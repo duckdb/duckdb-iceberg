@@ -6,6 +6,12 @@ require parquet
 
 require iceberg
 
+### Invalid iceberg metadata leads to failed statement
+statement error
+SELECT count(*) FROM ICEBERG_SCAN('data/bad_data/bad_iceberg_metadata.json');
+----
+Invalid Input Error: Fails to parse iceberg metadata from data/bad_data/bad_iceberg_metadata.json
+
 ### Iceberg spec v1
 
 # Check count matches
