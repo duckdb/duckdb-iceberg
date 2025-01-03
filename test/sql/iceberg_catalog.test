@@ -1,0 +1,93 @@
+# name: test/sql/iceberg_catalog.test
+# description: test iceberg extension using catalog
+# group: [iceberg]
+
+# Before we load the extension, this will fail
+statement error
+SELECT * FROM ICEBERG_SCAN('data/iceberg/lineitem_iceberg');
+----
+Catalog Error
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+require-env REST_ENDPOINT_AVAILABLE
+
+statement ok
+CREATE SECRET (
+  TYPE S3,
+  KEY_ID 'admin',
+  SECRET 'password',
+  ENDPOINT '127.0.0.1:9000',
+  URL_STYLE 'path',
+  USE_SSL 0
+);
+
+query I
+SELECT count(*) FROM ICEBERG_SCAN('table_unpartitioned', catalog_type='rest', catalog_uri='127.0.0.1:8181', catalog_namespace='default');
+----
+12
+
+query I
+SELECT SUM(record_count) FROM ICEBERG_METADATA('table_unpartitioned', catalog_type='rest', catalog_uri='127.0.0.1:8181', catalog_namespace='default');
+----
+12
+
+query I
+SELECT COUNT(*) FROM ICEBERG_SNAPSHOTS('table_unpartitioned', catalog_type='rest', catalog_uri='127.0.0.1:8181', catalog_namespace='default');
+----
+1
+
+query I
+SELECT count(*) FROM ICEBERG_SCAN('table_partitioned', catalog_type='rest', catalog_uri='127.0.0.1:8181', catalog_namespace='default');
+----
+12
+
+query I
+SELECT SUM(record_count) FROM ICEBERG_METADATA('table_partitioned', catalog_type='rest', catalog_uri='127.0.0.1:8181', catalog_namespace='default');
+----
+12
+
+query I
+SELECT count(*) FROM ICEBERG_SNAPSHOTS('table_partitioned', catalog_type='rest', catalog_uri='127.0.0.1:8181', catalog_namespace='default');
+----
+1
+
+query I
+SELECT count(*) FROM ICEBERG_SCAN('table_mor_deletes', catalog_type='rest', catalog_uri='127.0.0.1:8181', catalog_namespace='default');
+----
+11
+
+query I
+SELECT count(*) FROM ICEBERG_SNAPSHOTS('table_mor_deletes', catalog_type='rest', catalog_uri='127.0.0.1:8181', catalog_namespace='default');
+----
+2
+
+statement error
+SELECT count(*) FROM ICEBERG_SNAPSHOTS('non_existing_table', catalog_type='rest', catalog_uri='127.0.0.1:8181', catalog_namespace='default');
+----
+Connection Error: Getting table metadata from URL '127.0.0.1:8181/v1/namespaces/default/tables/non_existing_table' returned status: 404
+
+statement error
+SELECT count(*) FROM ICEBERG_SNAPSHOTS('table_unpartitioned', catalog_type='rest', catalog_uri='127.0.0.1:8182', catalog_namespace='default');
+----
+Connection Error: Connection error to host '127.0.0.1:8182/v1/namespaces/default/tables/table_unpartitioned' with error: Could not establish connection
+
+statement error
+SELECT count(*) FROM ICEBERG_SNAPSHOTS('table_unpartitioned', catalog_type='rest', catalog_uri='127.0.0.1:8182', catalog_namespace='default', catalog_prefix='/test');
+----
+Connection Error: Connection error to host '127.0.0.1:8182/test/v1/namespaces/default/tables/table_unpartitioned' with error: Could not establish connection
+
+statement error
+SELECT count(*) FROM ICEBERG_SNAPSHOTS('table_unpartitioned', catalog_type='rest', catalog_uri='127.0.0.1:8182');
+----
+Invalid Input Error: Catalog URI and namespace must be set for REST catalog
+
+statement error
+SELECT count(*) FROM ICEBERG_SNAPSHOTS('table_unpartitioned', catalog_type='rest', catalog_namespace='default');
+----
+Invalid Input Error: Catalog URI and namespace must be set for REST catalog
+

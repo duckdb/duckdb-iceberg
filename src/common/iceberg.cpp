@@ -2,6 +2,7 @@
 #include "iceberg_metadata.hpp"
 #include "iceberg_utils.hpp"
 #include "iceberg_types.hpp"
+#include "httplib.hpp"
 
 #include "avro/Compiler.hh"
 #include "avro/DataFile.hh"
@@ -187,13 +188,58 @@ string GenerateMetaDataUrl(FileSystem &fs, const string &meta_path, string &tabl
 		"Iceberg metadata file not found for table version '%s' using '%s' compression and format(s): '%s'", table_version, metadata_compression_codec, version_format);
 }
 
+string GetMetadataPathFromRestCatalog(const string &table_name, const IcebergCatalogDefinition &catalog_definition) {
+	if (catalog_definition.catalog_uri.empty() || catalog_definition.catalog_namespace.empty()) {
+		throw InvalidInputException("Catalog URI and namespace must be set for REST catalog");
+	}
 
-string IcebergSnapshot::GetMetaDataPath(ClientContext &context, const string &path, FileSystem &fs, string metadata_compression_codec, string table_version = DEFAULT_TABLE_VERSION, string version_format = DEFAULT_TABLE_VERSION_FORMAT) {
+	duckdb_httplib::Client cli(catalog_definition.catalog_uri);
+
+	const string url_path = StringUtil::Format("%s/v1/namespaces/%s/tables/%s",
+		catalog_definition.catalog_prefix, catalog_definition.catalog_namespace, table_name);
+
+	auto res = cli.Get(url_path);
+	if (!res) {
+		throw ConnectionException("Connection error to host '%s' with error: %s",
+			catalog_definition.catalog_uri + url_path, to_string(res.error()));
+	}
+	if (res->status != duckdb_httplib::StatusCode::OK_200) {
+		throw ConnectionException("Getting table metadata from URL '%s' returned status: %s",
+			catalog_definition.catalog_uri + url_path, to_string(res->status));
+	}
+
+	yyjson_doc* doc = nullptr;
+	try {
+		doc = yyjson_read(res->body.c_str(), res->body.size(), 0);
+		if (!doc) {
+			throw IOException("Failed to parse table metadata.");
+		}
+		auto *root = yyjson_doc_get_root(doc);
+		if (!root) {
+			throw IOException("Failed to get root from table metadata");
+		}
+
+		// Get the metadata path from the JSON response, method will throw if not found
+		auto result = IcebergUtils::TryGetStrFromObject(root, "metadata-location");
+		yyjson_doc_free(doc);
+		return result;
+	} catch (...) {
+		yyjson_doc_free(doc);
+		throw;
+	}
+}
+
+string IcebergSnapshot::GetMetaDataPath(ClientContext &context, const string &path, FileSystem &fs,
+	string metadata_compression_codec, const IcebergCatalogDefinition &catalog_definition,
+		string table_version = DEFAULT_TABLE_VERSION, string version_format = DEFAULT_TABLE_VERSION_FORMAT) {
+
 	string version_hint;
 	string meta_path = fs.JoinPath(path, "metadata");
 	if (StringUtil::EndsWith(path, ".json")) {
 		// We've been given a real metadata path. Nothing else to do.
 		return path;
+	} else if (catalog_definition.catalog_type == "rest") {
+		return GetMetadataPathFromRestCatalog(path, catalog_definition);
 	} else if (!fs.DirectoryExists(meta_path)) {
 		// Make sure we have a metadata directory to look in
 		throw IOException("Cannot open \"%s\": Metadata directory does not exist", path);

@@ -151,3 +151,9 @@ spark.sql(
             (CAST('2023-03-12' AS date), 12, 'l');
     """
 )
+
+spark.sql(
+    """
+        DELETE FROM default.table_mor_deletes WHERE number = 1;
+    """
+)

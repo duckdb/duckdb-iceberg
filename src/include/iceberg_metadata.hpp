@@ -35,6 +35,20 @@ static string DEFAULT_VERSION_HINT_FILE = "version-hint.text";
 // By default we will use the unknown version behavior mentioned above
 static string DEFAULT_TABLE_VERSION = UNKNOWN_TABLE_VERSION;
 
+struct IcebergCatalogDefinition {
+	//! The type of catalog (e.g. "rest")
+	const string& catalog_type;
+
+	//! The URI of the catalog
+	const string& catalog_uri;
+
+	//! The REST endpoint prefix (e.g. '/iceberg' for Apache Gravitino)
+	const string& catalog_prefix;
+
+	//! The namespace of the table
+	const string& catalog_namespace;
+};
+
 struct IcebergColumnDefinition {
 public:
 	static IcebergColumnDefinition ParseFromJson(yyjson_val *val);
@@ -86,7 +100,9 @@ public:
 
 	static IcebergSnapshot ParseSnapShot(yyjson_val *snapshot, idx_t iceberg_format_version, idx_t schema_id,
 	                                     vector<yyjson_val *> &schemas, string metadata_compression_codec, bool skip_schema_inference);
-	static string GetMetaDataPath(ClientContext &context, const string &path, FileSystem &fs, string metadata_compression_codec, string table_version, string version_format);
+	static string GetMetaDataPath(ClientContext &context, const string &path, FileSystem &fs,
+	                              string metadata_compression_codec, const IcebergCatalogDefinition &catalog_definition, string table_version,
+	                              string version_format);
 	static string ReadMetaData(const string &path, FileSystem &fs, string metadata_compression_codec);
 	static yyjson_val *GetSnapshots(const string &path, FileSystem &fs, string GetSnapshotByTimestamp);
 	static unique_ptr<SnapshotParseInfo> GetParseInfo(yyjson_doc &metadata_json);
@@ -147,5 +163,4 @@ protected:
 	static vector<IcebergManifestEntry> ReadManifestEntries(const string &path, FileSystem &fs, idx_t iceberg_format_version);
 	string path;
 };
-
 } // namespace duckdb

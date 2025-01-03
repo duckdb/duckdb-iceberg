@@ -8,7 +8,7 @@ set(CMAKE_CXX_STANDARD 14)
 set(CMAKE_CXX_STANDARD_REQUIRED True)
 
 set(EXTENSION_NAME ${TARGET_NAME}_extension)
-include_directories(src/include)
+include_directories(src/include duckdb/third_party/httplib)
 
 set(EXTENSION_SOURCES
     src/iceberg_extension.cpp

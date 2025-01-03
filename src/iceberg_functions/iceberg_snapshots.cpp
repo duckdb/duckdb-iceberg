@@ -16,6 +16,10 @@ struct IcebergSnaphotsBindData : public TableFunctionData {
 	string table_version;
 	string version_name_format;
 	bool skip_schema_inference = false;
+	string catalog_type;
+	string catalog_uri;
+	string catalog_prefix;
+	string catalog_namespace;
 };
 
 struct IcebergSnapshotGlobalTableFunctionState : public GlobalTableFunctionState {
@@ -32,8 +36,9 @@ public:
 		
 		FileSystem &fs = FileSystem::GetFileSystem(context);
 
-		auto iceberg_meta_path = IcebergSnapshot::GetMetaDataPath(
-		    context, bind_data.filename, fs, bind_data.metadata_compression_codec, bind_data.table_version, bind_data.version_name_format);
+		IcebergCatalogDefinition catalog_definition = {bind_data.catalog_type, bind_data.catalog_uri, bind_data.catalog_prefix, bind_data.catalog_namespace};
+		auto iceberg_meta_path = IcebergSnapshot::GetMetaDataPath(context, bind_data.filename, fs, bind_data.metadata_compression_codec,
+		                                     catalog_definition, bind_data.table_version, bind_data.version_name_format);
 		global_state->metadata_file = IcebergSnapshot::ReadMetaData(iceberg_meta_path, fs,  bind_data.metadata_compression_codec);
 		global_state->metadata_doc =
 		    yyjson_read(global_state->metadata_file.c_str(), global_state->metadata_file.size(), 0);
@@ -58,6 +63,10 @@ static unique_ptr<FunctionData> IcebergSnapshotsBind(ClientContext &context, Tab
 	string table_version = DEFAULT_TABLE_VERSION;
 	string version_name_format = DEFAULT_TABLE_VERSION_FORMAT;
 	bool skip_schema_inference = false;
+	string catalog_type;
+	string catalog_uri;
+	string catalog_prefix;
+	string catalog_namespace;
 	
 	for (auto &kv : input.named_parameters) {
 		auto loption = StringUtil::Lower(kv.first);
@@ -69,6 +78,14 @@ static unique_ptr<FunctionData> IcebergSnapshotsBind(ClientContext &context, Tab
 			version_name_format = StringValue::Get(kv.second);
 		} else if (loption == "skip_schema_inference") {
 			skip_schema_inference = BooleanValue::Get(kv.second);
+		} else if (loption == "catalog_type") {
+			catalog_type = StringValue::Get(kv.second);
+		} else if (loption == "catalog_uri") {
+			catalog_uri = StringValue::Get(kv.second);
+		} else if (loption == "catalog_prefix") {
+			catalog_prefix = StringValue::Get(kv.second);
+		} else if (loption == "catalog_namespace") {
+			catalog_namespace = StringValue::Get(kv.second);
 		}
 	}
 	bind_data->filename = input.inputs[0].ToString();
@@ -76,6 +93,10 @@ static unique_ptr<FunctionData> IcebergSnapshotsBind(ClientContext &context, Tab
 	bind_data->skip_schema_inference = skip_schema_inference;
 	bind_data->table_version = table_version;
 	bind_data->version_name_format = version_name_format;
+	bind_data->catalog_type = catalog_type;
+	bind_data->catalog_uri = catalog_uri;
+	bind_data->catalog_prefix = catalog_prefix;
+	bind_data->catalog_namespace = catalog_namespace;
 
 	names.emplace_back("sequence_number");
 	return_types.emplace_back(LogicalType::UBIGINT);
@@ -131,6 +152,11 @@ TableFunctionSet IcebergFunctions::GetIcebergSnapshotsFunction() {
 	table_function.named_parameters["version"] = LogicalType::VARCHAR;
 	table_function.named_parameters["version_name_format"] = LogicalType::VARCHAR;
 	table_function.named_parameters["skip_schema_inference"] = LogicalType::BOOLEAN;
+	table_function.named_parameters["catalog_type"] = LogicalType::VARCHAR;
+	table_function.named_parameters["catalog_uri"] = LogicalType::VARCHAR;
+	table_function.named_parameters["catalog_prefix"] = LogicalType::VARCHAR;
+	table_function.named_parameters["catalog_namespace"] = LogicalType::VARCHAR;
+
 	function_set.AddFunction(table_function);
 	return function_set;
 }

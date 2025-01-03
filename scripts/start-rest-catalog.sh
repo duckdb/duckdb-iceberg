@@ -10,9 +10,6 @@ pip3 install -r requirements.txt
 
 python3 provision.py
 
-# Would be nice to have rest support in there :)
-UNPARTITIONED_TABLE_PATH=$(curl -s http://127.0.0.1:8181/v1/namespaces/default/tables/table_unpartitioned | jq -r '."metadata-location"')
-
 SQL=$(cat <<-END
 
 CREATE SECRET (
@@ -24,9 +21,8 @@ CREATE SECRET (
   USE_SSL 0
 );
 
-SELECT * FROM iceberg_scan('${UNPARTITIONED_TABLE_PATH}');
+SELECT count(*) FROM ICEBERG_SCAN('table_unpartitioned', catalog_type='rest', catalog_uri='127.0.0.1:8181', catalog_namespace='default');
 END
-
 )
 
 if test -f "../build/release/duckdb"

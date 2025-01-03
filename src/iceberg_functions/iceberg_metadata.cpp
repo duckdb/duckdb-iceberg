@@ -59,6 +59,10 @@ static unique_ptr<FunctionData> IcebergMetaDataBind(ClientContext &context, Tabl
 	bool skip_schema_inference = false;
 	string table_version = DEFAULT_TABLE_VERSION;
 	string version_name_format = DEFAULT_TABLE_VERSION_FORMAT;
+	string catalog_type;
+	string catalog_uri;
+	string catalog_prefix;
+	string catalog_namespace;
 	
 	for (auto &kv : input.named_parameters) {
 		auto loption = StringUtil::Lower(kv.first);
@@ -72,10 +76,21 @@ static unique_ptr<FunctionData> IcebergMetaDataBind(ClientContext &context, Tabl
 			table_version = StringValue::Get(kv.second);
 		} else if (loption == "version_name_format") {
 			version_name_format = StringValue::Get(kv.second);
+		} else if (loption == "catalog_type") {
+			catalog_type = StringValue::Get(kv.second);
+		} else if (loption == "catalog_uri") {
+			catalog_uri = StringValue::Get(kv.second);
+		} else if (loption == "catalog_prefix") {
+			catalog_prefix = StringValue::Get(kv.second);
+		} else if (loption == "catalog_namespace") {
+			catalog_namespace = StringValue::Get(kv.second);
 		}
 	}
 
-	auto iceberg_meta_path = IcebergSnapshot::GetMetaDataPath(context, iceberg_path, fs, metadata_compression_codec, table_version, version_name_format);
+	IcebergCatalogDefinition catalog_definition = {catalog_type, catalog_uri, catalog_prefix, catalog_namespace};
+
+	auto iceberg_meta_path = IcebergSnapshot::GetMetaDataPath(context, iceberg_path, fs, metadata_compression_codec,
+	                                                          catalog_definition, table_version, version_name_format);
 	IcebergSnapshot snapshot_to_scan;
 	if (input.inputs.size() > 1) {
 		if (input.inputs[1].type() == LogicalType::UBIGINT) {
@@ -156,6 +171,10 @@ TableFunctionSet IcebergFunctions::GetIcebergMetadataFunction() {
 	fun.named_parameters["metadata_compression_codec"] = LogicalType::VARCHAR;
 	fun.named_parameters["version"] = LogicalType::VARCHAR;
 	fun.named_parameters["version_name_format"] = LogicalType::VARCHAR;
+	fun.named_parameters["catalog_type"] = LogicalType::VARCHAR;
+	fun.named_parameters["catalog_uri"] = LogicalType::VARCHAR;
+	fun.named_parameters["catalog_prefix"] = LogicalType::VARCHAR;
+	fun.named_parameters["catalog_namespace"] = LogicalType::VARCHAR;
 	function_set.AddFunction(fun);
 
 	fun = TableFunction({LogicalType::VARCHAR, LogicalType::UBIGINT}, IcebergMetaDataFunction, IcebergMetaDataBind,
@@ -165,6 +184,10 @@ TableFunctionSet IcebergFunctions::GetIcebergMetadataFunction() {
 	fun.named_parameters["metadata_compression_codec"] = LogicalType::VARCHAR;
 	fun.named_parameters["version"] = LogicalType::VARCHAR;
 	fun.named_parameters["version_name_format"] = LogicalType::VARCHAR;
+	fun.named_parameters["catalog_type"] = LogicalType::VARCHAR;
+	fun.named_parameters["catalog_uri"] = LogicalType::VARCHAR;
+	fun.named_parameters["catalog_prefix"] = LogicalType::VARCHAR;
+	fun.named_parameters["catalog_namespace"] = LogicalType::VARCHAR;
 	function_set.AddFunction(fun);
 
 	fun = TableFunction({LogicalType::VARCHAR, LogicalType::TIMESTAMP}, IcebergMetaDataFunction, IcebergMetaDataBind,
@@ -174,6 +197,10 @@ TableFunctionSet IcebergFunctions::GetIcebergMetadataFunction() {
 	fun.named_parameters["metadata_compression_codec"] = LogicalType::VARCHAR;
 	fun.named_parameters["version"] = LogicalType::VARCHAR;
 	fun.named_parameters["version_name_format"] = LogicalType::VARCHAR;
+	fun.named_parameters["catalog_type"] = LogicalType::VARCHAR;
+	fun.named_parameters["catalog_uri"] = LogicalType::VARCHAR;
+	fun.named_parameters["catalog_prefix"] = LogicalType::VARCHAR;
+	fun.named_parameters["catalog_namespace"] = LogicalType::VARCHAR;
 	function_set.AddFunction(fun);
 
 	return function_set;
