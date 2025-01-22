@@ -197,28 +197,30 @@ string IcebergSnapshot::GetMetaDataPath(ClientContext &context, const string &pa
 	if (StringUtil::EndsWith(path, ".json")) {
 		// We've been given a real metadata path. Nothing else to do.
 		return path;
-	} else if (!fs.DirectoryExists(meta_path)) {
-		// Make sure we have a metadata directory to look in
-		throw IOException("Cannot open \"%s\": Metadata directory does not exist", path);
-	} else if(StringUtil::EndsWith(table_version, ".text")||StringUtil::EndsWith(table_version, ".txt")) {
+	}
+
+	if(StringUtil::EndsWith(table_version, ".text")||StringUtil::EndsWith(table_version, ".txt")) {
 		// We were given a hint filename
 		version_hint = GetTableVersionFromHint(meta_path, fs, table_version);
 		return GenerateMetaDataUrl(fs, meta_path, version_hint, metadata_compression_codec, version_format);
-	} else if (table_version != UNKNOWN_TABLE_VERSION) {
+	}
+	if (table_version != UNKNOWN_TABLE_VERSION) {
 		// We were given an explicit version number
 		version_hint = table_version;
 		return GenerateMetaDataUrl(fs, meta_path, version_hint, metadata_compression_codec, version_format);
-	} else if (fs.FileExists(fs.JoinPath(meta_path, DEFAULT_VERSION_HINT_FILE))) {
+	}
+	if (fs.FileExists(fs.JoinPath(meta_path, DEFAULT_VERSION_HINT_FILE))) {
 		// We're guessing, but a version-hint.text exists so we'll use that
 		version_hint = GetTableVersionFromHint(meta_path, fs, DEFAULT_VERSION_HINT_FILE);
 		return GenerateMetaDataUrl(fs, meta_path, version_hint, metadata_compression_codec, version_format);
-	} else if (!UnsafeVersionGuessingEnabled(context)) {
+	}
+	if (!UnsafeVersionGuessingEnabled(context)) {
 		// Make sure we're allowed to guess versions
 		throw InvalidInputException("No version was provided and no version-hint could be found, globbing the filesystem to locate the latest version is disabled by default as this is considered unsafe and could result in reading uncommitted data. To enable this use 'SET %s = true;'", VERSION_GUESSING_CONFIG_VARIABLE);
-	} else {
-		// We are allowed to guess to guess from file paths
-		return GuessTableVersion(meta_path, fs, table_version, metadata_compression_codec, version_format);
 	}
+
+	// We are allowed to guess to guess from file paths
+	return GuessTableVersion(meta_path, fs, table_version, metadata_compression_codec, version_format);
 }
 
 
