@@ -51,7 +51,7 @@ lineitem_iceberg_gz/metadata/23f9dbea-1e7f-4694-a82c-dc3c9a94953e-m0.avro	0	DATA
 statement error
 SELECT * FROM ICEBERG_METADATA('data/iceberg/lineitem_iceberg_nonexistent');
 ----
-IO Error: Cannot open "data/iceberg/lineitem_iceberg_nonexistent": Metadata directory does not exist
+IO Error: Failed to read iceberg table. No version was provided and no version-hint could be found,
 
 statement error
 SELECT * FROM ICEBERG_METADATA('data/iceberg/lineitem_iceberg_no_hint', ALLOW_MOVED_PATHS=TRUE);

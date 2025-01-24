@@ -198,7 +198,6 @@ string IcebergSnapshot::GetMetaDataPath(ClientContext &context, const string &pa
 		// We've been given a real metadata path. Nothing else to do.
 		return path;
 	}
-
 	if(StringUtil::EndsWith(table_version, ".text")||StringUtil::EndsWith(table_version, ".txt")) {
 		// We were given a hint filename
 		version_hint = GetTableVersionFromHint(meta_path, fs, table_version);
@@ -216,7 +215,7 @@ string IcebergSnapshot::GetMetaDataPath(ClientContext &context, const string &pa
 	}
 	if (!UnsafeVersionGuessingEnabled(context)) {
 		// Make sure we're allowed to guess versions
-		throw InvalidInputException("No version was provided and no version-hint could be found, globbing the filesystem to locate the latest version is disabled by default as this is considered unsafe and could result in reading uncommitted data. To enable this use 'SET %s = true;'", VERSION_GUESSING_CONFIG_VARIABLE);
+		throw IOException("Failed to read iceberg table. No version was provided and no version-hint could be found, globbing the filesystem to locate the latest version is disabled by default as this is considered unsafe and could result in reading uncommitted data. To enable this use 'SET %s = true;'", VERSION_GUESSING_CONFIG_VARIABLE);
 	}
 
 	// We are allowed to guess to guess from file paths

@@ -41,7 +41,7 @@ SELECT * FROM ICEBERG_SNAPSHOTS('data/iceberg/lineitem_iceberg', version='1');
 statement error
 SELECT * FROM ICEBERG_SNAPSHOTS('data/iceberg/lineitem_iceberg_nonexistent');
 ----
-Invalid Input Error: No version was provided and no version-hint could be found
+IO Error: Failed to read iceberg table. No version was provided and no version-hint could be found,
 
 statement error
 SELECT * FROM ICEBERG_SNAPSHOTS('data/iceberg/lineitem_iceberg_gz');
