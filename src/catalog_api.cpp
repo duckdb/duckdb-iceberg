@@ -397,54 +397,62 @@ void ICAPI::DropTable(const string &catalog, const string &internal, const strin
 	api_result_to_doc(api_result);	// if the method returns, request was successful
 }
 
-static std::string json_to_string(yyjson_mut_doc *doc, yyjson_write_flag flags = YYJSON_WRITE_PRETTY) {
-    char *json_chars = yyjson_mut_write(doc, flags, NULL);
-    std::string json_str(json_chars);
+static std::string json_to_string(yyjson_mut_doc *doc) {
+    size_t len = 0;
+	yyjson_write_flag flags = YYJSON_WRITE_NOFLAG;
+    char *json_chars = yyjson_mut_write(doc, flags, &len);
+    std::string json_str(json_chars, len);
     free(json_chars);
     return json_str;
 }
 
 ICAPITable ICAPI::CreateTable(const string &catalog, const string &internal, const string &schema, ICCredentials credentials, CreateTableInfo *table_info) {
 	std::unique_ptr<yyjson_mut_doc, YyjsonDocDeleter> dd(yyjson_mut_doc_new(NULL));
-	yyjson_mut_val *rr = yyjson_mut_obj(dd.get());
-	yyjson_mut_doc_set_root(dd.get(), rr);
-	yyjson_mut_obj_add_str(dd.get(), rr, "name", table_info->table.c_str());
+	yyjson_mut_doc *doc = dd.get();
 
-	yyjson_mut_val *sch = yyjson_mut_obj(dd.get());
-    yyjson_mut_obj_add_val(dd.get(), rr, "schema", sch);
-	yyjson_mut_obj_add_str(dd.get(), sch, "type", "struct");
+	yyjson_mut_val *rr = yyjson_mut_obj(doc);
+	yyjson_mut_doc_set_root(doc, rr);
+	yyjson_mut_obj_add_str(doc, rr, "name", table_info->table.c_str());
 
-	yyjson_mut_val *fields = yyjson_mut_arr(dd.get());
-	yyjson_mut_obj_add_val(dd.get(), sch, "fields", fields);
+	yyjson_mut_val *sch = yyjson_mut_obj(doc);
+    yyjson_mut_obj_add_val(doc, rr, "schema", sch);
+	yyjson_mut_obj_add_str(doc, sch, "type", "struct");
+
+	yyjson_mut_val *fields = yyjson_mut_arr(doc);
+	yyjson_mut_obj_add_val(doc, sch, "fields", fields);
 
 	std::vector<std::string> column_names;
 	std::vector<std::string> column_types;
+	size_t num_columns = table_info->columns.LogicalColumnCount();
+	column_names.reserve(num_columns);
+	column_types.reserve(num_columns);
 	for (auto &col : table_info->columns.Logical()) {
 		// Store column name and type in vectors
 		column_names.push_back(col.GetName());
 		column_types.push_back(ICUtils::LogicalToIcebergType(col.GetType()));
 		// Add column object to JSON
-		yyjson_mut_val *col_obj = yyjson_mut_obj(dd.get());
-		yyjson_mut_obj_add_int(dd.get(), col_obj, "id", col.Oid());
-		yyjson_mut_obj_add_bool(dd.get(), col_obj, "required", true);
-		yyjson_mut_obj_add_str(dd.get(), col_obj, "name", column_names.back().c_str());
-		yyjson_mut_obj_add_str(dd.get(), col_obj, "type", column_types.back().c_str());
+		yyjson_mut_val *col_obj = yyjson_mut_obj(doc);
+		yyjson_mut_obj_add_int(doc, col_obj, "id", col.Oid());
+		yyjson_mut_obj_add_bool(doc, col_obj, "required", true);
+		yyjson_mut_obj_add_str(doc, col_obj, "name", column_names.back().c_str());
+		yyjson_mut_obj_add_str(doc, col_obj, "type", column_types.back().c_str());
 		yyjson_mut_arr_add_val(fields, col_obj);
 	}
 
-	yyjson_mut_val *props = yyjson_mut_obj(dd.get());
-    yyjson_mut_obj_add_val(dd.get(), rr, "properties", props);
-	yyjson_mut_obj_add_str(dd.get(), props, "write.parquet.compression-codec", "snappy");
+	yyjson_mut_val *props = yyjson_mut_obj(doc);
+    yyjson_mut_obj_add_val(doc, rr, "properties", props);
+	yyjson_mut_obj_add_str(doc, props, "write.parquet.compression-codec", "snappy");
+	string post_data = json_to_string(doc);
 
-	ICAPITable table_result = createTable(catalog, schema, table_info->table);
-	string post_data = json_to_string(dd.get());	
 	struct curl_slist *extra_headers = NULL;
 	extra_headers = curl_slist_append(extra_headers, "X-Iceberg-Access-Delegation: vended-credentials");
 	string api_result = PostRequest(
 		credentials.endpoint + "/v1/" + internal + "/namespaces/" + schema + "/tables", post_data, "json", credentials.token, extra_headers);
 	curl_slist_free_all(extra_headers);
-	std::unique_ptr<yyjson_doc, YyjsonDocDeleter> doc(api_result_to_doc(api_result));
-	auto *root = yyjson_doc_get_root(doc.get());	
+
+	std::unique_ptr<yyjson_doc, YyjsonDocDeleter> dd2(api_result_to_doc(api_result));
+	auto *root = yyjson_doc_get_root(dd2.get());	
+	ICAPITable table_result = createTable(catalog, schema, table_info->table);
 	populateTableMetadata(table_result, root);
 	return table_result;
 }
