@@ -12,3 +12,5 @@ data/iceberg/generated_*
 scripts/metastore_db/
 scripts/derby.log
 scripts/test-script-with-path.sql
+*.parquet
+src/include/jiceberg_generated/

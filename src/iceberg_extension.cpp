@@ -111,9 +111,21 @@ static unique_ptr<Catalog> IcebergCatalogAttach(StorageExtensionInfo *storage_in
 		const auto &kv_secret = dynamic_cast<const KeyValueSecret &>(*secret_entry->secret);
 		string new_connection_info;
 
+		Value client_id = kv_secret.TryGetValue("client_id");
+		if (client_id.IsNull()) {
+			throw std::runtime_error("CLIENT_ID is blank");
+		}
+		credentials.client_id = client_id.ToString();
+
+		Value client_secret = kv_secret.TryGetValue("client_secret");
+		if (client_secret.IsNull()) {
+			throw std::runtime_error("CLIENT_SECRET is blank");
+		}
+		credentials.client_secret = client_secret.ToString();
+
 		Value token_val = kv_secret.TryGetValue("token");
 		if (token_val.IsNull()) {
-			throw std::runtime_error("Token is blank");
+			throw std::runtime_error("TOKEN is blank");
 		}
 		credentials.token = token_val.ToString();
 

@@ -406,7 +406,7 @@ static std::string json_to_string(yyjson_mut_doc *doc) {
     return json_str;
 }
 
-ICAPITable ICAPI::CreateTable(const string &catalog, const string &internal, const string &schema, ICCredentials credentials, CreateTableInfo *table_info) {
+ICAPITable ICAPI::CreateTable(const string &catalog, const string &internal, const string &schema, ICCredentials &credentials, CreateTableInfo *table_info) {
 	std::unique_ptr<yyjson_mut_doc, YyjsonDocDeleter> dd(yyjson_mut_doc_new(NULL));
 	yyjson_mut_doc *doc = dd.get();
 
@@ -433,7 +433,7 @@ ICAPITable ICAPI::CreateTable(const string &catalog, const string &internal, con
 		// Add column object to JSON
 		yyjson_mut_val *col_obj = yyjson_mut_obj(doc);
 		yyjson_mut_obj_add_int(doc, col_obj, "id", col.Oid());
-		yyjson_mut_obj_add_bool(doc, col_obj, "required", true);
+		yyjson_mut_obj_add_bool(doc, col_obj, "required", false);
 		yyjson_mut_obj_add_str(doc, col_obj, "name", column_names.back().c_str());
 		yyjson_mut_obj_add_str(doc, col_obj, "type", column_types.back().c_str());
 		yyjson_mut_arr_add_val(fields, col_obj);

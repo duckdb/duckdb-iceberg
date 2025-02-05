@@ -4,7 +4,10 @@
 #include "duckdb/storage/database_size.hpp"
 #include "duckdb/parser/parsed_data/drop_info.hpp"
 #include "duckdb/parser/parsed_data/create_schema_info.hpp"
+#include "duckdb/planner/operator/logical_create_table.hpp"
 #include "duckdb/main/attached_database.hpp"
+#include "duckdb/execution/operator/schema/physical_create_table.hpp"
+#include "ic_create_table_as_op.hpp"
 
 namespace duckdb {
 
@@ -80,10 +83,25 @@ unique_ptr<PhysicalOperator> ICCatalog::PlanInsert(ClientContext &context, Logic
                                                    unique_ptr<PhysicalOperator> plan) {
 	throw NotImplementedException("ICCatalog PlanInsert");
 }
-unique_ptr<PhysicalOperator> ICCatalog::PlanCreateTableAs(ClientContext &context, LogicalCreateTable &op,
-                                                          unique_ptr<PhysicalOperator> plan) {
-	throw NotImplementedException("ICCatalog PlanCreateTableAs");
+
+unique_ptr<PhysicalOperator> ICCatalog::PlanCreateTableAs(
+	ClientContext &context, LogicalCreateTable &op, unique_ptr<PhysicalOperator> plan) {
+
+	auto create_table_as = make_uniq<ICCreateTableAsOp>(
+        op.types, 
+		std::move(op.info),
+        op.estimated_cardinality,
+		internal_name,
+		credentials);
+
+    // If your operator has children (input plan), attach them
+    if (plan) {
+        create_table_as->children.push_back(std::move(plan));
+    }
+
+    return create_table_as;
 }
+
 unique_ptr<PhysicalOperator> ICCatalog::PlanDelete(ClientContext &context, LogicalDelete &op,
                                                    unique_ptr<PhysicalOperator> plan) {
 	throw NotImplementedException("ICCatalog PlanDelete");

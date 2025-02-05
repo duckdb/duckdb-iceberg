@@ -53,7 +53,7 @@ public:
 	static string GetToken(string id, string secret, string endpoint);
 	static ICAPISchema CreateSchema(const string &catalog, const string &internal, const string &schema, ICCredentials credentials);
 	static void DropSchema(const string &internal, const string &schema, ICCredentials credentials);
-	static ICAPITable CreateTable(const string &catalog, const string &internal, const string &schema, ICCredentials credentials, CreateTableInfo *table_info);
+	static ICAPITable CreateTable(const string &catalog, const string &internal, const string &schema, ICCredentials &credentials, CreateTableInfo *table_info);
 	static void DropTable(const string &catalog, const string &internal, const string &schema, string &table_name, ICCredentials credentials);
 };
 

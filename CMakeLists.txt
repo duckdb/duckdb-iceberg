@@ -8,13 +8,18 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED True)
 
 set(EXTENSION_NAME ${TARGET_NAME}_extension)
-include_directories(src/include)
+include_directories(
+  src/include
+  arrow/cpp/src
+  arrow/cpp/build/src
+)
 
 set(EXTENSION_SOURCES
     src/iceberg_extension.cpp
     src/iceberg_functions.cpp
     src/catalog_api.cpp
     src/catalog_utils.cpp 
+    src/ic_create_table_as_op.cpp
     src/common/utils.cpp
     src/common/schema.cpp
     src/common/iceberg.cpp
@@ -30,7 +35,7 @@ set(EXTENSION_SOURCES
     src/storage/ic_table_set.cpp
     src/storage/ic_transaction.cpp
     src/storage/ic_transaction_manager.cpp
-    )
+)
 
 add_library(${EXTENSION_NAME} STATIC ${EXTENSION_SOURCES})
 
@@ -87,11 +92,18 @@ target_link_libraries(
 
 find_package(CURL REQUIRED)
 
+find_library(ARROW_LIB arrow PATHS arrow/cpp/build/release)
+find_library(PARQUET_LIB parquet PATHS arrow/cpp/build/release)
+find_library(FTICEBERGHELPER_LIB jiceberg PATHS jiceberg_lib/app/build/native/nativeCompile)
+
 # Link dependencies into extension
-target_link_libraries(${EXTENSION_NAME} PUBLIC optimized avro_static_release CURL::libcurl
-                                               debug avro_static_debug)
+target_link_libraries(${EXTENSION_NAME} PUBLIC optimized avro_static_release 
+                                               debug avro_static_debug
+                                               ${FTICEBERGHELPER_LIB} CURL::libcurl 
+                                               ${ARROW_LIB} ${PARQUET_LIB})
 target_link_libraries(${TARGET_NAME}_loadable_extension optimized CURL::libcurl
-                      avro_static_release debug avro_static_debug)
+                      avro_static_release ${FTICEBERGHELPER_LIB} ${ARROW_LIB} ${PARQUET_LIB}
+                      debug avro_static_debug)
 
 install(
   TARGETS ${EXTENSION_NAME} ${TARGET_NAME}_loadable_extension
