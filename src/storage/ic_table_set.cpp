@@ -25,7 +25,7 @@ static ColumnDefinition CreateColumnDefinition(ClientContext &context, ICAPIColu
 	return {coldef.name, ICUtils::TypeToLogicalType(context, coldef.type_text)};
 }
 
-unique_ptr<CatalogEntry> ICTableSet::_CreateCatalogEntry(ClientContext &context, ICAPITable table) {
+unique_ptr<CatalogEntry> ICTableSet::CreateTableEntry(ClientContext &context, ICAPITable table) {
 	D_ASSERT(schema.name == table.schema_name);
 	CreateTableInfo info;
 	info.table = table.name;
@@ -47,7 +47,7 @@ void ICTableSet::FillEntry(ClientContext &context, unique_ptr<CatalogEntry> &ent
 		
 	auto &ic_catalog = catalog.Cast<ICCatalog>();
 	auto table = ICAPI::GetTable(catalog.GetName(), catalog.GetDBPath(), schema.name, entry->name, ic_catalog.credentials);
-	entry = _CreateCatalogEntry(context, table);
+	entry = CreateTableEntry(context, table);
 }
 
 void ICTableSet::LoadEntries(ClientContext &context) {
@@ -60,8 +60,8 @@ void ICTableSet::LoadEntries(ClientContext &context) {
 	auto tables = ICAPI::GetTables(catalog.GetName(), catalog.GetDBPath(), schema.name, ic_catalog.credentials);
 
 	for (auto &table : tables) {
-		auto entry = _CreateCatalogEntry(context, table);
-		CreateEntry(std::move(entry));
+		auto entry = CreateTableEntry(context, table);
+		AddEntry(std::move(entry));
 	}
 }
 
@@ -69,7 +69,7 @@ optional_ptr<CatalogEntry> ICTableSet::RefreshTable(ClientContext &context, cons
 	auto table_info = GetTableInfo(context, schema, table_name);
 	auto table_entry = make_uniq<ICTableEntry>(catalog, schema, *table_info);
 	auto table_ptr = table_entry.get();
-	CreateEntry(std::move(table_entry));
+	AddEntry(std::move(table_entry));
 	return table_ptr;
 }
 
@@ -82,8 +82,8 @@ optional_ptr<CatalogEntry> ICTableSet::CreateTable(ClientContext &context, Bound
 	auto &ic_catalog = catalog.Cast<ICCatalog>();
 	auto *table_info = dynamic_cast<CreateTableInfo *>(info.base.get());
 	auto table = ICAPI::CreateTable(catalog.GetName(), ic_catalog.internal_name, schema.name, ic_catalog.credentials, table_info);
-	auto entry = _CreateCatalogEntry(context, table);
-	return CreateEntry(std::move(entry));
+	auto entry = CreateTableEntry(context, table);
+	return AddEntry(std::move(entry));
 }
 
 void ICTableSet::DropTable(ClientContext &context, DropInfo &info) {
@@ -109,6 +109,18 @@ void ICTableSet::AlterTable(ClientContext &context, RemoveColumnInfo &info) {
 
 void ICTableSet::AlterTable(ClientContext &context, AlterTableInfo &alter) {
 	throw NotImplementedException("ICTableSet::AlterTable");
+}
+
+ICInSchemaSet::ICInSchemaSet(ICSchemaEntry &schema) : ICCatalogSet(schema.ParentCatalog()), schema(schema) {
+}
+
+optional_ptr<CatalogEntry> ICInSchemaSet::AddEntry(unique_ptr<CatalogEntry> entry) {
+	std::cout << "ICInSchemaSet::CreateEntry" << std::endl;
+	
+	if (!entry->internal) {
+		entry->internal = schema.internal;
+	}
+	return ICCatalogSet::AddEntry(std::move(entry));
 }
 
 } // namespace duckdb

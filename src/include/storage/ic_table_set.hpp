@@ -14,7 +14,7 @@ class ICInSchemaSet : public ICCatalogSet {
 public:
 	ICInSchemaSet(ICSchemaEntry &schema);
 
-	optional_ptr<CatalogEntry> CreateEntry(unique_ptr<CatalogEntry> entry) override;
+	optional_ptr<CatalogEntry> AddEntry(unique_ptr<CatalogEntry> entry) override;
 
 protected:
 	ICSchemaEntry &schema;
@@ -44,7 +44,7 @@ protected:
 	static void AddColumn(ClientContext &context, ICResult &result, ICTableInfo &table_info, idx_t column_offset = 0);
 
 private:
-	unique_ptr<CatalogEntry> _CreateCatalogEntry(ClientContext &context, ICAPITable table);
+	unique_ptr<CatalogEntry> CreateTableEntry(ClientContext &context, ICAPITable table);
 };
 
 

@@ -37,7 +37,10 @@ void ICCatalogSet::Scan(ClientContext &context, const std::function<void(Catalog
 	}
 }
 
-optional_ptr<CatalogEntry> ICCatalogSet::CreateEntry(unique_ptr<CatalogEntry> entry) {
+optional_ptr<CatalogEntry> ICCatalogSet::AddEntry(unique_ptr<CatalogEntry> entry) {
+	// Also ICSchemaSet::AddEntry
+	std::cout << "ICCatalogSet::AddEntry" << std::endl; 
+
 	lock_guard<mutex> l(entry_lock);
 	auto result = entry.get();
 	if (result->name.empty()) {
@@ -49,16 +52,6 @@ optional_ptr<CatalogEntry> ICCatalogSet::CreateEntry(unique_ptr<CatalogEntry> en
 
 void ICCatalogSet::ClearEntries() {
 	entries.clear();
-}
-
-ICInSchemaSet::ICInSchemaSet(ICSchemaEntry &schema) : ICCatalogSet(schema.ParentCatalog()), schema(schema) {
-}
-
-optional_ptr<CatalogEntry> ICInSchemaSet::CreateEntry(unique_ptr<CatalogEntry> entry) {
-	if (!entry->internal) {
-		entry->internal = schema.internal;
-	}
-	return ICCatalogSet::CreateEntry(std::move(entry));
 }
 
 } // namespace duckdb

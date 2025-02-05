@@ -31,7 +31,7 @@ void ICSchemaSet::LoadEntries(ClientContext &context) {
 		info.internal = IsInternalTable(schema.catalog_name, schema.schema_name);
 		auto schema_entry = make_uniq<ICSchemaEntry>(catalog, info);
 		schema_entry->schema_data = make_uniq<ICAPISchema>(schema);
-		CreateEntry(std::move(schema_entry));
+		AddEntry(std::move(schema_entry));
 	}
 }
 
@@ -44,7 +44,7 @@ optional_ptr<CatalogEntry> ICSchemaSet::CreateSchema(ClientContext &context, Cre
 	auto schema = ICAPI::CreateSchema(catalog.GetName(), ic_catalog.internal_name, info.schema, ic_catalog.credentials);
 	auto schema_entry = make_uniq<ICSchemaEntry>(catalog, info);
 	schema_entry->schema_data = make_uniq<ICAPISchema>(schema);
-	return CreateEntry(std::move(schema_entry));
+	return AddEntry(std::move(schema_entry));
 }
 
 void ICSchemaSet::DropSchema(ClientContext &context, DropInfo &info) {
