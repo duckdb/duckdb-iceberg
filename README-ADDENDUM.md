@@ -2,14 +2,13 @@
 
 This fork adds proof-of-concept functionality to DuckDB iceberg extension to be able to connect to an iceberg catalog as well as read and write iceberg tables.
 
-You can try it out using DuckDB (>= v1.1.3) by doing the following:
-
-1. Start duckdb in `unsigned` mode
+You can try it out using DuckDB (>= v1.1.3) by running duckdb in unsigned mode:
 ```bash
 duckdb --unsigned
 ```
 
-2. Create a secret to provide access to your iceberg catalog
+# SQL commands
+## Create a secret to provide access to an iceberg catalog
 ```sql
 INSTALL '/path/to/this/iceberg.duckdb_extension';
 INSTALL httpfs;
@@ -24,25 +23,25 @@ CREATE SECRET (
 )
 ```
 
-3. Attach your iceberg catalog
+## Attach an iceberg catalog
 ```sql
 ATTACH 'my_catalog' AS my_catalog (TYPE ICEBERG)
 ```
 
-4. Read an iceberg table
+## Read an iceberg table
 ```sql
 SELECT * FROM my_catalog.my_schema.table_1;
 ```
 
-5. Create a new iceberg table
+## Create a new iceberg table
 ```sql
 CREATE TABLE my_catalog.my_schema.new_table (id BIGINT, name VARCHAR);
 ```
 ```sql
-CREATE TABLE my_catalog.my_schema.new_table_2 AS (SELECT FROM version());
+CREATE TABLE my_catalog.my_schema.new_table_2 AS (SELECT FROM version() as "version");
 ```
 
-6. Delete an existing iceberg table
+## Delete an existing iceberg table
 ```sql
 DROP TABLE my_catalog.my_schema.table_1;
 ```
@@ -54,3 +53,46 @@ git submodule update --init --recursive
 brew install ninja
 GEN=ninja make {debug/release}
 ```
+
+# Roadmap
+## # SQL commands
+### ✅ CREATE SECRET
+### ✅ ATTACH
+### 🔳 USE
+### ✅ SELECT
+### ✅ CREATE SCHEMA
+### ✅ DROP SCHEMA
+### 🔳 CREATE VIEW
+### 🔳 DROP VIEW
+### ✅ CREATE TABLE
+### ✅ CREATE TABLE AS SELECT
+### 🔳 ALTER TABLE
+### ✅ DROP TABLE
+### 🔳 INSERT
+### 🔳 UPDATE
+### 🔳 DELETE
+
+## # Data Types ([ref](https://docs.snowflake.com/en/user-guide/tables-iceberg-data-types))
+### 🔳 boolean
+### ✅ string
+### 🔳 tinyint
+### 🔳 smallint
+### ✅ int
+### ✅ long
+### ✅ double
+### 🔳 float
+### 🔳 timestamp
+### 🔳 timestamptz
+### 🔳 binary
+### 🔳 date
+### 🔳 decimal(prec,scale)
+### 🔳 array
+### 🔳 map
+### 🔳 struct
+
+
+
+
+
+
+
