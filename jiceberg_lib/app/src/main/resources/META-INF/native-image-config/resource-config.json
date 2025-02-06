@@ -27,10 +27,6 @@
   }, {
     "pattern":"\\Qiceberg-build.properties\\E"
   }, {
-    "pattern":"\\Qlog4j.properties\\E"
-  }, {
-    "pattern":"\\Qlog4j.xml\\E"
-  }, {
     "pattern":"\\Qmozilla/public-suffix-list.txt\\E"
   }, {
     "pattern":"\\Qorg-xerial-snappy.properties\\E"
@@ -38,8 +34,6 @@
     "pattern":"\\Qorg/apache/hc/client5/http/psl/org/publicsuffix/list/effective_tld_names.dat\\E"
   }, {
     "pattern":"\\Qorg/apache/hc/client5/version.properties\\E"
-  }, {
-    "pattern":"\\Qorg/slf4j/impl/StaticLoggerBinder.class\\E"
   }, {
     "pattern":"\\Qorg/xerial/snappy/VERSION\\E"
   }, {

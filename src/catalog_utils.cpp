@@ -71,7 +71,7 @@ string ICUtils::TypeToString(const LogicalType &input) {
 	}
 }
 
-LogicalType ICUtils::TypeToLogicalType(ClientContext &context, const string &type_text) {
+LogicalType ICUtils::TypeToLogicalType(const string &type_text) {
 	if (type_text == "tinyint") {
 		return LogicalType::TINYINT;
 	} else if (type_text == "smallint") {
@@ -112,7 +112,7 @@ LogicalType ICUtils::TypeToLogicalType(ClientContext &context, const string &typ
 		size_t type_end = type_text.rfind('>'); // find last, to deal with nested
 		if (type_end != string::npos) {
 			auto child_type_str = type_text.substr(6, type_end - 6);
-			auto child_type = ICUtils::TypeToLogicalType(context, child_type_str);
+			auto child_type = ICUtils::TypeToLogicalType(child_type_str);
 			return LogicalType::LIST(child_type);
 		}
 	} else if (type_text.find("map<") == 0) {
@@ -137,7 +137,7 @@ LogicalType ICUtils::TypeToLogicalType(ClientContext &context, const string &typ
 					}
 				}
 				auto child_str = type_text.substr(cur, next_sep - cur);
-				auto child_type = ICUtils::TypeToLogicalType(context, child_str);
+				auto child_type = ICUtils::TypeToLogicalType(child_str);
 				key_val.push_back(child_type);
 				if (next_sep == type_end) {
 					break;
@@ -175,7 +175,7 @@ LogicalType ICUtils::TypeToLogicalType(ClientContext &context, const string &typ
 					throw NotImplementedException("Invalid struct child type specifier: %s", child_str);
 				}
 				auto child_name = child_str.substr(0, type_sep);
-				auto child_type = ICUtils::TypeToLogicalType(context, child_str.substr(type_sep + 1, string::npos));
+				auto child_type = ICUtils::TypeToLogicalType(child_str.substr(type_sep + 1, string::npos));
 				children.push_back({child_name, child_type});
 				if (next_sep == type_end) {
 					break;

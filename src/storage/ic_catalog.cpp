@@ -87,12 +87,18 @@ unique_ptr<PhysicalOperator> ICCatalog::PlanInsert(ClientContext &context, Logic
 unique_ptr<PhysicalOperator> ICCatalog::PlanCreateTableAs(
 	ClientContext &context, LogicalCreateTable &op, unique_ptr<PhysicalOperator> plan) {
 
+	CatalogEntry *catalog_entry = schemas.GetEntry(context, op.info->base->schema).get();
+	if (!catalog_entry) {
+		throw BinderException("Schema not found");
+	}
+
+	auto schemaEntry = static_cast<ICSchemaEntry*>(catalog_entry);
 	auto create_table_as = make_uniq<ICCreateTableAsOp>(
         op.types, 
 		std::move(op.info),
+		schemaEntry,
         op.estimated_cardinality,
 		internal_name,
-		schemas,
 		credentials);
 
     // If your operator has children (input plan), attach them

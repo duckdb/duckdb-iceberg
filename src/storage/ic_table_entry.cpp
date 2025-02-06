@@ -72,7 +72,7 @@ TableFunction ICTableEntry::GetScanFunction(ClientContext &context, unique_ptr<F
 		                              table_data->data_source_format);
 	}
 
-	if (table_data->storage_location.find("file://") != 0) {
+	if (table_data->metadata_location.find("file://") != 0) {
 		auto &secret_manager = SecretManager::Get(context);
 		// Get Credentials from ICAPI
 		auto table_credentials = ICAPI::GetTableCredentials(
@@ -91,8 +91,8 @@ TableFunction ICTableEntry::GetScanFunction(ClientContext &context, unique_ptr<F
 		};
 
 		std::string lc_storage_location;
-		lc_storage_location.resize(table_data->storage_location.size());
-		std::transform(table_data->storage_location.begin(), table_data->storage_location.end(), lc_storage_location.begin(), ::tolower);
+		lc_storage_location.resize(table_data->metadata_location.size());
+		std::transform(table_data->metadata_location.begin(), table_data->metadata_location.end(), lc_storage_location.begin(), ::tolower);
 		size_t metadata_pos = lc_storage_location.find("metadata");
 		if (metadata_pos != std::string::npos) {
     		info.scope = {lc_storage_location.substr(0, metadata_pos)};
@@ -109,7 +109,7 @@ TableFunction ICTableEntry::GetScanFunction(ClientContext &context, unique_ptr<F
 	TableFunctionRef empty_ref;
 
 	// Set the S3 path as input to table function
-	vector<Value> inputs = {table_data->storage_location};
+	vector<Value> inputs = {table_data->metadata_location};
 
 	TableFunctionBindInput bind_input(inputs, param_map, return_types, names, nullptr, nullptr, 
 									  iceberg_scan_function, empty_ref);

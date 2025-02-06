@@ -1,6 +1,7 @@
 
 #include "duckdb.hpp"
 #include "duckdb/execution/physical_operator.hpp"
+#include "duckdb/parser/parsed_data/drop_info.hpp"
 #include "duckdb/planner/logical_operator.hpp"
 #include "duckdb/storage/data_table.hpp"
 #include "parquet/arrow/writer.h"
@@ -8,8 +9,6 @@
 
 #include "arrow/api.h"
 #include "arrow/io/api.h"
-#include "catalog_api.hpp"
-#include "storage/ic_catalog.hpp"
 #include "ic_create_table_as_op.hpp"
 #include "jiceberg_generated/libjiceberg.h"
 #include "jiceberg_generated/graal_isolate.h" 
@@ -173,7 +172,8 @@ OperatorResultType ICCreateTableAsOp::Execute(ExecutionContext &context,
     }
 
     // Create the table at the destination
-    ICAPI::CreateTable(table_info->catalog, catalog_internal_name, table_info->schema, table_credentials, table_info);
+    auto transaction = schemaEntry->catalog.GetCatalogTransaction(context.client);
+    auto entry = schemaEntry->CreateTable(transaction, *info);
 
     // Initialize the GraalVM isolate
     graal_isolate_t* isolate = nullptr;
@@ -183,7 +183,7 @@ OperatorResultType ICCreateTableAsOp::Execute(ExecutionContext &context,
     }
 
     string creds = table_credentials.client_id + ":" + table_credentials.client_secret;
-    int result = -1;
+    char *result = nullptr;
     try {
         result = append_to_table(
                 thread,
@@ -196,7 +196,12 @@ OperatorResultType ICCreateTableAsOp::Execute(ExecutionContext &context,
                 chunk.size());
 
     } catch (...) {
-        ICAPI::DropTable(table_info->catalog, catalog_internal_name, table_info->schema, table_info->table, table_credentials);
+        DropInfo drop_info;
+        drop_info.type = CatalogType::TABLE_ENTRY;
+        drop_info.catalog = info->base->catalog;
+        drop_info.schema = table_info->schema;
+        drop_info.name =  table_info->table;
+        schemaEntry->DropEntry(context.client, drop_info);
     }
 
     // Clean up the GraalVM isolate
@@ -204,11 +209,13 @@ OperatorResultType ICCreateTableAsOp::Execute(ExecutionContext &context,
         throw std::runtime_error("Failed to detach GraalVM thread");
     }
 
-    if (result < 0) {
+    if (result == nullptr) {
         throw std::runtime_error("Failed to append to table");
     }
 
-    // TODO: Add the new table to the catalog
+    // Update the table entry with the new metadata location
+    auto table_entry = dynamic_cast<ICTableEntry *>(entry.get());
+    table_entry->table_data->metadata_location = result;
 
     // Set output chunk to empty
     chunk.SetCardinality(0);

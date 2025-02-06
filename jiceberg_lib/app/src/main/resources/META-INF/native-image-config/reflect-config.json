@@ -147,8 +147,7 @@
 },
 {
   "name":"java.lang.Thread",
-  "fields":[{"name":"threadLocalRandomProbe"}],
-  "methods":[{"name":"getContextClassLoader","parameterTypes":[] }]
+  "fields":[{"name":"threadLocalRandomProbe"}]
 },
 {
   "name":"java.security.AlgorithmParametersSpi"
@@ -228,12 +227,24 @@
   "methods":[{"name":"setNormalizeUri","parameterTypes":["boolean"] }]
 },
 {
+  "name":"org.apache.iceberg.GenericDataFile",
+  "methods":[{"name":"<init>","parameterTypes":["org.apache.iceberg.types.Types$StructType"] }]
+},
+{
+  "name":"org.apache.iceberg.GenericManifestEntry",
+  "methods":[{"name":"<init>","parameterTypes":["org.apache.iceberg.types.Types$StructType"] }]
+},
+{
   "name":"org.apache.iceberg.GenericManifestFile",
   "methods":[{"name":"<init>","parameterTypes":["org.apache.avro.Schema"] }]
 },
 {
   "name":"org.apache.iceberg.GenericPartitionFieldSummary",
   "methods":[{"name":"<init>","parameterTypes":["org.apache.avro.Schema"] }]
+},
+{
+  "name":"org.apache.iceberg.PartitionData",
+  "methods":[{"name":"<init>","parameterTypes":["org.apache.iceberg.types.Types$StructType"] }]
 },
 {
   "name":"org.apache.iceberg.aws.ApacheHttpClientConfigurations",
@@ -252,26 +263,22 @@
   "methods":[{"name":"<init>","parameterTypes":["java.lang.String"] }]
 },
 {
+  "name":"org.apache.iceberg.relocated.com.google.common.util.concurrent.AbstractFuture",
+  "fields":[{"name":"listeners"}, {"name":"value"}, {"name":"waiters"}]
+},
+{
+  "name":"org.apache.iceberg.relocated.com.google.common.util.concurrent.AbstractFuture$Waiter",
+  "fields":[{"name":"next"}, {"name":"thread"}]
+},
+{
   "name":"org.apache.iceberg.util.Pair$1"
-},
-{
-  "name":"org.apache.log4j.Category"
-},
-{
-  "name":"org.apache.log4j.CategoryKey"
 },
 {
   "name":"org.apache.log4j.Level",
   "fields":[{"name":"TRACE"}]
 },
 {
-  "name":"org.apache.log4j.Logger"
-},
-{
   "name":"org.apache.log4j.Priority"
-},
-{
-  "name":"org.apache.log4j.helpers.Loader"
 },
 {
   "name":"org.brotli.dec.BrotliInputStream"
@@ -281,7 +288,7 @@
 },
 {
   "name":"sun.misc.Unsafe",
-  "fields":[{"name":"theUnsafe"}]
+  "allDeclaredFields":true
 },
 {
   "name":"sun.security.pkcs12.PKCS12KeyStore",

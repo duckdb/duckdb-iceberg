@@ -38,9 +38,6 @@ void ICCatalogSet::Scan(ClientContext &context, const std::function<void(Catalog
 }
 
 optional_ptr<CatalogEntry> ICCatalogSet::AddEntry(unique_ptr<CatalogEntry> entry) {
-	// Also ICSchemaSet::AddEntry
-	std::cout << "ICCatalogSet::AddEntry" << std::endl; 
-
 	lock_guard<mutex> l(entry_lock);
 	auto result = entry.get();
 	if (result->name.empty()) {

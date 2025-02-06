@@ -9,17 +9,19 @@ import org.graalvm.nativeimage.IsolateThread;
 import org.graalvm.nativeimage.c.function.CEntryPoint;
 import org.graalvm.nativeimage.c.type.CCharPointer;
 import org.graalvm.nativeimage.c.type.CTypeConversion;
+import org.graalvm.word.WordFactory;
 
 import java.io.IOException;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.UUID;
 
 
 public class App {
     @CEntryPoint(name = "append_to_table")
-    public static int appendToTable(
+    public static CCharPointer appendToTable(
             IsolateThread thread,
             CCharPointer uri,
             CCharPointer creds,
@@ -29,7 +31,7 @@ public class App {
             CCharPointer filename,
             int numRecords) {
         try {
-            return append(
+            String newMetadataLoc = append(
                     CTypeConversion.toJavaString(uri),
                     CTypeConversion.toJavaString(creds),
                     CTypeConversion.toJavaString(warehouse),
@@ -37,10 +39,13 @@ public class App {
                     CTypeConversion.toJavaString(tableName),
                     CTypeConversion.toJavaString(filename),
                     numRecords);
+            try (CTypeConversion.CCharPointerHolder holder = CTypeConversion.toCString(newMetadataLoc)) {
+                return holder.get();
+            }
         } catch (IOException e) {
-            return -1;
+            return WordFactory.nullPointer();
         } finally {
-            // Delete the local file
+            // Delete the local file no matter what
             Path localPath = Paths.get(CTypeConversion.toJavaString(filename));
             try {
                 java.nio.file.Files.deleteIfExists(localPath);
@@ -52,20 +57,21 @@ public class App {
 
     public static void main(String[] args) {
         try {
-            append("https://polaris.fivetran.com/api/catalog",
-                    "client_id:client_secret",
-                    "catalog",
-                    "schema",
-                    "new_table",
-                    "datafile.parquet",
-                    1
-            );
+            System.out.println(
+                append("https://polaris.fivetran.com/api/catalog",
+                        "client_id:client_secret",
+                        "catalog",
+                        "schema",
+                        "new_table",
+                        "datafile.parquet",
+                        1
+            ));
         } catch (IOException e) {
             throw new RuntimeException(e);
         }
     }
 
-    static int append(
+    static String append(
             String uri,
             String creds,
             String warehouse,
@@ -104,58 +110,27 @@ public class App {
                         .withFormat(FileFormat.PARQUET)
                         .build();
 
+                // Force a new metadata commit
+                table.updateProperties()
+                        .set("last-modified-time", String.valueOf(System.currentTimeMillis()))
+                        .commit();
+
+                // Optionally, you can try to expire old metadata
+                table.expireSnapshots()
+                        .expireOlderThan(System.currentTimeMillis())
+                        .commit();
+
                 // Append the data file
                 table.newAppend()
                         .appendFile(dataFile)
+                        .set("write.format.default", "parquet")
+                        .set("format-version", "2")
+                        .set("write.metadata.compression-codec", "none")
+                        .set("snapshot-id", UUID.randomUUID().toString())  // Force new snapshot
                         .commit();
+
+                return ((BaseTable) table).operations().current().metadataFileLocation();
             }
-
-//            Snapshot snapshot = table.currentSnapshot();
-//            FileIO io = table.io();
-//            // For newer Iceberg versions, use `allManifests(io)`:
-//            for (ManifestFile mf : snapshot.allManifests(io)) {
-//                System.out.println("Manifest path: " + mf.path()
-//                        + ", addedFilesCount=" + mf.addedFilesCount());
-//            }
-//
-//            Iterable<DataFile> newlyAddedFiles = snapshot.addedDataFiles(table.io());
-//            for (DataFile df : newlyAddedFiles) {
-//                System.out.println("Added file path: " + df.path());
-//            }
-//
-//            table.newScan()
-//                    .planFiles()
-//                    .forEach(task -> {
-//                        System.out.println("Active data file path: " + task.file().path());
-//                        System.out.println("Row count: " + task.file().recordCount());
-//                    });
-
-//            Schema schema = table.schema();
-//            // Iterate over each file in the table scan
-//            for (FileScanTask task : table.newScan().planFiles()) {
-//                // Print file information
-//                DataFile dataFile = task.file();
-//
-//                // Convert the DataFile to an Iceberg InputFile
-//                InputFile inputFile = table.io().newInputFile(dataFile.path().toString());
-//
-//                // Build a Parquet reader using Iceberg's Parquet API
-//                try (CloseableIterable<Record> reader = Parquet.read(inputFile)
-//                        .project(schema) // Project the full schema or a subset
-//                        .createReaderFunc(messageType -> GenericParquetReaders.buildReader(schema, messageType))
-//                        .build()) {
-//
-//                    // Iterate over the records and process them
-//                    for (Record record : reader) {
-//                        System.out.println("Record: " + record);
-//                    }
-//                } catch (IOException e) {
-//                    System.err.println("Failed to read data from file: " + dataFile.path());
-//                    e.printStackTrace();
-//                }
-//            }
-
-            return 0;
         }
     }
 }

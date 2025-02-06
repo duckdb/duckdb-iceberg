@@ -23,7 +23,7 @@ struct ICAPITable {
 	string schema_name;
 	string table_type;
 	string data_source_format;
-	string storage_location;
+	string metadata_location;
 
 	vector<ICAPIColumnDefinition> columns;
 };

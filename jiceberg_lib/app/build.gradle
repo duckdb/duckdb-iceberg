@@ -16,8 +16,6 @@ repositories {
 }
 
 dependencies {
-    implementation libs.guava
-
     implementation 'org.apache.iceberg:iceberg-core:1.7.1'
     implementation 'org.apache.iceberg:iceberg-api:1.7.1'
     implementation 'org.apache.iceberg:iceberg-aws:1.7.1'
@@ -32,6 +30,8 @@ dependencies {
     implementation 'software.amazon.awssdk:regions:2.30.11'
 
     compileOnly 'org.graalvm.sdk:graal-sdk:22.0.0'
+    implementation 'org.slf4j:slf4j-nop:2.0.9'
+    implementation 'org.slf4j:log4j-over-slf4j:2.0.9'
 }
 
 application {
@@ -47,13 +47,13 @@ graalvmNative {
             buildArgs.add('--shared')
             buildArgs.add('--initialize-at-run-time=org.apache.log4j')
             buildArgs.add('--initialize-at-run-time=org.slf4j')
-
-            // Add these for Iceberg
             buildArgs.add('--initialize-at-run-time=com.github.benmanes.caffeine.cache.LocalLoadingCache')
             buildArgs.add('--initialize-at-run-time=org.apache.iceberg.util.Pair')
+            buildArgs.add('--initialize-at-run-time=org.apache.logging.log4j.util.ProviderUtil')
+            buildArgs.add('--initialize-at-run-time=org.apache.logging.log4j.core.impl.Log4jContextFactory')
+            buildArgs.add('--initialize-at-run-time=org.apache.commons.logging.LogFactory')
+            buildArgs.add('--initialize-at-build-time=org.slf4j,org.apache.logging.slf4j')
             buildArgs.add('-H:+ReportExceptionStackTraces')
-
-            // If you need SSL support
             buildArgs.add('--enable-https')
 
             metadataRepository {

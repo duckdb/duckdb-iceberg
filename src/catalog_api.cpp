@@ -273,7 +273,7 @@ string ICAPI::GetToken(string id, string secret, string endpoint) {
 }
 
 static void populateTableMetadata(ICAPITable &table, yyjson_val *metadata_root) {
-	table.storage_location = TryGetStrFromObject(metadata_root, "metadata-location");
+	table.metadata_location = TryGetStrFromObject(metadata_root, "metadata-location");
 	auto *metadata = yyjson_obj_get(metadata_root, "metadata");
 	//table_result.table_id = TryGetStrFromObject(metadata, "table-uuid");
 
@@ -442,6 +442,12 @@ ICAPITable ICAPI::CreateTable(const string &catalog, const string &internal, con
 	yyjson_mut_val *props = yyjson_mut_obj(doc);
     yyjson_mut_obj_add_val(doc, rr, "properties", props);
 	yyjson_mut_obj_add_str(doc, props, "write.parquet.compression-codec", "snappy");
+    yyjson_mut_obj_add_str(doc, props, "format-version", "2");  // Important for newer Iceberg features
+    yyjson_mut_obj_add_str(doc, props, "write.metadata.compression-codec", "none");  // Ensure metadata writes work
+    yyjson_mut_obj_add_str(doc, props, "write.metadata.metrics.default", "full");  // Complete metadata
+    yyjson_mut_obj_add_str(doc, props, "write.metadata.delete-after-commit.enabled", "true");
+    yyjson_mut_obj_add_str(doc, props, "write.metadata.previous-versions-max", "1");
+
 	string post_data = json_to_string(doc);
 
 	struct curl_slist *extra_headers = NULL;

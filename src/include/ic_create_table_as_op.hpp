@@ -5,20 +5,23 @@
 #include "duckdb/execution/operator/schema/physical_create_table.hpp"
 #include "duckdb/planner/parsed_data/bound_create_table_info.hpp"
 
+#include "storage/ic_catalog.hpp"
+#include "storage/ic_schema_entry.hpp"
+
 namespace duckdb {
 
 class ICCreateTableAsOp : public PhysicalOperator {
 public:
     ICCreateTableAsOp(vector<LogicalType> types,
                       unique_ptr<BoundCreateTableInfo> info, 
+                      ICSchemaEntry *schemaEntry,
                       idx_t estimated_cardinality,
                       string &internal_name,
-                      ICCatalogSet &catalog_set,
                       ICCredentials &credentials)
     : PhysicalOperator(PhysicalOperatorType::CREATE_TABLE_AS, types, estimated_cardinality), 
           info(std::move(info)), 
+          schemaEntry(schemaEntry),
           catalog_internal_name(internal_name),
-          catalog_set(catalog_set),
           table_credentials(credentials) {}
 
     // Override the Execute method
@@ -31,7 +34,7 @@ public:
 private:
     unique_ptr<BoundCreateTableInfo> info;
     string &catalog_internal_name;
-    ICCatalogSet &catalog_set;
+    ICSchemaEntry *schemaEntry;
     ICCredentials &table_credentials;
 };
 
