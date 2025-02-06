@@ -16,12 +16,10 @@ public:
                       unique_ptr<BoundCreateTableInfo> info, 
                       ICSchemaEntry *schemaEntry,
                       idx_t estimated_cardinality,
-                      string &internal_name,
                       ICCredentials &credentials)
     : PhysicalOperator(PhysicalOperatorType::CREATE_TABLE_AS, types, estimated_cardinality), 
           info(std::move(info)), 
           schemaEntry(schemaEntry),
-          catalog_internal_name(internal_name),
           table_credentials(credentials) {}
 
     // Override the Execute method
@@ -33,7 +31,6 @@ public:
 
 private:
     unique_ptr<BoundCreateTableInfo> info;
-    string &catalog_internal_name;
     ICSchemaEntry *schemaEntry;
     ICCredentials &table_credentials;
 };

@@ -98,7 +98,6 @@ unique_ptr<PhysicalOperator> ICCatalog::PlanCreateTableAs(
 		std::move(op.info),
 		schemaEntry,
         op.estimated_cardinality,
-		internal_name,
 		credentials);
 
     // If your operator has children (input plan), attach them

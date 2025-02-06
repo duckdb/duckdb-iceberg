@@ -147,7 +147,7 @@ OperatorResultType ICCreateTableAsOp::Execute(ExecutionContext &context,
     
     // Create a file output stream
     const std::string datafile_filename = 
-        catalog_internal_name + "." + table_info->schema + "." + table_info->table + ".parquet";
+        schemaEntry->schema_data->iceberg_catalog + "." + table_info->schema + "." + table_info->table + ".parquet";
     auto open_result = arrow::io::FileOutputStream::Open(datafile_filename);
     
     if (!open_result.ok()) {
@@ -189,7 +189,7 @@ OperatorResultType ICCreateTableAsOp::Execute(ExecutionContext &context,
                 thread,
                 const_cast<char*>(table_credentials.endpoint.c_str()),
                 const_cast<char*>(creds.c_str()),
-                const_cast<char*>(catalog_internal_name.c_str()),
+                const_cast<char*>(schemaEntry->schema_data->iceberg_catalog.c_str()),
                 const_cast<char*>(table_info->schema.c_str()),
                 const_cast<char*>(table_info->table.c_str()),
                 const_cast<char*>(datafile_filename.c_str()),

@@ -219,11 +219,11 @@ static yyjson_doc *api_result_to_doc(const string &api_result) {
 	return doc;
 }
 
-static string GetTableMetadata(const string &internal, const string &schema, const string &table, ICCredentials credentials) {
+static string GetTableMetadata(const string &iceberg_catalog, const string &schema, const string &table, ICCredentials credentials) {
 	struct curl_slist *extra_headers = NULL;
 	extra_headers = curl_slist_append(extra_headers, "X-Iceberg-Access-Delegation: vended-credentials");
 	string api_result = GetRequest(
-		credentials.endpoint + "/v1/" + internal + "/namespaces/" + schema + "/tables/" + table, 
+		credentials.endpoint + "/v1/" + iceberg_catalog + "/namespaces/" + schema + "/tables/" + table, 
 		credentials.token,
 		extra_headers);
 	curl_slist_free_all(extra_headers);
@@ -248,9 +248,9 @@ static ICAPIColumnDefinition ParseColumnDefinition(yyjson_val *column_def) {
 	return result;
 }
 
-ICAPITableCredentials ICAPI::GetTableCredentials(const string &internal, const string &schema, const string &table, ICCredentials credentials) {
+ICAPITableCredentials ICAPI::GetTableCredentials(const string &iceberg_catalog, const string &schema, const string &table, ICCredentials credentials) {
 	ICAPITableCredentials result;
-	string api_result = GetTableMetadata(internal, schema, table, credentials);
+	string api_result = GetTableMetadata(iceberg_catalog, schema, table, credentials);
 	std::unique_ptr<yyjson_doc, YyjsonDocDeleter> doc(api_result_to_doc(api_result));
 	auto *root = yyjson_doc_get_root(doc.get());
 	auto *aws_temp_credentials = yyjson_obj_get(root, "config");
@@ -313,11 +313,11 @@ static ICAPITable createTable(const string &catalog, const string &schema, const
 }
 
 ICAPITable ICAPI::GetTable(
-	const string &catalog, const string &internal, const string &schema, const string &table_name, std::optional<ICCredentials> credentials) { 
+	const string &catalog, const string &iceberg_catalog, const string &schema, const string &table_name, std::optional<ICCredentials> credentials) { 
 	
 	ICAPITable table_result = createTable(catalog, schema, table_name);
 	if (credentials) {
-		string result = GetTableMetadata(internal, schema, table_result.name, *credentials);
+		string result = GetTableMetadata(iceberg_catalog, schema, table_result.name, *credentials);
 		std::unique_ptr<yyjson_doc, YyjsonDocDeleter> doc(api_result_to_doc(result));
 		auto *metadata_root = yyjson_doc_get_root(doc.get());
 		populateTableMetadata(table_result, metadata_root);
@@ -336,26 +336,26 @@ ICAPITable ICAPI::GetTable(
 }
 
 // TODO: handle out-of-order columns using position property
-vector<ICAPITable> ICAPI::GetTables(const string &catalog, const string &internal, const string &schema, ICCredentials credentials) {
+vector<ICAPITable> ICAPI::GetTables(const string &catalog, const string &iceberg_catalog, const string &schema, ICCredentials credentials) {
 	vector<ICAPITable> result;
-	string api_result = GetRequest(credentials.endpoint + "/v1/" + internal + "/namespaces/" + schema + "/tables", credentials.token);
+	string api_result = GetRequest(credentials.endpoint + "/v1/" + iceberg_catalog + "/namespaces/" + schema + "/tables", credentials.token);
 	std::unique_ptr<yyjson_doc, YyjsonDocDeleter> doc(api_result_to_doc(api_result));
 	auto *root = yyjson_doc_get_root(doc.get());
 	auto *tables = yyjson_obj_get(root, "identifiers");
 	size_t idx, max;
 	yyjson_val *table;
 	yyjson_arr_foreach(tables, idx, max, table) {
-		auto table_result = GetTable(catalog, internal, schema, TryGetStrFromObject(table, "name"), std::nullopt);
+		auto table_result = GetTable(catalog, iceberg_catalog, schema, TryGetStrFromObject(table, "name"), std::nullopt);
 		result.push_back(table_result);
 	}
 
 	return result;
 }
 
-vector<ICAPISchema> ICAPI::GetSchemas(const string &catalog, const string &internal, ICCredentials credentials) {
+vector<ICAPISchema> ICAPI::GetSchemas(const string &catalog, const string &iceberg_catalog, ICCredentials credentials) {
 	vector<ICAPISchema> result;
 	string api_result =
-	    GetRequest(credentials.endpoint + "/v1/" + internal + "/namespaces", credentials.token);
+	    GetRequest(credentials.endpoint + "/v1/" + iceberg_catalog + "/namespaces", credentials.token);
 	std::unique_ptr<yyjson_doc, YyjsonDocDeleter> doc(api_result_to_doc(api_result));
 	auto *root = yyjson_doc_get_root(doc.get());
 	auto *schemas = yyjson_obj_get(root, "namespaces");
@@ -364,35 +364,36 @@ vector<ICAPISchema> ICAPI::GetSchemas(const string &catalog, const string &inter
 	yyjson_arr_foreach(schemas, idx, max, schema) {
 		ICAPISchema schema_result;
 		schema_result.catalog_name = catalog;
-		yyjson_val *value = yyjson_arr_get(schema, 0);
-		schema_result.schema_name = yyjson_get_str(value);
+		schema_result.schema_name = yyjson_get_str(yyjson_arr_get(schema, 0));
+		schema_result.iceberg_catalog = iceberg_catalog;
 		result.push_back(schema_result);
 	}
 
 	return result;
 }
 
-ICAPISchema ICAPI::CreateSchema(const string &catalog, const string &internal, const string &schema, ICCredentials credentials) {
+ICAPISchema ICAPI::CreateSchema(const string &catalog, const string &iceberg_catalog, const string &schema, ICCredentials credentials) {
 	string post_data = "{\"namespace\":[\"" + schema + "\"]}";
 	string api_result = PostRequest(
-		credentials.endpoint + "/v1/" + internal + "/namespaces", post_data, "json", credentials.token);
+		credentials.endpoint + "/v1/" + iceberg_catalog + "/namespaces", post_data, "json", credentials.token);
 	api_result_to_doc(api_result);	// if the method returns, request was successful
 	
 	ICAPISchema schema_result;
 	schema_result.catalog_name = catalog;
-	schema_result.schema_name = schema; //yyjson_get_str(value);
+	schema_result.schema_name = schema;
+	schema_result.iceberg_catalog = iceberg_catalog;
 	return schema_result;
 }
 
-void ICAPI::DropSchema(const string &internal, const string &schema, ICCredentials credentials) {
+void ICAPI::DropSchema(const string &iceberg_catalog, const string &schema, ICCredentials credentials) {
 	string api_result = DeleteRequest(
-		credentials.endpoint + "/v1/" + internal + "/namespaces/" + schema, credentials.token);
+		credentials.endpoint + "/v1/" + iceberg_catalog + "/namespaces/" + schema, credentials.token);
 	api_result_to_doc(api_result);	// if the method returns, request was successful
 }
 
-void ICAPI::DropTable(const string &catalog, const string &internal, const string &schema, string &table_name, ICCredentials credentials) {
+void ICAPI::DropTable(const string &catalog, const string &iceberg_catalog, const string &schema, string &table_name, ICCredentials credentials) {
 	string api_result = DeleteRequest(
-		credentials.endpoint + "/v1/" + internal + "/namespaces/" + schema + "/tables/" + table_name + "?purgeRequested=true", 
+		credentials.endpoint + "/v1/" + iceberg_catalog + "/namespaces/" + schema + "/tables/" + table_name + "?purgeRequested=true", 
 		credentials.token);
 	api_result_to_doc(api_result);	// if the method returns, request was successful
 }
@@ -406,7 +407,7 @@ static std::string json_to_string(yyjson_mut_doc *doc) {
     return json_str;
 }
 
-ICAPITable ICAPI::CreateTable(const string &catalog, const string &internal, const string &schema, ICCredentials &credentials, CreateTableInfo *table_info) {
+ICAPITable ICAPI::CreateTable(const string &catalog, const string &iceberg_catalog, const string &schema, ICCredentials &credentials, CreateTableInfo *table_info) {
 	std::unique_ptr<yyjson_mut_doc, YyjsonDocDeleter> dd(yyjson_mut_doc_new(NULL));
 	yyjson_mut_doc *doc = dd.get();
 
@@ -453,7 +454,7 @@ ICAPITable ICAPI::CreateTable(const string &catalog, const string &internal, con
 	struct curl_slist *extra_headers = NULL;
 	extra_headers = curl_slist_append(extra_headers, "X-Iceberg-Access-Delegation: vended-credentials");
 	string api_result = PostRequest(
-		credentials.endpoint + "/v1/" + internal + "/namespaces/" + schema + "/tables", post_data, "json", credentials.token, extra_headers);
+		credentials.endpoint + "/v1/" + iceberg_catalog + "/namespaces/" + schema + "/tables", post_data, "json", credentials.token, extra_headers);
 	curl_slist_free_all(extra_headers);
 
 	std::unique_ptr<yyjson_doc, YyjsonDocDeleter> dd2(api_result_to_doc(api_result));
