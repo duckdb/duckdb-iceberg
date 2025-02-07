@@ -81,7 +81,7 @@ GEN=ninja make {debug/release}
 ```
 
 # Roadmap
-## 1. SQL commands
+## 1. Supported SQL commands
 ### ✅ CREATE SECRET
 ### ✅ ATTACH
 ### 🔳 USE
@@ -98,7 +98,7 @@ GEN=ninja make {debug/release}
 ### 🔳 UPDATE
 ### 🔳 DELETE
 
-## 2. Iceberg Data Types ([ref](https://docs.snowflake.com/en/user-guide/tables-iceberg-data-types))
+## 2. Supported [Iceberg data types](https://docs.snowflake.com/en/user-guide/tables-iceberg-data-types) (writing)
 ### 🔳 boolean
 ### ✅ string
 ### 🔳 tinyint
