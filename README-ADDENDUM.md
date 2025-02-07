@@ -2,18 +2,26 @@
 
 This fork adds proof-of-concept functionality to DuckDB iceberg extension to be able to connect to an iceberg catalog as well as read and write iceberg tables.
 
-You can try it out using DuckDB (>= v1.1.3) by running duckdb in unsigned mode:
+You can try it out using DuckDB (>= v1.2.0) by running duckdb in unsigned mode:
 ```bash
 duckdb --unsigned
 ```
 
 # SQL commands
-## Create a secret to provide access to an iceberg catalog
+## Install this extension and load it. If you already have the official `iceberg` extension installed, you will need to force install this one.
 ```sql
 INSTALL '/path/to/this/iceberg.duckdb_extension';
-INSTALL httpfs;
 LOAD '/path/to/this/iceberg.duckdb_extension';
+```
+
+## Install `httpfs` extension (if you don't have it already) and load it
+```sql
+INSTALL httpfs;
 LOAD httpfs;
+```
+
+## Create a secret to provide access to an iceberg catalog
+```sql
 CREATE SECRET (
 	TYPE ICEBERG,
 	CLIENT_ID '${CLIENT_ID}',
