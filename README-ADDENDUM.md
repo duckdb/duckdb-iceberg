@@ -1,25 +1,40 @@
 # ADDENDUM
 
-This fork adds proof-of-concept functionality to DuckDB iceberg extension to be able to connect to an iceberg catalog as well as read and write iceberg tables.
+This fork adds proof-of-concept functionality to DuckDB iceberg extension to be able to connect to an iceberg catalog and write to iceberg tables as well as read from them.
 
-You can try it out using DuckDB (>= v1.2.0) by running duckdb in unsigned mode:
+# Requirements
+You will need the following to be able to use this new version of the extension:
+1. DuckDB version 1.2.0 or later
+2. `httpfs` extension
+
+Since this extension is not official yet, you will need to run duckdb in `unsigned` mode to be able to use it:
 ```bash
 duckdb --unsigned
 ```
 
-# SQL commands
-## Install this extension and load it. If you already have the official `iceberg` extension installed, you will need to force install this one.
+# Installation
+The following steps need to be done once:
+1. Download the zip from github and unzip it
+2. Change directory to the directory where you unzipped the files
+3. Install the extension
 ```sql
-INSTALL '/path/to/this/iceberg.duckdb_extension';
-LOAD '/path/to/this/iceberg.duckdb_extension';
+INSTALL './iceberg.duckdb_extension';
 ```
-
-## Install `httpfs` extension (if you don't have it already) and load it
+4. If you already have the official `iceberg` extension installed, you will need to force the install
+```sql
+FORCE INSTALL './iceberg.duckdb_extension';
+```
+5. Install `httpfs` extension if you don't have it installed already
 ```sql
 INSTALL httpfs;
-LOAD httpfs;
 ```
 
+# Usage
+## Load `httpfs` and `iceberg` extensions
+```sql
+LOAD httpfs;
+LOAD iceberg;
+```
 ## Create a secret to provide access to an iceberg catalog
 ```sql
 CREATE SECRET (
@@ -55,6 +70,9 @@ DROP TABLE my_catalog.my_schema.table_1;
 ```
 
 # How to build extension from source
+Requirements:
+* A compiler that supports C++17
+* CMake version 3.28 or later
 ```
 git clone https://github.com/fivetran/duckdb-iceberg.git
 git submodule update --init --recursive
@@ -63,7 +81,7 @@ GEN=ninja make {debug/release}
 ```
 
 # Roadmap
-## # SQL commands
+## 1. SQL commands
 ### ✅ CREATE SECRET
 ### ✅ ATTACH
 ### 🔳 USE
@@ -80,7 +98,7 @@ GEN=ninja make {debug/release}
 ### 🔳 UPDATE
 ### 🔳 DELETE
 
-## # Data Types ([ref](https://docs.snowflake.com/en/user-guide/tables-iceberg-data-types))
+## 2. Iceberg Data Types ([ref](https://docs.snowflake.com/en/user-guide/tables-iceberg-data-types))
 ### 🔳 boolean
 ### ✅ string
 ### 🔳 tinyint
@@ -98,7 +116,7 @@ GEN=ninja make {debug/release}
 ### 🔳 map
 ### 🔳 struct
 
-## # Miscellaneous
+## 3. Miscellaneous
 ### 🔳 Bundle `jiceberg` statically into the extension
 
 
