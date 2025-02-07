@@ -90,6 +90,9 @@ GEN=ninja make {debug/release}
 ### 🔳 map
 ### 🔳 struct
 
+## # Miscellaneous
+### 🔳 Bundle `jiceberg` statically into the extension
+
 
 
 
