@@ -54,44 +54,40 @@ static unique_ptr<FunctionData> IcebergMetaDataBind(ClientContext &context, Tabl
 	FileSystem &fs = FileSystem::GetFileSystem(context);
 	auto iceberg_path = input.inputs[0].ToString();
 
-	bool allow_moved_paths = false;
-	string metadata_compression_codec = "none";
-	bool skip_schema_inference = false;
-	string table_version = DEFAULT_TABLE_VERSION;
-	string version_name_format = DEFAULT_TABLE_VERSION_FORMAT;
+	IcebergOptions options;
 	
 	for (auto &kv : input.named_parameters) {
 		auto loption = StringUtil::Lower(kv.first);
 		if (loption == "allow_moved_paths") {
-			allow_moved_paths = BooleanValue::Get(kv.second);
+			options.allow_moved_paths = BooleanValue::Get(kv.second);
 		} else if (loption == "metadata_compression_codec") {
-			metadata_compression_codec = StringValue::Get(kv.second);
+			options.metadata_compression_codec = StringValue::Get(kv.second);
 		} else if (loption == "skip_schema_inference") {
-			skip_schema_inference = BooleanValue::Get(kv.second);
+			options.skip_schema_inference = BooleanValue::Get(kv.second);
 		} else if (loption == "version") {
-			table_version = StringValue::Get(kv.second);
+			options.table_version = StringValue::Get(kv.second);
 		} else if (loption == "version_name_format") {
-			version_name_format = StringValue::Get(kv.second);
+			options.version_name_format = StringValue::Get(kv.second);
 		}
 	}
 
-	auto iceberg_meta_path = IcebergSnapshot::GetMetaDataPath(context, iceberg_path, fs, metadata_compression_codec, table_version, version_name_format);
+	auto iceberg_meta_path = IcebergSnapshot::GetMetaDataPath(context, iceberg_path, fs, options);
 	IcebergSnapshot snapshot_to_scan;
 	if (input.inputs.size() > 1) {
 		if (input.inputs[1].type() == LogicalType::UBIGINT) {
-			snapshot_to_scan = IcebergSnapshot::GetSnapshotById(iceberg_meta_path, fs, input.inputs[1].GetValue<uint64_t>(), metadata_compression_codec, skip_schema_inference);
+			snapshot_to_scan = IcebergSnapshot::GetSnapshotById(iceberg_meta_path, fs, input.inputs[1].GetValue<uint64_t>(), options);
 		} else if (input.inputs[1].type() == LogicalType::TIMESTAMP) {
 			snapshot_to_scan =
-			    IcebergSnapshot::GetSnapshotByTimestamp(iceberg_meta_path, fs, input.inputs[1].GetValue<timestamp_t>(), metadata_compression_codec, skip_schema_inference);
+			    IcebergSnapshot::GetSnapshotByTimestamp(iceberg_meta_path, fs, input.inputs[1].GetValue<timestamp_t>(), options);
 		} else {
 			throw InvalidInputException("Unknown argument type in IcebergScanBindReplace.");
 		}
 	} else {
-		snapshot_to_scan = IcebergSnapshot::GetLatestSnapshot(iceberg_meta_path, fs, metadata_compression_codec, skip_schema_inference);
+		snapshot_to_scan = IcebergSnapshot::GetLatestSnapshot(iceberg_meta_path, fs, options);
 	}
 
 	ret->iceberg_table =
-	    make_uniq<IcebergTable>(IcebergTable::Load(iceberg_path, snapshot_to_scan, fs, allow_moved_paths, metadata_compression_codec));
+	    make_uniq<IcebergTable>(IcebergTable::Load(iceberg_path, snapshot_to_scan, fs, options));
 
 	auto manifest_types = IcebergManifest::Types();
 	return_types.insert(return_types.end(), manifest_types.begin(), manifest_types.end());
