@@ -145,7 +145,7 @@ IcebergColumnDefinition IcebergColumnDefinition::ParseFromJson(yyjson_val *val) 
 	ret.id = IcebergUtils::TryGetNumFromObject(val, "id");
 	ret.name = IcebergUtils::TryGetStrFromObject(val, "name");
 	ret.type = ParseType(val);
-	ret.default_value = Value();
+	ret.default_value = Value(ret.type);
 	ret.required = IcebergUtils::TryGetBoolFromObject(val, "required");
 
 	return ret;

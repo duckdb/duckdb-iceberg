@@ -117,4 +117,4 @@ Binder Error
 query II
 EXPLAIN SELECT count(*) FROM ICEBERG_SCAN('data/iceberg/generated_spec2_0_001/pyspark_iceberg_table');
 ----
-physical_plan	<REGEX>:.* ANTI .*PARQUET_SCAN.*Rows.*Rows.*
+physical_plan	<REGEX>:.*ICEBERG_SCAN.*Rows.*

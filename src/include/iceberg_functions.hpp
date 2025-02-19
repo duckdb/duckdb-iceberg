@@ -16,12 +16,12 @@ namespace duckdb {
 
 class IcebergFunctions {
 public:
-	static vector<TableFunctionSet> GetTableFunctions();
+	static vector<TableFunctionSet> GetTableFunctions(DatabaseInstance &instance);
 	static vector<ScalarFunction> GetScalarFunctions();
 
 private:
 	static TableFunctionSet GetIcebergSnapshotsFunction();
-	static TableFunctionSet GetIcebergScanFunction();
+	static TableFunctionSet GetIcebergScanFunction(DatabaseInstance &instance);
 	static TableFunctionSet GetIcebergMetadataFunction();
 };
 
