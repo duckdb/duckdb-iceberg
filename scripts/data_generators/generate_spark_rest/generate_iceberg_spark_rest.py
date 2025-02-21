@@ -31,6 +31,7 @@ import shutil
 DATA_GENERATION_DIR = f"./data/generated/iceberg/spark-rest/"
 SCRIPT_DIR = f"./scripts/data_generators/"
 INTERMEDIATE_DATA = "./data/generated/intermediates/spark-rest/"
+PARQUET_SRC_FILE = f"scripts/data_generators/tmp_data/tmp.parquet"
 
 class IcebergSparkRest():
     def __init__(self):
@@ -86,7 +87,26 @@ class IcebergSparkRest():
             return ""
         return setup_files[0]
 
+    def GenerateTPCH(self, con):
+        duckdb_con = duckdb.connect()
+        duckdb_con.execute("call dbgen(sf=1)")
+
+        for tbl in ['lineitem', 'customer', 'nation', 'orders', 'part', 'partsupp', 'region', 'supplier']:
+            create_statement = f"""
+                CREATE or REPLACE TABLE default.{tbl}_sf1
+                TBLPROPERTIES (
+                    'format-version'='2',
+                    'write.update.mode'='merge-on-read'
+                )
+                AS SELECT * FROM parquet_file_view;
+            """
+            duckdb_con.execute(f"copy {tbl} to '{PARQUET_SRC_FILE}' (FORMAT PARQUET)")
+            con.read.parquet(PARQUET_SRC_FILE).createOrReplaceTempView('parquet_file_view')
+            con.sql(create_statement)
+
     def GenerateTables(self, con):
+        # Generate the tpch tables
+        self.GenerateTPCH(con)
         # con is spark_session
         # first get the sub_directories in the current directory
         for table_dir in self.GetTableDirs():
@@ -94,7 +114,6 @@ class IcebergSparkRest():
             setup_script = self.GetSetupFile(full_table_dir)
 
             # should mimic generate_base_parquet
-            PARQUET_SRC_FILE = f"scripts/data_generators/tmp_data/tmp.parquet"
             if setup_script != "":
                 os.system(f"PARQUET_SRC_FILE='{PARQUET_SRC_FILE}' python3 {full_table_dir}/{os.path.basename(setup_script)}")
                 con.read.parquet(PARQUET_SRC_FILE).createOrReplaceTempView('parquet_file_view')

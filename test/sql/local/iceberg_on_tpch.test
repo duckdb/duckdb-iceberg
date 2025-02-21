@@ -1,0 +1,79 @@
+# name: test/sql/local/iceberg_on_tpch.test
+# description: test integration with iceberg catalog read
+# group: [iceberg]
+
+
+require-env ICEBERG_SERVER_AVAILABLE
+
+require iceberg
+
+require parquet
+
+require httpfs
+
+require tpch
+
+# setup creds
+statement ok
+CREATE SECRET (
+       TYPE ICEBERG,
+       ENDPOINT 'http://127.0.0.1:8181'
+  );
+
+
+statement ok
+CREATE SECRET (
+    TYPE S3,
+    KEY_ID 'admin',
+    SECRET 'password',
+    ENDPOINT '127.0.0.1:9000',
+    URL_STYLE 'path',
+    USE_SSL 0
+  );
+
+statement ok
+ATTACH '' AS my_datalake (TYPE ICEBERG);
+
+
+statement ok
+create view customer as select * from my_datalake.default.customer_sf1;
+
+statement ok
+create view lineitem as select * from my_datalake.default.lineitem_sf1;
+
+statement ok
+create view nation as select * from my_datalake.default.nation_sf1;
+
+statement ok
+create view orders as select * from my_datalake.default.orders_sf1;
+
+statement ok
+create view part as select * from my_datalake.default.part_sf1;
+
+statement ok
+create view partsupp as select * from my_datalake.default.partsupp_sf1;
+
+statement ok
+create view region as select * from my_datalake.default.region_sf1;
+
+statement ok
+create view supplier as select * from my_datalake.default.supplier_sf1;
+
+
+loop i 1 9
+
+query I
+PRAGMA tpch(${i})
+----
+<FILE>:duckdb/extension/tpch/dbgen/answers/sf1/q0${i}.csv
+
+endloop
+
+loop i 10 23
+
+query I
+PRAGMA tpch(${i})
+----
+<FILE>:duckdb/extension/tpch/dbgen/answers/sf1/q${i}.csv
+
+endloop

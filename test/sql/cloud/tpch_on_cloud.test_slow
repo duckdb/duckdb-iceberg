@@ -1,0 +1,50 @@
+# name: test/sql/cloud/iceberg_on_tpch.test
+# description: test integration with iceberg catalog read
+# group: [iceberg]
+# setup creds
+
+# TODO, need to get access to a remote glue catalog merged first
+mode skip
+
+statement ok
+create view customer as select * from my_datalake.myblognamespace.customer;
+
+statement ok
+create view lineitem as select * from my_datalake.myblognamespace.lineitem;
+
+statement ok
+create view nation as select * from my_datalake.myblognamespace.nation;
+
+statement ok
+create view orders as select * from my_datalake.myblognamespace.orders;
+
+statement ok
+create view part as select * from my_datalake.myblognamespace.part;
+
+statement ok
+create view partsupp as select * from my_datalake.myblognamespace.partsupp;
+
+statement ok
+create view region as select * from my_datalake.myblognamespace.region;
+
+statement ok
+create view supplier as select * from my_datalake.myblognamespace.supplier;
+
+
+loop i 1 9
+
+query I
+PRAGMA tpch(${i})
+----
+<FILE>:duckdb/extension/tpch/dbgen/answers/sf0.1/q0${i}.csv
+
+endloop
+
+loop i 10 23
+
+query I
+PRAGMA tpch(${i})
+----
+<FILE>:duckdb/extension/tpch/dbgen/answers/sf0.1/q${i}.csv
+
+endloop

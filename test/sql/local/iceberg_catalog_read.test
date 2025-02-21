@@ -30,15 +30,6 @@ CREATE SECRET (
 statement ok
 ATTACH '' AS my_datalake (TYPE ICEBERG);
 
-query IIIIII
-Show all tables;
-----
-my_datalake	default	pyspark_iceberg_table_v1	[__]	[INTEGER]	false
-my_datalake	default	pyspark_iceberg_table_v2	[__]	[INTEGER]	false
-my_datalake	default	table_more_deletes	[__]	[INTEGER]	false
-my_datalake	default	table_partitioned	[__]	[INTEGER]	false
-my_datalake	default	table_unpartitioned	[__]	[INTEGER]	false
-
 statement error
 select * from table_unpartitioned
 ----
