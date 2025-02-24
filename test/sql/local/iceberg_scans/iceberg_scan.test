@@ -1,0 +1,181 @@
+# name: test/sql/local/iceberg_scan.test
+# description: test iceberg extension
+# group: [iceberg]
+
+# Before we load the extension, this will fail
+statement error
+SELECT * FROM ICEBERG_SCAN('data/iceberg/lineitem_iceberg');
+----
+Catalog Error
+
+require parquet
+
+require iceberg
+
+### Scanning latest snapshot
+query I
+SELECT count(*) FROM ICEBERG_SCAN('data/persistent/iceberg/lineitem_iceberg', ALLOW_MOVED_PATHS=TRUE);
+----
+51793
+
+# Scanning 1st snapshot
+query I
+SELECT count(*) FROM ICEBERG_SCAN('data/persistent/iceberg/lineitem_iceberg', 3776207205136740581::UBIGINT, ALLOW_MOVED_PATHS=TRUE);
+----
+60175
+
+# Scanning 2nd snapshot
+query I
+SELECT count(*) FROM ICEBERG_SCAN('data/persistent/iceberg/lineitem_iceberg', 7635660646343998149::UBIGINT, ALLOW_MOVED_PATHS=TRUE);
+----
+51793
+
+# Scanning 2nd snapshot
+query I
+SELECT count(*) FROM ICEBERG_SCAN('data/persistent/iceberg/lineitem_iceberg', version='2', ALLOW_MOVED_PATHS=TRUE);
+----
+51793
+
+# Scanning latest snapshot at specific moment in time
+# note in the data we have:
+#   1 = 2023-02-15 15:07:54.504
+#	2 = 2023-02-15 15:08:14.73
+query I
+SELECT count(*) FROM ICEBERG_SCAN('data/persistent/iceberg/lineitem_iceberg', '2023-02-15 15:07:54.504'::TIMESTAMP, ALLOW_MOVED_PATHS=TRUE);
+----
+60175
+
+query I
+SELECT count(*) FROM ICEBERG_SCAN('data/persistent/iceberg/lineitem_iceberg', '2023-02-15 15:07:54.729'::TIMESTAMP, ALLOW_MOVED_PATHS=TRUE);
+----
+60175
+
+query I
+SELECT count(*) FROM ICEBERG_SCAN('data/persistent/iceberg/lineitem_iceberg', '2023-02-15 15:08:14.73'::TIMESTAMP, ALLOW_MOVED_PATHS=TRUE);
+----
+51793
+
+statement error
+FROM ICEBERG_SCAN('data/persistent/iceberg/lineitem_iceberg', '2023-02-15 15:07:54.503'::TIMESTAMP, ALLOW_MOVED_PATHS=TRUE);
+----
+IO Error: Could not find latest snapshots for timestamp 2023-02-15 15:07:54.503
+
+statement error
+SELECT * FROM ICEBERG_SCAN('data/persistent/iceberg/lineitem_iceberg_gz', ALLOW_MOVED_PATHS=TRUE);
+----
+IO Error: Iceberg metadata file not found for table version '2' using 'none' compression and format(s): 'v%s%s.metadata.json,%s%s.metadata.json'
+
+query I
+SELECT count(*) FROM ICEBERG_SCAN('data/persistent/iceberg/lineitem_iceberg_gz', ALLOW_MOVED_PATHS=TRUE, METADATA_COMPRESSION_CODEC="gzip");
+----
+111968
+
+statement error
+SELECT count(*) FROM ICEBERG_SCAN('data/persistent/iceberg/lineitem_iceberg_gz', ALLOW_MOVED_PATHS=TRUE, METADATA_COMPRESSION_CODEC="gzip", version='1');
+----
+IO Error: No snapshots found
+
+query I
+SELECT count(*) FROM ICEBERG_SCAN('data/persistent/iceberg/lineitem_iceberg_gz', ALLOW_MOVED_PATHS=TRUE, METADATA_COMPRESSION_CODEC="gzip", version='2', version_name_format='v%s%s.metadata.json');
+----
+111968
+
+statement error
+SELECT count(*) FROM ICEBERG_SCAN('data/persistent/iceberg/lineitem_iceberg_no_hint', ALLOW_MOVED_PATHS=TRUE);
+----
+<REGEX>:.*SET unsafe_enable_version_guessing.*
+
+statement ok
+SET unsafe_enable_version_guessing=true;
+
+query I
+SELECT count(*) FROM ICEBERG_SCAN('data/persistent/iceberg/lineitem_iceberg_no_hint', '2023-02-15 15:07:54.504'::TIMESTAMP, ALLOW_MOVED_PATHS=TRUE);
+----
+60175
+
+query I
+SELECT count(*) FROM ICEBERG_SCAN('data/persistent/iceberg/lineitem_iceberg_no_hint', '2023-02-15 15:07:54.729'::TIMESTAMP, ALLOW_MOVED_PATHS=TRUE);
+----
+60175
+
+query I
+SELECT count(*) FROM ICEBERG_SCAN('data/persistent/iceberg/lineitem_iceberg_no_hint', '2023-02-15 15:08:14.73'::TIMESTAMP, ALLOW_MOVED_PATHS=TRUE);
+----
+51793
+
+statement error
+FROM ICEBERG_SCAN('data/persistent/iceberg/lineitem_iceberg_no_hint', '2023-02-15 15:07:54.503'::TIMESTAMP, ALLOW_MOVED_PATHS=TRUE);
+----
+IO Error: Could not find latest snapshots for timestamp 2023-02-15 15:07:54.503
+
+query I
+SELECT count(*) FROM ICEBERG_SCAN('data/persistent/iceberg/lineitem_iceberg_gz_no_hint', ALLOW_MOVED_PATHS=TRUE, METADATA_COMPRESSION_CODEC="gzip");
+----
+111968
+
+query I
+SELECT count(*) FROM ICEBERG_SCAN('data/persistent/iceberg/lineitem_iceberg_gz_no_hint', ALLOW_MOVED_PATHS=TRUE, METADATA_COMPRESSION_CODEC="gzip", version='2', version_name_format='v%s%s.metadata.json');
+----
+111968
+
+require-env DUCKDB_ICEBERG_HAVE_GENERATED_DATA
+
+query I
+SELECT typeof(l_orderkey_bool) FROM ICEBERG_SCAN('data/generated/iceberg/spark-local/pyspark_iceberg_table_v1', ALLOW_MOVED_PATHS=TRUE) LIMIT 1;
+----
+BOOLEAN
+
+query I
+SELECT typeof(l_partkey_int) FROM ICEBERG_SCAN('data/generated/iceberg/spark-local/pyspark_iceberg_table_v1', ALLOW_MOVED_PATHS=TRUE) LIMIT 1;
+----
+INTEGER
+
+query I
+SELECT typeof(l_suppkey_long) FROM ICEBERG_SCAN('data/generated/iceberg/spark-local/pyspark_iceberg_table_v1', ALLOW_MOVED_PATHS=TRUE) LIMIT 1;
+----
+BIGINT
+
+query I
+SELECT typeof(l_extendedprice_float) FROM ICEBERG_SCAN('data/generated/iceberg/spark-local/pyspark_iceberg_table_v1', ALLOW_MOVED_PATHS=TRUE) LIMIT 1;
+----
+FLOAT
+
+query I
+SELECT typeof(l_extendedprice_double) FROM ICEBERG_SCAN('data/generated/iceberg/spark-local/pyspark_iceberg_table_v1', ALLOW_MOVED_PATHS=TRUE) LIMIT 1;
+----
+DOUBLE
+
+query I
+SELECT typeof(l_extendedprice_dec9_2) FROM ICEBERG_SCAN('data/generated/iceberg/spark-local/pyspark_iceberg_table_v1', ALLOW_MOVED_PATHS=TRUE) LIMIT 1;
+----
+DECIMAL(9,2)
+
+query I
+SELECT typeof(l_shipdate_date) FROM ICEBERG_SCAN('data/generated/iceberg/spark-local/pyspark_iceberg_table_v1', ALLOW_MOVED_PATHS=TRUE) LIMIT 1;
+----
+DATE
+
+# query I
+# SELECT typeof(l_partkey_time) FROM ICEBERG_SCAN('data/generated/iceberg/spark-local/pyspark_iceberg_table_v1', ALLOW_MOVED_PATHS=TRUE) LIMIT 1;
+# ----
+# INTEGER
+
+query I
+SELECT typeof(l_commitdate_timestamp) FROM ICEBERG_SCAN('data/generated/iceberg/spark-local/pyspark_iceberg_table_v1', ALLOW_MOVED_PATHS=TRUE) LIMIT 1;
+----
+TIMESTAMP
+
+query I
+SELECT typeof(l_commitdate_timestamp_tz) FROM ICEBERG_SCAN('data/generated/iceberg/spark-local/pyspark_iceberg_table_v1', ALLOW_MOVED_PATHS=TRUE) LIMIT 1;
+----
+TIMESTAMP WITH TIME ZONE
+
+query I
+SELECT typeof(l_comment_string) FROM ICEBERG_SCAN('data/generated/iceberg/spark-local/pyspark_iceberg_table_v1', ALLOW_MOVED_PATHS=TRUE) LIMIT 1;
+----
+VARCHAR
+
+query I
+SELECT typeof(l_comment_blob) FROM ICEBERG_SCAN('data/generated/iceberg/spark-local/pyspark_iceberg_table_v1', ALLOW_MOVED_PATHS=TRUE) LIMIT 1;
+----
+BLOB

@@ -1,0 +1,115 @@
+# name: test/sql/local/iceberg_catalog_read.test
+# description: test integration with iceberg catalog read
+# group: [iceberg]
+
+require-env ICEBERG_SERVER_AVAILABLE
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+statement ok
+CREATE SECRET (
+       TYPE ICEBERG,
+       ENDPOINT 'http://127.0.0.1:8181'
+  );
+
+
+statement ok
+CREATE SECRET (
+    TYPE S3,
+    KEY_ID 'admin',
+    SECRET 'password',
+    ENDPOINT '127.0.0.1:9000',
+    URL_STYLE 'path',
+    USE_SSL 0
+  );
+
+
+statement ok
+ATTACH '' AS my_datalake (TYPE ICEBERG);
+
+query IIIIII
+Show all tables;
+----
+my_datalake	default	pyspark_iceberg_table_v1	[__]	[INTEGER]	false
+my_datalake	default	pyspark_iceberg_table_v2	[__]	[INTEGER]	false
+my_datalake	default	table_more_deletes	[__]	[INTEGER]	false
+my_datalake	default	table_partitioned	[__]	[INTEGER]	false
+my_datalake	default	table_unpartitioned	[__]	[INTEGER]	false
+
+statement error
+select * from table_unpartitioned
+----
+<REGEX>:.*table_unpartitioned does not exist.*
+
+statement error
+select * from table_unpartitioned
+----
+<REGEX>:.*Did you mean.*my_datalake.default.table_unpartitioned.*
+
+query III
+select * from my_datalake.default.table_unpartitioned order by all;
+----
+2023-03-01	1	a
+2023-03-02	2	b
+2023-03-03	3	c
+2023-03-04	4	d
+2023-03-05	5	e
+2023-03-06	6	f
+2023-03-07	7	g
+2023-03-08	8	h
+2023-03-09	9	i
+2023-03-10	10	j
+2023-03-11	11	k
+2023-03-12	12	l
+
+# test deletes (see generate_iceberg_spark_rest.py for where deletes occur)
+query III
+select * from my_datalake.default.table_more_deletes order by all;
+----
+2023-03-01	1	a
+2023-03-02	2	b
+2023-03-03	3	c
+2023-03-10	10	j
+2023-03-11	11	k
+2023-03-12	12	l
+
+
+query I
+select sum(l_suppkey_long) from my_datalake.default.pyspark_iceberg_table_v2;
+----
+15602826438
+
+statement error
+update my_datalake.default.table_unpartitioned set number = 5 where number < 5;
+----
+<REGEX>:.*Not implemented Error.*
+
+statement error
+delete from my_datalake.default.table_unpartitioned where number < 5;
+----
+<REGEX>:.*Not implemented Error.*
+
+statement error
+insert into my_datalake.default.table_unpartitioned values ('2023-03-13', 13, 'm');
+----
+<REGEX>:.*Not implemented Error.*
+
+statement error
+Create table my_datalake.default.new_table (a int, b varchar);
+----
+<REGEX>:.*Not implemented Error.*
+
+statement error
+Alter table my_datalake.default.table_more_deletes add column new_column INTEGER default 10;
+----
+<REGEX>:.*Not implemented Error.*
+
+statement error
+Drop table my_datalake.default.table_more_deletes;
+----
+<REGEX>:.*Not implemented Error.*
+

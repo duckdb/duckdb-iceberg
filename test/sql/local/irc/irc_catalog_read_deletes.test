@@ -1,0 +1,120 @@
+# name: test/sql/local/iceberg_catalog_read.test
+# description: test integration with iceberg catalog read
+# group: [iceberg]
+
+require-env ICEBERG_SERVER_AVAILABLE
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+statement ok
+CREATE SECRET (
+       TYPE ICEBERG,
+       ENDPOINT 'http://127.0.0.1:8181'
+  );
+
+
+statement ok
+CREATE SECRET (
+    TYPE S3,
+    KEY_ID 'admin',
+    SECRET 'password',
+    ENDPOINT '127.0.0.1:9000',
+    URL_STYLE 'path',
+    USE_SSL 0
+  );
+
+
+statement ok
+ATTACH '' AS my_datalake (TYPE ICEBERG);
+
+
+statement ok
+set enable_logging=true;
+# verify deletes
+
+# TODO verify the catalog has deletes (rest catalog stores data differently from local catalog)
+query I nosort results_1
+select sum(l_suppkey), min(l_suppkey), max(l_suppkey) from my_datalake.default.table_with_deletes;
+
+query I nosort results_1
+select sum(l_suppkey), min(l_suppkey), max(l_suppkey) from read_parquet('data/generated/intermediates/spark-rest/table_with_deletes/last/data.parquet/*.parquet');
+
+query I
+select message::INT > 0 from duckdb_logs() where type like '%duckdb-iceberg.finalize_deletes%';
+----
+true
+
+mode skip
+
+# Verify Deletes
+# joins with a table that has deletes.
+query I nosort results_2
+select l1_deletes.l_orderkey, count(*) count from
+  my_datalake.default.lineitem_sf1_deletes l1_deletes,
+  my_datalake.default.lineitem_sf_01_no_deletes l2_no_deletes
+where l1_deletes.l_partkey = l2_no_deletes.l_partkey
+group by l1_deletes.l_orderkey
+order by l1_deletes.l_orderkey, count
+limit 10;
+----
+
+
+query I nosort results_2
+select l1_deletes.l_orderkey, count(*) count from
+    read_parquet('data/generated/intermediates/spark-rest/lineitem_sf1_deletes/last/data.parquet/*.parquet') l1_deletes,
+    read_parquet('data/generated/intermediates/spark-rest/lineitem_sf_01_no_deletes/last/data.parquet/*.parquet') l2_no_deletes
+where l1_deletes.l_partkey = l2_no_deletes.l_partkey
+group by l1_deletes.l_orderkey
+order by l1_deletes.l_orderkey, count
+limit 10
+;
+
+# Verify a single delete
+query IIII nosort result_3
+select l_orderkey, l_partkey, l_suppkey, l_quantity from my_datalake.default.lineitem_sf_01_1_delete order by l_partkey, l_orderkey limit 10;
+----
+
+query IIII nosort result_3
+select l_orderkey, l_partkey, l_suppkey, l_quantity from read_parquet('data/generated/intermediates/spark-rest/lineitem_sf_01_1_delete/last/data.parquet/*.parquet') order by l_partkey, l_orderkey limit 10;
+----
+
+query I
+select count(*) from my_datalake.default.lineitem_sf_01_1_delete where l_orderkey=10053 and l_partkey = 77;
+----
+0
+
+query I
+select count(*) from read_parquet('data/generated/intermediates/spark-rest/lineitem_sf_01_1_delete/last/data.parquet/*.parquet') where l_orderkey=10053 and l_partkey = 77;
+----
+0
+
+
+# Verify reading from large partitioned table
+# add tests for partitioned tables.
+query II nosort result_4
+select l_shipmode, count(*) count from my_datalake.default.lineitem_partitioned_l_shipmode group by l_shipmode order by count;
+----
+
+query II nosort result_4
+select l_shipmode, count(*) count from read_parquet('data/generated/intermediates/spark-rest/lineitem_partitioned_l_shipmode/last/data.parquet/*.parquet') group by l_shipmode order by count;
+----
+
+
+# Verify reading from large partitioned table with deletes
+query II nosort result_5
+select l_shipmode, count(*) count from my_datalake.default.lineitem_partitioned_l_shipmode_deletes group by l_shipmode order by count;
+----
+
+query II nosort result_5
+select l_shipmode, count(*) count from read_parquet('data/generated/intermediates/spark-rest/lineitem_partitioned_l_shipmode_deletes/last/data.parquet/*.parquet') group by l_shipmode order by count;
+----
+
+query I
+select message::INT > 0 from duckdb_logs() where type like '%duckdb-iceberg.finalize_deletes%' order by timestamp desc limit 1;
+----
+1
+
