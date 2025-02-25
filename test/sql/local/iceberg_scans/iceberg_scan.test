@@ -12,7 +12,6 @@ require parquet
 
 require iceberg
 
-
 ### Scanning latest snapshot
 query I
 SELECT count(*) FROM ICEBERG_SCAN('data/persistent/iceberg/lineitem_iceberg', ALLOW_MOVED_PATHS=TRUE);

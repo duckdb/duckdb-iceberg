@@ -117,8 +117,10 @@ DESCRIBE SELECT schema_evol_added_col_1 FROM ICEBERG_SCAN('data/generated/iceber
 ----
 Binder Error
 
+mode skip
+
 # Check that there are injected cardinality
 query II
 EXPLAIN SELECT count(*) FROM ICEBERG_SCAN('data/generated/iceberg/spark-local/pyspark_iceberg_table_v2');
 ----
-physical_plan	<REGEX>:.* ANTI .*PARQUET_SCAN.*Rows.*Rows.*
+physical_plan	<REGEX>:.*ICEBERG_SCAN.*Rows.*

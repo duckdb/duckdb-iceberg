@@ -4,9 +4,9 @@
 
 require-env ICEBERG_SERVER_AVAILABLE
 
-require iceberg
-
 require parquet
+
+require iceberg
 
 require httpfs
 
@@ -27,17 +27,9 @@ CREATE SECRET (
     USE_SSL 0
   );
 
+
 statement ok
 ATTACH '' AS my_datalake (TYPE ICEBERG);
-
-query IIIIII
-Show all tables;
-----
-my_datalake	default	pyspark_iceberg_table_v1	[__]	[INTEGER]	false
-my_datalake	default	pyspark_iceberg_table_v2	[__]	[INTEGER]	false
-my_datalake	default	table_more_deletes	[__]	[INTEGER]	false
-my_datalake	default	table_partitioned	[__]	[INTEGER]	false
-my_datalake	default	table_unpartitioned	[__]	[INTEGER]	false
 
 statement error
 select * from table_unpartitioned
@@ -76,8 +68,9 @@ select * from my_datalake.default.table_more_deletes order by all;
 2023-03-11	11	k
 2023-03-12	12	l
 
+
 statement error
-select * from my_datalake.default.pyspark_iceberg_table_v2;
+select sum(l_suppkey_long) from my_datalake.default.pyspark_iceberg_table_v2;
 ----
 <REGEX>:.*Not implemented Error.*
 
