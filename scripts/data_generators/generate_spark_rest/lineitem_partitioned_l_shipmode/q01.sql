@@ -1,0 +1,1 @@
+delete from default.lineitem_partitioned_l_shipmode where l_shipmode = 'TRUCK';

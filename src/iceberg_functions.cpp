@@ -7,11 +7,11 @@
 
 namespace duckdb {
 
-vector<TableFunctionSet> IcebergFunctions::GetTableFunctions() {
+vector<TableFunctionSet> IcebergFunctions::GetTableFunctions(DatabaseInstance &instance) {
 	vector<TableFunctionSet> functions;
 
 	functions.push_back(GetIcebergSnapshotsFunction());
-	functions.push_back(GetIcebergScanFunction());
+	functions.push_back(GetIcebergScanFunction(instance));
 	functions.push_back(GetIcebergMetadataFunction());
 
 	return functions;
