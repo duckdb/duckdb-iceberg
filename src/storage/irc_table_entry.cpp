@@ -40,13 +40,9 @@ void ICTableEntry::BindUpdateConstraints(Binder &binder, LogicalGet &, LogicalPr
 
 TableFunction ICTableEntry::GetScanFunction(ClientContext &context, unique_ptr<FunctionData> &bind_data) {
 	auto &db = DatabaseInstance::GetDatabase(context);
+	auto &iceberg_scan_function_set = ExtensionUtil::GetTableFunction(db, "iceberg_scan");
+	auto iceberg_scan_function = iceberg_scan_function_set.functions.GetFunctionByArguments(context, {LogicalType::VARCHAR});
 	auto &ic_catalog = catalog.Cast<IRCatalog>();
-
-	auto &parquet_function_set = ExtensionUtil::GetTableFunction(db, "parquet_scan");
-	auto parquet_scan_function = parquet_function_set.functions.GetFunctionByArguments(context, {LogicalType::VARCHAR});
-
-	auto &iceberg_function_set = ExtensionUtil::GetTableFunction(db, "iceberg_scan");
-	auto iceberg_scan_function = iceberg_function_set.functions.GetFunctionByArguments(context, {LogicalType::VARCHAR});
 
 	D_ASSERT(table_data);
 
@@ -95,35 +91,13 @@ TableFunction ICTableEntry::GetScanFunction(ClientContext &context, unique_ptr<F
 	// Set the S3 path as input to table function
 	vector<Value> inputs = {table_data->storage_location};
 
-	TableFunctionBindInput bind_input(inputs, param_map, return_types, names, nullptr, nullptr, 
+	TableFunctionBindInput bind_input(inputs, param_map, return_types, names, nullptr, nullptr,
 									  iceberg_scan_function, empty_ref);
 
-	auto table_ref = iceberg_scan_function.bind_replace(context, bind_input);
+	auto result = iceberg_scan_function.bind(context, bind_input, return_types, names);
+	bind_data = std::move(result);
 
-	// 1) Create a Binder and bind the parser-level TableRef -> BoundTableRef
-	auto binder = Binder::CreateBinder(context);
-	auto bound_ref = binder->Bind(*table_ref);
-
-	// 2) Create a logical plan from the bound reference
-	unique_ptr<LogicalOperator> logical_plan = binder->CreatePlan(*bound_ref);
-
-	// 3) Recursively search the logical plan for a LogicalGet node
-	//    For a single table function, you often have just one operator: LogicalGet
-	LogicalOperator *op = logical_plan.get();
-	switch (op->type) {
-	case LogicalOperatorType::LOGICAL_PROJECTION:
-		throw NotImplementedException("Iceberg scans with point deletes not supported");
-	case LogicalOperatorType::LOGICAL_GET:
-		break;
-	default:
-		throw InternalException("Unsupported logical operator");
-	}
-
-	// 4) Access the bind_data inside LogicalGet
-	auto &get = op->Cast<LogicalGet>();
-	bind_data = std::move(get.bind_data);
-
-	return parquet_scan_function;
+	return iceberg_scan_function;
 }
 
 TableStorageInfo ICTableEntry::GetStorageInfo(ClientContext &context) {

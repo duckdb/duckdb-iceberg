@@ -11,6 +11,7 @@
 #include "duckdb/common/printer.hpp"
 #include "iceberg_types.hpp"
 #include "yyjson.hpp"
+#include "duckdb/common/file_system.hpp"
 
 using namespace duckdb_yyjson;
 
