@@ -1,0 +1,85 @@
+diff --git a/lang/c/src/avro/io.h b/lang/c/src/avro/io.h
+index ffbb68dc5..902e09512 100644
+--- a/lang/c/src/avro/io.h
++++ b/lang/c/src/avro/io.h
+@@ -114,6 +114,8 @@ int avro_file_writer_open_bs(const char *path, avro_file_writer_t * writer, size
+ int avro_file_reader(const char *path, avro_file_reader_t * reader);
+ int avro_file_reader_fp(FILE *fp, const char *path, int should_close,
+ 			avro_file_reader_t * reader);
++int avro_reader_reader(avro_reader_t reader_in,
++			avro_file_reader_t * reader);
+ 
+ avro_schema_t
+ avro_file_reader_get_writer_schema(avro_file_reader_t reader);
+diff --git a/lang/c/src/datafile.c b/lang/c/src/datafile.c
+index c9d4dfeb6..a0619f944 100644
+--- a/lang/c/src/datafile.c
++++ b/lang/c/src/datafile.c
+@@ -541,6 +541,67 @@ int avro_file_reader_fp(FILE *fp, const char *path, int should_close,
+ 	return 0;
+ }
+ 
++int avro_reader_reader(avro_reader_t reader_in,	avro_file_reader_t * reader)
++{
++	const char* path = "";
++	int rval;
++	avro_file_reader_t r = (avro_file_reader_t) avro_new(struct avro_file_reader_t_);
++	if (!r) {
++		avro_set_error("Cannot allocate file reader for %s", path);
++		return ENOMEM;
++	}
++
++	r->reader = reader_in;
++	if (!r->reader) {
++		avro_set_error("Cannot allocate reader for file %s", path);
++		avro_freet(struct avro_file_reader_t_, r);
++		return ENOMEM;
++	}
++	r->block_reader = avro_reader_memory(0, 0);
++	if (!r->block_reader) {
++		avro_set_error("Cannot allocate block reader for file %s", path);
++		avro_reader_free(r->reader);
++		avro_freet(struct avro_file_reader_t_, r);
++		return ENOMEM;
++	}
++
++	r->codec = (avro_codec_t) avro_new(struct avro_codec_t_);
++	if (!r->codec) {
++		avro_set_error("Could not allocate codec for file %s", path);
++		avro_reader_free(r->reader);
++		avro_freet(struct avro_file_reader_t_, r);
++		return ENOMEM;
++	}
++	avro_codec(r->codec, NULL);
++
++	rval = file_read_header(r->reader, &r->writers_schema, r->codec,
++				r->sync, sizeof(r->sync));
++	if (rval) {
++		avro_reader_free(r->reader);
++		avro_codec_reset(r->codec);
++		avro_freet(struct avro_codec_t_, r->codec);
++		avro_freet(struct avro_file_reader_t_, r);
++		return rval;
++	}
++
++	r->current_blockdata = NULL;
++	r->current_blocklen = 0;
++
++	rval = file_read_block_count(r);
++	if (rval == EOF) {
++		r->blocks_total = 0;
++	} else if (rval) {
++		avro_reader_free(r->reader);
++		avro_codec_reset(r->codec);
++		avro_freet(struct avro_codec_t_, r->codec);
++		avro_freet(struct avro_file_reader_t_, r);
++		return rval;
++	}
++
++	*reader = r;
++	return 0;
++}
++
+ int avro_file_reader(const char *path, avro_file_reader_t * reader)
+ {
+ 	FILE *fp;

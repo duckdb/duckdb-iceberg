@@ -91,7 +91,7 @@ static unique_ptr<FunctionData> IcebergMetaDataBind(ClientContext &context, Tabl
 	}
 
 	ret->iceberg_table =
-	    make_uniq<IcebergTable>(IcebergTable::Load(iceberg_path, snapshot_to_scan, fs, allow_moved_paths, metadata_compression_codec));
+	    make_uniq<IcebergTable>(IcebergTable::Load(iceberg_path, snapshot_to_scan, context, allow_moved_paths, metadata_compression_codec));
 
 	auto manifest_types = IcebergManifest::Types();
 	return_types.insert(return_types.end(), manifest_types.begin(), manifest_types.end());

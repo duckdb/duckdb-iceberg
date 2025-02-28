@@ -1,22 +1,19 @@
 {
-  "dependencies": [
-    {
-      "name": "avro-cpp",
-      "features": ["snappy"]
-    },
-    "curl",
-    "openssl"
-  ],
-  "vcpkg-configuration": {
-    "overlay-ports": [
-      "./vcpkg_ports"
-    ]
-  },
-  "builtin-baseline": "5e5d0e1cd7785623065e77eff011afdeec1a3574",
-  "overrides": [
-    {
-      "name": "openssl",
-      "version": "3.0.8"
-    }
-  ]
+	"dependencies": [
+		"avro-c",
+		"curl",
+		"openssl"
+	],
+	"vcpkg-configuration": {
+		"overlay-ports": [
+			"./vcpkg_ports"
+		]
+	},
+	"builtin-baseline": "5e5d0e1cd7785623065e77eff011afdeec1a3574",
+	"overrides": [
+		{
+			"name": "openssl",
+			"version": "3.0.8"
+		}
+	]
 }

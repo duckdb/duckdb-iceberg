@@ -1,90 +1,111 @@
 #include "duckdb.hpp"
 #include "iceberg_metadata.hpp"
+#include "iceberg_manifest.hpp"
 #include "iceberg_utils.hpp"
 #include "iceberg_types.hpp"
 
-#include "avro/Compiler.hh"
-#include "avro/DataFile.hh"
-#include "avro/Decoder.hh"
-#include "avro/Encoder.hh"
-#include "avro/ValidSchema.hh"
-#include "avro/Stream.hh"
+#include "duckdb/catalog/catalog_entry/table_function_catalog_entry.hpp"
+#include "duckdb/common/exception.hpp"
+#include "duckdb/execution/execution_context.hpp"
+#include "duckdb/main/extension_util.hpp"
+#include "duckdb/parallel/thread_context.hpp"
+#include "duckdb/parser/tableref/table_function_ref.hpp"
+#include "duckdb/parser/expression/constant_expression.hpp"
 
 namespace duckdb {
 
-IcebergTable IcebergTable::Load(const string &iceberg_path, IcebergSnapshot &snapshot, FileSystem &fs,
+template <class OP>
+vector<typename OP::entry_type> ScanAvroMetadata(ClientContext &context, const string &path) {
+	vector<typename OP::entry_type> ret;
+
+	// TODO: make streaming
+	auto &instance = DatabaseInstance::GetDatabase(context);
+	auto &avro_scan_entry = ExtensionUtil::GetTableFunction(instance, "read_avro");
+	auto &avro_scan = avro_scan_entry.functions.functions[0];
+
+	// Prepare the inputs for the bind
+	vector<Value> children;
+	children.reserve(1);
+	children.push_back(Value(path));
+	named_parameter_map_t named_params;
+	vector<LogicalType> input_types;
+	vector<string> input_names;
+
+	TableFunctionRef empty;
+	TableFunction dummy_table_function;
+	dummy_table_function.name = StringUtil::Format("%sV%d", OP::NAME, OP::FORMAT_VERSION);
+	TableFunctionBindInput bind_input(children, named_params, input_types, input_names, nullptr, nullptr,
+	                                  dummy_table_function, empty);
+	vector<LogicalType> return_types;
+	vector<string> return_names;
+
+	auto bind_data = avro_scan.bind(context, bind_input, return_types, return_names);
+
+	DataChunk result;
+	result.Initialize(context, return_types, STANDARD_VECTOR_SIZE);
+
+	ThreadContext thread_context(context);
+	ExecutionContext execution_context(context, thread_context, nullptr);
+
+	case_insensitive_map_t<ColumnIndex> name_to_vec;
+	vector<column_t> column_ids;
+	for (idx_t i = 0; i < return_types.size(); i++) {
+		column_ids.push_back(i);
+		OP::PopulateNameMapping(i, return_types[i], return_names[i], name_to_vec);
+	}
+
+	if (!OP::VerifySchema(name_to_vec)) {
+		throw InvalidInputException("%s schema invalid for Iceberg version %d", OP::NAME, OP::FORMAT_VERSION);
+	}
+
+	TableFunctionInitInput input(bind_data.get(), column_ids, vector<idx_t>(), nullptr);
+	auto global_state = avro_scan.init_global(context, input);
+
+	do {
+		TableFunctionInput function_input(bind_data.get(), nullptr, global_state.get());
+		result.Reset();
+		avro_scan.function(context, function_input, result);
+
+		idx_t count = result.size();
+		for (auto &vec : result.data) {
+			vec.Flatten(count);
+		}
+
+		OP::ProduceEntries(result, name_to_vec, ret);
+	} while (result.size() != 0);
+	return ret;
+}
+
+template <class OP>
+static void ReadManifestEntries(ClientContext &context, const vector<IcebergManifest> &manifests, bool allow_moved_paths, FileSystem &fs, const string &iceberg_path, vector<IcebergTableEntry> &result) {
+	for (auto &manifest : manifests) {
+		auto manifest_entry_full_path = allow_moved_paths
+		                                    ? IcebergUtils::GetFullPath(iceberg_path, manifest.manifest_path, fs)
+		                                    : manifest.manifest_path;
+		auto manifest_paths = ScanAvroMetadata<OP>(context, manifest_entry_full_path);
+		result.push_back({std::move(manifest), std::move(manifest_paths)});
+	}
+}
+
+IcebergTable IcebergTable::Load(const string &iceberg_path, IcebergSnapshot &snapshot, ClientContext &context,
                                 bool allow_moved_paths, string metadata_compression_codec) {
 	IcebergTable ret;
 	ret.path = iceberg_path;
 	ret.snapshot = snapshot;
 
+	auto &fs = FileSystem::GetFileSystem(context);
 	auto manifest_list_full_path = allow_moved_paths
 	                                   ? IcebergUtils::GetFullPath(iceberg_path, snapshot.manifest_list, fs)
 	                                   : snapshot.manifest_list;
-	auto manifests = ReadManifestListFile(manifest_list_full_path, fs, snapshot.iceberg_format_version);
-
-	for (auto &manifest : manifests) {
-		auto manifest_entry_full_path = allow_moved_paths
-		                                    ? IcebergUtils::GetFullPath(iceberg_path, manifest.manifest_path, fs)
-		                                    : manifest.manifest_path;
-		auto manifest_paths = ReadManifestEntries(manifest_entry_full_path, fs, snapshot.iceberg_format_version);
-
-		ret.entries.push_back({std::move(manifest), std::move(manifest_paths)});
-	}
-
-	return ret;
-}
-
-vector<IcebergManifest> IcebergTable::ReadManifestListFile(const string &path, FileSystem &fs, idx_t iceberg_format_version) {
-	vector<IcebergManifest> ret;
-
-	// TODO: make streaming
-	string file = IcebergUtils::FileToString(path, fs);
-
-	auto stream = avro::memoryInputStream((unsigned char *)file.c_str(), file.size());
-	avro::ValidSchema schema;
-
-	if (iceberg_format_version == 1) {
-		schema = avro::compileJsonSchemaFromString(MANIFEST_SCHEMA_V1);
-		avro::DataFileReader<c::manifest_file_v1> dfr(std::move(stream), schema);
-		c::manifest_file_v1 manifest_list;
-		while (dfr.read(manifest_list)) {
-			ret.emplace_back(IcebergManifest(manifest_list));
-		}
+	vector<IcebergManifest> manifests;
+	if (snapshot.iceberg_format_version == 1) {
+		manifests = ScanAvroMetadata<IcebergManifestV1>(context, manifest_list_full_path);
+		ReadManifestEntries<IcebergManifestEntryV1>(context, manifests, allow_moved_paths, fs, iceberg_path, ret.entries);
+	} else if (snapshot.iceberg_format_version == 2) {
+		manifests = ScanAvroMetadata<IcebergManifestV2>(context, manifest_list_full_path);
+		ReadManifestEntries<IcebergManifestEntryV2>(context, manifests, allow_moved_paths, fs, iceberg_path, ret.entries);
 	} else {
-		schema = avro::compileJsonSchemaFromString(MANIFEST_SCHEMA);
-		avro::DataFileReader<c::manifest_file> dfr(std::move(stream), schema);
-		c::manifest_file manifest_list;
-		while (dfr.read(manifest_list)) {
-			ret.emplace_back(IcebergManifest(manifest_list));
-		}
-	}
-
-	return ret;
-}
-
-vector<IcebergManifestEntry> IcebergTable::ReadManifestEntries(const string &path, FileSystem &fs,
-                                                               idx_t iceberg_format_version) {
-	vector<IcebergManifestEntry> ret;
-
-	// TODO: make streaming
-	string file = IcebergUtils::FileToString(path, fs);
-	auto stream = avro::memoryInputStream((unsigned char *)file.c_str(), file.size());
-
-	if (iceberg_format_version == 1) {
-		auto schema = avro::compileJsonSchemaFromString(MANIFEST_ENTRY_SCHEMA_V1);
-		avro::DataFileReader<c::manifest_entry_v1> dfr(std::move(stream), schema);
-		c::manifest_entry_v1 manifest_entry;
-		while (dfr.read(manifest_entry)) {
-			ret.emplace_back(IcebergManifestEntry(manifest_entry));
-		}
-	} else {
-		auto schema = avro::compileJsonSchemaFromString(MANIFEST_ENTRY_SCHEMA);
-		avro::DataFileReader<c::manifest_entry> dfr(std::move(stream), schema);
-		c::manifest_entry manifest_entry;
-		while (dfr.read(manifest_entry)) {
-			ret.emplace_back(IcebergManifestEntry(manifest_entry));
-		}
+		throw InvalidInputException("iceberg_format_version %d not handled", snapshot.iceberg_format_version);
 	}
 
 	return ret;
