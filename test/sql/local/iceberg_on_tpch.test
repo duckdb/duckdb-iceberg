@@ -5,9 +5,11 @@
 
 require-env ICEBERG_SERVER_AVAILABLE
 
-require iceberg
+require avro
 
 require parquet
+
+require iceberg
 
 require httpfs
 
