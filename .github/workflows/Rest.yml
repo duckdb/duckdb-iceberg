@@ -50,10 +50,6 @@ jobs:
         run: |
           make release
 
-      - name: Start Rest Catalog
-        run: |
-          make start-rest-catalog
-
       - name: Generate data
         run: |
           make data

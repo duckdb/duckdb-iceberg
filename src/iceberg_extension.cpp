@@ -156,7 +156,7 @@ static void LoadInternal(DatabaseInstance &instance) {
 	);
 
 	// Iceberg Table Functions
-	for (auto &fun : IcebergFunctions::GetTableFunctions()) {
+	for (auto &fun : IcebergFunctions::GetTableFunctions(instance)) {
 		ExtensionUtil::RegisterFunction(instance, fun);
 	}
 

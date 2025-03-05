@@ -1,0 +1,1 @@
+delete from iceberg_catalog.lineitem_sf_01_1_delete where l_orderkey=10053 and l_partkey = 77;
