@@ -16,6 +16,8 @@ require-env DUCKDB_S3_USE_SSL
 
 set ignore_error_messages
 
+require avro
+
 require parquet
 
 require iceberg

@@ -109,7 +109,7 @@ protected:
 struct IcebergTable {
 public:
 	//! Loads all(!) metadata of into IcebergTable object
-	static IcebergTable Load(const string &iceberg_path, IcebergSnapshot &snapshot, FileSystem &fs,
+	static IcebergTable Load(const string &iceberg_path, IcebergSnapshot &snapshot, ClientContext &context,
 	                         bool allow_moved_paths = false, string metadata_compression_codec = "none");
 
 	//! Returns all paths to be scanned for the IcebergManifestContentType
@@ -143,8 +143,6 @@ public:
 	vector<IcebergTableEntry> entries;
 
 protected:
-	static vector<IcebergManifest> ReadManifestListFile(const string &path, FileSystem &fs, idx_t iceberg_format_version);
-	static vector<IcebergManifestEntry> ReadManifestEntries(const string &path, FileSystem &fs, idx_t iceberg_format_version);
 	string path;
 };
 

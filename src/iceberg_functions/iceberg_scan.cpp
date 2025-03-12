@@ -263,7 +263,7 @@ static unique_ptr<TableRef> IcebergScanBindReplace(ClientContext &context, Table
 		snapshot_to_scan = IcebergSnapshot::GetLatestSnapshot(iceberg_meta_path, fs, metadata_compression_codec, skip_schema_inference);
 	}
 
-	IcebergTable iceberg_table = IcebergTable::Load(iceberg_path, snapshot_to_scan, fs, allow_moved_paths, metadata_compression_codec);
+	IcebergTable iceberg_table = IcebergTable::Load(iceberg_path, snapshot_to_scan, context, allow_moved_paths, metadata_compression_codec);
 	auto data_files = iceberg_table.GetPaths<IcebergManifestContentType::DATA>();
 	auto delete_files = iceberg_table.GetPaths<IcebergManifestContentType::DELETE>();
 	vector<Value> data_file_values;
