@@ -1,0 +1,167 @@
+# name: test/sql/local/iceberg_catalog_read.test
+# description: test integration with iceberg catalog read
+# group: [iceberg]
+
+require-env DUCKDB_ICEBERG_HAVE_GENERATED_DATA
+
+require parquet
+
+require iceberg
+
+# TODO verify the catalog has deletes (rest catalog stores data differently from local catalog)
+query I nosort results_1
+select sum(l_suppkey), min(l_suppkey), max(l_suppkey) from ICEBERG_SCAN('data/generated/iceberg/spark-local/table_with_deletes');
+
+query I nosort results_1
+select sum(l_suppkey), min(l_suppkey), max(l_suppkey) from read_parquet('data/generated/intermediates/spark-local/table_with_deletes/last/data.parquet/*.parquet');
+
+# Verify parquet scans on tables with delete vectors do not mess with results.
+query I nosort table_filter_result
+select l_partkey from ICEBERG_SCAN('data/generated/iceberg/spark-local/lineitem_001_deletes') where l_partkey > 5 and l_partkey < 20000;
+----
+
+query I nosort table_filter_result
+select l_partkey from read_parquet('data/generated/intermediates/spark-local/lineitem_001_deletes/last/data.parquet/*.parquet') where l_partkey > 5 and l_partkey < 20000;
+----
+
+# Verify Deletes
+# joins with a table that has deletes.
+# Projecting l_orderkey, joining on l_partkey
+query I nosort join_results
+select l1_deletes.l_partkey, count(*) count from
+  ICEBERG_SCAN('data/generated/iceberg/spark-local/lineitem_sf1_deletes') l1_deletes,
+  ICEBERG_SCAN('data/generated/iceberg/spark-local/lineitem_sf_01_no_deletes') l2_no_deletes
+where l1_deletes.l_partkey = l2_no_deletes.l_partkey
+group by l1_deletes.l_partkey
+order by l1_deletes.l_partkey, count
+----
+
+query I nosort join_results
+select l1_deletes.l_partkey, count(*) count from
+ICEBERG_SCAN('data/generated/iceberg/spark-local/lineitem_sf1_deletes') l1_deletes,
+ICEBERG_SCAN('data/generated/iceberg/spark-local/lineitem_sf_01_no_deletes') l2_no_deletes
+where l1_deletes.l_partkey = l2_no_deletes.l_partkey
+group by l1_deletes.l_partkey
+order by l1_deletes.l_partkey, count
+----
+
+
+# Verify Deletes
+# joins with a table that has deletes.
+# Projecting l_orderkey, joining on l_partkey
+query I nosort join_results_2_orderkey
+select l1_deletes.l_orderkey, count(*) count from
+  ICEBERG_SCAN('data/generated/iceberg/spark-local/lineitem_sf1_deletes') l1_deletes,
+  ICEBERG_SCAN('data/generated/iceberg/spark-local/lineitem_sf_01_no_deletes') l2_no_deletes
+where l1_deletes.l_partkey = l2_no_deletes.l_partkey
+group by l1_deletes.l_orderkey
+order by l1_deletes.l_orderkey, count
+----
+
+
+query I nosort join_results_2_orderkey
+select l1_deletes.l_orderkey, count(*) count from
+ICEBERG_SCAN('data/generated/iceberg/spark-local/lineitem_sf1_deletes') l1_deletes,
+ICEBERG_SCAN('data/generated/iceberg/spark-local/lineitem_sf_01_no_deletes') l2_no_deletes
+where l1_deletes.l_partkey = l2_no_deletes.l_partkey
+group by l1_deletes.l_orderkey
+order by l1_deletes.l_orderkey, count
+----
+
+
+# Verify a single delete
+query IIII nosort single_delete_result
+select l_orderkey,
+    l_partkey,
+    l_suppkey,
+    l_quantity
+from ICEBERG_SCAN('data/generated/iceberg/spark-local/lineitem_sf_01_1_delete')
+order by l_partkey, l_orderkey limit 10;
+----
+
+query IIII nosort single_delete_result
+select l_orderkey,
+    l_partkey,
+    l_suppkey,
+    l_quantity
+from read_parquet('data/generated/intermediates/spark-rest/lineitem_sf_01_1_delete/last/data.parquet/*.parquet')
+order by l_partkey, l_orderkey limit 10;
+----
+
+query I
+select count(*)
+from ICEBERG_SCAN('data/generated/iceberg/spark-local/lineitem_sf_01_1_delete')
+where l_orderkey=10053 and l_partkey = 77;
+----
+0
+
+query I
+select count(*)
+from read_parquet('data/generated/intermediates/spark-rest/lineitem_sf_01_1_delete/last/data.parquet/*.parquet')
+where l_orderkey=10053 and l_partkey = 77;
+----
+0
+
+
+# verify paritioned table read
+# add tests for partitioned tables.
+query II nosort result_4_partitioned
+select l_shipmode, count(*) count
+from ICEBERG_SCAN('data/generated/iceberg/spark-local/lineitem_partitioned_l_shipmode')
+group by l_shipmode order by count;
+----
+
+query II nosort result_4_partitioned
+select l_shipmode, count(*) count
+from read_parquet('data/generated/intermediates/spark-rest/lineitem_partitioned_l_shipmode/last/data.parquet/*.parquet')
+group by l_shipmode order by count;
+----
+
+# verify paritioned table read with table filters
+# add tests for partitioned tables.
+query II nosort result_4_partitioned_table_filters
+select l_shipmode, count(*) count
+from ICEBERG_SCAN('data/generated/iceberg/spark-local/lineitem_partitioned_l_shipmode')
+where l_partkey > 50
+group by l_shipmode order by count;
+----
+
+query II nosort result_4_partitioned_table_filters
+select l_shipmode, count(*) count
+from read_parquet('data/generated/intermediates/spark-rest/lineitem_partitioned_l_shipmode/last/data.parquet/*.parquet')
+where l_partkey > 50
+group by l_shipmode order by count;
+----
+
+# verify delete from partitioned table
+# create table lineitem_partitioned_mmany_deletes as select * from lineitem (merge on write, partition by l_shipmode)
+# select count(*), l_shipmode from lineitem where l_linenumber in (3,4,5,6) group by l_shipmode ;
+# add tests for partitioned tables.
+query II nosort result_5
+select l_shipmode, count(*) count
+from ICEBERG_SCAN('data/generated/iceberg/spark-local/lineitem_partitioned_l_shipmode_deletes')
+group by l_shipmode order by count;
+----
+
+query II nosort result_5
+select l_shipmode, count(*) count
+from read_parquet('data/generated/intermediates/spark-rest/lineitem_partitioned_l_shipmode_deletes/last/data.parquet/*.parquet')
+group by l_shipmode order by count;
+----
+
+# verify select on partitioned table deletes with table_filters
+query II nosort result_5_table_filter
+select l_shipmode, count(*) count
+from ICEBERG_SCAN('data/generated/iceberg/spark-local/lineitem_partitioned_l_shipmode_deletes')
+where l_partkey > 100
+group by l_shipmode order by count;
+----
+
+query II nosort result_5_table_filter
+select l_shipmode, count(*) count
+from read_parquet('data/generated/intermediates/spark-rest/lineitem_partitioned_l_shipmode_deletes/last/data.parquet/*.parquet')
+where l_partkey > 100
+group by l_shipmode order by count;
+----
+
+
