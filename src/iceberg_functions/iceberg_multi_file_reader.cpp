@@ -38,9 +38,20 @@ unique_ptr<MultiFileList> IcebergMultiFileList::ComplexFilterPushdown(ClientCont
                                                                       const MultiFileReaderOptions &options,
                                                                       MultiFilePushdownInfo &info,
                                                                       vector<unique_ptr<Expression>> &filters) {
-	//! FIXME: We don't handle filter pushdown yet into the file list
-	//! Leaving the skeleton here because we want to add this relatively soon anyways
-	return nullptr;
+	if (filters.empty()) {
+		return nullptr;
+	}
+
+	FilterCombiner combiner(context);
+	for (const auto &filter : filters) {
+		combiner.AddFilter(filter->Copy());
+	}
+	auto filterstmp = combiner.GenerateTableScanFilters(info.column_indexes);
+
+	auto new_list = make_uniq<IcebergMultiFileList>(context, GetPath(), this->options);
+	new_list->snapshot = this->snapshot;
+	new_list->table_filters = std::move(filterstmp);
+	return new_list;
 }
 
 vector<string> IcebergMultiFileList::GetAllFiles() {
