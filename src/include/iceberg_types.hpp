@@ -125,23 +125,56 @@ struct IcebergManifest {
 
 //! The schema containing the fields from the manifest entry.
 //! this schema should match the generated cpp header from src/include/avro_codegen/iceberg_manifest_entry_partial.hpp
-static string MANIFEST_ENTRY_SCHEMA = "{\n"
-                                      "     \"type\": \"record\",\n"
-                                      "     \"name\": \"manifest_entry\",\n"
-                                      "     \"fields\" : [\n"
-                                      "         {\"name\": \"status\", \"type\" : \"int\"},\n"
-                                      "         {\"name\": \"data_file\", \"type\": {\n"
-                                      "             \"type\": \"record\",\n"
-                                      "             \"name\": \"r2\",\n"
-                                      "             \"fields\" : [\n"
-                                      "                 {\"name\": \"content\", \"type\": \"int\"},\n"
-                                      "                 {\"name\": \"file_path\", \"type\": \"string\"},\n"
-                                      "                 {\"name\": \"file_format\", \"type\": \"string\"},\n"
-                                      "                 {\"name\": \"record_count\", \"type\" : \"long\"}\n"
-                                      "           ]}\n"
-                                      "         }\n"
-                                      "     ]\n"
-                                      " }";
+static string MANIFEST_ENTRY_SCHEMA = R"(
+{
+  "type": "record",
+  "name": "manifest_entry",
+  "fields": [
+    { "name": "status", "type": "int", "field-id": 0 },
+    { "name": "data_file", "type": {
+      "type": "record",
+      "name": "r2",
+      "fields": [
+        { "name": "content", "type": "int", "field-id": 134 },
+        { "name": "file_path", "type": "string", "field-id": 100 },
+        { "name": "file_format", "type": "string", "field-id": 101 },
+        { "name": "record_count", "type": "long", "field-id": 103 },
+        { "name": "lower_bounds", "type": [
+          "null",
+          {
+            "type": "array",
+            "items": {
+              "type": "record",
+              "name": "k126_v127",
+              "fields": [
+                { "name": "key", "type": "int", "field-id": 126 },
+                { "name": "value", "type": "bytes", "field-id": 127 }
+              ]
+            }
+          }
+        ],
+        "default": null,
+        "field-id": 125
+        },
+        { "name": "upper_bounds", "type": [
+          "null",
+          {
+            "type": "array",
+            "items": {
+              "type": "record",
+              "name": "k129_v130",
+              "fields": [
+                { "name": "key", "type": "int", "field-id": 129 },
+                { "name": "value", "type": "bytes", "field-id": 130 }
+              ]
+            }
+          }
+        ], "default": null, "field-id": 128 }
+      ]
+    }, "field-id": 2 }
+  ]
+}
+)";
 
 static string MANIFEST_ENTRY_SCHEMA_V1 = "{\n"
                                       "     \"type\": \"record\",\n"
@@ -163,12 +196,12 @@ static string MANIFEST_ENTRY_SCHEMA_V1 = "{\n"
 
 //! An entry in a manifest file
 struct IcebergManifestEntry {
-	explicit IcebergManifestEntry(const c::manifest_entry &schema) {
+	explicit IcebergManifestEntry(const manifest_entry &schema) {
 		status = (IcebergManifestEntryStatusType)schema.status;
-		content = (IcebergManifestEntryContentType)schema.data_file_.content;
-		file_path = schema.data_file_.file_path;
-		file_format = schema.data_file_.file_format;
-		record_count = schema.data_file_.record_count;
+		content = (IcebergManifestEntryContentType)schema.data_file.content;
+		file_path = schema.data_file.file_path;
+		file_format = schema.data_file.file_format;
+		record_count = schema.data_file.record_count;
 	}
 
 	explicit IcebergManifestEntry(const c::manifest_entry_v1 &schema) {

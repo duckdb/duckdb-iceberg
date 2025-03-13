@@ -187,23 +187,23 @@ public:
 
 			auto stream = avro::memoryInputStream((unsigned char *)content.c_str(), content.size());
 			schema = avro::compileJsonSchemaFromString(MANIFEST_ENTRY_SCHEMA);
-			reader = make_uniq<avro::DataFileReader<c::manifest_entry>>(std::move(stream), schema);
+			reader = make_uniq<avro::DataFileReader<manifest_entry>>(std::move(stream), schema);
 			state.initialized = true;
 		}
 
-		if (!reader->read(manifest_entry)) {
+		if (!reader->read(current_entry)) {
 			state.finished = true;
 			return nullptr;
 		}
 
-		return make_uniq<IcebergManifestEntry>(manifest_entry);
+		return make_uniq<IcebergManifestEntry>(current_entry);
 	}
 
 public:
 	avro::ValidSchema schema;
 	string content;
-	c::manifest_entry manifest_entry;
-	unique_ptr<avro::DataFileReader<c::manifest_entry>> reader;
+	manifest_entry current_entry;
+	unique_ptr<avro::DataFileReader<manifest_entry>> reader;
 };
 
 } // namespace duckdb
