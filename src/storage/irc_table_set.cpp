@@ -4,7 +4,6 @@
 #include "storage/irc_catalog.hpp"
 #include "storage/irc_table_set.hpp"
 #include "storage/irc_transaction.hpp"
-#include "duckdb/parser/parsed_data/create_table_info.hpp"
 #include "duckdb/parser/constraints/not_null_constraint.hpp"
 #include "duckdb/parser/constraints/unique_constraint.hpp"
 #include "duckdb/parser/expression/constant_expression.hpp"
