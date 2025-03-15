@@ -19,6 +19,7 @@
 #include "catalog_api.hpp"
 #include <aws/core/Aws.h>
 #include <aws/s3/S3Client.h>
+#include <regex>
 
 namespace duckdb {
 
@@ -61,18 +62,23 @@ static void SetCatalogSecretParameters(CreateSecretFunction &function) {
 }
 
 static bool SanityCheckGlueWarehouse(string warehouse) {
-	// valid glue catalog warehouse is <account_id>:s3tablescatalog/<bucket>
-	auto end_account_id = warehouse.find_first_of(':');
-	bool account_id_correct = end_account_id == 12;
-	auto bucket_sep = warehouse.find_first_of('/');
-	bool bucket_sep_correct = bucket_sep == 28;
-	if (!account_id_correct) {
-		throw IOException("Invalid Glue Catalog Format: '" + warehouse + "'. Expect 12 digits for account_id.");
-	}
-	if (bucket_sep_correct) {
-		return true;
-	}
-	throw IOException("Invalid Glue Catalog Format: '" + warehouse + "'. Expected '<account_id>:s3tablescatalog/<bucket>");
+    // See: https://docs.aws.amazon.com/glue/latest/dg/connect-glu-iceberg-rest.html#prefix-catalog-path-parameters
+
+	const std::regex patterns[] = {
+        std::regex("^:$"),                   // Default catalog ":" in current account
+        std::regex("^\\d{12}$"),             // Default catalog in a specific account
+        std::regex("^\\d{12}:[^:/]+$"),      // Specific catalog in a specific account
+        std::regex("^[^:]+/[^:]+$"),         // Nested catalog in the current account
+        std::regex("^\\d{12}:[^/]+/[^:]+$")  // Nested catalog in a specific account
+    };
+
+    for (const auto& pattern : patterns) {
+        if (std::regex_match(warehouse, pattern)) {
+            return true;
+        }
+    }
+
+	throw IOException("Invalid Glue Catalog Format: '" + warehouse + "'. Expected format: ':', '12-digit account ID', 'catalog1/catalog2', or '12-digit accountId:catalog1/catalog2'.");
 }
 
 static unique_ptr<Catalog> IcebergCatalogAttach(StorageExtensionInfo *storage_info, ClientContext &context,
