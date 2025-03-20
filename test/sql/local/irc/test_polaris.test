@@ -1,3 +1,5 @@
+require avro
+
 require parquet
 
 require httpfs

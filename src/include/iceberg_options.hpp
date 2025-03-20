@@ -1,6 +1,7 @@
 #pragma once
 
 #include "duckdb/common/string.hpp"
+#include "duckdb/common/types/timestamp.hpp"
 
 namespace duckdb {
 

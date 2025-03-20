@@ -10,6 +10,8 @@ Catalog Error
 
 require notwindows
 
+require avro
+
 require parquet
 
 require iceberg

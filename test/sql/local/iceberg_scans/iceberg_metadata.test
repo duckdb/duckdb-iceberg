@@ -8,6 +8,8 @@ SELECT * FROM ICEBERG_METADATA('data/persistent/iceberg/lineitem_iceberg');
 ----
 Catalog Error
 
+require avro
+
 require parquet
 
 require iceberg

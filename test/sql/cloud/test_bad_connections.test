@@ -2,6 +2,8 @@
 # description: test connections that arent good
 # group: [iceberg]
 
+require avro
+
 require parquet
 
 require iceberg

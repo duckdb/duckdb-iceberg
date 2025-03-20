@@ -18,7 +18,7 @@ string IcebergMultiFileList::ToDuckDBPath(const string &raw_path) {
 	return raw_path;
 }
 
-string IcebergMultiFileList::GetPath() {
+string IcebergMultiFileList::GetPath() const {
 	return GetPaths()[0];
 }
 
@@ -87,29 +87,40 @@ string IcebergMultiFileList::GetFile(idx_t file_id) {
 		InitializeFiles();
 	}
 
+	auto iceberg_path = GetPath();
+	auto &fs = FileSystem::GetFileSystem(context);
+	auto &data_files = this->data_files;
+	auto &entry_producer = this->entry_producer;
+
 	// Read enough data files
 	while (file_id >= data_files.size()) {
-		if (reader_state.finished) {
+		if (data_manifest_entry_reader->Finished()) {
 			if (current_data_manifest == data_manifests.end()) {
 				break;
 			}
 			auto &manifest = *current_data_manifest;
-			reader_state = ManifestEntryReaderState(*manifest);
+			auto manifest_entry_full_path = options.allow_moved_paths
+												? IcebergUtils::GetFullPath(iceberg_path, manifest.manifest_path, fs)
+												: manifest.manifest_path;
+			auto scan = make_uniq<AvroScan>("IcebergManifest", context, manifest_entry_full_path);
+			data_manifest_entry_reader->Initialize(std::move(scan));
 		}
 
-		auto new_entry = data_manifest_entry_reader->GetNext(reader_state);
-		if (!new_entry) {
-			D_ASSERT(reader_state.finished);
+		idx_t remaining = (file_id + 1) - data_files.size();
+		data_manifest_entry_reader->ReadEntries(remaining, [&data_files, &entry_producer](DataChunk &chunk, idx_t offset, idx_t count, const ManifestReaderInput &input) {
+			return entry_producer(chunk, offset, count, input, data_files);
+		});
+		if (data_manifest_entry_reader->Finished()) {
 			current_data_manifest++;
 			continue;
 		}
-		if (new_entry->status == IcebergManifestEntryStatusType::DELETED) {
-			// Skip deleted files
-			continue;
-		}
-		D_ASSERT(new_entry->content == IcebergManifestEntryContentType::DATA);
-		data_files.push_back(std::move(*new_entry));
 	}
+	#ifdef DEBUG
+	for (auto &entry : data_files) {
+		D_ASSERT(entry.content == IcebergManifestEntryContentType::DATA);
+		D_ASSERT(entry.status != IcebergManifestEntryStatusType::DELETED);
+	}
+	#endif
 
 	if (file_id >= data_files.size()) {
 		return string();
@@ -134,6 +145,7 @@ void IcebergMultiFileList::InitializeFiles() {
 		return;
 	}
 	initialized = true;
+	auto &manifest_producer = this->manifest_producer;
 
 	//! Load the snapshot
 	auto iceberg_path = GetPath();
@@ -158,34 +170,50 @@ void IcebergMultiFileList::InitializeFiles() {
 
 	//! Set up the manifest + manifest entry readers
 	if (snapshot.iceberg_format_version == 1) {
-		data_manifest_entry_reader =
-		    make_uniq<ManifestEntryReaderV1>(iceberg_path, snapshot.manifest_list, fs, options);
-		delete_manifest_entry_reader =
-		    make_uniq<ManifestEntryReaderV1>(iceberg_path, snapshot.manifest_list, fs, options);
-		manifest_reader = make_uniq<ManifestReaderV1>(iceberg_path, snapshot.manifest_list, fs, options);
+		data_manifest_entry_reader = make_uniq<ManifestReader>(IcebergManifestEntryV1::PopulateNameMapping, IcebergManifestEntryV1::VerifySchema);
+		delete_manifest_entry_reader = make_uniq<ManifestReader>(IcebergManifestEntryV1::PopulateNameMapping, IcebergManifestEntryV1::VerifySchema);
+		delete_manifest_entry_reader->skip_deleted = true;
+		data_manifest_entry_reader->skip_deleted = true;
+		manifest_reader = make_uniq<ManifestReader>(IcebergManifestV1::PopulateNameMapping, IcebergManifestV1::VerifySchema);
+
+		manifest_producer = IcebergManifestV1::ProduceEntries;
+		entry_producer = IcebergManifestEntryV1::ProduceEntries;
 	} else if (snapshot.iceberg_format_version == 2) {
-		data_manifest_entry_reader =
-		    make_uniq<ManifestEntryReaderV2>(iceberg_path, snapshot.manifest_list, fs, options);
-		delete_manifest_entry_reader =
-		    make_uniq<ManifestEntryReaderV2>(iceberg_path, snapshot.manifest_list, fs, options);
-		manifest_reader = make_uniq<ManifestReaderV2>(iceberg_path, snapshot.manifest_list, fs, options);
+		data_manifest_entry_reader = make_uniq<ManifestReader>(IcebergManifestEntryV2::PopulateNameMapping, IcebergManifestEntryV2::VerifySchema);
+		delete_manifest_entry_reader = make_uniq<ManifestReader>(IcebergManifestEntryV2::PopulateNameMapping, IcebergManifestEntryV2::VerifySchema);
+		delete_manifest_entry_reader->skip_deleted = true;
+		data_manifest_entry_reader->skip_deleted = true;
+		manifest_reader = make_uniq<ManifestReader>(IcebergManifestV2::PopulateNameMapping, IcebergManifestV2::VerifySchema);
+
+		manifest_producer = IcebergManifestV2::ProduceEntries;
+		entry_producer = IcebergManifestEntryV2::ProduceEntries;
 	} else {
 		throw InvalidInputException("Reading from Iceberg version %d is not supported yet", snapshot.iceberg_format_version);
 	}
 
 	// Read the manifest list, we need all the manifests to determine if we've seen all deletes
+	auto manifest_list_full_path = options.allow_moved_paths
+	                                   ? IcebergUtils::GetFullPath(iceberg_path, snapshot.manifest_list, fs)
+	                                   : snapshot.manifest_list;
+	auto scan = make_uniq<AvroScan>("IcebergManifestList", context, manifest_list_full_path);
+	manifest_reader->Initialize(std::move(scan));
+
+	vector<IcebergManifest> all_manifests;
 	while (!manifest_reader->Finished()) {
-		auto manifest = manifest_reader->GetNext();
-		if (!manifest) {
-			break;
-		}
-		if (manifest->content == IcebergManifestContentType::DATA) {
+		manifest_reader->ReadEntries(STANDARD_VECTOR_SIZE, [&all_manifests, manifest_producer](DataChunk &chunk, idx_t offset, idx_t count, const ManifestReaderInput &input) {
+			return manifest_producer(chunk, offset, count, input, all_manifests);
+		});
+	}
+
+	for (auto &manifest : all_manifests) {
+		if (manifest.content == IcebergManifestContentType::DATA) {
 			data_manifests.push_back(std::move(manifest));
 		} else {
-			D_ASSERT(manifest->content == IcebergManifestContentType::DELETE);
+			D_ASSERT(manifest.content == IcebergManifestContentType::DELETE);
 			delete_manifests.push_back(std::move(manifest));
 		}
 	}
+
 	current_data_manifest = data_manifests.begin();
 	current_delete_manifest = delete_manifests.begin();
 }
@@ -450,27 +478,43 @@ void IcebergMultiFileList::ProcessDeletes() const {
 
 	// From the spec: "At most one deletion vector is allowed per data file in a snapshot"
 
-	ManifestEntryReaderState reader_state;
+	auto iceberg_path = GetPath();
+	auto &fs = FileSystem::GetFileSystem(context);
+	auto &entry_producer = this->entry_producer;
+
+	vector<IcebergManifestEntry> delete_files;
 	while (current_delete_manifest != delete_manifests.end()) {
-		if (reader_state.finished) {
+		if (delete_manifest_entry_reader->Finished()) {
+			if (current_delete_manifest == delete_manifests.end()) {
+				break;
+			}
 			auto &manifest = *current_delete_manifest;
-			reader_state = ManifestEntryReaderState(*manifest);
+			auto manifest_entry_full_path = options.allow_moved_paths
+												? IcebergUtils::GetFullPath(iceberg_path, manifest.manifest_path, fs)
+												: manifest.manifest_path;
+			auto scan = make_uniq<AvroScan>("IcebergManifest", context, manifest_entry_full_path);
+			delete_manifest_entry_reader->Initialize(std::move(scan));
 		}
 
-		auto new_entry = delete_manifest_entry_reader->GetNext(reader_state);
-		if (!new_entry) {
-			D_ASSERT(reader_state.finished);
+		delete_manifest_entry_reader->ReadEntries(STANDARD_VECTOR_SIZE, [&delete_files, &entry_producer](DataChunk &chunk, idx_t offset, idx_t count, const ManifestReaderInput &input) {
+			return entry_producer(chunk, offset, count, input, delete_files);
+		});
+
+		if (delete_manifest_entry_reader->Finished()) {
 			current_delete_manifest++;
 			continue;
 		}
-		if (new_entry->status == IcebergManifestEntryStatusType::DELETED) {
-			// Skip deleted files
-			continue;
-		}
-		D_ASSERT(new_entry->content != IcebergManifestEntryContentType::DATA);
-		//! FIXME: with v3 we can check from the metadata whether this targets our file
-		// we can avoid (read: delay) materializing the file in that case
-		ScanDeleteFile(new_entry->file_path);
+	}
+
+	#ifdef DEBUG
+	for (auto &entry : data_files) {
+		D_ASSERT(entry.content == IcebergManifestEntryContentType::DATA);
+		D_ASSERT(entry.status != IcebergManifestEntryStatusType::DELETED);
+	}
+	#endif
+
+	for (auto &entry : delete_files) {
+		ScanDeleteFile(entry.file_path);
 	}
 
 	D_ASSERT(current_delete_manifest == delete_manifests.end());

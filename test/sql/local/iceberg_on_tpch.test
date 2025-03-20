@@ -5,6 +5,8 @@
 
 require-env ICEBERG_SERVER_AVAILABLE
 
+require avro
+
 require parquet
 
 require iceberg

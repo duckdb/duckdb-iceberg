@@ -72,7 +72,7 @@ public:
 
 public:
 	static string ToDuckDBPath(const string &raw_path);
-	string GetPath();
+	string GetPath() const;
 
 public:
 	//! MultiFileList API
@@ -104,20 +104,18 @@ public:
 	vector<string> names;
 	TableFilterSet table_filters;
 
-	////! Metadata map for files
-	// vector<unique_ptr<IcebergFileMetaData>> metadata;
-
-	////! Current file list resolution state
 	unique_ptr<ManifestReader> manifest_reader;
-	unique_ptr<ManifestEntryReader> data_manifest_entry_reader;
-	unique_ptr<ManifestEntryReader> delete_manifest_entry_reader;
-	ManifestEntryReaderState reader_state;
-	vector<IcebergManifestEntry> data_files;
+	unique_ptr<ManifestReader> data_manifest_entry_reader;
+	unique_ptr<ManifestReader> delete_manifest_entry_reader;
 
-	vector<unique_ptr<IcebergManifest>> data_manifests;
-	vector<unique_ptr<IcebergManifest>> delete_manifests;
-	vector<unique_ptr<IcebergManifest>>::iterator current_data_manifest;
-	mutable vector<unique_ptr<IcebergManifest>>::iterator current_delete_manifest;
+	manifest_reader_manifest_producer manifest_producer = nullptr;
+	manifest_reader_manifest_entry_producer entry_producer = nullptr;
+
+	vector<IcebergManifestEntry> data_files;
+	vector<IcebergManifest> data_manifests;
+	vector<IcebergManifest> delete_manifests;
+	vector<IcebergManifest>::iterator current_data_manifest;
+	mutable vector<IcebergManifest>::iterator current_delete_manifest;
 
 	//! For each file that has a delete file, the state for processing that/those delete file(s)
 	mutable case_insensitive_map_t<IcebergDeleteData> delete_data;

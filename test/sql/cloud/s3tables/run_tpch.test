@@ -9,6 +9,8 @@ require-env AWS_ACCESS_KEY_ID
 
 require-env AWS_SECRET_ACCESS_KEY
 
+require avro
+
 require parquet
 
 require iceberg

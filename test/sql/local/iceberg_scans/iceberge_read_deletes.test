@@ -4,6 +4,8 @@
 
 require-env DUCKDB_ICEBERG_HAVE_GENERATED_DATA
 
+require avro
+
 require parquet
 
 require iceberg

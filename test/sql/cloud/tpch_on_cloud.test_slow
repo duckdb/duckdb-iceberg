@@ -11,6 +11,8 @@ mode skip
 
 require httpfs
 
+require avro
+
 require parquet
 
 require iceberg

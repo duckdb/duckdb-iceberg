@@ -1,209 +1,67 @@
 #pragma once
 
-#include "avro/Compiler.hh"
-#include "avro/DataFile.hh"
-#include "avro/Decoder.hh"
-#include "avro/Encoder.hh"
-#include "avro/Stream.hh"
-#include "avro/ValidSchema.hh"
 #include "iceberg_options.hpp"
 #include "iceberg_types.hpp"
+#include "iceberg_manifest.hpp"
 
 namespace duckdb {
 
 // Manifest Reader
 
+typedef void (*manifest_reader_name_mapping)(idx_t column_id, const LogicalType &type, const string &name, case_insensitive_map_t<ColumnIndex> &mapping);
+typedef bool (*manifest_reader_schema_validation)(const case_insensitive_map_t<ColumnIndex> &mapping);
+
+typedef idx_t (*manifest_reader_manifest_producer)(DataChunk &chunk, idx_t offset, idx_t count, const ManifestReaderInput &input, vector<IcebergManifest> &result);
+typedef idx_t (*manifest_reader_manifest_entry_producer)(DataChunk &chunk, idx_t offset, idx_t count, const ManifestReaderInput &input, vector<IcebergManifestEntry> &result);
+
+using manifest_reader_read = std::function<idx_t(DataChunk &chunk, idx_t offset, idx_t count, const ManifestReaderInput &input)>;
+
+struct ManifestReaderInput {
+public:
+	ManifestReaderInput(const case_insensitive_map_t<ColumnIndex> &name_to_vec, bool skip_deleted = false);
+public:
+	const case_insensitive_map_t<ColumnIndex> &name_to_vec;
+	//! Whether the deleted entries should be skipped outright
+	bool skip_deleted = false;
+};
+
 class ManifestReader {
 public:
-	ManifestReader() {
-	}
-	virtual ~ManifestReader() {
-	}
-
+	ManifestReader(manifest_reader_name_mapping name_mapping, manifest_reader_schema_validation schema_validator);
 public:
-	bool Finished() const {
-		return finished;
-	}
-	virtual unique_ptr<IcebergManifest> GetNext() = 0;
-
-protected:
-	bool finished = false;
-};
-
-class ManifestReaderV1 : public ManifestReader {
+	void Initialize(unique_ptr<AvroScan> scan_p);
 public:
-	ManifestReaderV1(const string &table_path, const string &path, FileSystem &fs, const IcebergOptions &options) {
-		auto file = options.allow_moved_paths ? IcebergUtils::GetFullPath(table_path, path, fs) : path;
-		content = IcebergUtils::FileToString(file, fs);
-
-		auto stream = avro::memoryInputStream((unsigned char *)content.c_str(), content.size());
-		schema = avro::compileJsonSchemaFromString(MANIFEST_SCHEMA_V1);
-		reader = make_uniq<avro::DataFileReader<c::manifest_file_v1>>(std::move(stream), schema);
-	}
-
-public:
-	unique_ptr<IcebergManifest> GetNext() {
-		if (finished || !reader->read(manifest_file)) {
-			finished = true;
-			return nullptr;
-		}
-		return make_uniq<IcebergManifest>(manifest_file);
-	}
-
+	bool Finished() const;
+	idx_t ReadEntries(idx_t count, manifest_reader_read callback);
 private:
-	string content;
-	avro::ValidSchema schema;
-	unique_ptr<avro::DataFileReader<c::manifest_file_v1>> reader;
-	c::manifest_file_v1 manifest_file;
+	unique_ptr<AvroScan> scan;
+	DataChunk chunk;
+	idx_t offset = 0;
+	bool finished = true;
+	case_insensitive_map_t<ColumnIndex> name_to_vec;
+
+	manifest_reader_name_mapping name_mapping = nullptr;
+	manifest_reader_schema_validation schema_validation = nullptr;
+public:
+	bool skip_deleted = false;
 };
 
-class ManifestReaderV2 : public ManifestReader {
-public:
-	ManifestReaderV2(const string &table_path, const string &path, FileSystem &fs, const IcebergOptions &options) {
-		auto file = options.allow_moved_paths ? IcebergUtils::GetFullPath(table_path, path, fs) : path;
-		content = IcebergUtils::FileToString(file, fs);
 
-		auto stream = avro::memoryInputStream((unsigned char *)content.c_str(), content.size());
-		schema = avro::compileJsonSchemaFromString(MANIFEST_SCHEMA);
-		reader = make_uniq<avro::DataFileReader<c::manifest_file>>(std::move(stream), schema);
+template <class OP>
+vector<typename OP::entry_type> ScanAvroMetadata(const string &scan_name, ClientContext &context, const string &path) {
+	auto scan = make_uniq<AvroScan>(scan_name, context, path);
+
+	ManifestReader manifest_reader(OP::PopulateNameMapping, OP::VerifySchema);
+	manifest_reader.Initialize(std::move(scan));
+	auto manifest_producer = OP::ProduceEntries;
+
+	vector<typename OP::entry_type> ret;
+	while (!manifest_reader.Finished()) {
+		manifest_reader.ReadEntries(STANDARD_VECTOR_SIZE, [&ret, manifest_producer](DataChunk &chunk, idx_t offset, idx_t count, const ManifestReaderInput &input) {
+			return manifest_producer(chunk, offset, count, input, ret);
+		});
 	}
-
-public:
-	unique_ptr<IcebergManifest> GetNext() {
-		// FIXME: use `hasMore` instead?
-		if (finished || !reader->read(manifest_file)) {
-			finished = true;
-			return nullptr;
-		}
-		return make_uniq<IcebergManifest>(manifest_file);
-	}
-
-private:
-	string content;
-	avro::ValidSchema schema;
-	unique_ptr<avro::DataFileReader<c::manifest_file>> reader;
-	c::manifest_file manifest_file;
-};
-
-// Manifest Entry Reader
-
-// FIXME: this is a little confusing, this is just used to initialize a ManifestEntryReader
-// it does not hold any reading state
-struct ManifestEntryReaderState {
-public:
-	ManifestEntryReaderState(IcebergManifest &manifest) : manifest(manifest), initialized(false), finished(false) {
-	}
-	ManifestEntryReaderState() : manifest(nullptr), initialized(false), finished(true) {
-	}
-
-public:
-	optional_ptr<IcebergManifest> manifest;
-	bool initialized = false;
-	bool finished = false;
-};
-
-class ManifestEntryReader {
-public:
-	ManifestEntryReader(const string &table_path, FileSystem &fs, const IcebergOptions &options)
-	    : table_path(table_path), fs(fs), options(options) {
-	}
-	virtual ~ManifestEntryReader() {
-	}
-
-public:
-	ManifestEntryReaderState InitializeScan(IcebergManifest &manifest) {
-		return ManifestEntryReaderState(manifest);
-	}
-	bool Finished() const {
-		return finished;
-	}
-	virtual unique_ptr<IcebergManifestEntry> GetNext(ManifestEntryReaderState &state) = 0;
-
-protected:
-	string table_path;
-	FileSystem &fs;
-	const IcebergOptions &options;
-	bool finished = false;
-};
-
-class ManifestEntryReaderV1 : public ManifestEntryReader {
-public:
-	ManifestEntryReaderV1(const string &table_path, const string &path, FileSystem &fs, const IcebergOptions &options)
-	    : ManifestEntryReader(table_path, fs, options) {
-	}
-
-public:
-	unique_ptr<IcebergManifestEntry> GetNext(ManifestEntryReaderState &state) {
-		if (state.finished) {
-			return nullptr;
-		}
-
-		if (!state.initialized) {
-			// First call
-			auto file = options.allow_moved_paths
-			                ? IcebergUtils::GetFullPath(table_path, state.manifest->manifest_path, fs)
-			                : state.manifest->manifest_path;
-			content = IcebergUtils::FileToString(file, fs);
-
-			auto stream = avro::memoryInputStream((unsigned char *)content.c_str(), content.size());
-			schema = avro::compileJsonSchemaFromString(MANIFEST_ENTRY_SCHEMA_V1);
-			reader = make_uniq<avro::DataFileReader<c::manifest_entry_v1>>(std::move(stream), schema);
-			state.initialized = true;
-		}
-
-		if (!reader->read(manifest_entry)) {
-			state.finished = true;
-			return nullptr;
-		}
-
-		return make_uniq<IcebergManifestEntry>(manifest_entry);
-	}
-
-public:
-	avro::ValidSchema schema;
-	string content;
-	c::manifest_entry_v1 manifest_entry;
-	unique_ptr<avro::DataFileReader<c::manifest_entry_v1>> reader;
-};
-
-class ManifestEntryReaderV2 : public ManifestEntryReader {
-public:
-	ManifestEntryReaderV2(const string &table_path, const string &path, FileSystem &fs, const IcebergOptions &options)
-	    : ManifestEntryReader(table_path, fs, options) {
-	}
-
-public:
-	unique_ptr<IcebergManifestEntry> GetNext(ManifestEntryReaderState &state) {
-		if (state.finished) {
-			return nullptr;
-		}
-
-		if (!state.initialized) {
-			// First call
-			auto file = options.allow_moved_paths
-			                ? IcebergUtils::GetFullPath(table_path, state.manifest->manifest_path, fs)
-			                : state.manifest->manifest_path;
-			content = IcebergUtils::FileToString(file, fs);
-
-			auto stream = avro::memoryInputStream((unsigned char *)content.c_str(), content.size());
-			schema = avro::compileJsonSchemaFromString(MANIFEST_ENTRY_SCHEMA);
-			reader = make_uniq<avro::DataFileReader<c::manifest_entry>>(std::move(stream), schema);
-			state.initialized = true;
-		}
-
-		if (!reader->read(manifest_entry)) {
-			state.finished = true;
-			return nullptr;
-		}
-
-		return make_uniq<IcebergManifestEntry>(manifest_entry);
-	}
-
-public:
-	avro::ValidSchema schema;
-	string content;
-	c::manifest_entry manifest_entry;
-	unique_ptr<avro::DataFileReader<c::manifest_entry>> reader;
-};
+	return ret;
+}
 
 } // namespace duckdb
