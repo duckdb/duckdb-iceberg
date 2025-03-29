@@ -183,7 +183,7 @@ string IcebergSnapshot::GetMetaDataPath(ClientContext &context, const string &pa
 }
 
 string IcebergSnapshot::ReadMetaData(const string &path, FileSystem &fs, const string &metadata_compression_codec) {
-	if (metadata_compression_codec == "gzip") {
+	if (metadata_compression_codec == "gzip" || StringUtil::EndsWith(path, "gz.metadata.json")) {
 		return IcebergUtils::GzFileToString(path, fs);
 	}
 	return IcebergUtils::FileToString(path, fs);

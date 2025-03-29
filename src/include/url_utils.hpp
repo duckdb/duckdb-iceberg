@@ -8,48 +8,44 @@
 
 #pragma once
 
-#include <string>
-#include <unordered_map>
-#include <vector>
+#include "duckdb/common/string.hpp"
+#include "duckdb/common/vector.hpp"
+#include "duckdb/common/unordered_map.hpp"
 
 namespace duckdb {
 
 class IRCEndpointBuilder {
 public:
-	void AddPathComponent(std::string component);
+	void AddPathComponent(const string &component);
+	void AddQueryParameter(const string &key, const string &value);
 
-	void SetPrefix(std::string prefix_);
-	std::string GetPrefix() const;
+	void SetPrefix(const string &prefix_);
+	string GetPrefix() const;
 
-	void SetHost(std::string host_);
-	std::string GetHost() const;
+	void SetHost(const string &host_);
+	string GetHost() const;
 
-	void SetWarehouse(std::string warehouse_);
-	std::string GetWarehouse() const;
+	void SetVersion(const string &version_);
+	string GetVersion() const;
 
-	void SetVersion(std::string version_);
-	std::string GetVersion() const;
+	void SetParam(const string &key, const string &value);
+	string GetParam(const string &key) const;
+	const unordered_map<string, string> GetParams();
 
-	void SetParam(std::string key, std::string value);
-	std::string GetParam(std::string key) const;
-	const std::unordered_map<std::string, std::string> GetParams();
-
-	std::string GetURL() const;
+	string GetURL() const;
 
 	//! path components when querying. Like namespaces/tables etc.
-	std::vector<std::string> path_components;
+	vector<string> path_components;
 
 private:
 	//! host of the endpoint, like `glue` or `polaris`
-	std::string host;
+	string host;
 	//! version
-	std::string version;
+	string version;
 	//! optional prefix
-	std::string prefix;
-	//! warehouse
-	std::string warehouse;
+	string prefix;
 
-	std::unordered_map<std::string, std::string> params;
+	unordered_map<string, string> params;
 };
 
 } // namespace duckdb
