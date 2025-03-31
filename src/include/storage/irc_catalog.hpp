@@ -13,10 +13,10 @@ namespace duckdb {
 class IRCSchemaEntry;
 
 struct IRCCredentials {
-	string client_id;
-	string client_secret;
+	string key_id;
+	string secret;
 	// required to query s3 tables
-	string aws_region;
+	string region;
 	// Catalog generates the token using client id & secret
 	string token;
 };
@@ -28,7 +28,7 @@ public:
 	static void ClearCacheOnSetting(ClientContext &context, SetScope scope, Value &parameter);
 };
 
-enum class ICEBERG_CATALOG_TYPE { AWS_S3TABLES, AWS_GLUE, OTHER, INVALID };
+enum class ICEBERG_CATALOG_TYPE { AWS_S3TABLES, AWS_GLUE, POLARIS, INVALID };
 
 class MetadataCacheValue {
 public:

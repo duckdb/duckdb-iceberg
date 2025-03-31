@@ -31,7 +31,7 @@ static unique_ptr<BaseSecret> CreateCatalogSecretFunction(ClientContext &context
 		auto lower_name = StringUtil::Lower(named_param.first);
 
 		if (lower_name == "key_id" || lower_name == "secret" || lower_name == "endpoint" ||
-		    lower_name == "aws_region") {
+		    lower_name == "region" || lower_name == "endpoint_type") {
 			result->secret_map[lower_name] = named_param.second.ToString();
 		} else {
 			throw InternalException("Unknown named parameter passed to CreateIRCSecretFunction: " + lower_name);
@@ -44,16 +44,17 @@ static unique_ptr<BaseSecret> CreateCatalogSecretFunction(ClientContext &context
 	                     result->secret_map["endpoint"].ToString());
 
 	//! Set redact keys
-	result->redact_keys = {"token", "client_id", "client_secret"};
+	result->redact_keys = {"token", "key_id", "secret"};
 
 	return std::move(result);
 }
 
 static void SetCatalogSecretParameters(CreateSecretFunction &function) {
-	function.named_parameters["client_id"] = LogicalType::VARCHAR;
-	function.named_parameters["client_secret"] = LogicalType::VARCHAR;
+	function.named_parameters["key_id"] = LogicalType::VARCHAR;
+	function.named_parameters["secret"] = LogicalType::VARCHAR;
 	function.named_parameters["endpoint"] = LogicalType::VARCHAR;
-	function.named_parameters["aws_region"] = LogicalType::VARCHAR;
+	function.named_parameters["endpoint_type"] = LogicalType::VARCHAR;
+	function.named_parameters["region"] = LogicalType::VARCHAR;
 	function.named_parameters["token"] = LogicalType::VARCHAR;
 }
 
@@ -81,8 +82,6 @@ static unique_ptr<Catalog> IcebergCatalogAttach(StorageExtensionInfo *storage_in
 
 	string account_id;
 	string service;
-	string endpoint_type;
-	string endpoint;
 
 	// check if we have a secret provided
 	string secret_name;
@@ -92,17 +91,23 @@ static unique_ptr<Catalog> IcebergCatalogAttach(StorageExtensionInfo *storage_in
 			// already handled
 		} else if (lower_name == "secret") {
 			secret_name = StringUtil::Lower(entry.second.ToString());
-		} else if (lower_name == "endpoint_type") {
-			endpoint_type = StringUtil::Lower(entry.second.ToString());
-		} else if (lower_name == "endpoint") {
-			endpoint = StringUtil::Lower(entry.second.ToString());
-			StringUtil::RTrim(endpoint, "/");
 		} else {
-			throw BinderException("Unrecognized option for PC attach: %s", entry.first);
+			throw BinderException("Unrecognized option for iceberg catalog attach: %s", entry.first);
 		}
 	}
 	auto warehouse = info.path;
 	auto catalog_type = ICEBERG_CATALOG_TYPE::INVALID;
+
+	// Lookup a secret we can use to access the rest catalog.
+	// if no secret is referenced, this throw
+	auto secret_entry = IRCatalog::GetSecret(context, secret_name);
+	if (!secret_entry) {
+		throw IOException("No secret found to use with catalog " + name);
+	}
+	const auto kv_secret = dynamic_cast<const KeyValueSecret &>(*secret_entry->secret);
+	auto region = kv_secret.TryGetValue("region");
+	auto endpoint_type_val = kv_secret.TryGetValue("endpoint_type");
+	string endpoint_type = endpoint_type_val.IsNull() ? "" : endpoint_type_val.ToString();
 
 	if (endpoint_type == "glue" || endpoint_type == "s3_tables") {
 		if (endpoint_type == "s3_tables") {
@@ -112,16 +117,10 @@ static unique_ptr<Catalog> IcebergCatalogAttach(StorageExtensionInfo *storage_in
 			service = endpoint_type;
 			catalog_type = ICEBERG_CATALOG_TYPE::AWS_GLUE;
 		}
-		// look up any s3 secret
-
 		// if there is no secret, an error will be thrown
-		auto secret_entry = IRCatalog::GetSecret(context, secret_name);
-		auto kv_secret = dynamic_cast<const KeyValueSecret &>(*secret_entry->secret);
-		auto region = kv_secret.TryGetValue("region");
-
 		if (region.IsNull()) {
 			throw IOException("Assumed catalog secret " + secret_entry->secret->GetName() + " for catalog " + name +
-			                  " does not have a region");
+								" does not have a region");
 		}
 		switch (catalog_type) {
 		case ICEBERG_CATALOG_TYPE::AWS_S3TABLES: {
@@ -145,27 +144,23 @@ static unique_ptr<Catalog> IcebergCatalogAttach(StorageExtensionInfo *storage_in
 		catalog->catalog_type = catalog_type;
 		catalog->GetConfig(context);
 		return std::move(catalog);
-	}
+	} 
 
-	// Check no endpoint type has been passed.
-	if (!endpoint_type.empty()) {
-		throw IOException("Unrecognized endpoint point: %s. Expected either S3_TABLES or GLUE", endpoint_type);
+	catalog_type = ICEBERG_CATALOG_TYPE::POLARIS;
+	Value region_val = kv_secret.TryGetValue("region");
+	credentials.region = region_val.IsNull() ? "" : region_val.ToString();
+	Value endpoint_val = kv_secret.TryGetValue("endpoint");
+	if (endpoint_val.IsNull()) {
+		throw IOException("Assumed catalog secret " + secret_entry->secret->GetName() + " for catalog " + name +
+							" does not have an endpoint");
 	}
+	string endpoint = endpoint_val.ToString();
+
 	if (endpoint_type.empty() && endpoint.empty()) {
 		throw IOException("No endpoint type or endpoint provided");
 	}
 
-	catalog_type = ICEBERG_CATALOG_TYPE::OTHER;
 	// Default IRC path
-	Value endpoint_val;
-	// Lookup a secret we can use to access the rest catalog.
-	// if no secret is referenced, this throw
-	auto secret_entry = IRCatalog::GetSecret(context, secret_name);
-	if (!secret_entry) {
-		throw IOException("No secret found to use with catalog " + name);
-	}
-	// secret found - read data
-	const auto &kv_secret = dynamic_cast<const KeyValueSecret &>(*secret_entry->secret);
 	Value key_val = kv_secret.TryGetValue("key_id");
 	Value secret_val = kv_secret.TryGetValue("secret");
 	CreateSecretInput create_secret_input;
