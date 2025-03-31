@@ -137,13 +137,13 @@ DatabaseSize IRCatalog::GetDatabaseSize(ClientContext &context) {
 
 IRCEndpointBuilder IRCatalog::GetBaseUrl() const {
 	auto base_url = IRCEndpointBuilder();
-	base_url.SetPrefix(prefix);
 	base_url.SetWarehouse(warehouse);
 	base_url.SetVersion(version);
 	base_url.SetHost(host);
 	switch (catalog_type) {
 	case ICEBERG_CATALOG_TYPE::AWS_GLUE:
 	case ICEBERG_CATALOG_TYPE::AWS_S3TABLES: {
+		base_url.SetPrefix(prefix);
 		base_url.AddPathComponent("iceberg");
 		base_url.AddPathComponent(version);
 		break;
