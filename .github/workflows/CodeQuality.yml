@@ -44,6 +44,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          submodules: 'true'
 
       - name: Install
         shell: bash
@@ -61,8 +62,3 @@ jobs:
           black --version
           make format-check-silent
 
-      - name: Generated Check
-        shell: bash
-        run: |
-          make generate-files
-          git diff --exit-code

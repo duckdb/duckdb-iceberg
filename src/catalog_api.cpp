@@ -39,7 +39,6 @@ static string GetTableMetadata(ClientContext &context, IRCatalog &catalog, const
 
 static string GetTableMetadataCached(ClientContext &context, IRCatalog &catalog, const string &schema,
                                      const string &table, const string &secret_name) {
-	struct curl_slist *extra_headers = NULL;
 	auto url = catalog.GetBaseUrl();
 	url.AddPathComponent(catalog.prefix);
 	url.AddPathComponent("namespaces");
@@ -71,35 +70,151 @@ static IRCAPIColumnDefinition ParseColumnDefinition(yyjson_val *column_def) {
 	return result;
 }
 
+static void ParseConfigOptions(yyjson_val *config, case_insensitive_map_t<Value> &options) {
+	//! Set of recognized config parameters and the duckdb secret option that matches it.
+	static const case_insensitive_map_t<string> config_to_option = {{"s3.access-key-id", "key_id"},
+	                                                                {"s3.secret-access-key", "secret"},
+	                                                                {"s3.session-token", "session_token"},
+	                                                                {"s3.region", "region"},
+	                                                                {"s3.endpoint", "endpoint"}};
+
+	auto config_size = yyjson_obj_size(config);
+	if (!config || config_size == 0) {
+		return;
+	}
+	for (auto &it : config_to_option) {
+		auto &key = it.first;
+		auto &option = it.second;
+
+		auto *item = yyjson_obj_get(config, key.c_str());
+		if (item) {
+			options[option] = yyjson_get_str(item);
+		}
+	}
+	auto *access_style = yyjson_obj_get(config, "s3.path-style-access");
+	if (access_style) {
+		string value = yyjson_get_str(access_style);
+		bool path_style;
+		if (value == "true") {
+			path_style = true;
+		} else if (value == "false") {
+			path_style = false;
+		} else {
+			throw InvalidInputException("Unexpected value ('%s') for 's3.path-style-access' in 'config' property",
+			                            value);
+		}
+		options["use_ssl"] = Value(!path_style);
+		if (path_style) {
+			options["url_style"] = "path";
+		}
+	}
+
+	auto endpoint_it = options.find("endpoint");
+	if (endpoint_it == options.end()) {
+		return;
+	}
+	auto endpoint = endpoint_it->second.ToString();
+	if (StringUtil::StartsWith(endpoint, "http://")) {
+		endpoint = endpoint.substr(7, std::string::npos);
+	}
+	if (StringUtil::EndsWith(endpoint, "/")) {
+		endpoint = endpoint.substr(0, endpoint.size() - 1);
+	}
+	endpoint_it->second = endpoint;
+}
+
 IRCAPITableCredentials IRCAPI::GetTableCredentials(ClientContext &context, IRCatalog &catalog, const string &schema,
-                                                   const string &table, IRCCredentials credentials) {
+                                                   const string &table, const string &secret_base_name) {
 	IRCAPITableCredentials result;
 	string api_result = GetTableMetadataCached(context, catalog, schema, table, catalog.secret_name);
 	std::unique_ptr<yyjson_doc, YyjsonDocDeleter> doc(ICUtils::api_result_to_doc(api_result));
 	auto *root = yyjson_doc_get_root(doc.get());
-	auto *warehouse_credentials = yyjson_obj_get(root, "config");
-	auto credential_size = yyjson_obj_size(warehouse_credentials);
 	auto catalog_credentials = IRCatalog::GetSecret(context, catalog.secret_name);
-	if (warehouse_credentials && credential_size > 0) {
-		result.key_id = IcebergUtils::TryGetStrFromObject(warehouse_credentials, "s3.access-key-id", false);
-		result.secret = IcebergUtils::TryGetStrFromObject(warehouse_credentials, "s3.secret-access-key", false);
-		result.session_token = IcebergUtils::TryGetStrFromObject(warehouse_credentials, "s3.session-token", false);
-		if (catalog_credentials) {
-			auto kv_secret = dynamic_cast<const KeyValueSecret &>(*catalog_credentials->secret);
-			auto region = kv_secret.TryGetValue("region").ToString();
-			result.region = region;
+
+	// Mapping from config key to a duckdb secret option
+
+	case_insensitive_map_t<Value> config_options;
+	auto *config_val = yyjson_obj_get(root, "config");
+	if (config_val && catalog_credentials) {
+		auto kv_secret = dynamic_cast<const KeyValueSecret &>(*catalog_credentials->secret);
+		auto region = kv_secret.TryGetValue("region").ToString();
+		config_options["region"] = region;
+	}
+	ParseConfigOptions(config_val, config_options);
+
+	auto *storage_credentials = yyjson_obj_get(root, "storage-credentials");
+	auto storage_credentials_size = yyjson_arr_size(storage_credentials);
+	if (storage_credentials && storage_credentials_size > 0) {
+		yyjson_val *storage_credential;
+		size_t index, max;
+		yyjson_arr_foreach(storage_credentials, index, max, storage_credential) {
+			auto *sc_prefix = yyjson_obj_get(storage_credential, "prefix");
+			if (!sc_prefix) {
+				throw InvalidInputException("required property 'prefix' is missing from the StorageCredential schema");
+			}
+
+			CreateSecretInfo create_secret_info(OnCreateConflict::REPLACE_ON_CONFLICT, SecretPersistType::TEMPORARY);
+			auto prefix_string = yyjson_get_str(sc_prefix);
+			if (!prefix_string) {
+				throw InvalidInputException("property 'prefix' of StorageCredential is NULL");
+			}
+			create_secret_info.scope.push_back(string(prefix_string));
+			create_secret_info.name = StringUtil::Format("%s_%d_%s", secret_base_name, index, prefix_string);
+			create_secret_info.type = "s3";
+			create_secret_info.provider = "config";
+			create_secret_info.storage_type = "memory";
+			create_secret_info.options = config_options;
+
+			auto *sc_config = yyjson_obj_get(storage_credential, "config");
+			ParseConfigOptions(sc_config, create_secret_info.options);
+			result.storage_credentials.push_back(create_secret_info);
 		}
 	}
+
+	if (result.storage_credentials.empty() && !config_options.empty()) {
+		//! Only create a secret out of the 'config' if there are no 'storage-credentials'
+		result.config =
+		    make_uniq<CreateSecretInfo>(OnCreateConflict::REPLACE_ON_CONFLICT, SecretPersistType::TEMPORARY);
+		auto &config = *result.config;
+		config.options = config_options;
+		config.name = secret_base_name;
+		config.type = "s3";
+		config.provider = "config";
+		config.storage_type = "memory";
+	}
+
 	return result;
 }
 
-string IRCAPI::GetToken(ClientContext &context, string id, string secret, string endpoint) {
-	string post_data =
-	    "grant_type=client_credentials&client_id=" + id + "&client_secret=" + secret + "&scope=PRINCIPAL_ROLE:ALL";
-	string api_result = APIUtils::PostRequest(context, endpoint + "/v1/oauth/tokens", post_data);
+string IRCAPI::GetToken(ClientContext &context, const string &uri, const string &id, const string &secret,
+                        const string &endpoint, const string &scope) {
+	vector<string> parameters;
+	parameters.push_back(StringUtil::Format("%s=%s", "grant_type", "client_credentials"));
+	parameters.push_back(StringUtil::Format("%s=%s", "client_id", id));
+	parameters.push_back(StringUtil::Format("%s=%s", "client_secret", secret));
+	parameters.push_back(StringUtil::Format("%s=%s", "scope", scope));
+
+	string post_data = StringUtil::Format("%s", StringUtil::Join(parameters, "&"));
+	string api_result = APIUtils::PostRequest(context, uri, post_data);
+	//! FIXME: the oauth/tokens endpoint returns, on success;
+	// { 'access_token', 'token_type', 'expires_in', <issued_token_type>, 'refresh_token', 'scope'}
 	std::unique_ptr<yyjson_doc, YyjsonDocDeleter> doc(ICUtils::api_result_to_doc(api_result));
 	auto *root = yyjson_doc_get_root(doc.get());
-	return IcebergUtils::TryGetStrFromObject(root, "access_token");
+	auto access_token_val = yyjson_obj_get(root, "access_token");
+	auto token_type_val = yyjson_obj_get(root, "token_type");
+	if (!access_token_val) {
+		throw IOException("OAuthTokenResponse is missing required property 'access_token'");
+	}
+	if (!token_type_val) {
+		throw IOException("OAuthTokenResponse is missing required property 'token_type'");
+	}
+	string token_type = yyjson_get_str(token_type_val);
+	if (!StringUtil::CIEquals(token_type, "bearer")) {
+		throw NotImplementedException(
+		    "token_type return value '%s' is not supported, only supports 'bearer' currently.", token_type);
+	}
+	string access_token = yyjson_get_str(access_token_val);
+	return access_token;
 }
 
 static void populateTableMetadata(IRCAPITable &table, yyjson_val *metadata_root) {
@@ -127,7 +242,7 @@ static void populateTableMetadata(IRCAPITable &table, yyjson_val *metadata_root)
 	}
 
 	if (!found) {
-		throw InternalException("Current schema not found");
+		throw InvalidInputException("Current schema not found");
 	}
 }
 
@@ -195,6 +310,7 @@ vector<IRCAPISchema> IRCAPI::GetSchemas(ClientContext &context, IRCatalog &catal
 	string api_result = APIUtils::GetRequest(context, endpoint_builder, catalog.secret_name, catalog.credentials.token);
 	std::unique_ptr<yyjson_doc, YyjsonDocDeleter> doc(ICUtils::api_result_to_doc(api_result));
 	auto *root = yyjson_doc_get_root(doc.get());
+	//! 'ListNamespacesResponse'
 	auto *schemas = yyjson_obj_get(root, "namespaces");
 	size_t idx, max;
 	yyjson_val *schema;

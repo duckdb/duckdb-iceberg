@@ -50,7 +50,7 @@ string ICUtils::LogicalToIcebergType(const LogicalType &input) {
 		break;
 	}
 
-	throw std::runtime_error("Unsupported type: " + input.ToString());
+	throw InvalidInputException("Unsupported type: %s", input.ToString());
 }
 
 string ICUtils::TypeToString(const LogicalType &input) {
@@ -240,7 +240,7 @@ yyjson_doc *ICUtils::api_result_to_doc(const string &api_result) {
 	auto *error = yyjson_obj_get(root, "error");
 	if (error != NULL) {
 		string err_msg = IcebergUtils::TryGetStrFromObject(error, "message");
-		throw std::runtime_error(err_msg);
+		throw InvalidInputException(err_msg);
 	}
 	return doc;
 }

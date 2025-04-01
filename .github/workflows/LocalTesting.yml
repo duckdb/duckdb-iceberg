@@ -27,15 +27,47 @@ jobs:
           sudo apt-get install -y -qq software-properties-common
           sudo add-apt-repository ppa:git-core/ppa
           sudo apt-get update -y -qq
-          sudo apt-get install -y -qq ninja-build make gcc-multilib g++-multilib libssl-dev wget openjdk-8-jdk zip maven unixodbc-dev libc6-dev-i386 lib32readline6-dev libssl-dev libcurl4-gnutls-dev libexpat1-dev gettext unzip build-essential checkinstall libffi-dev curl libz-dev openssh-client
+          sudo apt-get install -y -qq \
+            ninja-build \
+            make gcc-multilib \
+            g++-multilib \
+            libssl-dev \
+            wget \
+            openjdk-8-jdk \
+            zip \
+            maven \
+            unixodbc-dev \
+            libc6-dev-i386 \
+            lib32readline6-dev \
+            libssl-dev \
+            libcurl4-gnutls-dev \
+            libexpat1-dev \
+            gettext \
+            unzip \
+            build-essential \
+            checkinstall \
+            libffi-dev \
+            curl \
+            libz-dev \
+            openssh-client
           sudo apt-get install -y -qq tar pkg-config
           sudo curl -L "https://github.com/docker/compose/releases/download/1.29.2/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
           sudo chmod +x /usr/local/bin/docker-compose
+
+      - name: Install CMake 3.x
+        run: |
+          sudo apt-get remove -y cmake cmake-data
+          sudo apt-get install --allow-downgrades -y -qq 'cmake=3.*' 'cmake-data=3.*'
 
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
           submodules: 'true'
+
+      - name: Check installed versions
+        run: |
+          ninja --version
+          cmake --version
 
       - name: Setup vcpkg
         uses: lukka/run-vcpkg@v11.1

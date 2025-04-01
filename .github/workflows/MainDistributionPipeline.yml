@@ -12,8 +12,16 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+
   duckdb-stable-build:
     name: Build extension binaries
+    steps:
+      - name: Install Ninja (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -y -qq
+          sudo apt-get install -y -qq ninja-build
+
     uses: duckdb/extension-ci-tools/.github/workflows/_extension_distribution.yml@v1.2.1
     with:
       extension_name: iceberg

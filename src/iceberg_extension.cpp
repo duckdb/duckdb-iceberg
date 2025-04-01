@@ -31,7 +31,7 @@ static unique_ptr<BaseSecret> CreateCatalogSecretFunction(ClientContext &context
 		auto lower_name = StringUtil::Lower(named_param.first);
 
 		if (lower_name == "key_id" || lower_name == "secret" || lower_name == "endpoint" ||
-		    lower_name == "region") {
+		    lower_name == "aws_region" || lower_name == "oauth2_scope" || lower_name == "oauth2_server_uri") {
 			result->secret_map[lower_name] = named_param.second.ToString();
 		} else {
 			throw InternalException("Unknown named parameter passed to CreateIRCSecretFunction: " + lower_name);
@@ -40,8 +40,9 @@ static unique_ptr<BaseSecret> CreateCatalogSecretFunction(ClientContext &context
 
 	// Get token from catalog
 	result->secret_map["token"] =
-	    IRCAPI::GetToken(context, result->secret_map["key_id"].ToString(), result->secret_map["secret"].ToString(),
-	                     result->secret_map["endpoint"].ToString());
+	    IRCAPI::GetToken(context, result->secret_map["oauth2_server_uri"].ToString(),
+	                     result->secret_map["key_id"].ToString(), result->secret_map["secret"].ToString(),
+	                     result->secret_map["endpoint"].ToString(), result->secret_map["oauth2_scope"].ToString());
 
 	//! Set redact keys
 	result->redact_keys = {"token", "key_id", "secret"};
@@ -83,6 +84,9 @@ static unique_ptr<Catalog> IcebergCatalogAttach(StorageExtensionInfo *storage_in
 	string service;
 	string endpoint_type;
 	string endpoint;
+	string oauth2_server_uri;
+
+	auto &oauth2_scope = credentials.oauth2_scope;
 
 	// check if we have a secret provided
 	string secret_name;
@@ -97,11 +101,28 @@ static unique_ptr<Catalog> IcebergCatalogAttach(StorageExtensionInfo *storage_in
 		} else if (lower_name == "endpoint") {
 			endpoint = StringUtil::Lower(entry.second.ToString());
 			StringUtil::RTrim(endpoint, "/");
+		} else if (lower_name == "oauth2_scope") {
+			oauth2_scope = StringUtil::Lower(entry.second.ToString());
+		} else if (lower_name == "oauth2_server_uri") {
+			oauth2_server_uri = StringUtil::Lower(entry.second.ToString());
 		} else {
 			throw BinderException("Unrecognized option for iceberg catalog attach: %s", entry.first);
 		}
 	}
 	auto warehouse = info.path;
+
+	if (oauth2_scope.empty()) {
+		//! Default to the Polaris scope: 'PRINCIPAL_ROLE:ALL'
+		oauth2_scope = "PRINCIPAL_ROLE:ALL";
+	}
+
+	if (oauth2_server_uri.empty()) {
+		//! If no oauth2_server_uri is provided, default to the (deprecated) REST API endpoint for it
+		DUCKDB_LOG_WARN(
+		    context, "iceberg",
+		    "'oauth2_server_uri' is not set, defaulting to deprecated '{endpoint}/v1/oauth/tokens' oauth2_server_uri");
+		oauth2_server_uri = StringUtil::Format("%s/v1/oauth/tokens", endpoint);
+	}
 	auto catalog_type = ICEBERG_CATALOG_TYPE::INVALID;
 
 	// Lookup a secret we can use to access the rest catalog.
@@ -165,9 +186,11 @@ static unique_ptr<Catalog> IcebergCatalogAttach(StorageExtensionInfo *storage_in
 	Value key_val = kv_secret.TryGetValue("key_id");
 	Value secret_val = kv_secret.TryGetValue("secret");
 	CreateSecretInput create_secret_input;
+	create_secret_input.options["oauth2_server_uri"] = oauth2_server_uri;
 	create_secret_input.options["key_id"] = key_val;
 	create_secret_input.options["secret"] = secret_val;
 	create_secret_input.options["endpoint"] = endpoint;
+	create_secret_input.options["oauth2_scope"] = oauth2_scope;
 	auto new_secret = CreateCatalogSecretFunction(context, create_secret_input);
 	auto &kv_secret_new = dynamic_cast<KeyValueSecret &>(*new_secret);
 	Value token = kv_secret_new.TryGetValue("token");
