@@ -31,7 +31,7 @@ static unique_ptr<BaseSecret> CreateCatalogSecretFunction(ClientContext &context
 		auto lower_name = StringUtil::Lower(named_param.first);
 
 		if (lower_name == "key_id" || lower_name == "secret" || lower_name == "endpoint" ||
-		    lower_name == "aws_region" || lower_name == "oauth2_scope" || lower_name == "oauth2_server_uri") {
+		    lower_name == "region" || lower_name == "oauth2_scope" || lower_name == "oauth2_server_uri") {
 			result->secret_map[lower_name] = named_param.second.ToString();
 		} else {
 			throw InternalException("Unknown named parameter passed to CreateIRCSecretFunction: " + lower_name);
@@ -169,6 +169,11 @@ static unique_ptr<Catalog> IcebergCatalogAttach(StorageExtensionInfo *storage_in
 		catalog->catalog_type = catalog_type;
 		catalog->GetConfig(context);
 		return std::move(catalog);
+	}
+
+	// Check no endpoint type has been passed.
+	if (!endpoint_type.empty()) {
+		throw IOException("Unrecognized endpoint type: %s. Expected either S3_TABLES or GLUE", endpoint_type);
 	}
 
 	catalog_type = ICEBERG_CATALOG_TYPE::OTHER;
