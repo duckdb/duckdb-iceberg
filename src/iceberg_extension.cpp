@@ -38,12 +38,6 @@ static unique_ptr<BaseSecret> CreateCatalogSecretFunction(ClientContext &context
 		}
 	}
 
-	// Get token from catalog
-	result->secret_map["token"] =
-	    IRCAPI::GetToken(context, result->secret_map["oauth2_server_uri"].ToString(),
-	                     result->secret_map["key_id"].ToString(), result->secret_map["secret"].ToString(),
-	                     result->secret_map["endpoint"].ToString(), result->secret_map["oauth2_scope"].ToString());
-
 	//! Set redact keys
 	result->redact_keys = {"token", "key_id", "secret"};
 
@@ -116,13 +110,6 @@ static unique_ptr<Catalog> IcebergCatalogAttach(StorageExtensionInfo *storage_in
 		oauth2_scope = "PRINCIPAL_ROLE:ALL";
 	}
 
-	if (oauth2_server_uri.empty()) {
-		//! If no oauth2_server_uri is provided, default to the (deprecated) REST API endpoint for it
-		DUCKDB_LOG_WARN(
-		    context, "iceberg",
-		    "'oauth2_server_uri' is not set, defaulting to deprecated '{endpoint}/v1/oauth/tokens' oauth2_server_uri");
-		oauth2_server_uri = StringUtil::Format("%s/v1/oauth/tokens", endpoint);
-	}
 	auto catalog_type = ICEBERG_CATALOG_TYPE::INVALID;
 
 	// Lookup a secret we can use to access the rest catalog.
@@ -187,6 +174,14 @@ static unique_ptr<Catalog> IcebergCatalogAttach(StorageExtensionInfo *storage_in
 		endpoint = endpoint_val.ToString();
 	}
 
+	if (oauth2_server_uri.empty()) {
+		//! If no oauth2_server_uri is provided, default to the (deprecated) REST API endpoint for it
+		DUCKDB_LOG_WARN(
+		    context, "iceberg",
+		    "'oauth2_server_uri' is not set, defaulting to deprecated '{endpoint}/v1/oauth/tokens' oauth2_server_uri");
+		oauth2_server_uri = StringUtil::Format("%s/v1/oauth/tokens", endpoint);
+	}
+
 	// Default IRC path
 	Value key_val = kv_secret.TryGetValue("key_id");
 	Value secret_val = kv_secret.TryGetValue("secret");
@@ -198,11 +193,11 @@ static unique_ptr<Catalog> IcebergCatalogAttach(StorageExtensionInfo *storage_in
 	create_secret_input.options["oauth2_scope"] = oauth2_scope;
 	auto new_secret = CreateCatalogSecretFunction(context, create_secret_input);
 	auto &kv_secret_new = dynamic_cast<KeyValueSecret &>(*new_secret);
-	Value token = kv_secret_new.TryGetValue("token");
-	if (token.IsNull()) {
-		throw IOException("Failed to generate oath token");
+	string token = IRCAPI::GetToken(context, oauth2_server_uri, key_val.ToString(), secret_val.ToString(), endpoint, oauth2_scope);
+	if (token.empty()) {
+		throw IOException("Failed to generate OAuth token");
 	}
-	credentials.token = token.ToString();
+	credentials.token = token;
 	auto catalog = make_uniq<IRCatalog>(db, access_mode, credentials, warehouse, endpoint, secret_name);
 	catalog->catalog_type = catalog_type;
 	catalog->GetConfig(context);
