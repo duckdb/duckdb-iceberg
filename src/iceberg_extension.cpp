@@ -150,7 +150,7 @@ static unique_ptr<Catalog> IcebergCatalogAttach(StorageExtensionInfo *storage_in
 		return std::move(catalog);
 	}
 
-	catalog_type = ICEBERG_CATALOG_TYPE::POLARIS;
+	catalog_type = ICEBERG_CATALOG_TYPE::OTHER;
 	credentials.region = region.IsNull() ? "" : region.ToString();
 	if (endpoint.empty()) {
 		Value endpoint_val = kv_secret.TryGetValue("endpoint");

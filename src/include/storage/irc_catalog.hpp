@@ -28,7 +28,7 @@ public:
 	static void ClearCacheOnSetting(ClientContext &context, SetScope scope, Value &parameter);
 };
 
-enum class ICEBERG_CATALOG_TYPE { AWS_S3TABLES, AWS_GLUE, POLARIS, INVALID };
+enum class ICEBERG_CATALOG_TYPE { AWS_S3TABLES, AWS_GLUE, OTHER, INVALID };
 
 class MetadataCacheValue {
 public:
