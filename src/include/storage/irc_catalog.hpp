@@ -13,10 +13,10 @@ namespace duckdb {
 class IRCSchemaEntry;
 
 struct IRCCredentials {
-	string client_id;
-	string client_secret;
+	string key_id;
+	string secret;
 	//! required to query s3 tables
-	string aws_region;
+	string region;
 	//! Catalog generates the token using client id & secret
 	string token;
 	//! The scope of the OAuth token to request through the client_credentials flow
