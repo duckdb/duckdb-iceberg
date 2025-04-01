@@ -30,7 +30,7 @@ static unique_ptr<BaseSecret> CreateCatalogSecretFunction(ClientContext &context
 	for (const auto &named_param : input.options) {
 		auto lower_name = StringUtil::Lower(named_param.first);
 
-		if (lower_name == "key_id" || lower_name == "secret" || lower_name == "endpoint" ||
+		if (lower_name == "client_id" || lower_name == "client_secret" || lower_name == "endpoint" ||
 		    lower_name == "region" || lower_name == "oauth2_scope" || lower_name == "oauth2_server_uri") {
 			result->secret_map[lower_name] = named_param.second.ToString();
 		} else {
@@ -39,14 +39,14 @@ static unique_ptr<BaseSecret> CreateCatalogSecretFunction(ClientContext &context
 	}
 
 	//! Set redact keys
-	result->redact_keys = {"token", "key_id", "secret"};
+	result->redact_keys = {"token", "client_id", "client_secret"};
 
 	return std::move(result);
 }
 
 static void SetCatalogSecretParameters(CreateSecretFunction &function) {
-	function.named_parameters["key_id"] = LogicalType::VARCHAR;
-	function.named_parameters["secret"] = LogicalType::VARCHAR;
+	function.named_parameters["client_id"] = LogicalType::VARCHAR;
+	function.named_parameters["client_secret"] = LogicalType::VARCHAR;
 	function.named_parameters["endpoint"] = LogicalType::VARCHAR;
 	function.named_parameters["region"] = LogicalType::VARCHAR;
 	function.named_parameters["token"] = LogicalType::VARCHAR;
@@ -183,12 +183,12 @@ static unique_ptr<Catalog> IcebergCatalogAttach(StorageExtensionInfo *storage_in
 	}
 
 	// Default IRC path
-	Value key_val = kv_secret.TryGetValue("key_id");
-	Value secret_val = kv_secret.TryGetValue("secret");
+	Value key_val = kv_secret.TryGetValue("client_id");
+	Value secret_val = kv_secret.TryGetValue("client_secret");
 	CreateSecretInput create_secret_input;
 	create_secret_input.options["oauth2_server_uri"] = oauth2_server_uri;
-	create_secret_input.options["key_id"] = key_val;
-	create_secret_input.options["secret"] = secret_val;
+	create_secret_input.options["client_id"] = key_val;
+	create_secret_input.options["client_secret"] = secret_val;
 	create_secret_input.options["endpoint"] = endpoint;
 	create_secret_input.options["oauth2_scope"] = oauth2_scope;
 	auto new_secret = CreateCatalogSecretFunction(context, create_secret_input);
