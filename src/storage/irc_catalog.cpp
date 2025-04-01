@@ -143,7 +143,6 @@ IRCEndpointBuilder IRCatalog::GetBaseUrl() const {
 	switch (catalog_type) {
 	case ICEBERG_CATALOG_TYPE::AWS_GLUE:
 	case ICEBERG_CATALOG_TYPE::AWS_S3TABLES: {
-		base_url.SetPrefix(prefix);
 		base_url.AddPathComponent("iceberg");
 		base_url.AddPathComponent(version);
 		break;
