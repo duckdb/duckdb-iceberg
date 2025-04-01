@@ -148,7 +148,7 @@ static unique_ptr<Catalog> IcebergCatalogAttach(StorageExtensionInfo *storage_in
 		catalog->catalog_type = catalog_type;
 		catalog->GetConfig(context);
 		return std::move(catalog);
-	} 
+	}
 
 	catalog_type = ICEBERG_CATALOG_TYPE::POLARIS;
 	credentials.region = region.IsNull() ? "" : region.ToString();
