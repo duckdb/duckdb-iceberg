@@ -9,6 +9,7 @@ defaults:
 
 env:
   BASE_BRANCH: ${{ github.base_ref || (endsWith(github.ref, '_feature') && 'feature' || 'main') }}
+  CMAKE_POLICY_VERSION_MINIMUM: 3.5
 
 jobs:
   rest:
