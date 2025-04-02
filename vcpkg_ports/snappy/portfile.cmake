@@ -16,6 +16,7 @@ vcpkg_cmake_configure(
     OPTIONS
         -DSNAPPY_BUILD_TESTS=OFF
         -DSNAPPY_BUILD_BENCHMARKS=OFF
+        -DCMAKE_POLICY_VERSION_MINIMUM=3.5
 
         # These variables can be overriden in a custom triplet, see usage file
         -DSNAPPY_HAVE_SSSE3=OFF
