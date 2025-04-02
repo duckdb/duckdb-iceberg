@@ -23,6 +23,7 @@ vcpkg_cmake_configure(
         ${EXTRA_ARGS}
         ${FEATURE_OPTIONS}
         -DUNSAFE_TREAT_WARNINGS_AS_ERRORS=OFF
+        -DCMAKE_POLICY_VERSION_MINIMUM=3.5
 )
 
 vcpkg_cmake_install()
