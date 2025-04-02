@@ -21,6 +21,7 @@ vcpkg_cmake_configure(
         -DBUILD_EXAMPLES=OFF
         -DBUILD_TESTS=OFF
         -DBUILD_DOCS=OFF
+        -DCMAKE_POLICY_VERSION_MINIMUM=3.5
 )
 
 vcpkg_cmake_install()
