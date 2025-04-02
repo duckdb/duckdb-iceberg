@@ -1,5 +1,6 @@
 cmake_minimum_required(VERSION 3.5...3.29)
 
+set(ENV{CMAKE_POLICY_VERSION_MINIMUM} "3.5")
 # Set extension name here
 set(TARGET_NAME iceberg)
 project(${TARGET_NAME})
