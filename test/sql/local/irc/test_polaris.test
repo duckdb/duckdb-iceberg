@@ -16,15 +16,17 @@ mode skip
 
 statement ok
 create secret polaris_secret (
-  type s3,
-  KEY_ID '',
-  SECRET ''
+  type ICEBERG,
+  CLIENT_ID '',
+  CLIENT_SECRET '',
+  ENDPOINT 'http://0.0.0.0:8181/api/catalog',
+  REGION '',
 );
 
 statement ok
 attach 'polaris_demo' as my_datalake (
-    type ICEBERG,
-    ENDPOINT 'http://0.0.0.0:8181/api/catalog'
+    TYPE ICEBERG, 
+    secret polaris_secret
 );
 
 statement ok
