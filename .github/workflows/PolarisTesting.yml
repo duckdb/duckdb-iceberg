@@ -98,8 +98,8 @@ jobs:
           echo 'export PATH="$HOME/.jenv/bin:$PATH"' >> ~/.bashrc
           echo 'eval "$(jenv init -)"' >> ~/.bashrc
           source ~/.bashrc
-          jenv enable-plugin export
-          jenv add /usr/lib/jvm/java-21-openjdk-amd64
+          ~/.jenv/bin/jenv enable-plugin export
+          ~/.jenv/bin/jenv add /usr/lib/jvm/java-21-openjdk-amd64
 
       - name: Wait for polaris initialization
         run: |
