@@ -60,6 +60,5 @@ attach 'quickstart_catalog' as my_datalake (
     ENDPOINT 'http://does_not_exist.com/api/catalog'
 )
 ----
-IO Error
-
+Invalid Input Error: Please provide either a 'client_id' + 'client_secret' pair or the name of an ICEBERG secret as 'secret' / 'catalog_secret'
 

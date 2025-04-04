@@ -75,14 +75,14 @@ TableFunction ICTableEntry::GetScanFunction(ClientContext &context, unique_ptr<F
 
 		if (StringUtil::StartsWith(ic_catalog.host, "glue")) {
 			//! Override the endpoint if 'glue' is the host of the catalog
-			auto secret_entry = IRCatalog::GetSecret(context, ic_catalog.secret_name);
+			auto secret_entry = IRCatalog::GetS3Secret(context, ic_catalog.secret_name);
 			auto kv_secret = dynamic_cast<const KeyValueSecret &>(*secret_entry->secret);
 			auto region = kv_secret.TryGetValue("region").ToString();
 			auto endpoint = "s3." + region + ".amazonaws.com";
 			info.options["endpoint"] = endpoint;
 		} else if (StringUtil::StartsWith(ic_catalog.host, "s3tables")) {
 			//! Override all the options if 's3tables' is the host of the catalog
-			auto secret_entry = IRCatalog::GetSecret(context, ic_catalog.secret_name);
+			auto secret_entry = IRCatalog::GetS3Secret(context, ic_catalog.secret_name);
 			auto kv_secret = dynamic_cast<const KeyValueSecret &>(*secret_entry->secret);
 			auto substrings = StringUtil::Split(ic_catalog.warehouse, ":");
 			D_ASSERT(substrings.size() == 6);

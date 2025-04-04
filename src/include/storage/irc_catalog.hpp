@@ -77,7 +77,9 @@ public:
 		return "iceberg";
 	}
 
-	static unique_ptr<SecretEntry> GetSecret(ClientContext &context, const string &secret_name);
+	static unique_ptr<SecretEntry> GetS3Secret(ClientContext &context, const string &secret_name);
+	static unique_ptr<SecretEntry> GetIcebergSecret(ClientContext &context, const string &secret_name,
+	                                                bool find_if_empty);
 
 	void GetConfig(ClientContext &context);
 

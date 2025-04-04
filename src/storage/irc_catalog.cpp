@@ -156,24 +156,45 @@ void IRCatalog::ClearCache() {
 	schemas.ClearEntries();
 }
 
-unique_ptr<SecretEntry> IRCatalog::GetSecret(ClientContext &context, const string &secret_name) {
+unique_ptr<SecretEntry> IRCatalog::GetS3Secret(ClientContext &context, const string &secret_name) {
 	auto transaction = CatalogTransaction::GetSystemCatalogTransaction(context);
 	// make sure a secret exists to connect to an AWS catalog
 	unique_ptr<SecretEntry> secret_entry = nullptr;
-	if (!secret_name.empty()) {
+	if (secret_name.empty()) {
+		//! Lookup the default S3 secret
+		secret_entry = context.db->GetSecretManager().GetSecretByName(transaction, "__default_s3");
+	} else {
 		secret_entry = context.db->GetSecretManager().GetSecretByName(transaction, secret_name);
 	}
+
 	if (!secret_entry) {
 		auto secret_match = context.db->GetSecretManager().LookupSecret(transaction, "s3://", "s3");
 		if (!secret_match.HasMatch()) {
-			throw IOException("Failed to find a secret and no explicit secret was passed!");
+			throw IOException("Failed to find an S3 secret and no explicit secret was passed!");
 		}
 		secret_entry = std::move(secret_match.secret_entry);
 	}
 	if (secret_entry) {
 		return secret_entry;
 	}
-	throw IOException("Could not find valid Iceberg secret");
+	throw IOException("Could not find valid S3 secret");
+}
+
+unique_ptr<SecretEntry> IRCatalog::GetIcebergSecret(ClientContext &context, const string &secret_name,
+                                                    bool find_if_empty) {
+	auto transaction = CatalogTransaction::GetSystemCatalogTransaction(context);
+	unique_ptr<SecretEntry> secret_entry = nullptr;
+	if (secret_name.empty() && find_if_empty) {
+		//! Try to find any secret with the 'iceberg' type
+		auto secret_match = context.db->GetSecretManager().LookupSecret(transaction, "", "iceberg");
+		if (!secret_match.HasMatch()) {
+			return nullptr;
+		}
+		secret_entry = std::move(secret_match.secret_entry);
+	} else {
+		secret_entry = context.db->GetSecretManager().GetSecretByName(transaction, secret_name);
+	}
+	return secret_entry;
 }
 
 unique_ptr<PhysicalOperator> IRCatalog::PlanInsert(ClientContext &context, LogicalInsert &op,

@@ -93,7 +93,7 @@ string APIUtils::GetRequestAws(ClientContext &context, IRCEndpointBuilder endpoi
 	std::shared_ptr<Aws::Http::HttpRequest> req(create_http_req);
 
 	// will error if no secret can be found for AWS services
-	auto secret_entry = IRCatalog::GetSecret(context, secret_name);
+	auto secret_entry = IRCatalog::GetS3Secret(context, secret_name);
 	auto kv_secret = dynamic_cast<const KeyValueSecret &>(*secret_entry->secret);
 
 	std::shared_ptr<Aws::Auth::AWSCredentialsProviderChain> provider;
