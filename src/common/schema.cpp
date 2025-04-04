@@ -63,13 +63,13 @@ static LogicalType ParseComplexType(yyjson_val *type) {
 	if (type_str == "map") {
 		return ParseMap(type);
 	}
-	throw IOException("Invalid field found while parsing field: type");
+	throw InvalidConfigurationException("Invalid field found while parsing field: type");
 }
 
 static LogicalType ParseType(yyjson_val *type) {
 	auto val = yyjson_obj_get(type, "type");
 	if (!val) {
-		throw IOException("Invalid field found while parsing field: type");
+		throw InvalidConfigurationException("Invalid field found while parsing field: type");
 	}
 	return ParseTypeValue(val);
 }
@@ -79,7 +79,7 @@ static LogicalType ParseTypeValue(yyjson_val *val) {
 		return ParseComplexType(val);
 	}
 	if (yyjson_get_type(val) != YYJSON_TYPE_STR) {
-		throw IOException("Invalid field found while parsing field: type");
+		throw InvalidConfigurationException("Invalid field found while parsing field: type");
 	}
 	string type_str = yyjson_get_str(val);
 
@@ -136,7 +136,7 @@ static LogicalType ParseTypeValue(yyjson_val *val) {
 		auto scale = std::stoi(digits[1]);
 		return LogicalType::DECIMAL(width, scale);
 	}
-	throw IOException("Encountered an unrecognized type in JSON schema: \"%s\"", type_str);
+	throw InvalidConfigurationException("Encountered an unrecognized type in JSON schema: \"%s\"", type_str);
 }
 
 IcebergColumnDefinition IcebergColumnDefinition::ParseFromJson(yyjson_val *val) {
@@ -155,7 +155,7 @@ static vector<IcebergColumnDefinition> ParseSchemaFromJson(yyjson_val *schema_js
 	// Assert that the top level 'type' is a struct
 	auto type_str = IcebergUtils::TryGetStrFromObject(schema_json, "type");
 	if (type_str != "struct") {
-		throw IOException("Schema in JSON Metadata is invalid");
+		throw InvalidConfigurationException("Schema in JSON Metadata is invalid");
 	}
 	D_ASSERT(yyjson_get_type(schema_json) == YYJSON_TYPE_OBJ);
 	D_ASSERT(IcebergUtils::TryGetStrFromObject(schema_json, "type") == "struct");
@@ -180,7 +180,7 @@ vector<IcebergColumnDefinition> IcebergSnapshot::ParseSchema(vector<yyjson_val *
 		}
 	}
 
-	throw IOException("Iceberg schema with schema id " + to_string(schema_id) + " was not found!");
+	throw InvalidConfigurationException("Iceberg schema with schema id " + to_string(schema_id) + " was not found!");
 }
 
 } // namespace duckdb

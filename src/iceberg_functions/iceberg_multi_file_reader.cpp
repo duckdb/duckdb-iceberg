@@ -313,7 +313,7 @@ void IcebergMultiFileReader::CreateColumnMapping(const string &file_name,
 		// Lookup the required column in the local map
 		auto entry = name_map.find("file_row_number");
 		if (entry == name_map.end()) {
-			throw IOException("Failed to find the file_row_number column");
+			throw InvalidConfigurationException("Failed to find the file_row_number column");
 		}
 
 		// Register the column to be scanned from this file

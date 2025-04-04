@@ -64,7 +64,7 @@ unique_ptr<SnapshotParseInfo> IcebergSnapshot::GetParseInfo(yyjson_doc &metadata
 	} else {
 		auto schema = yyjson_obj_get(root, "schema");
 		if (!schema) {
-			throw IOException("Neither a valid schema or schemas field was found");
+			throw InvalidConfigurationException("Neither a valid schema or schemas field was found");
 		}
 		auto found_schema_id = IcebergUtils::TryGetNumFromObject(schema, "schema-id");
 		info.schemas.push_back(schema);
@@ -103,7 +103,7 @@ IcebergSnapshot IcebergSnapshot::GetSnapshotById(const string &path, FileSystem 
 	auto snapshot = FindSnapshotByIdInternal(info->snapshots, snapshot_id);
 
 	if (!snapshot) {
-		throw IOException("Could not find snapshot with id " + to_string(snapshot_id));
+		throw InvalidConfigurationException("Could not find snapshot with id " + to_string(snapshot_id));
 	}
 
 	return ParseSnapShot(snapshot, info->iceberg_version, info->schema_id, info->schemas, options);
@@ -115,7 +115,8 @@ IcebergSnapshot IcebergSnapshot::GetSnapshotByTimestamp(const string &path, File
 	auto snapshot = FindSnapshotByIdTimestampInternal(info->snapshots, timestamp);
 
 	if (!snapshot) {
-		throw IOException("Could not find latest snapshots for timestamp " + Timestamp::ToString(timestamp));
+		throw InvalidConfigurationException("Could not find latest snapshots for timestamp " +
+		                                    Timestamp::ToString(timestamp));
 	}
 
 	return ParseSnapShot(snapshot, info->iceberg_version, info->schema_id, info->schemas, options);
@@ -138,7 +139,7 @@ static string GenerateMetaDataUrl(FileSystem &fs, const string &meta_path, strin
 		}
 	}
 
-	throw IOException(
+	throw InvalidConfigurationException(
 	    "Iceberg metadata file not found for table version '%s' using '%s' compression and format(s): '%s'",
 	    table_version, options.metadata_compression_codec, options.version_name_format);
 }
@@ -171,7 +172,7 @@ string IcebergSnapshot::GetMetaDataPath(ClientContext &context, const string &pa
 	}
 	if (!UnsafeVersionGuessingEnabled(context)) {
 		// Make sure we're allowed to guess versions
-		throw IOException(
+		throw InvalidConfigurationException(
 		    "Failed to read iceberg table. No version was provided and no version-hint could be found, globbing the "
 		    "filesystem to locate the latest version is disabled by default as this is considered unsafe and could "
 		    "result in reading uncommitted data. To enable this use 'SET %s = true;'",
@@ -195,7 +196,7 @@ IcebergSnapshot IcebergSnapshot::ParseSnapShot(yyjson_val *snapshot, idx_t icebe
 	if (snapshot) {
 		auto snapshot_tag = yyjson_get_type(snapshot);
 		if (snapshot_tag != YYJSON_TYPE_OBJ) {
-			throw IOException("Invalid snapshot field found parsing iceberg metadata.json");
+			throw InvalidConfigurationException("Invalid snapshot field found parsing iceberg metadata.json");
 		}
 		ret.metadata_compression_codec = options.metadata_compression_codec;
 		if (iceberg_format_version == 1) {
@@ -226,9 +227,9 @@ string IcebergSnapshot::GetTableVersionFromHint(const string &meta_path, FileSys
 	try {
 		return version_file_content;
 	} catch (std::invalid_argument &e) {
-		throw IOException("Iceberg version hint file contains invalid value");
+		throw InvalidConfigurationException("Iceberg version hint file contains invalid value");
 	} catch (std::out_of_range &e) {
-		throw IOException("Iceberg version hint file contains invalid value");
+		throw InvalidConfigurationException("Iceberg version hint file contains invalid value");
 	}
 }
 
@@ -262,8 +263,9 @@ string IcebergSnapshot::GuessTableVersion(const string &meta_path, FileSystem &f
 		}
 	}
 
-	throw IOException("Could not guess Iceberg table version using '%s' compression and format(s): '%s'",
-	                  metadata_compression_codec, version_format);
+	throw InvalidConfigurationException(
+	    "Could not guess Iceberg table version using '%s' compression and format(s): '%s'", metadata_compression_codec,
+	    version_format);
 }
 
 string IcebergSnapshot::PickTableVersion(vector<string> &found_metadata, string &version_pattern, string &glob) {

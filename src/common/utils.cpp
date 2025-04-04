@@ -32,13 +32,13 @@ string IcebergUtils::GetFullPath(const string &iceberg_path, const string &relat
 		return fs.JoinPath(iceberg_path, relative_file_path.substr(found + 1));
 	}
 
-	throw IOException("Did not recognize iceberg path");
+	throw InvalidConfigurationException("Did not recognize iceberg path");
 }
 
 uint64_t IcebergUtils::TryGetNumFromObject(yyjson_val *obj, const string &field) {
 	auto val = yyjson_obj_getn(obj, field.c_str(), field.size());
 	if (!val || yyjson_get_type(val) != YYJSON_TYPE_NUM) {
-		throw IOException("Invalid field found while parsing field: " + field);
+		throw InvalidConfigurationException("Invalid field found while parsing field: " + field);
 	}
 	return yyjson_get_uint(val);
 }
@@ -46,7 +46,7 @@ uint64_t IcebergUtils::TryGetNumFromObject(yyjson_val *obj, const string &field)
 bool IcebergUtils::TryGetBoolFromObject(yyjson_val *obj, const string &field) {
 	auto val = yyjson_obj_getn(obj, field.c_str(), field.size());
 	if (!val || yyjson_get_type(val) != YYJSON_TYPE_BOOL) {
-		throw IOException("Invalid field found while parsing field: " + field);
+		throw InvalidConfigurationException("Invalid field found while parsing field: " + field);
 	}
 	return yyjson_get_bool(val);
 }
@@ -54,7 +54,7 @@ bool IcebergUtils::TryGetBoolFromObject(yyjson_val *obj, const string &field) {
 string IcebergUtils::TryGetStrFromObject(yyjson_val *obj, const string &field) {
 	auto val = yyjson_obj_getn(obj, field.c_str(), field.size());
 	if (!val || yyjson_get_type(val) != YYJSON_TYPE_STR) {
-		throw IOException("Invalid field found while parsing field: " + field);
+		throw InvalidConfigurationException("Invalid field found while parsing field: " + field);
 	}
 	return yyjson_get_str(val);
 }
@@ -67,7 +67,7 @@ static TYPE TemplatedTryGetYYJson(yyjson_val *obj, const string &field, TYPE def
 	} else if (!fail_on_missing) {
 		return default_val;
 	}
-	throw IOException("Invalid field found while parsing field: " + field);
+	throw InvalidConfigurationException("Invalid field found while parsing field: " + field);
 }
 
 uint64_t IcebergUtils::TryGetNumFromObject(yyjson_val *obj, const string &field, bool fail_on_missing,

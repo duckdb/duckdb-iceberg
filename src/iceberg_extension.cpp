@@ -65,13 +65,14 @@ static bool SanityCheckGlueWarehouse(string warehouse) {
 	auto bucket_sep = warehouse.find_first_of('/');
 	bool bucket_sep_correct = bucket_sep == 28;
 	if (!account_id_correct) {
-		throw IOException("Invalid Glue Catalog Format: '" + warehouse + "'. Expect 12 digits for account_id.");
+		throw InvalidConfigurationException("Invalid Glue Catalog Format: '" + warehouse +
+		                                    "'. Expect 12 digits for account_id.");
 	}
 	if (bucket_sep_correct) {
 		return true;
 	}
-	throw IOException("Invalid Glue Catalog Format: '" + warehouse +
-	                  "'. Expected '<account_id>:s3tablescatalog/<bucket>");
+	throw InvalidConfigurationException("Invalid Glue Catalog Format: '" + warehouse +
+	                                    "'. Expected '<account_id>:s3tablescatalog/<bucket>");
 }
 
 static unique_ptr<Catalog> IcebergCatalogAttach(StorageExtensionInfo *storage_info, ClientContext &context,
@@ -141,8 +142,8 @@ static unique_ptr<Catalog> IcebergCatalogAttach(StorageExtensionInfo *storage_in
 		auto region = kv_secret.TryGetValue("region");
 
 		if (region.IsNull()) {
-			throw IOException("Assumed catalog secret " + secret_entry->secret->GetName() + " for catalog " + name +
-			                  " does not have a region");
+			throw InvalidConfigurationException("Assumed catalog secret " + secret_entry->secret->GetName() +
+			                                    " for catalog " + name + " does not have a region");
 		}
 		switch (catalog_type) {
 		case ICEBERG_CATALOG_TYPE::AWS_S3TABLES: {
@@ -158,7 +159,7 @@ static unique_ptr<Catalog> IcebergCatalogAttach(StorageExtensionInfo *storage_in
 			SanityCheckGlueWarehouse(warehouse);
 			break;
 		default:
-			throw IOException("Unsupported AWS catalog type");
+			throw NotImplementedException("Unsupported AWS catalog type");
 		}
 
 		auto catalog_host = service + "." + region.ToString() + ".amazonaws.com";
@@ -170,10 +171,11 @@ static unique_ptr<Catalog> IcebergCatalogAttach(StorageExtensionInfo *storage_in
 
 	// Check no endpoint type has been passed.
 	if (!endpoint_type.empty()) {
-		throw IOException("Unrecognized endpoint point: %s. Expected either S3_TABLES or GLUE", endpoint_type);
+		throw InvalidConfigurationException("Unrecognized endpoint point: %s. Expected either S3_TABLES or GLUE",
+		                                    endpoint_type);
 	}
 	if (endpoint_type.empty() && endpoint.empty()) {
-		throw IOException("No endpoint type or endpoint provided");
+		throw InvalidConfigurationException("No endpoint type or endpoint provided");
 	}
 
 	catalog_type = ICEBERG_CATALOG_TYPE::OTHER;
@@ -183,7 +185,7 @@ static unique_ptr<Catalog> IcebergCatalogAttach(StorageExtensionInfo *storage_in
 	// if no secret is referenced, this throw
 	auto secret_entry = IRCatalog::GetSecret(context, secret_name);
 	if (!secret_entry) {
-		throw IOException("No secret found to use with catalog " + name);
+		throw InvalidConfigurationException("No secret found to use with catalog " + name);
 	}
 	// secret found - read data
 	const auto &kv_secret = dynamic_cast<const KeyValueSecret &>(*secret_entry->secret);
