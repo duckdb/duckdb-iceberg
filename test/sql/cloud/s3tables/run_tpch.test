@@ -32,33 +32,30 @@ CREATE SECRET glue_secret (
 );
 
 statement ok
-attach 'arn:aws:s3tables:us-east-2:840140254803:bucket/iceberg-testing' as s3_catalog (
+attach 'arn:aws:s3tables:us-east-1:840140254803:bucket/duckdblabs-iceberg-testing' as s3_catalog (
     TYPE ICEBERG,
     ENDPOINT_TYPE 'S3_TABLES'
 );
 
 statement ok
-use s3_catalog.tpch_sf1;
+use s3_catalog.tpch_sf01;
 
-
-# FIXME: run smaller scale with full dataset
-loop i 1 5
+# FIXME: run all tpch tests when we have more optimizations
+foreach i 1 4 6
 
 query I
 PRAGMA tpch(${i})
 ----
-<FILE>:duckdb/extension/tpch/dbgen/answers/sf1/q0${i}.csv
+<FILE>:duckdb/extension/tpch/dbgen/answers/sf0.1/q0${i}.csv
 
 endloop
 
-# FIXME: run smaller scale with full dataset
-mode skip
-
-loop i 10 23
+# FIXME: run all tpch tests when we have more optimizations
+foreach i 14 19 22
 
 query I
 PRAGMA tpch(${i})
 ----
-<FILE>:duckdb/extension/tpch/dbgen/answers/sf1/q${i}.csv
+<FILE>:duckdb/extension/tpch/dbgen/answers/sf0.1/q${i}.csv
 
 endloop

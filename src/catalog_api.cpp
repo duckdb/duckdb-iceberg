@@ -135,10 +135,12 @@ IRCAPITableCredentials IRCAPI::GetTableCredentials(ClientContext &context, IRCat
 
 	case_insensitive_map_t<Value> config_options;
 	auto *config_val = yyjson_obj_get(root, "config");
-	if (config_val && catalog_credentials) {
+	if (catalog_credentials) {
 		auto kv_secret = dynamic_cast<const KeyValueSecret &>(*catalog_credentials->secret);
 		for (auto &option : kv_secret.secret_map) {
-			config_options.emplace(option);
+			if (option.first != "refresh_info" && option.first != "refresh") {
+				config_options.emplace(option);
+			}
 		}
 	}
 	ParseConfigOptions(config_val, config_options);

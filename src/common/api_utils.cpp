@@ -84,7 +84,6 @@ string APIUtils::GetRequestAws(ClientContext &context, IRCEndpointBuilder endpoi
 	uri.SetScheme(scheme);
 	// set host
 	uri.SetAuthority(endpoint_builder.GetHost());
-	auto encoded = uri.GetURLEncodedPath();
 
 	const Aws::Http::URI uri_const = Aws::Http::URI(uri);
 	auto create_http_req = Aws::Http::CreateHttpRequest(uri_const, Aws::Http::HttpMethod::HTTP_GET,

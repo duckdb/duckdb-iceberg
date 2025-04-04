@@ -1,5 +1,5 @@
 name: Cloud functional tests
-on: [push, repository_dispatch]
+on: [push, workflow_dispatch, repository_dispatch]
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}-${{ github.head_ref || '' }}-${{ github.base_ref || '' }}-${{ github.ref != 'refs/heads/main' || github.sha }}
   cancel-in-progress: true

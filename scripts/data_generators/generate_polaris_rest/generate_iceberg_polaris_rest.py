@@ -57,7 +57,9 @@ class IcebergPolarisRest:
             return
 
         spark = (
-            SparkSession.builder.config("spark.sql.catalog.quickstart_catalog", "org.apache.iceberg.spark.SparkSessionCatalog")
+            SparkSession.builder.config(
+                "spark.sql.catalog.quickstart_catalog", "org.apache.iceberg.spark.SparkSessionCatalog"
+            )
             .config(
                 "spark.jars.packages",
                 "org.apache.iceberg:iceberg-spark-runtime-3.5_2.12:1.8.1,org.apache.hadoop:hadoop-aws:3.4.0,software.amazon.awssdk:bundle:2.23.19,software.amazon.awssdk:url-connection-client:2.23.19",
@@ -134,7 +136,6 @@ class IcebergPolarisRest:
         """
         )
         con.sql("INSERT INTO quickstart_table VALUES (1, 'some data'), (2, 'more data'), (3, 'yet more data')")
-
 
     def CloseConnection(self, con):
         del con
