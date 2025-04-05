@@ -25,7 +25,6 @@ import duckdb
 import os
 from pyspark import SparkContext
 from pathlib import Path
-import duckdb
 import shutil
 
 DATA_GENERATION_DIR = f"./data/generated/iceberg/spark-rest/"

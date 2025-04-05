@@ -1,0 +1,33 @@
+# name: test/sql/local/irc/test_lakekeeper.test
+# group: [irc]
+
+require httpfs
+
+require avro
+
+require parquet
+
+require iceberg
+
+require-env LAKEKEEPER_SERVER_AVAILABLE
+
+statement ok
+create secret my_secret (
+	TYPE s3,
+	KEY_ID 'spark',
+	SECRET '2OR3eRvYfSZzzZ16MlPd95jhLnOaLM52'
+)
+
+statement ok
+attach 'demo' as my_datalake (
+	type ICEBERG,
+	ENDPOINT 'http://localhost:8181/catalog',
+	OAUTH2_SCOPE 'lakekeeper',
+	OAUTH2_SERVER_URI 'http://localhost:30080/realms/iceberg/protocol/openid-connect/token',
+	SECRET 'my_secret'
+);
+
+query III
+select * from my_datalake.my_namespace.my_table;
+----
+1	a-string	2.2
