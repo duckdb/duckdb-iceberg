@@ -10,7 +10,6 @@
   --default-base-location file://${PWD}/storage_files \
   quickstart_catalog
 
-\
 ./polaris \
   --client-id ${POLARIS_ROOT_ID} \
   --client-secret ${POLARIS_ROOT_SECRET} \

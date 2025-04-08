@@ -19,6 +19,8 @@ if match:
         with open("polaris_root_password.txt", "w") as secret_file:
             secret_file.write(root_password)
 
+
+
 else:
     print("Credentials not found in the log file.")
     exit(1)

@@ -31,6 +31,31 @@ setup_polaris_ci:
 	cd polaris_catalog && ./gradlew --stop
 	cd polaris_catalog && nohup ./gradlew run > polaris-server.log 2> polaris-error.log &
 
+polaris_osx_local:
+	rm -rf polaris_catalog
+	mkdir polaris_catalog
+	git clone https://github.com/apache/polaris.git polaris_catalog
+	cd polaris_catalog && jenv local 21
+	cd polaris_catalog && ./gradlew clean :polaris-quarkus-server:assemble -Dquarkus.container-image.build=true --no-build-cache
+	cd polaris_catalog && ./gradlew --stop
+	cd polaris_catalog && tmux kill-ses -t polaris || true
+	cd polaris_catalog && tmux new-session -s polaris -d './gradlew run > polaris-server.log 2> polaris-error.log'
+	sleep 60
+	rm -rf polaris_catalog/bin || true
+	python3 -m venv polaris_catalog
+	source polaris_catalog/bin/activate
+	python3 -m pip install poetry
+	python3 -m pip install pyspark==3.5.0
+	python3 -m pip install duckdb
+	python3 scripts/polaris/get_polaris_root_creds.py
+	export POLARIS_ROOT_ID=$(cat polaris_root_id.txt)
+	export POLARIS_ROOT_SECRET=$(cat polaris_root_password.txt)
+	cd polaris_catalog && ../scripts/polaris/setup_polaris_catalog.sh > user_credentials.json
+	python3 scripts/polaris/get_polaris_client_creds.py
+	export POLARIS_CLIENT_ID=$(cat polaris_client_id.txt)
+	export POLARIS_CLIENT_SECRET=$(cat polaris_client_secret.txt)
+	python3 scripts/data_generators/generate_data.py polaris
+
 data_clean:
 	rm -rf data/generated
 
