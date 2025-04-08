@@ -47,6 +47,11 @@ polaris_catalog_osx_local:
 	python3 scripts/polaris/get_polaris_client_creds.py
 	POLARIS_CLIENT_ID=$(cat polaris_client_id.txt) POLARIS_CLIENT_SECRET=$(cat polaris_client_secret.txt) python3 scripts/data_generators/generate_data.py polaris
 
+stop_servers:
+	cd scripts && docker compose kill
+	cd scripts && docker compose rm -f
+	tmux kill-ses -t polaris || true
+
 data_clean:
 	rm -rf data/generated
 
