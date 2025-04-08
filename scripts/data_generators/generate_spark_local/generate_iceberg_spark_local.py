@@ -2,11 +2,9 @@
 import pyspark
 import pyspark.sql
 import sys
-import duckdb
 import os
 from pyspark import SparkContext
 from pathlib import Path
-import duckdb
 import shutil
 
 

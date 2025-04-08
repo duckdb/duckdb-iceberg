@@ -27,13 +27,25 @@ from pyspark import SparkContext
 from pathlib import Path
 import shutil
 
-DATA_GENERATION_DIR = f"./data/generated/iceberg/polaris-rest/"
-SCRIPT_DIR = f"./scripts/data_generators/"
-INTERMEDIATE_DATA = "./data/generated/intermediates/polaris-rest/"
 PARQUET_SRC_FILE = f"scripts/data_generators/tmp_data/tmp.parquet"
 
+from pyspark.conf import SparkConf
+from pyspark.sql import SparkSession
 
-class IcebergPolarisRest:
+CATALOG_URL = "http://localhost:8181/catalog"
+MANAGEMENT_URL = "http://localhost:8181/management"
+KEYCLOAK_TOKEN_URL = "http://localhost:30080/realms/iceberg/protocol/openid-connect/token"
+WAREHOUSE = "demo"
+
+CLIENT_ID = "spark"
+CLIENT_SECRET = "2OR3eRvYfSZzzZ16MlPd95jhLnOaLM52"
+
+SPARK_VERSION = pyspark.__version__
+SPARK_MINOR_VERSION = '.'.join(SPARK_VERSION.split('.')[:2])
+ICEBERG_VERSION = "1.7.0"
+
+
+class IcebergLakekeeperRest:
     def __init__(self):
         pass
 
@@ -41,49 +53,26 @@ class IcebergPolarisRest:
     ### Configure everyone's favorite apache product
     ###
     def GetConnection(self):
-        os.environ["PYSPARK_SUBMIT_ARGS"] = (
-            "--packages org.apache.iceberg:iceberg-spark-runtime-3.4_2.12:1.4.2,org.apache.iceberg:iceberg-aws-bundle:1.4.2 pyspark-shell"
-        )
 
-        client_id = os.getenv('POLARIS_CLIENT_ID', '')
-        client_secret = os.getenv('POLARIS_CLIENT_SECRET', '')
-        os.environ["AWS_REGION"] = "us-east-1"
-        os.environ["AWS_ACCESS_KEY_ID"] = "admin"
-        os.environ["AWS_SECRET_ACCESS_KEY"] = "password"
+        conf = {
+            "spark.jars.packages": f"org.apache.iceberg:iceberg-spark-runtime-{SPARK_MINOR_VERSION}_2.12:{ICEBERG_VERSION},org.apache.iceberg:iceberg-aws-bundle:{ICEBERG_VERSION}",
+            "spark.sql.extensions": "org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions",
+            "spark.sql.catalog.lakekeeper": "org.apache.iceberg.spark.SparkCatalog",
+            "spark.sql.catalog.lakekeeper.type": "rest",
+            "spark.sql.catalog.lakekeeper.uri": CATALOG_URL,
+            "spark.sql.catalog.lakekeeper.credential": f"{CLIENT_ID}:{CLIENT_SECRET}",
+            "spark.sql.catalog.lakekeeper.warehouse": WAREHOUSE,
+            "spark.sql.catalog.lakekeeper.scope": "lakekeeper",
+            "spark.sql.catalog.lakekeeper.oauth2-server-uri": KEYCLOAK_TOKEN_URL,
+        }
 
-        if client_id == '' or client_secret == '':
-            print("could not find client id or client secret to connect to polaris, aborting")
-            return
+        spark_config = SparkConf().setMaster('local').setAppName("Iceberg-REST")
+        for k, v in conf.items():
+            spark_config = spark_config.set(k, v)
 
-        spark = (
-            SparkSession.builder.config(
-                "spark.sql.catalog.quickstart_catalog", "org.apache.iceberg.spark.SparkSessionCatalog"
-            )
-            .config(
-                "spark.jars.packages",
-                "org.apache.iceberg:iceberg-spark-runtime-3.5_2.12:1.8.1,org.apache.hadoop:hadoop-aws:3.4.0,software.amazon.awssdk:bundle:2.23.19,software.amazon.awssdk:url-connection-client:2.23.19",
-            )
-            .config('spark.sql.iceberg.vectorization.enabled', 'false')
-            # Configure the 'polaris' catalog as an Iceberg rest catalog
-            .config("spark.sql.catalog.quickstart_catalog.type", "rest")
-            .config("spark.sql.catalog.quickstart_catalog", "org.apache.iceberg.spark.SparkCatalog")
-            # Specify the rest catalog endpoint
-            .config("spark.sql.catalog.quickstart_catalog.uri", "http://localhost:8181/api/catalog")
-            # Enable token refresh
-            .config("spark.sql.catalog.quickstart_catalog.token-refresh-enabled", "true")
-            # specify the client_id:client_secret pair
-            .config("spark.sql.catalog.quickstart_catalog.credential", f"{client_id}:{client_secret}")
-            # Set the warehouse to the name of the catalog we created
-            .config("spark.sql.catalog.quickstart_catalog.warehouse", "quickstart_catalog")
-            # Scope set to PRINCIPAL_ROLE:ALL
-            .config("spark.sql.catalog.quickstart_catalog.scope", 'PRINCIPAL_ROLE:ALL')
-            # Enable access credential delegation
-            .config("spark.sql.catalog.quickstart_catalog.header.X-Iceberg-Access-Delegation", 'vended-credentials')
-            .config("spark.sql.catalog.quickstart_catalog.io-impl", "org.apache.iceberg.io.ResolvingFileIO")
-            .config("spark.sql.catalog.quickstart_catalog.s3.region", "us-west-2")
-            .config("spark.history.fs.logDirectory", "/home/iceberg/spark-events")
-        ).getOrCreate()
-        spark.sql("USE quickstart_catalog")
+        spark = SparkSession.builder.config(conf=spark_config).getOrCreate()
+
+        spark.sql("USE lakekeeper")
         spark.sql("CREATE NAMESPACE IF NOT EXISTS default")
         spark.sql("USE NAMESPACE default")
         return spark
@@ -94,7 +83,7 @@ class IcebergPolarisRest:
         return sql_files
 
     def GetTableDirs(self):
-        dir = "./scripts/data_generators/generate_polaris_rest/"
+        dir = "./scripts/data_generators/generate_lakekeeper_rest/"
         subdirectories = [d for d in os.listdir(dir) if os.path.isdir(dir + d) and d != "__pycache__"]
         return subdirectories
 

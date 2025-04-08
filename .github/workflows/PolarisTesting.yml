@@ -9,7 +9,6 @@ defaults:
 
 env:
   BASE_BRANCH: ${{ github.base_ref || (endsWith(github.ref, '_feature') && 'feature' || 'main') }}
-  CMAKE_POLICY_VERSION_MINIMUM: 3.5
 
 jobs:
   rest:
@@ -55,11 +54,6 @@ jobs:
           sudo curl -L "https://github.com/docker/compose/releases/download/1.29.2/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
           sudo chmod +x /usr/local/bin/docker-compose
 
-      - name: Install CMake 3.x
-        run: |
-          sudo apt-get remove -y cmake cmake-data
-          sudo apt-get install --allow-downgrades -y -qq 'cmake=3.*' 'cmake-data=3.*'
-
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
@@ -86,14 +80,19 @@ jobs:
           # install java
           sudo apt install -y -qq openjdk-21-jre-headless
           sudo apt install -y -qq openjdk-21-jdk-headless
-          # install python virtual environment (is this needed?)
           sudo apt-get install -y -qq python3-venv
 
       - name: Wait for polaris initialization
         env:
           JAVA_HOME: /usr/lib/jvm/java-21-openjdk-amd64
         run: |
-          make setup_polaris_ci
+          mkdir polaris_catalog
+          git clone https://github.com/apache/polaris.git polaris_catalog
+          cd polaris_catalog
+          ./gradlew clean :polaris-quarkus-server:assemble -Dquarkus.container-image.build=true --no-build-cache
+          ./gradlew --stop
+          nohup ./gradlew run > polaris-server.log 2> polaris-error.log &
+          cd ..
           # let polaris initialize 
           max_attempts=50
           attempt=1
@@ -132,4 +131,5 @@ jobs:
         run: |
           export POLARIS_CLIENT_ID=$(cat polaris_client_id.txt)
           export POLARIS_CLIENT_SECRET=$(cat polaris_client_secret.txt)
-          make test_release
+          ./build/release/test/unittest "$PWD/test/*" --list-test-names-only || true
+          ./build/release/test/unittest "$PWD/test/*"
