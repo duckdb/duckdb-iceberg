@@ -98,21 +98,24 @@ void IRCatalog::ScanSchemas(ClientContext &context, std::function<void(SchemaCat
 	schemas.Scan(context, [&](CatalogEntry &schema) { callback(schema.Cast<IRCSchemaEntry>()); });
 }
 
-optional_ptr<SchemaCatalogEntry> IRCatalog::GetSchema(CatalogTransaction transaction, const string &schema_name,
-                                                      OnEntryNotFound if_not_found, QueryErrorContext error_context) {
+optional_ptr<SchemaCatalogEntry> IRCatalog::LookupSchema(CatalogTransaction transaction,
+                                                         const EntryLookupInfo &schema_lookup,
+                                                         OnEntryNotFound if_not_found) {
+	auto &schema_name = schema_lookup.GetEntryName();
 	if (schema_name == DEFAULT_SCHEMA) {
 		if (default_schema.empty()) {
 			if (if_not_found == OnEntryNotFound::RETURN_NULL) {
 				return nullptr;
 			}
-			throw InvalidInputException("Attempting to fetch the default schema - but no database was "
-			                            "provided in the connection string");
+			throw CatalogException(
+			    schema_lookup.GetErrorContext(),
+			    "Attempting to fetch the default schema - but no database was provided in the connection string");
 		}
-		return GetSchema(transaction, default_schema, if_not_found, error_context);
+		return GetSchema(transaction, default_schema, if_not_found);
 	}
 	auto entry = schemas.GetEntry(transaction.GetContext(), schema_name);
 	if (!entry && if_not_found != OnEntryNotFound::RETURN_NULL) {
-		throw BinderException("Schema with name \"%s\" not found", schema_name);
+		throw CatalogException(schema_lookup.GetErrorContext(), "Schema with name \"%s\" not found", schema_name);
 	}
 
 	return reinterpret_cast<SchemaCatalogEntry *>(entry.get());
@@ -176,20 +179,20 @@ unique_ptr<SecretEntry> IRCatalog::GetSecret(ClientContext &context, const strin
 	throw IOException("Could not find valid Iceberg secret");
 }
 
-unique_ptr<PhysicalOperator> IRCatalog::PlanInsert(ClientContext &context, LogicalInsert &op,
-                                                   unique_ptr<PhysicalOperator> plan) {
+PhysicalOperator &IRCatalog::PlanInsert(ClientContext &context, PhysicalPlanGenerator &planner, LogicalInsert &op,
+                                        optional_ptr<PhysicalOperator> plan) {
 	throw NotImplementedException("ICCatalog PlanInsert");
 }
-unique_ptr<PhysicalOperator> IRCatalog::PlanCreateTableAs(ClientContext &context, LogicalCreateTable &op,
-                                                          unique_ptr<PhysicalOperator> plan) {
+PhysicalOperator &IRCatalog::PlanCreateTableAs(ClientContext &context, PhysicalPlanGenerator &planner,
+                                               LogicalCreateTable &op, PhysicalOperator &plan) {
 	throw NotImplementedException("ICCatalog PlanCreateTableAs");
 }
-unique_ptr<PhysicalOperator> IRCatalog::PlanDelete(ClientContext &context, LogicalDelete &op,
-                                                   unique_ptr<PhysicalOperator> plan) {
+PhysicalOperator &IRCatalog::PlanDelete(ClientContext &context, PhysicalPlanGenerator &planner, LogicalDelete &op,
+                                        PhysicalOperator &plan) {
 	throw NotImplementedException("ICCatalog PlanDelete");
 }
-unique_ptr<PhysicalOperator> IRCatalog::PlanUpdate(ClientContext &context, LogicalUpdate &op,
-                                                   unique_ptr<PhysicalOperator> plan) {
+PhysicalOperator &IRCatalog::PlanUpdate(ClientContext &context, PhysicalPlanGenerator &planner, LogicalUpdate &op,
+                                        PhysicalOperator &plan) {
 	throw NotImplementedException("ICCatalog PlanUpdate");
 }
 unique_ptr<LogicalOperator> IRCatalog::BindCreateIndex(Binder &binder, CreateStatement &stmt, TableCatalogEntry &table,

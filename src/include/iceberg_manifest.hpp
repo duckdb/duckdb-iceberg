@@ -79,6 +79,7 @@ public:
 	ClientContext &context;
 	unique_ptr<FunctionData> bind_data;
 	unique_ptr<GlobalTableFunctionState> global_state;
+	unique_ptr<LocalTableFunctionState> local_state;
 	vector<LogicalType> return_types;
 	vector<string> return_names;
 

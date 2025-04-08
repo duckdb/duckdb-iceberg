@@ -115,12 +115,13 @@ void IRCSchemaEntry::Scan(CatalogType type, const std::function<void(CatalogEntr
 	throw NotImplementedException("Scan without context not supported");
 }
 
-optional_ptr<CatalogEntry> IRCSchemaEntry::GetEntry(CatalogTransaction transaction, CatalogType type,
-                                                    const string &name) {
+optional_ptr<CatalogEntry> IRCSchemaEntry::LookupEntry(CatalogTransaction transaction,
+                                                       const EntryLookupInfo &lookup_info) {
+	auto type = lookup_info.GetCatalogType();
 	if (!CatalogTypeIsSupported(type)) {
 		return nullptr;
 	}
-	return GetCatalogSet(type).GetEntry(transaction.GetContext(), name);
+	return GetCatalogSet(type).GetEntry(transaction.GetContext(), lookup_info.GetEntryName());
 }
 
 IRCCatalogSet &IRCSchemaEntry::GetCatalogSet(CatalogType type) {

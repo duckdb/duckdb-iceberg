@@ -241,12 +241,16 @@ AvroScan::AvroScan(const string &scan_name, ClientContext &context, const string
 		column_ids.push_back(i);
 	}
 
+	ThreadContext thread_context(context);
+	ExecutionContext execution_context(context, thread_context, nullptr);
+
 	TableFunctionInitInput input(bind_data.get(), column_ids, vector<idx_t>(), nullptr);
 	global_state = avro_scan->init_global(context, input);
+	local_state = avro_scan->init_local(execution_context, input, global_state.get());
 }
 
 bool AvroScan::GetNext(DataChunk &result) {
-	TableFunctionInput function_input(bind_data.get(), nullptr, global_state.get());
+	TableFunctionInput function_input(bind_data.get(), local_state.get(), global_state.get());
 	avro_scan->function(context, function_input, result);
 
 	idx_t count = result.size();

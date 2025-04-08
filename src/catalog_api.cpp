@@ -154,29 +154,34 @@ IRCAPITableCredentials IRCAPI::GetTableCredentials(ClientContext &context, IRCat
 				throw InvalidInputException("required property 'prefix' is missing from the StorageCredential schema");
 			}
 
-			CreateSecretInfo create_secret_info(OnCreateConflict::REPLACE_ON_CONFLICT, SecretPersistType::TEMPORARY);
+			CreateSecretInput create_secret_input;
+			create_secret_input.on_conflict = OnCreateConflict::REPLACE_ON_CONFLICT;
+			create_secret_input.persist_type = SecretPersistType::TEMPORARY;
+
 			auto prefix_string = yyjson_get_str(sc_prefix);
 			if (!prefix_string) {
 				throw InvalidInputException("property 'prefix' of StorageCredential is NULL");
 			}
-			create_secret_info.scope.push_back(string(prefix_string));
-			create_secret_info.name = StringUtil::Format("%s_%d_%s", secret_base_name, index, prefix_string);
-			create_secret_info.type = "s3";
-			create_secret_info.provider = "config";
-			create_secret_info.storage_type = "memory";
-			create_secret_info.options = config_options;
+			create_secret_input.scope.push_back(string(prefix_string));
+			create_secret_input.name = StringUtil::Format("%s_%d_%s", secret_base_name, index, prefix_string);
+			create_secret_input.type = "s3";
+			create_secret_input.provider = "config";
+			create_secret_input.storage_type = "memory";
+			create_secret_input.options = config_options;
 
 			auto *sc_config = yyjson_obj_get(storage_credential, "config");
-			ParseConfigOptions(sc_config, create_secret_info.options);
-			result.storage_credentials.push_back(create_secret_info);
+			ParseConfigOptions(sc_config, create_secret_input.options);
+			result.storage_credentials.push_back(create_secret_input);
 		}
 	}
 
 	if (result.storage_credentials.empty() && !config_options.empty()) {
 		//! Only create a secret out of the 'config' if there are no 'storage-credentials'
-		result.config =
-		    make_uniq<CreateSecretInfo>(OnCreateConflict::REPLACE_ON_CONFLICT, SecretPersistType::TEMPORARY);
+		result.config = make_uniq<CreateSecretInput>();
 		auto &config = *result.config;
+		config.on_conflict = OnCreateConflict::REPLACE_ON_CONFLICT;
+		config.persist_type = SecretPersistType::TEMPORARY;
+
 		config.options = config_options;
 		config.name = secret_base_name;
 		config.type = "s3";
