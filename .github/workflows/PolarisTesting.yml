@@ -106,9 +106,6 @@ jobs:
             attempt=$((attempt + 1))
           done
           echo "Polaris is healthy"
-          
-      - name: Setup upterm session
-        uses: lhotari/action-upterm@v1
 
       - name: Generate Polaris Data
         run: |
