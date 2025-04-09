@@ -116,11 +116,15 @@ jobs:
           python3 -m pip install duckdb
           python3 scripts/polaris/get_polaris_root_creds.py
           # needed for setup_polaris_catalog.sh
+          cat polaris_root_id.txt
+          cat polaris_root_password.txt
           export POLARIS_ROOT_ID=$(cat polaris_root_id.txt)
           export POLARIS_ROOT_SECRET=$(cat polaris_root_password.txt)
           cd polaris_catalog && ../scripts/polaris/setup_polaris_catalog.sh > user_credentials.json
           cd ..
           python3 scripts/polaris/get_polaris_client_creds.py
+          cat polaris_client_id.txt
+          cat polaris_client_secret.txt
           export POLARIS_CLIENT_ID=$(cat polaris_client_id.txt)
           export POLARIS_CLIENT_SECRET=$(cat polaris_client_secret.txt)
           python3 scripts/data_generators/generate_data.py polaris
