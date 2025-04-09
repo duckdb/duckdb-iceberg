@@ -82,9 +82,6 @@ jobs:
           sudo apt install -y -qq openjdk-21-jdk-headless
           sudo apt-get install -y -qq python3-venv
 
-      - name: Setup upterm session
-        uses: lhotari/action-upterm@v1
-
       - name: Wait for polaris initialization
         env:
           JAVA_HOME: /usr/lib/jvm/java-21-openjdk-amd64/
@@ -96,20 +93,9 @@ jobs:
           ./gradlew --stop
           ./gradlew :polaris-quarkus-server:assemble :polaris-quarkus-server:quarkusAppPartsBuild --rerun
           tmux new-session -s polaris -d "java -jar quarkus/server/build/quarkus-app/quarkus-run.jar > polaris-server.log 2> polaris-error.log"
-          cd ..
-          # let polaris initialize 
-          max_attempts=50
-          attempt=1
-          while ! (curl -sf http://localhost:8182/healthcheck || curl -sf http://localhost:8182/q/health); do
-            if [ $attempt -gt $max_attempts ]; then
-              echo "Polaris failed to initialize after $max_attempts attempts"
-              exit 1
-            fi
-            echo "Waiting for Polaris to initialize (attempt $attempt/$max_attempts)..."
-            sleep 5
-            attempt=$((attempt + 1))
-          done
-          echo "Polaris is healthy"
+          
+      - name: Setup upterm session
+        uses: lhotari/action-upterm@v1
 
       - name: Generate Polaris Data
         run: |
