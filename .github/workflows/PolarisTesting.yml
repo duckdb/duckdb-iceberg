@@ -118,6 +118,12 @@ jobs:
           # needed for setup_polaris_catalog.sh
           cat polaris_root_id.txt
           cat polaris_root_password.txt
+
+      - name: Setup upterm session
+        uses: lhotari/action-upterm@v1
+
+      - name: More Polaris credential getting
+        run: |    
           export POLARIS_ROOT_ID=$(cat polaris_root_id.txt)
           export POLARIS_ROOT_SECRET=$(cat polaris_root_password.txt)
           cd polaris_catalog && ../scripts/polaris/setup_polaris_catalog.sh > user_credentials.json
