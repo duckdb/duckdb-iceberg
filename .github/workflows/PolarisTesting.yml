@@ -91,7 +91,8 @@ jobs:
           cd polaris_catalog
           ./gradlew clean :polaris-quarkus-server:assemble -Dquarkus.container-image.build=true --no-build-cache
           ./gradlew --stop
-          nohup ./gradlew run > polaris-server.log 2> polaris-error.log &
+          ./gradlew :polaris-quarkus-server:assemble :polaris-quarkus-server:quarkusAppPartsBuild --rerun
+          nohup java -jar quarkus/server/build/quarkus-app/quarkus-run.jar > polaris-server.log 2> polaris-error.log &
           cd ..
           # let polaris initialize 
           max_attempts=50
