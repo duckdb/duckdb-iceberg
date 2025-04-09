@@ -87,7 +87,7 @@ jobs:
 
       - name: Wait for polaris initialization
         env:
-          JAVA_HOME: /usr/lib/jvm/java-21-openjdk-amd64
+          JAVA_HOME: /usr/lib/jvm/java-21-openjdk-amd64/
         run: |
           mkdir polaris_catalog
           git clone https://github.com/apache/polaris.git polaris_catalog
