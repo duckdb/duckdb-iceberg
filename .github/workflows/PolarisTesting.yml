@@ -89,6 +89,7 @@ jobs:
           mkdir polaris_catalog
           git clone https://github.com/apache/polaris.git polaris_catalog
           cd polaris_catalog
+          git checkout 53eb36de9d892c9cc0ef4d2f02f6594446e28413
           ./gradlew clean :polaris-quarkus-server:assemble -Dquarkus.container-image.build=true --no-build-cache
           ./gradlew --stop
           ./gradlew :polaris-quarkus-server:assemble :polaris-quarkus-server:quarkusAppPartsBuild --rerun
