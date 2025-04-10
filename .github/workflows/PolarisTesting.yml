@@ -121,7 +121,8 @@ jobs:
           cat polaris_root_password.txt
 
       - name: More Polaris credential getting
-        run: |    
+        run: |
+          source ./bin/activate
           export POLARIS_ROOT_ID=$(cat polaris_root_id.txt)
           export POLARIS_ROOT_SECRET=$(cat polaris_root_password.txt)
           cd polaris_catalog && ../scripts/polaris/setup_polaris_catalog.sh > user_credentials.json
