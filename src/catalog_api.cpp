@@ -17,6 +17,8 @@
 #include <duckdb/main/secret/secret.hpp>
 #include <duckdb/main/secret/secret_manager.hpp>
 
+#include "rest_catalog/objects/list.hpp"
+
 using namespace duckdb_yyjson;
 namespace duckdb {
 
@@ -70,7 +72,7 @@ static IRCAPIColumnDefinition ParseColumnDefinition(yyjson_val *column_def) {
 	return result;
 }
 
-static void ParseConfigOptions(yyjson_val *config, case_insensitive_map_t<Value> &options) {
+static void ParseConfigOptions(const case_insensitive_map_t<string> &config, case_insensitive_map_t<Value> &options) {
 	//! Set of recognized config parameters and the duckdb secret option that matches it.
 	static const case_insensitive_map_t<string> config_to_option = {{"s3.access-key-id", "key_id"},
 	                                                                {"s3.secret-access-key", "secret"},
@@ -78,22 +80,21 @@ static void ParseConfigOptions(yyjson_val *config, case_insensitive_map_t<Value>
 	                                                                {"s3.region", "region"},
 	                                                                {"s3.endpoint", "endpoint"}};
 
-	auto config_size = yyjson_obj_size(config);
-	if (!config || config_size == 0) {
+	if (config.empty()) {
 		return;
 	}
 	for (auto &it : config_to_option) {
 		auto &key = it.first;
 		auto &option = it.second;
 
-		auto *item = yyjson_obj_get(config, key.c_str());
-		if (item) {
-			options[option] = yyjson_get_str(item);
+		auto config_it = config.find(key);
+		if (config_it != config.end()) {
+			options[option] = config_it->second;
 		}
 	}
-	auto *access_style = yyjson_obj_get(config, "s3.path-style-access");
-	if (access_style) {
-		string value = yyjson_get_str(access_style);
+	auto access_style_it = config.find("s3.path-style-access");
+	if (access_style_it != config.end()) {
+		auto &value = access_style_it->second;
 		bool path_style;
 		if (value == "true") {
 			path_style = true;
@@ -132,12 +133,12 @@ IRCAPITableCredentials IRCAPI::GetTableCredentials(ClientContext &context, IRCat
 	string api_result = GetTableMetadataCached(context, catalog, schema, table, catalog.secret_name);
 	std::unique_ptr<yyjson_doc, YyjsonDocDeleter> doc(ICUtils::api_result_to_doc(api_result));
 	auto *root = yyjson_doc_get_root(doc.get());
+	auto load_table_result = rest_api_objects::LoadTableResult::FromJSON(root);
 	auto catalog_credentials = IRCatalog::GetSecret(context, catalog.secret_name);
 
 	// Mapping from config key to a duckdb secret option
 
 	case_insensitive_map_t<Value> config_options;
-	auto *config_val = yyjson_obj_get(root, "config");
 	// start with the credentials needed for the catalog and overwrite information contained
 	// in the vended credentials. We do it this way to maintain the region info from the catalog credentials
 	if (catalog_credentials) {
@@ -151,33 +152,26 @@ IRCAPITableCredentials IRCAPI::GetTableCredentials(ClientContext &context, IRCat
 			}
 		}
 	}
-	ParseConfigOptions(config_val, config_options);
+	if (load_table_result.has_config) {
+		ParseConfigOptions(load_table_result.config, config_options);
+	}
 
-	auto *storage_credentials = yyjson_obj_get(root, "storage-credentials");
-	auto storage_credentials_size = yyjson_arr_size(storage_credentials);
-	if (storage_credentials && storage_credentials_size > 0) {
-		yyjson_val *storage_credential;
-		size_t index, max;
-		yyjson_arr_foreach(storage_credentials, index, max, storage_credential) {
-			auto *sc_prefix = yyjson_obj_get(storage_credential, "prefix");
-			if (!sc_prefix) {
-				throw InvalidInputException("required property 'prefix' is missing from the StorageCredential schema");
-			}
-
+	if (load_table_result.has_storage_credentials && !load_table_result.storage_credentials.empty()) {
+		for (idx_t i = 0; i < load_table_result.storage_credentials.size(); i++) {
+			auto &credentials = load_table_result.storage_credentials[i];
 			CreateSecretInfo create_secret_info(OnCreateConflict::REPLACE_ON_CONFLICT, SecretPersistType::TEMPORARY);
-			auto prefix_string = yyjson_get_str(sc_prefix);
-			if (!prefix_string) {
-				throw InvalidInputException("property 'prefix' of StorageCredential is NULL");
+			auto &prefix_string = credentials.prefix;
+			if (prefix_string.empty()) {
+				throw InvalidInputException("property 'prefix' of StorageCredential is empty");
 			}
-			create_secret_info.scope.push_back(string(prefix_string));
-			create_secret_info.name = StringUtil::Format("%s_%d_%s", secret_base_name, index, prefix_string);
+			create_secret_info.scope.push_back(prefix_string);
+			create_secret_info.name = StringUtil::Format("%s_%d_%s", secret_base_name, i, prefix_string);
 			create_secret_info.type = "s3";
 			create_secret_info.provider = "config";
 			create_secret_info.storage_type = "memory";
 			create_secret_info.options = config_options;
 
-			auto *sc_config = yyjson_obj_get(storage_credential, "config");
-			ParseConfigOptions(sc_config, create_secret_info.options);
+			ParseConfigOptions(credentials.config, create_secret_info.options);
 			result.storage_credentials.push_back(create_secret_info);
 		}
 	}

@@ -13,6 +13,8 @@
 #include "duckdb/planner/logical_operator.hpp"
 #include "duckdb/planner/operator/logical_get.hpp"
 
+#include "rest_catalog/objects/list.hpp"
+
 namespace duckdb {
 
 ICTableEntry::ICTableEntry(Catalog &catalog, SchemaCatalogEntry &schema, CreateTableInfo &info)
