@@ -23,7 +23,15 @@
 
 namespace duckdb {
 
+bool AVRO_LOADED = false;
+
 static unique_ptr<BaseSecret> CreateCatalogSecretFunction(ClientContext &context, CreateSecretInput &input) {
+	if (!AVRO_LOADED) {
+		auto &db_instance = context.db;
+		ExtensionHelper::AutoLoadExtension(*db_instance, "avro");
+		AVRO_LOADED = true;
+	}
+
 	// apply any overridden settings
 	vector<string> prefix_paths;
 	auto result = make_uniq<KeyValueSecret>(prefix_paths, "iceberg", "config", input.name);
@@ -88,6 +96,12 @@ static unique_ptr<Catalog> IcebergCatalogAttach(StorageExtensionInfo *storage_in
 	string oauth2_server_uri;
 
 	auto &oauth2_scope = credentials.oauth2_scope;
+
+	if (!AVRO_LOADED) {
+		auto &db_instance = context.db;
+		ExtensionHelper::AutoLoadExtension(*db_instance, "avro");
+		AVRO_LOADED = true;
+	}
 
 	// check if we have a secret provided
 	string secret_name;
@@ -228,10 +242,6 @@ static void LoadInternal(DatabaseInstance &instance) {
 	Aws::SDKOptions options;
 	Aws::InitAPI(options); // Should only be called once.
 
-	ExtensionHelper::AutoLoadExtension(instance, "avro");
-	if (!instance.ExtensionIsLoaded("avro")) {
-		throw MissingExtensionException("The iceberg extension requires the avro extension to be loaded!");
-	}
 	ExtensionHelper::AutoLoadExtension(instance, "parquet");
 	if (!instance.ExtensionIsLoaded("parquet")) {
 		throw MissingExtensionException("The iceberg extension requires the parquet extension to be loaded!");
