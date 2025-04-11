@@ -18,11 +18,6 @@ struct IcebergSnaphotsBindData : public TableFunctionData {
 
 struct IcebergSnapshotGlobalTableFunctionState : public GlobalTableFunctionState {
 public:
-	~IcebergSnapshotGlobalTableFunctionState() {
-		if (metadata_doc) {
-			yyjson_doc_free(metadata_doc);
-		}
-	}
 	static unique_ptr<GlobalTableFunctionState> Init(ClientContext &context, TableFunctionInitInput &input) {
 
 		auto bind_data = input.bind_data->Cast<IcebergSnaphotsBindData>();
@@ -31,19 +26,18 @@ public:
 		FileSystem &fs = FileSystem::GetFileSystem(context);
 
 		auto iceberg_meta_path = IcebergSnapshot::GetMetaDataPath(context, bind_data.filename, fs, bind_data.options);
-		global_state->metadata_file =
-		    IcebergSnapshot::ReadMetaData(iceberg_meta_path, fs, bind_data.options.metadata_compression_codec);
-		global_state->metadata_doc =
-		    yyjson_read(global_state->metadata_file.c_str(), global_state->metadata_file.size(), 0);
-		auto root = yyjson_doc_get_root(global_state->metadata_doc);
+		global_state->metadata =
+		    IcebergMetadata::Parse(iceberg_meta_path, fs, bind_data.options.metadata_compression_codec);
+
+		auto &info = *global_state->metadata;
+		auto root = yyjson_doc_get_root(info.doc);
 		global_state->iceberg_format_version = IcebergUtils::TryGetNumFromObject(root, "format-version");
 		auto snapshots = yyjson_obj_get(root, "snapshots");
 		yyjson_arr_iter_init(snapshots, &global_state->snapshot_it);
 		return std::move(global_state);
 	}
 
-	string metadata_file;
-	yyjson_doc *metadata_doc;
+	unique_ptr<IcebergMetadata> metadata;
 	yyjson_arr_iter snapshot_it;
 	idx_t iceberg_format_version;
 };
@@ -98,9 +92,9 @@ static void IcebergSnapshotsFunction(ClientContext &context, TableFunctionInput 
 			break;
 		}
 
-		auto parse_info = IcebergSnapshot::GetParseInfo(*global_state.metadata_doc);
+		auto &metadata = *global_state.metadata;
 		auto snapshot = IcebergSnapshot::ParseSnapShot(next_snapshot, global_state.iceberg_format_version,
-		                                               parse_info->schema_id, parse_info->schemas, bind_data.options);
+		                                               metadata.schema_id, metadata.schemas, bind_data.options);
 
 		FlatVector::GetData<int64_t>(output.data[0])[i] = snapshot.sequence_number;
 		FlatVector::GetData<int64_t>(output.data[1])[i] = snapshot.snapshot_id;
