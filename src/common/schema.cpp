@@ -63,13 +63,13 @@ static LogicalType ParseComplexType(yyjson_val *type) {
 	if (type_str == "map") {
 		return ParseMap(type);
 	}
-	throw InvalidConfigurationException("Invalid field found while parsing field: type");
+	throw InvalidConfigurationException("Unrecognized value found for 'type' (%s)", type_str);
 }
 
 static LogicalType ParseType(yyjson_val *type) {
 	auto val = yyjson_obj_get(type, "type");
 	if (!val) {
-		throw InvalidConfigurationException("Invalid field found while parsing field: type");
+		throw InvalidConfigurationException("Missing required property 'type'");
 	}
 	return ParseTypeValue(val);
 }
@@ -79,7 +79,8 @@ static LogicalType ParseTypeValue(yyjson_val *val) {
 		return ParseComplexType(val);
 	}
 	if (yyjson_get_type(val) != YYJSON_TYPE_STR) {
-		throw InvalidConfigurationException("Invalid field found while parsing field: type");
+		throw InvalidConfigurationException("Expected 'type' to be of json type 'string', found (%s) instead",
+		                                    yyjson_get_type_desc(val));
 	}
 	string type_str = yyjson_get_str(val);
 
