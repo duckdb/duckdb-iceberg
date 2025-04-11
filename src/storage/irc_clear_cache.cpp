@@ -45,6 +45,7 @@ void ICRClearCacheFunction::ClearCacheOnSetting(ClientContext &context, SetScope
 	ClearIRCCaches(context);
 }
 
+//! FIXME: why is this called 'pc' ??
 ICRClearCacheFunction::ICRClearCacheFunction()
     : TableFunction("pc_clear_cache", {}, ClearCacheFunction, ClearCacheBind) {
 }

@@ -12,6 +12,7 @@
 #include "duckdb/planner/binder.hpp"
 #include "duckdb/planner/logical_operator.hpp"
 #include "duckdb/planner/operator/logical_get.hpp"
+#include "storage/authorization/sigv4.hpp"
 
 namespace duckdb {
 
@@ -55,7 +56,6 @@ TableFunction ICTableEntry::GetScanFunction(ClientContext &context, unique_ptr<F
 	    StringUtil::Format("__internal_ic_%s__%s__%s", table_data->table_id, table_data->schema_name, table_data->name);
 	auto table_credentials =
 	    IRCAPI::GetTableCredentials(context, ic_catalog, table_data->schema_name, table_data->name, secret_base_name);
-	CreateSecretInfo info(OnCreateConflict::REPLACE_ON_CONFLICT, SecretPersistType::TEMPORARY);
 	// First check if table credentials are set (possible the IC catalog does not return credentials)
 
 	if (table_credentials.config) {
@@ -73,16 +73,18 @@ TableFunction ICTableEntry::GetScanFunction(ClientContext &context, unique_ptr<F
 			throw InvalidInputException("Substring not found");
 		}
 
-		if (StringUtil::StartsWith(ic_catalog.host, "glue")) {
+		if (StringUtil::StartsWith(ic_catalog.uri, "glue")) {
+			auto &sigv4_auth = ic_catalog.auth_handler->Cast<SIGV4Authorization>();
 			//! Override the endpoint if 'glue' is the host of the catalog
-			auto secret_entry = IRCatalog::GetSecret(context, ic_catalog.secret_name);
+			auto secret_entry = IRCatalog::GetStorageSecret(context, sigv4_auth.secret);
 			auto kv_secret = dynamic_cast<const KeyValueSecret &>(*secret_entry->secret);
 			auto region = kv_secret.TryGetValue("region").ToString();
 			auto endpoint = "s3." + region + ".amazonaws.com";
 			info.options["endpoint"] = endpoint;
-		} else if (StringUtil::StartsWith(ic_catalog.host, "s3tables")) {
+		} else if (StringUtil::StartsWith(ic_catalog.uri, "s3tables")) {
+			auto &sigv4_auth = ic_catalog.auth_handler->Cast<SIGV4Authorization>();
 			//! Override all the options if 's3tables' is the host of the catalog
-			auto secret_entry = IRCatalog::GetSecret(context, ic_catalog.secret_name);
+			auto secret_entry = IRCatalog::GetStorageSecret(context, sigv4_auth.secret);
 			auto kv_secret = dynamic_cast<const KeyValueSecret &>(*secret_entry->secret);
 			auto substrings = StringUtil::Split(ic_catalog.warehouse, ":");
 			D_ASSERT(substrings.size() == 6);

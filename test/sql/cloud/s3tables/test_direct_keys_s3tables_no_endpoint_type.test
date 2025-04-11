@@ -1,0 +1,96 @@
+# name: test/sql/cloud/s3tables/test_direct_keys_s3tables_no_endpoint_type.test
+# description: test integration with s3 tables read
+# group: [s3tables]
+
+require-env ICEBERG_AWS_REMOTE_AVAILABLE
+
+require-env AWS_ACCESS_KEY_ID
+
+require-env AWS_SECRET_ACCESS_KEY
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+require aws
+
+# test using keys directory
+statement ok
+CREATE SECRET s1 (
+	TYPE S3,
+	KEY_ID '${AWS_ACCESS_KEY_ID}',
+	SECRET '${AWS_SECRET_ACCESS_KEY}',
+	REGION 'us-east-2'
+);
+
+statement ok
+attach 'arn:aws:s3tables:us-east-2:840140254803:bucket/iceberg-testing' as my_datalake (
+	TYPE ICEBERG,
+	AUTHORIZATION_TYPE 'sigv4',
+	ENDPOINT 's3tables.us-east-2.amazonaws.com/iceberg'
+);
+
+query T nosort tables_1
+show all tables;
+----
+
+statement ok
+SELECT count(*) FROM my_datalake.tpch_sf1.lineitem;
+
+statement ok
+drop secret s1;
+
+statement ok
+detach my_datalake;
+
+# test using assume role
+statement ok
+CREATE SECRET assume_role_secret (
+	TYPE S3,
+	PROVIDER credential_chain,
+	CHAIN 'sts',
+	ASSUME_ROLE_ARN 'arn:aws:iam::840140254803:role/pyiceberg-etl-role',
+	REGION 'us-east-1'
+);
+
+statement ok
+attach 'arn:aws:s3tables:us-east-2:840140254803:bucket/iceberg-testing' as my_datalake (
+	TYPE ICEBERG,
+	AUTHORIZATION_TYPE 'sigv4',
+	ENDPOINT 's3tables.us-east-2.amazonaws.com/iceberg'
+);
+
+query T nosort tables_1
+show all tables;
+----
+
+statement ok
+select count(*) from my_datalake.tpch_sf1.lineitem;
+
+statement ok
+drop secret assume_role_secret;
+
+statement ok
+detach my_datalake
+
+# test using provider credential chain
+statement ok
+CREATE SECRET (
+  TYPE S3,
+  PROVIDER credential_chain
+);
+
+statement ok
+attach 'arn:aws:s3tables:us-east-2:840140254803:bucket/iceberg-testing' as my_datalake (
+	TYPE ICEBERG,
+	AUTHORIZATION_TYPE 'sigv4',
+	ENDPOINT 's3tables.us-east-2.amazonaws.com/iceberg'
+);
+
+query T nosort tables_1
+show all tables;
+----

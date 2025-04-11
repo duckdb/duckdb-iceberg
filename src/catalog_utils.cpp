@@ -217,11 +217,11 @@ LogicalType ICUtils::ToICType(const LogicalType &input) {
 	case LogicalTypeId::VARCHAR:
 		return input;
 	case LogicalTypeId::LIST:
-		throw NotImplementedException("PC does not support arrays - unsupported type \"%s\"", input.ToString());
+		throw NotImplementedException("Iceberg does not support arrays - unsupported type \"%s\"", input.ToString());
 	case LogicalTypeId::STRUCT:
 	case LogicalTypeId::MAP:
 	case LogicalTypeId::UNION:
-		throw NotImplementedException("PC does not support composite types - unsupported type \"%s\"",
+		throw NotImplementedException("Iceberg does not support composite types - unsupported type \"%s\"",
 		                              input.ToString());
 	case LogicalTypeId::TIMESTAMP_SEC:
 	case LogicalTypeId::TIMESTAMP_MS:

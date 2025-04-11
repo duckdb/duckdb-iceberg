@@ -17,16 +17,9 @@ namespace duckdb {
 class IRCEndpointBuilder {
 public:
 	void AddPathComponent(const string &component);
-	void AddQueryParameter(const string &key, const string &value);
 
-	void SetPrefix(const string &prefix_);
-	string GetPrefix() const;
-
-	void SetHost(const string &host_);
+	void SetHost(const string &host);
 	string GetHost() const;
-
-	void SetVersion(const string &version_);
-	string GetVersion() const;
 
 	void SetParam(const string &key, const string &value);
 	string GetParam(const string &key) const;
@@ -38,13 +31,7 @@ public:
 	vector<string> path_components;
 
 private:
-	//! host of the endpoint, like `glue` or `polaris`
 	string host;
-	//! version
-	string version;
-	//! optional prefix
-	string prefix;
-
 	unordered_map<string, string> params;
 };
 

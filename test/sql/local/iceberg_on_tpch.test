@@ -15,21 +15,24 @@ require httpfs
 require tpch
 
 statement ok
-CREATE SECRET (
+CREATE SECRET my_datalake_storage (
     TYPE S3,
-    KEY_ID 'admin',
-    SECRET 'password',
     ENDPOINT '127.0.0.1:9000',
     URL_STYLE 'path',
+    KEY_ID 'admin',
+    SECRET 'password',
     USE_SSL 0
 );
 
+# Note: the 'CLIENT_SECRET' is not verified at all by the authorization server,
+# so it's not actually testing authorization
 statement ok
 ATTACH '' AS my_datalake (
     TYPE ICEBERG,
-    ENDPOINT 'http://127.0.0.1:8181'
+    CLIENT_ID 'admin',
+    CLIENT_SECRET 'password',
+    ENDPOINT '127.0.0.1:8181'
 );
-
 
 statement ok
 create view customer as select * from my_datalake.default.customer_sf1;

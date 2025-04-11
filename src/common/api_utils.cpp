@@ -4,27 +4,47 @@
 #include "duckdb/common/exception/http_exception.hpp"
 #include "duckdb/common/string_util.hpp"
 #include "storage/irc_catalog.hpp"
+#include <curl/curl.h>
 #include <sys/stat.h>
 
 namespace duckdb {
 
-string APIUtils::GetAwsRegion(const string host) {
+namespace {
+
+struct HostDecompositionResult {
+	string authority;
+	vector<string> path_components;
+};
+
+HostDecompositionResult DecomposeHost(const string &host) {
+	HostDecompositionResult result;
+
+	auto start_of_path = host.find('/');
+	if (start_of_path != std::string::npos) {
+		//! Authority consists of everything (assuming the host does not contain the scheme) before the first slash
+		result.authority = host.substr(0, start_of_path);
+		auto remainder = host.substr(start_of_path + 1);
+		result.path_components = StringUtil::Split(remainder, '/');
+	} else {
+		result.authority = host;
+	}
+	return result;
+}
+
+} // namespace
+
+string APIUtils::GetAwsRegion(const string &host) {
 	idx_t first_dot = host.find_first_of('.');
 	idx_t second_dot = host.find_first_of('.', first_dot + 1);
 	return host.substr(first_dot + 1, second_dot - first_dot - 1);
 }
 
-string APIUtils::GetAwsService(const string host) {
+string APIUtils::GetAwsService(const string &host) {
 	return host.substr(0, host.find_first_of('.'));
 }
 
-string APIUtils::GetRequest(ClientContext &context, const IRCEndpointBuilder &endpoint_builder,
-                            const string &secret_name, const string &token, curl_slist *extra_headers) {
-	if (StringUtil::StartsWith(endpoint_builder.GetHost(), "glue.") ||
-	    StringUtil::StartsWith(endpoint_builder.GetHost(), "s3tables.")) {
-		auto str = GetRequestAws(context, endpoint_builder, secret_name);
-		return str;
-	}
+string APIUtils::GetRequest(ClientContext &context, const IRCEndpointBuilder &endpoint_builder, const string &token,
+                            curl_slist *extra_headers) {
 	auto url = endpoint_builder.GetURL();
 	CURL *curl;
 	CURLcode res;
@@ -77,6 +97,11 @@ string APIUtils::GetRequestAws(ClientContext &context, IRCEndpointBuilder endpoi
 	auto service = GetAwsService(endpoint_builder.GetHost());
 	auto region = GetAwsRegion(endpoint_builder.GetHost());
 
+	auto decomposed_host = DecomposeHost(endpoint_builder.GetHost());
+	for (auto &component : decomposed_host.path_components) {
+		uri.AddPathSegment(component);
+	}
+
 	for (auto &component : endpoint_builder.path_components) {
 		uri.AddPathSegment(component);
 	}
@@ -90,7 +115,7 @@ string APIUtils::GetRequestAws(ClientContext &context, IRCEndpointBuilder endpoi
 	Aws::Http::Scheme scheme = Aws::Http::Scheme::HTTPS;
 	uri.SetScheme(scheme);
 	// set host
-	uri.SetAuthority(endpoint_builder.GetHost());
+	uri.SetAuthority(decomposed_host.authority);
 
 	const Aws::Http::URI uri_const = Aws::Http::URI(uri);
 	auto create_http_req = Aws::Http::CreateHttpRequest(uri_const, Aws::Http::HttpMethod::HTTP_GET,
@@ -103,7 +128,7 @@ string APIUtils::GetRequestAws(ClientContext &context, IRCEndpointBuilder endpoi
 	req->SetUserAgent(config.UserAgent());
 
 	// will error if no secret can be found for AWS services
-	auto secret_entry = IRCatalog::GetSecret(context, secret_name);
+	auto secret_entry = IRCatalog::GetStorageSecret(context, secret_name);
 	auto kv_secret = dynamic_cast<const KeyValueSecret &>(*secret_entry->secret);
 
 	std::shared_ptr<Aws::Auth::AWSCredentialsProviderChain> provider;

@@ -15,197 +15,197 @@
 #include "duckdb/parser/parsed_data/attach_info.hpp"
 #include "duckdb/storage/storage_extension.hpp"
 #include "iceberg_functions.hpp"
+#include "storage/irc_authorization.hpp"
 #include "yyjson.hpp"
 #include "catalog_api.hpp"
 #include "aws/core/Aws.h"
 #include "aws/s3/S3Client.h"
 #include "duckdb/main/extension_helper.hpp"
 
+#include "storage/authorization/oauth2.hpp"
+#include "storage/authorization/sigv4.hpp"
+
 namespace duckdb {
 
-static unique_ptr<BaseSecret> CreateCatalogSecretFunction(ClientContext &context, CreateSecretInput &input) {
-	// apply any overridden settings
-	vector<string> prefix_paths;
-	auto result = make_uniq<KeyValueSecret>(prefix_paths, "iceberg", "config", input.name);
-	for (const auto &named_param : input.options) {
-		auto lower_name = StringUtil::Lower(named_param.first);
+namespace {
 
-		if (lower_name == "key_id" || lower_name == "secret" || lower_name == "endpoint" ||
-		    lower_name == "aws_region" || lower_name == "oauth2_scope" || lower_name == "oauth2_server_uri") {
-			result->secret_map[lower_name] = named_param.second.ToString();
-		} else {
-			throw InternalException("Unknown named parameter passed to CreateIRCSecretFunction: " + lower_name);
+enum class IcebergEndpointType : uint8_t { AWS_S3TABLES, AWS_GLUE, INVALID };
+
+static IcebergEndpointType EndpointTypeFromString(const string &input) {
+	D_ASSERT(StringUtil::Lower(input) == input);
+
+	static const case_insensitive_map_t<IcebergEndpointType> mapping {{"glue", IcebergEndpointType::AWS_GLUE},
+	                                                                  {"s3_tables", IcebergEndpointType::AWS_S3TABLES}};
+
+	for (auto &entry : mapping) {
+		if (entry.first == input) {
+			return entry.second;
 		}
 	}
-
-	// Get token from catalog
-	result->secret_map["token"] =
-	    IRCAPI::GetToken(context, result->secret_map["oauth2_server_uri"].ToString(),
-	                     result->secret_map["key_id"].ToString(), result->secret_map["secret"].ToString(),
-	                     result->secret_map["endpoint"].ToString(), result->secret_map["oauth2_scope"].ToString());
-
-	//! Set redact keys
-	result->redact_keys = {"token", "client_id", "client_secret"};
-
-	return std::move(result);
+	set<string> options;
+	for (auto &entry : mapping) {
+		options.insert(entry.first);
+	}
+	throw InvalidConfigurationException("Unrecognized 'endpoint_type' (%s), accepted options are: %s", input,
+	                                    StringUtil::Join(options, ", "));
 }
 
-static void SetCatalogSecretParameters(CreateSecretFunction &function) {
-	function.named_parameters["client_id"] = LogicalType::VARCHAR;
-	function.named_parameters["client_secret"] = LogicalType::VARCHAR;
-	function.named_parameters["endpoint"] = LogicalType::VARCHAR;
-	function.named_parameters["aws_region"] = LogicalType::VARCHAR;
-	function.named_parameters["token"] = LogicalType::VARCHAR;
+} // namespace
+
+//! Streamlined initialization for recognized catalog types
+
+static void S3OrGlueAttachInternal(IcebergAttachOptions &input, const string &service, const string &region) {
+	if (input.authorization_type != IRCAuthorizationType::INVALID) {
+		throw InvalidConfigurationException("'endpoint_type' can not be combined with 'authorization_type'");
+	}
+
+	input.authorization_type = IRCAuthorizationType::SIGV4;
+	input.endpoint = StringUtil::Format("%s.%s.amazonaws.com/iceberg", service, region);
 }
 
-static bool SanityCheckGlueWarehouse(string warehouse) {
+static void S3TablesAttach(IcebergAttachOptions &input) {
+	// extract region from the amazon ARN
+	auto substrings = StringUtil::Split(input.warehouse, ":");
+	if (substrings.size() != 6) {
+		throw InvalidInputException("Could not parse S3 Tables ARN warehouse value");
+	}
+	auto region = substrings[3];
+	S3OrGlueAttachInternal(input, "s3tables", region);
+}
+
+static bool SanityCheckGlueWarehouse(const string &warehouse) {
 	// valid glue catalog warehouse is <account_id>:s3tablescatalog/<bucket>
 	auto end_account_id = warehouse.find_first_of(':');
 	bool account_id_correct = end_account_id == 12;
 	auto bucket_sep = warehouse.find_first_of('/');
 	bool bucket_sep_correct = bucket_sep == 28;
 	if (!account_id_correct) {
-		throw InvalidConfigurationException("Invalid Glue Catalog Format: '" + warehouse +
-		                                    "'. Expect 12 digits for account_id.");
+		throw InvalidConfigurationException("Invalid Glue Catalog Format: '%s'. Expect 12 digits for account_id.",
+		                                    warehouse);
 	}
 	if (bucket_sep_correct) {
 		return true;
 	}
-	throw InvalidConfigurationException("Invalid Glue Catalog Format: '" + warehouse +
-	                                    "'. Expected '<account_id>:s3tablescatalog/<bucket>");
+	throw InvalidConfigurationException(
+	    "Invalid Glue Catalog Format: '%s'. Expected '<account_id>:s3tablescatalog/<bucket>", warehouse);
 }
+
+static void GlueAttach(ClientContext &context, IcebergAttachOptions &input) {
+	SanityCheckGlueWarehouse(input.warehouse);
+
+	string secret;
+	auto secret_it = input.options.find("secret");
+	if (secret_it != input.options.end()) {
+		secret = secret_it->second.ToString();
+	}
+
+	// look up any s3 secret
+
+	// if there is no secret, an error will be thrown
+	auto secret_entry = IRCatalog::GetStorageSecret(context, secret);
+	auto kv_secret = dynamic_cast<const KeyValueSecret &>(*secret_entry->secret);
+	auto region = kv_secret.TryGetValue("region");
+
+	if (region.IsNull()) {
+		throw InvalidConfigurationException("Assumed catalog secret '%s' for catalog '%s' does not have a region",
+		                                    secret_entry->secret->GetName(), input.name);
+	}
+	S3OrGlueAttachInternal(input, "glue", region.ToString());
+}
+
+//! Base attach method
 
 static unique_ptr<Catalog> IcebergCatalogAttach(StorageExtensionInfo *storage_info, ClientContext &context,
                                                 AttachedDatabase &db, const string &name, AttachInfo &info,
                                                 AccessMode access_mode) {
-	IRCCredentials credentials;
 	IRCEndpointBuilder endpoint_builder;
 
-	string account_id;
-	string service;
-	string endpoint_type;
-	string endpoint;
-	string oauth2_server_uri;
+	string endpoint_type_string;
+	string authorization_type_string;
 
-	auto &oauth2_scope = credentials.oauth2_scope;
+	IcebergAttachOptions attach_options;
+	attach_options.warehouse = info.path;
+	attach_options.name = name;
 
-	// check if we have a secret provided
-	string secret_name;
+	//! First handle generic attach options
 	for (auto &entry : info.options) {
 		auto lower_name = StringUtil::Lower(entry.first);
 		if (lower_name == "type" || lower_name == "read_only") {
-			// already handled
-		} else if (lower_name == "secret") {
-			secret_name = StringUtil::Lower(entry.second.ToString());
-		} else if (lower_name == "endpoint_type") {
-			endpoint_type = StringUtil::Lower(entry.second.ToString());
+			continue;
+		}
+
+		if (lower_name == "endpoint_type") {
+			endpoint_type_string = StringUtil::Lower(entry.second.ToString());
+		} else if (lower_name == "authorization_type") {
+			authorization_type_string = StringUtil::Lower(entry.second.ToString());
 		} else if (lower_name == "endpoint") {
-			endpoint = StringUtil::Lower(entry.second.ToString());
-			StringUtil::RTrim(endpoint, "/");
-		} else if (lower_name == "oauth2_scope") {
-			oauth2_scope = StringUtil::Lower(entry.second.ToString());
-		} else if (lower_name == "oauth2_server_uri") {
-			oauth2_server_uri = StringUtil::Lower(entry.second.ToString());
+			attach_options.endpoint = StringUtil::Lower(entry.second.ToString());
+			StringUtil::RTrim(attach_options.endpoint, "/");
 		} else {
-			throw BinderException("Unrecognized option for PC attach: %s", entry.first);
+			attach_options.options.emplace(std::move(entry));
 		}
 	}
-	auto warehouse = info.path;
 
-	if (oauth2_scope.empty()) {
-		//! Default to the Polaris scope: 'PRINCIPAL_ROLE:ALL'
-		oauth2_scope = "PRINCIPAL_ROLE:ALL";
-	}
-
-	if (oauth2_server_uri.empty()) {
-		//! If no oauth2_server_uri is provided, default to the (deprecated) REST API endpoint for it
-		DUCKDB_LOG_WARN(
-		    context, "iceberg",
-		    "'oauth2_server_uri' is not set, defaulting to deprecated '{endpoint}/v1/oauth/tokens' oauth2_server_uri");
-		oauth2_server_uri = StringUtil::Format("%s/v1/oauth/tokens", endpoint);
-	}
-	auto catalog_type = ICEBERG_CATALOG_TYPE::INVALID;
-
-	if (endpoint_type == "glue" || endpoint_type == "s3_tables") {
-		if (endpoint_type == "s3_tables") {
-			service = "s3tables";
-			catalog_type = ICEBERG_CATALOG_TYPE::AWS_S3TABLES;
-		} else {
-			service = endpoint_type;
-			catalog_type = ICEBERG_CATALOG_TYPE::AWS_GLUE;
-		}
-		// look up any s3 secret
-
-		// if there is no secret, an error will be thrown
-		auto secret_entry = IRCatalog::GetSecret(context, secret_name);
-		auto kv_secret = dynamic_cast<const KeyValueSecret &>(*secret_entry->secret);
-		auto region = kv_secret.TryGetValue("region");
-
-		if (region.IsNull()) {
-			throw InvalidConfigurationException("Assumed catalog secret " + secret_entry->secret->GetName() +
-			                                    " for catalog " + name + " does not have a region");
-		}
-		switch (catalog_type) {
-		case ICEBERG_CATALOG_TYPE::AWS_S3TABLES: {
-			// extract region from the amazon ARN
-			auto substrings = StringUtil::Split(warehouse, ":");
-			if (substrings.size() != 6) {
-				throw InvalidInputException("Could not parse S3 Tables arn warehouse value");
-			}
-			region = Value::CreateValue<string>(substrings[3]);
+	//! Then check any if the 'endpoint_type' is set, for any well known catalogs
+	if (!endpoint_type_string.empty()) {
+		auto endpoint_type = EndpointTypeFromString(endpoint_type_string);
+		switch (endpoint_type) {
+		case IcebergEndpointType::AWS_GLUE: {
+			GlueAttach(context, attach_options);
 			break;
 		}
-		case ICEBERG_CATALOG_TYPE::AWS_GLUE:
-			SanityCheckGlueWarehouse(warehouse);
+		case IcebergEndpointType::AWS_S3TABLES: {
+			S3TablesAttach(attach_options);
 			break;
+		}
 		default:
-			throw NotImplementedException("Unsupported AWS catalog type");
+			throw InternalException("Endpoint type (%s) not implemented", endpoint_type_string);
 		}
-
-		auto catalog_host = service + "." + region.ToString() + ".amazonaws.com";
-		auto catalog = make_uniq<IRCatalog>(db, access_mode, credentials, warehouse, catalog_host, secret_name);
-		catalog->catalog_type = catalog_type;
-		catalog->GetConfig(context);
-		return std::move(catalog);
 	}
 
-	// Check no endpoint type has been passed.
-	if (!endpoint_type.empty()) {
-		throw InvalidConfigurationException("Unrecognized endpoint point: %s. Expected either S3_TABLES or GLUE",
-		                                    endpoint_type);
+	//! Then check the authorization type
+	if (!authorization_type_string.empty()) {
+		if (attach_options.authorization_type != IRCAuthorizationType::INVALID) {
+			throw InvalidConfigurationException("'authorization_type' can not be combined with 'endpoint_type'");
+		}
+		attach_options.authorization_type = IRCAuthorization::TypeFromString(authorization_type_string);
 	}
-	if (endpoint_type.empty() && endpoint.empty()) {
-		throw InvalidConfigurationException("No endpoint type or endpoint provided");
+	if (attach_options.authorization_type == IRCAuthorizationType::INVALID) {
+		attach_options.authorization_type = IRCAuthorizationType::OAUTH2;
 	}
 
-	catalog_type = ICEBERG_CATALOG_TYPE::OTHER;
-	// Default IRC path
-	Value endpoint_val;
-	// Lookup a secret we can use to access the rest catalog.
-	// if no secret is referenced, this throw
-	auto secret_entry = IRCatalog::GetSecret(context, secret_name);
-	if (!secret_entry) {
-		throw InvalidConfigurationException("No secret found to use with catalog " + name);
+	//! Finally, create the auth_handler class from the authorization_type and the remaining options
+	unique_ptr<IRCAuthorization> auth_handler;
+	switch (attach_options.authorization_type) {
+	case IRCAuthorizationType::OAUTH2: {
+		auth_handler = OAuth2Authorization::FromAttachOptions(context, attach_options);
+		break;
 	}
-	// secret found - read data
-	const auto &kv_secret = dynamic_cast<const KeyValueSecret &>(*secret_entry->secret);
-	Value key_val = kv_secret.TryGetValue("key_id");
-	Value secret_val = kv_secret.TryGetValue("secret");
-	CreateSecretInput create_secret_input;
-	create_secret_input.options["oauth2_server_uri"] = oauth2_server_uri;
-	create_secret_input.options["key_id"] = key_val;
-	create_secret_input.options["secret"] = secret_val;
-	create_secret_input.options["endpoint"] = endpoint;
-	create_secret_input.options["oauth2_scope"] = oauth2_scope;
-	auto new_secret = CreateCatalogSecretFunction(context, create_secret_input);
-	auto &kv_secret_new = dynamic_cast<KeyValueSecret &>(*new_secret);
-	Value token = kv_secret_new.TryGetValue("token");
-	if (token.IsNull()) {
-		throw HTTPException(StringUtil::Format("Failed to retrieve oath token from %s", endpoint));
+	case IRCAuthorizationType::SIGV4: {
+		auth_handler = SIGV4Authorization::FromAttachOptions(attach_options);
+		break;
 	}
-	credentials.token = token.ToString();
-	auto catalog = make_uniq<IRCatalog>(db, access_mode, credentials, warehouse, endpoint, secret_name);
-	catalog->catalog_type = catalog_type;
+	default:
+		throw InternalException("Authorization Type (%s) not implemented", authorization_type_string);
+	}
+
+	//! We throw if there are any additional options not handled by previous steps
+	if (!attach_options.options.empty()) {
+		set<string> unrecognized_options;
+		for (auto &entry : attach_options.options) {
+			unrecognized_options.insert(entry.first);
+		}
+		throw InvalidConfigurationException("Unhandled options found: %s",
+		                                    StringUtil::Join(unrecognized_options, ", "));
+	}
+
+	if (attach_options.endpoint.empty()) {
+		throw InvalidConfigurationException("Missing 'endpoint' option for Iceberg attach");
+	}
+
+	D_ASSERT(auth_handler);
+	auto catalog = make_uniq<IRCatalog>(db, access_mode, std::move(auth_handler), attach_options.warehouse,
+	                                    attach_options.endpoint);
 	catalog->GetConfig(context);
 	return std::move(catalog);
 }
@@ -262,8 +262,8 @@ static void LoadInternal(DatabaseInstance &instance) {
 	secret_type.default_provider = "config";
 
 	ExtensionUtil::RegisterSecretType(instance, secret_type);
-	CreateSecretFunction secret_function = {"iceberg", "config", CreateCatalogSecretFunction};
-	SetCatalogSecretParameters(secret_function);
+	CreateSecretFunction secret_function = {"iceberg", "config", OAuth2Authorization::CreateCatalogSecretFunction};
+	OAuth2Authorization::SetCatalogSecretParameters(secret_function);
 	ExtensionUtil::RegisterFunction(instance, secret_function);
 
 	config.storage_extensions["iceberg"] = make_uniq<IRCStorageExtension>();

@@ -26,6 +26,9 @@ set(EXTENSION_SOURCES
     src/iceberg_functions/iceberg_snapshots.cpp
     src/iceberg_functions/iceberg_scan.cpp
     src/iceberg_functions/iceberg_metadata.cpp
+    src/storage/authorization/sigv4.cpp
+    src/storage/authorization/oauth2.cpp
+    src/storage/irc_authorization.cpp
     src/storage/irc_catalog.cpp
     src/storage/irc_catalog_set.cpp
     src/storage/irc_clear_cache.cpp
@@ -34,6 +37,7 @@ set(EXTENSION_SOURCES
     src/storage/irc_table_entry.cpp
     src/storage/irc_table_set.cpp
     src/storage/irc_transaction.cpp
+    src/storage/irc_authorization.cpp
     src/storage/irc_transaction_manager.cpp)
 
 add_library(${EXTENSION_NAME} STATIC ${EXTENSION_SOURCES})
@@ -45,7 +49,8 @@ find_package(CURL REQUIRED)
 find_package(AWSSDK REQUIRED COMPONENTS core sso sts)
 include_directories(${CURL_INCLUDE_DIRS})
 
-# Reset the TARGET_NAME, the AWS find_package build could bleed into our build - overriding `TARGET_NAME`
+# Reset the TARGET_NAME, the AWS find_package build could bleed into our build -
+# overriding `TARGET_NAME`
 set(TARGET_NAME iceberg)
 
 # AWS SDK FROM vcpkg

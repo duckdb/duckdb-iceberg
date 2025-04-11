@@ -129,4 +129,5 @@ struct IcebergTableEntry {
 		}
 	}
 };
+
 } // namespace duckdb

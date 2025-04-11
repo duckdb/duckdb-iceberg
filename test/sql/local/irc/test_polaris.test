@@ -23,15 +23,16 @@ set ignore_error_messages
 
 statement ok
 create secret polaris_secret (
-  TYPE S3,
-  KEY_ID '${POLARIS_CLIENT_ID}',
-  SECRET '${POLARIS_CLIENT_SECRET}'
+	TYPE ICEBERG,
+	CLIENT_ID '${POLARIS_CLIENT_ID}',
+	CLIENT_SECRET '${POLARIS_CLIENT_SECRET}',
+	ENDPOINT 'http://0.0.0.0:8181/api/catalog'
 );
 
 statement ok
 attach 'quickstart_catalog' as my_datalake (
-    type ICEBERG,
-    ENDPOINT 'http://0.0.0.0:8181/api/catalog'
+	type ICEBERG,
+	ENDPOINT 'http://0.0.0.0:8181/api/catalog'
 );
 
 statement ok

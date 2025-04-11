@@ -11,10 +11,13 @@
 #include "duckdb/common/printer.hpp"
 #include "yyjson.hpp"
 #include "duckdb/common/file_system.hpp"
-#include <curl/curl.h>
 #include "url_utils.hpp"
 
 using namespace duckdb_yyjson;
+
+//! fwd declare
+struct curl_slist;
+typedef void CURL;
 
 namespace duckdb {
 
@@ -40,10 +43,10 @@ public:
 	//! We use a global here to store the path that is selected on the ICAPI::InitializeCurl call
 
 	static string GetRequestAws(ClientContext &context, IRCEndpointBuilder endpoint_builder, const string &secret_name);
-	static string GetAwsRegion(const string host);
-	static string GetAwsService(const string host);
+	static string GetAwsRegion(const string &host);
+	static string GetAwsService(const string &host);
 	static string GetRequest(ClientContext &context, const IRCEndpointBuilder &endpoint_builder,
-	                         const string &secret_name, const string &token = "", curl_slist *extra_headers = NULL);
+	                         const string &token = "", curl_slist *extra_headers = NULL);
 	static string DeleteRequest(const string &url, const string &token = "", curl_slist *extra_headers = NULL);
 	static void InitializeCurlObject(CURL *curl, const string &token);
 	static bool SetCurlCAFileInfo(CURL *curl);

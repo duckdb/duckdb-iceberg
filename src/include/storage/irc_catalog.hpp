@@ -7,25 +7,11 @@
 #include "duckdb/main/secret/secret_manager.hpp"
 #include "url_utils.hpp"
 #include "storage/irc_schema_set.hpp"
+#include "storage/irc_authorization.hpp"
 
 namespace duckdb {
 
 class IRCSchemaEntry;
-
-struct IRCCredentials {
-	string client_id;
-	string client_secret;
-	//! required to query s3 tables
-	string aws_region;
-	//! Catalog generates the token using client id & secret
-	string token;
-	//! The scope of the OAuth token to request through the client_credentials flow
-	string oauth2_scope;
-	//! OAuth endpoint
-	string oauth2_endpoint;
-	//! The warehouse where the catalog lives
-	string warehouse;
-};
 
 class ICRClearCacheFunction : public TableFunction {
 public:
@@ -33,8 +19,6 @@ public:
 
 	static void ClearCacheOnSetting(ClientContext &context, SetScope scope, Value &parameter);
 };
-
-enum class ICEBERG_CATALOG_TYPE { AWS_S3TABLES, AWS_GLUE, OTHER, INVALID };
 
 class MetadataCacheValue {
 public:
@@ -48,27 +32,24 @@ public:
 
 class IRCatalog : public Catalog {
 public:
-	explicit IRCatalog(AttachedDatabase &db_p, AccessMode access_mode, IRCCredentials credentials, string warehouse,
-	                   string host, string secret_name, string version = "v1");
+	explicit IRCatalog(AttachedDatabase &db_p, AccessMode access_mode, unique_ptr<IRCAuthorization> auth_handler,
+	                   const string &warehouse, const string &uri, const string &version = "v1");
 	~IRCatalog();
 
 	string internal_name;
 	AccessMode access_mode;
-	IRCCredentials credentials;
+	unique_ptr<IRCAuthorization> auth_handler;
 	IRCEndpointBuilder endpoint_builder;
 
 	//! warehouse
 	string warehouse;
-	//! host of the endpoint, like `glue` or `polaris`
-	string host;
-	//! secret name that Iceberg catalog should use for authentication
-	string secret_name;
+
+	//! host of the REST catalog
+	string uri;
 	//! version
-	string version;
+	const string version;
 	//! optional prefix
 	string prefix;
-
-	ICEBERG_CATALOG_TYPE catalog_type = ICEBERG_CATALOG_TYPE::INVALID;
 
 public:
 	void Initialize(bool load_builtin) override;
@@ -77,7 +58,8 @@ public:
 		return "iceberg";
 	}
 
-	static unique_ptr<SecretEntry> GetSecret(ClientContext &context, const string &secret_name);
+	static unique_ptr<SecretEntry> GetStorageSecret(ClientContext &context, const string &secret_name);
+	static unique_ptr<SecretEntry> GetIcebergSecret(ClientContext &context, const string &secret_name);
 
 	void GetConfig(ClientContext &context);
 
@@ -104,7 +86,7 @@ public:
 
 	IRCEndpointBuilder GetBaseUrl() const;
 
-	//! Whether or not this is an in-memory PC database
+	//! Whether or not this is an in-memory Iceberg database
 	bool InMemory() override;
 	string GetDBPath() override;
 
