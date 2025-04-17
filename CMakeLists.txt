@@ -42,7 +42,9 @@ set(EXTENSION_SOURCES
     src/storage/irc_authorization.cpp
     src/storage/irc_transaction_manager.cpp)
 
-add_library(${EXTENSION_NAME} STATIC ${EXTENSION_SOURCES})
+add_subdirectory(src/rest_catalog/objects)
+
+add_library(${EXTENSION_NAME} STATIC ${EXTENSION_SOURCES} ${ALL_OBJECT_FILES})
 
 set(PARAMETERS "-warnings")
 build_loadable_extension(${TARGET_NAME} ${PARAMETERS} ${EXTENSION_SOURCES})

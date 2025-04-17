@@ -15,6 +15,8 @@
 #include "storage/authorization/sigv4.hpp"
 #include "duckdb/common/multi_file/multi_file_reader.hpp"
 
+#include "rest_catalog/objects/list.hpp"
+
 namespace duckdb {
 
 ICTableEntry::ICTableEntry(Catalog &catalog, SchemaCatalogEntry &schema, CreateTableInfo &info)
