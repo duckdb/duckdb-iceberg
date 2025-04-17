@@ -153,7 +153,7 @@ void IcebergMultiFileList::InitializeFiles() {
 	auto iceberg_path = GetPath();
 	auto &fs = FileSystem::GetFileSystem(context);
 	auto iceberg_meta_path = IcebergSnapshot::GetMetaDataPath(context, iceberg_path, fs, options);
-	auto metadata = IcebergMetadata::Parse(iceberg_meta_path, fs, options.metadata_compression_codec);
+	metadata = IcebergMetadata::Parse(iceberg_meta_path, fs, options.metadata_compression_codec);
 
 	switch (options.snapshot_source) {
 	case SnapshotSource::LATEST: {
@@ -297,6 +297,26 @@ IcebergMultiFileReader::InitializeGlobalState(ClientContext &context, const Mult
 	return std::move(res);
 }
 
+static void ApplyFieldMapping(MultiFileColumnDefinition &col, vector<IcebergFieldMapping> &mappings,
+                              case_insensitive_map_t<idx_t> &fields) {
+	if (!col.identifier.IsNull()) {
+		return;
+	}
+	auto it = fields.find(col.name);
+	if (it == fields.end()) {
+		throw InvalidConfigurationException("Column '%s' does not have a field-id, and no field-mapping exists for it!",
+		                                    col.name);
+	}
+	auto &mapping = mappings[it->second];
+	if (mapping.field_mapping_indexes.empty()) {
+		col.identifier = Value::INTEGER(mapping.field_id);
+	} else {
+		for (auto &child : col.children) {
+			ApplyFieldMapping(child, mappings, mapping.field_mapping_indexes);
+		}
+	}
+}
+
 void IcebergMultiFileReader::FinalizeBind(MultiFileReaderData &reader_data, const MultiFileOptions &file_options,
                                           const MultiFileReaderBindData &options,
                                           const vector<MultiFileColumnDefinition> &global_columns,
@@ -319,6 +339,13 @@ void IcebergMultiFileReader::FinalizeBind(MultiFileReaderData &reader_data, cons
 			multi_file_list.ProcessDeletes();
 		}
 		reader.deletion_filter = multi_file_list.GetDeletesForFile(file_path);
+	}
+
+	auto &local_columns = reader_data.reader->columns;
+	auto &mappings = multi_file_list.metadata->mappings;
+	auto &root = multi_file_list.metadata->root_field_mapping;
+	for (auto &local_column : local_columns) {
+		ApplyFieldMapping(local_column, mappings, root.field_mapping_indexes);
 	}
 }
 

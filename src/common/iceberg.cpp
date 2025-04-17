@@ -4,6 +4,7 @@
 #include "iceberg_utils.hpp"
 #include "iceberg_types.hpp"
 #include "manifest_reader.hpp"
+#include "catalog_utils.hpp"
 
 namespace duckdb {
 
@@ -46,6 +47,42 @@ IcebergTable IcebergTable::Load(const string &iceberg_path, IcebergSnapshot &sna
 	return ret;
 }
 
+static void ParseFieldMappings(yyjson_val *obj, case_insensitive_map_t<idx_t> &name_to_mapping_index,
+                               vector<IcebergFieldMapping> &mappings, idx_t &mapping_index) {
+	case_insensitive_map_t<IcebergFieldMapping> result;
+	size_t idx, max;
+	yyjson_val *val;
+	yyjson_arr_foreach(obj, idx, max, val) {
+		auto names = yyjson_obj_get(val, "names");
+		auto field_id = yyjson_obj_get(val, "field-id");
+		auto fields = yyjson_obj_get(val, "fields");
+
+		//! Create a new mapping entry
+		mappings.push_back(IcebergFieldMapping());
+		auto &mapping = mappings.back();
+
+		if (!names) {
+			throw InvalidInputException("Corrupt metadata.json file, field-mapping is missing names!");
+		}
+
+		//! Map every entry in the 'names' list to the entry we created above
+		size_t names_idx, names_max;
+		yyjson_val *names_val;
+		yyjson_arr_foreach(names, names_idx, names_max, names_val) {
+			name_to_mapping_index[yyjson_get_str(names_val)] = mapping_index;
+		}
+		mapping_index++;
+
+		if (field_id) {
+			mapping.field_id = yyjson_get_sint(field_id);
+		}
+		//! Create mappings for the the nested fields
+		if (fields) {
+			ParseFieldMappings(fields, mapping.field_mapping_indexes, mappings, mapping_index);
+		}
+	}
+}
+
 unique_ptr<IcebergMetadata> IcebergMetadata::Parse(const string &path, FileSystem &fs,
                                                    const string &metadata_compression_codec) {
 	auto metadata = unique_ptr<IcebergMetadata>(new IcebergMetadata);
@@ -82,6 +119,24 @@ unique_ptr<IcebergMetadata> IcebergMetadata::Parse(const string &path, FileSyste
 		auto found_schema_id = IcebergUtils::TryGetNumFromObject(schema, "schema-id");
 		info.schemas.push_back(schema);
 		info.schema_id = found_schema_id;
+	}
+
+	auto properties = yyjson_obj_get(root, "properties");
+	if (properties) {
+		auto name_mapping_defaults_p = yyjson_obj_get(properties, "schema.name-mapping.default");
+		if (name_mapping_defaults_p) {
+			string name_mapping_default = yyjson_get_str(name_mapping_defaults_p);
+			auto doc = std::unique_ptr<yyjson_doc, YyjsonDocDeleter>(
+			    yyjson_read(name_mapping_default.c_str(), name_mapping_default.size(), 0));
+			if (doc == nullptr) {
+				throw InvalidInputException(
+				    "Fails to parse iceberg metadata 'schema.name-mapping.default' property from %s", path);
+			}
+			auto root = yyjson_doc_get_root(doc.get());
+			idx_t mapping_index = 0;
+			ParseFieldMappings(root, metadata->root_field_mapping.field_mapping_indexes, metadata->mappings,
+			                   mapping_index);
+		}
 	}
 	return metadata;
 }

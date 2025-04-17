@@ -1,0 +1,21 @@
+# name: test/sql/local/column_mapping.test
+# description: test combinations of create secret and attah
+# group: [local]
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+statement ok
+SET unsafe_enable_version_guessing = true;
+
+query III
+SELECT * FROM iceberg_scan('data/column_mapping/warehouse/default.db/my_table');
+----
+1	Alice	25
+2	Bob	30
+3	Charlie	35
