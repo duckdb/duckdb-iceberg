@@ -20,6 +20,7 @@
 #include "duckdb/common/file_opener.hpp"
 #include "duckdb/common/file_system.hpp"
 #include "duckdb/main/extension_util.hpp"
+#include "duckdb/main/extension_helper.hpp"
 #include "iceberg_metadata.hpp"
 #include "iceberg_utils.hpp"
 #include "iceberg_multi_file_reader.hpp"
@@ -59,6 +60,9 @@ virtual_column_map_t IcebergVirtualColumns(ClientContext &, optional_ptr<Functio
 TableFunctionSet IcebergFunctions::GetIcebergScanFunction(DatabaseInstance &instance) {
 	// The iceberg_scan function is constructed by grabbing the parquet scan from the Catalog, then injecting the
 	// IcebergMultiFileReader into it to create a Iceberg-based multi file read
+
+	//! Make sure parquet is loaded, throws if it can't be loaded.
+	ExtensionHelper::AutoLoadExtension(instance, "parquet");
 
 	auto &parquet_scan = ExtensionUtil::GetTableFunction(instance, "parquet_scan");
 	auto parquet_scan_copy = parquet_scan.functions;

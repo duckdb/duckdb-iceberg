@@ -7,6 +7,7 @@
 #include "duckdb/parallel/thread_context.hpp"
 #include "duckdb/parser/tableref/table_function_ref.hpp"
 #include "duckdb/parser/expression/constant_expression.hpp"
+#include "duckdb/main/extension_helper.hpp"
 
 namespace duckdb {
 
@@ -324,6 +325,10 @@ void IcebergMultiFileReader::FinalizeBind(MultiFileReaderData &reader_data, cons
 
 void IcebergMultiFileList::ScanDeleteFile(const string &delete_file_path) const {
 	auto &instance = DatabaseInstance::GetDatabase(context);
+
+	//! Make sure parquet is loaded, throws if it can't be loaded.
+	ExtensionHelper::AutoLoadExtension(instance, "parquet");
+
 	auto &parquet_scan_entry = ExtensionUtil::GetTableFunction(instance, "parquet_scan");
 	auto &parquet_scan = parquet_scan_entry.functions.functions[0];
 

@@ -4,8 +4,6 @@
 
 namespace duckdb {
 
-static bool __AVRO_LOADED__ = false;
-
 class IcebergExtension : public Extension {
 public:
 	void Load(DuckDB &db) override;

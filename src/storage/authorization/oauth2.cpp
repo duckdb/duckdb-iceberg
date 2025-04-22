@@ -158,11 +158,9 @@ unique_ptr<OAuth2Authorization> OAuth2Authorization::FromAttachOptions(ClientCon
 unique_ptr<BaseSecret> OAuth2Authorization::CreateCatalogSecretFunction(ClientContext &context,
                                                                         CreateSecretInput &input) {
 
-	if (!__AVRO_LOADED__) {
-		auto &db_instance = context.db;
-		ExtensionHelper::AutoLoadExtension(*db_instance, "avro");
-		__AVRO_LOADED__ = true;
-	}
+	//! Make sure avro is loaded, throws if it can't be loaded.
+	auto &instance = DatabaseInstance::GetDatabase(context);
+	ExtensionHelper::AutoLoadExtension(instance, "avro");
 
 	// apply any overridden settings
 	vector<string> prefix_paths;

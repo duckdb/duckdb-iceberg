@@ -127,11 +127,10 @@ static unique_ptr<Catalog> IcebergCatalogAttach(StorageExtensionInfo *storage_in
 	attach_options.warehouse = info.path;
 	attach_options.name = name;
 
-	if (!__AVRO_LOADED__) {
-		auto &db_instance = context.db;
-		ExtensionHelper::AutoLoadExtension(*db_instance, "avro");
-		__AVRO_LOADED__ = true;
-	}
+	//! Make sure avro is loaded, throws if it can't be loaded.
+	auto &instance = DatabaseInstance::GetDatabase(context);
+	ExtensionHelper::AutoLoadExtension(instance, "avro");
+
 	// check if we have a secret provided
 	string secret_name;
 	//! First handle generic attach options
@@ -234,11 +233,6 @@ public:
 static void LoadInternal(DatabaseInstance &instance) {
 	Aws::SDKOptions options;
 	Aws::InitAPI(options); // Should only be called once.
-
-	ExtensionHelper::AutoLoadExtension(instance, "parquet");
-	if (!instance.ExtensionIsLoaded("parquet")) {
-		throw MissingExtensionException("The iceberg extension requires the parquet extension to be loaded!");
-	}
 
 	auto &config = DBConfig::GetConfig(instance);
 
