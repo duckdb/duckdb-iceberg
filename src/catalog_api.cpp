@@ -178,6 +178,17 @@ IRCAPITableCredentials IRCAPI::GetTableCredentials(ClientContext &context, IRCat
 			if (!prefix_string) {
 				throw InvalidInputException("property 'prefix' of StorageCredential is NULL");
 			}
+
+			// R2 data catalog has a prefix of '/' in storage credentials. This is most likely an attempt to
+			// have the secret match many files. The spec says the longest prefix should be chosen.
+			// In this case we get the scope from the metadata location.
+			// TODO: figure out a better work around for r2 catalogs
+			if (prefix_string == string("/")) {
+				auto *metadata = yyjson_obj_get(root, "metadata");
+				auto *metadata_location = yyjson_obj_get(metadata, "location");
+				prefix_string = yyjson_get_str(metadata_location);
+			}
+
 			create_secret_input.scope.push_back(string(prefix_string));
 			create_secret_input.name = StringUtil::Format("%s_%d_%s", secret_base_name, index, prefix_string);
 			create_secret_input.type = "s3";

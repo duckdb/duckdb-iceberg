@@ -1,0 +1,35 @@
+# name: test/sql/cloud/r2_catalog/test_r2_attach_and_read.test
+# description: test integration with iceberg catalog read
+# group: [r2_catalog]
+
+require-env ICEBERG_AWS_REMOTE_AVAILABLE
+
+require-env r2_token
+
+require httpfs
+
+require avro
+
+require parquet
+
+require iceberg
+
+require aws
+
+require tpch
+
+statement ok
+CREATE SECRET glue_secret (
+    TYPE ICEBERG,
+    TOKEN '${r2_token}'
+);
+
+
+statement ok
+attach '6b17833f308abc1e1cc343c552b51f51_r2-catalog' AS my_datalake (
+    TYPE ICEBERG,
+    ENDPOINT 'https://catalog.cloudflarestorage.com/6b17833f308abc1e1cc343c552b51f51/r2-catalog'
+);
+
+statement ok
+select * from my_datalake.default.people;
