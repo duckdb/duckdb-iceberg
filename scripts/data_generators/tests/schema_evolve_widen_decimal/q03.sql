@@ -1,0 +1,5 @@
+INSERT INTO default.schema_evolve_widen_decimal
+VALUES
+	(1234567890.12345678),
+	(987654321.98765432),
+	(123.12345678);

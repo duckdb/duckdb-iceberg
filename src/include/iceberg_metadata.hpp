@@ -12,9 +12,13 @@
 #include "yyjson.hpp"
 #include "iceberg_types.hpp"
 #include "iceberg_options.hpp"
-#include "rest_catalog/objects/struct_field.hpp"
 #include "duckdb/common/open_file_info.hpp"
 #include "iceberg_transform.hpp"
+
+#include "rest_catalog/objects/primitive_type.hpp"
+#include "rest_catalog/objects/struct_field.hpp"
+#include "rest_catalog/objects/primitive_type_value.hpp"
+#include "rest_catalog/objects/type.hpp"
 
 using namespace duckdb_yyjson;
 
@@ -22,17 +26,22 @@ namespace duckdb {
 
 struct IcebergColumnDefinition {
 public:
-	static IcebergColumnDefinition ParseFromJson(rest_api_objects::StructField &field);
-	LogicalType ToDuckDBType() {
-		return type;
-	}
+	static unique_ptr<IcebergColumnDefinition> ParseStructField(rest_api_objects::StructField &field);
+
+private:
+	static LogicalType ParsePrimitiveType(rest_api_objects::PrimitiveType &type);
+
+	static unique_ptr<IcebergColumnDefinition>
+	ParseType(const string &name, int32_t field_id, bool required, rest_api_objects::Type &iceberg_type,
+	          optional_ptr<rest_api_objects::PrimitiveTypeValue> initial_default = nullptr);
 
 public:
 	int32_t id;
 	string name;
 	LogicalType type;
-	Value default_value;
+	Value initial_default;
 	bool required;
+	vector<unique_ptr<IcebergColumnDefinition>> children;
 };
 
 struct IcebergPartitionSpecField {
@@ -110,17 +119,18 @@ public:
 	timestamp_t timestamp_ms;
 	idx_t iceberg_format_version;
 	uint64_t schema_id;
-	vector<IcebergColumnDefinition> schema;
+	vector<unique_ptr<IcebergColumnDefinition>> schema;
 	string metadata_compression_codec = "none";
 
 public:
-	static IcebergSnapshot GetLatestSnapshot(IcebergMetadata &info, const IcebergOptions &options);
-	static IcebergSnapshot GetSnapshotById(IcebergMetadata &info, idx_t snapshot_id, const IcebergOptions &options);
-	static IcebergSnapshot GetSnapshotByTimestamp(IcebergMetadata &info, timestamp_t timestamp,
-	                                              const IcebergOptions &options);
+	static shared_ptr<IcebergSnapshot> GetLatestSnapshot(IcebergMetadata &info, const IcebergOptions &options);
+	static shared_ptr<IcebergSnapshot> GetSnapshotById(IcebergMetadata &info, idx_t snapshot_id,
+	                                                   const IcebergOptions &options);
+	static shared_ptr<IcebergSnapshot> GetSnapshotByTimestamp(IcebergMetadata &info, timestamp_t timestamp,
+	                                                          const IcebergOptions &options);
 
-	static IcebergSnapshot ParseSnapShot(yyjson_val *snapshot, IcebergMetadata &metadata,
-	                                     const IcebergOptions &options);
+	static shared_ptr<IcebergSnapshot> ParseSnapShot(yyjson_val *snapshot, IcebergMetadata &metadata,
+	                                                 const IcebergOptions &options);
 	static string GetMetaDataPath(ClientContext &context, const string &path, FileSystem &fs,
 	                              const IcebergOptions &options);
 
@@ -135,14 +145,14 @@ protected:
 	static yyjson_val *FindLatestSnapshotInternal(yyjson_val *snapshots);
 	static yyjson_val *FindSnapshotByIdInternal(yyjson_val *snapshots, idx_t target_id);
 	static yyjson_val *FindSnapshotByIdTimestampInternal(yyjson_val *snapshots, timestamp_t timestamp);
-	static vector<IcebergColumnDefinition> ParseSchema(vector<yyjson_val *> &schemas, idx_t schema_id);
+	static vector<unique_ptr<IcebergColumnDefinition>> ParseSchema(vector<yyjson_val *> &schemas, idx_t schema_id);
 };
 
 //! Represents the iceberg table at a specific IcebergSnapshot. Corresponds to a single Manifest List.
 struct IcebergTable {
 public:
 	//! Loads all(!) metadata of into IcebergTable object
-	static IcebergTable Load(const string &iceberg_path, IcebergSnapshot &snapshot, ClientContext &context,
+	static IcebergTable Load(const string &iceberg_path, shared_ptr<IcebergSnapshot> snapshot, ClientContext &context,
 	                         const IcebergOptions &options);
 
 public:
@@ -184,7 +194,7 @@ public:
 	}
 
 	//! The snapshot of this table
-	IcebergSnapshot snapshot;
+	shared_ptr<IcebergSnapshot> snapshot;
 	//! The entries (manifests) of this table
 	vector<IcebergTableEntry> entries;
 

@@ -8,8 +8,8 @@
 
 namespace duckdb {
 
-IcebergTable IcebergTable::Load(const string &iceberg_path, IcebergSnapshot &snapshot, ClientContext &context,
-                                const IcebergOptions &options) {
+IcebergTable IcebergTable::Load(const string &iceberg_path, shared_ptr<IcebergSnapshot> snapshot,
+                                ClientContext &context, const IcebergOptions &options) {
 	IcebergTable ret;
 	ret.path = iceberg_path;
 	ret.snapshot = snapshot;
@@ -21,7 +21,7 @@ IcebergTable IcebergTable::Load(const string &iceberg_path, IcebergSnapshot &sna
 	manifest_reader_manifest_entry_producer entry_producer = nullptr;
 
 	//! Set up the manifest + manifest entry readers
-	if (snapshot.iceberg_format_version == 1) {
+	if (snapshot->iceberg_format_version == 1) {
 		manifest_entry_reader = make_uniq<ManifestReader>(IcebergManifestEntryV1::PopulateNameMapping,
 		                                                  IcebergManifestEntryV1::VerifySchema);
 		manifest_reader =
@@ -29,7 +29,7 @@ IcebergTable IcebergTable::Load(const string &iceberg_path, IcebergSnapshot &sna
 
 		manifest_producer = IcebergManifestV1::ProduceEntries;
 		entry_producer = IcebergManifestEntryV1::ProduceEntries;
-	} else if (snapshot.iceberg_format_version == 2) {
+	} else if (snapshot->iceberg_format_version == 2) {
 		manifest_entry_reader = make_uniq<ManifestReader>(IcebergManifestEntryV2::PopulateNameMapping,
 		                                                  IcebergManifestEntryV2::VerifySchema);
 		manifest_reader =
@@ -39,12 +39,12 @@ IcebergTable IcebergTable::Load(const string &iceberg_path, IcebergSnapshot &sna
 		entry_producer = IcebergManifestEntryV2::ProduceEntries;
 	} else {
 		throw InvalidInputException("Reading from Iceberg version %d is not supported yet",
-		                            snapshot.iceberg_format_version);
+		                            snapshot->iceberg_format_version);
 	}
 	auto &fs = FileSystem::GetFileSystem(context);
 	auto manifest_list_full_path = options.allow_moved_paths
-	                                   ? IcebergUtils::GetFullPath(iceberg_path, snapshot.manifest_list, fs)
-	                                   : snapshot.manifest_list;
+	                                   ? IcebergUtils::GetFullPath(iceberg_path, snapshot->manifest_list, fs)
+	                                   : snapshot->manifest_list;
 	auto scan = make_uniq<AvroScan>("IcebergManifestList", context, manifest_list_full_path);
 	manifest_reader->Initialize(std::move(scan));
 
@@ -248,13 +248,13 @@ unique_ptr<IcebergMetadata> IcebergMetadata::Parse(const string &path, FileSyste
 	return metadata;
 }
 
-IcebergSnapshot IcebergSnapshot::GetLatestSnapshot(IcebergMetadata &info, const IcebergOptions &options) {
+shared_ptr<IcebergSnapshot> IcebergSnapshot::GetLatestSnapshot(IcebergMetadata &info, const IcebergOptions &options) {
 	auto latest_snapshot = FindLatestSnapshotInternal(info.snapshots);
 	return ParseSnapShot(latest_snapshot, info, options);
 }
 
-IcebergSnapshot IcebergSnapshot::GetSnapshotById(IcebergMetadata &info, idx_t snapshot_id,
-                                                 const IcebergOptions &options) {
+shared_ptr<IcebergSnapshot> IcebergSnapshot::GetSnapshotById(IcebergMetadata &info, idx_t snapshot_id,
+                                                             const IcebergOptions &options) {
 	auto snapshot = FindSnapshotByIdInternal(info.snapshots, snapshot_id);
 
 	if (!snapshot) {
@@ -264,8 +264,8 @@ IcebergSnapshot IcebergSnapshot::GetSnapshotById(IcebergMetadata &info, idx_t sn
 	return ParseSnapShot(snapshot, info, options);
 }
 
-IcebergSnapshot IcebergSnapshot::GetSnapshotByTimestamp(IcebergMetadata &info, timestamp_t timestamp,
-                                                        const IcebergOptions &options) {
+shared_ptr<IcebergSnapshot> IcebergSnapshot::GetSnapshotByTimestamp(IcebergMetadata &info, timestamp_t timestamp,
+                                                                    const IcebergOptions &options) {
 	auto snapshot = FindSnapshotByIdTimestampInternal(info.snapshots, timestamp);
 
 	if (!snapshot) {
@@ -337,41 +337,41 @@ string IcebergSnapshot::GetMetaDataPath(ClientContext &context, const string &pa
 	return GuessTableVersion(meta_path, fs, options);
 }
 
-IcebergSnapshot IcebergSnapshot::ParseSnapShot(yyjson_val *snapshot, IcebergMetadata &metadata,
-                                               const IcebergOptions &options) {
-	IcebergSnapshot ret;
+shared_ptr<IcebergSnapshot> IcebergSnapshot::ParseSnapShot(yyjson_val *snapshot, IcebergMetadata &metadata,
+                                                           const IcebergOptions &options) {
+	auto ret = make_shared_ptr<IcebergSnapshot>();
 	if (snapshot) {
 		auto snapshot_tag = yyjson_get_type(snapshot);
 		if (snapshot_tag != YYJSON_TYPE_OBJ) {
 			throw InvalidConfigurationException("Invalid snapshot field found parsing iceberg metadata.json");
 		}
-		ret.metadata_compression_codec = options.metadata_compression_codec;
+		ret->metadata_compression_codec = options.metadata_compression_codec;
 		if (metadata.iceberg_version == 1) {
-			ret.sequence_number = 0;
+			ret->sequence_number = 0;
 		} else if (metadata.iceberg_version == 2) {
-			ret.sequence_number = IcebergUtils::TryGetNumFromObject(snapshot, "sequence-number");
+			ret->sequence_number = IcebergUtils::TryGetNumFromObject(snapshot, "sequence-number");
 		}
-		ret.snapshot_id = IcebergUtils::TryGetNumFromObject(snapshot, "snapshot-id");
-		ret.timestamp_ms = Timestamp::FromEpochMs(IcebergUtils::TryGetNumFromObject(snapshot, "timestamp-ms"));
+		ret->snapshot_id = IcebergUtils::TryGetNumFromObject(snapshot, "snapshot-id");
+		ret->timestamp_ms = Timestamp::FromEpochMs(IcebergUtils::TryGetNumFromObject(snapshot, "timestamp-ms"));
 		auto schema_id = yyjson_obj_get(snapshot, "schema-id");
 		if (options.snapshot_source == SnapshotSource::LATEST) {
-			ret.schema_id = metadata.schema_id;
+			ret->schema_id = metadata.schema_id;
 		} else if (schema_id && yyjson_get_type(schema_id) == YYJSON_TYPE_NUM) {
-			ret.schema_id = yyjson_get_uint(schema_id);
+			ret->schema_id = yyjson_get_uint(schema_id);
 		} else {
 			//! 'schema-id' is optional in the V1 iceberg format.
 			D_ASSERT(metadata.iceberg_version == 1);
-			ret.schema_id = metadata.schema_id;
+			ret->schema_id = metadata.schema_id;
 		}
-		ret.manifest_list = IcebergUtils::TryGetStrFromObject(snapshot, "manifest-list");
+		ret->manifest_list = IcebergUtils::TryGetStrFromObject(snapshot, "manifest-list");
 	} else {
-		ret.snapshot_id = DConstants::INVALID_INDEX;
-		ret.schema_id = metadata.schema_id;
+		ret->snapshot_id = DConstants::INVALID_INDEX;
+		ret->schema_id = metadata.schema_id;
 	}
 
-	ret.iceberg_format_version = metadata.iceberg_version;
+	ret->iceberg_format_version = metadata.iceberg_version;
 	if (options.infer_schema) {
-		ret.schema = ParseSchema(metadata.schemas, ret.schema_id);
+		ret->schema = ParseSchema(metadata.schemas, ret->schema_id);
 	}
 	return ret;
 }

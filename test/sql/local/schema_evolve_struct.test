@@ -1,0 +1,24 @@
+# name: test/sql/local/schema_evolve_struct.test
+# group: [local]
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+require-env DUCKDB_ICEBERG_HAVE_GENERATED_DATA
+
+query IIII
+select * from ICEBERG_SCAN('data/generated/iceberg/spark-local/default/schema_evolve_struct') order by all;
+----
+1	{'given_name': Alice, 'email': NULL, 'age': NULL}	[21, 42]	{theme=131, language=115}
+2	{'given_name': Bob, 'email': NULL, 'age': NULL}	[13, 24]	{theme=1, language=1337}
+3	{'given_name': Charlie, 'email': charlie@example.com, 'age': NULL}	[34, 65]	{theme=104, theme_importance=3, language=13, language_importance=2}
+4	{'given_name': Diana, 'email': diana@example.com, 'age': NULL}	[45, 93]	{theme=12, theme_importance=1, language=213, language_importance=3}
+5	{'given_name': Eve, 'email': eve@example.com, 'age': NULL}	[200, 300]	{setting=234, value=235, value_importance=2}
+6	{'given_name': Frank, 'email': frank@example.com, 'age': 42}	[500, 501]	{setting=324, value=167, value_importance=2, value_updated_at=123213}
+7	{'given_name': Grace, 'email': grace@example.com, 'age': 9223372036854775806}	[300, 9223372036854775806, 1000]	{setting=9223372036854775806, negative=-9223372036854775807}
+8	{'given_name': Heidi, 'email': heidi@example.com, 'age': 30}	[1, 2, 3, 4, 5]	{setting=245, value=453, value_updated_at=3253}

@@ -227,7 +227,7 @@ static void populateTableMetadata(IRCAPITable &table, const rest_api_objects::Lo
 			found = true;
 			auto &columns = schema.struct_type.fields;
 			for (auto &col : columns) {
-				table.columns.push_back(IcebergColumnDefinition::ParseFromJson(*col));
+				table.columns.push_back(IcebergColumnDefinition::ParseStructField(*col));
 			}
 		}
 	}
@@ -260,11 +260,11 @@ IRCAPITable IRCAPI::GetTable(ClientContext &context, IRCatalog &catalog, const s
 		populateTableMetadata(table_result, load_table_result);
 	} else {
 		// Skip fetching metadata, we'll do it later when we access the table
-		IcebergColumnDefinition col;
-		col.name = "__";
-		col.id = 0;
-		col.type = LogicalType::UNKNOWN;
-		table_result.columns.push_back(col);
+		auto col = make_uniq<IcebergColumnDefinition>();
+		col->name = "__";
+		col->id = 0;
+		col->type = LogicalType::UNKNOWN;
+		table_result.columns.push_back(std::move(col));
 	}
 	return table_result;
 }
@@ -288,7 +288,7 @@ vector<IRCAPITable> IRCAPI::GetTables(ClientContext &context, IRCatalog &catalog
 	}
 	for (auto &table : list_tables_response.identifiers) {
 		auto table_result = GetTable(context, catalog, schema, table.name);
-		result.push_back(table_result);
+		result.push_back(std::move(table_result));
 	}
 	return result;
 }

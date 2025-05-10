@@ -24,17 +24,17 @@ static ColumnDefinition CreateColumnDefinition(ClientContext &context, IcebergCo
 	return {coldef.name, coldef.type};
 }
 
-unique_ptr<CatalogEntry> ICTableSet::_CreateCatalogEntry(ClientContext &context, IRCAPITable table) {
+unique_ptr<CatalogEntry> ICTableSet::_CreateCatalogEntry(ClientContext &context, IRCAPITable &&table) {
 	D_ASSERT(schema.name == table.schema_name);
 	CreateTableInfo info;
 	info.table = table.name;
 
 	for (auto &col : table.columns) {
-		info.columns.AddColumn(CreateColumnDefinition(context, col));
+		info.columns.AddColumn(CreateColumnDefinition(context, *col));
 	}
 
 	auto table_entry = make_uniq<ICTableEntry>(catalog, schema, info);
-	table_entry->table_data = make_uniq<IRCAPITable>(table);
+	table_entry->table_data = make_uniq<IRCAPITable>(std::move(table));
 	return std::move(table_entry);
 }
 
@@ -46,7 +46,7 @@ void ICTableSet::FillEntry(ClientContext &context, unique_ptr<CatalogEntry> &ent
 
 	auto &ic_catalog = catalog.Cast<IRCatalog>();
 	auto table = IRCAPI::GetTable(context, ic_catalog, schema.name, entry->name, true);
-	entry = _CreateCatalogEntry(context, table);
+	entry = _CreateCatalogEntry(context, std::move(table));
 }
 
 void ICTableSet::LoadEntries(ClientContext &context) {
@@ -59,7 +59,7 @@ void ICTableSet::LoadEntries(ClientContext &context) {
 	auto tables = IRCAPI::GetTables(context, ic_catalog, schema.name);
 
 	for (auto &table : tables) {
-		auto entry = _CreateCatalogEntry(context, table);
+		auto entry = _CreateCatalogEntry(context, std::move(table));
 		CreateEntry(std::move(entry));
 	}
 }
@@ -81,7 +81,7 @@ optional_ptr<CatalogEntry> ICTableSet::CreateTable(ClientContext &context, Bound
 	auto &ic_catalog = catalog.Cast<IRCatalog>();
 	auto *table_info = dynamic_cast<CreateTableInfo *>(info.base.get());
 	auto table = IRCAPI::CreateTable(context, ic_catalog, ic_catalog.internal_name, schema.name, table_info);
-	auto entry = _CreateCatalogEntry(context, table);
+	auto entry = _CreateCatalogEntry(context, std::move(table));
 	return CreateEntry(std::move(entry));
 }
 

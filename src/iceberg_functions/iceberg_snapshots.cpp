@@ -94,10 +94,10 @@ static void IcebergSnapshotsFunction(ClientContext &context, TableFunctionInput 
 		auto &metadata = *global_state.metadata;
 		auto snapshot = IcebergSnapshot::ParseSnapShot(next_snapshot, metadata, bind_data.options);
 
-		FlatVector::GetData<int64_t>(output.data[0])[i] = snapshot.sequence_number;
-		FlatVector::GetData<int64_t>(output.data[1])[i] = snapshot.snapshot_id;
-		FlatVector::GetData<timestamp_t>(output.data[2])[i] = snapshot.timestamp_ms;
-		string_t manifest_string_t = StringVector::AddString(output.data[3], string_t(snapshot.manifest_list));
+		FlatVector::GetData<int64_t>(output.data[0])[i] = snapshot->sequence_number;
+		FlatVector::GetData<int64_t>(output.data[1])[i] = snapshot->snapshot_id;
+		FlatVector::GetData<timestamp_t>(output.data[2])[i] = snapshot->timestamp_ms;
+		string_t manifest_string_t = StringVector::AddString(output.data[3], string_t(snapshot->manifest_list));
 		FlatVector::GetData<string_t>(output.data[3])[i] = manifest_string_t;
 
 		i++;

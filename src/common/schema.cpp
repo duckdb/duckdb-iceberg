@@ -6,46 +6,49 @@ namespace duckdb {
 
 // https://iceberg.apache.org/spec/#schemas
 
-// forward declaration
-static LogicalType ParseTypeValue(rest_api_objects::Type &type);
+unique_ptr<IcebergColumnDefinition>
+IcebergColumnDefinition::ParseType(const string &name, int32_t field_id, bool required, rest_api_objects::Type &type,
+                                   optional_ptr<rest_api_objects::PrimitiveTypeValue> initial_default) {
+	auto res = make_uniq<IcebergColumnDefinition>();
+	res->id = field_id;
+	res->required = required;
+	res->name = name;
+	//! FIXME: parse the 'initial_default' into a Value
 
-static LogicalType ParseStruct(rest_api_objects::StructType &type) {
-	child_list_t<LogicalType> children;
-	for (auto &field : type.fields) {
-		// NOTE: 'id', 'required', 'doc', 'initial_default', 'write_default' are ignored for now
-		auto name = field->name;
-		auto type = ParseTypeValue(*field->type);
-		children.push_back(std::make_pair(name, type));
-	}
-	return LogicalType::STRUCT(std::move(children));
-}
-
-static LogicalType ParseList(rest_api_objects::ListType &type) {
-	// NOTE: 'element-id', 'element-required' are ignored for now
-	auto child_type = ParseTypeValue(*type.element);
-	return LogicalType::LIST(child_type);
-}
-
-static LogicalType ParseMap(rest_api_objects::MapType &type) {
-	// NOTE: 'key-id', 'value-id', 'value-required' are ignored for now
-	auto key_type = ParseTypeValue(*type.key);
-	auto value_type = ParseTypeValue(*type.value);
-	return LogicalType::MAP(key_type, value_type);
-}
-
-static LogicalType ParseTypeValue(rest_api_objects::Type &type) {
-	if (type.has_struct_type) {
-		return ParseStruct(type.struct_type);
+	if (type.has_primitive_type) {
+		res->type = ParsePrimitiveType(type.primitive_type);
+	} else if (type.has_struct_type) {
+		auto &struct_type = type.struct_type;
+		child_list_t<LogicalType> struct_children;
+		for (auto &field_p : struct_type.fields) {
+			auto &field = *field_p;
+			auto child = ParseType(field.name, field.id, field.required, *field.type,
+			                       field.has_initial_default ? &field.initial_default : nullptr);
+			struct_children.push_back(std::make_pair(child->name, child->type));
+			res->children.push_back(std::move(child));
+		}
+		res->type = LogicalType::STRUCT(std::move(struct_children));
 	} else if (type.has_list_type) {
-		return ParseList(type.list_type);
+		auto &list_type = type.list_type;
+		auto child =
+		    ParseType("element", list_type.element_id, list_type.element_required, *list_type.element, nullptr);
+		res->type = LogicalType::LIST(child->type);
+		res->children.push_back(std::move(child));
 	} else if (type.has_map_type) {
-		return ParseMap(type.map_type);
+		auto &map_type = type.map_type;
+		auto key = ParseType("key", map_type.key_id, true, *map_type.key, nullptr);
+		auto value = ParseType("value", map_type.value_id, map_type.value_required, *map_type.value, nullptr);
+		res->type = LogicalType::MAP(key->type, value->type);
+		res->children.push_back(std::move(key));
+		res->children.push_back(std::move(value));
+	} else {
+		throw InvalidConfigurationException("Encountered an invalid type in JSON schema");
 	}
+	return res;
+}
 
-	if (!type.has_primitive_type) {
-		throw InternalException("Invalid type encountered!");
-	}
-	auto &type_str = type.primitive_type.value;
+LogicalType IcebergColumnDefinition::ParsePrimitiveType(rest_api_objects::PrimitiveType &type) {
+	auto &type_str = type.value;
 
 	if (type_str == "boolean") {
 		return LogicalType::BOOLEAN;
@@ -100,34 +103,27 @@ static LogicalType ParseTypeValue(rest_api_objects::Type &type) {
 		auto scale = std::stoi(digits[1]);
 		return LogicalType::DECIMAL(width, scale);
 	}
-	throw InvalidConfigurationException("Encountered an unrecognized type in JSON schema: \"%s\"", type_str);
+	throw InvalidConfigurationException("Unrecognized primitive type: %s", type_str);
 }
 
-IcebergColumnDefinition IcebergColumnDefinition::ParseFromJson(rest_api_objects::StructField &field) {
-	IcebergColumnDefinition ret;
-
-	ret.id = field.id;
-	ret.name = field.name;
-	ret.type = ParseTypeValue(*field.type);
-	//! FIXME: use 'initial_default' instead
-	ret.default_value = Value(ret.type);
-	ret.required = field.required;
-
-	return ret;
+unique_ptr<IcebergColumnDefinition> IcebergColumnDefinition::ParseStructField(rest_api_objects::StructField &field) {
+	return ParseType(field.name, field.id, field.required, *field.type,
+	                 field.has_initial_default ? &field.initial_default : nullptr);
 }
 
-static vector<IcebergColumnDefinition> ParseSchemaFromJson(yyjson_val *schema_json) {
+static vector<unique_ptr<IcebergColumnDefinition>> ParseSchemaFromJson(yyjson_val *schema_json) {
 	auto parsed_schema = rest_api_objects::Schema::FromJSON(schema_json);
 	auto &struct_type = parsed_schema.struct_type;
 
-	vector<IcebergColumnDefinition> ret;
+	vector<unique_ptr<IcebergColumnDefinition>> ret;
 	for (auto &field : struct_type.fields) {
-		ret.push_back(IcebergColumnDefinition::ParseFromJson(*field));
+		ret.push_back(IcebergColumnDefinition::ParseStructField(*field));
 	}
 	return ret;
 }
 
-vector<IcebergColumnDefinition> IcebergSnapshot::ParseSchema(vector<yyjson_val *> &schemas, idx_t schema_id) {
+vector<unique_ptr<IcebergColumnDefinition>> IcebergSnapshot::ParseSchema(vector<yyjson_val *> &schemas,
+                                                                         idx_t schema_id) {
 	// Multiple schemas can be present in the json metadata 'schemas' list
 	for (const auto &schema_ptr : schemas) {
 		auto found_schema_id = IcebergUtils::TryGetNumFromObject(schema_ptr, "schema-id");

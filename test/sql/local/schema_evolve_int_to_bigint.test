@@ -1,0 +1,27 @@
+# name: test/sql/local/schema_evolve_int_to_bigint.test
+# group: [local]
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+require-env DUCKDB_ICEBERG_HAVE_GENERATED_DATA
+
+query I
+select * from ICEBERG_SCAN('data/generated/iceberg/spark-local/default/schema_evolve_int_to_bigint') order by all;
+----
+-9223372036854775808
+-2147483648
+-1
+-1
+0
+0
+1
+1
+2147483647
+9223372036854775807
+

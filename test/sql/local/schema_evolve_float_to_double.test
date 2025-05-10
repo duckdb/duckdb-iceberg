@@ -1,0 +1,22 @@
+# name: test/sql/local/schema_evolve_float_to_double.test
+# group: [local]
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+require-env DUCKDB_ICEBERG_HAVE_GENERATED_DATA
+
+query I
+select * from ICEBERG_SCAN('data/generated/iceberg/spark-local/default/schema_evolve_float_to_double') order by all;
+----
+1.2300000190734863
+1.23456789
+2.718281828459045
+3.141592653589793
+4.559999942779541
+7.889999866485596

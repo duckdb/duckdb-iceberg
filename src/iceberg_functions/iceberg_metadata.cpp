@@ -98,7 +98,7 @@ static unique_ptr<FunctionData> IcebergMetaDataBind(ClientContext &context, Tabl
 	auto iceberg_meta_path = IcebergSnapshot::GetMetaDataPath(context, iceberg_path, fs, options);
 	auto metadata = IcebergMetadata::Parse(iceberg_meta_path, fs, options.metadata_compression_codec);
 
-	IcebergSnapshot snapshot_to_scan;
+	shared_ptr<IcebergSnapshot> snapshot_to_scan;
 	switch (options.snapshot_source) {
 	case SnapshotSource::LATEST: {
 		snapshot_to_scan = IcebergSnapshot::GetLatestSnapshot(*metadata, options);

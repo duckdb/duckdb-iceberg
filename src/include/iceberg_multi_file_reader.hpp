@@ -167,7 +167,7 @@ public:
 	ClientContext &context;
 	const IcebergOptions &options;
 	unique_ptr<IcebergMetadata> metadata;
-	IcebergSnapshot snapshot;
+	shared_ptr<IcebergSnapshot> snapshot;
 };
 
 struct IcebergMultiFileReaderGlobalState : public MultiFileReaderGlobalState {

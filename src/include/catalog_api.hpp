@@ -12,6 +12,20 @@ namespace duckdb {
 class IRCatalog;
 
 struct IRCAPITable {
+public:
+	IRCAPITable(const string &table_id) : table_id(table_id) {
+	}
+	IRCAPITable() = default;
+
+	// Enable move constructor and move assignment
+	IRCAPITable(IRCAPITable &&) noexcept = default;
+	IRCAPITable &operator=(IRCAPITable &&) noexcept = default;
+
+	// Disable copy constructor and copy assignment
+	IRCAPITable(const IRCAPITable &) = delete;
+	IRCAPITable &operator=(const IRCAPITable &) = delete;
+
+public:
 	string table_id;
 
 	string name;
@@ -21,7 +35,7 @@ struct IRCAPITable {
 	string data_source_format;
 	string storage_location;
 
-	vector<IcebergColumnDefinition> columns;
+	vector<unique_ptr<IcebergColumnDefinition>> columns;
 };
 
 struct IRCAPISchema {

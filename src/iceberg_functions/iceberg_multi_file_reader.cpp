@@ -43,10 +43,10 @@ void IcebergMultiFileList::Bind(vector<LogicalType> &return_types, vector<string
 		InitializeFiles(guard);
 	}
 
-	auto &schema = snapshot.schema;
+	auto &schema = snapshot->schema;
 	for (auto &schema_entry : schema) {
-		names.push_back(schema_entry.name);
-		return_types.push_back(schema_entry.type);
+		names.push_back(schema_entry->name);
+		return_types.push_back(schema_entry->type);
 	}
 
 	have_bound = true;
@@ -309,7 +309,7 @@ idx_t IcebergMultiFileList::GetTotalFileCount() {
 unique_ptr<NodeStatistics> IcebergMultiFileList::GetCardinality(ClientContext &context) {
 	idx_t cardinality = 0;
 
-	if (snapshot.iceberg_format_version == 1) {
+	if (snapshot->iceberg_format_version == 1) {
 		//! We collect no cardinality information from manifests for V1 tables.
 		return nullptr;
 	}
@@ -331,11 +331,11 @@ bool IcebergMultiFileList::FileMatchesFilter(IcebergManifestEntry &file) {
 	D_ASSERT(!table_filters.filters.empty());
 
 	auto &filters = table_filters.filters;
-	auto &schema = snapshot.schema;
+	auto &schema = snapshot->schema;
 
 	for (idx_t column_id = 0; column_id < schema.size(); column_id++) {
 		// FIXME: is there a potential mismatch between column_id / field_id lurking here?
-		auto &column = schema[column_id];
+		auto &column = *schema[column_id];
 		auto it = filters.find(column_id);
 
 		if (it == filters.end()) {
@@ -492,11 +492,11 @@ bool IcebergMultiFileList::ManifestMatchesFilter(IcebergManifest &manifest) {
 		return true;
 	}
 
-	auto &schema = snapshot.schema;
+	auto &schema = snapshot->schema;
 	unordered_map<uint64_t, idx_t> source_to_column_id;
 	for (idx_t i = 0; i < schema.size(); i++) {
 		auto &column = schema[i];
-		source_to_column_id[static_cast<uint64_t>(column.id)] = i;
+		source_to_column_id[static_cast<uint64_t>(column->id)] = i;
 	}
 
 	for (idx_t i = 0; i < manifest.field_summary.size(); i++) {
@@ -517,8 +517,8 @@ bool IcebergMultiFileList::ManifestMatchesFilter(IcebergManifest &manifest) {
 
 		auto &column = schema[column_id];
 		IcebergPredicateStats stats;
-		stats.lower_bound = DeserializeBound<true>(field_summary.lower_bound, column);
-		stats.upper_bound = DeserializeBound<false>(field_summary.upper_bound, column);
+		stats.lower_bound = DeserializeBound<true>(field_summary.lower_bound, *column);
+		stats.upper_bound = DeserializeBound<false>(field_summary.upper_bound, *column);
 
 		auto &filter = *filter_it->second;
 		if (!IcebergPredicate::MatchBounds(filter, stats, field.transform)) {
@@ -559,7 +559,7 @@ void IcebergMultiFileList::InitializeFiles(lock_guard<mutex> &guard) {
 	}
 
 	//! Set up the manifest + manifest entry readers
-	if (snapshot.iceberg_format_version == 1) {
+	if (snapshot->iceberg_format_version == 1) {
 		data_manifest_entry_reader = make_uniq<ManifestReader>(IcebergManifestEntryV1::PopulateNameMapping,
 		                                                       IcebergManifestEntryV1::VerifySchema);
 		delete_manifest_entry_reader = make_uniq<ManifestReader>(IcebergManifestEntryV1::PopulateNameMapping,
@@ -571,7 +571,7 @@ void IcebergMultiFileList::InitializeFiles(lock_guard<mutex> &guard) {
 
 		manifest_producer = IcebergManifestV1::ProduceEntries;
 		entry_producer = IcebergManifestEntryV1::ProduceEntries;
-	} else if (snapshot.iceberg_format_version == 2) {
+	} else if (snapshot->iceberg_format_version == 2) {
 		data_manifest_entry_reader = make_uniq<ManifestReader>(IcebergManifestEntryV2::PopulateNameMapping,
 		                                                       IcebergManifestEntryV2::VerifySchema);
 		delete_manifest_entry_reader = make_uniq<ManifestReader>(IcebergManifestEntryV2::PopulateNameMapping,
@@ -585,10 +585,10 @@ void IcebergMultiFileList::InitializeFiles(lock_guard<mutex> &guard) {
 		entry_producer = IcebergManifestEntryV2::ProduceEntries;
 	} else {
 		throw InvalidInputException("Reading from Iceberg version %d is not supported yet",
-		                            snapshot.iceberg_format_version);
+		                            snapshot->iceberg_format_version);
 	}
 
-	if (snapshot.snapshot_id == DConstants::INVALID_INDEX) {
+	if (snapshot->snapshot_id == DConstants::INVALID_INDEX) {
 		// we are in an empty table
 		current_data_manifest = data_manifests.begin();
 		current_delete_manifest = delete_manifests.begin();
@@ -597,8 +597,8 @@ void IcebergMultiFileList::InitializeFiles(lock_guard<mutex> &guard) {
 
 	// Read the manifest list, we need all the manifests to determine if we've seen all deletes
 	auto manifest_list_full_path = options.allow_moved_paths
-	                                   ? IcebergUtils::GetFullPath(iceberg_path, snapshot.manifest_list, fs)
-	                                   : snapshot.manifest_list;
+	                                   ? IcebergUtils::GetFullPath(iceberg_path, snapshot->manifest_list, fs)
+	                                   : snapshot->manifest_list;
 
 	auto scan = make_uniq<AvroScan>("IcebergManifestList", context, manifest_list_full_path);
 	manifest_reader->Initialize(std::move(scan));
@@ -648,6 +648,20 @@ shared_ptr<MultiFileList> IcebergMultiFileReader::CreateFileList(ClientContext &
 	return make_shared_ptr<IcebergMultiFileList>(context, storage_location, this->options);
 }
 
+static MultiFileColumnDefinition TransformColumn(const IcebergColumnDefinition &input) {
+	MultiFileColumnDefinition column(input.name, input.type);
+	if (input.initial_default.IsNull()) {
+		column.default_expression = make_uniq<ConstantExpression>(Value(input.type));
+	} else {
+		column.default_expression = make_uniq<ConstantExpression>(input.initial_default);
+	}
+	column.identifier = Value::INTEGER(input.id);
+	for (auto &child : input.children) {
+		column.children.push_back(TransformColumn(*child));
+	}
+	return column;
+}
+
 bool IcebergMultiFileReader::Bind(MultiFileOptions &options, MultiFileList &files, vector<LogicalType> &return_types,
                                   vector<string> &names, MultiFileReaderBindData &bind_data) {
 	auto &iceberg_multi_file_list = dynamic_cast<IcebergMultiFileList &>(files);
@@ -655,14 +669,10 @@ bool IcebergMultiFileReader::Bind(MultiFileOptions &options, MultiFileList &file
 	iceberg_multi_file_list.Bind(return_types, names);
 	// FIXME: apply final transformation for 'file_row_number' ???
 
-	auto &schema = iceberg_multi_file_list.snapshot.schema;
+	auto &schema = iceberg_multi_file_list.snapshot->schema;
 	auto &columns = bind_data.schema;
 	for (auto &item : schema) {
-		MultiFileColumnDefinition column(item.name, item.type);
-		column.default_expression = make_uniq<ConstantExpression>(item.default_value);
-		column.identifier = Value::INTEGER(item.id);
-
-		columns.push_back(column);
+		columns.push_back(TransformColumn(*item));
 	}
 	//! FIXME: check if 'schema.name-mapping.default' is set, act on it to support "column-mapping"
 	bind_data.mapping = MultiFileColumnMappingMode::BY_FIELD_ID;
