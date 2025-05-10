@@ -49,6 +49,11 @@ void IcebergMultiFileList::Bind(vector<LogicalType> &return_types, vector<string
 		return_types.push_back(schema_entry.type);
 	}
 
+	QueryResult::DeduplicateColumns(names);
+	for (idx_t i = 0; i < names.size(); i++) {
+		schema[i].name = names[i];
+	}
+
 	have_bound = true;
 	this->names = names;
 	this->types = return_types;
