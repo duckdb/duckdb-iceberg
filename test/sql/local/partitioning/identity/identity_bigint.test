@@ -1,5 +1,5 @@
-# name: test/sql/local/partitioning/partition_bigint.test
-# group: [partitioning]
+# name: test/sql/local/partitioning/identity/identity_bigint.test
+# group: [identity]
 
 require avro
 

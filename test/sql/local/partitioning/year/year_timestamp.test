@@ -1,0 +1,45 @@
+# name: test/sql/local/partitioning/year/year_timestamp.test
+# group: [year]
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+require-env DUCKDB_ICEBERG_HAVE_GENERATED_DATA
+
+query III
+select * from ICEBERG_SCAN('data/generated/iceberg/spark-local/default/year_timestamp') ORDER BY partition_col;
+----
+2020-05-15 14:30:45	12345	click
+2021-08-22 09:15:20	67890	purchase
+2022-03-10 11:45:30	54321	view
+
+# Test filtering by year
+query I
+select user_id from ICEBERG_SCAN('data/generated/iceberg/spark-local/default/year_timestamp') 
+WHERE partition_col = '2020-05-15 14:30:45'
+----
+12345
+
+query I
+select user_id from ICEBERG_SCAN('data/generated/iceberg/spark-local/default/year_timestamp') 
+WHERE partition_col = '2021-08-22 09:15:20'
+----
+67890
+
+query I
+select user_id from ICEBERG_SCAN('data/generated/iceberg/spark-local/default/year_timestamp') 
+WHERE partition_col = '2022-03-10 11:45:30'
+----
+54321
+
+# Test filtering by timestamp range
+query I
+select user_id from ICEBERG_SCAN('data/generated/iceberg/spark-local/default/year_timestamp') 
+WHERE partition_col >= '2021-01-01' AND partition_col < '2022-01-01';
+----
+67890

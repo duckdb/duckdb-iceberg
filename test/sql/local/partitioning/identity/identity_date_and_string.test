@@ -1,5 +1,5 @@
-# name: test/sql/local/partitioning/hive_partitioned_table.test
-# group: [partitioning]
+# name: test/sql/local/partitioning/identity/identity_date_and_string.test
+# group: [identity]
 
 require avro
 

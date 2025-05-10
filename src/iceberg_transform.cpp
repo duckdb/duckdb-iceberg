@@ -41,4 +41,25 @@ IcebergTransform::IcebergTransform(const string &transform) : raw_transform(tran
 	}
 }
 
+LogicalType IcebergTransform::GetSerializedType(const LogicalType &input) const {
+	switch (type) {
+	case IcebergTransformType::IDENTITY:
+		return input;
+	case IcebergTransformType::BUCKET:
+		return LogicalType::INTEGER;
+	case IcebergTransformType::TRUNCATE:
+		return input;
+	case IcebergTransformType::YEAR:
+	case IcebergTransformType::MONTH:
+	case IcebergTransformType::DAY:
+	case IcebergTransformType::HOUR:
+		return LogicalType::INTEGER;
+	case IcebergTransformType::VOID:
+		return input;
+	default:
+		throw InvalidConfigurationException("Can't produce a result type for transform %s and input type %s",
+		                                    raw_transform, input.ToString());
+	}
+}
+
 } // namespace duckdb

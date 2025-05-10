@@ -1,5 +1,5 @@
-# name: test/sql/local/partitioning/partition_binary.test
-# group: [partitioning]
+# name: test/sql/local/partitioning/identity/identity_binary.test
+# group: [identity]
 
 require avro
 

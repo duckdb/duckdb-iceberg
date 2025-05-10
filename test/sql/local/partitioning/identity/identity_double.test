@@ -1,5 +1,5 @@
-# name: test/sql/local/partitioning/partition_double.test
-# group: [partitioning]
+# name: test/sql/local/partitioning/identity/identity_double.test
+# group: [identity]
 
 require avro
 

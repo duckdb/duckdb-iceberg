@@ -68,7 +68,7 @@ bool IcebergPredicate::MatchBounds(TableFilter &filter, const IcebergPredicateSt
 	case IcebergTransformType::TRUNCATE:
 		return true;
 	case IcebergTransformType::YEAR:
-		return true;
+		return MatchBoundsTemplated<YearTransform>(filter, stats, transform);
 	case IcebergTransformType::MONTH:
 		return true;
 	case IcebergTransformType::DAY:

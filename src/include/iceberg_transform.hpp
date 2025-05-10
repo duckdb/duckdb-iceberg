@@ -38,6 +38,8 @@ public:
 		return raw_transform;
 	}
 
+	LogicalType GetSerializedType(const LogicalType &input) const;
+
 private:
 	//! Preserve the input for debugging
 	string raw_transform;
@@ -61,6 +63,48 @@ struct IdentityTransform {
 	}
 	static bool CompareGreaterThan(const Value &constant, const IcebergPredicateStats &stats) {
 		return stats.upper_bound > constant;
+	}
+	static bool CompareGreaterThanOrEqual(const Value &constant, const IcebergPredicateStats &stats) {
+		return stats.upper_bound >= constant;
+	}
+};
+
+struct YearTransform {
+	static Value ApplyTransform(const Value &constant, const IcebergTransform &transform) {
+		switch (constant.type().id()) {
+		case LogicalTypeId::TIMESTAMP: {
+			auto val = constant.GetValue<timestamp_t>();
+			auto components = Timestamp::GetComponents(val);
+			return Value::INTEGER(components.year - 1970);
+		}
+		case LogicalTypeId::TIMESTAMP_TZ: {
+			auto val = constant.GetValue<timestamp_tz_t>();
+			auto components = Timestamp::GetComponents(val);
+			return Value::INTEGER(components.year - 1970);
+		}
+		case LogicalTypeId::DATE: {
+			int32_t year;
+			int32_t month;
+			int32_t day;
+			Date::Convert(constant.GetValue<date_t>(), year, month, day);
+			return Value::INTEGER(year - 1970);
+		}
+		default:
+			throw NotImplementedException("'year' transform for type %s", constant.type().ToString());
+		}
+		return constant;
+	}
+	static bool CompareEqual(const Value &constant, const IcebergPredicateStats &stats) {
+		return constant >= stats.lower_bound && constant <= stats.upper_bound;
+	}
+	static bool CompareLessThan(const Value &constant, const IcebergPredicateStats &stats) {
+		return stats.lower_bound <= constant;
+	}
+	static bool CompareLessThanOrEqual(const Value &constant, const IcebergPredicateStats &stats) {
+		return stats.lower_bound <= constant;
+	}
+	static bool CompareGreaterThan(const Value &constant, const IcebergPredicateStats &stats) {
+		return stats.upper_bound >= constant;
 	}
 	static bool CompareGreaterThanOrEqual(const Value &constant, const IcebergPredicateStats &stats) {
 		return stats.upper_bound >= constant;

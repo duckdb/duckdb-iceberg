@@ -1,5 +1,5 @@
-# name: test/sql/local/partitioning/partition_time.test
-# group: [partitioning]
+# name: test/sql/local/partitioning/identity/identity_time.test
+# group: [identity]
 
 require avro
 
