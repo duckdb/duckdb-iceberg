@@ -18,6 +18,8 @@ set(EXTENSION_SOURCES
     src/catalog_api.cpp
     src/catalog_utils.cpp
     src/common/utils.cpp
+    src/aws.cpp
+    src/curl.cpp
     src/common/url_utils.cpp
     src/common/schema.cpp
     src/common/iceberg.cpp

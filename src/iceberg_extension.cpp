@@ -252,8 +252,6 @@ static void LoadInternal(DatabaseInstance &instance) {
 		ExtensionUtil::RegisterFunction(instance, fun);
 	}
 
-	IRCAPI::InitializeCurl();
-
 	SecretType secret_type;
 	secret_type.name = "iceberg";
 	secret_type.deserializer = KeyValueSecret::Deserialize<KeyValueSecret>;

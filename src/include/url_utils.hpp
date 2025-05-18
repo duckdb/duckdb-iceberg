@@ -23,7 +23,7 @@ public:
 
 	void SetParam(const string &key, const string &value);
 	string GetParam(const string &key) const;
-	const unordered_map<string, string> GetParams();
+	const unordered_map<string, string> GetParams() const;
 
 	string GetURL() const;
 

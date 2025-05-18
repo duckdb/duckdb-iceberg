@@ -5,37 +5,30 @@
 #include "iceberg_utils.hpp"
 #include "api_utils.hpp"
 #include <sys/stat.h>
-#include <aws/core/Aws.h>
-#include <aws/s3/S3Client.h>
-#include <aws/core/Aws.h>
-#include <aws/core/auth/AWSCredentials.h>
-#include <aws/core/auth/AWSCredentialsProviderChain.h>
-#include <aws/core/auth/AWSCredentialsProvider.h>
-#include <aws/core/http/HttpClient.h>
-#include <aws/core/http/HttpRequest.h>
 #include <duckdb/main/secret/secret.hpp>
 #include <duckdb/main/secret/secret_manager.hpp>
 #include "duckdb/common/error_data.hpp"
 #include "storage/authorization/sigv4.hpp"
 #include "storage/authorization/oauth2.hpp"
-#include <curl/curl.h>
+#include "curl.hpp"
 
 using namespace duckdb_yyjson;
 namespace duckdb {
 
 static string GetTableMetadata(ClientContext &context, IRCatalog &catalog, const string &schema, const string &table) {
-	struct curl_slist *extra_headers = NULL;
+	RequestInput request_input;
+
 	auto url = catalog.GetBaseUrl();
 	url.AddPathComponent(catalog.prefix);
 	url.AddPathComponent("namespaces");
 	url.AddPathComponent(schema);
 	url.AddPathComponent("tables");
 	url.AddPathComponent(table);
-	extra_headers = curl_slist_append(extra_headers, "X-Iceberg-Access-Delegation: vended-credentials");
-	string api_result = catalog.auth_handler->GetRequest(context, url, extra_headers);
+
+	request_input.AddHeader("X-Iceberg-Access-Delegation: vended-credentials");
+	string api_result = catalog.auth_handler->GetRequest(context, url, request_input);
 
 	catalog.SetCachedValue(url.GetURL(), api_result);
-	curl_slist_free_all(extra_headers);
 	return api_result;
 }
 
@@ -51,10 +44,6 @@ static string GetTableMetadataCached(ClientContext &context, IRCatalog &catalog,
 		return catalog.GetCachedValue(url.GetURL());
 	}
 	return GetTableMetadata(context, catalog, schema, table);
-}
-
-void IRCAPI::InitializeCurl() {
-	APIUtils::SelectCurlCertPath();
 }
 
 vector<string> IRCAPI::GetCatalogs(ClientContext &context, IRCatalog &catalog) {
@@ -181,22 +170,23 @@ IRCAPITableCredentials IRCAPI::GetTableCredentials(ClientContext &context, IRCat
 				throw InvalidInputException("required property 'prefix' is missing from the StorageCredential schema");
 			}
 
-			CreateSecretInfo create_secret_info(OnCreateConflict::REPLACE_ON_CONFLICT, SecretPersistType::TEMPORARY);
+			CreateSecretInfo create_secret_input(OnCreateConflict::REPLACE_ON_CONFLICT, SecretPersistType::TEMPORARY);
+
 			auto prefix_string = yyjson_get_str(sc_prefix);
 			if (!prefix_string) {
 				throw InvalidInputException("property 'prefix' of StorageCredential is NULL");
 			}
-			create_secret_info.scope.push_back(string(prefix_string));
-			create_secret_info.name = StringUtil::Format("%s_%d_%s", secret_base_name, index, prefix_string);
-			create_secret_info.type = "s3";
-			create_secret_info.provider = "config";
-			create_secret_info.storage_type = "memory";
-			create_secret_info.options = config_options;
+			create_secret_input.scope.push_back(string(prefix_string));
+			create_secret_input.name = StringUtil::Format("%s_%d_%s", secret_base_name, index, prefix_string);
+			create_secret_input.type = "s3";
+			create_secret_input.provider = "config";
+			create_secret_input.storage_type = "memory";
+			create_secret_input.options = config_options;
 
 			auto *sc_config = yyjson_obj_get(storage_credential, "config");
-			ParseConfigOptions(sc_config, create_secret_info.options);
+			ParseConfigOptions(sc_config, create_secret_input.options);
 			//! TODO: apply the 'overrides' retrieved from the /v1/config endpoint
-			result.storage_credentials.push_back(create_secret_info);
+			result.storage_credentials.push_back(create_secret_input);
 		}
 	}
 
@@ -205,6 +195,7 @@ IRCAPITableCredentials IRCAPI::GetTableCredentials(ClientContext &context, IRCat
 		result.config =
 		    make_uniq<CreateSecretInfo>(OnCreateConflict::REPLACE_ON_CONFLICT, SecretPersistType::TEMPORARY);
 		auto &config = *result.config;
+
 		//! TODO: apply the 'overrides' retrieved from the /v1/config endpoint
 		config.options = config_options;
 		config.name = secret_base_name;
@@ -287,7 +278,8 @@ vector<IRCAPITable> IRCAPI::GetTables(ClientContext &context, IRCatalog &catalog
 	url.AddPathComponent("namespaces");
 	url.AddPathComponent(schema);
 	url.AddPathComponent("tables");
-	string api_result = catalog.auth_handler->GetRequest(context, url);
+	RequestInput request_input;
+	string api_result = catalog.auth_handler->GetRequest(context, url, request_input);
 	std::unique_ptr<yyjson_doc, YyjsonDocDeleter> doc(ICUtils::api_result_to_doc(api_result));
 	auto *root = yyjson_doc_get_root(doc.get());
 	auto *tables = yyjson_obj_get(root, "identifiers");
@@ -306,7 +298,8 @@ vector<IRCAPISchema> IRCAPI::GetSchemas(ClientContext &context, IRCatalog &catal
 	auto endpoint_builder = catalog.GetBaseUrl();
 	endpoint_builder.AddPathComponent(catalog.prefix);
 	endpoint_builder.AddPathComponent("namespaces");
-	string api_result = catalog.auth_handler->GetRequest(context, endpoint_builder);
+	RequestInput request_input;
+	string api_result = catalog.auth_handler->GetRequest(context, endpoint_builder, request_input);
 	std::unique_ptr<yyjson_doc, YyjsonDocDeleter> doc(ICUtils::api_result_to_doc(api_result));
 	auto *root = yyjson_doc_get_root(doc.get());
 	//! 'ListNamespacesResponse'

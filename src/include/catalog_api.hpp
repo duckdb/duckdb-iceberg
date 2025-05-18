@@ -45,9 +45,6 @@ class IRCAPI {
 public:
 	static const string API_VERSION_1;
 
-	//! WARNING: not thread-safe. To be called once on extension initialization
-	static void InitializeCurl();
-
 	static IRCAPITableCredentials GetTableCredentials(ClientContext &context, IRCatalog &catalog, const string &schema,
 	                                                  const string &table, const string &secret_base_name);
 	static vector<string> GetCatalogs(ClientContext &context, IRCatalog &catalog);

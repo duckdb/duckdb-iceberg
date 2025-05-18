@@ -12,16 +12,12 @@
 #include "yyjson.hpp"
 #include "duckdb/common/file_system.hpp"
 #include "url_utils.hpp"
+#include "curl.hpp"
+#include "aws.hpp"
 
 using namespace duckdb_yyjson;
 
-//! fwd declare
-struct curl_slist;
-typedef void CURL;
-
 namespace duckdb {
-
-static string SELECTED_CURL_CERT_PATH = "";
 
 // we statically compile in libcurl, which means the cert file location of the build machine is the
 // place curl will look. But not every distro has this file in the same location, so we search a
@@ -40,21 +36,15 @@ static string certFileLocations[] = {
 
 class APIUtils {
 public:
-	//! We use a global here to store the path that is selected on the ICAPI::InitializeCurl call
-
-	static string GetRequestAws(ClientContext &context, IRCEndpointBuilder endpoint_builder, const string &secret_name);
-	static string GetAwsRegion(const string &host);
-	static string GetAwsService(const string &host);
 	static string GetRequest(ClientContext &context, const IRCEndpointBuilder &endpoint_builder,
-	                         const string &token = "", curl_slist *extra_headers = NULL);
-	static string DeleteRequest(const string &url, const string &token = "", curl_slist *extra_headers = NULL);
-	static void InitializeCurlObject(CURL *curl, const string &token);
-	static bool SetCurlCAFileInfo(CURL *curl);
-	static bool SelectCurlCertPath();
-	static size_t RequestWriteCallback(void *contents, size_t size, size_t nmemb, void *userp);
+	                         RequestInput &request_input, const string &token = "");
+	static string DeleteRequest(ClientContext &context, const string &url, RequestInput &request_input,
+	                            const string &token = "");
 	static string PostRequest(ClientContext &context, const string &url, const string &post_data,
-	                          const string &content_type = "x-www-form-urlencoded", const string &token = "",
-	                          curl_slist *extra_headers = NULL);
+	                          RequestInput &request_input, const string &content_type = "x-www-form-urlencoded",
+	                          const string &token = "");
+	//! We use a singleton here to store the path, set by SelectCurlCertPath
+	static const string &GetCURLCertPath();
 };
 
 } // namespace duckdb
