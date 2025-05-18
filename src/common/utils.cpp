@@ -1,6 +1,5 @@
 #include "duckdb.hpp"
 #include "iceberg_utils.hpp"
-#include "zlib.h"
 #include "fstream"
 #include "duckdb/common/gzip_file_system.hpp"
 
