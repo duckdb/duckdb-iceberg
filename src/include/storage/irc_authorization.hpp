@@ -3,9 +3,7 @@
 #include "duckdb/main/secret/secret.hpp"
 #include "catalog_utils.hpp"
 #include "url_utils.hpp"
-
-//! fwd declare
-struct curl_slist;
+#include "curl.hpp"
 
 namespace duckdb {
 
@@ -32,7 +30,7 @@ public:
 
 public:
 	virtual string GetRequest(ClientContext &context, const IRCEndpointBuilder &endpoint_builder,
-	                          curl_slist *extra_headers = nullptr) = 0;
+	                          RequestInput &request_input) = 0;
 
 public:
 	template <class TARGET>

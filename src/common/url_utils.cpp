@@ -28,7 +28,7 @@ string IRCEndpointBuilder::GetParam(const string &key) const {
 	return "";
 }
 
-const std::unordered_map<string, string> IRCEndpointBuilder::GetParams() {
+const std::unordered_map<string, string> IRCEndpointBuilder::GetParams() const {
 	return params;
 }
 
