@@ -4,6 +4,9 @@
 #include "duckdb/main/extension_helper.hpp"
 #include "duckdb/main/database.hpp"
 
+#include "iceberg_multi_file_reader.hpp"
+#include "iceberg_avro_multi_file_reader.hpp"
+
 namespace duckdb {
 
 AvroScan::AvroScan(const string &scan_name, ClientContext &context, const string &path) : context(context) {
@@ -12,6 +15,7 @@ AvroScan::AvroScan(const string &scan_name, ClientContext &context, const string
 
 	auto &avro_scan_entry = ExtensionUtil::GetTableFunction(instance, "read_avro");
 	avro_scan = avro_scan_entry.functions.functions[0];
+	avro_scan->get_multi_file_reader = IcebergAvroMultiFileReader::CreateInstance;
 
 	// Prepare the inputs for the bind
 	vector<Value> children;
@@ -24,6 +28,7 @@ AvroScan::AvroScan(const string &scan_name, ClientContext &context, const string
 	TableFunctionRef empty;
 	TableFunction dummy_table_function;
 	dummy_table_function.name = scan_name;
+	dummy_table_function.get_multi_file_reader = IcebergAvroMultiFileReader::CreateInstance;
 	TableFunctionBindInput bind_input(children, named_params, input_types, input_names, nullptr, nullptr,
 	                                  dummy_table_function, empty);
 	bind_data = avro_scan->bind(context, bind_input, return_types, return_names);

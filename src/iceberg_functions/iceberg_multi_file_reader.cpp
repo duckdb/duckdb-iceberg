@@ -411,6 +411,7 @@ void IcebergMultiFileReader::FinalizeChunk(ClientContext &context, const MultiFi
 	const auto &multi_file_list = dynamic_cast<const IcebergMultiFileList &>(*global_state->file_list);
 	auto file_id = reader.file_list_idx.GetIndex();
 	auto &data_file = multi_file_list.data_files[file_id];
+
 	auto &local_columns = reader.columns;
 
 	ApplyEqualityDeletes(context, output_chunk, multi_file_list, data_file, local_columns);
