@@ -1,6 +1,7 @@
 #include "iceberg_logging.hpp"
 
 #include "aws.hpp"
+#include "duckdb/common/http_util.hpp"
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/common/exception/http_exception.hpp"
 
@@ -55,6 +56,28 @@ static void InitAWSAPI() {
 	}
 }
 
+static void LogAWSRequest(ClientContext &context, std::shared_ptr<Aws::Http::HttpRequest> &req) {
+	if (context.db) {
+		auto http_util = HTTPUtil::Get(*context.db);
+		auto aws_headers = req->GetHeaders();
+		auto http_headers = HTTPHeaders();
+		for (auto &header : aws_headers) {
+			http_headers.Insert(header.first.c_str(), header.second);
+		}
+		auto params = HTTPParams(http_util);
+		auto url = "https://" + req->GetUri().GetAuthority() + req->GetUri().GetPath();
+		const auto query_str = req->GetUri().GetQueryString();
+		if (!query_str.empty()) {
+			url += "?" + query_str;
+		}
+		auto request = GetRequestInfo(
+		    url, http_headers, params, [](const HTTPResponse &response) { return false; },
+		    [](const_data_ptr_t data, idx_t data_length) { return false; });
+		request.params.logger = context.logger;
+		http_util.LogRequest(request, nullptr);
+	}
+}
+
 string AWSInput::GetRequest(ClientContext &context) {
 	InitAWSAPI();
 	auto clientConfig = make_uniq<Aws::Client::ClientConfiguration>();
@@ -89,6 +112,8 @@ string AWSInput::GetRequest(ClientContext &context) {
 
 	std::shared_ptr<Aws::Http::HttpClient> MyHttpClient;
 	MyHttpClient = Aws::Http::CreateHttpClient(*clientConfig);
+
+	LogAWSRequest(context, req);
 	std::shared_ptr<Aws::Http::HttpResponse> res = MyHttpClient->MakeRequest(req);
 	Aws::Http::HttpResponseCode resCode = res->GetResponseCode();
 	DUCKDB_LOG(context, IcebergLogType,
