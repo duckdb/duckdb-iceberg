@@ -28,6 +28,11 @@ struct FieldSummary {
 	Value upper_bound;
 };
 
+struct ManifestPartitions {
+	bool has_partitions = false;
+	vector<FieldSummary> field_summary;
+};
+
 enum class IcebergManifestContentType : uint8_t {
 	DATA = 0,
 	DELETE = 1,
@@ -48,8 +53,8 @@ public:
 	idx_t existing_rows_count = 0;
 	//! The id of the partition spec referenced by this manifest (and the data files that are part of it)
 	int32_t partition_spec_id;
-
-	vector<FieldSummary> field_summary;
+	//! The field summaries of the partition (if present)
+	ManifestPartitions partitions;
 
 public:
 	static vector<LogicalType> Types() {

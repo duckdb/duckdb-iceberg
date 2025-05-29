@@ -401,10 +401,16 @@ bool IcebergMultiFileList::ManifestMatchesFilter(IcebergManifest &manifest) {
 		                            manifest.manifest_path, spec_id);
 	}
 	auto &partition_spec = partition_spec_it->second;
-	if (partition_spec.fields.size() != manifest.field_summary.size()) {
+	if (!manifest.partitions.has_partitions) {
+		//! No field summaries are present, can't filter anything
+		return true;
+	}
+
+	auto &field_summaries = manifest.partitions.field_summary;
+	if (partition_spec.fields.size() != field_summaries.size()) {
 		throw InvalidInputException(
 		    "Manifest has %d 'field_summary' entries but the referenced partition spec has %d fields",
-		    manifest.field_summary.size(), partition_spec.fields.size());
+		    field_summaries.size(), partition_spec.fields.size());
 	}
 
 	if (table_filters.filters.empty()) {
@@ -419,8 +425,8 @@ bool IcebergMultiFileList::ManifestMatchesFilter(IcebergManifest &manifest) {
 		source_to_column_id[static_cast<uint64_t>(column->id)] = i;
 	}
 
-	for (idx_t i = 0; i < manifest.field_summary.size(); i++) {
-		auto &field_summary = manifest.field_summary[i];
+	for (idx_t i = 0; i < field_summaries.size(); i++) {
+		auto &field_summary = field_summaries[i];
 		auto &field = partition_spec.fields[i];
 
 		auto column_id = source_to_column_id.at(field.source_id);

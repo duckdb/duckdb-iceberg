@@ -107,6 +107,8 @@ idx_t ManifestListReader::ReadChunk(idx_t offset, idx_t count, vector<IcebergMan
 		}
 
 		if (field_summary) {
+			manifest.partitions.has_partitions = true;
+			auto &summaries = manifest.partitions.field_summary;
 			auto list_entry = field_summary[index];
 			for (idx_t j = 0; j < list_entry.length; j++) {
 				FieldSummary summary;
@@ -123,7 +125,7 @@ idx_t ManifestListReader::ReadChunk(idx_t offset, idx_t count, vector<IcebergMan
 				if (upper_bound) {
 					summary.upper_bound = upper_bound->GetValue(list_idx);
 				}
-				manifest.field_summary.push_back(summary);
+				summaries.push_back(summary);
 			}
 		}
 		result.push_back(manifest);
