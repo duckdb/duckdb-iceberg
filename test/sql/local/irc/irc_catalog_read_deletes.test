@@ -39,7 +39,7 @@ query I nosort results_1
 select sum(l_suppkey), min(l_suppkey), max(l_suppkey) from my_datalake.default.lineitem_001_deletes;
 
 query I nosort results_1
-select sum(l_suppkey), min(l_suppkey), max(l_suppkey) from read_parquet('data/generated/intermediates/spark-rest/lineitem_001_deletes/last/data.parquet/*.parquet');
+select sum(l_suppkey), min(l_suppkey), max(l_suppkey) from read_parquet('__WORKING_DIRECTORY__/data/generated/intermediates/spark-rest/lineitem_001_deletes/last/data.parquet/*.parquet');
 
 # Verify Deletes
 # joins with a table that has deletes.
@@ -56,8 +56,8 @@ limit 10;
 
 query I nosort results_2
 select l1_deletes.l_orderkey, count(*) count from
-    read_parquet('data/generated/intermediates/spark-rest/lineitem_sf1_deletes/last/data.parquet/*.parquet') l1_deletes,
-    read_parquet('data/generated/intermediates/spark-rest/lineitem_sf_01_no_deletes/last/data.parquet/*.parquet') l2_no_deletes
+    read_parquet('__WORKING_DIRECTORY__/data/generated/intermediates/spark-rest/lineitem_sf1_deletes/last/data.parquet/*.parquet') l1_deletes,
+    read_parquet('__WORKING_DIRECTORY__/data/generated/intermediates/spark-rest/lineitem_sf_01_no_deletes/last/data.parquet/*.parquet') l2_no_deletes
 where l1_deletes.l_partkey = l2_no_deletes.l_partkey
 group by l1_deletes.l_orderkey
 order by l1_deletes.l_orderkey, count
@@ -70,7 +70,7 @@ select l_orderkey, l_partkey, l_suppkey, l_quantity from my_datalake.default.lin
 ----
 
 query IIII nosort result_3
-select l_orderkey, l_partkey, l_suppkey, l_quantity from read_parquet('data/generated/intermediates/spark-rest/lineitem_sf_01_1_delete/last/data.parquet/*.parquet') order by l_partkey, l_orderkey limit 10;
+select l_orderkey, l_partkey, l_suppkey, l_quantity from read_parquet('__WORKING_DIRECTORY__/data/generated/intermediates/spark-rest/lineitem_sf_01_1_delete/last/data.parquet/*.parquet') order by l_partkey, l_orderkey limit 10;
 ----
 
 query I
@@ -79,7 +79,7 @@ select count(*) from my_datalake.default.lineitem_sf_01_1_delete where l_orderke
 0
 
 query I
-select count(*) from read_parquet('data/generated/intermediates/spark-rest/lineitem_sf_01_1_delete/last/data.parquet/*.parquet') where l_orderkey=10053 and l_partkey = 77;
+select count(*) from read_parquet('__WORKING_DIRECTORY__/data/generated/intermediates/spark-rest/lineitem_sf_01_1_delete/last/data.parquet/*.parquet') where l_orderkey=10053 and l_partkey = 77;
 ----
 0
 
@@ -91,7 +91,7 @@ select l_shipmode, count(*) count from my_datalake.default.lineitem_partitioned_
 ----
 
 query II nosort result_4
-select l_shipmode, count(*) count from read_parquet('data/generated/intermediates/spark-rest/lineitem_partitioned_l_shipmode/last/data.parquet/*.parquet') group by l_shipmode order by count;
+select l_shipmode, count(*) count from read_parquet('__WORKING_DIRECTORY__/data/generated/intermediates/spark-rest/lineitem_partitioned_l_shipmode/last/data.parquet/*.parquet') group by l_shipmode order by count;
 ----
 
 
@@ -101,7 +101,7 @@ select l_shipmode, count(*) count from my_datalake.default.lineitem_partitioned_
 ----
 
 query II nosort result_5
-select l_shipmode, count(*) count from read_parquet('data/generated/intermediates/spark-rest/lineitem_partitioned_l_shipmode_deletes/last/data.parquet/*.parquet') group by l_shipmode order by count;
+select l_shipmode, count(*) count from read_parquet('__WORKING_DIRECTORY__/data/generated/intermediates/spark-rest/lineitem_partitioned_l_shipmode_deletes/last/data.parquet/*.parquet') group by l_shipmode order by count;
 ----
 
 

@@ -10,12 +10,12 @@ require iceberg
 require httpfs
 
 query III
-select * from ICEBERG_SCAN('data/persistent/partition_timestamp/default.db/partition_timestamp/metadata/00001-0c9938a5-103e-4185-b46d-331368ae4db7.metadata.json');
+select * from ICEBERG_SCAN('__WORKING_DIRECTORY__/data/persistent/partition_timestamp/default.db/partition_timestamp/metadata/00001-0c9938a5-103e-4185-b46d-331368ae4db7.metadata.json');
 ----
 2023-05-15 14:30:45	12345	click
 2023-08-22 09:15:20	67890	purchase
 
 query I
-select user_id from ICEBERG_SCAN('data/persistent/partition_timestamp/default.db/partition_timestamp/metadata/00001-0c9938a5-103e-4185-b46d-331368ae4db7.metadata.json') WHERE partition_col = '2023-05-15T14:30:45';
+select user_id from ICEBERG_SCAN('__WORKING_DIRECTORY__/data/persistent/partition_timestamp/default.db/partition_timestamp/metadata/00001-0c9938a5-103e-4185-b46d-331368ae4db7.metadata.json') WHERE partition_col = '2023-05-15T14:30:45';
 ----
 12345

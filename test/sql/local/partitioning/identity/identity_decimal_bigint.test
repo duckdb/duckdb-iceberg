@@ -10,7 +10,7 @@ require iceberg
 require httpfs
 
 query III
-select * from ICEBERG_SCAN('data/persistent/partition_decimal_bigint') order by all;
+select * from ICEBERG_SCAN('__WORKING_DIRECTORY__/data/persistent/partition_decimal_bigint') order by all;
 ----
 -9876.54321098765	222333	view
 -5432.10987654321	654321	swipe
@@ -24,6 +24,6 @@ select * from ICEBERG_SCAN('data/persistent/partition_decimal_bigint') order by 
 9999.99999999999	666777	hover
 
 query I
-select user_id from ICEBERG_SCAN('data/persistent/partition_decimal_bigint') WHERE partition_col = 123.45678901234;
+select user_id from ICEBERG_SCAN('__WORKING_DIRECTORY__/data/persistent/partition_decimal_bigint') WHERE partition_col = 123.45678901234;
 ----
 123456

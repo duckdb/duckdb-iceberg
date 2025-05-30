@@ -10,12 +10,12 @@ require iceberg
 require httpfs
 
 query III
-select * from ICEBERG_SCAN('data/persistent/partition_double');
+select * from ICEBERG_SCAN('__WORKING_DIRECTORY__/data/persistent/partition_double');
 ----
 3.141592653589793	12345	click
 2.718281828459045	67890	purchase
 
 query I
-select user_id from ICEBERG_SCAN('data/persistent/partition_double') WHERE partition_col = 3.141592653589793;
+select user_id from ICEBERG_SCAN('__WORKING_DIRECTORY__/data/persistent/partition_double') WHERE partition_col = 3.141592653589793;
 ----
 12345

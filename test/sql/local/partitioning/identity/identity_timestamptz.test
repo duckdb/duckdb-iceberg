@@ -18,12 +18,12 @@ statement ok
 SET TimeZone='Europe/Amsterdam';
 
 query III
-select * from ICEBERG_SCAN('data/persistent/partition_timestamptz/default.db/partition_timestamptz/metadata/00001-ffeadb58-2a9e-46ba-8b4f-f363f05de68c.metadata.json');
+select * from ICEBERG_SCAN('__WORKING_DIRECTORY__/data/persistent/partition_timestamptz/default.db/partition_timestamptz/metadata/00001-ffeadb58-2a9e-46ba-8b4f-f363f05de68c.metadata.json');
 ----
 2023-05-15 16:30:45+02	12345	click
 2023-08-22 11:15:20+02	67890	purchase
 
 query I
-select user_id from ICEBERG_SCAN('data/persistent/partition_timestamptz/default.db/partition_timestamptz/metadata/00001-ffeadb58-2a9e-46ba-8b4f-f363f05de68c.metadata.json') WHERE partition_col = '2023-05-15T16:30:45+02';
+select user_id from ICEBERG_SCAN('__WORKING_DIRECTORY__/data/persistent/partition_timestamptz/default.db/partition_timestamptz/metadata/00001-ffeadb58-2a9e-46ba-8b4f-f363f05de68c.metadata.json') WHERE partition_col = '2023-05-15T16:30:45+02';
 ----
 12345

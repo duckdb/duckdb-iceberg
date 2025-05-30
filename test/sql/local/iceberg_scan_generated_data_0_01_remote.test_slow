@@ -36,5 +36,5 @@ SELECT * FROM ICEBERG_SCAN('s3://test-bucket-public/iceberg_0_01/pyspark_iceberg
 ----
 
 query I nosort q1
-SELECT * FROM PARQUET_SCAN('data/iceberg/generated_0_01/expected_results/last/data/*.parquet') ORDER BY uuid;
+SELECT * FROM PARQUET_SCAN('__WORKING_DIRECTORY__/data/iceberg/generated_0_01/expected_results/last/data/*.parquet') ORDER BY uuid;
 ----

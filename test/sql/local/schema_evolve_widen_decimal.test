@@ -12,7 +12,7 @@ require httpfs
 require-env DUCKDB_ICEBERG_HAVE_GENERATED_DATA
 
 query I
-select * from ICEBERG_SCAN('data/generated/iceberg/spark-local/default/schema_evolve_widen_decimal') order by all;
+select * from ICEBERG_SCAN('__WORKING_DIRECTORY__/data/generated/iceberg/spark-local/default/schema_evolve_widen_decimal') order by all;
 ----
 12.12345678
 123.12345678

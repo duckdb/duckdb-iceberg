@@ -12,6 +12,6 @@ require httpfs
 require-env DUCKDB_ICEBERG_HAVE_GENERATED_DATA
 
 query IIIII
-select * from ICEBERG_SCAN('data/generated/iceberg/spark-local/default/nested_types');
+select * from ICEBERG_SCAN('__WORKING_DIRECTORY__/data/generated/iceberg/spark-local/default/nested_types');
 ----
 1	Alice	{'street': 123 Main St, 'city': Metropolis, 'zip': 12345}	[123-456-7890, 987-654-3210]	{age=30, membership=gold}

@@ -12,17 +12,17 @@ require httpfs
 
 # No 'b' fields are NULL at this point
 query I
-SELECT count(*) FROM ICEBERG_SCAN('data/persistent/name_mapping/warehouse_1/mydb/t1', version=3, snapshot_from_id=6597550917742534971) where b is null;
+SELECT count(*) FROM ICEBERG_SCAN('__WORKING_DIRECTORY__/data/persistent/name_mapping/warehouse_1/mydb/t1', version=3, snapshot_from_id=6597550917742534971) where b is null;
 ----
 0
 
 query I
-SELECT count(*) FROM ICEBERG_SCAN('data/persistent/name_mapping/warehouse_1/mydb/t1', version=3, snapshot_from_id=6597550917742534971) where b is not null;
+SELECT count(*) FROM ICEBERG_SCAN('__WORKING_DIRECTORY__/data/persistent/name_mapping/warehouse_1/mydb/t1', version=3, snapshot_from_id=6597550917742534971) where b is not null;
 ----
 10000
 
 # 'b' is deleted and re-added, with a different field-id, so its default value is NULL
 query I
-SELECT count(*) FROM ICEBERG_SCAN('data/persistent/name_mapping/warehouse_1/mydb/t1', version=7, snapshot_from_id=2651609110244230974) where b is null;
+SELECT count(*) FROM ICEBERG_SCAN('__WORKING_DIRECTORY__/data/persistent/name_mapping/warehouse_1/mydb/t1', version=7, snapshot_from_id=2651609110244230974) where b is null;
 ----
 10000
