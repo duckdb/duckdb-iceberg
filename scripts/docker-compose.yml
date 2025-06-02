@@ -35,7 +35,7 @@ services:
   mc:
     depends_on:
       - minio
-    image: minio/mc
+    image: minio/mc:RELEASE.2025-04-16T18-13-26Z-cpuv1
     container_name: mc
     networks:
       iceberg_net:
