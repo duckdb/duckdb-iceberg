@@ -183,7 +183,7 @@ jobs:
             -e MINIO_CONSOLE_PORT_NUMBER=9001 \
             -e MINIO_SCHEME=http \
             -e MINIO_DEFAULT_BUCKETS=examples \
-            --health-cmd="mc ls local | grep examples" \
+            --health-cmd="mc ls minio/local | grep examples" \
             --health-interval=2s \
             --health-timeout=10s \
             --health-retries=2 \
@@ -196,7 +196,7 @@ jobs:
         run: |
           max_attempts=30
           attempt=1
-          while ! docker exec minio mc ls local | grep examples; do
+          while ! docker exec minio mc ls minio/local | grep examples; do
             if [ $attempt -gt $max_attempts ]; then
               echo "Minio failed to initialize after $max_attempts attempts"
               exit 1
