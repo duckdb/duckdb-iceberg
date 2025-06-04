@@ -220,7 +220,7 @@ jobs:
             -e LAKEKEEPER__OPENFGA__CLIENT_ID=openfga \
             -e LAKEKEEPER__OPENFGA__CLIENT_SECRET=xqE1vUrifVDKAZdLuz6JAnDxMYLdGu5z \
             -e LAKEKEEPER__OPENFGA__TOKEN_ENDPOINT=http://localhost:30080/realms/iceberg/protocol/openid-connect/token \
-            -e RUST_LOG=info,iceberg-catalog=info,middle=trace \
+            -e RUST_LOG=info,lakekeeper=info,middle=trace \
             quay.io/lakekeeper/catalog:latest-main migrate
 
       - name: Start Lakekeeper
@@ -245,7 +245,7 @@ jobs:
         run: |
           max_attempts=30
           attempt=1
-          while ! docker exec lakekeeper /home/nonroot/iceberg-catalog healthcheck; do
+          while ! docker exec lakekeeper /home/nonroot/lakekeeper healthcheck; do
             if [ $attempt -gt $max_attempts ]; then
               echo "Lakekeeper failed to initialize after $max_attempts attempts"
               exit 1
@@ -271,10 +271,53 @@ jobs:
           python3 scripts/lakekeeper/setup_lakekeeper_catalog.py
           python3 -m scripts.data_generators.generate_data lakekeeper
 
+      - name: Save container logs
+        if: always()
+        run: |
+          docker logs keycloak > keycloak.log
+          docker logs postgres > postgres.log
+          docker logs openfga > openfga.log
+          docker logs minio > minio.log
+          docker logs lakekeeper > lakekeeper.log
+
+      - name: Upload keycloak logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: docker-logs
+          path: keycloak.log
+
+      - name: Upload postgres logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: docker-logs
+          path: postgres.log
+
+      - name: Upload openfga logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: docker-logs
+          path: openfga.log
+
+      - name: Upload minio logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: docker-logs
+          path: minio.log
+
+      - name: Upload lakekeeper logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: docker-logs
+          path: lakekeeper.log
+
       - name: Test with rest catalog
         env:
           LAKEKEEPER_SERVER_AVAILABLE: 1
         run: |
           ./build/release/test/unittest "$PWD/test/*" --list-test-names-only || true
           ./build/release/test/unittest "$PWD/test/*"
-
