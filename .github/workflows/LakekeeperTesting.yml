@@ -69,13 +69,6 @@ jobs:
         uses: hendrikmuhs/ccache-action@main
         continue-on-error: true
 
-      - name: Build extension
-        env:
-          GEN: ninja
-          STATIC_LIBCPP: 1
-        run: |
-          make release
-
       - name: Set up for Lakekeeper
         run: |
           # install java
@@ -284,36 +277,43 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: docker-logs
+          name: docker-logs-keycloak
           path: keycloak.log
 
       - name: Upload postgres logs
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: docker-logs
+          name: docker-logs-postgres
           path: postgres.log
 
       - name: Upload openfga logs
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: docker-logs
+          name: docker-logs-openfga
           path: openfga.log
 
       - name: Upload minio logs
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: docker-logs
+          name: docker-logs-minio
           path: minio.log
 
       - name: Upload lakekeeper logs
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: docker-logs
+          name: docker-logs-lakekeeper
           path: lakekeeper.log
+
+      - name: Build extension
+        env:
+          GEN: ninja
+          STATIC_LIBCPP: 1
+        run: |
+          make release
 
       - name: Test with rest catalog
         env:
