@@ -33,7 +33,6 @@ access_token = response.json()['access_token']
 print(access_token)
 
 # Check the 'info' endpoint of the Lakekeeper management API
-
 response = requests.get(
     url=f"{MANAGEMENT_URL}/v1/info",
     headers={"Authorization": f"Bearer {access_token}"},
@@ -42,47 +41,16 @@ response.raise_for_status()
 print(response.json())
 
 # Bootstrap
-
 response = requests.post(
     url=f"{MANAGEMENT_URL}/v1/bootstrap",
     headers={"Authorization": f"Bearer {access_token}"},
     json={
         "accept-terms-of-use": True,
-        # Optionally, we can override the name / type of the user:
-        # "user-email": "user@example.com",
-        # "user-name": "Roald Amundsen",
-        # "user-type": "human"
     },
 )
 response.raise_for_status()
 
-# Create a new user
-
-response = requests.post(
-    url=f"{MANAGEMENT_URL}/v1/permissions/server/assignments",
-    headers={"Authorization": f"Bearer {access_token}"},
-    json={"writes": [{"type": "admin", "user": "oidc~cfb55bf6-fcbb-4a1e-bfec-30c6649b52f8"}]},
-)
-response.raise_for_status()
-
-response = requests.post(
-    url=f"{MANAGEMENT_URL}/v1/permissions/project/assignments",
-    headers={"Authorization": f"Bearer {access_token}"},
-    json={"writes": [{"type": "project_admin", "user": "oidc~cfb55bf6-fcbb-4a1e-bfec-30c6649b52f8"}]},
-)
-response.raise_for_status()
-
-# Check the users, should have a result
-
-response = requests.get(
-    url=f"{MANAGEMENT_URL}/v1/user",
-    headers={"Authorization": f"Bearer {access_token}"},
-)
-response.raise_for_status()
-print(response.json())
-
 # Create a warehouse
-
 response = requests.post(
     url=f"{MANAGEMENT_URL}/v1/warehouse",
     headers={"Authorization": f"Bearer {access_token}"},
@@ -110,7 +78,6 @@ response.raise_for_status()
 print(response.json())
 
 # Populate the warehouse with Spark
-
 conf = {
     "spark.jars.packages": f"org.apache.iceberg:iceberg-spark-runtime-{SPARK_MINOR_VERSION}_2.12:{ICEBERG_VERSION},org.apache.iceberg:iceberg-aws-bundle:{ICEBERG_VERSION}",
     "spark.sql.extensions": "org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions",
