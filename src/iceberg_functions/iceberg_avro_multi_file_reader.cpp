@@ -20,6 +20,7 @@ shared_ptr<MultiFileList> IcebergAvroMultiFileReader::CreateFileList(ClientConte
 		open_files.emplace_back(path);
 		open_files.back().extended_info = make_uniq<ExtendedOpenFileInfo>();
 		open_files.back().extended_info->options["validate_external_file_cache"] = Value::BOOLEAN(false);
+		open_files.back().extended_info->options["direct_complete_download"] = Value::BOOLEAN(true);
 	}
 	auto res = make_uniq<SimpleMultiFileList>(std::move(open_files));
 	return std::move(res);
