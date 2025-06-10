@@ -5,7 +5,7 @@
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/common/exception/http_exception.hpp"
 
-#ifdef WASM_LOADABLE_EXTENSIONS
+#ifdef EMSCRIPTEN
 #else
 #include <aws/core/Aws.h>
 #include <aws/core/auth/AWSCredentials.h>
@@ -17,7 +17,7 @@
 
 namespace duckdb {
 
-#ifdef WASM_LOADABLE_EXTENSIONS
+#ifdef EMSCRIPTEN
 
 string AWSInput::GetRequest(ClientContext &context) {
 	throw NotImplementedException("GET on WASM not implemented yet");
