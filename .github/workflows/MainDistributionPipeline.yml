@@ -38,7 +38,7 @@ jobs:
     name: Code Quality Check
     uses: duckdb/extension-ci-tools/.github/workflows/_extension_code_quality.yml@main
     with:
-      duckdb_version: main
-      ci_tools_version: main
-      extension_name: quack
+      duckdb_version: v1.3.0
+      ci_tools_version: v1.3.0
+      extension_name: iceberg
       format_checks: 'format;tidy'
