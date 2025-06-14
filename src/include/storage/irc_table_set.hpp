@@ -2,11 +2,13 @@
 #pragma once
 
 #include "storage/irc_table_entry.hpp"
+#include "storage/iceberg_transaction_data.hpp"
 
 namespace duckdb {
 struct CreateTableInfo;
 class ICResult;
 class IRCSchemaEntry;
+class IRCTransaction;
 
 struct IRCAPITableCredentials {
 	unique_ptr<CreateSecretInput> config;
@@ -21,6 +23,9 @@ public:
 	optional_ptr<CatalogEntry> GetSchemaVersion(optional_ptr<BoundAtClause> at);
 	optional_ptr<CatalogEntry> CreateSchemaVersion(IcebergTableSchema &table_schema);
 	IRCAPITableCredentials GetVendedCredentials(ClientContext &context);
+	const string &BaseFilePath() const;
+
+	void AddSnapshot(IRCTransaction &transaction, vector<IcebergManifestEntry> &&data_files);
 
 public:
 	IRCatalog &catalog;
@@ -31,6 +36,9 @@ public:
 	rest_api_objects::LoadTableResult load_table_result;
 	IcebergTableMetadata table_metadata;
 	unordered_map<int32_t, unique_ptr<ICTableEntry>> schema_versions;
+
+public:
+	unique_ptr<IcebergTransactionData> transaction_data;
 };
 
 class ICTableSet {

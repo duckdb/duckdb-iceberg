@@ -14,6 +14,7 @@
 #include "duckdb/parser/constraints/list.hpp"
 #include "storage/irc_schema_entry.hpp"
 #include "duckdb/parser/parser.hpp"
+#include "storage/irc_transaction.hpp"
 
 #include "storage/authorization/sigv4.hpp"
 #include "storage/authorization/oauth2.hpp"
@@ -23,6 +24,15 @@ namespace duckdb {
 IcebergTableInformation::IcebergTableInformation(IRCatalog &catalog, IRCSchemaEntry &schema, const string &name)
     : catalog(catalog), schema(schema), name(name) {
 	table_id = "uuid-" + schema.name + "-" + name;
+}
+
+void IcebergTableInformation::AddSnapshot(IRCTransaction &transaction, vector<IcebergManifestEntry> &&data_files) {
+	if (!transaction_data) {
+		auto context = transaction.context.lock();
+		transaction_data = make_uniq<IcebergTransactionData>(*context, *this);
+	}
+
+	transaction_data->AddSnapshot(IcebergSnapshotOperationType::APPEND, std::move(data_files));
 }
 
 static void ParseConfigOptions(const case_insensitive_map_t<string> &config, case_insensitive_map_t<Value> &options) {
@@ -78,6 +88,10 @@ static void ParseConfigOptions(const case_insensitive_map_t<string> &config, cas
 		endpoint = endpoint.substr(0, endpoint.size() - 1);
 	}
 	endpoint_it->second = endpoint;
+}
+
+const string &IcebergTableInformation::BaseFilePath() const {
+	return load_table_result.metadata.location;
 }
 
 IRCAPITableCredentials IcebergTableInformation::GetVendedCredentials(ClientContext &context) {

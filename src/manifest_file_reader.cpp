@@ -37,7 +37,7 @@ idx_t ManifestFileReader::Read(idx_t count, vector<IcebergManifestEntry> &result
 
 void ManifestFileReader::CreateVectorMapping(idx_t column_id, MultiFileColumnDefinition &column) {
 	if (column.identifier.IsNull()) {
-		throw InvalidConfigurationException("Column '%s' of the manifest list is missing a field_id!", column.name);
+		throw InvalidConfigurationException("Column '%s' of the manifest file is missing a field_id!", column.name);
 	}
 	D_ASSERT(column.identifier.type().id() == LogicalTypeId::INTEGER);
 

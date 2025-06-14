@@ -1,4 +1,5 @@
 #include "storage/irc_schema_entry.hpp"
+#include "storage/irc_table_entry.hpp"
 #include "storage/irc_transaction.hpp"
 #include "catalog_api.hpp"
 #include "catalog_utils.hpp"
@@ -70,10 +71,6 @@ void IRCatalog::DropSchema(ClientContext &context, DropInfo &info) {
 	throw NotImplementedException("IRCatalog::DropSchema not implemented");
 }
 
-PhysicalOperator &IRCatalog::PlanInsert(ClientContext &context, PhysicalPlanGenerator &planner, LogicalInsert &op,
-                                        optional_ptr<PhysicalOperator> plan) {
-	throw NotImplementedException("IRCatalog PlanInsert");
-}
 PhysicalOperator &IRCatalog::PlanCreateTableAs(ClientContext &context, PhysicalPlanGenerator &planner,
                                                LogicalCreateTable &op, PhysicalOperator &plan) {
 	throw NotImplementedException("IRCatalog PlanCreateTableAs");

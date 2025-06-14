@@ -14,10 +14,13 @@ set(EXTENSION_SOURCES
     src/iceberg_extension.cpp
     src/iceberg_functions.cpp
     src/iceberg_manifest.cpp
+    src/iceberg_manifest_list.cpp
+    src/avro_scan.cpp
     src/iceberg_snapshot_lookup.cpp
     src/catalog_api.cpp
     src/iceberg_logging.cpp
     src/catalog_utils.cpp
+    src/storage/iceberg_insert.cpp
     src/aws.cpp
     src/base_manifest_reader.cpp
     src/manifest_list_reader.cpp
@@ -44,6 +47,7 @@ set(EXTENSION_SOURCES
     src/storage/authorization/sigv4.cpp
     src/storage/authorization/none.cpp
     src/storage/authorization/oauth2.cpp
+    src/storage/iceberg_transaction_data.cpp
     src/storage/irc_authorization.cpp
     src/storage/irc_catalog.cpp
     src/storage/irc_schema_entry.cpp
@@ -52,7 +56,9 @@ set(EXTENSION_SOURCES
     src/storage/irc_table_set.cpp
     src/storage/irc_transaction.cpp
     src/storage/irc_authorization.cpp
-    src/storage/irc_transaction_manager.cpp)
+    src/storage/irc_transaction_manager.cpp
+    src/storage/table_update/iceberg_add_snapshot.cpp
+)
 
 add_subdirectory(src/rest_catalog/objects)
 

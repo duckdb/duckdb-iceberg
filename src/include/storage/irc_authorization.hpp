@@ -30,6 +30,8 @@ public:
 
 public:
 	virtual unique_ptr<HTTPResponse> GetRequest(ClientContext &context, const IRCEndpointBuilder &endpoint_builder) = 0;
+	virtual unique_ptr<HTTPResponse> PostRequest(ClientContext &context, const IRCEndpointBuilder &endpoint_builder,
+	                                             const string &body) = 0;
 
 public:
 	template <class TARGET>

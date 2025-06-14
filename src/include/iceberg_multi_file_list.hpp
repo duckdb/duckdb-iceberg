@@ -101,6 +101,8 @@ public:
 	static string ToDuckDBPath(const string &raw_path);
 	string GetPath() const;
 	const IcebergTableMetadata &GetMetadata() const;
+	bool HasTransactionData() const;
+	const IcebergTransactionData &GetTransactionData() const;
 	optional_ptr<IcebergSnapshot> GetSnapshot() const;
 	const IcebergTableSchema &GetSchema() const;
 
@@ -168,6 +170,7 @@ public:
 	//! The data files of the manifest file that we last scanned
 	idx_t data_file_idx = 0;
 	vector<IcebergManifestEntry> current_data_files;
+	idx_t transaction_data_idx = 0;
 
 	//! For each file that has a delete file, the state for processing that/those delete file(s)
 	mutable case_insensitive_map_t<unique_ptr<IcebergPositionalDeleteData>> positional_delete_data;

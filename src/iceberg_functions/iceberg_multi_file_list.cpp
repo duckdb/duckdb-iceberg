@@ -7,8 +7,8 @@
 #include "duckdb/catalog/catalog_entry/table_function_catalog_entry.hpp"
 #include "duckdb/common/exception.hpp"
 #include "duckdb/execution/execution_context.hpp"
-#include "duckdb/main/extension_util.hpp"
 #include "duckdb/parallel/thread_context.hpp"
+#include "duckdb/main/extension_util.hpp"
 #include "duckdb/parser/tableref/table_function_ref.hpp"
 #include "duckdb/parser/expression/constant_expression.hpp"
 #include "duckdb/planner/expression/bound_comparison_expression.hpp"
@@ -38,6 +38,15 @@ string IcebergMultiFileList::GetPath() const {
 
 const IcebergTableMetadata &IcebergMultiFileList::GetMetadata() const {
 	return scan_info->metadata;
+}
+
+bool IcebergMultiFileList::HasTransactionData() const {
+	return scan_info->transaction_data;
+}
+
+const IcebergTransactionData &IcebergMultiFileList::GetTransactionData() const {
+	D_ASSERT(HasTransactionData());
+	return *scan_info->transaction_data;
 }
 
 optional_ptr<IcebergSnapshot> IcebergMultiFileList::GetSnapshot() const {
@@ -314,27 +323,37 @@ optional_ptr<const IcebergManifestEntry> IcebergMultiFileList::GetDataFile(idx_t
 
 	while (file_id >= data_files.size()) {
 		if (current_data_files.empty() || data_file_idx >= current_data_files.size()) {
+			current_data_files.clear();
 			//! Load the next manifest file
-			if (current_data_manifest == data_manifests.end()) {
+			if (current_data_manifest != data_manifests.end()) {
+				auto &manifest = *current_data_manifest;
+				auto full_path = options.allow_moved_paths ? IcebergUtils::GetFullPath(path, manifest.manifest_path, fs)
+				                                           : manifest.manifest_path;
+				auto scan = make_uniq<AvroScan>("IcebergManifest", context, full_path);
+
+				data_manifest_reader->Initialize(std::move(scan));
+				data_manifest_reader->SetSequenceNumber(manifest.sequence_number);
+				data_manifest_reader->SetPartitionSpecID(manifest.partition_spec_id);
+
+				while (!data_manifest_reader->Finished()) {
+					data_manifest_reader->Read(STANDARD_VECTOR_SIZE, current_data_files);
+				}
+				current_data_manifest++;
+			} else if (HasTransactionData()) {
+				auto &transaction_data = GetTransactionData();
+				if (transaction_data_idx >= transaction_data.alters.size()) {
+					//! Exhausted all the transaction-local data
+					return nullptr;
+				}
+				auto &alter = transaction_data.alters[transaction_data_idx].get();
+				auto &data_files = alter.manifest_file.data_files;
+				current_data_files.insert(current_data_files.end(), data_files.begin(), data_files.end());
+				transaction_data_idx++;
+			} else {
 				//! No more data manifests to explore
 				return nullptr;
 			}
 
-			auto &manifest = *current_data_manifest;
-			auto full_path = options.allow_moved_paths ? IcebergUtils::GetFullPath(path, manifest.manifest_path, fs)
-			                                           : manifest.manifest_path;
-			auto scan = make_uniq<AvroScan>("IcebergManifest", context, full_path);
-
-			data_manifest_reader->Initialize(std::move(scan));
-			data_manifest_reader->SetSequenceNumber(manifest.sequence_number);
-			data_manifest_reader->SetPartitionSpecID(manifest.partition_spec_id);
-
-			current_data_files.clear();
-			while (!data_manifest_reader->Finished()) {
-				data_manifest_reader->Read(STANDARD_VECTOR_SIZE, current_data_files);
-			}
-
-			current_data_manifest++;
 			data_file_idx = 0;
 		}
 
@@ -367,10 +386,6 @@ OpenFileInfo IcebergMultiFileList::GetFile(idx_t file_id) {
 	lock_guard<mutex> guard(lock);
 	if (!initialized) {
 		InitializeFiles(guard);
-	}
-
-	if (!scan_info->snapshot) {
-		return OpenFileInfo();
 	}
 
 	auto found_data_file = GetDataFile(file_id);

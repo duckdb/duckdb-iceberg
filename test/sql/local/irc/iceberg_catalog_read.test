@@ -111,11 +111,6 @@ delete from my_datalake.default.table_unpartitioned where number < 5;
 <REGEX>:.*Not implemented Error.*
 
 statement error
-insert into my_datalake.default.table_unpartitioned values ('2023-03-13', 13, 'm');
-----
-<REGEX>:.*Not implemented Error.*
-
-statement error
 Create table my_datalake.default.new_table (a int, b varchar);
 ----
 <REGEX>:.*Not implemented Error.*

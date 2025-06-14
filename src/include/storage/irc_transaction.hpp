@@ -9,8 +9,6 @@ class IRCatalog;
 class IRCSchemaEntry;
 class ICTableEntry;
 
-enum class IRCTransactionState { TRANSACTION_NOT_YET_STARTED, TRANSACTION_STARTED, TRANSACTION_FINISHED };
-
 class IRCTransaction : public Transaction {
 public:
 	IRCTransaction(IRCatalog &ic_catalog, TransactionManager &manager, ClientContext &context);
@@ -27,13 +25,20 @@ public:
 	IRCSchemaSet &GetSchemas() {
 		return schemas;
 	}
+	void MarkTableAsDirty(const ICTableEntry &table);
+
+private:
+	void CleanupFiles();
+
+private:
+	DatabaseInstance &db;
+	IRCatalog &catalog;
+	AccessMode access_mode;
 
 public:
 	IRCSchemaSet schemas;
-
-private:
-	IRCTransactionState transaction_state;
-	AccessMode access_mode;
+	//! Tables marked dirty in this transaction, to be rewritten on commit
+	unordered_set<const ICTableEntry *> dirty_tables;
 };
 
 } // namespace duckdb

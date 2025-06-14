@@ -81,6 +81,14 @@ unique_ptr<HTTPResponse> OAuth2Authorization::GetRequest(ClientContext &context,
 	return APIUtils::GetRequest(context, endpoint_builder, token);
 }
 
+unique_ptr<HTTPResponse> OAuth2Authorization::PostRequest(ClientContext &context,
+                                                          const IRCEndpointBuilder &endpoint_builder,
+                                                          const string &body) {
+	auto url = endpoint_builder.GetURL();
+	unordered_map<string, string> empty_headers;
+	return APIUtils::PostRequest(context, url, body, empty_headers, "json", token);
+}
+
 unique_ptr<OAuth2Authorization> OAuth2Authorization::FromAttachOptions(ClientContext &context,
                                                                        IcebergAttachOptions &input) {
 	auto result = make_uniq<OAuth2Authorization>();

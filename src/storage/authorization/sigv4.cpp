@@ -63,6 +63,12 @@ static string GetAwsService(const string &host) {
 	return host.substr(0, host.find_first_of('.'));
 }
 
+unique_ptr<HTTPResponse> SIGV4Authorization::PostRequest(ClientContext &context,
+                                                         const IRCEndpointBuilder &endpoint_builder,
+                                                         const string &body) {
+	throw NotImplementedException("POST request for SIGV4 Authorization");
+}
+
 unique_ptr<HTTPResponse> SIGV4Authorization::GetRequest(ClientContext &context,
                                                         const IRCEndpointBuilder &endpoint_builder) {
 	AWSInput aws_input;
