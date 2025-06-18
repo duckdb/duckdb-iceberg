@@ -52,7 +52,7 @@ static void LoadInternal(DatabaseInstance &instance) {
 
 	// Iceberg Table Functions
 	for (auto &fun : IcebergFunctions::GetTableFunctions(instance)) {
-		ExtensionUtil::RegisterFunction(instance, fun);
+		ExtensionUtil::RegisterFunction(instance, std::move(fun));
 	}
 
 	// Iceberg Scalar Functions
