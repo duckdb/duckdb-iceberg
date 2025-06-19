@@ -134,6 +134,7 @@ public:
 protected:
 	//! Get the i-th expanded file
 	OpenFileInfo GetFile(idx_t i) override;
+	OpenFileInfo GetFileInternal(idx_t i, lock_guard<mutex> &guard);
 
 protected:
 	bool ManifestMatchesFilter(const IcebergManifest &manifest);
@@ -141,7 +142,8 @@ protected:
 	// TODO: How to guarantee we only call this after the filter pushdown?
 	void InitializeFiles(lock_guard<mutex> &guard);
 
-	optional_ptr<const IcebergManifestEntry> GetDataFile(idx_t file_id);
+	//! NOTE: this requires the lock because it modifies the 'data_files' vector, potentially invalidating references
+	optional_ptr<const IcebergManifestEntry> GetDataFile(idx_t file_id, lock_guard<mutex> &guard);
 
 public:
 	ClientContext &context;

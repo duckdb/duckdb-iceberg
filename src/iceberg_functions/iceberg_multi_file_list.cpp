@@ -174,15 +174,18 @@ unique_ptr<MultiFileList> IcebergMultiFileList::ComplexFilterPushdown(ClientCont
 
 vector<OpenFileInfo> IcebergMultiFileList::GetAllFiles() {
 	vector<OpenFileInfo> file_list;
+	//! Lock is required because it reads the 'data_files' vector
+	lock_guard<mutex> guard(lock);
 	for (idx_t i = 0; i < data_files.size(); i++) {
-		file_list.push_back(GetFile(i));
+		file_list.push_back(GetFileInternal(i, guard));
 	}
 	return file_list;
 }
 
 FileExpandResult IcebergMultiFileList::GetExpandResult() {
-	// GetFile(1) will ensure files with index 0 and index 1 are expanded if they are available
-	GetFile(1);
+	// GetFileInternal(1) will ensure files with index 0 and index 1 are expanded if they are available
+	lock_guard<mutex> guard(lock);
+	GetFileInternal(1, guard);
 
 	if (data_files.size() > 1) {
 		return FileExpandResult::MULTIPLE_FILES;
@@ -196,8 +199,10 @@ FileExpandResult IcebergMultiFileList::GetExpandResult() {
 idx_t IcebergMultiFileList::GetTotalFileCount() {
 	// FIXME: the 'added_files_count' + the 'existing_files_count'
 	// in the Manifest List should give us this information without scanning the manifest list
+	lock_guard<mutex> guard(lock);
+
 	idx_t i = data_files.size();
-	while (!GetFile(i).path.empty()) {
+	while (!GetFileInternal(i, guard).path.empty()) {
 		i++;
 	}
 	return data_files.size();
@@ -306,7 +311,7 @@ bool IcebergMultiFileList::FileMatchesFilter(const IcebergManifestEntry &file) {
 	return true;
 }
 
-optional_ptr<const IcebergManifestEntry> IcebergMultiFileList::GetDataFile(idx_t file_id) {
+optional_ptr<const IcebergManifestEntry> IcebergMultiFileList::GetDataFile(idx_t file_id, lock_guard<mutex> &guard) {
 	if (file_id < data_files.size()) {
 		//! Have we already scanned this data file and returned it? If so, return it
 		return data_files[file_id];
@@ -363,8 +368,8 @@ optional_ptr<const IcebergManifestEntry> IcebergMultiFileList::GetDataFile(idx_t
 	return data_files[file_id];
 }
 
-OpenFileInfo IcebergMultiFileList::GetFile(idx_t file_id) {
-	lock_guard<mutex> guard(lock);
+OpenFileInfo IcebergMultiFileList::GetFileInternal(idx_t file_id, lock_guard<mutex> &guard) {
+
 	if (!initialized) {
 		InitializeFiles(guard);
 	}
@@ -373,12 +378,12 @@ OpenFileInfo IcebergMultiFileList::GetFile(idx_t file_id) {
 		return OpenFileInfo();
 	}
 
-	auto found_data_file = GetDataFile(file_id);
+	auto found_data_file = GetDataFile(file_id, guard);
 	if (!found_data_file) {
 		return OpenFileInfo();
 	}
 
-	const auto &data_file = data_files[file_id];
+	const auto &data_file = *found_data_file;
 	const auto &path = data_file.file_path;
 
 	if (!StringUtil::CIEquals(data_file.file_format, "parquet")) {
@@ -402,6 +407,11 @@ OpenFileInfo IcebergMultiFileList::GetFile(idx_t file_id) {
 	extended_info->options["last_modified"] = Value::TIMESTAMP(timestamp_t(0));
 	res.extended_info = extended_info;
 	return res;
+}
+
+OpenFileInfo IcebergMultiFileList::GetFile(idx_t file_id) {
+	lock_guard<mutex> guard(lock);
+	return GetFileInternal(file_id, guard);
 }
 
 bool IcebergMultiFileList::ManifestMatchesFilter(const IcebergManifest &manifest) {
@@ -531,6 +541,8 @@ void IcebergMultiFileList::ProcessDeletes(const vector<MultiFileColumnDefinition
 
 	// From the spec: "At most one deletion vector is allowed per data file in a snapshot"
 
+	//! NOTE: The lock is required because we're reading from the 'data_files' vector
+	lock_guard<mutex> guard(lock);
 	auto iceberg_path = GetPath();
 	auto &fs = FileSystem::GetFileSystem(context);
 
