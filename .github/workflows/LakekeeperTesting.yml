@@ -14,7 +14,6 @@ jobs:
   rest:
     name: Test against Lakekeeper Catalog
     runs-on: ubuntu-latest
-    if: false # disabled until lakekeeper setup process is more stable
     env:
       VCPKG_TARGET_TRIPLET: 'x64-linux-release'
       GEN: ninja
@@ -79,10 +78,6 @@ jobs:
 
       - name: Set up for Lakekeeper
         run: |
-          # install java
-          # TODO: need a newer java version maybe?
-          sudo apt install -y -qq openjdk-21-jre-headless
-          sudo apt install -y -qq openjdk-21-jdk-headless
           sudo apt-get install -y -qq python3-venv
           git clone https://github.com/lakekeeper/lakekeeper.git lakekeeper
 
@@ -137,43 +132,6 @@ jobs:
           done
           echo "PostgreSQL is healthy"
 
-      - name: Run OpenFGA DB migrations
-        run: |
-          docker run --rm \
-            --network="host" \
-            -e OPENFGA_DATASTORE_ENGINE=postgres \
-            -e OPENFGA_DATASTORE_URI="postgres://postgres:postgres@localhost:5433/postgres?sslmode=disable" \
-            openfga/openfga:v1.8 migrate
-
-      - name: Start OpenFGA
-        run: |
-          docker run -d \
-            --name openfga \
-            -p 8081:8081 \
-            -e OPENFGA_DATASTORE_ENGINE=postgres \
-            -e OPENFGA_DATASTORE_URI="postgres://postgres:postgres@localhost:5433/postgres?sslmode=disable" \
-            -e OPENFGA_AUTHN_METHOD=oidc \
-            -e OPENFGA_AUTHN_OIDC_ISSUER=http://localhost:30080/realms/iceberg \
-            -e OPENFGA_AUTHN_OIDC_AUDIENCE=openfga \
-            -e OPENFGA_HTTP_TLS_ENABLED=false \
-            --network="host" \
-            openfga/openfga:v1.8 run --playground-enabled=false
-
-      - name: Wait for OpenFGA
-        run: |
-          max_attempts=30
-          attempt=1
-          while ! curl -sf http://localhost:8080/healthz; do
-            if [ $attempt -gt $max_attempts ]; then
-              echo "OpenFGA failed to initialize after $max_attempts attempts"
-              exit 1
-            fi
-            echo "Waiting for OpenFGA to initialize (attempt $attempt/$max_attempts)..."
-            sleep 5
-            attempt=$((attempt + 1))
-          done
-          echo "OpenFGA is healthy"
-
       - name: Start Minio
         run: |
           docker run -d \
@@ -216,11 +174,6 @@ jobs:
             -e LAKEKEEPER__PG_ENCRYPTION_KEY=This-is-NOT-Secure! \
             -e LAKEKEEPER__PG_DATABASE_URL_READ=postgresql://postgres:postgres@localhost:5433/postgres?sslmode=disable \
             -e LAKEKEEPER__PG_DATABASE_URL_WRITE=postgresql://postgres:postgres@localhost:5433/postgres?sslmode=disable \
-            -e LAKEKEEPER__AUTHZ_BACKEND=openfga \
-            -e LAKEKEEPER__OPENFGA__ENDPOINT=http://localhost:8081 \
-            -e LAKEKEEPER__OPENFGA__CLIENT_ID=openfga \
-            -e LAKEKEEPER__OPENFGA__CLIENT_SECRET=xqE1vUrifVDKAZdLuz6JAnDxMYLdGu5z \
-            -e LAKEKEEPER__OPENFGA__TOKEN_ENDPOINT=http://localhost:30080/realms/iceberg/protocol/openid-connect/token \
             -e RUST_LOG=info,iceberg-catalog=info,middle=trace \
             quay.io/lakekeeper/catalog:latest-main migrate
 
@@ -236,9 +189,6 @@ jobs:
             -e LAKEKEEPER__OPENFGA__ENDPOINT=http://localhost:8081 \
             -e LAKEKEEPER__OPENID_PROVIDER_URI=http://localhost:30080/realms/iceberg \
             -e LAKEKEEPER__OPENID_AUDIENCE=lakekeeper \
-            -e LAKEKEEPER__OPENFGA__CLIENT_ID=openfga \
-            -e LAKEKEEPER__OPENFGA__CLIENT_SECRET=xqE1vUrifVDKAZdLuz6JAnDxMYLdGu5z \
-            -e LAKEKEEPER__OPENFGA__TOKEN_ENDPOINT=http://localhost:30080/realms/iceberg/protocol/openid-connect/token \
             -e LAKEKEEPER__METRICS_PORT=9002 \
             quay.io/lakekeeper/catalog serve
 
@@ -246,7 +196,7 @@ jobs:
         run: |
           max_attempts=30
           attempt=1
-          while ! docker exec lakekeeper /home/nonroot/iceberg-catalog healthcheck; do
+          while ! docker exec lakekeeper /home/nonroot/lakekeeper healthcheck; do
             if [ $attempt -gt $max_attempts ]; then
               echo "Lakekeeper failed to initialize after $max_attempts attempts"
               exit 1
@@ -278,4 +228,3 @@ jobs:
         run: |
           ./build/release/test/unittest "$PWD/test/*" --list-test-names-only || true
           ./build/release/test/unittest "$PWD/test/*"
-
