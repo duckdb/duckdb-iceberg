@@ -21,7 +21,15 @@ string IcebergUtils::FileToString(const string &path, FileSystem &fs) {
 	auto handle = fs.OpenFile(path, FileFlags::FILE_FLAGS_READ);
 	auto file_size = handle->GetFileSize();
 	string ret_val(file_size, ' ');
-	handle->Read((char *)ret_val.c_str(), file_size);
+	// We need to iterate, given Read() might return less bytes than expected
+	int64_t bytes_read = 0;
+	while (bytes_read < file_size) {
+		int64_t r = handle->Read((char *)ret_val.c_str() + bytes_read, file_size - bytes_read);
+		if (r == 0) {
+			throw IOException("Could not Read all bytes from the file");
+		}
+		bytes_read += r;
+	}
 	return ret_val;
 }
 
