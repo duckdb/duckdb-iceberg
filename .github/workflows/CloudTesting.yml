@@ -49,7 +49,7 @@ jobs:
 
       - name: install python packages
         run: |
-          python3 -m pip install scripts/requirements.txt
+          python3 -m pip install -r scripts/requirements.txt
 
       - name: Set up cloud testing
         env:
@@ -72,6 +72,8 @@ jobs:
 
       - name: File issue if error
         if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           echo "Cloud tests failed. see [Run Link](https://github.com/duckdblabs/duckdb-internal/actions/runs/${{ github.run_id }})" > report.txt
           gh issue create --repo duckdb/duckdb-iceberg --title "Cloud Test Failures" --body-file report.txt
