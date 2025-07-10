@@ -170,3 +170,4 @@ select * from my_datalake.test_inserts.basic_insert_test;
 15	mr.scroog	bitlane	2010-06-11
 16	mr.Goose	ponder	2010-06-11
 17	ms.Swan	lakeway	2010-06-11
+

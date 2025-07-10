@@ -1,0 +1,70 @@
+# name: test/sql/cloud/s3tables/test_create_table_s3tables.test
+# description: test integration with iceberg catalog read
+# group: [s3tables]
+
+require-env ICEBERG_AWS_REMOTE_AVAILABLE
+
+require-env ICEBERG_REMOTE_CREATE_READY
+
+require-env AWS_ACCESS_KEY_ID
+
+require-env AWS_SECRET_ACCESS_KEY
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+require aws
+
+statement ok
+CREATE SECRET (
+    TYPE S3,
+    PROVIDER credential_chain
+);e
+
+statement ok
+attach 'arn:aws:s3tables:us-east-2:840140254803:bucket/iceberg-testing' as s3_catalog (
+    TYPE ICEBERG,
+    ENDPOINT_TYPE S3_TABLES
+);
+
+# statement ok
+# create table s3_catalog.tpch_sf1.create_table_test_27  as select range a from range(30, 50);
+
+statement ok
+insert into s3_catalog.tpch_sf1.create_table_test_27 select range a from range(50, 70);
+
+# query I
+# select * from s3_catalog.tpch_sf1.create_table_test_27 order by all limit 5;
+# ----
+# 30
+# 31
+# 32
+# 33
+# 34
+
+mode skip
+
+statement ok
+CREATE SECRET (
+  TYPE S3,
+  PROVIDER credential_chain
+);
+
+
+statement ok
+attach 'arn:aws:s3tables:us-east-2:840140254803:bucket/iceberg-testing' as my_datalake (
+    TYPE ICEBERG,
+    ENDPOINT_TYPE 'S3_TABLES'
+);
+
+# statement ok
+# select * from my_datalake.tpch_sf1.create_table_test_3;
+
+
+statement ok
+create table my_datalake.tpch_sf1.create_table_test_9 as select range a from range(10);

@@ -1,0 +1,180 @@
+# name: test/sql/local/irc/create/test_create_table_as.test
+# description: test create table as
+# group: [create]
+
+require-env ICEBERG_SERVER_AVAILABLE
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+pragma enable_logging('HTTP');
+
+statement ok
+set logging_level='debug'
+
+statement ok
+CREATE SECRET (
+    TYPE S3,
+    KEY_ID 'admin',
+    SECRET 'password',
+    ENDPOINT '127.0.0.1:9000',
+    URL_STYLE 'path',
+    USE_SSL 0
+);
+
+
+statement ok
+ATTACH '' AS my_datalake (
+    TYPE ICEBERG,
+    CLIENT_ID 'admin',
+    CLIENT_SECRET 'password',
+    ENDPOINT 'http://127.0.0.1:8181'
+);
+
+
+statement ok
+use my_datalake.default;
+
+# create primitive type table from test all types
+statement ok
+create table all_types_table_primitives_2 as select
+bool,
+tinyint,
+smallint,
+int,
+bigint,
+utinyint,
+usmallint,
+uint,
+date,
+time,
+timestamp,
+timestamp_tz,
+float,
+double,
+dec_4_1,
+dec_9_4,
+dec_18_6,
+dec38_10,
+uuid,
+varchar,
+blob from test_all_types();
+
+query T nosort res_1
+select * from all_types_table_primitives_2;
+----
+
+query T nosort res_1
+select
+bool,
+tinyint,
+smallint,
+int,
+bigint,
+utinyint,
+usmallint,
+uint,
+date,
+time,
+timestamp,
+timestamp_tz,
+float,
+double,
+dec_4_1,
+dec_9_4,
+dec_18_6,
+dec38_10,
+uuid,
+varchar,
+blob from test_all_types();
+----
+
+# create nested types table from test all types
+statement ok
+create table nested_types_2 as select
+int_array,
+double_array,
+date_array,
+timestamp_array,
+timestamptz_array,
+varchar_array,
+nested_int_array,
+struct,
+struct_of_arrays,
+array_of_structs,
+map from test_all_types();
+
+query T nosort res2
+select * from nested_types_2;
+----
+
+query T nosort res2
+select int_array,
+double_array,
+date_array,
+timestamp_array,
+timestamptz_array,
+varchar_array,
+nested_int_array,
+struct,
+struct_of_arrays,
+array_of_structs,
+map from test_all_types();
+----
+
+# fixed length array types will be supported later
+# They can be supported if cast to list
+statement error
+create table fixed_array_table as select
+fixed_int_array,
+fixed_varchar_array,
+fixed_nested_int_array,
+fixed_nested_varchar_array,
+fixed_struct_array,
+struct_of_fixed_array,
+list_of_fixed_int_array from test_all_types();
+----
+<REGEX>:.*Please cast to LIST.*
+
+# casting to list works
+statement ok
+create table fixed_array_table_as_list as select
+fixed_int_array::INTEGER[] fixed_int_array,
+fixed_varchar_array::VARCHAR[] fixed_varchar_array,
+fixed_nested_int_array::INTEGER[][] fixed_nested_int_array,
+fixed_nested_varchar_array::VARCHAR[] fixed_nested_varchar_array,
+fixed_struct_array::STRUCT(a VARCHAR, b VARCHAR)[] fixed_struct_array,
+struct_of_fixed_array::STRUCT(a VARCHAR, b VARCHAR[]) struct_of_fixed_array,
+list_of_fixed_int_array::INTEGER[][] list_of_fixed_int_array,
+fixed_array_of_int_list::INTEGER[][] fixed_array_of_int_list from test_all_types();
+
+query T nosort res3
+select
+fixed_int_array::INTEGER[] fixed_int_array,
+fixed_varchar_array::VARCHAR[] fixed_varchar_array,
+fixed_nested_int_array::INTEGER[][] fixed_nested_int_array,
+fixed_nested_varchar_array::VARCHAR[] fixed_nested_varchar_array,
+fixed_struct_array::STRUCT(a VARCHAR, b VARCHAR)[] fixed_struct_array,
+struct_of_fixed_array::STRUCT(a VARCHAR, b VARCHAR[]) struct_of_fixed_array,
+list_of_fixed_int_array::INTEGER[][] list_of_fixed_int_array,
+fixed_array_of_int_list::INTEGER[][] from test_all_types();
+----
+
+query T nosort res3
+select * from fixed_array_table_as_list;
+----
+
+statement error
+create table bit_table as select bit from test_all_types();
+----
+not supported in Iceberg
+

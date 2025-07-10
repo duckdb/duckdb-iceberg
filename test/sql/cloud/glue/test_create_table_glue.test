@@ -1,0 +1,40 @@
+# name: test/sql/cloud/glue/test_create_table_glue.test
+# description: test createing a table in glue
+# group: [glue]
+
+require-env ICEBERG_AWS_REMOTE_AVAILABLE
+
+require-env ICEBERG_REMOTE_CREATE_READY
+
+require-env AWS_ACCESS_KEY_ID
+
+require-env AWS_SECRET_ACCESS_KEY
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+require aws
+
+statement ok
+CREATE SECRET glue_secret (
+    TYPE S3,
+    PROVIDER credential_chain,
+    CHAIN 'sts',
+    ASSUME_ROLE_ARN 'arn:aws:iam::840140254803:role/pyiceberg-etl-role',
+    REGION 'us-east-1'
+);
+
+statement ok
+attach '840140254803:s3tablescatalog/duckdblabs-iceberg-testing' as my_datalake (
+    TYPE ICEBERG,
+    ENDPOINT_TYPE 'GLUE'
+);
+
+
+statement ok
+create table t1 as

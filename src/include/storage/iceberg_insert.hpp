@@ -11,8 +11,22 @@
 #include "duckdb/execution/operator/persistent/physical_copy_to_file.hpp"
 #include "duckdb/execution/physical_operator.hpp"
 #include "duckdb/common/index_vector.hpp"
+#include "storage/irc_table_entry.hpp"
+#include "storage/irc_schema_entry.hpp"
 
 namespace duckdb {
+
+struct IcebergCopyInput {
+	explicit IcebergCopyInput(ClientContext &context, ICTableEntry &table);
+	IcebergCopyInput(ClientContext &context, IRCSchemaEntry &schema, const ColumnList &columns,
+	                 const string &data_path_p);
+
+	IRCatalog &catalog;
+	const ColumnList &columns;
+	string data_path;
+	//! Set of (key, value) options
+	case_insensitive_map_t<vector<Value>> options;
+};
 
 class IcebergInsert : public PhysicalOperator {
 public:
@@ -46,6 +60,8 @@ public:
 	SinkFinalizeType Finalize(Pipeline &pipeline, Event &event, ClientContext &context,
 	                          OperatorSinkFinalizeInput &input) const override;
 	unique_ptr<GlobalSinkState> GetGlobalSinkState(ClientContext &context) const override;
+	static PhysicalOperator &PlanCopyForInsert(ClientContext &context, PhysicalPlanGenerator &planner,
+	                                           IcebergCopyInput &copy_input, optional_ptr<PhysicalOperator> plan);
 
 	bool IsSink() const override {
 		return true;

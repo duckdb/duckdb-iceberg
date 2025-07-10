@@ -26,6 +26,13 @@ public:
 		return schemas;
 	}
 	void MarkTableAsDirty(const ICTableEntry &table);
+	void MarkTableAsNew(const ICTableEntry &table);
+	IRCatalog &GetCatalog();
+	// stage create = false, table is created immediately in the IRC
+	// stage create = true, table is not created, but metadata is initialized and returned
+	//     To commit table, call CommitNewTable again with stage_create = true
+	rest_api_objects::LoadTableResult CommitNewTable(ClientContext &context, const ICTableEntry *table,
+	                                                 bool stage_create = false);
 	void DropSecrets(ClientContext &context);
 	rest_api_objects::CommitTransactionRequest GetTransactionRequest(ClientContext &context);
 
@@ -41,6 +48,7 @@ public:
 	IRCSchemaSet schemas;
 	//! Tables marked dirty in this transaction, to be rewritten on commit
 	unordered_set<const ICTableEntry *> dirty_tables;
+	unordered_set<const ICTableEntry *> new_tables;
 	case_insensitive_set_t created_secrets;
 };
 

@@ -110,10 +110,6 @@ delete from my_datalake.default.table_unpartitioned where number < 5;
 ----
 <REGEX>:.*Not implemented Error.*
 
-statement error
-Create table my_datalake.default.new_table (a int, b varchar);
-----
-<REGEX>:.*Not implemented Error.*
 
 statement error
 Alter table my_datalake.default.table_more_deletes add column new_column INTEGER default 10;

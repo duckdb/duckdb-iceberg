@@ -9,6 +9,11 @@ duckdb_extension_load(iceberg
 
 duckdb_extension_load(tpch)
 duckdb_extension_load(icu)
+duckdb_extension_load(ducklake
+        LOAD_TESTS
+        GIT_URL https://github.com/duckdb/ducklake
+        GIT_TAG 9cc2d903c51d360ff3fc6afb10cf38f8eac2e25b
+)
 
 duckdb_extension_load(avro
         LOAD_TESTS

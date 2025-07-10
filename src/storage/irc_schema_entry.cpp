@@ -1,6 +1,9 @@
 #include "storage/irc_schema_entry.hpp"
+
 #include "storage/irc_table_entry.hpp"
 #include "storage/irc_transaction.hpp"
+#include "utils/iceberg_type.hpp"
+#include "duckdb/parser/column_list.hpp"
 #include "duckdb/parser/parsed_data/create_view_info.hpp"
 #include "duckdb/parser/parsed_data/create_index_info.hpp"
 #include "duckdb/planner/parsed_data/bound_create_table_info.hpp"
@@ -27,8 +30,40 @@ IRCTransaction &GetUCTransaction(CatalogTransaction transaction) {
 	return transaction.transaction->Cast<IRCTransaction>();
 }
 
+optional_ptr<CatalogEntry> IRCSchemaEntry::CreateTable(IRCTransaction &irc_transaction, ClientContext &context,
+                                                       BoundCreateTableInfo &info) {
+	auto &base_info = info.Base();
+
+	auto &catalog = irc_transaction.GetCatalog();
+
+	// create a table entry in our local catalog
+
+	// handles posting to IRC catalog if needed.
+	tables.CreateNewEntry(context, catalog, *this, base_info);
+	auto lookup_info = EntryLookupInfo(CatalogType::TABLE_ENTRY, base_info.table);
+	auto entry = tables.GetEntry(context, lookup_info);
+	auto &ic_table = entry->Cast<ICTableEntry>();
+
+	auto initial_schema =
+	    ic_table.table_info.table_metadata.schemas[ic_table.table_info.table_metadata.current_schema_id];
+	auto create_transaction = make_uniq<IcebergCreateTableRequest>(initial_schema, ic_table.table_info.name);
+	if (!ic_table.table_info.transaction_data) {
+		ic_table.table_info.transaction_data = make_uniq<IcebergTransactionData>(context, ic_table.table_info);
+	}
+	ic_table.table_info.transaction_data->create = std::move(create_transaction);
+
+	// get the entry from the catalog.
+	D_ASSERT(entry);
+	D_ASSERT(entry->type == CatalogType::TABLE_ENTRY);
+	irc_transaction.MarkTableAsNew(ic_table);
+
+	return entry;
+}
+
 optional_ptr<CatalogEntry> IRCSchemaEntry::CreateTable(CatalogTransaction transaction, BoundCreateTableInfo &info) {
-	throw NotImplementedException("Create Table");
+	auto &irc_transaction = transaction.transaction->Cast<IRCTransaction>();
+	auto &context = transaction.context;
+	return CreateTable(irc_transaction, *context, info);
 }
 
 void IRCSchemaEntry::DropEntry(ClientContext &context, DropInfo &info) {

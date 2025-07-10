@@ -3,7 +3,9 @@
 
 #include "storage/irc_catalog.hpp"
 #include "storage/irc_table_set.hpp"
+
 #include "storage/irc_transaction.hpp"
+#include "metadata/iceberg_partition_spec.hpp"
 #include "duckdb/parser/constraints/not_null_constraint.hpp"
 #include "duckdb/parser/constraints/unique_constraint.hpp"
 #include "duckdb/parser/expression/constant_expression.hpp"
@@ -262,6 +264,34 @@ void ICTableSet::LoadEntries(ClientContext &context) {
 	for (auto &table : tables) {
 		entries.emplace(table.name, IcebergTableInformation(ic_catalog, schema, table.name));
 	}
+}
+
+void ICTableSet::CreateNewEntry(ClientContext &context, IRCatalog &catalog, IRCSchemaEntry &schema,
+                                CreateTableInfo &info) {
+	auto table_name = info.table;
+	if (entries.find(table_name) != entries.end()) {
+		throw CatalogException("Table %s already exists", table_name.c_str());
+	}
+
+	entries.emplace(table_name, IcebergTableInformation(catalog, schema, info.table));
+	auto &table_info = entries.find(table_name)->second;
+
+	auto table_entry = make_uniq<ICTableEntry>(table_info, catalog, schema, info);
+	auto optional_entry = table_entry.get();
+
+	optional_entry->table_info.schema_versions[0] = std::move(table_entry);
+	optional_entry->table_info.table_metadata.schemas[0] =
+	    IcebergCreateTableRequest::CreateIcebergSchema(optional_entry);
+	optional_entry->table_info.table_metadata.current_schema_id = 0;
+	optional_entry->table_info.table_metadata.schemas[0]->schema_id = 0;
+	auto &irc_transaction = IRCTransaction::Get(context, catalog);
+	// Immediately create the table with stage_create = true to get metadata & data location(s)
+	// transaction commit will either commit with data (OR) create the table with stage_create = false
+	// on abort, hit DELETE endpoint with purge = TRUE?
+	auto load_table_result = irc_transaction.CommitNewTable(context, optional_entry, true);
+	optional_entry->table_info.load_table_result = std::move(load_table_result);
+	optional_entry->table_info.table_metadata =
+	    IcebergTableMetadata::FromTableMetadata(optional_entry->table_info.load_table_result.metadata);
 }
 
 unique_ptr<ICTableInfo> ICTableSet::GetTableInfo(ClientContext &context, IRCSchemaEntry &schema,

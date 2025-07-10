@@ -1,3 +1,4 @@
+#include "duckdb/common/assert.hpp"
 #include "duckdb/parser/parsed_data/create_view_info.hpp"
 #include "duckdb/catalog/catalog_entry/index_catalog_entry.hpp"
 #include "duckdb/catalog/catalog_entry/view_catalog_entry.hpp"
@@ -7,6 +8,7 @@
 #include "storage/irc_catalog.hpp"
 #include "storage/irc_authorization.hpp"
 #include "storage/table_update/iceberg_add_snapshot.hpp"
+#include "storage/table_create/iceberg_create_table_request.hpp"
 #include "catalog_utils.hpp"
 
 namespace duckdb {
@@ -22,7 +24,15 @@ void IRCTransaction::MarkTableAsDirty(const ICTableEntry &table) {
 	dirty_tables.insert(&table);
 }
 
+void IRCTransaction::MarkTableAsNew(const ICTableEntry &table) {
+	new_tables.insert(&table);
+}
+
 void IRCTransaction::Start() {
+}
+
+IRCatalog &IRCTransaction::GetCatalog() {
+	return catalog;
 }
 
 void CommitTableToJSON(yyjson_mut_doc *doc, yyjson_mut_val *root_object,
@@ -140,6 +150,55 @@ static rest_api_objects::TableRequirement CreateAssertRefSnapshotIdRequirement(I
 	return req;
 }
 
+rest_api_objects::LoadTableResult IRCTransaction::CommitNewTable(ClientContext &context, const ICTableEntry *table,
+                                                                 bool stage_create) {
+	auto &ic_catalog = table->catalog.Cast<IRCatalog>();
+	// Stupid hack for GLUE catalog
+	if (!stage_create && !ic_catalog.attach_options.supports_stage_create) {
+		// if the catalog does not support stage create, and stage_create = false
+		// it means we are trying to commit the table. We have already hit the endpoint with stage_create = true
+		// so this second request will result in an error. so we early out
+		return rest_api_objects::LoadTableResult();
+	}
+	// TODO: add D_ASSERT for the post table url
+	auto table_namespace = table->schema.name;
+	auto url_builder = catalog.GetBaseUrl();
+	url_builder.AddPathComponent(catalog.prefix);
+	url_builder.AddPathComponent("namespaces");
+	url_builder.AddPathComponent(table_namespace);
+	url_builder.AddPathComponent("tables");
+
+	std::unique_ptr<yyjson_mut_doc, YyjsonDocDeleter> doc_p(yyjson_mut_doc_new(nullptr));
+	yyjson_mut_doc *doc = doc_p.get();
+	auto root_object = yyjson_mut_obj(doc);
+	yyjson_mut_doc_set_root(doc, root_object);
+
+	auto initial_schema = table->table_info.table_metadata.schemas[table->table_info.table_metadata.current_schema_id];
+	auto create_transaction = make_uniq<IcebergCreateTableRequest>(initial_schema, table->table_info.name);
+	if (stage_create && ic_catalog.attach_options.supports_stage_create) {
+		yyjson_mut_obj_add_bool(doc, root_object, "stage-create", stage_create);
+	} else {
+		yyjson_mut_obj_add_bool(doc, root_object, "stage-create", false);
+	}
+	auto create_table_json = create_transaction->CreateTableToJSON(std::move(doc_p));
+
+	try {
+		auto response = catalog.auth_handler->PostRequest(context, url_builder, create_table_json);
+		if (response->status != HTTPStatusCode::OK_200) {
+			throw InvalidConfigurationException(
+			    "Request to '%s' returned a non-200 status code (%s), with reason: %s, body: %s", url_builder.GetURL(),
+			    EnumUtil::ToString(response->status), response->reason, response->body);
+		}
+		std::unique_ptr<yyjson_doc, YyjsonDocDeleter> doc(ICUtils::api_result_to_doc(response->body));
+		auto *root = yyjson_doc_get_root(doc.get());
+		auto load_table_result = rest_api_objects::LoadTableResult::FromJSON(root);
+		return load_table_result;
+	} catch (const std::exception &e) {
+		throw InvalidConfigurationException("Request to '%s' returned a non-200 status code body: %s",
+		                                    url_builder.GetURL(), e.what());
+	}
+}
+
 void IRCTransaction::DropSecrets(ClientContext &context) {
 	auto &secret_manager = SecretManager::Get(context);
 	for (auto &secret_name : created_secrets) {
@@ -192,13 +251,32 @@ rest_api_objects::CommitTransactionRequest IRCTransaction::GetTransactionRequest
 }
 
 void IRCTransaction::Commit() {
-	if (dirty_tables.empty()) {
+
+	if (dirty_tables.empty() && new_tables.empty()) {
 		return;
 	}
 
 	Connection temp_con(db);
 	temp_con.BeginTransaction();
 	auto &context = temp_con.context;
+
+	if (!new_tables.empty()) {
+		for (auto &table : new_tables) {
+			// we need to reload the secrets again because we are working in a different
+			// transaction with a different context again.
+			table->PrepareIcebergScanFromEntry(*context);
+			if (table->table_info.transaction_data->create) {
+				CommitNewTable(*context, table);
+			}
+		}
+	}
+
+	if (dirty_tables.empty()) {
+		// we don't need to do anything here.
+		temp_con.Rollback();
+		return;
+	}
+
 	try {
 		auto transaction = GetTransactionRequest(*context);
 		auto &authentication = *catalog.auth_handler;
@@ -211,8 +289,6 @@ void IRCTransaction::Commit() {
 
 			CommitTransactionToJSON(doc, root_object, transaction);
 			auto transaction_json = JsonDocToString(std::move(doc_p));
-
-			auto &authentication = *catalog.auth_handler;
 			auto url_builder = catalog.GetBaseUrl();
 			url_builder.AddPathComponent(catalog.prefix);
 			url_builder.AddPathComponent("transactions");
@@ -251,6 +327,9 @@ void IRCTransaction::Commit() {
 		}
 		DropSecrets(*context);
 	} catch (std::exception &ex) {
+		if (!new_tables.empty()) {
+			// hit drop enpoints.
+		}
 		ErrorData error(ex);
 		CleanupFiles();
 		DropSecrets(*context);

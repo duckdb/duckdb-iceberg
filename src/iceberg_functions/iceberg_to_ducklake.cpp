@@ -819,7 +819,8 @@ public:
 	}
 
 public:
-	void AddTable(IcebergTableInformation &table_info, ClientContext &context, const IcebergOptions &options) {
+	void AddTable(IcebergTableInformation &table_info, ClientContext &context,
+	              const IcebergOptions &options) {
 		auto &metadata = table_info.table_metadata;
 		if (table_names_to_skip.count(table_info.name)) {
 			//! FIXME: perhaps log that the table was skipped
