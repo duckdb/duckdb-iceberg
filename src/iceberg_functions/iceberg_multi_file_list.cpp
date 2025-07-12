@@ -408,9 +408,9 @@ OpenFileInfo IcebergMultiFileList::GetFileInternal(idx_t file_id, lock_guard<mut
 	const auto &data_file = *found_data_file;
 	const auto &path = data_file.file_path;
 
+	// Unknown data type, could be customized puffin blobs, directly ignore.
 	if (!StringUtil::CIEquals(data_file.file_format, "parquet")) {
-		throw NotImplementedException("File format '%s' not supported, only supports 'parquet' currently",
-		                              data_file.file_format);
+		return OpenFileInfo();
 	}
 
 	string file_path = path;
