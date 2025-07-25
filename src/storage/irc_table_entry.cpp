@@ -3,7 +3,7 @@
 #include "storage/irc_table_entry.hpp"
 #include "duckdb/storage/statistics/base_statistics.hpp"
 #include "duckdb/storage/table_storage_info.hpp"
-#include "duckdb/main/extension_util.hpp"
+#include "duckdb/main/extension/extension_loader.hpp"
 #include "duckdb/main/database.hpp"
 #include "duckdb/main/secret/secret_manager.hpp"
 #include "duckdb/catalog/catalog_entry/table_function_catalog_entry.hpp"
@@ -94,7 +94,14 @@ string ICTableEntry::PrepareIcebergScanFromEntry(ClientContext &context) const {
 TableFunction ICTableEntry::GetScanFunction(ClientContext &context, unique_ptr<FunctionData> &bind_data,
                                             const EntryLookupInfo &lookup) {
 	auto &db = DatabaseInstance::GetDatabase(context);
-	auto &iceberg_scan_function_set = ExtensionUtil::GetTableFunction(db, "iceberg_scan");
+	auto &system_catalog = Catalog::GetSystemCatalog(db);
+	auto data = CatalogTransaction::GetSystemTransaction(db);
+	auto &schema = system_catalog.GetSchema(data, DEFAULT_SCHEMA);
+	auto catalog_entry = schema.GetEntry(data, CatalogType::TABLE_FUNCTION_ENTRY, "iceberg_scan");
+	if (!catalog_entry) {
+		throw InvalidInputException("Function with name \"iceberg_scan\" not found!");
+	}
+	auto &iceberg_scan_function_set = catalog_entry->Cast<TableFunctionCatalogEntry>();
 	auto iceberg_scan_function =
 	    iceberg_scan_function_set.functions.GetFunctionByArguments(context, {LogicalType::VARCHAR});
 	auto storage_location = PrepareIcebergScanFromEntry(context);
@@ -117,9 +124,9 @@ TableFunction ICTableEntry::GetScanFunction(ClientContext &context, unique_ptr<F
 		schema_id = snapshot->schema_id;
 	}
 
-	auto schema = metadata.GetSchemaFromId(schema_id);
-	auto scan_info =
-	    make_shared_ptr<IcebergScanInfo>(table_info.load_table_result.metadata_location, metadata, snapshot, *schema);
+	auto iceberg_schema = metadata.GetSchemaFromId(schema_id);
+	auto scan_info = make_shared_ptr<IcebergScanInfo>(table_info.load_table_result.metadata_location, metadata,
+	                                                  snapshot, *iceberg_schema);
 	if (table_info.transaction_data) {
 		scan_info->transaction_data = table_info.transaction_data.get();
 	}

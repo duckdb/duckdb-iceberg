@@ -441,8 +441,9 @@ void IRCatalog::SetAWSCatalogOptions(IcebergAttachOptions &attach_options,
 	}
 }
 
-unique_ptr<Catalog> IRCatalog::Attach(StorageExtensionInfo *storage_info, ClientContext &context, AttachedDatabase &db,
-                                      const string &name, AttachInfo &info, AccessMode access_mode) {
+unique_ptr<Catalog> IRCatalog::Attach(optional_ptr<StorageExtensionInfo> storage_info, ClientContext &context,
+                                      AttachedDatabase &db, const string &name, AttachInfo &info,
+                                      AttachOptions &options) {
 	IRCEndpointBuilder endpoint_builder;
 
 	string endpoint_type_string;
@@ -551,7 +552,7 @@ unique_ptr<Catalog> IRCatalog::Attach(StorageExtensionInfo *storage_info, Client
 	}
 
 	D_ASSERT(auth_handler);
-	auto catalog = make_uniq<IRCatalog>(db, access_mode, std::move(auth_handler), attach_options);
+	auto catalog = make_uniq<IRCatalog>(db, options.access_mode, std::move(auth_handler), attach_options);
 	catalog->GetConfig(context, endpoint_type);
 	return std::move(catalog);
 }

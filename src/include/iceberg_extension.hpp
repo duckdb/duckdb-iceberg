@@ -6,7 +6,7 @@ namespace duckdb {
 
 class IcebergExtension : public Extension {
 public:
-	void Load(DuckDB &db) override;
+	void Load(ExtensionLoader &db) override;
 	string Name() override;
 };
 

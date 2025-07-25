@@ -2,6 +2,7 @@
 #include "avro_scan.hpp"
 #include "iceberg_extension.hpp"
 #include "duckdb/main/extension_helper.hpp"
+#include "duckdb/main/extension/extension_loader.hpp"
 #include "duckdb/main/database.hpp"
 
 #include "iceberg_multi_file_reader.hpp"
@@ -13,7 +14,14 @@ AvroScan::AvroScan(const string &scan_name, ClientContext &context, const string
 	auto &instance = DatabaseInstance::GetDatabase(context);
 	ExtensionHelper::AutoLoadExtension(instance, "avro");
 
-	auto &avro_scan_entry = ExtensionUtil::GetTableFunction(instance, "read_avro");
+	auto &system_catalog = Catalog::GetSystemCatalog(instance);
+	auto data = CatalogTransaction::GetSystemTransaction(instance);
+	auto &schema = system_catalog.GetSchema(data, DEFAULT_SCHEMA);
+	auto catalog_entry = schema.GetEntry(data, CatalogType::TABLE_FUNCTION_ENTRY, "read_avro");
+	if (!catalog_entry) {
+		throw InvalidInputException("Function with name \"read_avro\" not found!");
+	}
+	auto &avro_scan_entry = catalog_entry->Cast<TableFunctionCatalogEntry>();
 	avro_scan = avro_scan_entry.functions.functions[0];
 	avro_scan->get_multi_file_reader = IcebergAvroMultiFileReader::CreateInstance;
 

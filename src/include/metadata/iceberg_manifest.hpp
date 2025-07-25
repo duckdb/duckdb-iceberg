@@ -7,6 +7,7 @@
 
 #include "duckdb/function/copy_function.hpp"
 #include "duckdb/execution/execution_context.hpp"
+#include "duckdb/main/extension/extension_loader.hpp"
 #include "duckdb/parallel/thread_context.hpp"
 #include "duckdb/common/insertion_order_preserving_map.hpp"
 
