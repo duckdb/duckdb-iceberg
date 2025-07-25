@@ -30,6 +30,7 @@ HostDecompositionResult DecomposeHost(const string &host) {
 
 SIGV4Authorization::SIGV4Authorization() : IRCAuthorization(IRCAuthorizationType::SIGV4) {
 }
+
 SIGV4Authorization::SIGV4Authorization(const string &secret)
     : IRCAuthorization(IRCAuthorizationType::SIGV4), secret(secret) {
 }
@@ -63,116 +64,59 @@ static string GetAwsService(const string &host) {
 	return host.substr(0, host.find_first_of('.'));
 }
 
-unique_ptr<HTTPResponse> SIGV4Authorization::PostRequest(ClientContext &context,
-                                                         const IRCEndpointBuilder &endpoint_builder,
-                                                         const string &body) {
+AWSInput SIGV4Authorization::CreateAWSInput(ClientContext &context, const IRCEndpointBuilder &endpoint_builder) {
 	AWSInput aws_input;
 	aws_input.cert_path = APIUtils::GetCURLCertPath();
 
-	// Set the user Agent.
+	// Set the user Agent
 	auto &config = DBConfig::GetConfig(context);
 	aws_input.user_agent = config.UserAgent();
 
+	// AWS service and region
 	aws_input.service = GetAwsService(endpoint_builder.GetHost());
 	aws_input.region = GetAwsRegion(endpoint_builder.GetHost());
 
+	// Host decomposition
 	auto decomposed_host = DecomposeHost(endpoint_builder.GetHost());
-
 	aws_input.authority = decomposed_host.authority;
+
 	for (auto &component : decomposed_host.path_components) {
 		aws_input.path_segments.push_back(component);
 	}
 	for (auto &component : endpoint_builder.path_components) {
 		aws_input.path_segments.push_back(component);
 	}
-
 	for (auto &param : endpoint_builder.GetParams()) {
 		aws_input.query_string_parameters.emplace_back(param);
 	}
 
-	// Will error if no secret can be found for AWS services
+	// AWS credentials
 	auto secret_entry = IRCatalog::GetStorageSecret(context, secret);
 	auto kv_secret = dynamic_cast<const KeyValueSecret &>(*secret_entry->secret);
-
 	aws_input.key_id = kv_secret.secret_map["key_id"].GetValue<string>();
 	aws_input.secret = kv_secret.secret_map["secret"].GetValue<string>();
 	aws_input.session_token =
 	    kv_secret.secret_map["session_token"].IsNull() ? "" : kv_secret.secret_map["session_token"].GetValue<string>();
 
+	return aws_input;
+}
+
+unique_ptr<HTTPResponse> SIGV4Authorization::PostRequest(ClientContext &context,
+                                                         const IRCEndpointBuilder &endpoint_builder,
+                                                         const string &body) {
+	AWSInput aws_input = CreateAWSInput(context, endpoint_builder);
 	return aws_input.PostRequest(context, body);
 }
 
 unique_ptr<HTTPResponse> SIGV4Authorization::GetRequest(ClientContext &context,
                                                         const IRCEndpointBuilder &endpoint_builder) {
-	AWSInput aws_input;
-	aws_input.cert_path = APIUtils::GetCURLCertPath();
-	// Set the user Agent.
-	auto &config = DBConfig::GetConfig(context);
-	aws_input.user_agent = config.UserAgent();
-
-	aws_input.service = GetAwsService(endpoint_builder.GetHost());
-	aws_input.region = GetAwsRegion(endpoint_builder.GetHost());
-
-	auto decomposed_host = DecomposeHost(endpoint_builder.GetHost());
-
-	aws_input.authority = decomposed_host.authority;
-	for (auto &component : decomposed_host.path_components) {
-		aws_input.path_segments.push_back(component);
-	}
-	for (auto &component : endpoint_builder.path_components) {
-		aws_input.path_segments.push_back(component);
-	}
-
-	for (auto &param : endpoint_builder.GetParams()) {
-		aws_input.query_string_parameters.emplace_back(param);
-	}
-
-	// will error if no secret can be found for AWS services
-	auto secret_entry = IRCatalog::GetStorageSecret(context, secret);
-	auto kv_secret = dynamic_cast<const KeyValueSecret &>(*secret_entry->secret);
-
-	aws_input.key_id = kv_secret.secret_map["key_id"].GetValue<string>();
-	aws_input.secret = kv_secret.secret_map["secret"].GetValue<string>();
-	aws_input.session_token =
-	    kv_secret.secret_map["session_token"].IsNull() ? "" : kv_secret.secret_map["session_token"].GetValue<string>();
-
+	AWSInput aws_input = CreateAWSInput(context, endpoint_builder);
 	return aws_input.GetRequest(context);
 }
 
 unique_ptr<HTTPResponse> SIGV4Authorization::DeleteRequest(ClientContext &context,
                                                            const IRCEndpointBuilder &endpoint_builder) {
-	AWSInput aws_input;
-	aws_input.cert_path = APIUtils::GetCURLCertPath();
-	// Set the user Agent.
-	auto &config = DBConfig::GetConfig(context);
-	aws_input.user_agent = config.UserAgent();
-
-	aws_input.service = GetAwsService(endpoint_builder.GetHost());
-	aws_input.region = GetAwsRegion(endpoint_builder.GetHost());
-
-	auto decomposed_host = DecomposeHost(endpoint_builder.GetHost());
-
-	aws_input.authority = decomposed_host.authority;
-	for (auto &component : decomposed_host.path_components) {
-		aws_input.path_segments.push_back(component);
-	}
-	for (auto &component : endpoint_builder.path_components) {
-		aws_input.path_segments.push_back(component);
-	}
-
-	for (auto &param : endpoint_builder.GetParams()) {
-		aws_input.query_string_parameters.emplace_back(param);
-	}
-
-	// will error if no secret can be found for AWS services
-	auto secret_entry = IRCatalog::GetStorageSecret(context, secret);
-	auto kv_secret = dynamic_cast<const KeyValueSecret &>(*secret_entry->secret);
-
-	aws_input.key_id = kv_secret.secret_map["key_id"].GetValue<string>();
-	aws_input.secret = kv_secret.secret_map["secret"].GetValue<string>();
-	aws_input.session_token =
-	    kv_secret.secret_map["session_token"].IsNull() ? "" : kv_secret.secret_map["session_token"].GetValue<string>();
-
+	AWSInput aws_input = CreateAWSInput(context, endpoint_builder);
 	return aws_input.DeleteRequest(context);
 }
 
