@@ -20,6 +20,16 @@ struct IRCAPISchema {
 	string catalog_name;
 };
 
+template <typename T>
+class APIResult {
+public:
+	APIResult() {};
+
+	T result_;
+	bool has_error;
+	rest_api_objects::IcebergErrorResponse error_;
+};
+
 class IRCAPI {
 public:
 	static const string API_VERSION_1;
@@ -28,8 +38,8 @@ public:
 	static string GetEncodedSchemaName(const vector<string> &items);
 	static vector<rest_api_objects::TableIdentifier> GetTables(ClientContext &context, IRCatalog &catalog,
 	                                                           const IRCSchemaEntry &schema);
-	static rest_api_objects::LoadTableResult GetTable(ClientContext &context, IRCatalog &catalog,
-	                                                  const IRCSchemaEntry &schema, const string &table_name);
+	static APIResult<rest_api_objects::LoadTableResult>
+	GetTable(ClientContext &context, IRCatalog &catalog, const IRCSchemaEntry &schema, const string &table_name);
 	static vector<IRCAPISchema> GetSchemas(ClientContext &context, IRCatalog &catalog, const vector<string> &parent);
 	static void CommitTableUpdate(ClientContext &context, IRCatalog &catalog, const vector<string> &schema,
 	                              const string &table_name, const string &body);
