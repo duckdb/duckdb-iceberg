@@ -1,6 +1,7 @@
 #pragma once
 
 #include "storage/irc_authorization.hpp"
+#include "aws.hpp"
 
 namespace duckdb {
 
@@ -18,6 +19,9 @@ public:
 	unique_ptr<HTTPResponse> DeleteRequest(ClientContext &context, const IRCEndpointBuilder &endpoint_builder) override;
 	unique_ptr<HTTPResponse> PostRequest(ClientContext &context, const IRCEndpointBuilder &endpoint_builder,
 	                                     const string &body) override;
+
+private:
+	AWSInput CreateAWSInput(ClientContext &context, const IRCEndpointBuilder &endpoint_builder);
 
 public:
 	string secret;
