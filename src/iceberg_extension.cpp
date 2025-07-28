@@ -1,5 +1,3 @@
-#define DUCKDB_EXTENSION_MAIN
-
 #include "iceberg_extension.hpp"
 #include "storage/irc_catalog.hpp"
 #include "storage/irc_transaction_manager.hpp"
@@ -9,7 +7,7 @@
 #include "duckdb/common/exception/http_exception.hpp"
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/function/scalar_function.hpp"
-#include "duckdb/main/extension_util.hpp"
+#include "duckdb/main/extension/extension_loader.hpp"
 #include "duckdb/catalog/catalog_entry/macro_catalog_entry.hpp"
 #include "duckdb/catalog/default/default_functions.hpp"
 #include "duckdb/storage/storage_extension.hpp"
@@ -23,8 +21,8 @@
 
 namespace duckdb {
 
-static unique_ptr<TransactionManager> CreateTransactionManager(StorageExtensionInfo *storage_info, AttachedDatabase &db,
-                                                               Catalog &catalog) {
+static unique_ptr<TransactionManager> CreateTransactionManager(optional_ptr<StorageExtensionInfo> storage_info,
+                                                               AttachedDatabase &db, Catalog &catalog) {
 	auto &ic_catalog = catalog.Cast<IRCatalog>();
 	return make_uniq<ICTransactionManager>(db, ic_catalog);
 }
@@ -37,8 +35,10 @@ public:
 	}
 };
 
-static void LoadInternal(DatabaseInstance &instance) {
+static void LoadInternal(ExtensionLoader &loader) {
+	auto &instance = loader.GetDatabaseInstance();
 	ExtensionHelper::AutoLoadExtension(instance, "parquet");
+
 	if (!instance.ExtensionIsLoaded("parquet")) {
 		throw MissingExtensionException("The iceberg extension requires the parquet extension to be loaded!");
 	}
@@ -51,13 +51,13 @@ static void LoadInternal(DatabaseInstance &instance) {
 	                          LogicalType::BOOLEAN, Value::BOOLEAN(false));
 
 	// Iceberg Table Functions
-	for (auto &fun : IcebergFunctions::GetTableFunctions(instance)) {
-		ExtensionUtil::RegisterFunction(instance, std::move(fun));
+	for (auto &fun : IcebergFunctions::GetTableFunctions(loader)) {
+		loader.RegisterFunction(std::move(fun));
 	}
 
 	// Iceberg Scalar Functions
 	for (auto &fun : IcebergFunctions::GetScalarFunctions()) {
-		ExtensionUtil::RegisterFunction(instance, fun);
+		loader.RegisterFunction(fun);
 	}
 
 	SecretType secret_type;
@@ -65,10 +65,10 @@ static void LoadInternal(DatabaseInstance &instance) {
 	secret_type.deserializer = KeyValueSecret::Deserialize<KeyValueSecret>;
 	secret_type.default_provider = "config";
 
-	ExtensionUtil::RegisterSecretType(instance, secret_type);
+	loader.RegisterSecretType(secret_type);
 	CreateSecretFunction secret_function = {"iceberg", "config", OAuth2Authorization::CreateCatalogSecretFunction};
 	OAuth2Authorization::SetCatalogSecretParameters(secret_function);
-	ExtensionUtil::RegisterFunction(instance, secret_function);
+	loader.RegisterFunction(secret_function);
 
 	auto &log_manager = instance.GetLogManager();
 	log_manager.RegisterLogType(make_uniq<IcebergLogType>());
@@ -76,8 +76,8 @@ static void LoadInternal(DatabaseInstance &instance) {
 	config.storage_extensions["iceberg"] = make_uniq<IRCStorageExtension>();
 }
 
-void IcebergExtension::Load(DuckDB &db) {
-	LoadInternal(*db.instance);
+void IcebergExtension::Load(ExtensionLoader &loader) {
+	LoadInternal(loader);
 }
 string IcebergExtension::Name() {
 	return "iceberg";
@@ -86,16 +86,7 @@ string IcebergExtension::Name() {
 } // namespace duckdb
 
 extern "C" {
-
-DUCKDB_EXTENSION_API void iceberg_init(duckdb::DatabaseInstance &db) {
-	LoadInternal(db);
-}
-
-DUCKDB_EXTENSION_API const char *iceberg_version() {
-	return duckdb::DuckDB::LibraryVersion();
+DUCKDB_CPP_EXTENSION_ENTRY(iceberg, loader) {
+	LoadInternal(loader);
 }
 }
-
-#ifndef DUCKDB_EXTENSION_MAIN
-#error DUCKDB_EXTENSION_MAIN not defined
-#endif

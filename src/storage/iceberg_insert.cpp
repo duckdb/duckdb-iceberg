@@ -9,8 +9,6 @@
 #include "duckdb/common/sort/partition_state.hpp"
 #include "duckdb/catalog/catalog_entry/copy_function_catalog_entry.hpp"
 #include "duckdb/main/client_data.hpp"
-
-#include "duckdb/main/extension_util.hpp"
 #include "duckdb/planner/operator/logical_copy_to_file.hpp"
 #include "duckdb/execution/physical_operator_states.hpp"
 #include "duckdb/planner/operator/logical_insert.hpp"
@@ -24,14 +22,15 @@
 
 namespace duckdb {
 
-IcebergInsert::IcebergInsert(LogicalOperator &op, TableCatalogEntry &table,
+IcebergInsert::IcebergInsert(PhysicalPlan &physical_plan, LogicalOperator &op, TableCatalogEntry &table,
                              physical_index_vector_t<idx_t> column_index_map_p)
-    : PhysicalOperator(PhysicalOperatorType::EXTENSION, op.types, 1), table(&table), schema(nullptr),
+    : PhysicalOperator(physical_plan, PhysicalOperatorType::EXTENSION, op.types, 1), table(&table), schema(nullptr),
       column_index_map(std::move(column_index_map_p)) {
 }
 
-IcebergInsert::IcebergInsert(LogicalOperator &op, SchemaCatalogEntry &schema, unique_ptr<BoundCreateTableInfo> info)
-    : PhysicalOperator(PhysicalOperatorType::EXTENSION, op.types, 1), table(nullptr), schema(&schema),
+IcebergInsert::IcebergInsert(PhysicalPlan &physical_plan, LogicalOperator &op, SchemaCatalogEntry &schema,
+                             unique_ptr<BoundCreateTableInfo> info)
+    : PhysicalOperator(physical_plan, PhysicalOperatorType::EXTENSION, op.types, 1), table(nullptr), schema(&schema),
       info(std::move(info)) {
 }
 

@@ -31,9 +31,11 @@ struct IcebergCopyInput {
 class IcebergInsert : public PhysicalOperator {
 public:
 	//! INSERT INTO
-	IcebergInsert(LogicalOperator &op, TableCatalogEntry &table, physical_index_vector_t<idx_t> column_index_map);
+	IcebergInsert(PhysicalPlan &physical_plan, LogicalOperator &op, TableCatalogEntry &table,
+	              physical_index_vector_t<idx_t> column_index_map);
 	//! CREATE TABLE AS
-	IcebergInsert(LogicalOperator &op, SchemaCatalogEntry &schema, unique_ptr<BoundCreateTableInfo> info);
+	IcebergInsert(PhysicalPlan &physical_plan, LogicalOperator &op, SchemaCatalogEntry &schema,
+	              unique_ptr<BoundCreateTableInfo> info);
 
 	//! The table to insert into
 	optional_ptr<TableCatalogEntry> table;
