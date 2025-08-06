@@ -19,7 +19,7 @@
 #include "duckdb/planner/operator/logical_comparison_join.hpp"
 #include "duckdb/common/file_opener.hpp"
 #include "duckdb/common/file_system.hpp"
-#include "duckdb/main/extension_util.hpp"
+#include "duckdb/main/extension/extension_loader.hpp"
 #include "iceberg_metadata.hpp"
 #include "iceberg_utils.hpp"
 #include "iceberg_multi_file_reader.hpp"
@@ -41,11 +41,11 @@ static void AddNamedParameters(TableFunction &fun) {
 	fun.named_parameters["snapshot_from_id"] = LogicalType::UBIGINT;
 }
 
-TableFunctionSet IcebergFunctions::GetIcebergScanFunction(DatabaseInstance &instance) {
+TableFunctionSet IcebergFunctions::GetIcebergScanFunction(ExtensionLoader &loader) {
 	// The iceberg_scan function is constructed by grabbing the parquet scan from the Catalog, then injecting the
 	// IcebergMultiFileReader into it to create a Iceberg-based multi file read
 
-	auto &parquet_scan = ExtensionUtil::GetTableFunction(instance, "parquet_scan");
+	auto &parquet_scan = loader.GetTableFunction("parquet_scan");
 	auto parquet_scan_copy = parquet_scan.functions;
 
 	for (auto &function : parquet_scan_copy.functions) {

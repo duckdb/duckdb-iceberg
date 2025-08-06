@@ -13,15 +13,16 @@
 #include "duckdb/parser/parsed_data/create_table_function_info.hpp"
 
 namespace duckdb {
+class ExtensionLoader;
 
 class IcebergFunctions {
 public:
-	static vector<TableFunctionSet> GetTableFunctions(DatabaseInstance &instance);
+	static vector<TableFunctionSet> GetTableFunctions(ExtensionLoader &loader);
 	static vector<ScalarFunction> GetScalarFunctions();
 
 private:
 	static TableFunctionSet GetIcebergSnapshotsFunction();
-	static TableFunctionSet GetIcebergScanFunction(DatabaseInstance &instance);
+	static TableFunctionSet GetIcebergScanFunction(ExtensionLoader &instance);
 	static TableFunctionSet GetIcebergMetadataFunction();
 	static TableFunctionSet GetIcebergToDuckLakeFunction();
 };
