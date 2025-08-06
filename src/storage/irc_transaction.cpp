@@ -1,3 +1,4 @@
+#include "duckdb/common/assert.hpp"
 #include "duckdb/parser/parsed_data/create_view_info.hpp"
 #include "duckdb/catalog/catalog_entry/index_catalog_entry.hpp"
 #include "duckdb/catalog/catalog_entry/view_catalog_entry.hpp"
@@ -6,8 +7,11 @@
 #include "storage/irc_transaction.hpp"
 #include "storage/irc_catalog.hpp"
 #include "storage/irc_authorization.hpp"
+#include "storage/iceberg_table_information.hpp"
 #include "storage/table_update/iceberg_add_snapshot.hpp"
+#include "storage/table_create/iceberg_create_table_request.hpp"
 #include "catalog_utils.hpp"
+#include "duckdb/storage/table/update_state.hpp"
 
 namespace duckdb {
 
@@ -22,7 +26,15 @@ void IRCTransaction::MarkTableAsDirty(const ICTableEntry &table) {
 	dirty_tables.insert(&table);
 }
 
+void IRCTransaction::MarkTableAsDeleted(const ICTableEntry &table) {
+	deleted_tables.insert(&table);
+}
+
 void IRCTransaction::Start() {
+}
+
+IRCatalog &IRCTransaction::GetCatalog() {
+	return catalog;
 }
 
 void CommitTableToJSON(yyjson_mut_doc *doc, yyjson_mut_val *root_object,
@@ -36,6 +48,10 @@ void CommitTableToJSON(yyjson_mut_doc *doc, yyjson_mut_val *root_object,
 			yyjson_mut_obj_add_strcpy(doc, requirement_json, "type", assert_ref_snapshot_id.type.value.c_str());
 			yyjson_mut_obj_add_strcpy(doc, requirement_json, "ref", assert_ref_snapshot_id.ref.c_str());
 			yyjson_mut_obj_add_uint(doc, requirement_json, "snapshot-id", assert_ref_snapshot_id.snapshot_id);
+		} else if (requirement.has_assert_create) {
+			auto &assert_create = requirement.assert_create;
+			auto requirement_json = yyjson_mut_arr_add_obj(doc, requirements_array);
+			yyjson_mut_obj_add_strcpy(doc, requirement_json, "type", assert_create.type.value.c_str());
 		} else {
 			throw NotImplementedException("Can't serialize this TableRequirement type to JSON");
 		}
@@ -67,13 +83,85 @@ void CommitTableToJSON(yyjson_mut_doc *doc, yyjson_mut_val *root_object,
 			auto &ref_update = update.set_snapshot_ref_update;
 
 			//! updates[...].action
-			yyjson_mut_obj_add_strcpy(doc, update_json, "action", "set-snapshot-ref");
+			yyjson_mut_obj_add_strcpy(doc, update_json, "action", ref_update.action.c_str());
 			//! updates[...].ref-name
 			yyjson_mut_obj_add_strcpy(doc, update_json, "ref-name", ref_update.ref_name.c_str());
 			//! updates[...].type
 			yyjson_mut_obj_add_strcpy(doc, update_json, "type", ref_update.snapshot_reference.type.c_str());
 			//! updates[...].snapshot-id
 			yyjson_mut_obj_add_uint(doc, update_json, "snapshot-id", ref_update.snapshot_reference.snapshot_id);
+		} else if (update.has_assign_uuidupdate) {
+			auto update_json = yyjson_mut_arr_add_obj(doc, updates_array);
+			auto &ref_update = update.assign_uuidupdate;
+			//! updates[...].action
+			yyjson_mut_obj_add_strcpy(doc, update_json, "action", ref_update.action.c_str());
+			//! updates[...].ref-name
+			yyjson_mut_obj_add_strcpy(doc, update_json, "uuid", ref_update.uuid.c_str());
+		} else if (update.has_upgrade_format_version_update) {
+			auto update_json = yyjson_mut_arr_add_obj(doc, updates_array);
+			auto &ref_update = update.upgrade_format_version_update;
+			//! updates[...].action
+			yyjson_mut_obj_add_strcpy(doc, update_json, "action", ref_update.action.c_str());
+			//! updates[...].ref-name
+			yyjson_mut_obj_add_uint(doc, update_json, "format-version", ref_update.format_version);
+		} else if (update.has_set_properties_update) {
+			auto update_json = yyjson_mut_arr_add_obj(doc, updates_array);
+			auto &ref_update = update.set_properties_update;
+			//! updates[...].action
+			yyjson_mut_obj_add_strcpy(doc, update_json, "action", ref_update.action.c_str());
+			auto properties_json = yyjson_mut_obj_add_obj(doc, update_json, "updates");
+			for (auto &prop : ref_update.updates) {
+				yyjson_mut_obj_add_strcpy(doc, properties_json, prop.first.c_str(), prop.second.c_str());
+			}
+		} else if (update.has_add_schema_update) {
+			auto update_json = yyjson_mut_arr_add_obj(doc, updates_array);
+			auto &ref_update = update.add_schema_update;
+			//! updates[...].action
+			yyjson_mut_obj_add_strcpy(doc, update_json, "action", ref_update.action.c_str());
+			auto schema_json = yyjson_mut_obj_add_obj(doc, update_json, "schema");
+			IcebergTableSchema::SchemaToJson(doc, schema_json, update.add_schema_update.schema);
+		} else if (update.has_set_current_schema_update) {
+			auto update_json = yyjson_mut_arr_add_obj(doc, updates_array);
+			auto &ref_update = update.set_current_schema_update;
+			//! updates[...].action
+			yyjson_mut_obj_add_strcpy(doc, update_json, "action", ref_update.action.c_str());
+			yyjson_mut_obj_add_int(doc, update_json, "schema-id", ref_update.schema_id);
+		} else if (update.has_set_default_spec_update) {
+			auto update_json = yyjson_mut_arr_add_obj(doc, updates_array);
+			auto &ref_update = update.set_default_spec_update;
+			//! updates[...].action
+			yyjson_mut_obj_add_strcpy(doc, update_json, "action", ref_update.action.c_str());
+			yyjson_mut_obj_add_int(doc, update_json, "spec-id", ref_update.spec_id);
+		} else if (update.has_add_partition_spec_update) {
+			auto update_json = yyjson_mut_arr_add_obj(doc, updates_array);
+			auto &ref_update = update.add_partition_spec_update;
+			//! updates[...].action
+			yyjson_mut_obj_add_strcpy(doc, update_json, "action", ref_update.action.c_str());
+			auto spec_json = yyjson_mut_obj_add_obj(doc, update_json, "spec");
+			yyjson_mut_obj_add_int(doc, spec_json, "spec-id", ref_update.spec.spec_id);
+			// Add fields array, later we can add the fields
+			auto fields_arr = yyjson_mut_obj_add_arr(doc, spec_json, "fields");
+		} else if (update.has_set_default_sort_order_update) {
+			auto update_json = yyjson_mut_arr_add_obj(doc, updates_array);
+			auto &ref_update = update.set_default_sort_order_update;
+			//! updates[...].action
+			yyjson_mut_obj_add_strcpy(doc, update_json, "action", ref_update.action.c_str());
+			yyjson_mut_obj_add_int(doc, update_json, "sort-order-id", ref_update.sort_order_id);
+		} else if (update.has_add_sort_order_update) {
+			auto update_json = yyjson_mut_arr_add_obj(doc, updates_array);
+			auto &ref_update = update.add_sort_order_update;
+			//! updates[...].action
+			yyjson_mut_obj_add_strcpy(doc, update_json, "action", ref_update.action.c_str());
+			auto sort_order_json = yyjson_mut_obj_add_obj(doc, update_json, "sort-order");
+			yyjson_mut_obj_add_int(doc, sort_order_json, "order-id", ref_update.sort_order.order_id);
+			// Add fields array, later we can add the fields
+			auto fields_arr = yyjson_mut_obj_add_arr(doc, sort_order_json, "fields");
+		} else if (update.has_set_location_update) {
+			auto update_json = yyjson_mut_arr_add_obj(doc, updates_array);
+			auto &ref_update = update.set_location_update;
+			//! updates[...].action
+			yyjson_mut_obj_add_strcpy(doc, update_json, "action", ref_update.action.c_str());
+			yyjson_mut_obj_add_strcpy(doc, update_json, "location", ref_update.location.c_str());
 		} else {
 			throw NotImplementedException("Can't serialize this TableUpdate type to JSON");
 		}
@@ -88,8 +176,10 @@ void CommitTableToJSON(yyjson_mut_doc *doc, yyjson_mut_val *root_object,
 	yyjson_mut_obj_add_strcpy(doc, identifier_json, "name", table.identifier.name.c_str());
 	//! identifier.namespace
 	auto namespace_arr = yyjson_mut_obj_add_arr(doc, identifier_json, "namespace");
-	D_ASSERT(_namespace.size() == 1);
-	yyjson_mut_arr_add_strcpy(doc, namespace_arr, _namespace[0].c_str());
+	D_ASSERT(_namespace.size() >= 1);
+	for (auto &identifier : _namespace) {
+		yyjson_mut_arr_add_strcpy(doc, namespace_arr, identifier.c_str());
+	}
 }
 
 void CommitTransactionToJSON(yyjson_mut_doc *doc, yyjson_mut_val *root_object,
@@ -141,9 +231,13 @@ void IRCTransaction::DropSecrets(ClientContext &context) {
 	}
 }
 
-rest_api_objects::CommitTransactionRequest IRCTransaction::GetTransactionRequest(ClientContext &context) {
-	rest_api_objects::CommitTransactionRequest transaction;
+TableTransactionInfo IRCTransaction::GetTransactionRequest(ClientContext &context) {
+	TableTransactionInfo info;
+	auto &transaction = info.request;
 	for (auto &table : dirty_tables) {
+		if (!table->table_info.transaction_data) {
+			continue;
+		}
 		IcebergCommitState commit_state;
 		auto &table_change = commit_state.table_change;
 		auto &schema = table->ParentSchema().Cast<IRCSchemaEntry>();
@@ -166,7 +260,15 @@ rest_api_objects::CommitTransactionRequest IRCTransaction::GetTransactionRequest
 
 		auto &transaction_data = *table->table_info.transaction_data;
 		for (auto &update : transaction_data.updates) {
+			if (update->type == IcebergTableUpdateType::ADD_SNAPSHOT) {
+				// we need to recreate the keys in the current context.
+				table->PrepareIcebergScanFromEntry(context);
+			}
 			update->CreateUpdate(db, context, commit_state);
+		}
+		for (auto &requirement : transaction_data.requirements) {
+			requirement->CreateRequirement(db, context, commit_state);
+			info.has_assert_create = requirement->type == IcebergTableRequirementType::ASSERT_CREATE;
 		}
 
 		if (!transaction_data.alters.empty()) {
@@ -183,11 +285,11 @@ rest_api_objects::CommitTransactionRequest IRCTransaction::GetTransactionRequest
 
 		transaction.table_changes.push_back(std::move(table_change));
 	}
-	return transaction;
+	return info;
 }
 
 void IRCTransaction::Commit() {
-	if (dirty_tables.empty()) {
+	if (dirty_tables.empty() && deleted_tables.empty()) {
 		return;
 	}
 
@@ -195,29 +297,8 @@ void IRCTransaction::Commit() {
 	temp_con.BeginTransaction();
 	auto &context = temp_con.context;
 	try {
-		auto transaction = GetTransactionRequest(*context);
-		if (catalog.supported_urls.find("POST /v1/{prefix}/transactions/commit") != catalog.supported_urls.end()) {
-			// commit all transactions at once
-			std::unique_ptr<yyjson_mut_doc, YyjsonDocDeleter> doc_p(yyjson_mut_doc_new(nullptr));
-			auto doc = doc_p.get();
-			auto root_object = yyjson_mut_obj(doc);
-			yyjson_mut_doc_set_root(doc, root_object);
-
-			CommitTransactionToJSON(doc, root_object, transaction);
-			auto transaction_json = JsonDocToString(std::move(doc_p));
-			IRCAPI::CommitMultiTableUpdate(*context, catalog, transaction_json);
-		} else {
-			D_ASSERT(catalog.supported_urls.find("POST /v1/{prefix}/namespaces/{namespace}/tables/{table}") !=
-			         catalog.supported_urls.end());
-			// each table change will make a separate request
-			for (auto &table_change : transaction.table_changes) {
-				D_ASSERT(table_change.has_identifier);
-				auto transaction_json = ConstructTableUpdateJSON(table_change);
-				IRCAPI::CommitTableUpdate(*context, catalog, table_change.identifier._namespace.value,
-				                          table_change.identifier.name, transaction_json);
-			}
-		}
-		DropSecrets(*context);
+		DoTableUpdates(*context);
+		DoTableDeletes(*context);
 	} catch (std::exception &ex) {
 		ErrorData error(ex);
 		CleanupFiles();
@@ -227,6 +308,46 @@ void IRCTransaction::Commit() {
 	}
 
 	temp_con.Rollback();
+}
+
+void IRCTransaction::DoTableUpdates(ClientContext &context) {
+	if (!dirty_tables.empty()) {
+		auto transaction_info = GetTransactionRequest(context);
+		auto &transaction = transaction_info.request;
+
+		// if there are no new tables, we can post to the transactions/commit endpoint
+		// otherwise we fall back to posting a commit for each table.
+		if (!transaction_info.has_assert_create &&
+		    catalog.supported_urls.find("POST /v1/{prefix}/transactions/commit") != catalog.supported_urls.end()) {
+			// commit all transactions at once
+			std::unique_ptr<yyjson_mut_doc, YyjsonDocDeleter> doc_p(yyjson_mut_doc_new(nullptr));
+			auto doc = doc_p.get();
+			auto root_object = yyjson_mut_obj(doc);
+			yyjson_mut_doc_set_root(doc, root_object);
+
+			CommitTransactionToJSON(doc, root_object, transaction);
+			auto transaction_json = JsonDocToString(std::move(doc_p));
+			IRCAPI::CommitMultiTableUpdate(context, catalog, transaction_json);
+		} else {
+			D_ASSERT(catalog.supported_urls.find("POST /v1/{prefix}/namespaces/{namespace}/tables/{table}") !=
+			         catalog.supported_urls.end());
+			// each table change will make a separate request
+			for (auto &table_change : transaction.table_changes) {
+				D_ASSERT(table_change.has_identifier);
+				auto transaction_json = ConstructTableUpdateJSON(table_change);
+				IRCAPI::CommitTableUpdate(context, catalog, table_change.identifier._namespace.value,
+				                          table_change.identifier.name, transaction_json);
+			}
+		}
+		DropSecrets(context);
+	}
+}
+
+void IRCTransaction::DoTableDeletes(ClientContext &context) {
+	for (auto &table : deleted_tables) {
+		auto &irc_schema = table->ParentSchema().Cast<IRCSchemaEntry>();
+		IRCAPI::CommitTableDelete(context, catalog, irc_schema.namespace_items, table->name);
+	}
 }
 
 void IRCTransaction::CleanupFiles() {

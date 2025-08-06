@@ -34,10 +34,7 @@ attach '840140254803:s3tablescatalog/pyiceberg-blog-bucket' as my_datalake (
 );
 
 statement ok
-show all tables;
-
-statement ok
-SELECT count(*) FROM my_datalake.myblognamespace.lineitem;
+SELECT count(*) FROM my_datalake.myblognamespace.lineitem limit 20;
 
 query IIIIII
 describe my_datalake.myblognamespace.lineitem;

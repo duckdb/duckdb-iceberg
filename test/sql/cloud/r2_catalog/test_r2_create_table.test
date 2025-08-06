@@ -1,0 +1,78 @@
+# name: test/sql/cloud/r2_catalog/test_r2_create_table.test
+# description: test integration with iceberg catalog read
+# group: [r2_catalog]
+
+require-env ICEBERG_AWS_REMOTE_AVAILABLE
+
+require-env ICEBERG_REMOTE_INSERT_READY
+
+require-env R2_TOKEN
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+require aws
+
+statement ok
+CREATE SECRET r2_secret (
+    TYPE ICEBERG,
+    TOKEN '${R2_TOKEN}'
+);
+
+statement ok
+attach '6b17833f308abc1e1cc343c552b51f51_r2-catalog' AS my_datalake (
+    TYPE ICEBERG,
+    ENDPOINT 'https://catalog.cloudflarestorage.com/6b17833f308abc1e1cc343c552b51f51/r2-catalog'
+);
+
+statement ok
+create schema my_datalake.test_create;
+
+statement ok
+use my_datalake.test_create;
+
+statement ok
+create table test_basic_create (a int);
+
+query I
+select * from test_basic_create;
+----
+
+statement ok
+create table test_basic_create_as as select range a, range::VARCHAR from range(10);
+
+query II
+select * from test_basic_create_as order by all;
+----
+0	0
+1	1
+2	2
+3	3
+4	4
+5	5
+6	6
+7	7
+8	8
+9	9
+
+statement ok
+drop table test_basic_create_as;
+
+statement ok
+drop table test_basic_create;
+
+query I
+select count(*) from (show tables);
+----
+0
+
+statement ok
+use main;
+
+statement ok
+drop schema my_datalake.test_create;

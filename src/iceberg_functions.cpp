@@ -5,8 +5,9 @@
 #include "duckdb/function/cast/default_casts.hpp"
 #include "duckdb/parser/expression/function_expression.hpp"
 
-namespace duckdb {
+class ExtensionLoader;
 
+namespace duckdb {
 vector<TableFunctionSet> IcebergFunctions::GetTableFunctions(ExtensionLoader &loader) {
 	vector<TableFunctionSet> functions;
 

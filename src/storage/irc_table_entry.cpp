@@ -17,7 +17,7 @@
 #include "duckdb/planner/tableref/bound_at_clause.hpp"
 
 #include "rest_catalog/objects/list.hpp"
-#include "storage/irc_transaction.hpp"
+#include "storage/iceberg_table_information.hpp"
 
 namespace duckdb {
 
@@ -36,7 +36,7 @@ void ICTableEntry::BindUpdateConstraints(Binder &binder, LogicalGet &, LogicalPr
 	throw NotImplementedException("BindUpdateConstraints");
 }
 
-string ICTableEntry::PrepareIcebergScanFromEntry(ClientContext &context) {
+string ICTableEntry::PrepareIcebergScanFromEntry(ClientContext &context) const {
 	auto &ic_catalog = catalog.Cast<IRCatalog>();
 	auto &secret_manager = SecretManager::Get(context);
 
@@ -94,7 +94,6 @@ string ICTableEntry::PrepareIcebergScanFromEntry(ClientContext &context) {
 TableFunction ICTableEntry::GetScanFunction(ClientContext &context, unique_ptr<FunctionData> &bind_data,
                                             const EntryLookupInfo &lookup) {
 	auto &db = DatabaseInstance::GetDatabase(context);
-
 	auto &system_catalog = Catalog::GetSystemCatalog(db);
 	auto data = CatalogTransaction::GetSystemTransaction(db);
 	auto &catalog_schema = system_catalog.GetSchema(data, DEFAULT_SCHEMA);
@@ -125,9 +124,9 @@ TableFunction ICTableEntry::GetScanFunction(ClientContext &context, unique_ptr<F
 		schema_id = snapshot->schema_id;
 	}
 
-	auto schema = metadata.GetSchemaFromId(schema_id);
-	auto scan_info =
-	    make_shared_ptr<IcebergScanInfo>(table_info.load_table_result.metadata_location, metadata, snapshot, *schema);
+	auto iceberg_schema = metadata.GetSchemaFromId(schema_id);
+	auto scan_info = make_shared_ptr<IcebergScanInfo>(table_info.load_table_result.metadata_location, metadata,
+	                                                  snapshot, *iceberg_schema);
 	if (table_info.transaction_data) {
 		scan_info->transaction_data = table_info.transaction_data.get();
 	}

@@ -17,6 +17,8 @@ public:
 	static const IcebergColumnDefinition &GetFromColumnIndex(const vector<unique_ptr<IcebergColumnDefinition>> &columns,
 	                                                         const ColumnIndex &column_index, idx_t depth);
 
+	static void SchemaToJson(yyjson_mut_doc *doc, yyjson_mut_val *root_object, const rest_api_objects::Schema &schema);
+
 public:
 	int32_t schema_id;
 	vector<unique_ptr<IcebergColumnDefinition>> columns;

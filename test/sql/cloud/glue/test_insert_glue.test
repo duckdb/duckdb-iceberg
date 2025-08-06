@@ -20,12 +20,14 @@ require httpfs
 
 require aws
 
+# credentials in CI cannot set up the environment for this test
+# need to give the crentials glue:DropTable priviledges
+mode skip
+
 statement ok
-CREATE SECRET glue_secret (
+CREATE SECRET (
     TYPE S3,
     PROVIDER credential_chain,
-    CHAIN 'sts',
-    ASSUME_ROLE_ARN 'arn:aws:iam::840140254803:role/pyiceberg-etl-role',
     REGION 'us-east-1'
 );
 
@@ -121,7 +123,7 @@ commit
 statement error con1
 commit
 ----
-<REGEX>:.*HTTP Error.*branch main has changed.*
+<REGEX>:.*TransactionContext Error.*branch main has changed.*
 
 # we see the con2 update
 query IIII
@@ -170,3 +172,4 @@ select * from my_datalake.test_inserts.basic_insert_test;
 15	mr.scroog	bitlane	2010-06-11
 16	mr.Goose	ponder	2010-06-11
 17	ms.Swan	lakeway	2010-06-11
+

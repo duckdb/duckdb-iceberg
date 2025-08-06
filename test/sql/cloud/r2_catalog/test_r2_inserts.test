@@ -6,7 +6,7 @@ require-env ICEBERG_AWS_REMOTE_AVAILABLE
 
 require-env ICEBERG_REMOTE_INSERT_READY
 
-require-env r2_token
+require-env R2_TOKEN
 
 require avro
 
@@ -21,7 +21,7 @@ require aws
 statement ok
 CREATE SECRET r2_secret (
     TYPE ICEBERG,
-    TOKEN 'qq5IoEUuIImHrBQSjz_7Sa2gcNvyEuk_8ruKXkD1'
+    TOKEN '${R2_TOKEN}'
 );
 
 statement ok

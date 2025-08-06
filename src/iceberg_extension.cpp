@@ -21,8 +21,8 @@
 
 namespace duckdb {
 
-static unique_ptr<TransactionManager> CreateTransactionManager(StorageExtensionInfo *storage_info, AttachedDatabase &db,
-                                                               Catalog &catalog) {
+static unique_ptr<TransactionManager> CreateTransactionManager(optional_ptr<StorageExtensionInfo> storage_info,
+                                                               AttachedDatabase &db, Catalog &catalog) {
 	auto &ic_catalog = catalog.Cast<IRCatalog>();
 	return make_uniq<ICTransactionManager>(db, ic_catalog);
 }
@@ -38,6 +38,7 @@ public:
 static void LoadInternal(ExtensionLoader &loader) {
 	auto &instance = loader.GetDatabaseInstance();
 	ExtensionHelper::AutoLoadExtension(instance, "parquet");
+
 	if (!instance.ExtensionIsLoaded("parquet")) {
 		throw MissingExtensionException("The iceberg extension requires the parquet extension to be loaded!");
 	}
@@ -75,8 +76,8 @@ static void LoadInternal(ExtensionLoader &loader) {
 	config.storage_extensions["iceberg"] = make_uniq<IRCStorageExtension>();
 }
 
-void IcebergExtension::Load(ExtensionLoader &db) {
-	LoadInternal(db);
+void IcebergExtension::Load(ExtensionLoader &loader) {
+	LoadInternal(loader);
 }
 string IcebergExtension::Name() {
 	return "iceberg";
@@ -85,7 +86,6 @@ string IcebergExtension::Name() {
 } // namespace duckdb
 
 extern "C" {
-
 DUCKDB_CPP_EXTENSION_ENTRY(iceberg, loader) {
 	LoadInternal(loader);
 }

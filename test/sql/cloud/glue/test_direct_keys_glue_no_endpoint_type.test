@@ -100,8 +100,6 @@ attach '840140254803:s3tablescatalog/pyiceberg-blog-bucket' as my_datalake (
 	ENDPOINT 'glue.us-east-1.amazonaws.com/iceberg'
 );
 
-
-# TODO: re-enable verification of this output with output from 76
 query I
 select count(*) > 5 from (show all tables);
 ----

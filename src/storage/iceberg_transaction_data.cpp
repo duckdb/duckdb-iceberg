@@ -1,6 +1,8 @@
 #include "storage/iceberg_transaction_data.hpp"
 #include "storage/irc_table_set.hpp"
 #include "storage/table_update/iceberg_add_snapshot.hpp"
+#include "storage/table_update/common.hpp"
+#include "storage/iceberg_table_information.hpp"
 
 #include "duckdb/common/types/uuid.hpp"
 
@@ -92,6 +94,50 @@ void IcebergTransactionData::AddSnapshot(IcebergSnapshotOperationType operation,
 	                                std::make_move_iterator(data_files.end()));
 	alters.push_back(*add_snapshot);
 	updates.push_back(std::move(add_snapshot));
+}
+
+void IcebergTransactionData::TableAddSchema() {
+	updates.push_back(make_uniq<AddSchemaUpdate>(table_info));
+}
+
+void IcebergTransactionData::TableAssignUUID() {
+	updates.push_back(make_uniq<AssignUUIDUpdate>(table_info));
+}
+
+void IcebergTransactionData::TableAddAssertCreate() {
+	requirements.push_back(make_uniq<AssertCreateRequirement>(table_info));
+}
+
+void IcebergTransactionData::TableAddUpradeFormatVersion() {
+	updates.push_back(make_uniq<UpgradeFormatVersion>(table_info));
+}
+
+void IcebergTransactionData::TableAddSetCurrentSchema() {
+	updates.push_back(make_uniq<SetCurrentSchema>(table_info));
+}
+
+void IcebergTransactionData::TableAddPartitionSpec() {
+	updates.push_back(make_uniq<AddPartitionSpec>(table_info));
+}
+
+void IcebergTransactionData::TableAddSortOrder() {
+	updates.push_back(make_uniq<AddSortOrder>(table_info));
+}
+
+void IcebergTransactionData::TableSetDefaultSortOrder() {
+	updates.push_back(make_uniq<SetDefaultSortOrder>(table_info));
+}
+
+void IcebergTransactionData::TableSetDefaultSpec() {
+	updates.push_back(make_uniq<SetDefaultSpec>(table_info));
+}
+
+void IcebergTransactionData::TableSetProperties(case_insensitive_map_t<string> properties) {
+	updates.push_back(make_uniq<SetProperties>(table_info, properties));
+}
+
+void IcebergTransactionData::TableSetLocation() {
+	updates.push_back(make_uniq<SetLocation>(table_info));
 }
 
 } // namespace duckdb

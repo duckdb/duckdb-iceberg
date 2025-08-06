@@ -3,6 +3,7 @@
 
 #include "duckdb/storage/caching_file_system.hpp"
 #include "catalog_utils.hpp"
+#include "storage/iceberg_table_information.hpp"
 
 namespace duckdb {
 

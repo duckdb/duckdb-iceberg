@@ -4,6 +4,7 @@
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/main/client_data.hpp"
 #include "duckdb/main/database.hpp"
+#include "duckdb/main/extension/extension_loader.hpp"
 
 #include <sys/stat.h>
 
@@ -33,14 +34,15 @@ static string AddHttpHostIfMissing(const string &url) {
 	return "http://" + url;
 }
 
-unique_ptr<HTTPResponse> APIUtils::DeleteRequest(ClientContext &context, const string &url, const string &token) {
+unique_ptr<HTTPResponse> APIUtils::DeleteRequest(ClientContext &context, const IRCEndpointBuilder &endpoint_builder,
+                                                 const string &token) {
 	auto &db = DatabaseInstance::GetDatabase(context);
 
 	HTTPHeaders headers(db);
 	headers.Insert("X-Iceberg-Access-Delegation", "vended-credentials");
 	headers.Insert("Authorization", StringUtil::Format("Bearer %s", token));
 
-	string request_url = AddHttpHostIfMissing(url);
+	string request_url = AddHttpHostIfMissing(endpoint_builder.GetURL());
 	auto &http_util = HTTPUtil::Get(db);
 	unique_ptr<HTTPParams> params;
 	params = http_util.InitializeParameters(context, request_url);

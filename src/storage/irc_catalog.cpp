@@ -12,6 +12,7 @@
 #include "duckdb/parser/parsed_data/create_schema_info.hpp"
 #include "duckdb/main/attached_database.hpp"
 #include "rest_catalog/objects/catalog_config.hpp"
+#include "duckdb/planner/operator/logical_create_table.hpp"
 #include "storage/irc_catalog.hpp"
 
 #include <regex>
@@ -65,17 +66,46 @@ optional_ptr<SchemaCatalogEntry> IRCatalog::LookupSchema(CatalogTransaction tran
 }
 
 optional_ptr<CatalogEntry> IRCatalog::CreateSchema(CatalogTransaction transaction, CreateSchemaInfo &info) {
-	throw NotImplementedException("IRCatalog::CreateSchema not implemented");
+	optional_ptr<ClientContext> context = transaction.GetContext();
+	if (info.on_conflict == OnCreateConflict::REPLACE_ON_CONFLICT) {
+		throw InvalidInputException("CREATE OR REPLACE not supported in DuckDB-Iceberg");
+	}
+
+	D_ASSERT(context.get() != nullptr);
+	rest_api_objects::CreateNamespaceRequest request;
+	request.has_properties = false;
+	auto namespace_identifiers = IRCAPI::ParseSchemaName(info.schema);
+	for (auto &identifier : namespace_identifiers) {
+		request._namespace.value.push_back(identifier);
+	}
+	std::unique_ptr<yyjson_mut_doc, YyjsonDocDeleter> doc_p(yyjson_mut_doc_new(nullptr));
+	auto doc = doc_p.get();
+	auto root_object = yyjson_mut_obj(doc);
+	yyjson_mut_doc_set_root(doc, root_object);
+	auto namespace_arr = yyjson_mut_obj_add_arr(doc, root_object, "namespace");
+	for (auto &name : request._namespace.value) {
+		yyjson_mut_arr_add_strcpy(doc, namespace_arr, name.c_str());
+	}
+	// properties object is also requeried. Empty for now since we don't support properties
+	auto properties_obj = yyjson_mut_obj_add_obj(doc, root_object, "properties");
+	auto create_body = ICUtils::JsonToString(std::move(doc_p));
+	IRCAPI::CommitNamespaceCreate(*context.get(), *this, create_body);
+
+	auto &irc_transaction = IRCTransaction::Get(transaction.GetContext(), *this);
+	auto &schemas = irc_transaction.GetSchemas();
+	auto new_schema = make_uniq<IRCSchemaEntry>(*this, info);
+	schemas.entries.insert(make_pair(new_schema->name, std::move(new_schema)));
+	auto ret = schemas.entries.find(info.schema);
+	return ret->second.get();
 }
 
 void IRCatalog::DropSchema(ClientContext &context, DropInfo &info) {
-	throw NotImplementedException("IRCatalog::DropSchema not implemented");
+	vector<string> namespace_items;
+	auto namespace_identifier = IRCAPI::ParseSchemaName(info.name);
+	namespace_items.push_back(IRCAPI::GetEncodedSchemaName(namespace_identifier));
+	IRCAPI::CommitNamespaceDrop(context, *this, namespace_items);
 }
 
-PhysicalOperator &IRCatalog::PlanCreateTableAs(ClientContext &context, PhysicalPlanGenerator &planner,
-                                               LogicalCreateTable &op, PhysicalOperator &plan) {
-	throw NotImplementedException("IRCatalog PlanCreateTableAs");
-}
 PhysicalOperator &IRCatalog::PlanDelete(ClientContext &context, PhysicalPlanGenerator &planner, LogicalDelete &op,
                                         PhysicalOperator &plan) {
 	throw NotImplementedException("IRCatalog PlanDelete");
@@ -400,8 +430,20 @@ static void GlueAttach(ClientContext &context, IcebergAttachOptions &input) {
 	S3OrGlueAttachInternal(input, "glue", region.ToString());
 }
 
-unique_ptr<Catalog> IRCatalog::Attach(StorageExtensionInfo *storage_info, ClientContext &context, AttachedDatabase &db,
-                                      const string &name, AttachInfo &info, AccessMode access_mode) {
+void IRCatalog::SetAWSCatalogOptions(IcebergAttachOptions &attach_options,
+                                     case_insensitive_set_t &set_by_attach_options) {
+	attach_options.allows_deletes = false;
+	if (set_by_attach_options.find("support_stage_create") == set_by_attach_options.end()) {
+		attach_options.supports_stage_create = false;
+	}
+	if (set_by_attach_options.find("purge_requested") == set_by_attach_options.end()) {
+		attach_options.purge_requested = true;
+	}
+}
+
+unique_ptr<Catalog> IRCatalog::Attach(optional_ptr<StorageExtensionInfo> storage_info, ClientContext &context,
+                                      AttachedDatabase &db, const string &name, AttachInfo &info,
+                                      AttachOptions &options) {
 	IRCEndpointBuilder endpoint_builder;
 
 	string endpoint_type_string;
@@ -413,6 +455,7 @@ unique_ptr<Catalog> IRCatalog::Attach(StorageExtensionInfo *storage_info, Client
 
 	// check if we have a secret provided
 	string secret_name;
+	case_insensitive_set_t set_by_attach_options;
 	//! First handle generic attach options
 	for (auto &entry : info.options) {
 		auto lower_name = StringUtil::Lower(entry.first);
@@ -427,9 +470,17 @@ unique_ptr<Catalog> IRCatalog::Attach(StorageExtensionInfo *storage_info, Client
 		} else if (lower_name == "endpoint") {
 			attach_options.endpoint = StringUtil::Lower(entry.second.ToString());
 			StringUtil::RTrim(attach_options.endpoint, "/");
+		} else if (lower_name == "support_stage_create") {
+			auto result = entry.second.DefaultCastAs(LogicalType::BOOLEAN).GetValue<bool>();
+			attach_options.supports_stage_create = result;
+			set_by_attach_options.insert("supports_stage_create");
 		} else if (lower_name == "support_nested_namespaces") {
 			attach_options.support_nested_namespaces =
 			    entry.second.DefaultCastAs(LogicalType::BOOLEAN).GetValue<bool>();
+			set_by_attach_options.insert("support_nested_namespaces");
+		} else if (lower_name == "purge_requested") {
+			attach_options.purge_requested = entry.second.DefaultCastAs(LogicalType::BOOLEAN).GetValue<bool>();
+			set_by_attach_options.insert("purge_requested");
 		} else {
 			attach_options.options.emplace(std::move(entry));
 		}
@@ -442,12 +493,13 @@ unique_ptr<Catalog> IRCatalog::Attach(StorageExtensionInfo *storage_info, Client
 		case IcebergEndpointType::AWS_GLUE: {
 			GlueAttach(context, attach_options);
 			endpoint_type = IcebergEndpointType::AWS_GLUE;
+			SetAWSCatalogOptions(attach_options, set_by_attach_options);
 			break;
 		}
 		case IcebergEndpointType::AWS_S3TABLES: {
 			S3TablesAttach(attach_options);
 			endpoint_type = IcebergEndpointType::AWS_S3TABLES;
-			attach_options.allows_deletes = false;
+			SetAWSCatalogOptions(attach_options, set_by_attach_options);
 			break;
 		}
 		default:
@@ -500,7 +552,7 @@ unique_ptr<Catalog> IRCatalog::Attach(StorageExtensionInfo *storage_info, Client
 	}
 
 	D_ASSERT(auth_handler);
-	auto catalog = make_uniq<IRCatalog>(db, access_mode, std::move(auth_handler), attach_options);
+	auto catalog = make_uniq<IRCatalog>(db, options.access_mode, std::move(auth_handler), attach_options);
 	catalog->GetConfig(context, endpoint_type);
 	return std::move(catalog);
 }

@@ -39,6 +39,8 @@ struct IcebergScanTemporaryData {
 	IcebergTableMetadata metadata;
 };
 
+struct IcebergTransactionData;
+
 struct IcebergScanInfo : public TableFunctionInfo {
 public:
 	IcebergScanInfo(const string &metadata_path, IcebergTableMetadata &metadata, optional_ptr<IcebergSnapshot> snapshot,

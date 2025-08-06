@@ -31,6 +31,7 @@
 #include "storage/irc_schema_set.hpp"
 #include "storage/irc_table_set.hpp"
 #include "storage/irc_table_entry.hpp"
+#include "storage/iceberg_table_information.hpp"
 
 #include "metadata/iceberg_table_metadata.hpp"
 

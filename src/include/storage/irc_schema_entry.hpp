@@ -7,6 +7,7 @@
 
 namespace duckdb {
 class IRCTransaction;
+struct IRCAPISchema;
 
 class IRCSchemaEntry : public SchemaCatalogEntry {
 public:
@@ -18,6 +19,8 @@ public:
 
 public:
 	optional_ptr<CatalogEntry> CreateTable(CatalogTransaction transaction, BoundCreateTableInfo &info) override;
+	optional_ptr<CatalogEntry> CreateTable(IRCTransaction &irc_transaction, ClientContext &context,
+	                                       BoundCreateTableInfo &info);
 	optional_ptr<CatalogEntry> CreateFunction(CatalogTransaction transaction, CreateFunctionInfo &info) override;
 	optional_ptr<CatalogEntry> CreateIndex(CatalogTransaction transaction, CreateIndexInfo &info,
 	                                       TableCatalogEntry &table) override;

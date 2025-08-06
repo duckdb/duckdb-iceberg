@@ -14,6 +14,8 @@
 namespace duckdb {
 
 struct IcebergTableInformation;
+struct IcebergManifestFile;
+struct IcebergManifestList;
 
 struct IcebergAddSnapshot : public IcebergTableUpdate {
 	static constexpr const IcebergTableUpdateType TYPE = IcebergTableUpdateType::ADD_SNAPSHOT;

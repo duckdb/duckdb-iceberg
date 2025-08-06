@@ -26,24 +26,5 @@ data_large: data data_clean
 data_clean:
 	rm -rf data/generated
 
-format-fix:
-	rm -rf src/amalgamation/*
-	python3 scripts/format.py --all --fix --noconfirm
-
-format-check:
-	python3 scripts/format.py --all --check
-
-format-head:
-	python3 scripts/format.py HEAD --fix --noconfirm
-
-format-changes:
-	python3 scripts/format.py HEAD --fix --noconfirm
-
-format-main:
-	python3 scripts/format.py main --fix --noconfirm
-
-format-check-silent:
-	python3 scripts/format.py --all --check --silent
-
 wasm_pre_build_step:
 	jq 'del(.overrides,.dependencies[5])' vcpkg.json | unexpand -t2 > vcpkg.json.tmp && mv vcpkg.json.tmp vcpkg.json

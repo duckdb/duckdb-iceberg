@@ -655,7 +655,6 @@ void IcebergMultiFileList::ScanDeleteFile(const IcebergManifestEntry &entry,
 	auto &instance = DatabaseInstance::GetDatabase(context);
 	//! FIXME: delete files could also be made without row_ids,
 	//! in which case we need to rely on the `'schema.column-mapping.default'` property just like data files do.
-
 	auto &system_catalog = Catalog::GetSystemCatalog(instance);
 	auto data = CatalogTransaction::GetSystemTransaction(instance);
 	auto &schema = system_catalog.GetSchema(data, DEFAULT_SCHEMA);

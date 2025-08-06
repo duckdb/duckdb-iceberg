@@ -1,0 +1,82 @@
+# name: test/sql/local/irc/create/test_create_and_delete_schema_table.test
+# description: test integration with iceberg catalog read
+# group: [create]
+
+require-env ICEBERG_SERVER_AVAILABLE
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+pragma enable_logging('HTTP');
+
+statement ok
+set logging_level='debug'
+
+statement ok
+CREATE SECRET (
+    TYPE S3,
+    KEY_ID 'admin',
+    SECRET 'password',
+    ENDPOINT '127.0.0.1:9000',
+    URL_STYLE 'path',
+    USE_SSL 0
+);
+
+
+statement ok
+ATTACH '' AS my_datalake (
+    TYPE ICEBERG,
+    CLIENT_ID 'admin',
+    CLIENT_SECRET 'password',
+    ENDPOINT 'http://127.0.0.1:8181'
+);
+
+
+statement ok
+create schema my_datalake.new_schema_1;
+
+statement ok
+create table my_datalake.new_schema_1.my_table as select range a from range(100);
+
+query I nosort res_1
+select * from my_datalake.new_schema_1.my_table;
+----
+
+query I nosort res_1
+select * from range(100);
+----
+
+query I
+select name from (show all tables) where schema = 'new_schema_1';
+----
+my_table
+
+statement error
+drop schema my_datalake.new_schema_1;
+----
+<REGEX>:.*Namespace.*is not empty.*
+
+statement ok
+drop table my_datalake.new_schema_1.my_table;
+
+statement error
+create or replace table my_datalake.new_schema_1.table_2 as select range a from range(300);
+----
+<REGEX>:.*CREATE OR REPLACE not supported.*
+
+statement error
+create or replace schema my_datalake.new_schema_1;
+----
+<REGEX>:.*CREATE OR REPLACE not supported.*
+
+statement ok
+drop schema my_datalake.new_schema_1;

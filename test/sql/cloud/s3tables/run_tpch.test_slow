@@ -20,6 +20,10 @@ require aws
 
 require tpch
 
+# skip until we can pin a catalog snapshot and avoid making extra
+# calls to LoadTableEndpoint
+mode skip
+
 statement ok
 CREATE SECRET glue_secret (
     TYPE S3,

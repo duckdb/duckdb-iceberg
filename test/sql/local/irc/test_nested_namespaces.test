@@ -46,3 +46,29 @@ select * from my_datalake."level1.level2.level3".nested_namespaces
 some	1	data
 more	2	data
 yet	3	more data
+
+statement ok
+create schema my_datalake."my.nested.namespace";
+
+statement ok
+create table my_datalake."my.nested.namespace".table1 as select range a from range(10);
+
+query I
+select * from my_datalake."my.nested.namespace".table1;
+----
+0
+1
+2
+3
+4
+5
+6
+7
+8
+9
+
+statement ok
+drop table my_datalake."my.nested.namespace".table1;
+
+statement ok
+drop schema my_datalake."my.nested.namespace";

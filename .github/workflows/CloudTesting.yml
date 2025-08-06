@@ -49,22 +49,23 @@ jobs:
 
       - name: install python packages
         run: |
-          python3 -m pip install scripts/requirements.txt
+          python3 -m pip install -r scripts/requirements.txt
 
       - name: Set up cloud testing
         env:
           AWS_ACCESS_KEY_ID: ${{secrets.S3_ICEBERG_TEST_USER_KEY_ID}}
           AWS_SECRET_ACCESS_KEY: ${{secrets.S3_ICEBERG_TEST_USER_SECRET}}
           AWS_DEFAULT_REGION: ${{secrets.S3_ICEBERG_TEST_USER_REGION}}
-          r2_token: ${{secrets.r2_token}}
+          R2_TOKEN: ${{secrets.r2_token}}
         run: | 
-          python3 scripts/create_insert_table.py --action=delete-and-create --catalogs=s3tables,r2,glue
+          python3 scripts/create_s3_insert_table.py --action=delete-and-create --catalogs=s3tables,r2,glue
 
       - name: Test with rest catalog
         env:
           AWS_ACCESS_KEY_ID: ${{secrets.S3_ICEBERG_TEST_USER_KEY_ID}}
           AWS_SECRET_ACCESS_KEY: ${{secrets.S3_ICEBERG_TEST_USER_SECRET}}
           AWS_DEFAULT_REGION: ${{secrets.S3_ICEBERG_TEST_USER_REGION}}
+          R2_TOKEN: ${{secrets.r2_token}}
           ICEBERG_REMOTE_INSERT_READY: 1
           ICEBERG_AWS_REMOTE_AVAILABLE: 1
         run: |
@@ -72,6 +73,8 @@ jobs:
 
       - name: File issue if error
         if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           echo "Cloud tests failed. see [Run Link](https://github.com/duckdblabs/duckdb-internal/actions/runs/${{ github.run_id }})" > report.txt
           gh issue create --repo duckdb/duckdb-iceberg --title "Cloud Test Failures" --body-file report.txt
