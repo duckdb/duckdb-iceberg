@@ -31,7 +31,7 @@ attach 'arn:aws:s3tables:us-east-2:840140254803:bucket/iceberg-testing' as s3_ca
 );
 
 statement ok
-create schema s3_catalog.test_create_schema;
+create schema IF NOT EXISTS s3_catalog.test_create_schema;
 
 statement ok
 use s3_catalog.test_create_schema;

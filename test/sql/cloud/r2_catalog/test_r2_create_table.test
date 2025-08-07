@@ -31,7 +31,7 @@ attach '6b17833f308abc1e1cc343c552b51f51_r2-catalog' AS my_datalake (
 );
 
 statement ok
-create schema my_datalake.test_create;
+create schema IF NOT EXISTS my_datalake.test_create;
 
 statement ok
 use my_datalake.test_create;
