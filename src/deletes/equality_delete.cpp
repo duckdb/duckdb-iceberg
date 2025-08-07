@@ -61,9 +61,18 @@ void IcebergMultiFileList::ScanEqualityDeleteFile(const IcebergManifestEntry &en
 		id_to_global_column[col.identifier.GetValue<int32_t>()] = i;
 	}
 
+	std::vector<ColumnIndex> new_column_indexes = column_indexes;
+	for (auto field_id : entry.equality_ids) {
+		auto global_column_id = id_to_global_column[field_id];
+		ColumnIndex equality_index(global_column_id);
+		if (std::find(column_indexes.begin(), column_indexes.end(), equality_index) == column_indexes.end()) {
+			new_column_indexes.push_back(equality_index);
+		}
+	}
+
 	unordered_map<idx_t, idx_t> global_id_to_result_id;
-	for (idx_t i = 0; i < column_indexes.size(); i++) {
-		auto &column_index = column_indexes[i];
+	for (idx_t i = 0; i < new_column_indexes.size(); i++) {
+		auto &column_index = new_column_indexes[i];
 		if (column_index.IsVirtualColumn()) {
 			continue;
 		}
@@ -85,9 +94,6 @@ void IcebergMultiFileList::ScanEqualityDeleteFile(const IcebergManifestEntry &en
 		auto &vec = result.data[col_idx];
 
 		auto it = global_id_to_result_id.find(global_column_id);
-		if (it == global_id_to_result_id.end()) {
-			throw NotImplementedException("Equality deletes need the relevant columns to be selected");
-		}
 		global_column_id = it->second;
 
 		for (idx_t i = 0; i < count; i++) {

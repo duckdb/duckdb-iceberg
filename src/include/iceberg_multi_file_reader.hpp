@@ -50,6 +50,11 @@ public:
 	                      const MultiFileReaderBindData &bind_data, const MultiFileList &file_list,
 	                      const vector<MultiFileColumnDefinition> &global_columns,
 	                      const vector<ColumnIndex> &global_column_ids) override;
+	ReaderInitializeType InitializeReader(MultiFileReaderData &reader_data, const MultiFileBindData &bind_data,
+	                                      const vector<MultiFileColumnDefinition> &global_columns,
+	                                      const vector<ColumnIndex> &global_column_ids,
+	                                      optional_ptr<TableFilterSet> table_filters, ClientContext &context,
+	                                      MultiFileGlobalState &gstate) override;
 	void FinalizeBind(MultiFileReaderData &reader_data, const MultiFileOptions &file_options,
 	                  const MultiFileReaderBindData &options, const vector<MultiFileColumnDefinition> &global_columns,
 	                  const vector<ColumnIndex> &global_column_ids, ClientContext &context,
@@ -59,7 +64,8 @@ public:
 	                   ExpressionExecutor &executor, optional_ptr<MultiFileReaderGlobalState> global_state) override;
 	void ApplyEqualityDeletes(ClientContext &context, DataChunk &output_chunk,
 	                          const IcebergMultiFileList &multi_file_list, const IcebergManifestEntry &data_file,
-	                          const vector<MultiFileColumnDefinition> &local_columns);
+	                          const vector<MultiFileColumnDefinition> &local_columns,
+	                          unordered_map<idx_t, idx_t> field_id_to_result_id);
 	bool ParseOption(const string &key, const Value &val, MultiFileOptions &options, ClientContext &context) override;
 
 public:

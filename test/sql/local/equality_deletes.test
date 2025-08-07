@@ -44,7 +44,8 @@ SELECT filename[17:32], name, id FROM ICEBERG_SCAN('data/persistent/equality_del
 equality_deletes	b	2
 equality_deletes	b	1
 
-statement error
+query II
 SELECT filename[17:32], name FROM ICEBERG_SCAN('data/persistent/equality_deletes/warehouse/mydb/mytable');
 ----
-Not implemented Error: Equality deletes need the relevant columns to be selected
+equality_deletes	b
+equality_deletes	b
