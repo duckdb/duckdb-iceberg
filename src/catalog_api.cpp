@@ -63,8 +63,8 @@ string IRCAPI::GetEncodedSchemaName(const vector<string> &items) {
 	                    int(response.status));
 }
 
-static string GetTableMetadata(ClientContext &context, IRCatalog &catalog, const IRCSchemaEntry &schema,
-                               const string &table) {
+static unique_ptr<HTTPResponse> GetTableMetadata(ClientContext &context, IRCatalog &catalog,
+                                                 const IRCSchemaEntry &schema, const string &table) {
 	auto schema_name = IRCAPI::GetEncodedSchemaName(schema.namespace_items);
 
 	auto url_builder = catalog.GetBaseUrl();
@@ -79,22 +79,27 @@ static string GetTableMetadata(ClientContext &context, IRCatalog &catalog, const
 	if (!response->Success()) {
 		ThrowException(url, *response, "GET");
 	}
-
-	const auto &api_result = response->body;
-	std::unique_ptr<yyjson_doc, YyjsonDocDeleter> doc(ICUtils::api_result_to_doc(api_result));
-	auto *root = yyjson_doc_get_root(doc.get());
-	auto load_table_result = rest_api_objects::LoadTableResult::FromJSON(root);
-	catalog.SetCachedValue(url, api_result, load_table_result);
-	return api_result;
+	return std::move(response);
 }
 
-rest_api_objects::LoadTableResult IRCAPI::GetTable(ClientContext &context, IRCatalog &catalog,
-                                                   const IRCSchemaEntry &schema, const string &table_name) {
-	string result = GetTableMetadata(context, catalog, schema, table_name);
-	std::unique_ptr<yyjson_doc, YyjsonDocDeleter> doc(ICUtils::api_result_to_doc(result));
+APIResult<rest_api_objects::LoadTableResult> IRCAPI::GetTable(ClientContext &context, IRCatalog &catalog,
+                                                              const IRCSchemaEntry &schema, const string &table_name) {
+	auto ret = APIResult<rest_api_objects::LoadTableResult>();
+	auto result = GetTableMetadata(context, catalog, schema, table_name);
+	if (result->status != HTTPStatusCode::OK_200) {
+		yyjson_val *error_obj = ICUtils::get_error_message(result->body);
+		if (error_obj == nullptr) {
+			throw InvalidConfigurationException(result->body);
+		}
+		ret.has_error = true;
+		ret.error_ = rest_api_objects::IcebergErrorResponse::FromJSON(error_obj);
+		return ret;
+	}
+	ret.has_error = false;
+	std::unique_ptr<yyjson_doc, YyjsonDocDeleter> doc(ICUtils::api_result_to_doc(result->body));
 	auto *metadata_root = yyjson_doc_get_root(doc.get());
-	auto load_table_result = rest_api_objects::LoadTableResult::FromJSON(metadata_root);
-	return load_table_result;
+	ret.result_ = rest_api_objects::LoadTableResult::FromJSON(metadata_root);
+	return ret;
 }
 
 vector<rest_api_objects::TableIdentifier> IRCAPI::GetTables(ClientContext &context, IRCatalog &catalog,
