@@ -33,7 +33,7 @@ endif ()
 endif()
 
 duckdb_extension_load(httpfs
-        GIT_URL https://github.com/duckdb/duckdb-httpfs
-        GIT_TAG da2821906eb42f7255d969be3e073bc1b45a71a8
-        INCLUDE_DIR extension/httpfs/include
+        GIT_URL https://github.com/danklynn/duckdb-httpfs
+        GIT_TAG d5a7a2b06d4b6dc5e98cd19748d1dbe3cd9c5aa6
 )
+
