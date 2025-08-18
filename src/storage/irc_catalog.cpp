@@ -14,8 +14,7 @@
 #include "rest_catalog/objects/catalog_config.hpp"
 #include "duckdb/planner/operator/logical_create_table.hpp"
 #include "storage/irc_catalog.hpp"
-
-#include <regex>
+#include "regex"
 #include "storage/irc_authorization.hpp"
 #include "storage/authorization/oauth2.hpp"
 #include "storage/authorization/sigv4.hpp"
@@ -89,6 +88,15 @@ optional_ptr<CatalogEntry> IRCatalog::CreateSchema(CatalogTransaction transactio
 	// properties object is also requeried. Empty for now since we don't support properties
 	auto properties_obj = yyjson_mut_obj_add_obj(doc, root_object, "properties");
 	auto create_body = ICUtils::JsonToString(std::move(doc_p));
+
+	if (info.on_conflict == OnCreateConflict::IGNORE_ON_CONFLICT) {
+		auto schema_lookup = EntryLookupInfo(CatalogType::SCHEMA_ENTRY, info.schema);
+		auto schema_exists = LookupSchema(transaction, schema_lookup, OnEntryNotFound::RETURN_NULL);
+		if (schema_exists) {
+			return nullptr;
+		}
+	}
+
 	IRCAPI::CommitNamespaceCreate(*context.get(), *this, create_body);
 
 	auto &irc_transaction = IRCTransaction::Get(transaction.GetContext(), *this);
@@ -103,13 +111,18 @@ void IRCatalog::DropSchema(ClientContext &context, DropInfo &info) {
 	vector<string> namespace_items;
 	auto namespace_identifier = IRCAPI::ParseSchemaName(info.name);
 	namespace_items.push_back(IRCAPI::GetEncodedSchemaName(namespace_identifier));
+	if (info.if_not_found == OnEntryNotFound::RETURN_NULL) {
+		auto schema_lookup = EntryLookupInfo(CatalogType::SCHEMA_ENTRY, info.name);
+		// auto &irc_transaction = CatalogTran::Get(context, *this);
+		auto transaction = CatalogTransaction::GetSystemCatalogTransaction(context);
+		auto schema_exists = LookupSchema(transaction, schema_lookup, info.if_not_found);
+		if (!schema_exists) {
+			return;
+		}
+	}
 	IRCAPI::CommitNamespaceDrop(context, *this, namespace_items);
 }
 
-PhysicalOperator &IRCatalog::PlanDelete(ClientContext &context, PhysicalPlanGenerator &planner, LogicalDelete &op,
-                                        PhysicalOperator &plan) {
-	throw NotImplementedException("IRCatalog PlanDelete");
-}
 PhysicalOperator &IRCatalog::PlanUpdate(ClientContext &context, PhysicalPlanGenerator &planner, LogicalUpdate &op,
                                         PhysicalOperator &plan) {
 	throw NotImplementedException("IRCatalog PlanUpdate");

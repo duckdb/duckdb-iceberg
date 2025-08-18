@@ -6,6 +6,7 @@
 
 #include "duckdb/catalog/catalog_entry/table_function_catalog_entry.hpp"
 #include "duckdb/common/exception.hpp"
+#include "duckdb/function/function_binder.hpp"
 #include "duckdb/execution/execution_context.hpp"
 #include "duckdb/parallel/thread_context.hpp"
 #include "duckdb/parser/tableref/table_function_ref.hpp"
@@ -268,9 +269,9 @@ void IcebergMultiFileReader::FinalizeBind(MultiFileReaderData &reader_data, cons
 		const auto &data_file = multi_file_list.data_files[file_id];
 		// The path of the data file where this chunk was read from
 		const auto &file_path = data_file.file_path;
-
 		lock_guard<mutex> delete_guard(multi_file_list.delete_lock);
-		if (multi_file_list.current_delete_manifest != multi_file_list.delete_manifests.end()) {
+		if (multi_file_list.current_delete_manifest != multi_file_list.delete_manifests.end() ||
+		    !multi_file_list.transaction_delete_manifests.empty()) {
 			multi_file_list.ProcessDeletes(global_columns, global_column_ids);
 		}
 		reader.deletion_filter = std::move(multi_file_list.GetPositionalDeletesForFile(file_path));
@@ -456,6 +457,46 @@ bool IcebergMultiFileReader::ParseOption(const string &key, const Value &val, Mu
 		return true;
 	}
 	return MultiFileReader::ParseOption(key, val, options, context);
+}
+
+unique_ptr<Expression> IcebergMultiFileReader::GetVirtualColumnExpression(
+    ClientContext &context, MultiFileReaderData &reader_data, const vector<MultiFileColumnDefinition> &local_columns,
+    idx_t &column_id, const LogicalType &type, MultiFileLocalIndex local_idx,
+    optional_ptr<MultiFileColumnDefinition> &global_column_reference) {
+	if (column_id == COLUMN_IDENTIFIER_ROW_ID) {
+		// row id column
+		// this is computed as row_id_start + file_row_number OR read from the file
+		// first check if the row id is explicitly defined in this file
+		for (auto &col : local_columns) {
+			if (col.identifier.IsNull()) {
+				continue;
+			}
+			if (col.identifier.GetValue<int32_t>() == MultiFileReader::ROW_ID_FIELD_ID) {
+				throw InternalException("Should not be here. Iceberg doesn't support global row ids");
+				// it is! return a reference to the global row id column so we can read it from the file directly
+				global_column_reference = row_id_column.get();
+				return nullptr;
+			}
+		}
+		// get the row id start for this file
+		if (!reader_data.file_to_be_opened.extended_info) {
+			throw InternalException("Extended info not found for reading row id column");
+		}
+
+		auto row_id_expr = make_uniq<BoundConstantExpression>(Value::BIGINT(0));
+		column_id = MultiFileReader::COLUMN_IDENTIFIER_FILE_ROW_NUMBER;
+		return row_id_expr;
+	}
+	return MultiFileReader::GetVirtualColumnExpression(context, reader_data, local_columns, column_id, type, local_idx,
+	                                                   global_column_reference);
+}
+
+ReaderInitializeType IcebergMultiFileReader::CreateMapping(
+    ClientContext &context, MultiFileReaderData &reader_data, const vector<MultiFileColumnDefinition> &global_columns,
+    const vector<ColumnIndex> &global_column_ids, optional_ptr<TableFilterSet> filters, MultiFileList &multi_file_list,
+    const MultiFileReaderBindData &bind_data, const virtual_column_map_t &virtual_columns) {
+	return MultiFileReader::CreateMapping(context, reader_data, global_columns, global_column_ids, filters,
+	                                      multi_file_list, bind_data, virtual_columns);
 }
 
 } // namespace duckdb

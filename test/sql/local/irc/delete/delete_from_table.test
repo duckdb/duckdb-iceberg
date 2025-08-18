@@ -1,5 +1,6 @@
-# name: test/sql/local/irc/insert/iceberg_to_ducklake.test
-# group: [insert]
+# name: test/sql/local/irc/delete/delete_from_table.test
+# description: test integration with iceberg catalog read
+# group: [delete]
 
 require-env ICEBERG_SERVER_AVAILABLE
 
@@ -11,15 +12,11 @@ require iceberg
 
 require httpfs
 
-require ducklake
-
 # Do not ignore 'HTTP' error messages!
 set ignore_error_messages
 
-mode skip
-
 statement ok
-set enable_logging=true
+pragma enable_logging('HTTP');
 
 statement ok
 set logging_level='debug'
@@ -44,14 +41,22 @@ ATTACH '' AS my_datalake (
 );
 
 statement ok
-ATTACH 'ducklake:duckdb:__TEST_DIR__/ducklake.duckdb' as my_ducklake (DATA_PATH '__TEST_DIR__/data_path');
+drop table if exists my_datalake.default.test_delete_table;
 
 statement ok
-call iceberg_to_ducklake(
-    'my_datalake',
-    'my_ducklake',
-    skip_tables := [
-        'pyspark_iceberg_table_v2',
-        'deletion_vectors'
-    ]
-)
+create table my_datalake.default.test_delete_table as select range a from range(10);
+
+statement ok
+delete from my_datalake.default.test_delete_table where a%2 = 0;
+
+query I
+select * from my_datalake.default.test_delete_table;
+----
+1
+3
+5
+7
+9
+
+statement ok
+drop table my_datalake.default.test_delete_table;

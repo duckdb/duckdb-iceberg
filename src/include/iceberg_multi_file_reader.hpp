@@ -24,6 +24,8 @@
 
 namespace duckdb {
 
+struct IcebergDeleteMap;
+
 struct IcebergMultiFileReaderGlobalState : public MultiFileReaderGlobalState {
 public:
 	IcebergMultiFileReaderGlobalState(vector<LogicalType> extra_columns_p, const MultiFileList &file_list_p)
@@ -62,9 +64,26 @@ public:
 	                          const vector<MultiFileColumnDefinition> &local_columns);
 	bool ParseOption(const string &key, const Value &val, MultiFileOptions &options, ClientContext &context) override;
 
+	unique_ptr<Expression>
+	GetVirtualColumnExpression(ClientContext &context, MultiFileReaderData &reader_data,
+	                           const vector<MultiFileColumnDefinition> &local_columns, idx_t &column_id,
+	                           const LogicalType &type, MultiFileLocalIndex local_idx,
+	                           optional_ptr<MultiFileColumnDefinition> &global_column_reference) override;
+
+	ReaderInitializeType CreateMapping(ClientContext &context, MultiFileReaderData &reader_data,
+	                                   const vector<MultiFileColumnDefinition> &global_columns,
+	                                   const vector<ColumnIndex> &global_column_ids,
+	                                   optional_ptr<TableFilterSet> filters, MultiFileList &multi_file_list,
+	                                   const MultiFileReaderBindData &bind_data,
+	                                   const virtual_column_map_t &virtual_columns) override;
+
 public:
 	shared_ptr<TableFunctionInfo> function_info;
+	shared_ptr<IcebergDeleteMap> delete_map;
 	IcebergOptions options;
+
+private:
+	unique_ptr<MultiFileColumnDefinition> row_id_column;
 };
 
 } // namespace duckdb

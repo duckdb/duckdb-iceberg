@@ -6,6 +6,7 @@
 
 #include "duckdb/catalog/catalog_entry/table_function_catalog_entry.hpp"
 #include "duckdb/common/exception.hpp"
+#include "duckdb/common/file_system.hpp"
 #include "duckdb/execution/execution_context.hpp"
 #include "duckdb/parallel/thread_context.hpp"
 #include "duckdb/parser/tableref/table_function_ref.hpp"
@@ -360,6 +361,14 @@ optional_ptr<const IcebergManifestEntry> IcebergMultiFileList::GetDataFile(idx_t
 				auto &data_files = manifest_file.data_files;
 				current_data_files.insert(current_data_files.end(), data_files.begin(), data_files.end());
 				transaction_data_idx++;
+			} else if (!transaction_delete_manifests.empty()) {
+				if (transaction_delete_idx >= transaction_delete_manifests.size()) {
+					//! Exhausted all the transaction-local data
+					return nullptr;
+				}
+				// add to the current data files? I don't think so.
+				auto &manifest_file = transaction_delete_manifests[transaction_delete_idx].get();
+				transaction_delete_idx++;
 			} else {
 				//! No more data manifests to explore
 				return nullptr;
@@ -590,6 +599,8 @@ void IcebergMultiFileList::InitializeFiles(lock_guard<mutex> &guard) {
 
 			if (alter.snapshot.operation == IcebergSnapshotOperationType::APPEND) {
 				transaction_data_manifests.push_back(alter.manifest_file);
+			} else if (alter.snapshot.operation == IcebergSnapshotOperationType::DELETE) {
+				transaction_delete_manifests.push_back(alter.manifest_file);
 			} else {
 				throw NotImplementedException("IcebergSnapshotOperationType: %d",
 				                              static_cast<uint8_t>(alter.snapshot.operation));
@@ -599,6 +610,7 @@ void IcebergMultiFileList::InitializeFiles(lock_guard<mutex> &guard) {
 
 	current_data_manifest = data_manifests.begin();
 	current_delete_manifest = delete_manifests.begin();
+	current_transaction_delete_manifest = transaction_delete_manifests.begin();
 }
 
 void IcebergMultiFileList::ProcessDeletes(const vector<MultiFileColumnDefinition> &global_columns,
@@ -645,7 +657,50 @@ void IcebergMultiFileList::ProcessDeletes(const vector<MultiFileColumnDefinition
 		}
 	}
 
+	while (current_transaction_delete_manifest != transaction_delete_manifests.end()) {
+		for (auto &entry : current_transaction_delete_manifest->get().data_files) {
+			if (StringUtil::CIEquals(entry.file_format, "parquet")) {
+				ScanDeleteFile(entry, global_columns, column_indexes);
+			} else if (StringUtil::CIEquals(entry.file_format, "puffin")) {
+				ScanPuffinFile(entry);
+			} else {
+				throw NotImplementedException(
+				    "File format '%s' not supported for deletes, only supports 'parquet' and 'puffin' currently",
+				    entry.file_format);
+			}
+		}
+		++current_transaction_delete_manifest;
+	}
+
 	D_ASSERT(current_delete_manifest == delete_manifests.end());
+}
+
+vector<IcebergFileListExtendedEntry> IcebergMultiFileList::GetFilesExtended() {
+	lock_guard<mutex> l(lock);
+	InitializeFiles(l);
+
+	vector<IcebergFileListExtendedEntry> result;
+
+	for (auto &file : data_files) {
+		IcebergFileListExtendedEntry file_entry;
+		file_entry.file.path = file.file_path;
+		file_entry.file.file_size_bytes = file.file_size_in_bytes;
+		result.push_back(file_entry);
+	}
+
+	if (HasTransactionData()) {
+		auto &transaction_data = GetTransactionData();
+		for (auto &alter_p : transaction_data.alters) {
+			auto &alter = alter_p.get();
+			for (auto &file : alter.manifest_file.data_files) {
+				IcebergFileListExtendedEntry file_entry;
+				file_entry.file.path = file.file_path;
+				file_entry.file.file_size_bytes = file.file_size_in_bytes;
+				result.push_back(file_entry);
+			}
+		}
+	}
+	return result;
 }
 
 void IcebergMultiFileList::ScanDeleteFile(const IcebergManifestEntry &entry,

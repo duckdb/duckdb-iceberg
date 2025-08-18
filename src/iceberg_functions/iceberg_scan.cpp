@@ -41,6 +41,13 @@ static void AddNamedParameters(TableFunction &fun) {
 	fun.named_parameters["snapshot_from_id"] = LogicalType::UBIGINT;
 }
 
+virtual_column_map_t IcebergVirtualColumns(ClientContext &context, optional_ptr<FunctionData> bind_data_p) {
+	auto &bind_data = bind_data_p->Cast<MultiFileBindData>();
+	auto result = ICTableEntry::VirtualColumns();
+	bind_data.virtual_columns = result;
+	return result;
+}
+
 TableFunctionSet IcebergFunctions::GetIcebergScanFunction(ExtensionLoader &loader) {
 	// The iceberg_scan function is constructed by grabbing the parquet scan from the Catalog, then injecting the
 	// IcebergMultiFileReader into it to create a Iceberg-based multi file read
@@ -60,6 +67,7 @@ TableFunctionSet IcebergFunctions::GetIcebergScanFunction(ExtensionLoader &loade
 		function.statistics = nullptr;
 		function.table_scan_progress = nullptr;
 		function.get_bind_info = nullptr;
+		function.get_virtual_columns = IcebergVirtualColumns;
 
 		// Schema param is just confusing here
 		function.named_parameters.erase("schema");

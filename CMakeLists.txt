@@ -21,6 +21,7 @@ set(EXTENSION_SOURCES
     src/iceberg_logging.cpp
     src/catalog_utils.cpp
     src/storage/iceberg_insert.cpp
+    src/storage/iceberg_delete.cpp
     src/aws.cpp
     src/base_manifest_reader.cpp
     src/manifest_list_reader.cpp

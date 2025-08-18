@@ -1,5 +1,6 @@
-# name: test/sql/local/irc/insert/iceberg_to_ducklake.test
-# group: [insert]
+# name: test/sql/local/irc/create/test_create_schema.test
+# description: test integration with iceberg catalog read
+# group: [create]
 
 require-env ICEBERG_SERVER_AVAILABLE
 
@@ -11,15 +12,11 @@ require iceberg
 
 require httpfs
 
-require ducklake
-
 # Do not ignore 'HTTP' error messages!
 set ignore_error_messages
 
-mode skip
-
 statement ok
-set enable_logging=true
+pragma enable_logging('HTTP');
 
 statement ok
 set logging_level='debug'
@@ -43,15 +40,19 @@ ATTACH '' AS my_datalake (
     ENDPOINT 'http://127.0.0.1:8181'
 );
 
-statement ok
-ATTACH 'ducklake:duckdb:__TEST_DIR__/ducklake.duckdb' as my_ducklake (DATA_PATH '__TEST_DIR__/data_path');
 
+# create non-existent schema
 statement ok
-call iceberg_to_ducklake(
-    'my_datalake',
-    'my_ducklake',
-    skip_tables := [
-        'pyspark_iceberg_table_v2',
-        'deletion_vectors'
-    ]
-)
+create schema my_datalake.new_schema;
+
+# create schema if not exists does not throw error
+statement ok
+create schema if not exists my_datalake.new_schema;
+
+# drop schema if exists does not throw error if schema does not exist
+statement ok
+drop schema if exists my_datalake.non_existent_schema;
+
+# drop newly created schema
+statement ok
+drop schema my_datalake.new_schema;
