@@ -5,7 +5,6 @@
 #include "duckdb/common/string.hpp"
 #include "duckdb/common/vector.hpp"
 #include "duckdb/common/case_insensitive_map.hpp"
-#include "rest_catalog/response_objects.hpp"
 #include "rest_catalog/objects/list.hpp"
 
 using namespace duckdb_yyjson;
@@ -44,8 +43,8 @@ string CommitReport::TryFromJSON(yyjson_val *obj) {
 	} else {
 		if (yyjson_is_sint(snapshot_id_val)) {
 			snapshot_id = yyjson_get_sint(snapshot_id_val);
-		} else if (yyjson_is_int(snapshot_id_val)) {
-			snapshot_id = yyjson_get_int(snapshot_id_val);
+		} else if (yyjson_is_uint(snapshot_id_val)) {
+			snapshot_id = yyjson_get_uint(snapshot_id_val);
 		} else {
 			return StringUtil::Format(
 			    "CommitReport property 'snapshot_id' is not of type 'integer', found '%s' instead",
@@ -58,8 +57,8 @@ string CommitReport::TryFromJSON(yyjson_val *obj) {
 	} else {
 		if (yyjson_is_sint(sequence_number_val)) {
 			sequence_number = yyjson_get_sint(sequence_number_val);
-		} else if (yyjson_is_int(sequence_number_val)) {
-			sequence_number = yyjson_get_int(sequence_number_val);
+		} else if (yyjson_is_uint(sequence_number_val)) {
+			sequence_number = yyjson_get_uint(sequence_number_val);
 		} else {
 			return StringUtil::Format(
 			    "CommitReport property 'sequence_number' is not of type 'integer', found '%s' instead",

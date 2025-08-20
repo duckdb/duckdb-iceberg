@@ -5,7 +5,6 @@
 #include "duckdb/common/string.hpp"
 #include "duckdb/common/vector.hpp"
 #include "duckdb/common/case_insensitive_map.hpp"
-#include "rest_catalog/response_objects.hpp"
 #include "rest_catalog/objects/list.hpp"
 
 using namespace duckdb_yyjson;
@@ -44,8 +43,8 @@ string TimerResult::TryFromJSON(yyjson_val *obj) {
 	} else {
 		if (yyjson_is_sint(count_val)) {
 			count = yyjson_get_sint(count_val);
-		} else if (yyjson_is_int(count_val)) {
-			count = yyjson_get_int(count_val);
+		} else if (yyjson_is_uint(count_val)) {
+			count = yyjson_get_uint(count_val);
 		} else {
 			return StringUtil::Format("TimerResult property 'count' is not of type 'integer', found '%s' instead",
 			                          yyjson_get_type_desc(count_val));
@@ -57,8 +56,8 @@ string TimerResult::TryFromJSON(yyjson_val *obj) {
 	} else {
 		if (yyjson_is_sint(total_duration_val)) {
 			total_duration = yyjson_get_sint(total_duration_val);
-		} else if (yyjson_is_int(total_duration_val)) {
-			total_duration = yyjson_get_int(total_duration_val);
+		} else if (yyjson_is_uint(total_duration_val)) {
+			total_duration = yyjson_get_uint(total_duration_val);
 		} else {
 			return StringUtil::Format(
 			    "TimerResult property 'total_duration' is not of type 'integer', found '%s' instead",

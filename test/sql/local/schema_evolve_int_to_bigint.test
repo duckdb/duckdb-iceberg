@@ -12,7 +12,7 @@ require httpfs
 require-env DUCKDB_ICEBERG_HAVE_GENERATED_DATA
 
 query I
-select * from ICEBERG_SCAN('data/generated/iceberg/spark-local/default/schema_evolve_int_to_bigint') order by all;
+select * from ICEBERG_SCAN('__WORKING_DIRECTORY__/data/generated/iceberg/spark-local/default/schema_evolve_int_to_bigint') order by all;
 ----
 -9223372036854775808
 -2147483648
@@ -25,3 +25,12 @@ select * from ICEBERG_SCAN('data/generated/iceberg/spark-local/default/schema_ev
 2147483647
 9223372036854775807
 
+query I
+select col from ICEBERG_SCAN('__WORKING_DIRECTORY__/data/generated/iceberg/spark-local/default/schema_evolve_int_to_bigint') WHERE col < 1 ORDER BY ALL;
+----
+-9223372036854775808
+-2147483648
+-1
+-1
+0
+0

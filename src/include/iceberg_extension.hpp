@@ -7,7 +7,7 @@ namespace duckdb {
 class IcebergExtension : public Extension {
 public:
 	void Load(DuckDB &db) override;
-	std::string Name() override;
+	string Name() override;
 };
 
 } // namespace duckdb

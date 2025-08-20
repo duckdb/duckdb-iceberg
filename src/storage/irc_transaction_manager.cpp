@@ -18,7 +18,11 @@ Transaction &ICTransactionManager::StartTransaction(ClientContext &context) {
 
 ErrorData ICTransactionManager::CommitTransaction(ClientContext &context, Transaction &transaction) {
 	auto &ic_transaction = transaction.Cast<IRCTransaction>();
-	ic_transaction.Commit();
+	try {
+		ic_transaction.Commit();
+	} catch (std::exception &ex) {
+		return ErrorData(ex);
+	}
 	lock_guard<mutex> l(transaction_lock);
 	transactions.erase(transaction);
 	return ErrorData();

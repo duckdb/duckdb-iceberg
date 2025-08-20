@@ -1,22 +1,21 @@
+#include "iceberg_logging.hpp"
+
 #include "aws.hpp"
+#include "duckdb/common/http_util.hpp"
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/common/exception/http_exception.hpp"
 
-#ifdef WASM_LOADABLE_EXTENSIONS
+#ifdef EMSCRIPTEN
 #else
-#include <aws/core/Aws.h>
-#include <aws/core/auth/AWSCredentials.h>
 #include <aws/core/auth/AWSCredentialsProviderChain.h>
-#include <aws/core/auth/AWSCredentialsProvider.h>
 #include <aws/core/http/HttpClient.h>
-#include <aws/core/http/HttpRequest.h>
 #endif
 
 namespace duckdb {
 
-#ifdef WASM_LOADABLE_EXTENSIONS
+#ifdef EMSCRIPTEN
 
-string AWSInput::GetRequest(ClientContext &context) {
+unique_ptr<HTTPResponse> AWSInput::GetRequest(ClientContext &context) {
 	throw NotImplementedException("GET on WASM not implemented yet");
 }
 
@@ -44,55 +43,131 @@ protected:
 
 } // namespace
 
-string AWSInput::GetRequest(ClientContext &context) {
-	auto clientConfig = make_uniq<Aws::Client::ClientConfiguration>();
+static void InitAWSAPI() {
+	static bool loaded = false;
+	if (!loaded) {
+		Aws::SDKOptions options;
 
-	if (!cert_path.empty()) {
-		clientConfig->caFile = cert_path;
+		Aws::InitAPI(options); // Should only be called once.
+		loaded = true;
 	}
+}
 
+static void LogAWSRequest(ClientContext &context, std::shared_ptr<Aws::Http::HttpRequest> &req) {
+	if (context.db) {
+		auto http_util = HTTPUtil::Get(*context.db);
+		auto aws_headers = req->GetHeaders();
+		auto http_headers = HTTPHeaders();
+		for (auto &header : aws_headers) {
+			http_headers.Insert(header.first.c_str(), header.second);
+		}
+		auto params = HTTPParams(http_util);
+		auto url = "https://" + req->GetUri().GetAuthority() + req->GetUri().GetPath();
+		const auto query_str = req->GetUri().GetQueryString();
+		if (!query_str.empty()) {
+			url += "?" + query_str;
+		}
+		auto request = GetRequestInfo(
+		    url, http_headers, params, [](const HTTPResponse &response) { return false; },
+		    [](const_data_ptr_t data, idx_t data_length) { return false; });
+		request.params.logger = context.logger;
+		http_util.LogRequest(request, nullptr);
+	}
+}
+
+Aws::Client::ClientConfiguration AWSInput::BuildClientConfig() {
+	auto config = Aws::Client::ClientConfiguration();
+	if (!cert_path.empty()) {
+		config.caFile = cert_path;
+	}
+	return config;
+}
+
+Aws::Http::URI AWSInput::BuildURI() {
 	Aws::Http::URI uri;
-	Aws::Http::Scheme scheme = Aws::Http::Scheme::HTTPS;
-	uri.SetScheme(scheme);
+	uri.SetScheme(Aws::Http::Scheme::HTTPS);
 	uri.SetAuthority(authority);
 	for (auto &segment : path_segments) {
 		uri.AddPathSegment(segment);
 	}
-
 	for (auto &param : query_string_parameters) {
 		uri.AddQueryStringParameter(param.first.c_str(), param.second.c_str());
+	}
+	return uri;
+}
+
+std::shared_ptr<Aws::Http::HttpRequest> AWSInput::CreateSignedRequest(Aws::Http::HttpMethod method,
+                                                                      const Aws::Http::URI &uri, const string &body,
+                                                                      string content_type) {
+
+	auto request = Aws::Http::CreateHttpRequest(uri, method, Aws::Utils::Stream::DefaultResponseStreamFactoryMethod);
+	request->SetUserAgent(user_agent);
+
+	if (!body.empty()) {
+		auto bodyStream = Aws::MakeShared<Aws::StringStream>("");
+		*bodyStream << body;
+		request->AddContentBody(bodyStream);
+		request->SetContentLength(std::to_string(body.size()));
+		if (!content_type.empty()) {
+			request->SetHeaderValue("Content-Type", content_type);
+		}
 	}
 
 	std::shared_ptr<Aws::Auth::AWSCredentialsProviderChain> provider;
 	provider = std::make_shared<DuckDBSecretCredentialProvider>(key_id, secret, session_token);
 	auto signer = make_uniq<Aws::Client::AWSAuthV4Signer>(provider, service.c_str(), region.c_str());
-
-	const Aws::Http::URI uri_const = Aws::Http::URI(uri);
-	auto create_http_req = Aws::Http::CreateHttpRequest(uri_const, Aws::Http::HttpMethod::HTTP_GET,
-	                                                    Aws::Utils::Stream::DefaultResponseStreamFactoryMethod);
-	std::shared_ptr<Aws::Http::HttpRequest> req(create_http_req);
-	req->SetUserAgent(user_agent);
-
-	signer->SignRequest(*req);
-
-	std::shared_ptr<Aws::Http::HttpClient> MyHttpClient;
-	MyHttpClient = Aws::Http::CreateHttpClient(*clientConfig);
-	std::shared_ptr<Aws::Http::HttpResponse> res = MyHttpClient->MakeRequest(req);
-	Aws::Http::HttpResponseCode resCode = res->GetResponseCode();
-	DUCKDB_LOG_DEBUG(context, "iceberg.Catalog.Aws.HTTPRequest",
-	                 "GET %s (response %d) (signed with key_id '%s' for service '%s', in region '%s')",
-	                 uri.GetURIString(), resCode, key_id, service.c_str(), region.c_str());
-
-	if (resCode != Aws::Http::HttpResponseCode::OK) {
-		Aws::StringStream resBody;
-		resBody << res->GetResponseBody().rdbuf();
-		throw HTTPException(StringUtil::Format("Failed to query %s, http error %d thrown. Message: %s",
-		                                       req->GetUri().GetURIString(true), res->GetResponseCode(),
-		                                       resBody.str()));
+	if (!signer->SignRequest(*request)) {
+		throw HTTPException("Failed to sign request");
 	}
-	Aws::StringStream resBody;
-	resBody << res->GetResponseBody().rdbuf();
-	return resBody.str();
+
+	return request;
+}
+
+unique_ptr<HTTPResponse> AWSInput::ExecuteRequest(ClientContext &context, Aws::Http::HttpMethod method,
+                                                  const string body, string content_type) {
+
+	InitAWSAPI();
+	auto clientConfig = BuildClientConfig();
+	auto uri = BuildURI();
+	auto request = CreateSignedRequest(method, uri, body, content_type);
+
+	LogAWSRequest(context, request);
+	auto httpClient = Aws::Http::CreateHttpClient(clientConfig);
+	auto response = httpClient->MakeRequest(request);
+	auto resCode = response->GetResponseCode();
+
+	DUCKDB_LOG(context, IcebergLogType,
+	           "%s %s (response %d) (signed with key_id '%s' for service '%s', in region '%s')",
+	           Aws::Http::HttpMethodMapper::GetNameForHttpMethod(method), uri.GetURIString(), resCode, key_id,
+	           service.c_str(), region.c_str());
+
+	auto result = make_uniq<HTTPResponse>(resCode == Aws::Http::HttpResponseCode::REQUEST_NOT_MADE
+	                                          ? HTTPStatusCode::INVALID
+	                                          : HTTPStatusCode(static_cast<idx_t>(resCode)));
+
+	result->url = uri.GetURIString();
+	if (resCode == Aws::Http::HttpResponseCode::REQUEST_NOT_MADE) {
+		D_ASSERT(response->HasClientError());
+		result->reason = response->GetClientErrorMessage();
+		result->success = false;
+	} else {
+		Aws::StringStream resBody;
+		resBody << response->GetResponseBody().rdbuf();
+		result->body = resBody.str();
+	}
+	return result;
+}
+
+unique_ptr<HTTPResponse> AWSInput::GetRequest(ClientContext &context) {
+	return ExecuteRequest(context, Aws::Http::HttpMethod::HTTP_GET);
+}
+
+unique_ptr<HTTPResponse> AWSInput::DeleteRequest(ClientContext &context) {
+	return ExecuteRequest(context, Aws::Http::HttpMethod::HTTP_DELETE);
+}
+
+unique_ptr<HTTPResponse> AWSInput::PostRequest(ClientContext &context, string post_body) {
+	return ExecuteRequest(context, Aws::Http::HttpMethod::HTTP_POST, post_body, "application/json");
 }
 
 #endif

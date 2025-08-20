@@ -1,0 +1,49 @@
+# name: test/sql/local/iceberg_scans/uuid_type.test
+# group: [iceberg_scans]
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+require no_extension_autoloading "EXPECTED: enable logging is not aware of where 'Iceberg' option comes from"
+
+statement ok
+pragma enable_logging('Iceberg');
+
+query I
+select * from ICEBERG_SCAN('__WORKING_DIRECTORY__/data/persistent/uuid');
+----
+8dc314d8-3fd4-4b3a-8bf5-c008f363c2e4
+a217c09f-06fa-4e91-8315-ff44753c4a54
+abd6f939-9b99-4e1d-9cda-0dc8ce60a161
+e6218567-354b-4a9c-8cd7-3d4b6a2470f8
+f9f28465-51cf-45f1-8985-e01d9a82253c
+1571effb-facd-42a3-90e9-0af522e9b6c2
+160a53fe-3d8b-443d-bd36-ad66287f585a
+37afa09a-f496-48a8-89a9-61ea7ccd85d5
+3ef257b8-e9c6-4c53-9c22-973729e1043f
+7fae299c-cf05-4777-9b42-57a52e1415ed
+
+statement ok
+pragma truncate_duckdb_logs;
+
+query I
+select * from ICEBERG_SCAN('__WORKING_DIRECTORY__/data/persistent/uuid') WHERE "uuid" = '1571effb-facd-42a3-90e9-0af522e9b6c2';
+----
+1571effb-facd-42a3-90e9-0af522e9b6c2
+
+# Using the logs (which contains the data_file path), join it against the iceberg metadata to sum the record_counts of the skipped data files
+query I
+SELECT SUM(meta.record_count) AS total_record_count
+FROM (
+	SELECT message.split(': ')[2][2:-2] AS msg
+	FROM duckdb_logs() where type = 'Iceberg'
+) logs
+JOIN ICEBERG_METADATA('__WORKING_DIRECTORY__/data/persistent/uuid') meta
+ON logs.msg = meta.file_path;
+----
+5

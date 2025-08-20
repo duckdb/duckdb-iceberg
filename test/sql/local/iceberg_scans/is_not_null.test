@@ -1,0 +1,80 @@
+# name: test/sql/local/iceberg_scans/is_not_null.test
+# group: [iceberg_scans]
+
+require-env DUCKDB_ICEBERG_HAVE_GENERATED_DATA
+
+require avro
+
+require parquet
+
+require iceberg
+
+statement ok
+attach ':memory:' as my_datalake;
+
+statement ok
+create schema my_datalake.default;
+
+statement ok
+create view my_datalake.default.is_not_null as select * from ICEBERG_SCAN('__WORKING_DIRECTORY__/data/persistent/is_null_is_not_null');
+
+statement ok
+pragma enable_logging('Iceberg');
+
+query II
+select * from my_datalake.default.is_not_null ORDER BY id ASC;
+----
+1	NULL
+2	NULL
+3	NULL
+4	foo
+5	bar
+6	baz
+7	NULL
+8	blah
+
+statement ok
+pragma truncate_duckdb_logs;
+
+query II
+select * from my_datalake.default.is_not_null WHERE value IS NULL ORDER BY id ASC;
+----
+1	NULL
+2	NULL
+3	NULL
+7	NULL
+
+# Using the logs (which contains the data_file path), join it against the iceberg metadata to sum the record_counts of the skipped data files
+query I
+SELECT SUM(meta.record_count) AS total_record_count
+FROM (
+	SELECT message.split(': ')[2][2:-2] AS msg
+	FROM duckdb_logs() where type = 'Iceberg'
+) logs
+JOIN ICEBERG_METADATA(my_datalake.default.is_not_null) meta
+ON logs.msg = meta.file_path;
+----
+3
+
+statement ok
+pragma truncate_duckdb_logs;
+
+query II
+select * from my_datalake.default.is_not_null WHERE value IS NOT NULL ORDER BY id ASC;
+----
+4	foo
+5	bar
+6	baz
+8	blah
+
+# Using the logs (which contains the data_file path), join it against the iceberg metadata to sum the record_counts of the skipped data files
+query I
+SELECT SUM(meta.record_count) AS total_record_count
+FROM (
+	SELECT message.split(': ')[2][2:-2] AS msg
+	FROM duckdb_logs() where type = 'Iceberg'
+) logs
+JOIN ICEBERG_METADATA(my_datalake.default.is_not_null) meta
+ON logs.msg = meta.file_path;
+----
+3

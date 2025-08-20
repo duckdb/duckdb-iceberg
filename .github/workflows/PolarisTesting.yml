@@ -15,8 +15,9 @@ jobs:
     name: Test against Polaris Catalog
     runs-on: ubuntu-latest
     env:
-      VCPKG_TARGET_TRIPLET: 'x64-linux'
+      VCPKG_TARGET_TRIPLET: 'x64-linux-release'
       GEN: ninja
+      VCPKG_FEATURE_FLAGS: "-binarycaching"
       VCPKG_TOOLCHAIN_PATH: ${{ github.workspace }}/vcpkg/scripts/buildsystems/vcpkg.cmake
       PIP_BREAK_SYSTEM_PACKAGES: 1
 
@@ -62,7 +63,7 @@ jobs:
       - name: Setup vcpkg
         uses: lukka/run-vcpkg@v11.1
         with:
-          vcpkgGitCommitId: 5e5d0e1cd7785623065e77eff011afdeec1a3574
+          vcpkgGitCommitId: ce613c41372b23b1f51333815feb3edd87ef8a8b
 
       - name: Setup Ccache
         uses: hendrikmuhs/ccache-action@main
@@ -86,9 +87,9 @@ jobs:
         env:
           JAVA_HOME: /usr/lib/jvm/java-21-openjdk-amd64
         run: |
-          mkdir polaris_catalog
           git clone https://github.com/apache/polaris.git polaris_catalog
           cd polaris_catalog
+          git checkout 8fa1c773c8a775834bda24964dbed25c34ef2917
           ./gradlew clean :polaris-quarkus-server:assemble -Dquarkus.container-image.build=true --no-build-cache
           ./gradlew --stop
           nohup ./gradlew run -Dpolaris.bootstrap.credentials=POLARIS,root,secret > polaris-server.log 2> polaris-error.log &

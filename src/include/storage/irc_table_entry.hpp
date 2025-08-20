@@ -7,6 +7,8 @@
 
 namespace duckdb {
 
+struct IcebergTableInformation;
+
 struct ICTableInfo {
 	ICTableInfo() {
 		create_info = make_uniq<CreateTableInfo>();
@@ -27,26 +29,24 @@ struct ICTableInfo {
 
 class ICTableEntry : public TableCatalogEntry {
 public:
-	ICTableEntry(Catalog &catalog, SchemaCatalogEntry &schema, CreateTableInfo &info);
-	ICTableEntry(Catalog &catalog, SchemaCatalogEntry &schema, ICTableInfo &info);
-
-	unique_ptr<IRCAPITable> table_data;
+	ICTableEntry(IcebergTableInformation &table_info, Catalog &catalog, SchemaCatalogEntry &schema,
+	             CreateTableInfo &info);
 
 	virtual_column_map_t GetVirtualColumns() const override;
 	vector<column_t> GetRowIdColumns() const override;
 
 public:
 	unique_ptr<BaseStatistics> GetStatistics(ClientContext &context, column_t column_id) override;
-
-	string PrepareIcebergScanFromEntry(ClientContext &context);
+	string PrepareIcebergScanFromEntry(ClientContext &context) const;
 	TableFunction GetScanFunction(ClientContext &context, unique_ptr<FunctionData> &bind_data) override;
 	TableFunction GetScanFunction(ClientContext &context, unique_ptr<FunctionData> &bind_data,
 	                              const EntryLookupInfo &lookup) override;
-
 	TableStorageInfo GetStorageInfo(ClientContext &context) override;
-
 	void BindUpdateConstraints(Binder &binder, LogicalGet &get, LogicalProjection &proj, LogicalUpdate &update,
 	                           ClientContext &context) override;
+
+public:
+	IcebergTableInformation &table_info;
 };
 
 } // namespace duckdb

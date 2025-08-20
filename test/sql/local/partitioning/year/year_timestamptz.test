@@ -20,7 +20,7 @@ statement ok
 SET TimeZone='Europe/Amsterdam';
 
 query III
-select * from ICEBERG_SCAN('data/generated/iceberg/spark-local/default/year_timestamptz') ORDER BY partition_col;
+select * from ICEBERG_SCAN('__WORKING_DIRECTORY__/data/generated/iceberg/spark-local/default/year_timestamptz') ORDER BY partition_col;
 ----
 2020-05-15 23:30:45+02	12345	click
 2021-08-22 18:15:20+02	67890	purchase
@@ -28,26 +28,26 @@ select * from ICEBERG_SCAN('data/generated/iceberg/spark-local/default/year_time
 
 # Test filtering by year
 query I
-select user_id from ICEBERG_SCAN('data/generated/iceberg/spark-local/default/year_timestamptz') 
+select user_id from ICEBERG_SCAN('__WORKING_DIRECTORY__/data/generated/iceberg/spark-local/default/year_timestamptz') 
 WHERE partition_col = '2020-05-15 23:30:45+02'
 ----
 12345
 
 query I
-select user_id from ICEBERG_SCAN('data/generated/iceberg/spark-local/default/year_timestamptz') 
+select user_id from ICEBERG_SCAN('__WORKING_DIRECTORY__/data/generated/iceberg/spark-local/default/year_timestamptz') 
 WHERE partition_col = '2021-08-22 18:15:20+02'
 ----
 67890
 
 query I
-select user_id from ICEBERG_SCAN('data/generated/iceberg/spark-local/default/year_timestamptz') 
+select user_id from ICEBERG_SCAN('__WORKING_DIRECTORY__/data/generated/iceberg/spark-local/default/year_timestamptz') 
 WHERE partition_col = '2022-03-10 20:45:30+01'
 ----
 54321
 
 # Test filtering by timestamp range
 query I
-select user_id from ICEBERG_SCAN('data/generated/iceberg/spark-local/default/year_timestamptz') 
+select user_id from ICEBERG_SCAN('__WORKING_DIRECTORY__/data/generated/iceberg/spark-local/default/year_timestamptz') 
 WHERE partition_col >= '2021-01-01' AND partition_col < '2022-01-01';
 ----
 67890

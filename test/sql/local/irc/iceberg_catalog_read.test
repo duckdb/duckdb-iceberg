@@ -16,7 +16,7 @@ require httpfs
 set ignore_error_messages
 
 statement ok
-set enable_logging=true
+pragma enable_logging('HTTP');
 
 statement ok
 set logging_level='debug'
@@ -50,6 +50,14 @@ select * from table_unpartitioned;
 ----
 <REGEX>:.*Did you mean.*my_datalake.default.table_unpartitioned.*
 
+query II
+SELECT request.url, response.reason FROM duckdb_logs_parsed('HTTP') WHERE request.type='POST' AND (request.url).starts_with('http://127.0.0.1:8181/v1/') order by timestamp
+----
+http://127.0.0.1:8181/v1/oauth/tokens	OK
+
+statement ok
+pragma truncate_duckdb_logs;
+
 query III
 select * from my_datalake.default.table_unpartitioned order by all;
 ----
@@ -77,23 +85,15 @@ select * from my_datalake.default.table_more_deletes order by all;
 2023-03-11	11	k
 2023-03-12	12	l
 
-# TODO: after https://github.com/duckdb/duckdb-iceberg/pull/142 is merged, we can combine the
-# following two tests into one
-query I
-SELECT message FROM duckdb_logs where type='iceberg.Catalog.Curl.HTTPRequest' and message like '%GET%' order by timestamp
+query II
+SELECT request.url, response.reason FROM duckdb_logs_parsed('HTTP') WHERE request.type='GET' AND (request.url).starts_with('http://127.0.0.1:8181/v1/') order by timestamp
 ----
-GET http://127.0.0.1:8181/v1/config?warehouse= (curl code 'No error')
-GET http://127.0.0.1:8181/v1/namespaces (curl code 'No error')
-GET http://127.0.0.1:8181/v1/namespaces/default/tables (curl code 'No error')
-GET http://127.0.0.1:8181/v1/namespaces/default/tables/table_unpartitioned (curl code 'No error')
-GET http://127.0.0.1:8181/v1/namespaces/default/tables/table_unpartitioned (curl code 'No error')
-GET http://127.0.0.1:8181/v1/namespaces/default/tables/table_more_deletes (curl code 'No error')
-GET http://127.0.0.1:8181/v1/namespaces/default/tables/table_more_deletes (curl code 'No error')
-
-query I
-SELECT message FROM duckdb_logs where type='iceberg.Catalog.Curl.HTTPRequest' and message like '%POST%' order by timestamp
-----
-POST http://127.0.0.1:8181/v1/oauth/tokens (curl code 'No error')
+http://127.0.0.1:8181/v1/namespaces	OK
+http://127.0.0.1:8181/v1/namespaces/default/tables	OK
+http://127.0.0.1:8181/v1/namespaces/default/tables/table_unpartitioned	OK
+http://127.0.0.1:8181/v1/namespaces	OK
+http://127.0.0.1:8181/v1/namespaces/default/tables	OK
+http://127.0.0.1:8181/v1/namespaces/default/tables/table_more_deletes	OK
 
 query I
 select count(*) from my_datalake.default.pyspark_iceberg_table_v2;
@@ -111,22 +111,8 @@ delete from my_datalake.default.table_unpartitioned where number < 5;
 <REGEX>:.*Not implemented Error.*
 
 statement error
-insert into my_datalake.default.table_unpartitioned values ('2023-03-13', 13, 'm');
-----
-<REGEX>:.*Not implemented Error.*
-
-statement error
-Create table my_datalake.default.new_table (a int, b varchar);
-----
-<REGEX>:.*Not implemented Error.*
-
-statement error
 Alter table my_datalake.default.table_more_deletes add column new_column INTEGER default 10;
 ----
 <REGEX>:.*Not implemented Error.*
 
-statement error
-Drop table my_datalake.default.table_more_deletes;
-----
-<REGEX>:.*Not implemented Error.*
 

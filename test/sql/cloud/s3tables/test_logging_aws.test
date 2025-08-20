@@ -1,0 +1,48 @@
+# name: test/sql/cloud/s3tables/test_logging_aws.test
+# description: test integration with iceberg catalog read
+# group: [s3tables]
+
+require-env ICEBERG_AWS_REMOTE_AVAILABLE
+
+require-env AWS_ACCESS_KEY_ID
+
+require-env AWS_SECRET_ACCESS_KEY
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+require aws
+
+statement ok
+pragma enable_logging('HTTP');
+
+statement ok
+CREATE SECRET s3table_secret (
+    TYPE s3,
+    PROVIDER credential_chain,
+    CHAIN 'sts',
+    ASSUME_ROLE_ARN 'arn:aws:iam::840140254803:role/pyiceberg-etl-role'
+);
+
+statement ok
+attach 'arn:aws:s3tables:us-east-2:840140254803:bucket/iceberg-testing' as s3_catalog (
+    TYPE ICEBERG,
+    ENDPOINT_TYPE 'S3_TABLES'
+);
+
+query I
+select count(*) from s3_catalog.tpch_sf1.region;
+----
+5
+
+# make sure we log calls to IRC
+query II
+select request.url, request.type from duckdb_logs_parsed('HTTP') where request.type = 'GET' and request.url like '%/iceberg-testing/namespaces/%'
+----
+https://s3tables.us-east-2.amazonaws.com/iceberg/v1/arn:aws:s3tables:us-east-2:840140254803:bucket/iceberg-testing/namespaces/tpch_sf1/tables	GET
+https://s3tables.us-east-2.amazonaws.com/iceberg/v1/arn:aws:s3tables:us-east-2:840140254803:bucket/iceberg-testing/namespaces/tpch_sf1/tables/region	GET

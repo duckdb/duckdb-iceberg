@@ -9,7 +9,6 @@
 #pragma once
 
 #include "duckdb/common/printer.hpp"
-#include "iceberg_types.hpp"
 #include "yyjson.hpp"
 #include "duckdb/common/file_system.hpp"
 
@@ -27,21 +26,7 @@ public:
 	//! used for the allow_moved_paths debug option which allows us to test with iceberg tables that
 	//! were moved without their paths updated
 	static string GetFullPath(const string &iceberg_path, const string &relative_file_path, FileSystem &fs);
-
 	static string GetStorageLocation(ClientContext &context, const string &input);
-
-	//! YYJSON utility functions
-	static uint64_t TryGetNumFromObject(yyjson_val *obj, const string &field);
-	static string TryGetStrFromObject(yyjson_val *obj, const string &field);
-	static bool TryGetBoolFromObject(yyjson_val *obj, const string &field);
-
-	static uint64_t TryGetNumFromObject(yyjson_val *obj, const string &field, bool fail_on_missing,
-	                                    uint64_t default_val = 0);
-	static bool TryGetBoolFromObject(yyjson_val *obj, const string &field, bool fail_on_missing,
-	                                 bool default_val = false);
-	static string TryGetStrFromObject(yyjson_val *obj, const string &field, bool fail_on_missing,
-	                                  const char *default_val = "");
-
 	static idx_t CountOccurrences(const string &input, const string &to_find);
 };
 

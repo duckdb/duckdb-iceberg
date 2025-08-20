@@ -10,12 +10,12 @@ require iceberg
 require httpfs
 
 query III
-select * from ICEBERG_SCAN('data/persistent/partition_decimal_smallint');
+select * from ICEBERG_SCAN('__WORKING_DIRECTORY__/data/persistent/partition_decimal_smallint');
 ----
 1.23	12345	click
 4.56	67890	purchase
 
 query I
-select user_id from ICEBERG_SCAN('data/persistent/partition_decimal_smallint') WHERE partition_col = 1.23;
+select user_id from ICEBERG_SCAN('__WORKING_DIRECTORY__/data/persistent/partition_decimal_smallint') WHERE partition_col = 1.23;
 ----
 12345

@@ -16,16 +16,10 @@ statement ok
 create schema my_datalake.default;
 
 statement ok
-create view my_datalake.default.filtering_on_partition_bounds as select * from ICEBERG_SCAN('data/generated/iceberg/spark-local/default/filtering_on_partition_bounds');
+create view my_datalake.default.filtering_on_partition_bounds as select * from ICEBERG_SCAN('__WORKING_DIRECTORY__/data/generated/iceberg/spark-local/default/filtering_on_partition_bounds');
 
 statement ok
-pragma enable_logging=true;
-
-statement ok
-set enable_logging=false;
-set logging_storage='stdout';
-set logging_storage='memory';
-set enable_logging=true;
+pragma enable_logging('Iceberg');
 
 # 5 snapshots that each add 1000 rows (incremental)
 query I
@@ -45,15 +39,16 @@ select count(*) from my_datalake.default.filtering_on_partition_bounds where seq
 query I
 SELECT SUM(meta.record_count) AS total_record_count
 FROM (
-    SELECT 
-        message.split(': ')[2][2:-2] AS msg
-    FROM duckdb_logs
-    WHERE type = 'duckdb.Extensions.Iceberg' and message.contains('manifest_file')
+	SELECT message.split(': ')[2][2:-2] AS msg
+	FROM duckdb_logs() where type = 'Iceberg' and message.contains('manifest_file')
 ) logs
-JOIN ICEBERG_METADATA('data/generated/iceberg/spark-local/default/filtering_on_partition_bounds') meta
+JOIN ICEBERG_METADATA('__WORKING_DIRECTORY__/data/generated/iceberg/spark-local/default/filtering_on_partition_bounds') meta
 ON logs.msg = meta.manifest_path;
 ----
 4000
+
+
+
 
 statement ok
 pragma truncate_duckdb_logs;
@@ -66,12 +61,10 @@ select count(*) from my_datalake.default.filtering_on_partition_bounds where seq
 query I
 SELECT SUM(meta.record_count) AS total_record_count
 FROM (
-    SELECT 
-        message.split(': ')[2][2:-2] AS msg
-    FROM duckdb_logs
-    WHERE type = 'duckdb.Extensions.Iceberg' and message.contains('manifest_file')
+	SELECT message.split(': ')[2][2:-2] AS msg
+	FROM duckdb_logs() where type = 'Iceberg' and message.contains('manifest_file')
 ) logs
-JOIN ICEBERG_METADATA('data/generated/iceberg/spark-local/default/filtering_on_partition_bounds') meta
+JOIN ICEBERG_METADATA('__WORKING_DIRECTORY__/data/generated/iceberg/spark-local/default/filtering_on_partition_bounds') meta
 ON logs.msg = meta.manifest_path;
 ----
 3000
@@ -88,12 +81,10 @@ query I
 WITH result as (
 	SELECT SUM(meta.record_count) AS total_record_count
 	FROM (
-		SELECT 
-			message.split(': ')[2][2:-2] AS msg
-		FROM duckdb_logs
-		WHERE type = 'duckdb.Extensions.Iceberg' and message.contains('manifest_file')
+		SELECT message.split(': ')[2][2:-2] AS msg
+		FROM duckdb_logs() where type = 'Iceberg' and message.contains('manifest_file')
 	) logs
-	JOIN ICEBERG_METADATA('data/generated/iceberg/spark-local/default/filtering_on_partition_bounds') meta
+	JOIN ICEBERG_METADATA('__WORKING_DIRECTORY__/data/generated/iceberg/spark-local/default/filtering_on_partition_bounds') meta
 	ON logs.msg = meta.manifest_path
 )
 select total_record_count from result;

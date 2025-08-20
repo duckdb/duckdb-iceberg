@@ -1,0 +1,1 @@
+delete from default.deletion_vectors where col % 2 == 0;

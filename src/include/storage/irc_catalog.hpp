@@ -10,72 +10,62 @@
 #include "rest_catalog/objects/load_table_result.hpp"
 #include "storage/irc_authorization.hpp"
 
+#include "duckdb/parser/parsed_data/attach_info.hpp"
+#include "duckdb/storage/storage_extension.hpp"
+#include "duckdb/common/http_util.hpp"
+
 namespace duckdb {
 
 class IRCSchemaEntry;
 
-class ICRClearCacheFunction : public TableFunction {
-public:
-	ICRClearCacheFunction();
-
-	static void ClearCacheOnSetting(ClientContext &context, SetScope scope, Value &parameter);
-};
-
 class MetadataCacheValue {
 public:
-	const std::string data;
+	const string data;
 	const system_clock::time_point expires_at;
 
 public:
-	MetadataCacheValue(const std::string &data_, const system_clock::time_point expires_at_)
+	MetadataCacheValue(const string &data_, const system_clock::time_point expires_at_)
 	    : data(data_), expires_at(expires_at_) {
 	}
 };
 
 class IRCatalog : public Catalog {
 public:
+	// default target file size: 8.4MB
+	static constexpr const idx_t DEFAULT_TARGET_FILE_SIZE = 1 << 23;
+
+public:
 	explicit IRCatalog(AttachedDatabase &db_p, AccessMode access_mode, unique_ptr<IRCAuthorization> auth_handler,
-	                   const string &warehouse, const string &uri, const string &version = "v1");
+	                   IcebergAttachOptions &attach_options, const string &version = "v1");
 	~IRCatalog() override;
 
-	string internal_name;
-	AccessMode access_mode;
-	unique_ptr<IRCAuthorization> auth_handler;
-	IRCEndpointBuilder endpoint_builder;
+public:
+	static unique_ptr<SecretEntry> GetStorageSecret(ClientContext &context, const string &secret_name);
+	static unique_ptr<SecretEntry> GetIcebergSecret(ClientContext &context, const string &secret_name);
+	void GetConfig(ClientContext &context, IcebergEndpointType &endpoint_type);
+	IRCEndpointBuilder GetBaseUrl() const;
+	string OptionalGetCachedValue(const string &url);
+	bool SetCachedValue(const string &url, const string &value, const rest_api_objects::LoadTableResult &result);
+	static void SetAWSCatalogOptions(IcebergAttachOptions &attach_options,
+	                                 case_insensitive_set_t &set_by_attach_options);
 
-	//! warehouse
-	string warehouse;
-
-	//! host of the REST catalog
-	string uri;
-	//! version
-	const string version;
-	//! optional prefix
-	string prefix;
+public:
+	static unique_ptr<Catalog> Attach(StorageExtensionInfo *storage_info, ClientContext &context, AttachedDatabase &db,
+	                                  const string &name, AttachInfo &info, AccessMode access_mode);
 
 public:
 	void Initialize(bool load_builtin) override;
-
 	string GetCatalogType() override {
 		return "iceberg";
 	}
-
-	static unique_ptr<SecretEntry> GetStorageSecret(ClientContext &context, const string &secret_name);
-	static unique_ptr<SecretEntry> GetIcebergSecret(ClientContext &context, const string &secret_name);
-
-	void GetConfig(ClientContext &context);
-
 	bool SupportsTimeTravel() const override {
 		return true;
 	}
-
+	void DropSchema(ClientContext &context, DropInfo &info) override;
 	optional_ptr<CatalogEntry> CreateSchema(CatalogTransaction transaction, CreateSchemaInfo &info) override;
-
 	void ScanSchemas(ClientContext &context, std::function<void(SchemaCatalogEntry &)> callback) override;
-
 	optional_ptr<SchemaCatalogEntry> LookupSchema(CatalogTransaction transaction, const EntryLookupInfo &schema_lookup,
 	                                              OnEntryNotFound if_not_found) override;
-
 	PhysicalOperator &PlanInsert(ClientContext &context, PhysicalPlanGenerator &planner, LogicalInsert &op,
 	                             optional_ptr<PhysicalOperator> plan) override;
 	PhysicalOperator &PlanCreateTableAs(ClientContext &context, PhysicalPlanGenerator &planner, LogicalCreateTable &op,
@@ -86,31 +76,37 @@ public:
 	                             PhysicalOperator &plan) override;
 	unique_ptr<LogicalOperator> BindCreateIndex(Binder &binder, CreateStatement &stmt, TableCatalogEntry &table,
 	                                            unique_ptr<LogicalOperator> plan) override;
-
 	DatabaseSize GetDatabaseSize(ClientContext &context) override;
-
-	IRCEndpointBuilder GetBaseUrl() const;
-
+	void AddDefaultSupportedEndpoints();
+	void AddS3TablesEndpoints();
 	//! Whether or not this is an in-memory Iceberg database
 	bool InMemory() override;
 	string GetDBPath() override;
 
-	void ClearCache();
-
-	string OptionalGetCachedValue(const string &url);
-	bool SetCachedValue(const string &url, const string &value, const rest_api_objects::LoadTableResult &result);
+public:
+	AccessMode access_mode;
+	unique_ptr<IRCAuthorization> auth_handler;
+	IRCEndpointBuilder endpoint_builder;
+	//! warehouse
+	string warehouse;
+	//! host of the REST catalog
+	string uri;
+	//! version
+	const string version;
+	//! optional prefix
+	string prefix;
+	//! attach options
+	IcebergAttachOptions attach_options;
 
 private:
-	void DropSchema(ClientContext &context, DropInfo &info) override;
-
-private:
-	IRCSchemaSet schemas;
-	string default_schema;
-
 	// defaults and overrides provided by a catalog.
 	case_insensitive_map_t<string> defaults;
 	case_insensitive_map_t<string> overrides;
 
+public:
+	unordered_set<string> supported_urls;
+
+private:
 	std::mutex metadata_cache_mutex;
 	unordered_map<string, unique_ptr<MetadataCacheValue>> metadata_cache;
 };

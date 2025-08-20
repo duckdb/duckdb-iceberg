@@ -34,10 +34,7 @@ attach '840140254803:s3tablescatalog/pyiceberg-blog-bucket' as my_datalake (
 );
 
 statement ok
-show all tables;
-
-statement ok
-SELECT count(*) FROM my_datalake.myblognamespace.lineitem;
+SELECT count(*) FROM my_datalake.myblognamespace.lineitem limit 20;
 
 query IIIIII
 describe my_datalake.myblognamespace.lineitem;
@@ -67,12 +64,15 @@ attach '84014028:s3tablescatalog/pyiceberg-blog-bucket' as bad_account_id (
 ----
 Invalid Configuration Error
 
-statement error
+statement ok
 attach '840140254803:incorrect/pyiceberg-blog-bucket' as no_s3tables (
     TYPE ICEBERG,
     ENDPOINT_TYPE 'GLUE'
 );
-----
-Invalid Configuration Error
 
+# this should be fixed on the glue side. the attach should already fail.
+statement error
+select * from no_s3tables.my_namesepace.my_table;
+----
+Catalog not found
 

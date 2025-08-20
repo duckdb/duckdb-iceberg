@@ -20,6 +20,9 @@ require aws
 
 require tpch
 
+# re-enable when we can pin catalog snapshots to avoid unnecessary LoadTableRequests
+mode skip
+
 statement ok
 CREATE SECRET glue_secret (
     TYPE S3,
@@ -50,7 +53,7 @@ foreach i 1 4 6
 query I
 PRAGMA tpch(${i})
 ----
-<FILE>:duckdb/extension/tpch/dbgen/answers/sf0.1/q0${i}.csv
+<FILE>:__WORKING_DIRECTORY__/duckdb/extension/tpch/dbgen/answers/sf0.1/q0${i}.csv
 
 endloop
 
@@ -60,6 +63,6 @@ foreach i 14 19 22
 query I
 PRAGMA tpch(${i})
 ----
-<FILE>:duckdb/extension/tpch/dbgen/answers/sf0.1/q${i}.csv
+<FILE>:__WORKING_DIRECTORY__/duckdb/extension/tpch/dbgen/answers/sf0.1/q${i}.csv
 
 endloop

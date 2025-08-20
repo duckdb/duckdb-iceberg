@@ -1,0 +1,1 @@
+CREATE NAMESPACE IF NOT EXISTS demo.level1.level2.level3;

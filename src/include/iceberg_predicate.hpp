@@ -1,6 +1,6 @@
 #pragma once
-#include "iceberg_transform.hpp"
-#include "iceberg_predicate_stats.hpp"
+#include "metadata/iceberg_transform.hpp"
+#include "metadata/iceberg_predicate_stats.hpp"
 #include "duckdb/planner/table_filter.hpp"
 
 namespace duckdb {
@@ -10,7 +10,8 @@ public:
 	IcebergPredicate() = delete;
 
 public:
-	static bool MatchBounds(TableFilter &filter, const IcebergPredicateStats &stats, const IcebergTransform &transform);
+	static bool MatchBounds(const TableFilter &filter, const IcebergPredicateStats &stats,
+	                        const IcebergTransform &transform);
 };
 
 } // namespace duckdb

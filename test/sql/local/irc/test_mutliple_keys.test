@@ -43,7 +43,7 @@ attach '840140254803:s3tablescatalog/pyiceberg-blog-bucket' as glue_lake (
     ENDPOINT_TYPE 'GLUE'
 );
 ----
-Invalid Configuration Error
+<REGEX>:.*Invalid Configuration Error.*
 
 statement ok
 CREATE or replace SECRET amazing_secret (
@@ -63,7 +63,7 @@ attach '840140254803:s3tablescatalog/pyiceberg-blog-bucket' as glue_lake (
     ENDPOINT_TYPE 'GLUE'
 );
 ----
-HTTP Error
+<REGEX>:.*Invalid Configuration Error.*
 
 # TODO: fix me. Only fails in CI
 mode skip

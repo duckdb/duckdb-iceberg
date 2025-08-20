@@ -5,7 +5,6 @@
 #include "duckdb/common/string.hpp"
 #include "duckdb/common/vector.hpp"
 #include "duckdb/common/case_insensitive_map.hpp"
-#include "rest_catalog/response_objects.hpp"
 #include "rest_catalog/objects/list.hpp"
 
 using namespace duckdb_yyjson;
@@ -103,17 +102,21 @@ string TableUpdate::TryFromJSON(yyjson_val *obj) {
 	if (error.empty()) {
 		has_remove_schemas_update = true;
 	}
-	error = enable_row_lineage_update.TryFromJSON(obj);
+	error = add_encryption_key_update.TryFromJSON(obj);
 	if (error.empty()) {
-		has_enable_row_lineage_update = true;
+		has_add_encryption_key_update = true;
 	}
-	if (!has_add_partition_spec_update && !has_add_schema_update && !has_add_snapshot_update &&
-	    !has_add_sort_order_update && !has_assign_uuidupdate && !has_enable_row_lineage_update &&
-	    !has_remove_partition_specs_update && !has_remove_properties_update && !has_remove_schemas_update &&
-	    !has_remove_snapshot_ref_update && !has_remove_snapshots_update && !has_remove_statistics_update &&
-	    !has_set_current_schema_update && !has_set_default_sort_order_update && !has_set_default_spec_update &&
-	    !has_set_location_update && !has_set_properties_update && !has_set_snapshot_ref_update &&
-	    !has_set_statistics_update && !has_upgrade_format_version_update) {
+	error = remove_encryption_key_update.TryFromJSON(obj);
+	if (error.empty()) {
+		has_remove_encryption_key_update = true;
+	}
+	if (!has_add_encryption_key_update && !has_add_partition_spec_update && !has_add_schema_update &&
+	    !has_add_snapshot_update && !has_add_sort_order_update && !has_assign_uuidupdate &&
+	    !has_remove_encryption_key_update && !has_remove_partition_specs_update && !has_remove_properties_update &&
+	    !has_remove_schemas_update && !has_remove_snapshot_ref_update && !has_remove_snapshots_update &&
+	    !has_remove_statistics_update && !has_set_current_schema_update && !has_set_default_sort_order_update &&
+	    !has_set_default_spec_update && !has_set_location_update && !has_set_properties_update &&
+	    !has_set_snapshot_ref_update && !has_set_statistics_update && !has_upgrade_format_version_update) {
 		return "TableUpdate failed to parse, none of the anyOf candidates matched";
 	}
 	return string();

@@ -1,0 +1,95 @@
+# name: test/sql/cloud/s3tables/test_create_table_s3tables.test
+# description: test integration with iceberg catalog read
+# group: [s3tables]
+
+require-env ICEBERG_AWS_REMOTE_AVAILABLE
+
+require-env AWS_ACCESS_KEY_ID
+
+require-env AWS_SECRET_ACCESS_KEY
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+require aws
+
+statement ok
+CREATE SECRET (
+    TYPE S3,
+    PROVIDER credential_chain
+);
+
+statement ok
+attach 'arn:aws:s3tables:us-east-2:840140254803:bucket/iceberg-testing' as s3_catalog (
+    TYPE ICEBERG,
+    ENDPOINT_TYPE S3_TABLES
+);
+
+statement ok
+create schema IF NOT EXISTS s3_catalog.test_create_schema;
+
+statement ok
+use s3_catalog.test_create_schema;
+
+statement ok
+create table test_create_table (a int);
+
+query I
+select * from test_create_table;
+----
+
+statement ok
+insert into test_create_table select range a from range(10);
+
+query I
+select * from test_create_table;
+----
+0
+1
+2
+3
+4
+5
+6
+7
+8
+9
+
+statement ok
+create table test_create_table_as as select range a, range::VARCHAR b from range(10);
+
+query II
+select * from test_create_table_as;
+----
+0	0
+1	1
+2	2
+3	3
+4	4
+5	5
+6	6
+7	7
+8	8
+9	9
+
+statement ok
+drop table test_create_table_as;
+
+statement ok
+drop table test_create_table;
+
+query I
+select count(*) from (show tables);
+----
+0
+
+statement ok
+use main;
+
+statement ok
+drop schema s3_catalog.test_create_schema;

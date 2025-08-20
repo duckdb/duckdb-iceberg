@@ -5,7 +5,6 @@
 #include "duckdb/common/string.hpp"
 #include "duckdb/common/vector.hpp"
 #include "duckdb/common/case_insensitive_map.hpp"
-#include "rest_catalog/response_objects.hpp"
 #include "rest_catalog/objects/list.hpp"
 
 using namespace duckdb_yyjson;
@@ -33,8 +32,8 @@ string StatisticsFile::TryFromJSON(yyjson_val *obj) {
 	} else {
 		if (yyjson_is_sint(snapshot_id_val)) {
 			snapshot_id = yyjson_get_sint(snapshot_id_val);
-		} else if (yyjson_is_int(snapshot_id_val)) {
-			snapshot_id = yyjson_get_int(snapshot_id_val);
+		} else if (yyjson_is_uint(snapshot_id_val)) {
+			snapshot_id = yyjson_get_uint(snapshot_id_val);
 		} else {
 			return StringUtil::Format(
 			    "StatisticsFile property 'snapshot_id' is not of type 'integer', found '%s' instead",
@@ -59,8 +58,8 @@ string StatisticsFile::TryFromJSON(yyjson_val *obj) {
 	} else {
 		if (yyjson_is_sint(file_size_in_bytes_val)) {
 			file_size_in_bytes = yyjson_get_sint(file_size_in_bytes_val);
-		} else if (yyjson_is_int(file_size_in_bytes_val)) {
-			file_size_in_bytes = yyjson_get_int(file_size_in_bytes_val);
+		} else if (yyjson_is_uint(file_size_in_bytes_val)) {
+			file_size_in_bytes = yyjson_get_uint(file_size_in_bytes_val);
 		} else {
 			return StringUtil::Format(
 			    "StatisticsFile property 'file_size_in_bytes' is not of type 'integer', found '%s' instead",
@@ -73,8 +72,8 @@ string StatisticsFile::TryFromJSON(yyjson_val *obj) {
 	} else {
 		if (yyjson_is_sint(file_footer_size_in_bytes_val)) {
 			file_footer_size_in_bytes = yyjson_get_sint(file_footer_size_in_bytes_val);
-		} else if (yyjson_is_int(file_footer_size_in_bytes_val)) {
-			file_footer_size_in_bytes = yyjson_get_int(file_footer_size_in_bytes_val);
+		} else if (yyjson_is_uint(file_footer_size_in_bytes_val)) {
+			file_footer_size_in_bytes = yyjson_get_uint(file_footer_size_in_bytes_val);
 		} else {
 			return StringUtil::Format(
 			    "StatisticsFile property 'file_footer_size_in_bytes' is not of type 'integer', found '%s' instead",

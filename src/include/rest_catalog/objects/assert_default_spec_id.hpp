@@ -5,8 +5,7 @@
 #include "duckdb/common/string.hpp"
 #include "duckdb/common/vector.hpp"
 #include "duckdb/common/case_insensitive_map.hpp"
-#include "rest_catalog/response_objects.hpp"
-#include "rest_catalog/objects/table_requirement.hpp"
+#include "rest_catalog/objects/table_requirement_type.hpp"
 
 using namespace duckdb_yyjson;
 
@@ -28,10 +27,8 @@ public:
 	string TryFromJSON(yyjson_val *obj);
 
 public:
-	TableRequirement table_requirement;
+	TableRequirementType type;
 	int32_t default_spec_id;
-	string type;
-	bool has_type = false;
 };
 
 } // namespace rest_api_objects

@@ -18,4 +18,4 @@ attach '' as my_datalake (
 	AUTHORIZATION_TYPE 'test'
 )
 ----
-Invalid Configuration Error: 'authorization_type' 'test' is not supported, valid options are: oauth2, sigv4
+Invalid Configuration Error: 'authorization_type' 'test' is not supported

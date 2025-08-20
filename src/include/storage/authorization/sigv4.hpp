@@ -1,6 +1,7 @@
 #pragma once
 
 #include "storage/irc_authorization.hpp"
+#include "aws.hpp"
 
 namespace duckdb {
 
@@ -14,8 +15,13 @@ public:
 
 public:
 	static unique_ptr<IRCAuthorization> FromAttachOptions(IcebergAttachOptions &input);
-	string GetRequest(ClientContext &context, const IRCEndpointBuilder &endpoint_builder,
-	                  RequestInput &request_input) override;
+	unique_ptr<HTTPResponse> GetRequest(ClientContext &context, const IRCEndpointBuilder &endpoint_builder) override;
+	unique_ptr<HTTPResponse> DeleteRequest(ClientContext &context, const IRCEndpointBuilder &endpoint_builder) override;
+	unique_ptr<HTTPResponse> PostRequest(ClientContext &context, const IRCEndpointBuilder &endpoint_builder,
+	                                     const string &body) override;
+
+private:
+	AWSInput CreateAWSInput(ClientContext &context, const IRCEndpointBuilder &endpoint_builder);
 
 public:
 	string secret;

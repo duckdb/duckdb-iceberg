@@ -3,7 +3,9 @@
 
 #include "storage/irc_catalog.hpp"
 #include "storage/irc_table_set.hpp"
+
 #include "storage/irc_transaction.hpp"
+#include "metadata/iceberg_partition_spec.hpp"
 #include "duckdb/parser/constraints/not_null_constraint.hpp"
 #include "duckdb/parser/constraints/unique_constraint.hpp"
 #include "duckdb/parser/expression/constant_expression.hpp"
@@ -14,39 +16,44 @@
 #include "duckdb/parser/constraints/list.hpp"
 #include "storage/irc_schema_entry.hpp"
 #include "duckdb/parser/parser.hpp"
+#include "storage/irc_transaction.hpp"
+
+#include "storage/authorization/sigv4.hpp"
+#include "storage/iceberg_table_information.hpp"
+#include "storage/authorization/oauth2.hpp"
 
 namespace duckdb {
 
-ICTableSet::ICTableSet(IRCSchemaEntry &schema) : ICInSchemaSet(schema) {
+ICTableSet::ICTableSet(IRCSchemaEntry &schema) : schema(schema), catalog(schema.ParentCatalog()) {
 }
 
-static ColumnDefinition CreateColumnDefinition(ClientContext &context, IcebergColumnDefinition &coldef) {
-	return {coldef.name, coldef.type};
-}
-
-unique_ptr<CatalogEntry> ICTableSet::_CreateCatalogEntry(ClientContext &context, IRCAPITable &&table) {
-	D_ASSERT(schema.name == table.schema_name);
-	CreateTableInfo info;
-	info.table = table.name;
-
-	for (auto &col : table.columns) {
-		info.columns.AddColumn(CreateColumnDefinition(context, *col));
-	}
-
-	auto table_entry = make_uniq<ICTableEntry>(catalog, schema, info);
-	table_entry->table_data = make_uniq<IRCAPITable>(std::move(table));
-	return std::move(table_entry);
-}
-
-void ICTableSet::FillEntry(ClientContext &context, unique_ptr<CatalogEntry> &entry) {
-	auto *derived = static_cast<ICTableEntry *>(entry.get());
-	if (!derived->table_data->storage_location.empty()) {
+void ICTableSet::FillEntry(ClientContext &context, IcebergTableInformation &table) {
+	if (!table.schema_versions.empty()) {
+		//! Already filled
 		return;
 	}
 
 	auto &ic_catalog = catalog.Cast<IRCatalog>();
-	auto table = IRCAPI::GetTable(context, ic_catalog, schema.name, entry->name, true);
-	entry = _CreateCatalogEntry(context, std::move(table));
+	table.load_table_result = IRCAPI::GetTable(context, ic_catalog, schema, table.name);
+	table.table_metadata = IcebergTableMetadata::FromTableMetadata(table.load_table_result.metadata);
+	auto &schemas = table.table_metadata.schemas;
+
+	//! It should be impossible to have a metadata file without any schema
+	D_ASSERT(!schemas.empty());
+	for (auto &table_schema : schemas) {
+		table.CreateSchemaVersion(*table_schema.second);
+	}
+}
+
+void ICTableSet::Scan(ClientContext &context, const std::function<void(CatalogEntry &)> &callback) {
+	lock_guard<mutex> l(entry_lock);
+	LoadEntries(context);
+	for (auto &entry : entries) {
+		auto &table_info = entry.second;
+		FillEntry(context, table_info);
+		auto schema_id = table_info.table_metadata.current_schema_id;
+		callback(*table_info.schema_versions[schema_id]);
+	}
 }
 
 void ICTableSet::LoadEntries(ClientContext &context) {
@@ -56,20 +63,56 @@ void ICTableSet::LoadEntries(ClientContext &context) {
 
 	auto &ic_catalog = catalog.Cast<IRCatalog>();
 	// TODO: handle out-of-order columns using position property
-	auto tables = IRCAPI::GetTables(context, ic_catalog, schema.name);
+	auto tables = IRCAPI::GetTables(context, ic_catalog, schema);
 
 	for (auto &table : tables) {
-		auto entry = _CreateCatalogEntry(context, std::move(table));
-		CreateEntry(std::move(entry));
+		entries.emplace(table.name, IcebergTableInformation(ic_catalog, schema, table.name));
 	}
 }
 
-optional_ptr<CatalogEntry> ICTableSet::RefreshTable(ClientContext &context, const string &table_name) {
-	auto table_info = GetTableInfo(context, schema, table_name);
-	auto table_entry = make_uniq<ICTableEntry>(catalog, schema, *table_info);
-	auto table_ptr = table_entry.get();
-	CreateEntry(std::move(table_entry));
-	return table_ptr;
+void ICTableSet::CreateNewEntry(ClientContext &context, IRCatalog &catalog, IRCSchemaEntry &schema,
+                                CreateTableInfo &info) {
+	auto table_name = info.table;
+	if (info.on_conflict == OnCreateConflict::REPLACE_ON_CONFLICT) {
+		throw InvalidInputException("CREATE OR REPLACE not supported in DuckDB-Iceberg");
+	}
+	if (entries.find(table_name) != entries.end()) {
+		throw CatalogException("Table %s already exists", table_name.c_str());
+	}
+
+	entries.emplace(table_name, IcebergTableInformation(catalog, schema, info.table));
+	auto &table_info = entries.find(table_name)->second;
+	auto &irc_transaction = IRCTransaction::Get(context, catalog);
+
+	auto table_entry = make_uniq<ICTableEntry>(table_info, catalog, schema, info);
+	auto optional_entry = table_entry.get();
+
+	optional_entry->table_info.schema_versions[0] = std::move(table_entry);
+	optional_entry->table_info.table_metadata.schemas[0] =
+	    IcebergCreateTableRequest::CreateIcebergSchema(optional_entry);
+	optional_entry->table_info.table_metadata.current_schema_id = 0;
+	optional_entry->table_info.table_metadata.schemas[0]->schema_id = 0;
+	// Immediately create the table with stage_create = true to get metadata & data location(s)
+	// transaction commit will either commit with data (OR) create the table with stage_create = false
+	auto load_table_result = IRCAPI::CommitNewTable(context, catalog, optional_entry);
+	optional_entry->table_info.load_table_result = std::move(load_table_result);
+	optional_entry->table_info.table_metadata =
+	    IcebergTableMetadata::FromTableMetadata(optional_entry->table_info.load_table_result.metadata);
+
+	if (catalog.attach_options.supports_stage_create) {
+		// We have a response from the server for a stage create, we need to also send a number of table
+		// updates to finalize creation of the table.
+		table_info.AddAssertCreate(irc_transaction);
+		table_info.AddAssignUUID(irc_transaction);
+		table_info.AddUpradeFormatVersion(irc_transaction);
+		table_info.AddSchema(irc_transaction);
+		table_info.AddSetCurrentSchema(irc_transaction);
+		table_info.AddPartitionSpec(irc_transaction);
+		table_info.SetDefaultSpec(irc_transaction);
+		table_info.AddSortOrder(irc_transaction);
+		table_info.SetDefaultSortOrder(irc_transaction);
+		table_info.SetLocation(irc_transaction);
+	}
 }
 
 unique_ptr<ICTableInfo> ICTableSet::GetTableInfo(ClientContext &context, IRCSchemaEntry &schema,
@@ -77,37 +120,18 @@ unique_ptr<ICTableInfo> ICTableSet::GetTableInfo(ClientContext &context, IRCSche
 	throw NotImplementedException("ICTableSet::GetTableInfo");
 }
 
-optional_ptr<CatalogEntry> ICTableSet::CreateTable(ClientContext &context, BoundCreateTableInfo &info) {
-	auto &ic_catalog = catalog.Cast<IRCatalog>();
-	auto *table_info = dynamic_cast<CreateTableInfo *>(info.base.get());
-	auto table = IRCAPI::CreateTable(context, ic_catalog, ic_catalog.internal_name, schema.name, table_info);
-	auto entry = _CreateCatalogEntry(context, std::move(table));
-	return CreateEntry(std::move(entry));
-}
-
-void ICTableSet::DropTable(ClientContext &context, DropInfo &info) {
-	auto &ic_catalog = catalog.Cast<IRCatalog>();
-	IRCAPI::DropTable(context, ic_catalog, ic_catalog.internal_name, schema.name, info.name);
-}
-
-void ICTableSet::AlterTable(ClientContext &context, RenameTableInfo &info) {
-	throw NotImplementedException("ICTableSet::AlterTable");
-}
-
-void ICTableSet::AlterTable(ClientContext &context, RenameColumnInfo &info) {
-	throw NotImplementedException("ICTableSet::AlterTable");
-}
-
-void ICTableSet::AlterTable(ClientContext &context, AddColumnInfo &info) {
-	throw NotImplementedException("ICTableSet::AlterTable");
-}
-
-void ICTableSet::AlterTable(ClientContext &context, RemoveColumnInfo &info) {
-	throw NotImplementedException("ICTableSet::AlterTable");
-}
-
-void ICTableSet::AlterTable(ClientContext &context, AlterTableInfo &alter) {
-	throw NotImplementedException("ICTableSet::AlterTable");
+optional_ptr<CatalogEntry> ICTableSet::GetEntry(ClientContext &context, const EntryLookupInfo &lookup) {
+	LoadEntries(context);
+	lock_guard<mutex> l(entry_lock);
+	auto entry = entries.find(lookup.GetEntryName());
+	if (entry == entries.end()) {
+		return nullptr;
+	}
+	if (entry->second.transaction_data && entry->second.transaction_data->is_deleted) {
+		return nullptr;
+	}
+	FillEntry(context, entry->second);
+	return entry->second.GetSchemaVersion(lookup.GetAtClause());
 }
 
 } // namespace duckdb

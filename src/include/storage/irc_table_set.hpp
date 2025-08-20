@@ -1,49 +1,39 @@
 
 #pragma once
 
-#include "storage/irc_catalog_set.hpp"
+#include "duckdb/catalog/catalog_entry.hpp"
 #include "storage/irc_table_entry.hpp"
+#include "storage/iceberg_table_information.hpp"
+#include "storage/iceberg_transaction_data.hpp"
 
 namespace duckdb {
 struct CreateTableInfo;
 class ICResult;
 class IRCSchemaEntry;
+class IRCTransaction;
 
-class ICInSchemaSet : public IRCCatalogSet {
-public:
-	ICInSchemaSet(IRCSchemaEntry &schema);
-
-	optional_ptr<CatalogEntry> CreateEntry(unique_ptr<CatalogEntry> entry) override;
-
-protected:
-	IRCSchemaEntry &schema;
-};
-
-class ICTableSet : public ICInSchemaSet {
+class ICTableSet {
 public:
 	explicit ICTableSet(IRCSchemaEntry &schema);
 
 public:
-	optional_ptr<CatalogEntry> CreateTable(ClientContext &context, BoundCreateTableInfo &info);
 	static unique_ptr<ICTableInfo> GetTableInfo(ClientContext &context, IRCSchemaEntry &schema,
 	                                            const string &table_name);
-	optional_ptr<CatalogEntry> RefreshTable(ClientContext &context, const string &table_name);
-	void AlterTable(ClientContext &context, AlterTableInfo &info);
-	void DropTable(ClientContext &context, DropInfo &info);
+	optional_ptr<CatalogEntry> GetEntry(ClientContext &context, const EntryLookupInfo &lookup);
+	void Scan(ClientContext &context, const std::function<void(CatalogEntry &)> &callback);
+	void CreateNewEntry(ClientContext &context, IRCatalog &catalog, IRCSchemaEntry &schema, CreateTableInfo &info);
 
-protected:
-	void LoadEntries(ClientContext &context) override;
-	void FillEntry(ClientContext &context, unique_ptr<CatalogEntry> &entry) override;
+public:
+	void LoadEntries(ClientContext &context);
+	void FillEntry(ClientContext &context, IcebergTableInformation &table);
 
-	void AlterTable(ClientContext &context, RenameTableInfo &info);
-	void AlterTable(ClientContext &context, RenameColumnInfo &info);
-	void AlterTable(ClientContext &context, AddColumnInfo &info);
-	void AlterTable(ClientContext &context, RemoveColumnInfo &info);
-
-	static void AddColumn(ClientContext &context, ICResult &result, ICTableInfo &table_info, idx_t column_offset = 0);
+public:
+	IRCSchemaEntry &schema;
+	Catalog &catalog;
+	case_insensitive_map_t<IcebergTableInformation> entries;
 
 private:
-	unique_ptr<CatalogEntry> _CreateCatalogEntry(ClientContext &context, IRCAPITable &&table);
+	mutex entry_lock;
 };
 
 } // namespace duckdb

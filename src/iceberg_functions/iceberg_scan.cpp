@@ -24,7 +24,6 @@
 #include "iceberg_utils.hpp"
 #include "iceberg_multi_file_reader.hpp"
 #include "iceberg_functions.hpp"
-#include "yyjson.hpp"
 #include "storage/irc_table_entry.hpp"
 
 #include <string>
@@ -33,7 +32,6 @@
 namespace duckdb {
 
 static void AddNamedParameters(TableFunction &fun) {
-	fun.named_parameters["skip_schema_inference"] = LogicalType::BOOLEAN;
 	fun.named_parameters["allow_moved_paths"] = LogicalType::BOOLEAN;
 	fun.named_parameters["mode"] = LogicalType::VARCHAR;
 	fun.named_parameters["metadata_compression_codec"] = LogicalType::VARCHAR;
@@ -53,6 +51,7 @@ TableFunctionSet IcebergFunctions::GetIcebergScanFunction(DatabaseInstance &inst
 	for (auto &function : parquet_scan_copy.functions) {
 		// Register the MultiFileReader as the driver for reads
 		function.get_multi_file_reader = IcebergMultiFileReader::CreateInstance;
+		function.late_materialization = false;
 
 		// Unset all of these: they are either broken, very inefficient.
 		// TODO: implement/fix these

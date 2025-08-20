@@ -1,0 +1,25 @@
+# name: test/sql/local/iceberg_scans/test_read_empty_insert.test
+# group: [iceberg_scans]
+
+require-env DUCKDB_ICEBERG_HAVE_GENERATED_DATA
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+set enable_logging=true
+
+statement ok
+set logging_level='debug'
+
+query III
+select * from ICEBERG_SCAN('data/generated/iceberg/spark-local/default/empty_insert')
+----

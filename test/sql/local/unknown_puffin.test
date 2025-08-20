@@ -1,0 +1,17 @@
+# name: test/sql/local/unknown_puffin.test
+# group: [local]
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+# Query the latest snapshot.
+query III
+select * from ICEBERG_SCAN('__WORKING_DIRECTORY__/data/persistent/unknown_puffin/namespace/test_table');
+----
+1	John	10	
+4	David	40

@@ -4,9 +4,9 @@
 
 # Before we load the extension, this will fail
 statement error
-SELECT * FROM ICEBERG_SCAN('data/iceberg/lineitem_iceberg');
+SELECT * FROM ICEBERG_SCAN('__WORKING_DIRECTORY__/data/iceberg/lineitem_iceberg');
 ----
-Catalog Error
+Error
 
 require avro
 
@@ -25,7 +25,7 @@ statement ok
 create schema my_datalake.default;
 
 statement ok
-create view my_datalake.default.pyspark_iceberg_table_v1 as select * from ICEBERG_SCAN('data/generated/iceberg/spark-local/default/pyspark_iceberg_table_v1');
+create view my_datalake.default.pyspark_iceberg_table_v1 as select * from ICEBERG_SCAN('__WORKING_DIRECTORY__/data/generated/iceberg/spark-local/default/pyspark_iceberg_table_v1');
 
 
 query I

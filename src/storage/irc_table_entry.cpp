@@ -17,16 +17,13 @@
 #include "duckdb/planner/tableref/bound_at_clause.hpp"
 
 #include "rest_catalog/objects/list.hpp"
+#include "storage/iceberg_table_information.hpp"
 
 namespace duckdb {
 
-ICTableEntry::ICTableEntry(Catalog &catalog, SchemaCatalogEntry &schema, CreateTableInfo &info)
-    : TableCatalogEntry(catalog, schema, info) {
-	this->internal = false;
-}
-
-ICTableEntry::ICTableEntry(Catalog &catalog, SchemaCatalogEntry &schema, ICTableInfo &info)
-    : TableCatalogEntry(catalog, schema, *info.create_info) {
+ICTableEntry::ICTableEntry(IcebergTableInformation &table_info, Catalog &catalog, SchemaCatalogEntry &schema,
+                           CreateTableInfo &info)
+    : TableCatalogEntry(catalog, schema, info), table_info(table_info) {
 	this->internal = false;
 }
 
@@ -39,48 +36,22 @@ void ICTableEntry::BindUpdateConstraints(Binder &binder, LogicalGet &, LogicalPr
 	throw NotImplementedException("BindUpdateConstraints");
 }
 
-static void AddTimeTravelInformation(named_parameter_map_t &param_map, BoundAtClause &at) {
-	auto &unit = at.Unit();
-	auto &value = at.GetValue();
-
-	if (StringUtil::CIEquals(unit, "version")) {
-		param_map.emplace("snapshot_from_id", value);
-	} else if (StringUtil::CIEquals(unit, "timestamp")) {
-		param_map.emplace("snapshot_from_timestamp", value);
-	} else {
-		throw InvalidInputException(
-		    "Unit '%s' for time travel is not valid, supported options are 'version' and 'timestamp'", unit);
-	}
-}
-
-string ICTableEntry::PrepareIcebergScanFromEntry(ClientContext &context) {
-	D_ASSERT(table_data);
-	if (table_data->data_source_format != "ICEBERG") {
-		throw NotImplementedException("Table '%s' is of unsupported format '%s', ", table_data->name,
-		                              table_data->data_source_format);
-	}
-
+string ICTableEntry::PrepareIcebergScanFromEntry(ClientContext &context) const {
 	auto &ic_catalog = catalog.Cast<IRCatalog>();
 	auto &secret_manager = SecretManager::Get(context);
 
 	// Get Credentials from IRC API
-	auto secret_base_name =
-	    StringUtil::Format("__internal_ic_%s__%s__%s", table_data->table_id, table_data->schema_name, table_data->name);
-	auto table_credentials =
-	    IRCAPI::GetTableCredentials(context, ic_catalog, table_data->schema_name, table_data->name, secret_base_name);
-	// First check if table credentials are set (possible the IC catalog does not return credentials)
+	auto table_credentials = table_info.GetVendedCredentials(context);
+	auto &load_result = table_info.load_table_result;
 
 	if (table_credentials.config) {
 		auto &info = *table_credentials.config;
 		D_ASSERT(info.scope.empty());
 		//! Limit the scope to the metadata location
-		std::string lc_storage_location;
-		lc_storage_location.resize(table_data->storage_location.size());
-		std::transform(table_data->storage_location.begin(), table_data->storage_location.end(),
-		               lc_storage_location.begin(), ::tolower);
+		string lc_storage_location = StringUtil::Lower(load_result.metadata_location);
 		size_t metadata_pos = lc_storage_location.find("metadata");
-		if (metadata_pos != std::string::npos) {
-			info.scope = {table_data->storage_location.substr(0, metadata_pos)};
+		if (metadata_pos != string::npos) {
+			info.scope = {load_result.metadata_location.substr(0, metadata_pos)};
 		} else {
 			throw InvalidInputException("Substring not found");
 		}
@@ -117,7 +88,7 @@ string ICTableEntry::PrepareIcebergScanFromEntry(ClientContext &context) {
 	for (auto &info : table_credentials.storage_credentials) {
 		(void)secret_manager.CreateSecret(context, info);
 	}
-	return table_data->storage_location;
+	return table_info.load_table_result.metadata_location;
 }
 
 TableFunction ICTableEntry::GetScanFunction(ClientContext &context, unique_ptr<FunctionData> &bind_data,
@@ -133,18 +104,34 @@ TableFunction ICTableEntry::GetScanFunction(ClientContext &context, unique_ptr<F
 	vector<string> names;
 	TableFunctionRef empty_ref;
 
-	// Set the S3 path as input to table function
+	auto &metadata = table_info.table_metadata;
 	auto at = lookup.GetAtClause();
-	if (at) {
-		AddTimeTravelInformation(param_map, *at);
+	auto snapshot_lookup = IcebergSnapshotLookup::FromAtClause(at);
+	auto snapshot = metadata.GetSnapshot(snapshot_lookup);
+
+	int32_t schema_id;
+	if (snapshot_lookup.IsLatest()) {
+		schema_id = metadata.current_schema_id;
+	} else {
+		D_ASSERT(snapshot);
+		schema_id = snapshot->schema_id;
 	}
+
+	auto schema = metadata.GetSchemaFromId(schema_id);
+	auto scan_info =
+	    make_shared_ptr<IcebergScanInfo>(table_info.load_table_result.metadata_location, metadata, snapshot, *schema);
+	if (table_info.transaction_data) {
+		scan_info->transaction_data = table_info.transaction_data.get();
+	}
+
+	iceberg_scan_function.function_info = scan_info;
+
+	// Set the S3 path as input to table function
 	vector<Value> inputs = {storage_location};
 	TableFunctionBindInput bind_input(inputs, param_map, return_types, names, nullptr, nullptr, iceberg_scan_function,
 	                                  empty_ref);
-
 	auto result = iceberg_scan_function.bind(context, bind_input, return_types, names);
 	bind_data = std::move(result);
-
 	return iceberg_scan_function;
 }
 

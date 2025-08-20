@@ -23,6 +23,7 @@ private:
 	static TableFunctionSet GetIcebergSnapshotsFunction();
 	static TableFunctionSet GetIcebergScanFunction(DatabaseInstance &instance);
 	static TableFunctionSet GetIcebergMetadataFunction();
+	static TableFunctionSet GetIcebergToDuckLakeFunction();
 };
 
 } // namespace duckdb

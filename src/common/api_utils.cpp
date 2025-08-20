@@ -2,6 +2,7 @@
 #include "duckdb/common/exception.hpp"
 #include "duckdb/common/exception/http_exception.hpp"
 #include "duckdb/common/string_util.hpp"
+#include "duckdb/main/client_data.hpp"
 
 #include <sys/stat.h>
 
@@ -23,41 +24,78 @@ const string &APIUtils::GetCURLCertPath() {
 	return cert_path;
 }
 
-string APIUtils::DeleteRequest(ClientContext &context, const string &url, RequestInput &request_input,
-                               const string &token) {
-	// Set the user Agent.
-	auto &config = DBConfig::GetConfig(context);
-	request_input.AddHeader(StringUtil::Format("User-Agent: %s", config.UserAgent()));
-	request_input.SetURL(url);
-	request_input.SetCertPath(GetCURLCertPath());
-	request_input.SetBearerToken(token);
-
-	return request_input.DeleteRequest(context);
+static string AddHttpHostIfMissing(const string &url) {
+	auto lower_url = StringUtil::Lower(url);
+	if (StringUtil::StartsWith(lower_url, "http://") || StringUtil::StartsWith(lower_url, "https://")) {
+		return url;
+	}
+	return "http://" + url;
 }
 
-string APIUtils::PostRequest(ClientContext &context, const string &url, const string &post_data,
-                             RequestInput &request_input, const string &content_type, const string &token) {
-	auto &config = DBConfig::GetConfig(context);
-	request_input.AddHeader(StringUtil::Format("User-Agent: %s", config.UserAgent()));
-	request_input.AddHeader("Content-Type: application/" + content_type);
-	request_input.SetURL(url);
-	request_input.SetCertPath(GetCURLCertPath());
-	request_input.SetBearerToken(token);
+unique_ptr<HTTPResponse> APIUtils::DeleteRequest(ClientContext &context, const IRCEndpointBuilder &endpoint_builder,
+                                                 const string &token) {
+	auto &db = DatabaseInstance::GetDatabase(context);
 
-	return request_input.PostRequest(context, post_data);
+	HTTPHeaders headers(db);
+	headers.Insert("X-Iceberg-Access-Delegation", "vended-credentials");
+	headers.Insert("Authorization", StringUtil::Format("Bearer %s", token));
+
+	string request_url = AddHttpHostIfMissing(endpoint_builder.GetURL());
+	auto &http_util = HTTPUtil::Get(db);
+	unique_ptr<HTTPParams> params;
+	params = http_util.InitializeParameters(context, request_url);
+
+	DeleteRequestInfo delete_request(request_url, headers, *params);
+	return http_util.Request(delete_request);
 }
 
-string APIUtils::GetRequest(ClientContext &context, const IRCEndpointBuilder &endpoint_builder,
-                            RequestInput &request_input, const string &token) {
-	auto url = endpoint_builder.GetURL();
-	// Set the user Agent.
-	auto &config = DBConfig::GetConfig(context);
-	request_input.AddHeader(StringUtil::Format("User-Agent: %s", config.UserAgent()));
-	request_input.SetURL(url);
-	request_input.SetCertPath(GetCURLCertPath());
-	request_input.SetBearerToken(token);
+unique_ptr<HTTPResponse> APIUtils::PostRequest(ClientContext &context, const string &url, const string &post_data,
+                                               const unordered_map<string, string> &additional_headers,
+                                               const string &content_type, const string &token) {
+	auto &db = DatabaseInstance::GetDatabase(context);
 
-	return request_input.GetRequest(context);
+	string request_url = AddHttpHostIfMissing(url);
+
+	HTTPHeaders headers(db);
+	headers.Insert("X-Iceberg-Access-Delegation", "vended-credentials");
+	headers.Insert("Content-Type", StringUtil::Format("application/%s", content_type));
+	for (auto it : additional_headers) {
+		headers.Insert(it.first, it.second);
+	}
+	if (!token.empty()) {
+		headers.Insert("Authorization", StringUtil::Format("Bearer %s", token));
+	}
+
+	auto &http_util = HTTPUtil::Get(db);
+	unique_ptr<HTTPParams> params;
+	params = http_util.InitializeParameters(context, request_url);
+
+	PostRequestInfo post_request(request_url, headers, *params, reinterpret_cast<const_data_ptr_t>(post_data.data()),
+	                             post_data.size());
+	auto response = http_util.Request(post_request);
+	response->body = post_request.buffer_out;
+	return response;
+}
+
+unique_ptr<HTTPResponse> APIUtils::GetRequest(ClientContext &context, const IRCEndpointBuilder &endpoint_builder,
+                                              const string &token) {
+	auto &db = DatabaseInstance::GetDatabase(context);
+
+	HTTPHeaders headers(db);
+	headers.Insert("X-Iceberg-Access-Delegation", "vended-credentials");
+	if (!token.empty()) {
+		headers.Insert("Authorization", StringUtil::Format("Bearer %s", token));
+	}
+
+	auto &http_util = HTTPUtil::Get(db);
+	unique_ptr<HTTPParams> params;
+
+	string request_url = AddHttpHostIfMissing(endpoint_builder.GetURL());
+
+	params = http_util.InitializeParameters(context, request_url);
+
+	GetRequestInfo get_request(request_url, headers, *params, nullptr, nullptr);
+	return http_util.Request(get_request);
 }
 
 } // namespace duckdb

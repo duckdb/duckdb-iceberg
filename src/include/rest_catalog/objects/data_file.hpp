@@ -5,7 +5,6 @@
 #include "duckdb/common/string.hpp"
 #include "duckdb/common/vector.hpp"
 #include "duckdb/common/case_insensitive_map.hpp"
-#include "rest_catalog/response_objects.hpp"
 #include "rest_catalog/objects/content_file.hpp"
 #include "rest_catalog/objects/count_map.hpp"
 #include "rest_catalog/objects/value_map.hpp"
@@ -32,6 +31,8 @@ public:
 public:
 	ContentFile content_file;
 	string content;
+	int64_t first_row_id;
+	bool has_first_row_id = false;
 	CountMap column_sizes;
 	bool has_column_sizes = false;
 	CountMap value_counts;

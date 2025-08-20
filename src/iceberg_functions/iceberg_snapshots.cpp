@@ -4,7 +4,7 @@
 #include "iceberg_metadata.hpp"
 #include "iceberg_options.hpp"
 #include "iceberg_utils.hpp"
-#include "yyjson.hpp"
+#include "metadata/iceberg_table_metadata.hpp"
 
 #include <string>
 
@@ -25,19 +25,19 @@ public:
 
 		FileSystem &fs = FileSystem::GetFileSystem(context);
 
-		auto iceberg_meta_path = IcebergSnapshot::GetMetaDataPath(context, bind_data.filename, fs, bind_data.options);
-		global_state->metadata =
-		    IcebergMetadata::Parse(iceberg_meta_path, fs, bind_data.options.metadata_compression_codec);
+		auto iceberg_meta_path =
+		    IcebergTableMetadata::GetMetaDataPath(context, bind_data.filename, fs, bind_data.options);
+		auto table_metadata =
+		    IcebergTableMetadata::Parse(iceberg_meta_path, fs, bind_data.options.metadata_compression_codec);
+		global_state->metadata = IcebergTableMetadata::FromTableMetadata(table_metadata);
 
-		auto &info = *global_state->metadata;
-		auto root = yyjson_doc_get_root(info.doc);
-		auto snapshots = yyjson_obj_get(root, "snapshots");
-		yyjson_arr_iter_init(snapshots, &global_state->snapshot_it);
+		auto &info = global_state->metadata;
+		global_state->snapshot_it = info.snapshots.begin();
 		return std::move(global_state);
 	}
 
-	unique_ptr<IcebergMetadata> metadata;
-	yyjson_arr_iter snapshot_it;
+	IcebergTableMetadata metadata;
+	unordered_map<int64_t, IcebergSnapshot>::iterator snapshot_it;
 };
 
 static unique_ptr<FunctionData> IcebergSnapshotsBind(ClientContext &context, TableFunctionBindInput &input,
@@ -59,8 +59,6 @@ static unique_ptr<FunctionData> IcebergSnapshotsBind(ClientContext &context, Tab
 				    string_substitutions);
 			}
 			bind_data->options.version_name_format = value;
-		} else if (loption == "skip_schema_inference") {
-			bind_data->options.infer_schema = !BooleanValue::Get(kv.second);
 		}
 	}
 	auto input_string = input.inputs[0].ToString();
@@ -84,22 +82,20 @@ static unique_ptr<FunctionData> IcebergSnapshotsBind(ClientContext &context, Tab
 // Snapshots function
 static void IcebergSnapshotsFunction(ClientContext &context, TableFunctionInput &data, DataChunk &output) {
 	auto &global_state = data.global_state->Cast<IcebergSnapshotGlobalTableFunctionState>();
-	auto &bind_data = data.bind_data->Cast<IcebergSnaphotsBindData>();
 	idx_t i = 0;
-	while (auto next_snapshot = yyjson_arr_iter_next(&global_state.snapshot_it)) {
+	auto &it = global_state.snapshot_it;
+	auto end = global_state.metadata.snapshots.end();
+	for (; it != end; it++) {
 		if (i >= STANDARD_VECTOR_SIZE) {
 			break;
 		}
 
-		auto &metadata = *global_state.metadata;
-		auto snapshot = IcebergSnapshot::ParseSnapShot(next_snapshot, metadata, bind_data.options);
-
-		FlatVector::GetData<int64_t>(output.data[0])[i] = snapshot->sequence_number;
-		FlatVector::GetData<int64_t>(output.data[1])[i] = snapshot->snapshot_id;
-		FlatVector::GetData<timestamp_t>(output.data[2])[i] = snapshot->timestamp_ms;
-		string_t manifest_string_t = StringVector::AddString(output.data[3], string_t(snapshot->manifest_list));
+		auto &snapshot = it->second;
+		FlatVector::GetData<int64_t>(output.data[0])[i] = snapshot.sequence_number;
+		FlatVector::GetData<int64_t>(output.data[1])[i] = snapshot.snapshot_id;
+		FlatVector::GetData<timestamp_t>(output.data[2])[i] = snapshot.timestamp_ms;
+		string_t manifest_string_t = StringVector::AddString(output.data[3], string_t(snapshot.manifest_list));
 		FlatVector::GetData<string_t>(output.data[3])[i] = manifest_string_t;
-
 		i++;
 	}
 	output.SetCardinality(i);
@@ -112,7 +108,6 @@ TableFunctionSet IcebergFunctions::GetIcebergSnapshotsFunction() {
 	table_function.named_parameters["metadata_compression_codec"] = LogicalType::VARCHAR;
 	table_function.named_parameters["version"] = LogicalType::VARCHAR;
 	table_function.named_parameters["version_name_format"] = LogicalType::VARCHAR;
-	table_function.named_parameters["skip_schema_inference"] = LogicalType::BOOLEAN;
 	function_set.AddFunction(table_function);
 	return function_set;
 }

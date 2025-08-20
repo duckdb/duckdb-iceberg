@@ -5,7 +5,6 @@
 #include "duckdb/common/string.hpp"
 #include "duckdb/common/vector.hpp"
 #include "duckdb/common/case_insensitive_map.hpp"
-#include "rest_catalog/response_objects.hpp"
 #include "rest_catalog/objects/list.hpp"
 
 using namespace duckdb_yyjson;
@@ -29,8 +28,8 @@ string LongTypeValue::TryFromJSON(yyjson_val *obj) {
 	string error;
 	if (yyjson_is_sint(obj)) {
 		value = yyjson_get_sint(obj);
-	} else if (yyjson_is_int(obj)) {
-		value = yyjson_get_int(obj);
+	} else if (yyjson_is_uint(obj)) {
+		value = yyjson_get_uint(obj);
 	} else {
 		return StringUtil::Format("LongTypeValue property 'value' is not of type 'integer', found '%s' instead",
 		                          yyjson_get_type_desc(obj));

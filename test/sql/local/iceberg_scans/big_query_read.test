@@ -1,0 +1,14 @@
+# name: test/sql/local/iceberg_scans/big_query_read.test
+# group: [iceberg_scans]
+
+require parquet
+
+require iceberg
+
+require avro
+
+query III
+select * from iceberg_scan('data/persistent/big_query_error');
+----
+1	Alice	2024-01-01 10:00:00
+2	Bob	2024-02-01 11:30:00

@@ -1,0 +1,191 @@
+# name: test/sql/cloud/s3tables/test_insert_into_s3table.test
+# description: test integration with iceberg catalog read
+# group: [s3tables]
+
+require-env ICEBERG_AWS_REMOTE_AVAILABLE
+
+require-env ICEBERG_REMOTE_INSERT_READY
+
+require-env AWS_ACCESS_KEY_ID
+
+require-env AWS_SECRET_ACCESS_KEY
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+require aws
+
+statement ok
+CREATE SECRET s1 (
+  TYPE S3,
+  PROVIDER credential_chain
+);
+
+statement ok
+attach 'arn:aws:s3tables:us-east-2:840140254803:bucket/iceberg-testing' as s3_catalog (
+    TYPE ICEBERG,
+    secret s1,
+    ENDPOINT_TYPE 'S3_TABLES'
+);
+
+query IIII
+select * from s3_catalog.test_inserts.basic_insert_test order by id;
+----
+1	Alice	Smith	1990-01-01
+2	Bob	Jones	1985-06-15
+3	Charlie	Brown	2000-12-31
+
+statement ok
+begin transaction;
+
+statement ok
+insert into s3_catalog.test_inserts.basic_insert_test select * from VALUES
+    (5,
+    'mr.duck' ,
+    '404 lane' ,
+    '2010/06/11'::DATE) t(id, name, address, date);
+
+# # read new data before committing
+query IIII
+select * from s3_catalog.test_inserts.basic_insert_test order by id
+----
+1	Alice	Smith	1990-01-01
+2	Bob	Jones	1985-06-15
+3	Charlie	Brown	2000-12-31
+5	mr.duck	404 lane	2010-06-11
+
+statement ok
+rollback;
+
+# we see the original data after an abort
+query IIII
+select * from s3_catalog.test_inserts.basic_insert_test order by id
+----
+1	Alice	Smith	1990-01-01
+2	Bob	Jones	1985-06-15
+3	Charlie	Brown	2000-12-31
+
+# Perform an insert into the same table from two separate transactions
+
+statement ok con1
+begin transaction;
+
+statement ok con1
+insert into s3_catalog.test_inserts.basic_insert_test select * from VALUES
+    (8,
+    'mr.scroog' ,
+    'bitlane' ,
+    '2010/06/11'::DATE) t(id, name, address, date);
+
+statement ok con2
+begin transaction;
+
+statement ok con2
+insert into s3_catalog.test_inserts.basic_insert_test select * from VALUES
+    (10,
+    'duckman' ,
+    'byteway' ,
+    '2010/06/11'::DATE) t(id, name, address, date);
+
+# con1 only sees con1
+query IIII con1
+select * from s3_catalog.test_inserts.basic_insert_test;
+----
+1	Alice	Smith	1990-01-01
+2	Bob	Jones	1985-06-15
+3	Charlie	Brown	2000-12-31
+8	mr.scroog	bitlane	2010-06-11
+
+# con2 only sees con2
+query IIII con2
+select * from s3_catalog.test_inserts.basic_insert_test;
+----
+1	Alice	Smith	1990-01-01
+2	Bob	Jones	1985-06-15
+3	Charlie	Brown	2000-12-31
+10	duckman	byteway	2010-06-11
+
+statement ok con2
+commit
+
+# The second commit failed because both transactions tried to add sequence number: 2
+# Invalid Configuration Error: Request to 'http://127.0.0.1:8181/v1/transactions/commit' returned a non-200 status code
+statement error con1
+commit
+----
+<REGEX>:.*TransactionContext Error.*Conflict_409.*
+
+statement ok
+select 1;
+
+statement ok
+select 5;
+
+statement ok
+select * from s3_catalog.test_inserts.basic_insert_test;
+
+statement ok
+select 1;
+
+# we see the con2 update
+query IIII
+select * from s3_catalog.test_inserts.basic_insert_test;
+----
+1	Alice	Smith	1990-01-01
+2	Bob	Jones	1985-06-15
+3	Charlie	Brown	2000-12-31
+10	duckman	byteway	2010-06-11
+
+# # wait a little bit
+# statement ok
+# create table t1 as select range a from range(10000000);
+#
+# Insert multiple times into the same table in the same transaction
+statement ok con3
+begin
+
+statement ok con3
+insert into s3_catalog.test_inserts.basic_insert_test select * from VALUES
+    (15,
+    'mr.scroog' ,
+    'bitlane' ,
+    '2010/06/11'::DATE) t(id, name, address, date);
+
+statement ok con3
+insert into s3_catalog.test_inserts.basic_insert_test select * from VALUES
+    (16,
+    'mr.Goose' ,
+    'ponder' ,
+    '2010/06/11'::DATE) t(id, name, address, date);
+
+statement ok con3
+insert into s3_catalog.test_inserts.basic_insert_test select * from VALUES
+    (17,
+    'ms.Swan' ,
+    'lakeway' ,
+    '2010/06/11'::DATE) t(id, name, address, date);
+
+statement ok con3
+commit
+
+query IIII
+select * from s3_catalog.test_inserts.basic_insert_test;
+----
+1	Alice	Smith	1990-01-01
+2	Bob	Jones	1985-06-15
+3	Charlie	Brown	2000-12-31
+10	duckman	byteway	2010-06-11
+15	mr.scroog	bitlane	2010-06-11
+16	mr.Goose	ponder	2010-06-11
+17	ms.Swan	lakeway	2010-06-11
+
+# TODO: cleanup temporary secretes
+# query I
+# select count(*) from duckdb_secrets() where name like '%__internal_ic%';
+# ----
+# 0

@@ -22,7 +22,8 @@
 #include "iceberg_metadata.hpp"
 #include "iceberg_functions.hpp"
 #include "iceberg_utils.hpp"
-#include "yyjson.hpp"
+
+#include "metadata/iceberg_table_metadata.hpp"
 
 #include <string>
 #include <numeric>
@@ -54,9 +55,10 @@ static unique_ptr<FunctionData> IcebergMetaDataBind(ClientContext &context, Tabl
 
 	FileSystem &fs = FileSystem::GetFileSystem(context);
 	auto input_string = input.inputs[0].ToString();
-	auto iceberg_path = IcebergUtils::GetStorageLocation(context, input_string);
+	auto filename = IcebergUtils::GetStorageLocation(context, input_string);
 
 	IcebergOptions options;
+	auto &snapshot_lookup = options.snapshot_lookup;
 
 	for (auto &kv : input.named_parameters) {
 		auto loption = StringUtil::Lower(kv.first);
@@ -65,8 +67,6 @@ static unique_ptr<FunctionData> IcebergMetaDataBind(ClientContext &context, Tabl
 			options.allow_moved_paths = BooleanValue::Get(val);
 		} else if (loption == "metadata_compression_codec") {
 			options.metadata_compression_codec = StringValue::Get(val);
-		} else if (loption == "skip_schema_inference") {
-			options.infer_schema = !BooleanValue::Get(kv.second);
 		} else if (loption == "version") {
 			options.table_version = StringValue::Get(val);
 		} else if (loption == "version_name_format") {
@@ -79,44 +79,31 @@ static unique_ptr<FunctionData> IcebergMetaDataBind(ClientContext &context, Tabl
 			}
 			options.version_name_format = value;
 		} else if (loption == "snapshot_from_id") {
-			if (options.snapshot_source != SnapshotSource::LATEST) {
+			if (snapshot_lookup.snapshot_source != SnapshotSource::LATEST) {
 				throw InvalidInputException(
 				    "Can't use 'snapshot_from_id' in combination with 'snapshot_from_timestamp'");
 			}
-			options.snapshot_source = SnapshotSource::FROM_ID;
-			options.snapshot_id = val.GetValue<uint64_t>();
+			snapshot_lookup.snapshot_source = SnapshotSource::FROM_ID;
+			snapshot_lookup.snapshot_id = val.GetValue<uint64_t>();
 		} else if (loption == "snapshot_from_timestamp") {
-			if (options.snapshot_source != SnapshotSource::LATEST) {
+			if (snapshot_lookup.snapshot_source != SnapshotSource::LATEST) {
 				throw InvalidInputException(
 				    "Can't use 'snapshot_from_id' in combination with 'snapshot_from_timestamp'");
 			}
-			options.snapshot_source = SnapshotSource::FROM_TIMESTAMP;
-			options.snapshot_timestamp = val.GetValue<timestamp_t>();
+			snapshot_lookup.snapshot_source = SnapshotSource::FROM_TIMESTAMP;
+			snapshot_lookup.snapshot_timestamp = val.GetValue<timestamp_t>();
 		}
 	}
 
-	auto iceberg_meta_path = IcebergSnapshot::GetMetaDataPath(context, iceberg_path, fs, options);
-	auto metadata = IcebergMetadata::Parse(iceberg_meta_path, fs, options.metadata_compression_codec);
+	auto iceberg_meta_path = IcebergTableMetadata::GetMetaDataPath(context, filename, fs, options);
+	auto table_metadata = IcebergTableMetadata::Parse(iceberg_meta_path, fs, options.metadata_compression_codec);
+	auto metadata = IcebergTableMetadata::FromTableMetadata(table_metadata);
 
-	shared_ptr<IcebergSnapshot> snapshot_to_scan;
-	switch (options.snapshot_source) {
-	case SnapshotSource::LATEST: {
-		snapshot_to_scan = IcebergSnapshot::GetLatestSnapshot(*metadata, options);
-		break;
-	}
-	case SnapshotSource::FROM_ID: {
-		snapshot_to_scan = IcebergSnapshot::GetSnapshotById(*metadata, options.snapshot_id, options);
-		break;
-	}
-	case SnapshotSource::FROM_TIMESTAMP: {
-		snapshot_to_scan = IcebergSnapshot::GetSnapshotByTimestamp(*metadata, options.snapshot_timestamp, options);
-		break;
-	}
-	default:
-		throw InternalException("SnapshotSource type not implemented");
-	}
+	auto snapshot_to_scan = metadata.GetSnapshot(options.snapshot_lookup);
 
-	ret->iceberg_table = make_uniq<IcebergTable>(IcebergTable::Load(iceberg_path, snapshot_to_scan, context, options));
+	if (snapshot_to_scan) {
+		ret->iceberg_table = IcebergTable::Load(filename, metadata, *snapshot_to_scan, context, options);
+	}
 
 	auto manifest_types = IcebergManifest::Types();
 	return_types.insert(return_types.end(), manifest_types.begin(), manifest_types.end());
@@ -139,36 +126,41 @@ static void IcebergMetaDataFunction(ClientContext &context, TableFunctionInput &
 	auto &bind_data = data.bind_data->Cast<IcebergMetaDataBindData>();
 	auto &global_state = data.global_state->Cast<IcebergMetaDataGlobalTableFunctionState>();
 
+	if (!bind_data.iceberg_table) {
+		//! Table is empty
+		return;
+	}
+
 	idx_t out = 0;
-	auto manifests = bind_data.iceberg_table->entries;
-	for (; global_state.current_manifest_idx < manifests.size(); global_state.current_manifest_idx++) {
-		auto manifest_entries = manifests[global_state.current_manifest_idx].manifest_entries;
-		for (; global_state.current_manifest_entry_idx < manifest_entries.size();
-		     global_state.current_manifest_entry_idx++) {
+	auto &table_entries = bind_data.iceberg_table->entries;
+	for (; global_state.current_manifest_idx < table_entries.size(); global_state.current_manifest_idx++) {
+		auto &table_entry = table_entries[global_state.current_manifest_idx];
+		auto &data_files = table_entry.manifest_file.data_files;
+		for (; global_state.current_manifest_entry_idx < data_files.size(); global_state.current_manifest_entry_idx++) {
 			if (out >= STANDARD_VECTOR_SIZE) {
 				output.SetCardinality(out);
 				return;
 			}
-			auto manifest = manifests[global_state.current_manifest_idx];
-			auto manifest_entry = manifest_entries[global_state.current_manifest_entry_idx];
+			auto &manifest = table_entry.manifest;
+			auto &data_file = data_files[global_state.current_manifest_entry_idx];
 
 			//! manifest_path
-			AddString(output.data[0], out, string_t(manifest.manifest.manifest_path));
+			AddString(output.data[0], out, string_t(manifest.manifest_path));
 			//! manifest_sequence_number
-			FlatVector::GetData<int64_t>(output.data[1])[out] = manifest.manifest.sequence_number;
+			FlatVector::GetData<int64_t>(output.data[1])[out] = manifest.sequence_number;
 			//! manifest_content
-			AddString(output.data[2], out, string_t(IcebergManifestContentTypeToString(manifest.manifest.content)));
+			AddString(output.data[2], out, string_t(IcebergManifest::ContentTypeToString(manifest.content)));
 
 			//! status
-			AddString(output.data[3], out, string_t(IcebergManifestEntryStatusTypeToString(manifest_entry.status)));
+			AddString(output.data[3], out, string_t(IcebergManifestEntry::StatusTypeToString(data_file.status)));
 			//! content
-			AddString(output.data[4], out, string_t(IcebergManifestEntryContentTypeToString(manifest_entry.content)));
+			AddString(output.data[4], out, string_t(IcebergManifestEntry::ContentTypeToString(data_file.content)));
 			//! file_path
-			AddString(output.data[5], out, string_t(manifest_entry.file_path));
+			AddString(output.data[5], out, string_t(data_file.file_path));
 			//! file_format
-			AddString(output.data[6], out, string_t(manifest_entry.file_format));
+			AddString(output.data[6], out, string_t(data_file.file_format));
 			//! record_count
-			FlatVector::GetData<int64_t>(output.data[7])[out] = manifest_entry.record_count;
+			FlatVector::GetData<int64_t>(output.data[7])[out] = data_file.record_count;
 			out++;
 		}
 		global_state.current_manifest_entry_idx = 0;
@@ -182,28 +174,11 @@ TableFunctionSet IcebergFunctions::GetIcebergMetadataFunction() {
 	auto fun = TableFunction({LogicalType::VARCHAR}, IcebergMetaDataFunction, IcebergMetaDataBind,
 	                         IcebergMetaDataGlobalTableFunctionState::Init);
 	fun.named_parameters["allow_moved_paths"] = LogicalType::BOOLEAN;
-	fun.named_parameters["skip_schema_inference"] = LogicalType::BOOLEAN;
 	fun.named_parameters["metadata_compression_codec"] = LogicalType::VARCHAR;
 	fun.named_parameters["version"] = LogicalType::VARCHAR;
 	fun.named_parameters["version_name_format"] = LogicalType::VARCHAR;
-	function_set.AddFunction(fun);
-
-	fun = TableFunction({LogicalType::VARCHAR, LogicalType::UBIGINT}, IcebergMetaDataFunction, IcebergMetaDataBind,
-	                    IcebergMetaDataGlobalTableFunctionState::Init);
-	fun.named_parameters["allow_moved_paths"] = LogicalType::BOOLEAN;
-	fun.named_parameters["skip_schema_inference"] = LogicalType::BOOLEAN;
-	fun.named_parameters["metadata_compression_codec"] = LogicalType::VARCHAR;
-	fun.named_parameters["version"] = LogicalType::VARCHAR;
-	fun.named_parameters["version_name_format"] = LogicalType::VARCHAR;
-	function_set.AddFunction(fun);
-
-	fun = TableFunction({LogicalType::VARCHAR, LogicalType::TIMESTAMP}, IcebergMetaDataFunction, IcebergMetaDataBind,
-	                    IcebergMetaDataGlobalTableFunctionState::Init);
-	fun.named_parameters["allow_moved_paths"] = LogicalType::BOOLEAN;
-	fun.named_parameters["skip_schema_inference"] = LogicalType::BOOLEAN;
-	fun.named_parameters["metadata_compression_codec"] = LogicalType::VARCHAR;
-	fun.named_parameters["version"] = LogicalType::VARCHAR;
-	fun.named_parameters["version_name_format"] = LogicalType::VARCHAR;
+	fun.named_parameters["snapshot_from_timestamp"] = LogicalType::TIMESTAMP;
+	fun.named_parameters["snapshot_from_id"] = LogicalType::UBIGINT;
 	function_set.AddFunction(fun);
 
 	return function_set;

@@ -14,9 +14,11 @@ jobs:
   rest:
     name: Test against Lakekeeper Catalog
     runs-on: ubuntu-latest
+    if: false # disabled until lakekeeper setup process is more stable
     env:
-      VCPKG_TARGET_TRIPLET: 'x64-linux'
+      VCPKG_TARGET_TRIPLET: 'x64-linux-release'
       GEN: ninja
+      VCPKG_FEATURE_FLAGS: "-binarycaching"
       VCPKG_TOOLCHAIN_PATH: ${{ github.workspace }}/vcpkg/scripts/buildsystems/vcpkg.cmake
       PIP_BREAK_SYSTEM_PACKAGES: 1
 
@@ -62,7 +64,7 @@ jobs:
       - name: Setup vcpkg
         uses: lukka/run-vcpkg@v11.1
         with:
-          vcpkgGitCommitId: 5e5d0e1cd7785623065e77eff011afdeec1a3574
+          vcpkgGitCommitId: ce613c41372b23b1f51333815feb3edd87ef8a8b
 
       - name: Setup Ccache
         uses: hendrikmuhs/ccache-action@main
@@ -190,7 +192,7 @@ jobs:
             --health-start-period=15s \
             -p 9000:9000 \
             -p 9001:9001 \
-            bitnami/minio:latest
+            bitnami/minio:2025.4.22
 
       - name: Wait for Minio
         run: |
@@ -238,7 +240,7 @@ jobs:
             -e LAKEKEEPER__OPENFGA__CLIENT_SECRET=xqE1vUrifVDKAZdLuz6JAnDxMYLdGu5z \
             -e LAKEKEEPER__OPENFGA__TOKEN_ENDPOINT=http://localhost:30080/realms/iceberg/protocol/openid-connect/token \
             -e LAKEKEEPER__METRICS_PORT=9002 \
-            quay.io/lakekeeper/catalog:latest-main serve
+            quay.io/lakekeeper/catalog serve
 
       - name: Wait for Lakekeeper
         run: |

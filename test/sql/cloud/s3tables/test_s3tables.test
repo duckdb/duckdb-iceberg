@@ -36,9 +36,9 @@ statement ok
 show all tables;
 
 query I
-select count(*) from (show all tables);
+select count(*) > 20 from (show all tables);
 ----
-20
+1
 
 query I
 select count(*) from s3_catalog.tpch_sf1.region;

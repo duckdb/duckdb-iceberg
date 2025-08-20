@@ -1,10 +1,13 @@
 #include "iceberg_extension.hpp"
+#include "iceberg_utils.hpp"
+#include "iceberg_logging.hpp"
 #include "duckdb/main/extension_helper.hpp"
 #include "storage/authorization/oauth2.hpp"
 #include "storage/irc_catalog.hpp"
 #include "api_utils.hpp"
 #include "duckdb/common/exception/http_exception.hpp"
 #include "duckdb/logging/logger.hpp"
+#include "duckdb/common/types/blob.hpp"
 
 namespace duckdb {
 
@@ -32,20 +35,44 @@ OAuth2Authorization::OAuth2Authorization(const string &grant_type, const string 
       client_secret(client_secret), scope(scope) {
 }
 
+//! NOTE: this doesnt use StringUtil::URLEncode(..., escape_slash=true) because of how ' ' (space) is encoded
+namespace {
+
+static string XWWWFormUrlEncode(const string &input) {
+	string result;
+	static const char *HEX_DIGIT = "0123456789ABCDEF";
+	for (idx_t i = 0; i < input.size(); i++) {
+		char ch = input[i];
+		if ((ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9') || ch == '_' ||
+		    ch == '-' || ch == '~' || ch == '.') {
+			result += ch;
+		} else {
+			result += '%';
+			result += HEX_DIGIT[static_cast<unsigned char>(ch) >> 4];
+			result += HEX_DIGIT[static_cast<unsigned char>(ch) & 15];
+		}
+	}
+	return result;
+}
+
+} // namespace
+
 string OAuth2Authorization::GetToken(ClientContext &context, const string &grant_type, const string &uri,
                                      const string &client_id, const string &client_secret, const string &scope) {
 	vector<string> parameters;
-	parameters.push_back(StringUtil::Format("%s=%s", "grant_type", grant_type));
-	parameters.push_back(StringUtil::Format("%s=%s", "client_id", client_id));
-	parameters.push_back(StringUtil::Format("%s=%s", "client_secret", client_secret));
-	parameters.push_back(StringUtil::Format("%s=%s", "scope", scope));
+	parameters.push_back(StringUtil::Format("%s=%s", XWWWFormUrlEncode("grant_type"), XWWWFormUrlEncode(grant_type)));
+	parameters.push_back(StringUtil::Format("%s=%s", XWWWFormUrlEncode("scope"), XWWWFormUrlEncode(scope)));
 
+	string credentials = StringUtil::Format("%s:%s", client_id, client_secret);
+	string_t credentials_blob(credentials.data(), credentials.size());
+
+	unordered_map<string, string> headers;
+	headers.emplace("Authorization", StringUtil::Format("Basic %s", Blob::ToBase64(credentials_blob)));
 	string post_data = StringUtil::Format("%s", StringUtil::Join(parameters, "&"));
 	std::unique_ptr<yyjson_doc, YyjsonDocDeleter> doc;
 	try {
-		RequestInput request_input;
-		string api_result = APIUtils::PostRequest(context, uri, post_data, request_input);
-		doc = std::unique_ptr<yyjson_doc, YyjsonDocDeleter>(ICUtils::api_result_to_doc(api_result));
+		auto response = APIUtils::PostRequest(context, uri, post_data, headers);
+		doc = std::unique_ptr<yyjson_doc, YyjsonDocDeleter>(ICUtils::api_result_to_doc(response->body));
 	} catch (std::exception &ex) {
 		ErrorData error(ex);
 		throw InvalidConfigurationException("Could not get token from %s, captured error message: %s", uri,
@@ -71,9 +98,22 @@ string OAuth2Authorization::GetToken(ClientContext &context, const string &grant
 	return access_token;
 }
 
-string OAuth2Authorization::GetRequest(ClientContext &context, const IRCEndpointBuilder &endpoint_builder,
-                                       RequestInput &request_input) {
-	return APIUtils::GetRequest(context, endpoint_builder, request_input, token);
+unique_ptr<HTTPResponse> OAuth2Authorization::GetRequest(ClientContext &context,
+                                                         const IRCEndpointBuilder &endpoint_builder) {
+	return APIUtils::GetRequest(context, endpoint_builder, token);
+}
+
+unique_ptr<HTTPResponse> OAuth2Authorization::DeleteRequest(ClientContext &context,
+                                                            const IRCEndpointBuilder &endpoint_builder) {
+	return APIUtils::DeleteRequest(context, endpoint_builder, token);
+}
+
+unique_ptr<HTTPResponse> OAuth2Authorization::PostRequest(ClientContext &context,
+                                                          const IRCEndpointBuilder &endpoint_builder,
+                                                          const string &body) {
+	auto url = endpoint_builder.GetURL();
+	unordered_map<string, string> empty_headers;
+	return APIUtils::PostRequest(context, url, body, empty_headers, "json", token);
 }
 
 unique_ptr<OAuth2Authorization> OAuth2Authorization::FromAttachOptions(ClientContext &context,
@@ -121,8 +161,8 @@ unique_ptr<OAuth2Authorization> OAuth2Authorization::FromAttachOptions(ClientCon
 				throw InvalidConfigurationException(
 				    "No 'endpoint' was given to attach, and no 'endpoint' could be retrieved from the ICEBERG secret!");
 			}
-			DUCKDB_LOG_INFO(context, "iceberg", "'endpoint' is inferred from the ICEBERG secret '%s'",
-			                iceberg_secret->secret->GetName());
+			DUCKDB_LOG(context, IcebergLogType, "'endpoint' is inferred from the ICEBERG secret '%s'",
+			           iceberg_secret->secret->GetName());
 			input.endpoint = endpoint_from_secret.ToString();
 		}
 		token = kv_iceberg_secret.TryGetValue("token");
@@ -187,8 +227,8 @@ unique_ptr<BaseSecret> OAuth2Authorization::CreateCatalogSecretFunction(ClientCo
 	if (oauth2_server_uri_it != result->secret_map.end()) {
 		server_uri = oauth2_server_uri_it->second.ToString();
 	} else if (endpoint_it != result->secret_map.end()) {
-		DUCKDB_LOG_WARN(
-		    context, "iceberg",
+		DUCKDB_LOG(
+		    context, IcebergLogType,
 		    "'oauth2_server_uri' is not set, defaulting to deprecated '{endpoint}/v1/oauth/tokens' oauth2_server_uri");
 		server_uri = StringUtil::Format("%s/v1/oauth/tokens", endpoint_it->second.ToString());
 	} else {

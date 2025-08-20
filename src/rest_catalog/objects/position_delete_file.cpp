@@ -5,7 +5,6 @@
 #include "duckdb/common/string.hpp"
 #include "duckdb/common/vector.hpp"
 #include "duckdb/common/case_insensitive_map.hpp"
-#include "rest_catalog/response_objects.hpp"
 #include "rest_catalog/objects/list.hpp"
 
 using namespace duckdb_yyjson;
@@ -48,8 +47,8 @@ string PositionDeleteFile::TryFromJSON(yyjson_val *obj) {
 		has_content_offset = true;
 		if (yyjson_is_sint(content_offset_val)) {
 			content_offset = yyjson_get_sint(content_offset_val);
-		} else if (yyjson_is_int(content_offset_val)) {
-			content_offset = yyjson_get_int(content_offset_val);
+		} else if (yyjson_is_uint(content_offset_val)) {
+			content_offset = yyjson_get_uint(content_offset_val);
 		} else {
 			return StringUtil::Format(
 			    "PositionDeleteFile property 'content_offset' is not of type 'integer', found '%s' instead",
@@ -61,8 +60,8 @@ string PositionDeleteFile::TryFromJSON(yyjson_val *obj) {
 		has_content_size_in_bytes = true;
 		if (yyjson_is_sint(content_size_in_bytes_val)) {
 			content_size_in_bytes = yyjson_get_sint(content_size_in_bytes_val);
-		} else if (yyjson_is_int(content_size_in_bytes_val)) {
-			content_size_in_bytes = yyjson_get_int(content_size_in_bytes_val);
+		} else if (yyjson_is_uint(content_size_in_bytes_val)) {
+			content_size_in_bytes = yyjson_get_uint(content_size_in_bytes_val);
 		} else {
 			return StringUtil::Format(
 			    "PositionDeleteFile property 'content_size_in_bytes' is not of type 'integer', found '%s' instead",
