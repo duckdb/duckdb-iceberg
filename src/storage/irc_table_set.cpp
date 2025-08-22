@@ -1,9 +1,9 @@
 #include "catalog_api.hpp"
 #include "catalog_utils.hpp"
+#include "iceberg_logging.hpp"
 
 #include "storage/irc_catalog.hpp"
 #include "storage/irc_table_set.hpp"
-
 #include "storage/irc_transaction.hpp"
 #include "metadata/iceberg_partition_spec.hpp"
 #include "duckdb/parser/constraints/not_null_constraint.hpp"
@@ -12,6 +12,7 @@
 #include "duckdb/planner/parsed_data/bound_create_table_info.hpp"
 #include "duckdb/parser/parsed_data/drop_info.hpp"
 #include "duckdb/catalog/dependency_list.hpp"
+#include "duckdb/common/exception/http_exception.hpp"
 #include "duckdb/parser/parsed_data/create_table_info.hpp"
 #include "duckdb/parser/constraints/list.hpp"
 #include "storage/irc_schema_entry.hpp"
@@ -27,14 +28,22 @@ namespace duckdb {
 ICTableSet::ICTableSet(IRCSchemaEntry &schema) : schema(schema), catalog(schema.ParentCatalog()) {
 }
 
-void ICTableSet::FillEntry(ClientContext &context, IcebergTableInformation &table) {
+bool ICTableSet::FillEntry(ClientContext &context, IcebergTableInformation &table) {
 	if (!table.schema_versions.empty()) {
 		//! Already filled
-		return;
+		return true;
 	}
 
 	auto &ic_catalog = catalog.Cast<IRCatalog>();
-	table.load_table_result = IRCAPI::GetTable(context, ic_catalog, schema, table.name);
+
+	auto get_table_result = IRCAPI::GetTable(context, ic_catalog, schema, table.name);
+	if (get_table_result.has_error) {
+		if (get_table_result.error_._error.type == "NoSuchIcebergTableException") {
+			return false;
+		}
+		throw HTTPException(get_table_result.error_._error.message);
+	}
+	table.load_table_result = std::move(get_table_result.result_);
 	table.table_metadata = IcebergTableMetadata::FromTableMetadata(table.load_table_result.metadata);
 	auto &schemas = table.table_metadata.schemas;
 
@@ -43,16 +52,27 @@ void ICTableSet::FillEntry(ClientContext &context, IcebergTableInformation &tabl
 	for (auto &table_schema : schemas) {
 		table.CreateSchemaVersion(*table_schema.second);
 	}
+	return true;
 }
 
 void ICTableSet::Scan(ClientContext &context, const std::function<void(CatalogEntry &)> &callback) {
 	lock_guard<mutex> l(entry_lock);
 	LoadEntries(context);
+	case_insensitive_set_t non_iceberg_tables;
+	auto table_namespace = IRCAPI::GetEncodedSchemaName(schema.namespace_items);
 	for (auto &entry : entries) {
 		auto &table_info = entry.second;
-		FillEntry(context, table_info);
-		auto schema_id = table_info.table_metadata.current_schema_id;
-		callback(*table_info.schema_versions[schema_id]);
+		if (FillEntry(context, table_info)) {
+			auto schema_id = table_info.table_metadata.current_schema_id;
+			callback(*table_info.schema_versions[schema_id]);
+		} else {
+			DUCKDB_LOG(context, IcebergLogType, "Table %s.%s not an Iceberg Table", table_namespace, entry.first);
+			non_iceberg_tables.insert(entry.first);
+		}
+	}
+	// erase not iceberg tables
+	for (auto &entry : non_iceberg_tables) {
+		entries.erase(entry);
 	}
 }
 
@@ -60,7 +80,6 @@ void ICTableSet::LoadEntries(ClientContext &context) {
 	if (!entries.empty()) {
 		return;
 	}
-
 	auto &ic_catalog = catalog.Cast<IRCatalog>();
 	// TODO: handle out-of-order columns using position property
 	auto tables = IRCAPI::GetTables(context, ic_catalog, schema);
