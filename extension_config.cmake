@@ -4,7 +4,6 @@
 duckdb_extension_load(iceberg
     SOURCE_DIR ${CMAKE_CURRENT_LIST_DIR}
     LOAD_TESTS
-    LINKED_LIBS "../../vcpkg_installed/wasm32-emscripten/lib/*.a"
 )
 
 duckdb_extension_load(tpch)
