@@ -99,7 +99,6 @@ std::shared_ptr<Aws::Http::HttpRequest> AWSInput::CreateSignedRequest(Aws::Http:
 	//	request->SetUserAgent(user_agent);
 
 	if (!body.empty()) {
-		{
 			throw NotImplementedException("CreateSignedRequest with non-empty body is not supported at this time");
 			/*
 			            auto bodyStream = Aws::MakeShared<Aws::StringStream>("");
@@ -120,7 +119,7 @@ std::shared_ptr<Aws::Http::HttpRequest> AWSInput::CreateSignedRequest(Aws::Http:
 		//}
 		return nullptr;
 		// return request;
-	}
+}
 
 	unique_ptr<HTTPResponse> AWSInput::ExecuteRequest(ClientContext & context, Aws::Http::HttpMethod method,
 	                                                  const string body, string content_type) {
@@ -191,7 +190,7 @@ std::shared_ptr<Aws::Http::HttpRequest> AWSInput::CreateSignedRequest(Aws::Http:
 			// if (content_type.length() > 0) {
 			//		canonical_request += "\ncontent-type:" + content_type;
 			//	}
-			string host = "s3tables.us-east-2.amazonaws.com";
+			string host = "s3tables." + region + ".amazonaws.com";
 			canonical_request +=
 			    "\nhost:" + host + "\nx-amz-content-sha256:" + payload_hash + "\nx-amz-date:" + datetime_now;
 			if (session_token.length() > 0) {
@@ -210,7 +209,7 @@ std::shared_ptr<Aws::Http::HttpRequest> AWSInput::CreateSignedRequest(Aws::Http:
 			sha256(canonical_request.c_str(), canonical_request.length(), canonical_request_hash);
 
 			hex256(canonical_request_hash, canonical_request_hash_str);
-			auto string_to_sign = "AWS4-HMAC-SHA256\n" + datetime_now + "\n" + date_now + "/" + "us-east-2" + "/" +
+			auto string_to_sign = "AWS4-HMAC-SHA256\n" + datetime_now + "\n" + date_now + "/" + region + "/" +
 			                      service + "/aws4_request\n" +
 			                      string((char *)canonical_request_hash_str, sizeof(hash_str));
 
@@ -219,13 +218,13 @@ std::shared_ptr<Aws::Http::HttpRequest> AWSInput::CreateSignedRequest(Aws::Http:
 			hash_str signature_str;
 			auto sign_key = "AWS4" + secret;
 			hmac256(date_now, sign_key.c_str(), sign_key.length(), k_date);
-			hmac256("us-east-2", k_date, k_region);
+			hmac256(region, k_date, k_region);
 			hmac256(service, k_region, k_service);
 			hmac256("aws4_request", k_service, signing_key);
 			hmac256(string_to_sign, signing_key, signature);
 			hex256(signature, signature_str);
 
-			res["Authorization"] = "AWS4-HMAC-SHA256 Credential=" + key_id + "/" + date_now + "/" + "us-east-2" + "/" +
+			res["Authorization"] = "AWS4-HMAC-SHA256 Credential=" + key_id + "/" + date_now + "/" + region + "/" +
 			                       service + "/aws4_request, SignedHeaders=" + signed_headers +
 			                       ", Signature=" + string((char *)signature_str, sizeof(hash_str));
 		}
@@ -233,7 +232,15 @@ std::shared_ptr<Aws::Http::HttpRequest> AWSInput::CreateSignedRequest(Aws::Http:
 		auto &http_util = HTTPUtil::Get(db);
 		unique_ptr<HTTPParams> params;
 
-		string request_url = "https://cors-proxy.carlo-f90.workers.dev/corsproxy/" + uri.GetURIString().substr(8);
+		string request_url = uri.GetURIString().substr(8);
+
+		Value val;
+		auto has_setting= context.TryGetCurrentSetting("experimental_s3_tables_global_proxy", val);
+		if (has_setting) {
+			request_url = val.GetValue<string>() + request_url;
+		}
+std::cout << "I am here\n";
+		request_url = "https://" + request_url;
 
 		params = http_util.InitializeParameters(context, request_url);
 
