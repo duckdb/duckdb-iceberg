@@ -111,25 +111,131 @@ struct YearTransform {
 	}
 };
 
-// struct DayTransform {
-//	static Value ApplyTransform(const Value &constant, const IcebergTransform &transform) {
-//		throw NotImplementedException("'day' transform ApplyTransform");
-//	}
-//	static bool CompareEqual(const Value &constant, const IcebergPredicateStats &stats) {
-//		return constant >= stats.lower_bound && constant <= stats.upper_bound;
-//	}
-//	static bool CompareLessThan(const Value &constant, const IcebergPredicateStats &stats) {
-//		return stats.lower_bound <= constant;
-//	}
-//	static bool CompareLessThanOrEqual(const Value &constant, const IcebergPredicateStats &stats) {
-//		return stats.lower_bound <= constant;
-//	}
-//	static bool CompareGreaterThan(const Value &constant, const IcebergPredicateStats &stats) {
-//		return stats.upper_bound >= constant;
-//	}
-//	static bool CompareGreaterThanOrEqual(const Value &constant, const IcebergPredicateStats &stats) {
-//		return stats.upper_bound >= constant;
-//	}
-//};
+struct MonthTransform {
+	static Value ApplyTransform(const Value &constant, const IcebergTransform &transform) {
+		switch (constant.type().id()) {
+		case LogicalTypeId::TIMESTAMP: {
+			auto val = constant.GetValue<timestamp_t>();
+			auto diff = Interval::GetDifference(val, timestamp_t::epoch());
+			return Value::INTEGER(diff.months);
+		}
+		case LogicalTypeId::TIMESTAMP_TZ: {
+			auto val = constant.GetValue<timestamp_tz_t>();
+			auto diff = Interval::GetDifference(val, timestamp_t::epoch());
+			return Value::INTEGER(diff.months);
+		}
+		case LogicalTypeId::DATE: {
+			auto val = constant.GetValue<date_t>();
+			return Value::INTEGER(val.days / Interval::DAYS_PER_MONTH);
+		}
+		default:
+			throw NotImplementedException("'month' transform for type %s", constant.type().ToString());
+		}
+		return constant;
+	}
+	static bool CompareEqual(const Value &constant, const IcebergPredicateStats &stats) {
+		return constant >= stats.lower_bound && constant <= stats.upper_bound;
+	}
+	static bool CompareLessThan(const Value &constant, const IcebergPredicateStats &stats) {
+		return stats.lower_bound <= constant;
+	}
+	static bool CompareLessThanOrEqual(const Value &constant, const IcebergPredicateStats &stats) {
+		return stats.lower_bound <= constant;
+	}
+	static bool CompareGreaterThan(const Value &constant, const IcebergPredicateStats &stats) {
+		return stats.upper_bound >= constant;
+	}
+	static bool CompareGreaterThanOrEqual(const Value &constant, const IcebergPredicateStats &stats) {
+		return stats.upper_bound >= constant;
+	}
+};
+
+struct DayTransform {
+	static Value ApplyTransform(const Value &constant, const IcebergTransform &transform) {
+		switch (constant.type().id()) {
+		case LogicalTypeId::TIMESTAMP: {
+			auto val = constant.GetValue<timestamp_t>();
+			auto diff = Interval::GetDifference(val, timestamp_t::epoch());
+			int32_t days = 0;
+			days += diff.months * Interval::DAYS_PER_MONTH;
+			days += diff.days;
+			return Value::INTEGER(days);
+		}
+		case LogicalTypeId::TIMESTAMP_TZ: {
+			auto val = constant.GetValue<timestamp_tz_t>();
+			auto diff = Interval::GetDifference(val, timestamp_t::epoch());
+			int32_t days = 0;
+			days += diff.months * Interval::DAYS_PER_MONTH;
+			days += diff.days;
+			return Value::INTEGER(days);
+		}
+		case LogicalTypeId::DATE: {
+			auto val = constant.GetValue<date_t>();
+			return Value::INTEGER(val.days);
+		}
+		default:
+			throw NotImplementedException("'day' transform for type %s", constant.type().ToString());
+		}
+		return constant;
+	}
+	static bool CompareEqual(const Value &constant, const IcebergPredicateStats &stats) {
+		return constant >= stats.lower_bound && constant <= stats.upper_bound;
+	}
+	static bool CompareLessThan(const Value &constant, const IcebergPredicateStats &stats) {
+		return stats.lower_bound <= constant;
+	}
+	static bool CompareLessThanOrEqual(const Value &constant, const IcebergPredicateStats &stats) {
+		return stats.lower_bound <= constant;
+	}
+	static bool CompareGreaterThan(const Value &constant, const IcebergPredicateStats &stats) {
+		return stats.upper_bound >= constant;
+	}
+	static bool CompareGreaterThanOrEqual(const Value &constant, const IcebergPredicateStats &stats) {
+		return stats.upper_bound >= constant;
+	}
+};
+
+struct HourTransform {
+	static Value ApplyTransform(const Value &constant, const IcebergTransform &transform) {
+		switch (constant.type().id()) {
+		case LogicalTypeId::TIMESTAMP: {
+			auto val = constant.GetValue<timestamp_t>();
+			auto diff = Interval::GetDifference(val, timestamp_t::epoch());
+			int32_t hours = 0;
+			hours += diff.months * (Interval::HOURS_PER_DAY * Interval::DAYS_PER_MONTH);
+			hours += diff.days * (Interval::HOURS_PER_DAY);
+			hours += diff.micros / Interval::MICROS_PER_HOUR;
+			return Value::INTEGER(hours);
+		}
+		case LogicalTypeId::TIMESTAMP_TZ: {
+			auto val = constant.GetValue<timestamp_tz_t>();
+			auto diff = Interval::GetDifference(val, timestamp_t::epoch());
+			int32_t hours = 0;
+			hours += diff.months * (Interval::HOURS_PER_DAY * Interval::DAYS_PER_MONTH);
+			hours += diff.days * (Interval::HOURS_PER_DAY);
+			hours += diff.micros / Interval::MICROS_PER_HOUR;
+			return Value::INTEGER(hours);
+		}
+		default:
+			throw NotImplementedException("'hour' transform for type %s", constant.type().ToString());
+		}
+		return constant;
+	}
+	static bool CompareEqual(const Value &constant, const IcebergPredicateStats &stats) {
+		return constant >= stats.lower_bound && constant <= stats.upper_bound;
+	}
+	static bool CompareLessThan(const Value &constant, const IcebergPredicateStats &stats) {
+		return stats.lower_bound <= constant;
+	}
+	static bool CompareLessThanOrEqual(const Value &constant, const IcebergPredicateStats &stats) {
+		return stats.lower_bound <= constant;
+	}
+	static bool CompareGreaterThan(const Value &constant, const IcebergPredicateStats &stats) {
+		return stats.upper_bound >= constant;
+	}
+	static bool CompareGreaterThanOrEqual(const Value &constant, const IcebergPredicateStats &stats) {
+		return stats.upper_bound >= constant;
+	}
+};
 
 } // namespace duckdb

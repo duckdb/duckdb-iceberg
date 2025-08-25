@@ -1,0 +1,1 @@
+INSERT INTO demo.level1.level2.level3.nested_namespaces VALUES ('some',1, 'data'), ('more', 2, 'data'), ('yet', 3, 'more data');

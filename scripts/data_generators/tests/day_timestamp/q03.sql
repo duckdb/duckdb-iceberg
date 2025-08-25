@@ -1,0 +1,3 @@
+INSERT INTO default.day_timestamp VALUES
+    (TIMESTAMP_NTZ '2023-01-01 00:00:00', NULL, 'null_user'),
+    (TIMESTAMP_NTZ '2023-02-15 12:30:45', 88888, NULL);

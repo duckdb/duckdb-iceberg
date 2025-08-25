@@ -82,7 +82,6 @@ static unique_ptr<FunctionData> IcebergSnapshotsBind(ClientContext &context, Tab
 // Snapshots function
 static void IcebergSnapshotsFunction(ClientContext &context, TableFunctionInput &data, DataChunk &output) {
 	auto &global_state = data.global_state->Cast<IcebergSnapshotGlobalTableFunctionState>();
-	auto &bind_data = data.bind_data->Cast<IcebergSnaphotsBindData>();
 	idx_t i = 0;
 	auto &it = global_state.snapshot_it;
 	auto end = global_state.metadata.snapshots.end();

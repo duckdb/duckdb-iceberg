@@ -10,12 +10,12 @@ require iceberg
 require httpfs
 
 query III
-select * from ICEBERG_SCAN('data/persistent/partition_time/default.db/partition_time/metadata/00001-44546aa6-1ee5-48c5-9e3b-bc6c0bc0a60c.metadata.json');
+select * from ICEBERG_SCAN('__WORKING_DIRECTORY__/data/persistent/partition_time/default.db/partition_time/metadata/00001-44546aa6-1ee5-48c5-9e3b-bc6c0bc0a60c.metadata.json');
 ----
 12:34:56	12345	click
 08:21:09	67890	purchase
 
 query I
-select user_id from ICEBERG_SCAN('data/persistent/partition_time/default.db/partition_time/metadata/00001-44546aa6-1ee5-48c5-9e3b-bc6c0bc0a60c.metadata.json') WHERE partition_col = '12:34:56';
+select user_id from ICEBERG_SCAN('__WORKING_DIRECTORY__/data/persistent/partition_time/default.db/partition_time/metadata/00001-44546aa6-1ee5-48c5-9e3b-bc6c0bc0a60c.metadata.json') WHERE partition_col = '12:34:56';
 ----
 12345

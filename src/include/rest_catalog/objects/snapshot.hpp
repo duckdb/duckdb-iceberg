@@ -5,7 +5,6 @@
 #include "duckdb/common/string.hpp"
 #include "duckdb/common/vector.hpp"
 #include "duckdb/common/case_insensitive_map.hpp"
-#include "rest_catalog/response_objects.hpp"
 
 using namespace duckdb_yyjson;
 
@@ -53,6 +52,8 @@ public:
 	bool has_parent_snapshot_id = false;
 	int64_t sequence_number;
 	bool has_sequence_number = false;
+	int64_t first_row_id;
+	bool has_first_row_id = false;
 	int32_t schema_id;
 	bool has_schema_id = false;
 };

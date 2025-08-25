@@ -7,10 +7,11 @@
 namespace duckdb {
 
 template <class TRANSFORM>
-bool MatchBoundsTemplated(TableFilter &filter, const IcebergPredicateStats &stats, const IcebergTransform &transform);
+bool MatchBoundsTemplated(const TableFilter &filter, const IcebergPredicateStats &stats,
+                          const IcebergTransform &transform);
 
 template <class TRANSFORM>
-static bool MatchBoundsConstantFilter(ConstantFilter &constant_filter, const IcebergPredicateStats &stats,
+static bool MatchBoundsConstantFilter(const ConstantFilter &constant_filter, const IcebergPredicateStats &stats,
                                       const IcebergTransform &transform) {
 	auto constant_value = TRANSFORM::ApplyTransform(constant_filter.constant, transform);
 
@@ -43,12 +44,12 @@ static bool MatchBoundsIsNullFilter(const IcebergPredicateStats &stats, const Ic
 
 template <class TRANSFORM>
 static bool MatchBoundsIsNotNullFilter(const IcebergPredicateStats &stats, const IcebergTransform &transform) {
-	return stats.has_null == false;
+	return stats.has_not_null == true;
 }
 
 template <class TRANSFORM>
-static bool MatchBoundsConjunctionAndFilter(ConjunctionAndFilter &conjunction_and, const IcebergPredicateStats &stats,
-                                            const IcebergTransform &transform) {
+static bool MatchBoundsConjunctionAndFilter(const ConjunctionAndFilter &conjunction_and,
+                                            const IcebergPredicateStats &stats, const IcebergTransform &transform) {
 	for (auto &child : conjunction_and.child_filters) {
 		if (!MatchBoundsTemplated<TRANSFORM>(*child, stats, transform)) {
 			return false;
@@ -58,7 +59,8 @@ static bool MatchBoundsConjunctionAndFilter(ConjunctionAndFilter &conjunction_an
 }
 
 template <class TRANSFORM>
-bool MatchBoundsTemplated(TableFilter &filter, const IcebergPredicateStats &stats, const IcebergTransform &transform) {
+bool MatchBoundsTemplated(const TableFilter &filter, const IcebergPredicateStats &stats,
+                          const IcebergTransform &transform) {
 	//! TODO: support more filter types
 	switch (filter.filter_type) {
 	case TableFilterType::CONSTANT_COMPARISON: {
@@ -95,7 +97,7 @@ bool MatchBoundsTemplated(TableFilter &filter, const IcebergPredicateStats &stat
 	}
 }
 
-bool IcebergPredicate::MatchBounds(TableFilter &filter, const IcebergPredicateStats &stats,
+bool IcebergPredicate::MatchBounds(const TableFilter &filter, const IcebergPredicateStats &stats,
                                    const IcebergTransform &transform) {
 	switch (transform.Type()) {
 	case IcebergTransformType::IDENTITY:
@@ -107,12 +109,11 @@ bool IcebergPredicate::MatchBounds(TableFilter &filter, const IcebergPredicateSt
 	case IcebergTransformType::YEAR:
 		return MatchBoundsTemplated<YearTransform>(filter, stats, transform);
 	case IcebergTransformType::MONTH:
-		return true;
+		return MatchBoundsTemplated<MonthTransform>(filter, stats, transform);
 	case IcebergTransformType::DAY:
-		// return MatchBoundsTemplated<DayTransform>(filter, stats, transform);
-		return true;
+		return MatchBoundsTemplated<DayTransform>(filter, stats, transform);
 	case IcebergTransformType::HOUR:
-		return true;
+		return MatchBoundsTemplated<HourTransform>(filter, stats, transform);
 	case IcebergTransformType::VOID:
 		return true;
 	default:

@@ -7,14 +7,6 @@ require iceberg
 
 require avro
 
-statement error
-select * from iceberg_scan('data/persistent/big_query_error');
-----
-Invalid Configuration Error: Column 'added_files_count' of the manifest list is missing a field_id!
-
-# The produced avro files are malformed, field ids are not optional
-mode skip
-
 query III
 select * from iceberg_scan('data/persistent/big_query_error');
 ----

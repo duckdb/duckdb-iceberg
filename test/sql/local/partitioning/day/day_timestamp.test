@@ -1,0 +1,173 @@
+# name: test/sql/local/partitioning/day/day_timestamp.test
+# group: [day]
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+require-env DUCKDB_ICEBERG_HAVE_GENERATED_DATA
+
+statement ok
+pragma enable_logging('Iceberg');
+
+statement ok
+set enable_logging=false;
+set logging_storage='stdout';
+set logging_storage='memory';
+set enable_logging=true;
+
+query III
+select * from ICEBERG_SCAN('data/generated/iceberg/spark-local/default/day_timestamp') ORDER BY partition_col;
+----
+2020-05-15 14:30:45	12345	click
+2021-08-22 09:15:20	67890	purchase
+2022-03-10 11:45:30	54321	view
+2023-01-01 00:00:00	NULL	null_user
+2023-02-15 12:30:45	88888	NULL
+NULL	99999	null_event
+
+statement ok
+pragma truncate_duckdb_logs;
+
+query I
+select user_id from ICEBERG_SCAN('data/generated/iceberg/spark-local/default/day_timestamp') 
+WHERE partition_col = NULL::TIMESTAMP
+----
+
+# Comparing against a NULL doesn't filter any manifests
+query I
+SELECT message FROM duckdb_logs
+WHERE type = 'duckdb.Extensions.Iceberg' and message.contains('data_file')
+----
+
+query I
+select user_id from ICEBERG_SCAN('data/generated/iceberg/spark-local/default/day_timestamp') 
+WHERE partition_col IS NULL
+----
+99999
+
+# We can skip 5 records (at the manifest level) by filtering on IS NULL
+query I
+SELECT SUM(meta.record_count) AS total_record_count
+FROM (
+	SELECT message.split(': ')[2][2:-2] AS msg
+	FROM duckdb_logs() where type = 'Iceberg' and message.contains('manifest_file')
+) logs
+JOIN ICEBERG_METADATA('data/generated/iceberg/spark-local/default/day_timestamp') meta
+ON logs.msg = meta.manifest_path;
+----
+5
+
+statement ok
+pragma truncate_duckdb_logs;
+
+query I
+select user_id from ICEBERG_SCAN('data/generated/iceberg/spark-local/default/day_timestamp') 
+WHERE partition_col IS NOT NULL ORDER BY user_id
+----
+12345
+54321
+67890
+88888
+NULL
+
+# We can skip 1 record (at the data file level) by filtering on IS NOT NULL
+query I
+SELECT SUM(meta.record_count) AS total_record_count
+FROM (
+	SELECT message.split(': ')[2][2:-2] AS msg
+	FROM duckdb_logs() where type = 'Iceberg' and message.contains('data_file')
+) logs
+JOIN ICEBERG_METADATA('data/generated/iceberg/spark-local/default/day_timestamp') meta
+ON logs.msg = meta.file_path;
+----
+1
+
+statement ok
+pragma truncate_duckdb_logs;
+
+# Test filtering by day
+query I
+select user_id from ICEBERG_SCAN('data/generated/iceberg/spark-local/default/day_timestamp') 
+WHERE partition_col = '2020-05-15 14:30:45'
+----
+12345
+
+query I
+SELECT SUM(meta.record_count) AS total_record_count
+FROM (
+	SELECT message.split(': ')[2][2:-2] AS msg
+	FROM duckdb_logs() where type = 'Iceberg' and message.contains('data_file')
+) logs
+JOIN ICEBERG_METADATA('data/generated/iceberg/spark-local/default/day_timestamp') meta
+ON logs.msg = meta.file_path;
+----
+2
+
+statement ok
+pragma truncate_duckdb_logs;
+
+query I
+select user_id from ICEBERG_SCAN('data/generated/iceberg/spark-local/default/day_timestamp') 
+WHERE partition_col = '2021-08-22 09:15:20'
+----
+67890
+
+query I
+SELECT SUM(meta.record_count) AS total_record_count
+FROM (
+	SELECT message.split(': ')[2][2:-2] AS msg
+	FROM duckdb_logs() where type = 'Iceberg' and message.contains('data_file')
+) logs
+JOIN ICEBERG_METADATA('data/generated/iceberg/spark-local/default/day_timestamp') meta
+ON logs.msg = meta.file_path;
+----
+2
+
+statement ok
+pragma truncate_duckdb_logs;
+
+query I
+select user_id from ICEBERG_SCAN('data/generated/iceberg/spark-local/default/day_timestamp') 
+WHERE partition_col = '2022-03-10 11:45:30'
+----
+54321
+
+query I
+SELECT SUM(meta.record_count) AS total_record_count
+FROM (
+	SELECT message.split(': ')[2][2:-2] AS msg
+	FROM duckdb_logs() where type = 'Iceberg' and message.contains('data_file')
+) logs
+JOIN ICEBERG_METADATA('data/generated/iceberg/spark-local/default/day_timestamp') meta
+ON logs.msg = meta.file_path;
+----
+2
+
+statement ok
+pragma truncate_duckdb_logs;
+
+# Test filtering by timestamp range
+query I
+select user_id from ICEBERG_SCAN('data/generated/iceberg/spark-local/default/day_timestamp') 
+WHERE partition_col >= '2021-01-01' AND partition_col < '2022-01-01';
+----
+67890
+
+query I
+SELECT SUM(meta.record_count) AS total_record_count
+FROM (
+	SELECT message.split(': ')[2][2:-2] AS msg
+	FROM duckdb_logs() where type = 'Iceberg' and message.contains('data_file')
+) logs
+JOIN ICEBERG_METADATA('data/generated/iceberg/spark-local/default/day_timestamp') meta
+ON logs.msg = meta.file_path;
+----
+2
+
+statement ok
+pragma truncate_duckdb_logs;

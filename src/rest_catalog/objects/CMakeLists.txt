@@ -34,6 +34,7 @@ add_library(
   null_order.cpp
   sort_field.cpp
   sort_order.cpp
+  encrypted_key.cpp
   snapshot.cpp
   snapshot_reference.cpp
   snapshot_references.cpp
@@ -69,9 +70,11 @@ add_library(
   remove_partition_statistics_update.cpp
   remove_partition_specs_update.cpp
   remove_schemas_update.cpp
-  enable_row_lineage_update.cpp
+  add_encryption_key_update.cpp
+  remove_encryption_key_update.cpp
   table_update.cpp
   view_update.cpp
+  table_requirement_type.cpp
   table_requirement.cpp
   assert_create.cpp
   assert_table_uuid.cpp

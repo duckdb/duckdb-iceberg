@@ -5,7 +5,7 @@
 #include "duckdb/common/string.hpp"
 #include "duckdb/common/vector.hpp"
 #include "duckdb/common/case_insensitive_map.hpp"
-#include "rest_catalog/response_objects.hpp"
+#include "rest_catalog/objects/encrypted_key.hpp"
 #include "rest_catalog/objects/metadata_log.hpp"
 #include "rest_catalog/objects/partition_spec.hpp"
 #include "rest_catalog/objects/partition_statistics_file.hpp"
@@ -42,6 +42,8 @@ public:
 	bool has_location = false;
 	int64_t last_updated_ms;
 	bool has_last_updated_ms = false;
+	int64_t next_row_id;
+	bool has_next_row_id = false;
 	case_insensitive_map_t<string> properties;
 	bool has_properties = false;
 	vector<Schema> schemas;
@@ -60,6 +62,8 @@ public:
 	bool has_sort_orders = false;
 	int32_t default_sort_order_id;
 	bool has_default_sort_order_id = false;
+	vector<EncryptedKey> encryption_keys;
+	bool has_encryption_keys = false;
 	vector<Snapshot> snapshots;
 	bool has_snapshots = false;
 	SnapshotReferences refs;

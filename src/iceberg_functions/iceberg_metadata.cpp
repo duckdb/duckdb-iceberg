@@ -55,6 +55,7 @@ static unique_ptr<FunctionData> IcebergMetaDataBind(ClientContext &context, Tabl
 
 	FileSystem &fs = FileSystem::GetFileSystem(context);
 	auto input_string = input.inputs[0].ToString();
+	auto filename = IcebergUtils::GetStorageLocation(context, input_string);
 
 	IcebergOptions options;
 	auto &snapshot_lookup = options.snapshot_lookup;
@@ -94,14 +95,14 @@ static unique_ptr<FunctionData> IcebergMetaDataBind(ClientContext &context, Tabl
 		}
 	}
 
-	auto iceberg_meta_path = IcebergTableMetadata::GetMetaDataPath(context, input_string, fs, options);
+	auto iceberg_meta_path = IcebergTableMetadata::GetMetaDataPath(context, filename, fs, options);
 	auto table_metadata = IcebergTableMetadata::Parse(iceberg_meta_path, fs, options.metadata_compression_codec);
 	auto metadata = IcebergTableMetadata::FromTableMetadata(table_metadata);
 
 	auto snapshot_to_scan = metadata.GetSnapshot(options.snapshot_lookup);
 
 	if (snapshot_to_scan) {
-		ret->iceberg_table = IcebergTable::Load(input_string, metadata, *snapshot_to_scan, context, options);
+		ret->iceberg_table = IcebergTable::Load(filename, metadata, *snapshot_to_scan, context, options);
 	}
 
 	auto manifest_types = IcebergManifest::Types();

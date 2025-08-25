@@ -27,7 +27,7 @@ require httpfs
 # Result: [(id=2, name=b), (id=1, name=b)]
 
 query II
-SELECT * FROM ICEBERG_SCAN('data/persistent/equality_deletes/warehouse/mydb/mytable');
+SELECT * FROM ICEBERG_SCAN('__WORKING_DIRECTORY__/data/persistent/equality_deletes/warehouse/mydb/mytable');
 ----
 2	b
 1	b

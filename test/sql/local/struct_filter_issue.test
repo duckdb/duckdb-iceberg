@@ -1,0 +1,89 @@
+# name: test/sql/local/struct_filter_issue.test
+# group: [local]
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+require no_extension_autoloading "EXPECTED: enable logging is not aware of where 'Iceberg' option comes from"
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+set enable_logging=true
+
+statement ok
+set logging_level='debug'
+
+statement ok
+pragma enable_logging('Iceberg');
+
+# FIXME: this becomes a ConjunctionAndFilter on 'partition', with the 2 children being StructExtract
+# Which we don't enter yet
+query II
+SELECT * FROM iceberg_scan('__WORKING_DIRECTORY__/data/persistent/struct_filter_issue') WHERE redpanda.partition = 0 AND redpanda.timestamp = '2025-06-26 19:45:32.478';
+----
+{'partition': 0, 'offset': 0, 'timestamp': '2025-06-26 19:45:32.478', 'headers': NULL, 'key': NULL}	hello world
+
+query I
+SELECT SUM(meta.record_count) AS total_record_count
+FROM (
+	SELECT message.split(': ')[2][2:-2] AS msg
+	FROM duckdb_logs() where type = 'Iceberg'
+) logs
+JOIN ICEBERG_METADATA('__WORKING_DIRECTORY__/data/persistent/struct_filter_issue') meta
+ON logs.msg = meta.file_path;
+----
+NULL
+
+statement ok
+pragma truncate_duckdb_logs;
+
+# The issue here was that we expected to find redpanda.timestamp (that's where the partition is on),
+# now we correctly return nullptr instead of error
+query II
+SELECT * FROM iceberg_scan('__WORKING_DIRECTORY__/data/persistent/struct_filter_issue') WHERE redpanda.partition = 0;
+----
+{'partition': 0, 'offset': 0, 'timestamp': '2025-06-26 19:45:32.478', 'headers': NULL, 'key': NULL}	hello world
+
+query I
+SELECT SUM(meta.record_count) AS total_record_count
+FROM (
+	SELECT message.split(': ')[2][2:-2] AS msg
+	FROM duckdb_logs() where type = 'Iceberg'
+) logs
+JOIN ICEBERG_METADATA('__WORKING_DIRECTORY__/data/persistent/struct_filter_issue') meta
+ON logs.msg = meta.file_path;
+----
+NULL
+
+statement ok
+pragma truncate_duckdb_logs;
+
+query II
+SELECT * FROM iceberg_scan('__WORKING_DIRECTORY__/data/persistent/struct_filter_issue') WHERE redpanda.timestamp = '2026-06-26 19:45:32.478';
+----
+
+query I
+SELECT SUM(meta.record_count) AS total_record_count
+FROM (
+	SELECT message.split(': ')[2][2:-2] AS msg
+	FROM duckdb_logs() where type = 'Iceberg' and message.contains('manifest_file')
+) logs
+JOIN ICEBERG_METADATA('__WORKING_DIRECTORY__/data/persistent/struct_filter_issue') meta
+ON logs.msg = meta.manifest_path;
+----
+1
+
+statement ok
+pragma truncate_duckdb_logs;
+
+query II
+SELECT * FROM iceberg_scan('__WORKING_DIRECTORY__/data/persistent/struct_filter_issue') WHERE redpanda.timestamp = '2025-06-26 19:45:32.478';
+----
+{'partition': 0, 'offset': 0, 'timestamp': '2025-06-26 19:45:32.478', 'headers': NULL, 'key': NULL}	hello world

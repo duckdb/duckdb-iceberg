@@ -8,6 +8,7 @@
 #include "duckdb/common/exception/http_exception.hpp"
 #include "duckdb/logging/logger.hpp"
 
+#include "duckdb/common/types/blob.hpp"
 namespace duckdb {
 
 namespace {
@@ -34,13 +35,36 @@ OAuth2Authorization::OAuth2Authorization(const string &grant_type, const string 
       client_secret(client_secret), scope(scope) {
 }
 
+//! NOTE: this doesnt use StringUtil::URLEncode(..., escape_slash=true) because of how ' ' (space) is encoded
+namespace {
+
+static string XWWWFormUrlEncode(const string &input) {
+	string result;
+	static const char *HEX_DIGIT = "0123456789ABCDEF";
+	for (idx_t i = 0; i < input.size(); i++) {
+		char ch = input[i];
+		if ((ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9') || ch == '_' ||
+		    ch == '-' || ch == '~' || ch == '.') {
+			result += ch;
+		} else {
+			result += '%';
+			result += HEX_DIGIT[static_cast<unsigned char>(ch) >> 4];
+			result += HEX_DIGIT[static_cast<unsigned char>(ch) & 15];
+		}
+	}
+	return result;
+}
+
+} // namespace
+
 string OAuth2Authorization::GetToken(ClientContext &context, const string &grant_type, const string &uri,
                                      const string &client_id, const string &client_secret, const string &scope) {
 	vector<string> parameters;
-	parameters.push_back(StringUtil::Format("%s=%s", "grant_type", grant_type));
-	parameters.push_back(StringUtil::Format("%s=%s", "client_id", client_id));
-	parameters.push_back(StringUtil::Format("%s=%s", "client_secret", client_secret));
-	parameters.push_back(StringUtil::Format("%s=%s", "scope", scope));
+	parameters.push_back(StringUtil::Format("%s=%s", XWWWFormUrlEncode("grant_type"), XWWWFormUrlEncode(grant_type)));
+	parameters.push_back(StringUtil::Format("%s=%s", XWWWFormUrlEncode("scope"), XWWWFormUrlEncode(scope)));
+
+	string credentials = StringUtil::Format("%s:%s", client_id, client_secret);
+	string_t credentials_blob(credentials.data(), credentials.size());
 
 	string post_data = StringUtil::Format("%s", StringUtil::Join(parameters, "&"));
 	std::unique_ptr<yyjson_doc, YyjsonDocDeleter> doc;
@@ -75,6 +99,18 @@ string OAuth2Authorization::GetToken(ClientContext &context, const string &grant
 unique_ptr<HTTPResponse> OAuth2Authorization::GetRequest(ClientContext &context,
                                                          const IRCEndpointBuilder &endpoint_builder) {
 	return APIUtils::GetRequest(context, endpoint_builder, token);
+}
+
+unique_ptr<HTTPResponse> OAuth2Authorization::DeleteRequest(ClientContext &context,
+                                                            const IRCEndpointBuilder &endpoint_builder) {
+	return APIUtils::DeleteRequest(context, endpoint_builder, token);
+}
+
+unique_ptr<HTTPResponse> OAuth2Authorization::PostRequest(ClientContext &context,
+                                                          const IRCEndpointBuilder &endpoint_builder,
+                                                          const string &body) {
+	auto url = endpoint_builder.GetURL();
+	return APIUtils::PostRequest(context, url, body, "json", token);
 }
 
 unique_ptr<OAuth2Authorization> OAuth2Authorization::FromAttachOptions(ClientContext &context,

@@ -33,6 +33,7 @@ public:
 	bool IsUnpartitioned() const;
 	bool IsPartitioned() const;
 	const IcebergPartitionSpecField &GetFieldBySourceId(idx_t field_id) const;
+	string FieldsToJSON() const;
 
 public:
 	int32_t spec_id;

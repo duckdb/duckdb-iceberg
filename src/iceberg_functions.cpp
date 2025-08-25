@@ -13,6 +13,7 @@ vector<TableFunctionSet> IcebergFunctions::GetTableFunctions(DatabaseInstance &i
 	functions.push_back(std::move(GetIcebergSnapshotsFunction()));
 	functions.push_back(std::move(GetIcebergScanFunction(instance)));
 	functions.push_back(std::move(GetIcebergMetadataFunction()));
+	functions.push_back(std::move(GetIcebergToDuckLakeFunction()));
 
 	return functions;
 }

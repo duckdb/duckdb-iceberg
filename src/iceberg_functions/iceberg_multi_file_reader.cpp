@@ -193,10 +193,10 @@ static void ApplyPartitionConstants(const IcebergMultiFileList &multi_file_list,
 		return; // No partition fields, continue with normal mapping
 	}
 
-	unordered_map<uint64_t, idx_t> identifier_to_field_id;
+	unordered_map<uint64_t, idx_t> identifier_to_field_index;
 	for (idx_t i = 0; i < partition_spec.fields.size(); i++) {
 		auto &field = partition_spec.fields[i];
-		identifier_to_field_id[field.source_id] = i;
+		identifier_to_field_index[field.source_id] = i;
 	}
 
 	auto &local_columns = reader.columns;
@@ -220,8 +220,8 @@ static void ApplyPartitionConstants(const IcebergMultiFileList &multi_file_list,
 			continue;
 		}
 
-		auto it = identifier_to_field_id.find(field_id);
-		if (it == identifier_to_field_id.end()) {
+		auto it = identifier_to_field_index.find(field_id);
+		if (it == identifier_to_field_index.end()) {
 			continue;
 		}
 
@@ -231,25 +231,23 @@ static void ApplyPartitionConstants(const IcebergMultiFileList &multi_file_list,
 		}
 
 		// Get the partition value from the data file's partition struct
-		auto partition_value = data_file.partition;
-		if (partition_value.IsNull()) {
+		auto &partition_values = data_file.partition_values;
+		if (partition_values.empty()) {
 			continue; // No partition value available
 		}
-
-		// Extract the field value from the partition struct
-		const auto &struct_type = partition_value.type();
-		const auto &struct_children = StructValue::GetChildren(partition_value);
-
-		auto global_idx = MultiFileGlobalIndex(i);
-		for (idx_t i = 0; i < StructType::GetChildCount(struct_type); i++) {
-			auto &name = StructType::GetChildName(struct_type, i);
-			if (name == field.name) {
-				// Add to constant map - this will be used instead of reading from the file
-				reader_data.constant_map.Add(global_idx,
-				                             TransformPartitionValue(struct_children[i], global_column.type));
+		optional_ptr<const Value> partition_value;
+		for (auto &it : partition_values) {
+			if (static_cast<uint64_t>(it.first) == field.partition_field_id && !it.second.IsNull()) {
+				partition_value = it.second;
 				break;
 			}
 		}
+		if (!partition_value) {
+			//! This data file doesn't have a value for this partition field (is that an error ??)
+			continue;
+		}
+		auto global_idx = MultiFileGlobalIndex(i);
+		reader_data.constant_map.Add(global_idx, TransformPartitionValue(*partition_value, global_column.type));
 	}
 }
 
@@ -263,20 +261,16 @@ void IcebergMultiFileReader::FinalizeBind(MultiFileReaderData &reader_data, cons
 	D_ASSERT(global_state);
 	// Get the metadata for this file
 	const auto &multi_file_list = dynamic_cast<const IcebergMultiFileList &>(*global_state->file_list);
-	{
-		lock_guard<mutex> guard(multi_file_list.lock);
-		D_ASSERT(multi_file_list.initialized);
-	}
-
 	auto &reader = *reader_data.reader;
 	auto file_id = reader.file_list_idx.GetIndex();
-	const auto &data_file = multi_file_list.data_files[file_id];
 
-	// The path of the data file where this chunk was read from
-	const auto &file_path = data_file.file_path;
 	{
 		lock_guard<mutex> guard(multi_file_list.lock);
-		std::lock_guard<mutex> delete_guard(multi_file_list.delete_lock);
+		const auto &data_file = multi_file_list.data_files[file_id];
+		// The path of the data file where this chunk was read from
+		const auto &file_path = data_file.file_path;
+
+		lock_guard<mutex> delete_guard(multi_file_list.delete_lock);
 		if (multi_file_list.current_delete_manifest != multi_file_list.delete_manifests.end()) {
 			multi_file_list.ProcessDeletes(global_columns, global_column_ids);
 		}
@@ -314,10 +308,13 @@ void IcebergMultiFileReader::ApplyEqualityDeletes(ClientContext &context, DataCh
 					//! delete file.
 					continue;
 				}
-				if (file.partition != data_file.partition) {
-					//! Same partition spec id, but the partitioning information doesn't match, delete file doesn't
-					//! apply.
-					continue;
+				D_ASSERT(file.partition_values.size() == data_file.partition_values.size());
+				for (idx_t i = 0; i < file.partition_values.size(); i++) {
+					if (file.partition_values[i] != data_file.partition_values[i]) {
+						//! Same partition spec id, but the partitioning information doesn't match, delete file doesn't
+						//! apply.
+						continue;
+					}
 				}
 			}
 			delete_rows.insert(delete_rows.end(), file.rows.begin(), file.rows.end());

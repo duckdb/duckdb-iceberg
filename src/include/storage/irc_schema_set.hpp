@@ -18,7 +18,7 @@ public:
 protected:
 	optional_ptr<CatalogEntry> CreateEntryInternal(ClientContext &context, unique_ptr<CatalogEntry> entry);
 
-protected:
+public:
 	Catalog &catalog;
 	case_insensitive_map_t<unique_ptr<CatalogEntry>> entries;
 

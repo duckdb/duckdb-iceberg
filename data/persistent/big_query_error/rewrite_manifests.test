@@ -1,0 +1,99 @@
+require avro
+
+# This file contains sql queries used to rewrite the paths of received test data to live inside 'data/persistent/big_query_error'
+mode skip
+
+# Copy the manifest list
+
+statement ok
+create table manifest_list as
+select
+	*
+from read_avro('~/Downloads/table_name2/metadata/24f5f399-c7ec-488d-a9d3-f0aceb454be2-4830b289af0338e2-f-manifest-list-00000-of-00001.avro');
+
+statement ok
+update manifest_list set
+	manifest_path = 'data/persistent/big_query_error/metadata/24f5f399-c7ec-488d-a9d3-f0aceb454be2-4830b289af0338e2-f-00000-of-00001.avro';
+
+statement ok
+copy manifest_list to
+'./data/persistent/big_query_error/metadata/24f5f399-c7ec-488d-a9d3-f0aceb454be2-4830b289af0338e2-f-manifest-list-00000-of-00001.avro' (
+	FORMAT AVRO,
+	ROOT_NAME 'manifest_file',
+	FIELD_IDS {
+		'manifest_path': 500,
+		'manifest_length': 501,
+		'partition_spec_id': 502,
+		'content': 517,
+		'sequence_number': 515,
+		'min_sequence_number': 516,
+		'added_snapshot_id': 503,
+		'added_files_count': 504,
+		'existing_files_count': 505,
+		'deleted_files_count': 506,
+		'added_rows_count': 512,
+		'existing_rows_count': 513,
+		'deleted_rows_count': 514
+	}
+);
+
+# Copy the manifest file
+
+statement ok
+create table manifest_entries as
+select
+	*
+from read_avro('~/Downloads/table_name2/metadata/24f5f399-c7ec-488d-a9d3-f0aceb454be2-4830b289af0338e2-f-00000-of-00001.avro');
+
+statement ok
+alter table manifest_entries drop column data_file.file_path;
+
+statement ok
+alter table manifest_entries add column data_file.file_path VARCHAR DEFAULT 'data/persistent/big_query_error/data/bc12018c-b4ed-4ed8-adcb-a41cea51206d-3175699a3a6392ba-f-00000-of-00001.parquet';
+
+statement ok
+alter table manifest_entries drop column data_file.partition;
+
+statement ok
+alter table manifest_entries add column data_file.partition STRUCT("__duckdb_empty_struct_marker" VARCHAR) DEFAULT NULL::STRUCT("__duckdb_empty_struct_marker" VARCHAR);
+
+statement ok
+copy manifest_entries to
+'./data/persistent/big_query_error/metadata/24f5f399-c7ec-488d-a9d3-f0aceb454be2-4830b289af0338e2-f-00000-of-00001.avro' (
+	FORMAT AVRO,
+	ROOT_NAME 'manifest_entry',
+	FIELD_IDS {
+		'status': 0,
+		'data_file': {
+			'content': 134,
+			'file_path': 100,
+			'file_format': 101,
+			'partition': {
+				'__duckdb_field_id': 102
+			},
+			'record_count': 103,
+			'file_size_in_bytes': 104,
+			'value_counts': {
+				'key': 119,
+				'value': 120,
+				'__duckdb_field_id': 109
+			},
+			'null_value_counts': {
+				'key': 121,
+				'value': 122,
+				'__duckdb_field_id': 110
+			},
+			'lower_bounds': {
+				'key': 126,
+				'value': 127,
+				'__duckdb_field_id': 125
+			},
+			'upper_bounds': {
+				'key': 129,
+				'value': 130,
+				'__duckdb_field_id': 128
+			},
+			'__duckdb_field_id': 2
+		}
+	}
+);

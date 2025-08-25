@@ -7,16 +7,20 @@
 
 namespace duckdb {
 class IRCTransaction;
+struct IRCAPISchema;
 
 class IRCSchemaEntry : public SchemaCatalogEntry {
 public:
 	IRCSchemaEntry(Catalog &catalog, CreateSchemaInfo &info);
 	~IRCSchemaEntry() override;
 
-	unique_ptr<IRCAPISchema> schema_data;
+	//! The various levels of namespaces this flattened representation represents
+	vector<string> namespace_items;
 
 public:
 	optional_ptr<CatalogEntry> CreateTable(CatalogTransaction transaction, BoundCreateTableInfo &info) override;
+	optional_ptr<CatalogEntry> CreateTable(IRCTransaction &irc_transaction, ClientContext &context,
+	                                       BoundCreateTableInfo &info);
 	optional_ptr<CatalogEntry> CreateFunction(CatalogTransaction transaction, CreateFunctionInfo &info) override;
 	optional_ptr<CatalogEntry> CreateIndex(CatalogTransaction transaction, CreateIndexInfo &info,
 	                                       TableCatalogEntry &table) override;
@@ -39,7 +43,7 @@ public:
 private:
 	ICTableSet &GetCatalogSet(CatalogType type);
 
-private:
+public:
 	ICTableSet tables;
 };
 

@@ -10,7 +10,8 @@ public:
 	IcebergPredicate() = delete;
 
 public:
-	static bool MatchBounds(TableFilter &filter, const IcebergPredicateStats &stats, const IcebergTransform &transform);
+	static bool MatchBounds(const TableFilter &filter, const IcebergPredicateStats &stats,
+	                        const IcebergTransform &transform);
 };
 
 } // namespace duckdb

@@ -60,7 +60,6 @@ HEADER_FORMAT = """
 #include "duckdb/common/string.hpp"
 #include "duckdb/common/vector.hpp"
 #include "duckdb/common/case_insensitive_map.hpp"
-#include "rest_catalog/response_objects.hpp"
 {ADDITIONAL_HEADERS}
 
 using namespace duckdb_yyjson;
@@ -84,7 +83,6 @@ SOURCE_FORMAT = """
 #include "duckdb/common/string.hpp"
 #include "duckdb/common/vector.hpp"
 #include "duckdb/common/case_insensitive_map.hpp"
-#include "rest_catalog/response_objects.hpp"
 #include "rest_catalog/objects/list.hpp"
 
 using namespace duckdb_yyjson;

@@ -27,6 +27,7 @@ public:
 	bool Finished() const;
 
 public:
+	string path;
 	optional_ptr<TableFunction> avro_scan;
 	ClientContext &context;
 	unique_ptr<FunctionData> bind_data;

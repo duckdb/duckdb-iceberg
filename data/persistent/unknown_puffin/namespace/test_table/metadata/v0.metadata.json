@@ -1,0 +1,83 @@
+{
+  "format-version": 2,
+  "table-uuid": "019803f6-c3da-73c0-9da6-12709fee8d67",
+  "location": "data/persistent/unknown_puffin/namespace/test_table",
+  "last-sequence-number": 0,
+  "last-updated-ms": 1752413160411,
+  "last-column-id": 3,
+  "schemas": [
+    {
+      "schema-id": 0,
+      "type": "struct",
+      "fields": [
+        {
+          "id": 1,
+          "name": "id",
+          "required": true,
+          "type": "int"
+        },
+        {
+          "id": 2,
+          "name": "name",
+          "required": false,
+          "type": "string"
+        },
+        {
+          "id": 3,
+          "name": "age",
+          "required": true,
+          "type": "int"
+        }
+      ]
+    },
+    {
+      "schema-id": 1,
+      "type": "struct",
+      "fields": [
+        {
+          "id": 0,
+          "name": "id",
+          "required": true,
+          "type": "int"
+        },
+        {
+          "id": 1,
+          "name": "name",
+          "required": false,
+          "type": "string"
+        },
+        {
+          "id": 2,
+          "name": "age",
+          "required": true,
+          "type": "int"
+        }
+      ]
+    }
+  ],
+  "current-schema-id": 1,
+  "partition-specs": [
+    {
+      "spec-id": 0,
+      "fields": []
+    }
+  ],
+  "default-spec-id": 0,
+  "last-partition-id": 999,
+  "properties": {
+    "commit.retry.total-timeout-ms": "120000",
+    "commit.retry.num-retries": "5",
+    "write.parquet.compression-codec": "snappy",
+    "commit.retry.max-wait-ms": "30000",
+    "commit.retry.min-wait-ms": "200",
+    "write.metadata.compression-codec": "none"
+  },
+  "sort-orders": [
+    {
+      "order-id": 0,
+      "fields": []
+    }
+  ],
+  "default-sort-order-id": 0,
+  "refs": {}
+}

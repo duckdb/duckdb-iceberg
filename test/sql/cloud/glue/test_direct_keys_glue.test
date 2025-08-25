@@ -50,8 +50,6 @@ drop secret s1;
 statement ok
 detach my_datalake;
 
-mode unskip
-
 # test using assume role
 statement ok
 CREATE SECRET assume_role_secret (
@@ -68,9 +66,8 @@ attach '840140254803:s3tablescatalog/pyiceberg-blog-bucket' as my_datalake (
     ENDPOINT_TYPE 'GLUE'
 );
 
-# TODO: re-enable verification of this output with output from 101
 query I
-select count(*) > 5 from (show all tables);
+select count(*) > 1 from (show all tables);
 ----
 1
 

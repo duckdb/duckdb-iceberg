@@ -10,17 +10,17 @@ require iceberg
 require httpfs
 
 query III
-select * from ICEBERG_SCAN('data/persistent/partition_fixed_length_binary/default.db/partition_fixed_length_binary/metadata/00001-b4b3d6d2-cac2-4480-952e-0e4b3b88b5d7.metadata.json');
+select * from ICEBERG_SCAN('__WORKING_DIRECTORY__/data/persistent/partition_fixed_length_binary/default.db/partition_fixed_length_binary/metadata/00001-b4b3d6d2-cac2-4480-952e-0e4b3b88b5d7.metadata.json');
 ----
 hello world	12345	click
 fixed value	67890	purchase
 
 query I
-select user_id from ICEBERG_SCAN('data/persistent/partition_fixed_length_binary/default.db/partition_fixed_length_binary/metadata/00001-b4b3d6d2-cac2-4480-952e-0e4b3b88b5d7.metadata.json') WHERE partition_col = 'hello world'
+select user_id from ICEBERG_SCAN('__WORKING_DIRECTORY__/data/persistent/partition_fixed_length_binary/default.db/partition_fixed_length_binary/metadata/00001-b4b3d6d2-cac2-4480-952e-0e4b3b88b5d7.metadata.json') WHERE partition_col = 'hello world'
 ----
 12345
 
 query I
-select user_id from ICEBERG_SCAN('data/persistent/partition_fixed_length_binary/default.db/partition_fixed_length_binary/metadata/00001-b4b3d6d2-cac2-4480-952e-0e4b3b88b5d7.metadata.json') WHERE partition_col = 'fixed value'
+select user_id from ICEBERG_SCAN('__WORKING_DIRECTORY__/data/persistent/partition_fixed_length_binary/default.db/partition_fixed_length_binary/metadata/00001-b4b3d6d2-cac2-4480-952e-0e4b3b88b5d7.metadata.json') WHERE partition_col = 'fixed value'
 ----
 67890

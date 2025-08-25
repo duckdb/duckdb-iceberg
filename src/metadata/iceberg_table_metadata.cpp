@@ -8,20 +8,6 @@ namespace duckdb {
 
 //! ----------- Select Snapshot -----------
 
-optional_ptr<IcebergSnapshot> IcebergTableMetadata::FindLatestSnapshotInternal() {
-	int64_t max_timestamp = NumericLimits<int64_t>::Minimum();
-	optional_ptr<IcebergSnapshot> max_snapshot;
-	for (auto &it : snapshots) {
-		auto &snapshot = it.second;
-		auto current_timestamp = Timestamp::GetEpochMs(snapshot.timestamp_ms);
-		if (current_timestamp >= max_timestamp) {
-			max_timestamp = current_timestamp;
-			max_snapshot = snapshot;
-		}
-	}
-	return max_snapshot;
-}
-
 optional_ptr<IcebergSnapshot> IcebergTableMetadata::FindSnapshotByIdInternal(int64_t target_id) {
 	auto it = snapshots.find(target_id);
 	if (it == snapshots.end()) {
@@ -38,7 +24,7 @@ optional_ptr<IcebergSnapshot> IcebergTableMetadata::FindSnapshotByIdTimestampInt
 	for (auto &it : snapshots) {
 		auto &snapshot = it.second;
 		auto curr_millis = Timestamp::GetEpochMs(snapshot.timestamp_ms);
-		if (curr_millis <= timestamp_millis && curr_millis >= max_millis) {
+		if (curr_millis <= timestamp_millis && static_cast<uint64_t>(curr_millis) >= max_millis) {
 			max_snapshot = snapshot;
 			max_millis = curr_millis;
 		}
@@ -46,15 +32,36 @@ optional_ptr<IcebergSnapshot> IcebergTableMetadata::FindSnapshotByIdTimestampInt
 	return max_snapshot;
 }
 
-shared_ptr<IcebergTableSchema> IcebergTableMetadata::GetSchemaFromId(int32_t schema_id) {
+shared_ptr<IcebergTableSchema> IcebergTableMetadata::GetSchemaFromId(int32_t schema_id) const {
 	auto it = schemas.find(schema_id);
 	D_ASSERT(it != schemas.end());
 	return it->second;
 }
 
+optional_ptr<const IcebergPartitionSpec> IcebergTableMetadata::FindPartitionSpecById(int32_t spec_id) const {
+	auto it = partition_specs.find(spec_id);
+	D_ASSERT(it != partition_specs.end());
+	return it->second;
+}
+
 optional_ptr<IcebergSnapshot> IcebergTableMetadata::GetLatestSnapshot() {
-	auto latest_snapshot = FindLatestSnapshotInternal();
+	if (!has_current_snapshot) {
+		return nullptr;
+	}
+	auto latest_snapshot = GetSnapshotById(current_snapshot_id);
 	return latest_snapshot;
+}
+
+const IcebergTableSchema &IcebergTableMetadata::GetLatestSchema() const {
+	auto res = GetSchemaFromId(current_schema_id);
+	D_ASSERT(res);
+	return *res;
+}
+
+const IcebergPartitionSpec &IcebergTableMetadata::GetLatestPartitionSpec() const {
+	auto res = FindPartitionSpecById(default_spec_id);
+	D_ASSERT(res);
+	return *res;
 }
 
 optional_ptr<IcebergSnapshot> IcebergTableMetadata::GetSnapshotById(int64_t snapshot_id) {
@@ -234,6 +241,8 @@ rest_api_objects::TableMetadata IcebergTableMetadata::Parse(const string &path, 
 IcebergTableMetadata IcebergTableMetadata::FromTableMetadata(rest_api_objects::TableMetadata &table_metadata) {
 	IcebergTableMetadata res;
 
+	res.table_uuid = table_metadata.table_uuid;
+	res.location = table_metadata.location;
 	res.iceberg_version = table_metadata.format_version;
 	for (auto &schema : table_metadata.schemas) {
 		res.schemas.emplace(schema.object_1.schema_id, IcebergTableSchema::ParseSchema(schema));
@@ -251,6 +260,14 @@ IcebergTableMetadata IcebergTableMetadata::FromTableMetadata(rest_api_objects::T
 		throw InvalidConfigurationException("'current_schema_id' field is missing from the metadata.json file");
 	}
 	res.current_schema_id = table_metadata.current_schema_id;
+	if (table_metadata.has_current_snapshot_id && table_metadata.current_snapshot_id != -1) {
+		res.has_current_snapshot = true;
+		res.current_snapshot_id = table_metadata.current_snapshot_id;
+	} else {
+		res.has_current_snapshot = false;
+	}
+	res.last_sequence_number = table_metadata.last_sequence_number;
+	res.default_spec_id = table_metadata.default_spec_id;
 
 	auto &properties = table_metadata.properties;
 	auto name_mapping = properties.find("schema.name-mapping.default");

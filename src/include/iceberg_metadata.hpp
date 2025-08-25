@@ -28,6 +28,8 @@
 #include "metadata/iceberg_field_mapping.hpp"
 #include "metadata/iceberg_manifest.hpp"
 
+#include "storage/iceberg_transaction_data.hpp"
+
 using namespace duckdb_yyjson;
 
 namespace duckdb {
@@ -36,6 +38,8 @@ namespace duckdb {
 struct IcebergScanTemporaryData {
 	IcebergTableMetadata metadata;
 };
+
+struct IcebergTransactionData;
 
 struct IcebergScanInfo : public TableFunctionInfo {
 public:
@@ -53,6 +57,7 @@ public:
 	string metadata_path;
 	unique_ptr<IcebergScanTemporaryData> owned_temp_data;
 	IcebergTableMetadata &metadata;
+	optional_ptr<IcebergTransactionData> transaction_data;
 
 	optional_ptr<IcebergSnapshot> snapshot;
 	IcebergTableSchema &schema;

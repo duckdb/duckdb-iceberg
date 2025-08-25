@@ -23,6 +23,8 @@ public:
 	static string GetMetaDataPath(ClientContext &context, const string &path, FileSystem &fs,
 	                              const IcebergOptions &options);
 	optional_ptr<IcebergSnapshot> GetLatestSnapshot();
+	const IcebergTableSchema &GetLatestSchema() const;
+	const IcebergPartitionSpec &GetLatestPartitionSpec() const;
 	optional_ptr<IcebergSnapshot> GetSnapshotById(int64_t snapshot_id);
 	optional_ptr<IcebergSnapshot> GetSnapshotByTimestamp(timestamp_t timestamp);
 
@@ -33,19 +35,29 @@ public:
 	static string PickTableVersion(vector<OpenFileInfo> &found_metadata, string &version_pattern, string &glob);
 
 	//! Internal JSON parsing functions
-	optional_ptr<IcebergSnapshot> FindLatestSnapshotInternal();
 	optional_ptr<IcebergSnapshot> FindSnapshotByIdInternal(int64_t target_id);
 	optional_ptr<IcebergSnapshot> FindSnapshotByIdTimestampInternal(timestamp_t timestamp);
-
-	shared_ptr<IcebergTableSchema> GetSchemaFromId(int32_t schema_id);
-
+	shared_ptr<IcebergTableSchema> GetSchemaFromId(int32_t schema_id) const;
+	optional_ptr<const IcebergPartitionSpec> FindPartitionSpecById(int32_t spec_id) const;
 	optional_ptr<IcebergSnapshot> GetSnapshot(const IcebergSnapshotLookup &lookup);
 
 public:
+	string table_uuid;
+	string location;
+
 	int32_t iceberg_version;
 	int32_t current_schema_id;
+	int32_t default_spec_id;
+
+	bool has_current_snapshot = false;
+	int64_t current_snapshot_id;
+	int64_t last_sequence_number;
+
+	//! partition_spec_id -> partition spec
 	unordered_map<int32_t, IcebergPartitionSpec> partition_specs;
+	//! snapshot_id -> snapshot
 	unordered_map<int64_t, IcebergSnapshot> snapshots;
+	//! schema_id -> schema
 	unordered_map<int32_t, shared_ptr<IcebergTableSchema>> schemas;
 	vector<IcebergFieldMapping> mappings;
 };

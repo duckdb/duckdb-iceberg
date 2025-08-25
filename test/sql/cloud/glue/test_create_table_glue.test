@@ -1,0 +1,45 @@
+# name: test/sql/cloud/glue/test_create_table_glue.test
+# description: test createing a table in glue
+# group: [glue]
+
+require-env ICEBERG_AWS_REMOTE_AVAILABLE
+
+require-env AWS_ACCESS_KEY_ID
+
+require-env AWS_SECRET_ACCESS_KEY
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+require aws
+
+# credentials in CI cannot set up the environment for this test
+# need to give the crentials glue:DropTable priviledges
+mode skip
+
+statement ok
+CREATE SECRET (
+  TYPE S3,
+  PROVIDER credential_chain,
+  REGION 'us-east-1'
+);
+
+statement ok
+attach '840140254803:s3tablescatalog/duckdblabs-iceberg-testing' as my_datalake (
+    TYPE ICEBERG,
+    ENDPOINT_TYPE 'GLUE'
+);
+
+statement ok
+use my_datalake.tpch_sf01;
+
+statement ok
+create table test_create as select * from range(0,100);
+
+statement ok
+drop table test_create;

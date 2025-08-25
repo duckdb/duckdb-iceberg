@@ -17,18 +17,18 @@ statement ok
 create schema my_datalake.default;
 
 statement ok
-create view my_datalake.default.lineitem_001_deletes as select * from ICEBERG_SCAN('data/generated/iceberg/spark-local/default/lineitem_001_deletes');
+create view my_datalake.default.lineitem_001_deletes as select * from ICEBERG_SCAN('__WORKING_DIRECTORY__/data/generated/iceberg/spark-local/default/lineitem_001_deletes');
 
 
 # only 2 data files
 query I
-select count(*) from ICEBERG_METADATA('data/generated/iceberg/spark-local/default/lineitem_001_deletes') where manifest_content = 'DATA';
+select count(*) from ICEBERG_METADATA('__WORKING_DIRECTORY__/data/generated/iceberg/spark-local/default/lineitem_001_deletes') where manifest_content = 'DATA';
 ----
 2
 
 # only 1 delete files
 query I
-select count(*) from ICEBERG_METADATA('data/generated/iceberg/spark-local/default/lineitem_001_deletes') where manifest_content = 'DELETE';
+select count(*) from ICEBERG_METADATA('__WORKING_DIRECTORY__/data/generated/iceberg/spark-local/default/lineitem_001_deletes') where manifest_content = 'DELETE';
 ----
 1
 
@@ -46,24 +46,24 @@ select count(*) from my_datalake.default.lineitem_001_deletes;
 
 
 query I
-select count(*) from ICEBERG_METADATA('data/generated/iceberg/spark-local/default/many_adds_deletes') where manifest_content = 'DATA';
+select count(*) from ICEBERG_METADATA('__WORKING_DIRECTORY__/data/generated/iceberg/spark-local/default/many_adds_deletes') where manifest_content = 'DATA';
 ----
 8
 
 # only 4 delete files
 query I
-select count(*) from ICEBERG_METADATA('data/generated/iceberg/spark-local/default/many_adds_deletes') where manifest_content = 'DELETE';
+select count(*) from ICEBERG_METADATA('__WORKING_DIRECTORY__/data/generated/iceberg/spark-local/default/many_adds_deletes') where manifest_content = 'DELETE';
 ----
 4
 
 query II
-explain select count(*) from ICEBERG_SCAN('data/generated/iceberg/spark-local/default/many_adds_deletes');
+explain select count(*) from ICEBERG_SCAN('__WORKING_DIRECTORY__/data/generated/iceberg/spark-local/default/many_adds_deletes');
 ----
 physical_plan	<REGEX>:.*~40000.*
 
 
 query I
-select count(*) from ICEBERG_SCAN('data/generated/iceberg/spark-local/default/many_adds_deletes');
+select count(*) from ICEBERG_SCAN('__WORKING_DIRECTORY__/data/generated/iceberg/spark-local/default/many_adds_deletes');
 ----
 40000
 

@@ -107,6 +107,10 @@ IcebergColumnDefinition::ParseType(const string &name, int32_t field_id, bool re
 LogicalType IcebergColumnDefinition::ParsePrimitiveType(rest_api_objects::PrimitiveType &type) {
 	auto &type_str = type.value;
 
+	return ParsePrimitiveTypeString(type_str);
+}
+
+LogicalType IcebergColumnDefinition::ParsePrimitiveTypeString(const string &type_str) {
 	if (type_str == "boolean") {
 		return LogicalType::BOOLEAN;
 	}
@@ -166,6 +170,30 @@ LogicalType IcebergColumnDefinition::ParsePrimitiveType(rest_api_objects::Primit
 unique_ptr<IcebergColumnDefinition> IcebergColumnDefinition::ParseStructField(rest_api_objects::StructField &field) {
 	return ParseType(field.name, field.id, field.required, *field.type,
 	                 field.has_initial_default ? &field.initial_default : nullptr);
+}
+
+bool IcebergColumnDefinition::IsIcebergPrimitiveType() {
+	switch (type.id()) {
+	case LogicalTypeId::TINYINT:
+	case LogicalTypeId::SMALLINT:
+	case LogicalTypeId::INTEGER:
+	case LogicalTypeId::BOOLEAN:
+	case LogicalTypeId::VARCHAR:
+	case LogicalTypeId::DATE:
+	case LogicalTypeId::HUGEINT:
+	case LogicalTypeId::BIGINT:
+	case LogicalTypeId::FLOAT:
+	case LogicalTypeId::DOUBLE:
+	case LogicalTypeId::DECIMAL:
+	case LogicalTypeId::UUID:
+	case LogicalTypeId::BLOB:
+	case LogicalTypeId::TIME:
+	case LogicalTypeId::TIMESTAMP:
+	case LogicalTypeId::TIMESTAMP_TZ:
+		return true;
+	default:
+		return false;
+	}
 }
 
 } // namespace duckdb

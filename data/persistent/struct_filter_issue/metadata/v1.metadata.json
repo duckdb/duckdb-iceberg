@@ -1,0 +1,131 @@
+{
+  "format-version": 2,
+  "table-uuid": "9d405fef-3d1c-4d40-91c9-4769ee9ab38d",
+  "location": "data/persistent/struct_filter_issue",
+  "last-sequence-number": 1,
+  "last-updated-ms": 1750967189414,
+  "last-column-id": 10,
+  "schemas": [
+    {
+      "type": "struct",
+      "schema-id": 0,
+      "fields": [
+        {
+          "id": 1,
+          "name": "redpanda",
+          "required": true,
+          "type": {
+            "type": "struct",
+            "fields": [
+              {
+                "id": 2,
+                "name": "partition",
+                "required": true,
+                "type": "int"
+              },
+              {
+                "id": 3,
+                "name": "offset",
+                "required": true,
+                "type": "long"
+              },
+              {
+                "id": 4,
+                "name": "timestamp",
+                "required": true,
+                "type": "timestamp"
+              },
+              {
+                "id": 5,
+                "name": "headers",
+                "required": false,
+                "type": {
+                  "type": "list",
+                  "element-id": 6,
+                  "element-required": true,
+                  "element": {
+                    "type": "struct",
+                    "fields": [
+                      {
+                        "id": 7,
+                        "name": "key",
+                        "required": false,
+                        "type": "binary"
+                      },
+                      {
+                        "id": 8,
+                        "name": "value",
+                        "required": false,
+                        "type": "binary"
+                      }
+                    ]
+                  }
+                }
+              },
+              {
+                "id": 9,
+                "name": "key",
+                "required": false,
+                "type": "binary"
+              }
+            ]
+          }
+        },
+        {
+          "id": 10,
+          "name": "value",
+          "required": false,
+          "type": "binary"
+        }
+      ]
+    }
+  ],
+  "current-schema-id": 0,
+  "partition-specs": [
+    {
+      "spec-id": 0,
+      "fields": [
+        {
+          "source-id": 4,
+          "field-id": 1000,
+          "name": "redpanda.timestamp_hour",
+          "transform": "hour"
+        }
+      ]
+    }
+  ],
+  "default-spec-id": 0,
+  "last-partition-id": 1000,
+  "current-snapshot-id": 2608844449237347010,
+  "snapshots": [
+    {
+      "snapshot-id": 2608844449237347010,
+      "sequence-number": 1,
+      "timestamp-ms": 1750967189413,
+      "manifest-list": "data/persistent/struct_filter_issue/metadata/snap-2608844449237347010-21cbc5e3-71c2-4260-aa5f-10911de4af89-0.avro",
+      "schema-id": 0,
+      "summary": {
+        "operation": "append",
+        "redpanda.commit-metadata": "{\"offset\":2,\"cluster\":\"672cfcf5-555d-4df4-a051-972c08dc21fb\"}"
+      }
+    }
+  ],
+  "sort-orders": [
+    {
+      "order-id": 0,
+      "fields": []
+    }
+  ],
+  "default-sort-order-id": 0,
+  "refs": {
+    "main": {
+      "snapshot-id": 2608844449237347010,
+      "type": "branch"
+    },
+    "redpanda.tag": {
+      "snapshot-id": 2608844449237347010,
+      "type": "tag",
+      "max-ref-age-ms": 9223372036854775807
+    }
+  }
+}

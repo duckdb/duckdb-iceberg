@@ -2388,6 +2388,25 @@ components:
           items:
             $ref: '#/components/schemas/SortField'
 
+    EncryptedKey:
+      type: object
+      required:
+        - key-id
+        - encrypted-key-metadata
+      properties:
+        key-id:
+          type: string
+        encrypted-key-metadata:
+          type: string
+          format: byte # for compatibility
+          contentEncoding: base64
+        encrypted-by-id:
+          type: string
+        properties:
+          type: object
+          additionalProperties:
+            type: string
+
     Snapshot:
       type: object
       required:
@@ -2411,6 +2430,10 @@ components:
         manifest-list:
           type: string
           description: Location of the snapshot's manifest list file
+        first-row-id:
+          type: integer
+          format: int64
+          description: The first _row_id assigned to the first row in the first data file in the first manifest
         summary:
           type: object
           required:
@@ -2496,6 +2519,10 @@ components:
         last-updated-ms:
           type: integer
           format: int64
+        next-row-id:
+          type: integer
+          format: int64
+          description: A long higher than all assigned row IDs; the next snapshot's first-row-id.
         properties:
           type: object
           additionalProperties:
@@ -2525,6 +2552,11 @@ components:
             $ref: '#/components/schemas/SortOrder'
         default-sort-order-id:
           type: integer
+        # encryption
+        encryption-keys:
+          type: list
+          items:
+            $ref: '#/components/schemas/EncryptedKey'
         # snapshot tracking
         snapshots:
           type: array
@@ -2679,7 +2711,8 @@ components:
           remove-partition-statistics: '#/components/schemas/RemovePartitionStatisticsUpdate'
           remove-partition-specs: '#/components/schemas/RemovePartitionSpecsUpdate'
           remove-schemas: '#/components/schemas/RemoveSchemasUpdate'
-          enable-row-lineage: '#/components/schemas/EnableRowLineageUpdate'
+          add-encryption-key: '#/components/schemas/AddEncryptionKeyUpdate'
+          remove-encryption-key: '#/components/schemas/RemoveEncryptionKeyUpdate'
       type: object
       required:
         - action
@@ -2998,14 +3031,29 @@ components:
           items:
             type: integer
 
-    # Disabling Row Lineage is Forbidden
-    EnableRowLineageUpdate:
+    AddEncryptionKeyUpdate:
       allOf:
         - $ref: '#/components/schemas/BaseUpdate'
+      required:
+        - encryption-key
       properties:
         action:
           type: string
-          const: "enable-row-lineage"
+          const: "add-encryption-key"
+        encryption-key:
+          $ref: '#/components/schemas/EncryptedKey'
+
+    RemoveEncryptionKeyUpdate:
+      allOf:
+        - $ref: '#/components/schemas/BaseUpdate'
+      required:
+        - key-id
+      properties:
+        action:
+          type: string
+          const: "remove-encryption-key"
+        key-id:
+          type: string
 
     TableUpdate:
       anyOf:
@@ -3028,7 +3076,8 @@ components:
         - $ref: '#/components/schemas/RemoveStatisticsUpdate'
         - $ref: '#/components/schemas/RemovePartitionSpecsUpdate'
         - $ref: '#/components/schemas/RemoveSchemasUpdate'
-        - $ref: '#/components/schemas/EnableRowLineageUpdate'
+        - $ref: '#/components/schemas/AddEncryptionKeyUpdate'
+        - $ref: '#/components/schemas/RemoveEncryptionKeyUpdate'
 
     ViewUpdate:
       anyOf:
@@ -3041,47 +3090,48 @@ components:
         - $ref: '#/components/schemas/AddViewVersionUpdate'
         - $ref: '#/components/schemas/SetCurrentViewVersionUpdate'
 
+    TableRequirementType:
+      type: string
+      enum:
+        - assert-create
+        - assert-table-uuid
+        - assert-ref-snapshot-id
+        - assert-last-assigned-field-id
+        - assert-current-schema-id
+        - assert-last-assigned-partition-id
+        - assert-default-spec-id
+        - assert-default-sort-order-id
+
     TableRequirement:
-      type: object
-      discriminator:
-        propertyName: type
-        mapping:
-          assert-create: '#/components/schemas/AssertCreate'
-          assert-table-uuid: '#/components/schemas/AssertTableUUID'
-          assert-ref-snapshot-id: '#/components/schemas/AssertRefSnapshotId'
-          assert-last-assigned-field-id: '#/components/schemas/AssertLastAssignedFieldId'
-          assert-current-schema-id: '#/components/schemas/AssertCurrentSchemaId'
-          assert-last-assigned-partition-id: '#/components/schemas/AssertLastAssignedPartitionId'
-          assert-default-spec-id: '#/components/schemas/AssertDefaultSpecId'
-          assert-default-sort-order-id: '#/components/schemas/AssertDefaultSortOrderId'
-      properties:
-        type:
-          type: string
-      required:
-        - type
+      oneOf:
+        - $ref: '#/components/schemas/AssertCreate'
+        - $ref: '#/components/schemas/AssertTableUUID'
+        - $ref: '#/components/schemas/AssertRefSnapshotId'
+        - $ref: '#/components/schemas/AssertLastAssignedFieldId'
+        - $ref: '#/components/schemas/AssertCurrentSchemaId'
+        - $ref: '#/components/schemas/AssertLastAssignedPartitionId'
+        - $ref: '#/components/schemas/AssertDefaultSpecId'
+        - $ref: '#/components/schemas/AssertDefaultSortOrderId'
 
     AssertCreate:
       type: object
       description: The table must not already exist; used for create transactions
-      allOf:
-        - $ref: '#/components/schemas/TableRequirement'
       required:
         - type
       properties:
         type:
-          type: string
+          $ref: '#/components/schemas/TableRequirementType'
           const: "assert-create"
 
     AssertTableUUID:
+      type: object
       description: The table UUID must match the requirement's `uuid`
-      allOf:
-        - $ref: '#/components/schemas/TableRequirement'
       required:
         - type
         - uuid
       properties:
         type:
-          type: string
+          $ref: '#/components/schemas/TableRequirementType'
           const: "assert-table-uuid"
         uuid:
           type: string
@@ -3090,14 +3140,13 @@ components:
       description:
         The table branch or tag identified by the requirement's `ref` must reference the requirement's `snapshot-id`; 
         if `snapshot-id` is `null` or missing, the ref must not already exist
-      allOf:
-        - $ref: '#/components/schemas/TableRequirement'
       required:
+        - type
         - ref
         - snapshot-id
       properties:
         type:
-          type: string
+          $ref: '#/components/schemas/TableRequirementType'
           const: "assert-ref-snapshot-id"
         ref:
           type: string
@@ -3108,13 +3157,12 @@ components:
     AssertLastAssignedFieldId:
       description:
         The table's last assigned column id must match the requirement's `last-assigned-field-id`
-      allOf:
-        - $ref: '#/components/schemas/TableRequirement'
       required:
+        - type
         - last-assigned-field-id
       properties:
         type:
-          type: string
+          $ref: '#/components/schemas/TableRequirementType'
           const: "assert-last-assigned-field-id"
         last-assigned-field-id:
           type: integer
@@ -3122,13 +3170,12 @@ components:
     AssertCurrentSchemaId:
       description:
         The table's current schema id must match the requirement's `current-schema-id`
-      allOf:
-        - $ref: '#/components/schemas/TableRequirement'
       required:
+        - type
         - current-schema-id
       properties:
         type:
-          type: string
+          $ref: '#/components/schemas/TableRequirementType'
           const: "assert-current-schema-id"
         current-schema-id:
           type: integer
@@ -3136,13 +3183,12 @@ components:
     AssertLastAssignedPartitionId:
       description:
         The table's last assigned partition id must match the requirement's `last-assigned-partition-id`
-      allOf:
-        - $ref: '#/components/schemas/TableRequirement'
       required:
+        - type
         - last-assigned-partition-id
       properties:
         type:
-          type: string
+          $ref: '#/components/schemas/TableRequirementType'
           const: "assert-last-assigned-partition-id"
         last-assigned-partition-id:
           type: integer
@@ -3150,13 +3196,12 @@ components:
     AssertDefaultSpecId:
       description:
         The table's default spec id must match the requirement's `default-spec-id`
-      allOf:
-        - $ref: '#/components/schemas/TableRequirement'
       required:
+        - type
         - default-spec-id
       properties:
         type:
-          type: string
+          $ref: '#/components/schemas/TableRequirementType'
           const: "assert-default-spec-id"
         default-spec-id:
           type: integer
@@ -3164,13 +3209,12 @@ components:
     AssertDefaultSortOrderId:
       description:
         The table's default sort order id must match the requirement's `default-sort-order-id`
-      allOf:
-        - $ref: '#/components/schemas/TableRequirement'
       required:
+        - type
         - default-sort-order-id
       properties:
         type:
-          type: string
+          $ref: '#/components/schemas/TableRequirementType'
           const: "assert-default-sort-order-id"
         default-sort-order-id:
           type: integer
@@ -4259,6 +4303,10 @@ components:
         content:
           type: string
           const: "data"
+        first-row-id:
+          type: integer
+          format: int64
+          description: "The first row ID assigned to the first row in the data file"
         column-sizes:
           allOf:
             - $ref: '#/components/schemas/CountMap'
@@ -4468,7 +4516,9 @@ components:
     #  The fields `message` and `type` as indicated here are not presently prescriptive.
     UnauthorizedResponse:
       description:
-        Unauthorized. Authentication is required and has failed or has not yet been provided.
+        Unauthorized. The REST Catalog SHOULD respond with the 401 UnauthorizedResponse when
+        the access token provided is expired, revoked, malformed, or invalid for other reasons.
+        The client MAY request a new access token and retry the request.
       content:
         application/json:
           schema:
@@ -4576,7 +4626,9 @@ components:
 
     AuthenticationTimeoutResponse:
       description:
-        Credentials have timed out. If possible, the client should refresh credentials and retry.
+        This is an optional status response type that the REST Catalog can issue when the
+        token has expired. The client MAY request a new access token and retry the request.
+        401 UnauthorizedResponse SHOULD be preferred over this response type on token expiry.
       content:
         application/json:
           schema:

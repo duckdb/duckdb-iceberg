@@ -1,0 +1,107 @@
+{
+  "format-version": 2,
+  "table-uuid": "9d405fef-3d1c-4d40-91c9-4769ee9ab38d",
+  "location": "data/persistent/struct_filter_issue",
+  "last-sequence-number": 0,
+  "last-updated-ms": 1750967133526,
+  "last-column-id": 10,
+  "schemas": [
+    {
+      "type": "struct",
+      "schema-id": 0,
+      "fields": [
+        {
+          "id": 1,
+          "name": "redpanda",
+          "required": true,
+          "type": {
+            "type": "struct",
+            "fields": [
+              {
+                "id": 2,
+                "name": "partition",
+                "required": true,
+                "type": "int"
+              },
+              {
+                "id": 3,
+                "name": "offset",
+                "required": true,
+                "type": "long"
+              },
+              {
+                "id": 4,
+                "name": "timestamp",
+                "required": true,
+                "type": "timestamp"
+              },
+              {
+                "id": 5,
+                "name": "headers",
+                "required": false,
+                "type": {
+                  "type": "list",
+                  "element-id": 6,
+                  "element-required": true,
+                  "element": {
+                    "type": "struct",
+                    "fields": [
+                      {
+                        "id": 7,
+                        "name": "key",
+                        "required": false,
+                        "type": "binary"
+                      },
+                      {
+                        "id": 8,
+                        "name": "value",
+                        "required": false,
+                        "type": "binary"
+                      }
+                    ]
+                  }
+                }
+              },
+              {
+                "id": 9,
+                "name": "key",
+                "required": false,
+                "type": "binary"
+              }
+            ]
+          }
+        },
+        {
+          "id": 10,
+          "name": "value",
+          "required": false,
+          "type": "binary"
+        }
+      ]
+    }
+  ],
+  "current-schema-id": 0,
+  "partition-specs": [
+    {
+      "spec-id": 0,
+      "fields": [
+        {
+          "source-id": 4,
+          "field-id": 1000,
+          "name": "redpanda.timestamp_hour",
+          "transform": "hour"
+        }
+      ]
+    }
+  ],
+  "default-spec-id": 0,
+  "last-partition-id": 1000,
+  "snapshots": [],
+  "sort-orders": [
+    {
+      "order-id": 0,
+      "fields": []
+    }
+  ],
+  "default-sort-order-id": 0
+}

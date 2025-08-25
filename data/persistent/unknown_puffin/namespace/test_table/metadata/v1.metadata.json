@@ -1,0 +1,120 @@
+{
+  "format-version": 2,
+  "table-uuid": "019803f6-c3da-73c0-9da6-12709fee8d67",
+  "location": "data/persistent/unknown_puffin/namespace/test_table",
+  "last-sequence-number": 1,
+  "last-updated-ms": 1752413160423,
+  "last-column-id": 3,
+  "schemas": [
+    {
+      "schema-id": 0,
+      "type": "struct",
+      "fields": [
+        {
+          "id": 1,
+          "name": "id",
+          "required": true,
+          "type": "int"
+        },
+        {
+          "id": 2,
+          "name": "name",
+          "required": false,
+          "type": "string"
+        },
+        {
+          "id": 3,
+          "name": "age",
+          "required": true,
+          "type": "int"
+        }
+      ]
+    },
+    {
+      "schema-id": 1,
+      "type": "struct",
+      "fields": [
+        {
+          "id": 0,
+          "name": "id",
+          "required": true,
+          "type": "int"
+        },
+        {
+          "id": 1,
+          "name": "name",
+          "required": false,
+          "type": "string"
+        },
+        {
+          "id": 2,
+          "name": "age",
+          "required": true,
+          "type": "int"
+        }
+      ]
+    }
+  ],
+  "current-schema-id": 1,
+  "partition-specs": [
+    {
+      "spec-id": 0,
+      "fields": []
+    }
+  ],
+  "default-spec-id": 0,
+  "last-partition-id": 999,
+  "properties": {
+    "commit.retry.min-wait-ms": "200",
+    "commit.retry.total-timeout-ms": "120000",
+    "commit.retry.num-retries": "5",
+    "commit.retry.max-wait-ms": "30000",
+    "write.metadata.compression-codec": "none",
+    "moonlink.table-flush-lsn": "100",
+    "write.parquet.compression-codec": "snappy"
+  },
+  "current-snapshot-id": 2160374879266914800,
+  "snapshots": [
+    {
+      "snapshot-id": 2160374879266914800,
+      "sequence-number": 1,
+      "timestamp-ms": 1752413160423,
+      "manifest-list": "data/persistent/unknown_puffin/namespace/test_table/metadata/snap-2160374879266914775-0-019803f6-c3e4-75f3-8b96-21565df38e9e.avro",
+      "summary": {
+        "operation": "append",
+        "total-data-files": "0",
+        "total-records": "0",
+        "total-files-size": "0",
+        "total-equality-deletes": "0",
+        "total-delete-files": "0",
+        "total-position-deletes": "0"
+      },
+      "schema-id": 1
+    }
+  ],
+  "snapshot-log": [
+    {
+      "snapshot-id": 2160374879266914800,
+      "timestamp-ms": 1752413160423
+    }
+  ],
+  "metadata-log": [
+    {
+      "metadata-file": "namespace/test_table/metadata/v0.metadata.json",
+      "timestamp-ms": 1752413160411
+    }
+  ],
+  "sort-orders": [
+    {
+      "order-id": 0,
+      "fields": []
+    }
+  ],
+  "default-sort-order-id": 0,
+  "refs": {
+    "main": {
+      "snapshot-id": 2160374879266914800,
+      "type": "branch"
+    }
+  }
+}

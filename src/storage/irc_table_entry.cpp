@@ -17,7 +17,7 @@
 #include "duckdb/planner/tableref/bound_at_clause.hpp"
 
 #include "rest_catalog/objects/list.hpp"
-#include "storage/irc_transaction.hpp"
+#include "storage/iceberg_table_information.hpp"
 
 namespace duckdb {
 
@@ -36,7 +36,7 @@ void ICTableEntry::BindUpdateConstraints(Binder &binder, LogicalGet &, LogicalPr
 	throw NotImplementedException("BindUpdateConstraints");
 }
 
-string ICTableEntry::PrepareIcebergScanFromEntry(ClientContext &context) {
+string ICTableEntry::PrepareIcebergScanFromEntry(ClientContext &context) const {
 	auto &ic_catalog = catalog.Cast<IRCatalog>();
 	auto &secret_manager = SecretManager::Get(context);
 
@@ -117,11 +117,14 @@ TableFunction ICTableEntry::GetScanFunction(ClientContext &context, unique_ptr<F
 		schema_id = snapshot->schema_id;
 	}
 
-	auto &irc_transaction = IRCTransaction::Get(context, catalog);
-
 	auto schema = metadata.GetSchemaFromId(schema_id);
-	iceberg_scan_function.function_info =
+	auto scan_info =
 	    make_shared_ptr<IcebergScanInfo>(table_info.load_table_result.metadata_location, metadata, snapshot, *schema);
+	if (table_info.transaction_data) {
+		scan_info->transaction_data = table_info.transaction_data.get();
+	}
+
+	iceberg_scan_function.function_info = scan_info;
 
 	// Set the S3 path as input to table function
 	vector<Value> inputs = {storage_location};

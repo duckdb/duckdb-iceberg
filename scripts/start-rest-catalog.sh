@@ -6,6 +6,7 @@ then
   exit 1
 fi
 
+rm -rf data/generated
 mkdir -p data/generated/iceberg/spark-rest
 mkdir -p data/generated/intermediates
 

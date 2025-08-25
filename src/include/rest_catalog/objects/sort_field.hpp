@@ -5,7 +5,6 @@
 #include "duckdb/common/string.hpp"
 #include "duckdb/common/vector.hpp"
 #include "duckdb/common/case_insensitive_map.hpp"
-#include "rest_catalog/response_objects.hpp"
 #include "rest_catalog/objects/null_order.hpp"
 #include "rest_catalog/objects/sort_direction.hpp"
 #include "rest_catalog/objects/transform.hpp"

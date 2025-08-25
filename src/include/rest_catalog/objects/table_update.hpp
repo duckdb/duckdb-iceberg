@@ -5,13 +5,13 @@
 #include "duckdb/common/string.hpp"
 #include "duckdb/common/vector.hpp"
 #include "duckdb/common/case_insensitive_map.hpp"
-#include "rest_catalog/response_objects.hpp"
+#include "rest_catalog/objects/add_encryption_key_update.hpp"
 #include "rest_catalog/objects/add_partition_spec_update.hpp"
 #include "rest_catalog/objects/add_schema_update.hpp"
 #include "rest_catalog/objects/add_snapshot_update.hpp"
 #include "rest_catalog/objects/add_sort_order_update.hpp"
 #include "rest_catalog/objects/assign_uuidupdate.hpp"
-#include "rest_catalog/objects/enable_row_lineage_update.hpp"
+#include "rest_catalog/objects/remove_encryption_key_update.hpp"
 #include "rest_catalog/objects/remove_partition_specs_update.hpp"
 #include "rest_catalog/objects/remove_properties_update.hpp"
 #include "rest_catalog/objects/remove_schemas_update.hpp"
@@ -85,8 +85,10 @@ public:
 	bool has_remove_partition_specs_update = false;
 	RemoveSchemasUpdate remove_schemas_update;
 	bool has_remove_schemas_update = false;
-	EnableRowLineageUpdate enable_row_lineage_update;
-	bool has_enable_row_lineage_update = false;
+	AddEncryptionKeyUpdate add_encryption_key_update;
+	bool has_add_encryption_key_update = false;
+	RemoveEncryptionKeyUpdate remove_encryption_key_update;
+	bool has_remove_encryption_key_update = false;
 };
 
 } // namespace rest_api_objects

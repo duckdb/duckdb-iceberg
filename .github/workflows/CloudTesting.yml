@@ -1,5 +1,8 @@
 name: Cloud functional tests
-on: [push, workflow_dispatch, repository_dispatch]
+on:
+  schedule:
+    - cron:  '0 3 * * 1,3,5' # runs at 3am monday wednesday and friday
+  workflow_dispatch:
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}-${{ github.head_ref || '' }}-${{ github.base_ref || '' }}-${{ github.ref != 'refs/heads/main' || github.sha }}
   cancel-in-progress: true
@@ -9,7 +12,7 @@ defaults:
 
 jobs:
   rest:
-    name: Test against remote AWS account
+    name: Test against remote cloud catalogs
     runs-on: ubuntu-latest
     env:
       VCPKG_TARGET_TRIPLET: 'x64-linux-release'
@@ -21,14 +24,7 @@ jobs:
     steps:
       - name: Install required ubuntu packages
         run: |
-          sudo apt-get update -y -qq
-          sudo apt-get install -y -qq software-properties-common
-          sudo add-apt-repository ppa:git-core/ppa
-          sudo apt-get update -y -qq
-          sudo apt-get install -y -qq ninja-build make gcc-multilib g++-multilib libssl-dev wget openjdk-8-jdk zip maven unixodbc-dev libc6-dev-i386 lib32readline6-dev libssl-dev libcurl4-gnutls-dev libexpat1-dev gettext unzip build-essential checkinstall libffi-dev curl libz-dev openssh-client
-          sudo apt-get install -y -qq tar pkg-config
-          sudo curl -L "https://github.com/docker/compose/releases/download/1.29.2/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
-          sudo chmod +x /usr/local/bin/docker-compose
+          sudo apt-get update -y -qq && sudo apt-get install -y -qq ninja-build
 
       - uses: actions/checkout@v4
         with:
@@ -51,11 +47,34 @@ jobs:
         run: |
           make release
 
+      - name: install python packages
+        run: |
+          python3 -m pip install -r scripts/requirements.txt
+
+      - name: Set up cloud testing
+        env:
+          AWS_ACCESS_KEY_ID: ${{secrets.S3_ICEBERG_TEST_USER_KEY_ID}}
+          AWS_SECRET_ACCESS_KEY: ${{secrets.S3_ICEBERG_TEST_USER_SECRET}}
+          AWS_DEFAULT_REGION: ${{secrets.S3_ICEBERG_TEST_USER_REGION}}
+          R2_TOKEN: ${{secrets.r2_token}}
+        run: | 
+          python3 scripts/create_s3_insert_table.py --action=delete-and-create --catalogs=s3tables,r2
+
       - name: Test with rest catalog
         env:
           AWS_ACCESS_KEY_ID: ${{secrets.S3_ICEBERG_TEST_USER_KEY_ID}}
           AWS_SECRET_ACCESS_KEY: ${{secrets.S3_ICEBERG_TEST_USER_SECRET}}
           AWS_DEFAULT_REGION: ${{secrets.S3_ICEBERG_TEST_USER_REGION}}
+          R2_TOKEN: ${{secrets.r2_token}}
+          ICEBERG_REMOTE_INSERT_READY: 1
           ICEBERG_AWS_REMOTE_AVAILABLE: 1
         run: |
           make test_release
+
+      - name: File issue if error
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          echo "Cloud tests failed. see [Run Link](https://github.com/duckdb/duckdb-iceberg/actions/runs/${{ github.run_id }})" > report.txt
+          gh issue create --repo duckdb/duckdb-iceberg --title "Cloud Test Failures" --body-file report.txt

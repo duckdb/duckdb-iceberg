@@ -12,6 +12,7 @@
 
 #include "duckdb/parser/parsed_data/attach_info.hpp"
 #include "duckdb/storage/storage_extension.hpp"
+#include "duckdb/common/http_util.hpp"
 
 namespace duckdb {
 
@@ -30,6 +31,10 @@ public:
 
 class IRCatalog : public Catalog {
 public:
+	// default target file size: 8.4MB
+	static constexpr const idx_t DEFAULT_TARGET_FILE_SIZE = 1 << 23;
+
+public:
 	explicit IRCatalog(AttachedDatabase &db_p, AccessMode access_mode, unique_ptr<IRCAuthorization> auth_handler,
 	                   IcebergAttachOptions &attach_options, const string &version = "v1");
 	~IRCatalog() override;
@@ -37,10 +42,12 @@ public:
 public:
 	static unique_ptr<SecretEntry> GetStorageSecret(ClientContext &context, const string &secret_name);
 	static unique_ptr<SecretEntry> GetIcebergSecret(ClientContext &context, const string &secret_name);
-	void GetConfig(ClientContext &context);
+	void GetConfig(ClientContext &context, IcebergEndpointType &endpoint_type);
 	IRCEndpointBuilder GetBaseUrl() const;
 	string OptionalGetCachedValue(const string &url);
 	bool SetCachedValue(const string &url, const string &value, const rest_api_objects::LoadTableResult &result);
+	static void SetAWSCatalogOptions(IcebergAttachOptions &attach_options,
+	                                 case_insensitive_set_t &set_by_attach_options);
 
 public:
 	static unique_ptr<Catalog> Attach(StorageExtensionInfo *storage_info, ClientContext &context, AttachedDatabase &db,
@@ -70,6 +77,8 @@ public:
 	unique_ptr<LogicalOperator> BindCreateIndex(Binder &binder, CreateStatement &stmt, TableCatalogEntry &table,
 	                                            unique_ptr<LogicalOperator> plan) override;
 	DatabaseSize GetDatabaseSize(ClientContext &context) override;
+	void AddDefaultSupportedEndpoints();
+	void AddS3TablesEndpoints();
 	//! Whether or not this is an in-memory Iceberg database
 	bool InMemory() override;
 	string GetDBPath() override;
@@ -86,12 +95,18 @@ public:
 	const string version;
 	//! optional prefix
 	string prefix;
+	//! attach options
+	IcebergAttachOptions attach_options;
 
 private:
 	// defaults and overrides provided by a catalog.
 	case_insensitive_map_t<string> defaults;
 	case_insensitive_map_t<string> overrides;
 
+public:
+	unordered_set<string> supported_urls;
+
+private:
 	std::mutex metadata_cache_mutex;
 	unordered_map<string, unique_ptr<MetadataCacheValue>> metadata_cache;
 };

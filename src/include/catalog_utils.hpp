@@ -10,11 +10,6 @@ namespace duckdb {
 class IRCSchemaEntry;
 class IRCTransaction;
 
-class ICUtils {
-public:
-	static yyjson_doc *api_result_to_doc(const string &api_result);
-};
-
 struct YyjsonDocDeleter {
 	void operator()(yyjson_doc *doc) {
 		yyjson_doc_free(doc);
@@ -22,6 +17,12 @@ struct YyjsonDocDeleter {
 	void operator()(yyjson_mut_doc *doc) {
 		yyjson_mut_doc_free(doc);
 	}
+};
+
+class ICUtils {
+public:
+	static yyjson_doc *api_result_to_doc(const string &api_result);
+	static string JsonToString(std::unique_ptr<yyjson_mut_doc, YyjsonDocDeleter> doc);
 };
 
 } // namespace duckdb

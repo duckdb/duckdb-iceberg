@@ -19,10 +19,10 @@ statement ok
 create schema my_datalake.default;
 
 statement ok
-create view my_datalake.default.pyspark_iceberg_table_v1 as select * from ICEBERG_SCAN('data/generated/iceberg/spark-local/default/pyspark_iceberg_table_v1');
+create view my_datalake.default.pyspark_iceberg_table_v1 as select * from ICEBERG_SCAN('__WORKING_DIRECTORY__/data/generated/iceberg/spark-local/default/pyspark_iceberg_table_v1');
 
 statement ok
-create view my_datalake.default.pyspark_iceberg_table_v2 as select * from ICEBERG_SCAN('data/generated/iceberg/spark-local/default/pyspark_iceberg_table_v2');
+create view my_datalake.default.pyspark_iceberg_table_v2 as select * from ICEBERG_SCAN('__WORKING_DIRECTORY__/data/generated/iceberg/spark-local/default/pyspark_iceberg_table_v2');
 
 # Define the intermediates table
 
@@ -33,10 +33,10 @@ statement ok
 create schema intermediates.default;
 
 statement ok
-create view intermediates.default.pyspark_iceberg_table_v1 as select * from PARQUET_SCAN('data/generated/intermediates/spark-local/pyspark_iceberg_table_v1/last/data.parquet/*.parquet');
+create view intermediates.default.pyspark_iceberg_table_v1 as select * from PARQUET_SCAN('__WORKING_DIRECTORY__/data/generated/intermediates/spark-local/pyspark_iceberg_table_v1/last/data.parquet/*.parquet');
 
 statement ok
-create view intermediates.default.pyspark_iceberg_table_v2 as select * from PARQUET_SCAN('data/generated/intermediates/spark-local/pyspark_iceberg_table_v2/last/data.parquet/*.parquet');
+create view intermediates.default.pyspark_iceberg_table_v2 as select * from PARQUET_SCAN('__WORKING_DIRECTORY__/data/generated/intermediates/spark-local/pyspark_iceberg_table_v2/last/data.parquet/*.parquet');
 
 ### Iceberg spec v1
 

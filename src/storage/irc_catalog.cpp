@@ -1,4 +1,5 @@
 #include "storage/irc_schema_entry.hpp"
+#include "storage/irc_table_entry.hpp"
 #include "storage/irc_transaction.hpp"
 #include "catalog_api.hpp"
 #include "catalog_utils.hpp"
@@ -11,6 +12,7 @@
 #include "duckdb/parser/parsed_data/create_schema_info.hpp"
 #include "duckdb/main/attached_database.hpp"
 #include "rest_catalog/objects/catalog_config.hpp"
+#include "duckdb/planner/operator/logical_create_table.hpp"
 #include "storage/irc_catalog.hpp"
 
 #include <regex>
@@ -26,7 +28,8 @@ namespace duckdb {
 IRCatalog::IRCatalog(AttachedDatabase &db_p, AccessMode access_mode, unique_ptr<IRCAuthorization> auth_handler,
                      IcebergAttachOptions &attach_options, const string &version)
     : Catalog(db_p), access_mode(access_mode), auth_handler(std::move(auth_handler)),
-      warehouse(attach_options.warehouse), uri(attach_options.endpoint), version(version) {
+      warehouse(attach_options.warehouse), uri(attach_options.endpoint), version(version),
+      attach_options(attach_options) {
 	if (version.empty()) {
 		throw InternalException("version can not be empty");
 	}
@@ -63,21 +66,64 @@ optional_ptr<SchemaCatalogEntry> IRCatalog::LookupSchema(CatalogTransaction tran
 }
 
 optional_ptr<CatalogEntry> IRCatalog::CreateSchema(CatalogTransaction transaction, CreateSchemaInfo &info) {
-	throw NotImplementedException("IRCatalog::CreateSchema not implemented");
+	optional_ptr<ClientContext> context = transaction.GetContext();
+	if (info.on_conflict == OnCreateConflict::REPLACE_ON_CONFLICT) {
+		throw InvalidInputException("CREATE OR REPLACE not supported in DuckDB-Iceberg");
+	}
+
+	D_ASSERT(context.get() != nullptr);
+	rest_api_objects::CreateNamespaceRequest request;
+	request.has_properties = false;
+	auto namespace_identifiers = IRCAPI::ParseSchemaName(info.schema);
+	for (auto &identifier : namespace_identifiers) {
+		request._namespace.value.push_back(identifier);
+	}
+	std::unique_ptr<yyjson_mut_doc, YyjsonDocDeleter> doc_p(yyjson_mut_doc_new(nullptr));
+	auto doc = doc_p.get();
+	auto root_object = yyjson_mut_obj(doc);
+	yyjson_mut_doc_set_root(doc, root_object);
+	auto namespace_arr = yyjson_mut_obj_add_arr(doc, root_object, "namespace");
+	for (auto &name : request._namespace.value) {
+		yyjson_mut_arr_add_strcpy(doc, namespace_arr, name.c_str());
+	}
+	// properties object is also requeried. Empty for now since we don't support properties
+	auto properties_obj = yyjson_mut_obj_add_obj(doc, root_object, "properties");
+	auto create_body = ICUtils::JsonToString(std::move(doc_p));
+
+	if (info.on_conflict == OnCreateConflict::IGNORE_ON_CONFLICT) {
+		auto schema_lookup = EntryLookupInfo(CatalogType::SCHEMA_ENTRY, info.schema);
+		auto schema_exists = LookupSchema(transaction, schema_lookup, OnEntryNotFound::RETURN_NULL);
+		if (schema_exists) {
+			return nullptr;
+		}
+	}
+
+	IRCAPI::CommitNamespaceCreate(*context.get(), *this, create_body);
+
+	auto &irc_transaction = IRCTransaction::Get(transaction.GetContext(), *this);
+	auto &schemas = irc_transaction.GetSchemas();
+	auto new_schema = make_uniq<IRCSchemaEntry>(*this, info);
+	schemas.entries.insert(make_pair(new_schema->name, std::move(new_schema)));
+	auto ret = schemas.entries.find(info.schema);
+	return ret->second.get();
 }
 
 void IRCatalog::DropSchema(ClientContext &context, DropInfo &info) {
-	throw NotImplementedException("IRCatalog::DropSchema not implemented");
+	vector<string> namespace_items;
+	auto namespace_identifier = IRCAPI::ParseSchemaName(info.name);
+	namespace_items.push_back(IRCAPI::GetEncodedSchemaName(namespace_identifier));
+	if (info.if_not_found == OnEntryNotFound::RETURN_NULL) {
+		auto schema_lookup = EntryLookupInfo(CatalogType::SCHEMA_ENTRY, info.name);
+		// auto &irc_transaction = CatalogTran::Get(context, *this);
+		auto transaction = CatalogTransaction::GetSystemCatalogTransaction(context);
+		auto schema_exists = LookupSchema(transaction, schema_lookup, info.if_not_found);
+		if (!schema_exists) {
+			return;
+		}
+	}
+	IRCAPI::CommitNamespaceDrop(context, *this, namespace_items);
 }
 
-PhysicalOperator &IRCatalog::PlanInsert(ClientContext &context, PhysicalPlanGenerator &planner, LogicalInsert &op,
-                                        optional_ptr<PhysicalOperator> plan) {
-	throw NotImplementedException("IRCatalog PlanInsert");
-}
-PhysicalOperator &IRCatalog::PlanCreateTableAs(ClientContext &context, PhysicalPlanGenerator &planner,
-                                               LogicalCreateTable &op, PhysicalOperator &plan) {
-	throw NotImplementedException("IRCatalog PlanCreateTableAs");
-}
 PhysicalOperator &IRCatalog::PlanDelete(ClientContext &context, PhysicalPlanGenerator &planner, LogicalDelete &op,
                                         PhysicalOperator &plan) {
 	throw NotImplementedException("IRCatalog PlanDelete");
@@ -169,28 +215,77 @@ unique_ptr<SecretEntry> IRCatalog::GetIcebergSecret(ClientContext &context, cons
 	return secret_entry;
 }
 
-void IRCatalog::GetConfig(ClientContext &context) {
-	auto url = GetBaseUrl();
+void IRCatalog::AddDefaultSupportedEndpoints() {
+	// insert namespaces based on REST API spec.
+	// List namespaces
+	supported_urls.insert("GET /v1/{prefix}/namespaces");
+	// create namespace
+	supported_urls.insert("POST /v1/{prefix}/namespaces");
+	// Load metadata for a Namespace
+	supported_urls.insert("GET /v1/{prefix}/namespaces/{namespace}");
+	// Drop a namespace
+	supported_urls.insert("DELETE /v1/{prefix}/namespaces/{namespace}");
+	// set or remove properties on a namespace
+	supported_urls.insert("POST /v1/{prefix}/namespaces/{namespace}/properties");
+	// list all table identifiers
+	supported_urls.insert("GET /v1/{prefix}/namespaces/{namespace}/tables");
+	// create table in the namespace
+	supported_urls.insert("POST /v1/{prefix}/namespaces/{namespace}/tables");
+	// get table from the catalog
+	supported_urls.insert("GET /v1/{prefix}/namespaces/{namespace}/tables/{table}");
+	// commit updates to a tbale
+	supported_urls.insert("POST /v1/{prefix}/namespaces/{namespace}/tables/{table}");
+	// drop table from a catalog
+	supported_urls.insert("DELETE /v1/{prefix}/namespaces/{namespace}/tables/{table}");
+	// Register a table using given metadata file location.
+	supported_urls.insert("POST /v1/{prefix}/namespaces/{namespace}/register");
+	// send metrics report to this endpoint to be processed by the backend
+	supported_urls.insert("POST /v1/{prefix}/namespaces/{namespace}/tables/{table}/metrics");
+	// Rename a table from one identifier to another.
+	supported_urls.insert("POST /v1/{prefix}/tables/rename");
+	// commit updates to multiple tables in an atomic transaction
+	supported_urls.insert("POST /v1/{prefix}/transactions/commit)");
+}
+
+void IRCatalog::AddS3TablesEndpoints() {
+	// insert namespaces based on REST API spec.
+	// List namespaces
+	supported_urls.insert("GET /v1/{prefix}/namespaces");
+	// create namespace
+	supported_urls.insert("POST /v1/{prefix}/namespaces");
+	// Load metadata for a Namespace
+	supported_urls.insert("GET /v1/{prefix}/namespaces/{namespace}");
+	// Drop a namespace
+	supported_urls.insert("DELETE /v1/{prefix}/namespaces/{namespace}");
+	// list all table identifiers
+	supported_urls.insert("GET /v1/{prefix}/namespaces/{namespace}/tables");
+	// create table in the namespace
+	supported_urls.insert("POST /v1/{prefix}/namespaces/{namespace}/tables");
+	// get table from the catalog
+	supported_urls.insert("GET /v1/{prefix}/namespaces/{namespace}/tables/{table}");
+	// commit updates to a table
+	supported_urls.insert("POST /v1/{prefix}/namespaces/{namespace}/tables/{table}");
+	// drop table from a catalog
+	supported_urls.insert("DELETE /v1/{prefix}/namespaces/{namespace}/tables/{table}");
+	// table exists
+	supported_urls.insert("HEAD /v1/{prefix}/namespaces/{namespace}/tables/{table}");
+	// Rename a table from one identifier to another.
+	supported_urls.insert("POST /v1/{prefix}/tables/rename");
+	// commit updates to multiple tables in an atomic transaction
+	supported_urls.insert("POST /v1/{prefix}/transactions/commit)");
+}
+
+void IRCatalog::GetConfig(ClientContext &context, IcebergEndpointType &endpoint_type) {
 	// set the prefix to be empty. To get the config endpoint,
 	// we cannot add a default prefix.
 	D_ASSERT(prefix.empty());
-	url.AddPathComponent("config");
-	url.SetParam("warehouse", warehouse);
-	auto response = auth_handler->GetRequest(context, url);
-	if (response->status != HTTPStatusCode::OK_200) {
-		throw InvalidConfigurationException("Request to '%s' returned a non-200 status code (%s), with reason: %s",
-		                                    url.GetURL(), EnumUtil::ToString(response->status), response->reason);
-	}
-	std::unique_ptr<yyjson_doc, YyjsonDocDeleter> doc(ICUtils::api_result_to_doc(response->body));
-	auto *root = yyjson_doc_get_root(doc.get());
-	auto catalog_config = rest_api_objects::CatalogConfig::FromJSON(root);
+	auto catalog_config = IRCAPI::GetCatalogConfig(context, *this);
 
 	overrides = catalog_config.overrides;
 	defaults = catalog_config.defaults;
 	// save overrides and defaults.
 	// See https://iceberg.apache.org/docs/latest/configuration/#catalog-properties for sometimes used catalog
 	// properties
-
 	auto default_prefix_it = defaults.find("prefix");
 	auto override_prefix_it = overrides.find("prefix");
 
@@ -205,11 +300,22 @@ void IRCatalog::GetConfig(ClientContext &context) {
 		overrides.erase(override_prefix_it);
 	}
 
+	if (catalog_config.has_endpoints) {
+		for (auto &endpoint : catalog_config.endpoints) {
+			supported_urls.insert(endpoint);
+		}
+	}
+	// should be if s3tables
+	if (!catalog_config.has_endpoints && endpoint_type == IcebergEndpointType::AWS_S3TABLES) {
+		supported_urls.clear();
+		AddS3TablesEndpoints();
+	} else if (!catalog_config.has_endpoints) {
+		AddDefaultSupportedEndpoints();
+	}
+
 	if (prefix.empty()) {
 		DUCKDB_LOG(context, IcebergLogType, "No prefix found for catalog with warehouse value %s", warehouse);
 	}
-	// TODO: store optional endpoints param as well. We can enforce per catalog the endpoints that
-	//  are allowed to be hit
 }
 
 string IRCatalog::OptionalGetCachedValue(const string &url) {
@@ -253,8 +359,6 @@ bool IRCatalog::SetCachedValue(const string &url, const string &value,
 
 // namespace
 namespace {
-
-enum class IcebergEndpointType : uint8_t { AWS_S3TABLES, AWS_GLUE, INVALID };
 
 static IcebergEndpointType EndpointTypeFromString(const string &input) {
 	D_ASSERT(StringUtil::Lower(input) == input);
@@ -344,6 +448,17 @@ static void GlueAttach(ClientContext &context, IcebergAttachOptions &input) {
 	S3OrGlueAttachInternal(input, "glue", region.ToString());
 }
 
+void IRCatalog::SetAWSCatalogOptions(IcebergAttachOptions &attach_options,
+                                     case_insensitive_set_t &set_by_attach_options) {
+	attach_options.allows_deletes = false;
+	if (set_by_attach_options.find("support_stage_create") == set_by_attach_options.end()) {
+		attach_options.supports_stage_create = false;
+	}
+	if (set_by_attach_options.find("purge_requested") == set_by_attach_options.end()) {
+		attach_options.purge_requested = true;
+	}
+}
+
 unique_ptr<Catalog> IRCatalog::Attach(StorageExtensionInfo *storage_info, ClientContext &context, AttachedDatabase &db,
                                       const string &name, AttachInfo &info, AccessMode access_mode) {
 	IRCEndpointBuilder endpoint_builder;
@@ -357,6 +472,7 @@ unique_ptr<Catalog> IRCatalog::Attach(StorageExtensionInfo *storage_info, Client
 
 	// check if we have a secret provided
 	string secret_name;
+	case_insensitive_set_t set_by_attach_options;
 	//! First handle generic attach options
 	for (auto &entry : info.options) {
 		auto lower_name = StringUtil::Lower(entry.first);
@@ -371,21 +487,36 @@ unique_ptr<Catalog> IRCatalog::Attach(StorageExtensionInfo *storage_info, Client
 		} else if (lower_name == "endpoint") {
 			attach_options.endpoint = StringUtil::Lower(entry.second.ToString());
 			StringUtil::RTrim(attach_options.endpoint, "/");
+		} else if (lower_name == "support_stage_create") {
+			auto result = entry.second.DefaultCastAs(LogicalType::BOOLEAN).GetValue<bool>();
+			attach_options.supports_stage_create = result;
+			set_by_attach_options.insert("supports_stage_create");
+		} else if (lower_name == "support_nested_namespaces") {
+			attach_options.support_nested_namespaces =
+			    entry.second.DefaultCastAs(LogicalType::BOOLEAN).GetValue<bool>();
+			set_by_attach_options.insert("support_nested_namespaces");
+		} else if (lower_name == "purge_requested") {
+			attach_options.purge_requested = entry.second.DefaultCastAs(LogicalType::BOOLEAN).GetValue<bool>();
+			set_by_attach_options.insert("purge_requested");
 		} else {
 			attach_options.options.emplace(std::move(entry));
 		}
 	}
-
+	IcebergEndpointType endpoint_type = IcebergEndpointType::INVALID;
 	//! Then check any if the 'endpoint_type' is set, for any well known catalogs
 	if (!endpoint_type_string.empty()) {
-		auto endpoint_type = EndpointTypeFromString(endpoint_type_string);
+		endpoint_type = EndpointTypeFromString(endpoint_type_string);
 		switch (endpoint_type) {
 		case IcebergEndpointType::AWS_GLUE: {
 			GlueAttach(context, attach_options);
+			endpoint_type = IcebergEndpointType::AWS_GLUE;
+			SetAWSCatalogOptions(attach_options, set_by_attach_options);
 			break;
 		}
 		case IcebergEndpointType::AWS_S3TABLES: {
 			S3TablesAttach(attach_options);
+			endpoint_type = IcebergEndpointType::AWS_S3TABLES;
+			SetAWSCatalogOptions(attach_options, set_by_attach_options);
 			break;
 		}
 		default:
@@ -439,7 +570,7 @@ unique_ptr<Catalog> IRCatalog::Attach(StorageExtensionInfo *storage_info, Client
 
 	D_ASSERT(auth_handler);
 	auto catalog = make_uniq<IRCatalog>(db, access_mode, std::move(auth_handler), attach_options);
-	catalog->GetConfig(context);
+	catalog->GetConfig(context, endpoint_type);
 	return std::move(catalog);
 }
 

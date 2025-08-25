@@ -16,6 +16,7 @@ void BaseManifestReader::Initialize(unique_ptr<AvroScan> scan_p) {
 	finished = false;
 	offset = 0;
 	vector_mapping.clear();
+	partition_fields.clear();
 
 	auto &multi_file_local_state = scan->local_state->Cast<MultiFileLocalState>();
 	auto &columns = multi_file_local_state.reader->columns;

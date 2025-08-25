@@ -32,14 +32,15 @@ static string AddHttpHostIfMissing(const string &url) {
 	return "http://" + url;
 }
 
-unique_ptr<HTTPResponse> APIUtils::DeleteRequest(ClientContext &context, const string &url, const string &token) {
+unique_ptr<HTTPResponse> APIUtils::DeleteRequest(ClientContext &context, const IRCEndpointBuilder &endpoint_builder,
+                                                 const string &token) {
 	auto &db = DatabaseInstance::GetDatabase(context);
 
 	HTTPHeaders headers(db);
 	headers.Insert("X-Iceberg-Access-Delegation", "vended-credentials");
 	headers.Insert("Authorization", StringUtil::Format("Bearer %s", token));
 
-	string request_url = AddHttpHostIfMissing(url);
+	string request_url = AddHttpHostIfMissing(endpoint_builder.GetURL());
 	auto &http_util = HTTPUtil::Get(db);
 	unique_ptr<HTTPParams> params;
 	params = http_util.InitializeParameters(context, request_url);
@@ -57,6 +58,7 @@ unique_ptr<HTTPResponse> APIUtils::PostRequest(ClientContext &context, const str
 	HTTPHeaders headers(db);
 	headers.Insert("X-Iceberg-Access-Delegation", "vended-credentials");
 	headers.Insert("Content-Type", StringUtil::Format("application/%s", content_type));
+
 	if (!token.empty()) {
 		headers.Insert("Authorization", StringUtil::Format("Bearer %s", token));
 	}

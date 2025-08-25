@@ -41,7 +41,8 @@ select count(*) from s3_catalog.tpch_sf1.region;
 5
 
 # make sure we log calls to IRC
-query I
-select count(*) > 10 from duckdb_logs_parsed('HTTP') where request.type = 'GET' and request.url like '%https://s3tables%/iceberg-testing/namespaces/%'
+query II
+select request.url, request.type from duckdb_logs_parsed('HTTP') where request.type = 'GET' and request.url like '%/iceberg-testing/namespaces/%'
 ----
-49
+https://s3tables.us-east-2.amazonaws.com/iceberg/v1/arn:aws:s3tables:us-east-2:840140254803:bucket/iceberg-testing/namespaces/tpch_sf1/tables	GET
+https://s3tables.us-east-2.amazonaws.com/iceberg/v1/arn:aws:s3tables:us-east-2:840140254803:bucket/iceberg-testing/namespaces/tpch_sf1/tables/region	GET

@@ -1,6 +1,6 @@
 services:
   rest:
-    image: tabulario/iceberg-rest
+    image: apache/iceberg-rest-fixture
     container_name: iceberg-rest
     networks:
       iceberg_net:
