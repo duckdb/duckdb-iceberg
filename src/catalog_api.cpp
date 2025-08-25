@@ -100,26 +100,44 @@ rest_api_objects::LoadTableResult IRCAPI::GetTable(ClientContext &context, IRCat
 vector<rest_api_objects::TableIdentifier> IRCAPI::GetTables(ClientContext &context, IRCatalog &catalog,
                                                             const IRCSchemaEntry &schema) {
 	auto schema_name = GetEncodedSchemaName(schema.namespace_items);
+	vector<rest_api_objects::TableIdentifier> all_identifiers;
+	string page_token;
 
-	auto url_builder = catalog.GetBaseUrl();
-	url_builder.AddPathComponent(catalog.prefix);
-	url_builder.AddPathComponent("namespaces");
-	url_builder.AddPathComponent(schema_name);
-	url_builder.AddPathComponent("tables");
-	auto response = catalog.auth_handler->GetRequest(context, url_builder);
-	if (!response->Success()) {
-		auto url = url_builder.GetURL();
-		ThrowException(url, *response, "GET");
-	}
+	do {
+		auto url_builder = catalog.GetBaseUrl();
+		url_builder.AddPathComponent(catalog.prefix);
+		url_builder.AddPathComponent("namespaces");
+		url_builder.AddPathComponent(schema_name);
+		url_builder.AddPathComponent("tables");
+		if (!page_token.empty()) {
+			url_builder.SetParam("pageToken", page_token);
+		}
+		auto response = catalog.auth_handler->GetRequest(context, url_builder);
+		if (!response->Success()) {
+			auto url = url_builder.GetURL();
+			ThrowException(url, *response, "GET");
+		}
 
-	std::unique_ptr<yyjson_doc, YyjsonDocDeleter> doc(ICUtils::api_result_to_doc(response->body));
-	auto *root = yyjson_doc_get_root(doc.get());
-	auto list_tables_response = rest_api_objects::ListTablesResponse::FromJSON(root);
+		std::unique_ptr<yyjson_doc, YyjsonDocDeleter> doc(ICUtils::api_result_to_doc(response->body));
+		auto *root = yyjson_doc_get_root(doc.get());
+		auto list_tables_response = rest_api_objects::ListTablesResponse::FromJSON(root);
 
-	if (!list_tables_response.has_identifiers) {
-		throw NotImplementedException("List of 'identifiers' is missing, missing support for Iceberg V1");
-	}
-	return std::move(list_tables_response.identifiers);
+		if (!list_tables_response.has_identifiers) {
+			throw NotImplementedException("List of 'identifiers' is missing, missing support for Iceberg V1");
+		}
+
+		all_identifiers.insert(all_identifiers.end(), 
+		                      std::make_move_iterator(list_tables_response.identifiers.begin()),
+		                      std::make_move_iterator(list_tables_response.identifiers.end()));
+
+		if (list_tables_response.has_next_page_token) {
+			page_token = list_tables_response.next_page_token.value;
+		} else {
+			page_token.clear();
+		}
+	} while (!page_token.empty());
+
+	return all_identifiers;
 }
 
 vector<IRCAPISchema> IRCAPI::GetSchemas(ClientContext &context, IRCatalog &catalog, const vector<string> &parent) {
