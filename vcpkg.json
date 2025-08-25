@@ -2,7 +2,7 @@
 	"dependencies": [
 		"vcpkg-cmake",
 		"avro-c",
-		"curl",
+		"curl","openssl",
 		"roaring",
 		{
 			"name": "aws-sdk-cpp",
