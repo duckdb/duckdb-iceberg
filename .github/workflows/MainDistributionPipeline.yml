@@ -12,8 +12,8 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  duckdb-stable-build:
-    name: Build extension binaries
+  duckdb-wasm-build:
+    name: Build extension binaries for duckdb-wasm (experimental)
     uses: duckdb/extension-ci-tools/.github/workflows/_extension_distribution.yml@main
     with:
       extension_name: iceberg
@@ -22,9 +22,9 @@ jobs:
       exclude_archs: 'linux_amd64;linux_arm64;linux_amd64_musl;osx_amd64;osx_arm64;windows_amd64;windows_amd64_mingw'
       extra_toolchains: 'python3'
 
-  duckdb-stable-deploy:
-    name: Deploy extension binaries
-    needs: duckdb-stable-build
+  duckdb-wasm-deploy:
+    name: Deploy extension binaries for duckdb-wasm (experimental)
+    needs: duckdb-wasm-build
     uses: duckdb/extension-ci-tools/.github/workflows/_extension_deploy.yml@main
     secrets: inherit
     with:
@@ -32,5 +32,5 @@ jobs:
       duckdb_version: v1.3.2
       ci_tools_version: main
       exclude_archs: 'linux_amd64;linux_arm64;linux_amd64_musl;osx_amd64;osx_arm64;windows_amd64;windows_amd64_mingw'
-      deploy_latest: true
-      deploy_versioned: true
+      deploy_latest: ${{ github.ref == 'refs/heads/wasm' }}
+      deploy_versioned: ${{ github.ref == 'refs/heads/wasm' }}

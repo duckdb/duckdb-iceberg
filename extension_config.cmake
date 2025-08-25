@@ -20,8 +20,8 @@ duckdb_extension_load(avro
         GIT_TAG 180e41e8ad13b8712d207785a6bca0aa39341040
 )
 
-if (NOT EMSCRIPTEN)
 ################## AWS
+if (NOT EMSCRIPTEN)
 if (NOT MINGW)
     duckdb_extension_load(aws
             LOAD_TESTS

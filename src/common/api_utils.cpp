@@ -62,6 +62,7 @@ unique_ptr<HTTPResponse> APIUtils::PostRequest(ClientContext &context, const str
 	for (auto it : additional_headers) {
 		headers.Insert(it.first, it.second);
 	}
+
 	if (!token.empty()) {
 		headers.Insert("Authorization", StringUtil::Format("Bearer %s", token));
 	}
