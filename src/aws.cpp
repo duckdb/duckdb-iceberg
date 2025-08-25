@@ -95,7 +95,6 @@ std::shared_ptr<Aws::Http::HttpRequest> AWSInput::CreateSignedRequest(Aws::Http:
                                                                       string content_type) {
 
 	// auto request = Aws::Http::CreateHttpRequest(uri, method,Aws::Utils::Stream::DefaultResponseStreamFactoryMethod);
-	// std::cout << "CreateHttpRequest done\n";
 	//	request->SetUserAgent(user_agent);
 
 	if (!body.empty()) {
@@ -238,9 +237,9 @@ std::shared_ptr<Aws::Http::HttpRequest> AWSInput::CreateSignedRequest(Aws::Http:
 		auto has_setting= context.TryGetCurrentSetting("experimental_s3_tables_global_proxy", val);
 		if (has_setting) {
 			request_url = val.GetValue<string>() + request_url;
+		} else {
+			request_url = "https://" + request_url;
 		}
-std::cout << "I am here\n";
-		request_url = "https://" + request_url;
 
 		params = http_util.InitializeParameters(context, request_url);
 
