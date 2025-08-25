@@ -1,12 +1,10 @@
 #include "iceberg_logging.hpp"
 #include "mbedtls_wrapper.hpp"
 #include "aws.hpp"
+#include "hash_utils.hpp"
 #include "duckdb/common/http_util.hpp"
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/common/exception/http_exception.hpp"
-
-typedef unsigned char hash_str[64];
-typedef unsigned char hash_bytes[32];
 
 #include "duckdb/main/client_data.hpp"
 
@@ -16,28 +14,6 @@ typedef unsigned char hash_bytes[32];
 #include <iostream>
 
 namespace duckdb {
-
-void sha256(const char *in, size_t in_len, hash_bytes &out) {
-	duckdb_mbedtls::MbedTlsWrapper::ComputeSha256Hash(in, in_len, (char *)out);
-}
-
-void hmac256(const std::string &message, const char *secret, size_t secret_len, hash_bytes &out) {
-	duckdb_mbedtls::MbedTlsWrapper::Hmac256(secret, secret_len, message.data(), message.size(), (char *)out);
-}
-
-void hmac256(std::string message, hash_bytes secret, hash_bytes &out) {
-	hmac256(message, (char *)secret, sizeof(hash_bytes), out);
-}
-
-void hex256(hash_bytes &in, hash_str &out) {
-	const char *hex = "0123456789abcdef";
-	unsigned char *pin = in;
-	unsigned char *pout = out;
-	for (; pin < in + sizeof(in); pout += 2, pin++) {
-		pout[0] = hex[(*pin >> 4) & 0xF];
-		pout[1] = hex[*pin & 0xF];
-	}
-}
 
 namespace {
 
@@ -102,17 +78,13 @@ Aws::Client::ClientConfiguration AWSInput::BuildClientConfig() {
 }
 
 Aws::Http::URI AWSInput::BuildURI() {
-	std::cout << "BuildURI\n";
 	Aws::Http::URI uri;
 	uri.SetScheme(Aws::Http::Scheme::HTTPS);
 	uri.SetAuthority(authority);
 	for (auto &segment : path_segments) {
-		std::cout << segment << "\n";
 		uri.AddPathSegment(segment);
 	}
 	for (auto &param : query_string_parameters) {
-		std::cout << "param\n";
-		// std::cout << param.first.c_str() << " - " << param.second.c_str() << "\n";
 		uri.AddQueryStringParameter(param.first.c_str(), param.second.c_str());
 	}
 	return uri;
@@ -122,15 +94,14 @@ std::shared_ptr<Aws::Http::HttpRequest> AWSInput::CreateSignedRequest(Aws::Http:
                                                                       const Aws::Http::URI &uri, const string &body,
                                                                       string content_type) {
 
-	std::cout << "CreateHttpRequest\n";
-	std::cout << uri.GetURIString() << "\n";
-	std::cout << body << "\n";
 	// auto request = Aws::Http::CreateHttpRequest(uri, method,Aws::Utils::Stream::DefaultResponseStreamFactoryMethod);
 	// std::cout << "CreateHttpRequest done\n";
 	//	request->SetUserAgent(user_agent);
 
-	/*	if (!body.empty()) {
+		if (!body.empty()) {
 	{
+		throw NotImplementedException("CreateSignedRequest with non-empty body is not supported at this time");
+/*
 	        auto bodyStream = Aws::MakeShared<Aws::StringStream>("");
 	        *bodyStream << body;
 	        request->AddContentBody(bodyStream);
@@ -138,8 +109,8 @@ std::shared_ptr<Aws::Http::HttpRequest> AWSInput::CreateSignedRequest(Aws::Http:
 	        if (!content_type.empty()) {
 	            request->SetHeaderValue("Content-Type", content_type);
 	        }
-	    }
 	*/
+	    }
 
 	// std::shared_ptr<Aws::Auth::AWSCredentialsProviderChain> provider;
 	// provider = std::make_shared<DuckDBSecretCredentialProvider>(key_id, secret, session_token);
@@ -206,7 +177,6 @@ unique_ptr<HTTPResponse> AWSInput::ExecuteRequest(ClientContext &context, Aws::H
 				else
 					YY += "%3A";
 			}
-			std::cout << XX << "\t" << YY << "\n";
 			XX = YY;
 		}
 
@@ -233,7 +203,7 @@ unique_ptr<HTTPResponse> AWSInput::ExecuteRequest(ClientContext &context, Aws::H
 		//	}
 
 		canonical_request += "\n\n" + signed_headers + "\n" + payload_hash;
-		std::cout << canonical_request << "\nCANONICAL_REQUEST_END\n";
+	
 		sha256(canonical_request.c_str(), canonical_request.length(), canonical_request_hash);
 
 		hex256(canonical_request_hash, canonical_request_hash_str);
@@ -241,7 +211,6 @@ unique_ptr<HTTPResponse> AWSInput::ExecuteRequest(ClientContext &context, Aws::H
 		                      service + "/aws4_request\n" +
 		                      string((char *)canonical_request_hash_str, sizeof(hash_str));
 
-		std::cout << string_to_sign << "\nSTRING_TO_SIGN_END\n";
 		// compute signature
 		hash_bytes k_date, k_region, k_service, signing_key, signature;
 		hash_str signature_str;
@@ -266,7 +235,7 @@ unique_ptr<HTTPResponse> AWSInput::ExecuteRequest(ClientContext &context, Aws::H
 	params = http_util.InitializeParameters(context, request_url);
 
 	if (!body.empty()) {
-		std::cout << "body not empty\n";
+		throw NotImplementedException("CreateSignedRequest with non-empty body is not supported at this time");
 		/*
 		                auto bodyStream = Aws::MakeShared<Aws::StringStream>("");
 		                *bodyStream << body;
@@ -280,44 +249,6 @@ unique_ptr<HTTPResponse> AWSInput::ExecuteRequest(ClientContext &context, Aws::H
 
 	GetRequestInfo get_request(request_url, res, *params, nullptr, nullptr);
 	return http_util.Request(get_request);
-
-	std::cout << "ExecuteRequest\n";
-	//	InitAWSAPI();
-	std::cout << "BuildURI\n";
-	std::cout << "CreateSignedRequest\n";
-	auto request = CreateSignedRequest(method, uri, body, content_type);
-	std::cout << "CreateSignedRequest done\n";
-
-	LogAWSRequest(context, request);
-	auto result = make_uniq<HTTPResponse>(HTTPStatusCode::INVALID);
-
-	return result;
-	/*
-	    auto httpClient = Aws::Http::CreateHttpClient(clientConfig);
-	    auto response = httpClient->MakeRequest(request);
-	    auto resCode = response->GetResponseCode();
-
-	    DUCKDB_LOG(context, IcebergLogType,
-	               "%s %s (response %d) (signed with key_id '%s' for service '%s', in region '%s')",
-	               Aws::Http::HttpMethodMapper::GetNameForHttpMethod(method), uri.GetURIString(), resCode, key_id,
-	               service.c_str(), region.c_str());
-
-	    auto result = make_uniq<HTTPResponse>(resCode == Aws::Http::HttpResponseCode::REQUEST_NOT_MADE
-	                                              ? HTTPStatusCode::INVALID
-	                                              : HTTPStatusCode(static_cast<idx_t>(resCode)));
-
-	    result->url = uri.GetURIString();
-	    if (resCode == Aws::Http::HttpResponseCode::REQUEST_NOT_MADE) {
-	        D_ASSERT(response->HasClientError());
-	        result->reason = response->GetClientErrorMessage();
-	        result->success = false;
-	    } else {
-	        Aws::StringStream resBody;
-	        resBody << response->GetResponseBody().rdbuf();
-	        result->body = resBody.str();
-	    }
-	    return result;
-	*/
 }
 
 unique_ptr<HTTPResponse> AWSInput::GetRequest(ClientContext &context) {
