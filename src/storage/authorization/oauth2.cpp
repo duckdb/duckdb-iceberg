@@ -66,10 +66,13 @@ string OAuth2Authorization::GetToken(ClientContext &context, const string &grant
 	string credentials = StringUtil::Format("%s:%s", client_id, client_secret);
 	string_t credentials_blob(credentials.data(), credentials.size());
 
+	unordered_map<string, string> headers;
+	headers.emplace("Authorization", StringUtil::Format("Basic %s", Blob::ToBase64(credentials_blob)));
+
 	string post_data = StringUtil::Format("%s", StringUtil::Join(parameters, "&"));
 	std::unique_ptr<yyjson_doc, YyjsonDocDeleter> doc;
 	try {
-		auto response = APIUtils::PostRequest(context, uri, post_data);
+		auto response = APIUtils::PostRequest(context, uri, post_data, headers);
 		doc = std::unique_ptr<yyjson_doc, YyjsonDocDeleter>(ICUtils::api_result_to_doc(response->body));
 	} catch (std::exception &ex) {
 		ErrorData error(ex);
@@ -110,7 +113,8 @@ unique_ptr<HTTPResponse> OAuth2Authorization::PostRequest(ClientContext &context
                                                           const IRCEndpointBuilder &endpoint_builder,
                                                           const string &body) {
 	auto url = endpoint_builder.GetURL();
-	return APIUtils::PostRequest(context, url, body, "json", token);
+	unordered_map<string, string> empty_headers;
+	return APIUtils::PostRequest(context, url, body, empty_headers, "json", token);
 }
 
 unique_ptr<OAuth2Authorization> OAuth2Authorization::FromAttachOptions(ClientContext &context,
