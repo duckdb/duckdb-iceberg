@@ -65,9 +65,13 @@ jobs:
           AWS_ACCESS_KEY_ID: ${{secrets.S3_ICEBERG_TEST_USER_KEY_ID}}
           AWS_SECRET_ACCESS_KEY: ${{secrets.S3_ICEBERG_TEST_USER_SECRET}}
           AWS_DEFAULT_REGION: ${{secrets.S3_ICEBERG_TEST_USER_REGION}}
+          SNOWFLAKE_KEY_ID_GCS: ${{secrets.SNOWFLAKE_KEY_ID_GCS}}
+          SNOWFLAKE_SECRET_KEY_GCS: ${{secrets.SNOWFLAKE_SECRET_KEY_GCS}}
+          SNOWFLAKE_CATALOG_URI_GCS: ${{secrets.SNOWFLAKE_CATALOG_URI_GCS}}
           R2_TOKEN: ${{secrets.r2_token}}
           ICEBERG_REMOTE_INSERT_READY: 1
           ICEBERG_AWS_REMOTE_AVAILABLE: 1
+          ICEBERG_SNOWFLAKE_REMOTE_AVAILABLE: 1
         run: |
           make test_release
 

@@ -15,8 +15,30 @@ const string &IcebergTableInformation::BaseFilePath() const {
 	return load_table_result.metadata.location;
 }
 
-static void ParseConfigOptions(const case_insensitive_map_t<string> &config, case_insensitive_map_t<Value> &options) {
-	//! Set of recognized config parameters and the duckdb secret option that matches it.
+static string DetectStorageType(const string &location) {
+	// Detect storage type from the location URL
+	if (StringUtil::StartsWith(location, "gs://") || StringUtil::Contains(location, "storage.googleapis.com")) {
+		return "gcs";
+	} else if (StringUtil::StartsWith(location, "s3://") || StringUtil::StartsWith(location, "s3a://")) {
+		return "s3";
+	} else if (StringUtil::StartsWith(location, "abfs://") || StringUtil::StartsWith(location, "az://")) {
+		return "azure";
+	}
+	// Default to s3 for backward compatibility
+	return "s3";
+}
+
+static void ParseGCSConfigOptions(const case_insensitive_map_t<string> &config,
+                                  case_insensitive_map_t<Value> &options) {
+	// Parse GCS-specific configuration.
+	auto token_it = config.find("gcs.oauth2.token");
+	if (token_it != config.end()) {
+		options["bearer_token"] = token_it->second;
+	}
+}
+
+static void ParseS3ConfigOptions(const case_insensitive_map_t<string> &config, case_insensitive_map_t<Value> &options) {
+	// Set of recognized S3 config parameters and the duckdb secret option that matches it.
 	static const case_insensitive_map_t<string> config_to_option = {{"s3.access-key-id", "key_id"},
 	                                                                {"s3.secret-access-key", "secret"},
 	                                                                {"s3.session-token", "session_token"},
@@ -25,14 +47,26 @@ static void ParseConfigOptions(const case_insensitive_map_t<string> &config, cas
 	                                                                {"client.region", "region"},
 	                                                                {"s3.endpoint", "endpoint"}};
 
-	if (config.empty()) {
-		return;
-	}
 	for (auto &entry : config) {
 		auto it = config_to_option.find(entry.first);
 		if (it != config_to_option.end()) {
 			options[it->second] = entry.second;
 		}
+	}
+}
+
+static void ParseConfigOptions(const case_insensitive_map_t<string> &config, case_insensitive_map_t<Value> &options,
+                               const string &storage_type = "s3") {
+	if (config.empty()) {
+		return;
+	}
+
+	// Parse storage-specific config options
+	if (storage_type == "gcs") {
+		ParseGCSConfigOptions(config, options);
+	} else {
+		// Default to S3 parsing for backward compatibility
+		ParseS3ConfigOptions(config, options);
 	}
 
 	auto it = config.find("s3.path-style-access");
@@ -105,18 +139,19 @@ IRCAPITableCredentials IcebergTableInformation::GetVendedCredentials(ClientConte
 		}
 	}
 
-	// Mapping from config key to a duckdb secret option
+	// Detect storage type from metadata location
+	const auto &metadata_location = load_table_result.metadata.location;
+	string storage_type = DetectStorageType(metadata_location);
 
+	// Mapping from config key to a duckdb secret option
 	case_insensitive_map_t<Value> config_options;
 	//! TODO: apply the 'defaults' retrieved from the /v1/config endpoint
 	config_options.insert(user_defaults.begin(), user_defaults.end());
 
 	if (load_table_result.has_config) {
 		auto &config = load_table_result.config;
-		ParseConfigOptions(config, config_options);
+		ParseConfigOptions(config, config_options, storage_type);
 	}
-
-	const auto &metadata_location = load_table_result.metadata.location;
 
 	if (load_table_result.has_storage_credentials) {
 		auto &storage_credentials = load_table_result.storage_credentials;
@@ -133,12 +168,12 @@ IRCAPITableCredentials IcebergTableInformation::GetVendedCredentials(ClientConte
 			create_secret_input.scope.push_back(ignore_credential_prefix ? metadata_location : credential.prefix);
 			create_secret_input.name = StringUtil::Format("%s_%d_%s", secret_base_name, index, credential.prefix);
 
-			create_secret_input.type = "s3";
+			create_secret_input.type = storage_type;
 			create_secret_input.provider = "config";
 			create_secret_input.storage_type = "memory";
 			create_secret_input.options = config_options;
 
-			ParseConfigOptions(credential.config, create_secret_input.options);
+			ParseConfigOptions(credential.config, create_secret_input.options, storage_type);
 			//! TODO: apply the 'overrides' retrieved from the /v1/config endpoint
 			result.storage_credentials.push_back(create_secret_input);
 		}
@@ -154,7 +189,7 @@ IRCAPITableCredentials IcebergTableInformation::GetVendedCredentials(ClientConte
 		//! TODO: apply the 'overrides' retrieved from the /v1/config endpoint
 		config.options = config_options;
 		config.name = secret_base_name;
-		config.type = "s3";
+		config.type = storage_type;
 		config.provider = "config";
 		config.storage_type = "memory";
 	}
