@@ -4,6 +4,22 @@
 
 namespace duckdb {
 
+yyjson_val *ICUtils::get_error_message(const string &api_result) {
+	auto *doc = yyjson_read(api_result.c_str(), api_result.size(), 0);
+	auto *root = yyjson_doc_get_root(doc);
+	auto *error = yyjson_obj_get(root, "error");
+	if (error == nullptr) {
+		return nullptr;
+	}
+	auto message = yyjson_obj_get(error, "message");
+	auto type = yyjson_obj_get(error, "type");
+	auto code = yyjson_obj_get(error, "code");
+	if (message != nullptr && type != nullptr && code != nullptr) {
+		return root;
+	}
+	return nullptr;
+}
+
 yyjson_doc *ICUtils::api_result_to_doc(const string &api_result) {
 	auto *doc = yyjson_read(api_result.c_str(), api_result.size(), 0);
 	auto *root = yyjson_doc_get_root(doc);
