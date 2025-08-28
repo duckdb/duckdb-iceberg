@@ -32,6 +32,7 @@ public:
 	ICTableEntry(IcebergTableInformation &table_info, Catalog &catalog, SchemaCatalogEntry &schema,
 	             CreateTableInfo &info);
 
+	static virtual_column_map_t VirtualColumns();
 	virtual_column_map_t GetVirtualColumns() const override;
 	vector<column_t> GetRowIdColumns() const override;
 

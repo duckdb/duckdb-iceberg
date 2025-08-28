@@ -12,13 +12,15 @@ duckdb_extension_load(icu)
 duckdb_extension_load(ducklake
         LOAD_TESTS
         GIT_URL https://github.com/duckdb/ducklake
-        GIT_TAG dfe2e3c6ed7154514f6730e2db30b17fb506afaa
+	GIT_TAG d2392c36f33151cf5cdd7d006375b0b669bd44ac
+	APPLY_PATCHES
 )
 
 duckdb_extension_load(avro
-        LOAD_TESTS
-		GIT_URL https://github.com/duckdb/duckdb-avro
-		GIT_TAG b75cb5cea43d3e2bee6f5d0f377aa99354dd868a
+	LOAD_TESTS
+	GIT_URL https://github.com/duckdb/duckdb-avro
+	GIT_TAG 0d7af391bd0aa201b2bdcfb994b7a575ad810155
+	APPLY_PATCHES
 )
 
 if (NOT EMSCRIPTEN)

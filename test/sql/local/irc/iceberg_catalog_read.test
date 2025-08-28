@@ -106,11 +106,6 @@ update my_datalake.default.table_unpartitioned set number = 5 where number < 5;
 <REGEX>:.*Not implemented Error.*
 
 statement error
-delete from my_datalake.default.table_unpartitioned where number < 5;
-----
-<REGEX>:.*Not implemented Error.*
-
-statement error
 Alter table my_datalake.default.table_more_deletes add column new_column INTEGER default 10;
 ----
 <REGEX>:.*Not implemented Error.*

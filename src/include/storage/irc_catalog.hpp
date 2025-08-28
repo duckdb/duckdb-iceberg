@@ -1,4 +1,3 @@
-
 #pragma once
 
 #include "duckdb/catalog/catalog.hpp"

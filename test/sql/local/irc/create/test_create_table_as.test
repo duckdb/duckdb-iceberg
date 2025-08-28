@@ -44,6 +44,9 @@ ATTACH '' AS my_datalake (
 statement ok
 use my_datalake.default;
 
+statement ok
+DROP TABLE IF EXISTS all_types_table_primitives_2;
+
 # create primitive type table from test all types
 statement ok
 create table all_types_table_primitives_2 as select
@@ -98,6 +101,9 @@ varchar,
 blob from test_all_types();
 ----
 
+statement ok
+drop table if exists nested_types_2;
+
 # create nested types table from test all types
 statement ok
 create table nested_types_2 as select
@@ -144,6 +150,9 @@ struct_of_fixed_array,
 list_of_fixed_int_array from test_all_types();
 ----
 <REGEX>:.*Please cast to LIST.*
+
+statement ok
+drop table if exists fixed_array_table_as_list;
 
 # casting to list works
 statement ok

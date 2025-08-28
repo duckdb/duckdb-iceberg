@@ -43,6 +43,7 @@ void IcebergTransactionData::AddSnapshot(IcebergSnapshotOperationType operation,
 
 	//! Construct the snapshot
 	IcebergSnapshot new_snapshot;
+	new_snapshot.operation = operation;
 	new_snapshot.snapshot_id = snapshot_id;
 	new_snapshot.sequence_number = sequence_number;
 	new_snapshot.schema_id = table_metadata.current_schema_id;
@@ -69,21 +70,30 @@ void IcebergTransactionData::AddSnapshot(IcebergSnapshotOperationType operation,
 
 	manifest.manifest_path = manifest_file_path;
 	manifest.sequence_number = sequence_number;
-	manifest.content = IcebergManifestContentType::DATA;
+	if (operation == IcebergSnapshotOperationType::APPEND) {
+		manifest.content = IcebergManifestContentType::DATA;
+	} else if (operation == IcebergSnapshotOperationType::DELETE) {
+		manifest.content = IcebergManifestContentType::DELETE;
+	}
 	manifest.added_files_count = data_files.size();
-	manifest.existing_files_count = 0;
 	manifest.deleted_files_count = 0;
+	manifest.existing_files_count = 0;
 	manifest.added_rows_count = 0;
 	manifest.existing_rows_count = 0;
-	manifest.deleted_rows_count = 0;
 	//! TODO: support partitions
 	manifest.partition_spec_id = 0;
 	//! manifest.partitions = CreateManifestPartition();
 
 	//! Add the data files
 	for (auto &data_file : data_files) {
-		manifest.added_rows_count += data_file.record_count;
+		if (operation == IcebergSnapshotOperationType::APPEND) {
+			manifest.added_rows_count += data_file.record_count;
+		} else if (operation == IcebergSnapshotOperationType::DELETE) {
+			manifest.deleted_rows_count += data_file.record_count;
+		}
 		data_file.sequence_number = snapshot.sequence_number;
+		data_file.snapshot_id = snapshot.snapshot_id;
+		data_file.partition_spec_id = manifest.partition_spec_id;
 		if (!manifest.has_min_sequence_number || data_file.sequence_number < manifest.min_sequence_number) {
 			manifest.min_sequence_number = data_file.sequence_number;
 		}
