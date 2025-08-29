@@ -151,6 +151,9 @@ unique_ptr<HTTPResponse> AWSInput::ExecuteRequest(ClientContext &context, Aws::H
 			res["x-amz-security-token"] = session_token;
 		}
 
+		if (!content_type.empty()) {
+			res["Content-Type"] = content_type;
+		}
 		string signed_headers = "";
 		hash_bytes canonical_request_hash;
 		hash_str canonical_request_hash_str;
@@ -184,9 +187,9 @@ unique_ptr<HTTPResponse> AWSInput::ExecuteRequest(ClientContext &context, Aws::H
 			canonical_request += uri.GetQueryString().substr(1);
 		}
 
-		// if (content_type.length() > 0) {
-		//		canonical_request += "\ncontent-type:" + content_type;
-		//	}
+		if (content_type.length() > 0) {
+			canonical_request += "\ncontent-type:" + content_type;
+		}
 		string host = "s3tables." + region + ".amazonaws.com";
 		canonical_request +=
 		    "\nhost:" + host + "\nx-amz-content-sha256:" + payload_hash + "\nx-amz-date:" + datetime_now;
@@ -202,7 +205,6 @@ unique_ptr<HTTPResponse> AWSInput::ExecuteRequest(ClientContext &context, Aws::H
 		//	}
 
 		canonical_request += "\n\n" + signed_headers + "\n" + payload_hash;
-
 		sha256(canonical_request.c_str(), canonical_request.length(), canonical_request_hash);
 
 		hex256(canonical_request_hash, canonical_request_hash_str);
@@ -253,8 +255,16 @@ unique_ptr<HTTPResponse> AWSInput::ExecuteRequest(ClientContext &context, Aws::H
 		*/
 	}
 
-	GetRequestInfo get_request(request_url, res, *params, nullptr, nullptr);
-	return http_util.Request(get_request);
+	if (method == Aws::Http::HttpMethod::HTTP_GET) {
+		GetRequestInfo get_request(request_url, res, *params, nullptr, nullptr);
+		return http_util.Request(get_request);
+	}
+	if (method == Aws::Http::HttpMethod::HTTP_POST) {
+		PostRequestInfo post_request(request_url, res, *params, reinterpret_cast<const_data_ptr_t>(body.c_str()),
+		                             body.size());
+		return http_util.Request(post_request);
+	}
+	throw NotImplementedException("Only GET and POST are implemented at the moment");
 }
 
 unique_ptr<HTTPResponse> AWSInput::GetRequest(ClientContext &context) {
