@@ -58,21 +58,27 @@ jobs:
           AWS_DEFAULT_REGION: ${{secrets.S3_ICEBERG_TEST_USER_REGION}}
           R2_TOKEN: ${{secrets.r2_token}}
         run: | 
-          python3 scripts/create_s3_insert_table.py --action=delete-and-create --catalogs=s3tables,r2
+          python3 scripts/create_s3_insert_table.py --action=delete-and-create --catalogs=s3tables,r2,glue
 
       - name: Test with rest catalog
         env:
           AWS_ACCESS_KEY_ID: ${{secrets.S3_ICEBERG_TEST_USER_KEY_ID}}
           AWS_SECRET_ACCESS_KEY: ${{secrets.S3_ICEBERG_TEST_USER_SECRET}}
           AWS_DEFAULT_REGION: ${{secrets.S3_ICEBERG_TEST_USER_REGION}}
+          SNOWFLAKE_KEY_ID_GCS: ${{secrets.SNOWFLAKE_KEY_ID_GCS}}
+          SNOWFLAKE_SECRET_KEY_GCS: ${{secrets.SNOWFLAKE_SECRET_KEY_GCS}}
+          SNOWFLAKE_KEY_ID_S3: ${{secrets.SNOWFLAKE_KEY_ID_S3}}
+          SNOWFLAKE_SECRET_KEY_S3: ${{secrets.SNOWFLAKE_SECRET_KEY_S3}}
+          SNOWFLAKE_CATALOG_URI_GCS: ${{secrets.SNOWFLAKE_CATALOG_URI_GCS}}
           R2_TOKEN: ${{secrets.r2_token}}
           ICEBERG_REMOTE_INSERT_READY: 1
           ICEBERG_AWS_REMOTE_AVAILABLE: 1
+          ICEBERG_SNOWFLAKE_REMOTE_AVAILABLE: 1
         run: |
           make test_release
 
       - name: File issue if error
-        if: failure()
+        if: ${{ contains(github.ref_name, 'main') && failure() }}
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
