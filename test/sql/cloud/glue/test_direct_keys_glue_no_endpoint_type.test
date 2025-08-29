@@ -18,10 +18,6 @@ require httpfs
 
 require aws
 
-# TODO: re-enable these tests once we know what account has these
-#  credentials, and we can grant them access to the glue catalog
-mode skip
-
 # test using keys directory
 statement ok
 CREATE SECRET s1 (
@@ -38,10 +34,6 @@ attach '840140254803:s3tablescatalog/pyiceberg-blog-bucket' as my_datalake (
 	ENDPOINT 'glue.us-east-1.amazonaws.com/iceberg'
 );
 
-query T nosort tables_1
-show all tables;
-----
-
 statement ok
 SELECT count(*) FROM my_datalake.myblognamespace.lineitem;
 
@@ -50,8 +42,6 @@ drop secret s1;
 
 statement ok
 detach my_datalake;
-
-mode unskip
 
 # test using assume role
 statement ok

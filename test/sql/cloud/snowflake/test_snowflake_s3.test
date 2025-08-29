@@ -1,0 +1,64 @@
+# name: test/sql/cloud/snowflake/test_snowflake_s3.test
+# group: [snowflake]
+
+require-env SNOWFLAKE_KEY_ID_S3
+
+require-env SNOWFLAKE_SECRET_ID_S3
+
+require-env SNOWFLAKE_CATALOG_URI_GCS
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+require aws
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+create secret polaris_secret (
+        TYPE ICEBERG,
+        CLIENT_ID '${SNOWFLAKE_KEY_ID_S3}',
+        CLIENT_SECRET '${SNOWFLAKE_SECRET_KEY_S3}',
+        ENDPOINT '${SNOWFLAKE_CATALOG_URI_GCS}'
+    );
+
+
+statement ok
+attach 's3-catalog' as my_datalake (
+    type ICEBERG,
+    default_region 'eu-west-2',
+    ENDPOINT '${SNOWFLAKE_CATALOG_URI_GCS}'
+ );
+
+
+statement ok
+create schema if not exists my_datalake.test_create_schema;
+
+statement ok
+create table my_datalake.test_create_schema.table1 as select range a from range(10);
+
+query I
+select * from my_datalake.test_create_schema.table1;
+----
+0
+1
+2
+3
+4
+5
+6
+7
+8
+9
+
+statement ok
+drop table if exists my_datalake.test_create_schema.table1;
+
+statement ok
+drop schema if exists my_datalake.test_create_schema;

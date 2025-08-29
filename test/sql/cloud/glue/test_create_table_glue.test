@@ -18,10 +18,6 @@ require httpfs
 
 require aws
 
-# credentials in CI cannot set up the environment for this test
-# need to give the crentials glue:DropTable priviledges
-mode skip
-
 statement ok
 CREATE SECRET (
   TYPE S3,
