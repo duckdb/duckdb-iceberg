@@ -21,7 +21,7 @@ statement ok
 set logging_level='debug'
 
 statement ok
-pragma enable_logging('Iceberg');
+CALL enable_logging('Iceberg');
 
 # FIXME: this becomes a ConjunctionAndFilter on 'partition', with the 2 children being StructExtract
 # Which we don't enter yet
@@ -42,7 +42,7 @@ ON logs.msg = meta.file_path;
 NULL
 
 statement ok
-pragma truncate_duckdb_logs;
+CALL truncate_duckdb_logs();
 
 # The issue here was that we expected to find redpanda.timestamp (that's where the partition is on),
 # now we correctly return nullptr instead of error
@@ -63,7 +63,7 @@ ON logs.msg = meta.file_path;
 NULL
 
 statement ok
-pragma truncate_duckdb_logs;
+CALL truncate_duckdb_logs();
 
 query II
 SELECT * FROM iceberg_scan('__WORKING_DIRECTORY__/data/persistent/struct_filter_issue') WHERE redpanda.timestamp = '2026-06-26 19:45:32.478';
@@ -81,7 +81,7 @@ ON logs.msg = meta.manifest_path;
 1
 
 statement ok
-pragma truncate_duckdb_logs;
+CALL truncate_duckdb_logs();
 
 query II
 SELECT * FROM iceberg_scan('__WORKING_DIRECTORY__/data/persistent/struct_filter_issue') WHERE redpanda.timestamp = '2025-06-26 19:45:32.478';

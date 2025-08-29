@@ -16,7 +16,7 @@ require httpfs
 set ignore_error_messages
 
 statement ok
-pragma enable_logging('HTTP');
+CALL enable_logging('HTTP');
 
 statement ok
 set logging_level='debug'
@@ -96,7 +96,7 @@ statement ok
 create table my_datalake.default.test_purge_table as select range a from range(100);
 
 statement ok
-pragma truncate_duckdb_logs
+CALL truncate_duckdb_logs()
 
 # purgeRequested = true from attach option.
 statement ok
@@ -124,7 +124,7 @@ statement ok
 create table my_datalake.default.test_purge_table as select range a from range(100);
 
 statement ok
-pragma truncate_duckdb_logs
+CALL truncate_duckdb_logs()
 
 # purgeRequested = false from attach option.
 statement ok

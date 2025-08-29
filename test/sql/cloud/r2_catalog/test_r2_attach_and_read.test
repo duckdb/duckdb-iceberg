@@ -32,7 +32,7 @@ attach '6b17833f308abc1e1cc343c552b51f51_r2-catalog' AS my_datalake (
 );
 
 statement ok
-pragma enable_logging('HTTP');
+CALL enable_logging('HTTP');
 
 statement ok
 select * from my_datalake.default.people;

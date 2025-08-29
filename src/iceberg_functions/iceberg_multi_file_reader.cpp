@@ -7,7 +7,6 @@
 #include "duckdb/catalog/catalog_entry/table_function_catalog_entry.hpp"
 #include "duckdb/common/exception.hpp"
 #include "duckdb/execution/execution_context.hpp"
-#include "duckdb/main/extension_util.hpp"
 #include "duckdb/parallel/thread_context.hpp"
 #include "duckdb/parser/tableref/table_function_ref.hpp"
 #include "duckdb/parser/expression/constant_expression.hpp"
@@ -31,7 +30,7 @@ unique_ptr<MultiFileReader> IcebergMultiFileReader::CreateInstance(const TableFu
 }
 
 shared_ptr<MultiFileList> IcebergMultiFileReader::CreateFileList(ClientContext &context, const vector<string> &paths,
-                                                                 FileGlobOptions) {
+                                                                 const FileGlobInput &glob_input) {
 	if (paths.size() != 1) {
 		throw BinderException("'iceberg_scan' only supports single path as input");
 	}

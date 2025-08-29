@@ -40,7 +40,7 @@ public:
 
 public:
 	shared_ptr<MultiFileList> CreateFileList(ClientContext &context, const vector<string> &paths,
-	                                         FileGlobOptions options) override;
+	                                         const FileGlobInput &glob_input) override;
 	bool Bind(MultiFileOptions &options, MultiFileList &files, vector<LogicalType> &return_types, vector<string> &names,
 	          MultiFileReaderBindData &bind_data) override;
 	void BindOptions(MultiFileOptions &options, MultiFileList &files, vector<LogicalType> &return_types,

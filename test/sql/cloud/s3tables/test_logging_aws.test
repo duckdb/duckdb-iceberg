@@ -19,7 +19,7 @@ require httpfs
 require aws
 
 statement ok
-pragma enable_logging('HTTP');
+CALL enable_logging('HTTP');
 
 statement ok
 CREATE SECRET s3table_secret (

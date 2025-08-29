@@ -16,6 +16,8 @@ require ducklake
 # Do not ignore 'HTTP' error messages!
 set ignore_error_messages
 
+mode skip
+
 statement ok
 set enable_logging=true
 

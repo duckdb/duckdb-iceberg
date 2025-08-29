@@ -16,7 +16,7 @@ require httpfs
 set ignore_error_messages
 
 statement ok
-pragma enable_logging('HTTP');
+CALL enable_logging('HTTP');
 
 statement ok
 set logging_level='debug'
@@ -41,7 +41,7 @@ ATTACH '' AS my_datalake (
 );
 
 statement ok
-pragma truncate_duckdb_logs;
+CALL truncate_duckdb_logs();
 
 
 statement ok
@@ -64,7 +64,7 @@ http://127.0.0.1:8181/v1/namespaces/default/tables/table_unpartitioned	OK
 http://127.0.0.1:8181/v1/namespaces/default/tables/table_more_deletes	OK
 
 statement ok
-pragma truncate_duckdb_logs;
+CALL truncate_duckdb_logs();
 
 statement ok
 select * from my_datalake.default.table_more_deletes order by all;

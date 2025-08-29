@@ -19,7 +19,7 @@ statement ok
 create view my_datalake.default.filtering_on_bounds as select * from ICEBERG_SCAN('__WORKING_DIRECTORY__/data/generated/iceberg/spark-local/default/filtering_on_bounds');
 
 statement ok
-pragma enable_logging('Iceberg');
+CALL enable_logging('Iceberg');
 
 # 5 snapshots that each add 1000 rows (incremental)
 query I
@@ -28,7 +28,7 @@ select count(*) from my_datalake.default.filtering_on_bounds;
 5000
 
 statement ok
-pragma truncate_duckdb_logs;
+CALL truncate_duckdb_logs();
 
 query I
 select count(*) from my_datalake.default.filtering_on_bounds where col1 > 500;
@@ -48,7 +48,7 @@ ON logs.msg = meta.file_path;
 500
 
 statement ok
-pragma truncate_duckdb_logs;
+CALL truncate_duckdb_logs();
 
 query I
 select count(*) from my_datalake.default.filtering_on_bounds where col1 > 1500;
@@ -67,7 +67,7 @@ ON logs.msg = meta.file_path;
 1500
 
 statement ok
-pragma truncate_duckdb_logs;
+CALL truncate_duckdb_logs();
 
 query I
 select count(*) from my_datalake.default.filtering_on_bounds where col1 >= 2300 and col1 < 3500;

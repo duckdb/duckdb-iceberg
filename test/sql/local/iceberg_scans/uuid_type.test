@@ -12,7 +12,7 @@ require httpfs
 require no_extension_autoloading "EXPECTED: enable logging is not aware of where 'Iceberg' option comes from"
 
 statement ok
-pragma enable_logging('Iceberg');
+call enable_logging('Iceberg');
 
 query I
 select * from ICEBERG_SCAN('__WORKING_DIRECTORY__/data/persistent/uuid');
@@ -29,7 +29,7 @@ f9f28465-51cf-45f1-8985-e01d9a82253c
 7fae299c-cf05-4777-9b42-57a52e1415ed
 
 statement ok
-pragma truncate_duckdb_logs;
+CALL truncate_duckdb_logs();
 
 query I
 select * from ICEBERG_SCAN('__WORKING_DIRECTORY__/data/persistent/uuid') WHERE "uuid" = '1571effb-facd-42a3-90e9-0af522e9b6c2';

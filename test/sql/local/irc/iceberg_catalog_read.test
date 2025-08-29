@@ -16,7 +16,7 @@ require httpfs
 set ignore_error_messages
 
 statement ok
-pragma enable_logging('HTTP');
+CALL enable_logging('HTTP');
 
 statement ok
 set logging_level='debug'
@@ -56,7 +56,7 @@ SELECT request.url, response.reason FROM duckdb_logs_parsed('HTTP') WHERE reques
 http://127.0.0.1:8181/v1/oauth/tokens	OK
 
 statement ok
-pragma truncate_duckdb_logs;
+CALL truncate_duckdb_logs();
 
 query III
 select * from my_datalake.default.table_unpartitioned order by all;
