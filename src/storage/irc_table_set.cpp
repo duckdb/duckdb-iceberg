@@ -97,13 +97,16 @@ void ICTableSet::LoadEntries(ClientContext &context) {
 	listed = true;
 }
 
-void ICTableSet::CreateNewEntry(ClientContext &context, IRCatalog &catalog, IRCSchemaEntry &schema,
+bool ICTableSet::CreateNewEntry(ClientContext &context, IRCatalog &catalog, IRCSchemaEntry &schema,
                                 CreateTableInfo &info) {
 	auto table_name = info.table;
 	if (info.on_conflict == OnCreateConflict::REPLACE_ON_CONFLICT) {
 		throw InvalidInputException("CREATE OR REPLACE not supported in DuckDB-Iceberg");
 	}
 	if (entries.find(table_name) != entries.end()) {
+		if (info.on_conflict == OnCreateConflict::IGNORE_ON_CONFLICT) {
+			return false;
+		}
 		throw CatalogException("Table %s already exists", table_name.c_str());
 	}
 
@@ -140,6 +143,7 @@ void ICTableSet::CreateNewEntry(ClientContext &context, IRCatalog &catalog, IRCS
 		table_info.SetDefaultSortOrder(irc_transaction);
 		table_info.SetLocation(irc_transaction);
 	}
+	return true;
 }
 
 unique_ptr<ICTableInfo> ICTableSet::GetTableInfo(ClientContext &context, IRCSchemaEntry &schema,

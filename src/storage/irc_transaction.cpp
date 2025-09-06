@@ -231,6 +231,21 @@ void IRCTransaction::DropSecrets(ClientContext &context) {
 	}
 }
 
+static rest_api_objects::TableUpdate CreateSetSnapshotRefUpdate(int64_t snapshot_id) {
+	rest_api_objects::TableUpdate table_update;
+
+	table_update.has_set_snapshot_ref_update = true;
+	auto &update = table_update.set_snapshot_ref_update;
+	update.base_update.action = "set-snapshot-ref";
+	update.has_action = true;
+	update.action = "set-snapshot-ref";
+
+	update.ref_name = "main";
+	update.snapshot_reference.type = "branch";
+	update.snapshot_reference.snapshot_id = snapshot_id;
+	return table_update;
+}
+
 TableTransactionInfo IRCTransaction::GetTransactionRequest(ClientContext &context) {
 	TableTransactionInfo info;
 	auto &transaction = info.request;
@@ -271,16 +286,14 @@ TableTransactionInfo IRCTransaction::GetTransactionRequest(ClientContext &contex
 			info.has_assert_create = requirement->type == IcebergTableRequirementType::ASSERT_CREATE;
 		}
 
-		if (!transaction_data.alters.empty()) {
+		if (commit_state.added_snapshot) {
 			if (current_snapshot) {
 				//! If any changes were made to the data of the table, we should assert that our parent snapshot has
 				//! not changed
 				commit_state.table_change.requirements.push_back(
 				    CreateAssertRefSnapshotIdRequirement(*current_snapshot));
 			}
-
-			auto &last_alter = transaction_data.alters.back();
-			commit_state.table_change.updates.push_back(last_alter.get().CreateSetSnapshotRefUpdate());
+			CreateSetSnapshotRefUpdate(commit_state.new_snapshot_id);
 		}
 
 		transaction.table_changes.push_back(std::move(table_change));
