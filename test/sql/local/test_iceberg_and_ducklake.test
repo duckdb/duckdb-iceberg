@@ -1,6 +1,6 @@
-# name: test/sql/local/irc/test_duckdb_catalog_functions_and_iceberg.test
+# name: test/sql/local/test_iceberg_and_ducklake.test
 # description: test integration with iceberg catalog read
-# group: [irc]
+# group: [local]
 
 require-env ICEBERG_SERVER_AVAILABLE
 
@@ -11,6 +11,14 @@ require parquet
 require iceberg
 
 require httpfs
+
+require ducklake
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+pragma threads=1;
 
 statement ok
 CALL enable_logging('HTTP');
@@ -38,31 +46,11 @@ ATTACH '' AS my_datalake (
 );
 
 statement ok
-use my_datalake.default;
+ATTACH 'ducklake:duckdb:__TEST_DIR__/ducklake.duckdb' as my_ducklake (DATA_PATH '__TEST_DIR__/data_path');
 
-# one for the token, one for config endpoint, one for use call
+# 2 requests to the iceberg catalog for oauth and config
+# 3 requests when attaching ducklake because a ducklake attach calls from duckdb_tables()
 query I
 select count(*) from duckdb_logs_parsed('HTTP');
 ----
-3
-
-# three previous
-# one to lookup schema main, and one to lookup schema 'default' again.
-query I
-select count(*) from duckdb_logs_parsed('HTTP');
-----
-3
-
-statement ok
-use memory;
-
-# namespace 'memory' is looked up in the iceberg catalog
-query I
-select count(*) from duckdb_logs_parsed('HTTP');
-----
-4
-
-query I
-select count(*) from duckdb_logs_parsed('HTTP');
-----
-4
+5

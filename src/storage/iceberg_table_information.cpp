@@ -218,6 +218,7 @@ optional_ptr<CatalogEntry> IcebergTableInformation::CreateSchemaVersion(IcebergT
 
 optional_ptr<CatalogEntry> IcebergTableInformation::GetSchemaVersion(optional_ptr<BoundAtClause> at) {
 	D_ASSERT(!schema_versions.empty());
+	D_ASSERT(filled);
 	auto snapshot_lookup = IcebergSnapshotLookup::FromAtClause(at);
 
 	int32_t schema_id;
@@ -232,7 +233,7 @@ optional_ptr<CatalogEntry> IcebergTableInformation::GetSchemaVersion(optional_pt
 }
 
 IcebergTableInformation::IcebergTableInformation(IRCatalog &catalog, IRCSchemaEntry &schema, const string &name)
-    : catalog(catalog), schema(schema), name(name) {
+    : catalog(catalog), schema(schema), name(name), filled(false) {
 	table_id = "uuid-" + schema.name + "-" + name;
 }
 

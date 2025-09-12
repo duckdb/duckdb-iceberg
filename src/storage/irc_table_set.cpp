@@ -30,10 +30,11 @@ ICTableSet::ICTableSet(IRCSchemaEntry &schema) : schema(schema), catalog(schema.
 }
 
 bool ICTableSet::FillEntry(ClientContext &context, IcebergTableInformation &table) {
-	if (!table.schema_versions.empty()) {
-		//! Already filled
+	if (table.filled) {
 		return true;
 	}
+	// The table has not been filled yet, clear all dummy schema versions
+	table.schema_versions.clear();
 
 	auto &ic_catalog = catalog.Cast<IRCatalog>();
 
@@ -57,6 +58,7 @@ bool ICTableSet::FillEntry(ClientContext &context, IcebergTableInformation &tabl
 	for (auto &table_schema : schemas) {
 		table.CreateSchemaVersion(*table_schema.second);
 	}
+	table.filled = true;
 	return true;
 }
 
@@ -67,13 +69,28 @@ void ICTableSet::Scan(ClientContext &context, const std::function<void(CatalogEn
 	auto table_namespace = IRCAPI::GetEncodedSchemaName(schema.namespace_items);
 	for (auto &entry : entries) {
 		auto &table_info = entry.second;
-		if (FillEntry(context, table_info)) {
-			auto schema_id = table_info.table_metadata.current_schema_id;
-			callback(*table_info.schema_versions[schema_id]);
-		} else {
-			DUCKDB_LOG(context, IcebergLogType, "Table %s.%s not an Iceberg Table", table_namespace, entry.first);
-			non_iceberg_tables.insert(entry.first);
+		if (table_info.dummy_entry) {
+			continue;
 		}
+
+		// create a table entry with fake schema data
+		// filled stays false
+		CreateTableInfo info(schema, table_info.name);
+		vector<ColumnDefinition> columns;
+		auto col = ColumnDefinition(string("__"), LogicalType::UNKNOWN);
+		columns.push_back(std::move(col));
+		info.columns = ColumnList(std::move(columns));
+		auto table_entry = make_uniq<ICTableEntry>(table_info, catalog, schema, info);
+		if (!table_entry->internal) {
+			table_entry->internal = schema.internal;
+		}
+		auto result = table_entry.get();
+		if (result->name.empty()) {
+			throw InternalException("ICTableSet::CreateEntry called with empty name");
+		}
+		table_info.dummy_entry = std::move(table_entry);
+		auto &optional = table_info.dummy_entry.get()->Cast<CatalogEntry>();
+		callback(optional);
 	}
 	// erase not iceberg tables
 	for (auto &entry : non_iceberg_tables) {
@@ -116,6 +133,8 @@ bool ICTableSet::CreateNewEntry(ClientContext &context, IRCatalog &catalog, IRCS
 
 	auto table_entry = make_uniq<ICTableEntry>(table_info, catalog, schema, info);
 	auto optional_entry = table_entry.get();
+	// Since we are creating the schema, we set the table information to filled
+	table_info.filled = true;
 
 	optional_entry->table_info.schema_versions[0] = std::move(table_entry);
 	optional_entry->table_info.table_metadata.schemas[0] =
