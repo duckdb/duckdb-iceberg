@@ -1,0 +1,40 @@
+# name: test/sql/local/iceberg_scans/expression_filter.test
+# group: [iceberg_scans]
+
+require-env DUCKDB_ICEBERG_HAVE_GENERATED_DATA
+
+require avro
+
+require parquet
+
+require iceberg
+
+statement ok
+attach ':memory:' as my_datalake;
+
+statement ok
+create schema my_datalake.default;
+
+statement ok
+create view my_datalake.default.expression_filter as select * from ICEBERG_SCAN('__WORKING_DIRECTORY__/data/persistent/expression_filter');
+
+# baseline: select all rows
+query II
+SELECT * FROM my_datalake.default.expression_filter ORDER BY id ASC;
+----
+1	foo
+2	bar
+3	baz
+
+# CASE expression should not exclude any data files (prior to #464, IS NULL on CASE expression column resulted in exclusion)
+query II
+SELECT id, CASE WHEN value = 'foo' THEN 'not null' ELSE NULL END AS role FROM my_datalake.default.expression_filter WHERE role IS NULL ORDER BY id ASC;
+----
+2	NULL
+3	NULL
+
+# Complement to previous query
+query II
+SELECT id, CASE WHEN value = 'foo' THEN 'not null' ELSE NULL END AS role FROM my_datalake.default.expression_filter WHERE role IS NOT NULL ORDER BY id ASC;
+----
+1	not null
