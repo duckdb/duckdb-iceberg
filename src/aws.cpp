@@ -257,6 +257,10 @@ unique_ptr<HTTPResponse> AWSInput::ExecuteRequest(ClientContext &context, Aws::H
 		*/
 	}
 
+	if (method == Aws::Http::HttpMethod::HTTP_HEAD) {
+		HeadRequestInfo head_request(request_url, res, *params);
+		return http_util.Request(head_request);
+	}
 	if (method == Aws::Http::HttpMethod::HTTP_GET) {
 		GetRequestInfo get_request(request_url, res, *params, nullptr, nullptr);
 		return http_util.Request(get_request);
