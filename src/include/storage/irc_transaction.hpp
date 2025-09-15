@@ -58,6 +58,8 @@ public:
 	unordered_set<const ICTableEntry *> dirty_tables;
 	unordered_set<const ICTableEntry *> deleted_tables;
 	case_insensitive_set_t created_secrets;
+
+	case_insensitive_set_t looked_up_entries;
 };
 
 } // namespace duckdb

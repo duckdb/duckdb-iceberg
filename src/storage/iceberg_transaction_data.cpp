@@ -19,6 +19,8 @@ static int64_t NewSnapshotId() {
 
 void IcebergTransactionData::AddSnapshot(IcebergSnapshotOperationType operation,
                                          vector<IcebergManifestEntry> &&data_files) {
+	D_ASSERT(!data_files.empty());
+
 	//! Generate a new snapshot id
 	auto &table_metadata = table_info.table_metadata;
 	auto snapshot_id = NewSnapshotId();

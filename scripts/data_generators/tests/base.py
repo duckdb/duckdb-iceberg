@@ -65,7 +65,7 @@ class IcebergTest:
                     intermediate_data_path = os.path.join(intermediate_dir, snapshot_name, 'data.parquet')
                     df.write.mode("overwrite").parquet(intermediate_data_path)
 
-        if self.write_intermediates:
+        if self.write_intermediates and last_file:
             ### Finally, copy the latest results to a "last" dir for easy test writing
             shutil.copytree(
                 os.path.join(intermediate_dir, last_file, 'data.parquet'),

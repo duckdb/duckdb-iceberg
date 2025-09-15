@@ -244,8 +244,8 @@ void IcebergTableInformation::InitTransactionData(IRCTransaction &transaction) {
 }
 
 void IcebergTableInformation::AddSnapshot(IRCTransaction &transaction, vector<IcebergManifestEntry> &&data_files) {
+	D_ASSERT(!data_files.empty());
 	InitTransactionData(transaction);
-
 	transaction_data->AddSnapshot(IcebergSnapshotOperationType::APPEND, std::move(data_files));
 }
 

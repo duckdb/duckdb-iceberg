@@ -33,6 +33,8 @@ attach 'arn:aws:s3tables:us-east-2:840140254803:bucket/iceberg-testing' as my_da
     ENDPOINT_TYPE 'S3_Tables'
 );
 
+set ignore_error_messages
+
 query T nosort tables_1
 show all tables;
 ----

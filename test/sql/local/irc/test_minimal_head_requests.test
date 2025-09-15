@@ -16,7 +16,7 @@ require httpfs
 set ignore_error_messages
 
 statement ok
-pragma enable_logging('HTTP');
+CALL enable_logging('HTTP');
 
 
 statement ok
@@ -54,11 +54,11 @@ select * from my_datalake.default.table_unpartitioned order by all;
 2023-03-11	11	k
 2023-03-12	12	l
 
-# 0 head requests to all files
+# 2 head requests to scan all files (1 for the schema, 1 for the table)
 query I
 select count(*) from duckdb_logs_parsed('HTTP') where request.type = 'HEAD';
 ----
-0
+2
 
 # only 13 get requests
 query I nosort get_count_1
@@ -85,11 +85,11 @@ select * from my_datalake.default.table_unpartitioned order by all;
 2023-03-12	12	l
 
 
-# after reading the same table, still no head requests
+# after reading the same table, only 2 more head requests (because of new transactions)
 query I
 select count(*) from duckdb_logs_parsed('HTTP') where request.type = 'HEAD';
 ----
-0
+4
 
 # same amount of get calls
 query I nosort get_count_1

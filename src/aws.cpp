@@ -5,6 +5,8 @@
 #include "duckdb/common/http_util.hpp"
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/common/exception/http_exception.hpp"
+#include "duckdb/main/database.hpp"
+#include "duckdb/function/scalar/strftime_format.hpp"
 
 #include "duckdb/main/client_data.hpp"
 
@@ -265,6 +267,10 @@ unique_ptr<HTTPResponse> AWSInput::ExecuteRequest(ClientContext &context, Aws::H
 		return http_util.Request(post_request);
 	}
 	throw NotImplementedException("Only GET and POST are implemented at the moment");
+}
+
+unique_ptr<HTTPResponse> AWSInput::HeadRequest(ClientContext &context) {
+	return ExecuteRequest(context, Aws::Http::HttpMethod::HTTP_HEAD);
 }
 
 unique_ptr<HTTPResponse> AWSInput::GetRequest(ClientContext &context) {

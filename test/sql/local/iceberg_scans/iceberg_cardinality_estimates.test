@@ -35,7 +35,7 @@ select count(*) from ICEBERG_METADATA('__WORKING_DIRECTORY__/data/generated/iceb
 query II
 explain select * from my_datalake.default.lineitem_001_deletes;
 ----
-physical_plan	<REGEX>:.*~60175.*
+physical_plan	<REGEX>:.*~60,175.*
 
 
 # check we estimated it correctlry
@@ -59,7 +59,7 @@ select count(*) from ICEBERG_METADATA('__WORKING_DIRECTORY__/data/generated/iceb
 query II
 explain select count(*) from ICEBERG_SCAN('__WORKING_DIRECTORY__/data/generated/iceberg/spark-local/default/many_adds_deletes');
 ----
-physical_plan	<REGEX>:.*~40000.*
+physical_plan	<REGEX>:.*~40,000.*
 
 
 query I

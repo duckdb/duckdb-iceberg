@@ -6,6 +6,8 @@
 #include "duckdb/parser/parsed_data/copy_info.hpp"
 #include "duckdb/execution/execution_context.hpp"
 #include "duckdb/parallel/thread_context.hpp"
+#include "duckdb/main/extension_helper.hpp"
+#include "duckdb/main/extension/extension_loader.hpp"
 #include "duckdb/storage/buffer_manager.hpp"
 #include "duckdb/storage/caching_file_system.hpp"
 
@@ -29,21 +31,6 @@ rest_api_objects::TableUpdate CreateAddSnapshotUpdate(const IcebergSnapshot &sna
 	return table_update;
 }
 
-rest_api_objects::TableUpdate IcebergAddSnapshot::CreateSetSnapshotRefUpdate() {
-	rest_api_objects::TableUpdate table_update;
-
-	table_update.has_set_snapshot_ref_update = true;
-	auto &update = table_update.set_snapshot_ref_update;
-	update.base_update.action = "set-snapshot-ref";
-	update.has_action = true;
-	update.action = "set-snapshot-ref";
-
-	update.ref_name = "main";
-	update.snapshot_reference.type = "branch";
-	update.snapshot_reference.snapshot_id = snapshot.snapshot_id;
-	return table_update;
-}
-
 void IcebergAddSnapshot::CreateUpdate(DatabaseInstance &db, ClientContext &context, IcebergCommitState &commit_state) {
 	auto &system_catalog = Catalog::GetSystemCatalog(db);
 	auto data = CatalogTransaction::GetSystemTransaction(db);
@@ -51,6 +38,8 @@ void IcebergAddSnapshot::CreateUpdate(DatabaseInstance &db, ClientContext &conte
 	auto avro_copy_p = schema.GetEntry(data, CatalogType::COPY_FUNCTION_ENTRY, "avro");
 	D_ASSERT(avro_copy_p);
 	auto &avro_copy = avro_copy_p->Cast<CopyFunctionCatalogEntry>().function;
+
+	D_ASSERT(!manifest_file.data_files.empty());
 
 	auto manifest_length = manifest_file::WriteToFile(table_info, manifest_file, avro_copy, db, context);
 	manifest.manifest_length = manifest_length;

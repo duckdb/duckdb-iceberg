@@ -3,6 +3,8 @@
 #include "duckdb/common/exception/http_exception.hpp"
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/main/client_data.hpp"
+#include "duckdb/main/database.hpp"
+#include "duckdb/main/extension/extension_loader.hpp"
 
 #include <sys/stat.h>
 
@@ -97,6 +99,27 @@ unique_ptr<HTTPResponse> APIUtils::GetRequest(ClientContext &context, const IRCE
 
 	GetRequestInfo get_request(request_url, headers, *params, nullptr, nullptr);
 	return http_util.Request(get_request);
+}
+
+unique_ptr<HTTPResponse> APIUtils::HeadRequest(ClientContext &context, const IRCEndpointBuilder &endpoint_builder,
+                                               const string &token) {
+	auto &db = DatabaseInstance::GetDatabase(context);
+
+	HTTPHeaders headers(db);
+	headers.Insert("X-Iceberg-Access-Delegation", "vended-credentials");
+	if (!token.empty()) {
+		headers.Insert("Authorization", StringUtil::Format("Bearer %s", token));
+	}
+
+	auto &http_util = HTTPUtil::Get(db);
+	unique_ptr<HTTPParams> params;
+
+	string request_url = AddHttpHostIfMissing(endpoint_builder.GetURL());
+
+	params = http_util.InitializeParameters(context, request_url);
+
+	HeadRequestInfo head_request(request_url, headers, *params);
+	return http_util.Request(head_request);
 }
 
 } // namespace duckdb

@@ -37,7 +37,10 @@ optional_ptr<CatalogEntry> IRCSchemaEntry::CreateTable(IRCTransaction &irc_trans
 	auto &catalog = irc_transaction.GetCatalog();
 
 	// always posts to IRC catalog so we can get the metadata
-	tables.CreateNewEntry(context, catalog, *this, base_info);
+	if (!tables.CreateNewEntry(context, catalog, *this, base_info)) {
+		D_ASSERT(base_info.on_conflict == OnCreateConflict::IGNORE_ON_CONFLICT);
+		return nullptr;
+	}
 	auto lookup_info = EntryLookupInfo(CatalogType::TABLE_ENTRY, base_info.table);
 	auto entry = tables.GetEntry(context, lookup_info);
 	auto &ic_entry = entry->Cast<ICTableEntry>();
@@ -71,6 +74,9 @@ void IRCSchemaEntry::DropEntry(ClientContext &context, DropInfo &info) {
 	auto table_info_it = tables.entries.find(table_name);
 	if (table_info_it == tables.entries.end()) {
 		throw InvalidInputException("Table %s does not exist");
+	}
+	if (info.cascade) {
+		throw NotImplementedException("DROP TABLE <table_name> CASCADE is not supported for Iceberg tables currently");
 	}
 	auto &table_entry = table_info_it->second;
 	auto lookupInfo = EntryLookupInfo(CatalogType::TABLE_ENTRY, table_name);

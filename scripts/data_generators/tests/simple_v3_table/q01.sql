@@ -1,0 +1,1 @@
+delete from default.simple_v3_table where c_custkey % 2 = 0;

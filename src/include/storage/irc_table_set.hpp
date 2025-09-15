@@ -21,16 +21,20 @@ public:
 	                                            const string &table_name);
 	optional_ptr<CatalogEntry> GetEntry(ClientContext &context, const EntryLookupInfo &lookup);
 	void Scan(ClientContext &context, const std::function<void(CatalogEntry &)> &callback);
-	void CreateNewEntry(ClientContext &context, IRCatalog &catalog, IRCSchemaEntry &schema, CreateTableInfo &info);
+	bool CreateNewEntry(ClientContext &context, IRCatalog &catalog, IRCSchemaEntry &schema, CreateTableInfo &info);
 
 public:
 	void LoadEntries(ClientContext &context);
-	void FillEntry(ClientContext &context, IcebergTableInformation &table);
+	//! return true if request to LoadTableInformation was successful and entry has been filled
+	//! or if entry is already filled. Returns False otherwise
+	bool FillEntry(ClientContext &context, IcebergTableInformation &table);
 
 public:
 	IRCSchemaEntry &schema;
 	Catalog &catalog;
 	case_insensitive_map_t<IcebergTableInformation> entries;
+	//! Whether a listing is done for this transaction
+	bool listed = false;
 
 private:
 	mutex entry_lock;
