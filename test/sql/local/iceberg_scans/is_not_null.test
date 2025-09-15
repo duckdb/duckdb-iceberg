@@ -19,7 +19,7 @@ statement ok
 create view my_datalake.default.is_not_null as select * from ICEBERG_SCAN('__WORKING_DIRECTORY__/data/persistent/is_null_is_not_null');
 
 statement ok
-pragma enable_logging('Iceberg');
+CALL enable_logging('Iceberg');
 
 query II
 select * from my_datalake.default.is_not_null ORDER BY id ASC;
@@ -34,7 +34,7 @@ select * from my_datalake.default.is_not_null ORDER BY id ASC;
 8	blah
 
 statement ok
-pragma truncate_duckdb_logs;
+CALL truncate_duckdb_logs();
 
 query II
 select * from my_datalake.default.is_not_null WHERE value IS NULL ORDER BY id ASC;
@@ -57,7 +57,7 @@ ON logs.msg = meta.file_path;
 3
 
 statement ok
-pragma truncate_duckdb_logs;
+CALL truncate_duckdb_logs();
 
 query II
 select * from my_datalake.default.is_not_null WHERE value IS NOT NULL ORDER BY id ASC;

@@ -1,0 +1,37 @@
+# name: test/sql/cloud/r2_catalog/test_r2_pagination.test
+# description: test integration with iceberg catalog read
+# group: [r2_catalog]
+
+require-env ICEBERG_AWS_REMOTE_AVAILABLE
+
+require-env ICEBERG_REMOTE_INSERT_READY
+
+require-env R2_TOKEN
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+require aws
+
+statement ok
+CREATE SECRET r2_secret (
+    TYPE ICEBERG,
+    TOKEN '${R2_TOKEN}'
+);
+
+statement ok
+attach '6b17833f308abc1e1cc343c552b51f51_iceberg-catalog-test' AS my_datalake (
+    TYPE ICEBERG,
+    ENDPOINT 'https://catalog.cloudflarestorage.com/6b17833f308abc1e1cc343c552b51f51/iceberg-catalog-test',
+    support_nested_namespaces true
+);
+
+query I
+select count(*) from (show all tables);
+----
+101

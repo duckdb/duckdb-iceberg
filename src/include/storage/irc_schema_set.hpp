@@ -12,7 +12,7 @@ public:
 
 public:
 	void LoadEntries(ClientContext &context);
-	optional_ptr<CatalogEntry> GetEntry(ClientContext &context, const string &name);
+	optional_ptr<CatalogEntry> GetEntry(ClientContext &context, const string &name, OnEntryNotFound if_not_found);
 	void Scan(ClientContext &context, const std::function<void(CatalogEntry &)> &callback);
 
 protected:
@@ -21,6 +21,8 @@ protected:
 public:
 	Catalog &catalog;
 	case_insensitive_map_t<unique_ptr<CatalogEntry>> entries;
+	//! Whether a listing has been done for the catalog
+	bool listed = false;
 
 private:
 	mutex entry_lock;

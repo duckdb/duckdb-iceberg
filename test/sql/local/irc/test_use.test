@@ -38,17 +38,17 @@ ATTACH '' AS my_datalake (
 statement ok
 use my_datalake.default;
 
-# need catalog and schema name for use.
+# schema will default to 'main', which doesnt exist
 statement error
 use my_datalake;
 ----
-Catalog Error
+Catalog Error: SET schema: No catalog + schema named "my_datalake" found.
 
-# even after showing all tables. use statement needs catalog + schema.
 statement ok
-show all tables;
+select * from my_datalake.default.table_unpartitioned;
 
+# 'main' still doesn't exist
 statement error
 use my_datalake;
 ----
-Catalog Error
+Catalog Error: SET schema: No catalog + schema named "my_datalake" found.

@@ -4,6 +4,7 @@
 #include "catalog_api.hpp"
 #include "duckdb/catalog/catalog_entry/schema_catalog_entry.hpp"
 #include "storage/irc_table_set.hpp"
+#include "duckdb/common/enums/on_entry_not_found.hpp"
 
 namespace duckdb {
 class IRCTransaction;

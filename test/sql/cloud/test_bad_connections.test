@@ -2,6 +2,12 @@
 # description: test connections that arent good
 # group: [cloud]
 
+require-env ICEBERG_AWS_REMOTE_AVAILABLE
+
+require-env AWS_ACCESS_KEY_ID
+
+require-env AWS_SECRET_ACCESS_KEY
+
 require avro
 
 require parquet

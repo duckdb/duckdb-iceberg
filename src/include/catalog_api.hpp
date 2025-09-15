@@ -20,16 +20,34 @@ struct IRCAPISchema {
 	string catalog_name;
 };
 
+// Some API responses have error messages that need to be checked before being raised
+// to the user, since sometimes is does not mean whole operation has failed.
+// Ex: Glue will return an error when trying to get the metadata for a non-iceberg table during a list tables operation
+//     The complete operation did not fail, just getting metadata for one table
+template <typename T>
+class APIResult {
+public:
+	APIResult() {};
+
+	T result_;
+	HTTPStatusCode status_;
+	bool has_error;
+	rest_api_objects::IcebergErrorResponse error_;
+};
+
 class IRCAPI {
 public:
 	static const string API_VERSION_1;
-	static vector<string> ParseSchemaName(string &namespace_name);
-	static string GetSchemaName(const vector<string> &items);
-	static string GetEncodedSchemaName(const vector<string> &items);
 	static vector<rest_api_objects::TableIdentifier> GetTables(ClientContext &context, IRCatalog &catalog,
 	                                                           const IRCSchemaEntry &schema);
-	static rest_api_objects::LoadTableResult GetTable(ClientContext &context, IRCatalog &catalog,
-	                                                  const IRCSchemaEntry &schema, const string &table_name);
+	static bool VerifySchemaExistence(ClientContext &context, IRCatalog &catalog, const string &schema);
+	static bool VerifyTableExistence(ClientContext &context, IRCatalog &catalog, const IRCSchemaEntry &schema,
+	                                 const string &table);
+	static vector<string> ParseSchemaName(const string &namespace_name);
+	static string GetSchemaName(const vector<string> &items);
+	static string GetEncodedSchemaName(const vector<string> &items);
+	static APIResult<rest_api_objects::LoadTableResult>
+	GetTable(ClientContext &context, IRCatalog &catalog, const IRCSchemaEntry &schema, const string &table_name);
 	static vector<IRCAPISchema> GetSchemas(ClientContext &context, IRCatalog &catalog, const vector<string> &parent);
 	static void CommitTableUpdate(ClientContext &context, IRCatalog &catalog, const vector<string> &schema,
 	                              const string &table_name, const string &body);

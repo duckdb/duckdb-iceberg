@@ -3,14 +3,13 @@
 #include "storage/irc_transaction.hpp"
 #include "storage/irc_table_entry.hpp"
 #include "storage/iceberg_table_information.hpp"
+#include "metadata/iceberg_column_definition.hpp"
 
 #include "iceberg_multi_file_list.hpp"
 
 #include "duckdb/common/sort/partition_state.hpp"
 #include "duckdb/catalog/catalog_entry/copy_function_catalog_entry.hpp"
 #include "duckdb/main/client_data.hpp"
-
-#include "duckdb/main/extension_util.hpp"
 #include "duckdb/planner/operator/logical_copy_to_file.hpp"
 #include "duckdb/execution/physical_operator_states.hpp"
 #include "duckdb/planner/operator/logical_insert.hpp"
@@ -24,14 +23,15 @@
 
 namespace duckdb {
 
-IcebergInsert::IcebergInsert(LogicalOperator &op, TableCatalogEntry &table,
+IcebergInsert::IcebergInsert(PhysicalPlan &physical_plan, LogicalOperator &op, TableCatalogEntry &table,
                              physical_index_vector_t<idx_t> column_index_map_p)
-    : PhysicalOperator(PhysicalOperatorType::EXTENSION, op.types, 1), table(&table), schema(nullptr),
+    : PhysicalOperator(physical_plan, PhysicalOperatorType::EXTENSION, op.types, 1), table(&table), schema(nullptr),
       column_index_map(std::move(column_index_map_p)) {
 }
 
-IcebergInsert::IcebergInsert(LogicalOperator &op, SchemaCatalogEntry &schema, unique_ptr<BoundCreateTableInfo> info)
-    : PhysicalOperator(PhysicalOperatorType::EXTENSION, op.types, 1), table(nullptr), schema(&schema),
+IcebergInsert::IcebergInsert(PhysicalPlan &physical_plan, LogicalOperator &op, SchemaCatalogEntry &schema,
+                             unique_ptr<BoundCreateTableInfo> info)
+    : PhysicalOperator(physical_plan, PhysicalOperatorType::EXTENSION, op.types, 1), table(nullptr), schema(&schema),
       info(std::move(info)) {
 }
 
@@ -150,7 +150,26 @@ static IcebergColumnStats ParseColumnStats(const vector<Value> col_stats) {
 	return column_stats;
 }
 
-static void AddWrittenFiles(IcebergInsertGlobalState &global_state, DataChunk &chunk, optional_idx partition_id) {
+static void AddToColDefMap(case_insensitive_map_t<optional_ptr<IcebergColumnDefinition>> &name_to_coldef,
+                           string col_name_prefix, optional_ptr<IcebergColumnDefinition> column_def) {
+	string column_name = column_def->name;
+	if (!col_name_prefix.empty()) {
+		column_name = col_name_prefix + "." + column_def->name;
+	}
+	if (column_def->IsIcebergPrimitiveType()) {
+		name_to_coldef.emplace(column_name, column_def.get());
+	} else {
+		for (auto &child : column_def->children) {
+			AddToColDefMap(name_to_coldef, column_name, child.get());
+		}
+	}
+}
+
+static void AddWrittenFiles(IcebergInsertGlobalState &global_state, DataChunk &chunk,
+                            optional_ptr<TableCatalogEntry> table) {
+	D_ASSERT(table);
+	auto &ic_table = table->Cast<ICTableEntry>();
+	auto partition_id = ic_table.table_info.table_metadata.default_spec_id;
 	for (idx_t r = 0; r < chunk.size(); r++) {
 		IcebergManifestEntry data_file;
 		data_file.file_path = chunk.GetValue(0, r).GetValue<string>();
@@ -160,8 +179,8 @@ static void AddWrittenFiles(IcebergInsertGlobalState &global_state, DataChunk &c
 		data_file.status = IcebergManifestEntryStatusType::ADDED;
 		data_file.file_format = "parquet";
 
-		if (partition_id.IsValid()) {
-			data_file.partition_spec_id = static_cast<int32_t>(partition_id.GetIndex());
+		if (partition_id) {
+			data_file.partition_spec_id = static_cast<int32_t>(partition_id);
 		} else {
 			data_file.partition_spec_id = 0;
 		}
@@ -172,12 +191,27 @@ static void AddWrittenFiles(IcebergInsertGlobalState &global_state, DataChunk &c
 
 		global_state.insert_count += data_file.record_count;
 
+		auto table_current_schema_id = ic_table.table_info.table_metadata.current_schema_id;
+		auto ic_schema = ic_table.table_info.table_metadata.schemas[table_current_schema_id];
+
+		case_insensitive_map_t<optional_ptr<IcebergColumnDefinition>> column_info;
+		for (auto &column : ic_schema->columns) {
+			AddToColDefMap(column_info, "", column.get());
+		}
+
 		for (idx_t col_idx = 0; col_idx < map_children.size(); col_idx++) {
 			auto &struct_children = StructValue::GetChildren(map_children[col_idx]);
 			auto &col_name = StringValue::Get(struct_children[0]);
 			auto &col_stats = MapValue::GetChildren(struct_children[1]);
 			auto column_names = ParseQuotedList(col_name, '.');
 			auto stats = ParseColumnStats(col_stats);
+			auto normalized_col_name = StringUtil::Join(column_names, ".");
+
+			auto ic_column_info = column_info.find(normalized_col_name);
+			D_ASSERT(ic_column_info != column_info.end());
+			if (ic_column_info->second->required && stats.has_null_count && stats.null_count > 0) {
+				throw ConstraintException("NOT NULL constraint failed: %s.%s", table->name, normalized_col_name);
+			}
 
 			//! TODO: convert 'stats' into 'data_file.lower_bounds', upper_bounds, value_counts, null_value_counts,
 			//! nan_value_counts ...
@@ -206,7 +240,7 @@ SinkResultType IcebergInsert::Sink(ExecutionContext &context, DataChunk &chunk, 
 	auto &global_state = input.global_state.Cast<IcebergInsertGlobalState>();
 
 	// TODO: pass through the partition id?
-	AddWrittenFiles(global_state, chunk, {});
+	AddWrittenFiles(global_state, chunk, table);
 
 	return SinkResultType::NEED_MORE_INPUT;
 }
@@ -233,8 +267,10 @@ SinkFinalizeType IcebergInsert::Finalize(Pipeline &pipeline, Event &event, Clien
 	auto &table_info = irc_table.table_info;
 	auto &transaction = IRCTransaction::Get(context, table->catalog);
 
-	table_info.AddSnapshot(transaction, std::move(global_state.written_files));
-	transaction.MarkTableAsDirty(irc_table);
+	if (!global_state.written_files.empty()) {
+		table_info.AddSnapshot(transaction, std::move(global_state.written_files));
+		transaction.MarkTableAsDirty(irc_table);
+	}
 	return SinkFinalizeType::READY;
 }
 
@@ -366,16 +402,36 @@ PhysicalOperator &IcebergInsert::PlanCopyForInsert(ClientContext &context, Physi
 	return physical_copy;
 }
 
+void VerifyDirectInsertionOrder(LogicalInsert &op) {
+	idx_t column_index = 0;
+	for (auto &mapping : op.column_index_map) {
+		if (mapping == DConstants::INVALID_INDEX || mapping != column_index) {
+			//! See issue#444
+			throw NotImplementedException("Iceberg inserts don't support targeted inserts yet (i.e tbl(col1,col2))");
+		}
+		column_index++;
+	}
+}
+
 PhysicalOperator &IRCatalog::PlanInsert(ClientContext &context, PhysicalPlanGenerator &planner, LogicalInsert &op,
                                         optional_ptr<PhysicalOperator> plan) {
 	if (op.return_chunk) {
 		throw BinderException("RETURNING clause not yet supported for insertion into Iceberg table");
 	}
-	if (op.action_type != OnConflictAction::THROW) {
+
+	if (op.on_conflict_info.action_type != OnConflictAction::THROW) {
 		throw BinderException("ON CONFLICT clause not yet supported for insertion into Iceberg table");
 	}
 
+	VerifyDirectInsertionOrder(op);
+
 	auto &table_entry = op.table.Cast<ICTableEntry>();
+	// FIXME: Inserts into V3 tables is not yet supported since
+	// we need to keep track of row lineage, which we do not support
+	// https://iceberg.apache.org/spec/#row-lineage
+	if (table_entry.table_info.table_metadata.iceberg_version == 3) {
+		throw NotImplementedException("Insert into Iceberg V3 tables");
+	}
 	table_entry.PrepareIcebergScanFromEntry(context);
 	auto &table_info = table_entry.table_info;
 	auto &schema = table_info.table_metadata.GetLatestSchema();

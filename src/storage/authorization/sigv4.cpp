@@ -114,6 +114,12 @@ unique_ptr<HTTPResponse> SIGV4Authorization::GetRequest(ClientContext &context,
 	return aws_input.GetRequest(context);
 }
 
+unique_ptr<HTTPResponse> SIGV4Authorization::HeadRequest(ClientContext &context,
+                                                         const IRCEndpointBuilder &endpoint_builder) {
+	AWSInput aws_input = CreateAWSInput(context, endpoint_builder);
+	return aws_input.HeadRequest(context);
+}
+
 unique_ptr<HTTPResponse> SIGV4Authorization::DeleteRequest(ClientContext &context,
                                                            const IRCEndpointBuilder &endpoint_builder) {
 	AWSInput aws_input = CreateAWSInput(context, endpoint_builder);

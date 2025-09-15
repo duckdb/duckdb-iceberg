@@ -145,4 +145,4 @@ Binder Error
 query II
 EXPLAIN SELECT count(*) FROM my_datalake.default.pyspark_iceberg_table_v2;
 ----
-physical_plan	<REGEX>:.*ICEBERG_SCAN.*Rows.*
+physical_plan	<REGEX>:.*ICEBERG_SCAN.*rows.*

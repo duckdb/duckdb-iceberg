@@ -2,6 +2,7 @@
 #include "storage/table_create/iceberg_create_table_request.hpp"
 #include "storage/irc_table_set.hpp"
 #include "storage/iceberg_table_information.hpp"
+#include "duckdb/parser/constraints/not_null_constraint.hpp"
 #include "utils/iceberg_type.hpp"
 #include "duckdb/common/enums/catalog_type.hpp"
 #include "duckdb/catalog/catalog_entry/copy_function_catalog_entry.hpp"
@@ -105,9 +106,23 @@ shared_ptr<IcebergTableSchema> IcebergCreateTableRequest::CreateIcebergSchema(co
 		return field_id++;
 	};
 
+	auto &constraints = table_entry->GetConstraints();
 	for (auto column = column_iterator.begin(); column != column_iterator.end(); ++column) {
 		auto name = (*column).Name();
+		// check if there is a not null constraint
 		bool required = false;
+		if (!constraints.empty()) {
+			for (auto &constraint : constraints) {
+				if (constraint->type != ConstraintType::NOT_NULL) {
+					continue;
+				}
+				auto &not_null_constraint = constraint->Cast<NotNullConstraint>();
+				if (not_null_constraint.index.IsValid() && not_null_constraint.index.index == column.pos) {
+					required = true;
+				}
+			}
+		}
+
 		auto logical_type = (*column).GetType();
 		idx_t first_id = next_field_id();
 		rest_api_objects::Type type;

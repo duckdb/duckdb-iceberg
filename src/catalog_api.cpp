@@ -17,7 +17,7 @@
 using namespace duckdb_yyjson;
 namespace duckdb {
 
-vector<string> IRCAPI::ParseSchemaName(string &namespace_name) {
+vector<string> IRCAPI::ParseSchemaName(const string &namespace_name) {
 	idx_t start = 0;
 	idx_t end = namespace_name.find(".", start);
 	vector<string> ret;
@@ -40,6 +40,7 @@ string IRCAPI::GetSchemaName(const vector<string> &items) {
 
 //! Used for the path parameters
 string IRCAPI::GetEncodedSchemaName(const vector<string> &items) {
+	D_ASSERT(!items.empty());
 	static const string unit_separator = "%1F";
 	return StringUtil::Join(items, unit_separator);
 }
@@ -63,8 +64,54 @@ string IRCAPI::GetEncodedSchemaName(const vector<string> &items) {
 	                    int(response.status));
 }
 
-static string GetTableMetadata(ClientContext &context, IRCatalog &catalog, const IRCSchemaEntry &schema,
-                               const string &table) {
+bool IRCAPI::VerifySchemaExistence(ClientContext &context, IRCatalog &catalog, const string &schema) {
+	auto namespace_items = ParseSchemaName(schema);
+	auto schema_name = GetEncodedSchemaName(namespace_items);
+
+	auto url_builder = catalog.GetBaseUrl();
+	url_builder.AddPathComponent(catalog.prefix);
+	url_builder.AddPathComponent("namespaces");
+	url_builder.AddPathComponent(schema_name);
+
+	auto url = url_builder.GetURL();
+	auto response = catalog.auth_handler->HeadRequest(context, url_builder);
+	// the httputil currently only sets 200 and 304 response to success
+	// for AWS all responses < 400 are successful
+	if (response->Success() || response->status == HTTPStatusCode::NoContent_204) {
+		return true;
+	}
+	if (response->status == HTTPStatusCode::NotFound_404) {
+		return false;
+	}
+	ThrowException(url, *response, response->reason);
+}
+
+bool IRCAPI::VerifyTableExistence(ClientContext &context, IRCatalog &catalog, const IRCSchemaEntry &schema,
+                                  const string &table) {
+	auto schema_name = GetEncodedSchemaName(schema.namespace_items);
+
+	auto url_builder = catalog.GetBaseUrl();
+	url_builder.AddPathComponent(catalog.prefix);
+	url_builder.AddPathComponent("namespaces");
+	url_builder.AddPathComponent(schema_name);
+	url_builder.AddPathComponent("tables");
+	url_builder.AddPathComponent(table);
+
+	auto url = url_builder.GetURL();
+	auto response = catalog.auth_handler->HeadRequest(context, url_builder);
+	// the httputil currently only sets 200 and 304 response to success
+	// for AWS all responses < 400 are successful
+	if (response->Success() || response->status == HTTPStatusCode::NoContent_204) {
+		return true;
+	}
+	if (response->status == HTTPStatusCode::NotFound_404) {
+		return false;
+	}
+	ThrowException(url, *response, response->reason);
+}
+
+static unique_ptr<HTTPResponse> GetTableMetadata(ClientContext &context, IRCatalog &catalog,
+                                                 const IRCSchemaEntry &schema, const string &table) {
 	auto schema_name = IRCAPI::GetEncodedSchemaName(schema.namespace_items);
 
 	auto url_builder = catalog.GetBaseUrl();
@@ -75,91 +122,133 @@ static string GetTableMetadata(ClientContext &context, IRCatalog &catalog, const
 	url_builder.AddPathComponent(table);
 
 	auto url = url_builder.GetURL();
-	auto response = catalog.auth_handler->GetRequest(context, url_builder);
-	if (!response->Success()) {
-		ThrowException(url, *response, "GET");
-	}
-
-	const auto &api_result = response->body;
-	std::unique_ptr<yyjson_doc, YyjsonDocDeleter> doc(ICUtils::api_result_to_doc(api_result));
-	auto *root = yyjson_doc_get_root(doc.get());
-	auto load_table_result = rest_api_objects::LoadTableResult::FromJSON(root);
-	catalog.SetCachedValue(url, api_result, load_table_result);
-	return api_result;
+	return catalog.auth_handler->GetRequest(context, url_builder);
 }
 
-rest_api_objects::LoadTableResult IRCAPI::GetTable(ClientContext &context, IRCatalog &catalog,
-                                                   const IRCSchemaEntry &schema, const string &table_name) {
-	string result = GetTableMetadata(context, catalog, schema, table_name);
-	std::unique_ptr<yyjson_doc, YyjsonDocDeleter> doc(ICUtils::api_result_to_doc(result));
+APIResult<rest_api_objects::LoadTableResult> IRCAPI::GetTable(ClientContext &context, IRCatalog &catalog,
+                                                              const IRCSchemaEntry &schema, const string &table_name) {
+	auto ret = APIResult<rest_api_objects::LoadTableResult>();
+	auto result = GetTableMetadata(context, catalog, schema, table_name);
+	if (result->status != HTTPStatusCode::OK_200) {
+		yyjson_val *error_obj = ICUtils::get_error_message(result->body);
+		if (error_obj == nullptr) {
+			throw InvalidConfigurationException(result->body);
+		}
+		ret.has_error = true;
+		ret.status_ = result->status;
+		ret.error_ = rest_api_objects::IcebergErrorResponse::FromJSON(error_obj);
+		return ret;
+	}
+	ret.has_error = false;
+	std::unique_ptr<yyjson_doc, YyjsonDocDeleter> doc(ICUtils::api_result_to_doc(result->body));
 	auto *metadata_root = yyjson_doc_get_root(doc.get());
-	auto load_table_result = rest_api_objects::LoadTableResult::FromJSON(metadata_root);
-	return load_table_result;
+	ret.result_ = rest_api_objects::LoadTableResult::FromJSON(metadata_root);
+	return ret;
 }
 
 vector<rest_api_objects::TableIdentifier> IRCAPI::GetTables(ClientContext &context, IRCatalog &catalog,
                                                             const IRCSchemaEntry &schema) {
 	auto schema_name = GetEncodedSchemaName(schema.namespace_items);
+	vector<rest_api_objects::TableIdentifier> all_identifiers;
+	string page_token;
 
-	auto url_builder = catalog.GetBaseUrl();
-	url_builder.AddPathComponent(catalog.prefix);
-	url_builder.AddPathComponent("namespaces");
-	url_builder.AddPathComponent(schema_name);
-	url_builder.AddPathComponent("tables");
-	auto response = catalog.auth_handler->GetRequest(context, url_builder);
-	if (!response->Success()) {
-		auto url = url_builder.GetURL();
-		ThrowException(url, *response, "GET");
-	}
+	do {
+		auto url_builder = catalog.GetBaseUrl();
+		url_builder.AddPathComponent(catalog.prefix);
+		url_builder.AddPathComponent("namespaces");
+		url_builder.AddPathComponent(schema_name);
+		url_builder.AddPathComponent("tables");
+		if (!page_token.empty()) {
+			url_builder.SetParam("pageToken", page_token);
+		}
+		auto response = catalog.auth_handler->GetRequest(context, url_builder);
+		if (!response->Success()) {
+			if (response->status == HTTPStatusCode::Forbidden_403 ||
+			    response->status == HTTPStatusCode::Unauthorized_401) {
+				// return empty result if user cannot list tables for a schema.
+				vector<rest_api_objects::TableIdentifier> ret;
+				return ret;
+			}
+			auto url = url_builder.GetURL();
+			ThrowException(url, *response, "GET");
+		}
 
-	std::unique_ptr<yyjson_doc, YyjsonDocDeleter> doc(ICUtils::api_result_to_doc(response->body));
-	auto *root = yyjson_doc_get_root(doc.get());
-	auto list_tables_response = rest_api_objects::ListTablesResponse::FromJSON(root);
+		std::unique_ptr<yyjson_doc, YyjsonDocDeleter> doc(ICUtils::api_result_to_doc(response->body));
+		auto *root = yyjson_doc_get_root(doc.get());
+		auto list_tables_response = rest_api_objects::ListTablesResponse::FromJSON(root);
 
-	if (!list_tables_response.has_identifiers) {
-		throw NotImplementedException("List of 'identifiers' is missing, missing support for Iceberg V1");
-	}
-	return std::move(list_tables_response.identifiers);
+		if (!list_tables_response.has_identifiers) {
+			throw NotImplementedException("List of 'identifiers' is missing, missing support for Iceberg V1");
+		}
+
+		all_identifiers.insert(all_identifiers.end(), std::make_move_iterator(list_tables_response.identifiers.begin()),
+		                       std::make_move_iterator(list_tables_response.identifiers.end()));
+
+		if (list_tables_response.has_next_page_token) {
+			page_token = list_tables_response.next_page_token.value;
+		} else {
+			page_token.clear();
+		}
+	} while (!page_token.empty());
+
+	return all_identifiers;
 }
 
 vector<IRCAPISchema> IRCAPI::GetSchemas(ClientContext &context, IRCatalog &catalog, const vector<string> &parent) {
 	vector<IRCAPISchema> result;
-	auto endpoint_builder = catalog.GetBaseUrl();
-	endpoint_builder.AddPathComponent(catalog.prefix);
-	endpoint_builder.AddPathComponent("namespaces");
-	if (!parent.empty()) {
-		auto parent_name = GetSchemaName(parent);
-		endpoint_builder.SetParam("parent", parent_name);
-	}
-	auto response = catalog.auth_handler->GetRequest(context, endpoint_builder);
-	if (!response->Success()) {
-		auto url = endpoint_builder.GetURL();
-		ThrowException(url, *response, "GET");
-	}
-
-	std::unique_ptr<yyjson_doc, YyjsonDocDeleter> doc(ICUtils::api_result_to_doc(response->body));
-	auto *root = yyjson_doc_get_root(doc.get());
-	auto list_namespaces_response = rest_api_objects::ListNamespacesResponse::FromJSON(root);
-	if (!list_namespaces_response.has_namespaces) {
-		//! FIXME: old code expected 'namespaces' to always be present, but it's not a required property
-		return result;
-	}
-	auto &schemas = list_namespaces_response.namespaces;
-	for (auto &schema : schemas) {
-		IRCAPISchema schema_result;
-		schema_result.catalog_name = catalog.GetName();
-		schema_result.items = std::move(schema.value);
-
-		if (catalog.attach_options.support_nested_namespaces) {
-			auto new_parent = parent;
-			new_parent.push_back(schema_result.items.back());
-			auto nested_namespaces = GetSchemas(context, catalog, new_parent);
-			result.insert(result.end(), std::make_move_iterator(nested_namespaces.begin()),
-			              std::make_move_iterator(nested_namespaces.end()));
+	string page_token = "";
+	do {
+		auto endpoint_builder = catalog.GetBaseUrl();
+		endpoint_builder.AddPathComponent(catalog.prefix);
+		endpoint_builder.AddPathComponent("namespaces");
+		if (!parent.empty()) {
+			auto parent_name = GetSchemaName(parent);
+			endpoint_builder.SetParam("parent", parent_name);
+		}
+		if (!page_token.empty()) {
+			endpoint_builder.SetParam("pageToken", page_token);
+		}
+		auto response = catalog.auth_handler->GetRequest(context, endpoint_builder);
+		if (!response->Success()) {
+			if (response->status == HTTPStatusCode::Forbidden_403 ||
+			    response->status == HTTPStatusCode::Unauthorized_401) {
+				// return empty result if user cannot list schemas.
+				return result;
+			}
+			auto url = endpoint_builder.GetURL();
+			ThrowException(url, *response, "GET");
 		}
 
-		result.push_back(schema_result);
-	}
+		std::unique_ptr<yyjson_doc, YyjsonDocDeleter> doc(ICUtils::api_result_to_doc(response->body));
+		auto *root = yyjson_doc_get_root(doc.get());
+		auto list_namespaces_response = rest_api_objects::ListNamespacesResponse::FromJSON(root);
+		if (!list_namespaces_response.has_namespaces) {
+			//! FIXME: old code expected 'namespaces' to always be present, but it's not a required property
+			return result;
+		}
+		auto &schemas = list_namespaces_response.namespaces;
+		for (auto &schema : schemas) {
+			IRCAPISchema schema_result;
+			schema_result.catalog_name = catalog.GetName();
+			schema_result.items = std::move(schema.value);
+
+			if (catalog.attach_options.support_nested_namespaces) {
+				auto new_parent = parent;
+				new_parent.push_back(schema_result.items.back());
+				auto nested_namespaces = GetSchemas(context, catalog, new_parent);
+				result.insert(result.end(), std::make_move_iterator(nested_namespaces.begin()),
+				              std::make_move_iterator(nested_namespaces.end()));
+			}
+			result.push_back(schema_result);
+		}
+
+		if (list_namespaces_response.has_next_page_token) {
+			page_token = list_namespaces_response.next_page_token.value;
+		} else {
+			page_token.clear();
+		}
+	} while (!page_token.empty());
+
 	return result;
 }
 

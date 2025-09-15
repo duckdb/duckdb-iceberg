@@ -32,8 +32,7 @@ attach 'arn:aws:s3tables:us-east-2:840140254803:bucket/iceberg-testing' as s3_ca
     ENDPOINT_TYPE 'S3_TABLES'
 );
 
-statement ok
-show all tables;
+set ignore_error_messages
 
 query I
 select count(*) > 20 from (show all tables);

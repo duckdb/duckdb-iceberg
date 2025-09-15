@@ -267,6 +267,10 @@ unique_ptr<HTTPResponse> AWSInput::ExecuteRequest(ClientContext &context, Aws::H
 	throw NotImplementedException("Only GET and POST are implemented at the moment");
 }
 
+unique_ptr<HTTPResponse> AWSInput::HeadRequest(ClientContext &context) {
+	return ExecuteRequest(context, Aws::Http::HttpMethod::HTTP_HEAD);
+}
+
 unique_ptr<HTTPResponse> AWSInput::GetRequest(ClientContext &context) {
 	return ExecuteRequest(context, Aws::Http::HttpMethod::HTTP_GET);
 }

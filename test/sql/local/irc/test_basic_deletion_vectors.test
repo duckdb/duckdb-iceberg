@@ -19,7 +19,7 @@ statement ok
 create view my_datalake.default.deletion_vectors as select * from ICEBERG_SCAN('data/generated/iceberg/spark-local/default/deletion_vectors');
 
 statement ok
-pragma enable_logging('Iceberg');
+CALL enable_logging('Iceberg');
 
 query I
 select count(*) from my_datalake.default.deletion_vectors

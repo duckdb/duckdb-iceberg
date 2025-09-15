@@ -1,0 +1,35 @@
+# name: test/sql/cloud/test_glue_catalog_with_other_tables.test
+# group: [cloud]
+
+require-env ICEBERG_AWS_REMOTE_AVAILABLE
+
+require-env AWS_ACCESS_KEY_ID
+
+require-env AWS_SECRET_ACCESS_KEY
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+require aws
+
+statement ok
+CREATE SECRET iceberg_secret (
+    TYPE S3,
+    PROVIDER credential_chain
+);
+
+statement ok
+attach '840140254803' as glue_catalog (
+  type iceberg,
+  endpoint 'glue.us-east-1.amazonaws.com/iceberg',
+  AUTHORIZATION_TYPE 'sigv4'
+);
+
+
+statement ok
+show all tables;

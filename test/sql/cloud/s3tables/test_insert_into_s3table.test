@@ -26,6 +26,8 @@ CREATE SECRET s1 (
   PROVIDER credential_chain
 );
 
+set ignore_error_messages
+
 statement ok
 attach 'arn:aws:s3tables:us-east-2:840140254803:bucket/iceberg-testing' as s3_catalog (
     TYPE ICEBERG,

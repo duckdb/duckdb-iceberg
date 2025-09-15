@@ -50,8 +50,9 @@ public:
 	                                 case_insensitive_set_t &set_by_attach_options);
 
 public:
-	static unique_ptr<Catalog> Attach(StorageExtensionInfo *storage_info, ClientContext &context, AttachedDatabase &db,
-	                                  const string &name, AttachInfo &info, AccessMode access_mode);
+	static unique_ptr<Catalog> Attach(optional_ptr<StorageExtensionInfo> storage_info, ClientContext &context,
+	                                  AttachedDatabase &db, const string &name, AttachInfo &info,
+	                                  AttachOptions &options);
 
 public:
 	void Initialize(bool load_builtin) override;

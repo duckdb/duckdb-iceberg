@@ -17,6 +17,7 @@ public:
 
 public:
 	unique_ptr<HTTPResponse> GetRequest(ClientContext &context);
+	unique_ptr<HTTPResponse> HeadRequest(ClientContext &context);
 	unique_ptr<HTTPResponse> DeleteRequest(ClientContext &context);
 	unique_ptr<HTTPResponse> PostRequest(ClientContext &context, string post_body);
 

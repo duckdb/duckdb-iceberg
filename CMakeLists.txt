@@ -4,7 +4,7 @@ cmake_minimum_required(VERSION 3.5...3.29)
 set(TARGET_NAME iceberg)
 project(${TARGET_NAME})
 
-set(CMAKE_CXX_STANDARD 14)
+set(CMAKE_CXX_STANDARD 14 CACHE STRING "C++ standard")
 set(CMAKE_CXX_STANDARD_REQUIRED True)
 
 set(EXTENSION_NAME ${TARGET_NAME}_extension)

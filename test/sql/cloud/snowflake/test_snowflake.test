@@ -40,9 +40,14 @@ attach 'GCS_catalog' as my_datalake (
 	ENDPOINT '${SNOWFLAKE_CATALOG_URI_GCS}'
 );
 
+statement ok
+create schema if not exists my_datalake.test_create_schema;
+
+statement ok
+create table my_datalake.test_create_schema.table1 as select range a from range(10);
 
 query I
-select * from my_datalake.default.duckdb_created_table;
+select * from my_datalake.test_create_schema.table1;
 ----
 0
 1
@@ -54,3 +59,9 @@ select * from my_datalake.default.duckdb_created_table;
 7
 8
 9
+
+statement ok
+drop table if exists my_datalake.test_create_schema.table1;
+
+statement ok
+drop schema if exists my_datalake.test_create_schema;

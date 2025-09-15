@@ -231,6 +231,21 @@ void IRCTransaction::DropSecrets(ClientContext &context) {
 	}
 }
 
+static rest_api_objects::TableUpdate CreateSetSnapshotRefUpdate(int64_t snapshot_id) {
+	rest_api_objects::TableUpdate table_update;
+
+	table_update.has_set_snapshot_ref_update = true;
+	auto &update = table_update.set_snapshot_ref_update;
+	update.base_update.action = "set-snapshot-ref";
+	update.has_action = true;
+	update.action = "set-snapshot-ref";
+
+	update.ref_name = "main";
+	update.snapshot_reference.type = "branch";
+	update.snapshot_reference.snapshot_id = snapshot_id;
+	return table_update;
+}
+
 TableTransactionInfo IRCTransaction::GetTransactionRequest(ClientContext &context) {
 	TableTransactionInfo info;
 	auto &transaction = info.request;
@@ -278,9 +293,10 @@ TableTransactionInfo IRCTransaction::GetTransactionRequest(ClientContext &contex
 				commit_state.table_change.requirements.push_back(
 				    CreateAssertRefSnapshotIdRequirement(*current_snapshot));
 			}
-
 			auto &last_alter = transaction_data.alters.back();
-			commit_state.table_change.updates.push_back(last_alter.get().CreateSetSnapshotRefUpdate());
+			auto snapshot_id = last_alter.get().snapshot.snapshot_id;
+			auto set_snapshot_ref_update = CreateSetSnapshotRefUpdate(snapshot_id);
+			commit_state.table_change.updates.push_back(std::move(set_snapshot_ref_update));
 		}
 
 		transaction.table_changes.push_back(std::move(table_change));

@@ -1,11 +1,11 @@
 # name: test/sql/local/iceberg_scans/big_query_read.test
 # group: [iceberg_scans]
 
+require avro
+
 require parquet
 
 require iceberg
-
-require avro
 
 query III
 select * from iceberg_scan('data/persistent/big_query_error');
