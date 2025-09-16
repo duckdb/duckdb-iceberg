@@ -1,4 +1,5 @@
 #include "iceberg_predicate.hpp"
+#include "duckdb/planner/expression/bound_operator_expression.hpp"
 #include "duckdb/planner/filter/constant_filter.hpp"
 #include "duckdb/planner/filter/conjunction_filter.hpp"
 #include "duckdb/planner/filter/null_filter.hpp"
@@ -80,16 +81,34 @@ bool MatchBoundsTemplated(const TableFilter &filter, const IcebergPredicateStats
 		return MatchBoundsIsNotNullFilter<TRANSFORM>(stats, transform);
 	}
 	case TableFilterType::EXPRESSION_FILTER: {
+		//! Expressions can be arbitrarily complex, and we currently only support IS NULL/IS NOT NULL checks against the
+		//! column itself, i.e. where the expression is a BOUND_OPERATOR with type OPERATOR_IS_NULL/_IS_NOT_NULL with a
+		//! single child expression of type BOUND_REF.
+		//!
+		//! See duckdb/duckdb-iceberg#464
 		auto &expression_filter = filter.Cast<ExpressionFilter>();
 		auto &expr = *expression_filter.expr;
+
+		if (expr.type != ExpressionType::OPERATOR_IS_NULL && expr.type != ExpressionType::OPERATOR_IS_NOT_NULL) {
+			return true;
+		}
+
+		D_ASSERT(expr.GetExpressionClass() == ExpressionClass::BOUND_OPERATOR);
+		auto &bound_operator_expr = expr.Cast<BoundOperatorExpression>();
+
+		D_ASSERT(bound_operator_expr.children.size() == 1);
+		auto &child_expr = bound_operator_expr.children[0];
+		if (child_expr->type != ExpressionType::BOUND_REF) {
+			//! We can't evaluate expressions that aren't direct column references
+			return true;
+		}
+
 		if (expr.type == ExpressionType::OPERATOR_IS_NULL) {
 			return MatchBoundsIsNullFilter<TRANSFORM>(stats, transform);
-		}
-		if (expr.type == ExpressionType::OPERATOR_IS_NOT_NULL) {
+		} else {
+			D_ASSERT(expr.type == ExpressionType::OPERATOR_IS_NOT_NULL);
 			return MatchBoundsIsNotNullFilter<TRANSFORM>(stats, transform);
 		}
-		//! Any other expression can not be filtered
-		return true;
 	}
 	default:
 		//! Conservative approach: we don't know what this is, just say it doesn't filter anything

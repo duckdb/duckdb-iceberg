@@ -48,6 +48,17 @@ public:
 	bool SetCachedValue(const string &url, const string &value, const rest_api_objects::LoadTableResult &result);
 	static void SetAWSCatalogOptions(IcebergAttachOptions &attach_options,
 	                                 case_insensitive_set_t &set_by_attach_options);
+	//! Whether or not this catalog should search a specific type with the standard priority
+	CatalogLookupBehavior CatalogTypeLookupRule(CatalogType type) const override {
+		switch (type) {
+		case CatalogType::TABLE_FUNCTION_ENTRY:
+		case CatalogType::SCALAR_FUNCTION_ENTRY:
+		case CatalogType::AGGREGATE_FUNCTION_ENTRY:
+			return CatalogLookupBehavior::NEVER_LOOKUP;
+		default:
+			return CatalogLookupBehavior::STANDARD;
+		}
+	}
 
 public:
 	static unique_ptr<Catalog> Attach(optional_ptr<StorageExtensionInfo> storage_info, ClientContext &context,

@@ -45,11 +45,12 @@ public:
 	IRCSchemaEntry &schema;
 	string name;
 	string table_id;
-	// bool deleted;
 
 	rest_api_objects::LoadTableResult load_table_result;
 	IcebergTableMetadata table_metadata;
 	unordered_map<int32_t, unique_ptr<ICTableEntry>> schema_versions;
+	// dummy entry to hold existence of a table, but no schema versions
+	unique_ptr<ICTableEntry> dummy_entry;
 
 public:
 	unique_ptr<IcebergTransactionData> transaction_data;

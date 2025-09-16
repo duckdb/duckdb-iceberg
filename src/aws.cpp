@@ -122,6 +122,18 @@ std::shared_ptr<Aws::Http::HttpRequest> AWSInput::CreateSignedRequest(Aws::Http:
 	// return request;
 }
 
+static string GetPayloadHash(const char *buffer, idx_t buffer_len) {
+	if (buffer_len > 0) {
+		hash_bytes payload_hash_bytes;
+		hash_str payload_hash_str;
+		sha256(buffer, buffer_len, payload_hash_bytes);
+		hex256(payload_hash_bytes, payload_hash_str);
+		return string((char *)payload_hash_str, sizeof(payload_hash_str));
+	} else {
+		return "";
+	}
+}
+
 unique_ptr<HTTPResponse> AWSInput::ExecuteRequest(ClientContext &context, Aws::Http::HttpMethod method,
                                                   const string body, string content_type) {
 
@@ -140,6 +152,11 @@ unique_ptr<HTTPResponse> AWSInput::ExecuteRequest(ClientContext &context, Aws::H
 		// If access key is not set, we don't set the headers at all to allow accessing public files through s3 urls
 
 		string payload_hash = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"; // Empty payload hash
+
+		if (!body.empty()) {
+			payload_hash = GetPayloadHash(body.c_str(), body.size());
+		}
+
 		// key_id, secret, session_token
 		// we can pass date/time but this is mostly useful in testing. normally we just get the current datetime
 		// here.
@@ -161,6 +178,9 @@ unique_ptr<HTTPResponse> AWSInput::ExecuteRequest(ClientContext &context, Aws::H
 		hash_str canonical_request_hash_str;
 		if (content_type.length() > 0) {
 			signed_headers += "content-type;";
+#ifdef EMSCRIPTEN
+			res["content-type"] = content_type;
+#endif
 		}
 		signed_headers += "host;x-amz-content-sha256;x-amz-date";
 		if (session_token.length() > 0) {
@@ -244,19 +264,14 @@ unique_ptr<HTTPResponse> AWSInput::ExecuteRequest(ClientContext &context, Aws::H
 
 	params = http_util.InitializeParameters(context, request_url);
 
-	if (!body.empty()) {
-		throw NotImplementedException("CreateSignedRequest with non-empty body is not supported at this time");
-		/*
-		                auto bodyStream = Aws::MakeShared<Aws::StringStream>("");
-		                *bodyStream << body;
-		                request->AddContentBody(bodyStream);
-		                request->SetContentLength(std::to_string(body.size()));
-		                if (!content_type.empty()) {
-		                        request->SetHeaderValue("Content-Type", content_type);
-		                }
-		*/
+	if (method == Aws::Http::HttpMethod::HTTP_HEAD) {
+		HeadRequestInfo head_request(request_url, res, *params);
+		return http_util.Request(head_request);
 	}
-
+	if (method == Aws::Http::HttpMethod::HTTP_DELETE) {
+		DeleteRequestInfo delete_request(request_url, res, *params);
+		return http_util.Request(delete_request);
+	}
 	if (method == Aws::Http::HttpMethod::HTTP_GET) {
 		GetRequestInfo get_request(request_url, res, *params, nullptr, nullptr);
 		return http_util.Request(get_request);
