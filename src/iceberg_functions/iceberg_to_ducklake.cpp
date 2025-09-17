@@ -439,7 +439,7 @@ public:
 	}
 
 public:
-	//! Contains the stats used to write the 'ducklake_file_column_statistics'
+	//! Contains the stats used to write the 'ducklake_file_column_stats'
 	IcebergManifestEntry manifest_entry;
 	DuckLakePartition &partition;
 
@@ -1001,7 +1001,7 @@ public:
 public:
 	vector<string> CreateSQLStatements() {
 		//! Order to process in:
-		// - snapshot
+		// - snapshot + schema_versions
 		// - schema
 		// - table
 		//   - partition_info
@@ -1026,6 +1026,13 @@ public:
 			auto &snapshot = it.second;
 
 			auto values = snapshot.FinalizeEntry(serializer);
+			if (snapshot.catalog_changes) {
+				auto snapshot_id = snapshot.snapshot_id;
+				auto schema_version = snapshot.base_schema_version;
+				sql.push_back(
+				    StringUtil::Format("INSERT INTO {METADATA_CATALOG}.ducklake_schema_versions VALUES (%llu, %llu);",
+				                       snapshot_id.GetIndex(), schema_version));
+			}
 			sql.push_back(StringUtil::Format("INSERT INTO {METADATA_CATALOG}.ducklake_snapshot %s", values));
 		}
 
@@ -1083,7 +1090,7 @@ public:
 				auto data_file_id = data_file.data_file_id.GetIndex();
 				auto &start_snapshot = snapshots.at(data_file.start_snapshot);
 
-				//! ducklake_file_column_statistics
+				//! ducklake_file_column_stats
 				auto columns = table.GetColumnsAtSnapshot(start_snapshot);
 				for (auto &it : columns) {
 					auto column_id = it.first;
@@ -1130,11 +1137,11 @@ public:
 					auto contains_nan = stats.has_nan ? "true" : "false";
 					auto min_value = stats.lower_bound.IsNull() ? "NULL" : "'" + stats.lower_bound.ToString() + "'";
 					auto max_value = stats.upper_bound.IsNull() ? "NULL" : "'" + stats.upper_bound.ToString() + "'";
-					auto values = StringUtil::Format("VALUES(%d, %d, %d, %s, %s, %s, %s, %s, %s);", data_file_id,
+					auto values = StringUtil::Format("VALUES(%d, %d, %d, %s, %s, %s, %s, %s, %s, NULL);", data_file_id,
 					                                 table_id, column_id, column_size_bytes, value_count,
 					                                 null_count.ToString(), min_value, max_value, contains_nan);
-					sql.push_back(StringUtil::Format(
-					    "INSERT INTO {METADATA_CATALOG}.ducklake_file_column_statistics %s", values));
+					sql.push_back(
+					    StringUtil::Format("INSERT INTO {METADATA_CATALOG}.ducklake_file_column_stats %s", values));
 
 					if (!data_file.has_end && !column.has_end && !column.IsNested()) {
 						//! This data file is currently active, collect stats for it
@@ -1218,8 +1225,8 @@ public:
 				auto contains_nan = stats.contains_nan ? "true" : "false";
 				auto min_value = stats.min_value.IsNull() ? "NULL" : "'" + stats.min_value.ToString() + "'";
 				auto max_value = stats.max_value.IsNull() ? "NULL" : "'" + stats.max_value.ToString() + "'";
-				auto values = StringUtil::Format("VALUES(%d, %d, %s, %s, %s, %s);", table_id, column_id, contains_null,
-				                                 contains_nan, min_value, max_value);
+				auto values = StringUtil::Format("VALUES(%d, %d, %s, %s, %s, %s, NULL);", table_id, column_id,
+				                                 contains_null, contains_nan, min_value, max_value);
 				sql.push_back(
 				    StringUtil::Format("INSERT INTO {METADATA_CATALOG}.ducklake_table_column_stats %s", values));
 			}
@@ -1286,7 +1293,8 @@ public:
 				changes.push_back(StringUtil::Format("altered_table:%d", table_id));
 			}
 			auto snapshot_id = snapshot.snapshot_id.GetIndex();
-			auto values = StringUtil::Format("VALUES(%d, '%s');", snapshot_id, StringUtil::Join(changes, ","));
+			auto values =
+			    StringUtil::Format("VALUES(%d, '%s', NULL, NULL, NULL);", snapshot_id, StringUtil::Join(changes, ","));
 			sql.push_back(StringUtil::Format("INSERT INTO {METADATA_CATALOG}.ducklake_snapshot_changes %s", values));
 		}
 		sql.push_back("COMMIT TRANSACTION;");
@@ -1452,8 +1460,9 @@ public:
 			    "DuckLake version metadata is corrupt, the value can't be NULL and has to be of type VARCHAR");
 		}
 		auto version_string = value.GetValue<string>();
-		if (version_string != "0.2") {
-			throw InvalidInputException("'iceberg_to_ducklake' only support version 0.2 currently");
+		if (!StringUtil::StartsWith(version_string, "0.3")) {
+			throw InvalidInputException(
+			    "'iceberg_to_ducklake' only support version 0.3 currently, detected '%s' instead", version_string);
 		}
 	}
 
