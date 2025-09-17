@@ -65,7 +65,7 @@ public:
 	void ApplyEqualityDeletes(ClientContext &context, DataChunk &output_chunk,
 	                          const IcebergMultiFileList &multi_file_list, const IcebergManifestEntry &data_file,
 	                          const vector<MultiFileColumnDefinition> &local_columns,
-	                          unordered_map<idx_t, idx_t> field_id_to_result_id);
+	                          const unordered_map<idx_t, idx_t> &field_id_to_result_id);
 	bool ParseOption(const string &key, const Value &val, MultiFileOptions &options, ClientContext &context) override;
 
 public:
