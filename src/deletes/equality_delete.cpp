@@ -61,25 +61,27 @@ void IcebergMultiFileList::ScanEqualityDeleteFile(const IcebergManifestEntry &en
 		id_to_global_column[col.identifier.GetValue<int32_t>()] = i;
 	}
 
-	auto new_column_indexes = column_indexes;
-	for (auto field_id : entry.equality_ids) {
-		auto global_column_id = id_to_global_column[field_id];
-		ColumnIndex equality_index(global_column_id);
-		//! Check if the column needed by the equality delete is present
-		if (std::find(column_indexes.begin(), column_indexes.end(), equality_index) == column_indexes.end()) {
-			//! Column isn't being selected, add the column so it can be used for the equality delete
-			new_column_indexes.push_back(equality_index);
-		}
-	}
-
 	unordered_map<idx_t, idx_t> global_id_to_result_id;
-	for (idx_t i = 0; i < new_column_indexes.size(); i++) {
-		auto &column_index = new_column_indexes[i];
+	for (idx_t i = 0; i < column_indexes.size(); i++) {
+		auto &column_index = column_indexes[i];
 		if (column_index.IsVirtualColumn()) {
 			continue;
 		}
 		auto global_id = column_index.GetPrimaryIndex();
 		global_id_to_result_id[global_id] = i;
+	}
+	//! For the column(s) that are needed but aren't referenced, add them to the map
+	for (auto field_id : entry.equality_ids) {
+		auto global_column_id = id_to_global_column[field_id];
+		ColumnIndex equality_index(global_column_id);
+		//! Check if the column needed by the equality delete is present
+		if (std::find(column_indexes.begin(), column_indexes.end(), equality_index) != column_indexes.end()) {
+			continue;
+		}
+		auto new_result_id = column_indexes.size() + equality_id_to_result_id.size();
+		//! Create or get the result id mapping for this equality id
+		auto result_id = equality_id_to_result_id.emplace(field_id, new_result_id).first->second;
+		global_id_to_result_id[global_column_id] = result_id;
 	}
 
 	//! Take only the relevant columns from the result
@@ -97,13 +99,13 @@ void IcebergMultiFileList::ScanEqualityDeleteFile(const IcebergManifestEntry &en
 
 		auto it = global_id_to_result_id.find(global_column_id);
 		D_ASSERT(it != global_id_to_result_id.end());
-		global_column_id = it->second;
+		auto result_column_id = it->second;
 
 		for (idx_t i = 0; i < count; i++) {
 			auto &row = rows[i];
 			auto constant = vec.GetValue(i);
 			unique_ptr<Expression> equality_filter;
-			auto bound_ref = make_uniq<BoundReferenceExpression>(col.type, global_column_id);
+			auto bound_ref = make_uniq<BoundReferenceExpression>(col.type, result_column_id);
 			if (!constant.IsNull()) {
 				//! Create a COMPARE_NOT_EQUAL expression
 				equality_filter =
