@@ -49,3 +49,8 @@ select * from range(100) UNION ALL VALUES (-123), (123), (256)
 query I rowsort expected_res
 select * from my_datalake.default.variant_column;
 ----
+
+query I
+select count(*) from my_datalake.default.variant_column where col > 100
+----
+2
