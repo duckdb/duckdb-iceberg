@@ -119,6 +119,8 @@ public:
 	//! All equality deletes with sequence numbers higher than that of the data_file apply to that data_file
 	mutable map<sequence_number_t, unique_ptr<IcebergEqualityDeleteData>> equality_delete_data;
 	mutable mutex delete_lock;
+	//! The columns needed by the equality deletes that aren't referenced by the scan
+	mutable unordered_map<int32_t, column_t> equality_id_to_result_id;
 
 	bool initialized = false;
 	const IcebergOptions &options;

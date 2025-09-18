@@ -286,12 +286,18 @@ ReaderInitializeType IcebergMultiFileReader::InitializeReader(MultiFileReaderDat
 
 	//! Add the columns needed by the equality deletes if not present
 	auto new_global_column_ids = global_column_ids;
+	auto &equality_to_result_id = multi_file_list.equality_id_to_result_id;
+	new_global_column_ids.resize(global_column_ids.size() + equality_to_result_id.size());
 	for (auto field_id : equality_delete_ids) {
+		auto it = equality_to_result_id.find(field_id);
+		if (it == equality_to_result_id.end()) {
+			//! Already selected, no need to add
+			continue;
+		}
 		auto global_column_id = id_to_global_column[field_id];
 		ColumnIndex equality_index(global_column_id);
-		if (std::find(global_column_ids.begin(), global_column_ids.end(), equality_index) == global_column_ids.end()) {
-			new_global_column_ids.push_back(equality_index);
-		}
+		//! FIXME: is this correct?
+		new_global_column_ids[it->second] = equality_index;
 	}
 
 	return CreateMapping(context, reader_data, global_columns, new_global_column_ids, table_filters, gstate.file_list,
@@ -339,8 +345,7 @@ void IcebergMultiFileReader::FinalizeBind(MultiFileReaderData &reader_data, cons
 void IcebergMultiFileReader::ApplyEqualityDeletes(ClientContext &context, DataChunk &output_chunk,
                                                   const IcebergMultiFileList &multi_file_list,
                                                   const IcebergManifestEntry &data_file,
-                                                  const vector<MultiFileColumnDefinition> &local_columns,
-                                                  const unordered_map<idx_t, idx_t> &field_id_to_result_id) {
+                                                  const vector<MultiFileColumnDefinition> &local_columns) {
 	auto delete_rows = multi_file_list.GetEqualityDeletesForFile(data_file);
 
 	if (delete_rows.empty()) {
@@ -384,25 +389,7 @@ void IcebergMultiFileReader::ApplyEqualityDeletes(ClientContext &context, DataCh
 				}
 				continue;
 			}
-			if (field_id_to_result_id.empty()) {
-				equalities.push_back(expression->Copy());
-				continue;
-			}
-			idx_t index = field_id_to_result_id.at(field_id);
-			if (expression->type == ExpressionType::COMPARE_NOTEQUAL) {
-				auto &expr = expression->Cast<BoundComparisonExpression>();
-				auto bound_ref = make_uniq<BoundReferenceExpression>(expr.left->return_type, index);
-				unique_ptr<Expression> equality_filter = make_uniq<BoundComparisonExpression>(
-				    ExpressionType::COMPARE_NOTEQUAL, std::move(bound_ref), expr.right->Copy());
-				equalities.push_back(std::move(equality_filter));
-			} else if (expression->type == ExpressionType::OPERATOR_IS_NOT_NULL) {
-				auto &expr = expression->Cast<BoundOperatorExpression>();
-				auto bound_ref = make_uniq<BoundReferenceExpression>(expr.children[0]->return_type, index);
-				auto is_not_null =
-				    make_uniq<BoundOperatorExpression>(ExpressionType::OPERATOR_IS_NOT_NULL, LogicalType::BOOLEAN);
-				is_not_null->children.push_back(std::move(bound_ref));
-				equalities.push_back(std::move(is_not_null));
-			}
+			equalities.push_back(expression->Copy());
 		}
 
 		unique_ptr<Expression> filter;
@@ -440,14 +427,18 @@ void IcebergMultiFileReader::FinalizeChunk(ClientContext &context, const MultiFi
                                            DataChunk &input_chunk, DataChunk &output_chunk,
                                            ExpressionExecutor &executor,
                                            optional_ptr<MultiFileReaderGlobalState> global_state) {
+	D_ASSERT(global_state);
+	// Get the metadata for this file
+	const auto &multi_file_list = global_state->file_list->Cast<IcebergMultiFileList>();
 
 	//! Add the extra equality delete fields to output chunk.
-	int32_t diff = 0;
-	if (executor.expressions.size() != output_chunk.ColumnCount()) {
-		diff = executor.expressions.size() - output_chunk.ColumnCount();
-		for (int32_t i = diff; i > 0; i--) {
-			int32_t index = input_chunk.ColumnCount() - i;
-			output_chunk.data.emplace_back(input_chunk.data[index]);
+	idx_t diff = executor.expressions.size() - output_chunk.ColumnCount();
+	(void)diff;
+	D_ASSERT(diff == multi_file_list.equality_id_to_result_id.size());
+	if (diff > 0) {
+		int32_t start = input_chunk.ColumnCount() - diff;
+		for (int32_t i = 0; i < diff; i++) {
+			output_chunk.data.emplace_back(input_chunk.data[start + i]);
 		}
 	}
 
@@ -455,28 +446,10 @@ void IcebergMultiFileReader::FinalizeChunk(ClientContext &context, const MultiFi
 	MultiFileReader::FinalizeChunk(context, bind_data, reader, reader_data, input_chunk, output_chunk, executor,
 	                               global_state);
 
-	//! Map from index into local_columns -> field_id
 	auto &local_columns = reader.columns;
-	unordered_map<idx_t, idx_t> column_index_to_field_id;
-	for (idx_t i = 0; i < local_columns.size(); i++) {
-		auto &col = local_columns[i];
-		column_index_to_field_id[i] = col.identifier.GetValue<int32_t>();
-	}
-
-	//! Map from field_id -> index in 'output_chunk'
-	unordered_map<idx_t, idx_t> field_id_to_result_id;
-	auto &column_indexes = reader.column_indexes;
-	auto result_id = executor.expressions.size() - column_indexes.size();
-	for (auto &column_index : column_indexes) {
-		field_id_to_result_id[column_index_to_field_id[column_index.GetPrimaryIndex()]] = result_id++;
-	}
-
-	D_ASSERT(global_state);
-	// Get the metadata for this file
-	const auto &multi_file_list = dynamic_cast<const IcebergMultiFileList &>(*global_state->file_list);
 	auto file_id = reader.file_list_idx.GetIndex();
 	auto &data_file = multi_file_list.data_files[file_id];
-	ApplyEqualityDeletes(context, output_chunk, multi_file_list, data_file, local_columns, field_id_to_result_id);
+	ApplyEqualityDeletes(context, output_chunk, multi_file_list, data_file, local_columns);
 
 	//! Remove the extra columns we added to perform the equality delete filtering
 	for (idx_t i = 0; i < diff; i++) {
