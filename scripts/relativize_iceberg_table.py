@@ -6,8 +6,9 @@ import sys
 import shutil
 import tempfile
 import subprocess
+import re
 from datetime import datetime
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 
 def parse_args():
@@ -22,10 +23,12 @@ def abort(msg):
 
 
 def relativize_path(abs_path: str, new_base: str) -> str:
-    if "/data/" in abs_path:
-        return os.path.join(new_base, "data", abs_path.split("/data/", 1)[1])
-    elif "/metadata/" in abs_path:
-        return os.path.join(new_base, "metadata", abs_path.split("/metadata/", 1)[1])
+    p = PurePosixPath(abs_path)
+    parent = p.parent.name
+    if parent in ("data", "metadata"):
+        return os.path.join(new_base, parent, p.name)
+    elif p.parent.parent.name == "index" and parent in ("data", "metadata"):
+        return os.path.join(new_base, parent, p.name)
     else:
         return new_base
 
@@ -47,40 +50,40 @@ def validate_paths(table_path: Path):
 def jq_rewrite_json(file_path: Path, output_path: Path, new_base: str):
     jq_filter = f'''
         def relativize_path(path; new_base):
-            if (path | test(".*/index/data/.*")) then
-                (path | sub(".*?/index/"; "")) as $p | new_base + "/" + $p
-            elif (path | test(".*/index/metadata/.*")) then
-                (path | sub(".*?/index/"; "")) as $p | new_base + "/" + $p
+            if (path | test(".*/index/data/[^/]+$")) then
+                (path | sub(".*/index/"; "")) as $p | new_base + "/" + $p
+            elif (path | test(".*/index/metadata/[^/]+$")) then
+                (path | sub(".*/index/"; "")) as $p | new_base + "/" + $p
             elif (path | test(".*/index$")) then
                 new_base
             else
-                if (path | test(".*/data/.*")) then
-                    (path | sub(".*?/data/"; "")) as $p | new_base + "/data/" + $p
-                elif (path | test(".*/metadata/.*")) then
-                    (path | sub(".*?/metadata/"; "")) as $p | new_base + "/metadata/" + $p
+                if (path | test(".*/metadata/[^/]+$")) then
+                    (path | sub(".*/metadata/"; "")) as $p | new_base + "/metadata/" + $p
+                elif (path | test(".*/data/[^/]+$")) then
+                    (path | sub(".*/data/"; "")) as $p | new_base + "/data/" + $p
                 else
                     new_base
                 end
             end;
 
-        .location = relativize_path(.location; "{new_base}") |
+        .location = relativize_path(.location; "") |
         if .snapshots then
             .snapshots |= map(
                 if .["manifest-list"] then
-                    .["manifest-list"] = relativize_path(.["manifest-list"]; "{new_base}")
+                    .["manifest-list"] = relativize_path(.["manifest-list"]; "")
                 else . end
             )
         else . end |
         if .["metadata-log"] then
             .["metadata-log"] |= map(
                 if .["metadata-file"] then
-                    .["metadata-file"] = relativize_path(.["metadata-file"]; "{new_base}")
+                    .["metadata-file"] = relativize_path(.["metadata-file"]; "")
                 else . end
             )
         else . end
     '''
     with open(output_path, 'w') as out:
-        returncode = subprocess.run(["jq", jq_filter, str(file_path)], stdout=out, check=True)
+        subprocess.run(["jq", jq_filter, str(file_path)], stdout=out, check=True)
 
 
 def process_json_files(metadata_dir: Path, temp_metadata_dir: Path, new_base: str):
@@ -108,17 +111,17 @@ def process_avro_file(avro_file: Path, temp_dir: Path, temp_metadata_dir: Path, 
     if filename.startswith("snap-"):
         jq_filter = f'''
             def relativize_path(path; new_base):
-                if (path | test(".*/index/data/.*")) then
-                    (path | sub(".*?/index/"; "")) as $p | new_base + "/" + $p
-                elif (path | test(".*/index/metadata/.*")) then
-                    (path | sub(".*?/index/"; "")) as $p | new_base + "/" + $p
+                if (path | test(".*/index/data/[^/]+$")) then
+                    (path | sub(".*/index/"; "")) as $p | new_base + "/" + $p
+                elif (path | test(".*/index/metadata/[^/]+$")) then
+                    (path | sub(".*/index/"; "")) as $p | new_base + "/" + $p
                 elif (path | test(".*/index$")) then
                     new_base
                 else
-                    if (path | test(".*/data/.*")) then
-                        (path | sub(".*?/data/"; "")) as $p | new_base + "/data/" + $p
-                    elif (path | test(".*/metadata/.*")) then
-                        (path | sub(".*?/metadata/"; "")) as $p | new_base + "/metadata/" + $p
+                    if (path | test(".*/metadata/[^/]+$")) then
+                        (path | sub(".*/metadata/"; "")) as $p | new_base + "/metadata/" + $p
+                    elif (path | test(".*/data/[^/]+$")) then
+                        (path | sub(".*/data/"; "")) as $p | new_base + "/data/" + $p
                     else
                         new_base
                     end
@@ -129,17 +132,17 @@ def process_avro_file(avro_file: Path, temp_dir: Path, temp_metadata_dir: Path, 
     else:
         jq_filter = f'''
             def relativize_path(path; new_base):
-                if (path | test(".*/index/data/.*")) then
-                    (path | sub(".*?/index/"; "")) as $p | new_base + "/" + $p
-                elif (path | test(".*/index/metadata/.*")) then
-                    (path | sub(".*?/index/"; "")) as $p | new_base + "/" + $p
+                if (path | test(".*/index/data/[^/]+$")) then
+                    (path | sub(".*/index/"; "")) as $p | new_base + "/" + $p
+                elif (path | test(".*/index/metadata/[^/]+$")) then
+                    (path | sub(".*/index/"; "")) as $p | new_base + "/" + $p
                 elif (path | test(".*/index$")) then
                     new_base
                 else
-                    if (path | test(".*/data/.*")) then
-                        (path | sub(".*?/data/"; "")) as $p | new_base + "/data/" + $p
-                    elif (path | test(".*/metadata/.*")) then
-                        (path | sub(".*?/metadata/"; "")) as $p | new_base + "/metadata/" + $p
+                    if (path | test(".*/metadata/[^/]+$")) then
+                        (path | sub(".*/metadata/"; "")) as $p | new_base + "/metadata/" + $p
+                    elif (path | test(".*/data/[^/]+$")) then
+                        (path | sub(".*/data/"; "")) as $p | new_base + "/data/" + $p
                     else
                         new_base
                     end
