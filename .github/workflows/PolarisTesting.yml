@@ -12,7 +12,6 @@ env:
 
 jobs:
   rest:
-    if: false
     name: Test against Polaris Catalog
     runs-on: ubuntu-latest
     env:
