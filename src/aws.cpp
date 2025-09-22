@@ -49,7 +49,8 @@ static void InitAWSAPI() {
 	}
 }
 
-static void LogAWSRequest(ClientContext &context, std::shared_ptr<Aws::Http::HttpRequest> &req) {
+static void LogAWSRequest(ClientContext &context, std::shared_ptr<Aws::Http::HttpRequest> &req,
+                          Aws::Http::HttpMethod &method) {
 	if (context.db) {
 		auto http_util = HTTPUtil::Get(*context.db);
 		auto aws_headers = req->GetHeaders();
@@ -63,9 +64,28 @@ static void LogAWSRequest(ClientContext &context, std::shared_ptr<Aws::Http::Htt
 		if (!query_str.empty()) {
 			url += "?" + query_str;
 		}
-		auto request = GetRequestInfo(
-		    url, http_headers, params, [](const HTTPResponse &response) { return false; },
-		    [](const_data_ptr_t data, idx_t data_length) { return false; });
+		RequestType type;
+		switch (method) {
+		case Aws::Http::HttpMethod::HTTP_GET:
+			type = RequestType::GET_REQUEST;
+			break;
+		case Aws::Http::HttpMethod::HTTP_HEAD:
+			type = RequestType::HEAD_REQUEST;
+			break;
+		case Aws::Http::HttpMethod::HTTP_DELETE:
+			type = RequestType::DELETE_REQUEST;
+			break;
+		case Aws::Http::HttpMethod::HTTP_POST:
+			type = RequestType::POST_REQUEST;
+			break;
+		case Aws::Http::HttpMethod::HTTP_PUT:
+			type = RequestType::PUT_REQUEST;
+			break;
+		default:
+			throw InvalidConfigurationException("Aws client cannot create request of type %s",
+			                                    Aws::Http::HttpMethodMapper::GetNameForHttpMethod(method));
+		}
+		auto request = BaseRequest(type, url, http_headers, params);
 		request.params.logger = context.logger;
 		http_util.LogRequest(request, nullptr);
 	}

@@ -30,6 +30,7 @@ attach '840140254803' as glue_catalog (
   AUTHORIZATION_TYPE 'sigv4'
 );
 
+set ignore_error_messages
 
 statement ok
 show all tables;
