@@ -1,5 +1,6 @@
 #include "catalog_api.hpp"
 #include "catalog_utils.hpp"
+#include "iceberg_logging.hpp"
 #include "storage/irc_catalog.hpp"
 #include "storage/irc_schema_entry.hpp"
 #include "yyjson.hpp"
@@ -80,8 +81,27 @@ bool IRCAPI::VerifySchemaExistence(ClientContext &context, IRCatalog &catalog, c
 	if (response->Success() || response->status == HTTPStatusCode::NoContent_204) {
 		return true;
 	}
-	if (response->status == HTTPStatusCode::NotFound_404) {
+	// The following response codes return "schema does not exist"
+	// This list can change, some error codes we want to surface to the user (i.e PaymentRequired_402)
+	// but others not (Forbidden_403).
+	// We log 400, 401, and 500 just in case.
+	switch (response->status) {
+	case HTTPStatusCode::Forbidden_403:
+	case HTTPStatusCode::NotFound_404:
 		return false;
+		break;
+	case HTTPStatusCode::Unauthorized_401:
+	case HTTPStatusCode::BadRequest_400:
+#ifndef DEBUG
+		// Our local docker IRC can return 500 randomly, in debug we want to throw the error
+		// Glue returns 500 if the schema doesn't exist.
+	case HTTPStatusCode::InternalServerError_500:
+#endif
+		DUCKDB_LOG(context, IcebergLogType, "VerifySchemaExistence returned status code %s",
+		           EnumUtil::ToString(response->status));
+		return false;
+	default:
+		break;
 	}
 	ThrowException(url, *response, response->reason);
 }

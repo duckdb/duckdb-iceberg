@@ -612,7 +612,10 @@ public:
 	void DeleteDataFile(const string &data_file_path, DuckLakeSnapshot &end_snapshot) {
 		auto it = current_data_files.find(data_file_path);
 		if (it == current_data_files.end()) {
-			throw InvalidInputException("Iceberg integrity error: Deleting a Data File that doesn't exist?");
+			//! Entries can be marked deleted without having an add, if they were added in the same snapshot
+			//! This can be done to postpone deletion of created parquet files to a cleanup operation
+			//! I don't know why you would want to do that.. but it's possible
+			return;
 		}
 
 		auto &data_file = all_data_files[it->second];

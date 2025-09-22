@@ -18,6 +18,8 @@ require httpfs
 
 require aws
 
+set ignore_error_messages
+
 statement ok
 CREATE SECRET s3table_secret (
     TYPE s3,

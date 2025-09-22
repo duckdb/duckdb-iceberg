@@ -18,6 +18,8 @@ require httpfs
 
 require aws
 
+set ignore_error_messages
+
 # test using keys directory
 statement ok
 CREATE SECRET s1 (

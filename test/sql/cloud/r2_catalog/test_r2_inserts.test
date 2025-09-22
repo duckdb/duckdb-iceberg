@@ -30,6 +30,8 @@ attach '6b17833f308abc1e1cc343c552b51f51_r2-catalog' AS my_datalake (
     ENDPOINT 'https://catalog.cloudflarestorage.com/6b17833f308abc1e1cc343c552b51f51/r2-catalog'
 );
 
+set ignore_error_messages
+
 query IIII
 select * from my_datalake.test_inserts.basic_insert_test order by id;
 ----

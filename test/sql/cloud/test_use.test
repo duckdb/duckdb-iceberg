@@ -33,6 +33,8 @@ attach '840140254803:s3tablescatalog/pyiceberg-blog-bucket' as glue_lake (
     ENDPOINT_TYPE 'GLUE'
 );
 
+set ignore_error_messages
+
 statement ok
 use glue_lake.myblognamespace;
 
