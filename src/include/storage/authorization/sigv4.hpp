@@ -15,11 +15,9 @@ public:
 
 public:
 	static unique_ptr<IRCAuthorization> FromAttachOptions(IcebergAttachOptions &input);
-	unique_ptr<HTTPResponse> GetRequest(ClientContext &context, const IRCEndpointBuilder &endpoint_builder) override;
-	unique_ptr<HTTPResponse> HeadRequest(ClientContext &context, const IRCEndpointBuilder &endpoint_builder) override;
-	unique_ptr<HTTPResponse> DeleteRequest(ClientContext &context, const IRCEndpointBuilder &endpoint_builder) override;
-	unique_ptr<HTTPResponse> PostRequest(ClientContext &context, const IRCEndpointBuilder &endpoint_builder,
-	                                     const string &body) override;
+	unique_ptr<HTTPResponse> Request(RequestType request_type, ClientContext &context,
+	                                 const IRCEndpointBuilder &endpoint_builder, HTTPHeaders &headers,
+	                                 const string &data = "") override;
 
 private:
 	AWSInput CreateAWSInput(ClientContext &context, const IRCEndpointBuilder &endpoint_builder);

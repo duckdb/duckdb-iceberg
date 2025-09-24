@@ -9,10 +9,13 @@
 #pragma once
 
 #include "duckdb/common/string.hpp"
+#include "duckdb/common/string_util.hpp"
 #include "duckdb/common/vector.hpp"
 #include "duckdb/common/unordered_map.hpp"
 
 namespace duckdb {
+
+string AddHttpHostIfMissing(const string &url);
 
 class IRCEndpointBuilder {
 public:
@@ -26,6 +29,7 @@ public:
 	const unordered_map<string, string> GetParams() const;
 
 	string GetURL() const;
+	static IRCEndpointBuilder FromURL(const string &url);
 
 	//! path components when querying. Like namespaces/tables etc.
 	vector<string> path_components;

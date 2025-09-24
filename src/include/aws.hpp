@@ -1,7 +1,9 @@
 #pragma once
 
+#include "duckdb/common/http_util.hpp"
 #include "duckdb/common/string.hpp"
 #include "duckdb/main/client_context.hpp"
+#include "storage/irc_authorization.hpp"
 
 #ifdef EMSCRIPTEN
 #else
@@ -19,17 +21,15 @@ public:
 	}
 
 public:
-	unique_ptr<HTTPResponse> GetRequest(ClientContext &context);
-	unique_ptr<HTTPResponse> HeadRequest(ClientContext &context);
-	unique_ptr<HTTPResponse> DeleteRequest(ClientContext &context);
-	unique_ptr<HTTPResponse> PostRequest(ClientContext &context, string post_body);
+	unique_ptr<HTTPResponse> Request(RequestType request_type, ClientContext &context, HTTPHeaders &headers,
+	                                 const string &data);
 
 #ifdef EMSCRIPTEN
 #else
-	unique_ptr<HTTPResponse> ExecuteRequest(ClientContext &context, Aws::Http::HttpMethod method,
-	                                        const string body = "", string content_type = "");
+	unique_ptr<HTTPResponse> ExecuteRequest(ClientContext &context, Aws::Http::HttpMethod method, HTTPHeaders &headers,
+	                                        const string &body = "");
 	std::shared_ptr<Aws::Http::HttpRequest> CreateSignedRequest(Aws::Http::HttpMethod method, const Aws::Http::URI &uri,
-	                                                            const string &body = "", string content_type = "");
+	                                                            HTTPHeaders &headers, const string &body = "");
 	Aws::Http::URI BuildURI();
 	Aws::Client::ClientConfiguration BuildClientConfig();
 #endif

@@ -40,6 +40,9 @@ string ICTableEntry::PrepareIcebergScanFromEntry(ClientContext &context) const {
 	auto &ic_catalog = catalog.Cast<IRCatalog>();
 	auto &secret_manager = SecretManager::Get(context);
 
+	if (ic_catalog.attach_options.access_mode != IRCAccessDelegationMode::VENDED_CREDENTIALS) {
+		return table_info.load_table_result.metadata_location;
+	}
 	// Get Credentials from IRC API
 	auto table_credentials = table_info.GetVendedCredentials(context);
 	auto &load_result = table_info.load_table_result;
@@ -47,13 +50,13 @@ string ICTableEntry::PrepareIcebergScanFromEntry(ClientContext &context) const {
 	if (table_credentials.config) {
 		auto &info = *table_credentials.config;
 		D_ASSERT(info.scope.empty());
-		//! Limit the scope to the metadata location
 		string lc_storage_location = StringUtil::Lower(load_result.metadata_location);
 		size_t metadata_pos = lc_storage_location.find("metadata");
 		if (metadata_pos != string::npos) {
 			info.scope = {load_result.metadata_location.substr(0, metadata_pos)};
 		} else {
-			throw InvalidInputException("Substring not found");
+			DUCKDB_LOG_INFO(context, "Creating Iceberg Table secret with no scope. Returned metadata location is %s",
+			                lc_storage_location);
 		}
 
 		if (StringUtil::StartsWith(ic_catalog.uri, "glue")) {
@@ -81,8 +84,13 @@ string ICTableEntry::PrepareIcebergScanFromEntry(ClientContext &context) const {
 			                {"region", region},
 			                {"endpoint", endpoint}};
 		}
-
 		(void)secret_manager.CreateSecret(context, info);
+		// if there is no key_id, secret, or token in the info. log that vended credentials has not worked
+		if (info.options.find("key_id") == info.options.end() && info.options.find("secret") == info.options.end() &&
+		    info.options.find("token") == info.options.end()) {
+			DUCKDB_LOG_INFO(context, "Failed to create valid secret from Vendend Credentials for table '%s'",
+			                table_info.name);
+		}
 	}
 
 	for (auto &info : table_credentials.storage_credentials) {

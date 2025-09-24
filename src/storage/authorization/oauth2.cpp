@@ -66,12 +66,14 @@ string OAuth2Authorization::GetToken(ClientContext &context, const string &grant
 	string credentials = StringUtil::Format("%s:%s", client_id, client_secret);
 	string_t credentials_blob(credentials.data(), credentials.size());
 
-	unordered_map<string, string> headers;
-	headers.emplace("Authorization", StringUtil::Format("Basic %s", Blob::ToBase64(credentials_blob)));
+	HTTPHeaders headers(*context.db);
+	headers.Insert("Authorization", StringUtil::Format("Basic %s", Blob::ToBase64(credentials_blob)));
+	headers.Insert("Content-Type", StringUtil::Format("application/%s", "x-www-form-urlencoded"));
 	string post_data = StringUtil::Format("%s", StringUtil::Join(parameters, "&"));
 	std::unique_ptr<yyjson_doc, YyjsonDocDeleter> doc;
 	try {
-		auto response = APIUtils::PostRequest(context, uri, post_data, headers);
+		auto endpoint_builder = IRCEndpointBuilder::FromURL(uri);
+		auto response = APIUtils::Request(RequestType::POST_REQUEST, context, endpoint_builder, headers, post_data);
 		doc = std::unique_ptr<yyjson_doc, YyjsonDocDeleter>(ICUtils::api_result_to_doc(response->body));
 	} catch (std::exception &ex) {
 		ErrorData error(ex);
@@ -98,29 +100,6 @@ string OAuth2Authorization::GetToken(ClientContext &context, const string &grant
 	return access_token;
 }
 
-unique_ptr<HTTPResponse> OAuth2Authorization::GetRequest(ClientContext &context,
-                                                         const IRCEndpointBuilder &endpoint_builder) {
-	return APIUtils::GetRequest(context, endpoint_builder, token);
-}
-
-unique_ptr<HTTPResponse> OAuth2Authorization::HeadRequest(ClientContext &context,
-                                                          const IRCEndpointBuilder &endpoint_builder) {
-	return APIUtils::HeadRequest(context, endpoint_builder, token);
-}
-
-unique_ptr<HTTPResponse> OAuth2Authorization::DeleteRequest(ClientContext &context,
-                                                            const IRCEndpointBuilder &endpoint_builder) {
-	return APIUtils::DeleteRequest(context, endpoint_builder, token);
-}
-
-unique_ptr<HTTPResponse> OAuth2Authorization::PostRequest(ClientContext &context,
-                                                          const IRCEndpointBuilder &endpoint_builder,
-                                                          const string &body) {
-	auto url = endpoint_builder.GetURL();
-	unordered_map<string, string> empty_headers;
-	return APIUtils::PostRequest(context, url, body, empty_headers, "json", token);
-}
-
 unique_ptr<OAuth2Authorization> OAuth2Authorization::FromAttachOptions(ClientContext &context,
                                                                        IcebergAttachOptions &input) {
 	auto result = make_uniq<OAuth2Authorization>();
@@ -131,7 +110,8 @@ unique_ptr<OAuth2Authorization> OAuth2Authorization::FromAttachOptions(ClientCon
 	Value token;
 
 	static const unordered_set<string> recognized_create_secret_options {
-	    "oauth2_scope", "oauth2_server_uri", "oauth2_grant_type", "token", "client_id", "client_secret"};
+	    "oauth2_scope", "oauth2_server_uri", "oauth2_grant_type",     "token",
+	    "client_id",    "client_secret",     "access_delegation_mode"};
 
 	for (auto &entry : input.options) {
 		auto lower_name = StringUtil::Lower(entry.first);
@@ -276,6 +256,15 @@ unique_ptr<BaseSecret> OAuth2Authorization::CreateCatalogSecretFunction(ClientCo
 	    result->secret_map["client_id"].ToString(), result->secret_map["client_secret"].ToString(),
 	    result->secret_map["oauth2_scope"].ToString());
 	return std::move(result);
+}
+
+unique_ptr<HTTPResponse> OAuth2Authorization::Request(RequestType request_type, ClientContext &context,
+                                                      const IRCEndpointBuilder &endpoint_builder, HTTPHeaders &headers,
+                                                      const string &data) {
+	if (!token.empty()) {
+		headers.Insert("Authorization", StringUtil::Format("Bearer %s", token));
+	}
+	return APIUtils::Request(request_type, context, endpoint_builder, headers, data);
 }
 
 void OAuth2Authorization::SetCatalogSecretParameters(CreateSecretFunction &function) {

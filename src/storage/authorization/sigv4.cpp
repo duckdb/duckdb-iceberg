@@ -1,5 +1,6 @@
 #include "storage/authorization/sigv4.hpp"
 #include "api_utils.hpp"
+#include "duckdb/main/client_context.hpp"
 #include "duckdb/common/file_system.hpp"
 #include "duckdb/main/setting_info.hpp"
 #include "storage/irc_catalog.hpp"
@@ -110,29 +111,11 @@ AWSInput SIGV4Authorization::CreateAWSInput(ClientContext &context, const IRCEnd
 	return aws_input;
 }
 
-unique_ptr<HTTPResponse> SIGV4Authorization::PostRequest(ClientContext &context,
-                                                         const IRCEndpointBuilder &endpoint_builder,
-                                                         const string &body) {
-	AWSInput aws_input = CreateAWSInput(context, endpoint_builder);
-	return aws_input.PostRequest(context, body);
-}
-
-unique_ptr<HTTPResponse> SIGV4Authorization::GetRequest(ClientContext &context,
-                                                        const IRCEndpointBuilder &endpoint_builder) {
-	AWSInput aws_input = CreateAWSInput(context, endpoint_builder);
-	return aws_input.GetRequest(context);
-}
-
-unique_ptr<HTTPResponse> SIGV4Authorization::HeadRequest(ClientContext &context,
-                                                         const IRCEndpointBuilder &endpoint_builder) {
-	AWSInput aws_input = CreateAWSInput(context, endpoint_builder);
-	return aws_input.HeadRequest(context);
-}
-
-unique_ptr<HTTPResponse> SIGV4Authorization::DeleteRequest(ClientContext &context,
-                                                           const IRCEndpointBuilder &endpoint_builder) {
-	AWSInput aws_input = CreateAWSInput(context, endpoint_builder);
-	return aws_input.DeleteRequest(context);
+unique_ptr<HTTPResponse> SIGV4Authorization::Request(RequestType request_type, ClientContext &context,
+                                                     const IRCEndpointBuilder &endpoint_builder, HTTPHeaders &headers,
+                                                     const string &data) {
+	auto aws_input = CreateAWSInput(context, endpoint_builder);
+	return aws_input.Request(request_type, context, headers, data);
 }
 
 } // namespace duckdb

@@ -37,6 +37,11 @@ void AddSchemaUpdate::CreateUpdate(DatabaseInstance &db, ClientContext &context,
 	auto current_schema_id = table_info.load_table_result.metadata.current_schema_id;
 	auto &schema = table_info.table_metadata.schemas[current_schema_id];
 	update.add_schema_update.schema = CopySchema(*schema.get());
+	// last column id is technically deprecated, but some catalogs still use it (nessie).
+	if (table_info.load_table_result.metadata.has_last_column_id) {
+		update.add_schema_update.has_last_column_id = true;
+		update.add_schema_update.last_column_id = table_info.load_table_result.metadata.last_column_id;
+	}
 }
 
 AssignUUIDUpdate::AssignUUIDUpdate(IcebergTableInformation &table_info)
