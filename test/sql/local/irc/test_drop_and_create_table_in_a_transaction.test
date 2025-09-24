@@ -1,0 +1,69 @@
+# name: test/sql/local/irc/test_drop_and_create_table_in_a_transaction.test
+# group: [irc]
+
+require-env ICEBERG_SERVER_AVAILABLE
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+require aws
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+CREATE SECRET (
+    TYPE S3,
+    KEY_ID 'admin',
+    SECRET 'password',
+    ENDPOINT '127.0.0.1:9000',
+    URL_STYLE 'path',
+    USE_SSL 0
+);
+
+statement ok
+ATTACH '' AS my_datalake (
+    TYPE ICEBERG,
+    CLIENT_ID 'admin',
+    CLIENT_SECRET 'password',
+    ENDPOINT 'http://127.0.0.1:8181'
+);
+
+statement ok
+use my_datalake.default;
+
+statement ok
+drop table if exists duid;
+
+statement ok
+create table if not exists duid as select range a from range(100);
+
+statement ok
+begin;
+
+statement ok
+drop table if exists duid;
+
+statement error
+create table if not exists duid as select range a from range(100);
+----
+<REGEX>:.*Not implemented Error: Cannot create table previously deleted in the same transactio.*
+
+statement ok
+commit;
+
+statement error
+create or replace table duid (a int);
+----
+<REGEX>:.*Invalid Input.*CREATE OR REPLACE not supported.*
+
+statement error
+create or replace schema new_schema;
+----
+<REGEX>:.*Invalid Input.*CREATE OR REPLACE not supported.*
+

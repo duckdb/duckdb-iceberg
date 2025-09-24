@@ -469,6 +469,9 @@ PhysicalOperator &IRCatalog::PlanCreateTableAs(ClientContext &context, PhysicalP
 	// create the table. Takes care of committing to rest catalog and getting the metadata location etc.
 	// setting the schema
 	auto table = ic_schema_entry.CreateTable(irc_transaction, context, *op.info);
+	if (!table) {
+		throw InternalException("Table could not be created");
+	}
 	auto &ic_table = table->Cast<ICTableEntry>();
 	// We need to load table credentials into our secrets for when we copy files
 	ic_table.PrepareIcebergScanFromEntry(context);
