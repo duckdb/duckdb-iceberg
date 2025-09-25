@@ -1,17 +1,19 @@
 # This file is included by DuckDB's build system. It specifies which extension to load
+if (NOT EMSCRIPTEN)
 duckdb_extension_load(avro
 		LOAD_TESTS
 		GIT_URL https://github.com/duckdb/duckdb-avro
 		GIT_TAG 0c97a61781f63f8c5444cf3e0c6881ecbaa9fe13
 )
+endif()
 
 # Extension from this repo
 duckdb_extension_load(iceberg
     SOURCE_DIR ${CMAKE_CURRENT_LIST_DIR}
     LOAD_TESTS
-    LINKED_LIBS "../../vcpkg_installed/wasm32-emscripten/lib/*.a"
 )
 
+if (NOT EMSCRIPTEN)
 duckdb_extension_load(tpch)
 duckdb_extension_load(icu)
 duckdb_extension_load(ducklake
@@ -21,8 +23,6 @@ duckdb_extension_load(ducklake
 )
 
 
-if (NOT EMSCRIPTEN)
-################## AWS
 if (NOT MINGW)
     duckdb_extension_load(aws
             LOAD_TESTS
@@ -31,4 +31,3 @@ if (NOT MINGW)
     )
 endif ()
 endif()
-
