@@ -288,16 +288,11 @@ ReaderInitializeType IcebergMultiFileReader::InitializeReader(MultiFileReaderDat
 	auto new_global_column_ids = global_column_ids;
 	auto &equality_to_result_id = multi_file_list.equality_id_to_result_id;
 	new_global_column_ids.resize(global_column_ids.size() + equality_to_result_id.size());
-	for (auto field_id : equality_delete_ids) {
-		auto it = equality_to_result_id.find(field_id);
-		if (it == equality_to_result_id.end()) {
-			//! Already selected, no need to add
-			continue;
-		}
-		auto global_column_id = id_to_global_column[field_id];
+
+	for (auto it : equality_to_result_id) {
+		auto global_column_id = id_to_global_column[it.first];
 		ColumnIndex equality_index(global_column_id);
-		//! FIXME: is this correct?
-		new_global_column_ids[it->second] = equality_index;
+		new_global_column_ids[it.second] = equality_index;
 	}
 
 	return CreateMapping(context, reader_data, global_columns, new_global_column_ids, table_filters, gstate.file_list,

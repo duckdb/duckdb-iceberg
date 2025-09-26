@@ -10,42 +10,149 @@ require iceberg
 
 require httpfs
 
+# for unpartitioned table:
+# create table by spark sql: create table mytable_partitioned(id int,name string,bir date );
+
 # First snapshot:
-# add (id=1, name=a), (id=2, name=b), (id=3, name=b)
-# Result: [(id=1, name=a), (id=2, name=b), (id=3, name=b)]
+# insert into mytable values(1,'a',date '2025-01-01'),(2,'b',date '2025-01-02'),(3,'c',date '2025-01-03'),(4,'d',date '2025-01-04');
+# Result: [(id=1, name=a, bir=2025-01-01), (id=2, name=b, bir=2025-01-02), (id=3, name=c, bir=2025-01-03), (id=4, name=d, bir=2025-01-04)]
 
 # Second snapshot:
 # delete where name=b
-# Result: [(id=1, name=a)]
+# Result: [(id=1, name=a, bir=2025-01-01), (id=3, name=c, bir=2025-01-03), (id=4, name=d, bir=2025-01-04)]
 
 # Third snapshot:
-# add (id=1, name=a), (id=2, name=b), (id=3, name=b)
-# Result: [(id=1, name=a), (id=2, name=b), (id=1, name=b), (id=1, name=a)]
+# delete where id = 1
+# Result: [ (id=3, name=c, bir=2025-01-03), (id=4, name=d, bir=2025-01-04)]
 
 # Fourth snapshot:
-# delete where id=1 AND name=a
-# Result: [(id=2, name=b), (id=1, name=b)]
+# delete where id = 3 and name = c
+# Result: [(id=4, name=d, bir=2025-01-04)]
 
-query II
+# Fifth snapshot:
+#  insert into mytable values(5,'e',date '2025-01-05'),(6,'f',date '2025-01-06');
+# Result:[(id=4, name=d, bir=2025-01-04),(5,'e',date '2025-01-05'),(6,'f',date '2025-01-06')]
+
+# Sixth snapshot:
+# delete where  name = f
+# Result:[(id=4, name=d, bir=2025-01-04),(5,'e',date '2025-01-05')]
+
+
+# all
+query III
 SELECT * FROM ICEBERG_SCAN('__WORKING_DIRECTORY__/data/persistent/equality_deletes/warehouse/mydb/mytable');
 ----
-2	b
-1	b
+5	e	2025-01-05
+4	d	2025-01-04
 
+
+# only equality delete fields
 query II
-SELECT name, id FROM ICEBERG_SCAN('data/persistent/equality_deletes/warehouse/mydb/mytable');
+SELECT id,name FROM ICEBERG_SCAN('data/persistent/equality_deletes/warehouse/mydb/mytable');
 ----
-b	2
-b	1
+5	e
+4	d
 
-query III
-SELECT filename[17:32], name, id FROM ICEBERG_SCAN('data/persistent/equality_deletes/warehouse/mydb/mytable');
+
+# no equality delete fields
+query I
+SELECT bir FROM ICEBERG_SCAN('data/persistent/equality_deletes/warehouse/mydb/mytable');
 ----
-equality_deletes	b	2
-equality_deletes	b	1
+2025-01-05
+2025-01-04
 
+# partial equality delete field
+query I
+SELECT name FROM ICEBERG_SCAN('data/persistent/equality_deletes/warehouse/mydb/mytable');
+----
+e
+d
+
+# partial equality delete field and other
+query II
+SELECT name,bir FROM ICEBERG_SCAN('data/persistent/equality_deletes/warehouse/mydb/mytable');
+----
+e	2025-01-05
+d	2025-01-04
+
+# contain metadata
 query II
 SELECT filename[17:32], name FROM ICEBERG_SCAN('data/persistent/equality_deletes/warehouse/mydb/mytable');
 ----
-equality_deletes	b
-equality_deletes	b
+equality_deletes	e
+equality_deletes	d
+
+query I
+SELECT count(*) FROM ICEBERG_SCAN('data/persistent/equality_deletes/warehouse/mydb/mytable');
+----
+2
+
+
+# for partitioned table:
+# create table by spark sql: create table mytable_partitioned(id int,name string,bir date ) partitioned by (name);
+
+# First snapshot:
+# insert into mytable values(1,'a',date '2025-01-01'),(2,'b',date '2025-01-02'),(3,'c',date '2025-01-03'),(4,'d',date '2025-01-04');
+# Result: [(id=1, name=a, bir=2025-01-01), (id=2, name=b, bir=2025-01-02), (id=3, name=c, bir=2025-01-03), (id=4, name=d, bir=2025-01-04)]
+
+# Second snapshot:
+# delete where name=b
+# Result: [(id=1, name=a, bir=2025-01-01), (id=3, name=c, bir=2025-01-03), (id=4, name=d, bir=2025-01-04)]
+
+# Third snapshot:
+# delete where id = 3 and name = c
+# Result: [(id=1, name=a, bir=2025-01-01), (id=4, name=d, bir=2025-01-04)]
+
+# Fourth snapshot:
+#  insert into mytable values(5,'e',date '2025-01-05'),(6,'f',date '2025-01-06');
+# Result:[(id=1, name=a, bir=2025-01-01), (id=4, name=d, bir=2025-01-04), (5,'e',date '2025-01-05'),(6,'f',date '2025-01-06')]
+
+# Fifth snapshot:
+# delete where  name = f
+# Result:[(id=1, name=a, bir=2025-01-01), (id=4, name=d, bir=2025-01-04), (5,'e',date '2025-01-05')]
+
+# all
+query III
+SELECT * FROM ICEBERG_SCAN('__WORKING_DIRECTORY__/data/persistent/equality_deletes/warehouse/mydb/mytable_partitioned');
+----
+5	e	2025-01-05
+1	a	2025-01-01
+4	d	2025-01-04
+
+# only equality delete fields
+query I
+SELECT name FROM ICEBERG_SCAN('data/persistent/equality_deletes/warehouse/mydb/mytable_partitioned');
+----
+e
+a
+d
+
+# no equality delete field
+query I
+SELECT id FROM ICEBERG_SCAN('data/persistent/equality_deletes/warehouse/mydb/mytable_partitioned');
+----
+5
+1
+4
+
+# partial equality delete field and other
+query II
+SELECT name,bir FROM ICEBERG_SCAN('data/persistent/equality_deletes/warehouse/mydb/mytable_partitioned');
+----
+e	2025-01-05
+a	2025-01-01
+d	2025-01-04
+
+
+# contain metadata
+query II
+SELECT filename[17:32], name FROM ICEBERG_SCAN('data/persistent/equality_deletes/warehouse/mydb/mytable_partitioned');
+----
+equality_deletes	e
+equality_deletes	a
+equality_deletes	d
+
+query I
+SELECT count(*) FROM ICEBERG_SCAN('data/persistent/equality_deletes/warehouse/mydb/mytable_partitioned');
+----
+3
