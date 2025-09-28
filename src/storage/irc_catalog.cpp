@@ -29,7 +29,7 @@ IRCatalog::IRCatalog(AttachedDatabase &db_p, AccessMode access_mode, unique_ptr<
                      IcebergAttachOptions &attach_options, const string &version)
     : Catalog(db_p), access_mode(access_mode), auth_handler(std::move(auth_handler)),
       warehouse(attach_options.warehouse), uri(attach_options.endpoint), version(version),
-      attach_options(attach_options) {
+      prefix((attach_options.prefix)), attach_options(attach_options) {
 	if (version.empty()) {
 		throw InternalException("version can not be empty");
 	}
@@ -280,9 +280,6 @@ void IRCatalog::AddS3TablesEndpoints() {
 }
 
 void IRCatalog::GetConfig(ClientContext &context, IcebergEndpointType &endpoint_type) {
-	// set the prefix to be empty. To get the config endpoint,
-	// we cannot add a default prefix.
-	D_ASSERT(prefix.empty());
 	auto catalog_config = IRCAPI::GetCatalogConfig(context, *this);
 
 	overrides = catalog_config.overrides;
@@ -468,6 +465,9 @@ unique_ptr<Catalog> IRCatalog::Attach(optional_ptr<StorageExtensionInfo> storage
 		} else if (lower_name == "purge_requested") {
 			attach_options.purge_requested = entry.second.DefaultCastAs(LogicalType::BOOLEAN).GetValue<bool>();
 			set_by_attach_options.insert("purge_requested");
+		} else if (lower_name == "prefix") {
+			attach_options.prefix = StringUtil::Lower(entry.second.ToString());
+			StringUtil::RTrim(attach_options.prefix);
 		} else {
 			attach_options.options.emplace(std::move(entry));
 		}

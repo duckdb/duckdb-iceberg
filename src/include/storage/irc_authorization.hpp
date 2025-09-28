@@ -15,6 +15,8 @@ struct IcebergAttachOptions {
 	string endpoint;
 	string warehouse;
 	string secret;
+	// optional prefix, if the catalog do not support prefix, we do not need to add this option.
+	string prefix;
 	string name;
 	// some catalogs do not yet support stage create
 	bool supports_stage_create = true;
