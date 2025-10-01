@@ -106,16 +106,22 @@ static string GenerateMetaDataUrl(FileSystem &fs, const string &meta_path, strin
 	if (options.metadata_compression_codec == "gzip") {
 		compression_suffix = ".gz";
 	}
-	for (auto try_format : StringUtil::Split(options.version_name_format, ',')) {
+	auto version_name_formats = StringUtil::Split(options.version_name_format, ',');
+	vector<string> tried_paths;
+	for (auto try_format : version_name_formats) {
 		url = fs.JoinPath(meta_path, StringUtil::Format(try_format, table_version, compression_suffix));
+		tried_paths.push_back(url);
 		if (fs.FileExists(url)) {
 			return url;
 		}
 	}
 
-	throw InvalidConfigurationException(
-	    "Iceberg metadata file not found for table version '%s' using '%s' compression and format(s): '%s'",
-	    table_version, options.metadata_compression_codec, options.version_name_format);
+	string error;
+	error = StringUtil::Format("Iceberg metadata file not found for table version '%s' using '%s' compression and "
+	                           "format(s): '%s', tried paths:\n",
+	                           table_version, options.metadata_compression_codec, options.version_name_format);
+	error += StringUtil::Join(tried_paths, "\n");
+	throw InvalidConfigurationException(error);
 }
 
 string IcebergTableMetadata::GetTableVersionFromHint(const string &meta_path, FileSystem &fs,
