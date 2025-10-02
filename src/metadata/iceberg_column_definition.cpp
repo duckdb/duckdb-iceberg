@@ -164,6 +164,9 @@ LogicalType IcebergColumnDefinition::ParsePrimitiveTypeString(const string &type
 		auto scale = std::stoi(digits[1]);
 		return LogicalType::DECIMAL(width, scale);
 	}
+	if (type_str == "variant") {
+		return LogicalType::JSON();
+	}
 	throw InvalidConfigurationException("Unrecognized primitive type: %s", type_str);
 }
 
