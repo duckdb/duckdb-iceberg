@@ -429,6 +429,10 @@ rest_api_objects::LoadTableResult IRCAPI::CommitNewTable(ClientContext &context,
 	try {
 		HTTPHeaders headers(*context.db);
 		headers.Insert("Content-Type", "application/json");
+		// if you are creating a table with stage create, you need vended credentials
+		if (catalog.attach_options.access_mode == IRCAccessDelegationMode::VENDED_CREDENTIALS) {
+			headers.Insert("X-Iceberg-Access-Delegation", "vended-credentials");
+		}
 		auto response =
 		    catalog.auth_handler->Request(RequestType::POST_REQUEST, context, url_builder, headers, create_table_json);
 		if (response->status != HTTPStatusCode::OK_200) {
