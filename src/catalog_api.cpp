@@ -1,5 +1,8 @@
 #include "catalog_api.hpp"
+#include "include/catalog_api.hpp"
+
 #include "catalog_utils.hpp"
+#include "iceberg_logging.hpp"
 #include "storage/irc_catalog.hpp"
 #include "storage/irc_schema_entry.hpp"
 #include "yyjson.hpp"
@@ -11,6 +14,8 @@
 #include "duckdb/common/error_data.hpp"
 #include "duckdb/common/http_util.hpp"
 #include "duckdb/common/exception/http_exception.hpp"
+#include "include/storage/irc_authorization.hpp"
+#include "include/storage/irc_catalog.hpp"
 
 #include "rest_catalog/objects/list.hpp"
 
@@ -64,6 +69,72 @@ string IRCAPI::GetEncodedSchemaName(const vector<string> &items) {
 	                    int(response.status));
 }
 
+static IRCEntryLookupStatus CheckVerificationResponse(ClientContext &context, HTTPStatusCode &status) {
+	// The following response codes return "schema does not exist"
+	// This list can change, some error codes we want to surface to the user (i.e PaymentRequired_402)
+	// but others not (Forbidden_403).
+	// We log 400, 401, and 500 just in case.
+	switch (status) {
+	case HTTPStatusCode::OK_200:
+	case HTTPStatusCode::NoContent_204:
+		return IRCEntryLookupStatus::EXISTS;
+	case HTTPStatusCode::Forbidden_403:
+	case HTTPStatusCode::NotFound_404:
+		return IRCEntryLookupStatus::NOT_FOUND;
+		break;
+	case HTTPStatusCode::BadRequest_400:
+	case HTTPStatusCode::Unauthorized_401:
+#ifndef DEBUG
+		// Our local docker IRC can return 500 randomly, in debug we want to throw the error
+		// Glue returns 500 if the schema doesn't exist.
+	case HTTPStatusCode::InternalServerError_500:
+#endif
+		DUCKDB_LOG(context, IcebergLogType, "VerifySchemaExistence returned status code %s",
+		           EnumUtil::ToString(status));
+		return IRCEntryLookupStatus::API_ERROR;
+	default:
+		break;
+	}
+	return IRCEntryLookupStatus::API_ERROR;
+}
+
+bool IRCAPI::VerifyResponse(ClientContext &context, IRCatalog &catalog, IRCEndpointBuilder &url_builder,
+                            bool execute_head) {
+	HTTPHeaders headers(*context.db);
+	IRCEntryLookupStatus entry_status = IRCEntryLookupStatus::API_ERROR;
+	unique_ptr<HTTPResponse> response;
+	if (execute_head) {
+		// First response of Head request
+		response = catalog.auth_handler->Request(RequestType::HEAD_REQUEST, context, url_builder, headers);
+		// the httputil currently only sets 200 and 304 response to success
+		// for AWS all responses < 400 are successful
+		entry_status = CheckVerificationResponse(context, response->status);
+		switch (entry_status) {
+		case IRCEntryLookupStatus::EXISTS:
+			return true;
+		case IRCEntryLookupStatus::NOT_FOUND:
+			return false;
+		default:
+			break;
+		}
+	}
+	D_ASSERT(entry_status == IRCEntryLookupStatus::API_ERROR);
+	response = catalog.auth_handler->Request(RequestType::GET_REQUEST, context, url_builder, headers);
+	// if execute head has a weird response, fall back to GET just in case.
+	// check response of GET REQUEST
+	entry_status = CheckVerificationResponse(context, response->status);
+	switch (entry_status) {
+	case IRCEntryLookupStatus::EXISTS:
+		return true;
+	case IRCEntryLookupStatus::NOT_FOUND:
+		return false;
+	default:
+		// both head and get responses have returned a status that is an
+		// error status
+		ThrowException(url_builder.GetURL(), *response, response->reason);
+	}
+}
+
 bool IRCAPI::VerifySchemaExistence(ClientContext &context, IRCatalog &catalog, const string &schema) {
 	auto namespace_items = ParseSchemaName(schema);
 	auto schema_name = GetEncodedSchemaName(namespace_items);
@@ -72,18 +143,9 @@ bool IRCAPI::VerifySchemaExistence(ClientContext &context, IRCatalog &catalog, c
 	url_builder.AddPathComponent(catalog.prefix);
 	url_builder.AddPathComponent("namespaces");
 	url_builder.AddPathComponent(schema_name);
-
-	auto url = url_builder.GetURL();
-	auto response = catalog.auth_handler->HeadRequest(context, url_builder);
-	// the httputil currently only sets 200 and 304 response to success
-	// for AWS all responses < 400 are successful
-	if (response->Success() || response->status == HTTPStatusCode::NoContent_204) {
-		return true;
-	}
-	if (response->status == HTTPStatusCode::NotFound_404) {
-		return false;
-	}
-	ThrowException(url, *response, response->reason);
+	bool execute_head =
+	    catalog.supported_urls.find("HEAD /v1/{prefix}/namespaces/{namespace}") != catalog.supported_urls.end();
+	return VerifyResponse(context, catalog, url_builder, execute_head);
 }
 
 bool IRCAPI::VerifyTableExistence(ClientContext &context, IRCatalog &catalog, const IRCSchemaEntry &schema,
@@ -96,18 +158,9 @@ bool IRCAPI::VerifyTableExistence(ClientContext &context, IRCatalog &catalog, co
 	url_builder.AddPathComponent(schema_name);
 	url_builder.AddPathComponent("tables");
 	url_builder.AddPathComponent(table);
-
-	auto url = url_builder.GetURL();
-	auto response = catalog.auth_handler->HeadRequest(context, url_builder);
-	// the httputil currently only sets 200 and 304 response to success
-	// for AWS all responses < 400 are successful
-	if (response->Success() || response->status == HTTPStatusCode::NoContent_204) {
-		return true;
-	}
-	if (response->status == HTTPStatusCode::NotFound_404) {
-		return false;
-	}
-	ThrowException(url, *response, response->reason);
+	bool execute_head = catalog.supported_urls.find("HEAD /v1/{prefix}/namespaces/{namespace}/tables/{table}") !=
+	                    catalog.supported_urls.end();
+	return VerifyResponse(context, catalog, url_builder, execute_head);
 }
 
 static unique_ptr<HTTPResponse> GetTableMetadata(ClientContext &context, IRCatalog &catalog,
@@ -121,8 +174,11 @@ static unique_ptr<HTTPResponse> GetTableMetadata(ClientContext &context, IRCatal
 	url_builder.AddPathComponent("tables");
 	url_builder.AddPathComponent(table);
 
-	auto url = url_builder.GetURL();
-	return catalog.auth_handler->GetRequest(context, url_builder);
+	HTTPHeaders headers(*context.db);
+	if (catalog.attach_options.access_mode == IRCAccessDelegationMode::VENDED_CREDENTIALS) {
+		headers.Insert("X-Iceberg-Access-Delegation", "vended-credentials");
+	}
+	return catalog.auth_handler->Request(RequestType::GET_REQUEST, context, url_builder, headers);
 }
 
 APIResult<rest_api_objects::LoadTableResult> IRCAPI::GetTable(ClientContext &context, IRCatalog &catalog,
@@ -161,7 +217,12 @@ vector<rest_api_objects::TableIdentifier> IRCAPI::GetTables(ClientContext &conte
 		if (!page_token.empty()) {
 			url_builder.SetParam("pageToken", page_token);
 		}
-		auto response = catalog.auth_handler->GetRequest(context, url_builder);
+
+		HTTPHeaders headers(*context.db);
+		if (catalog.attach_options.access_mode == IRCAccessDelegationMode::VENDED_CREDENTIALS) {
+			headers.Insert("X-Iceberg-Access-Delegation", "vended-credentials");
+		}
+		auto response = catalog.auth_handler->Request(RequestType::GET_REQUEST, context, url_builder, headers);
 		if (!response->Success()) {
 			if (response->status == HTTPStatusCode::Forbidden_403 ||
 			    response->status == HTTPStatusCode::Unauthorized_401) {
@@ -208,7 +269,8 @@ vector<IRCAPISchema> IRCAPI::GetSchemas(ClientContext &context, IRCatalog &catal
 		if (!page_token.empty()) {
 			endpoint_builder.SetParam("pageToken", page_token);
 		}
-		auto response = catalog.auth_handler->GetRequest(context, endpoint_builder);
+		HTTPHeaders headers(*context.db);
+		auto response = catalog.auth_handler->Request(RequestType::GET_REQUEST, context, endpoint_builder, headers);
 		if (!response->Success()) {
 			if (response->status == HTTPStatusCode::Forbidden_403 ||
 			    response->status == HTTPStatusCode::Unauthorized_401) {
@@ -257,8 +319,9 @@ void IRCAPI::CommitMultiTableUpdate(ClientContext &context, IRCatalog &catalog, 
 	url_builder.AddPathComponent(catalog.prefix);
 	url_builder.AddPathComponent("transactions");
 	url_builder.AddPathComponent("commit");
-
-	auto response = catalog.auth_handler->PostRequest(context, url_builder, body);
+	HTTPHeaders headers(*context.db);
+	headers.Insert("Content-Type", "application/json");
+	auto response = catalog.auth_handler->Request(RequestType::POST_REQUEST, context, url_builder, headers, body);
 	if (response->status != HTTPStatusCode::OK_200 && response->status != HTTPStatusCode::NoContent_204) {
 		throw InvalidConfigurationException(
 		    "Request to '%s' returned a non-200 status code (%s), with reason: %s, body: %s", url_builder.GetURL(),
@@ -276,8 +339,9 @@ void IRCAPI::CommitTableUpdate(ClientContext &context, IRCatalog &catalog, const
 	url_builder.AddPathComponent(schema_name);
 	url_builder.AddPathComponent("tables");
 	url_builder.AddPathComponent(table_name);
-
-	auto response = catalog.auth_handler->PostRequest(context, url_builder, body);
+	HTTPHeaders headers(*context.db);
+	headers.Insert("Content-Type", "application/json");
+	auto response = catalog.auth_handler->Request(RequestType::POST_REQUEST, context, url_builder, headers, body);
 	if (response->status != HTTPStatusCode::OK_200 && response->status != HTTPStatusCode::NoContent_204) {
 		throw InvalidConfigurationException(
 		    "Request to '%s' returned a non-200 status code (%s), with reason: %s, body: %s", url_builder.GetURL(),
@@ -296,7 +360,8 @@ void IRCAPI::CommitTableDelete(ClientContext &context, IRCatalog &catalog, const
 	url_builder.AddPathComponent(table_name);
 	url_builder.SetParam("purgeRequested", Value::BOOLEAN(catalog.attach_options.purge_requested).ToString());
 
-	auto response = catalog.auth_handler->DeleteRequest(context, url_builder);
+	HTTPHeaders headers(*context.db);
+	auto response = catalog.auth_handler->Request(RequestType::DELETE_REQUEST, context, url_builder, headers);
 	// Glue/S3Tables follow spec and return 204, apache/iceberg-rest-fixture docker image returns 200
 	if (response->status != HTTPStatusCode::NoContent_204 && response->status != HTTPStatusCode::OK_200) {
 		throw InvalidConfigurationException(
@@ -309,8 +374,9 @@ void IRCAPI::CommitNamespaceCreate(ClientContext &context, IRCatalog &catalog, s
 	auto url_builder = catalog.GetBaseUrl();
 	url_builder.AddPathComponent(catalog.prefix);
 	url_builder.AddPathComponent("namespaces");
-
-	auto response = catalog.auth_handler->PostRequest(context, url_builder, body);
+	HTTPHeaders headers(*context.db);
+	headers.Insert("Content-Type", "application/json");
+	auto response = catalog.auth_handler->Request(RequestType::POST_REQUEST, context, url_builder, headers, body);
 	if (response->status != HTTPStatusCode::OK_200) {
 		throw InvalidConfigurationException(
 		    "Request to '%s' returned a non-200 status code (%s), with reason: %s, body: %s", url_builder.GetURL(),
@@ -325,7 +391,9 @@ void IRCAPI::CommitNamespaceDrop(ClientContext &context, IRCatalog &catalog, vec
 	url_builder.AddPathComponent("namespaces");
 	url_builder.AddPathComponent(schema_name);
 
-	auto response = catalog.auth_handler->DeleteRequest(context, url_builder);
+	HTTPHeaders headers(*context.db);
+	string body = "";
+	auto response = catalog.auth_handler->Request(RequestType::DELETE_REQUEST, context, url_builder, headers, body);
 	// Glue/S3Tables follow spec and return 204, apache/iceberg-rest-fixture docker image returns 200
 	if (response->status != HTTPStatusCode::NoContent_204 && response->status != HTTPStatusCode::OK_200) {
 		throw InvalidConfigurationException(
@@ -359,7 +427,14 @@ rest_api_objects::LoadTableResult IRCAPI::CommitNewTable(ClientContext &context,
 	auto create_table_json = create_transaction->CreateTableToJSON(std::move(doc_p));
 
 	try {
-		auto response = catalog.auth_handler->PostRequest(context, url_builder, create_table_json);
+		HTTPHeaders headers(*context.db);
+		headers.Insert("Content-Type", "application/json");
+		// if you are creating a table with stage create, you need vended credentials
+		if (catalog.attach_options.access_mode == IRCAccessDelegationMode::VENDED_CREDENTIALS) {
+			headers.Insert("X-Iceberg-Access-Delegation", "vended-credentials");
+		}
+		auto response =
+		    catalog.auth_handler->Request(RequestType::POST_REQUEST, context, url_builder, headers, create_table_json);
 		if (response->status != HTTPStatusCode::OK_200) {
 			throw InvalidConfigurationException(
 			    "Request to '%s' returned a non-200 status code (%s), with reason: %s, body: %s", url_builder.GetURL(),
@@ -376,13 +451,16 @@ rest_api_objects::LoadTableResult IRCAPI::CommitNewTable(ClientContext &context,
 }
 
 rest_api_objects::CatalogConfig IRCAPI::GetCatalogConfig(ClientContext &context, IRCatalog &catalog) {
-	auto url = catalog.GetBaseUrl();
-	url.AddPathComponent("config");
-	url.SetParam("warehouse", catalog.warehouse);
-	auto response = catalog.auth_handler->GetRequest(context, url);
+	auto url_builder = catalog.GetBaseUrl();
+	url_builder.AddPathComponent("config");
+	url_builder.SetParam("warehouse", catalog.warehouse);
+	string body = "";
+	HTTPHeaders headers(*context.db);
+	auto response = catalog.auth_handler->Request(RequestType::GET_REQUEST, context, url_builder, headers, body);
 	if (response->status != HTTPStatusCode::OK_200) {
 		throw InvalidConfigurationException("Request to '%s' returned a non-200 status code (%s), with reason: %s",
-		                                    url.GetURL(), EnumUtil::ToString(response->status), response->reason);
+		                                    url_builder.GetURL(), EnumUtil::ToString(response->status),
+		                                    response->reason);
 	}
 	std::unique_ptr<yyjson_doc, YyjsonDocDeleter> doc(ICUtils::api_result_to_doc(response->body));
 	auto *root = yyjson_doc_get_root(doc.get());

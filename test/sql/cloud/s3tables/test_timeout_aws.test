@@ -1,0 +1,52 @@
+# name: test/sql/cloud/s3tables/test_timeout_aws.test
+# description: Test when no request is made
+# group: [s3tables]
+
+require-env ICEBERG_AWS_REMOTE_AVAILABLE
+
+require-env AWS_ACCESS_KEY_ID
+
+require-env AWS_SECRET_ACCESS_KEY
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+require aws
+
+require tpch
+
+mode skip
+
+statement ok
+CREATE SECRET s3table_secret (
+    TYPE s3,
+    PROVIDER credential_chain,
+    region 'ap-southeast-2'
+);
+
+# set http timeout super low to start (1 second)
+statement ok
+set http_timeout=1;
+
+# This region is in sydney, so we should see a timeout message
+statement error
+attach 'arn:aws:s3tables:ap-southeast-2:840140254803:bucket/test-curl-timeout' as s3_catalog (
+    TYPE ICEBERG,
+    ENDPOINT_TYPE 'S3_TABLES'
+);
+----
+<REGEX>:.*Timeout was reached;.*
+
+statement ok
+set http_timeout=30;
+
+statement ok
+attach 'arn:aws:s3tables:ap-southeast-2:840140254803:bucket/test-curl-timeout' as s3_catalog (
+    TYPE ICEBERG,
+    ENDPOINT_TYPE 'S3_TABLES'
+);

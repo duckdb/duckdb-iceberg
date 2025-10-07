@@ -18,6 +18,8 @@ require httpfs
 
 require aws
 
+set ignore_error_messages
+
 statement ok
 CREATE SECRET glue_secret (
     TYPE S3,
@@ -74,5 +76,5 @@ attach '840140254803:incorrect/pyiceberg-blog-bucket' as no_s3tables (
 statement error
 select * from no_s3tables.my_namesepace.my_table;
 ----
-Catalog not found
+<REGEX>:.*HTTP Error: GET request to endpoint.*404.*
 

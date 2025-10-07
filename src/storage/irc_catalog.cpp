@@ -435,6 +435,7 @@ unique_ptr<Catalog> IRCatalog::Attach(optional_ptr<StorageExtensionInfo> storage
 
 	string endpoint_type_string;
 	string authorization_type_string;
+	string access_mode_string;
 
 	IcebergAttachOptions attach_options;
 	attach_options.warehouse = info.path;
@@ -454,6 +455,8 @@ unique_ptr<Catalog> IRCatalog::Attach(optional_ptr<StorageExtensionInfo> storage
 			endpoint_type_string = StringUtil::Lower(entry.second.ToString());
 		} else if (lower_name == "authorization_type") {
 			authorization_type_string = StringUtil::Lower(entry.second.ToString());
+		} else if (lower_name == "access_delegation_mode") {
+			access_mode_string = StringUtil::Lower(entry.second.ToString());
 		} else if (lower_name == "endpoint") {
 			attach_options.endpoint = StringUtil::Lower(entry.second.ToString());
 			StringUtil::RTrim(attach_options.endpoint, "/");
@@ -500,6 +503,17 @@ unique_ptr<Catalog> IRCatalog::Attach(optional_ptr<StorageExtensionInfo> storage
 			throw InvalidConfigurationException("'authorization_type' can not be combined with 'endpoint_type'");
 		}
 		attach_options.authorization_type = IRCAuthorization::TypeFromString(authorization_type_string);
+	}
+	if (!access_mode_string.empty()) {
+		if (access_mode_string == "vended_credentials") {
+			attach_options.access_mode = IRCAccessDelegationMode::VENDED_CREDENTIALS;
+		} else if (access_mode_string == "none") {
+			attach_options.access_mode = IRCAccessDelegationMode::NONE;
+		} else {
+			throw InvalidInputException(
+			    "Unrecognized access mode '%s'. Supported options are 'vended_credentials' and 'none'",
+			    access_mode_string);
+		}
 	}
 	if (attach_options.authorization_type == IRCAuthorizationType::INVALID) {
 		attach_options.authorization_type = IRCAuthorizationType::OAUTH2;

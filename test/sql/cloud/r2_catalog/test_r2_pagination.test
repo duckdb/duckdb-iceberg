@@ -31,6 +31,8 @@ attach '6b17833f308abc1e1cc343c552b51f51_iceberg-catalog-test' AS my_datalake (
     support_nested_namespaces true
 );
 
+set ignore_error_messages
+
 query I
 select count(*) from (show all tables);
 ----

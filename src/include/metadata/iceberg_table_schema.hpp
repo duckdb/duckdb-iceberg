@@ -2,6 +2,7 @@
 
 #include "metadata/iceberg_column_definition.hpp"
 #include "rest_catalog/objects/schema.hpp"
+#include "rest_catalog/objects/add_schema_update.hpp"
 #include "duckdb/common/column_index.hpp"
 
 namespace duckdb {
@@ -21,6 +22,8 @@ public:
 
 public:
 	int32_t schema_id;
+	// Nessie Needs this for some reason.
+	idx_t last_column_id;
 	vector<unique_ptr<IcebergColumnDefinition>> columns;
 };
 
