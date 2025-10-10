@@ -55,10 +55,6 @@ jobs:
           sudo curl -L "https://github.com/docker/compose/releases/download/1.29.2/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
           sudo chmod +x /usr/local/bin/docker-compose
 
-      - name: Install required python packages
-        run: |
-          python3 -m pip install pyiceberg pytest pyarrow
-
       - name: Install CMake 3.x
         run: |
           sudo apt-get remove -y cmake cmake-data
@@ -68,6 +64,10 @@ jobs:
         with:
           fetch-depth: 0
           submodules: 'true'
+
+      - name: Install required python packages
+        run: |
+          python3 -m pip install -r scripts/requirements.txt 
 
       - name: Check installed versions
         run: |

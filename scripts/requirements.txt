@@ -1,4 +1,4 @@
 pyspark==3.5.0
 duckdb
-pyiceberg
+pyiceberg==0.9.1
 pyarrow
