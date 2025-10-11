@@ -21,7 +21,8 @@ static string DetectStorageType(const string &location) {
 		return "gcs";
 	} else if (StringUtil::StartsWith(location, "s3://") || StringUtil::StartsWith(location, "s3a://")) {
 		return "s3";
-	} else if (StringUtil::StartsWith(location, "abfs://") || StringUtil::StartsWith(location, "az://")) {
+	} else if (StringUtil::StartsWith(location, "abfs://") || StringUtil::StartsWith(location, "abfss://") ||
+	           StringUtil::StartsWith(location, "az://")) {
 		return "azure";
 	}
 	// Default to s3 for backward compatibility
@@ -34,6 +35,29 @@ static void ParseGCSConfigOptions(const case_insensitive_map_t<string> &config,
 	auto token_it = config.find("gcs.oauth2.token");
 	if (token_it != config.end()) {
 		options["bearer_token"] = token_it->second;
+	}
+}
+
+static void ParseAzureConfigOptions(const case_insensitive_map_t<string> &config,
+                                    case_insensitive_map_t<Value> &options) {
+	static const string ADLS_SAS_TOKEN_PREFIX = "adls.sas-token.";
+
+	for (const auto &entry : config) {
+		// SAS token config format is e.g. adls.sas-token.<account-name>.dfs.core.windows.net
+		if (StringUtil::StartsWith(entry.first, ADLS_SAS_TOKEN_PREFIX)) {
+			string storage_account_identifier = entry.first.substr(ADLS_SAS_TOKEN_PREFIX.length());
+
+			// Extract account name
+			size_t dot_pos = storage_account_identifier.find('.');
+			string account_name =
+			    (dot_pos != string::npos) ? storage_account_identifier.substr(0, dot_pos) : storage_account_identifier;
+
+			options["connection_string"] =
+			    StringUtil::Format("AccountName=%s;SharedAccessSignature=%s", account_name, entry.second);
+
+			// For now, only process the first SAS token we find in the config
+			return;
+		}
 	}
 }
 
@@ -64,6 +88,8 @@ static void ParseConfigOptions(const case_insensitive_map_t<string> &config, cas
 	// Parse storage-specific config options
 	if (storage_type == "gcs") {
 		ParseGCSConfigOptions(config, options);
+	} else if (storage_type == "azure") {
+		ParseAzureConfigOptions(config, options);
 	} else {
 		// Default to S3 parsing for backward compatibility
 		ParseS3ConfigOptions(config, options);
