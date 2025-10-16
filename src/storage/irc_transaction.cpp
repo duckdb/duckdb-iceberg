@@ -77,6 +77,9 @@ void CommitTableToJSON(yyjson_mut_doc *doc, yyjson_mut_val *root_object,
 			yyjson_mut_obj_add_strcpy(doc, snapshot_json, "manifest-list", snapshot.manifest_list.c_str());
 			auto summary_json = yyjson_mut_obj_add_obj(doc, snapshot_json, "summary");
 			yyjson_mut_obj_add_strcpy(doc, summary_json, "operation", snapshot.summary.operation.c_str());
+			for (auto &prop : snapshot.summary.additional_properties) {
+				yyjson_mut_obj_add_strcpy(doc, summary_json, prop.first.c_str(), prop.second.c_str());
+			}
 			yyjson_mut_obj_add_uint(doc, snapshot_json, "schema-id", snapshot.schema_id);
 		} else if (update.has_set_snapshot_ref_update) {
 			auto update_json = yyjson_mut_arr_add_obj(doc, updates_array);

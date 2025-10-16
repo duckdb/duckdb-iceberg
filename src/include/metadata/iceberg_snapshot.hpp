@@ -9,6 +9,15 @@ struct IcebergTableMetadata;
 
 enum class IcebergSnapshotOperationType : uint8_t { APPEND, REPLACE, OVERWRITE, DELETE };
 
+enum class SnapshotMetricType : uint8_t {
+	ADDED_DATA_FILES,
+	ADDED_RECORDS,
+	DELETED_DATA_FILES,
+	DELETED_RECORDS,
+	TOTAL_DATA_FILES,
+	TOTAL_RECORDS
+};
+
 //! An Iceberg snapshot https://iceberg.apache.org/spec/#snapshots
 class IcebergSnapshot {
 public:
@@ -16,6 +25,7 @@ public:
 	}
 	static IcebergSnapshot ParseSnapshot(rest_api_objects::Snapshot &snapshot, IcebergTableMetadata &metadata);
 	rest_api_objects::Snapshot ToRESTObject() const;
+	using metrics_map_t = std::map<SnapshotMetricType, int64_t>;
 
 public:
 	//! Snapshot metadata
@@ -27,6 +37,7 @@ public:
 	IcebergSnapshotOperationType operation = IcebergSnapshotOperationType::APPEND;
 	timestamp_t timestamp_ms;
 	string manifest_list;
+	metrics_map_t metrics;
 };
 
 } // namespace duckdb
