@@ -289,7 +289,36 @@ IcebergTableMetadata IcebergTableMetadata::FromTableMetadata(rest_api_objects::T
 		mapping_index++;
 		IcebergFieldMapping::ParseFieldMappings(root, res.mappings, mapping_index, 0);
 	}
+
+	// Parse write.data.path property
+	auto write_data_path = properties.find("write.data.path");
+	if (write_data_path != properties.end()) {
+		res.write_data_path = write_data_path->second;
+	}
+
+	// Parse write.metadata.path property
+	auto write_metadata_path = properties.find("write.metadata.path");
+	if (write_metadata_path != properties.end()) {
+		res.write_metadata_path = write_metadata_path->second;
+	}
+
 	return res;
+}
+
+string IcebergTableMetadata::GetDataPath() const {
+	// If write.data.path property is set, use it; otherwise use default location + "/data"
+	if (!write_data_path.empty()) {
+		return write_data_path;
+	}
+	return location + "/data";
+}
+
+string IcebergTableMetadata::GetMetadataPath() const {
+	// If write.metadata.path property is set, use it; otherwise use default location + "/metadata"
+	if (!write_metadata_path.empty()) {
+		return write_metadata_path;
+	}
+	return location + "/metadata";
 }
 
 } // namespace duckdb

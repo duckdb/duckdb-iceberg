@@ -35,12 +35,12 @@ void IcebergTransactionData::AddSnapshot(IcebergSnapshotOperationType operation,
 
 	//! Construct the manifest file
 	auto manifest_file_uuid = UUID::ToString(UUID::GenerateRandomUUID());
-	auto manifest_file_path = table_info.BaseFilePath() + "/metadata/" + manifest_file_uuid + "-m0.avro";
+	auto manifest_file_path = table_metadata.GetMetadataPath() + "/" + manifest_file_uuid + "-m0.avro";
 	IcebergManifestFile new_manifest_file(manifest_file_path);
 
 	//! Construct the manifest list
 	auto manifest_list_uuid = UUID::ToString(UUID::GenerateRandomUUID());
-	auto manifest_list_path = table_info.BaseFilePath() + "/metadata/snap-" + std::to_string(snapshot_id) + "-" +
+	auto manifest_list_path = table_metadata.GetMetadataPath() + "/snap-" + std::to_string(snapshot_id) + "-" +
 	                          manifest_list_uuid + ".avro";
 
 	//! Construct the snapshot

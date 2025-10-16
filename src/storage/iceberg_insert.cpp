@@ -37,12 +37,15 @@ IcebergInsert::IcebergInsert(PhysicalPlan &physical_plan, LogicalOperator &op, S
 
 IcebergCopyInput::IcebergCopyInput(ClientContext &context, ICTableEntry &table)
     : catalog(table.catalog.Cast<IRCatalog>()), columns(table.GetColumns()) {
-	data_path = table.table_info.BaseFilePath() + "/data";
+	data_path = table.table_info.table_metadata.GetDataPath();
 }
 
 IcebergCopyInput::IcebergCopyInput(ClientContext &context, IRCSchemaEntry &schema, const ColumnList &columns,
                                    const string &data_path_p)
     : catalog(schema.catalog.Cast<IRCatalog>()), columns(columns) {
+	// When data_path_p is provided directly, it's already the table location
+	// We should check if it has write.data.path property, but since this is a schema-level
+	// constructor and we don't have access to table metadata, we use the default behavior
 	data_path = data_path_p + "/data";
 }
 
