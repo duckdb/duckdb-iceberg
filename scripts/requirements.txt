@@ -1,4 +1,4 @@
-pyspark==3.5.0
+pyspark==4.0.1
 duckdb
 pydantic==2.9.0
 pyiceberg==0.9.1
