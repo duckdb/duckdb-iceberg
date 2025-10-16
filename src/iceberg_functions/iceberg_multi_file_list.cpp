@@ -528,6 +528,38 @@ bool IcebergMultiFileList::ManifestMatchesFilter(const IcebergManifest &manifest
 	return true;
 }
 
+vector<reference<const IcebergEqualityDeleteRow>>
+IcebergMultiFileList::GetEqualityDeletesForFile(const IcebergManifestEntry &data_file) const {
+	vector<reference<const IcebergEqualityDeleteRow>> result;
+
+	//! Look through all the equality delete files with a *higher* sequence number
+	auto &metadata = GetMetadata();
+	auto it = equality_delete_data.upper_bound(data_file.sequence_number);
+	for (; it != equality_delete_data.end(); it++) {
+		auto &files = it->second->files;
+		for (auto &file : files) {
+			auto &partition_spec = metadata.partition_specs.at(file.partition_spec_id);
+			if (partition_spec.IsPartitioned()) {
+				if (file.partition_spec_id != data_file.partition_spec_id) {
+					//! Not unpartitioned and the data does not share the same partition spec as the delete, skip the
+					//! delete file.
+					continue;
+				}
+				D_ASSERT(file.partition_values.size() == data_file.partition_values.size());
+				for (idx_t i = 0; i < file.partition_values.size(); i++) {
+					if (file.partition_values[i] != data_file.partition_values[i]) {
+						//! Same partition spec id, but the partitioning information doesn't match, delete file doesn't
+						//! apply.
+						continue;
+					}
+				}
+			}
+			result.insert(result.end(), file.rows.begin(), file.rows.end());
+		}
+	}
+	return result;
+}
+
 void IcebergMultiFileList::InitializeFiles(lock_guard<mutex> &guard) {
 	if (initialized) {
 		return;
