@@ -1,0 +1,23 @@
+# name: test/sql/local/test_custom_write_paths.test
+# description: test that write.data.path and write.metadata.path properties are properly parsed
+# group: [local]
+
+require avro
+
+require parquet
+
+require iceberg
+
+# Test that a table with custom write.data.path and write.metadata.path properties can be read
+# and the properties are properly parsed from the metadata
+
+query II
+SELECT * FROM iceberg_scan('__WORKING_DIRECTORY__/data/persistent/custom_write_paths', allow_moved_paths=true);
+----
+
+# Verify the metadata is properly parsed by checking the table metadata
+query I
+SELECT COUNT(*) FROM iceberg_metadata('__WORKING_DIRECTORY__/data/persistent/custom_write_paths', allow_moved_paths=true);
+----
+0
+

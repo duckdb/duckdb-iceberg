@@ -41,6 +41,10 @@ public:
 	optional_ptr<const IcebergPartitionSpec> FindPartitionSpecById(int32_t spec_id) const;
 	optional_ptr<IcebergSnapshot> GetSnapshot(const IcebergSnapshotLookup &lookup);
 
+	//! Get the data and metadata paths, falling back to default if not set
+	string GetDataPath() const;
+	string GetMetadataPath() const;
+
 public:
 	string table_uuid;
 	string location;
@@ -60,6 +64,10 @@ public:
 	//! schema_id -> schema
 	unordered_map<int32_t, shared_ptr<IcebergTableSchema>> schemas;
 	vector<IcebergFieldMapping> mappings;
+
+	//! Custom write paths from table properties
+	string write_data_path;
+	string write_metadata_path;
 };
 
 } // namespace duckdb
