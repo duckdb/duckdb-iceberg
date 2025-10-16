@@ -40,8 +40,8 @@ void IcebergTransactionData::AddSnapshot(IcebergSnapshotOperationType operation,
 
 	//! Construct the manifest list
 	auto manifest_list_uuid = UUID::ToString(UUID::GenerateRandomUUID());
-	auto manifest_list_path = table_metadata.GetMetadataPath() + "/snap-" + std::to_string(snapshot_id) + "-" +
-	                          manifest_list_uuid + ".avro";
+	auto manifest_list_path =
+	    table_metadata.GetMetadataPath() + "/snap-" + std::to_string(snapshot_id) + "-" + manifest_list_uuid + ".avro";
 
 	//! Construct the snapshot
 	IcebergSnapshot new_snapshot;
