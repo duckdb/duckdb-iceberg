@@ -233,6 +233,29 @@ unique_ptr<NodeStatistics> IcebergMultiFileList::GetCardinality(ClientContext &c
 	return make_uniq<NodeStatistics>(cardinality, cardinality);
 }
 
+void IcebergMultiFileList::GetStatistics(vector<PartitionStatistics> &result) const {
+	if (GetMetadata().iceberg_version == 1) {
+		//! We collect no statistics information from manifests for V1 tables.
+		return;
+	}
+
+	if (!delete_manifests.empty()) {
+		//! if exist delete_manifests , return;
+		return;
+	}
+
+	idx_t count = 0;
+	for (idx_t i = 0; i < data_manifests.size(); i++) {
+		count += data_manifests[i].existing_rows_count;
+		count += data_manifests[i].added_rows_count;
+	}
+
+	PartitionStatistics partition_stats;
+	partition_stats.count = count;
+	partition_stats.count_type = CountType::COUNT_EXACT;
+	result.push_back(partition_stats);
+}
+
 IcebergPredicateStats IcebergPredicateStats::DeserializeBounds(const Value &lower_bound, const Value &upper_bound,
                                                                const string &name, const LogicalType &type) {
 	IcebergPredicateStats res;

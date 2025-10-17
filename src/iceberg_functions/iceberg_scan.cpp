@@ -66,6 +66,7 @@ TableFunctionSet IcebergFunctions::GetIcebergScanFunction(ExtensionLoader &loade
 		function.statistics = nullptr;
 		function.table_scan_progress = nullptr;
 		function.get_bind_info = nullptr;
+		function.get_partition_stats = IcebergMultiFileReader::IcebergGetPartitionStats;
 
 		// Schema param is just confusing here
 		function.named_parameters.erase("schema");
