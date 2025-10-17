@@ -1,0 +1,23 @@
+# name: test/sql/local/count_star_optimizer.test
+# description: Test count star optimizer in an iceberg scan
+# group: [local]
+
+require avro
+
+require parquet
+
+require iceberg
+
+# use statistics information.
+query II
+explain SELECT count(*) FROM ICEBERG_SCAN('__WORKING_DIRECTORY__/data/persistent/query_optimizer/count_star_optimizer');
+----
+physical_plan	<REGEX>:.*COLUMN_DATA_SCAN.*~1.*
+
+# contain delete file, do not use the statistics information.
+query II
+explain SELECT count(*) FROM ICEBERG_SCAN('__WORKING_DIRECTORY__/data/persistent/query_optimizer/count_star_optimizer_with_deletes');
+----
+physical_plan	<REGEX>:.*ICEBERG_SCAN.*~1.*
+
+
