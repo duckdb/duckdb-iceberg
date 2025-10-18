@@ -458,4 +458,13 @@ bool IcebergMultiFileReader::ParseOption(const string &key, const Value &val, Mu
 	return MultiFileReader::ParseOption(key, val, options, context);
 }
 
+vector<PartitionStatistics> IcebergMultiFileReader::IcebergGetPartitionStats(ClientContext &context,
+                                                                             GetPartitionStatsInput &input) {
+	auto &bind_data = input.bind_data->Cast<MultiFileBindData>();
+	vector<PartitionStatistics> result;
+	auto &multi_file_list = bind_data.file_list->Cast<IcebergMultiFileList>();
+	multi_file_list.GetStatistics(result);
+	return result;
+}
+
 } // namespace duckdb
