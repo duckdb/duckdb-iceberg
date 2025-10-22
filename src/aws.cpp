@@ -217,22 +217,22 @@ unique_ptr<HTTPResponse> AWSInput::ExecuteRequest(ClientContext &context, Aws::H
 			signed_headers += ";x-amz-security-token";
 		}
 
-		string XX = uri.GetURLEncodedPath();
+		string url_encoded_path = uri.GetURLEncodedPath();
 
 		{
-			string YY = "";
-			for (auto c : XX) {
-				if (c == 'F')
-					YY += "52F";
-				else if (c != ':')
-					YY += c;
+			// it's unclear to be why we need to transform %2F into %252F, see https://en.wikipedia.org/wiki/Percent-encoding#Percent_character
+			string post_process = "";
+			for (auto c : url_encoded_path) {
+				if (c == '%')
+					// Also '%' needs to be URL encoded (!?)
+					post_process += "%25";
 				else
-					YY += "%3A";
+					post_process += c;
 			}
-			XX = YY;
+			url_encoded_path = post_process;
 		}
 
-		auto canonical_request = string(Aws::Http::HttpMethodMapper::GetNameForHttpMethod(method)) + "\n" + XX + "\n";
+		auto canonical_request = string(Aws::Http::HttpMethodMapper::GetNameForHttpMethod(method)) + "\n" + url_encoded_path + "\n";
 		if (uri.GetQueryString().size()) {
 			canonical_request += uri.GetQueryString().substr(1);
 		}
