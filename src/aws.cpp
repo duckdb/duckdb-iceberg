@@ -217,10 +217,8 @@ unique_ptr<HTTPResponse> AWSInput::ExecuteRequest(ClientContext &context, Aws::H
 			signed_headers += ";x-amz-security-token";
 		}
 
-		string XX = uri.GetURIString().substr(8 + 32);
-		if (uri.GetQueryString().size() > 0) {
-			XX = XX.substr(0, XX.size() - uri.GetQueryString().size());
-		}
+		string XX = uri.GetURLEncodedPath();
+
 		{
 			string YY = "";
 			for (auto c : XX) {
@@ -242,7 +240,7 @@ unique_ptr<HTTPResponse> AWSInput::ExecuteRequest(ClientContext &context, Aws::H
 		if (content_type.length() > 0) {
 			canonical_request += "\ncontent-type:" + content_type;
 		}
-		string host = "s3tables." + region + ".amazonaws.com";
+		string host = uri.GetAuthority();
 		canonical_request +=
 		    "\nhost:" + host + "\nx-amz-content-sha256:" + payload_hash + "\nx-amz-date:" + datetime_now;
 		if (session_token.length() > 0) {
