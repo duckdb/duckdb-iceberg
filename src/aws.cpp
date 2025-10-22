@@ -222,15 +222,7 @@ unique_ptr<HTTPResponse> AWSInput::ExecuteRequest(ClientContext &context, Aws::H
 		{
 			// it's unclear to be why we need to transform %2F into %252F, see
 			// https://en.wikipedia.org/wiki/Percent-encoding#Percent_character
-			string post_process = "";
-			for (auto c : url_encoded_path) {
-				if (c == '%')
-					// Also '%' needs to be URL encoded (!?)
-					post_process += "%25";
-				else
-					post_process += c;
-			}
-			url_encoded_path = post_process;
+			url_encoded_path = StringUtil::Replace(url_encoded_path, "%2F", "%252F");
 		}
 
 		auto canonical_request =
