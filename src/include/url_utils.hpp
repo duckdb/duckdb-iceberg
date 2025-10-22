@@ -19,7 +19,7 @@ string AddHttpHostIfMissing(const string &url);
 
 class IRCEndpointBuilder {
 public:
-	void AddPathComponent(const string &component);
+	void AddPathComponent(const string &component, bool split_slash = false);
 
 	void SetHost(const string &host);
 	string GetHost() const;
