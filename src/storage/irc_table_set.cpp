@@ -29,20 +29,30 @@ namespace duckdb {
 ICTableSet::ICTableSet(IRCSchemaEntry &schema) : schema(schema), catalog(schema.ParentCatalog()) {
 }
 
-bool ICTableSet::FillEntry(ClientContext &context, IcebergTableInformation &table) {
+bool ICTableSet::FillEntry(ClientContext &context, IcebergTableInformation &table, bool might_throw) {
 	if (!table.schema_versions.empty()) {
 		return true;
 	}
 
 	auto &ic_catalog = catalog.Cast<IRCatalog>();
-
-	auto get_table_result = IRCAPI::GetTable(context, ic_catalog, schema, table.name);
+	APIResult<rest_api_objects::LoadTableResult> get_table_result;
+	try {
+		get_table_result = IRCAPI::GetTable(context, ic_catalog, schema, table.name);
+	} catch (...) {
+		if (!might_throw) {
+			return false;
+		}
+		throw;
+	}
 	if (get_table_result.has_error) {
 		if (get_table_result.error_._error.type == "NoSuchIcebergTableException") {
 			return false;
 		}
 		if (get_table_result.status_ == HTTPStatusCode::Forbidden_403 ||
 		    get_table_result.status_ == HTTPStatusCode::Unauthorized_401) {
+			return false;
+		}
+		if (!might_throw) {
 			return false;
 		}
 		throw HTTPException(get_table_result.error_._error.message);
@@ -194,11 +204,14 @@ optional_ptr<CatalogEntry> ICTableSet::GetEntry(ClientContext &context, const En
 	auto table_name = lookup.GetEntryName();
 	auto entry = entries.find(table_name);
 	if (entry == entries.end()) {
-		if (!IRCAPI::VerifyTableExistence(context, ic_catalog, schema, table_name)) {
-			return nullptr;
-		}
 		auto it = entries.emplace(table_name, IcebergTableInformation(ic_catalog, schema, table_name));
 		entry = it.first;
+		bool exists = FillEntry(context, entry->second, false);
+		if (!exists) {
+			entries.erase(entry);
+			return nullptr;
+		}
+		return entry->second.GetSchemaVersion(lookup.GetAtClause());
 	}
 	if (entry->second.transaction_data && entry->second.transaction_data->is_deleted) {
 		return nullptr;
