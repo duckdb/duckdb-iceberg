@@ -78,7 +78,7 @@ s_comment	VARCHAR
 query I
 select count(*) from duckdb_logs_parsed('HTTP');
 ----
-4
+3
 
 statement ok
 begin;
@@ -107,4 +107,4 @@ commit;
 query I
 select count(*) from duckdb_logs_parsed('HTTP');
 ----
-11
+10
