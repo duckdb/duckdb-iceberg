@@ -470,9 +470,16 @@ unique_ptr<Catalog> IRCatalog::Attach(optional_ptr<StorageExtensionInfo> storage
 		}
 	}
 	IcebergEndpointType endpoint_type = IcebergEndpointType::INVALID;
+	bool endpoint_set = false;
 	//! Then check any if the 'endpoint_type' is set, for any well known catalogs
 	if (!endpoint_type_string.empty()) {
 		endpoint_type = EndpointTypeFromString(endpoint_type_string);
+		endpoint_set = true;
+	} else if (StringUtil::StartsWith(info.path, "arn:aws:s3tables:")) {
+		endpoint_type = IcebergEndpointType::AWS_S3TABLES;
+		endpoint_set = true;
+	}
+	if (endpoint_set) {
 		switch (endpoint_type) {
 		case IcebergEndpointType::AWS_GLUE: {
 			GlueAttach(context, attach_options);
