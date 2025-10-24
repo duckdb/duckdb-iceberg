@@ -44,6 +44,12 @@ optional_ptr<const IcebergPartitionSpec> IcebergTableMetadata::FindPartitionSpec
 	return it->second;
 }
 
+optional_ptr<const IcebergSortOrder> IcebergTableMetadata::FindSortOrderById(int32_t sort_id) const {
+	auto it = sort_specs.find(sort_id);
+	D_ASSERT(it != sort_specs.end());
+	return it->second;
+}
+
 optional_ptr<IcebergSnapshot> IcebergTableMetadata::GetLatestSnapshot() {
 	if (!has_current_snapshot) {
 		return nullptr;
@@ -60,6 +66,18 @@ const IcebergTableSchema &IcebergTableMetadata::GetLatestSchema() const {
 
 const IcebergPartitionSpec &IcebergTableMetadata::GetLatestPartitionSpec() const {
 	auto res = FindPartitionSpecById(default_spec_id);
+	D_ASSERT(res);
+	return *res;
+}
+
+bool IcebergTableMetadata::HasSortOrder() const {
+	return default_sort_order_id.IsValid();
+}
+
+const IcebergSortOrder &IcebergTableMetadata::GetLatestSortOrder() const {
+	D_ASSERT(HasSortOrder());
+	auto sort_order_id = default_sort_order_id.GetIndex();
+	auto res = FindSortOrderById(sort_order_id);
 	D_ASSERT(res);
 	return *res;
 }
@@ -253,6 +271,9 @@ IcebergTableMetadata IcebergTableMetadata::FromTableMetadata(rest_api_objects::T
 	for (auto &spec : table_metadata.partition_specs) {
 		res.partition_specs.emplace(spec.spec_id, IcebergPartitionSpec::ParseFromJson(spec));
 	}
+	for (auto &sort_order : table_metadata.sort_orders) {
+		res.sort_specs.emplace(sort_order.order_id, IcebergSortOrder::ParseFromJson(sort_order));
+	}
 	if (!table_metadata.has_current_schema_id) {
 		if (res.iceberg_version == 1) {
 			throw NotImplementedException("Reading of the V1 'schema' field is not currently supported");
@@ -268,6 +289,9 @@ IcebergTableMetadata IcebergTableMetadata::FromTableMetadata(rest_api_objects::T
 	}
 	res.last_sequence_number = table_metadata.last_sequence_number;
 	res.default_spec_id = table_metadata.default_spec_id;
+	if (table_metadata.has_default_sort_order_id) {
+		res.default_sort_order_id = table_metadata.default_sort_order_id;
+	}
 
 	auto &properties = table_metadata.properties;
 	auto name_mapping = properties.find("schema.name-mapping.default");

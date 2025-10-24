@@ -443,6 +443,12 @@ PhysicalOperator &IRCatalog::PlanInsert(ClientContext &context, PhysicalPlanGene
 	if (!partition_spec.IsUnpartitioned()) {
 		throw NotImplementedException("INSERT into a partitioned table is not supported yet");
 	}
+	if (table_info.table_metadata.HasSortOrder()) {
+		auto &sort_spec = table_info.table_metadata.GetLatestSortOrder();
+		if (sort_spec.IsSorted()) {
+			throw NotImplementedException("Insert into a sorted iceberg table is not supported yet");
+		}
+	}
 
 	// Create Copy Info
 	auto info = make_uniq<IcebergCopyInput>(context, table_entry);

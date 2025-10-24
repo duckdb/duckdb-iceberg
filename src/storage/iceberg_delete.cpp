@@ -307,6 +307,11 @@ PhysicalOperator &IRCatalog::PlanDelete(ClientContext &context, PhysicalPlanGene
 		row_id_indexes.push_back(bound_ref.index);
 	}
 	auto &ic_table_entry = op.table.Cast<ICTableEntry>();
+
+	auto &partition_spec = ic_table_entry.table_info.table_metadata.GetLatestPartitionSpec();
+	if (!partition_spec.IsUnpartitioned()) {
+		throw NotImplementedException("Delete from a partitioned table is not supported yet");
+	}
 	auto &iceberg_delete = IcebergDelete::PlanDelete(context, planner, ic_table_entry, plan, row_id_indexes);
 	return iceberg_delete;
 }

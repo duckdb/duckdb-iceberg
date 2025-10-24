@@ -1,5 +1,6 @@
-# name: test/sql/local/irc/insert/test_partitioned_insert.test
-# group: [insert]
+# name: test/sql/local/irc/delete/test_delete_from_partitioned_table_errors.test
+# description: test integration with iceberg catalog read
+# group: [delete]
 
 require-env ICEBERG_SERVER_AVAILABLE
 
@@ -11,13 +12,11 @@ require iceberg
 
 require httpfs
 
-require tpch
-
 # Do not ignore 'HTTP' error messages!
 set ignore_error_messages
 
 statement ok
-set enable_logging=true
+CALL enable_logging('HTTP');
 
 statement ok
 set logging_level='debug'
@@ -42,18 +41,10 @@ ATTACH '' AS my_datalake (
 );
 
 statement ok
-call dbgen(sf=0.001);
+select * from my_datalake.default.lineitem_partitioned_l_shipmode limit 1;
 
 statement error
-insert into my_datalake.default.table_sort_order select * from lineitem limit 5;
+delete from my_datalake.default.lineitem_partitioned_l_shipmode where l_linenumber % 2 = 0;
 ----
-<REGEX>.*Not implemented.*Insert into a sorted iceberg table is not supported yet.*
+<REGEX>:.*Not implemented.*Delete from a partitioned.*
 
-statement error
-INSERT into my_datalake.default.insert_test_partitioned select
-	'2010/06/11'::DATE a,
-	42 b,
-	'test' c
-;
-----
-Not implemented Error: INSERT into a partitioned table is not supported yet

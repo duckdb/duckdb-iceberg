@@ -32,6 +32,7 @@ set(EXTENSION_SOURCES
     src/metadata/iceberg_transform.cpp
     src/metadata/iceberg_table_schema.cpp
     src/metadata/iceberg_partition_spec.cpp
+    src/metadata/iceberg_sort_order.cpp
     src/metadata/iceberg_snapshot.cpp
     src/metadata/iceberg_field_mapping.cpp
     src/metadata/iceberg_column_definition.cpp

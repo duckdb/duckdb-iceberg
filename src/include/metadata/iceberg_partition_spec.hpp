@@ -5,6 +5,8 @@
 
 #include "rest_catalog/objects/partition_spec.hpp"
 #include "rest_catalog/objects/partition_field.hpp"
+#include "rest_catalog/objects/sort_order.hpp"
+#include "rest_catalog/objects/sort_field.hpp"
 
 using namespace duckdb_yyjson;
 
