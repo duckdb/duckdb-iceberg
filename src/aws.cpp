@@ -274,14 +274,16 @@ unique_ptr<HTTPResponse> AWSInput::ExecuteRequest(ClientContext &context, Aws::H
 	auto &http_util = HTTPUtil::Get(db);
 	unique_ptr<HTTPParams> params;
 
-	string request_url = uri.GetURIString().substr(8);
+	string request_url = uri.GetURIString();
 
 	Value val;
 	auto has_setting = context.TryGetCurrentSetting("experimental_s3_tables_global_proxy", val);
 	if (has_setting) {
-		request_url = val.GetValue<string>() + request_url;
-	} else {
-		request_url = "https://" + request_url;
+		if (StringUtil::StartsWith(request_url, "https://")) {
+			request_url = val.GetValue<string>() + request_url.substr(string("https://").size());
+		} else if (StringUtil::StartsWith(request_url, "http://")) {
+			request_url = val.GetValue<string>() + request_url.substr(string("http://").size());
+		}
 	}
 
 	params = http_util.InitializeParameters(context, request_url);
