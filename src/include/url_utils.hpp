@@ -19,7 +19,8 @@ string AddHttpHostIfMissing(const string &url);
 
 class IRCEndpointBuilder {
 public:
-	void AddPathComponent(const string &component, bool split_slash = false);
+	void AddPathComponent(const string &component);
+	void AddMultipartPathComponent(const vector<string> &component);
 
 	void SetHost(const string &host);
 	string GetHost() const;

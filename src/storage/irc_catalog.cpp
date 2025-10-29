@@ -295,13 +295,21 @@ void IRCatalog::GetConfig(ClientContext &context, IcebergEndpointType &endpoint_
 
 	if (default_prefix_it != defaults.end()) {
 		// sometimes there is a prefix in the defaults
-		prefix = StringUtil::URLDecode(default_prefix_it->second);
+		prefix.push_back(StringUtil::URLDecode(default_prefix_it->second));
 		defaults.erase(default_prefix_it);
 	}
 	if (override_prefix_it != overrides.end()) {
 		// sometimes the prefix in the overrides. Prefer the override prefix
-		prefix = StringUtil::URLDecode(override_prefix_it->second);
+		prefix.clear();
+		prefix.push_back(StringUtil::URLDecode(override_prefix_it->second));
 		overrides.erase(override_prefix_it);
+	}
+	if (endpoint_type == IcebergEndpointType::AWS_GLUE) {
+		auto prefix_parts = StringUtil::Split(prefix[0], "/");
+		prefix.clear();
+		for (auto& part: prefix_parts) {
+			prefix.push_back(part);
+		}
 	}
 
 	if (catalog_config.has_endpoints) {

@@ -11,15 +11,16 @@ string AddHttpHostIfMissing(const string &url) {
 	return "http://" + url;
 }
 
-void IRCEndpointBuilder::AddPathComponent(const string &component, bool split_slash) {
+void IRCEndpointBuilder::AddPathComponent(const string &component) {
 	if (!component.empty()) {
-		if (split_slash) {
-			vector<string> parts = StringUtil::Split(component, "/");
-			for (auto& part: parts) {
-				path_components.push_back(part);
-			}
-		} else {
-			path_components.push_back(component);
+		path_components.push_back(component);
+	}
+}
+
+void IRCEndpointBuilder::AddMultipartPathComponent(const vector<string> &component) {
+	if (!component.empty()) {
+		for(auto& part: component) {
+			path_components.push_back(part);
 		}
 	}
 }

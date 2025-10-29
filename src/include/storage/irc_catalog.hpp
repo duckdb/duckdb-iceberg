@@ -106,7 +106,7 @@ public:
 	//! version
 	const string version;
 	//! optional prefix
-	string prefix;
+	vector<string> prefix;
 	//! attach options
 	IcebergAttachOptions attach_options;
 
