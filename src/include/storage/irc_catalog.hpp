@@ -35,7 +35,7 @@ public:
 
 public:
 	explicit IRCatalog(AttachedDatabase &db_p, AccessMode access_mode, unique_ptr<IRCAuthorization> auth_handler,
-	                   IcebergAttachOptions &attach_options, const string &version = "v1");
+	                   IcebergAttachOptions &attach_options, const string &default_schema);
 	~IRCatalog() override;
 
 public:
@@ -57,6 +57,9 @@ public:
 		default:
 			return CatalogLookupBehavior::STANDARD;
 		}
+	}
+	string GetDefaultSchema() const override {
+		return default_schema;
 	}
 
 public:
@@ -108,6 +111,7 @@ public:
 	string prefix;
 	//! attach options
 	IcebergAttachOptions attach_options;
+	string default_schema;
 
 private:
 	// defaults and overrides provided by a catalog.

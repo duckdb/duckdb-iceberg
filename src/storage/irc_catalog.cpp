@@ -25,13 +25,11 @@ using namespace duckdb_yyjson;
 namespace duckdb {
 
 IRCatalog::IRCatalog(AttachedDatabase &db_p, AccessMode access_mode, unique_ptr<IRCAuthorization> auth_handler,
-                     IcebergAttachOptions &attach_options, const string &version)
+                     IcebergAttachOptions &attach_options, const string &default_schema)
     : Catalog(db_p), access_mode(access_mode), auth_handler(std::move(auth_handler)),
-      warehouse(attach_options.warehouse), uri(attach_options.endpoint), version(version),
-      attach_options(attach_options) {
-	if (version.empty()) {
-		throw InternalException("version can not be empty");
-	}
+      warehouse(attach_options.warehouse), uri(attach_options.endpoint), version("v1"), attach_options(attach_options),
+      default_schema(default_schema) {
+	D_ASSERT(!default_schema.empty());
 }
 
 IRCatalog::~IRCatalog() = default;
@@ -54,6 +52,10 @@ optional_ptr<SchemaCatalogEntry> IRCatalog::LookupSchema(CatalogTransaction tran
                                                          OnEntryNotFound if_not_found) {
 	auto &irc_transaction = IRCTransaction::Get(transaction.GetContext(), *this);
 	auto &schemas = irc_transaction.GetSchemas();
+	if (schema_lookup.GetEntryName() == DEFAULT_SCHEMA && default_schema != DEFAULT_SCHEMA) {
+		D_ASSERT(!default_schema.empty());
+		return GetSchema(transaction, default_schema, if_not_found);
+	}
 
 	auto &schema_name = schema_lookup.GetEntryName();
 	auto entry = schemas.GetEntry(transaction.GetContext(), schema_name, if_not_found);
@@ -437,6 +439,7 @@ unique_ptr<Catalog> IRCatalog::Attach(optional_ptr<StorageExtensionInfo> storage
 
 	// check if we have a secret provided
 	string secret_name;
+	string default_schema;
 	case_insensitive_set_t set_by_attach_options;
 	//! First handle generic attach options
 	for (auto &entry : info.options) {
@@ -465,6 +468,8 @@ unique_ptr<Catalog> IRCatalog::Attach(optional_ptr<StorageExtensionInfo> storage
 		} else if (lower_name == "purge_requested") {
 			attach_options.purge_requested = entry.second.DefaultCastAs(LogicalType::BOOLEAN).GetValue<bool>();
 			set_by_attach_options.insert("purge_requested");
+		} else if (lower_name == "default_schema") {
+			default_schema = entry.second.ToString();
 		} else {
 			attach_options.options.emplace(std::move(entry));
 		}
@@ -546,8 +551,12 @@ unique_ptr<Catalog> IRCatalog::Attach(optional_ptr<StorageExtensionInfo> storage
 		throw InvalidConfigurationException("Missing 'endpoint' option for Iceberg attach");
 	}
 
+	if (default_schema.empty()) {
+		default_schema = DEFAULT_SCHEMA;
+	}
 	D_ASSERT(auth_handler);
-	auto catalog = make_uniq<IRCatalog>(db, options.access_mode, std::move(auth_handler), attach_options);
+	auto catalog =
+	    make_uniq<IRCatalog>(db, options.access_mode, std::move(auth_handler), attach_options, default_schema);
 	catalog->GetConfig(context, endpoint_type);
 	return std::move(catalog);
 }
