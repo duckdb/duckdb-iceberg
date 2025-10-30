@@ -54,11 +54,11 @@ select * from my_datalake.default.table_unpartitioned order by all;
 2023-03-11	11	k
 2023-03-12	12	l
 
-# 2 head requests to scan all files (1 for the schema, 1 for the table)
+# 1 head requests to scan all files (1 for the schema)
 query I
 select count(*) from duckdb_logs_parsed('HTTP') where request.type = 'HEAD';
 ----
-2
+1
 
 mode skip
 
