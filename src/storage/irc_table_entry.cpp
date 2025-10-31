@@ -32,11 +32,6 @@ unique_ptr<BaseStatistics> ICTableEntry::GetStatistics(ClientContext &context, c
 	return nullptr;
 }
 
-void ICTableEntry::BindUpdateConstraints(Binder &binder, LogicalGet &, LogicalProjection &, LogicalUpdate &,
-                                         ClientContext &) {
-	throw NotImplementedException("BindUpdateConstraints");
-}
-
 string ICTableEntry::PrepareIcebergScanFromEntry(ClientContext &context) const {
 	auto &ic_catalog = catalog.Cast<IRCatalog>();
 	auto &secret_manager = SecretManager::Get(context);

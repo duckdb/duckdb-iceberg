@@ -4,7 +4,6 @@
 #include "metadata/iceberg_manifest.hpp"
 #include "metadata/iceberg_snapshot.hpp"
 #include "duckdb/common/multi_file/multi_file_reader.hpp"
-
 #include "storage/irc_table_set.hpp"
 #include "storage/table_update/iceberg_add_snapshot.hpp"
 #include "storage/table_update/common.hpp"
@@ -130,6 +129,55 @@ void IcebergTransactionData::AddSnapshot(IcebergSnapshotOperationType operation,
 	}
 	auto add_snapshot = make_uniq<IcebergAddSnapshot>(table_info, manifest_list_path, std::move(new_snapshot));
 	CreateManifestListEntry(*add_snapshot, table_metadata, manifest_content_type, std::move(data_files));
+	alters.push_back(*add_snapshot);
+	updates.push_back(std::move(add_snapshot));
+}
+
+void IcebergTransactionData::AddUpdateSnapshot(vector<IcebergManifestEntry> &&delete_files,
+                                               vector<IcebergManifestEntry> &&data_files) {
+	//! Generate a new snapshot id
+	auto &table_metadata = table_info.table_metadata;
+	auto snapshot_id = NewSnapshotId();
+
+	auto last_sequence_number = table_metadata.last_sequence_number;
+	if (!alters.empty()) {
+		auto &last_alter = alters.back().get();
+		last_sequence_number = last_alter.snapshot.sequence_number;
+	}
+
+	auto sequence_number = last_sequence_number + 1;
+
+	//! Construct the manifest list
+	auto manifest_list_uuid = UUID::ToString(UUID::GenerateRandomUUID());
+	auto manifest_list_path =
+	    table_metadata.GetMetadataPath() + "/snap-" + std::to_string(snapshot_id) + "-" + manifest_list_uuid + ".avro";
+
+	//! Construct the snapshot
+	IcebergSnapshot new_snapshot;
+	new_snapshot.operation = IcebergSnapshotOperationType::OVERWRITE;
+	new_snapshot.snapshot_id = snapshot_id;
+	new_snapshot.sequence_number = sequence_number;
+	new_snapshot.schema_id = table_metadata.current_schema_id;
+	new_snapshot.manifest_list = manifest_list_path;
+	new_snapshot.timestamp_ms = Timestamp::GetEpochMs(Timestamp::GetCurrentTimestamp());
+
+	new_snapshot.has_parent_snapshot = table_info.table_metadata.has_current_snapshot || !alters.empty();
+	if (new_snapshot.has_parent_snapshot) {
+		if (!alters.empty()) {
+			auto &last_alter = alters.back().get();
+			new_snapshot.parent_snapshot_id = last_alter.snapshot.snapshot_id;
+		} else {
+			D_ASSERT(table_info.table_metadata.has_current_snapshot);
+			new_snapshot.parent_snapshot_id = table_info.table_metadata.current_snapshot_id;
+		}
+	}
+
+	auto add_snapshot = make_uniq<IcebergAddSnapshot>(table_info, manifest_list_path, std::move(new_snapshot));
+	CreateManifestListEntry(*add_snapshot, table_metadata, IcebergManifestContentType::DELETE, std::move(delete_files));
+
+	// Add a manifest list entry for the new insert data
+	CreateManifestListEntry(*add_snapshot, table_metadata, IcebergManifestContentType::DATA, std::move(data_files));
+
 	alters.push_back(*add_snapshot);
 	updates.push_back(std::move(add_snapshot));
 }

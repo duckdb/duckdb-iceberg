@@ -34,6 +34,10 @@ IcebergInsert::IcebergInsert(PhysicalPlan &physical_plan, LogicalOperator &op, S
       info(std::move(info)) {
 }
 
+IcebergInsert::IcebergInsert(PhysicalPlan &physical_plan, const vector<LogicalType> &types, TableCatalogEntry &table)
+    : PhysicalOperator(physical_plan, PhysicalOperatorType::EXTENSION, types, 1), table(&table), schema(nullptr) {
+}
+
 IcebergCopyInput::IcebergCopyInput(ClientContext &context, ICTableEntry &table)
     : catalog(table.catalog.Cast<IRCatalog>()), columns(table.GetColumns()) {
 	data_path = table.table_info.table_metadata.GetDataPath();
@@ -47,17 +51,6 @@ IcebergCopyInput::IcebergCopyInput(ClientContext &context, IRCSchemaEntry &schem
 	// constructor and we don't have access to table metadata, we use the default behavior
 	data_path = data_path_p + "/data";
 }
-
-//===--------------------------------------------------------------------===//
-// States
-//===--------------------------------------------------------------------===//
-class IcebergInsertGlobalState : public GlobalSinkState {
-public:
-	explicit IcebergInsertGlobalState() = default;
-	vector<IcebergManifestEntry> written_files;
-
-	idx_t insert_count;
-};
 
 unique_ptr<GlobalSinkState> IcebergInsert::GetGlobalSinkState(ClientContext &context) const {
 	return make_uniq<IcebergInsertGlobalState>();
@@ -170,6 +163,8 @@ static void AddToColDefMap(case_insensitive_map_t<optional_ptr<IcebergColumnDefi
 static void AddWrittenFiles(IcebergInsertGlobalState &global_state, DataChunk &chunk,
                             optional_ptr<TableCatalogEntry> table) {
 	D_ASSERT(table);
+	// grab lock for written files vector
+	lock_guard<mutex> guard(global_state.lock);
 	auto &ic_table = table->Cast<ICTableEntry>();
 	auto partition_id = ic_table.table_info.table_metadata.default_spec_id;
 	for (idx_t r = 0; r < chunk.size(); r++) {
@@ -269,6 +264,7 @@ SinkFinalizeType IcebergInsert::Finalize(Pipeline &pipeline, Event &event, Clien
 	auto &table_info = irc_table.table_info;
 	auto &transaction = IRCTransaction::Get(context, table->catalog);
 
+	lock_guard<mutex> guard(global_state.lock);
 	if (!global_state.written_files.empty()) {
 		table_info.AddSnapshot(transaction, std::move(global_state.written_files));
 		transaction.MarkTableAsDirty(irc_table);
@@ -397,7 +393,9 @@ PhysicalOperator &IcebergInsert::PlanCopyForInsert(ClientContext &context, Physi
 	physical_copy_ref.per_thread_output = false;
 	physical_copy_ref.return_type = CopyFunctionReturnType::WRITTEN_FILE_STATISTICS; // TODO: capture stats
 	physical_copy_ref.write_partition_columns = true;
-	physical_copy_ref.children.push_back(*plan);
+	if (plan) {
+		physical_copy.children.push_back(*plan);
+	}
 	physical_copy_ref.names = names_to_write;
 	physical_copy_ref.expected_types = types_to_write;
 	physical_copy_ref.hive_file_pattern = true;
@@ -413,6 +411,15 @@ void VerifyDirectInsertionOrder(LogicalInsert &op) {
 		}
 		column_index++;
 	}
+}
+
+PhysicalOperator &IcebergInsert::PlanInsert(ClientContext &context, PhysicalPlanGenerator &planner,
+                                            ICTableEntry &table) {
+	optional_idx partition_id;
+	vector<LogicalType> return_types;
+	// the one return value is how many rows we are inserting
+	return_types.emplace_back(LogicalType::BIGINT);
+	return planner.Make<IcebergInsert>(return_types, table);
 }
 
 PhysicalOperator &IRCatalog::PlanInsert(ClientContext &context, PhysicalPlanGenerator &planner, LogicalInsert &op,

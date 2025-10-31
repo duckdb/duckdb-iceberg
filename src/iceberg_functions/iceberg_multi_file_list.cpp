@@ -3,6 +3,7 @@
 #include "iceberg_logging.hpp"
 #include "iceberg_predicate.hpp"
 #include "iceberg_value.hpp"
+#include "metadata/iceberg_manifest.hpp"
 #include "storage/irc_transaction.hpp"
 
 #include "duckdb/catalog/catalog_entry/table_function_catalog_entry.hpp"
@@ -582,7 +583,6 @@ void IcebergMultiFileList::InitializeFiles(lock_guard<mutex> &guard) {
 		auto &transaction_data = GetTransactionData();
 		for (auto &alter_p : transaction_data.alters) {
 			auto &alter = alter_p.get();
-
 			auto &manifest_list_entries = alter.manifest_list.GetManifestFilesMutable();
 			for (auto &manifest : manifest_list_entries) {
 				if (!ManifestMatchesFilter(manifest)) {

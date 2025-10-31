@@ -126,10 +126,6 @@ void IRCatalog::DropSchema(ClientContext &context, DropInfo &info) {
 	IRCAPI::CommitNamespaceDrop(context, *this, namespace_items);
 }
 
-PhysicalOperator &IRCatalog::PlanUpdate(ClientContext &context, PhysicalPlanGenerator &planner, LogicalUpdate &op,
-                                        PhysicalOperator &plan) {
-	throw NotImplementedException("IRCatalog PlanUpdate");
-}
 unique_ptr<LogicalOperator> IRCatalog::BindCreateIndex(Binder &binder, CreateStatement &stmt, TableCatalogEntry &table,
                                                        unique_ptr<LogicalOperator> plan) {
 	throw NotImplementedException("IRCatalog BindCreateIndex");

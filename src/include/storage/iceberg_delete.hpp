@@ -38,12 +38,13 @@ public:
 	explicit IcebergDeleteGlobalState() {
 		written_columns["file_path"] = WrittenColumnInfo(LogicalType::VARCHAR, MultiFileReader::FILENAME_FIELD_ID);
 		written_columns["pos"] = WrittenColumnInfo(LogicalType::BIGINT, MultiFileReader::ORDINAL_FIELD_ID);
+		total_deleted_count = 0;
 	}
 
 	mutex lock;
 	unordered_map<string, IcebergDeleteFileInfo> written_files;
 	unordered_map<string, WrittenColumnInfo> written_columns;
-	idx_t total_deleted_count = 0;
+	atomic<idx_t> total_deleted_count;
 	// data file name -> newly deleted rows.
 	unordered_map<string, vector<idx_t>> deleted_rows;
 
@@ -93,8 +94,7 @@ public:
 	                          OperatorSinkFinalizeInput &input) const override;
 	unique_ptr<GlobalSinkState> GetGlobalSinkState(ClientContext &context) const override;
 	unique_ptr<LocalSinkState> GetLocalSinkState(ExecutionContext &context) const override;
-	static vector<IcebergManifestEntry>
-	GenerateDeleteManifestEntries(unordered_map<string, IcebergDeleteFileInfo> &delete_files);
+	static vector<IcebergManifestEntry> GenerateDeleteManifestEntries(IcebergDeleteGlobalState &global_state);
 
 	bool IsSink() const override {
 		return true;
@@ -106,8 +106,8 @@ public:
 
 	string GetName() const override;
 	InsertionOrderPreservingMap<string> ParamsToString() const override;
-	void FlushDelete(IRCTransaction &transaction, ClientContext &context, IcebergDeleteGlobalState &global_state,
-	                 const string &filename, vector<idx_t> &deleted_rows) const;
+	void FlushDeletes(IRCTransaction &transaction, ClientContext &context,
+	                  IcebergDeleteGlobalState &global_state) const;
 
 private:
 	void WritePositionalDeleteFile(ClientContext &context, IcebergDeleteGlobalState &global_state,

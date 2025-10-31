@@ -200,33 +200,38 @@ void IcebergDelete::WritePositionalDeleteFile(ClientContext &context, IcebergDel
 	global_state.written_files.emplace(filename, std::move(delete_file));
 }
 
-void IcebergDelete::FlushDelete(IRCTransaction &transaction, ClientContext &context,
-                                IcebergDeleteGlobalState &global_state, const string &filename,
-                                vector<idx_t> &deleted_rows) const {
-	// sort and duplicate eliminate the deletes
-	set<idx_t> sorted_deletes;
-	for (auto &row_idx : deleted_rows) {
-		sorted_deletes.insert(row_idx);
+void IcebergDelete::FlushDeletes(IRCTransaction &transaction, ClientContext &context,
+                                 IcebergDeleteGlobalState &global_state) const {
+	lock_guard<mutex> guard(global_state.lock);
+	for (auto &entry : global_state.deleted_rows) {
+		auto &filename = entry.first;
+		auto &deleted_rows = entry.second;
+		// sort and duplicate eliminate the deletes
+		set<idx_t> sorted_deletes;
+		for (auto &row_idx : deleted_rows) {
+			sorted_deletes.insert(row_idx);
+		}
+		if (sorted_deletes.size() != deleted_rows.size()) {
+			throw NotImplementedException("The same row was updated multiple times - this is not (yet) supported in "
+			                              "Iceberg. Eliminate duplicate matches prior to running the UPDATE");
+		}
+
+		IcebergDeleteFileInfo delete_file;
+		delete_file.data_file_path = filename;
+
+		auto &fs = FileSystem::GetFileSystem(context);
+		string delete_filename = UUID::ToString(UUID::GenerateRandomUUID()) + "-deletes.parquet";
+		string delete_file_path =
+		    fs.JoinPath(table.table_info.table_metadata.location, fs.JoinPath("data", delete_filename));
+
+		delete_file.file_name = delete_file_path;
+		WritePositionalDeleteFile(context, global_state, filename, delete_file, sorted_deletes);
 	}
-	if (sorted_deletes.size() != deleted_rows.size()) {
-		throw NotImplementedException("The same row was updated multiple times - this is not (yet) supported in "
-		                              "Iceberg. Eliminate duplicate matches prior to running the UPDATE");
-	}
-
-	IcebergDeleteFileInfo delete_file;
-	delete_file.data_file_path = filename;
-
-	auto &fs = FileSystem::GetFileSystem(context);
-	string delete_filename = UUID::ToString(UUID::GenerateRandomUUID()) + "-deletes.parquet";
-	string delete_file_path =
-	    fs.JoinPath(table.table_info.table_metadata.location, fs.JoinPath("data", delete_filename));
-
-	delete_file.file_name = delete_file_path;
-	WritePositionalDeleteFile(context, global_state, filename, delete_file, sorted_deletes);
 }
 
-vector<IcebergManifestEntry>
-IcebergDelete::GenerateDeleteManifestEntries(unordered_map<string, IcebergDeleteFileInfo> &delete_files) {
+vector<IcebergManifestEntry> IcebergDelete::GenerateDeleteManifestEntries(IcebergDeleteGlobalState &global_state) {
+	lock_guard<mutex> guard(global_state.lock);
+	auto &delete_files = global_state.written_files;
 	vector<IcebergManifestEntry> iceberg_delete_files;
 	for (auto &delete_entry : delete_files) {
 		auto data_file_name = delete_entry.first;
@@ -253,21 +258,21 @@ IcebergDelete::GenerateDeleteManifestEntries(unordered_map<string, IcebergDelete
 SinkFinalizeType IcebergDelete::Finalize(Pipeline &pipeline, Event &event, ClientContext &context,
                                          OperatorSinkFinalizeInput &input) const {
 	auto &global_state = input.global_state.Cast<IcebergDeleteGlobalState>();
+
+	// FIXME: replace with get deleted rows
 	if (global_state.deleted_rows.empty()) {
 		return SinkFinalizeType::READY;
 	}
 
 	auto &irc_transaction = IRCTransaction::Get(context, table.catalog);
 	// write out the delete rows
-	for (auto &entry : global_state.deleted_rows) {
-		FlushDelete(irc_transaction, context, global_state, entry.first, entry.second);
-	}
+	FlushDeletes(irc_transaction, context, global_state);
 
 	// write out the new manifest file
 	auto &irc_table = table.Cast<ICTableEntry>();
 	auto &table_info = irc_table.table_info;
 	auto &transaction = IRCTransaction::Get(context, table.catalog);
-	auto iceberg_delete_files = GenerateDeleteManifestEntries(global_state.written_files);
+	auto iceberg_delete_files = GenerateDeleteManifestEntries(global_state);
 	table_info.AddDeleteSnapshot(transaction, std::move(iceberg_delete_files));
 	transaction.MarkTableAsDirty(irc_table);
 	return SinkFinalizeType::READY;
@@ -278,7 +283,7 @@ SinkFinalizeType IcebergDelete::Finalize(Pipeline &pipeline, Event &event, Clien
 //===--------------------------------------------------------------------===//
 SourceResultType IcebergDelete::GetData(ExecutionContext &context, DataChunk &chunk, OperatorSourceInput &input) const {
 	auto &global_state = sink_state->Cast<IcebergDeleteGlobalState>();
-	auto value = Value::BIGINT(NumericCast<int64_t>(global_state.total_deleted_count));
+	auto value = Value::BIGINT(NumericCast<int64_t>(global_state.total_deleted_count.load()));
 	chunk.SetCardinality(1);
 	chunk.SetValue(0, 0, value);
 	return SourceResultType::FINISHED;

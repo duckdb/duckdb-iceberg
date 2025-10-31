@@ -8,6 +8,7 @@
 #include "duckdb/main/client_context.hpp"
 #include "duckdb/function/copy_function.hpp"
 #include "storage/iceberg_table_update.hpp"
+#include "storage/iceberg_metadata_info.hpp"
 #include "storage/iceberg_table_requirement.hpp"
 #include "storage/table_update/iceberg_add_snapshot.hpp"
 #include "storage/table_create/iceberg_create_table_request.hpp"
@@ -28,6 +29,7 @@ public:
 	                             IcebergManifestContentType manifest_content_type,
 	                             vector<IcebergManifestEntry> &&data_files);
 	void AddSnapshot(IcebergSnapshotOperationType operation, vector<IcebergManifestEntry> &&data_files);
+	void AddUpdateSnapshot(vector<IcebergManifestEntry> &&delete_files, vector<IcebergManifestEntry> &&data_files);
 	// add a schema update for a table
 	void TableAddSchema();
 	void TableAddAssertCreate();

@@ -1,0 +1,92 @@
+# name: test/sql/local/irc/update/update_partitioning.test
+# description: Update a partitioned table
+# group: [update]
+
+require-env ICEBERG_SERVER_AVAILABLE
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+CALL enable_logging('HTTP');
+
+statement ok
+set logging_level='debug'
+
+statement ok
+CREATE SECRET (
+    TYPE S3,
+    KEY_ID 'admin',
+    SECRET 'password',
+    ENDPOINT '127.0.0.1:9000',
+    URL_STYLE 'path',
+    USE_SSL 0
+);
+
+
+statement ok
+ATTACH '' AS my_datalake (
+    TYPE ICEBERG,
+    CLIENT_ID 'admin',
+    CLIENT_SECRET 'password',
+    ENDPOINT 'http://127.0.0.1:8181'
+);
+
+# need to figure out how to test that we do not allow updates to partitioned tables.
+mode skip
+
+statement ok
+CREATE TABLE partitioned_tbl(part_key INTEGER, values VARCHAR);
+
+statement ok
+ALTER TABLE partitioned_tbl SET PARTITIONED BY (part_key);
+
+statement ok
+INSERT INTO partitioned_tbl SELECT i%2, concat('thisisastring_', i) FROM range(10000) t(i)
+
+statement ok
+UPDATE partitioned_tbl SET part_key=2 WHERE part_key=0
+
+# verify files are partitioned
+query III
+SELECT data_file_id, partition_id, regexp_extract(path, '.*(part_key=[0-9])[/\\].*', 1) FROM ducklake_metadata.ducklake_data_file
+ORDER BY ALL
+----
+0	2	part_key=0
+1	2	part_key=1
+2	2	part_key=2
+
+query I
+SELECT COUNT(*) FROM partitioned_tbl
+----
+10000
+
+# query the new partition
+query I
+SELECT COUNT(*) FROM partitioned_tbl WHERE part_key=2
+----
+5000
+
+query II
+EXPLAIN ANALYZE SELECT COUNT(*) FROM partitioned_tbl WHERE part_key=2
+----
+analyzed_plan	<REGEX>:.*Total Files Read: 1.*
+
+# query the old partition with time travel
+query I
+SELECT COUNT(*) FROM partitioned_tbl AT (VERSION => 3) WHERE part_key=0
+----
+5000
+
+query II
+EXPLAIN ANALYZE SELECT COUNT(*) FROM partitioned_tbl AT (VERSION => 3) WHERE part_key=0
+----
+analyzed_plan	<REGEX>:.*Total Files Read: 1.*

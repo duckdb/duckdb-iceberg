@@ -2,6 +2,7 @@
 
 #include "duckdb/common/string_util.hpp"
 #include "storage/irc_transaction.hpp"
+#include "storage/iceberg_transaction_data.hpp"
 #include "storage/irc_schema_entry.hpp"
 #include "storage/irc_catalog.hpp"
 #include "storage/irc_authorization.hpp"
@@ -254,6 +255,14 @@ void IcebergTableInformation::AddDeleteSnapshot(IRCTransaction &transaction,
 	InitTransactionData(transaction);
 
 	transaction_data->AddSnapshot(IcebergSnapshotOperationType::DELETE, std::move(data_files));
+}
+
+void IcebergTableInformation::AddUpdateSnapshot(IRCTransaction &transaction,
+                                                vector<IcebergManifestEntry> &&delete_files,
+                                                vector<IcebergManifestEntry> &&data_files) {
+	InitTransactionData(transaction);
+	// Automatically creates new snapshot with SnapshotOperationType::Overwrite
+	transaction_data->AddUpdateSnapshot(std::move(delete_files), std::move(data_files));
 }
 
 void IcebergTableInformation::AddSchema(IRCTransaction &transaction) {

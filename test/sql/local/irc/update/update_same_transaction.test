@@ -1,0 +1,64 @@
+# name: test/sql/local/irc/update/update_same_transaction.test
+# description: Test running updates the same transaction
+# group: [update]
+
+require-env ICEBERG_SERVER_AVAILABLE
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+CALL enable_logging('HTTP');
+
+statement ok
+set logging_level='debug'
+
+statement ok
+CREATE SECRET (
+    TYPE S3,
+    KEY_ID 'admin',
+    SECRET 'password',
+    ENDPOINT '127.0.0.1:9000',
+    URL_STYLE 'path',
+    USE_SSL 0
+);
+
+
+statement ok
+ATTACH '' AS my_datalake (
+    TYPE ICEBERG,
+    CLIENT_ID 'admin',
+    CLIENT_SECRET 'password',
+    ENDPOINT 'http://127.0.0.1:8181'
+);
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.test;
+
+statement ok
+BEGIN TRANSACTION;
+
+statement ok
+CREATE TABLE my_datalake.default.test (id INTEGER, name TEXT);
+
+statement ok
+INSERT INTO my_datalake.default.test VALUES (1, 'Bob');
+
+statement ok
+UPDATE my_datalake.default.test SET name = 'Alice' Where id = 1;
+
+statement ok
+COMMIT;
+
+query T
+select name from my_datalake.default.test where id = 1;
+----
+Alice
