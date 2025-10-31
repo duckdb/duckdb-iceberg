@@ -13,6 +13,10 @@
 
 namespace duckdb {
 
+// common Iceberg table property keys
+const string WRITE_UPDATE_MODE = "write.update.mode";
+const string WRITE_DELETE_MODE = "write.delete.mode";
+
 struct IcebergTableMetadata {
 public:
 	IcebergTableMetadata() = default;
@@ -49,6 +53,10 @@ public:
 	string GetDataPath() const;
 	string GetMetadataPath() const;
 
+	const case_insensitive_map_t<string> &GetTableProperties() const;
+	string GetTableProperty(string property_string) const;
+	bool PropertiesAllowPositionalDeletes(IcebergSnapshotOperationType operation_type) const;
+
 public:
 	string table_uuid;
 	string location;
@@ -75,6 +83,9 @@ public:
 	//! Custom write paths from table properties
 	string write_data_path;
 	string write_metadata_path;
+
+	//! table properties
+	case_insensitive_map_t<string> table_properties;
 };
 
 } // namespace duckdb

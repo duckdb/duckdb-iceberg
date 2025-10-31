@@ -14,6 +14,9 @@ vector<TableFunctionSet> IcebergFunctions::GetTableFunctions(ExtensionLoader &lo
 	functions.push_back(std::move(GetIcebergSnapshotsFunction()));
 	functions.push_back(std::move(GetIcebergScanFunction(loader)));
 	functions.push_back(std::move(GetIcebergMetadataFunction()));
+	functions.push_back(std::move(GetIcebergTablePropertiesFunctions()));
+	functions.push_back(std::move(SetIcebergTablePropertiesFunctions()));
+	functions.push_back(std::move(RemoveIcebergTablePropertiesFunctions()));
 	functions.push_back(std::move(GetIcebergToDuckLakeFunction()));
 
 	return functions;

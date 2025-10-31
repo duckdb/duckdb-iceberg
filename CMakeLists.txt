@@ -49,6 +49,7 @@ set(EXTENSION_SOURCES
     src/iceberg_functions/iceberg_snapshots.cpp
     src/iceberg_functions/iceberg_scan.cpp
     src/iceberg_functions/iceberg_metadata.cpp
+    src/iceberg_functions/iceberg_table_properties_functions.cpp
     src/iceberg_functions/iceberg_to_ducklake.cpp
     src/storage/authorization/sigv4.cpp
     src/storage/authorization/none.cpp

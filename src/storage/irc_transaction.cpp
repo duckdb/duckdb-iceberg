@@ -113,6 +113,15 @@ void CommitTableToJSON(yyjson_mut_doc *doc, yyjson_mut_val *root_object,
 			for (auto &prop : ref_update.updates) {
 				yyjson_mut_obj_add_strcpy(doc, properties_json, prop.first.c_str(), prop.second.c_str());
 			}
+		} else if (update.has_remove_properties_update) {
+			auto update_json = yyjson_mut_arr_add_obj(doc, updates_array);
+			auto &ref_update = update.remove_properties_update;
+			//! updates[...].action
+			yyjson_mut_obj_add_strcpy(doc, update_json, "action", ref_update.action.c_str());
+			auto properties_json = yyjson_mut_obj_add_arr(doc, update_json, "removals");
+			for (auto &prop : ref_update.removals) {
+				yyjson_mut_arr_add_strcpy(doc, properties_json, prop.c_str());
+			}
 		} else if (update.has_add_schema_update) {
 			auto update_json = yyjson_mut_arr_add_obj(doc, updates_array);
 			auto &ref_update = update.add_schema_update;
@@ -288,16 +297,16 @@ TableTransactionInfo IRCTransaction::GetTransactionRequest(ClientContext &contex
 		}
 
 		if (!transaction_data.alters.empty()) {
-			if (current_snapshot) {
-				//! If any changes were made to the data of the table, we should assert that our parent snapshot has
-				//! not changed
-				commit_state.table_change.requirements.push_back(
-				    CreateAssertRefSnapshotIdRequirement(*current_snapshot));
-			}
 			auto &last_alter = transaction_data.alters.back();
 			auto snapshot_id = last_alter.get().snapshot.snapshot_id;
 			auto set_snapshot_ref_update = CreateSetSnapshotRefUpdate(snapshot_id);
 			commit_state.table_change.updates.push_back(std::move(set_snapshot_ref_update));
+		}
+
+		if (current_snapshot) {
+			//! If any changes were made to the state of the table, we should assert that our parent snapshot has
+			//! not changed. We don't want to change the table location if someone has added a snapshot
+			commit_state.table_change.requirements.push_back(CreateAssertRefSnapshotIdRequirement(*current_snapshot));
 		}
 
 		transaction.table_changes.push_back(std::move(table_change));

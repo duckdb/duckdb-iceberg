@@ -1,6 +1,8 @@
 #include "duckdb.hpp"
 #include "iceberg_utils.hpp"
 #include "fstream"
+#include "storage/irc_table_entry.hpp"
+#include "storage/irc_table_entry.hpp"
 #include "duckdb/common/gzip_file_system.hpp"
 #include "storage/irc_table_entry.hpp"
 #include "duckdb/catalog/catalog_entry/view_catalog_entry.hpp"
@@ -62,7 +64,6 @@ string IcebergUtils::GetStorageLocation(ClientContext &context, const string &in
 		if (!catalog_entry) {
 			break;
 		}
-
 		if (catalog_entry->type == CatalogType::VIEW_ENTRY) {
 			//! This is a view, which we will assume is wrapping an ICEBERG_SCAN(...) query
 			auto &view_entry = catalog_entry->Cast<ViewCatalogEntry>();

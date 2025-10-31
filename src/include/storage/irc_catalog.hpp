@@ -94,6 +94,8 @@ public:
 	bool InMemory() override;
 	string GetDBPath() override;
 
+	static string GetOnlyMergeOnReadSupportedErrorMessage(string table_name, string property, string property_value);
+
 public:
 	AccessMode access_mode;
 	unique_ptr<IRCAuthorization> auth_handler;

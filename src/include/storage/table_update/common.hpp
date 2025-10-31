@@ -84,12 +84,21 @@ struct SetDefaultSpec : public IcebergTableUpdate {
 };
 
 struct SetProperties : public IcebergTableUpdate {
-	static constexpr const IcebergTableUpdateType TYPE = IcebergTableUpdateType::SET_DEFAULT_SPEC;
+	static constexpr const IcebergTableUpdateType TYPE = IcebergTableUpdateType::SET_PROPERTIES;
 
 	explicit SetProperties(IcebergTableInformation &table_info, case_insensitive_map_t<string> properties);
 	void CreateUpdate(DatabaseInstance &db, ClientContext &context, IcebergCommitState &commit_state);
 
 	case_insensitive_map_t<string> properties;
+};
+
+struct RemoveProperties : public IcebergTableUpdate {
+	static constexpr const IcebergTableUpdateType TYPE = IcebergTableUpdateType::REMOVE_PROPERTIES;
+
+	explicit RemoveProperties(IcebergTableInformation &table_info, vector<string> properties);
+	void CreateUpdate(DatabaseInstance &db, ClientContext &context, IcebergCommitState &commit_state);
+
+	vector<string> properties;
 };
 
 struct SetLocation : public IcebergTableUpdate {

@@ -552,4 +552,13 @@ unique_ptr<Catalog> IRCatalog::Attach(optional_ptr<StorageExtensionInfo> storage
 	return std::move(catalog);
 }
 
+string IRCatalog::GetOnlyMergeOnReadSupportedErrorMessage(string table_name, string property, string property_value) {
+	return StringUtil::Format("DuckDB-Iceberg only supports merge-on-read for updates/deletes. Table Property '%s' is "
+	                          "set to '%s' for table %s"
+	                          "You can modify Iceberg table properties wth the set_iceberg_table_properties() "
+	                          "function, and remove them with the remove_iceberg_table_properties() function. "
+	                          "You can view Iceberg Table properties with the iceberg_table_properties() function",
+	                          property, property_value, table_name);
+}
+
 } // namespace duckdb

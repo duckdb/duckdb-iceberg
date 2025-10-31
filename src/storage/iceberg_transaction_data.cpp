@@ -174,6 +174,10 @@ void IcebergTransactionData::TableSetProperties(case_insensitive_map_t<string> p
 	updates.push_back(make_uniq<SetProperties>(table_info, properties));
 }
 
+void IcebergTransactionData::TableRemoveProperties(vector<string> properties) {
+	updates.push_back(make_uniq<RemoveProperties>(table_info, properties));
+}
+
 void IcebergTransactionData::TableSetLocation() {
 	updates.push_back(make_uniq<SetLocation>(table_info));
 }

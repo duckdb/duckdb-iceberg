@@ -1,6 +1,5 @@
 #include "storage/table_update/iceberg_add_snapshot.hpp"
 
-#include "../../include/metadata/iceberg_manifest_list.hpp"
 #include "metadata/iceberg_manifest_list.hpp"
 #include "storage/irc_table_set.hpp"
 
