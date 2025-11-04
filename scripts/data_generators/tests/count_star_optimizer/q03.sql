@@ -1,1 +1,0 @@
-INSERT INTO default.count_star_optimizer_with_deletes SELECT * FROM default.count_star_optimizer;
