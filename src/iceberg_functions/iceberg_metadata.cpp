@@ -105,12 +105,12 @@ static unique_ptr<FunctionData> IcebergMetaDataBind(ClientContext &context, Tabl
 		ret->iceberg_table = IcebergTable::Load(filename, metadata, *snapshot_to_scan, context, options);
 	}
 
-	auto manifest_types = IcebergManifest::Types();
+	auto manifest_types = IcebergManifestListEntry::Types();
 	return_types.insert(return_types.end(), manifest_types.begin(), manifest_types.end());
 	auto manifest_entry_types = IcebergManifestEntry::Types();
 	return_types.insert(return_types.end(), manifest_entry_types.begin(), manifest_entry_types.end());
 
-	auto manifest_names = IcebergManifest::Names();
+	auto manifest_names = IcebergManifestListEntry::Names();
 	names.insert(names.end(), manifest_names.begin(), manifest_names.end());
 	auto manifest_entry_names = IcebergManifestEntry::Names();
 	names.insert(names.end(), manifest_entry_names.begin(), manifest_entry_names.end());
@@ -149,7 +149,7 @@ static void IcebergMetaDataFunction(ClientContext &context, TableFunctionInput &
 			//! manifest_sequence_number
 			FlatVector::GetData<int64_t>(output.data[1])[out] = manifest.sequence_number;
 			//! manifest_content
-			AddString(output.data[2], out, string_t(IcebergManifest::ContentTypeToString(manifest.content)));
+			AddString(output.data[2], out, string_t(IcebergManifestListEntry::ContentTypeToString(manifest.content)));
 
 			//! status
 			AddString(output.data[3], out, string_t(IcebergManifestEntry::StatusTypeToString(data_file.status)));

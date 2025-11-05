@@ -67,12 +67,12 @@ public:
 
 struct IcebergTableEntry {
 public:
-	IcebergTableEntry(IcebergManifest &&manifest, IcebergManifestFile &&manifest_file)
+	IcebergTableEntry(IcebergManifestListEntry &&manifest, IcebergManifestFile &&manifest_file)
 	    : manifest(std::move(manifest)), manifest_file(std::move(manifest_file)) {
 	}
 
 public:
-	IcebergManifest manifest;
+	IcebergManifestListEntry manifest;
 	IcebergManifestFile manifest_file;
 };
 

@@ -71,3 +71,59 @@ class TestPyIcebergRead:
             {'col1': datetime.date(2020, 8, 15), 'col2': 3, 'col3': 'insert 3'},
             {'col1': datetime.date(2020, 8, 16), 'col2': 4, 'col3': 'insert 4'},
         ]
+
+
+@pytest.mark.skipif(
+    os.getenv('ICEBERG_SERVER_AVAILABLE', None) == None, reason="Test data wasn't generated, run 'make data' first"
+)
+class TestPyIcebergRead:
+    def test_pyiceberg_read(self, rest_catalog):
+        table = rest_catalog.load_table("default.duckdb_deletes_for_other_engines")
+        arrow_table: pa.Table = table.scan().to_arrow()
+        res = arrow_table.to_pylist()
+        assert len(res) == 10
+        assert res == [
+            {'a': 1},
+            {'a': 3},
+            {'a': 5},
+            {'a': 7},
+            {'a': 9},
+            {'a': 51},
+            {'a': 53},
+            {'a': 55},
+            {'a': 57},
+            {'a': 59},
+        ]
+
+
+@pytest.mark.skipif(
+    os.getenv('ICEBERG_SERVER_AVAILABLE', None) == None, reason="Test data wasn't generated, run 'make data' first"
+)
+class TestPyIcebergRead:
+    def test_pyiceberg_read(self, rest_catalog):
+        table = rest_catalog.load_table("default.duckdb_updates_for_other_engines")
+        arrow_table: pa.Table = table.scan().to_arrow()
+        res = arrow_table.to_pylist()
+        assert len(res) == 20
+        assert res == [
+            {'a': 1},
+            {'a': 3},
+            {'a': 5},
+            {'a': 7},
+            {'a': 9},
+            {'a': 51},
+            {'a': 53},
+            {'a': 55},
+            {'a': 57},
+            {'a': 59},
+            {'a': 100},
+            {'a': 100},
+            {'a': 100},
+            {'a': 100},
+            {'a': 100},
+            {'a': 100},
+            {'a': 100},
+            {'a': 100},
+            {'a': 100},
+            {'a': 100},
+        ]

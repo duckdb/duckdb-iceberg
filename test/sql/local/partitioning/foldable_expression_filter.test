@@ -1,0 +1,72 @@
+# name: test/sql/local/partitioning/foldable_expression_filter.test
+# group: [partitioning]
+
+require httpfs
+
+require avro
+
+require parquet
+
+require iceberg
+
+statement ok
+set enable_logging=true
+
+statement ok
+set logging_level='debug'
+
+statement ok
+CALL enable_logging('Iceberg');
+
+statement ok
+CREATE SECRET (
+    TYPE S3,
+    KEY_ID 'admin',
+    SECRET 'password',
+    ENDPOINT '127.0.0.1:9000',
+    URL_STYLE 'path',
+    USE_SSL 0
+);
+
+statement ok
+ATTACH '' AS my_datalake (
+    TYPE ICEBERG,
+    CLIENT_ID 'admin',
+    CLIENT_SECRET 'password',
+    ENDPOINT 'http://127.0.0.1:8181'
+);
+
+# Foldable expression is on the left side
+query I
+select
+	count(*)
+from
+	my_datalake.default.lineitem_partitioned_l_shipmode
+where
+	lower(l_shipmode) = 'rail'
+----
+8566
+
+query I
+select count(*) FROM duckdb_logs() where type = 'Iceberg' and message.contains('data_file')
+----
+5
+
+statement ok
+CALL truncate_duckdb_logs();
+
+# Foldable expression is on the right side
+query I
+select
+	count(*)
+from
+	my_datalake.default.lineitem_partitioned_l_shipmode
+where
+	'rail' = lower(l_shipmode)
+----
+8566
+
+query I
+select count(*) FROM duckdb_logs() where type = 'Iceberg' and message.contains('data_file')
+----
+5

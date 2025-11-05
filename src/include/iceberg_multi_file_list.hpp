@@ -10,6 +10,7 @@
 
 #include "duckdb/common/multi_file/multi_file_list.hpp"
 #include "duckdb/common/types/batched_data_collection.hpp"
+#include "storage/iceberg_metadata_info.hpp"
 #include "iceberg_metadata.hpp"
 #include "iceberg_utils.hpp"
 #include "manifest_reader.hpp"
@@ -74,7 +75,7 @@ protected:
 	OpenFileInfo GetFileInternal(idx_t i, lock_guard<mutex> &guard);
 
 protected:
-	bool ManifestMatchesFilter(const IcebergManifest &manifest);
+	bool ManifestMatchesFilter(const IcebergManifestListEntry &manifest);
 	bool FileMatchesFilter(const IcebergManifestEntry &file);
 	// TODO: How to guarantee we only call this after the filter pushdown?
 	void InitializeFiles(lock_guard<mutex> &guard);
@@ -99,15 +100,16 @@ public:
 	unique_ptr<manifest_file::ManifestFileReader> delete_manifest_reader;
 
 	vector<IcebergManifestEntry> data_files;
-	vector<IcebergManifest> data_manifests;
-	vector<IcebergManifest> delete_manifests;
+	vector<IcebergManifestListEntry> data_manifests;
+	vector<IcebergManifestListEntry> delete_manifests;
 	vector<reference<IcebergManifestFile>> transaction_data_manifests;
 	vector<reference<IcebergManifestFile>> transaction_delete_manifests;
 	idx_t transaction_data_idx = 0;
 	idx_t transaction_delete_idx = 0;
 
-	vector<IcebergManifest>::iterator current_data_manifest;
-	mutable vector<IcebergManifest>::iterator current_delete_manifest;
+	vector<IcebergManifestListEntry>::iterator current_data_manifest;
+	mutable vector<IcebergManifestListEntry>::iterator current_delete_manifest;
+	mutable vector<reference<IcebergManifestFile>>::iterator current_transaction_delete_manifest;
 	//! The data files of the manifest file that we last scanned
 	idx_t data_file_idx = 0;
 	vector<IcebergManifestEntry> current_data_files;

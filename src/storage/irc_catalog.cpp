@@ -14,8 +14,7 @@
 #include "rest_catalog/objects/catalog_config.hpp"
 #include "duckdb/planner/operator/logical_create_table.hpp"
 #include "storage/irc_catalog.hpp"
-
-#include <regex>
+#include "regex"
 #include "storage/irc_authorization.hpp"
 #include "storage/authorization/oauth2.hpp"
 #include "storage/authorization/sigv4.hpp"
@@ -26,13 +25,11 @@ using namespace duckdb_yyjson;
 namespace duckdb {
 
 IRCatalog::IRCatalog(AttachedDatabase &db_p, AccessMode access_mode, unique_ptr<IRCAuthorization> auth_handler,
-                     IcebergAttachOptions &attach_options, const string &version)
+                     IcebergAttachOptions &attach_options, const string &default_schema)
     : Catalog(db_p), access_mode(access_mode), auth_handler(std::move(auth_handler)),
-      warehouse(attach_options.warehouse), uri(attach_options.endpoint), version(version),
-      attach_options(attach_options) {
-	if (version.empty()) {
-		throw InternalException("version can not be empty");
-	}
+      warehouse(attach_options.warehouse), uri(attach_options.endpoint), version("v1"), attach_options(attach_options),
+      default_schema(default_schema) {
+	D_ASSERT(!default_schema.empty());
 }
 
 IRCatalog::~IRCatalog() = default;
@@ -55,6 +52,10 @@ optional_ptr<SchemaCatalogEntry> IRCatalog::LookupSchema(CatalogTransaction tran
                                                          OnEntryNotFound if_not_found) {
 	auto &irc_transaction = IRCTransaction::Get(transaction.GetContext(), *this);
 	auto &schemas = irc_transaction.GetSchemas();
+	if (schema_lookup.GetEntryName() == DEFAULT_SCHEMA && default_schema != DEFAULT_SCHEMA) {
+		D_ASSERT(!default_schema.empty());
+		return GetSchema(transaction, default_schema, if_not_found);
+	}
 
 	auto &schema_name = schema_lookup.GetEntryName();
 	auto entry = schemas.GetEntry(transaction.GetContext(), schema_name, if_not_found);
@@ -118,7 +119,6 @@ void IRCatalog::DropSchema(ClientContext &context, DropInfo &info) {
 	namespace_items.push_back(IRCAPI::GetEncodedSchemaName(namespace_identifier));
 	if (info.if_not_found == OnEntryNotFound::RETURN_NULL) {
 		auto schema_lookup = EntryLookupInfo(CatalogType::SCHEMA_ENTRY, info.name);
-		// auto &irc_transaction = CatalogTran::Get(context, *this);
 		auto transaction = CatalogTransaction::GetSystemCatalogTransaction(context);
 		auto schema_exists = LookupSchema(transaction, schema_lookup, info.if_not_found);
 		if (!schema_exists) {
@@ -128,14 +128,6 @@ void IRCatalog::DropSchema(ClientContext &context, DropInfo &info) {
 	IRCAPI::CommitNamespaceDrop(context, *this, namespace_items);
 }
 
-PhysicalOperator &IRCatalog::PlanDelete(ClientContext &context, PhysicalPlanGenerator &planner, LogicalDelete &op,
-                                        PhysicalOperator &plan) {
-	throw NotImplementedException("IRCatalog PlanDelete");
-}
-PhysicalOperator &IRCatalog::PlanUpdate(ClientContext &context, PhysicalPlanGenerator &planner, LogicalUpdate &op,
-                                        PhysicalOperator &plan) {
-	throw NotImplementedException("IRCatalog PlanUpdate");
-}
 unique_ptr<LogicalOperator> IRCatalog::BindCreateIndex(Binder &binder, CreateStatement &stmt, TableCatalogEntry &table,
                                                        unique_ptr<LogicalOperator> plan) {
 	throw NotImplementedException("IRCatalog BindCreateIndex");
@@ -443,6 +435,7 @@ unique_ptr<Catalog> IRCatalog::Attach(optional_ptr<StorageExtensionInfo> storage
 
 	// check if we have a secret provided
 	string secret_name;
+	string default_schema;
 	case_insensitive_set_t set_by_attach_options;
 	//! First handle generic attach options
 	for (auto &entry : info.options) {
@@ -471,6 +464,8 @@ unique_ptr<Catalog> IRCatalog::Attach(optional_ptr<StorageExtensionInfo> storage
 		} else if (lower_name == "purge_requested") {
 			attach_options.purge_requested = entry.second.DefaultCastAs(LogicalType::BOOLEAN).GetValue<bool>();
 			set_by_attach_options.insert("purge_requested");
+		} else if (lower_name == "default_schema") {
+			default_schema = entry.second.ToString();
 		} else {
 			attach_options.options.emplace(std::move(entry));
 		}
@@ -552,10 +547,24 @@ unique_ptr<Catalog> IRCatalog::Attach(optional_ptr<StorageExtensionInfo> storage
 		throw InvalidConfigurationException("Missing 'endpoint' option for Iceberg attach");
 	}
 
+	if (default_schema.empty()) {
+		default_schema = DEFAULT_SCHEMA;
+	}
 	D_ASSERT(auth_handler);
-	auto catalog = make_uniq<IRCatalog>(db, options.access_mode, std::move(auth_handler), attach_options);
+	auto catalog =
+	    make_uniq<IRCatalog>(db, options.access_mode, std::move(auth_handler), attach_options, default_schema);
 	catalog->GetConfig(context, endpoint_type);
 	return std::move(catalog);
+}
+
+string IRCatalog::GetOnlyMergeOnReadSupportedErrorMessage(const string &table_name, const string &property,
+                                                          const string &property_value) {
+	return StringUtil::Format("DuckDB-Iceberg only supports merge-on-read for updates/deletes. Table Property '%s' is "
+	                          "set to '%s' for table %s"
+	                          "You can modify Iceberg table properties wth the set_iceberg_table_properties() "
+	                          "function, and remove them with the remove_iceberg_table_properties() function. "
+	                          "You can view Iceberg table properties with the iceberg_table_properties() function",
+	                          property, property_value, table_name);
 }
 
 } // namespace duckdb

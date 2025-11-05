@@ -2441,6 +2441,7 @@ components:
           properties:
             operation:
               type: string
+              default: "overwrite"
               enum: ["append", "replace", "overwrite", "delete"]
           additionalProperties:
             type: string

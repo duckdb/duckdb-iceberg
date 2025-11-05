@@ -45,13 +45,13 @@ statement ok
 use my_datalake.default;
 
 statement ok
-drop table if exists all_types_table_primitives_2;
+DROP TABLE if exists all_types_table_primitives_2;
 
 statement ok
-drop table if exists nested_types_2;
+DROP TABLE if exists nested_types_2;
 
 statement ok
-drop table if exists fixed_array_table_as_list;
+DROP TABLE if exists fixed_array_table_as_list;
 
 # create primitive type table from test all types
 statement ok
@@ -107,6 +107,9 @@ varchar,
 blob from test_all_types();
 ----
 
+statement ok
+drop table if exists nested_types_2;
+
 # create nested types table from test all types
 statement ok
 create table nested_types_2 as select
@@ -153,6 +156,9 @@ struct_of_fixed_array,
 list_of_fixed_int_array from test_all_types();
 ----
 <REGEX>:.*Please cast to LIST.*
+
+statement ok
+drop table if exists fixed_array_table_as_list;
 
 # casting to list works
 statement ok
