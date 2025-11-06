@@ -176,11 +176,14 @@ unique_ptr<HTTPResponse> AWSInput::ExecuteRequest(ClientContext &context, Aws::H
 	auto uri_string = uri.GetURLEncodedPath();
 	auto request = LogFuncTime(
 	    context, [&] { return CreateSignedRequest(context, method, uri, headers, body); },
-	    StringUtil::Format("CreateAWSSignedRequest %s", uri_string));
+	    StringUtil::Format("\"CreateAWSSignedRequest %s\"", uri_string));
 
-	auto httpClient = Aws::Http::CreateHttpClient(clientConfig);
+	auto httpClient = LogFuncTime(
+	    context, [&] { return Aws::Http::CreateHttpClient(clientConfig); },
+	    StringUtil::Format("\"CreateAWSHTTPClient %s\"", uri_string));
 	auto response = LogFuncTime(
-	    context, [&] { return httpClient->MakeRequest(request); }, StringUtil::Format("MakeAWSRequest %s", uri_string));
+	    context, [&] { return httpClient->MakeRequest(request); },
+	    StringUtil::Format("\"ExecuteAWSRequest %s\"", uri_string));
 
 	auto resCode = response->GetResponseCode();
 
