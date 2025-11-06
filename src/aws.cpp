@@ -5,6 +5,8 @@
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/common/exception/http_exception.hpp"
 #include "include/storage/irc_authorization.hpp"
+#include "chrono"
+#include "utility"
 
 #ifdef EMSCRIPTEN
 #else
@@ -54,18 +56,31 @@ static void InitAWSAPI() {
 	}
 }
 
-static void LogAWSRequest(ClientContext &context, std::shared_ptr<Aws::Http::HttpRequest> &req,
-                          Aws::Http::HttpMethod &method) {
+template <typename Func>
+auto LogFuncTime(ClientContext &context, Func &&func, const std::string &message) -> decltype(func()) {
+	auto start = std::chrono::high_resolution_clock::now();
+
+	auto result = std::forward<Func>(func)();
+
+	auto end = std::chrono::high_resolution_clock::now();
+	auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
+
+	DUCKDB_LOG(context, IcebergLogType, "{%s:%dms}", message, duration.count());
+	return result;
+}
+
+static void LogAWSRequest(ClientContext &context, std::shared_ptr<Aws::Http::HttpRequest> &request,
+                          HTTPResponse &response, Aws::Http::HttpMethod &method) {
 	if (context.db) {
 		auto http_util = HTTPUtil::Get(*context.db);
-		auto aws_headers = req->GetHeaders();
+		auto aws_headers = request->GetHeaders();
 		auto http_headers = HTTPHeaders();
 		for (auto &header : aws_headers) {
 			http_headers.Insert(header.first.c_str(), header.second);
 		}
 		auto params = HTTPParams(http_util);
-		auto url = "https://" + req->GetUri().GetAuthority() + req->GetUri().GetPath();
-		const auto query_str = req->GetUri().GetQueryString();
+		auto url = "https://" + request->GetUri().GetAuthority() + request->GetUri().GetPath();
+		const auto query_str = request->GetUri().GetQueryString();
 		if (!query_str.empty()) {
 			url += "?" + query_str;
 		}
@@ -92,7 +107,7 @@ static void LogAWSRequest(ClientContext &context, std::shared_ptr<Aws::Http::Htt
 		}
 		auto request = BaseRequest(type, url, http_headers, params);
 		request.params.logger = context.logger;
-		http_util.LogRequest(request, nullptr);
+		http_util.LogRequest(request, response);
 	}
 }
 
@@ -125,7 +140,8 @@ Aws::Http::URI AWSInput::BuildURI() {
 	return uri;
 }
 
-std::shared_ptr<Aws::Http::HttpRequest> AWSInput::CreateSignedRequest(Aws::Http::HttpMethod method,
+std::shared_ptr<Aws::Http::HttpRequest> AWSInput::CreateSignedRequest(ClientContext &context,
+                                                                      Aws::Http::HttpMethod method,
                                                                       const Aws::Http::URI &uri, HTTPHeaders &headers,
                                                                       const string &body) {
 
@@ -154,21 +170,24 @@ std::shared_ptr<Aws::Http::HttpRequest> AWSInput::CreateSignedRequest(Aws::Http:
 
 unique_ptr<HTTPResponse> AWSInput::ExecuteRequest(ClientContext &context, Aws::Http::HttpMethod method,
                                                   HTTPHeaders &headers, const string &body) {
-
 	InitAWSAPI();
 	auto clientConfig = BuildClientConfig();
 	auto uri = BuildURI();
-	auto request = CreateSignedRequest(method, uri, headers, body);
+	auto uri_string = uri.GetURLEncodedPath();
+	auto request = LogFuncTime(
+	    context, [&] { return CreateSignedRequest(context, method, uri, headers, body); },
+	    StringUtil::Format("CreateAWSSignedRequest %s", uri_string));
 
-	LogAWSRequest(context, request, method);
 	auto httpClient = Aws::Http::CreateHttpClient(clientConfig);
-	auto response = httpClient->MakeRequest(request);
+	auto response = LogFuncTime(
+	    context, [&] { return httpClient->MakeRequest(request); }, StringUtil::Format("MakeAWSRequest %s", uri_string));
+
 	auto resCode = response->GetResponseCode();
 
-	DUCKDB_LOG(context, IcebergLogType,
-	           "%s %s (response %d) (signed with key_id '%s' for service '%s', in region '%s')",
-	           Aws::Http::HttpMethodMapper::GetNameForHttpMethod(method), uri.GetURIString(), resCode, key_id,
-	           service.c_str(), region.c_str());
+	// DUCKDB_LOG(context, IcebergLogType,
+	//            "%s %s (response %d) (signed with key_id '%s' for service '%s', in region '%s')",
+	//            Aws::Http::HttpMethodMapper::GetNameForHttpMethod(method), uri.GetURIString(), resCode, key_id,
+	//            service.c_str(), region.c_str());
 
 	auto result = make_uniq<HTTPResponse>(resCode == Aws::Http::HttpResponseCode::REQUEST_NOT_MADE
 	                                          ? HTTPStatusCode::INVALID
@@ -180,6 +199,10 @@ unique_ptr<HTTPResponse> AWSInput::ExecuteRequest(ClientContext &context, Aws::H
 		result->reason = response->GetClientErrorMessage();
 		throw HTTPException(*result, result->reason);
 	}
+	for (auto &header : response->GetHeaders()) {
+		result->headers[header.first] = header.second;
+	}
+	LogAWSRequest(context, request, *result, method);
 	Aws::StringStream resBody;
 	resBody << response->GetResponseBody().rdbuf();
 	result->body = resBody.str();

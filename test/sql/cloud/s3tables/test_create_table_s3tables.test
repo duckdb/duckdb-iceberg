@@ -30,6 +30,15 @@ attach 'arn:aws:s3tables:us-east-2:840140254803:bucket/iceberg-testing' as s3_ca
     ENDPOINT_TYPE S3_TABLES
 );
 
+statement ok
+call enable_logging(level='DEBUG');
+
+statement ok
+select * from s3_catalog.tpch_sf1.region;
+
+
+mode skip
+
 set ignore_error_messages
 
 statement ok

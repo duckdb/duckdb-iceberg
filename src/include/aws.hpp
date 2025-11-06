@@ -28,8 +28,9 @@ public:
 #else
 	unique_ptr<HTTPResponse> ExecuteRequest(ClientContext &context, Aws::Http::HttpMethod method, HTTPHeaders &headers,
 	                                        const string &body = "");
-	std::shared_ptr<Aws::Http::HttpRequest> CreateSignedRequest(Aws::Http::HttpMethod method, const Aws::Http::URI &uri,
-	                                                            HTTPHeaders &headers, const string &body = "");
+	std::shared_ptr<Aws::Http::HttpRequest> CreateSignedRequest(ClientContext &context, Aws::Http::HttpMethod method,
+	                                                            const Aws::Http::URI &uri, HTTPHeaders &headers,
+	                                                            const string &body = "");
 	Aws::Http::URI BuildURI();
 	Aws::Client::ClientConfiguration BuildClientConfig();
 #endif
