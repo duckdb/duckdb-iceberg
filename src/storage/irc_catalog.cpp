@@ -557,6 +557,15 @@ unique_ptr<Catalog> IRCatalog::Attach(optional_ptr<StorageExtensionInfo> storage
 	return std::move(catalog);
 }
 
+string IRCatalog::GetURLEncodedPrefix() {
+	// if auth handler is SigV4, we are sending the request through
+	// AWS, which will encode the prefix for us.
+	if (auth_handler->type == IRCAuthorizationType::SIGV4) {
+		return prefix;
+	}
+	return StringUtil::URLEncode(prefix);
+}
+
 string IRCatalog::GetOnlyMergeOnReadSupportedErrorMessage(const string &table_name, const string &property,
                                                           const string &property_value) {
 	return StringUtil::Format("DuckDB-Iceberg only supports merge-on-read for updates/deletes. Table Property '%s' is "

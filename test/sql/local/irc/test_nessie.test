@@ -46,7 +46,7 @@ attach '' as my_datalake (
 <REGEX>:.*Unrecognized access mode.*Supported options are 'vended_credentials' and 'none'.*
 
 statement ok
-attach '' as my_datalake (
+attach 'warehouse' as my_datalake (
     type ICEBERG,
     ENDPOINT 'http://127.0.0.1:19120/iceberg/',
     ACCESS_DELEGATION_MODE 'none',
@@ -64,6 +64,21 @@ insert into my_datalake.default.t1 select range a from range(10);
 
 statement ok
 create table if not exists my_datalake.default.t2 as select range a from range(1000);
+
+query I
+select * from my_datalake.default.t2 order by a limit 10;
+----
+0
+1
+2
+3
+4
+5
+6
+7
+8
+9
+
 
 statement ok
 drop table if exists my_datalake.default.t2;
