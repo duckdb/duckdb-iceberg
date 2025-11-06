@@ -51,6 +51,7 @@ static void InitAWSAPI() {
 
 static void LogAWSRequest(ClientContext &context, std::shared_ptr<Aws::Http::HttpRequest> &req,
                           Aws::Http::HttpMethod &method) {
+	return ;
 	if (context.db) {
 		auto http_util = HTTPUtil::Get(*context.db);
 		auto aws_headers = req->GetHeaders();
@@ -124,27 +125,9 @@ std::shared_ptr<Aws::Http::HttpRequest> AWSInput::CreateSignedRequest(Aws::Http:
                                                                       const Aws::Http::URI &uri, HTTPHeaders &headers,
                                                                       const string &body) {
 
-#ifndef EMSCRIPTEN
-	// auto request = Aws::Http::CreateHttpRequest(uri, method,Aws::Utils::Stream::DefaultResponseStreamFactoryMethod);
-	//	request->SetUserAgent(user_agent);
+//std::cout << "ARE WE HERE????\n";
 
-	if (!body.empty()) {
-		auto bodyStream = Aws::MakeShared<Aws::StringStream>("");
-		*bodyStream << body;
-		request->AddContentBody(bodyStream);
-		request->SetContentLength(std::to_string(body.size()));
-		if (headers.HasHeader("Content-Type")) {
-			request->SetHeaderValue("Content-Type", headers.GetHeaderValue("Content-Type"));
-		}
-	}
 
-	// std::shared_ptr<Aws::Auth::AWSCredentialsProviderChain> provider;
-	// provider = std::make_shared<DuckDBSecretCredentialProvider>(key_id, secret, session_token);
-	// auto signer = make_uniq<Aws::Client::AWSAuthV4Signer>(provider, service.c_str(), region.c_str());
-	// if (!signer->SignRequest(*request)) {
-	throw HTTPException("Failed to sign request");
-	//}
-#endif
 	return nullptr;
 	// return request;
 }
@@ -168,6 +151,7 @@ unique_ptr<HTTPResponse> AWSInput::ExecuteRequest(ClientContext &context, Aws::H
 
 	auto uri = BuildURI();
 	auto &db = DatabaseInstance::GetDatabase(context);
+//std::cout << uri.GetURIString() << "\n";
 
 	HTTPHeaders res(db);
 	//       headers.Insert("X-Iceberg-Access-Delegation", "vended-credentials");
@@ -175,7 +159,7 @@ unique_ptr<HTTPResponse> AWSInput::ExecuteRequest(ClientContext &context, Aws::H
 	//               headers.Insert("Authorization", StringUtil::Format("Bearer %s", token));
 	//       }
 	{
-		res["Host"] = uri.GetURIString();
+	res["host"] = uri.GetAuthority();
 		// If access key is not set, we don't set the headers at all to allow accessing public files through s3 urls
 
 		string payload_hash = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"; // Empty payload hash
@@ -208,9 +192,7 @@ unique_ptr<HTTPResponse> AWSInput::ExecuteRequest(ClientContext &context, Aws::H
 		hash_str canonical_request_hash_str;
 		if (content_type.length() > 0) {
 			signed_headers += "content-type;";
-#ifdef EMSCRIPTEN
-			res["content-type"] = content_type;
-#endif
+			res["Content-Type"] = content_type;
 		}
 		signed_headers += "host;x-amz-content-sha256;x-amz-date";
 		if (session_token.length() > 0) {
@@ -236,7 +218,7 @@ unique_ptr<HTTPResponse> AWSInput::ExecuteRequest(ClientContext &context, Aws::H
 		}
 		string host = uri.GetAuthority();
 		canonical_request +=
-		    "\nhost:" + host + "\nx-amz-content-sha256:" + payload_hash + "\nx-amz-date:" + datetime_now;
+                   "\nhost:" + host + "\nx-amz-content-sha256:" + payload_hash + "\nx-amz-date:" + datetime_now;
 		if (session_token.length() > 0) {
 			canonical_request += "\nx-amz-security-token:" + session_token;
 		}
@@ -249,6 +231,7 @@ unique_ptr<HTTPResponse> AWSInput::ExecuteRequest(ClientContext &context, Aws::H
 		//	}
 
 		canonical_request += "\n\n" + signed_headers + "\n" + payload_hash;
+		//std::cout << "CANONICAL in\n" << canonical_request << "\nCANONICAL out\n";
 		sha256(canonical_request.c_str(), canonical_request.length(), canonical_request_hash);
 
 		hex256(canonical_request_hash, canonical_request_hash_str);
@@ -276,17 +259,14 @@ unique_ptr<HTTPResponse> AWSInput::ExecuteRequest(ClientContext &context, Aws::H
 
 	string request_url = uri.GetURIString();
 
-	Value val;
-	auto has_setting = context.TryGetCurrentSetting("experimental_s3_tables_global_proxy", val);
-	if (has_setting) {
-		if (StringUtil::StartsWith(request_url, "https://")) {
-			request_url = val.GetValue<string>() + request_url.substr(string("https://").size());
-		} else if (StringUtil::StartsWith(request_url, "http://")) {
-			request_url = val.GetValue<string>() + request_url.substr(string("http://").size());
-		}
+	params = http_util.InitializeParameters(context, request_url);
+
+	//std::cout << "_______________\n" << request_url << "\n";
+
+	for (auto &h : res) {
+		//std::cout << h.first << "\t" << h.second << "\n";
 	}
 
-	params = http_util.InitializeParameters(context, request_url);
 
 	if (method == Aws::Http::HttpMethod::HTTP_HEAD) {
 		HeadRequestInfo head_request(request_url, res, *params);
