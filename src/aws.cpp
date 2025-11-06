@@ -65,7 +65,7 @@ auto LogFuncTime(ClientContext &context, Func &&func, const std::string &message
 	auto end = std::chrono::high_resolution_clock::now();
 	auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
 
-	DUCKDB_LOG(context, IcebergLogType, "{%s:%dms}", message, duration.count());
+	DUCKDB_LOG(context, IcebergLogType, "{%s:'%dms'}", message, duration.count());
 	return result;
 }
 
@@ -174,16 +174,31 @@ unique_ptr<HTTPResponse> AWSInput::ExecuteRequest(ClientContext &context, Aws::H
 	auto clientConfig = BuildClientConfig();
 	auto uri = BuildURI();
 	auto uri_string = uri.GetURLEncodedPath();
+	string method_string = "unknown_request_type";
+	switch (method) {
+	case Aws::Http::HttpMethod::HTTP_GET:
+		method_string = "HTTP_GET";
+		break;
+	case Aws::Http::HttpMethod::HTTP_POST:
+		method_string = "HTTP_POST";
+		break;
+	case Aws::Http::HttpMethod::HTTP_DELETE:
+		method_string = "HTTP_DELETE";
+		break;
+	case Aws::Http::HttpMethod::HTTP_HEAD:
+		method_string = "HTTP_HEAD";
+		break;
+	}
 	auto request = LogFuncTime(
 	    context, [&] { return CreateSignedRequest(context, method, uri, headers, body); },
-	    StringUtil::Format("\"CreateAWSSignedRequest %s\"", uri_string));
+	    StringUtil::Format("\'CreateAWSSignedRequest %s\'", uri_string));
 
 	auto httpClient = LogFuncTime(
 	    context, [&] { return Aws::Http::CreateHttpClient(clientConfig); },
-	    StringUtil::Format("\"CreateAWSHTTPClient %s\"", uri_string));
+	    StringUtil::Format("\'CreateAWSHTTPClient %s\'", uri_string));
 	auto response = LogFuncTime(
 	    context, [&] { return httpClient->MakeRequest(request); },
-	    StringUtil::Format("\"ExecuteAWSRequest %s\"", uri_string));
+	    StringUtil::Format("\'%s %s\'", method_string, uri_string));
 
 	auto resCode = response->GetResponseCode();
 
