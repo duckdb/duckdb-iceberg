@@ -147,7 +147,7 @@ static string GetPayloadHash(const char *buffer, idx_t buffer_len) {
 unique_ptr<HTTPResponse> AWSInput::ExecuteRequest(ClientContext &context, Aws::Http::HttpMethod method,
                                                   HTTPHeaders &headers, const string &body) {
 
-	auto clientConfig = BuildClientConfig();
+	//auto clientConfig = BuildClientConfig();
 
 	auto uri = BuildURI();
 	auto &db = DatabaseInstance::GetDatabase(context);
