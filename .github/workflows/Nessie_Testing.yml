@@ -14,6 +14,7 @@ jobs:
   rest:
     name: Test against Nessie Catalog
     runs-on: ubuntu-latest
+    if: false # disabled until lakekeeper setup process is more stable
     env:
       VCPKG_TARGET_TRIPLET: 'x64-linux-release'
       GEN: ninja
