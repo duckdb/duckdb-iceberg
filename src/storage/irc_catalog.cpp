@@ -50,15 +50,28 @@ void IRCatalog::ScanSchemas(ClientContext &context, std::function<void(SchemaCat
 optional_ptr<SchemaCatalogEntry> IRCatalog::LookupSchema(CatalogTransaction transaction,
                                                          const EntryLookupInfo &schema_lookup,
                                                          OnEntryNotFound if_not_found) {
-	auto &irc_transaction = IRCTransaction::Get(transaction.GetContext(), *this);
+	auto start = std::chrono::high_resolution_clock::now();
+	auto &context = transaction.GetContext();
+	auto &irc_transaction = IRCTransaction::Get(context, *this);
 	auto &schemas = irc_transaction.GetSchemas();
+	auto end = std::chrono::high_resolution_clock::now();
+	auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
+	auto timing = duration.count();
+
+	if (timing > 0) {
+		DUCKDB_LOG(context, IcebergLogType, "{%s:'%dms'}", "IRCatalog::LookupSchema GetContext() + IRCTransaction::Get",
+		           timing);
+	}
+
 	if (schema_lookup.GetEntryName() == DEFAULT_SCHEMA && default_schema != DEFAULT_SCHEMA) {
 		D_ASSERT(!default_schema.empty());
 		return GetSchema(transaction, default_schema, if_not_found);
 	}
 
 	auto &schema_name = schema_lookup.GetEntryName();
-	auto entry = schemas.GetEntry(transaction.GetContext(), schema_name, if_not_found);
+	auto entry = IcebergLogging::LogFuncTime(
+	    context, [&] { return schemas.GetEntry(transaction.GetContext(), schema_name, if_not_found); },
+	    "IRCatalog::LookupSchema GetEntry");
 	if (!entry && if_not_found != OnEntryNotFound::RETURN_NULL) {
 		throw CatalogException(schema_lookup.GetErrorContext(), "Schema with name \"%s\" not found", schema_name);
 	}

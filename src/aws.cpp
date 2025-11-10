@@ -5,8 +5,7 @@
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/common/exception/http_exception.hpp"
 #include "include/storage/irc_authorization.hpp"
-#include "chrono"
-#include "utility"
+#include "iceberg_logging.hpp"
 
 #ifdef EMSCRIPTEN
 #else
@@ -56,19 +55,6 @@ static void InitAWSAPI() {
 	}
 }
 
-template <typename Func>
-auto LogFuncTime(ClientContext &context, Func &&func, const std::string &message) -> decltype(func()) {
-	auto start = std::chrono::high_resolution_clock::now();
-
-	auto result = std::forward<Func>(func)();
-
-	auto end = std::chrono::high_resolution_clock::now();
-	auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
-
-	DUCKDB_LOG(context, IcebergLogType, "{%s:'%dms'}", message, duration.count());
-	return result;
-}
-
 static void LogAWSRequest(ClientContext &context, std::shared_ptr<Aws::Http::HttpRequest> &request,
                           HTTPResponse &response, Aws::Http::HttpMethod &method) {
 	if (context.db) {
@@ -111,8 +97,10 @@ static void LogAWSRequest(ClientContext &context, std::shared_ptr<Aws::Http::Htt
 	}
 }
 
-Aws::Client::ClientConfiguration AWSInput::BuildClientConfig() {
-	auto config = Aws::Client::ClientConfiguration();
+Aws::Client::ClientConfiguration AWSInput::BuildClientConfig(ClientContext &context) {
+	auto config = IcebergLogging::LogFuncTime(
+	    context, [&] { return Aws::Client::ClientConfiguration(); },
+	    StringUtil::Format("\'CreateAwsClientConfiguration\'"));
 	if (!cert_path.empty()) {
 		config.caFile = cert_path;
 	}
@@ -171,32 +159,19 @@ std::shared_ptr<Aws::Http::HttpRequest> AWSInput::CreateSignedRequest(ClientCont
 unique_ptr<HTTPResponse> AWSInput::ExecuteRequest(ClientContext &context, Aws::Http::HttpMethod method,
                                                   HTTPHeaders &headers, const string &body) {
 	InitAWSAPI();
-	auto clientConfig = BuildClientConfig();
+	auto clientConfig = BuildClientConfig(context);
 	auto uri = BuildURI();
-	auto uri_string = uri.GetURLEncodedPath();
-	string method_string = "unknown_request_type";
-	switch (method) {
-	case Aws::Http::HttpMethod::HTTP_GET:
-		method_string = "HTTP_GET";
-		break;
-	case Aws::Http::HttpMethod::HTTP_POST:
-		method_string = "HTTP_POST";
-		break;
-	case Aws::Http::HttpMethod::HTTP_DELETE:
-		method_string = "HTTP_DELETE";
-		break;
-	case Aws::Http::HttpMethod::HTTP_HEAD:
-		method_string = "HTTP_HEAD";
-		break;
-	}
-	auto request = LogFuncTime(
+	auto uri_string = IcebergLogging::LogFuncTime(
+	    context, [&] { return uri.GetURLEncodedPath(); }, "AWSInput::ExecuteRequest::GetURLEncodedPath()");
+	string method_string = Aws::Http::HttpMethodMapper::GetNameForHttpMethod(method);
+	auto request = IcebergLogging::LogFuncTime(
 	    context, [&] { return CreateSignedRequest(context, method, uri, headers, body); },
 	    StringUtil::Format("\'CreateAWSSignedRequest %s\'", uri_string));
 
-	auto httpClient = LogFuncTime(
+	auto httpClient = IcebergLogging::LogFuncTime(
 	    context, [&] { return Aws::Http::CreateHttpClient(clientConfig); },
 	    StringUtil::Format("\'CreateAWSHTTPClient %s\'", uri_string));
-	auto response = LogFuncTime(
+	auto response = IcebergLogging::LogFuncTime(
 	    context, [&] { return httpClient->MakeRequest(request); },
 	    StringUtil::Format("\'%s %s\'", method_string, uri_string));
 

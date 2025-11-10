@@ -1,5 +1,6 @@
 #include "storage/irc_schema_entry.hpp"
 
+#include "iceberg_logging.hpp"
 #include "storage/irc_table_entry.hpp"
 #include "storage/irc_transaction.hpp"
 #include "utils/iceberg_type.hpp"
@@ -175,7 +176,9 @@ optional_ptr<CatalogEntry> IRCSchemaEntry::LookupEntry(CatalogTransaction transa
 	if (!CatalogTypeIsSupported(type)) {
 		return nullptr;
 	}
-	return GetCatalogSet(type).GetEntry(transaction.GetContext(), lookup_info);
+	return IcebergLogging::LogFuncTime(
+	    transaction.GetContext(), [&] { return GetCatalogSet(type).GetEntry(transaction.GetContext(), lookup_info); },
+	    "IRCSchemaEntry::LookupEntry");
 }
 
 ICTableSet &IRCSchemaEntry::GetCatalogSet(CatalogType type) {

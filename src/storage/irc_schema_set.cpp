@@ -2,6 +2,7 @@
 #include "duckdb/parser/parsed_data/create_schema_info.hpp"
 #include "duckdb/parser/parsed_data/drop_info.hpp"
 #include "duckdb/catalog/catalog.hpp"
+#include "iceberg_logging.hpp"
 #include "storage/irc_catalog.hpp"
 #include "storage/irc_schema_set.hpp"
 #include "storage/irc_transaction.hpp"
@@ -16,7 +17,14 @@ optional_ptr<CatalogEntry> IRCSchemaSet::GetEntry(ClientContext &context, const 
 	lock_guard<mutex> l(entry_lock);
 	auto &ic_catalog = catalog.Cast<IRCatalog>();
 
+	auto start = std::chrono::high_resolution_clock::now();
 	auto &irc_transaction = IRCTransaction::Get(context, catalog);
+	auto end = std::chrono::high_resolution_clock::now();
+	auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
+	auto timing = duration.count();
+	if (timing > 0) {
+		DUCKDB_LOG(context, IcebergLogType, "{%s:'%dms'}", "IRCSchemaSet::GetEntry IRCTransaction::get", timing);
+	}
 
 	auto verify_existence = irc_transaction.looked_up_entries.insert(name).second;
 	auto entry = entries.find(name);
@@ -50,11 +58,18 @@ optional_ptr<CatalogEntry> IRCSchemaSet::GetEntry(ClientContext &context, const 
 }
 
 void IRCSchemaSet::Scan(ClientContext &context, const std::function<void(CatalogEntry &)> &callback) {
-	lock_guard<mutex> l(entry_lock);
-	LoadEntries(context);
-	for (auto &entry : entries) {
-		callback(*entry.second);
-	}
+	IcebergLogging::LogFuncTime(
+	    context,
+	    [&] {
+		    lock_guard<mutex> l(entry_lock);
+		    LoadEntries(context);
+		    for (auto &entry : entries) {
+			    callback(*entry.second);
+		    }
+		    // just return whatever
+		    return 1;
+	    },
+	    "IRCSchemaScan::Scan");
 }
 
 static string GetSchemaName(const vector<string> &items) {

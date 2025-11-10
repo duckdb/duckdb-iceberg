@@ -32,7 +32,7 @@ public:
 	                                                            const Aws::Http::URI &uri, HTTPHeaders &headers,
 	                                                            const string &body = "");
 	Aws::Http::URI BuildURI();
-	Aws::Client::ClientConfiguration BuildClientConfig();
+	Aws::Client::ClientConfiguration BuildClientConfig(ClientContext &context);
 #endif
 
 public:

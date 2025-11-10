@@ -1,5 +1,6 @@
 #include "storage/authorization/sigv4.hpp"
 #include "api_utils.hpp"
+#include "iceberg_logging.hpp"
 #include "duckdb/main/client_context.hpp"
 #include "duckdb/common/file_system.hpp"
 #include "duckdb/main/setting_info.hpp"
@@ -101,7 +102,9 @@ AWSInput SIGV4Authorization::CreateAWSInput(ClientContext &context, const IRCEnd
 	}
 
 	// AWS credentials
-	auto secret_entry = IRCatalog::GetStorageSecret(context, secret);
+	auto secret_entry = IcebergLogging::LogFuncTime(
+	    context, [&] { return IRCatalog::GetStorageSecret(context, secret); },
+	    "SigV4Authorization::CreateAWSInput::GetStorageSecret");
 	auto kv_secret = dynamic_cast<const KeyValueSecret &>(*secret_entry->secret);
 	aws_input.key_id = kv_secret.secret_map["key_id"].GetValue<string>();
 	aws_input.secret = kv_secret.secret_map["secret"].GetValue<string>();
