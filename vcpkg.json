@@ -2,6 +2,7 @@
 	"dependencies": [
 		"vcpkg-cmake",
 		"avro-c",
+		"openssl",
 		"curl",
 		"roaring",
 		{
