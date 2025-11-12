@@ -203,7 +203,7 @@ unique_ptr<HTTPResponse> AWSInput::ExecuteRequest(ClientContext &context, Aws::H
 			use_httputils = false;
 		}
 	}
-	if (!use_httputils || method == Aws::Http::HttpMethod::HTTP_POST) {
+	if (!use_httputils) {
 		// Query Iceberg REST catalog via AWS's SDK
 		return ExecuteRequestLegacy(context, method, headers, body);
 	}
@@ -322,7 +322,11 @@ unique_ptr<HTTPResponse> AWSInput::ExecuteRequest(ClientContext &context, Aws::H
 	case Aws::Http::HttpMethod::HTTP_POST: {
 		PostRequestInfo post_request(request_url, res, *params, reinterpret_cast<const_data_ptr_t>(body.c_str()),
 		                             body.size());
-		return http_util.Request(post_request);
+		auto x = http_util.Request(post_request);
+		if (x) {
+			x->body = post_request.buffer_out;
+		}
+		return std::move(x);
 	}
 	default:
 		throw NotImplementedException("Unexpected HTTP Method requested");
