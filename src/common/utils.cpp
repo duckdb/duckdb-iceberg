@@ -1,6 +1,8 @@
 #include "duckdb.hpp"
 #include "iceberg_utils.hpp"
 #include "fstream"
+#include "duckdb/catalog/catalog_entry/table_catalog_entry.hpp"
+#include "storage/irc_table_entry.hpp"
 #include "duckdb/common/gzip_file_system.hpp"
 #include "storage/irc_table_entry.hpp"
 #include "duckdb/catalog/catalog_entry/view_catalog_entry.hpp"
@@ -47,6 +49,36 @@ static string ExtractIcebergScanPath(const string &sql) {
 	return sql.substr(start, end - start);
 }
 
+optional_ptr<CatalogEntry> IcebergUtils::GetTableEntry(ClientContext &context, string &input_string) {
+
+	auto qualified_name = QualifiedName::ParseComponents(input_string);
+	optional_ptr<ICTableEntry> iceberg_table = nullptr;
+	auto default_db = DatabaseManager::GetDefaultDatabase(context);
+	auto &catalog = Catalog::GetCatalog(context, default_db);
+	switch (qualified_name.size()) {
+	case 3: {
+		auto lookup_info = EntryLookupInfo(CatalogType::TABLE_ENTRY, qualified_name[2]);
+		auto table = Catalog::GetEntry(context, qualified_name[0], qualified_name[1], lookup_info,
+		                               OnEntryNotFound::THROW_EXCEPTION);
+		return table;
+	}
+	case 2: {
+		// make sure default catalog is iceberg
+		auto table_entry = catalog.GetEntry(context, CatalogType::TABLE_ENTRY, qualified_name[0], qualified_name[1],
+		                                    OnEntryNotFound::THROW_EXCEPTION);
+		return table_entry;
+	}
+	case 1: {
+		auto schema = catalog.GetDefaultSchema();
+		auto table_entry = catalog.GetEntry(context, CatalogType::TABLE_ENTRY, schema, qualified_name[0],
+		                                    OnEntryNotFound::THROW_EXCEPTION);
+		return table_entry;
+	}
+	default:
+		throw InvalidInputException("Too many identifiers in table name %s", input_string);
+	}
+}
+
 string IcebergUtils::GetStorageLocation(ClientContext &context, const string &input) {
 	auto qualified_name = QualifiedName::ParseComponents(input);
 	string storage_location = input;
@@ -62,7 +94,6 @@ string IcebergUtils::GetStorageLocation(ClientContext &context, const string &in
 		if (!catalog_entry) {
 			break;
 		}
-
 		if (catalog_entry->type == CatalogType::VIEW_ENTRY) {
 			//! This is a view, which we will assume is wrapping an ICEBERG_SCAN(...) query
 			auto &view_entry = catalog_entry->Cast<ViewCatalogEntry>();
@@ -72,6 +103,10 @@ string IcebergUtils::GetStorageLocation(ClientContext &context, const string &in
 		}
 		if (catalog_entry->type == CatalogType::TABLE_ENTRY) {
 			//! This is a IRCTableEntry, set up the scan from this
+			auto &table = catalog_entry->Cast<TableCatalogEntry>();
+			if (table.catalog.GetCatalogType() != "iceberg") {
+				throw InvalidInputException("Table %s is not an Iceberg table", input);
+			}
 			auto &table_entry = catalog_entry->Cast<ICTableEntry>();
 			storage_location = table_entry.PrepareIcebergScanFromEntry(context);
 			break;

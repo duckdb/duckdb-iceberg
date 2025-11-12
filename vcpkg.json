@@ -3,6 +3,7 @@
 		"vcpkg-cmake",
 		"avro-c",
 		"curl",
+		"openssl",
 		"roaring",
 		{
 			"name": "aws-sdk-cpp",
@@ -14,10 +15,6 @@
 		}
 	],
 	"vcpkg-configuration": {
-    "overlay-ports": [
-      "./vcpkg_ports"
-    ],
-
 		"registries": [
 			{
 				"kind": "git",
@@ -30,5 +27,11 @@
 			}
 		]
 	},
-	"builtin-baseline": "ce613c41372b23b1f51333815feb3edd87ef8a8b"
+	"builtin-baseline": "ce613c41372b23b1f51333815feb3edd87ef8a8b",
+	"overrides": [
+		{
+			"name": "openssl",
+			"version": "3.0.8"
+		}
+	]
 }

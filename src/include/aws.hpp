@@ -21,8 +21,8 @@ public:
 	unique_ptr<HTTPResponse> Request(RequestType request_type, ClientContext &context, HTTPHeaders &headers,
 	                                 const string &data);
 
-	unique_ptr<HTTPResponse> ExecuteRequest(ClientContext &context, Aws::Http::HttpMethod method,
-	                                        const string body = "", string content_type = "");
+	unique_ptr<HTTPResponse> ExecuteRequestLegacy(ClientContext &context, Aws::Http::HttpMethod method,
+	                                              HTTPHeaders &headers, const string &body = "");
 	unique_ptr<HTTPResponse> ExecuteRequest(ClientContext &context, Aws::Http::HttpMethod method, HTTPHeaders &headers,
 	                                        const string &body = "");
 	std::shared_ptr<Aws::Http::HttpRequest> CreateSignedRequest(Aws::Http::HttpMethod method, const Aws::Http::URI &uri,

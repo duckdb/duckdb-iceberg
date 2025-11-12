@@ -404,7 +404,6 @@ void IRCAPI::CommitNamespaceDrop(ClientContext &context, IRCatalog &catalog, vec
 
 rest_api_objects::LoadTableResult IRCAPI::CommitNewTable(ClientContext &context, IRCatalog &catalog,
                                                          const ICTableEntry *table) {
-	auto &ic_catalog = table->catalog.Cast<IRCatalog>();
 	auto &ic_schema = table->schema.Cast<IRCSchemaEntry>();
 	auto table_namespace = GetEncodedSchemaName(ic_schema.namespace_items);
 	auto url_builder = catalog.GetBaseUrl();

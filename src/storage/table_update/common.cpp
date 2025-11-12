@@ -204,6 +204,18 @@ void SetProperties::CreateUpdate(DatabaseInstance &db, ClientContext &context, I
 	req.set_properties_update.updates = properties;
 }
 
+RemoveProperties::RemoveProperties(IcebergTableInformation &table_info, vector<string> properties)
+    : IcebergTableUpdate(IcebergTableUpdateType::SET_PROPERTIES, table_info), properties(properties) {
+}
+
+void RemoveProperties::CreateUpdate(DatabaseInstance &db, ClientContext &context, IcebergCommitState &commit_state) {
+	commit_state.table_change.updates.push_back(rest_api_objects::TableUpdate());
+	auto &req = commit_state.table_change.updates.back();
+	req.has_remove_properties_update = true;
+	req.remove_properties_update.action = "remove-properties";
+	req.remove_properties_update.removals = properties;
+}
+
 SetLocation::SetLocation(IcebergTableInformation &table_info)
     : IcebergTableUpdate(IcebergTableUpdateType::SET_LOCATION, table_info) {
 }

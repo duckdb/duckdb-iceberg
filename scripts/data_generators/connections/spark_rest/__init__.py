@@ -58,6 +58,7 @@ class IcebergSparkRest(IcebergConnection):
             .config("spark.sql.catalog.demo.s3.endpoint", "http://127.0.0.1:9000")
             .config("spark.sql.catalog.demo.s3.path-style-access", "true")
             .config('spark.driver.memory', '10g')
+            .config('spark.sql.session.timeZone', 'UTC')
             .config("spark.sql.catalogImplementation", "in-memory")
             .config("spark.sql.catalog.demo.io-impl", "org.apache.iceberg.aws.s3.S3FileIO")
             .config('spark.jars', SPARK_RUNTIME_PATH)

@@ -62,9 +62,18 @@ public:
 	                          const vector<MultiFileColumnDefinition> &local_columns);
 	bool ParseOption(const string &key, const Value &val, MultiFileOptions &options, ClientContext &context) override;
 
+	unique_ptr<Expression>
+	GetVirtualColumnExpression(ClientContext &context, MultiFileReaderData &reader_data,
+	                           const vector<MultiFileColumnDefinition> &local_columns, idx_t &column_id,
+	                           const LogicalType &type, MultiFileLocalIndex local_idx,
+	                           optional_ptr<MultiFileColumnDefinition> &global_column_reference) override;
+
 public:
 	shared_ptr<TableFunctionInfo> function_info;
 	IcebergOptions options;
+
+private:
+	unique_ptr<MultiFileColumnDefinition> row_id_column;
 };
 
 } // namespace duckdb

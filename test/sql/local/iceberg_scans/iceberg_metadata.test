@@ -98,3 +98,11 @@ SELECT * FROM ICEBERG_METADATA('__WORKING_DIRECTORY__/data/persistent/iceberg/li
 ----
 lineitem_iceberg_gz/metadata/23f9dbea-1e7f-4694-a82c-dc3c9a94953e-m0.avro	0	DATA	ADDED	EXISTING	lineitem_iceberg_gz/data/00000-2-371a340c-ded5-4e85-aa49-9c788d6f21cd-00001.parquet	PARQUET	111968
 
+statement ok
+create table t1 as select range a from range(10);
+
+statement error
+select * from iceberg_metadata(memory.main.t1);
+----
+<REGEX>:.*Invalid Input Error.*t1 is not an Iceberg table.*
+

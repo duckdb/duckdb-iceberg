@@ -1,6 +1,7 @@
 #include "duckdb/common/string_util.hpp"
 #include "utils/iceberg_type.hpp"
 #include "duckdb/common/extra_type_info.hpp"
+#include "duckdb/parser/column_definition.hpp"
 #include "rest_catalog/objects/list_type.hpp"
 #include "rest_catalog/objects/map_type.hpp"
 #include "rest_catalog/objects/struct_type.hpp"
@@ -11,10 +12,6 @@ namespace duckdb {
 
 string IcebergTypeHelper::LogicalTypeToIcebergType(const LogicalType &type) {
 	switch (type.id()) {
-	case LogicalTypeId::TINYINT:
-	case LogicalTypeId::UTINYINT:
-	case LogicalTypeId::SMALLINT:
-	case LogicalTypeId::USMALLINT:
 	case LogicalTypeId::INTEGER:
 		return "int";
 	case LogicalTypeId::BOOLEAN:
@@ -23,7 +20,6 @@ string IcebergTypeHelper::LogicalTypeToIcebergType(const LogicalType &type) {
 		return "string";
 	case LogicalTypeId::DATE:
 		return "date";
-	case LogicalTypeId::UINTEGER:
 	case LogicalTypeId::BIGINT:
 		return "long";
 	case LogicalTypeId::FLOAT:
@@ -41,11 +37,8 @@ string IcebergTypeHelper::LogicalTypeToIcebergType(const LogicalType &type) {
 		return "binary";
 	case LogicalTypeId::STRUCT:
 		return "struct";
-	case LogicalTypeId::ARRAY: {
-		// Iceberg doesn't support fixed array lengths
-		return "list";
-	}
 	case LogicalTypeId::LIST:
+		// Iceberg doesn't support fixed array lengths
 		return "list";
 	case LogicalTypeId::TIME:
 		return "time";
@@ -56,7 +49,7 @@ string IcebergTypeHelper::LogicalTypeToIcebergType(const LogicalType &type) {
 	case LogicalTypeId::MAP:
 		return "map";
 	default:
-		throw NotImplementedException("Type %s not supported in Iceberg", LogicalTypeIdToString(type.id()));
+		throw InvalidInputException("Column type %s is not a valid Iceberg Type.", LogicalTypeIdToString(type.id()));
 	}
 }
 

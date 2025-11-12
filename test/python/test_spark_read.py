@@ -82,7 +82,7 @@ class TestSparkRead:
 
 @pytest.mark.skipif(
     os.getenv('ICEBERG_SERVER_AVAILABLE', None) == None,
-    reason="Test data wasn't generated, run tests in test/sql/local/irc/other_engines first",
+    reason="Test data wasn't generated, run tests in test/sql/local/irc first",
 )
 class TestSparkReadDuckDBTable:
     def test_spark_read(self, spark_con):
@@ -103,4 +103,66 @@ class TestSparkReadDuckDBTable:
             Row(a=7),
             Row(a=8),
             Row(a=9),
+        ]
+
+
+@pytest.mark.skipif(
+    os.getenv('ICEBERG_SERVER_AVAILABLE', None) == None,
+    reason="Test data wasn't generated, run tests in test/sql/local/irc first",
+)
+class TestSparkReadDuckDBTableWithDeletes:
+    def test_spark_read(self, spark_con):
+        df = spark_con.sql(
+            """
+            select * from default.duckdb_deletes_for_other_engines order by a
+            """
+        )
+        res = df.collect()
+        assert res == [
+            Row(a=1),
+            Row(a=3),
+            Row(a=5),
+            Row(a=7),
+            Row(a=9),
+            Row(a=51),
+            Row(a=53),
+            Row(a=55),
+            Row(a=57),
+            Row(a=59),
+        ]
+
+
+@pytest.mark.skipif(
+    os.getenv('ICEBERG_SERVER_AVAILABLE', None) == None,
+    reason="Test data wasn't generated, run tests in test/sql/local/irc first",
+)
+class TestSparkReadDuckDBTableWithDeletes:
+    def test_spark_read(self, spark_con):
+        df = spark_con.sql(
+            """
+            select * from default.duckdb_updates_for_other_engines order by a
+            """
+        )
+        res = df.collect()
+        assert res == [
+            Row(a=1),
+            Row(a=3),
+            Row(a=5),
+            Row(a=7),
+            Row(a=9),
+            Row(a=51),
+            Row(a=53),
+            Row(a=55),
+            Row(a=57),
+            Row(a=59),
+            Row(a=100),
+            Row(a=100),
+            Row(a=100),
+            Row(a=100),
+            Row(a=100),
+            Row(a=100),
+            Row(a=100),
+            Row(a=100),
+            Row(a=100),
+            Row(a=100),
         ]

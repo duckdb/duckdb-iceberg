@@ -155,6 +155,7 @@ class RequiredProperty:
     # The property name in the JSON code
     property_name: str
     body: List[str]
+    default: Optional[List[str]]
 
 
 @dataclass
@@ -304,8 +305,19 @@ class CPPClass:
             [
                 f'auto {required_property.variable_name}_val = yyjson_obj_get(obj, "{required_property.property_name}");',
                 f'if (!{required_property.variable_name}_val) {{',
-                f"""\treturn "{self.name} required property '{required_property.property_name}' is missing";""",
-                '} else {',
+            ]
+        )
+        if required_property.default is not None:
+            res.extend([f'\t{x}' for x in required_property.default])
+        else:
+            res.extend(
+                [
+                    f"""\treturn "{self.name} required property '{required_property.property_name}' is missing";"""
+                ]
+            )
+        res.extend(
+            [
+                '} else {'
             ]
         )
         res.extend([f'\t{x}' for x in required_property.body])
@@ -763,8 +775,14 @@ class CPPClass:
         for item, required_property in properties.items():
             variable_name = safe_cpp_name(item)
             body = self.generate_assignment(required_property, variable_name, f'{variable_name}_val')
+            if required_property.default is not None:
+                default = [
+                    f'{variable_name} = "{str(required_property.default)}";'
+                ]
+            else:
+                default = None
             self.required_properties[item] = RequiredProperty(
-                property_name=item, variable_name=variable_name, body=body
+                property_name=item, variable_name=variable_name, body=body, default=default
             )
             variable_type = self.generate_variable_type(required_property)
             self.variables.append(f'\t{variable_type} {variable_name};')
