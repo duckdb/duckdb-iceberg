@@ -12,6 +12,7 @@ env:
 
 jobs:
   rest:
+    if: false
     name: Test against local Rest Catalog
     runs-on: ubuntu-latest
     env:

@@ -1,0 +1,319 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 671fb2c..c7bff3f 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -177,9 +177,6 @@ aws_add_sanitizers(${PROJECT_NAME})
+ # We are not ABI stable yet
+ set_target_properties(${PROJECT_NAME} PROPERTIES VERSION 1.0.0)
+ 
+-if (NOT EVENT_LOOP_DEFINES)
+-    message(FATAL_ERROR "Event Loop is not setup on the platform.")
+-endif()
+ foreach(EVENT_LOOP_DEFINE IN LISTS EVENT_LOOP_DEFINES)
+     target_compile_definitions(${PROJECT_NAME} PUBLIC "-DAWS_ENABLE_${EVENT_LOOP_DEFINE}")
+ endforeach()
+diff --git a/source/event_loop.c b/source/event_loop.c
+index 8d9321d..0b03adc 100644
+--- a/source/event_loop.c
++++ b/source/event_loop.c
+@@ -21,6 +21,16 @@ static enum aws_event_loop_type s_default_event_loop_type_override = AWS_EVENT_L
+ static enum aws_event_loop_type s_default_event_loop_type_override = AWS_EVENT_LOOP_PLATFORM_DEFAULT;
+ #endif
+ 
++int aws_default_dns_resolve(
++    struct aws_allocator *allocator,
++    const struct aws_string *host_name,
++    struct aws_array_list *output_addresses,
++    void *user_data) {
++	printf("aws_default_dns_resolve\n");
++		return 1;
++}
++
++
+ struct aws_event_loop *aws_event_loop_new_default(struct aws_allocator *alloc, aws_io_clock_fn *clock) {
+     struct aws_event_loop_options options = {
+         .thread_options = NULL,
+@@ -75,25 +85,7 @@ struct aws_event_loop *aws_event_loop_new_with_epoll(
+  * If `aws_event_loop_override_default_type` has been called, return the override default type.
+  */
+ static enum aws_event_loop_type aws_event_loop_get_default_type(void) {
+-    if (s_default_event_loop_type_override != AWS_EVENT_LOOP_PLATFORM_DEFAULT) {
+         return s_default_event_loop_type_override;
+-    }
+-/**
+- * Ideally we should use the platform definition (e.x.: AWS_OS_APPLE) here, however the platform
+- * definition was declared in aws-c-common. We probably do not want to introduce extra dependency here.
+- */
+-#ifdef AWS_ENABLE_KQUEUE
+-    return AWS_EVENT_LOOP_KQUEUE;
+-#elif defined(AWS_ENABLE_DISPATCH_QUEUE)
+-    return AWS_EVENT_LOOP_DISPATCH_QUEUE;
+-#elif defined(AWS_ENABLE_EPOLL)
+-    return AWS_EVENT_LOOP_EPOLL;
+-#elif defined(AWS_OS_WINDOWS)
+-    return AWS_EVENT_LOOP_IOCP;
+-#else
+-#    error                                                                                                             \
+-        "Default event loop type required. Failed to get default event loop type. The library is not built correctly on the platform. "
+-#endif
+ }
+ 
+ static int aws_event_loop_type_validate_platform(enum aws_event_loop_type type);
+diff --git a/source/io.c b/source/io.c
+index 380ece1..e1e507b 100644
+--- a/source/io.c
++++ b/source/io.c
+@@ -351,8 +351,9 @@ static struct aws_log_subject_info_list s_io_log_subject_list = {
+ 
+ static bool s_io_library_initialized = false;
+ 
+-void aws_tls_init_static_state(struct aws_allocator *alloc);
+-void aws_tls_clean_up_static_state(void);
++void aws_tls_init_static_state(struct aws_allocator *alloc) {}
++void aws_tls_clean_up_static_state(void) {}
++
+ 
+ void aws_io_library_init(struct aws_allocator *allocator) {
+     if (!s_io_library_initialized) {
+diff --git a/source/posix/socket.c b/source/posix/socket.c
+index 266ad2d..fe18ca1 100644
+--- a/source/posix/socket.c
++++ b/source/posix/socket.c
+@@ -330,87 +330,7 @@ static void s_socket_clean_up(struct aws_socket *socket) {
+ 
+ /* Update socket->local_endpoint based on the results of getsockname() */
+ static int s_update_local_endpoint(struct aws_socket *socket) {
+-    struct aws_socket_endpoint tmp_endpoint;
+-    AWS_ZERO_STRUCT(tmp_endpoint);
+-
+-    struct sockaddr_storage address;
+-    AWS_ZERO_STRUCT(address);
+-    socklen_t address_size = sizeof(address);
+-
+-    if (getsockname(socket->io_handle.data.fd, (struct sockaddr *)&address, &address_size) != 0) {
+-        int errno_value = errno; /* Always cache errno before potential side-effect */
+-        AWS_LOGF_ERROR(
+-            AWS_LS_IO_SOCKET,
+-            "id=%p fd=%d: getsockname() failed with error %d",
+-            (void *)socket,
+-            socket->io_handle.data.fd,
+-            errno_value);
+-        int aws_error = s_determine_socket_error(errno_value);
+-        return aws_raise_error(aws_error);
+-    }
+-
+-    if (address.ss_family == AF_INET) {
+-        struct sockaddr_in *s = (struct sockaddr_in *)&address;
+-        tmp_endpoint.port = ntohs(s->sin_port);
+-        if (inet_ntop(AF_INET, &s->sin_addr, tmp_endpoint.address, sizeof(tmp_endpoint.address)) == NULL) {
+-            int errno_value = errno; /* Always cache errno before potential side-effect */
+-
+-            AWS_LOGF_ERROR(
+-                AWS_LS_IO_SOCKET,
+-                "id=%p fd=%d: inet_ntop() failed with error %d",
+-                (void *)socket,
+-                socket->io_handle.data.fd,
+-                errno_value);
+-            int aws_error = s_determine_socket_error(errno_value);
+-            return aws_raise_error(aws_error);
+-        }
+-    } else if (address.ss_family == AF_INET6) {
+-        struct sockaddr_in6 *s = (struct sockaddr_in6 *)&address;
+-        tmp_endpoint.port = ntohs(s->sin6_port);
+-        if (inet_ntop(AF_INET6, &s->sin6_addr, tmp_endpoint.address, sizeof(tmp_endpoint.address)) == NULL) {
+-            int errno_value = errno; /* Always cache errno before potential side-effect */
+-            AWS_LOGF_ERROR(
+-                AWS_LS_IO_SOCKET,
+-                "id=%p fd=%d: inet_ntop() failed with error %d",
+-                (void *)socket,
+-                socket->io_handle.data.fd,
+-                errno_value);
+-            int aws_error = s_determine_socket_error(errno_value);
+-            return aws_raise_error(aws_error);
+-        }
+-    } else if (address.ss_family == AF_UNIX) {
+-        struct sockaddr_un *s = (struct sockaddr_un *)&address;
+-
+-        /* Ensure there's a null-terminator.
+-         * On some platforms it may be missing when the path gets very long. See:
+-         * https://man7.org/linux/man-pages/man7/unix.7.html#BUGS
+-         * But let's keep it simple, and not deal with that madness until someone demands it. */
+-        size_t sun_len;
+-        if (aws_secure_strlen(s->sun_path, sizeof(tmp_endpoint.address), &sun_len)) {
+-            AWS_LOGF_ERROR(
+-                AWS_LS_IO_SOCKET,
+-                "id=%p fd=%d: UNIX domain socket name is too long",
+-                (void *)socket,
+-                socket->io_handle.data.fd);
+-            return aws_raise_error(AWS_IO_SOCKET_INVALID_ADDRESS);
+-        }
+-        memcpy(tmp_endpoint.address, s->sun_path, sun_len);
+-#if USE_VSOCK
+-    } else if (address.ss_family == AF_VSOCK) {
+-        struct sockaddr_vm *s = (struct sockaddr_vm *)&address;
+-
+-        tmp_endpoint.port = s->svm_port;
+-
+-        snprintf(tmp_endpoint.address, sizeof(tmp_endpoint.address), "%" PRIu32, s->svm_cid);
+-        return AWS_OP_SUCCESS;
+-#endif /* USE_VSOCK */
+-    } else {
+-        AWS_ASSERT(0);
+-        return aws_raise_error(AWS_IO_SOCKET_UNSUPPORTED_ADDRESS_FAMILY);
+-    }
+-
+-    socket->local_endpoint = tmp_endpoint;
+-    return AWS_OP_SUCCESS;
++	return 0;
+ }
+ 
+ static void s_on_connection_error(struct aws_socket *socket, int error);
+@@ -992,129 +912,7 @@ static void s_socket_accept_event(
+     int events,
+     void *user_data) {
+ 
+-    (void)event_loop;
+-
+-    struct aws_socket *socket = user_data;
+-    struct posix_socket *socket_impl = socket->impl;
+-
+-    AWS_LOGF_DEBUG(
+-        AWS_LS_IO_SOCKET, "id=%p fd=%d: listening event received", (void *)socket, socket->io_handle.data.fd);
+-
+-    if (socket_impl->continue_accept && events & AWS_IO_EVENT_TYPE_READABLE) {
+-        int in_fd = 0;
+-        while (socket_impl->continue_accept && in_fd != -1) {
+-            struct sockaddr_storage in_addr;
+-            socklen_t in_len = sizeof(struct sockaddr_storage);
+-
+-            in_fd = accept(handle->data.fd, (struct sockaddr *)&in_addr, &in_len);
+-            if (in_fd == -1) {
+-                int errno_value = errno; /* Always cache errno before potential side-effect */
+-
+-                if (errno_value == EAGAIN || errno_value == EWOULDBLOCK) {
+-                    break;
+-                }
+-
+-                int aws_error = aws_socket_get_error(socket);
+-                aws_raise_error(aws_error);
+-                s_on_connection_error(socket, aws_error);
+-                break;
+-            }
+-
+-            AWS_LOGF_DEBUG(
+-                AWS_LS_IO_SOCKET, "id=%p fd=%d: incoming connection", (void *)socket, socket->io_handle.data.fd);
+-
+-            struct aws_socket *new_sock = aws_mem_calloc(socket->allocator, 1, sizeof(struct aws_socket));
+-
+-            if (!new_sock) {
+-                close(in_fd);
+-                s_on_connection_error(socket, aws_last_error());
+-                continue;
+-            }
+-
+-            if (s_socket_init(new_sock, socket->allocator, &socket->options, in_fd)) {
+-                aws_mem_release(socket->allocator, new_sock);
+-                s_on_connection_error(socket, aws_last_error());
+-                continue;
+-            }
+-
+-            new_sock->local_endpoint = socket->local_endpoint;
+-            new_sock->state = CONNECTED_READ | CONNECTED_WRITE;
+-            uint32_t port = 0;
+-
+-            /* get the info on the incoming socket's address */
+-            if (in_addr.ss_family == AF_INET) {
+-                struct sockaddr_in *s = (struct sockaddr_in *)&in_addr;
+-                port = ntohs(s->sin_port);
+-                /* this came from the kernel, a.) it won't fail. b.) even if it does
+-                 * its not fatal. come back and add logging later. */
+-                if (!inet_ntop(
+-                        AF_INET,
+-                        &s->sin_addr,
+-                        new_sock->remote_endpoint.address,
+-                        sizeof(new_sock->remote_endpoint.address))) {
+-                    AWS_LOGF_WARN(
+-                        AWS_LS_IO_SOCKET,
+-                        "id=%p fd=%d:. Failed to determine remote address.",
+-                        (void *)socket,
+-                        socket->io_handle.data.fd);
+-                }
+-                new_sock->options.domain = AWS_SOCKET_IPV4;
+-            } else if (in_addr.ss_family == AF_INET6) {
+-                /* this came from the kernel, a.) it won't fail. b.) even if it does
+-                 * its not fatal. come back and add logging later. */
+-                struct sockaddr_in6 *s = (struct sockaddr_in6 *)&in_addr;
+-                port = ntohs(s->sin6_port);
+-                if (!inet_ntop(
+-                        AF_INET6,
+-                        &s->sin6_addr,
+-                        new_sock->remote_endpoint.address,
+-                        sizeof(new_sock->remote_endpoint.address))) {
+-                    AWS_LOGF_WARN(
+-                        AWS_LS_IO_SOCKET,
+-                        "id=%p fd=%d:. Failed to determine remote address.",
+-                        (void *)socket,
+-                        socket->io_handle.data.fd);
+-                }
+-                new_sock->options.domain = AWS_SOCKET_IPV6;
+-            } else if (in_addr.ss_family == AF_UNIX) {
+-                new_sock->remote_endpoint = socket->local_endpoint;
+-                new_sock->options.domain = AWS_SOCKET_LOCAL;
+-            }
+-
+-            new_sock->remote_endpoint.port = port;
+-
+-            AWS_LOGF_INFO(
+-                AWS_LS_IO_SOCKET,
+-                "id=%p fd=%d: connected to %s:%d, incoming fd %d",
+-                (void *)socket,
+-                socket->io_handle.data.fd,
+-                new_sock->remote_endpoint.address,
+-                new_sock->remote_endpoint.port,
+-                in_fd);
+-
+-            int flags = fcntl(in_fd, F_GETFL, 0);
+-
+-            flags |= O_NONBLOCK | O_CLOEXEC;
+-            fcntl(in_fd, F_SETFL, flags);
+-
+-            bool close_occurred = false;
+-            socket_impl->close_happened = &close_occurred;
+-            socket->accept_result_fn(socket, AWS_ERROR_SUCCESS, new_sock, socket->connect_accept_user_data);
+-
+-            if (close_occurred) {
+-                return;
+-            }
+-
+-            socket_impl->close_happened = NULL;
+-        }
+-    }
+-
+-    AWS_LOGF_TRACE(
+-        AWS_LS_IO_SOCKET,
+-        "id=%p fd=%d: finished processing incoming connections, "
+-        "waiting on event-loop notification",
+-        (void *)socket,
+-        socket->io_handle.data.fd);
++	return;
+ }
+ 
+ static int s_socket_start_accept(
+diff --git a/source/tls_channel_handler.c b/source/tls_channel_handler.c
+index 5c64268..6e0cd0f 100644
+--- a/source/tls_channel_handler.c
++++ b/source/tls_channel_handler.c
+@@ -17,6 +17,13 @@
+ 
+ #include <aws/common/string.h>
+ 
++struct aws_tls_ctx *aws_tls_client_ctx_new(
++    struct aws_allocator *alloc,
++    const struct aws_tls_ctx_options *options) {
++	printf("aws_tls_client_ctx_new\n");
++		return 0;
++}
++
+ void aws_tls_ctx_options_init_default_client(struct aws_tls_ctx_options *options, struct aws_allocator *allocator) {
+     AWS_ZERO_STRUCT(*options);
+     options->allocator = allocator;
