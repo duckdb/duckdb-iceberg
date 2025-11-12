@@ -203,7 +203,7 @@ unique_ptr<HTTPResponse> AWSInput::ExecuteRequest(ClientContext &context, Aws::H
 			use_httputils = false;
 		}
 	}
-	if (!use_httputils) {
+	if (!use_httputils || method == Aws::Http::HttpMethod::HTTP_POST) {
 		// Query Iceberg REST catalog via AWS's SDK
 		return ExecuteRequestLegacy(context, method, headers, body);
 	}
