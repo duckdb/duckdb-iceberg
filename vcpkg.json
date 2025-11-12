@@ -14,10 +14,9 @@
 		}
 	],
 	"vcpkg-configuration": {
-    "overlay-ports": [
-      "./vcpkg_ports"
-    ],
-
+		"overlay-ports": [
+			"./vcpkg_ports"
+		],
 		"registries": [
 			{
 				"kind": "git",

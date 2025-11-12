@@ -52,3 +52,52 @@ from
 	my_datalake.default.pyspark_iceberg_table_v2 AT (VERSION => getvariable('last_snapshot')) WHERE schema_evol_added_col_1 IS NOT NULL;
 ----
 685
+
+query I
+select
+	count(schema_evol_added_col_1)
+from
+	my_datalake.default.pyspark_iceberg_table_v2 AT (TIMESTAMP => now()::TIMESTAMP) WHERE schema_evol_added_col_1 IS NOT NULL;
+----
+685
+
+query I
+select
+	count(schema_evol_added_col_1)
+from
+	my_datalake.default.pyspark_iceberg_table_v2 AT (TIMESTAMP => now()) WHERE schema_evol_added_col_1 IS NOT NULL;
+----
+685
+
+statement error
+select
+	count(schema_evol_added_col_1)
+from
+	my_datalake.default.pyspark_iceberg_table_v2 AT (TIMESTAMP => 'hi there') WHERE schema_evol_added_col_1 IS NOT NULL;
+----
+Invalid Input Error: Failed to cast value
+
+statement error
+select
+	count(schema_evol_added_col_1)
+from
+	my_datalake.default.pyspark_iceberg_table_v2 AT (VERSION => 'hi there') WHERE schema_evol_added_col_1 IS NOT NULL;
+----
+Invalid Input Error: Failed to cast value
+
+statement error
+select
+	count(schema_evol_added_col_1)
+from
+	my_datalake.default.pyspark_iceberg_table_v2 AT (VERSION => 1) WHERE schema_evol_added_col_1 IS NOT NULL;
+----
+Invalid Configuration Error: Could not find snapshot with id 1
+
+statement error
+select
+	count(schema_evol_added_col_1)
+from
+	my_datalake.default.pyspark_iceberg_table_v2 AT (VERSION => 1.0) WHERE schema_evol_added_col_1 IS NOT NULL;
+----
+Invalid Configuration Error: Could not find snapshot with id 1
+

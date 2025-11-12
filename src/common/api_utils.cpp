@@ -41,7 +41,6 @@ unique_ptr<HTTPResponse> APIUtils::Request(RequestType request_type, ClientConte
 	}
 
 	auto &db = DatabaseInstance::GetDatabase(context);
-
 	string request_url = AddHttpHostIfMissing(endpoint_builder.GetURL());
 
 	auto &http_util = HTTPUtil::Get(db);

@@ -3,9 +3,12 @@
 #include "iceberg_logging.hpp"
 #include "iceberg_predicate.hpp"
 #include "iceberg_value.hpp"
+#include "metadata/iceberg_manifest.hpp"
+#include "storage/irc_transaction.hpp"
 
 #include "duckdb/catalog/catalog_entry/table_function_catalog_entry.hpp"
 #include "duckdb/common/exception.hpp"
+#include "duckdb/common/file_system.hpp"
 #include "duckdb/execution/execution_context.hpp"
 #include "duckdb/parallel/thread_context.hpp"
 #include "duckdb/parser/tableref/table_function_ref.hpp"
@@ -319,7 +322,7 @@ bool IcebergMultiFileList::FileMatchesFilter(const IcebergManifestEntry &file) {
 		}
 
 		auto &filter = *it->second;
-		if (!IcebergPredicate::MatchBounds(filter, stats, IcebergTransform::Identity())) {
+		if (!IcebergPredicate::MatchBounds(context, filter, stats, IcebergTransform::Identity())) {
 			//! If any predicate fails, exclude the file
 			return false;
 		}
@@ -372,7 +375,6 @@ optional_ptr<const IcebergManifestEntry> IcebergMultiFileList::GetDataFile(idx_t
 		while (data_file_idx < current_data_files.size()) {
 			auto &data_file = current_data_files[data_file_idx];
 			data_file_idx++;
-
 			// Check whether current data file is filtered out.
 			if (!table_filters.filters.empty() && !FileMatchesFilter(data_file)) {
 				DUCKDB_LOG(context, IcebergLogType, "Iceberg Filter Pushdown, skipped 'data_file': '%s'",
@@ -470,7 +472,7 @@ static optional_ptr<const TableFilter> GetFilterForColumnIndex(TableFilterSet &f
 	return current_filter.get();
 }
 
-bool IcebergMultiFileList::ManifestMatchesFilter(const IcebergManifest &manifest) {
+bool IcebergMultiFileList::ManifestMatchesFilter(const IcebergManifestListEntry &manifest) {
 	auto spec_id = manifest.partition_spec_id;
 	auto &metadata = GetMetadata();
 
@@ -521,7 +523,7 @@ bool IcebergMultiFileList::ManifestMatchesFilter(const IcebergManifest &manifest
 		stats.has_null = field_summary.contains_null;
 		stats.has_not_null = true; // Not enough information in field_summary to determine if this should be false
 
-		if (!IcebergPredicate::MatchBounds(*table_filter, stats, field.transform)) {
+		if (!IcebergPredicate::MatchBounds(context, *table_filter, stats, field.transform)) {
 			return false;
 		}
 	}
@@ -555,11 +557,12 @@ void IcebergMultiFileList::InitializeFiles(lock_guard<mutex> &guard) {
 		auto manifest_list_reader = make_uniq<manifest_list::ManifestListReader>(metadata.iceberg_version);
 		auto scan = make_uniq<AvroScan>("IcebergManifestList", context, manifest_list_full_path);
 		manifest_list_reader->Initialize(std::move(scan));
+		auto manifest_list_entries = manifest_list.GetManifestFilesMutable();
 		while (!manifest_list_reader->Finished()) {
-			manifest_list_reader->Read(STANDARD_VECTOR_SIZE, manifest_list.manifests);
+			manifest_list_reader->Read(STANDARD_VECTOR_SIZE, manifest_list_entries);
 		}
 
-		for (auto &manifest : manifest_list.manifests) {
+		for (auto &manifest : manifest_list_entries) {
 			if (!ManifestMatchesFilter(manifest)) {
 				DUCKDB_LOG(context, IcebergLogType, "Iceberg Filter Pushdown, skipped 'manifest_file': '%s'",
 				           manifest.manifest_path);
@@ -580,25 +583,32 @@ void IcebergMultiFileList::InitializeFiles(lock_guard<mutex> &guard) {
 		auto &transaction_data = GetTransactionData();
 		for (auto &alter_p : transaction_data.alters) {
 			auto &alter = alter_p.get();
-
-			if (!ManifestMatchesFilter(alter.manifest)) {
-				DUCKDB_LOG(context, IcebergLogType, "Iceberg Filter Pushdown, skipped 'manifest_file': '%s'",
-				           alter.manifest.manifest_path);
-				//! Skip this manifest
-				continue;
-			}
-
-			if (alter.snapshot.operation == IcebergSnapshotOperationType::APPEND) {
-				transaction_data_manifests.push_back(alter.manifest_file);
-			} else {
-				throw NotImplementedException("IcebergSnapshotOperationType: %d",
-				                              static_cast<uint8_t>(alter.snapshot.operation));
+			auto &manifest_list_entries = alter.manifest_list.GetManifestFilesMutable();
+			for (auto &manifest : manifest_list_entries) {
+				if (!ManifestMatchesFilter(manifest)) {
+					DUCKDB_LOG(context, IcebergLogType, "Iceberg Filter Pushdown, skipped 'manifest_file': '%s'",
+					           manifest.manifest_path);
+					//! Skip this manifest
+					continue;
+				}
+				switch (manifest.content) {
+				case IcebergManifestContentType::DATA:
+					transaction_data_manifests.push_back(manifest.manifest_file);
+					break;
+				case IcebergManifestContentType::DELETE:
+					transaction_delete_manifests.push_back(manifest.manifest_file);
+					break;
+				default:
+					throw NotImplementedException("IcebergManifestContentType: %d",
+					                              static_cast<uint8_t>(manifest.content));
+				}
 			}
 		}
 	}
 
 	current_data_manifest = data_manifests.begin();
 	current_delete_manifest = delete_manifests.begin();
+	current_transaction_delete_manifest = transaction_delete_manifests.begin();
 }
 
 void IcebergMultiFileList::ProcessDeletes(const vector<MultiFileColumnDefinition> &global_columns,
@@ -643,6 +653,21 @@ void IcebergMultiFileList::ProcessDeletes(const vector<MultiFileColumnDefinition
 				    entry.file_format);
 			}
 		}
+	}
+
+	while (current_transaction_delete_manifest != transaction_delete_manifests.end()) {
+		for (auto &entry : current_transaction_delete_manifest->get().data_files) {
+			if (StringUtil::CIEquals(entry.file_format, "parquet")) {
+				ScanDeleteFile(entry, global_columns, column_indexes);
+			} else if (StringUtil::CIEquals(entry.file_format, "puffin")) {
+				ScanPuffinFile(entry);
+			} else {
+				throw NotImplementedException(
+				    "File format '%s' not supported for deletes, only supports 'parquet' and 'puffin' currently",
+				    entry.file_format);
+			}
+		}
+		++current_transaction_delete_manifest;
 	}
 
 	D_ASSERT(current_delete_manifest == delete_manifests.end());

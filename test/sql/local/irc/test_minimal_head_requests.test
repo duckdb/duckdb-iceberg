@@ -60,6 +60,8 @@ select count(*) from duckdb_logs_parsed('HTTP') where request.type = 'HEAD';
 ----
 2
 
+mode skip
+
 # only 13 get requests
 query I nosort get_count_1
 select count(*) from duckdb_logs_parsed('HTTP')

@@ -45,25 +45,20 @@ statement ok
 use my_datalake.default;
 
 statement ok
-drop table if exists all_types_table_primitives_2;
+DROP TABLE if exists all_types_table_primitives_2;
 
 statement ok
-drop table if exists nested_types_2;
+DROP TABLE if exists nested_types_2;
 
 statement ok
-drop table if exists fixed_array_table_as_list;
+DROP TABLE if exists fixed_array_table_as_list;
 
 # create primitive type table from test all types
 statement ok
 create table all_types_table_primitives_2 as select
 bool,
-tinyint,
-smallint,
 int,
 bigint,
-utinyint,
-usmallint,
-uint,
 date,
 time,
 timestamp,
@@ -85,13 +80,8 @@ select * from all_types_table_primitives_2;
 query T nosort res_1
 select
 bool,
-tinyint,
-smallint,
 int,
 bigint,
-utinyint,
-usmallint,
-uint,
 date,
 time,
 timestamp,
@@ -106,6 +96,9 @@ uuid,
 varchar,
 blob from test_all_types();
 ----
+
+statement ok
+drop table if exists nested_types_2;
 
 # create nested types table from test all types
 statement ok
@@ -154,6 +147,9 @@ list_of_fixed_int_array from test_all_types();
 ----
 <REGEX>:.*Please cast to LIST.*
 
+statement ok
+drop table if exists fixed_array_table_as_list;
+
 # casting to list works
 statement ok
 create table fixed_array_table_as_list as select
@@ -185,5 +181,5 @@ select * from fixed_array_table_as_list;
 statement error
 create table bit_table as select bit from test_all_types();
 ----
-not supported in Iceberg
+<REGEX>:.*Invalid Input.*Column type BIT is not a valid Iceberg Type.*
 

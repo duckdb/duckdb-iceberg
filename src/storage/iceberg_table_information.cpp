@@ -1,7 +1,9 @@
 #include "storage/iceberg_table_information.hpp"
 
+#include "duckdb/common/case_insensitive_map.hpp"
 #include "duckdb/common/string_util.hpp"
 #include "storage/irc_transaction.hpp"
+#include "storage/iceberg_transaction_data.hpp"
 #include "storage/irc_schema_entry.hpp"
 #include "storage/irc_catalog.hpp"
 #include "storage/irc_authorization.hpp"
@@ -249,6 +251,21 @@ void IcebergTableInformation::AddSnapshot(IRCTransaction &transaction, vector<Ic
 	transaction_data->AddSnapshot(IcebergSnapshotOperationType::APPEND, std::move(data_files));
 }
 
+void IcebergTableInformation::AddDeleteSnapshot(IRCTransaction &transaction,
+                                                vector<IcebergManifestEntry> &&data_files) {
+	InitTransactionData(transaction);
+
+	transaction_data->AddSnapshot(IcebergSnapshotOperationType::DELETE, std::move(data_files));
+}
+
+void IcebergTableInformation::AddUpdateSnapshot(IRCTransaction &transaction,
+                                                vector<IcebergManifestEntry> &&delete_files,
+                                                vector<IcebergManifestEntry> &&data_files) {
+	InitTransactionData(transaction);
+	// Automatically creates new snapshot with SnapshotOperationType::Overwrite
+	transaction_data->AddUpdateSnapshot(std::move(delete_files), std::move(data_files));
+}
+
 void IcebergTableInformation::AddSchema(IRCTransaction &transaction) {
 	InitTransactionData(transaction);
 	transaction_data->TableAddSchema();
@@ -291,6 +308,10 @@ void IcebergTableInformation::SetDefaultSpec(IRCTransaction &transaction) {
 void IcebergTableInformation::SetProperties(IRCTransaction &transaction, case_insensitive_map_t<string> properties) {
 	InitTransactionData(transaction);
 	transaction_data->TableSetProperties(properties);
+}
+void IcebergTableInformation::RemoveProperties(IRCTransaction &transaction, vector<string> properties) {
+	InitTransactionData(transaction);
+	transaction_data->TableRemoveProperties(properties);
 }
 void IcebergTableInformation::SetLocation(IRCTransaction &transaction) {
 	InitTransactionData(transaction);

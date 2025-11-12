@@ -1,0 +1,143 @@
+# name: test/sql/local/irc/table_properties/test_set_table_properties.test
+# group: [table_properties]
+
+require-env ICEBERG_SERVER_AVAILABLE
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+statement ok
+CALL enable_logging('HTTP');
+
+statement ok
+set logging_level='debug';
+
+statement ok
+CREATE SECRET (
+    TYPE S3,
+    KEY_ID 'admin',
+    SECRET 'password',
+    ENDPOINT '127.0.0.1:9000',
+    URL_STYLE 'path',
+    USE_SSL 0
+);
+
+
+statement ok
+ATTACH '' AS my_datalake (
+    TYPE ICEBERG,
+    CLIENT_ID 'admin',
+    CLIENT_SECRET 'password',
+    ENDPOINT 'http://127.0.0.1:8181'
+);
+
+statement ok
+drop table if exists my_datalake.default.test;
+
+statement ok
+create table if not exists my_datalake.default.test as select range a from range(100);
+
+statement ok
+CALL set_iceberg_table_properties(my_datalake.default.test,
+    {
+    'write.update.mode' : 'copy-on-write',
+    'write.delete.mode' : 'copy-on-write',
+    'foo' : 'buzz',
+    'page-write-size': '10000'
+    }
+);
+
+statement error
+CALL set_iceberg_table_properties(my_datalake.default.test,'blah');
+----
+<REGEX>:.*Invalid Input Error.*Failed to cast value.*
+
+statement error
+CALL set_iceberg_table_properties(my_datalake.default.test,1000);
+----
+<REGEX>:.*Invalid Input Error.*Failed to cast value.*
+
+# test deleting table properties
+statement ok
+CALL remove_iceberg_table_properties(my_datalake.default.test, ['foo']);
+
+query II
+select * from iceberg_table_properties(my_datalake.default.test) order by all;
+----
+page-write-size	10000
+write.delete.mode	copy-on-write
+write.update.mode	copy-on-write
+
+
+# table property is copy-on-write, so there is an error
+statement error
+delete from my_datalake.default.test where a %2 = 0;
+----
+<REGEX>:.*Not implemented Error.*write.delete.mode.*copy-on-write.*test.*
+
+# set the table property to merge on read
+statement ok
+CALL set_iceberg_table_properties(my_datalake.default.test,
+       {
+        'write.delete.mode' : 'merge-on-read',
+        });
+
+# table property is now merge on read, so there is no error
+statement ok
+delete from my_datalake.default.test where a %2 = 0;
+
+query I
+select count(*) from my_datalake.default.test;
+----
+50
+
+query II
+select * from iceberg_table_properties(my_datalake.default.test_table_properties) where "key" not in ('created-at', 'owner') order by all;
+----
+another1	neato
+duckdb_man	superman
+read.split.target-size	268435456
+write.delete.mode	merge-on-read
+write.parquet.compression-codec	zstd
+
+
+statement ok
+create table tbl1 as select range a from range(100);
+
+statement error
+select * from iceberg_table_properties(tbl1);
+----
+<REGEX>:.*Invalid Input.*
+
+
+statement error
+select * from iceberg_table_properties('not exists');
+----
+<REGEX>:.*Catalog Error.*
+
+statement error
+select * from iceberg_table_properties('default.test');
+----
+<REGEX>:.*Catalog Error.*
+
+statement ok
+use my_datalake.default;
+
+statement ok
+select * from iceberg_table_properties('default.test');
+
+statement error
+select * from iceberg_table_properties('default.test.blah.blah');
+----
+<REGEX>:.*Invalid Input Error.*Too many identifiers.*
+
+
+statement error
+select * from iceberg_table_properties('__WORKING_DIRECTORY__/data/generated/iceberg/spark-local/default/schema_evolve_float_to_double');
+----
+<REGEX>:.*Cannot call iceberg_table_properties.*on a file.*directory.*

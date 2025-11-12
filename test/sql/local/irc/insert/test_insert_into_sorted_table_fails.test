@@ -1,0 +1,69 @@
+# name: test/sql/local/irc/insert/test_insert_into_sorted_table_fails.test
+# group: [insert]
+
+require-env ICEBERG_SERVER_AVAILABLE
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+require tpch
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+set enable_logging=true
+
+statement ok
+set logging_level='debug'
+
+statement ok
+CREATE SECRET (
+    TYPE S3,
+    KEY_ID 'admin',
+    SECRET 'password',
+    ENDPOINT '127.0.0.1:9000',
+    URL_STYLE 'path',
+    USE_SSL 0
+);
+
+statement ok
+ATTACH '' AS my_datalake (
+    TYPE ICEBERG,
+    CLIENT_ID 'admin',
+    CLIENT_SECRET 'password',
+    ENDPOINT 'http://127.0.0.1:8181'
+);
+
+statement ok
+call dbgen(sf=0.001);
+
+statement error
+insert into my_datalake.default.table_sort_order select * from lineitem limit 5;
+----
+<REGEX>:.*Not implemented Error.*INSERT into a sorted iceberg table is not supported yet.*
+
+statement ok
+BEGIN;
+
+query I
+select count(*) from my_datalake.default.table_sort_order;
+----
+60175
+
+statement ok
+delete from my_datalake.default.table_sort_order where l_orderkey > 20;
+
+query I
+select count(*) from my_datalake.default.table_sort_order;
+----
+25
+
+statement ok
+ABORT;
+

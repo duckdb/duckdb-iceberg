@@ -10,7 +10,7 @@ public:
 	IcebergPredicate() = delete;
 
 public:
-	static bool MatchBounds(const TableFilter &filter, const IcebergPredicateStats &stats,
+	static bool MatchBounds(ClientContext &context, const TableFilter &filter, const IcebergPredicateStats &stats,
 	                        const IcebergTransform &transform);
 };
 

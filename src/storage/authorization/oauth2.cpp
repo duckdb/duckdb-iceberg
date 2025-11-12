@@ -7,8 +7,8 @@
 #include "api_utils.hpp"
 #include "duckdb/common/exception/http_exception.hpp"
 #include "duckdb/logging/logger.hpp"
-
 #include "duckdb/common/types/blob.hpp"
+
 namespace duckdb {
 
 namespace {

@@ -44,4 +44,7 @@ statement ok
 use my_datalake.default;
 
 statement ok
+drop table if exists duckdb_written_table;
+
+statement ok
 create table duckdb_written_table as select range a from range(10);

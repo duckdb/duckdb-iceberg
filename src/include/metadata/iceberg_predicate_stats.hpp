@@ -7,6 +7,7 @@ struct IcebergPredicateStats {
 public:
 	IcebergPredicateStats() {
 	}
+	IcebergPredicateStats(const IcebergPredicateStats &other) = default;
 
 public:
 	static IcebergPredicateStats DeserializeBounds(const Value &lower_bound, const Value &upper_bound,
