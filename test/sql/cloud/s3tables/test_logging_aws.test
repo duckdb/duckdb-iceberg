@@ -50,3 +50,11 @@ select request.url, request.type from duckdb_logs_parsed('HTTP') where request.t
 https://s3tables.us-east-2.amazonaws.com/iceberg/v1/arn:aws:s3tables:us-east-2:840140254803:bucket/iceberg-testing/namespaces/tpch_sf1	GET
 https://s3tables.us-east-2.amazonaws.com/iceberg/v1/arn:aws:s3tables:us-east-2:840140254803:bucket/iceberg-testing/namespaces/tpch_sf1/tables/region	HEAD
 https://s3tables.us-east-2.amazonaws.com/iceberg/v1/arn:aws:s3tables:us-east-2:840140254803:bucket/iceberg-testing/namespaces/tpch_sf1/tables/region	GET
+
+query I
+select contains(map_keys(response.headers), 'x-amzn-requestid') from duckdb_logs_parsed('HTTP') where request.url like '%iceberg/v1%' order by timestamp;
+----
+1
+1
+1
+1

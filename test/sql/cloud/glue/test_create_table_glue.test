@@ -37,7 +37,29 @@ statement ok
 use my_datalake.tpch_sf01;
 
 statement ok
+call enable_logging(level='DEBUG');
+
+statement ok
+drop table if exists test_create;
+
+statement ok
 create table test_create as select * from range(0,100);
 
 statement ok
 drop table test_create;
+
+# below is not deterministic depending on location. Check that when timeout is reached, it is logged properly
+mode skip
+
+statement ok
+set http_timeout=1;
+
+statement error
+create table test_create_2 as select range a from range(100);
+----
+<REGEX>:.*Error.*
+
+query I
+select count(*) from duckdb_logs_parsed('HTTP') where response.reason like '%Timeout was reached;%';
+----
+1

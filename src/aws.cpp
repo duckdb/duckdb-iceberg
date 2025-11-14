@@ -47,46 +47,45 @@ static void InitAWSAPI() {
 	}
 }
 
-static void LogAWSRequest(ClientContext &context, std::shared_ptr<Aws::Http::HttpRequest> &req,
-                          Aws::Http::HttpMethod &method) {
-	if (context.db) {
-		auto http_util = HTTPUtil::Get(*context.db);
-		auto aws_headers = req->GetHeaders();
-		auto http_headers = HTTPHeaders();
-		for (auto &header : aws_headers) {
-			http_headers.Insert(header.first.c_str(), header.second);
-		}
-		auto params = HTTPParams(http_util);
-		auto url = "https://" + req->GetUri().GetAuthority() + req->GetUri().GetPath();
-		const auto query_str = req->GetUri().GetQueryString();
-		if (!query_str.empty()) {
-			url += "?" + query_str;
-		}
-		RequestType type;
-		switch (method) {
-		case Aws::Http::HttpMethod::HTTP_GET:
-			type = RequestType::GET_REQUEST;
-			break;
-		case Aws::Http::HttpMethod::HTTP_HEAD:
-			type = RequestType::HEAD_REQUEST;
-			break;
-		case Aws::Http::HttpMethod::HTTP_DELETE:
-			type = RequestType::DELETE_REQUEST;
-			break;
-		case Aws::Http::HttpMethod::HTTP_POST:
-			type = RequestType::POST_REQUEST;
-			break;
-		case Aws::Http::HttpMethod::HTTP_PUT:
-			type = RequestType::PUT_REQUEST;
-			break;
-		default:
-			throw InvalidConfigurationException("Aws client cannot create request of type %s",
-			                                    Aws::Http::HttpMethodMapper::GetNameForHttpMethod(method));
-		}
-		auto request = BaseRequest(type, url, http_headers, params);
-		request.params.logger = context.logger;
-		http_util.LogRequest(request, nullptr);
+static void LogAWSHTTPRequest(ClientContext &context, std::shared_ptr<Aws::Http::HttpRequest> &req,
+                              HTTPResponse &response, Aws::Http::HttpMethod &method) {
+	D_ASSERT(context.db);
+	auto http_util = HTTPUtil::Get(*context.db);
+	auto aws_headers = req->GetHeaders();
+	auto http_headers = HTTPHeaders();
+	for (auto &header : aws_headers) {
+		http_headers.Insert(header.first, header.second);
 	}
+	auto params = HTTPParams(http_util);
+	auto url = string("https://") + req->GetUri().GetAuthority() + req->GetUri().GetPath();
+	const auto query_str = req->GetUri().GetQueryString();
+	if (!query_str.empty()) {
+		url += "?" + query_str;
+	}
+	RequestType type;
+	switch (method) {
+	case Aws::Http::HttpMethod::HTTP_GET:
+		type = RequestType::GET_REQUEST;
+		break;
+	case Aws::Http::HttpMethod::HTTP_HEAD:
+		type = RequestType::HEAD_REQUEST;
+		break;
+	case Aws::Http::HttpMethod::HTTP_DELETE:
+		type = RequestType::DELETE_REQUEST;
+		break;
+	case Aws::Http::HttpMethod::HTTP_POST:
+		type = RequestType::POST_REQUEST;
+		break;
+	case Aws::Http::HttpMethod::HTTP_PUT:
+		type = RequestType::PUT_REQUEST;
+		break;
+	default:
+		throw InvalidConfigurationException("Aws client cannot create request of type %s",
+		                                    Aws::Http::HttpMethodMapper::GetNameForHttpMethod(method));
+	}
+	auto request = BaseRequest(type, url, std::move(http_headers), params);
+	request.params.logger = context.logger;
+	http_util.LogRequest(request, response);
 }
 
 Aws::Client::ClientConfiguration AWSInput::BuildClientConfig() {
@@ -163,32 +162,35 @@ unique_ptr<HTTPResponse> AWSInput::ExecuteRequestLegacy(ClientContext &context, 
 	auto uri = BuildURI();
 	auto request = CreateSignedRequest(method, uri, headers, body);
 
-	LogAWSRequest(context, request, method);
 	auto httpClient = Aws::Http::CreateHttpClient(clientConfig);
-	auto response = httpClient->MakeRequest(request);
-	auto resCode = response->GetResponseCode();
-
-	DUCKDB_LOG(context, IcebergLogType,
-	           "%s %s (response %d) (signed with key_id '%s' for service '%s', in region '%s')",
-	           Aws::Http::HttpMethodMapper::GetNameForHttpMethod(method), uri.GetURIString(), resCode, key_id,
-	           service.c_str(), region.c_str());
+	auto aws_response = httpClient->MakeRequest(request);
+	auto resCode = aws_response->GetResponseCode();
 
 	auto result = make_uniq<HTTPResponse>(resCode == Aws::Http::HttpResponseCode::REQUEST_NOT_MADE
 	                                          ? HTTPStatusCode::INVALID
 	                                          : HTTPStatusCode(static_cast<idx_t>(resCode)));
 
 	result->url = uri.GetURIString();
-	if (resCode == Aws::Http::HttpResponseCode::REQUEST_NOT_MADE) {
-		D_ASSERT(response->HasClientError());
-		result->reason = response->GetClientErrorMessage();
-		throw HTTPException(*result, result->reason);
+	for (auto &header : aws_response->GetHeaders()) {
+		result->headers[header.first] = header.second;
 	}
 	Aws::StringStream resBody;
-	resBody << response->GetResponseBody().rdbuf();
+	resBody << aws_response->GetResponseBody().rdbuf();
 	result->body = resBody.str();
-
 	if (static_cast<uint16_t>(result->status) > 400) {
 		result->success = false;
+	}
+	bool throw_exception = false;
+	// check if there was an error, if so update the response with the error message
+	if (resCode == Aws::Http::HttpResponseCode::REQUEST_NOT_MADE) {
+		D_ASSERT(aws_response->HasClientError());
+		result->reason = aws_response->GetClientErrorMessage();
+		throw_exception = true;
+	}
+	// log the request
+	LogAWSHTTPRequest(context, request, *result, method);
+	if (throw_exception) {
+		throw HTTPException(*result, result->reason);
 	}
 	return result;
 }
