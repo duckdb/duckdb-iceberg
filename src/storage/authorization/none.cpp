@@ -15,7 +15,7 @@ unique_ptr<IRCAuthorization> NoneAuthorization::FromAttachOptions(IcebergAttachO
 unique_ptr<HTTPResponse> NoneAuthorization::Request(RequestType request_type, ClientContext &context,
                                                     const IRCEndpointBuilder &endpoint_builder, HTTPHeaders &headers,
                                                     const string &data) {
-	return APIUtils::Request(request_type, context, endpoint_builder, headers, data);
+	return APIUtils::Request(request_type, context, endpoint_builder, client, headers, data);
 }
 
 } // namespace duckdb

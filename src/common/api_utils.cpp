@@ -29,8 +29,8 @@ const string &APIUtils::GetCURLCertPath() {
 }
 
 unique_ptr<HTTPResponse> APIUtils::Request(RequestType request_type, ClientContext &context,
-                                           const IRCEndpointBuilder &endpoint_builder, HTTPHeaders &headers,
-                                           const string &data) {
+                                           const IRCEndpointBuilder &endpoint_builder, unique_ptr<HTTPClient> &client,
+                                           HTTPHeaders &headers, const string &data) {
 	// load httpfs since iceberg requests do not go through the file system api
 	if (!context.db.get()) {
 		throw InvalidConfigurationException("Context does not have database instance when loading Httpfs in Iceberg");
@@ -47,25 +47,29 @@ unique_ptr<HTTPResponse> APIUtils::Request(RequestType request_type, ClientConte
 	unique_ptr<HTTPParams> params;
 	params = http_util.InitializeParameters(context, request_url);
 
+	if (client) {
+		client->Initialize(*params);
+	}
+
 	switch (request_type) {
 	case RequestType::GET_REQUEST: {
 		GetRequestInfo get_request(request_url, headers, *params, nullptr, nullptr);
-		return http_util.Request(get_request);
+		return http_util.Request(get_request, client);
 	}
 	case RequestType::DELETE_REQUEST: {
 		DeleteRequestInfo delete_request(request_url, headers, *params);
-		return http_util.Request(delete_request);
+		return http_util.Request(delete_request, client);
 	}
 	case RequestType::POST_REQUEST: {
 		PostRequestInfo post_request(request_url, headers, *params, reinterpret_cast<const_data_ptr_t>(data.data()),
 		                             data.size());
-		auto response = http_util.Request(post_request);
+		auto response = http_util.Request(post_request, client);
 		response->body = post_request.buffer_out;
 		return response;
 	}
 	case RequestType::HEAD_REQUEST: {
 		HeadRequestInfo head_request(request_url, headers, *params);
-		return http_util.Request(head_request);
+		return http_util.Request(head_request, client);
 	}
 	default:
 		throw NotImplementedException("Cannot make request of type %s", EnumUtil::ToString(request_type));

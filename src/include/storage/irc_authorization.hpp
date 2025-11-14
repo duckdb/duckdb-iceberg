@@ -64,6 +64,7 @@ public:
 
 public:
 	IRCAuthorizationType type;
+	unique_ptr<HTTPClient> client;
 };
 
 } // namespace duckdb
