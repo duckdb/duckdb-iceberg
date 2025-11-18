@@ -1,4 +1,4 @@
-# name: test/sql/local/iceberg_scans/iceberg_metadata.test
+# name: test/sql/local/iceberg_scans/iceberg_column_stats.test
 # description: test iceberg metadata function
 # group: [iceberg_scans]
 

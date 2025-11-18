@@ -45,7 +45,8 @@ public:
 	};
 
 	static unique_ptr<GlobalTableFunctionState> Init(ClientContext &context, TableFunctionInitInput &input) {
-		return make_uniq<IcebergColumnStatsGlobalTableFunctionState>(input.bind_data->Cast<IcebergColumnStatsBindData>());
+		return make_uniq<IcebergColumnStatsGlobalTableFunctionState>(
+		    input.bind_data->Cast<IcebergColumnStatsBindData>());
 	}
 
 	idx_t current_manifest_idx = 0;
@@ -54,7 +55,7 @@ public:
 };
 
 static unique_ptr<FunctionData> IcebergColumnStatsBind(ClientContext &context, TableFunctionBindInput &input,
-                                                    vector<LogicalType> &return_types, vector<string> &names) {
+                                                       vector<LogicalType> &return_types, vector<string> &names) {
 	// return a TableRef that contains the scans for the
 	auto ret = make_uniq<IcebergColumnStatsBindData>();
 
@@ -114,38 +115,38 @@ static unique_ptr<FunctionData> IcebergColumnStatsBind(ClientContext &context, T
 		IcebergTableSchema::PopulateSourceIdMap(ret->source_to_column_id, schema, nullptr);
 	}
 
-    names.emplace_back("status");
-    return_types.emplace_back(LogicalType::VARCHAR);
+	names.emplace_back("status");
+	return_types.emplace_back(LogicalType::VARCHAR);
 
-    names.emplace_back("content");
-    return_types.emplace_back(LogicalType::VARCHAR);
+	names.emplace_back("content");
+	return_types.emplace_back(LogicalType::VARCHAR);
 
-    names.emplace_back("file_path");
-    return_types.emplace_back(LogicalType::VARCHAR);
+	names.emplace_back("file_path");
+	return_types.emplace_back(LogicalType::VARCHAR);
 
-    names.emplace_back("column_name");
-    return_types.emplace_back(LogicalType::VARCHAR);
+	names.emplace_back("column_name");
+	return_types.emplace_back(LogicalType::VARCHAR);
 
-    names.emplace_back("column_type");
-    return_types.emplace_back(LogicalType::VARCHAR);
+	names.emplace_back("column_type");
+	return_types.emplace_back(LogicalType::VARCHAR);
 
-    names.emplace_back("lower_bound");
-    return_types.emplace_back(LogicalType::VARCHAR);
+	names.emplace_back("lower_bound");
+	return_types.emplace_back(LogicalType::VARCHAR);
 
-    names.emplace_back("upper_bound");
-    return_types.emplace_back(LogicalType::VARCHAR);
+	names.emplace_back("upper_bound");
+	return_types.emplace_back(LogicalType::VARCHAR);
 
-    names.emplace_back("column_size");
-    return_types.emplace_back(LogicalType::BIGINT);
+	names.emplace_back("column_size");
+	return_types.emplace_back(LogicalType::BIGINT);
 
-    names.emplace_back("value_count");
-    return_types.emplace_back(LogicalType::BIGINT);
+	names.emplace_back("value_count");
+	return_types.emplace_back(LogicalType::BIGINT);
 
-    names.emplace_back("null_value_count");
-    return_types.emplace_back(LogicalType::BIGINT);
+	names.emplace_back("null_value_count");
+	return_types.emplace_back(LogicalType::BIGINT);
 
-    names.emplace_back("nan_value_count");
-    return_types.emplace_back(LogicalType::BIGINT);
+	names.emplace_back("nan_value_count");
+	return_types.emplace_back(LogicalType::BIGINT);
 
 	return std::move(ret);
 }
@@ -181,9 +182,11 @@ static void IcebergColumnStatsFunction(ClientContext &context, TableFunctionInpu
 				}
 				idx_t col = 0;
 				//! status
-				AddString(output.data[col++], out, string_t(IcebergManifestEntry::StatusTypeToString(data_file.status)));
+				AddString(output.data[col++], out,
+				          string_t(IcebergManifestEntry::StatusTypeToString(data_file.status)));
 				//! content
-				AddString(output.data[col++], out, string_t(IcebergManifestEntry::ContentTypeToString(data_file.content)));
+				AddString(output.data[col++], out,
+				          string_t(IcebergManifestEntry::ContentTypeToString(data_file.content)));
 				//! file_path
 				AddString(output.data[col++], out, string_t(data_file.file_path));
 
@@ -224,7 +227,8 @@ static void IcebergColumnStatsFunction(ClientContext &context, TableFunctionInpu
 					nan_value_count = Value::BIGINT(nan_value_count_it->second);
 				}
 
-				auto stats = IcebergPredicateStats::DeserializeBounds(lower_bound, upper_bound, column.name, column.type);
+				auto stats =
+				    IcebergPredicateStats::DeserializeBounds(lower_bound, upper_bound, column.name, column.type);
 
 				//! column_name
 				AddString(output.data[col++], out, string_t(column.name));
@@ -255,12 +259,8 @@ static void IcebergColumnStatsFunction(ClientContext &context, TableFunctionInpu
 
 TableFunctionSet IcebergFunctions::GetIcebergColumnStatsFunction() {
 	TableFunctionSet function_set("iceberg_column_stats");
-	TableFunction fun(
-		{LogicalType::VARCHAR},
-		IcebergColumnStatsFunction,
-		IcebergColumnStatsBind,
-		IcebergColumnStatsGlobalTableFunctionState::Init
-	);
+	TableFunction fun({LogicalType::VARCHAR}, IcebergColumnStatsFunction, IcebergColumnStatsBind,
+	                  IcebergColumnStatsGlobalTableFunctionState::Init);
 
 	fun.named_parameters["allow_moved_paths"] = LogicalType::BOOLEAN;
 	fun.named_parameters["metadata_compression_codec"] = LogicalType::VARCHAR;
