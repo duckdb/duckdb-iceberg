@@ -1,7 +1,5 @@
 #include "iceberg_avro_multi_file_reader.hpp"
-
 #include "duckdb/common/exception.hpp"
-#include "duckdb/parallel/thread_context.hpp"
 
 namespace duckdb {
 

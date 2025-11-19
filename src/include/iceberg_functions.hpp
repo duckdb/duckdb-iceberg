@@ -19,10 +19,11 @@ class IcebergFunctions {
 public:
 	static vector<TableFunctionSet> GetTableFunctions(ExtensionLoader &loader);
 	static vector<ScalarFunction> GetScalarFunctions();
+	static TableFunctionSet GetIcebergDeletesScanFunction(ClientContext &context);
 
 private:
 	static TableFunctionSet GetIcebergSnapshotsFunction();
-	static TableFunctionSet GetIcebergScanFunction(ExtensionLoader &instance);
+	static TableFunctionSet GetIcebergScanFunction(ExtensionLoader &loader);
 	static TableFunctionSet GetIcebergMetadataFunction();
 	static TableFunctionSet GetIcebergToDuckLakeFunction();
 	static TableFunctionSet GetIcebergTablePropertiesFunctions();
