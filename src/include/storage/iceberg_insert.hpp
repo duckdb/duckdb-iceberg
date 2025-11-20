@@ -37,6 +37,43 @@ public:
 	atomic<idx_t> insert_count;
 };
 
+struct IcebergColumnStats {
+	explicit IcebergColumnStats(LogicalType type_p) : type(std::move(type_p)) {
+		// if (DuckLakeTypes::IsGeoType(type)) {
+		// 	extra_stats = make_uniq<DuckLakeColumnGeoStats>();
+		// }
+	}
+
+	// Copy constructor
+	IcebergColumnStats(const IcebergColumnStats &other);
+	IcebergColumnStats &operator=(const IcebergColumnStats &other);
+	IcebergColumnStats(IcebergColumnStats &&other) noexcept = default;
+	IcebergColumnStats &operator=(IcebergColumnStats &&other) noexcept = default;
+
+	LogicalType type;
+	string min;
+	string max;
+	idx_t null_count = 0;
+	idx_t column_size_bytes = 0;
+	bool contains_nan = false;
+	bool has_null_count = false;
+	bool has_min = false;
+	bool has_max = false;
+	bool any_valid = true;
+	bool has_contains_nan = false;
+
+	// unique_ptr<DuckLakeColumnExtraStats> extra_stats;
+
+public:
+	unique_ptr<BaseStatistics> ToStats() const;
+	void MergeStats(const IcebergColumnStats &new_stats);
+	IcebergColumnStats Copy() const;
+
+private:
+	unique_ptr<BaseStatistics> CreateNumericStats() const;
+	unique_ptr<BaseStatistics> CreateStringStats() const;
+};
+
 class IcebergInsert : public PhysicalOperator {
 public:
 	//! INSERT INTO
@@ -78,6 +115,9 @@ public:
 
 	static PhysicalOperator &PlanInsert(ClientContext &context, PhysicalPlanGenerator &planner, ICTableEntry &table);
 	static vector<IcebergManifestEntry> GetInsertManifestEntries(IcebergInsertGlobalState &global_state);
+	static IcebergColumnStats ParseColumnStatsNew(const LogicalType &type, const vector<Value> &col_stats);
+	static void AddWrittenFiles(IcebergInsertGlobalState &global_state, DataChunk &chunk,
+	                            optional_ptr<TableCatalogEntry> table);
 
 	bool IsSink() const override {
 		return true;
