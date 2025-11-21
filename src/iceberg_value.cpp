@@ -244,4 +244,9 @@ DeserializeResult IcebergValue::DeserializeValue(const string_t &blob, const Log
 	return DeserializeError(blob, type);
 }
 
+SerializeStats IcebergValue::SerializeValue(string &value, LogicalType &column_type) {
+	string error = "serialization error";
+	return SerializeStats(error);
+}
+
 } // namespace duckdb

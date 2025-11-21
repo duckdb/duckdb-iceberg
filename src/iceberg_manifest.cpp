@@ -3,6 +3,7 @@
 
 #include "duckdb/storage/caching_file_system.hpp"
 #include "catalog_utils.hpp"
+#include "iceberg_value.hpp"
 #include "storage/iceberg_table_information.hpp"
 
 namespace duckdb {
@@ -42,6 +43,9 @@ Value IcebergManifestEntry::ToDataFileStruct(const LogicalType &type) const {
 	vector<Value> lower_bounds_values;
 	// lower bounds: map<126: int, 127: binary> - 125
 	for (auto &child : lower_bounds) {
+		auto tmp = LogicalType(LogicalTypeId::INTEGER);
+		auto tmp2 = child.second.ToString();
+		auto serialized_lower_bound = IcebergValue::SerializeValue(tmp2, tmp);
 		lower_bounds_values.push_back(Value::STRUCT({{"key", child.first}, {"value", child.second}}));
 	}
 	children.push_back(Value::MAP(LogicalType::STRUCT(bounds_types), lower_bounds_values));

@@ -19,11 +19,11 @@ public:
 		return !error.empty();
 	}
 	const string GetError() const {
-		D_ASSERT(!error.empty());
+		D_ASSERT(HasError());
 		return error;
 	}
 	const Value &GetValue() const {
-		D_ASSERT(error.empty());
+		D_ASSERT(!HasError());
 		return value;
 	}
 
@@ -32,12 +32,40 @@ public:
 	string error;
 };
 
+struct SerializeStats {
+public:
+	SerializeStats(string &input, LogicalType &column_type) : input(input), original_type(column_type) {
+	}
+	SerializeStats(const string &error) : error(error) {
+	}
+
+public:
+	bool HasError() const {
+		return !error.empty();
+	}
+	const string GetError() const {
+		D_ASSERT(HasError());
+		return error;
+	}
+	const Value &GetValue() const {
+		D_ASSERT(!HasError());
+		return value;
+	}
+
+public:
+	string input;
+	string error;
+	LogicalType original_type;
+	Value value;
+};
+
 struct IcebergValue {
 public:
 	IcebergValue() = delete;
 
 public:
 	static DeserializeResult DeserializeValue(const string_t &blob, const LogicalType &target);
+	static SerializeStats SerializeValue(string &value, LogicalType &column_type);
 };
 
 } // namespace duckdb
