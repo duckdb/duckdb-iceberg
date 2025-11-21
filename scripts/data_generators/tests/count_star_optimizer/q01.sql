@@ -1,0 +1,1 @@
+INSERT INTO default.count_star_optimizer VALUES  (1,'aaa'), (2,'bbb');
