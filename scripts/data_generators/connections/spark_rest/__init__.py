@@ -47,6 +47,7 @@ class IcebergSparkRest(IcebergConnection):
 
         spark = (
             SparkSession.builder.appName("DuckDB REST Integration test")
+            .master("local[1]")
             .config(
                 "spark.sql.extensions",
                 "org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions",

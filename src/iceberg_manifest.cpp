@@ -45,15 +45,24 @@ Value IcebergManifestEntry::ToDataFileStruct(const LogicalType &type) const {
 	for (auto &child : lower_bounds) {
 		auto tmp = LogicalType(LogicalTypeId::INTEGER);
 		auto tmp2 = child.second.ToString();
-		auto serialized_lower_bound = IcebergValue::SerializeValue(tmp2, tmp);
-		lower_bounds_values.push_back(Value::STRUCT({{"key", child.first}, {"value", child.second}}));
+		auto serialized_lower_bound = IcebergValue::SerializeValue(child.second, tmp);
+		if (serialized_lower_bound.HasError()) {
+			throw serialized_lower_bound.GetError();
+		}
+		lower_bounds_values.push_back(Value::STRUCT({{"key", child.first}, {"value", serialized_lower_bound.value}}));
 	}
 	children.push_back(Value::MAP(LogicalType::STRUCT(bounds_types), lower_bounds_values));
 
 	vector<Value> upper_bounds_values;
 	// upper bounds: map<129: int, 130: binary> - 128
 	for (auto &child : upper_bounds) {
-		upper_bounds_values.push_back(Value::STRUCT({{"key", child.first}, {"value", child.second}}));
+		auto tmp = LogicalType(LogicalTypeId::INTEGER);
+		;
+		auto serialized_upper_bound = IcebergValue::SerializeValue(child.second, tmp);
+		if (serialized_upper_bound.HasError()) {
+			throw serialized_upper_bound.GetError();
+		}
+		upper_bounds_values.push_back(Value::STRUCT({{"key", child.first}, {"value", serialized_upper_bound.value}}));
 	}
 	children.push_back(Value::MAP(LogicalType::STRUCT(bounds_types), upper_bounds_values));
 

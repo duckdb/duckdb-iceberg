@@ -34,7 +34,7 @@ public:
 
 struct SerializeStats {
 public:
-	SerializeStats(string &input, LogicalType &column_type) : input(input), original_type(column_type) {
+	SerializeStats(Value &input_value, LogicalType &column_type) : input(input_value), original_type(column_type) {
 	}
 	SerializeStats(const string &error) : error(error) {
 	}
@@ -53,7 +53,7 @@ public:
 	}
 
 public:
-	string input;
+	Value input;
 	string error;
 	LogicalType original_type;
 	Value value;
@@ -65,7 +65,7 @@ public:
 
 public:
 	static DeserializeResult DeserializeValue(const string_t &blob, const LogicalType &target);
-	static SerializeStats SerializeValue(string &value, LogicalType &column_type);
+	static SerializeStats SerializeValue(Value input_value, LogicalType &column_type);
 };
 
 } // namespace duckdb

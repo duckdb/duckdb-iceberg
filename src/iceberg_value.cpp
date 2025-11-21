@@ -244,8 +244,41 @@ DeserializeResult IcebergValue::DeserializeValue(const string_t &blob, const Log
 	return DeserializeError(blob, type);
 }
 
-SerializeStats IcebergValue::SerializeValue(string &value, LogicalType &column_type) {
+SerializeStats IcebergValue::SerializeValue(Value input_value, LogicalType &column_type) {
 	string error = "serialization error";
+	switch (column_type.id()) {
+	case LogicalTypeId::INTEGER: {
+		auto break_here = 0;
+		// get const data ptr for the string value
+		int32_t serialized_val = input_value.GetValue<int32_t>();
+		// copy it into dest type to get correct endianness
+		// int32_t serialized_val = 0;
+		// std::memcpy(&serialized_val, &val, sizeof(int32_t));
+		// get const data_ptr of the int32
+		auto serialized_const_data_ptr = const_data_ptr_cast<int32_t>(&serialized_val);
+		// create blob value of int32
+		auto ret_val = Value::BLOB(serialized_const_data_ptr, sizeof(int32_t));
+		// FIXME:
+		string tmp = "balh";
+		auto ret = SerializeStats(input_value, column_type);
+		ret.value = ret_val;
+		return ret;
+	}
+	case LogicalTypeId::BIGINT: {
+		// get const data ptr for the string value
+		int64_t val = input_value.GetValue<int64_t>();
+		// get const data_ptr of the int32
+		auto serialized_const_data_ptr = const_data_ptr_cast<int64_t>(&val);
+		// create blob value of int32
+		auto ret_val = Value::BLOB(serialized_const_data_ptr, sizeof(int64_t));
+		// FIXME:
+		auto ret = SerializeStats(input_value, column_type);
+		ret.value = ret_val;
+		return ret;
+	}
+	default:
+		break;
+	}
 	return SerializeStats(error);
 }
 

@@ -1,0 +1,1 @@
+INSERT INTO default.spark_written_upper_lower_bounds values (1, 10000000), (10000005, 1);

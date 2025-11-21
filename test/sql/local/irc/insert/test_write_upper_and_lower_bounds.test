@@ -1,0 +1,63 @@
+# name: test/sql/local/irc/insert/test_write_upper_and_lower_bounds.test
+# group: [insert]
+
+require-env ICEBERG_SERVER_AVAILABLE
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+set enable_logging=true
+
+statement ok
+set logging_level='debug'
+
+statement ok
+CREATE SECRET (
+    TYPE S3,
+    KEY_ID 'admin',
+    SECRET 'password',
+    ENDPOINT '127.0.0.1:9000',
+    URL_STYLE 'path',
+    USE_SSL 0
+);
+
+
+statement ok
+ATTACH '' AS my_datalake (
+    TYPE ICEBERG,
+    CLIENT_ID 'admin',
+    CLIENT_SECRET 'password',
+    ENDPOINT 'http://127.0.0.1:8181'
+);
+
+statement ok
+drop table if exists my_datalake.default.lower_upper_bounds_test;
+
+statement ok
+create table my_datalake.default.lower_upper_bounds_test (a int, b int);
+
+statement ok
+insert into my_datalake.default.lower_upper_bounds_test values (1, 10000000), (10000005, 1);
+
+statement ok
+set variable manifest_path_duckdb = (select manifest_path from iceberg_metadata(my_datalake.default.lower_upper_bounds_test) limit 1);
+
+statement ok
+set variable manifest_path_spark = (select manifest_path from iceberg_metadata(my_datalake.default.spark_written_upper_lower_bounds) order by manifest_sequence_number desc limit 1);
+
+mode output_result
+
+query II nosort duckdb_vals
+select unnest(map_keys(lower_bounds)) lower_keys, unnest(map_values(lower_bounds)) lower_vals, unnest(map_keys(upper_bounds)) upper_keys, unnest(map_values(upper_bounds)) upper_vals from (select unnest(data_file) from read_avro(getvariable('manifest_path_duckdb'))) order by all;
+
+query II nosort duckdb_vals
+select unnest(map_keys(lower_bounds)) lower_keys, unnest(map_values(lower_bounds)) lower_vals, unnest(map_keys(upper_bounds)) upper_keys, unnest(map_values(upper_bounds)) upper_vals from (select unnest(data_file) from read_avro(getvariable('manifest_path_spark'))) order by all;
