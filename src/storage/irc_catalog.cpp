@@ -151,7 +151,8 @@ DatabaseSize IRCatalog::GetDatabaseSize(ClientContext &context) {
 //===--------------------------------------------------------------------===//
 
 IRCEndpointBuilder IRCatalog::GetBaseUrl() const {
-	auto base_url = IRCEndpointBuilder();
+	auto encode_url_components = auth_handler->type != IRCAuthorizationType::SIGV4;
+	auto base_url = IRCEndpointBuilder(encode_url_components);
 	base_url.SetHost(uri);
 	base_url.AddPathComponent(version);
 	return base_url;

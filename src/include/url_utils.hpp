@@ -19,6 +19,7 @@ string AddHttpHostIfMissing(const string &url);
 
 class IRCEndpointBuilder {
 public:
+	IRCEndpointBuilder(bool encode_components = false);
 	void AddPathComponent(const string &component);
 
 	void SetHost(const string &host);
@@ -29,12 +30,13 @@ public:
 	const unordered_map<string, string> GetParams() const;
 
 	string GetURL() const;
-	static IRCEndpointBuilder FromURL(const string &url);
+	static IRCEndpointBuilder FromURL(const string &url, bool encode_components);
 
 	//! path components when querying. Like namespaces/tables etc.
 	vector<string> path_components;
 
 private:
+	bool encode_components;
 	string host;
 	unordered_map<string, string> params;
 };
