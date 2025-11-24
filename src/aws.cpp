@@ -1,26 +1,19 @@
 #include "iceberg_logging.hpp"
-
+#include "mbedtls_wrapper.hpp"
 #include "aws.hpp"
+#include "hash_utils.hpp"
 #include "duckdb/common/http_util.hpp"
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/common/exception/http_exception.hpp"
+#include "duckdb/main/database.hpp"
+#include "duckdb/function/scalar/strftime_format.hpp"
+#include "duckdb/main/client_data.hpp"
 #include "include/storage/irc_authorization.hpp"
 
-#ifdef EMSCRIPTEN
-#else
 #include <aws/core/auth/AWSCredentialsProviderChain.h>
 #include <aws/core/http/HttpClient.h>
-#endif
 
 namespace duckdb {
-
-#ifdef EMSCRIPTEN
-
-unique_ptr<HTTPResponse> AWSInput::GetRequest(ClientContext &context) {
-	throw NotImplementedException("GET on WASM not implemented yet");
-}
-
-#else
 
 namespace {
 
@@ -124,10 +117,21 @@ Aws::Http::URI AWSInput::BuildURI() {
 	return uri;
 }
 
+static string GetPayloadHash(const char *buffer, idx_t buffer_len) {
+	if (buffer_len > 0) {
+		hash_bytes payload_hash_bytes;
+		hash_str payload_hash_str;
+		sha256(buffer, buffer_len, payload_hash_bytes);
+		hex256(payload_hash_bytes, payload_hash_str);
+		return string((char *)payload_hash_str, sizeof(payload_hash_str));
+	} else {
+		return "";
+	}
+}
+
 std::shared_ptr<Aws::Http::HttpRequest> AWSInput::CreateSignedRequest(Aws::Http::HttpMethod method,
                                                                       const Aws::Http::URI &uri, HTTPHeaders &headers,
                                                                       const string &body) {
-
 	auto request = Aws::Http::CreateHttpRequest(uri, method, Aws::Utils::Stream::DefaultResponseStreamFactoryMethod);
 	request->SetUserAgent(user_agent);
 
@@ -151,9 +155,8 @@ std::shared_ptr<Aws::Http::HttpRequest> AWSInput::CreateSignedRequest(Aws::Http:
 	return request;
 }
 
-unique_ptr<HTTPResponse> AWSInput::ExecuteRequest(ClientContext &context, Aws::Http::HttpMethod method,
-                                                  HTTPHeaders &headers, const string &body) {
-
+unique_ptr<HTTPResponse> AWSInput::ExecuteRequestLegacy(ClientContext &context, Aws::Http::HttpMethod method,
+                                                        HTTPHeaders &headers, const string &body) {
 	InitAWSAPI();
 	auto clientConfig = BuildClientConfig();
 	auto uri = BuildURI();
@@ -191,6 +194,146 @@ unique_ptr<HTTPResponse> AWSInput::ExecuteRequest(ClientContext &context, Aws::H
 	return result;
 }
 
+unique_ptr<HTTPResponse> AWSInput::ExecuteRequest(ClientContext &context, Aws::Http::HttpMethod method,
+                                                  HTTPHeaders &headers, const string &body) {
+	bool use_httputils = true;
+	{
+		Value result;
+		(void)context.TryGetCurrentSetting("iceberg_via_aws_sdk_for_catalog_interactions", result);
+		if (!result.IsNull() && result.GetValue<bool>()) {
+			use_httputils = false;
+		}
+	}
+	if (!use_httputils) {
+		// Query Iceberg REST catalog via AWS's SDK
+		return ExecuteRequestLegacy(context, method, headers, body);
+	}
+
+	auto uri = BuildURI();
+	auto &db = DatabaseInstance::GetDatabase(context);
+
+	HTTPHeaders res(db);
+
+	const string host = uri.GetAuthority();
+	res["host"] = host;
+	// If access key is not set, we don't set the headers at all to allow accessing public files through s3 urls
+
+	string payload_hash = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"; // Empty payload hash
+
+	if (!body.empty()) {
+		payload_hash = GetPayloadHash(body.c_str(), body.size());
+	}
+
+	// key_id, secret, session_token
+	// we can pass date/time but this is mostly useful in testing. normally we just get the current datetime
+	// here.
+	auto timestamp = Timestamp::GetCurrentTimestamp();
+	string date_now = StrfTimeFormat::Format(timestamp, "%Y%m%d");
+	string datetime_now = StrfTimeFormat::Format(timestamp, "%Y%m%dT%H%M%SZ");
+
+	res["x-amz-date"] = datetime_now;
+	res["x-amz-content-sha256"] = payload_hash;
+	if (session_token.length() > 0) {
+		res["x-amz-security-token"] = session_token;
+	}
+	string content_type;
+	if (headers.HasHeader("Content-Type")) {
+		content_type = headers.GetHeaderValue("Content-Type");
+	}
+	if (!content_type.empty()) {
+		res["Content-Type"] = content_type;
+	}
+	string signed_headers = "";
+	hash_bytes canonical_request_hash;
+	hash_str canonical_request_hash_str;
+	if (content_type.length() > 0) {
+		signed_headers += "content-type;";
+		res["Content-Type"] = content_type;
+	}
+	signed_headers += "host;x-amz-content-sha256;x-amz-date";
+	if (session_token.length() > 0) {
+		signed_headers += ";x-amz-security-token";
+	}
+
+	string url_encoded_path = uri.GetURLEncodedPath();
+
+	{
+		// it's unclear to be why we need to transform %2F into %252F, see
+		// https://en.wikipedia.org/wiki/Percent-encoding#Percent_character
+		url_encoded_path = StringUtil::Replace(url_encoded_path, "%2F", "%252F");
+	}
+
+	auto canonical_request =
+	    string(Aws::Http::HttpMethodMapper::GetNameForHttpMethod(method)) + "\n" + url_encoded_path + "\n";
+	if (uri.GetQueryString().size()) {
+		canonical_request += uri.GetQueryString().substr(1);
+	}
+
+	if (content_type.length() > 0) {
+		canonical_request += "\ncontent-type:" + content_type;
+	}
+	canonical_request += "\nhost:" + host + "\nx-amz-content-sha256:" + payload_hash + "\nx-amz-date:" + datetime_now;
+	if (session_token.length() > 0) {
+		canonical_request += "\nx-amz-security-token:" + session_token;
+	}
+	canonical_request += "\n\n" + signed_headers + "\n" + payload_hash;
+	sha256(canonical_request.c_str(), canonical_request.length(), canonical_request_hash);
+
+	hex256(canonical_request_hash, canonical_request_hash_str);
+	auto string_to_sign = "AWS4-HMAC-SHA256\n" + datetime_now + "\n" + date_now + "/" + region + "/" + service +
+	                      "/aws4_request\n" + string((char *)canonical_request_hash_str, sizeof(hash_str));
+
+	// TODO: DUCKDB_LOGS (canonical_request + string_to_sing)
+
+	// compute signature
+	hash_bytes k_date, k_region, k_service, signing_key, signature;
+	hash_str signature_str;
+	auto sign_key = "AWS4" + secret;
+	hmac256(date_now, sign_key.c_str(), sign_key.length(), k_date);
+	hmac256(region, k_date, k_region);
+	hmac256(service, k_region, k_service);
+	hmac256("aws4_request", k_service, signing_key);
+	hmac256(string_to_sign, signing_key, signature);
+	hex256(signature, signature_str);
+
+	res["Authorization"] = "AWS4-HMAC-SHA256 Credential=" + key_id + "/" + date_now + "/" + region + "/" + service +
+	                       "/aws4_request, SignedHeaders=" + signed_headers +
+	                       ", Signature=" + string((char *)signature_str, sizeof(hash_str));
+
+	auto &http_util = HTTPUtil::Get(db);
+	unique_ptr<HTTPParams> params;
+
+	string request_url = uri.GetURIString();
+
+	params = http_util.InitializeParameters(context, request_url);
+
+	switch (method) {
+	case Aws::Http::HttpMethod::HTTP_HEAD: {
+		HeadRequestInfo head_request(request_url, res, *params);
+		return http_util.Request(head_request);
+	}
+	case Aws::Http::HttpMethod::HTTP_DELETE: {
+		DeleteRequestInfo delete_request(request_url, res, *params);
+		return http_util.Request(delete_request);
+	}
+	case Aws::Http::HttpMethod::HTTP_GET: {
+		GetRequestInfo get_request(request_url, res, *params, nullptr, nullptr);
+		return http_util.Request(get_request);
+	}
+	case Aws::Http::HttpMethod::HTTP_POST: {
+		PostRequestInfo post_request(request_url, res, *params, reinterpret_cast<const_data_ptr_t>(body.c_str()),
+		                             body.size());
+		auto x = http_util.Request(post_request);
+		if (x) {
+			x->body = post_request.buffer_out;
+		}
+		return std::move(x);
+	}
+	default:
+		throw NotImplementedException("Unexpected HTTP Method requested");
+	}
+}
+
 unique_ptr<HTTPResponse> AWSInput::Request(RequestType request_type, ClientContext &context, HTTPHeaders &headers,
                                            const string &data) {
 	switch (request_type) {
@@ -206,7 +349,5 @@ unique_ptr<HTTPResponse> AWSInput::Request(RequestType request_type, ClientConte
 		throw NotImplementedException("Cannot make request of type %s", EnumUtil::ToString(request_type));
 	}
 }
-
-#endif
 
 } // namespace duckdb

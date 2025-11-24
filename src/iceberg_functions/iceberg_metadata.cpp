@@ -115,6 +115,8 @@ static unique_ptr<FunctionData> IcebergMetaDataBind(ClientContext &context, Tabl
 	auto manifest_entry_names = IcebergManifestEntry::Names();
 	names.insert(names.end(), manifest_entry_names.begin(), manifest_entry_names.end());
 
+	D_ASSERT(manifest_types.size() == manifest_names.size());
+
 	return std::move(ret);
 }
 
