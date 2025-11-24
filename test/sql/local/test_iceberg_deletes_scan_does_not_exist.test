@@ -1,0 +1,17 @@
+# name: test/sql/local/test_iceberg_deletes_scan_does_not_exist.test
+# description: test that write.data.path and write.metadata.path properties are properly parsed
+# group: [local]
+
+require avro
+
+require parquet
+
+require iceberg
+
+# iceberg deletes scan is specific to iceberg_scan. It can utilize informaiton
+# from manifest files to skip performing a head request. It should not be available in the catalog
+statement error
+SELECT * FROM iceberg_deletes_scan('path/to/file.parquet');
+----
+<REGEX>:.*iceberg_deletes_scan.*does not exist.*
+
