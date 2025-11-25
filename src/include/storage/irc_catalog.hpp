@@ -96,7 +96,6 @@ public:
 	//! Whether or not this is an in-memory Iceberg database
 	bool InMemory() override;
 	string GetDBPath() override;
-	string GetURLEncodedPrefix();
 	static string GetOnlyMergeOnReadSupportedErrorMessage(const string &table_name, const string &property,
 	                                                      const string &property_value);
 

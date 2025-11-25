@@ -18,10 +18,6 @@ void IRCEndpointBuilder::AddPathComponent(const string &component) {
 	if (component.empty()) {
 		return;
 	}
-	if (encode_components) {
-		path_components.emplace_back(StringUtil::URLEncode(component));
-		return;
-	}
 	path_components.push_back(component);
 }
 
@@ -52,7 +48,11 @@ string IRCEndpointBuilder::GetURL() const {
 	//! {host}[/{version}][/{prefix}]/{path_component[0]}/{path_component[1]}
 	string ret = host;
 	for (auto &component : path_components) {
-		ret += "/" + component;
+		if (encode_components) {
+			ret += "/" + StringUtil::URLEncode(component);
+		} else {
+			ret += "/" + component;
+		}
 	}
 
 	// encode params
