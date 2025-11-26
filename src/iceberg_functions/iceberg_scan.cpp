@@ -74,6 +74,7 @@ TableFunctionSet IcebergFunctions::GetIcebergScanFunction(ExtensionLoader &loade
 		function.table_scan_progress = nullptr;
 		function.get_bind_info = nullptr;
 		function.get_virtual_columns = IcebergVirtualColumns;
+		function.get_partition_stats = IcebergMultiFileReader::IcebergGetPartitionStats;
 
 		// Schema param is just confusing here
 		function.named_parameters.erase("schema");
