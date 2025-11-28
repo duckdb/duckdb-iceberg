@@ -11,6 +11,8 @@ require iceberg
 
 require httpfs
 
+require icu
+
 # Do not ignore 'HTTP' error messages!
 set ignore_error_messages
 
@@ -19,6 +21,9 @@ set enable_logging=true
 
 statement ok
 set logging_level='debug'
+
+statement ok
+SET TimeZone = 'UTC';
 
 statement ok
 CREATE SECRET (
@@ -43,21 +48,60 @@ statement ok
 drop table if exists my_datalake.default.lower_upper_bounds_test;
 
 statement ok
-create table my_datalake.default.lower_upper_bounds_test (a int, b int);
+create table my_datalake.default.lower_upper_bounds_test (
+int_type int,
+long_type long,
+varchar_type varchar,
+bool_type bool,
+float_type float,
+double_type double,
+decimal_type_18_3 DECIMAL(18,3),
+decimal_type_1_12 DECIMAL(21,1),
+date_type DATE,
+timestamp_type TIMESTAMP,
+binary_type BINARY
+);
 
 statement ok
-insert into my_datalake.default.lower_upper_bounds_test values (1, 10000000), (10000005, 1);
+insert into my_datalake.default.lower_upper_bounds_test values
+(   -2147483648,
+    -9223372036854775808,
+    '',
+    false,
+    -3.4028235E38,
+    -1.7976931348623157E308,
+    -9999999999999.999,
+    0.0,
+    DATE '0001-01-01',
+    TIMESTAMP '0001-01-01 00:00:00',
+    ''::BLOB
+),
+(
+    2147483647,
+    9223372036854775807,
+    'ZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZ',
+    true,
+    3.4028235E38,
+    1.7976931348623157E308,
+    9999999999999.999,
+    9.9,
+    DATE '9999-12-31',
+    TIMESTAMP '9999-12-31 23:59:59.999999',
+    '\xFF\xFF\xFF\xFF\xFF\xFF\xFF\xFF'::BLOB
+);
 
 statement ok
-set variable manifest_path_duckdb = (select manifest_path from iceberg_metadata(my_datalake.default.lower_upper_bounds_test) limit 1);
+set variable manifest_path_duckdb = (select manifest_path from iceberg_metadata(my_datalake.default.lower_upper_bounds_test) order by manifest_sequence_number desc limit 1);
 
 statement ok
 set variable manifest_path_spark = (select manifest_path from iceberg_metadata(my_datalake.default.spark_written_upper_lower_bounds) order by manifest_sequence_number desc limit 1);
 
 mode output_result
 
-query II nosort duckdb_vals
-select unnest(map_keys(lower_bounds)) lower_keys, unnest(map_values(lower_bounds)) lower_vals, unnest(map_keys(upper_bounds)) upper_keys, unnest(map_values(upper_bounds)) upper_vals from (select unnest(data_file) from read_avro(getvariable('manifest_path_duckdb'))) order by all;
+# query II nosort duckdb_vals
+statement ok
+from (select unnest(map_keys(lower_bounds)) lower_keys, unnest(map_values(lower_bounds)) lower_vals, unnest(map_keys(upper_bounds)) upper_keys, unnest(map_values(upper_bounds)) upper_vals from (select unnest(data_file) from read_avro(getvariable('manifest_path_duckdb')))) order by all;
 
-query II nosort duckdb_vals
-select unnest(map_keys(lower_bounds)) lower_keys, unnest(map_values(lower_bounds)) lower_vals, unnest(map_keys(upper_bounds)) upper_keys, unnest(map_values(upper_bounds)) upper_vals from (select unnest(data_file) from read_avro(getvariable('manifest_path_spark'))) order by all;
+# query II nosort duckdb_vals
+statement ok
+from (select unnest(map_keys(lower_bounds)) lower_keys, unnest(map_values(lower_bounds)) lower_vals, unnest(map_keys(upper_bounds)) upper_keys, unnest(map_values(upper_bounds)) upper_vals from (select unnest(data_file) from read_avro(getvariable('manifest_path_spark')))) order by all;

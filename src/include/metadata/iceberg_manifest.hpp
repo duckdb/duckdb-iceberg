@@ -11,6 +11,8 @@
 #include "duckdb/parallel/thread_context.hpp"
 #include "duckdb/common/insertion_order_preserving_map.hpp"
 
+#include "metadata/iceberg_table_schema.hpp"
+
 namespace duckdb {
 
 struct IcebergTableInformation;
@@ -50,7 +52,7 @@ public:
 	Value content_size_in_bytes;
 
 public:
-	Value ToDataFileStruct(const LogicalType &type) const;
+	Value ToDataFileStruct(const IcebergTableSchema &schema, const LogicalType &type) const;
 
 public:
 	static vector<LogicalType> Types() {

@@ -227,6 +227,7 @@ void IcebergInsert::AddWrittenFiles(IcebergInsertGlobalState &global_state, Data
 			if (column_info->required && stats.has_null_count && stats.null_count > 0) {
 				throw ConstraintException("NOT NULL constraint failed: %s.%s", table->name, normalized_col_name);
 			}
+			// go through stats and add upper and lower bounds
 			data_file.lower_bounds[column_info->id] = stats.min;
 			data_file.upper_bounds[column_info->id] = stats.max;
 			data_file.column_sizes[column_info->id] = stats.column_size_bytes;

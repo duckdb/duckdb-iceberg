@@ -52,6 +52,8 @@ class IcebergSparkRest(IcebergConnection):
                 "spark.sql.extensions",
                 "org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions",
             )
+            .config("spark.sql.parquet.datetimeRebaseModeInWrite", "CORRECTED")
+            .config("spark.sql.parquet.int96RebaseModeInWrite", "CORRECTED")
             .config("spark.sql.catalog.demo", "org.apache.iceberg.spark.SparkCatalog")
             .config("spark.sql.catalog.demo.type", "rest")
             .config("spark.sql.catalog.demo.uri", "http://127.0.0.1:8181")

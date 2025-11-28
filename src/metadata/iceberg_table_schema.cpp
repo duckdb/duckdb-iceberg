@@ -2,6 +2,7 @@
 
 #include "iceberg_metadata.hpp"
 #include "iceberg_utils.hpp"
+#include "duckdb/common/exception.hpp"
 #include "rest_catalog/objects/list.hpp"
 
 namespace duckdb {
@@ -133,6 +134,16 @@ void IcebergTableSchema::SchemaToJson(yyjson_mut_doc *doc, yyjson_mut_val *root_
 	D_ASSERT(schema.object_1.has_schema_id);
 	yyjson_mut_obj_add_uint(doc, root_object, "schema-id", schema.object_1.schema_id);
 	yyjson_mut_obj_add_arr(doc, root_object, "identifier-field-ids");
+}
+
+LogicalType IcebergTableSchema::GetColumnTypeFromFieldId(idx_t field_id) const {
+	for (auto &column : columns) {
+		if (column->id == field_id) {
+			return column->type;
+		}
+	}
+	throw InvalidInputException("GetColumnTypeFromFieldId:: field id %dd does not exist in schema with id %d", field_id,
+	                            schema_id);
 }
 
 } // namespace duckdb
