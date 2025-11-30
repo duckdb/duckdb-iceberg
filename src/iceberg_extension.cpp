@@ -79,7 +79,8 @@ static void LoadInternal(ExtensionLoader &loader) {
 	OAuth2Authorization::SetCatalogSecretParameters(secret_function);
 	loader.RegisterFunction(secret_function);
 
-	CreateSecretFunction azure_secret_function = {"iceberg", "credential_chain", AzureAuthorization::CreateCatalogSecretFunction};
+	CreateSecretFunction azure_secret_function = {"iceberg", "credential_chain",
+	                                              AzureAuthorization::CreateCatalogSecretFunction};
 	AzureAuthorization::SetCatalogSecretParameters(azure_secret_function);
 	loader.RegisterFunction(azure_secret_function);
 
