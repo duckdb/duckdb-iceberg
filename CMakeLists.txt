@@ -80,8 +80,22 @@ add_subdirectory(src/rest_catalog/objects)
 
 add_library(${EXTENSION_NAME} STATIC ${EXTENSION_SOURCES} ${ALL_OBJECT_FILES})
 
+# Azure SDK requires C++14 or later
+set_target_properties(${EXTENSION_NAME} PROPERTIES
+    CXX_STANDARD 14
+    CXX_STANDARD_REQUIRED YES
+    CXX_EXTENSIONS NO
+)
+
 set(PARAMETERS "-warnings")
 build_loadable_extension(${TARGET_NAME} ${PARAMETERS} ${EXTENSION_SOURCES} ${ALL_OBJECT_FILES})
+
+# Azure SDK requires C++14 or later
+set_target_properties(${TARGET_NAME}_loadable_extension PROPERTIES
+    CXX_STANDARD 14
+    CXX_STANDARD_REQUIRED YES
+    CXX_EXTENSIONS NO
+)
 
 find_package(CURL REQUIRED)
 find_package(AWSSDK REQUIRED COMPONENTS core sso sts)
