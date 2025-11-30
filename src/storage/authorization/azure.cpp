@@ -226,7 +226,7 @@ unique_ptr<HTTPResponse> AzureAuthorization::Request(RequestType request_type, C
 	if (!token.empty()) {
 		headers.Insert("Authorization", StringUtil::Format("Bearer %s", token));
 	}
-	return APIUtils::Request(request_type, context, endpoint_builder, headers, data);
+	return APIUtils::Request(request_type, context, endpoint_builder, this->client, headers, data);
 }
 
 void AzureAuthorization::SetCatalogSecretParameters(CreateSecretFunction &function) {
