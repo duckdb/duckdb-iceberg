@@ -1,0 +1,22 @@
+#
+# Windows-only build workflow for Azure support development
+#
+name: Windows Build
+on:
+  push:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.head_ref || '' }}-${{ github.base_ref || '' }}-${{ github.ref != 'refs/heads/main' || github.sha }}
+  cancel-in-progress: true
+
+jobs:
+  windows-build:
+    name: Build Windows extension
+    uses: duckdb/extension-ci-tools/.github/workflows/_extension_distribution.yml@v1.4.2
+    with:
+      extension_name: iceberg
+      duckdb_version: v1.4.2
+      ci_tools_version: v1.4.2
+      exclude_archs: 'linux_amd64;linux_amd64_gcc4;linux_arm64;osx_amd64;osx_arm64;windows_amd64_mingw;wasm_mvp;wasm_eh;wasm_threads'
+      extra_toolchains: 'python3'
