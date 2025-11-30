@@ -108,17 +108,17 @@ unique_ptr<AzureAuthorization> AzureAuthorization::FromAttachOptions(ClientConte
 			           iceberg_secret->secret->GetName());
 			input.endpoint = endpoint_from_secret.ToString();
 		}
-		
+
 		auto account_name_val = kv_iceberg_secret.TryGetValue("account_name");
 		if (!account_name_val.IsNull()) {
 			result->account_name = account_name_val.ToString();
 		}
-		
+
 		auto chain_val = kv_iceberg_secret.TryGetValue("chain");
 		if (!chain_val.IsNull()) {
 			result->chain = chain_val.ToString();
 		}
-		
+
 		auto token_val = kv_iceberg_secret.TryGetValue("token");
 		if (!token_val.IsNull()) {
 			result->token = token_val.ToString();
@@ -140,17 +140,17 @@ unique_ptr<AzureAuthorization> AzureAuthorization::FromAttachOptions(ClientConte
 		create_secret_input.options = std::move(create_secret_options);
 		auto new_secret = AzureAuthorization::CreateCatalogSecretFunction(context, create_secret_input);
 		auto &kv_iceberg_secret = dynamic_cast<KeyValueSecret &>(*new_secret);
-		
+
 		auto account_name_val = kv_iceberg_secret.TryGetValue("account_name");
 		if (!account_name_val.IsNull()) {
 			result->account_name = account_name_val.ToString();
 		}
-		
+
 		auto chain_val = kv_iceberg_secret.TryGetValue("chain");
 		if (!chain_val.IsNull()) {
 			result->chain = chain_val.ToString();
 		}
-		
+
 		auto token_val = kv_iceberg_secret.TryGetValue("token");
 		if (!token_val.IsNull()) {
 			result->token = token_val.ToString();
@@ -158,11 +158,9 @@ unique_ptr<AzureAuthorization> AzureAuthorization::FromAttachOptions(ClientConte
 	}
 
 	if (result->token.empty()) {
-		throw HTTPException(StringUtil::Format("Failed to retrieve Azure token from credential chain '%s'", 
+		throw HTTPException(StringUtil::Format("Failed to retrieve Azure token from credential chain '%s'",
 		                                       result->chain));
-	}
-
-	input.options = std::move(remaining_options);
+	}	input.options = std::move(remaining_options);
 	return result;
 }
 
