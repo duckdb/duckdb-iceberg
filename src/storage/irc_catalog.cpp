@@ -18,6 +18,7 @@
 #include "storage/irc_authorization.hpp"
 #include "storage/authorization/oauth2.hpp"
 #include "storage/authorization/sigv4.hpp"
+#include "storage/authorization/azure.hpp"
 #include "storage/authorization/none.hpp"
 
 using namespace duckdb_yyjson;
@@ -523,6 +524,10 @@ unique_ptr<Catalog> IRCatalog::Attach(optional_ptr<StorageExtensionInfo> storage
 	}
 	case IRCAuthorizationType::SIGV4: {
 		auth_handler = SIGV4Authorization::FromAttachOptions(attach_options);
+		break;
+	}
+	case IRCAuthorizationType::AZURE: {
+		auth_handler = AzureAuthorization::FromAttachOptions(context, attach_options);
 		break;
 	}
 	case IRCAuthorizationType::NONE: {

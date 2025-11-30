@@ -9,7 +9,7 @@ namespace duckdb {
 
 enum class IcebergEndpointType : uint8_t { AWS_S3TABLES, AWS_GLUE, INVALID };
 
-enum class IRCAuthorizationType : uint8_t { OAUTH2, SIGV4, NONE, INVALID };
+enum class IRCAuthorizationType : uint8_t { OAUTH2, SIGV4, AZURE, NONE, INVALID };
 
 enum class IRCAccessDelegationMode : uint8_t { NONE, VENDED_CREDENTIALS };
 

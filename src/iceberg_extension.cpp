@@ -16,6 +16,7 @@
 #include "duckdb/main/extension_helper.hpp"
 #include "storage/authorization/oauth2.hpp"
 #include "storage/authorization/sigv4.hpp"
+#include "storage/authorization/azure.hpp"
 #include "iceberg_utils.hpp"
 #include "iceberg_logging.hpp"
 
@@ -73,9 +74,14 @@ static void LoadInternal(ExtensionLoader &loader) {
 	secret_type.default_provider = "config";
 
 	loader.RegisterSecretType(secret_type);
+	
 	CreateSecretFunction secret_function = {"iceberg", "config", OAuth2Authorization::CreateCatalogSecretFunction};
 	OAuth2Authorization::SetCatalogSecretParameters(secret_function);
 	loader.RegisterFunction(secret_function);
+	
+	CreateSecretFunction azure_secret_function = {"iceberg", "credential_chain", AzureAuthorization::CreateCatalogSecretFunction};
+	AzureAuthorization::SetCatalogSecretParameters(azure_secret_function);
+	loader.RegisterFunction(azure_secret_function);
 
 	auto &log_manager = instance.GetLogManager();
 	log_manager.RegisterLogType(make_uniq<IcebergLogType>());

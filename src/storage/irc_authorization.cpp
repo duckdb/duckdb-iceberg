@@ -8,6 +8,7 @@ namespace duckdb {
 IRCAuthorizationType IRCAuthorization::TypeFromString(const string &type) {
 	static const case_insensitive_map_t<IRCAuthorizationType> mapping {{"oauth2", IRCAuthorizationType::OAUTH2},
 	                                                                   {"sigv4", IRCAuthorizationType::SIGV4},
+	                                                                   {"azure", IRCAuthorizationType::AZURE},
 	                                                                   {"none", IRCAuthorizationType::NONE}};
 
 	for (auto it : mapping) {
