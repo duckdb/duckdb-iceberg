@@ -74,11 +74,11 @@ static void LoadInternal(ExtensionLoader &loader) {
 	secret_type.default_provider = "config";
 
 	loader.RegisterSecretType(secret_type);
-	
+
 	CreateSecretFunction secret_function = {"iceberg", "config", OAuth2Authorization::CreateCatalogSecretFunction};
 	OAuth2Authorization::SetCatalogSecretParameters(secret_function);
 	loader.RegisterFunction(secret_function);
-	
+
 	CreateSecretFunction azure_secret_function = {"iceberg", "credential_chain", AzureAuthorization::CreateCatalogSecretFunction};
 	AzureAuthorization::SetCatalogSecretParameters(azure_secret_function);
 	loader.RegisterFunction(azure_secret_function);
