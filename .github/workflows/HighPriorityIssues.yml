@@ -1,8 +1,6 @@
 name: Create Internal issue when the "High Priority" label is applied
 on:
-  issues:
-    types:
-      - labeled
+  workflow_dispatch:
 
 env:
   GH_TOKEN: ${{ secrets.DUCKDBLABS_BOT_TOKEN }}
