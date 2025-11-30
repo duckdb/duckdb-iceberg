@@ -29,7 +29,7 @@ static Azure::Core::Credentials::TokenCredentialOptions GetTokenCredentialOption
 static std::shared_ptr<Azure::Core::Credentials::TokenCredential>
 CreateChainedTokenCredential(const string &chain) {
 	auto credential_options = GetTokenCredentialOptions();
-	
+
 	auto chain_list = StringUtil::Split(chain, ';');
 	Azure::Identity::ChainedTokenCredential::Sources sources;
 	for (const auto &item : chain_list) {
@@ -45,7 +45,7 @@ CreateChainedTokenCredential(const string &chain) {
 static string GetTokenFromCredential(std::shared_ptr<Azure::Core::Credentials::TokenCredential> credential) {
 	Azure::Core::Credentials::TokenRequestContext token_request_context;
 	token_request_context.Scopes = {"https://storage.azure.com/.default"};
-	
+
 	try {
 		auto token = credential->GetToken(token_request_context, Azure::Core::Context());
 		return token.Token;
