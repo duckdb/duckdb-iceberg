@@ -5,6 +5,7 @@
 		"curl",
 		"openssl",
 		"roaring",
+		"azure-identity-cpp",
 		{
 			"name": "aws-sdk-cpp",
 			"features": [
