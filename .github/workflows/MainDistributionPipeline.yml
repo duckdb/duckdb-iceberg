@@ -19,7 +19,7 @@ jobs:
       extension_name: iceberg
       duckdb_version: v1.4.2
       ci_tools_version: v1.4.2
-      exclude_archs: 'windows_amd64_mingw;wasm_mvp;wasm_eh;wasm_threads'
+      exclude_archs: 'linux_amd64;linux_amd64_gcc4;linux_arm64;osx_amd64;osx_arm64;windows_amd64_mingw;wasm_mvp;wasm_eh;wasm_threads'
       extra_toolchains: 'python3'
 
   duckdb-stable-deploy:
@@ -31,6 +31,6 @@ jobs:
       extension_name: iceberg
       duckdb_version: v1.4.2
       ci_tools_version: v1.4.2
-      exclude_archs: 'windows_amd64_mingw;wasm_mvp;wasm_eh;wasm_threads'
+      exclude_archs: 'linux_amd64;linux_amd64_gcc4;linux_arm64;osx_amd64;osx_arm64;windows_amd64_mingw;wasm_mvp;wasm_eh;wasm_threads'
       deploy_latest: ${{ startsWith(github.ref, 'refs/heads/v') || github.ref == 'refs/heads/main' }}
       deploy_versioned: ${{ startsWith(github.ref, 'refs/heads/v') || github.ref == 'refs/heads/main' }}
