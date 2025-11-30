@@ -85,9 +85,14 @@ build_loadable_extension(${TARGET_NAME} ${PARAMETERS} ${EXTENSION_SOURCES} ${ALL
 
 find_package(CURL REQUIRED)
 find_package(AWSSDK REQUIRED COMPONENTS core sso sts)
+
+# Azure SDK
 find_package(azure-identity-cpp CONFIG REQUIRED)
 find_package(azure-storage-blobs-cpp CONFIG REQUIRED)
 find_package(azure-storage-files-datalake-cpp CONFIG REQUIRED)
+set(HAVE_AZURE_SDK TRUE)
+add_compile_definitions(DUCKDB_ICEBERG_AZURE_SUPPORT=1)
+
 include_directories(${CURL_INCLUDE_DIRS})
 
 # Roaring is installed via vcpkg and used here

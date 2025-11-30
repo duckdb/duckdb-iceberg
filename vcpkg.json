@@ -5,18 +5,9 @@
 		"curl",
 		"openssl",
 		"roaring",
-		{
-			"name": "azure-identity-cpp",
-			"platform": "windows"
-		},
-		{
-			"name": "azure-storage-blobs-cpp",
-			"platform": "windows"
-		},
-		{
-			"name": "azure-storage-files-datalake-cpp",
-			"platform": "windows"
-		},
+		"azure-identity-cpp",
+		"azure-storage-blobs-cpp",
+		"azure-storage-files-datalake-cpp",
 		{
 			"name": "aws-sdk-cpp",
 			"features": [

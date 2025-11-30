@@ -4,10 +4,12 @@
 #include "iceberg_logging.hpp"
 #include "duckdb/common/exception/http_exception.hpp"
 
+#if DUCKDB_ICEBERG_AZURE_SUPPORT
 #include <azure/core/credentials/token_credential_options.hpp>
 #include <azure/core/http/policies/policy.hpp>
 #include <azure/identity/azure_cli_credential.hpp>
 #include <azure/identity/chained_token_credential.hpp>
+#endif
 
 namespace duckdb {
 
@@ -21,6 +23,7 @@ static const case_insensitive_map_t<LogicalType> &IcebergAzureSecretOptions() {
 	return options;
 }
 
+#if DUCKDB_ICEBERG_AZURE_SUPPORT
 static Azure::Core::Credentials::TokenCredentialOptions GetTokenCredentialOptions() {
 	Azure::Core::Credentials::TokenCredentialOptions options;
 	return options;
@@ -53,6 +56,7 @@ static string GetTokenFromCredential(std::shared_ptr<Azure::Core::Credentials::T
 		throw InvalidConfigurationException("Failed to retrieve Azure token: %s", ex.what());
 	}
 }
+#endif
 
 } // namespace
 
@@ -206,8 +210,12 @@ unique_ptr<BaseSecret> AzureAuthorization::CreateCatalogSecretFunction(ClientCon
 		    "Unsupported option ('%s') for 'chain', only supports 'cli' currently", chain);
 	}
 
+#if DUCKDB_ICEBERG_AZURE_SUPPORT
 	auto credential = CreateChainedTokenCredential(chain);
 	result->secret_map["token"] = GetTokenFromCredential(credential);
+#else
+	throw NotImplementedException("Azure support is not available on this platform. Please rebuild with Azure SDK support.");
+#endif
 
 	return std::move(result);
 }

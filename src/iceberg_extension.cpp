@@ -79,10 +79,12 @@ static void LoadInternal(ExtensionLoader &loader) {
 	OAuth2Authorization::SetCatalogSecretParameters(secret_function);
 	loader.RegisterFunction(secret_function);
 
+#if DUCKDB_ICEBERG_AZURE_SUPPORT
 	CreateSecretFunction azure_secret_function = {"iceberg", "credential_chain",
 	                                              AzureAuthorization::CreateCatalogSecretFunction};
 	AzureAuthorization::SetCatalogSecretParameters(azure_secret_function);
 	loader.RegisterFunction(azure_secret_function);
+#endif
 
 	auto &log_manager = instance.GetLogManager();
 	log_manager.RegisterLogType(make_uniq<IcebergLogType>());
