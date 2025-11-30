@@ -1,8 +1,10 @@
 #
 # This workflow calls the main distribution pipeline from DuckDB to build, test and (optionally) release the extension
+# Windows only build
 #
 name: Main Extension Distribution Pipeline
 on:
+  push:
   workflow_dispatch:
 
 concurrency:
