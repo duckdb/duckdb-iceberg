@@ -9,6 +9,7 @@
 #include "storage/irc_authorization.hpp"
 #include "storage/authorization/oauth2.hpp"
 #include "storage/authorization/sigv4.hpp"
+#include "storage/authorization/azure.hpp"
 #include "storage/authorization/none.hpp"
 
 namespace duckdb {
@@ -138,6 +139,14 @@ IRCAPITableCredentials IcebergTableInformation::GetVendedCredentials(ClientConte
 		auto &oauth2_auth = catalog.auth_handler->Cast<OAuth2Authorization>();
 		if (!oauth2_auth.default_region.empty()) {
 			user_defaults["region"] = oauth2_auth.default_region;
+		}
+	} else if (catalog.auth_handler->type == IRCAuthorizationType::AZURE) {
+		auto &azure_auth = catalog.auth_handler->Cast<AzureAuthorization>();
+		if (!azure_auth.account_name.empty()) {
+			user_defaults["account_name"] = azure_auth.account_name;
+		}
+		if (!azure_auth.token.empty()) {
+			user_defaults["access_token"] = azure_auth.token;
 		}
 	}
 

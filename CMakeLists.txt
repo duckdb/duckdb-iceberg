@@ -58,6 +58,7 @@ set(EXTENSION_SOURCES
     src/storage/authorization/sigv4.cpp
     src/storage/authorization/none.cpp
     src/storage/authorization/oauth2.cpp
+    src/storage/authorization/azure.cpp
     src/storage/iceberg_transaction_data.cpp
     src/storage/irc_authorization.cpp
     src/storage/irc_catalog.cpp
@@ -79,14 +80,34 @@ add_subdirectory(src/rest_catalog/objects)
 
 add_library(${EXTENSION_NAME} STATIC ${EXTENSION_SOURCES} ${ALL_OBJECT_FILES})
 
+# Azure SDK requires C++14 or later
+set_target_properties(${EXTENSION_NAME} PROPERTIES
+    CXX_STANDARD 14
+    CXX_STANDARD_REQUIRED YES
+    CXX_EXTENSIONS NO
+)
+
 set(PARAMETERS "-warnings")
 build_loadable_extension(${TARGET_NAME} ${PARAMETERS} ${EXTENSION_SOURCES} ${ALL_OBJECT_FILES})
 
-if(NOT CMAKE_SYSTEM_NAME STREQUAL "Emscripten")
-    find_package(CURL REQUIRED)
-    find_package(AWSSDK REQUIRED COMPONENTS core sso sts)
-    include_directories(${CURL_INCLUDE_DIRS})
-endif()
+# Azure SDK requires C++14 or later
+set_target_properties(${TARGET_NAME}_loadable_extension PROPERTIES
+    CXX_STANDARD 14
+    CXX_STANDARD_REQUIRED YES
+    CXX_EXTENSIONS NO
+)
+
+find_package(CURL REQUIRED)
+find_package(AWSSDK REQUIRED COMPONENTS core sso sts)
+
+# Azure SDK
+find_package(azure-identity-cpp CONFIG REQUIRED)
+find_package(azure-storage-blobs-cpp CONFIG REQUIRED)
+find_package(azure-storage-files-datalake-cpp CONFIG REQUIRED)
+set(HAVE_AZURE_SDK TRUE)
+add_compile_definitions(DUCKDB_ICEBERG_AZURE_SUPPORT=1)
+
+include_directories(${CURL_INCLUDE_DIRS})
 
 # Roaring is installed via vcpkg and used here
 find_package(roaring CONFIG REQUIRED)
@@ -95,20 +116,22 @@ find_package(roaring CONFIG REQUIRED)
 # overriding `TARGET_NAME`
 set(TARGET_NAME iceberg)
 
-if(NOT CMAKE_SYSTEM_NAME STREQUAL "Emscripten")
-    # AWS SDK FROM vcpkg
-    target_include_directories(${EXTENSION_NAME}
-                            PUBLIC $<BUILD_INTERFACE:${AWSSDK_INCLUDE_DIRS}>)
-    target_link_libraries(${EXTENSION_NAME} PUBLIC ${AWSSDK_LINK_LIBRARIES})
-    target_include_directories(${TARGET_NAME}_loadable_extension
-                            PRIVATE $<BUILD_INTERFACE:${AWSSDK_INCLUDE_DIRS}>)
-    target_link_libraries(${TARGET_NAME}_loadable_extension
-                        ${AWSSDK_LINK_LIBRARIES})
+# AWS SDK FROM vcpkg
+target_include_directories(${EXTENSION_NAME}
+                        PUBLIC $<BUILD_INTERFACE:${AWSSDK_INCLUDE_DIRS}>)
+target_link_libraries(${EXTENSION_NAME} PUBLIC ${AWSSDK_LINK_LIBRARIES})
+target_include_directories(${TARGET_NAME}_loadable_extension
+                        PRIVATE $<BUILD_INTERFACE:${AWSSDK_INCLUDE_DIRS}>)
+target_link_libraries(${TARGET_NAME}_loadable_extension
+                    ${AWSSDK_LINK_LIBRARIES})
 
-    # Link dependencies into extension
-    target_link_libraries(${EXTENSION_NAME} PUBLIC ${CURL_LIBRARIES})
-    target_link_libraries(${TARGET_NAME}_loadable_extension ${CURL_LIBRARIES})
-endif()
+# Azure SDK FROM vcpkg
+target_link_libraries(${EXTENSION_NAME} PUBLIC Azure::azure-identity Azure::azure-storage-blobs Azure::azure-storage-files-datalake)
+target_link_libraries(${TARGET_NAME}_loadable_extension Azure::azure-identity Azure::azure-storage-blobs Azure::azure-storage-files-datalake)
+
+# Link dependencies into extension
+target_link_libraries(${EXTENSION_NAME} PUBLIC ${CURL_LIBRARIES})
+target_link_libraries(${TARGET_NAME}_loadable_extension ${CURL_LIBRARIES})
 
 # Link Roaring library
 target_link_libraries(${EXTENSION_NAME} PUBLIC roaring::roaring roaring::roaring-headers roaring::roaring-headers-cpp)
