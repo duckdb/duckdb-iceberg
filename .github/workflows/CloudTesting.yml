@@ -1,5 +1,7 @@
 name: Cloud functional tests
 on:
+  schedule:
+    - cron:  '0 3 * * 1,3,5' # runs at 3am monday wednesday and friday
   workflow_dispatch:
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}-${{ github.head_ref || '' }}-${{ github.base_ref || '' }}-${{ github.ref != 'refs/heads/main' || github.sha }}

@@ -1,6 +1,24 @@
 name: CodeQuality
 on:
   workflow_dispatch:
+    inputs:
+      explicit_checks:
+        type: string
+  repository_dispatch:
+  push:
+    branches:
+      - '**'
+      - '!main'
+      - '!feature'
+    paths-ignore:
+      - '**.md'
+      - '.github/workflows/**'
+      - '!.github/workflows/CodeQuality.yml'
+
+  pull_request:
+    types: [opened, reopened, ready_for_review]
+    paths-ignore:
+      - '**.md'
       - '.github/workflows/**'
       - '!.github/workflows/lcov_exclude'
       - '!.github/workflows/CodeQuality.yml'
