@@ -10,7 +10,6 @@ set(CMAKE_CXX_STANDARD_REQUIRED True)
 set(EXTENSION_NAME ${TARGET_NAME}_extension)
 include_directories(src/include)
 
-
 set(EXTENSION_SOURCES
     src/iceberg_extension.cpp
     src/iceberg_functions.cpp
