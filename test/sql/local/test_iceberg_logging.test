@@ -1,0 +1,23 @@
+# name: test/sql/local/test_iceberg_logging.test
+# description: Checks that 'Iceberg' logs can be returned by duckdb_logs_parsed
+# group: [local]
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+statement ok
+CALL enable_logging('Iceberg');
+
+query II
+SELECT * FROM iceberg_scan('__WORKING_DIRECTORY__/data/persistent/struct_filter_issue') WHERE redpanda.timestamp = '2026-06-26 19:45:32.478';
+----
+
+query I
+SELECT COUNT(*) FROM duckdb_logs_parsed('Iceberg');
+----
+1
