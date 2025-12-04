@@ -92,6 +92,55 @@ endif()
 # Roaring is installed via vcpkg and used here
 find_package(roaring CONFIG REQUIRED)
 
+set(EXTENSION_NAME ${TARGET_NAME}_extension)
+
+include_directories(src/include)
+
+add_subdirectory(src)
+add_subdirectory(src/rest_catalog/objects)
+set(EXTENSION_SOURCES ${ALL_OBJECT_FILES})
+
+# At this point the various OBJECT targets exist (iceberg_src_objects, iceberg_common_objects, ...)
+# Make sure OBJECT targets get the proper include directories and usage requirements from the
+# external packages by linking them to the imported dependency targets / variables. This
+# propagates include directories so the OBJECT targets can compile correctly.
+set(ICEBERG_OBJECT_LIBS
+        iceberg_src_objects
+        iceberg_common_objects
+        iceberg_deletes_objects
+        iceberg_metadata_objects
+        iceberg_functions_objects
+        iceberg_utils_objects
+        iceberg_storage_objects
+        iceberg_storage_auth_objects
+        iceberg_storage_table_update_objects
+        iceberg_storage_create_table_objects
+)
+
+foreach(tgt IN LISTS ICEBERG_OBJECT_LIBS)
+    if(TARGET ${tgt})
+        if(NOT CMAKE_SYSTEM_NAME STREQUAL "Emscripten")
+            # AWSSDK variables come from find_package(AWSSDK ...)
+            if(DEFINED AWSSDK_LINK_LIBRARIES)
+                target_link_libraries(${tgt} PUBLIC ${AWSSDK_LINK_LIBRARIES})
+            endif()
+            if(DEFINED CURL_LIBRARIES)
+                target_link_libraries(${tgt} PUBLIC ${CURL_LIBRARIES})
+            endif()
+        endif()
+
+        # Link roaring imported targets (these are imported targets provided by the package)
+        # This will propagate include directories for <roaring/roaring.hh>
+        target_link_libraries(${tgt} PUBLIC roaring::roaring roaring::roaring-headers roaring::roaring-headers-cpp)
+    endif()
+endforeach()
+
+add_library(${EXTENSION_NAME} STATIC ${EXTENSION_SOURCES} ${ALL_OBJECT_FILES})
+
+set(PARAMETERS "-warnings")
+build_loadable_extension(${TARGET_NAME} ${PARAMETERS} ${EXTENSION_SOURCES} ${ALL_OBJECT_FILES})
+
+
 # Reset the TARGET_NAME, the AWS find_package build could bleed into our build -
 # overriding `TARGET_NAME`
 set(TARGET_NAME iceberg)
