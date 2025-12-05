@@ -67,7 +67,6 @@ unique_ptr<MultiFileReader> IcebergDeleteFileReader::CreateInstance(const TableF
 
 shared_ptr<MultiFileList> IcebergDeleteFileReader::CreateFileList(ClientContext &context, const vector<string> &paths,
                                                                   const FileGlobInput &glob_input) {
-
 	D_ASSERT(paths.size() == 1);
 	vector<OpenFileInfo> open_files;
 	// in case someone calls this

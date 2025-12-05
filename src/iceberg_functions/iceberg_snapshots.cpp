@@ -19,7 +19,6 @@ struct IcebergSnaphotsBindData : public TableFunctionData {
 struct IcebergSnapshotGlobalTableFunctionState : public GlobalTableFunctionState {
 public:
 	static unique_ptr<GlobalTableFunctionState> Init(ClientContext &context, TableFunctionInitInput &input) {
-
 		auto bind_data = input.bind_data->Cast<IcebergSnaphotsBindData>();
 		auto global_state = make_uniq<IcebergSnapshotGlobalTableFunctionState>();
 
