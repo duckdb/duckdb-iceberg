@@ -8,7 +8,9 @@ add_library(
   iceberg_scan.cpp
   iceberg_metadata.cpp
   iceberg_table_properties_functions.cpp
-  iceberg_to_ducklake.cpp)
+  iceberg_to_ducklake.cpp
+  iceberg_column_stats.cpp
+  iceberg_partition_stats.cpp)
 
 set(ALL_OBJECT_FILES
     ${ALL_OBJECT_FILES} $<TARGET_OBJECTS:iceberg_functions_objects>
