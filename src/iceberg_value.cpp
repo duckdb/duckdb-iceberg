@@ -267,7 +267,7 @@ std::string truncate_and_increment_utf8(const std::string &input) {
 	return std::string(bytes.begin(), bytes.end());
 }
 
-SerializeStats IcebergValue::SerializeValue(Value input_value, LogicalType &column_type) {
+SerializeResult IcebergValue::SerializeValue(Value input_value, LogicalType &column_type) {
 	switch (column_type.id()) {
 	case LogicalTypeId::INTEGER: {
 		// get const data ptr for the string value
@@ -276,8 +276,7 @@ SerializeStats IcebergValue::SerializeValue(Value input_value, LogicalType &colu
 		auto serialized_const_data_ptr = const_data_ptr_cast<int32_t>(&serialized_val);
 		// create blob value of int32
 		auto ret_val = Value::BLOB(serialized_const_data_ptr, sizeof(int32_t));
-		auto ret = SerializeStats(input_value, column_type);
-		ret.value = ret_val;
+		auto ret = SerializeResult(column_type, ret_val);
 		return ret;
 	}
 	case LogicalTypeId::BIGINT: {
@@ -287,8 +286,7 @@ SerializeStats IcebergValue::SerializeValue(Value input_value, LogicalType &colu
 		auto serialized_const_data_ptr = const_data_ptr_cast<int64_t>(&val);
 		// create blob value of int32
 		auto ret_val = Value::BLOB(serialized_const_data_ptr, sizeof(int64_t));
-		auto ret = SerializeStats(input_value, column_type);
-		ret.value = ret_val;
+		auto ret = SerializeResult(column_type, ret_val);
 		return ret;
 	}
 	case LogicalTypeId::VARCHAR: {
@@ -296,26 +294,9 @@ SerializeStats IcebergValue::SerializeValue(Value input_value, LogicalType &colu
 		string val = truncate_and_increment_utf8(input_value.GetValue<string>());
 		// create blob value of int32
 		auto ret_val = val;
-		auto ret = SerializeStats(input_value, column_type);
-		ret.value = ret_val;
+		auto ret = SerializeResult(column_type, ret_val);
 		return ret;
 	}
-	// case LogicalTypeId::BOOLEAN: {
-	// 	// get const data ptr for the string value
-	// 	auto wat = input_value.GetValue<string>();
-	// 	bool val = true;
-	// 	if (wat == "") {
-	// 		val = false;
-	// 	}
-	// 	// bool val = input_value.GetValue<bool>();
-	// 	// get const data_ptr of the int32
-	// 	auto serialized_const_data_ptr = const_data_ptr_cast<bool>(&val);
-	// 	// create blob value of int32
-	// 	auto ret_val = Value::BLOB(serialized_const_data_ptr, sizeof(bool));
-	// 	auto ret = SerializeStats(input_value, column_type);
-	// 	ret.value = ret_val;
-	// 	return ret;
-	// }
 	case LogicalTypeId::FLOAT: {
 		// get const data ptr for the string value
 		float val = input_value.GetValue<float>();
@@ -323,8 +304,7 @@ SerializeStats IcebergValue::SerializeValue(Value input_value, LogicalType &colu
 		auto serialized_const_data_ptr = const_data_ptr_cast<float>(&val);
 		// create blob value of int32
 		auto ret_val = Value::BLOB(serialized_const_data_ptr, sizeof(float));
-		auto ret = SerializeStats(input_value, column_type);
-		ret.value = ret_val;
+		auto ret = SerializeResult(column_type, ret_val);
 		return ret;
 	}
 	case LogicalTypeId::DOUBLE: {
@@ -334,39 +314,9 @@ SerializeStats IcebergValue::SerializeValue(Value input_value, LogicalType &colu
 		auto serialized_const_data_ptr = const_data_ptr_cast<double>(&val);
 		// create blob value of int32
 		auto ret_val = Value::BLOB(serialized_const_data_ptr, sizeof(double));
-		auto ret = SerializeStats(input_value, column_type);
-		ret.value = ret_val;
+		auto ret = SerializeResult(column_type, ret_val);
 		return ret;
 	}
-	// case LogicalTypeId::DECIMAL: {
-	// 	// get const data ptr for the string value
-	// 	auto value = input_value.GetValue<double>();
-	// 	uint8_t width;
-	// 	uint8_t scale;
-	// 	column_type.GetDecimalProperties(width, scale);
-	//
-	// 	int64_t unscaled = std::round(value * std::pow(10, scale));
-	// 	// get const data_ptr of the int32
-	// 	std::vector<uint8_t> bytes;
-	// 	int64_t v = unscaled;
-	//
-	// 	// Keep extracting bytes from the least significant end
-	// 	do {
-	// 		bytes.push_back(static_cast<uint8_t>(v & 0xFF));
-	// 		// Arithmetic shift for signed values
-	// 		v >>= 8;
-	// 	} while (!((v == 0 && (bytes.back() & 0x80) == 0) ||
-	// 			   (v == -1 && (bytes.back() & 0x80) != 0)));
-	// 	// Reverse to big-endian
-	// 	std::reverse(bytes.begin(), bytes.end());
-	// 	auto serialized_const_data_ptr = const_data_ptr_cast<int64_t>(&unscaled);
-	//
-	// 	// create blob value of int32
-	// 	auto ret_val = Value::BLOB(serialized_const_data_ptr, bytes.size());
-	// 	auto ret = SerializeStats(input_value, column_type);
-	// 	ret.value = ret_val;
-	// 	return ret;
-	// }
 	case LogicalTypeId::DATE: {
 		// get const data ptr for the string value
 		date_t val = input_value.GetValue<date_t>();
@@ -375,8 +325,7 @@ SerializeStats IcebergValue::SerializeValue(Value input_value, LogicalType &colu
 		auto serialized_const_data_ptr = const_data_ptr_cast<int32_t>(&epoch_days);
 		// create blob value of int32
 		auto ret_val = Value::BLOB(serialized_const_data_ptr, sizeof(int32_t));
-		auto ret = SerializeStats(input_value, column_type);
-		ret.value = ret_val;
+		auto ret = SerializeResult(column_type, ret_val);
 		return ret;
 	}
 	case LogicalTypeId::TIMESTAMP: {
@@ -387,38 +336,21 @@ SerializeStats IcebergValue::SerializeValue(Value input_value, LogicalType &colu
 		auto serialized_const_data_ptr = const_data_ptr_cast<int64_t>(&micros_since_epoch);
 		// create blob value of int32
 		auto ret_val = Value::BLOB(serialized_const_data_ptr, sizeof(int64_t));
-		auto ret = SerializeStats(input_value, column_type);
-		ret.value = ret_val;
+		auto ret = SerializeResult(column_type, ret_val);
 		return ret;
 	}
-	// case LogicalTypeId::BIT: {
-	// 	// get const data ptr for the string value
-	// 	string_t val = input_value.GetValue<string_t>();
-	// 	// get const data_ptr of the int32
-	// 	auto serialized_const_data_ptr = const_data_ptr_cast<string_t>(&val);
-	// 	// create blob value of int32
-	// 	auto ret_val = Value::BLOB(serialized_const_data_ptr, 1);
-	// 	auto ret = SerializeStats(input_value, column_type);
-	// 	ret.value = ret_val;
-	// 	return ret;
-	// }
+	case LogicalTypeId::BIT:
+	case LogicalTypeId::BOOLEAN:
+	case LogicalTypeId::DECIMAL:
 	case LogicalTypeId::BLOB: {
-		// // get const data ptr for the string value
-		string val = input_value.GetValue<string>();
-		// get const data_ptr of the int32
-		auto serialized_const_data_ptr = const_data_ptr_cast<string>(&val);
-		// create blob value of int32
-		auto ret_val = Value::BLOB(serialized_const_data_ptr, val.size());
-		// auto ret_val = input_value;
-		auto ret = SerializeStats(input_value, column_type);
-		ret.value = ret_val;
-		return ret;
+		// TODO: these don't return correct serialization values yet.
+		return {column_type, Value()};
 	}
 	default:
 		break;
 	}
 	string error = "Invalid column type";
-	return SerializeStats(error);
+	return SerializeResult(error);
 }
 
 } // namespace duckdb

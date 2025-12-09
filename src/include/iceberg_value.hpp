@@ -32,18 +32,20 @@ public:
 	string error;
 };
 
-struct SerializeStats {
+struct SerializeResult {
 public:
-	SerializeStats(Value &input_value, LogicalType &column_type) : input(input_value), original_type(column_type) {
+	SerializeResult(LogicalType &column_type, Value serialized_value)
+	    : original_type(column_type), value(serialized_value) {
 	}
-	SerializeStats(const string &error) : error(error) {
+
+	explicit SerializeResult(const string &error) : error(error) {
 	}
 
 public:
 	bool HasError() const {
 		return !error.empty();
 	}
-	const string GetError() const {
+	string GetError() const {
 		D_ASSERT(HasError());
 		return error;
 	}
@@ -51,9 +53,12 @@ public:
 		D_ASSERT(!HasError());
 		return value;
 	}
+	// some returned stats are known to be incorrect. For that we do not serialize them
+	bool HasValue() const {
+		return !value.IsNull();
+	}
 
 public:
-	Value input;
 	string error;
 	LogicalType original_type;
 	Value value;
@@ -65,7 +70,7 @@ public:
 
 public:
 	static DeserializeResult DeserializeValue(const string_t &blob, const LogicalType &target);
-	static SerializeStats SerializeValue(Value input_value, LogicalType &column_type);
+	static SerializeResult SerializeValue(Value input_value, LogicalType &column_type);
 };
 
 } // namespace duckdb

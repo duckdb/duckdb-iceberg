@@ -46,12 +46,14 @@ Value IcebergManifestEntry::ToDataFileStruct(const IcebergTableSchema &schema, c
 		auto child_type = schema.GetColumnTypeFromFieldId(child.first);
 		auto serialized_lower_bound = IcebergValue::SerializeValue(child.second, child_type);
 		if (serialized_lower_bound.HasError()) {
-			// throw serialized_upper_bound.GetError();
-			continue;
-		} else {
-			lower_bounds_values.push_back(
-			    Value::STRUCT({{"key", child.first}, {"value", serialized_lower_bound.value}}));
+			throw InvalidConfigurationException(serialized_lower_bound.GetError());
 		}
+		if (serialized_lower_bound.HasValue()) {
+			lower_bounds_values.push_back(
+			    Value::STRUCT({{"key", child.first}, {"value", serialized_lower_bound.GetValue()}}));
+		}
+		// serialized lower bound is not valid for some reason
+		// FIXME: Log that no lower bound was written
 	}
 	children.push_back(Value::MAP(LogicalType::STRUCT(bounds_types), lower_bounds_values));
 
@@ -61,12 +63,14 @@ Value IcebergManifestEntry::ToDataFileStruct(const IcebergTableSchema &schema, c
 		auto child_type = schema.GetColumnTypeFromFieldId(child.first);
 		auto serialized_upper_bound = IcebergValue::SerializeValue(child.second, child_type);
 		if (serialized_upper_bound.HasError()) {
-			// throw serialized_upper_bound.GetError();
-			continue;
-		} else {
+			throw InvalidConfigurationException(serialized_upper_bound.GetError());
+		}
+		if (serialized_upper_bound.HasValue()) {
 			upper_bounds_values.push_back(
 			    Value::STRUCT({{"key", child.first}, {"value", serialized_upper_bound.value}}));
 		}
+		// serialized upper bound is not valid for some reason
+		// FIXME: Log that no upper bound was written
 	}
 	children.push_back(Value::MAP(LogicalType::STRUCT(bounds_types), upper_bounds_values));
 

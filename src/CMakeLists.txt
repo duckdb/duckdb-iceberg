@@ -6,7 +6,6 @@ add_subdirectory(utils)
 add_subdirectory(storage)
 add_subdirectory(rest_catalog/objects)
 
-# Top-level src/ translation units (those living directly under src/)
 add_library(
   iceberg_src_objects OBJECT
   iceberg_extension.cpp
