@@ -2,22 +2,28 @@ cmake_minimum_required(VERSION 3.5...3.29)
 
 # Set extension name here
 set(TARGET_NAME iceberg)
-project(${TARGET_NAME})
+
+set(EXTENSION_NAME ${TARGET_NAME}_extension)
+set(LOADABLE_EXTENSION_NAME ${TARGET_NAME}_loadable_extension)
 
 set(CMAKE_CXX_STANDARD 14 CACHE STRING "C++ standard")
 set(CMAKE_CXX_STANDARD_REQUIRED True)
 
-if(NOT CMAKE_SYSTEM_NAME STREQUAL "Emscripten")
-    find_package(CURL REQUIRED)
-    find_package(AWSSDK REQUIRED COMPONENTS core sso sts)
-    include_directories(${CURL_INCLUDE_DIRS})
-endif()
+#if(NOT CMAKE_SYSTEM_NAME STREQUAL "Emscripten")
+#    find_package(CURL REQUIRED)
+#    find_package(AWSSDK REQUIRED COMPONENTS core sso sts)
+#    include_directories(${CURL_INCLUDE_DIRS})
+#endif()
 
 # Roaring is installed via vcpkg and used here
 find_package(roaring CONFIG REQUIRED)
 
-set(EXTENSION_NAME ${TARGET_NAME}_extension)
 
+# Project-wide public include directory (use absolute path for clarity in IDEs)
+set(PROJECT_INC_DIR ${CMAKE_CURRENT_SOURCE_DIR}/src/include)
+
+# Keep the legacy directory-scoped include for generators that still rely on it,
+# but prefer target-scoped includes below for IDEs like CLion.
 include_directories(src/include)
 
 add_subdirectory(src)
@@ -39,6 +45,7 @@ set(ICEBERG_OBJECT_LIBS
         iceberg_storage_auth_objects
         iceberg_storage_table_update_objects
         iceberg_storage_create_table_objects
+        rest_catalog_objects
 )
 
 foreach(tgt IN LISTS ICEBERG_OBJECT_LIBS)
@@ -56,6 +63,9 @@ foreach(tgt IN LISTS ICEBERG_OBJECT_LIBS)
         # Link roaring imported targets (these are imported targets provided by the package)
         # This will propagate include directories for <roaring/roaring.hh>
         target_link_libraries(${tgt} PUBLIC roaring::roaring roaring::roaring-headers roaring::roaring-headers-cpp)
+
+        # Ensure sources in these OBJECT libraries see headers in src/include
+        target_include_directories(${tgt} PUBLIC ${PROJECT_INC_DIR})
     endif()
 endforeach()
 
@@ -87,6 +97,10 @@ endif()
 # Link Roaring library
 target_link_libraries(${EXTENSION_NAME} PUBLIC roaring::roaring roaring::roaring-headers roaring::roaring-headers-cpp)
 target_link_libraries(${TARGET_NAME}_loadable_extension roaring::roaring roaring::roaring-headers roaring::roaring-headers-cpp)
+
+# Attach the project include directory to the final targets so IDEs index correctly
+target_include_directories(${EXTENSION_NAME} PUBLIC ${PROJECT_INC_DIR})
+target_include_directories(${TARGET_NAME}_loadable_extension PUBLIC ${PROJECT_INC_DIR})
 
 install(
   TARGETS ${EXTENSION_NAME} ${TARGET_NAME}_loadable_extension
