@@ -9,31 +9,21 @@ set(LOADABLE_EXTENSION_NAME ${TARGET_NAME}_loadable_extension)
 set(CMAKE_CXX_STANDARD 14 CACHE STRING "C++ standard")
 set(CMAKE_CXX_STANDARD_REQUIRED True)
 
-#if(NOT CMAKE_SYSTEM_NAME STREQUAL "Emscripten")
-#    find_package(CURL REQUIRED)
-#    find_package(AWSSDK REQUIRED COMPONENTS core sso sts)
-#    include_directories(${CURL_INCLUDE_DIRS})
-#endif()
+if(NOT CMAKE_SYSTEM_NAME STREQUAL "Emscripten")
+    find_package(CURL REQUIRED)
+    find_package(AWSSDK REQUIRED COMPONENTS core sso sts)
+    include_directories(${CURL_INCLUDE_DIRS})
+endif()
 
 # Roaring is installed via vcpkg and used here
 find_package(roaring CONFIG REQUIRED)
 
-
 # Project-wide public include directory (use absolute path for clarity in IDEs)
 set(PROJECT_INC_DIR ${CMAKE_CURRENT_SOURCE_DIR}/src/include)
 
-# Keep the legacy directory-scoped include for generators that still rely on it,
-# but prefer target-scoped includes below for IDEs like CLion.
-include_directories(src/include)
-
 add_subdirectory(src)
-add_subdirectory(src/rest_catalog/objects)
 set(EXTENSION_SOURCES ${ALL_OBJECT_FILES})
 
-# At this point the various OBJECT targets exist (iceberg_src_objects, iceberg_common_objects, ...)
-# Make sure OBJECT targets get the proper include directories and usage requirements from the
-# external packages by linking them to the imported dependency targets / variables. This
-# propagates include directories so the OBJECT targets can compile correctly.
 set(ICEBERG_OBJECT_LIBS
         iceberg_src_objects
         iceberg_common_objects

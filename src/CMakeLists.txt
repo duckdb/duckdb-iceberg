@@ -4,6 +4,7 @@ add_subdirectory(metadata)
 add_subdirectory(iceberg_functions)
 add_subdirectory(utils)
 add_subdirectory(storage)
+add_subdirectory(rest_catalog/objects)
 
 # Top-level src/ translation units (those living directly under src/)
 add_library(
