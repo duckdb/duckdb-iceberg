@@ -43,6 +43,7 @@ Value IcebergManifestEntry::ToDataFileStruct(const IcebergTableSchema &schema, c
 	vector<Value> lower_bounds_values;
 	// lower bounds: map<126: int, 127: binary> - 125
 	for (auto &child : lower_bounds) {
+		child.second.Print();
 		auto child_type = schema.GetColumnTypeFromFieldId(child.first);
 		auto serialized_lower_bound = IcebergValue::SerializeValue(child.second, child_type);
 		if (serialized_lower_bound.HasError()) {

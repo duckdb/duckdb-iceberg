@@ -61,6 +61,7 @@ struct IcebergColumnStats {
 	bool has_max = false;
 	bool any_valid = true;
 	bool has_contains_nan = false;
+	bool has_column_size_bytes = false;
 
 	// unique_ptr<DuckLakeColumnExtraStats> extra_stats;
 

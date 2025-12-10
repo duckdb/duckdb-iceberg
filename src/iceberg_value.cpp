@@ -2,10 +2,12 @@
 #include "duckdb/common/helper.hpp"
 #include "duckdb/common/types/uuid.hpp"
 #include "duckdb/common/bswap.hpp"
+#include "duckdb/common/printer.hpp"
 #include "duckdb/common/types/date.hpp"
 #include "duckdb/common/types/timestamp.hpp"
 #include "duckdb/common/types/value.hpp"
 #include "mbedtls/ecp.h"
+#include "iostream"
 
 namespace duckdb {
 
@@ -267,13 +269,23 @@ std::string truncate_and_increment_utf8(const std::string &input) {
 	return std::string(bytes.begin(), bytes.end());
 }
 
+void printBinaryLeftToRight(hugeint_t value, int bits = 8) {
+	for (int i = 0; i < bits; i++) {
+		if (i > 0 && i % 8 == 0) {
+			std::cout << " ";
+		}
+		std::cout << idx_t((value >> (bits - i - 1)) & 1);
+	}
+	std::cout << std::endl;
+}
+
 SerializeResult IcebergValue::SerializeValue(Value input_value, LogicalType &column_type) {
 	switch (column_type.id()) {
 	case LogicalTypeId::INTEGER: {
 		// get const data ptr for the string value
-		int32_t serialized_val = input_value.GetValue<int32_t>();
+		int32_t val = input_value.GetValue<int32_t>();
 		// get const data_ptr of the int32
-		auto serialized_const_data_ptr = const_data_ptr_cast<int32_t>(&serialized_val);
+		auto serialized_const_data_ptr = const_data_ptr_cast<int32_t>(&val);
 		// create blob value of int32
 		auto serialized_val = Value::BLOB(serialized_const_data_ptr, sizeof(int32_t));
 		auto ret = SerializeResult(column_type, serialized_val);
@@ -339,9 +351,78 @@ SerializeResult IcebergValue::SerializeValue(Value input_value, LogicalType &col
 		auto ret = SerializeResult(column_type, serialized_val);
 		return ret;
 	}
+	case LogicalTypeId::DECIMAL: {
+		uint8_t width;
+		uint8_t scale;
+		column_type.GetDecimalProperties(width, scale);
+		auto decimal_as_string = input_value.GetValue<string>();
+		auto dec_pos = decimal_as_string.find(".");
+		// remove the decimal point
+		decimal_as_string.erase(dec_pos, 1);
+		auto unscaled = Value(decimal_as_string).DefaultCastAs(LogicalType::HUGEINT);
+		auto unscaled_hugeint = unscaled.GetValue<hugeint_t>();
+		auto unscaled_copy = unscaled_hugeint;
+
+		vector<uint8_t> big_endian_bytes;
+		printBinaryLeftToRight(unscaled_copy, 8 * sizeof(hugeint_t));
+		bool needs_positive_padding = false;
+		bool needs_negative_padding = false;
+		auto huge_int_bytes = sizeof(hugeint_t);
+		bool first_val = false;
+		bool is_negative = unscaled_hugeint < 0;
+		for (int i = 0; i < huge_int_bytes; i++) {
+			uint8_t get_8 =
+			    static_cast<uint8_t>(static_cast<unsigned long long>(unscaled_copy >> ((huge_int_bytes - i - 1) * 8)));
+			printBinaryLeftToRight(get_8, 8);
+			if (is_negative && (get_8 == 0xFF) && !first_val) {
+				// number is negative, these bytes are not important
+				continue;
+			}
+			if (!is_negative && (get_8 == 0x00) && !first_val) {
+				// number is positive and these bytes are not important
+				continue;
+			}
+			if (!first_val) {
+				// check if we need padding
+				if (is_negative && ((get_8 & 0x80) != 0x80)) {
+					// negative padding is needed. the number is negative
+					// but the most significatn byte is not 1
+					needs_negative_padding = true;
+				} else if (!is_negative && ((get_8 & 0x80) == 0x80)) {
+					// yes padding needed, number is positive but most significant byte is 1,
+					// sign extend with one byte of 0x00
+					needs_positive_padding = true;
+				}
+				first_val = true;
+			}
+			big_endian_bytes.push_back(get_8);
+		}
+		if (needs_negative_padding) {
+			big_endian_bytes.push_back(0xFF);
+		}
+		if (needs_positive_padding) {
+			big_endian_bytes.push_back(0x00);
+		}
+
+		// reverse the bytes
+		std::reverse(big_endian_bytes.begin(), big_endian_bytes.end());
+
+		hugeint_t result = 0;
+		int n = big_endian_bytes.size();
+		D_ASSERT(n <= 16);
+		for (int i = 0; i < n; i++) {
+			result |= static_cast<hugeint_t>(big_endian_bytes[i]) << (8 * (n - i - 1));
+		}
+
+		auto serialized_const_data_ptr = const_data_ptr_cast<hugeint_t>(&result);
+		// create blob value of int32, with only vec.size() bytes
+		auto ret_val = Value::BLOB(serialized_const_data_ptr, big_endian_bytes.size());
+		Printer::PrintF("ret_val = %s", ret_val.ToString());
+		auto ret = SerializeResult(column_type, ret_val);
+		return ret;
+	}
 	case LogicalTypeId::BIT:
 	case LogicalTypeId::BOOLEAN:
-	case LogicalTypeId::DECIMAL:
 	case LogicalTypeId::BLOB: {
 		// TODO: these don't return correct serialization values yet.
 		return {column_type, Value()};

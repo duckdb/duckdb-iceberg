@@ -133,6 +133,7 @@ IcebergColumnStats IcebergInsert::ParseColumnStatsNew(const LogicalType &type, c
 			column_stats.has_null_count = true;
 			column_stats.null_count = StringUtil::ToUnsigned(StringValue::Get(stats_children[1]));
 		} else if (stats_name == "column_size_bytes") {
+			column_stats.has_column_size_bytes = true;
 			column_stats.column_size_bytes = StringUtil::ToUnsigned(StringValue::Get(stats_children[1]));
 		} else if (stats_name == "has_nan") {
 			column_stats.has_contains_nan = true;
@@ -222,15 +223,27 @@ void IcebergInsert::AddWrittenFiles(IcebergInsertGlobalState &global_state, Data
 
 			auto ic_column_info_it = column_info.find(normalized_col_name);
 			D_ASSERT(ic_column_info_it != column_info.end());
-			auto &column_info = ic_column_info_it->second;
+			auto column_info = ic_column_info_it->second;
+			if (column_info->name == "decimal_type_18_3") {
+				auto break_here = 0;
+			}
+			if (column_info->name == "decimal_type_1_12") {
+				auto break_here = 0;
+			}
 			auto stats = ParseColumnStatsNew(column_info->type, col_stats);
 			if (column_info->required && stats.has_null_count && stats.null_count > 0) {
 				throw ConstraintException("NOT NULL constraint failed: %s.%s", table->name, normalized_col_name);
 			}
 			// go through stats and add upper and lower bounds
-			data_file.lower_bounds[column_info->id] = stats.min;
-			data_file.upper_bounds[column_info->id] = stats.max;
-			data_file.column_sizes[column_info->id] = stats.column_size_bytes;
+			if (stats.has_min) {
+				data_file.lower_bounds[column_info->id] = stats.min;
+			}
+			if (stats.has_max) {
+				data_file.upper_bounds[column_info->id] = stats.max;
+			}
+			if (stats.has_column_size_bytes) {
+				data_file.column_sizes[column_info->id] = stats.column_size_bytes;
+			}
 			if (stats.has_null_count) {
 				data_file.null_value_counts[column_info->id] = stats.null_count;
 			}
