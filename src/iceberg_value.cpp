@@ -275,8 +275,8 @@ SerializeResult IcebergValue::SerializeValue(Value input_value, LogicalType &col
 		// get const data_ptr of the int32
 		auto serialized_const_data_ptr = const_data_ptr_cast<int32_t>(&serialized_val);
 		// create blob value of int32
-		auto ret_val = Value::BLOB(serialized_const_data_ptr, sizeof(int32_t));
-		auto ret = SerializeResult(column_type, ret_val);
+		auto serialized_val = Value::BLOB(serialized_const_data_ptr, sizeof(int32_t));
+		auto ret = SerializeResult(column_type, serialized_val);
 		return ret;
 	}
 	case LogicalTypeId::BIGINT: {
@@ -285,16 +285,16 @@ SerializeResult IcebergValue::SerializeValue(Value input_value, LogicalType &col
 		// get const data_ptr of the int32
 		auto serialized_const_data_ptr = const_data_ptr_cast<int64_t>(&val);
 		// create blob value of int32
-		auto ret_val = Value::BLOB(serialized_const_data_ptr, sizeof(int64_t));
-		auto ret = SerializeResult(column_type, ret_val);
+		auto serialized_val = Value::BLOB(serialized_const_data_ptr, sizeof(int64_t));
+		auto ret = SerializeResult(column_type, serialized_val);
 		return ret;
 	}
 	case LogicalTypeId::VARCHAR: {
 		// get const data ptr for the string value
 		string val = truncate_and_increment_utf8(input_value.GetValue<string>());
 		// create blob value of int32
-		auto ret_val = val;
-		auto ret = SerializeResult(column_type, ret_val);
+		auto serialized_val = val;
+		auto ret = SerializeResult(column_type, serialized_val);
 		return ret;
 	}
 	case LogicalTypeId::FLOAT: {
@@ -303,8 +303,8 @@ SerializeResult IcebergValue::SerializeValue(Value input_value, LogicalType &col
 		// get const data_ptr of the int32
 		auto serialized_const_data_ptr = const_data_ptr_cast<float>(&val);
 		// create blob value of int32
-		auto ret_val = Value::BLOB(serialized_const_data_ptr, sizeof(float));
-		auto ret = SerializeResult(column_type, ret_val);
+		auto serialized_val = Value::BLOB(serialized_const_data_ptr, sizeof(float));
+		auto ret = SerializeResult(column_type, serialized_val);
 		return ret;
 	}
 	case LogicalTypeId::DOUBLE: {
@@ -313,8 +313,8 @@ SerializeResult IcebergValue::SerializeValue(Value input_value, LogicalType &col
 		// get const data_ptr of the int32
 		auto serialized_const_data_ptr = const_data_ptr_cast<double>(&val);
 		// create blob value of int32
-		auto ret_val = Value::BLOB(serialized_const_data_ptr, sizeof(double));
-		auto ret = SerializeResult(column_type, ret_val);
+		auto serialized_val = Value::BLOB(serialized_const_data_ptr, sizeof(double));
+		auto ret = SerializeResult(column_type, serialized_val);
 		return ret;
 	}
 	case LogicalTypeId::DATE: {
@@ -324,8 +324,8 @@ SerializeResult IcebergValue::SerializeValue(Value input_value, LogicalType &col
 		// get const data_ptr of the int32
 		auto serialized_const_data_ptr = const_data_ptr_cast<int32_t>(&epoch_days);
 		// create blob value of int32
-		auto ret_val = Value::BLOB(serialized_const_data_ptr, sizeof(int32_t));
-		auto ret = SerializeResult(column_type, ret_val);
+		auto serialized_val = Value::BLOB(serialized_const_data_ptr, sizeof(int32_t));
+		auto ret = SerializeResult(column_type, serialized_val);
 		return ret;
 	}
 	case LogicalTypeId::TIMESTAMP: {
@@ -335,8 +335,8 @@ SerializeResult IcebergValue::SerializeValue(Value input_value, LogicalType &col
 		// get const data_ptr of the int32
 		auto serialized_const_data_ptr = const_data_ptr_cast<int64_t>(&micros_since_epoch);
 		// create blob value of int32
-		auto ret_val = Value::BLOB(serialized_const_data_ptr, sizeof(int64_t));
-		auto ret = SerializeResult(column_type, ret_val);
+		auto serialized_val = Value::BLOB(serialized_const_data_ptr, sizeof(int64_t));
+		auto ret = SerializeResult(column_type, serialized_val);
 		return ret;
 	}
 	case LogicalTypeId::BIT:
