@@ -43,7 +43,6 @@ Value IcebergManifestEntry::ToDataFileStruct(const IcebergTableSchema &schema, c
 	vector<Value> lower_bounds_values;
 	// lower bounds: map<126: int, 127: binary> - 125
 	for (auto &child : lower_bounds) {
-		child.second.Print();
 		auto child_type = schema.GetColumnTypeFromFieldId(child.first);
 		auto serialized_lower_bound = IcebergValue::SerializeValue(child.second, child_type);
 		if (serialized_lower_bound.HasError()) {
@@ -73,7 +72,20 @@ Value IcebergManifestEntry::ToDataFileStruct(const IcebergTableSchema &schema, c
 		// serialized upper bound is not valid for some reason
 		// FIXME: Log that no upper bound was written
 	}
+
 	children.push_back(Value::MAP(LogicalType::STRUCT(bounds_types), upper_bounds_values));
+
+	child_list_t<LogicalType> null_value_count_types;
+	null_value_count_types.emplace_back("key", LogicalType::INTEGER);
+	null_value_count_types.emplace_back("value", LogicalType::BIGINT);
+
+	vector<Value> null_value_counts_values;
+	// upper bounds: map<129: int, 130: binary> - 128
+	for (auto &child : null_value_counts) {
+		null_value_counts_values.push_back(Value::STRUCT({{"key", child.first}, {"value", child.second}}));
+	}
+
+	children.push_back(Value::MAP(LogicalType::STRUCT(null_value_count_types), null_value_counts_values));
 
 	return Value::STRUCT(type, children);
 }
@@ -355,6 +367,47 @@ idx_t WriteToFile(IcebergTableInformation &table_info, const IcebergManifestFile
 		yyjson_mut_obj_add_strcpy(doc, val_obj, "name", "value");
 		yyjson_mut_obj_add_strcpy(doc, val_obj, "type", "binary");
 		yyjson_mut_obj_add_uint(doc, val_obj, "id", UPPER_BOUNDS_VALUE);
+	}
+
+	// null_value_counts_struct
+	// lower bounds struct
+	child_list_t<LogicalType> null_value_counts_fields;
+	null_value_counts_fields.emplace_back("key", LogicalType::INTEGER);
+	null_value_counts_fields.emplace_back("value", LogicalType::BIGINT);
+	{
+		// child_list_t<Value> null_value_counts_struct;
+		// upper bounds: map<121: int, 122: binary>
+		children.emplace_back("null_value_counts", LogicalType::MAP(LogicalType::STRUCT(null_value_counts_fields)));
+
+		child_list_t<Value> null_values_counts_record_field_ids;
+		null_values_counts_record_field_ids.emplace_back("__duckdb_field_id", Value::INTEGER(NULL_VALUE_COUNTS));
+		null_values_counts_record_field_ids.emplace_back("key", Value::INTEGER(NULL_VALUE_COUNTS_KEY));
+		null_values_counts_record_field_ids.emplace_back("value", Value::INTEGER(NULL_VALUE_COUNTS_VALUE));
+
+		data_file_field_ids.emplace_back("null_value_counts", Value::STRUCT(null_values_counts_record_field_ids));
+		auto field_obj = yyjson_mut_arr_add_obj(doc, child_fields_arr);
+		yyjson_mut_obj_add_uint(doc, field_obj, "id", NULL_VALUE_COUNTS);
+		yyjson_mut_obj_add_strcpy(doc, field_obj, "name", "null_value_counts");
+		yyjson_mut_obj_add_bool(doc, field_obj, "required", false);
+
+		auto null_value_counts_type_struct = yyjson_mut_obj_add_obj(doc, field_obj, "type");
+		yyjson_mut_obj_add_strcpy(doc, null_value_counts_type_struct, "type", "array");
+		auto items_obj = yyjson_mut_obj_add_obj(doc, null_value_counts_type_struct, "items");
+		yyjson_mut_obj_add_strcpy(doc, items_obj, "type", "record");
+		yyjson_mut_obj_add_strcpy(
+		    doc, items_obj, "name",
+		    StringUtil::Format("k%d_k%d", NULL_VALUE_COUNTS_KEY, NULL_VALUE_COUNTS_VALUE).c_str());
+		auto record_fields_arr = yyjson_mut_obj_add_arr(doc, items_obj, "fields");
+
+		auto key_obj = yyjson_mut_arr_add_obj(doc, record_fields_arr);
+		yyjson_mut_obj_add_strcpy(doc, key_obj, "name", "key");
+		yyjson_mut_obj_add_strcpy(doc, key_obj, "type", "int");
+		yyjson_mut_obj_add_uint(doc, key_obj, "id", NULL_VALUE_COUNTS_KEY);
+
+		auto val_obj = yyjson_mut_arr_add_obj(doc, record_fields_arr);
+		yyjson_mut_obj_add_strcpy(doc, val_obj, "name", "value");
+		yyjson_mut_obj_add_strcpy(doc, val_obj, "type", "binary");
+		yyjson_mut_obj_add_uint(doc, val_obj, "id", NULL_VALUE_COUNTS_VALUE);
 	}
 
 	{

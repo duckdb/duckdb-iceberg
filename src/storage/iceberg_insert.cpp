@@ -224,12 +224,6 @@ void IcebergInsert::AddWrittenFiles(IcebergInsertGlobalState &global_state, Data
 			auto ic_column_info_it = column_info.find(normalized_col_name);
 			D_ASSERT(ic_column_info_it != column_info.end());
 			auto column_info = ic_column_info_it->second;
-			if (column_info->name == "decimal_type_18_3") {
-				auto break_here = 0;
-			}
-			if (column_info->name == "decimal_type_1_12") {
-				auto break_here = 0;
-			}
 			auto stats = ParseColumnStatsNew(column_info->type, col_stats);
 			if (column_info->required && stats.has_null_count && stats.null_count > 0) {
 				throw ConstraintException("NOT NULL constraint failed: %s.%s", table->name, normalized_col_name);

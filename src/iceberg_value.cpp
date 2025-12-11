@@ -2,7 +2,6 @@
 #include "duckdb/common/helper.hpp"
 #include "duckdb/common/types/uuid.hpp"
 #include "duckdb/common/bswap.hpp"
-#include "duckdb/common/printer.hpp"
 #include "duckdb/common/types/date.hpp"
 #include "duckdb/common/types/timestamp.hpp"
 #include "duckdb/common/types/value.hpp"
@@ -269,14 +268,16 @@ std::string truncate_and_increment_utf8(const std::string &input) {
 	return std::string(bytes.begin(), bytes.end());
 }
 
-void printBinaryLeftToRight(hugeint_t value, int bits = 8) {
-	for (int i = 0; i < bits; i++) {
-		if (i > 0 && i % 8 == 0) {
-			std::cout << " ";
-		}
-		std::cout << idx_t((value >> (bits - i - 1)) & 1);
+std::vector<uint8_t> HexStringToBytes(const std::string &hex) {
+	std::vector<uint8_t> bytes;
+	D_ASSERT(hex.size() % 2 == 0);
+	bytes.reserve(hex.size() / 2);
+
+	for (size_t i = 0; i < hex.size(); i += 2) {
+		uint8_t byte = std::stoi(hex.substr(i, 2), nullptr, 16);
+		bytes.push_back(byte);
 	}
-	std::cout << std::endl;
+	return bytes;
 }
 
 SerializeResult IcebergValue::SerializeValue(Value input_value, LogicalType &column_type) {
@@ -352,34 +353,27 @@ SerializeResult IcebergValue::SerializeValue(Value input_value, LogicalType &col
 		return ret;
 	}
 	case LogicalTypeId::DECIMAL: {
-		uint8_t width;
-		uint8_t scale;
-		column_type.GetDecimalProperties(width, scale);
 		auto decimal_as_string = input_value.GetValue<string>();
 		auto dec_pos = decimal_as_string.find(".");
 		// remove the decimal point
 		decimal_as_string.erase(dec_pos, 1);
 		auto unscaled = Value(decimal_as_string).DefaultCastAs(LogicalType::HUGEINT);
 		auto unscaled_hugeint = unscaled.GetValue<hugeint_t>();
-		auto unscaled_copy = unscaled_hugeint;
-
 		vector<uint8_t> big_endian_bytes;
-		printBinaryLeftToRight(unscaled_copy, 8 * sizeof(hugeint_t));
 		bool needs_positive_padding = false;
 		bool needs_negative_padding = false;
 		auto huge_int_bytes = sizeof(hugeint_t);
 		bool first_val = false;
 		bool is_negative = unscaled_hugeint < 0;
 		for (int i = 0; i < huge_int_bytes; i++) {
-			uint8_t get_8 =
-			    static_cast<uint8_t>(static_cast<unsigned long long>(unscaled_copy >> ((huge_int_bytes - i - 1) * 8)));
-			printBinaryLeftToRight(get_8, 8);
+			uint8_t get_8 = static_cast<uint8_t>(
+			    static_cast<unsigned long long>(unscaled_hugeint >> ((huge_int_bytes - i - 1) * 8)));
 			if (is_negative && (get_8 == 0xFF) && !first_val) {
-				// number is negative, these bytes are not important
+				// number is negative, these are sign-extending bytes that are not important
 				continue;
 			}
 			if (!is_negative && (get_8 == 0x00) && !first_val) {
-				// number is positive and these bytes are not important
+				// number is positive and these sign-extending bytes that are not important
 				continue;
 			}
 			if (!first_val) {
@@ -404,7 +398,7 @@ SerializeResult IcebergValue::SerializeValue(Value input_value, LogicalType &col
 			big_endian_bytes.push_back(0x00);
 		}
 
-		// reverse the bytes
+		// reverse the bytes to get them in big-endian order
 		std::reverse(big_endian_bytes.begin(), big_endian_bytes.end());
 
 		hugeint_t result = 0;
@@ -415,16 +409,24 @@ SerializeResult IcebergValue::SerializeValue(Value input_value, LogicalType &col
 		}
 
 		auto serialized_const_data_ptr = const_data_ptr_cast<hugeint_t>(&result);
-		// create blob value of int32, with only vec.size() bytes
+		// create blob value of int32, using only big_endian_bytes.size() bytes
 		auto ret_val = Value::BLOB(serialized_const_data_ptr, big_endian_bytes.size());
-		Printer::PrintF("ret_val = %s", ret_val.ToString());
 		auto ret = SerializeResult(column_type, ret_val);
 		return ret;
 	}
-	case LogicalTypeId::BIT:
-	case LogicalTypeId::BOOLEAN:
-	case LogicalTypeId::BLOB: {
-		// TODO: these don't return correct serialization values yet.
+	case LogicalTypeId::BLOB:
+	case LogicalTypeId::BIT: {
+		// get const data ptr for the string value
+		auto val = input_value.GetValue<string>();
+		auto bytes = HexStringToBytes(val);
+		// get const data_ptr of the int32
+		auto serialized_const_data_ptr = const_data_ptr_cast<uint8_t>(bytes.data());
+		// create blob value of int32
+		auto ret_val = Value::BLOB(serialized_const_data_ptr, bytes.size());
+		auto ret = SerializeResult(column_type, ret_val);
+		return ret;
+	}
+	case LogicalTypeId::BOOLEAN: {
 		return {column_type, Value()};
 	}
 	default:

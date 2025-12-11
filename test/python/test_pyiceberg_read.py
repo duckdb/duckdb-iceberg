@@ -127,3 +127,20 @@ class TestPyIcebergRead:
             {'a': 100},
             {'a': 100},
         ]
+
+
+@pytest.mark.skipif(
+    os.getenv('ICEBERG_SERVER_AVAILABLE', None) == None, reason="Test data wasn't generated, run 'make data' first"
+)
+class TestPyIcebergRead:
+    def test_pyiceberg_read(self, rest_catalog):
+        tbl = rest_catalog.load_table("default.test_reading_upper_and_lower_bounds")
+        scan = tbl.scan(row_filter=pyice.expressions.GreaterThanOrEqual("a", 350))
+
+        # Collect the file paths Iceberg selects
+        matched_files = [task.file.file_path for task in scan.plan_files()]
+        import pdb
+
+        pdb.set_trace()
+        # only 1 data file should match the filter
+        assert len(matched_files) == 1

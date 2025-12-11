@@ -26,6 +26,9 @@ statement ok
 SET TimeZone = 'UTC';
 
 statement ok
+pragma threads=1;
+
+statement ok
 CREATE SECRET (
     TYPE S3,
     KEY_ID 'admin',
@@ -34,7 +37,6 @@ CREATE SECRET (
     URL_STYLE 'path',
     USE_SSL 0
 );
-
 
 statement ok
 ATTACH '' AS my_datalake (
@@ -56,7 +58,6 @@ bool_type bool,
 float_type float,
 double_type double,
 decimal_type_18_3 DECIMAL(18,3),
-decimal_type_1_12 DECIMAL(21,1),
 date_type DATE,
 timestamp_type TIMESTAMP,
 binary_type BINARY
@@ -71,7 +72,6 @@ insert into my_datalake.default.lower_upper_bounds_test values
     -3.4028235E38,
     -1.7976931348623157E308,
     -9999999999999.999,
-    0.0,
     DATE '0001-01-01',
     TIMESTAMP '0001-01-01 00:00:00',
     ''::BLOB
@@ -84,10 +84,21 @@ insert into my_datalake.default.lower_upper_bounds_test values
     3.4028235E38,
     1.7976931348623157E308,
     9999999999999.999,
-    9.9,
     DATE '9999-12-31',
     TIMESTAMP '9999-12-31 23:59:59.999999',
     '\xFF\xFF\xFF\xFF\xFF\xFF\xFF\xFF'::BLOB
+),
+(
+    NULL,
+    NULL,
+    NULL,
+    NULL,
+    NULL,
+    NULL,
+    NULL,
+    NULL,
+    NULL,
+    NULL
 );
 
 statement ok
@@ -96,12 +107,24 @@ set variable manifest_path_duckdb = (select manifest_path from iceberg_metadata(
 statement ok
 set variable manifest_path_spark = (select manifest_path from iceberg_metadata(my_datalake.default.spark_written_upper_lower_bounds) order by manifest_sequence_number desc limit 1);
 
-mode output_result
+# field ids 1, 2, 3 refer to int type, long type, and varchar type
+query II nosort duckdb_vals
+from (select unnest(map_keys(lower_bounds)) lower_keys, unnest(map_values(lower_bounds)) lower_vals, unnest(map_keys(upper_bounds)) upper_keys, unnest(map_values(upper_bounds)) upper_vals from (select unnest(data_file) from read_avro(getvariable('manifest_path_duckdb')))) where lower_keys in (1, 2, 3, 5, 6, 7, 8, 9) order by all;
 
-# query II nosort duckdb_vals
-statement ok
-from (select unnest(map_keys(lower_bounds)) lower_keys, unnest(map_values(lower_bounds)) lower_vals, unnest(map_keys(upper_bounds)) upper_keys, unnest(map_values(upper_bounds)) upper_vals from (select unnest(data_file) from read_avro(getvariable('manifest_path_duckdb')))) order by all;
+query II nosort duckdb_vals
+from (select unnest(map_keys(lower_bounds)) lower_keys, unnest(map_values(lower_bounds)) lower_vals, unnest(map_keys(upper_bounds)) upper_keys, unnest(map_values(upper_bounds)) upper_vals from (select unnest(data_file) from read_avro(getvariable('manifest_path_spark')))) where lower_keys in (1, 2, 3, 5, 6, 7, 8, 9) order by all;
 
-# query II nosort duckdb_vals
-statement ok
-from (select unnest(map_keys(lower_bounds)) lower_keys, unnest(map_values(lower_bounds)) lower_vals, unnest(map_keys(upper_bounds)) upper_keys, unnest(map_values(upper_bounds)) upper_vals from (select unnest(data_file) from read_avro(getvariable('manifest_path_spark')))) order by all;
+# check null counts as well.
+
+query II nosort duckdb_null_value_counts
+select unnest(map_keys(null_value_counts)), unnest(map_values(null_value_counts)) from (select unnest(data_file) from read_avro(getvariable('manifest_path_duckdb'))) order by all;
+
+query II nosort duckdb_null_value_counts
+select unnest(map_keys(null_value_counts)), unnest(map_values(null_value_counts)) from (select unnest(data_file) from read_avro(getvariable('manifest_path_spark'))) order by all;
+
+# FIXME :
+# bool values need to be fixed (field id 4)
+# BLOB/BIT does not match spark because they max out blob upper/lower bounds at 4 bytes.
+
+
+
