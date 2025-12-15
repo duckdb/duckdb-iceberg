@@ -240,7 +240,7 @@ void IRCatalog::AddDefaultSupportedEndpoints() {
 	// Rename a table from one identifier to another.
 	supported_urls.insert("POST /v1/{prefix}/tables/rename");
 	// commit updates to multiple tables in an atomic transaction
-	supported_urls.insert("POST /v1/{prefix}/transactions/commit)");
+	supported_urls.insert("POST /v1/{prefix}/transactions/commit");
 }
 
 void IRCatalog::AddS3TablesEndpoints() {
@@ -268,7 +268,7 @@ void IRCatalog::AddS3TablesEndpoints() {
 	// Rename a table from one identifier to another.
 	supported_urls.insert("POST /v1/{prefix}/tables/rename");
 	// commit updates to multiple tables in an atomic transaction
-	supported_urls.insert("POST /v1/{prefix}/transactions/commit)");
+	supported_urls.insert("POST /v1/{prefix}/transactions/commit");
 }
 
 void IRCatalog::GetConfig(ClientContext &context, IcebergEndpointType &endpoint_type) {
