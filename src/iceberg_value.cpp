@@ -367,7 +367,7 @@ SerializeResult IcebergValue::SerializeValue(Value input_value, LogicalType &col
 		bool is_negative = unscaled_hugeint < 0;
 		for (int i = 0; i < huge_int_bytes; i++) {
 			uint8_t get_8 = static_cast<uint8_t>(
-			    static_cast<unsigned long long>(unscaled_hugeint >> ((huge_int_bytes - i - 1) * 8)));
+			    static_cast<uhugeint_t>(unscaled_hugeint >> ((huge_int_bytes - i - 1) * 8)));
 			if (is_negative && (get_8 == 0xFF) && !first_val) {
 				// number is negative, these are sign-extending bytes that are not important
 				continue;
