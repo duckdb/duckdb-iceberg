@@ -51,6 +51,7 @@ public:
 	}
 	const Value &GetValue() const {
 		D_ASSERT(!HasError());
+		D_ASSERT(value.type() == LogicalType::BLOB);
 		return value;
 	}
 	// some returned stats are known to be incorrect. For that we do not serialize them

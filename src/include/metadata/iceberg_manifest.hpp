@@ -52,7 +52,7 @@ public:
 	Value content_size_in_bytes;
 
 public:
-	Value ToDataFileStruct(const IcebergTableSchema &schema, const LogicalType &type) const;
+	Value ToDataFileStruct(const LogicalType &type) const;
 
 public:
 	static vector<LogicalType> Types() {

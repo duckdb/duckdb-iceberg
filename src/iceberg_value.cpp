@@ -306,7 +306,7 @@ SerializeResult IcebergValue::SerializeValue(Value input_value, LogicalType &col
 		// get const data ptr for the string value
 		string val = truncate_and_increment_utf8(input_value.GetValue<string>());
 		// create blob value of int32
-		auto serialized_val = val;
+		auto serialized_val = Value::BLOB(val);
 		auto ret = SerializeResult(column_type, serialized_val);
 		return ret;
 	}
@@ -366,8 +366,8 @@ SerializeResult IcebergValue::SerializeValue(Value input_value, LogicalType &col
 		bool first_val = false;
 		bool is_negative = unscaled_hugeint < 0;
 		for (int i = 0; i < huge_int_bytes; i++) {
-			uint8_t get_8 = static_cast<uint8_t>(
-			    static_cast<uhugeint_t>(unscaled_hugeint >> ((huge_int_bytes - i - 1) * 8)));
+			uint8_t get_8 =
+			    static_cast<uint8_t>(static_cast<uhugeint_t>(unscaled_hugeint >> ((huge_int_bytes - i - 1) * 8)));
 			if (is_negative && (get_8 == 0xFF) && !first_val) {
 				// number is negative, these are sign-extending bytes that are not important
 				continue;
@@ -426,9 +426,8 @@ SerializeResult IcebergValue::SerializeValue(Value input_value, LogicalType &col
 		auto ret = SerializeResult(column_type, ret_val);
 		return ret;
 	}
-	case LogicalTypeId::BOOLEAN: {
-		return {column_type, Value()};
-	}
+	// boolean does not yet return proper values so we skip
+	case LogicalTypeId::BOOLEAN:
 	default:
 		break;
 	}

@@ -1,4 +1,4 @@
-#include "../include/storage/iceberg_insert.hpp"
+#include "storage/iceberg_insert.hpp"
 #include "storage/iceberg_insert.hpp"
 #include "storage/irc_catalog.hpp"
 #include "storage/irc_transaction.hpp"
@@ -7,6 +7,7 @@
 #include "metadata/iceberg_column_definition.hpp"
 
 #include "iceberg_multi_file_list.hpp"
+#include "iceberg_value.hpp"
 #include "utils/iceberg_type.hpp"
 #include "duckdb/common/sort/partition_state.hpp"
 #include "duckdb/catalog/catalog_entry/copy_function_catalog_entry.hpp"
@@ -229,11 +230,26 @@ void IcebergInsert::AddWrittenFiles(IcebergInsertGlobalState &global_state, Data
 				throw ConstraintException("NOT NULL constraint failed: %s.%s", table->name, normalized_col_name);
 			}
 			// go through stats and add upper and lower bounds
+			// Do serialization of values here in case we read transaction updates
 			if (stats.has_min) {
-				data_file.lower_bounds[column_info->id] = stats.min;
+				auto serialized_value = IcebergValue::SerializeValue(stats.min, column_info->type);
+				if (serialized_value.HasError()) {
+					throw InvalidConfigurationException(serialized_value.GetError());
+				} else if (serialized_value.HasValue()) {
+					data_file.lower_bounds[column_info->id] = serialized_value.GetValue();
+				} else {
+					// TODO: log that the min value for the column was not written
+				}
 			}
 			if (stats.has_max) {
-				data_file.upper_bounds[column_info->id] = stats.max;
+				auto serialized_value = IcebergValue::SerializeValue(stats.max, column_info->type);
+				if (serialized_value.HasError()) {
+					throw InvalidConfigurationException(serialized_value.GetError());
+				} else if (serialized_value.HasValue()) {
+					data_file.upper_bounds[column_info->id] = serialized_value.GetValue();
+				} else {
+					// TODO: log that the max value for the column was not written
+				}
 			}
 			if (stats.has_column_size_bytes) {
 				data_file.column_sizes[column_info->id] = stats.column_size_bytes;

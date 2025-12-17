@@ -8,7 +8,7 @@
 
 namespace duckdb {
 
-Value IcebergManifestEntry::ToDataFileStruct(const IcebergTableSchema &schema, const LogicalType &type) const {
+Value IcebergManifestEntry::ToDataFileStruct(const LogicalType &type) const {
 	vector<Value> children;
 
 	// content: int - 134
@@ -43,34 +43,14 @@ Value IcebergManifestEntry::ToDataFileStruct(const IcebergTableSchema &schema, c
 	vector<Value> lower_bounds_values;
 	// lower bounds: map<126: int, 127: binary> - 125
 	for (auto &child : lower_bounds) {
-		auto child_type = schema.GetColumnTypeFromFieldId(child.first);
-		auto serialized_lower_bound = IcebergValue::SerializeValue(child.second, child_type);
-		if (serialized_lower_bound.HasError()) {
-			throw InvalidConfigurationException(serialized_lower_bound.GetError());
-		}
-		if (serialized_lower_bound.HasValue()) {
-			lower_bounds_values.push_back(
-			    Value::STRUCT({{"key", child.first}, {"value", serialized_lower_bound.GetValue()}}));
-		}
-		// serialized lower bound is not valid for some reason
-		// FIXME: Log that no lower bound was written
+		lower_bounds_values.push_back(Value::STRUCT({{"key", child.first}, {"value", child.second}}));
 	}
 	children.push_back(Value::MAP(LogicalType::STRUCT(bounds_types), lower_bounds_values));
 
 	vector<Value> upper_bounds_values;
 	// upper bounds: map<129: int, 130: binary> - 128
 	for (auto &child : upper_bounds) {
-		auto child_type = schema.GetColumnTypeFromFieldId(child.first);
-		auto serialized_upper_bound = IcebergValue::SerializeValue(child.second, child_type);
-		if (serialized_upper_bound.HasError()) {
-			throw InvalidConfigurationException(serialized_upper_bound.GetError());
-		}
-		if (serialized_upper_bound.HasValue()) {
-			upper_bounds_values.push_back(
-			    Value::STRUCT({{"key", child.first}, {"value", serialized_upper_bound.value}}));
-		}
-		// serialized upper bound is not valid for some reason
-		// FIXME: Log that no upper bound was written
+		upper_bounds_values.push_back(Value::STRUCT({{"key", child.first}, {"value", child.second}}));
 	}
 
 	children.push_back(Value::MAP(LogicalType::STRUCT(bounds_types), upper_bounds_values));
@@ -432,7 +412,6 @@ idx_t WriteToFile(IcebergTableInformation &table_info, const IcebergManifestFile
 
 	DataChunk data;
 	data.Initialize(allocator, types, manifest_file.data_files.size());
-	auto &iceberg_table_schema = table_info.table_metadata.GetLatestSchema();
 
 	for (idx_t i = 0; i < manifest_file.data_files.size(); i++) {
 		auto &data_file = manifest_file.data_files[i];
@@ -450,7 +429,7 @@ idx_t WriteToFile(IcebergTableInformation &table_info, const IcebergManifestFile
 		// file_sequence_number: long - 4
 		data.SetValue(col_idx++, i, Value(LogicalType::BIGINT));
 		// data_file: struct(...) - 2
-		data.SetValue(col_idx, i, data_file.ToDataFileStruct(iceberg_table_schema, data.data[col_idx].GetType()));
+		data.SetValue(col_idx, i, data_file.ToDataFileStruct(data.data[col_idx].GetType()));
 		col_idx++;
 	}
 	data.SetCardinality(manifest_file.data_files.size());
