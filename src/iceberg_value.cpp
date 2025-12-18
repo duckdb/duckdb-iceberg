@@ -1,4 +1,5 @@
 #include "iceberg_value.hpp"
+#include "utf8proc_wrapper.hpp"
 #include "duckdb/common/helper.hpp"
 #include "duckdb/common/types/uuid.hpp"
 #include "duckdb/common/bswap.hpp"
@@ -6,7 +7,6 @@
 #include "duckdb/common/types/timestamp.hpp"
 #include "duckdb/common/types/value.hpp"
 #include "mbedtls/ecp.h"
-#include "iostream"
 
 namespace duckdb {
 
@@ -263,6 +263,10 @@ std::string truncate_and_increment_utf8(const std::string &input) {
 		--i;
 	}
 	bytes[i]++;
+	// make sure the buffer is still valid UTF-8
+	if (!Utf8Proc::IsValid(reinterpret_cast<const char *>(bytes.data()), bytes.size())) {
+		bytes[i]--;
+	}
 
 	// Convert back to string
 	return std::string(bytes.begin(), bytes.end());
@@ -306,7 +310,8 @@ SerializeResult IcebergValue::SerializeValue(Value input_value, LogicalType &col
 		// get const data ptr for the string value
 		string val = truncate_and_increment_utf8(input_value.GetValue<string>());
 		// create blob value of int32
-		auto serialized_val = Value::BLOB(val);
+		const_data_ptr_t string_data = reinterpret_cast<const_data_ptr_t>(&val);
+		auto serialized_val = Value::BLOB(string_data, val.size());
 		auto ret = SerializeResult(column_type, serialized_val);
 		return ret;
 	}
@@ -431,8 +436,8 @@ SerializeResult IcebergValue::SerializeValue(Value input_value, LogicalType &col
 	default:
 		break;
 	}
-	string error = "Invalid column type";
-	return SerializeResult(error);
+	// return no serialized value, also no error.
+	return SerializeResult();
 }
 
 } // namespace duckdb

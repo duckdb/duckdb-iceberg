@@ -237,8 +237,6 @@ void IcebergInsert::AddWrittenFiles(IcebergInsertGlobalState &global_state, Data
 					throw InvalidConfigurationException(serialized_value.GetError());
 				} else if (serialized_value.HasValue()) {
 					data_file.lower_bounds[column_info->id] = serialized_value.GetValue();
-				} else {
-					// TODO: log that the min value for the column was not written
 				}
 			}
 			if (stats.has_max) {
@@ -247,8 +245,6 @@ void IcebergInsert::AddWrittenFiles(IcebergInsertGlobalState &global_state, Data
 					throw InvalidConfigurationException(serialized_value.GetError());
 				} else if (serialized_value.HasValue()) {
 					data_file.upper_bounds[column_info->id] = serialized_value.GetValue();
-				} else {
-					// TODO: log that the max value for the column was not written
 				}
 			}
 			if (stats.has_column_size_bytes) {

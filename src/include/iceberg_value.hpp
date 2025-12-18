@@ -38,6 +38,9 @@ public:
 	    : original_type(column_type), value(serialized_value) {
 	}
 
+	SerializeResult() : original_type(LogicalType::INVALID), value(Value()) {
+	}
+
 	explicit SerializeResult(const string &error) : error(error) {
 	}
 
