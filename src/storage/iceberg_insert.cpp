@@ -139,40 +139,8 @@ IcebergColumnStats IcebergInsert::ParseColumnStatsNew(const LogicalType &type, c
 		} else if (stats_name == "has_nan") {
 			column_stats.has_contains_nan = true;
 			column_stats.contains_nan = StringValue::Get(stats_children[1]) == "true";
-		}
-		// else if (stats_name == "bbox_xmax") {
-		// 	auto &geo_stats = column_stats.extra_stats->Cast<DuckLakeColumnGeoStats>();
-		// 	geo_stats.xmax = stats_children[1].DefaultCastAs(LogicalType::DOUBLE).GetValue<double>();
-		// } else if (stats_name == "bbox_xmin") {
-		// 	auto &geo_stats = column_stats.extra_stats->Cast<DuckLakeColumnGeoStats>();
-		// 	geo_stats.xmin = stats_children[1].DefaultCastAs(LogicalType::DOUBLE).GetValue<double>();
-		// } else if (stats_name == "bbox_ymax") {
-		// 	auto &geo_stats = column_stats.extra_stats->Cast<DuckLakeColumnGeoStats>();
-		// 	geo_stats.ymax = stats_children[1].DefaultCastAs(LogicalType::DOUBLE).GetValue<double>();
-		// } else if (stats_name == "bbox_ymin") {
-		// 	auto &geo_stats = column_stats.extra_stats->Cast<DuckLakeColumnGeoStats>();
-		// 	geo_stats.ymin = stats_children[1].DefaultCastAs(LogicalType::DOUBLE).GetValue<double>();
-		// } else if (stats_name == "bbox_zmax") {
-		// 	auto &geo_stats = column_stats.extra_stats->Cast<DuckLakeColumnGeoStats>();
-		// 	geo_stats.zmax = stats_children[1].DefaultCastAs(LogicalType::DOUBLE).GetValue<double>();
-		// } else if (stats_name == "bbox_zmin") {
-		// 	auto &geo_stats = column_stats.extra_stats->Cast<DuckLakeColumnGeoStats>();
-		// 	geo_stats.zmin = stats_children[1].DefaultCastAs(LogicalType::DOUBLE).GetValue<double>();
-		// } else if (stats_name == "bbox_mmax") {
-		// 	auto &geo_stats = column_stats.extra_stats->Cast<DuckLakeColumnGeoStats>();
-		// 	geo_stats.mmax = stats_children[1].DefaultCastAs(LogicalType::DOUBLE).GetValue<double>();
-		// } else if (stats_name == "bbox_mmin") {
-		// 	auto &geo_stats = column_stats.extra_stats->Cast<DuckLakeColumnGeoStats>();
-		// 	geo_stats.mmin = stats_children[1].DefaultCastAs(LogicalType::DOUBLE).GetValue<double>();
-		// } else if (stats_name == "geo_types") {
-		// 	auto &geo_stats = column_stats.extra_stats->Cast<DuckLakeColumnGeoStats>();
-		// 	auto list_value = stats_children[1].DefaultCastAs(LogicalType::LIST(LogicalType::VARCHAR));
-		// 	for (const auto &child : ListValue::GetChildren(list_value)) {
-		// 		geo_stats.geo_types.insert(StringValue::Get(child));
-		// 	}
-		// }
-		else {
-			throw NotImplementedException("Unsupported stats type \"%s\" in DuckLakeInsert::Sink()", stats_name);
+		} else {
+			throw NotImplementedException("Unsupported stats type \"%s\" in IcebergInsert::Sink()", stats_name);
 		}
 	}
 	return column_stats;
@@ -254,9 +222,7 @@ void IcebergInsert::AddWrittenFiles(IcebergInsertGlobalState &global_state, Data
 				data_file.null_value_counts[column_info->id] = stats.null_count;
 			}
 
-			//! TODO: convert 'stats' into 'data_file.lower_bounds', upper_bounds, value_counts, null_value_counts,
-			//! nan_value_counts ...
-			//! null_value_counts and nan_value_counts won't work, we can only indicate if they exist.
+			//! nan_value_counts won't work, we can only indicate if they exist.
 			//! unsure what we should do here
 		}
 

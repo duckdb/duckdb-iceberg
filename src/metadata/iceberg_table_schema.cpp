@@ -136,14 +136,4 @@ void IcebergTableSchema::SchemaToJson(yyjson_mut_doc *doc, yyjson_mut_val *root_
 	yyjson_mut_obj_add_arr(doc, root_object, "identifier-field-ids");
 }
 
-LogicalType IcebergTableSchema::GetColumnTypeFromFieldId(idx_t field_id) const {
-	for (auto &column : columns) {
-		if (column->id == field_id) {
-			return column->type;
-		}
-	}
-	throw InvalidInputException("GetColumnTypeFromFieldId:: field id %dd does not exist in schema with id %d", field_id,
-	                            schema_id);
-}
-
 } // namespace duckdb
