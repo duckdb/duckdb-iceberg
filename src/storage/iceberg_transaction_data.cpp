@@ -116,6 +116,55 @@ void IcebergTransactionData::AddSnapshot(IcebergSnapshotOperationType operation,
 		}
 	}
 
+	//! Compute snapshot summary statistics
+	new_snapshot.summary.has_statistics = true;
+
+	//! Get previous snapshot totals if available
+	IcebergSnapshotSummary prev_summary;
+	if (new_snapshot.has_parent_snapshot) {
+		if (!alters.empty()) {
+			auto &last_alter = alters.back().get();
+			prev_summary = last_alter.snapshot.summary;
+		} else {
+			auto prev_snapshot = table_metadata.GetSnapshotById(new_snapshot.parent_snapshot_id);
+			if (prev_snapshot && prev_snapshot->summary.has_statistics) {
+				prev_summary = prev_snapshot->summary;
+			}
+		}
+	}
+
+	//! Calculate delta values from data_files
+	for (const auto &file : data_files) {
+		if (operation == IcebergSnapshotOperationType::APPEND) {
+			new_snapshot.summary.added_records += file.record_count;
+			new_snapshot.summary.added_data_files += 1;
+			new_snapshot.summary.added_files_size += file.file_size_in_bytes;
+		} else if (operation == IcebergSnapshotOperationType::DELETE) {
+			new_snapshot.summary.deleted_records += file.record_count;
+			new_snapshot.summary.deleted_data_files += 1;
+			new_snapshot.summary.removed_files_size += file.file_size_in_bytes;
+		}
+	}
+
+	//! Calculate cumulative totals
+	if (operation == IcebergSnapshotOperationType::APPEND) {
+		new_snapshot.summary.total_records = prev_summary.total_records + new_snapshot.summary.added_records;
+		new_snapshot.summary.total_data_files = prev_summary.total_data_files + new_snapshot.summary.added_data_files;
+		new_snapshot.summary.total_files_size = prev_summary.total_files_size + new_snapshot.summary.added_files_size;
+		new_snapshot.summary.total_delete_files = prev_summary.total_delete_files;
+		new_snapshot.summary.total_position_deletes = prev_summary.total_position_deletes;
+		new_snapshot.summary.total_equality_deletes = prev_summary.total_equality_deletes;
+		//! For appends, changed partition count is typically 1 for unpartitioned tables
+		new_snapshot.summary.changed_partition_count = 1;
+	} else if (operation == IcebergSnapshotOperationType::DELETE) {
+		new_snapshot.summary.total_records = prev_summary.total_records;
+		new_snapshot.summary.total_data_files = prev_summary.total_data_files;
+		new_snapshot.summary.total_files_size = prev_summary.total_files_size;
+		new_snapshot.summary.total_delete_files = prev_summary.total_delete_files + new_snapshot.summary.deleted_data_files;
+		new_snapshot.summary.total_position_deletes = prev_summary.total_position_deletes + new_snapshot.summary.deleted_records;
+		new_snapshot.summary.total_equality_deletes = prev_summary.total_equality_deletes;
+	}
+
 	auto manifest_content_type = IcebergManifestContentType::DATA;
 	switch (operation) {
 	case IcebergSnapshotOperationType::DELETE:
@@ -171,6 +220,46 @@ void IcebergTransactionData::AddUpdateSnapshot(vector<IcebergManifestEntry> &&de
 			new_snapshot.parent_snapshot_id = table_info.table_metadata.current_snapshot_id;
 		}
 	}
+
+	//! Compute snapshot summary statistics for OVERWRITE
+	new_snapshot.summary.has_statistics = true;
+
+	//! Get previous snapshot totals if available
+	IcebergSnapshotSummary prev_summary;
+	if (new_snapshot.has_parent_snapshot) {
+		if (!alters.empty()) {
+			auto &last_alter = alters.back().get();
+			prev_summary = last_alter.snapshot.summary;
+		} else {
+			auto prev_snapshot = table_metadata.GetSnapshotById(new_snapshot.parent_snapshot_id);
+			if (prev_snapshot && prev_snapshot->summary.has_statistics) {
+				prev_summary = prev_snapshot->summary;
+			}
+		}
+	}
+
+	//! Calculate delta values from delete_files
+	for (const auto &file : delete_files) {
+		new_snapshot.summary.deleted_records += file.record_count;
+		new_snapshot.summary.deleted_data_files += 1;
+		new_snapshot.summary.removed_files_size += file.file_size_in_bytes;
+	}
+
+	//! Calculate delta values from data_files
+	for (const auto &file : data_files) {
+		new_snapshot.summary.added_records += file.record_count;
+		new_snapshot.summary.added_data_files += 1;
+		new_snapshot.summary.added_files_size += file.file_size_in_bytes;
+	}
+
+	//! Calculate cumulative totals for OVERWRITE
+	new_snapshot.summary.total_records = prev_summary.total_records - new_snapshot.summary.deleted_records + new_snapshot.summary.added_records;
+	new_snapshot.summary.total_data_files = prev_summary.total_data_files - new_snapshot.summary.deleted_data_files + new_snapshot.summary.added_data_files;
+	new_snapshot.summary.total_files_size = prev_summary.total_files_size - new_snapshot.summary.removed_files_size + new_snapshot.summary.added_files_size;
+	new_snapshot.summary.total_delete_files = prev_summary.total_delete_files + static_cast<int64_t>(delete_files.size());
+	new_snapshot.summary.total_position_deletes = prev_summary.total_position_deletes;
+	new_snapshot.summary.total_equality_deletes = prev_summary.total_equality_deletes;
+	new_snapshot.summary.changed_partition_count = 1;
 
 	auto add_snapshot = make_uniq<IcebergAddSnapshot>(table_info, manifest_list_path, std::move(new_snapshot));
 	CreateManifestListEntry(*add_snapshot, table_metadata, IcebergManifestContentType::DELETE, std::move(delete_files));
