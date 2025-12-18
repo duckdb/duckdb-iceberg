@@ -139,8 +139,5 @@ class TestPyIcebergRead:
 
         # Collect the file paths Iceberg selects
         matched_files = [task.file.file_path for task in scan.plan_files()]
-        import pdb
-
-        pdb.set_trace()
         # only 1 data file should match the filter
         assert len(matched_files) == 1

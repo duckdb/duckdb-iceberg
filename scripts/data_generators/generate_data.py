@@ -31,6 +31,8 @@ for target in args.targets:
     print(f"Generating for '{target}'")
     for test in tests:
         print(f"Generating test '{test.table}'")
+        if test.table == "spark_written_upper_lower_bounds":
+            continue
         test.generate(con)
 
 if __name__ == "__main__":

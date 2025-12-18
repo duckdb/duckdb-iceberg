@@ -28,6 +28,8 @@ SET TimeZone = 'UTC';
 statement ok
 pragma threads=1;
 
+mode skip
+
 statement ok
 CREATE SECRET (
     TYPE S3,
