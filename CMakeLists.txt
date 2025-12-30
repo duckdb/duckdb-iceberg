@@ -10,8 +10,6 @@ set(LOADABLE_EXTENSION_NAME ${TARGET_NAME}_loadable_extension)
 set(CMAKE_CXX_STANDARD 14 CACHE STRING "C++ standard")
 set(CMAKE_CXX_STANDARD_REQUIRED True)
 
-# Force the use of the static runtime (/MT or /MTd for Debug builds)
-set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded")
 
 if(NOT CMAKE_SYSTEM_NAME STREQUAL "Emscripten")
     find_package(CURL REQUIRED)
@@ -29,7 +27,6 @@ set(PROJECT_INC_DIR ${CMAKE_CURRENT_SOURCE_DIR}/src/include)
 add_subdirectory(src)
 set(EXTENSION_SOURCES ${ALL_OBJECT_FILES})
 
-# Define object libraries
 set(ICEBERG_OBJECT_LIBS
         iceberg_src_objects
         iceberg_common_objects
@@ -47,10 +44,6 @@ set(ICEBERG_OBJECT_LIBS
 # Apply runtime library and link dependencies to each object library
 foreach(tgt IN LISTS ICEBERG_OBJECT_LIBS)
     if(TARGET ${tgt})
-        # Propagate the static runtime setting to object libraries
-        set_target_properties(${tgt} PROPERTIES
-            MSVC_RUNTIME_LIBRARY "MultiThreaded"
-        )
 
         if(NOT CMAKE_SYSTEM_NAME STREQUAL "Emscripten")
             # AWSSDK libraries and CURL libraries (if defined)
@@ -81,21 +74,17 @@ build_loadable_extension(${TARGET_NAME} ${PARAMETERS} ${EXTENSION_SOURCES} ${ALL
 set(TARGET_NAME iceberg)
 
 if(NOT CMAKE_SYSTEM_NAME STREQUAL "Emscripten")
-    # Set runtime library and include directories for the extension
-    set_target_properties(${EXTENSION_NAME} PROPERTIES MSVC_RUNTIME_LIBRARY "MultiThreaded")
     target_include_directories(${EXTENSION_NAME} PUBLIC $<BUILD_INTERFACE:${AWSSDK_INCLUDE_DIRS}>)
     target_link_libraries(${EXTENSION_NAME} PUBLIC ${AWSSDK_LINK_LIBRARIES})
 
-    # Configure the loadable extension target
-    set_target_properties(${TARGET_NAME}_loadable_extension PROPERTIES MSVC_RUNTIME_LIBRARY "MultiThreaded")
-    target_include_directories(${TARGET_NAME}_loadable_extension PRIVATE $<BUILD_INTERFACE:${AWSSDK_INCLUDE_DIRS}>)
-    target_link_libraries(${TARGET_NAME}_loadable_extension ${AWSSDK_LINK_LIBRARIES})
+    target_include_directories(${TARGET_NAME}_loadable_extension
+                            PRIVATE $<BUILD_INTERFACE:${AWSSDK_INCLUDE_DIRS}>)
+    target_link_libraries(${TARGET_NAME}_loadable_extension
+                        ${AWSSDK_LINK_LIBRARIES})
 
-    # Link CURL libraries
-    if(DEFINED CURL_LIBRARIES)
-        target_link_libraries(${EXTENSION_NAME} PUBLIC ${CURL_LIBRARIES})
-        target_link_libraries(${TARGET_NAME}_loadable_extension ${CURL_LIBRARIES})
-    endif()
+    # Link dependencies into extension
+    target_link_libraries(${EXTENSION_NAME} PUBLIC ${CURL_LIBRARIES})
+    target_link_libraries(${TARGET_NAME}_loadable_extension ${CURL_LIBRARIES})
 endif()
 
 # Link Roaring library to the main extension and loadable extension
