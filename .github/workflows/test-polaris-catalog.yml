@@ -1,80 +1,34 @@
-name: Local Polaris Testing
-on: [push, pull_request,repository_dispatch]
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.head_ref || '' }}-${{ github.base_ref || '' }}-${{ github.ref != 'refs/heads/main' || github.sha }}
-  cancel-in-progress: true
-defaults:
-  run:
-    shell: bash
-
-env:
-  BASE_BRANCH: ${{ github.base_ref || (endsWith(github.ref, '_feature') && 'feature' || 'main') }}
+name: Test Polaris Catalog
+on:
+  workflow_call:
+    inputs:
+      artifact-name:
+        description: "Name of the DuckDB-Iceberg artifact to download"
+        required: true
+        type: string
 
 jobs:
-  rest:
+  test-polaris:
     name: Test against Polaris Catalog
     runs-on: ubuntu-latest
-    env:
-      VCPKG_TARGET_TRIPLET: 'x64-linux-release'
-      GEN: ninja
-      VCPKG_FEATURE_FLAGS: "-binarycaching"
-      VCPKG_TOOLCHAIN_PATH: ${{ github.workspace }}/vcpkg/scripts/buildsystems/vcpkg.cmake
-      PIP_BREAK_SYSTEM_PACKAGES: 1
 
     steps:
-      - name: Install required ubuntu packages
-        run: |
-          sudo apt-get update -y -qq
-          sudo apt-get install -y -qq software-properties-common
-          sudo add-apt-repository ppa:git-core/ppa
-          sudo apt-get update -y -qq
-          sudo apt-get install -y -qq \
-            ninja-build \
-            make gcc-multilib \
-            g++-multilib \
-            libssl-dev \
-            wget \
-            openjdk-8-jdk \
-            zip \
-            maven \
-            unixodbc-dev \
-            libc6-dev-i386 \
-            lib32readline6-dev \
-            libssl-dev \
-            libcurl4-gnutls-dev \
-            libexpat1-dev \
-            gettext \
-            unzip \
-            build-essential \
-            checkinstall \
-            libffi-dev \
-            curl \
-            libz-dev \
-            openssh-client
-          sudo apt-get install -y -qq tar pkg-config
-          sudo curl -L "https://github.com/docker/compose/releases/download/1.29.2/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
-          sudo chmod +x /usr/local/bin/docker-compose
-
-      - uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
           submodules: 'true'
 
-      - name: Setup vcpkg
-        uses: lukka/run-vcpkg@v11.1
+      - name: Download DuckDB-Iceberg artifact
+        uses: actions/download-artifact@v4
         with:
-          vcpkgGitCommitId: ce613c41372b23b1f51333815feb3edd87ef8a8b
+          name: ${{ inputs.artifact-name }}
+          path: build/release
 
-      - name: Setup Ccache
-        uses: hendrikmuhs/ccache-action@main
-        continue-on-error: true
-
-      - name: Build extension
-        env:
-          GEN: ninja
-          STATIC_LIBCPP: 1
+      - name: Restore permissions
         run: |
-          make release
+          find ./build/release -type f -name 'duckdb*' -exec chmod +x {} \;
+          find ./build/release -type f -name 'unittest*' -exec chmod +x {} \;
 
       - name: Set up for Polaris
         run: |

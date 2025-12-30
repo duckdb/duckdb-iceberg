@@ -1,0 +1,71 @@
+name: Test Spark Catalog Reusable
+on:
+  workflow_call:
+    inputs:
+      artifact-name:
+        description: "Name of the DuckDB-Iceberg artifact to download"
+        required: true
+        type: string
+
+jobs:
+  test-spark:
+    name: Test against Spark Catalog
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: 'true'
+
+      - name: Download DuckDB-Iceberg artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.artifact-name }}
+          path: build/release
+
+      - name: Restore permissions
+        run: |
+          find ./build/release -type f -name 'duckdb*' -exec chmod +x {} \;
+          find ./build/release -type f -name 'unittest*' -exec chmod +x {} \;
+
+      - name: Install Spark Catalog dependencies
+        shell: bash
+        run: |
+          # install docker-compose
+          sudo curl -L "https://github.com/docker/compose/releases/download/1.29.2/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
+          sudo chmod +x /usr/local/bin/docker-compose
+          # install Java & Python
+          sudo apt update -y -qq
+          sudo apt install -y -qq openjdk-21-jre-headless openjdk-21-jdk-headless python3-venv tar pkg-config
+
+      - name: Install CMake 3.x
+        run: |
+          sudo apt-get remove -y cmake cmake-data
+          sudo apt-get install --allow-downgrades -y -qq 'cmake=3.*' 'cmake-data=3.*'
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+
+      - name: Install required python packages
+        run: |
+          python3 -m pip install -r scripts/requirements.txt
+          
+      - name: Generate data
+        run: |
+          make data
+
+      - name: Test with rest catalog
+        env:
+          ICEBERG_SERVER_AVAILABLE: 1
+          DUCKDB_ICEBERG_HAVE_GENERATED_DATA: 1
+        run: |
+          make test_release
+
+      - name: Test reads with PyIceberg
+        env:
+          ICEBERG_SERVER_AVAILABLE: 1
+        run: |
+          python3 -m pytest test/python
