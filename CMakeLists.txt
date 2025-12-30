@@ -6,8 +6,12 @@ set(TARGET_NAME iceberg)
 set(EXTENSION_NAME ${TARGET_NAME}_extension)
 set(LOADABLE_EXTENSION_NAME ${TARGET_NAME}_loadable_extension)
 
+# Set the C++ standard
 set(CMAKE_CXX_STANDARD 14 CACHE STRING "C++ standard")
 set(CMAKE_CXX_STANDARD_REQUIRED True)
+
+# Force the use of the static runtime (/MT or /MTd for Debug builds)
+set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded")
 
 if(NOT CMAKE_SYSTEM_NAME STREQUAL "Emscripten")
     find_package(CURL REQUIRED)
@@ -21,9 +25,11 @@ find_package(roaring CONFIG REQUIRED)
 # Project-wide public include directory (use absolute path for clarity in IDEs)
 set(PROJECT_INC_DIR ${CMAKE_CURRENT_SOURCE_DIR}/src/include)
 
+# Add subdirectories for the source files
 add_subdirectory(src)
 set(EXTENSION_SOURCES ${ALL_OBJECT_FILES})
 
+# Define object libraries
 set(ICEBERG_OBJECT_LIBS
         iceberg_src_objects
         iceberg_common_objects
@@ -38,10 +44,16 @@ set(ICEBERG_OBJECT_LIBS
         rest_catalog_objects
 )
 
+# Apply runtime library and link dependencies to each object library
 foreach(tgt IN LISTS ICEBERG_OBJECT_LIBS)
     if(TARGET ${tgt})
+        # Propagate the static runtime setting to object libraries
+        set_target_properties(${tgt} PROPERTIES
+            MSVC_RUNTIME_LIBRARY "MultiThreaded"
+        )
+
         if(NOT CMAKE_SYSTEM_NAME STREQUAL "Emscripten")
-            # AWSSDK variables come from find_package(AWSSDK ...)
+            # AWSSDK libraries and CURL libraries (if defined)
             if(DEFINED AWSSDK_LINK_LIBRARIES)
                 target_link_libraries(${tgt} PUBLIC ${AWSSDK_LINK_LIBRARIES})
             endif()
@@ -50,50 +62,54 @@ foreach(tgt IN LISTS ICEBERG_OBJECT_LIBS)
             endif()
         endif()
 
-        # Link roaring imported targets (these are imported targets provided by the package)
-        # This will propagate include directories for <roaring/roaring.hh>
+        # Link Roaring imported targets
         target_link_libraries(${tgt} PUBLIC roaring::roaring roaring::roaring-headers roaring::roaring-headers-cpp)
 
-        # Ensure sources in these OBJECT libraries see headers in src/include
+        # Ensure sources in object libraries see headers in src/include
         target_include_directories(${tgt} PUBLIC ${PROJECT_INC_DIR})
     endif()
 endforeach()
 
+# Create the static library
 add_library(${EXTENSION_NAME} STATIC ${EXTENSION_SOURCES} ${ALL_OBJECT_FILES})
 
+# Build the loadable extension
 set(PARAMETERS "-warnings")
 build_loadable_extension(${TARGET_NAME} ${PARAMETERS} ${EXTENSION_SOURCES} ${ALL_OBJECT_FILES})
 
-
-# Reset the TARGET_NAME, the AWS find_package build could bleed into our build -
-# overriding `TARGET_NAME`
+# Reset the TARGET_NAME (in case it gets overridden by AWSSDK's CMake)
 set(TARGET_NAME iceberg)
 
 if(NOT CMAKE_SYSTEM_NAME STREQUAL "Emscripten")
-    # AWS SDK FROM vcpkg
-    target_include_directories(${EXTENSION_NAME}
-                            PUBLIC $<BUILD_INTERFACE:${AWSSDK_INCLUDE_DIRS}>)
+    # Set runtime library and include directories for the extension
+    set_target_properties(${EXTENSION_NAME} PROPERTIES MSVC_RUNTIME_LIBRARY "MultiThreaded")
+    target_include_directories(${EXTENSION_NAME} PUBLIC $<BUILD_INTERFACE:${AWSSDK_INCLUDE_DIRS}>)
     target_link_libraries(${EXTENSION_NAME} PUBLIC ${AWSSDK_LINK_LIBRARIES})
-    target_include_directories(${TARGET_NAME}_loadable_extension
-                            PRIVATE $<BUILD_INTERFACE:${AWSSDK_INCLUDE_DIRS}>)
-    target_link_libraries(${TARGET_NAME}_loadable_extension
-                        ${AWSSDK_LINK_LIBRARIES})
 
-    # Link dependencies into extension
-    target_link_libraries(${EXTENSION_NAME} PUBLIC ${CURL_LIBRARIES})
-    target_link_libraries(${TARGET_NAME}_loadable_extension ${CURL_LIBRARIES})
+    # Configure the loadable extension target
+    set_target_properties(${TARGET_NAME}_loadable_extension PROPERTIES MSVC_RUNTIME_LIBRARY "MultiThreaded")
+    target_include_directories(${TARGET_NAME}_loadable_extension PRIVATE $<BUILD_INTERFACE:${AWSSDK_INCLUDE_DIRS}>)
+    target_link_libraries(${TARGET_NAME}_loadable_extension ${AWSSDK_LINK_LIBRARIES})
+
+    # Link CURL libraries
+    if(DEFINED CURL_LIBRARIES)
+        target_link_libraries(${EXTENSION_NAME} PUBLIC ${CURL_LIBRARIES})
+        target_link_libraries(${TARGET_NAME}_loadable_extension ${CURL_LIBRARIES})
+    endif()
 endif()
 
-# Link Roaring library
+# Link Roaring library to the main extension and loadable extension
 target_link_libraries(${EXTENSION_NAME} PUBLIC roaring::roaring roaring::roaring-headers roaring::roaring-headers-cpp)
 target_link_libraries(${TARGET_NAME}_loadable_extension roaring::roaring roaring::roaring-headers roaring::roaring-headers-cpp)
 
-# Attach the project include directory to the final targets so IDEs index correctly
+# Attach the project include directory to the final targets
 target_include_directories(${EXTENSION_NAME} PUBLIC ${PROJECT_INC_DIR})
 target_include_directories(${TARGET_NAME}_loadable_extension PUBLIC ${PROJECT_INC_DIR})
 
+# Install the targets
 install(
   TARGETS ${EXTENSION_NAME} ${TARGET_NAME}_loadable_extension
   EXPORT "${DUCKDB_EXPORT_SET}"
   LIBRARY DESTINATION "${INSTALL_LIB_DIR}"
-  ARCHIVE DESTINATION "${INSTALL_LIB_DIR}")
+  ARCHIVE DESTINATION "${INSTALL_LIB_DIR}"
+)
