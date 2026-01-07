@@ -140,7 +140,7 @@ shared_ptr<IcebergTableSchema> IcebergCreateTableRequest::CreateIcebergSchema(co
 }
 
 void IcebergCreateTableRequest::PopulateSchema(yyjson_mut_doc *doc, yyjson_mut_val *schema_json,
-                                               IcebergTableSchema &schema) {
+                                               const IcebergTableSchema &schema) {
 	yyjson_mut_obj_add_strcpy(doc, schema_json, "type", "struct");
 	auto fields_arr = yyjson_mut_obj_add_arr(doc, schema_json, "fields");
 

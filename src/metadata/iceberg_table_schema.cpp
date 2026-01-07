@@ -136,4 +136,14 @@ void IcebergTableSchema::SchemaToJson(yyjson_mut_doc *doc, yyjson_mut_val *root_
 	yyjson_mut_obj_add_arr(doc, root_object, "identifier-field-ids");
 }
 
+shared_ptr<IcebergTableSchema> IcebergTableSchema::Copy() const {
+	auto res = make_shared_ptr<IcebergTableSchema>();
+	res->schema_id = schema_id;
+	res->last_column_id = last_column_id;
+	for (auto &column : columns) {
+		res->columns.push_back(column->Copy());
+	}
+	return res;
+}
+
 } // namespace duckdb

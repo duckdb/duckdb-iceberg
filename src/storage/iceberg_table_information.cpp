@@ -248,6 +248,19 @@ optional_ptr<CatalogEntry> IcebergTableInformation::CreateSchemaVersion(IcebergT
 	return result;
 }
 
+idx_t IcebergTableInformation::GetMaxSchemaId() {
+	idx_t max_schema_id = 0;
+	if (schema_versions.empty()) {
+		throw CatalogException("No schema versions found for table '%s.%s'", schema.name, name);
+	}
+	for (auto &schema : schema_versions) {
+		if (schema.first > max_schema_id) {
+			max_schema_id = schema.first;
+		}
+	}
+	return max_schema_id;
+}
+
 optional_ptr<CatalogEntry> IcebergTableInformation::GetSchemaVersion(optional_ptr<BoundAtClause> at) {
 	D_ASSERT(!schema_versions.empty());
 	auto snapshot_lookup = IcebergSnapshotLookup::FromAtClause(at);

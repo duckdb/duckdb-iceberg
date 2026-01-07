@@ -26,6 +26,7 @@ public:
 	optional_ptr<CatalogEntry> GetLatestSchema();
 	optional_ptr<CatalogEntry> GetSchemaVersion(optional_ptr<BoundAtClause> at);
 	optional_ptr<CatalogEntry> CreateSchemaVersion(IcebergTableSchema &table_schema);
+	idx_t GetMaxSchemaId();
 	IRCAPITableCredentials GetVendedCredentials(ClientContext &context);
 	const string &BaseFilePath() const;
 
