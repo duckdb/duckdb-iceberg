@@ -196,4 +196,17 @@ bool IcebergColumnDefinition::IsIcebergPrimitiveType() {
 	}
 }
 
+unique_ptr<IcebergColumnDefinition> IcebergColumnDefinition::Copy() const {
+	auto res = make_uniq<IcebergColumnDefinition>();
+	res->id = id;
+	res->name = name;
+	res->type = type;
+	res->initial_default = initial_default;
+	res->required = required;
+	for (auto &child : children) {
+		res->children.push_back(child->Copy());
+	}
+	return res;
+}
+
 } // namespace duckdb

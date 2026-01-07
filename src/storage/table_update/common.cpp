@@ -5,7 +5,7 @@
 
 namespace duckdb {
 
-static rest_api_objects::Schema CopySchema(IcebergTableSchema &schema) {
+static rest_api_objects::Schema CopySchema(const IcebergTableSchema &schema) {
 	// the rest api objects are currently not copyable. Without having to modify generated code
 	//  the easiest way to copy for now is to write the schema to string, then parse it again
 	std::unique_ptr<yyjson_mut_doc, YyjsonDocDeleter> doc_p(yyjson_mut_doc_new(nullptr));
@@ -28,6 +28,9 @@ AddSchemaUpdate::AddSchemaUpdate(IcebergTableInformation &table_info)
 		throw InvalidConfigurationException("cannot assign a current schema id for a schema that does not yet exist");
 	};
 	table_schema = table_info.table_metadata.schemas[current_schema_id];
+	if (table_info.table_metadata.HasLastColumnId()) {
+		last_column_id = table_info.table_metadata.GetLastColumnId();
+	}
 }
 
 void AddSchemaUpdate::CreateUpdate(DatabaseInstance &db, ClientContext &context, IcebergCommitState &commit_state) {
@@ -36,13 +39,14 @@ void AddSchemaUpdate::CreateUpdate(DatabaseInstance &db, ClientContext &context,
 	update.has_add_schema_update = true;
 	update.add_schema_update.has_action = true;
 	update.add_schema_update.action = "add-schema";
-	auto &current_schema = table_info.table_metadata.GetLatestSchema();
-	auto &schema = table_info.table_metadata.schemas[current_schema.schema_id];
-	update.add_schema_update.schema = CopySchema(*schema.get());
+
+	auto &schema_to_copy = table_schema ? *table_schema : table_info.table_metadata.GetLatestSchema();
+	update.add_schema_update.schema = CopySchema(schema_to_copy);
+
 	// last column id is technically deprecated, but some catalogs still use it (nessie).
-	if (table_info.table_metadata.HasLastColumnId()) {
+	if (last_column_id.IsValid()) {
 		update.add_schema_update.has_last_column_id = true;
-		update.add_schema_update.last_column_id = table_info.table_metadata.GetLastColumnId();
+		update.add_schema_update.last_column_id = last_column_id.GetIndex();
 	}
 }
 

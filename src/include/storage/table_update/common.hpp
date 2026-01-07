@@ -23,7 +23,8 @@ struct AddSchemaUpdate : public IcebergTableUpdate {
 	explicit AddSchemaUpdate(IcebergTableInformation &table_info);
 	void CreateUpdate(DatabaseInstance &db, ClientContext &context, IcebergCommitState &commit_state);
 
-	optional_ptr<IcebergTableSchema> table_schema = nullptr;
+	shared_ptr<IcebergTableSchema> table_schema = nullptr;
+	optional_idx last_column_id;
 };
 
 struct AssertCreateRequirement : public IcebergTableRequirement {

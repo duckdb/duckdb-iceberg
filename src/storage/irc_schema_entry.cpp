@@ -1,10 +1,12 @@
 #include "storage/irc_schema_entry.hpp"
 
+#include "../include/storage/table_update/common.hpp"
+#include "duckdb/common/string_util.hpp"
 #include "storage/iceberg_table_information.hpp"
 #include "storage/irc_catalog.hpp"
 #include "storage/irc_transaction.hpp"
 #include "storage/irc_table_entry.hpp"
-#include "storage/irc_transaction.hpp"
+#include "storage/table_update/common.hpp"
 #include "utils/iceberg_type.hpp"
 #include "duckdb/parser/column_list.hpp"
 #include "duckdb/parser/parsed_data/create_view_info.hpp"
@@ -172,7 +174,80 @@ optional_ptr<CatalogEntry> IRCSchemaEntry::CreateCollation(CatalogTransaction tr
 }
 
 void IRCSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) {
-	throw NotImplementedException("Alter Schema Entry");
+	if (info.type != AlterType::ALTER_TABLE) {
+		throw NotImplementedException("Only ALTER TABLE is supported for Iceberg");
+	}
+	auto &alter_table_info = info.Cast<AlterTableInfo>();
+	auto &irc_transaction = GetICTransaction(transaction);
+	auto &context = transaction.GetContext();
+
+	EntryLookupInfo lookup(CatalogType::TABLE_ENTRY, alter_table_info.name);
+	auto catalog_entry = tables.GetEntry(context, lookup);
+	if (!catalog_entry) {
+		throw CatalogException("Table with name \"%s\" does not exist!", alter_table_info.name);
+	}
+	auto &table_entry = catalog_entry->Cast<ICTableEntry>();
+	auto &catalog_table_info = table_entry.table_info;
+	irc_transaction.updated_tables.emplace(catalog_table_info.GetTableKey(), catalog_table_info.Copy());
+	auto &updated_table = irc_transaction.updated_tables.at(catalog_table_info.GetTableKey());
+	updated_table.InitSchemaVersions();
+	updated_table.InitTransactionData(irc_transaction);
+
+	// TODO: GetLatestSchema actually gets current schema. Latest != Current
+	auto &current_schema = updated_table.table_metadata.GetLatestSchema();
+	// Copy the schema, then add it to the table metadata
+	auto new_schema = current_schema.Copy();
+	auto new_schema_id = updated_table.GetMaxSchemaId() + 1;
+	new_schema->schema_id = new_schema_id;
+
+	switch (alter_table_info.alter_table_type) {
+	case AlterTableType::ADD_COLUMN: {
+		auto &add_info = alter_table_info.Cast<AddColumnInfo>();
+		idx_t next_id = updated_table.table_metadata.GetLastColumnId();
+
+		auto get_next_id = [&]() {
+			return ++next_id;
+		};
+
+		auto iceberg_type = IcebergTypeHelper::CreateIcebergRestType(add_info.new_column.Type(), get_next_id);
+		auto new_column =
+		    IcebergColumnDefinition::ParseType(add_info.new_column.Name(), get_next_id(), false, iceberg_type);
+		new_schema->columns.push_back(std::move(new_column));
+		new_schema->last_column_id = next_id;
+
+		auto update = make_uniq<AddSchemaUpdate>(updated_table);
+		update->table_schema = new_schema;
+		update->last_column_id = next_id;
+		updated_table.transaction_data->updates.push_back(std::move(update));
+		break;
+	}
+	case AlterTableType::REMOVE_COLUMN: {
+		auto &remove_info = alter_table_info.Cast<RemoveColumnInfo>();
+		bool found = false;
+		for (auto it = new_schema->columns.begin(); it != new_schema->columns.end(); ++it) {
+			if (StringUtil::CIEquals((*it)->name, remove_info.removed_column)) {
+				new_schema->columns.erase(it);
+				found = true;
+				break;
+			}
+		}
+		if (!found && !remove_info.if_column_exists) {
+			throw CatalogException("Column with name \"%s\" does not exist!", remove_info.removed_column);
+		}
+
+		auto update = make_uniq<AddSchemaUpdate>(updated_table);
+		update->table_schema = new_schema;
+		updated_table.transaction_data->updates.push_back(std::move(update));
+		break;
+	}
+	default: {
+		throw NotImplementedException("Alter table type not supported: %s",
+		                              EnumUtil::ToString(alter_table_info.alter_table_type));
+	}
+	}
+	updated_table.table_metadata.schemas.emplace(new_schema_id, std::move(new_schema));
+	updated_table.table_metadata.current_schema_id = new_schema_id;
+	updated_table.AddSetCurrentSchema(irc_transaction);
 }
 
 static bool CatalogTypeIsSupported(CatalogType type) {
