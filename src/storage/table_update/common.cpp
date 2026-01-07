@@ -114,6 +114,7 @@ void AddPartitionSpec::CreateUpdate(DatabaseInstance &db, ClientContext &context
 	req.add_partition_spec_update.has_action = true;
 	req.add_partition_spec_update.action = "add-spec";
 	req.add_partition_spec_update.spec.has_spec_id = true;
+	// need to get the spec id from table_info() so we can also check updated talbes.
 	req.add_partition_spec_update.spec.spec_id = table_info.table_metadata.default_spec_id;
 	idx_t partition_spec_id = req.add_partition_spec_update.spec.spec_id;
 	if (table_info.table_metadata.HasPartitionSpec()) {
@@ -183,7 +184,7 @@ void SetDefaultSpec::CreateUpdate(DatabaseInstance &db, ClientContext &context, 
 	req.has_set_default_spec_update = true;
 	req.set_default_spec_update.has_action = true;
 	req.set_default_spec_update.action = "set-default-spec";
-	req.set_default_spec_update.spec_id = 0;
+	req.set_default_spec_update.spec_id = table_info.table_metadata.default_spec_id;
 }
 
 SetProperties::SetProperties(IcebergTableInformation &table_info, case_insensitive_map_t<string> properties)
