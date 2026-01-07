@@ -1,4 +1,4 @@
-# name: test/sql/local/irc/alter/test_alter_table_simple.test
+# name: test/sql/local/irc/alter/test_alter_partitioned_by.test
 # group: [alter]
 
 require-env ICEBERG_SERVER_AVAILABLE
@@ -29,38 +29,19 @@ ATTACH '' AS my_datalake (
     ENDPOINT 'http://127.0.0.1:8181'
 );
 
-# statement ok
-# drop table if exists my_datalake.default.alter_table_test;
+statement ok
+drop table if exists my_datalake.default.alter_table_partitioned;
 
 statement ok
-select * from my_datalake.default.lineitem_partitioned_l_shipmode;
-
-mode skip
+CREATE TABLE my_datalake.default.alter_table_partitioned AS (select range a, range%2 b FROM range(10));
 
 statement ok
-CREATE TABLE my_datalake.default.alter_table_test AS (select range a FROM range(10));
+Alter table my_datalake.default.alter_table_partitioned SET PARTITIONED BY (b);
 
-statement ok
-Alter table my_datalake.default.alter_table_test ADD COLUMN b INT;
-
-statement ok
-insert into my_datalake.default.alter_table_test values (11, 20);
-
-query II
-select * from my_datalake.default.alter_table_test;
+statement error
+insert into my_datalake.default.alter_table_partitioned values (11, 20);
 ----
-0	NULL
-1	NULL
-2	NULL
-3	NULL
-4	NULL
-5	NULL
-6	NULL
-7	NULL
-8	NULL
-9	NULL
-11	20
-
+<REGEX>:.*Partitioned.*
 
 # what about default value support?
 # What about nested column types? Adding/removing struct column information.

@@ -1,25 +1,23 @@
 #include "storage/irc_schema_entry.hpp"
-
-#include "../include/storage/table_update/common.hpp"
 #include "duckdb/common/string_util.hpp"
-#include "storage/iceberg_table_information.hpp"
-#include "storage/irc_catalog.hpp"
-#include "storage/irc_transaction.hpp"
-#include "storage/irc_table_entry.hpp"
-#include "storage/table_update/common.hpp"
-#include "utils/iceberg_type.hpp"
 #include "duckdb/parser/column_list.hpp"
-#include "duckdb/parser/parsed_data/create_view_info.hpp"
-#include "duckdb/parser/parsed_data/create_index_info.hpp"
-#include "duckdb/parser/parsed_data/create_schema_info.hpp"
-#include "duckdb/planner/parsed_data/bound_create_table_info.hpp"
-#include "duckdb/parser/parsed_data/drop_info.hpp"
 #include "duckdb/parser/constraints/list.hpp"
-#include "duckdb/common/unordered_set.hpp"
+#include "duckdb/parser/expression/columnref_expression.hpp"
+#include "duckdb/parser/expression/function_expression.hpp"
 #include "duckdb/parser/parsed_data/alter_info.hpp"
 #include "duckdb/parser/parsed_data/alter_table_info.hpp"
+#include "duckdb/parser/parsed_data/create_index_info.hpp"
+#include "duckdb/parser/parsed_data/create_schema_info.hpp"
+#include "duckdb/parser/parsed_data/create_view_info.hpp"
+#include "duckdb/parser/parsed_data/drop_info.hpp"
 #include "duckdb/parser/parsed_expression_iterator.hpp"
+#include "duckdb/planner/parsed_data/bound_create_table_info.hpp"
+#include "storage/iceberg_table_information.hpp"
 #include "storage/irc_catalog.hpp"
+#include "storage/irc_table_entry.hpp"
+#include "storage/irc_transaction.hpp"
+#include "storage/table_update/common.hpp"
+#include "utils/iceberg_type.hpp"
 namespace duckdb {
 
 IRCSchemaEntry::IRCSchemaEntry(Catalog &catalog, CreateSchemaInfo &info)
@@ -243,6 +241,58 @@ void IRCSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) {
 		update->table_schema = new_schema;
 		updated_table.transaction_data->updates.push_back(std::move(update));
 		break;
+	}
+	case AlterTableType::SET_PARTITIONED_BY: {
+		auto &partition_info = alter_table_info.Cast<SetPartitionedByInfo>();
+		// TODO: generate correct new spec id
+		auto new_spec_id = updated_table.table_metadata.default_spec_id + 1;
+		IcebergPartitionSpec new_spec;
+		new_spec.spec_id = new_spec_id;
+
+		for (auto &key : partition_info.partition_keys) {
+			string column_name;
+			string transform_name = "identity";
+
+			if (key->type == ExpressionType::COLUMN_REF) {
+				auto &colref = key->Cast<ColumnRefExpression>();
+				column_name = colref.column_names.back();
+			} else if (key->type == ExpressionType::FUNCTION) {
+				auto &funcexpr = key->Cast<FunctionExpression>();
+				transform_name = funcexpr.function_name;
+				if (funcexpr.children.empty() || funcexpr.children[0]->type != ExpressionType::COLUMN_REF) {
+					throw NotImplementedException("Only simple function transforms on columns are supported");
+				}
+				auto &colref = funcexpr.children[0]->Cast<ColumnRefExpression>();
+				column_name = colref.column_names.back();
+			} else {
+				throw NotImplementedException("Unsupported partition key type: %s", key->ToString());
+			}
+
+			// Find source_id
+			int32_t source_id = -1;
+			for (auto &col : new_schema->columns) {
+				if (StringUtil::CIEquals(col->name, column_name)) {
+					source_id = col->id;
+					break;
+				}
+			}
+			if (source_id == -1) {
+				throw CatalogException("Column \"%s\" not found in schema", column_name);
+			}
+
+			IcebergPartitionSpecField field;
+			field.name = column_name;
+			field.transform = IcebergTransform(transform_name);
+			field.source_id = source_id;
+			field.partition_field_id = 1000 + new_spec.fields.size(); // Use 1000+ for field IDs
+			new_spec.fields.push_back(std::move(field));
+		}
+
+		updated_table.table_metadata.partition_specs[new_spec_id] = std::move(new_spec);
+		updated_table.table_metadata.default_spec_id = new_spec_id;
+		updated_table.AddPartitionSpec(irc_transaction);
+		updated_table.SetDefaultSpec(irc_transaction);
+		return;
 	}
 	default: {
 		throw NotImplementedException("Alter table type not supported: %s",
