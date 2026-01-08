@@ -1,5 +1,6 @@
 #pragma once
 
+#include "../rest_catalog/objects/async_planning_result.hpp"
 #include "metadata/iceberg_transform.hpp"
 #include "duckdb/common/types/vector.hpp"
 
@@ -36,6 +37,8 @@ public:
 	bool IsPartitioned() const;
 	const IcebergPartitionSpecField &GetFieldBySourceId(idx_t field_id) const;
 	string FieldsToJSON() const;
+	static void FieldsToJson(yyjson_mut_doc *doc, yyjson_mut_val *root_object,
+	                         const vector<rest_api_objects::PartitionField> &fields);
 
 public:
 	int32_t spec_id;

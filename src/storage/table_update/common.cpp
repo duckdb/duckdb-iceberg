@@ -114,7 +114,7 @@ void AddPartitionSpec::CreateUpdate(DatabaseInstance &db, ClientContext &context
 	req.add_partition_spec_update.has_action = true;
 	req.add_partition_spec_update.action = "add-spec";
 	req.add_partition_spec_update.spec.has_spec_id = true;
-	// need to get the spec id from table_info() so we can also check updated talbes.
+	// need to get the spec id from table_info() so we can also check updated tables.
 	req.add_partition_spec_update.spec.spec_id = table_info.table_metadata.default_spec_id;
 	idx_t partition_spec_id = req.add_partition_spec_update.spec.spec_id;
 	if (table_info.table_metadata.HasPartitionSpec()) {

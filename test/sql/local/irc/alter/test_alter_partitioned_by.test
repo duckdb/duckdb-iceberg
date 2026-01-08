@@ -41,7 +41,7 @@ Alter table my_datalake.default.alter_table_partitioned SET PARTITIONED BY (b);
 statement error
 insert into my_datalake.default.alter_table_partitioned values (11, 20);
 ----
-<REGEX>:.*Partitioned.*
+<REGEX>:.*Not implemented Error: INSERT into a partitioned table is not supported yet.*
 
 # what about default value support?
 # What about nested column types? Adding/removing struct column information.
