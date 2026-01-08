@@ -67,4 +67,18 @@ string IcebergPartitionSpec::FieldsToJSON() const {
 	return ICUtils::JsonToString(std::move(doc_p));
 }
 
+void IcebergPartitionSpec::FieldsToJson(yyjson_mut_doc *doc, yyjson_mut_val *root_object,
+                                        const vector<rest_api_objects::PartitionField> &fields) {
+	yyjson_mut_obj_add_strcpy(doc, root_object, "type", "struct");
+	auto fields_arr = yyjson_mut_obj_add_arr(doc, root_object, "fields");
+
+	for (auto &field : fields) {
+		auto field_obj = yyjson_mut_arr_add_obj(doc, fields_arr);
+		yyjson_mut_obj_add_strcpy(doc, field_obj, "name", field.name.c_str());
+		yyjson_mut_obj_add_strcpy(doc, field_obj, "transform", field.transform.value.c_str());
+		yyjson_mut_obj_add_int(doc, field_obj, "source-id", field.source_id);
+		yyjson_mut_obj_add_int(doc, field_obj, "field-id", field.field_id);
+	}
+}
+
 } // namespace duckdb
