@@ -1,0 +1,133 @@
+# name: test/sql/local/irc/insert/test_create_table_as_with_incorrect_types.test
+# description: test integration with iceberg catalog read
+# group: [insert]
+
+require-env ICEBERG_SERVER_AVAILABLE
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+CALL enable_logging('HTTP');
+
+statement ok
+set logging_level='debug'
+
+statement ok
+CREATE SECRET (
+    TYPE S3,
+    KEY_ID 'admin',
+    SECRET 'password',
+    ENDPOINT '127.0.0.1:9000',
+    URL_STYLE 'path',
+    USE_SSL 0
+);
+
+
+statement ok
+ATTACH '' AS my_datalake (
+    TYPE ICEBERG,
+    CLIENT_ID 'admin',
+    CLIENT_SECRET 'password',
+    ENDPOINT 'http://127.0.0.1:8181'
+);
+
+
+statement ok
+create schema if not exists my_datalake.new_schema_1;
+
+statement ok
+drop table if exists my_datalake.new_schema_1.my_table;
+
+statement error
+create table my_datalake.new_schema_1.my_table as select range::UINTEGER a from range(10);
+----
+<REGEX>:.*Column type UINTEGER is not a valid Iceberg Type.*
+
+statement error
+create table my_datalake.new_schema_1.my_table as select range::UTINYINT a from range(10);
+----
+<REGEX>:.*Column type UTINYINT is not a valid Iceberg Type.*
+
+statement error
+create table my_datalake.new_schema_1.my_table as select range::USMALLINT a from range(10);
+----
+<REGEX>:.*Column type USMALLINT is not a valid Iceberg Type.*
+
+statement error
+create table my_datalake.new_schema_1.unsupported_types as select uint from test_all_types();
+----
+<REGEX>:.*Column type UINTEGER is not a valid Iceberg Type.*
+
+statement error
+create table my_datalake.new_schema_1.unsupported_types as select ubigint from test_all_types();
+----
+<REGEX>:.*Column type UBIGINT is not a valid Iceberg Type.*
+
+statement error
+create table my_datalake.new_schema_1.unsupported_types as select bignum from test_all_types();
+----
+<REGEX>:.*Column type BIGNUM is not a valid Iceberg Type.*
+
+statement error
+create table my_datalake.new_schema_1.unsupported_types as select timestamp_s from test_all_types();
+----
+<REGEX>:.*Column type TIMESTAMP_S is not a valid Iceberg Type.*
+
+statement error
+create table my_datalake.new_schema_1.unsupported_types as select timestamp_ms from test_all_types();
+----
+<REGEX>:.*Column type TIMESTAMP_MS is not a valid Iceberg Type.*
+
+statement error
+create table my_datalake.new_schema_1.unsupported_types as select interval from test_all_types();
+----
+<REGEX>:.*Column type INTERVAL is not a valid Iceberg Type.*
+
+statement error
+create table my_datalake.new_schema_1.unsupported_types as select bit from test_all_types();
+----
+<REGEX>:.*Column type BIT is not a valid Iceberg Type.*
+
+statement error
+create table my_datalake.new_schema_1.unsupported_types as select small_enum, medium_enum, large_enum from test_all_types();
+----
+<REGEX>:.*Column type ENUM is not a valid Iceberg Type.*
+
+statement ok
+drop table IF EXISTS my_datalake.new_schema_1.supported_types;
+
+# you can create tables with types that can be promoted to iceberg types
+statement error
+create table my_datalake.new_schema_1.not_supported_types (
+unsigned_int UINTEGER,
+tinyint_type tinyint,
+smallint_type smallint,
+utinyint_type utinyint,
+usmallint_type usmallint
+);
+----
+<REGEX>:.*Invalid Input.*Column type UINTEGER is not a valid Iceberg Type.*
+
+statement error
+create table my_datalake.new_schema_1.fixed_arr_table (a int[3]);
+----
+<REGEX>:.*Array type not supported in Iceberg type. Please cast to LIST.*
+
+statement ok
+create table my_datalake.new_schema_1.list_table (a int[]);
+
+statement ok
+drop table my_datalake.new_schema_1.list_table;
+
+
+statement ok
+drop schema my_datalake.new_schema_1;

@@ -116,12 +116,12 @@ struct MonthTransform {
 		switch (constant.type().id()) {
 		case LogicalTypeId::TIMESTAMP: {
 			auto val = constant.GetValue<timestamp_t>();
-			auto diff = Interval::GetDifference(val, timestamp_t::epoch());
+			auto diff = Interval::GetAge(val, timestamp_t::epoch());
 			return Value::INTEGER(diff.months);
 		}
 		case LogicalTypeId::TIMESTAMP_TZ: {
 			auto val = constant.GetValue<timestamp_tz_t>();
-			auto diff = Interval::GetDifference(val, timestamp_t::epoch());
+			auto diff = Interval::GetAge(val, timestamp_t::epoch());
 			return Value::INTEGER(diff.months);
 		}
 		case LogicalTypeId::DATE: {
@@ -156,18 +156,12 @@ struct DayTransform {
 		case LogicalTypeId::TIMESTAMP: {
 			auto val = constant.GetValue<timestamp_t>();
 			auto diff = Interval::GetDifference(val, timestamp_t::epoch());
-			int32_t days = 0;
-			days += diff.months * Interval::DAYS_PER_MONTH;
-			days += diff.days;
-			return Value::INTEGER(days);
+			return Value::INTEGER(diff.days);
 		}
 		case LogicalTypeId::TIMESTAMP_TZ: {
 			auto val = constant.GetValue<timestamp_tz_t>();
 			auto diff = Interval::GetDifference(val, timestamp_t::epoch());
-			int32_t days = 0;
-			days += diff.months * Interval::DAYS_PER_MONTH;
-			days += diff.days;
-			return Value::INTEGER(days);
+			return Value::INTEGER(diff.days);
 		}
 		case LogicalTypeId::DATE: {
 			auto val = constant.GetValue<date_t>();

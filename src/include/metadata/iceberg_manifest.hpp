@@ -41,6 +41,7 @@ public:
 	vector<pair<int32_t, Value>> partition_values;
 	//! Inherited from the 'manifest_file' if NULL and 'status == EXISTING'
 	sequence_number_t sequence_number;
+	int64_t snapshot_id;
 	//! Inherited from the 'manifest_file'
 	int32_t partition_spec_id;
 	int64_t file_size_in_bytes;
@@ -93,7 +94,6 @@ struct IcebergManifestFile {
 	IcebergManifestFile(const string &path) : path(path) {
 	}
 
-public:
 public:
 	string path;
 	vector<IcebergManifestEntry> data_files;

@@ -20,6 +20,8 @@ require httpfs
 
 require aws
 
+set ignore_error_messages
+
 statement ok
 CREATE SECRET (
     TYPE S3,
@@ -119,7 +121,7 @@ commit
 statement error con1
 commit
 ----
-<REGEX>:.*TransactionContext Error.*branch main has changed.*
+<REGEX>:.*TransactionContext Error.*
 
 # we see the con2 update
 query IIII

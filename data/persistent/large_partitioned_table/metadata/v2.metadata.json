@@ -1,0 +1,109 @@
+{
+  "format-version": 2,
+  "table-uuid": "3af7118b-cba6-44a7-afd2-e780d5a2f14a",
+  "location": "data/persisten/large_partitioned_table",
+  "last-sequence-number": 1,
+  "last-updated-ms": 1763390792045,
+  "last-column-id": 3,
+  "current-schema-id": 0,
+  "schemas": [
+    {
+      "type": "struct",
+      "schema-id": 0,
+      "fields": [
+        {
+          "id": 1,
+          "name": "id",
+          "required": false,
+          "type": "int"
+        },
+        {
+          "id": 2,
+          "name": "name",
+          "required": false,
+          "type": "string"
+        },
+        {
+          "id": 3,
+          "name": "joined",
+          "required": false,
+          "type": "timestamptz"
+        }
+      ]
+    }
+  ],
+  "default-spec-id": 0,
+  "partition-specs": [
+    {
+      "spec-id": 0,
+      "fields": [
+        {
+          "name": "joined_month",
+          "transform": "month",
+          "source-id": 3,
+          "field-id": 1000
+        }
+      ]
+    }
+  ],
+  "last-partition-id": 1000,
+  "default-sort-order-id": 0,
+  "sort-orders": [
+    {
+      "order-id": 0,
+      "fields": [ ]
+    }
+  ],
+  "properties": {
+    "owner": "tomebergen",
+    "write.update.mode": "merge-on-read",
+    "write.delete.mode": "merge-on-read",
+    "write.metadata.metrics.default": "none",
+    "write.parquet.compression-codec": "zstd"
+  },
+  "current-snapshot-id": 2859376696814272835,
+  "refs": {
+    "main": {
+      "snapshot-id": 2859376696814272835,
+      "type": "branch"
+    }
+  },
+  "snapshots": [
+    {
+      "sequence-number": 1,
+      "snapshot-id": 2859376696814272835,
+      "timestamp-ms": 1763390792045,
+      "summary": {
+        "operation": "delete",
+        "spark.app.id": "local-1763390789905",
+        "changed-partition-count": "0",
+        "total-records": "0",
+        "total-files-size": "0",
+        "total-data-files": "0",
+        "total-delete-files": "0",
+        "total-position-deletes": "0",
+        "total-equality-deletes": "0",
+        "engine-version": "3.5.0",
+        "app-id": "local-1763390789905",
+        "engine-name": "spark",
+        "iceberg-version": "Apache Iceberg unspecified (commit 7dbafb438ee1e68d0047bebcb587265d7d87d8a1)"
+      },
+      "manifest-list": "data/persistent/large_partitioned_table/metadata/snap-6252360244030588538-1-0f2ad419-3d04-47ee-8a2c-ac3cef5c5d05.avro",
+      "schema-id": 0
+    }
+  ],
+  "statistics": [ ],
+  "partition-statistics": [ ],
+  "snapshot-log": [
+    {
+      "timestamp-ms": 1763390792045,
+      "snapshot-id": 2859376696814272835
+    }
+  ],
+  "metadata-log": [
+    {
+      "timestamp-ms": 1763390759296,
+      "metadata-file": "data/persistent/large_partitioned_table/v2.metadata.json"
+    }
+  ]
+}

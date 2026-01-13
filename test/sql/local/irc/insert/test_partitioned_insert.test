@@ -46,4 +46,4 @@ INSERT into my_datalake.default.insert_test_partitioned select
 	'test' c
 ;
 ----
-Not implemented Error: INSERT into a partitioned table is not supported yet
+<REGEX>:.*Not implemented.*INSERT into a partitioned table is not supported yet.*

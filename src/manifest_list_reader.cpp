@@ -1,4 +1,5 @@
 #include "manifest_reader.hpp"
+#include "include/metadata/iceberg_manifest_list.hpp"
 
 namespace duckdb {
 
@@ -7,7 +8,7 @@ namespace manifest_list {
 ManifestListReader::ManifestListReader(idx_t iceberg_version) : BaseManifestReader(iceberg_version) {
 }
 
-idx_t ManifestListReader::Read(idx_t count, vector<IcebergManifest> &result) {
+idx_t ManifestListReader::Read(idx_t count, vector<IcebergManifestListEntry> &result) {
 	if (!scan || finished) {
 		return 0;
 	}
@@ -26,7 +27,7 @@ idx_t ManifestListReader::Read(idx_t count, vector<IcebergManifest> &result) {
 	return total_added;
 }
 
-idx_t ManifestListReader::ReadChunk(idx_t offset, idx_t count, vector<IcebergManifest> &result) {
+idx_t ManifestListReader::ReadChunk(idx_t offset, idx_t count, vector<IcebergManifestListEntry> &result) {
 	D_ASSERT(offset < chunk.size());
 	D_ASSERT(offset + count <= chunk.size());
 
@@ -111,8 +112,7 @@ idx_t ManifestListReader::ReadChunk(idx_t offset, idx_t count, vector<IcebergMan
 	for (idx_t i = 0; i < count; i++) {
 		idx_t index = i + offset;
 
-		IcebergManifest manifest;
-		manifest.manifest_path = manifest_path[index].GetString();
+		IcebergManifestListEntry manifest(manifest_path[index].GetString());
 		manifest.manifest_length = manifest_length[index];
 		manifest.added_snapshot_id = added_snapshot_id[index];
 		manifest.partition_spec_id = partition_spec_id[index];

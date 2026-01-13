@@ -1,4 +1,3 @@
-
 #pragma once
 
 #include "duckdb/catalog/catalog.hpp"
@@ -36,7 +35,7 @@ public:
 
 public:
 	explicit IRCatalog(AttachedDatabase &db_p, AccessMode access_mode, unique_ptr<IRCAuthorization> auth_handler,
-	                   IcebergAttachOptions &attach_options, const string &version = "v1");
+	                   IcebergAttachOptions &attach_options, const string &default_schema);
 	~IRCatalog() override;
 
 public:
@@ -58,6 +57,9 @@ public:
 		default:
 			return CatalogLookupBehavior::STANDARD;
 		}
+	}
+	string GetDefaultSchema() const override {
+		return default_schema;
 	}
 
 public:
@@ -94,6 +96,8 @@ public:
 	//! Whether or not this is an in-memory Iceberg database
 	bool InMemory() override;
 	string GetDBPath() override;
+	static string GetOnlyMergeOnReadSupportedErrorMessage(const string &table_name, const string &property,
+	                                                      const string &property_value);
 
 public:
 	AccessMode access_mode;
@@ -109,6 +113,7 @@ public:
 	string prefix;
 	//! attach options
 	IcebergAttachOptions attach_options;
+	string default_schema;
 
 private:
 	// defaults and overrides provided by a catalog.

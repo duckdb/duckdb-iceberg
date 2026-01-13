@@ -1,0 +1,78 @@
+name: Build & Test against catalogs
+on: [push, pull_request,repository_dispatch]
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.head_ref || '' }}-${{ github.base_ref || '' }}-${{ github.ref != 'refs/heads/main' || github.sha }}
+  cancel-in-progress: true
+defaults:
+  run:
+    shell: bash
+
+env:
+  BASE_BRANCH: ${{ github.base_ref || (endsWith(github.ref, '_feature') && 'feature' || 'main') }}
+
+jobs:
+  build_iceberg:
+    name: Build
+    runs-on: ubuntu-latest
+    env:
+      VCPKG_TARGET_TRIPLET: 'x64-linux-release'
+      GEN: ninja
+      VCPKG_FEATURE_FLAGS: "-binarycaching"
+      VCPKG_TOOLCHAIN_PATH: ${{ github.workspace }}/vcpkg/scripts/buildsystems/vcpkg.cmake
+      PIP_BREAK_SYSTEM_PACKAGES: 1
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: 'true'
+
+      - name: Setup vcpkg
+        uses: lukka/run-vcpkg@v11.1
+        with:
+          vcpkgGitCommitId: ce613c41372b23b1f51333815feb3edd87ef8a8b
+
+      - name: Install Ninja
+        shell: bash
+        run: sudo apt-get update -y -qq && sudo apt-get install -y -qq ninja-build
+
+      - name: Setup Ccache
+        uses: hendrikmuhs/ccache-action@main
+        with:
+          key: ${{ github.job }}
+          save: ${{ github.ref == 'refs/heads/main' || github.repository != 'duckdb/duckdb' }}
+
+      - name: Build extension
+        env:
+          GEN: ninja
+          STATIC_LIBCPP: 1
+        run: |
+          make release
+
+      - name: Upload DuckDB-Iceberg release folder
+        uses: actions/upload-artifact@v4
+        with:
+          name: duckdb-iceberg
+          path: build/release/
+          retention-days: 3
+
+  test-nessie:
+    name: Test against Nessie Catalog
+    needs: build_iceberg
+    uses: duckdb/duckdb-iceberg/.github/workflows/test-nessie-catalog.yml@main
+    with:
+      artifact-name: duckdb-iceberg
+
+  test-spark:
+    name: Test against Spark Catalog
+    needs: build_iceberg
+    uses: duckdb/duckdb-iceberg/.github/workflows/test-spark-catalog.yml@main
+    with:
+      artifact-name: duckdb-iceberg
+
+  test-polaris:
+    name: Test against Polaris Catalog
+    needs: build_iceberg
+    uses: duckdb/duckdb-iceberg/.github/workflows/test-polaris-catalog.yml@main
+    with:
+      artifact-name: duckdb-iceberg

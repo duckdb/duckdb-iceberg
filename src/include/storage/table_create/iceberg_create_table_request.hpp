@@ -19,7 +19,6 @@ struct IcebergTableInformation;
 class ICTableEntry;
 
 struct IcebergCreateTableRequest {
-
 	IcebergCreateTableRequest(shared_ptr<IcebergTableSchema> schema, string table_name);
 
 public:

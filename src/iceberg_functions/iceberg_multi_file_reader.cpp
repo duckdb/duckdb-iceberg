@@ -6,6 +6,7 @@
 
 #include "duckdb/catalog/catalog_entry/table_function_catalog_entry.hpp"
 #include "duckdb/common/exception.hpp"
+#include "duckdb/function/function_binder.hpp"
 #include "duckdb/execution/execution_context.hpp"
 #include "duckdb/parallel/thread_context.hpp"
 #include "duckdb/parser/tableref/table_function_ref.hpp"
@@ -86,7 +87,6 @@ IcebergMultiFileReader::InitializeGlobalState(ClientContext &context, const Mult
                                               const MultiFileReaderBindData &bind_data, const MultiFileList &file_list,
                                               const vector<MultiFileColumnDefinition> &global_columns,
                                               const vector<ColumnIndex> &global_column_ids) {
-
 	vector<LogicalType> extra_columns;
 	auto res = make_uniq<IcebergMultiFileReaderGlobalState>(extra_columns, file_list);
 	return std::move(res);
@@ -268,9 +268,9 @@ void IcebergMultiFileReader::FinalizeBind(MultiFileReaderData &reader_data, cons
 		const auto &data_file = multi_file_list.data_files[file_id];
 		// The path of the data file where this chunk was read from
 		const auto &file_path = data_file.file_path;
-
 		lock_guard<mutex> delete_guard(multi_file_list.delete_lock);
-		if (multi_file_list.current_delete_manifest != multi_file_list.delete_manifests.end()) {
+		if (multi_file_list.current_delete_manifest != multi_file_list.delete_manifests.end() ||
+		    multi_file_list.current_transaction_delete_manifest != multi_file_list.transaction_delete_manifests.end()) {
 			multi_file_list.ProcessDeletes(global_columns, global_column_ids);
 		}
 		reader.deletion_filter = std::move(multi_file_list.GetPositionalDeletesForFile(file_path));
@@ -433,8 +433,8 @@ bool IcebergMultiFileReader::ParseOption(const string &key, const Value &val, Mu
 		auto value = StringValue::Get(val);
 		auto string_substitutions = IcebergUtils::CountOccurrences(value, "%s");
 		if (string_substitutions != 2) {
-			throw InvalidInputException("'version_name_format' has to contain two occurrences of '%s' in it, found %d",
-			                            "%s", string_substitutions);
+			throw InvalidInputException("'version_name_format' has to contain two occurrences of '%%s' in it, found %d",
+			                            string_substitutions);
 		}
 		this->options.version_name_format = value;
 		return true;
@@ -456,6 +456,14 @@ bool IcebergMultiFileReader::ParseOption(const string &key, const Value &val, Mu
 		return true;
 	}
 	return MultiFileReader::ParseOption(key, val, options, context);
+}
+
+unique_ptr<Expression> IcebergMultiFileReader::GetVirtualColumnExpression(
+    ClientContext &context, MultiFileReaderData &reader_data, const vector<MultiFileColumnDefinition> &local_columns,
+    idx_t &column_id, const LogicalType &type, MultiFileLocalIndex local_idx,
+    optional_ptr<MultiFileColumnDefinition> &global_column_reference) {
+	return MultiFileReader::GetVirtualColumnExpression(context, reader_data, local_columns, column_id, type, local_idx,
+	                                                   global_column_reference);
 }
 
 } // namespace duckdb

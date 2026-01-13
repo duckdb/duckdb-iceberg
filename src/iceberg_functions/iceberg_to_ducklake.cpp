@@ -584,7 +584,7 @@ public:
 public:
 	//! ----- Partition Updates -----
 
-	DuckLakePartition &AddPartition(DuckLakePartition &new_partition, DuckLakeSnapshot &begin_snapshot) {
+	DuckLakePartition &AddPartition(unique_ptr<DuckLakePartition> new_partition, DuckLakeSnapshot &begin_snapshot) {
 		if (current_partition) {
 			auto &old_partition = *current_partition;
 			old_partition.end_snapshot = begin_snapshot.snapshot_time;
@@ -592,9 +592,9 @@ public:
 			current_partition = nullptr;
 		}
 		begin_snapshot.AlterTable(table_uuid);
-		new_partition.start_snapshot = begin_snapshot.snapshot_time;
-		all_partitions.push_back(new_partition);
-		current_partition = all_partitions.back();
+		new_partition->start_snapshot = begin_snapshot.snapshot_time;
+		all_partitions.push_back(std::move(new_partition));
+		current_partition = all_partitions.back().get();
 
 		return *current_partition;
 	}
@@ -612,7 +612,10 @@ public:
 	void DeleteDataFile(const string &data_file_path, DuckLakeSnapshot &end_snapshot) {
 		auto it = current_data_files.find(data_file_path);
 		if (it == current_data_files.end()) {
-			throw InvalidInputException("Iceberg integrity error: Deleting a Data File that doesn't exist?");
+			//! Entries can be marked deleted without having an add, if they were added in the same snapshot
+			//! This can be done to postpone deletion of created parquet files to a cleanup operation
+			//! I don't know why you would want to do that.. but it's possible
+			return;
 		}
 
 		auto &data_file = all_data_files[it->second];
@@ -695,7 +698,7 @@ public:
 	vector<DuckLakeColumn> all_columns;
 	unordered_map<int64_t, idx_t> current_columns;
 
-	vector<DuckLakePartition> all_partitions;
+	vector<unique_ptr<DuckLakePartition>> all_partitions;
 	optional_ptr<DuckLakePartition> current_partition;
 
 	vector<DuckLakeDataFile> all_data_files;
@@ -924,8 +927,8 @@ public:
 				if (!current_partition_spec_id.IsValid() ||
 				    static_cast<idx_t>(manifest.partition_spec_id) > current_partition_spec_id.GetIndex()) {
 					auto &partition_spec = *metadata.FindPartitionSpecById(manifest.partition_spec_id);
-					auto new_partition = DuckLakePartition(partition_spec);
-					current_partition = table.AddPartition(new_partition, ducklake_snapshot);
+					auto new_partition = make_uniq<DuckLakePartition>(partition_spec);
+					current_partition = table.AddPartition(std::move(new_partition), ducklake_snapshot);
 					current_partition_spec_id = manifest.partition_spec_id;
 				}
 
@@ -1061,13 +1064,13 @@ public:
 			int64_t table_id = table.table_id.GetIndex();
 			//! ducklake_partition_info
 			for (auto &partition : table.all_partitions) {
-				auto values = partition.FinalizeEntry(table_id, serializer, snapshots);
+				auto values = partition->FinalizeEntry(table_id, serializer, snapshots);
 				sql.push_back(StringUtil::Format("INSERT INTO {METADATA_CATALOG}.ducklake_partition_info %s", values));
-
-				auto partition_id = partition.partition_id.GetIndex();
+				D_ASSERT(partition->partition_id.IsValid());
+				auto partition_id = partition->partition_id.GetIndex();
 				//! ducklake_partition_column
-				for (idx_t i = 0; i < partition.columns.size(); i++) {
-					auto &column = partition.columns[i];
+				for (idx_t i = 0; i < partition->columns.size(); i++) {
+					auto &column = partition->columns[i];
 					auto values = column.FinalizeEntry(table_id, partition_id, i);
 					sql.push_back(
 					    StringUtil::Format("INSERT INTO {METADATA_CATALOG}.ducklake_partition_column %s", values));
@@ -1377,10 +1380,10 @@ static unique_ptr<FunctionData> IcebergToDuckLakeBind(ClientContext &context, Ta
 			options.table_version = StringValue::Get(val);
 		} else if (loption == "version_name_format") {
 			auto value = StringValue::Get(kv.second);
-			auto string_substitutions = IcebergUtils::CountOccurrences(value, "%s");
+			int string_substitutions = IcebergUtils::CountOccurrences(value, "%s");
 			if (string_substitutions != 2) {
 				throw InvalidInputException(
-				    "'version_name_format' has to contain two occurrences of '%s' in it, found %d", "%s",
+				    "'version_name_format' has to contain two occurrences of '%%s' in it, found %d",
 				    string_substitutions);
 			}
 			options.version_name_format = value;
@@ -1460,9 +1463,9 @@ public:
 			    "DuckLake version metadata is corrupt, the value can't be NULL and has to be of type VARCHAR");
 		}
 		auto version_string = value.GetValue<string>();
-		if (!StringUtil::StartsWith(version_string, "0.3")) {
+		if (!StringUtil::StartsWith(version_string, "0.4")) {
 			throw InvalidInputException(
-			    "'iceberg_to_ducklake' only support version 0.3 currently, detected '%s' instead", version_string);
+			    "'iceberg_to_ducklake' only support version 0.4 currently, detected '%s' instead", version_string);
 		}
 	}
 

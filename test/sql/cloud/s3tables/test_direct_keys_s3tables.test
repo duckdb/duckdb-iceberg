@@ -18,6 +18,8 @@ require httpfs
 
 require aws
 
+foreach aws_sdk_val true false
+
 # test using keys directory
 statement ok
 CREATE SECRET s1 (
@@ -28,7 +30,10 @@ CREATE SECRET s1 (
 );
 
 statement ok
-attach 'arn:aws:s3tables:us-east-2:840140254803:bucket/iceberg-testing' as my_datalake (
+SET iceberg_via_aws_sdk_for_catalog_interactions=${aws_sdk_val};
+
+statement ok
+attach or replace 'arn:aws:s3tables:us-east-2:840140254803:bucket/iceberg-testing' as my_datalake (
     TYPE ICEBERG,
     ENDPOINT_TYPE 'S3_Tables'
 );
@@ -79,7 +84,7 @@ detach my_datalake
 
 # test using provider credential chain
 statement ok
-CREATE SECRET (
+CREATE OR REPLACE SECRET (
   TYPE S3,
   PROVIDER credential_chain
 );
@@ -90,6 +95,9 @@ attach 'arn:aws:s3tables:us-east-2:840140254803:bucket/iceberg-testing' as my_da
     ENDPOINT_TYPE 'S3_Tables'
 );
 
+
 query T nosort tables_1
 show all tables;
 ----
+
+endloop

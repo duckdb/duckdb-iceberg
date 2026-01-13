@@ -1,8 +1,6 @@
 
 #pragma once
 
-#include "duckdb/common/string_util.hpp"
-#include "duckdb/common/types.hpp"
 #include "rest_catalog/objects/type.hpp"
 #include "functional"
 

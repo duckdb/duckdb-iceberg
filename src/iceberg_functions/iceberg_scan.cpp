@@ -41,9 +41,25 @@ static void AddNamedParameters(TableFunction &fun) {
 	fun.named_parameters["snapshot_from_id"] = LogicalType::UBIGINT;
 }
 
+virtual_column_map_t IcebergVirtualColumns(ClientContext &context, optional_ptr<FunctionData> bind_data_p) {
+	auto &bind_data = bind_data_p->Cast<MultiFileBindData>();
+	auto result = ICTableEntry::VirtualColumns();
+	bind_data.virtual_columns = result;
+	return result;
+}
+
 static void IcebergScanSerialize(Serializer &serializer, const optional_ptr<FunctionData> bind_data,
                                  const TableFunction &function) {
 	throw NotImplementedException("IcebergScan serialization not implemented");
+}
+
+BindInfo IcebergBindInfo(const optional_ptr<FunctionData> bind_data) {
+	auto &multi_file_data = bind_data->Cast<MultiFileBindData>();
+	auto &file_list = multi_file_data.file_list->Cast<IcebergMultiFileList>();
+	if (!file_list.table) {
+		return BindInfo(ScanType::EXTERNAL);
+	}
+	return BindInfo(*file_list.table);
 }
 
 TableFunctionSet IcebergFunctions::GetIcebergScanFunction(ExtensionLoader &loader) {
@@ -65,7 +81,8 @@ TableFunctionSet IcebergFunctions::GetIcebergScanFunction(ExtensionLoader &loade
 
 		function.statistics = nullptr;
 		function.table_scan_progress = nullptr;
-		function.get_bind_info = nullptr;
+		function.get_bind_info = IcebergBindInfo;
+		function.get_virtual_columns = IcebergVirtualColumns;
 
 		// Schema param is just confusing here
 		function.named_parameters.erase("schema");

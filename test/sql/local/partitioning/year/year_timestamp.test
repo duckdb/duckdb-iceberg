@@ -34,7 +34,7 @@ statement ok
 CALL truncate_duckdb_logs();
 
 query I
-select user_id from ICEBERG_SCAN('__WORKING_DIRECTORY__/data/generated/iceberg/spark-local/default/year_timestamp') 
+select user_id from ICEBERG_SCAN('__WORKING_DIRECTORY__/data/generated/iceberg/spark-local/default/year_timestamp')
 WHERE partition_col = NULL::TIMESTAMP
 ----
 
@@ -45,7 +45,7 @@ WHERE type = 'duckdb.Extensions.Iceberg' and message.contains('manifest_file')
 ----
 
 query I
-select user_id from ICEBERG_SCAN('__WORKING_DIRECTORY__/data/generated/iceberg/spark-local/default/year_timestamp') 
+select user_id from ICEBERG_SCAN('__WORKING_DIRECTORY__/data/generated/iceberg/spark-local/default/year_timestamp')
 WHERE partition_col IS NULL
 ----
 99999
@@ -74,6 +74,7 @@ WHERE partition_col IS NOT NULL ORDER BY user_id
 67890
 88888
 NULL
+
 
 # We can skip 1 record (at the data file level) by filtering on IS NOT NULL
 query I

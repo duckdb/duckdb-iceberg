@@ -1,0 +1,1 @@
+INSERT INTO default.test_table_properties VALUES (1), (2), (3);

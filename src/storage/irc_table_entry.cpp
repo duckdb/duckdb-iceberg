@@ -9,6 +9,7 @@
 #include "duckdb/catalog/catalog_entry/table_function_catalog_entry.hpp"
 #include "duckdb/parser/tableref/table_function_ref.hpp"
 #include "catalog_api.hpp"
+#include "iceberg_multi_file_reader.hpp"
 #include "duckdb/planner/binder.hpp"
 #include "duckdb/planner/logical_operator.hpp"
 #include "duckdb/planner/operator/logical_get.hpp"
@@ -31,15 +32,13 @@ unique_ptr<BaseStatistics> ICTableEntry::GetStatistics(ClientContext &context, c
 	return nullptr;
 }
 
-void ICTableEntry::BindUpdateConstraints(Binder &binder, LogicalGet &, LogicalProjection &, LogicalUpdate &,
-                                         ClientContext &) {
-	throw NotImplementedException("BindUpdateConstraints");
-}
-
 string ICTableEntry::PrepareIcebergScanFromEntry(ClientContext &context) const {
 	auto &ic_catalog = catalog.Cast<IRCatalog>();
 	auto &secret_manager = SecretManager::Get(context);
 
+	if (ic_catalog.attach_options.access_mode != IRCAccessDelegationMode::VENDED_CREDENTIALS) {
+		return table_info.load_table_result.metadata_location;
+	}
 	// Get Credentials from IRC API
 	auto table_credentials = table_info.GetVendedCredentials(context);
 	auto &load_result = table_info.load_table_result;
@@ -47,13 +46,13 @@ string ICTableEntry::PrepareIcebergScanFromEntry(ClientContext &context) const {
 	if (table_credentials.config) {
 		auto &info = *table_credentials.config;
 		D_ASSERT(info.scope.empty());
-		//! Limit the scope to the metadata location
 		string lc_storage_location = StringUtil::Lower(load_result.metadata_location);
 		size_t metadata_pos = lc_storage_location.find("metadata");
 		if (metadata_pos != string::npos) {
 			info.scope = {load_result.metadata_location.substr(0, metadata_pos)};
 		} else {
-			throw InvalidInputException("Substring not found");
+			DUCKDB_LOG_INFO(context, "Creating Iceberg Table secret with no scope. Returned metadata location is %s",
+			                lc_storage_location);
 		}
 
 		if (StringUtil::StartsWith(ic_catalog.uri, "glue")) {
@@ -81,8 +80,13 @@ string ICTableEntry::PrepareIcebergScanFromEntry(ClientContext &context) const {
 			                {"region", region},
 			                {"endpoint", endpoint}};
 		}
-
 		(void)secret_manager.CreateSecret(context, info);
+		// if there is no key_id, secret, or token in the info. log that vended credentials has not worked
+		if (info.options.find("key_id") == info.options.end() && info.options.find("secret") == info.options.end() &&
+		    info.options.find("token") == info.options.end()) {
+			DUCKDB_LOG_INFO(context, "Failed to create valid secret from Vendend Credentials for table '%s'",
+			                table_info.name);
+		}
 	}
 
 	for (auto &info : table_credentials.storage_credentials) {
@@ -139,6 +143,10 @@ TableFunction ICTableEntry::GetScanFunction(ClientContext &context, unique_ptr<F
 	                                  empty_ref);
 	auto result = iceberg_scan_function.bind(context, bind_input, return_types, names);
 	bind_data = std::move(result);
+	auto &file_bind_data = bind_data->Cast<MultiFileBindData>();
+	D_ASSERT(file_bind_data.file_list);
+	auto &ic_file_list = file_bind_data.file_list->Cast<IcebergMultiFileList>();
+	ic_file_list.table = this;
 	return iceberg_scan_function;
 }
 
@@ -147,19 +155,22 @@ TableFunction ICTableEntry::GetScanFunction(ClientContext &context, unique_ptr<F
 }
 
 virtual_column_map_t ICTableEntry::GetVirtualColumns() const {
+	return VirtualColumns();
+}
+
+virtual_column_map_t ICTableEntry::VirtualColumns() {
 	virtual_column_map_t result;
+	result.insert(
+	    make_pair(MultiFileReader::COLUMN_IDENTIFIER_FILENAME, TableColumn("filename", LogicalType::VARCHAR)));
 	result.insert(make_pair(MultiFileReader::COLUMN_IDENTIFIER_FILE_ROW_NUMBER,
 	                        TableColumn("file_row_number", LogicalType::BIGINT)));
-	result.insert(
-	    make_pair(MultiFileReader::COLUMN_IDENTIFIER_FILE_INDEX, TableColumn("file_index", LogicalType::UBIGINT)));
-	result.insert(make_pair(COLUMN_IDENTIFIER_EMPTY, TableColumn("", LogicalType::BOOLEAN)));
 	return result;
 }
 
 vector<column_t> ICTableEntry::GetRowIdColumns() const {
 	vector<column_t> result;
-	result.emplace_back(MultiFileReader::COLUMN_IDENTIFIER_FILE_INDEX);
-	result.emplace_back(MultiFileReader::COLUMN_IDENTIFIER_FILE_ROW_NUMBER);
+	result.push_back(MultiFileReader::COLUMN_IDENTIFIER_FILENAME);
+	result.push_back(MultiFileReader::COLUMN_IDENTIFIER_FILE_ROW_NUMBER);
 	return result;
 }
 

@@ -1,7 +1,5 @@
 #include "iceberg_avro_multi_file_reader.hpp"
-
 #include "duckdb/common/exception.hpp"
-#include "duckdb/parallel/thread_context.hpp"
 
 namespace duckdb {
 
@@ -13,7 +11,6 @@ unique_ptr<MultiFileReader> IcebergAvroMultiFileReader::CreateInstance(const Tab
 shared_ptr<MultiFileList> IcebergAvroMultiFileReader::CreateFileList(ClientContext &context,
                                                                      const vector<string> &paths,
                                                                      const FileGlobInput &glob_input) {
-
 	vector<OpenFileInfo> open_files;
 	for (auto &path : paths) {
 		open_files.emplace_back(path);

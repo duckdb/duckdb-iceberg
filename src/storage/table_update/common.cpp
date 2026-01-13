@@ -37,6 +37,11 @@ void AddSchemaUpdate::CreateUpdate(DatabaseInstance &db, ClientContext &context,
 	auto current_schema_id = table_info.load_table_result.metadata.current_schema_id;
 	auto &schema = table_info.table_metadata.schemas[current_schema_id];
 	update.add_schema_update.schema = CopySchema(*schema.get());
+	// last column id is technically deprecated, but some catalogs still use it (nessie).
+	if (table_info.load_table_result.metadata.has_last_column_id) {
+		update.add_schema_update.has_last_column_id = true;
+		update.add_schema_update.last_column_id = table_info.load_table_result.metadata.last_column_id;
+	}
 }
 
 AssignUUIDUpdate::AssignUUIDUpdate(IcebergTableInformation &table_info)
@@ -197,6 +202,18 @@ void SetProperties::CreateUpdate(DatabaseInstance &db, ClientContext &context, I
 	req.has_set_properties_update = true;
 	req.set_properties_update.action = "set-properties";
 	req.set_properties_update.updates = properties;
+}
+
+RemoveProperties::RemoveProperties(IcebergTableInformation &table_info, vector<string> properties)
+    : IcebergTableUpdate(IcebergTableUpdateType::SET_PROPERTIES, table_info), properties(properties) {
+}
+
+void RemoveProperties::CreateUpdate(DatabaseInstance &db, ClientContext &context, IcebergCommitState &commit_state) {
+	commit_state.table_change.updates.push_back(rest_api_objects::TableUpdate());
+	auto &req = commit_state.table_change.updates.back();
+	req.has_remove_properties_update = true;
+	req.remove_properties_update.action = "remove-properties";
+	req.remove_properties_update.removals = properties;
 }
 
 SetLocation::SetLocation(IcebergTableInformation &table_info)

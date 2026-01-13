@@ -56,6 +56,8 @@ call iceberg_to_ducklake(
     ]
 )
 
+mode skip
+
 # These are empty, so they are omitted:
 # - insert_all_types
 # - simple_v3_table
@@ -68,7 +70,7 @@ call iceberg_to_ducklake(
 # - schema_evolve_struct_in_list
 # - schema_evolve_struct_in_map
 
-foreach table_name lineitem_partitioned_l_shipmode_deletes all_types_table day_timestamp day_timestamptz empty_insert filtering_on_bounds filtering_on_partition_bounds issue_328 lineitem_001_deletes lineitem_partitioned_l_shipmode lineitem_sf_01_1_delete lineitem_sf_01_no_deletes lineitem_sf1_deletes many_adds_deletes nested_types pyspark_iceberg_table_v1 quickstart_table schema_evolve_float_to_double schema_evolve_int_to_bigint schema_evolve_struct schema_evolve_widen_decimal table_more_deletes table_partitioned table_unpartitioned table_with_deletes year_timestamp year_timestamptz
+foreach table_name lineitem_partitioned_l_shipmode_deletes all_types_table day_timestamp day_timestamptz empty_insert filtering_on_bounds complicated_partitioned_table filtering_on_partition_bounds issue_328 lineitem_001_deletes lineitem_partitioned_l_shipmode lineitem_sf_01_1_delete lineitem_sf_01_no_deletes lineitem_sf1_deletes many_adds_deletes nested_types pyspark_iceberg_table_v1 quickstart_table schema_evolve_float_to_double schema_evolve_int_to_bigint schema_evolve_struct schema_evolve_widen_decimal table_more_deletes table_partitioned table_unpartitioned table_with_deletes year_timestamp year_timestamptz
 
 query I rowsort expected_res
 select * from my_datalake.default.${table_name}

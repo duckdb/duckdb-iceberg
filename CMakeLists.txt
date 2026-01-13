@@ -10,6 +10,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED True)
 set(EXTENSION_NAME ${TARGET_NAME}_extension)
 include_directories(src/include)
 
+
 set(EXTENSION_SOURCES
     src/iceberg_extension.cpp
     src/iceberg_functions.cpp
@@ -21,7 +22,10 @@ set(EXTENSION_SOURCES
     src/iceberg_logging.cpp
     src/catalog_utils.cpp
     src/storage/iceberg_insert.cpp
+    src/storage/iceberg_delete.cpp
+    src/storage/iceberg_update.cpp
     src/aws.cpp
+    src/hash_utils.cpp
     src/base_manifest_reader.cpp
     src/manifest_list_reader.cpp
     src/manifest_file_reader.cpp
@@ -31,6 +35,7 @@ set(EXTENSION_SOURCES
     src/metadata/iceberg_transform.cpp
     src/metadata/iceberg_table_schema.cpp
     src/metadata/iceberg_partition_spec.cpp
+    src/metadata/iceberg_sort_order.cpp
     src/metadata/iceberg_snapshot.cpp
     src/metadata/iceberg_field_mapping.cpp
     src/metadata/iceberg_column_definition.cpp
@@ -43,10 +48,14 @@ set(EXTENSION_SOURCES
     src/common/api_utils.cpp
     src/iceberg_functions/iceberg_multi_file_reader.cpp
     src/iceberg_functions/iceberg_avro_multi_file_reader.cpp
+    src/iceberg_functions/iceberg_deletes_file_reader.cpp
     src/iceberg_functions/iceberg_multi_file_list.cpp
     src/iceberg_functions/iceberg_snapshots.cpp
     src/iceberg_functions/iceberg_scan.cpp
     src/iceberg_functions/iceberg_metadata.cpp
+    src/iceberg_functions/iceberg_column_stats.cpp
+    src/iceberg_functions/iceberg_partition_stats.cpp
+    src/iceberg_functions/iceberg_table_properties_functions.cpp
     src/iceberg_functions/iceberg_to_ducklake.cpp
     src/storage/authorization/sigv4.cpp
     src/storage/authorization/none.cpp

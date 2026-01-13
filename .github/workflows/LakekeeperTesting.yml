@@ -14,7 +14,7 @@ jobs:
   rest:
     name: Test against Lakekeeper Catalog
     runs-on: ubuntu-latest
-    if: false # disabled until lakekeeper setup process is more stable
+    if: false
     env:
       VCPKG_TARGET_TRIPLET: 'x64-linux-release'
       GEN: ninja

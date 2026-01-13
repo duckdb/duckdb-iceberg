@@ -1,0 +1,43 @@
+# name: test/sql/local/iceberg_scans/iceberg_partition_stats.test
+# description: test iceberg metadata function
+# group: [iceberg_scans]
+
+# Before we load the extension, this will fail
+statement error
+SELECT * FROM ICEBERG_PARTITION_STATS('__WORKING_DIRECTORY__/data/persistent/hive_partitioned_table') order by all;
+----
+Error
+
+require avro
+
+require parquet
+
+require iceberg
+
+query IIIIIIIIIIII
+SELECT * FROM ICEBERG_PARTITION_STATS('__WORKING_DIRECTORY__/data/persistent/hive_partitioned_table', ALLOW_MOVED_PATHS=TRUE) order by all;
+----
+data/persistent/hive_partitioned_table/metadata/8f7c6cdd-f7e6-4743-857e-021adfe0b999-m0.avro	2541674261311761067	0	1000	event_date	[event_date]	identity	DATE	2024-01-01	2024-01-02	0	0
+data/persistent/hive_partitioned_table/metadata/fee93099-6425-4d83-bd7c-0aa646533090-m0.avro	5128628767169163501	1	1000	event_date	[event_date]	identity	DATE	2024-01-03	2024-01-04	0	0
+data/persistent/hive_partitioned_table/metadata/fee93099-6425-4d83-bd7c-0aa646533090-m0.avro	5128628767169163501	1	1001	event_type	[event_type]	identity	VARCHAR	click	view	0	0
+
+query IIIIIIIIIIII
+SELECT * FROM ICEBERG_PARTITION_STATS('__WORKING_DIRECTORY__/data/persistent/hive_partitioned_table', ALLOW_MOVED_PATHS=TRUE, version='1') order by all;
+----
+
+query IIIIIIIIIIII
+SELECT * FROM ICEBERG_PARTITION_STATS('__WORKING_DIRECTORY__/data/persistent/hive_partitioned_table', ALLOW_MOVED_PATHS=TRUE, version_name_format='v%s%s.metadata.json') order by all;
+----
+data/persistent/hive_partitioned_table/metadata/8f7c6cdd-f7e6-4743-857e-021adfe0b999-m0.avro	2541674261311761067	0	1000	event_date	[event_date]	identity	DATE	2024-01-01	2024-01-02	0	0
+data/persistent/hive_partitioned_table/metadata/fee93099-6425-4d83-bd7c-0aa646533090-m0.avro	5128628767169163501	1	1000	event_date	[event_date]	identity	DATE	2024-01-03	2024-01-04	0	0
+data/persistent/hive_partitioned_table/metadata/fee93099-6425-4d83-bd7c-0aa646533090-m0.avro	5128628767169163501	1	1001	event_type	[event_type]	identity	VARCHAR	click	view	0	0
+
+query IIIIIIIIIIII
+SELECT * FROM ICEBERG_PARTITION_STATS('__WORKING_DIRECTORY__/data/persistent/hive_partitioned_table', ALLOW_MOVED_PATHS=TRUE, version='2', version_name_format='v%s%s.metadata.json') order by all;
+----
+data/persistent/hive_partitioned_table/metadata/8f7c6cdd-f7e6-4743-857e-021adfe0b999-m0.avro	2541674261311761067	0	1000	event_date	[event_date]	identity	DATE	2024-01-01	2024-01-02	false	false
+
+statement error
+SELECT * FROM ICEBERG_PARTITION_STATS('__WORKING_DIRECTORY__/data/persistent/hive_partitioned_table_nonexistent') order by all;
+----
+Invalid Configuration Error: Failed to read iceberg table. No version was provided and no version-hint could be found,

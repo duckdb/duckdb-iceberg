@@ -16,9 +16,6 @@ require httpfs
 set ignore_error_messages
 
 statement ok
-CALL enable_logging('HTTP');
-
-statement ok
 set logging_level='debug'
 
 statement ok
@@ -39,6 +36,15 @@ ATTACH '' AS my_datalake (
     CLIENT_SECRET 'password',
     ENDPOINT 'http://127.0.0.1:8181'
 );
+
+statement ok
+drop table if exists my_datalake.default.test_delete_table;
+
+statement ok
+CALL enable_logging('HTTP');
+
+statement ok
+set logging_level='debug'
 
 statement ok
 create table my_datalake.default.test_delete_table as select range a from range(10);
@@ -79,6 +85,9 @@ query I
 SELECT request.url FROM duckdb_logs_parsed('HTTP') where request.type = 'DELETE';
 ----
 http://127.0.0.1:8181/v1/namespaces/default/tables/test_delete_table?purgeRequested=false
+
+statement ok
+drop table if exists my_datalake.default.test_delete_table;
 
 statement ok
 DETACH my_datalake;

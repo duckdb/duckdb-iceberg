@@ -19,9 +19,6 @@ require httpfs
 require aws
 
 statement ok
-CALL enable_logging('HTTP');
-
-statement ok
 CREATE SECRET s3table_secret (
     TYPE s3,
     PROVIDER credential_chain,
@@ -37,14 +34,26 @@ attach 'arn:aws:s3tables:us-east-2:840140254803:bucket/iceberg-testing' as s3_ca
 
 set ignore_error_messages
 
+statement ok
+CALL enable_logging('HTTP');
+
 query I
 select count(*) from s3_catalog.tpch_sf1.region;
 ----
 5
 
+
 # make sure we log calls to IRC
 query II
-select request.url, request.type from duckdb_logs_parsed('HTTP') where request.type = 'GET' and request.url like '%/iceberg-testing/namespaces/%'
+select request.url, request.type from duckdb_logs_parsed('HTTP') where request.type in ('GET', 'HEAD') and request.url like '%iceberg/v1%'
 ----
-https://s3tables.us-east-2.amazonaws.com/iceberg/v1/arn:aws:s3tables:us-east-2:840140254803:bucket/iceberg-testing/namespaces/tpch_sf1/tables	GET
-https://s3tables.us-east-2.amazonaws.com/iceberg/v1/arn:aws:s3tables:us-east-2:840140254803:bucket/iceberg-testing/namespaces/tpch_sf1/tables/region	GET
+https://s3tables.us-east-2.amazonaws.com/iceberg/v1/arn:aws:s3tables:us-east-2:840140254803:bucket%2Ficeberg-testing/namespaces/tpch_sf1	GET
+https://s3tables.us-east-2.amazonaws.com/iceberg/v1/arn:aws:s3tables:us-east-2:840140254803:bucket%2Ficeberg-testing/namespaces/tpch_sf1/tables/region	HEAD
+https://s3tables.us-east-2.amazonaws.com/iceberg/v1/arn:aws:s3tables:us-east-2:840140254803:bucket%2Ficeberg-testing/namespaces/tpch_sf1/tables/region	GET
+
+query I
+select contains(map_keys(response.headers), 'x-amzn-RequestId') from duckdb_logs_parsed('HTTP') where request.url like '%iceberg/v1%' order by timestamp;
+----
+1
+1
+1

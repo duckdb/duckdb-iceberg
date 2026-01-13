@@ -1,0 +1,104 @@
+# name: test/sql/local/irc/reads/test_requests_to_partitioned_table.test
+# group: [reads]
+
+require-env ICEBERG_SERVER_AVAILABLE
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+require icu
+
+require ducklake
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+set enable_logging=true
+
+statement ok
+set logging_level='debug'
+
+statement ok
+SET TimeZone = 'UTC';
+
+statement ok
+CREATE SECRET (
+    TYPE S3,
+    KEY_ID 'admin',
+    SECRET 'password',
+    ENDPOINT '127.0.0.1:9000',
+    URL_STYLE 'path',
+    USE_SSL 0
+);
+
+
+statement ok
+ATTACH '' AS my_datalake (
+    TYPE ICEBERG,
+    CLIENT_ID 'admin',
+    CLIENT_SECRET 'password',
+    ENDPOINT 'http://127.0.0.1:8181'
+);
+
+statement ok
+call enable_logging(level='debug');
+
+# partitioning was evolved, so make sure we get all tuples inserted in both partitioning schemes
+query IIII
+select * from my_datalake.default.complicated_partitioned_table where ts <= '2020-01-30 00:00:00'::TIMESTAMP and ts >= '2020-01-01 00:00:00'::TIMESTAMP order by all;
+----
+1000	2020-01-01 00:00:00+00	C01-00	16
+1001	2020-01-01 00:00:00+00	C01-01	80
+1002	2020-01-01 00:00:00+00	C01-02	49
+1003	2020-01-01 00:00:00+00	C01-03	75
+4000	2020-01-10 00:00:00+00	C01-00	16
+4001	2020-01-10 00:00:00+00	C01-01	80
+4002	2020-01-10 00:00:00+00	C01-02	49
+4003	2020-01-10 00:00:00+00	C01-03	75
+
+query I
+select count(*) from duckdb_logs_parsed('HTTP') where request.url like '%.parquet';
+----
+2
+
+statement ok
+call truncate_duckdb_logs();
+
+query IIII
+select * from my_datalake.default.complicated_partitioned_table where ts is null order by id;
+----
+6005	NULL	C06-04	40
+6006	NULL	C06-04	41
+6007	NULL	C06-04	42
+
+
+query I
+select count(*) from duckdb_logs_parsed('HTTP') where request.url like '%.parquet';
+----
+1
+
+
+statement ok
+call truncate_duckdb_logs();
+
+
+query I
+select id from my_datalake.default.complicated_partitioned_table where ts >= '2021-01-25 00:00:00'::TIMESTAMP and ts <= '2021-01-30 00:00:00'::TIMESTAMP;
+----
+
+# skips the partitions/data files that match the partiition (2021 & 2021-01) but do not match on upper/lower bounds
+query I
+select count(*) from duckdb_logs where type like 'Iceberg' and
+(message like '%skipped%data_file%ts_year=2021%'
+ or
+ message like '%skipped%data_file%ts_month=2021-01%'
+);
+----
+2
+

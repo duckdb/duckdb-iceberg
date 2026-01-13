@@ -6,19 +6,14 @@
 #include "storage/irc_table_set.hpp"
 #include "storage/irc_transaction.hpp"
 #include "metadata/iceberg_partition_spec.hpp"
-#include "duckdb/parser/constraints/not_null_constraint.hpp"
-#include "duckdb/parser/constraints/unique_constraint.hpp"
 #include "duckdb/parser/expression/constant_expression.hpp"
 #include "duckdb/planner/parsed_data/bound_create_table_info.hpp"
 #include "duckdb/parser/parsed_data/drop_info.hpp"
-#include "duckdb/catalog/dependency_list.hpp"
 #include "duckdb/common/enums/http_status_code.hpp"
 #include "duckdb/common/exception/http_exception.hpp"
 #include "duckdb/parser/parsed_data/create_table_info.hpp"
-#include "duckdb/parser/constraints/list.hpp"
 #include "storage/irc_schema_entry.hpp"
 #include "duckdb/parser/parser.hpp"
-#include "storage/irc_transaction.hpp"
 
 #include "storage/authorization/sigv4.hpp"
 #include "storage/iceberg_table_information.hpp"
@@ -120,16 +115,35 @@ bool ICTableSet::CreateNewEntry(ClientContext &context, IRCatalog &catalog, IRCS
 	if (info.on_conflict == OnCreateConflict::REPLACE_ON_CONFLICT) {
 		throw InvalidInputException("CREATE OR REPLACE not supported in DuckDB-Iceberg");
 	}
-	if (entries.find(table_name) != entries.end()) {
-		if (info.on_conflict == OnCreateConflict::IGNORE_ON_CONFLICT) {
-			return false;
+	auto &irc_transaction = IRCTransaction::Get(context, catalog);
+	bool table_deleted_in_transaction = false;
+	for (auto &deleted_entry : irc_transaction.deleted_tables) {
+		if (deleted_entry->table_info.name == table_name) {
+			table_deleted_in_transaction = true;
+			break;
 		}
-		throw CatalogException("Table %s already exists", table_name.c_str());
+	}
+	if (entries.find(table_name) != entries.end() || table_deleted_in_transaction) {
+		// table still exists in the catalog.
+		// check if table has been deleted in the current transaction
+		switch (info.on_conflict) {
+		case OnCreateConflict::IGNORE_ON_CONFLICT: {
+			if (!table_deleted_in_transaction) {
+				return false;
+			}
+			throw NotImplementedException("Cannot create table previously deleted in the same transaction");
+		}
+		case OnCreateConflict::ERROR_ON_CONFLICT:
+			throw InvalidConfigurationException("Table %s already exists", table_name);
+		case OnCreateConflict::ALTER_ON_CONFLICT:
+			throw NotImplementedException("Alter on conflict");
+		default:
+			throw InternalException("Unknown conflict state when creating a table");
+		}
 	}
 
 	entries.emplace(table_name, IcebergTableInformation(catalog, schema, info.table));
 	auto &table_info = entries.find(table_name)->second;
-	auto &irc_transaction = IRCTransaction::Get(context, catalog);
 
 	auto table_entry = make_uniq<ICTableEntry>(table_info, catalog, schema, info);
 	auto optional_entry = table_entry.get();

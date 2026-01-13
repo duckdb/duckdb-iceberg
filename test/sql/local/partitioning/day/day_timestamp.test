@@ -34,7 +34,7 @@ statement ok
 CALL truncate_duckdb_logs();
 
 query I
-select user_id from ICEBERG_SCAN('data/generated/iceberg/spark-local/default/day_timestamp') 
+select user_id from ICEBERG_SCAN('data/generated/iceberg/spark-local/default/day_timestamp')
 WHERE partition_col = NULL::TIMESTAMP
 ----
 
@@ -45,7 +45,7 @@ WHERE type = 'duckdb.Extensions.Iceberg' and message.contains('data_file')
 ----
 
 query I
-select user_id from ICEBERG_SCAN('data/generated/iceberg/spark-local/default/day_timestamp') 
+select user_id from ICEBERG_SCAN('data/generated/iceberg/spark-local/default/day_timestamp')
 WHERE partition_col IS NULL
 ----
 99999
@@ -66,7 +66,7 @@ statement ok
 CALL truncate_duckdb_logs();
 
 query I
-select user_id from ICEBERG_SCAN('data/generated/iceberg/spark-local/default/day_timestamp') 
+select user_id from ICEBERG_SCAN('data/generated/iceberg/spark-local/default/day_timestamp')
 WHERE partition_col IS NOT NULL ORDER BY user_id
 ----
 12345
@@ -92,7 +92,7 @@ CALL truncate_duckdb_logs();
 
 # Test filtering by day
 query I
-select user_id from ICEBERG_SCAN('data/generated/iceberg/spark-local/default/day_timestamp') 
+select user_id from ICEBERG_SCAN('data/generated/iceberg/spark-local/default/day_timestamp')
 WHERE partition_col = '2020-05-15 14:30:45'
 ----
 12345
@@ -106,13 +106,13 @@ FROM (
 JOIN ICEBERG_METADATA('data/generated/iceberg/spark-local/default/day_timestamp') meta
 ON logs.msg = meta.file_path;
 ----
-2
+3
 
 statement ok
 CALL truncate_duckdb_logs();
 
 query I
-select user_id from ICEBERG_SCAN('data/generated/iceberg/spark-local/default/day_timestamp') 
+select user_id from ICEBERG_SCAN('data/generated/iceberg/spark-local/default/day_timestamp')
 WHERE partition_col = '2021-08-22 09:15:20'
 ----
 67890
@@ -126,13 +126,13 @@ FROM (
 JOIN ICEBERG_METADATA('data/generated/iceberg/spark-local/default/day_timestamp') meta
 ON logs.msg = meta.file_path;
 ----
-2
+3
 
 statement ok
 CALL truncate_duckdb_logs();
 
 query I
-select user_id from ICEBERG_SCAN('data/generated/iceberg/spark-local/default/day_timestamp') 
+select user_id from ICEBERG_SCAN('data/generated/iceberg/spark-local/default/day_timestamp')
 WHERE partition_col = '2022-03-10 11:45:30'
 ----
 54321
@@ -146,14 +146,14 @@ FROM (
 JOIN ICEBERG_METADATA('data/generated/iceberg/spark-local/default/day_timestamp') meta
 ON logs.msg = meta.file_path;
 ----
-2
+3
 
 statement ok
 CALL truncate_duckdb_logs();
 
 # Test filtering by timestamp range
 query I
-select user_id from ICEBERG_SCAN('data/generated/iceberg/spark-local/default/day_timestamp') 
+select user_id from ICEBERG_SCAN('data/generated/iceberg/spark-local/default/day_timestamp')
 WHERE partition_col >= '2021-01-01' AND partition_col < '2022-01-01';
 ----
 67890
@@ -167,7 +167,20 @@ FROM (
 JOIN ICEBERG_METADATA('data/generated/iceberg/spark-local/default/day_timestamp') meta
 ON logs.msg = meta.file_path;
 ----
-2
+3
 
 statement ok
 CALL truncate_duckdb_logs();
+
+query I
+select user_id from ICEBERG_SCAN('data/generated/iceberg/spark-local/default/day_timestamp')
+WHERE partition_col is null;
+----
+99999
+
+# 2 manifest files are skipped because their partition information indicates they do not have nulls
+query I
+select count(*) from duckdb_logs() where type = 'Iceberg' and message.contains('manifest_file');
+----
+2
+

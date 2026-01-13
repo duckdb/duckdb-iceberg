@@ -18,6 +18,8 @@ require httpfs
 
 require aws
 
+set ignore_error_messages
+
 statement ok
 CREATE SECRET (
   TYPE S3,
@@ -33,6 +35,9 @@ attach '840140254803:s3tablescatalog/duckdblabs-iceberg-testing' as my_datalake 
 
 statement ok
 use my_datalake.tpch_sf01;
+
+statement ok
+drop table if exists test_create;
 
 statement ok
 create table test_create as select * from range(0,100);

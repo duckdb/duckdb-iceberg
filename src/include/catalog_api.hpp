@@ -5,6 +5,7 @@
 #include "duckdb/parser/parsed_data/create_table_info.hpp"
 #include "duckdb/parser/parsed_data/create_secret_info.hpp"
 #include "iceberg_metadata.hpp"
+#include "url_utils.hpp"
 #include "storage/irc_table_entry.hpp"
 #include "rest_catalog/objects/table_identifier.hpp"
 #include "rest_catalog/objects/load_table_result.hpp"
@@ -19,6 +20,8 @@ struct IRCAPISchema {
 	vector<string> items;
 	string catalog_name;
 };
+
+enum class IRCEntryLookupStatus : uint8_t { EXISTS = 0, NOT_FOUND = 1, API_ERROR = 2 };
 
 // Some API responses have error messages that need to be checked before being raised
 // to the user, since sometimes is does not mean whole operation has failed.
@@ -40,6 +43,8 @@ public:
 	static const string API_VERSION_1;
 	static vector<rest_api_objects::TableIdentifier> GetTables(ClientContext &context, IRCatalog &catalog,
 	                                                           const IRCSchemaEntry &schema);
+	static bool VerifyResponse(ClientContext &context, IRCatalog &catalog, IRCEndpointBuilder &url_builder,
+	                           bool execute_head);
 	static bool VerifySchemaExistence(ClientContext &context, IRCatalog &catalog, const string &schema);
 	static bool VerifyTableExistence(ClientContext &context, IRCatalog &catalog, const IRCSchemaEntry &schema,
 	                                 const string &table);

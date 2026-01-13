@@ -22,6 +22,7 @@ class Property:
         self.any_of: List[Property] = []
         self.one_of: List[Property] = []
         self.nullable: Optional[bool] = None
+        self.default = None
 
     def is_string(self):
         if self.type != Property.Type.PRIMITIVE:
@@ -159,6 +160,7 @@ class ResponseObjectsGenerator:
         # default to 'object' (see 'AssertViewUUID')
         property_type = spec.get('type', 'object')
         nullable = spec.get('nullable', None)
+        default = spec.get('default', None)
 
         one_of = spec.get('oneOf')
         all_of = spec.get('allOf')
@@ -181,6 +183,7 @@ class ResponseObjectsGenerator:
             exit(1)
 
         result.nullable = nullable
+        result.default = default
 
         if one_of:
             if property_type != 'object':

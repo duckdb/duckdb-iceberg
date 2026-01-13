@@ -2,6 +2,7 @@ from scripts.data_generators.tests.base import IcebergTest
 from scripts.data_generators.connections.base import IcebergConnection
 import pathlib
 import tempfile
+from typing import Type, List, Optional
 import duckdb
 
 
@@ -18,7 +19,8 @@ class Test(IcebergTest):
         self.duckdb_con = duckdb.connect()
         self.duckdb_con.execute("call dbgen(sf=1)")
 
-    def generate(self, con: IcebergConnection):
+    def generate(self, catalog: str, *, target: Optional[str] = None, connection_kwargs: Optional[dict] = None):
+        con = self.get_connection(catalog, target=target, **(connection_kwargs or {}))
         self.setup(con)
 
     def setup(self, con):

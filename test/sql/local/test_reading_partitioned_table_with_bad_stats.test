@@ -1,0 +1,85 @@
+# name: test/sql/local/test_reading_partitioned_table_with_bad_stats.test
+# group: [local]
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+require icu
+
+require-env DUCKDB_ICEBERG_HAVE_GENERATED_DATA
+
+statement ok
+SET TimeZone='UTC'
+
+statement ok
+call enable_logging(level='debug');
+
+query III
+select * from ICEBERG_SCAN('__WORKING_DIRECTORY__/data/persistent/large_partitioned_table/metadata/v2.metadata.json') where joined >= '1984-12-01 00:00:00+01'::TIMESTAMP order by id desc limit 10;
+----
+66454	User_66454	1985-01-31 23:00:00+00
+66453	User_66453	1985-01-31 23:00:00+00
+66452	User_66452	1985-01-31 23:00:00+00
+66451	User_66451	1985-01-31 23:00:00+00
+66450	User_66450	1985-01-31 23:00:00+00
+66449	User_66449	1985-01-31 23:00:00+00
+66448	User_66448	1985-01-31 23:00:00+00
+66447	User_66447	1985-01-31 23:00:00+00
+66446	User_66446	1985-01-31 23:00:00+00
+66445	User_66445	1985-01-31 23:00:00+00
+
+# skipped all partitioned data files where partition information is does not match.
+# data files are skipped twice because during cardinality estimation we run the pruning again (this is a bug to fix for another time)
+query I
+select message from duckdb_logs() where type = 'Iceberg' group by message order by message;
+----
+Iceberg Filter Pushdown, skipped 'data_file': 'data/persistent/large_partitioned_table/data/joined_month=1984-09/00000-42167-732c9827-ec5e-44f2-b2a3-1a919fd2f708-0-00001.parquet'
+Iceberg Filter Pushdown, skipped 'data_file': 'data/persistent/large_partitioned_table/data/joined_month=1984-09/00000-42179-88be9947-7b02-4fd4-b3d4-c794944129c7-0-00001.parquet'
+Iceberg Filter Pushdown, skipped 'data_file': 'data/persistent/large_partitioned_table/data/joined_month=1984-10/00000-43055-fba934f2-9233-4232-b0ee-c2590d27b5a1-0-00001.parquet'
+Iceberg Filter Pushdown, skipped 'data_file': 'data/persistent/large_partitioned_table/data/joined_month=1984-10/00000-43067-4f95304c-c723-4687-8866-b10c02e6a2f1-0-00001.parquet'
+Iceberg Filter Pushdown, skipped 'data_file': 'data/persistent/large_partitioned_table/data/joined_month=1984-10/00000-43079-941f1f20-929b-4fef-a1c4-3ddd0cc73a72-0-00001.parquet'
+Iceberg Filter Pushdown, skipped 'data_file': 'data/persistent/large_partitioned_table/data/joined_month=1984-11/00000-43703-e2078303-362e-4718-91e5-c7164c053240-0-00001.parquet'
+Iceberg Filter Pushdown, skipped 'data_file': 'data/persistent/large_partitioned_table/data/joined_month=1984-11/00000-43715-e9637c83-d2f0-4dd3-94bd-f6bd9381cf7f-0-00001.parquet'
+Iceberg Filter Pushdown, skipped 'data_file': 'data/persistent/large_partitioned_table/data/joined_month=1984-11/00000-43727-a12cb232-8467-4828-9a1b-de3dda8b690d-0-00001.parquet'
+
+statement ok
+call truncate_duckdb_logs();
+
+query I
+select count(*) from ICEBERG_SCAN('__WORKING_DIRECTORY__/data/persistent/large_partitioned_table/metadata/v2.metadata.json') where id > 66450;
+----
+4
+
+# 0 files are pruned since lower and upper bound information no longer exist
+query I
+select count(*) from duckdb_logs() where type = 'Iceberg';
+----
+0
+
+query I
+select count(*) from ICEBERG_SCAN('__WORKING_DIRECTORY__/data/persistent/large_partitioned_table/metadata/v2.metadata.json') where id > 66450 or joined >= '1985-01-31 23:00:00+00'::TIMESTAMP;
+----
+61
+
+# still 0 files are pruned since lower and upper bound information do not exist and filter is an OR condition, so all files must be scanned
+query I
+select count(*) from duckdb_logs() where type = 'Iceberg';
+----
+0
+
+query I
+select count(*) from ICEBERG_SCAN('__WORKING_DIRECTORY__/data/persistent/large_partitioned_table/metadata/v2.metadata.json') where joined >= '1984-12-01 00:00:00+01'::TIMESTAMP and  id > 66450;
+----
+4
+
+# same 8 files pruned since now condition is an and, so the filter on the partition column must also hold
+# why pruning is not done twice is not clear to me.
+query I
+select count(*) from duckdb_logs() where type = 'Iceberg';
+----
+8
