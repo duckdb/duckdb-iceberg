@@ -199,45 +199,6 @@ void IRCSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) {
 	new_schema->schema_id = new_schema_id;
 
 	switch (alter_table_info.alter_table_type) {
-	case AlterTableType::ADD_COLUMN: {
-		auto &add_info = alter_table_info.Cast<AddColumnInfo>();
-		idx_t next_id = updated_table.table_metadata.GetLastColumnId();
-
-		auto get_next_id = [&]() {
-			return ++next_id;
-		};
-
-		auto iceberg_type = IcebergTypeHelper::CreateIcebergRestType(add_info.new_column.Type(), get_next_id);
-		auto new_column =
-		    IcebergColumnDefinition::ParseType(add_info.new_column.Name(), get_next_id(), false, iceberg_type);
-		new_schema->columns.push_back(std::move(new_column));
-		new_schema->last_column_id = next_id;
-
-		auto update = make_uniq<AddSchemaUpdate>(updated_table);
-		update->table_schema = new_schema;
-		update->last_column_id = next_id;
-		updated_table.transaction_data->updates.push_back(std::move(update));
-		break;
-	}
-	case AlterTableType::REMOVE_COLUMN: {
-		auto &remove_info = alter_table_info.Cast<RemoveColumnInfo>();
-		bool found = false;
-		for (auto it = new_schema->columns.begin(); it != new_schema->columns.end(); ++it) {
-			if (StringUtil::CIEquals((*it)->name, remove_info.removed_column)) {
-				new_schema->columns.erase(it);
-				found = true;
-				break;
-			}
-		}
-		if (!found && !remove_info.if_column_exists) {
-			throw CatalogException("Column with name \"%s\" does not exist!", remove_info.removed_column);
-		}
-
-		auto update = make_uniq<AddSchemaUpdate>(updated_table);
-		update->table_schema = new_schema;
-		updated_table.transaction_data->updates.push_back(std::move(update));
-		break;
-	}
 	case AlterTableType::SET_PARTITIONED_BY: {
 		auto &partition_info = alter_table_info.Cast<SetPartitionedByInfo>();
 		// TODO: generate correct new spec id
