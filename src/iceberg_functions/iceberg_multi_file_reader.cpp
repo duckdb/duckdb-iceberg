@@ -57,7 +57,24 @@ static MultiFileColumnDefinition TransformColumn(const IcebergColumnDefinition &
 
 bool IcebergMultiFileReader::Bind(MultiFileOptions &options, MultiFileList &files, vector<LogicalType> &return_types,
                                   vector<string> &names, MultiFileReaderBindData &bind_data) {
+	options.auto_detect_hive_partitioning = false;
+	options.hive_partitioning = false;
+	options.union_by_name = false;
+	return false;
+}
+
+void IcebergMultiFileReader::BindOptions(MultiFileOptions &options, MultiFileList &files,
+                                         vector<LogicalType> &return_types, vector<string> &names,
+                                         MultiFileReaderBindData &bind_data) {
+	// Disable all other multifilereader options
+	options.auto_detect_hive_partitioning = false;
+	options.hive_partitioning = false;
+	options.union_by_name = false;
+
 	auto &iceberg_multi_file_list = dynamic_cast<IcebergMultiFileList &>(files);
+	return_types.clear();
+	names.clear();
+	bind_data.schema.clear();
 
 	iceberg_multi_file_list.Bind(return_types, names);
 	// FIXME: apply final transformation for 'file_row_number' ???
@@ -68,16 +85,6 @@ bool IcebergMultiFileReader::Bind(MultiFileOptions &options, MultiFileList &file
 		columns.push_back(TransformColumn(*item));
 	}
 	bind_data.mapping = MultiFileColumnMappingMode::BY_FIELD_ID;
-	return true;
-}
-
-void IcebergMultiFileReader::BindOptions(MultiFileOptions &options, MultiFileList &files,
-                                         vector<LogicalType> &return_types, vector<string> &names,
-                                         MultiFileReaderBindData &bind_data) {
-	// Disable all other multifilereader options
-	options.auto_detect_hive_partitioning = false;
-	options.hive_partitioning = false;
-	options.union_by_name = false;
 
 	MultiFileReader::BindOptions(options, files, return_types, names, bind_data);
 }
