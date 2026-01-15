@@ -96,26 +96,7 @@ void IcebergMultiFileList::Bind(vector<LogicalType> &return_types, vector<string
 		return;
 	}
 
-	if (!scan_info) {
-		D_ASSERT(!path.empty());
-		auto input_string = path;
-		auto iceberg_path = IcebergUtils::GetStorageLocation(context, input_string);
-		auto iceberg_meta_path = IcebergTableMetadata::GetMetaDataPath(context, iceberg_path, fs, options);
-		auto table_metadata = IcebergTableMetadata::Parse(iceberg_meta_path, fs, options.metadata_compression_codec);
-
-		auto temp_data = make_uniq<IcebergScanTemporaryData>();
-		temp_data->metadata = IcebergTableMetadata::FromTableMetadata(table_metadata);
-		auto &metadata = temp_data->metadata;
-
-		auto found_snapshot = metadata.GetSnapshot(options.snapshot_lookup);
-		shared_ptr<IcebergTableSchema> schema;
-		if (options.snapshot_lookup.snapshot_source == SnapshotSource::LATEST) {
-			schema = metadata.GetSchemaFromId(metadata.current_schema_id);
-		} else {
-			schema = metadata.GetSchemaFromId(found_snapshot->schema_id);
-		}
-		scan_info = make_shared_ptr<IcebergScanInfo>(iceberg_path, std::move(temp_data), found_snapshot, *schema);
-	}
+	EnsureScanInfo(guard);
 
 	if (!initialized) {
 		InitializeFiles(guard);
@@ -612,6 +593,8 @@ void IcebergMultiFileList::InitializeFiles(lock_guard<mutex> &guard) {
 	}
 	initialized = true;
 
+	EnsureScanInfo(guard);
+
 	if (scan_info->snapshot) {
 		//! Load the snapshot
 		auto iceberg_path = GetPath();
@@ -685,6 +668,31 @@ void IcebergMultiFileList::InitializeFiles(lock_guard<mutex> &guard) {
 	current_data_manifest = data_manifests.begin();
 	current_delete_manifest = delete_manifests.begin();
 	current_transaction_delete_manifest = transaction_delete_manifests.begin();
+}
+
+void IcebergMultiFileList::EnsureScanInfo(lock_guard<mutex> &guard) {
+	(void)guard;
+	if (scan_info) {
+		return;
+	}
+	D_ASSERT(!path.empty());
+	auto input_string = path;
+	auto iceberg_path = IcebergUtils::GetStorageLocation(context, input_string);
+	auto iceberg_meta_path = IcebergTableMetadata::GetMetaDataPath(context, iceberg_path, fs, options);
+	auto table_metadata = IcebergTableMetadata::Parse(iceberg_meta_path, fs, options.metadata_compression_codec);
+
+	auto temp_data = make_uniq<IcebergScanTemporaryData>();
+	temp_data->metadata = IcebergTableMetadata::FromTableMetadata(table_metadata);
+	auto &metadata = temp_data->metadata;
+
+	auto found_snapshot = metadata.GetSnapshot(options.snapshot_lookup);
+	shared_ptr<IcebergTableSchema> schema;
+	if (options.snapshot_lookup.snapshot_source == SnapshotSource::LATEST) {
+		schema = metadata.GetSchemaFromId(metadata.current_schema_id);
+	} else {
+		schema = metadata.GetSchemaFromId(found_snapshot->schema_id);
+	}
+	scan_info = make_shared_ptr<IcebergScanInfo>(iceberg_path, std::move(temp_data), found_snapshot, *schema);
 }
 
 void IcebergMultiFileList::ProcessDeletes(const vector<MultiFileColumnDefinition> &global_columns,
