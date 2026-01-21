@@ -41,7 +41,11 @@ void CommitTableToJSON(yyjson_mut_doc *doc, yyjson_mut_val *root_object,
 			auto requirement_json = yyjson_mut_arr_add_obj(doc, requirements_array);
 			yyjson_mut_obj_add_strcpy(doc, requirement_json, "type", assert_ref_snapshot_id.type.value.c_str());
 			yyjson_mut_obj_add_strcpy(doc, requirement_json, "ref", assert_ref_snapshot_id.ref.c_str());
-			yyjson_mut_obj_add_uint(doc, requirement_json, "snapshot-id", assert_ref_snapshot_id.snapshot_id);
+			if (assert_ref_snapshot_id.has_snapshot_id) {
+				yyjson_mut_obj_add_uint(doc, requirement_json, "snapshot-id", assert_ref_snapshot_id.snapshot_id);
+			} else {
+				yyjson_mut_obj_add_null(doc, requirement_json, "snapshot-id");
+			}
 		} else if (requirement.has_assert_create) {
 			auto &assert_create = requirement.assert_create;
 			auto requirement_json = yyjson_mut_arr_add_obj(doc, requirements_array);
@@ -224,6 +228,18 @@ static rest_api_objects::TableRequirement CreateAssertRefSnapshotIdRequirement(I
 	auto &res = req.assert_ref_snapshot_id;
 	res.ref = "main";
 	res.snapshot_id = old_snapshot.snapshot_id;
+	res.has_snapshot_id = true;
+	res.type.value = "assert-ref-snapshot-id";
+	return req;
+}
+
+static rest_api_objects::TableRequirement CreateAssertNoSnapshotRequirement() {
+	rest_api_objects::TableRequirement req;
+	req.has_assert_ref_snapshot_id = true;
+
+	auto &res = req.assert_ref_snapshot_id;
+	res.ref = "main";
+	res.has_snapshot_id = false;
 	res.type.value = "assert-ref-snapshot-id";
 	return req;
 }
@@ -303,6 +319,10 @@ TableTransactionInfo IRCTransaction::GetTransactionRequest(ClientContext &contex
 			//! If any changes were made to the state of the table, we should assert that our parent snapshot has
 			//! not changed. We don't want to change the table location if someone has added a snapshot
 			commit_state.table_change.requirements.push_back(CreateAssertRefSnapshotIdRequirement(*current_snapshot));
+		} else if (!info.has_assert_create) {
+			//! If the table had no snapshots and isn't created by this transaction, we should assert that no snapshot
+			//! has been added in the meantime
+			commit_state.table_change.requirements.push_back(CreateAssertNoSnapshotRequirement());
 		}
 
 		transaction.table_changes.push_back(std::move(table_change));

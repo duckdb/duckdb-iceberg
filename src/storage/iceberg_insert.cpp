@@ -5,6 +5,7 @@
 #include "metadata/iceberg_column_definition.hpp"
 #include "iceberg_multi_file_list.hpp"
 #include "storage/irc_transaction.hpp"
+#include "iceberg_value.hpp"
 #include "utils/iceberg_type.hpp"
 #include "duckdb/catalog/catalog_entry/copy_function_catalog_entry.hpp"
 #include "duckdb/main/client_data.hpp"
@@ -49,8 +50,12 @@ IcebergCopyInput::IcebergCopyInput(ClientContext &context, IRCSchemaEntry &schem
 	data_path = data_path_p + "/data";
 }
 
+IcebergInsertGlobalState::IcebergInsertGlobalState(ClientContext &context)
+    : GlobalSinkState(), context(context), insert_count(0) {
+}
+
 unique_ptr<GlobalSinkState> IcebergInsert::GetGlobalSinkState(ClientContext &context) const {
-	return make_uniq<IcebergInsertGlobalState>();
+	return make_uniq<IcebergInsertGlobalState>(context);
 }
 
 //===--------------------------------------------------------------------===//
@@ -97,51 +102,6 @@ static vector<string> ParseQuotedList(const string &input, char list_separator) 
 	return result;
 }
 
-struct IcebergColumnStats {
-	explicit IcebergColumnStats() = default;
-
-	string min;
-	string max;
-	idx_t null_count = 0;
-	idx_t column_size_bytes = 0;
-	bool contains_nan = false;
-	bool has_null_count = false;
-	bool has_min = false;
-	bool has_max = false;
-	bool any_valid = true;
-	bool has_contains_nan = false;
-};
-
-static IcebergColumnStats ParseColumnStats(const vector<Value> col_stats) {
-	IcebergColumnStats column_stats;
-	for (idx_t stats_idx = 0; stats_idx < col_stats.size(); stats_idx++) {
-		auto &stats_children = StructValue::GetChildren(col_stats[stats_idx]);
-		auto &stats_name = StringValue::Get(stats_children[0]);
-		auto &stats_value = StringValue::Get(stats_children[1]);
-		if (stats_name == "min") {
-			D_ASSERT(!column_stats.has_min);
-			column_stats.min = stats_value;
-			column_stats.has_min = true;
-		} else if (stats_name == "max") {
-			D_ASSERT(!column_stats.has_max);
-			column_stats.max = stats_value;
-			column_stats.has_max = true;
-		} else if (stats_name == "null_count") {
-			D_ASSERT(!column_stats.has_null_count);
-			column_stats.has_null_count = true;
-			column_stats.null_count = StringUtil::ToUnsigned(stats_value);
-		} else if (stats_name == "column_size_bytes") {
-			column_stats.column_size_bytes = StringUtil::ToUnsigned(stats_value);
-		} else if (stats_name == "has_nan") {
-			column_stats.has_contains_nan = true;
-			column_stats.contains_nan = stats_value == "true";
-		} else {
-			throw NotImplementedException("Unsupported stats type \"%s\" in IcebergInsert::Sink()", stats_name);
-		}
-	}
-	return column_stats;
-}
-
 static void AddToColDefMap(case_insensitive_map_t<optional_ptr<IcebergColumnDefinition>> &name_to_coldef,
                            string col_name_prefix, optional_ptr<IcebergColumnDefinition> column_def) {
 	string column_name = column_def->name;
@@ -157,8 +117,40 @@ static void AddToColDefMap(case_insensitive_map_t<optional_ptr<IcebergColumnDefi
 	}
 }
 
-static void AddWrittenFiles(IcebergInsertGlobalState &global_state, DataChunk &chunk,
-                            optional_ptr<TableCatalogEntry> table) {
+IcebergColumnStats IcebergInsert::ParseColumnStats(const LogicalType &type, const vector<Value> &col_stats,
+                                                   ClientContext &context) {
+	IcebergColumnStats column_stats(type);
+	for (idx_t stats_idx = 0; stats_idx < col_stats.size(); stats_idx++) {
+		auto &stats_children = StructValue::GetChildren(col_stats[stats_idx]);
+		auto &stats_name = StringValue::Get(stats_children[0]);
+		if (stats_name == "min") {
+			D_ASSERT(!column_stats.has_min);
+			column_stats.min = StringValue::Get(stats_children[1]);
+			column_stats.has_min = true;
+		} else if (stats_name == "max") {
+			D_ASSERT(!column_stats.has_max);
+			column_stats.max = StringValue::Get(stats_children[1]);
+			column_stats.has_max = true;
+		} else if (stats_name == "null_count") {
+			D_ASSERT(!column_stats.has_null_count);
+			column_stats.has_null_count = true;
+			column_stats.null_count = StringUtil::ToUnsigned(StringValue::Get(stats_children[1]));
+		} else if (stats_name == "column_size_bytes") {
+			column_stats.has_column_size_bytes = true;
+			column_stats.column_size_bytes = StringUtil::ToUnsigned(StringValue::Get(stats_children[1]));
+		} else if (stats_name == "has_nan") {
+			column_stats.has_contains_nan = true;
+			column_stats.contains_nan = StringValue::Get(stats_children[1]) == "true";
+		} else {
+			// Ignore other stats types.s
+			DUCKDB_LOG_INFO(context, "Iceberg", "Did not write column stats %s", stats_name);
+		}
+	}
+	return column_stats;
+}
+
+void IcebergInsert::AddWrittenFiles(IcebergInsertGlobalState &global_state, DataChunk &chunk,
+                                    optional_ptr<TableCatalogEntry> table) {
 	D_ASSERT(table);
 	// grab lock for written files vector
 	lock_guard<mutex> guard(global_state.lock);
@@ -198,17 +190,44 @@ static void AddWrittenFiles(IcebergInsertGlobalState &global_state, DataChunk &c
 			auto &col_name = StringValue::Get(struct_children[0]);
 			auto &col_stats = MapValue::GetChildren(struct_children[1]);
 			auto column_names = ParseQuotedList(col_name, '.');
-			auto stats = ParseColumnStats(col_stats);
 			auto normalized_col_name = StringUtil::Join(column_names, ".");
 
-			auto ic_column_info = column_info.find(normalized_col_name);
-			D_ASSERT(ic_column_info != column_info.end());
-			if (ic_column_info->second->required && stats.has_null_count && stats.null_count > 0) {
+			auto ic_column_info_it = column_info.find(normalized_col_name);
+			D_ASSERT(ic_column_info_it != column_info.end());
+			auto column_info = ic_column_info_it->second;
+			auto stats = ParseColumnStats(column_info->type, col_stats, global_state.context);
+			if (column_info->required && stats.has_null_count && stats.null_count > 0) {
 				throw ConstraintException("NOT NULL constraint failed: %s.%s", table->name, normalized_col_name);
 			}
+			// go through stats and add upper and lower bounds
+			// Do serialization of values here in case we read transaction updates
+			if (stats.has_min) {
+				auto serialized_value =
+				    IcebergValue::SerializeValue(stats.min, column_info->type, SerializeBound::LOWER_BOUND);
+				if (serialized_value.HasError()) {
+					throw InvalidConfigurationException(serialized_value.GetError());
+				} else if (serialized_value.HasValue()) {
+					data_file.lower_bounds[column_info->id] = serialized_value.GetValue();
+				}
+			}
+			if (stats.has_max) {
+				auto serialized_value =
+				    IcebergValue::SerializeValue(stats.max, column_info->type, SerializeBound::UPPER_BOUND);
+				if (serialized_value.HasError()) {
+					throw InvalidConfigurationException(serialized_value.GetError());
+				} else if (serialized_value.HasValue()) {
+					data_file.upper_bounds[column_info->id] = serialized_value.GetValue();
+				}
+			}
+			if (stats.has_column_size_bytes) {
+				data_file.column_sizes[column_info->id] = stats.column_size_bytes;
+			}
+			if (stats.has_null_count) {
+				data_file.null_value_counts[column_info->id] = stats.null_count;
+			}
 
-			//! TODO: convert 'stats' into 'data_file.lower_bounds', upper_bounds, value_counts, null_value_counts,
-			//! nan_value_counts ...
+			//! nan_value_counts won't work, we can only indicate if they exist.
+			//! TODO: revisit when duckdb/duckdb can record nan_value_counts
 		}
 
 		//! TODO: extract the partition info

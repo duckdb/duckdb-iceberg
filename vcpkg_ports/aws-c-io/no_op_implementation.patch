@@ -1,0 +1,137 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 671fb2c..048fb63 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -176,10 +176,12 @@ aws_add_sanitizers(${PROJECT_NAME})
+ 
+ # We are not ABI stable yet
+ set_target_properties(${PROJECT_NAME} PROPERTIES VERSION 1.0.0)
+-
++if (NOT EMSCRIPTEN)
+ if (NOT EVENT_LOOP_DEFINES)
+     message(FATAL_ERROR "Event Loop is not setup on the platform.")
+ endif()
++endif()
++
+ foreach(EVENT_LOOP_DEFINE IN LISTS EVENT_LOOP_DEFINES)
+     target_compile_definitions(${PROJECT_NAME} PUBLIC "-DAWS_ENABLE_${EVENT_LOOP_DEFINE}")
+ endforeach()
+diff --git a/source/event_loop.c b/source/event_loop.c
+index 8d9321d..98f485a 100644
+--- a/source/event_loop.c
++++ b/source/event_loop.c
+@@ -21,6 +21,17 @@ static enum aws_event_loop_type s_default_event_loop_type_override = AWS_EVENT_L
+ static enum aws_event_loop_type s_default_event_loop_type_override = AWS_EVENT_LOOP_PLATFORM_DEFAULT;
+ #endif
+ 
++#ifdef EMSCRIPTEN
++int aws_default_dns_resolve(
++    struct aws_allocator *allocator,
++    const struct aws_string *host_name,
++    struct aws_array_list *output_addresses,
++    void *user_data) {
++	printf("aws_default_dns_resolve\n");
++		return 1;
++}
++#endif
++
+ struct aws_event_loop *aws_event_loop_new_default(struct aws_allocator *alloc, aws_io_clock_fn *clock) {
+     struct aws_event_loop_options options = {
+         .thread_options = NULL,
+@@ -75,6 +86,9 @@ struct aws_event_loop *aws_event_loop_new_with_epoll(
+  * If `aws_event_loop_override_default_type` has been called, return the override default type.
+  */
+ static enum aws_event_loop_type aws_event_loop_get_default_type(void) {
++#ifdef EMSCRIPTEN
++       return s_default_event_loop_type_override;
++#else
+     if (s_default_event_loop_type_override != AWS_EVENT_LOOP_PLATFORM_DEFAULT) {
+         return s_default_event_loop_type_override;
+     }
+@@ -94,6 +108,7 @@ static enum aws_event_loop_type aws_event_loop_get_default_type(void) {
+ #    error                                                                                                             \
+         "Default event loop type required. Failed to get default event loop type. The library is not built correctly on the platform. "
+ #endif
++#endif
+ }
+ 
+ static int aws_event_loop_type_validate_platform(enum aws_event_loop_type type);
+diff --git a/source/io.c b/source/io.c
+index 380ece1..60418b5 100644
+--- a/source/io.c
++++ b/source/io.c
+@@ -351,8 +351,13 @@ static struct aws_log_subject_info_list s_io_log_subject_list = {
+ 
+ static bool s_io_library_initialized = false;
+ 
++#ifdef EMSCRIPTEN
++void aws_tls_init_static_state(struct aws_allocator *alloc) {}
++void aws_tls_clean_up_static_state(void) {}
++#else
+ void aws_tls_init_static_state(struct aws_allocator *alloc);
+ void aws_tls_clean_up_static_state(void);
++#endif
+ 
+ void aws_io_library_init(struct aws_allocator *allocator) {
+     if (!s_io_library_initialized) {
+diff --git a/source/posix/socket.c b/source/posix/socket.c
+index 266ad2d..d0830d4 100644
+--- a/source/posix/socket.c
++++ b/source/posix/socket.c
+@@ -330,6 +330,9 @@ static void s_socket_clean_up(struct aws_socket *socket) {
+ 
+ /* Update socket->local_endpoint based on the results of getsockname() */
+ static int s_update_local_endpoint(struct aws_socket *socket) {
++#ifdef EMSCRIPTEN
++    return 0;
++#else
+     struct aws_socket_endpoint tmp_endpoint;
+     AWS_ZERO_STRUCT(tmp_endpoint);
+ 
+@@ -411,6 +414,7 @@ static int s_update_local_endpoint(struct aws_socket *socket) {
+ 
+     socket->local_endpoint = tmp_endpoint;
+     return AWS_OP_SUCCESS;
++#endif
+ }
+ 
+ static void s_on_connection_error(struct aws_socket *socket, int error);
+@@ -991,7 +995,9 @@ static void s_socket_accept_event(
+     struct aws_io_handle *handle,
+     int events,
+     void *user_data) {
+-
++#ifdef EMSCRIPTEN
++    return;
++#else
+     (void)event_loop;
+ 
+     struct aws_socket *socket = user_data;
+@@ -1115,6 +1121,7 @@ static void s_socket_accept_event(
+         "waiting on event-loop notification",
+         (void *)socket,
+         socket->io_handle.data.fd);
++#endif
+ }
+ 
+ static int s_socket_start_accept(
+diff --git a/source/tls_channel_handler.c b/source/tls_channel_handler.c
+index 5c64268..2b71242 100644
+--- a/source/tls_channel_handler.c
++++ b/source/tls_channel_handler.c
+@@ -17,6 +17,15 @@
+ 
+ #include <aws/common/string.h>
+ 
++#ifdef EMSCRIPTEN
++struct aws_tls_ctx *aws_tls_client_ctx_new(
++    struct aws_allocator *alloc,
++    const struct aws_tls_ctx_options *options) {
++	printf("aws_tls_client_ctx_new\n");
++		return 0;
++}
++#endif
++
+ void aws_tls_ctx_options_init_default_client(struct aws_tls_ctx_options *options, struct aws_allocator *allocator) {
+     AWS_ZERO_STRUCT(*options);
+     options->allocator = allocator;

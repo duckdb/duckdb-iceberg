@@ -2,6 +2,7 @@
 
 #include "iceberg_metadata.hpp"
 #include "iceberg_utils.hpp"
+#include "duckdb/common/exception.hpp"
 #include "rest_catalog/objects/list.hpp"
 
 namespace duckdb {
@@ -146,4 +147,13 @@ shared_ptr<IcebergTableSchema> IcebergTableSchema::Copy() const {
 	return res;
 }
 
+const LogicalType &IcebergTableSchema::GetColumnTypeFromFieldId(idx_t field_id) const {
+	for (auto &column : columns) {
+		if (column->id == field_id) {
+			return column->type;
+		}
+	}
+	throw InvalidInputException("GetColumnTypeFromFieldId:: field id %d does not exist in schema with id %d", field_id,
+								schema_id);
+}
 } // namespace duckdb

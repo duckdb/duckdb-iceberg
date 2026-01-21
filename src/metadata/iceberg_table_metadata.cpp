@@ -381,7 +381,7 @@ string IcebergTableMetadata::GetDataPath() const {
 string IcebergTableMetadata::GetMetadataPath() const {
 	// If write.metadata.path property is set, use it; otherwise use default location + "/metadata"
 	auto metadata_path = table_properties.find("write.metadata.path");
-	// If write.data.path property is set, use it; otherwise use default location + "/data"
+	// If write.data.path property is set, use it; otherwise use default location + "/metadata"
 	if (metadata_path != table_properties.end()) {
 		return metadata_path->second;
 	}

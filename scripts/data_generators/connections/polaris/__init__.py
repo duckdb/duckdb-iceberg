@@ -10,6 +10,7 @@ import sys
 import os
 
 CONNECTION_KEY = 'polaris'
+SPARK_RUNTIME_PATH = os.path.join(os.path.dirname(__file__), '..', '..', 'iceberg-spark-runtime-3.5_2.12-1.9.0.jar')
 
 
 @IcebergConnection.register(CONNECTION_KEY)
@@ -20,7 +21,7 @@ class IcebergSparkLocal(IcebergConnection):
 
     def get_connection(self):
         os.environ["PYSPARK_SUBMIT_ARGS"] = (
-            "--packages org.apache.iceberg:iceberg-spark-runtime-3.4_2.12:1.9.0,org.apache.iceberg:iceberg-aws-bundle:1.9.0 pyspark-shell"
+            "--packages org.apache.iceberg:iceberg-spark-runtime-3.5_2.12:1.9.0,org.apache.iceberg:iceberg-aws-bundle:1.9.0 pyspark-shell"
         )
 
         client_id = os.getenv('POLARIS_CLIENT_ID', '')
@@ -36,14 +37,17 @@ class IcebergSparkLocal(IcebergConnection):
         config = SparkConf()
         config.set(
             "spark.jars.packages",
-            "org.apache.iceberg:iceberg-spark-runtime-3.5_2.12:1.8.1,org.apache.hadoop:hadoop-aws:3.4.0,software.amazon.awssdk:bundle:2.23.19,software.amazon.awssdk:url-connection-client:2.23.19",
+            "org.apache.iceberg:iceberg-spark-runtime-3.5_2.12:1.9.0,org.apache.hadoop:hadoop-aws:3.4.0,software.amazon.awssdk:bundle:2.23.19,software.amazon.awssdk:url-connection-client:2.23.19",
         )
         config.set('spark.sql.iceberg.vectorization.enabled', 'false')
         # Configure the 'polaris' catalog as an Iceberg rest catalog
         config.set("spark.sql.catalog.quickstart_catalog.type", "rest")
+        config.set('spark.driver.memory', '10g')
+        config.set("spark.sql.catalog.quickstart_catalog.rest.auth.type", "oauth2")
         config.set("spark.sql.catalog.quickstart_catalog", "org.apache.iceberg.spark.SparkCatalog")
         # Specify the rest catalog endpoint
         config.set("spark.sql.catalog.quickstart_catalog.uri", "http://localhost:8181/api/catalog")
+        config.set("spark.sql.catalog.quickstart_catalog.oauth2-server-uri", "http://localhost:8181/api/catalog/v1/oauth/tokens")
         # Enable token refresh
         config.set("spark.sql.catalog.quickstart_catalog.token-refresh-enabled", "true")
         # specify the client_id:client_secret pair
@@ -57,6 +61,7 @@ class IcebergSparkLocal(IcebergConnection):
         config.set("spark.sql.catalog.quickstart_catalog.io-impl", "org.apache.iceberg.io.ResolvingFileIO")
         config.set("spark.sql.catalog.quickstart_catalog.s3.region", "us-west-2")
         config.set("spark.history.fs.logDirectory", "/home/iceberg/spark-events")
+        config.set("spark.jars", SPARK_RUNTIME_PATH)
 
         spark = SparkSession.builder.config(conf=config).getOrCreate()
         spark.sql("USE quickstart_catalog")

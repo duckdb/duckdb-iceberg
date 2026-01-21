@@ -269,7 +269,7 @@ void IRCatalog::AddDefaultSupportedEndpoints() {
 	// Rename a table from one identifier to another.
 	supported_urls.insert("POST /v1/{prefix}/tables/rename");
 	// commit updates to multiple tables in an atomic transaction
-	supported_urls.insert("POST /v1/{prefix}/transactions/commit)");
+	supported_urls.insert("POST /v1/{prefix}/transactions/commit");
 }
 
 void IRCatalog::AddS3TablesEndpoints() {
@@ -292,12 +292,36 @@ void IRCatalog::AddS3TablesEndpoints() {
 	supported_urls.insert("POST /v1/{prefix}/namespaces/{namespace}/tables/{table}");
 	// drop table from a catalog
 	supported_urls.insert("DELETE /v1/{prefix}/namespaces/{namespace}/tables/{table}");
-	// table exists
-	supported_urls.insert("HEAD /v1/{prefix}/namespaces/{namespace}/tables/{table}");
 	// Rename a table from one identifier to another.
 	supported_urls.insert("POST /v1/{prefix}/tables/rename");
-	// commit updates to multiple tables in an atomic transaction
-	supported_urls.insert("POST /v1/{prefix}/transactions/commit)");
+	// table exists
+	supported_urls.insert("HEAD /v1/{prefix}/namespaces/{namespace}/tables/{table}");
+	// namespace exists
+	supported_urls.insert("HEAD /v1/{prefix}/namespaces/{namespace}");
+}
+
+void IRCatalog::AddGlueEndpoints() {
+	// insert namespaces based on REST API spec.
+	// List namespaces
+	supported_urls.insert("GET /v1/{prefix}/namespaces");
+	// create namespace
+	supported_urls.insert("POST /v1/{prefix}/namespaces");
+	// Load metadata for a Namespace
+	supported_urls.insert("GET /v1/{prefix}/namespaces/{namespace}");
+	// Drop a namespace
+	supported_urls.insert("DELETE /v1/{prefix}/namespaces/{namespace}");
+	// list all table identifiers
+	supported_urls.insert("GET /v1/{prefix}/namespaces/{namespace}/tables");
+	// create table in the namespace
+	supported_urls.insert("POST /v1/{prefix}/namespaces/{namespace}/tables");
+	// get table from the catalog
+	supported_urls.insert("GET /v1/{prefix}/namespaces/{namespace}/tables/{table}");
+	// table exists
+	supported_urls.insert("HEAD /v1/{prefix}/namespaces/{namespace}/tables/{table}");
+	// commit updates to a table
+	supported_urls.insert("POST /v1/{prefix}/namespaces/{namespace}/tables/{table}");
+	// drop table from a catalog
+	supported_urls.insert("DELETE /v1/{prefix}/namespaces/{namespace}/tables/{table}");
 }
 
 void IRCatalog::GetConfig(ClientContext &context, IcebergEndpointType &endpoint_type) {
@@ -334,6 +358,9 @@ void IRCatalog::GetConfig(ClientContext &context, IcebergEndpointType &endpoint_
 	if (!catalog_config.has_endpoints && endpoint_type == IcebergEndpointType::AWS_S3TABLES) {
 		supported_urls.clear();
 		AddS3TablesEndpoints();
+	} else if (!catalog_config.has_endpoints && endpoint_type == IcebergEndpointType::AWS_GLUE) {
+		supported_urls.clear();
+		AddGlueEndpoints();
 	} else if (!catalog_config.has_endpoints) {
 		AddDefaultSupportedEndpoints();
 	}

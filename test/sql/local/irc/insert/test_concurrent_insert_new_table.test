@@ -33,10 +33,6 @@ ATTACH '' AS my_datalake (
     ENDPOINT 'http://127.0.0.1:8181'
 );
 
-# this is a bug in the IRC spec
-# empty tables do not have snapshots, and there is no spec-defined way to verify an empty table
-mode skip
-
 statement ok
 DROP TABLE IF EXISTS my_datalake.default.concurrent_new_table_test;
 

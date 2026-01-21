@@ -7,6 +7,11 @@
 
 namespace duckdb {
 
+enum class SerializeBound : uint8_t {
+	LOWER_BOUND = 0,
+	UPPER_BOUND = 1,
+};
+
 struct DeserializeResult {
 public:
 	DeserializeResult(Value &&val) : value(std::move(val)) {
@@ -19,11 +24,11 @@ public:
 		return !error.empty();
 	}
 	const string GetError() const {
-		D_ASSERT(!error.empty());
+		D_ASSERT(HasError());
 		return error;
 	}
 	const Value &GetValue() const {
-		D_ASSERT(error.empty());
+		D_ASSERT(!HasError());
 		return value;
 	}
 
@@ -32,12 +37,52 @@ public:
 	string error;
 };
 
+struct SerializeResult {
+public:
+	SerializeResult(LogicalType &column_type, Value serialized_value)
+	    : original_type(column_type), value(serialized_value) {
+	}
+
+	SerializeResult() : original_type(LogicalType::INVALID), value(Value()) {
+	}
+
+	explicit SerializeResult(const string &error) : error(error) {
+	}
+
+public:
+	bool HasError() const {
+		return !error.empty();
+	}
+	string GetError() const {
+		D_ASSERT(HasError());
+		return error;
+	}
+	const Value &GetValue() const {
+		D_ASSERT(!HasError());
+		D_ASSERT(value.type() == LogicalType::BLOB);
+		return value;
+	}
+	// some returned stats are known to be incorrect. For that we do not serialize them
+	bool HasValue() const {
+		return !value.IsNull();
+	}
+
+public:
+	string error;
+	LogicalType original_type;
+	Value value;
+};
+
 struct IcebergValue {
 public:
+	static constexpr idx_t MAX_STRING_UPPERBOUND_LENGTH = 16;
 	IcebergValue() = delete;
 
 public:
 	static DeserializeResult DeserializeValue(const string_t &blob, const LogicalType &target);
+	static SerializeResult SerializeValue(Value input_value, LogicalType &column_type, SerializeBound bound_type);
+	static string TruncateString(const string &input);
+	static string TruncateAndIncrementString(const string &input);
 };
 
 } // namespace duckdb

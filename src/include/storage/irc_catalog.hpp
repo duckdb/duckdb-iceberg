@@ -95,6 +95,7 @@ public:
 	DatabaseSize GetDatabaseSize(ClientContext &context) override;
 	void AddDefaultSupportedEndpoints();
 	void AddS3TablesEndpoints();
+	void AddGlueEndpoints();
 	//! Whether or not this is an in-memory Iceberg database
 	bool InMemory() override;
 	string GetDBPath() override;
