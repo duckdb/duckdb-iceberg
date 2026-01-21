@@ -27,6 +27,8 @@ struct IcebergCopyInput {
 	string data_path;
 	//! Set of (key, value) options
 	case_insensitive_map_t<vector<Value>> options;
+	//! Partition column indices (for partitioned tables)
+	vector<idx_t> partition_columns;
 };
 
 class IcebergInsertGlobalState : public GlobalSinkState {

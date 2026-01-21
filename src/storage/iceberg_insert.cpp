@@ -40,6 +40,30 @@ IcebergInsert::IcebergInsert(PhysicalPlan &physical_plan, const vector<LogicalTy
 IcebergCopyInput::IcebergCopyInput(ClientContext &context, ICTableEntry &table)
     : catalog(table.catalog.Cast<IRCatalog>()), columns(table.GetColumns()) {
 	data_path = table.table_info.table_metadata.GetDataPath();
+
+	// Extract partition column indices from partition spec
+	auto &partition_spec = table.table_info.table_metadata.GetLatestPartitionSpec();
+	if (partition_spec.IsPartitioned()) {
+		auto &schema = table.table_info.table_metadata.GetLatestSchema();
+		auto column_names = columns.GetColumnNames();
+
+		// Map source_id to column index
+		unordered_map<uint64_t, idx_t> source_id_to_column_index;
+		for (idx_t col_idx = 0; col_idx < schema.columns.size(); col_idx++) {
+			source_id_to_column_index[schema.columns[col_idx]->id] = col_idx;
+		}
+
+		// For each partition field, find the corresponding column index
+		for (auto &partition_field : partition_spec.fields) {
+			if (partition_field.transform == IcebergTransformType::VOID) {
+				continue; // Skip void transforms
+			}
+			auto it = source_id_to_column_index.find(partition_field.source_id);
+			if (it != source_id_to_column_index.end()) {
+				partition_columns.push_back(it->second);
+			}
+		}
+	}
 }
 
 IcebergCopyInput::IcebergCopyInput(ClientContext &context, IRCSchemaEntry &schema, const ColumnList &columns,
@@ -231,20 +255,41 @@ void IcebergInsert::AddWrittenFiles(IcebergInsertGlobalState &global_state, Data
 			//! TODO: revisit when duckdb/duckdb can record nan_value_counts
 		}
 
-		//! TODO: extract the partition info
-		// auto partition_info = chunk.GetValue(5, r);
-		// if (!partition_info.IsNull()) {
-		//	auto &partition_children = MapValue::GetChildren(partition_info);
-		//	for (idx_t col_idx = 0; col_idx < partition_children.size(); col_idx++) {
-		//		auto &struct_children = StructValue::GetChildren(partition_children[col_idx]);
-		//		auto &part_value = StringValue::Get(struct_children[1]);
+		// Extract partition info from the chunk
+		auto partition_info = chunk.GetValue(5, r);
+		if (!partition_info.IsNull()) {
+			auto &partition_spec = ic_table.table_info.table_metadata.GetLatestPartitionSpec();
+			auto &partition_children = MapValue::GetChildren(partition_info);
 
-		//		IcebergPartition file_partition_info;
-		//		file_partition_info.partition_column_idx = col_idx;
-		//		file_partition_info.partition_value = part_value;
-		//		data_file.partition_values.push_back(std::move(file_partition_info));
-		//	}
-		//}
+			// Map column name to partition field for lookup
+			case_insensitive_map_t<const IcebergPartitionSpecField *> column_to_field;
+			for (auto &field : partition_spec.fields) {
+				if (field.transform != IcebergTransformType::VOID) {
+					// Find the column name for this source_id
+					for (auto &col : ic_schema->columns) {
+						if (col->id == field.source_id) {
+							column_to_field[col->name] = &field;
+							break;
+						}
+					}
+				}
+			}
+
+			// Process each partition value from the chunk
+			for (idx_t col_idx = 0; col_idx < partition_children.size(); col_idx++) {
+				auto &struct_children = StructValue::GetChildren(partition_children[col_idx]);
+				auto &partition_col_name = StringValue::Get(struct_children[0]);
+				auto &partition_value = struct_children[1];
+
+				// Find the corresponding partition field
+				auto field_it = column_to_field.find(partition_col_name);
+				if (field_it != column_to_field.end()) {
+					auto *field = field_it->second;
+					// Store partition value with its field ID
+					data_file.partition_values.emplace_back(field->partition_field_id, partition_value);
+				}
+			}
+		}
 
 		global_state.written_files.push_back(std::move(data_file));
 	}
@@ -379,20 +424,8 @@ PhysicalOperator &IcebergInsert::PlanCopyForInsert(ClientContext &context, Physi
 	    std::move(function_data), 1);
 	auto &physical_copy_ref = physical_copy.Cast<PhysicalCopyToFile>();
 
-	vector<idx_t> partition_columns;
-	//! TODO: support partitions
-	// auto partitions = op.table.Cast<ICTableEntry>().snapshot->GetPartitionColumns();
-	// if (partitions.size() != 0) {
-	//	auto column_names = op.table.Cast<ICTableEntry>().GetColumns().GetColumnNames();
-	//	for (int64_t i = 0; i < partitions.size(); i++) {
-	//		for (int64_t j = 0; j < column_names.size(); j++) {
-	//			if (column_names[j] == partitions[i]) {
-	//				partition_columns.push_back(j);
-	//				break;
-	//			}
-	//		}
-	//	}
-	//}
+	// Use partition columns from copy_input (populated during construction)
+	vector<idx_t> partition_columns = copy_input.partition_columns;
 
 	physical_copy_ref.use_tmp_file = false;
 	if (!partition_columns.empty()) {
@@ -468,10 +501,7 @@ PhysicalOperator &IRCatalog::PlanInsert(ClientContext &context, PhysicalPlanGene
 	auto &table_info = table_entry.table_info;
 	auto &schema = table_info.table_metadata.GetLatestSchema();
 
-	auto &partition_spec = table_info.table_metadata.GetLatestPartitionSpec();
-	if (!partition_spec.IsUnpartitioned()) {
-		throw NotImplementedException("INSERT into a partitioned table is not supported yet");
-	}
+	// Partitioned table inserts are now supported
 	if (table_info.table_metadata.HasSortOrder()) {
 		auto &sort_spec = table_info.table_metadata.GetLatestSortOrder();
 		if (sort_spec.IsSorted()) {
