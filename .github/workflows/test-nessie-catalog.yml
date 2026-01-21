@@ -38,8 +38,6 @@ jobs:
           sudo apt install -y -qq openjdk-21-jre-headless openjdk-21-jdk-headless python3-venv
           # clone Nessie
           git clone https://github.com/projectnessie/nessie.git nessie
-          # checkout a working version of Nessie
-          cd nessie && git checkout b718c61ec8cf272f0ce80662d7ad955c487ba1a3
 
       - name: Start Nessie
         working-directory: nessie/docker
