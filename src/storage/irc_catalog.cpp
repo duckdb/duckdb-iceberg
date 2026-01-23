@@ -62,7 +62,7 @@ optional_ptr<SchemaCatalogEntry> IRCatalog::LookupSchema(CatalogTransaction tran
 	return reinterpret_cast<SchemaCatalogEntry *>(entry.get());
 }
 
-void IRCatalog::StoreLoadTableResult(string table_key,
+void IRCatalog::StoreLoadTableResult(const string &table_key,
                                      unique_ptr<const rest_api_objects::LoadTableResult> load_table_result) {
 	std::lock_guard<std::mutex> g(metadata_cache_mutex);
 	// erase load table result if it exists.
@@ -74,7 +74,7 @@ void IRCatalog::StoreLoadTableResult(string table_key,
 	metadata_cache.emplace(table_key, std::move(val));
 }
 
-MetadataCacheValue &IRCatalog::GetLoadTableResult(string table_key) {
+MetadataCacheValue &IRCatalog::GetLoadTableResult(const string &table_key) {
 	std::lock_guard<std::mutex> g(metadata_cache_mutex);
 	if (metadata_cache.find(table_key) == metadata_cache.end()) {
 		throw InternalException("Attempting to retrieve table information that was never stored");

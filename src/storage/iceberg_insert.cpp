@@ -284,15 +284,9 @@ SinkFinalizeType IcebergInsert::Finalize(Pipeline &pipeline, Event &event, Clien
 
 	lock_guard<mutex> guard(global_state.lock);
 	if (!global_state.written_files.empty()) {
-		if (table_info.IsTransactionLocalTable(irc_transaction)) {
-			table_info.AddSnapshot(transaction, std::move(global_state.written_files));
-		} else {
-			// add the table to updated tables for the transaction.
-			irc_transaction.updated_tables.emplace(table_info.GetTableKey(), table_info.Copy());
-			auto &updated_table = irc_transaction.updated_tables.at(table_info.GetTableKey());
-			updated_table.InitSchemaVersions();
-			updated_table.AddSnapshot(transaction, std::move(global_state.written_files));
-		}
+		ApplyTableUpdate(table_info, irc_transaction, [&](IcebergTableInformation &tbl) {
+			tbl.AddSnapshot(transaction, std::move(global_state.written_files));
+		});
 	}
 	return SinkFinalizeType::READY;
 }

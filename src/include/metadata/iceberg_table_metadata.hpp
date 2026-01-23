@@ -35,11 +35,11 @@ public:
 	const IcebergTableSchema &GetLatestSchema() const;
 	bool HasPartitionSpec() const;
 	const IcebergPartitionSpec &GetLatestPartitionSpec() const;
-	const unordered_map<int32_t, IcebergPartitionSpec> GetPartitionSpecs() const;
+	const unordered_map<int32_t, IcebergPartitionSpec> &GetPartitionSpecs() const;
 
 	bool HasSortOrder() const;
 	const IcebergSortOrder &GetLatestSortOrder() const;
-	const unordered_map<int32_t, IcebergSortOrder> GetSortOrderSpecs() const;
+	const unordered_map<int32_t, IcebergSortOrder> &GetSortOrderSpecs() const;
 
 	optional_ptr<IcebergSnapshot> GetSnapshotById(int64_t snapshot_id);
 	optional_ptr<IcebergSnapshot> GetSnapshotByTimestamp(timestamp_t timestamp);
@@ -59,10 +59,10 @@ public:
 	optional_ptr<IcebergSnapshot> GetSnapshot(const IcebergSnapshotLookup &lookup);
 
 	//! Get the data and metadata paths, falling back to default if not set
-	string GetLatestMetadataJson() const;
-	string GetLocation() const;
-	string GetDataPath() const;
-	string GetMetadataPath() const;
+	const string &GetLatestMetadataJson() const;
+	const string &GetLocation() const;
+	const string GetDataPath() const;
+	const string GetMetadataPath() const;
 
 	//! For Nessie catalogs (version ?)
 	bool HasLastColumnId() const;
@@ -86,6 +86,7 @@ public:
 	bool has_current_snapshot = false;
 	int64_t current_snapshot_id;
 	int64_t last_sequence_number;
+	idx_t last_updated_ms;
 
 	optional_idx last_column_id;
 

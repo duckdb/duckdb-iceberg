@@ -76,4 +76,16 @@ public:
 	case_insensitive_set_t looked_up_entries;
 };
 
+template <typename Callback>
+void ApplyTableUpdate(IcebergTableInformation &table_info, IRCTransaction &irc_transaction, Callback callback) {
+	if (table_info.IsTransactionLocalTable(irc_transaction)) {
+		callback(table_info);
+	} else {
+		irc_transaction.updated_tables.emplace(table_info.GetTableKey(), table_info.Copy(irc_transaction));
+		auto &updated_table = irc_transaction.updated_tables.at(table_info.GetTableKey());
+		updated_table.InitSchemaVersions();
+		callback(updated_table);
+	}
+}
+
 } // namespace duckdb

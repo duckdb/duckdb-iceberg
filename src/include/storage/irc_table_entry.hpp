@@ -45,6 +45,7 @@ public:
 	TableStorageInfo GetStorageInfo(ClientContext &context) override;
 	void BindUpdateConstraints(Binder &binder, LogicalGet &get, LogicalProjection &proj, LogicalUpdate &update,
 	                           ClientContext &context) override;
+	string GetUUID() const;
 
 public:
 	IcebergTableInformation &table_info;
@@ -53,9 +54,8 @@ public:
 struct ICTableEntryHashFunction {
 	uint64_t operator()(const optional_ptr<ICTableEntry> &entry) const {
 		D_ASSERT(entry);
-		// FIXME: we shuold use a table uuid in case renaming tables to the same name happens
-		auto qualified_name = entry->catalog.GetName() + "." + entry->name;
-		return std::hash<string>()(qualified_name);
+		auto table_uuid = entry->GetUUID();
+		return std::hash<string>()(table_uuid);
 	}
 };
 

@@ -412,8 +412,8 @@ void IRCTransaction::CleanupFiles() {
 		auto &table = up_table.second;
 		if (!table.transaction_data) {
 			// error occurred before transaction data was initialized
-			// this can happen during table creation with schema that cannot convert to
-			// an iceberg schema
+			// this can happen during table creation with table schema that cannot convert to
+			// an iceberg table schema due to type incompatabilities
 			continue;
 		}
 		auto &transaction_data = table.transaction_data;

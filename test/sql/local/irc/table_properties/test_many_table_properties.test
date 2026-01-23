@@ -36,7 +36,6 @@ ATTACH '' AS my_datalake (
     ENDPOINT 'http://127.0.0.1:8181'
 );
 
-
 statement ok
 drop table if exists my_datalake.default.many_properties;
 

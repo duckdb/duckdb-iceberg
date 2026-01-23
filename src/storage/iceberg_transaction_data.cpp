@@ -104,7 +104,6 @@ void IcebergTransactionData::AddSnapshot(IcebergSnapshotOperationType operation,
 	new_snapshot.manifest_list = manifest_list_path;
 	new_snapshot.operation = operation;
 	new_snapshot.timestamp_ms = Timestamp::GetEpochMs(Timestamp::GetCurrentTimestamp());
-
 	new_snapshot.has_parent_snapshot = table_info.table_metadata.has_current_snapshot || !alters.empty();
 	if (new_snapshot.has_parent_snapshot) {
 		if (!alters.empty()) {
@@ -131,6 +130,8 @@ void IcebergTransactionData::AddSnapshot(IcebergSnapshotOperationType operation,
 	CreateManifestListEntry(*add_snapshot, table_metadata, manifest_content_type, std::move(data_files));
 	alters.push_back(*add_snapshot);
 	updates.push_back(std::move(add_snapshot));
+
+	// modify the current table metadata to also have the new snapshot
 }
 
 void IcebergTransactionData::AddUpdateSnapshot(vector<IcebergManifestEntry> &&delete_files,

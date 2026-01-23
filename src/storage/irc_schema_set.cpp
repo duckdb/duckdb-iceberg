@@ -56,7 +56,7 @@ void IRCSchemaSet::Scan(ClientContext &context, const std::function<void(Catalog
 	}
 }
 
-void IRCSchemaSet::AddEntry(string name, unique_ptr<IRCSchemaEntry> entry) {
+void IRCSchemaSet::AddEntry(const string &name, unique_ptr<IRCSchemaEntry> entry) {
 	entries.insert(make_pair(name, std::move(entry)));
 }
 
@@ -80,7 +80,6 @@ static string GetSchemaName(const vector<string> &items) {
 void IRCSchemaSet::LoadEntries(ClientContext &context) {
 	auto &ic_catalog = catalog.Cast<IRCatalog>();
 	auto &irc_transaction = IRCTransaction::Get(context, catalog);
-	// auto &irc_transaction = transaction.Cast<IRCTransaction>();
 	bool schema_listed = irc_transaction.called_list_schemas;
 	if (schema_listed) {
 		return;

@@ -116,10 +116,37 @@ TableFunction ICTableEntry::GetScanFunction(ClientContext &context, unique_ptr<F
 	vector<string> names;
 	TableFunctionRef empty_ref;
 
+	// lookup should be asof start of the transaction if the lookup info is empty and there are no transaction updates
+	bool using_transaction_timestamp = false;
+	IcebergSnapshotLookup snapshot_lookup;
+	if (!lookup.GetAtClause() && !table_info.HasTransactionUpdates()) {
+		// if there is no user supplied AT () clause, and the table does not have transaction updates
+		// use transaction start time
+		snapshot_lookup = table_info.GetSnapshotLookup(context);
+		using_transaction_timestamp = true;
+	} else {
+		auto at = lookup.GetAtClause();
+		snapshot_lookup = IcebergSnapshotLookup::FromAtClause(at);
+	}
 	auto &metadata = table_info.table_metadata;
-	auto at = lookup.GetAtClause();
-	auto snapshot_lookup = IcebergSnapshotLookup::FromAtClause(at);
-	auto snapshot = metadata.GetSnapshot(snapshot_lookup);
+	optional_ptr<IcebergSnapshot> snapshot = nullptr;
+	try {
+		snapshot = metadata.GetSnapshot(snapshot_lookup);
+	} catch (InvalidConfigurationException &e) {
+		if (!table_info.TableIsEmpty(snapshot_lookup)) {
+			if (using_transaction_timestamp) {
+				// We are using the transaction start time.
+				// The table is not empty, but GetSnapshot is asking for table state before the first snapshot
+				// table creation has no snapshot, so we return this error message
+				throw InvalidConfigurationException("Table %s does not have a reachable state in this transaction",
+				                                    table_info.GetTableKey());
+			}
+			throw e;
+		}
+		// try without transaction start time bounds. This is allowed to throw
+		snapshot_lookup = IcebergSnapshotLookup::FromAtClause(lookup.GetAtClause());
+		snapshot = metadata.GetSnapshot(snapshot_lookup);
+	}
 
 	int32_t schema_id;
 	if (snapshot_lookup.IsLatest()) {
@@ -130,8 +157,7 @@ TableFunction ICTableEntry::GetScanFunction(ClientContext &context, unique_ptr<F
 	}
 
 	auto iceberg_schema = metadata.GetSchemaFromId(schema_id);
-	auto scan_info = make_shared_ptr<IcebergScanInfo>(table_info.table_metadata.GetMetadataPath(), metadata, snapshot,
-	                                                  *iceberg_schema);
+	auto scan_info = make_shared_ptr<IcebergScanInfo>(metadata.GetMetadataPath(), metadata, snapshot, *iceberg_schema);
 	if (table_info.transaction_data) {
 		scan_info->transaction_data = table_info.transaction_data.get();
 	}
@@ -179,6 +205,10 @@ TableStorageInfo ICTableEntry::GetStorageInfo(ClientContext &context) {
 	TableStorageInfo result;
 	// TODO fill info
 	return result;
+}
+
+string ICTableEntry::GetUUID() const {
+	return table_info.table_id;
 }
 
 } // namespace duckdb

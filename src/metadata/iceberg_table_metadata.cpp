@@ -53,11 +53,11 @@ optional_ptr<const IcebergSortOrder> IcebergTableMetadata::FindSortOrderById(int
 	return it->second;
 }
 
-const unordered_map<int32_t, IcebergSortOrder> IcebergTableMetadata::GetSortOrderSpecs() const {
+const unordered_map<int32_t, IcebergSortOrder> &IcebergTableMetadata::GetSortOrderSpecs() const {
 	return sort_specs;
 }
 
-const unordered_map<int32_t, IcebergPartitionSpec> IcebergTableMetadata::GetPartitionSpecs() const {
+const unordered_map<int32_t, IcebergPartitionSpec> &IcebergTableMetadata::GetPartitionSpecs() const {
 	return partition_specs;
 }
 
@@ -299,6 +299,7 @@ IcebergTableMetadata IcebergTableMetadata::FromTableMetadata(const rest_api_obje
 	res.table_uuid = table_metadata.table_uuid;
 	res.location = table_metadata.location;
 	res.iceberg_version = table_metadata.format_version;
+	res.last_updated_ms = table_metadata.last_updated_ms;
 	for (auto &schema : table_metadata.schemas) {
 		res.schemas.emplace(schema.object_1.schema_id, IcebergTableSchema::ParseSchema(schema));
 	}
@@ -361,15 +362,15 @@ const case_insensitive_map_t<string> &IcebergTableMetadata::GetTableProperties()
 	return table_properties;
 }
 
-string IcebergTableMetadata::GetLatestMetadataJson() const {
+const string &IcebergTableMetadata::GetLatestMetadataJson() const {
 	return latest_metadata_json;
 }
 
-string IcebergTableMetadata::GetLocation() const {
+const string &IcebergTableMetadata::GetLocation() const {
 	return location;
 }
 
-string IcebergTableMetadata::GetDataPath() const {
+const string IcebergTableMetadata::GetDataPath() const {
 	auto write_path = table_properties.find("write.data.path");
 	// If write.data.path property is set, use it; otherwise use default location + "/data"
 	if (write_path != table_properties.end()) {
@@ -378,7 +379,7 @@ string IcebergTableMetadata::GetDataPath() const {
 	return location + "/data";
 }
 
-string IcebergTableMetadata::GetMetadataPath() const {
+const string IcebergTableMetadata::GetMetadataPath() const {
 	// If write.metadata.path property is set, use it; otherwise use default location + "/metadata"
 	auto metadata_path = table_properties.find("write.metadata.path");
 	// If write.data.path property is set, use it; otherwise use default location + "/metadata"

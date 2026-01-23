@@ -19,7 +19,7 @@ public:
 	optional_ptr<CatalogEntry> GetEntry(ClientContext &context, const string &name, OnEntryNotFound if_not_found);
 	void Scan(ClientContext &context, const std::function<void(CatalogEntry &)> &callback);
 	const case_insensitive_map_t<unique_ptr<CatalogEntry>> &GetEntries();
-	void AddEntry(string name, unique_ptr<IRCSchemaEntry> entry);
+	void AddEntry(const string &name, unique_ptr<IRCSchemaEntry> entry);
 	CatalogEntry &GetEntry(const string &name);
 
 protected:
@@ -29,7 +29,6 @@ public:
 	Catalog &catalog;
 
 private:
-	//! Whether a listing has been done for the catalog
 	case_insensitive_map_t<unique_ptr<CatalogEntry>> entries;
 	mutex entry_lock;
 };

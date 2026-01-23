@@ -162,7 +162,7 @@ static void SetIcebergTablePropertiesFunction(ClientContext &context, TableFunct
 	auto iceberg_table = bind_data.iceberg_table;
 	auto &table_info = iceberg_table->table_info;
 	auto &irc_transaction = IRCTransaction::Get(context, iceberg_table->catalog);
-	irc_transaction.updated_tables.emplace(table_info.GetTableKey(), table_info.Copy());
+	irc_transaction.updated_tables.emplace(table_info.GetTableKey(), table_info.Copy(irc_transaction));
 	auto &entry = irc_transaction.updated_tables.at(table_info.GetTableKey());
 	if (!entry.transaction_data) {
 		entry.InitTransactionData(irc_transaction);
@@ -194,7 +194,7 @@ static void RemoveIcebergTablePropertiesFunction(ClientContext &context, TableFu
 	auto iceberg_table = bind_data.iceberg_table;
 	auto &table_info = iceberg_table->table_info;
 	auto &irc_transaction = IRCTransaction::Get(context, iceberg_table->catalog);
-	irc_transaction.updated_tables.emplace(table_info.GetTableKey(), table_info.Copy());
+	irc_transaction.updated_tables.emplace(table_info.GetTableKey(), table_info.Copy(irc_transaction));
 	auto &entry = irc_transaction.updated_tables.at(table_info.GetTableKey());
 	if (!entry.transaction_data) {
 		entry.InitTransactionData(irc_transaction);

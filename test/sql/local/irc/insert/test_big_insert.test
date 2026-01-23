@@ -1,4 +1,4 @@
-# name: test/sql/local/irc/insert/test_big_insert.test_slow
+# name: test/sql/local/irc/insert/test_big_insert.test
 # group: [insert]
 
 require-env ICEBERG_SERVER_AVAILABLE
