@@ -154,6 +154,6 @@ const LogicalType &IcebergTableSchema::GetColumnTypeFromFieldId(idx_t field_id) 
 		}
 	}
 	throw InvalidInputException("GetColumnTypeFromFieldId:: field id %d does not exist in schema with id %d", field_id,
-								schema_id);
+	                            schema_id);
 }
 } // namespace duckdb

@@ -193,7 +193,6 @@ void IRCSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) {
 	updated_table.InitSchemaVersions();
 	updated_table.InitTransactionData(irc_transaction);
 
-	// TODO: GetLatestSchema actually gets current schema. Latest != Current
 	auto &current_schema = updated_table.table_metadata.GetLatestSchema();
 	// Copy the schema, then add it to the table metadata
 	auto new_schema = current_schema.Copy();
@@ -204,7 +203,14 @@ void IRCSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) {
 	case AlterTableType::SET_PARTITIONED_BY: {
 		auto &partition_info = alter_table_info.Cast<SetPartitionedByInfo>();
 		// TODO: generate correct new spec id
-		auto new_spec_id = updated_table.table_metadata.default_spec_id + 1;
+		auto new_spec_id = updated_table.GetNextPartitionSpecId();
+		D_ASSERT(new_spec_id != 0);
+		idx_t base_partition_field_id = 1000 * new_spec_id;
+		// ensure the base_partition field id > max par
+		auto max_partition_field_id = updated_table.GetMaxPartitionFieldId();
+		if (base_partition_field_id < max_partition_field_id) {
+			base_partition_field_id = max_partition_field_id + 1;
+		}
 		IcebergPartitionSpec new_spec;
 		new_spec.spec_id = new_spec_id;
 
@@ -219,7 +225,8 @@ void IRCSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) {
 				auto &funcexpr = key->Cast<FunctionExpression>();
 				transform_name = funcexpr.function_name;
 				if (funcexpr.children.empty() || funcexpr.children[0]->type != ExpressionType::COLUMN_REF) {
-					throw NotImplementedException("Only simple function transforms on columns are supported");
+					throw NotImplementedException("Transforms are only supported on column references, not %s",
+					                              EnumUtil::ToChars(funcexpr.children[0]->type));
 				}
 				auto &colref = funcexpr.children[0]->Cast<ColumnRefExpression>();
 				column_name = colref.column_names.back();
@@ -243,8 +250,16 @@ void IRCSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) {
 			field.name = column_name;
 			field.transform = IcebergTransform(transform_name);
 			field.source_id = source_id;
-			field.partition_field_id = 1000 + new_spec.fields.size(); // Use 1000+ for field IDs
+			field.partition_field_id = base_partition_field_id + new_spec.fields.size(); // Use 1000+ for field IDs
 			new_spec.fields.push_back(std::move(field));
+		}
+
+		// if spec exists, just set it to that spec id
+		int64_t existing_spec_id = updated_table.GetExistingSpecId(new_spec);
+		if (existing_spec_id >= 0) {
+			updated_table.table_metadata.default_spec_id = existing_spec_id;
+			updated_table.AddPartitionSpec(irc_transaction);
+			return;
 		}
 
 		updated_table.table_metadata.partition_specs[new_spec_id] = std::move(new_spec);
@@ -258,9 +273,6 @@ void IRCSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) {
 		                              EnumUtil::ToString(alter_table_info.alter_table_type));
 	}
 	}
-	updated_table.table_metadata.schemas.emplace(new_schema_id, std::move(new_schema));
-	updated_table.table_metadata.current_schema_id = new_schema_id;
-	updated_table.AddSetCurrentSchema(irc_transaction);
 }
 
 static bool CatalogTypeIsSupported(CatalogType type) {

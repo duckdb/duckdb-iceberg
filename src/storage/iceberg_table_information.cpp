@@ -262,6 +262,48 @@ idx_t IcebergTableInformation::GetMaxSchemaId() {
 	return max_schema_id;
 }
 
+idx_t IcebergTableInformation::GetNextPartitionSpecId() {
+	idx_t max_partition_spec_id = table_metadata.default_spec_id;
+	for (auto &schema : table_metadata.GetPartitionSpecs()) {
+		if (schema.first > max_partition_spec_id) {
+			max_partition_spec_id = schema.first;
+		}
+	}
+	return max_partition_spec_id + 1;
+}
+
+idx_t IcebergTableInformation::GetMaxPartitionFieldId() {
+	// in v1 partition field IDs were assigned sequentially starting at 1000 (hence the 1000)
+	idx_t max_partition_field_id = 0;
+	for (auto &schema : table_metadata.GetPartitionSpecs()) {
+		for (auto &partition_field : schema.second.fields) {
+			if (partition_field.partition_field_id > max_partition_field_id) {
+				max_partition_field_id = partition_field.partition_field_id;
+			}
+		}
+	}
+	return max_partition_field_id;
+}
+
+int64_t IcebergTableInformation::GetExistingSpecId(IcebergPartitionSpec &spec) {
+	int64_t existing_spec_id = -1;
+	for (auto &existing_spec : table_metadata.GetPartitionSpecs()) {
+		for (idx_t field_index = 0; field_index < existing_spec.second.fields.size(); field_index++) {
+			auto existing_partition_col_source_id = existing_spec.second.fields[field_index].source_id;
+			auto new_spec_col_source_id = existing_spec.second.fields[field_index].source_id;
+			if (existing_partition_col_source_id != new_spec_col_source_id) {
+				continue;
+			}
+		}
+		if (existing_spec.second.fields.size() != spec.fields.size()) {
+			continue;
+		}
+		existing_spec_id = existing_spec.second.spec_id;
+		break;
+	}
+	return existing_spec_id;
+}
+
 optional_ptr<CatalogEntry> IcebergTableInformation::GetSchemaVersion(optional_ptr<BoundAtClause> at) {
 	D_ASSERT(!schema_versions.empty());
 	auto snapshot_lookup = IcebergSnapshotLookup::FromAtClause(at);
