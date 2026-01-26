@@ -128,6 +128,10 @@ void IcebergTransactionData::AddSnapshot(IcebergSnapshotOperationType operation,
 	}
 	auto add_snapshot = make_uniq<IcebergAddSnapshot>(table_info, manifest_list_path, std::move(new_snapshot));
 	CreateManifestListEntry(*add_snapshot, table_metadata, manifest_content_type, std::move(data_files));
+	// make sure we are still inserting into the current schema
+	if (table_metadata.has_current_snapshot) {
+		TableAddAssertCurrentSchemaId();
+	}
 	alters.push_back(*add_snapshot);
 	updates.push_back(std::move(add_snapshot));
 

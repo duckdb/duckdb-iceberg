@@ -41,6 +41,10 @@ CREATE TABLE my_datalake.default.alter_table_conflict AS (select range a, range%
 statement ok con1
 begin;
 
+# select from alter_table_conflict so we do not request table state again
+statement ok con1
+select * from my_datalake.default.alter_table_conflict;
+
 statement ok con2
 begin;
 

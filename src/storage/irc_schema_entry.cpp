@@ -206,8 +206,9 @@ void IRCSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) {
 	case AlterTableType::SET_PARTITIONED_BY: {
 		auto &partition_info = alter_table_info.Cast<SetPartitionedByInfo>();
 
-		// Add requirements to ensure the schema and partition spec haven't changed
+		// Ensure schema is the same as current
 		updated_table.AddAssertCurrentSchemaId(irc_transaction);
+		// Ensure last assigned partition field id is up to date
 		updated_table.AddAssertLastAssignedPartitionId(irc_transaction);
 
 		// TODO: generate correct new spec id
