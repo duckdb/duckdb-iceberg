@@ -63,6 +63,15 @@ struct AssertLastAssignedPartitionIdRequirement : public IcebergTableRequirement
 	int32_t last_assigned_partition_id;
 };
 
+struct AssertDefaultSpecIdRequirement : public IcebergTableRequirement {
+	static constexpr const IcebergTableRequirementType TYPE = IcebergTableRequirementType::ASSERT_DEFAULT_SPEC_ID;
+
+	explicit AssertDefaultSpecIdRequirement(IcebergTableInformation &table_info);
+	void CreateRequirement(DatabaseInstance &db, ClientContext &context, IcebergCommitState &commit_state);
+
+	int32_t default_spec_id;
+};
+
 struct AssignUUIDUpdate : public IcebergTableUpdate {
 	static constexpr const IcebergTableUpdateType TYPE = IcebergTableUpdateType::ASSIGN_UUID;
 

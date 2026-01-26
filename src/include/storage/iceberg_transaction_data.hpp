@@ -36,6 +36,7 @@ public:
 	void TableAddAssertCurrentSchemaId();
 	void TableAddAssertLastAssignedColumnFieldId();
 	void TableAddAssertLastAssignedPartitionId();
+	void TableAddAssertDefaultSpecId();
 	void TableAssignUUID();
 	void TableAddUpradeFormatVersion();
 	void TableAddSetCurrentSchema();

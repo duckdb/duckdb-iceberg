@@ -125,6 +125,20 @@ void AssertLastAssignedPartitionIdRequirement::CreateRequirement(DatabaseInstanc
 	req.assert_last_assigned_partition_id.last_assigned_partition_id = last_assigned_partition_id;
 }
 
+AssertDefaultSpecIdRequirement::AssertDefaultSpecIdRequirement(IcebergTableInformation &table_info)
+    : IcebergTableRequirement(IcebergTableRequirementType::ASSERT_DEFAULT_SPEC_ID, table_info) {
+	default_spec_id = table_info.table_metadata.default_spec_id;
+}
+
+void AssertDefaultSpecIdRequirement::CreateRequirement(DatabaseInstance &db, ClientContext &context,
+                                                       IcebergCommitState &commit_state) {
+	commit_state.table_change.requirements.push_back(rest_api_objects::TableRequirement());
+	auto &req = commit_state.table_change.requirements.back();
+	req.has_assert_default_spec_id = true;
+	req.assert_default_spec_id.type.value = "assert-default-spec-id";
+	req.assert_default_spec_id.default_spec_id = default_spec_id;
+}
+
 UpgradeFormatVersion::UpgradeFormatVersion(IcebergTableInformation &table_info)
     : IcebergTableUpdate(IcebergTableUpdateType::UPGRADE_FORMAT_VERSION, table_info) {
 }

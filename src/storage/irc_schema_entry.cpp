@@ -174,6 +174,9 @@ optional_ptr<CatalogEntry> IRCSchemaEntry::CreateCollation(CatalogTransaction tr
 }
 
 void IRCSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) {
+	// TODO: Modify this so we throw an error if this is an ongoing transaction.
+	//  committed alter statements are not reflected in the catalog timeline at all, making it very difficult
+	//  to handle anything there
 	if (info.type != AlterType::ALTER_TABLE) {
 		throw NotImplementedException("Only ALTER TABLE is supported for Iceberg");
 	}
