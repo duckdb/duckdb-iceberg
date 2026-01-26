@@ -1,6 +1,7 @@
 #include "storage/iceberg_table_information.hpp"
 
 #include "catalog_api.hpp"
+#include "../include/storage/iceberg_transaction_data.hpp"
 #include "duckdb/common/case_insensitive_map.hpp"
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/common/exception/transaction_exception.hpp"
@@ -272,19 +273,6 @@ idx_t IcebergTableInformation::GetNextPartitionSpecId() {
 	return max_partition_spec_id + 1;
 }
 
-idx_t IcebergTableInformation::GetMaxPartitionFieldId() {
-	// in v1 partition field IDs were assigned sequentially starting at 1000 (hence the 1000)
-	idx_t max_partition_field_id = 0;
-	for (auto &schema : table_metadata.GetPartitionSpecs()) {
-		for (auto &partition_field : schema.second.fields) {
-			if (partition_field.partition_field_id > max_partition_field_id) {
-				max_partition_field_id = partition_field.partition_field_id;
-			}
-		}
-	}
-	return max_partition_field_id;
-}
-
 int64_t IcebergTableInformation::GetExistingSpecId(IcebergPartitionSpec &spec) {
 	int64_t existing_spec_id = -1;
 	for (auto &existing_spec : table_metadata.GetPartitionSpecs()) {
@@ -455,6 +443,16 @@ void IcebergTableInformation::AddAssignUUID(IRCTransaction &transaction) {
 void IcebergTableInformation::AddAssertCreate(IRCTransaction &transaction) {
 	InitTransactionData(transaction);
 	transaction_data->TableAddAssertCreate();
+}
+
+void IcebergTableInformation::AddAssertCurrentSchemaId(IRCTransaction &transaction) {
+	InitTransactionData(transaction);
+	transaction_data->TableAddAssertCurrentSchemaId();
+}
+
+void IcebergTableInformation::AddAssertLastAssignedPartitionFieldId(IRCTransaction &transaction) {
+	InitTransactionData(transaction);
+	transaction_data->TableAddAssertLastAssignedPartitionFieldId();
 }
 
 void IcebergTableInformation::AddUpradeFormatVersion(IRCTransaction &transaction) {

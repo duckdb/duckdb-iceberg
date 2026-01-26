@@ -202,15 +202,15 @@ void IRCSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) {
 	switch (alter_table_info.alter_table_type) {
 	case AlterTableType::SET_PARTITIONED_BY: {
 		auto &partition_info = alter_table_info.Cast<SetPartitionedByInfo>();
+
+		// Add requirements to ensure the schema and partition spec haven't changed
+		updated_table.AddAssertCurrentSchemaId(irc_transaction);
+		updated_table.AddAssertLastAssignedPartitionFieldId(irc_transaction);
+
 		// TODO: generate correct new spec id
 		auto new_spec_id = updated_table.GetNextPartitionSpecId();
 		D_ASSERT(new_spec_id != 0);
-		idx_t base_partition_field_id = 1000 * new_spec_id;
-		// ensure the base_partition field id > max par
-		auto max_partition_field_id = updated_table.GetMaxPartitionFieldId();
-		if (base_partition_field_id < max_partition_field_id) {
-			base_partition_field_id = max_partition_field_id + 1;
-		}
+		idx_t base_partition_field_id = updated_table.table_metadata.GetLastPartitionFieldId() + 1;
 		IcebergPartitionSpec new_spec;
 		new_spec.spec_id = new_spec_id;
 
@@ -263,8 +263,8 @@ void IRCSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) {
 		}
 
 		updated_table.table_metadata.partition_specs[new_spec_id] = std::move(new_spec);
-		updated_table.table_metadata.default_spec_id = new_spec_id;
 		updated_table.AddPartitionSpec(irc_transaction);
+		updated_table.table_metadata.default_spec_id = new_spec_id;
 		updated_table.SetDefaultSpec(irc_transaction);
 		return;
 	}

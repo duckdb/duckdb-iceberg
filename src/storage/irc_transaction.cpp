@@ -50,6 +50,19 @@ void CommitTableToJSON(yyjson_mut_doc *doc, yyjson_mut_val *root_object,
 			auto &assert_create = requirement.assert_create;
 			auto requirement_json = yyjson_mut_arr_add_obj(doc, requirements_array);
 			yyjson_mut_obj_add_strcpy(doc, requirement_json, "type", assert_create.type.value.c_str());
+		} else if (requirement.has_assert_current_schema_id) {
+			auto &assert_current_schema_id = requirement.assert_current_schema_id;
+			auto requirement_json = yyjson_mut_arr_add_obj(doc, requirements_array);
+			yyjson_mut_obj_add_strcpy(doc, requirement_json, "type", assert_current_schema_id.type.value.c_str());
+			yyjson_mut_obj_add_int(doc, requirement_json, "current-schema-id",
+			                       assert_current_schema_id.current_schema_id);
+		} else if (requirement.has_assert_last_assigned_partition_id) {
+			auto &assert_last_assigned_partition_id = requirement.assert_last_assigned_partition_id;
+			auto requirement_json = yyjson_mut_arr_add_obj(doc, requirements_array);
+			yyjson_mut_obj_add_strcpy(doc, requirement_json, "type",
+			                          assert_last_assigned_partition_id.type.value.c_str());
+			yyjson_mut_obj_add_int(doc, requirement_json, "last-assigned-partition-id",
+			                       assert_last_assigned_partition_id.last_assigned_partition_id);
 		} else {
 			throw NotImplementedException("Can't serialize this TableRequirement type to JSON");
 		}

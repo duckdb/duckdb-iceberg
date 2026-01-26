@@ -76,6 +76,36 @@ void AssertCreateRequirement::CreateRequirement(DatabaseInstance &db, ClientCont
 	req.has_assert_create = true;
 }
 
+AssertCurrentSchemaIdRequirement::AssertCurrentSchemaIdRequirement(IcebergTableInformation &table_info)
+    : IcebergTableRequirement(IcebergTableRequirementType::ASSERT_CURRENT_SCHEMA_ID, table_info) {
+	current_schema_id = table_info.table_metadata.current_schema_id;
+}
+
+void AssertCurrentSchemaIdRequirement::CreateRequirement(DatabaseInstance &db, ClientContext &context,
+                                                         IcebergCommitState &commit_state) {
+	commit_state.table_change.requirements.push_back(rest_api_objects::TableRequirement());
+	auto &req = commit_state.table_change.requirements.back();
+	req.has_assert_current_schema_id = true;
+	req.assert_current_schema_id.type.value = "assert-current-schema-id";
+	req.assert_current_schema_id.current_schema_id = current_schema_id;
+}
+
+AssertLastAssignedPartitionFieldIdRequirement::AssertLastAssignedPartitionFieldIdRequirement(
+    IcebergTableInformation &table_info)
+    : IcebergTableRequirement(IcebergTableRequirementType::ASSERT_LAST_ASSIGNED_PARTITION_ID, table_info) {
+	D_ASSERT(table_info.table_metadata.HasLastPartitionId());
+	last_assigned_partition_field_id = table_info.table_metadata.GetLastPartitionFieldId();
+}
+
+void AssertLastAssignedPartitionFieldIdRequirement::CreateRequirement(DatabaseInstance &db, ClientContext &context,
+                                                                      IcebergCommitState &commit_state) {
+	commit_state.table_change.requirements.push_back(rest_api_objects::TableRequirement());
+	auto &req = commit_state.table_change.requirements.back();
+	req.has_assert_last_assigned_field_id = true;
+	req.assert_last_assigned_field_id.type.value = "assert-last-assigned-partition-id";
+	req.assert_last_assigned_field_id.last_assigned_field_id = last_assigned_partition_field_id;
+}
+
 UpgradeFormatVersion::UpgradeFormatVersion(IcebergTableInformation &table_info)
     : IcebergTableUpdate(IcebergTableUpdateType::UPGRADE_FORMAT_VERSION, table_info) {
 }

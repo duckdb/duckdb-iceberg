@@ -195,6 +195,14 @@ void IcebergTransactionData::TableAddAssertCreate() {
 	requirements.push_back(make_uniq<AssertCreateRequirement>(table_info));
 }
 
+void IcebergTransactionData::TableAddAssertCurrentSchemaId() {
+	requirements.push_back(make_uniq<AssertCurrentSchemaIdRequirement>(table_info));
+}
+
+void IcebergTransactionData::TableAddAssertLastAssignedPartitionFieldId() {
+	requirements.push_back(make_uniq<AssertLastAssignedPartitionFieldIdRequirement>(table_info));
+}
+
 void IcebergTransactionData::TableAddUpradeFormatVersion() {
 	updates.push_back(make_uniq<UpgradeFormatVersion>(table_info));
 }
