@@ -45,7 +45,7 @@ struct AssertCurrentSchemaIdRequirement : public IcebergTableRequirement {
 
 struct AssertLastAssignedPartitionFieldIdRequirement : public IcebergTableRequirement {
 	static constexpr const IcebergTableRequirementType TYPE =
-	    IcebergTableRequirementType::ASSERT_LAST_ASSIGNED_PARTITION_ID;
+	    IcebergTableRequirementType::ASSERT_LAST_ASSIGNED_FIELD_ID;
 
 	explicit AssertLastAssignedPartitionFieldIdRequirement(IcebergTableInformation &table_info);
 	void CreateRequirement(DatabaseInstance &db, ClientContext &context, IcebergCommitState &commit_state);

@@ -92,7 +92,7 @@ void AssertCurrentSchemaIdRequirement::CreateRequirement(DatabaseInstance &db, C
 
 AssertLastAssignedPartitionFieldIdRequirement::AssertLastAssignedPartitionFieldIdRequirement(
     IcebergTableInformation &table_info)
-    : IcebergTableRequirement(IcebergTableRequirementType::ASSERT_LAST_ASSIGNED_PARTITION_ID, table_info) {
+    : IcebergTableRequirement(IcebergTableRequirementType::ASSERT_LAST_ASSIGNED_FIELD_ID, table_info) {
 	D_ASSERT(table_info.table_metadata.HasLastPartitionId());
 	last_assigned_partition_field_id = table_info.table_metadata.GetLastPartitionFieldId();
 }
@@ -102,7 +102,7 @@ void AssertLastAssignedPartitionFieldIdRequirement::CreateRequirement(DatabaseIn
 	commit_state.table_change.requirements.push_back(rest_api_objects::TableRequirement());
 	auto &req = commit_state.table_change.requirements.back();
 	req.has_assert_last_assigned_field_id = true;
-	req.assert_last_assigned_field_id.type.value = "assert-last-assigned-partition-id";
+	req.assert_last_assigned_field_id.type.value = "last-assigned-field-id";
 	req.assert_last_assigned_field_id.last_assigned_field_id = last_assigned_partition_field_id;
 }
 
