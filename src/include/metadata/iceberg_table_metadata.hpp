@@ -64,9 +64,8 @@ public:
 	const string GetDataPath() const;
 	const string GetMetadataPath() const;
 
-	//! For Nessie catalogs (version ?)
-	bool HasLastColumnId() const;
-	idx_t GetLastColumnId() const;
+	bool HasLastAssignedColumnFieldId() const;
+	idx_t GetLastAssignedColumnFieldId() const;
 
 	bool HasLastPartitionId() const;
 	int32_t GetLastPartitionFieldId() const;

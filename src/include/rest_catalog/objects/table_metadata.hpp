@@ -58,7 +58,7 @@ public:
 	bool has_default_spec_id = false;
 	// in the IRC spec, it is last_partition_id refers to the last field id
 	// so we rename it here for clarity
-	// use default_spec_id for current partition spec id
+	// use default_spec_id for current partition spec i
 	int32_t last_partition_field_id;
 	bool has_last_partition_field_id = false;
 	vector<SortOrder> sort_orders;

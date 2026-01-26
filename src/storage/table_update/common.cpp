@@ -28,8 +28,8 @@ AddSchemaUpdate::AddSchemaUpdate(IcebergTableInformation &table_info)
 		throw InvalidConfigurationException("cannot assign a current schema id for a schema that does not yet exist");
 	};
 	table_schema = table_info.table_metadata.schemas[current_schema_id];
-	if (table_info.table_metadata.HasLastColumnId()) {
-		last_column_id = table_info.table_metadata.GetLastColumnId();
+	if (table_info.table_metadata.HasLastAssignedColumnFieldId()) {
+		last_column_id = table_info.table_metadata.GetLastAssignedColumnFieldId();
 	}
 }
 
@@ -90,20 +90,20 @@ void AssertCurrentSchemaIdRequirement::CreateRequirement(DatabaseInstance &db, C
 	req.assert_current_schema_id.current_schema_id = current_schema_id;
 }
 
-AssertLastAssignedPartitionFieldIdRequirement::AssertLastAssignedPartitionFieldIdRequirement(
+AssertLastAssignedColumnFieldIdRequirement::AssertLastAssignedColumnFieldIdRequirement(
     IcebergTableInformation &table_info)
     : IcebergTableRequirement(IcebergTableRequirementType::ASSERT_LAST_ASSIGNED_FIELD_ID, table_info) {
-	D_ASSERT(table_info.table_metadata.HasLastPartitionId());
-	last_assigned_partition_field_id = table_info.table_metadata.GetLastPartitionFieldId();
+	D_ASSERT(table_info.table_metadata.HasLastAssignedColumnFieldId());
+	last_assigned_column_field_id = static_cast<int32_t>(table_info.table_metadata.GetLastAssignedColumnFieldId());
 }
 
-void AssertLastAssignedPartitionFieldIdRequirement::CreateRequirement(DatabaseInstance &db, ClientContext &context,
-                                                                      IcebergCommitState &commit_state) {
+void AssertLastAssignedColumnFieldIdRequirement::CreateRequirement(DatabaseInstance &db, ClientContext &context,
+                                                                   IcebergCommitState &commit_state) {
 	commit_state.table_change.requirements.push_back(rest_api_objects::TableRequirement());
 	auto &req = commit_state.table_change.requirements.back();
 	req.has_assert_last_assigned_field_id = true;
-	req.assert_last_assigned_field_id.type.value = "last-assigned-field-id";
-	req.assert_last_assigned_field_id.last_assigned_field_id = last_assigned_partition_field_id;
+	req.assert_last_assigned_field_id.type.value = "assert-last-assigned-field-id";
+	req.assert_last_assigned_field_id.last_assigned_field_id = last_assigned_column_field_id;
 }
 
 UpgradeFormatVersion::UpgradeFormatVersion(IcebergTableInformation &table_info)

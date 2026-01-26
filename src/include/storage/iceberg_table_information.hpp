@@ -40,7 +40,7 @@ public:
 	void AddSchema(IRCTransaction &transaction);
 	void AddAssertCreate(IRCTransaction &transaction);
 	void AddAssertCurrentSchemaId(IRCTransaction &transaction);
-	void AddAssertLastAssignedPartitionFieldId(IRCTransaction &transaction);
+	void AddAssertLastAssignedColumnFieldId(IRCTransaction &transaction);
 	void AddAssignUUID(IRCTransaction &transaction);
 	void AddUpradeFormatVersion(IRCTransaction &transaction);
 	void AddSetCurrentSchema(IRCTransaction &transaction);

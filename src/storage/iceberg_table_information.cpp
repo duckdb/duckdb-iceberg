@@ -450,9 +450,9 @@ void IcebergTableInformation::AddAssertCurrentSchemaId(IRCTransaction &transacti
 	transaction_data->TableAddAssertCurrentSchemaId();
 }
 
-void IcebergTableInformation::AddAssertLastAssignedPartitionFieldId(IRCTransaction &transaction) {
+void IcebergTableInformation::AddAssertLastAssignedColumnFieldId(IRCTransaction &transaction) {
 	InitTransactionData(transaction);
-	transaction_data->TableAddAssertLastAssignedPartitionFieldId();
+	transaction_data->TableAddAssertLastAssignedColumnFieldId();
 }
 
 void IcebergTableInformation::AddUpradeFormatVersion(IRCTransaction &transaction) {
