@@ -106,6 +106,25 @@ void AssertLastAssignedColumnFieldIdRequirement::CreateRequirement(DatabaseInsta
 	req.assert_last_assigned_field_id.last_assigned_field_id = last_assigned_column_field_id;
 }
 
+AssertLastAssignedPartitionIdRequirement::AssertLastAssignedPartitionIdRequirement(IcebergTableInformation &table_info)
+    : IcebergTableRequirement(IcebergTableRequirementType::ASSERT_LAST_ASSIGNED_PARTITION_ID, table_info) {
+	if (table_info.table_metadata.HasLastPartitionId()) {
+		last_assigned_partition_id = table_info.table_metadata.GetLastPartitionFieldId();
+	} else {
+		// If no partition field IDs have been assigned, use 999 as the base (partition fields start at 1000)
+		last_assigned_partition_id = 999;
+	}
+}
+
+void AssertLastAssignedPartitionIdRequirement::CreateRequirement(DatabaseInstance &db, ClientContext &context,
+                                                                 IcebergCommitState &commit_state) {
+	commit_state.table_change.requirements.push_back(rest_api_objects::TableRequirement());
+	auto &req = commit_state.table_change.requirements.back();
+	req.has_assert_last_assigned_partition_id = true;
+	req.assert_last_assigned_partition_id.type.value = "assert-last-assigned-partition-id";
+	req.assert_last_assigned_partition_id.last_assigned_partition_id = last_assigned_partition_id;
+}
+
 UpgradeFormatVersion::UpgradeFormatVersion(IcebergTableInformation &table_info)
     : IcebergTableUpdate(IcebergTableUpdateType::UPGRADE_FORMAT_VERSION, table_info) {
 }

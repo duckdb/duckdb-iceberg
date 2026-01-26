@@ -205,6 +205,7 @@ void IRCSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) {
 
 		// Add requirements to ensure the schema and partition spec haven't changed
 		updated_table.AddAssertCurrentSchemaId(irc_transaction);
+		updated_table.AddAssertLastAssignedPartitionId(irc_transaction);
 
 		// TODO: generate correct new spec id
 		auto new_spec_id = updated_table.GetNextPartitionSpecId();

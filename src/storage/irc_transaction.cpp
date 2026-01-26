@@ -62,6 +62,13 @@ void CommitTableToJSON(yyjson_mut_doc *doc, yyjson_mut_val *root_object,
 			yyjson_mut_obj_add_strcpy(doc, requirement_json, "type", assert_last_assigned_field_id.type.value.c_str());
 			yyjson_mut_obj_add_int(doc, requirement_json, "last-assigned-field-id",
 			                       assert_last_assigned_field_id.last_assigned_field_id);
+		} else if (requirement.has_assert_last_assigned_partition_id) {
+			auto &assert_last_assigned_partition_id = requirement.assert_last_assigned_partition_id;
+			auto requirement_json = yyjson_mut_arr_add_obj(doc, requirements_array);
+			yyjson_mut_obj_add_strcpy(doc, requirement_json, "type",
+			                          assert_last_assigned_partition_id.type.value.c_str());
+			yyjson_mut_obj_add_int(doc, requirement_json, "last-assigned-partition-id",
+			                       assert_last_assigned_partition_id.last_assigned_partition_id);
 		} else {
 			throw NotImplementedException("Can't serialize this TableRequirement type to JSON");
 		}

@@ -455,6 +455,11 @@ void IcebergTableInformation::AddAssertLastAssignedColumnFieldId(IRCTransaction 
 	transaction_data->TableAddAssertLastAssignedColumnFieldId();
 }
 
+void IcebergTableInformation::AddAssertLastAssignedPartitionId(IRCTransaction &transaction) {
+	InitTransactionData(transaction);
+	transaction_data->TableAddAssertLastAssignedPartitionId();
+}
+
 void IcebergTableInformation::AddUpradeFormatVersion(IRCTransaction &transaction) {
 	InitTransactionData(transaction);
 	transaction_data->TableAddUpradeFormatVersion();

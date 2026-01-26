@@ -52,11 +52,12 @@ statement ok con2
 commit;
 
 statement ok con1
-Alter table my_datalake.default.alter_table_conflict SET PARTITIONED BY (1);
+Alter table my_datalake.default.alter_table_conflict SET PARTITIONED BY (a);
 
 # con1 should error since the partition spec id has updated before con1 could commit;
 statement error con1
 commit;
-
+----
+<REGEX>:.*Conflict.*
 
 

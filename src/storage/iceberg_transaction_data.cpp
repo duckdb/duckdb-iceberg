@@ -203,6 +203,10 @@ void IcebergTransactionData::TableAddAssertLastAssignedColumnFieldId() {
 	requirements.push_back(make_uniq<AssertLastAssignedColumnFieldIdRequirement>(table_info));
 }
 
+void IcebergTransactionData::TableAddAssertLastAssignedPartitionId() {
+	requirements.push_back(make_uniq<AssertLastAssignedPartitionIdRequirement>(table_info));
+}
+
 void IcebergTransactionData::TableAddUpradeFormatVersion() {
 	updates.push_back(make_uniq<UpgradeFormatVersion>(table_info));
 }
