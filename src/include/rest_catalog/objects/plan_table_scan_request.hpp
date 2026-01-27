@@ -35,6 +35,8 @@ public:
 	bool has_select = false;
 	unique_ptr<Expression> filter;
 	bool has_filter = false;
+	int64_t min_rows_requested;
+	bool has_min_rows_requested = false;
 	bool case_sensitive;
 	bool has_case_sensitive = false;
 	bool use_snapshot_schema;

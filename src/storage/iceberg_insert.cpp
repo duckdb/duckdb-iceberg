@@ -102,17 +102,17 @@ static vector<string> ParseQuotedList(const string &input, char list_separator) 
 	return result;
 }
 
-static void AddToColDefMap(case_insensitive_map_t<optional_ptr<IcebergColumnDefinition>> &name_to_coldef,
-                           string col_name_prefix, optional_ptr<IcebergColumnDefinition> column_def) {
-	string column_name = column_def->name;
+static void AddToColDefMap(case_insensitive_map_t<reference<const IcebergColumnDefinition>> &name_to_coldef,
+                           string col_name_prefix, const IcebergColumnDefinition &column_def) {
+	string column_name = column_def.name;
 	if (!col_name_prefix.empty()) {
-		column_name = col_name_prefix + "." + column_def->name;
+		column_name = col_name_prefix + "." + column_def.name;
 	}
-	if (column_def->IsIcebergPrimitiveType()) {
-		name_to_coldef.emplace(column_name, column_def.get());
+	if (column_def.IsIcebergPrimitiveType()) {
+		name_to_coldef.emplace(column_name, column_def);
 	} else {
-		for (auto &child : column_def->children) {
-			AddToColDefMap(name_to_coldef, column_name, child.get());
+		for (auto &child : column_def.children) {
+			AddToColDefMap(name_to_coldef, column_name, *child);
 		}
 	}
 }
@@ -187,50 +187,62 @@ void IcebergInsert::AddWrittenFiles(IcebergInsertGlobalState &global_state, Data
 		auto table_current_schema_id = ic_table.table_info.table_metadata.current_schema_id;
 		auto ic_schema = ic_table.table_info.table_metadata.schemas[table_current_schema_id];
 
-		case_insensitive_map_t<optional_ptr<IcebergColumnDefinition>> column_info;
+		case_insensitive_map_t<reference<const IcebergColumnDefinition>> column_info_map;
 		for (auto &column : ic_schema->columns) {
-			AddToColDefMap(column_info, "", column.get());
+			AddToColDefMap(column_info_map, "", *column);
 		}
 
 		for (idx_t col_idx = 0; col_idx < map_children.size(); col_idx++) {
 			auto &struct_children = StructValue::GetChildren(map_children[col_idx]);
-			auto &col_name = StringValue::Get(struct_children[0]);
-			auto &col_stats = MapValue::GetChildren(struct_children[1]);
-			auto column_names = ParseQuotedList(col_name, '.');
-			auto normalized_col_name = StringUtil::Join(column_names, ".");
+			auto &column_path = StringValue::Get(struct_children[0]);
 
-			auto ic_column_info_it = column_info.find(normalized_col_name);
-			D_ASSERT(ic_column_info_it != column_info.end());
-			auto column_info = ic_column_info_it->second;
-			auto stats = ParseColumnStats(column_info->type, col_stats, global_state.context);
-			if (column_info->required && stats.has_null_count && stats.null_count > 0) {
-				throw ConstraintException("NOT NULL constraint failed: %s.%s", table->name, normalized_col_name);
+			auto &col_stats = MapValue::GetChildren(struct_children[1]);
+			auto column_names = ParseQuotedList(column_path, '.');
+			auto normalized_column_path = StringUtil::Join(column_names, ".");
+
+			auto it = column_info_map.find(column_names[0]);
+			if (it == column_info_map.end()) {
+				throw InternalException("Root column '%s' can not be found in the schema, but returned by RETURN_STATS",
+				                        column_names[0]);
+			}
+			auto &root_entry = it->second.get();
+			if (root_entry.type.id() == LogicalTypeId::VARIANT) {
+				//! No stats for VARIANT columns yet
+				continue;
+			}
+
+			auto ic_column_info_it = column_info_map.find(normalized_column_path);
+			D_ASSERT(ic_column_info_it != column_info_map.end());
+			auto &column_info = ic_column_info_it->second.get();
+			auto stats = ParseColumnStats(column_info.type, col_stats, global_state.context);
+			if (column_info.required && stats.has_null_count && stats.null_count > 0) {
+				throw ConstraintException("NOT NULL constraint failed: %s.%s", table->name, normalized_column_path);
 			}
 			// go through stats and add upper and lower bounds
 			// Do serialization of values here in case we read transaction updates
 			if (stats.has_min) {
 				auto serialized_value =
-				    IcebergValue::SerializeValue(stats.min, column_info->type, SerializeBound::LOWER_BOUND);
+				    IcebergValue::SerializeValue(stats.min, column_info.type, SerializeBound::LOWER_BOUND);
 				if (serialized_value.HasError()) {
 					throw InvalidConfigurationException(serialized_value.GetError());
 				} else if (serialized_value.HasValue()) {
-					data_file.lower_bounds[column_info->id] = serialized_value.GetValue();
+					data_file.lower_bounds[column_info.id] = serialized_value.GetValue();
 				}
 			}
 			if (stats.has_max) {
 				auto serialized_value =
-				    IcebergValue::SerializeValue(stats.max, column_info->type, SerializeBound::UPPER_BOUND);
+				    IcebergValue::SerializeValue(stats.max, column_info.type, SerializeBound::UPPER_BOUND);
 				if (serialized_value.HasError()) {
 					throw InvalidConfigurationException(serialized_value.GetError());
 				} else if (serialized_value.HasValue()) {
-					data_file.upper_bounds[column_info->id] = serialized_value.GetValue();
+					data_file.upper_bounds[column_info.id] = serialized_value.GetValue();
 				}
 			}
 			if (stats.has_column_size_bytes) {
-				data_file.column_sizes[column_info->id] = stats.column_size_bytes;
+				data_file.column_sizes[column_info.id] = stats.column_size_bytes;
 			}
 			if (stats.has_null_count) {
-				data_file.null_value_counts[column_info->id] = stats.null_count;
+				data_file.null_value_counts[column_info.id] = stats.null_count;
 			}
 
 			//! nan_value_counts won't work, we can only indicate if they exist.
@@ -466,12 +478,6 @@ PhysicalOperator &IRCatalog::PlanInsert(ClientContext &context, PhysicalPlanGene
 	VerifyDirectInsertionOrder(op);
 
 	auto &table_entry = op.table.Cast<ICTableEntry>();
-	// FIXME: Inserts into V3 tables is not yet supported since
-	// we need to keep track of row lineage, which we do not support
-	// https://iceberg.apache.org/spec/#row-lineage
-	if (table_entry.table_info.table_metadata.iceberg_version == 3) {
-		throw NotImplementedException("Insert into Iceberg V3 tables");
-	}
 	table_entry.PrepareIcebergScanFromEntry(context);
 	auto &table_info = table_entry.table_info;
 	auto &schema = table_info.table_metadata.GetLatestSchema();

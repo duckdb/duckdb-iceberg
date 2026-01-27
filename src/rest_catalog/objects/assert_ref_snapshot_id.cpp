@@ -49,7 +49,10 @@ string AssertRefSnapshotId::TryFromJSON(yyjson_val *obj) {
 	auto snapshot_id_val = yyjson_obj_get(obj, "snapshot-id");
 	if (snapshot_id_val) {
 		has_snapshot_id = true;
-		if (yyjson_is_sint(snapshot_id_val)) {
+		if (yyjson_is_null(snapshot_id_val)) {
+			//! do nothing, property is explicitly nullable
+			has_snapshot_id = false;
+		} else if (yyjson_is_sint(snapshot_id_val)) {
 			snapshot_id = yyjson_get_sint(snapshot_id_val);
 		} else if (yyjson_is_uint(snapshot_id_val)) {
 			snapshot_id = yyjson_get_uint(snapshot_id_val);

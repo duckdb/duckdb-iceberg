@@ -30,6 +30,8 @@ public:
 	case_insensitive_map_t<string> overrides;
 	vector<string> endpoints;
 	bool has_endpoints = false;
+	string idempotency_key_lifetime;
+	bool has_idempotency_key_lifetime = false;
 };
 
 } // namespace rest_api_objects

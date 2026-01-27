@@ -6,6 +6,7 @@
 #include "duckdb/common/vector.hpp"
 #include "duckdb/common/case_insensitive_map.hpp"
 #include "rest_catalog/objects/expression_type.hpp"
+#include "rest_catalog/objects/primitive_type_value.hpp"
 #include "rest_catalog/objects/term.hpp"
 
 using namespace duckdb_yyjson;
@@ -30,7 +31,7 @@ public:
 public:
 	ExpressionType type;
 	Term term;
-	yyjson_val *value;
+	PrimitiveTypeValue value;
 };
 
 } // namespace rest_api_objects

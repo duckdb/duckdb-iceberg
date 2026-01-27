@@ -107,6 +107,7 @@
 #include "rest_catalog/objects/register_table_request.hpp"
 #include "rest_catalog/objects/create_view_request.hpp"
 #include "rest_catalog/objects/load_view_result.hpp"
+#include "rest_catalog/objects/register_view_request.hpp"
 #include "rest_catalog/objects/token_type.hpp"
 #include "rest_catalog/objects/oauth_client_credentials_request.hpp"
 #include "rest_catalog/objects/oauth_token_exchange_request.hpp"

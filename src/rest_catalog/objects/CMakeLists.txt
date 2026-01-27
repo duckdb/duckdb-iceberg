@@ -106,6 +106,7 @@ add_library(
   register_table_request.cpp
   create_view_request.cpp
   load_view_result.cpp
+  register_view_request.cpp
   token_type.cpp
   oauth_client_credentials_request.cpp
   oauth_token_exchange_request.cpp

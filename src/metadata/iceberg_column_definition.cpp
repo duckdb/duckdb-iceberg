@@ -175,7 +175,7 @@ unique_ptr<IcebergColumnDefinition> IcebergColumnDefinition::ParseStructField(re
 	                 field.has_initial_default ? &field.initial_default : nullptr);
 }
 
-bool IcebergColumnDefinition::IsIcebergPrimitiveType() {
+bool IcebergColumnDefinition::IsIcebergPrimitiveType() const {
 	switch (type.id()) {
 	case LogicalTypeId::TINYINT:
 	case LogicalTypeId::SMALLINT:
@@ -193,6 +193,7 @@ bool IcebergColumnDefinition::IsIcebergPrimitiveType() {
 	case LogicalTypeId::TIME:
 	case LogicalTypeId::TIMESTAMP:
 	case LogicalTypeId::TIMESTAMP_TZ:
+	case LogicalTypeId::VARIANT:
 		return true;
 	default:
 		return false;
