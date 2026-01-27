@@ -1,0 +1,89 @@
+# name: test/sql/local/irc/insert/test_write_infinity_timestamp.test
+# group: [insert]
+
+require-env ICEBERG_SERVER_AVAILABLE
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+require icu
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+set enable_logging=true
+
+statement ok
+set logging_level='debug'
+
+statement ok
+SET TimeZone = 'UTC';
+
+statement ok
+pragma threads=1;
+
+statement ok
+CREATE SECRET (
+    TYPE S3,
+    KEY_ID 'admin',
+    SECRET 'password',
+    ENDPOINT '127.0.0.1:9000',
+    URL_STYLE 'path',
+    USE_SSL 0
+);
+
+statement ok
+ATTACH '' AS my_datalake (
+    TYPE ICEBERG,
+    CLIENT_ID 'admin',
+    CLIENT_SECRET 'password',
+    ENDPOINT 'http://127.0.0.1:8181'
+);
+
+statement ok
+create schema if not exists my_datalake.default;
+
+statement ok
+drop table if exists my_datalake.default.test_time_types_upper_lower_bounds;
+
+statement error
+create table my_datalake.default.test_date_inf as select DATE 'infinity' date_type;
+----
+<REGEX>:.*Conversion Error.*
+
+statement error
+create table my_datalake.default.test_date_ninf as select DATE '-infinity' date_type;
+----
+<REGEX>:.*Conversion Error.*
+
+statement error
+create table my_datalake.default.test_timestamp_inf as select TIMESTAMP 'infinity'  timestamp_type;
+----
+<REGEX>:.*Conversion Error.*
+
+statement error
+create table my_datalake.default.test_dtimestampninf as select TIMESTAMP '-infinity' timestamp_type;
+----
+<REGEX>:.*Conversion Error.*
+
+statement error
+create table my_datalake.default.test_timestamp_tz_inf as select TIMESTAMPTZ 'infinity' timestamptz_type;
+----
+<REGEX>:.*Conversion Error.*
+
+statement error
+create table my_datalake.default.test_timestamp_tz_ninf as select TIMESTAMPTZ '-infinity' timestamptz_type;
+----
+<REGEX>:.*Conversion Error.*
+
+statement ok
+drop table if exists my_datalake.default.test_infinities;
+
+statement ok
+create table my_datalake.default.test_infinities as from values (FLOAT 'infinity', DOUBLE 'infinity'), (FLOAT '-infinity', DOUBLE '-infinity') t(float_type, double_type);

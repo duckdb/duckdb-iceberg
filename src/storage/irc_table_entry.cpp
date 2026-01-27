@@ -32,24 +32,25 @@ unique_ptr<BaseStatistics> ICTableEntry::GetStatistics(ClientContext &context, c
 	return nullptr;
 }
 
-string ICTableEntry::PrepareIcebergScanFromEntry(ClientContext &context) const {
+void ICTableEntry::PrepareIcebergScanFromEntry(ClientContext &context) const {
 	auto &ic_catalog = catalog.Cast<IRCatalog>();
 	auto &secret_manager = SecretManager::Get(context);
 
 	if (ic_catalog.attach_options.access_mode != IRCAccessDelegationMode::VENDED_CREDENTIALS) {
-		return table_info.load_table_result.metadata_location;
+		// assume secret already exists
+		return;
 	}
 	// Get Credentials from IRC API
 	auto table_credentials = table_info.GetVendedCredentials(context);
-	auto &load_result = table_info.load_table_result;
+	auto metadata_path = table_info.table_metadata.GetMetadataPath();
 
 	if (table_credentials.config) {
 		auto &info = *table_credentials.config;
 		D_ASSERT(info.scope.empty());
-		string lc_storage_location = StringUtil::Lower(load_result.metadata_location);
+		string lc_storage_location = StringUtil::Lower(metadata_path);
 		size_t metadata_pos = lc_storage_location.find("metadata");
 		if (metadata_pos != string::npos) {
-			info.scope = {load_result.metadata_location.substr(0, metadata_pos)};
+			info.scope = {metadata_path.substr(0, metadata_pos)};
 		} else {
 			DUCKDB_LOG_INFO(context, "Creating Iceberg Table secret with no scope. Returned metadata location is %s",
 			                lc_storage_location);
@@ -92,7 +93,6 @@ string ICTableEntry::PrepareIcebergScanFromEntry(ClientContext &context) const {
 	for (auto &info : table_credentials.storage_credentials) {
 		(void)secret_manager.CreateSecret(context, info);
 	}
-	return table_info.load_table_result.metadata_location;
 }
 
 TableFunction ICTableEntry::GetScanFunction(ClientContext &context, unique_ptr<FunctionData> &bind_data,
@@ -108,17 +108,45 @@ TableFunction ICTableEntry::GetScanFunction(ClientContext &context, unique_ptr<F
 	auto &iceberg_scan_function_set = catalog_entry->Cast<TableFunctionCatalogEntry>();
 	auto iceberg_scan_function =
 	    iceberg_scan_function_set.functions.GetFunctionByArguments(context, {LogicalType::VARCHAR});
-	auto storage_location = PrepareIcebergScanFromEntry(context);
+	PrepareIcebergScanFromEntry(context);
+	auto storage_location = table_info.table_metadata.location;
 
 	named_parameter_map_t param_map;
 	vector<LogicalType> return_types;
 	vector<string> names;
 	TableFunctionRef empty_ref;
 
+	// lookup should be asof start of the transaction if the lookup info is empty and there are no transaction updates
+	bool using_transaction_timestamp = false;
+	IcebergSnapshotLookup snapshot_lookup;
+	if (!lookup.GetAtClause() && !table_info.HasTransactionUpdates()) {
+		// if there is no user supplied AT () clause, and the table does not have transaction updates
+		// use transaction start time
+		snapshot_lookup = table_info.GetSnapshotLookup(context);
+		using_transaction_timestamp = true;
+	} else {
+		auto at = lookup.GetAtClause();
+		snapshot_lookup = IcebergSnapshotLookup::FromAtClause(at);
+	}
 	auto &metadata = table_info.table_metadata;
-	auto at = lookup.GetAtClause();
-	auto snapshot_lookup = IcebergSnapshotLookup::FromAtClause(at);
-	auto snapshot = metadata.GetSnapshot(snapshot_lookup);
+	optional_ptr<IcebergSnapshot> snapshot = nullptr;
+	try {
+		snapshot = metadata.GetSnapshot(snapshot_lookup);
+	} catch (InvalidConfigurationException &e) {
+		if (!table_info.TableIsEmpty(snapshot_lookup)) {
+			if (using_transaction_timestamp) {
+				// We are using the transaction start time.
+				// The table is not empty, but GetSnapshot is asking for table state before the first snapshot
+				// table creation has no snapshot, so we return this error message
+				throw InvalidConfigurationException("Table %s does not have a reachable state in this transaction",
+				                                    table_info.GetTableKey());
+			}
+			throw e;
+		}
+		// try without transaction start time bounds. This is allowed to throw
+		snapshot_lookup = IcebergSnapshotLookup::FromAtClause(lookup.GetAtClause());
+		snapshot = metadata.GetSnapshot(snapshot_lookup);
+	}
 
 	int32_t schema_id;
 	if (snapshot_lookup.IsLatest()) {
@@ -129,8 +157,7 @@ TableFunction ICTableEntry::GetScanFunction(ClientContext &context, unique_ptr<F
 	}
 
 	auto iceberg_schema = metadata.GetSchemaFromId(schema_id);
-	auto scan_info = make_shared_ptr<IcebergScanInfo>(table_info.load_table_result.metadata_location, metadata,
-	                                                  snapshot, *iceberg_schema);
+	auto scan_info = make_shared_ptr<IcebergScanInfo>(metadata.GetMetadataPath(), metadata, snapshot, *iceberg_schema);
 	if (table_info.transaction_data) {
 		scan_info->transaction_data = table_info.transaction_data.get();
 	}
@@ -178,6 +205,10 @@ TableStorageInfo ICTableEntry::GetStorageInfo(ClientContext &context) {
 	TableStorageInfo result;
 	// TODO fill info
 	return result;
+}
+
+string ICTableEntry::GetUUID() const {
+	return table_info.table_id;
 }
 
 } // namespace duckdb

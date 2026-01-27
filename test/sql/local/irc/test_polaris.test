@@ -60,7 +60,10 @@ select * from my_datalake.default.all_types_table;
 
 
 statement ok
-create schema my_datalake.schema_1;
+create schema if not exists my_datalake.schema_1;
+
+statement ok
+drop table if exists my_datalake.schema_1.polaris_create_table;
 
 statement ok
 create table my_datalake.schema_1.polaris_create_table (a int);
@@ -92,6 +95,9 @@ attach or replace 'quickstart_catalog' as my_datalake (
 	SUPPORT_NESTED_NAMESPACES true,
 	support_stage_create false
 );
+
+statement ok
+drop table if exists my_datalake.schema_1.polaris_create_table_as;
 
 statement ok
 create table my_datalake.schema_1.polaris_create_table_as as select range a, range::VARCHAR b from range(10, 20);

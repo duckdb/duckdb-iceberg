@@ -177,9 +177,10 @@ SinkFinalizeType IcebergUpdate::Finalize(Pipeline &pipeline, Event &event, Clien
 	auto delete_manifest_entries = IcebergDelete::GenerateDeleteManifestEntries(delete_global_state);
 	auto insert_manifest_entries = IcebergInsert::GetInsertManifestEntries(insert_global_state);
 	if (!insert_manifest_entries.empty()) {
-		table_info.AddUpdateSnapshot(irc_transaction, std::move(delete_manifest_entries),
-		                             std::move(insert_manifest_entries));
-		irc_transaction.MarkTableAsDirty(irc_table);
+		ApplyTableUpdate(table_info, irc_transaction, [&](IcebergTableInformation &tbl) {
+			tbl.AddUpdateSnapshot(irc_transaction, std::move(delete_manifest_entries),
+			                      std::move(insert_manifest_entries));
+		});
 	}
 	return SinkFinalizeType::READY;
 }

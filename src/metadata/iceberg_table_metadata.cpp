@@ -2,6 +2,7 @@
 
 #include "iceberg_utils.hpp"
 #include "catalog_utils.hpp"
+#include "iceberg_metadata.hpp"
 #include "metadata/iceberg_snapshot.hpp"
 #include "duckdb/common/exception.hpp"
 #include "rest_catalog/objects/list.hpp"
@@ -52,6 +53,14 @@ optional_ptr<const IcebergSortOrder> IcebergTableMetadata::FindSortOrderById(int
 	return it->second;
 }
 
+const unordered_map<int32_t, IcebergSortOrder> &IcebergTableMetadata::GetSortOrderSpecs() const {
+	return sort_specs;
+}
+
+const unordered_map<int32_t, IcebergPartitionSpec> &IcebergTableMetadata::GetPartitionSpecs() const {
+	return partition_specs;
+}
+
 optional_ptr<IcebergSnapshot> IcebergTableMetadata::GetLatestSnapshot() {
 	if (!has_current_snapshot) {
 		return nullptr;
@@ -64,6 +73,11 @@ const IcebergTableSchema &IcebergTableMetadata::GetLatestSchema() const {
 	auto res = GetSchemaFromId(current_schema_id);
 	D_ASSERT(res);
 	return *res;
+}
+
+bool IcebergTableMetadata::HasPartitionSpec() const {
+	auto spec = GetLatestPartitionSpec();
+	return !spec.fields.empty();
 }
 
 const IcebergPartitionSpec &IcebergTableMetadata::GetLatestPartitionSpec() const {
@@ -245,6 +259,14 @@ string IcebergTableMetadata::GetMetaDataPath(ClientContext &context, const strin
 	return GuessTableVersion(meta_path, fs, options);
 }
 
+bool IcebergTableMetadata::HasLastColumnId() const {
+	return last_column_id.IsValid();
+}
+
+idx_t IcebergTableMetadata::GetLastColumnId() const {
+	return last_column_id.GetIndex();
+}
+
 //! ----------- Parse the Metadata JSON -----------
 
 rest_api_objects::TableMetadata IcebergTableMetadata::Parse(const string &path, FileSystem &fs,
@@ -264,12 +286,20 @@ rest_api_objects::TableMetadata IcebergTableMetadata::Parse(const string &path, 
 	return rest_api_objects::TableMetadata::FromJSON(root);
 }
 
-IcebergTableMetadata IcebergTableMetadata::FromTableMetadata(rest_api_objects::TableMetadata &table_metadata) {
+IcebergTableMetadata
+IcebergTableMetadata::FromLoadTableResult(const rest_api_objects::LoadTableResult &load_table_result) {
+	auto res = FromTableMetadata(load_table_result.metadata);
+	res.latest_metadata_json = load_table_result.metadata_location;
+	return res;
+}
+
+IcebergTableMetadata IcebergTableMetadata::FromTableMetadata(const rest_api_objects::TableMetadata &table_metadata) {
 	IcebergTableMetadata res;
 
 	res.table_uuid = table_metadata.table_uuid;
 	res.location = table_metadata.location;
 	res.iceberg_version = table_metadata.format_version;
+	res.last_updated_ms = table_metadata.last_updated_ms;
 	for (auto &schema : table_metadata.schemas) {
 		res.schemas.emplace(schema.object_1.schema_id, IcebergTableSchema::ParseSchema(schema));
 	}
@@ -321,6 +351,10 @@ IcebergTableMetadata IcebergTableMetadata::FromTableMetadata(rest_api_objects::T
 		res.table_properties.emplace(property.first, property.second);
 	}
 
+	if (table_metadata.has_last_column_id) {
+		res.last_column_id = table_metadata.last_column_id;
+	}
+
 	return res;
 }
 
@@ -328,7 +362,15 @@ const case_insensitive_map_t<string> &IcebergTableMetadata::GetTableProperties()
 	return table_properties;
 }
 
-string IcebergTableMetadata::GetDataPath() const {
+const string &IcebergTableMetadata::GetLatestMetadataJson() const {
+	return latest_metadata_json;
+}
+
+const string &IcebergTableMetadata::GetLocation() const {
+	return location;
+}
+
+const string IcebergTableMetadata::GetDataPath() const {
 	auto write_path = table_properties.find("write.data.path");
 	// If write.data.path property is set, use it; otherwise use default location + "/data"
 	if (write_path != table_properties.end()) {
@@ -337,14 +379,14 @@ string IcebergTableMetadata::GetDataPath() const {
 	return location + "/data";
 }
 
-string IcebergTableMetadata::GetMetadataPath() const {
+const string IcebergTableMetadata::GetMetadataPath() const {
 	// If write.metadata.path property is set, use it; otherwise use default location + "/metadata"
 	auto metadata_path = table_properties.find("write.metadata.path");
-	// If write.data.path property is set, use it; otherwise use default location + "/data"
+	// If write.data.path property is set, use it; otherwise use default location + "/metadata"
 	if (metadata_path != table_properties.end()) {
 		return metadata_path->second;
 	}
-	return location + "/data";
+	return location + "/metadata";
 }
 
 string IcebergTableMetadata::GetTableProperty(string property_string) const {

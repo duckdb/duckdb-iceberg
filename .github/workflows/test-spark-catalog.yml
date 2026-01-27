@@ -56,7 +56,7 @@ jobs:
       - name: Generate data
         run: |
           make data
-
+          
       - name: Test with rest catalog
         env:
           ICEBERG_SERVER_AVAILABLE: 1

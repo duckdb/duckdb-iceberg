@@ -1,11 +1,12 @@
 #include "duckdb.hpp"
-#include "iceberg_utils.hpp"
-#include "fstream"
-#include "duckdb/catalog/catalog_entry/table_catalog_entry.hpp"
-#include "storage/irc_table_entry.hpp"
 #include "duckdb/common/gzip_file_system.hpp"
-#include "storage/irc_table_entry.hpp"
+#include "duckdb/catalog/catalog_entry/table_catalog_entry.hpp"
 #include "duckdb/catalog/catalog_entry/view_catalog_entry.hpp"
+
+#include "iceberg_utils.hpp"
+#include "storage/irc_table_entry.hpp"
+#include "storage/iceberg_table_information.hpp"
+#include "metadata/iceberg_table_metadata.hpp"
 
 namespace duckdb {
 
@@ -51,7 +52,6 @@ static string ExtractIcebergScanPath(const string &sql) {
 
 optional_ptr<CatalogEntry> IcebergUtils::GetTableEntry(ClientContext &context, string &input_string) {
 	auto qualified_name = QualifiedName::ParseComponents(input_string);
-	optional_ptr<ICTableEntry> iceberg_table = nullptr;
 	auto default_db = DatabaseManager::GetDefaultDatabase(context);
 	auto &catalog = Catalog::GetCatalog(context, default_db);
 	switch (qualified_name.size()) {
@@ -107,7 +107,9 @@ string IcebergUtils::GetStorageLocation(ClientContext &context, const string &in
 				throw InvalidInputException("Table %s is not an Iceberg table", input);
 			}
 			auto &table_entry = catalog_entry->Cast<ICTableEntry>();
-			storage_location = table_entry.PrepareIcebergScanFromEntry(context);
+			storage_location = table_entry.table_info.table_metadata.GetLatestMetadataJson();
+			// Prepare Iceberg Scan from entry will create the secret needed to access the table
+			table_entry.PrepareIcebergScanFromEntry(context);
 			break;
 		}
 	} while (false);

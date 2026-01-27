@@ -40,6 +40,9 @@ ATTACH '' AS my_datalake (
     SUPPORT_NESTED_NAMESPACES true
 );
 
+statement ok
+drop table if exists my_datalake.default.a;
+
 # First in a transaction, to verify transaction-local tables and scans work
 statement ok
 BEGIN TRANSACTION;

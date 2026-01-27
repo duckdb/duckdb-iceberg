@@ -43,7 +43,6 @@ ATTACH '' AS my_datalake (
 statement ok
 CALL truncate_duckdb_logs();
 
-
 statement ok
 begin transaction
 
@@ -68,7 +67,6 @@ statement ok
 select * from my_datalake.default.table_more_deletes order by all;
 
 # No extra logs are created because all the metadata was already cached
-
 query II
 SELECT request.url, response.reason FROM duckdb_logs_parsed('HTTP') WHERE request.type='GET' AND (request.url).starts_with('http://127.0.0.1:8181/v1/') order by timestamp
 ----

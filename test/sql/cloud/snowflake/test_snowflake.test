@@ -18,8 +18,6 @@ require iceberg
 
 require httpfs
 
-require aws
-
 
 # Do not ignore 'HTTP' error messages!
 set ignore_error_messages
@@ -32,7 +30,6 @@ create secret polaris_secret (
 	CLIENT_SECRET '${SNOWFLAKE_SECRET_KEY_GCS}',
 	ENDPOINT '${SNOWFLAKE_CATALOG_URI_GCS}'
 );
-
 
 statement ok
 attach 'GCS_catalog' as my_datalake (

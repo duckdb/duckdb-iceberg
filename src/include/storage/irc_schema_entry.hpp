@@ -20,7 +20,7 @@ public:
 
 public:
 	optional_ptr<CatalogEntry> CreateTable(CatalogTransaction transaction, BoundCreateTableInfo &info) override;
-	optional_ptr<CatalogEntry> CreateTable(IRCTransaction &irc_transaction, ClientContext &context,
+	optional_ptr<CatalogEntry> CreateTable(CatalogTransaction &transaction, ClientContext &context,
 	                                       BoundCreateTableInfo &info);
 	optional_ptr<CatalogEntry> CreateFunction(CatalogTransaction transaction, CreateFunctionInfo &info) override;
 	optional_ptr<CatalogEntry> CreateIndex(CatalogTransaction transaction, CreateIndexInfo &info,
@@ -40,6 +40,8 @@ public:
 	void Scan(CatalogType type, const std::function<void(CatalogEntry &)> &callback) override;
 	void DropEntry(ClientContext &context, DropInfo &info) override;
 	optional_ptr<CatalogEntry> LookupEntry(CatalogTransaction transaction, const EntryLookupInfo &lookup_info) override;
+	bool HandleCreateConflict(CatalogTransaction &transaction, CatalogType catalog_type, const string &entry_name,
+	                          OnCreateConflict on_conflict);
 
 private:
 	ICTableSet &GetCatalogSet(CatalogType type);

@@ -160,17 +160,18 @@ static void SetIcebergTablePropertiesFunction(ClientContext &context, TableFunct
 	}
 
 	auto iceberg_table = bind_data.iceberg_table;
+	auto &table_info = iceberg_table->table_info;
 	auto &irc_transaction = IRCTransaction::Get(context, iceberg_table->catalog);
-	if (!iceberg_table->table_info.transaction_data) {
-		iceberg_table->table_info.transaction_data =
-		    make_uniq<IcebergTransactionData>(context, iceberg_table->table_info);
+	irc_transaction.updated_tables.emplace(table_info.GetTableKey(), table_info.Copy(irc_transaction));
+	auto &entry = irc_transaction.updated_tables.at(table_info.GetTableKey());
+	if (!entry.transaction_data) {
+		entry.InitTransactionData(irc_transaction);
 	}
-	IcebergTransactionData &transaction_data = *(iceberg_table->table_info.transaction_data);
+	auto &transaction_data = entry.transaction_data;
 
 	auto schema = iceberg_table->schema.name;
 	auto table_name = iceberg_table->name;
-	transaction_data.TableSetProperties(bind_data.properties);
-	irc_transaction.dirty_tables.emplace(iceberg_table.get());
+	transaction_data->TableSetProperties(bind_data.properties);
 	global_state.properties_set = true;
 	// set success output, failure happens during transaction commit.
 	FlatVector::GetData<int64_t>(output.data[0])[0] = bind_data.properties.size();
@@ -191,17 +192,18 @@ static void RemoveIcebergTablePropertiesFunction(ClientContext &context, TableFu
 	}
 
 	auto iceberg_table = bind_data.iceberg_table;
+	auto &table_info = iceberg_table->table_info;
 	auto &irc_transaction = IRCTransaction::Get(context, iceberg_table->catalog);
-	if (!iceberg_table->table_info.transaction_data) {
-		iceberg_table->table_info.transaction_data =
-		    make_uniq<IcebergTransactionData>(context, iceberg_table->table_info);
+	irc_transaction.updated_tables.emplace(table_info.GetTableKey(), table_info.Copy(irc_transaction));
+	auto &entry = irc_transaction.updated_tables.at(table_info.GetTableKey());
+	if (!entry.transaction_data) {
+		entry.InitTransactionData(irc_transaction);
 	}
-	IcebergTransactionData &transaction_data = *(iceberg_table->table_info.transaction_data);
+	auto &transaction_data = entry.transaction_data;
 
 	auto schema = iceberg_table->schema.name;
 	auto table_name = iceberg_table->name;
-	transaction_data.TableRemoveProperties(bind_data.remove_properties);
-	irc_transaction.dirty_tables.emplace(iceberg_table.get());
+	transaction_data->TableRemoveProperties(bind_data.remove_properties);
 	global_state.properties_removed = true;
 	// set success output, failure happens during transaction commit.
 	FlatVector::GetData<int64_t>(output.data[0])[0] = bind_data.properties.size();
@@ -218,12 +220,12 @@ static void GetIcebergTablePropertiesFunction(ClientContext &context, TableFunct
 	}
 	auto iceberg_table = bind_data.iceberg_table;
 	auto &table_info = iceberg_table->table_info;
-	if (!table_info.load_table_result.metadata.has_properties) {
+	if (table_info.table_metadata.GetTableProperties().empty()) {
 		output.SetCardinality(0);
 		return;
 	}
 	if (!global_state.all_properties_initialized) {
-		for (auto &property : table_info.load_table_result.metadata.properties) {
+		for (auto &property : table_info.table_metadata.GetTableProperties()) {
 			global_state.all_properties.push_back(make_pair(property.first, property.second));
 		}
 		global_state.all_properties_initialized = true;

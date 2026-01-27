@@ -14,7 +14,7 @@ class IcebergSnapshot {
 public:
 	IcebergSnapshot() {
 	}
-	static IcebergSnapshot ParseSnapshot(rest_api_objects::Snapshot &snapshot, IcebergTableMetadata &metadata);
+	static IcebergSnapshot ParseSnapshot(const rest_api_objects::Snapshot &snapshot, IcebergTableMetadata &metadata);
 	rest_api_objects::Snapshot ToRESTObject() const;
 
 public:

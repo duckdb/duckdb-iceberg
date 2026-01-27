@@ -41,7 +41,16 @@ ATTACH '' AS my_datalake (
 );
 
 statement ok
-use my_datalake.default
+create schema if not exists my_datalake.default;
+
+statement ok
+use my_datalake.default;
+
+statement ok
+drop table if exists create_table_t1;
+
+statement ok
+drop table if exists create_table_t2;
 
 statement ok
 begin;
@@ -112,6 +121,12 @@ select * from create_table_t2;
 10	10
 15	15
 20	20
+
+statement ok
+drop table if exists create_table_t3;
+
+statement ok
+drop table if exists create_table_t4;
 
 # two updates to one table
 statement ok

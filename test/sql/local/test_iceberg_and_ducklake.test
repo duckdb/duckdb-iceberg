@@ -48,10 +48,12 @@ ATTACH '' AS my_datalake (
 statement ok
 ATTACH 'ducklake:duckdb:ducklake.duckdb' as my_ducklake (DATA_PATH 'data_path');
 
-# 2 requests to the iceberg catalog for oauth and config
-# 4 requests when attaching ducklake because a ducklake attach calls from duckdb_tables()
-# which lists all namespaces in the iceberg catalog
-query I
-select count(*) from duckdb_logs_parsed('HTTP');
+# this output will change if more tests add schemas.
+query II
+select request.url, request.type from duckdb_logs_parsed('HTTP');
 ----
-5
+http://127.0.0.1:8181/v1/oauth/tokens	POST
+http://127.0.0.1:8181/v1/config?warehouse=	GET
+http://127.0.0.1:8181/v1/namespaces	GET
+http://127.0.0.1:8181/v1/namespaces/default/tables	GET
+http://127.0.0.1:8181/v1/namespaces/level1/tables	GET

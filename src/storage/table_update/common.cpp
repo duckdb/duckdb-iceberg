@@ -1,4 +1,6 @@
 #include "storage/table_update/common.hpp"
+
+#include "duckdb/common/exception.hpp"
 #include "storage/irc_table_set.hpp"
 
 namespace duckdb {
@@ -34,13 +36,13 @@ void AddSchemaUpdate::CreateUpdate(DatabaseInstance &db, ClientContext &context,
 	update.has_add_schema_update = true;
 	update.add_schema_update.has_action = true;
 	update.add_schema_update.action = "add-schema";
-	auto current_schema_id = table_info.load_table_result.metadata.current_schema_id;
-	auto &schema = table_info.table_metadata.schemas[current_schema_id];
+	auto &current_schema = table_info.table_metadata.GetLatestSchema();
+	auto &schema = table_info.table_metadata.schemas[current_schema.schema_id];
 	update.add_schema_update.schema = CopySchema(*schema.get());
 	// last column id is technically deprecated, but some catalogs still use it (nessie).
-	if (table_info.load_table_result.metadata.has_last_column_id) {
+	if (table_info.table_metadata.HasLastColumnId()) {
 		update.add_schema_update.has_last_column_id = true;
-		update.add_schema_update.last_column_id = table_info.load_table_result.metadata.last_column_id;
+		update.add_schema_update.last_column_id = table_info.table_metadata.GetLastColumnId();
 	}
 }
 
@@ -110,22 +112,16 @@ void AddPartitionSpec::CreateUpdate(DatabaseInstance &db, ClientContext &context
 	req.add_partition_spec_update.spec.has_spec_id = true;
 	req.add_partition_spec_update.spec.spec_id = table_info.table_metadata.default_spec_id;
 	idx_t partition_spec_id = req.add_partition_spec_update.spec.spec_id;
-	if (table_info.load_table_result.metadata.has_partition_specs) {
-		auto &table_partition_specs = table_info.load_table_result.metadata.partition_specs;
-		optional_ptr<rest_api_objects::PartitionSpec> current_partition_spect = nullptr;
-		for (auto &partition_spec : table_partition_specs) {
-			if (partition_spec.spec_id == partition_spec_id) {
-				current_partition_spect = partition_spec;
-			}
-		}
-		for (auto &field : current_partition_spect.get()->fields) {
+	if (table_info.table_metadata.HasPartitionSpec()) {
+		auto &current_partition_spec = table_info.table_metadata.GetLatestPartitionSpec();
+		for (auto &field : current_partition_spec.fields) {
 			req.add_partition_spec_update.spec.fields.push_back(rest_api_objects::PartitionField());
 			auto &updated_field = req.add_partition_spec_update.spec.fields.back();
 			updated_field.name = field.name;
-			updated_field.transform.value = field.transform.value;
-			updated_field.field_id = field.field_id;
+			updated_field.transform.value = field.transform.RawType();
+			updated_field.field_id = field.partition_field_id;
 			updated_field.source_id = field.source_id;
-			updated_field.has_field_id = field.has_field_id;
+			updated_field.has_field_id = true;
 		}
 	}
 }
@@ -140,26 +136,20 @@ void AddSortOrder::CreateUpdate(DatabaseInstance &db, ClientContext &context, Ic
 	req.has_add_sort_order_update = true;
 	req.add_sort_order_update.has_action = true;
 	req.add_sort_order_update.action = "add-sort-order";
-	idx_t sort_order_id = 0;
-	if (table_info.load_table_result.metadata.has_default_sort_order_id) {
-		req.add_sort_order_update.sort_order.order_id = table_info.load_table_result.metadata.default_sort_order_id;
-		sort_order_id = req.add_sort_order_update.sort_order.order_id;
+	if (table_info.table_metadata.HasSortOrder()) {
+		req.add_sort_order_update.sort_order.order_id = table_info.table_metadata.default_sort_order_id.GetIndex();
 	}
 
-	if (table_info.load_table_result.metadata.has_sort_orders) {
-		auto &table_sort_orders = table_info.load_table_result.metadata.sort_orders;
-		optional_ptr<rest_api_objects::SortOrder> current_sort_order = nullptr;
-		for (auto &sort_order : table_sort_orders) {
-			if (sort_order.order_id == sort_order_id) {
-				current_sort_order = sort_order;
-			}
-		}
-		for (auto &field : current_sort_order.get()->fields) {
+	if (table_info.table_metadata.HasSortOrder()) {
+		auto &table_sort_orders = table_info.table_metadata.GetSortOrderSpecs();
+		// FIXME: is it correct to just get the latest sort order?
+		auto &current_sort_order = table_info.table_metadata.GetLatestSortOrder();
+		for (auto &field : current_sort_order.fields) {
 			req.add_sort_order_update.sort_order.fields.push_back(rest_api_objects::SortField());
 			auto &updated_field = req.add_sort_order_update.sort_order.fields.back();
-			updated_field.direction.value = field.direction.value;
-			updated_field.transform.value = field.transform.value;
-			updated_field.null_order.value = field.null_order.value;
+			updated_field.direction.value = field.direction;
+			updated_field.transform.value = field.transform.RawType();
+			updated_field.null_order.value = field.null_order;
 			updated_field.source_id = field.source_id;
 		}
 	}
@@ -175,8 +165,8 @@ void SetDefaultSortOrder::CreateUpdate(DatabaseInstance &db, ClientContext &cont
 	req.has_set_default_sort_order_update = true;
 	req.set_default_sort_order_update.has_action = true;
 	req.set_default_sort_order_update.action = "set-default-sort-order";
-	D_ASSERT(table_info.load_table_result.metadata.has_default_sort_order_id);
-	req.set_default_sort_order_update.sort_order_id = table_info.load_table_result.metadata.default_sort_order_id;
+	D_ASSERT(table_info.table_metadata.HasSortOrder());
+	req.set_default_sort_order_update.sort_order_id = table_info.table_metadata.GetLatestSortOrder().sort_order_id;
 }
 
 SetDefaultSpec::SetDefaultSpec(IcebergTableInformation &table_info)

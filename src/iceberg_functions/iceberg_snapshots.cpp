@@ -42,7 +42,6 @@ public:
 static unique_ptr<FunctionData> IcebergSnapshotsBind(ClientContext &context, TableFunctionBindInput &input,
                                                      vector<LogicalType> &return_types, vector<string> &names) {
 	auto bind_data = make_uniq<IcebergSnaphotsBindData>();
-
 	for (auto &kv : input.named_parameters) {
 		auto loption = StringUtil::Lower(kv.first);
 		if (loption == "metadata_compression_codec") {

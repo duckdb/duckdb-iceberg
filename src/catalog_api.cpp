@@ -184,9 +184,9 @@ static unique_ptr<HTTPResponse> GetTableMetadata(ClientContext &context, IRCatal
 	return catalog.auth_handler->Request(RequestType::GET_REQUEST, context, url_builder, headers);
 }
 
-APIResult<rest_api_objects::LoadTableResult> IRCAPI::GetTable(ClientContext &context, IRCatalog &catalog,
-                                                              const IRCSchemaEntry &schema, const string &table_name) {
-	auto ret = APIResult<rest_api_objects::LoadTableResult>();
+APIResult<unique_ptr<const rest_api_objects::LoadTableResult>>
+IRCAPI::GetTable(ClientContext &context, IRCatalog &catalog, const IRCSchemaEntry &schema, const string &table_name) {
+	auto ret = APIResult<unique_ptr<const rest_api_objects::LoadTableResult>>();
 	auto result = GetTableMetadata(context, catalog, schema, table_name);
 	if (result->status != HTTPStatusCode::OK_200) {
 		yyjson_val *error_obj = ICUtils::get_error_message(result->body);
@@ -201,7 +201,8 @@ APIResult<rest_api_objects::LoadTableResult> IRCAPI::GetTable(ClientContext &con
 	ret.has_error = false;
 	std::unique_ptr<yyjson_doc, YyjsonDocDeleter> doc(ICUtils::api_result_to_doc(result->body));
 	auto *metadata_root = yyjson_doc_get_root(doc.get());
-	ret.result_ = rest_api_objects::LoadTableResult::FromJSON(metadata_root);
+	ret.result_ =
+	    make_uniq<const rest_api_objects::LoadTableResult>(rest_api_objects::LoadTableResult::FromJSON(metadata_root));
 	return ret;
 }
 
@@ -359,6 +360,7 @@ void IRCAPI::CommitTableDelete(ClientContext &context, IRCatalog &catalog, const
 	url_builder.AddPathComponent(catalog.prefix);
 	url_builder.AddPathComponent("namespaces");
 	url_builder.AddPathComponent(schema_name);
+
 	url_builder.AddPathComponent("tables");
 	url_builder.AddPathComponent(table_name);
 	url_builder.SetParam("purgeRequested", Value::BOOLEAN(catalog.attach_options.purge_requested).ToString());

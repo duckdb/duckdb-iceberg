@@ -3,7 +3,7 @@
 
 namespace duckdb {
 
-IcebergPartitionSpecField IcebergPartitionSpecField::ParseFromJson(rest_api_objects::PartitionField &field) {
+IcebergPartitionSpecField IcebergPartitionSpecField::ParseFromJson(const rest_api_objects::PartitionField &field) {
 	IcebergPartitionSpecField result;
 
 	result.name = field.name;
@@ -14,7 +14,7 @@ IcebergPartitionSpecField IcebergPartitionSpecField::ParseFromJson(rest_api_obje
 	return result;
 }
 
-IcebergPartitionSpec IcebergPartitionSpec::ParseFromJson(rest_api_objects::PartitionSpec &partition_spec) {
+IcebergPartitionSpec IcebergPartitionSpec::ParseFromJson(const rest_api_objects::PartitionSpec &partition_spec) {
 	IcebergPartitionSpec result;
 
 	D_ASSERT(partition_spec.has_spec_id);

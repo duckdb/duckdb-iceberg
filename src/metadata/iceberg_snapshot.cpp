@@ -43,7 +43,8 @@ rest_api_objects::Snapshot IcebergSnapshot::ToRESTObject() const {
 	return res;
 }
 
-IcebergSnapshot IcebergSnapshot::ParseSnapshot(rest_api_objects::Snapshot &snapshot, IcebergTableMetadata &metadata) {
+IcebergSnapshot IcebergSnapshot::ParseSnapshot(const rest_api_objects::Snapshot &snapshot,
+                                               IcebergTableMetadata &metadata) {
 	IcebergSnapshot ret;
 	if (metadata.iceberg_version == 1) {
 		ret.sequence_number = 0;

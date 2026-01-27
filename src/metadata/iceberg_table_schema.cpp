@@ -2,11 +2,12 @@
 
 #include "iceberg_metadata.hpp"
 #include "iceberg_utils.hpp"
+#include "duckdb/common/exception.hpp"
 #include "rest_catalog/objects/list.hpp"
 
 namespace duckdb {
 
-shared_ptr<IcebergTableSchema> IcebergTableSchema::ParseSchema(rest_api_objects::Schema &schema) {
+shared_ptr<IcebergTableSchema> IcebergTableSchema::ParseSchema(const rest_api_objects::Schema &schema) {
 	auto res = make_shared_ptr<IcebergTableSchema>();
 	res->schema_id = schema.object_1.schema_id;
 	for (auto &field : schema.struct_type.fields) {
@@ -59,9 +60,10 @@ IcebergTableSchema::GetFromColumnIndex(const vector<unique_ptr<IcebergColumnDefi
 	return GetFromColumnIndex(column->children, column_index, depth + 1);
 }
 
-static void AddUnnamedField(yyjson_mut_doc *doc, yyjson_mut_val *field_obj, rest_api_objects::Type &column);
+static void AddUnnamedField(yyjson_mut_doc *doc, yyjson_mut_val *field_obj, const rest_api_objects::Type &column);
 
-static void AddStructField(yyjson_mut_doc *doc, yyjson_mut_val *field_obj, rest_api_objects::StructField &column) {
+static void AddStructField(yyjson_mut_doc *doc, yyjson_mut_val *field_obj,
+                           const rest_api_objects::StructField &column) {
 	yyjson_mut_obj_add_strcpy(doc, field_obj, "name", column.name.c_str());
 	yyjson_mut_obj_add_uint(doc, field_obj, "id", column.id);
 	if (!column.type->has_primitive_type) {
@@ -74,7 +76,7 @@ static void AddStructField(yyjson_mut_doc *doc, yyjson_mut_val *field_obj, rest_
 	yyjson_mut_obj_add_bool(doc, field_obj, "required", column.required);
 }
 
-static void AddUnnamedField(yyjson_mut_doc *doc, yyjson_mut_val *field_obj, rest_api_objects::Type &column) {
+static void AddUnnamedField(yyjson_mut_doc *doc, yyjson_mut_val *field_obj, const rest_api_objects::Type &column) {
 	if (column.has_struct_type) {
 		yyjson_mut_obj_add_strcpy(doc, field_obj, "type", "struct");
 		auto nested_fields_arr = yyjson_mut_obj_add_arr(doc, field_obj, "fields");
@@ -133,6 +135,16 @@ void IcebergTableSchema::SchemaToJson(yyjson_mut_doc *doc, yyjson_mut_val *root_
 	D_ASSERT(schema.object_1.has_schema_id);
 	yyjson_mut_obj_add_uint(doc, root_object, "schema-id", schema.object_1.schema_id);
 	yyjson_mut_obj_add_arr(doc, root_object, "identifier-field-ids");
+}
+
+const LogicalType &IcebergTableSchema::GetColumnTypeFromFieldId(idx_t field_id) const {
+	for (auto &column : columns) {
+		if (column->id == field_id) {
+			return column->type;
+		}
+	}
+	throw InvalidInputException("GetColumnTypeFromFieldId:: field id %d does not exist in schema with id %d", field_id,
+	                            schema_id);
 }
 
 } // namespace duckdb

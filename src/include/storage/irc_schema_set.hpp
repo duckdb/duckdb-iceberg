@@ -1,6 +1,10 @@
 
 #pragma once
 
+#include "irc_schema_entry.hpp"
+#include "duckdb/common/string.hpp"
+
+#include "duckdb/common/unique_ptr.hpp"
 #include "storage/irc_schema_entry.hpp"
 
 namespace duckdb {
@@ -14,17 +18,18 @@ public:
 	void LoadEntries(ClientContext &context);
 	optional_ptr<CatalogEntry> GetEntry(ClientContext &context, const string &name, OnEntryNotFound if_not_found);
 	void Scan(ClientContext &context, const std::function<void(CatalogEntry &)> &callback);
+	const case_insensitive_map_t<unique_ptr<CatalogEntry>> &GetEntries();
+	void AddEntry(const string &name, unique_ptr<IRCSchemaEntry> entry);
+	CatalogEntry &GetEntry(const string &name);
 
 protected:
 	optional_ptr<CatalogEntry> CreateEntryInternal(ClientContext &context, unique_ptr<CatalogEntry> entry);
 
 public:
 	Catalog &catalog;
-	case_insensitive_map_t<unique_ptr<CatalogEntry>> entries;
-	//! Whether a listing has been done for the catalog
-	bool listed = false;
 
 private:
+	case_insensitive_map_t<unique_ptr<CatalogEntry>> entries;
 	mutex entry_lock;
 };
 

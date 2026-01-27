@@ -19,12 +19,13 @@ class IRCSchemaEntry;
 
 class MetadataCacheValue {
 public:
-	const string data;
 	const system_clock::time_point expires_at;
+	unique_ptr<const rest_api_objects::LoadTableResult> load_table_result;
 
 public:
-	MetadataCacheValue(const string &data_, const system_clock::time_point expires_at_)
-	    : data(data_), expires_at(expires_at_) {
+	MetadataCacheValue(const system_clock::time_point expires_at,
+	                   unique_ptr<const rest_api_objects::LoadTableResult> load_table_result)
+	    : expires_at(expires_at), load_table_result(std::move(load_table_result)) {
 	}
 };
 
@@ -78,6 +79,7 @@ public:
 	void DropSchema(ClientContext &context, DropInfo &info) override;
 	optional_ptr<CatalogEntry> CreateSchema(CatalogTransaction transaction, CreateSchemaInfo &info) override;
 	void ScanSchemas(ClientContext &context, std::function<void(SchemaCatalogEntry &)> callback) override;
+	IRCSchemaSet &GetSchemas();
 	optional_ptr<SchemaCatalogEntry> LookupSchema(CatalogTransaction transaction, const EntryLookupInfo &schema_lookup,
 	                                              OnEntryNotFound if_not_found) override;
 	PhysicalOperator &PlanInsert(ClientContext &context, PhysicalPlanGenerator &planner, LogicalInsert &op,
@@ -93,11 +95,16 @@ public:
 	DatabaseSize GetDatabaseSize(ClientContext &context) override;
 	void AddDefaultSupportedEndpoints();
 	void AddS3TablesEndpoints();
+	void AddGlueEndpoints();
 	//! Whether or not this is an in-memory Iceberg database
 	bool InMemory() override;
 	string GetDBPath() override;
 	static string GetOnlyMergeOnReadSupportedErrorMessage(const string &table_name, const string &property,
 	                                                      const string &property_value);
+	void StoreLoadTableResult(const string &table_key,
+	                          unique_ptr<const rest_api_objects::LoadTableResult> load_table_result);
+	MetadataCacheValue &GetLoadTableResult(const string &table_key);
+	void RemoveLoadTableResult(string table_key);
 
 public:
 	AccessMode access_mode;
@@ -122,10 +129,11 @@ private:
 
 public:
 	unordered_set<string> supported_urls;
+	IRCSchemaSet schemas;
 
 private:
 	std::mutex metadata_cache_mutex;
-	unordered_map<string, unique_ptr<MetadataCacheValue>> metadata_cache;
+	case_insensitive_map_t<unique_ptr<MetadataCacheValue>> metadata_cache;
 };
 
 } // namespace duckdb

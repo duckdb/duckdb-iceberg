@@ -11,6 +11,8 @@
 #include "duckdb/parallel/thread_context.hpp"
 #include "duckdb/common/insertion_order_preserving_map.hpp"
 
+#include "metadata/iceberg_table_schema.hpp"
+
 namespace duckdb {
 
 struct IcebergTableInformation;

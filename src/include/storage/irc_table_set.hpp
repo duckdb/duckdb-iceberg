@@ -1,6 +1,7 @@
 
 #pragma once
 
+#include "iceberg_table_information.hpp"
 #include "duckdb/catalog/catalog_entry.hpp"
 #include "storage/irc_table_entry.hpp"
 #include "storage/iceberg_table_information.hpp"
@@ -21,7 +22,10 @@ public:
 	                                            const string &table_name);
 	optional_ptr<CatalogEntry> GetEntry(ClientContext &context, const EntryLookupInfo &lookup);
 	void Scan(ClientContext &context, const std::function<void(CatalogEntry &)> &callback);
-	bool CreateNewEntry(ClientContext &context, IRCatalog &catalog, IRCSchemaEntry &schema, CreateTableInfo &info);
+	static bool CreateNewEntry(ClientContext &context, IRCatalog &catalog, IRCSchemaEntry &schema,
+	                           CreateTableInfo &info);
+	const case_insensitive_map_t<IcebergTableInformation> &GetEntries();
+	case_insensitive_map_t<IcebergTableInformation> &GetEntriesMutable();
 
 public:
 	void LoadEntries(ClientContext &context);
@@ -32,11 +36,9 @@ public:
 public:
 	IRCSchemaEntry &schema;
 	Catalog &catalog;
-	case_insensitive_map_t<IcebergTableInformation> entries;
-	//! Whether a listing is done for this transaction
-	bool listed = false;
 
 private:
+	case_insensitive_map_t<IcebergTableInformation> entries;
 	mutex entry_lock;
 };
 

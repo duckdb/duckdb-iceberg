@@ -38,16 +38,25 @@ public:
 
 public:
 	unique_ptr<BaseStatistics> GetStatistics(ClientContext &context, column_t column_id) override;
-	string PrepareIcebergScanFromEntry(ClientContext &context) const;
+	void PrepareIcebergScanFromEntry(ClientContext &context) const;
 	TableFunction GetScanFunction(ClientContext &context, unique_ptr<FunctionData> &bind_data) override;
 	TableFunction GetScanFunction(ClientContext &context, unique_ptr<FunctionData> &bind_data,
 	                              const EntryLookupInfo &lookup) override;
 	TableStorageInfo GetStorageInfo(ClientContext &context) override;
 	void BindUpdateConstraints(Binder &binder, LogicalGet &get, LogicalProjection &proj, LogicalUpdate &update,
 	                           ClientContext &context) override;
+	string GetUUID() const;
 
 public:
 	IcebergTableInformation &table_info;
+};
+
+struct ICTableEntryHashFunction {
+	uint64_t operator()(const optional_ptr<ICTableEntry> &entry) const {
+		D_ASSERT(entry);
+		auto table_uuid = entry->GetUUID();
+		return std::hash<string>()(table_uuid);
+	}
 };
 
 } // namespace duckdb

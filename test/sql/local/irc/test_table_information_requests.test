@@ -19,7 +19,7 @@ statement ok
 set enable_logging=true
 
 statement ok
-set logging_level='debug'
+set logging_level='debug';
 
 statement ok
 CALL enable_logging('HTTP');
@@ -71,20 +71,22 @@ s_phone	VARCHAR
 s_acctbal	DECIMAL(15,2)
 s_comment	VARCHAR
 
-# one request to verify the default schema
-# another request to verify table default.supplier
+# schema default is saved between queries
+# one request to verify table default.supplier
 # another request to the table information endpoint
 # FIXME: apparantly there is also a request to an avro file
 query I
 select count(*) from duckdb_logs_parsed('HTTP');
 ----
-4
+3
 
 statement ok
 begin;
 
-statement ok
-show all tables;
+query I
+select count(*) > 30 from (show all tables);
+----
+1
 
 query I
 select distinct(s_nationkey) from my_datalake.default.supplier order by all limit 5;
@@ -98,10 +100,8 @@ select distinct(s_nationkey) from my_datalake.default.supplier order by all limi
 statement ok
 commit;
 
-# 5 calls to list the namespaces
-# 1 call the the GetTableInformationEndpoint for supploer
-# (FIXME) 1 call to an avro file in the warehouse
-# 1 call to the manifest file
+# 3 calls from above
+# 5 calls from show all tables above
 # 1 call to the manifest list
 # 2 calls to read parquet files
 query I

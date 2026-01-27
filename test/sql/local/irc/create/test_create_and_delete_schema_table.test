@@ -41,6 +41,12 @@ ATTACH '' AS my_datalake (
 );
 
 statement ok
+drop table if exists my_datalake.new_schema_1.my_table;
+
+statement ok
+drop table if exists my_datalake.new_schema_1.table_2;
+
+statement ok
 drop schema if exists my_datalake.new_schema_1;
 
 statement ok
@@ -73,12 +79,12 @@ drop table my_datalake.new_schema_1.my_table;
 statement error
 create or replace table my_datalake.new_schema_1.table_2 as select range a from range(300);
 ----
-<REGEX>:.*CREATE OR REPLACE not supported.*
+<REGEX>:.*CREATE OR REPLACE not supported in DuckDB-Iceberg. Please use separate Drop and Create Statements.*
 
 statement error
 create or replace schema my_datalake.new_schema_1;
 ----
-<REGEX>:.*CREATE OR REPLACE not supported.*
+<REGEX>:.*CREATE OR REPLACE not supported in DuckDB-Iceberg. Please use separate Drop and Create Statements.*
 
 statement ok
 drop schema my_datalake.new_schema_1;

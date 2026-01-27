@@ -51,7 +51,7 @@ public:
 	static vector<string> ParseSchemaName(const string &namespace_name);
 	static string GetSchemaName(const vector<string> &items);
 	static string GetEncodedSchemaName(const vector<string> &items);
-	static APIResult<rest_api_objects::LoadTableResult>
+	static APIResult<unique_ptr<const rest_api_objects::LoadTableResult>>
 	GetTable(ClientContext &context, IRCatalog &catalog, const IRCSchemaEntry &schema, const string &table_name);
 	static vector<IRCAPISchema> GetSchemas(ClientContext &context, IRCatalog &catalog, const vector<string> &parent);
 	static void CommitTableUpdate(ClientContext &context, IRCatalog &catalog, const vector<string> &schema,

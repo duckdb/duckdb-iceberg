@@ -41,7 +41,7 @@ statement ok
 drop table if exists duid;
 
 statement ok
-create table if not exists duid as select range a from range(100);
+create table if not exists duid as select range a from range(10);
 
 statement ok
 begin;
@@ -50,20 +50,43 @@ statement ok
 drop table if exists duid;
 
 statement error
-create table if not exists duid as select range a from range(100);
+select * from duid;
 ----
-<REGEX>:.*Not implemented Error: Cannot create table previously deleted in the same transactio.*
+<REGEX>:.*Catalog Error: Table with name duid does not exist.*
+
+statement error
+create table if not exists duid as select range a from range(10);
+----
+<REGEX>:.*Cannot create table deleted within a transaction: my_datalake.default.duid.*
 
 statement ok
-commit;
+ROLLBACK;
+
+# duid still exists
+statement ok
+select * from duid
+
+statement ok
+begin;
+
+statement ok
+drop table if exists duid;
+
+statement error
+create table duid as select range a from range(10);
+----
+<REGEX>:.*Not implemented Error: Cannot create table deleted within a transaction: my_datalake.default.duid.*
+
+statement ok
+ROLLBACK
 
 statement error
 create or replace table duid (a int);
 ----
-<REGEX>:.*Invalid Input.*CREATE OR REPLACE not supported.*
+<REGEX>:.*Not implemented Error.*CREATE OR REPLACE not supported in DuckDB-Iceberg. Please use separate Drop and Create Statements.*
 
 statement error
 create or replace schema new_schema;
 ----
-<REGEX>:.*Invalid Input.*CREATE OR REPLACE not supported.*
+<REGEX>:.*Not implemented Error.*CREATE OR REPLACE not supported in DuckDB-Iceberg. Please use separate Drop and Create Statements.*
 

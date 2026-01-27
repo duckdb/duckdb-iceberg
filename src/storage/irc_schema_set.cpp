@@ -41,7 +41,6 @@ optional_ptr<CatalogEntry> IRCSchemaSet::GetEntry(ClientContext &context, const 
 		info.schema = name;
 		info.internal = false;
 		auto schema_entry = make_uniq<IRCSchemaEntry>(catalog, info);
-		schema_entry->namespace_items = IRCAPI::ParseSchemaName(name);
 		CreateEntryInternal(context, std::move(schema_entry));
 		entry = entries.find(name);
 		D_ASSERT(entry != entries.end());
@@ -57,16 +56,34 @@ void IRCSchemaSet::Scan(ClientContext &context, const std::function<void(Catalog
 	}
 }
 
+void IRCSchemaSet::AddEntry(const string &name, unique_ptr<IRCSchemaEntry> entry) {
+	entries.insert(make_pair(name, std::move(entry)));
+}
+
+CatalogEntry &IRCSchemaSet::GetEntry(const string &name) {
+	auto entry_it = entries.find(name);
+	if (entry_it == entries.end()) {
+		throw CatalogException("Schema '%s' does not exist", name);
+	}
+	auto &entry = entry_it->second;
+	return *entry;
+}
+
+const case_insensitive_map_t<unique_ptr<CatalogEntry>> &IRCSchemaSet::GetEntries() {
+	return entries;
+}
+
 static string GetSchemaName(const vector<string> &items) {
 	return StringUtil::Join(items, ".");
 }
 
 void IRCSchemaSet::LoadEntries(ClientContext &context) {
-	if (listed) {
+	auto &ic_catalog = catalog.Cast<IRCatalog>();
+	auto &irc_transaction = IRCTransaction::Get(context, catalog);
+	bool schema_listed = irc_transaction.called_list_schemas;
+	if (schema_listed) {
 		return;
 	}
-
-	auto &ic_catalog = catalog.Cast<IRCatalog>();
 	auto schemas = IRCAPI::GetSchemas(context, ic_catalog, {});
 	for (const auto &schema : schemas) {
 		CreateSchemaInfo info;
@@ -76,7 +93,7 @@ void IRCSchemaSet::LoadEntries(ClientContext &context) {
 		schema_entry->namespace_items = std::move(schema.items);
 		CreateEntryInternal(context, std::move(schema_entry));
 	}
-	listed = true;
+	irc_transaction.called_list_schemas = true;
 }
 
 optional_ptr<CatalogEntry> IRCSchemaSet::CreateEntryInternal(ClientContext &context, unique_ptr<CatalogEntry> entry) {

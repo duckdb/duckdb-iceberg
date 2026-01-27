@@ -3,7 +3,7 @@
 
 namespace duckdb {
 
-IcebergSortOrderField IcebergSortOrderField::ParseFromJson(rest_api_objects::SortField &field) {
+IcebergSortOrderField IcebergSortOrderField::ParseFromJson(const rest_api_objects::SortField &field) {
 	IcebergSortOrderField result;
 	result.source_id = field.source_id;
 	result.transform = field.transform.value;
@@ -12,7 +12,7 @@ IcebergSortOrderField IcebergSortOrderField::ParseFromJson(rest_api_objects::Sor
 	return result;
 }
 
-IcebergSortOrder IcebergSortOrder::ParseFromJson(rest_api_objects::SortOrder &sort_order_spec) {
+IcebergSortOrder IcebergSortOrder::ParseFromJson(const rest_api_objects::SortOrder &sort_order_spec) {
 	IcebergSortOrder result;
 
 	result.sort_order_id = sort_order_spec.order_id;

@@ -30,6 +30,7 @@ public:
 	TableRequirementType type;
 	string ref;
 	int64_t snapshot_id;
+	bool has_snapshot_id = false;
 };
 
 } // namespace rest_api_objects

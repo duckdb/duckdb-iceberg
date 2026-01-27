@@ -11,24 +11,18 @@
 #include "storage/table_update/iceberg_add_snapshot.hpp"
 #include "storage/table_create/iceberg_create_table_request.hpp"
 #include "catalog_utils.hpp"
+#include "yyjson.hpp"
+#include "metadata/iceberg_snapshot.hpp"
+#include "storage/irc_catalog.hpp"
 #include "duckdb/storage/table/update_state.hpp"
 
 namespace duckdb {
 
 IRCTransaction::IRCTransaction(IRCatalog &ic_catalog, TransactionManager &manager, ClientContext &context)
-    : Transaction(manager, context), db(*context.db), catalog(ic_catalog), access_mode(ic_catalog.access_mode),
-      schemas(ic_catalog) {
+    : Transaction(manager, context), db(*context.db), catalog(ic_catalog), access_mode(ic_catalog.access_mode) {
 }
 
 IRCTransaction::~IRCTransaction() = default;
-
-void IRCTransaction::MarkTableAsDirty(const ICTableEntry &table) {
-	dirty_tables.insert(&table);
-}
-
-void IRCTransaction::MarkTableAsDeleted(const ICTableEntry &table) {
-	deleted_tables.insert(&table);
-}
 
 void IRCTransaction::Start() {
 }
@@ -47,7 +41,11 @@ void CommitTableToJSON(yyjson_mut_doc *doc, yyjson_mut_val *root_object,
 			auto requirement_json = yyjson_mut_arr_add_obj(doc, requirements_array);
 			yyjson_mut_obj_add_strcpy(doc, requirement_json, "type", assert_ref_snapshot_id.type.value.c_str());
 			yyjson_mut_obj_add_strcpy(doc, requirement_json, "ref", assert_ref_snapshot_id.ref.c_str());
-			yyjson_mut_obj_add_uint(doc, requirement_json, "snapshot-id", assert_ref_snapshot_id.snapshot_id);
+			if (assert_ref_snapshot_id.has_snapshot_id) {
+				yyjson_mut_obj_add_uint(doc, requirement_json, "snapshot-id", assert_ref_snapshot_id.snapshot_id);
+			} else {
+				yyjson_mut_obj_add_null(doc, requirement_json, "snapshot-id");
+			}
 		} else if (requirement.has_assert_create) {
 			auto &assert_create = requirement.assert_create;
 			auto requirement_json = yyjson_mut_arr_add_obj(doc, requirements_array);
@@ -230,6 +228,18 @@ static rest_api_objects::TableRequirement CreateAssertRefSnapshotIdRequirement(I
 	auto &res = req.assert_ref_snapshot_id;
 	res.ref = "main";
 	res.snapshot_id = old_snapshot.snapshot_id;
+	res.has_snapshot_id = true;
+	res.type.value = "assert-ref-snapshot-id";
+	return req;
+}
+
+static rest_api_objects::TableRequirement CreateAssertNoSnapshotRequirement() {
+	rest_api_objects::TableRequirement req;
+	req.has_assert_ref_snapshot_id = true;
+
+	auto &res = req.assert_ref_snapshot_id;
+	res.ref = "main";
+	res.has_snapshot_id = false;
 	res.type.value = "assert-ref-snapshot-id";
 	return req;
 }
@@ -259,18 +269,19 @@ static rest_api_objects::TableUpdate CreateSetSnapshotRefUpdate(int64_t snapshot
 TableTransactionInfo IRCTransaction::GetTransactionRequest(ClientContext &context) {
 	TableTransactionInfo info;
 	auto &transaction = info.request;
-	for (auto &table : dirty_tables) {
-		if (!table->table_info.transaction_data) {
+	for (auto &updated_table : updated_tables) {
+		auto &table_info = updated_table.second;
+		if (!table_info.transaction_data) {
 			continue;
 		}
 		IcebergCommitState commit_state;
 		auto &table_change = commit_state.table_change;
-		auto &schema = table->ParentSchema().Cast<IRCSchemaEntry>();
+		auto &schema = table_info.schema.Cast<IRCSchemaEntry>();
 		table_change.identifier._namespace.value = schema.namespace_items;
-		table_change.identifier.name = table->name;
+		table_change.identifier.name = table_info.name;
 		table_change.has_identifier = true;
 
-		auto &metadata = table->table_info.table_metadata;
+		auto &metadata = table_info.table_metadata;
 		auto current_snapshot = metadata.GetLatestSnapshot();
 		if (current_snapshot) {
 			auto &manifest_list_path = current_snapshot->manifest_list;
@@ -283,11 +294,12 @@ TableTransactionInfo IRCTransaction::GetTransactionRequest(ClientContext &contex
 			}
 		}
 
-		auto &transaction_data = *table->table_info.transaction_data;
+		auto &transaction_data = *table_info.transaction_data;
 		for (auto &update : transaction_data.updates) {
 			if (update->type == IcebergTableUpdateType::ADD_SNAPSHOT) {
 				// we need to recreate the keys in the current context.
-				table->PrepareIcebergScanFromEntry(context);
+				auto &ic_table_entry = table_info.GetLatestSchema()->Cast<ICTableEntry>();
+				ic_table_entry.PrepareIcebergScanFromEntry(context);
 			}
 			update->CreateUpdate(db, context, commit_state);
 		}
@@ -307,6 +319,10 @@ TableTransactionInfo IRCTransaction::GetTransactionRequest(ClientContext &contex
 			//! If any changes were made to the state of the table, we should assert that our parent snapshot has
 			//! not changed. We don't want to change the table location if someone has added a snapshot
 			commit_state.table_change.requirements.push_back(CreateAssertRefSnapshotIdRequirement(*current_snapshot));
+		} else if (!info.has_assert_create) {
+			//! If the table had no snapshots and isn't created by this transaction, we should assert that no snapshot
+			//! has been added in the meantime
+			commit_state.table_change.requirements.push_back(CreateAssertNoSnapshotRequirement());
 		}
 
 		transaction.table_changes.push_back(std::move(table_change));
@@ -315,7 +331,7 @@ TableTransactionInfo IRCTransaction::GetTransactionRequest(ClientContext &contex
 }
 
 void IRCTransaction::Commit() {
-	if (dirty_tables.empty() && deleted_tables.empty()) {
+	if (updated_tables.empty() && deleted_tables.empty()) {
 		return;
 	}
 
@@ -337,7 +353,7 @@ void IRCTransaction::Commit() {
 }
 
 void IRCTransaction::DoTableUpdates(ClientContext &context) {
-	if (!dirty_tables.empty()) {
+	if (!updated_tables.empty()) {
 		auto transaction_info = GetTransactionRequest(context);
 		auto &transaction = transaction_info.request;
 
@@ -365,14 +381,21 @@ void IRCTransaction::DoTableUpdates(ClientContext &context) {
 				                          table_change.identifier.name, transaction_json);
 			}
 		}
+		updated_tables.clear();
 		DropSecrets(context);
 	}
 }
 
 void IRCTransaction::DoTableDeletes(ClientContext &context) {
-	for (auto &table : deleted_tables) {
-		auto &irc_schema = table->ParentSchema().Cast<IRCSchemaEntry>();
-		IRCAPI::CommitTableDelete(context, catalog, irc_schema.namespace_items, table->name);
+	auto &ic_catalog = catalog.Cast<IRCatalog>();
+	for (auto &deleted_table : deleted_tables) {
+		auto &table = deleted_table.second;
+		auto schema_key = table.schema.name;
+		auto table_key = table.GetTableKey();
+		auto table_name = table.name;
+		IRCAPI::CommitTableDelete(context, catalog, table.schema.namespace_items, table.name);
+		// remove the load table result
+		ic_catalog.RemoveLoadTableResult(table_key);
 	}
 }
 
@@ -385,9 +408,16 @@ void IRCTransaction::CleanupFiles() {
 		return;
 	}
 	auto &fs = FileSystem::GetFileSystem(db);
-	for (auto &table : dirty_tables) {
-		auto &transaction_data = *table->table_info.transaction_data;
-		for (auto &update : transaction_data.updates) {
+	for (auto &up_table : updated_tables) {
+		auto &table = up_table.second;
+		if (!table.transaction_data) {
+			// error occurred before transaction data was initialized
+			// this can happen during table creation with table schema that cannot convert to
+			// an iceberg table schema due to type incompatabilities
+			continue;
+		}
+		auto &transaction_data = table.transaction_data;
+		for (auto &update : transaction_data->updates) {
 			if (update->type != IcebergTableUpdateType::ADD_SNAPSHOT) {
 				continue;
 			}

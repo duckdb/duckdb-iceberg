@@ -39,6 +39,9 @@ statement ok
 use my_datalake.test_create;
 
 statement ok
+drop table if exists test_basic_create;
+
+statement ok
 create table test_basic_create (a int);
 
 query I
