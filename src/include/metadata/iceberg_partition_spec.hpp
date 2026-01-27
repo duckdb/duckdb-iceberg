@@ -1,6 +1,5 @@
 #pragma once
 
-#include "rest_catalog/objects/async_planning_result.hpp"
 #include "metadata/iceberg_transform.hpp"
 #include "duckdb/common/types/vector.hpp"
 

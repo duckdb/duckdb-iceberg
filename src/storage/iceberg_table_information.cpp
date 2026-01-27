@@ -1,7 +1,6 @@
 #include "storage/iceberg_table_information.hpp"
 
-#include "catalog_api.hpp"
-#include "../include/storage/iceberg_transaction_data.hpp"
+#include "catalog_api.hpp" p"
 #include "duckdb/common/case_insensitive_map.hpp"
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/common/exception/transaction_exception.hpp"
