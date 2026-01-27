@@ -79,8 +79,7 @@ static void LoadInternal(ExtensionLoader &loader) {
 
 	auto &log_manager = instance.GetLogManager();
 	log_manager.RegisterLogType(make_uniq<IcebergLogType>());
-
-	config.storage_extensions["iceberg"] = make_uniq<IRCStorageExtension>();
+	StorageExtension::Register(config, "iceberg", make_shared_ptr<IRCStorageExtension>());
 }
 
 void IcebergExtension::Load(ExtensionLoader &loader) {

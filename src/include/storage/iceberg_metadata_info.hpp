@@ -23,6 +23,8 @@ struct IcebergDeleteFileInfo {
 	optional_idx footer_size;
 	idx_t delete_count;
 	idx_t file_size_bytes = 0;
+	idx_t pos_max_value;
+	idx_t pos_min_value;
 };
 
 struct IcebergFileData {

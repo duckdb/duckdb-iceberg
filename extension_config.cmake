@@ -19,7 +19,7 @@ duckdb_extension_load(icu)
 duckdb_extension_load(ducklake
         LOAD_TESTS
         GIT_URL https://github.com/duckdb/ducklake
-        GIT_TAG 64f3b12fa3f364efa9696ff70922d7f22325873a
+        GIT_TAG 73adbb015e31607f11c30484dd34dfc541758bdd
 )
 
 if (NOT MINGW)
