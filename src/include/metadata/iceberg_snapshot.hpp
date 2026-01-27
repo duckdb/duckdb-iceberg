@@ -24,6 +24,7 @@ public:
 	int64_t parent_snapshot_id = NumericLimits<int64_t>::Maximum();
 	int64_t sequence_number;
 	int32_t schema_id;
+	int64_t first_row_id;
 	IcebergSnapshotOperationType operation;
 	timestamp_t timestamp_ms;
 	string manifest_list;

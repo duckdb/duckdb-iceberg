@@ -39,6 +39,8 @@ rest_api_objects::Snapshot IcebergSnapshot::ToRESTObject() const {
 
 	res.has_schema_id = true;
 	res.schema_id = schema_id;
+	res.has_first_row_id = true;
+	res.first_row_id = first_row_id;
 
 	return res;
 }
