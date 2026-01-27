@@ -40,6 +40,7 @@ string LoadTableResult::TryFromJSON(yyjson_val *obj) {
 		has_metadata_location = true;
 		if (yyjson_is_null(metadata_location_val)) {
 			//! do nothing, property is explicitly nullable
+			has_metadata_location = false;
 		} else if (yyjson_is_str(metadata_location_val)) {
 			metadata_location = yyjson_get_str(metadata_location_val);
 		} else {

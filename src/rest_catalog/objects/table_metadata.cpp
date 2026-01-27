@@ -270,7 +270,10 @@ string TableMetadata::TryFromJSON(yyjson_val *obj) {
 	auto current_snapshot_id_val = yyjson_obj_get(obj, "current-snapshot-id");
 	if (current_snapshot_id_val) {
 		has_current_snapshot_id = true;
-		if (yyjson_is_sint(current_snapshot_id_val)) {
+		if (yyjson_is_null(current_snapshot_id_val)) {
+			//! do nothing, property is explicitly nullable
+			has_current_snapshot_id = false;
+		} else if (yyjson_is_sint(current_snapshot_id_val)) {
 			current_snapshot_id = yyjson_get_sint(current_snapshot_id_val);
 		} else if (yyjson_is_uint(current_snapshot_id_val)) {
 			current_snapshot_id = yyjson_get_uint(current_snapshot_id_val);

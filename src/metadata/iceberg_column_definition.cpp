@@ -165,7 +165,7 @@ LogicalType IcebergColumnDefinition::ParsePrimitiveTypeString(const string &type
 		return LogicalType::DECIMAL(width, scale);
 	}
 	if (type_str == "variant") {
-		return LogicalType::JSON();
+		return LogicalType::VARIANT();
 	}
 	throw InvalidConfigurationException("Unrecognized primitive type: %s", type_str);
 }

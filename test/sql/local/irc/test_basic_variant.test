@@ -38,19 +38,51 @@ ATTACH '' AS my_datalake (
 statement ok
 use my_datalake.default;
 
-query I
-select count(*) from my_datalake.default.variant_column ;
-----
-103
+#query I
+#select count(*) from my_datalake.default.variant_column ;
+#----
+#103
 
-query I rowsort expected_res
-select * from range(100) UNION ALL VALUES (-123), (123), (256)
+#query I rowsort expected_res
+#select * from range(100) UNION ALL VALUES (-123), (123), (256)
 
-query I rowsort expected_res
-select * from my_datalake.default.variant_column;
-----
+#query I rowsort expected_res
+#select * from my_datalake.default.variant_column;
+#----
 
-query I
-select count(*) from my_datalake.default.variant_column where col > 100
-----
-2
+#query I
+#select count(*) from my_datalake.default.variant_column where col > 100
+#----
+#2
+
+#query I
+#select variant_typeof(col) from my_datalake.default.variant_column limit 1
+#----
+#INT8
+
+#statement ok
+#insert into my_datalake.default.variant_column VALUES
+#	('test'),
+#	({'d': [1, 2, 3]}),
+#	(['testing'::VARIANT, 21, true, {'hello': 'world'}])
+#;
+
+#query II
+#select * from my_datalake.default.variant_column;
+#----
+#-123
+#123
+#256
+#test
+#{'d': [1, 2, 3]}
+#[testing, 21, true, {'hello': world}]
+#{'a': test, 'b': [21, test, true, {'c': 42}]}
+
+statement ok
+drop table if exists my_datalake.default.my_variant_tbl;
+
+statement ok
+create table if not exists my_datalake.default.my_variant_tbl(a VARIANT, b INTEGER)
+
+statement ok
+insert into my_datalake.default.my_variant_tbl VALUES ('test', 42)

@@ -25,7 +25,7 @@ static void AddUnnamedField(yyjson_mut_doc *doc, yyjson_mut_val *field_obj, Iceb
 static void AddNamedField(yyjson_mut_doc *doc, yyjson_mut_val *field_obj, IcebergColumnDefinition &column) {
 	yyjson_mut_obj_add_strcpy(doc, field_obj, "name", column.name.c_str());
 	yyjson_mut_obj_add_uint(doc, field_obj, "id", column.id);
-	if (column.type.IsNested()) {
+	if (column.type.id() != LogicalTypeId::VARIANT && column.type.IsNested()) {
 		auto type_obj = yyjson_mut_obj_add_obj(doc, field_obj, "type");
 		AddUnnamedField(doc, type_obj, column);
 		yyjson_mut_obj_add_bool(doc, field_obj, "required", column.required);
@@ -171,6 +171,7 @@ string IcebergCreateTableRequest::CreateTableToJSON(std::unique_ptr<yyjson_mut_d
 	// unused, but we want to add teh objects
 	auto write_order_fields = yyjson_mut_obj_add_arr(doc, write_order, "fields");
 	auto properties = yyjson_mut_obj_add_obj(doc, root_object, "properties");
+	yyjson_mut_obj_add_strcpy(doc, properties, "format-version", "3");
 
 	return ICUtils::JsonToString(std::move(doc_p));
 }

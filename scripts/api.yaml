@@ -2566,6 +2566,7 @@ components:
         refs:
           $ref: '#/components/schemas/SnapshotReferences'
         current-snapshot-id:
+          nullable: true
           type: integer
           format: int64
         last-sequence-number:
@@ -3144,7 +3145,6 @@ components:
       required:
         - type
         - ref
-        - snapshot-id
       properties:
         type:
           $ref: '#/components/schemas/TableRequirementType'

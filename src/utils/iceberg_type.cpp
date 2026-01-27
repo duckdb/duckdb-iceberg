@@ -48,6 +48,8 @@ string IcebergTypeHelper::LogicalTypeToIcebergType(const LogicalType &type) {
 		return "timestamptz";
 	case LogicalTypeId::MAP:
 		return "map";
+	case LogicalTypeId::VARIANT:
+		return "variant";
 	default:
 		throw InvalidInputException("Column type %s is not a valid Iceberg Type.", LogicalTypeIdToString(type.id()));
 	}

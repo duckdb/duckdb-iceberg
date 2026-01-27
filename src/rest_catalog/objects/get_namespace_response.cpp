@@ -40,6 +40,7 @@ string GetNamespaceResponse::TryFromJSON(yyjson_val *obj) {
 		has_properties = true;
 		if (yyjson_is_null(properties_val)) {
 			//! do nothing, property is explicitly nullable
+			has_properties = false;
 		} else if (yyjson_is_obj(properties_val)) {
 			size_t idx, max;
 			yyjson_val *key, *val;
