@@ -50,7 +50,7 @@ IcebergSnapshot IcebergSnapshot::ParseSnapshot(const rest_api_objects::Snapshot 
 	IcebergSnapshot ret;
 	if (metadata.iceberg_version == 1) {
 		ret.sequence_number = 0;
-	} else if (metadata.iceberg_version == 2) {
+	} else if (metadata.iceberg_version >= 2) {
 		D_ASSERT(snapshot.has_sequence_number);
 		ret.sequence_number = snapshot.sequence_number;
 	}

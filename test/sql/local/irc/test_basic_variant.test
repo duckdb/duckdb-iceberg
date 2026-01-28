@@ -177,21 +177,19 @@ test
 {'d': [1, 2, 3]}
 [testing, 21, true, {'hello': world}]
 
-mode skip
-
 statement ok
 drop table if exists my_datalake.default.my_variant_tbl;
 
 statement ok
 create table if not exists my_datalake.default.my_variant_tbl(a VARIANT, b INTEGER)
 
-#statement ok
-#insert into my_datalake.default.my_variant_tbl VALUES ('test', 42)
+statement ok
+insert into my_datalake.default.my_variant_tbl VALUES ('test', 42)
 
-#query I
-#select a from my_datalake.default.my_variant_tbl;
-#----
-#test
+query I
+select a from my_datalake.default.my_variant_tbl;
+----
+test
 
 statement ok
 insert into my_datalake.default.my_variant_tbl VALUES ({'a': 1337, 'b': [1::VARIANT, 'hello world', {'d': 41}]}, 43)
@@ -199,14 +197,17 @@ insert into my_datalake.default.my_variant_tbl VALUES ({'a': 1337, 'b': [1::VARI
 query I
 select a from my_datalake.default.my_variant_tbl
 ----
+test
 {'a': 1337, 'b': [1, hello world, {'d': 41}]}
 
 query I
 select variant_typeof(a) from my_datalake.default.my_variant_tbl
 ----
+VARCHAR
 OBJECT(a, b)
 
 query I
 select variant_typeof(a.b) from my_datalake.default.my_variant_tbl
 ----
+VARIANT_NULL
 ARRAY(3)
