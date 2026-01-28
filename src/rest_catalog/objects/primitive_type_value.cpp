@@ -26,89 +26,77 @@ PrimitiveTypeValue PrimitiveTypeValue::FromJSON(yyjson_val *obj) {
 
 string PrimitiveTypeValue::TryFromJSON(yyjson_val *obj) {
 	string error;
-	do {
-		error = boolean_type_value.TryFromJSON(obj);
-		if (error.empty()) {
-			has_boolean_type_value = true;
-			break;
-		}
-		error = integer_type_value.TryFromJSON(obj);
-		if (error.empty()) {
-			has_integer_type_value = true;
-			break;
-		}
-		error = long_type_value.TryFromJSON(obj);
-		if (error.empty()) {
-			has_long_type_value = true;
-			break;
-		}
-		error = float_type_value.TryFromJSON(obj);
-		if (error.empty()) {
-			has_float_type_value = true;
-			break;
-		}
-		error = double_type_value.TryFromJSON(obj);
-		if (error.empty()) {
-			has_double_type_value = true;
-			break;
-		}
-		error = decimal_type_value.TryFromJSON(obj);
-		if (error.empty()) {
-			has_decimal_type_value = true;
-			break;
-		}
-		error = string_type_value.TryFromJSON(obj);
-		if (error.empty()) {
-			has_string_type_value = true;
-			break;
-		}
-		error = uuidtype_value.TryFromJSON(obj);
-		if (error.empty()) {
-			has_uuidtype_value = true;
-			break;
-		}
-		error = date_type_value.TryFromJSON(obj);
-		if (error.empty()) {
-			has_date_type_value = true;
-			break;
-		}
-		error = time_type_value.TryFromJSON(obj);
-		if (error.empty()) {
-			has_time_type_value = true;
-			break;
-		}
-		error = timestamp_type_value.TryFromJSON(obj);
-		if (error.empty()) {
-			has_timestamp_type_value = true;
-			break;
-		}
-		error = timestamp_tz_type_value.TryFromJSON(obj);
-		if (error.empty()) {
-			has_timestamp_tz_type_value = true;
-			break;
-		}
-		error = timestamp_nano_type_value.TryFromJSON(obj);
-		if (error.empty()) {
-			has_timestamp_nano_type_value = true;
-			break;
-		}
-		error = timestamp_tz_nano_type_value.TryFromJSON(obj);
-		if (error.empty()) {
-			has_timestamp_tz_nano_type_value = true;
-			break;
-		}
-		error = fixed_type_value.TryFromJSON(obj);
-		if (error.empty()) {
-			has_fixed_type_value = true;
-			break;
-		}
-		error = binary_type_value.TryFromJSON(obj);
-		if (error.empty()) {
-			has_binary_type_value = true;
-			break;
-		}
-		return "PrimitiveTypeValue failed to parse, none of the oneOf candidates matched";
-	} while (false);
+	error = boolean_type_value.TryFromJSON(obj);
+	if (error.empty()) {
+		has_boolean_type_value = true;
+	}
+	error = integer_type_value.TryFromJSON(obj);
+	if (error.empty()) {
+		has_integer_type_value = true;
+	}
+	error = long_type_value.TryFromJSON(obj);
+	if (error.empty()) {
+		has_long_type_value = true;
+	}
+	error = float_type_value.TryFromJSON(obj);
+	if (error.empty()) {
+		has_float_type_value = true;
+	}
+	error = double_type_value.TryFromJSON(obj);
+	if (error.empty()) {
+		has_double_type_value = true;
+	}
+	error = decimal_type_value.TryFromJSON(obj);
+	if (error.empty()) {
+		has_decimal_type_value = true;
+	}
+	error = string_type_value.TryFromJSON(obj);
+	if (error.empty()) {
+		has_string_type_value = true;
+	}
+	error = uuidtype_value.TryFromJSON(obj);
+	if (error.empty()) {
+		has_uuidtype_value = true;
+	}
+	error = date_type_value.TryFromJSON(obj);
+	if (error.empty()) {
+		has_date_type_value = true;
+	}
+	error = time_type_value.TryFromJSON(obj);
+	if (error.empty()) {
+		has_time_type_value = true;
+	}
+	error = timestamp_type_value.TryFromJSON(obj);
+	if (error.empty()) {
+		has_timestamp_type_value = true;
+	}
+	error = timestamp_tz_type_value.TryFromJSON(obj);
+	if (error.empty()) {
+		has_timestamp_tz_type_value = true;
+	}
+	error = timestamp_nano_type_value.TryFromJSON(obj);
+	if (error.empty()) {
+		has_timestamp_nano_type_value = true;
+	}
+	error = timestamp_tz_nano_type_value.TryFromJSON(obj);
+	if (error.empty()) {
+		has_timestamp_tz_nano_type_value = true;
+	}
+	error = fixed_type_value.TryFromJSON(obj);
+	if (error.empty()) {
+		has_fixed_type_value = true;
+	}
+	error = binary_type_value.TryFromJSON(obj);
+	if (error.empty()) {
+		has_binary_type_value = true;
+	}
+	if (!has_binary_type_value && !has_boolean_type_value && !has_date_type_value && !has_decimal_type_value &&
+	    !has_double_type_value && !has_fixed_type_value && !has_float_type_value && !has_integer_type_value &&
+	    !has_long_type_value && !has_string_type_value && !has_time_type_value && !has_timestamp_nano_type_value &&
+	    !has_timestamp_type_value && !has_timestamp_tz_nano_type_value && !has_timestamp_tz_type_value &&
+	    !has_uuidtype_value) {
+		return "PrimitiveTypeValue failed to parse, none of the anyOf candidates matched";
+	}
 	return string();
 }
 
