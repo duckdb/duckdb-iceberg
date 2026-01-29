@@ -102,8 +102,11 @@ void IcebergTransactionData::AddSnapshot(IcebergSnapshotOperationType operation,
 	new_snapshot.sequence_number = sequence_number;
 	new_snapshot.schema_id = table_metadata.current_schema_id;
 	new_snapshot.manifest_list = manifest_list_path;
-	new_snapshot.operation = operation;
 	new_snapshot.timestamp_ms = Timestamp::GetEpochMs(Timestamp::GetCurrentTimestamp());
+	if (table_info.table_metadata.has_next_row_id) {
+		new_snapshot.has_first_row_id = true;
+		new_snapshot.first_row_id = table_info.table_metadata.next_row_id;
+	}
 	new_snapshot.has_parent_snapshot = table_info.table_metadata.has_current_snapshot || !alters.empty();
 	if (new_snapshot.has_parent_snapshot) {
 		if (!alters.empty()) {
@@ -122,6 +125,11 @@ void IcebergTransactionData::AddSnapshot(IcebergSnapshotOperationType operation,
 		break;
 	case IcebergSnapshotOperationType::APPEND:
 		manifest_content_type = IcebergManifestContentType::DATA;
+		new_snapshot.has_added_rows = true;
+		new_snapshot.added_rows = 0;
+		for (auto &data_file : data_files) {
+			new_snapshot.added_rows += data_file.record_count;
+		}
 		break;
 	default:
 		throw NotImplementedException("Cannot have use snapshot operation type REPLACE or OVERWRITE here");
@@ -161,7 +169,11 @@ void IcebergTransactionData::AddUpdateSnapshot(vector<IcebergManifestEntry> &&de
 	new_snapshot.schema_id = table_metadata.current_schema_id;
 	new_snapshot.manifest_list = manifest_list_path;
 	new_snapshot.timestamp_ms = Timestamp::GetEpochMs(Timestamp::GetCurrentTimestamp());
-	new_snapshot.first_row_id = table_metadata.next_row_id;
+	if (table_metadata.iceberg_version >= 3) {
+		D_ASSERT(table_metadata.has_next_row_id);
+		new_snapshot.has_first_row_id = true;
+		new_snapshot.first_row_id = table_metadata.next_row_id;
+	}
 
 	new_snapshot.has_parent_snapshot = table_info.table_metadata.has_current_snapshot || !alters.empty();
 	if (new_snapshot.has_parent_snapshot) {

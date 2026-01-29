@@ -318,9 +318,11 @@ IcebergTableMetadata IcebergTableMetadata::FromTableMetadata(const rest_api_obje
 		}
 		throw InvalidConfigurationException("'current_schema_id' field is missing from the metadata.json file");
 	}
-	D_ASSERT(table_metadata.has_next_row_id);
 	res.current_schema_id = table_metadata.current_schema_id;
-	res.next_row_id = table_metadata.next_row_id;
+	if (table_metadata.has_next_row_id) {
+		res.has_next_row_id = true;
+		res.next_row_id = table_metadata.next_row_id;
+	}
 	if (table_metadata.has_current_snapshot_id && table_metadata.current_snapshot_id != -1) {
 		res.has_current_snapshot = true;
 		res.current_snapshot_id = table_metadata.current_snapshot_id;

@@ -33,14 +33,22 @@ rest_api_objects::Snapshot IcebergSnapshot::ToRESTObject() const {
 		res.has_parent_snapshot_id = true;
 		res.parent_snapshot_id = parent_snapshot_id;
 	}
+	if (has_added_rows) {
+		res.has_added_rows = true;
+		res.added_rows = added_rows;
+	}
 
 	res.has_sequence_number = true;
 	res.sequence_number = sequence_number;
 
 	res.has_schema_id = true;
 	res.schema_id = schema_id;
-	res.has_first_row_id = true;
-	res.first_row_id = first_row_id;
+	if (has_first_row_id) {
+		res.has_first_row_id = true;
+		res.first_row_id = first_row_id;
+	} else {
+		throw InternalException("first-row-id required");
+	}
 
 	return res;
 }
@@ -60,6 +68,12 @@ IcebergSnapshot IcebergSnapshot::ParseSnapshot(const rest_api_objects::Snapshot 
 	D_ASSERT(snapshot.has_schema_id);
 	ret.schema_id = snapshot.schema_id;
 	ret.manifest_list = snapshot.manifest_list;
+
+	ret.has_first_row_id = snapshot.has_first_row_id;
+	ret.first_row_id = snapshot.first_row_id;
+
+	ret.has_added_rows = snapshot.has_added_rows;
+	ret.added_rows = snapshot.added_rows;
 	return ret;
 }
 
