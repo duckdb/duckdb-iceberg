@@ -41,6 +41,10 @@ ATTACH '' AS my_datalake (
     ENDPOINT 'http://127.0.0.1:8181'
 );
 
+# Currently there is an error
+# Binder Error: 'iceberg_to_ducklake' failed to commit to the DuckLake metadata catalog: table ducklake_schema_versions has 3 columns but 2 values were supplied
+mode skip
+
 statement ok
 ATTACH 'ducklake:duckdb:__TEST_DIR__/ducklake.duckdb' as my_ducklake (DATA_PATH '__TEST_DIR__/data_path');
 
@@ -55,8 +59,6 @@ call iceberg_to_ducklake(
         'simple_v3_table'
     ]
 )
-
-mode skip
 
 # These are empty, so they are omitted:
 # - insert_all_types

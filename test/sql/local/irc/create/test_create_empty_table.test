@@ -29,6 +29,8 @@ ATTACH '' AS my_datalake (
     ENDPOINT 'http://127.0.0.1:8181'
 );
 
+statement ok
+drop table if exists my_datalake.default.range_0_table;
 
 statement ok
 CREATE TABLE my_datalake.default.range_0_table AS FROM range(0);

@@ -31,7 +31,6 @@ CREATE SECRET (
     USE_SSL 0
 );
 
-
 statement ok
 ATTACH '' AS my_datalake (
     TYPE ICEBERG,

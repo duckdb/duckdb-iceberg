@@ -473,8 +473,10 @@ public:
 		auto lower_bound_it = entry.lower_bounds.find(2147483546);
 		auto upper_bound_it = entry.upper_bounds.find(2147483546);
 		if (lower_bound_it == entry.lower_bounds.end() || upper_bound_it == entry.upper_bounds.end()) {
-			throw InvalidInputException("No lower/upper bounds are available for the Position Delete File, this is "
-			                            "required for export to DuckLake");
+			throw InvalidInputException(
+			    "No lower/upper bounds are available for the Position Delete File for table %s, this is "
+			    "required for export to DuckLake",
+			    table_name);
 		}
 
 		auto &lower_bound = lower_bound_it->second;

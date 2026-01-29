@@ -24,9 +24,8 @@ namespace duckdb {
 
 IcebergMultiFileList::IcebergMultiFileList(ClientContext &context_p, shared_ptr<IcebergScanInfo> scan_info,
                                            const string &path, const IcebergOptions &options)
-    : MultiFileList(vector<OpenFileInfo> {}, FileGlobOptions::ALLOW_EMPTY), context(context_p),
-      fs(FileSystem::GetFileSystem(context)), scan_info(scan_info), path(path), table(nullptr), lock(),
-      options(options) {
+    : context(context_p), fs(FileSystem::GetFileSystem(context)), scan_info(scan_info), path(path), table(nullptr),
+      lock(), options(options) {
 }
 
 string IcebergMultiFileList::ToDuckDBPath(const string &raw_path) {
@@ -192,7 +191,7 @@ IcebergMultiFileList::DynamicFilterPushdown(ClientContext &context, const MultiF
 unique_ptr<MultiFileList> IcebergMultiFileList::ComplexFilterPushdown(ClientContext &context,
                                                                       const MultiFileOptions &options,
                                                                       MultiFilePushdownInfo &info,
-                                                                      vector<unique_ptr<Expression>> &filters) {
+                                                                      vector<unique_ptr<Expression>> &filters) const {
 	if (filters.empty()) {
 		return nullptr;
 	}
@@ -211,7 +210,7 @@ unique_ptr<MultiFileList> IcebergMultiFileList::ComplexFilterPushdown(ClientCont
 	return PushdownInternal(context, filter_set);
 }
 
-vector<OpenFileInfo> IcebergMultiFileList::GetAllFiles() {
+vector<OpenFileInfo> IcebergMultiFileList::GetAllFiles() const {
 	vector<OpenFileInfo> file_list;
 	//! Lock is required because it reads the 'data_files' vector
 	lock_guard<mutex> guard(lock);
@@ -221,7 +220,7 @@ vector<OpenFileInfo> IcebergMultiFileList::GetAllFiles() {
 	return file_list;
 }
 
-FileExpandResult IcebergMultiFileList::GetExpandResult() {
+FileExpandResult IcebergMultiFileList::GetExpandResult() const {
 	// GetFileInternal(1) will ensure files with index 0 and index 1 are expanded if they are available
 	lock_guard<mutex> guard(lock);
 	GetFileInternal(1, guard);
@@ -235,7 +234,7 @@ FileExpandResult IcebergMultiFileList::GetExpandResult() {
 	return FileExpandResult::NO_FILES;
 }
 
-idx_t IcebergMultiFileList::GetTotalFileCount() {
+idx_t IcebergMultiFileList::GetTotalFileCount() const {
 	// FIXME: the 'added_files_count' + the 'existing_files_count'
 	// in the Manifest List should give us this information without scanning the manifest list
 	lock_guard<mutex> guard(lock);
@@ -247,7 +246,7 @@ idx_t IcebergMultiFileList::GetTotalFileCount() {
 	return data_files.size();
 }
 
-unique_ptr<NodeStatistics> IcebergMultiFileList::GetCardinality(ClientContext &context) {
+unique_ptr<NodeStatistics> IcebergMultiFileList::GetCardinality(ClientContext &context) const {
 	idx_t cardinality = 0;
 
 	if (GetMetadata().iceberg_version == 1) {
@@ -436,7 +435,8 @@ bool IcebergMultiFileList::FileMatchesFilter(const IcebergManifestEntry &file) c
 	return true;
 }
 
-optional_ptr<const IcebergManifestEntry> IcebergMultiFileList::GetDataFile(idx_t file_id, lock_guard<mutex> &guard) {
+optional_ptr<const IcebergManifestEntry> IcebergMultiFileList::GetDataFile(idx_t file_id,
+                                                                           lock_guard<mutex> &guard) const {
 	if (file_id < data_files.size()) {
 		//! Have we already scanned this data file and returned it? If so, return it
 		return data_files[file_id];
@@ -507,7 +507,7 @@ optional_ptr<const IcebergManifestEntry> IcebergMultiFileList::GetDataFile(idx_t
 	return data_files[file_id];
 }
 
-OpenFileInfo IcebergMultiFileList::GetFileInternal(idx_t file_id, lock_guard<mutex> &guard) {
+OpenFileInfo IcebergMultiFileList::GetFileInternal(idx_t file_id, lock_guard<mutex> &guard) const {
 	if (!initialized) {
 		InitializeFiles(guard);
 	}
@@ -543,12 +543,12 @@ OpenFileInfo IcebergMultiFileList::GetFileInternal(idx_t file_id, lock_guard<mut
 	return res;
 }
 
-OpenFileInfo IcebergMultiFileList::GetFile(idx_t file_id) {
+OpenFileInfo IcebergMultiFileList::GetFile(idx_t file_id) const {
 	lock_guard<mutex> guard(lock);
 	return GetFileInternal(file_id, guard);
 }
 
-bool IcebergMultiFileList::ManifestMatchesFilter(const IcebergManifestListEntry &manifest) {
+bool IcebergMultiFileList::ManifestMatchesFilter(const IcebergManifestListEntry &manifest) const {
 	auto spec_id = manifest.partition_spec_id;
 	auto &metadata = GetMetadata();
 
@@ -606,7 +606,7 @@ bool IcebergMultiFileList::ManifestMatchesFilter(const IcebergManifestListEntry 
 	return true;
 }
 
-void IcebergMultiFileList::InitializeFiles(lock_guard<mutex> &guard) {
+void IcebergMultiFileList::InitializeFiles(lock_guard<mutex> &guard) const {
 	if (initialized) {
 		return;
 	}
