@@ -48,8 +48,9 @@ idx_t ManifestListReader::ReadChunk(idx_t offset, idx_t count, vector<IcebergMan
 	int64_t *added_rows_count = nullptr;
 	int64_t *existing_rows_count = nullptr;
 	int64_t *deleted_rows_count = nullptr;
+	int64_t *first_row_id = nullptr;
 
-	if (iceberg_version > 1) {
+	if (iceberg_version >= 2) {
 		//! 'content'
 		content = FlatVector::GetData<int32_t>(chunk.data[vector_mapping.at(CONTENT).GetPrimaryIndex()]);
 		//! 'sequence_number'
@@ -76,6 +77,13 @@ idx_t ManifestListReader::ReadChunk(idx_t offset, idx_t count, vector<IcebergMan
 		//! 'deleted_rows_count'
 		deleted_rows_count =
 		    FlatVector::GetData<int64_t>(chunk.data[vector_mapping.at(DELETED_ROWS_COUNT).GetPrimaryIndex()]);
+	}
+	if (iceberg_version >= 3) {
+		auto it = vector_mapping.find(FIRST_ROW_ID);
+		if (it != vector_mapping.end()) {
+			//! 'first_row_id'
+			first_row_id = FlatVector::GetData<int64_t>(chunk.data[it->second.GetPrimaryIndex()]);
+		}
 	}
 
 	//! 'partitions'
@@ -119,7 +127,7 @@ idx_t ManifestListReader::ReadChunk(idx_t offset, idx_t count, vector<IcebergMan
 		//! This flag is only used for writing, not for reading
 		manifest.has_min_sequence_number = true;
 
-		if (iceberg_version > 1) {
+		if (iceberg_version >= 2) {
 			manifest.content = IcebergManifestContentType(content[index]);
 			manifest.sequence_number = sequence_number[index];
 			manifest.min_sequence_number = min_sequence_number[index];
@@ -140,6 +148,11 @@ idx_t ManifestListReader::ReadChunk(idx_t offset, idx_t count, vector<IcebergMan
 			manifest.added_rows_count = 0;
 			manifest.existing_rows_count = 0;
 			manifest.deleted_rows_count = 0;
+		}
+
+		if (first_row_id) {
+			manifest.has_first_row_id = true;
+			manifest.first_row_id = first_row_id[index];
 		}
 
 		if (field_summary && FlatVector::Validity(*partitions).RowIsValid(index)) {

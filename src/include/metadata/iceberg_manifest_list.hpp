@@ -67,7 +67,7 @@ enum class IcebergManifestContentType : uint8_t {
 	DELETE = 1,
 };
 
-//! An entry in the manifest list file (top level AVRO file)
+//! An entry in the manifest list file (top level AVRO file), 'manifest_file' in the spec
 struct IcebergManifestListEntry {
 public:
 	//! Path to the manifest AVRO file
@@ -78,6 +78,8 @@ public:
 	sequence_number_t sequence_number = 0;
 	bool has_min_sequence_number = false;
 	sequence_number_t min_sequence_number = 0;
+	bool has_first_row_id = false;
+	sequence_number_t first_row_id = 0xDEADBEEF;
 	//! either data or deletes
 	IcebergManifestContentType content;
 	int64_t added_snapshot_id = -1;

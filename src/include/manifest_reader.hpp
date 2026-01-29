@@ -41,7 +41,7 @@ protected:
 
 namespace manifest_list {
 
-//! Produces IcebergManifests read, from the 'manifest_list'
+//! Produces IcebergManifests read, from the 'manifest_file'
 class ManifestListReader : public BaseManifestReader {
 public:
 	ManifestListReader(idx_t iceberg_version);

@@ -23,7 +23,7 @@ enum class IcebergManifestEntryContentType : uint8_t { DATA = 0, POSITION_DELETE
 
 enum class IcebergManifestEntryStatusType : uint8_t { EXISTING = 0, ADDED = 1, DELETED = 2 };
 
-//! An entry in a manifest file
+//! An entry in a manifest file ('manifest_entry' + 'data_file' in the spec)
 struct IcebergManifestEntry {
 public:
 	IcebergManifestEntryStatusType status;
@@ -33,6 +33,8 @@ public:
 	string file_format;
 	vector<int32_t> equality_ids;
 	int64_t record_count;
+	bool has_first_row_id = false;
+	int64_t first_row_id = 0xDEADBEEF;
 	//! source_id -> blob
 	unordered_map<int32_t, Value> lower_bounds;
 	unordered_map<int32_t, Value> upper_bounds;

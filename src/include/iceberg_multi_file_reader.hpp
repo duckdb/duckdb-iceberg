@@ -74,6 +74,7 @@ public:
 
 private:
 	unique_ptr<MultiFileColumnDefinition> row_id_column;
+	unique_ptr<MultiFileColumnDefinition> sequence_number_column;
 };
 
 } // namespace duckdb

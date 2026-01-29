@@ -177,10 +177,11 @@ idx_t ManifestFileReader::ReadChunk(idx_t offset, idx_t count, vector<IcebergMan
 	}
 	optional_ptr<Vector> equality_ids;
 	optional_ptr<Vector> sequence_number;
+	optional_ptr<Vector> first_row_id;
 	int32_t *content;
 
 	auto partition_idx = vector_mapping.at(PARTITION);
-	if (iceberg_version > 1) {
+	if (iceberg_version >= 2) {
 		auto equality_ids_it = vector_mapping.find(EQUALITY_IDS);
 		if (equality_ids_it != vector_mapping.end()) {
 			equality_ids = *child_entries[equality_ids_it->second.GetChildIndex(0).GetPrimaryIndex()];
@@ -191,6 +192,12 @@ idx_t ManifestFileReader::ReadChunk(idx_t offset, idx_t count, vector<IcebergMan
 		}
 		content =
 		    FlatVector::GetData<int32_t>(*child_entries[vector_mapping.at(CONTENT).GetChildIndex(0).GetPrimaryIndex()]);
+	}
+	if (iceberg_version >= 3) {
+		auto it = vector_mapping.find(FIRST_ROW_ID);
+		if (it != vector_mapping.end()) {
+			first_row_id = child_entries[it->second.GetChildIndex(0).GetPrimaryIndex()].get();
+		}
 	}
 
 	auto file_path = FlatVector::GetData<string_t>(*child_entries[file_path_idx.GetChildIndex(0).GetPrimaryIndex()]);
@@ -326,6 +333,16 @@ idx_t ManifestFileReader::ReadChunk(idx_t offset, idx_t count, vector<IcebergMan
 		} else {
 			entry.sequence_number = this->sequence_number;
 			entry.content = IcebergManifestEntryContentType::DATA;
+		}
+
+		//! V3 (row lineage)
+		if (first_row_id) {
+			auto &validity = FlatVector::Validity(*first_row_id);
+			auto data = FlatVector::GetData<int64_t>(*first_row_id);
+			if (validity.RowIsValid(index)) {
+				entry.has_first_row_id = true;
+				entry.first_row_id = data[index];
+			}
 		}
 
 		entry.partition_spec_id = this->partition_spec_id;

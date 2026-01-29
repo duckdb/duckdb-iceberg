@@ -20,9 +20,7 @@ struct IcebergCreateTableRequest;
 
 struct IcebergTransactionData {
 public:
-	IcebergTransactionData(ClientContext &context, IcebergTableInformation &table_info)
-	    : context(context), table_info(table_info), is_deleted(false) {
-	}
+	IcebergTransactionData(ClientContext &context, IcebergTableInformation &table_info);
 
 public:
 	void CreateManifestListEntry(IcebergAddSnapshot &add_snapshot, IcebergTableMetadata &table_metadata,
@@ -55,6 +53,8 @@ public:
 
 	//! Every insert/update/delete creates an alter of the table data
 	vector<reference<IcebergAddSnapshot>> alters;
+	//! Track the current row id for this transaction
+	int64_t next_row_id = 0;
 };
 
 } // namespace duckdb
