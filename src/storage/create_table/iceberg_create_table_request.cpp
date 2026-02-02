@@ -1,7 +1,7 @@
 #include "storage/table_update/iceberg_add_snapshot.hpp"
 #include "storage/table_create/iceberg_create_table_request.hpp"
 
-#include "../../include/metadata/iceberg_partition_spec.hpp"
+#include "metadata/iceberg_partition_spec.hpp"
 #include "storage/irc_table_set.hpp"
 #include "storage/iceberg_table_information.hpp"
 #include "duckdb/parser/constraints/not_null_constraint.hpp"

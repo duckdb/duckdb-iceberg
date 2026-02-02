@@ -348,7 +348,8 @@ void IcebergTableInformation::SetPartitionedBy(IRCTransaction &transaction,
 		new_spec.fields.push_back(std::move(field));
 	}
 
-	// if spec exists, just set it to that spec id
+	// if spec definition already exists in previous spec, set it to that spec id
+	// (some catalog may allow duplicate definitions, others not)
 	int64_t existing_spec_id = GetExistingSpecId(new_spec);
 	if (existing_spec_id >= 0) {
 		table_metadata.default_spec_id = existing_spec_id;
