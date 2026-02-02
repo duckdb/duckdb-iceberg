@@ -4,30 +4,32 @@
 #include "duckdb/catalog/catalog_entry/view_catalog_entry.hpp"
 #include "manifest_reader.hpp"
 
-#include "storage/irc_transaction.hpp"
-#include "storage/irc_catalog.hpp"
-#include "storage/irc_authorization.hpp"
+#include "storage/iceberg_transaction.hpp"
+#include "storage/catalog/iceberg_catalog.hpp"
+#include "storage/iceberg_authorization.hpp"
 #include "storage/iceberg_table_information.hpp"
 #include "storage/table_update/iceberg_add_snapshot.hpp"
 #include "storage/table_create/iceberg_create_table_request.hpp"
 #include "catalog_utils.hpp"
 #include "yyjson.hpp"
 #include "metadata/iceberg_snapshot.hpp"
-#include "storage/irc_catalog.hpp"
+#include "storage/catalog/iceberg_catalog.hpp"
 #include "duckdb/storage/table/update_state.hpp"
+#include "duckdb/parser/parsed_data/drop_info.hpp"
+#include "storage/catalog/iceberg_schema_entry.hpp"
 
 namespace duckdb {
 
-IRCTransaction::IRCTransaction(IRCatalog &ic_catalog, TransactionManager &manager, ClientContext &context)
+IcebergTransaction::IcebergTransaction(IcebergCatalog &ic_catalog, TransactionManager &manager, ClientContext &context)
     : Transaction(manager, context), db(*context.db), catalog(ic_catalog), access_mode(ic_catalog.access_mode) {
 }
 
-IRCTransaction::~IRCTransaction() = default;
+IcebergTransaction::~IcebergTransaction() = default;
 
-void IRCTransaction::Start() {
+void IcebergTransaction::Start() {
 }
 
-IRCatalog &IRCTransaction::GetCatalog() {
+IcebergCatalog &IcebergTransaction::GetCatalog() {
 	return catalog;
 }
 
@@ -268,7 +270,7 @@ static rest_api_objects::TableRequirement CreateAssertNoSnapshotRequirement() {
 	return req;
 }
 
-void IRCTransaction::DropSecrets(ClientContext &context) {
+void IcebergTransaction::DropSecrets(ClientContext &context) {
 	auto &secret_manager = SecretManager::Get(context);
 	for (auto &secret_name : created_secrets) {
 		(void)secret_manager.DropSecretByName(context, secret_name, OnEntryNotFound::RETURN_NULL);
@@ -290,7 +292,7 @@ static rest_api_objects::TableUpdate CreateSetSnapshotRefUpdate(int64_t snapshot
 	return table_update;
 }
 
-TableTransactionInfo IRCTransaction::GetTransactionRequest(ClientContext &context) {
+TableTransactionInfo IcebergTransaction::GetTransactionRequest(ClientContext &context) {
 	TableTransactionInfo info;
 	auto &transaction = info.request;
 	for (auto &updated_table : updated_tables) {
@@ -300,7 +302,7 @@ TableTransactionInfo IRCTransaction::GetTransactionRequest(ClientContext &contex
 		}
 		IcebergCommitState commit_state;
 		auto &table_change = commit_state.table_change;
-		auto &schema = table_info.schema.Cast<IRCSchemaEntry>();
+		auto &schema = table_info.schema.Cast<IcebergSchemaEntry>();
 		table_change.identifier._namespace.value = schema.namespace_items;
 		table_change.identifier.name = table_info.name;
 		table_change.has_identifier = true;
@@ -322,7 +324,7 @@ TableTransactionInfo IRCTransaction::GetTransactionRequest(ClientContext &contex
 		for (auto &update : transaction_data.updates) {
 			if (update->type == IcebergTableUpdateType::ADD_SNAPSHOT) {
 				// we need to recreate the keys in the current context.
-				auto &ic_table_entry = table_info.GetLatestSchema()->Cast<ICTableEntry>();
+				auto &ic_table_entry = table_info.GetLatestSchema()->Cast<IcebergTableEntry>();
 				ic_table_entry.PrepareIcebergScanFromEntry(context);
 			}
 			update->CreateUpdate(db, context, commit_state);
@@ -354,7 +356,7 @@ TableTransactionInfo IRCTransaction::GetTransactionRequest(ClientContext &contex
 	return info;
 }
 
-void IRCTransaction::Commit() {
+void IcebergTransaction::Commit() {
 	if (updated_tables.empty() && deleted_tables.empty()) {
 		return;
 	}
@@ -376,7 +378,7 @@ void IRCTransaction::Commit() {
 	temp_con.Rollback();
 }
 
-void IRCTransaction::DoTableUpdates(ClientContext &context) {
+void IcebergTransaction::DoTableUpdates(ClientContext &context) {
 	if (!updated_tables.empty()) {
 		auto transaction_info = GetTransactionRequest(context);
 		auto &transaction = transaction_info.request;
@@ -410,8 +412,8 @@ void IRCTransaction::DoTableUpdates(ClientContext &context) {
 	}
 }
 
-void IRCTransaction::DoTableDeletes(ClientContext &context) {
-	auto &ic_catalog = catalog.Cast<IRCatalog>();
+void IcebergTransaction::DoTableDeletes(ClientContext &context) {
+	auto &ic_catalog = catalog.Cast<IcebergCatalog>();
 	for (auto &deleted_table : deleted_tables) {
 		auto &table = deleted_table.second;
 		auto schema_key = table.schema.name;
@@ -420,10 +422,16 @@ void IRCTransaction::DoTableDeletes(ClientContext &context) {
 		IRCAPI::CommitTableDelete(context, catalog, table.schema.namespace_items, table.name);
 		// remove the load table result
 		ic_catalog.RemoveLoadTableResult(table_key);
+		// remove the table entry from the catalog
+		auto &schema_entry = ic_catalog.schemas.GetEntry(schema_key).Cast<IcebergSchemaEntry>();
+		DropInfo drop_info;
+		drop_info.name = table_name;
+		drop_info.if_not_found = OnEntryNotFound::RETURN_NULL;
+		schema_entry.DropEntry(context, drop_info, true);
 	}
 }
 
-void IRCTransaction::CleanupFiles() {
+void IcebergTransaction::CleanupFiles() {
 	// remove any files that were written
 	if (!catalog.attach_options.allows_deletes) {
 		// certain catalogs don't allow deletes and will have a s3.deletes attribute in the config describing this
@@ -447,8 +455,9 @@ void IRCTransaction::CleanupFiles() {
 			}
 			auto &add_snapshot = update->Cast<IcebergAddSnapshot>();
 			auto manifest_list_entries = add_snapshot.manifest_list.GetManifestFilesConst();
-			for (const auto &manifest_entry : manifest_list_entries) {
-				for (auto &data_file : manifest_entry.manifest_file.data_files) {
+			for (const auto &manifest : manifest_list_entries) {
+				for (auto &manifest_entry : manifest.manifest_file.entries) {
+					auto &data_file = manifest_entry.data_file;
 					fs.TryRemoveFile(data_file.file_path);
 				}
 			}
@@ -456,12 +465,12 @@ void IRCTransaction::CleanupFiles() {
 	}
 }
 
-void IRCTransaction::Rollback() {
+void IcebergTransaction::Rollback() {
 	CleanupFiles();
 }
 
-IRCTransaction &IRCTransaction::Get(ClientContext &context, Catalog &catalog) {
-	return Transaction::Get(context, catalog).Cast<IRCTransaction>();
+IcebergTransaction &IcebergTransaction::Get(ClientContext &context, Catalog &catalog) {
+	return Transaction::Get(context, catalog).Cast<IcebergTransaction>();
 }
 
 } // namespace duckdb

@@ -1,8 +1,8 @@
 #include "storage/iceberg_delete.hpp"
 #include "storage/iceberg_delete.hpp"
-#include "storage/irc_catalog.hpp"
-#include "storage/irc_transaction.hpp"
-#include "storage/irc_table_entry.hpp"
+#include "storage/catalog/iceberg_catalog.hpp"
+#include "storage/iceberg_transaction.hpp"
+#include "storage/catalog/iceberg_table_entry.hpp"
 #include "storage/iceberg_table_information.hpp"
 #include "iceberg_multi_file_reader.hpp"
 #include "iceberg_multi_file_list.hpp"
@@ -22,9 +22,9 @@
 namespace duckdb {
 class IcebergDeleteLocalState;
 class IcebergDeleteGlobalState;
-class ICTableEntry;
+class IcebergTableEntry;
 
-IcebergDelete::IcebergDelete(PhysicalPlan &physical_plan, ICTableEntry &table, PhysicalOperator &child,
+IcebergDelete::IcebergDelete(PhysicalPlan &physical_plan, IcebergTableEntry &table, PhysicalOperator &child,
                              vector<idx_t> row_id_indexes)
     : PhysicalOperator(physical_plan, PhysicalOperatorType::EXTENSION, {LogicalType::BIGINT}, 1), table(table),
       row_id_indexes(std::move(row_id_indexes)) {
@@ -180,7 +180,7 @@ void IcebergDelete::WritePositionalDeleteFile(ClientContext &context, IcebergDel
 	global_state.written_files.emplace(filename, std::move(delete_file));
 }
 
-void IcebergDelete::FlushDeletes(IRCTransaction &transaction, ClientContext &context,
+void IcebergDelete::FlushDeletes(IcebergTransaction &transaction, ClientContext &context,
                                  IcebergDeleteGlobalState &global_state) const {
 	lock_guard<mutex> guard(global_state.lock);
 	for (auto &entry : global_state.deleted_rows) {
@@ -219,17 +219,18 @@ vector<IcebergManifestEntry> IcebergDelete::GenerateDeleteManifestEntries(Iceber
 
 		IcebergManifestEntry manifest_entry;
 		manifest_entry.status = IcebergManifestEntryStatusType::ADDED;
-		manifest_entry.content = IcebergManifestEntryContentType::POSITION_DELETES;
-		manifest_entry.file_path = delete_file.file_name;
-		manifest_entry.file_format = "parquet";
-		manifest_entry.record_count = delete_file.delete_count;
-		manifest_entry.file_size_in_bytes = delete_file.file_size_bytes;
+		auto &data_file = manifest_entry.data_file;
+		data_file.content = IcebergManifestEntryContentType::POSITION_DELETES;
+		data_file.file_path = delete_file.file_name;
+		data_file.file_format = "parquet";
+		data_file.record_count = delete_file.delete_count;
+		data_file.file_size_in_bytes = delete_file.file_size_bytes;
 
 		// set lower and upper bound for the filename column
-		manifest_entry.lower_bounds[MultiFileReader::FILENAME_FIELD_ID] = Value::BLOB(data_file_name);
-		manifest_entry.upper_bounds[MultiFileReader::FILENAME_FIELD_ID] = Value::BLOB(data_file_name);
+		data_file.lower_bounds[MultiFileReader::FILENAME_FIELD_ID] = Value::BLOB(data_file_name);
+		data_file.upper_bounds[MultiFileReader::FILENAME_FIELD_ID] = Value::BLOB(data_file_name);
 		// set referenced_data_file
-		manifest_entry.referenced_data_file = data_file_name;
+		data_file.referenced_data_file = data_file_name;
 		iceberg_delete_files.push_back(manifest_entry);
 	}
 	return iceberg_delete_files;
@@ -244,18 +245,18 @@ SinkFinalizeType IcebergDelete::Finalize(Pipeline &pipeline, Event &event, Clien
 		return SinkFinalizeType::READY;
 	}
 
-	auto &irc_transaction = IRCTransaction::Get(context, table.catalog);
+	auto &iceberg_transaction = IcebergTransaction::Get(context, table.catalog);
 	// write out the delete rows
-	FlushDeletes(irc_transaction, context, global_state);
+	FlushDeletes(iceberg_transaction, context, global_state);
 
 	// write out the new manifest file
-	auto &irc_table = table.Cast<ICTableEntry>();
+	auto &irc_table = table.Cast<IcebergTableEntry>();
 	auto &table_info = irc_table.table_info;
-	auto &transaction = IRCTransaction::Get(context, table.catalog);
+	auto &transaction = IcebergTransaction::Get(context, table.catalog);
 	auto iceberg_delete_files = GenerateDeleteManifestEntries(global_state);
 	if (!global_state.written_files.empty()) {
-		ApplyTableUpdate(table_info, irc_transaction, [&](IcebergTableInformation &tbl) {
-			tbl.AddDeleteSnapshot(irc_transaction, std::move(iceberg_delete_files));
+		ApplyTableUpdate(table_info, iceberg_transaction, [&](IcebergTableInformation &tbl) {
+			tbl.AddDeleteSnapshot(iceberg_transaction, std::move(iceberg_delete_files));
 		});
 	}
 	return SinkFinalizeType::READY;
@@ -286,13 +287,14 @@ InsertionOrderPreservingMap<string> IcebergDelete::ParamsToString() const {
 	return result;
 }
 
-PhysicalOperator &IcebergDelete::PlanDelete(ClientContext &context, PhysicalPlanGenerator &planner, ICTableEntry &table,
-                                            PhysicalOperator &child_plan, vector<idx_t> row_id_indexes) {
+PhysicalOperator &IcebergDelete::PlanDelete(ClientContext &context, PhysicalPlanGenerator &planner,
+                                            IcebergTableEntry &table, PhysicalOperator &child_plan,
+                                            vector<idx_t> row_id_indexes) {
 	return planner.Make<IcebergDelete>(table, child_plan, std::move(row_id_indexes));
 }
 
-PhysicalOperator &IRCatalog::PlanDelete(ClientContext &context, PhysicalPlanGenerator &planner, LogicalDelete &op,
-                                        PhysicalOperator &plan) {
+PhysicalOperator &IcebergCatalog::PlanDelete(ClientContext &context, PhysicalPlanGenerator &planner, LogicalDelete &op,
+                                             PhysicalOperator &plan) {
 	if (op.return_chunk) {
 		throw BinderException("RETURNING clause not yet supported for deletion from Iceberg table");
 	}
@@ -303,7 +305,7 @@ PhysicalOperator &IRCatalog::PlanDelete(ClientContext &context, PhysicalPlanGene
 		auto &bound_ref = op.expressions[i]->Cast<BoundReferenceExpression>();
 		row_id_indexes.push_back(bound_ref.index);
 	}
-	auto &ic_table_entry = op.table.Cast<ICTableEntry>();
+	auto &ic_table_entry = op.table.Cast<IcebergTableEntry>();
 	// Verify Iceberg table version is v2
 	if (ic_table_entry.table_info.table_metadata.iceberg_version != 2) {
 		throw NotImplementedException("Delete from Iceberg V%d tables",
@@ -314,8 +316,8 @@ PhysicalOperator &IRCatalog::PlanDelete(ClientContext &context, PhysicalPlanGene
 	    ic_table_entry.table_info.table_metadata.PropertiesAllowPositionalDeletes(IcebergSnapshotOperationType::DELETE);
 	if (!allows_positional_deletes) {
 		auto delete_table_property = ic_table_entry.table_info.table_metadata.GetTableProperty(WRITE_DELETE_MODE);
-		auto error_message = IRCatalog::GetOnlyMergeOnReadSupportedErrorMessage(ic_table_entry.name, WRITE_DELETE_MODE,
-		                                                                        delete_table_property);
+		auto error_message = IcebergCatalog::GetOnlyMergeOnReadSupportedErrorMessage(
+		    ic_table_entry.name, WRITE_DELETE_MODE, delete_table_property);
 		throw NotImplementedException(error_message);
 	}
 

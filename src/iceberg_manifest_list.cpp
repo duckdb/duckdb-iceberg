@@ -6,11 +6,11 @@
 
 namespace duckdb {
 
-vector<IcebergManifestListEntry> &IcebergManifestList::GetManifestFilesMutable() {
+vector<IcebergManifestFile> &IcebergManifestList::GetManifestFilesMutable() {
 	return manifest_entries;
 }
 
-const vector<IcebergManifestListEntry> &IcebergManifestList::GetManifestFilesConst() const {
+const vector<IcebergManifestFile> &IcebergManifestList::GetManifestFilesConst() const {
 	return manifest_entries;
 }
 
@@ -27,12 +27,12 @@ idx_t IcebergManifestList::GetManifestListEntriesCount() const {
 	return manifest_entries.size();
 }
 
-void IcebergManifestList::AddToManifestEntries(vector<IcebergManifestListEntry> &manifest_list_entries) {
+void IcebergManifestList::AddToManifestEntries(vector<IcebergManifestFile> &manifest_list_entries) {
 	manifest_entries.insert(manifest_entries.begin(), std::make_move_iterator(manifest_list_entries.begin()),
 	                        std::make_move_iterator(manifest_list_entries.end()));
 }
 
-vector<IcebergManifestListEntry> IcebergManifestList::GetManifestListEntries() {
+vector<IcebergManifestFile> IcebergManifestList::GetManifestListEntries() {
 	return std::move(manifest_entries);
 }
 

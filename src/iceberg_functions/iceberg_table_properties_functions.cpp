@@ -9,13 +9,12 @@
 #include "iceberg_metadata.hpp"
 #include "iceberg_functions.hpp"
 #include "iceberg_utils.hpp"
-#include "storage/irc_table_entry.hpp"
+#include "storage/catalog/iceberg_table_entry.hpp"
 #include "duckdb/main/client_context.hpp"
-#include "storage/irc_catalog.hpp"
+#include "storage/catalog/iceberg_catalog.hpp"
 #include "storage/iceberg_table_information.hpp"
 #include "storage/iceberg_transaction_data.hpp"
-#include "storage/irc_transaction.hpp"
-#include "storage/iceberg_table_information.hpp"
+#include "storage/iceberg_transaction.hpp"
 #include "metadata/iceberg_table_metadata.hpp"
 
 #include <string>
@@ -23,7 +22,7 @@
 namespace duckdb {
 
 struct SetIcebergTablePropertiesBindData : public TableFunctionData {
-	optional_ptr<ICTableEntry> iceberg_table;
+	optional_ptr<IcebergTableEntry> iceberg_table;
 	case_insensitive_map_t<string> properties;
 	vector<string> remove_properties;
 };
@@ -81,7 +80,7 @@ static unique_ptr<FunctionData> SetIcebergTablePropertiesBind(ClientContext &con
 	if (!CheckTableIsIcebergTable(iceberg_table)) {
 		throw InvalidInputException("Cannot call set_iceberg_table_properties on non-iceberg table");
 	}
-	ret->iceberg_table = iceberg_table->Cast<ICTableEntry>();
+	ret->iceberg_table = iceberg_table->Cast<IcebergTableEntry>();
 	auto map = Value(input.inputs[1]).DefaultCastAs(LogicalType::MAP(LogicalType::VARCHAR, LogicalType::VARCHAR));
 
 	auto &map_children = MapValue::GetChildren(map);
@@ -108,7 +107,7 @@ static unique_ptr<FunctionData> RemoveIcebergTablePropertiesBind(ClientContext &
 	if (!CheckTableIsIcebergTable(iceberg_table)) {
 		throw InvalidInputException("Cannot call set_iceberg_table_properties on non-iceberg table");
 	}
-	ret->iceberg_table = iceberg_table->Cast<ICTableEntry>();
+	ret->iceberg_table = iceberg_table->Cast<IcebergTableEntry>();
 
 	auto &remove_values = input.inputs[1];
 	auto &list_children = ListValue::GetChildren(remove_values);
@@ -133,7 +132,7 @@ static unique_ptr<FunctionData> GetIcebergTablePropertiesBind(ClientContext &con
 	if (!CheckTableIsIcebergTable(iceberg_table)) {
 		throw InvalidInputException("Cannot call set_iceberg_table_properties on non-iceberg table");
 	}
-	ret->iceberg_table = iceberg_table->Cast<ICTableEntry>();
+	ret->iceberg_table = iceberg_table->Cast<IcebergTableEntry>();
 
 	return_types.insert(return_types.end(), LogicalType::VARCHAR);
 	return_types.insert(return_types.end(), LogicalType::VARCHAR);
@@ -161,11 +160,11 @@ static void SetIcebergTablePropertiesFunction(ClientContext &context, TableFunct
 
 	auto iceberg_table = bind_data.iceberg_table;
 	auto &table_info = iceberg_table->table_info;
-	auto &irc_transaction = IRCTransaction::Get(context, iceberg_table->catalog);
-	irc_transaction.updated_tables.emplace(table_info.GetTableKey(), table_info.Copy(irc_transaction));
-	auto &entry = irc_transaction.updated_tables.at(table_info.GetTableKey());
+	auto &iceberg_transaction = IcebergTransaction::Get(context, iceberg_table->catalog);
+	iceberg_transaction.updated_tables.emplace(table_info.GetTableKey(), table_info.Copy(iceberg_transaction));
+	auto &entry = iceberg_transaction.updated_tables.at(table_info.GetTableKey());
 	if (!entry.transaction_data) {
-		entry.InitTransactionData(irc_transaction);
+		entry.InitTransactionData(iceberg_transaction);
 	}
 	auto &transaction_data = entry.transaction_data;
 
@@ -193,11 +192,11 @@ static void RemoveIcebergTablePropertiesFunction(ClientContext &context, TableFu
 
 	auto iceberg_table = bind_data.iceberg_table;
 	auto &table_info = iceberg_table->table_info;
-	auto &irc_transaction = IRCTransaction::Get(context, iceberg_table->catalog);
-	irc_transaction.updated_tables.emplace(table_info.GetTableKey(), table_info.Copy(irc_transaction));
-	auto &entry = irc_transaction.updated_tables.at(table_info.GetTableKey());
+	auto &iceberg_transaction = IcebergTransaction::Get(context, iceberg_table->catalog);
+	iceberg_transaction.updated_tables.emplace(table_info.GetTableKey(), table_info.Copy(iceberg_transaction));
+	auto &entry = iceberg_transaction.updated_tables.at(table_info.GetTableKey());
 	if (!entry.transaction_data) {
-		entry.InitTransactionData(irc_transaction);
+		entry.InitTransactionData(iceberg_transaction);
 	}
 	auto &transaction_data = entry.transaction_data;
 

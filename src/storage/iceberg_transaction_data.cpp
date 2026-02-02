@@ -4,7 +4,7 @@
 #include "metadata/iceberg_manifest.hpp"
 #include "metadata/iceberg_snapshot.hpp"
 #include "duckdb/common/multi_file/multi_file_reader.hpp"
-#include "storage/irc_table_set.hpp"
+#include "storage/catalog/iceberg_table_set.hpp"
 #include "storage/table_update/iceberg_add_snapshot.hpp"
 #include "storage/table_update/common.hpp"
 #include "storage/iceberg_table_information.hpp"
@@ -25,23 +25,23 @@ static int64_t NewSnapshotId() {
 void IcebergTransactionData::CreateManifestListEntry(IcebergAddSnapshot &add_snapshot,
                                                      IcebergTableMetadata &table_metadata,
                                                      IcebergManifestContentType manifest_content_type,
-                                                     vector<IcebergManifestEntry> &&data_files) {
+                                                     vector<IcebergManifestEntry> &&manifest_entries) {
 	//! create manifest file path
 	auto manifest_file_uuid = UUID::ToString(UUID::GenerateRandomUUID());
 	auto manifest_file_path = table_metadata.GetMetadataPath() + "/" + manifest_file_uuid + "-m0.avro";
 
 	// Add a manifest list entry for the delete files
 	auto &manifest_list_delete_entry = add_snapshot.manifest_list.CreateNewManifestListEntry(manifest_file_path);
-	auto &manifest_entry = manifest_list_delete_entry.manifest_file;
+	auto &manifest_file = manifest_list_delete_entry.manifest_file;
 
-	manifest_entry.path = manifest_file_path;
+	manifest_file.path = manifest_file_path;
 
 	// auto &manifest = add_snapshot->manifest;
 	auto &snapshot = add_snapshot.snapshot;
 	manifest_list_delete_entry.manifest_path = manifest_file_path;
 	manifest_list_delete_entry.sequence_number = snapshot.sequence_number;
 	manifest_list_delete_entry.content = manifest_content_type;
-	manifest_list_delete_entry.added_files_count = data_files.size();
+	manifest_list_delete_entry.added_files_count = manifest_entries.size();
 	manifest_list_delete_entry.deleted_files_count = 0;
 	manifest_list_delete_entry.existing_files_count = 0;
 	manifest_list_delete_entry.added_rows_count = 0;
@@ -51,7 +51,8 @@ void IcebergTransactionData::CreateManifestListEntry(IcebergAddSnapshot &add_sna
 	//! manifest.partitions = CreateManifestPartition();
 
 	//! Add the delete files to the manifest
-	for (auto &data_file : data_files) {
+	for (auto &manifest_entry : manifest_entries) {
+		auto &data_file = manifest_entry.data_file;
 		switch (manifest_content_type) {
 		case IcebergManifestContentType::DATA:
 			manifest_list_delete_entry.added_rows_count += data_file.record_count;
@@ -60,18 +61,18 @@ void IcebergTransactionData::CreateManifestListEntry(IcebergAddSnapshot &add_sna
 			manifest_list_delete_entry.deleted_rows_count += data_file.record_count;
 			break;
 		}
-		data_file.sequence_number = snapshot.sequence_number;
-		data_file.snapshot_id = snapshot.snapshot_id;
-		data_file.partition_spec_id = manifest_list_delete_entry.partition_spec_id;
+		manifest_entry.sequence_number = snapshot.sequence_number;
+		manifest_entry.snapshot_id = snapshot.snapshot_id;
+		manifest_entry.partition_spec_id = manifest_list_delete_entry.partition_spec_id;
 		if (!manifest_list_delete_entry.has_min_sequence_number ||
-		    data_file.sequence_number < manifest_list_delete_entry.min_sequence_number) {
-			manifest_list_delete_entry.min_sequence_number = data_file.sequence_number;
+		    manifest_entry.sequence_number < manifest_list_delete_entry.min_sequence_number) {
+			manifest_list_delete_entry.min_sequence_number = manifest_entry.sequence_number;
 		}
 		manifest_list_delete_entry.has_min_sequence_number = true;
 	}
 	manifest_list_delete_entry.added_snapshot_id = snapshot.snapshot_id;
-	manifest_entry.data_files.insert(manifest_entry.data_files.end(), std::make_move_iterator(data_files.begin()),
-	                                 std::make_move_iterator(data_files.end()));
+	manifest_file.entries.insert(manifest_file.entries.end(), std::make_move_iterator(manifest_entries.begin()),
+	                             std::make_move_iterator(manifest_entries.end()));
 }
 
 void IcebergTransactionData::AddSnapshot(IcebergSnapshotOperationType operation,

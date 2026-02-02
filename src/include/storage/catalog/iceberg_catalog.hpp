@@ -5,9 +5,9 @@
 #include "duckdb/common/enums/access_mode.hpp"
 #include "duckdb/main/secret/secret_manager.hpp"
 #include "url_utils.hpp"
-#include "storage/irc_schema_set.hpp"
+#include "storage/catalog/iceberg_schema_set.hpp"
 #include "rest_catalog/objects/load_table_result.hpp"
-#include "storage/irc_authorization.hpp"
+#include "storage/iceberg_authorization.hpp"
 
 #include "duckdb/parser/parsed_data/attach_info.hpp"
 #include "duckdb/storage/storage_extension.hpp"
@@ -15,7 +15,7 @@
 
 namespace duckdb {
 
-class IRCSchemaEntry;
+class IcebergSchemaEntry;
 
 class MetadataCacheValue {
 public:
@@ -29,23 +29,22 @@ public:
 	}
 };
 
-class IRCatalog : public Catalog {
+class IcebergCatalog : public Catalog {
 public:
 	// default target file size: 8.4MB
 	static constexpr const idx_t DEFAULT_TARGET_FILE_SIZE = 1 << 23;
 
 public:
-	explicit IRCatalog(AttachedDatabase &db_p, AccessMode access_mode, unique_ptr<IRCAuthorization> auth_handler,
-	                   IcebergAttachOptions &attach_options, const string &default_schema);
-	~IRCatalog() override;
+	explicit IcebergCatalog(AttachedDatabase &db_p, AccessMode access_mode,
+	                        unique_ptr<IcebergAuthorization> auth_handler, IcebergAttachOptions &attach_options,
+	                        const string &default_schema);
+	~IcebergCatalog() override;
 
 public:
 	static unique_ptr<SecretEntry> GetStorageSecret(ClientContext &context, const string &secret_name);
 	static unique_ptr<SecretEntry> GetIcebergSecret(ClientContext &context, const string &secret_name);
 	void GetConfig(ClientContext &context, IcebergEndpointType &endpoint_type);
 	IRCEndpointBuilder GetBaseUrl() const;
-	string OptionalGetCachedValue(const string &url);
-	bool SetCachedValue(const string &url, const string &value, const rest_api_objects::LoadTableResult &result);
 	static void SetAWSCatalogOptions(IcebergAttachOptions &attach_options,
 	                                 case_insensitive_set_t &set_by_attach_options);
 	//! Whether or not this catalog should search a specific type with the standard priority
@@ -83,7 +82,7 @@ public:
 	void DropSchema(ClientContext &context, DropInfo &info) override;
 	optional_ptr<CatalogEntry> CreateSchema(CatalogTransaction transaction, CreateSchemaInfo &info) override;
 	void ScanSchemas(ClientContext &context, std::function<void(SchemaCatalogEntry &)> callback) override;
-	IRCSchemaSet &GetSchemas();
+	IcebergSchemaSet &GetSchemas();
 	optional_ptr<SchemaCatalogEntry> LookupSchema(CatalogTransaction transaction, const EntryLookupInfo &schema_lookup,
 	                                              OnEntryNotFound if_not_found) override;
 	PhysicalOperator &PlanInsert(ClientContext &context, PhysicalPlanGenerator &planner, LogicalInsert &op,
@@ -112,7 +111,7 @@ public:
 
 public:
 	AccessMode access_mode;
-	unique_ptr<IRCAuthorization> auth_handler;
+	unique_ptr<IcebergAuthorization> auth_handler;
 	IRCEndpointBuilder endpoint_builder;
 	//! warehouse
 	string warehouse;
@@ -133,7 +132,7 @@ private:
 
 public:
 	unordered_set<string> supported_urls;
-	IRCSchemaSet schemas;
+	IcebergSchemaSet schemas;
 
 private:
 	std::mutex metadata_cache_mutex;

@@ -2,23 +2,23 @@
 #include "duckdb/parser/parsed_data/create_schema_info.hpp"
 #include "duckdb/parser/parsed_data/drop_info.hpp"
 #include "duckdb/catalog/catalog.hpp"
-#include "storage/irc_catalog.hpp"
-#include "storage/irc_schema_set.hpp"
-#include "storage/irc_transaction.hpp"
+#include "storage/catalog/iceberg_catalog.hpp"
+#include "storage/catalog/iceberg_schema_set.hpp"
+#include "storage/iceberg_transaction.hpp"
 
 namespace duckdb {
 
-IRCSchemaSet::IRCSchemaSet(Catalog &catalog) : catalog(catalog) {
+IcebergSchemaSet::IcebergSchemaSet(Catalog &catalog) : catalog(catalog) {
 }
 
-optional_ptr<CatalogEntry> IRCSchemaSet::GetEntry(ClientContext &context, const string &name,
-                                                  OnEntryNotFound if_not_found) {
+optional_ptr<CatalogEntry> IcebergSchemaSet::GetEntry(ClientContext &context, const string &name,
+                                                      OnEntryNotFound if_not_found) {
 	lock_guard<mutex> l(entry_lock);
-	auto &ic_catalog = catalog.Cast<IRCatalog>();
+	auto &ic_catalog = catalog.Cast<IcebergCatalog>();
 
-	auto &irc_transaction = IRCTransaction::Get(context, catalog);
+	auto &iceberg_transaction = IcebergTransaction::Get(context, catalog);
 
-	auto verify_existence = irc_transaction.looked_up_entries.insert(name).second;
+	auto verify_existence = iceberg_transaction.looked_up_entries.insert(name).second;
 	auto entry = entries.find(name);
 	if (entry != entries.end()) {
 		return entry->second.get();
@@ -40,7 +40,7 @@ optional_ptr<CatalogEntry> IRCSchemaSet::GetEntry(ClientContext &context, const 
 		}
 		info.schema = name;
 		info.internal = false;
-		auto schema_entry = make_uniq<IRCSchemaEntry>(catalog, info);
+		auto schema_entry = make_uniq<IcebergSchemaEntry>(catalog, info);
 		CreateEntryInternal(context, std::move(schema_entry));
 		entry = entries.find(name);
 		D_ASSERT(entry != entries.end());
@@ -48,7 +48,7 @@ optional_ptr<CatalogEntry> IRCSchemaSet::GetEntry(ClientContext &context, const 
 	return entry->second.get();
 }
 
-void IRCSchemaSet::Scan(ClientContext &context, const std::function<void(CatalogEntry &)> &callback) {
+void IcebergSchemaSet::Scan(ClientContext &context, const std::function<void(CatalogEntry &)> &callback) {
 	lock_guard<mutex> l(entry_lock);
 	LoadEntries(context);
 	for (auto &entry : entries) {
@@ -56,11 +56,11 @@ void IRCSchemaSet::Scan(ClientContext &context, const std::function<void(Catalog
 	}
 }
 
-void IRCSchemaSet::AddEntry(const string &name, unique_ptr<IRCSchemaEntry> entry) {
+void IcebergSchemaSet::AddEntry(const string &name, unique_ptr<IcebergSchemaEntry> entry) {
 	entries.insert(make_pair(name, std::move(entry)));
 }
 
-CatalogEntry &IRCSchemaSet::GetEntry(const string &name) {
+CatalogEntry &IcebergSchemaSet::GetEntry(const string &name) {
 	auto entry_it = entries.find(name);
 	if (entry_it == entries.end()) {
 		throw CatalogException("Schema '%s' does not exist", name);
@@ -69,7 +69,7 @@ CatalogEntry &IRCSchemaSet::GetEntry(const string &name) {
 	return *entry;
 }
 
-const case_insensitive_map_t<unique_ptr<CatalogEntry>> &IRCSchemaSet::GetEntries() {
+const case_insensitive_map_t<unique_ptr<CatalogEntry>> &IcebergSchemaSet::GetEntries() {
 	return entries;
 }
 
@@ -77,10 +77,10 @@ static string GetSchemaName(const vector<string> &items) {
 	return StringUtil::Join(items, ".");
 }
 
-void IRCSchemaSet::LoadEntries(ClientContext &context) {
-	auto &ic_catalog = catalog.Cast<IRCatalog>();
-	auto &irc_transaction = IRCTransaction::Get(context, catalog);
-	bool schema_listed = irc_transaction.called_list_schemas;
+void IcebergSchemaSet::LoadEntries(ClientContext &context) {
+	auto &ic_catalog = catalog.Cast<IcebergCatalog>();
+	auto &iceberg_transaction = IcebergTransaction::Get(context, catalog);
+	bool schema_listed = iceberg_transaction.called_list_schemas;
 	if (schema_listed) {
 		return;
 	}
@@ -89,17 +89,18 @@ void IRCSchemaSet::LoadEntries(ClientContext &context) {
 		CreateSchemaInfo info;
 		info.schema = GetSchemaName(schema.items);
 		info.internal = false;
-		auto schema_entry = make_uniq<IRCSchemaEntry>(catalog, info);
+		auto schema_entry = make_uniq<IcebergSchemaEntry>(catalog, info);
 		schema_entry->namespace_items = std::move(schema.items);
 		CreateEntryInternal(context, std::move(schema_entry));
 	}
-	irc_transaction.called_list_schemas = true;
+	iceberg_transaction.called_list_schemas = true;
 }
 
-optional_ptr<CatalogEntry> IRCSchemaSet::CreateEntryInternal(ClientContext &context, unique_ptr<CatalogEntry> entry) {
+optional_ptr<CatalogEntry> IcebergSchemaSet::CreateEntryInternal(ClientContext &context,
+                                                                 unique_ptr<CatalogEntry> entry) {
 	auto result = entry.get();
 	if (result->name.empty()) {
-		throw InternalException("IRCSchemaSet::CreateEntry called with empty name");
+		throw InternalException("IcebergSchemaSet::CreateEntry called with empty name");
 	}
 	entries.insert(make_pair(result->name, std::move(entry)));
 	return result;

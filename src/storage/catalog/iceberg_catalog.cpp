@@ -1,6 +1,6 @@
-#include "storage/irc_schema_entry.hpp"
-#include "storage/irc_table_entry.hpp"
-#include "storage/irc_transaction.hpp"
+#include "storage/catalog/iceberg_schema_entry.hpp"
+#include "storage/catalog/iceberg_table_entry.hpp"
+#include "storage/iceberg_transaction.hpp"
 #include "catalog_api.hpp"
 #include "catalog_utils.hpp"
 #include "iceberg_utils.hpp"
@@ -13,9 +13,9 @@
 #include "duckdb/main/attached_database.hpp"
 #include "rest_catalog/objects/catalog_config.hpp"
 #include "duckdb/planner/operator/logical_create_table.hpp"
-#include "storage/irc_catalog.hpp"
+#include "storage/catalog/iceberg_catalog.hpp"
 #include "regex"
-#include "storage/irc_authorization.hpp"
+#include "storage/iceberg_authorization.hpp"
 #include "storage/authorization/oauth2.hpp"
 #include "storage/authorization/sigv4.hpp"
 #include "storage/authorization/none.hpp"
@@ -24,30 +24,31 @@ using namespace duckdb_yyjson;
 
 namespace duckdb {
 
-IRCatalog::IRCatalog(AttachedDatabase &db_p, AccessMode access_mode, unique_ptr<IRCAuthorization> auth_handler,
-                     IcebergAttachOptions &attach_options, const string &default_schema)
+IcebergCatalog::IcebergCatalog(AttachedDatabase &db_p, AccessMode access_mode,
+                               unique_ptr<IcebergAuthorization> auth_handler, IcebergAttachOptions &attach_options,
+                               const string &default_schema)
     : Catalog(db_p), access_mode(access_mode), auth_handler(std::move(auth_handler)),
       warehouse(attach_options.warehouse), uri(attach_options.endpoint), version("v1"), attach_options(attach_options),
       default_schema(default_schema), schemas(*this), metadata_cache() {
 	D_ASSERT(!default_schema.empty());
 }
 
-IRCatalog::~IRCatalog() = default;
+IcebergCatalog::~IcebergCatalog() = default;
 
 //===--------------------------------------------------------------------===//
 // Catalog API
 //===--------------------------------------------------------------------===//
 
-void IRCatalog::Initialize(bool load_builtin) {
+void IcebergCatalog::Initialize(bool load_builtin) {
 }
 
-void IRCatalog::ScanSchemas(ClientContext &context, std::function<void(SchemaCatalogEntry &)> callback) {
-	schemas.Scan(context, [&](CatalogEntry &schema) { callback(schema.Cast<IRCSchemaEntry>()); });
+void IcebergCatalog::ScanSchemas(ClientContext &context, std::function<void(SchemaCatalogEntry &)> callback) {
+	schemas.Scan(context, [&](CatalogEntry &schema) { callback(schema.Cast<IcebergSchemaEntry>()); });
 }
 
-optional_ptr<SchemaCatalogEntry> IRCatalog::LookupSchema(CatalogTransaction transaction,
-                                                         const EntryLookupInfo &schema_lookup,
-                                                         OnEntryNotFound if_not_found) {
+optional_ptr<SchemaCatalogEntry> IcebergCatalog::LookupSchema(CatalogTransaction transaction,
+                                                              const EntryLookupInfo &schema_lookup,
+                                                              OnEntryNotFound if_not_found) {
 	if (schema_lookup.GetEntryName() == DEFAULT_SCHEMA && default_schema != DEFAULT_SCHEMA) {
 		D_ASSERT(!default_schema.empty());
 		return GetSchema(transaction, default_schema, if_not_found);
@@ -62,8 +63,8 @@ optional_ptr<SchemaCatalogEntry> IRCatalog::LookupSchema(CatalogTransaction tran
 	return reinterpret_cast<SchemaCatalogEntry *>(entry.get());
 }
 
-void IRCatalog::StoreLoadTableResult(const string &table_key,
-                                     unique_ptr<const rest_api_objects::LoadTableResult> load_table_result) {
+void IcebergCatalog::StoreLoadTableResult(const string &table_key,
+                                          unique_ptr<const rest_api_objects::LoadTableResult> load_table_result) {
 	std::lock_guard<std::mutex> g(metadata_cache_mutex);
 	// erase load table result if it exists.
 	if (metadata_cache.find(table_key) != metadata_cache.end()) {
@@ -74,7 +75,7 @@ void IRCatalog::StoreLoadTableResult(const string &table_key,
 	metadata_cache.emplace(table_key, std::move(val));
 }
 
-MetadataCacheValue &IRCatalog::GetLoadTableResult(const string &table_key) {
+MetadataCacheValue &IcebergCatalog::GetLoadTableResult(const string &table_key) {
 	std::lock_guard<std::mutex> g(metadata_cache_mutex);
 	if (metadata_cache.find(table_key) == metadata_cache.end()) {
 		throw InternalException("Attempting to retrieve table information that was never stored");
@@ -84,7 +85,7 @@ MetadataCacheValue &IRCatalog::GetLoadTableResult(const string &table_key) {
 	return *res->second;
 }
 
-void IRCatalog::RemoveLoadTableResult(string table_key) {
+void IcebergCatalog::RemoveLoadTableResult(string table_key) {
 	std::lock_guard<std::mutex> g(metadata_cache_mutex);
 	if (metadata_cache.find(table_key) == metadata_cache.end()) {
 		throw InternalException("Attempting to remove table information that was never stored");
@@ -92,7 +93,7 @@ void IRCatalog::RemoveLoadTableResult(string table_key) {
 	metadata_cache.erase(table_key);
 }
 
-optional_ptr<CatalogEntry> IRCatalog::CreateSchema(CatalogTransaction transaction, CreateSchemaInfo &info) {
+optional_ptr<CatalogEntry> IcebergCatalog::CreateSchema(CatalogTransaction transaction, CreateSchemaInfo &info) {
 	optional_ptr<ClientContext> context = transaction.GetContext();
 	if (info.on_conflict == OnCreateConflict::REPLACE_ON_CONFLICT) {
 		throw NotImplementedException(
@@ -127,14 +128,14 @@ optional_ptr<CatalogEntry> IRCatalog::CreateSchema(CatalogTransaction transactio
 	}
 
 	IRCAPI::CommitNamespaceCreate(*context, *this, create_body);
-	auto new_schema = make_uniq<IRCSchemaEntry>(*this, info);
+	auto new_schema = make_uniq<IcebergSchemaEntry>(*this, info);
 	auto schema_name = new_schema->name;
 	schemas.AddEntry(schema_name, std::move(new_schema));
 	auto &ret = schemas.GetEntry(info.schema);
 	return ret;
 }
 
-void IRCatalog::DropSchema(ClientContext &context, DropInfo &info) {
+void IcebergCatalog::DropSchema(ClientContext &context, DropInfo &info) {
 	if (info.cascade) {
 		throw NotImplementedException(
 		    "DROP SCHEMA <schema_name> CASCADE is not supported for Iceberg schemas currently");
@@ -153,20 +154,21 @@ void IRCatalog::DropSchema(ClientContext &context, DropInfo &info) {
 	IRCAPI::CommitNamespaceDrop(context, *this, namespace_items);
 }
 
-unique_ptr<LogicalOperator> IRCatalog::BindCreateIndex(Binder &binder, CreateStatement &stmt, TableCatalogEntry &table,
-                                                       unique_ptr<LogicalOperator> plan) {
-	throw NotImplementedException("IRCatalog BindCreateIndex");
+unique_ptr<LogicalOperator> IcebergCatalog::BindCreateIndex(Binder &binder, CreateStatement &stmt,
+                                                            TableCatalogEntry &table,
+                                                            unique_ptr<LogicalOperator> plan) {
+	throw NotImplementedException("IcebergCatalog BindCreateIndex");
 }
 
-bool IRCatalog::InMemory() {
+bool IcebergCatalog::InMemory() {
 	return false;
 }
 
-string IRCatalog::GetDBPath() {
+string IcebergCatalog::GetDBPath() {
 	return warehouse;
 }
 
-DatabaseSize IRCatalog::GetDatabaseSize(ClientContext &context) {
+DatabaseSize IcebergCatalog::GetDatabaseSize(ClientContext &context) {
 	DatabaseSize size;
 	return size;
 }
@@ -175,14 +177,14 @@ DatabaseSize IRCatalog::GetDatabaseSize(ClientContext &context) {
 // Iceberg REST Catalog
 //===--------------------------------------------------------------------===//
 
-IRCEndpointBuilder IRCatalog::GetBaseUrl() const {
+IRCEndpointBuilder IcebergCatalog::GetBaseUrl() const {
 	auto base_url = IRCEndpointBuilder();
 	base_url.SetHost(uri);
 	base_url.AddPathComponent(version);
 	return base_url;
 }
 
-unique_ptr<SecretEntry> IRCatalog::GetStorageSecret(ClientContext &context, const string &secret_name) {
+unique_ptr<SecretEntry> IcebergCatalog::GetStorageSecret(ClientContext &context, const string &secret_name) {
 	auto transaction = CatalogTransaction::GetSystemCatalogTransaction(context);
 
 	case_insensitive_set_t accepted_secret_types {"s3", "aws"};
@@ -220,11 +222,11 @@ unique_ptr<SecretEntry> IRCatalog::GetStorageSecret(ClientContext &context, cons
 	throw InvalidConfigurationException("Could not find a valid storage secret (s3 or aws)");
 }
 
-IRCSchemaSet &IRCatalog::GetSchemas() {
+IcebergSchemaSet &IcebergCatalog::GetSchemas() {
 	return schemas;
 }
 
-unique_ptr<SecretEntry> IRCatalog::GetIcebergSecret(ClientContext &context, const string &secret_name) {
+unique_ptr<SecretEntry> IcebergCatalog::GetIcebergSecret(ClientContext &context, const string &secret_name) {
 	auto transaction = CatalogTransaction::GetSystemCatalogTransaction(context);
 	unique_ptr<SecretEntry> secret_entry = nullptr;
 	if (secret_name.empty()) {
@@ -240,7 +242,7 @@ unique_ptr<SecretEntry> IRCatalog::GetIcebergSecret(ClientContext &context, cons
 	return secret_entry;
 }
 
-void IRCatalog::AddDefaultSupportedEndpoints() {
+void IcebergCatalog::AddDefaultSupportedEndpoints() {
 	// insert namespaces based on REST API spec.
 	// List namespaces
 	supported_urls.insert("GET /v1/{prefix}/namespaces");
@@ -272,7 +274,7 @@ void IRCatalog::AddDefaultSupportedEndpoints() {
 	supported_urls.insert("POST /v1/{prefix}/transactions/commit");
 }
 
-void IRCatalog::AddS3TablesEndpoints() {
+void IcebergCatalog::AddS3TablesEndpoints() {
 	// insert namespaces based on REST API spec.
 	// List namespaces
 	supported_urls.insert("GET /v1/{prefix}/namespaces");
@@ -300,7 +302,7 @@ void IRCatalog::AddS3TablesEndpoints() {
 	supported_urls.insert("HEAD /v1/{prefix}/namespaces/{namespace}");
 }
 
-void IRCatalog::AddGlueEndpoints() {
+void IcebergCatalog::AddGlueEndpoints() {
 	// insert namespaces based on REST API spec.
 	// List namespaces
 	supported_urls.insert("GET /v1/{prefix}/namespaces");
@@ -324,7 +326,7 @@ void IRCatalog::AddGlueEndpoints() {
 	supported_urls.insert("DELETE /v1/{prefix}/namespaces/{namespace}/tables/{table}");
 }
 
-void IRCatalog::GetConfig(ClientContext &context, IcebergEndpointType &endpoint_type) {
+void IcebergCatalog::GetConfig(ClientContext &context, IcebergEndpointType &endpoint_type) {
 	// set the prefix to be empty. To get the config endpoint,
 	// we cannot add a default prefix.
 	D_ASSERT(prefix.empty());
@@ -401,11 +403,11 @@ static IcebergEndpointType EndpointTypeFromString(const string &input) {
 //! Streamlined initialization for recognized catalog types
 
 static void S3OrGlueAttachInternal(IcebergAttachOptions &input, const string &service, const string &region) {
-	if (input.authorization_type != IRCAuthorizationType::INVALID) {
+	if (input.authorization_type != IcebergAuthorizationType::INVALID) {
 		throw InvalidConfigurationException("'endpoint_type' can not be combined with 'authorization_type'");
 	}
 
-	input.authorization_type = IRCAuthorizationType::SIGV4;
+	input.authorization_type = IcebergAuthorizationType::SIGV4;
 	input.endpoint = StringUtil::Format("%s.%s.amazonaws.com/iceberg", service, region);
 }
 
@@ -454,7 +456,7 @@ static void GlueAttach(ClientContext &context, IcebergAttachOptions &input) {
 	// look up any s3 secret
 
 	// if there is no secret, an error will be thrown
-	auto secret_entry = IRCatalog::GetStorageSecret(context, secret);
+	auto secret_entry = IcebergCatalog::GetStorageSecret(context, secret);
 	auto kv_secret = dynamic_cast<const KeyValueSecret &>(*secret_entry->secret);
 	auto region = kv_secret.TryGetValue("region");
 
@@ -465,8 +467,8 @@ static void GlueAttach(ClientContext &context, IcebergAttachOptions &input) {
 	S3OrGlueAttachInternal(input, "glue", region.ToString());
 }
 
-void IRCatalog::SetAWSCatalogOptions(IcebergAttachOptions &attach_options,
-                                     case_insensitive_set_t &set_by_attach_options) {
+void IcebergCatalog::SetAWSCatalogOptions(IcebergAttachOptions &attach_options,
+                                          case_insensitive_set_t &set_by_attach_options) {
 	attach_options.allows_deletes = false;
 	if (set_by_attach_options.find("support_stage_create") == set_by_attach_options.end()) {
 		attach_options.supports_stage_create = false;
@@ -476,9 +478,9 @@ void IRCatalog::SetAWSCatalogOptions(IcebergAttachOptions &attach_options,
 	}
 }
 
-unique_ptr<Catalog> IRCatalog::Attach(optional_ptr<StorageExtensionInfo> storage_info, ClientContext &context,
-                                      AttachedDatabase &db, const string &name, AttachInfo &info,
-                                      AttachOptions &options) {
+unique_ptr<Catalog> IcebergCatalog::Attach(optional_ptr<StorageExtensionInfo> storage_info, ClientContext &context,
+                                           AttachedDatabase &db, const string &name, AttachInfo &info,
+                                           AttachOptions &options) {
 	IRCEndpointBuilder endpoint_builder;
 
 	string endpoint_type_string;
@@ -550,10 +552,10 @@ unique_ptr<Catalog> IRCatalog::Attach(optional_ptr<StorageExtensionInfo> storage
 
 	//! Then check the authorization type
 	if (!authorization_type_string.empty()) {
-		if (attach_options.authorization_type != IRCAuthorizationType::INVALID) {
+		if (attach_options.authorization_type != IcebergAuthorizationType::INVALID) {
 			throw InvalidConfigurationException("'authorization_type' can not be combined with 'endpoint_type'");
 		}
-		attach_options.authorization_type = IRCAuthorization::TypeFromString(authorization_type_string);
+		attach_options.authorization_type = IcebergAuthorization::TypeFromString(authorization_type_string);
 	}
 	if (!access_mode_string.empty()) {
 		if (access_mode_string == "vended_credentials") {
@@ -566,22 +568,22 @@ unique_ptr<Catalog> IRCatalog::Attach(optional_ptr<StorageExtensionInfo> storage
 			    access_mode_string);
 		}
 	}
-	if (attach_options.authorization_type == IRCAuthorizationType::INVALID) {
-		attach_options.authorization_type = IRCAuthorizationType::OAUTH2;
+	if (attach_options.authorization_type == IcebergAuthorizationType::INVALID) {
+		attach_options.authorization_type = IcebergAuthorizationType::OAUTH2;
 	}
 
 	//! Finally, create the auth_handler class from the authorization_type and the remaining options
-	unique_ptr<IRCAuthorization> auth_handler;
+	unique_ptr<IcebergAuthorization> auth_handler;
 	switch (attach_options.authorization_type) {
-	case IRCAuthorizationType::OAUTH2: {
+	case IcebergAuthorizationType::OAUTH2: {
 		auth_handler = OAuth2Authorization::FromAttachOptions(context, attach_options);
 		break;
 	}
-	case IRCAuthorizationType::SIGV4: {
+	case IcebergAuthorizationType::SIGV4: {
 		auth_handler = SIGV4Authorization::FromAttachOptions(attach_options);
 		break;
 	}
-	case IRCAuthorizationType::NONE: {
+	case IcebergAuthorizationType::NONE: {
 		auth_handler = NoneAuthorization::FromAttachOptions(attach_options);
 		break;
 	}
@@ -608,13 +610,13 @@ unique_ptr<Catalog> IRCatalog::Attach(optional_ptr<StorageExtensionInfo> storage
 	}
 	D_ASSERT(auth_handler);
 	auto catalog =
-	    make_uniq<IRCatalog>(db, options.access_mode, std::move(auth_handler), attach_options, default_schema);
+	    make_uniq<IcebergCatalog>(db, options.access_mode, std::move(auth_handler), attach_options, default_schema);
 	catalog->GetConfig(context, endpoint_type);
 	return std::move(catalog);
 }
 
-string IRCatalog::GetOnlyMergeOnReadSupportedErrorMessage(const string &table_name, const string &property,
-                                                          const string &property_value) {
+string IcebergCatalog::GetOnlyMergeOnReadSupportedErrorMessage(const string &table_name, const string &property,
+                                                               const string &property_value) {
 	return StringUtil::Format("DuckDB-Iceberg only supports merge-on-read for updates/deletes. Table Property '%s' is "
 	                          "set to '%s' for table %s"
 	                          "You can modify Iceberg table properties wth the set_iceberg_table_properties() "

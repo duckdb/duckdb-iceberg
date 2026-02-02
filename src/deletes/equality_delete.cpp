@@ -17,11 +17,12 @@ static void InitializeFromOtherChunk(DataChunk &target, DataChunk &other, const 
 	target.InitializeEmpty(types);
 }
 
-void IcebergMultiFileList::ScanEqualityDeleteFile(const IcebergManifestEntry &entry, DataChunk &result_p,
+void IcebergMultiFileList::ScanEqualityDeleteFile(const IcebergManifestEntry &manifest_entry, DataChunk &result_p,
                                                   vector<MultiFileColumnDefinition> &local_columns,
                                                   const vector<MultiFileColumnDefinition> &global_columns,
                                                   const vector<ColumnIndex> &column_indexes) const {
-	D_ASSERT(!entry.equality_ids.empty());
+	auto &data_file = manifest_entry.data_file;
+	D_ASSERT(!data_file.equality_ids.empty());
 	D_ASSERT(result_p.ColumnCount() == local_columns.size());
 
 	auto count = result_p.size();
@@ -39,16 +40,17 @@ void IcebergMultiFileList::ScanEqualityDeleteFile(const IcebergManifestEntry &en
 
 	vector<column_t> column_ids;
 	DataChunk result;
-	for (auto id : entry.equality_ids) {
+	for (auto id : data_file.equality_ids) {
 		D_ASSERT(id_to_column.count(id));
 		column_ids.push_back(id_to_column[id]);
 	}
 
 	//! Get or create the equality delete data for this sequence number
-	auto it = equality_delete_data.find(entry.sequence_number);
+	auto it = equality_delete_data.find(manifest_entry.sequence_number);
 	if (it == equality_delete_data.end()) {
 		it = equality_delete_data
-		         .emplace(entry.sequence_number, make_uniq<IcebergEqualityDeleteData>(entry.sequence_number))
+		         .emplace(manifest_entry.sequence_number,
+		                  make_uniq<IcebergEqualityDeleteData>(manifest_entry.sequence_number))
 		         .first;
 	}
 	auto &deletes = *it->second;
@@ -74,12 +76,12 @@ void IcebergMultiFileList::ScanEqualityDeleteFile(const IcebergManifestEntry &en
 	//! Take only the relevant columns from the result
 	InitializeFromOtherChunk(result, result_p, column_ids);
 	result.ReferenceColumns(result_p, column_ids);
-	deletes.files.emplace_back(entry.partition_values, entry.partition_spec_id);
+	deletes.files.emplace_back(data_file.partition_values, manifest_entry.partition_spec_id);
 	auto &rows = deletes.files.back().rows;
 	rows.resize(count);
-	D_ASSERT(result.ColumnCount() == entry.equality_ids.size());
+	D_ASSERT(result.ColumnCount() == data_file.equality_ids.size());
 	for (idx_t col_idx = 0; col_idx < result.ColumnCount(); col_idx++) {
-		auto &field_id = entry.equality_ids[col_idx];
+		auto &field_id = data_file.equality_ids[col_idx];
 		auto global_column_id = id_to_global_column[field_id];
 		auto &col = global_columns[global_column_id];
 		auto &vec = result.data[col_idx];

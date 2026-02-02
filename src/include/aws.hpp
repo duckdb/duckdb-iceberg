@@ -3,7 +3,7 @@
 #include "duckdb/common/http_util.hpp"
 #include "duckdb/common/string.hpp"
 #include "duckdb/main/client_context.hpp"
-#include "storage/irc_authorization.hpp"
+#include "storage/iceberg_authorization.hpp"
 
 #include <aws/core/Aws.h>
 #include <aws/core/auth/AWSCredentials.h>

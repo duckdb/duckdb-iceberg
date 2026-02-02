@@ -170,10 +170,11 @@ static void IcebergColumnStatsFunction(ClientContext &context, TableFunctionInpu
 	auto &metadata = bind_data.metadata;
 	for (; global_state.current_manifest_idx < table_entries.size(); global_state.current_manifest_idx++) {
 		auto &table_entry = table_entries[global_state.current_manifest_idx];
-		auto &data_files = table_entry.manifest_file.data_files;
-		for (; global_state.current_manifest_entry_idx < data_files.size(); global_state.current_manifest_entry_idx++) {
+		auto &entries = table_entry.manifest_file.entries;
+		for (; global_state.current_manifest_entry_idx < entries.size(); global_state.current_manifest_entry_idx++) {
 			auto &manifest = table_entry.manifest;
-			auto &data_file = data_files[global_state.current_manifest_entry_idx];
+			auto &manifest_entry = entries[global_state.current_manifest_entry_idx];
+			auto &data_file = manifest_entry.data_file;
 
 			for (; global_state.column_it != bind_data.source_to_column_id.end(); global_state.column_it++) {
 				if (out >= STANDARD_VECTOR_SIZE) {
@@ -183,7 +184,7 @@ static void IcebergColumnStatsFunction(ClientContext &context, TableFunctionInpu
 				idx_t col = 0;
 				//! status
 				AddString(output.data[col++], out,
-				          string_t(IcebergManifestEntry::StatusTypeToString(data_file.status)));
+				          string_t(IcebergManifestEntry::StatusTypeToString(manifest_entry.status)));
 				//! content
 				AddString(output.data[col++], out,
 				          string_t(IcebergManifestEntry::ContentTypeToString(data_file.content)));

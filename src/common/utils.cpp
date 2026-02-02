@@ -4,7 +4,7 @@
 #include "duckdb/catalog/catalog_entry/view_catalog_entry.hpp"
 
 #include "iceberg_utils.hpp"
-#include "storage/irc_table_entry.hpp"
+#include "storage/catalog/iceberg_table_entry.hpp"
 #include "storage/iceberg_table_information.hpp"
 #include "metadata/iceberg_table_metadata.hpp"
 
@@ -106,7 +106,7 @@ string IcebergUtils::GetStorageLocation(ClientContext &context, const string &in
 			if (table.catalog.GetCatalogType() != "iceberg") {
 				throw InvalidInputException("Table %s is not an Iceberg table", input);
 			}
-			auto &table_entry = catalog_entry->Cast<ICTableEntry>();
+			auto &table_entry = catalog_entry->Cast<IcebergTableEntry>();
 			storage_location = table_entry.table_info.table_metadata.GetLatestMetadataJson();
 			// Prepare Iceberg Scan from entry will create the secret needed to access the table
 			table_entry.PrepareIcebergScanFromEntry(context);

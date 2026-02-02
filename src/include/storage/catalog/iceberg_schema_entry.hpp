@@ -3,17 +3,17 @@
 
 #include "catalog_api.hpp"
 #include "duckdb/catalog/catalog_entry/schema_catalog_entry.hpp"
-#include "storage/irc_table_set.hpp"
+#include "storage/catalog/iceberg_table_set.hpp"
 #include "duckdb/common/enums/on_entry_not_found.hpp"
 
 namespace duckdb {
-class IRCTransaction;
+class IcebergTransaction;
 struct IRCAPISchema;
 
-class IRCSchemaEntry : public SchemaCatalogEntry {
+class IcebergSchemaEntry : public SchemaCatalogEntry {
 public:
-	IRCSchemaEntry(Catalog &catalog, CreateSchemaInfo &info);
-	~IRCSchemaEntry() override;
+	IcebergSchemaEntry(Catalog &catalog, CreateSchemaInfo &info);
+	~IcebergSchemaEntry() override;
 
 	//! The various levels of namespaces this flattened representation represents
 	vector<string> namespace_items;
@@ -39,15 +39,16 @@ public:
 	void Scan(ClientContext &context, CatalogType type, const std::function<void(CatalogEntry &)> &callback) override;
 	void Scan(CatalogType type, const std::function<void(CatalogEntry &)> &callback) override;
 	void DropEntry(ClientContext &context, DropInfo &info) override;
+	void DropEntry(ClientContext &context, DropInfo &info, bool delete_entry = false);
 	optional_ptr<CatalogEntry> LookupEntry(CatalogTransaction transaction, const EntryLookupInfo &lookup_info) override;
 	bool HandleCreateConflict(CatalogTransaction &transaction, CatalogType catalog_type, const string &entry_name,
 	                          OnCreateConflict on_conflict);
 
 private:
-	ICTableSet &GetCatalogSet(CatalogType type);
+	IcebergTableSet &GetCatalogSet(CatalogType type);
 
 public:
-	ICTableSet tables;
+	IcebergTableSet tables;
 };
 
 } // namespace duckdb

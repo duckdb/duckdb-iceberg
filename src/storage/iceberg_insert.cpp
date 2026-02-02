@@ -1,10 +1,10 @@
 #include "storage/iceberg_insert.hpp"
-#include "storage/irc_catalog.hpp"
-#include "storage/irc_table_entry.hpp"
+#include "storage/catalog/iceberg_catalog.hpp"
+#include "storage/catalog/iceberg_table_entry.hpp"
 #include "storage/iceberg_table_information.hpp"
 #include "metadata/iceberg_column_definition.hpp"
 #include "iceberg_multi_file_list.hpp"
-#include "storage/irc_transaction.hpp"
+#include "storage/iceberg_transaction.hpp"
 #include "iceberg_value.hpp"
 #include "utils/iceberg_type.hpp"
 #include "duckdb/catalog/catalog_entry/copy_function_catalog_entry.hpp"
@@ -36,14 +36,14 @@ IcebergInsert::IcebergInsert(PhysicalPlan &physical_plan, const vector<LogicalTy
     : PhysicalOperator(physical_plan, PhysicalOperatorType::EXTENSION, types, 1), table(&table), schema(nullptr) {
 }
 
-IcebergCopyInput::IcebergCopyInput(ClientContext &context, ICTableEntry &table)
-    : catalog(table.catalog.Cast<IRCatalog>()), columns(table.GetColumns()) {
+IcebergCopyInput::IcebergCopyInput(ClientContext &context, IcebergTableEntry &table)
+    : catalog(table.catalog.Cast<IcebergCatalog>()), columns(table.GetColumns()) {
 	data_path = table.table_info.table_metadata.GetDataPath();
 }
 
-IcebergCopyInput::IcebergCopyInput(ClientContext &context, IRCSchemaEntry &schema, const ColumnList &columns,
+IcebergCopyInput::IcebergCopyInput(ClientContext &context, IcebergSchemaEntry &schema, const ColumnList &columns,
                                    const string &data_path_p)
-    : catalog(schema.catalog.Cast<IRCatalog>()), columns(columns) {
+    : catalog(schema.catalog.Cast<IcebergCatalog>()), columns(columns) {
 	// When data_path_p is provided directly, it's already the table location
 	// We should check if it has write.data.path property, but since this is a schema-level
 	// constructor and we don't have access to table metadata, we use the default behavior
@@ -154,22 +154,23 @@ void IcebergInsert::AddWrittenFiles(IcebergInsertGlobalState &global_state, Data
 	D_ASSERT(table);
 	// grab lock for written files vector
 	lock_guard<mutex> guard(global_state.lock);
-	auto &ic_table = table->Cast<ICTableEntry>();
+	auto &ic_table = table->Cast<IcebergTableEntry>();
 	auto partition_id = ic_table.table_info.table_metadata.default_spec_id;
 	for (idx_t r = 0; r < chunk.size(); r++) {
-		IcebergManifestEntry data_file;
+		IcebergManifestEntry manifest_entry;
+		manifest_entry.status = IcebergManifestEntryStatusType::ADDED;
+		if (partition_id) {
+			manifest_entry.partition_spec_id = static_cast<int32_t>(partition_id);
+		} else {
+			manifest_entry.partition_spec_id = 0;
+		}
+
+		auto &data_file = manifest_entry.data_file;
 		data_file.file_path = chunk.GetValue(0, r).GetValue<string>();
 		data_file.record_count = static_cast<int64_t>(chunk.GetValue(1, r).GetValue<idx_t>());
 		data_file.file_size_in_bytes = static_cast<int64_t>(chunk.GetValue(2, r).GetValue<idx_t>());
 		data_file.content = IcebergManifestEntryContentType::DATA;
-		data_file.status = IcebergManifestEntryStatusType::ADDED;
 		data_file.file_format = "parquet";
-
-		if (partition_id) {
-			data_file.partition_spec_id = static_cast<int32_t>(partition_id);
-		} else {
-			data_file.partition_spec_id = 0;
-		}
 
 		// extract the column stats
 		auto column_stats = chunk.GetValue(4, r);
@@ -245,7 +246,7 @@ void IcebergInsert::AddWrittenFiles(IcebergInsertGlobalState &global_state, Data
 		//	}
 		//}
 
-		global_state.written_files.push_back(std::move(data_file));
+		global_state.written_files.push_back(std::move(manifest_entry));
 	}
 }
 
@@ -277,14 +278,14 @@ SinkFinalizeType IcebergInsert::Finalize(Pipeline &pipeline, Event &event, Clien
                                          OperatorSinkFinalizeInput &input) const {
 	auto &global_state = input.global_state.Cast<IcebergInsertGlobalState>();
 
-	auto &irc_table = table->Cast<ICTableEntry>();
+	auto &irc_table = table->Cast<IcebergTableEntry>();
 	auto &table_info = irc_table.table_info;
-	auto &transaction = IRCTransaction::Get(context, table->catalog);
-	auto &irc_transaction = transaction.Cast<IRCTransaction>();
+	auto &transaction = IcebergTransaction::Get(context, table->catalog);
+	auto &iceberg_transaction = transaction.Cast<IcebergTransaction>();
 
 	lock_guard<mutex> guard(global_state.lock);
 	if (!global_state.written_files.empty()) {
-		ApplyTableUpdate(table_info, irc_transaction, [&](IcebergTableInformation &tbl) {
+		ApplyTableUpdate(table_info, iceberg_transaction, [&](IcebergTableInformation &tbl) {
 			tbl.AddSnapshot(transaction, std::move(global_state.written_files));
 		});
 	}
@@ -382,9 +383,9 @@ PhysicalOperator &IcebergInsert::PlanCopyForInsert(ClientContext &context, Physi
 
 	vector<idx_t> partition_columns;
 	//! TODO: support partitions
-	// auto partitions = op.table.Cast<ICTableEntry>().snapshot->GetPartitionColumns();
+	// auto partitions = op.table.Cast<IcebergTableEntry>().snapshot->GetPartitionColumns();
 	// if (partitions.size() != 0) {
-	//	auto column_names = op.table.Cast<ICTableEntry>().GetColumns().GetColumnNames();
+	//	auto column_names = op.table.Cast<IcebergTableEntry>().GetColumns().GetColumnNames();
 	//	for (int64_t i = 0; i < partitions.size(); i++) {
 	//		for (int64_t j = 0; j < column_names.size(); j++) {
 	//			if (column_names[j] == partitions[i]) {
@@ -408,7 +409,7 @@ PhysicalOperator &IcebergInsert::PlanCopyForInsert(ClientContext &context, Physi
 		physical_copy_ref.file_path = copy_input.data_path;
 		physical_copy_ref.partition_output = false;
 		physical_copy_ref.write_empty_file = false;
-		physical_copy_ref.file_size_bytes = IRCatalog::DEFAULT_TARGET_FILE_SIZE;
+		physical_copy_ref.file_size_bytes = IcebergCatalog::DEFAULT_TARGET_FILE_SIZE;
 		physical_copy_ref.rotate = true;
 	}
 
@@ -438,7 +439,7 @@ void VerifyDirectInsertionOrder(LogicalInsert &op) {
 }
 
 PhysicalOperator &IcebergInsert::PlanInsert(ClientContext &context, PhysicalPlanGenerator &planner,
-                                            ICTableEntry &table) {
+                                            IcebergTableEntry &table) {
 	optional_idx partition_id;
 	vector<LogicalType> return_types;
 	// the one return value is how many rows we are inserting
@@ -446,8 +447,8 @@ PhysicalOperator &IcebergInsert::PlanInsert(ClientContext &context, PhysicalPlan
 	return planner.Make<IcebergInsert>(return_types, table);
 }
 
-PhysicalOperator &IRCatalog::PlanInsert(ClientContext &context, PhysicalPlanGenerator &planner, LogicalInsert &op,
-                                        optional_ptr<PhysicalOperator> plan) {
+PhysicalOperator &IcebergCatalog::PlanInsert(ClientContext &context, PhysicalPlanGenerator &planner, LogicalInsert &op,
+                                             optional_ptr<PhysicalOperator> plan) {
 	if (op.return_chunk) {
 		throw BinderException("RETURNING clause not yet supported for insertion into Iceberg table");
 	}
@@ -458,7 +459,7 @@ PhysicalOperator &IRCatalog::PlanInsert(ClientContext &context, PhysicalPlanGene
 
 	VerifyDirectInsertionOrder(op);
 
-	auto &table_entry = op.table.Cast<ICTableEntry>();
+	auto &table_entry = op.table.Cast<IcebergTableEntry>();
 	// FIXME: Inserts into V3 tables is not yet supported since
 	// we need to keep track of row lineage, which we do not support
 	// https://iceberg.apache.org/spec/#row-lineage
@@ -496,12 +497,12 @@ PhysicalOperator &IRCatalog::PlanInsert(ClientContext &context, PhysicalPlanGene
 	return insert;
 }
 
-PhysicalOperator &IRCatalog::PlanCreateTableAs(ClientContext &context, PhysicalPlanGenerator &planner,
-                                               LogicalCreateTable &op, PhysicalOperator &plan) {
+PhysicalOperator &IcebergCatalog::PlanCreateTableAs(ClientContext &context, PhysicalPlanGenerator &planner,
+                                                    LogicalCreateTable &op, PhysicalOperator &plan) {
 	// TODO: parse partition information here.
 	auto &schema = op.schema;
 
-	auto &ic_schema_entry = schema.Cast<IRCSchemaEntry>();
+	auto &ic_schema_entry = schema.Cast<IcebergSchemaEntry>();
 	auto &catalog = ic_schema_entry.catalog;
 	auto transaction = catalog.GetCatalogTransaction(context);
 
@@ -511,7 +512,7 @@ PhysicalOperator &IRCatalog::PlanCreateTableAs(ClientContext &context, PhysicalP
 	if (!table) {
 		throw InternalException("Table could not be created");
 	}
-	auto &ic_table = table->Cast<ICTableEntry>();
+	auto &ic_table = table->Cast<IcebergTableEntry>();
 	// We need to load table credentials into our secrets for when we copy files
 	ic_table.PrepareIcebergScanFromEntry(context);
 

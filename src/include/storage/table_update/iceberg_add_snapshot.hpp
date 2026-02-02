@@ -14,7 +14,7 @@
 namespace duckdb {
 
 struct IcebergTableInformation;
-struct IcebergManifestFile;
+struct IcebergManifest;
 struct IcebergManifestList;
 
 struct IcebergAddSnapshot : public IcebergTableUpdate {

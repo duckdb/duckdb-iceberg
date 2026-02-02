@@ -9,28 +9,10 @@ namespace duckdb {
 
 struct IcebergTableInformation;
 
-struct ICTableInfo {
-	ICTableInfo() {
-		create_info = make_uniq<CreateTableInfo>();
-	}
-	ICTableInfo(const string &schema, const string &table) {
-		create_info = make_uniq<CreateTableInfo>(string(), schema, table);
-	}
-	ICTableInfo(const SchemaCatalogEntry &schema, const string &table) {
-		create_info = make_uniq<CreateTableInfo>((SchemaCatalogEntry &)schema, table);
-	}
-
-	const string &GetTableName() const {
-		return create_info->table;
-	}
-
-	unique_ptr<CreateTableInfo> create_info;
-};
-
-class ICTableEntry : public TableCatalogEntry {
+class IcebergTableEntry : public TableCatalogEntry {
 public:
-	ICTableEntry(IcebergTableInformation &table_info, Catalog &catalog, SchemaCatalogEntry &schema,
-	             CreateTableInfo &info);
+	IcebergTableEntry(IcebergTableInformation &table_info, Catalog &catalog, SchemaCatalogEntry &schema,
+	                  CreateTableInfo &info);
 
 	static virtual_column_map_t VirtualColumns();
 	virtual_column_map_t GetVirtualColumns() const override;
@@ -51,8 +33,8 @@ public:
 	IcebergTableInformation &table_info;
 };
 
-struct ICTableEntryHashFunction {
-	uint64_t operator()(const optional_ptr<ICTableEntry> &entry) const {
+struct IcebergTableEntryHashFunction {
+	uint64_t operator()(const optional_ptr<IcebergTableEntry> &entry) const {
 		D_ASSERT(entry);
 		auto table_uuid = entry->GetUUID();
 		return std::hash<string>()(table_uuid);

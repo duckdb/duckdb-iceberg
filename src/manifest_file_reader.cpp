@@ -270,42 +270,43 @@ idx_t ManifestFileReader::ReadChunk(idx_t offset, idx_t count, vector<IcebergMan
 			continue;
 		}
 
-		entry.file_path = file_path[index].GetString();
-		entry.file_format = file_format[index].GetString();
-		entry.record_count = record_count[index];
-		entry.file_size_in_bytes = file_size_in_bytes[index];
+		auto &data_file = entry.data_file;
+		data_file.file_path = file_path[index].GetString();
+		data_file.file_format = file_format[index].GetString();
+		data_file.record_count = record_count[index];
+		data_file.file_size_in_bytes = file_size_in_bytes[index];
 
 		if (lower_bounds && upper_bounds) {
-			entry.lower_bounds = GetBounds(*lower_bounds, index);
-			entry.upper_bounds = GetBounds(*upper_bounds, index);
+			data_file.lower_bounds = GetBounds(*lower_bounds, index);
+			data_file.upper_bounds = GetBounds(*upper_bounds, index);
 		}
 		if (column_sizes) {
-			entry.column_sizes = GetCounts(*column_sizes, index);
+			data_file.column_sizes = GetCounts(*column_sizes, index);
 		}
 		if (value_counts) {
-			entry.value_counts = GetCounts(*value_counts, index);
+			data_file.value_counts = GetCounts(*value_counts, index);
 		}
 		if (null_value_counts) {
-			entry.null_value_counts = GetCounts(*null_value_counts, index);
+			data_file.null_value_counts = GetCounts(*null_value_counts, index);
 		}
 		if (nan_value_counts) {
-			entry.nan_value_counts = GetCounts(*nan_value_counts, index);
+			data_file.nan_value_counts = GetCounts(*nan_value_counts, index);
 		}
 
 		if (referenced_data_file && FlatVector::Validity(*referenced_data_file).RowIsValid(index)) {
-			entry.referenced_data_file = FlatVector::GetData<string_t>(*referenced_data_file)[index].GetString();
+			data_file.referenced_data_file = FlatVector::GetData<string_t>(*referenced_data_file)[index].GetString();
 		}
 		if (content_offset && FlatVector::Validity(*content_offset).RowIsValid(index)) {
-			entry.content_offset = content_offset->GetValue(index);
+			data_file.content_offset = content_offset->GetValue(index);
 		}
 		if (content_size_in_bytes && FlatVector::Validity(*content_size_in_bytes).RowIsValid(index)) {
-			entry.content_size_in_bytes = content_size_in_bytes->GetValue(index);
+			data_file.content_size_in_bytes = content_size_in_bytes->GetValue(index);
 		}
 
 		if (iceberg_version > 1) {
-			entry.content = (IcebergManifestEntryContentType)content[index];
+			data_file.content = (IcebergManifestEntryContentType)content[index];
 			if (equality_ids) {
-				entry.equality_ids = GetEqualityIds(*equality_ids, index);
+				data_file.equality_ids = GetEqualityIds(*equality_ids, index);
 			}
 
 			if (sequence_number) {
@@ -325,7 +326,7 @@ idx_t ManifestFileReader::ReadChunk(idx_t offset, idx_t count, vector<IcebergMan
 			}
 		} else {
 			entry.sequence_number = this->sequence_number;
-			entry.content = IcebergManifestEntryContentType::DATA;
+			data_file.content = IcebergManifestEntryContentType::DATA;
 		}
 
 		entry.partition_spec_id = this->partition_spec_id;
@@ -333,7 +334,7 @@ idx_t ManifestFileReader::ReadChunk(idx_t offset, idx_t count, vector<IcebergMan
 			auto field_id = it.first;
 			auto &partition_vector = it.second.get();
 
-			entry.partition_values.emplace_back(field_id, partition_vector.GetValue(index));
+			data_file.partition_values.emplace_back(field_id, partition_vector.GetValue(index));
 		}
 		produced++;
 		result.push_back(entry);

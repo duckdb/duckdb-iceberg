@@ -3,7 +3,7 @@
 #include "iceberg_logging.hpp"
 #include "duckdb/main/extension_helper.hpp"
 #include "storage/authorization/oauth2.hpp"
-#include "storage/irc_catalog.hpp"
+#include "storage/catalog/iceberg_catalog.hpp"
 #include "api_utils.hpp"
 #include "duckdb/common/exception/http_exception.hpp"
 #include "duckdb/logging/logger.hpp"
@@ -26,12 +26,12 @@ static const case_insensitive_map_t<LogicalType> &IcebergSecretOptions() {
 
 } // namespace
 
-OAuth2Authorization::OAuth2Authorization() : IRCAuthorization(IRCAuthorizationType::OAUTH2) {
+OAuth2Authorization::OAuth2Authorization() : IcebergAuthorization(IcebergAuthorizationType::OAUTH2) {
 }
 
 OAuth2Authorization::OAuth2Authorization(const string &grant_type, const string &uri, const string &client_id,
                                          const string &client_secret, const string &scope)
-    : IRCAuthorization(IRCAuthorizationType::OAUTH2), grant_type(grant_type), uri(uri), client_id(client_id),
+    : IcebergAuthorization(IcebergAuthorizationType::OAUTH2), grant_type(grant_type), uri(uri), client_id(client_id),
       client_secret(client_secret), scope(scope) {
 }
 
@@ -131,7 +131,7 @@ unique_ptr<OAuth2Authorization> OAuth2Authorization::FromAttachOptions(ClientCon
 	unique_ptr<SecretEntry> iceberg_secret;
 	if (create_secret_options.empty()) {
 		//! Look up an ICEBERG secret
-		iceberg_secret = IRCatalog::GetIcebergSecret(context, secret);
+		iceberg_secret = IcebergCatalog::GetIcebergSecret(context, secret);
 		if (!iceberg_secret) {
 			if (!secret.empty()) {
 				throw InvalidConfigurationException("No ICEBERG secret by the name of '%s' could be found", secret);

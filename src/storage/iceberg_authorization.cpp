@@ -1,14 +1,14 @@
 
-#include "storage/irc_authorization.hpp"
+#include "storage/iceberg_authorization.hpp"
 #include "api_utils.hpp"
 #include "storage/authorization/oauth2.hpp"
 
 namespace duckdb {
 
-IRCAuthorizationType IRCAuthorization::TypeFromString(const string &type) {
-	static const case_insensitive_map_t<IRCAuthorizationType> mapping {{"oauth2", IRCAuthorizationType::OAUTH2},
-	                                                                   {"sigv4", IRCAuthorizationType::SIGV4},
-	                                                                   {"none", IRCAuthorizationType::NONE}};
+IcebergAuthorizationType IcebergAuthorization::TypeFromString(const string &type) {
+	static const case_insensitive_map_t<IcebergAuthorizationType> mapping {{"oauth2", IcebergAuthorizationType::OAUTH2},
+	                                                                       {"sigv4", IcebergAuthorizationType::SIGV4},
+	                                                                       {"none", IcebergAuthorizationType::NONE}};
 
 	for (auto it : mapping) {
 		if (StringUtil::CIEquals(it.first, type)) {

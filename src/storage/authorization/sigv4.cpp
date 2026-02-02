@@ -3,7 +3,7 @@
 #include "duckdb/main/client_context.hpp"
 #include "duckdb/common/file_system.hpp"
 #include "duckdb/main/setting_info.hpp"
-#include "storage/irc_catalog.hpp"
+#include "storage/catalog/iceberg_catalog.hpp"
 
 namespace duckdb {
 
@@ -31,14 +31,14 @@ HostDecompositionResult DecomposeHost(const string &host) {
 
 } // namespace
 
-SIGV4Authorization::SIGV4Authorization() : IRCAuthorization(IRCAuthorizationType::SIGV4) {
+SIGV4Authorization::SIGV4Authorization() : IcebergAuthorization(IcebergAuthorizationType::SIGV4) {
 }
 
 SIGV4Authorization::SIGV4Authorization(const string &secret)
-    : IRCAuthorization(IRCAuthorizationType::SIGV4), secret(secret) {
+    : IcebergAuthorization(IcebergAuthorizationType::SIGV4), secret(secret) {
 }
 
-unique_ptr<IRCAuthorization> SIGV4Authorization::FromAttachOptions(IcebergAttachOptions &input) {
+unique_ptr<IcebergAuthorization> SIGV4Authorization::FromAttachOptions(IcebergAttachOptions &input) {
 	auto result = make_uniq<SIGV4Authorization>();
 
 	unordered_map<string, Value> remaining_options;
@@ -101,7 +101,7 @@ AWSInput SIGV4Authorization::CreateAWSInput(ClientContext &context, const IRCEnd
 	}
 
 	// AWS credentials
-	auto secret_entry = IRCatalog::GetStorageSecret(context, secret);
+	auto secret_entry = IcebergCatalog::GetStorageSecret(context, secret);
 	auto kv_secret = dynamic_cast<const KeyValueSecret &>(*secret_entry->secret);
 	aws_input.key_id = kv_secret.secret_map["key_id"].GetValue<string>();
 	aws_input.secret = kv_secret.secret_map["secret"].GetValue<string>();

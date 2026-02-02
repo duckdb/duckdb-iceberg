@@ -2,15 +2,15 @@
 #include "catalog_utils.hpp"
 #include "iceberg_logging.hpp"
 
-#include "storage/irc_catalog.hpp"
-#include "storage/irc_table_set.hpp"
+#include "storage/catalog/iceberg_catalog.hpp"
+#include "storage/catalog/iceberg_table_set.hpp"
 
-#include "storage/irc_table_entry.hpp"
-#include "storage/irc_transaction.hpp"
+#include "storage/catalog/iceberg_table_entry.hpp"
+#include "storage/iceberg_transaction.hpp"
 #include "storage/authorization/sigv4.hpp"
 #include "storage/iceberg_table_information.hpp"
 #include "storage/authorization/oauth2.hpp"
-#include "storage/irc_schema_entry.hpp"
+#include "storage/catalog/iceberg_schema_entry.hpp"
 #include "metadata/iceberg_partition_spec.hpp"
 
 #include "duckdb/parser/expression/constant_expression.hpp"
@@ -24,15 +24,15 @@
 
 namespace duckdb {
 
-ICTableSet::ICTableSet(IRCSchemaEntry &schema) : schema(schema), catalog(schema.ParentCatalog()) {
+IcebergTableSet::IcebergTableSet(IcebergSchemaEntry &schema) : schema(schema), catalog(schema.ParentCatalog()) {
 }
 
-bool ICTableSet::FillEntry(ClientContext &context, IcebergTableInformation &table) {
+bool IcebergTableSet::FillEntry(ClientContext &context, IcebergTableInformation &table) {
 	if (!table.schema_versions.empty()) {
 		return true;
 	}
 
-	auto &ic_catalog = catalog.Cast<IRCatalog>();
+	auto &ic_catalog = catalog.Cast<IcebergCatalog>();
 
 	auto get_table_result = IRCAPI::GetTable(context, ic_catalog, schema, table.name);
 	if (get_table_result.has_error) {
@@ -59,7 +59,7 @@ bool ICTableSet::FillEntry(ClientContext &context, IcebergTableInformation &tabl
 	return true;
 }
 
-void ICTableSet::Scan(ClientContext &context, const std::function<void(CatalogEntry &)> &callback) {
+void IcebergTableSet::Scan(ClientContext &context, const std::function<void(CatalogEntry &)> &callback) {
 	lock_guard<mutex> lock(entry_lock);
 	LoadEntries(context);
 	case_insensitive_set_t non_iceberg_tables;
@@ -80,13 +80,13 @@ void ICTableSet::Scan(ClientContext &context, const std::function<void(CatalogEn
 		auto col = ColumnDefinition(string("__"), LogicalType::UNKNOWN);
 		columns.push_back(std::move(col));
 		info.columns = ColumnList(std::move(columns));
-		auto table_entry = make_uniq<ICTableEntry>(table_info, catalog, schema, info);
+		auto table_entry = make_uniq<IcebergTableEntry>(table_info, catalog, schema, info);
 		if (!table_entry->internal) {
 			table_entry->internal = schema.internal;
 		}
 		auto result = table_entry.get();
 		if (result->name.empty()) {
-			throw InternalException("ICTableSet::CreateEntry called with empty name");
+			throw InternalException("IcebergTableSet::CreateEntry called with empty name");
 		}
 		table_info.dummy_entry = std::move(table_entry);
 		auto &optional = table_info.dummy_entry.get()->Cast<CatalogEntry>();
@@ -98,38 +98,39 @@ void ICTableSet::Scan(ClientContext &context, const std::function<void(CatalogEn
 	}
 }
 
-const case_insensitive_map_t<IcebergTableInformation> &ICTableSet::GetEntries() {
+const case_insensitive_map_t<IcebergTableInformation> &IcebergTableSet::GetEntries() {
 	return entries;
 }
 
-case_insensitive_map_t<IcebergTableInformation> &ICTableSet::GetEntriesMutable() {
+case_insensitive_map_t<IcebergTableInformation> &IcebergTableSet::GetEntriesMutable() {
 	return entries;
 }
 
-void ICTableSet::LoadEntries(ClientContext &context) {
-	auto &irc_transaction = IRCTransaction::Get(context, catalog);
-	bool schema_listed = irc_transaction.listed_schemas.find(schema.name) != irc_transaction.listed_schemas.end();
+void IcebergTableSet::LoadEntries(ClientContext &context) {
+	auto &iceberg_transaction = IcebergTransaction::Get(context, catalog);
+	bool schema_listed =
+	    iceberg_transaction.listed_schemas.find(schema.name) != iceberg_transaction.listed_schemas.end();
 	if (schema_listed) {
 		return;
 	}
-	auto &ic_catalog = catalog.Cast<IRCatalog>();
+	auto &ic_catalog = catalog.Cast<IcebergCatalog>();
 	auto tables = IRCAPI::GetTables(context, ic_catalog, schema);
 	for (auto &table : tables) {
 		entries.emplace(table.name, IcebergTableInformation(ic_catalog, schema, table.name));
 	}
-	irc_transaction.listed_schemas.insert(schema.name);
+	iceberg_transaction.listed_schemas.insert(schema.name);
 }
 
-bool ICTableSet::CreateNewEntry(ClientContext &context, IRCatalog &catalog, IRCSchemaEntry &schema,
-                                CreateTableInfo &info) {
+bool IcebergTableSet::CreateNewEntry(ClientContext &context, IcebergCatalog &catalog, IcebergSchemaEntry &schema,
+                                     CreateTableInfo &info) {
 	auto table_name = info.table;
-	auto &irc_transaction = IRCTransaction::Get(context, catalog);
+	auto &iceberg_transaction = IcebergTransaction::Get(context, catalog);
 
 	auto key = IcebergTableInformation::GetTableKey(schema.namespace_items, info.table);
-	irc_transaction.updated_tables.emplace(key, IcebergTableInformation(catalog, schema, info.table));
-	D_ASSERT(irc_transaction.updated_tables.count(key) > 0);
-	auto &table_info = irc_transaction.updated_tables.find(key)->second;
-	auto table_entry = make_uniq<ICTableEntry>(table_info, catalog, schema, info);
+	iceberg_transaction.updated_tables.emplace(key, IcebergTableInformation(catalog, schema, info.table));
+	D_ASSERT(iceberg_transaction.updated_tables.count(key) > 0);
+	auto &table_info = iceberg_transaction.updated_tables.find(key)->second;
+	auto table_entry = make_uniq<IcebergTableEntry>(table_info, catalog, schema, info);
 	auto table_ptr = table_entry.get();
 	table_entry->table_info.schema_versions[0] = std::move(table_entry);
 	table_ptr->table_info.table_metadata.schemas[0] = IcebergCreateTableRequest::CreateIcebergSchema(table_ptr);
@@ -138,7 +139,7 @@ bool ICTableSet::CreateNewEntry(ClientContext &context, IRCatalog &catalog, IRCS
 
 	auto &current_schema = table_info.table_metadata.GetLatestSchema();
 	table_ptr->table_info.table_metadata.default_spec_id = 0;
-	table_ptr->table_info.SetPartitionedBy(irc_transaction, info.partition_keys, current_schema, true);
+	table_ptr->table_info.SetPartitionedBy(iceberg_transaction, info.partition_keys, current_schema, true);
 
 	// Immediately create the table with stage_create = true to get metadata & data location(s)
 	// transaction commit will either commit with data (OR) create the table with stage_create = false
@@ -153,49 +154,44 @@ bool ICTableSet::CreateNewEntry(ClientContext &context, IRCatalog &catalog, IRCS
 
 	// if we stage created the table, we add an assert create
 	if (catalog.attach_options.supports_stage_create) {
-		table_info.AddAssertCreate(irc_transaction);
+		table_info.AddAssertCreate(iceberg_transaction);
 	}
 	// other required updates to the table
-	table_info.AddAssignUUID(irc_transaction);
-	table_info.AddUpradeFormatVersion(irc_transaction);
-	table_info.AddSchema(irc_transaction);
-	table_info.AddSetCurrentSchema(irc_transaction);
-	table_info.AddPartitionSpec(irc_transaction);
-	table_info.SetDefaultSpec(irc_transaction);
-	table_info.AddSortOrder(irc_transaction);
-	table_info.SetDefaultSortOrder(irc_transaction);
-	table_info.SetLocation(irc_transaction);
+	table_info.AddAssignUUID(iceberg_transaction);
+	table_info.AddUpradeFormatVersion(iceberg_transaction);
+	table_info.AddSchema(iceberg_transaction);
+	table_info.AddSetCurrentSchema(iceberg_transaction);
+	table_info.AddPartitionSpec(iceberg_transaction);
+	table_info.SetDefaultSpec(iceberg_transaction);
+	table_info.AddSortOrder(iceberg_transaction);
+	table_info.SetDefaultSortOrder(iceberg_transaction);
+	table_info.SetLocation(iceberg_transaction);
 	return true;
 }
 
-unique_ptr<ICTableInfo> ICTableSet::GetTableInfo(ClientContext &context, IRCSchemaEntry &schema,
-                                                 const string &table_name) {
-	throw NotImplementedException("ICTableSet::GetTableInfo");
-}
-
-optional_ptr<CatalogEntry> ICTableSet::GetEntry(ClientContext &context, const EntryLookupInfo &lookup) {
+optional_ptr<CatalogEntry> IcebergTableSet::GetEntry(ClientContext &context, const EntryLookupInfo &lookup) {
 	lock_guard<mutex> l(entry_lock);
-	auto &ic_catalog = catalog.Cast<IRCatalog>();
-	auto &irc_transaction = IRCTransaction::Get(context, catalog);
+	auto &ic_catalog = catalog.Cast<IcebergCatalog>();
+	auto &iceberg_transaction = IcebergTransaction::Get(context, catalog);
 	const auto table_name = lookup.GetEntryName();
 	// first check transaction entries
 	auto table_key = IcebergTableInformation::GetTableKey(schema.namespace_items, table_name);
 	// Check if table has been deleted within in the transaction.
-	if (irc_transaction.deleted_tables.count(table_key) > 0) {
+	if (iceberg_transaction.deleted_tables.count(table_key) > 0) {
 		return nullptr;
 	}
 	// Check if the table has been updated within the transaction
-	auto transaction_entry = irc_transaction.updated_tables.find(table_key);
-	if (transaction_entry != irc_transaction.updated_tables.end()) {
+	auto transaction_entry = iceberg_transaction.updated_tables.find(table_key);
+	if (transaction_entry != iceberg_transaction.updated_tables.end()) {
 		return transaction_entry->second.GetSchemaVersion(lookup.GetAtClause());
 	}
-	auto previous_requested_snapshot = irc_transaction.requested_tables.find(table_name);
-	if (previous_requested_snapshot != irc_transaction.requested_tables.end()) {
+	auto previous_requested_snapshot = iceberg_transaction.requested_tables.find(table_name);
+	if (previous_requested_snapshot != iceberg_transaction.requested_tables.end()) {
 		// transaction has already looked up this table, find it in entries
 		auto entry = entries.find(table_name);
 		if (entry == entries.end()) {
 			// table no longer exists (was most likely dropped in another transaction)
-			// TODO: we can recreate the table (but not insert it in the ICTableSet) by pulling it back
+			// TODO: we can recreate the table (but not insert it in the IcebergTableSet) by pulling it back
 			//  out of the MetadataCache. This doesn't make sense in the long run, as the transaction
 			//  will fail regardless
 			return nullptr;
@@ -215,7 +211,7 @@ optional_ptr<CatalogEntry> ICTableSet::GetEntry(ClientContext &context, const En
 	auto ret = entry->second.GetSchemaVersion(lookup.GetAtClause());
 
 	// get the latest information and save it to the transaction cache
-	auto &ic_ret = ret->Cast<ICTableEntry>();
+	auto &ic_ret = ret->Cast<IcebergTableEntry>();
 	auto latest_snapshot = ic_ret.table_info.table_metadata.GetLatestSnapshot();
 	idx_t latest_sequence_number, latest_snapshot_id;
 	if (latest_snapshot) {
@@ -227,7 +223,8 @@ optional_ptr<CatalogEntry> ICTableSet::GetEntry(ClientContext &context, const En
 		latest_snapshot_id = -1;
 	}
 
-	irc_transaction.requested_tables.emplace(table_name, TableInfoCache(latest_sequence_number, latest_snapshot_id));
+	iceberg_transaction.requested_tables.emplace(table_name,
+	                                             TableInfoCache(latest_sequence_number, latest_snapshot_id));
 	return ret;
 }
 

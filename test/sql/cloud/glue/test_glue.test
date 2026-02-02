@@ -76,5 +76,5 @@ attach '840140254803:incorrect/pyiceberg-blog-bucket' as no_s3tables (
 statement error
 select * from no_s3tables.my_namesepace.my_table;
 ----
-<REGEX>:.*HTTP Error: GET request to endpoint.*404.*
+<REGEX>:.*Catalog Error: Table with name.*my_namesepace.my_table.* does not exist because schema .*my_namesepace.* does not exist.*
 

@@ -6,14 +6,14 @@
 #include "duckdb/parser/parsed_data/create_secret_info.hpp"
 #include "iceberg_metadata.hpp"
 #include "url_utils.hpp"
-#include "storage/irc_table_entry.hpp"
+#include "storage/catalog/iceberg_table_entry.hpp"
 #include "rest_catalog/objects/table_identifier.hpp"
 #include "rest_catalog/objects/load_table_result.hpp"
 
 namespace duckdb {
 
-class IRCatalog;
-class IRCSchemaEntry;
+class IcebergCatalog;
+class IcebergSchemaEntry;
 
 struct IRCAPISchema {
 	//! The (potentially multiple) levels that the namespace is made up of
@@ -41,31 +41,34 @@ public:
 class IRCAPI {
 public:
 	static const string API_VERSION_1;
-	static vector<rest_api_objects::TableIdentifier> GetTables(ClientContext &context, IRCatalog &catalog,
-	                                                           const IRCSchemaEntry &schema);
-	static bool VerifyResponse(ClientContext &context, IRCatalog &catalog, IRCEndpointBuilder &url_builder,
+	static vector<rest_api_objects::TableIdentifier> GetTables(ClientContext &context, IcebergCatalog &catalog,
+	                                                           const IcebergSchemaEntry &schema);
+	static bool VerifyResponse(ClientContext &context, IcebergCatalog &catalog, IRCEndpointBuilder &url_builder,
 	                           bool execute_head);
-	static bool VerifySchemaExistence(ClientContext &context, IRCatalog &catalog, const string &schema);
-	static bool VerifyTableExistence(ClientContext &context, IRCatalog &catalog, const IRCSchemaEntry &schema,
+	static bool VerifySchemaExistence(ClientContext &context, IcebergCatalog &catalog, const string &schema);
+	static bool VerifyTableExistence(ClientContext &context, IcebergCatalog &catalog, const IcebergSchemaEntry &schema,
 	                                 const string &table);
 	static vector<string> ParseSchemaName(const string &namespace_name);
 	static string GetSchemaName(const vector<string> &items);
 	static string GetEncodedSchemaName(const vector<string> &items);
-	static APIResult<unique_ptr<const rest_api_objects::LoadTableResult>>
-	GetTable(ClientContext &context, IRCatalog &catalog, const IRCSchemaEntry &schema, const string &table_name);
-	static vector<IRCAPISchema> GetSchemas(ClientContext &context, IRCatalog &catalog, const vector<string> &parent);
-	static void CommitTableUpdate(ClientContext &context, IRCatalog &catalog, const vector<string> &schema,
+	static APIResult<unique_ptr<const rest_api_objects::LoadTableResult>> GetTable(ClientContext &context,
+	                                                                               IcebergCatalog &catalog,
+	                                                                               const IcebergSchemaEntry &schema,
+	                                                                               const string &table_name);
+	static vector<IRCAPISchema> GetSchemas(ClientContext &context, IcebergCatalog &catalog,
+	                                       const vector<string> &parent);
+	static void CommitTableUpdate(ClientContext &context, IcebergCatalog &catalog, const vector<string> &schema,
 	                              const string &table_name, const string &body);
-	static void CommitTableDelete(ClientContext &context, IRCatalog &catalog, const vector<string> &schema,
+	static void CommitTableDelete(ClientContext &context, IcebergCatalog &catalog, const vector<string> &schema,
 	                              const string &table_name);
-	static void CommitMultiTableUpdate(ClientContext &context, IRCatalog &catalog, const string &body);
-	static void CommitNamespaceCreate(ClientContext &context, IRCatalog &catalog, string body);
-	static void CommitNamespaceDrop(ClientContext &context, IRCatalog &catalog, vector<string> namespace_items);
+	static void CommitMultiTableUpdate(ClientContext &context, IcebergCatalog &catalog, const string &body);
+	static void CommitNamespaceCreate(ClientContext &context, IcebergCatalog &catalog, string body);
+	static void CommitNamespaceDrop(ClientContext &context, IcebergCatalog &catalog, vector<string> namespace_items);
 	//! stage create = false, table is created immediately in the IRC
 	//! stage create = true, table is not created, but metadata is initialized and returned
-	static rest_api_objects::LoadTableResult CommitNewTable(ClientContext &context, IRCatalog &catalog,
-	                                                        const ICTableEntry *table);
-	static rest_api_objects::CatalogConfig GetCatalogConfig(ClientContext &context, IRCatalog &catalog);
+	static rest_api_objects::LoadTableResult CommitNewTable(ClientContext &context, IcebergCatalog &catalog,
+	                                                        const IcebergTableEntry *table);
+	static rest_api_objects::CatalogConfig GetCatalogConfig(ClientContext &context, IcebergCatalog &catalog);
 };
 
 } // namespace duckdb

@@ -105,12 +105,12 @@ static unique_ptr<FunctionData> IcebergMetaDataBind(ClientContext &context, Tabl
 		ret->iceberg_table = IcebergTable::Load(filename, metadata, *snapshot_to_scan, context, options);
 	}
 
-	auto manifest_types = IcebergManifestListEntry::Types();
+	auto manifest_types = IcebergManifestFile::Types();
 	return_types.insert(return_types.end(), manifest_types.begin(), manifest_types.end());
 	auto manifest_entry_types = IcebergManifestEntry::Types();
 	return_types.insert(return_types.end(), manifest_entry_types.begin(), manifest_entry_types.end());
 
-	auto manifest_names = IcebergManifestListEntry::Names();
+	auto manifest_names = IcebergManifestFile::Names();
 	names.insert(names.end(), manifest_names.begin(), manifest_names.end());
 	auto manifest_entry_names = IcebergManifestEntry::Names();
 	names.insert(names.end(), manifest_entry_names.begin(), manifest_entry_names.end());
@@ -137,24 +137,25 @@ static void IcebergMetaDataFunction(ClientContext &context, TableFunctionInput &
 	auto &table_entries = bind_data.iceberg_table->entries;
 	for (; global_state.current_manifest_idx < table_entries.size(); global_state.current_manifest_idx++) {
 		auto &table_entry = table_entries[global_state.current_manifest_idx];
-		auto &data_files = table_entry.manifest_file.data_files;
-		for (; global_state.current_manifest_entry_idx < data_files.size(); global_state.current_manifest_entry_idx++) {
+		auto &entries = table_entry.manifest_file.entries;
+		for (; global_state.current_manifest_entry_idx < entries.size(); global_state.current_manifest_entry_idx++) {
 			if (out >= STANDARD_VECTOR_SIZE) {
 				output.SetCardinality(out);
 				return;
 			}
 			auto &manifest = table_entry.manifest;
-			auto &data_file = data_files[global_state.current_manifest_entry_idx];
+			auto &manifest_entry = entries[global_state.current_manifest_entry_idx];
+			auto &data_file = manifest_entry.data_file;
 
 			//! manifest_path
 			AddString(output.data[0], out, string_t(manifest.manifest_path));
 			//! manifest_sequence_number
 			FlatVector::GetData<int64_t>(output.data[1])[out] = manifest.sequence_number;
 			//! manifest_content
-			AddString(output.data[2], out, string_t(IcebergManifestListEntry::ContentTypeToString(manifest.content)));
+			AddString(output.data[2], out, string_t(IcebergManifestFile::ContentTypeToString(manifest.content)));
 
 			//! status
-			AddString(output.data[3], out, string_t(IcebergManifestEntry::StatusTypeToString(data_file.status)));
+			AddString(output.data[3], out, string_t(IcebergManifestEntry::StatusTypeToString(manifest_entry.status)));
 			//! content
 			AddString(output.data[4], out, string_t(IcebergManifestEntry::ContentTypeToString(data_file.content)));
 			//! file_path

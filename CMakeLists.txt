@@ -61,15 +61,15 @@ set(EXTENSION_SOURCES
     src/storage/authorization/none.cpp
     src/storage/authorization/oauth2.cpp
     src/storage/iceberg_transaction_data.cpp
-    src/storage/irc_authorization.cpp
-    src/storage/irc_catalog.cpp
-    src/storage/irc_schema_entry.cpp
-    src/storage/irc_schema_set.cpp
-    src/storage/irc_table_entry.cpp
-    src/storage/irc_table_set.cpp
-    src/storage/irc_transaction.cpp
-    src/storage/irc_authorization.cpp
-    src/storage/irc_transaction_manager.cpp
+    src/storage/iceberg_authorization.cpp
+    src/storage/catalog/iceberg_catalog.cpp
+    src/storage/catalog/iceberg_schema_entry.cpp
+    src/storage/catalog/iceberg_schema_set.cpp
+    src/storage/catalog/iceberg_table_entry.cpp
+    src/storage/catalog/iceberg_table_set.cpp
+    src/storage/iceberg_transaction.cpp
+    src/storage/iceberg_authorization.cpp
+    src/storage/iceberg_transaction_manager.cpp
     src/utils/iceberg_type.cpp
     src/storage/table_update/iceberg_add_snapshot.cpp
     src/storage/table_update/common.cpp

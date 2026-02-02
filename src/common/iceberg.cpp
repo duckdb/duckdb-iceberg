@@ -44,12 +44,12 @@ unique_ptr<IcebergTable> IcebergTable::Load(const string &iceberg_path, const Ic
 		manifest_file_reader->SetSequenceNumber(manifest.sequence_number);
 		manifest_file_reader->SetPartitionSpecID(manifest.partition_spec_id);
 
-		IcebergManifestFile manifest_file(full_path);
+		IcebergManifest manifest_file(full_path);
 		while (!manifest_file_reader->Finished()) {
-			manifest_file_reader->Read(STANDARD_VECTOR_SIZE, manifest_file.data_files);
+			manifest_file_reader->Read(STANDARD_VECTOR_SIZE, manifest_file.entries);
 		}
 
-		IcebergTableEntry table_entry(std::move(manifest), std::move(manifest_file));
+		IcebergTableManifestEntry table_entry(std::move(manifest), std::move(manifest_file));
 		ret->entries.push_back(table_entry);
 	}
 	return ret;

@@ -1,7 +1,7 @@
 #include "storage/table_update/common.hpp"
 
 #include "duckdb/common/exception.hpp"
-#include "storage/irc_table_set.hpp"
+#include "storage/catalog/iceberg_table_set.hpp"
 
 namespace duckdb {
 

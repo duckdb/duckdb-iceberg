@@ -10,7 +10,7 @@
 
 #include "duckdb/common/printer.hpp"
 #include "yyjson.hpp"
-#include "storage/irc_table_entry.hpp"
+#include "storage/catalog/iceberg_table_entry.hpp"
 #include "duckdb/common/file_system.hpp"
 
 using namespace duckdb_yyjson;

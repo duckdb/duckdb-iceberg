@@ -24,6 +24,7 @@
 
 #include "deletes/equality_delete.hpp"
 #include "deletes/positional_delete.hpp"
+#include "deletes/iceberg_delete_data.hpp"
 
 namespace duckdb {
 
@@ -44,13 +45,13 @@ public:
 	void Bind(vector<LogicalType> &return_types, vector<string> &names);
 	unique_ptr<IcebergMultiFileList> PushdownInternal(ClientContext &context, TableFilterSet &new_filters) const;
 	void ScanPositionalDeleteFile(DataChunk &result) const;
-	void ScanEqualityDeleteFile(const IcebergManifestEntry &entry, DataChunk &result,
+	void ScanEqualityDeleteFile(const IcebergManifestEntry &manifest_entry, DataChunk &result,
 	                            vector<MultiFileColumnDefinition> &columns,
 	                            const vector<MultiFileColumnDefinition> &global_columns,
 	                            const vector<ColumnIndex> &column_indexes) const;
 	void ScanDeleteFile(const IcebergManifestEntry &entry, const vector<MultiFileColumnDefinition> &global_columns,
 	                    const vector<ColumnIndex> &column_indexes) const;
-	void ScanPuffinFile(const IcebergManifestEntry &entry) const;
+	void ScanPuffinFile(const IcebergDataFile &entry) const;
 	unique_ptr<DeleteFilter> GetPositionalDeletesForFile(const string &file_path) const;
 	void ProcessDeletes(const vector<MultiFileColumnDefinition> &global_columns,
 	                    const vector<ColumnIndex> &column_indexes) const;
@@ -75,7 +76,7 @@ protected:
 	OpenFileInfo GetFileInternal(idx_t i, lock_guard<mutex> &guard) const;
 
 protected:
-	bool ManifestMatchesFilter(const IcebergManifestListEntry &manifest) const;
+	bool ManifestMatchesFilter(const IcebergManifestFile &manifest) const;
 	bool FileMatchesFilter(const IcebergManifestEntry &file) const;
 	// TODO: How to guarantee we only call this after the filter pushdown?
 	void InitializeFiles(lock_guard<mutex> &guard) const;
@@ -91,7 +92,7 @@ public:
 	FileSystem &fs;
 	shared_ptr<IcebergScanInfo> scan_info;
 	string path;
-	ICTableEntry *table;
+	IcebergTableEntry *table;
 
 	mutable mutex lock;
 	//! ComplexFilterPushdown results
@@ -100,28 +101,31 @@ public:
 	vector<LogicalType> types;
 	TableFilterSet table_filters;
 
-	mutable unique_ptr<manifest_file::ManifestFileReader> data_manifest_reader;
-	mutable unique_ptr<manifest_file::ManifestFileReader> delete_manifest_reader;
-
-	mutable vector<IcebergManifestEntry> data_files;
-	mutable vector<IcebergManifestListEntry> data_manifests;
-	mutable vector<IcebergManifestListEntry> delete_manifests;
-	mutable vector<reference<IcebergManifestFile>> transaction_data_manifests;
-	mutable vector<reference<IcebergManifestFile>> transaction_delete_manifests;
-	mutable idx_t transaction_data_idx = 0;
-	idx_t transaction_delete_idx = 0;
-
-	mutable vector<IcebergManifestListEntry>::iterator current_data_manifest;
-	mutable vector<IcebergManifestListEntry>::iterator current_delete_manifest;
-	mutable vector<reference<IcebergManifestFile>>::iterator current_transaction_delete_manifest;
-	//! The data files of the manifest file that we last scanned
-	mutable idx_t data_file_idx = 0;
-	mutable vector<IcebergManifestEntry> current_data_files;
-
+	mutable vector<IcebergManifestEntry> manifest_entries;
 	//! For each file that has a delete file, the state for processing that/those delete file(s)
-	mutable case_insensitive_map_t<unique_ptr<DeleteFilter>> positional_delete_data;
+	mutable case_insensitive_map_t<shared_ptr<IcebergDeleteData>> positional_delete_data;
 	//! All equality deletes with sequence numbers higher than that of the data_file apply to that data_file
 	mutable map<sequence_number_t, unique_ptr<IcebergEqualityDeleteData>> equality_delete_data;
+
+	//! State used for lazy-loading the data files
+	mutable unique_ptr<manifest_file::ManifestFileReader> data_manifest_reader;
+	mutable idx_t manifest_entry_idx = 0;
+	//! The data files of the manifest file that we last scanned
+	mutable vector<IcebergManifestEntry> current_manifest_entries;
+	mutable vector<IcebergManifestFile> data_manifests;
+	mutable vector<IcebergManifestFile>::iterator current_data_manifest;
+	mutable vector<reference<IcebergManifest>> transaction_data_manifests;
+	mutable idx_t transaction_data_idx = 0;
+
+	//! State used for pre-processing delete files
+	mutable unique_ptr<manifest_file::ManifestFileReader> delete_manifest_reader;
+	mutable vector<IcebergManifestFile> delete_manifests;
+	mutable vector<IcebergManifestFile>::iterator current_delete_manifest;
+	mutable vector<reference<IcebergManifest>> transaction_delete_manifests;
+	mutable idx_t transaction_delete_idx = 0;
+
+	//! FIXME: this is only used in 'FinalizeBind',
+	//! shouldn't this be used to protect all the variable accesses that are accessed there while the lock is held?
 	mutable mutex delete_lock;
 
 	mutable bool initialized = false;

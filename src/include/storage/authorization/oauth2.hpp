@@ -1,12 +1,12 @@
 #pragma once
 
-#include "storage/irc_authorization.hpp"
+#include "storage/iceberg_authorization.hpp"
 
 namespace duckdb {
 
-class OAuth2Authorization : public IRCAuthorization {
+class OAuth2Authorization : public IcebergAuthorization {
 public:
-	static constexpr const IRCAuthorizationType TYPE = IRCAuthorizationType::OAUTH2;
+	static constexpr const IcebergAuthorizationType TYPE = IcebergAuthorizationType::OAUTH2;
 
 public:
 	OAuth2Authorization();

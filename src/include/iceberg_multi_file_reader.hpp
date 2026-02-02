@@ -58,7 +58,7 @@ public:
 	                   const MultiFileReaderData &reader_data, DataChunk &input_chunk, DataChunk &output_chunk,
 	                   ExpressionExecutor &executor, optional_ptr<MultiFileReaderGlobalState> global_state) override;
 	void ApplyEqualityDeletes(ClientContext &context, DataChunk &output_chunk,
-	                          const IcebergMultiFileList &multi_file_list, const IcebergManifestEntry &data_file,
+	                          const IcebergMultiFileList &multi_file_list, const IcebergManifestEntry &manifest_entry,
 	                          const vector<MultiFileColumnDefinition> &local_columns);
 	bool ParseOption(const string &key, const Value &val, MultiFileOptions &options, ClientContext &context) override;
 

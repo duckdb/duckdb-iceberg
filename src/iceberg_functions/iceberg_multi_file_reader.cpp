@@ -177,11 +177,12 @@ static void ApplyPartitionConstants(const IcebergMultiFileList &multi_file_list,
 	// Get the metadata for this file
 	auto &reader = *reader_data.reader;
 	auto file_id = reader.file_list_idx.GetIndex();
-	auto &data_file = multi_file_list.data_files[file_id];
+	auto &manifest_entry = multi_file_list.manifest_entries[file_id];
+	auto &data_file = manifest_entry.data_file;
 
 	// Get the partition spec for this file
 	auto &partition_specs = multi_file_list.GetMetadata().partition_specs;
-	auto spec_id = data_file.partition_spec_id;
+	auto spec_id = manifest_entry.partition_spec_id;
 	auto partition_spec_it = partition_specs.find(spec_id);
 	if (partition_spec_it == partition_specs.end()) {
 		throw InvalidConfigurationException("'partition_spec_id' %d doesn't exist in the metadata", spec_id);
@@ -265,12 +266,13 @@ void IcebergMultiFileReader::FinalizeBind(MultiFileReaderData &reader_data, cons
 
 	{
 		lock_guard<mutex> guard(multi_file_list.lock);
-		const auto &data_file = multi_file_list.data_files[file_id];
+		const auto &manifest_entry = multi_file_list.manifest_entries[file_id];
+		const auto &data_file = manifest_entry.data_file;
 		// The path of the data file where this chunk was read from
 		const auto &file_path = data_file.file_path;
 		lock_guard<mutex> delete_guard(multi_file_list.delete_lock);
 		if (multi_file_list.current_delete_manifest != multi_file_list.delete_manifests.end() ||
-		    multi_file_list.current_transaction_delete_manifest != multi_file_list.transaction_delete_manifests.end()) {
+		    multi_file_list.transaction_delete_idx < multi_file_list.transaction_delete_manifests.size()) {
 			multi_file_list.ProcessDeletes(global_columns, global_column_ids);
 		}
 		reader.deletion_filter = std::move(multi_file_list.GetPositionalDeletesForFile(file_path));
@@ -290,19 +292,20 @@ void IcebergMultiFileReader::FinalizeBind(MultiFileReaderData &reader_data, cons
 
 void IcebergMultiFileReader::ApplyEqualityDeletes(ClientContext &context, DataChunk &output_chunk,
                                                   const IcebergMultiFileList &multi_file_list,
-                                                  const IcebergManifestEntry &data_file,
+                                                  const IcebergManifestEntry &manifest_entry,
                                                   const vector<MultiFileColumnDefinition> &local_columns) {
 	vector<reference<IcebergEqualityDeleteRow>> delete_rows;
 
+	auto &data_file = manifest_entry.data_file;
 	auto &metadata = multi_file_list.GetMetadata();
-	auto delete_data_it = multi_file_list.equality_delete_data.upper_bound(data_file.sequence_number);
+	auto delete_data_it = multi_file_list.equality_delete_data.upper_bound(manifest_entry.sequence_number);
 	//! Look through all the equality delete files with a *higher* sequence number
 	for (; delete_data_it != multi_file_list.equality_delete_data.end(); delete_data_it++) {
 		auto &files = delete_data_it->second->files;
 		for (auto &file : files) {
 			auto &partition_spec = metadata.partition_specs.at(file.partition_spec_id);
 			if (partition_spec.IsPartitioned()) {
-				if (file.partition_spec_id != data_file.partition_spec_id) {
+				if (file.partition_spec_id != manifest_entry.partition_spec_id) {
 					//! Not unpartitioned and the data does not share the same partition spec as the delete, skip the
 					//! delete file.
 					continue;
@@ -407,9 +410,9 @@ void IcebergMultiFileReader::FinalizeChunk(ClientContext &context, const MultiFi
 	// Get the metadata for this file
 	const auto &multi_file_list = dynamic_cast<const IcebergMultiFileList &>(*global_state->file_list);
 	auto file_id = reader.file_list_idx.GetIndex();
-	auto &data_file = multi_file_list.data_files[file_id];
+	auto &manifest_entry = multi_file_list.manifest_entries[file_id];
 	auto &local_columns = reader.columns;
-	ApplyEqualityDeletes(context, output_chunk, multi_file_list, data_file, local_columns);
+	ApplyEqualityDeletes(context, output_chunk, multi_file_list, manifest_entry, local_columns);
 }
 
 bool IcebergMultiFileReader::ParseOption(const string &key, const Value &val, MultiFileOptions &options,

@@ -12,17 +12,17 @@
 #include "duckdb/execution/operator/persistent/physical_copy_to_file.hpp"
 #include "duckdb/execution/physical_operator.hpp"
 #include "duckdb/common/index_vector.hpp"
-#include "storage/irc_table_entry.hpp"
-#include "storage/irc_schema_entry.hpp"
+#include "storage/catalog/iceberg_table_entry.hpp"
+#include "storage/catalog/iceberg_schema_entry.hpp"
 
 namespace duckdb {
 
 struct IcebergCopyInput {
-	explicit IcebergCopyInput(ClientContext &context, ICTableEntry &table);
-	IcebergCopyInput(ClientContext &context, IRCSchemaEntry &schema, const ColumnList &columns,
+	explicit IcebergCopyInput(ClientContext &context, IcebergTableEntry &table);
+	IcebergCopyInput(ClientContext &context, IcebergSchemaEntry &schema, const ColumnList &columns,
 	                 const string &data_path_p);
 
-	IRCatalog &catalog;
+	IcebergCatalog &catalog;
 	const ColumnList &columns;
 	string data_path;
 	//! Set of (key, value) options
@@ -111,7 +111,8 @@ public:
 	static PhysicalOperator &PlanCopyForInsert(ClientContext &context, PhysicalPlanGenerator &planner,
 	                                           IcebergCopyInput &copy_input, optional_ptr<PhysicalOperator> plan);
 
-	static PhysicalOperator &PlanInsert(ClientContext &context, PhysicalPlanGenerator &planner, ICTableEntry &table);
+	static PhysicalOperator &PlanInsert(ClientContext &context, PhysicalPlanGenerator &planner,
+	                                    IcebergTableEntry &table);
 	static vector<IcebergManifestEntry> GetInsertManifestEntries(IcebergInsertGlobalState &global_state);
 	static IcebergColumnStats ParseColumnStats(const LogicalType &type, const vector<Value> &col_stats,
 	                                           ClientContext &context);

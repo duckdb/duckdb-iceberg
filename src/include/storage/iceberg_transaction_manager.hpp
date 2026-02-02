@@ -2,14 +2,14 @@
 #pragma once
 
 #include "duckdb/transaction/transaction_manager.hpp"
-#include "storage/irc_catalog.hpp"
-#include "storage/irc_transaction.hpp"
+#include "storage/catalog/iceberg_catalog.hpp"
+#include "storage/iceberg_transaction.hpp"
 
 namespace duckdb {
 
-class ICTransactionManager : public TransactionManager {
+class IcebergTransactionManager : public TransactionManager {
 public:
-	ICTransactionManager(AttachedDatabase &db_p, IRCatalog &ic_catalog);
+	IcebergTransactionManager(AttachedDatabase &db_p, IcebergCatalog &ic_catalog);
 
 	Transaction &StartTransaction(ClientContext &context) override;
 	ErrorData CommitTransaction(ClientContext &context, Transaction &transaction) override;
@@ -18,9 +18,9 @@ public:
 	void Checkpoint(ClientContext &context, bool force = false) override;
 
 private:
-	IRCatalog &ic_catalog;
+	IcebergCatalog &ic_catalog;
 	mutex transaction_lock;
-	reference_map_t<Transaction, unique_ptr<IRCTransaction>> transactions;
+	reference_map_t<Transaction, unique_ptr<IcebergTransaction>> transactions;
 };
 
 } // namespace duckdb

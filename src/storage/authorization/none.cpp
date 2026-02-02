@@ -1,13 +1,13 @@
 #include "storage/authorization/none.hpp"
 #include "api_utils.hpp"
-#include "storage/irc_catalog.hpp"
+#include "storage/catalog/iceberg_catalog.hpp"
 
 namespace duckdb {
 
-NoneAuthorization::NoneAuthorization() : IRCAuthorization(IRCAuthorizationType::NONE) {
+NoneAuthorization::NoneAuthorization() : IcebergAuthorization(IcebergAuthorizationType::NONE) {
 }
 
-unique_ptr<IRCAuthorization> NoneAuthorization::FromAttachOptions(IcebergAttachOptions &input) {
+unique_ptr<IcebergAuthorization> NoneAuthorization::FromAttachOptions(IcebergAttachOptions &input) {
 	auto result = make_uniq<NoneAuthorization>();
 	return std::move(result);
 }

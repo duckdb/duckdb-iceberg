@@ -12,9 +12,8 @@
 #include "duckdb/planner/operator/logical_delete.hpp"
 #include "duckdb/common/multi_file/multi_file_reader.hpp"
 #include "storage/iceberg_metadata_info.hpp"
-#include "storage/iceberg_delete_filter.hpp"
-#include "storage/irc_table_entry.hpp"
-#include "storage/irc_schema_entry.hpp"
+#include "storage/catalog/iceberg_table_entry.hpp"
+#include "storage/catalog/iceberg_schema_entry.hpp"
 
 namespace duckdb {
 
@@ -67,11 +66,11 @@ public:
 
 class IcebergDelete : public PhysicalOperator {
 public:
-	IcebergDelete(PhysicalPlan &physical_plan, ICTableEntry &table, PhysicalOperator &child,
+	IcebergDelete(PhysicalPlan &physical_plan, IcebergTableEntry &table, PhysicalOperator &child,
 	              vector<idx_t> row_id_indexes);
 
 	//! The table to delete from
-	ICTableEntry &table;
+	IcebergTableEntry &table;
 	//! The column indexes for the relevant row-id columns
 	vector<idx_t> row_id_indexes;
 
@@ -84,8 +83,9 @@ public:
 		return true;
 	}
 
-	static PhysicalOperator &PlanDelete(ClientContext &context, PhysicalPlanGenerator &planner, ICTableEntry &table,
-	                                    PhysicalOperator &child_plan, vector<idx_t> row_id_indexes);
+	static PhysicalOperator &PlanDelete(ClientContext &context, PhysicalPlanGenerator &planner,
+	                                    IcebergTableEntry &table, PhysicalOperator &child_plan,
+	                                    vector<idx_t> row_id_indexes);
 
 public:
 	// Sink interface
@@ -107,7 +107,7 @@ public:
 
 	string GetName() const override;
 	InsertionOrderPreservingMap<string> ParamsToString() const override;
-	void FlushDeletes(IRCTransaction &transaction, ClientContext &context,
+	void FlushDeletes(IcebergTransaction &transaction, ClientContext &context,
 	                  IcebergDeleteGlobalState &global_state) const;
 
 private:

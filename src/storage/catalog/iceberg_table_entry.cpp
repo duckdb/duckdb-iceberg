@@ -1,6 +1,6 @@
-#include "storage/irc_catalog.hpp"
-#include "storage/irc_schema_entry.hpp"
-#include "storage/irc_table_entry.hpp"
+#include "storage/catalog/iceberg_catalog.hpp"
+#include "storage/catalog/iceberg_schema_entry.hpp"
+#include "storage/catalog/iceberg_table_entry.hpp"
 #include "duckdb/storage/statistics/base_statistics.hpp"
 #include "duckdb/storage/table_storage_info.hpp"
 #include "duckdb/main/extension/extension_loader.hpp"
@@ -22,18 +22,18 @@
 
 namespace duckdb {
 
-ICTableEntry::ICTableEntry(IcebergTableInformation &table_info, Catalog &catalog, SchemaCatalogEntry &schema,
-                           CreateTableInfo &info)
+IcebergTableEntry::IcebergTableEntry(IcebergTableInformation &table_info, Catalog &catalog, SchemaCatalogEntry &schema,
+                                     CreateTableInfo &info)
     : TableCatalogEntry(catalog, schema, info), table_info(table_info) {
 	this->internal = false;
 }
 
-unique_ptr<BaseStatistics> ICTableEntry::GetStatistics(ClientContext &context, column_t column_id) {
+unique_ptr<BaseStatistics> IcebergTableEntry::GetStatistics(ClientContext &context, column_t column_id) {
 	return nullptr;
 }
 
-void ICTableEntry::PrepareIcebergScanFromEntry(ClientContext &context) const {
-	auto &ic_catalog = catalog.Cast<IRCatalog>();
+void IcebergTableEntry::PrepareIcebergScanFromEntry(ClientContext &context) const {
+	auto &ic_catalog = catalog.Cast<IcebergCatalog>();
 	auto &secret_manager = SecretManager::Get(context);
 
 	if (ic_catalog.attach_options.access_mode != IRCAccessDelegationMode::VENDED_CREDENTIALS) {
@@ -59,7 +59,7 @@ void ICTableEntry::PrepareIcebergScanFromEntry(ClientContext &context) const {
 		if (StringUtil::StartsWith(ic_catalog.uri, "glue")) {
 			auto &sigv4_auth = ic_catalog.auth_handler->Cast<SIGV4Authorization>();
 			//! Override the endpoint if 'glue' is the host of the catalog
-			auto secret_entry = IRCatalog::GetStorageSecret(context, sigv4_auth.secret);
+			auto secret_entry = IcebergCatalog::GetStorageSecret(context, sigv4_auth.secret);
 			auto kv_secret = dynamic_cast<const KeyValueSecret &>(*secret_entry->secret);
 			auto region = kv_secret.TryGetValue("region").ToString();
 			auto endpoint = "s3." + region + ".amazonaws.com";
@@ -67,7 +67,7 @@ void ICTableEntry::PrepareIcebergScanFromEntry(ClientContext &context) const {
 		} else if (StringUtil::StartsWith(ic_catalog.uri, "s3tables")) {
 			auto &sigv4_auth = ic_catalog.auth_handler->Cast<SIGV4Authorization>();
 			//! Override all the options if 's3tables' is the host of the catalog
-			auto secret_entry = IRCatalog::GetStorageSecret(context, sigv4_auth.secret);
+			auto secret_entry = IcebergCatalog::GetStorageSecret(context, sigv4_auth.secret);
 			auto kv_secret = dynamic_cast<const KeyValueSecret &>(*secret_entry->secret);
 			auto substrings = StringUtil::Split(ic_catalog.warehouse, ":");
 			D_ASSERT(substrings.size() == 6);
@@ -95,8 +95,8 @@ void ICTableEntry::PrepareIcebergScanFromEntry(ClientContext &context) const {
 	}
 }
 
-TableFunction ICTableEntry::GetScanFunction(ClientContext &context, unique_ptr<FunctionData> &bind_data,
-                                            const EntryLookupInfo &lookup) {
+TableFunction IcebergTableEntry::GetScanFunction(ClientContext &context, unique_ptr<FunctionData> &bind_data,
+                                                 const EntryLookupInfo &lookup) {
 	auto &db = DatabaseInstance::GetDatabase(context);
 	auto &system_catalog = Catalog::GetSystemCatalog(db);
 	auto data = CatalogTransaction::GetSystemTransaction(db);
@@ -177,15 +177,15 @@ TableFunction ICTableEntry::GetScanFunction(ClientContext &context, unique_ptr<F
 	return iceberg_scan_function;
 }
 
-TableFunction ICTableEntry::GetScanFunction(ClientContext &context, unique_ptr<FunctionData> &bind_data) {
-	throw InternalException("ICTableEntry::GetScanFunction called without entry lookup info");
+TableFunction IcebergTableEntry::GetScanFunction(ClientContext &context, unique_ptr<FunctionData> &bind_data) {
+	throw InternalException("IcebergTableEntry::GetScanFunction called without entry lookup info");
 }
 
-virtual_column_map_t ICTableEntry::GetVirtualColumns() const {
+virtual_column_map_t IcebergTableEntry::GetVirtualColumns() const {
 	return VirtualColumns();
 }
 
-virtual_column_map_t ICTableEntry::VirtualColumns() {
+virtual_column_map_t IcebergTableEntry::VirtualColumns() {
 	virtual_column_map_t result;
 	result.insert(
 	    make_pair(MultiFileReader::COLUMN_IDENTIFIER_FILENAME, TableColumn("filename", LogicalType::VARCHAR)));
@@ -194,20 +194,20 @@ virtual_column_map_t ICTableEntry::VirtualColumns() {
 	return result;
 }
 
-vector<column_t> ICTableEntry::GetRowIdColumns() const {
+vector<column_t> IcebergTableEntry::GetRowIdColumns() const {
 	vector<column_t> result;
 	result.push_back(MultiFileReader::COLUMN_IDENTIFIER_FILENAME);
 	result.push_back(MultiFileReader::COLUMN_IDENTIFIER_FILE_ROW_NUMBER);
 	return result;
 }
 
-TableStorageInfo ICTableEntry::GetStorageInfo(ClientContext &context) {
+TableStorageInfo IcebergTableEntry::GetStorageInfo(ClientContext &context) {
 	TableStorageInfo result;
 	// TODO fill info
 	return result;
 }
 
-string ICTableEntry::GetUUID() const {
+string IcebergTableEntry::GetUUID() const {
 	return table_info.table_id;
 }
 

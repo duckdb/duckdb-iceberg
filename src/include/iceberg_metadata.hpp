@@ -65,15 +65,15 @@ public:
 
 //! ------------- ICEBERG_METADATA TABLE FUNCTION -------------
 
-struct IcebergTableEntry {
+struct IcebergTableManifestEntry {
 public:
-	IcebergTableEntry(IcebergManifestListEntry &&manifest, IcebergManifestFile &&manifest_file)
+	IcebergTableManifestEntry(IcebergManifestFile &&manifest, IcebergManifest &&manifest_file)
 	    : manifest(std::move(manifest)), manifest_file(std::move(manifest_file)) {
 	}
 
 public:
-	IcebergManifestListEntry manifest;
-	IcebergManifestFile manifest_file;
+	IcebergManifestFile manifest;
+	IcebergManifest manifest_file;
 };
 
 struct IcebergTable {
@@ -95,11 +95,11 @@ public:
 			if (table_entry.manifest.content != TYPE) {
 				continue;
 			}
-			for (auto &data_file : table_entry.manifest_file.data_files) {
-				if (data_file.status == IcebergManifestEntryStatusType::DELETED) {
+			for (auto &manifest_entry : table_entry.manifest_file.entries) {
+				if (manifest_entry.status == IcebergManifestEntryStatusType::DELETED) {
 					continue;
 				}
-				ret.push_back(data_file.file_path);
+				ret.push_back(manifest_entry.data_file.file_path);
 			}
 		}
 		return ret;
@@ -107,7 +107,7 @@ public:
 	vector<IcebergManifestEntry> GetAllPaths() {
 		vector<IcebergManifestEntry> ret;
 		for (auto &table_entry : entries) {
-			for (auto &manifest_entry : table_entry.manifest_file.data_files) {
+			for (auto &manifest_entry : table_entry.manifest_file.entries) {
 				if (manifest_entry.status == IcebergManifestEntryStatusType::DELETED) {
 					continue;
 				}
@@ -120,7 +120,7 @@ public:
 	//! The snapshot of this table
 	const IcebergSnapshot &snapshot;
 	//! The entries (manifests) of this table
-	vector<IcebergTableEntry> entries;
+	vector<IcebergTableManifestEntry> entries;
 
 protected:
 	string path;

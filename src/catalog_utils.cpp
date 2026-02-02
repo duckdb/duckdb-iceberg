@@ -1,6 +1,6 @@
 #include "catalog_utils.hpp"
 #include "duckdb/common/operator/cast_operators.hpp"
-#include "storage/irc_schema_entry.hpp"
+#include "storage/catalog/iceberg_schema_entry.hpp"
 
 namespace duckdb {
 
