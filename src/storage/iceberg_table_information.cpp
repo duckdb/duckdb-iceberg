@@ -1,8 +1,10 @@
 #include "storage/iceberg_table_information.hpp"
 
-#include "catalog_api.hpp" p"
+#include "catalog_api.hpp"
 #include "duckdb/common/case_insensitive_map.hpp"
 #include "duckdb/common/string_util.hpp"
+#include "duckdb/parser/expression/columnref_expression.hpp"
+#include "duckdb/parser/expression/function_expression.hpp"
 #include "duckdb/common/exception/transaction_exception.hpp"
 #include "duckdb/common/types/timestamp.hpp"
 #include "storage/irc_transaction.hpp"
@@ -289,6 +291,77 @@ int64_t IcebergTableInformation::GetExistingSpecId(IcebergPartitionSpec &spec) {
 		break;
 	}
 	return existing_spec_id;
+}
+
+void IcebergTableInformation::SetPartitionedBy(IRCTransaction &transaction,
+                                               const vector<unique_ptr<ParsedExpression>> &partition_keys,
+                                               const IcebergTableSchema &schema, bool first_partition_spec) {
+	idx_t base_partition_field_id = 1000;
+	if (!first_partition_spec && table_metadata.HasLastPartitionId()) {
+		base_partition_field_id = table_metadata.GetLastPartitionFieldId() + 1;
+	}
+	idx_t new_spec_id = 0;
+	if (!first_partition_spec) {
+		new_spec_id = GetNextPartitionSpecId();
+	}
+
+	IcebergPartitionSpec new_spec;
+	new_spec.spec_id = new_spec_id;
+
+	for (auto &key : partition_keys) {
+		string column_name;
+		string transform_name = "identity";
+
+		if (key->type == ExpressionType::COLUMN_REF) {
+			auto &colref = key->Cast<ColumnRefExpression>();
+			column_name = colref.column_names.back();
+		} else if (key->type == ExpressionType::FUNCTION) {
+			auto &funcexpr = key->Cast<FunctionExpression>();
+			transform_name = funcexpr.function_name;
+			if (funcexpr.children.empty() || funcexpr.children[0]->type != ExpressionType::COLUMN_REF) {
+				throw NotImplementedException("Transforms are only supported on column references, not %s",
+				                              EnumUtil::ToChars(funcexpr.children[0]->type));
+			}
+			auto &colref = funcexpr.children[0]->Cast<ColumnRefExpression>();
+			column_name = colref.column_names.back();
+		} else {
+			throw NotImplementedException("Unsupported partition key type: %s", key->ToString());
+		}
+
+		// Find source_id
+		int32_t source_id = -1;
+		for (auto &col : schema.columns) {
+			if (StringUtil::CIEquals(col->name, column_name)) {
+				source_id = col->id;
+				break;
+			}
+		}
+		if (source_id == -1) {
+			throw CatalogException("Column \"%s\" not found in schema", column_name);
+		}
+
+		IcebergPartitionSpecField field;
+		field.name = column_name;
+		field.transform = IcebergTransform(transform_name);
+		field.source_id = source_id;
+		field.partition_field_id = base_partition_field_id + new_spec.fields.size();
+		new_spec.fields.push_back(std::move(field));
+	}
+
+	// if spec exists, just set it to that spec id
+	int64_t existing_spec_id = GetExistingSpecId(new_spec);
+	if (existing_spec_id >= 0) {
+		table_metadata.default_spec_id = existing_spec_id;
+		SetDefaultSpec(transaction);
+		return;
+	}
+
+	table_metadata.partition_specs[new_spec_id] = std::move(new_spec);
+	table_metadata.default_spec_id = new_spec_id;
+	if (!first_partition_spec) {
+		AddPartitionSpec(transaction);
+		SetDefaultSpec(transaction);
+	}
 }
 
 optional_ptr<CatalogEntry> IcebergTableInformation::GetSchemaVersion(optional_ptr<BoundAtClause> at) {

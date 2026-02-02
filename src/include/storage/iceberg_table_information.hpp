@@ -9,6 +9,7 @@
 
 namespace duckdb {
 class IcebergTableSchema;
+class ParsedExpression;
 struct CreateTableInfo;
 class IRCSchemaEntry;
 struct IcebergManifestEntry;
@@ -29,6 +30,8 @@ public:
 	idx_t GetMaxSchemaId();
 	idx_t GetNextPartitionSpecId();
 	int64_t GetExistingSpecId(IcebergPartitionSpec &spec);
+	void SetPartitionedBy(IRCTransaction &transaction, const vector<unique_ptr<ParsedExpression>> &partition_keys,
+	                      const IcebergTableSchema &schema, bool first_partition_spec = false);
 	IRCAPITableCredentials GetVendedCredentials(ClientContext &context);
 	const string &BaseFilePath() const;
 

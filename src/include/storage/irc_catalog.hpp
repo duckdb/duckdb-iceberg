@@ -76,6 +76,10 @@ public:
 	bool SupportsTimeTravel() const override {
 		return true;
 	}
+	ErrorData SupportsCreateTable(BoundCreateTableInfo &info) override {
+		// we support partitioned by and WITH
+		return ErrorData();
+	}
 	void DropSchema(ClientContext &context, DropInfo &info) override;
 	optional_ptr<CatalogEntry> CreateSchema(CatalogTransaction transaction, CreateSchemaInfo &info) override;
 	void ScanSchemas(ClientContext &context, std::function<void(SchemaCatalogEntry &)> callback) override;

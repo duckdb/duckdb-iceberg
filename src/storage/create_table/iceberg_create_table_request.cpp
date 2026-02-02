@@ -1,5 +1,7 @@
 #include "storage/table_update/iceberg_add_snapshot.hpp"
 #include "storage/table_create/iceberg_create_table_request.hpp"
+
+#include "../../include/metadata/iceberg_partition_spec.hpp"
 #include "storage/irc_table_set.hpp"
 #include "storage/iceberg_table_information.hpp"
 #include "duckdb/parser/constraints/not_null_constraint.hpp"
@@ -16,8 +18,9 @@
 using namespace duckdb_yyjson;
 namespace duckdb {
 
-IcebergCreateTableRequest::IcebergCreateTableRequest(shared_ptr<IcebergTableSchema> schema, string table_name)
-    : table_name(table_name), initial_schema(schema) {
+IcebergCreateTableRequest::IcebergCreateTableRequest(shared_ptr<IcebergTableSchema> schema,
+                                                     IcebergPartitionSpec &partition_spec, string table_name)
+    : table_name(table_name), initial_schema(schema), partition_spec(partition_spec) {
 }
 
 static void AddUnnamedField(yyjson_mut_doc *doc, yyjson_mut_val *field_obj, IcebergColumnDefinition &column);
@@ -162,9 +165,18 @@ string IcebergCreateTableRequest::CreateTableToJSON(std::unique_ptr<yyjson_mut_d
 
 	PopulateSchema(doc, schema_json, *initial_schema.get());
 
-	auto partition_spec = yyjson_mut_obj_add_obj(doc, root_object, "partition-spec");
-	yyjson_mut_obj_add_uint(doc, partition_spec, "spec-id", 0);
-	auto partition_spec_fields = yyjson_mut_obj_add_arr(doc, partition_spec, "fields");
+	auto partition_spec_json = yyjson_mut_obj_add_obj(doc, root_object, "partition-spec");
+	yyjson_mut_obj_add_uint(doc, partition_spec_json, "spec-id", 0);
+	yyjson_mut_obj_add_strcpy(doc, partition_spec_json, "type", "struct");
+	auto fields_arr = yyjson_mut_obj_add_arr(doc, partition_spec_json, "fields");
+
+	for (auto &field : partition_spec.fields) {
+		auto field_obj = yyjson_mut_arr_add_obj(doc, fields_arr);
+		yyjson_mut_obj_add_strcpy(doc, field_obj, "name", field.name.c_str());
+		yyjson_mut_obj_add_strcpy(doc, field_obj, "transform", field.transform.RawType().c_str());
+		yyjson_mut_obj_add_int(doc, field_obj, "source-id", field.source_id);
+		yyjson_mut_obj_add_int(doc, field_obj, "field-id", field.partition_field_id);
+	}
 
 	auto write_order = yyjson_mut_obj_add_obj(doc, root_object, "write-order");
 	yyjson_mut_obj_add_uint(doc, write_order, "order-id", 0);

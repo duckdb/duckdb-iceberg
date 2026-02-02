@@ -1,4 +1,4 @@
-# name: test/sql/local/irc/alter/test_alter_partitioned_by.test
+# name: test/sql/local/irc/alter/test_create_table_partitioned_by.test
 # group: [alter]
 
 require-env ICEBERG_SERVER_AVAILABLE
@@ -33,16 +33,23 @@ ATTACH '' AS my_datalake (
 );
 
 statement ok
-drop table if exists my_datalake.default.alter_table_partitioned_identity_transform;
+drop table if exists my_datalake.default.test_create_table_partitioned_by;
 
 statement ok
-CREATE TABLE my_datalake.default.alter_table_partitioned_identity_transform AS (select range a, range%2 b FROM range(10));
-
-statement ok
-Alter table my_datalake.default.alter_table_partitioned_identity_transform SET PARTITIONED BY (b);
+CREATE TABLE my_datalake.default.test_create_table_partitioned_by (a int, b int)
+PARTITIONED BY (a);
 
 statement error
-insert into my_datalake.default.alter_table_partitioned_identity_transform values (11, 20);
+insert into my_datalake.default.test_create_table_partitioned_by values (1, 2);
+----
+<REGEX>:.*INSERT into a partitioned table is not supported yet.*
+
+
+statement ok
+Alter table my_datalake.default.test_create_table_partitioned_by SET PARTITIONED BY (b);
+
+statement error
+insert into my_datalake.default.test_create_table_partitioned_by values (11, 20);
 ----
 <REGEX>:.*Not implemented Error: INSERT into a partitioned table is not supported yet.*
 
