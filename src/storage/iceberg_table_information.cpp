@@ -277,16 +277,26 @@ idx_t IcebergTableInformation::GetNextPartitionSpecId() {
 int64_t IcebergTableInformation::GetExistingSpecId(IcebergPartitionSpec &spec) {
 	int64_t existing_spec_id = -1;
 	for (auto &existing_spec : table_metadata.GetPartitionSpecs()) {
+		bool fields_match = true;
 		for (idx_t field_index = 0; field_index < existing_spec.second.fields.size(); field_index++) {
 			auto existing_partition_col_source_id = existing_spec.second.fields[field_index].source_id;
 			auto new_spec_col_source_id = existing_spec.second.fields[field_index].source_id;
 			if (existing_partition_col_source_id != new_spec_col_source_id) {
-				continue;
+				fields_match = false;
+				break;
+			}
+			auto existing_partition_col_transform = existing_spec.second.fields[field_index].transform.RawType();
+			auto new_spec_col_transform = existing_spec.second.fields[field_index].transform.RawType();
+			if (existing_partition_col_transform != new_spec_col_transform) {
+				fields_match = false;
+				break;
 			}
 		}
-		if (existing_spec.second.fields.size() != spec.fields.size()) {
+		if (!fields_match || existing_spec.second.fields.size() != spec.fields.size()) {
 			continue;
 		}
+		// source ids are the same, transforms are the same, and partition amount is the same
+		// so we just use the existing spec.
 		existing_spec_id = existing_spec.second.spec_id;
 		break;
 	}
@@ -348,7 +358,7 @@ void IcebergTableInformation::SetPartitionedBy(IcebergTransaction &transaction,
 		new_spec.fields.push_back(std::move(field));
 	}
 
-	// if spec definition already exists in previous spec, set it to that spec id
+	// if spec definition already exists in a previous spec definition, set it to that spec id
 	// (some catalog may allow duplicate definitions, others not)
 	int64_t existing_spec_id = GetExistingSpecId(new_spec);
 	if (existing_spec_id >= 0) {
