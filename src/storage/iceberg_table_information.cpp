@@ -310,6 +310,7 @@ void IcebergTableInformation::SetPartitionedBy(IcebergTransaction &transaction,
 	if (!first_partition_spec && table_metadata.HasLastPartitionId()) {
 		base_partition_field_id = table_metadata.GetLastPartitionFieldId() + 1;
 	}
+
 	idx_t new_spec_id = 0;
 	if (!first_partition_spec) {
 		new_spec_id = GetNextPartitionSpecId();

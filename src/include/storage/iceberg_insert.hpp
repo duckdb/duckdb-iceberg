@@ -14,6 +14,8 @@
 #include "duckdb/common/index_vector.hpp"
 #include "storage/catalog/iceberg_table_entry.hpp"
 #include "storage/catalog/iceberg_schema_entry.hpp"
+#include "metadata/iceberg_partition_spec.hpp"
+#include "metadata/iceberg_table_schema.hpp"
 
 namespace duckdb {
 
@@ -27,6 +29,13 @@ struct IcebergCopyInput {
 	string data_path;
 	//! Set of (key, value) options
 	case_insensitive_map_t<vector<Value>> options;
+
+	//! Partition specification for the table (if partitioned)
+	optional_ptr<IcebergPartitionSpec> partition_spec;
+	//! Table schema for looking up source columns by ID
+	optional_ptr<IcebergTableSchema> table_schema;
+	//! Table index for logical plan generation (used when generating partition expressions)
+	optional_idx get_table_index;
 };
 
 class IcebergInsertGlobalState : public GlobalSinkState {

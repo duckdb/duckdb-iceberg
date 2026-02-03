@@ -39,6 +39,13 @@ IcebergInsert::IcebergInsert(PhysicalPlan &physical_plan, const vector<LogicalTy
 IcebergCopyInput::IcebergCopyInput(ClientContext &context, IcebergTableEntry &table)
     : catalog(table.catalog.Cast<IcebergCatalog>()), columns(table.GetColumns()) {
 	data_path = table.table_info.table_metadata.GetDataPath();
+
+	// Get partition spec if the table is partitioned
+	auto &metadata = table.table_info.table_metadata;
+	table_schema = table.table_info.table_metadata.GetSchemaFromId(table.table_info.table_metadata.current_schema_id);
+	if (metadata.GetLatestPartitionSpec().IsPartitioned()) {
+		*partition_spec = metadata.GetLatestPartitionSpec();
+	}
 }
 
 IcebergCopyInput::IcebergCopyInput(ClientContext &context, IcebergSchemaEntry &schema, const ColumnList &columns,
@@ -48,6 +55,10 @@ IcebergCopyInput::IcebergCopyInput(ClientContext &context, IcebergSchemaEntry &s
 	// We should check if it has write.data.path property, but since this is a schema-level
 	// constructor and we don't have access to table metadata, we use the default behavior
 	data_path = data_path_p + "/data";
+
+	// Note: partition_spec and table_schema are left as nullptr for schema-level construction
+	// (used in CREATE TABLE AS). If partitioning is needed for CTAS, the caller should
+	// set these fields after construction once the table is created.
 }
 
 IcebergInsertGlobalState::IcebergInsertGlobalState(ClientContext &context)
