@@ -1,0 +1,50 @@
+# name: test/sql/local/irc/insert/partitions/test_insert_into_partitioned_table_hour.test
+# group: [partitions]
+
+require-env ICEBERG_SERVER_AVAILABLE
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+CREATE SECRET (
+    TYPE S3,
+    KEY_ID 'admin',
+    SECRET 'password',
+    ENDPOINT '127.0.0.1:9000',
+    URL_STYLE 'path',
+    USE_SSL 0
+);
+
+statement ok
+ATTACH '' AS my_datalake (
+    TYPE ICEBERG,
+    CLIENT_ID 'admin',
+    CLIENT_SECRET 'password',
+    ENDPOINT 'http://127.0.0.1:8181'
+);
+
+statement ok
+create schema if not exists my_datalake.default;
+
+statement ok
+drop table if exists my_datalake.default.test_insert_into_partitioned_table_month;
+
+statement ok
+CREATE TABLE my_datalake.default.test_insert_into_partitioned_table_month (a TIMESTAMP, b int)
+PARTITIONED BY (hour(a));
+
+statement ok
+insert into my_datalake.default.test_insert_into_partitioned_table_month
+make_timestamp((1992 + (range/12)::INT), (range)%12+1, 20, 13, 34, 27.123456), range from range(100);
+
+statement ok
+select * from my_datalake.default.test_insert_into_partitioned_table_month order by b;

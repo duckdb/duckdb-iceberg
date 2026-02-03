@@ -31,7 +31,7 @@ struct IcebergCopyInput {
 	case_insensitive_map_t<vector<Value>> options;
 
 	//! Partition specification for the table (if partitioned)
-	optional_ptr<IcebergPartitionSpec> partition_spec;
+	optional_ptr<const IcebergPartitionSpec> partition_spec;
 	//! Table schema for looking up source columns by ID
 	optional_ptr<IcebergTableSchema> table_schema;
 	//! Table index for logical plan generation (used when generating partition expressions)
