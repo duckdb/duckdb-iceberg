@@ -19,7 +19,7 @@
 #include "duckdb/common/types/uuid.hpp"
 #include "duckdb/function/function_binder.hpp"
 #include "duckdb/planner/expression/bound_reference_expression.hpp"
-#include "duckdb/planner/expression/bound_columnref_expression.hpp"
+#include "duckdb/planner/expression/bound_constant_expression.hpp"
 
 namespace duckdb {
 
@@ -414,18 +414,32 @@ static unique_ptr<Expression> CreateColumnReference(IcebergCopyInput &copy_input
 	return make_uniq<BoundReferenceExpression>(type, column_index);
 }
 
-//! Get a scalar function expression (e.g., year, month, day, hour)
-static unique_ptr<Expression> GetFunction(ClientContext &context, IcebergCopyInput &copy_input,
-                                          const string &function_name, uint64_t source_id) {
+//! Get a date_diff function expression for temporal partition transforms
+//! Iceberg partition transforms for year/month/day/hour are defined as:
+//! - years: date_diff('year', DATE '1970-01-01', source_column)
+//! - months: date_diff('month', DATE '1970-01-01', source_column)
+//! - days: date_diff('day', DATE '1970-01-01', source_column)
+//! - hours: date_diff('hour', TIMESTAMP '1970-01-01', source_column)
+static unique_ptr<Expression> GetDateDiffFunction(ClientContext &context, IcebergCopyInput &copy_input,
+                                                  const string &date_part, uint64_t source_id) {
 	auto col_idx = GetColumnIndexBySourceId(copy_input, source_id);
 	auto col_type = GetSourceColumnType(copy_input, source_id);
 
 	vector<unique_ptr<Expression>> children;
+	// First argument: the date part string (e.g., 'year', 'month', 'day', 'hour')
+	children.push_back(make_uniq<BoundConstantExpression>(Value(date_part)));
+	// Second argument: the epoch date/timestamp
+	if (date_part == "hour") {
+		children.push_back(make_uniq<BoundConstantExpression>(Value::TIMESTAMP(Timestamp::FromEpochSeconds(0))));
+	} else {
+		children.push_back(make_uniq<BoundConstantExpression>(Value::DATE(Date::FromDate(1970, 1, 1))));
+	}
+	// Third argument: the source column
 	children.push_back(CreateColumnReference(copy_input, col_type, col_idx));
 
 	ErrorData error;
 	FunctionBinder binder(context);
-	auto function = binder.BindScalarFunction(DEFAULT_SCHEMA, function_name, std::move(children), error, false);
+	auto function = binder.BindScalarFunction(DEFAULT_SCHEMA, "date_diff", std::move(children), error, false);
 	if (!function) {
 		error.Throw();
 	}
@@ -442,13 +456,13 @@ static unique_ptr<Expression> GetPartitionExpression(ClientContext &context, Ice
 	case IcebergTransformType::IDENTITY:
 		return CreateColumnReference(copy_input, col_type, col_idx);
 	case IcebergTransformType::YEAR:
-		return GetFunction(context, copy_input, "year", field.source_id);
+		return GetDateDiffFunction(context, copy_input, "year", field.source_id);
 	case IcebergTransformType::MONTH:
-		return GetFunction(context, copy_input, "month", field.source_id);
+		return GetDateDiffFunction(context, copy_input, "month", field.source_id);
 	case IcebergTransformType::DAY:
-		return GetFunction(context, copy_input, "day", field.source_id);
+		return GetDateDiffFunction(context, copy_input, "day", field.source_id);
 	case IcebergTransformType::HOUR:
-		return GetFunction(context, copy_input, "hour", field.source_id);
+		return GetDateDiffFunction(context, copy_input, "hour", field.source_id);
 	case IcebergTransformType::BUCKET:
 		throw NotImplementedException("BUCKET partition transform is not yet supported for INSERT");
 	case IcebergTransformType::TRUNCATE:
