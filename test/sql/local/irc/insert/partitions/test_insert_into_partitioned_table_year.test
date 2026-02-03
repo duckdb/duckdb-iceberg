@@ -36,15 +36,15 @@ statement ok
 create schema if not exists my_datalake.default;
 
 statement ok
-drop table if exists my_datalake.default.test_insert_into_partitioned_table_month;
+drop table if exists my_datalake.default.test_insert_into_partitioned_table_year;
 
 statement ok
-CREATE TABLE my_datalake.default.test_insert_into_partitioned_table_month (a TIMESTAMP, b int)
+CREATE TABLE my_datalake.default.test_insert_into_partitioned_table_year (a TIMESTAMP, b int)
 PARTITIONED BY (year(a));
 
 statement ok
-insert into my_datalake.default.test_insert_into_partitioned_table_month
+insert into my_datalake.default.test_insert_into_partitioned_table_year select
 make_timestamp((1992 + (range/12)::INT), (range)%12+1, 20, 13, 34, 27.123456), range from range(100);
 
 statement ok
-select * from my_datalake.default.test_insert_into_partitioned_table_month order by b;
+select * from my_datalake.default.test_insert_into_partitioned_table_year order by b;

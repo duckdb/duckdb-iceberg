@@ -463,7 +463,7 @@ static unique_ptr<Expression> GetPartitionExpression(ClientContext &context, Ice
 //! Get the name for a partition expression (used in hive-style paths)
 static string GetPartitionExpressionName(IcebergCopyInput &copy_input, const IcebergPartitionSpecField &field) {
 	// Use the partition field name directly
-	return field.transform.RawType() + "_" + field.name;
+	return field.name + "_" + field.transform.RawType();
 }
 
 //! Check if all partition fields use identity transforms
