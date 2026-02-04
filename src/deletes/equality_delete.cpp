@@ -76,7 +76,7 @@ void IcebergMultiFileList::ScanEqualityDeleteFile(const IcebergManifestEntry &ma
 	//! Take only the relevant columns from the result
 	InitializeFromOtherChunk(result, result_p, column_ids);
 	result.ReferenceColumns(result_p, column_ids);
-	deletes.files.emplace_back(data_file.partition_values, manifest_entry.partition_spec_id);
+	// deletes.files.emplace_back(data_file.partition_values, manifest_entry.partition_spec_id);
 	auto &rows = deletes.files.back().rows;
 	rows.resize(count);
 	D_ASSERT(result.ColumnCount() == data_file.equality_ids.size());

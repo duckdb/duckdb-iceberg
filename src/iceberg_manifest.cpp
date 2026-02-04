@@ -25,8 +25,14 @@ Value IcebergDataFile::ToValue(const LogicalType &type) const {
 		    Value::STRUCT(child_list_t<Value> {{"__duckdb_empty_struct_marker", Value(LogicalTypeId::VARCHAR)}}));
 	} else {
 		child_list_t<Value> partition_children;
-		for (auto &field : partition_values) {
-			partition_children.emplace_back(StringUtil::Format("r%d", field.first), field.second);
+		for (auto &field : partition_metadata) {
+			auto &col_name = field.first;
+			for (auto &partition_value : partition_values) {
+				if (partition_value.first == field.second) {
+					int32_t partition_val = partition_value.second.GetValue<int>();
+					partition_children.emplace_back(StringUtil::Format("%s", col_name), partition_val);
+				}
+			}
 		}
 		children.push_back(Value::STRUCT(partition_children));
 	}
@@ -82,8 +88,13 @@ static LogicalType PartitionStructType(IcebergTableInformation &table_info, cons
 	} else {
 		//! NOTE: all entries in the file should have the same schema, otherwise it can't be in the same manifest file
 		//! anyways
-		for (auto &it : data_file.partition_values) {
-			children.emplace_back(StringUtil::Format("r%d", it.first), it.second.type());
+		for (auto &it : data_file.partition_metadata) {
+			for (auto &partition_value : data_file.partition_values) {
+				if (it.second == partition_value.first) {
+					children.emplace_back(StringUtil::Format("%s", it.first), LogicalType::INTEGER);
+					break;
+				}
+			}
 		}
 	}
 	return LogicalType::STRUCT(children);
@@ -223,6 +234,11 @@ idx_t WriteToFile(IcebergTableInformation &table_info, const IcebergManifest &ma
 		children.emplace_back("partition", PartitionStructType(table_info, manifest_file));
 		partition.emplace_back("__duckdb_field_id", Value::INTEGER(PARTITION));
 		partition.emplace_back("__duckdb_nullable", Value::BOOLEAN(false));
+
+		for (auto &partition_metadata : manifest_file.entries.front().data_file.partition_metadata) {
+			partition.emplace_back(partition_metadata.first, Value::INTEGER(partition_metadata.second));
+		}
+
 		data_file_field_ids.emplace_back("partition", Value::STRUCT(partition));
 
 		auto field_obj = yyjson_mut_arr_add_obj(doc, child_fields_arr);
@@ -238,7 +254,7 @@ idx_t WriteToFile(IcebergTableInformation &table_info, const IcebergManifest &ma
 		auto &first_entry = manifest_file.entries.front();
 		auto &data_file = first_entry.data_file;
 		if (!data_file.partition_values.empty()) {
-			for (auto &partition : data_file.partition_values) {
+			for (auto &partition : data_file.partition_metadata) {
 				// basically here you need to paste the partition field id information
 				// so here partition stores <1 (column source id), Value (partition value>
 				// what we should be pasting is something like
@@ -252,9 +268,11 @@ idx_t WriteToFile(IcebergTableInformation &table_info, const IcebergManifest &ma
 				// but then when the data is written in IcebergDataFile::ToValue
 				// you need to write the actual partition value (which is currently in data_file.partition_values)
 				auto field_obj = yyjson_mut_arr_add_obj(doc, partition_fields);
-				yyjson_mut_obj_add_strcpy(doc, field_obj, "name", "a_day");
-				yyjson_mut_obj_add_null(doc, field_obj, "default");
-				yyjson_mut_obj_add_int(doc, field_obj, "field-id", 1000);
+				yyjson_mut_obj_add_strcpy(doc, field_obj, "name", partition.first.c_str());
+				auto types_arr = yyjson_mut_obj_add_arr(doc, field_obj, "type");
+				yyjson_mut_arr_add_strcpy(doc, types_arr, "null");
+				yyjson_mut_arr_add_strcpy(doc, types_arr, "int");
+				yyjson_mut_obj_add_int(doc, field_obj, "id", partition.second);
 			}
 		}
 	}
@@ -434,6 +452,8 @@ idx_t WriteToFile(IcebergTableInformation &table_info, const IcebergManifest &ma
 	DataChunk chunk;
 	chunk.Initialize(allocator, types, manifest_file.entries.size());
 
+	auto iceberg_schema_string = ICUtils::JsonToString(std::move(doc_p));
+
 	for (idx_t i = 0; i < manifest_file.entries.size(); i++) {
 		auto &manifest_entry = manifest_file.entries[i];
 		idx_t col_idx = 0;
@@ -456,7 +476,6 @@ idx_t WriteToFile(IcebergTableInformation &table_info, const IcebergManifest &ma
 		col_idx++;
 	}
 	chunk.SetCardinality(manifest_file.entries.size());
-	auto iceberg_schema_string = ICUtils::JsonToString(std::move(doc_p));
 
 	child_list_t<Value> metadata_values;
 	metadata_values.emplace_back("schema", iceberg_schema_string);

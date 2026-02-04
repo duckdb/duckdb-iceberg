@@ -31,6 +31,11 @@ public:
 	IcebergManifestEntryContentType content;
 	string file_path;
 	string file_format;
+	// partition metadata is for writing the avro metadata.
+	// <partition_col_name, field_id>
+	vector<pair<string, int32_t>> partition_metadata;
+	// partition values is for writing the actual values
+	// <partition_col_field_id, actual partition value>
 	vector<pair<int32_t, Value>> partition_values;
 	int64_t record_count;
 	int64_t file_size_in_bytes;
