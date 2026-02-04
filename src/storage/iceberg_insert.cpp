@@ -132,6 +132,12 @@ static void AddToColDefMap(case_insensitive_map_t<optional_ptr<IcebergColumnDefi
 	}
 }
 
+//! Get the name for a partition expression (used in hive-style paths)
+static string GetPartitionExpressionName(const IcebergPartitionSpecField &field) {
+	// Use the partition field name directly
+	return field.name + "_" + field.transform.RawType();
+}
+
 IcebergColumnStats IcebergInsert::ParseColumnStats(const LogicalType &type, const vector<Value> &col_stats,
                                                    ClientContext &context) {
 	IcebergColumnStats column_stats(type);
@@ -191,7 +197,9 @@ void IcebergInsert::AddWrittenFiles(IcebergInsertGlobalState &global_state, Data
 		auto column_stats = chunk.GetValue(4, r);
 		auto &map_children = MapValue::GetChildren(column_stats);
 
-		global_state.insert_count += data_file.record_count;
+		auto partition_values = chunk.GetValue(5, r);
+		auto &partition_children = MapValue::GetChildren(partition_values);
+		auto &partition_vals = StructValue::GetChildren(partition_children[0]);
 
 		auto table_current_schema_id = ic_table.table_info.table_metadata.current_schema_id;
 		auto ic_schema = ic_table.table_info.table_metadata.schemas[table_current_schema_id];
@@ -200,6 +208,35 @@ void IcebergInsert::AddWrittenFiles(IcebergInsertGlobalState &global_state, Data
 		for (auto &column : ic_schema->columns) {
 			AddToColDefMap(column_info, "", column.get());
 		}
+
+		auto ic_partition_info = ic_table.table_info.table_metadata.GetLatestPartitionSpec();
+		case_insensitive_map_t<idx_t> partition_colname_to_source_id;
+		for (auto &partition_field : ic_partition_info.fields) {
+			auto parition_col_name = GetPartitionExpressionName(partition_field);
+			bool partition_col_found = false;
+			for (auto &column : ic_schema->columns) {
+				if (column->id == partition_field.source_id) {
+					D_ASSERT(partition_field.source_id == column->id);
+					partition_colname_to_source_id[parition_col_name] = column->id;
+					partition_col_found = true;
+					break;
+				}
+			}
+			if (!partition_col_found) {
+				throw InvalidConfigurationException("Could not find original column with source id %d for partition column %s", partition_field.source_id, partition_field.name);
+			}
+		}
+		for (auto &partition_val : partition_children) {
+			auto &struct_val = StructValue::GetChildren(partition_val);
+			auto &partition_name = StringValue::Get(struct_val[0]);
+			auto &partition_value = StringValue::Get(struct_val[1]);
+			auto partition_col_source_id = partition_colname_to_source_id.find(partition_name);
+			D_ASSERT(partition_col_source_id != partition_colname_to_source_id.end());
+			auto source_id = partition_col_source_id->second;
+			data_file.partition_values.push_back(std::make_pair(source_id, partition_value));
+		}
+
+		global_state.insert_count += data_file.record_count;
 
 		for (idx_t col_idx = 0; col_idx < map_children.size(); col_idx++) {
 			auto &struct_children = StructValue::GetChildren(map_children[col_idx]);
@@ -474,12 +511,6 @@ static unique_ptr<Expression> GetPartitionExpression(ClientContext &context, Ice
 	}
 }
 
-//! Get the name for a partition expression (used in hive-style paths)
-static string GetPartitionExpressionName(IcebergCopyInput &copy_input, const IcebergPartitionSpecField &field) {
-	// Use the partition field name directly
-	return field.name + "_" + field.transform.RawType();
-}
-
 //! Check if all partition fields use identity transforms
 static bool AllIdentityTransforms(const IcebergPartitionSpec &spec) {
 	for (auto &field : spec.fields) {
@@ -546,7 +577,7 @@ static void GeneratePartitionExpressions(ClientContext &context, IcebergCopyInpu
 		partition_columns.push_back(partition_column_start++);
 
 		auto expr = GetPartitionExpression(context, copy_input, field);
-		projection_names.push_back(GetPartitionExpressionName(copy_input, field));
+		projection_names.push_back(GetPartitionExpressionName( field));
 		projection_types.push_back(expr->return_type);
 		projection_expressions.push_back(std::move(expr));
 	}

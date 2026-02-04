@@ -54,7 +54,6 @@ Value IcebergDataFile::ToValue(const LogicalType &type) const {
 	}
 
 	children.push_back(Value::MAP(LogicalType::STRUCT(bounds_types), upper_bounds_values));
-
 	child_list_t<LogicalType> null_value_count_types;
 	null_value_count_types.emplace_back("key", LogicalType::INTEGER);
 	null_value_count_types.emplace_back("value", LogicalType::BIGINT);
@@ -236,6 +235,28 @@ idx_t WriteToFile(IcebergTableInformation &table_info, const IcebergManifest &ma
 		//! NOTE: this has to be populated with the fields of the partition spec when we support INSERT into a
 		//! partitioned table
 		[[maybe_unused]] auto partition_fields = yyjson_mut_obj_add_arr(doc, partition_struct, "fields");
+		auto &first_entry = manifest_file.entries.front();
+		auto &data_file = first_entry.data_file;
+		if (!data_file.partition_values.empty()) {
+			for (auto &partition : data_file.partition_values) {
+				// basically here you need to paste the partition field id information
+				// so here partition stores <1 (column source id), Value (partition value>
+				// what we should be pasting is something like
+				// "fields" : [ {
+				//			"name" : "ts_month",
+				//			"type" : [ "null", "int" ],
+				//			"default" : null,
+				//			"field-id" : 1000
+				//			}]
+				// so we need the partition column name, and the transform field id.
+				// but then when the data is written in IcebergDataFile::ToValue
+				// you need to write the actual partition value (which is currently in data_file.partition_values)
+				auto field_obj = yyjson_mut_arr_add_obj(doc, partition_fields);
+				yyjson_mut_obj_add_strcpy(doc, field_obj, "name", "a_day");
+				yyjson_mut_obj_add_null(doc, field_obj, "default");
+				yyjson_mut_obj_add_int(doc, field_obj, "field-id", 1000);
+			}
+		}
 	}
 
 	{
