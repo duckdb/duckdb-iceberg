@@ -105,6 +105,8 @@ public:
 	IcebergManifestFile(string manifest_path) : manifest_path(manifest_path), manifest_file(manifest_path) {
 	}
 
+	void AddPartitions(const IcebergDataFile &data_file);
+
 	static vector<LogicalType> Types() {
 		return {
 		    LogicalType::VARCHAR,

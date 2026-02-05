@@ -1,5 +1,7 @@
 #include "include/metadata/iceberg_manifest_list.hpp"
 #include "metadata/iceberg_manifest_list.hpp"
+
+#include "iceberg_value.hpp"
 #include "duckdb/main/database.hpp"
 
 #include "duckdb/storage/buffer_manager.hpp"
@@ -8,6 +10,21 @@ namespace duckdb {
 
 vector<IcebergManifestFile> &IcebergManifestList::GetManifestFilesMutable() {
 	return manifest_entries;
+}
+
+void IcebergManifestFile::AddPartitions(const IcebergDataFile &data_file) {
+	if (data_file.partition_values.empty()) {
+		return;
+	}
+	partitions.has_partitions = true;
+	for (auto &partition : data_file.partition_values) {
+		FieldSummary partition_field_summary;
+		partition_field_summary.contains_null = partition.second.IsNull();
+		LogicalType cool;
+		partition_field_summary.lower_bound = IcebergValue::SerializeValue(partition.second, cool, SerializeBound::LOWER_BOUND);
+		partition_field_summary.upper_bound = IcebergValue::SerializeValue(partition.second, cool, SerializeBound::UPPER_BOUND);
+		partitions.field_summary.push_back(partition_field_summary);
+	}
 }
 
 const vector<IcebergManifestFile> &IcebergManifestList::GetManifestFilesConst() const {
@@ -197,6 +214,7 @@ void WriteToFile(const IcebergManifestList &manifest_list, CopyFunction &copy, D
 		// deleted_rows_count: long - 514
 		data.SetValue(col_idx++, i, Value::BIGINT(static_cast<int64_t>(manifest.deleted_rows_count)));
 
+		D_ASSERT(!manifest.manifest_file.entries.empty());
 		// partitions: list<508: field_summary> - 507
 		data.SetValue(col_idx++, i, manifest.partitions.ToValue());
 	}
