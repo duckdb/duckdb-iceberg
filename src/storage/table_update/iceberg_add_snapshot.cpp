@@ -39,7 +39,6 @@ void IcebergAddSnapshot::CreateUpdate(DatabaseInstance &db, ClientContext &conte
 
 	D_ASSERT(manifest_list.GetManifestListEntriesCount() != 0);
 	auto manifest_list_entries_size = manifest_list.GetManifestListEntriesCount();
-	// manifest.AddPartitions(manifest.manifest_file.entries.front().data_file);
 	for (idx_t manifest_index = 0; manifest_index < manifest_list_entries_size; manifest_index++) {
 		manifest_list.WriteManifestListEntry(table_info, manifest_index, avro_copy, db, context);
 	}

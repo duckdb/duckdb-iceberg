@@ -12,6 +12,8 @@
 
 namespace duckdb {
 
+struct IcebergPartitionSpec;
+
 using sequence_number_t = int64_t;
 
 struct FieldSummary {
@@ -105,7 +107,7 @@ public:
 	IcebergManifestFile(string manifest_path) : manifest_path(manifest_path), manifest_file(manifest_path) {
 	}
 
-	void AddPartitions(const IcebergDataFile &data_file);
+	void AddPartitions(const IcebergPartitionSpec &partition_spec, const IcebergTableSchema &table_schema);
 
 	static vector<LogicalType> Types() {
 		return {

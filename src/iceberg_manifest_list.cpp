@@ -1,9 +1,8 @@
 #include "include/metadata/iceberg_manifest_list.hpp"
 #include "metadata/iceberg_manifest_list.hpp"
-
+#include "metadata/iceberg_partition_spec.hpp"
 #include "iceberg_value.hpp"
 #include "duckdb/main/database.hpp"
-
 #include "duckdb/storage/buffer_manager.hpp"
 
 namespace duckdb {
@@ -12,18 +11,100 @@ vector<IcebergManifestFile> &IcebergManifestList::GetManifestFilesMutable() {
 	return manifest_entries;
 }
 
-void IcebergManifestFile::AddPartitions(const IcebergDataFile &data_file) {
-	if (data_file.partition_values.empty()) {
+void IcebergManifestFile::AddPartitions(const IcebergPartitionSpec &partition_spec,
+                                        const IcebergTableSchema &table_schema) {
+	if (manifest_file.entries.empty() || partition_spec.fields.empty()) {
 		return;
 	}
+
+	// Check if any entry has partition values
+	for (auto &entry : manifest_file.entries) {
+		if (entry.data_file.partition_values.empty()) {
+			throw InvalidInputException(
+			    "Manifest file contains entries without partition values even though there is a partition spec");
+		}
+	}
+
 	partitions.has_partitions = true;
-	for (auto &partition : data_file.partition_values) {
-		FieldSummary partition_field_summary;
-		partition_field_summary.contains_null = partition.second.IsNull();
-		LogicalType cool;
-		partition_field_summary.lower_bound = IcebergValue::SerializeValue(partition.second, cool, SerializeBound::LOWER_BOUND);
-		partition_field_summary.upper_bound = IcebergValue::SerializeValue(partition.second, cool, SerializeBound::UPPER_BOUND);
-		partitions.field_summary.push_back(partition_field_summary);
+
+	// Build per-field info: determine the serialized type for each partition field
+	struct PartitionFieldInfo {
+		LogicalType serialized_type;
+		uint64_t partition_field_id;
+	};
+
+	vector<PartitionFieldInfo> field_infos;
+	for (auto &field : partition_spec.fields) {
+		auto source_type = table_schema.GetColumnTypeFromFieldId(field.source_id);
+		auto serialized_type = field.transform.GetSerializedType(source_type);
+		field_infos.push_back({serialized_type, field.partition_field_id});
+	}
+
+	// Initialize field summaries and track min/max typed values
+	partitions.field_summary.resize(field_infos.size());
+	vector<Value> min_values(field_infos.size());
+	vector<Value> max_values(field_infos.size());
+	vector<bool> initialized(field_infos.size(), false);
+
+	for (auto &entry : manifest_file.entries) {
+		auto &data_file = entry.data_file;
+		for (idx_t i = 0; i < field_infos.size(); i++) {
+			auto &field_info = field_infos[i];
+
+			// Find the partition value matching this field's partition_field_id
+			const Value *partition_value_ptr = nullptr;
+			for (auto &pv : data_file.partition_values) {
+				if (static_cast<uint64_t>(pv.first) == field_info.partition_field_id) {
+					partition_value_ptr = &pv.second;
+					break;
+				}
+			}
+
+			if (!partition_value_ptr || partition_value_ptr->IsNull()) {
+				partitions.field_summary[i].contains_null = true;
+				continue;
+			}
+
+			// Cast the partition value (stored as VARCHAR) to the correct serialized type
+			auto typed_value = partition_value_ptr->DefaultCastAs(field_info.serialized_type);
+
+			if (!initialized[i]) {
+				min_values[i] = typed_value;
+				max_values[i] = typed_value;
+				initialized[i] = true;
+			} else {
+				if (typed_value < min_values[i]) {
+					min_values[i] = typed_value;
+				}
+				if (typed_value > max_values[i]) {
+					max_values[i] = typed_value;
+				}
+			}
+		}
+	}
+
+	// Serialize the min/max values as bounds
+	for (idx_t i = 0; i < field_infos.size(); i++) {
+		if (!initialized[i]) {
+			// All values for this field are null - set bounds to null BLOBs
+			partitions.field_summary[i].lower_bound = Value(LogicalType::BLOB);
+			partitions.field_summary[i].upper_bound = Value(LogicalType::BLOB);
+			continue;
+		}
+		auto serialized_type = field_infos[i].serialized_type;
+		auto lower_result = IcebergValue::SerializeValue(min_values[i], serialized_type, SerializeBound::LOWER_BOUND);
+		auto upper_result = IcebergValue::SerializeValue(max_values[i], serialized_type, SerializeBound::UPPER_BOUND);
+
+		if (lower_result.HasValue()) {
+			partitions.field_summary[i].lower_bound = lower_result.GetValue();
+		} else {
+			partitions.field_summary[i].lower_bound = Value(LogicalType::BLOB);
+		}
+		if (upper_result.HasValue()) {
+			partitions.field_summary[i].upper_bound = upper_result.GetValue();
+		} else {
+			partitions.field_summary[i].upper_bound = Value(LogicalType::BLOB);
+		}
 	}
 }
 
