@@ -1,0 +1,96 @@
+# name: test/sql/local/irc/insert/partitions/combined/test_identity_and_year.test
+# group: [combined]
+
+require-env ICEBERG_SERVER_AVAILABLE
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+CREATE SECRET (
+    TYPE S3,
+    KEY_ID 'admin',
+    SECRET 'password',
+    ENDPOINT '127.0.0.1:9000',
+    URL_STYLE 'path',
+    USE_SSL 0
+);
+
+statement ok
+ATTACH '' AS my_datalake (
+    TYPE ICEBERG,
+    CLIENT_ID 'admin',
+    CLIENT_SECRET 'password',
+    ENDPOINT 'http://127.0.0.1:8181'
+);
+
+statement ok
+create schema if not exists my_datalake.default;
+
+statement ok
+drop table if exists my_datalake.default.test_identity_and_year;
+
+# Combine identity transform on one column with year transform on another
+statement ok
+CREATE TABLE my_datalake.default.test_identity_and_year (id int, category varchar, ts TIMESTAMP)
+PARTITIONED BY (category, year(ts));
+
+statement ok
+insert into my_datalake.default.test_identity_and_year
+select range,
+       case range % 2 when 0 then 'even' else 'odd' end,
+       make_timestamp(2018 + (range % 4), 6, 15, 12, 0, 0)
+from range(40);
+
+statement ok
+create table local_combined as
+select range as id,
+       case range % 2 when 0 then 'even' else 'odd' end as category,
+       make_timestamp(2018 + (range % 4), 6, 15, 12, 0, 0) as ts
+from range(40);
+
+query III nosort expected_result
+select * from local_combined order by id;
+----
+
+query III nosort expected_result
+select * from my_datalake.default.test_identity_and_year order by id;
+----
+
+query I
+select count(*) from my_datalake.default.test_identity_and_year;
+----
+40
+
+# Filter on identity partition column
+query I
+select count(*) from my_datalake.default.test_identity_and_year where category = 'even';
+----
+20
+
+mode output_result
+
+
+statement ok
+select * from local_combined  where category = 'even' and ts >= '2020-01-01'::TIMESTAMP and ts < '2021-01-01'::TIMESTAMP;
+
+mode skip
+
+
+# Filter on both partition columns
+statement ok
+select * from my_datalake.default.test_identity_and_year where category = 'even';
+
+# Filter on both partition columns
+statement ok
+select count(*) from my_datalake.default.test_identity_and_year where category = 'even' and ts >= '2020-01-01'::TIMESTAMP and ts < '2021-01-01'::TIMESTAMP;
+----
+5

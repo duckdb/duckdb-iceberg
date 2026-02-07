@@ -1,0 +1,67 @@
+# name: test/sql/local/irc/insert/partitions/temporal/test_hour_timestamp.test
+# group: [temporal]
+
+require-env ICEBERG_SERVER_AVAILABLE
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+CREATE SECRET (
+    TYPE S3,
+    KEY_ID 'admin',
+    SECRET 'password',
+    ENDPOINT '127.0.0.1:9000',
+    URL_STYLE 'path',
+    USE_SSL 0
+);
+
+statement ok
+ATTACH '' AS my_datalake (
+    TYPE ICEBERG,
+    CLIENT_ID 'admin',
+    CLIENT_SECRET 'password',
+    ENDPOINT 'http://127.0.0.1:8181'
+);
+
+statement ok
+create schema if not exists my_datalake.default;
+
+statement ok
+drop table if exists my_datalake.default.test_hour_timestamp;
+
+# Test hour transform on TIMESTAMP column
+statement ok
+CREATE TABLE my_datalake.default.test_hour_timestamp (id int, ts TIMESTAMP)
+PARTITIONED BY (hour(ts));
+
+statement ok
+insert into my_datalake.default.test_hour_timestamp
+select range, make_timestamp(2020, 6, 15, range % 6, range % 60, 0)
+from range(30);
+
+statement ok
+create table local_hour_ts as
+select range as id, make_timestamp(2020, 6, 15, range % 6, range % 60, 0) as ts
+from range(30);
+
+query II nosort expected_result
+select * from local_hour_ts order by id;
+----
+
+query II nosort expected_result
+select * from my_datalake.default.test_hour_timestamp order by id;
+----
+
+query I
+select count(*) from my_datalake.default.test_hour_timestamp;
+----
+30

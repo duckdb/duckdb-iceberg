@@ -1,0 +1,77 @@
+# name: test/sql/local/irc/insert/partitions/large/test_large_identity_insert.test
+# description: Test large insert into identity-partitioned table with many partitions and rows
+# group: [large]
+
+require-env ICEBERG_SERVER_AVAILABLE
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+CREATE SECRET (
+    TYPE S3,
+    KEY_ID 'admin',
+    SECRET 'password',
+    ENDPOINT '127.0.0.1:9000',
+    URL_STYLE 'path',
+    USE_SSL 0
+);
+
+statement ok
+ATTACH '' AS my_datalake (
+    TYPE ICEBERG,
+    CLIENT_ID 'admin',
+    CLIENT_SECRET 'password',
+    ENDPOINT 'http://127.0.0.1:8181'
+);
+
+statement ok
+create schema if not exists my_datalake.default;
+
+statement ok
+drop table if exists my_datalake.default.test_large_identity;
+
+statement ok
+CREATE TABLE my_datalake.default.test_large_identity (id int, partition_key int, payload varchar)
+PARTITIONED BY (partition_key);
+
+# Insert 100k rows across 50 partitions
+statement ok
+insert into my_datalake.default.test_large_identity
+select range, range % 50, 'payload_' || (range % 1000)::VARCHAR
+from range(100000);
+
+query I
+select count(*) from my_datalake.default.test_large_identity;
+----
+100000
+
+# Each partition should have 2000 rows
+query I
+select count(*) from my_datalake.default.test_large_identity where partition_key = 0;
+----
+2000
+
+query I
+select count(*) from my_datalake.default.test_large_identity where partition_key = 25;
+----
+2000
+
+query I
+select count(*) from my_datalake.default.test_large_identity where partition_key = 49;
+----
+2000
+
+# Verify distinct partition count
+query I
+select count(distinct partition_key) from my_datalake.default.test_large_identity;
+----
+50

@@ -1,0 +1,53 @@
+# name: test/sql/local/irc/insert/partitions/unsupported/test_bucket_transform.test
+# description: Test that BUCKET partition transform is rejected for INSERT
+# group: [unsupported]
+
+require-env ICEBERG_SERVER_AVAILABLE
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+CREATE SECRET (
+    TYPE S3,
+    KEY_ID 'admin',
+    SECRET 'password',
+    ENDPOINT '127.0.0.1:9000',
+    URL_STYLE 'path',
+    USE_SSL 0
+);
+
+statement ok
+ATTACH '' AS my_datalake (
+    TYPE ICEBERG,
+    CLIENT_ID 'admin',
+    CLIENT_SECRET 'password',
+    ENDPOINT 'http://127.0.0.1:8181'
+);
+
+statement ok
+create schema if not exists my_datalake.default;
+
+statement ok
+drop table if exists my_datalake.default.test_bucket_transform;
+
+statement ok
+CREATE TABLE my_datalake.default.test_bucket_transform (id int, val varchar);
+
+# Set bucket partition - this should work at the ALTER level
+statement ok
+ALTER TABLE my_datalake.default.test_bucket_transform SET PARTITIONED BY (bucket(id, 16));
+
+# But INSERT should fail because BUCKET transform is not yet supported for writes
+statement error
+insert into my_datalake.default.test_bucket_transform select range, 'val' from range(10);
+----
+<REGEX>:.*BUCKET.*not.*supported.*

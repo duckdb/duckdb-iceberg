@@ -1,0 +1,106 @@
+# name: test/sql/local/irc/insert/partitions/multi_insert/test_multiple_inserts_year.test
+# group: [multi_insert]
+
+require-env ICEBERG_SERVER_AVAILABLE
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+CREATE SECRET (
+    TYPE S3,
+    KEY_ID 'admin',
+    SECRET 'password',
+    ENDPOINT '127.0.0.1:9000',
+    URL_STYLE 'path',
+    USE_SSL 0
+);
+
+statement ok
+ATTACH '' AS my_datalake (
+    TYPE ICEBERG,
+    CLIENT_ID 'admin',
+    CLIENT_SECRET 'password',
+    ENDPOINT 'http://127.0.0.1:8181'
+);
+
+statement ok
+create schema if not exists my_datalake.default;
+
+statement ok
+drop table if exists my_datalake.default.test_multi_insert_year;
+
+statement ok
+CREATE TABLE my_datalake.default.test_multi_insert_year (id int, ts TIMESTAMP)
+PARTITIONED BY (year(ts));
+
+# First insert: data from 2020
+statement ok
+insert into my_datalake.default.test_multi_insert_year
+select range, make_timestamp(2020, (range % 12) + 1, 15, 12, 0, 0)
+from range(20);
+
+query I
+select count(*) from my_datalake.default.test_multi_insert_year;
+----
+20
+
+# Second insert: data from 2021
+statement ok
+insert into my_datalake.default.test_multi_insert_year
+select 100 + range, make_timestamp(2021, (range % 12) + 1, 15, 12, 0, 0)
+from range(20);
+
+query I
+select count(*) from my_datalake.default.test_multi_insert_year;
+----
+40
+
+# Third insert: data from 2022
+statement ok
+insert into my_datalake.default.test_multi_insert_year
+select 200 + range, make_timestamp(2022, (range % 12) + 1, 15, 12, 0, 0)
+from range(20);
+
+query I
+select count(*) from my_datalake.default.test_multi_insert_year;
+----
+60
+
+# Fourth insert: data spanning multiple years (2020-2022)
+statement ok
+insert into my_datalake.default.test_multi_insert_year
+select 300 + range, make_timestamp(2020 + (range % 3), 6, 15, 12, 0, 0)
+from range(15);
+
+query I
+select count(*) from my_datalake.default.test_multi_insert_year;
+----
+75
+
+# Verify correctness
+statement ok
+create table local_multi_year as
+select range as id, make_timestamp(2020, (range % 12) + 1, 15, 12, 0, 0) as ts from range(20)
+union all
+select 100 + range, make_timestamp(2021, (range % 12) + 1, 15, 12, 0, 0) from range(20)
+union all
+select 200 + range, make_timestamp(2022, (range % 12) + 1, 15, 12, 0, 0) from range(20)
+union all
+select 300 + range, make_timestamp(2020 + (range % 3), 6, 15, 12, 0, 0) from range(15);
+
+query II nosort expected_result
+select * from local_multi_year order by id;
+----
+
+query II nosort expected_result
+select * from my_datalake.default.test_multi_insert_year order by id;
+----

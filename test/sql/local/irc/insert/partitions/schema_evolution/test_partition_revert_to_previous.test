@@ -1,0 +1,113 @@
+# name: test/sql/local/irc/insert/partitions/schema_evolution/test_partition_revert_to_previous.test
+# description: Test setting partition schema back to a previous schema and verifying data integrity
+# group: [schema_evolution]
+
+require-env ICEBERG_SERVER_AVAILABLE
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+CREATE SECRET (
+    TYPE S3,
+    KEY_ID 'admin',
+    SECRET 'password',
+    ENDPOINT '127.0.0.1:9000',
+    URL_STYLE 'path',
+    USE_SSL 0
+);
+
+statement ok
+ATTACH '' AS my_datalake (
+    TYPE ICEBERG,
+    CLIENT_ID 'admin',
+    CLIENT_SECRET 'password',
+    ENDPOINT 'http://127.0.0.1:8181'
+);
+
+statement ok
+create schema if not exists my_datalake.default;
+
+statement ok
+drop table if exists my_datalake.default.test_partition_revert;
+
+# Create table partitioned by column a (spec #0)
+statement ok
+CREATE TABLE my_datalake.default.test_partition_revert (a int, b int)
+PARTITIONED BY (a);
+
+# Insert with original partition spec (by a)
+statement ok
+insert into my_datalake.default.test_partition_revert
+select range % 5, range from range(25);
+
+query I
+select count(*) from my_datalake.default.test_partition_revert;
+----
+25
+
+# Change to partition by b (new spec)
+statement ok
+ALTER TABLE my_datalake.default.test_partition_revert SET PARTITIONED BY (b);
+
+# Insert with new partition spec (by b)
+statement ok
+insert into my_datalake.default.test_partition_revert
+select range % 5, 100 + range from range(25);
+
+query I
+select count(*) from my_datalake.default.test_partition_revert;
+----
+50
+
+# Revert back to partitioning by a (should reuse the original spec id if catalog supports it)
+statement ok
+ALTER TABLE my_datalake.default.test_partition_revert SET PARTITIONED BY (a);
+
+# Insert with reverted partition spec (by a again)
+statement ok
+insert into my_datalake.default.test_partition_revert
+select range % 5, 200 + range from range(25);
+
+# Total: 25 + 25 + 25 = 75
+query I
+select count(*) from my_datalake.default.test_partition_revert;
+----
+75
+
+# Verify all data is correct
+statement ok
+create table local_revert as
+select range % 5 as a, range as b from range(25)
+union all
+select range % 5, 100 + range from range(25)
+union all
+select range % 5, 200 + range from range(25);
+
+query II nosort expected_result
+select * from local_revert order by b;
+----
+
+query II nosort expected_result
+select * from my_datalake.default.test_partition_revert order by b;
+----
+
+# Filter on partition column a - data from first and third inserts should match,
+# second insert was partitioned differently but data should still be readable
+query I
+select count(*) from my_datalake.default.test_partition_revert where a = 0;
+----
+15
+
+query I
+select count(*) from my_datalake.default.test_partition_revert where a = 3;
+----
+15

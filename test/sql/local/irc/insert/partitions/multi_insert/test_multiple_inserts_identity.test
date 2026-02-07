@@ -1,0 +1,101 @@
+# name: test/sql/local/irc/insert/partitions/multi_insert/test_multiple_inserts_identity.test
+# group: [multi_insert]
+
+require-env ICEBERG_SERVER_AVAILABLE
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+CREATE SECRET (
+    TYPE S3,
+    KEY_ID 'admin',
+    SECRET 'password',
+    ENDPOINT '127.0.0.1:9000',
+    URL_STYLE 'path',
+    USE_SSL 0
+);
+
+statement ok
+ATTACH '' AS my_datalake (
+    TYPE ICEBERG,
+    CLIENT_ID 'admin',
+    CLIENT_SECRET 'password',
+    ENDPOINT 'http://127.0.0.1:8181'
+);
+
+statement ok
+create schema if not exists my_datalake.default;
+
+statement ok
+drop table if exists my_datalake.default.test_multi_insert_identity;
+
+statement ok
+CREATE TABLE my_datalake.default.test_multi_insert_identity (id int, bucket int)
+PARTITIONED BY (bucket);
+
+# First insert: buckets 0-2
+statement ok
+insert into my_datalake.default.test_multi_insert_identity
+select range, range % 3 from range(30);
+
+query I
+select count(*) from my_datalake.default.test_multi_insert_identity;
+----
+30
+
+# Second insert: buckets 3-5
+statement ok
+insert into my_datalake.default.test_multi_insert_identity
+select 100 + range, 3 + (range % 3) from range(30);
+
+query I
+select count(*) from my_datalake.default.test_multi_insert_identity;
+----
+60
+
+# Third insert: overlapping buckets 0-2 (same partitions as first insert)
+statement ok
+insert into my_datalake.default.test_multi_insert_identity
+select 200 + range, range % 3 from range(30);
+
+query I
+select count(*) from my_datalake.default.test_multi_insert_identity;
+----
+90
+
+# Verify data correctness across all inserts
+statement ok
+create table local_multi_insert as
+select range as id, range % 3 as bucket from range(30)
+union all
+select 100 + range, 3 + (range % 3) from range(30)
+union all
+select 200 + range, range % 3 from range(30);
+
+query II nosort expected_result
+select * from local_multi_insert order by id;
+----
+
+query II nosort expected_result
+select * from my_datalake.default.test_multi_insert_identity order by id;
+----
+
+# Filter on partition column - should span multiple manifest list entries
+query I
+select count(*) from my_datalake.default.test_multi_insert_identity where bucket = 0;
+----
+20
+
+query I
+select count(*) from my_datalake.default.test_multi_insert_identity where bucket = 4;
+----
+10

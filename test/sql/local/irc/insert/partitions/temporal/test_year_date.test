@@ -1,0 +1,67 @@
+# name: test/sql/local/irc/insert/partitions/temporal/test_year_date.test
+# group: [temporal]
+
+require-env ICEBERG_SERVER_AVAILABLE
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+CREATE SECRET (
+    TYPE S3,
+    KEY_ID 'admin',
+    SECRET 'password',
+    ENDPOINT '127.0.0.1:9000',
+    URL_STYLE 'path',
+    USE_SSL 0
+);
+
+statement ok
+ATTACH '' AS my_datalake (
+    TYPE ICEBERG,
+    CLIENT_ID 'admin',
+    CLIENT_SECRET 'password',
+    ENDPOINT 'http://127.0.0.1:8181'
+);
+
+statement ok
+create schema if not exists my_datalake.default;
+
+statement ok
+drop table if exists my_datalake.default.test_year_date;
+
+# Test year transform on DATE column
+statement ok
+CREATE TABLE my_datalake.default.test_year_date (id int, dt DATE)
+PARTITIONED BY (year(dt));
+
+statement ok
+insert into my_datalake.default.test_year_date
+select range, ('2018-01-01'::DATE + interval (range * 90) day)::DATE
+from range(20);
+
+statement ok
+create table local_year_date as
+select range as id, ('2018-01-01'::DATE + interval (range * 90) day)::DATE as dt
+from range(20);
+
+query II nosort expected_result
+select * from local_year_date order by id;
+----
+
+query II nosort expected_result
+select * from my_datalake.default.test_year_date order by id;
+----
+
+query I
+select count(*) from my_datalake.default.test_year_date;
+----
+20

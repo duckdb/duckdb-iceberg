@@ -1,0 +1,80 @@
+# name: test/sql/local/irc/insert/partitions/identity/test_identity_varchar.test
+# group: [identity]
+
+require-env ICEBERG_SERVER_AVAILABLE
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+CREATE SECRET (
+    TYPE S3,
+    KEY_ID 'admin',
+    SECRET 'password',
+    ENDPOINT '127.0.0.1:9000',
+    URL_STYLE 'path',
+    USE_SSL 0
+);
+
+statement ok
+ATTACH '' AS my_datalake (
+    TYPE ICEBERG,
+    CLIENT_ID 'admin',
+    CLIENT_SECRET 'password',
+    ENDPOINT 'http://127.0.0.1:8181'
+);
+
+statement ok
+create schema if not exists my_datalake.default;
+
+statement ok
+drop table if exists my_datalake.default.test_identity_varchar;
+
+statement ok
+CREATE TABLE my_datalake.default.test_identity_varchar (id int, category varchar)
+PARTITIONED BY (category);
+
+statement ok
+insert into my_datalake.default.test_identity_varchar
+select range, case range % 3
+    when 0 then 'alpha'
+    when 1 then 'beta'
+    else 'gamma'
+end
+from range(30);
+
+statement ok
+create table local_identity_varchar as
+select range as id, case range % 3
+    when 0 then 'alpha'
+    when 1 then 'beta'
+    else 'gamma'
+end as category
+from range(30);
+
+query II nosort expected_result
+select * from local_identity_varchar order by id;
+----
+
+query II nosort expected_result
+select * from my_datalake.default.test_identity_varchar order by id;
+----
+
+# Filter on partition column
+query I
+select count(*) from my_datalake.default.test_identity_varchar where category = 'alpha';
+----
+10
+
+query I
+select count(*) from my_datalake.default.test_identity_varchar where category = 'beta';
+----
+10
