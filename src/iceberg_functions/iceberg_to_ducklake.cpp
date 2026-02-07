@@ -1166,25 +1166,25 @@ public:
 				}
 
 				//! ducklake_file_partition_value
-				auto &partition_values = data_file.manifest_entry.data_file.partition_values;
+				auto &partition_info = data_file.manifest_entry.data_file.partition_info;
 				auto &partition = data_file.partition;
 
-				unordered_map<int32_t, idx_t> field_id_to_index;
-				for (idx_t i = 0; i < partition_values.size(); i++) {
-					field_id_to_index.emplace(partition_values[i].first, i);
+				// Build a map from partition_field_id to DataFilePartitionInfo for quick lookup
+				unordered_map<uint64_t, reference<const DataFilePartitionInfo>> field_id_to_info;
+				for (auto &pi : partition_info) {
+					field_id_to_info.emplace(pi.field_id, pi);
 				}
 
 				for (idx_t partition_key_index = 0; partition_key_index < partition.columns.size();
 				     partition_key_index++) {
 					auto &partition_column = partition.columns[partition_key_index];
 
-					auto partition_it = field_id_to_index.find(partition_column.partition_field_id);
+					auto partition_it = field_id_to_info.find(partition_column.partition_field_id);
 					string partition_value;
-					if (partition_it == field_id_to_index.end()) {
+					if (partition_it == field_id_to_info.end()) {
 						partition_value = "NULL";
 					} else {
-						auto index = partition_it->second;
-						partition_value = "'" + partition_values[index].second.ToString() + "'";
+						partition_value = "'" + partition_it->second.get().value.ToString() + "'";
 					}
 					auto values = StringUtil::Format("VALUES(%d, %d, %d, %s);", data_file_id, table_id,
 					                                 partition_key_index, partition_value);

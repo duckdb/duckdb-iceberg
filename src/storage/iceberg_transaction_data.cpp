@@ -75,8 +75,7 @@ void IcebergTransactionData::CreateManifestListEntry(IcebergAddSnapshot &add_sna
 	// Compute partition field summaries (upper/lower bounds) for the manifest list entry
 	if (table_metadata.HasPartitionSpec() && table_metadata.GetLatestPartitionSpec().IsPartitioned()) {
 		auto &partition_spec = table_metadata.partition_specs[table_metadata.default_spec_id];
-		auto &table_schema = *table_metadata.schemas[table_metadata.current_schema_id];
-		manifest_list_entry.AddPartitions(partition_spec, table_schema);
+		manifest_list_entry.AddPartitions(partition_spec);
 	}
 }
 

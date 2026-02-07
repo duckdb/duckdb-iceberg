@@ -107,7 +107,7 @@ public:
 	IcebergManifestFile(string manifest_path) : manifest_path(manifest_path), manifest_file(manifest_path) {
 	}
 
-	void AddPartitions(const IcebergPartitionSpec &partition_spec, const IcebergTableSchema &table_schema);
+	void AddPartitions(const IcebergPartitionSpec &partition_spec);
 
 	static vector<LogicalType> Types() {
 		return {

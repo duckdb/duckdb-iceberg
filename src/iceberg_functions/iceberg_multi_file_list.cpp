@@ -326,8 +326,8 @@ bool IcebergMultiFileList::FileMatchesFilter(const IcebergManifestEntry &manifes
 		auto &metadata = GetMetadata();
 		auto &data_file = manifest_entry.data_file;
 		// First check if there are partitions
-		if (!data_file.partition_values.empty()) {
-			// check if the index is in the parititon value thing.
+		if (!data_file.partition_info.empty()) {
+			// check if the index is in the partition info.
 			auto partition_spec_it = metadata.partition_specs.find(manifest_entry.partition_spec_id);
 			if (partition_spec_it == metadata.partition_specs.end()) {
 				throw InvalidConfigurationException(
@@ -352,16 +352,15 @@ bool IcebergMultiFileList::FileMatchesFilter(const IcebergManifestEntry &manifes
 				// initialize dummy stats
 				auto stats = IcebergPredicateStats();
 				bool found_partition_field = false;
-				for (auto &partition_val : data_file.partition_values) {
-					auto partition_field_id = partition_val.first;
-					if (field.partition_field_id == partition_field_id) {
+				for (auto &pi : data_file.partition_info) {
+					if (field.partition_field_id == pi.field_id) {
 						found_partition_field = true;
-						stats.lower_bound = partition_val.second;
-						stats.upper_bound = partition_val.second;
+						stats.lower_bound = pi.value;
+						stats.upper_bound = pi.value;
 						stats.has_upper_bounds = true;
 						stats.has_lower_bounds = true;
 						// set null stats for partitioned column.
-						if (partition_val.second.IsNull()) {
+						if (pi.value.IsNull()) {
 							// partition values can be null
 							stats.has_null = true;
 						} else {

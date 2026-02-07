@@ -11,62 +11,51 @@ vector<IcebergManifestFile> &IcebergManifestList::GetManifestFilesMutable() {
 	return manifest_entries;
 }
 
-void IcebergManifestFile::AddPartitions(const IcebergPartitionSpec &partition_spec,
-                                        const IcebergTableSchema &table_schema) {
+void IcebergManifestFile::AddPartitions(const IcebergPartitionSpec &partition_spec) {
 	if (manifest_file.entries.empty() || partition_spec.fields.empty()) {
 		return;
 	}
 
-	// Check if any entry has partition values
+	// Check if any entry has partition info
 	for (auto &entry : manifest_file.entries) {
-		if (entry.data_file.partition_values.empty()) {
+		if (entry.data_file.partition_info.empty()) {
 			throw InvalidInputException(
-			    "Manifest file contains entries without partition values even though there is a partition spec");
+			    "Manifest file contains entries without partition info even though there is a partition spec");
 		}
 	}
 
 	partitions.has_partitions = true;
 
-	// Build per-field info: determine the serialized type for each partition field
-	struct PartitionFieldInfo {
-		LogicalType serialized_type;
-		uint64_t partition_field_id;
-	};
-
-	vector<PartitionFieldInfo> field_infos;
-	for (auto &field : partition_spec.fields) {
-		auto source_type = table_schema.GetColumnTypeFromFieldId(field.source_id);
-		auto serialized_type = field.transform.GetSerializedType(source_type);
-		field_infos.push_back({serialized_type, field.partition_field_id});
-	}
-
-	// Initialize field summaries and track min/max typed values
-	partitions.field_summary.resize(field_infos.size());
-	vector<Value> min_values(field_infos.size());
-	vector<Value> max_values(field_infos.size());
-	vector<bool> initialized(field_infos.size(), false);
+	auto num_fields = partition_spec.fields.size();
+	partitions.field_summary.resize(num_fields);
+	vector<Value> min_values(num_fields);
+	vector<Value> max_values(num_fields);
+	vector<bool> initialized(num_fields, false);
 
 	for (auto &entry : manifest_file.entries) {
 		auto &data_file = entry.data_file;
-		for (idx_t i = 0; i < field_infos.size(); i++) {
-			auto &field_info = field_infos[i];
+		for (idx_t i = 0; i < num_fields; i++) {
+			auto &spec_field = partition_spec.fields[i];
 
-			// Find the partition value matching this field's partition_field_id
-			const Value *partition_value_ptr = nullptr;
-			for (auto &pv : data_file.partition_values) {
-				if (static_cast<uint64_t>(pv.first) == field_info.partition_field_id) {
-					partition_value_ptr = &pv.second;
+			// Find the partition info entry matching this field's partition_field_id
+			const DataFilePartitionInfo *info_ptr = nullptr;
+			for (auto &pi : data_file.partition_info) {
+				if (pi.field_id == spec_field.partition_field_id) {
+					info_ptr = &pi;
 					break;
 				}
 			}
 
-			if (!partition_value_ptr || partition_value_ptr->IsNull()) {
+			if (!info_ptr || info_ptr->value.IsNull()) {
 				partitions.field_summary[i].contains_null = true;
 				continue;
 			}
 
+			// Get the serialized type from the DataFilePartitionInfo's transform and source_type
+			auto serialized_type = info_ptr->transform.GetSerializedType(info_ptr->source_type);
+
 			// Cast the partition value (stored as VARCHAR) to the correct serialized type
-			auto typed_value = partition_value_ptr->DefaultCastAs(field_info.serialized_type);
+			auto typed_value = info_ptr->value.DefaultCastAs(serialized_type);
 
 			if (!initialized[i]) {
 				min_values[i] = typed_value;
@@ -84,14 +73,29 @@ void IcebergManifestFile::AddPartitions(const IcebergPartitionSpec &partition_sp
 	}
 
 	// Serialize the min/max values as bounds
-	for (idx_t i = 0; i < field_infos.size(); i++) {
+	for (idx_t i = 0; i < num_fields; i++) {
 		if (!initialized[i]) {
 			// All values for this field are null - set bounds to null BLOBs
 			partitions.field_summary[i].lower_bound = Value(LogicalType::BLOB);
 			partitions.field_summary[i].upper_bound = Value(LogicalType::BLOB);
 			continue;
 		}
-		auto serialized_type = field_infos[i].serialized_type;
+		auto &spec_field = partition_spec.fields[i];
+		// Find one DataFilePartitionInfo entry to get the type info
+		const DataFilePartitionInfo *info_ptr = nullptr;
+		for (auto &entry : manifest_file.entries) {
+			for (auto &pi : entry.data_file.partition_info) {
+				if (pi.field_id == spec_field.partition_field_id && !pi.value.IsNull()) {
+					info_ptr = &pi;
+					break;
+				}
+			}
+			if (info_ptr) {
+				break;
+			}
+		}
+		D_ASSERT(info_ptr);
+		auto serialized_type = info_ptr->transform.GetSerializedType(info_ptr->source_type);
 		auto lower_result = IcebergValue::SerializeValue(min_values[i], serialized_type, SerializeBound::LOWER_BOUND);
 		auto upper_result = IcebergValue::SerializeValue(max_values[i], serialized_type, SerializeBound::UPPER_BOUND);
 

@@ -18,20 +18,20 @@ Value IcebergDataFile::ToValue(const LogicalType &type) const {
 	// file_format: string - 101
 	children.push_back(Value(file_format));
 	// partition: struct(...) - 102
-	if (partition_values.empty()) {
+	if (partition_info.empty()) {
 		//! NOTE: Spark does *not* like it when this column is NULL, so we populate it with an empty struct value
 		//! instead
 		children.push_back(
 		    Value::STRUCT(child_list_t<Value> {{"__duckdb_empty_struct_marker", Value(LogicalTypeId::VARCHAR)}}));
 	} else {
 		child_list_t<Value> partition_children;
-		for (auto &field : partition_metadata) {
-			auto &col_name = field.first;
-			for (auto &partition_value : partition_values) {
-				if (partition_value.first == field.second) {
-					int32_t partition_val = partition_value.second.GetValue<int>();
-					partition_children.emplace_back(StringUtil::Format("%s", col_name), partition_val);
-				}
+		for (auto &entry : partition_info) {
+			auto new_value = Value();
+			string error_message;
+			const LogicalType actual_type = entry.source_type;
+			bool cast_worked = entry.value.DefaultTryCastAs(actual_type, new_value, &error_message, true);
+			if (cast_worked) {
+				partition_children.emplace_back(entry.name, new_value);
 			}
 		}
 		children.push_back(Value::STRUCT(partition_children));
@@ -83,17 +83,32 @@ static LogicalType PartitionStructType(IcebergTableInformation &table_info, cons
 	auto &first_entry = file.entries.front();
 	child_list_t<LogicalType> children;
 	auto &data_file = first_entry.data_file;
-	if (data_file.partition_values.empty()) {
+	if (data_file.partition_info.empty()) {
 		children.emplace_back("__duckdb_empty_struct_marker", LogicalType::INTEGER);
 	} else {
 		//! NOTE: all entries in the file should have the same schema, otherwise it can't be in the same manifest file
 		//! anyways
-		for (auto &it : data_file.partition_metadata) {
-			for (auto &partition_value : data_file.partition_values) {
-				if (it.second == partition_value.first) {
-					children.emplace_back(StringUtil::Format("%s", it.first), LogicalType::INTEGER);
-					break;
-				}
+		for (auto &entry : data_file.partition_info) {
+			switch (entry.transform.Type()) {
+			case IcebergTransformType::IDENTITY:
+				children.emplace_back(entry.name, entry.source_type);
+				break;
+			case IcebergTransformType::BUCKET:
+			case IcebergTransformType::TRUNCATE:
+				children.emplace_back(entry.name, LogicalType::VARCHAR);
+				break;
+			case IcebergTransformType::DAY:
+			case IcebergTransformType::MONTH:
+			case IcebergTransformType::YEAR:
+			case IcebergTransformType::HOUR:
+				children.emplace_back(entry.name, LogicalType::BIGINT);
+				break;
+			case IcebergTransformType::INVALID:
+			case IcebergTransformType::VOID:
+				throw InvalidInputException("Cannot use this transform type");
+				break;
+			default:
+				throw InvalidInputException("Unrecognized transform");
 			}
 		}
 	}
@@ -235,8 +250,8 @@ idx_t WriteToFile(IcebergTableInformation &table_info, const IcebergManifest &ma
 		partition.emplace_back("__duckdb_field_id", Value::INTEGER(PARTITION));
 		partition.emplace_back("__duckdb_nullable", Value::BOOLEAN(false));
 
-		for (auto &partition_metadata : manifest_file.entries.front().data_file.partition_metadata) {
-			partition.emplace_back(partition_metadata.first, Value::INTEGER(partition_metadata.second));
+		for (auto &entry : manifest_file.entries.front().data_file.partition_info) {
+			partition.emplace_back(entry.name, Value::INTEGER(static_cast<int32_t>(entry.field_id)));
 		}
 
 		data_file_field_ids.emplace_back("partition", Value::STRUCT(partition));
@@ -248,31 +263,17 @@ idx_t WriteToFile(IcebergTableInformation &table_info, const IcebergManifest &ma
 
 		auto partition_struct = yyjson_mut_obj_add_obj(doc, field_obj, "type");
 		yyjson_mut_obj_add_strcpy(doc, partition_struct, "type", "struct");
-		//! NOTE: this has to be populated with the fields of the partition spec when we support INSERT into a
-		//! partitioned table
-		[[maybe_unused]] auto partition_fields = yyjson_mut_obj_add_arr(doc, partition_struct, "fields");
+		auto partition_fields = yyjson_mut_obj_add_arr(doc, partition_struct, "fields");
 		auto &first_entry = manifest_file.entries.front();
 		auto &data_file = first_entry.data_file;
-		if (!data_file.partition_values.empty()) {
-			for (auto &partition : data_file.partition_metadata) {
-				// basically here you need to paste the partition field id information
-				// so here partition stores <1 (column source id), Value (partition value>
-				// what we should be pasting is something like
-				// "fields" : [ {
-				//			"name" : "ts_month",
-				//			"type" : [ "null", "int" ],
-				//			"default" : null,
-				//			"field-id" : 1000
-				//			}]
-				// so we need the partition column name, and the transform field id.
-				// but then when the data is written in IcebergDataFile::ToValue
-				// you need to write the actual partition value (which is currently in data_file.partition_values)
+		if (!data_file.partition_info.empty()) {
+			for (auto &entry : data_file.partition_info) {
 				auto field_obj = yyjson_mut_arr_add_obj(doc, partition_fields);
-				yyjson_mut_obj_add_strcpy(doc, field_obj, "name", partition.first.c_str());
+				yyjson_mut_obj_add_strcpy(doc, field_obj, "name", entry.name.c_str());
 				auto types_arr = yyjson_mut_obj_add_arr(doc, field_obj, "type");
 				yyjson_mut_arr_add_strcpy(doc, types_arr, "null");
 				yyjson_mut_arr_add_strcpy(doc, types_arr, "int");
-				yyjson_mut_obj_add_int(doc, field_obj, "id", partition.second);
+				yyjson_mut_obj_add_int(doc, field_obj, "id", static_cast<int32_t>(entry.field_id));
 			}
 		}
 	}

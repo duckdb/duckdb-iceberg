@@ -230,15 +230,14 @@ static void ApplyPartitionConstants(const IcebergMultiFileList &multi_file_list,
 			continue; // Skip non-identity transforms
 		}
 
-		// Get the partition value from the data file's partition struct
-		auto &partition_values = data_file.partition_values;
-		if (partition_values.empty()) {
-			continue; // No partition value available
+		// Get the partition value from the data file's partition info
+		if (data_file.partition_info.empty()) {
+			continue; // No partition info available
 		}
 		optional_ptr<const Value> partition_value;
-		for (auto &it : partition_values) {
-			if (static_cast<uint64_t>(it.first) == field.partition_field_id && !it.second.IsNull()) {
-				partition_value = it.second;
+		for (auto &pi : data_file.partition_info) {
+			if (pi.field_id == field.partition_field_id && !pi.value.IsNull()) {
+				partition_value = pi.value;
 				break;
 			}
 		}
@@ -310,13 +309,16 @@ void IcebergMultiFileReader::ApplyEqualityDeletes(ClientContext &context, DataCh
 					//! delete file.
 					continue;
 				}
-				D_ASSERT(file.partition_values.size() == data_file.partition_values.size());
-				for (idx_t i = 0; i < file.partition_values.size(); i++) {
-					if (file.partition_values[i] != data_file.partition_values[i]) {
-						//! Same partition spec id, but the partitioning information doesn't match, delete file doesn't
-						//! apply.
-						continue;
+				D_ASSERT(file.partition_info.size() == data_file.partition_info.size());
+				bool partition_match = true;
+				for (idx_t i = 0; i < file.partition_info.size(); i++) {
+					if (file.partition_info[i].value != data_file.partition_info[i].value) {
+						partition_match = false;
+						break;
 					}
+				}
+				if (!partition_match) {
+					continue;
 				}
 			}
 			delete_rows.insert(delete_rows.end(), file.rows.begin(), file.rows.end());

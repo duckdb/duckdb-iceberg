@@ -210,15 +210,14 @@ void IcebergInsert::AddWrittenFiles(IcebergInsertGlobalState &global_state, Data
 		}
 
 		auto ic_partition_info = ic_table.table_info.table_metadata.GetLatestPartitionSpec();
-		case_insensitive_map_t<int32_t> partition_colname_to_partition_field_id;
+
+		// Build a map from partition column name to its partition spec field
+		case_insensitive_map_t<reference<const IcebergPartitionSpecField>> partition_colname_to_field;
 		for (auto &partition_field : ic_partition_info.fields) {
 			auto partition_col_name = GetPartitionExpressionName(partition_field);
 			bool partition_col_found = false;
 			for (auto &column : ic_schema->columns) {
 				if (column->id == partition_field.source_id) {
-					D_ASSERT(partition_field.source_id == column->id);
-					partition_colname_to_partition_field_id[partition_col_name] =
-					    static_cast<int32_t>(partition_field.partition_field_id);
 					partition_col_found = true;
 					break;
 				}
@@ -228,17 +227,27 @@ void IcebergInsert::AddWrittenFiles(IcebergInsertGlobalState &global_state, Data
 				    "Could not find original column with source id %d for partition column %s",
 				    partition_field.source_id, partition_field.name);
 			}
-			data_file.partition_metadata.emplace_back(
-			    std::make_pair(partition_col_name, partition_field.partition_field_id));
+			partition_colname_to_field.emplace(partition_col_name, partition_field);
 		}
+
+		// Populate partition_info from the partition values in the chunk
 		for (auto &partition_val : partition_children) {
 			auto &struct_val = StructValue::GetChildren(partition_val);
 			auto &partition_name = StringValue::Get(struct_val[0]);
 			auto &partition_value = StringValue::Get(struct_val[1]);
-			auto partition_col_partition_field_id = partition_colname_to_partition_field_id.find(partition_name);
-			D_ASSERT(partition_col_partition_field_id != partition_colname_to_partition_field_id.end());
-			data_file.partition_values.emplace_back(
-			    std::make_pair(partition_col_partition_field_id->second, Value(partition_value)));
+			auto field_it = partition_colname_to_field.find(partition_name);
+			D_ASSERT(field_it != partition_colname_to_field.end());
+			auto &partition_field = field_it->second.get();
+			auto source_type = ic_schema->GetColumnTypeFromFieldId(partition_field.source_id);
+
+			DataFilePartitionInfo info;
+			info.name = partition_name;
+			info.source_id = partition_field.source_id;
+			info.field_id = partition_field.partition_field_id;
+			info.transform = partition_field.transform;
+			info.source_type = source_type;
+			info.value = Value(partition_value);
+			data_file.partition_info.push_back(std::move(info));
 		}
 
 		global_state.insert_count += data_file.record_count;
@@ -287,21 +296,6 @@ void IcebergInsert::AddWrittenFiles(IcebergInsertGlobalState &global_state, Data
 			//! nan_value_counts won't work, we can only indicate if they exist.
 			//! TODO: revisit when duckdb/duckdb can record nan_value_counts
 		}
-
-		//! TODO: extract the partition info
-		// auto partition_info = chunk.GetValue(5, r);
-		// if (!partition_info.IsNull()) {
-		//	auto &partition_children = MapValue::GetChildren(partition_info);
-		//	for (idx_t col_idx = 0; col_idx < partition_children.size(); col_idx++) {
-		//		auto &struct_children = StructValue::GetChildren(partition_children[col_idx]);
-		//		auto &part_value = StringValue::Get(struct_children[1]);
-
-		//		IcebergPartition file_partition_info;
-		//		file_partition_info.partition_column_idx = col_idx;
-		//		file_partition_info.partition_value = part_value;
-		//		data_file.partition_values.push_back(std::move(file_partition_info));
-		//	}
-		//}
 
 		global_state.written_files.push_back(std::move(manifest_entry));
 	}

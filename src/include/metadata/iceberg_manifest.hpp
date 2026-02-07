@@ -12,6 +12,7 @@
 #include "duckdb/common/insertion_order_preserving_map.hpp"
 
 #include "metadata/iceberg_table_schema.hpp"
+#include "metadata/iceberg_transform.hpp"
 
 namespace duckdb {
 
@@ -23,6 +24,22 @@ enum class IcebergManifestEntryContentType : uint8_t { DATA = 0, POSITION_DELETE
 
 enum class IcebergManifestEntryStatusType : uint8_t { EXISTING = 0, ADDED = 1, DELETED = 2 };
 
+//! Combined partition information for a single partition field in a data file
+struct DataFilePartitionInfo {
+	//! The partition column name
+	string name;
+	//! The source column id from the table schema
+	uint64_t source_id = 0;
+	//! The partition field id (unique within a partition spec)
+	uint64_t field_id = 0;
+	//! The partition transform applied to the source column
+	IcebergTransform transform;
+	//! The source column type from the table schema
+	LogicalType source_type;
+	//! The actual partition value for this data file
+	Value value;
+};
+
 struct IcebergDataFile {
 public:
 	Value ToValue(const LogicalType &type) const;
@@ -31,12 +48,9 @@ public:
 	IcebergManifestEntryContentType content;
 	string file_path;
 	string file_format;
-	// partition metadata is for writing the avro metadata.
-	// <partition_col_name, field_id>
-	vector<pair<string, int32_t>> partition_metadata;
-	// partition values is for writing the actual values
-	// <partition_col_field_id, actual partition value>
-	vector<pair<int32_t, Value>> partition_values;
+	//! Combined partition information in partition spec order.
+	//! Contains name, source_id, field_id, transform, source_type, and the actual partition value.
+	vector<DataFilePartitionInfo> partition_info;
 	int64_t record_count;
 	int64_t file_size_in_bytes;
 	unordered_map<int32_t, int64_t> column_sizes;
