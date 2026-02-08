@@ -38,6 +38,7 @@ public:
 	string FieldsToJSON() const;
 	static void FieldsToJson(yyjson_mut_doc *doc, yyjson_mut_val *root_object,
 	                         const vector<rest_api_objects::PartitionField> &fields);
+	const vector<IcebergPartitionSpecField> &GetFields() const;
 
 public:
 	int32_t spec_id;

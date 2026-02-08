@@ -20,6 +20,7 @@ public:
 	void Scan(ClientContext &context, const std::function<void(CatalogEntry &)> &callback);
 	const case_insensitive_map_t<unique_ptr<CatalogEntry>> &GetEntries();
 	void AddEntry(const string &name, unique_ptr<IcebergSchemaEntry> entry);
+	void RemoveEntry(const string &name);
 	CatalogEntry &GetEntry(const string &name);
 
 protected:

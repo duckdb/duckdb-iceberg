@@ -1,0 +1,68 @@
+{
+  "format-version" : 2,
+  "table-uuid" : "76ba3a18-2eeb-48dd-9e32-79dd8b37ccca",
+  "location" : "s3://original-bucket/warehouse/products",
+  "last-sequence-number" : 0,
+  "last-updated-ms" : 1762539058918,
+  "last-column-id" : 6,
+  "current-schema-id" : 0,
+  "schemas" : [ {
+    "type" : "struct",
+    "schema-id" : 0,
+    "fields" : [ {
+      "id" : 1,
+      "name" : "eventcode",
+      "required" : false,
+      "type" : "string"
+    }, {
+      "id" : 2,
+      "name" : "eventtitle",
+      "required" : false,
+      "type" : "string"
+    }, {
+      "id" : 3,
+      "name" : "id",
+      "required" : false,
+      "type" : "string"
+    }, {
+      "id" : 4,
+      "name" : "lastmodifieddate",
+      "required" : false,
+      "type" : "string"
+    }, {
+      "id" : 5,
+      "name" : "modifiedby",
+      "required" : false,
+      "type" : "string"
+    }, {
+      "id" : 6,
+      "name" : "load_time",
+      "required" : false,
+      "type" : "string"
+    } ]
+  } ],
+  "default-spec-id" : 0,
+  "partition-specs" : [ {
+    "spec-id" : 0,
+    "fields" : [ ]
+  } ],
+  "last-partition-id" : 999,
+  "default-sort-order-id" : 0,
+  "sort-orders" : [ {
+    "order-id" : 0,
+    "fields" : [ ]
+  } ],
+  "properties" : {
+    "write.delete.parquet.compression-codec" : "zstd",
+    "write.format.default" : "parquet",
+    "write.object-storage.enabled" : "true",
+    "write.object-storage.path" : "s3://original-bucket/warehouse/products/data",
+    "write.parquet.compression-codec" : "zstd"
+  },
+  "current-snapshot-id" : -1,
+  "refs" : { },
+  "snapshots" : [ ],
+  "statistics" : [ ],
+  "snapshot-log" : [ ],
+  "metadata-log" : [ ]
+}

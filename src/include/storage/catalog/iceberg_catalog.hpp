@@ -58,6 +58,9 @@ public:
 			return CatalogLookupBehavior::STANDARD;
 		}
 	}
+	bool CheckAmbiguousCatalogOrSchema(ClientContext &context, const string &schema) override {
+		return false;
+	}
 	string GetDefaultSchema() const override {
 		return default_schema;
 	}
@@ -107,7 +110,12 @@ public:
 	void StoreLoadTableResult(const string &table_key,
 	                          unique_ptr<const rest_api_objects::LoadTableResult> load_table_result);
 	MetadataCacheValue &GetLoadTableResult(const string &table_key);
-	void RemoveLoadTableResult(string table_key);
+	//! Returns a reference to the metadata cache mutex. The caller is responsible for holding the lock
+	//! for the duration of any access to data returned by TryGetValidCachedLoadTableResult.
+	std::mutex &GetMetadataCacheLock();
+	optional_ptr<MetadataCacheValue> TryGetValidCachedLoadTableResult(const string &table_key,
+	                                                                  lock_guard<std::mutex> &lock);
+	void RemoveLoadTableResult(const string &table_key);
 
 public:
 	AccessMode access_mode;

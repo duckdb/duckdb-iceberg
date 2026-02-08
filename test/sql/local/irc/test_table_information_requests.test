@@ -72,8 +72,7 @@ s_acctbal	DECIMAL(15,2)
 s_comment	VARCHAR
 
 # schema default is saved between queries
-# one request to verify table default.supplier
-# another request to the table information endpoint
+# one request to the table information endpoint
 # FIXME: apparantly there is also a request to an avro file
 query I
 select count(*) from duckdb_logs_parsed('HTTP');
@@ -107,4 +106,4 @@ commit;
 query I
 select count(*) from duckdb_logs_parsed('HTTP');
 ----
-11
+9

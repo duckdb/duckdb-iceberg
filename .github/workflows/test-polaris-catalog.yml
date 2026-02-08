@@ -33,6 +33,7 @@ jobs:
       - name: Set up for Polaris
         run: |
           # install java
+          sudo apt update -y -qq
           sudo apt install -y -qq openjdk-21-jre-headless
           sudo apt install -y -qq openjdk-21-jdk-headless
           sudo apt-get install -y -qq python3-venv

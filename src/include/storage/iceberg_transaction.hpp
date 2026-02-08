@@ -21,10 +21,13 @@ struct TableTransactionInfo {
 
 struct TableInfoCache {
 	TableInfoCache(idx_t sequence_number, idx_t snapshot_id)
-	    : sequence_number(sequence_number), snapshot_id(snapshot_id) {
+	    : sequence_number(sequence_number), snapshot_id(snapshot_id), exists(true) {
+	}
+	TableInfoCache(bool exists_) : sequence_number(0), snapshot_id(0), exists(exists_) {
 	}
 	idx_t sequence_number;
 	idx_t snapshot_id;
+	bool exists;
 };
 
 class IcebergTransaction : public Transaction {
@@ -42,6 +45,8 @@ public:
 	}
 	void DoTableUpdates(ClientContext &context);
 	void DoTableDeletes(ClientContext &context);
+	void DoSchemaCreates(ClientContext &context);
+	void DoSchemaDeletes(ClientContext &context);
 	IcebergCatalog &GetCatalog();
 	void DropSecrets(ClientContext &context);
 	TableTransactionInfo GetTransactionRequest(ClientContext &context);
@@ -67,6 +72,8 @@ public:
 	//! (with no updates), we can return table information at that snapshot
 	//! while other transactions can still request up to date tables
 	case_insensitive_map_t<TableInfoCache> requested_tables;
+	unordered_set<string> created_schemas;
+	unordered_set<string> deleted_schemas;
 
 	bool called_list_schemas = false;
 	case_insensitive_set_t listed_schemas;

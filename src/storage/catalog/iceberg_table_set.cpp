@@ -33,19 +33,37 @@ bool IcebergTableSet::FillEntry(ClientContext &context, IcebergTableInformation 
 	}
 
 	auto &ic_catalog = catalog.Cast<IcebergCatalog>();
+	auto table_key = table.GetTableKey();
 
+	// Only check cache if MAX_TABLE_STALENESS option is set
+	if (ic_catalog.attach_options.max_table_staleness_micros.IsValid()) {
+		lock_guard<std::mutex> cache_lock(ic_catalog.GetMetadataCacheLock());
+		auto cached_result = ic_catalog.TryGetValidCachedLoadTableResult(table_key, cache_lock);
+		if (cached_result) {
+			// Use the cached result instead of making a new request
+			table.table_metadata = IcebergTableMetadata::FromLoadTableResult(*cached_result->load_table_result);
+			auto &schemas = table.table_metadata.schemas;
+			D_ASSERT(!schemas.empty());
+			for (auto &table_schema : schemas) {
+				table.CreateSchemaVersion(*table_schema.second);
+			}
+			return true;
+		}
+	}
+
+	// No valid cached result or caching disabled, make a new request
 	auto get_table_result = IRCAPI::GetTable(context, ic_catalog, schema, table.name);
 	if (get_table_result.has_error) {
 		if (get_table_result.error_._error.type == "NoSuchIcebergTableException") {
 			return false;
 		}
 		if (get_table_result.status_ == HTTPStatusCode::Forbidden_403 ||
-		    get_table_result.status_ == HTTPStatusCode::Unauthorized_401) {
+		    get_table_result.status_ == HTTPStatusCode::Unauthorized_401 ||
+		    get_table_result.status_ == HTTPStatusCode::NotFound_404) {
 			return false;
 		}
 		throw HTTPException(get_table_result.error_._error.message);
 	}
-	auto table_key = table.GetTableKey();
 	ic_catalog.StoreLoadTableResult(table_key, std::move(get_table_result.result_));
 	auto &cached_table_result = ic_catalog.GetLoadTableResult(table_key);
 	table.table_metadata = IcebergTableMetadata::FromLoadTableResult(*cached_table_result.load_table_result);
@@ -199,15 +217,17 @@ optional_ptr<CatalogEntry> IcebergTableSet::GetEntry(ClientContext &context, con
 		return entry->second.GetSchemaVersion(lookup.GetAtClause());
 	}
 
-	if (!IRCAPI::VerifyTableExistence(context, ic_catalog, schema, table_name)) {
-		return nullptr;
-	}
 	if (entries.find(table_name) != entries.end()) {
 		entries.erase(table_name);
 	}
 	auto it = entries.emplace(table_name, IcebergTableInformation(ic_catalog, schema, table_name));
 	auto entry = it.first;
-	FillEntry(context, entry->second);
+	if (!FillEntry(context, entry->second)) {
+		// Table doesn't exist
+		entries.erase(entry);
+		iceberg_transaction.requested_tables.emplace(table_name, TableInfoCache(false));
+		return nullptr;
+	}
 	auto ret = entry->second.GetSchemaVersion(lookup.GetAtClause());
 
 	// get the latest information and save it to the transaction cache

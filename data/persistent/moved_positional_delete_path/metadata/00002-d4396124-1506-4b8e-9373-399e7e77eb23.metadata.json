@@ -1,0 +1,129 @@
+{
+  "format-version" : 2,
+  "table-uuid" : "76ba3a18-2eeb-48dd-9e32-79dd8b37ccca",
+  "location" : "s3://original-bucket/warehouse/products",
+  "last-sequence-number" : 2,
+  "last-updated-ms" : 1762547711858,
+  "last-column-id" : 6,
+  "current-schema-id" : 0,
+  "schemas" : [ {
+    "type" : "struct",
+    "schema-id" : 0,
+    "fields" : [ {
+      "id" : 1,
+      "name" : "eventcode",
+      "required" : false,
+      "type" : "string"
+    }, {
+      "id" : 2,
+      "name" : "eventtitle",
+      "required" : false,
+      "type" : "string"
+    }, {
+      "id" : 3,
+      "name" : "id",
+      "required" : false,
+      "type" : "string"
+    }, {
+      "id" : 4,
+      "name" : "lastmodifieddate",
+      "required" : false,
+      "type" : "string"
+    }, {
+      "id" : 5,
+      "name" : "modifiedby",
+      "required" : false,
+      "type" : "string"
+    }, {
+      "id" : 6,
+      "name" : "load_time",
+      "required" : false,
+      "type" : "string"
+    } ]
+  } ],
+  "default-spec-id" : 0,
+  "partition-specs" : [ {
+    "spec-id" : 0,
+    "fields" : [ ]
+  } ],
+  "last-partition-id" : 999,
+  "default-sort-order-id" : 0,
+  "sort-orders" : [ {
+    "order-id" : 0,
+    "fields" : [ ]
+  } ],
+  "properties" : {
+    "write.delete.parquet.compression-codec" : "zstd",
+    "write.format.default" : "parquet",
+    "write.object-storage.enabled" : "true",
+    "write.object-storage.path" : "s3://original-bucket/warehouse/products/data",
+    "write.parquet.compression-codec" : "zstd"
+  },
+  "current-snapshot-id" : 37063316311657592,
+  "refs" : {
+    "main" : {
+      "snapshot-id" : 37063316311657592,
+      "type" : "branch"
+    }
+  },
+  "snapshots" : [ {
+    "sequence-number" : 1,
+    "snapshot-id" : 1424012806737762895,
+    "timestamp-ms" : 1762543919178,
+    "summary" : {
+      "operation" : "overwrite",
+      "trino_query_id" : "20251107_193155_00111_i9w9b",
+      "added-data-files" : "1",
+      "added-records" : "7917",
+      "added-files-size" : "409230",
+      "changed-partition-count" : "1",
+      "total-records" : "7917",
+      "total-files-size" : "409230",
+      "total-data-files" : "1",
+      "total-delete-files" : "0",
+      "total-position-deletes" : "0",
+      "total-equality-deletes" : "0"
+    },
+    "manifest-list" : "s3://original-bucket/warehouse/products/metadata/snap-1424012806737762895-1-9e0c10c9-3408-48e5-ae6c-d6e21221c023.avro",
+    "schema-id" : 0
+  }, {
+    "sequence-number" : 2,
+    "snapshot-id" : 37063316311657592,
+    "parent-snapshot-id" : 1424012806737762895,
+    "timestamp-ms" : 1762547711858,
+    "summary" : {
+      "operation" : "overwrite",
+      "trino_query_id" : "20251107_203508_00103_7vgqh",
+      "added-data-files" : "1",
+      "added-position-delete-files" : "1",
+      "added-delete-files" : "1",
+      "added-records" : "7917",
+      "added-files-size" : "480393",
+      "added-position-deletes" : "7917",
+      "changed-partition-count" : "1",
+      "total-records" : "15834",
+      "total-files-size" : "889623",
+      "total-data-files" : "2",
+      "total-delete-files" : "1",
+      "total-position-deletes" : "7917",
+      "total-equality-deletes" : "0"
+    },
+    "manifest-list" : "s3://original-bucket/warehouse/products/metadata/snap-37063316311657592-1-15b35d01-5e35-40b9-b477-8ac11c35d42a.avro",
+    "schema-id" : 0
+  } ],
+  "statistics" : [ ],
+  "snapshot-log" : [ {
+    "timestamp-ms" : 1762543919178,
+    "snapshot-id" : 1424012806737762895
+  }, {
+    "timestamp-ms" : 1762547711858,
+    "snapshot-id" : 37063316311657592
+  } ],
+  "metadata-log" : [ {
+    "timestamp-ms" : 1762539058918,
+    "metadata-file" : "s3://original-bucket/warehouse/products/metadata/00000-f43c0592-d381-4a74-a364-68d8c7bd58c9.metadata.json"
+  }, {
+    "timestamp-ms" : 1762543919178,
+    "metadata-file" : "s3://original-bucket/warehouse/products/metadata/00001-840680bb-5547-433f-8991-33681d227158.metadata.json"
+  } ]
+}

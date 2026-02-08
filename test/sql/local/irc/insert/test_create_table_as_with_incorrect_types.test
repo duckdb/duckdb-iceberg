@@ -128,6 +128,5 @@ create table my_datalake.new_schema_1.list_table (a int[]);
 statement ok
 drop table my_datalake.new_schema_1.list_table;
 
-
 statement ok
 drop schema my_datalake.new_schema_1;

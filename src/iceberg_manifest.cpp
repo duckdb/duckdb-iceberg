@@ -8,16 +8,118 @@
 
 namespace duckdb {
 
+map<idx_t, LogicalType> IcebergDataFile::GetFieldIdToTypeMapping(const IcebergSnapshot &snapshot,
+                                                                 const IcebergTableMetadata &metadata,
+                                                                 const unordered_set<int32_t> &partition_spec_ids) {
+	D_ASSERT(!partition_spec_ids.empty());
+	auto &partition_specs = metadata.GetPartitionSpecs();
+	auto &schema = *metadata.GetSchemaFromId(snapshot.schema_id);
+
+	unordered_map<uint64_t, ColumnIndex> source_to_column_id;
+	IcebergTableSchema::PopulateSourceIdMap(source_to_column_id, schema.columns, nullptr);
+	map<idx_t, LogicalType> partition_field_id_to_type;
+	for (auto &spec_id : partition_spec_ids) {
+		auto &partition_spec = partition_specs.at(spec_id);
+		auto &fields = partition_spec.GetFields();
+
+		for (auto &field : fields) {
+			auto &column_id = source_to_column_id[field.source_id];
+			auto &column = IcebergTableSchema::GetFromColumnIndex(schema.columns, column_id, 0);
+			partition_field_id_to_type.emplace(field.partition_field_id, field.transform.GetBoundsType(column.type));
+		}
+	}
+	return partition_field_id_to_type;
+}
+
+LogicalType IcebergDataFile::PartitionStructType(const map<idx_t, LogicalType> &partition_field_id_to_type) {
+	child_list_t<LogicalType> children;
+	if (partition_field_id_to_type.empty()) {
+		return LogicalType::SQLNULL;
+	} else {
+		for (auto &it : partition_field_id_to_type) {
+			children.emplace_back(StringUtil::Format("r%d", it.first), it.second);
+		}
+	}
+	return LogicalType::STRUCT(children);
+}
+
+LogicalType IcebergDataFile::GetType(const IcebergTableMetadata &metadata, const LogicalType &partition_type) {
+	auto &iceberg_version = metadata.iceberg_version;
+
+	// lower/upper bounds
+	child_list_t<LogicalType> bounds_fields;
+	bounds_fields.emplace_back("key", LogicalType::INTEGER);
+	bounds_fields.emplace_back("value", LogicalType::BLOB);
+
+	// null_value_counts
+	child_list_t<LogicalType> null_value_counts_fields;
+	null_value_counts_fields.emplace_back("key", LogicalType::INTEGER);
+	null_value_counts_fields.emplace_back("value", LogicalType::BIGINT);
+
+	child_list_t<LogicalType> children;
+
+	if (iceberg_version >= 2) {
+		// content: int
+		children.emplace_back("content", LogicalType::INTEGER);
+	}
+	// file_path: string
+	children.emplace_back("file_path", LogicalType::VARCHAR);
+	// file_format: string
+	children.emplace_back("file_format", LogicalType::VARCHAR);
+	// partition: struct(...)
+	children.emplace_back("partition", partition_type);
+	// record_count: long
+	children.emplace_back("record_count", LogicalType::BIGINT);
+	// file_size_in_bytes: long
+	children.emplace_back("file_size_in_bytes", LogicalType::BIGINT);
+	// column_sizes: map<int, binary>
+	children.emplace_back("column_sizes", LogicalType::MAP(LogicalType::STRUCT(null_value_counts_fields)));
+	// value_counts: map<int, binary>
+	children.emplace_back("value_counts", LogicalType::MAP(LogicalType::STRUCT(null_value_counts_fields)));
+	// null_value_counts: map<int, binary>
+	children.emplace_back("null_value_counts", LogicalType::MAP(LogicalType::STRUCT(null_value_counts_fields)));
+	// nan_value_counts: map<int, binary>
+	children.emplace_back("nan_value_counts", LogicalType::MAP(LogicalType::STRUCT(null_value_counts_fields)));
+	// lower bounds: map<int, binary>
+	children.emplace_back("lower_bounds", LogicalType::MAP(LogicalType::STRUCT(bounds_fields)));
+	// upper bounds: map<int, binary>
+	children.emplace_back("upper_bounds", LogicalType::MAP(LogicalType::STRUCT(bounds_fields)));
+	// split_offsets: list<long>
+	children.emplace_back("split_offsets", LogicalType::LIST(LogicalType::BIGINT));
+	// equality_ids: list<int>
+	children.emplace_back("equality_ids", LogicalType::LIST(LogicalType::INTEGER));
+	// sort_id: int
+	children.emplace_back("sort_order_id", LogicalType::INTEGER);
+	// first_row_id: long
+	if (iceberg_version >= 3) {
+		children.emplace_back("first_row_id", LogicalType::BIGINT);
+	}
+	// referenced_data_file: string
+	if (iceberg_version >= 2) {
+		children.emplace_back("referenced_data_file", LogicalType::VARCHAR);
+	}
+	// content_offset: long
+	if (iceberg_version >= 3) {
+		children.emplace_back("content_offset", LogicalType::BIGINT);
+	}
+	// content_size_in_bytes: long
+	if (iceberg_version >= 3) {
+		children.emplace_back("content_size_in_bytes", LogicalType::BIGINT);
+	}
+
+	return LogicalType::STRUCT(std::move(children));
+}
+
 Value IcebergDataFile::ToValue(const LogicalType &type) const {
 	vector<Value> children;
 
-	// content: int - 134
+	// content: int
 	children.push_back(Value::INTEGER(static_cast<int32_t>(content)));
-	// file_path: string - 100
+	// file_path: string
 	children.push_back(Value(file_path));
-	// file_format: string - 101
+	// file_format: string
 	children.push_back(Value(file_format));
-	// partition: struct(...) - 102
+	// partition: struct(...)
 	if (partition_values.empty()) {
 		//! NOTE: Spark does *not* like it when this column is NULL, so we populate it with an empty struct value
 		//! instead
@@ -31,9 +133,9 @@ Value IcebergDataFile::ToValue(const LogicalType &type) const {
 		children.push_back(Value::STRUCT(partition_children));
 	}
 
-	// record_count: long - 103
+	// record_count: long
 	children.push_back(Value::BIGINT(record_count));
-	// file_size_in_bytes: long - 104
+	// file_size_in_bytes: long
 	children.push_back(Value::BIGINT(file_size_in_bytes));
 
 	child_list_t<LogicalType> bounds_types;
@@ -41,14 +143,14 @@ Value IcebergDataFile::ToValue(const LogicalType &type) const {
 	bounds_types.emplace_back("value", LogicalType::BLOB);
 
 	vector<Value> lower_bounds_values;
-	// lower bounds: map<126: int, 127: binary> - 125
+	// lower bounds: map<int, binary>
 	for (auto &child : lower_bounds) {
 		lower_bounds_values.push_back(Value::STRUCT({{"key", child.first}, {"value", child.second}}));
 	}
 	children.push_back(Value::MAP(LogicalType::STRUCT(bounds_types), lower_bounds_values));
 
 	vector<Value> upper_bounds_values;
-	// upper bounds: map<129: int, 130: binary> - 128
+	// upper bounds: map<int, binary>
 	for (auto &child : upper_bounds) {
 		upper_bounds_values.push_back(Value::STRUCT({{"key", child.first}, {"value", child.second}}));
 	}
@@ -60,7 +162,7 @@ Value IcebergDataFile::ToValue(const LogicalType &type) const {
 	null_value_count_types.emplace_back("value", LogicalType::BIGINT);
 
 	vector<Value> null_value_counts_values;
-	// null_value_counts: map<121: int, 122: long> - 110
+	// null_value_counts: map<int, long>
 	for (auto &child : null_value_counts) {
 		null_value_counts_values.push_back(Value::STRUCT({{"key", child.first}, {"value", child.second}}));
 	}
@@ -74,7 +176,6 @@ namespace manifest_file {
 
 static LogicalType PartitionStructType(IcebergTableInformation &table_info, const IcebergManifest &file) {
 	D_ASSERT(!file.entries.empty());
-
 	auto &first_entry = file.entries.front();
 	child_list_t<LogicalType> children;
 	auto &data_file = first_entry.data_file;
@@ -114,7 +215,7 @@ idx_t WriteToFile(IcebergTableInformation &table_info, const IcebergManifest &ma
 
 	{
 		child_list_t<Value> status_field;
-		// status: int - 0
+		// status: int
 		names.push_back("status");
 		types.push_back(LogicalType::INTEGER);
 		status_field.emplace_back("__duckdb_field_id", Value::INTEGER(STATUS));
@@ -129,7 +230,7 @@ idx_t WriteToFile(IcebergTableInformation &table_info, const IcebergManifest &ma
 	}
 
 	{
-		// snapshot_id: long - 1
+		// snapshot_id: long
 		names.push_back("snapshot_id");
 		types.push_back(LogicalType::BIGINT);
 		field_ids.emplace_back("snapshot_id", Value::INTEGER(SNAPSHOT_ID));
@@ -142,7 +243,7 @@ idx_t WriteToFile(IcebergTableInformation &table_info, const IcebergManifest &ma
 	}
 
 	{
-		// sequence_number: long - 3
+		// sequence_number: long
 		names.push_back("sequence_number");
 		types.push_back(LogicalType::BIGINT);
 		field_ids.emplace_back("sequence_number", Value::INTEGER(SEQUENCE_NUMBER));
@@ -155,7 +256,7 @@ idx_t WriteToFile(IcebergTableInformation &table_info, const IcebergManifest &ma
 	}
 
 	{
-		// file_sequence_number: long - 4
+		// file_sequence_number: long
 		names.push_back("file_sequence_number");
 		types.push_back(LogicalType::BIGINT);
 		field_ids.emplace_back("file_sequence_number", Value::INTEGER(FILE_SEQUENCE_NUMBER));
@@ -175,7 +276,7 @@ idx_t WriteToFile(IcebergTableInformation &table_info, const IcebergManifest &ma
 	auto child_fields_arr = yyjson_mut_arr(doc);
 	{
 		child_list_t<Value> content_field;
-		// content: int - 134
+		// content: int
 		children.emplace_back("content", LogicalType::INTEGER);
 		content_field.emplace_back("__duckdb_field_id", Value::INTEGER(CONTENT));
 		content_field.emplace_back("__duckdb_nullable", Value::BOOLEAN(false));
@@ -190,7 +291,7 @@ idx_t WriteToFile(IcebergTableInformation &table_info, const IcebergManifest &ma
 
 	{
 		child_list_t<Value> file_path;
-		// file_path: string - 100
+		// file_path: string
 		children.emplace_back("file_path", LogicalType::VARCHAR);
 		file_path.emplace_back("__duckdb_field_id", Value::INTEGER(FILE_PATH));
 		file_path.emplace_back("__duckdb_nullable", Value::BOOLEAN(false));
@@ -205,7 +306,7 @@ idx_t WriteToFile(IcebergTableInformation &table_info, const IcebergManifest &ma
 
 	{
 		child_list_t<Value> file_format;
-		// file_format: string - 101
+		// file_format: string
 		children.emplace_back("file_format", LogicalType::VARCHAR);
 		file_format.emplace_back("__duckdb_field_id", Value::INTEGER(FILE_FORMAT));
 		file_format.emplace_back("__duckdb_nullable", Value::BOOLEAN(false));
@@ -220,7 +321,7 @@ idx_t WriteToFile(IcebergTableInformation &table_info, const IcebergManifest &ma
 
 	{
 		child_list_t<Value> partition;
-		// partition: struct(...) - 102
+		// partition: struct(...)
 		children.emplace_back("partition", PartitionStructType(table_info, manifest_file));
 		partition.emplace_back("__duckdb_field_id", Value::INTEGER(PARTITION));
 		partition.emplace_back("__duckdb_nullable", Value::BOOLEAN(false));
@@ -240,7 +341,7 @@ idx_t WriteToFile(IcebergTableInformation &table_info, const IcebergManifest &ma
 
 	{
 		child_list_t<Value> record_count;
-		// record_count: long - 103
+		// record_count: long
 		children.emplace_back("record_count", LogicalType::BIGINT);
 		record_count.emplace_back("__duckdb_field_id", Value::INTEGER(RECORD_COUNT));
 		record_count.emplace_back("__duckdb_nullable", Value::BOOLEAN(false));
@@ -255,7 +356,7 @@ idx_t WriteToFile(IcebergTableInformation &table_info, const IcebergManifest &ma
 
 	{
 		child_list_t<Value> file_size_in_bytes;
-		// file_size_in_bytes: long - 104
+		// file_size_in_bytes: long
 		children.emplace_back("file_size_in_bytes", LogicalType::BIGINT);
 		file_size_in_bytes.emplace_back("__duckdb_field_id", Value::INTEGER(FILE_SIZE_IN_BYTES));
 		file_size_in_bytes.emplace_back("__duckdb_nullable", Value::BOOLEAN(false));
@@ -280,7 +381,7 @@ idx_t WriteToFile(IcebergTableInformation &table_info, const IcebergManifest &ma
 	bounds_fields.emplace_back("value", LogicalType::BLOB);
 	{
 		// child_list_t<Value> lower_bounds_field_ids;
-		// lower bounds: map<126: int, 127: binary> - 104
+		// lower bounds: map<int, binary>
 		children.emplace_back("lower_bounds", LogicalType::MAP(LogicalType::STRUCT(bounds_fields)));
 
 		child_list_t<Value> lower_bound_record_field_ids;
@@ -317,7 +418,7 @@ idx_t WriteToFile(IcebergTableInformation &table_info, const IcebergManifest &ma
 	// upper bounds struct
 	{
 		// child_list_t<Value> upper_bounds_field_ids;
-		// upper bounds: map<129: int, 130: binary>
+		// upper bounds: map<int, binary>
 		children.emplace_back("upper_bounds", LogicalType::MAP(LogicalType::STRUCT(bounds_fields)));
 
 		child_list_t<Value> upper_bound_record_field_ids;
@@ -356,7 +457,7 @@ idx_t WriteToFile(IcebergTableInformation &table_info, const IcebergManifest &ma
 	null_value_counts_fields.emplace_back("key", LogicalType::INTEGER);
 	null_value_counts_fields.emplace_back("value", LogicalType::BIGINT);
 	{
-		// null_value_counts: map<121: int, 122: binary>
+		// null_value_counts: map<int, binary>
 		children.emplace_back("null_value_counts", LogicalType::MAP(LogicalType::STRUCT(null_value_counts_fields)));
 
 		child_list_t<Value> null_values_counts_record_field_ids;
@@ -391,7 +492,7 @@ idx_t WriteToFile(IcebergTableInformation &table_info, const IcebergManifest &ma
 	}
 
 	{
-		// data_file: struct(...) - 2
+		// data_file: struct(...)
 		names.push_back("data_file");
 		types.push_back(LogicalType::STRUCT(std::move(children)));
 		data_file_field_ids.emplace_back("__duckdb_field_id", Value::INTEGER(DATA_FILE));
@@ -420,17 +521,17 @@ idx_t WriteToFile(IcebergTableInformation &table_info, const IcebergManifest &ma
 		//! We rely on inheriting the snapshot_id, this is only acceptable for ADDED data files
 		D_ASSERT(manifest_entry.status == IcebergManifestEntryStatusType::ADDED);
 
-		// status: int - 0
+		// status: int
 		chunk.SetValue(col_idx++, i, Value::INTEGER(static_cast<int32_t>(manifest_entry.status)));
-		// snapshot_id: long - 1
+		// snapshot_id: long
 		chunk.SetValue(col_idx++, i, Value::BIGINT(manifest_entry.snapshot_id));
-		// sequence_number: long - 3
+		// sequence_number: long
 		chunk.SetValue(col_idx++, i, Value::BIGINT(manifest_entry.sequence_number));
-		// file_sequence_number: long - 4
+		// file_sequence_number: long
 		chunk.SetValue(col_idx++, i, Value(LogicalType::BIGINT));
 
 		auto &data_file = manifest_entry.data_file;
-		// data_file: struct(...) - 2
+		// data_file: struct(...)
 		chunk.SetValue(col_idx, i, data_file.ToValue(chunk.data[col_idx].GetType()));
 		col_idx++;
 	}
