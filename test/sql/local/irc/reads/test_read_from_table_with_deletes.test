@@ -1,0 +1,73 @@
+# name: test/sql/local/irc/reads/test_read_from_table_with_deletes.test
+# group: [reads]
+
+require-env ICEBERG_SERVER_AVAILABLE
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+CALL enable_logging('HTTP');
+
+statement ok
+set logging_level='debug'
+
+statement ok
+CREATE SECRET (
+TYPE S3,
+  KEY_ID 'admin',
+  SECRET 'password',
+  ENDPOINT '127.0.0.1:9000',
+  URL_STYLE 'path',
+  USE_SSL 0
+);
+
+
+statement ok
+ATTACH '' AS s3_tables (
+  TYPE ICEBERG,
+  CLIENT_ID 'admin',
+  CLIENT_SECRET 'password',
+  ENDPOINT 'http://127.0.0.1:8181'
+);
+
+statement ok
+DROP TABLE if EXISTS s3_tables."default".table_test;
+
+statement ok
+create table s3_tables."default".table_test as
+select * from read_csv('data/data_test.csv');
+
+statement ok
+select * from s3_tables."default".table_test where invoice_refunded is null;
+
+statement ok
+insert into s3_tables."default".table_test
+select * from read_csv('data/data_test.csv');
+
+query I
+select count(*) from s3_tables."default".table_test where invoice_refunded is null;
+----
+2
+
+statement ok
+DELETE FROM s3_tables."default".table_test WHERE month = '2026-01-01 00:00:00.000'
+
+query I
+select count(*) from s3_tables."default".table_test;
+----
+0
+
+# but it currently returns 2, because we skip the delete files because of the filter
+query I
+select count(*) from s3_tables."default".table_test where invoice_refunded is null;
+----
+0
