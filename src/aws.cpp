@@ -8,7 +8,7 @@
 #include "duckdb/main/database.hpp"
 #include "duckdb/function/scalar/strftime_format.hpp"
 #include "duckdb/main/client_data.hpp"
-#include "include/storage/irc_authorization.hpp"
+#include "include/storage/iceberg_authorization.hpp"
 
 #include <aws/core/auth/AWSCredentialsProviderChain.h>
 #include <aws/core/http/HttpClient.h>

@@ -24,7 +24,7 @@
 #include "iceberg_utils.hpp"
 #include "iceberg_multi_file_reader.hpp"
 #include "iceberg_functions.hpp"
-#include "storage/irc_table_entry.hpp"
+#include "storage/catalog/iceberg_table_entry.hpp"
 
 #include <string>
 #include <numeric>
@@ -43,7 +43,7 @@ static void AddNamedParameters(TableFunction &fun) {
 
 virtual_column_map_t IcebergVirtualColumns(ClientContext &context, optional_ptr<FunctionData> bind_data_p) {
 	auto &bind_data = bind_data_p->Cast<MultiFileBindData>();
-	auto result = ICTableEntry::VirtualColumns();
+	auto result = IcebergTableEntry::VirtualColumns();
 	bind_data.virtual_columns = result;
 	return result;
 }

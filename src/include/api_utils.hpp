@@ -13,7 +13,7 @@
 #include "url_utils.hpp"
 #include "aws.hpp"
 #include "duckdb/common/http_util.hpp"
-#include "storage/irc_authorization.hpp"
+#include "storage/iceberg_authorization.hpp"
 
 namespace duckdb {
 

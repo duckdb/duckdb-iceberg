@@ -1,20 +1,20 @@
 #pragma once
 
-#include "storage/irc_authorization.hpp"
+#include "storage/iceberg_authorization.hpp"
 #include "aws.hpp"
 
 namespace duckdb {
 
-class SIGV4Authorization : public IRCAuthorization {
+class SIGV4Authorization : public IcebergAuthorization {
 public:
-	static constexpr const IRCAuthorizationType TYPE = IRCAuthorizationType::SIGV4;
+	static constexpr const IcebergAuthorizationType TYPE = IcebergAuthorizationType::SIGV4;
 
 public:
 	SIGV4Authorization();
 	SIGV4Authorization(const string &secret);
 
 public:
-	static unique_ptr<IRCAuthorization> FromAttachOptions(IcebergAttachOptions &input);
+	static unique_ptr<IcebergAuthorization> FromAttachOptions(IcebergAttachOptions &input);
 	unique_ptr<HTTPResponse> Request(RequestType request_type, ClientContext &context,
 	                                 const IRCEndpointBuilder &endpoint_builder, HTTPHeaders &headers,
 	                                 const string &data = "") override;

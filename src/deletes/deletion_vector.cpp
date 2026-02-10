@@ -6,7 +6,7 @@
 
 namespace duckdb {
 
-unique_ptr<IcebergDeletionVector> IcebergDeletionVector::FromBlob(data_ptr_t blob_start, idx_t blob_length) {
+shared_ptr<IcebergDeletionVectorData> IcebergDeletionVectorData::FromBlob(data_ptr_t blob_start, idx_t blob_length) {
 	//! https://iceberg.apache.org/puffin-spec/#deletion-vector-v1-blob-type
 
 	auto blob_end = blob_start + blob_length;
@@ -35,7 +35,7 @@ unique_ptr<IcebergDeletionVector> IcebergDeletionVector::FromBlob(data_ptr_t blo
 	vector_size -= sizeof(int64_t);
 	D_ASSERT(blob_start < blob_end);
 
-	auto result_p = make_uniq<IcebergDeletionVector>();
+	auto result_p = make_shared_ptr<IcebergDeletionVectorData>();
 	auto &result = *result_p;
 	result.bitmaps.reserve(amount_of_bitmaps);
 	for (int64_t i = 0; i < amount_of_bitmaps; i++) {
@@ -57,7 +57,7 @@ unique_ptr<IcebergDeletionVector> IcebergDeletionVector::FromBlob(data_ptr_t blo
 	return result_p;
 }
 
-void IcebergMultiFileList::ScanPuffinFile(const IcebergManifestEntry &entry) const {
+void IcebergMultiFileList::ScanPuffinFile(const IcebergDataFile &entry) const {
 	auto file_path = entry.file_path;
 	D_ASSERT(!entry.referenced_data_file.empty());
 
@@ -75,7 +75,8 @@ void IcebergMultiFileList::ScanPuffinFile(const IcebergManifestEntry &entry) con
 	auto buf_handle = caching_file_handle->Read(data, length, offset);
 	auto buffer_data = buf_handle.Ptr();
 
-	positional_delete_data.emplace(entry.referenced_data_file, IcebergDeletionVector::FromBlob(buffer_data, length));
+	positional_delete_data.emplace(entry.referenced_data_file,
+	                               IcebergDeletionVectorData::FromBlob(buffer_data, length));
 }
 
 idx_t IcebergDeletionVector::Filter(row_t start_row_index, idx_t count, SelectionVector &result_sel) {
@@ -85,6 +86,7 @@ idx_t IcebergDeletionVector::Filter(row_t start_row_index, idx_t count, Selectio
 	result_sel.Initialize(STANDARD_VECTOR_SIZE);
 	idx_t selection_idx = 0;
 
+	auto &bitmaps = data->bitmaps;
 	idx_t offset = 0;
 	while (offset < count) {
 		const row_t current_row = start_row_index + offset;
@@ -123,6 +125,10 @@ idx_t IcebergDeletionVector::Filter(row_t start_row_index, idx_t count, Selectio
 		offset = next_offset;
 	}
 	return selection_idx;
+}
+
+unique_ptr<DeleteFilter> IcebergDeletionVectorData::ToFilter() const {
+	return make_uniq<IcebergDeletionVector>(shared_from_this());
 }
 
 } // namespace duckdb

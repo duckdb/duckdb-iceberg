@@ -1,27 +1,42 @@
 #pragma once
 
 #include "duckdb/common/multi_file/multi_file_data.hpp"
+#include "deletes/iceberg_delete_data.hpp"
 #include <roaring/roaring.hh>
 
 namespace duckdb {
 
-struct IcebergDeletionVector : public DeleteFilter {
+struct IcebergDeletionVectorData : public enable_shared_from_this<IcebergDeletionVectorData>, IcebergDeleteData {
 public:
-	IcebergDeletionVector() {
+	IcebergDeletionVectorData() {
+	}
+	virtual ~IcebergDeletionVectorData() override {
 	}
 
 public:
-	static unique_ptr<IcebergDeletionVector> FromBlob(data_ptr_t blob_start, idx_t blob_length);
+	static shared_ptr<IcebergDeletionVectorData> FromBlob(data_ptr_t blob_start, idx_t blob_length);
+
+public:
+	unique_ptr<DeleteFilter> ToFilter() const override;
+
+public:
+	unordered_map<int32_t, roaring::Roaring> bitmaps;
+};
+
+struct IcebergDeletionVector : public DeleteFilter {
+public:
+	IcebergDeletionVector(shared_ptr<const IcebergDeletionVectorData> data) : data(data) {
+	}
 
 public:
 	idx_t Filter(row_t start_row_index, idx_t count, SelectionVector &result_sel) override;
 
 public:
-	unordered_map<int32_t, roaring::Roaring> bitmaps;
-
+	//! Immutable state of the deletion vector
+	shared_ptr<const IcebergDeletionVectorData> data;
 	//! State shared between Filter calls
 	roaring::BulkContext bulk_context;
-	optional_ptr<roaring::Roaring> current_bitmap;
+	optional_ptr<const roaring::Roaring> current_bitmap = nullptr;
 	bool has_current_high = false;
 	//! High bits of the current bitmap (the key in the map)
 	int32_t current_high;

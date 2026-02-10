@@ -7,8 +7,8 @@
 
 using namespace duckdb_yyjson;
 namespace duckdb {
-class IRCSchemaEntry;
-class IRCTransaction;
+class IcebergSchemaEntry;
+class IcebergTransaction;
 
 struct YyjsonDocDeleter {
 	void operator()(yyjson_doc *doc) {

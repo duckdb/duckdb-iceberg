@@ -53,6 +53,6 @@ INSERT INTO my_datalake.default.check_insert_count SELECT range a FROM range(200
 2000000
 
 query II
-explain analyze select * from my_datalake.default.insert_test_big
+explain analyze select * from my_datalake.default.check_insert_count
 ----
-analyzed_plan	<REGEX>:.*Total Files Read: 3.*
+analyzed_plan	<REGEX>:.*Total Files Read: 1.*

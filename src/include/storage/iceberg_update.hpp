@@ -13,20 +13,19 @@
 #include "duckdb/planner/operator/logical_delete.hpp"
 #include "duckdb/common/multi_file/multi_file_reader.hpp"
 #include "storage/iceberg_metadata_info.hpp"
-#include "storage/iceberg_delete_filter.hpp"
-#include "storage/irc_table_entry.hpp"
-#include "storage/irc_schema_entry.hpp"
+#include "storage/catalog/iceberg_table_entry.hpp"
+#include "storage/catalog/iceberg_schema_entry.hpp"
 
 namespace duckdb {
 
 class IcebergUpdate : public PhysicalOperator {
 public:
-	IcebergUpdate(PhysicalPlan &physical_plan, ICTableEntry &table, vector<PhysicalIndex> columns,
+	IcebergUpdate(PhysicalPlan &physical_plan, IcebergTableEntry &table, vector<PhysicalIndex> columns,
 	              PhysicalOperator &child, PhysicalOperator &copy_op, PhysicalOperator &delete_op,
 	              PhysicalOperator &insert_op);
 
 	//! The table to update
-	ICTableEntry &table;
+	IcebergTableEntry &table;
 	//! The order of to-be-inserted columns
 	vector<PhysicalIndex> columns;
 	//! The copy operator for writing new data to files

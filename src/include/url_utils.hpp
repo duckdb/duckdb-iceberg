@@ -21,6 +21,7 @@ class IRCEndpointBuilder {
 public:
 	IRCEndpointBuilder();
 	void AddPathComponent(const string &component);
+	void AddPrefixComponent(const string &component, const bool &prefix_is_one_component);
 
 	void SetHost(const string &host);
 	string GetHost() const;

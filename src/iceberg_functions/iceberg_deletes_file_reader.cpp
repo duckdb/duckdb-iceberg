@@ -1,13 +1,13 @@
 #include "duckdb/catalog/catalog_entry/table_function_catalog_entry.hpp"
 #include "iceberg_functions/iceberg_deletes_file_reader.hpp"
 #include "iceberg_functions.hpp"
-#include "storage/irc_table_entry.hpp"
+#include "storage/catalog/iceberg_table_entry.hpp"
 
 namespace duckdb {
 
 virtual_column_map_t IcebergDeleteVirtualColumns(ClientContext &context, optional_ptr<FunctionData> bind_data_p) {
 	auto &bind_data = bind_data_p->Cast<MultiFileBindData>();
-	auto result = ICTableEntry::VirtualColumns();
+	auto result = IcebergTableEntry::VirtualColumns();
 	bind_data.virtual_columns = result;
 	return result;
 }

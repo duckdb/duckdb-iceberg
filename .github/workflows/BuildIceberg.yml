@@ -59,20 +59,20 @@ jobs:
   test-nessie:
     name: Test against Nessie Catalog
     needs: build_iceberg
-    uses: duckdb/duckdb-iceberg/.github/workflows/test-nessie-catalog.yml@main
+    uses: ./.github/workflows/test-nessie-catalog.yml
     with:
       artifact-name: duckdb-iceberg
 
   test-spark:
     name: Test against Spark Catalog
     needs: build_iceberg
-    uses: duckdb/duckdb-iceberg/.github/workflows/test-spark-catalog.yml@main
+    uses: ./.github/workflows/test-spark-catalog.yml
     with:
       artifact-name: duckdb-iceberg
 
   test-polaris:
     name: Test against Polaris Catalog
     needs: build_iceberg
-    uses: duckdb/duckdb-iceberg/.github/workflows/test-polaris-catalog.yml@main
+    uses: ./.github/workflows/test-polaris-catalog.yml
     with:
       artifact-name: duckdb-iceberg

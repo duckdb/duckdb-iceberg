@@ -1,6 +1,6 @@
 #pragma once
 
-#include "storage/irc_table_entry.hpp"
+#include "storage/catalog/iceberg_table_entry.hpp"
 #include "storage/iceberg_metadata_info.hpp"
 #include "metadata/iceberg_manifest.hpp"
 #include "metadata/iceberg_table_metadata.hpp"
@@ -10,7 +10,7 @@
 namespace duckdb {
 class IcebergTableSchema;
 struct CreateTableInfo;
-class IRCSchemaEntry;
+class IcebergSchemaEntry;
 struct IcebergManifestEntry;
 
 struct IRCAPITableCredentials {
@@ -20,7 +20,7 @@ struct IRCAPITableCredentials {
 
 struct IcebergTableInformation {
 public:
-	IcebergTableInformation(IRCatalog &catalog, IRCSchemaEntry &schema, const string &name);
+	IcebergTableInformation(IcebergCatalog &catalog, IcebergSchemaEntry &schema, const string &name);
 
 public:
 	optional_ptr<CatalogEntry> GetLatestSchema();
@@ -29,48 +29,48 @@ public:
 	IRCAPITableCredentials GetVendedCredentials(ClientContext &context);
 	const string &BaseFilePath() const;
 
-	void InitTransactionData(IRCTransaction &transaction);
-	void AddSnapshot(IRCTransaction &transaction, vector<IcebergManifestEntry> &&data_files);
-	void AddDeleteSnapshot(IRCTransaction &transaction, vector<IcebergManifestEntry> &&data_files);
-	void AddUpdateSnapshot(IRCTransaction &transaction, vector<IcebergManifestEntry> &&delete_files,
+	void InitTransactionData(IcebergTransaction &transaction);
+	void AddSnapshot(IcebergTransaction &transaction, vector<IcebergManifestEntry> &&data_files);
+	void AddDeleteSnapshot(IcebergTransaction &transaction, vector<IcebergManifestEntry> &&data_files);
+	void AddUpdateSnapshot(IcebergTransaction &transaction, vector<IcebergManifestEntry> &&delete_files,
 	                       vector<IcebergManifestEntry> &&data_files);
-	void AddSchema(IRCTransaction &transaction);
-	void AddAssertCreate(IRCTransaction &transaction);
-	void AddAssignUUID(IRCTransaction &transaction);
-	void AddUpradeFormatVersion(IRCTransaction &transaction);
-	void AddSetCurrentSchema(IRCTransaction &transaction);
-	void AddPartitionSpec(IRCTransaction &transaction);
-	void AddSortOrder(IRCTransaction &transaction);
-	void SetDefaultSortOrder(IRCTransaction &transaction);
-	void SetDefaultSpec(IRCTransaction &transaction);
-	void SetProperties(IRCTransaction &transaction, case_insensitive_map_t<string> properties);
-	void RemoveProperties(IRCTransaction &transaction, vector<string> properties);
-	void SetLocation(IRCTransaction &transaction);
-	bool IsTransactionLocalTable(IRCTransaction &transaction);
+	void AddSchema(IcebergTransaction &transaction);
+	void AddAssertCreate(IcebergTransaction &transaction);
+	void AddAssignUUID(IcebergTransaction &transaction);
+	void AddUpradeFormatVersion(IcebergTransaction &transaction);
+	void AddSetCurrentSchema(IcebergTransaction &transaction);
+	void AddPartitionSpec(IcebergTransaction &transaction);
+	void AddSortOrder(IcebergTransaction &transaction);
+	void SetDefaultSortOrder(IcebergTransaction &transaction);
+	void SetDefaultSpec(IcebergTransaction &transaction);
+	void SetProperties(IcebergTransaction &transaction, case_insensitive_map_t<string> properties);
+	void RemoveProperties(IcebergTransaction &transaction, vector<string> properties);
+	void SetLocation(IcebergTransaction &transaction);
+	bool IsTransactionLocalTable(IcebergTransaction &transaction);
 	static string GetTableKey(const vector<string> &namespace_items, const string &table_name);
 	string GetTableKey() const;
 	// we pass the transaction, because we are only allowed to copy table information state provded by the catalog
 	// from before our transaction start time.
-	IcebergTableInformation Copy(IRCTransaction &irc_transaction) const;
+	IcebergTableInformation Copy(IcebergTransaction &iceberg_transaction) const;
 	// This copy is used for deletes, where we don't care about valid table state
 	IcebergTableInformation Copy() const;
 	void InitSchemaVersions();
 
-	IcebergSnapshotLookup GetSnapshotLookup(IRCTransaction &irc_transaction) const;
+	IcebergSnapshotLookup GetSnapshotLookup(IcebergTransaction &iceberg_transaction) const;
 	IcebergSnapshotLookup GetSnapshotLookup(ClientContext &context) const;
 	bool TableIsEmpty(const IcebergSnapshotLookup &snapshot_lookup) const;
 	bool HasTransactionUpdates();
 
 public:
-	IRCatalog &catalog;
-	IRCSchemaEntry &schema;
+	IcebergCatalog &catalog;
+	IcebergSchemaEntry &schema;
 	string name;
 	string table_id;
 	IcebergTableMetadata table_metadata;
 
-	unordered_map<int32_t, unique_ptr<ICTableEntry>> schema_versions;
+	unordered_map<int32_t, unique_ptr<IcebergTableEntry>> schema_versions;
 	// dummy entry to hold existence of a table, but no schema versions
-	unique_ptr<ICTableEntry> dummy_entry;
+	unique_ptr<IcebergTableEntry> dummy_entry;
 	unique_ptr<IcebergTransactionData> transaction_data;
 };
 

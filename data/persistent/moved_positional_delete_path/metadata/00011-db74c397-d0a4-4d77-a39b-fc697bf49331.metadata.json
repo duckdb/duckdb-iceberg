@@ -1,0 +1,185 @@
+{
+  "format-version" : 2,
+  "table-uuid" : "76ba3a18-2eeb-48dd-9e32-79dd8b37ccca",
+  "location" : "s3://original-bucket/warehouse/products",
+  "last-sequence-number" : 7,
+  "last-updated-ms" : 1765378217722,
+  "last-column-id" : 6,
+  "current-schema-id" : 0,
+  "schemas" : [ {
+    "type" : "struct",
+    "schema-id" : 0,
+    "fields" : [ {
+      "id" : 1,
+      "name" : "eventcode",
+      "required" : false,
+      "type" : "string"
+    }, {
+      "id" : 2,
+      "name" : "eventtitle",
+      "required" : false,
+      "type" : "string"
+    }, {
+      "id" : 3,
+      "name" : "id",
+      "required" : false,
+      "type" : "string"
+    }, {
+      "id" : 4,
+      "name" : "lastmodifieddate",
+      "required" : false,
+      "type" : "string"
+    }, {
+      "id" : 5,
+      "name" : "modifiedby",
+      "required" : false,
+      "type" : "string"
+    }, {
+      "id" : 6,
+      "name" : "load_time",
+      "required" : false,
+      "type" : "string"
+    } ]
+  } ],
+  "default-spec-id" : 0,
+  "partition-specs" : [ {
+    "spec-id" : 0,
+    "fields" : [ ]
+  } ],
+  "last-partition-id" : 999,
+  "default-sort-order-id" : 0,
+  "sort-orders" : [ {
+    "order-id" : 0,
+    "fields" : [ ]
+  } ],
+  "properties" : {
+    "write.delete.parquet.compression-codec" : "zstd",
+    "write.format.default" : "parquet",
+    "write.object-storage.enabled" : "true",
+    "write.object-storage.path" : "s3://original-bucket/warehouse/products/data",
+    "write.parquet.compression-codec" : "zstd"
+  },
+  "current-snapshot-id" : 2250710480624197828,
+  "refs" : {
+    "main" : {
+      "snapshot-id" : 2250710480624197828,
+      "type" : "branch"
+    }
+  },
+  "snapshots" : [ {
+    "sequence-number" : 5,
+    "snapshot-id" : 4321504963366796320,
+    "parent-snapshot-id" : 4510868751519690426,
+    "timestamp-ms" : 1763793907737,
+    "summary" : {
+      "operation" : "overwrite",
+      "trino_query_id" : "20251122_064504_00052_yf3n2",
+      "added-data-files" : "1",
+      "added-position-delete-files" : "1",
+      "added-delete-files" : "1",
+      "added-records" : "2640",
+      "added-files-size" : "165342",
+      "added-position-deletes" : "2532",
+      "changed-partition-count" : "1",
+      "total-records" : "13132",
+      "total-files-size" : "783487",
+      "total-data-files" : "2",
+      "total-delete-files" : "1",
+      "total-position-deletes" : "2532",
+      "total-equality-deletes" : "0"
+    },
+    "manifest-list" : "s3://original-bucket/warehouse/products/metadata/snap-4321504963366796320-1-e93ebe26-6031-41c2-9d03-e5b211eb9173.avro",
+    "schema-id" : 0
+  }, {
+    "sequence-number" : 6,
+    "snapshot-id" : 5875815289963971411,
+    "parent-snapshot-id" : 4321504963366796320,
+    "timestamp-ms" : 1765356986896,
+    "summary" : {
+      "operation" : "overwrite",
+      "trino_query_id" : "20251210_085625_00079_35mzi",
+      "added-position-delete-files" : "1",
+      "added-delete-files" : "1",
+      "added-files-size" : "1038",
+      "added-position-deletes" : "1",
+      "changed-partition-count" : "1",
+      "total-records" : "13132",
+      "total-files-size" : "784525",
+      "total-data-files" : "2",
+      "total-delete-files" : "2",
+      "total-position-deletes" : "2533",
+      "total-equality-deletes" : "0"
+    },
+    "manifest-list" : "s3://original-bucket/warehouse/products/metadata/snap-5875815289963971411-1-39902731-dfa5-46d5-a44f-a9717ac81492.avro",
+    "schema-id" : 0
+  }, {
+    "sequence-number" : 7,
+    "snapshot-id" : 2250710480624197828,
+    "parent-snapshot-id" : 5875815289963971411,
+    "timestamp-ms" : 1765378217722,
+    "summary" : {
+      "operation" : "overwrite",
+      "trino_query_id" : "20251210_145014_00088_7vcya",
+      "added-data-files" : "1",
+      "added-position-delete-files" : "2",
+      "added-delete-files" : "2",
+      "added-records" : "108",
+      "added-files-size" : "10715",
+      "added-position-deletes" : "78",
+      "changed-partition-count" : "1",
+      "total-records" : "13240",
+      "total-files-size" : "795240",
+      "total-data-files" : "3",
+      "total-delete-files" : "4",
+      "total-position-deletes" : "2611",
+      "total-equality-deletes" : "0"
+    },
+    "manifest-list" : "s3://original-bucket/warehouse/products/metadata/snap-2250710480624197828-1-c6e4fb3a-0283-46d0-92ec-986664434c14.avro",
+    "schema-id" : 0
+  } ],
+  "statistics" : [ ],
+  "snapshot-log" : [ {
+    "timestamp-ms" : 1763793907737,
+    "snapshot-id" : 4321504963366796320
+  }, {
+    "timestamp-ms" : 1765356986896,
+    "snapshot-id" : 5875815289963971411
+  }, {
+    "timestamp-ms" : 1765378217722,
+    "snapshot-id" : 2250710480624197828
+  } ],
+  "metadata-log" : [ {
+    "timestamp-ms" : 1762539058918,
+    "metadata-file" : "s3://original-bucket/warehouse/products/metadata/00000-f43c0592-d381-4a74-a364-68d8c7bd58c9.metadata.json"
+  }, {
+    "timestamp-ms" : 1762543919178,
+    "metadata-file" : "s3://original-bucket/warehouse/products/metadata/00001-840680bb-5547-433f-8991-33681d227158.metadata.json"
+  }, {
+    "timestamp-ms" : 1762547711858,
+    "metadata-file" : "s3://original-bucket/warehouse/products/metadata/00002-d4396124-1506-4b8e-9373-399e7e77eb23.metadata.json"
+  }, {
+    "timestamp-ms" : 1763059633054,
+    "metadata-file" : "s3://original-bucket/warehouse/products/metadata/00003-6c4e6187-4663-40de-b10d-b24105a5d711.metadata.json"
+  }, {
+    "timestamp-ms" : 1763113160500,
+    "metadata-file" : "s3://original-bucket/warehouse/products/metadata/00004-fb422005-e724-4845-a538-4bc02200ed9c.metadata.json"
+  }, {
+    "timestamp-ms" : 1763118147637,
+    "metadata-file" : "s3://original-bucket/warehouse/products/metadata/00005-32c6714f-0707-49da-877f-99a2fc31515d.metadata.json"
+  }, {
+    "timestamp-ms" : 1763146325708,
+    "metadata-file" : "s3://original-bucket/warehouse/products/metadata/00006-3144320f-4635-43f2-9bbd-5a1955735d4d.metadata.json"
+  }, {
+    "timestamp-ms" : 1763579876691,
+    "metadata-file" : "s3://original-bucket/warehouse/products/metadata/00007-c5e01697-9210-4221-aaa3-69a74328cef6.metadata.json"
+  }, {
+    "timestamp-ms" : 1763793907737,
+    "metadata-file" : "s3://original-bucket/warehouse/products/metadata/00008-adc80672-a60a-4309-94d5-e77889a905bf.metadata.json"
+  }, {
+    "timestamp-ms" : 1763839320050,
+    "metadata-file" : "s3://original-bucket/warehouse/products/metadata/00009-dd8bc5f5-f3cd-4277-a27a-fecd208be57b.metadata.json"
+  }, {
+    "timestamp-ms" : 1765356986896,
+    "metadata-file" : "s3://original-bucket/warehouse/products/metadata/00010-e0329011-d408-4099-a8f0-e3c3f821aa32.metadata.json"
+  } ]
+}

@@ -1,6 +1,6 @@
 #include "iceberg_extension.hpp"
-#include "storage/irc_catalog.hpp"
-#include "storage/irc_transaction_manager.hpp"
+#include "storage/catalog/iceberg_catalog.hpp"
+#include "storage/iceberg_transaction_manager.hpp"
 #include "duckdb.hpp"
 #include "duckdb/main/secret/secret_manager.hpp"
 #include "duckdb/common/exception.hpp"
@@ -23,14 +23,14 @@ namespace duckdb {
 
 static unique_ptr<TransactionManager> CreateTransactionManager(optional_ptr<StorageExtensionInfo> storage_info,
                                                                AttachedDatabase &db, Catalog &catalog) {
-	auto &ic_catalog = catalog.Cast<IRCatalog>();
-	return make_uniq<ICTransactionManager>(db, ic_catalog);
+	auto &ic_catalog = catalog.Cast<IcebergCatalog>();
+	return make_uniq<IcebergTransactionManager>(db, ic_catalog);
 }
 
 class IRCStorageExtension : public StorageExtension {
 public:
 	IRCStorageExtension() {
-		attach = IRCatalog::Attach;
+		attach = IcebergCatalog::Attach;
 		create_transaction_manager = CreateTransactionManager;
 	}
 };

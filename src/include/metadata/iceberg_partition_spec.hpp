@@ -36,6 +36,7 @@ public:
 	bool IsPartitioned() const;
 	const IcebergPartitionSpecField &GetFieldBySourceId(idx_t field_id) const;
 	string FieldsToJSON() const;
+	const vector<IcebergPartitionSpecField> &GetFields() const;
 
 public:
 	int32_t spec_id;

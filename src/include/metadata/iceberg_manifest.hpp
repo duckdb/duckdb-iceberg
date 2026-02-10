@@ -12,6 +12,7 @@
 #include "duckdb/common/insertion_order_preserving_map.hpp"
 
 #include "metadata/iceberg_table_schema.hpp"
+#include "metadata/iceberg_table_metadata.hpp"
 
 namespace duckdb {
 
@@ -23,38 +24,53 @@ enum class IcebergManifestEntryContentType : uint8_t { DATA = 0, POSITION_DELETE
 
 enum class IcebergManifestEntryStatusType : uint8_t { EXISTING = 0, ADDED = 1, DELETED = 2 };
 
-//! An entry in a manifest file ('manifest_entry' + 'data_file' in the spec)
-struct IcebergManifestEntry {
+struct IcebergDataFile {
 public:
-	IcebergManifestEntryStatusType status;
-	//! ----- Data File Struct ------
+	Value ToValue(const LogicalType &type) const;
+
+public:
+	static map<idx_t, LogicalType> GetFieldIdToTypeMapping(const IcebergSnapshot &snapshot,
+	                                                       const IcebergTableMetadata &metadata,
+	                                                       const unordered_set<int32_t> &partition_spec_ids);
+	static LogicalType PartitionStructType(const map<idx_t, LogicalType> &partition_field_id_to_type);
+	static LogicalType GetType(const IcebergTableMetadata &metadata, const LogicalType &partition_type);
+
+public:
 	IcebergManifestEntryContentType content;
 	string file_path;
 	string file_format;
-	vector<int32_t> equality_ids;
+	vector<pair<int32_t, Value>> partition_values;
 	int64_t record_count;
 	bool has_first_row_id = false;
 	int64_t first_row_id = 0xDEADBEEF;
-	//! source_id -> blob
-	unordered_map<int32_t, Value> lower_bounds;
-	unordered_map<int32_t, Value> upper_bounds;
+	int64_t file_size_in_bytes;
+	sequence_number_t sequence_number = 0XDEADBEEF;
 	unordered_map<int32_t, int64_t> column_sizes;
 	unordered_map<int32_t, int64_t> value_counts;
 	unordered_map<int32_t, int64_t> null_value_counts;
 	unordered_map<int32_t, int64_t> nan_value_counts;
-	vector<pair<int32_t, Value>> partition_values;
-	//! Inherited from the 'manifest_file' if NULL and 'status == EXISTING'
-	sequence_number_t sequence_number;
-	int64_t snapshot_id;
-	//! Inherited from the 'manifest_file'
-	int32_t partition_spec_id;
-	int64_t file_size_in_bytes;
+	//! source_id -> blob
+	unordered_map<int32_t, Value> lower_bounds;
+	unordered_map<int32_t, Value> upper_bounds;
+	vector<int32_t> equality_ids;
 	string referenced_data_file;
 	Value content_offset;
 	Value content_size_in_bytes;
+};
 
+//! An entry in a manifest file
+struct IcebergManifestEntry {
 public:
-	Value ToDataFileStruct(const LogicalType &type) const;
+	IcebergManifestEntryStatusType status;
+	//! ----- Data File Struct ------
+	//! Inherited from the 'manifest_file' if NULL and 'status == EXISTING'
+	sequence_number_t sequence_number = 0xDEADBEEF;
+	int64_t snapshot_id = 0xDEADBEEF;
+	//! Inherited from the 'manifest_file'
+	int32_t partition_spec_id = 0xDEADBEEF;
+	//! The index into the manifest_file vector where the entry originated from
+	idx_t manifest_file_idx = DConstants::INVALID_INDEX;
+	IcebergDataFile data_file;
 
 public:
 	static vector<LogicalType> Types() {
@@ -94,13 +110,13 @@ public:
 	}
 };
 
-struct IcebergManifestFile {
-	IcebergManifestFile(const string &path) : path(path) {
+struct IcebergManifest {
+	IcebergManifest(const string &path) : path(path) {
 	}
 
 public:
 	string path;
-	vector<IcebergManifestEntry> data_files;
+	vector<IcebergManifestEntry> entries;
 };
 
 namespace manifest_file {
@@ -150,7 +166,7 @@ static constexpr const int32_t REFERENCED_DATA_FILE = 143;
 static constexpr const int32_t CONTENT_OFFSET = 144;
 static constexpr const int32_t CONTENT_SIZE_IN_BYTES = 145;
 
-idx_t WriteToFile(IcebergTableInformation &table_info, const IcebergManifestFile &manifest_file,
+idx_t WriteToFile(IcebergTableInformation &table_info, const IcebergManifest &manifest_file,
                   CopyFunction &copy_function, DatabaseInstance &db, ClientContext &context);
 
 } // namespace manifest_file

@@ -40,6 +40,10 @@ bool IcebergPartitionSpec::IsUnpartitioned() const {
 	return !IsPartitioned();
 }
 
+const vector<IcebergPartitionSpecField> &IcebergPartitionSpec::GetFields() const {
+	return fields;
+}
+
 const IcebergPartitionSpecField &IcebergPartitionSpec::GetFieldBySourceId(idx_t source_id) const {
 	for (auto &field : fields) {
 		if (field.source_id == source_id) {

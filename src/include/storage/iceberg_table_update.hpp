@@ -33,7 +33,7 @@ enum class IcebergTableUpdateType : uint8_t {
 };
 
 struct IcebergCommitState {
-	vector<IcebergManifestListEntry> manifests;
+	vector<IcebergManifestFile> manifests;
 	rest_api_objects::CommitTableRequest table_change;
 };
 

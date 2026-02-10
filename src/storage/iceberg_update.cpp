@@ -1,9 +1,9 @@
 #include "storage/iceberg_update.hpp"
 #include "storage/iceberg_delete.hpp"
 #include "storage/iceberg_insert.hpp"
-#include "storage/irc_transaction.hpp"
-#include "storage/irc_catalog.hpp"
-#include "storage/irc_table_entry.hpp"
+#include "storage/iceberg_transaction.hpp"
+#include "storage/catalog/iceberg_catalog.hpp"
+#include "storage/catalog/iceberg_table_entry.hpp"
 #include "storage/iceberg_table_information.hpp"
 #include "duckdb/planner/operator/logical_update.hpp"
 #include "duckdb/parallel/thread_context.hpp"
@@ -12,7 +12,7 @@
 
 namespace duckdb {
 
-IcebergUpdate::IcebergUpdate(PhysicalPlan &physical_plan, ICTableEntry &table, vector<PhysicalIndex> columns_p,
+IcebergUpdate::IcebergUpdate(PhysicalPlan &physical_plan, IcebergTableEntry &table, vector<PhysicalIndex> columns_p,
                              PhysicalOperator &child, PhysicalOperator &copy_op, PhysicalOperator &delete_op,
                              PhysicalOperator &insert_op)
     : PhysicalOperator(physical_plan, PhysicalOperatorType::EXTENSION, {LogicalType::BIGINT}, 1), table(table),
@@ -136,8 +136,8 @@ SinkFinalizeType IcebergUpdate::Finalize(Pipeline &pipeline, Event &event, Clien
 	// Finalize the Deletes.
 	auto &iceberg_delete = delete_op.Cast<IcebergDelete>();
 	auto &delete_global_state = delete_op.sink_state->Cast<IcebergDeleteGlobalState>();
-	auto &irc_transaction = IRCTransaction::Get(context, table.catalog);
-	iceberg_delete.FlushDeletes(irc_transaction, context, delete_global_state);
+	auto &iceberg_transaction = IcebergTransaction::Get(context, table.catalog);
+	iceberg_delete.FlushDeletes(iceberg_transaction, context, delete_global_state);
 
 	// scan the copy operator and sink into the insert operator
 	ThreadContext thread_context(context);
@@ -172,13 +172,13 @@ SinkFinalizeType IcebergUpdate::Finalize(Pipeline &pipeline, Event &event, Clien
 	}
 
 	auto &insert_global_state = global_sink->Cast<IcebergInsertGlobalState>();
-	auto &irc_table = table.Cast<ICTableEntry>();
+	auto &irc_table = table.Cast<IcebergTableEntry>();
 	auto &table_info = irc_table.table_info;
 	auto delete_manifest_entries = IcebergDelete::GenerateDeleteManifestEntries(delete_global_state);
 	auto insert_manifest_entries = IcebergInsert::GetInsertManifestEntries(insert_global_state);
 	if (!insert_manifest_entries.empty()) {
-		ApplyTableUpdate(table_info, irc_transaction, [&](IcebergTableInformation &tbl) {
-			tbl.AddUpdateSnapshot(irc_transaction, std::move(delete_manifest_entries),
+		ApplyTableUpdate(table_info, iceberg_transaction, [&](IcebergTableInformation &tbl) {
+			tbl.AddUpdateSnapshot(iceberg_transaction, std::move(delete_manifest_entries),
 			                      std::move(insert_manifest_entries));
 		});
 	}
@@ -236,8 +236,8 @@ static Value WrittenFieldIds(const IcebergTableSchema &schema) {
 	return Value::STRUCT(std::move(values));
 }
 
-PhysicalOperator &IRCatalog::PlanUpdate(ClientContext &context, PhysicalPlanGenerator &planner, LogicalUpdate &op,
-                                        PhysicalOperator &child_plan) {
+PhysicalOperator &IcebergCatalog::PlanUpdate(ClientContext &context, PhysicalPlanGenerator &planner, LogicalUpdate &op,
+                                             PhysicalOperator &child_plan) {
 	if (op.return_chunk) {
 		throw BinderException("RETURNING clause not yet supported for updates of a Iceberg table");
 	}
@@ -247,7 +247,7 @@ PhysicalOperator &IRCatalog::PlanUpdate(ClientContext &context, PhysicalPlanGene
 		}
 	}
 
-	auto &table = op.table.Cast<ICTableEntry>();
+	auto &table = op.table.Cast<IcebergTableEntry>();
 	auto &table_schema = table.table_info.table_metadata.GetLatestSchema();
 
 	auto &partition_spec = table.table_info.table_metadata.GetLatestPartitionSpec();
@@ -283,8 +283,8 @@ PhysicalOperator &IRCatalog::PlanUpdate(ClientContext &context, PhysicalPlanGene
 	return planner.Make<IcebergUpdate>(table, op.columns, child_plan, copy_op, delete_op, insert_op);
 }
 
-void ICTableEntry::BindUpdateConstraints(Binder &binder, LogicalGet &get, LogicalProjection &proj,
-                                         LogicalUpdate &update, ClientContext &context) {
+void IcebergTableEntry::BindUpdateConstraints(Binder &binder, LogicalGet &get, LogicalProjection &proj,
+                                              LogicalUpdate &update, ClientContext &context) {
 	// all updates in DuckDB-Iceberg are deletes + inserts
 	update.update_is_del_and_insert = true;
 

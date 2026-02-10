@@ -15,19 +15,10 @@ void BaseManifestReader::Initialize(unique_ptr<AvroScan> scan_p) {
 
 	finished = false;
 	offset = 0;
-	vector_mapping.clear();
-	partition_fields.clear();
+}
 
-	auto &multi_file_local_state = scan->local_state->Cast<MultiFileLocalState>();
-	auto &columns = multi_file_local_state.reader->columns;
-	for (idx_t i = 0; i < columns.size(); i++) {
-		auto &column = columns[i];
-		CreateVectorMapping(i, column);
-	}
-
-	if (!ValidateVectorMapping()) {
-		throw InvalidInputException("Invalid schema detected in a manifest/manifest entry");
-	}
+const IcebergAvroScanInfo &BaseManifestReader::GetScanInfo() const {
+	return *scan->scan_info;
 }
 
 idx_t BaseManifestReader::ScanInternal(idx_t remaining) {

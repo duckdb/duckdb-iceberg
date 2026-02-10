@@ -3,7 +3,8 @@
 #include "duckdb/main/client_context.hpp"
 #include "duckdb/common/file_system.hpp"
 #include "duckdb/main/setting_info.hpp"
-#include "storage/irc_catalog.hpp"
+#include "storage/catalog/iceberg_catalog.hpp"
+#include "duckdb/common/types/value.hpp"
 
 namespace duckdb {
 
@@ -31,14 +32,14 @@ HostDecompositionResult DecomposeHost(const string &host) {
 
 } // namespace
 
-SIGV4Authorization::SIGV4Authorization() : IRCAuthorization(IRCAuthorizationType::SIGV4) {
+SIGV4Authorization::SIGV4Authorization() : IcebergAuthorization(IcebergAuthorizationType::SIGV4) {
 }
 
 SIGV4Authorization::SIGV4Authorization(const string &secret)
-    : IRCAuthorization(IRCAuthorizationType::SIGV4), secret(secret) {
+    : IcebergAuthorization(IcebergAuthorizationType::SIGV4), secret(secret) {
 }
 
-unique_ptr<IRCAuthorization> SIGV4Authorization::FromAttachOptions(IcebergAttachOptions &input) {
+unique_ptr<IcebergAuthorization> SIGV4Authorization::FromAttachOptions(IcebergAttachOptions &input) {
 	auto result = make_uniq<SIGV4Authorization>();
 
 	unordered_map<string, Value> remaining_options;
@@ -49,6 +50,9 @@ unique_ptr<IRCAuthorization> SIGV4Authorization::FromAttachOptions(IcebergAttach
 				throw InvalidInputException("Duplicate 'secret' option detected!");
 			}
 			result->secret = StringUtil::Lower(entry.second.ToString());
+		} else if (lower_name == "extra_http_headers") {
+			// Parse extra_http_headers if provided directly in attach options
+			IcebergAuthorization::ParseExtraHttpHeaders(entry.second, result->extra_http_headers);
 		} else {
 			remaining_options.emplace(std::move(entry));
 		}
@@ -101,7 +105,7 @@ AWSInput SIGV4Authorization::CreateAWSInput(ClientContext &context, const IRCEnd
 	}
 
 	// AWS credentials
-	auto secret_entry = IRCatalog::GetStorageSecret(context, secret);
+	auto secret_entry = IcebergCatalog::GetStorageSecret(context, secret);
 	auto kv_secret = dynamic_cast<const KeyValueSecret &>(*secret_entry->secret);
 	aws_input.key_id = kv_secret.secret_map["key_id"].GetValue<string>();
 	aws_input.secret = kv_secret.secret_map["secret"].GetValue<string>();
@@ -114,6 +118,12 @@ AWSInput SIGV4Authorization::CreateAWSInput(ClientContext &context, const IRCEnd
 unique_ptr<HTTPResponse> SIGV4Authorization::Request(RequestType request_type, ClientContext &context,
                                                      const IRCEndpointBuilder &endpoint_builder, HTTPHeaders &headers,
                                                      const string &data) {
+	// Note: For SIGV4, custom headers should be added BEFORE signing so they're included in the signature
+	// Merge extra HTTP headers first
+	for (auto &entry : extra_http_headers) {
+		headers.Insert(entry.first, entry.second);
+	}
+
 	auto aws_input = CreateAWSInput(context, endpoint_builder);
 	return aws_input.Request(request_type, context, client, headers, data);
 }
