@@ -202,7 +202,6 @@ void IcebergInsert::AddWrittenFiles(IcebergInsertGlobalState &global_state, Data
 		auto &map_children = MapValue::GetChildren(column_stats);
 
 		auto partition_values = chunk.GetValue(5, r);
-		auto &partition_children = MapValue::GetChildren(partition_values);
 
 		auto table_current_schema_id = ic_table.table_info.table_metadata.current_schema_id;
 		auto ic_schema = ic_table.table_info.table_metadata.schemas[table_current_schema_id];
@@ -233,24 +232,27 @@ void IcebergInsert::AddWrittenFiles(IcebergInsertGlobalState &global_state, Data
 			partition_colname_to_field.emplace(partition_col_name, partition_field);
 		}
 
-		// Populate partition_info from the partition values in the chunk
-		for (auto &partition_val : partition_children) {
-			auto &struct_val = StructValue::GetChildren(partition_val);
-			auto &partition_name = StringValue::Get(struct_val[0]);
-			auto &partition_value = StringValue::Get(struct_val[1]);
-			auto field_it = partition_colname_to_field.find(partition_name);
-			D_ASSERT(field_it != partition_colname_to_field.end());
-			auto &partition_field = field_it->second.get();
-			auto source_type = ic_schema->GetColumnTypeFromFieldId(partition_field.source_id);
+		if (!partition_values.IsNull()) {
+			// Populate partition_info from the partition values in the chunk
+			auto &partition_children = MapValue::GetChildren(partition_values);
+			for (auto &partition_val : partition_children) {
+				auto &struct_val = StructValue::GetChildren(partition_val);
+				auto &partition_name = StringValue::Get(struct_val[0]);
+				auto &partition_value = StringValue::Get(struct_val[1]);
+				auto field_it = partition_colname_to_field.find(partition_name);
+				D_ASSERT(field_it != partition_colname_to_field.end());
+				auto &partition_field = field_it->second.get();
+				auto source_type = ic_schema->GetColumnTypeFromFieldId(partition_field.source_id);
 
-			DataFilePartitionInfo info;
-			info.name = partition_name;
-			info.source_id = partition_field.source_id;
-			info.field_id = partition_field.partition_field_id;
-			info.transform = partition_field.transform;
-			info.source_type = source_type;
-			info.value = Value(partition_value);
-			data_file.partition_info.push_back(std::move(info));
+				DataFilePartitionInfo info;
+				info.name = partition_name;
+				info.source_id = partition_field.source_id;
+				info.field_id = partition_field.partition_field_id;
+				info.transform = partition_field.transform;
+				info.source_type = source_type;
+				info.value = Value(partition_value);
+				data_file.partition_info.push_back(std::move(info));
+			}
 		}
 
 		global_state.insert_count += data_file.record_count;
