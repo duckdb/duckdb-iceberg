@@ -41,6 +41,8 @@ public:
 	const IcebergTransactionData &GetTransactionData() const;
 	optional_ptr<IcebergSnapshot> GetSnapshot() const;
 	const IcebergTableSchema &GetSchema() const;
+	bool FinishedScanningDeletes() const;
+	bool FinishedScanningData() const;
 
 	void Bind(vector<LogicalType> &return_types, vector<string> &names);
 	unique_ptr<IcebergMultiFileList> PushdownInternal(ClientContext &context, TableFilterSet &new_filters) const;
@@ -108,19 +110,17 @@ public:
 	mutable map<sequence_number_t, unique_ptr<IcebergEqualityDeleteData>> equality_delete_data;
 
 	//! State used for lazy-loading the data files
-	mutable unique_ptr<manifest_file::ManifestFileReader> data_manifest_reader;
+	mutable unique_ptr<manifest_file::ManifestReader> data_manifest_reader;
 	mutable idx_t manifest_entry_idx = 0;
 	//! The data files of the manifest file that we last scanned
 	mutable vector<IcebergManifestEntry> current_manifest_entries;
 	mutable vector<IcebergManifestFile> data_manifests;
-	mutable vector<IcebergManifestFile>::iterator current_data_manifest;
 	mutable vector<reference<IcebergManifest>> transaction_data_manifests;
 	mutable idx_t transaction_data_idx = 0;
 
 	//! State used for pre-processing delete files
-	mutable unique_ptr<manifest_file::ManifestFileReader> delete_manifest_reader;
+	mutable unique_ptr<manifest_file::ManifestReader> delete_manifest_reader;
 	mutable vector<IcebergManifestFile> delete_manifests;
-	mutable vector<IcebergManifestFile>::iterator current_delete_manifest;
 	mutable vector<reference<IcebergManifest>> transaction_delete_manifests;
 	mutable idx_t transaction_delete_idx = 0;
 

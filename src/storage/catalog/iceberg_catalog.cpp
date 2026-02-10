@@ -15,6 +15,7 @@
 #include "duckdb/planner/operator/logical_create_table.hpp"
 #include "storage/catalog/iceberg_catalog.hpp"
 #include "regex"
+#include "duckdb/common/exception/conversion_exception.hpp"
 #include "storage/iceberg_authorization.hpp"
 #include "storage/authorization/oauth2.hpp"
 #include "storage/authorization/sigv4.hpp"
@@ -30,7 +31,6 @@ IcebergCatalog::IcebergCatalog(AttachedDatabase &db_p, AccessMode access_mode,
     : Catalog(db_p), access_mode(access_mode), auth_handler(std::move(auth_handler)),
       warehouse(attach_options.warehouse), uri(attach_options.endpoint), version("v1"), attach_options(attach_options),
       default_schema(default_schema), schemas(*this), metadata_cache() {
-	D_ASSERT(!default_schema.empty());
 }
 
 IcebergCatalog::~IcebergCatalog() = default;
@@ -50,7 +50,10 @@ optional_ptr<SchemaCatalogEntry> IcebergCatalog::LookupSchema(CatalogTransaction
                                                               const EntryLookupInfo &schema_lookup,
                                                               OnEntryNotFound if_not_found) {
 	if (schema_lookup.GetEntryName() == DEFAULT_SCHEMA && default_schema != DEFAULT_SCHEMA) {
-		D_ASSERT(!default_schema.empty());
+		// throws error if default schema is empty
+		if (default_schema.empty() && if_not_found == OnEntryNotFound::RETURN_NULL) {
+			return nullptr;
+		}
 		return GetSchema(transaction, default_schema, if_not_found);
 	}
 
@@ -70,8 +73,15 @@ void IcebergCatalog::StoreLoadTableResult(const string &table_key,
 	if (metadata_cache.find(table_key) != metadata_cache.end()) {
 		metadata_cache.erase(table_key);
 	}
-	auto now = system_clock::now() + std::chrono::minutes(10);
-	auto val = make_uniq<MetadataCacheValue>(now, std::move(load_table_result));
+	// If max_table_staleness_minutes is not set, use a time in the past so cache is always expired
+	system_clock::time_point expires_at;
+	if (attach_options.max_table_staleness_micros.IsValid()) {
+		expires_at =
+		    system_clock::now() + std::chrono::microseconds(attach_options.max_table_staleness_micros.GetIndex());
+	} else {
+		expires_at = system_clock::time_point::min();
+	}
+	auto val = make_uniq<MetadataCacheValue>(expires_at, std::move(load_table_result));
 	metadata_cache.emplace(table_key, std::move(val));
 }
 
@@ -85,7 +95,26 @@ MetadataCacheValue &IcebergCatalog::GetLoadTableResult(const string &table_key) 
 	return *res->second;
 }
 
-void IcebergCatalog::RemoveLoadTableResult(string table_key) {
+std::mutex &IcebergCatalog::GetMetadataCacheLock() {
+	return metadata_cache_mutex;
+}
+
+optional_ptr<MetadataCacheValue> IcebergCatalog::TryGetValidCachedLoadTableResult(const string &table_key,
+                                                                                  lock_guard<std::mutex> &lock) {
+	(void)lock;
+	auto it = metadata_cache.find(table_key);
+	if (it == metadata_cache.end()) {
+		return nullptr;
+	}
+	auto &cached_value = *it->second;
+	if (system_clock::now() > cached_value.expires_at) {
+		// cached value has expired
+		return nullptr;
+	}
+	return &cached_value;
+}
+
+void IcebergCatalog::RemoveLoadTableResult(const string &table_key) {
 	std::lock_guard<std::mutex> g(metadata_cache_mutex);
 	if (metadata_cache.find(table_key) == metadata_cache.end()) {
 		throw InternalException("Attempting to remove table information that was never stored");
@@ -101,38 +130,32 @@ optional_ptr<CatalogEntry> IcebergCatalog::CreateSchema(CatalogTransaction trans
 	}
 
 	D_ASSERT(context);
-	rest_api_objects::CreateNamespaceRequest request;
-	request.has_properties = false;
-	auto namespace_identifiers = IRCAPI::ParseSchemaName(info.schema);
-	for (auto &identifier : namespace_identifiers) {
-		request._namespace.value.push_back(identifier);
-	}
-	std::unique_ptr<yyjson_mut_doc, YyjsonDocDeleter> doc_p(yyjson_mut_doc_new(nullptr));
-	auto doc = doc_p.get();
-	auto root_object = yyjson_mut_obj(doc);
-	yyjson_mut_doc_set_root(doc, root_object);
-	auto namespace_arr = yyjson_mut_obj_add_arr(doc, root_object, "namespace");
-	for (auto &name : request._namespace.value) {
-		yyjson_mut_arr_add_strcpy(doc, namespace_arr, name.c_str());
-	}
-	// properties object is also requeried. Empty for now since we don't support properties
-	auto properties_obj = yyjson_mut_obj_add_obj(doc, root_object, "properties");
-	auto create_body = ICUtils::JsonToString(std::move(doc_p));
 
-	if (info.on_conflict == OnCreateConflict::IGNORE_ON_CONFLICT) {
-		auto schema_lookup = EntryLookupInfo(CatalogType::SCHEMA_ENTRY, info.schema);
-		auto schema_exists = LookupSchema(transaction, schema_lookup, OnEntryNotFound::RETURN_NULL);
-		if (schema_exists) {
-			return nullptr;
+	// Verify schema existence on the server first
+	bool schema_exists = IRCAPI::VerifySchemaExistence(*context, *this, info.schema);
+
+	if (schema_exists) {
+		if (info.on_conflict == OnCreateConflict::IGNORE_ON_CONFLICT) {
+			// Schema already exists on the server - get or create a local entry and return it
+			auto entry = schemas.GetEntry(*context, info.schema, OnEntryNotFound::RETURN_NULL);
+			if (entry) {
+				return entry;
+			}
+			auto new_schema = make_uniq<IcebergSchemaEntry>(*this, info);
+			auto schema_name = new_schema->name;
+			schemas.AddEntry(schema_name, std::move(new_schema));
+			return &schemas.GetEntry(info.schema);
 		}
+		throw CatalogException("Schema with name \"%s\" already exists", info.schema);
 	}
 
-	IRCAPI::CommitNamespaceCreate(*context, *this, create_body);
+	// Schema does not exist - create it locally and defer the server creation to commit
+	auto &iceberg_transaction = IcebergTransaction::Get(*context, *this);
 	auto new_schema = make_uniq<IcebergSchemaEntry>(*this, info);
 	auto schema_name = new_schema->name;
 	schemas.AddEntry(schema_name, std::move(new_schema));
-	auto &ret = schemas.GetEntry(info.schema);
-	return ret;
+	iceberg_transaction.created_schemas.insert(info.schema);
+	return &schemas.GetEntry(info.schema);
 }
 
 void IcebergCatalog::DropSchema(ClientContext &context, DropInfo &info) {
@@ -140,18 +163,20 @@ void IcebergCatalog::DropSchema(ClientContext &context, DropInfo &info) {
 		throw NotImplementedException(
 		    "DROP SCHEMA <schema_name> CASCADE is not supported for Iceberg schemas currently");
 	}
-	vector<string> namespace_items;
-	auto namespace_identifier = IRCAPI::ParseSchemaName(info.name);
-	namespace_items.push_back(IRCAPI::GetEncodedSchemaName(namespace_identifier));
-	if (info.if_not_found == OnEntryNotFound::RETURN_NULL) {
-		auto schema_lookup = EntryLookupInfo(CatalogType::SCHEMA_ENTRY, info.name);
-		auto transaction = CatalogTransaction::GetSystemCatalogTransaction(context);
-		auto schema_exists = LookupSchema(transaction, schema_lookup, info.if_not_found);
-		if (!schema_exists) {
+
+	// Verify schema existence on the server first
+	bool schema_exists = IRCAPI::VerifySchemaExistence(context, *this, info.name);
+
+	if (!schema_exists) {
+		if (info.if_not_found == OnEntryNotFound::RETURN_NULL) {
 			return;
 		}
+		throw CatalogException("Schema with name \"%s\" does not exist", info.name);
 	}
-	IRCAPI::CommitNamespaceDrop(context, *this, namespace_items);
+
+	// Schema exists - defer the server deletion to commit
+	auto &iceberg_transaction = IcebergTransaction::Get(context, *this);
+	iceberg_transaction.deleted_schemas.insert(info.name);
 }
 
 unique_ptr<LogicalOperator> IcebergCatalog::BindCreateIndex(Binder &binder, CreateStatement &stmt,
@@ -181,6 +206,7 @@ IRCEndpointBuilder IcebergCatalog::GetBaseUrl() const {
 	auto base_url = IRCEndpointBuilder();
 	base_url.SetHost(uri);
 	base_url.AddPathComponent(version);
+
 	return base_url;
 }
 
@@ -326,29 +352,53 @@ void IcebergCatalog::AddGlueEndpoints() {
 	supported_urls.insert("DELETE /v1/{prefix}/namespaces/{namespace}/tables/{table}");
 }
 
-void IcebergCatalog::GetConfig(ClientContext &context, IcebergEndpointType &endpoint_type) {
-	// set the prefix to be empty. To get the config endpoint,
-	// we cannot add a default prefix.
-	D_ASSERT(prefix.empty());
-	auto catalog_config = IRCAPI::GetCatalogConfig(context, *this);
-
-	overrides = catalog_config.overrides;
-	defaults = catalog_config.defaults;
+void IcebergCatalog::ParsePrefix() {
 	// save overrides and defaults.
 	// See https://iceberg.apache.org/docs/latest/configuration/#catalog-properties for sometimes used catalog
 	// properties
 	auto default_prefix_it = defaults.find("prefix");
 	auto override_prefix_it = overrides.find("prefix");
 
+	string decoded_prefix = "";
 	if (default_prefix_it != defaults.end()) {
-		// sometimes there is a prefix in the defaults
-		prefix = StringUtil::URLDecode(default_prefix_it->second);
-		defaults.erase(default_prefix_it);
+		decoded_prefix = StringUtil::URLDecode(default_prefix_it->second);
+		prefix = decoded_prefix;
+		if (!StringUtil::Equals(decoded_prefix, default_prefix_it->second)) {
+			// decoded prefix contains a slash AND is not equal to the original
+			// means prefix was encoded, and is one URL component
+			prefix_is_one_component = true;
+		} else {
+			prefix_is_one_component = false;
+		}
 	}
+
+	// sometimes the prefix in the overrides. Prefer the override prefix
 	if (override_prefix_it != overrides.end()) {
-		// sometimes the prefix in the overrides. Prefer the override prefix
-		prefix = StringUtil::URLDecode(override_prefix_it->second);
-		overrides.erase(override_prefix_it);
+		decoded_prefix = StringUtil::URLDecode(override_prefix_it->second);
+		prefix = decoded_prefix;
+
+		if (!StringUtil::Equals(decoded_prefix, override_prefix_it->second)) {
+			// decoded prefix is not equal to the original
+			// means prefix was encoded, and is one URL component
+			prefix_is_one_component = true;
+		} else {
+			// decoded prefix contains a '/' or is equal
+			prefix_is_one_component = false;
+		}
+	}
+}
+
+void IcebergCatalog::GetConfig(ClientContext &context, IcebergEndpointType &endpoint_type) {
+	// set the prefix to be empty. To get the config endpoint,
+	// we cannot add a default prefix.
+	D_ASSERT(prefix.empty());
+	auto catalog_config = IRCAPI::GetCatalogConfig(context, *this);
+	overrides = catalog_config.overrides;
+	defaults = catalog_config.defaults;
+	ParsePrefix();
+
+	if (attach_options.encode_entire_prefix) {
+		prefix_is_one_component = true;
 	}
 
 	if (catalog_config.has_endpoints) {
@@ -524,6 +574,16 @@ unique_ptr<Catalog> IcebergCatalog::Attach(optional_ptr<StorageExtensionInfo> st
 			set_by_attach_options.insert("purge_requested");
 		} else if (lower_name == "default_schema") {
 			default_schema = entry.second.ToString();
+		} else if (lower_name == "encode_entire_prefix") {
+			attach_options.encode_entire_prefix = true;
+		} else if (lower_name == "max_table_staleness") {
+			auto interval_option = entry.second.DefaultCastAs(LogicalType::INTERVAL);
+			auto interval_value = interval_option.GetValue<interval_t>();
+			int64_t interval_in_micros = 0;
+			if (!Interval::TryGetMicro(interval_value, interval_in_micros)) {
+				throw ConversionException("Could not get interval information from %s", interval_option.ToString());
+			}
+			attach_options.max_table_staleness_micros = interval_in_micros;
 		} else {
 			attach_options.options.emplace(std::move(entry));
 		}
@@ -605,9 +665,6 @@ unique_ptr<Catalog> IcebergCatalog::Attach(optional_ptr<StorageExtensionInfo> st
 		throw InvalidConfigurationException("Missing 'endpoint' option for Iceberg attach");
 	}
 
-	if (default_schema.empty()) {
-		default_schema = DEFAULT_SCHEMA;
-	}
 	D_ASSERT(auth_handler);
 	auto catalog =
 	    make_uniq<IcebergCatalog>(db, options.access_mode, std::move(auth_handler), attach_options, default_schema);

@@ -1,0 +1,17 @@
+# name: test/sql/local/moved_positional_delete_path.test
+# group: [local]
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+set ignore_error_messages
+
+query I
+select count(*) from ICEBERG_SCAN('__WORKING_DIRECTORY__/data/persistent/moved_positional_delete_path', allow_moved_paths=true);
+----
+13136

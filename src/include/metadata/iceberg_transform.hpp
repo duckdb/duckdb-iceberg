@@ -39,6 +39,7 @@ public:
 	}
 
 	LogicalType GetSerializedType(const LogicalType &input) const;
+	LogicalType GetBoundsType(const LogicalType &input) const;
 
 private:
 	//! Preserve the input for debugging

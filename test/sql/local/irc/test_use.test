@@ -38,17 +38,30 @@ ATTACH '' AS my_datalake (
 statement ok
 use my_datalake.default;
 
-# schema will default to 'main', which doesnt exist
 statement error
-use my_datalake;
+select * from non_existend_table;
 ----
-Catalog Error: SET schema: No catalog + schema named "my_datalake" found.
+<REGEX>:.*Table with name non_existend_table does not exist.*
 
 statement ok
 select * from my_datalake.default.table_unpartitioned;
 
-# 'main' still doesn't exist
-statement error
+statement ok
+select * from table_unpartitioned;
+
+statement ok
 use my_datalake;
+
+statement error
+select * from table_unpartitioned;
 ----
-Catalog Error: SET schema: No catalog + schema named "my_datalake" found.
+<REGEX>:.*Table with name table_unpartitioned does not exist.*Did you mean "default.table_unpartitioned".*
+
+query II nosort res1
+select * from "default".table_unpartitioned;
+----
+
+query II nosort res1
+select * from my_datalake.default.table_unpartitioned;
+----
+

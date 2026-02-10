@@ -15,8 +15,25 @@ optional_ptr<CatalogEntry> IcebergSchemaSet::GetEntry(ClientContext &context, co
                                                       OnEntryNotFound if_not_found) {
 	lock_guard<mutex> l(entry_lock);
 	auto &ic_catalog = catalog.Cast<IcebergCatalog>();
-
 	auto &iceberg_transaction = IcebergTransaction::Get(context, catalog);
+
+	// If the schema was deleted in this transaction, treat it as non-existent
+	if (iceberg_transaction.deleted_schemas.count(name)) {
+		if (if_not_found == OnEntryNotFound::RETURN_NULL) {
+			return nullptr;
+		}
+		throw CatalogException("Schema '%s' does not exist", name);
+	}
+
+	// If the schema was created in this transaction, return the local entry directly
+	if (iceberg_transaction.created_schemas.count(name)) {
+		auto entry = entries.find(name);
+		if (entry != entries.end()) {
+			return entry->second.get();
+		}
+		throw InternalException("Schema '%s' was created in this transaction, but was no found in the local cache",
+		                        name);
+	}
 
 	auto verify_existence = iceberg_transaction.looked_up_entries.insert(name).second;
 	auto entry = entries.find(name);
@@ -31,16 +48,22 @@ optional_ptr<CatalogEntry> IcebergSchemaSet::GetEntry(ClientContext &context, co
 	}
 	if (entry == entries.end()) {
 		CreateSchemaInfo info;
-		if (!IRCAPI::VerifySchemaExistence(context, ic_catalog, name)) {
-			if (if_not_found == OnEntryNotFound::RETURN_NULL) {
-				return nullptr;
-			} else {
-				throw CatalogException("Iceberg namespace by the name of '%s' does not exist", name);
+		// Look up existence of default schema to avoid lookup of `duckdb_*` tables
+		if (name == DEFAULT_SCHEMA) {
+			if (!IRCAPI::VerifySchemaExistence(context, ic_catalog, name)) {
+				if (if_not_found == OnEntryNotFound::RETURN_NULL) {
+					return nullptr;
+				}
+				throw CatalogException("default schema '%s' does not exist", name);
 			}
 		}
 		info.schema = name;
 		info.internal = false;
 		auto schema_entry = make_uniq<IcebergSchemaEntry>(catalog, info);
+		// we will not create entries with empty names
+		if (name.empty()) {
+			return nullptr;
+		}
 		CreateEntryInternal(context, std::move(schema_entry));
 		entry = entries.find(name);
 		D_ASSERT(entry != entries.end());
@@ -58,6 +81,11 @@ void IcebergSchemaSet::Scan(ClientContext &context, const std::function<void(Cat
 
 void IcebergSchemaSet::AddEntry(const string &name, unique_ptr<IcebergSchemaEntry> entry) {
 	entries.insert(make_pair(name, std::move(entry)));
+}
+
+void IcebergSchemaSet::RemoveEntry(const string &name) {
+	lock_guard<mutex> l(entry_lock);
+	entries.erase(name);
 }
 
 CatalogEntry &IcebergSchemaSet::GetEntry(const string &name) {

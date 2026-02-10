@@ -144,7 +144,7 @@ bool IRCAPI::VerifySchemaExistence(ClientContext &context, IcebergCatalog &catal
 	auto schema_name = GetEncodedSchemaName(namespace_items);
 
 	auto url_builder = catalog.GetBaseUrl();
-	url_builder.AddPathComponent(catalog.prefix);
+	url_builder.AddPrefixComponent(catalog.prefix, catalog.prefix_is_one_component);
 	url_builder.AddPathComponent("namespaces");
 	url_builder.AddPathComponent(schema_name);
 	bool execute_head =
@@ -157,7 +157,7 @@ bool IRCAPI::VerifyTableExistence(ClientContext &context, IcebergCatalog &catalo
 	auto schema_name = GetEncodedSchemaName(schema.namespace_items);
 
 	auto url_builder = catalog.GetBaseUrl();
-	url_builder.AddPathComponent(catalog.prefix);
+	url_builder.AddPrefixComponent(catalog.prefix, catalog.prefix_is_one_component);
 	url_builder.AddPathComponent("namespaces");
 	url_builder.AddPathComponent(schema_name);
 	url_builder.AddPathComponent("tables");
@@ -172,7 +172,7 @@ static unique_ptr<HTTPResponse> GetTableMetadata(ClientContext &context, Iceberg
 	auto schema_name = IRCAPI::GetEncodedSchemaName(schema.namespace_items);
 
 	auto url_builder = catalog.GetBaseUrl();
-	url_builder.AddPathComponent(catalog.prefix);
+	url_builder.AddPrefixComponent(catalog.prefix, catalog.prefix_is_one_component);
 	url_builder.AddPathComponent("namespaces");
 	url_builder.AddPathComponent(schema_name);
 	url_builder.AddPathComponent("tables");
@@ -217,7 +217,7 @@ vector<rest_api_objects::TableIdentifier> IRCAPI::GetTables(ClientContext &conte
 
 	do {
 		auto url_builder = catalog.GetBaseUrl();
-		url_builder.AddPathComponent(catalog.prefix);
+		url_builder.AddPrefixComponent(catalog.prefix, catalog.prefix_is_one_component);
 		url_builder.AddPathComponent("namespaces");
 		url_builder.AddPathComponent(schema_name);
 		url_builder.AddPathComponent("tables");
@@ -232,7 +232,8 @@ vector<rest_api_objects::TableIdentifier> IRCAPI::GetTables(ClientContext &conte
 		auto response = catalog.auth_handler->Request(RequestType::GET_REQUEST, context, url_builder, headers);
 		if (!response->Success()) {
 			if (response->status == HTTPStatusCode::Forbidden_403 ||
-			    response->status == HTTPStatusCode::Unauthorized_401) {
+			    response->status == HTTPStatusCode::Unauthorized_401 ||
+			    response->status == HTTPStatusCode::NotFound_404) {
 				// return empty result if user cannot list tables for a schema.
 				vector<rest_api_objects::TableIdentifier> ret;
 				return ret;
@@ -267,7 +268,7 @@ vector<IRCAPISchema> IRCAPI::GetSchemas(ClientContext &context, IcebergCatalog &
 	string page_token = "";
 	do {
 		auto endpoint_builder = catalog.GetBaseUrl();
-		endpoint_builder.AddPathComponent(catalog.prefix);
+		endpoint_builder.AddPrefixComponent(catalog.prefix, catalog.prefix_is_one_component);
 		endpoint_builder.AddPathComponent("namespaces");
 		if (!parent.empty()) {
 			auto parent_name = GetSchemaName(parent);
@@ -323,7 +324,7 @@ vector<IRCAPISchema> IRCAPI::GetSchemas(ClientContext &context, IcebergCatalog &
 
 void IRCAPI::CommitMultiTableUpdate(ClientContext &context, IcebergCatalog &catalog, const string &body) {
 	auto url_builder = catalog.GetBaseUrl();
-	url_builder.AddPathComponent(catalog.prefix);
+	url_builder.AddPrefixComponent(catalog.prefix, catalog.prefix_is_one_component);
 	url_builder.AddPathComponent("transactions");
 	url_builder.AddPathComponent("commit");
 	HTTPHeaders headers(*context.db);
@@ -355,7 +356,7 @@ void IRCAPI::CommitTableUpdate(ClientContext &context, IcebergCatalog &catalog, 
 	auto schema_name = GetEncodedSchemaName(schema);
 
 	auto url_builder = catalog.GetBaseUrl();
-	url_builder.AddPathComponent(catalog.prefix);
+	url_builder.AddPrefixComponent(catalog.prefix, catalog.prefix_is_one_component);
 	url_builder.AddPathComponent("namespaces");
 	url_builder.AddPathComponent(schema_name);
 	url_builder.AddPathComponent("tables");
@@ -374,7 +375,7 @@ void IRCAPI::CommitTableDelete(ClientContext &context, IcebergCatalog &catalog, 
                                const string &table_name) {
 	auto schema_name = GetEncodedSchemaName(schema);
 	auto url_builder = catalog.GetBaseUrl();
-	url_builder.AddPathComponent(catalog.prefix);
+	url_builder.AddPrefixComponent(catalog.prefix, catalog.prefix_is_one_component);
 	url_builder.AddPathComponent("namespaces");
 	url_builder.AddPathComponent(schema_name);
 	url_builder.AddPathComponent("tables");
@@ -393,7 +394,7 @@ void IRCAPI::CommitTableDelete(ClientContext &context, IcebergCatalog &catalog, 
 
 void IRCAPI::CommitNamespaceCreate(ClientContext &context, IcebergCatalog &catalog, string body) {
 	auto url_builder = catalog.GetBaseUrl();
-	url_builder.AddPathComponent(catalog.prefix);
+	url_builder.AddPrefixComponent(catalog.prefix, catalog.prefix_is_one_component);
 	url_builder.AddPathComponent("namespaces");
 	HTTPHeaders headers(*context.db);
 	headers.Insert("Content-Type", "application/json");
@@ -408,7 +409,7 @@ void IRCAPI::CommitNamespaceCreate(ClientContext &context, IcebergCatalog &catal
 void IRCAPI::CommitNamespaceDrop(ClientContext &context, IcebergCatalog &catalog, vector<string> namespace_items) {
 	auto url_builder = catalog.GetBaseUrl();
 	auto schema_name = GetEncodedSchemaName(namespace_items);
-	url_builder.AddPathComponent(catalog.prefix);
+	url_builder.AddPrefixComponent(catalog.prefix, catalog.prefix_is_one_component);
 	url_builder.AddPathComponent("namespaces");
 	url_builder.AddPathComponent(schema_name);
 
@@ -428,7 +429,7 @@ rest_api_objects::LoadTableResult IRCAPI::CommitNewTable(ClientContext &context,
 	auto &ic_schema = table->schema.Cast<IcebergSchemaEntry>();
 	auto table_namespace = GetEncodedSchemaName(ic_schema.namespace_items);
 	auto url_builder = catalog.GetBaseUrl();
-	url_builder.AddPathComponent(catalog.prefix);
+	url_builder.AddPrefixComponent(catalog.prefix, catalog.prefix_is_one_component);
 	url_builder.AddPathComponent("namespaces");
 	url_builder.AddPathComponent(table_namespace);
 	url_builder.AddPathComponent("tables");

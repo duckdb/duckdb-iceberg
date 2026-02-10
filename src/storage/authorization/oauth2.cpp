@@ -8,6 +8,7 @@
 #include "duckdb/common/exception/http_exception.hpp"
 #include "duckdb/logging/logger.hpp"
 #include "duckdb/common/types/blob.hpp"
+#include "duckdb/common/types/value.hpp"
 
 namespace duckdb {
 
@@ -17,10 +18,14 @@ namespace {
 //! So we use this to deduplicate it instead
 static const case_insensitive_map_t<LogicalType> &IcebergSecretOptions() {
 	static const case_insensitive_map_t<LogicalType> options {
-	    {"client_id", LogicalType::VARCHAR},        {"client_secret", LogicalType::VARCHAR},
-	    {"endpoint", LogicalType::VARCHAR},         {"token", LogicalType::VARCHAR},
-	    {"oauth2_scope", LogicalType::VARCHAR},     {"oauth2_server_uri", LogicalType::VARCHAR},
-	    {"oauth2_grant_type", LogicalType::VARCHAR}};
+	    {"client_id", LogicalType::VARCHAR},
+	    {"client_secret", LogicalType::VARCHAR},
+	    {"endpoint", LogicalType::VARCHAR},
+	    {"token", LogicalType::VARCHAR},
+	    {"oauth2_scope", LogicalType::VARCHAR},
+	    {"oauth2_server_uri", LogicalType::VARCHAR},
+	    {"oauth2_grant_type", LogicalType::VARCHAR},
+	    {"extra_http_headers", LogicalType::MAP(LogicalType::VARCHAR, LogicalType::VARCHAR)}};
 	return options;
 }
 
@@ -112,8 +117,8 @@ unique_ptr<OAuth2Authorization> OAuth2Authorization::FromAttachOptions(ClientCon
 	Value token;
 
 	static const unordered_set<string> recognized_create_secret_options {
-	    "oauth2_scope", "oauth2_server_uri", "oauth2_grant_type",     "token",
-	    "client_id",    "client_secret",     "access_delegation_mode"};
+	    "oauth2_scope", "oauth2_server_uri", "oauth2_grant_type",      "token",
+	    "client_id",    "client_secret",     "access_delegation_mode", "extra_http_headers"};
 
 	for (auto &entry : input.options) {
 		auto lower_name = StringUtil::Lower(entry.first);
@@ -153,6 +158,10 @@ unique_ptr<OAuth2Authorization> OAuth2Authorization::FromAttachOptions(ClientCon
 			input.endpoint = endpoint_from_secret.ToString();
 		}
 		token = kv_iceberg_secret.TryGetValue("token");
+
+		// Parse extra_http_headers from secret if present
+		IcebergAuthorization::ParseExtraHttpHeaders(kv_iceberg_secret.TryGetValue("extra_http_headers"),
+		                                            result->extra_http_headers);
 	} else {
 		if (!secret.empty()) {
 			set<string> option_names;
@@ -171,6 +180,10 @@ unique_ptr<OAuth2Authorization> OAuth2Authorization::FromAttachOptions(ClientCon
 		auto new_secret = OAuth2Authorization::CreateCatalogSecretFunction(context, create_secret_input);
 		auto &kv_iceberg_secret = dynamic_cast<KeyValueSecret &>(*new_secret);
 		token = kv_iceberg_secret.TryGetValue("token");
+
+		// Parse extra_http_headers from inline options if present
+		IcebergAuthorization::ParseExtraHttpHeaders(kv_iceberg_secret.TryGetValue("extra_http_headers"),
+		                                            result->extra_http_headers);
 	}
 
 	if (token.IsNull()) {
@@ -195,7 +208,13 @@ unique_ptr<BaseSecret> OAuth2Authorization::CreateCatalogSecretFunction(ClientCo
 		auto &param_name = named_param.first;
 		auto it = accepted_parameters.find(param_name);
 		if (it != accepted_parameters.end()) {
-			result->secret_map[param_name] = named_param.second.ToString();
+			// Special handling for extra_http_headers (MAP type)
+			if (StringUtil::Lower(param_name) == "extra_http_headers") {
+				// Store the MAP value directly, will be parsed later when creating authorization
+				result->secret_map[param_name] = named_param.second;
+			} else {
+				result->secret_map[param_name] = named_param.second.ToString();
+			}
 		} else {
 			throw InvalidInputException("Unknown named parameter passed to CreateIRCSecretFunction: %s", param_name);
 		}
@@ -263,9 +282,15 @@ unique_ptr<BaseSecret> OAuth2Authorization::CreateCatalogSecretFunction(ClientCo
 unique_ptr<HTTPResponse> OAuth2Authorization::Request(RequestType request_type, ClientContext &context,
                                                       const IRCEndpointBuilder &endpoint_builder, HTTPHeaders &headers,
                                                       const string &data) {
-	if (!token.empty()) {
-		headers.Insert("Authorization", StringUtil::Format("Bearer %s", token));
+	for (auto &entry : extra_http_headers) {
+		headers.Insert(entry.first, entry.second);
 	}
+
+	// DuckDB's Bearer token always takes precedence over custom Authorization headers
+	if (!token.empty()) {
+		headers["Authorization"] = StringUtil::Format("Bearer %s", token);
+	}
+
 	return APIUtils::Request(request_type, context, endpoint_builder, client, headers, data);
 }
 

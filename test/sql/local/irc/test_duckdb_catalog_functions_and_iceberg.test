@@ -44,14 +44,14 @@ use my_datalake.default;
 query I
 select count(*) from duckdb_logs_parsed('HTTP');
 ----
-3
+2
 
 # three previous
 # one to lookup schema main, and one to lookup schema 'default' again.
 query I
 select count(*) from duckdb_logs_parsed('HTTP');
 ----
-3
+2
 
 statement ok
 use memory;
@@ -60,9 +60,9 @@ use memory;
 query I
 select count(*) from duckdb_logs_parsed('HTTP');
 ----
-4
+2
 
 query I
 select count(*) from duckdb_logs_parsed('HTTP');
 ----
-4
+2

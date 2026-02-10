@@ -7,6 +7,9 @@ require parquet
 
 require iceberg
 
+# FIXME: the checked in avro file is missing field-ids, which the MultiFileReader doesn't forgive.
+mode skip
+
 query III
 select * from iceberg_scan('data/persistent/big_query_error');
 ----

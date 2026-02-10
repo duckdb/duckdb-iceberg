@@ -10,6 +10,7 @@
 #include "storage/iceberg_table_information.hpp"
 #include "storage/table_update/iceberg_add_snapshot.hpp"
 #include "storage/table_create/iceberg_create_table_request.hpp"
+#include "catalog_api.hpp"
 #include "catalog_utils.hpp"
 #include "yyjson.hpp"
 #include "metadata/iceberg_snapshot.hpp"
@@ -313,7 +314,7 @@ TableTransactionInfo IcebergTransaction::GetTransactionRequest(ClientContext &co
 			auto &manifest_list_path = current_snapshot->manifest_list;
 			//! Read the manifest list
 			auto manifest_list_reader = make_uniq<manifest_list::ManifestListReader>(metadata.iceberg_version);
-			auto scan = make_uniq<AvroScan>("IcebergManifestList", context, manifest_list_path);
+			auto scan = AvroScan::ScanManifestList(*current_snapshot, metadata, context, manifest_list_path);
 			manifest_list_reader->Initialize(std::move(scan));
 			while (!manifest_list_reader->Finished()) {
 				manifest_list_reader->Read(STANDARD_VECTOR_SIZE, commit_state.manifests);
@@ -357,7 +358,7 @@ TableTransactionInfo IcebergTransaction::GetTransactionRequest(ClientContext &co
 }
 
 void IcebergTransaction::Commit() {
-	if (updated_tables.empty() && deleted_tables.empty()) {
+	if (updated_tables.empty() && deleted_tables.empty() && created_schemas.empty() && deleted_schemas.empty()) {
 		return;
 	}
 
@@ -365,8 +366,10 @@ void IcebergTransaction::Commit() {
 	temp_con.BeginTransaction();
 	auto &temp_con_context = temp_con.context;
 	try {
+		DoSchemaCreates(*temp_con_context);
 		DoTableUpdates(*temp_con_context);
 		DoTableDeletes(*temp_con_context);
+		DoSchemaDeletes(*temp_con_context);
 	} catch (std::exception &ex) {
 		ErrorData error(ex);
 		CleanupFiles();
@@ -431,6 +434,39 @@ void IcebergTransaction::DoTableDeletes(ClientContext &context) {
 	}
 }
 
+void IcebergTransaction::DoSchemaCreates(ClientContext &context) {
+	auto &ic_catalog = catalog.Cast<IcebergCatalog>();
+	for (auto &schema_name : created_schemas) {
+		auto namespace_identifiers = IRCAPI::ParseSchemaName(schema_name);
+
+		std::unique_ptr<yyjson_mut_doc, YyjsonDocDeleter> doc_p(yyjson_mut_doc_new(nullptr));
+		auto doc = doc_p.get();
+		auto root_object = yyjson_mut_obj(doc);
+		yyjson_mut_doc_set_root(doc, root_object);
+		auto namespace_arr = yyjson_mut_obj_add_arr(doc, root_object, "namespace");
+		for (auto &name : namespace_identifiers) {
+			yyjson_mut_arr_add_strcpy(doc, namespace_arr, name.c_str());
+		}
+		yyjson_mut_obj_add_obj(doc, root_object, "properties");
+		auto create_body = JsonDocToString(std::move(doc_p));
+
+		IRCAPI::CommitNamespaceCreate(context, ic_catalog, create_body);
+	}
+	created_schemas.clear();
+}
+
+void IcebergTransaction::DoSchemaDeletes(ClientContext &context) {
+	auto &ic_catalog = catalog.Cast<IcebergCatalog>();
+	for (auto &schema_name : deleted_schemas) {
+		vector<string> namespace_items;
+		auto namespace_identifier = IRCAPI::ParseSchemaName(schema_name);
+		namespace_items.push_back(IRCAPI::GetEncodedSchemaName(namespace_identifier));
+		IRCAPI::CommitNamespaceDrop(context, ic_catalog, namespace_items);
+		ic_catalog.GetSchemas().RemoveEntry(schema_name);
+	}
+	deleted_schemas.clear();
+}
+
 void IcebergTransaction::CleanupFiles() {
 	// remove any files that were written
 	if (!catalog.attach_options.allows_deletes) {
@@ -440,6 +476,7 @@ void IcebergTransaction::CleanupFiles() {
 		return;
 	}
 	auto &fs = FileSystem::GetFileSystem(db);
+	vector<string> to_be_removed;
 	for (auto &up_table : updated_tables) {
 		auto &table = up_table.second;
 		if (!table.transaction_data) {
@@ -458,11 +495,13 @@ void IcebergTransaction::CleanupFiles() {
 			for (const auto &manifest : manifest_list_entries) {
 				for (auto &manifest_entry : manifest.manifest_file.entries) {
 					auto &data_file = manifest_entry.data_file;
-					fs.TryRemoveFile(data_file.file_path);
+					to_be_removed.push_back(data_file.file_path);
 				}
 			}
 		}
 	}
+
+	fs.RemoveFiles(to_be_removed);
 }
 
 void IcebergTransaction::Rollback() {

@@ -23,11 +23,14 @@ struct IcebergAttachOptions {
 	// if the catalog allows manual cleaning up of storage files.
 	bool allows_deletes = true;
 	bool support_nested_namespaces = false;
+	bool encode_entire_prefix = false;
 	// in rest api spec, purge requested defaults to false.
 	bool purge_requested = false;
 	IRCAccessDelegationMode access_mode = IRCAccessDelegationMode::VENDED_CREDENTIALS;
 	IcebergAuthorizationType authorization_type = IcebergAuthorizationType::INVALID;
 	unordered_map<string, Value> options;
+	// max staleness for cached table metadata in minutes (optional - if not set, always request fresh metadata)
+	optional_idx max_table_staleness_micros;
 };
 
 struct IcebergAuthorization {
@@ -39,6 +42,8 @@ public:
 
 public:
 	static IcebergAuthorizationType TypeFromString(const string &type);
+
+	static void ParseExtraHttpHeaders(const Value &headers_value, unordered_map<string, string> &out_headers);
 
 public:
 	virtual unique_ptr<HTTPResponse> Request(RequestType request_type, ClientContext &context,
@@ -65,6 +70,7 @@ public:
 public:
 	IcebergAuthorizationType type;
 	unique_ptr<HTTPClient> client;
+	unordered_map<string, string> extra_http_headers;
 };
 
 } // namespace duckdb

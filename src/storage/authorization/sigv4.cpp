@@ -4,6 +4,7 @@
 #include "duckdb/common/file_system.hpp"
 #include "duckdb/main/setting_info.hpp"
 #include "storage/catalog/iceberg_catalog.hpp"
+#include "duckdb/common/types/value.hpp"
 
 namespace duckdb {
 
@@ -49,6 +50,9 @@ unique_ptr<IcebergAuthorization> SIGV4Authorization::FromAttachOptions(IcebergAt
 				throw InvalidInputException("Duplicate 'secret' option detected!");
 			}
 			result->secret = StringUtil::Lower(entry.second.ToString());
+		} else if (lower_name == "extra_http_headers") {
+			// Parse extra_http_headers if provided directly in attach options
+			IcebergAuthorization::ParseExtraHttpHeaders(entry.second, result->extra_http_headers);
 		} else {
 			remaining_options.emplace(std::move(entry));
 		}
@@ -114,6 +118,12 @@ AWSInput SIGV4Authorization::CreateAWSInput(ClientContext &context, const IRCEnd
 unique_ptr<HTTPResponse> SIGV4Authorization::Request(RequestType request_type, ClientContext &context,
                                                      const IRCEndpointBuilder &endpoint_builder, HTTPHeaders &headers,
                                                      const string &data) {
+	// Note: For SIGV4, custom headers should be added BEFORE signing so they're included in the signature
+	// Merge extra HTTP headers first
+	for (auto &entry : extra_http_headers) {
+		headers.Insert(entry.first, entry.second);
+	}
+
 	auto aws_input = CreateAWSInput(context, endpoint_builder);
 	return aws_input.Request(request_type, context, client, headers, data);
 }
