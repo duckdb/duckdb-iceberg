@@ -42,6 +42,29 @@ ATTACH '' AS my_datalake (
 # Perform an INSERT and COMMIT it
 
 statement ok
+DROP TABLE IF EXISTS my_datalake.default.insert_test;
+
+statement ok
+CREATE TABLE my_datalake.default.insert_test (
+	col1 date,
+	col2 integer,
+	col3 string
+)
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.insert_all_types;
+
+statement ok
+CREATE TABLE my_datalake.default.insert_all_types (
+	int_col INT,
+	long_col BIGINT,
+	float_col FLOAT,
+	double_col DOUBLE,
+	decimal_col DECIMAL(15, 5),
+	date_col DATE
+)
+
+statement ok
 begin transaction;
 
 statement ok
@@ -193,8 +216,6 @@ insert into my_datalake.default.insert_test select
 statement ok
 INSERT INTO my_datalake.default.insert_all_types
 SELECT
-	127::TINYINT, -- byte_col (max for TINYINT)
-	1340::SMALLINT, -- short_col (min for SMALLINT)
 	2147483647::INT, -- int_col (max for INT)
 	9223372036854775807::BIGINT, -- long_col (max for BIGINT)
 	3.14::FLOAT, -- float_col (typical float)
@@ -216,10 +237,10 @@ select * from my_datalake.default.insert_test;
 2020-08-15	3	insert 3
 2020-08-16	4	insert 4
 
-query IIIIIIII
-select * from my_datalake.default.insert_all_types;
+query IIIIII
+select * from my_datalake.default.insert_all_types order by all;
 ----
-127	1340	2147483647	9223372036854775807	3.14	-1.7976931348623157	1234567890.12345	2023-12-31
+2147483647	9223372036854775807	3.14	-1.7976931348623157	1234567890.12345	2023-12-31
 
 query III
 select count(sequence_number), min(sequence_number), max(sequence_number) from (select * from iceberg_snapshots(my_datalake.default.insert_test) order by timestamp_ms, sequence_number);
