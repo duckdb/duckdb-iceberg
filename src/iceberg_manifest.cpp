@@ -28,7 +28,29 @@ Value IcebergDataFile::ToValue(const LogicalType &type) const {
 		for (auto &entry : partition_info) {
 			auto new_value = Value();
 			string error_message;
-			const LogicalType actual_type = entry.source_type;
+			LogicalType partition_result_type;
+			switch (entry.transform.Type()) {
+			case IcebergTransformType::IDENTITY:
+				partition_result_type = entry.source_type;
+				break;
+			case IcebergTransformType::BUCKET:
+			case IcebergTransformType::TRUNCATE:
+				partition_result_type = LogicalType::VARCHAR;
+				break;
+			case IcebergTransformType::DAY:
+			case IcebergTransformType::MONTH:
+			case IcebergTransformType::YEAR:
+			case IcebergTransformType::HOUR:
+				partition_result_type = LogicalType::BIGINT;
+				break;
+			case IcebergTransformType::INVALID:
+			case IcebergTransformType::VOID:
+				throw InvalidInputException("Cannot use this transform type");
+				break;
+			default:
+				throw InvalidInputException("Unrecognized transform");
+			}
+			const LogicalType actual_type = partition_result_type;
 			bool cast_worked = entry.value.DefaultTryCastAs(actual_type, new_value, &error_message, true);
 			if (cast_worked) {
 				partition_children.emplace_back(entry.name, new_value);
