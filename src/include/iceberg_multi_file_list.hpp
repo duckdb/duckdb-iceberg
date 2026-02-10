@@ -28,6 +28,8 @@
 
 namespace duckdb {
 
+enum class IcebergDataFileType : uint8_t { DATA, DELETE };
+
 struct IcebergMultiFileList : public MultiFileList {
 public:
 	IcebergMultiFileList(ClientContext &context, shared_ptr<IcebergScanInfo> scan_info, const string &path,
@@ -79,7 +81,7 @@ protected:
 
 protected:
 	bool ManifestMatchesFilter(const IcebergManifestFile &manifest) const;
-	bool FileMatchesFilter(const IcebergManifestEntry &file) const;
+	bool FileMatchesFilter(const IcebergManifestEntry &file, IcebergDataFileType file_type) const;
 	// TODO: How to guarantee we only call this after the filter pushdown?
 	void InitializeFiles(lock_guard<mutex> &guard) const;
 

@@ -94,6 +94,17 @@ string CatalogConfig::TryFromJSON(yyjson_val *obj) {
 			                          yyjson_get_type_desc(endpoints_val));
 		}
 	}
+	auto idempotency_key_lifetime_val = yyjson_obj_get(obj, "idempotency-key-lifetime");
+	if (idempotency_key_lifetime_val) {
+		has_idempotency_key_lifetime = true;
+		if (yyjson_is_str(idempotency_key_lifetime_val)) {
+			idempotency_key_lifetime = yyjson_get_str(idempotency_key_lifetime_val);
+		} else {
+			return StringUtil::Format(
+			    "CatalogConfig property 'idempotency_key_lifetime' is not of type 'string', found '%s' instead",
+			    yyjson_get_type_desc(idempotency_key_lifetime_val));
+		}
+	}
 	return string();
 }
 

@@ -30,6 +30,7 @@ public:
 	string type;
 	int32_t code;
 	vector<string> stack;
+	bool has_stack = false;
 };
 
 } // namespace rest_api_objects

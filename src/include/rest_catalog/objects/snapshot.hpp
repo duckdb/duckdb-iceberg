@@ -54,6 +54,8 @@ public:
 	bool has_sequence_number = false;
 	int64_t first_row_id;
 	bool has_first_row_id = false;
+	int64_t added_rows;
+	bool has_added_rows = false;
 	int32_t schema_id;
 	bool has_schema_id = false;
 };

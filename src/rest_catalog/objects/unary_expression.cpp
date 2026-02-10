@@ -44,16 +44,6 @@ string UnaryExpression::TryFromJSON(yyjson_val *obj) {
 			return error;
 		}
 	}
-	auto value_val = yyjson_obj_get(obj, "value");
-	if (!value_val) {
-		return "UnaryExpression required property 'value' is missing";
-	} else {
-		if (yyjson_is_obj(value_val)) {
-			value = value_val;
-		} else {
-			return "UnaryExpression property 'value' is not of type 'object'";
-		}
-	}
 	return string();
 }
 

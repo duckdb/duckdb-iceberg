@@ -30,7 +30,7 @@ string Snapshot::Object2::TryFromJSON(yyjson_val *obj) {
 	string error;
 	auto operation_val = yyjson_obj_get(obj, "operation");
 	if (!operation_val) {
-		operation = "overwrite";
+		return "Object2 required property 'operation' is missing";
 	} else {
 		if (yyjson_is_str(operation_val)) {
 			operation = yyjson_get_str(operation_val);
@@ -152,6 +152,18 @@ string Snapshot::TryFromJSON(yyjson_val *obj) {
 		} else {
 			return StringUtil::Format("Snapshot property 'first_row_id' is not of type 'integer', found '%s' instead",
 			                          yyjson_get_type_desc(first_row_id_val));
+		}
+	}
+	auto added_rows_val = yyjson_obj_get(obj, "added-rows");
+	if (added_rows_val) {
+		has_added_rows = true;
+		if (yyjson_is_sint(added_rows_val)) {
+			added_rows = yyjson_get_sint(added_rows_val);
+		} else if (yyjson_is_uint(added_rows_val)) {
+			added_rows = yyjson_get_uint(added_rows_val);
+		} else {
+			return StringUtil::Format("Snapshot property 'added_rows' is not of type 'integer', found '%s' instead",
+			                          yyjson_get_type_desc(added_rows_val));
 		}
 	}
 	auto schema_id_val = yyjson_obj_get(obj, "schema-id");

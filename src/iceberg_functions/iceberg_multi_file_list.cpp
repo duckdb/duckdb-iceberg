@@ -318,7 +318,8 @@ IcebergPredicateStats IcebergPredicateStats::DeserializeBounds(const Value &lowe
 	return res;
 }
 
-bool IcebergMultiFileList::FileMatchesFilter(const IcebergManifestEntry &manifest_entry) const {
+bool IcebergMultiFileList::FileMatchesFilter(const IcebergManifestEntry &manifest_entry,
+                                             IcebergDataFileType file_type) const {
 	D_ASSERT(!table_filters.filters.empty());
 
 	auto &filters = table_filters.filters;
@@ -395,8 +396,10 @@ bool IcebergMultiFileList::FileMatchesFilter(const IcebergManifestEntry &manifes
 				}
 			}
 		}
-		if (data_file.lower_bounds.empty() || data_file.upper_bounds.empty()) {
-			//! There are no bounds statistics for the file, can't filter
+		if (data_file.lower_bounds.empty() || data_file.upper_bounds.empty() ||
+		    file_type == IcebergDataFileType::DELETE) {
+			// There are no bounds statistics for the file, can't filter,
+			// or it is a delete file, which should only be filtered on partitions
 			continue;
 		}
 
@@ -415,18 +418,30 @@ bool IcebergMultiFileList::FileMatchesFilter(const IcebergManifestEntry &manifes
 		auto stats = IcebergPredicateStats::DeserializeBounds(lower_bound, upper_bound, column.name, column.type);
 
 		int64_t value_count = 0;
+		bool has_value_counts = false;
 		auto value_counts_it = data_file.value_counts.find(column_id);
 		if (value_counts_it != data_file.value_counts.end()) {
 			value_count = value_counts_it->second;
+			has_value_counts = true;
 		}
 
 		auto null_counts_it = data_file.null_value_counts.find(column_id);
 		if (null_counts_it != data_file.null_value_counts.end()) {
 			auto &null_counts = null_counts_it->second;
 			stats.has_null = null_counts != 0;
-			stats.has_not_null = (value_count - null_counts) > 0;
+			if (has_value_counts) {
+				stats.has_not_null = (value_count - null_counts) > 0;
+			} else {
+				// if no value counts are active, assume there are values
+				stats.has_not_null = true;
+			}
 		} else {
-			stats.has_not_null = value_count > 0;
+			if (has_value_counts) {
+				stats.has_not_null = value_count > 0;
+			} else {
+				// if no value counts are active, assume there are values
+				stats.has_not_null = true;
+			}
 		}
 
 		auto nan_counts_it = data_file.nan_value_counts.find(column_id);
@@ -483,7 +498,7 @@ optional_ptr<const IcebergManifestEntry> IcebergMultiFileList::GetDataFile(idx_t
 			auto &data_file = manifest_entry.data_file;
 			manifest_entry_idx++;
 			// Check whether current data file is filtered out.
-			if (!table_filters.filters.empty() && !FileMatchesFilter(manifest_entry)) {
+			if (!table_filters.filters.empty() && !FileMatchesFilter(manifest_entry, IcebergDataFileType::DATA)) {
 				DUCKDB_LOG(context, IcebergLogType, "Iceberg Filter Pushdown, skipped 'data_file': '%s'",
 				           data_file.file_path);
 				//! Skip this file
@@ -721,7 +736,7 @@ void IcebergMultiFileList::ProcessDeletes(const vector<MultiFileColumnDefinition
 		for (auto &manifest_entry : entries) {
 			auto &data_file = manifest_entry.data_file;
 			// Check whether current data file is filtered out.
-			if (!table_filters.filters.empty() && !FileMatchesFilter(manifest_entry)) {
+			if (!table_filters.filters.empty() && !FileMatchesFilter(manifest_entry, IcebergDataFileType::DELETE)) {
 				DUCKDB_LOG(context, IcebergLogType, "Iceberg Filter Pushdown, skipped 'data_file': '%s'",
 				           data_file.file_path);
 				//! Skip this file

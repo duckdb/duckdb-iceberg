@@ -7,6 +7,7 @@
 #include "duckdb/common/case_insensitive_map.hpp"
 #include "rest_catalog/objects/plan_status.hpp"
 #include "rest_catalog/objects/scan_tasks.hpp"
+#include "rest_catalog/objects/storage_credential.hpp"
 
 using namespace duckdb_yyjson;
 
@@ -36,6 +37,8 @@ public:
 
 	public:
 		PlanStatus status;
+		vector<StorageCredential> storage_credentials;
+		bool has_storage_credentials = false;
 	};
 
 public:

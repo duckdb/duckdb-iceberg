@@ -68,6 +68,19 @@ string PlanTableScanRequest::TryFromJSON(yyjson_val *obj) {
 			return error;
 		}
 	}
+	auto min_rows_requested_val = yyjson_obj_get(obj, "min-rows-requested");
+	if (min_rows_requested_val) {
+		has_min_rows_requested = true;
+		if (yyjson_is_sint(min_rows_requested_val)) {
+			min_rows_requested = yyjson_get_sint(min_rows_requested_val);
+		} else if (yyjson_is_uint(min_rows_requested_val)) {
+			min_rows_requested = yyjson_get_uint(min_rows_requested_val);
+		} else {
+			return StringUtil::Format(
+			    "PlanTableScanRequest property 'min_rows_requested' is not of type 'integer', found '%s' instead",
+			    yyjson_get_type_desc(min_rows_requested_val));
+		}
+	}
 	auto case_sensitive_val = yyjson_obj_get(obj, "case-sensitive");
 	if (case_sensitive_val) {
 		has_case_sensitive = true;
