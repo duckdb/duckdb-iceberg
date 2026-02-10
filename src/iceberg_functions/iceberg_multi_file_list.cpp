@@ -384,6 +384,13 @@ bool IcebergMultiFileList::FileMatchesFilter(const IcebergManifestEntry &manifes
 
 				// if the filter doesn't match the partition value, we don't need to scan the data file
 				if (!IcebergPredicate::MatchBounds(context, *table_filter, stats, field.transform)) {
+					auto &source_column = IcebergTableSchema::GetFromColumnIndex(schema, column_id, 0);
+					DUCKDB_LOG(context, IcebergLogType,
+					           "Iceberg Filter Pushdown, skipped 'data_file': '%s', partition column '%s' with "
+					           "transform '%s', value '%s' did not match filter: %s",
+					           data_file.file_path, source_column.name, field.transform.RawType(),
+					           stats.has_lower_bounds ? stats.lower_bound.ToString() : "NULL",
+					           table_filter->ToString(source_column.name));
 					return false;
 				}
 			}
@@ -431,6 +438,13 @@ bool IcebergMultiFileList::FileMatchesFilter(const IcebergManifestEntry &manifes
 		auto &filter = *it->second;
 		if (!IcebergPredicate::MatchBounds(context, filter, stats, IcebergTransform::Identity())) {
 			//! If any predicate fails, exclude the file
+			DUCKDB_LOG(context, IcebergLogType,
+			           "Iceberg Filter Pushdown, skipped 'data_file': '%s', column '%s' with "
+			           "bounds [%s, %s] did not match filter: %s",
+			           data_file.file_path, column.name,
+			           stats.has_lower_bounds ? stats.lower_bound.ToString() : "N/A",
+			           stats.has_upper_bounds ? stats.upper_bound.ToString() : "N/A",
+			           filter.ToString(column.name));
 			return false;
 		}
 	}
@@ -486,8 +500,6 @@ optional_ptr<const IcebergManifestEntry> IcebergMultiFileList::GetDataFile(idx_t
 			manifest_entry_idx++;
 			// Check whether current data file is filtered out.
 			if (!table_filters.filters.empty() && !FileMatchesFilter(manifest_entry)) {
-				DUCKDB_LOG(context, IcebergLogType, "Iceberg Filter Pushdown, skipped 'data_file': '%s'",
-				           data_file.file_path);
 				//! Skip this file
 				continue;
 			}
@@ -605,6 +617,13 @@ bool IcebergMultiFileList::ManifestMatchesFilter(const IcebergManifestFile &mani
 		stats.has_not_null = true; // Not enough information in field_summary to determine if this should be false
 
 		if (!IcebergPredicate::MatchBounds(context, *table_filter, stats, field.transform)) {
+			DUCKDB_LOG(context, IcebergLogType,
+			           "Iceberg Filter Pushdown, skipped 'manifest_file': '%s', column '%s' with "
+			           "transform '%s', bounds [%s, %s] did not match filter: %s",
+			           manifest.manifest_path, column.name, field.transform.RawType(),
+			           stats.has_lower_bounds ? stats.lower_bound.ToString() : "N/A",
+			           stats.has_upper_bounds ? stats.upper_bound.ToString() : "N/A",
+			           table_filter->ToString(column.name));
 			return false;
 		}
 	}
@@ -645,8 +664,6 @@ void IcebergMultiFileList::InitializeFiles(lock_guard<mutex> &guard) const {
 
 		for (auto &manifest : manifest_list_entries) {
 			if (!ManifestMatchesFilter(manifest)) {
-				DUCKDB_LOG(context, IcebergLogType, "Iceberg Filter Pushdown, skipped 'manifest_file': '%s'",
-				           manifest.manifest_path);
 				//! Skip this manifest
 				continue;
 			}
@@ -667,8 +684,6 @@ void IcebergMultiFileList::InitializeFiles(lock_guard<mutex> &guard) const {
 			auto &manifest_list_entries = alter.manifest_list.GetManifestFilesMutable();
 			for (auto &manifest : manifest_list_entries) {
 				if (!ManifestMatchesFilter(manifest)) {
-					DUCKDB_LOG(context, IcebergLogType, "Iceberg Filter Pushdown, skipped 'manifest_file': '%s'",
-					           manifest.manifest_path);
 					//! Skip this manifest
 					continue;
 				}
@@ -728,8 +743,6 @@ void IcebergMultiFileList::ProcessDeletes(const vector<MultiFileColumnDefinition
 			auto &data_file = manifest_entry.data_file;
 			// Check whether current data file is filtered out.
 			if (!table_filters.filters.empty() && !FileMatchesFilter(manifest_entry)) {
-				DUCKDB_LOG(context, IcebergLogType, "Iceberg Filter Pushdown, skipped 'data_file': '%s'",
-				           data_file.file_path);
 				//! Skip this file
 				continue;
 			}
