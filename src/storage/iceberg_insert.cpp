@@ -6,6 +6,7 @@
 #include "iceberg_multi_file_list.hpp"
 #include "storage/iceberg_transaction.hpp"
 #include "iceberg_value.hpp"
+#include "metadata/iceberg_transform.hpp"
 #include "utils/iceberg_type.hpp"
 #include "duckdb/catalog/catalog_entry/copy_function_catalog_entry.hpp"
 #include "duckdb/main/client_data.hpp"
@@ -135,6 +136,9 @@ static void AddToColDefMap(case_insensitive_map_t<optional_ptr<IcebergColumnDefi
 //! Get the name for a partition expression (used in hive-style paths)
 static string GetPartitionExpressionName(const IcebergPartitionSpecField &field) {
 	// Use the partition field name directly
+	if (field.transform.Type() == IcebergTransformType::IDENTITY) {
+		return field.name;
+	}
 	return field.name + "_" + field.transform.RawType();
 }
 
@@ -199,7 +203,6 @@ void IcebergInsert::AddWrittenFiles(IcebergInsertGlobalState &global_state, Data
 
 		auto partition_values = chunk.GetValue(5, r);
 		auto &partition_children = MapValue::GetChildren(partition_values);
-		auto &partition_vals = StructValue::GetChildren(partition_children[0]);
 
 		auto table_current_schema_id = ic_table.table_info.table_metadata.current_schema_id;
 		auto ic_schema = ic_table.table_info.table_metadata.schemas[table_current_schema_id];
@@ -649,14 +652,14 @@ PhysicalOperator &IcebergInsert::PlanCopyForInsert(ClientContext &context, Physi
 		physical_copy_ref.file_path = copy_input.data_path;
 		physical_copy_ref.partition_output = true;
 		physical_copy_ref.partition_columns = partition_columns;
-		physical_copy_ref.write_partition_columns = false;
+		physical_copy_ref.write_partition_columns = write_partition_columns;
 		physical_copy_ref.write_empty_file = true;
 		physical_copy_ref.rotate = false;
 	} else {
 		physical_copy_ref.filename_pattern.SetFilenamePattern("{uuidv7}");
 		physical_copy_ref.file_path = copy_input.data_path;
 		physical_copy_ref.partition_output = false;
-		physical_copy_ref.write_partition_columns = true;
+		physical_copy_ref.write_partition_columns = false;
 		physical_copy_ref.write_empty_file = false;
 		physical_copy_ref.file_size_bytes = IcebergCatalog::DEFAULT_TARGET_FILE_SIZE;
 		physical_copy_ref.rotate = true;

@@ -280,13 +280,13 @@ int64_t IcebergTableInformation::GetExistingSpecId(IcebergPartitionSpec &spec) {
 		bool fields_match = true;
 		for (idx_t field_index = 0; field_index < existing_spec.second.fields.size(); field_index++) {
 			auto existing_partition_col_source_id = existing_spec.second.fields[field_index].source_id;
-			auto new_spec_col_source_id = existing_spec.second.fields[field_index].source_id;
+			auto new_spec_col_source_id = spec.fields[field_index].source_id;
 			if (existing_partition_col_source_id != new_spec_col_source_id) {
 				fields_match = false;
 				break;
 			}
 			auto existing_partition_col_transform = existing_spec.second.fields[field_index].transform.RawType();
-			auto new_spec_col_transform = existing_spec.second.fields[field_index].transform.RawType();
+			auto new_spec_col_transform = spec.fields[field_index].transform.RawType();
 			if (existing_partition_col_transform != new_spec_col_transform) {
 				fields_match = false;
 				break;
