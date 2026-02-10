@@ -1,5 +1,5 @@
 # name: test/sql/local/irc/reads/partitioned_reads/test_read_from_month_partitioned_date.test
-# group: [reads]
+# group: [partitioned_reads]
 
 require-env ICEBERG_SERVER_AVAILABLE
 
