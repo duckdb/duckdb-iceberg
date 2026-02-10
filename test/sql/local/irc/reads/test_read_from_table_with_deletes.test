@@ -15,9 +15,6 @@ require httpfs
 set ignore_error_messages
 
 statement ok
-CALL enable_logging('HTTP');
-
-statement ok
 set logging_level='debug'
 
 statement ok
@@ -30,9 +27,8 @@ TYPE S3,
   USE_SSL 0
 );
 
-
 statement ok
-ATTACH '' AS s3_tables (
+ATTACH '' AS my_datalake (
   TYPE ICEBERG,
   CLIENT_ID 'admin',
   CLIENT_SECRET 'password',
@@ -40,34 +36,41 @@ ATTACH '' AS s3_tables (
 );
 
 statement ok
-DROP TABLE if EXISTS s3_tables."default".table_test;
+DROP TABLE if EXISTS my_datalake."default".test_filter_deletes;
 
 statement ok
-create table s3_tables."default".table_test as
-select * from read_csv('data/data_test.csv');
+create table my_datalake."default".test_filter_deletes as
+from values (NULL, 'b') t(a, b);
 
 statement ok
-select * from s3_tables."default".table_test where invoice_refunded is null;
+insert into my_datalake."default".test_filter_deletes values (NULL, 'b');
 
-statement ok
-insert into s3_tables."default".table_test
-select * from read_csv('data/data_test.csv');
-
-query I
-select count(*) from s3_tables."default".table_test where invoice_refunded is null;
+query II
+select * from my_datalake."default".test_filter_deletes;
 ----
-2
+NULL	b
+NULL	b
+
+query II
+select * from my_datalake."default".test_filter_deletes where a is null;
+----
+NULL	b
+NULL	b
+
+query II
+select * from my_datalake."default".test_filter_deletes where a is not null;
+----
 
 statement ok
-DELETE FROM s3_tables."default".table_test WHERE month = '2026-01-01 00:00:00.000'
+DELETE FROM my_datalake."default".test_filter_deletes WHERE b = 'b';
 
-query I
-select count(*) from s3_tables."default".table_test;
+# rows are empty
+query II
+select * from my_datalake."default".test_filter_deletes;
 ----
-0
 
 # but it currently returns 2, because we skip the delete files because of the filter
 query I
-select count(*) from s3_tables."default".table_test where invoice_refunded is null;
+select count(*) from my_datalake."default".test_filter_deletes where a is null;
 ----
 0

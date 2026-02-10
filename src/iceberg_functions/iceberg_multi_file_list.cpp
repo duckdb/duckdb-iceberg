@@ -408,18 +408,30 @@ bool IcebergMultiFileList::FileMatchesFilter(const IcebergManifestEntry &file,
 		auto stats = IcebergPredicateStats::DeserializeBounds(lower_bound, upper_bound, column.name, column.type);
 
 		int64_t value_count = 0;
+		bool has_value_counts = false;
 		auto value_counts_it = file.value_counts.find(column_id);
 		if (value_counts_it != file.value_counts.end()) {
 			value_count = value_counts_it->second;
+			has_value_counts = true;
 		}
 
 		auto null_counts_it = file.null_value_counts.find(column_id);
 		if (null_counts_it != file.null_value_counts.end()) {
 			auto &null_counts = null_counts_it->second;
 			stats.has_null = null_counts != 0;
-			stats.has_not_null = (value_count - null_counts) > 0;
+			if (has_value_counts) {
+				stats.has_not_null = (value_count - null_counts) > 0;
+			} else {
+				// if no value counts are active, assume there are values
+				stats.has_not_null = true;
+			}
 		} else {
-			stats.has_not_null = value_count > 0;
+			if (has_value_counts) {
+				stats.has_not_null = value_count > 0;
+			} else {
+				// if no value counts are active, assume there are values
+				stats.has_not_null = true;
+			}
 		}
 
 		auto nan_counts_it = file.nan_value_counts.find(column_id);
