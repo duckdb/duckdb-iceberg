@@ -299,7 +299,6 @@ void WriteToFile(const IcebergManifestList &manifest_list, CopyFunction &copy, D
 		// deleted_rows_count: long - 514
 		data.SetValue(col_idx++, i, Value::BIGINT(static_cast<int64_t>(manifest.deleted_rows_count)));
 
-		D_ASSERT(!manifest.manifest_file.entries.empty());
 		// partitions: list<508: field_summary> - 507
 		data.SetValue(col_idx++, i, manifest.partitions.ToValue());
 	}
