@@ -238,7 +238,6 @@ void IcebergInsert::AddWrittenFiles(IcebergInsertGlobalState &global_state, Data
 			for (auto &partition_val : partition_children) {
 				auto &struct_val = StructValue::GetChildren(partition_val);
 				auto &partition_name = StringValue::Get(struct_val[0]);
-				auto &partition_value = StringValue::Get(struct_val[1]);
 				auto field_it = partition_colname_to_field.find(partition_name);
 				D_ASSERT(field_it != partition_colname_to_field.end());
 				auto &partition_field = field_it->second.get();
@@ -250,7 +249,11 @@ void IcebergInsert::AddWrittenFiles(IcebergInsertGlobalState &global_state, Data
 				info.field_id = partition_field.partition_field_id;
 				info.transform = partition_field.transform;
 				info.source_type = source_type;
-				info.value = Value(partition_value);
+				if (!struct_val[1].IsNull()) {
+					info.value = Value(StringValue::Get(struct_val[1]));
+				} else {
+					info.value = Value();
+				}
 				data_file.partition_info.push_back(std::move(info));
 			}
 		}

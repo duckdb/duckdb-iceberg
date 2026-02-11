@@ -6,6 +6,7 @@
 #include "duckdb/parser/expression/columnref_expression.hpp"
 #include "duckdb/parser/expression/function_expression.hpp"
 #include "duckdb/common/exception/transaction_exception.hpp"
+#include "duckdb/common/types/string.hpp"
 #include "duckdb/common/types/timestamp.hpp"
 #include "storage/iceberg_transaction.hpp"
 #include "storage/iceberg_transaction_data.hpp"
@@ -280,6 +281,11 @@ int64_t IcebergTableInformation::GetExistingSpecId(IcebergPartitionSpec &spec) {
 		bool fields_match = true;
 		for (idx_t field_index = 0; field_index < existing_spec.second.fields.size(); field_index++) {
 			auto existing_partition_col_source_id = existing_spec.second.fields[field_index].source_id;
+			// if the number of partition columns don't match, the specs are not the same
+			if (existing_spec.second.fields.size() != spec.fields.size()) {
+				fields_match = false;
+				break;
+			}
 			auto new_spec_col_source_id = spec.fields[field_index].source_id;
 			if (existing_partition_col_source_id != new_spec_col_source_id) {
 				fields_match = false;
@@ -292,7 +298,7 @@ int64_t IcebergTableInformation::GetExistingSpecId(IcebergPartitionSpec &spec) {
 				break;
 			}
 		}
-		if (!fields_match || existing_spec.second.fields.size() != spec.fields.size()) {
+		if (!fields_match) {
 			continue;
 		}
 		// source ids are the same, transforms are the same, and partition amount is the same
@@ -302,7 +308,6 @@ int64_t IcebergTableInformation::GetExistingSpecId(IcebergPartitionSpec &spec) {
 	}
 	return existing_spec_id;
 }
-
 void IcebergTableInformation::SetPartitionedBy(IcebergTransaction &transaction,
                                                const vector<unique_ptr<ParsedExpression>> &partition_keys,
                                                const IcebergTableSchema &schema, bool first_partition_spec) {
