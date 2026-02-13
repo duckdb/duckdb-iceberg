@@ -309,8 +309,7 @@ IcebergPredicateStats IcebergPredicateStats::DeserializeBounds(const Value &lowe
 	return res;
 }
 
-bool IcebergMultiFileList::FileMatchesFilter(const IcebergManifestEntry &file,
-                                             IcebergDataFileType file_type) const {
+bool IcebergMultiFileList::FileMatchesFilter(const IcebergManifestEntry &file, IcebergDataFileType file_type) const {
 	D_ASSERT(!table_filters.filters.empty());
 
 	auto &filters = table_filters.filters;
@@ -386,8 +385,7 @@ bool IcebergMultiFileList::FileMatchesFilter(const IcebergManifestEntry &file,
 				}
 			}
 		}
-		if (file.lower_bounds.empty() || file.upper_bounds.empty() ||
-		    file_type == IcebergDataFileType::DELETE) {
+		if (file.lower_bounds.empty() || file.upper_bounds.empty() || file_type == IcebergDataFileType::DELETE) {
 			// There are no bounds statistics for the file, can't filter,
 			// or it is a delete file, which should only be filtered on partitions
 			continue;
