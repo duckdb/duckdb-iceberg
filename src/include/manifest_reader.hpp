@@ -39,7 +39,7 @@ protected:
 
 namespace manifest_list {
 
-//! Produces IcebergManifests read, from the 'manifest_file'
+//! Produces IcebergManifests read, from the 'manifest_list'
 class ManifestListReader : public BaseManifestReader {
 public:
 	ManifestListReader(const AvroScan &scan);

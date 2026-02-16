@@ -479,6 +479,12 @@ PhysicalOperator &IcebergCatalog::PlanInsert(ClientContext &context, PhysicalPla
 	VerifyDirectInsertionOrder(op);
 
 	auto &table_entry = op.table.Cast<IcebergTableEntry>();
+	// FIXME: Inserts into V3 tables is not yet supported since
+	// we need to keep track of row lineage, which we do not support
+	// https://iceberg.apache.org/spec/#row-lineage
+	if (table_entry.table_info.table_metadata.iceberg_version == 3) {
+		throw NotImplementedException("Insert into Iceberg V3 tables");
+	}
 	table_entry.PrepareIcebergScanFromEntry(context);
 	auto &table_info = table_entry.table_info;
 	auto &schema = table_info.table_metadata.GetLatestSchema();

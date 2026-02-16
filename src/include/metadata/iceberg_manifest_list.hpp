@@ -75,14 +75,14 @@ public:
 	int64_t manifest_length;
 	//! The id of the partition spec referenced by this manifest (and the data files that are part of it)
 	int32_t partition_spec_id;
+	bool has_first_row_id = false;
+	sequence_number_t first_row_id = 0xDEADBEEF;
 	//! either data or deletes
 	IcebergManifestContentType content;
 	//! sequence_number when manifest was added to table (0 for Iceberg v1)
 	sequence_number_t sequence_number = 0xDEADBEEF;
 	bool has_min_sequence_number = false;
 	sequence_number_t min_sequence_number = 0;
-	bool has_first_row_id = false;
-	sequence_number_t first_row_id = 0xDEADBEEF;
 	int64_t added_snapshot_id = -1;
 	//! added files count
 	idx_t added_files_count = 0;
