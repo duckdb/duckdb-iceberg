@@ -56,7 +56,7 @@ DESCRIBE SELECT * FROM my_datalake.default.pyspark_iceberg_table_v1 ORDER BY uui
 ----
 
 query I nosort q1-schema
-DESCRIBE SELECT * FROM iceberg_scan(my_datalake.default.pyspark_iceberg_table_v1, version=9) ORDER BY uuid;
+DESCRIBE SELECT * FROM iceberg_scan(my_datalake.default.pyspark_iceberg_table_v1, version=10) ORDER BY uuid;
 ----
 
 query I nosort q1-schema
@@ -69,7 +69,7 @@ SELECT * FROM my_datalake.default.pyspark_iceberg_table_v1 ORDER BY uuid;
 ----
 
 query I nosort q1-data
-SELECT * FROM iceberg_scan(my_datalake.default.pyspark_iceberg_table_v1, version=9) ORDER BY uuid;
+SELECT * FROM iceberg_scan(my_datalake.default.pyspark_iceberg_table_v1, version=10) ORDER BY uuid;
 ----
 
 query I nosort q1-data
@@ -91,7 +91,7 @@ SELECT count(*) FROM my_datalake.default.pyspark_iceberg_table_v2;
 
 # We should also be able to scan the metadata file directly
 query I nosort count_match_r1
-SELECT count(*) FROM iceberg_scan(my_datalake.default.pyspark_iceberg_table_v2, version=9);
+SELECT count(*) FROM iceberg_scan(my_datalake.default.pyspark_iceberg_table_v2, version=10);
 ----
 
 # Check schema is identical, sorting by uuid to guarantee unique order
@@ -100,7 +100,7 @@ DESCRIBE SELECT * FROM my_datalake.default.pyspark_iceberg_table_v2 ORDER BY uui
 ----
 
 query I nosort q2-schema
-DESCRIBE SELECT * FROM iceberg_scan(my_datalake.default.pyspark_iceberg_table_v2, version=9) ORDER BY uuid;
+DESCRIBE SELECT * FROM iceberg_scan(my_datalake.default.pyspark_iceberg_table_v2, version=10) ORDER BY uuid;
 ----
 
 query I nosort q2-schema
@@ -114,7 +114,7 @@ SELECT * FROM my_datalake.default.pyspark_iceberg_table_v2 ORDER BY uuid;
 
 # Check data is identical, sorting by uuid to guarantee unique order
 query I nosort q2-data
-SELECT * FROM iceberg_scan(my_datalake.default.pyspark_iceberg_table_v2, version=9) ORDER BY uuid;
+SELECT * FROM iceberg_scan(my_datalake.default.pyspark_iceberg_table_v2, version=10) ORDER BY uuid;
 ----
 
 query I nosort q2-data
@@ -125,7 +125,7 @@ SELECT * FROM intermediates.default.pyspark_iceberg_table_v2 ORDER BY uuid;
 
 # Latest metadata version has correct type
 query IIIIII
-DESCRIBE SELECT schema_evol_added_col_1 FROM iceberg_scan(my_datalake.default.pyspark_iceberg_table_v2, version=9) ORDER BY uuid;
+DESCRIBE SELECT schema_evol_added_col_1 FROM iceberg_scan(my_datalake.default.pyspark_iceberg_table_v2, version=10) ORDER BY uuid;
 ----
 schema_evol_added_col_1	BIGINT	YES	NULL	NULL	NULL
 

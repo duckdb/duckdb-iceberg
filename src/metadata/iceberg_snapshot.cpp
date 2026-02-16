@@ -1,5 +1,6 @@
 #include "metadata/iceberg_snapshot.hpp"
 #include "metadata/iceberg_table_metadata.hpp"
+#include "storage/iceberg_table_information.hpp"
 
 namespace duckdb {
 
@@ -18,7 +19,7 @@ static string OperationTypeToString(IcebergSnapshotOperationType type) {
 	}
 }
 
-rest_api_objects::Snapshot IcebergSnapshot::ToRESTObject() const {
+rest_api_objects::Snapshot IcebergSnapshot::ToRESTObject(const IcebergTableInformation &table_info) const {
 	rest_api_objects::Snapshot res;
 
 	res.snapshot_id = snapshot_id;
@@ -38,6 +39,11 @@ rest_api_objects::Snapshot IcebergSnapshot::ToRESTObject() const {
 		res.added_rows = added_rows;
 	}
 
+	if (has_added_rows) {
+		res.has_added_rows = true;
+		res.added_rows = added_rows;
+	}
+
 	res.has_sequence_number = true;
 	res.sequence_number = sequence_number;
 
@@ -48,6 +54,13 @@ rest_api_objects::Snapshot IcebergSnapshot::ToRESTObject() const {
 		res.first_row_id = first_row_id;
 	} else {
 		throw InternalException("first-row-id required");
+	}
+
+	if (has_first_row_id) {
+		res.has_first_row_id = true;
+		res.first_row_id = first_row_id;
+	} else if (table_info.GetIcebergVersion() >= 3) {
+		throw InternalException("first-row-id required for V3 tables!");
 	}
 
 	return res;

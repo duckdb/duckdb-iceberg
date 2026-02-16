@@ -1,5 +1,5 @@
 pyspark==4.0.1
-duckdb
+duckdb==1.4.0
 pydantic==2.9.0
 pyiceberg==0.9.1
 pyarrow

@@ -302,7 +302,7 @@ PhysicalOperator &IcebergCatalog::PlanDelete(ClientContext &context, PhysicalPla
 	vector<idx_t> row_id_indexes;
 	// we only push 2 columns for positional deletes
 	for (idx_t i = 0; i < 2; i++) {
-		auto &bound_ref = op.expressions[i]->Cast<BoundReferenceExpression>();
+		auto &bound_ref = op.expressions[1 + i]->Cast<BoundReferenceExpression>();
 		row_id_indexes.push_back(bound_ref.index);
 	}
 	auto &ic_table_entry = op.table.Cast<IcebergTableEntry>();

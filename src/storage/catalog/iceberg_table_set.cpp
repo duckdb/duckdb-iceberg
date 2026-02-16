@@ -65,8 +65,13 @@ bool IcebergTableSet::FillEntry(ClientContext &context, IcebergTableInformation 
 		throw HTTPException(get_table_result.error_._error.message);
 	}
 	ic_catalog.StoreLoadTableResult(table_key, std::move(get_table_result.result_));
-	auto &cached_table_result = ic_catalog.GetLoadTableResult(table_key);
-	table.table_metadata = IcebergTableMetadata::FromLoadTableResult(*cached_table_result.load_table_result);
+	{
+		lock_guard<std::mutex> cache_lock(ic_catalog.GetMetadataCacheLock());
+		auto cached_table_result = ic_catalog.TryGetValidCachedLoadTableResult(table_key, cache_lock, false);
+		D_ASSERT(cached_table_result);
+		auto &load_table_result = *cached_table_result->load_table_result;
+		table.table_metadata = IcebergTableMetadata::FromLoadTableResult(load_table_result);
+	}
 	auto &schemas = table.table_metadata.schemas;
 
 	//! It should be impossible to have a metadata file without any schema
@@ -161,10 +166,13 @@ bool IcebergTableSet::CreateNewEntry(ClientContext &context, IcebergCatalog &cat
 	    make_uniq<const rest_api_objects::LoadTableResult>(IRCAPI::CommitNewTable(context, catalog, table_ptr));
 
 	catalog.StoreLoadTableResult(key, std::move(load_table_result));
-	auto &cached_table_result = catalog.GetLoadTableResult(key);
-
-	table_ptr->table_info.table_metadata =
-	    IcebergTableMetadata::FromTableMetadata(cached_table_result.load_table_result->metadata);
+	{
+		lock_guard<std::mutex> cache_lock(catalog.GetMetadataCacheLock());
+		auto cached_table_result = catalog.TryGetValidCachedLoadTableResult(key, cache_lock, false);
+		D_ASSERT(cached_table_result);
+		auto &load_table_result = cached_table_result->load_table_result;
+		table_ptr->table_info.table_metadata = IcebergTableMetadata::FromTableMetadata(load_table_result->metadata);
+	}
 
 	// if we stage created the table, we add an assert create
 	if (catalog.attach_options.supports_stage_create) {
@@ -199,8 +207,8 @@ optional_ptr<CatalogEntry> IcebergTableSet::GetEntry(ClientContext &context, con
 	if (transaction_entry != iceberg_transaction.updated_tables.end()) {
 		return transaction_entry->second.GetSchemaVersion(lookup.GetAtClause());
 	}
-	auto previous_requested_snapshot = iceberg_transaction.requested_tables.find(table_name);
-	if (previous_requested_snapshot != iceberg_transaction.requested_tables.end()) {
+	auto previous_request_info = iceberg_transaction.GetTableRequestResult(table_key);
+	if (previous_request_info.exists) {
 		// transaction has already looked up this table, find it in entries
 		auto entry = entries.find(table_name);
 		if (entry == entries.end()) {
@@ -221,7 +229,7 @@ optional_ptr<CatalogEntry> IcebergTableSet::GetEntry(ClientContext &context, con
 	if (!FillEntry(context, entry->second)) {
 		// Table doesn't exist
 		entries.erase(entry);
-		iceberg_transaction.requested_tables.emplace(table_name, TableInfoCache(false));
+		iceberg_transaction.RecordTableRequest(table_key);
 		return nullptr;
 	}
 	auto ret = entry->second.GetSchemaVersion(lookup.GetAtClause());
@@ -239,8 +247,7 @@ optional_ptr<CatalogEntry> IcebergTableSet::GetEntry(ClientContext &context, con
 		latest_snapshot_id = -1;
 	}
 
-	iceberg_transaction.requested_tables.emplace(table_name,
-	                                             TableInfoCache(latest_sequence_number, latest_snapshot_id));
+	iceberg_transaction.RecordTableRequest(table_key, latest_sequence_number, latest_snapshot_id);
 	return ret;
 }
 

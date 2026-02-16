@@ -18,7 +18,8 @@ statement ok
 SET TimeZone='Europe/Amsterdam';
 
 query I
-select a from ICEBERG_SCAN('__WORKING_DIRECTORY__/data/persistent/add_columns_with_defaults_in_struct/default.db/add_columns_with_defaults_in_struct/metadata/00003-21a957f9-c2ee-431a-9d18-bf257b561198.metadata.json');
+select a from ICEBERG_SCAN('__WORKING_DIRECTORY__/data/persistent/add_columns_with_defaults_in_struct/default.db/add_columns_with_defaults_in_struct/metadata/00003-21a957f9-c2ee-431a-9d18-bf257b561198.metadata.json') order by all;
 ----
 {'col1': test, 'col_boolean': false, 'col_integer': 453243, 'col_long': 328725092345834, 'col_float': 23.34342, 'col_double': 23.343424523423433, 'col_decimal': 3423434.23, 'col_date': 0011-03-05, 'col_time': '12:06:45', 'col_timestamp': '0011-03-05 12:06:45', 'col_timestamptz': NULL, 'col_string': World, 'col_uuid': NULL, 'col_fixed': NULL, 'col_binary': \x80\x00\x80}
 {'col1': test, 'col_boolean': true, 'col_integer': 342342, 'col_long': -9223372036854775808, 'col_float': 0.34234, 'col_double': 0.342343242342342, 'col_decimal': 12345.00, 'col_date': 2003-10-20, 'col_time': '00:00:00.012345', 'col_timestamp': '1970-01-01 00:00:00.012345', 'col_timestamptz': '1970-01-01 01:00:00.012345+01', 'col_string': HELLO, 'col_uuid': f79c3e09-677c-4bbd-a479-3f349cb785e7, 'col_fixed': \x01\x02\x03\xFF\x03, 'col_binary': \x01\x02}
+

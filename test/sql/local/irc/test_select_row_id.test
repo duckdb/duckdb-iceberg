@@ -40,8 +40,18 @@ ATTACH '' AS my_datalake (
     ENDPOINT 'http://127.0.0.1:8181'
 );
 
-statement error
+query I
 select rowid from my_datalake.default.table_unpartitioned order by all;
 ----
-<REGEX>:.*Referenced column "rowid" not found in FROM clause.*
-
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL

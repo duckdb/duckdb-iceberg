@@ -85,29 +85,20 @@ void IcebergCatalog::StoreLoadTableResult(const string &table_key,
 	metadata_cache.emplace(table_key, std::move(val));
 }
 
-MetadataCacheValue &IcebergCatalog::GetLoadTableResult(const string &table_key) {
-	std::lock_guard<std::mutex> g(metadata_cache_mutex);
-	if (metadata_cache.find(table_key) == metadata_cache.end()) {
-		throw InternalException("Attempting to retrieve table information that was never stored");
-	}
-	auto res = metadata_cache.find(table_key);
-	D_ASSERT(res != metadata_cache.end());
-	return *res->second;
-}
-
 std::mutex &IcebergCatalog::GetMetadataCacheLock() {
 	return metadata_cache_mutex;
 }
 
 optional_ptr<MetadataCacheValue> IcebergCatalog::TryGetValidCachedLoadTableResult(const string &table_key,
-                                                                                  lock_guard<std::mutex> &lock) {
+                                                                                  lock_guard<std::mutex> &lock,
+                                                                                  bool validate_cache) {
 	(void)lock;
 	auto it = metadata_cache.find(table_key);
 	if (it == metadata_cache.end()) {
 		return nullptr;
 	}
 	auto &cached_value = *it->second;
-	if (system_clock::now() > cached_value.expires_at) {
+	if (validate_cache && system_clock::now() > cached_value.expires_at) {
 		// cached value has expired
 		return nullptr;
 	}
@@ -169,6 +160,9 @@ void IcebergCatalog::DropSchema(ClientContext &context, DropInfo &info) {
 
 	if (!schema_exists) {
 		if (info.if_not_found == OnEntryNotFound::RETURN_NULL) {
+			// remove the entry if it exists locally
+			// it could have been created during the bind phase.
+			GetSchemas().RemoveEntry(info.name);
 			return;
 		}
 		throw CatalogException("Schema with name \"%s\" does not exist", info.name);

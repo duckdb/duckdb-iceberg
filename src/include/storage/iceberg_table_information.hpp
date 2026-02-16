@@ -24,6 +24,7 @@ public:
 
 public:
 	optional_ptr<CatalogEntry> GetLatestSchema();
+	idx_t GetIcebergVersion() const;
 	optional_ptr<CatalogEntry> GetSchemaVersion(optional_ptr<BoundAtClause> at);
 	optional_ptr<CatalogEntry> CreateSchemaVersion(IcebergTableSchema &table_schema);
 	IRCAPITableCredentials GetVendedCredentials(ClientContext &context);

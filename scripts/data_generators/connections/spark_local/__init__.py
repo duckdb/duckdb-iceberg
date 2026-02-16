@@ -12,7 +12,7 @@ CONNECTION_KEY = 'local'
 
 SCRIPT_DIR = os.path.dirname(__file__)
 DATA_GENERATION_DIR = os.path.join(SCRIPT_DIR, '..', '..', '..', '..', 'data', 'generated', 'iceberg', 'spark-local')
-SPARK_RUNTIME_PATH = os.path.join(SCRIPT_DIR, '..', '..', 'iceberg-spark-runtime-3.5_2.12-1.9.0.jar')
+SPARK_RUNTIME_PATH = os.path.join(SCRIPT_DIR, '..', '..', 'iceberg-spark-runtime-4.0_2.13-1.10.0.jar')
 
 
 @IcebergConnection.register(CONNECTION_KEY)

@@ -49,8 +49,7 @@ create table my_datalake.default.test_delete_table (a int);
 statement ok
 insert into my_datalake.default.test_delete_table select range a from range(1000);
 
-statement error
+query I
 delete from my_datalake.default.test_delete_table where rowid in (0, 2, 4, 6);
 ----
-<REGEX>:.*Referenced column "rowid" not found in FROM clause.*
-
+0

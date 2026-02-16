@@ -30,15 +30,19 @@ jobs:
           find ./build/release -type f -name 'duckdb*' -exec chmod +x {} \;
           find ./build/release -type f -name 'unittest*' -exec chmod +x {} \;
 
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Set up Docker Compose
+        uses: docker/setup-compose-action@v1
+
       - name: Install Spark Catalog dependencies
-        shell: bash
         run: |
-          # install docker-compose
-          sudo curl -L "https://github.com/docker/compose/releases/download/1.29.2/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
-          sudo chmod +x /usr/local/bin/docker-compose
-          # install Java & Python
           sudo apt update -y -qq
-          sudo apt install -y -qq openjdk-21-jre-headless openjdk-21-jdk-headless python3-venv tar pkg-config
+          sudo apt install -y -qq python3-venv tar pkg-config
 
       - name: Install CMake 3.x
         run: |

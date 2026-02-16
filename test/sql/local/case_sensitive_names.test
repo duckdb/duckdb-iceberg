@@ -10,21 +10,21 @@ require iceberg
 require httpfs
 
 query II
-select * from ICEBERG_SCAN('__WORKING_DIRECTORY__/data/persistent/case_sensitive_names/default.db/case_sensitive_names/metadata/00001-a7a3a44c-4aac-4619-bebd-11be37b27351.metadata.json');
+select * from ICEBERG_SCAN('__WORKING_DIRECTORY__/data/persistent/case_sensitive_names/default.db/case_sensitive_names/metadata/00001-a7a3a44c-4aac-4619-bebd-11be37b27351.metadata.json') order by all;
 ----
 1	user_1
 2	user_2
 3	user_3
 
 query I
-select user_id_1 from ICEBERG_SCAN('__WORKING_DIRECTORY__/data/persistent/case_sensitive_names/default.db/case_sensitive_names/metadata/00001-a7a3a44c-4aac-4619-bebd-11be37b27351.metadata.json');
+select user_id_1 from ICEBERG_SCAN('__WORKING_DIRECTORY__/data/persistent/case_sensitive_names/default.db/case_sensitive_names/metadata/00001-a7a3a44c-4aac-4619-bebd-11be37b27351.metadata.json') order by all;
 ----
 user_1
 user_2
 user_3
 
 query I
-select column_name from (describe from  ICEBERG_SCAN('__WORKING_DIRECTORY__/data/persistent/case_sensitive_names/default.db/case_sensitive_names/metadata/00001-a7a3a44c-4aac-4619-bebd-11be37b27351.metadata.json'));
+select column_name from (describe from ICEBERG_SCAN('__WORKING_DIRECTORY__/data/persistent/case_sensitive_names/default.db/case_sensitive_names/metadata/00001-a7a3a44c-4aac-4619-bebd-11be37b27351.metadata.json')) order by all;
 ----
-user_id
 uSeR_Id_1
+user_id

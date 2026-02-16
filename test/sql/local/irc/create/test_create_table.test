@@ -164,9 +164,9 @@ statement ok
 commit;
 
 query II nosort res_2
-select * from create_table_t4;
+select * from create_table_t4 order by all;
 ----
 
 query II nosort res_2
-select range d, range::VARCHAR e from range(0,1500);
+select range d, range::VARCHAR e from range(0,1500) order by all;
 ----

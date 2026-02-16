@@ -21,7 +21,8 @@
 namespace duckdb {
 
 IcebergSchemaEntry::IcebergSchemaEntry(Catalog &catalog, CreateSchemaInfo &info)
-    : SchemaCatalogEntry(catalog, info), namespace_items(IRCAPI::ParseSchemaName(info.schema)), tables(*this) {
+    : SchemaCatalogEntry(catalog, info), namespace_items(IRCAPI::ParseSchemaName(info.schema)), exists(true),
+      tables(*this) {
 }
 
 IcebergSchemaEntry::~IcebergSchemaEntry() {
@@ -220,7 +221,20 @@ optional_ptr<CatalogEntry> IcebergSchemaEntry::LookupEntry(CatalogTransaction tr
 	if (!CatalogTypeIsSupported(type)) {
 		return nullptr;
 	}
-	return GetCatalogSet(type).GetEntry(transaction.GetContext(), lookup_info);
+	auto &context = transaction.GetContext();
+	auto &ic_catalog = catalog.Cast<IcebergCatalog>();
+	auto table_entry = GetCatalogSet(type).GetEntry(context, lookup_info);
+	if (!table_entry) {
+		// verify the schema exists
+		if (!IRCAPI::VerifySchemaExistence(context, ic_catalog, name)) {
+			// set exists to false here
+			// we would like to throw an error, but this code is also called when listing schemas,
+			// and throwing an error will abort the listing process.
+			exists = false;
+			return nullptr;
+		}
+	}
+	return table_entry;
 }
 
 IcebergTableSet &IcebergSchemaEntry::GetCatalogSet(CatalogType type) {

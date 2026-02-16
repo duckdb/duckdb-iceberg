@@ -82,16 +82,16 @@ insert into my_datalake.default.insert_test select
 
 # Read the new data before committing
 query III
-select * from my_datalake.default.insert_test;
+select * from my_datalake.default.insert_test order by all;
 ----
-2010-06-11	42	test
 1980-11-25	-3434	this is a long string
+2010-06-11	42	test
 
 statement ok
 abort;
 
 query III
-select * from my_datalake.default.insert_test;
+select * from my_datalake.default.insert_test order by all;
 ----
 2010-06-11	42	test
 
@@ -122,7 +122,7 @@ commit
 
 # con2 should not see con1 data
 query III con2
-select * from my_datalake.default.insert_test;
+select * from my_datalake.default.insert_test order by all;
 ----
 2010-06-11	42	test
 2020-08-12	45345	inserted by con2
@@ -135,7 +135,7 @@ commit
 <REGEX>:.*Requirement failed: branch main has changed.*
 
 query III
-select * from my_datalake.default.insert_test;
+select * from my_datalake.default.insert_test order by all;
 ----
 2010-06-11	42	test
 2020-08-12	45345	inserted by con1
@@ -170,7 +170,7 @@ statement ok
 commit
 
 query III
-select * from my_datalake.default.insert_test;
+select * from my_datalake.default.insert_test order by all;
 ----
 2010-06-11	42	test
 2020-08-12	45345	inserted by con1
@@ -207,7 +207,7 @@ statement ok
 commit
 
 query III
-select * from my_datalake.default.insert_test;
+select * from my_datalake.default.insert_test order by all;
 ----
 2010-06-11	42	test
 2020-08-12	45345	inserted by con1
@@ -217,7 +217,7 @@ select * from my_datalake.default.insert_test;
 2020-08-16	4	insert 4
 
 query IIIIIIII
-select * from my_datalake.default.insert_all_types;
+select * from my_datalake.default.insert_all_types order by all;
 ----
 127	1340	2147483647	9223372036854775807	3.14	-1.7976931348623157	1234567890.12345	2023-12-31
 

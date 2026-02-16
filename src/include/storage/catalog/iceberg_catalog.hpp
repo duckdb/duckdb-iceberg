@@ -106,12 +106,11 @@ public:
 	                                                      const string &property_value);
 	void StoreLoadTableResult(const string &table_key,
 	                          unique_ptr<const rest_api_objects::LoadTableResult> load_table_result);
-	MetadataCacheValue &GetLoadTableResult(const string &table_key);
 	//! Returns a reference to the metadata cache mutex. The caller is responsible for holding the lock
 	//! for the duration of any access to data returned by TryGetValidCachedLoadTableResult.
 	std::mutex &GetMetadataCacheLock();
-	optional_ptr<MetadataCacheValue> TryGetValidCachedLoadTableResult(const string &table_key,
-	                                                                  lock_guard<std::mutex> &lock);
+	optional_ptr<MetadataCacheValue>
+	TryGetValidCachedLoadTableResult(const string &table_key, lock_guard<std::mutex> &lock, bool validate_cache = true);
 	void RemoveLoadTableResult(const string &table_key);
 
 public:

@@ -16,11 +16,13 @@
 #include "storage/authorization/sigv4.hpp"
 #include "duckdb/common/multi_file/multi_file_reader.hpp"
 #include "duckdb/planner/tableref/bound_at_clause.hpp"
+#include "iceberg_multi_file_reader.hpp"
 
 #include "rest_catalog/objects/list.hpp"
 #include "storage/iceberg_table_information.hpp"
 
 namespace duckdb {
+constexpr column_t IcebergMultiFileReader::COLUMN_IDENTIFIER_LAST_SEQUENCE_NUMBER;
 
 IcebergTableEntry::IcebergTableEntry(IcebergTableInformation &table_info, Catalog &catalog, SchemaCatalogEntry &schema,
                                      CreateTableInfo &info)
@@ -187,15 +189,18 @@ virtual_column_map_t IcebergTableEntry::GetVirtualColumns() const {
 
 virtual_column_map_t IcebergTableEntry::VirtualColumns() {
 	virtual_column_map_t result;
-	result.insert(
-	    make_pair(MultiFileReader::COLUMN_IDENTIFIER_FILENAME, TableColumn("filename", LogicalType::VARCHAR)));
-	result.insert(make_pair(MultiFileReader::COLUMN_IDENTIFIER_FILE_ROW_NUMBER,
-	                        TableColumn("file_row_number", LogicalType::BIGINT)));
+	result.emplace(MultiFileReader::COLUMN_IDENTIFIER_FILENAME, TableColumn("filename", LogicalType::VARCHAR));
+	result.emplace(COLUMN_IDENTIFIER_ROW_ID, TableColumn("rowid", LogicalType::BIGINT));
+	result.emplace(MultiFileReader::COLUMN_IDENTIFIER_FILE_ROW_NUMBER,
+	               TableColumn("file_row_number", LogicalType::BIGINT));
+	result.emplace(IcebergMultiFileReader::COLUMN_IDENTIFIER_LAST_SEQUENCE_NUMBER,
+	               TableColumn("sequence_number", LogicalType::BIGINT));
 	return result;
 }
 
 vector<column_t> IcebergTableEntry::GetRowIdColumns() const {
 	vector<column_t> result;
+	result.push_back(COLUMN_IDENTIFIER_ROW_ID);
 	result.push_back(MultiFileReader::COLUMN_IDENTIFIER_FILENAME);
 	result.push_back(MultiFileReader::COLUMN_IDENTIFIER_FILE_ROW_NUMBER);
 	return result;

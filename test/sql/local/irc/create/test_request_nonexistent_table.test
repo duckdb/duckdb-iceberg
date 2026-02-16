@@ -1,0 +1,77 @@
+# name: test/sql/local/irc/create/test_request_nonexistent_table.test
+# description: test create table
+# group: [create]
+
+require-env ICEBERG_SERVER_AVAILABLE
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+set logging_level='debug'
+
+statement ok
+CREATE SECRET (
+    TYPE S3,
+    KEY_ID 'admin',
+    SECRET 'password',
+    ENDPOINT '127.0.0.1:9000',
+    URL_STYLE 'path',
+    USE_SSL 0
+);
+
+
+statement ok
+ATTACH '' AS my_datalake (
+    TYPE ICEBERG,
+    CLIENT_ID 'admin',
+    CLIENT_SECRET 'password',
+    ENDPOINT 'http://127.0.0.1:8181'
+);
+
+statement ok
+create schema if not exists my_datalake.default;
+
+statement ok
+use my_datalake.default;
+
+statement ok
+drop table if exists create_table_t1;
+
+# table does not exist
+statement error
+select * from create_table_t1;
+----
+<REGEX>:.*table.*does not exist.*
+
+statement ok
+use my_datalake.non_existent_schema;
+
+# schema also does not exist, but we cannot handle that
+statement error
+select * from non_existent_table
+----
+<REGEX>:.*non_existent_table.*does not exist.*
+
+query I
+select "schema" schema_name from (show all tables) where schema_name like '%non_existent_schema%';
+----
+
+query I
+select count(*) > 1 from (show all tables);
+----
+1
+
+
+
+
+
+

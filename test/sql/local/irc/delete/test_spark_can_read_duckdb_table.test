@@ -61,7 +61,7 @@ SELECT COUNT(*), COUNT(*) FILTER(WHERE a%2=0) FROM my_datalake.default.duckdb_de
 
 
 query I
-select * from my_datalake.default.duckdb_deletes_for_other_engines;
+select * from my_datalake.default.duckdb_deletes_for_other_engines order by all;
 ----
 1
 3

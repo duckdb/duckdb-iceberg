@@ -54,7 +54,7 @@ NULL	NULL
 NULL	duck
 
 query II
-select * from my_datalake.default.test_null_filtering where a is not null order by a;
+select * from my_datalake.default.test_null_filtering where a is not null order by all;
 ----
 0	hello
 1	world

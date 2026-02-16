@@ -16,6 +16,11 @@ public:
 	virtual ~IcebergAvroScanInfo();
 
 public:
+	idx_t IcebergVersion() const {
+		return metadata.iceberg_version;
+	}
+
+public:
 	AvroScanInfoType type;
 	const IcebergTableMetadata &metadata;
 	const IcebergSnapshot &snapshot;
