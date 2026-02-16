@@ -34,10 +34,6 @@ rest_api_objects::Snapshot IcebergSnapshot::ToRESTObject(const IcebergTableInfor
 		res.has_parent_snapshot_id = true;
 		res.parent_snapshot_id = parent_snapshot_id;
 	}
-	if (has_added_rows) {
-		res.has_added_rows = true;
-		res.added_rows = added_rows;
-	}
 
 	if (has_added_rows) {
 		res.has_added_rows = true;
@@ -49,12 +45,6 @@ rest_api_objects::Snapshot IcebergSnapshot::ToRESTObject(const IcebergTableInfor
 
 	res.has_schema_id = true;
 	res.schema_id = schema_id;
-	if (has_first_row_id) {
-		res.has_first_row_id = true;
-		res.first_row_id = first_row_id;
-	} else {
-		throw InternalException("first-row-id required");
-	}
 
 	if (has_first_row_id) {
 		res.has_first_row_id = true;
