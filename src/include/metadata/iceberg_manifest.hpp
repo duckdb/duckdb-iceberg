@@ -44,7 +44,6 @@ public:
 	bool has_first_row_id = false;
 	int64_t first_row_id = 0xDEADBEEF;
 	int64_t file_size_in_bytes;
-	sequence_number_t sequence_number = 0XDEADBEEF;
 	unordered_map<int32_t, int64_t> column_sizes;
 	unordered_map<int32_t, int64_t> value_counts;
 	unordered_map<int32_t, int64_t> null_value_counts;
