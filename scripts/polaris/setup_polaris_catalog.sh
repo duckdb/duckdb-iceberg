@@ -3,7 +3,7 @@
 
 ./polaris \
   --client-id root \
-  --client-secret secret \
+  --client-secret s3cr3t \
   catalogs \
   create \
   --storage-type FILE \
@@ -12,21 +12,21 @@
 
 ./polaris \
   --client-id root \
-  --client-secret secret \
+  --client-secret s3cr3t \
   principals \
   create \
   quickstart_user
 
 ./polaris \
   --client-id root \
-  --client-secret secret \
+  --client-secret s3cr3t \
   principal-roles \
   create \
   quickstart_user_role
 
 ./polaris \
   --client-id root \
-  --client-secret secret \
+  --client-secret s3cr3t \
   catalog-roles \
   create \
   --catalog quickstart_catalog \
@@ -34,7 +34,7 @@
 
 ./polaris \
   --client-id root \
-  --client-secret secret \
+  --client-secret s3cr3t \
   principal-roles \
   grant \
   --principal quickstart_user \
@@ -42,7 +42,7 @@
 
 ./polaris \
   --client-id root \
-  --client-secret secret \
+  --client-secret s3cr3t \
   catalog-roles \
   grant \
   --catalog quickstart_catalog \
@@ -51,7 +51,7 @@
 
 ./polaris \
   --client-id root \
-  --client-secret secret \
+  --client-secret s3cr3t \
   privileges \
   catalog \
   grant \
