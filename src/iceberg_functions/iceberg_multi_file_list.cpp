@@ -648,13 +648,6 @@ OpenFileInfo IcebergMultiFileList::GetFileInternal(idx_t file_id, lock_guard<mut
 	}
 	OpenFileInfo res(file_path);
 	auto extended_info = make_shared_ptr<ExtendedOpenFileInfo>();
-
-	if (data_file.has_first_row_id) {
-		extended_info->options["row_id_start"] = Value::UBIGINT(data_file.first_row_id);
-	}
-	extended_info->options["snapshot_id"] = Value(LogicalType::BIGINT);
-	extended_info->options["mapping_id"] = Value::UBIGINT(data_file.sequence_number);
-
 	extended_info->options["file_size"] = Value::UBIGINT(data_file.file_size_in_bytes);
 	// files managed by Iceberg are never modified - we can keep them cached
 	extended_info->options["validate_external_file_cache"] = Value::BOOLEAN(false);
