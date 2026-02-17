@@ -36,6 +36,8 @@ public:
 	bool IsPartitioned() const;
 	const IcebergPartitionSpecField &GetFieldBySourceId(idx_t field_id) const;
 	string FieldsToJSON() const;
+	static void FieldsToJson(yyjson_mut_doc *doc, yyjson_mut_val *root_object,
+	                         const vector<rest_api_objects::PartitionField> &fields);
 	const vector<IcebergPartitionSpecField> &GetFields() const;
 
 public:

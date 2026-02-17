@@ -181,9 +181,9 @@ string TableMetadata::TryFromJSON(yyjson_val *obj) {
 	}
 	auto last_partition_id_val = yyjson_obj_get(obj, "last-partition-id");
 	if (last_partition_id_val) {
-		has_last_partition_id = true;
+		has_last_partition_field_id = true;
 		if (yyjson_is_int(last_partition_id_val)) {
-			last_partition_id = yyjson_get_int(last_partition_id_val);
+			last_partition_field_id = yyjson_get_int(last_partition_id_val);
 		} else {
 			return StringUtil::Format(
 			    "TableMetadata property 'last_partition_id' is not of type 'integer', found '%s' instead",

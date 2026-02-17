@@ -259,12 +259,21 @@ string IcebergTableMetadata::GetMetaDataPath(ClientContext &context, const strin
 	return GuessTableVersion(meta_path, fs, options);
 }
 
-bool IcebergTableMetadata::HasLastColumnId() const {
+bool IcebergTableMetadata::HasLastAssignedColumnFieldId() const {
 	return last_column_id.IsValid();
 }
 
-idx_t IcebergTableMetadata::GetLastColumnId() const {
+idx_t IcebergTableMetadata::GetLastAssignedColumnFieldId() const {
 	return last_column_id.GetIndex();
+}
+
+bool IcebergTableMetadata::HasLastPartitionId() const {
+	return last_partition_field_id.IsValid();
+}
+
+int32_t IcebergTableMetadata::GetLastPartitionFieldId() const {
+	D_ASSERT(HasLastPartitionId());
+	return static_cast<int32_t>(last_partition_field_id.GetIndex());
 }
 
 //! ----------- Parse the Metadata JSON -----------
@@ -362,6 +371,10 @@ IcebergTableMetadata IcebergTableMetadata::FromTableMetadata(const rest_api_obje
 
 	if (table_metadata.has_last_column_id) {
 		res.last_column_id = table_metadata.last_column_id;
+	}
+
+	if (table_metadata.has_last_partition_field_id) {
+		res.last_partition_field_id = table_metadata.last_partition_field_id;
 	}
 
 	return res;

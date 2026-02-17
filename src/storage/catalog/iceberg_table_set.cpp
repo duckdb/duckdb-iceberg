@@ -160,6 +160,10 @@ bool IcebergTableSet::CreateNewEntry(ClientContext &context, IcebergCatalog &cat
 	table_ptr->table_info.table_metadata.current_schema_id = 0;
 	table_ptr->table_info.table_metadata.schemas[0]->schema_id = 0;
 
+	auto &current_schema = table_info.table_metadata.GetLatestSchema();
+	table_ptr->table_info.table_metadata.default_spec_id = 0;
+	table_ptr->table_info.SetPartitionedBy(iceberg_transaction, info.partition_keys, current_schema, true);
+
 	// Immediately create the table with stage_create = true to get metadata & data location(s)
 	// transaction commit will either commit with data (OR) create the table with stage_create = false
 	auto load_table_result =

@@ -33,6 +33,10 @@ public:
 	// add a schema update for a table
 	void TableAddSchema();
 	void TableAddAssertCreate();
+	void TableAddAssertCurrentSchemaId();
+	void TableAddAssertLastAssignedColumnFieldId();
+	void TableAddAssertLastAssignedPartitionId();
+	void TableAddAssertDefaultSpecId();
 	void TableAssignUUID();
 	void TableAddUpradeFormatVersion();
 	void TableAddSetCurrentSchema();

@@ -56,6 +56,30 @@ void CommitTableToJSON(yyjson_mut_doc *doc, yyjson_mut_val *root_object,
 			auto &assert_create = requirement.assert_create;
 			auto requirement_json = yyjson_mut_arr_add_obj(doc, requirements_array);
 			yyjson_mut_obj_add_strcpy(doc, requirement_json, "type", assert_create.type.value.c_str());
+		} else if (requirement.has_assert_current_schema_id) {
+			auto &assert_current_schema_id = requirement.assert_current_schema_id;
+			auto requirement_json = yyjson_mut_arr_add_obj(doc, requirements_array);
+			yyjson_mut_obj_add_strcpy(doc, requirement_json, "type", assert_current_schema_id.type.value.c_str());
+			yyjson_mut_obj_add_int(doc, requirement_json, "current-schema-id",
+			                       assert_current_schema_id.current_schema_id);
+		} else if (requirement.has_assert_last_assigned_field_id) {
+			auto &assert_last_assigned_field_id = requirement.assert_last_assigned_field_id;
+			auto requirement_json = yyjson_mut_arr_add_obj(doc, requirements_array);
+			yyjson_mut_obj_add_strcpy(doc, requirement_json, "type", assert_last_assigned_field_id.type.value.c_str());
+			yyjson_mut_obj_add_int(doc, requirement_json, "last-assigned-field-id",
+			                       assert_last_assigned_field_id.last_assigned_field_id);
+		} else if (requirement.has_assert_last_assigned_partition_id) {
+			auto &assert_last_assigned_partition_id = requirement.assert_last_assigned_partition_id;
+			auto requirement_json = yyjson_mut_arr_add_obj(doc, requirements_array);
+			yyjson_mut_obj_add_strcpy(doc, requirement_json, "type",
+			                          assert_last_assigned_partition_id.type.value.c_str());
+			yyjson_mut_obj_add_int(doc, requirement_json, "last-assigned-partition-id",
+			                       assert_last_assigned_partition_id.last_assigned_partition_id);
+		} else if (requirement.has_assert_default_spec_id) {
+			auto &assert_default_spec_id = requirement.assert_default_spec_id;
+			auto requirement_json = yyjson_mut_arr_add_obj(doc, requirements_array);
+			yyjson_mut_obj_add_strcpy(doc, requirement_json, "type", assert_default_spec_id.type.value.c_str());
+			yyjson_mut_obj_add_int(doc, requirement_json, "default-spec-id", assert_default_spec_id.default_spec_id);
 		} else {
 			throw NotImplementedException("Can't serialize this TableRequirement type to JSON");
 		}
@@ -153,8 +177,8 @@ void CommitTableToJSON(yyjson_mut_doc *doc, yyjson_mut_val *root_object,
 			yyjson_mut_obj_add_strcpy(doc, update_json, "action", ref_update.action.c_str());
 			auto spec_json = yyjson_mut_obj_add_obj(doc, update_json, "spec");
 			yyjson_mut_obj_add_int(doc, spec_json, "spec-id", ref_update.spec.spec_id);
-			// Add fields array, later we can add the fields
-			auto fields_arr = yyjson_mut_obj_add_arr(doc, spec_json, "fields");
+			// add fields
+			IcebergPartitionSpec::FieldsToJson(doc, spec_json, ref_update.spec.fields);
 		} else if (update.has_set_default_sort_order_update) {
 			auto update_json = yyjson_mut_arr_add_obj(doc, updates_array);
 			auto &ref_update = update.set_default_sort_order_update;
@@ -320,13 +344,13 @@ TableTransactionInfo IcebergTransaction::GetTransactionRequest(ClientContext &co
 			commit_state.table_change.updates.push_back(std::move(set_snapshot_ref_update));
 		}
 
-		if (current_snapshot) {
+		if (current_snapshot && !transaction_data.alters.empty()) {
 			//! If any changes were made to the state of the table, we should assert that our parent snapshot has
 			//! not changed. We don't want to change the table location if someone has added a snapshot
 			commit_state.table_change.requirements.push_back(CreateAssertRefSnapshotIdRequirement(*current_snapshot));
-		} else if (!info.has_assert_create) {
-			//! If the table had no snapshots and isn't created by this transaction, we should assert that no snapshot
-			//! has been added in the meantime
+		} else if (!current_snapshot && !transaction_data.alters.empty() && !info.has_assert_create) {
+			//! If the table had no snapshots, is not created in this transaction, and has some kind of update
+			//! we should ensure no snapshots have been added in the meantime
 			commit_state.table_change.requirements.push_back(CreateAssertNoSnapshotRequirement());
 		}
 
