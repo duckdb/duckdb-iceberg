@@ -30,24 +30,27 @@ jobs:
           find ./build/release -type f -name 'duckdb*' -exec chmod +x {} \;
           find ./build/release -type f -name 'unittest*' -exec chmod +x {} \;
 
-      - name: Set up for Polaris
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Update Docker Engine and install python
         run: |
-          # install java
           sudo apt update -y -qq
-          sudo apt install -y -qq openjdk-21-jre-headless
-          sudo apt install -y -qq openjdk-21-jdk-headless
-          sudo apt-get install -y -qq python3-venv
+          sudo apt-get install -y docker-ce docker-ce-cli containerd.io
+          sudo apt install -y -qq python3-venv
+
 
       - name: Wait for polaris initialization
-        env:
-          JAVA_HOME: /usr/lib/jvm/java-21-openjdk-amd64
         run: |
           git clone https://github.com/apache/polaris.git polaris_catalog
           cd polaris_catalog
-          git checkout 8fa1c773c8a775834bda24964dbed25c34ef2917
-          ./gradlew clean :polaris-quarkus-server:assemble -Dquarkus.container-image.build=true --no-build-cache
+          git checkout c940ded0f6be44d58ac6f0b6606c41cb08b53304
+          ./gradlew clean :polaris-server:assemble -Dquarkus.container-image.build=true --no-build-cache
           ./gradlew --stop
-          nohup ./gradlew run -Dpolaris.bootstrap.credentials=POLARIS,root,secret > polaris-server.log 2> polaris-error.log &
+          nohup ./gradlew :polaris-server:run > polaris-server.log 2> polaris-error.log &
           cd ..
           # let polaris initialize 
           max_attempts=50
@@ -65,17 +68,21 @@ jobs:
 
       - name: Generate Polaris Data
         run: |
-          python3 -m venv .
-          source ./bin/activate
-          python3 -m pip install poetry
-          python3 -m pip install pyspark==3.5.0
-          python3 -m pip install duckdb
-          # needed for setup_polaris_catalog.sh
+          cd polaris_catalog 
+          python3 -m venv . 
+          source bin/activate
+          make client-regenerate
+          cd client/python && python3 -m pip install .
+          cd ../../../
           cd polaris_catalog && ../scripts/polaris/setup_polaris_catalog.sh > user_credentials.json
           cd ..
           python3 scripts/polaris/get_polaris_client_creds.py
           export POLARIS_CLIENT_ID=$(cat polaris_client_id.txt)
           export POLARIS_CLIENT_SECRET=$(cat polaris_client_secret.txt)
+          deactivate
+          python3 -m venv .
+          source bin/activate
+          python3 -m pip install -r scripts/requirements.txt
           python3 -m scripts.data_generators.generate_data polaris
 
       - name: Test with rest catalog

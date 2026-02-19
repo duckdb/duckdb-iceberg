@@ -19,8 +19,7 @@ struct IcebergTableInformation;
 class IcebergTableEntry;
 
 struct IcebergCreateTableRequest {
-	IcebergCreateTableRequest(shared_ptr<IcebergTableSchema> schema, IcebergPartitionSpec &partition_spec,
-	                          string table_name);
+	explicit IcebergCreateTableRequest(const IcebergTableInformation &table_info);
 
 public:
 	static shared_ptr<IcebergTableSchema> CreateIcebergSchema(const IcebergTableEntry *table_entry);
@@ -28,9 +27,7 @@ public:
 	static void PopulateSchema(yyjson_mut_doc *doc, yyjson_mut_val *schema_json, const IcebergTableSchema &schema);
 
 private:
-	string table_name;
-	shared_ptr<IcebergTableSchema> initial_schema;
-	IcebergPartitionSpec &partition_spec;
+	const IcebergTableInformation &table_info;
 };
 
 } // namespace duckdb

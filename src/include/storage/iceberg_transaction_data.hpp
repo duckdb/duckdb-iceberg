@@ -59,6 +59,8 @@ public:
 
 	//! Every insert/update/delete creates an alter of the table data
 	vector<reference<IcebergAddSnapshot>> alters;
+	//! Track the current row id for this transaction
+	int64_t next_row_id = 0;
 };
 
 } // namespace duckdb

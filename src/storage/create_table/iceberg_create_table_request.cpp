@@ -17,9 +17,8 @@
 using namespace duckdb_yyjson;
 namespace duckdb {
 
-IcebergCreateTableRequest::IcebergCreateTableRequest(shared_ptr<IcebergTableSchema> schema,
-                                                     IcebergPartitionSpec &partition_spec, string table_name)
-    : table_name(table_name), initial_schema(schema), partition_spec(partition_spec) {
+IcebergCreateTableRequest::IcebergCreateTableRequest(const IcebergTableInformation &table_info)
+    : table_info(table_info) {
 }
 
 static void AddUnnamedField(yyjson_mut_doc *doc, yyjson_mut_val *field_obj, IcebergColumnDefinition &column);
@@ -159,15 +158,20 @@ string IcebergCreateTableRequest::CreateTableToJSON(std::unique_ptr<yyjson_mut_d
 	auto doc = doc_p.get();
 	auto root_object = yyjson_mut_doc_get_root(doc);
 
-	yyjson_mut_obj_add_strcpy(doc, root_object, "name", table_name.c_str());
+	yyjson_mut_obj_add_strcpy(doc, root_object, "name", table_info.name.c_str());
 	auto schema_json = yyjson_mut_obj_add_obj(doc, root_object, "schema");
 
-	PopulateSchema(doc, schema_json, *initial_schema.get());
+	idx_t schema_id = table_info.table_metadata.current_schema_id;
+	auto initial_schema = table_info.table_metadata.schemas.find(schema_id);
+	PopulateSchema(doc, schema_json, *initial_schema->second);
 
 	auto partition_spec_json = yyjson_mut_obj_add_obj(doc, root_object, "partition-spec");
 	yyjson_mut_obj_add_uint(doc, partition_spec_json, "spec-id", 0);
 	yyjson_mut_obj_add_strcpy(doc, partition_spec_json, "type", "struct");
 	auto fields_arr = yyjson_mut_obj_add_arr(doc, partition_spec_json, "fields");
+
+	idx_t partition_spec_id = table_info.table_metadata.current_schema_id;
+	auto partition_spec = table_info.table_metadata.partition_specs.find(partition_spec_id)->second;
 
 	for (auto &field : partition_spec.fields) {
 		auto field_obj = yyjson_mut_arr_add_obj(doc, fields_arr);
@@ -182,7 +186,14 @@ string IcebergCreateTableRequest::CreateTableToJSON(std::unique_ptr<yyjson_mut_d
 	// unused, but we want to add teh objects
 	auto write_order_fields = yyjson_mut_obj_add_arr(doc, write_order, "fields");
 	auto properties = yyjson_mut_obj_add_obj(doc, root_object, "properties");
-
+	yyjson_mut_obj_add_strcpy(doc, properties, "format-version",
+	                          std::to_string(table_info.table_metadata.iceberg_version).c_str());
+	for (auto &property : table_info.table_metadata.table_properties) {
+		yyjson_mut_obj_add_strcpy(doc, properties, property.first.c_str(), property.second.c_str());
+	}
+	if (!table_info.table_metadata.location.empty()) {
+		yyjson_mut_obj_add_str(doc, root_object, "location", table_info.table_metadata.location.c_str());
+	}
 	return ICUtils::JsonToString(std::move(doc_p));
 }
 

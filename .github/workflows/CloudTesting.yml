@@ -20,6 +20,7 @@ jobs:
       VCPKG_FEATURE_FLAGS: "-binarycaching"
       VCPKG_TOOLCHAIN_PATH: ${{ github.workspace }}/vcpkg/scripts/buildsystems/vcpkg.cmake
       PIP_BREAK_SYSTEM_PACKAGES: 1
+      HTTP_PROXY_PUBLIC: http://localhost:8878
 
     steps:
       - name: Install required ubuntu packages
@@ -59,6 +60,11 @@ jobs:
           R2_TOKEN: ${{secrets.r2_token}}
         run: | 
           python3 scripts/create_s3_insert_table.py --action=delete-and-create --catalogs=s3tables,r2,glue
+
+      - name: Run mitmproxy
+        shell: bash
+        run: |
+          mitmdump --mode regular@8878 --flow-detail 2 > mitmproxy.log 2>&1 &
 
       - name: Test with rest catalog
         env:

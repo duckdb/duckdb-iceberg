@@ -168,10 +168,21 @@ IcebergColumnStats IcebergInsert::ParseColumnStats(const LogicalType &type, cons
 			column_stats.contains_nan = StringValue::Get(stats_children[1]) == "true";
 		} else {
 			// Ignore other stats types.s
-			DUCKDB_LOG_INFO(context, "Iceberg", "Did not write column stats %s", stats_name);
+			DUCKDB_LOG_INFO(context, StringUtil::Format("Did not write column stats %s", stats_name));
 		}
 	}
 	return column_stats;
+}
+
+static bool IsMapType(string col_name, IcebergTableSchema &table_schema) {
+	for (auto &col : table_schema.columns) {
+		if (col->name == col_name) {
+			if (col->type.id() == LogicalTypeId::MAP) {
+				return true;
+			}
+		}
+	}
+	return false;
 }
 
 void IcebergInsert::AddWrittenFiles(IcebergInsertGlobalState &global_state, DataChunk &chunk,
@@ -269,36 +280,40 @@ void IcebergInsert::AddWrittenFiles(IcebergInsertGlobalState &global_state, Data
 
 			auto ic_column_info_it = column_info.find(normalized_col_name);
 			D_ASSERT(ic_column_info_it != column_info.end());
-			auto column_info = ic_column_info_it->second;
-			auto stats = ParseColumnStats(column_info->type, col_stats, global_state.context);
-			if (column_info->required && stats.has_null_count && stats.null_count > 0) {
+			auto column_info_stats = ic_column_info_it->second;
+			auto stats = ParseColumnStats(column_info_stats->type, col_stats, global_state.context);
+
+			// a map type cannot violate not null constraints.
+			// Null value counts can be off since an empty map is the same as a null map.
+			bool is_map = IsMapType(column_names[0], *ic_schema);
+			if (!is_map && column_info_stats->required && stats.has_null_count && stats.null_count > 0) {
 				throw ConstraintException("NOT NULL constraint failed: %s.%s", table->name, normalized_col_name);
 			}
 			// go through stats and add upper and lower bounds
 			// Do serialization of values here in case we read transaction updates
 			if (stats.has_min) {
 				auto serialized_value =
-				    IcebergValue::SerializeValue(stats.min, column_info->type, SerializeBound::LOWER_BOUND);
+				    IcebergValue::SerializeValue(stats.min, column_info_stats->type, SerializeBound::LOWER_BOUND);
 				if (serialized_value.HasError()) {
 					throw InvalidConfigurationException(serialized_value.GetError());
 				} else if (serialized_value.HasValue()) {
-					data_file.lower_bounds[column_info->id] = serialized_value.GetValue();
+					data_file.lower_bounds[column_info_stats->id] = serialized_value.GetValue();
 				}
 			}
 			if (stats.has_max) {
 				auto serialized_value =
-				    IcebergValue::SerializeValue(stats.max, column_info->type, SerializeBound::UPPER_BOUND);
+				    IcebergValue::SerializeValue(stats.max, column_info_stats->type, SerializeBound::UPPER_BOUND);
 				if (serialized_value.HasError()) {
 					throw InvalidConfigurationException(serialized_value.GetError());
 				} else if (serialized_value.HasValue()) {
-					data_file.upper_bounds[column_info->id] = serialized_value.GetValue();
+					data_file.upper_bounds[column_info_stats->id] = serialized_value.GetValue();
 				}
 			}
 			if (stats.has_column_size_bytes) {
-				data_file.column_sizes[column_info->id] = stats.column_size_bytes;
+				data_file.column_sizes[column_info_stats->id] = stats.column_size_bytes;
 			}
 			if (stats.has_null_count) {
-				data_file.null_value_counts[column_info->id] = stats.null_count;
+				data_file.null_value_counts[column_info_stats->id] = stats.null_count;
 			}
 
 			//! nan_value_counts won't work, we can only indicate if they exist.

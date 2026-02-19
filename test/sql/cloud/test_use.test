@@ -38,15 +38,21 @@ set ignore_error_messages
 statement ok
 use glue_lake.myblognamespace;
 
-statement error
+statement ok
 use glue_lake;
-----
-Catalog Error
 
 statement error
-use glue_secret;
+select * from some_table;
 ----
-Catalog Error
+<REGEX>:.*some_table.*does not exist.*
+
+statement ok
+use glue_secret;
+
+statement error
+select * from some_table
+----
+<REGEX>:.*some_table.*does not exist.*
 
 # even after showing all tables. use statement needs catalog + schema.
 statement ok
@@ -55,4 +61,4 @@ show all tables;
 statement error
 use glue_lake;
 ----
-Catalog Error
+<REGEX>:.*No.*glue_lake.*found.*

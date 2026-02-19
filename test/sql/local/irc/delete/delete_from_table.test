@@ -57,7 +57,7 @@ statement ok
 delete from my_datalake.default.test_delete_table where a%2 = 0;
 
 query I
-select * from my_datalake.default.test_delete_table;
+select * from my_datalake.default.test_delete_table order by all;
 ----
 1
 3

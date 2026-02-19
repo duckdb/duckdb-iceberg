@@ -83,6 +83,8 @@ public:
 	int32_t iceberg_version;
 	int32_t current_schema_id;
 	int32_t default_spec_id;
+	bool has_next_row_id = false;
+	int64_t next_row_id = 0xDEADBEEF;
 	optional_idx default_sort_order_id;
 
 	bool has_current_snapshot = false;

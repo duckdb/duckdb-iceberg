@@ -167,12 +167,10 @@ static void IcebergColumnStatsFunction(ClientContext &context, TableFunctionInpu
 	idx_t out = 0;
 	auto &schema = bind_data.schema->columns;
 	auto &table_entries = bind_data.iceberg_table->entries;
-	auto &metadata = bind_data.metadata;
 	for (; global_state.current_manifest_idx < table_entries.size(); global_state.current_manifest_idx++) {
 		auto &table_entry = table_entries[global_state.current_manifest_idx];
 		auto &entries = table_entry.manifest_file.entries;
 		for (; global_state.current_manifest_entry_idx < entries.size(); global_state.current_manifest_entry_idx++) {
-			auto &manifest = table_entry.manifest;
 			auto &manifest_entry = entries[global_state.current_manifest_entry_idx];
 			auto &data_file = manifest_entry.data_file;
 

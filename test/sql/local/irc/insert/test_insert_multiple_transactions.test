@@ -72,7 +72,7 @@ commit
 
 # con2 should not see con1 data
 query II con2
-select * from my_datalake.default.multi_transaction_insert;
+select * from my_datalake.default.multi_transaction_insert order by all;
 ----
 0	0
 2	2

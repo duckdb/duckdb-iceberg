@@ -20,7 +20,7 @@ SET TimeZone='Europe/Amsterdam';
 # 'col1' is the original column, everything else was added with an 'initial-default' later
 # FIXME: 'col_uuid' is skipped because the parquet reader casts the read BLOB -> UUID, which is not supported in core
 query IIIIIIIIIIIII
-select * EXCLUDE (col1, col_uuid) from ICEBERG_SCAN('__WORKING_DIRECTORY__/data/persistent/add_columns_with_defaults/default.db/add_columns_with_defaults/metadata/00003-3f1801a5-7dfb-4072-b14a-39cd12f9279b.metadata.json');
+select * EXCLUDE (col1, col_uuid) from ICEBERG_SCAN('__WORKING_DIRECTORY__/data/persistent/add_columns_with_defaults/default.db/add_columns_with_defaults/metadata/00003-3f1801a5-7dfb-4072-b14a-39cd12f9279b.metadata.json') order by all;
 ----
 false	453243	328725092345834	23.34342	23.343424523423433	3423434.23	0011-03-05	12:06:45	0011-03-05 12:06:45	2023-05-15 16:30:45+02	World	\x80\x00\x80\x00\x80	\x80\x00\x80
 true	342342	-9223372036854775808	0.34234	0.342343242342342	12345.00	2003-10-20	00:00:00.012345	1970-01-01 00:00:00.012345	1970-01-01 01:00:00.012345+01	HELLO	\x01\x02\x03\xFF\x03	\x01\x02

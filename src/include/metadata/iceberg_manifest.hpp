@@ -60,6 +60,8 @@ public:
 	//! Contains name, source_id, field_id, transform, source_type, and the actual partition value.
 	vector<DataFilePartitionInfo> partition_info;
 	int64_t record_count;
+	bool has_first_row_id = false;
+	int64_t first_row_id = 0xDEADBEEF;
 	int64_t file_size_in_bytes;
 	unordered_map<int32_t, int64_t> column_sizes;
 	unordered_map<int32_t, int64_t> value_counts;

@@ -1,0 +1,66 @@
+# name: test/sql/cloud/s3tables/http_proxy.test
+# description: Test http proxy
+# group: [s3tables]
+
+require-env HTTP_PROXY_PUBLIC
+
+require-env ICEBERG_AWS_REMOTE_AVAILABLE
+
+require-env AWS_ACCESS_KEY_ID
+
+require-env AWS_SECRET_ACCESS_KEY
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+require aws
+
+# override the default behaviour of skipping HTTP errors and connection failures: this test fails on connection issues
+set ignore_error_messages
+
+# Keep track of where the log file will start writing, as proxy logs from previous tests are irrelevant
+statement ok
+CREATE TABLE logs_tracker AS SELECT len(content) AS log_length FROM read_text('mitmproxy.log');
+
+statement ok
+CREATE SECRET s1 (
+  TYPE S3,
+  PROVIDER credential_chain
+);
+
+statement ok
+SET ca_cert_file = '~/.mitmproxy/mitmproxy-ca-cert.pem';
+
+statement ok
+CREATE SECRET http_proxy (
+    TYPE HTTP,
+    http_proxy '${HTTP_PROXY_PUBLIC}'
+);
+
+statement ok
+attach or replace 'arn:aws:s3tables:us-east-2:840140254803:bucket/iceberg-testing' as s3_catalog (
+    TYPE ICEBERG,
+    secret s1,
+    ENDPOINT_TYPE 'S3_TABLES'
+);
+
+query IIII
+select * from s3_catalog.test_inserts.basic_insert_test order by id;
+----
+1	Alice	Smith	1990-01-01
+2	Bob	Jones	1985-06-15
+3	Charlie	Brown	2000-12-31
+
+# Proxy should see a GET request to a manifest file
+query I
+SELECT regexp_matches(
+    substr((SELECT content FROM read_text("mitmproxy.log")), (SELECT log_length FROM logs_tracker) + 1),
+    'GET.*\/metadata\/snap.*avro'
+);
+----
+true

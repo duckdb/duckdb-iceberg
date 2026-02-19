@@ -43,6 +43,7 @@ public:
 public:
 	static unique_ptr<SecretEntry> GetStorageSecret(ClientContext &context, const string &secret_name);
 	static unique_ptr<SecretEntry> GetIcebergSecret(ClientContext &context, const string &secret_name);
+	static unique_ptr<SecretEntry> GetHTTPSecret(ClientContext &context, const string &secret_name);
 	void ParsePrefix();
 	void GetConfig(ClientContext &context, IcebergEndpointType &endpoint_type);
 	IRCEndpointBuilder GetBaseUrl() const;
@@ -65,6 +66,7 @@ public:
 	string GetDefaultSchema() const override {
 		return default_schema;
 	}
+	ErrorData SupportsCreateTable(BoundCreateTableInfo &info) override;
 
 public:
 	static unique_ptr<Catalog> Attach(optional_ptr<StorageExtensionInfo> storage_info, ClientContext &context,
@@ -78,10 +80,6 @@ public:
 	}
 	bool SupportsTimeTravel() const override {
 		return true;
-	}
-	ErrorData SupportsCreateTable(BoundCreateTableInfo &info) override {
-		// we support partitioned by and WITH
-		return ErrorData();
 	}
 	void DropSchema(ClientContext &context, DropInfo &info) override;
 	optional_ptr<CatalogEntry> CreateSchema(CatalogTransaction transaction, CreateSchemaInfo &info) override;
@@ -110,12 +108,11 @@ public:
 	                                                      const string &property_value);
 	void StoreLoadTableResult(const string &table_key,
 	                          unique_ptr<const rest_api_objects::LoadTableResult> load_table_result);
-	MetadataCacheValue &GetLoadTableResult(const string &table_key);
 	//! Returns a reference to the metadata cache mutex. The caller is responsible for holding the lock
 	//! for the duration of any access to data returned by TryGetValidCachedLoadTableResult.
 	std::mutex &GetMetadataCacheLock();
-	optional_ptr<MetadataCacheValue> TryGetValidCachedLoadTableResult(const string &table_key,
-	                                                                  lock_guard<std::mutex> &lock);
+	optional_ptr<MetadataCacheValue>
+	TryGetValidCachedLoadTableResult(const string &table_key, lock_guard<std::mutex> &lock, bool validate_cache = true);
 	void RemoveLoadTableResult(const string &table_key);
 
 public:

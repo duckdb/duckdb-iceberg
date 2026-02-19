@@ -1,0 +1,67 @@
+# name: test/sql/cloud/s3tables/test_create_table_with_properties.test
+# description: test integration with iceberg catalog read
+# group: [s3tables]
+
+require-env ICEBERG_AWS_REMOTE_AVAILABLE
+
+require-env AWS_ACCESS_KEY_ID
+
+require-env AWS_SECRET_ACCESS_KEY
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+require aws
+
+statement ok
+CREATE SECRET (
+    TYPE S3,
+    PROVIDER credential_chain
+);
+
+statement ok
+attach or replace 'arn:aws:s3tables:us-east-2:840140254803:bucket/iceberg-testing' as s3_catalog (
+    TYPE ICEBERG,
+    ENDPOINT_TYPE S3_TABLES
+);
+
+set ignore_error_messages
+
+statement ok
+create schema IF NOT EXISTS s3_catalog.test_create_schema;
+
+statement ok
+use s3_catalog.test_create_schema;
+
+statement ok
+drop table if exists test_create_table;
+
+statement ok
+create table test_create_table (a int) 
+WITH (
+    'format-version'='2',
+    'property1'='value1', 
+    'property2'='value2'
+);
+
+query II
+select * from iceberg_table_properties(s3_catalog.test_create_schema.test_create_table) where key like '%property%' order by key;
+----
+property1	value1
+property2	value2
+
+statement error
+create table invalid_table_format_version (a int) 
+WITH (
+    'format-version'='3',
+    'property1'='value1', 
+    'property2'='value2'
+);
+----
+<REGEX>:.*DuckDB-Iceberg only supports creating version 2 Iceberg tables.*
+

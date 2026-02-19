@@ -6,34 +6,35 @@
 
 #include "metadata/iceberg_manifest.hpp"
 #include "metadata/iceberg_manifest_list.hpp"
-
-#include "avro_scan.hpp"
+#include "iceberg_avro_multi_file_list.hpp"
 
 namespace duckdb {
 
-// Manifest Reader
+class AvroScan;
 
 class BaseManifestReader {
 public:
-	BaseManifestReader(idx_t iceberg_version) : iceberg_version(iceberg_version) {
-	}
-	virtual ~BaseManifestReader() {
-	}
+	BaseManifestReader(const AvroScan &scan);
+	virtual ~BaseManifestReader();
 
 public:
-	void Initialize(unique_ptr<AvroScan> scan_p);
 	bool Finished() const;
 
 protected:
 	idx_t ScanInternal(idx_t remaining);
 	const IcebergAvroScanInfo &GetScanInfo() const;
 
+private:
+	void InitializeInternal();
+
 protected:
+	const AvroScan &scan;
 	DataChunk chunk;
+	unique_ptr<LocalTableFunctionState> local_state;
 	const idx_t iceberg_version;
-	unique_ptr<AvroScan> scan;
 	idx_t offset = 0;
-	bool finished = true;
+	bool initialized = false;
+	bool finished = false;
 };
 
 namespace manifest_list {
@@ -41,9 +42,8 @@ namespace manifest_list {
 //! Produces IcebergManifests read, from the 'manifest_list'
 class ManifestListReader : public BaseManifestReader {
 public:
-	ManifestListReader(idx_t iceberg_version);
-	~ManifestListReader() override {
-	}
+	ManifestListReader(const AvroScan &scan);
+	~ManifestListReader() override;
 
 public:
 	idx_t Read(idx_t count, vector<IcebergManifestFile> &result);
@@ -59,14 +59,12 @@ namespace manifest_file {
 //! Produces IcebergManifestEntries read, from the 'manifest_file'
 class ManifestReader : public BaseManifestReader {
 public:
-	ManifestReader(idx_t iceberg_version, bool skip_deleted = true);
-	~ManifestReader() override {
-	}
+	ManifestReader(const AvroScan &scan, bool skip_deleted);
+	~ManifestReader() override;
 
 public:
 	idx_t Read(idx_t count, vector<IcebergManifestEntry> &result);
 
-public:
 private:
 	idx_t ReadChunk(idx_t offset, idx_t count, vector<IcebergManifestEntry> &result);
 

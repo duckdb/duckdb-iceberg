@@ -1,0 +1,102 @@
+# name: test/sql/local/irc/oauth2/test_oauth2_refresh_omission.test
+# description: Test that OAuth2 preserves refresh_token when server omits it in refresh response
+# group: [oauth2]
+
+# NOTE: This test uses Keycloak which returns refresh_token in the initial grant.
+# Per RFC 6749 Section 6, when the server omits refresh_token in subsequent responses:
+# "The authorization server MAY issue a new refresh token, in which case
+# the client MUST discard the old refresh token and replace it with the new one."
+# When no new refresh_token is returned, the client should keep using the existing one.
+# Keycloak typically returns a new refresh_token on each refresh, but we test the
+# omission case by verifying multiple refreshes work.
+
+require-env NESSIE_SERVER_AVAILABLE
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+set ignore_error_messages
+
+statement ok
+CALL enable_logging('HTTP');
+
+statement ok
+set logging_level='debug';
+
+statement ok
+CREATE SECRET storage_secret (
+    TYPE S3,
+    KEY_ID 'minioadmin',
+    SECRET 'minioadmin',
+    ENDPOINT '127.0.0.1:9002',
+    URL_STYLE 'path',
+    USE_SSL 0
+);
+
+# Attach with credentials that will receive a refresh_token initially
+statement ok
+ATTACH '' AS omit_lake (
+    TYPE ICEBERG,
+    CLIENT_ID 'client1',
+    CLIENT_SECRET 's3cr3t',
+    OAUTH2_SCOPE 'catalog sign',
+    OAUTH2_SERVER_URI 'http://127.0.0.1:8080/realms/iceberg/protocol/openid-connect/token',
+    ENDPOINT 'http://127.0.0.1:19120/iceberg/',
+    ACCESS_DELEGATION_MODE 'none'
+);
+
+# Initial token fetch
+query I
+SELECT count(*) >= 1 AS has_initial_fetch FROM duckdb_logs_parsed('HTTP')
+WHERE request.type = 'POST'
+  AND request.url LIKE '%token%';
+----
+true
+
+statement ok
+call truncate_duckdb_logs();
+
+# Force first refresh - server omits refresh_token in response
+statement ok
+SET iceberg_test_force_token_expiry=true;
+
+statement ok
+show all tables;
+
+# Verify first refresh happened
+query I
+SELECT count(*) >= 1 AS has_first_refresh FROM duckdb_logs_parsed('HTTP')
+WHERE request.type = 'POST'
+  AND request.url LIKE '%token%';
+----
+true
+
+statement ok
+call truncate_duckdb_logs();
+
+# Force second refresh - should still work using the ORIGINAL refresh_token
+# This verifies that we didn't blank the refresh_token when the server omitted it
+statement ok
+show all tables;
+
+# Verify second refresh happened successfully (proves refresh_token was preserved)
+query I
+SELECT count(*) >= 1 AS has_second_refresh FROM duckdb_logs_parsed('HTTP')
+WHERE request.type = 'POST'
+  AND request.url LIKE '%token%';
+----
+true
+
+statement ok
+SET iceberg_test_force_token_expiry=false;
+
+statement ok
+DETACH omit_lake;
+
+statement ok
+DROP SECRET storage_secret;

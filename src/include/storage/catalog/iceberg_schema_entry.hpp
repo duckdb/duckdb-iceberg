@@ -43,9 +43,15 @@ public:
 	optional_ptr<CatalogEntry> LookupEntry(CatalogTransaction transaction, const EntryLookupInfo &lookup_info) override;
 	bool HandleCreateConflict(CatalogTransaction &transaction, CatalogType catalog_type, const string &entry_name,
 	                          OnCreateConflict on_conflict);
+	bool DoesExist() const {
+		return exists;
+	}
 
 private:
 	IcebergTableSet &GetCatalogSet(CatalogType type);
+	// does the schema actually exist? default is true, but this is set to false
+	// when a verify schema request is made.
+	bool exists;
 
 public:
 	IcebergTableSet tables;

@@ -1,0 +1,62 @@
+# name: test/sql/cloud/glue/test_create_table_location_glue.test
+# description: test createing a table in glue
+# group: [glue]
+
+require-env ICEBERG_AWS_REMOTE_AVAILABLE
+
+require-env AWS_ACCESS_KEY_ID
+
+require-env AWS_SECRET_ACCESS_KEY
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+require aws
+
+set ignore_error_messages
+
+statement ok
+CREATE SECRET (
+  TYPE S3,
+  PROVIDER credential_chain,
+  REGION 'us-east-1'
+);
+
+statement ok
+attach '840140254803' as my_datalake (
+    TYPE ICEBERG,
+    ENDPOINT_TYPE 'GLUE',
+    purge_requested false
+);
+
+statement ok
+drop table if exists my_datalake.simple_glue_database.duckdb_created_table;
+
+statement ok
+create table my_datalake.simple_glue_database.duckdb_created_table (a int)
+WITH (
+    'location'='s3://duckdblabs-glue-iceberg-database-on-s3-bucket/iceberg-database/',
+    'property1'='value2',
+    'property2'='value3'
+);
+
+statement ok
+insert into my_datalake.simple_glue_database.duckdb_created_table values (1), (2);
+
+query I
+select * from  my_datalake.simple_glue_database.duckdb_created_table;
+----
+1
+2
+
+query II
+select * from iceberg_table_properties(my_datalake.simple_glue_database.duckdb_created_table) order by all;
+----
+property1	value2
+property2	value3
+write.parquet.compression-codec	zstd

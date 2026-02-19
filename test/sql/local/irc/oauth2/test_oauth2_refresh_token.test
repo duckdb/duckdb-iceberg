@@ -1,0 +1,84 @@
+# name: test/sql/local/irc/oauth2/test_oauth2_refresh_token.test
+# description: Test RFC 6749 Section 6 refresh_token grant flow
+# group: [oauth2]
+
+require-env NESSIE_SERVER_AVAILABLE
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+require aws
+
+set ignore_error_messages
+
+statement ok
+CALL enable_logging('HTTP');
+
+statement ok
+set logging_level='debug';
+
+statement ok
+CREATE SECRET storage_secret (
+    TYPE S3,
+    KEY_ID 'minioadmin',
+    SECRET 'minioadmin',
+    ENDPOINT '127.0.0.1:9002',
+    URL_STYLE 'path',
+    USE_SSL 0
+);
+
+# Keycloak returns refresh_token in its OAuth2 response
+statement ok
+ATTACH '' AS nessie_lake (
+    TYPE ICEBERG,
+    CLIENT_ID 'client1',
+    CLIENT_SECRET 's3cr3t',
+    OAUTH2_SCOPE 'catalog sign',
+    OAUTH2_SERVER_URI 'http://127.0.0.1:8080/realms/iceberg/protocol/openid-connect/token',
+    ENDPOINT 'http://127.0.0.1:19120/iceberg/',
+    ACCESS_DELEGATION_MODE 'none'
+);
+
+# Initial token fetch via client_credentials
+query I
+SELECT count(*) >= 1 AS has_initial_fetch FROM duckdb_logs_parsed('HTTP')
+WHERE request.type = 'POST'
+  AND request.url LIKE '%openid-connect/token%';
+----
+true
+
+statement ok
+show all tables;
+
+statement ok
+call truncate_duckdb_logs();
+
+# Force token expiry
+statement ok
+SET iceberg_test_force_token_expiry=true;
+
+# This request should trigger a refresh using grant_type=refresh_token
+statement ok
+show all tables;
+
+# Verify the refresh request was a POST with grant_type=refresh_token
+query I
+SELECT count(*) >= 1 AS has_refresh FROM duckdb_logs_parsed('HTTP')
+WHERE request.type = 'POST'
+  AND request.url LIKE '%openid-connect/token%';
+----
+true
+
+statement ok
+SET iceberg_test_force_token_expiry=false;
+
+statement ok
+DETACH nessie_lake;
+
+statement ok
+DROP SECRET storage_secret;

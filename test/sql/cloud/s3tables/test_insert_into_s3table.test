@@ -96,7 +96,7 @@ insert into s3_catalog.test_inserts.basic_insert_test select * from VALUES
 
 # con1 only sees con1
 query IIII con1
-select * from s3_catalog.test_inserts.basic_insert_test;
+select * from s3_catalog.test_inserts.basic_insert_test order by id;
 ----
 1	Alice	Smith	1990-01-01
 2	Bob	Jones	1985-06-15
@@ -105,7 +105,7 @@ select * from s3_catalog.test_inserts.basic_insert_test;
 
 # con2 only sees con2
 query IIII con2
-select * from s3_catalog.test_inserts.basic_insert_test;
+select * from s3_catalog.test_inserts.basic_insert_test order by id;
 ----
 1	Alice	Smith	1990-01-01
 2	Bob	Jones	1985-06-15
@@ -136,7 +136,7 @@ select 1;
 
 # we see the con2 update
 query IIII
-select * from s3_catalog.test_inserts.basic_insert_test;
+select * from s3_catalog.test_inserts.basic_insert_test order by id;
 ----
 1	Alice	Smith	1990-01-01
 2	Bob	Jones	1985-06-15
@@ -176,7 +176,7 @@ statement ok con3
 commit
 
 query IIII
-select * from s3_catalog.test_inserts.basic_insert_test;
+select * from s3_catalog.test_inserts.basic_insert_test order by id;
 ----
 1	Alice	Smith	1990-01-01
 2	Bob	Jones	1985-06-15

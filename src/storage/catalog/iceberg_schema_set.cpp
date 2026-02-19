@@ -38,7 +38,11 @@ optional_ptr<CatalogEntry> IcebergSchemaSet::GetEntry(ClientContext &context, co
 	auto verify_existence = iceberg_transaction.looked_up_entries.insert(name).second;
 	auto entry = entries.find(name);
 	if (entry != entries.end()) {
-		return entry->second.get();
+		auto &iceberg_schema_entry = entry->second->Cast<IcebergSchemaEntry>();
+		if (iceberg_schema_entry.DoesExist()) {
+			return entry->second.get();
+		}
+		return nullptr;
 	}
 	if (!verify_existence) {
 		if (if_not_found == OnEntryNotFound::RETURN_NULL) {
@@ -75,7 +79,10 @@ void IcebergSchemaSet::Scan(ClientContext &context, const std::function<void(Cat
 	lock_guard<mutex> l(entry_lock);
 	LoadEntries(context);
 	for (auto &entry : entries) {
-		callback(*entry.second);
+		auto &iceberg_schema_entry = entry.second->Cast<IcebergSchemaEntry>();
+		if (iceberg_schema_entry.DoesExist()) {
+			callback(*entry.second);
+		}
 	}
 }
 

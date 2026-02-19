@@ -33,6 +33,9 @@ public:
 
 struct IcebergMultiFileReader : public MultiFileReader {
 public:
+	static constexpr column_t COLUMN_IDENTIFIER_LAST_SEQUENCE_NUMBER = UINT64_C(10000000000000000000);
+
+public:
 	IcebergMultiFileReader(shared_ptr<TableFunctionInfo> function_info);
 
 public:
@@ -74,6 +77,9 @@ public:
 
 private:
 	unique_ptr<MultiFileColumnDefinition> row_id_column;
+	unique_ptr<MultiFileColumnDefinition> last_updated_sequence_number_column;
+	//! Track which output column is sequence_number (if the virtual column is requested)
+	optional_idx sequence_number_col;
 };
 
 } // namespace duckdb

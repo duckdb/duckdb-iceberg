@@ -77,6 +77,8 @@ public:
 	int64_t manifest_length;
 	//! The id of the partition spec referenced by this manifest (and the data files that are part of it)
 	int32_t partition_spec_id;
+	bool has_first_row_id = false;
+	sequence_number_t first_row_id = 0xDEADBEEF;
 	//! either data or deletes
 	IcebergManifestContentType content;
 	//! sequence_number when manifest was added to table (0 for Iceberg v1)

@@ -5,11 +5,14 @@ namespace duckdb {
 
 namespace manifest_list {
 
-ManifestListReader::ManifestListReader(idx_t iceberg_version) : BaseManifestReader(iceberg_version) {
+ManifestListReader::ManifestListReader(const AvroScan &scan) : BaseManifestReader(scan) {
+}
+
+ManifestListReader::~ManifestListReader() {
 }
 
 idx_t ManifestListReader::Read(idx_t count, vector<IcebergManifestFile> &result) {
-	if (!scan || finished) {
+	if (finished) {
 		return 0;
 	}
 
@@ -64,21 +67,25 @@ idx_t ManifestListReader::ReadChunk(idx_t offset, idx_t count, vector<IcebergMan
 	auto &lower_bound = *child_vectors[partition_index++];
 	auto &upper_bound = *child_vectors[partition_index++];
 
-	// optional_ptr<Vector> first_row_id;
-	// if (iceberg_version >= 3) {
-	//	first_row_id = chunk.data[vector_index++];
-	//}
+	optional_ptr<Vector> first_row_id;
+	if (iceberg_version >= 3) {
+		first_row_id = chunk.data[vector_index++];
+	}
 
 	auto manifest_path_data = FlatVector::GetData<string_t>(manifest_path);
 	auto manifest_length_data = FlatVector::GetData<int64_t>(manifest_length);
 	auto partition_spec_id_data = FlatVector::GetData<int32_t>(partition_spec_id);
-	int32_t *content_data;
-	int64_t *sequence_number_data;
-	int64_t *min_sequence_number_data;
+	int32_t *content_data = nullptr;
+	int64_t *sequence_number_data = nullptr;
+	int64_t *min_sequence_number_data = nullptr;
+	int64_t *first_row_id_data = nullptr;
 	if (iceberg_version >= 2) {
 		content_data = FlatVector::GetData<int32_t>(*content);
 		sequence_number_data = FlatVector::GetData<int64_t>(*sequence_number);
 		min_sequence_number_data = FlatVector::GetData<int64_t>(*min_sequence_number);
+	}
+	if (iceberg_version >= 3) {
+		first_row_id_data = FlatVector::GetData<int64_t>(*first_row_id);
 	}
 	auto added_snapshot_id_data = FlatVector::GetData<int64_t>(added_snapshot_id);
 	auto added_files_count_data = FlatVector::GetData<int32_t>(added_files_count);
@@ -117,6 +124,19 @@ idx_t ManifestListReader::ReadChunk(idx_t offset, idx_t count, vector<IcebergMan
 			manifest.content = IcebergManifestContentType::DATA;
 			manifest.sequence_number = 0;
 			manifest.min_sequence_number = 0;
+		}
+
+		if (iceberg_version >= 3) {
+			if (!FlatVector::Validity(*first_row_id).RowIsValid(index)) {
+				if (manifest.content != IcebergManifestContentType::DELETE) {
+					throw InternalException(
+					    "Malformed manifest_file detected, 'first-row-id' is not set for a DATA manifest");
+				}
+				manifest.has_first_row_id = false;
+			} else {
+				manifest.first_row_id = first_row_id_data[index];
+				manifest.has_first_row_id = true;
+			}
 		}
 
 		if (field_summary && partitions_validity.RowIsValid(index)) {

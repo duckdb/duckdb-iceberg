@@ -39,10 +39,10 @@ b	2
 b	1
 
 query III
-SELECT filename[17:32], name, id FROM ICEBERG_SCAN('data/persistent/equality_deletes/warehouse/mydb/mytable');
+SELECT filename[17:32], name, id FROM ICEBERG_SCAN('data/persistent/equality_deletes/warehouse/mydb/mytable') order by all;
 ----
-equality_deletes	b	2
 equality_deletes	b	1
+equality_deletes	b	2
 
 statement error
 SELECT filename[17:32], name FROM ICEBERG_SCAN('data/persistent/equality_deletes/warehouse/mydb/mytable');

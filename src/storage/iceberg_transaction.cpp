@@ -1,3 +1,5 @@
+#include "../include/storage/iceberg_transaction.hpp"
+
 #include "duckdb/common/assert.hpp"
 #include "duckdb/parser/parsed_data/create_view_info.hpp"
 #include "duckdb/catalog/catalog_entry/index_catalog_entry.hpp"
@@ -18,6 +20,7 @@
 #include "duckdb/storage/table/update_state.hpp"
 #include "duckdb/parser/parsed_data/drop_info.hpp"
 #include "storage/catalog/iceberg_schema_entry.hpp"
+#include "avro_scan.hpp"
 
 namespace duckdb {
 
@@ -313,9 +316,8 @@ TableTransactionInfo IcebergTransaction::GetTransactionRequest(ClientContext &co
 		if (current_snapshot) {
 			auto &manifest_list_path = current_snapshot->manifest_list;
 			//! Read the manifest list
-			auto manifest_list_reader = make_uniq<manifest_list::ManifestListReader>(metadata.iceberg_version);
 			auto scan = AvroScan::ScanManifestList(*current_snapshot, metadata, context, manifest_list_path);
-			manifest_list_reader->Initialize(std::move(scan));
+			auto manifest_list_reader = make_uniq<manifest_list::ManifestListReader>(*scan);
 			while (!manifest_list_reader->Finished()) {
 				manifest_list_reader->Read(STANDARD_VECTOR_SIZE, commit_state.manifests);
 			}
@@ -476,7 +478,6 @@ void IcebergTransaction::CleanupFiles() {
 		return;
 	}
 	auto &fs = FileSystem::GetFileSystem(db);
-	vector<string> to_be_removed;
 	for (auto &up_table : updated_tables) {
 		auto &table = up_table.second;
 		if (!table.transaction_data) {
@@ -495,17 +496,30 @@ void IcebergTransaction::CleanupFiles() {
 			for (const auto &manifest : manifest_list_entries) {
 				for (auto &manifest_entry : manifest.manifest_file.entries) {
 					auto &data_file = manifest_entry.data_file;
-					to_be_removed.push_back(data_file.file_path);
+					fs.TryRemoveFile(data_file.file_path);
 				}
 			}
 		}
 	}
-
-	fs.RemoveFiles(to_be_removed);
 }
 
 void IcebergTransaction::Rollback() {
 	CleanupFiles();
+}
+
+void IcebergTransaction::RecordTableRequest(const string &table_key, idx_t sequence_number, idx_t snapshot_id) {
+	requested_tables.emplace(table_key, TableInfoCache(sequence_number, snapshot_id));
+}
+
+void IcebergTransaction::RecordTableRequest(const string &table_key) {
+	requested_tables.emplace(table_key, TableInfoCache(false));
+}
+
+TableInfoCache IcebergTransaction::GetTableRequestResult(const string &table_key) {
+	if (requested_tables.find(table_key) == requested_tables.end()) {
+		return TableInfoCache(false);
+	}
+	return requested_tables.at(table_key);
 }
 
 IcebergTransaction &IcebergTransaction::Get(ClientContext &context, Catalog &catalog) {

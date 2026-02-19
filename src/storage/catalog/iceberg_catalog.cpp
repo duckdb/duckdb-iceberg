@@ -85,29 +85,20 @@ void IcebergCatalog::StoreLoadTableResult(const string &table_key,
 	metadata_cache.emplace(table_key, std::move(val));
 }
 
-MetadataCacheValue &IcebergCatalog::GetLoadTableResult(const string &table_key) {
-	std::lock_guard<std::mutex> g(metadata_cache_mutex);
-	if (metadata_cache.find(table_key) == metadata_cache.end()) {
-		throw InternalException("Attempting to retrieve table information that was never stored");
-	}
-	auto res = metadata_cache.find(table_key);
-	D_ASSERT(res != metadata_cache.end());
-	return *res->second;
-}
-
 std::mutex &IcebergCatalog::GetMetadataCacheLock() {
 	return metadata_cache_mutex;
 }
 
 optional_ptr<MetadataCacheValue> IcebergCatalog::TryGetValidCachedLoadTableResult(const string &table_key,
-                                                                                  lock_guard<std::mutex> &lock) {
+                                                                                  lock_guard<std::mutex> &lock,
+                                                                                  bool validate_cache) {
 	(void)lock;
 	auto it = metadata_cache.find(table_key);
 	if (it == metadata_cache.end()) {
 		return nullptr;
 	}
 	auto &cached_value = *it->second;
-	if (system_clock::now() > cached_value.expires_at) {
+	if (validate_cache && system_clock::now() > cached_value.expires_at) {
 		// cached value has expired
 		return nullptr;
 	}
@@ -169,6 +160,9 @@ void IcebergCatalog::DropSchema(ClientContext &context, DropInfo &info) {
 
 	if (!schema_exists) {
 		if (info.if_not_found == OnEntryNotFound::RETURN_NULL) {
+			// remove the entry if it exists locally
+			// it could have been created during the bind phase.
+			GetSchemas().RemoveEntry(info.name);
 			return;
 		}
 		throw CatalogException("Schema with name \"%s\" does not exist", info.name);
@@ -196,6 +190,15 @@ string IcebergCatalog::GetDBPath() {
 DatabaseSize IcebergCatalog::GetDatabaseSize(ClientContext &context) {
 	DatabaseSize size;
 	return size;
+}
+
+ErrorData IcebergCatalog::SupportsCreateTable(BoundCreateTableInfo &info) {
+	auto &base = info.Base().Cast<CreateTableInfo>();
+	if (!base.sort_keys.empty()) {
+		return ErrorData(ExceptionType::CATALOG,
+		                 StringUtil::Format("SORTED BY is not supported for tables in a %s catalog", GetCatalogType()));
+	}
+	return ErrorData();
 }
 
 //===--------------------------------------------------------------------===//
@@ -268,6 +271,28 @@ unique_ptr<SecretEntry> IcebergCatalog::GetIcebergSecret(ClientContext &context,
 	return secret_entry;
 }
 
+unique_ptr<SecretEntry> IcebergCatalog::GetHTTPSecret(ClientContext &context, const string &secret_name) {
+	auto transaction = CatalogTransaction::GetSystemCatalogTransaction(context);
+	unique_ptr<SecretEntry> secret_entry = nullptr;
+
+	if (!secret_name.empty()) {
+		secret_entry = context.db->GetSecretManager().GetSecretByName(transaction, secret_name);
+		if (!secret_entry) {
+			throw InternalException("Secret '%s' not found", secret_name);
+		}
+		auto http_kv_secret = dynamic_cast<const KeyValueSecret &>(*secret_entry->secret);
+		bool has_proxy = !http_kv_secret.TryGetValue("http_proxy").IsNull();
+		if (has_proxy) {
+			return secret_entry;
+		}
+	}
+	auto secret_match = context.db->GetSecretManager().LookupSecret(transaction, "", "http");
+	if (!secret_match.HasMatch()) {
+		return nullptr;
+	}
+	secret_entry = std::move(secret_match.secret_entry);
+	return secret_entry;
+}
 void IcebergCatalog::AddDefaultSupportedEndpoints() {
 	// insert namespaces based on REST API spec.
 	// List namespaces

@@ -25,8 +25,27 @@
 #include "deletes/equality_delete.hpp"
 #include "deletes/positional_delete.hpp"
 #include "deletes/iceberg_delete_data.hpp"
+#include "avro_scan.hpp"
+#include "duckdb/parallel/task_executor.hpp"
 
 namespace duckdb {
+
+struct IcebergManifestReadingState {
+public:
+	IcebergManifestReadingState(ClientContext &context, unique_ptr<AvroScan> scan, mutex &lock,
+	                            vector<IcebergManifestEntry> &entries)
+	    : context(context), executor(context), scan(std::move(scan)), lock(lock), entries(entries),
+	      in_progress_tasks(0) {
+	}
+
+public:
+	ClientContext &context;
+	TaskExecutor executor;
+	unique_ptr<AvroScan> scan;
+	mutex &lock;
+	vector<IcebergManifestEntry> &entries;
+	atomic<idx_t> in_progress_tasks;
+};
 
 enum class IcebergDataFileType : uint8_t { DATA, DELETE };
 
@@ -34,6 +53,7 @@ struct IcebergMultiFileList : public MultiFileList {
 public:
 	IcebergMultiFileList(ClientContext &context, shared_ptr<IcebergScanInfo> scan_info, const string &path,
 	                     const IcebergOptions &options);
+	virtual ~IcebergMultiFileList() override;
 
 public:
 	static string ToDuckDBPath(const string &raw_path);
@@ -44,7 +64,6 @@ public:
 	optional_ptr<IcebergSnapshot> GetSnapshot() const;
 	const IcebergTableSchema &GetSchema() const;
 	bool FinishedScanningDeletes() const;
-	bool FinishedScanningData() const;
 
 	void Bind(vector<LogicalType> &return_types, vector<string> &names);
 	unique_ptr<IcebergMultiFileList> PushdownInternal(ClientContext &context, TableFilterSet &new_filters) const;
@@ -91,6 +110,10 @@ protected:
 	optional_ptr<const TableFilter> GetFilterForColumnIndex(const TableFilterSet &filter_set,
 	                                                        const ColumnIndex &column_index) const;
 
+private:
+	bool PopulateEntryBuffer(lock_guard<mutex> &guard) const;
+	void FinishScanTasks(lock_guard<mutex> &guard) const;
+
 public:
 	ClientContext &context;
 	FileSystem &fs;
@@ -105,6 +128,7 @@ public:
 	vector<LogicalType> types;
 	TableFilterSet table_filters;
 
+	mutable mutex entry_lock;
 	mutable vector<IcebergManifestEntry> manifest_entries;
 	//! For each file that has a delete file, the state for processing that/those delete file(s)
 	mutable case_insensitive_map_t<shared_ptr<IcebergDeleteData>> positional_delete_data;
@@ -119,8 +143,12 @@ public:
 	mutable vector<IcebergManifestFile> data_manifests;
 	mutable vector<reference<IcebergManifest>> transaction_data_manifests;
 	mutable idx_t transaction_data_idx = 0;
+	mutable unique_ptr<IcebergManifestReadingState> manifest_read_state;
+	mutable atomic<bool> finished;
+	mutable atomic<bool> has_buffered_entries;
 
 	//! State used for pre-processing delete files
+	mutable unique_ptr<AvroScan> delete_manifest_scan;
 	mutable unique_ptr<manifest_file::ManifestReader> delete_manifest_reader;
 	mutable vector<IcebergManifestFile> delete_manifests;
 	mutable vector<reference<IcebergManifest>> transaction_delete_manifests;

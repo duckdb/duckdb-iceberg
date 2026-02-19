@@ -3,6 +3,7 @@ import os
 import datetime
 from decimal import Decimal
 from math import inf
+from dataclasses import dataclass
 
 from pprint import pprint
 
@@ -16,22 +17,52 @@ SparkContext = pyspark.SparkContext
 Row = pyspark_sql.Row
 
 
+@dataclass
+class IcebergRuntimeConfig:
+    spark_version: str
+    scala_binary_version: str
+    iceberg_library_version: str
+
+
 # List of runtimes you want to test
 ICEBERG_RUNTIMES = [
-    "org.apache.iceberg:iceberg-spark-runtime-3.5_2.12:1.4.1",
-    "org.apache.iceberg:iceberg-spark-runtime-3.5_2.12:1.9.0",
-    "org.apache.iceberg:iceberg-spark-runtime-3.5_2.13:1.9.1",
+    IcebergRuntimeConfig(
+        spark_version="3.5",
+        scala_binary_version="2.12",
+        iceberg_library_version="1.4.1",
+    ),
+    IcebergRuntimeConfig(
+        spark_version="3.5",
+        scala_binary_version="2.12",
+        iceberg_library_version="1.9.0",
+    ),
+    IcebergRuntimeConfig(
+        spark_version="3.5",
+        scala_binary_version="2.13",
+        iceberg_library_version="1.9.1",
+    ),
 ]
+
+
+# uses {spark}_{scala}-{iceberg}
+def generate_jar_location(config: IcebergRuntimeConfig) -> str:
+    return f"iceberg-spark-runtime-{config.spark_version}_{config.scala_binary_version}-{config.iceberg_library_version}.jar"
+
+
+# uses {spark}_{scala}:{iceberg}
+def generate_package(config: IcebergRuntimeConfig) -> str:
+    return f'org.apache.iceberg:iceberg-spark-runtime-{config.spark_version}_{config.scala_binary_version}:{config.iceberg_library_version}'
 
 
 @pytest.fixture(params=ICEBERG_RUNTIMES, scope="session")
 def spark_con(request):
-    runtime_pkg = request.param
-    runtime_pkg_jar = (runtime_pkg[len("org.apache.iceberg:") :] + ".jar").replace(":", "-")
-    runtime_path = os.path.abspath(os.path.join(SCRIPT_DIR, '..', '..', 'scripts', 'data_generators', runtime_pkg_jar))
+    runtime_config = request.param
+    runtime_jar = generate_jar_location(runtime_config)
+    runtime_pkg = generate_package(runtime_config)
+    runtime_path = os.path.abspath(os.path.join(SCRIPT_DIR, '..', '..', 'scripts', 'data_generators', runtime_jar))
 
     os.environ["PYSPARK_SUBMIT_ARGS"] = (
-        f"--packages {runtime_pkg},org.apache.iceberg:iceberg-aws-bundle:1.9.0 pyspark-shell"
+        f"--packages {runtime_pkg},org.apache.iceberg:iceberg-aws-bundle:{runtime_config.iceberg_library_version} pyspark-shell"
     )
     os.environ["AWS_REGION"] = "us-east-1"
     os.environ["AWS_ACCESS_KEY_ID"] = "admin"

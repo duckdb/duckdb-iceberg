@@ -16,6 +16,9 @@ static void IcebergDeletesScanSerialize(Serializer &serializer, const optional_p
                                         const TableFunction &function) {
 	throw NotImplementedException("IcebergDeletesScan serialization not implemented");
 }
+static unique_ptr<FunctionData> IcebergDeletesScanDeserialize(Deserializer &deserializer, TableFunction &function) {
+	throw NotImplementedException("IcebergDeletesScan deserialization not implemented");
+}
 
 TableFunctionSet IcebergFunctions::GetIcebergDeletesScanFunction(ClientContext &context) {
 	// The iceberg_scan function is constructed by grabbing the parquet scan from the Catalog, then injecting the
@@ -41,7 +44,7 @@ TableFunctionSet IcebergFunctions::GetIcebergDeletesScanFunction(ClientContext &
 		// Unset all of these: they are either broken, very inefficient.
 		// TODO: implement/fix these
 		function.serialize = IcebergDeletesScanSerialize;
-		function.deserialize = nullptr;
+		function.deserialize = IcebergDeletesScanDeserialize;
 
 		function.statistics = nullptr;
 		function.table_scan_progress = nullptr;

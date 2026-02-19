@@ -61,14 +61,42 @@ unique_ptr<IcebergAuthorization> SIGV4Authorization::FromAttachOptions(IcebergAt
 	return std::move(result);
 }
 
+static bool IsAwsRegion(const string &token) {
+	static const vector<string> prefixes = {"us-", "eu-", "ap-", "sa-", "ca-", "me-", "af-", "il-", "mx-"};
+	bool has_prefix = false;
+	for (auto &prefix : prefixes) {
+		if (StringUtil::StartsWith(token, prefix)) {
+			has_prefix = true;
+			break;
+		}
+	}
+	if (!has_prefix) {
+		return false;
+	}
+	if (token.empty() || !StringUtil::CharacterIsDigit(token.back())) {
+		return false;
+	}
+	return true;
+}
+
 static string GetAwsRegion(const string &host) {
-	idx_t first_dot = host.find_first_of('.');
-	idx_t second_dot = host.find_first_of('.', first_dot + 1);
-	return host.substr(first_dot + 1, second_dot - first_dot - 1);
+	auto parts = StringUtil::Split(host, '.');
+	for (auto &part : parts) {
+		if (IsAwsRegion(part)) {
+			return part;
+		}
+	}
+	throw InvalidInputException("Could not parse AWS region from host: %s", host);
 }
 
 static string GetAwsService(const string &host) {
-	return host.substr(0, host.find_first_of('.'));
+	auto parts = StringUtil::Split(host, '.');
+	for (idx_t i = 0; i < parts.size(); i++) {
+		if (IsAwsRegion(parts[i]) && i > 0) {
+			return parts[i - 1];
+		}
+	}
+	throw InvalidInputException("Could not parse AWS service from host: %s", host);
 }
 
 AWSInput SIGV4Authorization::CreateAWSInput(ClientContext &context, const IRCEndpointBuilder &endpoint_builder) {

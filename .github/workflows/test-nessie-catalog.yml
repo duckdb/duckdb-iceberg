@@ -27,16 +27,19 @@ jobs:
           find ./build/release -type f -name 'duckdb*' -exec chmod +x {} \;
           find ./build/release -type f -name 'unittest*' -exec chmod +x {} \;
 
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Set up Docker Compose
+        uses: docker/setup-compose-action@v1
+
       - name: Install Nessie dependencies
-        shell: bash
         run: |
-          # install docker-compose
-          sudo curl -L "https://github.com/docker/compose/releases/download/1.29.2/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
-          sudo chmod +x /usr/local/bin/docker-compose
-          # install Java & Python
           sudo apt update -y -qq
-          sudo apt install -y -qq openjdk-21-jre-headless openjdk-21-jdk-headless python3-venv
-          # clone Nessie
+          sudo apt install -y -qq python3-venv
           git clone https://github.com/projectnessie/nessie.git nessie
 
       - name: Start Nessie
@@ -48,7 +51,7 @@ jobs:
           # lower client timeouts because they cannot be longer than realm timeouts.
           # all client timeouts are 86400 right now
           sed -i 's/86400/1800/g' authn-keycloak/config/iceberg-realm.json
-          docker-compose -f catalog-auth-s3/docker-compose.yml up -d
+          docker compose -f catalog-auth-s3/docker-compose.yml up -d
 
       - name: Wait for Nessie/Keycloak
         run: |

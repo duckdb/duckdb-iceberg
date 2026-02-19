@@ -34,7 +34,6 @@ AvroScan::AvroScan(const string &path, ClientContext &context, shared_ptr<Iceber
 	auto &avro_scan_entry = catalog_entry->Cast<TableFunctionCatalogEntry>();
 	avro_scan = avro_scan_entry.functions.functions[0];
 
-	// Prepare the inputs for the bind
 	vector<Value> children;
 	children.reserve(1);
 	children.push_back(Value(path));
@@ -54,7 +53,6 @@ AvroScan::AvroScan(const string &path, ClientContext &context, shared_ptr<Iceber
 	                                  dummy_table_function, empty);
 	bind_data = avro_scan->bind(context, bind_input, return_types, return_names);
 
-	vector<column_t> column_ids;
 	for (idx_t i = 0; i < return_types.size(); i++) {
 		column_ids.push_back(i);
 	}
@@ -78,12 +76,8 @@ AvroScan::AvroScan(const string &path, ClientContext &context, shared_ptr<Iceber
 		multi_file_bind_data.virtual_columns = result;
 	}
 
-	ThreadContext thread_context(context);
-	ExecutionContext execution_context(context, thread_context, nullptr);
-
 	TableFunctionInitInput input(bind_data.get(), column_ids, vector<idx_t>(), nullptr);
 	global_state = avro_scan->init_global(context, input);
-	local_state = avro_scan->init_local(execution_context, input, global_state.get());
 }
 
 unique_ptr<AvroScan> AvroScan::ScanManifest(const IcebergSnapshot &snapshot,
@@ -102,27 +96,20 @@ unique_ptr<AvroScan> AvroScan::ScanManifestList(const IcebergSnapshot &snapshot,
 	return make_uniq<AvroScan>(path, context, std::move(avro_scan_info));
 }
 
-bool AvroScan::GetNext(DataChunk &result) {
-	TableFunctionInput function_input(bind_data.get(), local_state.get(), global_state.get());
-	avro_scan->function(context, function_input, result);
-
-	idx_t count = result.size();
-	for (auto &vec : result.data) {
-		vec.Flatten(count);
-	}
-	if (count == 0) {
-		finished = true;
-		return false;
-	}
-	return true;
-}
-
-void AvroScan::InitializeChunk(DataChunk &chunk) {
+void AvroScan::InitializeChunk(DataChunk &chunk) const {
 	chunk.Initialize(context, return_types, STANDARD_VECTOR_SIZE);
 }
 
 bool AvroScan::Finished() const {
 	return finished;
+}
+
+const vector<column_t> &AvroScan::GetColumnIds() const {
+	return column_ids;
+}
+
+const idx_t AvroScan::IcebergVersion() const {
+	return scan_info->IcebergVersion();
 }
 
 } // namespace duckdb

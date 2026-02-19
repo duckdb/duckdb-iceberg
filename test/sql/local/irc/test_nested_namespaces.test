@@ -48,6 +48,9 @@ more	2	data
 yet	3	more data
 
 statement ok
+drop table if exists my_datalake."my.nested.namespace".table1;
+
+statement ok
 drop schema if exists my_datalake."my.nested.namespace";
 
 statement ok

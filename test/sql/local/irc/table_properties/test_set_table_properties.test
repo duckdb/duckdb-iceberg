@@ -67,10 +67,11 @@ statement ok
 CALL remove_iceberg_table_properties(my_datalake.default.test, ['foo']);
 
 query II
-select * from iceberg_table_properties(my_datalake.default.test) order by all;
+select * from iceberg_table_properties(my_datalake.default.test) where key not like '%created-at%' order by all;
 ----
 page-write-size	10000
 write.delete.mode	copy-on-write
+write.parquet.compression-codec	zstd
 write.update.mode	copy-on-write
 
 

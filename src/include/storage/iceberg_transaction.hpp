@@ -50,6 +50,9 @@ public:
 	IcebergCatalog &GetCatalog();
 	void DropSecrets(ClientContext &context);
 	TableTransactionInfo GetTransactionRequest(ClientContext &context);
+	void RecordTableRequest(const string &table_key, idx_t sequence_number, idx_t snapshot_id);
+	void RecordTableRequest(const string &table_key);
+	TableInfoCache GetTableRequestResult(const string &table_key);
 
 private:
 	void CleanupFiles();
@@ -58,6 +61,12 @@ private:
 	DatabaseInstance &db;
 	IcebergCatalog &catalog;
 	AccessMode access_mode;
+	//! Tables that have been requested in the current transaction
+	//! and do not need to be requested again. When we request, we also
+	//! store the latest snapshot id, so if the table is requested again
+	//! (with no updates), we can return table information at that snapshot
+	//! while other transactions can still request up to date tables
+	case_insensitive_map_t<TableInfoCache> requested_tables;
 
 public:
 	//! tables that have been created in this transaction
@@ -66,12 +75,6 @@ public:
 	case_insensitive_map_t<IcebergTableInformation> updated_tables;
 	//! tables that have been deleted in this transaction, to be deleted on commit.
 	case_insensitive_map_t<IcebergTableInformation> deleted_tables;
-	//! Tables that have been requested in the current transaction
-	//! and do not need to be requested again. When we request, we also
-	//! store the latest snapshot id, so if the table is requested again
-	//! (with no updates), we can return table information at that snapshot
-	//! while other transactions can still request up to date tables
-	case_insensitive_map_t<TableInfoCache> requested_tables;
 	unordered_set<string> created_schemas;
 	unordered_set<string> deleted_schemas;
 
