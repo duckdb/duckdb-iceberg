@@ -1,6 +1,7 @@
 #pragma once
 
 #include "metadata/iceberg_predicate_stats.hpp"
+#include "duckdb/parser/expression/function_expression.hpp"
 
 namespace duckdb {
 
@@ -40,6 +41,7 @@ public:
 
 	LogicalType GetSerializedType(const LogicalType &input) const;
 	LogicalType GetBoundsType(const LogicalType &input) const;
+	void SetBucketOrModuloValue(idx_t value);
 
 private:
 	//! Preserve the input for debugging

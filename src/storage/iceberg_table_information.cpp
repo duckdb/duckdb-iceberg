@@ -1,6 +1,7 @@
 #include "storage/iceberg_table_information.hpp"
 
 #include "catalog_api.hpp"
+#include "../include/metadata/iceberg_transform.hpp"
 #include "duckdb/common/case_insensitive_map.hpp"
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/parser/expression/columnref_expression.hpp"
@@ -284,13 +285,12 @@ int64_t IcebergTableInformation::GetExistingSpecId(IcebergPartitionSpec &spec) {
 	int64_t existing_spec_id = -1;
 	for (auto &existing_spec : table_metadata.GetPartitionSpecs()) {
 		bool fields_match = true;
+		if (existing_spec.second.fields.size() != spec.fields.size()) {
+			continue;
+		}
 		for (idx_t field_index = 0; field_index < existing_spec.second.fields.size(); field_index++) {
 			auto existing_partition_col_source_id = existing_spec.second.fields[field_index].source_id;
 			// if the number of partition columns don't match, the specs are not the same
-			if (existing_spec.second.fields.size() != spec.fields.size()) {
-				fields_match = false;
-				break;
-			}
 			auto new_spec_col_source_id = spec.fields[field_index].source_id;
 			if (existing_partition_col_source_id != new_spec_col_source_id) {
 				fields_match = false;
@@ -332,6 +332,7 @@ void IcebergTableInformation::SetPartitionedBy(IcebergTransaction &transaction,
 	for (auto &key : partition_keys) {
 		string column_name;
 		string transform_name = "identity";
+		idx_t bucket_modulo_val;
 
 		if (key->type == ExpressionType::COLUMN_REF) {
 			auto &colref = key->Cast<ColumnRefExpression>();
@@ -345,6 +346,18 @@ void IcebergTableInformation::SetPartitionedBy(IcebergTransaction &transaction,
 			}
 			auto &colref = funcexpr.children[0]->Cast<ColumnRefExpression>();
 			column_name = colref.column_names.back();
+			if (transform_name == "bucket" || transform_name == "truncate") {
+				if (funcexpr.children.size() < 2) {
+					throw InvalidInputException("%s requires a numeric argument, e.g. %s(col, 16)", transform_name,
+					                            transform_name);
+				}
+				auto &param_expr = *funcexpr.children[1];
+				if (param_expr.type != ExpressionType::VALUE_CONSTANT) {
+					throw InvalidInputException("%s second argument must be a constant integer", transform_name);
+				}
+				auto &const_expr = param_expr.Cast<ConstantExpression>();
+				bucket_modulo_val = const_expr.value.GetValue<int32_t>();
+			}
 		} else {
 			throw NotImplementedException("Unsupported partition key type: %s", key->ToString());
 		}
@@ -364,6 +377,14 @@ void IcebergTableInformation::SetPartitionedBy(IcebergTransaction &transaction,
 		IcebergPartitionSpecField field;
 		field.name = column_name;
 		field.transform = IcebergTransform(transform_name);
+		switch (field.transform.Type()) {
+		case IcebergTransformType::BUCKET:
+		case IcebergTransformType::TRUNCATE:
+			field.transform.SetBucketOrModuloValue(bucket_modulo_val);
+			break;
+		default:
+			break;
+		}
 		field.source_id = source_id;
 		field.partition_field_id = base_partition_field_id + new_spec.fields.size();
 		new_spec.fields.push_back(std::move(field));

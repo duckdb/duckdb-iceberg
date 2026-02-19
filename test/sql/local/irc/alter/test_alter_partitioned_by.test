@@ -41,10 +41,13 @@ CREATE TABLE my_datalake.default.alter_table_partitioned_identity_transform AS (
 statement ok
 Alter table my_datalake.default.alter_table_partitioned_identity_transform SET PARTITIONED BY (b);
 
-statement error
+statement ok
 insert into my_datalake.default.alter_table_partitioned_identity_transform values (11, 20);
-----
-<REGEX>:.*Not implemented Error: INSERT into a partitioned table is not supported yet.*
+
+#TODO verify data_file structure
+
+statement ok
+drop table if exists my_datalake.default.alter_table_partitioned_identity_transform;
 
 statement ok
 drop table if exists my_datalake.default.alter_table_partitioned_date_transform;
@@ -58,10 +61,13 @@ CREATE TABLE my_datalake.default.alter_table_partitioned_date_transform AS (FROM
 statement ok
 Alter table my_datalake.default.alter_table_partitioned_date_transform SET PARTITIONED BY (day(date));
 
-statement error
+statement ok
 insert into my_datalake.default.alter_table_partitioned_date_transform values (11, '2023-07-07'::DATE);
-----
-<REGEX>:.*Not implemented Error: INSERT into a partitioned table is not supported yet.*
+
+#TODO verify data_file structure
+
+statement ok
+drop table if exists my_datalake.default.alter_table_partitioned_date_transform;
 
 statement ok
 drop table if exists my_datalake.default.alter_table_partitioned_date_transform;
@@ -75,10 +81,13 @@ CREATE TABLE my_datalake.default.alter_table_partitioned_date_transform AS (FROM
 statement ok
 Alter table my_datalake.default.alter_table_partitioned_date_transform SET PARTITIONED BY (month(date));
 
-statement error
+statement ok
 insert into my_datalake.default.alter_table_partitioned_date_transform values (11, '2023-07-07'::DATE);
-----
-<REGEX>:.*Not implemented Error: INSERT into a partitioned table is not supported yet.*
+
+#TODO verify data_file structure
+
+statement ok
+drop table if exists my_datalake.default.alter_table_partitioned_date_transform;
 
 statement ok
 drop table if exists my_datalake.default.alter_table_partitioned_date_transform;
@@ -92,11 +101,10 @@ CREATE TABLE my_datalake.default.alter_table_partitioned_date_transform AS (FROM
 statement ok
 Alter table my_datalake.default.alter_table_partitioned_date_transform SET PARTITIONED BY (year(date));
 
-statement error
+statement ok
 insert into my_datalake.default.alter_table_partitioned_date_transform values (11, '2023-07-07'::DATE);
-----
-<REGEX>:.*Not implemented Error: INSERT into a partitioned table is not supported yet.*
 
+#TODO verify data_file structure
 
 statement ok
 drop table if exists my_datalake.default.alter_table_partitioned_date_transform;
@@ -112,6 +120,5 @@ Alter table my_datalake.default.alter_table_partitioned_date_transform SET PARTI
 ----
 <REGEX>:.*Not implemented Error: Unrecognized transform.*
 
-
-# what about default value support?
-# What about nested column types? Adding/removing struct column information.
+statement ok
+drop table if exists my_datalake.default.alter_table_partitioned_date_transform;

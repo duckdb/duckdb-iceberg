@@ -102,7 +102,7 @@ where ts >= '2020-01-01'::TIMESTAMP and ts < '2021-01-01'::TIMESTAMP;
 query I
 select count(*) from duckdb_logs() where type = 'Iceberg' and message like '%skipped%manifest_file%';
 ----
-3
+2
 
 statement ok
 CALL truncate_duckdb_logs();

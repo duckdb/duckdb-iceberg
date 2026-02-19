@@ -47,7 +47,7 @@ PARTITIONED BY (month(ts));
 statement ok
 insert into my_datalake.default.test_large_temporal
 select range,
-       make_timestamp(2020 + ((range % 24) / 12)::INT, ((range % 24) % 12) + 1, 15, 12, 0, 0),
+       make_timestamp(2020 + floor(range/25000)::INT, (range % 12) + 1, 15, 12, 0, 0),
        range * 7
 from range(50000);
 

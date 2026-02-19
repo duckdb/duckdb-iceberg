@@ -41,10 +41,13 @@ CREATE TABLE my_datalake.default.alter_table_reset_partitioned_by AS (select ran
 statement ok
 Alter table my_datalake.default.alter_table_reset_partitioned_by SET PARTITIONED BY (b);
 
-statement error
+statement ok
 insert into my_datalake.default.alter_table_reset_partitioned_by values (11, 20);
-----
-<REGEX>:.*Not implemented Error: INSERT into a partitioned table is not supported yet.*
 
 statement ok
 alter table my_datalake.default.alter_table_reset_partitioned_by RESET PARTITIONED BY;
+
+#TODO verify data_file structure
+
+statement ok
+insert into my_datalake.default.alter_table_reset_partitioned_by values (100, 200);

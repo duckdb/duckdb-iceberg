@@ -1,3 +1,4 @@
+#include "../include/metadata/iceberg_transform.hpp"
 #include "metadata/iceberg_transform.hpp"
 #include "duckdb/common/string_util.hpp"
 
@@ -12,20 +13,8 @@ IcebergTransform::IcebergTransform(const string &transform) : raw_transform(tran
 		type = IcebergTransformType::IDENTITY;
 	} else if (StringUtil::StartsWith(transform, "bucket")) {
 		type = IcebergTransformType::BUCKET;
-		D_ASSERT(transform[6] == '[');
-		D_ASSERT(transform.back() == ']');
-		auto start = transform.find('[');
-		auto end = transform.rfind(']');
-		auto digits = transform.substr(start + 1, end - start);
-		modulo = std::stoi(digits);
 	} else if (StringUtil::StartsWith(transform, "truncate")) {
 		type = IcebergTransformType::TRUNCATE;
-		D_ASSERT(transform[8] == '[');
-		D_ASSERT(transform.back() == ']');
-		auto start = transform.find('[');
-		auto end = transform.rfind(']');
-		auto digits = transform.substr(start + 1, end - start);
-		width = std::stoi(digits);
 	} else if (transform == "year") {
 		type = IcebergTransformType::YEAR;
 	} else if (transform == "month") {
@@ -98,6 +87,19 @@ LogicalType IcebergTransform::GetSerializedType(const LogicalType &input) const 
 	default:
 		throw InvalidConfigurationException("Can't produce a result type for transform %s and input type %s",
 		                                    raw_transform, input.ToString());
+	}
+}
+
+void IcebergTransform::SetBucketOrModuloValue(idx_t value) {
+	switch (type) {
+	case IcebergTransformType::BUCKET:
+		modulo = value;
+		return;
+	case IcebergTransformType::TRUNCATE:
+		width = value;
+		return;
+	default:
+		throw InvalidInputException("Cannot set bucket or modulo value for transform '%s'", raw_transform);
 	}
 }
 
