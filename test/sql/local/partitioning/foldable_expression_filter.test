@@ -1,6 +1,8 @@
 # name: test/sql/local/partitioning/foldable_expression_filter.test
 # group: [partitioning]
 
+require-env ICEBERG_SERVER_AVAILABLE
+
 require httpfs
 
 require avro

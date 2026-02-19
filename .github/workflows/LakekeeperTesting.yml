@@ -1,20 +1,19 @@
 name: Local Lakekeeper Testing
-on: [push, pull_request,repository_dispatch]
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.head_ref || '' }}-${{ github.base_ref || '' }}-${{ github.ref != 'refs/heads/main' || github.sha }}
-  cancel-in-progress: true
-defaults:
-  run:
-    shell: bash
-
-env:
-  BASE_BRANCH: ${{ github.base_ref || (endsWith(github.ref, '_feature') && 'feature' || 'main') }}
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+  workflow_call:
+    inputs:
+      artifact-name:
+        description: "Name of the DuckDB-Iceberg artifact to download"
+        required: true
+        type: string
 
 jobs:
   rest:
     name: Test against Lakekeeper Catalog
     runs-on: ubuntu-latest
-    if: false
     env:
       VCPKG_TARGET_TRIPLET: 'x64-linux-release'
       GEN: ninja
@@ -70,196 +69,36 @@ jobs:
         uses: hendrikmuhs/ccache-action@main
         continue-on-error: true
 
-      - name: Build extension
-        env:
-          GEN: ninja
-          STATIC_LIBCPP: 1
+      - name: Add minio host entry
         run: |
-          make release
+          echo "127.0.0.1 minio" | sudo tee -a /etc/hosts
 
-      - name: Set up for Lakekeeper
-        run: |
-          # install java
-          # TODO: need a newer java version maybe?
-          sudo apt install -y -qq openjdk-21-jre-headless
-          sudo apt install -y -qq openjdk-21-jdk-headless
-          sudo apt-get install -y -qq python3-venv
-          git clone https://github.com/lakekeeper/lakekeeper.git lakekeeper
+      - name: Clone Lakekeeper
+        uses: actions/checkout@v4
+        with:
+          repository: lakekeeper/lakekeeper
+          ref: f6aaa4570cf62d54943581e7a00b9f882d9c992d
+          path: lakekeeper
 
-      - name: Start Keycloak
+      - name: Apply lakekeeper patch
         run: |
-          docker run -d \
-            --name keycloak \
-            -p 30080:8080 \
-            -e KC_BOOTSTRAP_ADMIN_USERNAME=admin \
-            -e KC_BOOTSTRAP_ADMIN_PASSWORD=admin \
-            -v $(pwd)/lakekeeper/examples/access-control-simple/keycloak/realm.json:/opt/keycloak/data/import/realm.json \
-            quay.io/keycloak/keycloak:26.0.7 \
-            start-dev --metrics-enabled=true --health-enabled=true --import-realm --verbose --log-level=INFO --features=token-exchange
-
-      - name: Wait for Keycloak
-        run: |
-          max_attempts=30
-          attempt=1
-          while ! curl -sf "http://localhost:30080/realms/master/.well-known/openid-configuration"; do
-            if [ $attempt -gt $max_attempts ]; then
-              echo "Keycloak failed to initialize after $max_attempts attempts"
-              exit 1
-            fi
-            echo "Waiting for Keycloak to initialize (attempt $attempt/$max_attempts)..."
-            sleep 5
-            attempt=$((attempt + 1))
-          done
-          echo "Keycloak is healthy"
-
-      - name: Start PostgreSQL
-        run: |
-          docker run -d \
-            --name postgres \
-            -p 5433:5432 \
-            -e POSTGRESQL_USERNAME=postgres \
-            -e POSTGRESQL_PASSWORD=postgres \
-            -e POSTGRESQL_DATABASE=postgres \
-            bitnami/postgresql:16.3.0
-
-      - name: Wait for PostgreSQL
-        run: |
-          max_attempts=30
-          attempt=1
-          while ! docker exec postgres pg_isready -U postgres -p 5432 -d postgres; do
-            if [ $attempt -gt $max_attempts ]; then
-              echo "PostgreSQL failed to initialize after $max_attempts attempts"
-              exit 1
-            fi
-            echo "Waiting for PostgreSQL to initialize (attempt $attempt/$max_attempts)..."
-            sleep 5
-            attempt=$((attempt + 1))
-          done
-          echo "PostgreSQL is healthy"
-
-      - name: Run OpenFGA DB migrations
-        run: |
-          docker run --rm \
-            --network="host" \
-            -e OPENFGA_DATASTORE_ENGINE=postgres \
-            -e OPENFGA_DATASTORE_URI="postgres://postgres:postgres@localhost:5433/postgres?sslmode=disable" \
-            openfga/openfga:v1.8 migrate
-
-      - name: Start OpenFGA
-        run: |
-          docker run -d \
-            --name openfga \
-            -p 8081:8081 \
-            -e OPENFGA_DATASTORE_ENGINE=postgres \
-            -e OPENFGA_DATASTORE_URI="postgres://postgres:postgres@localhost:5433/postgres?sslmode=disable" \
-            -e OPENFGA_AUTHN_METHOD=oidc \
-            -e OPENFGA_AUTHN_OIDC_ISSUER=http://localhost:30080/realms/iceberg \
-            -e OPENFGA_AUTHN_OIDC_AUDIENCE=openfga \
-            -e OPENFGA_HTTP_TLS_ENABLED=false \
-            --network="host" \
-            openfga/openfga:v1.8 run --playground-enabled=false
-
-      - name: Wait for OpenFGA
-        run: |
-          max_attempts=30
-          attempt=1
-          while ! curl -sf http://localhost:8080/healthz; do
-            if [ $attempt -gt $max_attempts ]; then
-              echo "OpenFGA failed to initialize after $max_attempts attempts"
-              exit 1
-            fi
-            echo "Waiting for OpenFGA to initialize (attempt $attempt/$max_attempts)..."
-            sleep 5
-            attempt=$((attempt + 1))
-          done
-          echo "OpenFGA is healthy"
-
-      - name: Start Minio
-        run: |
-          docker run -d \
-            --name minio \
-            --network="host" \
-            -e MINIO_ROOT_USER=minio-root-user \
-            -e MINIO_ROOT_PASSWORD=minio-root-password \
-            -e MINIO_API_PORT_NUMBER=9000 \
-            -e MINIO_CONSOLE_PORT_NUMBER=9001 \
-            -e MINIO_SCHEME=http \
-            -e MINIO_DEFAULT_BUCKETS=examples \
-            --health-cmd="mc ls local | grep examples" \
-            --health-interval=2s \
-            --health-timeout=10s \
-            --health-retries=2 \
-            --health-start-period=15s \
-            -p 9000:9000 \
-            -p 9001:9001 \
-            bitnami/minio:2025.4.22
-
-      - name: Wait for Minio
-        run: |
-          max_attempts=30
-          attempt=1
-          while ! docker exec minio mc ls local | grep examples; do
-            if [ $attempt -gt $max_attempts ]; then
-              echo "Minio failed to initialize after $max_attempts attempts"
-              exit 1
-            fi
-            echo "Waiting for Minio to initialize (attempt $attempt/$max_attempts)..."
-            sleep 5
-            attempt=$((attempt + 1))
-          done
-          echo "Minio is healthy"
-
-      - name: Run Lakekeeper DB Migrations
-        run: |
-          docker run --rm \
-            --network="host" \
-            -e LAKEKEEPER__PG_ENCRYPTION_KEY=This-is-NOT-Secure! \
-            -e LAKEKEEPER__PG_DATABASE_URL_READ=postgresql://postgres:postgres@localhost:5433/postgres?sslmode=disable \
-            -e LAKEKEEPER__PG_DATABASE_URL_WRITE=postgresql://postgres:postgres@localhost:5433/postgres?sslmode=disable \
-            -e LAKEKEEPER__AUTHZ_BACKEND=openfga \
-            -e LAKEKEEPER__OPENFGA__ENDPOINT=http://localhost:8081 \
-            -e LAKEKEEPER__OPENFGA__CLIENT_ID=openfga \
-            -e LAKEKEEPER__OPENFGA__CLIENT_SECRET=xqE1vUrifVDKAZdLuz6JAnDxMYLdGu5z \
-            -e LAKEKEEPER__OPENFGA__TOKEN_ENDPOINT=http://localhost:30080/realms/iceberg/protocol/openid-connect/token \
-            -e RUST_LOG=info,iceberg-catalog=info,middle=trace \
-            quay.io/lakekeeper/catalog:latest-main migrate
+          cd lakekeeper
+          git apply ../.github/patches/lakekeeper_docker_compose.patch
 
       - name: Start Lakekeeper
         run: |
-          docker run -d \
-            --name lakekeeper \
-            --network="host" \
-            -e LAKEKEEPER__PG_ENCRYPTION_KEY=This-is-NOT-Secure! \
-            -e LAKEKEEPER__PG_DATABASE_URL_READ=postgresql://postgres:postgres@localhost:5433/postgres?sslmode=disable \
-            -e LAKEKEEPER__PG_DATABASE_URL_WRITE=postgresql://postgres:postgres@localhost:5433/postgres?sslmode=disable \
-            -e LAKEKEEPER__AUTHZ_BACKEND=openfga \
-            -e LAKEKEEPER__OPENFGA__ENDPOINT=http://localhost:8081 \
-            -e LAKEKEEPER__OPENID_PROVIDER_URI=http://localhost:30080/realms/iceberg \
-            -e LAKEKEEPER__OPENID_AUDIENCE=lakekeeper \
-            -e LAKEKEEPER__OPENFGA__CLIENT_ID=openfga \
-            -e LAKEKEEPER__OPENFGA__CLIENT_SECRET=xqE1vUrifVDKAZdLuz6JAnDxMYLdGu5z \
-            -e LAKEKEEPER__OPENFGA__TOKEN_ENDPOINT=http://localhost:30080/realms/iceberg/protocol/openid-connect/token \
-            -e LAKEKEEPER__METRICS_PORT=9002 \
-            quay.io/lakekeeper/catalog serve
+          cd lakekeeper/examples/access-control-simple
+          docker compose up -d
 
-      - name: Wait for Lakekeeper
+      - name: Bootstrap, Create Warehouse and Populate Lakekeeper
         run: |
-          max_attempts=30
-          attempt=1
-          while ! docker exec lakekeeper /home/nonroot/iceberg-catalog healthcheck; do
-            if [ $attempt -gt $max_attempts ]; then
-              echo "Lakekeeper failed to initialize after $max_attempts attempts"
-              exit 1
-            fi
-            echo "Waiting for Lakekeeper to initialize (attempt $attempt/$max_attempts)..."
-            sleep 5
-            attempt=$((attempt + 1))
-          done
-          echo "Lakekeeper is healthy"
+          cd lakekeeper/examples/access-control-simple
+          docker compose exec jupyter start.sh bash -lc "\
+            jupyter nbconvert --to notebook --execute --output-dir=/tmp /home/jovyan/examples/01-Bootstrap.ipynb && \
+            jupyter nbconvert --to notebook --execute --output-dir=/tmp /home/jovyan/examples/02-Create-Warehouse.ipynb && \
+            jupyter nbconvert --to notebook --execute --output-dir=/tmp /home/jovyan/examples/03-01-Spark.ipynb"
 
-      - name: Populate Lakekeeper
-        env:
-          JAVA_HOME: /usr/lib/jvm/java-21-openjdk-amd64
+      - name: Generate Data
         run: |
           sudo apt-get install -y -qq python3-venv
           python3 -m venv .
@@ -267,10 +106,14 @@ jobs:
           python3 -m pip install poetry
           python3 -m pip install pyspark==3.5.0
           python3 -m pip install duckdb
-          python3 -m pip install pandas
-          python3 -m pip install setuptools
-          python3 scripts/lakekeeper/setup_lakekeeper_catalog.py
           python3 -m scripts.data_generators.generate_data lakekeeper
+
+      - name: Build extension
+        env:
+          GEN: ninja
+          STATIC_LIBCPP: 1
+        run: |
+          make release
 
       - name: Test with rest catalog
         env:
