@@ -69,6 +69,7 @@ set(EXTENSION_SOURCES
     src/storage/catalog/iceberg_table_entry.cpp
     src/storage/catalog/iceberg_table_set.cpp
     src/storage/iceberg_transaction.cpp
+    src/storage/iceberg_table_update.cpp
     src/storage/iceberg_authorization.cpp
     src/storage/iceberg_transaction_manager.cpp
     src/utils/iceberg_type.cpp

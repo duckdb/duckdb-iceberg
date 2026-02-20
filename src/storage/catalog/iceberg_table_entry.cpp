@@ -180,7 +180,7 @@ TableFunction IcebergTableEntry::GetScanFunction(ClientContext &context, unique_
 		snapshot_lookup = IcebergSnapshotLookup::FromAtClause(at);
 	}
 	auto &metadata = table_info.table_metadata;
-	optional_ptr<IcebergSnapshot> snapshot = nullptr;
+	optional_ptr<const IcebergSnapshot> snapshot = nullptr;
 	try {
 		snapshot = metadata.GetSnapshot(snapshot_lookup);
 	} catch (InvalidConfigurationException &e) {

@@ -82,6 +82,12 @@ void CommitTableToJSON(yyjson_mut_doc *doc, yyjson_mut_val *root_object,
 			auto summary_json = yyjson_mut_obj_add_obj(doc, snapshot_json, "summary");
 			yyjson_mut_obj_add_strcpy(doc, summary_json, "operation", snapshot.summary.operation.c_str());
 			yyjson_mut_obj_add_uint(doc, snapshot_json, "schema-id", snapshot.schema_id);
+			if (snapshot.has_first_row_id) {
+				yyjson_mut_obj_add_uint(doc, snapshot_json, "first-row-id", snapshot.first_row_id);
+			}
+			if (snapshot.has_added_rows) {
+				yyjson_mut_obj_add_uint(doc, snapshot_json, "added-rows", snapshot.added_rows);
+			}
 		} else if (update.has_set_snapshot_ref_update) {
 			auto update_json = yyjson_mut_arr_add_obj(doc, updates_array);
 			auto &ref_update = update.set_snapshot_ref_update;
@@ -227,7 +233,7 @@ static string ConstructTableUpdateJSON(rest_api_objects::CommitTableRequest &tab
 	return JsonDocToString(std::move(doc_p));
 }
 
-static rest_api_objects::TableRequirement CreateAssertRefSnapshotIdRequirement(IcebergSnapshot &old_snapshot) {
+static rest_api_objects::TableRequirement CreateAssertRefSnapshotIdRequirement(const IcebergSnapshot &old_snapshot) {
 	rest_api_objects::TableRequirement req;
 	req.has_assert_ref_snapshot_id = true;
 
@@ -280,7 +286,7 @@ TableTransactionInfo IcebergTransaction::GetTransactionRequest(ClientContext &co
 		if (!table_info.transaction_data) {
 			continue;
 		}
-		IcebergCommitState commit_state;
+		IcebergCommitState commit_state(table_info, context);
 		auto &table_change = commit_state.table_change;
 		auto &schema = table_info.schema.Cast<IcebergSchemaEntry>();
 		table_change.identifier._namespace.value = schema.namespace_items;
@@ -289,6 +295,8 @@ TableTransactionInfo IcebergTransaction::GetTransactionRequest(ClientContext &co
 
 		auto &metadata = table_info.table_metadata;
 		auto current_snapshot = metadata.GetLatestSnapshot();
+		commit_state.latest_snapshot = current_snapshot;
+		//! We want to copy over all the existing manifests from the existing manifest list
 		if (current_snapshot) {
 			auto &manifest_list_path = current_snapshot->manifest_list;
 			//! Read the manifest list
@@ -299,7 +307,7 @@ TableTransactionInfo IcebergTransaction::GetTransactionRequest(ClientContext &co
 			}
 		}
 
-		auto &transaction_data = *table_info.transaction_data;
+		auto &transaction_data = *commit_state.table_info.transaction_data;
 		for (auto &update : transaction_data.updates) {
 			if (update->type == IcebergTableUpdateType::ADD_SNAPSHOT) {
 				// we need to recreate the keys in the current context.

@@ -26,7 +26,7 @@ enum class IcebergManifestEntryStatusType : uint8_t { EXISTING = 0, ADDED = 1, D
 
 struct IcebergDataFile {
 public:
-	Value ToValue(const LogicalType &type) const;
+	Value ToValue(const IcebergTableMetadata &table_metadata, const LogicalType &type) const;
 
 public:
 	static map<idx_t, LogicalType> GetFieldIdToTypeMapping(const IcebergSnapshot &snapshot,
@@ -67,8 +67,7 @@ public:
 	int64_t snapshot_id = 0xDEADBEEF;
 	//! Inherited from the 'manifest_file'
 	int32_t partition_spec_id = 0xDEADBEEF;
-	//! The index into the manifest_file vector where the entry originated from
-	idx_t manifest_file_idx = DConstants::INVALID_INDEX;
+	string manifest_file_path;
 	IcebergDataFile data_file;
 
 public:
@@ -165,7 +164,7 @@ static constexpr const int32_t REFERENCED_DATA_FILE = 143;
 static constexpr const int32_t CONTENT_OFFSET = 144;
 static constexpr const int32_t CONTENT_SIZE_IN_BYTES = 145;
 
-idx_t WriteToFile(IcebergTableInformation &table_info, const IcebergManifest &manifest_file,
+idx_t WriteToFile(const IcebergTableMetadata &table_metadata, const IcebergManifest &manifest_file,
                   CopyFunction &copy_function, DatabaseInstance &db, ClientContext &context);
 
 } // namespace manifest_file
