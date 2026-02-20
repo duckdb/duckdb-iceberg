@@ -155,8 +155,6 @@ public:
 
 public:
 	string path;
-
-private:
 	vector<IcebergManifestFile> manifest_entries;
 };
 
@@ -184,8 +182,8 @@ static constexpr const int32_t FIELD_SUMMARY_UPPER_BOUND = 511;
 static constexpr const int32_t KEY_METADATA = 519;
 static constexpr const int32_t FIRST_ROW_ID = 520;
 
-void WriteToFile(const IcebergManifestList &manifest_list, CopyFunction &copy_function, DatabaseInstance &db,
-                 ClientContext &context);
+void WriteToFile(const IcebergTableMetadata &table_metadata, const IcebergManifestList &manifest_list,
+                 CopyFunction &copy_function, DatabaseInstance &db, ClientContext &context);
 
 } // namespace manifest_list
 

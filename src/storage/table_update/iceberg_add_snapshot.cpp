@@ -46,7 +46,7 @@ void IcebergAddSnapshot::CreateUpdate(DatabaseInstance &db, ClientContext &conte
 
 	// Add manifest files from previous snapshots
 	manifest_list.AddToManifestEntries(commit_state.manifests);
-	manifest_list::WriteToFile(manifest_list, avro_copy, db, context);
+	manifest_list::WriteToFile(table_info.table_metadata, manifest_list, avro_copy, db, context);
 	commit_state.manifests = manifest_list.GetManifestListEntries();
 
 	commit_state.table_change.updates.push_back(CreateAddSnapshotUpdate(table_info, snapshot));

@@ -464,13 +464,20 @@ void IcebergAvroMultiFileReader::FinalizeChunk(ClientContext &context, const Mul
 	auto res = global_state.added_rows_per_manifest.emplace(manifest_file_idx, 0);
 	auto &start_row_id = res.first->second;
 
+	//! NOTE: the order of these columns is defined by the order that they are produced in BuildManifestSchema
+	//! see `iceberg_avro_multi_file_reader.cpp`
 	auto &data_file_column = output_chunk.data[4];
 	auto &data_struct_children = StructVector::GetEntries(data_file_column);
 
 	auto &first_row_id_column = *data_struct_children[15];
+	first_row_id_column.Flatten(count);
+
+	auto &record_count_column = *data_struct_children[4];
+	record_count_column.Flatten(count);
 
 	auto &first_row_id_validity = FlatVector::Validity(first_row_id_column);
 	auto first_row_id_data = FlatVector::GetData<int64_t>(first_row_id_column);
+	auto record_count_data = FlatVector::GetData<int64_t>(record_count_column);
 	for (idx_t i = 0; i < count; i++) {
 		if (first_row_id_validity.RowIsValid(i)) {
 			//! First row id is explicitly set
@@ -479,7 +486,7 @@ void IcebergAvroMultiFileReader::FinalizeChunk(ClientContext &context, const Mul
 		first_row_id_validity.SetValid(i);
 		D_ASSERT(manifest_file.has_first_row_id);
 		first_row_id_data[i] = manifest_file.first_row_id + start_row_id;
-		start_row_id++;
+		start_row_id += record_count_data[i];
 	}
 	(void)output_chunk;
 	count += 1;

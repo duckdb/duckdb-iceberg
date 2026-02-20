@@ -17,8 +17,14 @@
 #include "duckdb/execution/operator/projection/physical_projection.hpp"
 #include "duckdb/execution/operator/scan/physical_table_scan.hpp"
 #include "duckdb/common/types/uuid.hpp"
+#include "duckdb/common/multi_file/multi_file_reader.hpp"
 
 namespace duckdb {
+
+static bool WriteRowId(IcebergInsertVirtualColumns virtual_columns) {
+	return virtual_columns == IcebergInsertVirtualColumns::WRITE_ROW_ID ||
+	       virtual_columns == IcebergInsertVirtualColumns::WRITE_ROW_ID_AND_SEQUENCE_NUMBER;
+}
 
 IcebergInsert::IcebergInsert(PhysicalPlan &physical_plan, LogicalOperator &op, TableCatalogEntry &table,
                              physical_index_vector_t<idx_t> column_index_map_p)
@@ -36,18 +42,9 @@ IcebergInsert::IcebergInsert(PhysicalPlan &physical_plan, const vector<LogicalTy
     : PhysicalOperator(physical_plan, PhysicalOperatorType::EXTENSION, types, 1), table(&table), schema(nullptr) {
 }
 
-IcebergCopyInput::IcebergCopyInput(ClientContext &context, IcebergTableEntry &table)
-    : catalog(table.catalog.Cast<IcebergCatalog>()), columns(table.GetColumns()) {
+IcebergCopyInput::IcebergCopyInput(ClientContext &context, IcebergTableEntry &table, const IcebergTableSchema &schema)
+    : catalog(table.catalog.Cast<IcebergCatalog>()), columns(table.GetColumns()), schema(schema) {
 	data_path = table.table_info.table_metadata.GetDataPath();
-}
-
-IcebergCopyInput::IcebergCopyInput(ClientContext &context, IcebergSchemaEntry &schema, const ColumnList &columns,
-                                   const string &data_path_p)
-    : catalog(schema.catalog.Cast<IcebergCatalog>()), columns(columns) {
-	// When data_path_p is provided directly, it's already the table location
-	// We should check if it has write.data.path property, but since this is a schema-level
-	// constructor and we don't have access to table metadata, we use the default behavior
-	data_path = data_path_p + "/data";
 }
 
 IcebergInsertGlobalState::IcebergInsertGlobalState(ClientContext &context)
@@ -202,6 +199,9 @@ void IcebergInsert::AddWrittenFiles(IcebergInsertGlobalState &global_state, Data
 			auto &col_name = StringValue::Get(struct_children[0]);
 			auto &col_stats = MapValue::GetChildren(struct_children[1]);
 			auto column_names = ParseQuotedList(col_name, '.');
+			if (column_names[0] == "_row_id") {
+				continue;
+			}
 			auto normalized_col_name = StringUtil::Join(column_names, ".");
 
 			auto ic_column_info_it = column_info.find(normalized_col_name);
@@ -347,13 +347,17 @@ static Value GetFieldIdValue(const IcebergColumnDefinition &column) {
 	return Value::STRUCT(std::move(values));
 }
 
-static Value WrittenFieldIds(const IcebergTableSchema &schema) {
+static Value WrittenFieldIds(const IcebergCopyInput &copy_input) {
+	auto &schema = copy_input.schema;
 	auto &columns = schema.columns;
 
 	child_list_t<Value> values;
 	for (idx_t c_idx = 0; c_idx < columns.size(); c_idx++) {
 		auto &column = columns[c_idx];
 		values.emplace_back(column->name, GetFieldIdValue(*column));
+	}
+	if (WriteRowId(copy_input.virtual_columns)) {
+		values.emplace_back("_row_id", Value::BIGINT(MultiFileReader::ROW_ID_FIELD_ID));
 	}
 	return Value::STRUCT(std::move(values));
 }
@@ -364,6 +368,11 @@ unique_ptr<CopyInfo> GetBindInput(IcebergCopyInput &input) {
 	info->file_path = input.data_path;
 	info->format = "parquet";
 	info->is_from = false;
+
+	vector<Value> field_input;
+	field_input.push_back(WrittenFieldIds(input));
+	info->options["field_ids"] = std::move(field_input);
+
 	for (auto &option : input.options) {
 		info->options[option.first] = option.second;
 	}
@@ -385,6 +394,10 @@ PhysicalOperator &IcebergInsert::PlanCopyForInsert(ClientContext &context, Physi
 
 	auto names_to_write = copy_input.columns.GetColumnNames();
 	auto types_to_write = copy_input.columns.GetColumnTypes();
+	if (WriteRowId(copy_input.virtual_columns)) {
+		names_to_write.push_back("_row_id");
+		types_to_write.push_back(LogicalType::BIGINT);
+	}
 
 	auto wat = GetBindInput(copy_input);
 	auto bind_input = CopyFunctionBindInput(*wat);
@@ -475,12 +488,6 @@ PhysicalOperator &IcebergCatalog::PlanInsert(ClientContext &context, PhysicalPla
 	VerifyDirectInsertionOrder(op);
 
 	auto &table_entry = op.table.Cast<IcebergTableEntry>();
-	// FIXME: Inserts into V3 tables is not yet supported since
-	// we need to keep track of row lineage, which we do not support
-	// https://iceberg.apache.org/spec/#row-lineage
-	if (table_entry.table_info.table_metadata.iceberg_version == 3) {
-		throw NotImplementedException("Insert into Iceberg V3 tables");
-	}
 	table_entry.PrepareIcebergScanFromEntry(context);
 	auto &table_info = table_entry.table_info;
 	auto &schema = table_info.table_metadata.GetLatestSchema();
@@ -497,16 +504,9 @@ PhysicalOperator &IcebergCatalog::PlanInsert(ClientContext &context, PhysicalPla
 	}
 
 	// Create Copy Info
-	auto info = make_uniq<IcebergCopyInput>(context, table_entry);
-
-	vector<Value> field_input;
-	field_input.push_back(WrittenFieldIds(schema));
-	info->options["field_ids"] = std::move(field_input);
-
+	IcebergCopyInput info(context, table_entry, schema);
 	auto &insert = planner.Make<IcebergInsert>(op, op.table, op.column_index_map);
-
-	auto &physical_copy = IcebergInsert::PlanCopyForInsert(context, planner, *info, plan);
-
+	auto &physical_copy = IcebergInsert::PlanCopyForInsert(context, planner, info, plan);
 	insert.children.push_back(physical_copy);
 
 	return insert;
@@ -534,13 +534,8 @@ PhysicalOperator &IcebergCatalog::PlanCreateTableAs(ClientContext &context, Phys
 	auto &table_schema = ic_table.table_info.table_metadata.GetLatestSchema();
 
 	// Create Copy Info
-	auto info = make_uniq<IcebergCopyInput>(context, ic_table);
-
-	vector<Value> field_input;
-	field_input.push_back(WrittenFieldIds(table_schema));
-	info->options["field_ids"] = std::move(field_input);
-
-	auto &physical_copy = IcebergInsert::PlanCopyForInsert(context, planner, *info, plan);
+	IcebergCopyInput info(context, ic_table, table_schema);
+	auto &physical_copy = IcebergInsert::PlanCopyForInsert(context, planner, info, plan);
 	physical_index_vector_t<idx_t> column_index_map;
 	auto &insert = planner.Make<IcebergInsert>(op, ic_table, column_index_map);
 

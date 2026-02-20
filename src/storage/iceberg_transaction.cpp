@@ -82,6 +82,12 @@ void CommitTableToJSON(yyjson_mut_doc *doc, yyjson_mut_val *root_object,
 			auto summary_json = yyjson_mut_obj_add_obj(doc, snapshot_json, "summary");
 			yyjson_mut_obj_add_strcpy(doc, summary_json, "operation", snapshot.summary.operation.c_str());
 			yyjson_mut_obj_add_uint(doc, snapshot_json, "schema-id", snapshot.schema_id);
+			if (snapshot.has_first_row_id) {
+				yyjson_mut_obj_add_uint(doc, snapshot_json, "first-row-id", snapshot.first_row_id);
+			}
+			if (snapshot.has_added_rows) {
+				yyjson_mut_obj_add_uint(doc, snapshot_json, "added-rows", snapshot.added_rows);
+			}
 		} else if (update.has_set_snapshot_ref_update) {
 			auto update_json = yyjson_mut_arr_add_obj(doc, updates_array);
 			auto &ref_update = update.set_snapshot_ref_update;

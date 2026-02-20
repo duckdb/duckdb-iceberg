@@ -174,7 +174,7 @@ Value IcebergDataFile::ToValue(const LogicalType &type) const {
 
 namespace manifest_file {
 
-static LogicalType PartitionStructType(IcebergTableInformation &table_info, const IcebergManifest &file) {
+static LogicalType PartitionStructType(const IcebergManifest &file) {
 	D_ASSERT(!file.entries.empty());
 	auto &first_entry = file.entries.front();
 	child_list_t<LogicalType> children;
@@ -191,7 +191,7 @@ static LogicalType PartitionStructType(IcebergTableInformation &table_info, cons
 	return LogicalType::STRUCT(children);
 }
 
-idx_t WriteToFile(IcebergTableInformation &table_info, const IcebergManifest &manifest_file, CopyFunction &copy,
+idx_t WriteToFile(const IcebergTableMetadata &table_metadata, const IcebergManifest &manifest_file, CopyFunction &copy,
                   DatabaseInstance &db, ClientContext &context) {
 	D_ASSERT(!manifest_file.entries.empty());
 	auto &allocator = db.GetBufferManager().GetBufferAllocator();
@@ -211,7 +211,7 @@ idx_t WriteToFile(IcebergTableInformation &table_info, const IcebergManifest &ma
 	vector<string> names;
 	vector<LogicalType> types;
 
-	auto &current_partition_spec = table_info.table_metadata.GetLatestPartitionSpec();
+	auto &current_partition_spec = table_metadata.GetLatestPartitionSpec();
 
 	{
 		child_list_t<Value> status_field;
@@ -322,7 +322,7 @@ idx_t WriteToFile(IcebergTableInformation &table_info, const IcebergManifest &ma
 	{
 		child_list_t<Value> partition;
 		// partition: struct(...)
-		children.emplace_back("partition", PartitionStructType(table_info, manifest_file));
+		children.emplace_back("partition", PartitionStructType(manifest_file));
 		partition.emplace_back("__duckdb_field_id", Value::INTEGER(PARTITION));
 		partition.emplace_back("__duckdb_nullable", Value::BOOLEAN(false));
 		data_file_field_ids.emplace_back("partition", Value::STRUCT(partition));
@@ -540,10 +540,10 @@ idx_t WriteToFile(IcebergTableInformation &table_info, const IcebergManifest &ma
 
 	child_list_t<Value> metadata_values;
 	metadata_values.emplace_back("schema", iceberg_schema_string);
-	metadata_values.emplace_back("schema-id", std::to_string(table_info.table_metadata.current_schema_id));
+	metadata_values.emplace_back("schema-id", std::to_string(table_metadata.current_schema_id));
 	metadata_values.emplace_back("partition-spec", current_partition_spec.FieldsToJSON());
 	metadata_values.emplace_back("partition-spec-id", std::to_string(current_partition_spec.spec_id));
-	metadata_values.emplace_back("format-version", std::to_string(table_info.table_metadata.iceberg_version));
+	metadata_values.emplace_back("format-version", std::to_string(table_metadata.iceberg_version));
 	metadata_values.emplace_back("content", "data");
 	auto metadata_map = Value::STRUCT(std::move(metadata_values));
 
