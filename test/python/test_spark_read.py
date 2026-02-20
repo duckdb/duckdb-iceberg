@@ -5,19 +5,18 @@ from decimal import Decimal
 from math import inf
 from dataclasses import dataclass
 from packaging.version import Version
+from packaging.specifiers import SpecifierSet
+
+from conftest import *
 
 from pprint import pprint
 
 SCRIPT_DIR = os.path.dirname(__file__)
 
-
-pyspark = pytest.importorskip("pyspark")
 pyspark_sql = pytest.importorskip("pyspark.sql")
 SparkSession = pyspark_sql.SparkSession
 SparkContext = pyspark.SparkContext
 Row = pyspark_sql.Row
-
-PYSPARK_VERSION = Version(pyspark.__version__)
 
 
 @dataclass
@@ -268,6 +267,7 @@ class TestSparkReadDuckDBNestedTypes:
 
 @requires_iceberg_server
 class TestSparkReadDuckDBDeletionVector:
+    @pytest.mark.requires_spark(">=4.0")
     def test_spark_read(self, spark_con):
         res = spark_con.sql(
             """
@@ -276,3 +276,35 @@ class TestSparkReadDuckDBDeletionVector:
         ).collect()
 
         assert str(res) == "[Row(id=1, data='a')]"
+
+
+@requires_iceberg_server
+class TestSparkReadDuckDBVariant:
+    @pytest.mark.requires_spark(">=4.0")
+    def test_spark_read(self, spark_con):
+        VariantVal = pyspark.sql.VariantVal
+
+        def assert_variant_equal(actual, value_bytes, metadata_bytes):
+            assert bytes(actual.value) == value_bytes
+            assert bytes(actual.metadata) == metadata_bytes
+
+        res = spark_con.sql(
+            """
+            select * from default.my_variant_tbl order by b
+            """
+        ).collect()
+
+        row = res[0]
+        assert row.b == 42
+        assert_variant_equal(
+            row.a,
+            b'\x11test',
+            b'\x11\x00\x00',
+        )
+        row = res[1]
+        assert row.b == 43
+        assert_variant_equal(
+            row.a,
+            b'\x02\x02\x00\x01\x00\x05&\x149\x05\x00\x00\x03\x03\x00\x05\x11\x1b\x14\x01\x00\x00\x00-hello world\x02\x01\x02\x00\x05\x14)\x00\x00\x00',
+            b'\x11\x03\x00\x01\x02\x03abd',
+        )
