@@ -4,13 +4,15 @@ import datetime
 from decimal import Decimal
 from math import inf
 from dataclasses import dataclass
+from packaging.version import Version
+from packaging.specifiers import SpecifierSet
+
+from conftest import *
 
 from pprint import pprint
 
 SCRIPT_DIR = os.path.dirname(__file__)
 
-
-pyspark = pytest.importorskip("pyspark")
 pyspark_sql = pytest.importorskip("pyspark.sql")
 SparkSession = pyspark_sql.SparkSession
 SparkContext = pyspark.SparkContext
@@ -19,29 +21,9 @@ Row = pyspark_sql.Row
 
 @dataclass
 class IcebergRuntimeConfig:
-    spark_version: str
+    spark_version: Version
     scala_binary_version: str
     iceberg_library_version: str
-
-
-# List of runtimes you want to test
-ICEBERG_RUNTIMES = [
-    IcebergRuntimeConfig(
-        spark_version="3.5",
-        scala_binary_version="2.12",
-        iceberg_library_version="1.4.1",
-    ),
-    IcebergRuntimeConfig(
-        spark_version="3.5",
-        scala_binary_version="2.12",
-        iceberg_library_version="1.9.0",
-    ),
-    IcebergRuntimeConfig(
-        spark_version="3.5",
-        scala_binary_version="2.13",
-        iceberg_library_version="1.9.1",
-    ),
-]
 
 
 # uses {spark}_{scala}-{iceberg}
@@ -54,9 +36,42 @@ def generate_package(config: IcebergRuntimeConfig) -> str:
     return f'org.apache.iceberg:iceberg-spark-runtime-{config.spark_version}_{config.scala_binary_version}:{config.iceberg_library_version}'
 
 
+# List of runtimes you want to test
+ICEBERG_RUNTIMES = [
+    IcebergRuntimeConfig(
+        spark_version=Version("3.5"),
+        scala_binary_version="2.12",
+        iceberg_library_version="1.4.1",
+    ),
+    IcebergRuntimeConfig(
+        spark_version=Version("3.5"),
+        scala_binary_version="2.12",
+        iceberg_library_version="1.9.0",
+    ),
+    IcebergRuntimeConfig(
+        spark_version=Version("3.5"),
+        scala_binary_version="2.13",
+        iceberg_library_version="1.9.1",
+    ),
+    IcebergRuntimeConfig(
+        spark_version=Version("4.0"),
+        scala_binary_version="2.13",
+        iceberg_library_version="1.10.0",
+    ),
+]
+
+
 @pytest.fixture(params=ICEBERG_RUNTIMES, scope="session")
 def spark_con(request):
     runtime_config = request.param
+    if runtime_config.spark_version.major != PYSPARK_VERSION.major:
+        pytest.skip(
+            f"Skipping Iceberg runtime "
+            f"(Spark {runtime_config.spark_version}, Scala {runtime_config.scala_binary_version}, "
+            f"Iceberg {runtime_config.iceberg_library_version}) "
+            f"because current PySpark version is {PYSPARK_VERSION}"
+        )
+
     runtime_jar = generate_jar_location(runtime_config)
     runtime_pkg = generate_package(runtime_config)
     runtime_path = os.path.abspath(os.path.join(SCRIPT_DIR, '..', '..', 'scripts', 'data_generators', runtime_jar))
@@ -92,9 +107,13 @@ def spark_con(request):
     return spark
 
 
-@pytest.mark.skipif(
-    os.getenv('ICEBERG_SERVER_AVAILABLE', None) == None, reason="Test data wasn't generated, run 'make data' first"
+requires_iceberg_server = pytest.mark.skipif(
+    os.getenv("ICEBERG_SERVER_AVAILABLE", None) is None,
+    reason="Test data wasn't generated, run tests in test/sql/local/irc first (and set 'export ICEBERG_SERVER_AVAILABLE=1')",
 )
+
+
+@requires_iceberg_server
 class TestSparkRead:
     def test_spark_read(self, spark_con):
         df = spark_con.sql(
@@ -113,10 +132,7 @@ class TestSparkRead:
         ]
 
 
-@pytest.mark.skipif(
-    os.getenv('ICEBERG_SERVER_AVAILABLE', None) == None,
-    reason="Test data wasn't generated, run tests in test/sql/local/irc first",
-)
+@requires_iceberg_server
 class TestSparkReadDuckDBTable:
     def test_spark_read(self, spark_con):
         df = spark_con.sql(
@@ -139,10 +155,7 @@ class TestSparkReadDuckDBTable:
         ]
 
 
-@pytest.mark.skipif(
-    os.getenv('ICEBERG_SERVER_AVAILABLE', None) == None,
-    reason="Test data wasn't generated, run tests in test/sql/local/irc first",
-)
+@requires_iceberg_server
 class TestSparkReadDuckDBTableWithDeletes:
     def test_spark_read(self, spark_con):
         df = spark_con.sql(
@@ -165,10 +178,7 @@ class TestSparkReadDuckDBTableWithDeletes:
         ]
 
 
-@pytest.mark.skipif(
-    os.getenv('ICEBERG_SERVER_AVAILABLE', None) == None,
-    reason="Test data wasn't generated, run tests in test/sql/local/irc first",
-)
+@requires_iceberg_server
 class TestSparkReadUpperLowerBounds:
     def test_spark_read(self, spark_con):
         df = spark_con.sql(
@@ -218,10 +228,7 @@ class TestSparkReadUpperLowerBounds:
         ]
 
 
-@pytest.mark.skipif(
-    os.getenv('ICEBERG_SERVER_AVAILABLE', None) == None,
-    reason="Test data wasn't generated, run tests in test/sql/local/irc first",
-)
+@requires_iceberg_server
 class TestSparkReadInfinities:
     def test_spark_read(self, spark_con):
         df = spark_con.sql(
@@ -237,10 +244,7 @@ class TestSparkReadInfinities:
         ]
 
 
-@pytest.mark.skipif(
-    os.getenv('ICEBERG_SERVER_AVAILABLE', None) == None,
-    reason="Test data wasn't generated, run tests in test/sql/local/irc first",
-)
+@requires_iceberg_server
 class TestSparkReadDuckDBNestedTypes:
     def test_spark_read(self, spark_con):
         df = spark_con.sql(
