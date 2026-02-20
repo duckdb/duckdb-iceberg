@@ -39,7 +39,7 @@ public:
 
 struct SerializeResult {
 public:
-	SerializeResult(LogicalType &column_type, Value serialized_value)
+	SerializeResult(const LogicalType &column_type, Value serialized_value)
 	    : original_type(column_type), value(serialized_value) {
 	}
 
@@ -80,7 +80,7 @@ public:
 
 public:
 	static DeserializeResult DeserializeValue(const string_t &blob, const LogicalType &target);
-	static SerializeResult SerializeValue(Value input_value, LogicalType &column_type, SerializeBound bound_type);
+	static SerializeResult SerializeValue(Value input_value, const LogicalType &column_type, SerializeBound bound_type);
 	static string TruncateString(const string &input);
 	static string TruncateAndIncrementString(const string &input);
 };

@@ -9,7 +9,7 @@
 namespace duckdb {
 constexpr column_t IcebergAvroMultiFileReader::PARTITION_SPEC_ID_FIELD_ID;
 constexpr column_t IcebergAvroMultiFileReader::SEQUENCE_NUMBER_FIELD_ID;
-constexpr column_t IcebergAvroMultiFileReader::MANIFEST_FILE_INDEX_FIELD_ID;
+constexpr column_t IcebergAvroMultiFileReader::MANIFEST_FILE_PATH_FIELD_ID;
 
 unique_ptr<MultiFileReader> IcebergAvroMultiFileReader::CreateInstance(const TableFunction &table) {
 	return make_uniq<IcebergAvroMultiFileReader>(table.function_info);
@@ -468,6 +468,7 @@ void IcebergAvroMultiFileReader::FinalizeChunk(ClientContext &context, const Mul
 	auto &data_struct_children = StructVector::GetEntries(data_file_column);
 
 	auto &first_row_id_column = *data_struct_children[15];
+	first_row_id_column.Flatten(count);
 
 	auto &first_row_id_validity = FlatVector::Validity(first_row_id_column);
 	auto first_row_id_data = FlatVector::GetData<int64_t>(first_row_id_column);
@@ -512,14 +513,14 @@ unique_ptr<Expression> IcebergAvroMultiFileReader::GetVirtualColumnExpression(
 		}
 		return make_uniq<BoundConstantExpression>(entry->second);
 	}
-	if (column_id == MANIFEST_FILE_INDEX_FIELD_ID) {
+	if (column_id == MANIFEST_FILE_PATH_FIELD_ID) {
 		if (!reader_data.file_to_be_opened.extended_info) {
-			throw InternalException("Extended info not found for manifest_file_index column");
+			throw InternalException("Extended info not found for manifest_file_path column");
 		}
 		auto &options = reader_data.file_to_be_opened.extended_info->options;
-		auto entry = options.find("manifest_file_index");
+		auto entry = options.find("manifest_file_path");
 		if (entry == options.end()) {
-			throw InternalException("'manifest_file_index' not set when initializing the FileList");
+			throw InternalException("'manifest_file_path' not set when initializing the FileList");
 		}
 		return make_uniq<BoundConstantExpression>(entry->second);
 	}
@@ -572,7 +573,7 @@ shared_ptr<MultiFileList> IcebergAvroMultiFileReader::CreateFileList(ClientConte
 			file_info.extended_info->options["last_modified"] = Value::TIMESTAMP(timestamp_t(0));
 			file_info.extended_info->options["partition_spec_id"] = Value::INTEGER(manifest.partition_spec_id);
 			file_info.extended_info->options["sequence_number"] = Value::BIGINT(manifest.sequence_number);
-			file_info.extended_info->options["manifest_file_index"] = Value::UBIGINT(i);
+			file_info.extended_info->options["manifest_file_path"] = Value(manifest.manifest_path);
 		}
 	}
 

@@ -60,6 +60,53 @@ IcebergTableSchema::GetFromColumnIndex(const vector<unique_ptr<IcebergColumnDefi
 	return GetFromColumnIndex(column->children, column_index, depth + 1);
 }
 
+static optional_ptr<const IcebergColumnDefinition> GetColumnChild(const IcebergColumnDefinition &column,
+                                                                  const string &child_name) {
+	for (auto &child_p : column.children) {
+		auto &child = *child_p;
+		if (StringUtil::CIEquals(child.name, child_name)) {
+			return child;
+		}
+	}
+	return nullptr;
+}
+
+optional_ptr<const IcebergColumnDefinition> IcebergTableSchema::GetFromPath(const vector<string> &path,
+                                                                            optional_ptr<optional_idx> name_offset) {
+	D_ASSERT(!path.empty());
+
+	optional_ptr<const IcebergColumnDefinition> result;
+	for (idx_t i = 0; i < columns.size(); i++) {
+		auto &column = *columns[i];
+		if (!StringUtil::CIEquals(column.name, path[0])) {
+			continue;
+		}
+		result = column;
+	}
+	if (!result) {
+		return nullptr;
+	}
+	reference<const IcebergColumnDefinition> res(*result);
+	for (idx_t i = 1; i < path.size(); i++) {
+		auto &column = res.get();
+		if (column.type.id() == LogicalTypeId::VARIANT) {
+			if (name_offset) {
+				*name_offset = i;
+				return column;
+			}
+			throw InvalidInputException(
+			    "Column path %s points to child of variant column %s - but no name_offset is provided",
+			    StringUtil::Join(path, "."), res.get().name);
+		}
+		auto next_child = GetColumnChild(column, path[i]);
+		if (!next_child) {
+			return nullptr;
+		}
+		res = *next_child;
+	}
+	return res.get();
+}
+
 static void AddUnnamedField(yyjson_mut_doc *doc, yyjson_mut_val *field_obj, const rest_api_objects::Type &column);
 
 static void AddStructField(yyjson_mut_doc *doc, yyjson_mut_val *field_obj,
