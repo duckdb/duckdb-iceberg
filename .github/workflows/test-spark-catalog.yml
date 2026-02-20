@@ -11,6 +11,8 @@ jobs:
   test-spark:
     name: Test against Spark Catalog
     runs-on: ubuntu-latest
+    env:
+      HTTP_PROXY_PUBLIC: http://localhost:8878
 
     steps:
       - name: Checkout repository
@@ -55,21 +57,34 @@ jobs:
 
       - name: Install required python packages
         run: |
+          python3 -m venv .venv-spark4
+          source .venv-spark4/bin/activate
           python3 -m pip install -r scripts/requirements.txt
-          
+
       - name: Generate data
         run: |
+          source .venv-spark4/bin/activate
           make data
-          
+
+      - name: Run mitmproxy
+        shell: bash
+        run: |
+          source .venv-spark4/bin/activate
+          mitmdump --mode regular@8878 --flow-detail 2 > mitmproxy.log 2>&1 &
+
       - name: Test with rest catalog
         env:
           ICEBERG_SERVER_AVAILABLE: 1
           DUCKDB_ICEBERG_HAVE_GENERATED_DATA: 1
         run: |
+          source .venv-spark4/bin/activate
           make test_release
 
       - name: Test reads with PyIceberg
         env:
           ICEBERG_SERVER_AVAILABLE: 1
         run: |
+          python3 -m venv .venv-spark3
+          source .venv-spark3/bin/activate
+          python3 -m pip install pyspark==3.5.2 pytest pyiceberg==0.9.1 pyarrow pydantic==2.9.0
           python3 -m pytest test/python

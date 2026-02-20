@@ -68,11 +68,8 @@ insert into my_datalake.default.variant_column VALUES
 ;
 
 query I
-select * from my_datalake.default.variant_column;
+select * from my_datalake.default.variant_column order by rowid;
 ----
--123
-123
-256
 0
 1
 2
@@ -173,6 +170,9 @@ select * from my_datalake.default.variant_column;
 97
 98
 99
+-123
+123
+256
 test
 {'d': [1, 2, 3]}
 [testing, 21, true, {'hello': world}]
@@ -181,7 +181,7 @@ statement ok
 drop table if exists my_datalake.default.my_variant_tbl;
 
 statement ok
-create table if not exists my_datalake.default.my_variant_tbl(a VARIANT, b INTEGER)
+create table if not exists my_datalake.default.my_variant_tbl(a VARIANT, b INTEGER) WITH ('format-version'='3');
 
 statement ok
 insert into my_datalake.default.my_variant_tbl VALUES ('test', 42)

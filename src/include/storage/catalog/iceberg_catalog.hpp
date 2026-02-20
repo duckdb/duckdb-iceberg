@@ -43,6 +43,7 @@ public:
 public:
 	static unique_ptr<SecretEntry> GetStorageSecret(ClientContext &context, const string &secret_name);
 	static unique_ptr<SecretEntry> GetIcebergSecret(ClientContext &context, const string &secret_name);
+	static unique_ptr<SecretEntry> GetHTTPSecret(ClientContext &context, const string &secret_name);
 	void ParsePrefix();
 	void GetConfig(ClientContext &context, IcebergEndpointType &endpoint_type);
 	IRCEndpointBuilder GetBaseUrl() const;
@@ -65,6 +66,7 @@ public:
 	string GetDefaultSchema() const override {
 		return default_schema;
 	}
+	ErrorData SupportsCreateTable(BoundCreateTableInfo &info) override;
 
 public:
 	static unique_ptr<Catalog> Attach(optional_ptr<StorageExtensionInfo> storage_info, ClientContext &context,

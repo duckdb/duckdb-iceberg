@@ -17,6 +17,8 @@
 
 namespace duckdb {
 
+struct IcebergMultiFileList;
+
 struct WrittenColumnInfo {
 	WrittenColumnInfo() = default;
 	WrittenColumnInfo(LogicalType type_p, int32_t field_id) : type(std::move(type_p)), field_id(field_id) {
@@ -46,6 +48,7 @@ public:
 	atomic<idx_t> total_deleted_count;
 	// data file name -> newly deleted rows.
 	unordered_map<string, vector<idx_t>> deleted_rows;
+	case_insensitive_map_t<IcebergManifestDeletes> altered_manifests;
 
 	void Flush(IcebergDeleteLocalState &local_state) {
 		auto &local_entry = local_state.file_row_numbers;
@@ -66,11 +69,12 @@ public:
 
 class IcebergDelete : public PhysicalOperator {
 public:
-	IcebergDelete(PhysicalPlan &physical_plan, IcebergTableEntry &table, PhysicalOperator &child,
-	              vector<idx_t> row_id_indexes);
+	IcebergDelete(PhysicalPlan &physical_plan, IcebergTableEntry &table, IcebergMultiFileList &multi_file_list,
+	              PhysicalOperator &child, vector<idx_t> row_id_indexes);
 
 	//! The table to delete from
 	IcebergTableEntry &table;
+	IcebergMultiFileList &multi_file_list;
 	//! The column indexes for the relevant row-id columns
 	vector<idx_t> row_id_indexes;
 
@@ -114,6 +118,8 @@ private:
 	void WritePositionalDeleteFile(ClientContext &context, IcebergDeleteGlobalState &global_state,
 	                               const string &filename, IcebergDeleteFileInfo delete_file,
 	                               set<idx_t> sorted_deletes) const;
+	void WriteDeletionVectorFile(ClientContext &context, IcebergDeleteGlobalState &global_state, const string &filename,
+	                             IcebergDeleteFileInfo delete_file, set<idx_t> sorted_deletes) const;
 };
 
 } // namespace duckdb

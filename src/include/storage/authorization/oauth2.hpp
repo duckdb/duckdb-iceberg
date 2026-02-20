@@ -1,6 +1,7 @@
 #pragma once
 
 #include "storage/iceberg_authorization.hpp"
+#include <mutex>
 
 namespace duckdb {
 
@@ -24,16 +25,33 @@ public:
 	static unique_ptr<BaseSecret> CreateCatalogSecretFunction(ClientContext &context, CreateSecretInput &input);
 
 public:
+	//! OAuth2 configuration (set during construction, immutable after that)
 	string grant_type;
 	string uri;
 	string client_id;
 	string client_secret;
 	string scope;
-
-	//! The user-supplied default region to add to the default secret
 	string default_region;
-	//! The (bearer) token retrieved
+
+private:
+	//! Mutable token state (protected by token_mutex)
 	string token;
+	string refresh_token;
+	int64_t token_expires_at = 0;
+	int32_t last_expires_in = 0;
+
+	//! Helper to update token state from OAuth2 response.
+	//! Safe to call during construction (before sharing) and under token_mutex afterwards.
+	void UpdateTokenState(const string &new_token, int32_t expires_in, const string &new_refresh_token);
+
+	//! Internal methods -- caller must hold token_mutex
+	bool IsTokenExpiredUnlocked(ClientContext &context, std::lock_guard<std::mutex> &lock) const;
+	bool CanRefreshUnlocked(std::lock_guard<std::mutex> &lock) const;
+	void RefreshAccessTokenUnlocked(ClientContext &context, std::lock_guard<std::mutex> &lock);
+
+	//! Mutex to serialize token refresh. Held during check+refresh+copy, released before catalog I/O.
+	//! At most one thread refreshes at a time; others queue and re-check expiry after acquiring.
+	mutable std::mutex token_mutex;
 };
 
 } // namespace duckdb

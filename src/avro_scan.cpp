@@ -61,7 +61,7 @@ AvroScan::AvroScan(const string &path, ClientContext &context, shared_ptr<Iceber
 		const ManifestFileVirtualColumn columns[] = {
 		    {IcebergAvroMultiFileReader::PARTITION_SPEC_ID_FIELD_ID, "partition_spec_id", LogicalType::INTEGER},
 		    {IcebergAvroMultiFileReader::SEQUENCE_NUMBER_FIELD_ID, "sequence_number", LogicalType::BIGINT},
-		    {IcebergAvroMultiFileReader::MANIFEST_FILE_INDEX_FIELD_ID, "manifest_file_index", LogicalType::UBIGINT}};
+		    {IcebergAvroMultiFileReader::MANIFEST_FILE_PATH_FIELD_ID, "manifest_file_path", LogicalType::VARCHAR}};
 		const idx_t columns_size = sizeof(columns) / sizeof(ManifestFileVirtualColumn);
 		auto &multi_file_bind_data = bind_data->Cast<MultiFileBindData>();
 

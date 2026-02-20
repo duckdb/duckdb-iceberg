@@ -33,13 +33,11 @@ ATTACH '' AS my_datalake (
 statement ok
 CALL enable_logging('Iceberg');
 
-statement error
+statement ok
 update my_datalake.default.simple_v3_table set c_name = 'new_customer_key' where c_custkey %2 = 0;
-----
-<REGEX>:.*Not implemented Error: Update Iceberg V3 tables.*
 
 statement error
 update my_datalake.default.pyspark_iceberg_table_v1 set l_suppkey_long = 100000 where l_suppkey_long%2 = 0;
 ----
-<REGEX>:.*Not implemented Error.*Update Iceberg V1 tables.*
+<REGEX>:.*V1.*
 

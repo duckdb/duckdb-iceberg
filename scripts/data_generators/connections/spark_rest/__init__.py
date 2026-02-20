@@ -23,12 +23,18 @@ import pyspark.sql
 from pyspark import SparkContext
 
 from ..base import IcebergConnection
+from ..spark_settings import iceberg_runtime_configuration
+
+RUNTIME_CONFIG = iceberg_runtime_configuration()
+SPARK_VERSION = RUNTIME_CONFIG['spark_version']
+SCALA_BINARY_VERSION = RUNTIME_CONFIG['scala_binary_version']
+ICEBERG_LIBRARY_VERSION = RUNTIME_CONFIG['iceberg_library_version']
 
 import sys
 import os
 
 CONNECTION_KEY = 'spark-rest'
-SPARK_RUNTIME_PATH = os.path.join(os.path.dirname(__file__), '..', '..', 'iceberg-spark-runtime-4.0_2.13-1.10.0.jar')
+SPARK_RUNTIME_PATH = os.path.join(os.path.dirname(__file__), '..', '..', f'iceberg-spark-runtime-{SPARK_VERSION}_{SCALA_BINARY_VERSION}-{ICEBERG_LIBRARY_VERSION}.jar')
 
 @IcebergConnection.register(CONNECTION_KEY)
 class IcebergSparkRest(IcebergConnection):
@@ -38,7 +44,7 @@ class IcebergSparkRest(IcebergConnection):
 
     def get_connection(self):
         os.environ["PYSPARK_SUBMIT_ARGS"] = (
-            "--packages org.apache.iceberg:iceberg-spark-runtime-4.0_2.13:1.10.0,org.apache.iceberg:iceberg-aws-bundle:1.10.0 pyspark-shell"
+            f"--packages org.apache.iceberg:iceberg-spark-runtime-{SPARK_VERSION}_{SCALA_BINARY_VERSION}:{ICEBERG_LIBRARY_VERSION},org.apache.iceberg:iceberg-aws-bundle:{ICEBERG_LIBRARY_VERSION} pyspark-shell"
         )
         os.environ["AWS_REGION"] = "us-east-1"
         os.environ["AWS_ACCESS_KEY_ID"] = "admin"

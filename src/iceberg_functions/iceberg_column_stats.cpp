@@ -31,7 +31,7 @@
 namespace duckdb {
 
 struct IcebergColumnStatsBindData : public TableFunctionData {
-	optional_ptr<IcebergSnapshot> snapshot_to_scan;
+	optional_ptr<const IcebergSnapshot> snapshot_to_scan;
 	IcebergTableMetadata metadata;
 	shared_ptr<IcebergTableSchema> schema;
 	unordered_map<uint64_t, ColumnIndex> source_to_column_id;

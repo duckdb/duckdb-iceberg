@@ -33,13 +33,10 @@ ATTACH '' AS my_datalake (
 statement ok
 CALL enable_logging('Iceberg');
 
-statement error
+statement ok
 delete from my_datalake.default.simple_v3_table where c_custkey %2 = 0;
-----
-<REGEX>:.*Not implemented Error: Delete from Iceberg V3 tables.*
 
 statement error
 delete from my_datalake.default.pyspark_iceberg_table_v1 where l_suppkey_long%2 = 0;
 ----
-<REGEX>:.*Not implemented Error: Delete from Iceberg V1 tables.*
-
+<REGEX>:.*V1.*

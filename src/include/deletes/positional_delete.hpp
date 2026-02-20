@@ -7,7 +7,8 @@ namespace duckdb {
 
 struct IcebergPositionalDeleteData : public enable_shared_from_this<IcebergPositionalDeleteData>, IcebergDeleteData {
 public:
-	IcebergPositionalDeleteData() {
+	IcebergPositionalDeleteData(const IcebergManifestEntry &entry)
+	    : IcebergDeleteData(IcebergDeleteType::POSITIONAL_DELETE, entry) {
 	}
 	virtual ~IcebergPositionalDeleteData() override {
 	}
@@ -17,6 +18,7 @@ public:
 		invalid_rows.insert(row_id);
 	}
 	unique_ptr<DeleteFilter> ToFilter() const override;
+	void ToSet(set<idx_t> &out) const override;
 
 public:
 	//! Store invalid rows here before finalizing into a SelectionVector

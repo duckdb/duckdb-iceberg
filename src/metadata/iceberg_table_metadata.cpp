@@ -11,7 +11,7 @@ namespace duckdb {
 
 //! ----------- Select Snapshot -----------
 
-optional_ptr<IcebergSnapshot> IcebergTableMetadata::FindSnapshotByIdInternal(int64_t target_id) {
+optional_ptr<const IcebergSnapshot> IcebergTableMetadata::FindSnapshotByIdInternal(int64_t target_id) const {
 	auto it = snapshots.find(target_id);
 	if (it == snapshots.end()) {
 		return nullptr;
@@ -19,9 +19,10 @@ optional_ptr<IcebergSnapshot> IcebergTableMetadata::FindSnapshotByIdInternal(int
 	return it->second;
 }
 
-optional_ptr<IcebergSnapshot> IcebergTableMetadata::FindSnapshotByIdTimestampInternal(timestamp_t timestamp) {
+optional_ptr<const IcebergSnapshot>
+IcebergTableMetadata::FindSnapshotByIdTimestampInternal(timestamp_t timestamp) const {
 	uint64_t max_millis = NumericLimits<uint64_t>::Minimum();
-	optional_ptr<IcebergSnapshot> max_snapshot = nullptr;
+	optional_ptr<const IcebergSnapshot> max_snapshot = nullptr;
 
 	auto timestamp_millis = Timestamp::GetEpochMs(timestamp);
 	for (auto &it : snapshots) {
@@ -61,12 +62,11 @@ const unordered_map<int32_t, IcebergPartitionSpec> &IcebergTableMetadata::GetPar
 	return partition_specs;
 }
 
-optional_ptr<IcebergSnapshot> IcebergTableMetadata::GetLatestSnapshot() {
+optional_ptr<const IcebergSnapshot> IcebergTableMetadata::GetLatestSnapshot() const {
 	if (!has_current_snapshot) {
 		return nullptr;
 	}
-	auto latest_snapshot = GetSnapshotById(current_snapshot_id);
-	return latest_snapshot;
+	return GetSnapshotById(current_snapshot_id);
 }
 
 const IcebergTableSchema &IcebergTableMetadata::GetLatestSchema() const {
@@ -98,7 +98,7 @@ const IcebergSortOrder &IcebergTableMetadata::GetLatestSortOrder() const {
 	return *res;
 }
 
-optional_ptr<IcebergSnapshot> IcebergTableMetadata::GetSnapshotById(int64_t snapshot_id) {
+optional_ptr<const IcebergSnapshot> IcebergTableMetadata::GetSnapshotById(int64_t snapshot_id) const {
 	auto snapshot = FindSnapshotByIdInternal(snapshot_id);
 	if (!snapshot) {
 		throw InvalidConfigurationException("Could not find snapshot with id " + to_string(snapshot_id));
@@ -106,7 +106,7 @@ optional_ptr<IcebergSnapshot> IcebergTableMetadata::GetSnapshotById(int64_t snap
 	return snapshot;
 }
 
-optional_ptr<IcebergSnapshot> IcebergTableMetadata::GetSnapshotByTimestamp(timestamp_t timestamp) {
+optional_ptr<const IcebergSnapshot> IcebergTableMetadata::GetSnapshotByTimestamp(timestamp_t timestamp) const {
 	auto snapshot = FindSnapshotByIdTimestampInternal(timestamp);
 	if (!snapshot) {
 		throw InvalidConfigurationException("Could not find latest snapshots for timestamp " +
@@ -115,7 +115,7 @@ optional_ptr<IcebergSnapshot> IcebergTableMetadata::GetSnapshotByTimestamp(times
 	return snapshot;
 }
 
-optional_ptr<IcebergSnapshot> IcebergTableMetadata::GetSnapshot(const IcebergSnapshotLookup &lookup) {
+optional_ptr<const IcebergSnapshot> IcebergTableMetadata::GetSnapshot(const IcebergSnapshotLookup &lookup) const {
 	switch (lookup.snapshot_source) {
 	case SnapshotSource::LATEST:
 		return GetLatestSnapshot();

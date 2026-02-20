@@ -31,7 +31,7 @@ public:
 	static IcebergTableMetadata FromTableMetadata(const rest_api_objects::TableMetadata &table_metadata);
 	static string GetMetaDataPath(ClientContext &context, const string &path, FileSystem &fs,
 	                              const IcebergOptions &options);
-	optional_ptr<IcebergSnapshot> GetLatestSnapshot();
+	optional_ptr<const IcebergSnapshot> GetLatestSnapshot() const;
 	const IcebergTableSchema &GetLatestSchema() const;
 	bool HasPartitionSpec() const;
 	const IcebergPartitionSpec &GetLatestPartitionSpec() const;
@@ -41,8 +41,8 @@ public:
 	const IcebergSortOrder &GetLatestSortOrder() const;
 	const unordered_map<int32_t, IcebergSortOrder> &GetSortOrderSpecs() const;
 
-	optional_ptr<IcebergSnapshot> GetSnapshotById(int64_t snapshot_id);
-	optional_ptr<IcebergSnapshot> GetSnapshotByTimestamp(timestamp_t timestamp);
+	optional_ptr<const IcebergSnapshot> GetSnapshotById(int64_t snapshot_id) const;
+	optional_ptr<const IcebergSnapshot> GetSnapshotByTimestamp(timestamp_t timestamp) const;
 
 	//! Version extraction and identification
 	static bool UnsafeVersionGuessingEnabled(ClientContext &context);
@@ -51,12 +51,12 @@ public:
 	static string PickTableVersion(vector<OpenFileInfo> &found_metadata, string &version_pattern, string &glob);
 
 	//! Internal JSON parsing functions
-	optional_ptr<IcebergSnapshot> FindSnapshotByIdInternal(int64_t target_id);
-	optional_ptr<IcebergSnapshot> FindSnapshotByIdTimestampInternal(timestamp_t timestamp);
+	optional_ptr<const IcebergSnapshot> FindSnapshotByIdInternal(int64_t target_id) const;
+	optional_ptr<const IcebergSnapshot> FindSnapshotByIdTimestampInternal(timestamp_t timestamp) const;
 	shared_ptr<IcebergTableSchema> GetSchemaFromId(int32_t schema_id) const;
 	optional_ptr<const IcebergPartitionSpec> FindPartitionSpecById(int32_t spec_id) const;
 	optional_ptr<const IcebergSortOrder> FindSortOrderById(int32_t sort_id) const;
-	optional_ptr<IcebergSnapshot> GetSnapshot(const IcebergSnapshotLookup &lookup);
+	optional_ptr<const IcebergSnapshot> GetSnapshot(const IcebergSnapshotLookup &lookup) const;
 
 	//! Get the data and metadata paths, falling back to default if not set
 	const string &GetLatestMetadataJson() const;

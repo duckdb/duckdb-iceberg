@@ -43,13 +43,17 @@ unique_ptr<IcebergTable> IcebergTable::Load(const string &iceberg_path, const Ic
 	}
 
 	//! Create the table entries, then populate them
-	for (auto &manifest_file : manifest_files) {
+	unordered_map<string, idx_t> manifest_file_idx_map;
+	for (idx_t i = 0; i < manifest_files.size(); i++) {
+		auto &manifest_file = manifest_files[i];
+		manifest_file_idx_map[manifest_file.manifest_path] = i;
 		ret->entries.push_back(std::move(manifest_file));
 	}
 
 	auto &entries = ret->entries;
 	for (auto &manifest_entry : manifest_entries) {
-		auto &manifest = entries[manifest_entry.manifest_file_idx];
+		auto manifest_file_idx = manifest_file_idx_map[manifest_entry.manifest_file_path];
+		auto &manifest = entries[manifest_file_idx];
 		manifest.manifest_file.entries.push_back(std::move(manifest_entry));
 	}
 	return ret;

@@ -21,6 +21,7 @@
 #include "duckdb/parser/parsed_data/create_table_info.hpp"
 #include "duckdb/parser/parser.hpp"
 #include "duckdb/planner/tableref/bound_at_clause.hpp"
+#include "duckdb/planner/expression_binder/table_function_binder.hpp"
 
 namespace duckdb {
 
@@ -144,10 +145,55 @@ void IcebergTableSet::LoadEntries(ClientContext &context) {
 	iceberg_transaction.listed_schemas.insert(schema.name);
 }
 
+static Value ParseFormatVersionProperty(TableFunctionBinder &binder, ClientContext &context,
+                                        const ParsedExpression &expr_ref, string property_name, LogicalType type) {
+	auto expr = expr_ref.Copy();
+	auto bound_expr = binder.Bind(expr);
+	if (bound_expr->HasParameter()) {
+		throw ParameterNotResolvedException();
+	}
+
+	auto val = ExpressionExecutor::EvaluateScalar(context, *bound_expr, true);
+	if (val.IsNull()) {
+		throw BinderException("NULL is not supported as a valid option for '%s'", property_name);
+	}
+	if (!val.DefaultTryCastAs(type, true)) {
+		throw InvalidInputException("Can't cast '%s' property (%s) to %s", property_name, val.ToString(),
+		                            type.ToString());
+	}
+	return val;
+}
+
 bool IcebergTableSet::CreateNewEntry(ClientContext &context, IcebergCatalog &catalog, IcebergSchemaEntry &schema,
                                      CreateTableInfo &info) {
 	auto table_name = info.table;
 	auto &iceberg_transaction = IcebergTransaction::Get(context, catalog);
+
+	auto binder = Binder::CreateBinder(context);
+	TableFunctionBinder property_binder(*binder, context, "format-version");
+
+	optional_idx iceberg_version;
+	case_insensitive_map_t<Value> table_properties;
+	// format version must be verified
+	auto format_version_it = info.options.find("format-version");
+	if (format_version_it != info.options.end()) {
+		iceberg_version = ParseFormatVersionProperty(property_binder, context, *format_version_it->second,
+		                                             "format-version", LogicalType::INTEGER)
+		                      .GetValue<int32_t>();
+		if (iceberg_version.GetIndex() < 1) {
+			throw InvalidInputException("The lowest supported iceberg version is 1!");
+		}
+	} else {
+		iceberg_version = 2;
+	}
+
+	string location;
+	auto location_it = info.options.find("location");
+	if (location_it != info.options.end()) {
+		location =
+		    ParseFormatVersionProperty(property_binder, context, *location_it->second, "location", LogicalType::VARCHAR)
+		        .GetValue<string>();
+	}
 
 	auto key = IcebergTableInformation::GetTableKey(schema.namespace_items, info.table);
 	iceberg_transaction.updated_tables.emplace(key, IcebergTableInformation(catalog, schema, info.table));
@@ -159,6 +205,21 @@ bool IcebergTableSet::CreateNewEntry(ClientContext &context, IcebergCatalog &cat
 	table_ptr->table_info.table_metadata.schemas[0] = IcebergCreateTableRequest::CreateIcebergSchema(table_ptr);
 	table_ptr->table_info.table_metadata.current_schema_id = 0;
 	table_ptr->table_info.table_metadata.schemas[0]->schema_id = 0;
+	table_ptr->table_info.table_metadata.iceberg_version = iceberg_version.GetIndex();
+
+	// Get Location
+	if (!location.empty()) {
+		table_ptr->table_info.table_metadata.location = location;
+	}
+	for (auto &option : info.options) {
+		if (option.first == "format-version" || option.first == "location") {
+			continue;
+		}
+		auto option_val =
+		    ParseFormatVersionProperty(property_binder, context, *option.second, option.first, LogicalType::VARCHAR)
+		        .GetValue<string>();
+		table_ptr->table_info.table_metadata.table_properties.emplace(option.first, option_val);
+	}
 
 	// Immediately create the table with stage_create = true to get metadata & data location(s)
 	// transaction commit will either commit with data (OR) create the table with stage_create = false
@@ -188,6 +249,7 @@ bool IcebergTableSet::CreateNewEntry(ClientContext &context, IcebergCatalog &cat
 	table_info.AddSortOrder(iceberg_transaction);
 	table_info.SetDefaultSortOrder(iceberg_transaction);
 	table_info.SetLocation(iceberg_transaction);
+	table_info.SetProperties(iceberg_transaction, table_info.table_metadata.table_properties);
 	return true;
 }
 

@@ -88,7 +88,6 @@ void CommitTableToJSON(yyjson_mut_doc *doc, yyjson_mut_val *root_object,
 			if (snapshot.has_added_rows) {
 				yyjson_mut_obj_add_uint(doc, snapshot_json, "added-rows", snapshot.added_rows);
 			}
-
 		} else if (update.has_set_snapshot_ref_update) {
 			auto update_json = yyjson_mut_arr_add_obj(doc, updates_array);
 			auto &ref_update = update.set_snapshot_ref_update;
@@ -234,7 +233,7 @@ static string ConstructTableUpdateJSON(rest_api_objects::CommitTableRequest &tab
 	return JsonDocToString(std::move(doc_p));
 }
 
-static rest_api_objects::TableRequirement CreateAssertRefSnapshotIdRequirement(IcebergSnapshot &old_snapshot) {
+static rest_api_objects::TableRequirement CreateAssertRefSnapshotIdRequirement(const IcebergSnapshot &old_snapshot) {
 	rest_api_objects::TableRequirement req;
 	req.has_assert_ref_snapshot_id = true;
 
@@ -287,7 +286,7 @@ TableTransactionInfo IcebergTransaction::GetTransactionRequest(ClientContext &co
 		if (!table_info.transaction_data) {
 			continue;
 		}
-		IcebergCommitState commit_state;
+		IcebergCommitState commit_state(table_info, context);
 		auto &table_change = commit_state.table_change;
 		auto &schema = table_info.schema.Cast<IcebergSchemaEntry>();
 		table_change.identifier._namespace.value = schema.namespace_items;
@@ -296,6 +295,8 @@ TableTransactionInfo IcebergTransaction::GetTransactionRequest(ClientContext &co
 
 		auto &metadata = table_info.table_metadata;
 		auto current_snapshot = metadata.GetLatestSnapshot();
+		commit_state.latest_snapshot = current_snapshot;
+		//! We want to copy over all the existing manifests from the existing manifest list
 		if (current_snapshot) {
 			auto &manifest_list_path = current_snapshot->manifest_list;
 			//! Read the manifest list
@@ -306,7 +307,7 @@ TableTransactionInfo IcebergTransaction::GetTransactionRequest(ClientContext &co
 			}
 		}
 
-		auto &transaction_data = *table_info.transaction_data;
+		auto &transaction_data = *commit_state.table_info.transaction_data;
 		for (auto &update : transaction_data.updates) {
 			if (update->type == IcebergTableUpdateType::ADD_SNAPSHOT) {
 				// we need to recreate the keys in the current context.
@@ -461,7 +462,6 @@ void IcebergTransaction::CleanupFiles() {
 		return;
 	}
 	auto &fs = FileSystem::GetFileSystem(db);
-	vector<string> to_be_removed;
 	for (auto &up_table : updated_tables) {
 		auto &table = up_table.second;
 		if (!table.transaction_data) {
@@ -480,13 +480,11 @@ void IcebergTransaction::CleanupFiles() {
 			for (const auto &manifest : manifest_list_entries) {
 				for (auto &manifest_entry : manifest.manifest_file.entries) {
 					auto &data_file = manifest_entry.data_file;
-					to_be_removed.push_back(data_file.file_path);
+					fs.TryRemoveFile(data_file.file_path);
 				}
 			}
 		}
 	}
-
-	fs.RemoveFiles(to_be_removed);
 }
 
 void IcebergTransaction::Rollback() {

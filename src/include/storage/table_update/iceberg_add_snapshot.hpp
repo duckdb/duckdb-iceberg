@@ -10,6 +10,7 @@
 #include "duckdb/common/string.hpp"
 #include "duckdb/common/types.hpp"
 #include "duckdb/common/types/value.hpp"
+#include "storage/iceberg_transaction_metadata.hpp"
 
 namespace duckdb {
 
@@ -25,9 +26,13 @@ public:
 	                   IcebergSnapshot &&snapshot);
 
 public:
+	void ConstructManifestList(CopyFunction &avro_copy, DatabaseInstance &db, IcebergCommitState &commit_state);
+	void ConstructManifest(CopyFunction &avro_copy, DatabaseInstance &db, IcebergCommitState &commit_state,
+	                       IcebergManifestFile &manifest_file, IcebergManifestDeletes &deletes);
 	void CreateUpdate(DatabaseInstance &db, ClientContext &context, IcebergCommitState &commit_state) override;
 
 public:
+	case_insensitive_map_t<IcebergManifestDeletes> altered_manifests;
 	IcebergManifestList manifest_list;
 
 	IcebergSnapshot snapshot;

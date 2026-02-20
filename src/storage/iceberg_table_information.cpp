@@ -344,7 +344,7 @@ IcebergTableInformation IcebergTableInformation::Copy(IcebergTransaction &iceber
 	// this is to ensure when the transaction commits, the assert ref snapshot id is the one closest to the start of
 	// this
 	auto snapshot_lookup = GetSnapshotLookup(iceberg_transaction);
-	optional_ptr<IcebergSnapshot> snapshot = nullptr;
+	optional_ptr<const IcebergSnapshot> snapshot = nullptr;
 	try {
 		snapshot = ret.table_metadata.GetSnapshot(snapshot_lookup);
 	} catch (InvalidConfigurationException &e) {
@@ -384,22 +384,26 @@ void IcebergTableInformation::InitTransactionData(IcebergTransaction &transactio
 void IcebergTableInformation::AddSnapshot(IcebergTransaction &transaction, vector<IcebergManifestEntry> &&data_files) {
 	D_ASSERT(!data_files.empty());
 	InitTransactionData(transaction);
-	transaction_data->AddSnapshot(IcebergSnapshotOperationType::APPEND, std::move(data_files));
+	case_insensitive_map_t<IcebergManifestDeletes> empty_manifest_deletes;
+	transaction_data->AddSnapshot(IcebergSnapshotOperationType::APPEND, std::move(data_files),
+	                              std::move(empty_manifest_deletes));
 }
 
 void IcebergTableInformation::AddDeleteSnapshot(IcebergTransaction &transaction,
-                                                vector<IcebergManifestEntry> &&data_files) {
+                                                vector<IcebergManifestEntry> &&data_files,
+                                                case_insensitive_map_t<IcebergManifestDeletes> &&altered_manifests) {
 	InitTransactionData(transaction);
-
-	transaction_data->AddSnapshot(IcebergSnapshotOperationType::DELETE, std::move(data_files));
+	transaction_data->AddSnapshot(IcebergSnapshotOperationType::DELETE, std::move(data_files),
+	                              std::move(altered_manifests));
 }
 
 void IcebergTableInformation::AddUpdateSnapshot(IcebergTransaction &transaction,
                                                 vector<IcebergManifestEntry> &&delete_files,
-                                                vector<IcebergManifestEntry> &&data_files) {
+                                                vector<IcebergManifestEntry> &&data_files,
+                                                case_insensitive_map_t<IcebergManifestDeletes> &&altered_manifests) {
 	InitTransactionData(transaction);
 	// Automatically creates new snapshot with SnapshotOperationType::Overwrite
-	transaction_data->AddUpdateSnapshot(std::move(delete_files), std::move(data_files));
+	transaction_data->AddUpdateSnapshot(std::move(delete_files), std::move(data_files), std::move(altered_manifests));
 }
 
 void IcebergTableInformation::AddSchema(IcebergTransaction &transaction) {

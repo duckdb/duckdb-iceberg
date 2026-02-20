@@ -4,3 +4,4 @@ pydantic==2.9.0
 pyiceberg==0.9.1
 pyarrow
 pytest
+mitmproxy==12.2.1

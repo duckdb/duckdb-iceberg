@@ -440,8 +440,7 @@ rest_api_objects::LoadTableResult IRCAPI::CommitNewTable(ClientContext &context,
 	auto root_object = yyjson_mut_obj(doc);
 	yyjson_mut_doc_set_root(doc, root_object);
 
-	auto initial_schema = table->table_info.table_metadata.schemas[table->table_info.table_metadata.current_schema_id];
-	auto create_transaction = make_uniq<IcebergCreateTableRequest>(initial_schema, table->table_info.name);
+	auto create_transaction = make_uniq<IcebergCreateTableRequest>(table->table_info);
 	// if stage create is supported, create the table with stage_create = true and the table update will
 	// commit the table.
 	auto support_stage_create = catalog.attach_options.supports_stage_create;

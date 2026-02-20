@@ -107,7 +107,7 @@ idx_t ManifestReader::ReadChunk(idx_t offset, idx_t count, vector<IcebergManifes
 
 	auto &partition_spec_id = chunk.data[vector_index++];
 	auto &manifest_file_sequence_number = chunk.data[vector_index++];
-	auto &manifest_file_index = chunk.data[vector_index++];
+	auto &manifest_file_path = chunk.data[vector_index++];
 
 	idx_t entry_index = 0;
 	auto &data_file_entries = StructVector::GetEntries(data_file);
@@ -150,7 +150,7 @@ idx_t ManifestReader::ReadChunk(idx_t offset, idx_t count, vector<IcebergManifes
 	auto file_sequence_number_data = FlatVector::GetData<int64_t>(file_sequence_number);
 	auto partition_spec_id_data = FlatVector::GetData<int32_t>(partition_spec_id);
 	auto manifest_file_sequence_number_data = FlatVector::GetData<int64_t>(manifest_file_sequence_number);
-	auto manifest_file_index_data = FlatVector::GetData<uint64_t>(manifest_file_index);
+	auto manifest_file_path_data = FlatVector::GetData<string_t>(manifest_file_path);
 
 	int32_t *content_data = nullptr;
 	int64_t *first_row_id_data = nullptr;
@@ -241,7 +241,7 @@ idx_t ManifestReader::ReadChunk(idx_t offset, idx_t count, vector<IcebergManifes
 		}
 
 		entry.partition_spec_id = partition_spec_id_data[index];
-		entry.manifest_file_idx = manifest_file_index_data[index];
+		entry.manifest_file_path = manifest_file_path_data[index].GetString();
 		for (auto &it : partition_vectors) {
 			auto field_id = it.first;
 			auto &partition_vector = it.second.get();

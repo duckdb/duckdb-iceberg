@@ -1,0 +1,85 @@
+# name: test/sql/local/irc/create/test_create_table_with_properties.test
+# description: test create table
+# group: [create]
+
+require-env ICEBERG_SERVER_AVAILABLE
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+CALL enable_logging('HTTP');
+
+statement ok
+set logging_level='debug'
+
+statement ok
+CREATE SECRET (
+    TYPE S3,
+    KEY_ID 'admin',
+    SECRET 'password',
+    ENDPOINT '127.0.0.1:9000',
+    URL_STYLE 'path',
+    USE_SSL 0
+);
+
+
+statement ok
+ATTACH '' AS my_datalake (
+    TYPE ICEBERG,
+    CLIENT_ID 'admin',
+    CLIENT_SECRET 'password',
+    ENDPOINT 'http://127.0.0.1:8181'
+);
+
+statement ok
+create schema if not exists my_datalake.default;
+
+statement ok
+use my_datalake.default;
+
+statement ok
+drop table if exists create_table_with_properties;
+
+statement ok
+create table create_table_with_properties (a int) WITH ('format-version'='3');
+
+statement ok
+drop table if exists create_table_with_properties;
+
+statement ok
+create table create_table_with_properties (a int) 
+WITH (
+    'property1'='value1',
+    'property2'='value2',
+    'property3'='value3',
+    'property4'='value4'
+);
+
+query II
+select * from iceberg_table_properties(my_datalake.default.create_table_with_properties) where key like '%property%' order by all;
+----
+property1	value1
+property2	value2
+property3	value3
+property4	value4
+
+statement ok
+call set_iceberg_table_properties(my_datalake.default.create_table_with_properties, {'property1':'value10', 'property2':'value20'});
+
+query II
+select * from iceberg_table_properties(my_datalake.default.create_table_with_properties) where key like '%property%' order by all;
+----
+property1	value10
+property2	value20
+property3	value3
+property4	value4
+

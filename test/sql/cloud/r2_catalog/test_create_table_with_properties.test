@@ -1,0 +1,68 @@
+# name: test/sql/cloud/r2_catalog/test_create_table_with_properties.test
+# description: test integration with iceberg catalog read
+# group: [r2_catalog]
+
+require-env ICEBERG_AWS_REMOTE_AVAILABLE
+
+require-env R2_TOKEN
+
+require httpfs
+
+require avro
+
+require parquet
+
+require iceberg
+
+require aws
+
+require tpch
+
+statement ok
+CREATE SECRET r2_secret (
+    TYPE ICEBERG,
+    TOKEN '${R2_TOKEN}'
+);
+
+
+statement ok
+attach '6b17833f308abc1e1cc343c552b51f51_r2-catalog' AS my_datalake (
+    TYPE ICEBERG,
+    ENDPOINT 'https://catalog.cloudflarestorage.com/6b17833f308abc1e1cc343c552b51f51/r2-catalog'
+);
+
+set ignore_error_messages
+
+statement ok
+create schema IF NOT EXISTS my_datalake.test_create_schema;
+
+statement ok
+use my_datalake.test_create_schema;
+
+statement ok
+drop table if exists test_create_table;
+
+statement ok
+create table test_create_table (a int) 
+WITH (
+    'format-version'='2',
+    'property1'='value1', 
+    'property2'='value2'
+);
+
+query II
+select * from iceberg_table_properties(my_datalake.test_create_schema.test_create_table) where key like '%property%' order by key;
+----
+property1	value1
+property2	value2
+
+statement error
+create table invalid_table_format_version (a int) 
+WITH (
+    'format-version'='3',
+    'property1'='value1', 
+    'property2'='value2'
+);
+----
+<REGEX>:.*DuckDB-Iceberg only supports creating version 2 Iceberg tables.*
+
