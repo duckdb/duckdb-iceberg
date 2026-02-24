@@ -105,7 +105,7 @@ WHERE id = 2;
 
 # The first transaction's delete should now be skipped, and only the last delete should be used
 query IIII
-select sequence_number, rowid, id, data from my_datalake.default.tbl order by rowid;
+select sequence_number, rowid, id, data from my_datalake.default.write_v3_update_and_delete order by rowid;
 ----
 1	0	1	a
 2	3	4	d_u1

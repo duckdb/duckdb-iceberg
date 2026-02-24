@@ -10,6 +10,8 @@
 #include "storage/iceberg_table_information.hpp"
 
 #include "duckdb/common/types/uuid.hpp"
+#include "avro_scan.hpp"
+#include "manifest_reader.hpp"
 
 namespace duckdb {
 
@@ -97,6 +99,7 @@ void IcebergTransactionData::AddSnapshot(IcebergSnapshotOperationType operation,
 	auto &table_metadata = table_info.table_metadata;
 	auto snapshot_id = NewSnapshotId();
 
+	CacheExistingManifestList(table_metadata);
 	auto last_sequence_number = table_metadata.last_sequence_number;
 	if (!alters.empty()) {
 		auto &last_alter = alters.back().get();
@@ -180,6 +183,48 @@ void IcebergTransactionData::AddSnapshot(IcebergSnapshotOperationType operation,
 	updates.push_back(std::move(add_snapshot));
 }
 
+void IcebergTransactionData::CacheExistingManifestList(const IcebergTableMetadata &metadata) {
+	if (!alters.empty()) {
+		return;
+	}
+
+	auto current_snapshot = metadata.GetLatestSnapshot();
+	if (!current_snapshot) {
+		return;
+	}
+	auto &snapshot = *current_snapshot;
+
+	auto &manifest_list_path = snapshot.manifest_list;
+	//! Read the manifest list
+	auto scan = AvroScan::ScanManifestList(snapshot, metadata, context, manifest_list_path);
+	auto manifest_list_reader = make_uniq<manifest_list::ManifestListReader>(*scan);
+	while (!manifest_list_reader->Finished()) {
+		manifest_list_reader->Read(STANDARD_VECTOR_SIZE, existing_manifest_list);
+	}
+
+	if (metadata.iceberg_version < 3) {
+		return;
+	}
+
+	//! Deal with upgraded tables, if the snapshot originated from V2
+	for (auto &manifest_file : existing_manifest_list) {
+		if (manifest_file.content != IcebergManifestContentType::DATA) {
+			continue;
+		}
+		if (manifest_file.has_first_row_id) {
+			continue;
+		}
+		if (snapshot.has_first_row_id) {
+			throw InternalException("Table is corrupted, snapshot has 'first-row-id' but not all 'manifest_file' "
+			                        "entries have a 'first_row_id'");
+		}
+		manifest_file.has_first_row_id = true;
+		manifest_file.first_row_id = next_row_id;
+		next_row_id += manifest_file.added_rows_count;
+		next_row_id += manifest_file.existing_rows_count;
+	}
+}
+
 void IcebergTransactionData::AddUpdateSnapshot(vector<IcebergManifestEntry> &&delete_files,
                                                vector<IcebergManifestEntry> &&data_files,
                                                case_insensitive_map_t<IcebergManifestDeletes> &&altered_manifests) {
@@ -187,6 +232,7 @@ void IcebergTransactionData::AddUpdateSnapshot(vector<IcebergManifestEntry> &&de
 	auto &table_metadata = table_info.table_metadata;
 	auto snapshot_id = NewSnapshotId();
 
+	CacheExistingManifestList(table_metadata);
 	auto last_sequence_number = table_metadata.last_sequence_number;
 	if (!alters.empty()) {
 		auto &last_alter = alters.back().get();

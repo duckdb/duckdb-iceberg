@@ -738,18 +738,36 @@ void IcebergMultiFileList::InitializeFiles(lock_guard<mutex> &guard) const {
 		auto &metadata = GetMetadata();
 		auto &fs = FileSystem::GetFileSystem(context);
 
-		// Read the manifest list, we need all the manifests to determine if we've seen all deletes
-		auto manifest_list_full_path = options.allow_moved_paths
-		                                   ? IcebergUtils::GetFullPath(iceberg_path, snapshot.manifest_list, fs)
-		                                   : snapshot.manifest_list;
-
-		//! Read the manifest list
-		auto scan = AvroScan::ScanManifestList(snapshot, metadata, context, manifest_list_full_path);
-		auto manifest_list_reader = make_uniq<manifest_list::ManifestListReader>(*scan);
-
 		vector<IcebergManifestFile> manifest_files;
-		while (!manifest_list_reader->Finished()) {
-			manifest_list_reader->Read(STANDARD_VECTOR_SIZE, manifest_files);
+		if (HasTransactionData() && !GetTransactionData().alters.empty()) {
+			auto &transaction_data = GetTransactionData();
+			manifest_files = transaction_data.existing_manifest_list;
+		} else {
+			// Read the manifest list, we need all the manifests to determine if we've seen all deletes
+			auto manifest_list_full_path = options.allow_moved_paths
+			                                   ? IcebergUtils::GetFullPath(iceberg_path, snapshot.manifest_list, fs)
+			                                   : snapshot.manifest_list;
+			//! Read the manifest list
+			auto scan = AvroScan::ScanManifestList(snapshot, metadata, context, manifest_list_full_path);
+			auto manifest_list_reader = make_uniq<manifest_list::ManifestListReader>(*scan);
+			while (!manifest_list_reader->Finished()) {
+				manifest_list_reader->Read(STANDARD_VECTOR_SIZE, manifest_files);
+			}
+			if (metadata.iceberg_version >= 3 && !snapshot.has_first_row_id) {
+				//! Backfill the row lineage for V2 snapshots, required for correct UPDATE behavior
+				idx_t next_row_id = 0;
+				for (auto &manifest_file : manifest_files) {
+					if (manifest_file.content != IcebergManifestContentType::DATA) {
+						continue;
+					}
+					if (manifest_file.has_first_row_id) {
+						continue;
+					}
+					manifest_file.has_first_row_id = true;
+					manifest_file.first_row_id = next_row_id;
+					next_row_id += manifest_file.added_rows_count + manifest_file.existing_rows_count;
+				}
+			}
 		}
 
 		for (auto &manifest_file : manifest_files) {

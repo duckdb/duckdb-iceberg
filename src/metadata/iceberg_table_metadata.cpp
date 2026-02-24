@@ -322,10 +322,6 @@ IcebergTableMetadata IcebergTableMetadata::FromTableMetadata(const rest_api_obje
 	if (table_metadata.has_next_row_id) {
 		res.has_next_row_id = true;
 		res.next_row_id = table_metadata.next_row_id;
-	} else if (res.iceberg_version >= 3) {
-		//! When upgrading to v3, initialize next_row_id to 0
-		res.has_next_row_id = true;
-		res.next_row_id = 0;
 	}
 
 	if (table_metadata.has_current_snapshot_id && table_metadata.current_snapshot_id != -1) {

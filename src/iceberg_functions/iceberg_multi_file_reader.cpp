@@ -416,22 +416,6 @@ void IcebergMultiFileReader::FinalizeChunk(ClientContext &context, const MultiFi
 	auto file_id = reader.file_list_idx.GetIndex();
 	auto &manifest_entry = multi_file_list.manifest_entries[file_id];
 
-	idx_t count = output_chunk.size();
-	if (sequence_number_col.IsValid()) {
-		auto &sequence_number_column = output_chunk.data[sequence_number_col.GetIndex()];
-		sequence_number_column.Flatten(count);
-		auto &sequence_number_validity = FlatVector::Validity(sequence_number_column);
-		auto sequence_number_data = FlatVector::GetData<int64_t>(sequence_number_column);
-		for (idx_t i = 0; i < count; i++) {
-			if (sequence_number_validity.RowIsValid(i)) {
-				//! Explicitly set in the file
-				continue;
-			}
-			sequence_number_validity.SetValid(i);
-			sequence_number_data[i] = manifest_entry.sequence_number;
-		}
-	}
-
 	auto &local_columns = reader.columns;
 	ApplyEqualityDeletes(context, output_chunk, multi_file_list, manifest_entry, local_columns);
 }
@@ -482,6 +466,25 @@ bool IcebergMultiFileReader::ParseOption(const string &key, const Value &val, Mu
 	return MultiFileReader::ParseOption(key, val, options, context);
 }
 
+static unique_ptr<Expression> ConstructVirtualRowIdExpression(ClientContext &context, const LogicalType &type,
+                                                              const Value &val, idx_t local_idx) {
+	auto row_id_expr = make_uniq<BoundConstantExpression>(val);
+	auto file_row_number = make_uniq<BoundReferenceExpression>(type, local_idx);
+
+	// generate the addition
+	vector<unique_ptr<Expression>> children;
+	children.push_back(std::move(row_id_expr));
+	children.push_back(std::move(file_row_number));
+
+	FunctionBinder binder(context);
+	ErrorData error;
+	auto function_expr = binder.BindScalarFunction(DEFAULT_SCHEMA, "+", std::move(children), error, true, nullptr);
+	if (error.HasError()) {
+		error.Throw();
+	}
+	return function_expr;
+}
+
 unique_ptr<Expression> IcebergMultiFileReader::GetVirtualColumnExpression(
     ClientContext &context, MultiFileReaderData &reader_data, const vector<MultiFileColumnDefinition> &local_columns,
     idx_t &column_id, const LogicalType &type, MultiFileLocalIndex local_idx,
@@ -490,69 +493,91 @@ unique_ptr<Expression> IcebergMultiFileReader::GetVirtualColumnExpression(
 		// row id column
 		// this is computed as row_id_start + file_row_number OR read from the file
 		// first check if the row id is explicitly defined in this file
-		for (auto &col : local_columns) {
-			if (col.identifier.IsNull()) {
-				continue;
-			}
-			//! FIXME: this means the column is present, not that it's always non-null
-			//! Don't we need to push a COALESCE(_row_id, ...) - or deal with it in FinalizeChunk ?
-			if (col.identifier.GetValue<int32_t>() == MultiFileReader::ROW_ID_FIELD_ID) {
-				// it is! return a reference to the global row id column so we can read it from the file directly
-				global_column_reference = row_id_column.get();
-				return nullptr;
-			}
-		}
 		// get the row id start for this file
 		if (!reader_data.file_to_be_opened.extended_info) {
 			throw InternalException("Extended info not found for reading row id column");
 		}
-
 		auto &options = reader_data.file_to_be_opened.extended_info->options;
 		auto entry = options.find("first_row_id");
+		for (idx_t i = 0; i < local_columns.size(); i++) {
+			auto &col = local_columns[i];
+			if (col.identifier.IsNull()) {
+				continue;
+			}
+			if (col.identifier.GetValue<int32_t>() == MultiFileReader::ROW_ID_FIELD_ID) {
+				if (entry == options.end()) {
+					//! There is no parent 'first_row_id' to inherit, simply reference the existing column
+					global_column_reference = row_id_column.get();
+					return nullptr;
+				}
+				auto &reader = *reader_data.reader;
+				// add a projection for the _row_id column we found in the local schema
+				reader.column_ids.push_back(MultiFileLocalColumnId(i));
+				reader.column_indexes.push_back(ColumnIndex(i));
+
+				column_id = MultiFileReader::COLUMN_IDENTIFIER_FILE_ROW_NUMBER;
+
+				auto computed_row_id =
+				    ConstructVirtualRowIdExpression(context, type, entry->second, local_idx.GetIndex() + 1);
+				// Create COALESCE(_row_id, computed_row_id)
+				auto coalesce_expr = make_uniq<BoundOperatorExpression>(ExpressionType::OPERATOR_COALESCE, type);
+				auto file_row_id = make_uniq<BoundReferenceExpression>(type, local_idx.GetIndex());
+				coalesce_expr->children.push_back(std::move(file_row_id));
+				coalesce_expr->children.push_back(std::move(computed_row_id));
+
+				// Transform virtual column to file_row_number for the reference
+				column_id = MultiFileReader::COLUMN_IDENTIFIER_FILE_ROW_NUMBER;
+				return coalesce_expr;
+			}
+		}
 		if (entry == options.end()) {
 			//! No first-row-id can be found, version must be <3, just return null
 			return make_uniq<BoundConstantExpression>(Value(LogicalType::BIGINT));
 		}
-		auto row_id_expr = make_uniq<BoundConstantExpression>(entry->second);
-		auto file_row_number = make_uniq<BoundReferenceExpression>(type, local_idx.GetIndex());
 
 		// transform this virtual column to file_row_number
 		column_id = MultiFileReader::COLUMN_IDENTIFIER_FILE_ROW_NUMBER;
-
-		// generate the addition
-		vector<unique_ptr<Expression>> children;
-		children.push_back(std::move(row_id_expr));
-		children.push_back(std::move(file_row_number));
-
-		FunctionBinder binder(context);
-		ErrorData error;
-		auto function_expr = binder.BindScalarFunction(DEFAULT_SCHEMA, "+", std::move(children), error, true, nullptr);
-		if (error.HasError()) {
-			error.Throw();
-		}
-		return function_expr;
+		return ConstructVirtualRowIdExpression(context, type, entry->second, local_idx.GetIndex());
 	}
 	if (column_id == COLUMN_IDENTIFIER_LAST_SEQUENCE_NUMBER) {
-		sequence_number_col = local_idx.GetIndex();
 		// get the row id start for this file
 		if (!reader_data.file_to_be_opened.extended_info) {
 			throw InternalException("Missing extended info for data file");
 		}
 		auto &options = reader_data.file_to_be_opened.extended_info->options;
 		auto entry = options.find("sequence_number");
-		if (entry == options.end()) {
-			throw InvalidInputException("Extended info not found for reading sequence_number column");
-		}
-		for (auto &col : local_columns) {
+		for (idx_t i = 0; i < local_columns.size(); i++) {
+			auto &col = local_columns[i];
 			if (col.identifier.IsNull()) {
 				continue;
 			}
 			if (col.identifier.GetValue<int32_t>() == MultiFileReader::LAST_UPDATED_SEQUENCE_NUMBER_ID) {
-				// it is! return a reference to the global sequence_number column so we can read it from the file
-				// directly
-				global_column_reference = last_updated_sequence_number_column.get();
-				return nullptr;
+				if (entry == options.end()) {
+					//! There is no parent 'sequence_number' to inherit, simply reference the existing column
+					global_column_reference = last_updated_sequence_number_column.get();
+					return nullptr;
+				}
+				auto &reader = *reader_data.reader;
+				// add a projection for the _row_id column we found in the local schema
+				reader.column_ids.push_back(MultiFileLocalColumnId(i));
+				reader.column_indexes.push_back(ColumnIndex(i));
+
+				column_id = MultiFileReader::COLUMN_IDENTIFIER_FILE_ROW_NUMBER;
+
+				auto computed_sequence_number = make_uniq<BoundConstantExpression>(entry->second);
+				// Create COALESCE(_last_updated_sequence_number, computed_sequence_number)
+				auto coalesce_expr = make_uniq<BoundOperatorExpression>(ExpressionType::OPERATOR_COALESCE, type);
+				auto sequence_number = make_uniq<BoundReferenceExpression>(type, local_idx.GetIndex());
+				coalesce_expr->children.push_back(std::move(sequence_number));
+				coalesce_expr->children.push_back(std::move(computed_sequence_number));
+
+				// Transform virtual column to file_row_number for the reference
+				column_id = MultiFileReader::COLUMN_IDENTIFIER_FILE_ROW_NUMBER;
+				return coalesce_expr;
 			}
+		}
+		if (entry == options.end()) {
+			return make_uniq<BoundConstantExpression>(Value(LogicalType::BIGINT));
 		}
 		return make_uniq<BoundConstantExpression>(entry->second);
 	}

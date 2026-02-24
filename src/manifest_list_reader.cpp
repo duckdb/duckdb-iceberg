@@ -127,13 +127,7 @@ idx_t ManifestListReader::ReadChunk(idx_t offset, idx_t count, vector<IcebergMan
 		}
 
 		if (iceberg_version >= 3) {
-			if (!FlatVector::Validity(*first_row_id).RowIsValid(index)) {
-				if (manifest.content != IcebergManifestContentType::DELETE) {
-					throw InternalException(
-					    "Malformed manifest_file detected, 'first-row-id' is not set for a DATA manifest");
-				}
-				manifest.has_first_row_id = false;
-			} else {
+			if (FlatVector::Validity(*first_row_id).RowIsValid(index)) {
 				manifest.first_row_id = first_row_id_data[index];
 				manifest.has_first_row_id = true;
 			}

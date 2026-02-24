@@ -154,9 +154,17 @@ void WriteToFile(const IcebergTableMetadata &table_metadata, const IcebergManife
 	}
 
 	//! Populate the DataChunk with the manifests
-	auto manifest_files = manifest_list.GetManifestFilesConst();
+	auto &manifest_files = manifest_list.GetManifestFilesConst();
 	DataChunk data;
 	data.Initialize(allocator, types, manifest_files.size());
+
+	idx_t next_row_id;
+	auto latest_snapshot = table_metadata.GetLatestSnapshot();
+	if (table_metadata.has_next_row_id) {
+		next_row_id = table_metadata.next_row_id;
+	} else {
+		next_row_id = 0;
+	}
 
 	for (idx_t i = 0; i < manifest_files.size(); i++) {
 		const auto &manifest = manifest_files[i];
@@ -209,8 +217,18 @@ void WriteToFile(const IcebergTableMetadata &table_metadata, const IcebergManife
 		// partitions: list<508: field_summary> - 507
 		data.SetValue(col_idx++, i, manifest.partitions.ToValue());
 
-		if (manifest.has_first_row_id) {
-			data.SetValue(col_idx++, i, manifest.first_row_id);
+		bool has_first_row_id = manifest.has_first_row_id;
+		int64_t first_row_id = manifest.first_row_id;
+		if (!has_first_row_id && manifest.content == IcebergManifestContentType::DATA) {
+			//! Assign first_row_id to old manifest_file entries on
+			first_row_id = next_row_id;
+			has_first_row_id = true;
+			next_row_id += manifest.added_rows_count;
+			next_row_id += manifest.existing_rows_count;
+		}
+
+		if (has_first_row_id) {
+			data.SetValue(col_idx++, i, first_row_id);
 		}
 	}
 	data.SetCardinality(manifest_files.size());

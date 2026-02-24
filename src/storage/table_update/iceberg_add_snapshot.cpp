@@ -63,7 +63,15 @@ void IcebergAddSnapshot::ConstructManifest(CopyFunction &avro_copy, DatabaseInst
 	bool removed_any_entries = false;
 	idx_t handled_entries = 0;
 	for (auto &manifest_entry : rewritten_manifest.entries) {
-		manifest_entry.status = IcebergManifestEntryStatusType::EXISTING;
+		if (manifest_entry.status == IcebergManifestEntryStatusType::ADDED) {
+			manifest_entry.status = IcebergManifestEntryStatusType::EXISTING;
+		}
+		//! File was already deleted, preserve the deleted entry
+		if (manifest_entry.status == IcebergManifestEntryStatusType::DELETED) {
+			rewritten_manifest_file.deleted_rows_count += manifest_entry.data_file.record_count;
+			rewritten_manifest_file.deleted_files_count++;
+			continue;
+		}
 		auto delete_it = deletes.altered_data_files.find(manifest_entry.data_file.file_path);
 		if (delete_it == deletes.altered_data_files.end()) {
 			rewritten_manifest_file.existing_rows_count += manifest_entry.data_file.record_count;

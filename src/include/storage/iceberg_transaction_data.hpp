@@ -45,6 +45,9 @@ public:
 	void TableRemoveProperties(vector<string> properties);
 	void TableSetLocation();
 
+private:
+	void CacheExistingManifestList(const IcebergTableMetadata &metadata);
+
 public:
 	ClientContext &context;
 	IcebergTableInformation &table_info;
@@ -53,6 +56,8 @@ public:
 	//! has the table been deleted in the current transaction
 	bool is_deleted;
 	vector<unique_ptr<IcebergTableRequirement>> requirements;
+	//! Cached manifest list from the source snapshot
+	vector<IcebergManifestFile> existing_manifest_list;
 
 	//! Every insert/update/delete creates an alter of the table data
 	vector<reference<IcebergAddSnapshot>> alters;

@@ -230,9 +230,6 @@ idx_t ManifestReader::ReadChunk(idx_t offset, idx_t count, vector<IcebergManifes
 		}
 		if (iceberg_version >= 3) {
 			if (!first_row_id_validity->RowIsValid(index)) {
-				if (data_file.content == IcebergManifestEntryContentType::DATA) {
-					throw InternalException("'first-row-id' missing for data_file");
-				}
 				data_file.has_first_row_id = false;
 			} else {
 				data_file.has_first_row_id = true;
