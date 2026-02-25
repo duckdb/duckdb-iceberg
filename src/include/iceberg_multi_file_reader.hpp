@@ -40,6 +40,7 @@ public:
 
 public:
 	static unique_ptr<MultiFileReader> CreateInstance(const TableFunction &table);
+	static vector<PartitionStatistics> IcebergGetPartitionStats(ClientContext &context, GetPartitionStatsInput &input);
 
 public:
 	shared_ptr<MultiFileList> CreateFileList(ClientContext &context, const vector<string> &paths,

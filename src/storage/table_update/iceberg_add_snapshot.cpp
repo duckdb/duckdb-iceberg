@@ -123,13 +123,13 @@ void IcebergAddSnapshot::ConstructManifestList(CopyFunction &avro_copy, Database
 	for (auto &manifest_file : commit_state.manifests) {
 		auto it = altered_manifests.find(manifest_file.manifest_path);
 		if (it == altered_manifests.end()) {
-			manifest_list.manifest_entries.push_back(std::move(manifest_file));
+			manifest_list.AddManifestFile(std::move(manifest_file));
 			continue;
 		}
 		handled_entries++;
 		auto &altered_manifest = it->second;
 		ConstructManifest(avro_copy, db, commit_state, manifest_file, altered_manifest);
-		manifest_list.manifest_entries.push_back(std::move(manifest_file));
+		manifest_list.AddManifestFile(std::move(manifest_file));
 	}
 	if (handled_entries != altered_manifests.size()) {
 		throw InternalException("(ConstructManifestList) We expected to find %d invalidated entries, but only found %d",

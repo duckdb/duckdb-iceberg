@@ -78,6 +78,7 @@ public:
 	unique_ptr<DeleteFilter> GetPositionalDeletesForFile(const string &file_path) const;
 	void ProcessDeletes(const vector<MultiFileColumnDefinition> &global_columns,
 	                    const vector<ColumnIndex> &column_indexes) const;
+	void GetStatistics(vector<PartitionStatistics> &result) const;
 
 public:
 	//! MultiFileList API

@@ -137,10 +137,12 @@ public:
 public:
 	vector<IcebergManifestFile> &GetManifestFilesMutable();
 	const vector<IcebergManifestFile> &GetManifestFilesConst() const;
+	const string &GetPath() const {
+		return path;
+	}
 
-	IcebergManifestFile &CreateNewManifestListEntry(string manifest_file_path) {
-		manifest_entries.push_back(IcebergManifestFile(manifest_file_path));
-		return manifest_entries.back();
+	void AddManifestFile(IcebergManifestFile &&manifest_file) {
+		manifest_entries.push_back(std::move(manifest_file));
 	}
 	idx_t GetManifestListEntriesCount() const;
 
@@ -153,7 +155,7 @@ public:
 	static LogicalType FieldSummaryType();
 	static Value FieldSummaryFieldIds();
 
-public:
+private:
 	string path;
 	vector<IcebergManifestFile> manifest_entries;
 };

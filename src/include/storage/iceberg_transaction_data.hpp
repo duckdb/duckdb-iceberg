@@ -24,9 +24,10 @@ public:
 	IcebergTransactionData(ClientContext &context, IcebergTableInformation &table_info);
 
 public:
-	void CreateManifestListEntry(IcebergAddSnapshot &add_snapshot, IcebergTableMetadata &table_metadata,
-	                             IcebergManifestContentType manifest_content_type,
-	                             vector<IcebergManifestEntry> &&data_files);
+	IcebergManifestFile CreateManifestFile(int64_t snapshot_id, sequence_number_t sequence_number,
+	                                       IcebergTableMetadata &table_metadata,
+	                                       IcebergManifestContentType manifest_content_type,
+	                                       vector<IcebergManifestEntry> &&data_files);
 	void AddSnapshot(IcebergSnapshotOperationType operation, vector<IcebergManifestEntry> &&data_files,
 	                 case_insensitive_map_t<IcebergManifestDeletes> &&altered_manifests);
 	void AddUpdateSnapshot(vector<IcebergManifestEntry> &&delete_files, vector<IcebergManifestEntry> &&data_files,
