@@ -1,5 +1,7 @@
 name: Build & Test against catalogs
 on: [push, pull_request,repository_dispatch]
+permissions:
+  contents: write
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}-${{ github.head_ref || '' }}-${{ github.base_ref || '' }}-${{ github.ref != 'refs/heads/main' || github.sha }}
   cancel-in-progress: true
@@ -76,3 +78,32 @@ jobs:
     uses: ./.github/workflows/test-polaris-catalog.yml
     with:
       artifact-name: duckdb-iceberg
+
+  release-artifacts:
+    name: Publish GitHub release artifacts
+    if: startsWith(github.ref, 'refs/tags/')
+    needs:
+      - build_iceberg
+      - test-nessie
+      - test-spark
+      - test-polaris
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download DuckDB-Iceberg artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: duckdb-iceberg
+          path: build/release
+
+      - name: Pack release artifact
+        run: |
+          tar -C build/release -czf duckdb-iceberg-${{ github.ref_name }}-linux-x86_64.tar.gz .
+          sha256sum duckdb-iceberg-${{ github.ref_name }}-linux-x86_64.tar.gz > duckdb-iceberg-${{ github.ref_name }}-linux-x86_64.tar.gz.sha256
+
+      - name: Upload to GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            duckdb-iceberg-${{ github.ref_name }}-linux-x86_64.tar.gz
+            duckdb-iceberg-${{ github.ref_name }}-linux-x86_64.tar.gz.sha256
