@@ -150,6 +150,15 @@ static Value TransformPartitionValueTemplated(const Value &value, const LogicalT
 
 static Value TransformPartitionValue(const Value &value, const LogicalType &type) {
 	D_ASSERT(!value.type().IsNested());
+	// DECIMAL partition values are already decoded as proper DuckDB DECIMALs by the Avro reader.
+	// The blob round-trip below misinterprets the little-endian internal representation as
+	// big-endian Iceberg bytes, producing garbage. Return directly (or cast if params differ).
+	if (value.type().id() == LogicalTypeId::DECIMAL) {
+		if (value.type() == type) {
+			return value;
+		}
+		return value.DefaultCastAs(type);
+	}
 	switch (value.type().InternalType()) {
 	case PhysicalType::BOOL:
 		return TransformPartitionValueTemplated<bool>(value, type);
