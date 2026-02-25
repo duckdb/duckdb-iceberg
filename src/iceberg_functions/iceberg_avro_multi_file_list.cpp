@@ -34,6 +34,21 @@ IcebergManifestFileScanInfo::IcebergManifestFileScanInfo(const IcebergTableMetad
 	//! Since we are now reading *all* manifests in one reader, we have to merge these schemas,
 	//! and to do that we create a map of all relevant partition fields
 	partition_field_id_to_type = IcebergDataFile::GetFieldIdToTypeMapping(snapshot, metadata, partition_spec_ids);
+
+	// Build avro read type map: same as partition_field_id_to_type except DAY → DATE.
+	// Spark writes day-transform partition values with Avro 'date' logical type (int32 + logicalType annotation).
+	// The spec says INTEGER, but the avro reader cannot coerce DATE→INTEGER, so we use DATE for reading
+	// and normalize DATE→INTEGER in manifest_reader.cpp after the value is extracted.
+	partition_field_id_to_avro_read_type = partition_field_id_to_type;
+	auto &partition_specs = metadata.GetPartitionSpecs();
+	for (auto &spec_id : partition_spec_ids) {
+		auto &partition_spec = partition_specs.at(spec_id);
+		for (auto &field : partition_spec.GetFields()) {
+			if (field.transform.Type() == IcebergTransformType::DAY) {
+				partition_field_id_to_avro_read_type[field.partition_field_id] = LogicalType::DATE;
+			}
+		}
+	}
 }
 
 IcebergManifestFileScanInfo::~IcebergManifestFileScanInfo() {

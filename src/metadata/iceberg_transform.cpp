@@ -59,8 +59,12 @@ LogicalType IcebergTransform::GetBoundsType(const LogicalType &input) const {
 		return LogicalType::INTEGER;
 	case IcebergTransformType::TRUNCATE:
 		return input;
-	case IcebergTransformType::DAY:
-		return LogicalType::INTEGER;
+	case IcebergTransformType::DAY: {
+		child_list_t<LogicalType> members;
+		members.emplace_back("int", LogicalType::INTEGER);
+		members.emplace_back("date", LogicalType::DATE);
+		return LogicalType::UNION(members);
+	}
 	case IcebergTransformType::YEAR:
 	case IcebergTransformType::MONTH:
 	case IcebergTransformType::HOUR:

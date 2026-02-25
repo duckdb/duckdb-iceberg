@@ -143,11 +143,12 @@ static vector<MultiFileColumnDefinition> BuildManifestListSchema(const IcebergTa
 
 namespace manifest_file {
 
-static MultiFileColumnDefinition CreateManifestPartitionColumn(const map<idx_t, LogicalType> partition_field_id_to_type,
-                                                               const LogicalType &partition_type) {
+static MultiFileColumnDefinition
+CreateManifestPartitionColumn(const map<idx_t, LogicalType> &partition_field_id_to_avro_read_type,
+                              const LogicalType &partition_type) {
 	MultiFileColumnDefinition partition("partition", partition_type);
 	partition.identifier = Value::INTEGER(PARTITION);
-	for (auto &it : partition_field_id_to_type) {
+	for (auto &it : partition_field_id_to_avro_read_type) {
 		auto partition_field_id = it.first;
 		auto &type = it.second;
 
@@ -161,7 +162,8 @@ static MultiFileColumnDefinition CreateManifestPartitionColumn(const map<idx_t, 
 
 static vector<MultiFileColumnDefinition>
 BuildManifestSchema(const IcebergSnapshot &snapshot, const IcebergTableMetadata &metadata,
-                    const map<idx_t, LogicalType> &partition_field_id_to_type) {
+                    const map<idx_t, LogicalType> &partition_field_id_to_type,
+                    const map<idx_t, LogicalType> &partition_field_id_to_avro_read_type) {
 	vector<MultiFileColumnDefinition> schema;
 
 	auto &iceberg_version = metadata.iceberg_version;
@@ -189,8 +191,11 @@ BuildManifestSchema(const IcebergSnapshot &snapshot, const IcebergTableMetadata 
 	schema.push_back(file_sequence_number);
 
 	//! Map all the referenced partition spec ids to the partition fields that *could* be referenced,
-	//! any missing fields will be NULL
-	auto partition_type = IcebergDataFile::PartitionStructType(partition_field_id_to_type);
+	//! any missing fields will be NULL.
+	//! Use avro_read_type for the actual column types (DATE for DAY fields so the avro reader accepts
+	//! both spec-compliant INT and Spark's 'date' logical type). The semantic type (partition_field_id_to_type)
+	//! stays as INTEGER for DAY; manifest_reader.cpp normalizes DATE→INTEGER after extraction.
+	auto partition_type = IcebergDataFile::PartitionStructType(partition_field_id_to_avro_read_type);
 
 	// data_file
 	MultiFileColumnDefinition data_file("data_file", IcebergDataFile::GetType(metadata, partition_type));
@@ -211,7 +216,7 @@ BuildManifestSchema(const IcebergSnapshot &snapshot, const IcebergTableMetadata 
 	file_format.identifier = Value::INTEGER(FILE_FORMAT);
 	data_file.children.push_back(file_format);
 
-	data_file.children.push_back(CreateManifestPartitionColumn(partition_field_id_to_type, partition_type));
+	data_file.children.push_back(CreateManifestPartitionColumn(partition_field_id_to_avro_read_type, partition_type));
 
 	MultiFileColumnDefinition record_count("record_count", LogicalType::BIGINT);
 	record_count.identifier = Value::INTEGER(RECORD_COUNT);
@@ -404,7 +409,9 @@ bool IcebergAvroMultiFileReader::Bind(MultiFileOptions &options, MultiFileList &
 		auto &manifest_file_scan = scan_info.Cast<IcebergManifestFileScanInfo>();
 		auto &manifest_files = manifest_file_scan.manifest_files;
 		auto &partition_field_id_to_type = manifest_file_scan.partition_field_id_to_type;
-		schema = manifest_file::BuildManifestSchema(snapshot, metadata, partition_field_id_to_type);
+		auto &partition_field_id_to_avro_read_type = manifest_file_scan.partition_field_id_to_avro_read_type;
+		schema = manifest_file::BuildManifestSchema(snapshot, metadata, partition_field_id_to_type,
+		                                            partition_field_id_to_avro_read_type);
 	}
 
 	// Populate return_types and names from schema
