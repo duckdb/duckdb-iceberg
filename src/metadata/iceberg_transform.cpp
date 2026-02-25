@@ -32,24 +32,46 @@ IcebergTransform::IcebergTransform(const string &transform) : raw_transform(tran
 
 LogicalType IcebergTransform::GetBoundsType(const LogicalType &input) const {
 	switch (type) {
-	case IcebergTransformType::IDENTITY:
+	case IcebergTransformType::IDENTITY: {
 		//! Appendix A: Avro Data Type Mappings
 		//! The avro reader handles these
 		return input;
+		// switch (input.id()) {
+		// case LogicalTypeId::DATE:
+		// 	return LogicalType::DATE;
+		// case LogicalTypeId::TIME:
+		// 	return LogicalType::BIGINT;
+		// case LogicalTypeId::TIMESTAMP:
+		// 	return LogicalType::BIGINT;
+		// case LogicalTypeId::TIMESTAMP_TZ:
+		// 	return LogicalType::BIGINT;
+		// case LogicalTypeId::TIMESTAMP_NS:
+		// 	return LogicalType::BIGINT;
+		// case LogicalTypeId::DECIMAL:
+		// 	return LogicalType::BLOB;
+		// case LogicalTypeId::UUID:
+		// 	return LogicalType::BLOB;
+		// default:
+		// 	return input;
+		// }
+	}
 	case IcebergTransformType::BUCKET:
 		return LogicalType::INTEGER;
 	case IcebergTransformType::TRUNCATE:
 		return input;
+	case IcebergTransformType::DAY:
+		// the spec says this should be INT. but spark writes logicalType: Date to the avro schema. So we
+		// need to read Date
+		return LogicalType::DATE;
 	case IcebergTransformType::YEAR:
 	case IcebergTransformType::MONTH:
-	case IcebergTransformType::DAY:
 	case IcebergTransformType::HOUR:
 		return LogicalType::INTEGER;
 	case IcebergTransformType::VOID:
 		return input;
 	default:
-		throw InvalidConfigurationException("Can't produce a result type for transform %s and input type %s", raw_transform,
-										input.ToString());
+		throw InvalidConfigurationException("Can't produce a result type for transform %s and input type %s",
+		                                    raw_transform, input.ToString());
 	}
 }
 
@@ -62,9 +84,10 @@ LogicalType IcebergTransform::GetSerializedType(const LogicalType &input) const 
 	case IcebergTransformType::BUCKET:
 	case IcebergTransformType::YEAR:
 	case IcebergTransformType::MONTH:
-	case IcebergTransformType::DAY:
 	case IcebergTransformType::HOUR:
 		return LogicalType::INTEGER;
+	case IcebergTransformType::DAY:
+		return LogicalType::DATE;
 	case IcebergTransformType::VOID:
 		return input;
 	default:

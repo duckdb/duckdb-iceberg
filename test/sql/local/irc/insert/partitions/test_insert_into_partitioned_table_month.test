@@ -50,13 +50,13 @@ statement ok
 create table local_table as select
 make_timestamp((1992 + (range/12)::INT), (range)%12+1, 20, 13, 34, 27.123456) a, range b from range(100)
 
-# query II nosort correct_result
-# select * from local_table order by b;
-# ----
-#
-# query II nosort correct_result
-# select * from my_datalake.default.test_insert_into_partitioned_table_month order by b;
-# ----
+query II nosort correct_result
+select * from local_table order by b;
+----
+
+query II nosort correct_result
+select * from my_datalake.default.test_insert_into_partitioned_table_month order by b;
+----
 
 statement ok
 call enable_logging();
@@ -66,7 +66,7 @@ select * from my_datalake.default.test_insert_into_partitioned_table_month where
 ----
 1993-04-20 13:34:27.123456	15
 
-mode output_result
-
-statement ok
-select * from duckdb_logs() where type ilike '%iceberg%';
+query I
+select count(*) from duckdb_logs() where type ilike '%iceberg%';
+----
+96
