@@ -1,4 +1,5 @@
 #include "metadata/iceberg_transform.hpp"
+#include "iceberg_hash.hpp"
 #include "duckdb/common/string_util.hpp"
 
 namespace duckdb {
@@ -100,6 +101,30 @@ LogicalType IcebergTransform::GetSerializedType(const LogicalType &input) const 
 		throw InvalidConfigurationException("Can't produce a result type for transform %s and input type %s",
 		                                    raw_transform, input.ToString());
 	}
+}
+
+Value BucketTransform::ApplyTransform(const Value &constant, const IcebergTransform &transform) {
+	if (constant.IsNull()) {
+		// Iceberg spec: null values hash to 0, then apply modulo
+		return Value::INTEGER(0);
+	}
+
+	// Get the number of buckets from the transform
+	auto num_buckets = static_cast<int32_t>(transform.GetBucketModulo());
+
+	// Safety check: avoid division by zero
+	if (num_buckets <= 0) {
+		throw InvalidInputException("Invalid bucket count: %d (must be > 0)", num_buckets);
+	}
+
+	// Compute the Iceberg-compatible hash
+	int32_t hash_value = IcebergHash::HashValue(constant);
+
+	// Apply modulo to get bucket number
+	// Use & 0x7FFFFFFF to ensure positive result (Iceberg spec)
+	int32_t bucket_id = (hash_value & 0x7FFFFFFF) % num_buckets;
+
+	return Value::INTEGER(bucket_id);
 }
 
 } // namespace duckdb

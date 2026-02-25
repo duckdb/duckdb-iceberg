@@ -224,4 +224,28 @@ struct HourTransform {
 	}
 };
 
+struct BucketTransform {
+	static Value ApplyTransform(const Value &constant, const IcebergTransform &transform);
+
+	static bool CompareEqual(const Value &constant, const IcebergPredicateStats &stats) {
+		// For bucket partitioning, check if the bucket ID is within the bounds
+		if (stats.lower_bound.IsNull() || stats.upper_bound.IsNull()) {
+			return true; // Conservative: include the file if bounds are null
+		}
+		return constant >= stats.lower_bound && constant <= stats.upper_bound;
+	}
+	static bool CompareLessThan(const Value &constant, const IcebergPredicateStats &stats) {
+		return true;
+	}
+	static bool CompareLessThanOrEqual(const Value &constant, const IcebergPredicateStats &stats) {
+		return true;
+	}
+	static bool CompareGreaterThan(const Value &constant, const IcebergPredicateStats &stats) {
+		return true;
+	}
+	static bool CompareGreaterThanOrEqual(const Value &constant, const IcebergPredicateStats &stats) {
+		return true;
+	}
+};
+
 } // namespace duckdb
