@@ -2,8 +2,10 @@
 #include "metadata/iceberg_manifest_list.hpp"
 #include "metadata/iceberg_partition_spec.hpp"
 #include "iceberg_value.hpp"
+#include "duckdb/common/exception/conversion_exception.hpp"
 #include "duckdb/main/database.hpp"
 #include "duckdb/storage/buffer_manager.hpp"
+#include "include/metadata/iceberg_transform.hpp"
 
 namespace duckdb {
 

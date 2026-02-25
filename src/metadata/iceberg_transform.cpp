@@ -60,9 +60,7 @@ LogicalType IcebergTransform::GetBoundsType(const LogicalType &input) const {
 	case IcebergTransformType::TRUNCATE:
 		return input;
 	case IcebergTransformType::DAY:
-		// the spec says this should be INT. but spark writes logicalType: Date to the avro schema. So we
-		// need to read Date
-		return LogicalType::DATE;
+		return LogicalType::INTEGER;
 	case IcebergTransformType::YEAR:
 	case IcebergTransformType::MONTH:
 	case IcebergTransformType::HOUR:
@@ -85,9 +83,8 @@ LogicalType IcebergTransform::GetSerializedType(const LogicalType &input) const 
 	case IcebergTransformType::YEAR:
 	case IcebergTransformType::MONTH:
 	case IcebergTransformType::HOUR:
-		return LogicalType::INTEGER;
 	case IcebergTransformType::DAY:
-		return LogicalType::DATE;
+		return LogicalType::INTEGER;
 	case IcebergTransformType::VOID:
 		return input;
 	default:
