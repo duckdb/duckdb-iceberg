@@ -51,6 +51,20 @@ select * from my_datalake.default.quickstart_table;
 2	more data
 3	yet more data
 
+query I
+SELECT count(*)
+FROM (
+	SELECT row_number() OVER () AS rn
+	FROM my_datalake.default.quickstart_table
+) t
+JOIN (
+	SELECT row_number() OVER () AS rn
+	FROM my_datalake.default.all_types_table
+) c
+USING (rn);
+----
+3
+
 query IIIIIIII
 select * from my_datalake.default.all_types_table;
 ----
