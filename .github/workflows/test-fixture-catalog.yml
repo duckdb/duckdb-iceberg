@@ -1,0 +1,105 @@
+name: Test Fixture Catalog Reusable
+on:
+  workflow_call:
+    inputs:
+      artifact-name:
+        description: "Name of the DuckDB-Iceberg artifact to download"
+        required: true
+        type: string
+
+jobs:
+  test-spark:
+    name: Test against fixture catalog
+    runs-on: ubuntu-latest
+    env:
+      HTTP_PROXY_PUBLIC: http://localhost:8878
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: 'true'
+
+      - name: Download DuckDB-Iceberg artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.artifact-name }}
+          path: build/release
+
+      - name: Restore permissions
+        run: |
+          find ./build/release -type f -name 'duckdb*' -exec chmod +x {} \;
+          find ./build/release -type f -name 'unittest*' -exec chmod +x {} \;
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Set up Docker Compose
+        uses: docker/setup-compose-action@v1
+
+      - name: Install fixture catalog dependencies
+        run: |
+          sudo apt update -y -qq
+          sudo apt install -y -qq python3-venv tar pkg-config
+
+      - name: Install CMake 3.x
+        run: |
+          sudo apt-get remove -y cmake cmake-data
+          sudo apt-get install --allow-downgrades -y -qq 'cmake=3.*' 'cmake-data=3.*'
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+
+      - name: Install required python packages
+        run: |
+          python3 -m venv .venv-spark4
+          source .venv-spark4/bin/activate
+          python3 -m pip install -r scripts/requirements.txt
+
+      - name: Generate data and start fixture
+        env:
+          S3_KEY_ID: admin
+          S3_SECRET: password
+          S3_ENDPOINT: http://127.0.0.1:9000
+          ICEBERG_ENDPOINT: http://127.0.0.1:8181
+          WAREHOUSE: s3://warehouse/wh/
+        run: |
+          source .venv-spark4/bin/activate
+          rm -rf data/generated
+          ./scripts/start-fixture-rest-catalog.sh
+          python3 -m scripts.data_generators.generate_data spark-rest
+
+      - name: Run mitmproxy
+        shell: bash
+        run: |
+          source .venv-spark4/bin/activate
+          mitmdump --mode regular@8878 --flow-detail 2 > mitmproxy.log 2>&1 &
+
+      - name: Run Generic IRC tests
+        env:
+          ICEBERG_SERVER_AVAILABLE: 1
+          SECRETS_CREATED_AND_CATALOG_ATTACHED: 1
+        run: |
+          ./build/release/test/unittest "$PWD/test/sql/local/irc_any_catalog/*" --list-test-names-only || true
+          ./build/release/test/unittest "$PWD/test/sql/local/irc_any_catalog/*" --test-config test/configs/fixture.json
+
+      - name: Run other tests
+        env:
+          ICEBERG_SERVER_AVAILABLE: 1
+        run: |
+          ./build/release/test/unittest "$PWD/test/*" --list-test-names-only || true
+          ./build/release/test/unittest "$PWD/test/*"
+
+      - name: Test reads with PyIceberg
+        env:
+          ICEBERG_SERVER_AVAILABLE: 1
+        run: |
+          python3 -m venv .venv-spark3
+          source .venv-spark3/bin/activate
+          python3 -m pip install pyspark==3.5.2 pytest pyiceberg==0.9.1 pyarrow pydantic==2.9.0
+          python3 -m pytest test/python

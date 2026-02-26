@@ -1,0 +1,27 @@
+# name: test/sql/local/irc_any_catalog/delete/test_delete_from_v3_table.test
+# group: [delete]
+
+require-env ICEBERG_SERVER_AVAILABLE
+
+require-env SECRETS_CREATED_AND_CATALOG_ATTACHED
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+statement ok
+CALL enable_logging('Iceberg');
+
+statement error
+delete from my_datalake.default.simple_v3_table where c_custkey %2 = 0;
+----
+<REGEX>:.*V3.*
+
+statement error
+delete from my_datalake.default.pyspark_iceberg_table_v1 where l_suppkey_long%2 = 0;
+----
+<REGEX>:.*V1.*

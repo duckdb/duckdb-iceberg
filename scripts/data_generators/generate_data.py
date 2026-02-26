@@ -14,7 +14,7 @@ parser = argparse.ArgumentParser(description="Generate data for various systems.
 parser.add_argument(
     "targets",
     nargs="+",
-    choices=["polaris", "lakekeeper", "local", "spark-rest"],
+    choices=["polaris", "lakekeeper", "local", "spark-rest", "nessie"],
     help="Specify one or more catalogs/targets to generate for",
 )
 parser.add_argument("--test", help='Generate only a specific test (for debugging)', action='store')

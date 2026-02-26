@@ -15,6 +15,9 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: 'true'
 
       - name: Download DuckDB-Iceberg artifact
         uses: actions/download-artifact@v4
@@ -69,9 +72,39 @@ jobs:
           done
           echo "Keycloak is healthy"
 
-      - name: Run Nessie Tests
+      - name: Install required python packages
+        run: |
+          python3 -m venv .venv-spark4
+          source .venv-spark4/bin/activate
+          python3 -m pip install -r scripts/requirements.txt
+
+      - name: Run Nessie Specific Tests
         env:
           NESSIE_SERVER_AVAILABLE: 1
         run: |
-          ./build/release/test/unittest "$PWD/test/*" --list-test-names-only || true
-          ./build/release/test/unittest "$PWD/test/*"
+          ./build/release/test/unittest "$PWD/test/sql/local/irc_specific_catalogs/nessie/*" --list-test-names-only || true
+          ./build/release/test/unittest "$PWD/test/sql/local/irc_specific_catalogs/nessie/*"
+
+      - name: Generate data
+        env:
+          S3_KEY_ID: minioadmin
+          S3_SECRET: minioadmin
+          S3_ENDPOINT: http://127.0.0.1:9002
+          ICEBERG_CLIENT_ID: client1
+          ICEBERG_CLIENT_SECRET: s3cr3t
+          ICEBERG_ENDPOINT: http://127.0.0.1:19120/iceberg/main/
+          OAUTH2_SERVER_URI: http://127.0.0.1:8080/realms/iceberg/protocol/openid-connect/token
+          WAREHOUSE: warehouse
+        run: |
+          source .venv-spark4/bin/activate
+          rm -rf data/generated
+          python3 -m scripts.data_generators.generate_data nessie
+
+      - name: Run Generic IRC tests
+        env:
+          ICEBERG_SERVER_AVAILABLE: 1
+          DUCKDB_ICEBERG_HAVE_GENERATED_DATA: 1
+          SECRETS_CREATED_AND_CATALOG_ATTACHED: 1
+        run: |
+          ./build/release/test/unittest "$PWD/test/sql/local/irc_any_catalog/*" --list-test-names-only || true
+          ./build/release/test/unittest "$PWD/test/sql/local/irc_any_catalog/*" --test-config test/configs/nessie.json  --autoloading available

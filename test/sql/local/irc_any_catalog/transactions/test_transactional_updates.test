@@ -1,0 +1,61 @@
+# name: test/sql/local/irc_any_catalog/transactions/test_transactional_updates.test
+# group: [transactions]
+
+require-env ICEBERG_SERVER_AVAILABLE
+
+require-env SECRETS_CREATED_AND_CATALOG_ATTACHED
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+set enable_logging=true
+
+statement ok
+set logging_level='debug'
+
+# Perform an INSERT and COMMIT it so table has a snapshot id other transactions can find
+statement ok
+drop table if exists my_datalake.default.multi_transaction_update;
+
+statement ok
+create table my_datalake.default.multi_transaction_update (a int, b int);
+
+# make sure the table has a snapshot id to start
+statement ok
+insert into my_datalake.default.multi_transaction_update select 0, 0;
+
+statement ok con1
+begin
+
+statement ok con2
+begin
+
+statement ok con2
+insert into my_datalake.default.multi_transaction_update select 2, 2;
+
+statement ok con2
+commit
+
+# con1 should only see data from con1 and before (from transaction start of con1)
+query II con1
+select * from my_datalake.default.multi_transaction_update;
+----
+0	0
+
+statement ok con1
+update my_datalake.default.multi_transaction_update set a = 50;
+
+# con1 should error. con1 cannot update the table since the last snapshot it saw was the 1, 1 insert.
+statement error con1
+commit;
+----
+<REGEX>:.*TransactionContext Error:.*Conflict.*

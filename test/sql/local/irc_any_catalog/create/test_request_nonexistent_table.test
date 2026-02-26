@@ -1,0 +1,62 @@
+# name: test/sql/local/irc_any_catalog/create/test_request_nonexistent_table.test
+# description: test create table
+# group: [create]
+
+require-env ICEBERG_SERVER_AVAILABLE
+
+require-env SECRETS_CREATED_AND_CATALOG_ATTACHED
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+require core_functions
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+set logging_level='debug'
+
+statement ok
+create schema if not exists my_datalake.default;
+
+statement ok
+use my_datalake.default;
+
+statement ok
+drop table if exists create_table_t1;
+
+# table does not exist
+statement error
+select * from create_table_t1;
+----
+<REGEX>:.*table.*does not exist.*
+
+statement ok
+use my_datalake.non_existent_schema;
+
+# schema also does not exist, but we cannot handle that
+statement error
+select * from non_existent_table
+----
+<REGEX>:.*non_existent_table.*does not exist.*
+
+query I
+select "schema" schema_name from (show all tables) where schema_name like '%non_existent_schema%';
+----
+
+query I
+select count(*) > 1 from (show all tables);
+----
+1
+
+
+
+
+
+

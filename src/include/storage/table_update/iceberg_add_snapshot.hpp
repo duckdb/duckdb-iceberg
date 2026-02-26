@@ -25,7 +25,7 @@ public:
 	                   IcebergSnapshot &&snapshot);
 
 public:
-	void CreateUpdate(DatabaseInstance &db, ClientContext &context, IcebergCommitState &commit_state) override;
+	void CreateUpdate(DatabaseInstance &db, ClientContext &context, IcebergCommitState &commit_state) const override;
 
 public:
 	IcebergManifestList manifest_list;

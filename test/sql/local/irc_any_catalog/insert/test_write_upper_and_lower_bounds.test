@@ -1,0 +1,114 @@
+# name: test/sql/local/irc_any_catalog/insert/test_write_upper_and_lower_bounds.test
+# group: [insert]
+
+require-env ICEBERG_SERVER_AVAILABLE
+
+require-env SECRETS_CREATED_AND_CATALOG_ATTACHED
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+require icu
+
+require core_functions
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+set enable_logging=true
+
+statement ok
+set logging_level='debug'
+
+statement ok
+SET TimeZone = 'UTC';
+
+
+statement ok
+drop table if exists my_datalake.default.lower_upper_bounds_test;
+
+statement ok
+create table my_datalake.default.lower_upper_bounds_test (
+int_type int,
+long_type long,
+varchar_type varchar,
+bool_type bool,
+float_type float,
+double_type double,
+decimal_type_18_3 DECIMAL(18,3),
+date_type DATE,
+timestamp_type TIMESTAMP,
+binary_type BINARY
+);
+
+statement ok
+insert into my_datalake.default.lower_upper_bounds_test values
+(   -2147483648,
+    -9223372036854775808,
+    '',
+    false,
+    -3.4028235E38,
+    -1.7976931348623157E308,
+    -9999999999999.999,
+    DATE '0001-01-01IC',
+    TIMESTAMP '0001-01-01 00:00:00',
+    ''::BLOB
+),
+(
+    2147483647,
+    9223372036854775807,
+    'ZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZ',
+    true,
+    3.4028235E38,
+    1.7976931348623157E308,
+    9999999999999.999,
+    DATE '9999-12-31',
+    TIMESTAMP '9999-12-31 23:59:59.999999',
+    '\xFF\xFF\xFF\xFF\xFF\xFF\xFF\xFF'::BLOB
+),
+(
+    NULL,
+    NULL,
+    NULL,
+    NULL,
+    NULL,
+    NULL,
+    NULL,
+    NULL,
+    NULL,
+    NULL
+);
+
+statement ok
+set variable manifest_path_duckdb = (select manifest_path from iceberg_metadata(my_datalake.default.lower_upper_bounds_test) order by manifest_sequence_number desc limit 1);
+
+statement ok
+set variable manifest_path_spark = (select manifest_path from iceberg_metadata(my_datalake.default.spark_written_upper_lower_bounds) order by manifest_sequence_number desc limit 1);
+
+# field ids 1, 2, 3 refer to int type, long type, and varchar type
+query II nosort duckdb_vals
+from (select unnest(map_keys(lower_bounds)) lower_keys, unnest(map_values(lower_bounds)) lower_vals, unnest(map_keys(upper_bounds)) upper_keys, unnest(map_values(upper_bounds)) upper_vals from (select unnest(data_file) from read_avro(getvariable('manifest_path_duckdb')))) where lower_keys in (1, 2, 3, 5, 6, 7, 8, 9) order by all;
+
+query II nosort duckdb_vals
+from (select unnest(map_keys(lower_bounds)) lower_keys, unnest(map_values(lower_bounds)) lower_vals, unnest(map_keys(upper_bounds)) upper_keys, unnest(map_values(upper_bounds)) upper_vals from (select unnest(data_file) from read_avro(getvariable('manifest_path_spark')))) where lower_keys in (1, 2, 3, 5, 6, 7, 8, 9) order by all;
+
+# check null counts as well.
+
+query II nosort duckdb_null_value_counts
+select unnest(map_keys(null_value_counts)), unnest(map_values(null_value_counts)) from (select unnest(data_file) from read_avro(getvariable('manifest_path_duckdb'))) order by all;
+
+query II nosort duckdb_null_value_counts
+select unnest(map_keys(null_value_counts)), unnest(map_values(null_value_counts)) from (select unnest(data_file) from read_avro(getvariable('manifest_path_spark'))) order by all;
+
+# FIXME :
+# bool values need to be fixed (field id 4)
+# BLOB/BIT does not match spark because they max out blob upper/lower bounds at 4 bytes.
+
+
+

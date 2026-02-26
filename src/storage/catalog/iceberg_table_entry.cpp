@@ -209,7 +209,7 @@ TableFunction IcebergTableEntry::GetScanFunction(ClientContext &context, unique_
 
 	auto iceberg_schema = metadata.GetSchemaFromId(schema_id);
 	auto scan_info = make_shared_ptr<IcebergScanInfo>(metadata.GetMetadataPath(), metadata, snapshot, *iceberg_schema);
-	if (table_info.transaction_data) {
+	if (table_info.transaction_data && snapshot_lookup.IsLatest()) {
 		scan_info->transaction_data = table_info.transaction_data.get();
 	}
 

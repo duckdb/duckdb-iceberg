@@ -1,0 +1,51 @@
+# name: test/sql/local/irc_custom_setup/setup_errors/cant_infer_endpoint.test
+# description: test combinations of create secret and attah
+# group: [setup_errors]
+
+require-env ICEBERG_SERVER_AVAILABLE
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+# Test catalog secret and storage secret
+statement ok
+set enable_logging=true
+
+statement ok
+set logging_level='debug'
+
+statement ok
+CREATE SECRET storage_secret(
+	TYPE S3,
+	KEY_ID 'admin',
+	SECRET 'password',
+	ENDPOINT '127.0.0.1:9000',
+	URL_STYLE 'path',
+	USE_SSL 0
+);
+
+# Secret is created with a direct OAUTH2_SERVER_URI, has no 'endpoint'
+statement ok
+CREATE SECRET iceberg_secret (
+	TYPE ICEBERG,
+	CLIENT_ID 'admin',
+	CLIENT_SECRET 'password',
+	OAUTH2_SERVER_URI 'http://127.0.0.1:8181/v1/oauth/tokens'
+);
+
+# Attach without an 'endpoint', will try to infer it from the secret
+statement error
+ATTACH '' AS my_datalake (
+	TYPE ICEBERG,
+	SECRET iceberg_secret
+);
+----
+Invalid Configuration Error: No 'endpoint' was given to attach, and no 'endpoint' could be retrieved from the ICEBERG secret!

@@ -1,0 +1,59 @@
+# name: test/sql/local/irc_any_catalog/update/test_no_update_no_new_snapshot.test
+# description: Test there are no new snapshots if there are no new updates
+# group: [update]
+
+require-env ICEBERG_SERVER_AVAILABLE
+
+require-env SECRETS_CREATED_AND_CATALOG_ATTACHED
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+CALL enable_logging('HTTP');
+
+statement ok
+set logging_level='debug'
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.test;
+
+statement ok
+CREATE TABLE my_datalake.default.test AS SELECT range a from range(10);
+
+query I
+select count(*) from iceberg_snapshots(my_datalake.default.test);
+----
+1
+
+statement ok
+update my_datalake.default.test set a = 100 where a % 100  = 99;
+
+query I
+select * from my_datalake.default.test order by a;
+----
+0
+1
+2
+3
+4
+5
+6
+7
+8
+9
+
+query I
+select count(*) from iceberg_snapshots(my_datalake.default.test);
+----
+1
+
+

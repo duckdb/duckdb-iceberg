@@ -19,8 +19,10 @@
 #include "storage/catalog/iceberg_catalog.hpp"
 #include "duckdb/storage/table/update_state.hpp"
 #include "duckdb/parser/parsed_data/drop_info.hpp"
+#include "duckdb/main/client_data.hpp"
 #include "storage/catalog/iceberg_schema_entry.hpp"
 #include "avro_scan.hpp"
+#include "iceberg_logging.hpp"
 
 namespace duckdb {
 
@@ -486,7 +488,10 @@ void IcebergTransaction::CleanupFiles() {
 		// on the aws side will result in an error.
 		return;
 	}
-	auto &fs = FileSystem::GetFileSystem(db);
+	Connection temp_con(db);
+	temp_con.BeginTransaction();
+	auto &temp_con_context = temp_con.context;
+	auto &fs = FileSystem::GetFileSystem(*temp_con_context);
 	for (auto &up_table : updated_tables) {
 		auto &table = up_table.second;
 		if (!table.transaction_data) {
@@ -500,12 +505,19 @@ void IcebergTransaction::CleanupFiles() {
 			if (update->type != IcebergTableUpdateType::ADD_SNAPSHOT) {
 				continue;
 			}
+			// we need to recreate the keys in the current context.
+			auto &ic_table_entry = table.GetLatestSchema()->Cast<IcebergTableEntry>();
+			ic_table_entry.PrepareIcebergScanFromEntry(*temp_con_context);
+
 			auto &add_snapshot = update->Cast<IcebergAddSnapshot>();
 			auto manifest_list_entries = add_snapshot.manifest_list.GetManifestFilesConst();
 			for (const auto &manifest : manifest_list_entries) {
 				for (auto &manifest_entry : manifest.manifest_file.entries) {
 					auto &data_file = manifest_entry.data_file;
-					fs.TryRemoveFile(data_file.file_path);
+					if (fs.TryRemoveFile(data_file.file_path)) {
+						DUCKDB_LOG(*temp_con_context, IcebergLogType,
+						           "Iceberg Transaction Cleanup, deleted 'data_file': '%s'", data_file.file_path);
+					}
 				}
 			}
 		}

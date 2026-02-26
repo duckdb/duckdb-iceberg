@@ -119,16 +119,6 @@ const vector<IcebergManifestFile> &IcebergManifestList::GetManifestFilesConst() 
 	return manifest_entries;
 }
 
-void IcebergManifestList::WriteManifestListEntry(IcebergTableInformation &table_info, idx_t manifest_index,
-                                                 CopyFunction &avro_copy, DatabaseInstance &db,
-                                                 ClientContext &context) {
-	D_ASSERT(manifest_index < manifest_entries.size());
-	auto &manifest_file = manifest_entries[manifest_index];
-	auto manifest_length =
-	    manifest_file::WriteToFile(table_info.table_metadata, manifest_file.manifest_file, avro_copy, db, context);
-	manifest_file.manifest_length = manifest_length;
-}
-
 idx_t IcebergManifestList::GetManifestListEntriesCount() const {
 	return manifest_entries.size();
 }

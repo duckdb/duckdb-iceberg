@@ -1,0 +1,33 @@
+# name: test/sql/local/irc_any_catalog/delete/test_delete_from_partitioned_table_errors.test
+# description: test integration with iceberg catalog read
+# group: [delete]
+
+require-env ICEBERG_SERVER_AVAILABLE
+
+require-env SECRETS_CREATED_AND_CATALOG_ATTACHED
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+CALL enable_logging('HTTP');
+
+statement ok
+set logging_level='debug'
+
+statement ok
+select * from my_datalake.default.lineitem_partitioned_l_shipmode limit 1;
+
+statement error
+delete from my_datalake.default.lineitem_partitioned_l_shipmode where l_linenumber % 2 = 0;
+----
+<REGEX>:.*Not implemented.*Delete from a partitioned.*
+

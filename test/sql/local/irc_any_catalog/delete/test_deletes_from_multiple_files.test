@@ -1,0 +1,58 @@
+# name: test/sql/local/irc_any_catalog/delete/test_deletes_from_multiple_files.test
+# description: Test ducklake deleting multiple batches
+# group: [delete]
+
+require-env ICEBERG_SERVER_AVAILABLE
+
+require-env SECRETS_CREATED_AND_CATALOG_ATTACHED
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+CALL enable_logging('HTTP');
+
+statement ok
+set logging_level='debug'
+
+statement ok
+create schema if not exists my_datalake.default;
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.test;
+
+statement ok
+CREATE TABLE my_datalake.default.test AS SELECT i id FROM range(5000000) t(i);
+
+query I
+select count(*) from iceberg_metadata(my_datalake.default.test);
+----
+3
+
+statement ok
+delete from my_datalake.default.test where id in (10000, 3000000, 4800000);
+
+# Expect 3 delete files, one for every data file
+query I
+select count(*) from iceberg_metadata(my_datalake.default.test) where manifest_content = 'DELETE';
+----
+3
+
+
+statement ok
+delete from my_datalake.default.test where id in (10001, 4800001);
+
+# Expect 2 more delete files, the original 3, plus 2 more for the new deletes
+query I
+select count(*) from iceberg_metadata(my_datalake.default.test) where manifest_content = 'DELETE';
+----
+5
+

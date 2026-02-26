@@ -1,0 +1,52 @@
+# name: test/sql/local/irc_any_catalog/insert/test_metadata_for_pyiceberg.test
+# group: [insert]
+
+require-env ICEBERG_SERVER_AVAILABLE
+
+require-env SECRETS_CREATED_AND_CATALOG_ATTACHED
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+require icu
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+set enable_logging=true
+
+statement ok
+set logging_level='debug'
+
+statement ok
+SET TimeZone = 'UTC';
+
+statement ok
+pragma threads=1;
+
+
+# create table needed to test pyiceberg can read duckdb upper and lower bounds
+statement ok
+drop table if exists my_datalake.default.test_metadata_for_pyiceberg;
+
+statement ok
+create table my_datalake.default.test_metadata_for_pyiceberg (a int);
+
+statement ok
+insert into my_datalake.default.test_metadata_for_pyiceberg select range a from range(300);
+
+statement ok
+insert into my_datalake.default.test_metadata_for_pyiceberg select range a from range(300, 400);
+
+statement ok
+insert into my_datalake.default.test_metadata_for_pyiceberg select range a from range(400, 500);
+
+
+
+

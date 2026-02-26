@@ -1,0 +1,43 @@
+{
+  "description": "Use nessie as Iceberg Rest Catalog.",
+  "on_init": "CREATE SECRET storage_secret ( TYPE S3, KEY_ID 'minioadmin', SECRET 'minioadmin', ENDPOINT '127.0.0.1:9002', URL_STYLE 'path', USE_SSL 0\n);\n\n\ncreate secret my_secret ( TYPE ICEBERG, CLIENT_ID 'client1', CLIENT_SECRET 's3cr3t', OAUTH2_SCOPE 'catalog sign', OAUTH2_SERVER_URI 'http://127.0.0.1:8080/realms/iceberg/protocol/openid-connect/token'\n);\n\n\nattach 'warehouse' as my_datalake ( type ICEBERG, ENDPOINT 'http://127.0.0.1:19120/iceberg/', ACCESS_DELEGATION_MODE 'none', SECRET 'my_secret'\n);",
+  "statically_loaded_extensions": [
+    "core_functions",
+    "parquet",
+    "avro",
+    "iceberg",
+    "httpfs"
+  ],
+  "skip_tests": [
+    {
+      "reason": "Not yet supported with Nessie",
+      "paths": [
+        "test/sql/local/irc_any_catalog/create/test_create_table_as.test",
+        "test/sql/local/irc_any_catalog/delete/delete_table.test",
+        "test/sql/local/irc_any_catalog/delete/test_delete_from_v3_table.test",
+        "test/sql/local/irc_any_catalog/iceberg_catalog_eager_refresh.test",
+        "test/sql/local/irc_any_catalog/insert/test_basic_insert.test",
+        "test/sql/local/irc_any_catalog/insert/test_big_insert.test",
+        "test/sql/local/irc_any_catalog/insert/test_concurrent_insert_new_table.test",
+        "test/sql/local/irc_any_catalog/insert/test_create_table_as_with_incorrect_types.test",
+        "test/sql/local/irc_any_catalog/insert/test_insert_multiple_transactions.test",
+        "test/sql/local/irc_any_catalog/insert/test_insert_to_v3_tables.test",
+        "test/sql/local/irc_any_catalog/insert/test_transactional_insert_v3.test",
+        "test/sql/local/irc_any_catalog/insert/test_write_upper_lower_bounds_nested_types.test",
+        "test/sql/local/irc_any_catalog/irc_catalog_read_deletes.test",
+        "test/sql/local/irc_any_catalog/reads/test_read_partitioned_table_type_promotion.test",
+        "test/sql/local/irc_any_catalog/table_properties/test_many_table_properties.test",
+        "test/sql/local/irc_any_catalog/table_properties/test_set_table_properties.test",
+        "test/sql/local/irc_any_catalog/test_row_lineage_read.test",
+        "test/sql/local/irc_any_catalog/test_row_lineage_write.test",
+        "test/sql/local/irc_any_catalog/test_select_row_id.test",
+        "test/sql/local/irc_any_catalog/transactions/test_get_transaction_snapshot.test",
+        "test/sql/local/irc_any_catalog/transactions/test_transaction_get_from_transaction_start.test",
+        "test/sql/local/irc_any_catalog/transactions/test_transactional_updates.test",
+        "test/sql/local/irc_any_catalog/transactions/test_transactional_updates_error_omits_stacktrace.test",
+        "test/sql/local/irc_any_catalog/update/test_one_update_one_snapshot.test",
+        "test/sql/local/irc_any_catalog/update/test_update_v3_table.test"
+      ]
+    }
+  ]
+}

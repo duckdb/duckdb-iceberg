@@ -1,0 +1,47 @@
+# name: test/sql/local/irc_any_catalog/delete/delete_rollback_cleanup.test
+# description: Test ducklake cleaning up files after rollback of delete
+# group: [delete]
+
+require-env ICEBERG_SERVER_AVAILABLE
+
+require-env SECRETS_CREATED_AND_CATALOG_ATTACHED
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+CALL enable_logging('HTTP');
+
+statement ok
+set logging_level='debug'
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.test;
+
+statement ok
+CREATE TABLE my_datalake.default.test AS SELECT i id FROM range(1000) t(i);
+
+statement ok
+BEGIN
+
+query I
+DELETE FROM my_datalake.default.test WHERE id%2=0
+----
+500
+
+statement ok
+ROLLBACK
+
+query I
+SELECT COUNT(*) FROM my_datalake.default.test
+----
+1000
+

@@ -1,0 +1,72 @@
+name: Test Local Catalog Reusable
+on:
+  workflow_call:
+    inputs:
+      artifact-name:
+        description: "Name of the DuckDB-Iceberg artifact to download"
+        required: true
+        type: string
+
+jobs:
+  test-spark:
+    name: Test against local catalog
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: 'true'
+
+      - name: Download DuckDB-Iceberg artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.artifact-name }}
+          path: build/release
+
+      - name: Restore permissions
+        run: |
+          find ./build/release -type f -name 'duckdb*' -exec chmod +x {} \;
+          find ./build/release -type f -name 'unittest*' -exec chmod +x {} \;
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Install fixture catalog dependencies
+        run: |
+          sudo apt update -y -qq
+          sudo apt install -y -qq python3-venv tar pkg-config
+
+      - name: Install CMake 3.x
+        run: |
+          sudo apt-get remove -y cmake cmake-data
+          sudo apt-get install --allow-downgrades -y -qq 'cmake=3.*' 'cmake-data=3.*'
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+
+      - name: Install required python packages
+        run: |
+          python3 -m venv .venv-spark4
+          source .venv-spark4/bin/activate
+          python3 -m pip install -r scripts/requirements.txt
+
+      - name: Generate data and start fixture
+        run: |
+          source .venv-spark4/bin/activate
+          rm -rf data/generated
+          ./scripts/start-fixture-rest-catalog.sh
+          python3 -m scripts.data_generators.generate_data local
+
+      - name: Run local tests
+        env:
+          DUCKDB_ICEBERG_HAVE_GENERATED_DATA: 1
+        run: |
+          ./build/release/test/unittest "$PWD/test/*" --list-test-names-only || true
+          ./build/release/test/unittest "$PWD/test/*"
+
