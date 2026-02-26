@@ -65,4 +65,4 @@ commit;
 query I
 select message from duckdb_logs() where type like 'Iceberg' and log_level = 'INFO' order by "timestamp" desc limit 1;
 ----
-<REGEX>:.*org.apache.iceberg.exceptions.CommitFailedException.*
+<REGEX>:.*Iceberg Transaction Cleanup.*deleted.*data_file.*.s3.*parquet.*
