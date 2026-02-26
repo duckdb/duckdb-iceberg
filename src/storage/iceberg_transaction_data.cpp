@@ -209,7 +209,11 @@ void IcebergTransactionData::AddSnapshot(IcebergSnapshotOperationType operation,
 		new_snapshot.first_row_id = first_row_id;
 
 		new_snapshot.has_added_rows = true;
-		new_snapshot.added_rows = manifest_file.added_rows_count;
+		if (manifest_file.content == IcebergManifestContentType::DATA) {
+			new_snapshot.added_rows = manifest_file.added_rows_count;
+		} else {
+			new_snapshot.added_rows = 0;
+		}
 	}
 
 	auto add_snapshot = make_uniq<IcebergAddSnapshot>(table_info, manifest_list_path, std::move(new_snapshot));
@@ -298,19 +302,6 @@ void IcebergTransactionData::AddUpdateSnapshot(vector<IcebergManifestEntry> &&de
 	new_snapshot.schema_id = table_metadata.current_schema_id;
 	new_snapshot.manifest_list = manifest_list_path;
 	new_snapshot.timestamp_ms = Timestamp::GetEpochMs(Timestamp::GetCurrentTimestamp());
-	if (table_metadata.iceberg_version >= 3) {
-		D_ASSERT(table_metadata.has_next_row_id);
-		new_snapshot.has_added_rows = true;
-		new_snapshot.added_rows = 0;
-		for (auto &manifest_entry : data_files) {
-			D_ASSERT(manifest_entry.status != IcebergManifestEntryStatusType::DELETED);
-			auto &data_file = manifest_entry.data_file;
-			new_snapshot.added_rows += data_file.record_count;
-		}
-
-		new_snapshot.has_first_row_id = true;
-		new_snapshot.first_row_id = next_row_id;
-	}
 
 	new_snapshot.has_parent_snapshot = table_info.table_metadata.has_current_snapshot || !alters.empty();
 	//! FIXME: correctly set metrics for an UPDATE
