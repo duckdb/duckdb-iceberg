@@ -7,6 +7,7 @@
 #include "duckdb/common/exception/http_exception.hpp"
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/function/scalar_function.hpp"
+#include "duckdb/function/cast/default_casts.hpp"
 #include "duckdb/main/extension/extension_loader.hpp"
 #include "duckdb/catalog/catalog_entry/macro_catalog_entry.hpp"
 #include "duckdb/catalog/default/default_functions.hpp"
@@ -79,6 +80,13 @@ static void LoadInternal(ExtensionLoader &loader) {
 	CreateSecretFunction secret_function = {"iceberg", "config", OAuth2Authorization::CreateCatalogSecretFunction};
 	OAuth2Authorization::SetCatalogSecretParameters(secret_function);
 	loader.RegisterFunction(secret_function);
+
+	// Register DATE -> INTEGER implicit cast.
+	// Spark writes day-transform partition values as Avro 'date' logical type (int32 days since epoch) when it should
+	// be int. DuckDB's date_t is also int32 days since epoch, so this is a physical no-op reinterpretation. Cost 200
+	// keeps it low-priority so it doesn't interfere with standard casts elsewhere.
+	loader.RegisterCastFunction(LogicalType::DATE, LogicalType::INTEGER, BoundCastInfo(DefaultCasts::ReinterpretCast),
+	                            200);
 
 	auto &log_manager = instance.GetLogManager();
 	log_manager.RegisterLogType(make_uniq<IcebergLogType>());

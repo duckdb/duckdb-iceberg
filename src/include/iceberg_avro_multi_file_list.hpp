@@ -73,8 +73,6 @@ public:
 	string iceberg_path;
 	//! partition_field_id -> semantic column type (e.g. INTEGER for DAY)
 	map<idx_t, LogicalType> partition_field_id_to_type;
-	//! partition_field_id -> avro read type (DATE for DAY, to accept Spark's 'date' logical type)
-	map<idx_t, LogicalType> partition_field_id_to_avro_read_type;
 };
 
 class IcebergAvroMultiFileList : public SimpleMultiFileList {
