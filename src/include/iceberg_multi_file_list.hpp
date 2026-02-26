@@ -78,6 +78,8 @@ public:
 	unique_ptr<DeleteFilter> GetPositionalDeletesForFile(const string &file_path) const;
 	void ProcessDeletes(const vector<MultiFileColumnDefinition> &global_columns,
 	                    const vector<ColumnIndex> &column_indexes) const;
+	vector<reference<const IcebergEqualityDeleteRow>>
+	GetEqualityDeletesForFile(const IcebergManifestEntry &manifest_entry) const;
 	void GetStatistics(vector<PartitionStatistics> &result) const;
 
 public:
@@ -159,6 +161,8 @@ public:
 	//! FIXME: this is only used in 'FinalizeBind',
 	//! shouldn't this be used to protect all the variable accesses that are accessed there while the lock is held?
 	mutable mutex delete_lock;
+	//! The columns needed by the equality deletes that aren't referenced by the scan
+	mutable unordered_map<int32_t, column_t> equality_id_to_result_id;
 
 	mutable bool initialized = false;
 	const IcebergOptions &options;

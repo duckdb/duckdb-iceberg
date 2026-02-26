@@ -1,10 +1,10 @@
 {
   "format-version" : 2,
-  "table-uuid" : "7c269e29-15d2-48a6-bc83-4919d38e3041",
+  "table-uuid" : "96247900-66da-4f86-9cbe-c81dbcf8420f",
   "location" : "data/persistent/equality_deletes/warehouse/mydb/mytable",
   "last-sequence-number" : 4,
-  "last-updated-ms" : 1746122110333,
-  "last-column-id" : 2,
+  "last-updated-ms" : 1758879496480,
+  "last-column-id" : 3,
   "current-schema-id" : 0,
   "schemas" : [ {
     "type" : "struct",
@@ -12,13 +12,18 @@
     "fields" : [ {
       "id" : 1,
       "name" : "id",
-      "required" : true,
+      "required" : false,
       "type" : "int"
     }, {
       "id" : 2,
       "name" : "name",
       "required" : false,
       "type" : "string"
+    }, {
+      "id" : 3,
+      "name" : "bir",
+      "required" : false,
+      "type" : "date"
     } ]
   } ],
   "default-spec-id" : 0,
@@ -32,121 +37,140 @@
     "order-id" : 0,
     "fields" : [ ]
   } ],
-  "properties" : { },
-  "current-snapshot-id" : 2894602912036338632,
+  "properties" : {
+    "owner" : "zhangjun",
+    "write.parquet.compression-codec" : "zstd"
+  },
+  "current-snapshot-id" : 842401149381792626,
   "refs" : {
     "main" : {
-      "snapshot-id" : 2894602912036338632,
+      "snapshot-id" : 842401149381792626,
       "type" : "branch"
     }
   },
   "snapshots" : [ {
     "sequence-number" : 1,
-    "snapshot-id" : 1046545856685507949,
-    "timestamp-ms" : 1746122109975,
+    "snapshot-id" : 853766660775201079,
+    "timestamp-ms" : 1758879443926,
     "summary" : {
       "operation" : "append",
+      "spark.app.id" : "local-1758878991225",
       "added-data-files" : "1",
-      "added-records" : "3",
-      "added-files-size" : "685",
+      "added-records" : "4",
+      "added-files-size" : "935",
       "changed-partition-count" : "1",
-      "total-records" : "3",
-      "total-files-size" : "685",
+      "total-records" : "4",
+      "total-files-size" : "935",
       "total-data-files" : "1",
       "total-delete-files" : "0",
       "total-position-deletes" : "0",
-      "total-equality-deletes" : "0"
+      "total-equality-deletes" : "0",
+      "engine-version" : "3.5.1",
+      "app-id" : "local-1758878991225",
+      "engine-name" : "spark",
+      "iceberg-version" : "Apache Iceberg 1.8.1 (commit 9ce0fcf0af7becf25ad9fc996c3bad2afdcfd33d)"
     },
-    "manifest-list" : "data/persistent/equality_deletes/warehouse/mydb/mytable/metadata/snap-1046545856685507949-1-ee85b137-904a-4591-8054-6b5d4993c9bd.avro",
+    "manifest-list" : "data/persistent/equality_deletes/warehouse/mydb/mytable/metadata/snap-853766660775201079-1-bcc5469e-83b4-4a41-be7e-af79ed029353.avro",
     "schema-id" : 0
   }, {
     "sequence-number" : 2,
-    "snapshot-id" : 3512576891615857142,
-    "parent-snapshot-id" : 1046545856685507949,
-    "timestamp-ms" : 1746122110110,
+    "snapshot-id" : 7342794868382145167,
+    "parent-snapshot-id" : 853766660775201079,
+    "timestamp-ms" : 1758879495787,
     "summary" : {
-      "operation" : "overwrite",
+      "operation" : "delete",
       "added-equality-delete-files" : "1",
       "added-delete-files" : "1",
-      "added-files-size" : "451",
+      "added-files-size" : "466",
       "added-equality-deletes" : "1",
       "changed-partition-count" : "1",
-      "total-records" : "3",
-      "total-files-size" : "1136",
+      "total-records" : "4",
+      "total-files-size" : "1401",
       "total-data-files" : "1",
       "total-delete-files" : "1",
       "total-position-deletes" : "0",
-      "total-equality-deletes" : "1"
+      "total-equality-deletes" : "1",
+      "iceberg-version" : "Apache Iceberg 1.8.1 (commit 9ce0fcf0af7becf25ad9fc996c3bad2afdcfd33d)"
     },
-    "manifest-list" : "data/persistent/equality_deletes/warehouse/mydb/mytable/metadata/snap-3512576891615857142-1-6afce3c7-c302-42aa-91ab-bcbe4f01cb97.avro",
+    "manifest-list" : "data/persistent/equality_deletes/warehouse/mydb/mytable/metadata/snap-7342794868382145167-1-34f7dec7-90c5-4cd5-b158-5782b73fc010.avro",
     "schema-id" : 0
   }, {
     "sequence-number" : 3,
-    "snapshot-id" : 8985322175058482040,
-    "parent-snapshot-id" : 3512576891615857142,
-    "timestamp-ms" : 1746122110222,
+    "snapshot-id" : 1584331123492059582,
+    "parent-snapshot-id" : 7342794868382145167,
+    "timestamp-ms" : 1758879496119,
     "summary" : {
-      "operation" : "append",
-      "added-data-files" : "1",
-      "added-records" : "3",
-      "added-files-size" : "734",
+      "operation" : "delete",
+      "added-equality-delete-files" : "1",
+      "added-delete-files" : "1",
+      "added-files-size" : "463",
+      "added-equality-deletes" : "1",
       "changed-partition-count" : "1",
-      "total-records" : "6",
-      "total-files-size" : "1870",
-      "total-data-files" : "2",
-      "total-delete-files" : "1",
+      "total-records" : "4",
+      "total-files-size" : "1864",
+      "total-data-files" : "1",
+      "total-delete-files" : "2",
       "total-position-deletes" : "0",
-      "total-equality-deletes" : "1"
+      "total-equality-deletes" : "2",
+      "iceberg-version" : "Apache Iceberg 1.8.1 (commit 9ce0fcf0af7becf25ad9fc996c3bad2afdcfd33d)"
     },
-    "manifest-list" : "data/persistent/equality_deletes/warehouse/mydb/mytable/metadata/snap-8985322175058482040-1-44f48ecd-dd48-42c0-8639-76cc51702031.avro",
+    "manifest-list" : "data/persistent/equality_deletes/warehouse/mydb/mytable/metadata/snap-1584331123492059582-2-91bf4420-2bae-484f-b724-8184d56d3029.avro",
     "schema-id" : 0
   }, {
     "sequence-number" : 4,
-    "snapshot-id" : 2894602912036338632,
-    "parent-snapshot-id" : 8985322175058482040,
-    "timestamp-ms" : 1746122110333,
+    "snapshot-id" : 842401149381792626,
+    "parent-snapshot-id" : 1584331123492059582,
+    "timestamp-ms" : 1758879496480,
     "summary" : {
-      "operation" : "overwrite",
+      "operation" : "delete",
       "added-equality-delete-files" : "1",
       "added-delete-files" : "1",
-      "added-files-size" : "674",
+      "added-files-size" : "706",
       "added-equality-deletes" : "1",
       "changed-partition-count" : "1",
-      "total-records" : "6",
-      "total-files-size" : "2544",
-      "total-data-files" : "2",
-      "total-delete-files" : "2",
+      "total-records" : "4",
+      "total-files-size" : "2570",
+      "total-data-files" : "1",
+      "total-delete-files" : "3",
       "total-position-deletes" : "0",
-      "total-equality-deletes" : "2"
+      "total-equality-deletes" : "3",
+      "iceberg-version" : "Apache Iceberg 1.8.1 (commit 9ce0fcf0af7becf25ad9fc996c3bad2afdcfd33d)"
     },
-    "manifest-list" : "data/persistent/equality_deletes/warehouse/mydb/mytable/metadata/snap-2894602912036338632-1-e08e7f38-46b9-40b7-9f1d-bd0fe9e77386.avro",
+    "manifest-list" : "data/persistent/equality_deletes/warehouse/mydb/mytable/metadata/snap-842401149381792626-2-c4028cec-4266-45e9-bf74-77cbf1b55328.avro",
     "schema-id" : 0
   } ],
   "statistics" : [ ],
+  "partition-statistics" : [ ],
   "snapshot-log" : [ {
-    "timestamp-ms" : 1746122109975,
-    "snapshot-id" : 1046545856685507949
+    "timestamp-ms" : 1758879443926,
+    "snapshot-id" : 853766660775201079
   }, {
-    "timestamp-ms" : 1746122110110,
-    "snapshot-id" : 3512576891615857142
+    "timestamp-ms" : 1758879495787,
+    "snapshot-id" : 7342794868382145167
   }, {
-    "timestamp-ms" : 1746122110222,
-    "snapshot-id" : 8985322175058482040
+    "timestamp-ms" : 1758879496119,
+    "snapshot-id" : 1584331123492059582
   }, {
-    "timestamp-ms" : 1746122110333,
-    "snapshot-id" : 2894602912036338632
+    "timestamp-ms" : 1758879496330,
+    "snapshot-id" : 7342794868382145167
+  }, {
+    "timestamp-ms" : 1758879496404,
+    "snapshot-id" : 1584331123492059582
+  }, {
+    "timestamp-ms" : 1758879496480,
+    "snapshot-id" : 842401149381792626
   } ],
   "metadata-log" : [ {
-    "timestamp-ms" : 1746122109432,
+    "timestamp-ms" : 1758879194794,
     "metadata-file" : "data/persistent/equality_deletes/warehouse/mydb/mytable/metadata/v1.metadata.json"
   }, {
-    "timestamp-ms" : 1746122109975,
+    "timestamp-ms" : 1758879443926,
     "metadata-file" : "data/persistent/equality_deletes/warehouse/mydb/mytable/metadata/v2.metadata.json"
   }, {
-    "timestamp-ms" : 1746122110110,
+    "timestamp-ms" : 1758879495787,
     "metadata-file" : "data/persistent/equality_deletes/warehouse/mydb/mytable/metadata/v3.metadata.json"
   }, {
-    "timestamp-ms" : 1746122110222,
+    "timestamp-ms" : 1758879496119,
     "metadata-file" : "data/persistent/equality_deletes/warehouse/mydb/mytable/metadata/v4.metadata.json"
   } ]
 }

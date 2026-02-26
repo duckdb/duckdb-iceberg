@@ -77,7 +77,7 @@ select count(*) from my_datalake.default.count_star_optimizer;
 query II
 explain SELECT count(*) FROM  my_datalake.default.count_star_optimizer;
 ----
-physical_plan	<REGEX>:.*ICEBERG_SCAN.*rows.*
+physical_plan	<REGEX>:.*ICEBERG_SCAN.*row.*
 
 
 

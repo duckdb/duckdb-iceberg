@@ -112,3 +112,8 @@ select sequence_number, rowid, id, data from my_datalake.default.write_v3_update
 
 statement ok
 abort
+
+query I
+select count(*) from duckdb_logs() where type = 'Iceberg' and message.starts_with('Iceberg Transaction Cleanup') and message.ends_with('.puffin''');
+----
+2

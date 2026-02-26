@@ -54,6 +54,11 @@ public:
 	                      const MultiFileReaderBindData &bind_data, const MultiFileList &file_list,
 	                      const vector<MultiFileColumnDefinition> &global_columns,
 	                      const vector<ColumnIndex> &global_column_ids) override;
+	ReaderInitializeType InitializeReader(MultiFileReaderData &reader_data, const MultiFileBindData &bind_data,
+	                                      const vector<MultiFileColumnDefinition> &global_columns,
+	                                      const vector<ColumnIndex> &global_column_ids,
+	                                      optional_ptr<TableFilterSet> table_filters, ClientContext &context,
+	                                      MultiFileGlobalState &gstate) override;
 	void FinalizeBind(MultiFileReaderData &reader_data, const MultiFileOptions &file_options,
 	                  const MultiFileReaderBindData &options, const vector<MultiFileColumnDefinition> &global_columns,
 	                  const vector<ColumnIndex> &global_column_ids, ClientContext &context,
