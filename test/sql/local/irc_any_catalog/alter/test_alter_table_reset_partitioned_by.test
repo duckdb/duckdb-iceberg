@@ -15,24 +15,6 @@ require httpfs
 set ignore_error_messages
 
 statement ok
-CREATE SECRET (
-    TYPE S3,
-    KEY_ID 'admin',
-    SECRET 'password',
-    ENDPOINT '127.0.0.1:9000',
-    URL_STYLE 'path',
-    USE_SSL 0
-);
-
-statement ok
-ATTACH '' AS my_datalake (
-    TYPE ICEBERG,
-    CLIENT_ID 'admin',
-    CLIENT_SECRET 'password',
-    ENDPOINT 'http://127.0.0.1:8181'
-);
-
-statement ok
 drop table if exists my_datalake.default.alter_table_reset_partitioned_by;
 
 statement ok

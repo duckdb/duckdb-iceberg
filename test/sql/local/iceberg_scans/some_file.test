@@ -1,0 +1,265 @@
+# name: test/sql/local/iceberg_scans/some_file.test
+# description: Tests for extended filter pruning optimizations (BETWEEN, OR, !=, NOT IN)
+# group: [iceberg_scans]
+
+require-env DUCKDB_ICEBERG_HAVE_GENERATED_DATA
+
+require avro
+
+require parquet
+
+require iceberg
+
+statement ok
+attach ':memory:' as my_datalake;
+
+statement ok
+create schema my_datalake.default;
+
+# filtering_on_bounds table has 5 snapshots of 1000 rows each (0-999, 1000-1999, etc.)
+# Data is distributed across 60 files total (12 files per snapshot)
+
+statement ok
+create view my_datalake.default.filtering_on_bounds as select * from ICEBERG_SCAN('__WORKING_DIRECTORY__/data/generated/iceberg/spark-local/default/filtering_on_bounds');
+
+statement ok
+CALL enable_logging('Iceberg');
+
+# Verify total row count
+query I
+select count(*) from my_datalake.default.filtering_on_bounds;
+----
+5000
+
+# =============================================================================
+# TEST: BETWEEN filter
+# BETWEEN 1500 AND 2500 should skip files outside that range
+# Verify correctness and that SOME pruning occurs
+# =============================================================================
+
+statement ok
+CALL truncate_duckdb_logs();
+
+query I
+select count(*) from my_datalake.default.filtering_on_bounds where col1 BETWEEN 1500 AND 2500;
+----
+1001
+
+# Verify pruning occurred: skipped rows should be > 0 (some files were pruned)
+query I
+SELECT SUM(meta.record_count) > 0 AS pruning_occurred
+FROM (
+	SELECT message.split(': ')[2][2:-2] AS msg
+	FROM duckdb_logs() where type = 'Iceberg'
+) logs
+JOIN ICEBERG_METADATA('__WORKING_DIRECTORY__/data/generated/iceberg/spark-local/default/filtering_on_bounds') meta
+ON logs.msg = meta.file_path;
+----
+true
+
+# # =============================================================================
+# # TEST: BETWEEN at boundaries spanning two value ranges
+# # BETWEEN 1000 AND 1999 should exactly match one "snapshot" worth of data
+# # =============================================================================
+
+statement ok
+CALL truncate_duckdb_logs();
+
+query I
+select count(*) from my_datalake.default.filtering_on_bounds where col1 BETWEEN 1000 AND 1999;
+----
+1000
+
+# Verify pruning: skipped rows should be at least 3000 (files for 0-999 and 3000-4999)
+query I
+SELECT SUM(meta.record_count) >= 3000 AS good_pruning
+FROM (
+	SELECT message.split(': ')[2][2:-2] AS msg
+	FROM duckdb_logs() where type = 'Iceberg'
+) logs
+JOIN ICEBERG_METADATA('__WORKING_DIRECTORY__/data/generated/iceberg/spark-local/default/filtering_on_bounds') meta
+ON logs.msg = meta.file_path;
+----
+true
+
+# =============================================================================
+# TEST: OR filter with disjoint ranges
+# col1 < 500 OR col1 >= 4500 should match first and last value ranges
+# =============================================================================
+
+statement ok
+CALL truncate_duckdb_logs();
+
+query I
+select count(*) from my_datalake.default.filtering_on_bounds where col1 < 500 OR col1 >= 4500;
+----
+1000
+
+# Verify pruning: skipped rows should be at least 2000 (middle ranges)
+query I
+SELECT SUM(meta.record_count) >= 2000 AS good_pruning
+FROM (
+	SELECT message.split(': ')[2][2:-2] AS msg
+	FROM duckdb_logs() where type = 'Iceberg'
+) logs
+JOIN ICEBERG_METADATA('__WORKING_DIRECTORY__/data/generated/iceberg/spark-local/default/filtering_on_bounds') meta
+ON logs.msg = meta.file_path;
+----
+true
+
+# =============================================================================
+# TEST: OR filter with equality conditions
+# col1 = 500 OR col1 = 2500 should only need to scan files containing those values
+# =============================================================================
+
+statement ok
+CALL truncate_duckdb_logs();
+
+query I
+select count(*) from my_datalake.default.filtering_on_bounds where col1 = 500 OR col1 = 2500;
+----
+2
+
+# Verify pruning occurred (most files should be skipped)
+query I
+SELECT SUM(meta.record_count) >= 3000 AS good_pruning
+FROM (
+	SELECT message.split(': ')[2][2:-2] AS msg
+	FROM duckdb_logs() where type = 'Iceberg'
+) logs
+JOIN ICEBERG_METADATA('__WORKING_DIRECTORY__/data/generated/iceberg/spark-local/default/filtering_on_bounds') meta
+ON logs.msg = meta.file_path;
+----
+true
+
+# =============================================================================
+# TEST: OR filter with simple range conditions
+# col1 < 1000 OR col1 >= 4000 should match first and last snapshot ranges
+# Note: Complex nested (AND) OR (AND) filters are not pushed down by DuckDB
+# =============================================================================
+
+statement ok
+CALL truncate_duckdb_logs();
+
+query I
+select count(*) from my_datalake.default.filtering_on_bounds
+where col1 < 1000 OR col1 >= 4000;
+----
+2000
+
+# Verify pruning: should skip middle ranges (at least 2000 rows)
+query I
+SELECT SUM(meta.record_count) >= 2000 AS good_pruning
+FROM (
+	SELECT message.split(': ')[2][2:-2] AS msg
+	FROM duckdb_logs() where type = 'Iceberg'
+) logs
+JOIN ICEBERG_METADATA('__WORKING_DIRECTORY__/data/generated/iceberg/spark-local/default/filtering_on_bounds') meta
+ON logs.msg = meta.file_path;
+----
+true
+
+# =============================================================================
+# TEST: != (NOT EQUAL) filter - correctness test
+# != can only prune when a file contains exactly one distinct value
+# With range data, it should still return correct results
+# =============================================================================
+
+statement ok
+CALL truncate_duckdb_logs();
+
+query I
+select count(*) from my_datalake.default.filtering_on_bounds where col1 != 500;
+----
+4999
+
+# =============================================================================
+# TEST: NOT IN filter - correctness test
+# NOT IN should return correct results even if pruning is limited
+# =============================================================================
+
+statement ok
+CALL truncate_duckdb_logs();
+
+query I
+select count(*) from my_datalake.default.filtering_on_bounds where col1 NOT IN (500, 1500, 2500);
+----
+4997
+
+# =============================================================================
+# TEST: Verify BETWEEN produces same results as equivalent AND
+# BETWEEN should be semantically equivalent to >= AND <=
+# =============================================================================
+
+query I
+select count(*) from my_datalake.default.filtering_on_bounds where col1 BETWEEN 2000 AND 3000;
+----
+1001
+
+query I
+select count(*) from my_datalake.default.filtering_on_bounds where col1 >= 2000 AND col1 <= 3000;
+----
+1001
+
+# =============================================================================
+# TEST: Complex nested OR with AND children
+# (col1 >= 0 AND col1 < 500) OR (col1 >= 4500 AND col1 < 5000)
+# Should match first 500 + last 500 = 1000 rows
+# This pattern was previously not pushed down by FilterCombiner
+# =============================================================================
+
+statement ok
+CALL truncate_duckdb_logs();
+
+query I
+select count(*) from my_datalake.default.filtering_on_bounds
+where (col1 >= 0 AND col1 < 500) OR (col1 >= 4500 AND col1 < 5000);
+----
+1000
+
+# =============================================================================
+# TEST: NOT BETWEEN - correctness test
+# NOT BETWEEN 1000 AND 3999 should return values 0-999 and 4000-4999
+# =============================================================================
+
+query I
+select count(*) from my_datalake.default.filtering_on_bounds
+where col1 NOT BETWEEN 1000 AND 3999;
+----
+2000
+
+# Verify we get the expected range
+query II
+select min(col1), max(col1) from my_datalake.default.filtering_on_bounds
+where col1 NOT BETWEEN 1000 AND 3999;
+----
+0	4999
+
+# =============================================================================
+# TEST: NOT with comparison - correctness test
+# NOT (col1 >= 2000) should return values 0-1999
+# =============================================================================
+
+query I
+select count(*) from my_datalake.default.filtering_on_bounds
+where NOT (col1 >= 2000);
+----
+2000
+
+# Verify we get the expected range
+query II
+select min(col1), max(col1) from my_datalake.default.filtering_on_bounds
+where NOT (col1 >= 2000);
+----
+0	1999
+
+# =============================================================================
+# TEST: Complex OR with three branches
+# col1 < 100 OR (col1 >= 2000 AND col1 < 2100) OR col1 >= 4900
+# =============================================================================
+
+query I
+select count(*) from my_datalake.default.filtering_on_bounds
+where col1 < 100 OR (col1 >= 2000 AND col1 < 2100) OR col1 >= 4900;
+----
+300
