@@ -35,7 +35,7 @@ public:
 	//! The (final) insert operator that registers inserted data
 	PhysicalOperator &insert_op;
 	//! The row-id-index
-	idx_t row_id_index;
+	optional_idx row_id_index;
 
 public:
 	// Source interface

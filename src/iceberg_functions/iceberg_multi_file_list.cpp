@@ -338,6 +338,36 @@ unique_ptr<NodeStatistics> IcebergMultiFileList::GetCardinality(ClientContext &c
 	return make_uniq<NodeStatistics>(cardinality, cardinality);
 }
 
+void IcebergMultiFileList::GetStatistics(vector<PartitionStatistics> &result) const {
+	if (GetMetadata().iceberg_version == 1) {
+		//! We collect no statistics information from manifests for V1 tables.
+		return;
+	}
+
+	if (!transaction_delete_manifests.empty() || !delete_manifests.empty()) {
+		//! if exist delete_manifests , return;
+		return;
+	}
+
+	idx_t count = 0;
+	for (idx_t i = 0; i < data_manifests.size(); i++) {
+		count += data_manifests[i].existing_rows_count;
+		count += data_manifests[i].added_rows_count;
+	}
+
+	for (idx_t i = 0; i < transaction_data_manifests.size(); i++) {
+		auto files = transaction_data_manifests[i].get().entries;
+		for (idx_t j = 0; j < files.size(); j++) {
+			count += files[j].data_file.record_count;
+		}
+	}
+
+	PartitionStatistics partition_stats;
+	partition_stats.count = count;
+	partition_stats.count_type = CountType::COUNT_EXACT;
+	result.push_back(partition_stats);
+}
+
 void IcebergPredicateStats::SetLowerBound(const Value &new_lower_bound) {
 	has_lower_bounds = true;
 	lower_bound = new_lower_bound;
@@ -723,6 +753,39 @@ bool IcebergMultiFileList::ManifestMatchesFilter(const IcebergManifestFile &mani
 		}
 	}
 	return true;
+}
+
+vector<reference<const IcebergEqualityDeleteRow>>
+IcebergMultiFileList::GetEqualityDeletesForFile(const IcebergManifestEntry &manifest_entry) const {
+	vector<reference<const IcebergEqualityDeleteRow>> result;
+
+	//! Look through all the equality delete files with a *higher* sequence number
+	auto &data_file = manifest_entry.data_file;
+	auto &metadata = GetMetadata();
+	auto it = equality_delete_data.upper_bound(manifest_entry.sequence_number);
+	for (; it != equality_delete_data.end(); it++) {
+		auto &files = it->second->files;
+		for (auto &file : files) {
+			auto &partition_spec = metadata.partition_specs.at(file.partition_spec_id);
+			if (partition_spec.IsPartitioned()) {
+				if (file.partition_spec_id != manifest_entry.partition_spec_id) {
+					//! Not unpartitioned and the data does not share the same partition spec as the delete, skip the
+					//! delete file.
+					continue;
+				}
+				D_ASSERT(file.partition_info.size() == data_file.partition_info.size());
+				for (idx_t i = 0; i < file.partition_info.size(); i++) {
+					if (file.partition_info[i] != data_file.partition_info[i]) {
+						//! Same partition spec id, but the partitioning information doesn't match, delete file doesn't
+						//! apply.
+						continue;
+					}
+				}
+			}
+			result.insert(result.end(), file.rows.begin(), file.rows.end());
+		}
+	}
+	return result;
 }
 
 void IcebergMultiFileList::InitializeFiles(lock_guard<mutex> &guard) const {

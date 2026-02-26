@@ -49,10 +49,11 @@ use my_datalake.default;
 statement ok
 drop table if exists create_table_with_properties;
 
-statement error
+statement ok
 create table create_table_with_properties (a int) WITH ('format-version'='3');
-----
-<REGEX>:.*DuckDB-Iceberg only supports creating version 2 Iceberg tables.*
+
+statement ok
+drop table if exists create_table_with_properties;
 
 statement ok
 create table create_table_with_properties (a int) 

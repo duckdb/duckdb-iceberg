@@ -4,6 +4,7 @@
 #include "iceberg_value.hpp"
 #include "duckdb/common/exception/conversion_exception.hpp"
 #include "duckdb/main/database.hpp"
+#include "include/storage/iceberg_table_information.hpp"
 #include "duckdb/storage/buffer_manager.hpp"
 #include "include/metadata/iceberg_transform.hpp"
 
@@ -123,7 +124,8 @@ void IcebergManifestList::WriteManifestListEntry(IcebergTableInformation &table_
                                                  ClientContext &context) {
 	D_ASSERT(manifest_index < manifest_entries.size());
 	auto &manifest_file = manifest_entries[manifest_index];
-	auto manifest_length = manifest_file::WriteToFile(table_info, manifest_file.manifest_file, avro_copy, db, context);
+	auto manifest_length =
+	    manifest_file::WriteToFile(table_info.table_metadata, manifest_file.manifest_file, avro_copy, db, context);
 	manifest_file.manifest_length = manifest_length;
 }
 
@@ -168,8 +170,8 @@ static Value FieldSummaryFieldIds() {
 	return Value::STRUCT(list_children);
 }
 
-void WriteToFile(const IcebergManifestList &manifest_list, CopyFunction &copy, DatabaseInstance &db,
-                 ClientContext &context) {
+void WriteToFile(const IcebergTableMetadata &table_metadata, const IcebergManifestList &manifest_list,
+                 CopyFunction &copy, DatabaseInstance &db, ClientContext &context) {
 	auto &allocator = db.GetBufferManager().GetBufferAllocator();
 
 	//! Create the types for the DataChunk
@@ -248,6 +250,13 @@ void WriteToFile(const IcebergManifestList &manifest_list, CopyFunction &copy, D
 	types.push_back(IcebergManifestList::FieldSummaryType());
 	field_ids.emplace_back("partitions", FieldSummaryFieldIds());
 
+	if (table_metadata.iceberg_version >= 3) {
+		//! first_row_id: long - 520
+		names.push_back("first_row_id");
+		types.push_back(LogicalType::BIGINT);
+		field_ids.emplace_back("first_row_id", Value::INTEGER(FIRST_ROW_ID));
+	}
+
 	//! Populate the DataChunk with the manifests
 	auto manifest_files = manifest_list.GetManifestFilesConst();
 	DataChunk data;
@@ -303,6 +312,10 @@ void WriteToFile(const IcebergManifestList &manifest_list, CopyFunction &copy, D
 
 		// partitions: list<508: field_summary> - 507
 		data.SetValue(col_idx++, i, manifest.partitions.ToValue());
+
+		if (manifest.has_first_row_id) {
+			data.SetValue(col_idx++, i, manifest.first_row_id);
+		}
 	}
 	data.SetCardinality(manifest_files.size());
 
@@ -318,7 +331,7 @@ void WriteToFile(const IcebergManifestList &manifest_list, CopyFunction &copy, D
 	ExecutionContext execution_context(context, thread_context, nullptr);
 	auto bind_data = copy.copy_to_bind(context, input, names, types);
 
-	auto global_state = copy.copy_to_initialize_global(context, *bind_data, manifest_list.path);
+	auto global_state = copy.copy_to_initialize_global(context, *bind_data, manifest_list.GetPath());
 	auto local_state = copy.copy_to_initialize_local(execution_context, *bind_data);
 
 	copy.copy_to_sink(execution_context, *bind_data, *global_state, *local_state, data);

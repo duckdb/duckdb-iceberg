@@ -19,23 +19,25 @@
 
 namespace duckdb {
 
+enum class IcebergInsertVirtualColumns { NONE, WRITE_ROW_ID, WRITE_SEQUENCE_NUMBER, WRITE_ROW_ID_AND_SEQUENCE_NUMBER };
+
 struct IcebergCopyInput {
-	explicit IcebergCopyInput(ClientContext &context, IcebergTableEntry &table);
-	IcebergCopyInput(ClientContext &context, IcebergSchemaEntry &schema, const ColumnList &columns,
-	                 const string &data_path_p);
+	explicit IcebergCopyInput(ClientContext &context, IcebergTableEntry &table, const IcebergTableSchema &schema);
 
 	IcebergCatalog &catalog;
+	//! FIXME: this feels redundant?
 	const ColumnList &columns;
+	const IcebergTableSchema &schema;
 	string data_path;
 	//! Set of (key, value) options
 	case_insensitive_map_t<vector<Value>> options;
-
 	//! Partition specification for the table (if partitioned)
 	optional_ptr<const IcebergPartitionSpec> partition_spec;
 	//! Table schema for looking up source columns by ID
 	optional_ptr<IcebergTableSchema> table_schema;
 	//! Table index for logical plan generation (used when generating partition expressions)
 	optional_idx get_table_index;
+	IcebergInsertVirtualColumns virtual_columns = IcebergInsertVirtualColumns::NONE;
 };
 
 class IcebergInsertGlobalState : public GlobalSinkState {

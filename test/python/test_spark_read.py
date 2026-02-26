@@ -4,13 +4,15 @@ import datetime
 from decimal import Decimal
 from math import inf
 from dataclasses import dataclass
+from packaging.version import Version
+from packaging.specifiers import SpecifierSet
+
+from conftest import *
 
 from pprint import pprint
 
 SCRIPT_DIR = os.path.dirname(__file__)
 
-
-pyspark = pytest.importorskip("pyspark")
 pyspark_sql = pytest.importorskip("pyspark.sql")
 SparkSession = pyspark_sql.SparkSession
 SparkContext = pyspark.SparkContext
@@ -19,29 +21,9 @@ Row = pyspark_sql.Row
 
 @dataclass
 class IcebergRuntimeConfig:
-    spark_version: str
+    spark_version: Version
     scala_binary_version: str
     iceberg_library_version: str
-
-
-# List of runtimes you want to test
-ICEBERG_RUNTIMES = [
-    IcebergRuntimeConfig(
-        spark_version="3.5",
-        scala_binary_version="2.12",
-        iceberg_library_version="1.4.1",
-    ),
-    IcebergRuntimeConfig(
-        spark_version="3.5",
-        scala_binary_version="2.12",
-        iceberg_library_version="1.9.0",
-    ),
-    IcebergRuntimeConfig(
-        spark_version="3.5",
-        scala_binary_version="2.13",
-        iceberg_library_version="1.9.1",
-    ),
-]
 
 
 # uses {spark}_{scala}-{iceberg}
@@ -54,9 +36,42 @@ def generate_package(config: IcebergRuntimeConfig) -> str:
     return f'org.apache.iceberg:iceberg-spark-runtime-{config.spark_version}_{config.scala_binary_version}:{config.iceberg_library_version}'
 
 
+# List of runtimes you want to test
+ICEBERG_RUNTIMES = [
+    IcebergRuntimeConfig(
+        spark_version=Version("3.5"),
+        scala_binary_version="2.12",
+        iceberg_library_version="1.4.1",
+    ),
+    IcebergRuntimeConfig(
+        spark_version=Version("3.5"),
+        scala_binary_version="2.12",
+        iceberg_library_version="1.9.0",
+    ),
+    IcebergRuntimeConfig(
+        spark_version=Version("3.5"),
+        scala_binary_version="2.13",
+        iceberg_library_version="1.9.1",
+    ),
+    IcebergRuntimeConfig(
+        spark_version=Version("4.0"),
+        scala_binary_version="2.13",
+        iceberg_library_version="1.10.0",
+    ),
+]
+
+
 @pytest.fixture(params=ICEBERG_RUNTIMES, scope="session")
 def spark_con(request):
     runtime_config = request.param
+    if runtime_config.spark_version.major != PYSPARK_VERSION.major:
+        pytest.skip(
+            f"Skipping Iceberg runtime "
+            f"(Spark {runtime_config.spark_version}, Scala {runtime_config.scala_binary_version}, "
+            f"Iceberg {runtime_config.iceberg_library_version}) "
+            f"because current PySpark version is {PYSPARK_VERSION}"
+        )
+
     runtime_jar = generate_jar_location(runtime_config)
     runtime_pkg = generate_package(runtime_config)
     runtime_path = os.path.abspath(os.path.join(SCRIPT_DIR, '..', '..', 'scripts', 'data_generators', runtime_jar))
@@ -92,11 +107,15 @@ def spark_con(request):
     return spark
 
 
-@pytest.mark.skipif(
-    os.getenv('ICEBERG_SERVER_AVAILABLE', None) == None, reason="Test data wasn't generated, run 'make data' first"
+requires_iceberg_server = pytest.mark.skipif(
+    os.getenv("ICEBERG_SERVER_AVAILABLE", None) is None,
+    reason="Test data wasn't generated, run tests in test/sql/local/irc first (and set 'export ICEBERG_SERVER_AVAILABLE=1')",
 )
+
+
+@requires_iceberg_server
 class TestSparkRead:
-    def test_spark_read(self, spark_con):
+    def test_spark_read_insert_test(self, spark_con):
         df = spark_con.sql(
             """
             select * from default.insert_test order by col1, col2, col3
@@ -112,13 +131,7 @@ class TestSparkRead:
             Row(col1=datetime.date(2020, 8, 16), col2=4, col3='insert 4'),
         ]
 
-
-@pytest.mark.skipif(
-    os.getenv('ICEBERG_SERVER_AVAILABLE', None) == None,
-    reason="Test data wasn't generated, run tests in test/sql/local/irc first",
-)
-class TestSparkReadDuckDBTable:
-    def test_spark_read(self, spark_con):
+    def test_spark_read_duckdb_table(self, spark_con):
         df = spark_con.sql(
             """
             select * from default.duckdb_written_table order by a
@@ -138,13 +151,7 @@ class TestSparkReadDuckDBTable:
             Row(a=9),
         ]
 
-
-@pytest.mark.skipif(
-    os.getenv('ICEBERG_SERVER_AVAILABLE', None) == None,
-    reason="Test data wasn't generated, run tests in test/sql/local/irc first",
-)
-class TestSparkReadDuckDBTableWithDeletes:
-    def test_spark_read(self, spark_con):
+    def test_spark_read_table_with_deletes(self, spark_con):
         df = spark_con.sql(
             """
             select * from default.duckdb_deletes_for_other_engines order by a
@@ -164,13 +171,7 @@ class TestSparkReadDuckDBTableWithDeletes:
             Row(a=59),
         ]
 
-
-@pytest.mark.skipif(
-    os.getenv('ICEBERG_SERVER_AVAILABLE', None) == None,
-    reason="Test data wasn't generated, run tests in test/sql/local/irc first",
-)
-class TestSparkReadUpperLowerBounds:
-    def test_spark_read(self, spark_con):
+    def test_spark_read_upper_and_lower_bounds(self, spark_con):
         df = spark_con.sql(
             """
             select * from default.lower_upper_bounds_test;
@@ -217,13 +218,7 @@ class TestSparkReadUpperLowerBounds:
             ),
         ]
 
-
-@pytest.mark.skipif(
-    os.getenv('ICEBERG_SERVER_AVAILABLE', None) == None,
-    reason="Test data wasn't generated, run tests in test/sql/local/irc first",
-)
-class TestSparkReadInfinities:
-    def test_spark_read(self, spark_con):
+    def test_spark_read_infinities(self, spark_con):
         df = spark_con.sql(
             """
             select * from default.test_infinities;
@@ -236,13 +231,7 @@ class TestSparkReadInfinities:
             Row(float_type=-inf, double_type=-inf),
         ]
 
-
-@pytest.mark.skipif(
-    os.getenv('ICEBERG_SERVER_AVAILABLE', None) == None,
-    reason="Test data wasn't generated, run tests in test/sql/local/irc first",
-)
-class TestSparkReadDuckDBNestedTypes:
-    def test_spark_read(self, spark_con):
+    def test_duckdb_written_nested_types(self, spark_con):
         df = spark_con.sql(
             """
             select * from default.duckdb_nested_types;
@@ -258,4 +247,23 @@ class TestSparkReadDuckDBNestedTypes:
                 phone_numbers=['123-456-7890', '987-654-3210'],
                 metadata={'age': '30', 'membership': 'gold'},
             ),
+        ]
+
+    @pytest.mark.requires_spark(">=4.0")
+    def test_duckdb_written_row_lineage(self, spark_con):
+        df = spark_con.sql(
+            """
+            select _row_id, _last_updated_sequence_number, * from default.duckdb_row_lineage order by _row_id;
+            """
+        )
+        res = df.collect()
+        assert res == [
+            Row(_row_id=0, _last_updated_sequence_number=1, id=1, data='a'),
+            Row(_row_id=1, _last_updated_sequence_number=1, id=2, data='b'),
+            Row(_row_id=2, _last_updated_sequence_number=1, id=3, data='c'),
+            Row(_row_id=3, _last_updated_sequence_number=1, id=4, data='d'),
+            Row(_row_id=4, _last_updated_sequence_number=1, id=5, data='e'),
+            Row(_row_id=5, _last_updated_sequence_number=2, id=6, data='f'),
+            Row(_row_id=6, _last_updated_sequence_number=2, id=7, data='g'),
+            Row(_row_id=7, _last_updated_sequence_number=3, id=7, data='g_new'),
         ]

@@ -306,7 +306,6 @@ PhysicalOperator &IcebergCatalog::PlanDelete(ClientContext &context, PhysicalPla
 		row_id_indexes.push_back(bound_ref.index);
 	}
 	auto &ic_table_entry = op.table.Cast<IcebergTableEntry>();
-	// Verify Iceberg table version is v2
 	if (ic_table_entry.table_info.table_metadata.iceberg_version != 2) {
 		throw NotImplementedException("Delete from Iceberg V%d tables",
 		                              ic_table_entry.table_info.table_metadata.iceberg_version);

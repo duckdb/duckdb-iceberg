@@ -141,10 +141,12 @@ public:
 public:
 	vector<IcebergManifestFile> &GetManifestFilesMutable();
 	const vector<IcebergManifestFile> &GetManifestFilesConst() const;
+	const string &GetPath() const {
+		return path;
+	}
 
-	IcebergManifestFile &CreateNewManifestListEntry(string manifest_file_path) {
-		manifest_entries.push_back(IcebergManifestFile(manifest_file_path));
-		return manifest_entries.back();
+	void AddManifestFile(IcebergManifestFile &&manifest_file) {
+		manifest_entries.push_back(std::move(manifest_file));
 	}
 	idx_t GetManifestListEntriesCount() const;
 
@@ -157,10 +159,8 @@ public:
 	static LogicalType FieldSummaryType();
 	static Value FieldSummaryFieldIds();
 
-public:
-	string path;
-
 private:
+	string path;
 	vector<IcebergManifestFile> manifest_entries;
 };
 
@@ -188,8 +188,8 @@ static constexpr const int32_t FIELD_SUMMARY_UPPER_BOUND = 511;
 static constexpr const int32_t KEY_METADATA = 519;
 static constexpr const int32_t FIRST_ROW_ID = 520;
 
-void WriteToFile(const IcebergManifestList &manifest_list, CopyFunction &copy_function, DatabaseInstance &db,
-                 ClientContext &context);
+void WriteToFile(const IcebergTableMetadata &table_metadata, const IcebergManifestList &manifest_list,
+                 CopyFunction &copy_function, DatabaseInstance &db, ClientContext &context);
 
 } // namespace manifest_list
 

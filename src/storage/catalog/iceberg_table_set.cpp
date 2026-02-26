@@ -158,7 +158,8 @@ static Value ParseFormatVersionProperty(TableFunctionBinder &binder, ClientConte
 		throw BinderException("NULL is not supported as a valid option for '%s'", property_name);
 	}
 	if (!val.DefaultTryCastAs(type, true)) {
-		throw InvalidInputException("Can't cast 'format-version' property (%s) to %s", val.ToString(), type.ToString());
+		throw InvalidInputException("Can't cast '%s' property (%s) to %s", property_name, val.ToString(),
+		                            type.ToString());
 	}
 	return val;
 }
@@ -179,10 +180,13 @@ bool IcebergTableSet::CreateNewEntry(ClientContext &context, IcebergCatalog &cat
 		iceberg_version = ParseFormatVersionProperty(property_binder, context, *format_version_it->second,
 		                                             "format-version", LogicalType::INTEGER)
 		                      .GetValue<int32_t>();
-		if (iceberg_version.GetIndex() != 2) {
-			throw InvalidInputException("DuckDB-Iceberg only supports creating version 2 Iceberg tables");
+		if (iceberg_version.GetIndex() < 1) {
+			throw InvalidInputException("The lowest supported iceberg version is 1!");
 		}
+	} else {
+		iceberg_version = 2;
 	}
+
 	string location;
 	auto location_it = info.options.find("location");
 	if (location_it != info.options.end()) {
@@ -201,7 +205,7 @@ bool IcebergTableSet::CreateNewEntry(ClientContext &context, IcebergCatalog &cat
 	table_ptr->table_info.table_metadata.schemas[0] = IcebergCreateTableRequest::CreateIcebergSchema(table_ptr);
 	table_ptr->table_info.table_metadata.current_schema_id = 0;
 	table_ptr->table_info.table_metadata.schemas[0]->schema_id = 0;
-	table_ptr->table_info.table_metadata.iceberg_version = 2;
+	table_ptr->table_info.table_metadata.iceberg_version = iceberg_version.GetIndex();
 
 	// Get Location
 	if (!location.empty()) {

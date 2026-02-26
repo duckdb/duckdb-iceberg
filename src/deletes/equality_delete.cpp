@@ -72,6 +72,19 @@ void IcebergMultiFileList::ScanEqualityDeleteFile(const IcebergManifestEntry &ma
 		auto global_id = column_index.GetPrimaryIndex();
 		global_id_to_result_id[global_id] = i;
 	}
+	//! For the column(s) that are needed but aren't referenced, add them to the map
+	for (auto field_id : data_file.equality_ids) {
+		auto global_column_id = id_to_global_column[field_id];
+		ColumnIndex equality_index(global_column_id);
+		//! Check if the column needed by the equality delete is present
+		if (std::find(column_indexes.begin(), column_indexes.end(), equality_index) != column_indexes.end()) {
+			continue;
+		}
+		auto new_result_id = column_indexes.size() + equality_id_to_result_id.size();
+		//! Create or get the result id mapping for this equality id
+		auto result_id = equality_id_to_result_id.emplace(field_id, new_result_id).first->second;
+		global_id_to_result_id[global_column_id] = result_id;
+	}
 
 	//! Take only the relevant columns from the result
 	InitializeFromOtherChunk(result, result_p, column_ids);
@@ -87,16 +100,14 @@ void IcebergMultiFileList::ScanEqualityDeleteFile(const IcebergManifestEntry &ma
 		auto &vec = result.data[col_idx];
 
 		auto it = global_id_to_result_id.find(global_column_id);
-		if (it == global_id_to_result_id.end()) {
-			throw NotImplementedException("Equality deletes need the relevant columns to be selected");
-		}
-		global_column_id = it->second;
+		D_ASSERT(it != global_id_to_result_id.end());
+		auto result_column_id = it->second;
 
 		for (idx_t i = 0; i < count; i++) {
 			auto &row = rows[i];
 			auto constant = vec.GetValue(i);
 			unique_ptr<Expression> equality_filter;
-			auto bound_ref = make_uniq<BoundReferenceExpression>(col.type, global_column_id);
+			auto bound_ref = make_uniq<BoundReferenceExpression>(col.type, result_column_id);
 			if (!constant.IsNull()) {
 				//! Create a COMPARE_NOT_EQUAL expression
 				equality_filter =

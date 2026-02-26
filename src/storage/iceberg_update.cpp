@@ -18,7 +18,11 @@ IcebergUpdate::IcebergUpdate(PhysicalPlan &physical_plan, IcebergTableEntry &tab
     : PhysicalOperator(physical_plan, PhysicalOperatorType::EXTENSION, {LogicalType::BIGINT}, 1), table(table),
       columns(std::move(columns_p)), copy_op(copy_op), delete_op(delete_op), insert_op(insert_op) {
 	children.push_back(child);
-	row_id_index = columns.size();
+	auto &table_metadata = table.table_info.table_metadata;
+	if (table_metadata.iceberg_version >= 3) {
+		//! Only write _row_id for table version 3 and up
+		row_id_index = columns.size();
+	}
 }
 
 //===--------------------------------------------------------------------===//
@@ -59,6 +63,9 @@ unique_ptr<LocalSinkState> IcebergUpdate::GetLocalSinkState(ExecutionContext &co
 
 	// updates also write the row id to the file
 	auto insert_types = table.GetTypes();
+	if (row_id_index.IsValid()) {
+		insert_types.insert(insert_types.begin() + insert_types.size(), LogicalType::BIGINT);
+	}
 
 	result->insert_chunk.Initialize(context.client, insert_types);
 	result->delete_chunk.Initialize(context.client, delete_types);
@@ -77,6 +84,10 @@ SinkResultType IcebergUpdate::Sink(ExecutionContext &context, DataChunk &chunk, 
 	insert_chunk.SetCardinality(chunk.size());
 	for (idx_t i = 0; i < columns.size(); i++) {
 		insert_chunk.data[columns[i].index].Reference(chunk.data[i]);
+	}
+	// reference the row id right after the physical columns
+	if (row_id_index.IsValid()) {
+		insert_chunk.data[columns.size()].Reference(chunk.data[row_id_index.GetIndex()]);
 	}
 
 	OperatorSinkInput copy_input {*copy_op.sink_state, *lstate.copy_local_state, input.interrupt_state};
@@ -210,32 +221,6 @@ InsertionOrderPreservingMap<string> IcebergUpdate::ParamsToString() const {
 	return result;
 }
 
-static Value GetFieldIdValue(const IcebergColumnDefinition &column) {
-	auto column_value = Value::BIGINT(column.id);
-	if (column.children.empty()) {
-		// primitive type - return the field-id directly
-		return column_value;
-	}
-	// nested type - generate a struct and recurse into children
-	child_list_t<Value> values;
-	values.emplace_back("__duckdb_field_id", std::move(column_value));
-	for (auto &child : column.children) {
-		values.emplace_back(child->name, GetFieldIdValue(*child));
-	}
-	return Value::STRUCT(std::move(values));
-}
-
-static Value WrittenFieldIds(const IcebergTableSchema &schema) {
-	auto &columns = schema.columns;
-
-	child_list_t<Value> values;
-	for (idx_t c_idx = 0; c_idx < columns.size(); c_idx++) {
-		auto &column = columns[c_idx];
-		values.emplace_back(column->name, GetFieldIdValue(*column));
-	}
-	return Value::STRUCT(std::move(values));
-}
-
 PhysicalOperator &IcebergCatalog::PlanUpdate(ClientContext &context, PhysicalPlanGenerator &planner, LogicalUpdate &op,
                                              PhysicalOperator &child_plan) {
 	if (op.return_chunk) {
@@ -260,22 +245,21 @@ PhysicalOperator &IcebergCatalog::PlanUpdate(ClientContext &context, PhysicalPla
 			throw NotImplementedException("Update on a sorted iceberg table is not supported yet");
 		}
 	}
-	// Verify Iceberg table version is v2
 	if (table.table_info.table_metadata.iceberg_version != 2) {
 		throw NotImplementedException("Update Iceberg V%d tables", table.table_info.table_metadata.iceberg_version);
 	}
 
-	IcebergCopyInput copy_input(context, table);
-	vector<Value> field_input;
-	field_input.push_back(WrittenFieldIds(table_schema));
-	copy_input.options["field_ids"] = std::move(field_input);
-
+	IcebergCopyInput copy_input(context, table, table_schema);
+	if (table.table_info.table_metadata.iceberg_version >= 3) {
+		copy_input.virtual_columns = IcebergInsertVirtualColumns::WRITE_ROW_ID;
+	}
 	auto &copy_op = IcebergInsert::PlanCopyForInsert(context, planner, copy_input, nullptr);
 	// plan the delete
 	vector<idx_t> row_id_indexes;
 	for (idx_t i = 0; i < 2; i++) {
 		row_id_indexes.push_back(i);
 	}
+
 	auto &delete_op = IcebergDelete::PlanDelete(context, planner, table, child_plan, std::move(row_id_indexes));
 	// plan the actual insert
 	auto &insert_op = IcebergInsert::PlanInsert(context, planner, table);
