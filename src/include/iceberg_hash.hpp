@@ -15,6 +15,7 @@
 #include "duckdb/common/types/value.hpp"
 #include "duckdb/common/types/date.hpp"
 #include "duckdb/common/types/string_type.hpp"
+#include "duckdb/common/types/timestamp.hpp"
 
 namespace duckdb {
 
@@ -29,6 +30,7 @@ public:
 	static int32_t HashInt64(int64_t value);
 	static int32_t HashString(const string_t &value);
 	static int32_t HashDate(date_t date);
+	static int32_t HashDecimal(const Value &value);
 
 	//! Hash a DuckDB Value based on its type
 	static int32_t HashValue(const Value &value);

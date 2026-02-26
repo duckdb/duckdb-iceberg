@@ -1,0 +1,60 @@
+# name: test/sql/local/partitioning/bucket/bucket_timestamp.test
+# description: Test bucket partitioning with TIMESTAMP type (stored as timestamptz in Iceberg).
+#              Bucket pushdown is supported for TIMESTAMP/TIMESTAMPTZ (microseconds-since-epoch hashed as int64).
+#              Filter uses TIMESTAMPTZ literal with explicit UTC offset to match the stored UTC values.
+# group: [partitioning]
+
+require-env DUCKDB_ICEBERG_HAVE_GENERATED_DATA
+
+require avro
+
+require parquet
+
+require iceberg
+
+statement ok
+attach ':memory:' as my_datalake;
+
+statement ok
+create schema my_datalake.default;
+
+statement ok
+create view my_datalake.default.bucket_partitioned_timestamp as
+select * from ICEBERG_SCAN('__WORKING_DIRECTORY__/data/generated/iceberg/spark-local/default/bucket_partitioned_timestamp');
+
+# Test 1: Total row count
+query I
+select count(*) from my_datalake.default.bucket_partitioned_timestamp;
+----
+12
+
+# Test 2: Equality filter on partition column returns correct rows (no false negatives)
+# Note: the column is TIMESTAMPTZ; use explicit UTC offset to match Spark-written UTC values.
+query I
+select count(*) from my_datalake.default.bucket_partitioned_timestamp
+where ts_val = TIMESTAMPTZ '2023-01-01 00:00:00+00';
+----
+2
+
+# Test 3: Verify filtered row content
+query IT
+select id, label from my_datalake.default.bucket_partitioned_timestamp
+where ts_val = TIMESTAMPTZ '2023-01-01 00:00:00+00'
+order by id;
+----
+1	jan
+11	jan_dup
+
+# Test 4: NULL rows are preserved (IS NULL filter works)
+query I
+select count(*) from my_datalake.default.bucket_partitioned_timestamp
+where ts_val IS NULL;
+----
+1
+
+# Test 5: Non-partition column filter still returns correct results
+query I
+select count(*) from my_datalake.default.bucket_partitioned_timestamp
+where id >= 10;
+----
+3

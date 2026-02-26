@@ -228,38 +228,31 @@ struct BucketTransform {
 	static Value ApplyTransform(const Value &constant, const IcebergTransform &transform);
 
 	static bool CompareEqual(const Value &constant, const IcebergPredicateStats &stats) {
-		// 'constant' is the transformed bucket ID (INTEGER type).
-		// ApplyTransform returns a null Value for unsupported types,
-		// in which case we conservatively include all files (no filtering).
-		if (constant.IsNull()) {
+		// ApplyTransform returns null for null inputs (Iceberg spec) and for
+		// unsupported types; in both cases skip filtering (conservative).
+		if (constant.IsNull() || stats.lower_bound.IsNull() || stats.upper_bound.IsNull()) {
 			return true;
-		}
-
-		if (stats.lower_bound.IsNull() || stats.upper_bound.IsNull()) {
-			return true; // Conservative: include the file if bounds are null
 		}
 
 		int32_t bucket_id = constant.GetValue<int32_t>();
 		int32_t lower_bucket = stats.lower_bound.GetValue<int32_t>();
 		int32_t upper_bucket = stats.upper_bound.GetValue<int32_t>();
-
-		// Check if bucket_id is within the range [lower_bucket, upper_bucket]
 		return (bucket_id >= lower_bucket && bucket_id <= upper_bucket);
 	}
 	static bool CompareLessThan(const Value &constant, const IcebergPredicateStats &stats) {
-		// Bucket transform doesn't preserve order, so we can't filter on < or >
+		// Bucket transform doesn't preserve order, so we can't filter on <
 		return true;
 	}
 	static bool CompareLessThanOrEqual(const Value &constant, const IcebergPredicateStats &stats) {
-		// Bucket transform doesn't preserve order, so we can't filter on <= or >=
+		// Bucket transform doesn't preserve order, so we can't filter on <=
 		return true;
 	}
 	static bool CompareGreaterThan(const Value &constant, const IcebergPredicateStats &stats) {
-		// Bucket transform doesn't preserve order, so we can't filter on < or >
+		// Bucket transform doesn't preserve order, so we can't filter on >
 		return true;
 	}
 	static bool CompareGreaterThanOrEqual(const Value &constant, const IcebergPredicateStats &stats) {
-		// Bucket transform doesn't preserve order, so we can't filter on <= or >=
+		// Bucket transform doesn't preserve order, so we can't filter on >=
 		return true;
 	}
 };

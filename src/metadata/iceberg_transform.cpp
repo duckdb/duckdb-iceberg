@@ -105,37 +105,35 @@ LogicalType IcebergTransform::GetSerializedType(const LogicalType &input) const 
 
 Value BucketTransform::ApplyTransform(const Value &constant, const IcebergTransform &transform) {
 	if (constant.IsNull()) {
-		// Iceberg spec: null values hash to 0, then apply modulo
-		return Value::INTEGER(0);
+		// Iceberg spec: "All transforms must return null for a null input value"
+		return Value(LogicalType::INTEGER);
 	}
 
 	// Check if this type is supported for bucket pushdown.
-	// Supported types: integer, long, date, string.
+	// Supported types: integer, long, decimal, date, timestamp, timestamptz, string, binary.
 	auto type_id = constant.type().id();
 	switch (type_id) {
 	case LogicalTypeId::INTEGER:
 	case LogicalTypeId::BIGINT:
+	case LogicalTypeId::DECIMAL:
 	case LogicalTypeId::DATE:
+	case LogicalTypeId::TIMESTAMP:
+	case LogicalTypeId::TIMESTAMP_TZ:
 	case LogicalTypeId::VARCHAR:
+	case LogicalTypeId::BLOB:
 		break;
 	default:
 		// Unsupported type: return a null Value so CompareEqual skips filtering
 		return Value(LogicalType::INTEGER);
 	}
 
-	// Get the number of buckets from the transform
 	auto num_buckets = static_cast<int32_t>(transform.GetBucketModulo());
-
-	// Safety check: avoid division by zero
 	if (num_buckets <= 0) {
 		throw InvalidInputException("Invalid bucket count: %d (must be > 0)", num_buckets);
 	}
 
-	// Compute the Iceberg-compatible hash
 	int32_t hash_value = IcebergHash::HashValue(constant);
-
-	// Apply modulo to get bucket number
-	// Use & 0x7FFFFFFF to ensure positive result (Iceberg spec)
+	// Iceberg spec: (hash & 0x7FFFFFFF) % num_buckets
 	int32_t bucket_id = (hash_value & 0x7FFFFFFF) % num_buckets;
 
 	return Value::INTEGER(bucket_id);
