@@ -218,6 +218,7 @@ void IcebergInsert::AddWrittenFiles(IcebergInsertGlobalState &global_state, Data
 		auto ic_partition_info = ic_table.table_info.table_metadata.GetLatestPartitionSpec();
 
 		// Build a map from partition column name to its partition spec field
+		// To be used later to add partitioning info to the data file
 		case_insensitive_map_t<reference<const IcebergPartitionSpecField>> partition_colname_to_field;
 		for (auto &partition_field : ic_partition_info.fields) {
 			auto partition_col_name = GetPartitionExpressionName(partition_field);
@@ -745,8 +746,6 @@ PhysicalOperator &IcebergCatalog::PlanInsert(ClientContext &context, PhysicalPla
 	auto &table_info = table_entry.table_info;
 	auto &schema = table_info.table_metadata.GetLatestSchema();
 
-	// Note: Partitioned tables are now supported. Unsupported partition transforms
-	// (BUCKET, TRUNCATE) will throw in GeneratePartitionExpressions.
 	if (table_info.table_metadata.HasSortOrder()) {
 		auto &sort_spec = table_info.table_metadata.GetLatestSortOrder();
 		if (sort_spec.IsSorted()) {

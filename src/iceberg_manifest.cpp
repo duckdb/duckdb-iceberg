@@ -220,18 +220,16 @@ static LogicalType PartitionStructType(const IcebergManifest &file) {
 		//! anyways
 		for (auto &entry : data_file.partition_info) {
 			switch (entry.transform.Type()) {
+			case IcebergTransformType::TRUNCATE:
 			case IcebergTransformType::IDENTITY:
 				children.emplace_back(entry.name, entry.source_type);
 				break;
 			case IcebergTransformType::BUCKET:
-			case IcebergTransformType::TRUNCATE:
-				children.emplace_back(entry.name, LogicalType::VARCHAR);
-				break;
 			case IcebergTransformType::DAY:
 			case IcebergTransformType::MONTH:
 			case IcebergTransformType::YEAR:
 			case IcebergTransformType::HOUR:
-				children.emplace_back(entry.name, LogicalType::BIGINT);
+				children.emplace_back(entry.name, LogicalType::INTEGER);
 				break;
 			case IcebergTransformType::INVALID:
 			case IcebergTransformType::VOID:

@@ -1,5 +1,8 @@
 #include "manifest_reader.hpp"
 
+#include "duckdb/common/string_util.hpp"
+#include "duckdb/common/types/string.hpp"
+
 namespace duckdb {
 
 namespace manifest_file {
@@ -247,20 +250,10 @@ idx_t ManifestReader::ReadChunk(idx_t offset, idx_t count, vector<IcebergManifes
 			auto &partition_vector = it.second.get();
 
 			DataFilePartitionInfo info;
-			// auto name_it = partition_field_names.find(field_id);
-			// info.name = name_it != partition_field_names.end() ? name_it->second : std::to_string(field_id);
-			info.name = "REVISIT_THIS";
+			auto name_it = partition_field_names.find(field_id);
+			info.name = name_it != partition_field_names.end() ? name_it->second : std::to_string(field_id);
 			info.field_id = static_cast<uint64_t>(field_id);
 			info.value = partition_vector.GetValue(index);
-			// Spark writes day-transform partition values as Avro 'date' logical type, but the
-			// spec says INTEGER (days since epoch). Both use the same int32 storage, so if we
-			// expected INTEGER but the avro reader gave us DATE, normalize it here.
-			auto expected_type_it = scan_info.partition_field_id_to_type.find(static_cast<idx_t>(field_id));
-			if (expected_type_it != scan_info.partition_field_id_to_type.end() &&
-			    expected_type_it->second.id() == LogicalTypeId::INTEGER &&
-			    info.value.type().id() == LogicalTypeId::DATE) {
-				info.value = Value::INTEGER(info.value.GetValue<int32_t>());
-			}
 			data_file.partition_info.push_back(std::move(info));
 		}
 		produced++;

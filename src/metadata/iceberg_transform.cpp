@@ -1,4 +1,3 @@
-#include "../include/metadata/iceberg_transform.hpp"
 #include "metadata/iceberg_transform.hpp"
 #include "duckdb/common/string_util.hpp"
 

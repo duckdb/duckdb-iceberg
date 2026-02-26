@@ -1,7 +1,6 @@
 #include "storage/iceberg_table_information.hpp"
 
 #include "catalog_api.hpp"
-#include "../include/metadata/iceberg_transform.hpp"
 #include "duckdb/common/case_insensitive_map.hpp"
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/parser/expression/columnref_expression.hpp"
@@ -17,6 +16,7 @@
 #include "storage/authorization/oauth2.hpp"
 #include "storage/authorization/sigv4.hpp"
 #include "storage/authorization/none.hpp"
+#include "metadata/iceberg_transform.hpp"
 
 namespace duckdb {
 

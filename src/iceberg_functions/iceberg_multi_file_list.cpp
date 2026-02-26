@@ -453,15 +453,15 @@ bool IcebergMultiFileList::FileMatchesFilter(const IcebergManifestEntry &manifes
 				// initialize dummy stats
 				auto stats = IcebergPredicateStats();
 				bool found_partition_field = false;
-				for (auto &pi : data_file.partition_info) {
-					if (field.partition_field_id == pi.field_id) {
+				for (auto &partition_val : data_file.partition_info) {
+					if (field.partition_field_id == partition_val.field_id) {
 						found_partition_field = true;
-						stats.lower_bound = pi.value;
-						stats.upper_bound = pi.value;
+						stats.lower_bound = partition_val.value;
+						stats.upper_bound = partition_val.value;
 						stats.has_upper_bounds = true;
 						stats.has_lower_bounds = true;
 						// set null stats for partitioned column.
-						if (pi.value.IsNull()) {
+						if (partition_val.value.IsNull()) {
 							// partition values can be null
 							stats.has_null = true;
 						} else {

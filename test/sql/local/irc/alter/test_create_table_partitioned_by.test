@@ -49,7 +49,7 @@ statement ok
 insert into my_datalake.default.test_create_table_partitioned_by values (11, 20);
 
 query II
-select * from my_datalake.default.test_create_table_partitioned_by;
+select * from my_datalake.default.test_create_table_partitioned_by order by all;
 ----
 1	2
 11	20
@@ -73,7 +73,7 @@ statement ok
 insert into my_datalake.default.alter_table_partitioned_date_transform values (11, '2023-07-07'::DATE);
 
 query II
-select * from my_datalake.default.alter_table_partitioned_date_transform;
+select * from my_datalake.default.alter_table_partitioned_date_transform order by all;
 ----
 1	2020-10-10
 2	2021-09-09
@@ -96,7 +96,7 @@ statement ok
 insert into my_datalake.default.alter_table_partitioned_date_transform values (11, '2023-07-07'::DATE);
 
 query II
-select * from my_datalake.default.alter_table_partitioned_date_transform;
+select * from my_datalake.default.alter_table_partitioned_date_transform order by all;
 ----
 1	2020-10-10
 2	2021-09-09
@@ -119,7 +119,7 @@ statement ok
 insert into my_datalake.default.alter_table_partitioned_date_transform values (11, '2023-07-07'::DATE);
 
 query II
-select * from my_datalake.default.alter_table_partitioned_date_transform;
+select * from my_datalake.default.alter_table_partitioned_date_transform order by all;
 ----
 1	2020-10-10
 2	2021-09-09
@@ -139,7 +139,3 @@ statement error
 Alter table my_datalake.default.alter_table_partitioned_date_transform SET PARTITIONED BY (invalid(date));
 ----
 <REGEX>:.*Not implemented Error: Unrecognized transform.*
-
-
-# what about default value support?
-# What about nested column types? Adding/removing struct column information.

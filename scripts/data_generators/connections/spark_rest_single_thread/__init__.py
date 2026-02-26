@@ -44,7 +44,7 @@ class IcebergSparkRestSingleThreaded(IcebergConnection):
 
     def get_connection(self):
         os.environ["PYSPARK_SUBMIT_ARGS"] = (
-            f"--packages org.apache.iceberg:iceberg-spark-runtime-{SPARK_VERSION}.{SCALA_BINARY_VERSION}:{ICEBERG_LIBRARY_VERSION},org.apache.iceberg:iceberg-aws-bundle:{ICEBERG_LIBRARY_VERSION} pyspark-shell"
+            f"--packages org.apache.iceberg:iceberg-spark-runtime-{SPARK_VERSION}_{SCALA_BINARY_VERSION}:{ICEBERG_LIBRARY_VERSION},org.apache.iceberg:iceberg-aws-bundle:{ICEBERG_LIBRARY_VERSION} pyspark-shell"
         )
         os.environ["AWS_REGION"] = "us-east-1"
         os.environ["AWS_ACCESS_KEY_ID"] = "admin"
