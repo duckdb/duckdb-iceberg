@@ -1,0 +1,48 @@
+# name: test/sql/local/partitioning/bucket_bigint.test
+# description: Test bucket partitioning with BIGINT type
+# group: [partitioning]
+
+require-env DUCKDB_ICEBERG_HAVE_GENERATED_DATA
+
+require avro
+
+require parquet
+
+require iceberg
+
+statement ok
+attach ':memory:' as my_datalake;
+
+statement ok
+create schema my_datalake.default;
+
+statement ok
+create view my_datalake.default.bucket_partitioned_bigint as
+select * from ICEBERG_SCAN('__WORKING_DIRECTORY__/data/generated/iceberg/spark-local/default/bucket_partitioned_bigint');
+
+# Test 1: Verify total row count
+query I
+select count(*) from my_datalake.default.bucket_partitioned_bigint;
+----
+15
+
+# Test 2: Filter by specific bigint value
+query I
+select count(*) from my_datalake.default.bucket_partitioned_bigint where value = 1000000000000;
+----
+2
+
+# Test 3: Verify filtered results
+query III
+select id, value, name from my_datalake.default.bucket_partitioned_bigint
+where value = 1000000000000 order by id;
+----
+1	1000000000000	row_1
+11	1000000000000	row_11
+
+# Test 4: Filter with IN clause for bigint
+query I
+select count(*) from my_datalake.default.bucket_partitioned_bigint
+where value IN (2000000000000, 3000000000000);
+----
+4

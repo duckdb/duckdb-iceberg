@@ -1,0 +1,54 @@
+# name: test/sql/local/partitioning/bucket_integer.test
+# description: Test bucket partitioning with INTEGER type
+# group: [partitioning]
+
+require-env DUCKDB_ICEBERG_HAVE_GENERATED_DATA
+
+require avro
+
+require parquet
+
+require iceberg
+
+statement ok
+attach ':memory:' as my_datalake;
+
+statement ok
+create schema my_datalake.default;
+
+statement ok
+create view my_datalake.default.bucket_partitioned_integer as
+select * from ICEBERG_SCAN('__WORKING_DIRECTORY__/data/generated/iceberg/spark-local/default/bucket_partitioned_integer');
+
+# Test 1: Verify total row count
+query I
+select count(*) from my_datalake.default.bucket_partitioned_integer;
+----
+20
+
+# Test 2: Filter by specific value (should use bucket pushdown)
+query I
+select count(*) from my_datalake.default.bucket_partitioned_integer where value = 10;
+----
+2
+
+# Test 3: Verify filtered results
+query III
+select id, value, name from my_datalake.default.bucket_partitioned_integer
+where value = 10 order by id;
+----
+1	10	row_1
+11	10	row_11
+
+# Test 4: Filter with IN clause
+query I
+select count(*) from my_datalake.default.bucket_partitioned_integer
+where value IN (20, 30);
+----
+4
+
+# Test 5: Verify bucket distribution works correctly
+query I
+select count(distinct value) from my_datalake.default.bucket_partitioned_integer;
+----
+10

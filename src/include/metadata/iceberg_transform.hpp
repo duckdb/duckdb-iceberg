@@ -228,22 +228,38 @@ struct BucketTransform {
 	static Value ApplyTransform(const Value &constant, const IcebergTransform &transform);
 
 	static bool CompareEqual(const Value &constant, const IcebergPredicateStats &stats) {
-		// For bucket partitioning, check if the bucket ID is within the bounds
+		// 'constant' is the transformed bucket ID (INTEGER type).
+		// ApplyTransform returns a null Value for unsupported types,
+		// in which case we conservatively include all files (no filtering).
+		if (constant.IsNull()) {
+			return true;
+		}
+
 		if (stats.lower_bound.IsNull() || stats.upper_bound.IsNull()) {
 			return true; // Conservative: include the file if bounds are null
 		}
-		return constant >= stats.lower_bound && constant <= stats.upper_bound;
+
+		int32_t bucket_id = constant.GetValue<int32_t>();
+		int32_t lower_bucket = stats.lower_bound.GetValue<int32_t>();
+		int32_t upper_bucket = stats.upper_bound.GetValue<int32_t>();
+
+		// Check if bucket_id is within the range [lower_bucket, upper_bucket]
+		return (bucket_id >= lower_bucket && bucket_id <= upper_bucket);
 	}
 	static bool CompareLessThan(const Value &constant, const IcebergPredicateStats &stats) {
+		// Bucket transform doesn't preserve order, so we can't filter on < or >
 		return true;
 	}
 	static bool CompareLessThanOrEqual(const Value &constant, const IcebergPredicateStats &stats) {
+		// Bucket transform doesn't preserve order, so we can't filter on <= or >=
 		return true;
 	}
 	static bool CompareGreaterThan(const Value &constant, const IcebergPredicateStats &stats) {
+		// Bucket transform doesn't preserve order, so we can't filter on < or >
 		return true;
 	}
 	static bool CompareGreaterThanOrEqual(const Value &constant, const IcebergPredicateStats &stats) {
+		// Bucket transform doesn't preserve order, so we can't filter on <= or >=
 		return true;
 	}
 };

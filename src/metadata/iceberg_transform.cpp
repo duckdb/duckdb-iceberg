@@ -109,6 +109,20 @@ Value BucketTransform::ApplyTransform(const Value &constant, const IcebergTransf
 		return Value::INTEGER(0);
 	}
 
+	// Check if this type is supported for bucket pushdown.
+	// Supported types: integer, long, date, string.
+	auto type_id = constant.type().id();
+	switch (type_id) {
+	case LogicalTypeId::INTEGER:
+	case LogicalTypeId::BIGINT:
+	case LogicalTypeId::DATE:
+	case LogicalTypeId::VARCHAR:
+		break;
+	default:
+		// Unsupported type: return a null Value so CompareEqual skips filtering
+		return Value(LogicalType::INTEGER);
+	}
+
 	// Get the number of buckets from the transform
 	auto num_buckets = static_cast<int32_t>(transform.GetBucketModulo());
 

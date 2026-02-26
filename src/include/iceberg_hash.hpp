@@ -14,8 +14,7 @@
 #include "duckdb.hpp"
 #include "duckdb/common/types/value.hpp"
 #include "duckdb/common/types/date.hpp"
-#include "duckdb/common/types/timestamp.hpp"
-#include "duckdb/common/types/uuid.hpp"
+#include "duckdb/common/types/string_type.hpp"
 
 namespace duckdb {
 
@@ -29,11 +28,7 @@ public:
 	static int32_t HashInt32(int32_t value);
 	static int32_t HashInt64(int64_t value);
 	static int32_t HashString(const string_t &value);
-	static int32_t HashBytes(const uint8_t *data, idx_t len);
-	static int32_t HashUUID(const hugeint_t &uuid);
 	static int32_t HashDate(date_t date);
-	static int32_t HashTimestamp(timestamp_t timestamp);
-	static int32_t HashTimestampTZ(timestamp_t timestamp);
 
 	//! Hash a DuckDB Value based on its type
 	static int32_t HashValue(const Value &value);
