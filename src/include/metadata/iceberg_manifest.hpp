@@ -39,6 +39,13 @@ struct DataFilePartitionInfo {
 	LogicalType source_type;
 	//! The actual partition value for this data file
 	Value value;
+
+	bool operator==(const DataFilePartitionInfo &other) const {
+		return field_id == other.field_id && value == other.value;
+	}
+	bool operator!=(const DataFilePartitionInfo &other) const {
+		return !(*this == other);
+	}
 };
 
 struct IcebergDataFile {

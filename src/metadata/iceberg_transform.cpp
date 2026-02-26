@@ -34,26 +34,8 @@ LogicalType IcebergTransform::GetBoundsType(const LogicalType &input) const {
 	switch (type) {
 	case IcebergTransformType::IDENTITY: {
 		//! Appendix A: Avro Data Type Mappings
-		//! The avro reader handles these
+		//! The avro reader return will return the correct identity types now
 		return input;
-		// switch (input.id()) {
-		// case LogicalTypeId::DATE:
-		// 	return LogicalType::DATE;
-		// case LogicalTypeId::TIME:
-		// 	return LogicalType::BIGINT;
-		// case LogicalTypeId::TIMESTAMP:
-		// 	return LogicalType::BIGINT;
-		// case LogicalTypeId::TIMESTAMP_TZ:
-		// 	return LogicalType::BIGINT;
-		// case LogicalTypeId::TIMESTAMP_NS:
-		// 	return LogicalType::BIGINT;
-		// case LogicalTypeId::DECIMAL:
-		// 	return LogicalType::BLOB;
-		// case LogicalTypeId::UUID:
-		// 	return LogicalType::BLOB;
-		// default:
-		// 	return input;
-		// }
 	}
 	case IcebergTransformType::BUCKET:
 		return LogicalType::INTEGER;
