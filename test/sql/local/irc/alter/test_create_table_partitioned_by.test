@@ -96,7 +96,7 @@ statement ok
 insert into my_datalake.default.alter_table_partitioned_date_transform values (11, '2023-07-07'::DATE);
 
 query II
-seelect * from my_datalake.default.alter_table_partitioned_date_transform;
+select * from my_datalake.default.alter_table_partitioned_date_transform;
 ----
 1	2020-10-10
 2	2021-09-09
@@ -119,7 +119,7 @@ statement ok
 insert into my_datalake.default.alter_table_partitioned_date_transform values (11, '2023-07-07'::DATE);
 
 query II
-seelect * from my_datalake.default.alter_table_partitioned_date_transform;
+select * from my_datalake.default.alter_table_partitioned_date_transform;
 ----
 1	2020-10-10
 2	2021-09-09
