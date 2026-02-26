@@ -1,6 +1,6 @@
 {
   "description": "Use Polaris as Iceberg Rest Catalog.",
-  "on_init": "create secret polaris_secret (TYPE ICEBERG, CLIENT_ID getenv('POLARIS_CLIENT_ID'),CLIENT_SECRET getenv('POLARIS_CLIENT_SECRET'),ENDPOINT 'http://0.0.0.0:8181/api/catalog'); attach 'quickstart_catalog' as my_datalake (type ICEBERG,ENDPOINT 'http://0.0.0.0:8181/api/catalog');",
+  "on_init": "create secret polaris_secret (TYPE ICEBERG, CLIENT_ID '%PLACEHOLDER_POLARIS_CLIENT_ID%',CLIENT_SECRET '%PLACEHOLDER_POLARIS_CLIENT_SECRET%',ENDPOINT 'http://0.0.0.0:8181/api/catalog'); attach 'quickstart_catalog' as my_datalake (type ICEBERG,ENDPOINT 'http://0.0.0.0:8181/api/catalog');",
   "statically_loaded_extensions": [
     "core_functions",
     "parquet",

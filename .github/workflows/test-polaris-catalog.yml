@@ -93,6 +93,10 @@ jobs:
           ./build/release/test/unittest "$PWD/test/*" --list-test-names-only || true
           ./build/release/test/unittest "$PWD/test/*"
 
+      - name: Populate Config Placeholders
+        run: |
+          perl -i -pe "s/%PLACEHOLDER_POLARIS_CLIENT_ID%/$(cat polaris_client_id.txt)/g; s/%PLACEHOLDER_POLARIS_CLIENT_SECRET%/$(cat polaris_client_secret.txt)/g" test/configs/polaris.json
+
       - name: Run Generic IRC tests
         env:
           ICEBERG_SERVER_AVAILABLE: 1
