@@ -1,4 +1,4 @@
-# name: test/sql/local/irc/insert/partitions/temporal/test_hour_timestamp.test
+# name: test/sql/local/irc_any_catalog/insert/partitions/temporal/test_hour_timestamp.test
 # group: [temporal]
 
 require-env ICEBERG_SERVER_AVAILABLE

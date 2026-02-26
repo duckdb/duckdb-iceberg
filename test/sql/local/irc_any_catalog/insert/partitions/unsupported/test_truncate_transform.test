@@ -1,4 +1,4 @@
-# name: test/sql/local/irc/insert/partitions/unsupported/test_truncate_transform.test
+# name: test/sql/local/irc_any_catalog/insert/partitions/unsupported/test_truncate_transform.test
 # description: Test that TRUNCATE partition transform is rejected for INSERT
 # group: [unsupported]
 

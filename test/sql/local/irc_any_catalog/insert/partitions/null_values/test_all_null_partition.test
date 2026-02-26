@@ -1,4 +1,4 @@
-# name: test/sql/local/irc/insert/partitions/null_values/test_all_null_partition.test
+# name: test/sql/local/irc_any_catalog/insert/partitions/null_values/test_all_null_partition.test
 # description: Test inserting when ALL partition values are NULL
 # group: [null_values]
 

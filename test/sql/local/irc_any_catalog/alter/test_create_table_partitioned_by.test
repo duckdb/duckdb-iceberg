@@ -1,4 +1,4 @@
-# name: test/sql/local/irc/alter/test_create_table_partitioned_by.test
+# name: test/sql/local/irc_any_catalog/alter/test_create_table_partitioned_by.test
 # group: [alter]
 
 require-env ICEBERG_SERVER_AVAILABLE

@@ -1,4 +1,4 @@
-# name: test/sql/local/irc/insert/partitions/null_values/test_null_mixed_with_multiple_inserts.test
+# name: test/sql/local/irc_any_catalog/insert/partitions/null_values/test_null_mixed_with_multiple_inserts.test
 # description: Test NULL partition values across multiple inserts and verify manifest skipping
 # group: [null_values]
 

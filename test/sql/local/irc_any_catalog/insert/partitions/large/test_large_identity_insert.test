@@ -1,4 +1,4 @@
-# name: test/sql/local/irc/insert/partitions/large/test_large_identity_insert.test
+# name: test/sql/local/irc_any_catalog/insert/partitions/large/test_large_identity_insert.test
 # description: Test large insert into identity-partitioned table with many partitions and rows
 # group: [large]
 

@@ -1,4 +1,4 @@
-# name: test/sql/local/irc/insert/partitions/multi_insert/test_manifest_skip_year_transform.test
+# name: test/sql/local/irc_any_catalog/insert/partitions/multi_insert/test_manifest_skip_year_transform.test
 # description: Verify manifest list entries are skipped for year-partitioned tables with temporal filters
 # group: [multi_insert]
 

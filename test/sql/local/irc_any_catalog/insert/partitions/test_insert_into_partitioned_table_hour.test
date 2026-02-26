@@ -1,4 +1,4 @@
-# name: test/sql/local/irc/insert/partitions/test_insert_into_partitioned_table_hour.test
+# name: test/sql/local/irc_any_catalog/insert/partitions/test_insert_into_partitioned_table_hour.test
 # group: [partitions]
 
 require-env ICEBERG_SERVER_AVAILABLE

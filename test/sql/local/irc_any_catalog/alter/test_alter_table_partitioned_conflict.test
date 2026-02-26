@@ -1,4 +1,4 @@
-# name: test/sql/local/irc/alter/test_alter_table_partitioned_conflict.test
+# name: test/sql/local/irc_any_catalog/alter/test_alter_table_partitioned_conflict.test
 # group: [alter]
 
 require-env ICEBERG_SERVER_AVAILABLE

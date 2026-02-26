@@ -1,4 +1,4 @@
-# name: test/sql/local/irc/insert/partitions/large/test_large_multiple_inserts.test
+# name: test/sql/local/irc_any_catalog/insert/partitions/large/test_large_multiple_inserts.test
 # description: Test many sequential inserts into a partitioned table, populating the manifest list with many entries
 # group: [large]
 

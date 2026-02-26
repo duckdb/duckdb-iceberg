@@ -1,4 +1,4 @@
-# name: test/sql/local/irc/insert/partitions/null_values/test_null_temporal_partition.test
+# name: test/sql/local/irc_any_catalog/insert/partitions/null_values/test_null_temporal_partition.test
 # description: Test inserting NULL values into temporal partition columns (year, month, day, hour)
 # group: [null_values]
 

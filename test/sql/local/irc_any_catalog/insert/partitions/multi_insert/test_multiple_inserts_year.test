@@ -1,4 +1,4 @@
-# name: test/sql/local/irc/insert/partitions/multi_insert/test_multiple_inserts_year.test
+# name: test/sql/local/irc_any_catalog/insert/partitions/multi_insert/test_multiple_inserts_year.test
 # group: [multi_insert]
 
 require-env ICEBERG_SERVER_AVAILABLE

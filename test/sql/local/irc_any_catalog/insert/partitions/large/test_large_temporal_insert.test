@@ -1,4 +1,4 @@
-# name: test/sql/local/irc/insert/partitions/large/test_large_temporal_insert.test
+# name: test/sql/local/irc_any_catalog/insert/partitions/large/test_large_temporal_insert.test
 # description: Test large insert into temporal-partitioned table with many rows
 # group: [large]
 

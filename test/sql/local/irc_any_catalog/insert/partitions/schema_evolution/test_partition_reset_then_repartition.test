@@ -1,4 +1,4 @@
-# name: test/sql/local/irc/insert/partitions/schema_evolution/test_partition_reset_then_repartition.test
+# name: test/sql/local/irc_any_catalog/insert/partitions/schema_evolution/test_partition_reset_then_repartition.test
 # description: Test RESET PARTITIONED BY (unpartition), then repartition and insert
 # group: [schema_evolution]
 

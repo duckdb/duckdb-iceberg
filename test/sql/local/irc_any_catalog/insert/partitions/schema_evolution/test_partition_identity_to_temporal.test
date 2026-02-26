@@ -1,4 +1,4 @@
-# name: test/sql/local/irc/insert/partitions/schema_evolution/test_partition_identity_to_temporal.test
+# name: test/sql/local/irc_any_catalog/insert/partitions/schema_evolution/test_partition_identity_to_temporal.test
 # description: Test evolving from identity partition to temporal partition and back
 # group: [schema_evolution]
 

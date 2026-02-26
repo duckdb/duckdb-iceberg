@@ -1,4 +1,4 @@
-# name: test/sql/local/irc/insert/partitions/unsupported/test_bucket_transform.test
+# name: test/sql/local/irc_any_catalog/insert/partitions/unsupported/test_bucket_transform.test
 # description: Test that BUCKET partition transform is rejected for INSERT
 # group: [unsupported]
 

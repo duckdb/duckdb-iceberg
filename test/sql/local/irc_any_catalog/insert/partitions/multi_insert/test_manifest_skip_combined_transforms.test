@@ -1,4 +1,4 @@
-# name: test/sql/local/irc/insert/partitions/multi_insert/test_manifest_skip_combined_transforms.test
+# name: test/sql/local/irc_any_catalog/insert/partitions/multi_insert/test_manifest_skip_combined_transforms.test
 # description: Test manifest skipping with combined transforms (identity + year) across multiple inserts
 # group: [multi_insert]
 

@@ -1,4 +1,4 @@
-# name: test/sql/local/irc/insert/partitions/schema_evolution/test_partition_revert_to_previous.test
+# name: test/sql/local/irc_any_catalog/insert/partitions/schema_evolution/test_partition_revert_to_previous.test
 # description: Test setting partition schema back to a previous schema and verifying data integrity
 # group: [schema_evolution]
 

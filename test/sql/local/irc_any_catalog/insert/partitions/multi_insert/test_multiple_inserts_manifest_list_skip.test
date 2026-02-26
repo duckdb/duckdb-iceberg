@@ -1,4 +1,4 @@
-# name: test/sql/local/irc/insert/partitions/multi_insert/test_multiple_inserts_manifest_list_skip.test
+# name: test/sql/local/irc_any_catalog/insert/partitions/multi_insert/test_multiple_inserts_manifest_list_skip.test
 # description: Verify that manifest list entries are skipped using partition bounds across multiple inserts
 # group: [multi_insert]
 

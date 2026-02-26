@@ -1,4 +1,4 @@
-# name: test/sql/local/irc/insert/partitions/combined/test_triple_partition.test
+# name: test/sql/local/irc_any_catalog/insert/partitions/combined/test_triple_partition.test
 # group: [combined]
 
 require-env ICEBERG_SERVER_AVAILABLE
