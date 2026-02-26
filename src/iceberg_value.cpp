@@ -422,7 +422,7 @@ SerializeResult IcebergValue::SerializeValue(Value input_value, LogicalType &col
 				// check if we need padding
 				if (is_negative && ((get_8 & 0x80) != 0x80)) {
 					// negative padding is needed. the number is negative
-					// but the most significatn byte is not 1
+					// but the most significant byte is not 1
 					needs_negative_padding = true;
 				} else if (!is_negative && ((get_8 & 0x80) == 0x80)) {
 					// yes padding needed, number is positive but most significant byte is 1,

@@ -1,0 +1,93 @@
+# name: test/sql/local/irc_any_catalog/insert/partitions/schema_evolution/test_partition_multiple_schema_changes_with_inserts.test
+# description: Test multiple partition schema changes with inserts in between, verifying manifest list entries from different specs
+# group: [schema_evolution]
+
+require-env ICEBERG_SERVER_AVAILABLE
+
+require-env SECRETS_CREATED_AND_CATALOG_ATTACHED
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+create schema if not exists my_datalake.default;
+
+statement ok
+drop table if exists my_datalake.default.test_multi_schema_insert;
+
+# Start with partition by a (integer)
+statement ok
+CREATE TABLE my_datalake.default.test_multi_schema_insert (a int, b int, ts TIMESTAMP)
+PARTITIONED BY (a);
+
+# Insert batch 1: partitioned by a
+statement ok
+insert into my_datalake.default.test_multi_schema_insert
+select range % 3, range, make_timestamp(2020, 1, 1, 12, 0, 0) from range(30);
+
+# Change to year(ts)
+statement ok
+ALTER TABLE my_datalake.default.test_multi_schema_insert SET PARTITIONED BY (year(ts));
+
+# Insert batch 2: partitioned by year(ts)
+statement ok
+insert into my_datalake.default.test_multi_schema_insert
+select range % 3, 100 + range, make_timestamp(2021, 6, 15, 12, 0, 0) from range(30);
+
+# Change to partition by b
+statement ok
+ALTER TABLE my_datalake.default.test_multi_schema_insert SET PARTITIONED BY (b);
+
+# Insert batch 3: partitioned by b
+statement ok
+insert into my_datalake.default.test_multi_schema_insert
+select range % 3, 200 + range, make_timestamp(2022, 3, 10, 12, 0, 0) from range(30);
+
+# Change to month(ts)
+statement ok
+ALTER TABLE my_datalake.default.test_multi_schema_insert SET PARTITIONED BY (month(ts));
+
+# Insert batch 4: partitioned by month(ts)
+statement ok
+insert into my_datalake.default.test_multi_schema_insert
+select range % 3, 300 + range, make_timestamp(2023, (range % 6) + 1, 15, 12, 0, 0) from range(30);
+
+# Revert to partition by a (same as original)
+statement ok
+ALTER TABLE my_datalake.default.test_multi_schema_insert SET PARTITIONED BY (a);
+
+# Insert batch 5: partitioned by a again
+statement ok
+insert into my_datalake.default.test_multi_schema_insert
+select range % 3, 400 + range, make_timestamp(2024, 8, 1, 12, 0, 0) from range(30);
+
+# Total: 5 * 30 = 150
+query I
+select count(*) from my_datalake.default.test_multi_schema_insert;
+----
+150
+
+# Verify data correctness
+statement ok
+create table local_multi_schema as
+select range % 3 as a, range as b, make_timestamp(2020, 1, 1, 12, 0, 0) as ts from range(30)
+union all select range % 3, 100 + range, make_timestamp(2021, 6, 15, 12, 0, 0) from range(30)
+union all select range % 3, 200 + range, make_timestamp(2022, 3, 10, 12, 0, 0) from range(30)
+union all select range % 3, 300 + range, make_timestamp(2023, (range % 6) + 1, 15, 12, 0, 0) from range(30)
+union all select range % 3, 400 + range, make_timestamp(2024, 8, 1, 12, 0, 0) from range(30);
+
+query III nosort expected_result
+select * from local_multi_schema order by b;
+----
+
+query III nosort expected_result
+select * from my_datalake.default.test_multi_schema_insert order by b;
+----

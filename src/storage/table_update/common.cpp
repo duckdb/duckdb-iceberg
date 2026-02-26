@@ -5,7 +5,7 @@
 
 namespace duckdb {
 
-static rest_api_objects::Schema CopySchema(IcebergTableSchema &schema) {
+static rest_api_objects::Schema CopySchema(const IcebergTableSchema &schema) {
 	// the rest api objects are currently not copyable. Without having to modify generated code
 	//  the easiest way to copy for now is to write the schema to string, then parse it again
 	std::unique_ptr<yyjson_mut_doc, YyjsonDocDeleter> doc_p(yyjson_mut_doc_new(nullptr));
@@ -28,6 +28,9 @@ AddSchemaUpdate::AddSchemaUpdate(IcebergTableInformation &table_info)
 		throw InvalidConfigurationException("cannot assign a current schema id for a schema that does not yet exist");
 	};
 	table_schema = table_info.table_metadata.schemas[current_schema_id];
+	if (table_info.table_metadata.HasLastAssignedColumnFieldId()) {
+		last_column_id = table_info.table_metadata.GetLastAssignedColumnFieldId();
+	}
 }
 
 void AddSchemaUpdate::CreateUpdate(DatabaseInstance &db, ClientContext &context,
@@ -37,13 +40,14 @@ void AddSchemaUpdate::CreateUpdate(DatabaseInstance &db, ClientContext &context,
 	update.has_add_schema_update = true;
 	update.add_schema_update.has_action = true;
 	update.add_schema_update.action = "add-schema";
-	auto &current_schema = table_info.table_metadata.GetLatestSchema();
-	auto &schema = table_info.table_metadata.schemas[current_schema.schema_id];
-	update.add_schema_update.schema = CopySchema(*schema.get());
+
+	auto &schema_to_copy = table_schema ? *table_schema : table_info.table_metadata.GetLatestSchema();
+	update.add_schema_update.schema = CopySchema(schema_to_copy);
+
 	// last column id is technically deprecated, but some catalogs still use it (nessie).
-	if (table_info.table_metadata.HasLastColumnId()) {
+	if (last_column_id.IsValid()) {
 		update.add_schema_update.has_last_column_id = true;
-		update.add_schema_update.last_column_id = table_info.table_metadata.GetLastColumnId();
+		update.add_schema_update.last_column_id = last_column_id.GetIndex();
 	}
 }
 
@@ -72,6 +76,69 @@ void AssertCreateRequirement::CreateRequirement(DatabaseInstance &db, ClientCont
 	auto &req = commit_state.table_change.requirements.back();
 	req.assert_create.type.value = "assert-create";
 	req.has_assert_create = true;
+}
+
+AssertCurrentSchemaIdRequirement::AssertCurrentSchemaIdRequirement(IcebergTableInformation &table_info)
+    : IcebergTableRequirement(IcebergTableRequirementType::ASSERT_CURRENT_SCHEMA_ID, table_info) {
+	current_schema_id = table_info.table_metadata.current_schema_id;
+}
+
+void AssertCurrentSchemaIdRequirement::CreateRequirement(DatabaseInstance &db, ClientContext &context,
+                                                         IcebergCommitState &commit_state) {
+	commit_state.table_change.requirements.push_back(rest_api_objects::TableRequirement());
+	auto &req = commit_state.table_change.requirements.back();
+	req.has_assert_current_schema_id = true;
+	req.assert_current_schema_id.type.value = "assert-current-schema-id";
+	req.assert_current_schema_id.current_schema_id = current_schema_id;
+}
+
+AssertLastAssignedColumnFieldIdRequirement::AssertLastAssignedColumnFieldIdRequirement(
+    IcebergTableInformation &table_info)
+    : IcebergTableRequirement(IcebergTableRequirementType::ASSERT_LAST_ASSIGNED_FIELD_ID, table_info) {
+	D_ASSERT(table_info.table_metadata.HasLastAssignedColumnFieldId());
+	last_assigned_column_field_id = static_cast<int32_t>(table_info.table_metadata.GetLastAssignedColumnFieldId());
+}
+
+void AssertLastAssignedColumnFieldIdRequirement::CreateRequirement(DatabaseInstance &db, ClientContext &context,
+                                                                   IcebergCommitState &commit_state) {
+	commit_state.table_change.requirements.push_back(rest_api_objects::TableRequirement());
+	auto &req = commit_state.table_change.requirements.back();
+	req.has_assert_last_assigned_field_id = true;
+	req.assert_last_assigned_field_id.type.value = "assert-last-assigned-field-id";
+	req.assert_last_assigned_field_id.last_assigned_field_id = last_assigned_column_field_id;
+}
+
+AssertLastAssignedPartitionIdRequirement::AssertLastAssignedPartitionIdRequirement(IcebergTableInformation &table_info)
+    : IcebergTableRequirement(IcebergTableRequirementType::ASSERT_LAST_ASSIGNED_PARTITION_ID, table_info) {
+	if (table_info.table_metadata.HasLastPartitionId()) {
+		last_assigned_partition_id = table_info.table_metadata.GetLastPartitionFieldId();
+	} else {
+		// If no partition field IDs have been assigned, use 999 as the base (partition fields start at 1000)
+		last_assigned_partition_id = 999;
+	}
+}
+
+void AssertLastAssignedPartitionIdRequirement::CreateRequirement(DatabaseInstance &db, ClientContext &context,
+                                                                 IcebergCommitState &commit_state) {
+	commit_state.table_change.requirements.push_back(rest_api_objects::TableRequirement());
+	auto &req = commit_state.table_change.requirements.back();
+	req.has_assert_last_assigned_partition_id = true;
+	req.assert_last_assigned_partition_id.type.value = "assert-last-assigned-partition-id";
+	req.assert_last_assigned_partition_id.last_assigned_partition_id = last_assigned_partition_id;
+}
+
+AssertDefaultSpecIdRequirement::AssertDefaultSpecIdRequirement(IcebergTableInformation &table_info)
+    : IcebergTableRequirement(IcebergTableRequirementType::ASSERT_DEFAULT_SPEC_ID, table_info) {
+	default_spec_id = table_info.table_metadata.default_spec_id;
+}
+
+void AssertDefaultSpecIdRequirement::CreateRequirement(DatabaseInstance &db, ClientContext &context,
+                                                       IcebergCommitState &commit_state) {
+	commit_state.table_change.requirements.push_back(rest_api_objects::TableRequirement());
+	auto &req = commit_state.table_change.requirements.back();
+	req.has_assert_default_spec_id = true;
+	req.assert_default_spec_id.type.value = "assert-default-spec-id";
+	req.assert_default_spec_id.default_spec_id = default_spec_id;
 }
 
 UpgradeFormatVersion::UpgradeFormatVersion(IcebergTableInformation &table_info)
@@ -114,6 +181,7 @@ void AddPartitionSpec::CreateUpdate(DatabaseInstance &db, ClientContext &context
 	req.add_partition_spec_update.has_action = true;
 	req.add_partition_spec_update.action = "add-spec";
 	req.add_partition_spec_update.spec.has_spec_id = true;
+	// need to get the spec id from table_info() so we can also check updated tables.
 	req.add_partition_spec_update.spec.spec_id = table_info.table_metadata.default_spec_id;
 	idx_t partition_spec_id = req.add_partition_spec_update.spec.spec_id;
 	if (table_info.table_metadata.HasPartitionSpec()) {
@@ -185,7 +253,7 @@ void SetDefaultSpec::CreateUpdate(DatabaseInstance &db, ClientContext &context,
 	req.has_set_default_spec_update = true;
 	req.set_default_spec_update.has_action = true;
 	req.set_default_spec_update.action = "set-default-spec";
-	req.set_default_spec_update.spec_id = 0;
+	req.set_default_spec_update.spec_id = table_info.table_metadata.default_spec_id;
 }
 
 SetProperties::SetProperties(IcebergTableInformation &table_info, case_insensitive_map_t<string> properties)

@@ -1,0 +1,58 @@
+# name: test/sql/local/irc_any_catalog/insert/partitions/identity/test_identity_int.test
+# group: [identity]
+
+require-env ICEBERG_SERVER_AVAILABLE
+
+require-env SECRETS_CREATED_AND_CATALOG_ATTACHED
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+create schema if not exists my_datalake.default;
+
+statement ok
+drop table if exists my_datalake.default.test_identity_int;
+
+statement ok
+CREATE TABLE my_datalake.default.test_identity_int (a int, b varchar)
+PARTITIONED BY (a);
+
+statement ok
+insert into my_datalake.default.test_identity_int select range % 5, 'val_' || range::VARCHAR from range(50);
+
+statement ok
+create table local_identity_int as select range % 5 as a, 'val_' || range::VARCHAR as b from range(50);
+
+query II nosort expected_result
+select * from local_identity_int order by b;
+----
+
+query II nosort expected_result
+select * from my_datalake.default.test_identity_int order by b;
+----
+
+# Verify row count
+query I
+select count(*) from my_datalake.default.test_identity_int;
+----
+50
+
+# Filter on partition column
+query I
+select count(*) from my_datalake.default.test_identity_int where a = 0;
+----
+10
+
+query I
+select count(*) from my_datalake.default.test_identity_int where a = 3;
+----
+10

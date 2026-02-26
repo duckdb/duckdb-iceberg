@@ -1,0 +1,85 @@
+# name: test/sql/local/irc_any_catalog/insert/partitions/schema_evolution/test_partition_reset_then_repartition.test
+# description: Test RESET PARTITIONED BY (unpartition), then repartition and insert
+# group: [schema_evolution]
+
+require-env ICEBERG_SERVER_AVAILABLE
+
+require-env SECRETS_CREATED_AND_CATALOG_ATTACHED
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+create schema if not exists my_datalake.default;
+
+statement ok
+drop table if exists my_datalake.default.test_reset_repartition;
+
+# Start partitioned by a
+statement ok
+CREATE TABLE my_datalake.default.test_reset_repartition (a int, b int)
+PARTITIONED BY (a);
+
+# Insert with partition by a
+statement ok
+insert into my_datalake.default.test_reset_repartition
+select range % 3, range from range(15);
+
+query I
+select count(*) from my_datalake.default.test_reset_repartition;
+----
+15
+
+# Reset partitioning (make unpartitioned)
+statement ok
+ALTER TABLE my_datalake.default.test_reset_repartition RESET PARTITIONED BY;
+
+# Insert into unpartitioned table
+statement ok
+insert into my_datalake.default.test_reset_repartition
+select range % 3, 100 + range from range(15);
+
+query I
+select count(*) from my_datalake.default.test_reset_repartition;
+----
+30
+
+# Re-partition by b
+statement ok
+ALTER TABLE my_datalake.default.test_reset_repartition SET PARTITIONED BY (b);
+
+# Insert with partition by b
+statement ok
+insert into my_datalake.default.test_reset_repartition
+select range % 3, 200 + range from range(15);
+
+# Total: 15 + 15 + 15 = 45
+query I
+select count(*) from my_datalake.default.test_reset_repartition;
+----
+45
+
+# Verify data
+statement ok
+create table local_reset_repart as
+select range % 3 as a, range as b from range(15)
+union all
+select range % 3, 100 + range from range(15)
+union all
+select range % 3, 200 + range from range(15);
+
+query II nosort expected_result
+select * from local_reset_repart order by b;
+----
+
+query II nosort expected_result
+select * from my_datalake.default.test_reset_repartition order by b;
+----

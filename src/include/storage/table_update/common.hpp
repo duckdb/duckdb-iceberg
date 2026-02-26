@@ -23,7 +23,8 @@ struct AddSchemaUpdate : public IcebergTableUpdate {
 	explicit AddSchemaUpdate(IcebergTableInformation &table_info);
 	void CreateUpdate(DatabaseInstance &db, ClientContext &context, IcebergCommitState &commit_state) const override;
 
-	optional_ptr<IcebergTableSchema> table_schema = nullptr;
+	shared_ptr<IcebergTableSchema> table_schema = nullptr;
+	optional_idx last_column_id;
 };
 
 struct AssertCreateRequirement : public IcebergTableRequirement {
@@ -31,6 +32,44 @@ struct AssertCreateRequirement : public IcebergTableRequirement {
 
 	explicit AssertCreateRequirement(IcebergTableInformation &table_info);
 	void CreateRequirement(DatabaseInstance &db, ClientContext &context, IcebergCommitState &commit_state);
+};
+
+struct AssertCurrentSchemaIdRequirement : public IcebergTableRequirement {
+	static constexpr const IcebergTableRequirementType TYPE = IcebergTableRequirementType::ASSERT_CURRENT_SCHEMA_ID;
+
+	explicit AssertCurrentSchemaIdRequirement(IcebergTableInformation &table_info);
+	void CreateRequirement(DatabaseInstance &db, ClientContext &context, IcebergCommitState &commit_state);
+
+	int32_t current_schema_id;
+};
+
+struct AssertLastAssignedColumnFieldIdRequirement : public IcebergTableRequirement {
+	static constexpr const IcebergTableRequirementType TYPE =
+	    IcebergTableRequirementType::ASSERT_LAST_ASSIGNED_FIELD_ID;
+
+	explicit AssertLastAssignedColumnFieldIdRequirement(IcebergTableInformation &table_info);
+	void CreateRequirement(DatabaseInstance &db, ClientContext &context, IcebergCommitState &commit_state);
+
+	int32_t last_assigned_column_field_id;
+};
+
+struct AssertLastAssignedPartitionIdRequirement : public IcebergTableRequirement {
+	static constexpr const IcebergTableRequirementType TYPE =
+	    IcebergTableRequirementType::ASSERT_LAST_ASSIGNED_PARTITION_ID;
+
+	explicit AssertLastAssignedPartitionIdRequirement(IcebergTableInformation &table_info);
+	void CreateRequirement(DatabaseInstance &db, ClientContext &context, IcebergCommitState &commit_state);
+
+	int32_t last_assigned_partition_id;
+};
+
+struct AssertDefaultSpecIdRequirement : public IcebergTableRequirement {
+	static constexpr const IcebergTableRequirementType TYPE = IcebergTableRequirementType::ASSERT_DEFAULT_SPEC_ID;
+
+	explicit AssertDefaultSpecIdRequirement(IcebergTableInformation &table_info);
+	void CreateRequirement(DatabaseInstance &db, ClientContext &context, IcebergCommitState &commit_state);
+
+	int32_t default_spec_id;
 };
 
 struct AssignUUIDUpdate : public IcebergTableUpdate {

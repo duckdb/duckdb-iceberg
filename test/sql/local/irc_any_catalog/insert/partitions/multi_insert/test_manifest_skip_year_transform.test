@@ -1,0 +1,92 @@
+# name: test/sql/local/irc_any_catalog/insert/partitions/multi_insert/test_manifest_skip_year_transform.test
+# description: Verify manifest list entries are skipped for year-partitioned tables with temporal filters
+# group: [multi_insert]
+
+require-env ICEBERG_SERVER_AVAILABLE
+
+require-env SECRETS_CREATED_AND_CATALOG_ATTACHED
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+create schema if not exists my_datalake.default;
+
+statement ok
+drop table if exists my_datalake.default.test_manifest_skip_year;
+
+statement ok
+CREATE TABLE my_datalake.default.test_manifest_skip_year (id int, ts TIMESTAMP)
+PARTITIONED BY (year(ts));
+
+# Insert 1: all data from year 2018
+statement ok
+insert into my_datalake.default.test_manifest_skip_year
+select range, make_timestamp(2018, (range % 12) + 1, 15, 12, 0, 0) from range(50);
+
+# Insert 2: all data from year 2020
+statement ok
+insert into my_datalake.default.test_manifest_skip_year
+select 100 + range, make_timestamp(2020, (range % 12) + 1, 15, 12, 0, 0) from range(50);
+
+# Insert 3: all data from year 2022
+statement ok
+insert into my_datalake.default.test_manifest_skip_year
+select 200 + range, make_timestamp(2022, (range % 12) + 1, 15, 12, 0, 0) from range(50);
+
+statement ok
+CALL enable_logging('Iceberg');
+
+statement ok
+CALL truncate_duckdb_logs();
+
+# Query only year 2020 - should skip manifest files for 2018 and 2022
+query I
+select count(*) from my_datalake.default.test_manifest_skip_year
+where ts >= '2020-01-01'::TIMESTAMP and ts < '2021-01-01'::TIMESTAMP;
+----
+50
+
+# 2 manifest files should be skipped (2018 and 2022)
+query I
+select count(*) from duckdb_logs() where type = 'Iceberg' and message like '%skipped%manifest_file%';
+----
+2
+
+statement ok
+CALL truncate_duckdb_logs();
+
+# Query year 2022 - should skip 2018 and 2020
+query I
+select count(*) from my_datalake.default.test_manifest_skip_year
+where ts >= '2022-01-01'::TIMESTAMP;
+----
+50
+
+query I
+select count(*) from duckdb_logs() where type = 'Iceberg' and message like '%skipped%manifest_file%';
+----
+2
+
+statement ok
+CALL truncate_duckdb_logs();
+
+# Query year < 2019 - should skip 2020 and 2022
+query I
+select count(*) from my_datalake.default.test_manifest_skip_year
+where ts < '2019-01-01'::TIMESTAMP;
+----
+50
+
+query I
+select count(*) from duckdb_logs() where type = 'Iceberg' and message like '%skipped%manifest_file%';
+----
+2

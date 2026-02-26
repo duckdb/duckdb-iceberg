@@ -1,0 +1,68 @@
+# name: test/sql/local/irc_any_catalog/insert/partitions/null_values/test_all_null_partition.test
+# description: Test inserting when ALL partition values are NULL
+# group: [null_values]
+
+require-env ICEBERG_SERVER_AVAILABLE
+
+require-env SECRETS_CREATED_AND_CATALOG_ATTACHED
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+create schema if not exists my_datalake.default;
+
+statement ok
+drop table if exists my_datalake.default.test_all_null_partition;
+
+statement ok
+CREATE TABLE my_datalake.default.test_all_null_partition (id int, category varchar)
+PARTITIONED BY (category);
+
+# Insert all NULLs for partition column
+statement ok
+insert into my_datalake.default.test_all_null_partition
+select range, NULL::varchar from range(20);
+
+query I
+select count(*) from my_datalake.default.test_all_null_partition;
+----
+20
+
+query I
+select count(*) from my_datalake.default.test_all_null_partition where category is null;
+----
+20
+
+query I
+select count(*) from my_datalake.default.test_all_null_partition where category is not null;
+----
+0
+
+# Now insert some non-NULL values
+statement ok
+insert into my_datalake.default.test_all_null_partition
+select 100 + range, 'value_' || range::VARCHAR from range(10);
+
+query I
+select count(*) from my_datalake.default.test_all_null_partition;
+----
+30
+
+query I
+select count(*) from my_datalake.default.test_all_null_partition where category is null;
+----
+20
+
+query I
+select count(*) from my_datalake.default.test_all_null_partition where category is not null;
+----
+10

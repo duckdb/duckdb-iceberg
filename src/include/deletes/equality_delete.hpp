@@ -5,6 +5,7 @@
 #include "duckdb/common/types/value.hpp"
 #include "duckdb/common/typedefs.hpp"
 #include "duckdb/planner/expression.hpp"
+#include "metadata/iceberg_manifest.hpp"
 
 namespace duckdb {
 
@@ -29,13 +30,13 @@ public:
 
 struct IcebergEqualityDeleteFile {
 public:
-	IcebergEqualityDeleteFile(vector<pair<int32_t, Value>> partition_values, int32_t partition_spec_id)
-	    : partition_values(partition_values), partition_spec_id(partition_spec_id) {
+	IcebergEqualityDeleteFile(vector<DataFilePartitionInfo> partition_info_p, int32_t partition_spec_id)
+	    : partition_info(std::move(partition_info_p)), partition_spec_id(partition_spec_id) {
 	}
 
 public:
-	//! The partition value (struct) if the equality delete has partition information
-	vector<pair<int32_t, Value>> partition_values;
+	//! The partition info if the equality delete has partition information
+	vector<DataFilePartitionInfo> partition_info;
 	int32_t partition_spec_id;
 	vector<IcebergEqualityDeleteRow> rows;
 };

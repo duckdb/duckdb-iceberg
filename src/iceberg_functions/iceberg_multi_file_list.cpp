@@ -427,7 +427,8 @@ bool IcebergMultiFileList::FileMatchesFilter(const IcebergManifestEntry &manifes
 		auto &metadata = GetMetadata();
 		auto &data_file = manifest_entry.data_file;
 		// First check if there are partitions
-		if (!data_file.partition_values.empty()) {
+		if (!data_file.partition_info.empty()) {
+			// check if the index is in the partition info.
 			auto partition_spec_it = metadata.partition_specs.find(manifest_entry.partition_spec_id);
 			if (partition_spec_it == metadata.partition_specs.end()) {
 				throw InvalidConfigurationException(
@@ -452,16 +453,15 @@ bool IcebergMultiFileList::FileMatchesFilter(const IcebergManifestEntry &manifes
 				// initialize dummy stats
 				auto stats = IcebergPredicateStats();
 				bool found_partition_field = false;
-				for (auto &partition_val : data_file.partition_values) {
-					auto partition_field_id = partition_val.first;
-					if (field.partition_field_id == partition_field_id) {
+				for (auto &partition_val : data_file.partition_info) {
+					if (field.partition_field_id == partition_val.field_id) {
 						found_partition_field = true;
-						stats.lower_bound = partition_val.second;
-						stats.upper_bound = partition_val.second;
+						stats.lower_bound = partition_val.value;
+						stats.upper_bound = partition_val.value;
 						stats.has_upper_bounds = true;
 						stats.has_lower_bounds = true;
 						// set null stats for partitioned column.
-						if (partition_val.second.IsNull()) {
+						if (partition_val.value.IsNull()) {
 							// partition values can be null
 							stats.has_null = true;
 						} else {
@@ -773,9 +773,9 @@ IcebergMultiFileList::GetEqualityDeletesForFile(const IcebergManifestEntry &mani
 					//! delete file.
 					continue;
 				}
-				D_ASSERT(file.partition_values.size() == data_file.partition_values.size());
-				for (idx_t i = 0; i < file.partition_values.size(); i++) {
-					if (file.partition_values[i] != data_file.partition_values[i]) {
+				D_ASSERT(file.partition_info.size() == data_file.partition_info.size());
+				for (idx_t i = 0; i < file.partition_info.size(); i++) {
+					if (file.partition_info[i] != data_file.partition_info[i]) {
 						//! Same partition spec id, but the partitioning information doesn't match, delete file doesn't
 						//! apply.
 						continue;

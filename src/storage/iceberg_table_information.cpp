@@ -3,7 +3,10 @@
 #include "catalog_api.hpp"
 #include "duckdb/common/case_insensitive_map.hpp"
 #include "duckdb/common/string_util.hpp"
+#include "duckdb/parser/expression/columnref_expression.hpp"
+#include "duckdb/parser/expression/function_expression.hpp"
 #include "duckdb/common/exception/transaction_exception.hpp"
+#include "duckdb/common/types/string.hpp"
 #include "duckdb/common/types/timestamp.hpp"
 #include "storage/iceberg_transaction.hpp"
 #include "storage/iceberg_transaction_data.hpp"
@@ -13,6 +16,7 @@
 #include "storage/authorization/oauth2.hpp"
 #include "storage/authorization/sigv4.hpp"
 #include "storage/authorization/none.hpp"
+#include "metadata/iceberg_transform.hpp"
 
 namespace duckdb {
 
@@ -254,6 +258,155 @@ optional_ptr<CatalogEntry> IcebergTableInformation::CreateSchemaVersion(IcebergT
 	return result;
 }
 
+idx_t IcebergTableInformation::GetMaxSchemaId() {
+	idx_t max_schema_id = 0;
+	if (schema_versions.empty()) {
+		throw CatalogException("No schema versions found for table '%s.%s'", schema.name, name);
+	}
+	for (auto &schema : schema_versions) {
+		if (schema.first > max_schema_id) {
+			max_schema_id = schema.first;
+		}
+	}
+	return max_schema_id;
+}
+
+idx_t IcebergTableInformation::GetNextPartitionSpecId() {
+	idx_t max_partition_spec_id = table_metadata.default_spec_id;
+	for (auto &schema : table_metadata.GetPartitionSpecs()) {
+		if (schema.first > max_partition_spec_id) {
+			max_partition_spec_id = schema.first;
+		}
+	}
+	return max_partition_spec_id + 1;
+}
+
+int64_t IcebergTableInformation::GetExistingSpecId(IcebergPartitionSpec &spec) {
+	int64_t existing_spec_id = -1;
+	for (auto &existing_spec : table_metadata.GetPartitionSpecs()) {
+		bool fields_match = true;
+		if (existing_spec.second.fields.size() != spec.fields.size()) {
+			continue;
+		}
+		for (idx_t field_index = 0; field_index < existing_spec.second.fields.size(); field_index++) {
+			auto existing_partition_col_source_id = existing_spec.second.fields[field_index].source_id;
+			// if the number of partition columns don't match, the specs are not the same
+			auto new_spec_col_source_id = spec.fields[field_index].source_id;
+			if (existing_partition_col_source_id != new_spec_col_source_id) {
+				fields_match = false;
+				break;
+			}
+			auto existing_partition_col_transform = existing_spec.second.fields[field_index].transform.RawType();
+			auto new_spec_col_transform = spec.fields[field_index].transform.RawType();
+			if (existing_partition_col_transform != new_spec_col_transform) {
+				fields_match = false;
+				break;
+			}
+		}
+		if (!fields_match) {
+			continue;
+		}
+		// source ids are the same, transforms are the same, and partition amount is the same
+		// so we just use the existing spec.
+		existing_spec_id = existing_spec.second.spec_id;
+		break;
+	}
+	return existing_spec_id;
+}
+void IcebergTableInformation::SetPartitionedBy(IcebergTransaction &transaction,
+                                               const vector<unique_ptr<ParsedExpression>> &partition_keys,
+                                               const IcebergTableSchema &schema, bool first_partition_spec) {
+	idx_t base_partition_field_id = 1000;
+	if (!first_partition_spec && table_metadata.HasLastPartitionId()) {
+		base_partition_field_id = table_metadata.GetLastPartitionFieldId() + 1;
+	}
+
+	idx_t new_spec_id = 0;
+	if (!first_partition_spec) {
+		new_spec_id = GetNextPartitionSpecId();
+	}
+
+	IcebergPartitionSpec new_spec;
+	new_spec.spec_id = new_spec_id;
+
+	for (auto &key : partition_keys) {
+		string column_name;
+		string transform_name = "identity";
+		idx_t bucket_modulo_val;
+
+		if (key->type == ExpressionType::COLUMN_REF) {
+			auto &colref = key->Cast<ColumnRefExpression>();
+			column_name = colref.column_names.back();
+		} else if (key->type == ExpressionType::FUNCTION) {
+			auto &funcexpr = key->Cast<FunctionExpression>();
+			transform_name = funcexpr.function_name;
+			if (funcexpr.children.empty() || funcexpr.children[0]->type != ExpressionType::COLUMN_REF) {
+				throw NotImplementedException("Transforms are only supported on column references, not %s",
+				                              EnumUtil::ToChars(funcexpr.children[0]->type));
+			}
+			auto &colref = funcexpr.children[0]->Cast<ColumnRefExpression>();
+			column_name = colref.column_names.back();
+			if (transform_name == "bucket" || transform_name == "truncate") {
+				if (funcexpr.children.size() < 2) {
+					throw InvalidInputException("%s requires a numeric argument, e.g. %s(col, 16)", transform_name,
+					                            transform_name);
+				}
+				auto &param_expr = *funcexpr.children[1];
+				if (param_expr.type != ExpressionType::VALUE_CONSTANT) {
+					throw InvalidInputException("%s second argument must be a constant integer", transform_name);
+				}
+				auto &const_expr = param_expr.Cast<ConstantExpression>();
+				bucket_modulo_val = const_expr.value.GetValue<int32_t>();
+			}
+		} else {
+			throw NotImplementedException("Unsupported partition key type: %s", key->ToString());
+		}
+
+		// Find source_id
+		int32_t source_id = -1;
+		for (auto &col : schema.columns) {
+			if (StringUtil::CIEquals(col->name, column_name)) {
+				source_id = col->id;
+				break;
+			}
+		}
+		if (source_id == -1) {
+			throw CatalogException("Column \"%s\" not found in schema", column_name);
+		}
+
+		IcebergPartitionSpecField field;
+		field.name = column_name;
+		field.transform = IcebergTransform(transform_name);
+		switch (field.transform.Type()) {
+		case IcebergTransformType::BUCKET:
+		case IcebergTransformType::TRUNCATE:
+			field.transform.SetBucketOrModuloValue(bucket_modulo_val);
+			break;
+		default:
+			break;
+		}
+		field.source_id = source_id;
+		field.partition_field_id = base_partition_field_id + new_spec.fields.size();
+		new_spec.fields.push_back(std::move(field));
+	}
+
+	// if spec definition already exists in a previous spec definition, set it to that spec id
+	// (some catalog may allow duplicate definitions, others not)
+	int64_t existing_spec_id = GetExistingSpecId(new_spec);
+	if (existing_spec_id >= 0) {
+		table_metadata.default_spec_id = existing_spec_id;
+		SetDefaultSpec(transaction);
+		return;
+	}
+
+	table_metadata.partition_specs[new_spec_id] = std::move(new_spec);
+	table_metadata.default_spec_id = new_spec_id;
+	if (!first_partition_spec) {
+		AddPartitionSpec(transaction);
+		SetDefaultSpec(transaction);
+	}
+}
+
 optional_ptr<CatalogEntry> IcebergTableInformation::GetSchemaVersion(optional_ptr<BoundAtClause> at) {
 	D_ASSERT(!schema_versions.empty());
 	auto snapshot_lookup = IcebergSnapshotLookup::FromAtClause(at);
@@ -415,6 +568,26 @@ void IcebergTableInformation::AddAssignUUID(IcebergTransaction &transaction) {
 void IcebergTableInformation::AddAssertCreate(IcebergTransaction &transaction) {
 	InitTransactionData(transaction);
 	transaction_data->TableAddAssertCreate();
+}
+
+void IcebergTableInformation::AddAssertCurrentSchemaId(IcebergTransaction &transaction) {
+	InitTransactionData(transaction);
+	transaction_data->TableAddAssertCurrentSchemaId();
+}
+
+void IcebergTableInformation::AddAssertLastAssignedColumnFieldId(IcebergTransaction &transaction) {
+	InitTransactionData(transaction);
+	transaction_data->TableAddAssertLastAssignedColumnFieldId();
+}
+
+void IcebergTableInformation::AddAssertLastAssignedPartitionId(IcebergTransaction &transaction) {
+	InitTransactionData(transaction);
+	transaction_data->TableAddAssertLastAssignedPartitionId();
+}
+
+void IcebergTableInformation::AddAssertDefaultSpecId(IcebergTransaction &transaction) {
+	InitTransactionData(transaction);
+	transaction_data->TableAddAssertDefaultSpecId();
 }
 
 void IcebergTableInformation::AddUpradeFormatVersion(IcebergTransaction &transaction) {

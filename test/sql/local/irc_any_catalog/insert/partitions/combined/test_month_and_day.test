@@ -1,0 +1,55 @@
+# name: test/sql/local/irc_any_catalog/insert/partitions/combined/test_month_and_day.test
+# group: [combined]
+
+require-env ICEBERG_SERVER_AVAILABLE
+
+require-env SECRETS_CREATED_AND_CATALOG_ATTACHED
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+create schema if not exists my_datalake.default;
+
+statement ok
+drop table if exists my_datalake.default.test_month_and_day;
+
+# Combine month and day transforms on different columns
+statement ok
+CREATE TABLE my_datalake.default.test_month_and_day (id int, created_at TIMESTAMP, updated_at TIMESTAMP)
+PARTITIONED BY (month(created_at), day(updated_at));
+
+statement ok
+insert into my_datalake.default.test_month_and_day
+select range,
+       make_timestamp(2020, (range % 3) + 1, 10, 12, 0, 0),
+       make_timestamp(2020, 6, (range % 5) + 1, 8, 0, 0)
+from range(30);
+
+statement ok
+create table local_month_day as
+select range as id,
+       make_timestamp(2020, (range % 3) + 1, 10, 12, 0, 0) as created_at,
+       make_timestamp(2020, 6, (range % 5) + 1, 8, 0, 0) as updated_at
+from range(30);
+
+query III nosort expected_result
+select * from local_month_day order by id;
+----
+
+query III nosort expected_result
+select * from my_datalake.default.test_month_and_day order by id;
+----
+
+query I
+select count(*) from my_datalake.default.test_month_and_day;
+----
+30

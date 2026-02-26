@@ -1,14 +1,118 @@
 #include "include/metadata/iceberg_manifest_list.hpp"
 #include "metadata/iceberg_manifest_list.hpp"
+#include "metadata/iceberg_partition_spec.hpp"
+#include "iceberg_value.hpp"
+#include "duckdb/common/exception/conversion_exception.hpp"
 #include "duckdb/main/database.hpp"
 #include "include/storage/iceberg_table_information.hpp"
-
 #include "duckdb/storage/buffer_manager.hpp"
+#include "include/metadata/iceberg_transform.hpp"
 
 namespace duckdb {
 
 vector<IcebergManifestFile> &IcebergManifestList::GetManifestFilesMutable() {
 	return manifest_entries;
+}
+
+void IcebergManifestFile::AddPartitions(const IcebergPartitionSpec &partition_spec) {
+	if (manifest_file.entries.empty() || partition_spec.fields.empty()) {
+		return;
+	}
+
+	// Check if any entry has partition info
+	for (auto &entry : manifest_file.entries) {
+		if (entry.data_file.partition_info.empty()) {
+			throw InvalidInputException(
+			    "Manifest file contains entries without partition info even though there is a partition spec");
+		}
+	}
+
+	partitions.has_partitions = true;
+
+	auto num_fields = partition_spec.fields.size();
+	partitions.field_summary.resize(num_fields);
+	vector<Value> min_values(num_fields);
+	vector<Value> max_values(num_fields);
+	vector<bool> initialized(num_fields, false);
+
+	for (auto &entry : manifest_file.entries) {
+		auto &data_file = entry.data_file;
+		for (idx_t i = 0; i < num_fields; i++) {
+			auto &spec_field = partition_spec.fields[i];
+
+			// Find the partition info entry matching this field's partition_field_id
+			const DataFilePartitionInfo *info_ptr = nullptr;
+			for (auto &pi : data_file.partition_info) {
+				if (pi.field_id == spec_field.partition_field_id) {
+					info_ptr = &pi;
+					break;
+				}
+			}
+
+			if (!info_ptr || info_ptr->value.IsNull()) {
+				partitions.field_summary[i].contains_null = true;
+				continue;
+			}
+
+			// Get the serialized type from the DataFilePartitionInfo's transform and source_type
+			auto serialized_type = info_ptr->transform.GetSerializedType(info_ptr->source_type);
+
+			// Cast the partition value (stored as VARCHAR) to the correct serialized type
+			auto typed_value = info_ptr->value.DefaultCastAs(serialized_type);
+
+			if (!initialized[i]) {
+				min_values[i] = typed_value;
+				max_values[i] = typed_value;
+				initialized[i] = true;
+			} else {
+				if (typed_value < min_values[i]) {
+					min_values[i] = typed_value;
+				}
+				if (typed_value > max_values[i]) {
+					max_values[i] = typed_value;
+				}
+			}
+		}
+	}
+
+	// Serialize the min/max values as bounds
+	for (idx_t i = 0; i < num_fields; i++) {
+		if (!initialized[i]) {
+			// All values for this field are null - set bounds to null BLOBs
+			partitions.field_summary[i].lower_bound = Value(LogicalType::BLOB);
+			partitions.field_summary[i].upper_bound = Value(LogicalType::BLOB);
+			continue;
+		}
+		auto &spec_field = partition_spec.fields[i];
+		// Find one DataFilePartitionInfo entry to get the type info
+		const DataFilePartitionInfo *info_ptr = nullptr;
+		for (auto &entry : manifest_file.entries) {
+			for (auto &pi : entry.data_file.partition_info) {
+				if (pi.field_id == spec_field.partition_field_id && !pi.value.IsNull()) {
+					info_ptr = &pi;
+					break;
+				}
+			}
+			if (info_ptr) {
+				break;
+			}
+		}
+		D_ASSERT(info_ptr);
+		auto serialized_type = info_ptr->transform.GetSerializedType(info_ptr->source_type);
+		auto lower_result = IcebergValue::SerializeValue(min_values[i], serialized_type, SerializeBound::LOWER_BOUND);
+		auto upper_result = IcebergValue::SerializeValue(max_values[i], serialized_type, SerializeBound::UPPER_BOUND);
+
+		if (lower_result.HasValue()) {
+			partitions.field_summary[i].lower_bound = lower_result.GetValue();
+		} else {
+			partitions.field_summary[i].lower_bound = Value(LogicalType::BLOB);
+		}
+		if (upper_result.HasValue()) {
+			partitions.field_summary[i].upper_bound = upper_result.GetValue();
+		} else {
+			partitions.field_summary[i].upper_bound = Value(LogicalType::BLOB);
+		}
+	}
 }
 
 const vector<IcebergManifestFile> &IcebergManifestList::GetManifestFilesConst() const {

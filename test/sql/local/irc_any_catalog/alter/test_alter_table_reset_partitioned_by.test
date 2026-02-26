@@ -1,0 +1,37 @@
+# name: test/sql/local/irc_any_catalog/alter/test_alter_table_reset_partitioned_by.test
+# group: [alter]
+
+require-env ICEBERG_SERVER_AVAILABLE
+
+require-env SECRETS_CREATED_AND_CATALOG_ATTACHED
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+drop table if exists my_datalake.default.alter_table_reset_partitioned_by;
+
+statement ok
+CREATE TABLE my_datalake.default.alter_table_reset_partitioned_by AS (select range a, range%2 b FROM range(10));
+
+statement ok
+Alter table my_datalake.default.alter_table_reset_partitioned_by SET PARTITIONED BY (b);
+
+statement ok
+insert into my_datalake.default.alter_table_reset_partitioned_by values (11, 20);
+
+statement ok
+alter table my_datalake.default.alter_table_reset_partitioned_by RESET PARTITIONED BY;
+
+#TODO verify data_file structure
+
+statement ok
+insert into my_datalake.default.alter_table_reset_partitioned_by values (100, 200);

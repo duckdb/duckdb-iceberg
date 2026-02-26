@@ -88,9 +88,7 @@ IcebergManifestFile IcebergTransactionData::CreateManifestFile(int64_t snapshot_
 	manifest_file.added_rows_count = 0;
 	manifest_file.existing_rows_count = 0;
 	manifest_file.deleted_rows_count = 0;
-	//! TODO: support partitions
-	manifest_file.partition_spec_id = 0;
-	//! manifest.partitions = CreateManifestPartition();
+	manifest_file.partition_spec_id = table_metadata.default_spec_id;
 
 	//! Add the files to the manifest
 	for (auto &manifest_entry : manifest_entries) {
@@ -124,7 +122,7 @@ IcebergManifestFile IcebergTransactionData::CreateManifestFile(int64_t snapshot_
 
 		manifest_entry.sequence_number = sequence_number;
 		manifest_entry.snapshot_id = snapshot_id;
-		manifest_entry.partition_spec_id = manifest_file.partition_spec_id;
+		manifest_entry.partition_spec_id = manifest_entry.partition_spec_id;
 		if (!manifest_file.has_min_sequence_number ||
 		    manifest_entry.sequence_number < manifest_file.min_sequence_number) {
 			manifest_file.min_sequence_number = manifest_entry.sequence_number;
@@ -134,6 +132,11 @@ IcebergManifestFile IcebergTransactionData::CreateManifestFile(int64_t snapshot_
 	manifest_file.added_snapshot_id = snapshot_id;
 	manifest.entries.insert(manifest.entries.end(), std::make_move_iterator(manifest_entries.begin()),
 	                        std::make_move_iterator(manifest_entries.end()));
+	// Compute partition field summaries (upper/lower bounds) for the manifest list entry
+	if (table_metadata.HasPartitionSpec() && table_metadata.GetLatestPartitionSpec().IsPartitioned()) {
+		auto &partition_spec = table_metadata.partition_specs[table_metadata.default_spec_id];
+		manifest_file.AddPartitions(partition_spec);
+	}
 	return manifest_file;
 }
 
@@ -208,7 +211,10 @@ void IcebergTransactionData::AddSnapshot(IcebergSnapshotOperationType operation,
 
 	auto add_snapshot = make_uniq<IcebergAddSnapshot>(table_info, manifest_list_path, std::move(new_snapshot));
 	add_snapshot->manifest_list.AddManifestFile(std::move(manifest_file));
-
+	// make sure we are still inserting into the current schema
+	if (table_metadata.has_current_snapshot) {
+		TableAddAssertCurrentSchemaId();
+	}
 	alters.push_back(*add_snapshot);
 	updates.push_back(std::move(add_snapshot));
 }
@@ -299,6 +305,22 @@ void IcebergTransactionData::TableAssignUUID() {
 
 void IcebergTransactionData::TableAddAssertCreate() {
 	requirements.push_back(make_uniq<AssertCreateRequirement>(table_info));
+}
+
+void IcebergTransactionData::TableAddAssertCurrentSchemaId() {
+	requirements.push_back(make_uniq<AssertCurrentSchemaIdRequirement>(table_info));
+}
+
+void IcebergTransactionData::TableAddAssertLastAssignedColumnFieldId() {
+	requirements.push_back(make_uniq<AssertLastAssignedColumnFieldIdRequirement>(table_info));
+}
+
+void IcebergTransactionData::TableAddAssertLastAssignedPartitionId() {
+	requirements.push_back(make_uniq<AssertLastAssignedPartitionIdRequirement>(table_info));
+}
+
+void IcebergTransactionData::TableAddAssertDefaultSpecId() {
+	requirements.push_back(make_uniq<AssertDefaultSpecIdRequirement>(table_info));
 }
 
 void IcebergTransactionData::TableAddUpradeFormatVersion() {

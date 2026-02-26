@@ -71,7 +71,7 @@ public:
 	const IcebergOptions &options;
 	FileSystem &fs;
 	string iceberg_path;
-	//! partition_field_id -> column type;
+	//! partition_field_id -> semantic column type (e.g. INTEGER for DAY)
 	map<idx_t, LogicalType> partition_field_id_to_type;
 };
 

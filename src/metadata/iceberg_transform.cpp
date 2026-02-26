@@ -12,20 +12,8 @@ IcebergTransform::IcebergTransform(const string &transform) : raw_transform(tran
 		type = IcebergTransformType::IDENTITY;
 	} else if (StringUtil::StartsWith(transform, "bucket")) {
 		type = IcebergTransformType::BUCKET;
-		D_ASSERT(transform[6] == '[');
-		D_ASSERT(transform.back() == ']');
-		auto start = transform.find('[');
-		auto end = transform.rfind(']');
-		auto digits = transform.substr(start + 1, end - start);
-		modulo = std::stoi(digits);
 	} else if (StringUtil::StartsWith(transform, "truncate")) {
 		type = IcebergTransformType::TRUNCATE;
-		D_ASSERT(transform[8] == '[');
-		D_ASSERT(transform.back() == ']');
-		auto start = transform.find('[');
-		auto end = transform.rfind(']');
-		auto digits = transform.substr(start + 1, end - start);
-		width = std::stoi(digits);
 	} else if (transform == "year") {
 		type = IcebergTransformType::YEAR;
 	} else if (transform == "month") {
@@ -45,32 +33,16 @@ LogicalType IcebergTransform::GetBoundsType(const LogicalType &input) const {
 	switch (type) {
 	case IcebergTransformType::IDENTITY: {
 		//! Appendix A: Avro Data Type Mappings
-		switch (input.id()) {
-		case LogicalTypeId::DATE:
-			return LogicalType::INTEGER;
-		case LogicalTypeId::TIME:
-			return LogicalType::BIGINT;
-		case LogicalTypeId::TIMESTAMP:
-			return LogicalType::BIGINT;
-		case LogicalTypeId::TIMESTAMP_TZ:
-			return LogicalType::BIGINT;
-		case LogicalTypeId::TIMESTAMP_NS:
-			return LogicalType::BIGINT;
-		case LogicalTypeId::DECIMAL:
-			return LogicalType::BLOB;
-		case LogicalTypeId::UUID:
-			return LogicalType::BLOB;
-		default:
-			return input;
-		}
+		//! The avro reader return will return the correct identity types now
+		return input;
 	}
 	case IcebergTransformType::BUCKET:
 		return LogicalType::INTEGER;
 	case IcebergTransformType::TRUNCATE:
 		return input;
+	case IcebergTransformType::DAY:
 	case IcebergTransformType::YEAR:
 	case IcebergTransformType::MONTH:
-	case IcebergTransformType::DAY:
 	case IcebergTransformType::HOUR:
 		return LogicalType::INTEGER;
 	case IcebergTransformType::VOID:
@@ -85,20 +57,32 @@ LogicalType IcebergTransform::GetSerializedType(const LogicalType &input) const 
 	switch (type) {
 	case IcebergTransformType::IDENTITY:
 		return input;
-	case IcebergTransformType::BUCKET:
-		return LogicalType::INTEGER;
 	case IcebergTransformType::TRUNCATE:
 		return input;
+	case IcebergTransformType::BUCKET:
 	case IcebergTransformType::YEAR:
 	case IcebergTransformType::MONTH:
-	case IcebergTransformType::DAY:
 	case IcebergTransformType::HOUR:
+	case IcebergTransformType::DAY:
 		return LogicalType::INTEGER;
 	case IcebergTransformType::VOID:
 		return input;
 	default:
 		throw InvalidConfigurationException("Can't produce a result type for transform %s and input type %s",
 		                                    raw_transform, input.ToString());
+	}
+}
+
+void IcebergTransform::SetBucketOrModuloValue(idx_t value) {
+	switch (type) {
+	case IcebergTransformType::BUCKET:
+		modulo = value;
+		return;
+	case IcebergTransformType::TRUNCATE:
+		width = value;
+		return;
+	default:
+		throw InvalidInputException("Cannot set bucket or modulo value for transform '%s'", raw_transform);
 	}
 }
 

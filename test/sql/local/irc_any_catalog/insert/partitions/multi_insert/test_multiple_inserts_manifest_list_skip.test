@@ -1,0 +1,119 @@
+# name: test/sql/local/irc_any_catalog/insert/partitions/multi_insert/test_multiple_inserts_manifest_list_skip.test
+# description: Verify that manifest list entries are skipped using partition bounds across multiple inserts
+# group: [multi_insert]
+
+require-env ICEBERG_SERVER_AVAILABLE
+
+require-env SECRETS_CREATED_AND_CATALOG_ATTACHED
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+create schema if not exists my_datalake.default;
+
+statement ok
+drop table if exists my_datalake.default.test_manifest_skip;
+
+statement ok
+CREATE TABLE my_datalake.default.test_manifest_skip (id int, partition_key int)
+PARTITIONED BY (partition_key);
+
+# Insert 1: partition_key = 1 (only)
+statement ok
+insert into my_datalake.default.test_manifest_skip
+select range, 1 from range(100);
+
+# Insert 2: partition_key = 2 (only)
+statement ok
+insert into my_datalake.default.test_manifest_skip
+select 100 + range, 2 from range(100);
+
+# Insert 3: partition_key = 3 (only)
+statement ok
+insert into my_datalake.default.test_manifest_skip
+select 200 + range, 3 from range(100);
+
+# Insert 4: partition_key = 4 (only)
+statement ok
+insert into my_datalake.default.test_manifest_skip
+select 300 + range, 4 from range(100);
+
+# Now enable logging and query with a filter that should skip manifest files
+statement ok
+CALL enable_logging('Iceberg');
+
+statement ok
+CALL truncate_duckdb_logs();
+
+# Query only partition_key = 1 - should skip the 3 manifest files for partitions 2, 3, 4
+query I
+select count(*) from my_datalake.default.test_manifest_skip where partition_key = 1;
+----
+100
+
+# Check that manifest files were skipped
+# Each insert creates one manifest file. Querying partition_key = 1 should skip 3 of 4 manifests.
+query I
+select count(*) from duckdb_logs() where type = 'Iceberg' and message like '%skipped%manifest_file%';
+----
+3
+
+statement ok
+CALL truncate_duckdb_logs();
+
+# Query partition_key = 2 - should skip 3 manifest files
+query I
+select count(*) from my_datalake.default.test_manifest_skip where partition_key = 2;
+----
+100
+
+query I
+select count(*) from duckdb_logs() where type = 'Iceberg' and message like '%skipped%manifest_file%';
+----
+3
+
+statement ok
+CALL truncate_duckdb_logs();
+
+# Query partition_key IN (1, 2) - should skip 2 manifest files
+query I
+select count(*) from my_datalake.default.test_manifest_skip where partition_key = 1 or partition_key = 2;
+----
+200
+
+statement ok
+CALL truncate_duckdb_logs();
+
+# Query partition_key > 3 - should skip 3 manifest files (partitions 1, 2, 3)
+query I
+select count(*) from my_datalake.default.test_manifest_skip where partition_key > 3;
+----
+100
+
+query I
+select count(*) from duckdb_logs() where type = 'Iceberg' and message like '%skipped%manifest_file%';
+----
+3
+
+statement ok
+CALL truncate_duckdb_logs();
+
+# No filter - should skip nothing
+query I
+select count(*) from my_datalake.default.test_manifest_skip;
+----
+400
+
+query I
+select count(*) from duckdb_logs() where type = 'Iceberg' and message like '%skipped%manifest_file%';
+----
+0

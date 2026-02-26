@@ -1,0 +1,82 @@
+# name: test/sql/local/irc_any_catalog/insert/partitions/null_values/test_null_partition_values.test
+# description: Test inserting NULL values into partition columns
+# group: [null_values]
+
+require-env ICEBERG_SERVER_AVAILABLE
+
+require-env SECRETS_CREATED_AND_CATALOG_ATTACHED
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+create schema if not exists my_datalake.default;
+
+statement ok
+drop table if exists my_datalake.default.test_null_partition;
+
+# Identity partition with NULLs
+statement ok
+CREATE TABLE my_datalake.default.test_null_partition (id int, category varchar)
+PARTITIONED BY (category);
+
+# Insert mix of NULL and non-NULL partition values
+statement ok
+insert into my_datalake.default.test_null_partition
+select range, case
+    when range % 4 = 0 then NULL
+    when range % 4 = 1 then 'alpha'
+    when range % 4 = 2 then 'beta'
+    else 'gamma'
+end
+from range(40);
+
+statement ok
+create table local_null_part as
+select range as id, case
+    when range % 4 = 0 then NULL
+    when range % 4 = 1 then 'alpha'
+    when range % 4 = 2 then 'beta'
+    else 'gamma'
+end as category
+from range(40);
+
+query II nosort expected_result
+select * from local_null_part order by id;
+----
+
+query II nosort expected_result
+select * from my_datalake.default.test_null_partition order by id;
+----
+
+# Count total
+query I
+select count(*) from my_datalake.default.test_null_partition;
+----
+40
+
+# Count NULLs
+query I
+select count(*) from my_datalake.default.test_null_partition where category is null;
+----
+10
+
+# Count non-NULLs
+query I
+select count(*) from my_datalake.default.test_null_partition where category is not null;
+----
+30
+
+# Filter on specific non-NULL value
+query I
+select count(*) from my_datalake.default.test_null_partition where category = 'alpha';
+----
+10

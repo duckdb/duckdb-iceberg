@@ -402,7 +402,6 @@ bool IcebergAvroMultiFileReader::Bind(MultiFileOptions &options, MultiFileList &
 		schema = manifest_list::BuildManifestListSchema(metadata);
 	} else {
 		auto &manifest_file_scan = scan_info.Cast<IcebergManifestFileScanInfo>();
-		auto &manifest_files = manifest_file_scan.manifest_files;
 		auto &partition_field_id_to_type = manifest_file_scan.partition_field_id_to_type;
 		schema = manifest_file::BuildManifestSchema(snapshot, metadata, partition_field_id_to_type);
 	}

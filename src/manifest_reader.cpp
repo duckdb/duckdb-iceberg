@@ -1,5 +1,8 @@
 #include "manifest_reader.hpp"
 
+#include "duckdb/common/string_util.hpp"
+#include "duckdb/common/types/string.hpp"
+
 namespace duckdb {
 
 namespace manifest_file {
@@ -246,7 +249,12 @@ idx_t ManifestReader::ReadChunk(idx_t offset, idx_t count, vector<IcebergManifes
 			auto field_id = it.first;
 			auto &partition_vector = it.second.get();
 
-			data_file.partition_values.emplace_back(field_id, partition_vector.GetValue(index));
+			DataFilePartitionInfo info;
+			auto name_it = partition_field_names.find(field_id);
+			info.name = name_it != partition_field_names.end() ? name_it->second : std::to_string(field_id);
+			info.field_id = static_cast<uint64_t>(field_id);
+			info.value = partition_vector.GetValue(index);
+			data_file.partition_info.push_back(std::move(info));
 		}
 		produced++;
 		result.push_back(entry);

@@ -1,0 +1,84 @@
+# name: test/sql/local/irc_any_catalog/insert/partitions/null_values/test_null_mixed_with_multiple_inserts.test
+# description: Test NULL partition values across multiple inserts and verify manifest skipping
+# group: [null_values]
+
+require-env ICEBERG_SERVER_AVAILABLE
+
+require-env SECRETS_CREATED_AND_CATALOG_ATTACHED
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+create schema if not exists my_datalake.default;
+
+statement ok
+drop table if exists my_datalake.default.test_null_multi_insert;
+
+statement ok
+CREATE TABLE my_datalake.default.test_null_multi_insert (id int, partition_key int)
+PARTITIONED BY (partition_key);
+
+# Insert 1: only NULLs
+statement ok
+insert into my_datalake.default.test_null_multi_insert
+select range, NULL::int from range(50);
+
+# Insert 2: non-NULL values (partition_key = 1)
+statement ok
+insert into my_datalake.default.test_null_multi_insert
+select 100 + range, 1 from range(50);
+
+# Insert 3: mix of NULLs and non-NULLs
+statement ok
+insert into my_datalake.default.test_null_multi_insert
+select 200 + range, case when range % 2 = 0 then NULL else 2 end from range(50);
+
+# Total: 50 + 50 + 50 = 150
+query I
+select count(*) from my_datalake.default.test_null_multi_insert;
+----
+150
+
+# Count NULLs: 50 (insert 1) + 25 (insert 3) = 75
+query I
+select count(*) from my_datalake.default.test_null_multi_insert where partition_key is null;
+----
+75
+
+# Count partition_key = 1
+query I
+select count(*) from my_datalake.default.test_null_multi_insert where partition_key = 1;
+----
+50
+
+# Count partition_key = 2
+query I
+select count(*) from my_datalake.default.test_null_multi_insert where partition_key = 2;
+----
+25
+
+# Verify data correctness
+statement ok
+create table local_null_multi as
+select range as id, NULL::int as partition_key from range(50)
+union all
+select 100 + range, 1 from range(50)
+union all
+select 200 + range, case when range % 2 = 0 then NULL else 2 end from range(50);
+
+query II nosort expected_result
+select * from local_null_multi order by id;
+----
+
+query II nosort expected_result
+select * from my_datalake.default.test_null_multi_insert order by id;
+----

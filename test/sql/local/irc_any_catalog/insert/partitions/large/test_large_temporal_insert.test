@@ -1,0 +1,61 @@
+# name: test/sql/local/irc_any_catalog/insert/partitions/large/test_large_temporal_insert.test
+# description: Test large insert into temporal-partitioned table with many rows
+# group: [large]
+
+require-env ICEBERG_SERVER_AVAILABLE
+
+require-env SECRETS_CREATED_AND_CATALOG_ATTACHED
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+create schema if not exists my_datalake.default;
+
+statement ok
+drop table if exists my_datalake.default.test_large_temporal;
+
+statement ok
+CREATE TABLE my_datalake.default.test_large_temporal (id int, ts TIMESTAMP, data int)
+PARTITIONED BY (month(ts));
+
+# Insert 50k rows spanning 24 months (2 years)
+statement ok
+insert into my_datalake.default.test_large_temporal
+select range,
+       make_timestamp(2020 + floor(range/25000)::INT, (range % 12) + 1, 15, 12, 0, 0),
+       range * 7
+from range(50000);
+
+query I
+select count(*) from my_datalake.default.test_large_temporal;
+----
+50000
+
+# Each of 24 months should have roughly 50000/24 = ~2083 rows
+query I
+select count(*) from my_datalake.default.test_large_temporal
+where ts >= '2020-01-01'::TIMESTAMP and ts < '2020-02-01'::TIMESTAMP;
+----
+2084
+
+# Verify we have data in both years
+query I
+select count(*) from my_datalake.default.test_large_temporal
+where ts >= '2020-01-01'::TIMESTAMP and ts < '2021-01-01'::TIMESTAMP;
+----
+25000
+
+query I
+select count(*) from my_datalake.default.test_large_temporal
+where ts >= '2021-01-01'::TIMESTAMP and ts < '2022-01-01'::TIMESTAMP;
+----
+25000
