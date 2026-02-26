@@ -1,18 +1,11 @@
 {
   "description": "Use Polaris as Iceberg Rest Catalog.",
-  "on_init": "CREATE SECRET storage_secret ( TYPE S3, KEY_ID 'minioadmin', SECRET 'minioadmin', ENDPOINT '127.0.0.1:9002', URL_STYLE 'path', USE_SSL 0\n);\n\n\ncreate secret my_secret ( TYPE ICEBERG, CLIENT_ID 'client1', CLIENT_SECRET 's3cr3t', OAUTH2_SCOPE 'catalog sign', OAUTH2_SERVER_URI 'http://127.0.0.1:8080/realms/iceberg/protocol/openid-connect/token'\n);\n\n\nattach 'warehouse' as my_datalake ( type ICEBERG, ENDPOINT 'http://127.0.0.1:19120/iceberg/', ACCESS_DELEGATION_MODE 'none', SECRET 'my_secret'\n);",
+  "on_init": "create secret polaris_secret (TYPE ICEBERG,CLIENT_ID '${POLARIS_CLIENT_ID}',CLIENT_SECRET '${POLARIS_CLIENT_SECRET}',ENDPOINT 'http://0.0.0.0:8181/api/catalog'); attach 'quickstart_catalog' as my_datalake (type ICEBERG,ENDPOINT 'http://0.0.0.0:8181/api/catalog');",
   "statically_loaded_extensions": [
     "core_functions",
     "parquet",
     "avro",
     "iceberg",
     "httpfs"
-  ],
-  "skip_tests": [
-    {
-      "reason": "Not yet supported with Polaris",
-      "paths": [
-      ]
-    }
   ]
 }
