@@ -41,7 +41,8 @@
         "test/sql/local/irc_any_catalog/delete/test_delete_consolidation_commit.test",
         "test/sql/local/irc_any_catalog/update/test_update_deletion_vector_consolidation_commit.test",
         "test/sql/local/irc_any_catalog/test_row_lineage_read_from_upgraded.test",
-        "test/sql/local/irc_any_catalog/test_row_lineage_write_after_upgrade.test"
+        "test/sql/local/irc_any_catalog/test_row_lineage_write_after_upgrade.test",
+        "test/sql/local/irc_any_catalog/test_basic_variant.test"
       ]
     }
   ]
