@@ -103,7 +103,6 @@ jobs:
       - name: Run Generic IRC tests
         env:
           ICEBERG_SERVER_AVAILABLE: 1
-          DUCKDB_ICEBERG_HAVE_GENERATED_DATA: 1
           SECRETS_CREATED_AND_CATALOG_ATTACHED: 1
         run: |
           ./build/release/test/unittest "$PWD/test/sql/local/irc_any_catalog/*" --list-test-names-only || true

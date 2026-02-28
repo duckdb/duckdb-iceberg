@@ -1,0 +1,49 @@
+{
+  "description": "Use Polaris as Iceberg Rest Catalog.",
+  "on_init": "create secret polaris_secret (TYPE ICEBERG, CLIENT_ID '%PLACEHOLDER_POLARIS_CLIENT_ID%',CLIENT_SECRET '%PLACEHOLDER_POLARIS_CLIENT_SECRET%',ENDPOINT 'http://0.0.0.0:8181/api/catalog'); attach 'quickstart_catalog' as my_datalake (type ICEBERG,ENDPOINT 'http://0.0.0.0:8181/api/catalog');",
+  "statically_loaded_extensions": [
+    "core_functions",
+    "parquet",
+    "avro",
+    "iceberg",
+    "httpfs"
+  ],
+  "skip_tests": [
+    {
+      "reason": "Not yet supported with Polaris",
+      "paths": [
+        "test/sql/local/irc_any_catalog/create/test_create_and_delete_schema_table.test",
+        "test/sql/local/irc_any_catalog/create/test_create_empty_table.test",
+        "test/sql/local/irc_any_catalog/create/test_create_table.test",
+        "test/sql/local/irc_any_catalog/create/test_create_table_as.test",
+        "test/sql/local/irc_any_catalog/create/test_create_table_with_properties.test",
+        "test/sql/local/irc_any_catalog/delete/delete_table.test",
+        "test/sql/local/irc_any_catalog/delete/test_no_head_request_for_deletes.test",
+        "test/sql/local/irc_any_catalog/delete/test_spark_can_read_duckdb_table.test",
+        "test/sql/local/irc_any_catalog/delete/time_travel_after_uncommitted_delete.test",
+        "test/sql/local/irc_any_catalog/iceberg_catalog_eager_refresh.test",
+        "test/sql/local/irc_any_catalog/insert/count_star_optimizer.test",
+        "test/sql/local/irc_any_catalog/insert/test_insert_into_sorted_table_fails.test",
+        "test/sql/local/irc_any_catalog/insert/test_insert_to_v3_tables.test",
+        "test/sql/local/irc_any_catalog/insert/test_read_upper_and_lower_bounds.test",
+        "test/sql/local/irc_any_catalog/insert/test_transactional_insert_v3.test",
+        "test/sql/local/irc_any_catalog/insert/test_write_infinity_timestamp.test",
+        "test/sql/local/irc_any_catalog/insert/test_write_upper_and_lower_bounds.test",
+        "test/sql/local/irc_any_catalog/insert/test_write_upper_and_lower_bounds_all_null.test",
+        "test/sql/local/irc_any_catalog/insert/test_write_upper_and_lower_bounds_single_values.test",
+        "test/sql/local/irc_any_catalog/irc_catalog_read_deletes.test",
+        "test/sql/local/irc_any_catalog/other_engines/test_create_table_then_read_with_other_engine.test",
+        "test/sql/local/irc_any_catalog/reads/partitioned_reads/test_read_from_month_partitioned_date.test",
+        "test/sql/local/irc_any_catalog/reads/test_read_from_partitioned_table.test",
+        "test/sql/local/irc_any_catalog/reads/test_read_from_table_with_deletes.test",
+        "test/sql/local/irc_any_catalog/reads/test_read_partitioned_table_type_promotion.test",
+        "test/sql/local/irc_any_catalog/reads/test_requests_to_partitioned_table.test",
+        "test/sql/local/irc_any_catalog/table_properties/test_set_table_properties.test",
+        "test/sql/local/irc_any_catalog/test_drop_and_create_table_in_a_transaction.test",
+        "test/sql/local/irc_any_catalog/test_row_lineage_write.test",
+        "test/sql/local/irc_any_catalog/transactions/test_transactional_updates_error_omits_stacktrace.test",
+        "test/sql/local/irc_any_catalog/update/test_spark_can_read_duckdb_updates.test"
+      ]
+    }
+  ]
+}
