@@ -99,17 +99,17 @@ static vector<string> ParseQuotedList(const string &input, char list_separator) 
 	return result;
 }
 
-static void AddToColDefMap(case_insensitive_map_t<optional_ptr<IcebergColumnDefinition>> &name_to_coldef,
-                           string col_name_prefix, optional_ptr<IcebergColumnDefinition> column_def) {
-	string column_name = column_def->name;
+static void AddToColDefMap(case_insensitive_map_t<reference<const IcebergColumnDefinition>> &name_to_coldef,
+                           string col_name_prefix, const IcebergColumnDefinition &column_def) {
+	string column_name = column_def.name;
 	if (!col_name_prefix.empty()) {
-		column_name = col_name_prefix + "." + column_def->name;
+		column_name = col_name_prefix + "." + column_def.name;
 	}
-	if (column_def->IsIcebergPrimitiveType()) {
-		name_to_coldef.emplace(column_name, column_def.get());
+	if (column_def.IsIcebergPrimitiveType()) {
+		name_to_coldef.emplace(column_name, column_def);
 	} else {
-		for (auto &child : column_def->children) {
-			AddToColDefMap(name_to_coldef, column_name, child.get());
+		for (auto &child : column_def.children) {
+			AddToColDefMap(name_to_coldef, column_name, *child);
 		}
 	}
 }
@@ -132,12 +132,19 @@ IcebergColumnStats IcebergInsert::ParseColumnStats(const LogicalType &type, cons
 			D_ASSERT(!column_stats.has_null_count);
 			column_stats.has_null_count = true;
 			column_stats.null_count = StringUtil::ToUnsigned(StringValue::Get(stats_children[1]));
+		} else if (stats_name == "num_values") {
+			D_ASSERT(!column_stats.has_num_values);
+			column_stats.has_num_values = true;
+			column_stats.num_values = StringUtil::ToUnsigned(StringValue::Get(stats_children[1]));
 		} else if (stats_name == "column_size_bytes") {
 			column_stats.has_column_size_bytes = true;
 			column_stats.column_size_bytes = StringUtil::ToUnsigned(StringValue::Get(stats_children[1]));
 		} else if (stats_name == "has_nan") {
 			column_stats.has_contains_nan = true;
 			column_stats.contains_nan = StringValue::Get(stats_children[1]) == "true";
+		} else if (stats_name == "variant_type") {
+			//! Should be handled elsewhere
+			continue;
 		} else {
 			// Ignore other stats types.s
 			DUCKDB_LOG_INFO(context, StringUtil::Format("Did not write column stats %s", stats_name));
@@ -189,11 +196,6 @@ void IcebergInsert::AddWrittenFiles(IcebergInsertGlobalState &global_state, Data
 		auto table_current_schema_id = ic_table.table_info.table_metadata.current_schema_id;
 		auto ic_schema = ic_table.table_info.table_metadata.schemas[table_current_schema_id];
 
-		case_insensitive_map_t<optional_ptr<IcebergColumnDefinition>> column_info;
-		for (auto &column : ic_schema->columns) {
-			AddToColDefMap(column_info, "", column.get());
-		}
-
 		for (idx_t col_idx = 0; col_idx < map_children.size(); col_idx++) {
 			auto &struct_children = StructValue::GetChildren(map_children[col_idx]);
 			auto &col_name = StringValue::Get(struct_children[0]);
@@ -202,44 +204,53 @@ void IcebergInsert::AddWrittenFiles(IcebergInsertGlobalState &global_state, Data
 			if (column_names[0] == "_row_id") {
 				continue;
 			}
-			auto normalized_col_name = StringUtil::Join(column_names, ".");
 
-			auto ic_column_info_it = column_info.find(normalized_col_name);
-			D_ASSERT(ic_column_info_it != column_info.end());
-			auto column_info_stats = ic_column_info_it->second;
-			auto stats = ParseColumnStats(column_info_stats->type, col_stats, global_state.context);
+			optional_idx name_offset;
+			auto column_info_p = ic_schema->GetFromPath(column_names, &name_offset);
+			if (!column_info_p) {
+				auto normalized_col_name = StringUtil::Join(column_names, ".");
+				throw InternalException("Column '%s' can not be found in the schema, but returned by RETURN_STATS",
+				                        normalized_col_name);
+			}
+			if (name_offset.IsValid()) {
+				//! FIXME: deal with variant stats
+				continue;
+			}
+			auto &column_info = *column_info_p;
+			auto stats = ParseColumnStats(column_info.type, col_stats, global_state.context);
 
 			// a map type cannot violate not null constraints.
 			// Null value counts can be off since an empty map is the same as a null map.
 			bool is_map = IsMapType(column_names[0], *ic_schema);
-			if (!is_map && column_info_stats->required && stats.has_null_count && stats.null_count > 0) {
+			if (!is_map && column_info.required && stats.has_null_count && stats.null_count > 0) {
+				auto normalized_col_name = StringUtil::Join(column_names, ".");
 				throw ConstraintException("NOT NULL constraint failed: %s.%s", table->name, normalized_col_name);
 			}
 			// go through stats and add upper and lower bounds
 			// Do serialization of values here in case we read transaction updates
 			if (stats.has_min) {
 				auto serialized_value =
-				    IcebergValue::SerializeValue(stats.min, column_info_stats->type, SerializeBound::LOWER_BOUND);
+				    IcebergValue::SerializeValue(stats.min, column_info.type, SerializeBound::LOWER_BOUND);
 				if (serialized_value.HasError()) {
 					throw InvalidConfigurationException(serialized_value.GetError());
 				} else if (serialized_value.HasValue()) {
-					data_file.lower_bounds[column_info_stats->id] = serialized_value.GetValue();
+					data_file.lower_bounds[column_info.id] = serialized_value.GetValue();
 				}
 			}
 			if (stats.has_max) {
 				auto serialized_value =
-				    IcebergValue::SerializeValue(stats.max, column_info_stats->type, SerializeBound::UPPER_BOUND);
+				    IcebergValue::SerializeValue(stats.max, column_info.type, SerializeBound::UPPER_BOUND);
 				if (serialized_value.HasError()) {
 					throw InvalidConfigurationException(serialized_value.GetError());
 				} else if (serialized_value.HasValue()) {
-					data_file.upper_bounds[column_info_stats->id] = serialized_value.GetValue();
+					data_file.upper_bounds[column_info.id] = serialized_value.GetValue();
 				}
 			}
 			if (stats.has_column_size_bytes) {
-				data_file.column_sizes[column_info_stats->id] = stats.column_size_bytes;
+				data_file.column_sizes[column_info.id] = stats.column_size_bytes;
 			}
 			if (stats.has_null_count) {
-				data_file.null_value_counts[column_info_stats->id] = stats.null_count;
+				data_file.null_value_counts[column_info.id] = stats.null_count;
 			}
 
 			//! nan_value_counts won't work, we can only indicate if they exist.

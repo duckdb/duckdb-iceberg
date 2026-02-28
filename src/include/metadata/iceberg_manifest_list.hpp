@@ -80,7 +80,7 @@ public:
 	//! either data or deletes
 	IcebergManifestContentType content;
 	//! sequence_number when manifest was added to table (0 for Iceberg v1)
-	sequence_number_t sequence_number = 0;
+	sequence_number_t sequence_number = 0xDEADBEEF;
 	bool has_min_sequence_number = false;
 	sequence_number_t min_sequence_number = 0;
 	int64_t added_snapshot_id = -1;
