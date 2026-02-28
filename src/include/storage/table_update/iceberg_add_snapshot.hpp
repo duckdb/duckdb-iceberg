@@ -26,10 +26,12 @@ public:
 	                   IcebergSnapshot &&snapshot);
 
 public:
-	void ConstructManifestList(CopyFunction &avro_copy, DatabaseInstance &db, IcebergCommitState &commit_state);
-	void ConstructManifest(CopyFunction &avro_copy, DatabaseInstance &db, IcebergCommitState &commit_state,
-	                       IcebergManifestFile &manifest_file, IcebergManifestDeletes &deletes);
-	void CreateUpdate(DatabaseInstance &db, ClientContext &context, IcebergCommitState &commit_state) override;
+	IcebergManifestList ConstructManifestList(CopyFunction &avro_copy, DatabaseInstance &db,
+	                                          IcebergCommitState &commit_state) const;
+	IcebergManifestFile ConstructManifest(CopyFunction &avro_copy, DatabaseInstance &db,
+	                                      IcebergCommitState &commit_state, const IcebergManifestFile &manifest_file,
+	                                      const IcebergManifestDeletes &deletes) const;
+	void CreateUpdate(DatabaseInstance &db, ClientContext &context, IcebergCommitState &commit_state) const override;
 
 public:
 	case_insensitive_map_t<IcebergManifestDeletes> altered_manifests;

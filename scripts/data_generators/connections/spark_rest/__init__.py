@@ -47,8 +47,8 @@ class IcebergSparkRest(IcebergConnection):
             f"--packages org.apache.iceberg:iceberg-spark-runtime-{SPARK_VERSION}_{SCALA_BINARY_VERSION}:{ICEBERG_LIBRARY_VERSION},org.apache.iceberg:iceberg-aws-bundle:{ICEBERG_LIBRARY_VERSION} pyspark-shell"
         )
         os.environ["AWS_REGION"] = "us-east-1"
-        os.environ["AWS_ACCESS_KEY_ID"] = "admin"
-        os.environ["AWS_SECRET_ACCESS_KEY"] = "password"
+        os.environ["AWS_ACCESS_KEY_ID"] = os.getenv("S3_KEY_ID", "admin")
+        os.environ["AWS_SECRET_ACCESS_KEY"] = os.getenv("S3_SECRET", "password")
 
         spark = (
             SparkSession.builder.appName("DuckDB REST Integration test")
@@ -58,9 +58,9 @@ class IcebergSparkRest(IcebergConnection):
             )
             .config("spark.sql.catalog.demo", "org.apache.iceberg.spark.SparkCatalog")
             .config("spark.sql.catalog.demo.type", "rest")
-            .config("spark.sql.catalog.demo.uri", "http://127.0.0.1:8181")
-            .config("spark.sql.catalog.demo.warehouse", "s3://warehouse/wh/")
-            .config("spark.sql.catalog.demo.s3.endpoint", "http://127.0.0.1:9000")
+            .config("spark.sql.catalog.demo.uri", os.getenv("ICEBERG_ENDPOINT", "http://127.0.0.1:8181"))
+            .config("spark.sql.catalog.demo.warehouse", os.getenv("WAREHOUSE", "s3://warehouse/wh/"))
+            .config("spark.sql.catalog.demo.s3.endpoint", os.getenv("S3_ENDPOINT", "http://127.0.0.1:9000"))
             .config("spark.sql.catalog.demo.s3.path-style-access", "true")
             .config('spark.driver.memory', '10g')
             .config('spark.sql.session.timeZone', 'UTC')

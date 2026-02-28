@@ -15,16 +15,6 @@ const vector<IcebergManifestFile> &IcebergManifestList::GetManifestFilesConst() 
 	return manifest_entries;
 }
 
-void IcebergManifestList::WriteManifestListEntry(IcebergTableInformation &table_info, idx_t manifest_index,
-                                                 CopyFunction &avro_copy, DatabaseInstance &db,
-                                                 ClientContext &context) {
-	D_ASSERT(manifest_index < manifest_entries.size());
-	auto &manifest_file = manifest_entries[manifest_index];
-	auto manifest_length =
-	    manifest_file::WriteToFile(table_info.table_metadata, manifest_file.manifest_file, avro_copy, db, context);
-	manifest_file.manifest_length = manifest_length;
-}
-
 idx_t IcebergManifestList::GetManifestListEntriesCount() const {
 	return manifest_entries.size();
 }
@@ -159,7 +149,6 @@ void WriteToFile(const IcebergTableMetadata &table_metadata, const IcebergManife
 	data.Initialize(allocator, types, manifest_files.size());
 
 	idx_t next_row_id;
-	auto latest_snapshot = table_metadata.GetLatestSnapshot();
 	if (table_metadata.has_next_row_id) {
 		next_row_id = table_metadata.next_row_id;
 	} else {
@@ -217,10 +206,14 @@ void WriteToFile(const IcebergTableMetadata &table_metadata, const IcebergManife
 		// partitions: list<508: field_summary> - 507
 		data.SetValue(col_idx++, i, manifest.partitions.ToValue());
 
+		if (table_metadata.iceberg_version < 3) {
+			continue;
+		}
+
 		bool has_first_row_id = manifest.has_first_row_id;
 		int64_t first_row_id = manifest.first_row_id;
 		if (!has_first_row_id && manifest.content == IcebergManifestContentType::DATA) {
-			//! Assign first_row_id to old manifest_file entries on
+			//! Assign first_row_id to old manifest_file entries
 			first_row_id = next_row_id;
 			has_first_row_id = true;
 			next_row_id += manifest.added_rows_count;

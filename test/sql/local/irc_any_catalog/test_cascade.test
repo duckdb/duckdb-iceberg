@@ -1,0 +1,29 @@
+# name: test/sql/local/irc_any_catalog/test_cascade.test
+# group: [irc_any_catalog]
+
+require-env ICEBERG_SERVER_AVAILABLE
+
+require-env SECRETS_CREATED_AND_CATALOG_ATTACHED
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+require aws
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement error
+DROP SCHEMA my_datalake.default CASCADE;
+----
+Not implemented Error: DROP SCHEMA <schema_name> CASCADE is not supported for Iceberg schemas currently
+
+statement error
+DROP TABLE my_datalake.default.empty_table CASCADE;
+----
+Not implemented Error: DROP TABLE <table_name> CASCADE is not supported for Iceberg tables currently

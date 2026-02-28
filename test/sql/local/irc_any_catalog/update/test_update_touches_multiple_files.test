@@ -1,0 +1,54 @@
+# name: test/sql/local/irc_any_catalog/update/test_update_touches_multiple_files.test
+# description: Test iceberg deletes
+# group: [update]
+
+require-env ICEBERG_SERVER_AVAILABLE
+
+require-env SECRETS_CREATED_AND_CATALOG_ATTACHED
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+CALL enable_logging('HTTP');
+
+statement ok
+set logging_level='debug'
+
+statement ok
+create schema if not exists my_datalake.default;
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.test;
+
+statement ok
+CREATE TABLE my_datalake.default.test AS SELECT range id FROM range(100);
+
+statement ok
+Insert into my_datalake.default.test SELECT range id FROM range(100, 200);
+
+statement ok
+Insert into my_datalake.default.test SELECT range id FROM range(200, 300);
+
+# 3 data files
+query I
+select count(*) from iceberg_metadata(my_datalake.default.test);
+----
+3
+
+statement ok
+update my_datalake.default.test set id = -1 where id % 20 = 0;
+
+# 3 more delete files, and 1 more data file with new data
+query I
+select count(*) from iceberg_metadata(my_datalake.default.test);
+----
+7

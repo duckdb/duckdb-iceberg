@@ -304,6 +304,7 @@ TableTransactionInfo IcebergTransaction::GetTransactionRequest(ClientContext &co
 		if (!transaction_data.alters.empty()) {
 			commit_state.manifests = transaction_data.existing_manifest_list;
 		}
+		commit_state.latest_snapshot = current_snapshot;
 
 		for (auto &update : transaction_data.updates) {
 			if (update->type == IcebergTableUpdateType::ADD_SNAPSHOT) {

@@ -555,8 +555,6 @@ unique_ptr<Expression> IcebergMultiFileReader::GetVirtualColumnExpression(
 				reader.column_ids.push_back(MultiFileLocalColumnId(i));
 				reader.column_indexes.push_back(ColumnIndex(i));
 
-				column_id = MultiFileReader::COLUMN_IDENTIFIER_FILE_ROW_NUMBER;
-
 				auto computed_row_id =
 				    ConstructVirtualRowIdExpression(context, type, entry->second, local_idx.GetIndex() + 1);
 				// Create COALESCE(_row_id, computed_row_id)

@@ -30,7 +30,8 @@ AddSchemaUpdate::AddSchemaUpdate(IcebergTableInformation &table_info)
 	table_schema = table_info.table_metadata.schemas[current_schema_id];
 }
 
-void AddSchemaUpdate::CreateUpdate(DatabaseInstance &db, ClientContext &context, IcebergCommitState &commit_state) {
+void AddSchemaUpdate::CreateUpdate(DatabaseInstance &db, ClientContext &context,
+                                   IcebergCommitState &commit_state) const {
 	commit_state.table_change.updates.push_back(rest_api_objects::TableUpdate());
 	auto &update = commit_state.table_change.updates.back();
 	update.has_add_schema_update = true;
@@ -50,7 +51,8 @@ AssignUUIDUpdate::AssignUUIDUpdate(IcebergTableInformation &table_info)
     : IcebergTableUpdate(IcebergTableUpdateType::ADD_SCHEMA, table_info) {
 }
 
-void AssignUUIDUpdate::CreateUpdate(DatabaseInstance &db, ClientContext &context, IcebergCommitState &commit_state) {
+void AssignUUIDUpdate::CreateUpdate(DatabaseInstance &db, ClientContext &context,
+                                    IcebergCommitState &commit_state) const {
 	commit_state.table_change.updates.push_back(rest_api_objects::TableUpdate());
 	auto &update = commit_state.table_change.updates.back();
 	update.has_assign_uuidupdate = true;
@@ -77,7 +79,7 @@ UpgradeFormatVersion::UpgradeFormatVersion(IcebergTableInformation &table_info)
 }
 
 void UpgradeFormatVersion::CreateUpdate(DatabaseInstance &db, ClientContext &context,
-                                        IcebergCommitState &commit_state) {
+                                        IcebergCommitState &commit_state) const {
 	commit_state.table_change.updates.push_back(rest_api_objects::TableUpdate());
 	auto &req = commit_state.table_change.updates.back();
 	req.has_upgrade_format_version_update = true;
@@ -90,7 +92,8 @@ SetCurrentSchema::SetCurrentSchema(IcebergTableInformation &table_info)
     : IcebergTableUpdate(IcebergTableUpdateType::SET_CURRENT_SCHEMA, table_info) {
 }
 
-void SetCurrentSchema::CreateUpdate(DatabaseInstance &db, ClientContext &context, IcebergCommitState &commit_state) {
+void SetCurrentSchema::CreateUpdate(DatabaseInstance &db, ClientContext &context,
+                                    IcebergCommitState &commit_state) const {
 	commit_state.table_change.updates.push_back(rest_api_objects::TableUpdate());
 	auto &req = commit_state.table_change.updates.back();
 	req.has_set_current_schema_update = true;
@@ -103,7 +106,8 @@ AddPartitionSpec::AddPartitionSpec(IcebergTableInformation &table_info)
     : IcebergTableUpdate(IcebergTableUpdateType::ADD_PARTITION_SPEC, table_info) {
 }
 
-void AddPartitionSpec::CreateUpdate(DatabaseInstance &db, ClientContext &context, IcebergCommitState &commit_state) {
+void AddPartitionSpec::CreateUpdate(DatabaseInstance &db, ClientContext &context,
+                                    IcebergCommitState &commit_state) const {
 	commit_state.table_change.updates.push_back(rest_api_objects::TableUpdate());
 	auto &req = commit_state.table_change.updates.back();
 	req.has_add_partition_spec_update = true;
@@ -130,7 +134,7 @@ AddSortOrder::AddSortOrder(IcebergTableInformation &table_info)
     : IcebergTableUpdate(IcebergTableUpdateType::ADD_SORT_ORDER, table_info) {
 }
 
-void AddSortOrder::CreateUpdate(DatabaseInstance &db, ClientContext &context, IcebergCommitState &commit_state) {
+void AddSortOrder::CreateUpdate(DatabaseInstance &db, ClientContext &context, IcebergCommitState &commit_state) const {
 	commit_state.table_change.updates.push_back(rest_api_objects::TableUpdate());
 	auto &req = commit_state.table_change.updates.back();
 	req.has_add_sort_order_update = true;
@@ -159,7 +163,8 @@ SetDefaultSortOrder::SetDefaultSortOrder(IcebergTableInformation &table_info)
     : IcebergTableUpdate(IcebergTableUpdateType::SET_DEFAULT_SORT_ORDER, table_info) {
 }
 
-void SetDefaultSortOrder::CreateUpdate(DatabaseInstance &db, ClientContext &context, IcebergCommitState &commit_state) {
+void SetDefaultSortOrder::CreateUpdate(DatabaseInstance &db, ClientContext &context,
+                                       IcebergCommitState &commit_state) const {
 	commit_state.table_change.updates.push_back(rest_api_objects::TableUpdate());
 	auto &req = commit_state.table_change.updates.back();
 	req.has_set_default_sort_order_update = true;
@@ -173,7 +178,8 @@ SetDefaultSpec::SetDefaultSpec(IcebergTableInformation &table_info)
     : IcebergTableUpdate(IcebergTableUpdateType::SET_DEFAULT_SPEC, table_info) {
 }
 
-void SetDefaultSpec::CreateUpdate(DatabaseInstance &db, ClientContext &context, IcebergCommitState &commit_state) {
+void SetDefaultSpec::CreateUpdate(DatabaseInstance &db, ClientContext &context,
+                                  IcebergCommitState &commit_state) const {
 	commit_state.table_change.updates.push_back(rest_api_objects::TableUpdate());
 	auto &req = commit_state.table_change.updates.back();
 	req.has_set_default_spec_update = true;
@@ -186,7 +192,7 @@ SetProperties::SetProperties(IcebergTableInformation &table_info, case_insensiti
     : IcebergTableUpdate(IcebergTableUpdateType::SET_PROPERTIES, table_info), properties(properties) {
 }
 
-void SetProperties::CreateUpdate(DatabaseInstance &db, ClientContext &context, IcebergCommitState &commit_state) {
+void SetProperties::CreateUpdate(DatabaseInstance &db, ClientContext &context, IcebergCommitState &commit_state) const {
 	commit_state.table_change.updates.push_back(rest_api_objects::TableUpdate());
 	auto &req = commit_state.table_change.updates.back();
 	req.has_set_properties_update = true;
@@ -198,7 +204,8 @@ RemoveProperties::RemoveProperties(IcebergTableInformation &table_info, vector<s
     : IcebergTableUpdate(IcebergTableUpdateType::SET_PROPERTIES, table_info), properties(properties) {
 }
 
-void RemoveProperties::CreateUpdate(DatabaseInstance &db, ClientContext &context, IcebergCommitState &commit_state) {
+void RemoveProperties::CreateUpdate(DatabaseInstance &db, ClientContext &context,
+                                    IcebergCommitState &commit_state) const {
 	commit_state.table_change.updates.push_back(rest_api_objects::TableUpdate());
 	auto &req = commit_state.table_change.updates.back();
 	req.has_remove_properties_update = true;
@@ -210,7 +217,7 @@ SetLocation::SetLocation(IcebergTableInformation &table_info)
     : IcebergTableUpdate(IcebergTableUpdateType::SET_LOCATION, table_info) {
 }
 
-void SetLocation::CreateUpdate(DatabaseInstance &db, ClientContext &context, IcebergCommitState &commit_state) {
+void SetLocation::CreateUpdate(DatabaseInstance &db, ClientContext &context, IcebergCommitState &commit_state) const {
 	commit_state.table_change.updates.push_back(rest_api_objects::TableUpdate());
 	auto &req = commit_state.table_change.updates.back();
 	req.has_set_location_update = true;

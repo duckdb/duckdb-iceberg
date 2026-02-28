@@ -223,8 +223,9 @@ unique_ptr<IcebergMultiFileList> IcebergMultiFileList::PushdownInternal(ClientCo
 
 	// Add new filters
 	for (auto &entry : new_filters.filters) {
-		if (entry.first < names.size()) {
-			result_filter_set.PushFilter(ColumnIndex(entry.first), entry.second->Copy());
+		auto &column_id = entry.first;
+		if (column_id < names.size()) {
+			result_filter_set.PushFilter(ColumnIndex(column_id), entry.second->Copy());
 		}
 	}
 
@@ -815,21 +816,6 @@ void IcebergMultiFileList::InitializeFiles(lock_guard<mutex> &guard) const {
 			auto manifest_list_reader = make_uniq<manifest_list::ManifestListReader>(*scan);
 			while (!manifest_list_reader->Finished()) {
 				manifest_list_reader->Read(STANDARD_VECTOR_SIZE, manifest_files);
-			}
-			if (metadata.iceberg_version >= 3 && !snapshot.has_first_row_id) {
-				//! Backfill the row lineage for V2 snapshots, required for correct UPDATE behavior
-				idx_t next_row_id = 0;
-				for (auto &manifest_file : manifest_files) {
-					if (manifest_file.content != IcebergManifestContentType::DATA) {
-						continue;
-					}
-					if (manifest_file.has_first_row_id) {
-						continue;
-					}
-					manifest_file.has_first_row_id = true;
-					manifest_file.first_row_id = next_row_id;
-					next_row_id += manifest_file.added_rows_count + manifest_file.existing_rows_count;
-				}
 			}
 		}
 

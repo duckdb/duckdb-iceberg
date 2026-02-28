@@ -62,6 +62,17 @@ BindInfo IcebergBindInfo(const optional_ptr<FunctionData> bind_data) {
 	return BindInfo(*file_list.table);
 }
 
+//! FIXME: needs v1.5.1, causes a crash on v1.5.0
+// static bool IcebergScanSupportsPushdownType(const FunctionData &bind_data_p, idx_t column_id) {
+//	// Don't push down filters on the _row_id virtual column
+//	if (column_id == COLUMN_IDENTIFIER_ROW_ID) {
+//		return false;
+//	}
+
+//	// Default behavior for other columns
+//	return true;
+//}
+
 TableFunctionSet IcebergFunctions::GetIcebergScanFunction(ExtensionLoader &loader) {
 	// The iceberg_scan function is constructed by grabbing the parquet scan from the Catalog, then injecting the
 	// IcebergMultiFileReader into it to create a Iceberg-based multi file read
@@ -84,6 +95,7 @@ TableFunctionSet IcebergFunctions::GetIcebergScanFunction(ExtensionLoader &loade
 		function.get_bind_info = IcebergBindInfo;
 		function.get_virtual_columns = IcebergVirtualColumns;
 		function.get_partition_stats = IcebergMultiFileReader::IcebergGetPartitionStats;
+		// function.supports_pushdown_type = IcebergScanSupportsPushdownType;
 
 		// Schema param is just confusing here
 		function.named_parameters.erase("schema");

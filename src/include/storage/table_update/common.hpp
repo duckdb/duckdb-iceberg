@@ -21,7 +21,7 @@ struct AddSchemaUpdate : public IcebergTableUpdate {
 	static constexpr const IcebergTableUpdateType TYPE = IcebergTableUpdateType::ADD_SCHEMA;
 
 	explicit AddSchemaUpdate(IcebergTableInformation &table_info);
-	void CreateUpdate(DatabaseInstance &db, ClientContext &context, IcebergCommitState &commit_state);
+	void CreateUpdate(DatabaseInstance &db, ClientContext &context, IcebergCommitState &commit_state) const override;
 
 	optional_ptr<IcebergTableSchema> table_schema = nullptr;
 };
@@ -37,28 +37,28 @@ struct AssignUUIDUpdate : public IcebergTableUpdate {
 	static constexpr const IcebergTableUpdateType TYPE = IcebergTableUpdateType::ASSIGN_UUID;
 
 	explicit AssignUUIDUpdate(IcebergTableInformation &table_info);
-	void CreateUpdate(DatabaseInstance &db, ClientContext &context, IcebergCommitState &commit_state);
+	void CreateUpdate(DatabaseInstance &db, ClientContext &context, IcebergCommitState &commit_state) const override;
 };
 
 struct UpgradeFormatVersion : public IcebergTableUpdate {
 	static constexpr const IcebergTableUpdateType TYPE = IcebergTableUpdateType::UPGRADE_FORMAT_VERSION;
 
 	explicit UpgradeFormatVersion(IcebergTableInformation &table_info);
-	void CreateUpdate(DatabaseInstance &db, ClientContext &context, IcebergCommitState &commit_state);
+	void CreateUpdate(DatabaseInstance &db, ClientContext &context, IcebergCommitState &commit_state) const override;
 };
 
 struct SetCurrentSchema : public IcebergTableUpdate {
 	static constexpr const IcebergTableUpdateType TYPE = IcebergTableUpdateType::UPGRADE_FORMAT_VERSION;
 
 	explicit SetCurrentSchema(IcebergTableInformation &table_info);
-	void CreateUpdate(DatabaseInstance &db, ClientContext &context, IcebergCommitState &commit_state);
+	void CreateUpdate(DatabaseInstance &db, ClientContext &context, IcebergCommitState &commit_state) const override;
 };
 
 struct AddPartitionSpec : public IcebergTableUpdate {
 	static constexpr const IcebergTableUpdateType TYPE = IcebergTableUpdateType::UPGRADE_FORMAT_VERSION;
 
 	explicit AddPartitionSpec(IcebergTableInformation &table_info);
-	void CreateUpdate(DatabaseInstance &db, ClientContext &context, IcebergCommitState &commit_state);
+	void CreateUpdate(DatabaseInstance &db, ClientContext &context, IcebergCommitState &commit_state) const override;
 };
 
 struct AddSortOrder : public IcebergTableUpdate {
@@ -66,28 +66,28 @@ struct AddSortOrder : public IcebergTableUpdate {
 	static constexpr const IcebergTableUpdateType TYPE = IcebergTableUpdateType::ADD_SORT_ORDER;
 
 	explicit AddSortOrder(IcebergTableInformation &table_info);
-	void CreateUpdate(DatabaseInstance &db, ClientContext &context, IcebergCommitState &commit_state);
+	void CreateUpdate(DatabaseInstance &db, ClientContext &context, IcebergCommitState &commit_state) const override;
 };
 
 struct SetDefaultSortOrder : public IcebergTableUpdate {
 	static constexpr const IcebergTableUpdateType TYPE = IcebergTableUpdateType::SET_DEFAULT_SORT_ORDER;
 
 	explicit SetDefaultSortOrder(IcebergTableInformation &table_info);
-	void CreateUpdate(DatabaseInstance &db, ClientContext &context, IcebergCommitState &commit_state);
+	void CreateUpdate(DatabaseInstance &db, ClientContext &context, IcebergCommitState &commit_state) const override;
 };
 
 struct SetDefaultSpec : public IcebergTableUpdate {
 	static constexpr const IcebergTableUpdateType TYPE = IcebergTableUpdateType::SET_DEFAULT_SPEC;
 
 	explicit SetDefaultSpec(IcebergTableInformation &table_info);
-	void CreateUpdate(DatabaseInstance &db, ClientContext &context, IcebergCommitState &commit_state);
+	void CreateUpdate(DatabaseInstance &db, ClientContext &context, IcebergCommitState &commit_state) const override;
 };
 
 struct SetProperties : public IcebergTableUpdate {
 	static constexpr const IcebergTableUpdateType TYPE = IcebergTableUpdateType::SET_PROPERTIES;
 
 	explicit SetProperties(IcebergTableInformation &table_info, case_insensitive_map_t<string> properties);
-	void CreateUpdate(DatabaseInstance &db, ClientContext &context, IcebergCommitState &commit_state);
+	void CreateUpdate(DatabaseInstance &db, ClientContext &context, IcebergCommitState &commit_state) const override;
 
 	case_insensitive_map_t<string> properties;
 };
@@ -96,7 +96,7 @@ struct RemoveProperties : public IcebergTableUpdate {
 	static constexpr const IcebergTableUpdateType TYPE = IcebergTableUpdateType::REMOVE_PROPERTIES;
 
 	explicit RemoveProperties(IcebergTableInformation &table_info, vector<string> properties);
-	void CreateUpdate(DatabaseInstance &db, ClientContext &context, IcebergCommitState &commit_state);
+	void CreateUpdate(DatabaseInstance &db, ClientContext &context, IcebergCommitState &commit_state) const override;
 
 	vector<string> properties;
 };
@@ -105,7 +105,7 @@ struct SetLocation : public IcebergTableUpdate {
 	static constexpr const IcebergTableUpdateType TYPE = IcebergTableUpdateType::SET_LOCATION;
 
 	explicit SetLocation(IcebergTableInformation &table_info);
-	void CreateUpdate(DatabaseInstance &db, ClientContext &context, IcebergCommitState &commit_state);
+	void CreateUpdate(DatabaseInstance &db, ClientContext &context, IcebergCommitState &commit_state) const override;
 };
 
 } // namespace duckdb

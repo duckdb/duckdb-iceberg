@@ -1,0 +1,20 @@
+# name: test/sql/local/irc_any_catalog/create/test_create_empty_table.test
+# group: [create]
+
+require-env ICEBERG_SERVER_AVAILABLE
+
+require-env SECRETS_CREATED_AND_CATALOG_ATTACHED
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+statement ok
+drop table if exists my_datalake.default.range_0_table;
+
+statement ok
+CREATE TABLE my_datalake.default.range_0_table AS FROM range(0);

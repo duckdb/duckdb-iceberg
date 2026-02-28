@@ -1,0 +1,41 @@
+# name: test/sql/local/irc_any_catalog/create/test_create_schema.test
+# description: test integration with iceberg catalog read
+# group: [create]
+
+require-env ICEBERG_SERVER_AVAILABLE
+
+require-env SECRETS_CREATED_AND_CATALOG_ATTACHED
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+CALL enable_logging('HTTP');
+
+statement ok
+set logging_level='debug'
+
+
+# create non-existent schema
+statement ok
+create schema my_datalake.new_schema;
+
+# create schema if not exists does not throw error
+statement ok
+create schema if not exists my_datalake.new_schema;
+
+# drop schema if exists does not throw error if schema does not exist
+statement ok
+drop schema if exists my_datalake.non_existent_schema;
+
+# drop newly created schema
+statement ok
+drop schema my_datalake.new_schema;

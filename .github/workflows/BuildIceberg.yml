@@ -46,6 +46,8 @@ jobs:
         env:
           GEN: ninja
           STATIC_LIBCPP: 1
+          ENABLE_EXTENSION_AUTOLOADING: 1
+          ENABLE_EXTENSION_AUTOINSTALL: 1
         run: |
           make release
 
@@ -56,6 +58,13 @@ jobs:
           path: build/release/
           retention-days: 3
 
+  test-fixture:
+    name: Test against fixture catalog
+    needs: build_iceberg
+    uses: ./.github/workflows/test-fixture-catalog.yml
+    with:
+      artifact-name: duckdb-iceberg
+
   test-nessie:
     name: Test against Nessie Catalog
     needs: build_iceberg
@@ -63,16 +72,16 @@ jobs:
     with:
       artifact-name: duckdb-iceberg
 
-  test-spark:
-    name: Test against Spark Catalog
+  test-local:
+    name: Test against local Catalog
     needs: build_iceberg
-    uses: ./.github/workflows/test-spark-catalog.yml
+    uses: ./.github/workflows/test-local-catalog.yml
     with:
       artifact-name: duckdb-iceberg
 
-  test-polaris:
-    name: Test against Polaris Catalog
-    needs: build_iceberg
-    uses: ./.github/workflows/test-polaris-catalog.yml
-    with:
-      artifact-name: duckdb-iceberg
+#  test-polaris:
+#    name: Test against Polaris Catalog
+#    needs: build_iceberg
+#    uses: ./.github/workflows/test-polaris-catalog.yml
+#    with:
+#      artifact-name: duckdb-iceberg

@@ -1,0 +1,60 @@
+# name: test/sql/local/irc_any_catalog/reads/test_read_from_table_with_deletes.test
+# group: [reads]
+
+require-env ICEBERG_SERVER_AVAILABLE
+
+require-env SECRETS_CREATED_AND_CATALOG_ATTACHED
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+set logging_level='debug'
+
+statement ok
+DROP TABLE if EXISTS my_datalake."default".test_filter_deletes;
+
+statement ok
+create table my_datalake."default".test_filter_deletes as
+from values (NULL, 'b') t(a, b);
+
+statement ok
+insert into my_datalake."default".test_filter_deletes values (NULL, 'b');
+
+query II
+select * from my_datalake."default".test_filter_deletes;
+----
+NULL	b
+NULL	b
+
+query II
+select * from my_datalake."default".test_filter_deletes where a is null;
+----
+NULL	b
+NULL	b
+
+query II
+select * from my_datalake."default".test_filter_deletes where a is not null;
+----
+
+statement ok
+DELETE FROM my_datalake."default".test_filter_deletes WHERE b = 'b';
+
+# rows are empty
+query II
+select * from my_datalake."default".test_filter_deletes;
+----
+
+# but it currently returns 2, because we skip the delete files because of the filter
+query I
+select count(*) from my_datalake."default".test_filter_deletes where a is null;
+----
+0

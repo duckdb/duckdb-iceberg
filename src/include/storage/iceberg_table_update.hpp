@@ -54,7 +54,7 @@ public:
 	}
 
 public:
-	virtual void CreateUpdate(DatabaseInstance &db, ClientContext &context, IcebergCommitState &commit_state) = 0;
+	virtual void CreateUpdate(DatabaseInstance &db, ClientContext &context, IcebergCommitState &commit_state) const = 0;
 
 public:
 	template <class TARGET>

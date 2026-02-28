@@ -1,0 +1,51 @@
+# name: test/sql/local/irc_any_catalog/test_use.test
+# description: test integration with iceberg catalog read
+# group: [irc_any_catalog]
+
+require-env ICEBERG_SERVER_AVAILABLE
+
+require-env SECRETS_CREATED_AND_CATALOG_ATTACHED
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+require aws
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+use my_datalake.default;
+
+statement error
+select * from non_existend_table;
+----
+<REGEX>:.*Table with name non_existend_table does not exist.*
+
+statement ok
+select * from my_datalake.default.table_unpartitioned;
+
+statement ok
+select * from table_unpartitioned;
+
+statement ok
+use my_datalake;
+
+statement error
+select * from table_unpartitioned;
+----
+<REGEX>:.*Table with name table_unpartitioned does not exist.*Did you mean "default.table_unpartitioned".*
+
+query II nosort res1
+select * from "default".table_unpartitioned;
+----
+
+query II nosort res1
+select * from my_datalake.default.table_unpartitioned;
+----
+

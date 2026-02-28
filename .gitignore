@@ -20,3 +20,5 @@ data/generated/*
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
+
+tmp/

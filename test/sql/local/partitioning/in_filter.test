@@ -1,8 +1,6 @@
 # name: test/sql/local/partitioning/in_filter.test
 # group: [partitioning]
 
-require-env ICEBERG_SERVER_AVAILABLE
-
 require httpfs
 
 require avro
@@ -10,6 +8,8 @@ require avro
 require parquet
 
 require iceberg
+
+require-env ICEBERG_SERVER_AVAILABLE
 
 statement ok
 set enable_logging=true

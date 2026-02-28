@@ -1,0 +1,230 @@
+# name: test/sql/local/irc_any_catalog/insert/test_basic_insert.test
+# group: [insert]
+
+require-env ICEBERG_SERVER_AVAILABLE
+
+require-env SECRETS_CREATED_AND_CATALOG_ATTACHED
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+set enable_logging=true
+
+statement ok
+set logging_level='debug'
+
+# Perform an INSERT and COMMIT it
+
+statement ok
+begin transaction;
+
+statement ok
+insert into my_datalake.default.insert_test select
+	'2010/06/11'::DATE a,
+	42 b,
+	'test' c
+;
+
+# Read the new data before committing
+query III
+select * from my_datalake.default.insert_test;
+----
+2010-06-11	42	test
+
+# Commit (to the REST catalog)
+statement ok
+commit;
+
+# Read the new data after committing
+query III
+select * from my_datalake.default.insert_test;
+----
+2010-06-11	42	test
+
+# Perform an INSERT and ABORT it
+
+statement ok
+begin transaction;
+
+# Perform an insert in the transaction
+statement ok
+insert into my_datalake.default.insert_test select
+	'1980/11/25'::DATE a,
+	-3434 b,
+	'this is a long string' c
+;
+
+# Read the new data before committing
+query III
+select * from my_datalake.default.insert_test order by all;
+----
+1980-11-25	-3434	this is a long string
+2010-06-11	42	test
+
+statement ok
+abort;
+
+query III
+select * from my_datalake.default.insert_test order by all;
+----
+2010-06-11	42	test
+
+# Perform an insert into the same table from two separate transactions
+
+statement ok con1
+begin
+
+statement ok con1
+insert into my_datalake.default.insert_test select
+	'2020/08/12'::DATE a,
+	45345 b,
+	'inserted by con1' c
+;
+
+statement ok con2
+begin
+
+statement ok con2
+insert into my_datalake.default.insert_test select
+	'2020/08/12'::DATE a,
+	45345 b,
+	'inserted by con2' c
+;
+
+statement ok con1
+commit
+
+# con2 should not see con1 data
+query III con2
+select * from my_datalake.default.insert_test order by all;
+----
+2010-06-11	42	test
+2020-08-12	45345	inserted by con2
+
+
+# The second commit failed because both transactions tried to add sequence number: 2
+statement error con2
+commit
+----
+<REGEX>:.*Requirement failed: branch main has changed.*
+
+query III
+select * from my_datalake.default.insert_test order by all;
+----
+2010-06-11	42	test
+2020-08-12	45345	inserted by con1
+
+# Insert multiple times into the same table in the same transaction
+
+statement ok
+begin
+
+statement ok
+insert into my_datalake.default.insert_test select
+	'2020/08/13'::DATE a,
+	1 b,
+	'insert 1' c
+;
+
+statement ok
+insert into my_datalake.default.insert_test select
+	'2020/08/14'::DATE a,
+	2 b,
+	'insert 2' c
+;
+
+statement ok
+insert into my_datalake.default.insert_test select
+	'2020/08/15'::DATE a,
+	3 b,
+	'insert 3' c
+;
+
+statement ok
+commit
+
+query III
+select * from my_datalake.default.insert_test order by all;
+----
+2010-06-11	42	test
+2020-08-12	45345	inserted by con1
+2020-08-13	1	insert 1
+2020-08-14	2	insert 2
+2020-08-15	3	insert 3
+
+# Insert into both 'insert_test' and 'insert_all_types' in the same transaction
+
+statement ok
+begin
+
+statement ok
+insert into my_datalake.default.insert_test select
+	'2020/08/16'::DATE a,
+	4 b,
+	'insert 4' c
+;
+
+statement ok
+INSERT INTO my_datalake.default.insert_all_types
+SELECT
+	127::TINYINT, -- byte_col (max for TINYINT)
+	1340::SMALLINT, -- short_col (min for SMALLINT)
+	2147483647::INT, -- int_col (max for INT)
+	9223372036854775807::BIGINT, -- long_col (max for BIGINT)
+	3.14::FLOAT, -- float_col (typical float)
+	-1.7976931348623157::DOUBLE, -- double_col (min for DOUBLE)
+	1234567890.12345::DECIMAL(15, 5), -- decimal_col
+	DATE '2023-12-31' -- date_col
+;
+
+statement ok
+commit
+
+query III
+select * from my_datalake.default.insert_test order by all;
+----
+2010-06-11	42	test
+2020-08-12	45345	inserted by con1
+2020-08-13	1	insert 1
+2020-08-14	2	insert 2
+2020-08-15	3	insert 3
+2020-08-16	4	insert 4
+
+query IIIIIIII
+select * from my_datalake.default.insert_all_types order by all;
+----
+127	1340	2147483647	9223372036854775807	3.14	-1.7976931348623157	1234567890.12345	2023-12-31
+
+query III
+select count(sequence_number), min(sequence_number), max(sequence_number) from (select * from iceberg_snapshots(my_datalake.default.insert_test) order by timestamp_ms, sequence_number);
+----
+6	1	6
+
+query I
+select distinct status from iceberg_metadata('my_datalake.default.insert_test');
+----
+ADDED
+
+query I
+select distinct content from iceberg_metadata('my_datalake.default.insert_test');
+----
+EXISTING
+
+query I
+select distinct manifest_content from iceberg_metadata('my_datalake.default.insert_test');
+----
+DATA
+
+query III
+select count(manifest_sequence_number), min(manifest_sequence_number), max(manifest_sequence_number) from iceberg_metadata('my_datalake.default.insert_test');
+----
+6	1	6

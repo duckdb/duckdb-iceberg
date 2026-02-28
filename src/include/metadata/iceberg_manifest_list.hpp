@@ -146,8 +146,6 @@ public:
 	}
 	idx_t GetManifestListEntriesCount() const;
 
-	void WriteManifestListEntry(IcebergTableInformation &table_info, idx_t manifest_index, CopyFunction &avro_copy,
-	                            DatabaseInstance &db, ClientContext &context);
 	void AddToManifestEntries(vector<IcebergManifestFile> &manifest_list_entries);
 	vector<IcebergManifestFile> GetManifestListEntries();
 
