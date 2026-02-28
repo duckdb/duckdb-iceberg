@@ -52,7 +52,7 @@ insert into my_datalake.default.variant_column VALUES
 ;
 
 query I
-select * from my_datalake.default.variant_column order by rowid;
+select * from my_datalake.default.variant_column order by _row_id;
 ----
 0
 1
@@ -179,19 +179,19 @@ statement ok
 insert into my_datalake.default.my_variant_tbl VALUES ({'a': 1337, 'b': [1::VARIANT, 'hello world', {'d': 41}]}, 43)
 
 query I
-select a from my_datalake.default.my_variant_tbl
+select a from my_datalake.default.my_variant_tbl order by b;
 ----
 test
 {'a': 1337, 'b': [1, hello world, {'d': 41}]}
 
 query I
-select variant_typeof(a) from my_datalake.default.my_variant_tbl
+select variant_typeof(a) from my_datalake.default.my_variant_tbl order by b;
 ----
 VARCHAR
 OBJECT(a, b)
 
 query I
-select variant_typeof(a.b) from my_datalake.default.my_variant_tbl
+select variant_typeof(a.b) from my_datalake.default.my_variant_tbl order by b;
 ----
 VARIANT_NULL
 ARRAY(3)
