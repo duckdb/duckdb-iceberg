@@ -1,0 +1,50 @@
+# name: test/sql/local/partitioning/bucket_string.test
+# description: Test bucket partitioning with STRING type
+# group: [partitioning]
+
+require-env DUCKDB_ICEBERG_HAVE_GENERATED_DATA
+
+require avro
+
+require parquet
+
+require iceberg
+
+statement ok
+attach ':memory:' as my_datalake;
+
+statement ok
+create schema my_datalake.default;
+
+statement ok
+create view my_datalake.default.bucket_partitioned_string as
+select * from ICEBERG_SCAN('__WORKING_DIRECTORY__/data/generated/iceberg/spark-local/default/bucket_partitioned_string');
+
+# Test 1: Verify total row count
+query I
+select count(*) from my_datalake.default.bucket_partitioned_string;
+----
+15
+
+# Test 2: Filter by specific string value
+query I
+select count(*) from my_datalake.default.bucket_partitioned_string where category = 'electronics';
+----
+4
+
+# Test 3: Verify filtered results
+query IIT
+select id, category, description from my_datalake.default.bucket_partitioned_string
+where category = 'electronics' order by id;
+----
+1	electronics	laptop
+5	electronics	phone
+9	electronics	tablet
+13	electronics	monitor
+
+# Test 4: Filter with IN clause for strings
+query I
+select count(*) from my_datalake.default.bucket_partitioned_string
+where category IN ('books', 'clothing');
+----
+8

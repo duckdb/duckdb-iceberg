@@ -1,0 +1,58 @@
+# name: test/sql/local/partitioning/bucket/bucket_binary.test
+# description: Test bucket partitioning with BINARY type.
+#              Bucket pushdown is supported for BINARY (raw bytes hashed with MurmurHash3).
+# group: [partitioning]
+
+require-env DUCKDB_ICEBERG_HAVE_GENERATED_DATA
+
+require avro
+
+require parquet
+
+require iceberg
+
+statement ok
+attach ':memory:' as my_datalake;
+
+statement ok
+create schema my_datalake.default;
+
+statement ok
+create view my_datalake.default.bucket_partitioned_binary as
+select * from ICEBERG_SCAN('__WORKING_DIRECTORY__/data/generated/iceberg/spark-local/default/bucket_partitioned_binary');
+
+# Test 1: Total row count
+query I
+select count(*) from my_datalake.default.bucket_partitioned_binary;
+----
+12
+
+# Test 2: Equality filter on partition column returns correct rows (no false negatives)
+query I
+select count(*) from my_datalake.default.bucket_partitioned_binary
+where data = '\x01'::BLOB;
+----
+2
+
+# Test 3: Verify filtered row content
+query IT
+select id, label from my_datalake.default.bucket_partitioned_binary
+where data = '\x01'::BLOB
+order by id;
+----
+1	one
+10	one_dup
+
+# Test 4: NULL rows are preserved (IS NULL filter works)
+query I
+select count(*) from my_datalake.default.bucket_partitioned_binary
+where data IS NULL;
+----
+1
+
+# Test 5: Non-partition column filter still returns correct results
+query I
+select count(*) from my_datalake.default.bucket_partitioned_binary
+where id >= 10;
+----
+3

@@ -1,0 +1,49 @@
+# name: test/sql/local/partitioning/bucket_date.test
+# description: Test bucket partitioning with DATE type
+# group: [partitioning]
+
+require-env DUCKDB_ICEBERG_HAVE_GENERATED_DATA
+
+require avro
+
+require parquet
+
+require iceberg
+
+statement ok
+attach ':memory:' as my_datalake;
+
+statement ok
+create schema my_datalake.default;
+
+statement ok
+create view my_datalake.default.bucket_partitioned_date as
+select * from ICEBERG_SCAN('__WORKING_DIRECTORY__/data/generated/iceberg/spark-local/default/bucket_partitioned_date');
+
+# Test 1: Verify total row count
+query I
+select count(*) from my_datalake.default.bucket_partitioned_date;
+----
+12
+
+# Test 2: Filter by specific date value
+query I
+select count(*) from my_datalake.default.bucket_partitioned_date
+where event_date = CAST('2023-01-01' AS DATE);
+----
+2
+
+# Test 3: Verify filtered results
+query IIT
+select id, event_date, event_name from my_datalake.default.bucket_partitioned_date
+where event_date = CAST('2023-01-01' AS DATE) order by id;
+----
+1	2023-01-01	event_1
+9	2023-01-01	event_9
+
+# Test 4: Filter with IN clause for dates
+query I
+select count(*) from my_datalake.default.bucket_partitioned_date
+where event_date IN (CAST('2023-02-15' AS DATE), CAST('2023-03-20' AS DATE));
+----
+4
