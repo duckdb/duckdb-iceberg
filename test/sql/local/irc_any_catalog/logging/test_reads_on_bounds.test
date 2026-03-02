@@ -1,4 +1,4 @@
-# name: test/sql/local/irc/logging/test_reads_on_bounds.test
+# name: test/sql/local/irc_any_catalog/logging/test_reads_on_bounds.test
 # group: [logging]
 
 require-env ICEBERG_SERVER_AVAILABLE

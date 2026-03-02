@@ -1,4 +1,4 @@
-# name: test/sql/local/irc/logging/test_partition_read_logic_month.test
+# name: test/sql/local/irc_any_catalog/logging/test_partition_read_logic_month.test
 # group: [logging]
 
 require-env ICEBERG_SERVER_AVAILABLE
