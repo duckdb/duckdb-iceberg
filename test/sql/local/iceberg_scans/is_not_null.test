@@ -48,7 +48,7 @@ select * from my_datalake.default.is_not_null WHERE value IS NULL ORDER BY id AS
 query I
 SELECT SUM(meta.record_count) AS total_record_count
 FROM (
-	SELECT message.split(': ')[2][2:-2] AS msg
+	SELECT message.split(':')[2][3:] tmp, instr(tmp, 'parquet') pos, tmp[:pos+6] msg
 	FROM duckdb_logs() where type = 'Iceberg'
 ) logs
 JOIN ICEBERG_METADATA(my_datalake.default.is_not_null) meta
@@ -71,7 +71,7 @@ select * from my_datalake.default.is_not_null WHERE value IS NOT NULL ORDER BY i
 query I
 SELECT SUM(meta.record_count) AS total_record_count
 FROM (
-	SELECT message.split(': ')[2][2:-2] AS msg
+	SELECT message.split(':')[2][3:] tmp, instr(tmp, 'parquet') pos, tmp[:pos+6] msg
 	FROM duckdb_logs() where type = 'Iceberg'
 ) logs
 JOIN ICEBERG_METADATA(my_datalake.default.is_not_null) meta

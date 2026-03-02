@@ -30,9 +30,9 @@ call enable_logging('Iceberg');
 query I
 select ts from my_datalake.default.day_partitioned_table where ts = '2025-01-04 00:00:00'::TIMESTAMP;
 ----
-2025-01-04 00:00:00
-2025-01-04 00:00:00
-2025-01-04 00:00:00
+2025-01-04 00:00:00+00
+2025-01-04 00:00:00+00
+2025-01-04 00:00:00+00
 
 query I
 select count(*) from duckdb_logs() where type = 'Iceberg' and regexp_matches(message, '.*skipped.*data_file.*partition column.*with transform.*did not match filter.*dt=.2025-01-04 00:00:00.*');

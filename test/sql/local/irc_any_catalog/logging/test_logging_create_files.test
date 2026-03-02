@@ -1,5 +1,17 @@
-# name: test/sql/local/irc/logging/test_logging_create_files.test
+# name: test/sql/local/irc_any_catalog/logging/test_logging_create_files.test
 # group: [logging]
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+require icu
+
+require ducklake
 
 statement ok
 call enable_logging('Iceberg');
@@ -14,7 +26,7 @@ statement ok
 create table my_datalake.default.test_logging_create_table as select range a from range(10000);
 
 query I
-select count(*) from duckdb_logs() where type = 'Iceberg' where regexp_matches(message, 'Iceberg INSERT, wrote data_file.*record_count=.*');
+select count(*) from duckdb_logs() where type = 'Iceberg' and regexp_matches(message, 'Iceberg INSERT, wrote data_file.*record_count=.*');
 ----
 1
 
@@ -26,13 +38,6 @@ statement ok
 create table my_datalake.default.test_logging_create_table_large as select range a from range(10000000);
 
 query I
-select count(*) from duckdb_logs() where type = 'Iceberg' where regexp_matches(message, 'Iceberg INSERT, wrote data_file.*record_count=.*');
+select count(*) from duckdb_logs() where type = 'Iceberg' and regexp_matches(message, 'Iceberg INSERT, wrote data_file.*record_count=.*');
 ----
 5
-
-
-statement ok
-call truncate_duckdb_logs();
-
-statement ok
-delete from my_datalek.
