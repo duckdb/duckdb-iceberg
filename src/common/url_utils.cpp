@@ -67,15 +67,15 @@ string IRCEndpointBuilder::GetURLEncoded() const {
 	//! {host}[/{version}][/{prefix}]/{path_component[0]}/{path_component[1]}
 	string ret = host;
 	for (auto &component : path_components) {
-		ret += "/" + StringUtil::URLEncode(component);
+		ret += "/" + component;
 	}
 
 	// encode params
 	auto sep = "?";
 	if (params.size() > 0) {
 		for (auto &param : params) {
-			auto key = StringUtil::URLEncode(param.first);
-			auto value = StringUtil::URLEncode(param.second);
+			auto key = param.first;
+			auto value = param.second;
 			ret += sep + key + "=" + value;
 			sep = "&";
 		}
