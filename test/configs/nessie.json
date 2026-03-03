@@ -8,6 +8,12 @@
     "iceberg",
     "httpfs"
   ],
+  "test_env": [
+    {
+      "env_name": "CATALOG_TYPE",
+      "env_value": "nessie"
+    }
+  ],
   "skip_tests": [
     {
       "reason": "Not yet supported with Nessie",

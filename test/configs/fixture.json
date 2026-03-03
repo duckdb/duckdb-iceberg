@@ -7,5 +7,11 @@
     "avro",
     "iceberg",
     "httpfs"
+  ],
+  "test_env": [
+    {
+      "env_name": "CATALOG_TYPE",
+      "env_value": "fixture"
+    }
   ]
 }
