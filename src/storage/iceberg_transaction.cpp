@@ -438,8 +438,7 @@ void IcebergTransaction::DoSchemaDeletes(ClientContext &context) {
 	for (auto &schema_name : deleted_schemas) {
 		vector<string> namespace_items;
 		auto namespace_identifier = IRCAPI::ParseSchemaName(schema_name);
-		namespace_items.push_back(IRCAPI::GetEncodedSchemaName(namespace_identifier));
-		IRCAPI::CommitNamespaceDrop(context, ic_catalog, namespace_items);
+		IRCAPI::CommitNamespaceDrop(context, ic_catalog, namespace_identifier);
 		ic_catalog.GetSchemas().RemoveEntry(schema_name);
 	}
 	deleted_schemas.clear();

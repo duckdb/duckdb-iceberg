@@ -87,7 +87,8 @@ void IcebergTableSet::Scan(ClientContext &context, const std::function<void(Cata
 	lock_guard<mutex> lock(entry_lock);
 	LoadEntries(context);
 	case_insensitive_set_t non_iceberg_tables;
-	auto table_namespace = IRCAPI::GetEncodedSchemaName(schema.namespace_items);
+	auto schema_component = IRCPathComponent::NamespaceComponent(schema.namespace_items);
+	auto table_namespace = schema_component.encoded;
 	for (auto &entry : entries) {
 		auto &table_info = entry.second;
 		if (table_info.dummy_entry) {
