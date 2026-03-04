@@ -562,17 +562,6 @@ bool IcebergMultiFileList::FileMatchesFilter(const IcebergManifestEntry &manifes
 		}
 
 		auto &filter = *it->second;
-		// if (!IcebergPredicate::MatchBounds(context, *table_filter, stats, field.transform)) {
-		// 	auto &source_column = IcebergTableSchema::GetFromColumnIndex(schema, column_id, 0);
-		// 	auto partition_value_raw_str = stats.has_lower_bounds ? stats.lower_bound.ToString() : "NULL";
-		// 	auto partition_value_transformed_str = stats.has_lower_bounds ?
-		// field.transform.PartitionValueToString(stats.lower_bound.ToString()) : "NULL"; 	DUCKDB_LOG(context,
-		// IcebergLogType, 			   "Iceberg Filter Pushdown, skipped 'data_file': '%s', partition column '%s' has raw
-		// value %s " 			   "with transform '%s'. '%s(%s)=%s' does not match filter: %s", 			   data_file.file_path,
-		// source_column.name, partition_value_raw_str, field.transform.RawType(), 			   field.transform.RawType(),
-		// partition_value_raw_str, partition_value_transformed_str, 			   table_filter->ToString(source_column.name)); 	return
-		// false;
-		// }
 		if (!IcebergPredicate::MatchBounds(context, filter, stats, IcebergTransform::Identity())) {
 			//! If any predicate fails, exclude the file
 			DUCKDB_LOG(context, IcebergLogType,
