@@ -58,7 +58,7 @@ select count(*) from ICEBERG_SCAN('__WORKING_DIRECTORY__/data/persistent/large_p
 
 # 0 files are pruned since lower and upper bound information no longer exist
 query I
-select count(*) from duckdb_logs() where type = 'Iceberg';
+select count(*) from duckdb_logs() where type = 'Iceberg' and message not like 'Iceberg selected snapshot_id%';
 ----
 0
 
@@ -69,7 +69,7 @@ select count(*) from ICEBERG_SCAN('__WORKING_DIRECTORY__/data/persistent/large_p
 
 # still 0 files are pruned since lower and upper bound information do not exist and filter is an OR condition, so all files must be scanned
 query I
-select count(*) from duckdb_logs() where type = 'Iceberg';
+select count(*) from duckdb_logs() where type = 'Iceberg' and message not like 'Iceberg selected snapshot_id%';
 ----
 0
 
@@ -81,6 +81,6 @@ select count(*) from ICEBERG_SCAN('__WORKING_DIRECTORY__/data/persistent/large_p
 # same 8 files pruned since now condition is an and, so the filter on the partition column must also hold
 # why pruning is not done twice is not clear to me.
 query I
-select count(*) from duckdb_logs() where type = 'Iceberg';
+select count(*) from duckdb_logs() where type = 'Iceberg' and message not like 'Iceberg selected snapshot_id%';;
 ----
 8

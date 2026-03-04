@@ -1,6 +1,10 @@
 # name: test/sql/local/irc_any_catalog/logging/test_logging_create_files.test
 # group: [logging]
 
+require-env ICEBERG_SERVER_AVAILABLE
+
+require-env SECRETS_CREATED_AND_CATALOG_ATTACHED
+
 require avro
 
 require parquet

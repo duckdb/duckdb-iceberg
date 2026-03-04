@@ -54,7 +54,7 @@ WHERE partition_col IS NULL
 query I
 SELECT SUM(meta.record_count) AS total_record_count
 FROM (
-	SELECT message.split(':')[2][3:] tmp, instr(tmp, 'avro') pos, tmp[:pos+3] ms
+	SELECT message.split(':')[2][3:] tmp, instr(tmp, 'avro') pos, tmp[:pos+3] msg
 	FROM duckdb_logs() where type = 'Iceberg' and message.contains('manifest_file')
 ) logs
 JOIN ICEBERG_METADATA('__WORKING_DIRECTORY__/data/generated/iceberg/spark-local/default/year_timestamp') meta
