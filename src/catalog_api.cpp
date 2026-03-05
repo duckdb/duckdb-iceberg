@@ -55,7 +55,8 @@ string IRCAPI::GetEncodedSchemaName(const vector<string> &items) {
 }
 
 static void LogPostBody(ClientContext &context, const IRCEndpointBuilder &url_builder, const string &body) {
-	LogPostBody(context, url_builder, body);
+	auto message = StringUtil::Format("POST %s", url_builder.GetURLEncoded().c_str());
+	DUCKDB_LOG(context, IcebergLogType, message);
 }
 
 [[noreturn]] static void ThrowException(const string &url, const HTTPResponse &response, const string &method) {
