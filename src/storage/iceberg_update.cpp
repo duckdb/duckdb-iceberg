@@ -190,7 +190,16 @@ SinkFinalizeType IcebergUpdate::Finalize(Pipeline &pipeline, Event &event, Clien
 	if (!insert_manifest_entries.empty()) {
 		ApplyTableUpdate(table_info, iceberg_transaction, [&](IcebergTableInformation &tbl) {
 			tbl.AddUpdateSnapshot(iceberg_transaction, std::move(delete_manifest_entries),
-			                      std::move(insert_manifest_entries));
+			                      std::move(insert_manifest_entries), std::move(delete_global_state.altered_manifests));
+
+			auto &transaction_data = *tbl.transaction_data;
+			//! Add or overwrite the currently active transaction-local delete files
+			for (auto &entry : delete_global_state.written_files) {
+				auto &delete_file = entry.second;
+				if (table_info.table_metadata.iceberg_version >= 3) {
+					transaction_data.transactional_delete_files[delete_file.data_file_path] = delete_file.file_name;
+				}
+			}
 		});
 	}
 	return SinkFinalizeType::READY;
@@ -245,7 +254,7 @@ PhysicalOperator &IcebergCatalog::PlanUpdate(ClientContext &context, PhysicalPla
 			throw NotImplementedException("Update on a sorted iceberg table is not supported yet");
 		}
 	}
-	if (table.table_info.table_metadata.iceberg_version != 2) {
+	if (table.table_info.table_metadata.iceberg_version < 2) {
 		throw NotImplementedException("Update Iceberg V%d tables", table.table_info.table_metadata.iceberg_version);
 	}
 

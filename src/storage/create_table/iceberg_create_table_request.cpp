@@ -20,12 +20,12 @@ IcebergCreateTableRequest::IcebergCreateTableRequest(const IcebergTableInformati
     : table_info(table_info) {
 }
 
-static void AddUnnamedField(yyjson_mut_doc *doc, yyjson_mut_val *field_obj, IcebergColumnDefinition &column);
+static void AddUnnamedField(yyjson_mut_doc *doc, yyjson_mut_val *field_obj, const IcebergColumnDefinition &column);
 
-static void AddNamedField(yyjson_mut_doc *doc, yyjson_mut_val *field_obj, IcebergColumnDefinition &column) {
+static void AddNamedField(yyjson_mut_doc *doc, yyjson_mut_val *field_obj, const IcebergColumnDefinition &column) {
 	yyjson_mut_obj_add_strcpy(doc, field_obj, "name", column.name.c_str());
 	yyjson_mut_obj_add_uint(doc, field_obj, "id", column.id);
-	if (column.type.IsNested()) {
+	if (column.type.id() != LogicalTypeId::VARIANT && column.type.IsNested()) {
 		auto type_obj = yyjson_mut_obj_add_obj(doc, field_obj, "type");
 		AddUnnamedField(doc, type_obj, column);
 		yyjson_mut_obj_add_bool(doc, field_obj, "required", column.required);
@@ -35,7 +35,7 @@ static void AddNamedField(yyjson_mut_doc *doc, yyjson_mut_val *field_obj, Iceber
 	yyjson_mut_obj_add_bool(doc, field_obj, "required", column.required);
 }
 
-static void AddUnnamedField(yyjson_mut_doc *doc, yyjson_mut_val *field_obj, IcebergColumnDefinition &column) {
+static void AddUnnamedField(yyjson_mut_doc *doc, yyjson_mut_val *field_obj, const IcebergColumnDefinition &column) {
 	D_ASSERT(column.type.IsNested());
 	switch (column.type.id()) {
 	case LogicalTypeId::STRUCT: {
@@ -91,22 +91,22 @@ static void AddUnnamedField(yyjson_mut_doc *doc, yyjson_mut_val *field_obj, Iceb
 	}
 }
 
-shared_ptr<IcebergTableSchema> IcebergCreateTableRequest::CreateIcebergSchema(const IcebergTableEntry *table_entry) {
+shared_ptr<IcebergTableSchema> IcebergCreateTableRequest::CreateIcebergSchema(const IcebergTableEntry &table_entry) {
 	auto schema = make_shared_ptr<IcebergTableSchema>();
 	// should this be a different schema id?
-	schema->schema_id = table_entry->table_info.table_metadata.current_schema_id;
+	schema->schema_id = table_entry.table_info.table_metadata.current_schema_id;
 
 	// TODO: this can all be refactored out
 	//  this makes the IcebergTableSchema, and we use that to dump data to JSON.
 	//  we can just directly dump it to json.
-	auto column_iterator = table_entry->GetColumns().Logical();
+	auto column_iterator = table_entry.GetColumns().Logical();
 	idx_t field_id = 1;
 
 	auto next_field_id = [&field_id]() -> idx_t {
 		return field_id++;
 	};
 
-	auto &constraints = table_entry->GetConstraints();
+	auto &constraints = table_entry.GetConstraints();
 	for (auto column = column_iterator.begin(); column != column_iterator.end(); ++column) {
 		auto name = (*column).Name();
 		// check if there is a not null constraint
@@ -140,7 +140,7 @@ shared_ptr<IcebergTableSchema> IcebergCreateTableRequest::CreateIcebergSchema(co
 }
 
 void IcebergCreateTableRequest::PopulateSchema(yyjson_mut_doc *doc, yyjson_mut_val *schema_json,
-                                               IcebergTableSchema &schema) {
+                                               const IcebergTableSchema &schema) {
 	yyjson_mut_obj_add_strcpy(doc, schema_json, "type", "struct");
 	auto fields_arr = yyjson_mut_obj_add_arr(doc, schema_json, "fields");
 

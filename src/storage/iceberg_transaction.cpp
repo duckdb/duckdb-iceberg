@@ -1,4 +1,4 @@
-#include "../include/storage/iceberg_transaction.hpp"
+#include "storage/iceberg_transaction.hpp"
 
 #include "duckdb/common/assert.hpp"
 #include "duckdb/parser/parsed_data/create_view_info.hpp"
@@ -238,7 +238,7 @@ static string ConstructTableUpdateJSON(rest_api_objects::CommitTableRequest &tab
 	return JsonDocToString(std::move(doc_p));
 }
 
-static rest_api_objects::TableRequirement CreateAssertRefSnapshotIdRequirement(IcebergSnapshot &old_snapshot) {
+static rest_api_objects::TableRequirement CreateAssertRefSnapshotIdRequirement(const IcebergSnapshot &old_snapshot) {
 	rest_api_objects::TableRequirement req;
 	req.has_assert_ref_snapshot_id = true;
 
@@ -291,26 +291,21 @@ TableTransactionInfo IcebergTransaction::GetTransactionRequest(ClientContext &co
 		if (!table_info.transaction_data) {
 			continue;
 		}
-		IcebergCommitState commit_state;
+		IcebergCommitState commit_state(table_info, context);
 		auto &table_change = commit_state.table_change;
 		auto &schema = table_info.schema.Cast<IcebergSchemaEntry>();
 		table_change.identifier._namespace.value = schema.namespace_items;
 		table_change.identifier.name = table_info.name;
 		table_change.has_identifier = true;
 
-		auto &metadata = table_info.table_metadata;
+		auto &metadata = commit_state.table_info.table_metadata;
 		auto current_snapshot = metadata.GetLatestSnapshot();
-		if (current_snapshot) {
-			auto &manifest_list_path = current_snapshot->manifest_list;
-			//! Read the manifest list
-			auto scan = AvroScan::ScanManifestList(*current_snapshot, metadata, context, manifest_list_path);
-			auto manifest_list_reader = make_uniq<manifest_list::ManifestListReader>(*scan);
-			while (!manifest_list_reader->Finished()) {
-				manifest_list_reader->Read(STANDARD_VECTOR_SIZE, commit_state.manifests);
-			}
+		auto &transaction_data = *commit_state.table_info.transaction_data;
+		if (!transaction_data.alters.empty()) {
+			commit_state.manifests = transaction_data.existing_manifest_list;
 		}
+		commit_state.latest_snapshot = current_snapshot;
 
-		auto &transaction_data = *table_info.transaction_data;
 		for (auto &update : transaction_data.updates) {
 			if (update->type == IcebergTableUpdateType::ADD_SNAPSHOT) {
 				// we need to recreate the keys in the current context.

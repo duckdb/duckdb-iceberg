@@ -119,7 +119,7 @@ const IcebergTransactionData &IcebergMultiFileList::GetTransactionData() const {
 	return *scan_info->transaction_data;
 }
 
-optional_ptr<IcebergSnapshot> IcebergMultiFileList::GetSnapshot() const {
+optional_ptr<const IcebergSnapshot> IcebergMultiFileList::GetSnapshot() const {
 	return scan_info->snapshot;
 }
 
@@ -230,8 +230,9 @@ unique_ptr<IcebergMultiFileList> IcebergMultiFileList::PushdownInternal(ClientCo
 
 	// Add new filters
 	for (auto &entry : new_filters.filters) {
-		if (entry.first < names.size()) {
-			result_filter_set.PushFilter(ColumnIndex(entry.first), entry.second->Copy());
+		auto &column_id = entry.first;
+		if (column_id < names.size()) {
+			result_filter_set.PushFilter(ColumnIndex(column_id), entry.second->Copy());
 		}
 	}
 
@@ -830,18 +831,21 @@ void IcebergMultiFileList::InitializeFiles(lock_guard<mutex> &guard) const {
 		auto &metadata = GetMetadata();
 		auto &fs = FileSystem::GetFileSystem(context);
 
-		// Read the manifest list, we need all the manifests to determine if we've seen all deletes
-		auto manifest_list_full_path = options.allow_moved_paths
-		                                   ? IcebergUtils::GetFullPath(iceberg_path, snapshot.manifest_list, fs)
-		                                   : snapshot.manifest_list;
-
-		//! Read the manifest list
-		auto scan = AvroScan::ScanManifestList(snapshot, metadata, context, manifest_list_full_path);
-		auto manifest_list_reader = make_uniq<manifest_list::ManifestListReader>(*scan);
-
 		vector<IcebergManifestFile> manifest_files;
-		while (!manifest_list_reader->Finished()) {
-			manifest_list_reader->Read(STANDARD_VECTOR_SIZE, manifest_files);
+		if (HasTransactionData() && !GetTransactionData().alters.empty()) {
+			auto &transaction_data = GetTransactionData();
+			manifest_files = transaction_data.existing_manifest_list;
+		} else {
+			// Read the manifest list, we need all the manifests to determine if we've seen all deletes
+			auto manifest_list_full_path = options.allow_moved_paths
+			                                   ? IcebergUtils::GetFullPath(iceberg_path, snapshot.manifest_list, fs)
+			                                   : snapshot.manifest_list;
+			//! Read the manifest list
+			auto scan = AvroScan::ScanManifestList(snapshot, metadata, context, manifest_list_full_path);
+			auto manifest_list_reader = make_uniq<manifest_list::ManifestListReader>(*scan);
+			while (!manifest_list_reader->Finished()) {
+				manifest_list_reader->Read(STANDARD_VECTOR_SIZE, manifest_files);
+			}
 		}
 
 		for (auto &manifest_file : manifest_files) {
@@ -931,6 +935,10 @@ void IcebergMultiFileList::ProcessDeletes(const vector<MultiFileColumnDefinition
 
 	// From the spec: "At most one deletion vector is allowed per data file in a snapshot"
 
+	optional_ptr<const case_insensitive_map_t<string>> transactional_delete_files;
+	if (HasTransactionData()) {
+		transactional_delete_files = GetTransactionData().transactional_delete_files;
+	}
 	while (!FinishedScanningDeletes()) {
 		vector<IcebergManifestEntry> entries;
 		delete_manifest_reader->Read(STANDARD_VECTOR_SIZE, entries);
@@ -942,30 +950,49 @@ void IcebergMultiFileList::ProcessDeletes(const vector<MultiFileColumnDefinition
 				//! Skip this file
 				continue;
 			}
-
-			if (StringUtil::CIEquals(data_file.file_format, "parquet")) {
-				ScanDeleteFile(manifest_entry, global_columns, column_indexes);
-			} else if (StringUtil::CIEquals(data_file.file_format, "puffin")) {
-				ScanPuffinFile(manifest_entry.data_file);
-			} else {
-				throw NotImplementedException(
-				    "File format '%s' not supported for deletes, only supports 'parquet' and 'puffin' currently",
-				    data_file.file_format);
+			auto &referenced_data_file = data_file.referenced_data_file;
+			if (!referenced_data_file.empty() && transactional_delete_files &&
+			    transactional_delete_files->count(referenced_data_file)) {
+				//! Skip this delete file, there's a transaction-local delete that makes it obsolete
+				continue;
 			}
+			delete_manifest_entries.push_back(std::move(manifest_entry));
+		}
+	}
+
+	for (auto &manifest_entry : delete_manifest_entries) {
+		auto &data_file = manifest_entry.data_file;
+		if (StringUtil::CIEquals(data_file.file_format, "parquet")) {
+			ScanDeleteFile(manifest_entry, global_columns, column_indexes);
+		} else if (StringUtil::CIEquals(data_file.file_format, "puffin")) {
+			ScanPuffinFile(manifest_entry);
+		} else {
+			throw NotImplementedException(
+			    "File format '%s' not supported for deletes, only supports 'parquet' and 'puffin' currently",
+			    data_file.file_format);
 		}
 	}
 
 	while (transaction_delete_idx < transaction_delete_manifests.size()) {
-		auto &delete_manifest = transaction_delete_manifests[transaction_delete_idx];
-		for (auto &manifest_entry : delete_manifest.get().entries) {
+		auto &delete_manifest = transaction_delete_manifests[transaction_delete_idx].get();
+		for (auto &manifest_entry : delete_manifest.entries) {
 			auto &data_file = manifest_entry.data_file;
 
-			//! FIXME: no file pruning for uncommitted data?
+			auto &referenced_data_file = data_file.referenced_data_file;
+			if (!referenced_data_file.empty() && transactional_delete_files) {
+				auto it = transactional_delete_files->find(referenced_data_file);
+				//! Check if this is the currently active (last) delete file for this referenced_data_file
+				if (it != transactional_delete_files->end() && it->second != data_file.file_path) {
+					//! It's not, skip the delete
+					continue;
+				}
+			}
 
+			//! FIXME: no file pruning for uncommitted data?
 			if (StringUtil::CIEquals(data_file.file_format, "parquet")) {
 				ScanDeleteFile(manifest_entry, global_columns, column_indexes);
 			} else if (StringUtil::CIEquals(data_file.file_format, "puffin")) {
-				ScanPuffinFile(manifest_entry.data_file);
+				ScanPuffinFile(manifest_entry);
 			} else {
 				throw NotImplementedException(
 				    "File format '%s' not supported for deletes, only supports 'parquet' and 'puffin' currently",
@@ -1042,7 +1069,7 @@ void IcebergMultiFileList::ScanDeleteFile(const IcebergManifestEntry &manifest_e
 			result.Reset();
 			delete_scan_function.function(context, function_input, result);
 			result.Flatten();
-			ScanPositionalDeleteFile(result);
+			ScanPositionalDeleteFile(manifest_entry, result);
 		} while (result.size() != 0);
 	} else if (data_file.content == IcebergManifestEntryContentType::EQUALITY_DELETES) {
 		do {

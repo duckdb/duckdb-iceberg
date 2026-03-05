@@ -24,7 +24,7 @@ statement ok
 set logging_level='debug'
 
 query I
-select rowid from my_datalake.default.table_unpartitioned order by all;
+select _row_id from my_datalake.default.table_unpartitioned order by all;
 ----
 NULL
 NULL

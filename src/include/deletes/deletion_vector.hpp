@@ -8,16 +8,20 @@ namespace duckdb {
 
 struct IcebergDeletionVectorData : public enable_shared_from_this<IcebergDeletionVectorData>, IcebergDeleteData {
 public:
-	IcebergDeletionVectorData() {
+	IcebergDeletionVectorData(const IcebergManifestEntry &entry)
+	    : IcebergDeleteData(IcebergDeleteType::DELETION_VECTOR, entry) {
 	}
 	virtual ~IcebergDeletionVectorData() override {
 	}
 
 public:
-	static shared_ptr<IcebergDeletionVectorData> FromBlob(data_ptr_t blob_start, idx_t blob_length);
+	static shared_ptr<IcebergDeletionVectorData> FromBlob(const IcebergManifestEntry &entry, data_ptr_t blob_start,
+	                                                      idx_t blob_length);
+	vector<data_t> ToBlob() const;
 
 public:
 	unique_ptr<DeleteFilter> ToFilter() const override;
+	void ToSet(set<idx_t> &out) const override;
 
 public:
 	unordered_map<int32_t, roaring::Roaring> bitmaps;

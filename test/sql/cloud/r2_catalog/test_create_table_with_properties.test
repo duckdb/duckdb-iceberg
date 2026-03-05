@@ -57,12 +57,12 @@ property1	value1
 property2	value2
 
 statement error
-create table invalid_table_format_version (a int) 
+create table invalid_table_format_version_400 (a int)
 WITH (
-    'format-version'='3',
+    'format-version'='400',
     'property1'='value1', 
     'property2'='value2'
 );
 ----
-<REGEX>:.*DuckDB-Iceberg only supports creating version 2 Iceberg tables.*
+<REGEX>:.*Invalid format version specified in table_properties.*
 

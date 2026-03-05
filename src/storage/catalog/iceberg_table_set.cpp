@@ -202,7 +202,7 @@ bool IcebergTableSet::CreateNewEntry(ClientContext &context, IcebergCatalog &cat
 	auto table_entry = make_uniq<IcebergTableEntry>(table_info, catalog, schema, info);
 	auto table_ptr = table_entry.get();
 	table_entry->table_info.schema_versions[0] = std::move(table_entry);
-	table_ptr->table_info.table_metadata.schemas[0] = IcebergCreateTableRequest::CreateIcebergSchema(table_ptr);
+	table_ptr->table_info.table_metadata.schemas[0] = IcebergCreateTableRequest::CreateIcebergSchema(*table_ptr);
 	table_ptr->table_info.table_metadata.current_schema_id = 0;
 	table_ptr->table_info.table_metadata.schemas[0]->schema_id = 0;
 	table_ptr->table_info.table_metadata.iceberg_version = iceberg_version.GetIndex();

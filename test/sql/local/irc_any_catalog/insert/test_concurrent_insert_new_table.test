@@ -46,7 +46,7 @@ commit
 statement error con1
 commit
 ----
-<REGEX>:.*Requirement failed: branch main was created concurrently.*
+<REGEX>:.*TransactionContext Error.*Conflict_409.*
 
 # only con2's data is in the table
 query II

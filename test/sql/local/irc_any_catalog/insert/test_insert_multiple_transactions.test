@@ -64,7 +64,7 @@ select * from my_datalake.default.multi_transaction_insert order by all;
 statement error con2
 commit
 ----
-<REGEX>:.*Requirement failed: branch main has changed.*
+<REGEX>:.*TransactionContext Error.*Conflict_409.*
 
 query II
 select * from my_datalake.default.multi_transaction_insert;

@@ -16,10 +16,8 @@ require httpfs
 statement ok
 CALL enable_logging('Iceberg');
 
-statement error
+statement ok
 delete from my_datalake.default.simple_v3_table where c_custkey %2 = 0;
-----
-<REGEX>:.*V3.*
 
 statement error
 delete from my_datalake.default.pyspark_iceberg_table_v1 where l_suppkey_long%2 = 0;

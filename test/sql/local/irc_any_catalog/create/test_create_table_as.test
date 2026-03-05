@@ -25,7 +25,6 @@ CALL enable_logging('HTTP');
 statement ok
 set logging_level='debug'
 
-
 statement ok
 use my_datalake.default;
 

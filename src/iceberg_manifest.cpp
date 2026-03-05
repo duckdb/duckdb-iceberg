@@ -110,7 +110,7 @@ LogicalType IcebergDataFile::GetType(const IcebergTableMetadata &metadata, const
 	return LogicalType::STRUCT(std::move(children));
 }
 
-Value IcebergDataFile::ToValue(const LogicalType &type) const {
+Value IcebergDataFile::ToValue(const IcebergTableMetadata &table_metadata, const LogicalType &type) const {
 	vector<Value> children;
 
 	// content: int
@@ -154,20 +154,31 @@ Value IcebergDataFile::ToValue(const LogicalType &type) const {
 	for (auto &child : upper_bounds) {
 		upper_bounds_values.push_back(Value::STRUCT({{"key", child.first}, {"value", child.second}}));
 	}
-
 	children.push_back(Value::MAP(LogicalType::STRUCT(bounds_types), upper_bounds_values));
 
+	// null_value_counts
 	child_list_t<LogicalType> null_value_count_types;
 	null_value_count_types.emplace_back("key", LogicalType::INTEGER);
 	null_value_count_types.emplace_back("value", LogicalType::BIGINT);
 
 	vector<Value> null_value_counts_values;
-	// null_value_counts: map<int, long>
 	for (auto &child : null_value_counts) {
 		null_value_counts_values.push_back(Value::STRUCT({{"key", child.first}, {"value", child.second}}));
 	}
-
 	children.push_back(Value::MAP(LogicalType::STRUCT(null_value_count_types), null_value_counts_values));
+
+	// referenced_data_file
+	if (table_metadata.iceberg_version >= 3) {
+		children.push_back(Value(referenced_data_file));
+	}
+	// content_size_in_bytes
+	if (table_metadata.iceberg_version >= 3) {
+		children.push_back(content_size_in_bytes);
+	}
+	// content_offset
+	if (table_metadata.iceberg_version >= 3) {
+		children.push_back(content_offset);
+	}
 
 	return Value::STRUCT(type, children);
 }
@@ -452,7 +463,6 @@ idx_t WriteToFile(const IcebergTableMetadata &table_metadata, const IcebergManif
 	}
 
 	// null_value_counts_struct
-	// lower bounds struct
 	child_list_t<LogicalType> null_value_counts_fields;
 	null_value_counts_fields.emplace_back("key", LogicalType::INTEGER);
 	null_value_counts_fields.emplace_back("value", LogicalType::BIGINT);
@@ -490,6 +500,51 @@ idx_t WriteToFile(const IcebergTableMetadata &table_metadata, const IcebergManif
 		yyjson_mut_obj_add_strcpy(doc, val_obj, "type", "binary");
 		yyjson_mut_obj_add_uint(doc, val_obj, "id", NULL_VALUE_COUNTS_VALUE);
 	}
+	// referenced_data_file
+	if (table_metadata.iceberg_version >= 3) {
+		child_list_t<Value> referenced_data_file;
+		// referenced_data_file: long
+		children.emplace_back("referenced_data_file", LogicalType::VARCHAR);
+		referenced_data_file.emplace_back("__duckdb_field_id", Value::INTEGER(REFERENCED_DATA_FILE));
+		referenced_data_file.emplace_back("__duckdb_nullable", Value::BOOLEAN(true));
+		data_file_field_ids.emplace_back("referenced_data_file", Value::STRUCT(referenced_data_file));
+
+		auto field_obj = yyjson_mut_arr_add_obj(doc, child_fields_arr);
+		yyjson_mut_obj_add_uint(doc, field_obj, "id", REFERENCED_DATA_FILE);
+		yyjson_mut_obj_add_strcpy(doc, field_obj, "name", "referenced_data_file");
+		yyjson_mut_obj_add_bool(doc, field_obj, "required", false);
+		yyjson_mut_obj_add_strcpy(doc, field_obj, "type", "string");
+	}
+	// content_size_in_bytes
+	if (table_metadata.iceberg_version >= 3) {
+		child_list_t<Value> content_size_in_bytes;
+		// content_size_in_bytes: long
+		children.emplace_back("content_size_in_bytes", LogicalType::BIGINT);
+		content_size_in_bytes.emplace_back("__duckdb_field_id", Value::INTEGER(CONTENT_SIZE_IN_BYTES));
+		content_size_in_bytes.emplace_back("__duckdb_nullable", Value::BOOLEAN(true));
+		data_file_field_ids.emplace_back("content_size_in_bytes", Value::STRUCT(content_size_in_bytes));
+
+		auto field_obj = yyjson_mut_arr_add_obj(doc, child_fields_arr);
+		yyjson_mut_obj_add_uint(doc, field_obj, "id", CONTENT_SIZE_IN_BYTES);
+		yyjson_mut_obj_add_strcpy(doc, field_obj, "name", "content_size_in_bytes");
+		yyjson_mut_obj_add_bool(doc, field_obj, "required", false);
+		yyjson_mut_obj_add_strcpy(doc, field_obj, "type", "long");
+	}
+	// content_offset
+	if (table_metadata.iceberg_version >= 3) {
+		child_list_t<Value> content_offset;
+		// content_offset: long
+		children.emplace_back("content_offset", LogicalType::BIGINT);
+		content_offset.emplace_back("__duckdb_field_id", Value::INTEGER(CONTENT_OFFSET));
+		content_offset.emplace_back("__duckdb_nullable", Value::BOOLEAN(true));
+		data_file_field_ids.emplace_back("content_offset", Value::STRUCT(content_offset));
+
+		auto field_obj = yyjson_mut_arr_add_obj(doc, child_fields_arr);
+		yyjson_mut_obj_add_uint(doc, field_obj, "id", CONTENT_OFFSET);
+		yyjson_mut_obj_add_strcpy(doc, field_obj, "name", "content_offset");
+		yyjson_mut_obj_add_bool(doc, field_obj, "required", false);
+		yyjson_mut_obj_add_strcpy(doc, field_obj, "type", "long");
+	}
 
 	{
 		// data_file: struct(...)
@@ -518,9 +573,6 @@ idx_t WriteToFile(const IcebergTableMetadata &table_metadata, const IcebergManif
 		auto &manifest_entry = manifest_file.entries[i];
 		idx_t col_idx = 0;
 
-		//! We rely on inheriting the snapshot_id, this is only acceptable for ADDED data files
-		D_ASSERT(manifest_entry.status == IcebergManifestEntryStatusType::ADDED);
-
 		// status: int
 		chunk.SetValue(col_idx++, i, Value::INTEGER(static_cast<int32_t>(manifest_entry.status)));
 		// snapshot_id: long
@@ -532,7 +584,7 @@ idx_t WriteToFile(const IcebergTableMetadata &table_metadata, const IcebergManif
 
 		auto &data_file = manifest_entry.data_file;
 		// data_file: struct(...)
-		chunk.SetValue(col_idx, i, data_file.ToValue(chunk.data[col_idx].GetType()));
+		chunk.SetValue(col_idx, i, data_file.ToValue(table_metadata, chunk.data[col_idx].GetType()));
 		col_idx++;
 	}
 	chunk.SetCardinality(manifest_file.entries.size());

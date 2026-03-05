@@ -180,7 +180,7 @@ TableFunction IcebergTableEntry::GetScanFunction(ClientContext &context, unique_
 		snapshot_lookup = IcebergSnapshotLookup::FromAtClause(at);
 	}
 	auto &metadata = table_info.table_metadata;
-	optional_ptr<IcebergSnapshot> snapshot = nullptr;
+	optional_ptr<const IcebergSnapshot> snapshot = nullptr;
 	try {
 		snapshot = metadata.GetSnapshot(snapshot_lookup);
 	} catch (InvalidConfigurationException &e) {
@@ -239,11 +239,11 @@ virtual_column_map_t IcebergTableEntry::GetVirtualColumns() const {
 virtual_column_map_t IcebergTableEntry::VirtualColumns() {
 	virtual_column_map_t result;
 	result.emplace(MultiFileReader::COLUMN_IDENTIFIER_FILENAME, TableColumn("filename", LogicalType::VARCHAR));
-	result.emplace(COLUMN_IDENTIFIER_ROW_ID, TableColumn("rowid", LogicalType::BIGINT));
+	result.emplace(COLUMN_IDENTIFIER_ROW_ID, TableColumn("_row_id", LogicalType::BIGINT));
 	result.emplace(MultiFileReader::COLUMN_IDENTIFIER_FILE_ROW_NUMBER,
 	               TableColumn("file_row_number", LogicalType::BIGINT));
 	result.emplace(IcebergMultiFileReader::COLUMN_IDENTIFIER_LAST_SEQUENCE_NUMBER,
-	               TableColumn("sequence_number", LogicalType::BIGINT));
+	               TableColumn("_last_updated_sequence_number", LogicalType::BIGINT));
 	return result;
 }
 

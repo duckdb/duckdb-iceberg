@@ -33,6 +33,6 @@ statement ok
 insert into my_datalake.default.test_delete_table select range a from range(1000);
 
 query I
-delete from my_datalake.default.test_delete_table where rowid in (0, 2, 4, 6);
+delete from my_datalake.default.test_delete_table where _row_id in (0, 2, 4, 6);
 ----
 0

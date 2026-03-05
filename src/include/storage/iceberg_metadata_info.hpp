@@ -20,24 +20,14 @@ namespace duckdb {
 struct IcebergDeleteFileInfo {
 	string data_file_path;
 	string file_name;
+	string file_format;
 	optional_idx footer_size;
 	idx_t delete_count;
 	idx_t file_size_bytes = 0;
 	idx_t pos_max_value;
 	idx_t pos_min_value;
-};
-
-struct IcebergFileData {
-	string path;
-	idx_t file_size_in_bytes = 0;
-	optional_idx footer_size;
-};
-
-struct IcebergFileListExtendedEntry {
-	IcebergFileData file;
-	IcebergDeleteFileInfo delete_file;
-	idx_t row_count;
-	idx_t delete_count = 0;
+	optional_idx content_size_in_bytes;
+	optional_idx content_offset;
 };
 
 } // namespace duckdb

@@ -52,6 +52,9 @@ static void IcebergScanSerialize(Serializer &serializer, const optional_ptr<Func
                                  const TableFunction &function) {
 	throw NotImplementedException("IcebergScan serialization not implemented");
 }
+static unique_ptr<FunctionData> IcebergScanDeserialize(Deserializer &deserializer, TableFunction &function) {
+	throw NotImplementedException("IcebergScan deserialization not implemented");
+}
 
 BindInfo IcebergBindInfo(const optional_ptr<FunctionData> bind_data) {
 	auto &multi_file_data = bind_data->Cast<MultiFileBindData>();
@@ -61,6 +64,17 @@ BindInfo IcebergBindInfo(const optional_ptr<FunctionData> bind_data) {
 	}
 	return BindInfo(*file_list.table);
 }
+
+//! FIXME: needs v1.5.1, causes a crash on v1.5.0
+// static bool IcebergScanSupportsPushdownType(const FunctionData &bind_data_p, idx_t column_id) {
+//	// Don't push down filters on the _row_id virtual column
+//	if (column_id == COLUMN_IDENTIFIER_ROW_ID) {
+//		return false;
+//	}
+
+//	// Default behavior for other columns
+//	return true;
+//}
 
 TableFunctionSet IcebergFunctions::GetIcebergScanFunction(ExtensionLoader &loader) {
 	// The iceberg_scan function is constructed by grabbing the parquet scan from the Catalog, then injecting the
@@ -77,13 +91,14 @@ TableFunctionSet IcebergFunctions::GetIcebergScanFunction(ExtensionLoader &loade
 		// Unset all of these: they are either broken, very inefficient.
 		// TODO: implement/fix these
 		function.serialize = IcebergScanSerialize;
-		function.deserialize = nullptr;
+		function.deserialize = IcebergScanDeserialize;
 
 		function.statistics = nullptr;
 		function.table_scan_progress = nullptr;
 		function.get_bind_info = IcebergBindInfo;
 		function.get_virtual_columns = IcebergVirtualColumns;
 		function.get_partition_stats = IcebergMultiFileReader::IcebergGetPartitionStats;
+		// function.supports_pushdown_type = IcebergScanSupportsPushdownType;
 
 		// Schema param is just confusing here
 		function.named_parameters.erase("schema");

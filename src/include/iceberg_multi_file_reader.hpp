@@ -84,8 +84,6 @@ public:
 private:
 	unique_ptr<MultiFileColumnDefinition> row_id_column;
 	unique_ptr<MultiFileColumnDefinition> last_updated_sequence_number_column;
-	//! Track which output column is sequence_number (if the virtual column is requested)
-	optional_idx sequence_number_col;
 };
 
 } // namespace duckdb

@@ -40,7 +40,7 @@ endloop
 
 # Insert rows 0-4
 query II
-select id, data from my_datalake.default.row_lineage_test AT (VERSION=>getvariable('snapshot0').snapshot_id) order by rowid;
+select id, data from my_datalake.default.row_lineage_test AT (VERSION=>getvariable('snapshot0').snapshot_id) order by _row_id;
 ----
 1	a
 2	b
@@ -50,7 +50,7 @@ select id, data from my_datalake.default.row_lineage_test AT (VERSION=>getvariab
 
 # Update row_ids 1 and 3
 query II
-select id, data from my_datalake.default.row_lineage_test AT (VERSION=>getvariable('snapshot1').snapshot_id) order by rowid;
+select id, data from my_datalake.default.row_lineage_test AT (VERSION=>getvariable('snapshot1').snapshot_id) order by _row_id;
 ----
 1	a
 2	b_u1
@@ -60,7 +60,7 @@ select id, data from my_datalake.default.row_lineage_test AT (VERSION=>getvariab
 
 # Delete row_ids 2 and 4
 query II
-select id, data from my_datalake.default.row_lineage_test AT (VERSION=>getvariable('snapshot2').snapshot_id) order by rowid;
+select id, data from my_datalake.default.row_lineage_test AT (VERSION=>getvariable('snapshot2').snapshot_id) order by _row_id;
 ----
 1	a
 2	b_u1
@@ -68,7 +68,7 @@ select id, data from my_datalake.default.row_lineage_test AT (VERSION=>getvariab
 
 # Insert 2 new rows (because of various rewrites this starts with a much higher row_id)
 query II
-select id, data from my_datalake.default.row_lineage_test AT (VERSION=>getvariable('snapshot3').snapshot_id) order by rowid;
+select id, data from my_datalake.default.row_lineage_test AT (VERSION=>getvariable('snapshot3').snapshot_id) order by _row_id;
 ----
 1	a
 2	b_u1
@@ -78,7 +78,7 @@ select id, data from my_datalake.default.row_lineage_test AT (VERSION=>getvariab
 
 # UPDATE row_ids 0 and 11
 query II
-select id, data from my_datalake.default.row_lineage_test AT (VERSION=>getvariable('snapshot4').snapshot_id) order by rowid;
+select id, data from my_datalake.default.row_lineage_test AT (VERSION=>getvariable('snapshot4').snapshot_id) order by _row_id;
 ----
 1	replaced
 2	b_u1
@@ -88,7 +88,7 @@ select id, data from my_datalake.default.row_lineage_test AT (VERSION=>getvariab
 
 # DELETE row_id 12
 query II
-select id, data from my_datalake.default.row_lineage_test AT (VERSION=>getvariable('snapshot5').snapshot_id) order by rowid;
+select id, data from my_datalake.default.row_lineage_test AT (VERSION=>getvariable('snapshot5').snapshot_id) order by _row_id;
 ----
 1	replaced
 2	b_u1
@@ -97,7 +97,7 @@ select id, data from my_datalake.default.row_lineage_test AT (VERSION=>getvariab
 
 # INSERT row_id 16 (again, because of various rewrites this starts with a much higher row_id)
 query II
-select id, data from my_datalake.default.row_lineage_test AT (VERSION=>getvariable('snapshot6').snapshot_id) order by rowid;
+select id, data from my_datalake.default.row_lineage_test AT (VERSION=>getvariable('snapshot6').snapshot_id) order by _row_id;
 ----
 1	replaced
 2	b_u1
@@ -107,7 +107,7 @@ select id, data from my_datalake.default.row_lineage_test AT (VERSION=>getvariab
 
 # Latest state of the table (same as above)
 query II
-select id, data from my_datalake.default.row_lineage_test order by rowid;
+select id, data from my_datalake.default.row_lineage_test order by _row_id;
 ----
 1	replaced
 2	b_u1

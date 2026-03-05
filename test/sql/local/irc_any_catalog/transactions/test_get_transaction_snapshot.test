@@ -33,6 +33,11 @@ create table my_datalake.default.get_transaction_snapshot (a int, b int);
 statement ok
 insert into my_datalake.default.get_transaction_snapshot select 0, 0;
 
+query I
+select count(*) from iceberg_snapshots(my_datalake.default.get_transaction_snapshot);
+----
+1
+
 statement ok con1
 begin
 
@@ -47,6 +52,12 @@ select count(*) from iceberg_snapshots(my_datalake.default.get_transaction_snaps
 
 statement ok con1
 commit;
+
+query II
+select * from my_datalake.default.get_transaction_snapshot ;
+----
+0	0
+1	1
 
 query I
 select count(*) from iceberg_snapshots(my_datalake.default.get_transaction_snapshot);

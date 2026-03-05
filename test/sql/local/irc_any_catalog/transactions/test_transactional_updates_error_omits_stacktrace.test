@@ -63,6 +63,6 @@ commit;
 
 # stacktrace should be logged on INFO level
 query I
-select message from duckdb_logs() where type like 'Iceberg' and log_level = 'INFO' order by "timestamp" desc limit 1;
+select message from duckdb_logs() where type like 'Iceberg' and not message.starts_with('Iceberg Transaction Cleanup') and log_level = 'INFO' order by "timestamp" desc limit 1;
 ----
 <REGEX>:.*org.apache.iceberg.exceptions.CommitFailedException.*

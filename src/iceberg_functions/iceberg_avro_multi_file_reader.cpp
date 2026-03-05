@@ -9,7 +9,7 @@
 namespace duckdb {
 constexpr column_t IcebergAvroMultiFileReader::PARTITION_SPEC_ID_FIELD_ID;
 constexpr column_t IcebergAvroMultiFileReader::SEQUENCE_NUMBER_FIELD_ID;
-constexpr column_t IcebergAvroMultiFileReader::MANIFEST_FILE_INDEX_FIELD_ID;
+constexpr column_t IcebergAvroMultiFileReader::MANIFEST_FILE_PATH_FIELD_ID;
 
 unique_ptr<MultiFileReader> IcebergAvroMultiFileReader::CreateInstance(const TableFunction &table) {
 	return make_uniq<IcebergAvroMultiFileReader>(table.function_info);
@@ -438,10 +438,14 @@ void IcebergAvroMultiFileReader::FinalizeChunk(ClientContext &context, const Mul
 	auto &manifest_file = manifest_scan_info.manifest_files[manifest_file_idx];
 
 	idx_t count = output_chunk.size();
+	auto &status_column = output_chunk.data[0];
+	status_column.Flatten(count);
+
 	auto &sequence_number_column = output_chunk.data[2];
 	sequence_number_column.Flatten(count);
 	auto &sequence_number_validity = FlatVector::Validity(sequence_number_column);
 	auto sequence_number_data = FlatVector::GetData<int64_t>(sequence_number_column);
+	auto status_column_data = FlatVector::GetData<int32_t>(status_column);
 	for (idx_t i = 0; i < count; i++) {
 		if (sequence_number_validity.RowIsValid(i)) {
 			//! Sequence number is explicitly set
@@ -483,10 +487,15 @@ void IcebergAvroMultiFileReader::FinalizeChunk(ClientContext &context, const Mul
 			//! First row id is explicitly set
 			continue;
 		}
-		first_row_id_validity.SetValid(i);
-		D_ASSERT(manifest_file.has_first_row_id);
-		first_row_id_data[i] = manifest_file.first_row_id + start_row_id;
-		start_row_id += record_count_data[i];
+		if (status_column_data[i] == 2) {
+			// Manifest entry is deleted, skip
+			continue;
+		}
+		if (manifest_file.has_first_row_id) {
+			first_row_id_validity.SetValid(i);
+			first_row_id_data[i] = manifest_file.first_row_id + start_row_id;
+			start_row_id += record_count_data[i];
+		}
 	}
 	(void)output_chunk;
 	count += 1;
@@ -519,14 +528,14 @@ unique_ptr<Expression> IcebergAvroMultiFileReader::GetVirtualColumnExpression(
 		}
 		return make_uniq<BoundConstantExpression>(entry->second);
 	}
-	if (column_id == MANIFEST_FILE_INDEX_FIELD_ID) {
+	if (column_id == MANIFEST_FILE_PATH_FIELD_ID) {
 		if (!reader_data.file_to_be_opened.extended_info) {
-			throw InternalException("Extended info not found for manifest_file_index column");
+			throw InternalException("Extended info not found for manifest_file_path column");
 		}
 		auto &options = reader_data.file_to_be_opened.extended_info->options;
-		auto entry = options.find("manifest_file_index");
+		auto entry = options.find("manifest_file_path");
 		if (entry == options.end()) {
-			throw InternalException("'manifest_file_index' not set when initializing the FileList");
+			throw InternalException("'manifest_file_path' not set when initializing the FileList");
 		}
 		return make_uniq<BoundConstantExpression>(entry->second);
 	}
@@ -579,7 +588,7 @@ shared_ptr<MultiFileList> IcebergAvroMultiFileReader::CreateFileList(ClientConte
 			file_info.extended_info->options["last_modified"] = Value::TIMESTAMP(timestamp_t(0));
 			file_info.extended_info->options["partition_spec_id"] = Value::INTEGER(manifest.partition_spec_id);
 			file_info.extended_info->options["sequence_number"] = Value::BIGINT(manifest.sequence_number);
-			file_info.extended_info->options["manifest_file_index"] = Value::UBIGINT(i);
+			file_info.extended_info->options["manifest_file_path"] = Value(manifest.manifest_path);
 		}
 	}
 

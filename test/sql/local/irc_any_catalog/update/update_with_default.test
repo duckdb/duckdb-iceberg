@@ -1,0 +1,58 @@
+# name: test/sql/local/irc_any_catalog/update/update_with_default.test
+# description: Test ducklake updates
+# group: [update]
+
+require-env ICEBERG_SERVER_AVAILABLE
+
+require-env SECRETS_CREATED_AND_CATALOG_ATTACHED
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+require core_functions
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+CALL enable_logging('HTTP');
+
+statement ok
+set logging_level='debug'
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.test;
+
+statement ok
+CREATE TABLE my_datalake.default.test(a VARCHAR, b BOOLEAN, c INTEGER);
+
+statement ok
+BEGIN
+
+statement ok
+INSERT INTO my_datalake.default.test(b, a) VALUES (true, 'test');
+
+query III
+SELECT * FROM my_datalake.default.test;
+----
+test	true	NULL
+
+statement error
+UPDATE my_datalake.default.test
+	SET b = DEFAULT
+;
+----
+SET DEFAULT is not yet supported for updates of a Iceberg table
+
+#query III
+#select * FROM my_datalake.default.test
+#----
+#test	NULL	NULL
+
+statement ok
+ABORT

@@ -48,7 +48,7 @@ insert into my_datalake.default.tbl values
 
 # Scan the transaction-local snapshot/manifest_file/manifest_entry we created
 query IIII
-select sequence_number, rowid, id, data from my_datalake.default.tbl order by rowid;
+select _last_updated_sequence_number, _row_id, id, data from my_datalake.default.tbl order by _row_id;
 ----
 1	0	1	a
 1	1	2	b
@@ -64,7 +64,7 @@ insert into my_datalake.default.tbl values
 
 # Scan the transaction-local snapshot/manifest_file/manifest_entry we created
 query IIII
-select sequence_number, rowid, id, data from my_datalake.default.tbl order by rowid;
+select _last_updated_sequence_number, _row_id, id, data from my_datalake.default.tbl order by _row_id;
 ----
 1	0	1	a
 1	1	2	b
@@ -79,7 +79,7 @@ commit
 
 # After we commit, this should give the same result
 query IIII
-select sequence_number, rowid, id, data from my_datalake.default.tbl order by rowid;
+select _last_updated_sequence_number, _row_id, id, data from my_datalake.default.tbl order by _row_id;
 ----
 1	0	1	a
 1	1	2	b
