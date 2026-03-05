@@ -1,0 +1,34 @@
+# name: test/sql/local/missing_map_bounds.test
+# description: Test ducklake updates
+# group: [local]
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+require core_functions
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+CALL enable_logging('HTTP');
+
+statement ok
+set logging_level='debug'
+
+query IIII
+from iceberg_scan('__WORKING_DIRECTORY__/data/persistent/map_stats/default.db/map_stats', version='00002-0e059d4b-e5e8-41af-a763-76cbf3a3d0bc', allow_moved_paths=true) order by all;
+----
+2026-01-01 00:00:00+00	hello	world	{key=value1}
+2026-01-02 00:00:00+00	hello	world	{key=value1}
+
+
+query IIII
+from iceberg_scan('__WORKING_DIRECTORY__/data/persistent/map_stats/default.db/map_stats', version='00002-0e059d4b-e5e8-41af-a763-76cbf3a3d0bc', allow_moved_paths=true) where timestamp >= '2026-01-01' AND timestamp < '2026-01-02' AND metadata['key'] = 'value1' order by all;
+----
+2026-01-01 00:00:00+00	hello	world	{key=value1}

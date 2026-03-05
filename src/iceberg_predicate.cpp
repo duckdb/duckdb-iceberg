@@ -27,7 +27,8 @@ public:
 		if (expr.index != 0) {
 			return nullptr;
 		}
-		return make_uniq<BoundConstantExpression>(val);
+		auto &return_type = expr.return_type;
+		return make_uniq<BoundConstantExpression>(val.DefaultCastAs(return_type, true));
 	}
 
 public:
