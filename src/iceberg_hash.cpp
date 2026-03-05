@@ -109,21 +109,21 @@ int32_t IcebergHash::HashDecimal(const Value &value) {
 
 	if (is_hugeint) {
 		// Write 16 bytes big-endian
-		buf[0]  = static_cast<uint8_t>(hugeint_val.upper >> 56);
-		buf[1]  = static_cast<uint8_t>(hugeint_val.upper >> 48);
-		buf[2]  = static_cast<uint8_t>(hugeint_val.upper >> 40);
-		buf[3]  = static_cast<uint8_t>(hugeint_val.upper >> 32);
-		buf[4]  = static_cast<uint8_t>(hugeint_val.upper >> 24);
-		buf[5]  = static_cast<uint8_t>(hugeint_val.upper >> 16);
-		buf[6]  = static_cast<uint8_t>(hugeint_val.upper >>  8);
-		buf[7]  = static_cast<uint8_t>(hugeint_val.upper);
-		buf[8]  = static_cast<uint8_t>(hugeint_val.lower >> 56);
-		buf[9]  = static_cast<uint8_t>(hugeint_val.lower >> 48);
+		buf[0] = static_cast<uint8_t>(hugeint_val.upper >> 56);
+		buf[1] = static_cast<uint8_t>(hugeint_val.upper >> 48);
+		buf[2] = static_cast<uint8_t>(hugeint_val.upper >> 40);
+		buf[3] = static_cast<uint8_t>(hugeint_val.upper >> 32);
+		buf[4] = static_cast<uint8_t>(hugeint_val.upper >> 24);
+		buf[5] = static_cast<uint8_t>(hugeint_val.upper >> 16);
+		buf[6] = static_cast<uint8_t>(hugeint_val.upper >> 8);
+		buf[7] = static_cast<uint8_t>(hugeint_val.upper);
+		buf[8] = static_cast<uint8_t>(hugeint_val.lower >> 56);
+		buf[9] = static_cast<uint8_t>(hugeint_val.lower >> 48);
 		buf[10] = static_cast<uint8_t>(hugeint_val.lower >> 40);
 		buf[11] = static_cast<uint8_t>(hugeint_val.lower >> 32);
 		buf[12] = static_cast<uint8_t>(hugeint_val.lower >> 24);
 		buf[13] = static_cast<uint8_t>(hugeint_val.lower >> 16);
-		buf[14] = static_cast<uint8_t>(hugeint_val.lower >>  8);
+		buf[14] = static_cast<uint8_t>(hugeint_val.lower >> 8);
 		buf[15] = static_cast<uint8_t>(hugeint_val.lower);
 		byte_len = 16;
 	} else {
