@@ -13,8 +13,6 @@ require iceberg
 
 require httpfs
 
-mode skip
-
 statement ok
 CALL enable_logging('HTTP');
 
