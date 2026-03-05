@@ -100,6 +100,9 @@ jobs:
           rm -rf data/generated
           python3 -m scripts.data_generators.generate_data nessie
 
+      - name: Setup tmate session
+        uses: mxschmitt/action-tmate@v3
+
       - name: Run Generic IRC tests
         env:
           ICEBERG_SERVER_AVAILABLE: 1
