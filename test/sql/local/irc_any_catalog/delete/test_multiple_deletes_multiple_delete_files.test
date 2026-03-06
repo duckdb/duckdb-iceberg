@@ -35,25 +35,25 @@ CREATE TABLE my_datalake.default.test AS SELECT i id FROM range(5000000) t(i);
 query I
 select count(*) from iceberg_metadata(my_datalake.default.test);
 ----
-3
+1
 
 statement ok
 delete from my_datalake.default.test where id in (10000, 3000000, 4800000);
 
-# Expect 3 delete files, one for every data file
+# Expect 1 delete files, as there is 1 parquet data file
 query I
 select count(*) from iceberg_metadata(my_datalake.default.test) where manifest_content = 'DELETE';
 ----
-3
+1
 
 statement ok
 delete from my_datalake.default.test where id in (10001, 3000001, 4800001);
 
-# Expect 3 more delete files, each containing point deletes
+# Expect 1 more delete file, each containing point deletes
 query I
 select count(*) from iceberg_metadata(my_datalake.default.test) where manifest_content = 'DELETE';
 ----
-6
+2
 
 query I
 select * from my_datalake.default.test where id in (10000, 10001, 3000000, 3000001, 4800000, 4800001);

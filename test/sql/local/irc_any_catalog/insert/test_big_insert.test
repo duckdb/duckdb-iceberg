@@ -32,4 +32,4 @@ INSERT INTO my_datalake.default.insert_test_big SELECT i, concat('thisisalongstr
 query II
 explain analyze select * from my_datalake.default.insert_test_big
 ----
-analyzed_plan	<REGEX>:.*Total Files Read: 3.*
+analyzed_plan	<REGEX>:.*Total Files Read: 1.*
