@@ -36,7 +36,7 @@ jobs:
   regression-test-benchmark-runner:
     name: Regression Tests
     needs: check-draft
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-latest
     env:
       CC: gcc-10
       CXX: g++-10
@@ -44,6 +44,10 @@ jobs:
       BUILD_BENCHMARK: 1
       CORE_EXTENSIONS: "tpch;avro;parquet;httpfs"
       HTTP_PROXY_PUBLIC: http://localhost:8878
+      VCPKG_TARGET_TRIPLET: 'x64-linux-release'
+      VCPKG_FEATURE_FLAGS: "-binarycaching"
+      VCPKG_TOOLCHAIN_PATH: ${{ github.workspace }}/vcpkg/scripts/buildsystems/vcpkg.cmake
+      PIP_BREAK_SYSTEM_PACKAGES: 1
 
     steps:
       - uses: actions/checkout@v4
@@ -55,16 +59,35 @@ jobs:
         with:
           python-version: '3.13'
 
-      - name: Setup vcpkg
-        uses: lukka/run-vcpkg@v11.1
-        with:
-          vcpkgGitCommitId: 84bab45d415d22042bd0b9081aea57f362da3f35
-
       - name: Set up Java
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '21'
+
+      - name: Setup vcpkg
+        uses: lukka/run-vcpkg@v11.1
+        with:
+          vcpkgGitCommitId: 84bab45d415d22042bd0b9081aea57f362da3f35
+
+      - name: Install Ninja
+        shell: bash
+        run: sudo apt-get update -y -qq && sudo apt-get install -y -qq ninja-build
+
+      - name: Setup Ccache
+        uses: hendrikmuhs/ccache-action@main
+        with:
+          key: ${{ github.job }}
+          save: ${{ github.ref == 'refs/heads/main' || github.repository != 'duckdb/duckdb' }}
+
+      - name: Build extension
+        env:
+          GEN: ninja
+          STATIC_LIBCPP: 1
+          ENABLE_EXTENSION_AUTOLOADING: 1
+          ENABLE_EXTENSION_AUTOINSTALL: 1
+        run: |
+          make release
 
       - name: Set up Docker Compose
         uses: docker/setup-compose-action@v1
@@ -108,13 +131,13 @@ jobs:
         shell: bash
         run: sudo apt-get update -y -qq && sudo apt-get install -y -qq ninja-build && pip install requests
 
-      - name: Build Current Branch
-        shell: bash
-        run: |
-          make release
-
       - name: Build Base Branch
         shell: bash
+        env:
+          GEN: ninja
+          STATIC_LIBCPP: 1
+          ENABLE_EXTENSION_AUTOLOADING: 1
+          ENABLE_EXTENSION_AUTOINSTALL: 1
         run: |
           git clone --branch ${{ env.BASE_BRANCH }} https://github.com/${{ github.repository }}.git --depth=1 base
           cd base
