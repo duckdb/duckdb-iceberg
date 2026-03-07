@@ -1,0 +1,42 @@
+# name: test/sql/local/partitioning/truncate/truncate_varchar.test
+# group: [truncate]
+
+require avro
+
+require parquet
+
+require iceberg
+
+statement ok
+create view scan as select * from ICEBERG_SCAN('__WORKING_DIRECTORY__/data/generated/iceberg/spark-local/default/truncate_partitioned_varchar');
+
+query I
+select count(*) from scan;
+----
+5
+
+# unconstrained query reads all files
+query II
+explain analyze select * from scan;
+----
+analyzed_plan	<REGEX>:.*Total Files Read: 3\s+.*
+
+query I
+select count(*) from scan where nested.data >= '🐯';
+----
+3
+
+# query II
+# explain analyze select * from scan where nested.data >= '🐯';
+# ----
+# analyzed_plan	<REGEX>:.*Total Files Read: 1\s+.*
+
+query I
+select count(*) from scan where nested.data = '☭☫☦︎';
+----
+1
+
+# query II
+# explain analyze select * from scan where nested.data = '☭☫☦︎';
+# ----
+# analyzed_plan	<REGEX>:.*Total Files Read: 1\s+.*

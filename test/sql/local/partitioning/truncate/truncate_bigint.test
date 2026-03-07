@@ -1,0 +1,32 @@
+# name: test/sql/local/partitioning/truncate/truncate_bigint.test
+# group: [truncate]
+
+require avro
+
+require parquet
+
+require iceberg
+
+statement ok
+create view scan as select * from ICEBERG_SCAN('__WORKING_DIRECTORY__/data/generated/iceberg/spark-local/default/truncate_partitioned_bigint');
+
+query I
+select count(*) from scan;
+----
+9
+
+# unconstrained query reads all files
+query II
+explain analyze select * from scan;
+----
+analyzed_plan	<REGEX>:.*Total Files Read: 3\s+.*
+
+query I
+select count(*) from scan where nested.value >= 10001000003000;
+----
+3
+
+query II
+explain analyze select * from scan where nested.value >= 10001000003000;
+----
+analyzed_plan	<REGEX>:.*Total Files Read: 2\s+.*
