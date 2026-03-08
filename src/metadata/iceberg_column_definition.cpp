@@ -204,6 +204,25 @@ bool IcebergColumnDefinition::IsIcebergPrimitiveType() const {
 	}
 }
 
+unique_ptr<IcebergColumnDefinition> IcebergColumnDefinition::Copy() const {
+	auto res = make_uniq<IcebergColumnDefinition>();
+	res->id = id;
+	res->name = name;
+	res->type = type;
+	// TODO: initial default and write default need more support here
+	if (initial_default) {
+		res->initial_default = make_uniq<Value>(initial_default.get());
+	}
+	if (write_default) {
+		res->write_default = make_uniq<Value>(write_default.get());
+	}
+	res->required = required;
+	for (auto &child : children) {
+		res->children.push_back(child->Copy());
+	}
+	return res;
+}
+
 ColumnDefinition IcebergColumnDefinition::GetColumnDefinition() const {
 	optional_ptr<Value> default_to_use;
 	if (write_default) {

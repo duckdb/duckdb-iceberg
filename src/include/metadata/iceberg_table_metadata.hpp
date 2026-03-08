@@ -64,9 +64,11 @@ public:
 	const string GetDataPath() const;
 	const string GetMetadataPath() const;
 
-	//! For Nessie catalogs (version ?)
-	bool HasLastColumnId() const;
-	idx_t GetLastColumnId() const;
+	bool HasLastAssignedColumnFieldId() const;
+	idx_t GetLastAssignedColumnFieldId() const;
+
+	bool HasLastPartitionId() const;
+	int32_t GetLastPartitionFieldId() const;
 
 	const case_insensitive_map_t<string> &GetTableProperties() const;
 	string GetTableProperty(string property_string) const;
@@ -91,6 +93,7 @@ public:
 	idx_t last_updated_ms;
 
 	optional_idx last_column_id;
+	optional_idx last_partition_field_id;
 
 	//! partition_spec_id -> partition spec
 	unordered_map<int32_t, IcebergPartitionSpec> partition_specs;

@@ -1,23 +1,18 @@
 #include "storage/catalog/iceberg_schema_entry.hpp"
-
 #include "storage/iceberg_table_information.hpp"
 #include "storage/catalog/iceberg_catalog.hpp"
 #include "storage/iceberg_transaction.hpp"
 #include "storage/catalog/iceberg_table_entry.hpp"
-#include "storage/iceberg_transaction.hpp"
 #include "utils/iceberg_type.hpp"
 #include "duckdb/parser/column_list.hpp"
-#include "duckdb/parser/parsed_data/create_view_info.hpp"
-#include "duckdb/parser/parsed_data/create_index_info.hpp"
-#include "duckdb/parser/parsed_data/create_schema_info.hpp"
-#include "duckdb/planner/parsed_data/bound_create_table_info.hpp"
-#include "duckdb/parser/parsed_data/drop_info.hpp"
 #include "duckdb/parser/constraints/list.hpp"
-#include "duckdb/common/unordered_set.hpp"
 #include "duckdb/parser/parsed_data/alter_info.hpp"
 #include "duckdb/parser/parsed_data/alter_table_info.hpp"
+#include "duckdb/parser/parsed_data/create_index_info.hpp"
+#include "duckdb/parser/parsed_data/create_schema_info.hpp"
+#include "duckdb/parser/parsed_data/drop_info.hpp"
 #include "duckdb/parser/parsed_expression_iterator.hpp"
-#include "storage/catalog/iceberg_catalog.hpp"
+#include "duckdb/planner/parsed_data/bound_create_table_info.hpp"
 namespace duckdb {
 
 IcebergSchemaEntry::IcebergSchemaEntry(Catalog &catalog, CreateSchemaInfo &info)
@@ -191,7 +186,48 @@ optional_ptr<CatalogEntry> IcebergSchemaEntry::CreateCollation(CatalogTransactio
 }
 
 void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) {
-	throw NotImplementedException("Alter Schema Entry");
+	if (info.type != AlterType::ALTER_TABLE) {
+		throw NotImplementedException("Only ALTER TABLE is supported for Iceberg");
+	}
+	auto &alter_table_info = info.Cast<AlterTableInfo>();
+	auto &irc_transaction = GetICTransaction(transaction);
+	auto &context = transaction.GetContext();
+
+	EntryLookupInfo lookup(CatalogType::TABLE_ENTRY, alter_table_info.name);
+	auto catalog_entry = tables.GetEntry(context, lookup);
+	if (!catalog_entry) {
+		throw CatalogException("Table with name \"%s\" does not exist!", alter_table_info.name);
+	}
+	auto &table_entry = catalog_entry->Cast<IcebergTableEntry>();
+	auto &catalog_table_info = table_entry.table_info;
+	irc_transaction.updated_tables.emplace(catalog_table_info.GetTableKey(), catalog_table_info.Copy());
+	auto &updated_table = irc_transaction.updated_tables.at(catalog_table_info.GetTableKey());
+	updated_table.InitSchemaVersions();
+	updated_table.InitTransactionData(irc_transaction);
+
+	auto &current_schema = updated_table.table_metadata.GetLatestSchema();
+	// Copy the schema, then add it to the table metadata
+	auto new_schema = current_schema.Copy();
+	auto new_schema_id = updated_table.GetMaxSchemaId() + 1;
+	new_schema->schema_id = new_schema_id;
+
+	switch (alter_table_info.alter_table_type) {
+	case AlterTableType::SET_PARTITIONED_BY: {
+		auto &partition_info = alter_table_info.Cast<SetPartitionedByInfo>();
+
+		// Ensure schema is the same as current
+		updated_table.AddAssertCurrentSchemaId(irc_transaction);
+		// Ensure last assigned partition field id is up to date
+		updated_table.AddAssertLastAssignedPartitionId(irc_transaction);
+
+		updated_table.SetPartitionedBy(irc_transaction, partition_info.partition_keys, *new_schema);
+		return;
+	}
+	default: {
+		throw NotImplementedException("Alter table type not supported: %s",
+		                              EnumUtil::ToString(alter_table_info.alter_table_type));
+	}
+	}
 }
 
 static bool CatalogTypeIsSupported(CatalogType type) {

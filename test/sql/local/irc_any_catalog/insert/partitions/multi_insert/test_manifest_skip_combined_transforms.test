@@ -1,0 +1,111 @@
+# name: test/sql/local/irc_any_catalog/insert/partitions/multi_insert/test_manifest_skip_combined_transforms.test
+# description: Test manifest skipping with combined transforms (identity + year) across multiple inserts
+# group: [multi_insert]
+
+require-env ICEBERG_SERVER_AVAILABLE
+
+require-env SECRETS_CREATED_AND_CATALOG_ATTACHED
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+create schema if not exists my_datalake.default;
+
+statement ok
+drop table if exists my_datalake.default.test_skip_combined;
+
+statement ok
+CREATE TABLE my_datalake.default.test_skip_combined (id int, region varchar, ts TIMESTAMP)
+PARTITIONED BY (region, year(ts));
+
+# Insert 1: US, year 2020
+statement ok
+insert into my_datalake.default.test_skip_combined
+select range, 'US', make_timestamp(2020, (range % 12) + 1, 15, 12, 0, 0)
+from range(100);
+
+# Insert 2: EU, year 2021
+statement ok
+insert into my_datalake.default.test_skip_combined
+select 100 + range, 'EU', make_timestamp(2021, (range % 12) + 1, 15, 12, 0, 0)
+from range(100);
+
+# Insert 3: US, year 2022
+statement ok
+insert into my_datalake.default.test_skip_combined
+select 200 + range, 'US', make_timestamp(2022, (range % 12) + 1, 15, 12, 0, 0)
+from range(100);
+
+# Insert 4: EU, year 2023
+statement ok
+insert into my_datalake.default.test_skip_combined
+select 300 + range, 'EU', make_timestamp(2023, (range % 12) + 1, 15, 12, 0, 0)
+from range(100);
+
+query I
+select count(*) from my_datalake.default.test_skip_combined;
+----
+400
+
+statement ok
+CALL enable_logging('Iceberg');
+
+statement ok
+CALL truncate_duckdb_logs();
+
+# Query US only - should skip the 2 EU manifest files
+query I
+select count(*) from my_datalake.default.test_skip_combined where region = 'US';
+----
+200
+
+query I
+select count(*) from duckdb_logs() where type = 'Iceberg' and message like '%skipped%manifest_file%';
+----
+2
+
+statement ok
+CALL truncate_duckdb_logs();
+
+# Query year 2020 only - should skip 3 manifest files (2021, 2022, 2023)
+query I
+select count(*) from my_datalake.default.test_skip_combined
+where ts >= '2020-01-01'::TIMESTAMP and ts < '2021-01-01'::TIMESTAMP;
+----
+100
+
+query I
+select count(*) from duckdb_logs() where type = 'Iceberg' and message like '%skipped%manifest_file%';
+----
+2
+
+statement ok
+CALL truncate_duckdb_logs();
+
+# Verify correctness
+statement ok
+create table local_skip_combined as
+select range as id, 'US' as region, make_timestamp(2020, (range % 12) + 1, 15, 12, 0, 0) as ts from range(100)
+union all
+select 100 + range, 'EU', make_timestamp(2021, (range % 12) + 1, 15, 12, 0, 0) from range(100)
+union all
+select 200 + range, 'US', make_timestamp(2022, (range % 12) + 1, 15, 12, 0, 0) from range(100)
+union all
+select 300 + range, 'EU', make_timestamp(2023, (range % 12) + 1, 15, 12, 0, 0) from range(100);
+
+query III nosort expected_result
+select * from local_skip_combined order by id;
+----
+
+query III nosort expected_result
+select * from my_datalake.default.test_skip_combined order by id;
+----
