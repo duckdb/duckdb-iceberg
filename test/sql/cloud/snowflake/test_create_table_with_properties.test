@@ -61,12 +61,15 @@ property1	value1
 property2	value2
 
 statement error
-create table invalid_table_format_version (a int) 
+create table invalid_table_format_version_500 (a int)
 WITH (
-    'format-version'='3',
+    'format-version'='500',
     'property1'='value1', 
     'property2'='value2'
 );
 ----
-<REGEX>:.*DuckDB-Iceberg only supports creating version 2 Iceberg tables.*
+<REGEX>:.*Unsupported format version.*
+
+statement ok
+drop table if exists my_datalake.test_create_schema.test_create_table_with_properties;
 
