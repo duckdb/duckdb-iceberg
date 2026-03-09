@@ -345,10 +345,13 @@ TableTransactionInfo IcebergTransaction::GetTransactionRequest(ClientContext &co
 
 IcebergTableInformation &IcebergTransaction::GetTableInfoForTransaction(IcebergTableInformation &table_info) {
 	lock_guard<mutex> guard(lock);
-	if (table_info.IsTransactionLocalTable(guard, *this)) {
-		return table_info;
+
+	auto table_key = table_info.GetTableKey();
+	auto it = updated_tables.find(table_key);
+	if (it != updated_tables.end()) {
+		return it->second;
 	}
-	auto &updated_table = updated_tables.emplace(table_info.GetTableKey(), table_info.Copy(*this)).first->second;
+	auto &updated_table = updated_tables.emplace(table_key, table_info.Copy(*this)).first->second;
 	updated_table.InitSchemaVersions();
 	return updated_table;
 }
