@@ -72,23 +72,32 @@ static unordered_map<int32_t, int64_t> GetCounts(Vector &counts, idx_t index) {
 	return parsed_counts;
 }
 
-static vector<int32_t> GetEqualityIds(Vector &equality_ids, idx_t index) {
-	vector<int32_t> result;
+template <class T>
+static vector<T> GetListTemplated(Vector &item, idx_t index) {
+	vector<T> result;
 
-	if (!FlatVector::Validity(equality_ids).RowIsValid(index)) {
+	if (!FlatVector::Validity(item).RowIsValid(index)) {
 		return result;
 	}
-	auto &equality_ids_child = ListVector::GetEntry(equality_ids);
-	auto equality_ids_data = FlatVector::GetData<int32_t>(equality_ids_child);
-	auto equality_ids_list = FlatVector::GetData<list_entry_t>(equality_ids);
-	auto list_entry = equality_ids_list[index];
+	auto &item_child = ListVector::GetEntry(item);
+	auto item_data = FlatVector::GetData<T>(item_child);
+	auto item_list = FlatVector::GetData<list_entry_t>(item);
+	auto list_entry = item_list[index];
 
 	for (idx_t j = 0; j < list_entry.length; j++) {
 		auto list_idx = list_entry.offset + j;
-		result.push_back(equality_ids_data[list_idx]);
+		result.push_back(item_data[list_idx]);
 	}
 
 	return result;
+}
+
+static vector<int32_t> GetEqualityIds(Vector &equality_ids, idx_t index) {
+	return GetListTemplated<int32_t>(equality_ids, index);
+}
+
+static vector<int64_t> GetSplitOffsets(Vector &split_offsets, idx_t index) {
+	return GetListTemplated<int64_t>(split_offsets, index);
 }
 
 idx_t ManifestReader::ReadChunk(idx_t offset, idx_t count, vector<IcebergManifestEntry> &result) {
@@ -101,8 +110,13 @@ idx_t ManifestReader::ReadChunk(idx_t offset, idx_t count, vector<IcebergManifes
 	idx_t vector_index = 0;
 	auto &status = chunk.data[vector_index++];
 	auto &snapshot_id = chunk.data[vector_index++];
+
 	auto &sequence_number = chunk.data[vector_index++];
+	auto &sequence_number_validity = FlatVector::Validity(sequence_number);
+
 	auto &file_sequence_number = chunk.data[vector_index++];
+	auto &file_sequence_number_validity = FlatVector::Validity(file_sequence_number);
+
 	auto &data_file = chunk.data[vector_index++];
 
 	auto &partition_spec_id = chunk.data[vector_index++];
@@ -145,12 +159,18 @@ idx_t ManifestReader::ReadChunk(idx_t offset, idx_t count, vector<IcebergManifes
 	}
 
 	auto status_data = FlatVector::GetData<int32_t>(status);
+
+	auto &snapshot_id_validity = FlatVector::Validity(snapshot_id);
 	auto snapshot_id_data = FlatVector::GetData<int64_t>(snapshot_id);
+
 	auto sequence_number_data = FlatVector::GetData<int64_t>(sequence_number);
 	auto file_sequence_number_data = FlatVector::GetData<int64_t>(file_sequence_number);
 	auto partition_spec_id_data = FlatVector::GetData<int32_t>(partition_spec_id);
 	auto manifest_file_sequence_number_data = FlatVector::GetData<int64_t>(manifest_file_sequence_number);
 	auto manifest_file_path_data = FlatVector::GetData<string_t>(manifest_file_path);
+
+	auto &sort_order_id_validity = FlatVector::Validity(sort_order_id);
+	auto sort_order_id_data = FlatVector::GetData<int32_t>(sort_order_id);
 
 	int32_t *content_data = nullptr;
 	int64_t *first_row_id_data = nullptr;
@@ -213,19 +233,42 @@ idx_t ManifestReader::ReadChunk(idx_t offset, idx_t count, vector<IcebergManifes
 			data_file.content_size_in_bytes = content_size_in_bytes->GetValue(index);
 		}
 
+		data_file.split_offsets = GetSplitOffsets(split_offsets, index);
+		data_file.has_sort_order_id = sort_order_id_validity.RowIsValid(index);
+		if (data_file.has_sort_order_id) {
+			data_file.sort_order_id = sort_order_id_data[index];
+		}
 		if (iceberg_version >= 2) {
 			data_file.content = (IcebergManifestEntryContentType)content_data[index];
 			data_file.equality_ids = GetEqualityIds(equality_ids, index);
 
-			if (FlatVector::Validity(sequence_number).RowIsValid(index)) {
+			if (sequence_number_validity.RowIsValid(index)) {
 				entry.sequence_number = sequence_number_data[index];
 			} else {
 				//! Value should only be NULL for ADDED manifest entries, to support inheritance
-				D_ASSERT(entry.status == IcebergManifestEntryStatusType::ADDED);
+				if (entry.status != IcebergManifestEntryStatusType::ADDED) {
+					throw InvalidConfigurationException(
+					    "'manifest_entry.sequence_number' is only allowed to be NULL for ADDED entries");
+				}
 				entry.sequence_number = manifest_file_sequence_number_data[index];
 			}
+
+			if (file_sequence_number_validity.RowIsValid(index)) {
+				entry.file_sequence_number = file_sequence_number_data[index];
+			} else {
+				//! Value should only be NULL for ADDED manifest entries, to support inheritance
+				if (entry.status != IcebergManifestEntryStatusType::ADDED) {
+					throw InvalidConfigurationException(
+					    "'manifest_entry.file_sequence_number' is only allowed to be NULL for ADDED entries");
+				}
+				entry.file_sequence_number = manifest_file_sequence_number_data[index];
+			}
 		} else {
+			//! SPEC: Manifest entry field sequence_number must default to 0
 			entry.sequence_number = manifest_file_sequence_number_data[index];
+			//! SPEC: Manifest entry field file_sequence_number must default to 0
+			entry.file_sequence_number = manifest_file_sequence_number_data[index];
+			//! SPEC: Data file field content must default to 0 (data)
 			data_file.content = IcebergManifestEntryContentType::DATA;
 		}
 		if (iceberg_version >= 3) {
@@ -237,6 +280,10 @@ idx_t ManifestReader::ReadChunk(idx_t offset, idx_t count, vector<IcebergManifes
 			}
 		}
 
+		entry.has_snapshot_id = snapshot_id_validity.RowIsValid(index);
+		if (entry.has_snapshot_id) {
+			entry.snapshot_id = snapshot_id_data[index];
+		}
 		entry.partition_spec_id = partition_spec_id_data[index];
 		entry.manifest_file_path = manifest_file_path_data[index].GetString();
 		for (auto &it : partition_vectors) {

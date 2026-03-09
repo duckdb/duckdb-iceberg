@@ -166,6 +166,7 @@ void CommitTableToJSON(yyjson_mut_doc *doc, yyjson_mut_val *root_object,
 			yyjson_mut_obj_add_int(doc, spec_json, "spec-id", ref_update.spec.spec_id);
 			// Add fields array, later we can add the fields
 			auto fields_arr = yyjson_mut_obj_add_arr(doc, spec_json, "fields");
+			(void)fields_arr;
 		} else if (update.has_set_default_sort_order_update) {
 			auto update_json = yyjson_mut_arr_add_obj(doc, updates_array);
 			auto &ref_update = update.set_default_sort_order_update;
@@ -181,6 +182,7 @@ void CommitTableToJSON(yyjson_mut_doc *doc, yyjson_mut_val *root_object,
 			yyjson_mut_obj_add_int(doc, sort_order_json, "order-id", ref_update.sort_order.order_id);
 			// Add fields array, later we can add the fields
 			auto fields_arr = yyjson_mut_obj_add_arr(doc, sort_order_json, "fields");
+			(void)fields_arr;
 		} else if (update.has_set_location_update) {
 			auto update_json = yyjson_mut_arr_add_obj(doc, updates_array);
 			auto &ref_update = update.set_location_update;

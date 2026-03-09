@@ -17,9 +17,6 @@ void BaseManifestReader::InitializeInternal() {
 	local_state = scan.avro_scan->init_local(execution_context, input, scan.global_state.get());
 
 	scan.InitializeChunk(chunk);
-
-	auto &multi_file_bind_data = scan.bind_data->Cast<MultiFileBindData>();
-	auto &columns = multi_file_bind_data.reader_bind.schema;
 	initialized = true;
 }
 

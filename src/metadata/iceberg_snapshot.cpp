@@ -111,6 +111,7 @@ IcebergSnapshot IcebergSnapshot::ParseSnapshot(const rest_api_objects::Snapshot 
                                                IcebergTableMetadata &metadata) {
 	IcebergSnapshot ret;
 	if (metadata.iceberg_version == 1) {
+		//! SPEC: Snapshot field sequence-number must default to 0
 		ret.sequence_number = 0;
 	} else if (metadata.iceberg_version >= 2) {
 		D_ASSERT(snapshot.has_sequence_number);

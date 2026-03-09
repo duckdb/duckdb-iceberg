@@ -11,15 +11,15 @@ namespace duckdb {
 vector<TableFunctionSet> IcebergFunctions::GetTableFunctions(ExtensionLoader &loader) {
 	vector<TableFunctionSet> functions;
 
-	functions.push_back(std::move(GetIcebergSnapshotsFunction()));
-	functions.push_back(std::move(GetIcebergScanFunction(loader)));
-	functions.push_back(std::move(GetIcebergMetadataFunction()));
-	functions.push_back(std::move(GetIcebergColumnStatsFunction()));
-	functions.push_back(std::move(GetIcebergPartitionStatsFunction()));
-	functions.push_back(std::move(GetIcebergTablePropertiesFunctions()));
-	functions.push_back(std::move(SetIcebergTablePropertiesFunctions()));
-	functions.push_back(std::move(RemoveIcebergTablePropertiesFunctions()));
-	functions.push_back(std::move(GetIcebergToDuckLakeFunction()));
+	functions.push_back(GetIcebergSnapshotsFunction());
+	functions.push_back(GetIcebergScanFunction(loader));
+	functions.push_back(GetIcebergMetadataFunction());
+	functions.push_back(GetIcebergColumnStatsFunction());
+	functions.push_back(GetIcebergPartitionStatsFunction());
+	functions.push_back(GetIcebergTablePropertiesFunctions());
+	functions.push_back(SetIcebergTablePropertiesFunctions());
+	functions.push_back(RemoveIcebergTablePropertiesFunctions());
+	functions.push_back(GetIcebergToDuckLakeFunction());
 
 	return functions;
 }
