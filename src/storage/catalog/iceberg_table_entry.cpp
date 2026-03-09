@@ -249,7 +249,12 @@ virtual_column_map_t IcebergTableEntry::VirtualColumns() {
 
 vector<column_t> IcebergTableEntry::GetRowIdColumns() const {
 	vector<column_t> result;
-	result.push_back(COLUMN_IDENTIFIER_ROW_ID);
+	auto &table_metadata = table_info.table_metadata;
+	if (table_metadata.iceberg_version >= 3) {
+		//! Project the _row_id column as part of the row-id-columns
+		result.push_back(COLUMN_IDENTIFIER_ROW_ID);
+	}
+
 	result.push_back(MultiFileReader::COLUMN_IDENTIFIER_FILENAME);
 	result.push_back(MultiFileReader::COLUMN_IDENTIFIER_FILE_ROW_NUMBER);
 	return result;

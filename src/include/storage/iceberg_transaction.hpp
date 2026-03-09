@@ -90,8 +90,9 @@ void ApplyTableUpdate(IcebergTableInformation &table_info, IcebergTransaction &i
 	if (table_info.IsTransactionLocalTable(iceberg_transaction)) {
 		callback(table_info);
 	} else {
-		iceberg_transaction.updated_tables.emplace(table_info.GetTableKey(), table_info.Copy(iceberg_transaction));
-		auto &updated_table = iceberg_transaction.updated_tables.at(table_info.GetTableKey());
+		auto &updated_table =
+		    iceberg_transaction.updated_tables.emplace(table_info.GetTableKey(), table_info.Copy(iceberg_transaction))
+		        .first->second;
 		updated_table.InitSchemaVersions();
 		callback(updated_table);
 	}

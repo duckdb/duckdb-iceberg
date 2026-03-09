@@ -1,4 +1,16 @@
 #include "duckdb/execution/operator/persistent/physical_merge_into.hpp"
+#include "duckdb/planner/operator/logical_insert.hpp"
+#include "duckdb/planner/operator/logical_delete.hpp"
+#include "duckdb/planner/operator/logical_update.hpp"
+#include "duckdb/planner/operator/logical_merge_into.hpp"
+#include "duckdb/planner/expression/bound_reference_expression.hpp"
+#include "storage/iceberg_merge_insert.hpp"
+#include "storage/catalog/iceberg_catalog.hpp"
+#include "storage/catalog/iceberg_table_entry.hpp"
+
+#include "storage/iceberg_update.hpp"
+#include "storage/iceberg_delete.hpp"
+#include "storage/iceberg_insert.hpp"
 
 namespace duckdb {
 
@@ -19,6 +31,10 @@ static unique_ptr<MergeIntoOperator> IcebergPlanMergeIntoAction(IcebergCatalog &
 	}
 	auto return_types = op.types;
 
+	auto &table_entry = op.table.Cast<IcebergTableEntry>();
+	auto &table_info = table_entry.table_info;
+	auto &schema = table_info.table_metadata.GetLatestSchema();
+
 	switch (action.action_type) {
 	case MergeActionType::MERGE_UPDATE: {
 		LogicalUpdate update(op.table);
@@ -33,7 +49,9 @@ static unique_ptr<MergeIntoOperator> IcebergPlanMergeIntoAction(IcebergCatalog &
 		result->op = update_plan;
 		auto &dl_update = result->op->Cast<IcebergUpdate>();
 		// The row_id comes before the deletion information
-		dl_update.row_id_index = child_plan.types.size() - 4;
+		if (table_info.table_metadata.iceberg_version >= 3) {
+			dl_update.row_id_index = child_plan.types.size() - 4;
+		}
 		break;
 	}
 	case MergeActionType::MERGE_DELETE: {
@@ -72,20 +90,14 @@ static unique_ptr<MergeIntoOperator> IcebergPlanMergeIntoAction(IcebergCatalog &
 			action.expressions = std::move(new_expressions);
 		}
 		result->expressions = std::move(action.expressions);
-		auto &table_entry = op.table.Cast<IcebergTableEntry>();
-		auto &table_info = table_entry.table_info;
-		auto &schema = table_info.table_metadata.GetLatestSchema();
 
 		IcebergCopyInput copy_input(context, table_entry, schema);
-		auto copy_options = IcebergInsert::GetCopyOptions(context, copy_input, schema);
-
 		auto &physical_copy = IcebergInsert::PlanCopyForInsert(context, planner, copy_input, nullptr);
 		auto &insert = IcebergInsert::PlanInsert(context, planner, table_entry);
 		insert.children.push_back(physical_copy);
 
 		auto &merge_insert =
 		    planner.Make<IcebergMergeInsert>(insert.types, insert, physical_copy).Cast<IcebergMergeInsert>();
-		merge_insert.extra_projections = std::move(copy_options.projection_list);
 		result->op = merge_insert;
 		break;
 	}

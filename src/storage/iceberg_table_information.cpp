@@ -460,8 +460,12 @@ void IcebergTableInformation::SetLocation(IcebergTransaction &transaction) {
 }
 
 bool IcebergTableInformation::IsTransactionLocalTable(IcebergTransaction &transaction) {
+	if (transaction.updated_tables.empty()) {
+		return false;
+	}
+	auto table_key = GetTableKey();
 	for (auto &tbl : transaction.updated_tables) {
-		if (tbl.first == GetTableKey()) {
+		if (tbl.first == table_key) {
 			return true;
 		}
 	}

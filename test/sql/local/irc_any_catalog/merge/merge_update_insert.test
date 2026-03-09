@@ -30,19 +30,26 @@ statement ok
 DROP TABLE IF EXISTS my_datalake.default.Buy;
 
 statement ok
-CREATE TABLE my_datalake.default.Stock(item_id int, balance int);
+CREATE TABLE my_datalake.default.Stock(
+	item_id int,
+	balance int
+);
 
 statement ok
-insert into my_datalake.default.Stock values (10,2200), (20,1900)
+insert into my_datalake.default.Stock values
+	(10, 2200),
+	(20, 1900)
 
 statement ok
-CREATE TABLE my_datalake.default.Buy(item_id int, volume int);
+CREATE TABLE my_datalake.default.Buy(
+	item_id int,
+	volume int
+);
 
 statement ok
-INSERT INTO my_datalake.default.Buy values(10, 1000);
-
-statement ok
-INSERT INTO my_datalake.default.Buy values(30, 300);
+INSERT INTO my_datalake.default.Buy values
+	(10, 1000),
+	(30, 300);
 
 query II
 FROM my_datalake.default.Stock ORDER BY item_id
