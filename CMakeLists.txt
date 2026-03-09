@@ -24,6 +24,8 @@ set(EXTENSION_SOURCES
     src/storage/iceberg_insert.cpp
     src/storage/iceberg_delete.cpp
     src/storage/iceberg_update.cpp
+    src/storage/iceberg_merge_insert.cpp
+    src/storage/iceberg_merge_into.cpp
     src/aws.cpp
     src/hash_utils.cpp
     src/iceberg_hash.cpp
