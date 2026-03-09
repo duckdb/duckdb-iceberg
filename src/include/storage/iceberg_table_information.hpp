@@ -46,8 +46,8 @@ public:
 	void AddSortOrder(IcebergTransaction &transaction);
 	void SetDefaultSortOrder(IcebergTransaction &transaction);
 	void SetDefaultSpec(IcebergTransaction &transaction);
-	void SetProperties(IcebergTransaction &transaction, case_insensitive_map_t<string> properties);
-	void RemoveProperties(IcebergTransaction &transaction, vector<string> properties);
+	void SetProperties(IcebergTransaction &transaction, const case_insensitive_map_t<string> &properties);
+	void RemoveProperties(IcebergTransaction &transaction, const vector<string> &properties);
 	void SetLocation(IcebergTransaction &transaction);
 	bool IsTransactionLocalTable(IcebergTransaction &transaction);
 	static string GetTableKey(const vector<string> &namespace_items, const string &table_name);

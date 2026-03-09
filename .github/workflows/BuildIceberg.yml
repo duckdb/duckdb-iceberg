@@ -79,9 +79,16 @@ jobs:
     with:
       artifact-name: duckdb-iceberg
 
-#  test-polaris:
-#    name: Test against Polaris Catalog
-#    needs: build_iceberg
-#    uses: ./.github/workflows/test-polaris-catalog.yml
-#    with:
-#      artifact-name: duckdb-iceberg
+  test-polaris:
+    name: Test against Polaris Catalog
+    needs: build_iceberg
+    uses: ./.github/workflows/test-polaris-catalog.yml
+    with:
+      artifact-name: duckdb-iceberg
+
+  test-lakekeeper:
+    name: Test against Lakekeeper Catalog
+    needs: build_iceberg
+    uses: ./.github/workflows/test-lakekeeper-catalog.yml
+    with:
+      artifact-name: duckdb-iceberg

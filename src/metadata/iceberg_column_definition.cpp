@@ -99,10 +99,10 @@ IcebergColumnDefinition::ParseType(const string &name, int32_t field_id, bool re
 	}
 
 	if (initial_default) {
-		res->initial_default = ParseDefaultForType(res->type, *initial_default);
+		res->initial_default = make_uniq<Value>(ParseDefaultForType(res->type, *initial_default));
 	}
 	if (write_default) {
-		res->write_default = ParseDefaultForType(res->type, *write_default);
+		res->write_default = make_uniq<Value>(ParseDefaultForType(res->type, *write_default));
 	}
 	return res;
 }
@@ -167,6 +167,9 @@ LogicalType IcebergColumnDefinition::ParsePrimitiveTypeString(const string &type
 		auto scale = std::stoi(digits[1]);
 		return LogicalType::DECIMAL(width, scale);
 	}
+	if (type_str == "variant") {
+		return LogicalType::VARIANT();
+	}
 	throw InvalidConfigurationException("Unrecognized primitive type: %s", type_str);
 }
 
@@ -176,7 +179,7 @@ unique_ptr<IcebergColumnDefinition> IcebergColumnDefinition::ParseStructField(re
 	return ParseType(field.name, field.id, field.required, *field.type, field_initial_default, field_write_default);
 }
 
-bool IcebergColumnDefinition::IsIcebergPrimitiveType() {
+bool IcebergColumnDefinition::IsIcebergPrimitiveType() const {
 	switch (type.id()) {
 	case LogicalTypeId::TINYINT:
 	case LogicalTypeId::SMALLINT:
@@ -194,9 +197,30 @@ bool IcebergColumnDefinition::IsIcebergPrimitiveType() {
 	case LogicalTypeId::TIME:
 	case LogicalTypeId::TIMESTAMP:
 	case LogicalTypeId::TIMESTAMP_TZ:
+	case LogicalTypeId::VARIANT:
 		return true;
 	default:
 		return false;
+	}
+}
+
+ColumnDefinition IcebergColumnDefinition::GetColumnDefinition() const {
+	optional_ptr<Value> default_to_use;
+	if (write_default) {
+		//! Use write-default if it's set
+		default_to_use = write_default.get();
+	} else if (initial_default) {
+		//! If it's not set, use the initial-default (if that *is* set)
+		default_to_use = initial_default.get();
+	}
+	if (default_to_use) {
+		//! FIXME: the expression needs to be more advanced for nested types
+		if (type.IsNested()) {
+			throw NotImplementedException("DEFAULT values for nested types are not supported currently");
+		}
+		return ColumnDefinition(name, type, make_uniq<ConstantExpression>(*default_to_use), TableColumnType::STANDARD);
+	} else {
+		return ColumnDefinition(name, type);
 	}
 }
 

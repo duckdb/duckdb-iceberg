@@ -200,6 +200,8 @@ BuildManifestSchema(const IcebergSnapshot &snapshot, const IcebergTableMetadata 
 	if (iceberg_version >= 2) {
 		MultiFileColumnDefinition content("content", LogicalType::INTEGER);
 		content.identifier = Value::INTEGER(CONTENT);
+		//! Default to 0 if missing (V1 compatibility)
+		content.default_expression = make_uniq<ConstantExpression>(Value::INTEGER(0));
 		data_file.children.push_back(content);
 	}
 

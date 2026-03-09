@@ -48,10 +48,10 @@ shared_ptr<MultiFileList> IcebergMultiFileReader::CreateFileList(ClientContext &
 
 static MultiFileColumnDefinition TransformColumn(const IcebergColumnDefinition &input) {
 	MultiFileColumnDefinition column(input.name, input.type);
-	if (input.initial_default.IsNull()) {
+	if (!input.initial_default || input.initial_default->IsNull()) {
 		column.default_expression = make_uniq<ConstantExpression>(Value(input.type));
 	} else {
-		column.default_expression = make_uniq<ConstantExpression>(input.initial_default);
+		column.default_expression = make_uniq<ConstantExpression>(*input.initial_default);
 	}
 	column.identifier = Value::INTEGER(input.id);
 	for (auto &child : input.children) {

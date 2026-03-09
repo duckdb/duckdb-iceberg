@@ -14,7 +14,7 @@
 
 namespace duckdb {
 
-IcebergAddSnapshot::IcebergAddSnapshot(IcebergTableInformation &table_info, const string &manifest_list_path,
+IcebergAddSnapshot::IcebergAddSnapshot(const IcebergTableInformation &table_info, const string &manifest_list_path,
                                        IcebergSnapshot &&snapshot)
     : IcebergTableUpdate(IcebergTableUpdateType::ADD_SNAPSHOT, table_info), manifest_list(manifest_list_path),
       snapshot(std::move(snapshot)) {
@@ -141,7 +141,7 @@ IcebergManifestList IcebergAddSnapshot::ConstructManifestList(CopyFunction &avro
 	return new_manifest_list;
 }
 
-static IcebergManifestFile WriteManifestListEntry(IcebergTableInformation &table_info,
+static IcebergManifestFile WriteManifestListEntry(const IcebergTableInformation &table_info,
                                                   const IcebergManifestFile &manifest_file, CopyFunction &avro_copy,
                                                   DatabaseInstance &db, ClientContext &context) {
 	auto manifest_length =

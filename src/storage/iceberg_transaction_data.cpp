@@ -15,7 +15,7 @@
 
 namespace duckdb {
 
-IcebergTransactionData::IcebergTransactionData(ClientContext &context, IcebergTableInformation &table_info)
+IcebergTransactionData::IcebergTransactionData(ClientContext &context, const IcebergTableInformation &table_info)
     : context(context), table_info(table_info), is_deleted(false) {
 	if (table_info.table_metadata.has_next_row_id) {
 		next_row_id = table_info.table_metadata.next_row_id;
@@ -75,7 +75,7 @@ static void AddToMetrics(IcebergSnapshot::metrics_map_t &metrics, const IcebergM
 }
 
 IcebergManifestFile IcebergTransactionData::CreateManifestFile(int64_t snapshot_id, sequence_number_t sequence_number,
-                                                               IcebergTableMetadata &table_metadata,
+                                                               const IcebergTableMetadata &table_metadata,
                                                                IcebergManifestContentType manifest_content_type,
                                                                vector<IcebergManifestEntry> &&manifest_entries) {
 	//! create manifest file path
@@ -387,11 +387,11 @@ void IcebergTransactionData::TableSetDefaultSpec() {
 	updates.push_back(make_uniq<SetDefaultSpec>(table_info));
 }
 
-void IcebergTransactionData::TableSetProperties(case_insensitive_map_t<string> properties) {
+void IcebergTransactionData::TableSetProperties(const case_insensitive_map_t<string> &properties) {
 	updates.push_back(make_uniq<SetProperties>(table_info, properties));
 }
 
-void IcebergTransactionData::TableRemoveProperties(vector<string> properties) {
+void IcebergTransactionData::TableRemoveProperties(const vector<string> &properties) {
 	updates.push_back(make_uniq<RemoveProperties>(table_info, properties));
 }
 

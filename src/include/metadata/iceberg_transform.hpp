@@ -224,4 +224,37 @@ struct HourTransform {
 	}
 };
 
+struct BucketTransform {
+	static Value ApplyTransform(const Value &constant, const IcebergTransform &transform);
+
+	static bool CompareEqual(const Value &constant, const IcebergPredicateStats &stats) {
+		// ApplyTransform returns null for null inputs (Iceberg spec) and for
+		// unsupported types; in both cases skip filtering (conservative).
+		if (constant.IsNull() || stats.lower_bound.IsNull() || stats.upper_bound.IsNull()) {
+			return true;
+		}
+
+		int32_t bucket_id = constant.GetValue<int32_t>();
+		int32_t lower_bucket = stats.lower_bound.GetValue<int32_t>();
+		int32_t upper_bucket = stats.upper_bound.GetValue<int32_t>();
+		return (bucket_id >= lower_bucket && bucket_id <= upper_bucket);
+	}
+	static bool CompareLessThan(const Value &constant, const IcebergPredicateStats &stats) {
+		// Bucket transform doesn't preserve order, so we can't filter on <
+		return true;
+	}
+	static bool CompareLessThanOrEqual(const Value &constant, const IcebergPredicateStats &stats) {
+		// Bucket transform doesn't preserve order, so we can't filter on <=
+		return true;
+	}
+	static bool CompareGreaterThan(const Value &constant, const IcebergPredicateStats &stats) {
+		// Bucket transform doesn't preserve order, so we can't filter on >
+		return true;
+	}
+	static bool CompareGreaterThanOrEqual(const Value &constant, const IcebergPredicateStats &stats) {
+		// Bucket transform doesn't preserve order, so we can't filter on >=
+		return true;
+	}
+};
+
 } // namespace duckdb

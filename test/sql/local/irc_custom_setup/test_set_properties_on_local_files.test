@@ -1,0 +1,21 @@
+# name: test/sql/local/irc_custom_setup/test_set_properties_on_local_files.test
+# group: [irc_custom_setup]
+
+require-env ICEBERG_SERVER_AVAILABLE
+
+require-env SECRETS_CREATED_AND_CATALOG_ATTACHED
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+require core_functions
+
+statement error
+select * from iceberg_table_properties('__WORKING_DIRECTORY__/data/persistent/equality_deletes');
+----
+<REGEX>:.*Cannot call iceberg_table_properties.*on a file.*directory.*

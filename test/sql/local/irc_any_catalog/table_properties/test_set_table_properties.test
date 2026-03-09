@@ -52,11 +52,10 @@ statement ok
 CALL remove_iceberg_table_properties(my_datalake.default.test, ['foo']);
 
 query II
-select * from iceberg_table_properties(my_datalake.default.test) where key not like '%created-at%' order by all;
+select * from iceberg_table_properties(my_datalake.default.test) where key in ('write.update.mode', 'write.delete.mode', 'page-write-size') order by all;
 ----
 page-write-size	10000
 write.delete.mode	copy-on-write
-write.parquet.compression-codec	zstd
 write.update.mode	copy-on-write
 
 
@@ -83,13 +82,11 @@ select count(*) from my_datalake.default.test;
 50
 
 query II
-select * from iceberg_table_properties(my_datalake.default.test_table_properties) where "key" not in ('created-at', 'owner') order by all;
+select * from iceberg_table_properties(my_datalake.default.test_table_properties) where key in ('write.update.mode', 'write.delete.mode', 'page-write-size', 'another1', 'duckdb_man') order by all;
 ----
 another1	neato
 duckdb_man	superman
-read.split.target-size	268435456
 write.delete.mode	merge-on-read
-write.parquet.compression-codec	zstd
 
 
 statement ok
@@ -121,9 +118,3 @@ statement error
 select * from iceberg_table_properties('default.test.blah.blah');
 ----
 <REGEX>:.*Invalid Input Error.*Too many identifiers.*
-
-
-statement error
-select * from iceberg_table_properties('__WORKING_DIRECTORY__/data/generated/iceberg/spark-rest/warehouse/default/schema_evolve_float_to_double');
-----
-<REGEX>:.*Cannot call iceberg_table_properties.*on a file.*directory.*

@@ -258,14 +258,6 @@ PhysicalOperator &IcebergCatalog::PlanUpdate(ClientContext &context, PhysicalPla
 		throw NotImplementedException("Update Iceberg V%d tables", table.table_info.table_metadata.iceberg_version);
 	}
 
-	for (auto &column_p : table_schema.columns) {
-		auto &column = *column_p;
-		if (!column.write_default.IsNull()) {
-			throw NotImplementedException("UPDATE on column (%s) with 'write_default: %s' not supported yet",
-			                              column.name, column.write_default.ToSQLString());
-		}
-	}
-
 	IcebergCopyInput copy_input(context, table, table_schema);
 	if (table.table_info.table_metadata.iceberg_version >= 3) {
 		copy_input.virtual_columns = IcebergInsertVirtualColumns::WRITE_ROW_ID;

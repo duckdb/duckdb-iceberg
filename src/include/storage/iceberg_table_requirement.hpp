@@ -20,7 +20,7 @@ enum class IcebergTableRequirementType : uint8_t {
 
 struct IcebergTableRequirement {
 public:
-	IcebergTableRequirement(IcebergTableRequirementType type, IcebergTableInformation &table_info)
+	IcebergTableRequirement(IcebergTableRequirementType type, const IcebergTableInformation &table_info)
 	    : type(type), table_info(table_info) {
 	}
 	virtual ~IcebergTableRequirement() {
@@ -40,7 +40,7 @@ public:
 
 public:
 	IcebergTableRequirementType type;
-	IcebergTableInformation &table_info;
+	const IcebergTableInformation &table_info;
 };
 
 } // namespace duckdb

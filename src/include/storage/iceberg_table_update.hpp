@@ -49,7 +49,7 @@ public:
 
 struct IcebergTableUpdate {
 public:
-	IcebergTableUpdate(IcebergTableUpdateType type, IcebergTableInformation &table_info);
+	IcebergTableUpdate(IcebergTableUpdateType type, const IcebergTableInformation &table_info);
 	virtual ~IcebergTableUpdate() {
 	}
 
@@ -67,7 +67,7 @@ public:
 
 public:
 	IcebergTableUpdateType type;
-	IcebergTableInformation &table_info;
+	const IcebergTableInformation &table_info;
 };
 
 } // namespace duckdb

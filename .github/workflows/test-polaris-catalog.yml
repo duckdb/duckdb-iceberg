@@ -42,7 +42,6 @@ jobs:
           sudo apt-get install -y docker-ce docker-ce-cli containerd.io
           sudo apt install -y -qq python3-venv
 
-
       - name: Wait for polaris initialization
         run: |
           git clone https://github.com/apache/polaris.git polaris_catalog
@@ -85,7 +84,7 @@ jobs:
           python3 -m pip install -r scripts/requirements.txt
           python3 -m scripts.data_generators.generate_data polaris
 
-      - name: Test with rest catalog
+      - name: Run Polaris Specific Tests
         env:
           POLARIS_SERVER_AVAILABLE: 1
         run: |
@@ -93,3 +92,17 @@ jobs:
           export POLARIS_CLIENT_SECRET=$(cat polaris_client_secret.txt)
           ./build/release/test/unittest "$PWD/test/*" --list-test-names-only || true
           ./build/release/test/unittest "$PWD/test/*"
+
+      - name: Populate Config Placeholders
+        run: |
+          perl -i -pe "s/%PLACEHOLDER_POLARIS_CLIENT_ID%/$(cat polaris_client_id.txt)/g; s/%PLACEHOLDER_POLARIS_CLIENT_SECRET%/$(cat polaris_client_secret.txt)/g" test/configs/polaris.json
+
+      - name: Run Generic IRC tests
+        env:
+          ICEBERG_SERVER_AVAILABLE: 1
+          SECRETS_CREATED_AND_CATALOG_ATTACHED: 1
+        run: |
+          export POLARIS_CLIENT_ID=$(cat polaris_client_id.txt)
+          export POLARIS_CLIENT_SECRET=$(cat polaris_client_secret.txt)
+          ./build/release/test/unittest "$PWD/test/sql/local/irc_any_catalog/*" --list-test-names-only || true
+          ./build/release/test/unittest "$PWD/test/sql/local/irc_any_catalog/*" --test-config test/configs/polaris.json  --autoloading available

@@ -69,7 +69,7 @@ class IcebergSparkRest(IcebergConnection):
             .config('spark.jars', SPARK_RUNTIME_PATH)
             .config("spark.sql.catalog.demo.scope", "catalog sign")
             .config("spark.sql.catalog.demo.oauth2-server-uri", os.getenv("OAUTH2_SERVER_URI", "http://127.0.0.1:8080/realms/iceberg/protocol/openid-connect/token"))
-            .config("spark.sql.catalog.demo.credential", f"{os.getenv("ICEBERG_CLIENT_ID", "client1")}:{os.getenv("ICEBERG_CLIENT_SECRET", "s3cr3t")}")
+            .config("spark.sql.catalog.demo.credential", "{}:{}".format(os.getenv("ICEBERG_CLIENT_ID", "client1"), os.getenv("ICEBERG_CLIENT_SECRET", "s3cr3t")))
             .config("spark.sql.catalog.demo.rest.auth.type", "oauth2")
             .getOrCreate()
         )

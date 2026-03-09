@@ -272,8 +272,14 @@ public:
 		column_order = order;
 		column_name = column.name;
 		column_type = ToDuckLakeColumnType(column.type);
-		initial_default = column.initial_default;
-		//! FIXME: parse the write-default
+		initial_default = column.initial_default ? *column.initial_default : Value(column_type);
+		if (column.write_default) {
+			default_value = *column.write_default;
+		} else if (column.initial_default) {
+			default_value = *column.initial_default;
+		} else {
+			default_value = Value(column_type);
+		}
 		nulls_allowed = !column.required;
 	}
 
@@ -303,6 +309,9 @@ public:
 			return false;
 		}
 		if (initial_default != other.initial_default) {
+			return false;
+		}
+		if (default_value != other.default_value) {
 			return false;
 		}
 		return true;

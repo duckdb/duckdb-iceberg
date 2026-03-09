@@ -239,7 +239,7 @@ optional_ptr<CatalogEntry> IcebergTableInformation::CreateSchemaVersion(IcebergT
 	CreateTableInfo info;
 	info.table = name;
 	for (auto &col : table_schema.columns) {
-		info.columns.AddColumn(ColumnDefinition(col->name, col->type));
+		info.columns.AddColumn(col->GetColumnDefinition());
 	}
 
 	auto table_entry = make_uniq<IcebergTableEntry>(*this, catalog, schema, info);
@@ -446,11 +446,11 @@ void IcebergTableInformation::SetDefaultSpec(IcebergTransaction &transaction) {
 	transaction_data->TableSetDefaultSpec();
 }
 void IcebergTableInformation::SetProperties(IcebergTransaction &transaction,
-                                            case_insensitive_map_t<string> properties) {
+                                            const case_insensitive_map_t<string> &properties) {
 	InitTransactionData(transaction);
 	transaction_data->TableSetProperties(properties);
 }
-void IcebergTableInformation::RemoveProperties(IcebergTransaction &transaction, vector<string> properties) {
+void IcebergTableInformation::RemoveProperties(IcebergTransaction &transaction, const vector<string> &properties) {
 	InitTransactionData(transaction);
 	transaction_data->TableRemoveProperties(properties);
 }

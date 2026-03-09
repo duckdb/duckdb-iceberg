@@ -7,7 +7,7 @@ IcebergCommitState::IcebergCommitState(const IcebergTableInformation &table_info
     : table_info(table_info), context(context) {
 }
 
-IcebergTableUpdate::IcebergTableUpdate(IcebergTableUpdateType type, IcebergTableInformation &table_info)
+IcebergTableUpdate::IcebergTableUpdate(IcebergTableUpdateType type, const IcebergTableInformation &table_info)
     : type(type), table_info(table_info) {
 }
 
