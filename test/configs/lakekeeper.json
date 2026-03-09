@@ -8,6 +8,12 @@
     "iceberg",
     "httpfs"
   ],
+  "test_env": [
+    {
+      "env_name": "CATALOG_TYPE",
+      "env_value": "lakekeeper"
+    }
+  ],
   "skip_tests": [
     {
       "reason": "Not yet supported with Lakekeeper",
