@@ -375,6 +375,7 @@ IcebergTableInformation::IcebergTableInformation(IcebergCatalog &catalog, Iceber
 }
 
 void IcebergTableInformation::InitTransactionData(IcebergTransaction &transaction) {
+	lock_guard<mutex> guard(transaction.lock);
 	if (!transaction_data) {
 		auto context = transaction.context.lock();
 		transaction_data = make_uniq<IcebergTransactionData>(*context, *this);
@@ -459,7 +460,7 @@ void IcebergTableInformation::SetLocation(IcebergTransaction &transaction) {
 	transaction_data->TableSetLocation();
 }
 
-bool IcebergTableInformation::IsTransactionLocalTable(IcebergTransaction &transaction) {
+bool IcebergTableInformation::IsTransactionLocalTable(lock_guard<mutex> &guard, IcebergTransaction &transaction) {
 	if (transaction.updated_tables.empty()) {
 		return false;
 	}

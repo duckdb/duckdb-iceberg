@@ -24,7 +24,8 @@ public:
 	IcebergTransactionData(ClientContext &context, const IcebergTableInformation &table_info);
 
 public:
-	IcebergManifestFile CreateManifestFile(int64_t snapshot_id, sequence_number_t sequence_number,
+	IcebergManifestFile CreateManifestFile(lock_guard<mutex> &guard, int64_t snapshot_id,
+	                                       sequence_number_t sequence_number,
 	                                       const IcebergTableMetadata &table_metadata,
 	                                       IcebergManifestContentType manifest_content_type,
 	                                       vector<IcebergManifestEntry> &&data_files);
@@ -47,7 +48,7 @@ public:
 	void TableSetLocation();
 
 private:
-	void CacheExistingManifestList(const IcebergTableMetadata &metadata);
+	void CacheExistingManifestList(lock_guard<mutex> &guard, const IcebergTableMetadata &metadata);
 
 public:
 	ClientContext &context;
@@ -66,6 +67,8 @@ public:
 	case_insensitive_map_t<string> transactional_delete_files;
 	//! Track the current row id for this transaction
 	int64_t next_row_id = 0;
+
+	mutex lock;
 };
 
 } // namespace duckdb

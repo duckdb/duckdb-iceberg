@@ -343,6 +343,16 @@ TableTransactionInfo IcebergTransaction::GetTransactionRequest(ClientContext &co
 	return info;
 }
 
+IcebergTableInformation &IcebergTransaction::GetTableInfoForTransaction(IcebergTableInformation &table_info) {
+	lock_guard<mutex> guard(lock);
+	if (table_info.IsTransactionLocalTable(guard, *this)) {
+		return table_info;
+	}
+	auto &updated_table = updated_tables.emplace(table_info.GetTableKey(), table_info.Copy(*this)).first->second;
+	updated_table.InitSchemaVersions();
+	return updated_table;
+}
+
 void IcebergTransaction::Commit() {
 	if (updated_tables.empty() && deleted_tables.empty() && created_schemas.empty() && deleted_schemas.empty()) {
 		return;

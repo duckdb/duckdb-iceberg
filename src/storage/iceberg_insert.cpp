@@ -294,11 +294,15 @@ SinkFinalizeType IcebergInsert::Finalize(Pipeline &pipeline, Event &event, Clien
 	auto &transaction = IcebergTransaction::Get(context, table->catalog);
 	auto &iceberg_transaction = transaction.Cast<IcebergTransaction>();
 
-	lock_guard<mutex> guard(global_state.lock);
-	if (!global_state.written_files.empty()) {
-		ApplyTableUpdate(table_info, iceberg_transaction, [&](IcebergTableInformation &tbl) {
-			tbl.AddSnapshot(transaction, std::move(global_state.written_files));
-		});
+	vector<IcebergManifestEntry> written_files;
+	{
+		lock_guard<mutex> guard(global_state.lock);
+		written_files = std::move(global_state.written_files);
+	}
+
+	if (!written_files.empty()) {
+		ApplyTableUpdate(table_info, iceberg_transaction,
+		                 [&](IcebergTableInformation &tbl) { tbl.AddSnapshot(transaction, std::move(written_files)); });
 	}
 	return SinkFinalizeType::READY;
 }
