@@ -14,6 +14,8 @@ require iceberg
 
 require httpfs
 
+#require tpch
+
 # Do not ignore 'HTTP' error messages!
 set ignore_error_messages
 
@@ -23,48 +25,51 @@ set enable_logging=true
 statement ok
 set logging_level='debug'
 
+#statement ok
+#CALL dbgen(sf=1);
+
 statement ok
-CALL dbgen(sf=1);
+attach 'tmp/tpch_sf1.db' as tpch (readonly);
 
 statement ok
 DROP TABLE IF EXISTS my_datalake.default.random_lineitem;
 
 statement ok
-CREATE TABLE my_datalake.default.random_lineitem AS FROM lineitem LIMIT 0
+CREATE TABLE my_datalake.default.random_lineitem AS FROM tpch.lineitem LIMIT 0
 
 # create lineitem but with a random subset of the rows
 statement ok
-MERGE INTO my_datalake.default.random_lineitem USING lineitem USING (l_orderkey, l_linenumber)
+MERGE INTO my_datalake.default.random_lineitem USING tpch.lineitem USING (l_orderkey, l_linenumber)
 WHEN NOT MATCHED AND random() < 0.2 THEN INSERT
 
 # insert a bunch of rows with unchanged values
 statement ok
-MERGE INTO my_datalake.default.random_lineitem USING (SELECT * REPLACE (l_orderkey + 10000000 AS l_orderkey) FROM lineitem) USING (l_orderkey, l_linenumber)
+MERGE INTO my_datalake.default.random_lineitem USING (SELECT * REPLACE (l_orderkey + 10000000 AS l_orderkey) FROM tpch.lineitem) USING (l_orderkey, l_linenumber)
 WHEN MATCHED THEN ERROR
 WHEN NOT MATCHED AND random() < 0.2 THEN INSERT
 
 # randomly update a bunch of rows
 statement ok
-MERGE INTO my_datalake.default.random_lineitem USING lineitem USING (l_orderkey, l_linenumber)
+MERGE INTO my_datalake.default.random_lineitem USING tpch.lineitem USING (l_orderkey, l_linenumber)
 WHEN MATCHED AND random() < 0.1 THEN UPDATE SET l_discount = random()
 
 # run two merges that should fully equalize the tables
 statement ok
-MERGE INTO my_datalake.default.random_lineitem USING lineitem USING (l_orderkey, l_linenumber)
+MERGE INTO my_datalake.default.random_lineitem USING tpch.lineitem USING (l_orderkey, l_linenumber)
 WHEN MATCHED THEN UPDATE
 
 statement ok
-MERGE INTO my_datalake.default.random_lineitem USING lineitem USING (l_orderkey, l_linenumber)
+MERGE INTO my_datalake.default.random_lineitem USING tpch.lineitem USING (l_orderkey, l_linenumber)
 WHEN NOT MATCHED BY TARGET THEN INSERT
 WHEN NOT MATCHED BY SOURCE THEN DELETE
 
 # both tables should now be identical - despite all the random stuff we did
 query IIIIIIIIIIIIIIII
-FROM lineitem EXCEPT FROM my_datalake.default.random_lineitem
+FROM tpch.lineitem EXCEPT FROM my_datalake.default.random_lineitem
 ----
 
 query IIIIIIIIIIIIIIII
-FROM my_datalake.default.random_lineitem EXCEPT FROM lineitem
+FROM my_datalake.default.random_lineitem EXCEPT FROM tpch.lineitem
 ----
 
 statement ok

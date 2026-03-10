@@ -34,6 +34,7 @@ static unique_ptr<MergeIntoOperator> IcebergPlanMergeIntoAction(IcebergCatalog &
 	auto &table_entry = op.table.Cast<IcebergTableEntry>();
 	auto &table_info = table_entry.table_info;
 	auto &schema = table_info.table_metadata.GetLatestSchema();
+	auto iceberg_version = table_info.table_metadata.iceberg_version;
 
 	switch (action.action_type) {
 	case MergeActionType::MERGE_UPDATE: {
@@ -56,11 +57,17 @@ static unique_ptr<MergeIntoOperator> IcebergPlanMergeIntoAction(IcebergCatalog &
 	}
 	case MergeActionType::MERGE_DELETE: {
 		LogicalDelete delete_op(op.table, 0);
-		delete_op.expressions.push_back(nullptr);
 
-		vector<LogicalType> row_id_types {LogicalType::VARCHAR, LogicalType::UBIGINT, LogicalType::BIGINT};
+		// we only push 2 columns for positional deletes
+		idx_t column_offset = 0;
+		if (iceberg_version >= 3) {
+			delete_op.expressions.push_back(nullptr);
+			//! The row ids of the table contain the _row_id column, which we're not interested in
+			column_offset = 1;
+		}
+		vector<LogicalType> row_id_types {LogicalType::VARCHAR, LogicalType::BIGINT};
 		for (idx_t i = 0; i < 2; i++) {
-			auto ref = make_uniq<BoundReferenceExpression>(row_id_types[i], op.row_id_start + i + 1);
+			auto ref = make_uniq<BoundReferenceExpression>(row_id_types[i], op.row_id_start + i + column_offset);
 			delete_op.expressions.push_back(std::move(ref));
 		}
 		delete_op.bound_constraints = std::move(bound_constraints);
