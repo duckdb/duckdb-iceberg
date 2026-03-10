@@ -347,7 +347,8 @@ idx_t WriteToFile(const IcebergTableMetadata &table_metadata, const IcebergManif
 		yyjson_mut_obj_add_strcpy(doc, partition_struct, "type", "struct");
 		//! NOTE: this has to be populated with the fields of the partition spec when we support INSERT into a
 		//! partitioned table
-		[[maybe_unused]] auto partition_fields = yyjson_mut_obj_add_arr(doc, partition_struct, "fields");
+		auto partition_fields = yyjson_mut_obj_add_arr(doc, partition_struct, "fields");
+		(void)partition_fields;
 	}
 
 	{
@@ -580,7 +581,11 @@ idx_t WriteToFile(const IcebergTableMetadata &table_metadata, const IcebergManif
 		// sequence_number: long
 		chunk.SetValue(col_idx++, i, Value::BIGINT(manifest_entry.sequence_number));
 		// file_sequence_number: long
-		chunk.SetValue(col_idx++, i, Value(LogicalType::BIGINT));
+		if (manifest_entry.status == IcebergManifestEntryStatusType::ADDED) {
+			chunk.SetValue(col_idx++, i, Value(LogicalType::BIGINT));
+		} else {
+			chunk.SetValue(col_idx++, i, Value::BIGINT(manifest_entry.file_sequence_number));
+		}
 
 		auto &data_file = manifest_entry.data_file;
 		// data_file: struct(...)

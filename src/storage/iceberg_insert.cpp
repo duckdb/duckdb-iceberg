@@ -99,21 +99,6 @@ static vector<string> ParseQuotedList(const string &input, char list_separator) 
 	return result;
 }
 
-static void AddToColDefMap(case_insensitive_map_t<reference<const IcebergColumnDefinition>> &name_to_coldef,
-                           string col_name_prefix, const IcebergColumnDefinition &column_def) {
-	string column_name = column_def.name;
-	if (!col_name_prefix.empty()) {
-		column_name = col_name_prefix + "." + column_def.name;
-	}
-	if (column_def.IsIcebergPrimitiveType()) {
-		name_to_coldef.emplace(column_name, column_def);
-	} else {
-		for (auto &child : column_def.children) {
-			AddToColDefMap(name_to_coldef, column_name, *child);
-		}
-	}
-}
-
 IcebergColumnStats IcebergInsert::ParseColumnStats(const LogicalType &type, const vector<Value> &col_stats,
                                                    ClientContext &context) {
 	IcebergColumnStats column_stats(type);

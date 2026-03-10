@@ -335,7 +335,6 @@ SinkFinalizeType IcebergDelete::Finalize(Pipeline &pipeline, Event &event, Clien
 	// write out the new manifest file
 	auto &irc_table = table.Cast<IcebergTableEntry>();
 	auto &table_info = irc_table.table_info;
-	auto &transaction = IcebergTransaction::Get(context, table.catalog);
 	auto iceberg_delete_files = GenerateDeleteManifestEntries(global_state);
 
 	if (!global_state.written_files.empty()) {
@@ -414,7 +413,6 @@ PhysicalOperator &IcebergDelete::PlanDelete(ClientContext &context, PhysicalPlan
 		throw InternalException("Couldn't locate the scan that feeds the delete information");
 	}
 	auto &bind_data = table_scan->bind_data->Cast<MultiFileBindData>();
-	auto &reader = bind_data.multi_file_reader->Cast<IcebergMultiFileReader>();
 	auto &file_list = bind_data.file_list->Cast<IcebergMultiFileList>();
 	return planner.Make<IcebergDelete>(table, file_list, child_plan, std::move(row_id_indexes));
 }

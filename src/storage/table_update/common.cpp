@@ -123,7 +123,6 @@ void AddPartitionSpec::CreateUpdate(DatabaseInstance &db, ClientContext &context
 	req.add_partition_spec_update.action = "add-spec";
 	req.add_partition_spec_update.spec.has_spec_id = true;
 	req.add_partition_spec_update.spec.spec_id = table_info.table_metadata.default_spec_id;
-	idx_t partition_spec_id = req.add_partition_spec_update.spec.spec_id;
 	if (table_info.table_metadata.HasPartitionSpec()) {
 		auto &current_partition_spec = table_info.table_metadata.GetLatestPartitionSpec();
 		for (auto &field : current_partition_spec.fields) {
@@ -153,7 +152,6 @@ void AddSortOrder::CreateUpdate(DatabaseInstance &db, ClientContext &context, Ic
 	}
 
 	if (table_info.table_metadata.HasSortOrder()) {
-		auto &table_sort_orders = table_info.table_metadata.GetSortOrderSpecs();
 		// FIXME: is it correct to just get the latest sort order?
 		auto &current_sort_order = table_info.table_metadata.GetLatestSortOrder();
 		for (auto &field : current_sort_order.fields) {

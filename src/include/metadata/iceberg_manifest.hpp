@@ -52,6 +52,9 @@ public:
 	unordered_map<int32_t, Value> lower_bounds;
 	unordered_map<int32_t, Value> upper_bounds;
 	vector<int32_t> equality_ids;
+	vector<int64_t> split_offsets;
+	bool has_sort_order_id = false;
+	int32_t sort_order_id;
 	string referenced_data_file;
 	Value content_offset;
 	Value content_size_in_bytes;
@@ -64,7 +67,9 @@ public:
 	//! ----- Data File Struct ------
 	//! Inherited from the 'manifest_file' if NULL and 'status == EXISTING'
 	sequence_number_t sequence_number = 0xDEADBEEF;
-	int64_t snapshot_id = 0xDEADBEEF;
+	sequence_number_t file_sequence_number = 0xDEADBEEF;
+	bool has_snapshot_id = false;
+	int64_t snapshot_id;
 	//! Inherited from the 'manifest_file'
 	int32_t partition_spec_id = 0xDEADBEEF;
 	string manifest_file_path;

@@ -36,9 +36,7 @@ void IcebergTransactionManager::RollbackTransaction(Transaction &transaction) {
 }
 
 void IcebergTransactionManager::Checkpoint(ClientContext &context, bool force) {
-	auto &transaction = IcebergTransaction::Get(context, db.GetCatalog());
-	// auto &db = transaction.GetConnection();
-	// db.Execute("CHECKPOINT");
+	return;
 }
 
 } // namespace duckdb

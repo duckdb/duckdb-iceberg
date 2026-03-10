@@ -330,7 +330,14 @@ IcebergTableMetadata IcebergTableMetadata::FromTableMetadata(const rest_api_obje
 	} else {
 		res.has_current_snapshot = false;
 	}
-	res.last_sequence_number = table_metadata.last_sequence_number;
+
+	if (table_metadata.has_last_sequence_number) {
+		res.last_sequence_number = table_metadata.last_sequence_number;
+	} else {
+		//! SPEC: Table metadata field last-sequence-number must default to 0
+		res.last_sequence_number = 0;
+	}
+
 	res.default_spec_id = table_metadata.default_spec_id;
 	if (table_metadata.has_default_sort_order_id) {
 		res.default_sort_order_id = table_metadata.default_sort_order_id;

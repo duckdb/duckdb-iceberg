@@ -328,7 +328,7 @@ void IcebergMultiFileReader::FinalizeBind(MultiFileReaderData &reader_data, cons
 		    multi_file_list.transaction_delete_idx < multi_file_list.transaction_delete_manifests.size()) {
 			multi_file_list.ProcessDeletes(global_columns, global_column_ids);
 		}
-		reader.deletion_filter = std::move(multi_file_list.GetPositionalDeletesForFile(file_path));
+		reader.deletion_filter = multi_file_list.GetPositionalDeletesForFile(file_path);
 	}
 
 	auto &local_columns = reader_data.reader->columns;
