@@ -95,7 +95,9 @@ jobs:
 
       - name: Populate Config Placeholders
         run: |
-          perl -i -pe "s/%PLACEHOLDER_POLARIS_CLIENT_ID%/$(cat polaris_client_id.txt)/g; s/%PLACEHOLDER_POLARIS_CLIENT_SECRET%/$(cat polaris_client_secret.txt)/g" test/configs/polaris.json
+          export POLARIS_CLIENT_ID=$(cat polaris_client_id.txt)
+          export POLARIS_CLIENT_SECRET=$(cat polaris_client_secret.txt)
+          envsubst '$POLARIS_CLIENT_ID $POLARIS_CLIENT_SECRET' < test/configs/polaris.json.template > test/configs/polaris.json
 
       - name: Run Generic IRC tests
         env:
@@ -106,3 +108,13 @@ jobs:
           export POLARIS_CLIENT_SECRET=$(cat polaris_client_secret.txt)
           ./build/release/test/unittest "$PWD/test/sql/local/irc_any_catalog/*" --list-test-names-only || true
           ./build/release/test/unittest "$PWD/test/sql/local/irc_any_catalog/*" --test-config test/configs/polaris.json  --autoloading available
+
+      - name: Upload Polaris Logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: polaris-server-logs
+          path: |
+            polaris_catalog/polaris-server.log
+            polaris_catalog/polaris-error.log
+          if-no-files-found: ignore
