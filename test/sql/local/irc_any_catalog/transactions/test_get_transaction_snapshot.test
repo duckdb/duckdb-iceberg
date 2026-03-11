@@ -54,7 +54,7 @@ statement ok con1
 commit;
 
 query II
-select * from my_datalake.default.get_transaction_snapshot ;
+select * from my_datalake.default.get_transaction_snapshot order by all;
 ----
 0	0
 1	1

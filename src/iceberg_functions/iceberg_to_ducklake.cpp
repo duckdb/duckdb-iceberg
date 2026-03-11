@@ -1382,7 +1382,6 @@ static unique_ptr<FunctionData> IcebergToDuckLakeBind(ClientContext &context, Ta
 		throw InvalidInputException("First parameter must be the name of an attached Iceberg catalog");
 	}
 	auto &iceberg_catalog = catalog.Cast<IcebergCatalog>();
-	auto &iceberg_transaction = IcebergTransaction::Get(context, iceberg_catalog);
 	auto &schema_set = iceberg_catalog.GetSchemas();
 
 	IcebergOptions options;

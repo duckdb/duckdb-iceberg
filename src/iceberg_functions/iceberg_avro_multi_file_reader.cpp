@@ -200,6 +200,8 @@ BuildManifestSchema(const IcebergSnapshot &snapshot, const IcebergTableMetadata 
 	if (iceberg_version >= 2) {
 		MultiFileColumnDefinition content("content", LogicalType::INTEGER);
 		content.identifier = Value::INTEGER(CONTENT);
+		//! Default to 0 if missing (V1 compatibility)
+		content.default_expression = make_uniq<ConstantExpression>(Value::INTEGER(0));
 		data_file.children.push_back(content);
 	}
 
@@ -402,7 +404,6 @@ bool IcebergAvroMultiFileReader::Bind(MultiFileOptions &options, MultiFileList &
 		schema = manifest_list::BuildManifestListSchema(metadata);
 	} else {
 		auto &manifest_file_scan = scan_info.Cast<IcebergManifestFileScanInfo>();
-		auto &manifest_files = manifest_file_scan.manifest_files;
 		auto &partition_field_id_to_type = manifest_file_scan.partition_field_id_to_type;
 		schema = manifest_file::BuildManifestSchema(snapshot, metadata, partition_field_id_to_type);
 	}

@@ -167,11 +167,14 @@ string IcebergCreateTableRequest::CreateTableToJSON(std::unique_ptr<yyjson_mut_d
 	auto partition_spec = yyjson_mut_obj_add_obj(doc, root_object, "partition-spec");
 	yyjson_mut_obj_add_uint(doc, partition_spec, "spec-id", 0);
 	auto partition_spec_fields = yyjson_mut_obj_add_arr(doc, partition_spec, "fields");
+	(void)partition_spec_fields;
 
 	auto write_order = yyjson_mut_obj_add_obj(doc, root_object, "write-order");
 	yyjson_mut_obj_add_uint(doc, write_order, "order-id", 0);
-	// unused, but we want to add teh objects
+	// unused, but we want to add the objects
 	auto write_order_fields = yyjson_mut_obj_add_arr(doc, write_order, "fields");
+	(void)write_order_fields;
+
 	auto properties = yyjson_mut_obj_add_obj(doc, root_object, "properties");
 	yyjson_mut_obj_add_strcpy(doc, properties, "format-version",
 	                          std::to_string(table_info.table_metadata.iceberg_version).c_str());

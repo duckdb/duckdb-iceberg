@@ -1,0 +1,28 @@
+{
+  "description": "Use nessie as Iceberg Rest Catalog.",
+  "on_init": "create secret my_secret (TYPE ICEBERG,CLIENT_ID 'spark',CLIENT_SECRET '2OR3eRvYfSZzzZ16MlPd95jhLnOaLM52',OAUTH2_SCOPE 'lakekeeper',OAUTH2_SERVER_URI 'http://localhost:30080/realms/iceberg/protocol/openid-connect/token'); attach 'demo' as my_datalake (type ICEBERG,ENDPOINT 'http://localhost:8181/catalog',SECRET 'my_secret');",
+  "statically_loaded_extensions": [
+    "core_functions",
+    "parquet",
+    "avro",
+    "iceberg",
+    "httpfs"
+  ],
+  "skip_tests": [
+    {
+      "reason": "Not yet supported with Lakekeeper",
+      "paths": [
+        "test/sql/local/irc_any_catalog/insert/test_write_upper_and_lower_bounds.test",
+        "test/sql/local/irc_any_catalog/insert/test_write_upper_and_lower_bounds_all_null.test",
+        "test/sql/local/irc_any_catalog/insert/test_write_upper_and_lower_bounds_single_values.test",
+        "test/sql/local/irc_any_catalog/insert/test_read_upper_and_lower_bounds.test",
+        "test/sql/local/irc_any_catalog/transactions/test_transactional_updates_error_omits_stacktrace.test",
+        "test/sql/local/irc_any_catalog/iceberg_catalog_eager_refresh.test",
+        "test/sql/local/irc_any_catalog/irc_catalog_read_deletes.test",
+        "test/sql/local/irc_any_catalog/table_properties/test_many_table_properties.test",
+        "test/sql/local/irc_any_catalog/delete/delete_table.test",
+        "test/sql/local/irc_any_catalog/reads/test_read_partitioned_table_type_promotion.test"
+      ]
+    }
+  ]
+}

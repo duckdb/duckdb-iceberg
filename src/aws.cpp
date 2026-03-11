@@ -339,7 +339,7 @@ unique_ptr<HTTPResponse> AWSInput::ExecuteRequest(ClientContext &context, Aws::H
 		if (x) {
 			x->body = post_request.buffer_out;
 		}
-		return std::move(x);
+		return x;
 	}
 	default:
 		throw NotImplementedException("Unexpected HTTP Method requested");
