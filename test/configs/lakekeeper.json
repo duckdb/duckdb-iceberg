@@ -23,6 +23,12 @@
         "test/sql/local/irc_any_catalog/delete/delete_table.test",
         "test/sql/local/irc_any_catalog/reads/test_read_partitioned_table_type_promotion.test"
       ]
+    },
+    {
+      "reason": "Needs to write lakeeper data with one thread",
+      "paths": [
+        "test/sql/local/irc_any_catalog/logging/test_reads_on_bounds.test"
+      ]
     }
   ]
 }
