@@ -26,7 +26,12 @@ statement ok
 DROP TABLE IF EXISTS my_datalake.default.Stock;
 
 statement ok
-CREATE TABLE my_datalake.default.Stock(item_id int, balance int DEFAULT 0);
+CREATE TABLE my_datalake.default.Stock(
+	item_id int,
+	balance int DEFAULT 0
+) WITH (
+	'format-version'='3'
+);
 
 # explicit default
 query I
