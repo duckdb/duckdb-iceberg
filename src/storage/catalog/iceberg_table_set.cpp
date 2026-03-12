@@ -145,8 +145,8 @@ void IcebergTableSet::LoadEntries(ClientContext &context) {
 	iceberg_transaction.listed_schemas.insert(schema.name);
 }
 
-static Value ParseFormatVersionProperty(TableFunctionBinder &binder, ClientContext &context,
-                                        const ParsedExpression &expr_ref, string property_name, LogicalType type) {
+static Value ParseTableProperty(TableFunctionBinder &binder, ClientContext &context, const ParsedExpression &expr_ref,
+                                const string &property_name, const LogicalType &type) {
 	auto expr = expr_ref.Copy();
 	auto bound_expr = binder.Bind(expr);
 	if (bound_expr->HasParameter()) {
@@ -164,9 +164,8 @@ static Value ParseFormatVersionProperty(TableFunctionBinder &binder, ClientConte
 	return val;
 }
 
-bool IcebergTableSet::CreateNewEntry(ClientContext &context, IcebergCatalog &catalog, IcebergSchemaEntry &schema,
-                                     CreateTableInfo &info) {
-	auto table_name = info.table;
+IcebergTableInformation &IcebergTableSet::CreateNewEntry(ClientContext &context, IcebergCatalog &catalog,
+                                                         IcebergSchemaEntry &schema, CreateTableInfo &info) {
 	auto &iceberg_transaction = IcebergTransaction::Get(context, catalog);
 
 	auto binder = Binder::CreateBinder(context);
@@ -177,8 +176,8 @@ bool IcebergTableSet::CreateNewEntry(ClientContext &context, IcebergCatalog &cat
 	// format version must be verified
 	auto format_version_it = info.options.find("format-version");
 	if (format_version_it != info.options.end()) {
-		iceberg_version = ParseFormatVersionProperty(property_binder, context, *format_version_it->second,
-		                                             "format-version", LogicalType::INTEGER)
+		iceberg_version = ParseTableProperty(property_binder, context, *format_version_it->second, "format-version",
+		                                     LogicalType::INTEGER)
 		                      .GetValue<int32_t>();
 		if (iceberg_version.GetIndex() < 1) {
 			throw InvalidInputException("The lowest supported iceberg version is 1!");
@@ -190,35 +189,37 @@ bool IcebergTableSet::CreateNewEntry(ClientContext &context, IcebergCatalog &cat
 	string location;
 	auto location_it = info.options.find("location");
 	if (location_it != info.options.end()) {
-		location =
-		    ParseFormatVersionProperty(property_binder, context, *location_it->second, "location", LogicalType::VARCHAR)
-		        .GetValue<string>();
+		location = ParseTableProperty(property_binder, context, *location_it->second, "location", LogicalType::VARCHAR)
+		               .GetValue<string>();
 	}
 
 	auto key = IcebergTableInformation::GetTableKey(schema.namespace_items, info.table);
-	iceberg_transaction.updated_tables.emplace(key, IcebergTableInformation(catalog, schema, info.table));
-	D_ASSERT(iceberg_transaction.updated_tables.count(key) > 0);
-	auto &table_info = iceberg_transaction.updated_tables.find(key)->second;
+	auto emplace_res =
+	    iceberg_transaction.updated_tables.emplace(key, IcebergTableInformation(catalog, schema, info.table));
+	if (!emplace_res.second) {
+		throw InternalException("Table %s was already created somehow?", key);
+	}
+	auto &table_info = emplace_res.first->second;
 	auto table_entry = make_uniq<IcebergTableEntry>(table_info, catalog, schema, info);
 	auto table_ptr = table_entry.get();
 	table_entry->table_info.schema_versions[0] = std::move(table_entry);
-	table_ptr->table_info.table_metadata.schemas[0] = IcebergCreateTableRequest::CreateIcebergSchema(*table_ptr);
-	table_ptr->table_info.table_metadata.current_schema_id = 0;
-	table_ptr->table_info.table_metadata.schemas[0]->schema_id = 0;
-	table_ptr->table_info.table_metadata.iceberg_version = iceberg_version.GetIndex();
+	table_info.table_metadata.iceberg_version = iceberg_version.GetIndex();
+	table_info.table_metadata.schemas[0] = IcebergCreateTableRequest::CreateIcebergSchema(context, *table_ptr);
+	table_info.table_metadata.current_schema_id = 0;
+	table_info.table_metadata.schemas[0]->schema_id = 0;
 
 	// Get Location
 	if (!location.empty()) {
-		table_ptr->table_info.table_metadata.location = location;
+		table_info.table_metadata.location = location;
 	}
 	for (auto &option : info.options) {
 		if (option.first == "format-version" || option.first == "location") {
 			continue;
 		}
 		auto option_val =
-		    ParseFormatVersionProperty(property_binder, context, *option.second, option.first, LogicalType::VARCHAR)
+		    ParseTableProperty(property_binder, context, *option.second, option.first, LogicalType::VARCHAR)
 		        .GetValue<string>();
-		table_ptr->table_info.table_metadata.table_properties.emplace(option.first, option_val);
+		table_info.table_metadata.table_properties.emplace(option.first, option_val);
 	}
 
 	// Immediately create the table with stage_create = true to get metadata & data location(s)
@@ -232,7 +233,7 @@ bool IcebergTableSet::CreateNewEntry(ClientContext &context, IcebergCatalog &cat
 		auto cached_table_result = catalog.TryGetValidCachedLoadTableResult(key, cache_lock, false);
 		D_ASSERT(cached_table_result);
 		auto &load_table_result = cached_table_result->load_table_result;
-		table_ptr->table_info.table_metadata = IcebergTableMetadata::FromTableMetadata(load_table_result->metadata);
+		table_info.table_metadata = IcebergTableMetadata::FromTableMetadata(load_table_result->metadata);
 	}
 
 	// if we stage created the table, we add an assert create
@@ -250,7 +251,7 @@ bool IcebergTableSet::CreateNewEntry(ClientContext &context, IcebergCatalog &cat
 	table_info.SetDefaultSortOrder(iceberg_transaction);
 	table_info.SetLocation(iceberg_transaction);
 	table_info.SetProperties(iceberg_transaction, table_info.table_metadata.table_properties);
-	return true;
+	return table_info;
 }
 
 optional_ptr<CatalogEntry> IcebergTableSet::GetEntry(ClientContext &context, const EntryLookupInfo &lookup) {

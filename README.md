@@ -61,6 +61,32 @@ make test
 Running the S3 test cases requires the minio test server to be running and populated with `scripts/upload_iceberg_to_s3_test_server.sh`.
 Note that this requires to have run `make data` before and also to have the aws cli and docker compose installed.
 
+### Local catalog setup
+
+The Makefile provides targets to spin up local Iceberg catalogs for development and testing. Each target clones the catalog repo (if needed), starts the service, and generates test data:
+
+```shell
+make fixture      # Apache Iceberg REST Fixture (Docker)
+make nessie       # Nessie catalog (Docker)
+make lakekeeper   # Lakekeeper catalog (Docker)
+make polaris      # Apache Polaris catalog (Gradle/local)
+```
+
+You can also run the individual steps separately if needed:
+
+| Step          | Fixture | Nessie | Lakekeeper | Polaris |
+|---------------|---------|--------|------------|---------|
+| Start service | `make fixture_start` | `make nessie_start` | `make lakekeeper_start` | `make polaris_start` |
+| Generate data | `make fixture_data` | `make nessie_data` | `make lakekeeper_data` | `make polaris_data` |
+
+**Prerequisites:** Docker and Docker Compose are required for Fixture, Nessie, and Lakekeeper. Polaris requires Java/Gradle and builds from source — the build is skipped automatically if it has already completed. To force a clean rebuild of Polaris, run `make polaris_rebuild`.
+
+Fixture also has a local variant that generates data for local file-based testing instead of REST:
+
+```shell
+make fixture_local
+```
+
 ## Acknowledgements
 
 This extension was initially developed as part of a customer project for [RelationalAI](https://relational.ai/),

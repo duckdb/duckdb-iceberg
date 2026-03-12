@@ -130,9 +130,15 @@ void IcebergTableEntry::PrepareIcebergScanFromEntry(ClientContext &context) cons
 		}
 
 		(void)secret_manager.CreateSecret(context, info);
-		// if there is no key_id, secret, or token in the info. log that vended credentials has not worked
-		if (info.options.find("key_id") == info.options.end() && info.options.find("secret") == info.options.end() &&
-		    info.options.find("token") == info.options.end()) {
+		// if there is no key_id, secret, token (S3/GCS) or account_name, connection_string (Azure) in the info,
+		// log that vended credentials has not worked
+		bool has_s3_creds = info.options.find("key_id") != info.options.end() ||
+		                    info.options.find("secret") != info.options.end() ||
+		                    info.options.find("token") != info.options.end();
+		bool has_azure_creds = info.options.find("account_name") != info.options.end() ||
+		                       info.options.find("connection_string") != info.options.end();
+		bool has_gcs_creds = info.options.find("bearer_token") != info.options.end();
+		if (!has_s3_creds && !has_azure_creds && !has_gcs_creds) {
 			DUCKDB_LOG_INFO(context, "Failed to create valid secret from Vendend Credentials for table '%s'",
 			                table_info.name);
 		}

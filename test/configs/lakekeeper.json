@@ -21,7 +21,8 @@
         "test/sql/local/irc_any_catalog/irc_catalog_read_deletes.test",
         "test/sql/local/irc_any_catalog/table_properties/test_many_table_properties.test",
         "test/sql/local/irc_any_catalog/delete/delete_table.test",
-        "test/sql/local/irc_any_catalog/reads/test_read_partitioned_table_type_promotion.test"
+        "test/sql/local/irc_any_catalog/reads/test_read_partitioned_table_type_promotion.test",
+        "test/sql/local/irc_any_catalog/create/default/test_create_default_blob.test"
       ]
     }
   ]

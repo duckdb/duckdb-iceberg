@@ -109,6 +109,56 @@ optional_ptr<const IcebergColumnDefinition> IcebergTableSchema::GetFromPath(cons
 
 static void AddUnnamedField(yyjson_mut_doc *doc, yyjson_mut_val *field_obj, const rest_api_objects::Type &column);
 
+static yyjson_mut_val *PrimitiveTypeValueToJSON(yyjson_mut_doc *doc,
+                                                const rest_api_objects::PrimitiveTypeValue &value) {
+	if (value.has_boolean_type_value) {
+		return yyjson_mut_bool(doc, value.boolean_type_value.value);
+	} else if (value.has_long_type_value) {
+		return yyjson_mut_int(doc, value.long_type_value.value);
+	} else if (value.has_integer_type_value) {
+		return yyjson_mut_int(doc, value.integer_type_value.value);
+	} else if (value.has_double_type_value) {
+		return yyjson_mut_real(doc, value.double_type_value.value);
+	} else if (value.has_float_type_value) {
+		return yyjson_mut_real(doc, value.float_type_value.value);
+	} else if (value.has_decimal_type_value) {
+		auto &str = value.decimal_type_value.value;
+		return yyjson_mut_strncpy(doc, str.c_str(), str.size());
+	} else if (value.has_string_type_value) {
+		auto &str = value.string_type_value.value;
+		return yyjson_mut_strncpy(doc, str.c_str(), str.size());
+	} else if (value.has_uuidtype_value) {
+		auto &str = value.uuidtype_value.value;
+		return yyjson_mut_strncpy(doc, str.c_str(), str.size());
+	} else if (value.has_date_type_value) {
+		auto &str = value.date_type_value.value;
+		return yyjson_mut_strncpy(doc, str.c_str(), str.size());
+	} else if (value.has_time_type_value) {
+		auto &str = value.time_type_value.value;
+		return yyjson_mut_strncpy(doc, str.c_str(), str.size());
+	} else if (value.has_timestamp_type_value) {
+		auto &str = value.timestamp_type_value.value;
+		return yyjson_mut_strncpy(doc, str.c_str(), str.size());
+	} else if (value.has_timestamp_tz_type_value) {
+		auto &str = value.timestamp_tz_type_value.value;
+		return yyjson_mut_strncpy(doc, str.c_str(), str.size());
+	} else if (value.has_timestamp_nano_type_value) {
+		auto &str = value.timestamp_nano_type_value.value;
+		return yyjson_mut_strncpy(doc, str.c_str(), str.size());
+	} else if (value.has_timestamp_tz_nano_type_value) {
+		auto &str = value.timestamp_tz_nano_type_value.value;
+		return yyjson_mut_strncpy(doc, str.c_str(), str.size());
+	} else if (value.has_fixed_type_value) {
+		auto &str = value.fixed_type_value.value;
+		return yyjson_mut_strncpy(doc, str.c_str(), str.size());
+	} else if (value.has_binary_type_value) {
+		auto &str = value.binary_type_value.value;
+		return yyjson_mut_strncpy(doc, str.c_str(), str.size());
+	} else {
+		return yyjson_mut_null(doc);
+	}
+}
+
 static void AddStructField(yyjson_mut_doc *doc, yyjson_mut_val *field_obj,
                            const rest_api_objects::StructField &column) {
 	yyjson_mut_obj_add_uint(doc, field_obj, "id", column.id);
@@ -120,6 +170,13 @@ static void AddStructField(yyjson_mut_doc *doc, yyjson_mut_val *field_obj,
 		return;
 	}
 	yyjson_mut_obj_add_strcpy(doc, field_obj, "type", column.type->primitive_type.value.c_str());
+	if (column.has_initial_default) {
+		yyjson_mut_obj_add_val(doc, field_obj, "initial-default",
+		                       PrimitiveTypeValueToJSON(doc, column.initial_default));
+	}
+	if (column.has_write_default) {
+		yyjson_mut_obj_add_val(doc, field_obj, "write-default", PrimitiveTypeValueToJSON(doc, column.write_default));
+	}
 }
 
 static void AddUnnamedField(yyjson_mut_doc *doc, yyjson_mut_val *field_obj, const rest_api_objects::Type &column) {

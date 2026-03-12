@@ -25,7 +25,22 @@
         "test/sql/local/irc_any_catalog/update/test_update_deletion_vector_consolidation_commit.test",
         "test/sql/local/irc_any_catalog/test_row_lineage_read_from_upgraded.test",
         "test/sql/local/irc_any_catalog/test_row_lineage_write_after_upgrade.test",
-        "test/sql/local/irc_any_catalog/test_basic_variant.test"
+        "test/sql/local/irc_any_catalog/test_basic_variant.test",
+        "test/sql/local/irc_any_catalog/create/default/test_create_default_varchar.test",
+        "test/sql/local/irc_any_catalog/create/default/test_create_default_blob.test",
+        "test/sql/local/irc_any_catalog/create/default/test_create_default_bigint.test",
+        "test/sql/local/irc_any_catalog/create/default/test_create_default_decimal.test",
+        "test/sql/local/irc_any_catalog/create/default/test_create_default_bool.test",
+        "test/sql/local/irc_any_catalog/create/default/test_create_default_float.test",
+        "test/sql/local/irc_any_catalog/create/default/test_create_default_timestamp.test",
+        "test/sql/local/irc_any_catalog/create/default/test_create_default_date.test",
+        "test/sql/local/irc_any_catalog/create/default/test_create_default_timestamp_tz.test",
+        "test/sql/local/irc_any_catalog/create/default/test_create_default_integer.test",
+        "test/sql/local/irc_any_catalog/create/default/test_create_default_timestamp_ns.test",
+        "test/sql/local/irc_any_catalog/create/default/test_create_default_double.test",
+        "test/sql/local/irc_any_catalog/create/default/test_create_default_uuid.test",
+        "test/sql/local/irc_any_catalog/create/default/test_create_default_time.test",
+        "test/sql/local/irc_any_catalog/create/test_create_default.test"
       ]
     },
     {
