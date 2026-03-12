@@ -25,6 +25,7 @@ struct IcebergCopyInput {
 	IcebergCatalog &catalog;
 	//! FIXME: this feels redundant?
 	const ColumnList &columns;
+	const IcebergTableInformation &table_info;
 	const IcebergTableSchema &schema;
 	string data_path;
 	//! Set of (key, value) options

@@ -30,7 +30,7 @@ statement ok
 DROP TABLE IF EXISTS my_datalake.default.test;
 
 statement ok
-CREATE TABLE my_datalake.default.test AS SELECT i id FROM range(5000000) t(i);
+CREATE TABLE my_datalake.default.test WITH ('write.parquet.compression-codec'='snappy') AS SELECT i id FROM range(5000000) t(i);
 
 query I
 select count(*) from iceberg_metadata(my_datalake.default.test);

@@ -46,10 +46,10 @@ public:
 	~ManifestListReader() override;
 
 public:
-	idx_t Read(idx_t count, vector<IcebergManifestFile> &result);
+	idx_t Read(idx_t count, vector<IcebergManifestListEntry> &result);
 
 private:
-	idx_t ReadChunk(idx_t offset, idx_t count, vector<IcebergManifestFile> &result);
+	idx_t ReadChunk(idx_t offset, idx_t count, vector<IcebergManifestListEntry> &result);
 };
 
 } // namespace manifest_list

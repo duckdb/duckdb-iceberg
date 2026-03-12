@@ -7,11 +7,11 @@
 
 namespace duckdb {
 
-vector<IcebergManifestFile> &IcebergManifestList::GetManifestFilesMutable() {
+vector<IcebergManifestListEntry> &IcebergManifestList::GetManifestFilesMutable() {
 	return manifest_entries;
 }
 
-const vector<IcebergManifestFile> &IcebergManifestList::GetManifestFilesConst() const {
+const vector<IcebergManifestListEntry> &IcebergManifestList::GetManifestFilesConst() const {
 	return manifest_entries;
 }
 
@@ -19,12 +19,12 @@ idx_t IcebergManifestList::GetManifestListEntriesCount() const {
 	return manifest_entries.size();
 }
 
-void IcebergManifestList::AddToManifestEntries(vector<IcebergManifestFile> &manifest_list_entries) {
+void IcebergManifestList::AddToManifestEntries(vector<IcebergManifestListEntry> &manifest_list_entries) {
 	manifest_entries.insert(manifest_entries.begin(), std::make_move_iterator(manifest_list_entries.begin()),
 	                        std::make_move_iterator(manifest_list_entries.end()));
 }
 
-vector<IcebergManifestFile> IcebergManifestList::GetManifestListEntries() {
+vector<IcebergManifestListEntry> IcebergManifestList::GetManifestListEntries() {
 	return std::move(manifest_entries);
 }
 
@@ -156,7 +156,8 @@ void WriteToFile(const IcebergTableMetadata &table_metadata, const IcebergManife
 	}
 
 	for (idx_t i = 0; i < manifest_files.size(); i++) {
-		const auto &manifest = manifest_files[i];
+		const auto &manifest_entry = manifest_files[i];
+		const auto &manifest = manifest_entry.file;
 		idx_t col_idx = 0;
 
 		// manifest_path: string - 500

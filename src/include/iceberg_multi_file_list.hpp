@@ -144,8 +144,8 @@ public:
 	mutable idx_t manifest_entry_idx = 0;
 	//! The data files of the manifest file that we last scanned
 	mutable vector<IcebergManifestEntry> current_manifest_entries;
-	mutable vector<IcebergManifestFile> data_manifests;
-	mutable vector<reference<IcebergManifest>> transaction_data_manifests;
+	mutable vector<IcebergManifestListEntry> data_manifests;
+	mutable vector<reference<IcebergManifestListEntry>> transaction_data_manifests;
 	mutable idx_t transaction_data_idx = 0;
 	mutable unique_ptr<IcebergManifestReadingState> manifest_read_state;
 	mutable atomic<bool> finished;
@@ -154,8 +154,8 @@ public:
 	//! State used for pre-processing delete files
 	mutable unique_ptr<AvroScan> delete_manifest_scan;
 	mutable unique_ptr<manifest_file::ManifestReader> delete_manifest_reader;
-	mutable vector<IcebergManifestFile> delete_manifests;
-	mutable vector<reference<IcebergManifest>> transaction_delete_manifests;
+	mutable vector<IcebergManifestListEntry> delete_manifests;
+	mutable vector<reference<IcebergManifestListEntry>> transaction_delete_manifests;
 	mutable idx_t transaction_delete_idx = 0;
 
 	//! FIXME: this is only used in 'FinalizeBind',

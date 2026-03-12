@@ -78,19 +78,13 @@ optional_ptr<CatalogEntry> IcebergSchemaEntry::CreateTable(CatalogTransaction &t
                                                            BoundCreateTableInfo &info) {
 	auto &base_info = info.Base();
 	auto &ir_catalog = catalog.Cast<IcebergCatalog>();
-	auto &iceberg_transaction = GetICTransaction(transaction);
 	// check if we have an existing entry with this name
 	if (!HandleCreateConflict(transaction, CatalogType::TABLE_ENTRY, base_info.table, base_info.on_conflict)) {
 		return nullptr;
 	}
 
-	if (!IcebergTableSet::CreateNewEntry(context, ir_catalog, *this, base_info)) {
-		throw InternalException("Could not create entry %s", base_info.table);
-	}
-	auto table_key = IcebergTableInformation::GetTableKey(namespace_items, base_info.table);
-	D_ASSERT(iceberg_transaction.updated_tables.count(table_key) > 0);
-	auto entry = iceberg_transaction.updated_tables.find(table_key);
-	return entry->second.schema_versions[0].get();
+	auto &table_info = IcebergTableSet::CreateNewEntry(context, ir_catalog, *this, base_info);
+	return table_info.schema_versions[0].get();
 }
 
 optional_ptr<CatalogEntry> IcebergSchemaEntry::CreateTable(CatalogTransaction transaction, BoundCreateTableInfo &info) {

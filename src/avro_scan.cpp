@@ -81,7 +81,7 @@ AvroScan::AvroScan(const string &path, ClientContext &context, shared_ptr<Iceber
 }
 
 unique_ptr<AvroScan> AvroScan::ScanManifest(const IcebergSnapshot &snapshot,
-                                            const vector<IcebergManifestFile> &manifest_files,
+                                            const vector<IcebergManifestListEntry> &manifest_files,
                                             const IcebergOptions &options, FileSystem &fs, const string &iceberg_path,
                                             const IcebergTableMetadata &metadata, ClientContext &context) {
 	D_ASSERT(!manifest_files.empty());

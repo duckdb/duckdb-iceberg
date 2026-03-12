@@ -453,13 +453,13 @@ void IcebergAvroMultiFileReader::FinalizeChunk(ClientContext &context, const Mul
 			continue;
 		}
 		sequence_number_validity.SetValid(i);
-		sequence_number_data[i] = manifest_file.sequence_number;
+		sequence_number_data[i] = manifest_file.file.sequence_number;
 	}
 	if (scan_info->metadata.iceberg_version < 3) {
 		//! No row-lineage applies, just return
 		return;
 	}
-	if (manifest_file.content == IcebergManifestContentType::DELETE) {
+	if (manifest_file.file.content == IcebergManifestContentType::DELETE) {
 		//! No need to inherit first-row-id for DELETE manifests
 		return;
 	}
@@ -492,9 +492,9 @@ void IcebergAvroMultiFileReader::FinalizeChunk(ClientContext &context, const Mul
 			// Manifest entry is deleted, skip
 			continue;
 		}
-		if (manifest_file.has_first_row_id) {
+		if (manifest_file.file.has_first_row_id) {
 			first_row_id_validity.SetValid(i);
-			first_row_id_data[i] = manifest_file.first_row_id + start_row_id;
+			first_row_id_data[i] = manifest_file.file.first_row_id + start_row_id;
 			start_row_id += record_count_data[i];
 		}
 	}
@@ -577,19 +577,19 @@ shared_ptr<MultiFileList> IcebergAvroMultiFileReader::CreateFileList(ClientConte
 		for (idx_t i = 0; i < manifest_files.size(); i++) {
 			auto &manifest = manifest_files[i];
 			auto full_path = options.allow_moved_paths
-			                     ? IcebergUtils::GetFullPath(iceberg_path, manifest.manifest_path, fs)
-			                     : manifest.manifest_path;
+			                     ? IcebergUtils::GetFullPath(iceberg_path, manifest.file.manifest_path, fs)
+			                     : manifest.file.manifest_path;
 			open_files.emplace_back(full_path);
 			auto &file_info = open_files.back();
 			file_info.extended_info = make_uniq<ExtendedOpenFileInfo>();
 			file_info.extended_info->options["validate_external_file_cache"] = Value::BOOLEAN(false);
 			file_info.extended_info->options["force_full_download"] = Value::BOOLEAN(true);
-			file_info.extended_info->options["file_size"] = Value::UBIGINT(manifest.manifest_length);
+			file_info.extended_info->options["file_size"] = Value::UBIGINT(manifest.file.manifest_length);
 			file_info.extended_info->options["etag"] = Value("");
 			file_info.extended_info->options["last_modified"] = Value::TIMESTAMP(timestamp_t(0));
-			file_info.extended_info->options["partition_spec_id"] = Value::INTEGER(manifest.partition_spec_id);
-			file_info.extended_info->options["sequence_number"] = Value::BIGINT(manifest.sequence_number);
-			file_info.extended_info->options["manifest_file_path"] = Value(manifest.manifest_path);
+			file_info.extended_info->options["partition_spec_id"] = Value::INTEGER(manifest.file.partition_spec_id);
+			file_info.extended_info->options["sequence_number"] = Value::BIGINT(manifest.file.sequence_number);
+			file_info.extended_info->options["manifest_file_path"] = Value(manifest.file.manifest_path);
 		}
 	}
 

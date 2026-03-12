@@ -171,7 +171,7 @@ static void IcebergPartitionStatsFunction(ClientContext &context, TableFunctionI
 	auto &metadata = bind_data.metadata;
 	for (; global_state.current_manifest_idx < table_entries.size(); global_state.current_manifest_idx++) {
 		auto &table_entry = table_entries[global_state.current_manifest_idx];
-		auto &manifest = table_entry.manifest;
+		auto &manifest = table_entry.file;
 		auto &field_summaries = manifest.partitions.field_summary;
 
 		auto spec_id = manifest.partition_spec_id;

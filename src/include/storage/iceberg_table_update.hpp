@@ -43,7 +43,7 @@ public:
 	ClientContext &context;
 
 	//! All the 'manifest_file' entries we will write to the new manifest list
-	vector<IcebergManifestFile> manifests;
+	vector<IcebergManifestListEntry> manifests;
 	rest_api_objects::CommitTableRequest table_change;
 };
 

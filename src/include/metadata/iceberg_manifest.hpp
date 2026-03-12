@@ -113,14 +113,7 @@ public:
 	}
 };
 
-struct IcebergManifest {
-	IcebergManifest(const string &path) : path(path) {
-	}
-
-public:
-	string path;
-	vector<IcebergManifestEntry> entries;
-};
+struct IcebergManifestListEntry;
 
 namespace manifest_file {
 
@@ -169,8 +162,9 @@ static constexpr const int32_t REFERENCED_DATA_FILE = 143;
 static constexpr const int32_t CONTENT_OFFSET = 144;
 static constexpr const int32_t CONTENT_SIZE_IN_BYTES = 145;
 
-idx_t WriteToFile(const IcebergTableMetadata &table_metadata, const IcebergManifest &manifest_file,
-                  CopyFunction &copy_function, DatabaseInstance &db, ClientContext &context);
+idx_t WriteToFile(const IcebergTableMetadata &table_metadata, const string &path,
+                  const vector<IcebergManifestEntry> &entries, CopyFunction &copy_function, DatabaseInstance &db,
+                  ClientContext &context);
 
 } // namespace manifest_file
 

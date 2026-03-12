@@ -43,7 +43,8 @@ IcebergInsert::IcebergInsert(PhysicalPlan &physical_plan, const vector<LogicalTy
 }
 
 IcebergCopyInput::IcebergCopyInput(ClientContext &context, IcebergTableEntry &table, const IcebergTableSchema &schema)
-    : catalog(table.catalog.Cast<IcebergCatalog>()), columns(table.GetColumns()), schema(schema) {
+    : catalog(table.catalog.Cast<IcebergCatalog>()), columns(table.GetColumns()), table_info(table.table_info),
+      schema(schema) {
 	data_path = table.table_info.table_metadata.GetDataPath();
 }
 
@@ -384,6 +385,31 @@ vector<IcebergManifestEntry> IcebergInsert::GetInsertManifestEntries(IcebergInse
 	return std::move(global_state.written_files);
 }
 
+namespace {
+
+struct IcebergParquetOptionMapping {
+	const char *iceberg_option;
+	const char *parquet_option;
+};
+
+// Maps from
+// https://iceberg.apache.org/docs/1.10.0/configuration/#write-properties
+// to
+// https://github.com/duckdb/duckdb/blob/9cbb0656cd34fa3eb890963b9f961bbc8a221fa9/extension/parquet/parquet_extension.cpp#L121
+static const IcebergParquetOptionMapping ICEBERG_TABLE_PROPERTY_MAPPING[] = {
+    {"write.parquet.row-group-size-bytes", "row_group_size_bytes"},
+    {"write.parquet.compression-codec", "codec"},
+    {"write.parquet.compression-level", "compression_level"},
+    {"write.parquet.dict-size-bytes", "string_dictionary_page_size_limit"},
+    {"write.parquet.row-group-size", "row_group_size"},
+    {"write.parquet.page-size-bytes", "chunk_size"},
+    {"write.parquet.row-groups-per-file", "row_groups_per_file"}};
+
+static const idx_t ICEBERG_TABLE_PROPERTY_MAPPING_SIZE =
+    sizeof(ICEBERG_TABLE_PROPERTY_MAPPING) / sizeof(IcebergParquetOptionMapping);
+
+} // namespace
+
 PhysicalOperator &IcebergInsert::PlanCopyForInsert(ClientContext &context, PhysicalPlanGenerator &planner,
                                                    IcebergCopyInput &copy_input, optional_ptr<PhysicalOperator> plan) {
 	// Get Parquet Copy function
@@ -399,8 +425,23 @@ PhysicalOperator &IcebergInsert::PlanCopyForInsert(ClientContext &context, Physi
 		types_to_write.push_back(LogicalType::BIGINT);
 	}
 
-	auto wat = GetBindInput(copy_input);
-	auto bind_input = CopyFunctionBindInput(*wat);
+	const auto copy_info = GetBindInput(copy_input);
+	const auto table_properties = copy_input.table_info.table_metadata.GetTableProperties();
+
+	// Map Iceberg write properties to DuckDB parquet copy options
+	for (idx_t i = 0; i < ICEBERG_TABLE_PROPERTY_MAPPING_SIZE; i++) {
+		auto &mapping = ICEBERG_TABLE_PROPERTY_MAPPING[i];
+		auto it = table_properties.find(mapping.iceberg_option);
+		if (it != table_properties.end()) {
+			copy_info->options[mapping.parquet_option].emplace_back(it->second);
+		}
+	}
+
+	// TODO: Iceberg properties for bloom filter are per column, duckdb's seems to be per table.
+	// write.parquet.bloom-filter-fpp.column.<col> -> bloom_filter_false_positive_ratio
+	// write.parquet.bloom-filter-enabled.column.<col> -> write_bloom_filter
+
+	auto bind_input = CopyFunctionBindInput(*copy_info);
 
 	auto function_data = copy_fun->function.copy_to_bind(context, bind_input, names_to_write, types_to_write);
 

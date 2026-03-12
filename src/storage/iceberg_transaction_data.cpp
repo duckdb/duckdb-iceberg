@@ -98,7 +98,8 @@ void IcebergTransactionData::CacheExistingManifestList(lock_guard<mutex> &guard,
 	}
 
 	//! Deal with upgraded tables, if the snapshot originated from V2
-	for (auto &manifest_file : existing_manifest_list) {
+	for (auto &manifest_list_entry : existing_manifest_list) {
+		auto &manifest_file = manifest_list_entry.file;
 		if (manifest_file.content != IcebergManifestContentType::DATA) {
 			continue;
 		}
@@ -116,19 +117,19 @@ void IcebergTransactionData::CacheExistingManifestList(lock_guard<mutex> &guard,
 	}
 }
 
-IcebergManifestFile IcebergTransactionData::CreateManifestFile(lock_guard<mutex> &guard, int64_t snapshot_id,
-                                                               sequence_number_t sequence_number,
-                                                               const IcebergTableMetadata &table_metadata,
-                                                               IcebergManifestContentType manifest_content_type,
-                                                               vector<IcebergManifestEntry> &&manifest_entries) {
+IcebergManifestListEntry IcebergTransactionData::CreateManifestFile(lock_guard<mutex> &guard, int64_t snapshot_id,
+                                                                    sequence_number_t sequence_number,
+                                                                    const IcebergTableMetadata &table_metadata,
+                                                                    IcebergManifestContentType manifest_content_type,
+                                                                    vector<IcebergManifestEntry> &&manifest_entries) {
 	//! create manifest file path
 	auto manifest_file_uuid = UUID::ToString(UUID::GenerateRandomUUID());
 	auto manifest_file_path = table_metadata.GetMetadataPath() + "/" + manifest_file_uuid + "-m0.avro";
 
 	// Add a manifest list entry for the delete files
-	IcebergManifestFile manifest_file(manifest_file_path);
-	auto &manifest = manifest_file.manifest_file;
-	manifest.path = manifest_file_path;
+	IcebergManifestListEntry manifest_list_entry(manifest_file_path);
+	auto &manifest_file = manifest_list_entry.file;
+	manifest_file.manifest_path = manifest_file_path;
 	if (table_metadata.iceberg_version >= 3) {
 		manifest_file.has_first_row_id = true;
 		manifest_file.first_row_id = next_row_id;
@@ -189,9 +190,10 @@ IcebergManifestFile IcebergTransactionData::CreateManifestFile(lock_guard<mutex>
 		manifest_file.has_min_sequence_number = true;
 	}
 	manifest_file.added_snapshot_id = snapshot_id;
-	manifest.entries.insert(manifest.entries.end(), std::make_move_iterator(manifest_entries.begin()),
-	                        std::make_move_iterator(manifest_entries.end()));
-	return manifest_file;
+	manifest_list_entry.manifest_entries.insert(manifest_list_entry.manifest_entries.end(),
+	                                            std::make_move_iterator(manifest_entries.begin()),
+	                                            std::make_move_iterator(manifest_entries.end()));
+	return manifest_list_entry;
 }
 
 void IcebergTransactionData::AddSnapshot(IcebergSnapshotOperationType operation,
@@ -259,15 +261,15 @@ void IcebergTransactionData::AddSnapshot(IcebergSnapshotOperationType operation,
 		// If there was no previous snapshot, default the metrics to start totals at 0
 		new_snapshot.metrics = EmptyMetrics();
 	}
-	AddToMetrics(new_snapshot.metrics, manifest_file);
+	AddToMetrics(new_snapshot.metrics, manifest_file.file);
 
 	if (table_metadata.iceberg_version >= 3) {
 		new_snapshot.has_first_row_id = true;
 		new_snapshot.first_row_id = first_row_id;
 
 		new_snapshot.has_added_rows = true;
-		if (manifest_file.content == IcebergManifestContentType::DATA) {
-			new_snapshot.added_rows = manifest_file.added_rows_count;
+		if (manifest_file.file.content == IcebergManifestContentType::DATA) {
+			new_snapshot.added_rows = manifest_file.file.added_rows_count;
 		} else {
 			new_snapshot.added_rows = 0;
 		}
@@ -338,15 +340,15 @@ void IcebergTransactionData::AddUpdateSnapshot(vector<IcebergManifestEntry> &&de
 		// If there was no previous snapshot, default the metrics to start totals at 0
 		new_snapshot.metrics = EmptyMetrics();
 	}
-	AddToMetrics(new_snapshot.metrics, data_manifest_file);
-	AddToMetrics(new_snapshot.metrics, delete_manifest_file);
+	AddToMetrics(new_snapshot.metrics, data_manifest_file.file);
+	AddToMetrics(new_snapshot.metrics, delete_manifest_file.file);
 
 	if (table_metadata.iceberg_version >= 3) {
 		new_snapshot.has_first_row_id = true;
 		new_snapshot.first_row_id = first_row_id;
 
 		new_snapshot.has_added_rows = true;
-		new_snapshot.added_rows = data_manifest_file.added_rows_count;
+		new_snapshot.added_rows = data_manifest_file.file.added_rows_count;
 	}
 
 	auto add_snapshot = make_uniq<IcebergAddSnapshot>(table_info, manifest_list_path, std::move(new_snapshot));
