@@ -86,17 +86,22 @@ static void ParseS3ConfigOptions(const case_insensitive_map_t<string> &config, c
 }
 string RetrieveRegion(DBConfig &db_config) {
 	char *retrieved_region = std::getenv("AWS_REGION");
+	printf("Region1: %s\n", retrieved_region);
+
 	if (retrieved_region) {
 		return string(retrieved_region);
 	}
 	// FIXME: this returns eu-north-1 which fails
 	retrieved_region = std::getenv("AWS_DEFAULT_REGION");
+	printf("Region2: %s\n", retrieved_region);
+
 	if (retrieved_region) {
 		return string(retrieved_region);
 	}
 	// FIXME: this returns eu-north-1 which fails
 	Value region_value;
 	if (db_config.TryGetCurrentSetting("s3_region", region_value)) {
+		printf("Region3: %s\n", region_value.ToString().c_str());
 		return region_value.ToString();
 	}
 	return string(retrieved_region);
