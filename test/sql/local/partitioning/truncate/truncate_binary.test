@@ -1,0 +1,42 @@
+# name: test/sql/local/partitioning/truncate/truncate_binary.test
+# group: [truncate]
+
+require avro
+
+require parquet
+
+require iceberg
+
+statement ok
+create view scan as select * from ICEBERG_SCAN('__WORKING_DIRECTORY__/data/generated/iceberg/spark-local/default/truncate_partitioned_binary');
+
+query I
+select count(*) from scan;
+----
+5
+
+# unconstrained query reads all files
+query II
+explain analyze select * from scan;
+----
+analyzed_plan	<REGEX>:.*Total Files Read: 3\s+.*
+
+query I
+select count(*) from scan where nested.data >= '\xF0'::blob;
+----
+3
+
+query I
+select count(*) from scan where nested.data >= 'ascii string'::blob;
+----
+4
+
+query II
+explain analyze select * from scan where nested.data >= '\xF0'::blob;
+----
+analyzed_plan	<REGEX>:.*Total Files Read: 1\s+.*
+
+query II
+explain analyze select * from scan where nested.data = '\xe2\x98\xad\xe2\x98\xab\xe2\x98\xa6\xef\xb8\x8e'::BINARY;
+----
+analyzed_plan	<REGEX>:.*Total Files Read: 1\s+.*

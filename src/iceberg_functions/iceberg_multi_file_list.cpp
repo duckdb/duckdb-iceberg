@@ -131,7 +131,34 @@ bool IcebergMultiFileList::FinishedScanningDeletes() const {
 	return !delete_manifest_reader || delete_manifest_reader->Finished();
 }
 
-optional_ptr<const TableFilter> IcebergMultiFileList::GetFilterForColumnIndex(const TableFilterSet &filter_set,
+unique_ptr<TableFilter> FlattenStructFilters(const TableFilter &filter, const idx_t index) {
+	switch (filter.filter_type) {
+	case TableFilterType::STRUCT_EXTRACT: {
+		auto &struct_extract = filter.Cast<StructFilter>();
+		if (struct_extract.child_idx != index) {
+			//! This filter is not targeting the column on which a partition exists
+			return nullptr;
+		}
+		return struct_extract.child_filter->Copy();
+	}
+	case TableFilterType::CONJUNCTION_AND:
+	case TableFilterType::CONJUNCTION_OR: {
+		auto filter_copy = filter.Copy();
+		auto &conjunction_filter = reinterpret_cast<ConjunctionFilter &>(*filter_copy);
+		for (auto &child : conjunction_filter.child_filters) {
+			child = FlattenStructFilters(*child, index);
+			if (!child) {
+				return nullptr;
+			}
+		}
+		return filter_copy;
+	}
+	default:
+		return nullptr;
+	}
+}
+
+unique_ptr<TableFilter> IcebergMultiFileList::GetFilterForColumnIndex(const TableFilterSet &filter_set,
                                                                               const ColumnIndex &column_index) const {
 	auto primary_index = column_index.GetPrimaryIndex();
 	auto filter_it = filter_set.filters.find(primary_index);
@@ -142,22 +169,18 @@ optional_ptr<const TableFilter> IcebergMultiFileList::GetFilterForColumnIndex(co
 	auto &parent_filter = *filter_it->second;
 	auto &child_indexes = column_index.GetChildIndexes();
 
-	reference<const TableFilter> current_filter(parent_filter);
+	auto current_filter = parent_filter.Copy();
 	for (idx_t i = 0; i < child_indexes.size(); i++) {
-		auto &table_filter = current_filter.get();
+		auto &table_filter = *current_filter;
 		auto &child_index = child_indexes[i];
 		auto index = child_index.GetPrimaryIndex();
-		if (table_filter.filter_type != TableFilterType::STRUCT_EXTRACT) {
+		auto flattened_filter = FlattenStructFilters(table_filter, index);
+		if (!flattened_filter) {
 			return nullptr;
 		}
-		auto &struct_extract = table_filter.Cast<StructFilter>();
-		if (struct_extract.child_idx != index) {
-			//! This filter is not targeting the column on which a partition exists
-			return nullptr;
-		}
-		current_filter = *struct_extract.child_filter;
+		current_filter = std::move(flattened_filter);
 	}
-	return current_filter.get();
+	return current_filter;
 }
 
 void IcebergMultiFileList::Bind(vector<LogicalType> &return_types, vector<string> &names) {

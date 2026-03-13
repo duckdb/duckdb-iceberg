@@ -110,8 +110,8 @@ protected:
 	//! NOTE: this requires the lock because it modifies the 'data_files' vector, potentially invalidating references
 	optional_ptr<const IcebergManifestEntry> GetDataFile(idx_t file_id, lock_guard<mutex> &guard) const;
 
-	optional_ptr<const TableFilter> GetFilterForColumnIndex(const TableFilterSet &filter_set,
-	                                                        const ColumnIndex &column_index) const;
+	unique_ptr<TableFilter> GetFilterForColumnIndex(const TableFilterSet &filter_set,
+	                                                const ColumnIndex &column_index) const;
 
 private:
 	bool PopulateEntryBuffer(lock_guard<mutex> &guard) const;
