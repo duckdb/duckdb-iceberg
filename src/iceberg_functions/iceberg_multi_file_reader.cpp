@@ -150,6 +150,15 @@ static Value TransformPartitionValueTemplated(const Value &value, const LogicalT
 
 static Value TransformPartitionValue(const Value &value, const LogicalType &type) {
 	D_ASSERT(!value.type().IsNested());
+	// DECIMAL partition values are already decoded as proper DuckDB DECIMALs by the Avro reader.
+	// The blob round-trip below misinterprets the little-endian internal representation as
+	// big-endian Iceberg bytes, producing garbage. Return directly (or cast if params differ).
+	if (value.type().id() == LogicalTypeId::DECIMAL) {
+		if (value.type() == type) {
+			return value;
+		}
+		return value.DefaultCastAs(type);
+	}
 	switch (value.type().InternalType()) {
 	case PhysicalType::BOOL:
 		return TransformPartitionValueTemplated<bool>(value, type);
@@ -235,15 +244,14 @@ static void ApplyPartitionConstants(const IcebergMultiFileList &multi_file_list,
 			continue; // Skip non-identity transforms
 		}
 
-		// Get the partition value from the data file's partition struct
-		auto &partition_values = data_file.partition_values;
-		if (partition_values.empty()) {
-			continue; // No partition value available
+		// Get the partition value from the data file's partition info
+		if (data_file.partition_info.empty()) {
+			continue; // No partition info available
 		}
 		optional_ptr<const Value> partition_value;
-		for (auto &it : partition_values) {
-			if (static_cast<uint64_t>(it.first) == field.partition_field_id && !it.second.IsNull()) {
-				partition_value = it.second;
+		for (auto &partition_info : data_file.partition_info) {
+			if (partition_info.field_id == field.partition_field_id && !partition_info.value.IsNull()) {
+				partition_value = partition_info.value;
 				break;
 			}
 		}

@@ -24,6 +24,29 @@ enum class IcebergManifestEntryContentType : uint8_t { DATA = 0, POSITION_DELETE
 
 enum class IcebergManifestEntryStatusType : uint8_t { EXISTING = 0, ADDED = 1, DELETED = 2 };
 
+//! Combined partition information for a single partition field in a data file
+struct DataFilePartitionInfo {
+	//! The partition column name
+	string name;
+	//! The source column id from the table schema
+	uint64_t source_id = 0;
+	//! The partition field id (unique within a partition spec)
+	uint64_t field_id = 0;
+	//! The partition transform applied to the source column
+	IcebergTransform transform;
+	//! The source column type from the table schema
+	LogicalType source_type;
+	//! The actual partition value for this data file
+	Value value;
+
+	bool operator==(const DataFilePartitionInfo &other) const {
+		return field_id == other.field_id && value == other.value;
+	}
+	bool operator!=(const DataFilePartitionInfo &other) const {
+		return !(*this == other);
+	}
+};
+
 struct IcebergDataFile {
 public:
 	Value ToValue(const IcebergTableMetadata &table_metadata, const LogicalType &type) const;
@@ -39,7 +62,9 @@ public:
 	IcebergManifestEntryContentType content;
 	string file_path;
 	string file_format;
-	vector<pair<int32_t, Value>> partition_values;
+	//! Combined partition information in partition spec order.
+	//! Contains name, source_id, field_id, transform, source_type, and the actual partition value.
+	vector<DataFilePartitionInfo> partition_info;
 	int64_t record_count;
 	bool has_first_row_id = false;
 	int64_t first_row_id = 0xDEADBEEF;

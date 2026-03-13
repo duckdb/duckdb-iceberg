@@ -1,0 +1,108 @@
+# name: test/sql/local/irc_any_catalog/alter/test_alter_partitioned_by.test
+# group: [alter]
+
+require-env ICEBERG_SERVER_AVAILABLE
+
+require-env SECRETS_CREATED_AND_CATALOG_ATTACHED
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+drop table if exists my_datalake.default.alter_table_partitioned_identity_transform;
+
+statement ok
+CREATE TABLE my_datalake.default.alter_table_partitioned_identity_transform AS (select range a, range%2 b FROM range(10));
+
+statement ok
+Alter table my_datalake.default.alter_table_partitioned_identity_transform SET PARTITIONED BY (b);
+
+statement ok
+insert into my_datalake.default.alter_table_partitioned_identity_transform values (11, 20);
+
+#TODO verify data_file structure
+
+statement ok
+drop table if exists my_datalake.default.alter_table_partitioned_identity_transform;
+
+statement ok
+drop table if exists my_datalake.default.alter_table_partitioned_date_transform;
+
+statement ok
+CREATE TABLE my_datalake.default.alter_table_partitioned_date_transform AS (FROM values
+(1, '2020-10-10'::DATE),
+(2, '2021-09-09'::DATE),
+(3, '2022-08-08'::DATE) t(a, date));
+
+statement ok
+Alter table my_datalake.default.alter_table_partitioned_date_transform SET PARTITIONED BY (day(date));
+
+statement ok
+insert into my_datalake.default.alter_table_partitioned_date_transform values (11, '2023-07-07'::DATE);
+
+#TODO verify data_file structure
+
+statement ok
+drop table if exists my_datalake.default.alter_table_partitioned_date_transform;
+
+statement ok
+drop table if exists my_datalake.default.alter_table_partitioned_date_transform;
+
+statement ok
+CREATE TABLE my_datalake.default.alter_table_partitioned_date_transform AS (FROM values
+(1, '2020-10-10'::DATE),
+(2, '2021-09-09'::DATE),
+(3, '2022-08-08'::DATE) t(a, date));
+
+statement ok
+Alter table my_datalake.default.alter_table_partitioned_date_transform SET PARTITIONED BY (month(date));
+
+statement ok
+insert into my_datalake.default.alter_table_partitioned_date_transform values (11, '2023-07-07'::DATE);
+
+#TODO verify data_file structure
+
+statement ok
+drop table if exists my_datalake.default.alter_table_partitioned_date_transform;
+
+statement ok
+drop table if exists my_datalake.default.alter_table_partitioned_date_transform;
+
+statement ok
+CREATE TABLE my_datalake.default.alter_table_partitioned_date_transform AS (FROM values
+(1, '2020-10-10'::DATE),
+(2, '2021-09-09'::DATE),
+(3, '2022-08-08'::DATE) t(a, date));
+
+statement ok
+Alter table my_datalake.default.alter_table_partitioned_date_transform SET PARTITIONED BY (year(date));
+
+statement ok
+insert into my_datalake.default.alter_table_partitioned_date_transform values (11, '2023-07-07'::DATE);
+
+#TODO verify data_file structure
+
+statement ok
+drop table if exists my_datalake.default.alter_table_partitioned_date_transform;
+
+statement ok
+CREATE TABLE my_datalake.default.alter_table_partitioned_date_transform AS (FROM values
+(1, '2020-10-10'::DATE),
+(2, '2021-09-09'::DATE),
+(3, '2022-08-08'::DATE) t(a, date));
+
+statement error
+Alter table my_datalake.default.alter_table_partitioned_date_transform SET PARTITIONED BY (invalid(date));
+----
+<REGEX>:.*Not implemented Error: Unrecognized transform.*
+
+statement ok
+drop table if exists my_datalake.default.alter_table_partitioned_date_transform;

@@ -1,11 +1,116 @@
 #include "include/metadata/iceberg_manifest_list.hpp"
 #include "metadata/iceberg_manifest_list.hpp"
+#include "metadata/iceberg_partition_spec.hpp"
+#include "iceberg_value.hpp"
+#include "duckdb/common/exception/conversion_exception.hpp"
 #include "duckdb/main/database.hpp"
 #include "include/storage/iceberg_table_information.hpp"
-
 #include "duckdb/storage/buffer_manager.hpp"
+#include "include/metadata/iceberg_transform.hpp"
 
 namespace duckdb {
+
+void ManifestPartitions::Create(const IcebergPartitionSpec &partition_spec,
+                                const vector<IcebergManifestEntry> &manifest_entries) {
+	if (manifest_entries.empty() || partition_spec.fields.empty()) {
+		return;
+	}
+
+	// Check if any entry has partition info
+	for (auto &entry : manifest_entries) {
+		if (entry.data_file.partition_info.empty()) {
+			throw InvalidInputException(
+			    "Manifest file contains entries without partition info even though there is a partition spec");
+		}
+	}
+
+	has_partitions = true;
+
+	auto num_fields = partition_spec.fields.size();
+	field_summary.resize(num_fields);
+	vector<Value> min_values(num_fields);
+	vector<Value> max_values(num_fields);
+	vector<bool> initialized(num_fields, false);
+
+	for (auto &entry : manifest_entries) {
+		auto &data_file = entry.data_file;
+		for (idx_t i = 0; i < num_fields; i++) {
+			auto &spec_field = partition_spec.fields[i];
+
+			// Find the partition info entry matching this field's partition_field_id
+			optional_ptr<const DataFilePartitionInfo> info_ptr;
+			for (auto &pi : data_file.partition_info) {
+				if (pi.field_id == spec_field.partition_field_id) {
+					info_ptr = &pi;
+					break;
+				}
+			}
+
+			if (!info_ptr || info_ptr->value.IsNull()) {
+				field_summary[i].contains_null = true;
+				continue;
+			}
+
+			// Get the serialized type from the DataFilePartitionInfo's transform and source_type
+			auto serialized_type = info_ptr->transform.GetSerializedType(info_ptr->source_type);
+
+			// Cast the partition value (stored as VARCHAR) to the correct serialized type
+			auto typed_value = info_ptr->value.DefaultCastAs(serialized_type);
+
+			if (!initialized[i]) {
+				min_values[i] = typed_value;
+				max_values[i] = typed_value;
+				initialized[i] = true;
+			} else {
+				if (typed_value < min_values[i]) {
+					min_values[i] = typed_value;
+				}
+				if (typed_value > max_values[i]) {
+					max_values[i] = typed_value;
+				}
+			}
+		}
+	}
+
+	// Serialize the min/max values as bounds
+	for (idx_t i = 0; i < num_fields; i++) {
+		if (!initialized[i]) {
+			// All values for this field are null - set bounds to null BLOBs
+			field_summary[i].lower_bound = Value(LogicalType::BLOB);
+			field_summary[i].upper_bound = Value(LogicalType::BLOB);
+			continue;
+		}
+		auto &spec_field = partition_spec.fields[i];
+		// Find one DataFilePartitionInfo entry to get the type info
+		optional_ptr<const DataFilePartitionInfo> info_ptr;
+		for (auto &entry : manifest_entries) {
+			for (auto &pi : entry.data_file.partition_info) {
+				if (pi.field_id == spec_field.partition_field_id && !pi.value.IsNull()) {
+					info_ptr = &pi;
+					break;
+				}
+			}
+			if (info_ptr) {
+				break;
+			}
+		}
+		D_ASSERT(info_ptr);
+		auto serialized_type = info_ptr->transform.GetSerializedType(info_ptr->source_type);
+		auto lower_result = IcebergValue::SerializeValue(min_values[i], serialized_type, SerializeBound::LOWER_BOUND);
+		auto upper_result = IcebergValue::SerializeValue(max_values[i], serialized_type, SerializeBound::UPPER_BOUND);
+
+		if (lower_result.HasValue()) {
+			field_summary[i].lower_bound = lower_result.GetValue();
+		} else {
+			field_summary[i].lower_bound = Value(LogicalType::BLOB);
+		}
+		if (upper_result.HasValue()) {
+			field_summary[i].upper_bound = upper_result.GetValue();
+		} else {
+			field_summary[i].upper_bound = Value(LogicalType::BLOB);
+		}
+	}
+}
 
 vector<IcebergManifestListEntry> &IcebergManifestList::GetManifestFilesMutable() {
 	return manifest_entries;
@@ -43,11 +148,18 @@ namespace manifest_list {
 
 static Value FieldSummaryFieldIds() {
 	child_list_t<Value> children;
-	children.emplace_back("contains_null", Value::INTEGER(FIELD_SUMMARY_CONTAINS_NULL));
+	child_list_t<Value> contains_null;
+
+	contains_null.emplace_back("__duckdb_field_id", Value::INTEGER(FIELD_SUMMARY_CONTAINS_NULL));
+	contains_null.emplace_back("__duckdb_nullable", Value::BOOLEAN(false));
+
+	children.emplace_back("contains_null", Value::STRUCT(contains_null));
+
 	children.emplace_back("contains_nan", Value::INTEGER(FIELD_SUMMARY_CONTAINS_NAN));
 	children.emplace_back("lower_bound", Value::INTEGER(FIELD_SUMMARY_LOWER_BOUND));
 	children.emplace_back("upper_bound", Value::INTEGER(FIELD_SUMMARY_UPPER_BOUND));
 	children.emplace_back("__duckdb_field_id", Value::INTEGER(PARTITIONS_ELEMENT));
+	children.emplace_back("__duckdb_nullable", Value::BOOLEAN(false));
 	auto field_summary = Value::STRUCT(children);
 
 	child_list_t<Value> list_children;

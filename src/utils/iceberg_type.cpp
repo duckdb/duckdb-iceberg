@@ -1,6 +1,7 @@
 #include "duckdb/common/string_util.hpp"
 #include "utils/iceberg_type.hpp"
 #include "duckdb/common/extra_type_info.hpp"
+#include "duckdb/common/types.hpp"
 #include "duckdb/parser/column_definition.hpp"
 #include "rest_catalog/objects/list_type.hpp"
 #include "rest_catalog/objects/map_type.hpp"
@@ -46,6 +47,8 @@ string IcebergTypeHelper::LogicalTypeToIcebergType(const LogicalType &type) {
 		return "timestamp";
 	case LogicalTypeId::TIMESTAMP_TZ:
 		return "timestamptz";
+	case LogicalTypeId::TIMESTAMP_NS:
+		return "timestamp_ns";
 	case LogicalTypeId::MAP:
 		return "map";
 	case LogicalTypeId::VARIANT:

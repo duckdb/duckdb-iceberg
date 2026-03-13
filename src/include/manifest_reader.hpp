@@ -71,6 +71,8 @@ private:
 public:
 	//! Whether the deleted entries should be skipped outright
 	bool skip_deleted = false;
+	//! Map from partition field_id to the partition field name (from the avro schema)
+	unordered_map<int32_t, string> partition_field_names;
 };
 
 } // namespace manifest_file

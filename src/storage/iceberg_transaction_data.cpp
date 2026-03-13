@@ -144,9 +144,7 @@ IcebergManifestListEntry IcebergTransactionData::CreateManifestFile(lock_guard<m
 	manifest_file.added_rows_count = 0;
 	manifest_file.existing_rows_count = 0;
 	manifest_file.deleted_rows_count = 0;
-	//! TODO: support partitions
-	manifest_file.partition_spec_id = 0;
-	//! manifest.partitions = CreateManifestPartition();
+	manifest_file.partition_spec_id = table_metadata.default_spec_id;
 
 	//! Add the files to the manifest
 	for (auto &manifest_entry : manifest_entries) {
@@ -182,7 +180,7 @@ IcebergManifestListEntry IcebergTransactionData::CreateManifestFile(lock_guard<m
 		//! FIXME: these should be inherited - left NULL - for newly added data
 		manifest_entry.sequence_number = sequence_number;
 		manifest_entry.snapshot_id = snapshot_id;
-		manifest_entry.partition_spec_id = manifest_file.partition_spec_id;
+		manifest_entry.partition_spec_id = manifest_entry.partition_spec_id;
 		if (!manifest_file.has_min_sequence_number ||
 		    manifest_entry.sequence_number < manifest_file.min_sequence_number) {
 			manifest_file.min_sequence_number = manifest_entry.sequence_number;
@@ -190,6 +188,18 @@ IcebergManifestListEntry IcebergTransactionData::CreateManifestFile(lock_guard<m
 		manifest_file.has_min_sequence_number = true;
 	}
 	manifest_file.added_snapshot_id = snapshot_id;
+
+	// Compute partition field summaries (upper/lower bounds) for the manifest list entry
+	if (table_metadata.HasPartitionSpec() && table_metadata.GetLatestPartitionSpec().IsPartitioned()) {
+		auto partition_spec_it = table_metadata.partition_specs.find(table_metadata.default_spec_id);
+		if (partition_spec_it == table_metadata.partition_specs.end()) {
+			throw InternalException("Cannot find partition spec with id " +
+			                        std::to_string(table_metadata.default_spec_id));
+		}
+		auto &partition_spec = partition_spec_it->second;
+		manifest_file.partitions.Create(partition_spec, manifest_entries);
+	}
+
 	manifest_list_entry.manifest_entries.insert(manifest_list_entry.manifest_entries.end(),
 	                                            std::make_move_iterator(manifest_entries.begin()),
 	                                            std::make_move_iterator(manifest_entries.end()));
@@ -277,6 +287,10 @@ void IcebergTransactionData::AddSnapshot(IcebergSnapshotOperationType operation,
 
 	auto add_snapshot = make_uniq<IcebergAddSnapshot>(table_info, manifest_list_path, std::move(new_snapshot));
 	add_snapshot->manifest_list.AddManifestFile(std::move(manifest_file));
+	// make sure we are still inserting into the current schema
+	if (table_metadata.has_current_snapshot) {
+		TableAddAssertCurrentSchemaId();
+	}
 	add_snapshot->altered_manifests = std::move(altered_manifests);
 
 	alters.push_back(*add_snapshot);
@@ -370,6 +384,22 @@ void IcebergTransactionData::TableAssignUUID() {
 
 void IcebergTransactionData::TableAddAssertCreate() {
 	requirements.push_back(make_uniq<AssertCreateRequirement>(table_info));
+}
+
+void IcebergTransactionData::TableAddAssertCurrentSchemaId() {
+	requirements.push_back(make_uniq<AssertCurrentSchemaIdRequirement>(table_info));
+}
+
+void IcebergTransactionData::TableAddAssertLastAssignedColumnFieldId() {
+	requirements.push_back(make_uniq<AssertLastAssignedColumnFieldIdRequirement>(table_info));
+}
+
+void IcebergTransactionData::TableAddAssertLastAssignedPartitionId() {
+	requirements.push_back(make_uniq<AssertLastAssignedPartitionIdRequirement>(table_info));
+}
+
+void IcebergTransactionData::TableAddAssertDefaultSpecId() {
+	requirements.push_back(make_uniq<AssertDefaultSpecIdRequirement>(table_info));
 }
 
 void IcebergTransactionData::TableAddUpradeFormatVersion() {

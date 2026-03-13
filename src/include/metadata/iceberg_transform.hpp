@@ -1,5 +1,4 @@
 #pragma once
-
 #include "metadata/iceberg_predicate_stats.hpp"
 
 namespace duckdb {
@@ -38,8 +37,10 @@ public:
 		return raw_transform;
 	}
 
+	static bool TransformFunctionSupported(const string &transform_name);
 	LogicalType GetSerializedType(const LogicalType &input) const;
 	LogicalType GetBoundsType(const LogicalType &input) const;
+	void SetBucketOrTruncateValue(idx_t value);
 
 private:
 	//! Preserve the input for debugging
