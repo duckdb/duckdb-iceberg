@@ -86,25 +86,20 @@ static void ParseS3ConfigOptions(const case_insensitive_map_t<string> &config, c
 }
 string RetrieveRegion(DBConfig &db_config) {
 	char *retrieved_region = std::getenv("AWS_REGION");
-	printf("Region1: %s\n", retrieved_region);
-
 	if (retrieved_region) {
 		return string(retrieved_region);
 	}
-	// FIXME: this returns eu-north-1 which fails
 	retrieved_region = std::getenv("AWS_DEFAULT_REGION");
-	printf("Region2: %s\n", retrieved_region);
-
 	if (retrieved_region) {
 		return string(retrieved_region);
 	}
-	// FIXME: this returns eu-north-1 which fails
+
 	Value region_value;
 	if (db_config.TryGetCurrentSetting("s3_region", region_value)) {
-		printf("Region3: %s\n", region_value.ToString().c_str());
 		return region_value.ToString();
 	}
-	return string(retrieved_region);
+
+	return "";
 }
 static void ParseConfigOptions(const case_insensitive_map_t<string> &config, case_insensitive_map_t<Value> &options,
                                ClientContext &context, const string &storage_type = "s3") {
@@ -125,8 +120,9 @@ static void ParseConfigOptions(const case_insensitive_map_t<string> &config, cas
 			const string region = RetrieveRegion(DBConfig::GetConfig(context));
 
 			if (region.empty()) {
-				throw InternalException("No region provided in vended credentials, no default region passed for the "
-				                        "catalog, and no region found via environment variables");
+				throw InvalidConfigurationException(
+				    "No region provided in vended credentials, no default region passed for the "
+				    "catalog, and no region found via environment variables");
 			}
 			options["region"] = Value(region);
 		}

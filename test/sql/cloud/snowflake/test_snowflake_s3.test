@@ -28,6 +28,7 @@ create secret polaris_secret (
         ENDPOINT '${SNOWFLAKE_CATALOG_URI_GCS}'
     );
 
+
 statement ok
 attach 's3-catalog' as my_datalake (
     type ICEBERG,
@@ -35,11 +36,6 @@ attach 's3-catalog' as my_datalake (
     ENDPOINT '${SNOWFLAKE_CATALOG_URI_GCS}'
  );
 
-# statement ok
-# attach 's3-catalog' as my_datalake (
-#     type ICEBERG,
-#     ENDPOINT '${SNOWFLAKE_CATALOG_URI_GCS}'
-#  );
 
 statement ok
 create schema if not exists my_datalake.test_create_schema;
