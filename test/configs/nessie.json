@@ -40,7 +40,8 @@
         "test/sql/local/irc_any_catalog/create/default/test_create_default_double.test",
         "test/sql/local/irc_any_catalog/create/default/test_create_default_uuid.test",
         "test/sql/local/irc_any_catalog/create/default/test_create_default_time.test",
-        "test/sql/local/irc_any_catalog/create/test_create_default.test"
+        "test/sql/local/irc_any_catalog/create/test_create_default.test",
+        "test/sql/local/irc_any_catalog/update/update_with_default.test"
       ]
     },
     {
