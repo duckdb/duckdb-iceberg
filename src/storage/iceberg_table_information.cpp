@@ -121,8 +121,8 @@ static void ParseConfigOptions(const case_insensitive_map_t<string> &config, cas
 
 			if (region.empty()) {
 				throw InvalidConfigurationException(
-				    "No region provided in vended credentials, no default region passed for the "
-				    "catalog, and no region found via environment variables");
+				    "No region was provided via the vended credentials, and no region could be found via "
+				    "environment variables. Please provide a default_region for the Iceberg Catalog when attaching");
 			}
 			options["region"] = Value(region);
 		}
