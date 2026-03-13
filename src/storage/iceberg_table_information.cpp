@@ -84,9 +84,25 @@ static void ParseS3ConfigOptions(const case_insensitive_map_t<string> &config, c
 		}
 	}
 }
+string RetrieveRegion(DBConfig &db_config) {
+	char *retrieved_region = std::getenv("AWS_REGION");
+	if (retrieved_region) {
+		return string(retrieved_region);
+	}
+	retrieved_region = std::getenv("AWS_DEFAULT_REGION");
+	if (retrieved_region) {
+		return string(retrieved_region);
+	}
 
+	Value region_value;
+	if (db_config.TryGetCurrentSetting("s3_region", region_value)) {
+		return region_value.ToString();
+	}
+
+	return "";
+}
 static void ParseConfigOptions(const case_insensitive_map_t<string> &config, case_insensitive_map_t<Value> &options,
-                               const string &storage_type = "s3") {
+                               ClientContext &context, const string &storage_type = "s3") {
 	if (config.empty()) {
 		return;
 	}
@@ -99,6 +115,17 @@ static void ParseConfigOptions(const case_insensitive_map_t<string> &config, cas
 	} else {
 		// Default to S3 parsing for backward compatibility
 		ParseS3ConfigOptions(config, options);
+
+		if (options.find("region") == options.end()) {
+			const string region = RetrieveRegion(DBConfig::GetConfig(context));
+
+			if (region.empty()) {
+				throw InvalidConfigurationException(
+				    "No region was provided via the vended credentials, and no region could be found via "
+				    "environment variables. Please provide a default_region for the Iceberg Catalog when attaching");
+			}
+			options["region"] = Value(region);
+		}
 	}
 
 	auto it = config.find("s3.path-style-access");
@@ -187,7 +214,7 @@ IRCAPITableCredentials IcebergTableInformation::GetVendedCredentials(ClientConte
 		auto &load_table_result = *cached_table_result->load_table_result;
 		if (load_table_result.has_config) {
 			auto &config = load_table_result.config;
-			ParseConfigOptions(config, config_options, storage_type);
+			ParseConfigOptions(config, config_options, context, storage_type);
 		}
 
 		if (load_table_result.has_storage_credentials) {
@@ -210,7 +237,7 @@ IRCAPITableCredentials IcebergTableInformation::GetVendedCredentials(ClientConte
 				create_secret_input.storage_type = "memory";
 				create_secret_input.options = config_options;
 
-				ParseConfigOptions(credential.config, create_secret_input.options, storage_type);
+				ParseConfigOptions(credential.config, create_secret_input.options, context, storage_type);
 				//! TODO: apply the 'overrides' retrieved from the /v1/config endpoint
 				result.storage_credentials.push_back(create_secret_input);
 			}
