@@ -73,7 +73,7 @@ WHEN NOT MATCHED THEN ERROR
 1
 
 query II
-FROM my_datalake.default.Stock
+FROM my_datalake.default.Stock order by all
 ----
 10	0
 20	100
