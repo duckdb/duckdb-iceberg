@@ -1,0 +1,43 @@
+# name: test/sql/local/irc_any_catalog/logging/test_partition_read_logic_month.test
+# group: [logging]
+
+require-env ICEBERG_SERVER_AVAILABLE
+
+require-env SECRETS_CREATED_AND_CATALOG_ATTACHED
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+require icu
+
+require ducklake
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+set enable_logging=true
+
+statement ok
+SET TimeZone = 'UTC';
+
+statement ok
+call enable_logging('Iceberg');
+
+query I
+select ts from my_datalake.default.day_partitioned_table where ts = '2025-01-04 00:00:00'::TIMESTAMP;
+----
+2025-01-04 00:00:00+00
+2025-01-04 00:00:00+00
+2025-01-04 00:00:00+00
+
+query I
+select count(*) from duckdb_logs() where type = 'Iceberg' and regexp_matches(message, '.*skipped.*data_file.*partition column.*with transform.*does not match filter.*ts=.*2025-01-04 00:00:00\+00.*');
+----
+3
+

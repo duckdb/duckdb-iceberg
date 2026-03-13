@@ -1,6 +1,9 @@
 #include "metadata/iceberg_transform.hpp"
 #include "iceberg_hash.hpp"
 #include "duckdb/common/string_util.hpp"
+#include "duckdb/common/types/date.hpp"
+#include "duckdb/common/types/timestamp.hpp"
+#include "duckdb/common/types/value.hpp"
 
 namespace duckdb {
 
@@ -100,6 +103,36 @@ LogicalType IcebergTransform::GetSerializedType(const LogicalType &input) const 
 	default:
 		throw InvalidConfigurationException("Can't produce a result type for transform %s and input type %s",
 		                                    raw_transform, input.ToString());
+	}
+}
+
+string IcebergTransform::PartitionValueToString(const Value &partition_value) const {
+	if (partition_value.IsNull() || partition_value.ToString() == "NULL") {
+		return "NULL";
+	}
+	switch (type) {
+	case IcebergTransformType::DAY: {
+		date_t d;
+		d.days = partition_value.GetValue<int32_t>();
+		return Date::ToString(d);
+	}
+	case IcebergTransformType::MONTH: {
+		int32_t m = partition_value.GetValue<int32_t>();
+		// Floor-divide to correctly handle months before 1970
+		int32_t year = 1970 + (m >= 0 ? m : m - 11) / 12;
+		int32_t month = ((m % 12) + 12) % 12 + 1;
+		return StringUtil::Format("%04d-%02d", year, month);
+	}
+	case IcebergTransformType::YEAR: {
+		return std::to_string(1970 + partition_value.GetValue<int32_t>());
+	}
+	case IcebergTransformType::HOUR: {
+		int64_t hours = partition_value.GetValue<int32_t>();
+		timestamp_t ts(hours * Interval::MICROS_PER_HOUR);
+		return Timestamp::ToString(ts);
+	}
+	default:
+		return partition_value.ToString();
 	}
 }
 

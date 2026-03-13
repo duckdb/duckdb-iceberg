@@ -1,5 +1,5 @@
 #include "storage/iceberg_delete.hpp"
-#include "storage/iceberg_delete.hpp"
+#include "iceberg_logging.hpp"
 #include "storage/catalog/iceberg_catalog.hpp"
 #include "storage/iceberg_transaction.hpp"
 #include "storage/catalog/iceberg_table_entry.hpp"
@@ -210,6 +210,10 @@ void IcebergDelete::WritePositionalDeleteFile(ClientContext &context, IcebergDel
 	delete_file.file_format = "parquet";
 	delete_file.delete_count = stats.row_count;
 	delete_file.file_size_bytes = stats.file_size_bytes;
+	DUCKDB_LOG(context, IcebergLogType,
+	           "Iceberg DELETE, wrote positional_delete_file '%s' for data_file '%s', delete_count=%llu, "
+	           "file_size=%llu bytes",
+	           delete_file_path, filename, stats.row_count, stats.file_size_bytes);
 	delete_file.footer_size = stats.footer_size_bytes.GetValue<idx_t>();
 	auto pos_stats = stats.column_statistics.find("\"pos\"");
 	auto pos_min = pos_stats->second.find("min");

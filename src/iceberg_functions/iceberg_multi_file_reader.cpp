@@ -178,7 +178,7 @@ static Value TransformPartitionValue(const Value &value, const LogicalType &type
 
 static void ApplyPartitionConstants(const IcebergMultiFileList &multi_file_list, MultiFileReaderData &reader_data,
                                     const vector<MultiFileColumnDefinition> &global_columns,
-                                    const vector<ColumnIndex> &global_column_ids) {
+                                    const vector<ColumnIndex> &global_column_ids, ClientContext &context) {
 	// Get the metadata for this file
 	auto &reader = *reader_data.reader;
 	auto file_id = reader.file_list_idx.GetIndex();
@@ -248,7 +248,9 @@ static void ApplyPartitionConstants(const IcebergMultiFileList &multi_file_list,
 			}
 		}
 		if (!partition_value) {
-			//! This data file doesn't have a value for this partition field (is that an error ??)
+			DUCKDB_LOG(context, IcebergLogType,
+			           "Iceberg partition constant missing for data_file '%s', partition field_id=%llu column '%s'",
+			           data_file.file_path, field.partition_field_id, global_column.name);
 			continue;
 		}
 		auto global_idx = MultiFileGlobalIndex(i);
@@ -340,7 +342,7 @@ void IcebergMultiFileReader::FinalizeBind(MultiFileReaderData &reader_data, cons
 			ApplyFieldMapping(local_column, mappings, root.field_mapping_indexes);
 		}
 	}
-	ApplyPartitionConstants(multi_file_list, reader_data, global_columns, global_column_ids);
+	ApplyPartitionConstants(multi_file_list, reader_data, global_columns, global_column_ids, context);
 }
 
 void IcebergMultiFileReader::ApplyEqualityDeletes(ClientContext &context, DataChunk &output_chunk,

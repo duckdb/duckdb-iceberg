@@ -40,6 +40,8 @@ public:
 
 	LogicalType GetSerializedType(const LogicalType &input) const;
 	LogicalType GetBoundsType(const LogicalType &input) const;
+	//! Convert a partition domain value (e.g. 20091 days-since-epoch) to a human-readable string (e.g. "2025-01-03")
+	string PartitionValueToString(const Value &partition_value) const;
 
 private:
 	//! Preserve the input for debugging

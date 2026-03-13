@@ -54,6 +54,11 @@ string IRCAPI::GetEncodedSchemaName(const vector<string> &items) {
 	return result;
 }
 
+static void LogPostBody(ClientContext &context, const IRCEndpointBuilder &url_builder, const string &body) {
+	auto message = StringUtil::Format("POST %s", url_builder.GetURLEncoded().c_str());
+	DUCKDB_LOG(context, IcebergLogType, message);
+}
+
 [[noreturn]] static void ThrowException(const string &url, const HTTPResponse &response, const string &method) {
 	D_ASSERT(!response.Success());
 
@@ -329,6 +334,7 @@ void IRCAPI::CommitMultiTableUpdate(ClientContext &context, IcebergCatalog &cata
 	url_builder.AddPathComponent("commit");
 	HTTPHeaders headers(*context.db);
 	headers.Insert("Content-Type", "application/json");
+	LogPostBody(context, url_builder, body);
 	auto response = catalog.auth_handler->Request(RequestType::POST_REQUEST, context, url_builder, headers, body);
 	if (response->status != HTTPStatusCode::OK_200 && response->status != HTTPStatusCode::NoContent_204) {
 		yyjson_val *error_obj = ICUtils::get_error_message(response->body);
@@ -363,6 +369,7 @@ void IRCAPI::CommitTableUpdate(ClientContext &context, IcebergCatalog &catalog, 
 	url_builder.AddPathComponent(table_name);
 	HTTPHeaders headers(*context.db);
 	headers.Insert("Content-Type", "application/json");
+	LogPostBody(context, url_builder, body);
 	auto response = catalog.auth_handler->Request(RequestType::POST_REQUEST, context, url_builder, headers, body);
 	if (response->status != HTTPStatusCode::OK_200 && response->status != HTTPStatusCode::NoContent_204) {
 		throw InvalidConfigurationException(
@@ -399,6 +406,7 @@ void IRCAPI::CommitNamespaceCreate(ClientContext &context, IcebergCatalog &catal
 	url_builder.AddPathComponent("namespaces");
 	HTTPHeaders headers(*context.db);
 	headers.Insert("Content-Type", "application/json");
+	LogPostBody(context, url_builder, body);
 	auto response = catalog.auth_handler->Request(RequestType::POST_REQUEST, context, url_builder, headers, body);
 	if (response->status != HTTPStatusCode::OK_200) {
 		throw InvalidConfigurationException(
@@ -454,6 +462,7 @@ rest_api_objects::LoadTableResult IRCAPI::CommitNewTable(ClientContext &context,
 		if (catalog.attach_options.access_mode == IRCAccessDelegationMode::VENDED_CREDENTIALS) {
 			headers.Insert("X-Iceberg-Access-Delegation", "vended-credentials");
 		}
+		LogPostBody(context, url_builder, create_table_json);
 		auto response =
 		    catalog.auth_handler->Request(RequestType::POST_REQUEST, context, url_builder, headers, create_table_json);
 		if (response->status != HTTPStatusCode::OK_200) {
