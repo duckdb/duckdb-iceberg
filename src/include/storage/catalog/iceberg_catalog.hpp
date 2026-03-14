@@ -95,6 +95,8 @@ public:
 	                             PhysicalOperator &plan) override;
 	PhysicalOperator &PlanUpdate(ClientContext &context, PhysicalPlanGenerator &planner, LogicalUpdate &op,
 	                             PhysicalOperator &plan) override;
+	PhysicalOperator &PlanMergeInto(ClientContext &context, PhysicalPlanGenerator &planner, LogicalMergeInto &op,
+	                                PhysicalOperator &plan) override;
 	unique_ptr<LogicalOperator> BindCreateIndex(Binder &binder, CreateStatement &stmt, TableCatalogEntry &table,
 	                                            unique_ptr<LogicalOperator> plan) override;
 	DatabaseSize GetDatabaseSize(ClientContext &context) override;
