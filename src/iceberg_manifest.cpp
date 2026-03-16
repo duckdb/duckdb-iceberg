@@ -596,8 +596,15 @@ idx_t WriteToFile(const IcebergTableMetadata &table_metadata, const string &path
 	chunk.SetCardinality(manifest_entries.size());
 	auto iceberg_schema_string = ICUtils::JsonToString(std::move(doc_p));
 
+	std::unique_ptr<yyjson_mut_doc, YyjsonDocDeleter> schema_doc_p(yyjson_mut_doc_new(nullptr));
+	auto schema_doc = schema_doc_p.get();
+	auto schema_root_obj = yyjson_mut_obj(schema_doc);
+	yyjson_mut_doc_set_root(schema_doc, schema_root_obj);
+	table_metadata.GetSchemaFromId(table_metadata.current_schema_id)->ToJson(schema_doc, schema_root_obj);
+	auto iceberg_table_schema_string = ICUtils::JsonToString(std::move(schema_doc_p));
+
 	child_list_t<Value> metadata_values;
-	metadata_values.emplace_back("schema", iceberg_schema_string);
+	metadata_values.emplace_back("schema", iceberg_table_schema_string);
 	metadata_values.emplace_back("schema-id", std::to_string(table_metadata.current_schema_id));
 	metadata_values.emplace_back("partition-spec", current_partition_spec.FieldsToJSON());
 	metadata_values.emplace_back("partition-spec-id", std::to_string(current_partition_spec.spec_id));

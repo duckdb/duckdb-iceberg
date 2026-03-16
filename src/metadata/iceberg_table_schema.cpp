@@ -238,6 +238,18 @@ void IcebergTableSchema::SchemaToJson(yyjson_mut_doc *doc, yyjson_mut_val *root_
 	yyjson_mut_obj_add_arr(doc, root_object, "identifier-field-ids");
 }
 
+void IcebergTableSchema::ToJson(yyjson_mut_doc *doc, yyjson_mut_val *root_object) const {
+	yyjson_mut_obj_add_strcpy(doc, root_object, "type", "struct");
+	yyjson_mut_obj_add_uint(doc, root_object, "schema-id", schema_id);
+	auto fields_arr = yyjson_mut_obj_add_arr(doc, root_object, "fields");
+	// populate the fields
+	for (auto &field : columns) {
+		auto field_obj = yyjson_mut_arr_add_obj(doc, fields_arr);
+		field->ToJson(doc, field_obj);
+	}
+	yyjson_mut_obj_add_arr(doc, root_object, "identifier-field-ids");
+}
+
 const LogicalType &IcebergTableSchema::GetColumnTypeFromFieldId(idx_t field_id) const {
 	for (auto &column : columns) {
 		if (column->id == field_id) {

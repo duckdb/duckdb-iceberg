@@ -17,6 +17,7 @@ namespace duckdb {
 struct IcebergColumnDefinition {
 public:
 	static unique_ptr<IcebergColumnDefinition> ParseStructField(rest_api_objects::StructField &field);
+	void ToJson(yyjson_mut_doc *doc, yyjson_mut_val *field_obj) const;
 
 public:
 	static LogicalType ParsePrimitiveType(rest_api_objects::PrimitiveType &type);
