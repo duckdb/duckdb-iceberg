@@ -21,8 +21,6 @@ public:
 	                                                        optional_ptr<optional_idx> names_offset);
 
 	static void SchemaToJson(yyjson_mut_doc *doc, yyjson_mut_val *root_object, const rest_api_objects::Schema &schema);
-	void ToJson(yyjson_mut_doc *doc, yyjson_mut_val *root_object) const;
-
 	const LogicalType &GetColumnTypeFromFieldId(idx_t field_id) const;
 
 public:
