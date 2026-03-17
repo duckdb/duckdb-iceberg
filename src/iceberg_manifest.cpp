@@ -567,7 +567,6 @@ idx_t WriteToFile(const IcebergTableMetadata &table_metadata, const string &path
 
 	//! Write the current table schema into the header
 	std::unique_ptr<yyjson_mut_doc, YyjsonDocDeleter> schema_doc_p(yyjson_mut_doc_new(nullptr));
-
 	auto schema_doc = schema_doc_p.get();
 	auto schema_root_obj = yyjson_mut_obj(schema_doc);
 	yyjson_mut_doc_set_root(schema_doc, schema_root_obj);
@@ -581,7 +580,7 @@ idx_t WriteToFile(const IcebergTableMetadata &table_metadata, const string &path
 	metadata_values.emplace_back("partition-spec-id", std::to_string(current_partition_spec.spec_id));
 	metadata_values.emplace_back("format-version", std::to_string(table_metadata.iceberg_version));
 	metadata_values.emplace_back("content", "data");
-	// metadata_values.emplace_back("iceberg.schema", iceberg_manifest_schema_string);
+	metadata_values.emplace_back("iceberg.schema", iceberg_manifest_schema_string);
 	auto metadata_map = Value::STRUCT(std::move(metadata_values));
 
 	CopyInfo copy_info;
