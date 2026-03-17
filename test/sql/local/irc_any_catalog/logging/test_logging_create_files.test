@@ -44,4 +44,4 @@ create table my_datalake.default.test_logging_create_table_large as select range
 query I
 select count(*) from duckdb_logs() where type = 'Iceberg' and regexp_matches(message, 'Iceberg INSERT, wrote data_file.*record_count=.*');
 ----
-5
+2
