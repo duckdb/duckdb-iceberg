@@ -277,24 +277,25 @@ PhysicalOperator &IcebergCatalog::PlanUpdate(ClientContext &context, PhysicalPla
 	}
 
 	auto &table = op.table.Cast<IcebergTableEntry>();
-	auto &table_schema = table.table_info.table_metadata.GetLatestSchema();
+	auto &table_metadata = table.table_info.table_metadata;
+	auto &table_schema = table_metadata.GetLatestSchema();
 
-	auto &partition_spec = table.table_info.table_metadata.GetLatestPartitionSpec();
+	auto &partition_spec = table_metadata.GetLatestPartitionSpec();
 	if (!partition_spec.IsUnpartitioned()) {
 		throw NotImplementedException("Update into a partitioned table is not supported yet");
 	}
-	if (table.table_info.table_metadata.HasSortOrder()) {
-		auto &sort_spec = table.table_info.table_metadata.GetLatestSortOrder();
+	if (table_metadata.HasSortOrder()) {
+		auto &sort_spec = table_metadata.GetLatestSortOrder();
 		if (sort_spec.IsSorted()) {
 			throw NotImplementedException("Update on a sorted iceberg table is not supported yet");
 		}
 	}
-	if (table.table_info.table_metadata.iceberg_version < 2) {
-		throw NotImplementedException("Update Iceberg V%d tables", table.table_info.table_metadata.iceberg_version);
+	if (table_metadata.iceberg_version < 2) {
+		throw NotImplementedException("Update Iceberg V%d tables", table_metadata.iceberg_version);
 	}
 
-	IcebergCopyInput copy_input(context, table, table_schema);
-	if (table.table_info.table_metadata.iceberg_version >= 3) {
+	IcebergCopyInput copy_input(context, table_metadata, table_schema);
+	if (table_metadata.iceberg_version >= 3) {
 		copy_input.virtual_columns = IcebergInsertVirtualColumns::WRITE_ROW_ID;
 	}
 	auto &copy_op = IcebergInsert::PlanCopyForInsert(context, planner, copy_input, nullptr);

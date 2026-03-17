@@ -21,7 +21,10 @@ public:
 	                                                        optional_ptr<optional_idx> names_offset);
 
 	static void SchemaToJson(yyjson_mut_doc *doc, yyjson_mut_val *root_object, const rest_api_objects::Schema &schema);
+	shared_ptr<IcebergTableSchema> Copy() const;
 	const LogicalType &GetColumnTypeFromFieldId(idx_t field_id) const;
+
+	void GetColumnNamesAndTypes(vector<string> &names, vector<LogicalType> &types) const;
 
 public:
 	int32_t schema_id;

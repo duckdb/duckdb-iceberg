@@ -58,20 +58,16 @@ public:
 
 public:
 	IcebergManifestFileScanInfo(const IcebergTableMetadata &metadata, const IcebergSnapshot &snapshot,
-	                            const vector<IcebergManifestFile> &manifest_files, const IcebergOptions &options,
+	                            const vector<IcebergManifestListEntry> &manifest_files, const IcebergOptions &options,
 	                            FileSystem &fs, const string &iceberg_path);
 	virtual ~IcebergManifestFileScanInfo();
 
 public:
-	// Helper to get manifest metadata by file index
-	const IcebergManifestFile &GetManifestFile(idx_t file_idx) const;
-
-public:
-	const vector<IcebergManifestFile> &manifest_files;
+	const vector<IcebergManifestListEntry> &manifest_files;
 	const IcebergOptions &options;
 	FileSystem &fs;
 	string iceberg_path;
-	//! partition_field_id -> column type;
+	//! partition_field_id -> semantic column type (e.g. INTEGER for DAY)
 	map<idx_t, LogicalType> partition_field_id_to_type;
 };
 

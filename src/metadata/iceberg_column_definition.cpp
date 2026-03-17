@@ -1,4 +1,5 @@
 #include "metadata/iceberg_column_definition.hpp"
+#include "duckdb/common/types.hpp"
 
 namespace duckdb {
 
@@ -141,6 +142,9 @@ LogicalType IcebergColumnDefinition::ParsePrimitiveTypeString(const string &type
 	if (type_str == "timestamptz") {
 		return LogicalType::TIMESTAMP_TZ;
 	}
+	if (type_str == "timestamp_ns") {
+		return LogicalType::TIMESTAMP_NS;
+	}
 	if (type_str == "string") {
 		return LogicalType::VARCHAR;
 	}
@@ -202,6 +206,25 @@ bool IcebergColumnDefinition::IsIcebergPrimitiveType() const {
 	default:
 		return false;
 	}
+}
+
+unique_ptr<IcebergColumnDefinition> IcebergColumnDefinition::Copy() const {
+	auto res = make_uniq<IcebergColumnDefinition>();
+	res->id = id;
+	res->name = name;
+	res->type = type;
+	// TODO: initial default and write default need more support here
+	if (initial_default) {
+		res->initial_default = make_uniq<Value>(initial_default.get());
+	}
+	if (write_default) {
+		res->write_default = make_uniq<Value>(write_default.get());
+	}
+	res->required = required;
+	for (auto &child : children) {
+		res->children.push_back(child->Copy());
+	}
+	return res;
 }
 
 ColumnDefinition IcebergColumnDefinition::GetColumnDefinition() const {

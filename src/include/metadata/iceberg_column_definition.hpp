@@ -27,6 +27,7 @@ public:
 	          optional_ptr<rest_api_objects::PrimitiveTypeValue> write_default = nullptr);
 	bool IsIcebergPrimitiveType() const;
 	ColumnDefinition GetColumnDefinition() const;
+	unique_ptr<IcebergColumnDefinition> Copy() const;
 
 public:
 	int32_t id;

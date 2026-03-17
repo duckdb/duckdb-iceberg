@@ -120,15 +120,52 @@ Value IcebergDataFile::ToValue(const IcebergTableMetadata &table_metadata, const
 	// file_format: string
 	children.push_back(Value(file_format));
 	// partition: struct(...)
-	if (partition_values.empty()) {
+	if (partition_info.empty()) {
 		//! NOTE: Spark does *not* like it when this column is NULL, so we populate it with an empty struct value
 		//! instead
 		children.push_back(
 		    Value::STRUCT(child_list_t<Value> {{"__duckdb_empty_struct_marker", Value(LogicalTypeId::VARCHAR)}}));
 	} else {
 		child_list_t<Value> partition_children;
-		for (auto &field : partition_values) {
-			partition_children.emplace_back(StringUtil::Format("r%d", field.first), field.second);
+		for (auto &entry : partition_info) {
+			auto new_value = Value();
+			string error_message;
+			LogicalType partition_result_type;
+			switch (entry.transform.Type()) {
+			case IcebergTransformType::IDENTITY: {
+				if (entry.source_type.IsNested()) {
+					throw InvalidInputException("Cannot use identify partition on a nested column");
+				}
+				partition_result_type = entry.source_type;
+				break;
+			}
+			case IcebergTransformType::BUCKET:
+			case IcebergTransformType::TRUNCATE:
+				partition_result_type = LogicalType::VARCHAR;
+				break;
+			case IcebergTransformType::DAY:
+			case IcebergTransformType::MONTH:
+			case IcebergTransformType::YEAR:
+			case IcebergTransformType::HOUR:
+				partition_result_type = LogicalType::BIGINT;
+				break;
+			case IcebergTransformType::INVALID:
+			case IcebergTransformType::VOID: {
+				throw InvalidInputException("Cannot use transform type %s in IcebergDataFile::ToValue %s",
+				                            entry.transform.RawType());
+				break;
+			}
+			default:
+				throw InvalidInputException("Unrecognized transform %s", entry.transform.RawType());
+			}
+			const LogicalType actual_type = partition_result_type;
+			bool cast_worked = entry.value.DefaultTryCastAs(actual_type, new_value, &error_message, true);
+			if (cast_worked) {
+				partition_children.emplace_back(entry.name, new_value);
+			} else {
+				throw InvalidInputException("Could not cast %s to %s", entry.value.type().ToString(),
+				                            actual_type.ToString());
+			}
 		}
 		children.push_back(Value::STRUCT(partition_children));
 	}
@@ -155,7 +192,6 @@ Value IcebergDataFile::ToValue(const IcebergTableMetadata &table_metadata, const
 		upper_bounds_values.push_back(Value::STRUCT({{"key", child.first}, {"value", child.second}}));
 	}
 	children.push_back(Value::MAP(LogicalType::STRUCT(bounds_types), upper_bounds_values));
-
 	// null_value_counts
 	child_list_t<LogicalType> null_value_count_types;
 	null_value_count_types.emplace_back("key", LogicalType::INTEGER);
@@ -185,26 +221,45 @@ Value IcebergDataFile::ToValue(const IcebergTableMetadata &table_metadata, const
 
 namespace manifest_file {
 
-static LogicalType PartitionStructType(const IcebergManifest &file) {
-	D_ASSERT(!file.entries.empty());
-	auto &first_entry = file.entries.front();
+static LogicalType PartitionStructType(const vector<IcebergManifestEntry> &entries) {
+	D_ASSERT(!entries.empty());
+	auto &first_entry = entries.front();
 	child_list_t<LogicalType> children;
 	auto &data_file = first_entry.data_file;
-	if (data_file.partition_values.empty()) {
+	if (data_file.partition_info.empty()) {
 		children.emplace_back("__duckdb_empty_struct_marker", LogicalType::INTEGER);
 	} else {
 		//! NOTE: all entries in the file should have the same schema, otherwise it can't be in the same manifest file
 		//! anyways
-		for (auto &it : data_file.partition_values) {
-			children.emplace_back(StringUtil::Format("r%d", it.first), it.second.type());
+		for (auto &entry : data_file.partition_info) {
+			switch (entry.transform.Type()) {
+			case IcebergTransformType::TRUNCATE:
+			case IcebergTransformType::IDENTITY:
+				children.emplace_back(entry.name, entry.source_type);
+				break;
+			case IcebergTransformType::BUCKET:
+			case IcebergTransformType::DAY:
+			case IcebergTransformType::MONTH:
+			case IcebergTransformType::YEAR:
+			case IcebergTransformType::HOUR:
+				children.emplace_back(entry.name, LogicalType::INTEGER);
+				break;
+			case IcebergTransformType::INVALID:
+			case IcebergTransformType::VOID:
+				throw InvalidInputException("Cannot use this transform type");
+				break;
+			default:
+				throw InvalidInputException("Unrecognized transform");
+			}
 		}
 	}
 	return LogicalType::STRUCT(children);
 }
 
-idx_t WriteToFile(const IcebergTableMetadata &table_metadata, const IcebergManifest &manifest_file, CopyFunction &copy,
-                  DatabaseInstance &db, ClientContext &context) {
-	D_ASSERT(!manifest_file.entries.empty());
+idx_t WriteToFile(const IcebergTableMetadata &table_metadata, const string &path,
+                  const vector<IcebergManifestEntry> &manifest_entries, CopyFunction &copy, DatabaseInstance &db,
+                  ClientContext &context) {
+	D_ASSERT(!manifest_entries.empty());
 	auto &allocator = db.GetBufferManager().GetBufferAllocator();
 
 	//! We need to create an iceberg-schema for the manifest file, written in the metadata of the Avro file.
@@ -331,24 +386,36 @@ idx_t WriteToFile(const IcebergTableMetadata &table_metadata, const IcebergManif
 	}
 
 	{
+		auto &first_entry = manifest_entries.front();
+		auto &data_file = first_entry.data_file;
+
 		child_list_t<Value> partition;
 		// partition: struct(...)
-		children.emplace_back("partition", PartitionStructType(manifest_file));
+		children.emplace_back("partition", PartitionStructType(manifest_entries));
 		partition.emplace_back("__duckdb_field_id", Value::INTEGER(PARTITION));
 		partition.emplace_back("__duckdb_nullable", Value::BOOLEAN(false));
+		for (auto &entry : data_file.partition_info) {
+			partition.emplace_back(entry.name, Value::INTEGER(static_cast<int32_t>(entry.field_id)));
+		}
 		data_file_field_ids.emplace_back("partition", Value::STRUCT(partition));
 
 		auto field_obj = yyjson_mut_arr_add_obj(doc, child_fields_arr);
 		yyjson_mut_obj_add_uint(doc, field_obj, "id", PARTITION);
 		yyjson_mut_obj_add_strcpy(doc, field_obj, "name", "partition");
 		yyjson_mut_obj_add_bool(doc, field_obj, "required", true);
-
 		auto partition_struct = yyjson_mut_obj_add_obj(doc, field_obj, "type");
 		yyjson_mut_obj_add_strcpy(doc, partition_struct, "type", "struct");
-		//! NOTE: this has to be populated with the fields of the partition spec when we support INSERT into a
-		//! partitioned table
 		auto partition_fields = yyjson_mut_obj_add_arr(doc, partition_struct, "fields");
-		(void)partition_fields;
+		if (!data_file.partition_info.empty()) {
+			for (auto &entry : data_file.partition_info) {
+				auto field_obj = yyjson_mut_arr_add_obj(doc, partition_fields);
+				yyjson_mut_obj_add_strcpy(doc, field_obj, "name", entry.name.c_str());
+				auto types_arr = yyjson_mut_obj_add_arr(doc, field_obj, "type");
+				yyjson_mut_arr_add_strcpy(doc, types_arr, "null");
+				yyjson_mut_arr_add_strcpy(doc, types_arr, "int");
+				yyjson_mut_obj_add_int(doc, field_obj, "id", static_cast<int32_t>(entry.field_id));
+			}
+		}
 	}
 
 	{
@@ -385,7 +452,7 @@ idx_t WriteToFile(const IcebergTableMetadata &table_metadata, const IcebergManif
 	//! column_sizes
 	//! value_counts
 	//! null_value_counts
-	//! nan_value_counts
+	//! nan_value_count
 
 	// lower bounds struct
 	child_list_t<LogicalType> bounds_fields;
@@ -398,8 +465,14 @@ idx_t WriteToFile(const IcebergTableMetadata &table_metadata, const IcebergManif
 
 		child_list_t<Value> lower_bound_record_field_ids;
 		lower_bound_record_field_ids.emplace_back("__duckdb_field_id", Value::INTEGER(LOWER_BOUNDS));
-		lower_bound_record_field_ids.emplace_back("key", Value::INTEGER(LOWER_BOUNDS_KEY));
-		lower_bound_record_field_ids.emplace_back("value", Value::INTEGER(LOWER_BOUNDS_VALUE));
+		child_list_t<Value> lower_bounds_key_field;
+		lower_bounds_key_field.emplace_back("__duckdb_field_id", Value::INTEGER(LOWER_BOUNDS_KEY));
+		lower_bounds_key_field.emplace_back("__duckdb_nullable", Value::BOOLEAN(false));
+		lower_bound_record_field_ids.emplace_back("key", Value::STRUCT(lower_bounds_key_field));
+		child_list_t<Value> lower_bounds_value_field;
+		lower_bounds_value_field.emplace_back("__duckdb_field_id", Value::INTEGER(LOWER_BOUNDS_VALUE));
+		lower_bounds_value_field.emplace_back("__duckdb_nullable", Value::BOOLEAN(false));
+		lower_bound_record_field_ids.emplace_back("value", Value::STRUCT(lower_bounds_value_field));
 
 		data_file_field_ids.emplace_back("lower_bounds", Value::STRUCT(lower_bound_record_field_ids));
 
@@ -435,8 +508,14 @@ idx_t WriteToFile(const IcebergTableMetadata &table_metadata, const IcebergManif
 
 		child_list_t<Value> upper_bound_record_field_ids;
 		upper_bound_record_field_ids.emplace_back("__duckdb_field_id", Value::INTEGER(UPPER_BOUNDS));
-		upper_bound_record_field_ids.emplace_back("key", Value::INTEGER(UPPER_BOUNDS_KEY));
-		upper_bound_record_field_ids.emplace_back("value", Value::INTEGER(UPPER_BOUNDS_VALUE));
+		child_list_t<Value> upper_bounds_key_field;
+		upper_bounds_key_field.emplace_back("__duckdb_field_id", Value::INTEGER(UPPER_BOUNDS_KEY));
+		upper_bounds_key_field.emplace_back("__duckdb_nullable", Value::BOOLEAN(false));
+		upper_bound_record_field_ids.emplace_back("key", Value::STRUCT(upper_bounds_key_field));
+		child_list_t<Value> upper_bounds_value_field;
+		upper_bounds_value_field.emplace_back("__duckdb_field_id", Value::INTEGER(UPPER_BOUNDS_VALUE));
+		upper_bounds_value_field.emplace_back("__duckdb_nullable", Value::BOOLEAN(false));
+		upper_bound_record_field_ids.emplace_back("value", Value::STRUCT(upper_bounds_value_field));
 
 		data_file_field_ids.emplace_back("upper_bounds", Value::STRUCT(upper_bound_record_field_ids));
 		auto field_obj = yyjson_mut_arr_add_obj(doc, child_fields_arr);
@@ -473,8 +552,14 @@ idx_t WriteToFile(const IcebergTableMetadata &table_metadata, const IcebergManif
 
 		child_list_t<Value> null_values_counts_record_field_ids;
 		null_values_counts_record_field_ids.emplace_back("__duckdb_field_id", Value::INTEGER(NULL_VALUE_COUNTS));
-		null_values_counts_record_field_ids.emplace_back("key", Value::INTEGER(NULL_VALUE_COUNTS_KEY));
-		null_values_counts_record_field_ids.emplace_back("value", Value::INTEGER(NULL_VALUE_COUNTS_VALUE));
+		child_list_t<Value> null_value_counts_key_field;
+		null_value_counts_key_field.emplace_back("__duckdb_field_id", Value::INTEGER(NULL_VALUE_COUNTS_KEY));
+		null_value_counts_key_field.emplace_back("__duckdb_nullable", Value::BOOLEAN(false));
+		null_values_counts_record_field_ids.emplace_back("key", Value::STRUCT(null_value_counts_key_field));
+		child_list_t<Value> null_value_counts_value_field;
+		null_value_counts_value_field.emplace_back("__duckdb_field_id", Value::INTEGER(NULL_VALUE_COUNTS_VALUE));
+		null_value_counts_value_field.emplace_back("__duckdb_nullable", Value::BOOLEAN(false));
+		null_values_counts_record_field_ids.emplace_back("value", Value::STRUCT(null_value_counts_value_field));
 
 		data_file_field_ids.emplace_back("null_value_counts", Value::STRUCT(null_values_counts_record_field_ids));
 		auto field_obj = yyjson_mut_arr_add_obj(doc, child_fields_arr);
@@ -568,10 +653,10 @@ idx_t WriteToFile(const IcebergTableMetadata &table_metadata, const IcebergManif
 	//! Populate the DataChunk with the data files
 
 	DataChunk chunk;
-	chunk.Initialize(allocator, types, manifest_file.entries.size());
+	chunk.Initialize(allocator, types, manifest_entries.size());
 
-	for (idx_t i = 0; i < manifest_file.entries.size(); i++) {
-		auto &manifest_entry = manifest_file.entries[i];
+	for (idx_t i = 0; i < manifest_entries.size(); i++) {
+		auto &manifest_entry = manifest_entries[i];
 		idx_t col_idx = 0;
 
 		// status: int
@@ -592,7 +677,7 @@ idx_t WriteToFile(const IcebergTableMetadata &table_metadata, const IcebergManif
 		chunk.SetValue(col_idx, i, data_file.ToValue(table_metadata, chunk.data[col_idx].GetType()));
 		col_idx++;
 	}
-	chunk.SetCardinality(manifest_file.entries.size());
+	chunk.SetCardinality(manifest_entries.size());
 	auto iceberg_schema_string = ICUtils::JsonToString(std::move(doc_p));
 
 	child_list_t<Value> metadata_values;
@@ -618,7 +703,7 @@ idx_t WriteToFile(const IcebergTableMetadata &table_metadata, const IcebergManif
 		ExecutionContext execution_context(context, thread_context, nullptr);
 		auto bind_data = copy.copy_to_bind(context, input, names, types);
 
-		auto global_state = copy.copy_to_initialize_global(context, *bind_data, manifest_file.path);
+		auto global_state = copy.copy_to_initialize_global(context, *bind_data, path);
 		auto local_state = copy.copy_to_initialize_local(execution_context, *bind_data);
 
 		copy.copy_to_sink(execution_context, *bind_data, *global_state, *local_state, chunk);
@@ -627,7 +712,7 @@ idx_t WriteToFile(const IcebergTableMetadata &table_metadata, const IcebergManif
 	}
 
 	auto file_system = CachingFileSystem::Get(context);
-	auto file_handle = file_system.OpenFile(manifest_file.path, FileOpenFlags::FILE_FLAGS_READ);
+	auto file_handle = file_system.OpenFile(path, FileOpenFlags::FILE_FLAGS_READ);
 	auto manifest_length = file_handle->GetFileSize();
 	return manifest_length;
 }

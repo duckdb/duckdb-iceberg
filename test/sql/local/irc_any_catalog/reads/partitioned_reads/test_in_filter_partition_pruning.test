@@ -1,0 +1,117 @@
+# name: test/sql/local/irc_any_catalog/reads/partitioned_reads/test_in_filter_partition_pruning.test
+# description: Test that IN filters on identity partition columns prune the correct partitions
+# group: [partitioned_reads]
+
+require-env ICEBERG_SERVER_AVAILABLE
+
+require-env SECRETS_CREATED_AND_CATALOG_ATTACHED
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+pragma enable_external_file_cache=false;
+
+statement ok
+create schema if not exists my_datalake.default;
+
+statement ok
+drop table if exists my_datalake.default.test_in_filter_partitioned;
+
+statement ok
+CREATE TABLE my_datalake.default.test_in_filter_partitioned (id int, bucket int)
+PARTITIONED BY (bucket);
+
+# Insert into 4 separate partitions (one insert per partition creates one data file per partition)
+statement ok
+insert into my_datalake.default.test_in_filter_partitioned select range, 0 from range(1000);
+
+statement ok
+insert into my_datalake.default.test_in_filter_partitioned select 1000 + range, 1 from range(1000);
+
+statement ok
+insert into my_datalake.default.test_in_filter_partitioned select 2000 + range, 2 from range(1000);
+
+statement ok
+insert into my_datalake.default.test_in_filter_partitioned select 3000 + range, 3 from range(1000);
+
+# Verify total count
+query I
+select count(*) from my_datalake.default.test_in_filter_partitioned;
+----
+4000
+
+statement ok
+CALL enable_logging(level=debug);
+
+statement ok
+CALL truncate_duckdb_logs();
+
+query I
+select count(*) from my_datalake.default.test_in_filter_partitioned where bucket in (0, 1);
+----
+2000
+
+# Should read 2 parquet files 
+query I
+select count(distinct request.url) from duckdb_logs_parsed('HTTP') where request.url like '%.parquet' group by all;
+----
+2
+
+# 2 manifest files should be skipped (for buckets 2 and 3)
+query I
+select count(*) from duckdb_logs() where type = 'Iceberg' and message like '%skipped%manifest_file%' group by all;
+----
+2
+
+# --- IN filter on a single value ---
+
+statement ok
+CALL truncate_duckdb_logs();
+
+query I
+select count(*) from my_datalake.default.test_in_filter_partitioned where bucket IN (2) and id > 2499;
+----
+500
+
+# Should only read 1 parquet file
+query I
+select count(distinct request.url) from duckdb_logs_parsed('HTTP') where request.url like '%.parquet' group by all;
+----
+1
+
+# 3 manifest files should be skipped (for buckets 0, 1, 3)
+query I
+select count(*) from duckdb_logs() where type = 'Iceberg' and message like '%skipped%manifest_file%' group by all;
+----
+3
+
+# --- IN filter spanning all partition values ---
+
+statement ok
+CALL truncate_duckdb_logs();
+
+query I
+select count(*) from my_datalake.default.test_in_filter_partitioned where bucket IN (0, 1, 2, 3);
+----
+4000
+
+# Should read all 4 parquet files
+query I
+select count(distinct request.url) from duckdb_logs_parsed('HTTP') where request.url like '%.parquet' group by all;
+----
+4
+
+# No manifest files should be skipped
+query I
+select count(*) from duckdb_logs() where type = 'Iceberg' and message like '%skipped%manifest_file%';
+----
+0

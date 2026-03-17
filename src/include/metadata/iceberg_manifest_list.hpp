@@ -12,6 +12,8 @@
 
 namespace duckdb {
 
+struct IcebergPartitionSpec;
+
 using sequence_number_t = int64_t;
 
 struct FieldSummary {
@@ -58,6 +60,9 @@ public:
 	}
 
 public:
+	void Create(const IcebergPartitionSpec &partition_spec, const vector<IcebergManifestEntry> &entries);
+
+public:
 	bool has_partitions = false;
 	vector<FieldSummary> field_summary;
 };
@@ -98,11 +103,9 @@ public:
 	idx_t deleted_rows_count = 0;
 	//! The field summaries of the partition (if present)
 	ManifestPartitions partitions;
-	//! the actual manifest file information
-	IcebergManifest manifest_file;
 
 public:
-	IcebergManifestFile(string manifest_path) : manifest_path(manifest_path), manifest_file(manifest_path) {
+	IcebergManifestFile(const string &manifest_path) : manifest_path(manifest_path) {
 	}
 
 	static vector<LogicalType> Types() {
@@ -129,25 +132,35 @@ public:
 	}
 };
 
+struct IcebergManifestListEntry {
+public:
+	IcebergManifestListEntry(IcebergManifestFile file) : file(std::move(file)) {
+	}
+
+public:
+	IcebergManifestFile file;
+	vector<IcebergManifestEntry> manifest_entries;
+};
+
 struct IcebergManifestList {
 public:
 	IcebergManifestList(const string &path) : path(path) {
 	}
 
 public:
-	vector<IcebergManifestFile> &GetManifestFilesMutable();
-	const vector<IcebergManifestFile> &GetManifestFilesConst() const;
+	vector<IcebergManifestListEntry> &GetManifestFilesMutable();
+	const vector<IcebergManifestListEntry> &GetManifestFilesConst() const;
 	const string &GetPath() const {
 		return path;
 	}
 
-	void AddManifestFile(IcebergManifestFile &&manifest_file) {
+	void AddManifestFile(IcebergManifestListEntry &&manifest_file) {
 		manifest_entries.push_back(std::move(manifest_file));
 	}
 	idx_t GetManifestListEntriesCount() const;
 
-	void AddToManifestEntries(vector<IcebergManifestFile> &manifest_list_entries);
-	vector<IcebergManifestFile> GetManifestListEntries();
+	void AddToManifestEntries(vector<IcebergManifestListEntry> &manifest_list_entries);
+	vector<IcebergManifestListEntry> GetManifestListEntries();
 
 public:
 	static LogicalType FieldSummaryType();
@@ -155,7 +168,7 @@ public:
 
 private:
 	string path;
-	vector<IcebergManifestFile> manifest_entries;
+	vector<IcebergManifestListEntry> manifest_entries;
 };
 
 namespace manifest_list {

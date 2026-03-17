@@ -1,0 +1,106 @@
+# name: test/sql/local/irc_any_catalog/insert/partitions/unsupported/test_incorrect_function_partition.test
+# description: Test partition creations that are technically invalid
+# group: [unsupported]
+
+require-env ICEBERG_SERVER_AVAILABLE
+
+require-env SECRETS_CREATED_AND_CATALOG_ATTACHED
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+create schema if not exists my_datalake.default;
+
+statement ok
+drop table if exists my_datalake.default.test_unsupported_transforms;
+
+statement ok
+CREATE TABLE my_datalake.default.test_unsupported_transforms (id int, val varchar, amount decimal(10,2), ts timestamp);
+
+statement error
+ALTER TABLE my_datalake.default.test_unsupported_transforms SET PARTITIONED BY (id + 20);
+----
+<REGEX>:.*Unrecognized transform \(\'\+\'\).*
+
+# String functions are not supported as partition transforms
+statement error
+ALTER TABLE my_datalake.default.test_unsupported_transforms SET PARTITIONED BY (upper(val));
+----
+<REGEX>:.*Unrecognized transform \(\'upper\'\).*
+
+statement error
+ALTER TABLE my_datalake.default.test_unsupported_transforms SET PARTITIONED BY (lower(val));
+----
+<REGEX>:.*Unrecognized transform \(\'lower.*
+
+statement error
+ALTER TABLE my_datalake.default.test_unsupported_transforms SET PARTITIONED BY (length(val));
+----
+<REGEX>:.*Unrecognized transform \(\'length\'\).*
+
+
+statement error
+ALTER TABLE my_datalake.default.test_unsupported_transforms SET PARTITIONED BY (substr(val, 1, 3));
+----
+<REGEX>:.*Unrecognized transform \(\'substr\'\).*
+
+
+# Arithmetic functions are not supported as partition transforms
+statement error
+ALTER TABLE my_datalake.default.test_unsupported_transforms SET PARTITIONED BY (abs(amount));
+----
+<REGEX>:.*Unrecognized transform \(\'abs\'\).*
+
+
+statement error
+ALTER TABLE my_datalake.default.test_unsupported_transforms SET PARTITIONED BY (floor(amount));
+----
+<REGEX>:.*Unrecognized transform \(\'floor\'\).*
+
+
+statement error
+ALTER TABLE my_datalake.default.test_unsupported_transforms SET PARTITIONED BY (ceil(amount));
+----
+<REGEX>:.*Unrecognized transform \(\'ceil\'\).
+
+statement error
+ALTER TABLE my_datalake.default.test_unsupported_transforms SET PARTITIONED BY (round(amount));
+----
+<REGEX>:.*Unrecognized transform \(\'round\'\).*
+
+# Arithmetic operators are not supported as partition transforms
+statement error
+ALTER TABLE my_datalake.default.test_unsupported_transforms SET PARTITIONED BY (amount * 2);
+----
+<REGEX>:.*Unrecognized transform \(\'\*\'\).*
+
+statement error
+ALTER TABLE my_datalake.default.test_unsupported_transforms SET PARTITIONED BY (id - 1);
+----
+<REGEX>:.*Unrecognized transform \(\'-\'\).*
+
+# Random/non-deterministic functions are not supported as partition transforms
+statement error
+ALTER TABLE my_datalake.default.test_unsupported_transforms SET PARTITIONED BY (random());
+----
+<REGEX>:.*Unrecognized transform \(\'random\'\).*
+
+# Date/time extraction functions (non-Iceberg) are not supported
+statement error
+ALTER TABLE my_datalake.default.test_unsupported_transforms SET PARTITIONED BY (date_part('month', ts));
+----
+<REGEX>:.*Unrecognized transform \(\'date_part\'\).*
+
+statement error
+ALTER TABLE my_datalake.default.test_unsupported_transforms SET PARTITIONED BY (strftime(ts, '%Y'));
+----
+<REGEX>:.*Unrecognized transform \(\'strftime\'\).*

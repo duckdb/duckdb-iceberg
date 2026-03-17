@@ -19,14 +19,15 @@ IcebergManifestListScanInfo::~IcebergManifestListScanInfo() {
 
 IcebergManifestFileScanInfo::IcebergManifestFileScanInfo(const IcebergTableMetadata &metadata,
                                                          const IcebergSnapshot &snapshot,
-                                                         const vector<IcebergManifestFile> &manifest_files,
+                                                         const vector<IcebergManifestListEntry> &manifest_files,
                                                          const IcebergOptions &options, FileSystem &fs,
                                                          const string &iceberg_path)
     : IcebergAvroScanInfo(TYPE, metadata, snapshot), manifest_files(manifest_files), options(options), fs(fs),
       iceberg_path(iceberg_path) {
 	unordered_set<int32_t> partition_spec_ids;
-	for (auto &manifest_file : manifest_files) {
-		partition_spec_ids.insert(manifest_file.partition_spec_id);
+	for (auto &manifest_list_entry : manifest_files) {
+		auto &manifest = manifest_list_entry.file;
+		partition_spec_ids.insert(manifest.partition_spec_id);
 	}
 	//! The schema of a manifest is affected by the 'partition_spec_id' of the 'manifest_file',
 	//! because the 'partition' struct has a field for every partition field in that partition spec.
@@ -37,10 +38,6 @@ IcebergManifestFileScanInfo::IcebergManifestFileScanInfo(const IcebergTableMetad
 }
 
 IcebergManifestFileScanInfo::~IcebergManifestFileScanInfo() {
-}
-
-const IcebergManifestFile &IcebergManifestFileScanInfo::GetManifestFile(idx_t file_idx) const {
-	return manifest_files[file_idx];
 }
 
 IcebergAvroMultiFileList::IcebergAvroMultiFileList(shared_ptr<IcebergAvroScanInfo> info, vector<OpenFileInfo> paths)
