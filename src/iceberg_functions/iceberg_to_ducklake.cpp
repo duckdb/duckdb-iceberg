@@ -929,8 +929,8 @@ public:
 			vector<DuckLakeDeleteFile> new_delete_files;
 			vector<string> deleted_delete_files;
 			for (auto &entry : iceberg_table->entries) {
-				auto &manifest = entry.manifest;
-				auto &manifest_file = entry.manifest_file;
+				auto &manifest = entry.file;
+				auto &entries = entry.manifest_entries;
 
 				if (manifest.added_snapshot_id != snapshot.snapshot_id) {
 					//! This is essentially an "EXISTING" manifest
@@ -948,7 +948,7 @@ public:
 
 				switch (manifest.content) {
 				case IcebergManifestContentType::DATA: {
-					for (auto &manifest_entry : manifest_file.entries) {
+					for (auto &manifest_entry : entries) {
 						auto &data_file = manifest_entry.data_file;
 						D_ASSERT(data_file.content == IcebergManifestEntryContentType::DATA);
 						if (manifest_entry.status == IcebergManifestEntryStatusType::EXISTING) {
@@ -966,7 +966,7 @@ public:
 					break;
 				}
 				case IcebergManifestContentType::DELETE: {
-					for (auto &manifest_entry : manifest_file.entries) {
+					for (auto &manifest_entry : entries) {
 						auto &data_file = manifest_entry.data_file;
 						if (data_file.content == IcebergManifestEntryContentType::EQUALITY_DELETES) {
 							throw InvalidInputException(

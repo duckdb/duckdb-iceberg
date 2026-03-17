@@ -11,7 +11,7 @@ ManifestListReader::ManifestListReader(const AvroScan &scan) : BaseManifestReade
 ManifestListReader::~ManifestListReader() {
 }
 
-idx_t ManifestListReader::Read(idx_t count, vector<IcebergManifestFile> &result) {
+idx_t ManifestListReader::Read(idx_t count, vector<IcebergManifestListEntry> &result) {
 	if (finished) {
 		return 0;
 	}
@@ -30,7 +30,7 @@ idx_t ManifestListReader::Read(idx_t count, vector<IcebergManifestFile> &result)
 	return total_added;
 }
 
-idx_t ManifestListReader::ReadChunk(idx_t offset, idx_t count, vector<IcebergManifestFile> &result) {
+idx_t ManifestListReader::ReadChunk(idx_t offset, idx_t count, vector<IcebergManifestListEntry> &result) {
 	D_ASSERT(offset < chunk.size());
 	D_ASSERT(offset + count <= chunk.size());
 
@@ -154,7 +154,7 @@ idx_t ManifestListReader::ReadChunk(idx_t offset, idx_t count, vector<IcebergMan
 				summaries.push_back(summary);
 			}
 		}
-		result.push_back(manifest);
+		result.push_back(std::move(manifest));
 	}
 	return count;
 }

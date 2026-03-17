@@ -343,6 +343,19 @@ TableTransactionInfo IcebergTransaction::GetTransactionRequest(ClientContext &co
 	return info;
 }
 
+IcebergTableInformation &IcebergTransaction::GetTableInfoForTransaction(IcebergTableInformation &table_info) {
+	lock_guard<mutex> guard(lock);
+
+	auto table_key = table_info.GetTableKey();
+	auto it = updated_tables.find(table_key);
+	if (it != updated_tables.end()) {
+		return it->second;
+	}
+	auto &updated_table = updated_tables.emplace(table_key, table_info.Copy(*this)).first->second;
+	updated_table.InitSchemaVersions();
+	return updated_table;
+}
+
 void IcebergTransaction::Commit() {
 	if (updated_tables.empty() && deleted_tables.empty() && created_schemas.empty() && deleted_schemas.empty()) {
 		return;
@@ -485,7 +498,7 @@ void IcebergTransaction::CleanupFiles() {
 			auto &add_snapshot = update->Cast<IcebergAddSnapshot>();
 			auto manifest_list_entries = add_snapshot.manifest_list.GetManifestFilesConst();
 			for (const auto &manifest : manifest_list_entries) {
-				for (auto &manifest_entry : manifest.manifest_file.entries) {
+				for (auto &manifest_entry : manifest.manifest_entries) {
 					auto &data_file = manifest_entry.data_file;
 					if (fs.TryRemoveFile(data_file.file_path)) {
 						DUCKDB_LOG(*temp_con_context, IcebergLogType,

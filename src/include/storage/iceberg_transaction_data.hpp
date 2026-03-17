@@ -24,10 +24,11 @@ public:
 	IcebergTransactionData(ClientContext &context, const IcebergTableInformation &table_info);
 
 public:
-	IcebergManifestFile CreateManifestFile(int64_t snapshot_id, sequence_number_t sequence_number,
-	                                       const IcebergTableMetadata &table_metadata,
-	                                       IcebergManifestContentType manifest_content_type,
-	                                       vector<IcebergManifestEntry> &&data_files);
+	IcebergManifestListEntry CreateManifestFile(lock_guard<mutex> &guard, int64_t snapshot_id,
+	                                            sequence_number_t sequence_number,
+	                                            const IcebergTableMetadata &table_metadata,
+	                                            IcebergManifestContentType manifest_content_type,
+	                                            vector<IcebergManifestEntry> &&data_files);
 	void AddSnapshot(IcebergSnapshotOperationType operation, vector<IcebergManifestEntry> &&data_files,
 	                 case_insensitive_map_t<IcebergManifestDeletes> &&altered_manifests);
 	void AddUpdateSnapshot(vector<IcebergManifestEntry> &&delete_files, vector<IcebergManifestEntry> &&data_files,
@@ -47,7 +48,7 @@ public:
 	void TableSetLocation();
 
 private:
-	void CacheExistingManifestList(const IcebergTableMetadata &metadata);
+	void CacheExistingManifestList(lock_guard<mutex> &guard, const IcebergTableMetadata &metadata);
 
 public:
 	ClientContext &context;
@@ -58,7 +59,7 @@ public:
 	bool is_deleted;
 	vector<unique_ptr<IcebergTableRequirement>> requirements;
 	//! Cached manifest list from the source snapshot
-	vector<IcebergManifestFile> existing_manifest_list;
+	vector<IcebergManifestListEntry> existing_manifest_list;
 
 	//! Every insert/update/delete creates an alter of the table data
 	vector<reference<IcebergAddSnapshot>> alters;
@@ -66,6 +67,8 @@ public:
 	case_insensitive_map_t<string> transactional_delete_files;
 	//! Track the current row id for this transaction
 	int64_t next_row_id = 0;
+
+	mutex lock;
 };
 
 } // namespace duckdb

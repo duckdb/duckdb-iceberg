@@ -1,0 +1,53 @@
+# name: test/sql/local/irc_any_catalog/create/default/test_create_default_uuid.test
+# group: [default]
+
+require-env ICEBERG_SERVER_AVAILABLE
+
+require-env SECRETS_CREATED_AND_CATALOG_ATTACHED
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+set enable_logging=true
+
+statement ok
+set logging_level='debug'
+
+statement ok
+CREATE SCHEMA IF NOT EXISTS my_datalake.default;
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.tbl_types;
+
+statement ok
+select setseed(0.42);
+
+statement ok
+SET VARIABLE my_uuid = (select uuid());
+
+# Test UUID default
+statement ok
+CREATE TABLE my_datalake.default.tbl_types(
+	id int,
+	uuid_col UUID DEFAULT getvariable('my_uuid')
+) WITH ('format-version'='3');
+
+statement ok
+INSERT INTO my_datalake.default.tbl_types VALUES(1, DEFAULT);
+
+query II
+SELECT * FROM my_datalake.default.tbl_types;
+----
+1	cfc548bf-df8e-424c-99a6-72ac95b2dcc4
+
+statement ok
+DROP TABLE my_datalake.default.tbl_types;

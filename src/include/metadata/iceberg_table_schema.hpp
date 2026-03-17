@@ -23,6 +23,8 @@ public:
 	static void SchemaToJson(yyjson_mut_doc *doc, yyjson_mut_val *root_object, const rest_api_objects::Schema &schema);
 	const LogicalType &GetColumnTypeFromFieldId(idx_t field_id) const;
 
+	void GetColumnNamesAndTypes(vector<string> &names, vector<LogicalType> &types) const;
+
 public:
 	int32_t schema_id;
 	// Nessie Needs this for some reason.

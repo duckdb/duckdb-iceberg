@@ -15,7 +15,6 @@
 namespace duckdb {
 
 struct IcebergTableInformation;
-struct IcebergManifest;
 struct IcebergManifestList;
 
 struct IcebergAddSnapshot : public IcebergTableUpdate {
@@ -28,9 +27,10 @@ public:
 public:
 	IcebergManifestList ConstructManifestList(CopyFunction &avro_copy, DatabaseInstance &db,
 	                                          IcebergCommitState &commit_state) const;
-	IcebergManifestFile ConstructManifest(CopyFunction &avro_copy, DatabaseInstance &db,
-	                                      IcebergCommitState &commit_state, const IcebergManifestFile &manifest_file,
-	                                      const IcebergManifestDeletes &deletes) const;
+	IcebergManifestListEntry ConstructManifest(CopyFunction &avro_copy, DatabaseInstance &db,
+	                                           IcebergCommitState &commit_state,
+	                                           const IcebergManifestListEntry &manifest_file,
+	                                           const IcebergManifestDeletes &deletes) const;
 	void CreateUpdate(DatabaseInstance &db, ClientContext &context, IcebergCommitState &commit_state) const override;
 
 public:

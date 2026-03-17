@@ -36,76 +36,32 @@ jobs:
           distribution: temurin
           java-version: '21'
 
-      - name: Update Docker Engine and install python
+      - name: Install Polaris dependencies
         run: |
           sudo apt update -y -qq
           sudo apt-get install -y docker-ce docker-ce-cli containerd.io
           sudo apt install -y -qq python3-venv
 
-      - name: Wait for polaris initialization
+      - name: Setup Polaris
         run: |
-          git clone https://github.com/apache/polaris.git polaris_catalog
-          cd polaris_catalog
-          git checkout c940ded0f6be44d58ac6f0b6606c41cb08b53304
-          ./gradlew clean :polaris-server:assemble -Dquarkus.container-image.build=true --no-build-cache
-          ./gradlew --stop
-          nohup ./gradlew :polaris-server:run > polaris-server.log 2> polaris-error.log &
-          cd ..
-          # let polaris initialize 
-          max_attempts=50
-          attempt=1
-          while ! (curl -sf http://localhost:8182/healthcheck || curl -sf http://localhost:8182/q/health); do
-            if [ $attempt -gt $max_attempts ]; then
-              echo "Polaris failed to initialize after $max_attempts attempts"
-              exit 1
-            fi
-            echo "Waiting for Polaris to initialize (attempt $attempt/$max_attempts)..."
-            sleep 5
-            attempt=$((attempt + 1))
-          done
-          echo "Polaris is healthy"
-
-      - name: Generate Polaris Data
-        run: |
-          cd polaris_catalog 
-          python3 -m venv . 
-          source bin/activate
-          make client-regenerate
-          cd client/python && python3 -m pip install .
-          cd ../../../
-          cd polaris_catalog && ../scripts/polaris/setup_polaris_catalog.sh > user_credentials.json
-          cd ..
-          python3 scripts/polaris/get_polaris_client_creds.py
-          export POLARIS_CLIENT_ID=$(cat polaris_client_id.txt)
-          export POLARIS_CLIENT_SECRET=$(cat polaris_client_secret.txt)
-          deactivate
-          python3 -m venv .
-          source bin/activate
-          python3 -m pip install -r scripts/requirements.txt
-          python3 -m scripts.data_generators.generate_data polaris
+          make polaris
 
       - name: Run Polaris Specific Tests
         env:
           POLARIS_SERVER_AVAILABLE: 1
         run: |
-          export POLARIS_CLIENT_ID=$(cat polaris_client_id.txt)
-          export POLARIS_CLIENT_SECRET=$(cat polaris_client_secret.txt)
+          export POLARIS_CLIENT_ID=$(cat tmp/polaris_client_id.txt)
+          export POLARIS_CLIENT_SECRET=$(cat tmp/polaris_client_secret.txt)
           ./build/release/test/unittest "$PWD/test/*" --list-test-names-only || true
           ./build/release/test/unittest "$PWD/test/*"
-
-      - name: Populate Config Placeholders
-        run: |
-          export POLARIS_CLIENT_ID=$(cat polaris_client_id.txt)
-          export POLARIS_CLIENT_SECRET=$(cat polaris_client_secret.txt)
-          envsubst '$POLARIS_CLIENT_ID $POLARIS_CLIENT_SECRET' < test/configs/polaris.json.template > test/configs/polaris.json
 
       - name: Run Generic IRC tests
         env:
           ICEBERG_SERVER_AVAILABLE: 1
           SECRETS_CREATED_AND_CATALOG_ATTACHED: 1
         run: |
-          export POLARIS_CLIENT_ID=$(cat polaris_client_id.txt)
-          export POLARIS_CLIENT_SECRET=$(cat polaris_client_secret.txt)
+          export POLARIS_CLIENT_ID=$(cat tmp/polaris_client_id.txt)
+          export POLARIS_CLIENT_SECRET=$(cat tmp/polaris_client_secret.txt)
           ./build/release/test/unittest "$PWD/test/sql/local/irc_any_catalog/*" --list-test-names-only || true
           ./build/release/test/unittest "$PWD/test/sql/local/irc_any_catalog/*" --test-config test/configs/polaris.json  --autoloading available
 
@@ -115,6 +71,6 @@ jobs:
         with:
           name: polaris-server-logs
           path: |
-            polaris_catalog/polaris-server.log
-            polaris_catalog/polaris-error.log
+            .catalogs/polaris/polaris-server.log
+            .catalogs/polaris/polaris-error.log
           if-no-files-found: ignore

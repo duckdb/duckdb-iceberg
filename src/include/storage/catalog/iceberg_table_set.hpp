@@ -18,8 +18,8 @@ public:
 public:
 	optional_ptr<CatalogEntry> GetEntry(ClientContext &context, const EntryLookupInfo &lookup);
 	void Scan(ClientContext &context, const std::function<void(CatalogEntry &)> &callback);
-	static bool CreateNewEntry(ClientContext &context, IcebergCatalog &catalog, IcebergSchemaEntry &schema,
-	                           CreateTableInfo &info);
+	static IcebergTableInformation &CreateNewEntry(ClientContext &context, IcebergCatalog &catalog,
+	                                               IcebergSchemaEntry &schema, CreateTableInfo &info);
 	const case_insensitive_map_t<IcebergTableInformation> &GetEntries();
 	case_insensitive_map_t<IcebergTableInformation> &GetEntriesMutable();
 

@@ -1,8 +1,10 @@
-# name: test/sql/local/iceberg_on_tpch.test
+# name: test/sql/local/irc_any_catalog/test_tpch.test
 # description: test integration with iceberg catalog read
-# group: [local]
+# group: [irc_any_catalog]
 
 require-env ICEBERG_SERVER_AVAILABLE
+
+require-env SECRETS_CREATED_AND_CATALOG_ATTACHED
 
 require avro
 
@@ -16,26 +18,6 @@ require tpch
 
 # Do not ignore 'HTTP' error messages!
 set ignore_error_messages
-
-statement ok
-CREATE SECRET my_datalake_storage (
-    TYPE S3,
-    ENDPOINT '127.0.0.1:9000',
-    URL_STYLE 'path',
-    KEY_ID 'admin',
-    SECRET 'password',
-    USE_SSL 0
-);
-
-# Note: the 'CLIENT_SECRET' is not verified at all by the authorization server,
-# so it's not actually testing authorization
-statement ok
-ATTACH '' AS my_datalake (
-    TYPE ICEBERG,
-    CLIENT_ID 'admin',
-    CLIENT_SECRET 'password',
-    ENDPOINT '127.0.0.1:8181'
-);
 
 statement ok
 create view customer as select * from my_datalake.default.customer;

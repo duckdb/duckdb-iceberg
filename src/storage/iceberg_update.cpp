@@ -9,14 +9,17 @@
 #include "duckdb/parallel/thread_context.hpp"
 #include "duckdb/planner/operator/logical_get.hpp"
 #include "duckdb/planner/operator/logical_projection.hpp"
+#include "duckdb/planner/expression/bound_reference_expression.hpp"
 
 namespace duckdb {
 
 IcebergUpdate::IcebergUpdate(PhysicalPlan &physical_plan, IcebergTableEntry &table, vector<PhysicalIndex> columns_p,
                              PhysicalOperator &child, PhysicalOperator &copy_op, PhysicalOperator &delete_op,
-                             PhysicalOperator &insert_op)
+                             PhysicalOperator &insert_op, vector<unique_ptr<Expression>> expressions,
+                             vector<unique_ptr<Expression>> bound_defaults)
     : PhysicalOperator(physical_plan, PhysicalOperatorType::EXTENSION, {LogicalType::BIGINT}, 1), table(table),
-      columns(std::move(columns_p)), copy_op(copy_op), delete_op(delete_op), insert_op(insert_op) {
+      columns(std::move(columns_p)), copy_op(copy_op), delete_op(delete_op), insert_op(insert_op),
+      expressions(std::move(expressions)), bound_defaults(std::move(bound_defaults)) {
 	children.push_back(child);
 	auto &table_metadata = table.table_info.table_metadata;
 	if (table_metadata.iceberg_version >= 3) {
@@ -38,9 +41,25 @@ public:
 
 class IcebergUpdateLocalState : public LocalSinkState {
 public:
+	IcebergUpdateLocalState(ClientContext &context, const vector<unique_ptr<Expression>> &expressions,
+	                        const vector<unique_ptr<Expression>> &bound_defaults)
+	    : default_executor(context, bound_defaults) {
+		// Initialize the update chunk.
+		auto &allocator = Allocator::Get(context);
+		vector<LogicalType> update_types;
+		update_types.reserve(expressions.size());
+		for (auto &expr : expressions) {
+			update_types.push_back(expr->return_type);
+		}
+		update_chunk.Initialize(allocator, update_types);
+	}
+
+public:
+	ExpressionExecutor default_executor;
 	unique_ptr<LocalSinkState> copy_local_state;
 	unique_ptr<LocalSinkState> delete_local_state;
 	DataChunk insert_chunk;
+	DataChunk update_chunk;
 	DataChunk delete_chunk;
 	idx_t updated_count = 0;
 };
@@ -53,7 +72,8 @@ unique_ptr<GlobalSinkState> IcebergUpdate::GetGlobalSinkState(ClientContext &con
 }
 
 unique_ptr<LocalSinkState> IcebergUpdate::GetLocalSinkState(ExecutionContext &context) const {
-	auto result = make_uniq<IcebergUpdateLocalState>();
+	auto result = make_uniq<IcebergUpdateLocalState>(context.client, expressions, bound_defaults);
+
 	result->copy_local_state = copy_op.GetLocalSinkState(context);
 	result->delete_local_state = delete_op.GetLocalSinkState(context);
 
@@ -81,13 +101,33 @@ SinkResultType IcebergUpdate::Sink(ExecutionContext &context, DataChunk &chunk, 
 	// push the to-be-inserted data into the copy
 	auto &insert_chunk = lstate.insert_chunk;
 
+	chunk.Flatten();
+	lstate.default_executor.SetChunk(chunk);
+
+	DataChunk &update_chunk = lstate.update_chunk;
+	update_chunk.Reset();
+	update_chunk.SetCardinality(chunk);
+
+	for (idx_t i = 0; i < expressions.size(); i++) {
+		// Default expression, set to the default value of the column.
+		if (expressions[i]->GetExpressionType() == ExpressionType::VALUE_DEFAULT) {
+			lstate.default_executor.ExecuteExpression(columns[i].index, update_chunk.data[i]);
+			continue;
+		}
+
+		D_ASSERT(expressions[i]->GetExpressionType() == ExpressionType::BOUND_REF);
+		auto &binding = expressions[i]->Cast<BoundReferenceExpression>();
+		update_chunk.data[i].Reference(chunk.data[binding.index]);
+	}
+
 	insert_chunk.SetCardinality(chunk.size());
 	for (idx_t i = 0; i < columns.size(); i++) {
-		insert_chunk.data[columns[i].index].Reference(chunk.data[i]);
+		insert_chunk.data[columns[i].index].Reference(update_chunk.data[i]);
 	}
 	// reference the row id right after the physical columns
 	if (row_id_index.IsValid()) {
-		insert_chunk.data[columns.size()].Reference(chunk.data[row_id_index.GetIndex()]);
+		auto index = chunk.ColumnCount() - 3;
+		insert_chunk.data[columns.size()].Reference(chunk.data[index]);
 	}
 
 	OperatorSinkInput copy_input {*copy_op.sink_state, *lstate.copy_local_state, input.interrupt_state};
@@ -235,31 +275,27 @@ PhysicalOperator &IcebergCatalog::PlanUpdate(ClientContext &context, PhysicalPla
 	if (op.return_chunk) {
 		throw BinderException("RETURNING clause not yet supported for updates of a Iceberg table");
 	}
-	for (auto &expr : op.expressions) {
-		if (expr->type == ExpressionType::VALUE_DEFAULT) {
-			throw BinderException("SET DEFAULT is not yet supported for updates of a Iceberg table");
-		}
-	}
 
 	auto &table = op.table.Cast<IcebergTableEntry>();
-	auto &table_schema = table.table_info.table_metadata.GetLatestSchema();
+	auto &table_metadata = table.table_info.table_metadata;
+	auto &table_schema = table_metadata.GetLatestSchema();
 
-	auto &partition_spec = table.table_info.table_metadata.GetLatestPartitionSpec();
+	auto &partition_spec = table_metadata.GetLatestPartitionSpec();
 	if (!partition_spec.IsUnpartitioned()) {
 		throw NotImplementedException("Update into a partitioned table is not supported yet");
 	}
-	if (table.table_info.table_metadata.HasSortOrder()) {
-		auto &sort_spec = table.table_info.table_metadata.GetLatestSortOrder();
+	if (table_metadata.HasSortOrder()) {
+		auto &sort_spec = table_metadata.GetLatestSortOrder();
 		if (sort_spec.IsSorted()) {
 			throw NotImplementedException("Update on a sorted iceberg table is not supported yet");
 		}
 	}
-	if (table.table_info.table_metadata.iceberg_version < 2) {
-		throw NotImplementedException("Update Iceberg V%d tables", table.table_info.table_metadata.iceberg_version);
+	if (table_metadata.iceberg_version < 2) {
+		throw NotImplementedException("Update Iceberg V%d tables", table_metadata.iceberg_version);
 	}
 
-	IcebergCopyInput copy_input(context, table, table_schema);
-	if (table.table_info.table_metadata.iceberg_version >= 3) {
+	IcebergCopyInput copy_input(context, table_metadata, table_schema);
+	if (table_metadata.iceberg_version >= 3) {
 		copy_input.virtual_columns = IcebergInsertVirtualColumns::WRITE_ROW_ID;
 	}
 	auto &copy_op = IcebergInsert::PlanCopyForInsert(context, planner, copy_input, nullptr);
@@ -273,7 +309,8 @@ PhysicalOperator &IcebergCatalog::PlanUpdate(ClientContext &context, PhysicalPla
 	// plan the actual insert
 	auto &insert_op = IcebergInsert::PlanInsert(context, planner, table);
 
-	return planner.Make<IcebergUpdate>(table, op.columns, child_plan, copy_op, delete_op, insert_op);
+	return planner.Make<IcebergUpdate>(table, op.columns, child_plan, copy_op, delete_op, insert_op,
+	                                   std::move(op.expressions), std::move(op.bound_defaults));
 }
 
 void IcebergTableEntry::BindUpdateConstraints(Binder &binder, LogicalGet &get, LogicalProjection &proj,

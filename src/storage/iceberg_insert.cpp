@@ -10,8 +10,8 @@
 #include "utils/iceberg_type.hpp"
 #include "duckdb/catalog/catalog_entry/copy_function_catalog_entry.hpp"
 #include "duckdb/main/client_data.hpp"
-#include "duckdb/planner/operator/logical_copy_to_file.hpp"
 #include "duckdb/execution/physical_operator_states.hpp"
+#include "duckdb/planner/operator/logical_copy_to_file.hpp"
 #include "duckdb/planner/operator/logical_insert.hpp"
 #include "duckdb/planner/operator/logical_create_table.hpp"
 #include "duckdb/planner/parsed_data/bound_create_table_info.hpp"
@@ -43,9 +43,10 @@ IcebergInsert::IcebergInsert(PhysicalPlan &physical_plan, const vector<LogicalTy
     : PhysicalOperator(physical_plan, PhysicalOperatorType::EXTENSION, types, 1), table(&table), schema(nullptr) {
 }
 
-IcebergCopyInput::IcebergCopyInput(ClientContext &context, IcebergTableEntry &table, const IcebergTableSchema &schema)
-    : catalog(table.catalog.Cast<IcebergCatalog>()), columns(table.GetColumns()), schema(schema) {
-	data_path = table.table_info.table_metadata.GetDataPath();
+IcebergCopyInput::IcebergCopyInput(ClientContext &context, const IcebergTableMetadata &table_metadata,
+                                   const IcebergTableSchema &schema)
+    : table_metadata(table_metadata), schema(schema) {
+	data_path = table_metadata.GetDataPath();
 }
 
 IcebergInsertGlobalState::IcebergInsertGlobalState(ClientContext &context)
@@ -298,11 +299,15 @@ SinkFinalizeType IcebergInsert::Finalize(Pipeline &pipeline, Event &event, Clien
 	auto &transaction = IcebergTransaction::Get(context, table->catalog);
 	auto &iceberg_transaction = transaction.Cast<IcebergTransaction>();
 
-	lock_guard<mutex> guard(global_state.lock);
-	if (!global_state.written_files.empty()) {
-		ApplyTableUpdate(table_info, iceberg_transaction, [&](IcebergTableInformation &tbl) {
-			tbl.AddSnapshot(transaction, std::move(global_state.written_files));
-		});
+	vector<IcebergManifestEntry> written_files;
+	{
+		lock_guard<mutex> guard(global_state.lock);
+		written_files = std::move(global_state.written_files);
+	}
+
+	if (!written_files.empty()) {
+		ApplyTableUpdate(table_info, iceberg_transaction,
+		                 [&](IcebergTableInformation &tbl) { tbl.AddSnapshot(transaction, std::move(written_files)); });
 	}
 	return SinkFinalizeType::READY;
 }
@@ -384,6 +389,31 @@ vector<IcebergManifestEntry> IcebergInsert::GetInsertManifestEntries(IcebergInse
 	return std::move(global_state.written_files);
 }
 
+namespace {
+
+struct IcebergParquetOptionMapping {
+	const char *iceberg_option;
+	const char *parquet_option;
+};
+
+// Maps from
+// https://iceberg.apache.org/docs/1.10.0/configuration/#write-properties
+// to
+// https://github.com/duckdb/duckdb/blob/9cbb0656cd34fa3eb890963b9f961bbc8a221fa9/extension/parquet/parquet_extension.cpp#L121
+static const IcebergParquetOptionMapping ICEBERG_TABLE_PROPERTY_MAPPING[] = {
+    {"write.parquet.row-group-size-bytes", "row_group_size_bytes"},
+    {"write.parquet.compression-codec", "codec"},
+    {"write.parquet.compression-level", "compression_level"},
+    {"write.parquet.dict-size-bytes", "string_dictionary_page_size_limit"},
+    {"write.parquet.row-group-size", "row_group_size"},
+    {"write.parquet.page-size-bytes", "chunk_size"},
+    {"write.parquet.row-groups-per-file", "row_groups_per_file"}};
+
+static const idx_t ICEBERG_TABLE_PROPERTY_MAPPING_SIZE =
+    sizeof(ICEBERG_TABLE_PROPERTY_MAPPING) / sizeof(IcebergParquetOptionMapping);
+
+} // namespace
+
 PhysicalOperator &IcebergInsert::PlanCopyForInsert(ClientContext &context, PhysicalPlanGenerator &planner,
                                                    IcebergCopyInput &copy_input, optional_ptr<PhysicalOperator> plan) {
 	// Get Parquet Copy function
@@ -392,15 +422,31 @@ PhysicalOperator &IcebergInsert::PlanCopyForInsert(ClientContext &context, Physi
 		throw MissingExtensionException("Did not find parquet copy function required to write to iceberg table");
 	}
 
-	auto names_to_write = copy_input.columns.GetColumnNames();
-	auto types_to_write = copy_input.columns.GetColumnTypes();
+	vector<string> names_to_write;
+	vector<LogicalType> types_to_write;
+	copy_input.schema.GetColumnNamesAndTypes(names_to_write, types_to_write);
 	if (WriteRowId(copy_input.virtual_columns)) {
 		names_to_write.push_back("_row_id");
 		types_to_write.push_back(LogicalType::BIGINT);
 	}
 
-	auto wat = GetBindInput(copy_input);
-	auto bind_input = CopyFunctionBindInput(*wat);
+	const auto copy_info = GetBindInput(copy_input);
+	const auto &table_properties = copy_input.table_metadata.GetTableProperties();
+
+	// Map Iceberg write properties to DuckDB parquet copy options
+	for (idx_t i = 0; i < ICEBERG_TABLE_PROPERTY_MAPPING_SIZE; i++) {
+		auto &mapping = ICEBERG_TABLE_PROPERTY_MAPPING[i];
+		auto it = table_properties.find(mapping.iceberg_option);
+		if (it != table_properties.end()) {
+			copy_info->options[mapping.parquet_option].emplace_back(it->second);
+		}
+	}
+
+	// TODO: Iceberg properties for bloom filter are per column, duckdb's seems to be per table.
+	// write.parquet.bloom-filter-fpp.column.<col> -> bloom_filter_false_positive_ratio
+	// write.parquet.bloom-filter-enabled.column.<col> -> write_bloom_filter
+
+	auto bind_input = CopyFunctionBindInput(*copy_info);
 
 	auto function_data = copy_fun->function.copy_to_bind(context, bind_input, names_to_write, types_to_write);
 
@@ -491,22 +537,22 @@ PhysicalOperator &IcebergCatalog::PlanInsert(ClientContext &context, PhysicalPla
 
 	auto &table_entry = op.table.Cast<IcebergTableEntry>();
 	table_entry.PrepareIcebergScanFromEntry(context);
-	auto &table_info = table_entry.table_info;
-	auto &schema = table_info.table_metadata.GetLatestSchema();
+	auto &table_metadata = table_entry.table_info.table_metadata;
+	auto &schema = table_metadata.GetLatestSchema();
 
-	auto &partition_spec = table_info.table_metadata.GetLatestPartitionSpec();
+	auto &partition_spec = table_metadata.GetLatestPartitionSpec();
 	if (!partition_spec.IsUnpartitioned()) {
 		throw NotImplementedException("INSERT into a partitioned table is not supported yet");
 	}
-	if (table_info.table_metadata.HasSortOrder()) {
-		auto &sort_spec = table_info.table_metadata.GetLatestSortOrder();
+	if (table_metadata.HasSortOrder()) {
+		auto &sort_spec = table_metadata.GetLatestSortOrder();
 		if (sort_spec.IsSorted()) {
 			throw NotImplementedException("INSERT into a sorted iceberg table is not supported yet");
 		}
 	}
 
 	// Create Copy Info
-	IcebergCopyInput info(context, table_entry, schema);
+	IcebergCopyInput info(context, table_metadata, schema);
 	auto &insert = planner.Make<IcebergInsert>(op, op.table, op.column_index_map);
 	auto &physical_copy = IcebergInsert::PlanCopyForInsert(context, planner, info, plan);
 	insert.children.push_back(physical_copy);
@@ -530,13 +576,14 @@ PhysicalOperator &IcebergCatalog::PlanCreateTableAs(ClientContext &context, Phys
 		throw InternalException("Table could not be created");
 	}
 	auto &ic_table = table->Cast<IcebergTableEntry>();
+	auto &table_metadata = ic_table.table_info.table_metadata;
 	// We need to load table credentials into our secrets for when we copy files
 	ic_table.PrepareIcebergScanFromEntry(context);
 
-	auto &table_schema = ic_table.table_info.table_metadata.GetLatestSchema();
+	auto &table_schema = table_metadata.GetLatestSchema();
 
 	// Create Copy Info
-	IcebergCopyInput info(context, ic_table, table_schema);
+	IcebergCopyInput info(context, table_metadata, table_schema);
 	auto &physical_copy = IcebergInsert::PlanCopyForInsert(context, planner, info, plan);
 	physical_index_vector_t<idx_t> column_index_map;
 	auto &insert = planner.Make<IcebergInsert>(op, ic_table, column_index_map);

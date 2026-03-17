@@ -1,0 +1,74 @@
+# name: test/sql/local/irc_any_catalog/test_parquet_copy_options.test
+# description: test integration with iceberg catalog read
+# group: [irc_any_catalog]
+
+require-env ICEBERG_SERVER_AVAILABLE
+
+require-env SECRETS_CREATED_AND_CATALOG_ATTACHED
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+require aws
+
+set ignore_error_messages
+
+statement ok
+create schema if not exists my_datalake.default;
+
+statement ok
+use my_datalake.default;
+
+statement ok
+drop table if exists properties_table;
+
+# Test default beviour
+statement ok
+create table properties_table (my_col int);
+
+statement ok
+insert into my_datalake.default.properties_table SELECT * FROM range(100000) my_col;
+
+statement ok
+set variable parquet_filepath = (select file_path from iceberg_metadata(my_datalake.default.properties_table) limit 1);
+
+query I
+select row_group_bytes from parquet_metadata(getvariable('parquet_filepath'));
+----
+400031
+
+statement ok
+drop table if exists properties_table;
+
+# Test with copy option set
+statement ok
+SET preserve_insertion_order=false;
+
+statement ok
+create table properties_table (my_col int)
+WITH (
+    'write.parquet.row-group-size-bytes'='200KB'
+);
+
+query II
+select * from iceberg_table_properties(my_datalake.default.properties_table) where key like '%row-group-size-bytes%';
+----
+write.parquet.row-group-size-bytes	200KB
+
+statement ok
+insert into my_datalake.default.properties_table SELECT * FROM range(100000) my_col;
+
+statement ok
+set variable parquet_filepath = (select file_path from iceberg_metadata(my_datalake.default.properties_table) limit 1);
+
+query I
+select row_group_bytes from parquet_metadata(getvariable('parquet_filepath'));
+----
+196639
+196639
+6811

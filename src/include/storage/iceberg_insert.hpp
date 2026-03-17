@@ -20,11 +20,11 @@ namespace duckdb {
 enum class IcebergInsertVirtualColumns { NONE, WRITE_ROW_ID, WRITE_SEQUENCE_NUMBER, WRITE_ROW_ID_AND_SEQUENCE_NUMBER };
 
 struct IcebergCopyInput {
-	explicit IcebergCopyInput(ClientContext &context, IcebergTableEntry &table, const IcebergTableSchema &schema);
+	explicit IcebergCopyInput(ClientContext &context, const IcebergTableMetadata &table_metadata,
+	                          const IcebergTableSchema &schema);
 
-	IcebergCatalog &catalog;
-	//! FIXME: this feels redundant?
-	const ColumnList &columns;
+public:
+	const IcebergTableMetadata &table_metadata;
 	const IcebergTableSchema &schema;
 	string data_path;
 	//! Set of (key, value) options

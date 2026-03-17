@@ -29,44 +29,14 @@ jobs:
           find ./build/release -type f -name 'duckdb*' -exec chmod +x {} \;
           find ./build/release -type f -name 'unittest*' -exec chmod +x {} \;
 
-      - name: Add minio host entry
+      - name: Install Lakekeeper dependencies
         run: |
-          echo "127.0.0.1 minio" | sudo tee -a /etc/hosts
+          sudo apt update -y -qq
+          sudo apt install -y -qq python3-venv
 
-      - name: Clone Lakekeeper
-        uses: actions/checkout@v4
-        with:
-          repository: lakekeeper/lakekeeper
-          ref: f6aaa4570cf62d54943581e7a00b9f882d9c992d
-          path: lakekeeper
-
-      - name: Apply lakekeeper patch
+      - name: Setup Lakekeeper
         run: |
-          cd lakekeeper
-          git apply ../.github/patches/lakekeeper_docker_compose.patch
-
-      - name: Start Lakekeeper
-        run: |
-          cd lakekeeper/examples/access-control-simple
-          docker compose up -d
-
-      - name: Bootstrap, Create Warehouse and Populate Lakekeeper
-        run: |
-          cd lakekeeper/examples/access-control-simple
-          docker compose exec jupyter start.sh bash -lc "\
-            jupyter nbconvert --to notebook --execute --output-dir=/tmp /home/jovyan/examples/01-Bootstrap.ipynb && \
-            jupyter nbconvert --to notebook --execute --output-dir=/tmp /home/jovyan/examples/02-Create-Warehouse.ipynb && \
-            jupyter nbconvert --to notebook --execute --output-dir=/tmp /home/jovyan/examples/03-01-Spark.ipynb"
-
-      - name: Generate Data
-        run: |
-          sudo apt-get install -y -qq python3-venv
-          python3 -m venv .
-          source ./bin/activate
-          python3 -m pip install poetry
-          python3 -m pip install pyspark==4.0.1
-          python3 -m pip install duckdb
-          python3 -m scripts.data_generators.generate_data lakekeeper
+          make lakekeeper
 
       - name: Run Lakekeeper Specific Tests
         env:

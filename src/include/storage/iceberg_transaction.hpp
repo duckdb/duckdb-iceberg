@@ -53,6 +53,7 @@ public:
 	void RecordTableRequest(const string &table_key, idx_t sequence_number, idx_t snapshot_id);
 	void RecordTableRequest(const string &table_key);
 	TableInfoCache GetTableRequestResult(const string &table_key);
+	IcebergTableInformation &GetTableInfoForTransaction(IcebergTableInformation &table_info);
 
 private:
 	void CleanupFiles();
@@ -83,18 +84,13 @@ public:
 
 	case_insensitive_set_t created_secrets;
 	case_insensitive_set_t looked_up_entries;
+	mutex lock;
 };
 
 template <typename Callback>
 void ApplyTableUpdate(IcebergTableInformation &table_info, IcebergTransaction &iceberg_transaction, Callback callback) {
-	if (table_info.IsTransactionLocalTable(iceberg_transaction)) {
-		callback(table_info);
-	} else {
-		iceberg_transaction.updated_tables.emplace(table_info.GetTableKey(), table_info.Copy(iceberg_transaction));
-		auto &updated_table = iceberg_transaction.updated_tables.at(table_info.GetTableKey());
-		updated_table.InitSchemaVersions();
-		callback(updated_table);
-	}
+	auto &updated_table = iceberg_transaction.GetTableInfoForTransaction(table_info);
+	callback(updated_table);
 }
 
 } // namespace duckdb

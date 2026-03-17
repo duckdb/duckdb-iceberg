@@ -375,6 +375,7 @@ IcebergTableInformation::IcebergTableInformation(IcebergCatalog &catalog, Iceber
 }
 
 void IcebergTableInformation::InitTransactionData(IcebergTransaction &transaction) {
+	lock_guard<mutex> guard(transaction.lock);
 	if (!transaction_data) {
 		auto context = transaction.context.lock();
 		transaction_data = make_uniq<IcebergTransactionData>(*context, *this);
@@ -457,15 +458,6 @@ void IcebergTableInformation::RemoveProperties(IcebergTransaction &transaction, 
 void IcebergTableInformation::SetLocation(IcebergTransaction &transaction) {
 	InitTransactionData(transaction);
 	transaction_data->TableSetLocation();
-}
-
-bool IcebergTableInformation::IsTransactionLocalTable(IcebergTransaction &transaction) {
-	for (auto &tbl : transaction.updated_tables) {
-		if (tbl.first == GetTableKey()) {
-			return true;
-		}
-	}
-	return false;
 }
 
 } // namespace duckdb

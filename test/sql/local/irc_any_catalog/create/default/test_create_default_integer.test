@@ -1,0 +1,47 @@
+# name: test/sql/local/irc_any_catalog/create/default/test_create_default_integer.test
+# group: [default]
+
+require-env ICEBERG_SERVER_AVAILABLE
+
+require-env SECRETS_CREATED_AND_CATALOG_ATTACHED
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+set enable_logging=true
+
+statement ok
+set logging_level='debug'
+
+statement ok
+CREATE SCHEMA IF NOT EXISTS my_datalake.default;
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.tbl_types;
+
+# Test INTEGER default
+statement ok
+CREATE TABLE my_datalake.default.tbl_types(
+	id int,
+	integer_col INTEGER DEFAULT 2147483647
+) WITH ('format-version'='3');
+
+statement ok
+INSERT INTO my_datalake.default.tbl_types VALUES(1, DEFAULT);
+
+query II
+SELECT * FROM my_datalake.default.tbl_types;
+----
+1	2147483647
+
+statement ok
+DROP TABLE my_datalake.default.tbl_types;

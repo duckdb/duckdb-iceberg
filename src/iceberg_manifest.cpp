@@ -185,9 +185,9 @@ Value IcebergDataFile::ToValue(const IcebergTableMetadata &table_metadata, const
 
 namespace manifest_file {
 
-static LogicalType PartitionStructType(const IcebergManifest &file) {
-	D_ASSERT(!file.entries.empty());
-	auto &first_entry = file.entries.front();
+static LogicalType PartitionStructType(const vector<IcebergManifestEntry> &entries) {
+	D_ASSERT(!entries.empty());
+	auto &first_entry = entries.front();
 	child_list_t<LogicalType> children;
 	auto &data_file = first_entry.data_file;
 	if (data_file.partition_values.empty()) {
@@ -202,9 +202,10 @@ static LogicalType PartitionStructType(const IcebergManifest &file) {
 	return LogicalType::STRUCT(children);
 }
 
-idx_t WriteToFile(const IcebergTableMetadata &table_metadata, const IcebergManifest &manifest_file, CopyFunction &copy,
-                  DatabaseInstance &db, ClientContext &context) {
-	D_ASSERT(!manifest_file.entries.empty());
+idx_t WriteToFile(const IcebergTableMetadata &table_metadata, const string &path,
+                  const vector<IcebergManifestEntry> &manifest_entries, CopyFunction &copy, DatabaseInstance &db,
+                  ClientContext &context) {
+	D_ASSERT(!manifest_entries.empty());
 	auto &allocator = db.GetBufferManager().GetBufferAllocator();
 
 	//! We need to create an iceberg-schema for the manifest file, written in the metadata of the Avro file.
@@ -333,7 +334,7 @@ idx_t WriteToFile(const IcebergTableMetadata &table_metadata, const IcebergManif
 	{
 		child_list_t<Value> partition;
 		// partition: struct(...)
-		children.emplace_back("partition", PartitionStructType(manifest_file));
+		children.emplace_back("partition", PartitionStructType(manifest_entries));
 		partition.emplace_back("__duckdb_field_id", Value::INTEGER(PARTITION));
 		partition.emplace_back("__duckdb_nullable", Value::BOOLEAN(false));
 		data_file_field_ids.emplace_back("partition", Value::STRUCT(partition));
@@ -568,10 +569,10 @@ idx_t WriteToFile(const IcebergTableMetadata &table_metadata, const IcebergManif
 	//! Populate the DataChunk with the data files
 
 	DataChunk chunk;
-	chunk.Initialize(allocator, types, manifest_file.entries.size());
+	chunk.Initialize(allocator, types, manifest_entries.size());
 
-	for (idx_t i = 0; i < manifest_file.entries.size(); i++) {
-		auto &manifest_entry = manifest_file.entries[i];
+	for (idx_t i = 0; i < manifest_entries.size(); i++) {
+		auto &manifest_entry = manifest_entries[i];
 		idx_t col_idx = 0;
 
 		// status: int
@@ -592,7 +593,7 @@ idx_t WriteToFile(const IcebergTableMetadata &table_metadata, const IcebergManif
 		chunk.SetValue(col_idx, i, data_file.ToValue(table_metadata, chunk.data[col_idx].GetType()));
 		col_idx++;
 	}
-	chunk.SetCardinality(manifest_file.entries.size());
+	chunk.SetCardinality(manifest_entries.size());
 	auto iceberg_schema_string = ICUtils::JsonToString(std::move(doc_p));
 
 	child_list_t<Value> metadata_values;
@@ -618,7 +619,7 @@ idx_t WriteToFile(const IcebergTableMetadata &table_metadata, const IcebergManif
 		ExecutionContext execution_context(context, thread_context, nullptr);
 		auto bind_data = copy.copy_to_bind(context, input, names, types);
 
-		auto global_state = copy.copy_to_initialize_global(context, *bind_data, manifest_file.path);
+		auto global_state = copy.copy_to_initialize_global(context, *bind_data, path);
 		auto local_state = copy.copy_to_initialize_local(execution_context, *bind_data);
 
 		copy.copy_to_sink(execution_context, *bind_data, *global_state, *local_state, chunk);
@@ -627,7 +628,7 @@ idx_t WriteToFile(const IcebergTableMetadata &table_metadata, const IcebergManif
 	}
 
 	auto file_system = CachingFileSystem::Get(context);
-	auto file_handle = file_system.OpenFile(manifest_file.path, FileOpenFlags::FILE_FLAGS_READ);
+	auto file_handle = file_system.OpenFile(path, FileOpenFlags::FILE_FLAGS_READ);
 	auto manifest_length = file_handle->GetFileSize();
 	return manifest_length;
 }

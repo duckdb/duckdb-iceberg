@@ -22,7 +22,8 @@ class IcebergUpdate : public PhysicalOperator {
 public:
 	IcebergUpdate(PhysicalPlan &physical_plan, IcebergTableEntry &table, vector<PhysicalIndex> columns,
 	              PhysicalOperator &child, PhysicalOperator &copy_op, PhysicalOperator &delete_op,
-	              PhysicalOperator &insert_op);
+	              PhysicalOperator &insert_op, vector<unique_ptr<Expression>> expressions,
+	              vector<unique_ptr<Expression>> bound_defaults);
 
 	//! The table to update
 	IcebergTableEntry &table;
@@ -34,6 +35,9 @@ public:
 	PhysicalOperator &delete_op;
 	//! The (final) insert operator that registers inserted data
 	PhysicalOperator &insert_op;
+	vector<unique_ptr<Expression>> expressions;
+	vector<unique_ptr<Expression>> bound_defaults;
+
 	//! The row-id-index
 	optional_idx row_id_index;
 
