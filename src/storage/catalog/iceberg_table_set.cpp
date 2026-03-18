@@ -55,9 +55,6 @@ bool IcebergTableSet::FillEntry(ClientContext &context, IcebergTableInformation 
 	// No valid cached result or caching disabled, make a new request
 	auto get_table_result = IRCAPI::GetTable(context, ic_catalog, schema, table.name);
 	if (get_table_result.has_error) {
-		if (get_table_result.error_._error.type == "NoSuchIcebergTableException") {
-			return false;
-		}
 		throw HTTPException(StringUtil::Format("GetTableInformation endpoint returned response code %s with message %s",
 		                                       EnumUtil::ToString(get_table_result.status_),
 		                                       get_table_result.error_._error.message));
