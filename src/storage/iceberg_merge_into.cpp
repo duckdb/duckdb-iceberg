@@ -33,8 +33,9 @@ static unique_ptr<MergeIntoOperator> IcebergPlanMergeIntoAction(IcebergCatalog &
 
 	auto &table_entry = op.table.Cast<IcebergTableEntry>();
 	auto &table_info = table_entry.table_info;
-	auto &schema = table_info.table_metadata.GetLatestSchema();
-	auto iceberg_version = table_info.table_metadata.iceberg_version;
+	auto &table_metadata = table_entry.table_info.table_metadata;
+	auto &schema = table_metadata.GetLatestSchema();
+	auto iceberg_version = table_metadata.iceberg_version;
 
 	switch (action.action_type) {
 	case MergeActionType::MERGE_UPDATE: {
@@ -50,7 +51,7 @@ static unique_ptr<MergeIntoOperator> IcebergPlanMergeIntoAction(IcebergCatalog &
 		result->op = update_plan;
 		auto &dl_update = result->op->Cast<IcebergUpdate>();
 		// The row_id comes before the deletion information
-		if (table_info.table_metadata.iceberg_version >= 3) {
+		if (table_metadata.iceberg_version >= 3) {
 			dl_update.row_id_index = child_plan.types.size() - 4;
 		}
 		break;
@@ -98,7 +99,7 @@ static unique_ptr<MergeIntoOperator> IcebergPlanMergeIntoAction(IcebergCatalog &
 		}
 		result->expressions = std::move(action.expressions);
 
-		IcebergCopyInput copy_input(context, table_entry, schema);
+		IcebergCopyInput copy_input(context, table_metadata, schema);
 		auto &physical_copy = IcebergInsert::PlanCopyForInsert(context, planner, copy_input, nullptr);
 		auto &insert = IcebergInsert::PlanInsert(context, planner, table_entry);
 		insert.children.push_back(physical_copy);
