@@ -58,12 +58,9 @@ bool IcebergTableSet::FillEntry(ClientContext &context, IcebergTableInformation 
 		if (get_table_result.error_._error.type == "NoSuchIcebergTableException") {
 			return false;
 		}
-		if (get_table_result.status_ == HTTPStatusCode::Forbidden_403 ||
-		    get_table_result.status_ == HTTPStatusCode::Unauthorized_401 ||
-		    get_table_result.status_ == HTTPStatusCode::NotFound_404) {
-			return false;
-		}
-		throw HTTPException(get_table_result.error_._error.message);
+		throw HTTPException(StringUtil::Format("GetTableInformation endpoint returned response code %s with message %s",
+		                                       EnumUtil::ToString(get_table_result.status_),
+		                                       get_table_result.error_._error.message));
 	}
 	ic_catalog.StoreLoadTableResult(table_key, std::move(get_table_result.result_));
 	{

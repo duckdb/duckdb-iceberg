@@ -119,10 +119,8 @@ bool IRCAPI::VerifyResponse(ClientContext &context, IcebergCatalog &catalog, IRC
 		case IRCEntryLookupStatus::EXISTS:
 			return true;
 		case IRCEntryLookupStatus::NOT_FOUND:
-			return false;
 		case IRCEntryLookupStatus::FORBIDDEN:
-			throw PermissionException("Forbidden_403 returned by catalog when requesting %s",
-			                          url_builder.GetURLEncoded());
+			return false;
 		default:
 			break;
 		}
@@ -136,9 +134,8 @@ bool IRCAPI::VerifyResponse(ClientContext &context, IcebergCatalog &catalog, IRC
 	case IRCEntryLookupStatus::EXISTS:
 		return true;
 	case IRCEntryLookupStatus::NOT_FOUND:
-		return false;
 	case IRCEntryLookupStatus::FORBIDDEN:
-		throw PermissionException("Forbidden_403 returned by catalog when requesting %s", url_builder.GetURLEncoded());
+		return false;
 	default:
 		// both head and get responses have returned a status that is an
 		// error status

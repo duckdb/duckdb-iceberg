@@ -1,0 +1,53 @@
+# name: test/sql/cloud/glue/test_glue_permissions.test
+# description: test integration with iceberg catalog read
+# group: [glue]
+
+require-env ICEBERG_AWS_REMOTE_AVAILABLE
+
+require-env AWS_ACCESS_KEY_ID
+
+require-env AWS_SECRET_ACCESS_KEY
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+require aws
+
+set ignore_error_messages
+
+statement ok
+CREATE SECRET glue_secret (
+    TYPE S3,
+    PROVIDER credential_chain,
+    CHAIN 'sts',
+    ASSUME_ROLE_ARN 'arn:aws:iam::840140254803:role/pyiceberg-etl-role'
+);
+
+statement ok
+attach '840140254803:s3tablescatalog/duckdblabs-iceberg-testing' as my_datalake (
+    TYPE ICEBERG,
+    ENDPOINT_TYPE 'GLUE'
+);
+
+query I
+SELECT count(*) FROM my_datalake.tpch_sf01.region;
+----
+5
+
+# I can list the table
+query II
+select schema, name from (show all tables) where name = 'basic_insert_test' and schema = 'test_inserts'; 
+----
+test_inserts	basic_insert_test
+
+# querying from the table results in 403
+statement error
+select * from my_datalake.test_inserts.basic_insert_test;
+----
+<REGEX>:.*Forbidden_403.*
+
