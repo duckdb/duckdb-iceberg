@@ -100,12 +100,14 @@ static unique_ptr<MergeIntoOperator> IcebergPlanMergeIntoAction(IcebergCatalog &
 		result->expressions = std::move(action.expressions);
 
 		IcebergCopyInput copy_input(context, table_metadata, schema);
+		auto copy_options = IcebergInsert::GetCopyOptions(context, copy_input);
 		auto &physical_copy = IcebergInsert::PlanCopyForInsert(context, planner, copy_input, nullptr);
 		auto &insert = IcebergInsert::PlanInsert(context, planner, table_entry);
 		insert.children.push_back(physical_copy);
 
 		auto &merge_insert =
 		    planner.Make<IcebergMergeInsert>(insert.types, insert, physical_copy).Cast<IcebergMergeInsert>();
+		merge_insert.extra_projections = std::move(copy_options.projection_list);
 		result->op = merge_insert;
 		break;
 	}

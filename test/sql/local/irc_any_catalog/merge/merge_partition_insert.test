@@ -1,9 +1,6 @@
-# name: test/sql/local/irc_any_catalog/merge/merge_partition_update.test
+# name: test/sql/local/irc_any_catalog/merge/merge_partition_insert.test
 # description: Test merge into with partitions
 # group: [merge]
-
-# Needs UPDATE support for partitioned tables
-mode skip
 
 require-env ICEBERG_SERVER_AVAILABLE
 
@@ -36,32 +33,20 @@ statement ok
 ALTER TABLE my_datalake.default.my_timeseries SET PARTITIONED BY (year(ts));
 
 statement ok
-INSERT INTO my_datalake.default.my_timeseries VALUES ('2025-09-17'::TIMESTAMP, 42::DOUBLE PRECISION);
+insert into my_datalake.default.my_timeseries VALUES ('2025-09-15',42)
 
 statement ok
 MERGE INTO my_datalake.default.my_timeseries
     USING (
         SELECT
             '2025-09-17'::TIMESTAMP as ts,
-            43::DOUBLE PRECISION as x
+            42::DOUBLE PRECISION as x
     ) AS timeseries_updates
     ON my_datalake.default.my_timeseries.ts = timeseries_updates.ts
-    WHEN MATCHED THEN UPDATE;
+    WHEN NOT MATCHED THEN INSERT;
 
-# TODO: use the logs to check if the data files in the partition get hit by a scan?
-mode skip
-
-query I
-SELECT COUNT(*) FROM GLOB('${DATA_PATH}/merge_partition_update/**/year=2025/*')
+query II
+SELECT * FROM my_datalake.default.my_timeseries
 ----
-2
-
-statement ok
-UPDATE my_datalake.default.my_timeseries
-SET x = 43::DOUBLE PRECISION
-WHERE ts = '2025-09-17'::TIMESTAMP;
-
-query I
-SELECT COUNT(*) FROM GLOB('${DATA_PATH}/merge_partition_update/**/year=2025/*')
-----
-3
+2025-09-15 00:00:00	42.0
+2025-09-17 00:00:00	42.0
