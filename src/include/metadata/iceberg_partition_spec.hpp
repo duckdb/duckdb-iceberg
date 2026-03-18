@@ -29,16 +29,23 @@ public:
 
 struct IcebergPartitionSpec {
 public:
+	IcebergPartitionSpec(int32_t spec_id) : spec_id(spec_id) {
+	}
+
+public:
 	static IcebergPartitionSpec ParseFromJson(const rest_api_objects::PartitionSpec &spec);
 
 public:
 	bool IsUnpartitioned() const;
 	bool IsPartitioned() const;
 	const IcebergPartitionSpecField &GetFieldBySourceId(idx_t field_id) const;
-	string FieldsToJSON() const;
-	static void FieldsToJson(yyjson_mut_doc *doc, yyjson_mut_val *root_object,
-	                         const vector<rest_api_objects::PartitionField> &fields);
+	yyjson_mut_val *ToJSON(yyjson_mut_doc *doc) const;
+	string FieldsToJSONString() const;
 	const vector<IcebergPartitionSpecField> &GetFields() const;
+	static yyjson_mut_val *ToJSON(yyjson_mut_doc *doc, const rest_api_objects::PartitionSpec &spec);
+
+private:
+	yyjson_mut_val *FieldsToJSON(yyjson_mut_doc *doc) const;
 
 public:
 	int32_t spec_id;

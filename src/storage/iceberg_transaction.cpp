@@ -95,28 +95,9 @@ void CommitTableToJSON(yyjson_mut_doc *doc, yyjson_mut_val *root_object,
 			//! updates[...].action
 			yyjson_mut_obj_add_strcpy(doc, update_json, "action", "add-snapshot");
 			//! updates[...].snapshot
-			auto snapshot_json = yyjson_mut_obj_add_obj(doc, update_json, "snapshot");
-
 			auto &snapshot = update.add_snapshot_update.snapshot;
-			yyjson_mut_obj_add_uint(doc, snapshot_json, "snapshot-id", snapshot.snapshot_id);
-			if (snapshot.has_parent_snapshot_id) {
-				yyjson_mut_obj_add_uint(doc, snapshot_json, "parent-snapshot-id", snapshot.parent_snapshot_id);
-			}
-			yyjson_mut_obj_add_uint(doc, snapshot_json, "sequence-number", snapshot.sequence_number);
-			yyjson_mut_obj_add_uint(doc, snapshot_json, "timestamp-ms", snapshot.timestamp_ms);
-			yyjson_mut_obj_add_strcpy(doc, snapshot_json, "manifest-list", snapshot.manifest_list.c_str());
-			auto summary_json = yyjson_mut_obj_add_obj(doc, snapshot_json, "summary");
-			yyjson_mut_obj_add_strcpy(doc, summary_json, "operation", snapshot.summary.operation.c_str());
-			for (auto &prop : snapshot.summary.additional_properties) {
-				yyjson_mut_obj_add_strcpy(doc, summary_json, prop.first.c_str(), prop.second.c_str());
-			}
-			yyjson_mut_obj_add_uint(doc, snapshot_json, "schema-id", snapshot.schema_id);
-			if (snapshot.has_first_row_id) {
-				yyjson_mut_obj_add_uint(doc, snapshot_json, "first-row-id", snapshot.first_row_id);
-			}
-			if (snapshot.has_added_rows) {
-				yyjson_mut_obj_add_uint(doc, snapshot_json, "added-rows", snapshot.added_rows);
-			}
+			auto snapshot_obj = IcebergSnapshot::ToJSON(snapshot, doc);
+			yyjson_mut_obj_add_val(doc, update_json, "snapshot", snapshot_obj);
 		} else if (update.has_set_snapshot_ref_update) {
 			auto update_json = yyjson_mut_arr_add_obj(doc, updates_array);
 			auto &ref_update = update.set_snapshot_ref_update;
@@ -186,10 +167,7 @@ void CommitTableToJSON(yyjson_mut_doc *doc, yyjson_mut_val *root_object,
 			auto &ref_update = update.add_partition_spec_update;
 			//! updates[...].action
 			yyjson_mut_obj_add_strcpy(doc, update_json, "action", ref_update.action.c_str());
-			auto spec_json = yyjson_mut_obj_add_obj(doc, update_json, "spec");
-			yyjson_mut_obj_add_int(doc, spec_json, "spec-id", ref_update.spec.spec_id);
-			// add fields
-			IcebergPartitionSpec::FieldsToJson(doc, spec_json, ref_update.spec.fields);
+			yyjson_mut_obj_add_val(doc, update_json, "spec", IcebergPartitionSpec::ToJSON(doc, ref_update.spec));
 		} else if (update.has_set_default_sort_order_update) {
 			auto update_json = yyjson_mut_arr_add_obj(doc, updates_array);
 			auto &ref_update = update.set_default_sort_order_update;

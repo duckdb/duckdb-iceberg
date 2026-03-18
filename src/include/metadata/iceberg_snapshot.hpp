@@ -10,7 +10,7 @@ struct IcebergTableInformation;
 
 enum class IcebergSnapshotOperationType : uint8_t { APPEND, REPLACE, OVERWRITE, DELETE };
 
-enum class SnapshotMetricType : uint8_t {
+enum class IcebergSnapshotMetricType : uint8_t {
 	ADDED_DATA_FILES,
 	ADDED_RECORDS,
 	DELETED_DATA_FILES,
@@ -19,14 +19,30 @@ enum class SnapshotMetricType : uint8_t {
 	TOTAL_RECORDS
 };
 
+class IcebergSnapshot;
+struct IcebergManifestFile;
+
+struct IcebergSnapshotMetrics {
+public:
+	IcebergSnapshotMetrics();
+	IcebergSnapshotMetrics(const IcebergSnapshot &parent_snapshot);
+
+public:
+	void AddManifestFile(const IcebergManifestFile &manifest_file);
+
+public:
+	map<IcebergSnapshotMetricType, int64_t> metrics;
+};
+
 //! An Iceberg snapshot https://iceberg.apache.org/spec/#snapshots
 class IcebergSnapshot {
 public:
 	IcebergSnapshot() {
 	}
+	static int64_t NewSnapshotId();
 	static IcebergSnapshot ParseSnapshot(const rest_api_objects::Snapshot &snapshot, IcebergTableMetadata &metadata);
-	rest_api_objects::Snapshot ToRESTObject(const IcebergTableInformation &table_info) const;
-	using metrics_map_t = map<SnapshotMetricType, int64_t>;
+	rest_api_objects::Snapshot ToRESTObject(const IcebergTableMetadata &table_metadata) const;
+	static yyjson_mut_val *ToJSON(const rest_api_objects::Snapshot &snapshot, yyjson_mut_doc *doc);
 
 public:
 	//! Snapshot metadata
@@ -42,7 +58,7 @@ public:
 	IcebergSnapshotOperationType operation;
 	timestamp_t timestamp_ms;
 	string manifest_list;
-	metrics_map_t metrics;
+	IcebergSnapshotMetrics metrics;
 };
 
 } // namespace duckdb

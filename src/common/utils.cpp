@@ -10,6 +10,14 @@
 
 namespace duckdb {
 
+optional_ptr<CopyFunctionCatalogEntry> IcebergUtils::TryGetCopyFunction(DatabaseInstance &db, const string &name) {
+	D_ASSERT(!name.empty());
+	auto &system_catalog = Catalog::GetSystemCatalog(db);
+	auto data = CatalogTransaction::GetSystemTransaction(db);
+	auto &schema = system_catalog.GetSchema(data, DEFAULT_SCHEMA);
+	return schema.GetEntry(data, CatalogType::COPY_FUNCTION_ENTRY, name)->Cast<CopyFunctionCatalogEntry>();
+}
+
 idx_t IcebergUtils::CountOccurrences(const string &input, const string &to_find) {
 	size_t pos = input.find(to_find);
 	idx_t count = 0;

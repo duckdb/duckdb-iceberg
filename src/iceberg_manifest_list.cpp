@@ -6,9 +6,100 @@
 #include "duckdb/main/database.hpp"
 #include "include/storage/iceberg_table_information.hpp"
 #include "duckdb/storage/buffer_manager.hpp"
+#include "duckdb/common/types/uuid.hpp"
 #include "include/metadata/iceberg_transform.hpp"
 
 namespace duckdb {
+
+IcebergManifestListEntry IcebergManifestListEntry::CreateFromEntries(int64_t snapshot_id,
+                                                                     sequence_number_t sequence_number,
+                                                                     const IcebergTableMetadata &table_metadata,
+                                                                     IcebergManifestContentType manifest_content_type,
+                                                                     vector<IcebergManifestEntry> &&manifest_entries,
+                                                                     int64_t &next_row_id) {
+	//! create manifest file path
+	auto manifest_file_uuid = UUID::ToString(UUID::GenerateRandomUUID());
+	auto manifest_file_path = table_metadata.GetMetadataPath() + "/" + manifest_file_uuid + "-m0.avro";
+
+	// Add a manifest list entry for the delete files
+	IcebergManifestListEntry manifest_list_entry(manifest_file_path);
+	auto &manifest_file = manifest_list_entry.file;
+	manifest_file.manifest_path = manifest_file_path;
+	if (table_metadata.iceberg_version >= 3) {
+		manifest_file.has_first_row_id = true;
+		manifest_file.first_row_id = next_row_id;
+	}
+
+	manifest_file.manifest_path = manifest_file_path;
+	manifest_file.sequence_number = sequence_number;
+	manifest_file.content = manifest_content_type;
+	manifest_file.added_files_count = 0;
+	manifest_file.deleted_files_count = 0;
+	manifest_file.existing_files_count = 0;
+	manifest_file.added_rows_count = 0;
+	manifest_file.existing_rows_count = 0;
+	manifest_file.deleted_rows_count = 0;
+	manifest_file.partition_spec_id = table_metadata.default_spec_id;
+
+	//! Add the files to the manifest
+	for (auto &manifest_entry : manifest_entries) {
+		manifest_entry.manifest_file_path = manifest_file_path;
+		auto &data_file = manifest_entry.data_file;
+		if (data_file.content == IcebergManifestEntryContentType::DATA) {
+			//! FIXME: this is required because we don't apply inheritance to uncommitted manifests
+			//! But this does result in serializing this to the avro file, which *should* be NULL
+			//! To fix this we should probably remove the inheritance application in the "manifest_reader"
+			//! and instead do the inheritance in a path that is used by both committed and uncommitted manifests
+			data_file.has_first_row_id = true;
+			data_file.first_row_id = next_row_id;
+			next_row_id += data_file.record_count;
+		}
+		switch (manifest_entry.status) {
+		case IcebergManifestEntryStatusType::ADDED: {
+			manifest_file.added_files_count++;
+			manifest_file.added_rows_count += data_file.record_count;
+			break;
+		}
+		case IcebergManifestEntryStatusType::DELETED: {
+			manifest_file.deleted_files_count++;
+			manifest_file.deleted_rows_count += data_file.record_count;
+			break;
+		}
+		case IcebergManifestEntryStatusType::EXISTING: {
+			manifest_file.existing_files_count++;
+			manifest_file.existing_rows_count += data_file.record_count;
+			break;
+		}
+		}
+
+		//! FIXME: these should be inherited - left NULL - for newly added data
+		manifest_entry.sequence_number = sequence_number;
+		manifest_entry.snapshot_id = snapshot_id;
+		manifest_entry.partition_spec_id = manifest_file.partition_spec_id;
+		if (!manifest_file.has_min_sequence_number ||
+		    manifest_entry.sequence_number < manifest_file.min_sequence_number) {
+			manifest_file.min_sequence_number = manifest_entry.sequence_number;
+		}
+		manifest_file.has_min_sequence_number = true;
+	}
+	manifest_file.added_snapshot_id = snapshot_id;
+
+	// Compute partition field summaries (upper/lower bounds) for the manifest list entry
+	if (table_metadata.HasPartitionSpec() && table_metadata.GetLatestPartitionSpec().IsPartitioned()) {
+		auto partition_spec_it = table_metadata.partition_specs.find(table_metadata.default_spec_id);
+		if (partition_spec_it == table_metadata.partition_specs.end()) {
+			throw InternalException("Cannot find partition spec with id " +
+			                        std::to_string(table_metadata.default_spec_id));
+		}
+		auto &partition_spec = partition_spec_it->second;
+		manifest_file.partitions.Create(partition_spec, manifest_entries);
+	}
+
+	manifest_list_entry.manifest_entries.insert(manifest_list_entry.manifest_entries.end(),
+	                                            std::make_move_iterator(manifest_entries.begin()),
+	                                            std::make_move_iterator(manifest_entries.end()));
+	return manifest_list_entry;
+}
 
 void ManifestPartitions::Create(const IcebergPartitionSpec &partition_spec,
                                 const vector<IcebergManifestEntry> &manifest_entries) {

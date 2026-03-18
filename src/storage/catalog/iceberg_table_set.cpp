@@ -200,17 +200,21 @@ IcebergTableInformation &IcebergTableSet::CreateNewEntry(ClientContext &context,
 		throw InternalException("Table %s was already created somehow?", key);
 	}
 	auto &table_info = emplace_res.first->second;
+	auto &table_metadata = table_info.table_metadata;
 	auto table_entry = make_uniq<IcebergTableEntry>(table_info, catalog, schema, info);
 	auto table_ptr = table_entry.get();
 	table_entry->table_info.schema_versions[0] = std::move(table_entry);
-	table_info.table_metadata.iceberg_version = iceberg_version.GetIndex();
-	table_info.table_metadata.schemas[0] = IcebergCreateTableRequest::CreateIcebergSchema(context, *table_ptr);
-	table_info.table_metadata.current_schema_id = 0;
-	table_info.table_metadata.schemas[0]->schema_id = 0;
+	table_metadata.iceberg_version = iceberg_version.GetIndex();
+	int32_t last_column_id;
+	table_metadata.schemas[0] = IcebergCreateTableRequest::CreateIcebergSchema(
+	    context, table_metadata, table_ptr->GetColumns(), table_ptr->GetConstraints(), last_column_id);
+	table_metadata.current_schema_id = 0;
+	table_metadata.schemas[0]->schema_id = 0;
+	table_metadata.last_column_id = last_column_id;
 
 	// Get Location
 	if (!location.empty()) {
-		table_info.table_metadata.location = location;
+		table_metadata.location = location;
 	}
 	for (auto &option : info.options) {
 		if (option.first == "format-version" || option.first == "location") {
@@ -219,7 +223,7 @@ IcebergTableInformation &IcebergTableSet::CreateNewEntry(ClientContext &context,
 		auto option_val =
 		    ParseTableProperty(property_binder, context, *option.second, option.first, LogicalType::VARCHAR)
 		        .GetValue<string>();
-		table_info.table_metadata.table_properties.emplace(option.first, option_val);
+		table_metadata.table_properties.emplace(option.first, option_val);
 	}
 
 	auto &current_schema = table_info.table_metadata.GetLatestSchema();
@@ -237,7 +241,7 @@ IcebergTableInformation &IcebergTableSet::CreateNewEntry(ClientContext &context,
 		auto cached_table_result = catalog.TryGetValidCachedLoadTableResult(key, cache_lock, false);
 		D_ASSERT(cached_table_result);
 		auto &load_table_result = cached_table_result->load_table_result;
-		table_info.table_metadata = IcebergTableMetadata::FromTableMetadata(load_table_result->metadata);
+		table_metadata = IcebergTableMetadata::FromTableMetadata(load_table_result->metadata);
 	}
 
 	// if we stage created the table, we add an assert create
@@ -254,7 +258,7 @@ IcebergTableInformation &IcebergTableSet::CreateNewEntry(ClientContext &context,
 	table_info.AddSortOrder(iceberg_transaction);
 	table_info.SetDefaultSortOrder(iceberg_transaction);
 	table_info.SetLocation(iceberg_transaction);
-	table_info.SetProperties(iceberg_transaction, table_info.table_metadata.table_properties);
+	table_info.SetProperties(iceberg_transaction, table_metadata.table_properties);
 	return table_info;
 }
 

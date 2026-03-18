@@ -328,8 +328,7 @@ void IcebergTableInformation::SetPartitionedBy(IcebergTransaction &transaction,
 		new_spec_id = GetNextPartitionSpecId();
 	}
 
-	IcebergPartitionSpec new_spec;
-	new_spec.spec_id = new_spec_id;
+	IcebergPartitionSpec new_spec(new_spec_id);
 
 	for (auto &key : partition_keys) {
 		string column_name;
@@ -407,7 +406,7 @@ void IcebergTableInformation::SetPartitionedBy(IcebergTransaction &transaction,
 		return;
 	}
 
-	table_metadata.partition_specs[new_spec_id] = std::move(new_spec);
+	table_metadata.partition_specs.emplace(new_spec_id, std::move(new_spec));
 	table_metadata.default_spec_id = new_spec_id;
 	if (!first_partition_spec) {
 		AddPartitionSpec(transaction);
@@ -470,7 +469,7 @@ IcebergSnapshotLookup IcebergTableInformation::GetSnapshotLookup(ClientContext &
 bool IcebergTableInformation::TableIsEmpty(const IcebergSnapshotLookup &snapshot_lookup) const {
 	// edge case tables before data is inserted. There is no snapshot information, so we defer to latest.
 	if (table_metadata.snapshots.empty() && snapshot_lookup.snapshot_source == SnapshotSource::FROM_TIMESTAMP) {
-		auto timestamp_millis = Timestamp::GetEpochMs(snapshot_lookup.snapshot_timestamp);
+		auto timestamp_millis = timestamp_t(Timestamp::GetEpochMs(snapshot_lookup.snapshot_timestamp));
 		if (timestamp_millis >= table_metadata.last_updated_ms) {
 			// current table was made before the transaction but is empty.
 			// you can return current table information in an as-is form

@@ -19,6 +19,7 @@
 #include "storage/authorization/sigv4.hpp"
 #include "iceberg_utils.hpp"
 #include "iceberg_logging.hpp"
+#include "copy/function/iceberg_copy_function.hpp"
 
 namespace duckdb {
 
@@ -70,6 +71,9 @@ static void LoadInternal(ExtensionLoader &loader) {
 	for (auto &fun : IcebergFunctions::GetScalarFunctions()) {
 		loader.RegisterFunction(fun);
 	}
+
+	// Iceberg COPY Function
+	loader.RegisterFunction(IcebergCopyFunction::Create());
 
 	SecretType secret_type;
 	secret_type.name = "iceberg";

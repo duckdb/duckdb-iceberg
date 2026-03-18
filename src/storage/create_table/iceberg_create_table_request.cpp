@@ -213,42 +213,45 @@ static Value ExtractInitialValue(ConstantBinder &binder, ClientContext &context,
 	return ExpressionExecutor::EvaluateScalar(context, *bound_expr).DefaultCastAs(type);
 }
 
-shared_ptr<IcebergTableSchema> IcebergCreateTableRequest::CreateIcebergSchema(ClientContext &context,
-                                                                              const IcebergTableEntry &table_entry) {
+shared_ptr<IcebergTableSchema> IcebergCreateTableRequest::CreateIcebergSchema(
+    ClientContext &context, const IcebergTableMetadata &table_metadata, const ColumnList &columns,
+    optional_ptr<const vector<unique_ptr<Constraint>>> constraints_p, int32_t &last_column_id) {
 	auto schema = make_shared_ptr<IcebergTableSchema>();
-	auto &table_metadata = table_entry.table_info.table_metadata;
 	// should this be a different schema id?
 	schema->schema_id = table_metadata.current_schema_id;
 
 	// TODO: this can all be refactored out
 	//  this makes the IcebergTableSchema, and we use that to dump data to JSON.
 	//  we can just directly dump it to json.
-	auto column_iterator = table_entry.GetColumns().Logical();
-	idx_t field_id = 1;
+	auto column_iterator = columns.Logical();
+	int32_t field_id = 1;
 
 	auto next_field_id = [&field_id]() -> idx_t {
 		return field_id++;
 	};
 
-	auto &constraints = table_entry.GetConstraints();
+	unordered_set<idx_t> required_columns;
+	if (constraints_p) {
+		auto &constraints = *constraints_p;
+		for (auto &constraint : constraints) {
+			if (constraint->type != ConstraintType::NOT_NULL) {
+				continue;
+			}
+			auto &not_null_constraint = constraint->Cast<NotNullConstraint>();
+			if (!not_null_constraint.index.IsValid()) {
+				continue;
+			}
+			required_columns.insert(not_null_constraint.index.index);
+		}
+	}
+
 	auto binder = Binder::CreateBinder(context);
 	ConstantBinder constant_binder(*binder, context, "DEFAULT");
 	for (auto column = column_iterator.begin(); column != column_iterator.end(); ++column) {
 		auto &column_def = *column;
 		auto name = column_def.Name();
 		// check if there is a not null constraint
-		bool required = false;
-		if (!constraints.empty()) {
-			for (auto &constraint : constraints) {
-				if (constraint->type != ConstraintType::NOT_NULL) {
-					continue;
-				}
-				auto &not_null_constraint = constraint->Cast<NotNullConstraint>();
-				if (not_null_constraint.index.IsValid() && not_null_constraint.index.index == column.pos) {
-					required = true;
-				}
-			}
-		}
+		const bool required = required_columns.count(column.pos);
 
 		const auto &logical_type = column_def.GetType();
 		idx_t first_id = next_field_id();
@@ -271,6 +274,7 @@ shared_ptr<IcebergTableSchema> IcebergCreateTableRequest::CreateIcebergSchema(Cl
 		}
 		schema->columns.push_back(std::move(iceberg_column_def));
 	}
+	last_column_id = field_id - 1;
 	return schema;
 }
 

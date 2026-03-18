@@ -49,6 +49,8 @@ set(EXTENSION_SOURCES
     src/common/url_utils.cpp
     src/common/iceberg.cpp
     src/common/api_utils.cpp
+    src/copy/function/iceberg_copy_function.cpp
+    src/copy/operator/iceberg_copy.cpp
     src/iceberg_functions/iceberg_multi_file_reader.cpp
     src/iceberg_functions/iceberg_avro_multi_file_reader.cpp
     src/iceberg_functions/iceberg_avro_multi_file_list.cpp

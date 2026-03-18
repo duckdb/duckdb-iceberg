@@ -87,14 +87,6 @@ SinkCombineResultType IcebergDelete::Combine(ExecutionContext &context, Operator
 	return SinkCombineResultType::FINISHED;
 }
 
-static optional_ptr<CopyFunctionCatalogEntry> TryGetCopyFunction(DatabaseInstance &db, const string &name) {
-	D_ASSERT(!name.empty());
-	auto &system_catalog = Catalog::GetSystemCatalog(db);
-	auto data = CatalogTransaction::GetSystemTransaction(db);
-	auto &schema = system_catalog.GetSchema(data, DEFAULT_SCHEMA);
-	return schema.GetEntry(data, CatalogType::COPY_FUNCTION_ENTRY, name)->Cast<CopyFunctionCatalogEntry>();
-}
-
 //===--------------------------------------------------------------------===//
 // Finalize
 //===--------------------------------------------------------------------===//
@@ -158,7 +150,7 @@ void IcebergDelete::WritePositionalDeleteFile(ClientContext &context, IcebergDel
 	vector<string> names_to_write {"file_path", "pos"};
 	vector<LogicalType> types_to_write {LogicalType::VARCHAR, LogicalType::BIGINT};
 
-	auto copy_fun = TryGetCopyFunction(*context.db, "parquet");
+	auto copy_fun = IcebergUtils::TryGetCopyFunction(*context.db, "parquet");
 	CopyFunctionBindInput bind_input(*info);
 
 	auto function_data = copy_fun->function.copy_to_bind(context, bind_input, names_to_write, types_to_write);

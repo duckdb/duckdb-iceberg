@@ -51,7 +51,7 @@ void AddSchemaUpdate::CreateUpdate(DatabaseInstance &db, ClientContext &context,
 	}
 	auto &schema = it->second;
 	update.add_schema_update.schema = CopySchema(*schema.get());
-	// last column id is technically deprecated, but some catalogs still use it (nessie).
+	// last-column-id is technically deprecated in AddSchemaUpdate, but some catalogs still use it (nessie).
 	if (last_column_id.IsValid()) {
 		update.add_schema_update.has_last_column_id = true;
 		update.add_schema_update.last_column_id = last_column_id.GetIndex();

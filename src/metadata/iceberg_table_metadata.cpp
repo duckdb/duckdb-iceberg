@@ -6,6 +6,7 @@
 #include "metadata/iceberg_snapshot.hpp"
 #include "duckdb/common/exception.hpp"
 #include "rest_catalog/objects/list.hpp"
+#include "storage/table_create/iceberg_create_table_request.hpp"
 
 namespace duckdb {
 
@@ -131,7 +132,7 @@ optional_ptr<const IcebergSnapshot> IcebergTableMetadata::GetSnapshot(const Iceb
 //! ----------- Find Metadata -----------
 
 // Function to generate a metadata file url from version and format string
-// default format is "v%s%s.metadata.json" -> v00###-xxxxxxxxx-.gz.metadata.json"
+// default format is "v%s%s.metadata.json" -> v00###-xxxxxxxxx-.gz.metadata.json
 static string GenerateMetaDataUrl(FileSystem &fs, const string &meta_path, string &table_version,
                                   const IcebergOptions &options) {
 	// TODO: Need to URL Encode table_version
@@ -308,7 +309,7 @@ IcebergTableMetadata IcebergTableMetadata::FromTableMetadata(const rest_api_obje
 	res.table_uuid = table_metadata.table_uuid;
 	res.location = table_metadata.location;
 	res.iceberg_version = table_metadata.format_version;
-	res.last_updated_ms = table_metadata.last_updated_ms;
+	res.last_updated_ms = timestamp_t(table_metadata.last_updated_ms);
 	for (auto &schema : table_metadata.schemas) {
 		res.schemas.emplace(schema.object_1.schema_id, IcebergTableSchema::ParseSchema(schema));
 	}
@@ -438,6 +439,123 @@ bool IcebergTableMetadata::PropertiesAllowPositionalDeletes(IcebergSnapshotOpera
 	default:
 		throw NotImplementedException("Operation type not supported");
 	}
+}
+
+yyjson_mut_val *IcebergTableMetadata::SchemasToJSON(yyjson_mut_doc *doc) const {
+	auto schemas_array = yyjson_mut_arr(doc);
+	for (auto &it : schemas) {
+		auto &schema = *it.second;
+		auto schema_obj = yyjson_mut_obj(doc);
+		IcebergCreateTableRequest::PopulateSchema(doc, schema_obj, schema);
+		yyjson_mut_arr_add_val(schemas_array, schema_obj);
+	}
+	return schemas_array;
+}
+
+yyjson_mut_val *IcebergTableMetadata::PartitionsToJSON(yyjson_mut_doc *doc) const {
+	auto partitions_array = yyjson_mut_arr(doc);
+	for (auto &it : partition_specs) {
+		auto &partition_spec = it.second;
+		auto partition_obj = partition_spec.ToJSON(doc);
+		yyjson_mut_arr_add_val(partitions_array, partition_obj);
+	}
+	return partitions_array;
+}
+
+yyjson_mut_val *IcebergTableMetadata::TablePropertiesToJSON(yyjson_mut_doc *doc) const {
+	auto properties_obj = yyjson_mut_obj(doc);
+	for (auto &property : table_properties) {
+		auto &key = property.first;
+		auto &val = property.second;
+		//! Register the string as part of the document, to ensure lifetime correctness
+		auto key_val = unsafe_yyjson_mut_strncpy(doc, key.c_str(), key.size());
+		yyjson_mut_obj_add_strncpy(doc, properties_obj, key_val, val.c_str(), val.size());
+	}
+	return properties_obj;
+}
+
+yyjson_mut_val *IcebergTableMetadata::SnapshotsToJSON(yyjson_mut_doc *doc) const {
+	auto snapshots_array = yyjson_mut_arr(doc);
+	for (auto &it : snapshots) {
+		auto &snapshot = it.second;
+		auto snapshot_rest_object = snapshot.ToRESTObject(*this);
+		auto snapshot_obj = IcebergSnapshot::ToJSON(snapshot_rest_object, doc);
+		yyjson_mut_arr_add_val(snapshots_array, snapshot_obj);
+	}
+	return snapshots_array;
+}
+
+yyjson_mut_val *IcebergTableMetadata::SnapshotLogToJSON(yyjson_mut_doc *doc) const {
+	auto log_array = yyjson_mut_arr(doc);
+	for (auto &it : snapshots) {
+		auto &snapshot = it.second;
+		auto log_item = yyjson_mut_obj(doc);
+		yyjson_mut_obj_add_int(doc, log_item, "snapshot-id", snapshot.snapshot_id);
+		yyjson_mut_obj_add_int(doc, log_item, "timestamp-ms", snapshot.timestamp_ms.value);
+		yyjson_mut_arr_add_val(log_array, log_item);
+	}
+	return log_array;
+}
+
+yyjson_mut_val *IcebergTableMetadata::SortOrdersToJSON(yyjson_mut_doc *doc) const {
+	auto sort_orders_array = yyjson_mut_arr(doc);
+	for (auto &it : sort_specs) {
+		auto &sort_order = it.second;
+		auto sort_order_obj = sort_order.ToJSON(doc);
+		yyjson_mut_arr_add_val(sort_orders_array, sort_order_obj);
+	}
+	return sort_orders_array;
+}
+
+string IcebergTableMetadata::ToJSON() const {
+	std::unique_ptr<yyjson_mut_doc, YyjsonDocDeleter> doc_p(yyjson_mut_doc_new(nullptr));
+	auto doc = doc_p.get();
+	auto root_obj = yyjson_mut_obj(doc);
+	yyjson_mut_doc_set_root(doc, root_obj);
+
+	yyjson_mut_obj_add_val(doc, root_obj, "format-version", yyjson_mut_int(doc, iceberg_version));
+	yyjson_mut_obj_add_val(doc, root_obj, "table-uuid", yyjson_mut_str(doc, table_uuid.c_str()));
+	yyjson_mut_obj_add_val(doc, root_obj, "location", yyjson_mut_str(doc, location.c_str()));
+	yyjson_mut_obj_add_val(doc, root_obj, "last-updated-ms", yyjson_mut_int(doc, last_updated_ms.value));
+	yyjson_mut_obj_add_val(doc, root_obj, "last-column-id", yyjson_mut_int(doc, last_column_id.GetIndex()));
+	yyjson_mut_obj_add_val(doc, root_obj, "schemas", SchemasToJSON(doc));
+	yyjson_mut_obj_add_val(doc, root_obj, "current-schema-id", yyjson_mut_int(doc, current_schema_id));
+	yyjson_mut_obj_add_val(doc, root_obj, "partition-specs", PartitionsToJSON(doc));
+	yyjson_mut_obj_add_val(doc, root_obj, "default-spec-id", yyjson_mut_int(doc, default_spec_id));
+	yyjson_mut_obj_add_val(doc, root_obj, "last-partition-id", yyjson_mut_int(doc, last_partition_field_id.GetIndex()));
+	yyjson_mut_obj_add_val(doc, root_obj, "properties", TablePropertiesToJSON(doc));
+	yyjson_mut_obj_add_val(doc, root_obj, "current-snapshot-id", yyjson_mut_int(doc, current_snapshot_id));
+	yyjson_mut_obj_add_val(doc, root_obj, "snapshots", SnapshotsToJSON(doc));
+	yyjson_mut_obj_add_val(doc, root_obj, "snapshot-log", SnapshotLogToJSON(doc));
+	// yyjson_mut_obj_add_val(doc, root_obj, "metadata-log", MetadataLogToJSON(doc));
+	yyjson_mut_obj_add_val(doc, root_obj, "sort-orders", SortOrdersToJSON(doc));
+	yyjson_mut_obj_add_val(doc, root_obj, "default-sort-order-id",
+	                       yyjson_mut_int(doc, default_sort_order_id.GetIndex()));
+	// yyjson_mut_obj_add_val(doc, root_obj, "refs", RefToJSON(doc));
+	// yyjson_mut_obj_add_val(doc, root_obj, "encryption-keys", EncryptionKeyToJSON(doc));
+	return ICUtils::JsonToString(std::move(doc_p));
+}
+
+void IcebergTableMetadata::WriteMetadata(ClientContext &context, const string &path) const {
+	auto &fs = FileSystem::GetFileSystem(context);
+
+	// Generate JSON using ToJSON()
+	auto json_content = ToJSON();
+
+	// Write to file
+	auto file = fs.OpenFile(path, FileFlags::FILE_FLAGS_WRITE | FileFlags::FILE_FLAGS_FILE_CREATE);
+	file->Write((void *)json_content.c_str(), json_content.size());
+	file->Close();
+}
+
+void IcebergTableMetadata::WriteVersionHint(ClientContext &context, const string &path,
+                                            const string &version_hint) const {
+	auto &fs = FileSystem::GetFileSystem(context);
+
+	// Write to file
+	auto file = fs.OpenFile(path, FileFlags::FILE_FLAGS_WRITE | FileFlags::FILE_FLAGS_FILE_CREATE);
+	file->Write((void *)version_hint.c_str(), version_hint.size());
+	file->Close();
 }
 
 } // namespace duckdb

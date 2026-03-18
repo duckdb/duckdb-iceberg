@@ -683,7 +683,7 @@ idx_t WriteToFile(const IcebergTableMetadata &table_metadata, const string &path
 	child_list_t<Value> metadata_values;
 	metadata_values.emplace_back("schema", iceberg_schema_string);
 	metadata_values.emplace_back("schema-id", std::to_string(table_metadata.current_schema_id));
-	metadata_values.emplace_back("partition-spec", current_partition_spec.FieldsToJSON());
+	metadata_values.emplace_back("partition-spec", current_partition_spec.FieldsToJSONString());
 	metadata_values.emplace_back("partition-spec-id", std::to_string(current_partition_spec.spec_id));
 	metadata_values.emplace_back("format-version", std::to_string(table_metadata.iceberg_version));
 	metadata_values.emplace_back("content", "data");

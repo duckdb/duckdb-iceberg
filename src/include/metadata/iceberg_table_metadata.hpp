@@ -73,6 +73,17 @@ public:
 	const case_insensitive_map_t<string> &GetTableProperties() const;
 	string GetTableProperty(string property_string) const;
 	bool PropertiesAllowPositionalDeletes(IcebergSnapshotOperationType operation_type) const;
+	string ToJSON() const;
+	void WriteMetadata(ClientContext &context, const string &path) const;
+	void WriteVersionHint(ClientContext &context, const string &path, const string &metadata_json_path) const;
+
+private:
+	yyjson_mut_val *SchemasToJSON(yyjson_mut_doc *doc) const;
+	yyjson_mut_val *PartitionsToJSON(yyjson_mut_doc *doc) const;
+	yyjson_mut_val *TablePropertiesToJSON(yyjson_mut_doc *doc) const;
+	yyjson_mut_val *SnapshotsToJSON(yyjson_mut_doc *doc) const;
+	yyjson_mut_val *SnapshotLogToJSON(yyjson_mut_doc *doc) const;
+	yyjson_mut_val *SortOrdersToJSON(yyjson_mut_doc *doc) const;
 
 public:
 	string table_uuid;
@@ -90,7 +101,7 @@ public:
 	bool has_current_snapshot = false;
 	int64_t current_snapshot_id;
 	int64_t last_sequence_number;
-	idx_t last_updated_ms;
+	timestamp_t last_updated_ms;
 
 	optional_idx last_column_id;
 	optional_idx last_partition_field_id;
