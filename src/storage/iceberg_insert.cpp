@@ -647,10 +647,7 @@ static const idx_t ICEBERG_TABLE_PROPERTY_MAPPING_SIZE =
 PhysicalOperator &IcebergInsert::PlanCopyForInsert(ClientContext &context, PhysicalPlanGenerator &planner,
                                                    IcebergCopyInput &copy_input, optional_ptr<PhysicalOperator> plan) {
 	// Get Parquet Copy function
-	auto copy_fun = IcebergUtils::TryGetCopyFunction(*context.db, "parquet");
-	if (!copy_fun) {
-		throw MissingExtensionException("Did not find parquet copy function required to write to iceberg table");
-	}
+	auto &copy_fun = IcebergUtils::GetCopyFunction(context, "parquet");
 
 	vector<string> names_to_write;
 	vector<LogicalType> types_to_write;
@@ -700,10 +697,10 @@ PhysicalOperator &IcebergInsert::PlanCopyForInsert(ClientContext &context, Physi
 		}
 	}
 	auto bind_input = CopyFunctionBindInput(*copy_info);
-	auto function_data = copy_fun->function.copy_to_bind(context, bind_input, names_to_write, types_to_write);
+	auto function_data = copy_fun.function.copy_to_bind(context, bind_input, names_to_write, types_to_write);
 
 	auto &physical_copy = planner.Make<PhysicalCopyToFile>(
-	    GetCopyFunctionReturnLogicalTypes(CopyFunctionReturnType::WRITTEN_FILE_STATISTICS), copy_fun->function,
+	    GetCopyFunctionReturnLogicalTypes(CopyFunctionReturnType::WRITTEN_FILE_STATISTICS), copy_fun.function,
 	    std::move(function_data), 1);
 	auto &physical_copy_ref = physical_copy.Cast<PhysicalCopyToFile>();
 

@@ -68,10 +68,7 @@ static void WriteIcebergMetadata(ClientContext &context, CopyIcebergBindData &bi
 
 	// Get the avro copy function for writing manifest files
 	auto &db = DatabaseInstance::GetDatabase(context);
-	auto copy_fun = IcebergUtils::TryGetCopyFunction(db, "avro");
-	if (!copy_fun) {
-		throw MissingExtensionException("Did not find avro copy function required to write iceberg metadata");
-	}
+	auto &copy_fun = IcebergUtils::GetCopyFunction(context, "avro");
 
 	int64_t next_row_id = 0;
 	auto snapshot_id = IcebergSnapshot::NewSnapshotId();
@@ -124,11 +121,11 @@ static void WriteIcebergMetadata(ClientContext &context, CopyIcebergBindData &bi
 	// Write manifest file(s)
 	manifest_file.file.manifest_length =
 	    manifest_file::WriteToFile(table_metadata, manifest_file.file.manifest_path, manifest_file.manifest_entries,
-	                               copy_fun->function, db, context);
+	                               copy_fun.function, db, context);
 
 	IcebergManifestList manifest_list(manifest_list_path);
 	manifest_list.AddManifestFile(std::move(manifest_file));
-	manifest_list::WriteToFile(table_metadata, manifest_list, copy_fun->function, db, context);
+	manifest_list::WriteToFile(table_metadata, manifest_list, copy_fun.function, db, context);
 
 	// Update table metadata with snapshot
 	table_metadata.current_snapshot_id = snapshot.snapshot_id;

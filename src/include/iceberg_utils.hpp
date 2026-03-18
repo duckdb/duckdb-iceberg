@@ -30,7 +30,7 @@ public:
 	static string GetStorageLocation(ClientContext &context, const string &input);
 	static optional_ptr<CatalogEntry> GetTableEntry(ClientContext &context, string &input_string);
 	static idx_t CountOccurrences(const string &input, const string &to_find);
-	static optional_ptr<CopyFunctionCatalogEntry> TryGetCopyFunction(DatabaseInstance &db, const string &name);
+	static CopyFunctionCatalogEntry &GetCopyFunction(ClientContext &context, const string &name);
 };
 
 } // namespace duckdb

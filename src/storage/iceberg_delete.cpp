@@ -150,11 +150,11 @@ void IcebergDelete::WritePositionalDeleteFile(ClientContext &context, IcebergDel
 	vector<string> names_to_write {"file_path", "pos"};
 	vector<LogicalType> types_to_write {LogicalType::VARCHAR, LogicalType::BIGINT};
 
-	auto copy_fun = IcebergUtils::TryGetCopyFunction(*context.db, "parquet");
+	auto &copy_fun = IcebergUtils::GetCopyFunction(context, "parquet");
 	CopyFunctionBindInput bind_input(*info);
 
-	auto function_data = copy_fun->function.copy_to_bind(context, bind_input, names_to_write, types_to_write);
-	auto copy_global_state = copy_fun->function.copy_to_initialize_global(context, *function_data, delete_file_path);
+	auto function_data = copy_fun.function.copy_to_bind(context, bind_input, names_to_write, types_to_write);
+	auto copy_global_state = copy_fun.function.copy_to_initialize_global(context, *function_data, delete_file_path);
 
 	// generate the physical copy to file
 	auto copy_return_types = GetCopyFunctionReturnLogicalTypes(CopyFunctionReturnType::WRITTEN_FILE_STATISTICS);
@@ -162,10 +162,10 @@ void IcebergDelete::WritePositionalDeleteFile(ClientContext &context, IcebergDel
 
 	ThreadContext thread_context(context);
 	ExecutionContext execution_context(context, thread_context, nullptr);
-	auto copy_local_state = copy_fun->function.copy_to_initialize_local(execution_context, *function_data);
+	auto copy_local_state = copy_fun.function.copy_to_initialize_local(execution_context, *function_data);
 
 	CopyFunctionFileStatistics stats;
-	copy_fun->function.copy_to_get_written_statistics(context, *function_data, *copy_global_state, stats);
+	copy_fun.function.copy_to_get_written_statistics(context, *function_data, *copy_global_state, stats);
 
 	// run the copy to file
 	vector<LogicalType> write_types;
@@ -184,19 +184,19 @@ void IcebergDelete::WritePositionalDeleteFile(ClientContext &context, IcebergDel
 		row_data[row_count++] = NumericCast<int64_t>(row_idx);
 		if (row_count >= STANDARD_VECTOR_SIZE) {
 			write_chunk.SetCardinality(row_count);
-			copy_fun->function.copy_to_sink(execution_context, *function_data, *copy_global_state, *copy_local_state,
-			                                write_chunk);
+			copy_fun.function.copy_to_sink(execution_context, *function_data, *copy_global_state, *copy_local_state,
+			                               write_chunk);
 			row_count = 0;
 		}
 	}
 	if (row_count > 0) {
 		write_chunk.SetCardinality(row_count);
-		copy_fun->function.copy_to_sink(execution_context, *function_data, *copy_global_state, *copy_local_state,
-		                                write_chunk);
+		copy_fun.function.copy_to_sink(execution_context, *function_data, *copy_global_state, *copy_local_state,
+		                               write_chunk);
 	}
 
-	copy_fun->function.copy_to_combine(execution_context, *function_data, *copy_global_state, *copy_local_state);
-	copy_fun->function.copy_to_finalize(context, *function_data, *copy_global_state);
+	copy_fun.function.copy_to_combine(execution_context, *function_data, *copy_global_state, *copy_local_state);
+	copy_fun.function.copy_to_finalize(context, *function_data, *copy_global_state);
 
 	delete_file.file_name = delete_file_path;
 	delete_file.file_format = "parquet";
