@@ -1,0 +1,11 @@
+require iceberg;
+
+require-env DUCKDB_ICEBERG_HAVE_GENERATED_DATA
+
+statement ok
+SET unsafe_enable_version_guessing = true;
+
+query I
+SELECT item_id, length(item_id) AS len FROM iceberg_scan('{iceberg_table.location()}') WHERE length(item_id) = 36;
+----
+???
