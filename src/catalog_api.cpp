@@ -1,4 +1,5 @@
 #include "catalog_api.hpp"
+#include "duckdb/common/exception.hpp"
 #include "include/catalog_api.hpp"
 
 #include "catalog_utils.hpp"
@@ -83,6 +84,7 @@ static IRCEntryLookupStatus CheckVerificationResponse(ClientContext &context, HT
 	case HTTPStatusCode::NoContent_204:
 		return IRCEntryLookupStatus::EXISTS;
 	case HTTPStatusCode::Forbidden_403:
+		return IRCEntryLookupStatus::FORBIDDEN;
 	case HTTPStatusCode::NotFound_404:
 		return IRCEntryLookupStatus::NOT_FOUND;
 		break;
@@ -118,6 +120,9 @@ bool IRCAPI::VerifyResponse(ClientContext &context, IcebergCatalog &catalog, IRC
 			return true;
 		case IRCEntryLookupStatus::NOT_FOUND:
 			return false;
+		case IRCEntryLookupStatus::FORBIDDEN:
+			throw PermissionException("Forbidden_403 returned by catalog when requesting %s",
+			                          url_builder.GetURLEncoded());
 		default:
 			break;
 		}
@@ -132,6 +137,8 @@ bool IRCAPI::VerifyResponse(ClientContext &context, IcebergCatalog &catalog, IRC
 		return true;
 	case IRCEntryLookupStatus::NOT_FOUND:
 		return false;
+	case IRCEntryLookupStatus::FORBIDDEN:
+		throw PermissionException("Forbidden_403 returned by catalog when requesting %s", url_builder.GetURLEncoded());
 	default:
 		// both head and get responses have returned a status that is an
 		// error status
@@ -234,6 +241,8 @@ vector<rest_api_objects::TableIdentifier> IRCAPI::GetTables(ClientContext &conte
 			if (response->status == HTTPStatusCode::Forbidden_403 ||
 			    response->status == HTTPStatusCode::Unauthorized_401 ||
 			    response->status == HTTPStatusCode::NotFound_404) {
+				DUCKDB_LOG_WARNING(context, "GET %s returned status code %s", url_builder.GetURLEncoded(),
+				                   EnumUtil::ToString(response->status));
 				// return empty result if user cannot list tables for a schema.
 				vector<rest_api_objects::TableIdentifier> ret;
 				return ret;
@@ -282,6 +291,8 @@ vector<IRCAPISchema> IRCAPI::GetSchemas(ClientContext &context, IcebergCatalog &
 		if (!response->Success()) {
 			if (response->status == HTTPStatusCode::Forbidden_403 ||
 			    response->status == HTTPStatusCode::Unauthorized_401) {
+				DUCKDB_LOG_WARNING(context, "GET %s returned %s", endpoint_builder.GetURLEncoded(),
+				                   EnumUtil::ToString(response->status));
 				// return empty result if user cannot list schemas.
 				return result;
 			}
