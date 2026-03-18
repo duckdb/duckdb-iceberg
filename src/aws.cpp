@@ -50,7 +50,7 @@ static void InitAWSAPI() {
 static void LogAWSHTTPRequest(ClientContext &context, std::shared_ptr<Aws::Http::HttpRequest> &req,
                               HTTPResponse &response, Aws::Http::HttpMethod &method) {
 	D_ASSERT(context.db);
-	auto http_util = HTTPUtil::Get(*context.db);
+	auto &http_util = HTTPUtil::Get(*context.db);
 	auto aws_headers = req->GetHeaders();
 	auto http_headers = HTTPHeaders();
 	for (auto &header : aws_headers) {
