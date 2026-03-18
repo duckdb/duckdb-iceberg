@@ -31,6 +31,11 @@ static bool WriteRowId(IcebergInsertVirtualColumns virtual_columns) {
 	       virtual_columns == IcebergInsertVirtualColumns::WRITE_ROW_ID_AND_SEQUENCE_NUMBER;
 }
 
+static bool WriteSequenceNumber(IcebergInsertVirtualColumns virtual_columns) {
+	return virtual_columns == IcebergInsertVirtualColumns::WRITE_SEQUENCE_NUMBER ||
+	       virtual_columns == IcebergInsertVirtualColumns::WRITE_ROW_ID_AND_SEQUENCE_NUMBER;
+}
+
 IcebergInsert::IcebergInsert(PhysicalPlan &physical_plan, LogicalOperator &op, TableCatalogEntry &table,
                              physical_index_vector_t<idx_t> column_index_map_p)
     : PhysicalOperator(physical_plan, PhysicalOperatorType::EXTENSION, op.types, 1), table(&table), schema(nullptr),
@@ -47,6 +52,10 @@ IcebergInsert::IcebergInsert(PhysicalPlan &physical_plan, const vector<LogicalTy
     : PhysicalOperator(physical_plan, PhysicalOperatorType::EXTENSION, types, 1), table(&table), schema(nullptr) {
 }
 
+IcebergCopyOptions::IcebergCopyOptions(unique_ptr<CopyInfo> info_p, CopyFunction copy_function_p)
+    : info(std::move(info_p)), copy_function(std::move(copy_function_p)) {
+}
+
 IcebergCopyInput::IcebergCopyInput(ClientContext &context, const IcebergTableMetadata &table_metadata,
                                    const IcebergTableSchema &schema)
     : table_metadata(table_metadata), schema(schema) {
@@ -59,6 +68,14 @@ IcebergCopyInput::IcebergCopyInput(ClientContext &context, const IcebergTableMet
 	if (metadata.GetLatestPartitionSpec().IsPartitioned()) {
 		partition_spec = table_metadata.FindPartitionSpecById(table_metadata.default_spec_id);
 	}
+}
+
+static void StripTrailingSeparator(FileSystem &fs, string &path) {
+	auto sep = fs.PathSeparator(path);
+	if (!StringUtil::EndsWith(path, sep)) {
+		return;
+	}
+	path = path.substr(0, path.size() - sep.size());
 }
 
 IcebergInsertGlobalState::IcebergInsertGlobalState(ClientContext &context)
@@ -443,23 +460,6 @@ static Value WrittenFieldIds(const IcebergCopyInput &copy_input) {
 	return Value::STRUCT(std::move(values));
 }
 
-unique_ptr<CopyInfo> GetBindInput(IcebergCopyInput &input) {
-	// Create Copy Info
-	auto info = make_uniq<CopyInfo>();
-	info->file_path = input.data_path;
-	info->format = "parquet";
-	info->is_from = false;
-
-	vector<Value> field_input;
-	field_input.push_back(WrittenFieldIds(input));
-	info->options["field_ids"] = std::move(field_input);
-
-	for (auto &option : input.options) {
-		info->options[option.first] = option.second;
-	}
-	return info;
-}
-
 //===--------------------------------------------------------------------===//
 // Partition Expression Generation
 //===--------------------------------------------------------------------===//
@@ -552,12 +552,15 @@ static unique_ptr<Expression> GetPartitionExpression(ClientContext &context, Ice
 
 //! Generate partition expressions and configure copy options for partitioned writes
 static void GeneratePartitionExpressions(ClientContext &context, IcebergCopyInput &copy_input,
-                                         vector<idx_t> &partition_columns,
-                                         vector<unique_ptr<Expression>> &projection_expressions,
-                                         vector<string> &projection_names, vector<LogicalType> &projection_types,
-                                         bool &write_partition_columns) {
+                                         IcebergCopyOptions &result) {
 	D_ASSERT(copy_input.partition_spec);
 	auto &spec = *copy_input.partition_spec;
+
+	auto &partition_columns = result.partition_columns;
+	auto &projection_expressions = result.projection_list;
+	auto &projection_names = result.names;
+	auto &projection_types = result.expected_types;
+	auto &write_partition_columns = result.write_partition_columns;
 
 	// Check for unsupported transforms early
 	for (auto &field : spec.fields) {
@@ -611,7 +614,6 @@ static void GeneratePartitionExpressions(ClientContext &context, IcebergCopyInpu
 	}
 
 	D_ASSERT(projection_names.size() == projection_types.size());
-
 	write_partition_columns = false;
 }
 
@@ -645,47 +647,22 @@ static const idx_t ICEBERG_TABLE_PROPERTY_MAPPING_SIZE =
 
 } // namespace
 
-PhysicalOperator &IcebergInsert::PlanCopyForInsert(ClientContext &context, PhysicalPlanGenerator &planner,
-                                                   IcebergCopyInput &copy_input, optional_ptr<PhysicalOperator> plan) {
-	// Get Parquet Copy function
-	auto &copy_fun = IcebergUtils::GetCopyFunction(context, "parquet");
+IcebergCopyOptions IcebergInsert::GetCopyOptions(ClientContext &context, IcebergCopyInput &copy_input) {
+	auto info = make_uniq<CopyInfo>();
+	info->file_path = copy_input.data_path;
 
-	vector<string> names_to_write;
-	vector<LogicalType> types_to_write;
-	copy_input.schema.GetColumnNamesAndTypes(names_to_write, types_to_write);
-	if (WriteRowId(copy_input.virtual_columns)) {
-		names_to_write.push_back("_row_id");
-		types_to_write.push_back(LogicalType::BIGINT);
+	auto file_format = "parquet";
+	info->format = file_format;
+	info->is_from = false;
+
+	vector<Value> field_input;
+	field_input.push_back(WrittenFieldIds(copy_input));
+	info->options["field_ids"] = std::move(field_input);
+	for (auto &option : copy_input.options) {
+		info->options[option.first] = option.second;
 	}
 
-	// Generate partition expressions if the table is partitioned
-	vector<idx_t> partition_columns;
-	vector<unique_ptr<Expression>> projection_expressions;
-	vector<string> projection_names;
-	vector<LogicalType> projection_types;
-	bool write_partition_columns = true;
-
-	if (copy_input.partition_spec) {
-		GeneratePartitionExpressions(context, copy_input, partition_columns, projection_expressions, projection_names,
-		                             projection_types, write_partition_columns);
-
-		// If we have projection expressions, we need to add a projection operator
-		if (!projection_expressions.empty() && plan) {
-			// Build the projection types from the expressions
-			vector<LogicalType> proj_types;
-			for (auto &expr : projection_expressions) {
-				proj_types.push_back(expr->return_type);
-			}
-			auto &proj = planner.Make<PhysicalProjection>(std::move(proj_types), std::move(projection_expressions),
-			                                              plan->estimated_cardinality);
-			proj.children.push_back(*plan);
-			plan = proj;
-		}
-	}
-
-	auto copy_info = GetBindInput(copy_input);
-	const auto table_properties = copy_input.table_metadata.GetTableProperties();
-
+	const auto &table_properties = copy_input.table_metadata.GetTableProperties();
 	// Map Iceberg write properties to DuckDB parquet copy options
 	// TODO: Iceberg properties for bloom filter are per column, duckdb's seems to be per table.
 	// write.parquet.bloom-filter-fpp.column.<col> -> bloom_filter_false_positive_ratio
@@ -694,54 +671,126 @@ PhysicalOperator &IcebergInsert::PlanCopyForInsert(ClientContext &context, Physi
 		auto &mapping = ICEBERG_TABLE_PROPERTY_MAPPING[i];
 		auto it = table_properties.find(mapping.iceberg_option);
 		if (it != table_properties.end()) {
-			copy_info->options[mapping.parquet_option].emplace_back(it->second);
+			info->options[mapping.parquet_option].emplace_back(it->second);
 		}
 	}
-	auto bind_input = CopyFunctionBindInput(*copy_info);
+
+	// Always use native parquet geometry for writing
+	info->options["geoparquet_version"].emplace_back("NONE");
+
+	auto &fs = FileSystem::GetFileSystem(context);
+	if (!fs.IsRemoteFile(copy_input.data_path)) {
+		// create data path if it does not yet exist
+		try {
+			fs.CreateDirectoriesRecursive(copy_input.data_path);
+		} catch (...) {
+		}
+	}
+
+	// Bind Copy Function
+	CopyFunctionBindInput bind_input(*info);
+
+	vector<string> names_to_write;
+	vector<LogicalType> types_to_write;
+	copy_input.schema.GetColumnNamesAndTypes(names_to_write, types_to_write);
+	if (WriteRowId(copy_input.virtual_columns)) {
+		names_to_write.push_back("_row_id");
+		types_to_write.push_back(LogicalType::BIGINT);
+	}
+	if (WriteSequenceNumber(copy_input.virtual_columns)) {
+		names_to_write.push_back("_last_updated_sequence_number");
+		types_to_write.push_back(LogicalType::BIGINT);
+	}
+
+	// Get Parquet Copy function
+	auto &copy_fun = IcebergUtils::GetCopyFunction(context, file_format);
+	IcebergCopyOptions result(std::move(info), copy_fun.function);
 	auto function_data = copy_fun.function.copy_to_bind(context, bind_input, names_to_write, types_to_write);
+	result.bind_data = std::move(function_data);
 
-	auto &physical_copy = planner.Make<PhysicalCopyToFile>(
-	    GetCopyFunctionReturnLogicalTypes(CopyFunctionReturnType::WRITTEN_FILE_STATISTICS), copy_fun.function,
-	    std::move(function_data), 1);
-	auto &physical_copy_ref = physical_copy.Cast<PhysicalCopyToFile>();
-
-	// Update names and types to include partition columns (for PhysicalCopyToFile)
-	for (idx_t i = 0; i < projection_names.size(); i++) {
-		names_to_write.push_back(projection_names[i]);
-		types_to_write.push_back(projection_types[i]);
-	}
-
-	// write_partition_columns controls whether partition columns are written
-	physical_copy_ref.use_tmp_file = false;
-	if (!partition_columns.empty()) {
-		physical_copy_ref.filename_pattern.SetFilenamePattern("{uuidv7}");
-		physical_copy_ref.file_path = copy_input.data_path;
-		physical_copy_ref.partition_output = true;
-		physical_copy_ref.partition_columns = partition_columns;
-		physical_copy_ref.write_partition_columns = write_partition_columns;
-		physical_copy_ref.write_empty_file = true;
-		physical_copy_ref.rotate = false;
+	result.use_tmp_file = false;
+	if (copy_input.partition_spec) {
+		result.filename_pattern.SetFilenamePattern("{uuidv7}");
+		result.partition_output = true;
+		result.write_empty_file = true;
+		result.rotate = false;
 	} else {
-		physical_copy_ref.filename_pattern.SetFilenamePattern("{uuidv7}");
-		physical_copy_ref.file_path = copy_input.data_path;
-		physical_copy_ref.partition_output = false;
-		physical_copy_ref.write_partition_columns = false;
-		physical_copy_ref.write_empty_file = false;
-		physical_copy_ref.file_size_bytes = IcebergCatalog::DEFAULT_TARGET_FILE_SIZE;
-		physical_copy_ref.rotate = true;
+		result.filename_pattern.SetFilenamePattern("{uuidv7}");
+		result.partition_output = false;
+		result.write_empty_file = false;
+		// file_size_bytes is currently only supported for unpartitioned writes
+		//! FIXME: should use 'write.target-file-size-bytes' instead
+		result.file_size_bytes = IcebergCatalog::DEFAULT_TARGET_FILE_SIZE;
+		result.rotate = true;
 	}
 
-	physical_copy_ref.file_extension = "parquet";
-	physical_copy_ref.overwrite_mode = CopyOverwriteMode::COPY_OVERWRITE_OR_IGNORE;
-	physical_copy_ref.per_thread_output = false;
-	physical_copy_ref.return_type = CopyFunctionReturnType::WRITTEN_FILE_STATISTICS;
-	physical_copy_ref.names = names_to_write;
-	physical_copy_ref.expected_types = types_to_write;
-	physical_copy_ref.parallel = true;
-	physical_copy_ref.hive_file_pattern = true;
+	result.file_path = copy_input.data_path;
+	StripTrailingSeparator(fs, result.file_path);
+	result.file_extension = file_format;
+	result.overwrite_mode = CopyOverwriteMode::COPY_OVERWRITE_OR_IGNORE;
+	result.per_thread_output = false;
+	result.write_partition_columns = true;
+	result.return_type = CopyFunctionReturnType::WRITTEN_FILE_STATISTICS;
+	result.names = names_to_write;
+	result.expected_types = types_to_write;
+
+	if (copy_input.partition_spec) {
+		// we are partitioning - generate partition expressions (if any)
+		GeneratePartitionExpressions(context, copy_input, result);
+	}
+	return result;
+}
+
+static void GenerateProjection(ClientContext &context, PhysicalPlanGenerator &planner,
+                               vector<unique_ptr<Expression>> &expressions, optional_ptr<PhysicalOperator> &plan) {
+	// push the projection
+	vector<LogicalType> types;
+	for (auto &expr : expressions) {
+		types.push_back(expr->return_type);
+	}
+	auto &proj =
+	    planner.Make<PhysicalProjection>(std::move(types), std::move(expressions), plan->estimated_cardinality);
+	proj.children.push_back(*plan);
+	plan = proj;
+}
+
+PhysicalOperator &IcebergInsert::PlanCopyForInsert(ClientContext &context, PhysicalPlanGenerator &planner,
+                                                   IcebergCopyInput &copy_input, optional_ptr<PhysicalOperator> plan) {
+	auto copy_options = GetCopyOptions(context, copy_input);
+
+	// If we have projection expressions, we need to add a projection operator
+	if (!copy_options.projection_list.empty() && plan) {
+		GenerateProjection(context, planner, copy_options.projection_list, plan);
+	}
+
+	auto copy_return_types = GetCopyFunctionReturnLogicalTypes(CopyFunctionReturnType::WRITTEN_FILE_STATISTICS);
+	auto &physical_copy = planner
+	                          .Make<PhysicalCopyToFile>(copy_return_types, std::move(copy_options.copy_function),
+	                                                    std::move(copy_options.bind_data), 1)
+	                          .Cast<PhysicalCopyToFile>();
+
+	physical_copy.file_path = std::move(copy_options.file_path);
+	physical_copy.use_tmp_file = copy_options.use_tmp_file;
+	physical_copy.filename_pattern = std::move(copy_options.filename_pattern);
+	physical_copy.file_extension = std::move(copy_options.file_extension);
+	physical_copy.overwrite_mode = copy_options.overwrite_mode;
+	physical_copy.per_thread_output = copy_options.per_thread_output;
+	physical_copy.file_size_bytes = copy_options.file_size_bytes;
+	physical_copy.rotate = copy_options.rotate;
+	physical_copy.return_type = copy_options.return_type;
+
+	physical_copy.partition_output = copy_options.partition_output;
+	physical_copy.write_partition_columns = copy_options.write_partition_columns;
+	physical_copy.write_empty_file = copy_options.write_empty_file;
+	physical_copy.partition_columns = std::move(copy_options.partition_columns);
+	physical_copy.names = std::move(copy_options.names);
+	physical_copy.expected_types = std::move(copy_options.expected_types);
+	physical_copy.parallel = true;
+	physical_copy.hive_file_pattern = true;
 	if (plan) {
 		physical_copy.children.push_back(*plan);
 	}
+
 	return physical_copy;
 }
 

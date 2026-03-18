@@ -40,6 +40,38 @@ public:
 	IcebergInsertVirtualColumns virtual_columns = IcebergInsertVirtualColumns::NONE;
 };
 
+struct IcebergCopyOptions {
+public:
+	IcebergCopyOptions(unique_ptr<CopyInfo> info, CopyFunction copy_function);
+
+public:
+	unique_ptr<CopyInfo> info;
+	CopyFunction copy_function;
+	unique_ptr<FunctionData> bind_data;
+
+	string file_path;
+	bool use_tmp_file;
+	FilenamePattern filename_pattern;
+	string file_extension;
+	CopyOverwriteMode overwrite_mode;
+	bool per_thread_output;
+	optional_idx file_size_bytes;
+	bool rotate;
+	CopyFunctionReturnType return_type;
+	bool hive_file_pattern;
+
+	//! Partitioning
+	bool partition_output;
+	bool write_partition_columns;
+	bool write_empty_file = true;
+	vector<idx_t> partition_columns;
+	vector<string> names;
+	vector<LogicalType> expected_types;
+
+	//! Set of projection columns to execute prior to inserting (if any)
+	vector<unique_ptr<Expression>> projection_list;
+};
+
 class IcebergInsertGlobalState : public GlobalSinkState {
 public:
 	explicit IcebergInsertGlobalState(ClientContext &context);
@@ -128,6 +160,7 @@ public:
 	unique_ptr<GlobalSinkState> GetGlobalSinkState(ClientContext &context) const override;
 	static PhysicalOperator &PlanCopyForInsert(ClientContext &context, PhysicalPlanGenerator &planner,
 	                                           IcebergCopyInput &copy_input, optional_ptr<PhysicalOperator> plan);
+	static IcebergCopyOptions GetCopyOptions(ClientContext &context, IcebergCopyInput &copy_input);
 
 	static PhysicalOperator &PlanInsert(ClientContext &context, PhysicalPlanGenerator &planner,
 	                                    IcebergTableEntry &table);
