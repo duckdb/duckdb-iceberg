@@ -2,9 +2,6 @@
 # description: Test merge into with partitions
 # group: [merge]
 
-# Re-enable when partitioned inserts are supported
-mode skip
-
 require-env ICEBERG_SERVER_AVAILABLE
 
 require-env SECRETS_CREATED_AND_CATALOG_ATTACHED
