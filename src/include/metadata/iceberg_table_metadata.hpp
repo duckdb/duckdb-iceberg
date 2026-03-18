@@ -61,8 +61,8 @@ public:
 	//! Get the data and metadata paths, falling back to default if not set
 	const string &GetLatestMetadataJson() const;
 	const string &GetLocation() const;
-	const string GetDataPath() const;
-	const string GetMetadataPath() const;
+	const string GetDataPath(FileSystem &fs) const;
+	const string GetMetadataPath(FileSystem &fs) const;
 
 	bool HasLastAssignedColumnFieldId() const;
 	idx_t GetLastAssignedColumnFieldId() const;

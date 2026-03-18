@@ -47,7 +47,7 @@ IcebergManifestListEntry IcebergAddSnapshot::ConstructManifest(CopyFunction &avr
 	auto manifest_file_reader = make_uniq<manifest_file::ManifestReader>(*manifest_scan, true);
 
 	auto manifest_file_uuid = UUID::ToString(UUID::GenerateRandomUUID());
-	auto manifest_file_path = table_metadata.GetMetadataPath() + "/" + manifest_file_uuid + "-m0.avro";
+	auto manifest_file_path = fs.JoinPath(table_metadata.GetMetadataPath(fs), manifest_file_uuid + "-m0.avro");
 
 	auto &rewritten_list_entry = manifest_files[0];
 	auto &manifest_entries = rewritten_list_entry.manifest_entries;

@@ -50,7 +50,8 @@ IcebergInsert::IcebergInsert(PhysicalPlan &physical_plan, const vector<LogicalTy
 IcebergCopyInput::IcebergCopyInput(ClientContext &context, const IcebergTableMetadata &table_metadata,
                                    const IcebergTableSchema &schema)
     : table_metadata(table_metadata), schema(schema) {
-	data_path = table_metadata.GetDataPath();
+	auto &fs = FileSystem::GetFileSystem(context);
+	data_path = table_metadata.GetDataPath(fs);
 
 	// Get partition spec if the table is partitioned
 	auto &metadata = table_metadata;

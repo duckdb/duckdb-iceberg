@@ -87,8 +87,10 @@ void IcebergTransactionData::AddSnapshot(IcebergSnapshotOperationType operation,
 
 	//! Construct the manifest list
 	auto manifest_list_uuid = UUID::ToString(UUID::GenerateRandomUUID());
-	auto manifest_list_path =
-	    table_metadata.GetMetadataPath() + "/snap-" + std::to_string(snapshot_id) + "-" + manifest_list_uuid + ".avro";
+
+	auto &fs = FileSystem::GetFileSystem(context);
+	auto manifest_list_path = fs.JoinPath(table_metadata.GetMetadataPath(fs),
+	                                      "snap-" + std::to_string(snapshot_id) + "-" + manifest_list_uuid + ".avro");
 
 	IcebergManifestContentType manifest_content_type;
 	switch (operation) {
@@ -102,7 +104,7 @@ void IcebergTransactionData::AddSnapshot(IcebergSnapshotOperationType operation,
 		throw NotImplementedException("Cannot have use snapshot operation type REPLACE or OVERWRITE here");
 	};
 	auto manifest_file = IcebergManifestListEntry::CreateFromEntries(
-	    snapshot_id, sequence_number, table_metadata, manifest_content_type, std::move(data_files), next_row_id);
+	    fs, snapshot_id, sequence_number, table_metadata, manifest_content_type, std::move(data_files), next_row_id);
 
 	//! Construct the snapshot
 	IcebergSnapshot new_snapshot;
@@ -175,18 +177,19 @@ void IcebergTransactionData::AddUpdateSnapshot(vector<IcebergManifestEntry> &&de
 	const auto sequence_number = last_sequence_number + 1;
 	const auto first_row_id = next_row_id;
 
+	auto &fs = FileSystem::GetFileSystem(context);
 	//! Construct the manifest list
 	auto manifest_list_uuid = UUID::ToString(UUID::GenerateRandomUUID());
-	auto manifest_list_path =
-	    table_metadata.GetMetadataPath() + "/snap-" + std::to_string(snapshot_id) + "-" + manifest_list_uuid + ".avro";
+	auto manifest_list_path = fs.JoinPath(table_metadata.GetMetadataPath(fs),
+	                                      "snap-" + std::to_string(snapshot_id) + "-" + manifest_list_uuid + ".avro");
 
 	auto delete_manifest_file = IcebergManifestListEntry::CreateFromEntries(
-	    snapshot_id, sequence_number, table_metadata, IcebergManifestContentType::DELETE, std::move(delete_files),
+	    fs, snapshot_id, sequence_number, table_metadata, IcebergManifestContentType::DELETE, std::move(delete_files),
 	    next_row_id);
 	// Add a manifest_file for the new insert data
-	auto data_manifest_file = IcebergManifestListEntry::CreateFromEntries(snapshot_id, sequence_number, table_metadata,
-	                                                                      IcebergManifestContentType::DATA,
-	                                                                      std::move(data_files), next_row_id);
+	auto data_manifest_file = IcebergManifestListEntry::CreateFromEntries(
+	    fs, snapshot_id, sequence_number, table_metadata, IcebergManifestContentType::DATA, std::move(data_files),
+	    next_row_id);
 
 	//! Construct the snapshot
 	IcebergSnapshot new_snapshot;

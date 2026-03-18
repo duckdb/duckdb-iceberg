@@ -54,8 +54,9 @@ void IcebergTableEntry::PrepareIcebergScanFromEntry(ClientContext &context) cons
 		return;
 	}
 	// Get Credentials from IRC API
+	auto &fs = FileSystem::GetFileSystem(context);
 	auto table_credentials = table_info.GetVendedCredentials(context);
-	auto metadata_path = table_info.table_metadata.GetMetadataPath();
+	auto metadata_path = table_info.table_metadata.GetMetadataPath(fs);
 
 	unique_ptr<SecretEntry> http_secret_entry;
 	unique_ptr<SIGV4Authorization> sigv4_auth;
@@ -213,8 +214,10 @@ TableFunction IcebergTableEntry::GetScanFunction(ClientContext &context, unique_
 		schema_id = snapshot->schema_id;
 	}
 
+	auto &fs = FileSystem::GetFileSystem(context);
 	auto iceberg_schema = metadata.GetSchemaFromId(schema_id);
-	auto scan_info = make_shared_ptr<IcebergScanInfo>(metadata.GetMetadataPath(), metadata, snapshot, *iceberg_schema);
+	auto scan_info =
+	    make_shared_ptr<IcebergScanInfo>(metadata.GetMetadataPath(fs), metadata, snapshot, *iceberg_schema);
 	if (table_info.transaction_data && snapshot_lookup.IsLatest()) {
 		scan_info->transaction_data = table_info.transaction_data.get();
 	}

@@ -75,8 +75,8 @@ static void WriteIcebergMetadata(ClientContext &context, CopyIcebergBindData &bi
 	const auto sequence_number = 0;
 	const auto first_row_id = next_row_id;
 
-	auto metadata_path = table_metadata.GetMetadataPath();
 	auto &fs = FileSystem::GetFileSystem(context);
+	auto metadata_path = table_metadata.GetMetadataPath(fs);
 	if (!fs.IsRemoteFile(metadata_path)) {
 		// create data path if it does not yet exist
 		try {
@@ -88,9 +88,9 @@ static void WriteIcebergMetadata(ClientContext &context, CopyIcebergBindData &bi
 	//! Construct the manifest list
 	auto manifest_list_uuid = UUID::ToString(UUID::GenerateRandomUUID());
 	auto manifest_list_path =
-	    metadata_path + "/snap-" + std::to_string(snapshot_id) + "-" + manifest_list_uuid + ".avro";
+	    fs.JoinPath(metadata_path, "snap-" + std::to_string(snapshot_id) + "-" + manifest_list_uuid + ".avro");
 
-	auto manifest_file = IcebergManifestListEntry::CreateFromEntries(snapshot_id, sequence_number, table_metadata,
+	auto manifest_file = IcebergManifestListEntry::CreateFromEntries(fs, snapshot_id, sequence_number, table_metadata,
 	                                                                 IcebergManifestContentType::DATA,
 	                                                                 std::move(written_files), next_row_id);
 
@@ -136,11 +136,11 @@ static void WriteIcebergMetadata(ClientContext &context, CopyIcebergBindData &bi
 	auto version_hint = UUID::ToString(UUID::GenerateRandomUUID());
 
 	// Write metadata.json
-	auto metadata_file_path = metadata_path + "/" + version_hint + ".metadata.json";
+	auto metadata_file_path = fs.JoinPath(metadata_path, version_hint + ".metadata.json");
 	table_metadata.WriteMetadata(context, metadata_file_path);
 
 	// Write version-hint.text pointing to the latest metadata
-	auto version_hint_path = metadata_path + "/version-hint.text";
+	auto version_hint_path = fs.JoinPath(metadata_path, "version-hint.text");
 	table_metadata.WriteVersionHint(context, version_hint_path, version_hint);
 }
 

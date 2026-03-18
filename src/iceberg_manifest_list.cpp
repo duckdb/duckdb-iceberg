@@ -11,7 +11,7 @@
 
 namespace duckdb {
 
-IcebergManifestListEntry IcebergManifestListEntry::CreateFromEntries(int64_t snapshot_id,
+IcebergManifestListEntry IcebergManifestListEntry::CreateFromEntries(FileSystem &fs, int64_t snapshot_id,
                                                                      sequence_number_t sequence_number,
                                                                      const IcebergTableMetadata &table_metadata,
                                                                      IcebergManifestContentType manifest_content_type,
@@ -19,7 +19,7 @@ IcebergManifestListEntry IcebergManifestListEntry::CreateFromEntries(int64_t sna
                                                                      int64_t &next_row_id) {
 	//! create manifest file path
 	auto manifest_file_uuid = UUID::ToString(UUID::GenerateRandomUUID());
-	auto manifest_file_path = table_metadata.GetMetadataPath() + "/" + manifest_file_uuid + "-m0.avro";
+	auto manifest_file_path = fs.JoinPath(table_metadata.GetMetadataPath(fs), manifest_file_uuid + "-m0.avro");
 
 	// Add a manifest list entry for the delete files
 	IcebergManifestListEntry manifest_list_entry(manifest_file_path);

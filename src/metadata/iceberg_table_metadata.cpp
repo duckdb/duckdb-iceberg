@@ -396,23 +396,23 @@ const string &IcebergTableMetadata::GetLocation() const {
 	return location;
 }
 
-const string IcebergTableMetadata::GetDataPath() const {
+const string IcebergTableMetadata::GetDataPath(FileSystem &fs) const {
 	auto write_path = table_properties.find("write.data.path");
 	// If write.data.path property is set, use it; otherwise use default location + "/data"
 	if (write_path != table_properties.end()) {
 		return write_path->second;
 	}
-	return location + "/data";
+	return fs.JoinPath(location, "data");
 }
 
-const string IcebergTableMetadata::GetMetadataPath() const {
+const string IcebergTableMetadata::GetMetadataPath(FileSystem &fs) const {
 	// If write.metadata.path property is set, use it; otherwise use default location + "/metadata"
 	auto metadata_path = table_properties.find("write.metadata.path");
 	// If write.data.path property is set, use it; otherwise use default location + "/metadata"
 	if (metadata_path != table_properties.end()) {
 		return metadata_path->second;
 	}
-	return location + "/metadata";
+	return fs.JoinPath(location, "metadata");
 }
 
 string IcebergTableMetadata::GetTableProperty(string property_string) const {
