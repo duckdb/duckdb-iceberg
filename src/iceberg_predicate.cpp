@@ -209,6 +209,10 @@ bool MatchBoundsTemplated(ClientContext &context, const TableFilter &filter, con
 		case ExpressionType::COMPARE_LESSTHAN:
 		case ExpressionType::COMPARE_LESSTHANOREQUALTO:
 		case ExpressionType::COMPARE_EQUAL: {
+			// TableFilterType::EXPRESSION_FILTER on strings (e.g len(my_string_col)) do not maintain lexicographic ordering properties
+			if (stats.lower_bound.type() == LogicalType::VARCHAR) {
+				return true;
+			}
 			D_ASSERT(expr.GetExpressionClass() == ExpressionClass::BOUND_COMPARISON);
 			auto &compare_expr = expr.Cast<BoundComparisonExpression>();
 			if (transform.Type() == IcebergTransformType::IDENTITY) {

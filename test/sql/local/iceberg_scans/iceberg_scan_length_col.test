@@ -1,11 +1,37 @@
-require iceberg;
+# name: test/sql/local/iceberg_scans/iceberg_scan_length_col.test
+# group: [iceberg_scans]
+
+require avro
+
+require parquet
+
+require iceberg
 
 require-env DUCKDB_ICEBERG_HAVE_GENERATED_DATA
+
+statement ok
+attach ':memory:' as my_datalake;
+
+statement ok
+create schema my_datalake.default;
 
 statement ok
 SET unsafe_enable_version_guessing = true;
 
 query I
-SELECT item_id, length(item_id) AS len FROM iceberg_scan('{iceberg_table.location()}') WHERE length(item_id) = 36;
+SELECT item_id FROM ICEBERG_SCAN('__WORKING_DIRECTORY__/data/generated/iceberg/spark-local/default/issue_791') WHERE length(item_id) = 36;
 ----
-???
+10000000-0000-0000-0000-000000000001
+20000000-0000-0000-0000-000000000002
+
+query I
+SELECT item_id FROM ICEBERG_SCAN('__WORKING_DIRECTORY__/data/generated/iceberg/spark-local/default/issue_791') WHERE length(item_id) > 35 AND length(item_id) < 37;
+----
+10000000-0000-0000-0000-000000000001
+20000000-0000-0000-0000-000000000002
+
+query I
+SELECT item_id FROM ICEBERG_SCAN('__WORKING_DIRECTORY__/data/generated/iceberg/spark-local/default/issue_791') WHERE length(item_id) IN (36);
+----
+10000000-0000-0000-0000-000000000001
+20000000-0000-0000-0000-000000000002
