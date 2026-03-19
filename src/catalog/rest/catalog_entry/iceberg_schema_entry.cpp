@@ -220,6 +220,10 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 		updated_table.SetPartitionedBy(irc_transaction, partition_info.partition_keys, *new_schema);
 		return;
 	}
+	case AlterTableType::ADD_COLUMN: {
+		auto &partition_info = alter_table_info.Cast<AddColumnInfo>();
+
+	}
 	default: {
 		throw NotImplementedException("Alter table type not supported: %s",
 		                              EnumUtil::ToString(alter_table_info.alter_table_type));
