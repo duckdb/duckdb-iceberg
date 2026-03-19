@@ -22,7 +22,7 @@ struct IRCAPISchema {
 	string catalog_name;
 };
 
-enum class IRCEntryLookupStatus : uint8_t { EXISTS = 0, NOT_FOUND = 1, API_ERROR = 2, FORBIDDEN = 3 };
+enum class IRCEntryLookupStatus : uint8_t { EXISTS = 0, NOT_FOUND = 1, API_ERROR = 2 };
 
 // Some API responses have error messages that need to be checked before being raised
 // to the user, since sometimes is does not mean whole operation has failed.
