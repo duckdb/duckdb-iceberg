@@ -47,17 +47,10 @@ SELECT * FROM my_datalake.default.t ORDER BY id
 1	2025-01-15 00:00:00
 2	2025-03-20 00:00:00
 
-# FIXME: translate to iceberg
-
-## Year should only be 2025, not 0
-#query I
-#SELECT DISTINCT partition_value FROM meta.ducklake_file_partition_value WHERE partition_key_index = 0 ORDER BY 1
-#----
-#2025
-
-## Month should be 1 and 3, not 0
-#query I
-#SELECT DISTINCT partition_value FROM meta.ducklake_file_partition_value WHERE partition_key_index = 1 ORDER BY 1
-#----
-#1
-#3
+query III
+select partition_field_name, lower_bound, upper_bound from iceberg_partition_stats(my_datalake.default.t) order by all
+----
+ts_month	660	660
+ts_month	662	662
+ts_year	55	55
+ts_year	55	55
