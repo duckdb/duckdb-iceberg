@@ -54,6 +54,11 @@ bool IcebergTableSet::FillEntry(ClientContext &context, IcebergTableInformation 
 	// No valid cached result or caching disabled, make a new request
 	auto get_table_result = IRCAPI::GetTable(context, ic_catalog, schema, table.name);
 	if (get_table_result.has_error) {
+		if (get_table_result.status_ == HTTPStatusCode::NotFound_404) {
+			return false;
+		}
+		// 403 return error message
+		// 401 return error message, we want to surface to the user they cannot access this table.
 		throw HTTPException(StringUtil::Format("GetTableInformation endpoint returned response code %s with message %s",
 		                                       EnumUtil::ToString(get_table_result.status_),
 		                                       get_table_result.error_._error.message));
