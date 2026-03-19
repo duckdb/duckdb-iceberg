@@ -11,7 +11,31 @@ require httpfs
 
 require-env DUCKDB_ICEBERG_HAVE_GENERATED_DATA
 
+statement ok
+create view scan as select * from ICEBERG_SCAN('__WORKING_DIRECTORY__/data/generated/iceberg/spark-local/default/nested_types');
+
 query IIIII
-select * from ICEBERG_SCAN('__WORKING_DIRECTORY__/data/generated/iceberg/spark-local/default/nested_types');
+select * from scan;
 ----
 1	Alice	{'street': 123 Main St, 'city': Metropolis, 'zip': 12345}	[123-456-7890, 987-654-3210]	{age=30, membership=gold}
+
+# nested-column filters prune files from scan
+query II
+explain analyze select count(*) from scan where address.zip < '1';
+----
+analyzed_plan	<REGEX>:.*Total Files Read: 0\s+.*
+
+query II
+explain analyze select count(*) from scan where address.zip < '9';
+----
+analyzed_plan	<REGEX>:.*Total Files Read: 1\s+.*
+
+query II
+explain analyze select count(*) from scan where address.zip = '12345';
+----
+analyzed_plan	<REGEX>:.*Total Files Read: 1\s+.*
+
+query II
+explain analyze select count(*) from scan where address.zip = '12346';
+----
+analyzed_plan	<REGEX>:.*Total Files Read: 0\s+.*
