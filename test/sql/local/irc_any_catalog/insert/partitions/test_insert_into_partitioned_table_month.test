@@ -1,0 +1,56 @@
+# name: test/sql/local/irc_any_catalog/insert/partitions/test_insert_into_partitioned_table_month.test
+# group: [partitions]
+
+require-env ICEBERG_SERVER_AVAILABLE
+
+require-env SECRETS_CREATED_AND_CATALOG_ATTACHED
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+create schema if not exists my_datalake.default;
+
+statement ok
+drop table if exists my_datalake.default.test_insert_into_partitioned_table_month;
+
+statement ok
+CREATE TABLE my_datalake.default.test_insert_into_partitioned_table_month (a TIMESTAMP, b int)
+PARTITIONED BY (month(a));
+
+statement ok
+insert into my_datalake.default.test_insert_into_partitioned_table_month select
+make_timestamp((1992 + (range/12)::INT), (range)%12+1, 20, 13, 34, 27.123456), range from range(100);
+
+statement ok
+create table local_table as select
+make_timestamp((1992 + (range/12)::INT), (range)%12+1, 20, 13, 34, 27.123456) a, range b from range(100)
+
+query II nosort correct_result
+select * from local_table order by b;
+----
+
+query II nosort correct_result
+select * from my_datalake.default.test_insert_into_partitioned_table_month order by b;
+----
+
+statement ok
+call enable_logging();
+
+query II
+select * from my_datalake.default.test_insert_into_partitioned_table_month where a = '1993-04-20 13:34:27.123456'::TIMESTAMPTZ;
+----
+1993-04-20 13:34:27.123456	15
+
+query I
+select count(*) from duckdb_logs() where type ilike '%iceberg%';
+----
+96

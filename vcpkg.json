@@ -22,7 +22,7 @@
 			{
 				"kind": "git",
 				"repository": "https://github.com/duckdb/vcpkg-duckdb-ports",
-				"baseline": "02558971ebafdbaa697a0704a3ed7ba365cd5495",
+				"baseline": "d485389ad737bb05a5e8afd1fbde5672b559f19e",
 				"packages": [
 					"vcpkg-cmake",
 					"avro-c"

@@ -1,0 +1,93 @@
+# name: test/sql/local/irc_any_catalog/insert/partitions/null_values/test_null_temporal_partition.test
+# description: Test inserting NULL values into temporal partition columns (year, month, day, hour)
+# group: [null_values]
+
+require-env ICEBERG_SERVER_AVAILABLE
+
+require-env SECRETS_CREATED_AND_CATALOG_ATTACHED
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+create schema if not exists my_datalake.default;
+
+# ---- Year transform with NULLs ----
+statement ok
+drop table if exists my_datalake.default.test_null_year;
+
+statement ok
+CREATE TABLE my_datalake.default.test_null_year (id int, ts TIMESTAMP)
+PARTITIONED BY (year(ts));
+
+statement ok
+insert into my_datalake.default.test_null_year
+select range, case when range % 3 = 0 then NULL else make_timestamp(2020 + (range % 4), 6, 15, 12, 0, 0) end
+from range(30);
+
+statement ok
+create table local_null_year as
+select range as id, case when range % 3 = 0 then NULL else make_timestamp(2020 + (range % 4), 6, 15, 12, 0, 0) end as ts
+from range(30);
+
+query II nosort year_result
+select * from local_null_year order by id;
+----
+
+query II nosort year_result
+select * from my_datalake.default.test_null_year order by id;
+----
+
+query I
+select count(*) from my_datalake.default.test_null_year where ts is null;
+----
+10
+
+query I
+select count(*) from my_datalake.default.test_null_year where ts is not null;
+----
+20
+
+# ---- Day transform with NULLs ----
+statement ok
+drop table if exists my_datalake.default.test_null_day;
+
+statement ok
+CREATE TABLE my_datalake.default.test_null_day (id int, dt DATE)
+PARTITIONED BY (day(dt));
+
+statement ok
+insert into my_datalake.default.test_null_day
+select range, case when range % 5 = 0 then NULL else ('2020-01-01'::DATE + interval (range) day)::DATE end
+from range(25);
+
+statement ok
+create table local_null_day as
+select range as id, case when range % 5 = 0 then NULL else ('2020-01-01'::DATE + interval (range) day)::DATE end as dt
+from range(25);
+
+query II nosort day_result
+select * from local_null_day order by id;
+----
+
+query II nosort day_result
+select * from my_datalake.default.test_null_day order by id;
+----
+
+query I
+select count(*) from my_datalake.default.test_null_day where dt is null;
+----
+5
+
+query I
+select count(*) from my_datalake.default.test_null_day where dt is not null;
+----
+20

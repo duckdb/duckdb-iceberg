@@ -42,7 +42,13 @@
         "test/sql/local/irc_any_catalog/test_drop_and_create_table_in_a_transaction.test",
         "test/sql/local/irc_any_catalog/test_row_lineage_write.test",
         "test/sql/local/irc_any_catalog/transactions/test_transactional_updates_error_omits_stacktrace.test",
-        "test/sql/local/irc_any_catalog/update/test_spark_can_read_duckdb_updates.test"
+        "test/sql/local/irc_any_catalog/update/test_spark_can_read_duckdb_updates.test",
+        "test/sql/local/irc_any_catalog/reads/partitioned_reads/test_in_filter_partition_pruning.test",
+        "test/sql/local/irc_any_catalog/reads/partitioned_reads_v3/test_partitioned_reads_v3.test",
+        "test/sql/local/irc_any_catalog/alter/test_alter_table_reset_partitioned_by.test",
+        "test/sql/local/irc_any_catalog/alter/test_alter_partitioned_by.test",
+        "test/sql/local/irc_any_catalog/alter/test_alter_table_partitioned_conflict.test",
+        "test/sql/local/irc_any_catalog/alter/test_create_table_partitioned_by.test"
       ]
     }
   ]

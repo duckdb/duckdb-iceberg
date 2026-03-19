@@ -7,7 +7,7 @@ fixture_stop:
 fixture_start: fixture_stop
 	$(call stop_active_catalog)
 	@echo "Starting apache/iceberg-rest-fixture catalog..."
-	sudo rm -rf data/generated
+	rm -rf data/generated
 	mkdir -p data/generated/iceberg/spark-rest
 	mkdir -p data/generated/intermediates
 	(cd scripts && docker compose up -d)
