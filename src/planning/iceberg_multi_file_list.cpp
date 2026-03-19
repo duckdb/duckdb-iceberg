@@ -417,92 +417,135 @@ IcebergPredicateStats IcebergPredicateStats::DeserializeBounds(const Value &lowe
 	return res;
 }
 
+//! Inverse of PushDownFilterIntoExpression - given a filter that may have been
+//! wrapped in StructExtractFilters, extract the underlying filter and the index
+//! of the column it applies to.
+static std::pair<ColumnIndex, unique_ptr<TableFilter>>
+TryUnwrapStructFilter(const ColumnIndex &index, const unique_ptr<TableFilter> &filter,
+                      const vector<unique_ptr<IcebergColumnDefinition>> &schema,
+                      const unordered_map<uint64_t, ColumnIndex> &source_to_column_id) {
+	if (filter->filter_type == TableFilterType::STRUCT_EXTRACT) {
+		auto &struct_extract = filter->Cast<const StructFilter>();
+		auto &column = IcebergTableSchema::GetFromColumnIndex(schema, index, 0);
+		auto &child = column.children.at(struct_extract.child_idx);
+		return TryUnwrapStructFilter(source_to_column_id.at(child->id), struct_extract.child_filter, schema,
+		                             source_to_column_id);
+	}
+	return std::make_pair(index, filter->Copy());
+}
+
+//! Invert FilterCombiner::TryPushdownConstantFilter
+static void DecomposeTableFilter(const ColumnIndex &index, const unique_ptr<TableFilter> &filter,
+                                 TableFilterSet &decomposed_filters,
+                                 const vector<unique_ptr<IcebergColumnDefinition>> &schema,
+                                 const unordered_map<uint64_t, ColumnIndex> &source_to_column_id) {
+	//! Orthogonal filters may have been combined after wrapping in StructFilter.
+	//! Rebuild the filter set using individual column ids.
+	if (filter->filter_type == TableFilterType::CONJUNCTION_AND) {
+		auto &conjunction_and = filter->Cast<ConjunctionAndFilter>();
+		for (const auto &child : conjunction_and.child_filters) {
+			auto unwrapped = TryUnwrapStructFilter(index, child, schema, source_to_column_id);
+			auto column_id = IcebergTableSchema::GetFromColumnIndex(schema, unwrapped.first, 0).id;
+			decomposed_filters.PushFilter(ColumnIndex(column_id), std::move(unwrapped.second));
+		}
+	} else {
+		auto unwrapped = TryUnwrapStructFilter(index, filter, schema, source_to_column_id);
+		auto column_id = IcebergTableSchema::GetFromColumnIndex(schema, unwrapped.first, 0).id;
+		decomposed_filters.PushFilter(ColumnIndex(column_id), std::move(unwrapped.second));
+	}
+}
+
 bool IcebergMultiFileList::FileMatchesFilter(const IcebergManifestEntry &manifest_entry,
                                              IcebergDataFileType file_type) const {
 	D_ASSERT(!table_filters.filters.empty());
+	unordered_map<uint64_t, ColumnIndex> source_to_column_id;
+	IcebergTableSchema::PopulateSourceIdMap(source_to_column_id, GetSchema().columns, nullptr);
 
 	auto &filters = table_filters.filters;
 	auto &schema = GetSchema().columns;
 
-	for (idx_t index = 0; index < schema.size(); index++) {
-		auto &column = *schema[index];
-		auto it = filters.find(index);
+	//! Split filters that were combined by FilterSet::Push because they refer to the same
+	//! top-level column, but different nested fields. Whereas the keys of table_filters.filters
+	//! are indexes into the top-level columns, the keys of decomposed_filters.filters are field
+	//! ids in the schema.
+	TableFilterSet decomposed_filters;
+	for (auto &entry : table_filters.filters) {
+		DecomposeTableFilter(ColumnIndex(entry.first), entry.second, decomposed_filters, schema, source_to_column_id);
+	}
 
-		if (it == filters.end()) {
-			continue;
+	auto &metadata = GetMetadata();
+	auto &data_file = manifest_entry.data_file;
+	// First check if there are partitions
+	if (!data_file.partition_info.empty()) {
+		// check if the index is in the partition info.
+		auto partition_spec_it = metadata.partition_specs.find(manifest_entry.partition_spec_id);
+		if (partition_spec_it == metadata.partition_specs.end()) {
+			throw InvalidConfigurationException(
+			    "Data file %s has partition spec %d while the metadata does not have this partition spec",
+			    data_file.file_path, manifest_entry.partition_spec_id);
 		}
-		auto &metadata = GetMetadata();
-		auto &data_file = manifest_entry.data_file;
-		// First check if there are partitions
-		if (!data_file.partition_info.empty()) {
-			// check if the index is in the partition info.
-			auto partition_spec_it = metadata.partition_specs.find(manifest_entry.partition_spec_id);
-			if (partition_spec_it == metadata.partition_specs.end()) {
-				throw InvalidConfigurationException(
-				    "Data file %s has partition spec %d while the metadata does not have this partition spec",
-				    data_file.file_path, manifest_entry.partition_spec_id);
+		auto &partition_spec = partition_spec_it->second;
+
+		auto &field_summaries = partition_spec.fields;
+		for (auto &field : partition_spec.fields) {
+			// Find if we have a filter for this source column
+			auto filter_it = decomposed_filters.filters.find(field.source_id);
+			if (filter_it == decomposed_filters.filters.end()) {
+				continue;
 			}
-			auto &partition_spec = partition_spec_it->second;
-			unordered_map<uint64_t, ColumnIndex> source_to_column_id;
-			IcebergTableSchema::PopulateSourceIdMap(source_to_column_id, schema, nullptr);
 
-			auto &field_summaries = partition_spec.fields;
-			for (idx_t i = 0; i < field_summaries.size(); i++) {
-				auto &field = partition_spec.fields[i];
-
-				const auto &column_id = source_to_column_id.at(field.source_id);
-				// Find if we have a filter for this source column
-				auto table_filter = GetFilterForColumnIndex(table_filters, column_id);
-				if (!table_filter) {
-					continue;
-				}
-
-				// initialize dummy stats
-				auto stats = IcebergPredicateStats();
-				bool found_partition_field = false;
-				for (auto &partition_val : data_file.partition_info) {
-					if (field.partition_field_id == partition_val.field_id) {
-						found_partition_field = true;
-						stats.lower_bound = partition_val.value;
-						stats.upper_bound = partition_val.value;
-						stats.has_upper_bounds = true;
-						stats.has_lower_bounds = true;
-						// set null stats for partitioned column.
-						if (partition_val.value.IsNull()) {
-							// partition values can be null
-							stats.has_null = true;
-						} else {
-							stats.has_not_null = true;
-						}
-						break;
+			// initialize dummy stats
+			auto stats = IcebergPredicateStats();
+			bool found_partition_field = false;
+			for (auto &partition_val : data_file.partition_info) {
+				if (field.partition_field_id == partition_val.field_id) {
+					found_partition_field = true;
+					stats.lower_bound = partition_val.value;
+					stats.upper_bound = partition_val.value;
+					stats.has_upper_bounds = true;
+					stats.has_lower_bounds = true;
+					// set null stats for partitioned column.
+					if (partition_val.value.IsNull()) {
+						// partition values can be null
+						stats.has_null = true;
+					} else {
+						stats.has_not_null = true;
 					}
-				}
-
-				if (!found_partition_field) {
-					// continue to next partition spec field summary
-					continue;
-				}
-
-				auto nan_counts_it = data_file.nan_value_counts.find(column_id.GetPrimaryIndex());
-				if (nan_counts_it != data_file.nan_value_counts.end()) {
-					auto &nan_counts = nan_counts_it->second;
-					stats.has_nan = nan_counts != 0;
-				}
-
-				// if the filter doesn't match the partition value, we don't need to scan the data file
-				if (!IcebergPredicate::MatchBounds(context, *table_filter, stats, field.transform)) {
-					return false;
+					break;
 				}
 			}
-		}
-		if (data_file.lower_bounds.empty() || data_file.upper_bounds.empty() ||
-		    file_type == IcebergDataFileType::DELETE) {
-			// There are no bounds statistics for the file, can't filter,
-			// or it is a delete file, which should only be filtered on partitions
-			continue;
-		}
 
-		auto &column_id = column.id;
+			if (!found_partition_field) {
+				// continue to next partition spec field summary
+				continue;
+			}
+
+			auto nan_counts_it = data_file.nan_value_counts.find(field.source_id);
+			if (nan_counts_it != data_file.nan_value_counts.end()) {
+				auto &nan_counts = nan_counts_it->second;
+				stats.has_nan = nan_counts != 0;
+			}
+
+			// if the filter doesn't match the partition value, we don't need to scan the data file
+			auto &filter = *filter_it->second;
+			auto column_id = field.source_id;
+			auto &column = IcebergTableSchema::GetFromColumnIndex(schema, source_to_column_id.at(column_id), 0);
+
+			if (!IcebergPredicate::MatchBounds(context, *(filter_it->second), stats, field.transform)) {
+				return false;
+			}
+		}
+	}
+	if (data_file.lower_bounds.empty() || data_file.upper_bounds.empty() || file_type == IcebergDataFileType::DELETE) {
+		// There are no bounds statistics for the file, can't filter,
+		// or it is a delete file, which should only be filtered on partitions
+		return true;
+	}
+
+	for (auto &id_and_filter : decomposed_filters.filters) {
+		auto &column_id = id_and_filter.first;
+		auto &column = IcebergTableSchema::GetFromColumnIndex(schema, source_to_column_id.at(column_id), 0);
+
 		auto lower_bound_it = data_file.lower_bounds.find(column_id);
 		auto upper_bound_it = data_file.upper_bounds.find(column_id);
 		Value lower_bound;
@@ -549,7 +592,7 @@ bool IcebergMultiFileList::FileMatchesFilter(const IcebergManifestEntry &manifes
 			stats.has_nan = nan_counts != 0;
 		}
 
-		auto &filter = *it->second;
+		auto &filter = *(id_and_filter.second);
 		if (!IcebergPredicate::MatchBounds(context, filter, stats, IcebergTransform::Identity())) {
 			//! If any predicate fails, exclude the file
 			return false;
