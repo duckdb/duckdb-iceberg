@@ -1,7 +1,5 @@
 #include "iceberg_extension.hpp"
-#include "storage/catalog/iceberg_catalog.hpp"
-#include "storage/iceberg_transaction_manager.hpp"
-#include "duckdb.hpp"
+
 #include "duckdb/main/secret/secret_manager.hpp"
 #include "duckdb/common/exception.hpp"
 #include "duckdb/common/exception/http_exception.hpp"
@@ -12,14 +10,18 @@
 #include "duckdb/catalog/catalog_entry/macro_catalog_entry.hpp"
 #include "duckdb/catalog/default/default_functions.hpp"
 #include "duckdb/storage/storage_extension.hpp"
-#include "iceberg_functions.hpp"
-#include "catalog_api.hpp"
 #include "duckdb/main/extension_helper.hpp"
-#include "storage/authorization/oauth2.hpp"
-#include "storage/authorization/sigv4.hpp"
-#include "iceberg_utils.hpp"
+#include "duckdb.hpp"
+
+#include "catalog/rest/iceberg_catalog.hpp"
+#include "catalog/rest/transaction/iceberg_transaction_manager.hpp"
+#include "function/iceberg_functions.hpp"
+#include "catalog/rest/api/catalog_api.hpp"
+#include "catalog/rest/storage/authorization/oauth2.hpp"
+#include "catalog/rest/storage/authorization/sigv4.hpp"
+#include "common/iceberg_utils.hpp"
 #include "iceberg_logging.hpp"
-#include "copy/function/iceberg_copy_function.hpp"
+#include "function/copy/iceberg_copy_function.hpp"
 
 namespace duckdb {
 
