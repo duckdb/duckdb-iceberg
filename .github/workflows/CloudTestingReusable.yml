@@ -1,0 +1,153 @@
+name: Cloud functional tests (reusable)
+on:
+  workflow_call:
+    inputs:
+      duckdb_ref:
+        description: 'DuckDB branch name or commit hash'
+        required: true
+        type: string
+      duckdb_iceberg_ref:
+        description: 'duckdb-iceberg branch name or commit hash'
+        required: true
+        type: string
+      httpfs_fork:
+        description: 'URL of a duckdb-httpfs fork (e.g. https://github.com/myfork/duckdb-httpfs). Leave empty to use the default duckdb/duckdb-httpfs.'
+        required: false
+        default: 'https://github.com/duckdb/duckdb-httpfs'
+        type: string
+      httpfs_ref:
+        description: 'Commit hash or branch of the httpfs fork to use. Leave empty to use the default.'
+        required: false
+        default: ''
+        type: string
+    secrets:
+      S3_ICEBERG_TEST_USER_KEY_ID:
+        required: false
+      S3_ICEBERG_TEST_USER_SECRET:
+        required: false
+      S3_ICEBERG_TEST_USER_REGION:
+        required: false
+      r2_token:
+        required: false
+      SNOWFLAKE_KEY_ID_GCS:
+        required: false
+      SNOWFLAKE_SECRET_KEY_GCS:
+        required: false
+      SNOWFLAKE_KEY_ID_S3:
+        required: false
+      SNOWFLAKE_SECRET_KEY_S3:
+        required: false
+      SNOWFLAKE_CATALOG_URI_GCS:
+        required: false
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  rest:
+    name: Test against remote cloud catalogs
+    runs-on: ubuntu-latest
+    env:
+      VCPKG_TARGET_TRIPLET: 'x64-linux-release'
+      GEN: ninja
+      VCPKG_FEATURE_FLAGS: "-binarycaching"
+      VCPKG_TOOLCHAIN_PATH: ${{ github.workspace }}/vcpkg/scripts/buildsystems/vcpkg.cmake
+      PIP_BREAK_SYSTEM_PACKAGES: 1
+      HTTP_PROXY_PUBLIC: http://localhost:8878
+
+    steps:
+      - name: Install required ubuntu packages
+        run: |
+          sudo apt-get update -y -qq && sudo apt-get install -y -qq ninja-build
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.duckdb_iceberg_ref }}
+          fetch-depth: 0
+          submodules: 'true'
+
+      - name: Setup vcpkg
+        uses: lukka/run-vcpkg@v11.1
+        with:
+          vcpkgGitCommitId: 84bab45d415d22042bd0b9081aea57f362da3f35
+
+      - name: Setup Ccache
+        uses: hendrikmuhs/ccache-action@main
+        continue-on-error: true
+
+      - name: Checkout DuckDB
+        run: |
+          cd duckdb
+          git fetch
+          git checkout ${{ inputs.duckdb_ref }}
+
+      - name: Checkout selected httpfs
+        if: ${{ inputs.httpfs_ref != '' }}
+        run: |
+          cat > duckdb/.github/config/extensions/httpfs.cmake << 'EOF'
+          duckdb_extension_load(httpfs
+            LOAD_TESTS
+            GIT_URL ${{ inputs.httpfs_fork }}
+            GIT_TAG ${{ inputs.httpfs_ref }}
+          )
+          EOF
+
+      - name: Build extension
+        env:
+          GEN: ninja
+          STATIC_LIBCPP: 1
+        run: |
+          make release
+
+      - name: install python packages
+        run: |
+          python3 -m pip install -r scripts/requirements.txt
+
+      - name: Set up cloud testing
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.S3_ICEBERG_TEST_USER_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.S3_ICEBERG_TEST_USER_SECRET }}
+          AWS_DEFAULT_REGION: ${{ secrets.S3_ICEBERG_TEST_USER_REGION }}
+          R2_TOKEN: ${{ secrets.r2_token }}
+        run: |
+          python3 scripts/create_s3_insert_table.py --action=delete-and-create --catalogs=s3tables,r2,glue
+
+      - name: Run mitmproxy
+        shell: bash
+        run: |
+          mitmdump --mode regular@8878 --flow-detail 2 > mitmproxy.log 2>&1 &
+
+      - name: Test with rest catalog
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.S3_ICEBERG_TEST_USER_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.S3_ICEBERG_TEST_USER_SECRET }}
+          AWS_DEFAULT_REGION: ${{ secrets.S3_ICEBERG_TEST_USER_REGION }}
+          SNOWFLAKE_KEY_ID_GCS: ${{ secrets.SNOWFLAKE_KEY_ID_GCS }}
+          SNOWFLAKE_SECRET_KEY_GCS: ${{ secrets.SNOWFLAKE_SECRET_KEY_GCS }}
+          SNOWFLAKE_KEY_ID_S3: ${{ secrets.SNOWFLAKE_KEY_ID_S3 }}
+          SNOWFLAKE_SECRET_KEY_S3: ${{ secrets.SNOWFLAKE_SECRET_KEY_S3 }}
+          SNOWFLAKE_CATALOG_URI_GCS: ${{ secrets.SNOWFLAKE_CATALOG_URI_GCS }}
+          R2_TOKEN: ${{ secrets.r2_token }}
+          ICEBERG_REMOTE_INSERT_READY: 1
+          ICEBERG_AWS_REMOTE_AVAILABLE: 1
+          ICEBERG_SNOWFLAKE_REMOTE_AVAILABLE: 1
+        run: |
+          make test_release
+
+      - name: Test with no region set
+        env:
+          SNOWFLAKE_KEY_ID_S3: ${{secrets.SNOWFLAKE_KEY_ID_S3}}
+          SNOWFLAKE_SECRET_KEY_S3: ${{secrets.SNOWFLAKE_SECRET_KEY_S3}}
+          SNOWFLAKE_CATALOG_URI_GCS: ${{secrets.SNOWFLAKE_CATALOG_URI_GCS}}
+          NO_REGION_SET: 1
+        run: |
+          ./build/release/test/unittest test/sql/cloud/snowflake/no_vended_credentials_region.test
+
+      - name: File issue if error
+        if: ${{ contains(github.ref_name, 'main') && failure() }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          echo "Cloud tests failed. see [Run Link](https://github.com/duckdb/duckdb-iceberg/actions/runs/${{ github.run_id }})" > report.txt
+          gh issue create --repo duckdb/duckdb-iceberg --title "Cloud Test Failures" --body-file report.txt

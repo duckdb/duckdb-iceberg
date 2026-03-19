@@ -1,0 +1,69 @@
+# name: test/sql/local/irc_any_catalog/insert/partitions/combined/test_triple_partition.test
+# group: [combined]
+
+require-env ICEBERG_SERVER_AVAILABLE
+
+require-env SECRETS_CREATED_AND_CATALOG_ATTACHED
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+create schema if not exists my_datalake.default;
+
+statement ok
+drop table if exists my_datalake.default.test_triple_partition;
+
+# Three partition columns: identity, year, and identity
+statement ok
+CREATE TABLE my_datalake.default.test_triple_partition (id int, region varchar, ts TIMESTAMP, status int)
+PARTITIONED BY (region, year(ts), status);
+
+statement ok
+insert into my_datalake.default.test_triple_partition
+select range,
+       case range % 2 when 0 then 'US' else 'EU' end,
+       make_timestamp(2020 + (range % 3), 6, 15, 12, 0, 0),
+       range % 2
+from range(24);
+
+statement ok
+create table local_triple as
+select range as id,
+       case range % 2 when 0 then 'US' else 'EU' end as region,
+       make_timestamp(2020 + (range % 3), 6, 15, 12, 0, 0) as ts,
+       range % 2 as status
+from range(24);
+
+query IIII nosort expected_result
+select * from local_triple order by id;
+----
+
+query IIII nosort expected_result
+select * from my_datalake.default.test_triple_partition order by id;
+----
+
+query I
+select count(*) from my_datalake.default.test_triple_partition;
+----
+24
+
+# Filter on just one partition column
+query I
+select count(*) from my_datalake.default.test_triple_partition where region = 'US';
+----
+12
+
+# Filter on two partition columns
+query I
+select count(*) from my_datalake.default.test_triple_partition where region = 'US' and status = 0;
+----
+12

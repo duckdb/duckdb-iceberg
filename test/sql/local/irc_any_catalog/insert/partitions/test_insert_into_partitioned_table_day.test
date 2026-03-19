@@ -1,0 +1,43 @@
+# name: test/sql/local/irc_any_catalog/insert/partitions/test_insert_into_partitioned_table_day.test
+# group: [partitions]
+
+require-env ICEBERG_SERVER_AVAILABLE
+
+require-env SECRETS_CREATED_AND_CATALOG_ATTACHED
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+create schema if not exists my_datalake.default;
+
+statement ok
+drop table if exists my_datalake.default.test_insert_into_partitioned_table_day;
+
+statement ok
+CREATE TABLE my_datalake.default.test_insert_into_partitioned_table_day (a TIMESTAMP, b int)
+PARTITIONED BY (day(a));
+
+statement ok
+insert into my_datalake.default.test_insert_into_partitioned_table_day select
+make_timestamp((1992 + (range/12)::INT), (range)%12+1, 20, 13, 34, 27.123456) a, range b from range(100);
+
+statement ok
+create table local_table as select
+make_timestamp((1992 + (range/12)::INT), (range)%12+1, 20, 13, 34, 27.123456) a, range b from range(100);
+
+query II nosort local_result
+select * from local_table order by b;
+----
+
+query II nosort local_result
+select * from my_datalake.default.test_insert_into_partitioned_table_day order by b;
+----
