@@ -55,13 +55,17 @@ bool IcebergTableSet::FillEntry(ClientContext &context, IcebergTableInformation 
 	auto get_table_result = IRCAPI::GetTable(context, ic_catalog, schema, table.name);
 	if (get_table_result.has_error) {
 		if (get_table_result.status_ == HTTPStatusCode::NotFound_404) {
-			return false;
+			// Glue returns 404 when a table is not an Iceberg Table. The problem is that the table
+			// still shows up in `show all table` statements. So if we get a 404 with NoSuchTable, we throw this error
+			if (get_table_result.error_._error.type != "NoSuchIcebergTableException") {
+				return false;
+			}
 		}
-		// 403 return error message
-		// 401 return error message, we want to surface to the user they cannot access this table.
-		throw HTTPException(StringUtil::Format("GetTableInformation endpoint returned response code %s with message %s",
-		                                       EnumUtil::ToString(get_table_result.status_),
-		                                       get_table_result.error_._error.message));
+		// surface all other errror messages. Not found will be returned as a catalog exception
+		// User should not if they do not have permission or if they are not authorized (or 500)
+		throw HTTPException(
+		    StringUtil::Format("GetTableInformation endpoint returned response code %s with message \"%s\"",
+		                       EnumUtil::ToString(get_table_result.status_), get_table_result.error_._error.message));
 	}
 	ic_catalog.StoreLoadTableResult(table_key, std::move(get_table_result.result_));
 	{

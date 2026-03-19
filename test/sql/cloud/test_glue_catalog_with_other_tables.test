@@ -34,3 +34,8 @@ set ignore_error_messages
 
 statement ok
 show all tables;
+
+statement error
+select * from glue_catalog.default.duckdb_cloudfront_logs;
+----
+<REGEX>:.*Input table is not an iceberg table.*

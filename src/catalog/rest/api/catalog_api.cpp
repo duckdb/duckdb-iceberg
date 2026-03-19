@@ -83,7 +83,6 @@ static IRCEntryLookupStatus CheckVerificationResponse(ClientContext &context, HT
 	case HTTPStatusCode::NoContent_204:
 		return IRCEntryLookupStatus::EXISTS;
 	case HTTPStatusCode::Forbidden_403:
-		return IRCEntryLookupStatus::FORBIDDEN;
 	case HTTPStatusCode::NotFound_404:
 		return IRCEntryLookupStatus::NOT_FOUND;
 		break;
@@ -118,7 +117,6 @@ bool IRCAPI::VerifyResponse(ClientContext &context, IcebergCatalog &catalog, IRC
 		case IRCEntryLookupStatus::EXISTS:
 			return true;
 		case IRCEntryLookupStatus::NOT_FOUND:
-		case IRCEntryLookupStatus::FORBIDDEN:
 			return false;
 		default:
 			break;
@@ -133,7 +131,6 @@ bool IRCAPI::VerifyResponse(ClientContext &context, IcebergCatalog &catalog, IRC
 	case IRCEntryLookupStatus::EXISTS:
 		return true;
 	case IRCEntryLookupStatus::NOT_FOUND:
-	case IRCEntryLookupStatus::FORBIDDEN:
 		return false;
 	default:
 		// both head and get responses have returned a status that is an
@@ -288,7 +285,10 @@ vector<IRCAPISchema> IRCAPI::GetSchemas(ClientContext &context, IcebergCatalog &
 		auto response = catalog.auth_handler->Request(RequestType::GET_REQUEST, context, endpoint_builder, headers);
 		if (!response->Success()) {
 			if (response->status == HTTPStatusCode::Forbidden_403 ||
-			    response->status == HTTPStatusCode::Unauthorized_401) {
+			    response->status == HTTPStatusCode::Unauthorized_401 ||
+			    response->status == HTTPStatusCode::NotFound_404) {
+				// when listing tables, if a user is not allowed to list from one schema, we log an error to notify the
+				// user We do not error, otherwise the user won't be able to seee any results.
 				DUCKDB_LOG_WARNING(context, "GET %s returned %s", endpoint_builder.GetURLEncoded(),
 				                   EnumUtil::ToString(response->status));
 				// return empty result if user cannot list schemas.
