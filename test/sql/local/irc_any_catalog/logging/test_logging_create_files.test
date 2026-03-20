@@ -1,0 +1,47 @@
+# name: test/sql/local/irc_any_catalog/logging/test_logging_create_files.test
+# group: [logging]
+
+require-env ICEBERG_SERVER_AVAILABLE
+
+require-env SECRETS_CREATED_AND_CATALOG_ATTACHED
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+require icu
+
+require ducklake
+
+statement ok
+call enable_logging('Iceberg');
+
+statement ok
+drop table if exists my_datalake.default.test_logging_create_table;
+
+statement ok
+drop table if exists my_datalake.default.test_logging_create_table_large;
+
+statement ok
+create table my_datalake.default.test_logging_create_table as select range a from range(10000);
+
+query I
+select count(*) from duckdb_logs() where type = 'Iceberg' and regexp_matches(message, 'Iceberg INSERT, wrote data_file.*record_count=.*');
+----
+1
+
+statement ok
+call truncate_duckdb_logs();
+
+# write multiple files in one insert
+statement ok
+create table my_datalake.default.test_logging_create_table_large as select range a from range(10000000);
+
+query I
+select count(*) from duckdb_logs() where type = 'Iceberg' and regexp_matches(message, 'Iceberg INSERT, wrote data_file.*record_count=.*');
+----
+2

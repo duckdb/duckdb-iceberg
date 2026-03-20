@@ -38,14 +38,15 @@ select * from ICEBERG_SCAN('__WORKING_DIRECTORY__/data/persistent/large_partitio
 query I
 select message from duckdb_logs() where type = 'Iceberg' group by message order by message;
 ----
-Iceberg Filter Pushdown, skipped 'data_file': 'data/persistent/large_partitioned_table/data/joined_month=1984-09/00000-42167-732c9827-ec5e-44f2-b2a3-1a919fd2f708-0-00001.parquet'
-Iceberg Filter Pushdown, skipped 'data_file': 'data/persistent/large_partitioned_table/data/joined_month=1984-09/00000-42179-88be9947-7b02-4fd4-b3d4-c794944129c7-0-00001.parquet'
-Iceberg Filter Pushdown, skipped 'data_file': 'data/persistent/large_partitioned_table/data/joined_month=1984-10/00000-43055-fba934f2-9233-4232-b0ee-c2590d27b5a1-0-00001.parquet'
-Iceberg Filter Pushdown, skipped 'data_file': 'data/persistent/large_partitioned_table/data/joined_month=1984-10/00000-43067-4f95304c-c723-4687-8866-b10c02e6a2f1-0-00001.parquet'
-Iceberg Filter Pushdown, skipped 'data_file': 'data/persistent/large_partitioned_table/data/joined_month=1984-10/00000-43079-941f1f20-929b-4fef-a1c4-3ddd0cc73a72-0-00001.parquet'
-Iceberg Filter Pushdown, skipped 'data_file': 'data/persistent/large_partitioned_table/data/joined_month=1984-11/00000-43703-e2078303-362e-4718-91e5-c7164c053240-0-00001.parquet'
-Iceberg Filter Pushdown, skipped 'data_file': 'data/persistent/large_partitioned_table/data/joined_month=1984-11/00000-43715-e9637c83-d2f0-4dd3-94bd-f6bd9381cf7f-0-00001.parquet'
-Iceberg Filter Pushdown, skipped 'data_file': 'data/persistent/large_partitioned_table/data/joined_month=1984-11/00000-43727-a12cb232-8467-4828-9a1b-de3dda8b690d-0-00001.parquet'
+Iceberg Filter Pushdown, skipped 'data_file': 'data/persistent/large_partitioned_table/data/joined_month=1984-09/00000-42167-732c9827-ec5e-44f2-b2a3-1a919fd2f708-0-00001.parquet', partition column 'joined' has raw value 176 with transform 'month'. 'month(176)=1984-09' does not match filter: joined>='1984-12-01 00:00:00+00'::TIMESTAMP WITH TIME ZONE
+Iceberg Filter Pushdown, skipped 'data_file': 'data/persistent/large_partitioned_table/data/joined_month=1984-09/00000-42179-88be9947-7b02-4fd4-b3d4-c794944129c7-0-00001.parquet', partition column 'joined' has raw value 176 with transform 'month'. 'month(176)=1984-09' does not match filter: joined>='1984-12-01 00:00:00+00'::TIMESTAMP WITH TIME ZONE
+Iceberg Filter Pushdown, skipped 'data_file': 'data/persistent/large_partitioned_table/data/joined_month=1984-10/00000-43055-fba934f2-9233-4232-b0ee-c2590d27b5a1-0-00001.parquet', partition column 'joined' has raw value 177 with transform 'month'. 'month(177)=1984-10' does not match filter: joined>='1984-12-01 00:00:00+00'::TIMESTAMP WITH TIME ZONE
+Iceberg Filter Pushdown, skipped 'data_file': 'data/persistent/large_partitioned_table/data/joined_month=1984-10/00000-43067-4f95304c-c723-4687-8866-b10c02e6a2f1-0-00001.parquet', partition column 'joined' has raw value 177 with transform 'month'. 'month(177)=1984-10' does not match filter: joined>='1984-12-01 00:00:00+00'::TIMESTAMP WITH TIME ZONE
+Iceberg Filter Pushdown, skipped 'data_file': 'data/persistent/large_partitioned_table/data/joined_month=1984-10/00000-43079-941f1f20-929b-4fef-a1c4-3ddd0cc73a72-0-00001.parquet', partition column 'joined' has raw value 177 with transform 'month'. 'month(177)=1984-10' does not match filter: joined>='1984-12-01 00:00:00+00'::TIMESTAMP WITH TIME ZONE
+Iceberg Filter Pushdown, skipped 'data_file': 'data/persistent/large_partitioned_table/data/joined_month=1984-11/00000-43703-e2078303-362e-4718-91e5-c7164c053240-0-00001.parquet', partition column 'joined' has raw value 178 with transform 'month'. 'month(178)=1984-11' does not match filter: joined>='1984-12-01 00:00:00+00'::TIMESTAMP WITH TIME ZONE
+Iceberg Filter Pushdown, skipped 'data_file': 'data/persistent/large_partitioned_table/data/joined_month=1984-11/00000-43715-e9637c83-d2f0-4dd3-94bd-f6bd9381cf7f-0-00001.parquet', partition column 'joined' has raw value 178 with transform 'month'. 'month(178)=1984-11' does not match filter: joined>='1984-12-01 00:00:00+00'::TIMESTAMP WITH TIME ZONE
+Iceberg Filter Pushdown, skipped 'data_file': 'data/persistent/large_partitioned_table/data/joined_month=1984-11/00000-43727-a12cb232-8467-4828-9a1b-de3dda8b690d-0-00001.parquet', partition column 'joined' has raw value 178 with transform 'month'. 'month(178)=1984-11' does not match filter: joined>='1984-12-01 00:00:00+00'::TIMESTAMP WITH TIME ZONE
+Iceberg selected snapshot_id=2859376696814272835, timestamp=2025-11-17 14:46:32.045, sequence_number=1
 
 statement ok
 call truncate_duckdb_logs();
@@ -57,7 +58,7 @@ select count(*) from ICEBERG_SCAN('__WORKING_DIRECTORY__/data/persistent/large_p
 
 # 0 files are pruned since lower and upper bound information no longer exist
 query I
-select count(*) from duckdb_logs() where type = 'Iceberg';
+select count(*) from duckdb_logs() where type = 'Iceberg' and message not like 'Iceberg selected snapshot_id%';
 ----
 0
 
@@ -68,7 +69,7 @@ select count(*) from ICEBERG_SCAN('__WORKING_DIRECTORY__/data/persistent/large_p
 
 # still 0 files are pruned since lower and upper bound information do not exist and filter is an OR condition, so all files must be scanned
 query I
-select count(*) from duckdb_logs() where type = 'Iceberg';
+select count(*) from duckdb_logs() where type = 'Iceberg' and message not like 'Iceberg selected snapshot_id%';
 ----
 0
 
@@ -80,6 +81,6 @@ select count(*) from ICEBERG_SCAN('__WORKING_DIRECTORY__/data/persistent/large_p
 # same 8 files pruned since now condition is an and, so the filter on the partition column must also hold
 # why pruning is not done twice is not clear to me.
 query I
-select count(*) from duckdb_logs() where type = 'Iceberg';
+select count(*) from duckdb_logs() where type = 'Iceberg' and message not like 'Iceberg selected snapshot_id%';;
 ----
 8

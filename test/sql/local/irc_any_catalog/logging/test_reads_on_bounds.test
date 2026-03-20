@@ -1,0 +1,47 @@
+# name: test/sql/local/irc_any_catalog/logging/test_reads_on_bounds.test
+# group: [logging]
+
+require-env ICEBERG_SERVER_AVAILABLE
+
+require-env SECRETS_CREATED_AND_CATALOG_ATTACHED
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+require icu
+
+require ducklake
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+set enable_logging=true
+
+statement ok
+SET TimeZone = 'UTC';
+
+statement ok
+call enable_logging('Iceberg');
+
+query I
+select count(*) from my_datalake.default.filtering_on_bounds where col1 >= 50 and col1 < 100;
+----
+50
+
+# verify there are 10+ files
+# Can be different counts depending on if this runs on CI or not (on CI there are exactly 10 files)
+query I
+select count(*) >= 10 from (from iceberg_metadata(my_datalake.default.filtering_on_bounds) select manifest_sequence_number, file_path group by all order by manifest_sequence_number);
+----
+1
+
+# verify 8+ have been filtered out. (On CI many more are filtered out)
+statement ok
+select count(*) > 8 from duckdb_logs() where type = 'Iceberg' and regexp_matches(message, '.*col1.*did not match filter.*');
+

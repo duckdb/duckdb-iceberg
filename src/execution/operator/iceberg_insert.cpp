@@ -25,6 +25,7 @@
 #include "core/expression/iceberg_transform.hpp"
 #include "catalog/rest/api/iceberg_type.hpp"
 #include "common/iceberg_utils.hpp"
+#include "iceberg_logging.hpp"
 
 namespace duckdb {
 
@@ -231,6 +232,9 @@ void IcebergInsertGlobalState::AddFiles(DataChunk &chunk, const string &table_na
 		data_file.file_path = chunk.GetValue(0, r).GetValue<string>();
 		data_file.record_count = static_cast<int64_t>(chunk.GetValue(1, r).GetValue<idx_t>());
 		data_file.file_size_in_bytes = static_cast<int64_t>(chunk.GetValue(2, r).GetValue<idx_t>());
+		DUCKDB_LOG(context, IcebergLogType,
+		           "Iceberg INSERT, wrote data_file '%s', record_count=%lld, file_size=%lld bytes", data_file.file_path,
+		           data_file.record_count, data_file.file_size_in_bytes);
 		data_file.content = IcebergManifestEntryContentType::DATA;
 		data_file.file_format = "parquet";
 
