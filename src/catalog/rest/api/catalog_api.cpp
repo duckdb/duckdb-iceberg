@@ -11,6 +11,7 @@
 #include "iceberg_logging.hpp"
 #include "catalog/rest/iceberg_catalog.hpp"
 #include "catalog/rest/catalog_entry/iceberg_schema_entry.hpp"
+#include "catalog/rest/catalog_entry/table/iceberg_table_entry.hpp"
 #include "common/iceberg_utils.hpp"
 #include "catalog/rest/api/api_utils.hpp"
 #include "catalog/rest/storage/iceberg_authorization.hpp"
@@ -425,8 +426,8 @@ void IRCAPI::CommitNamespaceDrop(ClientContext &context, IcebergCatalog &catalog
 }
 
 rest_api_objects::LoadTableResult IRCAPI::CommitNewTable(ClientContext &context, IcebergCatalog &catalog,
-                                                         const IcebergTableEntry *table) {
-	auto &ic_schema = table->schema.Cast<IcebergSchemaEntry>();
+                                                         const IcebergTableEntry &table) {
+	auto &ic_schema = table.schema.Cast<IcebergSchemaEntry>();
 	auto table_namespace = GetEncodedSchemaName(ic_schema.namespace_items);
 	auto url_builder = catalog.GetBaseUrl();
 	url_builder.AddPrefixComponent(catalog.prefix, catalog.prefix_is_one_component);
@@ -439,7 +440,7 @@ rest_api_objects::LoadTableResult IRCAPI::CommitNewTable(ClientContext &context,
 	auto root_object = yyjson_mut_obj(doc);
 	yyjson_mut_doc_set_root(doc, root_object);
 
-	auto create_transaction = make_uniq<IcebergCreateTableRequest>(table->table_info);
+	auto create_transaction = make_uniq<IcebergCreateTableRequest>(table.table_info);
 	// if stage create is supported, create the table with stage_create = true and the table update will
 	// commit the table.
 	auto support_stage_create = catalog.attach_options.supports_stage_create;

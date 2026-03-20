@@ -19,19 +19,20 @@
 #include "duckdb/planner/operator/logical_comparison_join.hpp"
 #include "duckdb/common/file_opener.hpp"
 #include "duckdb/common/file_system.hpp"
+#include "duckdb/common/string.hpp"
 
-#include "function/metadata/iceberg_metadata.hpp"
 #include "function/iceberg_functions.hpp"
 #include "common/iceberg_utils.hpp"
 #include "core/metadata/iceberg_table_metadata.hpp"
+#include "core/metadata/manifest/iceberg_manifest.hpp"
+#include "core/metadata/manifest/iceberg_manifest_list.hpp"
 
-#include <string>
 #include <numeric>
 
 namespace duckdb {
 
 struct IcebergMetaDataBindData : public TableFunctionData {
-	unique_ptr<IcebergTable> iceberg_table;
+	unique_ptr<IcebergManifestList> iceberg_table;
 };
 
 struct IcebergMetaDataGlobalTableFunctionState : public GlobalTableFunctionState {
@@ -102,7 +103,7 @@ static unique_ptr<FunctionData> IcebergMetaDataBind(ClientContext &context, Tabl
 	auto snapshot_to_scan = metadata.GetSnapshot(options.snapshot_lookup);
 
 	if (snapshot_to_scan) {
-		ret->iceberg_table = IcebergTable::Load(filename, metadata, *snapshot_to_scan, context, options);
+		ret->iceberg_table = IcebergManifestList::Load(filename, metadata, *snapshot_to_scan, context, options);
 	}
 
 	auto manifest_types = IcebergManifestFile::Types();
@@ -134,7 +135,7 @@ static void IcebergMetaDataFunction(ClientContext &context, TableFunctionInput &
 	}
 
 	idx_t out = 0;
-	auto &table_entries = bind_data.iceberg_table->entries;
+	auto &table_entries = bind_data.iceberg_table->GetManifestFilesConst();
 	for (; global_state.current_manifest_idx < table_entries.size(); global_state.current_manifest_idx++) {
 		auto &table_entry = table_entries[global_state.current_manifest_idx];
 		auto &entries = table_entry.manifest_entries;

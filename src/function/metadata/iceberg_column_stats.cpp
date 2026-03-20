@@ -19,23 +19,24 @@
 #include "duckdb/planner/operator/logical_comparison_join.hpp"
 #include "duckdb/common/file_opener.hpp"
 #include "duckdb/common/file_system.hpp"
+#include "duckdb/common/string.hpp"
 
-#include "function/metadata/iceberg_metadata.hpp"
 #include "function/iceberg_functions.hpp"
 #include "common/iceberg_utils.hpp"
 #include "core/metadata/iceberg_table_metadata.hpp"
+#include "core/metadata/manifest/iceberg_manifest.hpp"
+#include "core/metadata/manifest/iceberg_manifest_list.hpp"
 
-#include <string>
 #include <numeric>
 
 namespace duckdb {
 
 struct IcebergColumnStatsBindData : public TableFunctionData {
+	unique_ptr<IcebergManifestList> iceberg_table;
 	optional_ptr<const IcebergSnapshot> snapshot_to_scan;
 	IcebergTableMetadata metadata;
 	shared_ptr<IcebergTableSchema> schema;
 	unordered_map<uint64_t, ColumnIndex> source_to_column_id;
-	unique_ptr<IcebergTable> iceberg_table;
 };
 
 struct IcebergColumnStatsGlobalTableFunctionState : public GlobalTableFunctionState {
@@ -108,7 +109,8 @@ static unique_ptr<FunctionData> IcebergColumnStatsBind(ClientContext &context, T
 	ret->snapshot_to_scan = ret->metadata.GetSnapshot(options.snapshot_lookup);
 
 	if (ret->snapshot_to_scan) {
-		ret->iceberg_table = IcebergTable::Load(filename, ret->metadata, *ret->snapshot_to_scan, context, options);
+		ret->iceberg_table =
+		    IcebergManifestList::Load(filename, ret->metadata, *ret->snapshot_to_scan, context, options);
 		ret->schema = ret->metadata.GetSchemaFromId(ret->snapshot_to_scan->schema_id);
 
 		auto &schema = ret->schema->columns;
@@ -166,7 +168,7 @@ static void IcebergColumnStatsFunction(ClientContext &context, TableFunctionInpu
 
 	idx_t out = 0;
 	auto &schema = bind_data.schema->columns;
-	auto &table_entries = bind_data.iceberg_table->entries;
+	auto &table_entries = bind_data.iceberg_table->GetManifestFilesConst();
 	for (; global_state.current_manifest_idx < table_entries.size(); global_state.current_manifest_idx++) {
 		auto &table_entry = table_entries[global_state.current_manifest_idx];
 		auto &entries = table_entry.manifest_entries;

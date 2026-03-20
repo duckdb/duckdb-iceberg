@@ -18,13 +18,13 @@
 #include "duckdb/planner/table_filter.hpp"
 #include "duckdb/parallel/task_executor.hpp"
 
-#include "function/metadata/iceberg_metadata.hpp"
 #include "common/iceberg_utils.hpp"
 #include "planning/metadata_io/manifest/iceberg_manifest_reader.hpp"
 #include "planning/metadata_io/avro/avro_scan.hpp"
 #include "core/deletes/iceberg_equality_delete.hpp"
 #include "core/deletes/iceberg_positional_delete.hpp"
 #include "core/deletes/iceberg_delete_data.hpp"
+#include "planning/snapshot/iceberg_scan_info.hpp"
 
 namespace duckdb {
 

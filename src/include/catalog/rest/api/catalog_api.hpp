@@ -5,16 +5,14 @@
 #include "duckdb/parser/parsed_data/create_table_info.hpp"
 #include "duckdb/parser/parsed_data/create_secret_info.hpp"
 
-#include "function/metadata/iceberg_metadata.hpp"
 #include "catalog/rest/api/url_utils.hpp"
-#include "catalog/rest/catalog_entry/table/iceberg_table_entry.hpp"
-#include "rest_catalog/objects/table_identifier.hpp"
-#include "rest_catalog/objects/load_table_result.hpp"
+#include "rest_catalog/objects/list.hpp"
 
 namespace duckdb {
 
 class IcebergCatalog;
 class IcebergSchemaEntry;
+class IcebergTableEntry;
 
 struct IRCAPISchema {
 	//! The (potentially multiple) levels that the namespace is made up of
@@ -68,7 +66,7 @@ public:
 	//! stage create = false, table is created immediately in the IRC
 	//! stage create = true, table is not created, but metadata is initialized and returned
 	static rest_api_objects::LoadTableResult CommitNewTable(ClientContext &context, IcebergCatalog &catalog,
-	                                                        const IcebergTableEntry *table);
+	                                                        const IcebergTableEntry &table);
 	static rest_api_objects::CatalogConfig GetCatalogConfig(ClientContext &context, IcebergCatalog &catalog);
 };
 

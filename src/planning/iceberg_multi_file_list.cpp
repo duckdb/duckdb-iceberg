@@ -535,6 +535,7 @@ bool IcebergMultiFileList::FileMatchesFilter(const IcebergManifestEntry &manifes
 				stats.has_not_null = true;
 			}
 		} else {
+			stats.has_null = true;
 			if (has_value_counts) {
 				stats.has_not_null = value_count > 0;
 			} else {

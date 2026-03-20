@@ -2,7 +2,6 @@
 #include "duckdb/common/file_system.hpp"
 
 #include "function/iceberg_functions.hpp"
-#include "function/metadata/iceberg_metadata.hpp"
 #include "iceberg_options.hpp"
 #include "common/iceberg_utils.hpp"
 #include "core/metadata/iceberg_table_metadata.hpp"

@@ -18,7 +18,6 @@
 #include "duckdb/planner/table_filter.hpp"
 
 #include "planning/iceberg_multi_file_list.hpp"
-#include "function/metadata/iceberg_metadata.hpp"
 #include "common/iceberg_utils.hpp"
 #include "planning/metadata_io/manifest/iceberg_manifest_reader.hpp"
 

@@ -171,6 +171,9 @@ public:
 public:
 	static LogicalType FieldSummaryType();
 	static Value FieldSummaryFieldIds();
+	static unique_ptr<IcebergManifestList> Load(const string &iceberg_path, const IcebergTableMetadata &metadata,
+	                                            const IcebergSnapshot &snapshot, ClientContext &context,
+	                                            const IcebergOptions &options);
 
 private:
 	string path;
