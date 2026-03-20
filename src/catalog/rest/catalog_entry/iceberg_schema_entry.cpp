@@ -105,7 +105,7 @@ void IcebergSchemaEntry::DropEntry(ClientContext &context, DropInfo &info, bool 
 		if (info.if_not_found == OnEntryNotFound::RETURN_NULL) {
 			return;
 		}
-		throw CatalogException("Table %s does not exist");
+		throw CatalogException("Table %s does not exist", table_name);
 	}
 	if (info.cascade) {
 		throw NotImplementedException("DROP TABLE <table_name> CASCADE is not supported for Iceberg tables currently");
@@ -245,8 +245,11 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 		// Add the new column
 		auto new_column = make_uniq<IcebergColumnDefinition>();
 		auto last_column_id = updated_table.table_metadata.last_column_id;
-		//todo: check if i can create a table without columns in duckdb. If not, just throw here if .IsValid() returns false.2
-		new_column->id  = last_column_id.IsValid() ? last_column_id.GetIndex() + 1 : 0;
+		if (!last_column_id.IsValid()) {
+			throw InternalException("No last_column_id when trying to ADD COLUMN %s", add_column_info.name);
+		}
+		//todo: do i need to bump last_column_id myself here?
+		new_column->id  =  last_column_id.GetIndex() + 1;
 		new_column->name = add_column_info.name;
 
 
