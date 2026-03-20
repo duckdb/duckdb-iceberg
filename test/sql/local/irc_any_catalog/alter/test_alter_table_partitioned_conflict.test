@@ -1,0 +1,51 @@
+# name: test/sql/local/irc_any_catalog/alter/test_alter_table_partitioned_conflict.test
+# group: [alter]
+
+require-env ICEBERG_SERVER_AVAILABLE
+
+require-env SECRETS_CREATED_AND_CATALOG_ATTACHED
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+drop table if exists my_datalake.default.alter_table_conflict;
+
+statement ok
+CREATE TABLE my_datalake.default.alter_table_conflict AS (select range a, range%2 b, range%4 c FROM range(10));
+
+statement ok con1
+begin;
+
+# select from alter_table_conflict so we do not request table state again
+statement ok con1
+select * from my_datalake.default.alter_table_conflict;
+
+statement ok con2
+begin;
+
+# con2 alters the partition
+statement ok con2
+Alter table my_datalake.default.alter_table_conflict SET PARTITIONED BY (b);
+
+statement ok con2
+commit;
+
+statement ok con1
+Alter table my_datalake.default.alter_table_conflict SET PARTITIONED BY (a);
+
+# con1 should error since the partition spec id has updated before con1 could commit;
+statement error con1
+commit;
+----
+<REGEX>:.*Conflict.*
+
+

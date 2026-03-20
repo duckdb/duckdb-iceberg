@@ -1,0 +1,47 @@
+# name: test/sql/cloud/glue/test_default_catalog.test
+# description: test integration with iceberg catalog read
+# group: [glue]
+
+require-env ICEBERG_AWS_REMOTE_AVAILABLE
+
+require-env AWS_ACCESS_KEY_ID
+
+require-env AWS_SECRET_ACCESS_KEY
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+require aws
+
+set ignore_error_messages
+
+statement ok
+CREATE SECRET (
+  TYPE S3,
+  PROVIDER credential_chain,
+  REGION 'us-east-1'
+);
+
+statement ok
+attach ':' as glue_catalog (
+	type ICEBERG,
+	ENDPOINT_TYPE 'GLUE'
+);
+
+
+query III
+select database, schema, name from (show all tables) where name = 'metrics';
+----
+glue_catalog	simple_glue_database	metrics
+
+
+query I
+select * from glue_catalog.simple_glue_database.duckdb_created_table limit 10;
+----
+1
+2

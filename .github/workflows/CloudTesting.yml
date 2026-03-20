@@ -7,7 +7,7 @@ on:
       duckdb_ref:
         description: 'DuckDB branch name or commit hash'
         required: false
-        default: 'main'
+        default: 'v1.5-variegata'
       duckdb_iceberg_ref:
         description: 'duckdb-iceberg branch name or commit hash'
         required: false

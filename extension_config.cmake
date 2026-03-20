@@ -1,9 +1,9 @@
 # This file is included by DuckDB's build system. It specifies which extension to load
 if (NOT EMSCRIPTEN)
-duckdb_extension_load(avro
-		LOAD_TESTS
-		GIT_URL https://github.com/duckdb/duckdb_avro
-		GIT_TAG 4fa0f73f816e9878d5b6a39795e060877766ac1a
+  duckdb_extension_load(avro
+  LOAD_TESTS
+  GIT_URL https://github.com/duckdb/duckdb-avro
+  GIT_TAG fa61c8e2bfa5b173749bf9db4fc853dea78969b6
 )
 endif()
 
@@ -14,19 +14,19 @@ duckdb_extension_load(iceberg
 )
 
 if (NOT EMSCRIPTEN)
-duckdb_extension_load(tpch)
-duckdb_extension_load(icu)
-duckdb_extension_load(ducklake
+  duckdb_extension_load(tpch)
+  duckdb_extension_load(icu)
+  duckdb_extension_load(ducklake
         LOAD_TESTS
         GIT_URL https://github.com/duckdb/ducklake
         GIT_TAG f22b43cc4c8db6eb996e9797221318b72b10bd48
 )
 
-if (NOT MINGW)
+  if (NOT MINGW)
     duckdb_extension_load(aws
             LOAD_TESTS
             GIT_URL https://github.com/duckdb/duckdb-aws
             GIT_TAG 18803d5e55b9f9f6dda5047d0fdb4f4238b6801d
     )
-endif()
+  endif()
 endif()
