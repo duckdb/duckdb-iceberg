@@ -238,7 +238,21 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 		 *	- POST /v1/{prefix}/namespaces/{namespace}/tables/{table} - Commit updates to a table.
 		 */
 		auto commit_table_request = CreateCommitTableRequestForAddColumn(add_column_info);
+		// Ensure schema is the same as current
+		updated_table.AddAssertCurrentSchemaId(irc_transaction);
 
+
+		// Add the new column
+		auto new_column = make_uniq<IcebergColumnDefinition>();
+		auto last_column_id = updated_table.table_metadata.last_column_id;
+		//todo: check if i can create a table without columns in duckdb. If not, just throw here if .IsValid() returns false.2
+		new_column->id  = last_column_id.IsValid() ? last_column_id.GetIndex() + 1 : 0;
+		new_column->name = add_column_info.name;
+
+
+		new_schema->columns.push_back(std::move(new_column));
+
+		updated_table.AddSchema(irc_transaction);
 	}
 	default: {
 		throw NotImplementedException("Alter table type not supported: %s",
