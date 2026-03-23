@@ -70,6 +70,38 @@ LogicalType IcebergDataFile::PartitionStructType(const map<idx_t, LogicalType> &
 	return LogicalType::STRUCT(children);
 }
 
+const vector<DataFileExtendedPartitionInfo>
+IcebergDataFile::GetPartitionInfo(const IcebergTableMetadata &metadata) const {
+	vector<DataFileExtendedPartitionInfo> ret;
+	for (auto &partition_info : partition_info) {
+		auto &field_id = partition_info.field_id;
+		auto &value = partition_info.value;
+		DataFileExtendedPartitionInfo info;
+		for (auto &id_spec : metadata.partition_specs) {
+			auto &spec = id_spec.second;
+			for (auto &field : spec.fields) {
+				if (field_id == field.partition_field_id) {
+					info.name = field.name;
+					info.field_id = static_cast<uint64_t>(field_id);
+					info.value = value;
+					info.source_id = field.source_id;
+					info.transform = field.transform;
+					for (auto &schema : metadata.schemas) {
+						auto &schema_columns = schema.second->columns;
+						for (auto &schema_field : schema_columns) {
+							if (schema_field->id == field.source_id) {
+								info.source_type = schema_field->type;
+							}
+						}
+					}
+					ret.push_back(std::move(info));
+				}
+			}
+		}
+	}
+	return ret;
+}
+
 void IcebergDataFile::SetFirstRowId(int64_t value) {
 	has_first_row_id = true;
 	first_row_id = value;
@@ -168,14 +200,15 @@ Value IcebergDataFile::ToValue(const IcebergTableMetadata &table_metadata, const
 		    Value::STRUCT(child_list_t<Value> {{"__duckdb_empty_struct_marker", Value(LogicalTypeId::VARCHAR)}}));
 	} else {
 		child_list_t<Value> partition_children;
-		for (auto &entry : partition_info) {
+		auto extended_partition_info = GetPartitionInfo(table_metadata);
+		for (auto &entry : extended_partition_info) {
 			auto new_value = Value();
 			string error_message;
 			LogicalType partition_result_type;
 			switch (entry.transform.Type()) {
 			case IcebergTransformType::IDENTITY: {
 				if (entry.source_type.IsNested()) {
-					throw InvalidInputException("Cannot use identify partition on a nested column");
+					throw NotImplementedException("Using an identity partition on a nested column");
 				}
 				partition_result_type = entry.source_type;
 				break;
@@ -308,17 +341,19 @@ int64_t IcebergManifestEntry::GetSnapshotId() const {
 
 namespace manifest_file {
 
-static LogicalType PartitionStructType(const vector<IcebergManifestEntry> &entries) {
+static LogicalType PartitionStructType(const IcebergTableMetadata &table_metadata,
+                                       const vector<IcebergManifestEntry> &entries) {
 	D_ASSERT(!entries.empty());
 	auto &first_entry = entries.front();
 	child_list_t<LogicalType> children;
 	auto &data_file = first_entry.data_file;
+	auto extended_partition_info = data_file.GetPartitionInfo(table_metadata);
 	if (data_file.partition_info.empty()) {
 		children.emplace_back("__duckdb_empty_struct_marker", LogicalType::INTEGER);
 	} else {
 		//! NOTE: all entries in the file should have the same schema, otherwise it can't be in the same manifest file
 		//! anyways
-		for (auto &entry : data_file.partition_info) {
+		for (auto &entry : extended_partition_info) {
 			switch (entry.transform.Type()) {
 			case IcebergTransformType::TRUNCATE:
 			case IcebergTransformType::IDENTITY:
@@ -477,12 +512,13 @@ idx_t WriteToFile(const IcebergTableMetadata &table_metadata, const IcebergManif
 		auto &first_entry = manifest_entries.front();
 		auto &data_file = first_entry.data_file;
 
+		auto extended_partition_info = data_file.GetPartitionInfo(table_metadata);
 		child_list_t<Value> partition;
 		// partition: struct(...)
-		children.emplace_back("partition", PartitionStructType(manifest_entries));
+		children.emplace_back("partition", PartitionStructType(table_metadata, manifest_entries));
 		partition.emplace_back("__duckdb_field_id", Value::INTEGER(PARTITION));
 		partition.emplace_back("__duckdb_nullable", Value::BOOLEAN(false));
-		for (auto &entry : data_file.partition_info) {
+		for (auto &entry : extended_partition_info) {
 			partition.emplace_back(entry.name, Value::INTEGER(static_cast<int32_t>(entry.field_id)));
 		}
 		data_file_field_ids.emplace_back("partition", Value::STRUCT(partition));
@@ -494,12 +530,13 @@ idx_t WriteToFile(const IcebergTableMetadata &table_metadata, const IcebergManif
 		auto partition_struct = yyjson_mut_obj_add_obj(doc, field_obj, "type");
 		yyjson_mut_obj_add_strcpy(doc, partition_struct, "type", "struct");
 		auto partition_fields = yyjson_mut_obj_add_arr(doc, partition_struct, "fields");
-		if (!data_file.partition_info.empty()) {
-			for (auto &entry : data_file.partition_info) {
+		if (!extended_partition_info.empty()) {
+			for (auto &entry : extended_partition_info) {
 				auto field_obj = yyjson_mut_arr_add_obj(doc, partition_fields);
 				yyjson_mut_obj_add_strcpy(doc, field_obj, "name", entry.name.c_str());
 				auto types_arr = yyjson_mut_obj_add_arr(doc, field_obj, "type");
 				yyjson_mut_arr_add_strcpy(doc, types_arr, "null");
+				// TODO: Is this correct? I don't think so.
 				yyjson_mut_arr_add_strcpy(doc, types_arr, "int");
 				yyjson_mut_obj_add_int(doc, field_obj, "id", static_cast<int32_t>(entry.field_id));
 			}

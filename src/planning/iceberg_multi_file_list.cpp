@@ -370,6 +370,22 @@ const BoundIcebergManifestEntry &IcebergMultiFileList::GetManifestEntry(idx_t fi
 	return data_manifest_entries[file_id];
 }
 
+vector<DataFilePartitionInfo> IcebergMultiFileList::GetPartitionInfoForDataFile(const string &file_path) const {
+	lock_guard<mutex> guard(lock);
+	auto iceberg_path = GetPath();
+	for (auto &bound_entry : data_manifest_entries) {
+		auto &data_file = bound_entry.entry.data_file;
+		string entry_path = data_file.file_path;
+		if (options.allow_moved_paths) {
+			entry_path = IcebergUtils::GetFullPath(iceberg_path, entry_path, fs);
+		}
+		if (StringUtil::CIEquals(entry_path, file_path)) {
+			return data_file.partition_info;
+		}
+	}
+	throw InternalException("Could not find data file '%s' in manifest entries", file_path);
+}
+
 const IcebergManifestFile &IcebergMultiFileList::GetManifestFileForEntry(const BoundIcebergManifestEntry &entry,
                                                                          IcebergManifestContentType type) const {
 	if (type == IcebergManifestContentType::DATA) {

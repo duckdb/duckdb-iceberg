@@ -440,8 +440,8 @@ void IcebergAvroMultiFileReader::FinalizeChunk(ClientContext &context, const Mul
 
 		output_chunk.Flatten();
 		idx_t start_index = manifest_file.manifest_entries.size();
-		manifest_file::ManifestReader::ReadChunk(output_chunk, manifest_scan_info.partition_field_id_to_type,
-		                                         metadata.iceberg_version, manifest_file.manifest_entries);
+		manifest_file::ManifestReader::ReadChunk(output_chunk, manifest_scan_info.partition_field_id_to_type, metadata,
+		                                         manifest_file.manifest_entries);
 		if (manifest_scan_info.read_state) {
 			auto &read_state = *manifest_scan_info.read_state;
 			read_state.PushBatch(

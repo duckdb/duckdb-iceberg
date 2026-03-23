@@ -14,6 +14,7 @@
 
 #include "catalog/rest/catalog_entry/table/iceberg_table_entry.hpp"
 #include "catalog/rest/catalog_entry/iceberg_schema_entry.hpp"
+#include "core/metadata/manifest/iceberg_manifest.hpp"
 
 namespace duckdb {
 
@@ -45,6 +46,7 @@ struct IcebergDeleteFileInfo {
 	idx_t pos_min_value;
 	optional_idx content_size_in_bytes;
 	optional_idx content_offset;
+	vector<DataFilePartitionInfo> partition_info;
 };
 
 class IcebergDeleteGlobalState : public GlobalSinkState {

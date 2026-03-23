@@ -282,10 +282,6 @@ PhysicalOperator &IcebergCatalog::PlanUpdate(ClientContext &context, PhysicalPla
 	auto &table_metadata = table.table_info.table_metadata;
 	auto &table_schema = table_metadata.GetLatestSchema();
 
-	auto &partition_spec = table_metadata.GetLatestPartitionSpec();
-	if (!partition_spec.IsUnpartitioned()) {
-		throw NotImplementedException("Update into a partitioned table is not supported yet");
-	}
 	if (table_metadata.HasSortOrder()) {
 		auto &sort_spec = table_metadata.GetLatestSortOrder();
 		if (sort_spec.IsSorted()) {

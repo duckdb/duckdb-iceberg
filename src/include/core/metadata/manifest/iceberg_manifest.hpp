@@ -28,7 +28,7 @@ string IcebergManifestEntryContentTypeToString(IcebergManifestEntryContentType t
 string IcebergManifestEntryStatusTypeToString(IcebergManifestEntryStatusType type);
 
 //! Combined partition information for a single partition field in a data file
-struct DataFilePartitionInfo {
+struct DataFileExtendedPartitionInfo {
 	//! The partition column name
 	string name;
 	//! The source column id from the table schema
@@ -39,6 +39,20 @@ struct DataFilePartitionInfo {
 	IcebergTransform transform;
 	//! The source column type from the table schema
 	LogicalType source_type;
+	//! The actual partition value for this data file
+	Value value;
+
+	bool operator==(const DataFileExtendedPartitionInfo &other) const {
+		return field_id == other.field_id && value == other.value;
+	}
+	bool operator!=(const DataFileExtendedPartitionInfo &other) const {
+		return !(*this == other);
+	}
+};
+
+struct DataFilePartitionInfo {
+	//! The partition field_id
+	uint64_t field_id;
 	//! The actual partition value for this data file
 	Value value;
 
@@ -60,6 +74,8 @@ public:
 	                                                       const unordered_set<int32_t> &partition_spec_ids);
 	static LogicalType PartitionStructType(const map<idx_t, LogicalType> &partition_field_id_to_type);
 	static LogicalType GetType(const IcebergTableMetadata &metadata, const LogicalType &partition_type);
+	// Get extended partition info
+	const vector<DataFileExtendedPartitionInfo> GetPartitionInfo(const IcebergTableMetadata &metadata) const;
 
 public:
 	void SetFirstRowId(int64_t first_row_id);

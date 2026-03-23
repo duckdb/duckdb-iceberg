@@ -78,6 +78,7 @@ public:
 	GetEqualityDeletesForFile(const BoundIcebergManifestEntry &manifest_entry) const;
 	void GetStatistics(vector<PartitionStatistics> &result) const;
 	const BoundIcebergManifestEntry &GetManifestEntry(idx_t file_id) const;
+	vector<DataFilePartitionInfo> GetPartitionInfoForDataFile(const string &file_path) const;
 	const IcebergManifestFile &GetManifestFileForEntry(const BoundIcebergManifestEntry &entry,
 	                                                   IcebergManifestContentType type) const;
 

@@ -100,7 +100,7 @@ IcebergManifestListEntry IcebergManifestListEntry::CreateFromEntries(FileSystem 
 			                        std::to_string(table_metadata.default_spec_id));
 		}
 		auto &partition_spec = partition_spec_it->second;
-		manifest_file.partitions.Create(partition_spec, manifest_entries);
+		manifest_file.partitions.Create(table_metadata, partition_spec, manifest_entries);
 	}
 
 	manifest_list_entry.manifest_entries.insert(manifest_list_entry.manifest_entries.end(),
@@ -109,7 +109,7 @@ IcebergManifestListEntry IcebergManifestListEntry::CreateFromEntries(FileSystem 
 	return manifest_list_entry;
 }
 
-void ManifestPartitions::Create(const IcebergPartitionSpec &partition_spec,
+void ManifestPartitions::Create(const IcebergTableMetadata &metadata, const IcebergPartitionSpec &partition_spec,
                                 const vector<IcebergManifestEntry> &manifest_entries) {
 	if (manifest_entries.empty() || partition_spec.fields.empty()) {
 		return;
@@ -133,28 +133,32 @@ void ManifestPartitions::Create(const IcebergPartitionSpec &partition_spec,
 
 	for (auto &entry : manifest_entries) {
 		auto &data_file = entry.data_file;
+		auto data_extended_partition_info = data_file.GetPartitionInfo(metadata);
 		for (idx_t i = 0; i < num_fields; i++) {
 			auto &spec_field = partition_spec.fields[i];
 
 			// Find the partition info entry matching this field's partition_field_id
-			optional_ptr<const DataFilePartitionInfo> info_ptr;
-			for (auto &pi : data_file.partition_info) {
+			DataFileExtendedPartitionInfo extended_partition_info;
+			bool partition_info_exists = false;
+			for (auto &pi : data_extended_partition_info) {
 				if (pi.field_id == spec_field.partition_field_id) {
-					info_ptr = &pi;
+					extended_partition_info = pi;
+					partition_info_exists = true;
 					break;
 				}
 			}
 
-			if (!info_ptr || info_ptr->value.IsNull()) {
+			if (!partition_info_exists || extended_partition_info.value.IsNull()) {
 				field_summary[i].contains_null = true;
 				continue;
 			}
 
-			// Get the serialized type from the DataFilePartitionInfo's transform and source_type
-			auto serialized_type = info_ptr->transform.GetSerializedType(info_ptr->source_type);
+			// Get them serialized type from the DataFilePartitionInfo's transform and source_type
+			auto serialized_type =
+			    extended_partition_info.transform.GetSerializedType(extended_partition_info.source_type);
 
 			// Cast the partition value (stored as VARCHAR) to the correct serialized type
-			auto typed_value = info_ptr->value.DefaultCastAs(serialized_type);
+			auto typed_value = extended_partition_info.value.DefaultCastAs(serialized_type);
 
 			if (!initialized[i]) {
 				min_values[i] = typed_value;
@@ -181,20 +185,24 @@ void ManifestPartitions::Create(const IcebergPartitionSpec &partition_spec,
 		}
 		auto &spec_field = partition_spec.fields[i];
 		// Find one DataFilePartitionInfo entry to get the type info
-		optional_ptr<const DataFilePartitionInfo> info_ptr;
+		DataFileExtendedPartitionInfo extended_partition_info;
+		bool have_extended_partition_info = false;
 		for (auto &entry : manifest_entries) {
-			for (auto &pi : entry.data_file.partition_info) {
+			auto &data_file = entry.data_file;
+			auto data_extended_partition_info = data_file.GetPartitionInfo(metadata);
+			for (auto &pi : data_extended_partition_info) {
 				if (pi.field_id == spec_field.partition_field_id && !pi.value.IsNull()) {
-					info_ptr = &pi;
+					extended_partition_info = pi;
+					have_extended_partition_info = true;
 					break;
 				}
 			}
-			if (info_ptr) {
+			if (have_extended_partition_info) {
 				break;
 			}
 		}
-		D_ASSERT(info_ptr);
-		auto serialized_type = info_ptr->transform.GetSerializedType(info_ptr->source_type);
+		D_ASSERT(have_extended_partition_info);
+		auto serialized_type = extended_partition_info.transform.GetSerializedType(extended_partition_info.source_type);
 		auto lower_result = IcebergValue::SerializeValue(min_values[i], serialized_type, SerializeBound::LOWER_BOUND);
 		auto upper_result = IcebergValue::SerializeValue(max_values[i], serialized_type, SerializeBound::UPPER_BOUND);
 

@@ -60,7 +60,8 @@ public:
 	}
 
 public:
-	void Create(const IcebergPartitionSpec &partition_spec, const vector<IcebergManifestEntry> &entries);
+	void Create(const IcebergTableMetadata &metadata, const IcebergPartitionSpec &partition_spec,
+	            const vector<IcebergManifestEntry> &entries);
 
 public:
 	bool has_partitions = false;
