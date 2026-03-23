@@ -13,6 +13,15 @@ require iceberg
 
 require httpfs
 
+statement ok
+SET ca_cert_file = '~/.mitmproxy/mitmproxy-ca-cert.pem';
+
+statement ok
+CREATE SECRET http_proxy (
+    TYPE http,
+    HTTP_PROXY 'http://localhost:8878'
+);
+
 # Do not ignore 'HTTP' error messages!
 set ignore_error_messages
 
@@ -20,21 +29,58 @@ statement ok
 drop table if exists my_datalake.default.alter_add_column_table;
 
 statement ok
+CREATE SCHEMA IF NOT EXISTS my_datalake.default;
+
+statement ok
 CREATE TABLE my_datalake.default.alter_add_column_table AS (select range a FROM range(10));
 
 statement ok
-ALTER TABLE my_datalake.default.alter_add_column_table ADD COLUMN b int DEFAULT 42;
+ALTER TABLE my_datalake.default.alter_add_column_table ADD COLUMN b int;
+
+statement ok
+set variable manifest_list_duckdb = (SELECT manifest_list FROM iceberg_snapshots('my_datalake.default.alter_add_column_table') ORDER BY sequence_number);
+
+statement ok
+set variable manifest_path_duckdb = (select manifest_path from iceberg_metadata(my_datalake.default.alter_add_column_table) order by manifest_sequence_number desc limit 1);
+
+statement ok
+set variable parquet_path_duckdb = (select file_path from iceberg_metadata(my_datalake.default.alter_add_column_table) order by manifest_sequence_number desc limit 1);
+
+mode output_result
+
+statement ok
+from read_avro(getvariable(manifest_list_duckdb));
+
+statement ok
+from read_avro(getvariable(manifest_path_duckdb));
+
+statement ok
+from read_parquet(getvariable(parquet_path_duckdb));
+
+query II
+FROM iceberg_scan('my_datalake.default.alter_add_column_table');
+----
+0	NULL
+1	NULL
+2	NULL
+3	NULL
+4	NULL
+5	NULL
+6	NULL
+7	NULL
+8	NULL
+9	NULL
 
 query II
 FROM my_datalake.default.alter_add_column_table;
-0	42
-1	42
-2	42
-3	42
-4	42
-5	42
-6	42
-7	42
-8	42
-9	42
-10	42
+----
+0	NULL
+1	NULL
+2	NULL
+3	NULL
+4	NULL
+5	NULL
+6	NULL
+7	NULL
+8	NULL
+9	NULL

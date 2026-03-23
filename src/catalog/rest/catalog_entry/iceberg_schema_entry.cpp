@@ -234,6 +234,7 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 	}
 	case AlterTableType::ADD_COLUMN: {
 		auto &add_column_info = alter_table_info.Cast<AddColumnInfo>();
+		auto &column_definition = add_column_info.new_column;
 		 /* We need to create the necessary POST bodies to send to the Iceberg REST API. We should do:
 		 *	- POST /v1/{prefix}/namespaces/{namespace}/tables/{table} - Commit updates to a table.
 		 */
@@ -243,19 +244,53 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 
 
 		// Add the new column
-		auto new_column = make_uniq<IcebergColumnDefinition>();
-		auto last_column_id = updated_table.table_metadata.last_column_id;
+		auto new_iceberg_column = make_uniq<IcebergColumnDefinition>();
+		auto &last_column_id = updated_table.table_metadata.last_column_id;
 		if (!last_column_id.IsValid()) {
 			throw InternalException("No last_column_id when trying to ADD COLUMN %s", add_column_info.name);
 		}
-		//todo: do i need to bump last_column_id myself here?
-		new_column->id  =  last_column_id.GetIndex() + 1;
-		new_column->name = add_column_info.name;
+		new_iceberg_column->id  =  last_column_id.GetIndex() + 1;
+		last_column_id = optional_idx(new_iceberg_column->id);
 
+		new_iceberg_column->name = column_definition.GetName();
+		new_iceberg_column->type = column_definition.GetType();
 
-		new_schema->columns.push_back(std::move(new_column));
+		// Default value
+		if (column_definition.HasDefaultValue()) {
+			auto &default_value =column_definition.DefaultValue();
+
+			//TODO: Which expressions should we support? Some will require binding, should that binding happen here?
+			// ExtractInitialValue in iceberg_create_table_request.cpp:208-216 gets a value using a ConstantBinder.
+			switch (default_value.type) {
+			case ExpressionType::VALUE_CONSTANT:
+				new_iceberg_column->initial_default = make_uniq<Value>(default_value.Cast<ConstantExpression>().value);
+				new_iceberg_column->write_default = make_uniq<Value>(default_value.Cast<ConstantExpression>().value);
+				break;
+			case ExpressionType::VALUE_NULL:
+				new_iceberg_column->initial_default = make_uniq<Value>(nullptr);
+				new_iceberg_column->write_default = make_uniq<Value>(nullptr);
+				break;
+			default:
+				throw InvalidInputException("DEFAULT expression not yet supported");
+			}
+		}
+		// else {
+		// 	new_iceberg_column->initial_default = make_uniq<Value>(nullptr);
+		// 	new_iceberg_column->write_default = make_uniq<Value>(nullptr);
+		// }
+		new_iceberg_column->required = false;
+
+		//TODO: Add support for nested types here
+		new_iceberg_column->children = vector<unique_ptr<IcebergColumnDefinition>>();
+
+		new_schema->columns.push_back(std::move(new_iceberg_column));
+
+		updated_table.table_metadata.schemas[new_schema_id] = std::move(new_schema);
+		updated_table.table_metadata.current_schema_id = new_schema_id;
 
 		updated_table.AddSchema(irc_transaction);
+		updated_table.AddSetCurrentSchema(irc_transaction);
+		return;
 	}
 	default: {
 		throw NotImplementedException("Alter table type not supported: %s",
