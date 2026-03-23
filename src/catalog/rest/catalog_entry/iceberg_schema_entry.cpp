@@ -235,7 +235,7 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 	case AlterTableType::ADD_COLUMN: {
 		auto &add_column_info = alter_table_info.Cast<AddColumnInfo>();
 		auto &column_definition = add_column_info.new_column;
-		 /* We need to create the necessary POST bodies to send to the Iceberg REST API. We should do:
+		/* We need to create the necessary POST bodies to send to the Iceberg REST API. We should do:
 		 *	- POST /v1/{prefix}/namespaces/{namespace}/tables/{table} - Commit updates to a table.
 		 */
 		auto commit_table_request = CreateCommitTableRequestForAddColumn(add_column_info);
@@ -248,7 +248,7 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 		if (!last_column_id.IsValid()) {
 			throw InternalException("No last_column_id when trying to ADD COLUMN %s", add_column_info.name);
 		}
-		new_iceberg_column->id  =  last_column_id.GetIndex() + 1;
+		new_iceberg_column->id = last_column_id.GetIndex() + 1;
 		last_column_id = optional_idx(new_iceberg_column->id);
 
 		new_iceberg_column->name = column_definition.GetName();
@@ -256,9 +256,9 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 
 		// Default value
 		if (column_definition.HasDefaultValue()) {
-			auto &default_value =column_definition.DefaultValue();
+			auto &default_value = column_definition.DefaultValue();
 
-			//TODO: Which expressions should we support? Some will require binding, should that binding happen here?
+			// TODO: Which expressions should we support? Some will require binding, should that binding happen here?
 			// ExtractInitialValue in iceberg_create_table_request.cpp:208-216 gets a value using a ConstantBinder.
 			switch (default_value.type) {
 			case ExpressionType::VALUE_CONSTANT:
@@ -279,7 +279,7 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 		// }
 		new_iceberg_column->required = false;
 
-		//TODO: Add support for nested types here
+		// TODO: Add support for nested types here
 		new_iceberg_column->children = vector<unique_ptr<IcebergColumnDefinition>>();
 
 		new_schema->columns.push_back(std::move(new_iceberg_column));
