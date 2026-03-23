@@ -253,17 +253,12 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 				new_iceberg_column->write_default = make_uniq<Value>(default_value.Cast<ConstantExpression>().value);
 				break;
 			case ExpressionType::VALUE_NULL:
-				new_iceberg_column->initial_default = make_uniq<Value>(nullptr);
-				new_iceberg_column->write_default = make_uniq<Value>(nullptr);
 				break;
 			default:
 				throw InvalidInputException("DEFAULT expression not yet supported");
 			}
 		}
-		// else {
-		// 	new_iceberg_column->initial_default = make_uniq<Value>(nullptr);
-		// 	new_iceberg_column->write_default = make_uniq<Value>(nullptr);
-		// }
+
 		new_iceberg_column->required = false;
 
 		// TODO: Add support for nested types here
