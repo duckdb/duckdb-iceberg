@@ -183,17 +183,7 @@ optional_ptr<CatalogEntry> IcebergSchemaEntry::CreateCollation(CatalogTransactio
                                                                CreateCollationInfo &info) {
 	throw BinderException("Iceberg databases do not support creating collations");
 }
-rest_api_objects::CommitTableRequest CreateCommitTableRequestForAddColumn(AddColumnInfo &add_column_info) {
-	auto commit_table_request = rest_api_objects::CommitTableRequest();
-	auto identifier = rest_api_objects::TableIdentifier();
-	identifier.name = add_column_info.name;
-	auto _namespace = rest_api_objects::Namespace();
-	_namespace.value.push_back(add_column_info.schema);
-	identifier._namespace = std::move(_namespace);
 
-	// commit_table_request.identifier = identifier
-	return commit_table_request;
-}
 void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) {
 	if (info.type != AlterType::ALTER_TABLE) {
 		throw NotImplementedException("Only ALTER TABLE is supported for Iceberg");
@@ -235,10 +225,7 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 	case AlterTableType::ADD_COLUMN: {
 		auto &add_column_info = alter_table_info.Cast<AddColumnInfo>();
 		auto &column_definition = add_column_info.new_column;
-		/* We need to create the necessary POST bodies to send to the Iceberg REST API. We should do:
-		 *	- POST /v1/{prefix}/namespaces/{namespace}/tables/{table} - Commit updates to a table.
-		 */
-		auto commit_table_request = CreateCommitTableRequestForAddColumn(add_column_info);
+
 		// Ensure schema is the same as current
 		updated_table.AddAssertCurrentSchemaId(irc_transaction);
 
