@@ -1,4 +1,4 @@
-# name: test/sql/local/irc_any_catalog/alter/test_alter_add_column.test
+# name: test/sql/local/irc_any_catalog/alter/test_alter_add_column_v2.test
 # group: [alter]
 
 require-env ICEBERG_SERVER_AVAILABLE
@@ -41,3 +41,8 @@ FROM my_datalake.default.alter_add_column_table;
 7	NULL
 8	NULL
 9	NULL
+
+statement error
+ALTER TABLE my_datalake.default.alter_add_column_table ADD COLUMN c int DEFAULT 42;
+----
+Operation `ALTER TABLE ... ADD COLUMN ... DEFAULT ...` with non-null default is only supported for tables with Iceberg v3 onwards.

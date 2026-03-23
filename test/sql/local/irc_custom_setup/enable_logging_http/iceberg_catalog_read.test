@@ -108,4 +108,4 @@ select count(*) from my_datalake.default.pyspark_iceberg_table_v2;
 statement error
 Alter table my_datalake.default.table_more_deletes add column new_column INTEGER default 10;
 ----
-Operation `ALTER TABLE ... ADD COLUMN ... DEFAULT ...` with non-null default is only supported with Iceberg tables version v3 onwards.
+Operation `ALTER TABLE ... ADD COLUMN ... DEFAULT ...` with non-null default is only supported for tables with Iceberg v3 onwards.
