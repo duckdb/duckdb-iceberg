@@ -45,7 +45,7 @@ IcebergManifestListEntry IcebergAddSnapshot::ConstructManifest(CopyFunction &avr
 	auto &snapshot = *commit_state.latest_snapshot;
 	auto manifest_scan =
 	    AvroScan::ScanManifest(snapshot, manifest_files, options, fs, "", table_metadata, commit_state.context);
-	auto manifest_file_reader = make_uniq<manifest_file::ManifestReader>(*manifest_scan, true);
+	auto manifest_file_reader = make_uniq<manifest_file::ManifestReader>(*manifest_scan);
 
 	auto manifest_file_uuid = UUID::ToString(UUID::GenerateRandomUUID());
 	auto manifest_file_path = fs.JoinPath(table_metadata.GetMetadataPath(fs), manifest_file_uuid + "-m0.avro");
@@ -53,7 +53,7 @@ IcebergManifestListEntry IcebergAddSnapshot::ConstructManifest(CopyFunction &avr
 	auto &rewritten_list_entry = manifest_files[0];
 	auto &manifest_entries = rewritten_list_entry.manifest_entries;
 	while (!manifest_file_reader->Finished()) {
-		manifest_file_reader->Read(STANDARD_VECTOR_SIZE, manifest_entries);
+		manifest_file_reader->Read();
 	}
 	auto &rewritten_manifest_file = rewritten_list_entry.file;
 	rewritten_manifest_file.manifest_path = manifest_file_path;
@@ -67,6 +67,10 @@ IcebergManifestListEntry IcebergAddSnapshot::ConstructManifest(CopyFunction &avr
 	bool removed_any_entries = false;
 	idx_t handled_entries = 0;
 	for (auto &manifest_entry : manifest_entries) {
+		auto sequence_number = manifest_entry.GetSequenceNumber(rewritten_manifest_file);
+		auto file_sequence_number = manifest_entry.GetFileSequenceNumber(rewritten_manifest_file);
+		manifest_entry.SetSequenceNumber(sequence_number);
+		manifest_entry.SetFileSequenceNumber(file_sequence_number);
 		if (manifest_entry.status == IcebergManifestEntryStatusType::ADDED) {
 			manifest_entry.status = IcebergManifestEntryStatusType::EXISTING;
 		}
@@ -109,8 +113,8 @@ IcebergManifestListEntry IcebergAddSnapshot::ConstructManifest(CopyFunction &avr
 	}
 
 	//! Finally overwrite the input 'manifest_file' with our edited copy
-	auto manifest_length = manifest_file::WriteToFile(table_metadata, manifest_file_path, manifest_entries, avro_copy,
-	                                                  db, commit_state.context);
+	auto manifest_length = manifest_file::WriteToFile(table_metadata, rewritten_manifest_file, manifest_entries,
+	                                                  avro_copy, db, commit_state.context);
 	rewritten_manifest_file.manifest_length = manifest_length;
 	return std::move(rewritten_list_entry);
 }
@@ -149,7 +153,7 @@ static IcebergManifestListEntry WriteManifestListEntry(const IcebergTableInforma
                                                        const IcebergManifestListEntry &list_entry,
                                                        CopyFunction &avro_copy, DatabaseInstance &db,
                                                        ClientContext &context) {
-	auto manifest_length = manifest_file::WriteToFile(table_info.table_metadata, list_entry.file.manifest_path,
+	auto manifest_length = manifest_file::WriteToFile(table_info.table_metadata, list_entry.file,
 	                                                  list_entry.manifest_entries, avro_copy, db, context);
 	IcebergManifestListEntry new_entry(list_entry.file);
 	new_entry.manifest_entries = list_entry.manifest_entries;

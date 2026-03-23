@@ -6,6 +6,7 @@
 #include "core/metadata/iceberg_table_metadata.hpp"
 #include "core/metadata/manifest/iceberg_manifest_list.hpp"
 #include "iceberg_options.hpp"
+#include "planning/iceberg_manifest_read_state.hpp"
 
 namespace duckdb {
 
@@ -49,8 +50,12 @@ public:
 	static constexpr const AvroScanInfoType TYPE = AvroScanInfoType::MANIFEST_LIST;
 
 public:
-	IcebergManifestListScanInfo(const IcebergTableMetadata &metadata, const IcebergSnapshot &snapshot);
+	IcebergManifestListScanInfo(const IcebergTableMetadata &metadata, const IcebergSnapshot &snapshot,
+	                            vector<IcebergManifestListEntry> &result);
 	virtual ~IcebergManifestListScanInfo();
+
+public:
+	vector<IcebergManifestListEntry> &result;
 };
 
 class IcebergManifestFileScanInfo : public IcebergAvroScanInfo {
@@ -59,17 +64,19 @@ public:
 
 public:
 	IcebergManifestFileScanInfo(const IcebergTableMetadata &metadata, const IcebergSnapshot &snapshot,
-	                            const vector<IcebergManifestListEntry> &manifest_files, const IcebergOptions &options,
-	                            FileSystem &fs, const string &iceberg_path);
+	                            vector<IcebergManifestListEntry> &manifest_files, const IcebergOptions &options,
+	                            FileSystem &fs, const string &iceberg_pat,
+	                            optional_ptr<ManifestEntryReadState> read_state);
 	virtual ~IcebergManifestFileScanInfo();
 
 public:
-	const vector<IcebergManifestListEntry> &manifest_files;
+	vector<IcebergManifestListEntry> &manifest_files;
 	const IcebergOptions &options;
 	FileSystem &fs;
 	string iceberg_path;
 	//! partition_field_id -> semantic column type (e.g. INTEGER for DAY)
 	map<idx_t, LogicalType> partition_field_id_to_type;
+	optional_ptr<ManifestEntryReadState> read_state;
 };
 
 class IcebergAvroMultiFileList : public SimpleMultiFileList {

@@ -616,9 +616,9 @@ void IcebergTableInformation::AddAssertCurrentSchemaId(IcebergTransaction &trans
 	transaction_data->TableAddAssertCurrentSchemaId();
 }
 
-void IcebergTableInformation::AddAssertLastAssignedColumnFieldId(IcebergTransaction &transaction) {
+void IcebergTableInformation::AddAssertLastAssignedFieldId(IcebergTransaction &transaction) {
 	InitTransactionData(transaction);
-	transaction_data->TableAddAssertLastAssignedColumnFieldId();
+	transaction_data->TableAddAssertLastAssignedFieldId();
 }
 
 void IcebergTableInformation::AddAssertLastAssignedPartitionId(IcebergTransaction &transaction) {

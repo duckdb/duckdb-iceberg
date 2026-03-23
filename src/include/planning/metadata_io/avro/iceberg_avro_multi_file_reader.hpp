@@ -23,11 +23,6 @@ public:
 
 struct IcebergAvroMultiFileReader : public MultiFileReader {
 public:
-	static constexpr column_t PARTITION_SPEC_ID_FIELD_ID = UINT64_C(10000000000000000000);
-	static constexpr column_t SEQUENCE_NUMBER_FIELD_ID = UINT64_C(10000000000000000001);
-	static constexpr column_t MANIFEST_FILE_PATH_FIELD_ID = UINT64_C(10000000000000000002);
-
-public:
 	IcebergAvroMultiFileReader(shared_ptr<TableFunctionInfo> function_info) : function_info(std::move(function_info)) {
 	}
 
@@ -36,11 +31,6 @@ public:
 	                                         const FileGlobInput &glob_input) override;
 	bool Bind(MultiFileOptions &options, MultiFileList &files, vector<LogicalType> &return_types, vector<string> &names,
 	          MultiFileReaderBindData &bind_data) override;
-	unique_ptr<Expression>
-	GetVirtualColumnExpression(ClientContext &context, MultiFileReaderData &reader_data,
-	                           const vector<MultiFileColumnDefinition> &local_columns, idx_t &column_id,
-	                           const LogicalType &type, MultiFileLocalIndex local_idx,
-	                           optional_ptr<MultiFileColumnDefinition> &global_column_reference) override;
 	void FinalizeChunk(ClientContext &context, const MultiFileBindData &bind_data, BaseFileReader &reader,
 	                   const MultiFileReaderData &reader_data, DataChunk &input_chunk, DataChunk &output_chunk,
 	                   ExpressionExecutor &executor, optional_ptr<MultiFileReaderGlobalState> global_state) override;

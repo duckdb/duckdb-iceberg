@@ -47,6 +47,9 @@ public:
 	void ParsePrefix();
 	void GetConfig(ClientContext &context, IcebergEndpointType &endpoint_type);
 	IRCEndpointBuilder GetBaseUrl() const;
+	string GetWarehouse() const {
+		return warehouse;
+	}
 	static void SetAWSCatalogOptions(IcebergAttachOptions &attach_options,
 	                                 case_insensitive_set_t &set_by_attach_options);
 	//! Whether or not this catalog should search a specific type with the standard priority
@@ -118,8 +121,6 @@ public:
 public:
 	AccessMode access_mode;
 	unique_ptr<IcebergAuthorization> auth_handler;
-	//! warehouse
-	string warehouse;
 	//! host of the REST catalog
 	string uri;
 	//! version
@@ -132,6 +133,8 @@ public:
 	string default_schema;
 
 private:
+	//! warehouse
+	string warehouse;
 	// defaults and overrides provided by a catalog.
 	case_insensitive_map_t<string> defaults;
 	case_insensitive_map_t<string> overrides;

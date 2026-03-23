@@ -36,7 +36,7 @@ jobs:
 
       - name: Setup Lakekeeper
         run: |
-          make lakekeeper
+          make lakekeeper-data
 
       - name: Run Lakekeeper Specific Tests
         env:

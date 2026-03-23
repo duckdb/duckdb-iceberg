@@ -113,7 +113,7 @@ void IcebergTableEntry::PrepareIcebergScanFromEntry(ClientContext &context) cons
 			auto kv_secret = dynamic_cast<const KeyValueSecret &>(*secret_entry->secret);
 
 			//! Override all the options if 's3tables' is the host of the catalog
-			auto substrings = StringUtil::Split(ic_catalog.warehouse, ":");
+			auto substrings = StringUtil::Split(ic_catalog.GetWarehouse(), ":");
 			D_ASSERT(substrings.size() == 6);
 			auto region = substrings[3];
 			auto endpoint = "s3." + region + ".amazonaws.com";

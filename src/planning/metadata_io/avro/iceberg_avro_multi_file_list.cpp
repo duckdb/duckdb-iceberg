@@ -11,19 +11,21 @@ IcebergAvroScanInfo::~IcebergAvroScanInfo() {
 }
 
 IcebergManifestListScanInfo::IcebergManifestListScanInfo(const IcebergTableMetadata &metadata,
-                                                         const IcebergSnapshot &snapshot)
-    : IcebergAvroScanInfo(TYPE, metadata, snapshot) {
+                                                         const IcebergSnapshot &snapshot,
+                                                         vector<IcebergManifestListEntry> &result)
+    : IcebergAvroScanInfo(TYPE, metadata, snapshot), result(result) {
 }
 IcebergManifestListScanInfo::~IcebergManifestListScanInfo() {
 }
 
 IcebergManifestFileScanInfo::IcebergManifestFileScanInfo(const IcebergTableMetadata &metadata,
                                                          const IcebergSnapshot &snapshot,
-                                                         const vector<IcebergManifestListEntry> &manifest_files,
+                                                         vector<IcebergManifestListEntry> &manifest_files,
                                                          const IcebergOptions &options, FileSystem &fs,
-                                                         const string &iceberg_path)
+                                                         const string &iceberg_path,
+                                                         optional_ptr<ManifestEntryReadState> read_state)
     : IcebergAvroScanInfo(TYPE, metadata, snapshot), manifest_files(manifest_files), options(options), fs(fs),
-      iceberg_path(iceberg_path) {
+      iceberg_path(iceberg_path), read_state(read_state) {
 	unordered_set<int32_t> partition_spec_ids;
 	for (auto &manifest_list_entry : manifest_files) {
 		auto &manifest = manifest_list_entry.file;

@@ -14,6 +14,7 @@
 #include "duckdb/parser/expression/constant_expression.hpp"
 
 #include "planning/metadata_io/avro/iceberg_avro_multi_file_list.hpp"
+#include "planning/iceberg_manifest_read_state.hpp"
 
 namespace duckdb {
 
@@ -25,11 +26,13 @@ public:
 
 public:
 	static unique_ptr<AvroScan> ScanManifestList(const IcebergSnapshot &snapshot, const IcebergTableMetadata &metadata,
-	                                             ClientContext &context, const string &path);
+	                                             ClientContext &context, const string &path,
+	                                             vector<IcebergManifestListEntry> &result);
 	static unique_ptr<AvroScan> ScanManifest(const IcebergSnapshot &snapshot,
-	                                         const vector<IcebergManifestListEntry> &manifest_files,
+	                                         vector<IcebergManifestListEntry> &manifest_files,
 	                                         const IcebergOptions &options, FileSystem &fs, const string &iceberg_path,
-	                                         const IcebergTableMetadata &metadata, ClientContext &context);
+	                                         const IcebergTableMetadata &metadata, ClientContext &context,
+	                                         optional_ptr<ManifestEntryReadState> read_state = nullptr);
 
 public:
 	void InitializeChunk(DataChunk &chunk) const;

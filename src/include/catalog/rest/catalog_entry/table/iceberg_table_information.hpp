@@ -47,7 +47,7 @@ public:
 	void AddAssertCreate(IcebergTransaction &transaction);
 	void AddAssertDefaultSpecId(IcebergTransaction &transaction);
 	void AddAssertCurrentSchemaId(IcebergTransaction &transaction);
-	void AddAssertLastAssignedColumnFieldId(IcebergTransaction &transaction);
+	void AddAssertLastAssignedFieldId(IcebergTransaction &transaction);
 	void AddAssertLastAssignedPartitionId(IcebergTransaction &transaction);
 	void AddAssignUUID(IcebergTransaction &transaction);
 	void AddUpradeFormatVersion(IcebergTransaction &transaction);
