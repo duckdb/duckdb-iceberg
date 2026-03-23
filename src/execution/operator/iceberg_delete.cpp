@@ -272,7 +272,10 @@ void IcebergDelete::FlushDeletes(IcebergTransaction &transaction, ClientContext 
 		// so that for partitioned tables it lands in the correct partition folder.
 		auto sep = fs.PathSeparator(filename);
 		auto last_sep = filename.rfind(sep);
-		string data_file_dir = last_sep != string::npos ? filename.substr(0, last_sep) : filename;
+		if (last_sep == string::npos) {
+			throw InvalidConfigurationException("Cannot create valid file path for delete file");
+		}
+		string data_file_dir = filename.substr(0, last_sep);
 		string delete_file_path = fs.JoinPath(data_file_dir, delete_filename);
 
 		delete_file.file_name = delete_file_path;

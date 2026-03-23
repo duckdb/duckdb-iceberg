@@ -88,8 +88,9 @@ IcebergDataFile::GetExtendedPartitionInfo(const IcebergTableMetadata &metadata) 
 	// Partition field ids are globally unique across all specs per the Iceberg spec.
 	struct ResolvedField {
 		const IcebergPartitionSpecField *field;
-		const LogicalType *source_type; // may be nullptr if column not found
+		const LogicalType *source_type;
 	};
+
 	unordered_map<uint64_t, ResolvedField> field_id_to_resolved;
 	for (auto &spec_pair : metadata.partition_specs) {
 		for (auto &field : spec_pair.second.fields) {
