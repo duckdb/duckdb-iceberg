@@ -46,3 +46,17 @@ statement error
 ALTER TABLE my_datalake.default.alter_add_column_table ADD COLUMN c int DEFAULT 42;
 ----
 Operation `ALTER TABLE ... ADD COLUMN ... DEFAULT ...` with non-null default is only supported for tables with Iceberg v3 onwards.
+
+query II
+FROM my_datalake.default.alter_add_column_table;
+----
+0	NULL
+1	NULL
+2	NULL
+3	NULL
+4	NULL
+5	NULL
+6	NULL
+7	NULL
+8	NULL
+9	NULL
