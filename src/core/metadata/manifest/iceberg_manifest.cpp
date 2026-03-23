@@ -70,34 +70,54 @@ LogicalType IcebergDataFile::PartitionStructType(const map<idx_t, LogicalType> &
 	return LogicalType::STRUCT(children);
 }
 
-const vector<DataFileExtendedPartitionInfo>
-IcebergDataFile::GetPartitionInfo(const IcebergTableMetadata &metadata) const {
-	vector<DataFileExtendedPartitionInfo> ret;
-	for (auto &partition_info : partition_info) {
-		auto &field_id = partition_info.field_id;
-		auto &value = partition_info.value;
-		DataFileExtendedPartitionInfo info;
-		for (auto &id_spec : metadata.partition_specs) {
-			auto &spec = id_spec.second;
-			for (auto &field : spec.fields) {
-				if (field_id == field.partition_field_id) {
-					info.name = field.name;
-					info.field_id = static_cast<uint64_t>(field_id);
-					info.value = value;
-					info.source_id = field.source_id;
-					info.transform = field.transform;
-					for (auto &schema : metadata.schemas) {
-						auto &schema_columns = schema.second->columns;
-						for (auto &schema_field : schema_columns) {
-							if (schema_field->id == field.source_id) {
-								info.source_type = schema_field->type;
-							}
-						}
-					}
-					ret.push_back(std::move(info));
-				}
-			}
+const vector<IcebergExtendedPartitionInfo>
+IcebergDataFile::GetExtendedPartitionInfo(const IcebergTableMetadata &metadata) const {
+	if (partition_info.empty()) {
+		return {};
+	}
+
+	// Build source_id -> LogicalType map from all schemas (schema evolution may spread columns).
+	unordered_map<uint64_t, const LogicalType *> source_id_to_type;
+	for (auto &schema_pair : metadata.schemas) {
+		for (auto &col : schema_pair.second->columns) {
+			source_id_to_type.emplace(static_cast<uint64_t>(col->id), &col->type);
 		}
+	}
+
+	// Build field_id -> (spec field, source_type) map from all partition specs.
+	// Partition field ids are globally unique across all specs per the Iceberg spec.
+	struct ResolvedField {
+		const IcebergPartitionSpecField *field;
+		const LogicalType *source_type; // may be nullptr if column not found
+	};
+	unordered_map<uint64_t, ResolvedField> field_id_to_resolved;
+	for (auto &spec_pair : metadata.partition_specs) {
+		for (auto &field : spec_pair.second.fields) {
+			auto type_it = source_id_to_type.find(field.source_id);
+			const LogicalType *source_type = type_it != source_id_to_type.end() ? type_it->second : nullptr;
+			field_id_to_resolved.emplace(field.partition_field_id, ResolvedField {&field, source_type});
+		}
+	}
+
+	// Resolve each partition_info entry in O(1).
+	vector<IcebergExtendedPartitionInfo> ret;
+	ret.reserve(partition_info.size());
+	for (auto &info : partition_info) {
+		auto it = field_id_to_resolved.find(info.field_id);
+		if (it == field_id_to_resolved.end()) {
+			throw InternalException("Partition field_id %llu not found in any partition spec", info.field_id);
+		}
+		auto &resolved = it->second;
+		IcebergExtendedPartitionInfo extended;
+		extended.name = resolved.field->name;
+		extended.field_id = info.field_id;
+		extended.value = info.value;
+		extended.source_id = resolved.field->source_id;
+		extended.transform = resolved.field->transform;
+		if (resolved.source_type) {
+			extended.source_type = *resolved.source_type;
+		}
+		ret.push_back(std::move(extended));
 	}
 	return ret;
 }
@@ -200,7 +220,7 @@ Value IcebergDataFile::ToValue(const IcebergTableMetadata &table_metadata, const
 		    Value::STRUCT(child_list_t<Value> {{"__duckdb_empty_struct_marker", Value(LogicalTypeId::VARCHAR)}}));
 	} else {
 		child_list_t<Value> partition_children;
-		auto extended_partition_info = GetPartitionInfo(table_metadata);
+		auto extended_partition_info = GetExtendedPartitionInfo(table_metadata);
 		for (auto &entry : extended_partition_info) {
 			auto new_value = Value();
 			string error_message;
@@ -347,7 +367,7 @@ static LogicalType PartitionStructType(const IcebergTableMetadata &table_metadat
 	auto &first_entry = entries.front();
 	child_list_t<LogicalType> children;
 	auto &data_file = first_entry.data_file;
-	auto extended_partition_info = data_file.GetPartitionInfo(table_metadata);
+	auto extended_partition_info = data_file.GetExtendedPartitionInfo(table_metadata);
 	if (data_file.partition_info.empty()) {
 		children.emplace_back("__duckdb_empty_struct_marker", LogicalType::INTEGER);
 	} else {
@@ -512,7 +532,7 @@ idx_t WriteToFile(const IcebergTableMetadata &table_metadata, const IcebergManif
 		auto &first_entry = manifest_entries.front();
 		auto &data_file = first_entry.data_file;
 
-		auto extended_partition_info = data_file.GetPartitionInfo(table_metadata);
+		auto extended_partition_info = data_file.GetExtendedPartitionInfo(table_metadata);
 		child_list_t<Value> partition;
 		// partition: struct(...)
 		children.emplace_back("partition", PartitionStructType(table_metadata, manifest_entries));

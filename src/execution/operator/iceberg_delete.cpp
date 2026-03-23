@@ -268,8 +268,12 @@ void IcebergDelete::FlushDeletes(IcebergTransaction &transaction, ClientContext 
 		}
 
 		string delete_filename = UUID::ToString(UUID::GenerateRandomUUID()) + "-deletes." + file_format;
-		string delete_file_path =
-		    fs.JoinPath(table.table_info.table_metadata.location, fs.JoinPath("data", delete_filename));
+		// Place the delete file in the same directory as the data file it references,
+		// so that for partitioned tables it lands in the correct partition folder.
+		auto sep = fs.PathSeparator(filename);
+		auto last_sep = filename.rfind(sep);
+		string data_file_dir = last_sep != string::npos ? filename.substr(0, last_sep) : filename;
+		string delete_file_path = fs.JoinPath(data_file_dir, delete_filename);
 
 		delete_file.file_name = delete_file_path;
 

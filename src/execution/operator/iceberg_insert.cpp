@@ -273,7 +273,7 @@ void IcebergInsertGlobalState::AddFiles(DataChunk &chunk, const string &table_na
 				auto &partition_field = field_it->second.get();
 				auto source_type = ic_schema->GetColumnTypeFromFieldId(partition_field.source_id);
 
-				DataFilePartitionInfo info;
+				IcebergPartitionInfo info;
 				info.field_id = partition_field.partition_field_id;
 				if (!struct_val[1].IsNull()) {
 					info.value = Value(StringValue::Get(struct_val[1]));

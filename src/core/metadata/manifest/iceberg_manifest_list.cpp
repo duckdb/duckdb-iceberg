@@ -133,12 +133,12 @@ void ManifestPartitions::Create(const IcebergTableMetadata &metadata, const Iceb
 
 	for (auto &entry : manifest_entries) {
 		auto &data_file = entry.data_file;
-		auto data_extended_partition_info = data_file.GetPartitionInfo(metadata);
+		auto data_extended_partition_info = data_file.GetExtendedPartitionInfo(metadata);
 		for (idx_t i = 0; i < num_fields; i++) {
 			auto &spec_field = partition_spec.fields[i];
 
 			// Find the partition info entry matching this field's partition_field_id
-			DataFileExtendedPartitionInfo extended_partition_info;
+			IcebergExtendedPartitionInfo extended_partition_info;
 			bool partition_info_exists = false;
 			for (auto &pi : data_extended_partition_info) {
 				if (pi.field_id == spec_field.partition_field_id) {
@@ -184,12 +184,12 @@ void ManifestPartitions::Create(const IcebergTableMetadata &metadata, const Iceb
 			continue;
 		}
 		auto &spec_field = partition_spec.fields[i];
-		// Find one DataFilePartitionInfo entry to get the type info
-		DataFileExtendedPartitionInfo extended_partition_info;
+		// Find one IcebergPartitionInfo entry to get the type info
+		IcebergExtendedPartitionInfo extended_partition_info;
 		bool have_extended_partition_info = false;
 		for (auto &entry : manifest_entries) {
 			auto &data_file = entry.data_file;
-			auto data_extended_partition_info = data_file.GetPartitionInfo(metadata);
+			auto data_extended_partition_info = data_file.GetExtendedPartitionInfo(metadata);
 			for (auto &pi : data_extended_partition_info) {
 				if (pi.field_id == spec_field.partition_field_id && !pi.value.IsNull()) {
 					extended_partition_info = pi;

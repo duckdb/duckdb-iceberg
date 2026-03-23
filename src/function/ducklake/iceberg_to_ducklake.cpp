@@ -1179,7 +1179,7 @@ public:
 				auto &partition = data_file.partition;
 
 				// Build a map from partition_field_id to DataFilePartitionInfo for quick lookup
-				unordered_map<uint64_t, reference<const DataFilePartitionInfo>> field_id_to_info;
+				unordered_map<uint64_t, reference<const IcebergPartitionInfo>> field_id_to_info;
 				for (auto &pi : partition_info) {
 					field_id_to_info.emplace(pi.field_id, pi);
 				}

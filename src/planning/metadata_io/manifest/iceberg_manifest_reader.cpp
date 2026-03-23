@@ -90,10 +90,6 @@ static vector<int64_t> GetSplitOffsets(Vector &split_offsets, idx_t index) {
 	return GetListTemplated<int64_t>(split_offsets, index);
 }
 
-static DataFilePartitionInfo GetPartitionInfo(const IcebergTableMetadata &table_metadata,
-                                              const vector<std::pair<int32_t, reference<Vector>>> partition_vectors) {
-}
-
 void ManifestReader::ReadChunk(DataChunk &chunk, const map<idx_t, LogicalType> &partition_field_id_to_type,
                                const IcebergTableMetadata &metadata, vector<IcebergManifestEntry> &result) {
 	idx_t count = chunk.size();
@@ -251,7 +247,7 @@ void ManifestReader::ReadChunk(DataChunk &chunk, const map<idx_t, LogicalType> &
 					if (field_id == field.partition_field_id) {
 						auto &partition_vector = it.second.get();
 
-						DataFilePartitionInfo info;
+						IcebergPartitionInfo info;
 						// info.name = field.name;
 						info.field_id = static_cast<uint64_t>(field_id);
 						info.value = partition_vector.GetValue(index);

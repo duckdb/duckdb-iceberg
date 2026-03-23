@@ -46,7 +46,7 @@ struct IcebergDeleteFileInfo {
 	idx_t pos_min_value;
 	optional_idx content_size_in_bytes;
 	optional_idx content_offset;
-	vector<DataFilePartitionInfo> partition_info;
+	vector<IcebergPartitionInfo> partition_info;
 };
 
 class IcebergDeleteGlobalState : public GlobalSinkState {

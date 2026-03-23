@@ -370,7 +370,7 @@ const BoundIcebergManifestEntry &IcebergMultiFileList::GetManifestEntry(idx_t fi
 	return data_manifest_entries[file_id];
 }
 
-vector<DataFilePartitionInfo> IcebergMultiFileList::GetPartitionInfoForDataFile(const string &file_path) const {
+vector<IcebergPartitionInfo> IcebergMultiFileList::GetPartitionInfoForDataFile(const string &file_path) const {
 	lock_guard<mutex> guard(lock);
 	auto iceberg_path = GetPath();
 	for (auto &bound_entry : data_manifest_entries) {
