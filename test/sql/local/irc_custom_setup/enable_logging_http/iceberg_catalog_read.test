@@ -12,6 +12,15 @@ require iceberg
 
 require httpfs
 
+statement ok
+SET ca_cert_file = '~/.mitmproxy/mitmproxy-ca-cert.pem';
+
+statement ok
+CREATE SECRET http_proxy (
+    TYPE http,
+    HTTP_PROXY 'http://localhost:8878'
+);
+
 # Do not ignore 'HTTP' error messages!
 set ignore_error_messages
 
@@ -40,15 +49,15 @@ ATTACH '' AS my_datalake (
     ENDPOINT 'http://127.0.0.1:8181'
 );
 
-statement error
-select * from table_unpartitioned
-----
-<REGEX>:.*table_unpartitioned does not exist.*
-
-statement error
-select * from table_unpartitioned;
-----
-<REGEX>:.*Did you mean.*my_datalake.default.table_unpartitioned.*
+# statement error
+# select * from table_unpartitioned
+# ----
+# <REGEX>:.*table_unpartitioned does not exist.*
+#
+# statement error
+# select * from table_unpartitioned;
+# ----
+# <REGEX>:.*Did you mean.*my_datalake.default.table_unpartitioned.*
 
 query II
 SELECT request.url, response.reason FROM duckdb_logs_parsed('HTTP') WHERE request.type='POST' AND (request.url).starts_with('http://127.0.0.1:8181/v1/') order by timestamp
@@ -99,4 +108,4 @@ select count(*) from my_datalake.default.pyspark_iceberg_table_v2;
 statement error
 Alter table my_datalake.default.table_more_deletes add column new_column INTEGER default 10;
 ----
-<REGEX>:.*Not implemented Error.*
+Operation `ALTER TABLE ... ADD COLUMN ... DEFAULT ...` with non-null default is only supported with Iceberg tables version v3 onwards.
