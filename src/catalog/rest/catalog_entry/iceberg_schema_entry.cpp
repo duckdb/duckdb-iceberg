@@ -242,7 +242,6 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 		// Ensure schema is the same as current
 		updated_table.AddAssertCurrentSchemaId(irc_transaction);
 
-
 		// Add the new column
 		auto new_iceberg_column = make_uniq<IcebergColumnDefinition>();
 		auto &last_column_id = updated_table.table_metadata.last_column_id;
@@ -287,6 +286,9 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 
 		updated_table.table_metadata.schemas[new_schema_id] = std::move(new_schema);
 		updated_table.table_metadata.current_schema_id = new_schema_id;
+
+		// Update the Table Metadata to have our new schema
+		updated_table.CreateSchemaVersion(*updated_table.table_metadata.schemas[new_schema_id]);
 
 		updated_table.AddSchema(irc_transaction);
 		updated_table.AddSetCurrentSchema(irc_transaction);

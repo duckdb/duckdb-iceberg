@@ -46,8 +46,6 @@ set variable manifest_path_duckdb = (select manifest_path from iceberg_metadata(
 statement ok
 set variable parquet_path_duckdb = (select file_path from iceberg_metadata(my_datalake.default.alter_add_column_table) order by manifest_sequence_number desc limit 1);
 
-mode output_result
-
 statement ok
 from read_avro(getvariable(manifest_list_duckdb));
 
