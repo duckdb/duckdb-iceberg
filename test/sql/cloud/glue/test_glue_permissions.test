@@ -23,6 +23,7 @@ set ignore_error_messages
 statement ok
 CREATE SECRET glue_secret (
     TYPE S3,
+    REGION 'us-east-1',
     PROVIDER credential_chain,
     CHAIN 'sts',
     ASSUME_ROLE_ARN 'arn:aws:iam::840140254803:role/pyiceberg-etl-role'
