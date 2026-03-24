@@ -209,9 +209,6 @@ TableFunction IcebergTableEntry::GetScanFunction(ClientContext &context, unique_
 
 	int32_t schema_id;
 	if (snapshot_lookup.IsLatest() || using_transaction_timestamp) {
-		// For latest or transaction-timestamp lookups, use the current schema.
-		// Transaction-timestamp is for snapshot isolation (data file selection),
-		// not schema selection — schema evolution (e.g. ADD COLUMN) is always reflected.
 		schema_id = metadata.current_schema_id;
 	} else {
 		D_ASSERT(snapshot);

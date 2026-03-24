@@ -241,12 +241,13 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 		new_iceberg_column->name = column_definition.GetName();
 		new_iceberg_column->type = column_definition.GetType();
 
-		// Default value
 		if (column_definition.HasDefaultValue()) {
 			auto &default_value = column_definition.DefaultValue();
 
-			// TODO: Which expressions should we support? Some will require binding, should that binding happen here?
-			// ExtractInitialValue in iceberg_create_table_request.cpp:208-216 gets a value using a ConstantBinder.
+			/*TODO: Support more expressions.
+			*  Which expressions should we support? Some will require binding, should that binding happen here?
+			*  ExtractInitialValue in iceberg_create_table_request.cpp:208-216 gets a value using a ConstantBinder.
+			*/
 			switch (default_value.type) {
 			case ExpressionType::VALUE_CONSTANT:
 				new_iceberg_column->initial_default = make_uniq<Value>(default_value.Cast<ConstantExpression>().value);
