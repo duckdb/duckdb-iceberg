@@ -48,7 +48,8 @@
         "test/sql/local/setup_with_test_config/alter/test_alter_table_reset_partitioned_by.test",
         "test/sql/local/setup_with_test_config/alter/test_alter_partitioned_by.test",
         "test/sql/local/setup_with_test_config/alter/test_alter_table_partitioned_conflict.test",
-        "test/sql/local/setup_with_test_config/alter/test_create_table_partitioned_by.test"
+        "test/sql/local/setup_with_test_config/alter/test_create_table_partitioned_by.test",
+        "test/sql/local/setup_with_test_config/alter/test_alter_add_column_same_transaction.test"
       ]
     }
   ]
