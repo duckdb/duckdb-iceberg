@@ -1,4 +1,4 @@
-# name: test/sql/local/setup_with_test_config/alter/test_alter_add_column_same_transaction.test
+# name: test/sql/local/setup_with_test_config/alter/alter_add_column_same_transaction.test
 # group: [alter]
 
 require-env ICEBERG_SERVER_AVAILABLE

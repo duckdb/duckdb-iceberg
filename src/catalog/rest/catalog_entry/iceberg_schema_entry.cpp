@@ -226,6 +226,14 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 		auto &add_column_info = alter_table_info.Cast<AddColumnInfo>();
 		auto &column_definition = add_column_info.new_column;
 
+		if (add_column_info.if_column_not_exists) {
+			for (auto &col : current_schema.columns) {
+				if (col->name == column_definition.GetName()) {
+					return;
+				}
+			}
+		}
+
 		// Ensure schema is the same as current
 		updated_table.AddAssertCurrentSchemaId(irc_transaction);
 
@@ -245,9 +253,9 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 			auto &default_value = column_definition.DefaultValue();
 
 			/*TODO: Support more expressions.
-			*  Which expressions should we support? Some will require binding, should that binding happen here?
-			*  ExtractInitialValue in iceberg_create_table_request.cpp:208-216 gets a value using a ConstantBinder.
-			*/
+			 *  Which expressions should we support? Some will require binding, should that binding happen here?
+			 *  ExtractInitialValue in iceberg_create_table_request.cpp:208-216 gets a value using a ConstantBinder.
+			 */
 			switch (default_value.type) {
 			case ExpressionType::VALUE_CONSTANT:
 				new_iceberg_column->initial_default = make_uniq<Value>(default_value.Cast<ConstantExpression>().value);
