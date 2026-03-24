@@ -69,9 +69,10 @@ jobs:
         env:
           ICEBERG_SERVER_AVAILABLE: 1
           SECRETS_CREATED_AND_CATALOG_ATTACHED: 1
+          FIXTURE_SERVER_AVAILABLE: 1
         run: |
-          ./build/release/test/unittest "$PWD/test/sql/local/irc_any_catalog/*" --list-test-names-only || true
-          ./build/release/test/unittest "$PWD/test/sql/local/irc_any_catalog/*" --test-config test/configs/fixture.json
+          ./build/release/test/unittest "$PWD/test/sql/local/setup_with_test_config/*" --list-test-names-only || true
+          ./build/release/test/unittest "$PWD/test/sql/local/setup_with_test_config/*" --test-config test/configs/fixture.json
 
       - name: Run other tests
         env:
