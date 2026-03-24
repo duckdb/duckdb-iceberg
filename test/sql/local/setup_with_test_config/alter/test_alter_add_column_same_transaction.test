@@ -17,10 +17,10 @@ require httpfs
 set ignore_error_messages
 
 statement ok
-drop table if exists my_datalake.default.alter_add_column_same_txn_table;
+CREATE SCHEMA IF NOT EXISTS my_datalake.default;
 
 statement ok
-CREATE SCHEMA IF NOT EXISTS my_datalake.default;
+drop table if exists my_datalake.default.alter_add_column_same_txn_table;
 
 statement ok
 CREATE TABLE my_datalake.default.alter_add_column_same_txn_table AS (select range a FROM range(10));

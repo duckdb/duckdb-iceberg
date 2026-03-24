@@ -19,10 +19,10 @@ require httpfs
 set ignore_error_messages
 
 statement ok
-drop table if exists my_datalake.default.alter_add_column_table;
+CREATE SCHEMA IF NOT EXISTS my_datalake.default;
 
 statement ok
-CREATE SCHEMA IF NOT EXISTS my_datalake.default;
+drop table if exists my_datalake.default.alter_add_column_table;
 
 statement ok
 CREATE TABLE my_datalake.default.alter_add_column_table WITH ('format-version' = 3) AS (select range a FROM range(10));
