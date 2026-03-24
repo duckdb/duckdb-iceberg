@@ -55,8 +55,11 @@ bool IcebergTableSet::FillEntry(ClientContext &context, IcebergTableInformation 
 	auto get_table_result = IRCAPI::GetTable(context, ic_catalog, schema, table.name);
 	if (get_table_result.has_error) {
 		if (get_table_result.status_ == HTTPStatusCode::NotFound_404) {
-			// Glue returns 404 when a table is not an Iceberg Table. The problem is that the table
-			// still shows up in `show all table` statements. So if we get a 404 with NoSuchTable, we throw this error
+			// Glue returns 404 when a table is not an Iceberg Table with the error message
+			// "input table is not an iceberg table" of type "NoSuchIcebergTableException"
+			// Otherwise the error is a standard 404, we return false and duckdb will return
+			// that the table does not exist.
+			// see test/sql/cloud/test_glue_catalog_with_other_tables.test for testing
 			if (get_table_result.error_._error.type != "NoSuchIcebergTableException") {
 				return false;
 			}
