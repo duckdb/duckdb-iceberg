@@ -4,7 +4,6 @@
 
 #include "common/iceberg_utils.hpp"
 #include "catalog/rest/api/catalog_utils.hpp"
-#include "function/metadata/iceberg_metadata.hpp"
 #include "core/metadata/snapshot/iceberg_snapshot.hpp"
 #include "rest_catalog/objects/list.hpp"
 #include "catalog/rest/api/iceberg_create_table_request.hpp"
@@ -261,11 +260,11 @@ string IcebergTableMetadata::GetMetaDataPath(ClientContext &context, const strin
 	return GuessTableVersion(meta_path, fs, options);
 }
 
-bool IcebergTableMetadata::HasLastAssignedColumnFieldId() const {
+bool IcebergTableMetadata::HasLastColumnId() const {
 	return last_column_id.IsValid();
 }
 
-idx_t IcebergTableMetadata::GetLastAssignedColumnFieldId() const {
+idx_t IcebergTableMetadata::GetLastColumnId() const {
 	return last_column_id.GetIndex();
 }
 

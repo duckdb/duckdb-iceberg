@@ -1,6 +1,6 @@
 POLARIS_ENV_FILE ?= scripts/envs/polaris.env
 
-polaris_clone:
+polaris-clone:
 	@if [ ! -d ".catalogs/polaris" ]; then \
 		echo "Cloning Polaris repository..."; \
 		mkdir -p .catalogs && git clone https://github.com/apache/polaris.git .catalogs/polaris; \
@@ -9,23 +9,23 @@ polaris_clone:
 		echo "Polaris repository exists."; \
 	fi
 
-polaris_build:
+polaris-build:
 	@if [ -f ".catalogs/polaris/runtime/server/build/quarkus-app/quarkus-run.jar" ]; then \
-		echo "Polaris already built, skipping. Run 'make polaris_rebuild' to force."; \
+		echo "Polaris already built, skipping. Run 'make polaris-rebuild' to force."; \
 	else \
 		echo "Building Polaris..."; \
 		cd .catalogs/polaris && ./gradlew :polaris-server:assemble -Dquarkus.container-image.build=true && ./gradlew --stop; \
 	fi
 
-polaris_rebuild:
+polaris-rebuild:
 	@echo "Rebuilding Polaris (clean)..."
 	cd .catalogs/polaris && ./gradlew clean :polaris-server:assemble -Dquarkus.container-image.build=true --no-build-cache && ./gradlew --stop
 
-polaris_stop:
+polaris-stop:
 	@echo "Stopping Polaris server..."
 	cd .catalogs/polaris && ./gradlew --stop
 
-polaris_start: polaris_clone polaris_build polaris_stop
+polaris: polaris-clone polaris-build polaris-stop
 	$(call stop_active_catalog)
 	@echo "Starting Polaris server..."
 	cd .catalogs/polaris && nohup ./gradlew :polaris-server:run > polaris-server.log 2> polaris-error.log &
@@ -50,7 +50,7 @@ polaris_start: polaris_clone polaris_build polaris_stop
 	envsubst '$$POLARIS_CLIENT_ID $$POLARIS_CLIENT_SECRET' < test/configs/polaris.json.template > test/configs/polaris.json
 	$(call set_active_catalog,polaris)
 
-polaris_data:
+polaris-data: polaris
 	@echo "Setting up venv-spark4 and generating data..."
 	python3 -m venv .venv-spark4 && \
 	. .venv-spark4/bin/activate && \
@@ -58,6 +58,4 @@ polaris_data:
 	if [ -f "$(POLARIS_ENV_FILE)" ]; then echo "Loading env from $(POLARIS_ENV_FILE)"; set -a; . ./$(POLARIS_ENV_FILE); set +a; fi && \
 	export POLARIS_CLIENT_ID=$$(cat tmp/polaris_client_id.txt) && \
 	export POLARIS_CLIENT_SECRET=$$(cat tmp/polaris_client_secret.txt) && \
-	python3 -m scripts.data_generators.generate_data polaris
-
-polaris: polaris_start polaris_data
+	python3 -m scripts.data_generators.generate_data polaris $(if $(TEST),--test $(TEST))

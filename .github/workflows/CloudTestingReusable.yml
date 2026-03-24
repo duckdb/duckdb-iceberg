@@ -4,7 +4,8 @@ on:
     inputs:
       duckdb_ref:
         description: 'DuckDB branch name or commit hash'
-        required: true
+        required: false
+        default: ''
         type: string
       duckdb_iceberg_ref:
         description: 'duckdb-iceberg branch name or commit hash'
@@ -77,6 +78,7 @@ jobs:
         continue-on-error: true
 
       - name: Checkout DuckDB
+        if: ${{ inputs.duckdb_ref != '' }}
         run: |
           cd duckdb
           git fetch

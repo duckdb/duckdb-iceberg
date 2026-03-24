@@ -58,7 +58,7 @@ jobs:
 
       - name: Setup fixture local
         run: |
-          make fixture_local
+          make fixture-data-local
 
       - name: Run local tests
         env:

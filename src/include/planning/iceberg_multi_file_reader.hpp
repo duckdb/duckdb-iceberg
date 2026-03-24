@@ -18,7 +18,6 @@
 #include "duckdb/planner/table_filter.hpp"
 
 #include "planning/iceberg_multi_file_list.hpp"
-#include "function/metadata/iceberg_metadata.hpp"
 #include "common/iceberg_utils.hpp"
 #include "planning/metadata_io/manifest/iceberg_manifest_reader.hpp"
 
@@ -67,7 +66,8 @@ public:
 	                   const MultiFileReaderData &reader_data, DataChunk &input_chunk, DataChunk &output_chunk,
 	                   ExpressionExecutor &executor, optional_ptr<MultiFileReaderGlobalState> global_state) override;
 	void ApplyEqualityDeletes(ClientContext &context, DataChunk &output_chunk,
-	                          const IcebergMultiFileList &multi_file_list, const IcebergManifestEntry &manifest_entry,
+	                          const IcebergMultiFileList &multi_file_list,
+	                          const BoundIcebergManifestEntry &manifest_entry,
 	                          const vector<MultiFileColumnDefinition> &local_columns);
 	bool ParseOption(const string &key, const Value &val, MultiFileOptions &options, ClientContext &context) override;
 

@@ -65,7 +65,7 @@ bool CRC32::table_initialized = false;
 
 } // namespace
 
-shared_ptr<IcebergDeletionVectorData> IcebergDeletionVectorData::FromBlob(const IcebergManifestEntry &entry,
+shared_ptr<IcebergDeletionVectorData> IcebergDeletionVectorData::FromBlob(const BoundIcebergManifestEntry &entry,
                                                                           data_ptr_t blob_start, idx_t blob_length) {
 	//! https://iceberg.apache.org/puffin-spec/#deletion-vector-v1-blob-type
 
@@ -132,7 +132,8 @@ shared_ptr<IcebergDeletionVectorData> IcebergDeletionVectorData::FromBlob(const 
 	return result_p;
 }
 
-void IcebergMultiFileList::ScanPuffinFile(const IcebergManifestEntry &entry) const {
+void IcebergMultiFileList::ScanPuffinFile(const BoundIcebergManifestEntry &bound_entry) const {
+	auto &entry = bound_entry.entry;
 	auto &data_file = entry.data_file;
 	auto &table_metadata = GetMetadata();
 	auto iceberg_version = table_metadata.iceberg_version;
@@ -167,7 +168,7 @@ void IcebergMultiFileList::ScanPuffinFile(const IcebergManifestEntry &entry) con
 	}
 	//! NOTE: assign, don't emplace, deletion vectors take priority over any remaining positional delete files
 	positional_delete_data[data_file.referenced_data_file] =
-	    IcebergDeletionVectorData::FromBlob(entry, buffer_data, length);
+	    IcebergDeletionVectorData::FromBlob(bound_entry, buffer_data, length);
 }
 
 idx_t IcebergDeletionVector::Filter(row_t start_row_index, idx_t count, SelectionVector &result_sel) {
@@ -247,7 +248,7 @@ void IcebergDeletionVectorData::ToSet(set<idx_t> &out) const {
 	}
 }
 
-vector<data_t> IcebergDeletionVectorData::ToBlob() const {
+vector<data_t> IcebergDeletionVectorData::ToBlob(const unordered_map<int32_t, roaring::Roaring> &bitmaps) {
 	//! https://iceberg.apache.org/puffin-spec/#deletion-vector-v1-blob-type
 
 	// Calculate total size needed

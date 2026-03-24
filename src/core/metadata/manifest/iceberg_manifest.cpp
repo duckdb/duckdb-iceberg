@@ -9,6 +9,32 @@
 
 namespace duckdb {
 
+string IcebergManifestEntryContentTypeToString(IcebergManifestEntryContentType type) {
+	switch (type) {
+	case IcebergManifestEntryContentType::DATA:
+		return "EXISTING";
+	case IcebergManifestEntryContentType::POSITION_DELETES:
+		return "POSITION_DELETES";
+	case IcebergManifestEntryContentType::EQUALITY_DELETES:
+		return "EQUALITY_DELETES";
+	default:
+		throw InvalidConfigurationException("Invalid Manifest Entry Content Type");
+	}
+}
+
+string IcebergManifestEntryStatusTypeToString(IcebergManifestEntryStatusType type) {
+	switch (type) {
+	case IcebergManifestEntryStatusType::EXISTING:
+		return "EXISTING";
+	case IcebergManifestEntryStatusType::ADDED:
+		return "ADDED";
+	case IcebergManifestEntryStatusType::DELETED:
+		return "DELETED";
+	default:
+		throw InvalidConfigurationException("Invalid matifest entry type");
+	}
+}
+
 map<idx_t, LogicalType> IcebergDataFile::GetFieldIdToTypeMapping(const IcebergSnapshot &snapshot,
                                                                  const IcebergTableMetadata &metadata,
                                                                  const unordered_set<int32_t> &partition_spec_ids) {
@@ -42,6 +68,20 @@ LogicalType IcebergDataFile::PartitionStructType(const map<idx_t, LogicalType> &
 		}
 	}
 	return LogicalType::STRUCT(children);
+}
+
+void IcebergDataFile::SetFirstRowId(int64_t value) {
+	has_first_row_id = true;
+	first_row_id = value;
+}
+
+bool IcebergDataFile::HasFirstRowId() const {
+	return has_first_row_id;
+}
+
+int64_t IcebergDataFile::GetFirstRowId() const {
+	D_ASSERT(has_first_row_id);
+	return first_row_id;
 }
 
 LogicalType IcebergDataFile::GetType(const IcebergTableMetadata &metadata, const LogicalType &partition_type) {
@@ -220,6 +260,52 @@ Value IcebergDataFile::ToValue(const IcebergTableMetadata &table_metadata, const
 	return Value::STRUCT(type, children);
 }
 
+void IcebergManifestEntry::SetSequenceNumber(sequence_number_t value) {
+	has_sequence_number = true;
+	sequence_number = value;
+}
+
+void IcebergManifestEntry::SetFileSequenceNumber(sequence_number_t value) {
+	has_file_sequence_number = true;
+	file_sequence_number = value;
+}
+
+sequence_number_t IcebergManifestEntry::GetSequenceNumber(const IcebergManifestFile &manifest_file) const {
+	if (!has_sequence_number) {
+		if (status != IcebergManifestEntryStatusType::ADDED) {
+			throw InvalidConfigurationException(
+			    "'manifest_entry.sequence_number' is only allowed to be NULL for ADDED entries");
+		}
+		return manifest_file.sequence_number;
+	}
+	return sequence_number;
+}
+
+sequence_number_t IcebergManifestEntry::GetFileSequenceNumber(const IcebergManifestFile &manifest_file) const {
+	if (!has_file_sequence_number) {
+		if (status != IcebergManifestEntryStatusType::ADDED) {
+			throw InvalidConfigurationException(
+			    "'manifest_entry.file_sequence_number' is only allowed to be NULL for ADDED entries");
+		}
+		return manifest_file.sequence_number;
+	}
+	return file_sequence_number;
+}
+
+void IcebergManifestEntry::SetSnapshotId(int64_t value) {
+	has_snapshot_id = true;
+	snapshot_id = value;
+}
+
+bool IcebergManifestEntry::HasSnapshotId() const {
+	return has_snapshot_id;
+}
+
+int64_t IcebergManifestEntry::GetSnapshotId() const {
+	D_ASSERT(HasSnapshotId());
+	return snapshot_id;
+}
+
 namespace manifest_file {
 
 static LogicalType PartitionStructType(const vector<IcebergManifestEntry> &entries) {
@@ -257,11 +343,12 @@ static LogicalType PartitionStructType(const vector<IcebergManifestEntry> &entri
 	return LogicalType::STRUCT(children);
 }
 
-idx_t WriteToFile(const IcebergTableMetadata &table_metadata, const string &path,
+idx_t WriteToFile(const IcebergTableMetadata &table_metadata, const IcebergManifestFile &manifest_file,
                   const vector<IcebergManifestEntry> &manifest_entries, CopyFunction &copy, DatabaseInstance &db,
                   ClientContext &context) {
 	D_ASSERT(!manifest_entries.empty());
 	auto &allocator = db.GetBufferManager().GetBufferAllocator();
+	auto &path = manifest_file.manifest_path;
 
 	//! We need to create an iceberg-schema for the manifest file, written in the metadata of the Avro file.
 	std::unique_ptr<yyjson_mut_doc, YyjsonDocDeleter> doc_p(yyjson_mut_doc_new(nullptr));
@@ -662,15 +749,22 @@ idx_t WriteToFile(const IcebergTableMetadata &table_metadata, const string &path
 
 		// status: int
 		chunk.SetValue(col_idx++, i, Value::INTEGER(static_cast<int32_t>(manifest_entry.status)));
+		//! FIXME: this is missing logic, needs to be looked into
+		//! SPEC: Snapshot id where the file was added, or deleted if status is 2. Inherited when null.
 		// snapshot_id: long
-		chunk.SetValue(col_idx++, i, Value::BIGINT(manifest_entry.snapshot_id));
+		if (manifest_entry.HasSnapshotId()) {
+			chunk.SetValue(col_idx++, i, Value::BIGINT(manifest_entry.GetSnapshotId()));
+		} else {
+			chunk.SetValue(col_idx++, i, Value(LogicalType::BIGINT));
+		}
 		// sequence_number: long
-		chunk.SetValue(col_idx++, i, Value::BIGINT(manifest_entry.sequence_number));
 		// file_sequence_number: long
 		if (manifest_entry.status == IcebergManifestEntryStatusType::ADDED) {
 			chunk.SetValue(col_idx++, i, Value(LogicalType::BIGINT));
+			chunk.SetValue(col_idx++, i, Value(LogicalType::BIGINT));
 		} else {
-			chunk.SetValue(col_idx++, i, Value::BIGINT(manifest_entry.file_sequence_number));
+			chunk.SetValue(col_idx++, i, Value::BIGINT(manifest_entry.GetFileSequenceNumber(manifest_file)));
+			chunk.SetValue(col_idx++, i, Value::BIGINT(manifest_entry.GetSequenceNumber(manifest_file)));
 		}
 
 		auto &data_file = manifest_entry.data_file;

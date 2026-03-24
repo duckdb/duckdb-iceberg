@@ -94,12 +94,11 @@ SinkCombineResultType IcebergDelete::Combine(ExecutionContext &context, Operator
 
 void IcebergDelete::WriteDeletionVectorFile(ClientContext &context, IcebergDeleteGlobalState &global_state,
                                             const string &filename, IcebergDeleteFileInfo delete_file,
-                                            set<idx_t> sorted_deletes) const {
+                                            const set<idx_t> &sorted_deletes) const {
 	auto delete_file_path = delete_file.file_name;
 
 	// Build deletion vector data
-	IcebergManifestEntry unused;
-	auto dv_data = make_shared_ptr<IcebergDeletionVectorData>(unused);
+	unordered_map<int32_t, roaring::Roaring> bitmaps;
 
 	// Group row indices by high 32 bits
 	for (auto row_idx : sorted_deletes) {
@@ -107,12 +106,12 @@ void IcebergDelete::WriteDeletionVectorFile(ClientContext &context, IcebergDelet
 		int32_t high_bits = static_cast<int32_t>(row_id >> 32);
 		uint32_t low_bits = static_cast<uint32_t>(row_id & 0xFFFFFFFF);
 
-		auto &bitmap = dv_data->bitmaps[high_bits];
+		auto &bitmap = bitmaps[high_bits];
 		bitmap.add(low_bits);
 	}
 
 	// Serialize to blob
-	auto blob_data = dv_data->ToBlob();
+	auto blob_data = IcebergDeletionVectorData::ToBlob(bitmaps);
 
 	// Write blob to file
 	auto &fs = FileSystem::GetFileSystem(context);
@@ -214,12 +213,14 @@ void IcebergDelete::WritePositionalDeleteFile(ClientContext &context, IcebergDel
 	global_state.written_files.emplace(filename, std::move(delete_file));
 }
 
-static void PopulateAlteredManifests(case_insensitive_map_t<IcebergManifestDeletes> &out,
+static void PopulateAlteredManifests(const IcebergMultiFileList &multi_file_list,
+                                     case_insensitive_map_t<IcebergManifestDeletes> &out,
                                      IcebergDeleteData &delete_data, const string &referenced_data_file) {
-	for (auto &entry_p : delete_data.entries) {
-		auto &entry = entry_p.get();
-		auto &manifest_file = out[entry.manifest_file_path];
-		auto it = manifest_file.altered_data_files.emplace(entry.data_file.file_path, delete_data.type).first;
+	for (auto &bound_entry : delete_data.entries) {
+		auto &entry = bound_entry.entry;
+		auto &manifest_file = multi_file_list.GetManifestFileForEntry(bound_entry, IcebergManifestContentType::DELETE);
+		auto &altered_manifest_file = out[manifest_file.manifest_path];
+		auto it = altered_manifest_file.altered_data_files.emplace(entry.data_file.file_path, delete_data.type).first;
 		auto &delete_file = it->second;
 		delete_file.referenced_data_files.push_back(referenced_data_file);
 	}
@@ -248,7 +249,7 @@ void IcebergDelete::FlushDeletes(IcebergTransaction &transaction, ClientContext 
 			auto it = multi_file_list.positional_delete_data.find(filename);
 			if (it != multi_file_list.positional_delete_data.end()) {
 				auto &delete_data = *it->second;
-				PopulateAlteredManifests(global_state.altered_manifests, delete_data, filename);
+				PopulateAlteredManifests(multi_file_list, global_state.altered_manifests, delete_data, filename);
 				delete_data.ToSet(sorted_deletes);
 			}
 		}
