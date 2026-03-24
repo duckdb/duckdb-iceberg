@@ -12,15 +12,6 @@ require iceberg
 
 require httpfs
 
-statement ok
-SET ca_cert_file = '~/.mitmproxy/mitmproxy-ca-cert.pem';
-
-statement ok
-CREATE SECRET http_proxy (
-    TYPE http,
-    HTTP_PROXY 'http://localhost:8878'
-);
-
 # Do not ignore 'HTTP' error messages!
 set ignore_error_messages
 
@@ -49,15 +40,15 @@ ATTACH '' AS my_datalake (
     ENDPOINT 'http://127.0.0.1:8181'
 );
 
-# statement error
-# select * from table_unpartitioned
-# ----
-# <REGEX>:.*table_unpartitioned does not exist.*
-#
-# statement error
-# select * from table_unpartitioned;
-# ----
-# <REGEX>:.*Did you mean.*my_datalake.default.table_unpartitioned.*
+statement error
+select * from table_unpartitioned
+----
+<REGEX>:.*table_unpartitioned does not exist.*
+
+statement error
+select * from table_unpartitioned;
+----
+<REGEX>:.*Did you mean.*my_datalake.default.table_unpartitioned.*
 
 query II
 SELECT request.url, response.reason FROM duckdb_logs_parsed('HTTP') WHERE request.type='POST' AND (request.url).starts_with('http://127.0.0.1:8181/v1/') order by timestamp
