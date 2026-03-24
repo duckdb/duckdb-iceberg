@@ -23,7 +23,7 @@ statement ok
 CREATE SCHEMA IF NOT EXISTS my_datalake.default;
 
 statement ok
-CREATE TABLE my_datalake.default.alter_add_column_table AS (select range a FROM range(10));
+CREATE TABLE my_datalake.default.alter_add_column_table WITH ('format-version' = 2) AS (select range a FROM range(10));
 
 statement ok
 ALTER TABLE my_datalake.default.alter_add_column_table ADD COLUMN b int;
