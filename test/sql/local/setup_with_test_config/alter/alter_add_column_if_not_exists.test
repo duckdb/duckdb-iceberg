@@ -42,6 +42,7 @@ FROM my_datalake.default.alter_add_column_table;
 8	NULL
 9	NULL
 
+# ADD existing column IF NOT EXISTS. This should have no effect.
 statement ok
 ALTER TABLE my_datalake.default.alter_add_column_table ADD COLUMN IF NOT EXISTS b int;
 
@@ -58,3 +59,21 @@ FROM my_datalake.default.alter_add_column_table;
 7	NULL
 8	NULL
 9	NULL
+
+# ADD new column IF NOT EXISTS. Should create new column.
+statement ok
+ALTER TABLE my_datalake.default.alter_add_column_table ADD COLUMN IF NOT EXISTS c int;
+
+query III
+FROM my_datalake.default.alter_add_column_table;
+----
+0	NULL	NULL
+1	NULL	NULL
+2	NULL	NULL
+3	NULL	NULL
+4	NULL	NULL
+5	NULL	NULL
+6	NULL	NULL
+7	NULL	NULL
+8	NULL	NULL
+9	NULL	NULL
