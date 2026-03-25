@@ -58,6 +58,17 @@ public:
 	vector<IcebergManifestListEntry> &result;
 };
 
+struct IcebergManifestFileScan {
+public:
+	IcebergManifestFileScan(idx_t index, IcebergManifestListEntry &entry)
+	    : manifest_list_entry_idx(index), manifest_list_entry(entry) {
+	}
+
+public:
+	idx_t manifest_list_entry_idx;
+	IcebergManifestListEntry &manifest_list_entry;
+};
+
 class IcebergManifestFileScanInfo : public IcebergAvroScanInfo {
 public:
 	static constexpr const AvroScanInfoType TYPE = AvroScanInfoType::MANIFEST_FILE;
@@ -70,7 +81,7 @@ public:
 	virtual ~IcebergManifestFileScanInfo();
 
 public:
-	vector<IcebergManifestListEntry> &manifest_files;
+	vector<IcebergManifestFileScan> files_to_scan;
 	const IcebergOptions &options;
 	FileSystem &fs;
 	string iceberg_path;

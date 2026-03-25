@@ -122,9 +122,8 @@ static void WriteIcebergMetadata(ClientContext &context, CopyIcebergBindData &bi
 	}
 
 	// Write manifest file(s)
-	manifest_file.manifest_length =
-	    manifest_file::WriteToFile(table_metadata, manifest_file.manifest_path, manifest_list_entry.ManifestEntries(),
-	                               copy_fun.function, db, context);
+	manifest_file.manifest_length = manifest_file::WriteToFile(
+	    table_metadata, manifest_file, manifest_list_entry.ManifestEntries(), copy_fun.function, db, context);
 
 	IcebergManifestList manifest_list(snapshot_id, sequence_number, manifest_list_path);
 	manifest_list.AddNewManifestFile(std::move(manifest_list_entry));

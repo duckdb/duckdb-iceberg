@@ -435,17 +435,21 @@ void IcebergAvroMultiFileReader::FinalizeChunk(ClientContext &context, const Mul
 	switch (scan_info->type) {
 	case AvroScanInfoType::MANIFEST_FILE: {
 		auto &manifest_scan_info = scan_info->Cast<IcebergManifestFileScanInfo>();
-		auto manifest_file_idx = reader.file_list_idx.GetIndex();
-		auto &manifest_list_entry = manifest_scan_info.manifest_files[manifest_file_idx];
+		auto idx = reader.file_list_idx.GetIndex();
+
+		auto &file_to_scan = manifest_scan_info.files_to_scan[idx];
+		auto &manifest_list_entry = file_to_scan.manifest_list_entry;
 		auto &manifest_entries = manifest_list_entry.ManifestEntries();
 
+		auto &manifest = manifest_list_entry.GetManifestMutable();
 		output_chunk.Flatten();
 		idx_t start_index = manifest_entries.size();
 		manifest_file::ManifestReader::ReadChunk(output_chunk, manifest_scan_info.partition_field_id_to_type,
-		                                         metadata.iceberg_version, manifest_list_entry.GetManifestMutable());
+		                                         metadata.iceberg_version, manifest);
 		if (manifest_scan_info.read_state) {
 			auto &read_state = *manifest_scan_info.read_state;
-			read_state.PushBatch(ManifestReadBatch(manifest_file_idx, start_index, manifest_entries.size()));
+			read_state.PushBatch(
+			    ManifestReadBatch(file_to_scan.manifest_list_entry_idx, start_index, manifest_entries.size()));
 		}
 		break;
 	}
@@ -478,12 +482,12 @@ shared_ptr<MultiFileList> IcebergAvroMultiFileReader::CreateFileList(ClientConte
 		file_info.extended_info->options["last_modified"] = Value::TIMESTAMP(timestamp_t(0));
 	} else {
 		auto &manifest_files_scan = scan_info->Cast<IcebergManifestFileScanInfo>();
-		auto &manifest_files = manifest_files_scan.manifest_files;
+		auto &manifest_files = manifest_files_scan.files_to_scan;
 		auto &options = manifest_files_scan.options;
 		auto &fs = manifest_files_scan.fs;
 		auto &iceberg_path = manifest_files_scan.iceberg_path;
 		for (idx_t i = 0; i < manifest_files.size(); i++) {
-			auto &manifest_list_entry = manifest_files[i];
+			auto &manifest_list_entry = manifest_files[i].manifest_list_entry;
 			auto &manifest_file = manifest_list_entry.ManifestFile();
 			auto full_path = options.allow_moved_paths
 			                     ? IcebergUtils::GetFullPath(iceberg_path, manifest_file.manifest_path, fs)

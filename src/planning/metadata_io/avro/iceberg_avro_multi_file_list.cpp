@@ -23,20 +23,34 @@ IcebergManifestFileScanInfo::IcebergManifestFileScanInfo(const IcebergTableMetad
                                                          vector<IcebergManifestListEntry> &manifest_files,
                                                          const IcebergOptions &options, FileSystem &fs,
                                                          const string &iceberg_path,
-                                                         optional_ptr<ManifestEntryReadState> read_state)
-    : IcebergAvroScanInfo(TYPE, metadata, snapshot), manifest_files(manifest_files), options(options), fs(fs),
-      iceberg_path(iceberg_path), read_state(read_state) {
+                                                         optional_ptr<ManifestEntryReadState> read_state_p)
+    : IcebergAvroScanInfo(TYPE, metadata, snapshot), options(options), fs(fs), iceberg_path(iceberg_path),
+      read_state(read_state_p) {
 	unordered_set<int32_t> partition_spec_ids;
-	for (auto &manifest_list_entry : manifest_files) {
-		auto &manifest = manifest_list_entry.ManifestFile();
-		partition_spec_ids.insert(manifest.partition_spec_id);
+	for (idx_t i = 0; i < manifest_files.size(); i++) {
+		auto &manifest_list_entry = manifest_files[i];
+		auto &manifest = manifest_list_entry.GetManifest();
+		if (manifest.CanCache()) {
+			if (read_state_p) {
+				//! Push a batch for this manifest directly
+				auto &read_state = *read_state_p;
+				read_state.PushBatch(ManifestReadBatch(i, 0, manifest.manifest_entries.size()));
+			}
+			continue;
+		}
+
+		files_to_scan.emplace_back(i, manifest_list_entry);
+		auto &manifest_file = manifest_list_entry.ManifestFile();
+		partition_spec_ids.insert(manifest_file.partition_spec_id);
 	}
 	//! The schema of a manifest is affected by the 'partition_spec_id' of the 'manifest_file',
 	//! because the 'partition' struct has a field for every partition field in that partition spec.
 
 	//! Since we are now reading *all* manifests in one reader, we have to merge these schemas,
 	//! and to do that we create a map of all relevant partition fields
-	partition_field_id_to_type = IcebergDataFile::GetFieldIdToTypeMapping(snapshot, metadata, partition_spec_ids);
+	if (!partition_spec_ids.empty()) {
+		partition_field_id_to_type = IcebergDataFile::GetFieldIdToTypeMapping(snapshot, metadata, partition_spec_ids);
+	}
 }
 
 IcebergManifestFileScanInfo::~IcebergManifestFileScanInfo() {

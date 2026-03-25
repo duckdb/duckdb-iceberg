@@ -41,15 +41,12 @@ IcebergManifestListEntry IcebergManifestListEntry::CreateFromEntries(FileSystem 
 	auto manifest_file_path = fs.JoinPath(table_metadata.GetMetadataPath(fs), manifest_file_uuid + "-m0.avro");
 
 	// Add a manifest list entry for the delete files
-	IcebergManifestListEntry manifest_list_entry(manifest_file_path);
-	auto &manifest_file = manifest_list_entry.file;
-	manifest_file.manifest_path = manifest_file_path;
+	IcebergManifestFile manifest_file(manifest_file_path);
 	if (table_metadata.iceberg_version >= 3) {
 		manifest_file.has_first_row_id = true;
 		manifest_file.first_row_id = next_row_id;
 	}
 
-	manifest_file.manifest_path = manifest_file_path;
 	manifest_file.content = manifest_content_type;
 	//! NOTE: this gets overwritten on commit
 	manifest_file.sequence_number = sequence_number;
@@ -107,7 +104,7 @@ IcebergManifestListEntry IcebergManifestListEntry::CreateFromEntries(FileSystem 
 		manifest_file.partitions.Create(partition_spec, manifest_entries);
 	}
 
-	manifest_list_entry.manifest = make_shared_ptr<IcebergManifest>(std::move(manifest_entries));
+	IcebergManifestListEntry manifest_list_entry(manifest_file, std::move(manifest_entries));
 	return manifest_list_entry;
 }
 

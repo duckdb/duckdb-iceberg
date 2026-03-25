@@ -876,13 +876,6 @@ void IcebergMultiFileList::InitializeFiles(lock_guard<mutex> &guard) const {
 		if (!committed_delete_manifests.empty()) {
 			delete_manifest_scan = AvroScan::ScanManifest(snapshot, committed_delete_manifests, options, fs,
 			                                              iceberg_path, metadata, context);
-			for (auto &manifest_list_entry : committed_delete_manifests) {
-				// reserve upfront → guarantees no reallocation
-				auto &file = manifest_list_entry.ManifestFile();
-				idx_t reserve_size = file.existing_files_count + file.added_files_count + file.deleted_files_count;
-				manifest_list_entry.SetManifest(make_shared_ptr<IcebergManifest>(reserve_size));
-			}
-
 			delete_manifest_reader = make_uniq<manifest_file::ManifestReader>(*delete_manifest_scan);
 		}
 	}
@@ -925,11 +918,6 @@ void IcebergMultiFileList::InitializeFiles(lock_guard<mutex> &guard) const {
 	//! Add all data manifests
 	for (auto &manifest_list_entry : committed_data_manifests) {
 		auto manifest_list_entry_idx = data_manifests.size();
-		// reserve upfront → guarantees no reallocation
-		auto &file = manifest_list_entry.ManifestFile();
-		idx_t reserve_size = file.existing_files_count + file.added_files_count + file.deleted_files_count;
-		manifest_list_entry.SetManifest(make_shared_ptr<IcebergManifest>(reserve_size));
-
 		data_manifests.emplace_back(manifest_list_entry_idx, manifest_list_entry);
 	}
 	for (auto &manifest : transaction_data_manifests) {

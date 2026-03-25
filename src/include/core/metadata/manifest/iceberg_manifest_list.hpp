@@ -107,13 +107,23 @@ public:
 	ManifestPartitions partitions;
 
 public:
-	IcebergManifestFile(const string &manifest_path) : manifest_path(manifest_path) {
+	idx_t ManifestEntryCount() const {
+		return added_files_count + existing_files_count + deleted_files_count;
+	}
+
+public:
+	explicit IcebergManifestFile(const string &manifest_path) : manifest_path(manifest_path) {
 	}
 };
 
 struct IcebergManifestListEntry {
 public:
 	IcebergManifestListEntry(IcebergManifestFile file) : file(std::move(file)) {
+		manifest = make_shared_ptr<IcebergManifest>(file.ManifestEntryCount());
+	}
+	IcebergManifestListEntry(IcebergManifestFile file, vector<IcebergManifestEntry> &&entries) : file(std::move(file)) {
+		manifest = make_shared_ptr<IcebergManifest>(std::move(entries));
+		D_ASSERT(manifest->manifest_entries.size() == file.ManifestEntryCount());
 	}
 
 public:
@@ -132,18 +142,15 @@ public:
 		this->manifest = manifest;
 	}
 	const IcebergManifest &GetManifest() const {
-		//! FIXME: verify 'manifest' is not NULL?
 		return *manifest;
 	}
 	IcebergManifest &GetManifestMutable() {
-		//! FIXME: verify 'manifest' is not NULL?
 		return *manifest;
 	}
 	void ReferenceManifest(const IcebergManifestListEntry &other) {
 		manifest = other.manifest;
 	}
 	const vector<IcebergManifestEntry> &ManifestEntries() const {
-		//! FIXME: verify 'manifest' is not NULL?
 		return manifest->manifest_entries;
 	}
 
