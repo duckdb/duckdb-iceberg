@@ -54,7 +54,8 @@
         "test/sql/local/irc_any_catalog/alter/alter_add_column_same_transaction_aborted.test",
         "test/sql/local/irc_any_catalog/alter/alter_add_column_same_name_error.test",
         "test/sql/local/irc_any_catalog/alter/alter_add_column_time_travel.test",
-        "test/sql/local/irc_any_catalog/alter/alter_add_column_explicit_transaction.test"
+        "test/sql/local/irc_any_catalog/alter/alter_add_column_explicit_transaction.test",
+        "test/sql/local/irc_any_catalog/delete/multi_deletes.test"
       ]
     },
     {
