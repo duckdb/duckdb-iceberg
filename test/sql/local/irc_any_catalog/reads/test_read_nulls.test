@@ -1,0 +1,62 @@
+# name: test/sql/local/irc_any_catalog/reads/test_read_nulls.test
+# group: [reads]
+
+require-env ICEBERG_SERVER_AVAILABLE
+
+require-env SECRETS_CREATED_AND_CATALOG_ATTACHED
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+require icu
+
+require ducklake
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+set enable_logging=true
+
+statement ok
+SET TimeZone = 'UTC';
+
+statement ok
+set logging_level='debug'
+
+query II
+select * from my_datalake.default.test_null_filtering where a is null order by all NULLS FIRST;
+----
+NULL	NULL
+NULL	duck
+
+query II
+select * from my_datalake.default.test_null_filtering where a is not null order by all;
+----
+0	hello
+1	world
+3	NULL
+5	wonderful
+6	ducks
+10	no nulls
+
+query II
+select * from my_datalake.default.test_null_filtering where a is distinct from null order by a;
+----
+0	hello
+1	world
+3	NULL
+5	wonderful
+6	ducks
+10	no nulls
+
+query II
+select * from my_datalake.default.test_null_filtering where a is not distinct from null order by all NULLS FIRST;
+----
+NULL	NULL
+NULL	duck

@@ -1,0 +1,44 @@
+# name: test/sql/local/irc_any_catalog/create/test_create_table_not_null.test
+# description: test create table
+# group: [create]
+
+require-env ICEBERG_SERVER_AVAILABLE
+
+require-env SECRETS_CREATED_AND_CATALOG_ATTACHED
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+CALL enable_logging('HTTP');
+
+statement ok
+set logging_level='debug'
+
+statement ok
+use my_datalake.default;
+
+statement ok
+drop table if exists table_with_null_reqs;
+
+statement ok
+create table table_with_null_reqs (
+	a varchar,
+	b int NOT NULL
+);
+
+statement error
+insert into table_with_null_reqs values ('value', NULL);
+----
+<REGEX>:.*NOT NULL constraint failed.*table_with_null_reqs.b.*
+
+statement ok
+insert into table_with_null_reqs values ('value', 5);

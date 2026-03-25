@@ -1,0 +1,126 @@
+# name: test/sql/local/irc_any_catalog/reads/partitioned_reads_v3/test_partitioned_reads_v3.test
+# description: Test creating and reading from v3 partitioned tables with partition pruning
+# group: [partitioned_reads_v3]
+
+require-env ICEBERG_SERVER_AVAILABLE
+
+require-env SECRETS_CREATED_AND_CATALOG_ATTACHED
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+set enable_external_file_cache=false;
+
+statement ok
+create schema if not exists my_datalake.default;
+
+statement ok
+drop table if exists my_datalake.default.test_v3_partitioned_reads;
+
+statement ok
+CREATE TABLE my_datalake.default.test_v3_partitioned_reads (id int, category VARCHAR)
+PARTITIONED BY (category)
+WITH ('format-version' = 3);
+
+# Insert into 3 separate partitions
+statement ok
+insert into my_datalake.default.test_v3_partitioned_reads select range, 'A' from range(500);
+
+statement ok
+insert into my_datalake.default.test_v3_partitioned_reads select 500 + range, 'B' from range(500);
+
+statement ok
+insert into my_datalake.default.test_v3_partitioned_reads select 1000 + range, 'C' from range(500);
+
+# Verify total count and basic reads
+query I
+select count(*) from my_datalake.default.test_v3_partitioned_reads;
+----
+1500
+
+query I
+select count(*) from my_datalake.default.test_v3_partitioned_reads where category = 'A';
+----
+500
+
+query I
+select count(*) from my_datalake.default.test_v3_partitioned_reads where category IN ('A', 'B');
+----
+1000
+
+statement ok
+CALL enable_logging();
+
+statement ok
+set logging_level='debug';
+
+# --- Equality filter: read 1 partition, skip 2 ---
+
+statement ok
+CALL truncate_duckdb_logs();
+
+query I
+select count(*) from my_datalake.default.test_v3_partitioned_reads where category = 'C';
+----
+500
+
+query I
+select count(distinct request.url) from duckdb_logs_parsed('HTTP') where request.url like '%.parquet';
+----
+1
+
+query I
+select count(*) from duckdb_logs() where type = 'Iceberg' and message like '%skipped%manifest_file%';
+----
+2
+
+# --- IN filter: read 2 partitions, skip 1 ---
+
+statement ok
+CALL truncate_duckdb_logs();
+
+query I
+select count(*) from my_datalake.default.test_v3_partitioned_reads where category IN ('A', 'B');
+----
+1000
+
+query I
+select count(distinct request.url) from duckdb_logs_parsed('HTTP') where request.url like '%.parquet';
+----
+2
+
+query I
+select count(*) from duckdb_logs() where type = 'Iceberg' and message like '%skipped%manifest_file%';
+----
+2
+
+# --- No filter: read all partitions, skip none ---
+
+statement ok
+CALL truncate_duckdb_logs();
+
+query I
+select count(*) from my_datalake.default.test_v3_partitioned_reads;
+----
+1500
+
+
+# no filters, we can use count(*) optimization
+query I
+select count(distinct request.url) from duckdb_logs_parsed('HTTP') where request.url like '%.parquet';
+----
+0
+
+query I
+select count(*) from duckdb_logs() where type = 'Iceberg' and message like '%skipped%manifest_file%';
+----
+0

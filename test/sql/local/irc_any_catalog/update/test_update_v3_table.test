@@ -1,0 +1,26 @@
+# name: test/sql/local/irc_any_catalog/update/test_update_v3_table.test
+# group: [update]
+
+require-env ICEBERG_SERVER_AVAILABLE
+
+require-env SECRETS_CREATED_AND_CATALOG_ATTACHED
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+statement ok
+CALL enable_logging('Iceberg');
+
+statement ok
+update my_datalake.default.simple_v3_table set c_name = 'new_customer_key' where c_custkey %2 = 0;
+
+statement error
+update my_datalake.default.pyspark_iceberg_table_v1 set l_suppkey_long = 100000 where l_suppkey_long%2 = 0;
+----
+<REGEX>:.*V1.*
+

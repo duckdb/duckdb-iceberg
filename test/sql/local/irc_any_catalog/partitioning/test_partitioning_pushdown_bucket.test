@@ -1,0 +1,471 @@
+# name: test/sql/local/irc_any_catalog/partitioning/test_partitioning_pushdown_bucket.test
+# description: Test bucket partition pushdown for multiple types (INTEGER, BIGINT, STRING, DATE, DECIMAL, BINARY, TIMESTAMP)
+# group: [partitioning]
+
+require-env ICEBERG_SERVER_AVAILABLE
+
+require-env SECRETS_CREATED_AND_CATALOG_ATTACHED
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+require core_functions
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+set enable_external_file_cache=false;
+
+statement ok
+CALL enable_logging('HTTP');
+
+#--------------------------------------------------------------------
+# INTEGER: bucket(4, value)
+# Data: 20 rows, values {10..100 step 10} each appearing twice, plus NULL
+# Total: 4 parquet files (one per bucket 0-3)
+#--------------------------------------------------------------------
+
+# Clear any logs accumulated during catalog attach / table discovery
+statement ok
+call truncate_duckdb_logs();
+
+# Read whole table - should open all 4 parquet files
+statement ok
+select * from my_datalake.default.bucket_partitioned_integer;
+
+query I
+select count(distinct request.url) from duckdb_logs_parsed('HTTP') where request.url like '%.parquet';
+----
+4
+
+statement ok
+call truncate_duckdb_logs();
+
+# Filter by value=10 (bucket 1) - pushdown should open only 1 file
+# value=10 appears in rows 1 and 11
+query I
+select count(*) from my_datalake.default.bucket_partitioned_integer where value = 10;
+----
+2
+
+query I
+select count(distinct request.url) from duckdb_logs_parsed('HTTP') where request.url like '%.parquet';
+----
+1
+
+statement ok
+call truncate_duckdb_logs();
+
+# Filter by value=90 (bucket 2) - 2 rows (rows 9 and 19), 1 file
+query I
+select count(*) from my_datalake.default.bucket_partitioned_integer where value = 90;
+----
+2
+
+query I
+select count(distinct request.url) from duckdb_logs_parsed('HTTP') where request.url like '%.parquet';
+----
+1
+
+statement ok
+call truncate_duckdb_logs();
+
+# IN filter across 2 buckets: value IN (10, 40) -> buckets 1 and 3 -> 2 files
+# value=10 -> bucket 1 (rows 1, 11); value=40 -> bucket 3 (rows 4, 14)
+query I
+select count(*) from my_datalake.default.bucket_partitioned_integer where value IN (10, 40);
+----
+4
+
+query I
+select count(distinct request.url) from duckdb_logs_parsed('HTTP') where request.url like '%.parquet';
+----
+2
+
+statement ok
+call truncate_duckdb_logs();
+
+# Verify row contents for value=10
+query III rowsort
+select id, value, name from my_datalake.default.bucket_partitioned_integer where value = 10;
+----
+1	10	row_1
+11	10	row_11
+
+statement ok
+call truncate_duckdb_logs();
+
+#--------------------------------------------------------------------
+# BIGINT: bucket(8, value)
+# Data: values 1T..9T, duplicates for 1T and 2T, plus NULL
+# Total: 6 parquet files (distinct occupied buckets)
+# Bucket distribution (Spark): 1T->3, 2T->0, 3T->1, 4T->6, 5T->0, 6T->7, 7T->3, 8T->5, 9T->2
+# Occupied buckets: 0(2T,5T), 1(3T), 2(9T), 3(1T,7T), 5(8T), 6(4T), 7(6T) = 6 files
+# (NULL values stored alongside their bucket file, no separate null file)
+#--------------------------------------------------------------------
+
+# Read whole table - 6 files
+statement ok
+select * from my_datalake.default.bucket_partitioned_bigint;
+
+query I
+select count(distinct request.url) from duckdb_logs_parsed('HTTP') where request.url like '%.parquet';
+----
+6
+
+statement ok
+call truncate_duckdb_logs();
+
+# Filter by value=1000000000000 - 2 rows (rows 1 and 11), 1 file
+query I
+select count(*) from my_datalake.default.bucket_partitioned_bigint where value = 1000000000000;
+----
+2
+
+query I
+select count(distinct request.url) from duckdb_logs_parsed('HTTP') where request.url like '%.parquet';
+----
+1
+
+statement ok
+call truncate_duckdb_logs();
+
+# Filter by value=9000000000000 - 1 row, 1 file
+query I
+select count(*) from my_datalake.default.bucket_partitioned_bigint where value = 9000000000000;
+----
+1
+
+query I
+select count(distinct request.url) from duckdb_logs_parsed('HTTP') where request.url like '%.parquet';
+----
+1
+
+statement ok
+call truncate_duckdb_logs();
+
+#--------------------------------------------------------------------
+# STRING: bucket(4, category)
+# Data: 15 rows, categories: electronics(bucket 3), books(bucket 2),
+#       clothing(bucket 0), food(bucket 2)
+# Total: 3 parquet files (buckets 0, 2, 3 occupied; bucket 1 empty)
+#--------------------------------------------------------------------
+
+# Read whole table - 3 files
+statement ok
+select * from my_datalake.default.bucket_partitioned_string;
+
+query I
+select count(distinct request.url) from duckdb_logs_parsed('HTTP') where request.url like '%.parquet';
+----
+3
+
+statement ok
+call truncate_duckdb_logs();
+
+# Filter by category='clothing' (bucket 0) - 4 rows, 1 file
+query I
+select count(*) from my_datalake.default.bucket_partitioned_string where category = 'clothing';
+----
+4
+
+query I
+select count(distinct request.url) from duckdb_logs_parsed('HTTP') where request.url like '%.parquet';
+----
+1
+
+statement ok
+call truncate_duckdb_logs();
+
+# Filter by category='electronics' (bucket 3) - 4 rows (1,5,9,13), 1 file
+query I
+select count(*) from my_datalake.default.bucket_partitioned_string where category = 'electronics';
+----
+4
+
+query I
+select count(distinct request.url) from duckdb_logs_parsed('HTTP') where request.url like '%.parquet';
+----
+1
+
+statement ok
+call truncate_duckdb_logs();
+
+#--------------------------------------------------------------------
+# DATE: bucket(4, event_date)
+# Data: 12 rows, dates: 2023-01-01(x2), 2023-02-15(x2), 2023-03-20(x2),
+#                       2023-04-10(x2), 2023-05-05(x1), 2023-06-12(x1),
+#                       2023-07-22(x1), 2023-08-30(x1)
+# Total: 4 parquet files (buckets 0-3 all occupied, no NULL rows)
+# Distribution: 2023-01-01->3, 2023-02-15->1, 2023-03-20->2, 2023-04-10->3,
+#               2023-05-05->0, 2023-06-12->3, 2023-07-22->2, 2023-08-30->3
+#--------------------------------------------------------------------
+
+# Read whole table - 4 files
+statement ok
+select * from my_datalake.default.bucket_partitioned_date;
+
+query I
+select count(distinct request.url) from duckdb_logs_parsed('HTTP') where request.url like '%.parquet';
+----
+4
+
+statement ok
+call truncate_duckdb_logs();
+
+# Filter on 2023-01-01 (bucket 3) - 2 rows (rows 1 and 9), 1 file
+query I
+select count(*) from my_datalake.default.bucket_partitioned_date where event_date = DATE '2023-01-01';
+----
+2
+
+query I
+select count(distinct request.url) from duckdb_logs_parsed('HTTP') where request.url like '%.parquet';
+----
+1
+
+statement ok
+call truncate_duckdb_logs();
+
+# Filter on 2023-05-05 (bucket 0) - 1 row (row 5), 1 file
+query I
+select count(*) from my_datalake.default.bucket_partitioned_date where event_date = DATE '2023-05-05';
+----
+1
+
+query I
+select count(distinct request.url) from duckdb_logs_parsed('HTTP') where request.url like '%.parquet';
+----
+1
+
+statement ok
+call truncate_duckdb_logs();
+
+#--------------------------------------------------------------------
+# DECIMAL: bucket(4, amount)
+# Data: 12 rows, amounts 10.00..90.00 step 10, duplicates for 10 and 20, NULL
+# Total: 5 parquet files (buckets 0-3 + null bucket)
+# Distribution: 10->0, 20->2, 30->3, 40->0, 50->3, 60->2, 70->3, 80->3, 90->1
+#--------------------------------------------------------------------
+
+# Read whole table - 5 files
+statement ok
+select * from my_datalake.default.bucket_partitioned_decimal;
+
+query I
+select count(distinct request.url) from duckdb_logs_parsed('HTTP') where request.url like '%.parquet';
+----
+5
+
+statement ok
+call truncate_duckdb_logs();
+
+# Filter on 10.00 (bucket 0) - 2 rows (rows 1 and 10), 1 file
+query I
+select count(*) from my_datalake.default.bucket_partitioned_decimal where amount = 10.00;
+----
+2
+
+query I
+select count(distinct request.url) from duckdb_logs_parsed('HTTP') where request.url like '%.parquet';
+----
+1
+
+statement ok
+call truncate_duckdb_logs();
+
+# Filter on 90.00 (bucket 1) - 1 row, 1 file
+query I
+select count(*) from my_datalake.default.bucket_partitioned_decimal where amount = 90.00;
+----
+1
+
+query I
+select count(distinct request.url) from duckdb_logs_parsed('HTTP') where request.url like '%.parquet';
+----
+1
+
+statement ok
+call truncate_duckdb_logs();
+
+#--------------------------------------------------------------------
+# BINARY: bucket(4, data)
+# Data: 12 rows, bytes 0x01..0x09, duplicates for 0x01 and 0x02, NULL
+# Total: 4 parquet files (buckets 1,2,3 + null, no bucket-0 occupied)
+# Distribution: 0x01->3, 0x02->3, 0x03->2, 0x04->2, 0x05->1, 0x06->1, 0x07->2, 0x08->3, 0x09->3
+#--------------------------------------------------------------------
+
+# Read whole table - 4 files
+statement ok
+select * from my_datalake.default.bucket_partitioned_binary;
+
+query I
+select count(distinct request.url) from duckdb_logs_parsed('HTTP') where request.url like '%.parquet';
+----
+4
+
+statement ok
+call truncate_duckdb_logs();
+
+# Filter on 0x05 (bucket 1) - 1 row, 1 file
+query I
+select count(*) from my_datalake.default.bucket_partitioned_binary where data = '\x05'::BLOB;
+----
+1
+
+query I
+select count(distinct request.url) from duckdb_logs_parsed('HTTP') where request.url like '%.parquet';
+----
+1
+
+statement ok
+call truncate_duckdb_logs();
+
+# Filter on 0x01 (bucket 3) - 2 rows (rows 1 and 10), 1 file
+query I
+select count(*) from my_datalake.default.bucket_partitioned_binary where data = '\x01'::BLOB;
+----
+2
+
+query I
+select count(distinct request.url) from duckdb_logs_parsed('HTTP') where request.url like '%.parquet';
+----
+1
+
+statement ok
+call truncate_duckdb_logs();
+
+#--------------------------------------------------------------------
+# TIMESTAMP: bucket(4, ts_val)
+# Data: 11 rows (10 months + 1 duplicate Jan) + 1 NULL row
+# Total: 5 parquet files (buckets 0-3 + null)
+# Distribution: Jan->0, Feb->0, Mar->3, Apr->2, May->2, Jun->2, Jul->3, Aug->2, Sep->2, Oct->0
+#--------------------------------------------------------------------
+
+# Read whole table - 5 files
+statement ok
+select * from my_datalake.default.bucket_partitioned_timestamp;
+
+query I
+select count(distinct request.url) from duckdb_logs_parsed('HTTP') where request.url like '%.parquet';
+----
+5
+
+statement ok
+call truncate_duckdb_logs();
+
+# Filter on 2023-03-01 (bucket 3) - 1 row, 1 file
+query I
+select count(*) from my_datalake.default.bucket_partitioned_timestamp where ts_val = TIMESTAMP '2023-03-01 00:00:00';
+----
+1
+
+query I
+select count(distinct request.url) from duckdb_logs_parsed('HTTP') where request.url like '%.parquet';
+----
+1
+
+statement ok
+call truncate_duckdb_logs();
+
+# Filter on 2023-01-01 (bucket 0) - 2 rows (rows 1 and 11 - the duplicate), 1 file
+query I
+select count(*) from my_datalake.default.bucket_partitioned_timestamp where ts_val = TIMESTAMP '2023-01-01 00:00:00';
+----
+2
+
+query I
+select count(distinct request.url) from duckdb_logs_parsed('HTTP') where request.url like '%.parquet';
+----
+1
+
+statement ok
+call truncate_duckdb_logs();
+
+#--------------------------------------------------------------------
+# Extra: IN filter spanning multiple buckets (bucket(4, value))
+# value=10, value=20, value=40, value=90 hash to 3 distinct buckets (two values share a bucket)
+# value=10 (rows 1,11), value=20 (rows 2,12), value=40 (rows 4,14), value=90 (rows 9,19) = 8 rows
+# IN spans 3 distinct files
+#--------------------------------------------------------------------
+
+query I
+select count(*) from my_datalake.default.bucket_partitioned_integer where value IN (10, 20, 40, 90);
+----
+8
+
+query I
+select count(distinct request.url) from duckdb_logs_parsed('HTTP') where request.url like '%.parquet';
+----
+3
+
+statement ok
+call truncate_duckdb_logs();
+
+#--------------------------------------------------------------------
+# Sparse bucket: bucket(16, value) with only 3 unique values
+# This tests the "more buckets than distinct values" scenario:
+# 16 buckets configured, but only 2 are occupied
+# value=1  -> bucket 14 (rows 1, 4)
+# value=2  -> bucket 4  (row 2)
+# value=42 -> bucket 4  (rows 3, 5) -- same bucket as value=2
+# Result: only 2 parquet files despite 16 configured buckets
+#--------------------------------------------------------------------
+
+# Read whole table - only 2 files (14 empty buckets)
+statement ok
+select * from my_datalake.default.bucket_partitioned_sparse_integer;
+
+query I
+select count(distinct request.url) from duckdb_logs_parsed('HTTP') where request.url like '%.parquet';
+----
+2
+
+statement ok
+call truncate_duckdb_logs();
+
+# Filter value=1 (bucket 14) - 2 rows, 1 file; 15 other buckets pruned
+query I
+select count(*) from my_datalake.default.bucket_partitioned_sparse_integer where value = 1;
+----
+2
+
+query I
+select count(distinct request.url) from duckdb_logs_parsed('HTTP') where request.url like '%.parquet';
+----
+1
+
+statement ok
+call truncate_duckdb_logs();
+
+# Filter value=2 (bucket 4) - 1 row, 1 file
+query I
+select count(*) from my_datalake.default.bucket_partitioned_sparse_integer where value = 2;
+----
+1
+
+query I
+select count(distinct request.url) from duckdb_logs_parsed('HTTP') where request.url like '%.parquet';
+----
+1
+
+statement ok
+call truncate_duckdb_logs();
+
+# IN filter spanning both occupied buckets: value IN (1, 42) -> buckets 14 and 4 -> 2 files
+# value=1 (rows 1,4), value=42 (rows 3,5) = 4 rows
+query I
+select count(*) from my_datalake.default.bucket_partitioned_sparse_integer where value IN (1, 42);
+----
+4
+
+query I
+select count(distinct request.url) from duckdb_logs_parsed('HTTP') where request.url like '%.parquet';
+----
+2

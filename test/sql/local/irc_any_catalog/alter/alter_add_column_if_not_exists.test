@@ -1,0 +1,79 @@
+# name: test/sql/local/irc_any_catalog/alter/alter_add_column_if_not_exists.test
+# group: [alter]
+
+require-env ICEBERG_SERVER_AVAILABLE
+
+require-env SECRETS_CREATED_AND_CATALOG_ATTACHED
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+CREATE SCHEMA IF NOT EXISTS my_datalake.default;
+
+statement ok
+drop table if exists my_datalake.default.alter_add_column_table;
+
+statement ok
+CREATE TABLE my_datalake.default.alter_add_column_table WITH ('format-version' = 2) AS (select range a FROM range(10));
+
+statement ok
+ALTER TABLE my_datalake.default.alter_add_column_table ADD COLUMN b int;
+
+query II
+FROM my_datalake.default.alter_add_column_table;
+----
+0	NULL
+1	NULL
+2	NULL
+3	NULL
+4	NULL
+5	NULL
+6	NULL
+7	NULL
+8	NULL
+9	NULL
+
+# ADD existing column IF NOT EXISTS. This should have no effect.
+statement ok
+ALTER TABLE my_datalake.default.alter_add_column_table ADD COLUMN IF NOT EXISTS b int;
+
+query II
+FROM my_datalake.default.alter_add_column_table;
+----
+0	NULL
+1	NULL
+2	NULL
+3	NULL
+4	NULL
+5	NULL
+6	NULL
+7	NULL
+8	NULL
+9	NULL
+
+# ADD new column IF NOT EXISTS. Should create new column.
+statement ok
+ALTER TABLE my_datalake.default.alter_add_column_table ADD COLUMN IF NOT EXISTS c int;
+
+query III
+FROM my_datalake.default.alter_add_column_table;
+----
+0	NULL	NULL
+1	NULL	NULL
+2	NULL	NULL
+3	NULL	NULL
+4	NULL	NULL
+5	NULL	NULL
+6	NULL	NULL
+7	NULL	NULL
+8	NULL	NULL
+9	NULL	NULL

@@ -1,0 +1,28 @@
+# name: test/sql/local/irc_any_catalog/test_read_empty_table.test
+# description: test integration with iceberg catalog read
+# group: [irc_any_catalog]
+
+require-env ICEBERG_SERVER_AVAILABLE
+
+require-env SECRETS_CREATED_AND_CATALOG_ATTACHED
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+set enable_logging=true
+
+statement ok
+set logging_level='debug'
+
+query III
+select * from my_datalake.default.empty_table;
+----

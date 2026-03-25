@@ -1,0 +1,58 @@
+# name: test/sql/local/irc_any_catalog/drop/test_drop_table.test
+# description: test drop table with iceberg catalog read
+# group: [drop]
+
+require-env ICEBERG_SERVER_AVAILABLE
+
+require-env SECRETS_CREATED_AND_CATALOG_ATTACHED
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+require core_functions
+
+set ignore_error_messages
+
+statement ok
+use my_datalake.default;
+
+statement ok
+drop table if exists test_drop_table;
+
+statement ok
+create table test_drop_table (a int);
+
+query I
+select * from test_drop_table;
+----
+
+statement ok
+insert into test_drop_table select range a from range(10);
+
+query I
+select * from test_drop_table;
+----
+0
+1
+2
+3
+4
+5
+6
+7
+8
+9
+
+statement ok
+drop table test_drop_table;
+
+# table should no longer exist
+query I
+select count(*) from (show tables) where name like '%test_drop_table%';
+----
+0

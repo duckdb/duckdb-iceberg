@@ -1,0 +1,41 @@
+# name: test/sql/local/irc_any_catalog/insert/test_insert_count.test
+# group: [insert]
+
+require-env ICEBERG_SERVER_AVAILABLE
+
+require-env SECRETS_CREATED_AND_CATALOG_ATTACHED
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+set enable_logging=true
+
+statement ok
+set logging_level='debug'
+
+statement ok
+drop table if exists my_datalake.default.check_insert_count;
+
+statement ok
+create table my_datalake.default.check_insert_count (a int);
+
+# Default TARGET_FILE_SIZE = 8.4MB
+# We create ~18MB of data, which spreads out over 3 files
+query I
+INSERT INTO my_datalake.default.check_insert_count SELECT range a FROM range(2000000);
+----
+2000000
+
+query II
+explain analyze select * from my_datalake.default.check_insert_count
+----
+analyzed_plan	<REGEX>:.*Total Files Read: 1.*

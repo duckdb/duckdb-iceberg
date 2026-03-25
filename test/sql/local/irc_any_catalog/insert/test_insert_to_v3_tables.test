@@ -1,0 +1,46 @@
+# name: test/sql/local/irc_any_catalog/insert/test_insert_to_v3_tables.test
+# group: [insert]
+
+require-env ICEBERG_SERVER_AVAILABLE
+
+require-env SECRETS_CREATED_AND_CATALOG_ATTACHED
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+statement ok
+CALL enable_logging('Iceberg');
+
+query I
+select count(*) from my_datalake.default.simple_v3_table;
+----
+75000
+
+query I
+select count(*) from my_datalake.default.simple_v3_table where c_custkey > 75_000;
+----
+37500
+
+query I
+select count(*) from my_datalake.default.simple_v3_table where c_custkey > 50_000;
+----
+50_000
+
+query I
+select count(*) from my_datalake.default.simple_v3_table where c_custkey < 75_000;
+----
+37500
+
+query I
+select count(*) from my_datalake.default.simple_v3_table where c_custkey > 25_000 and c_custkey < 75_000;
+----
+25000
+
+statement ok
+insert into my_datalake.default.simple_v3_table values (100000000, 'Customer#1000000000', 'jsdjsdffi', 4, 06-122-922-9374, 9281.24, 'FURNITURE', 'ducks are human beings');
+
