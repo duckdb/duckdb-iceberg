@@ -24,6 +24,7 @@ CREATE SCHEMA IF NOT EXISTS my_datalake.default;
 statement ok
 drop table if exists my_datalake.default.alter_add_column_table;
 
+# No support for Polaris CREATE TABLE yet
 statement error
 CREATE TABLE my_datalake.default.alter_add_column_table WITH ('format-version' = 2) AS (select range a FROM range(10));
 ----
