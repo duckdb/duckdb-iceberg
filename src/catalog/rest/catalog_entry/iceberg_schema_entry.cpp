@@ -259,7 +259,6 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 			switch (default_value.type) {
 			case ExpressionType::VALUE_CONSTANT:
 				new_iceberg_column->initial_default = make_uniq<Value>(default_value.Cast<ConstantExpression>().value);
-				new_iceberg_column->write_default = make_uniq<Value>(default_value.Cast<ConstantExpression>().value);
 				break;
 			case ExpressionType::VALUE_NULL:
 				break;

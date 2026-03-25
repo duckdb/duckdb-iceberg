@@ -47,7 +47,7 @@ FROM my_datalake.default.alter_add_column_table;
 statement error
 ALTER TABLE my_datalake.default.alter_add_column_table ADD COLUMN c int DEFAULT 42;
 ----
-Operation `ALTER TABLE ... ADD COLUMN ... DEFAULT ...` with non-null default is only supported for tables with Iceberg v3 onwards.
+Request returned HTTP 500 for HTTP POST to
 
 query II
 FROM my_datalake.default.alter_add_column_table;

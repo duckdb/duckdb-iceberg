@@ -331,44 +331,7 @@ void IRCAPI::CommitMultiTableUpdate(ClientContext &context, IcebergCatalog &cata
 	url_builder.AddPathComponent("commit");
 	HTTPHeaders headers(*context.db);
 	headers.Insert("Content-Type", "application/json");
-	unique_ptr<HTTPResponse> response;
-	try {
-		response = catalog.auth_handler->Request(RequestType::POST_REQUEST, context, url_builder, headers, body);
-	} catch (duckdb::HTTPException &ex) {
-		ErrorData error_data(ex); // parses the JSON from ex.what()
-		auto &extra = error_data.ExtraInfo();
-
-		// status_code
-		auto it = extra.find("status_code");
-		if (it == extra.end()) {
-			throw ex;
-		}
-		int status_code = std::stoi(it->second);
-
-		// exception message (the human-readable error string)
-		const string &message = error_data.RawMessage();
-
-		// response_body
-		it = extra.find("response_body");
-		if (it == extra.end()) {
-			throw ex;
-		}
-		const string &response_body = it->second;
-		std::regex rx("Invalid initial default for (.*?): non-null default \\((.*?)\\) is not supported until v3");
-		std::smatch ma;
-		bool matches = std::regex_search(response_body, ma, rx);
-		if (status_code == 500 && matches) {
-			const string &col_name = ma[1].str();
-			const string &default_val = ma[2].str();
-			throw InvalidInputException(
-			    "\nCannot add column '%s' with non-null default value '%s': this requires Iceberg v3.\n"
-			    "Operation `ALTER TABLE ... ADD COLUMN ... DEFAULT ...` with non-null default is only supported for "
-			    "tables with Iceberg v3 onwards.\nTo create a v3 table use the WITH syntax:\n\tCREATE TABLE\n\t\t"
-			    "my_catalog.my_schema.my_table (my_column INTEGER)\n\tWITH (\n\t\t'format-version' = 3\n\t);",
-			    col_name, default_val);
-		}
-		throw ex;
-	}
+	auto response = catalog.auth_handler->Request(RequestType::POST_REQUEST, context, url_builder, headers, body);
 	if (response->status != HTTPStatusCode::OK_200 && response->status != HTTPStatusCode::NoContent_204) {
 		yyjson_val *error_obj = ICUtils::get_error_message(response->body);
 		if (error_obj == nullptr) {
