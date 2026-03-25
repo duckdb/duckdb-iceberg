@@ -1,4 +1,4 @@
-# name: test/sql/local/partitioning/truncate/truncate_binary.test
+# name: test/sql/local/irc_any_catalog/reads/partitioned_reads/truncate/truncate_binary.test
 # group: [truncate]
 
 require avro
