@@ -15,8 +15,6 @@
 #include "catalog/rest/transaction/iceberg_transaction.hpp"
 #include "catalog/rest/catalog_entry/table/iceberg_table_entry.hpp"
 #include "catalog/rest/api/iceberg_type.hpp"
-#include "../../../include/rest_catalog/objects/commit_table_request.hpp"
-#include "rest_catalog/objects/table_identifier.hpp"
 
 namespace duckdb {
 
