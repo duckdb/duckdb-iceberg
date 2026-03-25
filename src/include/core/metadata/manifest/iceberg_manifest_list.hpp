@@ -122,9 +122,34 @@ public:
 	                  const IcebergTableMetadata &table_metadata, IcebergManifestContentType manifest_content_type,
 	                  vector<IcebergManifestEntry> &&manifest_entries, int64_t &next_row_id);
 
-public:
+	const IcebergManifestFile &ManifestFile() const {
+		return file;
+	}
+	IcebergManifestFile &ManifestFileMutable() {
+		return file;
+	}
+	void SetManifest(shared_ptr<IcebergManifest> manifest) {
+		this->manifest = manifest;
+	}
+	const IcebergManifest &GetManifest() const {
+		//! FIXME: verify 'manifest' is not NULL?
+		return *manifest;
+	}
+	IcebergManifest &GetManifestMutable() {
+		//! FIXME: verify 'manifest' is not NULL?
+		return *manifest;
+	}
+	void ReferenceManifest(const IcebergManifestListEntry &other) {
+		manifest = other.manifest;
+	}
+	const vector<IcebergManifestEntry> &ManifestEntries() const {
+		//! FIXME: verify 'manifest' is not NULL?
+		return manifest->manifest_entries;
+	}
+
+private:
 	IcebergManifestFile file;
-	vector<IcebergManifestEntry> manifest_entries;
+	shared_ptr<IcebergManifest> manifest;
 };
 
 struct IcebergManifestList {
@@ -141,7 +166,7 @@ public:
 	}
 
 	void AddNewManifestFile(IcebergManifestListEntry &&manifest_list_entry) {
-		auto &manifest_file = manifest_list_entry.file;
+		auto &manifest_file = manifest_list_entry.ManifestFileMutable();
 		manifest_file.sequence_number = sequence_number;
 		manifest_file.added_snapshot_id = snapshot_id;
 

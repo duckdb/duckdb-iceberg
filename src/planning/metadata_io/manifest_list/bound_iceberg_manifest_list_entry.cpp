@@ -5,10 +5,11 @@ namespace duckdb {
 
 BoundIcebergManifestListEntry::BoundIcebergManifestListEntry(idx_t index, const IcebergManifestListEntry &entry)
     : entry(entry), index(index) {
-	has_next_row_id = entry.file.has_first_row_id;
+	auto &manifest_file = entry.ManifestFile();
+	has_next_row_id = manifest_file.has_first_row_id;
 	if (has_next_row_id) {
 		//! 'first_row_id' is NULL for pre-V3 manifests
-		next_row_id = entry.file.first_row_id;
+		next_row_id = manifest_file.first_row_id;
 	}
 }
 

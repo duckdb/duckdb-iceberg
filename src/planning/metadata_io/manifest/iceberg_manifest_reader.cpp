@@ -91,9 +91,10 @@ static vector<int64_t> GetSplitOffsets(Vector &split_offsets, idx_t index) {
 }
 
 void ManifestReader::ReadChunk(DataChunk &chunk, const map<idx_t, LogicalType> &partition_field_id_to_type,
-                               idx_t iceberg_version, vector<IcebergManifestEntry> &result) {
+                               idx_t iceberg_version, IcebergManifest &manifest) {
 	idx_t count = chunk.size();
 
+	auto &result = manifest.manifest_entries;
 	//! NOTE: the order of these columns is defined by the order that they are produced in BuildManifestSchema
 	//! see `iceberg_avro_multi_file_reader.cpp`
 	idx_t vector_index = 0;

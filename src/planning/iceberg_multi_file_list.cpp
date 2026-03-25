@@ -355,13 +355,13 @@ unique_ptr<NodeStatistics> IcebergMultiFileList::GetCardinality(ClientContext &c
 
 	idx_t cardinality = 0;
 	for (idx_t i = 0; i < data_manifests.size(); i++) {
-		auto &manifest = data_manifests[i].entry.file;
-		cardinality += manifest.added_rows_count;
-		cardinality += manifest.existing_rows_count;
+		auto &manifest_file = data_manifests[i].entry.ManifestFile();
+		cardinality += manifest_file.added_rows_count;
+		cardinality += manifest_file.existing_rows_count;
 	}
 	for (idx_t i = 0; i < delete_manifests.size(); i++) {
-		auto &manifest = delete_manifests[i].entry.file;
-		cardinality -= manifest.added_rows_count;
+		auto &manifest_file = delete_manifests[i].entry.ManifestFile();
+		cardinality -= manifest_file.added_rows_count;
 	}
 	return make_uniq<NodeStatistics>(cardinality, cardinality);
 }
@@ -373,9 +373,9 @@ const BoundIcebergManifestEntry &IcebergMultiFileList::GetManifestEntry(idx_t fi
 const IcebergManifestFile &IcebergMultiFileList::GetManifestFileForEntry(const BoundIcebergManifestEntry &entry,
                                                                          IcebergManifestContentType type) const {
 	if (type == IcebergManifestContentType::DATA) {
-		return data_manifests[entry.manifest_file_idx].entry.file;
+		return data_manifests[entry.manifest_file_idx].entry.ManifestFile();
 	} else {
-		return delete_manifests[entry.manifest_file_idx].entry.file;
+		return delete_manifests[entry.manifest_file_idx].entry.ManifestFile();
 	}
 }
 
@@ -392,9 +392,9 @@ void IcebergMultiFileList::GetStatistics(vector<PartitionStatistics> &result) co
 
 	idx_t count = 0;
 	for (idx_t i = 0; i < data_manifests.size(); i++) {
-		auto &manifest = data_manifests[i].entry.file;
-		count += manifest.existing_rows_count;
-		count += manifest.added_rows_count;
+		auto &manifest_file = data_manifests[i].entry.ManifestFile();
+		count += manifest_file.existing_rows_count;
+		count += manifest_file.added_rows_count;
 	}
 
 	PartitionStatistics partition_stats;
@@ -649,8 +649,8 @@ optional_ptr<const BoundIcebergManifestEntry> IcebergMultiFileList::GetDataFile(
 		auto &current_batch = *batch;
 		auto &bound_manifest_list_entry = data_manifests[current_batch.manifest_list_entry_idx];
 		auto &manifest_list_entry = bound_manifest_list_entry.entry;
-		auto &manifest_entries = manifest_list_entry.manifest_entries;
-		auto &manifest_file = manifest_list_entry.file;
+		auto &manifest_entries = manifest_list_entry.ManifestEntries();
+		auto &manifest_file = manifest_list_entry.ManifestFile();
 		for (; current_batch.start_index < current_batch.end_index && file_id >= data_manifest_entries.size();
 		     current_batch.start_index++) {
 			auto &manifest_entry = manifest_entries[current_batch.start_index];
@@ -796,7 +796,7 @@ IcebergMultiFileList::GetEqualityDeletesForFile(const BoundIcebergManifestEntry 
 
 	//! Look through all the equality delete files with a *higher* sequence number
 	auto &manifest_entry = bound_manifest_entry.entry;
-	auto &manifest_file = data_manifests[bound_manifest_entry.manifest_file_idx].entry.file;
+	auto &manifest_file = data_manifests[bound_manifest_entry.manifest_file_idx].entry.ManifestFile();
 	auto &data_file = manifest_entry.data_file;
 	auto &metadata = GetMetadata();
 	auto it = equality_delete_data.upper_bound(manifest_entry.GetSequenceNumber(manifest_file));
@@ -857,7 +857,7 @@ void IcebergMultiFileList::InitializeFiles(lock_guard<mutex> &guard) const {
 		}
 
 		for (auto &manifest_list_entry : manifest_list_entries) {
-			auto &manifest_file = manifest_list_entry.file;
+			auto &manifest_file = manifest_list_entry.ManifestFile();
 			if (!ManifestMatchesFilter(manifest_file)) {
 				DUCKDB_LOG(context, IcebergLogType, "Iceberg Filter Pushdown, skipped 'manifest_file': '%s'",
 				           manifest_file.manifest_path);
@@ -876,6 +876,13 @@ void IcebergMultiFileList::InitializeFiles(lock_guard<mutex> &guard) const {
 		if (!committed_delete_manifests.empty()) {
 			delete_manifest_scan = AvroScan::ScanManifest(snapshot, committed_delete_manifests, options, fs,
 			                                              iceberg_path, metadata, context);
+			for (auto &manifest_list_entry : committed_delete_manifests) {
+				// reserve upfront → guarantees no reallocation
+				auto &file = manifest_list_entry.ManifestFile();
+				idx_t reserve_size = file.existing_files_count + file.added_files_count + file.deleted_files_count;
+				manifest_list_entry.SetManifest(make_shared_ptr<IcebergManifest>(reserve_size));
+			}
+
 			delete_manifest_reader = make_uniq<manifest_file::ManifestReader>(*delete_manifest_scan);
 		}
 	}
@@ -886,14 +893,14 @@ void IcebergMultiFileList::InitializeFiles(lock_guard<mutex> &guard) const {
 			auto &alter = alter_p.get();
 			const auto &manifest_list_entries = alter.GetManifestFiles();
 			for (auto &manifest_list_entry : manifest_list_entries) {
-				auto &manifest = manifest_list_entry.file;
-				if (!ManifestMatchesFilter(manifest)) {
+				auto &manifest_file = manifest_list_entry.ManifestFile();
+				if (!ManifestMatchesFilter(manifest_file)) {
 					DUCKDB_LOG(context, IcebergLogType, "Iceberg Filter Pushdown, skipped 'manifest_file': '%s'",
-					           manifest.manifest_path);
+					           manifest_file.manifest_path);
 					//! Skip this manifest
 					continue;
 				}
-				switch (manifest.content) {
+				switch (manifest_file.content) {
 				case IcebergManifestContentType::DATA: {
 					transaction_data_manifests.push_back(manifest_list_entry);
 					break;
@@ -904,7 +911,7 @@ void IcebergMultiFileList::InitializeFiles(lock_guard<mutex> &guard) const {
 				}
 				default:
 					throw NotImplementedException("IcebergManifestContentType: %d",
-					                              static_cast<uint8_t>(manifest.content));
+					                              static_cast<uint8_t>(manifest_file.content));
 				}
 			}
 		}
@@ -916,19 +923,19 @@ void IcebergMultiFileList::InitializeFiles(lock_guard<mutex> &guard) const {
 	data_manifests.reserve(total_data_manifests);
 
 	//! Add all data manifests
-	for (auto &manifest : committed_data_manifests) {
+	for (auto &manifest_list_entry : committed_data_manifests) {
 		auto manifest_list_entry_idx = data_manifests.size();
 		// reserve upfront → guarantees no reallocation
-		auto &file = manifest.file;
+		auto &file = manifest_list_entry.ManifestFile();
 		idx_t reserve_size = file.existing_files_count + file.added_files_count + file.deleted_files_count;
-		manifest.manifest_entries.reserve(reserve_size);
+		manifest_list_entry.SetManifest(make_shared_ptr<IcebergManifest>(reserve_size));
 
-		data_manifests.emplace_back(manifest_list_entry_idx, manifest);
+		data_manifests.emplace_back(manifest_list_entry_idx, manifest_list_entry);
 	}
 	for (auto &manifest : transaction_data_manifests) {
 		auto manifest_list_entry_idx = data_manifests.size();
 		data_manifests.emplace_back(manifest_list_entry_idx, manifest);
-		read_state.PushBatch(ManifestReadBatch {manifest_list_entry_idx, 0, manifest.get().manifest_entries.size()});
+		read_state.PushBatch(ManifestReadBatch {manifest_list_entry_idx, 0, manifest.get().ManifestEntries().size()});
 	}
 
 	idx_t total_delete_manifests = 0;
@@ -989,8 +996,8 @@ void IcebergMultiFileList::ProcessDeletes(const vector<MultiFileColumnDefinition
 	}
 	for (idx_t i = 0; i < committed_delete_manifests.size(); i++) {
 		auto &manifest = delete_manifests[i];
-		auto &entries = manifest.entry.manifest_entries;
-		auto &manifest_file = manifest.entry.file;
+		auto &entries = manifest.entry.ManifestEntries();
+		auto &manifest_file = manifest.entry.ManifestFile();
 		for (auto &manifest_entry : entries) {
 			if (manifest_entry.status == IcebergManifestEntryStatusType::DELETED) {
 				continue;
@@ -1032,7 +1039,7 @@ void IcebergMultiFileList::ProcessDeletes(const vector<MultiFileColumnDefinition
 	auto offset = committed_delete_manifests.size();
 	while (transaction_delete_idx < transaction_delete_manifests.size()) {
 		auto &delete_manifest = delete_manifests[offset + transaction_delete_idx];
-		for (auto &manifest_entry : delete_manifest.entry.manifest_entries) {
+		for (auto &manifest_entry : delete_manifest.entry.ManifestEntries()) {
 			auto &data_file = manifest_entry.data_file;
 
 			auto &referenced_data_file = data_file.referenced_data_file;

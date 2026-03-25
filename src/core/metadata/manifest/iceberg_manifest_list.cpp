@@ -64,7 +64,8 @@ IcebergManifestListEntry IcebergManifestListEntry::CreateFromEntries(FileSystem 
 	//! Add the files to the manifest
 	for (auto &manifest_entry : manifest_entries) {
 		auto &data_file = manifest_entry.data_file;
-		if (data_file.content == IcebergManifestEntryContentType::DATA) {
+		if (data_file.content == IcebergManifestEntryContentType::DATA &&
+		    manifest_entry.status != IcebergManifestEntryStatusType::DELETED) {
 			next_row_id += data_file.record_count;
 		}
 		switch (manifest_entry.status) {
@@ -106,9 +107,7 @@ IcebergManifestListEntry IcebergManifestListEntry::CreateFromEntries(FileSystem 
 		manifest_file.partitions.Create(partition_spec, manifest_entries);
 	}
 
-	manifest_list_entry.manifest_entries.insert(manifest_list_entry.manifest_entries.end(),
-	                                            std::make_move_iterator(manifest_entries.begin()),
-	                                            std::make_move_iterator(manifest_entries.end()));
+	manifest_list_entry.manifest = make_shared_ptr<IcebergManifest>(std::move(manifest_entries));
 	return manifest_list_entry;
 }
 
@@ -371,7 +370,7 @@ void WriteToFile(const IcebergTableMetadata &table_metadata, const IcebergManife
 
 	for (idx_t i = 0; i < manifest_files.size(); i++) {
 		const auto &manifest_entry = manifest_files[i];
-		const auto &manifest = manifest_entry.file;
+		const auto &manifest = manifest_entry.ManifestFile();
 		idx_t col_idx = 0;
 
 		// manifest_path: string - 500

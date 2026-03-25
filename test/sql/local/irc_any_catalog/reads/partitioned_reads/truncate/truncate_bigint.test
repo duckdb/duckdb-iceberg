@@ -1,4 +1,4 @@
-# name: test/sql/local/partitioning/truncate/truncate_bigint.test
+# name: test/sql/local/irc_any_catalog/reads/partitioned_reads/truncate/truncate_bigint.test
 # group: [truncate]
 
 require avro

@@ -28,7 +28,7 @@ IcebergManifestFileScanInfo::IcebergManifestFileScanInfo(const IcebergTableMetad
       iceberg_path(iceberg_path), read_state(read_state) {
 	unordered_set<int32_t> partition_spec_ids;
 	for (auto &manifest_list_entry : manifest_files) {
-		auto &manifest = manifest_list_entry.file;
+		auto &manifest = manifest_list_entry.ManifestFile();
 		partition_spec_ids.insert(manifest.partition_spec_id);
 	}
 	//! The schema of a manifest is affected by the 'partition_spec_id' of the 'manifest_file',

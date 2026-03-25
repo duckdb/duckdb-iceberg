@@ -48,7 +48,7 @@ void IcebergTransactionData::CacheExistingManifestList(lock_guard<mutex> &guard,
 
 	//! Deal with upgraded tables, if the snapshot originated from V2
 	for (auto &manifest_list_entry : existing_manifest_list) {
-		auto &manifest_file = manifest_list_entry.file;
+		auto &manifest_file = manifest_list_entry.ManifestFileMutable();
 		if (manifest_file.content != IcebergManifestContentType::DATA) {
 			continue;
 		}
