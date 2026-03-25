@@ -50,7 +50,9 @@
         "test/sql/local/irc_any_catalog/alter/test_alter_table_partitioned_conflict.test",
         "test/sql/local/irc_any_catalog/alter/test_create_table_partitioned_by.test",
         "test/sql/local/irc_any_catalog/alter/alter_add_column_same_transaction.test",
-        "test/sql/local/irc_any_catalog/alter/alter_add_column_if_not_exists.test"
+        "test/sql/local/irc_any_catalog/alter/alter_add_column_if_not_exists.test",
+        "test/sql/local/irc_any_catalog/alter/alter_add_column_same_transaction_aborted.test",
+        "test/sql/local/irc_any_catalog/alter/alter_add_column_same_name_error.test"
       ]
     }
   ]
