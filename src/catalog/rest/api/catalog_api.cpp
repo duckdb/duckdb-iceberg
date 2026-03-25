@@ -20,7 +20,6 @@
 
 #include "rest_catalog/objects/list.hpp"
 #include "rest_catalog/objects/iceberg_error_response.hpp"
-#include <regex>
 
 using namespace duckdb_yyjson;
 namespace duckdb {
