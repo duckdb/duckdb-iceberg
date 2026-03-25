@@ -158,7 +158,7 @@ public:
 	mutable unique_ptr<manifest_file::ManifestReader> delete_manifest_reader;
 	mutable vector<IcebergManifestListEntry> committed_delete_manifests;
 	//! Cached, uncommitted delete manifests created by earlier statements in the transaction
-	mutable vector<reference<IcebergManifestListEntry>> transaction_delete_manifests;
+	mutable vector<reference<const IcebergManifestListEntry>> transaction_delete_manifests;
 
 private:
 	//! References to items inside the 'manifest_entries' of the list entries in the 'data_manifests'
@@ -170,7 +170,7 @@ private:
 	mutable unique_ptr<manifest_file::ManifestReader> data_manifest_reader;
 	mutable vector<IcebergManifestListEntry> committed_data_manifests;
 	//! Cached, uncommitted data manifests created by earlier statements in the transaction
-	mutable vector<reference<IcebergManifestListEntry>> transaction_data_manifests;
+	mutable vector<reference<const IcebergManifestListEntry>> transaction_data_manifests;
 };
 
 } // namespace duckdb

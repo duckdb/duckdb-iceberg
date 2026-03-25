@@ -749,6 +749,8 @@ idx_t WriteToFile(const IcebergTableMetadata &table_metadata, const IcebergManif
 
 		// status: int
 		chunk.SetValue(col_idx++, i, Value::INTEGER(static_cast<int32_t>(manifest_entry.status)));
+		//! FIXME: this is missing logic, needs to be looked into
+		//! SPEC: Snapshot id where the file was added, or deleted if status is 2. Inherited when null.
 		// snapshot_id: long
 		if (manifest_entry.HasSnapshotId()) {
 			chunk.SetValue(col_idx++, i, Value::BIGINT(manifest_entry.GetSnapshotId()));
@@ -756,12 +758,13 @@ idx_t WriteToFile(const IcebergTableMetadata &table_metadata, const IcebergManif
 			chunk.SetValue(col_idx++, i, Value(LogicalType::BIGINT));
 		}
 		// sequence_number: long
-		chunk.SetValue(col_idx++, i, Value::BIGINT(manifest_entry.GetSequenceNumber(manifest_file)));
 		// file_sequence_number: long
 		if (manifest_entry.status == IcebergManifestEntryStatusType::ADDED) {
 			chunk.SetValue(col_idx++, i, Value(LogicalType::BIGINT));
+			chunk.SetValue(col_idx++, i, Value(LogicalType::BIGINT));
 		} else {
 			chunk.SetValue(col_idx++, i, Value::BIGINT(manifest_entry.GetFileSequenceNumber(manifest_file)));
+			chunk.SetValue(col_idx++, i, Value::BIGINT(manifest_entry.GetSequenceNumber(manifest_file)));
 		}
 
 		auto &data_file = manifest_entry.data_file;

@@ -884,7 +884,7 @@ void IcebergMultiFileList::InitializeFiles(lock_guard<mutex> &guard) const {
 		auto &transaction_data = GetTransactionData();
 		for (auto &alter_p : transaction_data.alters) {
 			auto &alter = alter_p.get();
-			auto &manifest_list_entries = alter.manifest_list.GetManifestFilesMutable();
+			const auto &manifest_list_entries = alter.GetManifestFiles();
 			for (auto &manifest_list_entry : manifest_list_entries) {
 				auto &manifest = manifest_list_entry.file;
 				if (!ManifestMatchesFilter(manifest)) {
@@ -920,7 +920,7 @@ void IcebergMultiFileList::InitializeFiles(lock_guard<mutex> &guard) const {
 		auto manifest_list_entry_idx = data_manifests.size();
 		// reserve upfront → guarantees no reallocation
 		auto &file = manifest.file;
-		idx_t reserve_size = file.existing_files_count + file.added_files_count;
+		idx_t reserve_size = file.existing_files_count + file.added_files_count + file.deleted_files_count;
 		manifest.manifest_entries.reserve(reserve_size);
 
 		data_manifests.emplace_back(manifest_list_entry_idx, manifest);

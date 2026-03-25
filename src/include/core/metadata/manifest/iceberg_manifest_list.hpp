@@ -129,7 +129,8 @@ public:
 
 struct IcebergManifestList {
 public:
-	IcebergManifestList(const string &path) : path(path) {
+	IcebergManifestList(int64_t snapshot_id, sequence_number_t sequence_number, const string &path)
+	    : path(path), snapshot_id(snapshot_id), sequence_number(sequence_number) {
 	}
 
 public:
@@ -139,7 +140,18 @@ public:
 		return path;
 	}
 
-	void AddManifestFile(IcebergManifestListEntry &&manifest_file) {
+	void AddNewManifestFile(IcebergManifestListEntry &&manifest_list_entry) {
+		auto &manifest_file = manifest_list_entry.file;
+		manifest_file.sequence_number = sequence_number;
+		manifest_file.added_snapshot_id = snapshot_id;
+
+		if (!manifest_file.has_min_sequence_number || manifest_file.min_sequence_number > sequence_number) {
+			manifest_file.min_sequence_number = sequence_number;
+			manifest_file.has_min_sequence_number = true;
+		}
+		manifest_entries.push_back(std::move(manifest_list_entry));
+	}
+	void AddExistingManifestFile(IcebergManifestListEntry &&manifest_file) {
 		manifest_entries.push_back(std::move(manifest_file));
 	}
 	idx_t GetManifestListEntriesCount() const;
@@ -156,6 +168,8 @@ public:
 
 private:
 	string path;
+	int64_t snapshot_id;
+	sequence_number_t sequence_number;
 	vector<IcebergManifestListEntry> manifest_entries;
 };
 

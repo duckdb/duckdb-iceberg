@@ -61,7 +61,7 @@ public:
 	atomic<idx_t> total_deleted_count;
 	// data file name -> newly deleted rows.
 	unordered_map<string, vector<idx_t>> deleted_rows;
-	case_insensitive_map_t<IcebergManifestDeletes> altered_manifests;
+	IcebergManifestDeletes altered_manifests;
 
 	void Flush(IcebergDeleteLocalState &local_state) {
 		auto &local_entry = local_state.file_row_numbers;

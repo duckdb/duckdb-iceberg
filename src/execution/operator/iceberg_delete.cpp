@@ -213,16 +213,14 @@ void IcebergDelete::WritePositionalDeleteFile(ClientContext &context, IcebergDel
 	global_state.written_files.emplace(filename, std::move(delete_file));
 }
 
-static void PopulateAlteredManifests(const IcebergMultiFileList &multi_file_list,
-                                     case_insensitive_map_t<IcebergManifestDeletes> &out,
-                                     IcebergDeleteData &delete_data, const string &referenced_data_file) {
+static void PopulateAlteredManifests(const IcebergMultiFileList &multi_file_list, IcebergManifestDeletes &out,
+                                     IcebergDeleteData &delete_data) {
+	if (delete_data.type != IcebergDeleteType::DELETION_VECTOR) {
+		return;
+	}
 	for (auto &bound_entry : delete_data.entries) {
 		auto &entry = bound_entry.entry;
-		auto &manifest_file = multi_file_list.GetManifestFileForEntry(bound_entry, IcebergManifestContentType::DELETE);
-		auto &altered_manifest_file = out[manifest_file.manifest_path];
-		auto it = altered_manifest_file.altered_data_files.emplace(entry.data_file.file_path, delete_data.type).first;
-		auto &delete_file = it->second;
-		delete_file.referenced_data_files.push_back(referenced_data_file);
+		out.InvalidateFile(entry.data_file.file_path);
 	}
 }
 
@@ -249,7 +247,7 @@ void IcebergDelete::FlushDeletes(IcebergTransaction &transaction, ClientContext 
 			auto it = multi_file_list.positional_delete_data.find(filename);
 			if (it != multi_file_list.positional_delete_data.end()) {
 				auto &delete_data = *it->second;
-				PopulateAlteredManifests(multi_file_list, global_state.altered_manifests, delete_data, filename);
+				PopulateAlteredManifests(multi_file_list, global_state.altered_manifests, delete_data);
 				delete_data.ToSet(sorted_deletes);
 			}
 		}

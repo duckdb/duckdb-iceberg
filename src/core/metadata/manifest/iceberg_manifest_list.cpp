@@ -50,8 +50,9 @@ IcebergManifestListEntry IcebergManifestListEntry::CreateFromEntries(FileSystem 
 	}
 
 	manifest_file.manifest_path = manifest_file_path;
-	manifest_file.sequence_number = sequence_number;
 	manifest_file.content = manifest_content_type;
+	//! NOTE: this gets overwritten on commit
+	manifest_file.sequence_number = sequence_number;
 	manifest_file.added_files_count = 0;
 	manifest_file.deleted_files_count = 0;
 	manifest_file.existing_files_count = 0;
@@ -84,12 +85,14 @@ IcebergManifestListEntry IcebergManifestListEntry::CreateFromEntries(FileSystem 
 		}
 		}
 
+		//! NOTE: this gets overwritten on commit
 		if (!manifest_file.has_min_sequence_number ||
 		    manifest_file.sequence_number < manifest_file.min_sequence_number) {
 			manifest_file.min_sequence_number = manifest_file.sequence_number;
 		}
 		manifest_file.has_min_sequence_number = true;
 	}
+	//! NOTE: this gets overwritten on commit
 	manifest_file.added_snapshot_id = snapshot_id;
 
 	// Compute partition field summaries (upper/lower bounds) for the manifest list entry
@@ -468,7 +471,7 @@ unique_ptr<IcebergManifestList> IcebergManifestList::Load(const string &iceberg_
                                                           const IcebergTableMetadata &metadata,
                                                           const IcebergSnapshot &snapshot, ClientContext &context,
                                                           const IcebergOptions &options) {
-	auto ret = make_uniq<IcebergManifestList>(snapshot.manifest_list);
+	auto ret = make_uniq<IcebergManifestList>(snapshot.snapshot_id, snapshot.sequence_number, snapshot.manifest_list);
 
 	auto &fs = FileSystem::GetFileSystem(context);
 	auto manifest_list_full_path = options.allow_moved_paths

@@ -323,8 +323,8 @@ TableTransactionInfo IcebergTransaction::GetTransactionRequest(ClientContext &co
 		}
 
 		if (!transaction_data.alters.empty()) {
-			auto &last_alter = transaction_data.alters.back();
-			auto snapshot_id = last_alter.get().snapshot.snapshot_id;
+			auto &snapshot = *commit_state.latest_snapshot;
+			auto snapshot_id = snapshot.snapshot_id;
 			auto set_snapshot_ref_update = CreateSetSnapshotRefUpdate(snapshot_id);
 			commit_state.table_change.updates.push_back(std::move(set_snapshot_ref_update));
 		}
@@ -503,7 +503,7 @@ void IcebergTransaction::CleanupFiles() {
 			ic_table_entry.PrepareIcebergScanFromEntry(*temp_con_context);
 
 			auto &add_snapshot = update->Cast<IcebergAddSnapshot>();
-			auto manifest_list_entries = add_snapshot.manifest_list.GetManifestFilesConst();
+			const auto manifest_list_entries = add_snapshot.GetManifestFiles();
 			for (const auto &manifest : manifest_list_entries) {
 				for (auto &manifest_entry : manifest.manifest_entries) {
 					auto &data_file = manifest_entry.data_file;
