@@ -215,15 +215,9 @@ void IcebergInsertGlobalState::AddFiles(DataChunk &chunk, const string &table_na
                                         const IcebergTableMetadata &table_metadata) {
 	// grab lock for written files vector
 	lock_guard<mutex> guard(lock);
-	auto partition_id = table_metadata.default_spec_id;
 	for (idx_t r = 0; r < chunk.size(); r++) {
 		IcebergManifestEntry manifest_entry;
 		manifest_entry.status = IcebergManifestEntryStatusType::ADDED;
-		if (partition_id) {
-			manifest_entry.partition_spec_id = static_cast<int32_t>(partition_id);
-		} else {
-			manifest_entry.partition_spec_id = 0;
-		}
 
 		// returned chunk has data as defined in
 		// GetCopyFunctionReturnLogicalTypes(CopyFunctionReturnType::WRITTEN_FILE_STATISTICS)

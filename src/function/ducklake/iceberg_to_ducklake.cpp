@@ -22,7 +22,6 @@
 #include "duckdb/common/types/uuid.hpp"
 #include "duckdb/common/numeric_utils.hpp"
 
-#include "function/metadata/iceberg_metadata.hpp"
 #include "function/iceberg_functions.hpp"
 #include "common/iceberg_utils.hpp"
 #include "catalog/rest/iceberg_catalog.hpp"
@@ -921,14 +920,15 @@ public:
 			}
 			last_schema = current_schema;
 
-			auto iceberg_table = IcebergTable::Load(metadata.location, metadata, snapshot, context, options);
+			auto iceberg_manifest_list =
+			    IcebergManifestList::Load(metadata.location, metadata, snapshot, context, options);
 
 			vector<DuckLakeDataFile> new_data_files;
 			vector<string> deleted_data_files;
 
 			vector<DuckLakeDeleteFile> new_delete_files;
 			vector<string> deleted_delete_files;
-			for (auto &entry : iceberg_table->entries) {
+			for (auto &entry : iceberg_manifest_list->GetManifestFilesConst()) {
 				auto &manifest = entry.file;
 				auto &entries = entry.manifest_entries;
 

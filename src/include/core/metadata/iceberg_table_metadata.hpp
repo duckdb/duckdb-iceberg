@@ -64,8 +64,8 @@ public:
 	const string GetDataPath(FileSystem &fs) const;
 	const string GetMetadataPath(FileSystem &fs) const;
 
-	bool HasLastAssignedColumnFieldId() const;
-	idx_t GetLastAssignedColumnFieldId() const;
+	bool HasLastColumnId() const;
+	idx_t GetLastColumnId() const;
 
 	bool HasLastPartitionId() const;
 	int32_t GetLastPartitionFieldId() const;
