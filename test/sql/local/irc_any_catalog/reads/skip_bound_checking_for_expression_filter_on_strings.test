@@ -1,5 +1,5 @@
-# name: test/sql/local/iceberg_scans/skip_bound_checking_for_expression_filter_on_strings.test
-# group: [iceberg_scans]
+# name: test/sql/local/irc_any_catalog/reads/skip_bound_checking_for_expression_filter_on_strings.test
+# group: [reads]
 
 require avro
 
