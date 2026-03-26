@@ -362,14 +362,9 @@ int64_t IcebergManifestEntry::GetSnapshotId() const {
 
 namespace manifest_file {
 
-static LogicalType PartitionStructType(const IcebergTableMetadata &table_metadata,
-                                       const vector<IcebergManifestEntry> &entries) {
-	D_ASSERT(!entries.empty());
-	auto &first_entry = entries.front();
+static LogicalType PartitionStructType(vector<IcebergExtendedPartitionInfo> extended_partition_info) {
 	child_list_t<LogicalType> children;
-	auto &data_file = first_entry.data_file;
-	auto extended_partition_info = data_file.GetExtendedPartitionInfo(table_metadata);
-	if (data_file.partition_info.empty()) {
+	if (extended_partition_info.empty()) {
 		children.emplace_back("__duckdb_empty_struct_marker", LogicalType::INTEGER);
 	} else {
 		//! NOTE: all entries in the file should have the same schema, otherwise it can't be in the same manifest file
@@ -536,7 +531,7 @@ idx_t WriteToFile(const IcebergTableMetadata &table_metadata, const IcebergManif
 		auto extended_partition_info = data_file.GetExtendedPartitionInfo(table_metadata);
 		child_list_t<Value> partition;
 		// partition: struct(...)
-		children.emplace_back("partition", PartitionStructType(table_metadata, manifest_entries));
+		children.emplace_back("partition", PartitionStructType(extended_partition_info));
 		partition.emplace_back("__duckdb_field_id", Value::INTEGER(PARTITION));
 		partition.emplace_back("__duckdb_nullable", Value::BOOLEAN(false));
 		for (auto &entry : extended_partition_info) {

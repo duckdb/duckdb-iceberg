@@ -750,7 +750,7 @@ IcebergCopyOptions IcebergInsert::GetCopyOptions(ClientContext &context, Iceberg
 	result.write_partition_columns = true;
 	result.return_type = CopyFunctionReturnType::WRITTEN_FILE_STATISTICS;
 	// Virtual columns come before partition columns, matching the chunk layout:
-	//   [physical_cols..., _row_id?, partition_vals...]
+	//   [physical_cols..., _row_id, partition_vals...]
 	if (WriteRowId(copy_input.virtual_columns)) {
 		names_to_write.push_back("_row_id");
 		types_to_write.push_back(LogicalType::BIGINT);
