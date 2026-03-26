@@ -1,4 +1,4 @@
-# name: test/sql/local/irc_any_catalog/reads/skip_bound_checking_for_expression_filter_on_strings.test
+# name: test/sql/local/irc_any_catalog/reads/should_not_do_filter_pruning_on_expression_string_filters.test
 # group: [reads]
 
 require avro
