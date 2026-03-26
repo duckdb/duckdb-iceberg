@@ -484,7 +484,7 @@ shared_ptr<MultiFileList> IcebergAvroMultiFileReader::CreateFileList(ClientConte
 		auto &manifest_files_scan = scan_info->Cast<IcebergManifestFileScanInfo>();
 		auto &manifest_files = manifest_files_scan.files_to_scan;
 		auto &options = manifest_files_scan.options;
-		auto &fs = manifest_files_scan.fs;
+		auto &fs = FileSystem::GetFileSystem(manifest_files_scan.context);
 		auto &iceberg_path = manifest_files_scan.iceberg_path;
 		for (idx_t i = 0; i < manifest_files.size(); i++) {
 			auto &manifest_list_entry = manifest_files[i].manifest_list_entry;

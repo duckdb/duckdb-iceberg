@@ -1,5 +1,6 @@
 #include "planning/metadata_io/avro/iceberg_avro_multi_file_list.hpp"
 #include "core/metadata/manifest/iceberg_manifest.hpp"
+#include "iceberg_logging.hpp"
 
 namespace duckdb {
 
@@ -18,19 +19,20 @@ IcebergManifestListScanInfo::IcebergManifestListScanInfo(const IcebergTableMetad
 IcebergManifestListScanInfo::~IcebergManifestListScanInfo() {
 }
 
-IcebergManifestFileScanInfo::IcebergManifestFileScanInfo(const IcebergTableMetadata &metadata,
+IcebergManifestFileScanInfo::IcebergManifestFileScanInfo(ClientContext &context, const IcebergTableMetadata &metadata,
                                                          const IcebergSnapshot &snapshot,
                                                          vector<IcebergManifestListEntry> &manifest_files,
-                                                         const IcebergOptions &options, FileSystem &fs,
-                                                         const string &iceberg_path,
+                                                         const IcebergOptions &options, const string &iceberg_path,
                                                          optional_ptr<ManifestEntryReadState> read_state_p)
-    : IcebergAvroScanInfo(TYPE, metadata, snapshot), options(options), fs(fs), iceberg_path(iceberg_path),
+    : IcebergAvroScanInfo(TYPE, metadata, snapshot), context(context), options(options), iceberg_path(iceberg_path),
       read_state(read_state_p) {
 	unordered_set<int32_t> partition_spec_ids;
 	for (idx_t i = 0; i < manifest_files.size(); i++) {
 		auto &manifest_list_entry = manifest_files[i];
+		auto &manifest_file = manifest_list_entry.ManifestFile();
 		auto &manifest = manifest_list_entry.GetManifest();
-		if (manifest.CanCache()) {
+		if (manifest_file.ManifestEntryCount() && manifest.CanCache()) {
+			DUCKDB_LOG(context, IcebergLogType, "[Caching] manifest_file '%s' was cached", manifest_file.manifest_path);
 			if (read_state_p) {
 				//! Push a batch for this manifest directly
 				auto &read_state = *read_state_p;
@@ -40,7 +42,6 @@ IcebergManifestFileScanInfo::IcebergManifestFileScanInfo(const IcebergTableMetad
 		}
 
 		files_to_scan.emplace_back(i, manifest_list_entry);
-		auto &manifest_file = manifest_list_entry.ManifestFile();
 		partition_spec_ids.insert(manifest_file.partition_spec_id);
 	}
 	//! The schema of a manifest is affected by the 'partition_spec_id' of the 'manifest_file',
