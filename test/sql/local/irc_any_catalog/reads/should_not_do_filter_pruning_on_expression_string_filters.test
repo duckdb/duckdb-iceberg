@@ -7,16 +7,10 @@ require parquet
 
 require iceberg
 
-require-env DUCKDB_ICEBERG_HAVE_GENERATED_DATA
+require-env ICEBERG_SERVER_AVAILABLE
 
-statement ok
-attach ':memory:' as my_datalake;
+require-env SECRETS_CREATED_AND_CATALOG_ATTACHED
 
-statement ok
-create schema my_datalake.default;
-
-statement ok
-SET unsafe_enable_version_guessing = true;
 
 statement ok
 SET enable_logging=true;
@@ -25,7 +19,7 @@ statement ok
 SET logging_level='trace';
 
 query I
-SELECT item_id FROM ICEBERG_SCAN('__WORKING_DIRECTORY__/data/generated/iceberg/spark-local/default/issue_791') WHERE length(item_id) = 36;
+SELECT item_id FROM my_datalake.default.issue_791 WHERE length(item_id) = 36;
 ----
 10000000-0000-0000-0000-000000000001
 20000000-0000-0000-0000-000000000002
@@ -37,13 +31,13 @@ select count(*) FROM duckdb_logs() where type = 'Iceberg' and message.contains('
 0
 
 query I
-SELECT item_id FROM ICEBERG_SCAN('__WORKING_DIRECTORY__/data/generated/iceberg/spark-local/default/issue_791') WHERE length(item_id) > 35 AND length(item_id) < 37;
+SELECT item_id FROM my_datalake.default.issue_791 WHERE length(item_id) > 35 AND length(item_id) < 37;
 ----
 10000000-0000-0000-0000-000000000001
 20000000-0000-0000-0000-000000000002
 
 query I
-SELECT item_id FROM ICEBERG_SCAN('__WORKING_DIRECTORY__/data/generated/iceberg/spark-local/default/issue_791') WHERE length(item_id) IN (36);
+SELECT item_id FROM my_datalake.default.issue_791 WHERE length(item_id) IN (36);
 ----
 10000000-0000-0000-0000-000000000001
 20000000-0000-0000-0000-000000000002

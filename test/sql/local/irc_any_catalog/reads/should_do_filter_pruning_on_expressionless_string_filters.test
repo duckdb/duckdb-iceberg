@@ -7,13 +7,12 @@ require parquet
 
 require iceberg
 
-require-env DUCKDB_ICEBERG_HAVE_GENERATED_DATA
+require-env ICEBERG_SERVER_AVAILABLE
+
+require-env SECRETS_CREATED_AND_CATALOG_ATTACHED
 
 statement ok
-attach ':memory:' as my_datalake;
-
-statement ok
-create schema my_datalake.default;
+create schema if not exists my_datalake.default;
 
 statement ok
 SET unsafe_enable_version_guessing = true;
@@ -25,7 +24,7 @@ statement ok
 SET logging_level='trace';
 
 query I
-SELECT item_id FROM ICEBERG_SCAN('__WORKING_DIRECTORY__/data/generated/iceberg/spark-local/default/issue_791')
+SELECT item_id FROM my_datalake.default.issue_791
 WHERE
 item_id = '20000000-0000-0000-0000-000000000002';
 ----
@@ -52,7 +51,7 @@ statement ok
 CALL truncate_duckdb_logs();
 
 query I
-SELECT item_id FROM ICEBERG_SCAN('__WORKING_DIRECTORY__/data/generated/iceberg/spark-local/default/issue_791')
+SELECT item_id FROM my_datalake.default.issue_791
 WHERE
 item_id < '20000000-0000-0000-0000-000000000002';
 ----
@@ -85,7 +84,7 @@ statement ok
 CALL truncate_duckdb_logs();
 
 query I
-SELECT item_id FROM ICEBERG_SCAN('__WORKING_DIRECTORY__/data/generated/iceberg/spark-local/default/issue_791')
+SELECT item_id FROM my_datalake.default.issue_791
 WHERE
 item_id <= '20000000-0000-0000-0000-000000000002';
 ----
@@ -110,7 +109,7 @@ statement ok
 CALL truncate_duckdb_logs();
 
 query I
-SELECT item_id FROM ICEBERG_SCAN('__WORKING_DIRECTORY__/data/generated/iceberg/spark-local/default/issue_791')
+SELECT item_id FROM my_datalake.default.issue_791
 WHERE
 item_id >= '20000000-0000-0000-0000-000000000002';
 ----
@@ -134,7 +133,7 @@ statement ok
 CALL truncate_duckdb_logs();
 
 query I
-SELECT item_id FROM ICEBERG_SCAN('__WORKING_DIRECTORY__/data/generated/iceberg/spark-local/default/issue_791')
+SELECT item_id FROM my_datalake.default.issue_791
 WHERE
 item_id > '20000000-0000-0000-0000-000000000002';
 ----
