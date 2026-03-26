@@ -17,11 +17,6 @@ namespace duckdb {
 
 IcebergAddSnapshot::IcebergAddSnapshot(const IcebergTableInformation &table_info)
     : IcebergTableUpdate(IcebergTableUpdateType::ADD_SNAPSHOT, table_info) {
-	//! FIXME: altered_manifests should just be on the 'IcebergTransactionData', not on individual snapshot updates
-	if (table_info.transaction_data && !table_info.transaction_data->alters.empty()) {
-		auto &last_alter = table_info.transaction_data->alters.back();
-		altered_manifests.Merge(last_alter.get().altered_manifests);
-	}
 }
 
 static rest_api_objects::TableUpdate CreateAddSnapshotUpdate(const IcebergTableInformation &table_info,
@@ -46,7 +41,7 @@ static bool ManifestFileNeedsToBeRewritten(IcebergCommitState &commit_state, Ice
 	auto manifest_file_path = fs.JoinPath(table_metadata.GetMetadataPath(fs), manifest_file_uuid + "-m0.avro");
 
 	auto &manifest = list_entry.GetManifestMutable();
-	auto manifest_entries = manifest.manifest_entries;
+	auto &manifest_entries = manifest.manifest_entries;
 
 	auto &manifest_file = list_entry.ManifestFileMutable();
 	manifest_file.manifest_path = manifest_file_path;
