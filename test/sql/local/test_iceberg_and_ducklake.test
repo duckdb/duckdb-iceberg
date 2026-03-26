@@ -53,7 +53,7 @@ query II
 select request.url, request.type from duckdb_logs_parsed('HTTP');
 ----
 http://127.0.0.1:8181/v1/oauth/tokens	POST
-http://127.0.0.1:8181/v1/config?warehouse=	GET
+http://127.0.0.1:8181/v1/config	GET
 http://127.0.0.1:8181/v1/namespaces	GET
 http://127.0.0.1:8181/v1/namespaces/default/tables	GET
 http://127.0.0.1:8181/v1/namespaces/level1/tables	GET

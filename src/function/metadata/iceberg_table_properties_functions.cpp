@@ -8,7 +8,6 @@
 #include "duckdb/common/file_system.hpp"
 #include "duckdb/main/client_context.hpp"
 
-#include "function/metadata/iceberg_metadata.hpp"
 #include "function/iceberg_functions.hpp"
 #include "common/iceberg_utils.hpp"
 #include "catalog/rest/catalog_entry/table/iceberg_table_entry.hpp"

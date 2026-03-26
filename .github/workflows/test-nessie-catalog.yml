@@ -46,7 +46,7 @@ jobs:
 
       - name: Clone Nessie
         run: |
-          make nessie_clone
+          make nessie-clone
 
       - name: GitHub machine compatibility
         working-directory: .catalogs/nessie/docker
@@ -61,7 +61,7 @@ jobs:
 
       - name: Start Nessie
         run: |
-          make nessie_start
+          make nessie
 
       - name: Wait for Nessie/Keycloak
         run: |
@@ -88,7 +88,7 @@ jobs:
 
       - name: Generate data
         run: |
-          make nessie_data
+          make nessie-data-only
 
       - name: Run Generic IRC tests
         env:

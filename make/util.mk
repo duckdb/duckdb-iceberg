@@ -5,7 +5,7 @@ define stop_active_catalog
 	@if [ -f "$(ACTIVE_CATALOG_FILE)" ]; then \
 		active=$$(cat $(ACTIVE_CATALOG_FILE)); \
 		echo "Stopping active catalog: $$active"; \
-		$(MAKE) $${active}_stop; \
+		$(MAKE) $${active}-stop; \
 	fi
 	@rm -f $(ACTIVE_CATALOG_FILE)
 endef

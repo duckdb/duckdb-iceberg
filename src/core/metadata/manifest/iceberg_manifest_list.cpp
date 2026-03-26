@@ -9,8 +9,26 @@
 #include "core/expression/iceberg_value.hpp"
 #include "catalog/rest/catalog_entry/table/iceberg_table_information.hpp"
 #include "core/expression/iceberg_transform.hpp"
+#include "planning/metadata_io/avro/avro_scan.hpp"
+#include "common/iceberg_utils.hpp"
+#include "core/metadata/manifest/iceberg_manifest.hpp"
+#include "core/metadata/manifest/iceberg_manifest_list.hpp"
+#include "planning/metadata_io/manifest/iceberg_manifest_reader.hpp"
+#include "planning/metadata_io/manifest_list/iceberg_manifest_list_reader.hpp"
+#include "catalog/rest/api/catalog_utils.hpp"
 
 namespace duckdb {
+
+string IcebergManifestContentTypeToString(IcebergManifestContentType type) {
+	switch (type) {
+	case IcebergManifestContentType::DATA:
+		return "DATA";
+	case IcebergManifestContentType::DELETE:
+		return "DELETE";
+	default:
+		throw InvalidConfigurationException("Invalid Manifest Content Type");
+	}
+}
 
 IcebergManifestListEntry IcebergManifestListEntry::CreateFromEntries(FileSystem &fs, int64_t snapshot_id,
                                                                      sequence_number_t sequence_number,
@@ -32,8 +50,9 @@ IcebergManifestListEntry IcebergManifestListEntry::CreateFromEntries(FileSystem 
 	}
 
 	manifest_file.manifest_path = manifest_file_path;
-	manifest_file.sequence_number = sequence_number;
 	manifest_file.content = manifest_content_type;
+	//! NOTE: this gets overwritten on commit
+	manifest_file.sequence_number = sequence_number;
 	manifest_file.added_files_count = 0;
 	manifest_file.deleted_files_count = 0;
 	manifest_file.existing_files_count = 0;
@@ -44,15 +63,8 @@ IcebergManifestListEntry IcebergManifestListEntry::CreateFromEntries(FileSystem 
 
 	//! Add the files to the manifest
 	for (auto &manifest_entry : manifest_entries) {
-		manifest_entry.manifest_file_path = manifest_file_path;
 		auto &data_file = manifest_entry.data_file;
 		if (data_file.content == IcebergManifestEntryContentType::DATA) {
-			//! FIXME: this is required because we don't apply inheritance to uncommitted manifests
-			//! But this does result in serializing this to the avro file, which *should* be NULL
-			//! To fix this we should probably remove the inheritance application in the "manifest_reader"
-			//! and instead do the inheritance in a path that is used by both committed and uncommitted manifests
-			data_file.has_first_row_id = true;
-			data_file.first_row_id = next_row_id;
 			next_row_id += data_file.record_count;
 		}
 		switch (manifest_entry.status) {
@@ -73,16 +85,14 @@ IcebergManifestListEntry IcebergManifestListEntry::CreateFromEntries(FileSystem 
 		}
 		}
 
-		//! FIXME: these should be inherited - left NULL - for newly added data
-		manifest_entry.sequence_number = sequence_number;
-		manifest_entry.snapshot_id = snapshot_id;
-		manifest_entry.partition_spec_id = manifest_file.partition_spec_id;
+		//! NOTE: this gets overwritten on commit
 		if (!manifest_file.has_min_sequence_number ||
-		    manifest_entry.sequence_number < manifest_file.min_sequence_number) {
-			manifest_file.min_sequence_number = manifest_entry.sequence_number;
+		    manifest_file.sequence_number < manifest_file.min_sequence_number) {
+			manifest_file.min_sequence_number = manifest_file.sequence_number;
 		}
 		manifest_file.has_min_sequence_number = true;
 	}
+	//! NOTE: this gets overwritten on commit
 	manifest_file.added_snapshot_id = snapshot_id;
 
 	// Compute partition field summaries (upper/lower bounds) for the manifest list entry
@@ -455,6 +465,36 @@ void WriteToFile(const IcebergTableMetadata &table_metadata, const IcebergManife
 
 Value IcebergManifestList::FieldSummaryFieldIds() {
 	return manifest_list::FieldSummaryFieldIds();
+}
+
+unique_ptr<IcebergManifestList> IcebergManifestList::Load(const string &iceberg_path,
+                                                          const IcebergTableMetadata &metadata,
+                                                          const IcebergSnapshot &snapshot, ClientContext &context,
+                                                          const IcebergOptions &options) {
+	auto ret = make_uniq<IcebergManifestList>(snapshot.snapshot_id, snapshot.sequence_number, snapshot.manifest_list);
+
+	auto &fs = FileSystem::GetFileSystem(context);
+	auto manifest_list_full_path = options.allow_moved_paths
+	                                   ? IcebergUtils::GetFullPath(iceberg_path, snapshot.manifest_list, fs)
+	                                   : snapshot.manifest_list;
+
+	//! Read the entire manifest list, producing 'manifest_file' items
+	auto scan = AvroScan::ScanManifestList(snapshot, metadata, context, manifest_list_full_path, ret->manifest_entries);
+	auto manifest_list_reader = make_uniq<manifest_list::ManifestListReader>(*scan);
+
+	while (!manifest_list_reader->Finished()) {
+		manifest_list_reader->Read();
+	}
+
+	//! Read all manifest files, producing 'manifest_entry' items
+	auto manifest_scan =
+	    AvroScan::ScanManifest(snapshot, ret->manifest_entries, options, fs, iceberg_path, metadata, context);
+	auto manifest_file_reader = make_uniq<manifest_file::ManifestReader>(*manifest_scan);
+
+	while (!manifest_file_reader->Finished()) {
+		manifest_file_reader->Read();
+	}
+	return ret;
 }
 
 } // namespace duckdb

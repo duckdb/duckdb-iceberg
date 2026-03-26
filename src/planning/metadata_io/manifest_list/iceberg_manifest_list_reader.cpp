@@ -12,28 +12,15 @@ ManifestListReader::ManifestListReader(const AvroScan &scan) : BaseManifestReade
 ManifestListReader::~ManifestListReader() {
 }
 
-idx_t ManifestListReader::Read(idx_t count, vector<IcebergManifestListEntry> &result) {
+void ManifestListReader::Read() {
 	if (finished) {
-		return 0;
+		return;
 	}
-
-	idx_t total_read = 0;
-	idx_t total_added = 0;
-	while (total_read < count && !finished) {
-		auto tuples = ScanInternal(count - total_read);
-		if (finished) {
-			break;
-		}
-		total_added += ReadChunk(offset, tuples, result);
-		offset += tuples;
-		total_read += tuples;
-	}
-	return total_added;
+	ScanInternal();
 }
 
-idx_t ManifestListReader::ReadChunk(idx_t offset, idx_t count, vector<IcebergManifestListEntry> &result) {
-	D_ASSERT(offset < chunk.size());
-	D_ASSERT(offset + count <= chunk.size());
+void ManifestListReader::ReadChunk(DataChunk &chunk, idx_t iceberg_version, vector<IcebergManifestListEntry> &result) {
+	auto count = chunk.size();
 
 	//! NOTE: the order of these columns is defined by the order that they are produced in BuildManifestListSchema
 	//! see `iceberg_avro_multi_file_reader.cpp`
@@ -102,7 +89,7 @@ idx_t ManifestListReader::ReadChunk(idx_t offset, idx_t count, vector<IcebergMan
 	auto contains_nan_data = FlatVector::GetData<bool>(contains_nan);
 
 	for (idx_t i = 0; i < count; i++) {
-		idx_t index = i + offset;
+		idx_t index = i;
 
 		IcebergManifestFile manifest(manifest_path_data[index].GetString());
 		manifest.manifest_length = manifest_length_data[index];
@@ -157,7 +144,6 @@ idx_t ManifestListReader::ReadChunk(idx_t offset, idx_t count, vector<IcebergMan
 		}
 		result.push_back(std::move(manifest));
 	}
-	return count;
 }
 
 } // namespace manifest_list

@@ -40,6 +40,11 @@ public:
 public:
 	const IcebergTableInformation &table_info;
 	optional_ptr<const IcebergSnapshot> latest_snapshot;
+	//! Snapshot(s) created in this commit
+	vector<IcebergSnapshot> created_snapshots;
+	int64_t next_sequence_number;
+	int64_t next_row_id = 0;
+
 	ClientContext &context;
 
 	//! All the 'manifest_file' entries we will write to the new manifest list
