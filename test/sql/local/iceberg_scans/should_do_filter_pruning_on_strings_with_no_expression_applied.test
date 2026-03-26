@@ -1,0 +1,37 @@
+# name: test/sql/local/iceberg_scans/should_do_filter_pruning_on_strings_with_no_expression_applied.test
+# group: [iceberg_scans]
+
+require avro
+
+require parquet
+
+require iceberg
+
+require-env DUCKDB_ICEBERG_HAVE_GENERATED_DATA
+
+statement ok
+attach ':memory:' as my_datalake;
+
+statement ok
+create schema my_datalake.default;
+
+statement ok
+SET unsafe_enable_version_guessing = true;
+
+statement ok
+SET enable_logging=true;
+
+statement ok
+SET logging_level='trace';
+
+query I
+SELECT item_id FROM ICEBERG_SCAN('__WORKING_DIRECTORY__/data/generated/iceberg/spark-local/default/issue_791') WHERE item_id = '20000000-0000-0000-0000-000000000002';
+----
+20000000-0000-0000-0000-000000000002
+
+
+# Out of the 4 parquet files it should skip 3 based on bound checks, and only read the one where the filter was in-bounds
+query I
+select count(*) FROM duckdb_logs() where type = 'Iceberg' and message.contains('Iceberg Filter Pushdown, skipped ''data_file'':');
+----
+3
