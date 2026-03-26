@@ -138,9 +138,6 @@ public:
 	IcebergManifestFile &ManifestFileMutable() {
 		return file;
 	}
-	void SetManifest(shared_ptr<IcebergManifest> manifest) {
-		this->manifest = manifest;
-	}
 	const IcebergManifest &GetManifest() const {
 		return *manifest;
 	}

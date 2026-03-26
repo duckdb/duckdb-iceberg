@@ -102,7 +102,7 @@ void IcebergTransactionData::AddSnapshot(IcebergSnapshotOperationType operation,
 	if (table_metadata.has_current_snapshot) {
 		TableAddAssertCurrentSchemaId();
 	}
-	add_snapshot->altered_manifests = std::move(altered_manifests);
+	add_snapshot->altered_manifests.Merge(altered_manifests);
 
 	alters.push_back(*add_snapshot);
 	updates.push_back(std::move(add_snapshot));
@@ -136,7 +136,7 @@ void IcebergTransactionData::AddUpdateSnapshot(vector<IcebergManifestEntry> &&de
 	auto add_snapshot = make_uniq<IcebergAddSnapshot>(table_info);
 	add_snapshot->AddManifestFile(std::move(delete_manifest_file));
 	add_snapshot->AddManifestFile(std::move(data_manifest_file));
-	add_snapshot->altered_manifests = std::move(altered_manifests);
+	add_snapshot->altered_manifests.Merge(altered_manifests);
 
 	alters.push_back(*add_snapshot);
 	updates.push_back(std::move(add_snapshot));
