@@ -72,6 +72,25 @@ struct IdentityTransform {
 	}
 };
 
+struct TruncateTransform {
+	static Value ApplyTransform(const Value &constant, const IcebergTransform &transform);
+	static bool CompareEqual(const Value &constant, const IcebergPredicateStats &stats) {
+		return constant >= stats.lower_bound && constant <= stats.upper_bound;
+	}
+	static bool CompareLessThan(const Value &constant, const IcebergPredicateStats &stats) {
+		return stats.lower_bound <= constant;
+	}
+	static bool CompareLessThanOrEqual(const Value &constant, const IcebergPredicateStats &stats) {
+		return stats.lower_bound <= constant;
+	}
+	static bool CompareGreaterThan(const Value &constant, const IcebergPredicateStats &stats) {
+		return stats.upper_bound >= constant;
+	}
+	static bool CompareGreaterThanOrEqual(const Value &constant, const IcebergPredicateStats &stats) {
+		return stats.upper_bound >= constant;
+	}
+};
+
 struct YearTransform {
 	static Value ApplyTransform(const Value &constant, const IcebergTransform &transform) {
 		switch (constant.type().id()) {

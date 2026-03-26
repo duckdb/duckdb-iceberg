@@ -68,7 +68,7 @@ void IcebergTransactionData::CacheExistingManifestList(lock_guard<mutex> &guard,
 
 void IcebergTransactionData::AddSnapshot(IcebergSnapshotOperationType operation,
                                          vector<IcebergManifestEntry> &&data_files,
-                                         case_insensitive_map_t<IcebergManifestDeletes> &&altered_manifests) {
+                                         IcebergManifestDeletes &&altered_manifests) {
 	//! NOTE: Lock has to be held to make sure the rows are assigned the correct row ids
 	lock_guard<mutex> guard(lock);
 
@@ -110,7 +110,7 @@ void IcebergTransactionData::AddSnapshot(IcebergSnapshotOperationType operation,
 
 void IcebergTransactionData::AddUpdateSnapshot(vector<IcebergManifestEntry> &&delete_files,
                                                vector<IcebergManifestEntry> &&data_files,
-                                               case_insensitive_map_t<IcebergManifestDeletes> &&altered_manifests) {
+                                               IcebergManifestDeletes &&altered_manifests) {
 	//! NOTE: Lock has to be held to make sure the rows are assigned the correct row ids
 	lock_guard<mutex> guard(lock);
 

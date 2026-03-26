@@ -249,7 +249,7 @@ bool IcebergPredicate::MatchBounds(ClientContext &context, const TableFilter &fi
 	case IcebergTransformType::BUCKET:
 		return MatchBoundsTemplated<BucketTransform>(context, filter, stats, transform);
 	case IcebergTransformType::TRUNCATE:
-		return true;
+		return MatchBoundsTemplated<TruncateTransform>(context, filter, stats, transform);
 	case IcebergTransformType::YEAR:
 		return MatchBoundsTemplated<YearTransform>(context, filter, stats, transform);
 	case IcebergTransformType::MONTH:

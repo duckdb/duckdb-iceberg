@@ -32,11 +32,11 @@ static rest_api_objects::TableUpdate CreateAddSnapshotUpdate(const IcebergTableI
 	return table_update;
 }
 
-IcebergManifestListEntry IcebergAddSnapshot::ConstructManifest(CopyFunction &avro_copy, DatabaseInstance &db,
-                                                               IcebergCommitState &commit_state,
-                                                               const IcebergManifestListEntry &list_entry,
-                                                               const IcebergManifestDeletes &deletes) const {
-	vector<IcebergManifestListEntry> manifest_files = {list_entry};
+static IcebergManifestListEntry ScanExistingManifestFile(const IcebergManifestFile &manifest_file,
+                                                         IcebergCommitState &commit_state) {
+	vector<IcebergManifestListEntry> manifest_files;
+	manifest_files.push_back(manifest_file);
+
 	IcebergOptions options;
 	auto &fs = FileSystem::GetFileSystem(commit_state.context);
 	auto &table_metadata = commit_state.table_info.table_metadata;
@@ -45,28 +45,37 @@ IcebergManifestListEntry IcebergAddSnapshot::ConstructManifest(CopyFunction &avr
 	    AvroScan::ScanManifest(snapshot, manifest_files, options, fs, "", table_metadata, commit_state.context);
 	auto manifest_file_reader = make_uniq<manifest_file::ManifestReader>(*manifest_scan);
 
-	auto manifest_file_uuid = UUID::ToString(UUID::GenerateRandomUUID());
-	auto manifest_file_path = fs.JoinPath(table_metadata.GetMetadataPath(fs), manifest_file_uuid + "-m0.avro");
-
-	auto &rewritten_list_entry = manifest_files[0];
-	auto &manifest_entries = rewritten_list_entry.manifest_entries;
 	while (!manifest_file_reader->Finished()) {
 		manifest_file_reader->Read();
 	}
-	auto &rewritten_manifest_file = rewritten_list_entry.file;
-	rewritten_manifest_file.manifest_path = manifest_file_path;
-	rewritten_manifest_file.added_files_count = 0;
-	rewritten_manifest_file.deleted_files_count = 0;
-	rewritten_manifest_file.existing_files_count = 0;
-	rewritten_manifest_file.added_rows_count = 0;
-	rewritten_manifest_file.deleted_rows_count = 0;
-	rewritten_manifest_file.existing_rows_count = 0;
+
+	return std::move(manifest_files[0]);
+}
+
+static bool ManifestFileNeedsToBeRewritten(IcebergCommitState &commit_state, IcebergManifestListEntry &list_entry,
+                                           const IcebergManifestDeletes &deletes) {
+	auto &fs = FileSystem::GetFileSystem(commit_state.context);
+	auto &table_metadata = commit_state.table_info.table_metadata;
+
+	auto manifest_file_uuid = UUID::ToString(UUID::GenerateRandomUUID());
+	auto manifest_file_path = fs.JoinPath(table_metadata.GetMetadataPath(fs), manifest_file_uuid + "-m0.avro");
+
+	auto &manifest_entries = list_entry.manifest_entries;
+	auto &manifest_file = list_entry.file;
+	manifest_file.manifest_path = manifest_file_path;
+
+	manifest_file.added_files_count = 0;
+	manifest_file.deleted_files_count = 0;
+	manifest_file.existing_files_count = 0;
+
+	manifest_file.added_rows_count = 0;
+	manifest_file.deleted_rows_count = 0;
+	manifest_file.existing_rows_count = 0;
 
 	bool removed_any_entries = false;
-	idx_t handled_entries = 0;
 	for (auto &manifest_entry : manifest_entries) {
-		auto sequence_number = manifest_entry.GetSequenceNumber(rewritten_manifest_file);
-		auto file_sequence_number = manifest_entry.GetFileSequenceNumber(rewritten_manifest_file);
+		auto sequence_number = manifest_entry.GetSequenceNumber(manifest_file);
+		auto file_sequence_number = manifest_entry.GetFileSequenceNumber(manifest_file);
 		manifest_entry.SetSequenceNumber(sequence_number);
 		manifest_entry.SetFileSequenceNumber(file_sequence_number);
 		if (manifest_entry.status == IcebergManifestEntryStatusType::ADDED) {
@@ -74,74 +83,59 @@ IcebergManifestListEntry IcebergAddSnapshot::ConstructManifest(CopyFunction &avr
 		}
 		//! File was already deleted, preserve the deleted entry
 		if (manifest_entry.status == IcebergManifestEntryStatusType::DELETED) {
-			rewritten_manifest_file.deleted_rows_count += manifest_entry.data_file.record_count;
-			rewritten_manifest_file.deleted_files_count++;
+			manifest_file.deleted_rows_count += manifest_entry.data_file.record_count;
+			manifest_file.deleted_files_count++;
 			continue;
 		}
-		auto delete_it = deletes.altered_data_files.find(manifest_entry.data_file.file_path);
-		if (delete_it == deletes.altered_data_files.end()) {
-			rewritten_manifest_file.existing_rows_count += manifest_entry.data_file.record_count;
-			rewritten_manifest_file.existing_files_count++;
-			continue;
-		}
-		handled_entries++;
-		auto &delete_file_state = delete_it->second;
-		if (delete_file_state.type != IcebergDeleteType::DELETION_VECTOR) {
-			//! This is a positional delete,
-			//! we can't remove the file because we can't be sure
-			//! that it doesn't contain deletes for other data files.
-			rewritten_manifest_file.existing_rows_count += manifest_entry.data_file.record_count;
-			rewritten_manifest_file.existing_files_count++;
+		auto is_deleted = deletes.IsInvalidated(manifest_entry.data_file.file_path);
+		if (!is_deleted) {
+			manifest_file.existing_rows_count += manifest_entry.data_file.record_count;
+			manifest_file.existing_files_count++;
 			continue;
 		}
 		removed_any_entries = true;
-		D_ASSERT(delete_file_state.referenced_data_files.size() == 1);
-		D_ASSERT(manifest_entry.data_file.referenced_data_file == delete_file_state.referenced_data_files[0]);
 		//! Remove the entry
 		manifest_entry.status = IcebergManifestEntryStatusType::DELETED;
-		rewritten_manifest_file.deleted_rows_count += manifest_entry.data_file.record_count;
-		rewritten_manifest_file.deleted_files_count++;
+		manifest_file.deleted_rows_count += manifest_entry.data_file.record_count;
+		manifest_file.deleted_files_count++;
 	}
-	if (handled_entries != deletes.altered_data_files.size()) {
-		throw InternalException("(ConstructManifest) We expected to find %d invalidated entries, but only found %d",
-		                        deletes.altered_data_files.size(), handled_entries);
-	}
-	if (!removed_any_entries) {
-		return list_entry;
-	}
+	return removed_any_entries;
+}
+
+static void RewriteManifestFile(IcebergManifestListEntry &list_entry, CopyFunction &avro_copy, DatabaseInstance &db,
+                                IcebergCommitState &commit_state) {
+	auto &manifest_file = list_entry.file;
+	auto &manifest_entries = list_entry.manifest_entries;
+	auto &table_metadata = commit_state.table_info.table_metadata;
 
 	//! Finally overwrite the input 'manifest_file' with our edited copy
-	auto manifest_length = manifest_file::WriteToFile(table_metadata, rewritten_manifest_file, manifest_entries,
-	                                                  avro_copy, db, commit_state.context);
-	rewritten_manifest_file.manifest_length = manifest_length;
-	return std::move(rewritten_list_entry);
+	auto manifest_length = manifest_file::WriteToFile(table_metadata, manifest_file, manifest_entries, avro_copy, db,
+	                                                  commit_state.context);
+	manifest_file.manifest_length = manifest_length;
 }
 
 void IcebergAddSnapshot::ConstructManifestList(IcebergManifestList &new_manifest_list, CopyFunction &avro_copy,
                                                DatabaseInstance &db, IcebergCommitState &commit_state) const {
 	//! Construct the manifest list
-	if (altered_manifests.empty()) {
+	//! FIXME: RETRY_BLOCKER: no guarantee that no new deletes are introduced
+	if (altered_manifests.IsEmpty()) {
 		//! Copy the existing manifest_file entries without any modification
 		new_manifest_list.AddToManifestEntries(commit_state.manifests);
 		return;
 	}
 
-	idx_t handled_entries = 0;
 	for (auto &manifest_list_entry : commit_state.manifests) {
-		auto &manifest_file = manifest_list_entry.file;
-		auto it = altered_manifests.find(manifest_file.manifest_path);
-		if (it == altered_manifests.end()) {
-			new_manifest_list.AddExistingManifestFile(std::move(manifest_file));
+		auto &existing_manifest_file = manifest_list_entry.file;
+
+		auto scanned_manifest_file = ScanExistingManifestFile(existing_manifest_file, commit_state);
+		bool needs_rewrite = ManifestFileNeedsToBeRewritten(commit_state, scanned_manifest_file, altered_manifests);
+		if (!needs_rewrite) {
+			new_manifest_list.AddExistingManifestFile(std::move(manifest_list_entry));
 			continue;
 		}
-		handled_entries++;
-		auto &altered_manifest = it->second;
-		auto new_manifest_file = ConstructManifest(avro_copy, db, commit_state, manifest_file, altered_manifest);
-		new_manifest_list.AddNewManifestFile(std::move(new_manifest_file));
-	}
-	if (handled_entries != altered_manifests.size()) {
-		throw InternalException("(ConstructManifestList) We expected to find %d invalidated entries, but only found %d",
-		                        altered_manifests.size(), handled_entries);
+
+		RewriteManifestFile(scanned_manifest_file, avro_copy, db, commit_state);
+		new_manifest_list.AddNewManifestFile(std::move(scanned_manifest_file));
 	}
 	commit_state.manifests.clear();
 }
