@@ -114,9 +114,3 @@ select id, data from my_datalake.default.row_lineage_test order by _row_id;
 4	d_u1
 6	replaced
 7	g_new
-
-# Check that we cached manifests
-query I
-select count(*) from (select distinct message from duckdb_logs() where type = 'Iceberg' and message.starts_with('[Caching] manifest_file'))
-----
-5

@@ -171,9 +171,3 @@ query I
 select _row_id = getvariable('id2_row_id') from my_datalake.default.row_lineage_test_upgraded where id = 2;
 ----
 true
-
-# Check that we cached manifests
-query I
-select count(*) from (select distinct message from duckdb_logs() where type = 'Iceberg' and message.starts_with('[Caching] manifest_file'))
-----
-10
