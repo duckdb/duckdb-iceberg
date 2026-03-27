@@ -86,26 +86,27 @@ IcebergDataFile::GetExtendedPartitionInfo(const IcebergTableMetadata &metadata) 
 
 	// Build field_id -> (spec field, source_type) map from all partition specs.
 	// Partition field ids are globally unique across all specs per the Iceberg spec.
-	struct ResolvedField {
+	struct ParitionFieldWithSourceType {
 		const IcebergPartitionSpecField *field;
 		const LogicalType *source_type;
 	};
 
-	unordered_map<uint64_t, ResolvedField> field_id_to_resolved;
+	unordered_map<uint64_t, ParitionFieldWithSourceType> field_id_to_partition_spec_and_source_type;
 	for (auto &spec_pair : metadata.partition_specs) {
 		for (auto &field : spec_pair.second.fields) {
 			auto type_it = source_id_to_type.find(field.source_id);
-			const LogicalType *source_type = type_it != source_id_to_type.end() ? type_it->second : nullptr;
-			field_id_to_resolved.emplace(field.partition_field_id, ResolvedField {&field, source_type});
+			if (type_it == source_id_to_type.end()) {
+				throw InternalException("Partition %s with field_id %llu in data_file %s with source_id %llu not found in any table schema", field.name, field.partition_field_id, file_path, field.source_id);
+			}
+			field_id_to_partition_spec_and_source_type.emplace(field.partition_field_id, ParitionFieldWithSourceType {&field, type_it->second});
 		}
 	}
 
-	// Resolve each partition_info entry in O(1).
 	vector<IcebergExtendedPartitionInfo> ret;
 	ret.reserve(partition_info.size());
 	for (auto &info : partition_info) {
-		auto it = field_id_to_resolved.find(info.field_id);
-		if (it == field_id_to_resolved.end()) {
+		auto it = field_id_to_partition_spec_and_source_type.find(info.field_id);
+		if (it == field_id_to_partition_spec_and_source_type.end()) {
 			throw InternalException("Partition field_id %llu not found in any partition spec", info.field_id);
 		}
 		auto &resolved = it->second;
@@ -115,9 +116,8 @@ IcebergDataFile::GetExtendedPartitionInfo(const IcebergTableMetadata &metadata) 
 		extended.value = info.value;
 		extended.source_id = resolved.field->source_id;
 		extended.transform = resolved.field->transform;
-		if (resolved.source_type) {
-			extended.source_type = *resolved.source_type;
-		}
+		D_ASSERT(resolved.source_type);
+		extended.source_type = *resolved.source_type;
 		ret.push_back(std::move(extended));
 	}
 	return ret;

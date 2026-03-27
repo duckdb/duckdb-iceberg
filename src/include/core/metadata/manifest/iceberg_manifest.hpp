@@ -75,9 +75,9 @@ public:
 	static LogicalType PartitionStructType(const map<idx_t, LogicalType> &partition_field_id_to_type);
 	static LogicalType GetType(const IcebergTableMetadata &metadata, const LogicalType &partition_type);
 	// Get extended partition info. A data_file struct stores partition info as
-	// struct {partition_name: val}
+	// struct {partition_name: val} (with partition field id for the struct key.
 	// extended partition info returns extra information about these partitions
-	// like source column id, source field id, & transform type.
+	// like source column id, source type, transform, and partition value.
 	const vector<IcebergExtendedPartitionInfo> GetExtendedPartitionInfo(const IcebergTableMetadata &metadata) const;
 
 public:
