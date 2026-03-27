@@ -533,14 +533,13 @@ IcebergTableInformation IcebergTableInformation::Copy(IcebergTransaction &iceber
 	// this is to ensure when the transaction commits, the assert ref snapshot id is the one closest to the start of
 	// this
 	auto snapshot_lookup = GetSnapshotLookup(iceberg_transaction);
+	if (ret.TableIsEmpty(snapshot_lookup)) {
+		return ret;
+	}
 	optional_ptr<const IcebergSnapshot> snapshot = nullptr;
 	try {
 		snapshot = ret.table_metadata.GetSnapshot(snapshot_lookup);
 	} catch (InvalidConfigurationException &e) {
-		// lookup may fail for empty tables, since no snapshot exists
-		if (ret.TableIsEmpty(snapshot_lookup)) {
-			return ret;
-		}
 		throw TransactionException("Table %s is already outdated. Please restart your transaction", GetTableKey());
 	}
 

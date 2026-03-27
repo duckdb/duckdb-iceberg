@@ -1,6 +1,7 @@
 #include "core/expression/iceberg_transform.hpp"
 
 #include "duckdb/common/string_util.hpp"
+#include "utf8proc_wrapper.hpp"
 #include "core/expression/iceberg_hash.hpp"
 
 namespace duckdb {
@@ -144,4 +145,44 @@ Value BucketTransform::ApplyTransform(const Value &constant, const IcebergTransf
 	return Value::INTEGER(bucket_id);
 }
 
+Value TruncateTransform::ApplyTransform(const Value &constant, const IcebergTransform &transform) {
+	switch (constant.type().id()) {
+	case LogicalTypeId::INTEGER:
+	case LogicalTypeId::BIGINT: {
+		auto v = constant.GetValue<int64_t>();
+		auto W = transform.GetTruncateWidth();
+		return Value::Numeric(constant.type(), v - (((v % W) + W) % W));
+	}
+	case LogicalTypeId::DECIMAL: {
+		// Truncate the unscaled value, keeping the same scale and width
+		auto scaled_constant = constant.Copy();
+		scaled_constant.Reinterpret(LogicalType::BIGINT);
+		auto v = scaled_constant.GetValue<int64_t>();
+		auto W = transform.GetTruncateWidth();
+		return Value::DECIMAL(int64_t(v - (((v % W) + W) % W)), DecimalType::GetWidth(constant.type()),
+		                      DecimalType::GetScale(constant.type()));
+	}
+	case LogicalTypeId::BLOB: {
+		// truncate to L bytes
+		auto bytes = StringValue::Get(constant);
+		return Value::BLOB((uint8_t *)bytes.data(),
+		                   bytes.size() < transform.GetTruncateWidth() ? bytes.size() : transform.GetTruncateWidth());
+	}
+	case LogicalTypeId::VARCHAR: {
+		// truncate to at most L code points, assuming UTF-8 encoding
+		auto v = constant.GetValue<string>();
+		auto L = transform.GetTruncateWidth();
+		size_t num_characters = 0;
+		for (auto cluster : Utf8Proc::GraphemeClusters(v.data(), v.size())) {
+			if (++num_characters >= L) {
+				return Value(v.substr(0, cluster.end));
+			}
+		}
+		return constant;
+	}
+	default:
+		throw NotImplementedException("'truncate' transform for type %s", constant.type().ToString());
+	}
+	return constant;
+}
 } // namespace duckdb

@@ -52,4 +52,4 @@ jobs:
           LAKEKEEPER_SERVER_AVAILABLE: 1
         run: |
           ./build/release/test/unittest "$PWD/test/sql/local/irc_any_catalog/*" --list-test-names-only || true
-          ./build/release/test/unittest "$PWD/test/sql/local/irc_any_catalog/*" --test-config test/configs/lakekeeper.json  --autoloading available
+          ./build/release/test/unittest "$PWD/test/sql/local/irc_any_catalog/*" --test-config test/configs/lakekeeper.json
