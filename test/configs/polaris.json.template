@@ -57,14 +57,6 @@
         "test/sql/local/irc_any_catalog/alter/alter_add_column_explicit_transaction.test",
         "test/sql/local/irc_any_catalog/delete/multi_deletes.test"
       ]
-    },
-    {
-     "reason": "Flaky tests. https://github.com/duckdblabs/duckdb-internal/issues/8630",
-     "paths": [
-       "test/sql/local/irc_any_catalog/update/update_join_duplicates.test",
-       "test/sql/local/irc_any_catalog/insert/test_basic_insert.test",
-       "test/sql/local/irc_any_catalog/delete/delete_same_transaction.test"
-      ]
     }
   ]
 }
