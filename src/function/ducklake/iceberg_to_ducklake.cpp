@@ -52,6 +52,16 @@ namespace iceberg {
 
 namespace ducklake {
 
+namespace {
+
+struct DuckLakeSchemaVersionIntermediate {
+	idx_t snapshot_id;
+	idx_t schema_version;
+	unordered_set<string> table_uuids;
+};
+
+} // namespace
+
 static void SchemaToColumnsInternal(const vector<unique_ptr<IcebergColumnDefinition>> &columns,
                                     unordered_map<int64_t, DuckLakeColumn> &result,
                                     optional_ptr<const IcebergColumnDefinition> parent) {
@@ -290,17 +300,22 @@ public:
 		sql.push_back("DELETE FROM {METADATA_CATALOG}.ducklake_snapshot;");
 		sql.push_back("DELETE FROM {METADATA_CATALOG}.ducklake_snapshot_changes;");
 
+		vector<DuckLakeSchemaVersionIntermediate> schema_versions;
 		//! ducklake_snapshot
 		for (auto &it : snapshots) {
 			auto &snapshot = it.second;
 
 			auto values = snapshot.FinalizeEntry(serializer);
 			if (snapshot.catalog_changes) {
-				auto snapshot_id = snapshot.snapshot_id;
+				auto snapshot_id = snapshot.snapshot_id.GetIndex();
 				auto schema_version = snapshot.base_schema_version;
-				sql.push_back(
-				    StringUtil::Format("INSERT INTO {METADATA_CATALOG}.ducklake_schema_versions VALUES (%llu, %llu);",
-				                       snapshot_id.GetIndex(), schema_version));
+				DuckLakeSchemaVersionIntermediate new_schema_version;
+				new_schema_version.snapshot_id = snapshot_id;
+				new_schema_version.schema_version = schema_version;
+				new_schema_version.table_uuids.insert(snapshot.created_table.begin(), snapshot.created_table.end());
+				new_schema_version.table_uuids.insert(snapshot.altered_table.begin(), snapshot.altered_table.end());
+				//! Push a new schema version
+				schema_versions.push_back(new_schema_version);
 			}
 			sql.push_back(StringUtil::Format("INSERT INTO {METADATA_CATALOG}.ducklake_snapshot %s", values));
 		}
@@ -499,6 +514,38 @@ public:
 				                                 contains_null, contains_nan, min_value, max_value);
 				sql.push_back(
 				    StringUtil::Format("INSERT INTO {METADATA_CATALOG}.ducklake_table_column_stats %s", values));
+			}
+		}
+
+		//! ducklake_schema_version
+		const auto SCHEMA_VERSION_SQL = R"(
+			INSERT INTO {METADATA_CATALOG}.ducklake_schema_versions VALUES
+				(
+					%llu, -- begin_snapshot
+					%llu, -- schema_version
+					%llu -- table_id
+				);
+		)";
+		for (auto &item : schema_versions) {
+			auto &snapshot_id = item.snapshot_id;
+			auto &schema_version = item.schema_version;
+			for (auto &table_uuid : item.table_uuids) {
+				auto table_it = tables.find(table_uuid);
+				if (table_it == tables.end()) {
+					throw InternalException(
+					    "Corrupt snapshot detected, created/modified table '%s' but no table with that uuid exists",
+					    table_uuid);
+				}
+				auto &table = table_it->second;
+				auto table_id = table.table_id.GetIndex();
+
+				sql.push_back(StringUtil::Format(SCHEMA_VERSION_SQL,
+				                                 //! begin_snapshot
+				                                 snapshot_id,
+				                                 //! schema_version
+				                                 schema_version,
+				                                 //! table_id
+				                                 table_id));
 			}
 		}
 
