@@ -31,9 +31,60 @@ string DuckLakeDataFile::FinalizeEntry(int64_t table_id, const map<timestamp_t, 
 	auto snapshot_ids = DuckLakeUtils::GetSnapshots(start_snapshot, has_end, end_snapshot, snapshots);
 	int64_t partition_id = partition.partition_id.GetIndex();
 
-	return StringUtil::Format(
-	    "VALUES(%d, %d, %d, %s, NULL, '%s', False, 'parquet', %d, %d, NULL, NULL, %d, NULL, NULL, NULL);", data_file_id,
-	    table_id, snapshot_ids.first, snapshot_ids.second, path, record_count, file_size_bytes, partition_id);
+	const auto DATA_FILE_SQL = R"(
+		INSERT INTO {METADATA_CATALOG}.ducklake_data_file VALUES(
+			%d, -- data_file_id
+			%d, -- table_id
+			%d, -- begin_snapshot
+			%s, -- end_snapshot
+			%s, -- file_order
+			'%s', -- path
+			%s, -- path_is_relative
+			'%s', -- file_format
+			%d, -- record_count
+			%d, -- file_size_bytes
+			%s, -- footer_size
+			%s, -- row_id_start
+			%d, -- partition_id
+			%s, -- encryption_key
+			%s, -- mapping_id
+			%s -- partial_max
+		);
+	)";
+
+	return StringUtil::Format(DATA_FILE_SQL,
+	                          // data_file_id
+	                          data_file_id,
+	                          // table_id
+	                          table_id,
+	                          // begin_snapshot
+	                          snapshot_ids.first,
+	                          // end_snapshot
+	                          snapshot_ids.second,
+	                          // file_order
+	                          "NULL",
+	                          // path
+	                          path,
+	                          // path_is_relative
+	                          "False",
+	                          // file_format
+	                          "parquet",
+	                          // record_count
+	                          record_count,
+	                          // file_size_bytes
+	                          file_size_bytes,
+	                          // footer_size
+	                          "NULL",
+	                          // row_id_start
+	                          "NULL",
+	                          // partition_id
+	                          partition_id,
+	                          // encryption_key
+	                          "NULL",
+	                          // mapping_id
+	                          "NULL",
+	                          // partial_max
+	                          "NULL");
 }
 
 } // namespace ducklake

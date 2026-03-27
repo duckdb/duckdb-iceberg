@@ -377,8 +377,8 @@ public:
 
 			//! ducklake_data_file
 			for (auto &data_file : table.all_data_files) {
-				auto values = data_file.FinalizeEntry(table_id, snapshots);
-				sql.push_back(StringUtil::Format("INSERT INTO {METADATA_CATALOG}.ducklake_data_file %s", values));
+				auto insert_statement = data_file.FinalizeEntry(table_id, snapshots);
+				sql.push_back(insert_statement);
 
 				auto data_file_id = data_file.data_file_id.GetIndex();
 				auto &start_snapshot = snapshots.at(data_file.start_snapshot);
@@ -478,8 +478,8 @@ public:
 
 			//! ducklake_delete_file
 			for (auto &delete_file : table.all_delete_files) {
-				auto values = delete_file.FinalizeEntry(table_id, table.all_data_files, snapshots);
-				sql.push_back(StringUtil::Format("INSERT INTO {METADATA_CATALOG}.ducklake_delete_file %s", values));
+				auto insert_statement = delete_file.FinalizeEntry(table_id, table.all_data_files, snapshots);
+				sql.push_back(insert_statement);
 			}
 
 			//! ducklake_table_stats
