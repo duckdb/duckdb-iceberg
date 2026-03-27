@@ -1,0 +1,127 @@
+# name: test/sql/local/irc_any_catalog/reads/test_nested_column_pruning.test
+# description: Test that filters on nested columns
+# group: [reads]
+
+require-env ICEBERG_SERVER_AVAILABLE
+
+require-env SECRETS_CREATED_AND_CATALOG_ATTACHED
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+pragma enable_external_file_cache=false;
+
+statement ok
+create view iceberg as select * from my_datalake.default.filtering_on_bounds_nested;
+
+statement ok
+create macro count_files_read() as (
+    select
+        count(distinct request.url)
+    from
+        duckdb_logs_parsed('HTTP')
+    where
+        request.url like '%.parquet'
+    group by all
+);
+
+query I
+select count(*) from iceberg
+----
+5
+
+statement ok
+CALL enable_logging(level=debug);
+
+statement ok
+CALL truncate_duckdb_logs();
+
+query I
+select count(*) from iceberg where deepstruct.struct.int = 1
+----
+1
+
+# Should read 1 file
+query I
+select count_files_read();
+----
+1
+
+statement ok
+CALL truncate_duckdb_logs();
+
+query I
+select count(*) from iceberg where deepstruct.struct.int is not null
+----
+4
+
+# IS NOT NULL remains an ExpressionFilter; reads all files
+query I
+select count_files_read();
+----
+5
+
+statement ok
+CALL truncate_duckdb_logs();
+
+query I
+select count(*) from iceberg where deepstruct.struct.int <= 1 AND deepstruct.struct.bytes <= unhex('deadbeef')
+----
+1
+
+# Conjunction was decomposed and unwrapped; should read 1 file
+query I
+select count_files_read();
+----
+1
+
+statement ok
+CALL truncate_duckdb_logs();
+
+query I
+select count(*) from iceberg where deepstruct.struct.int = 1 OR (deepstruct.struct.double > 0 AND deepstruct.struct.double < 1.5)
+----
+1
+
+# OR remains an ExpressionFilter; reads all files
+query I
+select count_files_read();
+----
+5
+
+statement ok
+CALL truncate_duckdb_logs();
+
+query I
+select count(*) from iceberg where element_at(deepmap, 1)[1].int = 1;
+----
+1
+
+# FilterCombiner does not push down map_extract; reads all files
+query I
+select count_files_read();
+----
+5
+
+statement ok
+CALL truncate_duckdb_logs();
+
+query I
+select count(*) from iceberg where deeplist[1].struct.int = 1;
+----
+1
+
+# FilterCombiner does not push down array_extract; reads all files
+query I
+select count_files_read();
+----
+5
