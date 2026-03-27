@@ -175,17 +175,20 @@ TableFunction IcebergTableEntry::GetScanFunction(ClientContext &context, unique_
 	vector<string> names;
 	TableFunctionRef empty_ref;
 
-	// lookup should be asof start of the transaction if the lookup info is empty and there are no transaction updates
 	bool using_transaction_timestamp = false;
 	IcebergSnapshotLookup snapshot_lookup;
-	if (!lookup.GetAtClause() && !table_info.HasTransactionUpdates()) {
-		// if there is no user supplied AT () clause, and the table does not have transaction updates
-		// use transaction start time
+	if (lookup.GetAtClause()) {
+		// Explicit time travel: AT (VERSION = x) or AT (TIMESTAMP = ...)
+		snapshot_lookup = IcebergSnapshotLookup::FromAtClause(lookup.GetAtClause());
+	} else if (table_info.HasTransactionUpdates() || context.transaction.IsAutoCommit()) {
+		// Pending writes in this transaction, or autocommit (single-statement transaction).
+		// Use latest snapshot and current schema.
+		snapshot_lookup = IcebergSnapshotLookup::FromAtClause(nullptr);
+	} else {
+		// This case happens when there is an explicit transaction (BEGIN; ... COMMIT;), no pending writes, no AT
+		// clause. Use transaction start timestamp for snapshot isolation.
 		snapshot_lookup = table_info.GetSnapshotLookup(context);
 		using_transaction_timestamp = true;
-	} else {
-		auto at = lookup.GetAtClause();
-		snapshot_lookup = IcebergSnapshotLookup::FromAtClause(at);
 	}
 	auto &metadata = table_info.table_metadata;
 	optional_ptr<const IcebergSnapshot> snapshot = nullptr;
@@ -207,12 +210,15 @@ TableFunction IcebergTableEntry::GetScanFunction(ClientContext &context, unique_
 		snapshot = metadata.GetSnapshot(snapshot_lookup);
 	}
 
+	// Select which schema to use:
+	// Use snapshot's schema only for explicit time travel (AT clause), otherwise use Table Metadata's
+	// current_schema_id.
 	int32_t schema_id;
-	if (snapshot_lookup.IsLatest()) {
-		schema_id = metadata.current_schema_id;
-	} else {
+	if (lookup.GetAtClause()) {
 		D_ASSERT(snapshot);
 		schema_id = snapshot->schema_id;
+	} else {
+		schema_id = metadata.current_schema_id;
 	}
 
 	auto &fs = FileSystem::GetFileSystem(context);
