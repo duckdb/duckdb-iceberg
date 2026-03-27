@@ -26,8 +26,29 @@ string DuckLakeSnapshot::FinalizeEntry(DuckLakeMetadataSerializer &serializer) {
 	int64_t schema_version = serializer.schema_version;
 	int64_t next_catalog_id = serializer.next_catalog_id;
 	int64_t next_file_id = serializer.next_file_id;
-	return StringUtil::Format("VALUES(%d, '%s', %d, %d, %d);", snapshot_id, Timestamp::ToString(snapshot_time),
-	                          schema_version, next_catalog_id, next_file_id);
+
+	const auto SNAPSHOT_SQL = R"(
+		INSERT INTO {METADATA_CATALOG}.ducklake_snapshot VALUES
+			(
+				%d,	-- snapshot_id
+				'%s', -- snapshot_time
+				%d,	-- schema_version
+				%d,	-- next_catalog_id
+				%d	-- next_file_id
+			);
+	)";
+
+	return StringUtil::Format(SNAPSHOT_SQL,
+	                          // snapshot_id
+	                          snapshot_id,
+	                          // snapshot_time
+	                          Timestamp::ToString(snapshot_time),
+	                          // schema_version
+	                          schema_version,
+	                          // next_catalog_id
+	                          next_catalog_id,
+	                          // next_file_id
+	                          next_file_id);
 }
 
 int64_t DuckLakeSnapshot::AddSchema(const string &schema_name) {

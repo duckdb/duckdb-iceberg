@@ -300,12 +300,21 @@ public:
 		sql.push_back("DELETE FROM {METADATA_CATALOG}.ducklake_snapshot;");
 		sql.push_back("DELETE FROM {METADATA_CATALOG}.ducklake_snapshot_changes;");
 
+		const auto SCHEMA_VERSION_SQL = R"(
+			INSERT INTO {METADATA_CATALOG}.ducklake_schema_versions VALUES
+				(
+					%llu, -- begin_snapshot
+					%llu, -- schema_version
+					%llu -- table_id
+				);
+		)";
+
 		vector<DuckLakeSchemaVersionIntermediate> schema_versions;
 		//! ducklake_snapshot
 		for (auto &it : snapshots) {
 			auto &snapshot = it.second;
 
-			auto values = snapshot.FinalizeEntry(serializer);
+			auto insert_statement = snapshot.FinalizeEntry(serializer);
 			if (snapshot.catalog_changes) {
 				auto snapshot_id = snapshot.snapshot_id.GetIndex();
 				auto schema_version = snapshot.base_schema_version;
@@ -317,7 +326,7 @@ public:
 				//! Push a new schema version
 				schema_versions.push_back(new_schema_version);
 			}
-			sql.push_back(StringUtil::Format("INSERT INTO {METADATA_CATALOG}.ducklake_snapshot %s", values));
+			sql.push_back(insert_statement);
 		}
 
 		//! ducklake_schema
@@ -329,8 +338,8 @@ public:
 				//! FIXME: we *could* assign it to the earliest snapshot in existence???
 				continue;
 			}
-			auto values = schema.FinalizeEntry(snapshots);
-			sql.push_back(StringUtil::Format("INSERT INTO {METADATA_CATALOG}.ducklake_schema %s", values));
+			auto insert_statement = schema.FinalizeEntry(snapshots);
+			sql.push_back(insert_statement);
 		}
 
 		//! ducklake_table
@@ -360,8 +369,8 @@ public:
 
 			//! ducklake_column
 			for (auto &column : table.all_columns) {
-				auto values = column.FinalizeEntry(table_id, snapshots);
-				sql.push_back(StringUtil::Format("INSERT INTO {METADATA_CATALOG}.ducklake_column %s", values));
+				auto insert_statement = column.FinalizeEntry(table_id, snapshots);
+				sql.push_back(insert_statement);
 			}
 
 			unordered_map<int32_t, DuckLakeColumnStats> column_stats;
@@ -518,14 +527,6 @@ public:
 		}
 
 		//! ducklake_schema_version
-		const auto SCHEMA_VERSION_SQL = R"(
-			INSERT INTO {METADATA_CATALOG}.ducklake_schema_versions VALUES
-				(
-					%llu, -- begin_snapshot
-					%llu, -- schema_version
-					%llu -- table_id
-				);
-		)";
 		for (auto &item : schema_versions) {
 			auto &snapshot_id = item.snapshot_id;
 			auto &schema_version = item.schema_version;
