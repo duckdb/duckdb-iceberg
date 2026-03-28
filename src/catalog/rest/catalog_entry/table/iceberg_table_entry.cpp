@@ -208,7 +208,7 @@ TableFunction IcebergTableEntry::GetScanFunction(ClientContext &context, unique_
 	}
 
 	int32_t schema_id;
-	if (snapshot_lookup.IsLatest()) {
+	if (snapshot_lookup.IsLatest() || using_transaction_timestamp) {
 		schema_id = metadata.current_schema_id;
 	} else {
 		D_ASSERT(snapshot);
