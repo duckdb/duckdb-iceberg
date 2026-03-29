@@ -1,0 +1,47 @@
+# name: test/sql/local/irc_any_catalog/merge/merge_timestamp.test
+# description: Test merge into with timestamp partitions
+# group: [merge]
+
+# Needs UPDATE support for partitioned tables
+mode skip
+
+require-env ICEBERG_SERVER_AVAILABLE
+
+require-env SECRETS_CREATED_AND_CATALOG_ATTACHED
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+set enable_logging=true
+
+statement ok
+set logging_level='debug'
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.t;
+
+statement ok
+create table my_datalake.default.t (id uuid, ts timestamptz);
+
+statement ok
+alter table my_datalake.default.t set partitioned by (year(ts), month(ts));
+
+statement ok
+merge into my_datalake.default.t
+using (select uuidv7() id, current_timestamp ts) m on (my_datalake.default.t.id = m.id)
+when matched then update set id = m.id, ts=m.ts
+when not matched then insert (id, ts) values (m.id, m.ts);
+
+query I
+SELECT count (*) FROM my_datalake.default.t;
+----
+1
