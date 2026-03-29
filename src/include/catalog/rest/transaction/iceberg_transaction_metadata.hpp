@@ -16,6 +16,9 @@ public:
 	bool IsEmpty() const {
 		return data_files.empty();
 	}
+	void Merge(const IcebergManifestDeletes &other) {
+		data_files.insert(other.data_files.begin(), other.data_files.end());
+	}
 
 private:
 	//! The 'data_file.file_path' of invalidated data files

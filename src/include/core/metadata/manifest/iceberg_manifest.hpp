@@ -9,6 +9,7 @@
 #include "duckdb/main/extension/extension_loader.hpp"
 #include "duckdb/parallel/thread_context.hpp"
 #include "duckdb/common/insertion_order_preserving_map.hpp"
+#include "duckdb/storage/object_cache.hpp"
 
 #include "core/metadata/schema/iceberg_table_schema.hpp"
 #include "core/metadata/iceberg_table_metadata.hpp"
@@ -124,7 +125,40 @@ private:
 	sequence_number_t file_sequence_number;
 };
 
-struct IcebergManifestListEntry;
+struct IcebergManifest : public ObjectCacheEntry {
+public:
+	IcebergManifest(idx_t expected_size) : expected_size(expected_size) {
+		manifest_entries.reserve(expected_size);
+	}
+	IcebergManifest(vector<IcebergManifestEntry> &&entries) : manifest_entries(std::move(entries)) {
+		expected_size = manifest_entries.size();
+	}
+
+public:
+	string GetObjectType() override {
+		return "iceberg_manifest";
+	}
+
+	//! Get the rough cache memory usage in bytes for this entry.
+	//! Used for eviction decisions. Return invalid index to prevent eviction.
+	optional_idx GetEstimatedCacheMemory() const override {
+		return manifest_entries.size() * sizeof(IcebergManifestEntry);
+	}
+
+public:
+	bool CanCache() const {
+		return expected_size == manifest_entries.size();
+	}
+	shared_ptr<IcebergManifest> Copy() const {
+		auto copy = make_shared_ptr<IcebergManifest>(expected_size);
+		copy->manifest_entries = manifest_entries;
+		return copy;
+	}
+
+public:
+	idx_t expected_size;
+	vector<IcebergManifestEntry> manifest_entries;
+};
 
 namespace manifest_file {
 

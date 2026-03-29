@@ -505,7 +505,7 @@ void IcebergTransaction::CleanupFiles() {
 			auto &add_snapshot = update->Cast<IcebergAddSnapshot>();
 			const auto manifest_list_entries = add_snapshot.GetManifestFiles();
 			for (const auto &manifest : manifest_list_entries) {
-				for (auto &manifest_entry : manifest.manifest_entries) {
+				for (auto &manifest_entry : manifest.ManifestEntries()) {
 					auto &data_file = manifest_entry.data_file;
 					if (fs.TryRemoveFile(data_file.file_path)) {
 						DUCKDB_LOG(*temp_con_context, IcebergLogType,

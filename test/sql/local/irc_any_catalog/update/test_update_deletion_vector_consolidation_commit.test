@@ -108,3 +108,9 @@ select _last_updated_sequence_number, _row_id, id, data from my_datalake.default
 2	1	2	b_u1
 1	2	3	c
 4	3	4	d_u1_u3
+
+# Check that we cached manifests
+query I
+select count(*) from (select distinct message from duckdb_logs() where type = 'Iceberg' and message.starts_with('[Caching] manifest_file'))
+----
+5

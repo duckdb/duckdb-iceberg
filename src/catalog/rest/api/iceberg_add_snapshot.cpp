@@ -32,26 +32,6 @@ static rest_api_objects::TableUpdate CreateAddSnapshotUpdate(const IcebergTableI
 	return table_update;
 }
 
-static IcebergManifestListEntry ScanExistingManifestFile(const IcebergManifestFile &manifest_file,
-                                                         IcebergCommitState &commit_state) {
-	vector<IcebergManifestListEntry> manifest_files;
-	manifest_files.push_back(manifest_file);
-
-	IcebergOptions options;
-	auto &fs = FileSystem::GetFileSystem(commit_state.context);
-	auto &table_metadata = commit_state.table_info.table_metadata;
-	auto &snapshot = *commit_state.latest_snapshot;
-	auto manifest_scan =
-	    AvroScan::ScanManifest(snapshot, manifest_files, options, fs, "", table_metadata, commit_state.context);
-	auto manifest_file_reader = make_uniq<manifest_file::ManifestReader>(*manifest_scan);
-
-	while (!manifest_file_reader->Finished()) {
-		manifest_file_reader->Read();
-	}
-
-	return std::move(manifest_files[0]);
-}
-
 static bool ManifestFileNeedsToBeRewritten(IcebergCommitState &commit_state, IcebergManifestListEntry &list_entry,
                                            const IcebergManifestDeletes &deletes) {
 	auto &fs = FileSystem::GetFileSystem(commit_state.context);
@@ -60,8 +40,10 @@ static bool ManifestFileNeedsToBeRewritten(IcebergCommitState &commit_state, Ice
 	auto manifest_file_uuid = UUID::ToString(UUID::GenerateRandomUUID());
 	auto manifest_file_path = fs.JoinPath(table_metadata.GetMetadataPath(fs), manifest_file_uuid + "-m0.avro");
 
-	auto &manifest_entries = list_entry.manifest_entries;
-	auto &manifest_file = list_entry.file;
+	auto &manifest = list_entry.GetManifestMutable();
+	auto &manifest_entries = manifest.manifest_entries;
+
+	auto &manifest_file = list_entry.ManifestFileMutable();
 	manifest_file.manifest_path = manifest_file_path;
 
 	manifest_file.added_files_count = 0;
@@ -104,8 +86,8 @@ static bool ManifestFileNeedsToBeRewritten(IcebergCommitState &commit_state, Ice
 
 static void RewriteManifestFile(IcebergManifestListEntry &list_entry, CopyFunction &avro_copy, DatabaseInstance &db,
                                 IcebergCommitState &commit_state) {
-	auto &manifest_file = list_entry.file;
-	auto &manifest_entries = list_entry.manifest_entries;
+	auto &manifest_file = list_entry.ManifestFileMutable();
+	auto &manifest_entries = list_entry.ManifestEntries();
 	auto &table_metadata = commit_state.table_info.table_metadata;
 
 	//! Finally overwrite the input 'manifest_file' with our edited copy
@@ -124,18 +106,30 @@ void IcebergAddSnapshot::ConstructManifestList(IcebergManifestList &new_manifest
 		return;
 	}
 
-	for (auto &manifest_list_entry : commit_state.manifests) {
-		auto &existing_manifest_file = manifest_list_entry.file;
+	IcebergOptions options;
+	auto &fs = FileSystem::GetFileSystem(commit_state.context);
+	auto &table_metadata = commit_state.table_info.table_metadata;
+	auto &snapshot = *commit_state.latest_snapshot;
+	auto manifest_scan =
+	    AvroScan::ScanManifest(snapshot, commit_state.manifests, options, fs, "", table_metadata, commit_state.context);
+	auto manifest_file_reader = make_uniq<manifest_file::ManifestReader>(*manifest_scan);
 
-		auto scanned_manifest_file = ScanExistingManifestFile(existing_manifest_file, commit_state);
-		bool needs_rewrite = ManifestFileNeedsToBeRewritten(commit_state, scanned_manifest_file, altered_manifests);
+	while (!manifest_file_reader->Finished()) {
+		manifest_file_reader->Read();
+	}
+
+	for (auto &manifest_list_entry : commit_state.manifests) {
+		auto copied_manifest_entries = manifest_list_entry.ManifestEntries();
+		IcebergManifestListEntry rewritten_manifest(manifest_list_entry.ManifestFile(),
+		                                            std::move(copied_manifest_entries));
+		bool needs_rewrite = ManifestFileNeedsToBeRewritten(commit_state, rewritten_manifest, altered_manifests);
 		if (!needs_rewrite) {
 			new_manifest_list.AddExistingManifestFile(std::move(manifest_list_entry));
 			continue;
 		}
 
-		RewriteManifestFile(scanned_manifest_file, avro_copy, db, commit_state);
-		new_manifest_list.AddNewManifestFile(std::move(scanned_manifest_file));
+		RewriteManifestFile(rewritten_manifest, avro_copy, db, commit_state);
+		new_manifest_list.AddNewManifestFile(std::move(rewritten_manifest));
 	}
 	commit_state.manifests.clear();
 }
@@ -144,11 +138,11 @@ static IcebergManifestListEntry WriteManifestListEntry(const IcebergTableInforma
                                                        const IcebergManifestListEntry &list_entry,
                                                        CopyFunction &avro_copy, DatabaseInstance &db,
                                                        ClientContext &context) {
-	auto manifest_length = manifest_file::WriteToFile(table_info.table_metadata, list_entry.file,
-	                                                  list_entry.manifest_entries, avro_copy, db, context);
-	IcebergManifestListEntry new_entry(list_entry.file);
-	new_entry.manifest_entries = list_entry.manifest_entries;
-	new_entry.file.manifest_length = manifest_length;
+	auto manifest_length = manifest_file::WriteToFile(table_info.table_metadata, list_entry.ManifestFile(),
+	                                                  list_entry.ManifestEntries(), avro_copy, db, context);
+	IcebergManifestListEntry new_entry(list_entry.ManifestFile());
+	new_entry.ReferenceManifest(list_entry);
+	new_entry.ManifestFileMutable().manifest_length = manifest_length;
 	return new_entry;
 }
 
@@ -202,7 +196,7 @@ void IcebergAddSnapshot::CreateUpdate(DatabaseInstance &db, ClientContext &conte
 
 	new_snapshot.added_rows = 0;
 	for (auto &manifest_list_entry : uncommitted_manifest_files) {
-		auto &manifest_file = manifest_list_entry.file;
+		auto &manifest_file = manifest_list_entry.ManifestFile();
 		new_snapshot.metrics.AddManifestFile(manifest_file);
 
 		auto new_manifest_list_entry = WriteManifestListEntry(table_info, manifest_list_entry, avro_copy, db, context);

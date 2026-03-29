@@ -172,13 +172,13 @@ static void IcebergMetaDataFunction(ClientContext &context, TableFunctionInput &
 	auto &table_entries = bind_data.iceberg_table->GetManifestFilesConst();
 	for (; global_state.current_manifest_idx < table_entries.size(); global_state.current_manifest_idx++) {
 		auto &table_entry = table_entries[global_state.current_manifest_idx];
-		auto &entries = table_entry.manifest_entries;
+		auto &entries = table_entry.ManifestEntries();
 		for (; global_state.current_manifest_entry_idx < entries.size(); global_state.current_manifest_entry_idx++) {
 			if (out >= STANDARD_VECTOR_SIZE) {
 				output.SetCardinality(out);
 				return;
 			}
-			auto &manifest = table_entry.file;
+			auto &manifest = table_entry.ManifestFile();
 			auto &manifest_entry = entries[global_state.current_manifest_entry_idx];
 			auto &data_file = manifest_entry.data_file;
 

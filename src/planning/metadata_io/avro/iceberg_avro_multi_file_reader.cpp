@@ -498,17 +498,21 @@ void IcebergAvroMultiFileReader::FinalizeChunk(ClientContext &context, const Mul
 	switch (scan_info->type) {
 	case AvroScanInfoType::MANIFEST_FILE: {
 		auto &manifest_scan_info = scan_info->Cast<IcebergManifestFileScanInfo>();
-		auto manifest_file_idx = reader.file_list_idx.GetIndex();
-		auto &manifest_file = manifest_scan_info.manifest_files[manifest_file_idx];
+		auto idx = reader.file_list_idx.GetIndex();
 
+		auto &file_to_scan = manifest_scan_info.files_to_scan[idx];
+		auto &manifest_list_entry = file_to_scan.manifest_list_entry;
+		auto &manifest_entries = manifest_list_entry.ManifestEntries();
+
+		auto &manifest = manifest_list_entry.GetManifestMutable();
 		output_chunk.Flatten();
-		idx_t start_index = manifest_file.manifest_entries.size();
+		idx_t start_index = manifest_entries.size();
 		manifest_file::ManifestReader::ReadChunk(output_chunk, manifest_scan_info.partition_field_id_to_type,
-		                                         metadata.iceberg_version, manifest_file.manifest_entries);
+		                                         metadata.iceberg_version, manifest);
 		if (manifest_scan_info.read_state) {
 			auto &read_state = *manifest_scan_info.read_state;
 			read_state.PushBatch(
-			    ManifestReadBatch(manifest_file_idx, start_index, manifest_file.manifest_entries.size()));
+			    ManifestReadBatch(file_to_scan.manifest_list_entry_idx, start_index, manifest_entries.size()));
 		}
 		break;
 	}
@@ -541,26 +545,27 @@ shared_ptr<MultiFileList> IcebergAvroMultiFileReader::CreateFileList(ClientConte
 		file_info.extended_info->options["last_modified"] = Value::TIMESTAMP(timestamp_t(0));
 	} else {
 		auto &manifest_files_scan = scan_info->Cast<IcebergManifestFileScanInfo>();
-		auto &manifest_files = manifest_files_scan.manifest_files;
+		auto &manifest_files = manifest_files_scan.files_to_scan;
 		auto &options = manifest_files_scan.options;
-		auto &fs = manifest_files_scan.fs;
+		auto &fs = FileSystem::GetFileSystem(manifest_files_scan.context);
 		auto &iceberg_path = manifest_files_scan.iceberg_path;
 		for (idx_t i = 0; i < manifest_files.size(); i++) {
-			auto &manifest = manifest_files[i];
+			auto &manifest_list_entry = manifest_files[i].manifest_list_entry;
+			auto &manifest_file = manifest_list_entry.ManifestFile();
 			auto full_path = options.allow_moved_paths
-			                     ? IcebergUtils::GetFullPath(iceberg_path, manifest.file.manifest_path, fs)
-			                     : manifest.file.manifest_path;
+			                     ? IcebergUtils::GetFullPath(iceberg_path, manifest_file.manifest_path, fs)
+			                     : manifest_file.manifest_path;
 			open_files.emplace_back(full_path);
 			auto &file_info = open_files.back();
 			file_info.extended_info = make_uniq<ExtendedOpenFileInfo>();
 			file_info.extended_info->options["validate_external_file_cache"] = Value::BOOLEAN(false);
 			file_info.extended_info->options["force_full_download"] = Value::BOOLEAN(true);
-			file_info.extended_info->options["file_size"] = Value::UBIGINT(manifest.file.manifest_length);
+			file_info.extended_info->options["file_size"] = Value::UBIGINT(manifest_file.manifest_length);
 			file_info.extended_info->options["etag"] = Value("");
 			file_info.extended_info->options["last_modified"] = Value::TIMESTAMP(timestamp_t(0));
-			file_info.extended_info->options["partition_spec_id"] = Value::INTEGER(manifest.file.partition_spec_id);
-			file_info.extended_info->options["sequence_number"] = Value::BIGINT(manifest.file.sequence_number);
-			file_info.extended_info->options["manifest_file_path"] = Value(manifest.file.manifest_path);
+			file_info.extended_info->options["partition_spec_id"] = Value::INTEGER(manifest_file.partition_spec_id);
+			file_info.extended_info->options["sequence_number"] = Value::BIGINT(manifest_file.sequence_number);
+			file_info.extended_info->options["manifest_file_path"] = Value(manifest_file.manifest_path);
 		}
 	}
 

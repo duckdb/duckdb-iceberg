@@ -92,9 +92,10 @@ static void WriteIcebergMetadata(ClientContext &context, CopyIcebergBindData &bi
 	auto manifest_list_path =
 	    fs.JoinPath(metadata_path, "snap-" + std::to_string(snapshot_id) + "-" + manifest_list_uuid + ".avro");
 
-	auto manifest_file = IcebergManifestListEntry::CreateFromEntries(fs, snapshot_id, sequence_number, table_metadata,
-	                                                                 IcebergManifestContentType::DATA,
-	                                                                 std::move(written_files), next_row_id);
+	auto manifest_list_entry = IcebergManifestListEntry::CreateFromEntries(
+	    fs, snapshot_id, sequence_number, table_metadata, IcebergManifestContentType::DATA, std::move(written_files),
+	    next_row_id);
+	auto &manifest_file = manifest_list_entry.ManifestFileMutable();
 
 	// Create a snapshot from the written files
 	IcebergSnapshot snapshot;
@@ -106,27 +107,26 @@ static void WriteIcebergMetadata(ClientContext &context, CopyIcebergBindData &bi
 	snapshot.timestamp_ms = Timestamp::GetEpochMs(Timestamp::GetCurrentTimestamp());
 	snapshot.has_parent_snapshot = false;
 
-	snapshot.metrics.AddManifestFile(manifest_file.file);
+	snapshot.metrics.AddManifestFile(manifest_file);
 
 	if (table_metadata.iceberg_version >= 3) {
 		snapshot.has_first_row_id = true;
 		snapshot.first_row_id = first_row_id;
 
 		snapshot.has_added_rows = true;
-		if (manifest_file.file.content == IcebergManifestContentType::DATA) {
-			snapshot.added_rows = manifest_file.file.added_rows_count;
+		if (manifest_file.content == IcebergManifestContentType::DATA) {
+			snapshot.added_rows = manifest_file.added_rows_count;
 		} else {
 			snapshot.added_rows = 0;
 		}
 	}
 
 	// Write manifest file(s)
-	manifest_file.file.manifest_length =
-	    manifest_file::WriteToFile(table_metadata, manifest_file.file.manifest_path, manifest_file.manifest_entries,
-	                               copy_fun.function, db, context);
+	manifest_file.manifest_length = manifest_file::WriteToFile(
+	    table_metadata, manifest_file, manifest_list_entry.ManifestEntries(), copy_fun.function, db, context);
 
 	IcebergManifestList manifest_list(snapshot_id, sequence_number, manifest_list_path);
-	manifest_list.AddNewManifestFile(std::move(manifest_file));
+	manifest_list.AddNewManifestFile(std::move(manifest_list_entry));
 	manifest_list::WriteToFile(table_metadata, manifest_list, copy_fun.function, db, context);
 
 	// Update table metadata with snapshot

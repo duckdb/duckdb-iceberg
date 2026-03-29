@@ -107,13 +107,23 @@ public:
 	ManifestPartitions partitions;
 
 public:
-	IcebergManifestFile(const string &manifest_path) : manifest_path(manifest_path) {
+	idx_t ManifestEntryCount() const {
+		return added_files_count + existing_files_count + deleted_files_count;
+	}
+
+public:
+	explicit IcebergManifestFile(const string &manifest_path) : manifest_path(manifest_path) {
 	}
 };
 
 struct IcebergManifestListEntry {
 public:
 	IcebergManifestListEntry(IcebergManifestFile file) : file(std::move(file)) {
+		manifest = make_shared_ptr<IcebergManifest>(file.ManifestEntryCount());
+	}
+	IcebergManifestListEntry(IcebergManifestFile file, vector<IcebergManifestEntry> &&entries) : file(std::move(file)) {
+		manifest = make_shared_ptr<IcebergManifest>(std::move(entries));
+		D_ASSERT(manifest->manifest_entries.size() == file.ManifestEntryCount());
 	}
 
 public:
@@ -122,9 +132,28 @@ public:
 	                  const IcebergTableMetadata &table_metadata, IcebergManifestContentType manifest_content_type,
 	                  vector<IcebergManifestEntry> &&manifest_entries, int64_t &next_row_id);
 
-public:
+	const IcebergManifestFile &ManifestFile() const {
+		return file;
+	}
+	IcebergManifestFile &ManifestFileMutable() {
+		return file;
+	}
+	const IcebergManifest &GetManifest() const {
+		return *manifest;
+	}
+	IcebergManifest &GetManifestMutable() {
+		return *manifest;
+	}
+	void ReferenceManifest(const IcebergManifestListEntry &other) {
+		manifest = other.manifest;
+	}
+	const vector<IcebergManifestEntry> &ManifestEntries() const {
+		return manifest->manifest_entries;
+	}
+
+private:
 	IcebergManifestFile file;
-	vector<IcebergManifestEntry> manifest_entries;
+	shared_ptr<IcebergManifest> manifest;
 };
 
 struct IcebergManifestList {
@@ -141,7 +170,7 @@ public:
 	}
 
 	void AddNewManifestFile(IcebergManifestListEntry &&manifest_list_entry) {
-		auto &manifest_file = manifest_list_entry.file;
+		auto &manifest_file = manifest_list_entry.ManifestFileMutable();
 		manifest_file.sequence_number = sequence_number;
 		manifest_file.added_snapshot_id = snapshot_id;
 
