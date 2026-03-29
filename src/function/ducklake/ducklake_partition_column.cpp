@@ -28,7 +28,26 @@ DuckLakePartitionColumn::DuckLakePartitionColumn(const IcebergPartitionSpecField
 }
 
 string DuckLakePartitionColumn::FinalizeEntry(int64_t table_id, int64_t partition_id, int64_t partition_key_index) {
-	return StringUtil::Format("VALUES(%d, %d, %d, %d, '%s');", partition_id, table_id, partition_key_index, column_id,
+	const auto PARTITION_COLUMN_SQL = R"(
+		INSERT INTO {METADATA_CATALOG}.ducklake_partition_column VALUES(
+			%d, -- partition_id
+			%d, -- table_id
+			%d, -- partition_key_index
+			%d, -- column_id
+			'%s' -- transform
+		);
+	)";
+
+	return StringUtil::Format(PARTITION_COLUMN_SQL,
+	                          // partition_id
+	                          partition_id,
+	                          // table_id
+	                          table_id,
+	                          // partition_key_index
+	                          partition_key_index,
+	                          // column_id
+	                          column_id,
+	                          // transform
 	                          transform);
 }
 

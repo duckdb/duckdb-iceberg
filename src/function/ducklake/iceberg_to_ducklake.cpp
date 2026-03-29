@@ -21,6 +21,7 @@
 #include "duckdb/common/file_system.hpp"
 #include "duckdb/common/types/uuid.hpp"
 #include "duckdb/common/numeric_utils.hpp"
+#include "duckdb/common/printer.hpp"
 
 #include "function/iceberg_functions.hpp"
 #include "common/iceberg_utils.hpp"
@@ -301,12 +302,66 @@ public:
 		sql.push_back("DELETE FROM {METADATA_CATALOG}.ducklake_snapshot_changes;");
 
 		const auto SCHEMA_VERSION_SQL = R"(
-			INSERT INTO {METADATA_CATALOG}.ducklake_schema_versions VALUES
-				(
-					%llu, -- begin_snapshot
-					%llu, -- schema_version
-					%llu -- table_id
-				);
+			INSERT INTO {METADATA_CATALOG}.ducklake_schema_versions VALUES(
+				%llu, -- begin_snapshot
+				%llu, -- schema_version
+				%llu -- table_id
+			);
+		)";
+
+		const auto FILE_COLUMN_STATS_SQL = R"(
+			INSERT INTO {METADATA_CATALOG}.ducklake_file_column_stats VALUES(
+				%d, -- data_file_id
+				%d, -- table_id
+				%d, -- column_id
+				%s, -- column_size_bytes
+				%s, -- value_count
+				%s, -- null_count
+				%s, -- min_value
+				%s, -- max_value
+				%s, -- contains_nan
+				%s -- extra_stats
+			);
+		)";
+
+		const auto FILE_PARTITION_VALUE_SQL = R"(
+			INSERT INTO {METADATA_CATALOG}.ducklake_file_partition_value VALUES(
+				%d, -- data_file_id
+				%d, -- table_id
+				%d, -- partition_key_index
+				%s -- partition_value
+			);
+		)";
+
+		const auto TABLE_STATS_SQL = R"(
+			INSERT INTO {METADATA_CATALOG}.ducklake_table_stats VALUES(
+				%d, -- table_id
+				%d, -- record_count
+				%d, -- next_row_id
+				%d -- file_size_bytes
+			);
+		)";
+
+		const auto TABLE_COLUMN_STATS_SQL = R"(
+			INSERT INTO {METADATA_CATALOG}.ducklake_table_column_stats VALUES(
+				%d, -- table_id
+				%d, -- column_id
+				%s, -- contains_null
+				%s, -- contains_nan
+				%s, -- min_value
+				%s, -- max_value
+				%s -- extra_stats
+			);
+		)";
+
+		const auto SNAPSHOT_CHANGES_SQL = R"(
+			INSERT INTO {METADATA_CATALOG}.ducklake_snapshot_changes VALUES(
+				%d, -- snapshot_id
+				'%s', -- changes_made
+				%s, -- author
+				%s, -- commit_message
+				%s -- commit_extra_info
+			);
 		)";
 
 		vector<DuckLakeSchemaVersionIntermediate> schema_versions;
@@ -348,22 +403,21 @@ public:
 
 			auto &schema = schemas.at(table.schema_name);
 			auto schema_id = schema.schema_id.GetIndex();
-			auto values = table.FinalizeEntry(schema_id, snapshots);
-			sql.push_back(StringUtil::Format("INSERT INTO {METADATA_CATALOG}.ducklake_table %s", values));
+			auto insert_statement = table.FinalizeEntry(schema_id, snapshots);
+			sql.push_back(insert_statement);
 
 			int64_t table_id = table.table_id.GetIndex();
 			//! ducklake_partition_info
 			for (auto &partition : table.all_partitions) {
-				auto values = partition->FinalizeEntry(table_id, serializer, snapshots);
-				sql.push_back(StringUtil::Format("INSERT INTO {METADATA_CATALOG}.ducklake_partition_info %s", values));
+				auto insert_statement = partition->FinalizeEntry(table_id, serializer, snapshots);
+				sql.push_back(insert_statement);
 				D_ASSERT(partition->partition_id.IsValid());
 				auto partition_id = partition->partition_id.GetIndex();
 				//! ducklake_partition_column
 				for (idx_t i = 0; i < partition->columns.size(); i++) {
 					auto &column = partition->columns[i];
-					auto values = column.FinalizeEntry(table_id, partition_id, i);
-					sql.push_back(
-					    StringUtil::Format("INSERT INTO {METADATA_CATALOG}.ducklake_partition_column %s", values));
+					auto insert_statement = column.FinalizeEntry(table_id, partition_id, i);
+					sql.push_back(insert_statement);
 				}
 			}
 
@@ -431,11 +485,29 @@ public:
 					auto contains_nan = stats.has_nan ? "true" : "false";
 					auto min_value = stats.lower_bound.IsNull() ? "NULL" : "'" + stats.lower_bound.ToString() + "'";
 					auto max_value = stats.upper_bound.IsNull() ? "NULL" : "'" + stats.upper_bound.ToString() + "'";
-					auto values = StringUtil::Format("VALUES(%d, %d, %d, %s, %s, %s, %s, %s, %s, NULL);", data_file_id,
-					                                 table_id, column_id, column_size_bytes, value_count,
-					                                 null_count.ToString(), min_value, max_value, contains_nan);
-					sql.push_back(
-					    StringUtil::Format("INSERT INTO {METADATA_CATALOG}.ducklake_file_column_stats %s", values));
+
+					auto insert_statement = StringUtil::Format(FILE_COLUMN_STATS_SQL,
+					                                           // data_file_id
+					                                           data_file_id,
+					                                           // table_id
+					                                           table_id,
+					                                           // column_id
+					                                           column_id,
+					                                           // column_size_bytes
+					                                           column_size_bytes,
+					                                           // value_count
+					                                           value_count,
+					                                           // null_count
+					                                           null_count.ToString(),
+					                                           // min_value
+					                                           min_value,
+					                                           // max_value
+					                                           max_value,
+					                                           // contains_nan
+					                                           contains_nan,
+					                                           // extra_stats
+					                                           "NULL");
+					sql.push_back(insert_statement);
 
 					if (!data_file.has_end && !column.has_end && !column.IsNested()) {
 						//! This data file is currently active, collect stats for it
@@ -469,10 +541,16 @@ public:
 					} else {
 						partition_value = "'" + partition_it->second.get().value.ToString() + "'";
 					}
-					auto values = StringUtil::Format("VALUES(%d, %d, %d, %s);", data_file_id, table_id,
-					                                 partition_key_index, partition_value);
-					sql.push_back(
-					    StringUtil::Format("INSERT INTO {METADATA_CATALOG}.ducklake_file_partition_value %s", values));
+					auto values = StringUtil::Format(FILE_PARTITION_VALUE_SQL,
+					                                 // data_file_id
+					                                 data_file_id,
+					                                 // table_id
+					                                 table_id,
+					                                 // partition_key_index
+					                                 partition_key_index,
+					                                 // partition_value
+					                                 partition_value);
+					sql.push_back(StringUtil::Format(" %s", values));
 				}
 			}
 
@@ -504,10 +582,16 @@ public:
 
 			if (!column_stats.empty()) {
 				//! FIXME: for v2 compatibility this uses the 'record_count' as the 'next_row_id'
-				auto stats_values = StringUtil::Format("VALUES(%d, %d, %d, %d);", table_id, record_count, record_count,
-				                                       file_size_bytes);
-				sql.push_back(
-				    StringUtil::Format("INSERT INTO {METADATA_CATALOG}.ducklake_table_stats %s", stats_values));
+				auto insert_statement = StringUtil::Format(TABLE_STATS_SQL,
+				                                           // table_id
+				                                           table_id,
+				                                           // record_count
+				                                           record_count,
+				                                           // next_row_id
+				                                           record_count,
+				                                           // file_size_bytes
+				                                           file_size_bytes);
+				sql.push_back(insert_statement);
 			}
 
 			//! ducklake_table_column_stats
@@ -519,10 +603,22 @@ public:
 				auto contains_nan = stats.contains_nan ? "true" : "false";
 				auto min_value = stats.min_value.IsNull() ? "NULL" : "'" + stats.min_value.ToString() + "'";
 				auto max_value = stats.max_value.IsNull() ? "NULL" : "'" + stats.max_value.ToString() + "'";
-				auto values = StringUtil::Format("VALUES(%d, %d, %s, %s, %s, %s, NULL);", table_id, column_id,
-				                                 contains_null, contains_nan, min_value, max_value);
-				sql.push_back(
-				    StringUtil::Format("INSERT INTO {METADATA_CATALOG}.ducklake_table_column_stats %s", values));
+				auto values = StringUtil::Format(TABLE_COLUMN_STATS_SQL,
+				                                 // table_id
+				                                 table_id,
+				                                 // column_id
+				                                 column_id,
+				                                 // contains_null
+				                                 contains_null,
+				                                 // contains_nan
+				                                 contains_nan,
+				                                 // min_value
+				                                 min_value,
+				                                 // max_value
+				                                 max_value,
+				                                 // extra_stats
+				                                 "NULL");
+				sql.push_back(insert_statement);
 			}
 		}
 
@@ -611,9 +707,18 @@ public:
 				changes.push_back(StringUtil::Format("altered_table:%d", table_id));
 			}
 			auto snapshot_id = snapshot.snapshot_id.GetIndex();
-			auto values =
-			    StringUtil::Format("VALUES(%d, '%s', NULL, NULL, NULL);", snapshot_id, StringUtil::Join(changes, ","));
-			sql.push_back(StringUtil::Format("INSERT INTO {METADATA_CATALOG}.ducklake_snapshot_changes %s", values));
+			auto insert_statement = StringUtil::Format(SNAPSHOT_CHANGES_SQL,
+			                                           // snapshot_id
+			                                           snapshot_id,
+			                                           // changes_made
+			                                           StringUtil::Join(changes, ","),
+			                                           // author
+			                                           "NULL",
+			                                           // commit_message
+			                                           "NULL",
+			                                           // commit_extra_info
+			                                           "NULL");
+			sql.push_back(insert_statement);
 		}
 		sql.push_back("COMMIT TRANSACTION;");
 
@@ -846,6 +951,7 @@ static void IcebergToDuckLakeFunction(ClientContext &context, TableFunctionInput
 	auto &statements = bind_data.sql_statements;
 
 	auto query = StringUtil::Join(statements, "\n");
+	Printer::Print(query);
 	query = StringUtil::Replace(query, "{METADATA_CATALOG}", StringUtil::Format("%s", global_state.metadata_catalog));
 	auto result = connection.Query(query);
 	if (result->HasError()) {

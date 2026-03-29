@@ -56,6 +56,10 @@ call iceberg_to_ducklake(
     ]
 )
 
+query II
+select * from my_ducklake.default.test_null_filtering
+----
+
 ## These are empty, so they are omitted:
 ## - insert_all_types
 ## - simple_v3_table
