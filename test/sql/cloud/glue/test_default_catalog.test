@@ -39,7 +39,6 @@ select database, schema, name from (show all tables) where name = 'metrics';
 ----
 glue_catalog	simple_glue_database	metrics
 
-
 query I
 select * from glue_catalog.simple_glue_database.duckdb_created_table limit 10;
 ----

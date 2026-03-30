@@ -1,0 +1,42 @@
+{
+  "description": "Use Polaris as Iceberg Rest Catalog.",
+  "on_init": "create secret polaris_secret (TYPE ICEBERG, CLIENT_ID 'root',CLIENT_SECRET 's3cr3t',ENDPOINT 'http://0.0.0.0:8181/api/catalog'); attach 'quickstart_catalog' as my_datalake (type ICEBERG,ENDPOINT 'http://0.0.0.0:8181/api/catalog', default_region 'us-west-2'); Create schema if not exists my_datalake.default;",
+  "statically_loaded_extensions": [
+    "core_functions",
+    "parquet",
+    "avro",
+    "iceberg",
+    "httpfs"
+  ],
+  "skip_tests": [
+    {
+      "reason": "Not yet supported with Polaris",
+      "paths": [
+        "test/sql/local/irc_any_catalog/delete/test_no_head_request_for_deletes.test",
+        "test/sql/local/irc_any_catalog/delete/test_spark_can_read_duckdb_table.test",
+        "test/sql/local/irc_any_catalog/delete/time_travel_after_uncommitted_delete.test",
+        "test/sql/local/irc_any_catalog/transactions/test_transactional_updates_error_omits_stacktrace.test",
+        "test/sql/local/irc_any_catalog/other_engines/test_create_table_then_read_with_other_engine.test"
+      ]
+    },
+    {
+      "reason" : "For some reason the tables cannot be generated in polaris yet",
+      "paths" : [
+        "test/sql/local/irc_any_catalog/insert/test_insert_into_sorted_table_fails.test",
+        "test/sql/local/irc_any_catalog/reads/test_requests_to_partitioned_table.test",
+        "test/sql/local/irc_any_catalog/irc_catalog_read_deletes.test",
+        "test/sql/local/irc_any_catalog/insert/test_read_upper_and_lower_bounds.test",
+        "test/sql/local/irc_any_catalog/iceberg_catalog_eager_refresh.test"
+      ]
+    },
+    {
+      "reason": "Need to reparse paths",
+      "paths": [
+        "test/sql/local/irc_any_catalog/delete/delete_table.test",
+        "test/sql/local/irc_any_catalog/insert/test_write_upper_and_lower_bounds_single_values.test",
+        "test/sql/local/irc_any_catalog/insert/test_write_upper_and_lower_bounds_all_null.test",
+        "test/sql/local/irc_any_catalog/insert/test_write_upper_and_lower_bounds.test"
+      ]
+    }
+  ]
+}

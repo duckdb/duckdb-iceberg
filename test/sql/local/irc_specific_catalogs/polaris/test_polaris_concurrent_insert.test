@@ -2,10 +2,6 @@
 # description: Test concurrent inserts to a newly created table with no snapshots
 # group: [polaris]
 
-require-env POLARIS_CLIENT_ID
-
-require-env POLARIS_CLIENT_SECRET
-
 require-env POLARIS_SERVER_AVAILABLE
 
 require avro
@@ -24,15 +20,16 @@ set ignore_error_messages
 statement ok
 create secret polaris_secret (
 	TYPE ICEBERG,
-	CLIENT_ID '${POLARIS_CLIENT_ID}',
-	CLIENT_SECRET '${POLARIS_CLIENT_SECRET}',
+	CLIENT_ID 'root',
+	CLIENT_SECRET 's3cr3t',
 	ENDPOINT 'http://0.0.0.0:8181/api/catalog'
 );
 
 statement ok
 attach 'quickstart_catalog' as my_datalake (
 	type ICEBERG,
-	ENDPOINT 'http://0.0.0.0:8181/api/catalog'
+	ENDPOINT 'http://0.0.0.0:8181/api/catalog',
+	DEFAULT_REGION 'us-west-2'
 );
 
 statement ok
@@ -83,7 +80,8 @@ attach or replace 'quickstart_catalog' as my_datalake (
 	type ICEBERG,
 	ENDPOINT 'http://0.0.0.0:8181/api/catalog',
 	SUPPORT_NESTED_NAMESPACES true,
-	support_stage_create false
+	support_stage_create false,
+	DEFAULT_REGION 'us-west-2'
 );
 
 statement ok

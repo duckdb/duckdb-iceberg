@@ -306,6 +306,13 @@ int64_t IcebergManifestEntry::GetSnapshotId() const {
 	return snapshot_id;
 }
 
+static Value CreateFieldID(int32_t field_id, bool nullable) {
+	child_list_t<Value> fields;
+	fields.emplace_back("__duckdb_field_id", Value::INTEGER(field_id));
+	fields.emplace_back("__duckdb_nullable", Value::BOOLEAN(nullable));
+	return Value::STRUCT(fields);
+}
+
 namespace manifest_file {
 
 static LogicalType PartitionStructType(const vector<IcebergManifestEntry> &entries) {
@@ -368,19 +375,16 @@ idx_t WriteToFile(const IcebergTableMetadata &table_metadata, const IcebergManif
 	auto &current_partition_spec = table_metadata.GetLatestPartitionSpec();
 
 	{
-		child_list_t<Value> status_field;
 		// status: int
 		names.push_back("status");
 		types.push_back(LogicalType::INTEGER);
-		status_field.emplace_back("__duckdb_field_id", Value::INTEGER(STATUS));
-		status_field.emplace_back("__duckdb_nullable", Value::BOOLEAN(false));
 
 		auto field_obj = yyjson_mut_arr_add_obj(doc, fields_arr);
 		yyjson_mut_obj_add_uint(doc, field_obj, "id", STATUS);
 		yyjson_mut_obj_add_strcpy(doc, field_obj, "name", "status");
 		yyjson_mut_obj_add_bool(doc, field_obj, "required", true);
 		yyjson_mut_obj_add_strcpy(doc, field_obj, "type", "int");
-		field_ids.emplace_back("status", Value::STRUCT(status_field));
+		field_ids.emplace_back("status", CreateFieldID(STATUS, false));
 	}
 
 	{
@@ -429,12 +433,9 @@ idx_t WriteToFile(const IcebergTableMetadata &table_metadata, const IcebergManif
 
 	auto child_fields_arr = yyjson_mut_arr(doc);
 	{
-		child_list_t<Value> content_field;
 		// content: int
 		children.emplace_back("content", LogicalType::INTEGER);
-		content_field.emplace_back("__duckdb_field_id", Value::INTEGER(CONTENT));
-		content_field.emplace_back("__duckdb_nullable", Value::BOOLEAN(false));
-		data_file_field_ids.emplace_back("content", Value::STRUCT(content_field));
+		data_file_field_ids.emplace_back("content", CreateFieldID(CONTENT, false));
 
 		auto field_obj = yyjson_mut_arr_add_obj(doc, child_fields_arr);
 		yyjson_mut_obj_add_uint(doc, field_obj, "id", CONTENT);
@@ -444,12 +445,9 @@ idx_t WriteToFile(const IcebergTableMetadata &table_metadata, const IcebergManif
 	}
 
 	{
-		child_list_t<Value> file_path;
 		// file_path: string
 		children.emplace_back("file_path", LogicalType::VARCHAR);
-		file_path.emplace_back("__duckdb_field_id", Value::INTEGER(FILE_PATH));
-		file_path.emplace_back("__duckdb_nullable", Value::BOOLEAN(false));
-		data_file_field_ids.emplace_back("file_path", Value::STRUCT(file_path));
+		data_file_field_ids.emplace_back("file_path", CreateFieldID(FILE_PATH, false));
 
 		auto field_obj = yyjson_mut_arr_add_obj(doc, child_fields_arr);
 		yyjson_mut_obj_add_uint(doc, field_obj, "id", FILE_PATH);
@@ -459,12 +457,9 @@ idx_t WriteToFile(const IcebergTableMetadata &table_metadata, const IcebergManif
 	}
 
 	{
-		child_list_t<Value> file_format;
 		// file_format: string
 		children.emplace_back("file_format", LogicalType::VARCHAR);
-		file_format.emplace_back("__duckdb_field_id", Value::INTEGER(FILE_FORMAT));
-		file_format.emplace_back("__duckdb_nullable", Value::BOOLEAN(false));
-		data_file_field_ids.emplace_back("file_format", Value::STRUCT(file_format));
+		data_file_field_ids.emplace_back("file_format", CreateFieldID(FILE_FORMAT, false));
 
 		auto field_obj = yyjson_mut_arr_add_obj(doc, child_fields_arr);
 		yyjson_mut_obj_add_uint(doc, field_obj, "id", FILE_FORMAT);
@@ -507,12 +502,9 @@ idx_t WriteToFile(const IcebergTableMetadata &table_metadata, const IcebergManif
 	}
 
 	{
-		child_list_t<Value> record_count;
 		// record_count: long
 		children.emplace_back("record_count", LogicalType::BIGINT);
-		record_count.emplace_back("__duckdb_field_id", Value::INTEGER(RECORD_COUNT));
-		record_count.emplace_back("__duckdb_nullable", Value::BOOLEAN(false));
-		data_file_field_ids.emplace_back("record_count", Value::STRUCT(record_count));
+		data_file_field_ids.emplace_back("record_count", CreateFieldID(RECORD_COUNT, false));
 
 		auto field_obj = yyjson_mut_arr_add_obj(doc, child_fields_arr);
 		yyjson_mut_obj_add_uint(doc, field_obj, "id", RECORD_COUNT);
@@ -522,12 +514,9 @@ idx_t WriteToFile(const IcebergTableMetadata &table_metadata, const IcebergManif
 	}
 
 	{
-		child_list_t<Value> file_size_in_bytes;
 		// file_size_in_bytes: long
 		children.emplace_back("file_size_in_bytes", LogicalType::BIGINT);
-		file_size_in_bytes.emplace_back("__duckdb_field_id", Value::INTEGER(FILE_SIZE_IN_BYTES));
-		file_size_in_bytes.emplace_back("__duckdb_nullable", Value::BOOLEAN(false));
-		data_file_field_ids.emplace_back("file_size_in_bytes", Value::STRUCT(file_size_in_bytes));
+		data_file_field_ids.emplace_back("file_size_in_bytes", CreateFieldID(FILE_SIZE_IN_BYTES, false));
 
 		auto field_obj = yyjson_mut_arr_add_obj(doc, child_fields_arr);
 		yyjson_mut_obj_add_uint(doc, field_obj, "id", FILE_SIZE_IN_BYTES);
@@ -676,12 +665,9 @@ idx_t WriteToFile(const IcebergTableMetadata &table_metadata, const IcebergManif
 	}
 	// referenced_data_file
 	if (table_metadata.iceberg_version >= 3) {
-		child_list_t<Value> referenced_data_file;
 		// referenced_data_file: long
 		children.emplace_back("referenced_data_file", LogicalType::VARCHAR);
-		referenced_data_file.emplace_back("__duckdb_field_id", Value::INTEGER(REFERENCED_DATA_FILE));
-		referenced_data_file.emplace_back("__duckdb_nullable", Value::BOOLEAN(true));
-		data_file_field_ids.emplace_back("referenced_data_file", Value::STRUCT(referenced_data_file));
+		data_file_field_ids.emplace_back("referenced_data_file", CreateFieldID(REFERENCED_DATA_FILE, true));
 
 		auto field_obj = yyjson_mut_arr_add_obj(doc, child_fields_arr);
 		yyjson_mut_obj_add_uint(doc, field_obj, "id", REFERENCED_DATA_FILE);
@@ -691,12 +677,9 @@ idx_t WriteToFile(const IcebergTableMetadata &table_metadata, const IcebergManif
 	}
 	// content_size_in_bytes
 	if (table_metadata.iceberg_version >= 3) {
-		child_list_t<Value> content_size_in_bytes;
 		// content_size_in_bytes: long
 		children.emplace_back("content_size_in_bytes", LogicalType::BIGINT);
-		content_size_in_bytes.emplace_back("__duckdb_field_id", Value::INTEGER(CONTENT_SIZE_IN_BYTES));
-		content_size_in_bytes.emplace_back("__duckdb_nullable", Value::BOOLEAN(true));
-		data_file_field_ids.emplace_back("content_size_in_bytes", Value::STRUCT(content_size_in_bytes));
+		data_file_field_ids.emplace_back("content_size_in_bytes", CreateFieldID(CONTENT_SIZE_IN_BYTES, true));
 
 		auto field_obj = yyjson_mut_arr_add_obj(doc, child_fields_arr);
 		yyjson_mut_obj_add_uint(doc, field_obj, "id", CONTENT_SIZE_IN_BYTES);
@@ -706,12 +689,9 @@ idx_t WriteToFile(const IcebergTableMetadata &table_metadata, const IcebergManif
 	}
 	// content_offset
 	if (table_metadata.iceberg_version >= 3) {
-		child_list_t<Value> content_offset;
 		// content_offset: long
 		children.emplace_back("content_offset", LogicalType::BIGINT);
-		content_offset.emplace_back("__duckdb_field_id", Value::INTEGER(CONTENT_OFFSET));
-		content_offset.emplace_back("__duckdb_nullable", Value::BOOLEAN(true));
-		data_file_field_ids.emplace_back("content_offset", Value::STRUCT(content_offset));
+		data_file_field_ids.emplace_back("content_offset", CreateFieldID(CONTENT_OFFSET, true));
 
 		auto field_obj = yyjson_mut_arr_add_obj(doc, child_fields_arr);
 		yyjson_mut_obj_add_uint(doc, field_obj, "id", CONTENT_OFFSET);
