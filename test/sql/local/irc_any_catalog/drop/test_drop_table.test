@@ -49,6 +49,15 @@ select * from test_drop_table;
 9
 
 statement ok
+set variable data_file = (select file_path from iceberg_metadata(my_datalake.default.test_drop_table) limit 1)
+
+query I
+select count(*) from read_parquet(getvariable('data_file'));
+----
+10
+
+
+statement ok
 drop table test_drop_table;
 
 # table should no longer exist
@@ -56,3 +65,9 @@ query I
 select count(*) from (show tables) where name like '%test_drop_table%';
 ----
 0
+
+# data files should no longer exist in storage
+statement error
+select count(*) from read_parquet(getvariable('data_file'));
+----
+HTTP 404 Not Found
