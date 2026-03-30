@@ -1,0 +1,61 @@
+# name: test/sql/local/irc_any_catalog/reads/partitioned_reads/test_read_spark_days_partition.test
+# group: [partitioned_reads]
+
+require-env ICEBERG_SERVER_AVAILABLE
+
+require-env SECRETS_CREATED_AND_CATALOG_ATTACHED
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+require icu
+
+require ducklake
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+set enable_logging=true
+
+query I
+select dt from my_datalake.default.table_partitioned where dt = DATE '2023-03-01' limit 1;
+----
+2023-03-01
+
+statement ok
+drop table if exists my_datalake.default.duckdb_partitioned_table;
+
+statement ok
+create table my_datalake.default.duckdb_partitioned_table (dt DATE, id int, cat VARCHAR) PARTITIONED BY (day(dt));
+
+statement ok
+insert into my_datalake.default.duckdb_partitioned_table Values
+('2023-03-01'::DATE, 1, 'a'),
+('2023-03-02'::DATE, 2, 'b'),
+('2023-03-03'::DATE, 3, 'c'),
+('2023-03-04'::DATE, 4, 'd'),
+('2023-03-05'::DATE, 5, 'e'),
+('2023-03-06'::DATE, 6, 'f'),
+('2023-03-07'::DATE, 7, 'g'),
+('2023-03-08'::DATE, 8, 'h'),
+('2023-03-09'::DATE, 9, 'i'),
+('2023-03-10'::DATE, 10, 'j'),
+('2023-03-11'::DATE, 11, 'k'),
+('2023-03-12'::DATE, 12, 'l');
+
+query I
+select dt from my_datalake.default.duckdb_partitioned_table where dt = DATE '2023-03-01' limit 1;
+----
+2023-03-01
+
+# make sure cast Date -> INT does not exist
+statement error
+select '2020-01-01'::DATE::INT a;
+----
+<REGEX>:.*Unimplemented type for cast.*DATE \-\> INTEGER.*

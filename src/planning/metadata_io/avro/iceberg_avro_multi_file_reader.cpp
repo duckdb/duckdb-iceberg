@@ -2,6 +2,9 @@
 
 #include "duckdb/common/exception.hpp"
 #include "duckdb/planner/expression/bound_constant_expression.hpp"
+#include "duckdb/planner/expression/bound_cast_expression.hpp"
+#include "duckdb/planner/expression/bound_function_expression.hpp"
+#include "duckdb/function/cast/bound_cast_data.hpp"
 
 #include "planning/metadata_io/avro/iceberg_avro_multi_file_list.hpp"
 #include "core/metadata/manifest/iceberg_manifest_list.hpp"
@@ -419,6 +422,66 @@ bool IcebergAvroMultiFileReader::Bind(MultiFileOptions &options, MultiFileList &
 	bind_data.schema = std::move(schema);
 	bind_data.mapping = MultiFileColumnMappingMode::BY_FIELD_ID;
 	return true;
+}
+
+// Recursively walk a BoundCastInfo and replace TryVectorNullCast → ReinterpretCast wherever
+// the source and target types share the same physical representation.  This handles the case
+// where Spark writes DAY-transform partition values as an avro 'date' logical type
+// (int32) rather than a plain int32. DuckDB-Avro returns DATE, while DuckDB-Iceberg expects INTEGER for a day
+// transform, both are PhysicalType::INT32 so a bitwise reinterpret is always correct. This is only executed for Avro
+// Manifests, and does not happen in any other reads
+static void FixSamePhysicalTypeCasts(BoundCastInfo &cast_info, const LogicalType &source_type,
+                                     const LogicalType &target_type) {
+	if (cast_info.function == DefaultCasts::TryVectorNullCast &&
+	    source_type.InternalType() == target_type.InternalType()) {
+		cast_info.function = DefaultCasts::ReinterpretCast;
+		return;
+	}
+	if (!cast_info.cast_data) {
+		return;
+	}
+	if (source_type.id() != LogicalTypeId::STRUCT || target_type.id() != LogicalTypeId::STRUCT) {
+		return;
+	}
+	auto &struct_data = cast_info.cast_data->Cast<StructBoundCastData>();
+	auto &src_children = StructType::GetChildTypes(source_type);
+	auto &tgt_children = StructType::GetChildTypes(target_type);
+	for (idx_t i = 0; i < struct_data.child_cast_info.size(); i++) {
+		auto src_idx = struct_data.source_indexes[i];
+		auto tgt_idx = struct_data.target_indexes[i];
+		if (src_idx >= src_children.size() || tgt_idx >= tgt_children.size()) {
+			continue;
+		}
+		FixSamePhysicalTypeCasts(struct_data.child_cast_info[i], src_children[src_idx].second,
+		                         tgt_children[tgt_idx].second);
+	}
+}
+
+static void FixSamePhysicalTypeCastsInExpr(Expression &expr) {
+	if (expr.type == ExpressionType::OPERATOR_CAST) {
+		auto &cast_expr = expr.Cast<BoundCastExpression>();
+		FixSamePhysicalTypeCasts(cast_expr.bound_cast, cast_expr.source_type(), cast_expr.return_type);
+	} else if (expr.type == ExpressionType::BOUND_FUNCTION) {
+		for (auto &child : expr.Cast<BoundFunctionExpression>().children) {
+			if (child) {
+				FixSamePhysicalTypeCastsInExpr(*child);
+			}
+		}
+	}
+}
+
+ReaderInitializeType IcebergAvroMultiFileReader::InitializeReader(
+    MultiFileReaderData &reader_data, const MultiFileBindData &bind_data,
+    const vector<MultiFileColumnDefinition> &global_columns, const vector<ColumnIndex> &global_column_ids,
+    optional_ptr<TableFilterSet> table_filters, ClientContext &context, MultiFileGlobalState &gstate) {
+	auto result = MultiFileReader::InitializeReader(reader_data, bind_data, global_columns, global_column_ids,
+	                                                table_filters, context, gstate);
+	for (auto &expr : reader_data.expressions) {
+		if (expr) {
+			FixSamePhysicalTypeCastsInExpr(*expr);
+		}
+	}
+	return result;
 }
 
 void IcebergAvroMultiFileReader::FinalizeChunk(ClientContext &context, const MultiFileBindData &bind_data,
