@@ -96,4 +96,4 @@ jobs:
           SECRETS_CREATED_AND_CATALOG_ATTACHED: 1
         run: |
           ./build/release/test/unittest "$PWD/test/sql/local/irc_any_catalog/*" --list-test-names-only || true
-          ./build/release/test/unittest "$PWD/test/sql/local/irc_any_catalog/*" --test-config test/configs/nessie.json  --autoloading available
+          ./build/release/test/unittest "$PWD/test/sql/local/irc_any_catalog/*" --test-config test/configs/nessie.json
