@@ -143,6 +143,9 @@ public:
 	physical_index_vector_t<idx_t> column_index_map;
 	//! The physical copy used internally by this insert
 	unique_ptr<PhysicalOperator> physical_copy_to_file;
+	//! When set, this insert is part of an UPDATE: points to the delete operator so Finalize
+	//! can call AddUpdateSnapshot instead of AddSnapshot.
+	optional_ptr<PhysicalOperator> update_delete_op;
 
 public:
 	// Source interface
