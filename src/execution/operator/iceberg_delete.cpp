@@ -254,6 +254,7 @@ void IcebergDelete::FlushDeletes(IcebergTransaction &transaction, ClientContext 
 
 		IcebergDeleteFileInfo delete_file;
 		delete_file.data_file_path = filename;
+		delete_file.partition_info = multi_file_list.GetPartitionInfoForDataFile(filename);
 
 		auto &fs = FileSystem::GetFileSystem(context);
 
@@ -265,8 +266,15 @@ void IcebergDelete::FlushDeletes(IcebergTransaction &transaction, ClientContext 
 		}
 
 		string delete_filename = UUID::ToString(UUID::GenerateRandomUUID()) + "-deletes." + file_format;
-		string delete_file_path =
-		    fs.JoinPath(table.table_info.table_metadata.location, fs.JoinPath("data", delete_filename));
+		// Place the delete file in the same directory as the data file it references,
+		// so that for partitioned tables it lands in the correct partition folder.
+		auto sep = fs.PathSeparator(filename);
+		auto last_sep = filename.rfind(sep);
+		if (last_sep == string::npos) {
+			throw InvalidConfigurationException("Cannot create valid file path for delete file");
+		}
+		string data_file_dir = filename.substr(0, last_sep);
+		string delete_file_path = fs.JoinPath(data_file_dir, delete_filename);
 
 		delete_file.file_name = delete_file_path;
 
@@ -306,6 +314,8 @@ vector<IcebergManifestEntry> IcebergDelete::GenerateDeleteManifestEntries(Iceber
 		data_file.upper_bounds[MultiFileReader::FILENAME_FIELD_ID] = Value::BLOB(data_file_name);
 		// set referenced_data_file
 		data_file.referenced_data_file = data_file_name;
+		// copy partition info from the data file being deleted
+		data_file.partition_info = delete_file.partition_info;
 		iceberg_delete_files.push_back(manifest_entry);
 	}
 	return iceberg_delete_files;
@@ -442,10 +452,6 @@ PhysicalOperator &IcebergCatalog::PlanDelete(ClientContext &context, PhysicalPla
 		throw NotImplementedException(error_message);
 	}
 
-	auto &partition_spec = ic_table_entry.table_info.table_metadata.GetLatestPartitionSpec();
-	if (!partition_spec.IsUnpartitioned()) {
-		throw NotImplementedException("Delete from a partitioned table is not supported yet");
-	}
 	auto &iceberg_delete = IcebergDelete::PlanDelete(context, planner, ic_table_entry, plan, row_id_indexes);
 	return iceberg_delete;
 }
