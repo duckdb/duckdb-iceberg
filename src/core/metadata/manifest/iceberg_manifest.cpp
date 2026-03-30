@@ -96,9 +96,12 @@ IcebergDataFile::GetExtendedPartitionInfo(const IcebergTableMetadata &metadata) 
 		for (auto &field : spec_pair.second.fields) {
 			auto type_it = source_id_to_type.find(field.source_id);
 			if (type_it == source_id_to_type.end()) {
-				throw InternalException("Partition %s with field_id %llu in data_file %s with source_id %llu not found in any table schema", field.name, field.partition_field_id, file_path, field.source_id);
+				throw InternalException(
+				    "Partition %s with field_id %llu in data_file %s with source_id %llu not found in any table schema",
+				    field.name, field.partition_field_id, file_path, field.source_id);
 			}
-			field_id_to_partition_spec_and_source_type.emplace(field.partition_field_id, ParitionFieldWithSourceType {&field, type_it->second});
+			field_id_to_partition_spec_and_source_type.emplace(field.partition_field_id,
+			                                                   ParitionFieldWithSourceType {&field, type_it->second});
 		}
 	}
 
