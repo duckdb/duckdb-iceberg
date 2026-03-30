@@ -119,6 +119,7 @@ IcebergDataFile::GetExtendedPartitionInfo(const IcebergTableMetadata &metadata) 
 		extended.value = info.value;
 		extended.source_id = resolved.field->source_id;
 		extended.transform = resolved.field->transform;
+		extended.data_file_friendly_name = extended.transform.GetDataFileFriendlyName(extended.name);
 		D_ASSERT(resolved.source_type);
 		extended.source_type = *resolved.source_type;
 		ret.push_back(std::move(extended));
@@ -259,7 +260,7 @@ Value IcebergDataFile::ToValue(const IcebergTableMetadata &table_metadata, const
 			const LogicalType actual_type = partition_result_type;
 			bool cast_worked = entry.value.DefaultTryCastAs(actual_type, new_value, &error_message, true);
 			if (cast_worked) {
-				partition_children.emplace_back(entry.name, new_value);
+				partition_children.emplace_back(entry.data_file_friendly_name, new_value);
 			} else {
 				throw InvalidInputException("Could not cast %s to %s", entry.value.type().ToString(),
 				                            actual_type.ToString());
@@ -383,14 +384,14 @@ static LogicalType PartitionStructType(vector<IcebergExtendedPartitionInfo> exte
 			switch (entry.transform.Type()) {
 			case IcebergTransformType::TRUNCATE:
 			case IcebergTransformType::IDENTITY:
-				children.emplace_back(entry.name, entry.source_type);
+				children.emplace_back(entry.data_file_friendly_name, entry.source_type);
 				break;
 			case IcebergTransformType::BUCKET:
 			case IcebergTransformType::DAY:
 			case IcebergTransformType::MONTH:
 			case IcebergTransformType::YEAR:
 			case IcebergTransformType::HOUR:
-				children.emplace_back(entry.name, LogicalType::INTEGER);
+				children.emplace_back(entry.data_file_friendly_name, LogicalType::INTEGER);
 				break;
 			case IcebergTransformType::INVALID:
 			case IcebergTransformType::VOID:
@@ -533,7 +534,7 @@ idx_t WriteToFile(const IcebergTableMetadata &table_metadata, const IcebergManif
 		partition.emplace_back("__duckdb_field_id", Value::INTEGER(PARTITION));
 		partition.emplace_back("__duckdb_nullable", Value::BOOLEAN(false));
 		for (auto &entry : extended_partition_info) {
-			partition.emplace_back(entry.name, Value::INTEGER(static_cast<int32_t>(entry.field_id)));
+			partition.emplace_back(entry.data_file_friendly_name, Value::INTEGER(static_cast<int32_t>(entry.field_id)));
 		}
 		data_file_field_ids.emplace_back("partition", Value::STRUCT(partition));
 
@@ -547,7 +548,7 @@ idx_t WriteToFile(const IcebergTableMetadata &table_metadata, const IcebergManif
 		if (!extended_partition_info.empty()) {
 			for (auto &entry : extended_partition_info) {
 				auto field_obj = yyjson_mut_arr_add_obj(doc, partition_fields);
-				yyjson_mut_obj_add_strcpy(doc, field_obj, "name", entry.name.c_str());
+				yyjson_mut_obj_add_strcpy(doc, field_obj, "name", entry.data_file_friendly_name.c_str());
 				auto types_arr = yyjson_mut_obj_add_arr(doc, field_obj, "type");
 				yyjson_mut_arr_add_strcpy(doc, types_arr, "null");
 				// TODO: Is this correct? I don't think so.

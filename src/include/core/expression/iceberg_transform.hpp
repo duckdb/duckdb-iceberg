@@ -42,6 +42,7 @@ public:
 	LogicalType GetSerializedType(const LogicalType &input) const;
 	LogicalType GetBoundsType(const LogicalType &input) const;
 	void SetBucketOrTruncateValue(idx_t value);
+	string GetDataFileFriendlyName(string &column_name);
 
 private:
 	//! Preserve the input for debugging

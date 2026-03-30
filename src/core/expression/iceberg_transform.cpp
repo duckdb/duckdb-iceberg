@@ -1,3 +1,4 @@
+#include "../../include/core/expression/iceberg_transform.hpp"
 #include "core/expression/iceberg_transform.hpp"
 
 #include "duckdb/common/string_util.hpp"
@@ -74,6 +75,22 @@ LogicalType IcebergTransform::GetBoundsType(const LogicalType &input) const {
 		throw InvalidConfigurationException("Can't produce a result type for transform %s and input type %s",
 		                                    raw_transform, input.ToString());
 	}
+}
+
+string IcebergTransform::GetDataFileFriendlyName(string &column_name) {
+	string result = column_name;
+	for (idx_t i = 0; i < result.size(); i++) {
+		char c = result[i];
+		bool valid = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_';
+		if (!valid) {
+			result[i] = '_';
+		}
+	}
+	// Avro names must not start with a digit
+	if (!result.empty() && result[0] >= '0' && result[0] <= '9') {
+		result = "_" + result;
+	}
+	return result;
 }
 
 LogicalType IcebergTransform::GetSerializedType(const LogicalType &input) const {

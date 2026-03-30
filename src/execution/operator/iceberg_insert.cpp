@@ -536,15 +536,55 @@ static unique_ptr<Expression> GetDateDiffFunction(ClientContext &context, Iceber
 	return function;
 }
 
-//! Get the partition expression for a partition field based on its transform type
-static unique_ptr<Expression> GetPartitionExpression(ClientContext &context, IcebergCopyInput &copy_input,
-                                                     const IcebergPartitionSpecField &field) {
+//! Get an iceberg_bucket(col, N) expression for bucket partition transforms
+static unique_ptr<Expression> GetBucketExpression(ClientContext &context, IcebergCopyInput &copy_input,
+                                                  const IcebergPartitionSpecField &field) {
 	auto col_idx = GetColumnIndexBySourceId(copy_input.table_schema->columns, field.source_id);
 	auto col_type = GetSourceColumnType(copy_input, field.source_id);
 
+	vector<unique_ptr<Expression>> children;
+	children.push_back(CreateColumnReference(copy_input, col_type, col_idx));
+	children.push_back(
+	    make_uniq<BoundConstantExpression>(Value::INTEGER(static_cast<int32_t>(field.transform.GetBucketModulo()))));
+
+	ErrorData error;
+	FunctionBinder binder(context);
+	auto function = binder.BindScalarFunction(DEFAULT_SCHEMA, "iceberg_bucket", std::move(children), error, false);
+	if (!function) {
+		error.Throw();
+	}
+	return function;
+}
+
+//! Get an iceberg_truncate(col, W) expression for truncate partition transforms
+static unique_ptr<Expression> GetTruncateExpression(ClientContext &context, IcebergCopyInput &copy_input,
+                                                    const IcebergPartitionSpecField &field) {
+	auto col_idx = GetColumnIndexBySourceId(copy_input.table_schema->columns, field.source_id);
+	auto col_type = GetSourceColumnType(copy_input, field.source_id);
+
+	vector<unique_ptr<Expression>> children;
+	children.push_back(CreateColumnReference(copy_input, col_type, col_idx));
+	children.push_back(
+	    make_uniq<BoundConstantExpression>(Value::INTEGER(static_cast<int32_t>(field.transform.GetTruncateWidth()))));
+
+	ErrorData error;
+	FunctionBinder binder(context);
+	auto function = binder.BindScalarFunction(DEFAULT_SCHEMA, "iceberg_truncate", std::move(children), error, false);
+	if (!function) {
+		error.Throw();
+	}
+	return function;
+}
+
+//! Get the partition expression for a partition field based on its transform type
+static unique_ptr<Expression> GetPartitionExpression(ClientContext &context, IcebergCopyInput &copy_input,
+                                                     const IcebergPartitionSpecField &field) {
 	switch (field.transform.Type()) {
-	case IcebergTransformType::IDENTITY:
+	case IcebergTransformType::IDENTITY: {
+		auto col_idx = GetColumnIndexBySourceId(copy_input.table_schema->columns, field.source_id);
+		auto col_type = GetSourceColumnType(copy_input, field.source_id);
 		return CreateColumnReference(copy_input, col_type, col_idx);
+	}
 	case IcebergTransformType::YEAR:
 		return GetDateDiffFunction(context, copy_input, "year", field.source_id);
 	case IcebergTransformType::MONTH:
@@ -554,9 +594,9 @@ static unique_ptr<Expression> GetPartitionExpression(ClientContext &context, Ice
 	case IcebergTransformType::HOUR:
 		return GetDateDiffFunction(context, copy_input, "hour", field.source_id);
 	case IcebergTransformType::BUCKET:
-		throw NotImplementedException("BUCKET partition transform is not yet supported for INSERT");
+		return GetBucketExpression(context, copy_input, field);
 	case IcebergTransformType::TRUNCATE:
-		throw NotImplementedException("TRUNCATE partition transform is not yet supported for INSERT");
+		return GetTruncateExpression(context, copy_input, field);
 	case IcebergTransformType::VOID:
 		throw InvalidInputException("VOID partition transform should not be used for partitioning");
 	default:
@@ -575,20 +615,6 @@ static void GeneratePartitionExpressions(ClientContext &context, IcebergCopyInpu
 	auto &projection_names = result.names;
 	auto &projection_types = result.expected_types;
 	auto &write_partition_columns = result.write_partition_columns;
-
-	// Check for unsupported transforms early
-	for (auto &field : spec.fields) {
-		if (field.transform.Type() == IcebergTransformType::VOID) {
-			// Skip void transforms - they don't produce partition values
-			continue;
-		}
-		if (field.transform.Type() == IcebergTransformType::BUCKET) {
-			throw NotImplementedException("BUCKET partition transform is not yet supported for INSERT");
-		}
-		if (field.transform.Type() == IcebergTransformType::TRUNCATE) {
-			throw NotImplementedException("TRUNCATE partition transform is not yet supported for INSERT");
-		}
-	}
 
 	if (AllIdentityTransforms(spec)) {
 		// All transforms are identity - we can partition on the columns directly

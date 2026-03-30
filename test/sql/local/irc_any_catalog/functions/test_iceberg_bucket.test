@@ -1,0 +1,142 @@
+# name: test/sql/local/irc_any_catalog/functions/test_iceberg_bucket.test
+# description: Test iceberg_bucket scalar function against Iceberg spec hash vectors
+# group: [functions]
+
+# Spec: https://iceberg.apache.org/spec/#appendix-b-32-bit-hash-requirements
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+# ---- NULL handling ----
+# Iceberg spec: all transforms return null for null input
+
+query I
+SELECT iceberg_bucket(NULL, 16);
+----
+NULL
+
+query I
+SELECT iceberg_bucket(NULL, 16);
+----
+NULL
+
+query I
+SELECT iceberg_bucket(NULL, 16);
+----
+NULL
+
+query I
+SELECT iceberg_bucket(NULL, 16);
+----
+NULL
+
+# ---- Return type is always INTEGER ----
+
+query I
+SELECT typeof(iceberg_bucket(42::INTEGER, 16));
+----
+INTEGER
+
+query I
+SELECT typeof(iceberg_bucket(42::BIGINT, 16));
+----
+INTEGER
+
+query I
+SELECT typeof(iceberg_bucket('hello', 16));
+----
+INTEGER
+
+query I
+SELECT typeof(iceberg_bucket('2023-01-01'::DATE, 16));
+----
+INTEGER
+
+query I
+SELECT typeof(iceberg_bucket('2023-01-01'::TIMESTAMP, 16));
+----
+INTEGER
+
+query I
+SELECT typeof(iceberg_bucket('2023-01-01'::TIMESTAMPTZ, 16));
+----
+INTEGER
+
+query I
+SELECT typeof(iceberg_bucket('\x01\x02'::BLOB, 16));
+----
+INTEGER
+
+# ---- Spec test vectors ----
+# hash(0L) = 1669671676  =>  (& 0x7FFFFFFF) % 16 = 12
+query I
+SELECT iceberg_bucket(0, 16);
+----
+12
+
+# hash(0L) = 1669671676  =>  (& 0x7FFFFFFF) % 100 = 76
+query I
+SELECT iceberg_bucket(0, 100);
+----
+76
+
+# INTEGER is sign-extended to BIGINT before hashing, so same result
+query I
+SELECT iceberg_bucket(0, 100);
+----
+76
+
+# hash("iceberg") = 1210000089  =>  (& 0x7FFFFFFF) % 100 = 89
+query I
+SELECT iceberg_bucket('iceberg', 100);
+----
+89
+
+# hash(date("2017-11-16")) = hash(17486L) = -653330422
+# (-653330422 & 0x7FFFFFFF) % 100 = 1494153226 % 100 = 26
+query I
+SELECT iceberg_bucket('2017-11-16'::DATE, 100);
+----
+26
+
+# ---- Result is always in range [0, num_buckets) ----
+
+query I
+SELECT bool_and(iceberg_bucket(range, 16) BETWEEN 0 AND 15)
+FROM range(1000);
+----
+true
+
+query I
+SELECT bool_and(iceberg_bucket(range, 4) BETWEEN 0 AND 3)
+FROM range(1000);
+----
+true
+
+query I
+SELECT bool_and(iceberg_bucket(range, 7) BETWEEN 0 AND 6)
+FROM range(1000);
+----
+true
+
+# ---- Deterministic: same input always yields same bucket ----
+
+query I
+SELECT count(DISTINCT iceberg_bucket(v, 8)) = count(DISTINCT iceberg_bucket(v, 8))
+FROM (SELECT range AS v FROM range(100)) t;
+----
+true
+
+
+statement error
+SELECT iceberg_bucket(1000, 0);
+----
+<REGEX>:.*modulo must be a positive integer.*
