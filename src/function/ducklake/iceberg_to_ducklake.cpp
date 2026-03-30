@@ -603,21 +603,21 @@ public:
 				auto contains_nan = stats.contains_nan ? "true" : "false";
 				auto min_value = stats.min_value.IsNull() ? "NULL" : "'" + stats.min_value.ToString() + "'";
 				auto max_value = stats.max_value.IsNull() ? "NULL" : "'" + stats.max_value.ToString() + "'";
-				auto values = StringUtil::Format(TABLE_COLUMN_STATS_SQL,
-				                                 // table_id
-				                                 table_id,
-				                                 // column_id
-				                                 column_id,
-				                                 // contains_null
-				                                 contains_null,
-				                                 // contains_nan
-				                                 contains_nan,
-				                                 // min_value
-				                                 min_value,
-				                                 // max_value
-				                                 max_value,
-				                                 // extra_stats
-				                                 "NULL");
+				auto insert_statement = StringUtil::Format(TABLE_COLUMN_STATS_SQL,
+				                                           // table_id
+				                                           table_id,
+				                                           // column_id
+				                                           column_id,
+				                                           // contains_null
+				                                           contains_null,
+				                                           // contains_nan
+				                                           contains_nan,
+				                                           // min_value
+				                                           min_value,
+				                                           // max_value
+				                                           max_value,
+				                                           // extra_stats
+				                                           "NULL");
 				sql.push_back(insert_statement);
 			}
 		}
@@ -951,7 +951,6 @@ static void IcebergToDuckLakeFunction(ClientContext &context, TableFunctionInput
 	auto &statements = bind_data.sql_statements;
 
 	auto query = StringUtil::Join(statements, "\n");
-	Printer::Print(query);
 	query = StringUtil::Replace(query, "{METADATA_CATALOG}", StringUtil::Format("%s", global_state.metadata_catalog));
 	auto result = connection.Query(query);
 	if (result->HasError()) {
