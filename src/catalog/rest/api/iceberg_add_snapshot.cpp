@@ -43,7 +43,7 @@ static IcebergManifestListEntry ScanExistingManifestFile(const IcebergManifestFi
 
 	IcebergSnapshotScanInfo snapshot_info;
 	snapshot_info.snapshot = commit_state.latest_snapshot;
-	snapshot_info.schema_id = table_metadata.current_schema_id;
+	snapshot_info.schema_id = table_metadata.GetCurrentSchemaId();
 
 	auto manifest_scan =
 	    AvroScan::ScanManifest(snapshot_info, manifest_files, options, fs, "", table_metadata, commit_state.context);
@@ -187,7 +187,7 @@ void IcebergAddSnapshot::CreateUpdate(DatabaseInstance &db, ClientContext &conte
 	new_snapshot.operation = IcebergSnapshotOperationType::OVERWRITE;
 	new_snapshot.snapshot_id = snapshot_id;
 	new_snapshot.sequence_number = sequence_number;
-	new_snapshot.SetSchemaId(table_metadata.current_schema_id);
+	new_snapshot.SetSchemaId(table_metadata.GetCurrentSchemaId());
 	new_snapshot.manifest_list = manifest_list_path;
 	new_snapshot.timestamp_ms = Timestamp::GetEpochMs(Timestamp::GetCurrentTimestamp());
 

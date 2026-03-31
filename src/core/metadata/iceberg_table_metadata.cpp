@@ -121,7 +121,7 @@ IcebergSnapshotScanInfo IcebergTableMetadata::GetSnapshot(const IcebergSnapshotL
 	switch (lookup.GetSource()) {
 	case SnapshotSource::LATEST:
 		snapshot_info.snapshot = GetLatestSnapshot();
-		snapshot_info.schema_id = current_schema_id;
+		snapshot_info.schema_id = GetCurrentSchemaId();
 		return snapshot_info;
 	case SnapshotSource::FROM_ID:
 		snapshot_info.snapshot = GetSnapshotById(lookup.snapshot_id);
@@ -273,6 +273,14 @@ bool IcebergTableMetadata::HasLastColumnId() const {
 
 idx_t IcebergTableMetadata::GetLastColumnId() const {
 	return last_column_id.GetIndex();
+}
+
+void IcebergTableMetadata::SetCurrentSchemaId(int32_t value) {
+	current_schema_id = value;
+}
+
+int32_t IcebergTableMetadata::GetCurrentSchemaId() const {
+	return current_schema_id;
 }
 
 bool IcebergTableMetadata::HasLastPartitionId() const {

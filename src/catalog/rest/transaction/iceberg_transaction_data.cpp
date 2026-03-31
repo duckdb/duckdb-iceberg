@@ -35,7 +35,7 @@ void IcebergTransactionData::CacheExistingManifestList(lock_guard<mutex> &guard,
 
 	IcebergSnapshotScanInfo snapshot_info;
 	snapshot_info.snapshot = current_snapshot;
-	snapshot_info.schema_id = metadata.current_schema_id;
+	snapshot_info.schema_id = metadata.GetCurrentSchemaId();
 
 	auto &manifest_list_path = current_snapshot->manifest_list;
 	//! Read the manifest list

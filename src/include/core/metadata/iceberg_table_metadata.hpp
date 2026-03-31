@@ -78,6 +78,10 @@ public:
 	void WriteMetadata(ClientContext &context, const string &path) const;
 	void WriteVersionHint(ClientContext &context, const string &path, const string &metadata_json_path) const;
 
+public:
+	void SetCurrentSchemaId(int32_t schema_id);
+	int32_t GetCurrentSchemaId() const;
+
 private:
 	yyjson_mut_val *SchemasToJSON(yyjson_mut_doc *doc) const;
 	yyjson_mut_val *PartitionsToJSON(yyjson_mut_doc *doc) const;
@@ -93,7 +97,6 @@ public:
 	string location;
 
 	int32_t iceberg_version;
-	int32_t current_schema_id;
 	int32_t default_spec_id;
 	bool has_next_row_id = false;
 	int64_t next_row_id = 0xDEADBEEF;
@@ -123,6 +126,9 @@ public:
 
 	//! table properties
 	case_insensitive_map_t<string> table_properties;
+
+private:
+	int32_t current_schema_id;
 };
 
 } // namespace duckdb

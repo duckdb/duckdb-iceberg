@@ -537,7 +537,7 @@ IcebergTableInformation IcebergTableInformation::Copy(IcebergTransaction &iceber
 
 	auto &snapshot = snapshot_info.snapshot;
 	D_ASSERT(snapshot);
-	ret.table_metadata.current_schema_id = snapshot_info.schema_id;
+	ret.table_metadata.SetCurrentSchemaId(snapshot_info.schema_id);
 	ret.table_metadata.last_sequence_number = snapshot->sequence_number;
 	ret.table_metadata.current_snapshot_id = snapshot->snapshot_id;
 	return ret;
