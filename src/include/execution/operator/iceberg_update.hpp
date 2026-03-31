@@ -33,7 +33,6 @@ public:
 	//! Index of the _row_id column in the input scan chunk (v3 only)
 	optional_idx row_id_index;
 	vector<unique_ptr<Expression>> expressions;
-	vector<unique_ptr<Expression>> bound_defaults;
 
 public:
 	static IcebergUpdate &PlanUpdateOperator(ClientContext &context, PhysicalPlanGenerator &planner, LogicalUpdate &op,

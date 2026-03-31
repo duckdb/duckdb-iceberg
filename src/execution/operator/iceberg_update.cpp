@@ -18,15 +18,25 @@ namespace duckdb {
 IcebergUpdate::IcebergUpdate(PhysicalPlan &physical_plan, IcebergTableEntry &table, vector<PhysicalIndex> columns_p,
                              PhysicalOperator &child, PhysicalOperator &delete_op_p,
                              vector<unique_ptr<Expression>> expressions_p,
-                             vector<unique_ptr<Expression>> bound_defaults_p)
+                             vector<unique_ptr<Expression>> bound_defaults)
     : PhysicalOperator(physical_plan, PhysicalOperatorType::EXTENSION, {}, 1), table(table),
-      columns(std::move(columns_p)), delete_op(delete_op_p), expressions(std::move(expressions_p)),
-      bound_defaults(std::move(bound_defaults_p)) {
+      columns(std::move(columns_p)), delete_op(delete_op_p), expressions(std::move(expressions_p)) {
 	children.push_back(child);
 	auto &table_metadata = table.table_info.table_metadata;
 	if (table_metadata.iceberg_version >= 3) {
 		//! For v3, _row_id is the virtual column appended right after physical columns by DuckDB
 		row_id_index = columns.size();
+	}
+
+	if (!bound_defaults.empty()) {
+		//! Replace the DEFAULT expression with the bound version
+		D_ASSERT(bound_defaults.size() == expressions.size());
+		for (idx_t i = 0; i < expressions.size(); i++) {
+			auto &expr = expressions[i];
+			if (expr->type == ExpressionType::VALUE_DEFAULT) {
+				expr = bound_defaults[i]->Copy();
+			}
+		}
 	}
 }
 
@@ -49,9 +59,19 @@ IcebergUpdate &IcebergUpdate::PlanUpdateOperator(ClientContext &context, Physica
 	vector<idx_t> row_id_indexes = {0, 1};
 	auto &delete_op = IcebergDelete::PlanDelete(context, planner, table, child_plan, std::move(row_id_indexes));
 
+	// build update expressions (physical columns only, no partition cols, no casts)
+	vector<unique_ptr<Expression>> expressions;
+	unordered_map<idx_t, idx_t> expression_map;
+	for (idx_t i = 0; i < op.columns.size(); i++) {
+		expression_map[op.columns[i].index] = i;
+	}
+	for (idx_t i = 0; i < op.columns.size(); i++) {
+		expressions.push_back(op.expressions[expression_map[i]]->Copy());
+	}
+
 	// Create the IcebergUpdate intermediate operator
 	auto &update_op = planner
-	                      .Make<IcebergUpdate>(table, op.columns, child_plan, delete_op, std::move(op.expressions),
+	                      .Make<IcebergUpdate>(table, op.columns, child_plan, delete_op, std::move(expressions),
 	                                           std::move(op.bound_defaults))
 	                      .Cast<IcebergUpdate>();
 
@@ -77,25 +97,11 @@ public:
 
 class IcebergUpdateLocalState : public OperatorState {
 public:
-	IcebergUpdateLocalState(ClientContext &context, const vector<unique_ptr<Expression>> &expressions,
-	                        const vector<unique_ptr<Expression>> &bound_defaults)
-	    : default_executor(context, bound_defaults) {
-		auto &allocator = Allocator::Get(context);
-		vector<LogicalType> update_types;
-		update_types.reserve(expressions.size());
-		for (auto &expr : expressions) {
-			update_types.push_back(expr->return_type);
-		}
-		update_chunk.Initialize(allocator, update_types);
-
-		vector<LogicalType> delete_types = {LogicalType::VARCHAR, LogicalType::BIGINT};
-		delete_chunk.Initialize(allocator, delete_types);
-	}
-
-public:
-	ExpressionExecutor default_executor;
 	unique_ptr<LocalSinkState> delete_local_state;
-	DataChunk update_chunk;
+	unique_ptr<ExpressionExecutor> expression_executor;
+	//! Chunk where the updated expressions are executed.
+	DataChunk update_expression_chunk;
+	DataChunk insert_chunk;
 	DataChunk delete_chunk;
 	idx_t updated_count = 0;
 };
@@ -107,8 +113,22 @@ unique_ptr<GlobalOperatorState> IcebergUpdate::GetGlobalOperatorState(ClientCont
 }
 
 unique_ptr<OperatorState> IcebergUpdate::GetOperatorState(ExecutionContext &context) const {
-	auto result = make_uniq<IcebergUpdateLocalState>(context.client, expressions, bound_defaults);
+	auto result = make_uniq<IcebergUpdateLocalState>();
 	result->delete_local_state = delete_op.GetLocalSinkState(context);
+
+	vector<LogicalType> expression_types;
+	result->expression_executor = make_uniq<ExpressionExecutor>(context.client, expressions);
+	for (auto &expr : result->expression_executor->expressions) {
+		expression_types.push_back(expr->return_type);
+	}
+
+	result->update_expression_chunk.Initialize(context.client, expression_types);
+	result->insert_chunk.Initialize(context.client, types);
+
+	vector<LogicalType> delete_types;
+	delete_types.emplace_back(LogicalType::VARCHAR);
+	delete_types.emplace_back(LogicalType::BIGINT);
+	result->delete_chunk.Initialize(context.client, delete_types);
 	return std::move(result);
 }
 
@@ -119,36 +139,27 @@ OperatorResultType IcebergUpdate::Execute(ExecutionContext &context, DataChunk &
                                           GlobalOperatorState &gstate_p, OperatorState &state_p) const {
 	auto &lstate = state_p.Cast<IcebergUpdateLocalState>();
 
-	input.Flatten();
-	lstate.default_executor.SetChunk(input);
+	// evaluate update expressions
+	auto &update_expression_chunk = lstate.update_expression_chunk;
+	auto &insert_chunk = lstate.insert_chunk;
 
-	// Evaluate update expressions into update_chunk
-	DataChunk &update_chunk = lstate.update_chunk;
-	update_chunk.Reset();
-	update_chunk.SetCardinality(input);
+	update_expression_chunk.SetCardinality(input.size());
+	insert_chunk.SetCardinality(input.size());
+	lstate.expression_executor->Execute(input, update_expression_chunk);
 
-	for (idx_t i = 0; i < expressions.size(); i++) {
-		if (expressions[i]->GetExpressionType() == ExpressionType::VALUE_DEFAULT) {
-			lstate.default_executor.ExecuteExpression(columns[i].index, update_chunk.data[i]);
-			continue;
-		}
-		D_ASSERT(expressions[i]->GetExpressionType() == ExpressionType::BOUND_REF);
-		auto &binding = expressions[i]->Cast<BoundReferenceExpression>();
-		update_chunk.data[i].Reference(input.data[binding.index]);
-	}
-
-	// Build the output chunk: [physical_col0..colN-1, _row_id (v3 only)]
-	// This output feeds into PlanCopyForInsert which adds partition projections on top.
-	chunk.SetCardinality(input.size());
-	for (idx_t i = 0; i < columns.size(); i++) {
-		chunk.data[columns[i].index].Reference(update_chunk.data[i]);
+	// build output, physical columns + row_id
+	const idx_t physical_column_count = columns.size();
+	for (idx_t i = 0; i < physical_column_count; i++) {
+		insert_chunk.data[i].Reference(update_expression_chunk.data[i]);
 	}
 	if (row_id_index.IsValid()) {
 		// _row_id is the 3rd column from the end in the scan output:
 		// [..., _row_id, file_path, seq_row_id]
 		auto index = input.ColumnCount() - 3;
-		chunk.data[row_id_index.GetIndex()].Reference(input.data[index]);
+		insert_chunk.data[physical_column_count].Reference(input.data[index]);
 	}
+
+	chunk.Reference(insert_chunk);
 
 	// Sink the delete tracking columns (last 2 columns: file_path, row_id)
 	auto &delete_chunk = lstate.delete_chunk;

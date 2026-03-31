@@ -120,7 +120,9 @@ static unique_ptr<MergeIntoOperator> IcebergPlanMergeIntoAction(IcebergCatalog &
 		auto &update_op = IcebergUpdate::PlanUpdateOperator(context, planner, update, child_plan, copy_input);
 
 		// The row_id comes before the deletion information, that is always the 3 last column of the chunk.
-		update_op.row_id_index = child_plan.types.size() - 4;
+		if (table_metadata.iceberg_version >= 3) {
+			update_op.row_id_index = child_plan.types.size() - 4;
+		}
 
 		// plan copy and insert
 		auto copy_options = IcebergInsert::GetCopyOptions(context, copy_input);
