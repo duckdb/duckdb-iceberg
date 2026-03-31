@@ -32,7 +32,7 @@
 namespace duckdb {
 
 struct IcebergPartitionStatsBindData : public TableFunctionData {
-	optional_ptr<const IcebergSnapshot> snapshot_to_scan;
+	IcebergSnapshotScanInfo snapshot_to_scan;
 	IcebergTableMetadata metadata;
 	shared_ptr<IcebergTableSchema> schema;
 	unordered_map<uint64_t, ColumnIndex> source_to_column_id;
@@ -84,18 +84,18 @@ static unique_ptr<FunctionData> IcebergPartitionStatsBind(ClientContext &context
 			}
 			options.version_name_format = value;
 		} else if (loption == "snapshot_from_id") {
-			if (snapshot_lookup.snapshot_source != SnapshotSource::LATEST) {
+			if (snapshot_lookup.GetSource() != SnapshotSource::LATEST) {
 				throw InvalidInputException(
 				    "Can't use 'snapshot_from_id' in combination with 'snapshot_from_timestamp'");
 			}
-			snapshot_lookup.snapshot_source = SnapshotSource::FROM_ID;
+			snapshot_lookup.SetSource(SnapshotSource::FROM_ID);
 			snapshot_lookup.snapshot_id = val.GetValue<uint64_t>();
 		} else if (loption == "snapshot_from_timestamp") {
-			if (snapshot_lookup.snapshot_source != SnapshotSource::LATEST) {
+			if (snapshot_lookup.GetSource() != SnapshotSource::LATEST) {
 				throw InvalidInputException(
 				    "Can't use 'snapshot_from_id' in combination with 'snapshot_from_timestamp'");
 			}
-			snapshot_lookup.snapshot_source = SnapshotSource::FROM_TIMESTAMP;
+			snapshot_lookup.SetSource(SnapshotSource::FROM_TIMESTAMP);
 			snapshot_lookup.snapshot_timestamp = val.GetValue<timestamp_t>();
 		}
 	}
@@ -106,10 +106,10 @@ static unique_ptr<FunctionData> IcebergPartitionStatsBind(ClientContext &context
 
 	ret->snapshot_to_scan = ret->metadata.GetSnapshot(options.snapshot_lookup);
 
-	if (ret->snapshot_to_scan) {
+	if (ret->snapshot_to_scan.snapshot) {
 		ret->iceberg_table =
-		    IcebergManifestList::Load(filename, ret->metadata, *ret->snapshot_to_scan, context, options);
-		ret->schema = ret->metadata.GetSchemaFromId(ret->snapshot_to_scan->schema_id);
+		    IcebergManifestList::Load(filename, ret->metadata, ret->snapshot_to_scan, context, options);
+		ret->schema = ret->metadata.GetSchemaFromId(ret->snapshot_to_scan.schema_id);
 
 		auto &schema = ret->schema->columns;
 		IcebergTableSchema::PopulateSourceIdMap(ret->source_to_column_id, schema, nullptr);

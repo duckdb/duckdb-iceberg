@@ -12,6 +12,7 @@
 
 #include "core/metadata/schema/iceberg_table_schema.hpp"
 #include "core/metadata/iceberg_table_metadata.hpp"
+#include "planning/snapshot/iceberg_snapshot_scan_info.hpp"
 
 namespace duckdb {
 
@@ -55,7 +56,7 @@ public:
 	Value ToValue(const IcebergTableMetadata &table_metadata, const LogicalType &type) const;
 
 public:
-	static map<idx_t, LogicalType> GetFieldIdToTypeMapping(const IcebergSnapshot &snapshot,
+	static map<idx_t, LogicalType> GetFieldIdToTypeMapping(const IcebergSnapshotScanInfo &snapshot_info,
 	                                                       const IcebergTableMetadata &metadata,
 	                                                       const unordered_set<int32_t> &partition_spec_ids);
 	static LogicalType PartitionStructType(const map<idx_t, LogicalType> &partition_field_id_to_type);

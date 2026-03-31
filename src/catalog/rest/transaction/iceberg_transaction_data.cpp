@@ -32,11 +32,15 @@ void IcebergTransactionData::CacheExistingManifestList(lock_guard<mutex> &guard,
 	if (!current_snapshot) {
 		return;
 	}
-	auto &snapshot = *current_snapshot;
 
-	auto &manifest_list_path = snapshot.manifest_list;
+	IcebergSnapshotScanInfo snapshot_info;
+	snapshot_info.snapshot = current_snapshot;
+	snapshot_info.schema_id = metadata.current_schema_id;
+
+	auto &manifest_list_path = current_snapshot->manifest_list;
 	//! Read the manifest list
-	auto scan = AvroScan::ScanManifestList(snapshot, metadata, context, manifest_list_path, existing_manifest_list);
+	auto scan =
+	    AvroScan::ScanManifestList(snapshot_info, metadata, context, manifest_list_path, existing_manifest_list);
 	auto manifest_list_reader = make_uniq<manifest_list::ManifestListReader>(*scan);
 	while (!manifest_list_reader->Finished()) {
 		manifest_list_reader->Read();
@@ -55,7 +59,7 @@ void IcebergTransactionData::CacheExistingManifestList(lock_guard<mutex> &guard,
 		if (manifest_file.has_first_row_id) {
 			continue;
 		}
-		if (snapshot.has_first_row_id) {
+		if (current_snapshot->has_first_row_id) {
 			throw InternalException("Table is corrupted, snapshot has 'first-row-id' but not all 'manifest_file' "
 			                        "entries have a 'first_row_id'");
 		}

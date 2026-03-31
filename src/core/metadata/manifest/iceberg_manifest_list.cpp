@@ -459,8 +459,9 @@ Value IcebergManifestList::FieldSummaryFieldIds() {
 
 unique_ptr<IcebergManifestList> IcebergManifestList::Load(const string &iceberg_path,
                                                           const IcebergTableMetadata &metadata,
-                                                          const IcebergSnapshot &snapshot, ClientContext &context,
-                                                          const IcebergOptions &options) {
+                                                          const IcebergSnapshotScanInfo &snapshot_info,
+                                                          ClientContext &context, const IcebergOptions &options) {
+	auto &snapshot = *snapshot_info.snapshot;
 	auto ret = make_uniq<IcebergManifestList>(snapshot.snapshot_id, snapshot.sequence_number, snapshot.manifest_list);
 
 	auto &fs = FileSystem::GetFileSystem(context);
@@ -469,7 +470,8 @@ unique_ptr<IcebergManifestList> IcebergManifestList::Load(const string &iceberg_
 	                                   : snapshot.manifest_list;
 
 	//! Read the entire manifest list, producing 'manifest_file' items
-	auto scan = AvroScan::ScanManifestList(snapshot, metadata, context, manifest_list_full_path, ret->manifest_entries);
+	auto scan =
+	    AvroScan::ScanManifestList(snapshot_info, metadata, context, manifest_list_full_path, ret->manifest_entries);
 	auto manifest_list_reader = make_uniq<manifest_list::ManifestListReader>(*scan);
 
 	while (!manifest_list_reader->Finished()) {
@@ -478,7 +480,7 @@ unique_ptr<IcebergManifestList> IcebergManifestList::Load(const string &iceberg_
 
 	//! Read all manifest files, producing 'manifest_entry' items
 	auto manifest_scan =
-	    AvroScan::ScanManifest(snapshot, ret->manifest_entries, options, fs, iceberg_path, metadata, context);
+	    AvroScan::ScanManifest(snapshot_info, ret->manifest_entries, options, fs, iceberg_path, metadata, context);
 	auto manifest_file_reader = make_uniq<manifest_file::ManifestReader>(*manifest_scan);
 
 	while (!manifest_file_reader->Finished()) {

@@ -57,7 +57,7 @@ public:
 	const IcebergTableMetadata &GetMetadata() const;
 	bool HasTransactionData() const;
 	const IcebergTransactionData &GetTransactionData() const;
-	optional_ptr<const IcebergSnapshot> GetSnapshot() const;
+	const IcebergSnapshotScanInfo &GetSnapshot() const;
 	const IcebergTableSchema &GetSchema() const;
 	bool FinishedScanningDeletes() const;
 

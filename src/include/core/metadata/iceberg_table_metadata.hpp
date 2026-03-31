@@ -10,6 +10,7 @@
 #include "core/metadata/sort/iceberg_sort_order.hpp"
 #include "iceberg_options.hpp"
 #include "rest_catalog/objects/list.hpp"
+#include "planning/snapshot/iceberg_snapshot_scan_info.hpp"
 
 namespace duckdb {
 
@@ -56,7 +57,7 @@ public:
 	shared_ptr<IcebergTableSchema> GetSchemaFromId(int32_t schema_id) const;
 	optional_ptr<const IcebergPartitionSpec> FindPartitionSpecById(int32_t spec_id) const;
 	optional_ptr<const IcebergSortOrder> FindSortOrderById(int32_t sort_id) const;
-	optional_ptr<const IcebergSnapshot> GetSnapshot(const IcebergSnapshotLookup &lookup) const;
+	IcebergSnapshotScanInfo GetSnapshot(const IcebergSnapshotLookup &lookup) const;
 
 	//! Get the data and metadata paths, falling back to default if not set
 	const string &GetLatestMetadataJson() const;

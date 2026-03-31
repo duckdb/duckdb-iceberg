@@ -35,12 +35,12 @@ string IcebergManifestEntryStatusTypeToString(IcebergManifestEntryStatusType typ
 	}
 }
 
-map<idx_t, LogicalType> IcebergDataFile::GetFieldIdToTypeMapping(const IcebergSnapshot &snapshot,
+map<idx_t, LogicalType> IcebergDataFile::GetFieldIdToTypeMapping(const IcebergSnapshotScanInfo &snapshot_info,
                                                                  const IcebergTableMetadata &metadata,
                                                                  const unordered_set<int32_t> &partition_spec_ids) {
 	D_ASSERT(!partition_spec_ids.empty());
 	auto &partition_specs = metadata.GetPartitionSpecs();
-	auto &schema = *metadata.GetSchemaFromId(snapshot.schema_id);
+	auto &schema = *metadata.GetSchemaFromId(snapshot_info.schema_id);
 
 	unordered_map<uint64_t, ColumnIndex> source_to_column_id;
 	IcebergTableSchema::PopulateSourceIdMap(source_to_column_id, schema.columns, nullptr);
