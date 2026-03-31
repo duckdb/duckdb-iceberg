@@ -1,0 +1,66 @@
+# name: test/sql/local/irc_any_catalog/alter/alter_add_column_then_change.test
+# group: [alter]
+
+require-env ICEBERG_SERVER_AVAILABLE
+
+require-env SECRETS_CREATED_AND_CATALOG_ATTACHED
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+CREATE SCHEMA IF NOT EXISTS my_datalake.default;
+
+statement ok
+drop table if exists my_datalake.default.alter_add_column_same_txn_table;
+
+statement ok
+CREATE TABLE my_datalake.default.alter_add_column_same_txn_table AS (select range a FROM range(10));
+
+statement ok
+ALTER TABLE my_datalake.default.alter_add_column_same_txn_table ADD COLUMN b int;
+
+query II
+FROM my_datalake.default.alter_add_column_same_txn_table;
+----
+0	NULL
+1	NULL
+2	NULL
+3	NULL
+4	NULL
+5	NULL
+6	NULL
+7	NULL
+8	NULL
+9	NULL
+
+statement ok
+INSERT INTO my_datalake.default.alter_add_column_same_txn_table VALUES (42, 42);
+
+statement ok
+DELETE FROM my_datalake.default.alter_add_column_same_txn_table WHERE a=1;
+
+statement ok
+UPDATE my_datalake.default.alter_add_column_same_txn_table SET a=42 WHERE a=3;
+
+query II
+FROM my_datalake.default.alter_add_column_same_txn_table;
+----
+0	NULL
+2	NULL
+4	NULL
+5	NULL
+6	NULL
+7	NULL
+8	NULL
+9	NULL
+42	42
+42	NULL

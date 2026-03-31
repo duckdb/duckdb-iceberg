@@ -544,7 +544,11 @@ IcebergTableInformation IcebergTableInformation::Copy(IcebergTransaction &iceber
 	}
 
 	D_ASSERT(snapshot);
-	ret.table_metadata.current_schema_id = snapshot->schema_id;
+
+	// This used to override the new table_metadata.current_schema_id that was bumped after an `ALTER TABLE ... ADD
+	// COLUMN`. This ADD COLUMN resulted in NULLS only and didn't crete new parquet files, so only the schema was
+	// changed. That's why no new snapshot was made.
+	ret.table_metadata.current_schema_id = std::max(ret.table_metadata.current_schema_id, snapshot->schema_id);
 	ret.table_metadata.last_sequence_number = snapshot->sequence_number;
 	ret.table_metadata.current_snapshot_id = snapshot->snapshot_id;
 	return ret;
