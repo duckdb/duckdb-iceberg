@@ -445,6 +445,9 @@ void IcebergTableInformation::SetPartitionedBy(IcebergTransaction &transaction,
 
 optional_ptr<CatalogEntry> IcebergTableInformation::GetSchemaVersion(const IcebergSnapshotLookup &snapshot_lookup) {
 	D_ASSERT(!schema_versions.empty());
+	if (table_metadata.snapshots.empty()) {
+		return schema_versions[table_metadata.GetCurrentSchemaId()].get();
+	}
 	auto snapshot_info = table_metadata.GetSnapshot(snapshot_lookup);
 	return schema_versions[snapshot_info.schema_id].get();
 }
