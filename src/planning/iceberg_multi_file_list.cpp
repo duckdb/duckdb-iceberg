@@ -370,6 +370,22 @@ const BoundIcebergManifestEntry &IcebergMultiFileList::GetManifestEntry(idx_t fi
 	return data_manifest_entries[file_id];
 }
 
+vector<IcebergPartitionInfo> IcebergMultiFileList::GetPartitionInfoForDataFile(const string &file_path) const {
+	lock_guard<mutex> guard(lock);
+	auto iceberg_path = GetPath();
+	for (auto &bound_entry : data_manifest_entries) {
+		auto &data_file = bound_entry.entry.data_file;
+		string entry_path = data_file.file_path;
+		if (options.allow_moved_paths) {
+			entry_path = IcebergUtils::GetFullPath(iceberg_path, entry_path, fs);
+		}
+		if (StringUtil::CIEquals(entry_path, file_path)) {
+			return data_file.partition_info;
+		}
+	}
+	throw InternalException("Could not find data file '%s' in manifest entries", file_path);
+}
+
 const IcebergManifestFile &IcebergMultiFileList::GetManifestFileForEntry(const BoundIcebergManifestEntry &entry,
                                                                          IcebergManifestContentType type) const {
 	if (type == IcebergManifestContentType::DATA) {
@@ -452,6 +468,14 @@ bool IcebergMultiFileList::FileMatchesFilter(const IcebergManifestFile &manifest
 	auto &filters = table_filters.filters;
 	auto &schema = GetSchema().columns;
 
+	auto &metadata = GetMetadata();
+	unordered_set<int32_t> mapping_field_ids;
+	for (auto &mapping : metadata.mappings) {
+		if (mapping.field_id != NumericLimits<int32_t>::Maximum()) {
+			mapping_field_ids.insert(mapping.field_id);
+		}
+	}
+
 	for (idx_t index = 0; index < schema.size(); index++) {
 		auto &column = *schema[index];
 		auto it = filters.find(index);
@@ -459,7 +483,6 @@ bool IcebergMultiFileList::FileMatchesFilter(const IcebergManifestFile &manifest
 		if (it == filters.end()) {
 			continue;
 		}
-		auto &metadata = GetMetadata();
 		auto &data_file = manifest_entry.data_file;
 		// First check if there are partitions
 		if (!data_file.partition_info.empty()) {
@@ -531,6 +554,18 @@ bool IcebergMultiFileList::FileMatchesFilter(const IcebergManifestFile &manifest
 		}
 
 		auto &column_id = column.id;
+		if (!metadata.mappings.empty() && mapping_field_ids.find(column_id) == mapping_field_ids.end()) {
+			// The name-mapping isn't empty, but it doesn't contain this field.
+			// We take the conservative approach and assume that the name mapping is required to resolve this field.
+			// i.e: assume all of these are true:
+			// 1. parquet file doesn't contain field ids for this column.
+			// 2. no identity transform exists for this field.
+			// 3. the column has no initial-default
+			// When we assume that, the column becomes unreachable (entirely NULL), voiding the stats in the iceberg
+			// metadata. So we have to ignore this filter.
+			continue;
+		}
+
 		auto lower_bound_it = data_file.lower_bounds.find(column_id);
 		auto upper_bound_it = data_file.upper_bounds.find(column_id);
 		Value lower_bound;
