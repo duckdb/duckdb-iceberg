@@ -27,8 +27,8 @@ class OAuth2Authorization;
 constexpr column_t IcebergMultiFileReader::COLUMN_IDENTIFIER_LAST_SEQUENCE_NUMBER;
 
 IcebergTableEntry::IcebergTableEntry(IcebergTableInformation &table_info, Catalog &catalog, SchemaCatalogEntry &schema,
-                                     CreateTableInfo &info)
-    : TableCatalogEntry(catalog, schema, info), table_info(table_info) {
+                                     CreateTableInfo &info, optional_idx schema_id)
+    : TableCatalogEntry(catalog, schema, info), table_info(table_info), schema_id(schema_id) {
 	this->internal = false;
 }
 
@@ -170,6 +170,11 @@ TableFunction IcebergTableEntry::GetScanFunction(ClientContext &context, unique_
 	PrepareIcebergScanFromEntry(context);
 	auto storage_location = table_info.table_metadata.location;
 
+	if (!schema_id.IsValid()) {
+		throw InternalException("GetScanFunction was called with a dummy IcebergTableEntry, this should never happen");
+	}
+	const auto schema_id = this->schema_id.GetIndex();
+
 	named_parameter_map_t param_map;
 	vector<LogicalType> return_types;
 	vector<string> names;
@@ -213,6 +218,11 @@ TableFunction IcebergTableEntry::GetScanFunction(ClientContext &context, unique_
 	} else {
 		D_ASSERT(snapshot);
 		schema_id = snapshot->schema_id;
+	}
+	if (snapshot_info.schema_id != schema_id) {
+		throw InternalException(
+		    "Attempting to scan a schema_id (%d) that doesn't align with the schema id of the table entry (%d)!",
+		    snapshot_info.schema_id, schema_id);
 	}
 
 	auto &fs = FileSystem::GetFileSystem(context);

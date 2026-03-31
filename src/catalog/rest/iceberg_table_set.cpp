@@ -109,7 +109,7 @@ void IcebergTableSet::Scan(ClientContext &context, const std::function<void(Cata
 		auto col = ColumnDefinition(string("__"), LogicalType::UNKNOWN);
 		columns.push_back(std::move(col));
 		info.columns = ColumnList(std::move(columns));
-		auto table_entry = make_uniq<IcebergTableEntry>(table_info, catalog, schema, info);
+		auto table_entry = make_uniq<IcebergTableEntry>(table_info, catalog, schema, info, optional_idx());
 		if (!table_entry->internal) {
 			table_entry->internal = schema.internal;
 		}
@@ -206,9 +206,9 @@ IcebergTableInformation &IcebergTableSet::CreateNewEntry(ClientContext &context,
 	}
 	auto &table_info = emplace_res.first->second;
 	auto &table_metadata = table_info.table_metadata;
-	auto table_entry = make_uniq<IcebergTableEntry>(table_info, catalog, schema, info);
+	auto table_entry = make_uniq<IcebergTableEntry>(table_info, catalog, schema, info, 0);
 	auto table_ptr = table_entry.get();
-	table_entry->table_info.schema_versions[0] = std::move(table_entry);
+	table_info.schema_versions[0] = std::move(table_entry);
 	table_metadata.iceberg_version = iceberg_version.GetIndex();
 	int32_t last_column_id;
 	table_metadata.schemas[0] = IcebergCreateTableRequest::CreateIcebergSchema(

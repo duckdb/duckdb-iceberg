@@ -270,14 +270,14 @@ IRCAPITableCredentials IcebergTableInformation::GetVendedCredentials(ClientConte
 	return result;
 }
 
-optional_ptr<CatalogEntry> IcebergTableInformation::CreateSchemaVersion(IcebergTableSchema &table_schema) {
+optional_ptr<CatalogEntry> IcebergTableInformation::CreateSchemaVersion(const IcebergTableSchema &table_schema) {
 	CreateTableInfo info;
 	info.table = name;
 	for (auto &col : table_schema.columns) {
 		info.columns.AddColumn(col->GetColumnDefinition());
 	}
 
-	auto table_entry = make_uniq<IcebergTableEntry>(*this, catalog, schema, info);
+	auto table_entry = make_uniq<IcebergTableEntry>(*this, catalog, schema, info, table_schema.schema_id);
 	if (!table_entry->internal) {
 		table_entry->internal = schema.internal;
 	}
