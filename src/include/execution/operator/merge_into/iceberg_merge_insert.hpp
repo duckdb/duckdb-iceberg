@@ -31,6 +31,11 @@ public:
 	vector<unique_ptr<Expression>> extra_projections;
 
 public:
+	string GetName() const override {
+		return "ICEBERG_MERGE_INSERT";
+	}
+
+public:
 	// Source interface
 	SourceResultType GetDataInternal(ExecutionContext &context, DataChunk &chunk,
 	                                 OperatorSourceInput &input) const override;

@@ -6,7 +6,9 @@
 #include "duckdb/planner/operator/logical_merge_into.hpp"
 #include "duckdb/planner/expression/bound_reference_expression.hpp"
 
-#include "execution/operator/iceberg_merge_insert.hpp"
+#include "execution/operator/merge_into/iceberg_merge_insert.hpp"
+#include "execution/operator/merge_into/iceberg_merge_update.hpp"
+#include "execution/operator/merge_into/iceberg_merge_into.hpp"
 #include "catalog/rest/iceberg_catalog.hpp"
 #include "catalog/rest/catalog_entry/table/iceberg_table_entry.hpp"
 #include "execution/operator/iceberg_update.hpp"
@@ -14,6 +16,70 @@
 #include "execution/operator/iceberg_insert.hpp"
 
 namespace duckdb {
+
+void IcebergMergeInto::ProjectAndCastForCopy(ClientContext &context, DataChunk &input_chunk, PhysicalOperator &copy_op,
+                                             ExpressionExecutor *expression_executor, DataChunk &projected_chunk,
+                                             DataChunk &cast_chunk) {
+	reference<DataChunk> chunk_ref = input_chunk;
+	if (expression_executor) {
+		projected_chunk.Reset();
+		expression_executor->Execute(input_chunk, projected_chunk);
+		chunk_ref = projected_chunk;
+	}
+	auto &copy_types = copy_op.Cast<PhysicalCopyToFile>().expected_types;
+	for (idx_t i = 0; i < chunk_ref.get().ColumnCount(); i++) {
+		if (chunk_ref.get().data[i].GetType() != copy_types[i]) {
+			VectorOperations::Cast(context, chunk_ref.get().data[i], cast_chunk.data[i], chunk_ref.get().size());
+		} else {
+			cast_chunk.data[i].Reference(chunk_ref.get().data[i]);
+		}
+	}
+	cast_chunk.SetCardinality(chunk_ref.get().size());
+}
+
+void IcebergMergeInto::FinalizeCopyToInsert(Pipeline &pipeline, Event &event, ClientContext &context,
+                                            PhysicalOperator &copy_op, PhysicalOperator &insert_op,
+                                            InterruptState &interrupt_state) {
+	DataChunk chunk;
+	chunk.Initialize(context, copy_op.types);
+
+	ThreadContext thread(context);
+	ExecutionContext exec_context(context, thread, nullptr);
+
+	auto copy_global = copy_op.GetGlobalSourceState(context);
+	auto copy_local = copy_op.GetLocalSourceState(exec_context, *copy_global);
+	OperatorSourceInput source_input {*copy_global, *copy_local, interrupt_state};
+
+	auto insert_global = insert_op.GetGlobalSinkState(context);
+	auto insert_local = insert_op.GetLocalSinkState(exec_context);
+	OperatorSinkInput sink_input {*insert_global, *insert_local, interrupt_state};
+	SourceResultType source_res = SourceResultType::HAVE_MORE_OUTPUT;
+	while (source_res == SourceResultType::HAVE_MORE_OUTPUT) {
+		chunk.Reset();
+		source_res = copy_op.GetData(exec_context, chunk, source_input);
+		if (chunk.size() == 0) {
+			continue;
+		}
+		if (source_res == SourceResultType::BLOCKED) {
+			throw InternalException("BLOCKED not supported in IcebergMerge");
+		}
+
+		auto sink_result = insert_op.Sink(exec_context, chunk, sink_input);
+		if (sink_result != SinkResultType::NEED_MORE_INPUT) {
+			throw InternalException("BLOCKED not supported in IcebergMerge");
+		}
+	}
+	OperatorSinkCombineInput combine_input {*insert_global, *insert_local, interrupt_state};
+	auto combine_res = insert_op.Combine(exec_context, combine_input);
+	if (combine_res == SinkCombineResultType::BLOCKED) {
+		throw InternalException("BLOCKED not supported in IcebergMerge");
+	}
+	OperatorSinkFinalizeInput finalize_input {*insert_global, interrupt_state};
+	auto finalize_res = insert_op.Finalize(pipeline, event, context, finalize_input);
+	if (finalize_res == SinkFinalizeType::BLOCKED) {
+		throw InternalException("BLOCKED not supported in IcebergMerge");
+	}
+}
 
 //===--------------------------------------------------------------------===//
 // Plan Merge Into
@@ -47,13 +113,27 @@ static unique_ptr<MergeIntoOperator> IcebergPlanMergeIntoAction(IcebergCatalog &
 		update.expressions = std::move(action.expressions);
 		update.columns = std::move(action.columns);
 		update.update_is_del_and_insert = action.update_is_del_and_insert;
-		auto &update_plan = catalog.PlanUpdate(context, planner, update, child_plan);
-		result->op = update_plan;
-		auto &dl_update = result->op->Cast<IcebergUpdate>();
-		// The row_id comes before the deletion information
-		if (table_metadata.iceberg_version >= 3) {
-			dl_update.row_id_index = child_plan.types.size() - 4;
-		}
+
+		IcebergCopyInput copy_input(context, table_metadata, schema);
+		copy_input.virtual_columns = IcebergInsertVirtualColumns::WRITE_ROW_ID;
+
+		auto &update_op = IcebergUpdate::PlanUpdateOperator(context, planner, update, child_plan, copy_input);
+
+		// The row_id comes before the deletion information, that is always the 3 last column of the chunk.
+		update_op.row_id_index = child_plan.types.size() - 4;
+
+		// plan copy and insert
+		auto copy_options = IcebergInsert::GetCopyOptions(context, copy_input);
+		auto &copy_op = IcebergInsert::PlanCopyForInsert(context, planner, copy_input, nullptr);
+		auto &iceberg_table = op.table.Cast<IcebergTableEntry>();
+		auto &insert_op = IcebergInsert::PlanInsert(context, planner, iceberg_table);
+		insert_op.children.push_back(copy_op);
+
+		// wrap in IcebergMergeUpdate
+		auto &merge_update =
+		    planner.Make<IcebergMergeUpdate>(return_types, update_op, copy_op, insert_op).Cast<IcebergMergeUpdate>();
+		merge_update.extra_projections = std::move(copy_options.projection_list);
+		result->op = merge_update;
 		break;
 	}
 	case MergeActionType::MERGE_DELETE: {
@@ -142,7 +222,7 @@ PhysicalOperator &IcebergCatalog::PlanMergeInto(ClientContext &context, Physical
 				update_delete_count++;
 				if (update_delete_count > 1) {
 					throw NotImplementedException(
-					    "MERGE INTO with DuckLake only supports a single UPDATE/DELETE action currently");
+					    "MERGE INTO with Iceberg only supports a single UPDATE/DELETE action currently");
 				}
 			}
 			planned_actions.push_back(IcebergPlanMergeIntoAction(*this, context, op, planner, *action, plan));

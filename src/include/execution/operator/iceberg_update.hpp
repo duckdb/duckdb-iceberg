@@ -36,6 +36,10 @@ public:
 	vector<unique_ptr<Expression>> bound_defaults;
 
 public:
+	static IcebergUpdate &PlanUpdateOperator(ClientContext &context, PhysicalPlanGenerator &planner, LogicalUpdate &op,
+	                                         PhysicalOperator &child_plan, IcebergCopyInput &copy_input);
+
+public:
 	// Operator interface
 	unique_ptr<GlobalOperatorState> GetGlobalOperatorState(ClientContext &context) const override;
 	unique_ptr<OperatorState> GetOperatorState(ExecutionContext &context) const override;

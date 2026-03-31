@@ -30,6 +30,40 @@ IcebergUpdate::IcebergUpdate(PhysicalPlan &physical_plan, IcebergTableEntry &tab
 	}
 }
 
+IcebergUpdate &IcebergUpdate::PlanUpdateOperator(ClientContext &context, PhysicalPlanGenerator &planner,
+                                                 LogicalUpdate &op, PhysicalOperator &child_plan,
+                                                 IcebergCopyInput &copy_input) {
+	auto &table = op.table.Cast<IcebergTableEntry>();
+	auto &table_metadata = table.table_info.table_metadata;
+
+	if (table_metadata.HasSortOrder()) {
+		auto &sort_spec = table_metadata.GetLatestSortOrder();
+		if (sort_spec.IsSorted()) {
+			throw NotImplementedException("Update on a sorted iceberg table is not supported yet");
+		}
+	}
+	if (table_metadata.iceberg_version < 2) {
+		throw NotImplementedException("Update Iceberg V%d tables", table_metadata.iceberg_version);
+	}
+
+	vector<idx_t> row_id_indexes = {0, 1};
+	auto &delete_op = IcebergDelete::PlanDelete(context, planner, table, child_plan, std::move(row_id_indexes));
+
+	// Create the IcebergUpdate intermediate operator
+	auto &update_op = planner
+	                      .Make<IcebergUpdate>(table, op.columns, child_plan, delete_op, std::move(op.expressions),
+	                                           std::move(op.bound_defaults))
+	                      .Cast<IcebergUpdate>();
+
+	// Set output types: physical columns + optional _row_id for v3
+	vector<LogicalType> update_output_types = table.GetTypes();
+	if (table_metadata.iceberg_version >= 3) {
+		update_output_types.push_back(LogicalType::BIGINT); // _row_id
+	}
+	update_op.types = std::move(update_output_types);
+	return update_op;
+}
+
 //===--------------------------------------------------------------------===//
 // States
 //===--------------------------------------------------------------------===//
@@ -185,45 +219,20 @@ PhysicalOperator &IcebergCatalog::PlanUpdate(ClientContext &context, PhysicalPla
 	auto &table_metadata = table.table_info.table_metadata;
 	auto &table_schema = table_metadata.GetLatestSchema();
 
-	if (table_metadata.HasSortOrder()) {
-		auto &sort_spec = table_metadata.GetLatestSortOrder();
-		if (sort_spec.IsSorted()) {
-			throw NotImplementedException("Update on a sorted iceberg table is not supported yet");
-		}
-	}
-	if (table_metadata.iceberg_version < 2) {
-		throw NotImplementedException("Update Iceberg V%d tables", table_metadata.iceberg_version);
-	}
-
-	// Plan the delete operator (used as a side-sink from IcebergUpdate::Execute)
-	vector<idx_t> row_id_indexes = {0, 1};
-	auto &delete_op = IcebergDelete::PlanDelete(context, planner, table, child_plan, std::move(row_id_indexes));
-
-	// Create the IcebergUpdate intermediate operator
-	auto &update_op = planner
-	                      .Make<IcebergUpdate>(table, op.columns, child_plan, delete_op, std::move(op.expressions),
-	                                           std::move(op.bound_defaults))
-	                      .Cast<IcebergUpdate>();
-
-	// Set output types: physical columns + optional _row_id for v3
-	vector<LogicalType> update_output_types = table.GetTypes();
-	if (table_metadata.iceberg_version >= 3) {
-		update_output_types.push_back(LogicalType::BIGINT); // _row_id
-	}
-	update_op.types = std::move(update_output_types);
-
 	// Plan the copy operator with update_op as child.
 	// PlanCopyForInsert will add a partition projection on top if needed.
 	IcebergCopyInput copy_input(context, table_metadata, table_schema);
 	if (table_metadata.iceberg_version >= 3) {
 		copy_input.virtual_columns = IcebergInsertVirtualColumns::WRITE_ROW_ID;
 	}
+	auto &update_op = IcebergUpdate::PlanUpdateOperator(context, planner, op, child_plan, copy_input);
+
 	optional_ptr<PhysicalOperator> plan = &update_op;
 	auto &copy_op = IcebergInsert::PlanCopyForInsert(context, planner, copy_input, plan);
 
 	// Plan the insert sink and wire it up
 	auto &insert_op = IcebergInsert::PlanInsert(context, planner, table).Cast<IcebergInsert>();
-	insert_op.update_delete_op = delete_op;
+	insert_op.update_delete_op = update_op.delete_op;
 	insert_op.children.push_back(copy_op);
 	return insert_op;
 }
