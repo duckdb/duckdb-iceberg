@@ -27,12 +27,6 @@ select count(*) from my_datalake.default.truncate_partitioned_int_for_insert;
 ----
 11
 
-statement ok
-set variable manifest_list_path = (select manifest_list from iceberg_snapshots(my_datalake.default.truncate_partitioned_int_for_insert) order by sequence_number desc limit 1);
-
-statement ok
-set variable manifest_file_path = (select manifest_path from read_avro(getvariable('manifest_list_path')) order by sequence_number desc limit 1);
-
 # ---- DuckDB inserts the same values Spark inserted, with new ids ----
 
 statement ok

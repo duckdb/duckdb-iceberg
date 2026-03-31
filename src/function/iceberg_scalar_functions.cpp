@@ -15,6 +15,7 @@
 #include "duckdb/common/vector_operations/binary_executor.hpp"
 #include "duckdb/common/vector_operations/vector_operations.hpp"
 #include "duckdb/execution/expression_executor.hpp"
+#include "duckdb/common/types/hugeint.hpp"
 #include "utf8proc_wrapper.hpp"
 
 namespace duckdb {
@@ -82,6 +83,27 @@ static void IcebergBucketTimestampTz(DataChunk &input, ExpressionState &state, V
 	    [](timestamp_tz_t val, int32_t n) -> int32_t { return (IcebergHash::HashInt64(val.value) & 0x7FFFFFFF) % n; });
 }
 
+static void IcebergBucketTimestampNs(DataChunk &input, ExpressionState &state, Vector &result) {
+	BinaryExecutor::Execute<timestamp_ns_t, int32_t, int32_t>(
+	    input.data[0], input.data[1], result, input.size(),
+	    [](timestamp_ns_t val, int32_t n) -> int32_t {
+		    return (IcebergHash::HashTimestampNs(val) & 0x7FFFFFFF) % n;
+	    });
+}
+
+static void IcebergBucketTime(DataChunk &input, ExpressionState &state, Vector &result) {
+	BinaryExecutor::Execute<dtime_t, int32_t, int32_t>(
+	    input.data[0], input.data[1], result, input.size(),
+	    [](dtime_t val, int32_t n) -> int32_t { return (IcebergHash::HashTime(val) & 0x7FFFFFFF) % n; });
+}
+
+static void IcebergBucketUUID(DataChunk &input, ExpressionState &state, Vector &result) {
+	BinaryExecutor::Execute<hugeint_t, int32_t, int32_t>(
+	    input.data[0], input.data[1], result, input.size(),
+	    [](hugeint_t val, int32_t n) -> int32_t { return (IcebergHash::HashUUID(val) & 0x7FFFFFFF) % n; });
+}
+
+
 ScalarFunctionSet IcebergFunctions::GetIcebergBucketFunction() {
 	ScalarFunctionSet set("iceberg_bucket");
 	// (value, num_buckets) -> INTEGER
@@ -99,6 +121,12 @@ ScalarFunctionSet IcebergFunctions::GetIcebergBucketFunction() {
 	                               IcebergBucketTimestamp, IcebergBucketBind));
 	set.AddFunction(ScalarFunction({LogicalType::TIMESTAMP_TZ, LogicalType::INTEGER}, LogicalType::INTEGER,
 	                               IcebergBucketTimestampTz, IcebergBucketBind));
+	set.AddFunction(ScalarFunction({LogicalType::TIMESTAMP_NS, LogicalType::INTEGER}, LogicalType::INTEGER,
+	                               IcebergBucketTimestampNs, IcebergBucketBind));
+	set.AddFunction(ScalarFunction({LogicalType::TIME, LogicalType::INTEGER}, LogicalType::INTEGER, IcebergBucketTime,
+	                               IcebergBucketBind));
+	set.AddFunction(ScalarFunction({LogicalType::UUID, LogicalType::INTEGER}, LogicalType::INTEGER, IcebergBucketUUID,
+	                               IcebergBucketBind));
 	return set;
 }
 
@@ -166,22 +194,14 @@ ScalarFunctionSet IcebergFunctions::GetIcebergTruncateFunction() {
 	// (value, width) -> same type as value
 	// Width is validated at bind time for constant expressions; numeric variants also
 	// guard at execution time since v % 0 is undefined behaviour.
-	ScalarFunction int_fn({LogicalType::INTEGER, LogicalType::INTEGER}, LogicalType::INTEGER, IcebergTruncateInteger,
-	                      IcebergTruncateBind);
-	set.AddFunction(int_fn);
-
-	ScalarFunction bigint_fn({LogicalType::BIGINT, LogicalType::INTEGER}, LogicalType::BIGINT, IcebergTruncateBigInt,
-	                         IcebergTruncateBind);
-	set.AddFunction(bigint_fn);
-
-	ScalarFunction varchar_fn({LogicalType::VARCHAR, LogicalType::INTEGER}, LogicalType::VARCHAR,
-	                          IcebergTruncateVarchar, IcebergTruncateBind);
-	set.AddFunction(varchar_fn);
-
-	ScalarFunction blob_fn({LogicalType::BLOB, LogicalType::INTEGER}, LogicalType::BLOB, IcebergTruncateBlob,
-	                       IcebergTruncateBind);
-	set.AddFunction(blob_fn);
-
+	set.AddFunction(ScalarFunction({LogicalType::INTEGER, LogicalType::INTEGER}, LogicalType::INTEGER,
+	                               IcebergTruncateInteger, IcebergTruncateBind));
+	set.AddFunction(ScalarFunction({LogicalType::BIGINT, LogicalType::INTEGER}, LogicalType::BIGINT,
+	                               IcebergTruncateBigInt, IcebergTruncateBind));
+	set.AddFunction(ScalarFunction({LogicalType::VARCHAR, LogicalType::INTEGER}, LogicalType::VARCHAR,
+	                               IcebergTruncateVarchar, IcebergTruncateBind));
+	set.AddFunction(ScalarFunction({LogicalType::BLOB, LogicalType::INTEGER}, LogicalType::BLOB, IcebergTruncateBlob,
+	                               IcebergTruncateBind));
 	return set;
 }
 

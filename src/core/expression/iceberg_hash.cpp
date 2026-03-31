@@ -2,6 +2,7 @@
 
 #include "duckdb/common/exception.hpp"
 #include "duckdb/common/types/hugeint.hpp"
+#include "utf8proc_wrapper.hpp"
 
 namespace duckdb {
 
@@ -150,8 +151,32 @@ int32_t IcebergHash::HashDecimal(const Value &value) {
 	return Murmur3Hash32(buf + start, byte_len - start, SEED);
 }
 
+//! Hash time value (Iceberg spec: int64 microseconds from midnight)
+int32_t IcebergHash::HashTime(dtime_t t) {
+	return HashInt64(t.micros);
+}
+
+//! Hash timestamp_ns value (Iceberg spec: int64 nanoseconds from epoch)
+int32_t IcebergHash::HashTimestampNs(timestamp_ns_t t) {
+	return HashInt64(t.value);
+}
+
+//! Hash UUID value (Iceberg spec: 16 big-endian bytes, MSB first)
+//! DuckDB stores UUID as hugeint_t: upper (int64, most-significant) + lower (uint64, least-significant)
+int32_t IcebergHash::HashUUID(hugeint_t uuid) {
+	uint8_t bytes[16];
+	for (int i = 0; i < 8; i++) {
+		bytes[i] = static_cast<uint8_t>(uuid.upper >> (56 - i * 8));
+	}
+	for (int i = 0; i < 8; i++) {
+		bytes[8 + i] = static_cast<uint8_t>(uuid.lower >> (56 - i * 8));
+	}
+	return Murmur3Hash32(bytes, 16, SEED);
+}
+
 //! Hash a DuckDB Value based on its type
-//! Supports Iceberg bucket transform types: integer, long, decimal, date, timestamp, timestamptz, string, binary
+//! Supports Iceberg bucket transform types: integer, long, decimal, date, time, timestamp, timestamptz,
+//! timestamp_ns, uuid, string, binary.
 int32_t IcebergHash::HashValue(const Value &value) {
 	D_ASSERT(!value.IsNull());
 	switch (value.type().id()) {
@@ -182,9 +207,86 @@ int32_t IcebergHash::HashValue(const Value &value) {
 		return HashInt64(value.GetValue<timestamp_t>().value);
 	case LogicalTypeId::TIMESTAMP_TZ:
 		return HashInt64(value.GetValue<timestamp_tz_t>().value);
-
+	// time: microseconds from midnight, hashed as int64
+	case LogicalTypeId::TIME:
+		return HashTime(value.GetValue<dtime_t>());
+	// timestamp_ns: nanoseconds from epoch, hashed as int64
+	case LogicalTypeId::TIMESTAMP_NS:
+		return HashTimestampNs(value.GetValue<timestamp_ns_t>());
+	// uuid: 16 big-endian bytes
+	case LogicalTypeId::UUID:
+		return HashUUID(value.GetValueUnsafe<hugeint_t>());
 	default:
 		return 0;
+	}
+}
+
+//! Canonical bucket computation for predicate pruning.
+//! Returns Value::INTEGER(bucket_id) for supported types, or a null INTEGER Value for null/unsupported input
+//! (null signals the caller to be conservative and not filter the file).
+Value IcebergHash::BucketValue(const Value &v, int32_t num_buckets) {
+	if (v.IsNull()) {
+		return Value(LogicalType::INTEGER);
+	}
+	switch (v.type().id()) {
+	case LogicalTypeId::INTEGER:
+	case LogicalTypeId::BIGINT:
+	case LogicalTypeId::DECIMAL:
+	case LogicalTypeId::DATE:
+	case LogicalTypeId::TIME:
+	case LogicalTypeId::TIMESTAMP:
+	case LogicalTypeId::TIMESTAMP_TZ:
+	case LogicalTypeId::TIMESTAMP_NS:
+	case LogicalTypeId::UUID:
+	case LogicalTypeId::VARCHAR:
+	case LogicalTypeId::BLOB:
+		break;
+	default:
+		// Unsupported type: return null so predicate pushdown is conservative
+		return Value(LogicalType::INTEGER);
+	}
+	int32_t h = HashValue(v);
+	return Value::INTEGER((h & 0x7FFFFFFF) % num_buckets);
+}
+
+//! Canonical truncate computation shared by TruncateTransform::ApplyTransform and the scalar function.
+//! Input must not be null; throws for unsupported types.
+Value IcebergHash::TruncateValue(const Value &v, idx_t width) {
+	auto W = static_cast<int64_t>(width);
+	switch (v.type().id()) {
+	case LogicalTypeId::INTEGER: {
+		auto val = static_cast<int64_t>(v.GetValue<int32_t>());
+		return Value::INTEGER(static_cast<int32_t>(val - (((val % W) + W) % W)));
+	}
+	case LogicalTypeId::BIGINT: {
+		auto val = v.GetValue<int64_t>();
+		return Value::BIGINT(val - (((val % W) + W) % W));
+	}
+	case LogicalTypeId::DECIMAL: {
+		// Truncate the unscaled integer value, preserving type (scale/precision)
+		auto scaled = v.Copy();
+		scaled.Reinterpret(LogicalType::BIGINT);
+		auto val = scaled.GetValue<int64_t>();
+		auto result = val - (((val % W) + W) % W);
+		return Value::DECIMAL(result, DecimalType::GetWidth(v.type()), DecimalType::GetScale(v.type()));
+	}
+	case LogicalTypeId::BLOB: {
+		auto bytes = StringValue::Get(v);
+		auto truncated = bytes.size() < static_cast<size_t>(width) ? bytes.size() : static_cast<size_t>(width);
+		return Value::BLOB(reinterpret_cast<const uint8_t *>(bytes.data()), truncated);
+	}
+	case LogicalTypeId::VARCHAR: {
+		auto s = v.GetValue<string>();
+		size_t num_chars = 0;
+		for (auto cluster : Utf8Proc::GraphemeClusters(s.data(), s.size())) {
+			if (++num_chars >= static_cast<size_t>(width)) {
+				return Value(s.substr(0, cluster.end));
+			}
+		}
+		return v;
+	}
+	default:
+		throw NotImplementedException("iceberg_truncate: unsupported type %s", v.type().ToString());
 	}
 }
 
