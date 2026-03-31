@@ -443,9 +443,8 @@ void IcebergTableInformation::SetPartitionedBy(IcebergTransaction &transaction,
 	}
 }
 
-optional_ptr<CatalogEntry> IcebergTableInformation::GetSchemaVersion(optional_ptr<BoundAtClause> at) {
+optional_ptr<CatalogEntry> IcebergTableInformation::GetSchemaVersion(const IcebergSnapshotLookup &snapshot_lookup) {
 	D_ASSERT(!schema_versions.empty());
-	auto snapshot_lookup = IcebergSnapshotLookup::FromAtClause(at);
 	auto snapshot_info = table_metadata.GetSnapshot(snapshot_lookup);
 	return schema_versions[snapshot_info.schema_id].get();
 }
@@ -455,7 +454,8 @@ idx_t IcebergTableInformation::GetIcebergVersion() const {
 }
 
 optional_ptr<CatalogEntry> IcebergTableInformation::GetLatestSchema() {
-	return GetSchemaVersion(nullptr);
+	IcebergSnapshotLookup latest_snapshot;
+	return GetSchemaVersion(latest_snapshot);
 }
 
 string IcebergTableInformation::GetTableKey(const vector<string> &namespace_items, const string &table_name) {
@@ -500,7 +500,7 @@ bool IcebergTableInformation::TableIsEmpty(const IcebergSnapshotLookup &snapshot
 	return false;
 }
 
-bool IcebergTableInformation::HasTransactionUpdates() {
+bool IcebergTableInformation::HasTransactionUpdates() const {
 	return transaction_data && (!transaction_data->updates.empty() || !transaction_data->requirements.empty());
 }
 
