@@ -219,8 +219,7 @@ shared_ptr<IcebergTableSchema> IcebergCreateTableRequest::CreateIcebergSchema(
     ClientContext &context, const IcebergTableMetadata &table_metadata, const ColumnList &columns,
     optional_ptr<const vector<unique_ptr<Constraint>>> constraints_p, int32_t &last_column_id) {
 	auto schema = make_shared_ptr<IcebergTableSchema>();
-	// should this be a different schema id?
-	schema->schema_id = table_metadata.current_schema_id;
+	schema->schema_id = table_metadata.GetCurrentSchemaId();
 
 	// TODO: this can all be refactored out
 	//  this makes the IcebergTableSchema, and we use that to dump data to JSON.
@@ -301,7 +300,7 @@ string IcebergCreateTableRequest::CreateTableToJSON(std::unique_ptr<yyjson_mut_d
 	yyjson_mut_obj_add_strcpy(doc, root_object, "name", table_info.name.c_str());
 	auto schema_json = yyjson_mut_obj_add_obj(doc, root_object, "schema");
 
-	idx_t schema_id = table_info.table_metadata.current_schema_id;
+	idx_t schema_id = table_info.table_metadata.GetCurrentSchemaId();
 	auto initial_schema = table_info.table_metadata.schemas.find(schema_id);
 	PopulateSchema(doc, schema_json, *initial_schema->second);
 
@@ -310,7 +309,7 @@ string IcebergCreateTableRequest::CreateTableToJSON(std::unique_ptr<yyjson_mut_d
 	yyjson_mut_obj_add_strcpy(doc, partition_spec_json, "type", "struct");
 	auto fields_arr = yyjson_mut_obj_add_arr(doc, partition_spec_json, "fields");
 
-	idx_t partition_spec_id = table_info.table_metadata.current_schema_id;
+	idx_t partition_spec_id = table_info.table_metadata.GetCurrentSchemaId();
 	auto partition_spec = table_info.table_metadata.partition_specs.find(partition_spec_id)->second;
 
 	for (auto &field : partition_spec.fields) {

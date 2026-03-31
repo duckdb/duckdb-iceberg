@@ -35,12 +35,12 @@ string IcebergManifestEntryStatusTypeToString(IcebergManifestEntryStatusType typ
 	}
 }
 
-map<idx_t, LogicalType> IcebergDataFile::GetFieldIdToTypeMapping(const IcebergSnapshot &snapshot,
+map<idx_t, LogicalType> IcebergDataFile::GetFieldIdToTypeMapping(const IcebergSnapshotScanInfo &snapshot_info,
                                                                  const IcebergTableMetadata &metadata,
                                                                  const unordered_set<int32_t> &partition_spec_ids) {
 	D_ASSERT(!partition_spec_ids.empty());
 	auto &partition_specs = metadata.GetPartitionSpecs();
-	auto &schema = *metadata.GetSchemaFromId(snapshot.schema_id);
+	auto &schema = *metadata.GetSchemaFromId(snapshot_info.schema_id);
 
 	unordered_map<uint64_t, ColumnIndex> source_to_column_id;
 	IcebergTableSchema::PopulateSourceIdMap(source_to_column_id, schema.columns, nullptr);
@@ -814,7 +814,7 @@ idx_t WriteToFile(const IcebergTableMetadata &table_metadata, const IcebergManif
 
 	child_list_t<Value> metadata_values;
 	metadata_values.emplace_back("schema", iceberg_schema_string);
-	metadata_values.emplace_back("schema-id", std::to_string(table_metadata.current_schema_id));
+	metadata_values.emplace_back("schema-id", std::to_string(table_metadata.GetCurrentSchemaId()));
 	metadata_values.emplace_back("partition-spec", current_partition_spec.FieldsToJSONString());
 	metadata_values.emplace_back("partition-spec-id", std::to_string(current_partition_spec.spec_id));
 	metadata_values.emplace_back("format-version", std::to_string(table_metadata.iceberg_version));
