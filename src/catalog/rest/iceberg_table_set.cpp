@@ -54,15 +54,21 @@ bool IcebergTableSet::FillEntry(ClientContext &context, IcebergTableInformation 
 	// No valid cached result or caching disabled, make a new request
 	auto get_table_result = IRCAPI::GetTable(context, ic_catalog, schema, table.name);
 	if (get_table_result.has_error) {
-		if (get_table_result.error_._error.type == "NoSuchIcebergTableException") {
-			return false;
+		if (get_table_result.status_ == HTTPStatusCode::NotFound_404) {
+			// Glue returns 404 when a table is not an Iceberg Table with the error message
+			// "input table is not an iceberg table" of type "NoSuchIcebergTableException"
+			// Otherwise the error is a standard 404, we return false and duckdb will return
+			// that the table does not exist.
+			// see test/sql/cloud/test_glue_catalog_with_other_tables.test for testing
+			if (get_table_result.error_._error.type != "NoSuchIcebergTableException") {
+				return false;
+			}
 		}
-		if (get_table_result.status_ == HTTPStatusCode::Forbidden_403 ||
-		    get_table_result.status_ == HTTPStatusCode::Unauthorized_401 ||
-		    get_table_result.status_ == HTTPStatusCode::NotFound_404) {
-			return false;
-		}
-		throw HTTPException(get_table_result.error_._error.message);
+		// surface all other errror messages. Not found will be returned as a catalog exception
+		// User should not if they do not have permission or if they are not authorized (or 500)
+		throw HTTPException(
+		    StringUtil::Format("GetTableInformation endpoint returned response code %s with message \"%s\"",
+		                       EnumUtil::ToString(get_table_result.status_), get_table_result.error_._error.message));
 	}
 	ic_catalog.StoreLoadTableResult(table_key, std::move(get_table_result.result_));
 	{

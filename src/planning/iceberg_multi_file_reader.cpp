@@ -98,7 +98,7 @@ IcebergMultiFileReader::InitializeGlobalState(ClientContext &context, const Mult
 }
 
 static void ApplyFieldMapping(MultiFileColumnDefinition &col, const vector<IcebergFieldMapping> &mappings,
-                              const case_insensitive_map_t<idx_t> &fields,
+                              const case_insensitive_map_t<idx_t> &fields, ClientContext &context,
                               optional_ptr<MultiFileColumnDefinition> parent = nullptr) {
 	if (!col.identifier.IsNull()) {
 		return;
@@ -108,7 +108,7 @@ static void ApplyFieldMapping(MultiFileColumnDefinition &col, const vector<Icebe
 	if (parent && parent->type.id() == LogicalTypeId::MAP && StringUtil::CIEquals(name, "key_value")) {
 		//! Deal with MAP, it has a 'key_value' child, which holds the 'key' + 'value' columns
 		for (auto &child : col.children) {
-			ApplyFieldMapping(child, mappings, fields, parent);
+			ApplyFieldMapping(child, mappings, fields, context, parent);
 		}
 		return;
 	}
@@ -119,6 +119,8 @@ static void ApplyFieldMapping(MultiFileColumnDefinition &col, const vector<Icebe
 
 	auto it = fields.find(name);
 	if (it == fields.end()) {
+		DUCKDB_LOG(context, IcebergLogType, "Column '%s' does not have a field-id, and no field-mapping exists for it!",
+		           name);
 		return;
 	}
 	auto &mapping = mappings[it->second];
@@ -128,7 +130,7 @@ static void ApplyFieldMapping(MultiFileColumnDefinition &col, const vector<Icebe
 	}
 
 	for (auto &child : col.children) {
-		ApplyFieldMapping(child, mappings, mapping.field_mapping_indexes, col);
+		ApplyFieldMapping(child, mappings, mapping.field_mapping_indexes, context, col);
 	}
 }
 
@@ -351,7 +353,7 @@ void IcebergMultiFileReader::FinalizeBind(MultiFileReaderData &reader_data, cons
 	if (!multi_file_list.GetMetadata().mappings.empty()) {
 		auto &root = metadata.mappings[0];
 		for (auto &local_column : local_columns) {
-			ApplyFieldMapping(local_column, mappings, root.field_mapping_indexes);
+			ApplyFieldMapping(local_column, mappings, root.field_mapping_indexes, context);
 		}
 	}
 	ApplyPartitionConstants(multi_file_list, reader_data, global_columns, global_column_ids);

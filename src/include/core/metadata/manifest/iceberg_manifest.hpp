@@ -29,7 +29,7 @@ string IcebergManifestEntryContentTypeToString(IcebergManifestEntryContentType t
 string IcebergManifestEntryStatusTypeToString(IcebergManifestEntryStatusType type);
 
 //! Combined partition information for a single partition field in a data file
-struct DataFilePartitionInfo {
+struct IcebergExtendedPartitionInfo {
 	//! The partition column name
 	string name;
 	//! The source column id from the table schema
@@ -43,10 +43,24 @@ struct DataFilePartitionInfo {
 	//! The actual partition value for this data file
 	Value value;
 
-	bool operator==(const DataFilePartitionInfo &other) const {
+	bool operator==(const IcebergExtendedPartitionInfo &other) const {
 		return field_id == other.field_id && value == other.value;
 	}
-	bool operator!=(const DataFilePartitionInfo &other) const {
+	bool operator!=(const IcebergExtendedPartitionInfo &other) const {
+		return !(*this == other);
+	}
+};
+
+struct IcebergPartitionInfo {
+	//! The partition field_id
+	uint64_t field_id;
+	//! The actual partition value for this data file
+	Value value;
+
+	bool operator==(const IcebergPartitionInfo &other) const {
+		return field_id == other.field_id && value == other.value;
+	}
+	bool operator!=(const IcebergPartitionInfo &other) const {
 		return !(*this == other);
 	}
 };
@@ -61,6 +75,11 @@ public:
 	                                                       const unordered_set<int32_t> &partition_spec_ids);
 	static LogicalType PartitionStructType(const map<idx_t, LogicalType> &partition_field_id_to_type);
 	static LogicalType GetType(const IcebergTableMetadata &metadata, const LogicalType &partition_type);
+	// Get extended partition info. A data_file struct stores partition info as
+	// struct {partition_name: val} (with partition field id for the struct key.
+	// extended partition info returns extra information about these partitions
+	// like source column id, source type, transform, and partition value.
+	const vector<IcebergExtendedPartitionInfo> GetExtendedPartitionInfo(const IcebergTableMetadata &metadata) const;
 
 public:
 	void SetFirstRowId(int64_t first_row_id);
@@ -73,7 +92,7 @@ public:
 	string file_format;
 	//! Combined partition information in partition spec order.
 	//! Contains name, source_id, field_id, transform, source_type, and the actual partition value.
-	vector<DataFilePartitionInfo> partition_info;
+	vector<IcebergPartitionInfo> partition_info;
 	int64_t record_count;
 
 	int64_t file_size_in_bytes;

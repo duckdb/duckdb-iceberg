@@ -16,16 +16,16 @@
 namespace duckdb {
 
 IcebergUpdate::IcebergUpdate(PhysicalPlan &physical_plan, IcebergTableEntry &table, vector<PhysicalIndex> columns_p,
-                             PhysicalOperator &child, PhysicalOperator &copy_op, PhysicalOperator &delete_op,
-                             PhysicalOperator &insert_op, vector<unique_ptr<Expression>> expressions,
-                             vector<unique_ptr<Expression>> bound_defaults)
-    : PhysicalOperator(physical_plan, PhysicalOperatorType::EXTENSION, {LogicalType::BIGINT}, 1), table(table),
-      columns(std::move(columns_p)), copy_op(copy_op), delete_op(delete_op), insert_op(insert_op),
-      expressions(std::move(expressions)), bound_defaults(std::move(bound_defaults)) {
+                             PhysicalOperator &child, PhysicalOperator &delete_op_p,
+                             vector<unique_ptr<Expression>> expressions_p,
+                             vector<unique_ptr<Expression>> bound_defaults_p)
+    : PhysicalOperator(physical_plan, PhysicalOperatorType::EXTENSION, {}, 1), table(table),
+      columns(std::move(columns_p)), delete_op(delete_op_p), expressions(std::move(expressions_p)),
+      bound_defaults(std::move(bound_defaults_p)) {
 	children.push_back(child);
 	auto &table_metadata = table.table_info.table_metadata;
 	if (table_metadata.iceberg_version >= 3) {
-		//! Only write _row_id for table version 3 and up
+		//! For v3, _row_id is the virtual column appended right after physical columns by DuckDB
 		row_id_index = columns.size();
 	}
 }
@@ -33,7 +33,7 @@ IcebergUpdate::IcebergUpdate(PhysicalPlan &physical_plan, IcebergTableEntry &tab
 //===--------------------------------------------------------------------===//
 // States
 //===--------------------------------------------------------------------===//
-class IcebergUpdateGlobalState : public GlobalSinkState {
+class IcebergUpdateGlobalState : public GlobalOperatorState {
 public:
 	IcebergUpdateGlobalState() : total_updated_count(0) {
 	}
@@ -41,12 +41,11 @@ public:
 	atomic<idx_t> total_updated_count;
 };
 
-class IcebergUpdateLocalState : public LocalSinkState {
+class IcebergUpdateLocalState : public OperatorState {
 public:
 	IcebergUpdateLocalState(ClientContext &context, const vector<unique_ptr<Expression>> &expressions,
 	                        const vector<unique_ptr<Expression>> &bound_defaults)
 	    : default_executor(context, bound_defaults) {
-		// Initialize the update chunk.
 		auto &allocator = Allocator::Get(context);
 		vector<LogicalType> update_types;
 		update_types.reserve(expressions.size());
@@ -54,209 +53,113 @@ public:
 			update_types.push_back(expr->return_type);
 		}
 		update_chunk.Initialize(allocator, update_types);
+
+		vector<LogicalType> delete_types = {LogicalType::VARCHAR, LogicalType::BIGINT};
+		delete_chunk.Initialize(allocator, delete_types);
 	}
 
 public:
 	ExpressionExecutor default_executor;
-	unique_ptr<LocalSinkState> copy_local_state;
 	unique_ptr<LocalSinkState> delete_local_state;
-	DataChunk insert_chunk;
 	DataChunk update_chunk;
 	DataChunk delete_chunk;
 	idx_t updated_count = 0;
 };
 
-unique_ptr<GlobalSinkState> IcebergUpdate::GetGlobalSinkState(ClientContext &context) const {
+unique_ptr<GlobalOperatorState> IcebergUpdate::GetGlobalOperatorState(ClientContext &context) const {
 	auto result = make_uniq<IcebergUpdateGlobalState>();
-	copy_op.sink_state = copy_op.GetGlobalSinkState(context);
 	delete_op.sink_state = delete_op.GetGlobalSinkState(context);
 	return std::move(result);
 }
 
-unique_ptr<LocalSinkState> IcebergUpdate::GetLocalSinkState(ExecutionContext &context) const {
+unique_ptr<OperatorState> IcebergUpdate::GetOperatorState(ExecutionContext &context) const {
 	auto result = make_uniq<IcebergUpdateLocalState>(context.client, expressions, bound_defaults);
-
-	result->copy_local_state = copy_op.GetLocalSinkState(context);
 	result->delete_local_state = delete_op.GetLocalSinkState(context);
-
-	vector<LogicalType> delete_types;
-	delete_types.emplace_back(LogicalType::VARCHAR);
-	delete_types.emplace_back(LogicalType::BIGINT);
-
-	// updates also write the row id to the file
-	auto insert_types = table.GetTypes();
-	if (row_id_index.IsValid()) {
-		insert_types.insert(insert_types.begin() + insert_types.size(), LogicalType::BIGINT);
-	}
-
-	result->insert_chunk.Initialize(context.client, insert_types);
-	result->delete_chunk.Initialize(context.client, delete_types);
 	return std::move(result);
 }
 
 //===--------------------------------------------------------------------===//
-// Sink
+// Execute
 //===--------------------------------------------------------------------===//
-SinkResultType IcebergUpdate::Sink(ExecutionContext &context, DataChunk &chunk, OperatorSinkInput &input) const {
-	auto &lstate = input.local_state.Cast<IcebergUpdateLocalState>();
+OperatorResultType IcebergUpdate::Execute(ExecutionContext &context, DataChunk &input, DataChunk &chunk,
+                                          GlobalOperatorState &gstate_p, OperatorState &state_p) const {
+	auto &lstate = state_p.Cast<IcebergUpdateLocalState>();
 
-	// push the to-be-inserted data into the copy
-	auto &insert_chunk = lstate.insert_chunk;
+	input.Flatten();
+	lstate.default_executor.SetChunk(input);
 
-	chunk.Flatten();
-	lstate.default_executor.SetChunk(chunk);
-
+	// Evaluate update expressions into update_chunk
 	DataChunk &update_chunk = lstate.update_chunk;
 	update_chunk.Reset();
-	update_chunk.SetCardinality(chunk);
+	update_chunk.SetCardinality(input);
 
 	for (idx_t i = 0; i < expressions.size(); i++) {
-		// Default expression, set to the default value of the column.
 		if (expressions[i]->GetExpressionType() == ExpressionType::VALUE_DEFAULT) {
 			lstate.default_executor.ExecuteExpression(columns[i].index, update_chunk.data[i]);
 			continue;
 		}
-
 		D_ASSERT(expressions[i]->GetExpressionType() == ExpressionType::BOUND_REF);
 		auto &binding = expressions[i]->Cast<BoundReferenceExpression>();
-		update_chunk.data[i].Reference(chunk.data[binding.index]);
+		update_chunk.data[i].Reference(input.data[binding.index]);
 	}
 
-	insert_chunk.SetCardinality(chunk.size());
+	// Build the output chunk: [physical_col0..colN-1, _row_id (v3 only)]
+	// This output feeds into PlanCopyForInsert which adds partition projections on top.
+	chunk.SetCardinality(input.size());
 	for (idx_t i = 0; i < columns.size(); i++) {
-		insert_chunk.data[columns[i].index].Reference(update_chunk.data[i]);
+		chunk.data[columns[i].index].Reference(update_chunk.data[i]);
 	}
-	// reference the row id right after the physical columns
 	if (row_id_index.IsValid()) {
-		auto index = chunk.ColumnCount() - 3;
-		insert_chunk.data[columns.size()].Reference(chunk.data[index]);
+		// _row_id is the 3rd column from the end in the scan output:
+		// [..., _row_id, file_path, seq_row_id]
+		auto index = input.ColumnCount() - 3;
+		chunk.data[row_id_index.GetIndex()].Reference(input.data[index]);
 	}
 
-	OperatorSinkInput copy_input {*copy_op.sink_state, *lstate.copy_local_state, input.interrupt_state};
-	copy_op.Sink(context, insert_chunk, copy_input);
-
-	// push the rowids into the delete
+	// Sink the delete tracking columns (last 2 columns: file_path, row_id)
 	auto &delete_chunk = lstate.delete_chunk;
-	delete_chunk.SetCardinality(chunk.size());
-	idx_t delete_idx_start = chunk.ColumnCount() - 2;
+	delete_chunk.SetCardinality(input.size());
+	idx_t delete_idx_start = input.ColumnCount() - 2;
 	for (idx_t i = 0; i < 2; i++) {
-		if (delete_chunk.data[i].GetVectorType() != chunk.data[delete_idx_start + i].GetVectorType()) {
-			delete_chunk.data[i].Flatten(chunk.size());
-			chunk.data[delete_idx_start + i].Flatten(chunk.size());
-		}
-		delete_chunk.data[i].Reference(chunk.data[delete_idx_start + i]);
+		delete_chunk.data[i].Reference(input.data[delete_idx_start + i]);
 	}
 
-	OperatorSinkInput delete_input {*delete_op.sink_state, *lstate.delete_local_state, input.interrupt_state};
+	InterruptState interrupt_state;
+	OperatorSinkInput delete_input {*delete_op.sink_state, *lstate.delete_local_state, interrupt_state};
 	delete_op.Sink(context, delete_chunk, delete_input);
 
-	lstate.updated_count += chunk.size();
-	return SinkResultType::NEED_MORE_INPUT;
+	lstate.updated_count += input.size();
+	return OperatorResultType::NEED_MORE_INPUT;
 }
 
 //===--------------------------------------------------------------------===//
-// Combine
+// FinalExecute
 //===--------------------------------------------------------------------===//
-SinkCombineResultType IcebergUpdate::Combine(ExecutionContext &context, OperatorSinkCombineInput &input) const {
-	auto &global_state = input.global_state.Cast<IcebergUpdateGlobalState>();
-	auto &local_state = input.local_state.Cast<IcebergUpdateLocalState>();
-	OperatorSinkCombineInput copy_combine_input {*copy_op.sink_state, *local_state.copy_local_state,
-	                                             input.interrupt_state};
-	auto result = copy_op.Combine(context, copy_combine_input);
+OperatorFinalizeResultType IcebergUpdate::FinalExecute(ExecutionContext &context, DataChunk &chunk,
+                                                       GlobalOperatorState &gstate_p, OperatorState &state_p) const {
+	auto &gstate = gstate_p.Cast<IcebergUpdateGlobalState>();
+	auto &lstate = state_p.Cast<IcebergUpdateLocalState>();
+
+	InterruptState interrupt_state;
+	OperatorSinkCombineInput del_combine_input {*delete_op.sink_state, *lstate.delete_local_state, interrupt_state};
+	auto result = delete_op.Combine(context, del_combine_input);
 	if (result != SinkCombineResultType::FINISHED) {
-		throw InternalException("IcebergUpdate::Combine does not support async child operators");
+		throw InternalException("IcebergUpdate::FinalExecute does not support async child operators");
 	}
-	OperatorSinkCombineInput del_combine_input {*delete_op.sink_state, *local_state.delete_local_state,
-	                                            input.interrupt_state};
-	result = delete_op.Combine(context, del_combine_input);
-	if (result != SinkCombineResultType::FINISHED) {
-		throw InternalException("IcebergUpdate::Combine does not support async child operators");
-	}
-	global_state.total_updated_count += local_state.updated_count;
-	return SinkCombineResultType::FINISHED;
+	gstate.total_updated_count += lstate.updated_count;
+	return OperatorFinalizeResultType::FINISHED;
 }
 
 //===--------------------------------------------------------------------===//
-// Finalize
+// OperatorFinalize
 //===--------------------------------------------------------------------===//
-SinkFinalizeType IcebergUpdate::Finalize(Pipeline &pipeline, Event &event, ClientContext &context,
-                                         OperatorSinkFinalizeInput &input) const {
-	OperatorSinkFinalizeInput copy_finalize_input {*copy_op.sink_state, input.interrupt_state};
-	auto result = copy_op.Finalize(pipeline, event, context, copy_finalize_input);
-	if (result != SinkFinalizeType::READY) {
-		throw InternalException("IcebergUpdate::Finalize does not support async child operators");
-	}
-	// Finalize the Deletes.
+OperatorFinalResultType IcebergUpdate::OperatorFinalize(Pipeline &pipeline, Event &event, ClientContext &context,
+                                                        OperatorFinalizeInput &input) const {
 	auto &iceberg_delete = delete_op.Cast<IcebergDelete>();
 	auto &delete_global_state = delete_op.sink_state->Cast<IcebergDeleteGlobalState>();
 	auto &iceberg_transaction = IcebergTransaction::Get(context, table.catalog);
 	iceberg_delete.FlushDeletes(iceberg_transaction, context, delete_global_state);
-
-	// scan the copy operator and sink into the insert operator
-	ThreadContext thread_context(context);
-	ExecutionContext execution_context(context, thread_context, nullptr);
-	auto global_source = copy_op.GetGlobalSourceState(context);
-	auto local_source = copy_op.GetLocalSourceState(execution_context, *global_source);
-
-	DataChunk copy_source_chunk;
-	copy_source_chunk.Initialize(context, copy_op.types);
-
-	auto global_sink = insert_op.GetGlobalSinkState(context);
-	auto local_sink = insert_op.GetLocalSinkState(execution_context);
-
-	OperatorSourceInput source_input {*global_source, *local_source, input.interrupt_state};
-	OperatorSinkInput sink_input {*global_sink, *local_sink, input.interrupt_state};
-	while (true) {
-		auto source_result = copy_op.GetData(execution_context, copy_source_chunk, source_input);
-		if (copy_source_chunk.size() == 0) {
-			break;
-		}
-		if (source_result == SourceResultType::BLOCKED) {
-			throw InternalException("IcebergUpdate::Finalize does not support async child operators");
-		}
-
-		auto sink_result = insert_op.Sink(execution_context, copy_source_chunk, sink_input);
-		if (sink_result == SinkResultType::BLOCKED) {
-			throw InternalException("IcebergUpdate::Finalize does not support async child operators");
-		}
-		if (source_result == SourceResultType::FINISHED) {
-			break;
-		}
-	}
-
-	auto &insert_global_state = global_sink->Cast<IcebergInsertGlobalState>();
-	auto &irc_table = table.Cast<IcebergTableEntry>();
-	auto &table_info = irc_table.table_info;
-	auto delete_manifest_entries = IcebergDelete::GenerateDeleteManifestEntries(delete_global_state);
-	auto insert_manifest_entries = IcebergInsert::GetInsertManifestEntries(insert_global_state);
-	if (!insert_manifest_entries.empty()) {
-		ApplyTableUpdate(table_info, iceberg_transaction, [&](IcebergTableInformation &tbl) {
-			tbl.AddUpdateSnapshot(iceberg_transaction, std::move(delete_manifest_entries),
-			                      std::move(insert_manifest_entries), std::move(delete_global_state.altered_manifests));
-
-			auto &transaction_data = *tbl.transaction_data;
-			//! Add or overwrite the currently active transaction-local delete files
-			for (auto &entry : delete_global_state.written_files) {
-				auto &delete_file = entry.second;
-				if (table_info.table_metadata.iceberg_version >= 3) {
-					transaction_data.transactional_delete_files[delete_file.data_file_path] = delete_file.file_name;
-				}
-			}
-		});
-	}
-	return SinkFinalizeType::READY;
-}
-
-//===--------------------------------------------------------------------===//
-// GetData
-//===--------------------------------------------------------------------===//
-SourceResultType IcebergUpdate::GetDataInternal(ExecutionContext &context, DataChunk &chunk,
-                                                OperatorSourceInput &input) const {
-	auto &global_state = sink_state->Cast<IcebergUpdateGlobalState>();
-	auto value = Value::BIGINT(NumericCast<int64_t>(global_state.total_updated_count.load()));
-	chunk.SetCardinality(1);
-	chunk.SetValue(0, 0, value);
-	return SourceResultType::FINISHED;
+	return OperatorFinalResultType::FINISHED;
 }
 
 //===--------------------------------------------------------------------===//
@@ -282,10 +185,6 @@ PhysicalOperator &IcebergCatalog::PlanUpdate(ClientContext &context, PhysicalPla
 	auto &table_metadata = table.table_info.table_metadata;
 	auto &table_schema = table_metadata.GetLatestSchema();
 
-	auto &partition_spec = table_metadata.GetLatestPartitionSpec();
-	if (!partition_spec.IsUnpartitioned()) {
-		throw NotImplementedException("Update into a partitioned table is not supported yet");
-	}
 	if (table_metadata.HasSortOrder()) {
 		auto &sort_spec = table_metadata.GetLatestSortOrder();
 		if (sort_spec.IsSorted()) {
@@ -296,23 +195,37 @@ PhysicalOperator &IcebergCatalog::PlanUpdate(ClientContext &context, PhysicalPla
 		throw NotImplementedException("Update Iceberg V%d tables", table_metadata.iceberg_version);
 	}
 
+	// Plan the delete operator (used as a side-sink from IcebergUpdate::Execute)
+	vector<idx_t> row_id_indexes = {0, 1};
+	auto &delete_op = IcebergDelete::PlanDelete(context, planner, table, child_plan, std::move(row_id_indexes));
+
+	// Create the IcebergUpdate intermediate operator
+	auto &update_op = planner
+	                      .Make<IcebergUpdate>(table, op.columns, child_plan, delete_op, std::move(op.expressions),
+	                                           std::move(op.bound_defaults))
+	                      .Cast<IcebergUpdate>();
+
+	// Set output types: physical columns + optional _row_id for v3
+	vector<LogicalType> update_output_types = table.GetTypes();
+	if (table_metadata.iceberg_version >= 3) {
+		update_output_types.push_back(LogicalType::BIGINT); // _row_id
+	}
+	update_op.types = std::move(update_output_types);
+
+	// Plan the copy operator with update_op as child.
+	// PlanCopyForInsert will add a partition projection on top if needed.
 	IcebergCopyInput copy_input(context, table_metadata, table_schema);
 	if (table_metadata.iceberg_version >= 3) {
 		copy_input.virtual_columns = IcebergInsertVirtualColumns::WRITE_ROW_ID;
 	}
-	auto &copy_op = IcebergInsert::PlanCopyForInsert(context, planner, copy_input, nullptr);
-	// plan the delete
-	vector<idx_t> row_id_indexes;
-	for (idx_t i = 0; i < 2; i++) {
-		row_id_indexes.push_back(i);
-	}
+	optional_ptr<PhysicalOperator> plan = &update_op;
+	auto &copy_op = IcebergInsert::PlanCopyForInsert(context, planner, copy_input, plan);
 
-	auto &delete_op = IcebergDelete::PlanDelete(context, planner, table, child_plan, std::move(row_id_indexes));
-	// plan the actual insert
-	auto &insert_op = IcebergInsert::PlanInsert(context, planner, table);
-
-	return planner.Make<IcebergUpdate>(table, op.columns, child_plan, copy_op, delete_op, insert_op,
-	                                   std::move(op.expressions), std::move(op.bound_defaults));
+	// Plan the insert sink and wire it up
+	auto &insert_op = IcebergInsert::PlanInsert(context, planner, table).Cast<IcebergInsert>();
+	insert_op.update_delete_op = delete_op;
+	insert_op.children.push_back(copy_op);
+	return insert_op;
 }
 
 void IcebergTableEntry::BindUpdateConstraints(Binder &binder, LogicalGet &get, LogicalProjection &proj,

@@ -91,8 +91,10 @@ static vector<int64_t> GetSplitOffsets(Vector &split_offsets, idx_t index) {
 }
 
 void ManifestReader::ReadChunk(DataChunk &chunk, const map<idx_t, LogicalType> &partition_field_id_to_type,
-                               idx_t iceberg_version, vector<IcebergManifestEntry> &result) {
+                               const IcebergTableMetadata &metadata, vector<IcebergManifestEntry> &result) {
 	idx_t count = chunk.size();
+	auto &partition_specs = metadata.partition_specs;
+	auto &iceberg_version = metadata.iceberg_version;
 
 	//! NOTE: the order of these columns is defined by the order that they are produced in BuildManifestSchema
 	//! see `iceberg_avro_multi_file_reader.cpp`
@@ -239,13 +241,22 @@ void ManifestReader::ReadChunk(DataChunk &chunk, const map<idx_t, LogicalType> &
 		}
 		for (auto &it : partition_vectors) {
 			auto field_id = it.first;
-			auto &partition_vector = it.second.get();
+			for (auto &id_spec : partition_specs) {
+				auto &spec = id_spec.second;
+				for (auto &field : spec.fields) {
+					if (field_id == field.partition_field_id) {
+						auto &partition_vector = it.second.get();
 
-			DataFilePartitionInfo info;
-			info.name = std::to_string(field_id);
-			info.field_id = static_cast<uint64_t>(field_id);
-			info.value = partition_vector.GetValue(index);
-			data_file.partition_info.push_back(std::move(info));
+						IcebergPartitionInfo info;
+						// info.name = field.name;
+						info.field_id = static_cast<uint64_t>(field_id);
+						info.value = partition_vector.GetValue(index);
+						// info.source_id = field.source_id;
+						// info.transform = field.transform;
+						data_file.partition_info.push_back(std::move(info));
+					}
+				}
+			}
 		}
 		result.push_back(entry);
 	}
