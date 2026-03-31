@@ -145,8 +145,8 @@ const IcebergTransactionData &IcebergMultiFileList::GetTransactionData() const {
 	return *scan_info->transaction_data;
 }
 
-optional_ptr<const IcebergSnapshot> IcebergMultiFileList::GetSnapshot() const {
-	return scan_info->snapshot;
+const IcebergSnapshotScanInfo &IcebergMultiFileList::GetSnapshot() const {
+	return scan_info->snapshot_info;
 }
 
 const IcebergTableSchema &IcebergMultiFileList::GetSchema() const {
@@ -206,14 +206,10 @@ void IcebergMultiFileList::Bind(vector<LogicalType> &return_types, vector<string
 		temp_data->metadata = IcebergTableMetadata::FromTableMetadata(table_metadata);
 		auto &metadata = temp_data->metadata;
 
-		auto found_snapshot = metadata.GetSnapshot(options.snapshot_lookup);
-		shared_ptr<IcebergTableSchema> schema;
-		if (options.snapshot_lookup.snapshot_source == SnapshotSource::LATEST) {
-			schema = metadata.GetSchemaFromId(metadata.current_schema_id);
-		} else {
-			schema = metadata.GetSchemaFromId(found_snapshot->schema_id);
-		}
-		scan_info = make_shared_ptr<IcebergScanInfo>(iceberg_path, std::move(temp_data), found_snapshot, *schema);
+		IcebergSnapshotScanInfo snapshot_info;
+		snapshot_info = metadata.GetSnapshot(options.snapshot_lookup);
+		auto schema = metadata.GetSchemaFromId(snapshot_info.schema_id);
+		scan_info = make_shared_ptr<IcebergScanInfo>(iceberg_path, std::move(temp_data), snapshot_info, *schema);
 	}
 
 	if (!initialized) {
@@ -866,10 +862,12 @@ void IcebergMultiFileList::InitializeFiles(lock_guard<mutex> &guard) const {
 	}
 	initialized = true;
 
-	if (scan_info->snapshot) {
+	auto &snapshot_info = scan_info->snapshot_info;
+	if (snapshot_info.snapshot) {
 		//! Load the snapshot
 		auto iceberg_path = GetPath();
-		auto &snapshot = *GetSnapshot();
+		auto &snapshot_info = GetSnapshot();
+		auto &snapshot = *snapshot_info.snapshot;
 		auto &metadata = GetMetadata();
 		auto &fs = FileSystem::GetFileSystem(context);
 
@@ -883,8 +881,8 @@ void IcebergMultiFileList::InitializeFiles(lock_guard<mutex> &guard) const {
 			                                   ? IcebergUtils::GetFullPath(iceberg_path, snapshot.manifest_list, fs)
 			                                   : snapshot.manifest_list;
 			//! Read the manifest list
-			auto scan =
-			    AvroScan::ScanManifestList(snapshot, metadata, context, manifest_list_full_path, manifest_list_entries);
+			auto scan = AvroScan::ScanManifestList(snapshot_info, metadata, context, manifest_list_full_path,
+			                                       manifest_list_entries);
 			auto manifest_list_reader = make_uniq<manifest_list::ManifestListReader>(*scan);
 			while (!manifest_list_reader->Finished()) {
 				manifest_list_reader->Read();
@@ -909,7 +907,7 @@ void IcebergMultiFileList::InitializeFiles(lock_guard<mutex> &guard) const {
 		}
 
 		if (!committed_delete_manifests.empty()) {
-			delete_manifest_scan = AvroScan::ScanManifest(snapshot, committed_delete_manifests, options, fs,
+			delete_manifest_scan = AvroScan::ScanManifest(snapshot_info, committed_delete_manifests, options, fs,
 			                                              iceberg_path, metadata, context);
 			delete_manifest_reader = make_uniq<manifest_file::ManifestReader>(*delete_manifest_scan);
 		}
@@ -983,12 +981,12 @@ void IcebergMultiFileList::InitializeFiles(lock_guard<mutex> &guard) const {
 
 	if (!committed_data_manifests.empty()) {
 		auto &metadata = GetMetadata();
-		auto &snapshot = *GetSnapshot();
+		auto &snapshot_info = GetSnapshot();
 		auto iceberg_path = GetPath();
 		auto &fs = FileSystem::GetFileSystem(context);
 
-		auto data_scan = AvroScan::ScanManifest(snapshot, committed_data_manifests, options, fs, iceberg_path, metadata,
-		                                        context, &read_state);
+		auto data_scan = AvroScan::ScanManifest(snapshot_info, committed_data_manifests, options, fs, iceberg_path,
+		                                        metadata, context, &read_state);
 		data_manifest_read_state =
 		    make_uniq<IcebergManifestScanningState>(context, std::move(data_scan), committed_data_manifests);
 		data_manifest_reader = make_uniq<manifest_file::ManifestReader>(*data_manifest_read_state->scan);

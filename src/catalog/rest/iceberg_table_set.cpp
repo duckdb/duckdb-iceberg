@@ -213,7 +213,7 @@ IcebergTableInformation &IcebergTableSet::CreateNewEntry(ClientContext &context,
 	int32_t last_column_id;
 	table_metadata.schemas[0] = IcebergCreateTableRequest::CreateIcebergSchema(
 	    context, table_metadata, table_ptr->GetColumns(), table_ptr->GetConstraints(), last_column_id);
-	table_metadata.current_schema_id = 0;
+	table_metadata.SetCurrentSchemaId(0);
 	table_metadata.schemas[0]->schema_id = 0;
 	table_metadata.last_column_id = last_column_id;
 

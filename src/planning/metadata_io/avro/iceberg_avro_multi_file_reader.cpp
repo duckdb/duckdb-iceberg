@@ -400,7 +400,7 @@ bool IcebergAvroMultiFileReader::Bind(MultiFileOptions &options, MultiFileList &
 	auto &scan_info = *iceberg_avro_list.info;
 	auto &type = scan_info.type;
 	auto &metadata = scan_info.metadata;
-	auto &snapshot = scan_info.snapshot;
+	auto &snapshot = *scan_info.snapshot_info.snapshot;
 
 	// Build the expected schema with field IDs
 	vector<MultiFileColumnDefinition> schema;

@@ -47,7 +47,7 @@ CopyIcebergBindData::CopyIcebergBindData(const CopyInfo &info, vector<string> &&
 	table_metadata->table_uuid = UUID::ToString(UUID::GenerateRandomUUID());
 	table_metadata->location = file_path;
 	table_metadata->iceberg_version = 2;
-	table_metadata->current_schema_id = 0;
+	table_metadata->SetCurrentSchemaId(0);
 
 	// Create ColumnList from query output
 	ColumnList columns;
@@ -59,7 +59,7 @@ CopyIcebergBindData::CopyIcebergBindData(const CopyInfo &info, vector<string> &&
 	table_schema =
 	    IcebergCreateTableRequest::CreateIcebergSchema(context, *table_metadata, columns, nullptr, last_column_id);
 	table_metadata->schemas[0] = table_schema;
-	table_metadata->current_schema_id = 0;
+	table_metadata->SetCurrentSchemaId(0);
 	//! FIXME: adapt when we have partitioning support
 	table_metadata->partition_specs.emplace(0, IcebergPartitionSpec(0));
 	table_metadata->default_spec_id = 0;
