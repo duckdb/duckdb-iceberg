@@ -224,7 +224,7 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 		auto &add_column_info = alter_table_info.Cast<AddColumnInfo>();
 		auto &column_definition = add_column_info.new_column;
 		if (column_definition.GetType().IsNested()) {
-			throw NotImplementedException("ADD COLUMN for Nested Types not supported");
+			throw NotImplementedException("ADD COLUMN for Nested Types not supported for Iceberg tables");
 		}
 
 		if (add_column_info.if_column_not_exists) {
