@@ -1,0 +1,113 @@
+# name: test/sql/local/irc_any_catalog/other_engines/partitions/test_append_bucket_varchar_for_insert.test
+# description: DuckDB appends the exact same values Spark inserted into a bucket(8, value)
+#              VARCHAR table. Filtering on each value must return exactly 2 rows — one from Spark,
+#              one from DuckDB — proving both ended up in the same partition.
+# group: [append]
+
+require-env ICEBERG_SERVER_AVAILABLE
+
+require-env SECRETS_CREATED_AND_CATALOG_ATTACHED
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+# ---- Verify Spark's initial state ----
+# Spark inserted 10 animal name strings (spread across 8 buckets) plus NULL.
+
+query I
+select count(*) from my_datalake.default.bucket_partitioned_varchar_for_insert;
+----
+11
+
+statement ok
+set variable manifest_list_path = (select manifest_list from iceberg_snapshots(my_datalake.default.bucket_partitioned_varchar_for_insert) order by sequence_number desc limit 1);
+
+statement ok
+set variable manifest_file_path = (select manifest_path from read_avro(getvariable('manifest_list_path')) order by sequence_number desc limit 1);
+
+# ---- DuckDB inserts the same values Spark inserted, with new ids ----
+
+statement ok
+INSERT INTO my_datalake.default.bucket_partitioned_varchar_for_insert VALUES
+    (101, 'aardvark'),
+    (102, 'bison'),
+    (103, 'camel'),
+    (104, 'dingo'),
+    (105, 'eagle'),
+    (106, 'falcon'),
+    (107, 'gecko'),
+    (108, 'hippo'),
+    (109, 'ibis'),
+    (110, 'jaguar'),
+    (111, NULL);
+
+query I
+select count(*) from my_datalake.default.bucket_partitioned_varchar_for_insert;
+----
+22
+
+# ---- For each inserted value, exactly 2 rows should be visible ----
+# One row from Spark (id 1-11) and one from DuckDB (id 101-111).
+
+query I
+select count(*) from my_datalake.default.bucket_partitioned_varchar_for_insert where value = 'aardvark';
+----
+2
+
+query I
+select count(*) from my_datalake.default.bucket_partitioned_varchar_for_insert where value = 'bison';
+----
+2
+
+query I
+select count(*) from my_datalake.default.bucket_partitioned_varchar_for_insert where value = 'camel';
+----
+2
+
+query I
+select count(*) from my_datalake.default.bucket_partitioned_varchar_for_insert where value = 'dingo';
+----
+2
+
+query I
+select count(*) from my_datalake.default.bucket_partitioned_varchar_for_insert where value = 'eagle';
+----
+2
+
+query I
+select count(*) from my_datalake.default.bucket_partitioned_varchar_for_insert where value = 'falcon';
+----
+2
+
+query I
+select count(*) from my_datalake.default.bucket_partitioned_varchar_for_insert where value = 'gecko';
+----
+2
+
+query I
+select count(*) from my_datalake.default.bucket_partitioned_varchar_for_insert where value = 'hippo';
+----
+2
+
+query I
+select count(*) from my_datalake.default.bucket_partitioned_varchar_for_insert where value = 'ibis';
+----
+2
+
+query I
+select count(*) from my_datalake.default.bucket_partitioned_varchar_for_insert where value = 'jaguar';
+----
+2
+
+query I
+select count(*) from my_datalake.default.bucket_partitioned_varchar_for_insert where value is null;
+----
+2
