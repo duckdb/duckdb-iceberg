@@ -273,7 +273,7 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 		new_schema->columns.push_back(std::move(new_iceberg_column));
 
 		updated_table.table_metadata.schemas[new_schema_id] = std::move(new_schema);
-		updated_table.table_metadata.current_schema_id = new_schema_id;
+		updated_table.table_metadata.SetCurrentSchemaId(new_schema_id);
 
 		// Update the Table Metadata to have our new schema
 		updated_table.CreateSchemaVersion(*updated_table.table_metadata.schemas[new_schema_id]);

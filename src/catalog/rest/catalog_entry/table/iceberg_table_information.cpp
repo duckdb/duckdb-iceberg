@@ -520,10 +520,23 @@ IcebergTableInformation IcebergTableInformation::Copy() const {
 
 IcebergTableInformation IcebergTableInformation::Copy(IcebergTransaction &iceberg_transaction) const {
 	auto ret = Copy();
+	return ret;
 	// get snapshot from start of transaction
 	// latest_snapshot_id and sequence of copied table information should be asof the transaction start
 	// this is to ensure when the transaction commits, the assert ref snapshot id is the one closest to the start of
 	// this
+
+	// FIXME: `GetSnapshotLookup(iceberg_transaction);` just ends up doing a lookup from(at); clause, which always
+	// results in snapshot schema_id.
+	// This used to override the new table_metadata.current_schema_id that was bumped after an `ALTER TABLE ... ADD
+	// COLUMN`. The ADD COLUMN resulted in NULLS only and didn't crete new parquet files, so only the schema was
+	// changed. That's why no new snapshot was made, so we need the table_metadata.schema_id.
+	//
+	// It seems the intrinsic problem is that schema_id is not version tracked.
+	//
+	// this works here for alter_add_column_then_change.test, but defeats the purpose of this function:
+	// auto snapshot_lookup = IcebergSnapshotLookup();
+
 	auto snapshot_lookup = GetSnapshotLookup(iceberg_transaction);
 	if (ret.TableIsEmpty(snapshot_lookup)) {
 		return ret;

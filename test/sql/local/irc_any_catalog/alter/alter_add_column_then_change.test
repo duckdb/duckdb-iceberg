@@ -51,6 +51,7 @@ DELETE FROM my_datalake.default.alter_add_column_same_txn_table WHERE a=1;
 statement ok
 UPDATE my_datalake.default.alter_add_column_same_txn_table SET a=42 WHERE a=3;
 
+# Is flaky, sometimes the order is different. Why is that?
 query II
 FROM my_datalake.default.alter_add_column_same_txn_table;
 ----

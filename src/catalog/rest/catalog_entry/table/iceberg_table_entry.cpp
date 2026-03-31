@@ -178,14 +178,13 @@ TableFunction IcebergTableEntry::GetScanFunction(ClientContext &context, unique_
 	// lookup should be asof start of the transaction if the lookup info is empty and there are no transaction updates
 	bool using_transaction_timestamp = false;
 	IcebergSnapshotLookup snapshot_lookup;
-	if (!lookup.GetAtClause() && !table_info.HasTransactionUpdates()) {
-		// if there is no user supplied AT () clause, and the table does not have transaction updates
-		// use transaction start time
-		snapshot_lookup = table_info.GetSnapshotLookup(context);
-		using_transaction_timestamp = true;
+
+	if (lookup.GetAtClause()) {
+		// Explicit time travel: AT (VERSION = x) or AT (TIMESTAMP = ...)
+		snapshot_lookup = IcebergSnapshotLookup::FromAtClause(lookup.GetAtClause());
 	} else {
-		auto at = lookup.GetAtClause();
-		snapshot_lookup = IcebergSnapshotLookup::FromAtClause(at);
+		// Use latest snapshot and current schema.
+		snapshot_lookup = IcebergSnapshotLookup();
 	}
 	auto &metadata = table_info.table_metadata;
 
