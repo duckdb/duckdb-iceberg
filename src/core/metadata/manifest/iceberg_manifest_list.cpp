@@ -206,8 +206,19 @@ void ManifestPartitions::Create(const IcebergTableMetadata &metadata, const Iceb
 		}
 		D_ASSERT(have_extended_partition_info);
 		auto serialized_type = extended_partition_info.transform.GetSerializedType(extended_partition_info.source_type);
-		auto lower_result = IcebergValue::SerializeValue(min_values[i], serialized_type, SerializeBound::LOWER_BOUND);
-		auto upper_result = IcebergValue::SerializeValue(max_values[i], serialized_type, SerializeBound::UPPER_BOUND);
+		SerializeResult lower_result;
+		SerializeResult upper_result;
+		// the extended partition info values come from the data file that is written.
+		// If the partition result returns a binary value, we need to write that binary value, and not re-encode it
+		//
+		if (serialized_type != LogicalType::BLOB) {
+			lower_result = IcebergValue::SerializeValue(min_values[i].DefaultCastAs(LogicalType::VARCHAR), serialized_type, SerializeBound::LOWER_BOUND);
+			upper_result = IcebergValue::SerializeValue(max_values[i].DefaultCastAs(LogicalType::VARCHAR), serialized_type, SerializeBound::UPPER_BOUND);
+		} else {
+			// we have
+			lower_result = SerializeResult(LogicalType::BLOB, min_values[i]);
+			upper_result = SerializeResult(LogicalType::BLOB, max_values[i]);
+		}
 
 		if (lower_result.HasValue()) {
 			field_summary[i].lower_bound = lower_result.GetValue();

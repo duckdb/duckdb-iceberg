@@ -185,7 +185,7 @@ static void IcebergTruncateBlob(DataChunk &input, ExpressionState &state, Vector
 	    input.data[0], input.data[1], result, input.size(), [&result](string_t val, int32_t L) -> string_t {
 		    auto size = val.GetSize();
 		    auto truncated = static_cast<idx_t>(L) < size ? static_cast<idx_t>(L) : size;
-		    return StringVector::AddString(result, val.GetData(), truncated);
+		    return StringVector::AddStringOrBlob(result, val.GetData(), truncated);
 	    });
 }
 
