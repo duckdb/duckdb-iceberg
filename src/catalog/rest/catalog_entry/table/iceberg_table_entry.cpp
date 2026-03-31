@@ -195,22 +195,13 @@ TableFunction IcebergTableEntry::GetScanFunction(ClientContext &context, unique_
 	auto &metadata = table_info.table_metadata;
 
 	IcebergSnapshotScanInfo snapshot_info;
-	try {
-		snapshot_info = metadata.GetSnapshot(snapshot_lookup);
-	} catch (InvalidConfigurationException &e) {
-		if (!table_info.TableIsEmpty(snapshot_lookup)) {
-			if (using_transaction_timestamp) {
-				// We are using the transaction start time.
-				// The table is not empty, but GetSnapshot is asking for table state before the first snapshot
-				// table creation has no snapshot, so we return this error message
-				throw InvalidConfigurationException("Table %s does not have a reachable state in this transaction",
-				                                    table_info.GetTableKey());
-			}
-			throw e;
-		}
-		// try without transaction start time bounds. This is allowed to throw
-		snapshot_lookup = IcebergSnapshotLookup::FromAtClause(lookup.GetAtClause());
-		snapshot_info = metadata.GetSnapshot(snapshot_lookup);
+	snapshot_info = metadata.GetSnapshot(snapshot_lookup);
+	if (!snapshot_info.snapshot && using_transaction_timestamp) {
+		// We are using the transaction start time.
+		// The table is not empty, but GetSnapshot is asking for table state before the first snapshot
+		// table creation has no snapshot, so we return this error message
+		throw InvalidConfigurationException("Table %s does not have a reachable state in this transaction",
+		                                    table_info.GetTableKey());
 	}
 	if (snapshot_info.schema_id != schema_id) {
 		throw InternalException(
