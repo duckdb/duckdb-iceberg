@@ -1,5 +1,5 @@
 # name: test/sql/local/irc_any_catalog/update/test_update_partitioned_table_failure.test
-# description: Test there are no new snapshots if there are no new updates
+# description: Test update on partitioned table
 # group: [update]
 
 require-env ICEBERG_SERVER_AVAILABLE
@@ -26,7 +26,3 @@ set logging_level='debug'
 statement ok
 select 1 from my_datalake.default.lineitem_partitioned_l_shipmode limit 1;
 
-statement error
-update my_datalake.default.lineitem_partitioned_l_shipmode set l_linenumber = 100 where l_linenumber % 5 = 0;
-----
-<REGEX>:.*Not implemented.*Update into a partitioned table.*

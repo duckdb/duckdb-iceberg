@@ -67,7 +67,8 @@ public:
 	//! stage create = true, table is not created, but metadata is initialized and returned
 	static rest_api_objects::LoadTableResult CommitNewTable(ClientContext &context, IcebergCatalog &catalog,
 	                                                        const IcebergTableEntry &table);
-	static rest_api_objects::CatalogConfig GetCatalogConfig(ClientContext &context, IcebergCatalog &catalog);
+	static rest_api_objects::CatalogConfig GetCatalogConfig(ClientContext &context, IcebergCatalog &catalog,
+	                                                        const string &warehouse);
 };
 
 } // namespace duckdb

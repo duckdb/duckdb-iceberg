@@ -113,7 +113,7 @@ void IcebergTableEntry::PrepareIcebergScanFromEntry(ClientContext &context) cons
 			auto kv_secret = dynamic_cast<const KeyValueSecret &>(*secret_entry->secret);
 
 			//! Override all the options if 's3tables' is the host of the catalog
-			auto substrings = StringUtil::Split(ic_catalog.warehouse, ":");
+			auto substrings = StringUtil::Split(ic_catalog.GetWarehouse(), ":");
 			D_ASSERT(substrings.size() == 6);
 			auto region = substrings[3];
 			auto endpoint = "s3." + region + ".amazonaws.com";
@@ -188,9 +188,10 @@ TableFunction IcebergTableEntry::GetScanFunction(ClientContext &context, unique_
 		snapshot_lookup = IcebergSnapshotLookup::FromAtClause(at);
 	}
 	auto &metadata = table_info.table_metadata;
-	optional_ptr<const IcebergSnapshot> snapshot = nullptr;
+
+	IcebergSnapshotScanInfo snapshot_info;
 	try {
-		snapshot = metadata.GetSnapshot(snapshot_lookup);
+		snapshot_info = metadata.GetSnapshot(snapshot_lookup);
 	} catch (InvalidConfigurationException &e) {
 		if (!table_info.TableIsEmpty(snapshot_lookup)) {
 			if (using_transaction_timestamp) {
@@ -204,21 +205,13 @@ TableFunction IcebergTableEntry::GetScanFunction(ClientContext &context, unique_
 		}
 		// try without transaction start time bounds. This is allowed to throw
 		snapshot_lookup = IcebergSnapshotLookup::FromAtClause(lookup.GetAtClause());
-		snapshot = metadata.GetSnapshot(snapshot_lookup);
-	}
-
-	int32_t schema_id;
-	if (snapshot_lookup.IsLatest()) {
-		schema_id = metadata.current_schema_id;
-	} else {
-		D_ASSERT(snapshot);
-		schema_id = snapshot->schema_id;
+		snapshot_info = metadata.GetSnapshot(snapshot_lookup);
 	}
 
 	auto &fs = FileSystem::GetFileSystem(context);
-	auto iceberg_schema = metadata.GetSchemaFromId(schema_id);
+	auto iceberg_schema = metadata.GetSchemaFromId(snapshot_info.schema_id);
 	auto scan_info =
-	    make_shared_ptr<IcebergScanInfo>(metadata.GetMetadataPath(fs), metadata, snapshot, *iceberg_schema);
+	    make_shared_ptr<IcebergScanInfo>(metadata.GetMetadataPath(fs), metadata, snapshot_info, *iceberg_schema);
 	if (table_info.transaction_data && snapshot_lookup.IsLatest()) {
 		scan_info->transaction_data = table_info.transaction_data.get();
 	}

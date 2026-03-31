@@ -59,6 +59,15 @@ set(EXTENSION_SOURCES
 	src/execution/operator/merge_into/iceberg_merge_insert.cpp
 	src/function/copy/iceberg_copy_function.cpp
 	src/function/ducklake/iceberg_to_ducklake.cpp
+	src/function/ducklake/ducklake_column.cpp
+	src/function/ducklake/ducklake_column_stats.cpp
+	src/function/ducklake/ducklake_partition.cpp
+	src/function/ducklake/ducklake_partition_column.cpp
+	src/function/ducklake/ducklake_table.cpp
+	src/function/ducklake/ducklake_snapshot.cpp
+	src/function/ducklake/ducklake_schema.cpp
+	src/function/ducklake/ducklake_data_file.cpp
+	src/function/ducklake/ducklake_delete_file.cpp
 	src/function/iceberg_functions.cpp
 	src/function/metadata/iceberg_column_stats.cpp
 	src/function/metadata/iceberg_metadata.cpp
@@ -75,7 +84,9 @@ set(EXTENSION_SOURCES
 	src/planning/metadata_io/avro/iceberg_avro_multi_file_reader.cpp
 	src/planning/metadata_io/base_manifest_reader.cpp
 	src/planning/metadata_io/deletes/iceberg_deletes_file_reader.cpp
+	src/planning/metadata_io/manifest/bound_iceberg_manifest_entry.cpp
 	src/planning/metadata_io/manifest/iceberg_manifest_reader.cpp
+	src/planning/metadata_io/manifest_list/bound_iceberg_manifest_list_entry.cpp
 	src/planning/metadata_io/manifest_list/iceberg_manifest_list_reader.cpp
 	src/planning/pruning/iceberg_predicate.cpp
 	src/planning/snapshot/iceberg_snapshot_lookup.cpp

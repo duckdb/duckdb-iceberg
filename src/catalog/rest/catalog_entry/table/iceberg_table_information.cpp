@@ -446,16 +446,8 @@ void IcebergTableInformation::SetPartitionedBy(IcebergTransaction &transaction,
 optional_ptr<CatalogEntry> IcebergTableInformation::GetSchemaVersion(optional_ptr<BoundAtClause> at) {
 	D_ASSERT(!schema_versions.empty());
 	auto snapshot_lookup = IcebergSnapshotLookup::FromAtClause(at);
-
-	int32_t schema_id;
-	if (snapshot_lookup.IsLatest()) {
-		schema_id = table_metadata.current_schema_id;
-	} else {
-		auto snapshot = table_metadata.GetSnapshot(snapshot_lookup);
-		D_ASSERT(snapshot);
-		schema_id = snapshot->schema_id;
-	}
-	return schema_versions[schema_id].get();
+	auto snapshot_info = table_metadata.GetSnapshot(snapshot_lookup);
+	return schema_versions[snapshot_info.schema_id].get();
 }
 
 idx_t IcebergTableInformation::GetIcebergVersion() const {
@@ -497,7 +489,7 @@ IcebergSnapshotLookup IcebergTableInformation::GetSnapshotLookup(ClientContext &
 
 bool IcebergTableInformation::TableIsEmpty(const IcebergSnapshotLookup &snapshot_lookup) const {
 	// edge case tables before data is inserted. There is no snapshot information, so we defer to latest.
-	if (table_metadata.snapshots.empty() && snapshot_lookup.snapshot_source == SnapshotSource::FROM_TIMESTAMP) {
+	if (table_metadata.snapshots.empty() && snapshot_lookup.IsFromTimestamp()) {
 		auto timestamp_millis = timestamp_t(Timestamp::GetEpochMs(snapshot_lookup.snapshot_timestamp));
 		if (timestamp_millis >= table_metadata.last_updated_ms) {
 			// current table was made before the transaction but is empty.
@@ -533,19 +525,19 @@ IcebergTableInformation IcebergTableInformation::Copy(IcebergTransaction &iceber
 	// this is to ensure when the transaction commits, the assert ref snapshot id is the one closest to the start of
 	// this
 	auto snapshot_lookup = GetSnapshotLookup(iceberg_transaction);
-	optional_ptr<const IcebergSnapshot> snapshot = nullptr;
+	if (ret.TableIsEmpty(snapshot_lookup)) {
+		return ret;
+	}
+	IcebergSnapshotScanInfo snapshot_info;
 	try {
-		snapshot = ret.table_metadata.GetSnapshot(snapshot_lookup);
+		snapshot_info = ret.table_metadata.GetSnapshot(snapshot_lookup);
 	} catch (InvalidConfigurationException &e) {
-		// lookup may fail for empty tables, since no snapshot exists
-		if (ret.TableIsEmpty(snapshot_lookup)) {
-			return ret;
-		}
 		throw TransactionException("Table %s is already outdated. Please restart your transaction", GetTableKey());
 	}
 
+	auto &snapshot = snapshot_info.snapshot;
 	D_ASSERT(snapshot);
-	ret.table_metadata.current_schema_id = snapshot->schema_id;
+	ret.table_metadata.SetCurrentSchemaId(snapshot_info.schema_id);
 	ret.table_metadata.last_sequence_number = snapshot->sequence_number;
 	ret.table_metadata.current_snapshot_id = snapshot->snapshot_id;
 	return ret;
@@ -574,14 +566,14 @@ void IcebergTableInformation::InitTransactionData(IcebergTransaction &transactio
 void IcebergTableInformation::AddSnapshot(IcebergTransaction &transaction, vector<IcebergManifestEntry> &&data_files) {
 	D_ASSERT(!data_files.empty());
 	InitTransactionData(transaction);
-	case_insensitive_map_t<IcebergManifestDeletes> empty_manifest_deletes;
+	IcebergManifestDeletes empty_manifest_deletes;
 	transaction_data->AddSnapshot(IcebergSnapshotOperationType::APPEND, std::move(data_files),
 	                              std::move(empty_manifest_deletes));
 }
 
 void IcebergTableInformation::AddDeleteSnapshot(IcebergTransaction &transaction,
                                                 vector<IcebergManifestEntry> &&data_files,
-                                                case_insensitive_map_t<IcebergManifestDeletes> &&altered_manifests) {
+                                                IcebergManifestDeletes &&altered_manifests) {
 	InitTransactionData(transaction);
 	transaction_data->AddSnapshot(IcebergSnapshotOperationType::DELETE, std::move(data_files),
 	                              std::move(altered_manifests));
@@ -590,7 +582,7 @@ void IcebergTableInformation::AddDeleteSnapshot(IcebergTransaction &transaction,
 void IcebergTableInformation::AddUpdateSnapshot(IcebergTransaction &transaction,
                                                 vector<IcebergManifestEntry> &&delete_files,
                                                 vector<IcebergManifestEntry> &&data_files,
-                                                case_insensitive_map_t<IcebergManifestDeletes> &&altered_manifests) {
+                                                IcebergManifestDeletes &&altered_manifests) {
 	InitTransactionData(transaction);
 	// Automatically creates new snapshot with SnapshotOperationType::Overwrite
 	transaction_data->AddUpdateSnapshot(std::move(delete_files), std::move(data_files), std::move(altered_manifests));
@@ -616,9 +608,9 @@ void IcebergTableInformation::AddAssertCurrentSchemaId(IcebergTransaction &trans
 	transaction_data->TableAddAssertCurrentSchemaId();
 }
 
-void IcebergTableInformation::AddAssertLastAssignedColumnFieldId(IcebergTransaction &transaction) {
+void IcebergTableInformation::AddAssertLastAssignedFieldId(IcebergTransaction &transaction) {
 	InitTransactionData(transaction);
-	transaction_data->TableAddAssertLastAssignedColumnFieldId();
+	transaction_data->TableAddAssertLastAssignedFieldId();
 }
 
 void IcebergTableInformation::AddAssertLastAssignedPartitionId(IcebergTransaction &transaction) {

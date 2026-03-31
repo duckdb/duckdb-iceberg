@@ -25,6 +25,12 @@
         "test/sql/local/irc_any_catalog/merge/merge_multi_partition_timestamp.test",
         "test/sql/local/irc_any_catalog/create/default/test_create_default_blob.test"
       ]
+    },
+    {
+      "reason": "Lakekeeper data generation insert results in a single parquet file",
+      "paths": [
+        "test/sql/local/irc_any_catalog/reads/should_do_filter_pruning_on_expressionless_string_filters.test"
+      ]
     }
   ]
 }

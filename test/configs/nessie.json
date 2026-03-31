@@ -26,6 +26,7 @@
         "test/sql/local/irc_any_catalog/test_row_lineage_read_from_upgraded.test",
         "test/sql/local/irc_any_catalog/test_row_lineage_write_after_upgrade.test",
         "test/sql/local/irc_any_catalog/test_basic_variant.test",
+        "test/sql/local/irc_any_catalog/update/partitions/update_v3_row_lineage.test",
         "test/sql/local/irc_any_catalog/create/default/test_create_default_varchar.test",
         "test/sql/local/irc_any_catalog/create/default/test_create_default_blob.test",
         "test/sql/local/irc_any_catalog/create/default/test_create_default_bigint.test",

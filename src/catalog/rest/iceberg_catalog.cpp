@@ -30,9 +30,9 @@ namespace duckdb {
 IcebergCatalog::IcebergCatalog(AttachedDatabase &db_p, AccessMode access_mode,
                                unique_ptr<IcebergAuthorization> auth_handler, IcebergAttachOptions &attach_options,
                                const string &default_schema)
-    : Catalog(db_p), access_mode(access_mode), auth_handler(std::move(auth_handler)),
-      warehouse(attach_options.warehouse), uri(attach_options.endpoint), version("v1"), attach_options(attach_options),
-      default_schema(default_schema), schemas(*this), metadata_cache() {
+    : Catalog(db_p), access_mode(access_mode), auth_handler(std::move(auth_handler)), uri(attach_options.endpoint),
+      version("v1"), attach_options(attach_options), default_schema(default_schema),
+      warehouse(attach_options.warehouse), schemas(*this), metadata_cache() {
 }
 
 IcebergCatalog::~IcebergCatalog() = default;
@@ -419,7 +419,13 @@ void IcebergCatalog::GetConfig(ClientContext &context, IcebergEndpointType &endp
 	// set the prefix to be empty. To get the config endpoint,
 	// we cannot add a default prefix.
 	D_ASSERT(prefix.empty());
-	auto catalog_config = IRCAPI::GetCatalogConfig(context, *this);
+
+	// For AWS Glue, ":" means "default account catalog" — omit the warehouse param
+	string effective_warehouse = warehouse;
+	if (endpoint_type == IcebergEndpointType::AWS_GLUE && warehouse == ":") {
+		effective_warehouse = "";
+	}
+	auto catalog_config = IRCAPI::GetCatalogConfig(context, *this, effective_warehouse);
 	overrides = catalog_config.overrides;
 	defaults = catalog_config.defaults;
 	ParsePrefix();

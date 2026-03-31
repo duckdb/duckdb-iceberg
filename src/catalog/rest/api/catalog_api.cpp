@@ -235,6 +235,11 @@ vector<rest_api_objects::TableIdentifier> IRCAPI::GetTables(ClientContext &conte
 			if (response->status == HTTPStatusCode::Forbidden_403 ||
 			    response->status == HTTPStatusCode::Unauthorized_401 ||
 			    response->status == HTTPStatusCode::NotFound_404) {
+				// when listing tables, if a user is not allowed to list a schema for one of the error reasons above
+				// we log a warning to notify the user. We do not error, otherwise the user won't be able to see any
+				// results.
+				DUCKDB_LOG_WARNING(context, "GET %s returned status code %s", url_builder.GetURLEncoded(),
+				                   EnumUtil::ToString(response->status));
 				// return empty result if user cannot list tables for a schema.
 				vector<rest_api_objects::TableIdentifier> ret;
 				return ret;
@@ -282,7 +287,13 @@ vector<IRCAPISchema> IRCAPI::GetSchemas(ClientContext &context, IcebergCatalog &
 		auto response = catalog.auth_handler->Request(RequestType::GET_REQUEST, context, endpoint_builder, headers);
 		if (!response->Success()) {
 			if (response->status == HTTPStatusCode::Forbidden_403 ||
-			    response->status == HTTPStatusCode::Unauthorized_401) {
+			    response->status == HTTPStatusCode::Unauthorized_401 ||
+			    response->status == HTTPStatusCode::NotFound_404) {
+				// when listing tables, if a user is not allowed to list a schema for one of the error reasons above
+				// we log a warning to notify the user. We do not error, otherwise the user won't be able to see any
+				// results.
+				DUCKDB_LOG_WARNING(context, "GET %s returned %s", endpoint_builder.GetURLEncoded(),
+				                   EnumUtil::ToString(response->status));
 				// return empty result if user cannot list schemas.
 				return result;
 			}
@@ -471,10 +482,13 @@ rest_api_objects::LoadTableResult IRCAPI::CommitNewTable(ClientContext &context,
 	}
 }
 
-rest_api_objects::CatalogConfig IRCAPI::GetCatalogConfig(ClientContext &context, IcebergCatalog &catalog) {
+rest_api_objects::CatalogConfig IRCAPI::GetCatalogConfig(ClientContext &context, IcebergCatalog &catalog,
+                                                         const string &warehouse) {
 	auto url_builder = catalog.GetBaseUrl();
 	url_builder.AddPathComponent("config");
-	url_builder.SetParam("warehouse", catalog.warehouse);
+	if (!warehouse.empty()) {
+		url_builder.SetParam("warehouse", warehouse);
+	}
 	string body = "";
 	HTTPHeaders headers(*context.db);
 	auto response = catalog.auth_handler->Request(RequestType::GET_REQUEST, context, url_builder, headers, body);

@@ -22,7 +22,7 @@ static rest_api_objects::Schema CopySchema(const IcebergTableSchema &schema) {
 
 AddSchemaUpdate::AddSchemaUpdate(const IcebergTableInformation &table_info)
     : IcebergTableUpdate(IcebergTableUpdateType::ADD_SCHEMA, table_info) {
-	auto current_schema_id = table_info.table_metadata.current_schema_id;
+	auto current_schema_id = table_info.table_metadata.GetCurrentSchemaId();
 	if (table_info.table_metadata.schemas.find(current_schema_id) == table_info.table_metadata.schemas.end()) {
 		throw InvalidConfigurationException("cannot assign a current schema id for a schema that does not yet exist");
 	};
@@ -31,8 +31,8 @@ AddSchemaUpdate::AddSchemaUpdate(const IcebergTableInformation &table_info)
 		throw InternalException("(AddSchemaUpdate) Could not find schema with id: %d", current_schema_id);
 	}
 	table_schema = it->second.get();
-	if (table_info.table_metadata.HasLastAssignedColumnFieldId()) {
-		last_column_id = table_info.table_metadata.GetLastAssignedColumnFieldId();
+	if (table_info.table_metadata.HasLastColumnId()) {
+		last_column_id = table_info.table_metadata.GetLastColumnId();
 	}
 }
 
@@ -86,7 +86,7 @@ void AssertCreateRequirement::CreateRequirement(DatabaseInstance &db, ClientCont
 
 AssertCurrentSchemaIdRequirement::AssertCurrentSchemaIdRequirement(const IcebergTableInformation &table_info)
     : IcebergTableRequirement(IcebergTableRequirementType::ASSERT_CURRENT_SCHEMA_ID, table_info) {
-	current_schema_id = table_info.table_metadata.current_schema_id;
+	current_schema_id = table_info.table_metadata.GetCurrentSchemaId();
 }
 
 void AssertCurrentSchemaIdRequirement::CreateRequirement(DatabaseInstance &db, ClientContext &context,
@@ -98,20 +98,19 @@ void AssertCurrentSchemaIdRequirement::CreateRequirement(DatabaseInstance &db, C
 	req.assert_current_schema_id.current_schema_id = current_schema_id;
 }
 
-AssertLastAssignedColumnFieldIdRequirement::AssertLastAssignedColumnFieldIdRequirement(
-    const IcebergTableInformation &table_info)
+AssertLastAssignedFieldIdRequirement::AssertLastAssignedFieldIdRequirement(const IcebergTableInformation &table_info)
     : IcebergTableRequirement(IcebergTableRequirementType::ASSERT_LAST_ASSIGNED_FIELD_ID, table_info) {
-	D_ASSERT(table_info.table_metadata.HasLastAssignedColumnFieldId());
-	last_assigned_column_field_id = static_cast<int32_t>(table_info.table_metadata.GetLastAssignedColumnFieldId());
+	D_ASSERT(table_info.table_metadata.HasLastColumnId());
+	last_assigned_field_id = static_cast<int32_t>(table_info.table_metadata.GetLastColumnId());
 }
 
-void AssertLastAssignedColumnFieldIdRequirement::CreateRequirement(DatabaseInstance &db, ClientContext &context,
-                                                                   IcebergCommitState &commit_state) {
+void AssertLastAssignedFieldIdRequirement::CreateRequirement(DatabaseInstance &db, ClientContext &context,
+                                                             IcebergCommitState &commit_state) {
 	commit_state.table_change.requirements.push_back(rest_api_objects::TableRequirement());
 	auto &req = commit_state.table_change.requirements.back();
 	req.has_assert_last_assigned_field_id = true;
 	req.assert_last_assigned_field_id.type.value = "assert-last-assigned-field-id";
-	req.assert_last_assigned_field_id.last_assigned_field_id = last_assigned_column_field_id;
+	req.assert_last_assigned_field_id.last_assigned_field_id = last_assigned_field_id;
 }
 
 AssertLastAssignedPartitionIdRequirement::AssertLastAssignedPartitionIdRequirement(
@@ -174,7 +173,7 @@ void SetCurrentSchema::CreateUpdate(DatabaseInstance &db, ClientContext &context
 	req.has_set_current_schema_update = true;
 	req.set_current_schema_update.action = "set-current-schema";
 	// TODO: should this be a different value? or is the rest catalog setting this again?
-	req.set_current_schema_update.schema_id = table_info.table_metadata.current_schema_id;
+	req.set_current_schema_update.schema_id = table_info.table_metadata.GetCurrentSchemaId();
 }
 
 AddPartitionSpec::AddPartitionSpec(const IcebergTableInformation &table_info)

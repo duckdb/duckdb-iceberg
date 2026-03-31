@@ -18,20 +18,10 @@ static void InitializeFromOtherChunk(DataChunk &target, DataChunk &other, const 
 	target.InitializeEmpty(types);
 }
 
-void IcebergMultiFileList::ScanEqualityDeleteFile(const IcebergManifestEntry &manifest_entry, DataChunk &result_p,
-                                                  vector<MultiFileColumnDefinition> &local_columns,
-                                                  const vector<MultiFileColumnDefinition> &global_columns,
-                                                  const vector<ColumnIndex> &column_indexes) const {
-	auto &data_file = manifest_entry.data_file;
-	D_ASSERT(!data_file.equality_ids.empty());
-	D_ASSERT(result_p.ColumnCount() == local_columns.size());
-
-	auto count = result_p.size();
-	if (count == 0) {
-		return;
-	}
-
-	//! Map from column_id to 'local_columns' index, to figure out which columns from the 'result_p' are relevant here
+static void ColumnsReferencedByEqualityIds(DataChunk &source, DataChunk &result,
+                                           const vector<MultiFileColumnDefinition> &local_columns,
+                                           const vector<int32_t> &equality_ids) {
+	//! Map from column_id to 'local_columns' index, to figure out which columns from the 'source' are relevant here
 	unordered_map<int32_t, column_t> id_to_column;
 	for (column_t i = 0; i < local_columns.size(); i++) {
 		auto &col = local_columns[i];
@@ -40,19 +30,38 @@ void IcebergMultiFileList::ScanEqualityDeleteFile(const IcebergManifestEntry &ma
 	}
 
 	vector<column_t> column_ids;
-	DataChunk result;
-	for (auto id : data_file.equality_ids) {
+	for (auto id : equality_ids) {
 		D_ASSERT(id_to_column.count(id));
 		column_ids.push_back(id_to_column[id]);
 	}
+	//! Take only the relevant columns from the source
+	InitializeFromOtherChunk(result, source, column_ids);
+	result.ReferenceColumns(source, column_ids);
+}
 
+void IcebergMultiFileList::ScanEqualityDeleteFile(const BoundIcebergManifestEntry &bound_manifest_entry,
+                                                  DataChunk &source, vector<MultiFileColumnDefinition> &local_columns,
+                                                  const vector<MultiFileColumnDefinition> &global_columns,
+                                                  const vector<ColumnIndex> &column_indexes) const {
+	auto &manifest_entry = bound_manifest_entry.entry;
+	auto &data_file = manifest_entry.data_file;
+	auto &manifest_file = GetManifestFileForEntry(bound_manifest_entry, IcebergManifestContentType::DELETE);
+	D_ASSERT(!data_file.equality_ids.empty());
+	D_ASSERT(source.ColumnCount() == local_columns.size());
+
+	auto count = source.size();
+	if (count == 0) {
+		return;
+	}
+
+	DataChunk result;
+	ColumnsReferencedByEqualityIds(source, result, local_columns, data_file.equality_ids);
+
+	const auto sequence_number = manifest_entry.GetSequenceNumber(manifest_file);
 	//! Get or create the equality delete data for this sequence number
-	auto it = equality_delete_data.find(manifest_entry.sequence_number);
+	auto it = equality_delete_data.find(sequence_number);
 	if (it == equality_delete_data.end()) {
-		it = equality_delete_data
-		         .emplace(manifest_entry.sequence_number,
-		                  make_uniq<IcebergEqualityDeleteData>(manifest_entry.sequence_number))
-		         .first;
+		it = equality_delete_data.emplace(sequence_number, make_uniq<IcebergEqualityDeleteData>(sequence_number)).first;
 	}
 	auto &deletes = *it->second;
 
@@ -86,11 +95,7 @@ void IcebergMultiFileList::ScanEqualityDeleteFile(const IcebergManifestEntry &ma
 		auto result_id = equality_id_to_result_id.emplace(field_id, new_result_id).first->second;
 		global_id_to_result_id[global_column_id] = result_id;
 	}
-
-	//! Take only the relevant columns from the result
-	InitializeFromOtherChunk(result, result_p, column_ids);
-	result.ReferenceColumns(result_p, column_ids);
-	deletes.files.emplace_back(data_file.partition_info, manifest_entry.partition_spec_id);
+	deletes.files.emplace_back(data_file.partition_info, manifest_file.partition_spec_id);
 	auto &rows = deletes.files.back().rows;
 	rows.resize(count);
 	D_ASSERT(result.ColumnCount() == data_file.equality_ids.size());

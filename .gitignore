@@ -23,4 +23,3 @@ __pycache__/
 
 tmp/
 .catalogs/
-test/configs/polaris.json

@@ -31,6 +31,40 @@
 
 namespace duckdb {
 
+static vector<LogicalType> IcebergManifestEntryTypes() {
+	return {
+	    //! status
+	    LogicalType::VARCHAR,
+	    //! content
+	    LogicalType::VARCHAR,
+	    //! file_path
+	    LogicalType::VARCHAR,
+	    //! file_format
+	    LogicalType::VARCHAR,
+	    //! record_count
+	    LogicalType::BIGINT,
+	};
+}
+
+static vector<string> IcebergManifestEntryNames() {
+	return {"status", "content", "file_path", "file_format", "record_count"};
+}
+
+static vector<LogicalType> IcebergManifestTypes() {
+	return {
+	    //! manifest_path
+	    LogicalType::VARCHAR,
+	    //! manifest_sequence_number
+	    LogicalType::BIGINT,
+	    //! manifest_content
+	    LogicalType::VARCHAR,
+	};
+}
+
+static vector<string> IcebergManifestNames() {
+	return {"manifest_path", "manifest_sequence_number", "manifest_content"};
+}
+
 struct IcebergMetaDataBindData : public TableFunctionData {
 	unique_ptr<IcebergManifestList> iceberg_table;
 };
@@ -80,18 +114,18 @@ static unique_ptr<FunctionData> IcebergMetaDataBind(ClientContext &context, Tabl
 			}
 			options.version_name_format = value;
 		} else if (loption == "snapshot_from_id") {
-			if (snapshot_lookup.snapshot_source != SnapshotSource::LATEST) {
+			if (snapshot_lookup.GetSource() != SnapshotSource::LATEST) {
 				throw InvalidInputException(
 				    "Can't use 'snapshot_from_id' in combination with 'snapshot_from_timestamp'");
 			}
-			snapshot_lookup.snapshot_source = SnapshotSource::FROM_ID;
+			snapshot_lookup.SetSource(SnapshotSource::FROM_ID);
 			snapshot_lookup.snapshot_id = val.GetValue<uint64_t>();
 		} else if (loption == "snapshot_from_timestamp") {
-			if (snapshot_lookup.snapshot_source != SnapshotSource::LATEST) {
+			if (snapshot_lookup.GetSource() != SnapshotSource::LATEST) {
 				throw InvalidInputException(
 				    "Can't use 'snapshot_from_id' in combination with 'snapshot_from_timestamp'");
 			}
-			snapshot_lookup.snapshot_source = SnapshotSource::FROM_TIMESTAMP;
+			snapshot_lookup.SetSource(SnapshotSource::FROM_TIMESTAMP);
 			snapshot_lookup.snapshot_timestamp = val.GetValue<timestamp_t>();
 		}
 	}
@@ -102,18 +136,18 @@ static unique_ptr<FunctionData> IcebergMetaDataBind(ClientContext &context, Tabl
 
 	auto snapshot_to_scan = metadata.GetSnapshot(options.snapshot_lookup);
 
-	if (snapshot_to_scan) {
-		ret->iceberg_table = IcebergManifestList::Load(filename, metadata, *snapshot_to_scan, context, options);
+	if (snapshot_to_scan.snapshot) {
+		ret->iceberg_table = IcebergManifestList::Load(filename, metadata, snapshot_to_scan, context, options);
 	}
 
-	auto manifest_types = IcebergManifestFile::Types();
+	auto manifest_types = IcebergManifestTypes();
 	return_types.insert(return_types.end(), manifest_types.begin(), manifest_types.end());
-	auto manifest_entry_types = IcebergManifestEntry::Types();
+	auto manifest_entry_types = IcebergManifestEntryTypes();
 	return_types.insert(return_types.end(), manifest_entry_types.begin(), manifest_entry_types.end());
 
-	auto manifest_names = IcebergManifestFile::Names();
+	auto manifest_names = IcebergManifestNames();
 	names.insert(names.end(), manifest_names.begin(), manifest_names.end());
-	auto manifest_entry_names = IcebergManifestEntry::Names();
+	auto manifest_entry_names = IcebergManifestEntryNames();
 	names.insert(names.end(), manifest_entry_names.begin(), manifest_entry_names.end());
 
 	D_ASSERT(manifest_types.size() == manifest_names.size());
@@ -153,12 +187,12 @@ static void IcebergMetaDataFunction(ClientContext &context, TableFunctionInput &
 			//! manifest_sequence_number
 			FlatVector::GetData<int64_t>(output.data[1])[out] = manifest.sequence_number;
 			//! manifest_content
-			AddString(output.data[2], out, string_t(IcebergManifestFile::ContentTypeToString(manifest.content)));
+			AddString(output.data[2], out, string_t(IcebergManifestContentTypeToString(manifest.content)));
 
 			//! status
-			AddString(output.data[3], out, string_t(IcebergManifestEntry::StatusTypeToString(manifest_entry.status)));
+			AddString(output.data[3], out, string_t(IcebergManifestEntryStatusTypeToString(manifest_entry.status)));
 			//! content
-			AddString(output.data[4], out, string_t(IcebergManifestEntry::ContentTypeToString(data_file.content)));
+			AddString(output.data[4], out, string_t(IcebergManifestEntryContentTypeToString(data_file.content)));
 			//! file_path
 			AddString(output.data[5], out, string_t(data_file.file_path));
 			//! file_format

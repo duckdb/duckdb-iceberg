@@ -45,12 +45,15 @@ public:
 	static yyjson_mut_val *ToJSON(const rest_api_objects::Snapshot &snapshot, yyjson_mut_doc *doc);
 
 public:
+	void SetSchemaId(int32_t schema_id);
+	int32_t GetSchemaId() const;
+
+public:
 	//! Snapshot metadata
 	int64_t snapshot_id = NumericLimits<int64_t>::Maximum();
 	bool has_parent_snapshot = false;
 	int64_t parent_snapshot_id = NumericLimits<int64_t>::Maximum();
 	int64_t sequence_number = 0xDEADBEEF;
-	int32_t schema_id;
 	bool has_first_row_id = false;
 	int64_t first_row_id = 0xDEADBEEF;
 	bool has_added_rows = false;
@@ -59,6 +62,9 @@ public:
 	timestamp_t timestamp_ms;
 	string manifest_list;
 	IcebergSnapshotMetrics metrics;
+
+private:
+	int32_t schema_id;
 };
 
 } // namespace duckdb
