@@ -34,8 +34,6 @@ public:
 	case_insensitive_map_t<vector<Value>> options;
 	//! Partition specification for the table (if partitioned)
 	optional_ptr<const IcebergPartitionSpec> partition_spec;
-	//! Table schema for looking up source columns by ID
-	optional_ptr<IcebergTableSchema> table_schema;
 	//! Table index for logical plan generation (used when generating partition expressions)
 	optional_idx get_table_index;
 	IcebergInsertVirtualColumns virtual_columns = IcebergInsertVirtualColumns::NONE;
