@@ -1,0 +1,195 @@
+# name: test/sql/local/irc_any_catalog/test_target_file_size_bytes.test
+# description: test write.target-file-size-bytes property controls file rotation
+# group: [irc_any_catalog]
+
+require-env ICEBERG_SERVER_AVAILABLE
+
+require-env SECRETS_CREATED_AND_CATALOG_ATTACHED
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+require aws
+
+set ignore_error_messages
+
+# Default behavior no property set, default target is 8.4MB
+# With zstd which is currently default compression 2M rows fits in 1 file
+statement ok
+drop table if exists my_datalake.default.test_target_file_size_default;
+
+statement ok
+create table my_datalake.default.test_target_file_size_default (id INTEGER, data VARCHAR);
+
+query I
+INSERT INTO my_datalake.default.test_target_file_size_default SELECT i, concat('thisisalongstring', i) FROM range(2000000) t(i)
+----
+2000000
+
+query II
+explain analyze select * from my_datalake.default.test_target_file_size_default
+----
+analyzed_plan	<REGEX>:.*Total Files Read: 1.*
+
+# Set property via CREATE TABLE WITH clause
+statement ok
+drop table if exists my_datalake.default.test_target_file_size_with;
+
+statement ok
+create table my_datalake.default.test_target_file_size_with (id INTEGER, data VARCHAR)
+WITH (
+    'write.target-file-size-bytes'='1048576'
+);
+
+query II
+select * from iceberg_table_properties(my_datalake.default.test_target_file_size_with) where key = 'write.target-file-size-bytes';
+----
+write.target-file-size-bytes	1048576
+
+query I
+INSERT INTO my_datalake.default.test_target_file_size_with SELECT i, concat('thisisalongstring', i) FROM range(2000000) t(i)
+----
+2000000
+
+query II
+explain analyze select * from my_datalake.default.test_target_file_size_with
+----
+analyzed_plan	<REGEX>:.*Total Files Read: [5-9].*
+
+
+# Set property via set_iceberg_table_properties and verify
+statement ok
+drop table if exists my_datalake.default.test_target_file_size_small;
+
+statement ok
+create table my_datalake.default.test_target_file_size_small (id INTEGER, data VARCHAR);
+
+statement ok
+CALL set_iceberg_table_properties(my_datalake.default.test_target_file_size_small,
+    {
+    'write.target-file-size-bytes' : '1048576',
+    'write.parquet.compression-codec' :	'snappy'
+    }
+);
+
+query II
+select * from iceberg_table_properties(my_datalake.default.test_target_file_size_small) where key = 'write.target-file-size-bytes';
+----
+write.target-file-size-bytes	1048576
+
+# Small file size (1MB) with snappy: 500k rows creates 5 files
+query I
+INSERT INTO my_datalake.default.test_target_file_size_small SELECT i, concat('thisisalongstring', i) FROM range(500000) t(i)
+----
+500000
+
+query II
+explain analyze select * from my_datalake.default.test_target_file_size_small
+----
+analyzed_plan	<REGEX>:.*Total Files Read: 5.*
+
+# Large file size (20MB): everything fits in 1 file
+statement ok
+drop table if exists my_datalake.default.test_target_file_size_large;
+
+statement ok
+create table my_datalake.default.test_target_file_size_large (id INTEGER, data VARCHAR);
+
+statement ok
+CALL set_iceberg_table_properties(my_datalake.default.test_target_file_size_large,
+    {
+    'write.target-file-size-bytes' : '20971520'
+    }
+);
+
+query II
+select * from iceberg_table_properties(my_datalake.default.test_target_file_size_large) where key = 'write.target-file-size-bytes';
+----
+write.target-file-size-bytes	20971520
+
+query I
+INSERT INTO my_datalake.default.test_target_file_size_large SELECT i, concat('thisisalongstring', i) FROM range(2000000) t(i)
+----
+2000000
+
+query II
+explain analyze select * from my_datalake.default.test_target_file_size_large
+----
+analyzed_plan	<REGEX>:.*Total Files Read: 1.*
+
+# Property removal reverts to default behavior
+statement ok
+drop table if exists my_datalake.default.test_target_file_size_remove;
+
+statement ok
+create table my_datalake.default.test_target_file_size_remove (id INTEGER, data VARCHAR);
+
+statement ok
+CALL set_iceberg_table_properties(my_datalake.default.test_target_file_size_remove,
+    {
+    'write.target-file-size-bytes' : '1048576'
+    }
+);
+
+query II
+select * from iceberg_table_properties(my_datalake.default.test_target_file_size_remove) where key = 'write.target-file-size-bytes';
+----
+write.target-file-size-bytes	1048576
+
+statement ok
+CALL remove_iceberg_table_properties(my_datalake.default.test_target_file_size_remove, ['write.target-file-size-bytes']);
+
+query I
+select count(*) from iceberg_table_properties(my_datalake.default.test_target_file_size_remove) where key = 'write.target-file-size-bytes';
+----
+0
+
+query I
+INSERT INTO my_datalake.default.test_target_file_size_remove SELECT i, concat('thisisalongstring', i) FROM range(2000000) t(i)
+----
+2000000
+
+query II
+explain analyze select * from my_datalake.default.test_target_file_size_remove
+----
+analyzed_plan	<REGEX>:.*Total Files Read: 1.*
+
+# Multiple inserts with 2MB target
+statement ok
+drop table if exists my_datalake.default.test_target_file_size_multiple;
+
+statement ok
+create table my_datalake.default.test_target_file_size_multiple (id INTEGER, data VARCHAR);
+
+statement ok
+CALL set_iceberg_table_properties(my_datalake.default.test_target_file_size_multiple,
+    {
+    'write.target-file-size-bytes' : '2097152'
+    }
+);
+
+query I
+INSERT INTO my_datalake.default.test_target_file_size_multiple SELECT i, concat('thisisalongstring', i) FROM range(500000) t(i)
+----
+500000
+
+query II
+explain analyze select * from my_datalake.default.test_target_file_size_multiple
+----
+analyzed_plan	<REGEX>:.*Total Files Read: 1.*
+
+query I
+INSERT INTO my_datalake.default.test_target_file_size_multiple SELECT i, concat('thisisalongstring', i) FROM range(500000, 1000000) t(i)
+----
+500000
+
+query II
+explain analyze select * from my_datalake.default.test_target_file_size_multiple
+----
+analyzed_plan	<REGEX>:.*Total Files Read: 2.*
+
