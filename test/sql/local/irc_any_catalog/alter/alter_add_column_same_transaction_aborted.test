@@ -31,7 +31,13 @@ statement ok
 begin;
 
 statement ok
+DELETE FROM my_datalake.default.alter_add_column_same_txn_table WHERE a=0;
+
+statement ok
 ALTER TABLE my_datalake.default.alter_add_column_same_txn_table ADD COLUMN b int;
+
+statement ok
+INSERT INTO my_datalake.default.alter_add_column_same_txn_table VALUES (42, 42);
 
 statement ok
 abort;
