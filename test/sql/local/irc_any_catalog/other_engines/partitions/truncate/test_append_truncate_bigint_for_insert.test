@@ -1,8 +1,9 @@
-# name: test/sql/local/irc_any_catalog/other_engines/partitions/test_append_truncate_bigint_for_insert.test
+# name: test/sql/local/irc_any_catalog/other_engines/partitions/truncate/test_append_truncate_bigint_for_insert.test
 # description: DuckDB appends the exact same values Spark inserted into a truncate(value, 10)
+# group: [truncate]
+
 #              BIGINT table. Filtering on each value must return exactly 2 rows — one from Spark,
 #              one from DuckDB — proving both ended up in the same partition.
-# group: [append]
 
 require-env ICEBERG_SERVER_AVAILABLE
 

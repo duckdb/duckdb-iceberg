@@ -212,8 +212,10 @@ void ManifestPartitions::Create(const IcebergTableMetadata &metadata, const Iceb
 		// If the partition result returns a binary value, we need to write that binary value, and not re-encode it
 		//
 		if (serialized_type != LogicalType::BLOB) {
-			lower_result = IcebergValue::SerializeValue(min_values[i].DefaultCastAs(LogicalType::VARCHAR), serialized_type, SerializeBound::LOWER_BOUND);
-			upper_result = IcebergValue::SerializeValue(max_values[i].DefaultCastAs(LogicalType::VARCHAR), serialized_type, SerializeBound::UPPER_BOUND);
+			lower_result = IcebergValue::SerializeValue(min_values[i].DefaultCastAs(LogicalType::VARCHAR),
+			                                            serialized_type, SerializeBound::LOWER_BOUND);
+			upper_result = IcebergValue::SerializeValue(max_values[i].DefaultCastAs(LogicalType::VARCHAR),
+			                                            serialized_type, SerializeBound::UPPER_BOUND);
 		} else {
 			// we have
 			lower_result = SerializeResult(LogicalType::BLOB, min_values[i]);

@@ -2,13 +2,13 @@
 # description: test integration with iceberg catalog read
 # group: [glue]
 
-# require-env ICEBERG_AWS_REMOTE_AVAILABLE
-#
-# require-env ICEBERG_REMOTE_INSERT_READY
-#
-# require-env AWS_ACCESS_KEY_ID
-#
-# require-env AWS_SECRET_ACCESS_KEY
+require-env ICEBERG_AWS_REMOTE_AVAILABLE
+
+require-env ICEBERG_REMOTE_INSERT_READY
+
+require-env AWS_ACCESS_KEY_ID
+
+require-env AWS_SECRET_ACCESS_KEY
 
 require avro
 

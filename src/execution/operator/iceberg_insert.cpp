@@ -561,7 +561,8 @@ static unique_ptr<Expression> GetTruncateExpression(ClientContext &context, Iceb
 	auto col_idx = GetColumnIndexBySourceId(copy_input.schema.columns, field.source_id);
 	auto col_type = GetSourceColumnType(copy_input, field.source_id);
 	if (col_type.id() == LogicalTypeId::DECIMAL) {
-		throw NotImplementedException("truncate partition transform on DECIMAL columns is not yet supported for INSERT");
+		throw NotImplementedException(
+		    "truncate partition transform on DECIMAL columns is not yet supported for INSERT");
 	}
 
 	vector<unique_ptr<Expression>> children;

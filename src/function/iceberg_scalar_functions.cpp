@@ -86,9 +86,7 @@ static void IcebergBucketTimestampTz(DataChunk &input, ExpressionState &state, V
 static void IcebergBucketTimestampNs(DataChunk &input, ExpressionState &state, Vector &result) {
 	BinaryExecutor::Execute<timestamp_ns_t, int32_t, int32_t>(
 	    input.data[0], input.data[1], result, input.size(),
-	    [](timestamp_ns_t val, int32_t n) -> int32_t {
-		    return (IcebergHash::HashTimestampNs(val) & 0x7FFFFFFF) % n;
-	    });
+	    [](timestamp_ns_t val, int32_t n) -> int32_t { return (IcebergHash::HashTimestampNs(val) & 0x7FFFFFFF) % n; });
 }
 
 static void IcebergBucketTime(DataChunk &input, ExpressionState &state, Vector &result) {
@@ -102,7 +100,6 @@ static void IcebergBucketUUID(DataChunk &input, ExpressionState &state, Vector &
 	    input.data[0], input.data[1], result, input.size(),
 	    [](hugeint_t val, int32_t n) -> int32_t { return (IcebergHash::HashUUID(val) & 0x7FFFFFFF) % n; });
 }
-
 
 ScalarFunctionSet IcebergFunctions::GetIcebergBucketFunction() {
 	ScalarFunctionSet set("iceberg_bucket");
