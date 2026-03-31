@@ -128,8 +128,9 @@ static unique_ptr<MergeIntoOperator> IcebergPlanMergeIntoAction(IcebergCatalog &
 		auto copy_options = IcebergInsert::GetCopyOptions(context, copy_input);
 		auto &copy_op = IcebergInsert::PlanCopyForInsert(context, planner, copy_input, nullptr);
 		auto &iceberg_table = op.table.Cast<IcebergTableEntry>();
-		auto &insert_op = IcebergInsert::PlanInsert(context, planner, iceberg_table);
+		auto &insert_op = IcebergInsert::PlanInsert(context, planner, iceberg_table).Cast<IcebergInsert>();
 		insert_op.children.push_back(copy_op);
+		insert_op.update_delete_op = update_op.delete_op;
 
 		// wrap in IcebergMergeUpdate
 		auto &merge_update =
