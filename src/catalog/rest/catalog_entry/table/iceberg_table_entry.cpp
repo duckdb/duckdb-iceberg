@@ -196,7 +196,7 @@ TableFunction IcebergTableEntry::GetScanFunction(ClientContext &context, unique_
 
 	IcebergSnapshotScanInfo snapshot_info;
 	snapshot_info = metadata.GetSnapshot(snapshot_lookup);
-	if (!snapshot_info.snapshot && using_transaction_timestamp) {
+	if (!metadata.snapshots.empty() && !snapshot_info.snapshot && using_transaction_timestamp) {
 		// We are using the transaction start time.
 		// The table is not empty, but GetSnapshot is asking for table state before the first snapshot
 		// table creation has no snapshot, so we return this error message
