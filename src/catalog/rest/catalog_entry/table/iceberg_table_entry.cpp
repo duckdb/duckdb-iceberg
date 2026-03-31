@@ -175,25 +175,23 @@ TableFunction IcebergTableEntry::GetScanFunction(ClientContext &context, unique_
 	vector<string> names;
 	TableFunctionRef empty_ref;
 
+	// lookup should be asof start of the transaction if the lookup info is empty and there are no transaction updates
 	bool using_transaction_timestamp = false;
 	IcebergSnapshotLookup snapshot_lookup;
-	if (lookup.GetAtClause()) {
-		// Explicit time travel: AT (VERSION = x) or AT (TIMESTAMP = ...)
-		snapshot_lookup = IcebergSnapshotLookup::FromAtClause(lookup.GetAtClause());
-	} else if (table_info.HasTransactionUpdates() || context.transaction.IsAutoCommit()) {
-		// Pending writes in this transaction, or autocommit (single-statement transaction).
-		// Use latest snapshot and current schema.
-		snapshot_lookup = IcebergSnapshotLookup::FromAtClause(nullptr);
-	} else {
-		// This case happens when there is an explicit transaction (BEGIN; ... COMMIT;), no pending writes, no AT
-		// clause. Use transaction start timestamp for snapshot isolation.
+	if (!lookup.GetAtClause() && !table_info.HasTransactionUpdates()) {
+		// if there is no user supplied AT () clause, and the table does not have transaction updates
+		// use transaction start time
 		snapshot_lookup = table_info.GetSnapshotLookup(context);
 		using_transaction_timestamp = true;
+	} else {
+		auto at = lookup.GetAtClause();
+		snapshot_lookup = IcebergSnapshotLookup::FromAtClause(at);
 	}
 	auto &metadata = table_info.table_metadata;
-	optional_ptr<const IcebergSnapshot> snapshot = nullptr;
+
+	IcebergSnapshotScanInfo snapshot_info;
 	try {
-		snapshot = metadata.GetSnapshot(snapshot_lookup);
+		snapshot_info = metadata.GetSnapshot(snapshot_lookup);
 	} catch (InvalidConfigurationException &e) {
 		if (!table_info.TableIsEmpty(snapshot_lookup)) {
 			if (using_transaction_timestamp) {
@@ -207,24 +205,13 @@ TableFunction IcebergTableEntry::GetScanFunction(ClientContext &context, unique_
 		}
 		// try without transaction start time bounds. This is allowed to throw
 		snapshot_lookup = IcebergSnapshotLookup::FromAtClause(lookup.GetAtClause());
-		snapshot = metadata.GetSnapshot(snapshot_lookup);
-	}
-
-	// Select which schema to use:
-	// Use snapshot's schema only for explicit time travel (AT clause), otherwise use Table Metadata's
-	// current_schema_id.
-	int32_t schema_id;
-	if (lookup.GetAtClause()) {
-		D_ASSERT(snapshot);
-		schema_id = snapshot->schema_id;
-	} else {
-		schema_id = metadata.current_schema_id;
+		snapshot_info = metadata.GetSnapshot(snapshot_lookup);
 	}
 
 	auto &fs = FileSystem::GetFileSystem(context);
-	auto iceberg_schema = metadata.GetSchemaFromId(schema_id);
+	auto iceberg_schema = metadata.GetSchemaFromId(snapshot_info.schema_id);
 	auto scan_info =
-	    make_shared_ptr<IcebergScanInfo>(metadata.GetMetadataPath(fs), metadata, snapshot, *iceberg_schema);
+	    make_shared_ptr<IcebergScanInfo>(metadata.GetMetadataPath(fs), metadata, snapshot_info, *iceberg_schema);
 	if (table_info.transaction_data && snapshot_lookup.IsLatest()) {
 		scan_info->transaction_data = table_info.transaction_data.get();
 	}

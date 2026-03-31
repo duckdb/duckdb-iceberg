@@ -400,7 +400,7 @@ bool IcebergAvroMultiFileReader::Bind(MultiFileOptions &options, MultiFileList &
 	auto &scan_info = *iceberg_avro_list.info;
 	auto &type = scan_info.type;
 	auto &metadata = scan_info.metadata;
-	auto &snapshot = scan_info.snapshot;
+	auto &snapshot = *scan_info.snapshot_info.snapshot;
 
 	// Build the expected schema with field IDs
 	vector<MultiFileColumnDefinition> schema;
@@ -503,8 +503,8 @@ void IcebergAvroMultiFileReader::FinalizeChunk(ClientContext &context, const Mul
 
 		output_chunk.Flatten();
 		idx_t start_index = manifest_file.manifest_entries.size();
-		manifest_file::ManifestReader::ReadChunk(output_chunk, manifest_scan_info.partition_field_id_to_type,
-		                                         metadata.iceberg_version, manifest_file.manifest_entries);
+		manifest_file::ManifestReader::ReadChunk(output_chunk, manifest_scan_info.partition_field_id_to_type, metadata,
+		                                         manifest_file.manifest_entries);
 		if (manifest_scan_info.read_state) {
 			auto &read_state = *manifest_scan_info.read_state;
 			read_state.PushBatch(
