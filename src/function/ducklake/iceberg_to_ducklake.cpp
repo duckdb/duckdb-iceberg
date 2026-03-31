@@ -117,7 +117,10 @@ public:
 		optional_ptr<DuckLakePartition> current_partition;
 
 		for (auto &it : snapshots) {
+			IcebergSnapshotScanInfo snapshot_info;
 			auto &snapshot = it.second.get();
+			snapshot_info.snapshot = snapshot;
+			snapshot_info.schema_id = snapshot.GetSchemaId();
 			auto &ducklake_snapshot = GetSnapshot(it.first);
 
 			if (!table.has_snapshot) {
@@ -128,7 +131,7 @@ public:
 			}
 
 			//! Process the schema changes
-			auto &current_schema = *metadata.GetSchemaFromId(snapshot.schema_id);
+			auto &current_schema = *metadata.GetSchemaFromId(snapshot.GetSchemaId());
 			auto current_columns = SchemaToColumns(current_schema);
 			vector<DuckLakeColumn> added_columns;
 			vector<int64_t> dropped_columns;
@@ -171,7 +174,7 @@ public:
 			last_schema = current_schema;
 
 			auto iceberg_manifest_list =
-			    IcebergManifestList::Load(metadata.location, metadata, snapshot, context, options);
+			    IcebergManifestList::Load(metadata.location, metadata, snapshot_info, context, options);
 
 			vector<DuckLakeDataFile> new_data_files;
 			vector<string> deleted_data_files;

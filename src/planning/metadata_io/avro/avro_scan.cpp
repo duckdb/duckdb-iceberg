@@ -62,21 +62,21 @@ AvroScan::AvroScan(const string &path, ClientContext &context, shared_ptr<Iceber
 	global_state = avro_scan->init_global(context, input);
 }
 
-unique_ptr<AvroScan> AvroScan::ScanManifest(const IcebergSnapshot &snapshot,
+unique_ptr<AvroScan> AvroScan::ScanManifest(const IcebergSnapshotScanInfo &snapshot_info,
                                             vector<IcebergManifestListEntry> &manifest_files,
                                             const IcebergOptions &options, FileSystem &fs, const string &iceberg_path,
                                             const IcebergTableMetadata &metadata, ClientContext &context,
                                             optional_ptr<ManifestEntryReadState> read_state) {
 	D_ASSERT(!manifest_files.empty());
-	auto avro_scan_info = make_shared_ptr<IcebergManifestFileScanInfo>(metadata, snapshot, manifest_files, options, fs,
-	                                                                   iceberg_path, read_state);
+	auto avro_scan_info = make_shared_ptr<IcebergManifestFileScanInfo>(metadata, snapshot_info, manifest_files, options,
+	                                                                   fs, iceberg_path, read_state);
 	return make_uniq<AvroScan>("placeholder", context, std::move(avro_scan_info));
 }
 
-unique_ptr<AvroScan> AvroScan::ScanManifestList(const IcebergSnapshot &snapshot, const IcebergTableMetadata &metadata,
-                                                ClientContext &context, const string &path,
-                                                vector<IcebergManifestListEntry> &result) {
-	auto avro_scan_info = make_shared_ptr<IcebergManifestListScanInfo>(metadata, snapshot, result);
+unique_ptr<AvroScan> AvroScan::ScanManifestList(const IcebergSnapshotScanInfo &snapshot_info,
+                                                const IcebergTableMetadata &metadata, ClientContext &context,
+                                                const string &path, vector<IcebergManifestListEntry> &result) {
+	auto avro_scan_info = make_shared_ptr<IcebergManifestListScanInfo>(metadata, snapshot_info, result);
 	return make_uniq<AvroScan>(path, context, std::move(avro_scan_info));
 }
 

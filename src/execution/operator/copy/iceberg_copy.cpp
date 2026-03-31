@@ -101,7 +101,7 @@ static void WriteIcebergMetadata(ClientContext &context, CopyIcebergBindData &bi
 	snapshot.operation = IcebergSnapshotOperationType::APPEND;
 	snapshot.snapshot_id = snapshot_id;
 	snapshot.sequence_number = sequence_number;
-	snapshot.schema_id = 0;
+	snapshot.SetSchemaId(0);
 	snapshot.manifest_list = manifest_list_path;
 	snapshot.timestamp_ms = Timestamp::GetEpochMs(Timestamp::GetCurrentTimestamp());
 	snapshot.has_parent_snapshot = false;
