@@ -359,7 +359,6 @@ optional_ptr<CatalogEntry> IcebergTableSet::GetEntry(ClientContext &context, con
 	auto transaction_start_millis = Timestamp::GetEpochMs(transaction_start);
 
 	auto &table_metadata_last_updated_at = ic_ret.table_info.table_metadata.last_updated_ms;
-	// TODO: do we even need the timestamp checks? if schema_id mismatches the timestamp check will always mismatch, no?
 	if (transaction_start_millis < table_metadata_last_updated_at.value &&
 	    latest_snapshot->GetSchemaId() != ic_ret.table_info.table_metadata.GetCurrentSchemaId()) {
 		DUCKDB_LOG_WARNING(
