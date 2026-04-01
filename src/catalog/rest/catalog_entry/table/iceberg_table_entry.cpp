@@ -168,17 +168,13 @@ TableFunction IcebergTableEntry::GetScanFunction(ClientContext &context, unique_
 	auto iceberg_scan_function =
 	    iceberg_scan_function_set.functions.GetFunctionByArguments(context, {LogicalType::VARCHAR});
 	PrepareIcebergScanFromEntry(context);
-	auto storage_location = table_info.table_metadata.location;
 
 	if (!schema_id.IsValid()) {
 		throw InternalException("GetScanFunction was called with a dummy IcebergTableEntry, this should never happen");
 	}
 	const auto schema_id = this->schema_id.GetIndex();
-
-	named_parameter_map_t param_map;
-	vector<LogicalType> return_types;
-	vector<string> names;
-	TableFunctionRef empty_ref;
+	const auto &metadata = table_info.table_metadata;
+	const auto &iceberg_schema = *metadata.GetSchemaFromId(schema_id);
 
 	// lookup should be asof start of the transaction if the lookup info is empty and there are no transaction updates
 	bool using_transaction_timestamp = false;
@@ -192,10 +188,18 @@ TableFunction IcebergTableEntry::GetScanFunction(ClientContext &context, unique_
 		auto at = lookup.GetAtClause();
 		snapshot_lookup = IcebergSnapshotLookup::FromAtClause(at);
 	}
-	auto &metadata = table_info.table_metadata;
 
 	IcebergSnapshotScanInfo snapshot_info;
 	snapshot_info = metadata.GetSnapshot(snapshot_lookup);
+	if (snapshot_info.snapshot && snapshot_info.snapshot->GetSchemaId() > schema_id) {
+		throw InternalException("Tried to scan a snapshot created with a newer schema id (%d) than the schema id "
+		                        "selected for the scan (%d)",
+		                        snapshot_info.snapshot->GetSchemaId(), schema_id);
+	}
+	//! Override whatever schema id the lookup resulted in
+	//! The schema is preset by the IcebergCatalogEntry and we can not deviate from that
+	snapshot_info.schema_id = schema_id;
+
 	if (!metadata.snapshots.empty() && !snapshot_info.snapshot && using_transaction_timestamp) {
 		// We are using the transaction start time.
 		// The table is not empty, but GetSnapshot is asking for table state before the first snapshot
@@ -203,23 +207,22 @@ TableFunction IcebergTableEntry::GetScanFunction(ClientContext &context, unique_
 		throw InvalidConfigurationException("Table %s does not have a reachable state in this transaction",
 		                                    table_info.GetTableKey());
 	}
-	if (snapshot_info.schema_id != schema_id) {
-		throw InternalException(
-		    "Attempting to scan a schema_id (%d) that doesn't align with the schema id of the table entry (%d)!",
-		    snapshot_info.schema_id, schema_id);
-	}
 
 	auto &fs = FileSystem::GetFileSystem(context);
-	auto iceberg_schema = metadata.GetSchemaFromId(snapshot_info.schema_id);
 	auto scan_info =
-	    make_shared_ptr<IcebergScanInfo>(metadata.GetMetadataPath(fs), metadata, snapshot_info, *iceberg_schema);
+	    make_shared_ptr<IcebergScanInfo>(metadata.GetMetadataPath(fs), metadata, snapshot_info, iceberg_schema);
 	if (table_info.transaction_data && snapshot_lookup.IsLatest()) {
 		scan_info->transaction_data = table_info.transaction_data.get();
 	}
 
 	iceberg_scan_function.function_info = scan_info;
+	named_parameter_map_t param_map;
+	vector<LogicalType> return_types;
+	vector<string> names;
+	TableFunctionRef empty_ref;
 
 	// Set the S3 path as input to table function
+	const auto &storage_location = metadata.location;
 	vector<Value> inputs = {storage_location};
 	TableFunctionBindInput bind_input(inputs, param_map, return_types, names, nullptr, nullptr, iceberg_scan_function,
 	                                  empty_ref);
