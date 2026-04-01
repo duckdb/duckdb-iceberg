@@ -22,6 +22,7 @@ public:
 
 public:
 	string path;
+	string file_format;
 	int64_t record_count;
 	int64_t file_size_bytes;
 	string data_file_path;
