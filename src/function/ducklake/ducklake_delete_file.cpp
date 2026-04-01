@@ -53,9 +53,51 @@ string DuckLakeDeleteFile::FinalizeEntry(int64_t table_id, vector<DuckLakeDataFi
 	auto &data_file = all_data_files[referenced_data_file];
 	int64_t data_file_id = data_file.data_file_id.GetIndex();
 
-	return StringUtil::Format("VALUES(%d, %d, %d, %s, %d, '%s', false, 'parquet', %d, %d, NULL, NULL);", delete_file_id,
-	                          table_id, snapshot_ids.first, snapshot_ids.second, data_file_id, path, record_count,
-	                          file_size_bytes);
+	const auto DELETE_FILE_SQL = R"(
+		INSERT INTO {METADATA_CATALOG}.ducklake_delete_file VALUES (
+			%d, -- delete_file_id
+			%d, -- table_id
+			%d, -- begin_snapshot
+			%s, -- end_snapshot
+			%d, -- data_file_id
+			'%s', -- path
+			%s, -- path_is_relative
+			'%s', -- format
+			%d, -- delete_count
+			%d, -- file_size_bytes
+			%s, -- footer_size
+			%s, -- encryption_key
+			%s -- partial_max
+		);
+	)";
+
+	return StringUtil::Format(DELETE_FILE_SQL,
+	                          // delete_file_id
+	                          delete_file_id,
+	                          // table_id
+	                          table_id,
+	                          // begin_snapshot
+	                          snapshot_ids.first,
+	                          // end_snapshot
+	                          snapshot_ids.second,
+	                          // data_file_id
+	                          data_file_id,
+	                          // path
+	                          path,
+	                          // path_is_relative
+	                          "false",
+	                          // format
+	                          "parquet",
+	                          // delete_count
+	                          record_count,
+	                          // file_size_bytes
+	                          file_size_bytes,
+	                          // footer_size
+	                          "NULL",
+	                          // encryption_key
+	                          "NULL",
+	                          // partial_max
+	                          "NULL");
 }
 
 } // namespace ducklake
