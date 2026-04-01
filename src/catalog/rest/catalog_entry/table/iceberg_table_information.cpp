@@ -443,12 +443,20 @@ void IcebergTableInformation::SetPartitionedBy(IcebergTransaction &transaction,
 	}
 }
 
-optional_ptr<CatalogEntry> IcebergTableInformation::GetSchemaVersion(const IcebergSnapshotLookup &snapshot_lookup) {
+optional_ptr<CatalogEntry> IcebergTableInformation::GetSchemaVersion(const IcebergSnapshotLookup &snapshot_lookup,
+                                                                     ClientContext &context) {
 	D_ASSERT(!schema_versions.empty());
 	if (table_metadata.snapshots.empty()) {
 		return schema_versions[table_metadata.GetCurrentSchemaId()].get();
 	}
 	auto snapshot_info = table_metadata.GetSnapshot(snapshot_lookup);
+	auto &meta_transaction = MetaTransaction::Get(context);
+	auto transaction_start = meta_transaction.GetCurrentTransactionStartTimestamp();
+	auto transaction_start_millis = Timestamp::GetEpochMs(transaction_start);
+
+	if (transaction_start_millis > table_metadata.last_updated_ms.value || snapshot_info.snapshot) {
+		snapshot_info.schema_id = table_metadata.GetCurrentSchemaId();
+	}
 	return schema_versions[snapshot_info.schema_id].get();
 }
 
@@ -456,9 +464,9 @@ idx_t IcebergTableInformation::GetIcebergVersion() const {
 	return table_metadata.iceberg_version;
 }
 
-optional_ptr<CatalogEntry> IcebergTableInformation::GetLatestSchema() {
+optional_ptr<CatalogEntry> IcebergTableInformation::GetLatestSchema(ClientContext &context) {
 	IcebergSnapshotLookup latest_snapshot;
-	return GetSchemaVersion(latest_snapshot);
+	return GetSchemaVersion(latest_snapshot, context);
 }
 
 string IcebergTableInformation::GetTableKey(const vector<string> &namespace_items, const string &table_name) {
@@ -520,27 +528,9 @@ IcebergTableInformation IcebergTableInformation::Copy() const {
 	}
 	return ret;
 }
-
+// Does not use snapshot's schema id, schema may have changed
 IcebergTableInformation IcebergTableInformation::Copy(IcebergTransaction &iceberg_transaction) const {
 	auto ret = Copy();
-	return ret; // fixes insert after add column (otherwise schema_id is overwritten)
-
-	// get snapshot from start of transaction
-	// latest_snapshot_id and sequence of copied table information should be asof the transaction start
-	// this is to ensure when the transaction commits, the assert ref snapshot id is the one closest to the start of
-	// this
-
-	// FIXME: `GetSnapshotLookup(iceberg_transaction);` just ends up doing a lookup from(at); clause, which always
-	// results in snapshot schema_id.
-	// This used to override the new table_metadata.current_schema_id that was bumped after an `ALTER TABLE ... ADD
-	// COLUMN`. The ADD COLUMN resulted in NULLS only and didn't crete new parquet files, so only the schema was
-	// changed. That's why no new snapshot was made, so we need the table_metadata.schema_id.
-	//
-	// It seems the intrinsic problem is that schema_id is not version tracked.
-	//
-	// this works here for alter_add_column_then_change.test, but defeats the purpose of this function:
-	// auto snapshot_lookup = IcebergSnapshotLookup();
-
 	auto snapshot_lookup = GetSnapshotLookup(iceberg_transaction);
 	if (ret.TableIsEmpty(snapshot_lookup)) {
 		return ret;
@@ -554,7 +544,8 @@ IcebergTableInformation IcebergTableInformation::Copy(IcebergTransaction &iceber
 
 	auto &snapshot = snapshot_info.snapshot;
 	D_ASSERT(snapshot);
-	ret.table_metadata.SetCurrentSchemaId(snapshot_info.schema_id);
+	ret.table_metadata.SetCurrentSchemaId(table_metadata.GetCurrentSchemaId());
+	// ret.table_metadata.SetCurrentSchemaId(snapshot_info.schema_id);
 	ret.table_metadata.last_sequence_number = snapshot->sequence_number;
 	ret.table_metadata.current_snapshot_id = snapshot->snapshot_id;
 	return ret;

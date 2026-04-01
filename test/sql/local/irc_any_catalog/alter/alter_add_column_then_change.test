@@ -51,9 +51,9 @@ DELETE FROM my_datalake.default.alter_add_column_same_txn_table WHERE a=1;
 statement ok
 UPDATE my_datalake.default.alter_add_column_same_txn_table SET a=42 WHERE a=3;
 
-# Without the`ORDER BY a` this test is flaky. Sometimes the order of the rows is different. Why is that?
+# Without the`ORDER BY a, b` this test is flaky. Sometimes the order of the rows is different. Why is that?
 query II
-FROM my_datalake.default.alter_add_column_same_txn_table ORDER BY a;
+FROM my_datalake.default.alter_add_column_same_txn_table ORDER BY a, b;
 ----
 0	NULL
 2	NULL

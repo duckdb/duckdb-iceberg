@@ -296,7 +296,7 @@ optional_ptr<CatalogEntry> IcebergTableSet::GetEntry(ClientContext &context, con
 		if (it != iceberg_transaction.updated_tables.end()) {
 			auto &table_info = it->second;
 			auto snapshot_lookup = GetSnapshotLookup(table_info, context, lookup);
-			return table_info.GetSchemaVersion(snapshot_lookup);
+			return table_info.GetSchemaVersion(snapshot_lookup, context);
 		}
 	}
 	auto previous_request_info = iceberg_transaction.GetTableRequestResult(table_key);
@@ -312,7 +312,7 @@ optional_ptr<CatalogEntry> IcebergTableSet::GetEntry(ClientContext &context, con
 		}
 		auto &table_info = entry->second;
 		auto snapshot_lookup = GetSnapshotLookup(table_info, context, lookup);
-		return table_info.GetSchemaVersion(snapshot_lookup);
+		return table_info.GetSchemaVersion(snapshot_lookup, context);
 	}
 
 	if (entries.find(table_name) != entries.end()) {
@@ -327,9 +327,18 @@ optional_ptr<CatalogEntry> IcebergTableSet::GetEntry(ClientContext &context, con
 		iceberg_transaction.RecordTableRequest(table_key);
 		return nullptr;
 	}
+	IcebergSnapshotLookup snapshot_lookup;
 
-	auto snapshot_lookup = GetSnapshotLookup(table_info, context, lookup);
-	auto ret = table_info.GetSchemaVersion(snapshot_lookup);
+	if (!lookup.GetAtClause() && !table_info.HasTransactionUpdates()) {
+		// if there is no user supplied AT () clause, and the table does not have transaction updates
+		// use transaction start time
+		snapshot_lookup = table_info.GetSnapshotLookup(context);
+	} else {
+		auto at = lookup.GetAtClause();
+		snapshot_lookup = IcebergSnapshotLookup::FromAtClause(at);
+	};
+
+	auto ret = table_info.GetSchemaVersion(snapshot_lookup, context);
 
 	// get the latest information and save it to the transaction cache
 	auto &ic_ret = ret->Cast<IcebergTableEntry>();
@@ -342,6 +351,19 @@ optional_ptr<CatalogEntry> IcebergTableSet::GetEntry(ClientContext &context, con
 		// table is not yet initialized.
 		latest_sequence_number = 0;
 		latest_snapshot_id = -1;
+	}
+
+	// Log warning on schema_id mismatch
+	auto &meta_transaction = MetaTransaction::Get(context);
+	auto transaction_start = meta_transaction.GetCurrentTransactionStartTimestamp();
+	auto transaction_start_millis = Timestamp::GetEpochMs(transaction_start);
+
+	auto &table_metadata_last_updated_at = ic_ret.table_info.table_metadata.last_updated_ms;
+	// TODO: do we even need the timestamp checks? if schema_id mismatches the timestamp check will always mismatch, no?
+	if (transaction_start_millis < table_metadata_last_updated_at.value &&
+	    latest_snapshot->GetSchemaId() != ic_ret.table_info.table_metadata.GetCurrentSchemaId()) {
+		DUCKDB_LOG_WARNING(
+		    context, "Detected schema change during transaction (schema_id mismatch); ACID guarantees may not hold.");
 	}
 
 	iceberg_transaction.RecordTableRequest(table_key, latest_sequence_number, latest_snapshot_id);
