@@ -17,9 +17,34 @@ string DuckLakeSchema::FinalizeEntry(const map<timestamp_t, DuckLakeSnapshot> &s
 	int64_t schema_id = snapshot.base_catalog_id + catalog_id_offset;
 	this->schema_id = schema_id;
 
+	const auto SCHEMA_SQL = R"(
+		INSERT INTO {METADATA_CATALOG}.ducklake_schema VALUES (
+			%d, -- schema_id
+			'%s', -- schema_uuid
+			%d, -- begin_snapshot
+			%s, -- end_snapshot
+			'%s', -- schema_name
+			'%s', -- path
+			%s -- path_is_relative
+		);
+	)";
+
 	int64_t begin_snapshot = snapshot.snapshot_id.GetIndex();
-	return StringUtil::Format("VALUES (%d, '%s', %d, NULL, '%s', '', false);", schema_id, schema_uuid, begin_snapshot,
-	                          schema_name);
+	return StringUtil::Format(SCHEMA_SQL,
+	                          // schema_id
+	                          schema_id,
+	                          // schema_uuid
+	                          schema_uuid,
+	                          // begin_snapshot
+	                          begin_snapshot,
+	                          // end_snapshot
+	                          "NULL",
+	                          // schema_name
+	                          schema_name,
+	                          // path
+	                          "",
+	                          // path_is_relative
+	                          "false");
 }
 
 void DuckLakeSchema::AssignEarliestSnapshot(unordered_map<string, DuckLakeTable> &all_tables,

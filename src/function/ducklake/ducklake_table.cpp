@@ -145,8 +145,37 @@ string DuckLakeTable::FinalizeEntry(int64_t schema_id, const map<timestamp_t, Du
 	this->table_id = table_id;
 
 	auto snapshot_ids = DuckLakeUtils::GetSnapshots(start_snapshot, false, timestamp_t(0), snapshots);
-	return StringUtil::Format("VALUES(%d, '%s', %d, %s, %d, '%s', '', false);", table_id, table_uuid,
-	                          snapshot_ids.first, snapshot_ids.second, schema_id, table_name);
+
+	const auto TABLE_SQL = R"(
+		INSERT INTO {METADATA_CATALOG}.ducklake_table VALUES(
+			%d, -- table_id
+			'%s', -- table_uuid
+			%d, -- begin_snapshot
+			%s, -- end_snapshot
+			%d, -- schema_id
+			'%s', -- table_name
+			'%s', -- path
+			%s -- path_is_relative
+		);
+	)";
+
+	return StringUtil::Format(TABLE_SQL,
+	                          // table_id
+	                          table_id,
+	                          // table_uuid
+	                          table_uuid,
+	                          // begin_snapshot
+	                          snapshot_ids.first,
+	                          // end_snapshot
+	                          snapshot_ids.second,
+	                          // schema_id
+	                          schema_id,
+	                          // table_name
+	                          table_name,
+	                          // path
+	                          "",
+	                          // path_is_relative
+	                          "false");
 }
 
 } // namespace ducklake
