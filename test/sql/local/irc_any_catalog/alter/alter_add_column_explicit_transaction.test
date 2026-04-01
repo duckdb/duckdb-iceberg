@@ -18,6 +18,12 @@ require httpfs
 set ignore_error_messages
 
 statement ok
+CALL enable_logging(level='warning');
+
+statement ok
+SET warnings_as_errors = True;
+
+statement ok
 CREATE SCHEMA IF NOT EXISTS my_datalake.default;
 
 statement ok

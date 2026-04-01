@@ -18,6 +18,9 @@ require httpfs
 set ignore_error_messages
 
 statement ok
+CALL enable_logging(level='warning');
+
+statement ok
 CREATE SCHEMA IF NOT EXISTS my_datalake.default;
 
 statement ok
@@ -51,9 +54,6 @@ FROM my_datalake.default.alter_add_column_explicit_txn ORDER BY a;
 
 statement ok con1
 COMMIT;
-
-statement ok
-CALL enable_logging(level='warning');
 
 # Schema changed, ACID is violated.
 query II con2
