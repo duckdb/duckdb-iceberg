@@ -108,12 +108,7 @@ optional_ptr<const IcebergSnapshot> IcebergTableMetadata::GetSnapshotById(int64_
 }
 
 optional_ptr<const IcebergSnapshot> IcebergTableMetadata::GetSnapshotByTimestamp(timestamp_t timestamp) const {
-	auto snapshot = FindSnapshotByIdTimestampInternal(timestamp);
-	if (!snapshot) {
-		throw InvalidConfigurationException("Could not find latest snapshots for timestamp " +
-		                                    Timestamp::ToString(timestamp));
-	}
-	return snapshot;
+	return FindSnapshotByIdTimestampInternal(timestamp);
 }
 
 IcebergSnapshotScanInfo IcebergTableMetadata::GetSnapshot(const IcebergSnapshotLookup &lookup) const {
@@ -129,7 +124,11 @@ IcebergSnapshotScanInfo IcebergTableMetadata::GetSnapshot(const IcebergSnapshotL
 		return snapshot_info;
 	case SnapshotSource::FROM_TIMESTAMP:
 		snapshot_info.snapshot = GetSnapshotByTimestamp(lookup.snapshot_timestamp);
-		snapshot_info.schema_id = snapshot_info.snapshot->GetSchemaId();
+		if (snapshot_info.snapshot) {
+			snapshot_info.schema_id = snapshot_info.snapshot->GetSchemaId();
+		} else {
+			snapshot_info.schema_id = GetCurrentSchemaId();
+		}
 		return snapshot_info;
 	default:
 		throw InternalException("SnapshotSource type not implemented");
