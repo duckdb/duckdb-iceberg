@@ -12,7 +12,7 @@ struct IcebergTableInformation;
 class IcebergTableEntry : public TableCatalogEntry {
 public:
 	IcebergTableEntry(IcebergTableInformation &table_info, Catalog &catalog, SchemaCatalogEntry &schema,
-	                  CreateTableInfo &info);
+	                  CreateTableInfo &info, optional_idx schema_id);
 
 	static virtual_column_map_t VirtualColumns();
 	virtual_column_map_t GetVirtualColumns() const override;
@@ -31,6 +31,8 @@ public:
 
 public:
 	IcebergTableInformation &table_info;
+	//! 'schema_id' used to create the entry, or invalid if this is a dummy
+	optional_idx schema_id;
 };
 
 struct IcebergTableEntryHashFunction {

@@ -733,8 +733,12 @@ IcebergCopyOptions IcebergInsert::GetCopyOptions(ClientContext &context, Iceberg
 		result.partition_output = false;
 		result.write_empty_file = false;
 		// file_size_bytes is currently only supported for unpartitioned writes
-		//! FIXME: should use 'write.target-file-size-bytes' instead
-		result.file_size_bytes = IcebergCatalog::DEFAULT_TARGET_FILE_SIZE;
+		auto write_target_file_size = table_properties.find("write.target-file-size-bytes");
+		if (write_target_file_size != table_properties.end()) {
+			result.file_size_bytes = std::stoull(write_target_file_size->second);
+		} else {
+			result.file_size_bytes = IcebergCatalog::DEFAULT_TARGET_FILE_SIZE;
+		}
 		result.rotate = true;
 	}
 
