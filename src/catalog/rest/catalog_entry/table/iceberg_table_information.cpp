@@ -520,7 +520,8 @@ IcebergTableInformation IcebergTableInformation::Copy() const {
 
 IcebergTableInformation IcebergTableInformation::Copy(IcebergTransaction &iceberg_transaction) const {
 	auto ret = Copy();
-	return ret;
+	return ret; // fixes insert after add column (otherwise schema_id is overwritten)
+
 	// get snapshot from start of transaction
 	// latest_snapshot_id and sequence of copied table information should be asof the transaction start
 	// this is to ensure when the transaction commits, the assert ref snapshot id is the one closest to the start of
