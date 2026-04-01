@@ -528,7 +528,7 @@ IcebergTableInformation IcebergTableInformation::Copy() const {
 	}
 	return ret;
 }
-// Does not use snapshot's schema id, schema may have changed
+
 IcebergTableInformation IcebergTableInformation::Copy(IcebergTransaction &iceberg_transaction) const {
 	auto ret = Copy();
 	auto snapshot_lookup = GetSnapshotLookup(iceberg_transaction);
@@ -545,7 +545,6 @@ IcebergTableInformation IcebergTableInformation::Copy(IcebergTransaction &iceber
 	auto &snapshot = snapshot_info.snapshot;
 	D_ASSERT(snapshot);
 	ret.table_metadata.SetCurrentSchemaId(table_metadata.GetCurrentSchemaId());
-	// ret.table_metadata.SetCurrentSchemaId(snapshot_info.schema_id);
 	ret.table_metadata.last_sequence_number = snapshot->sequence_number;
 	ret.table_metadata.current_snapshot_id = snapshot->snapshot_id;
 	return ret;
