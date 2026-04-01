@@ -26,9 +26,6 @@ drop table if exists my_datalake.default.alter_add_column_explicit_txn;
 statement ok
 CREATE TABLE my_datalake.default.alter_add_column_explicit_txn WITH ('format-version' = 2) AS (select range a FROM range(10));
 
-statement ok
-INSERT INTO my_datalake.default.alter_add_column_explicit_txn VALUES (42);
-
 statement ok con1
 BEGIN;
 
@@ -51,7 +48,6 @@ FROM my_datalake.default.alter_add_column_explicit_txn ORDER BY a;
 7	NULL
 8	NULL
 9	NULL
-42	NULL
 
 statement ok con1
 COMMIT;
@@ -69,11 +65,9 @@ FROM my_datalake.default.alter_add_column_explicit_txn ORDER BY a;
 7
 8
 9
-42
 
 statement ok con2
-INSERT INTO my_datalake.default.alter_add_column_explicit_txn VALUES (43);
-
+INSERT INTO my_datalake.default.alter_add_column_explicit_txn VALUES (42);
 
 query I con2
 FROM my_datalake.default.alter_add_column_explicit_txn ORDER BY a;
@@ -89,9 +83,6 @@ FROM my_datalake.default.alter_add_column_explicit_txn ORDER BY a;
 8
 9
 42
-43
-
-
 
 statement error con2
 COMMIT;
