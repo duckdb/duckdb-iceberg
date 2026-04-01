@@ -1,0 +1,99 @@
+# name: test/sql/local/irc_any_catalog/alter/alter_add_column_two_transactions.test
+# description: Reading an altered table inside an explicit BEGIN/COMMIT transaction (after ALTER already committed)
+# group: [alter]
+
+require-env ICEBERG_SERVER_AVAILABLE
+
+require-env SECRETS_CREATED_AND_CATALOG_ATTACHED
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+CREATE SCHEMA IF NOT EXISTS my_datalake.default;
+
+statement ok
+drop table if exists my_datalake.default.alter_add_column_explicit_txn;
+
+statement ok
+CREATE TABLE my_datalake.default.alter_add_column_explicit_txn WITH ('format-version' = 2) AS (select range a FROM range(10));
+
+statement ok
+INSERT INTO my_datalake.default.alter_add_column_explicit_txn VALUES (42);
+
+statement ok con1
+BEGIN;
+
+statement ok con2
+BEGIN;
+
+statement ok con1
+ALTER TABLE my_datalake.default.alter_add_column_explicit_txn ADD COLUMN b int;
+
+query II con1
+FROM my_datalake.default.alter_add_column_explicit_txn ORDER BY a;
+----
+0	NULL
+1	NULL
+2	NULL
+3	NULL
+4	NULL
+5	NULL
+6	NULL
+7	NULL
+8	NULL
+9	NULL
+42	NULL
+
+statement ok con1
+COMMIT;
+
+query I con2
+FROM my_datalake.default.alter_add_column_explicit_txn ORDER BY a;
+----
+0
+1
+2
+3
+4
+5
+6
+7
+8
+9
+42
+
+statement ok con2
+INSERT INTO my_datalake.default.alter_add_column_explicit_txn VALUES (43);
+
+
+query I con2
+FROM my_datalake.default.alter_add_column_explicit_txn ORDER BY a;
+----
+0
+1
+2
+3
+4
+5
+6
+7
+8
+9
+42
+43
+
+
+
+statement error con2
+COMMIT;
+----
+<REGEX>:.*TransactionContext Error.*
