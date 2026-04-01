@@ -444,7 +444,7 @@ void IcebergTableInformation::SetPartitionedBy(IcebergTransaction &transaction,
 }
 
 optional_ptr<CatalogEntry> IcebergTableInformation::GetSchemaVersion(const IcebergSnapshotLookup &snapshot_lookup,
-                                                                     ClientContext &context) {
+                                                                     ClientContext &context, bool is_time_travel) {
 	D_ASSERT(!schema_versions.empty());
 	if (table_metadata.snapshots.empty()) {
 		return schema_versions[table_metadata.GetCurrentSchemaId()].get();
@@ -454,7 +454,8 @@ optional_ptr<CatalogEntry> IcebergTableInformation::GetSchemaVersion(const Icebe
 	auto transaction_start = meta_transaction.GetCurrentTransactionStartTimestamp();
 	auto transaction_start_millis = Timestamp::GetEpochMs(transaction_start);
 
-	if (transaction_start_millis > table_metadata.last_updated_ms.value || snapshot_info.snapshot) {
+	if (!is_time_travel &&
+	    (transaction_start_millis > table_metadata.last_updated_ms.value || snapshot_info.snapshot)) {
 		snapshot_info.schema_id = table_metadata.GetCurrentSchemaId();
 	}
 	return schema_versions[snapshot_info.schema_id].get();

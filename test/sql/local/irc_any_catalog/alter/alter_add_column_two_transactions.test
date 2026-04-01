@@ -55,7 +55,7 @@ FROM my_datalake.default.alter_add_column_explicit_txn ORDER BY a;
 statement ok con1
 COMMIT;
 
-# Schema changed, ACID is violated.
+# Schema changed, ACID is violated for con2.
 query II con2
 FROM my_datalake.default.alter_add_column_explicit_txn ORDER BY a;
 ----

@@ -329,7 +329,8 @@ optional_ptr<CatalogEntry> IcebergTableSet::GetEntry(ClientContext &context, con
 	}
 	IcebergSnapshotLookup snapshot_lookup;
 
-	if (!lookup.GetAtClause() && !table_info.HasTransactionUpdates()) {
+	bool is_time_travel = lookup.GetAtClause();
+	if (!is_time_travel && !table_info.HasTransactionUpdates()) {
 		// if there is no user supplied AT () clause, and the table does not have transaction updates
 		// use transaction start time
 		snapshot_lookup = table_info.GetSnapshotLookup(context);
@@ -338,7 +339,7 @@ optional_ptr<CatalogEntry> IcebergTableSet::GetEntry(ClientContext &context, con
 		snapshot_lookup = IcebergSnapshotLookup::FromAtClause(at);
 	};
 
-	auto ret = table_info.GetSchemaVersion(snapshot_lookup, context);
+	auto ret = table_info.GetSchemaVersion(snapshot_lookup, context, is_time_travel);
 
 	// get the latest information and save it to the transaction cache
 	auto &ic_ret = ret->Cast<IcebergTableEntry>();
