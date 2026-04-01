@@ -22,7 +22,7 @@ static rest_api_objects::Schema CopySchema(const IcebergTableSchema &schema) {
 
 AddSchemaUpdate::AddSchemaUpdate(const IcebergTableInformation &table_info)
     : IcebergTableUpdate(IcebergTableUpdateType::ADD_SCHEMA, table_info) {
-	auto current_schema_id = table_info.table_metadata.current_schema_id;
+	auto current_schema_id = table_info.table_metadata.GetCurrentSchemaId();
 	if (table_info.table_metadata.schemas.find(current_schema_id) == table_info.table_metadata.schemas.end()) {
 		throw InvalidConfigurationException("cannot assign a current schema id for a schema that does not yet exist");
 	};
@@ -86,7 +86,7 @@ void AssertCreateRequirement::CreateRequirement(DatabaseInstance &db, ClientCont
 
 AssertCurrentSchemaIdRequirement::AssertCurrentSchemaIdRequirement(const IcebergTableInformation &table_info)
     : IcebergTableRequirement(IcebergTableRequirementType::ASSERT_CURRENT_SCHEMA_ID, table_info) {
-	current_schema_id = table_info.table_metadata.current_schema_id;
+	current_schema_id = table_info.table_metadata.GetCurrentSchemaId();
 }
 
 void AssertCurrentSchemaIdRequirement::CreateRequirement(DatabaseInstance &db, ClientContext &context,
@@ -173,7 +173,7 @@ void SetCurrentSchema::CreateUpdate(DatabaseInstance &db, ClientContext &context
 	req.has_set_current_schema_update = true;
 	req.set_current_schema_update.action = "set-current-schema";
 	// TODO: should this be a different value? or is the rest catalog setting this again?
-	req.set_current_schema_update.schema_id = table_info.table_metadata.current_schema_id;
+	req.set_current_schema_update.schema_id = table_info.table_metadata.GetCurrentSchemaId();
 }
 
 AddPartitionSpec::AddPartitionSpec(const IcebergTableInformation &table_info)

@@ -221,4 +221,12 @@ yyjson_mut_val *IcebergSnapshot::ToJSON(const rest_api_objects::Snapshot &snapsh
 	return snapshot_obj;
 }
 
+void IcebergSnapshot::SetSchemaId(int32_t value) {
+	schema_id = value;
+}
+
+int32_t IcebergSnapshot::GetSchemaId() const {
+	return schema_id;
+}
+
 } // namespace duckdb

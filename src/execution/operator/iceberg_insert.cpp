@@ -67,7 +67,6 @@ IcebergCopyInput::IcebergCopyInput(ClientContext &context, const IcebergTableMet
 
 	// Get partition spec if the table is partitioned
 	auto &metadata = table_metadata;
-	table_schema = table_metadata.GetSchemaFromId(table_metadata.current_schema_id);
 	if (metadata.GetLatestPartitionSpec().IsPartitioned()) {
 		partition_spec = table_metadata.FindPartitionSpecById(table_metadata.default_spec_id);
 	}
@@ -142,7 +141,7 @@ static bool IsMapType(string col_name, IcebergTableSchema &table_schema) {
 	return false;
 }
 
-static idx_t GetColumnIndexBySourceId(vector<unique_ptr<IcebergColumnDefinition>> &columns, idx_t source_id) {
+static idx_t GetColumnIndexBySourceId(const vector<unique_ptr<IcebergColumnDefinition>> &columns, idx_t source_id) {
 	for (idx_t col_idx = 0; col_idx < columns.size(); col_idx++) {
 		if (columns[col_idx]->id == source_id) {
 			return col_idx;
@@ -151,7 +150,7 @@ static idx_t GetColumnIndexBySourceId(vector<unique_ptr<IcebergColumnDefinition>
 	throw InvalidInputException("Partition source column with id %d not found in schema", source_id);
 }
 
-static string GetColumnNameBySourceId(vector<unique_ptr<IcebergColumnDefinition>> &columns, idx_t source_id) {
+static string GetColumnNameBySourceId(const vector<unique_ptr<IcebergColumnDefinition>> &columns, idx_t source_id) {
 	for (idx_t col_idx = 0; col_idx < columns.size(); col_idx++) {
 		if (columns[col_idx]->id == source_id) {
 			return columns[col_idx]->name;
@@ -236,7 +235,7 @@ void IcebergInsertGlobalState::AddFiles(DataChunk &chunk, const string &table_na
 		// column 5 is stats, which we can also use for partition information
 		auto partition_values = chunk.GetValue(5, r);
 
-		auto table_current_schema_id = table_metadata.current_schema_id;
+		auto table_current_schema_id = table_metadata.GetCurrentSchemaId();
 		auto &ic_schema = table_metadata.schemas.at(table_current_schema_id);
 
 		auto ic_partition_info = table_metadata.GetLatestPartitionSpec();
@@ -480,10 +479,7 @@ static Value WrittenFieldIds(const IcebergCopyInput &copy_input) {
 
 //! Get the logical type for a source column by source_id
 static LogicalType GetSourceColumnType(IcebergCopyInput &copy_input, uint64_t source_id) {
-	if (!copy_input.table_schema) {
-		throw InvalidInputException("Partitioning requires table schema");
-	}
-	auto &columns = copy_input.table_schema->columns;
+	auto &columns = copy_input.schema.columns;
 	for (auto &col : columns) {
 		if (col->id == static_cast<int32_t>(source_id)) {
 			return col->type;
@@ -512,7 +508,7 @@ static unique_ptr<Expression> CreateColumnReference(IcebergCopyInput &copy_input
 //! - hours: date_diff('hour', TIMESTAMP '1970-01-01', source_column)
 static unique_ptr<Expression> GetDateDiffFunction(ClientContext &context, IcebergCopyInput &copy_input,
                                                   const string &date_part, uint64_t source_id) {
-	auto col_idx = GetColumnIndexBySourceId(copy_input.table_schema->columns, source_id);
+	auto col_idx = GetColumnIndexBySourceId(copy_input.schema.columns, source_id);
 	auto col_type = GetSourceColumnType(copy_input, source_id);
 
 	vector<unique_ptr<Expression>> children;
@@ -539,7 +535,7 @@ static unique_ptr<Expression> GetDateDiffFunction(ClientContext &context, Iceber
 //! Get the partition expression for a partition field based on its transform type
 static unique_ptr<Expression> GetPartitionExpression(ClientContext &context, IcebergCopyInput &copy_input,
                                                      const IcebergPartitionSpecField &field) {
-	auto col_idx = GetColumnIndexBySourceId(copy_input.table_schema->columns, field.source_id);
+	auto col_idx = GetColumnIndexBySourceId(copy_input.schema.columns, field.source_id);
 	auto col_type = GetSourceColumnType(copy_input, field.source_id);
 
 	switch (field.transform.Type()) {
@@ -597,7 +593,7 @@ static void GeneratePartitionExpressions(ClientContext &context, IcebergCopyInpu
 			if (field.transform.Type() == IcebergTransformType::VOID) {
 				continue;
 			}
-			auto col_idx = GetColumnIndexBySourceId(copy_input.table_schema->columns, field.source_id);
+			auto col_idx = GetColumnIndexBySourceId(copy_input.schema.columns, field.source_id);
 			partition_columns.push_back(col_idx);
 		}
 		write_partition_columns = true;
@@ -616,11 +612,11 @@ static void GeneratePartitionExpressions(ClientContext &context, IcebergCopyInpu
 	if (WriteSequenceNumber(copy_input.virtual_columns)) {
 		virtual_column_count++;
 	}
-	idx_t partition_column_start = copy_input.table_schema->columns.size() + virtual_column_count;
+	idx_t partition_column_start = copy_input.schema.columns.size() + virtual_column_count;
 
 	// Pass-through projections for physical columns
 	idx_t col_idx = 0;
-	for (auto &col : copy_input.table_schema->columns) {
+	for (auto &col : copy_input.schema.columns) {
 		projection_expressions.push_back(CreateColumnReference(copy_input, col->type, col_idx++));
 	}
 	// Pass-through projections for virtual columns

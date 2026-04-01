@@ -109,7 +109,7 @@ void IcebergTableSet::Scan(ClientContext &context, const std::function<void(Cata
 		auto col = ColumnDefinition(string("__"), LogicalType::UNKNOWN);
 		columns.push_back(std::move(col));
 		info.columns = ColumnList(std::move(columns));
-		auto table_entry = make_uniq<IcebergTableEntry>(table_info, catalog, schema, info);
+		auto table_entry = make_uniq<IcebergTableEntry>(table_info, catalog, schema, info, optional_idx());
 		if (!table_entry->internal) {
 			table_entry->internal = schema.internal;
 		}
@@ -206,14 +206,14 @@ IcebergTableInformation &IcebergTableSet::CreateNewEntry(ClientContext &context,
 	}
 	auto &table_info = emplace_res.first->second;
 	auto &table_metadata = table_info.table_metadata;
-	auto table_entry = make_uniq<IcebergTableEntry>(table_info, catalog, schema, info);
+	auto table_entry = make_uniq<IcebergTableEntry>(table_info, catalog, schema, info, 0);
 	auto table_ptr = table_entry.get();
-	table_entry->table_info.schema_versions[0] = std::move(table_entry);
+	table_info.schema_versions[0] = std::move(table_entry);
 	table_metadata.iceberg_version = iceberg_version.GetIndex();
 	int32_t last_column_id;
 	table_metadata.schemas[0] = IcebergCreateTableRequest::CreateIcebergSchema(
 	    context, table_metadata, table_ptr->GetColumns(), table_ptr->GetConstraints(), last_column_id);
-	table_metadata.current_schema_id = 0;
+	table_metadata.SetCurrentSchemaId(0);
 	table_metadata.schemas[0]->schema_id = 0;
 	table_metadata.last_column_id = last_column_id;
 
@@ -267,6 +267,18 @@ IcebergTableInformation &IcebergTableSet::CreateNewEntry(ClientContext &context,
 	return table_info;
 }
 
+static IcebergSnapshotLookup GetSnapshotLookup(const IcebergTableInformation &table_info, ClientContext &context,
+                                               const EntryLookupInfo &lookup) {
+	auto at = lookup.GetAtClause();
+	if (!at && !table_info.HasTransactionUpdates()) {
+		// if there is no user supplied AT () clause, and the table does not have transaction updates
+		// use transaction start time
+		return table_info.GetSnapshotLookup(context);
+	} else {
+		return IcebergSnapshotLookup::FromAtClause(at);
+	}
+}
+
 optional_ptr<CatalogEntry> IcebergTableSet::GetEntry(ClientContext &context, const EntryLookupInfo &lookup) {
 	lock_guard<mutex> l(entry_lock);
 	auto &ic_catalog = catalog.Cast<IcebergCatalog>();
@@ -279,9 +291,13 @@ optional_ptr<CatalogEntry> IcebergTableSet::GetEntry(ClientContext &context, con
 		return nullptr;
 	}
 	// Check if the table has been updated within the transaction
-	auto transaction_entry = iceberg_transaction.updated_tables.find(table_key);
-	if (transaction_entry != iceberg_transaction.updated_tables.end()) {
-		return transaction_entry->second.GetSchemaVersion(lookup.GetAtClause());
+	{
+		auto it = iceberg_transaction.updated_tables.find(table_key);
+		if (it != iceberg_transaction.updated_tables.end()) {
+			auto &table_info = it->second;
+			auto snapshot_lookup = GetSnapshotLookup(table_info, context, lookup);
+			return table_info.GetSchemaVersion(snapshot_lookup);
+		}
 	}
 	auto previous_request_info = iceberg_transaction.GetTableRequestResult(table_key);
 	if (previous_request_info.exists) {
@@ -294,7 +310,9 @@ optional_ptr<CatalogEntry> IcebergTableSet::GetEntry(ClientContext &context, con
 			//  will fail regardless
 			return nullptr;
 		}
-		return entry->second.GetSchemaVersion(lookup.GetAtClause());
+		auto &table_info = entry->second;
+		auto snapshot_lookup = GetSnapshotLookup(table_info, context, lookup);
+		return table_info.GetSchemaVersion(snapshot_lookup);
 	}
 
 	if (entries.find(table_name) != entries.end()) {
@@ -302,13 +320,16 @@ optional_ptr<CatalogEntry> IcebergTableSet::GetEntry(ClientContext &context, con
 	}
 	auto it = entries.emplace(table_name, IcebergTableInformation(ic_catalog, schema, table_name));
 	auto entry = it.first;
-	if (!FillEntry(context, entry->second)) {
+	auto &table_info = entry->second;
+	if (!FillEntry(context, table_info)) {
 		// Table doesn't exist
 		entries.erase(entry);
 		iceberg_transaction.RecordTableRequest(table_key);
 		return nullptr;
 	}
-	auto ret = entry->second.GetSchemaVersion(lookup.GetAtClause());
+
+	auto snapshot_lookup = GetSnapshotLookup(table_info, context, lookup);
+	auto ret = table_info.GetSchemaVersion(snapshot_lookup);
 
 	// get the latest information and save it to the transaction cache
 	auto &ic_ret = ret->Cast<IcebergTableEntry>();
