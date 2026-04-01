@@ -18,8 +18,8 @@ if (NOT EMSCRIPTEN)
   duckdb_extension_load(icu)
   duckdb_extension_load(ducklake
         LOAD_TESTS
-        GIT_URL https://github.com/pdet/ducklake
-        GIT_TAG 04a364fa2d9aa8e1ef2e576bc1659342e02f2da8
+        GIT_URL https://github.com/duckdb/ducklake
+        GIT_TAG a92abf755a7b4e2f3e410f8b89c72b990a0698da
 )
 
   if (NOT MINGW)
