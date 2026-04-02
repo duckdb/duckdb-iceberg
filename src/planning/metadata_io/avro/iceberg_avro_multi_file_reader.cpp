@@ -512,7 +512,6 @@ void IcebergAvroMultiFileReader::FinalizeChunk(ClientContext &context, const Mul
 		break;
 	}
 	case AvroScanInfoType::MANIFEST_LIST: {
-		output_chunk.Flatten();
 		auto &manifest_scan_info = scan_info->Cast<IcebergManifestListScanInfo>();
 		manifest_list::ManifestListReader::ReadChunk(output_chunk, metadata.iceberg_version, manifest_scan_info.result);
 		break;
