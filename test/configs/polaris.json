@@ -35,7 +35,8 @@
         "test/sql/local/irc_any_catalog/delete/delete_table.test",
         "test/sql/local/irc_any_catalog/insert/test_write_upper_and_lower_bounds_single_values.test",
         "test/sql/local/irc_any_catalog/insert/test_write_upper_and_lower_bounds_all_null.test",
-        "test/sql/local/irc_any_catalog/insert/test_write_upper_and_lower_bounds.test"
+        "test/sql/local/irc_any_catalog/insert/test_write_upper_and_lower_bounds.test",
+        "test/sql/local/irc_any_catalog/insert/test_write_decimal_bounds.test"
       ]
     }
   ]
