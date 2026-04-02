@@ -315,6 +315,7 @@ void ManifestReader::ReadChunk(DataChunk &chunk, const map<idx_t, LogicalType> &
 		data_file.split_offsets = GetSplitOffsets(split_offsets_format, i);
 		int32_t sort_order_id;
 		if (ReadOptionalField<int32_t>(sort_order_id_format, i, sort_order_id)) {
+			data_file.has_sort_order_id = true;
 			data_file.sort_order_id = sort_order_id;
 		}
 		if (iceberg_version >= 2) {
