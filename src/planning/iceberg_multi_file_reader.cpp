@@ -294,16 +294,6 @@ ReaderInitializeType IcebergMultiFileReader::InitializeReader(MultiFileReaderDat
 	auto file_id = reader.file_list_idx.GetIndex();
 	auto &bound_manifest_entry = multi_file_list.GetManifestEntry(file_id);
 
-	//! Collect all the equality delete ids needed
-	unordered_set<int32_t> equality_delete_ids;
-	auto delete_rows = multi_file_list.GetEqualityDeletesForFile(bound_manifest_entry);
-	for (auto &row : delete_rows) {
-		auto &filters = row.get().filters;
-		for (auto &filter : filters) {
-			equality_delete_ids.insert(filter.first);
-		}
-	}
-
 	//! Add the columns needed by the equality deletes if not present
 	auto new_global_column_ids = global_column_ids;
 	auto &equality_to_result_id = multi_file_list.equality_id_to_result_id;
@@ -387,7 +377,11 @@ void IcebergMultiFileReader::ApplyEqualityDeletes(ClientContext &context, DataCh
 	vector<unique_ptr<Expression>> rows;
 	for (auto &row : delete_rows) {
 		vector<unique_ptr<Expression>> equalities;
-		for (auto &item : row.get().filters) {
+		auto &filters = row.get().filters;
+		if (filters.empty()) {
+			continue;
+		}
+		for (auto &item : filters) {
 			auto &field_id = item.first;
 			auto &expression = item.second;
 
@@ -419,6 +413,9 @@ void IcebergMultiFileReader::ApplyEqualityDeletes(ClientContext &context, DataCh
 			filter = std::move(equalities[0]);
 		}
 		rows.push_back(std::move(filter));
+	}
+	if (rows.empty()) {
+		return;
 	}
 
 	unique_ptr<Expression> equality_delete_filter;
