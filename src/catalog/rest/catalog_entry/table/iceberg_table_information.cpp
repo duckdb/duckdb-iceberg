@@ -523,6 +523,10 @@ IcebergTableInformation IcebergTableInformation::Copy() const {
 
 IcebergTableInformation IcebergTableInformation::Copy(IcebergTransaction &iceberg_transaction) const {
 	auto ret = Copy();
+	// get snapshot from start of transaction
+	// latest_snapshot_id and sequence of copied table information should be asof the transaction start
+	// this is to ensure when the transaction commits, the assert ref snapshot id is the one closest to the start of
+	// this. !schema is not guaranteed to be the same as the one from the snapshot though!
 	auto snapshot_lookup = GetSnapshotLookup(iceberg_transaction);
 	if (ret.TableIsEmpty(snapshot_lookup)) {
 		return ret;
@@ -536,6 +540,7 @@ IcebergTableInformation IcebergTableInformation::Copy(IcebergTransaction &iceber
 
 	auto &snapshot = snapshot_info.snapshot;
 	D_ASSERT(snapshot);
+	// schema is not guaranteed to be the same as the one from the snapshot
 	ret.table_metadata.SetCurrentSchemaId(table_metadata.GetCurrentSchemaId());
 	ret.table_metadata.last_sequence_number = snapshot->sequence_number;
 	ret.table_metadata.current_snapshot_id = snapshot->snapshot_id;
