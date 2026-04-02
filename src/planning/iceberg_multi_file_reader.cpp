@@ -290,9 +290,6 @@ ReaderInitializeType IcebergMultiFileReader::InitializeReader(MultiFileReaderDat
 
 	//! Get the data file that we're preparing to scan
 	const auto &multi_file_list = gstate.file_list.Cast<IcebergMultiFileList>();
-	auto &reader = *reader_data.reader;
-	auto file_id = reader.file_list_idx.GetIndex();
-	auto &bound_manifest_entry = multi_file_list.GetManifestEntry(file_id);
 
 	//! Add the columns needed by the equality deletes if not present
 	auto new_global_column_ids = global_column_ids;
@@ -578,7 +575,7 @@ unique_ptr<Expression> IcebergMultiFileReader::GetVirtualColumnExpression(
 
 				// Transform virtual column to file_row_number for the reference
 				column_id = MultiFileReader::COLUMN_IDENTIFIER_FILE_ROW_NUMBER;
-				return coalesce_expr;
+				return std::move(coalesce_expr);
 			}
 		}
 		if (entry == options.end()) {
@@ -624,7 +621,7 @@ unique_ptr<Expression> IcebergMultiFileReader::GetVirtualColumnExpression(
 
 				// Transform virtual column to file_row_number for the reference
 				column_id = MultiFileReader::COLUMN_IDENTIFIER_FILE_ROW_NUMBER;
-				return coalesce_expr;
+				return std::move(coalesce_expr);
 			}
 		}
 		if (entry == options.end()) {
