@@ -482,6 +482,119 @@ rest_api_objects::LoadTableResult IRCAPI::CommitNewTable(ClientContext &context,
 	}
 }
 
+// ─── View operations ─────────────────────────────────────────────────────────
+
+vector<rest_api_objects::TableIdentifier> IRCAPI::GetViews(ClientContext &context, IcebergCatalog &catalog,
+                                                           const IcebergSchemaEntry &schema) {
+	auto schema_name = GetEncodedSchemaName(schema.namespace_items);
+	vector<rest_api_objects::TableIdentifier> all_identifiers;
+	string page_token;
+
+	do {
+		auto url_builder = catalog.GetBaseUrl();
+		url_builder.AddPrefixComponent(catalog.prefix, catalog.prefix_is_one_component);
+		url_builder.AddPathComponent("namespaces");
+		url_builder.AddPathComponent(schema_name);
+		url_builder.AddPathComponent("views");
+		if (!page_token.empty()) {
+			url_builder.SetParam("pageToken", page_token);
+		}
+
+		HTTPHeaders headers(*context.db);
+		auto response = catalog.auth_handler->Request(RequestType::GET_REQUEST, context, url_builder, headers);
+		if (!response->Success()) {
+			if (response->status == HTTPStatusCode::Forbidden_403 ||
+			    response->status == HTTPStatusCode::Unauthorized_401 ||
+			    response->status == HTTPStatusCode::NotFound_404) {
+				DUCKDB_LOG_WARNING(context, "GET %s returned status code %s", url_builder.GetURLEncoded(),
+				                   EnumUtil::ToString(response->status));
+				return all_identifiers;
+			}
+			auto url = url_builder.GetURLEncoded();
+			ThrowException(url, *response, "GET");
+		}
+
+		std::unique_ptr<yyjson_doc, YyjsonDocDeleter> doc(ICUtils::api_result_to_doc(response->body));
+		auto *root = yyjson_doc_get_root(doc.get());
+		auto list_response = rest_api_objects::ListTablesResponse::FromJSON(root);
+
+		if (list_response.has_identifiers) {
+			all_identifiers.insert(all_identifiers.end(), std::make_move_iterator(list_response.identifiers.begin()),
+			                       std::make_move_iterator(list_response.identifiers.end()));
+		}
+
+		if (list_response.has_next_page_token) {
+			page_token = list_response.next_page_token.value;
+		} else {
+			page_token.clear();
+		}
+	} while (!page_token.empty());
+
+	return all_identifiers;
+}
+
+rest_api_objects::LoadViewResult IRCAPI::GetView(ClientContext &context, IcebergCatalog &catalog,
+                                                 const IcebergSchemaEntry &schema, const string &view_name) {
+	auto schema_name = GetEncodedSchemaName(schema.namespace_items);
+
+	auto url_builder = catalog.GetBaseUrl();
+	url_builder.AddPrefixComponent(catalog.prefix, catalog.prefix_is_one_component);
+	url_builder.AddPathComponent("namespaces");
+	url_builder.AddPathComponent(schema_name);
+	url_builder.AddPathComponent("views");
+	url_builder.AddPathComponent(view_name);
+
+	HTTPHeaders headers(*context.db);
+	auto response = catalog.auth_handler->Request(RequestType::GET_REQUEST, context, url_builder, headers);
+	if (response->status != HTTPStatusCode::OK_200) {
+		throw InvalidConfigurationException(
+		    "Request to '%s' returned a non-200 status code (%s), with reason: %s, body: %s",
+		    url_builder.GetURLEncoded(), EnumUtil::ToString(response->status), response->reason, response->body);
+	}
+	std::unique_ptr<yyjson_doc, YyjsonDocDeleter> doc(ICUtils::api_result_to_doc(response->body));
+	auto *root = yyjson_doc_get_root(doc.get());
+	return rest_api_objects::LoadViewResult::FromJSON(root);
+}
+
+void IRCAPI::CommitNewView(ClientContext &context, IcebergCatalog &catalog, const IcebergSchemaEntry &schema,
+                           const string &json_body) {
+	auto schema_name = GetEncodedSchemaName(schema.namespace_items);
+
+	auto url_builder = catalog.GetBaseUrl();
+	url_builder.AddPrefixComponent(catalog.prefix, catalog.prefix_is_one_component);
+	url_builder.AddPathComponent("namespaces");
+	url_builder.AddPathComponent(schema_name);
+	url_builder.AddPathComponent("views");
+
+	HTTPHeaders headers(*context.db);
+	headers.Insert("Content-Type", "application/json");
+	auto response = catalog.auth_handler->Request(RequestType::POST_REQUEST, context, url_builder, headers, json_body);
+	if (response->status != HTTPStatusCode::OK_200) {
+		throw InvalidConfigurationException(
+		    "Request to '%s' returned a non-200 status code (%s), with reason: %s, body: %s",
+		    url_builder.GetURLEncoded(), EnumUtil::ToString(response->status), response->reason, response->body);
+	}
+}
+
+void IRCAPI::CommitViewDelete(ClientContext &context, IcebergCatalog &catalog, const vector<string> &schema,
+                              const string &view_name) {
+	auto schema_name = GetEncodedSchemaName(schema);
+	auto url_builder = catalog.GetBaseUrl();
+	url_builder.AddPrefixComponent(catalog.prefix, catalog.prefix_is_one_component);
+	url_builder.AddPathComponent("namespaces");
+	url_builder.AddPathComponent(schema_name);
+	url_builder.AddPathComponent("views");
+	url_builder.AddPathComponent(view_name);
+
+	HTTPHeaders headers(*context.db);
+	auto response = catalog.auth_handler->Request(RequestType::DELETE_REQUEST, context, url_builder, headers);
+	if (response->status != HTTPStatusCode::NoContent_204 && response->status != HTTPStatusCode::OK_200) {
+		throw InvalidConfigurationException(
+		    "Request to '%s' returned a non-200 status code (%s), with reason: %s, body: %s",
+		    url_builder.GetURLEncoded(), EnumUtil::ToString(response->status), response->reason, response->body);
+	}
+}
+
 rest_api_objects::CatalogConfig IRCAPI::GetCatalogConfig(ClientContext &context, IcebergCatalog &catalog,
                                                          const string &warehouse) {
 	auto url_builder = catalog.GetBaseUrl();
