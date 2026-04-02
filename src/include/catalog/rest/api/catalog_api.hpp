@@ -11,6 +11,7 @@
 #include "catalog/rest/api/url_utils.hpp"
 #include "iceberg_attach.hpp"
 #include "rest_catalog/objects/list.hpp"
+#include "rest_catalog/objects/load_view_result.hpp"
 
 namespace duckdb {
 
@@ -105,6 +106,16 @@ public:
 	                                                        const IcebergCreateTableRequest &request);
 	static rest_api_objects::CatalogConfig GetCatalogConfig(ClientContext &context, IcebergCatalog &catalog,
 	                                                        const string &warehouse);
+
+	//! View operations
+	static vector<rest_api_objects::TableIdentifier> GetViews(ClientContext &context, IcebergCatalog &catalog,
+	                                                          const IcebergSchemaEntry &schema);
+	static rest_api_objects::LoadViewResult GetView(ClientContext &context, IcebergCatalog &catalog,
+	                                                const IcebergSchemaEntry &schema, const string &view_name);
+	static void CommitNewView(ClientContext &context, IcebergCatalog &catalog, const IcebergSchemaEntry &schema,
+	                          const string &json_body);
+	static void CommitViewDelete(ClientContext &context, IcebergCatalog &catalog, const vector<string> &schema,
+	                             const string &view_name);
 };
 
 } // namespace duckdb

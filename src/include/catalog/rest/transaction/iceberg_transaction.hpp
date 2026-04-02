@@ -2,6 +2,7 @@
 #pragma once
 
 #include "duckdb/transaction/transaction.hpp"
+#include "duckdb/parser/parsed_data/create_view_info.hpp"
 #include "catalog/rest/iceberg_schema_set.hpp"
 #include "catalog/rest/api/iceberg_retry.hpp"
 #include "catalog/rest/transaction/iceberg_transaction_update.hpp"
@@ -83,6 +84,8 @@ public:
 	void DoSchemaCreates(ClientContext &context);
 	void DoSchemaDeletes(ClientContext &context);
 	void DoSchemaPropertyUpdates(ClientContext &context);
+	void DoViewCreates(ClientContext &context);
+	void DoViewDeletes(ClientContext &context);
 	IcebergCatalog &GetCatalog();
 	void DoMultiTableCommitUpdates(IcebergTransactionAlterUpdate &alter_update, ClientContext &context);
 	void DoSingleTableCommitUpdates(IcebergTransactionAlterUpdate &alter_update, ClientContext &context);
@@ -132,11 +135,23 @@ public:
 	//! Declared after the schema and table states so update references are destroyed before the referenced states.
 	IcebergTransactionUpdate transaction_update;
 
+	//! views that have been created in this transaction, to be committed on commit.
+	//! keyed by view_key (schema_namespace + view_name)
+	case_insensitive_map_t<unique_ptr<CreateViewInfo>> created_views;
+	//! views that have been deleted in this transaction, to be deleted on commit.
+	struct DeletedViewInfo {
+		vector<string> namespace_items;
+		string schema_name;
+		string view_name;
+	};
+	case_insensitive_map_t<DeletedViewInfo> deleted_views;
+
 	unordered_set<string> deleted_schemas;
 
 	bool called_list_schemas = false;
 	//! Set of schemas that this transaction has listed tables for
 	case_insensitive_set_t listed_schemas;
+	case_insensitive_set_t listed_view_schemas;
 
 	case_insensitive_set_t looked_up_entries;
 	mutex lock;
