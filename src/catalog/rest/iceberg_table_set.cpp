@@ -296,7 +296,7 @@ optional_ptr<CatalogEntry> IcebergTableSet::GetEntry(ClientContext &context, con
 		if (it != iceberg_transaction.updated_tables.end()) {
 			auto &table_info = it->second;
 			auto snapshot_lookup = GetSnapshotLookup(table_info, context, lookup);
-			return table_info.GetSchemaVersion(snapshot_lookup, context);
+			return table_info.GetSchemaVersion(snapshot_lookup);
 		}
 	}
 	auto previous_request_info = iceberg_transaction.GetTableRequestResult(table_key);
@@ -312,7 +312,7 @@ optional_ptr<CatalogEntry> IcebergTableSet::GetEntry(ClientContext &context, con
 		}
 		auto &table_info = entry->second;
 		auto snapshot_lookup = GetSnapshotLookup(table_info, context, lookup);
-		return table_info.GetSchemaVersion(snapshot_lookup, context);
+		return table_info.GetSchemaVersion(snapshot_lookup);
 	}
 
 	if (entries.find(table_name) != entries.end()) {
@@ -339,7 +339,7 @@ optional_ptr<CatalogEntry> IcebergTableSet::GetEntry(ClientContext &context, con
 		snapshot_lookup = IcebergSnapshotLookup::FromAtClause(at);
 	};
 
-	auto ret = table_info.GetSchemaVersion(snapshot_lookup, context, is_time_travel);
+	auto ret = table_info.GetSchemaVersion(snapshot_lookup, is_time_travel);
 
 	// get the latest information and save it to the transaction cache
 	auto &ic_ret = ret->Cast<IcebergTableEntry>();

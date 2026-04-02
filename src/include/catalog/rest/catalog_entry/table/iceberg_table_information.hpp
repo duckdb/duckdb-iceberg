@@ -26,7 +26,7 @@ public:
 public:
 	optional_ptr<CatalogEntry> GetLatestSchema(ClientContext &context);
 	idx_t GetIcebergVersion() const;
-	optional_ptr<CatalogEntry> GetSchemaVersion(const IcebergSnapshotLookup &snapshot_lookup, ClientContext &context,
+	optional_ptr<CatalogEntry> GetSchemaVersion(const IcebergSnapshotLookup &snapshot_lookup,
 	                                            bool is_time_travel = false);
 	optional_ptr<CatalogEntry> CreateSchemaVersion(const IcebergTableSchema &table_schema);
 	idx_t GetMaxSchemaId();

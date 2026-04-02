@@ -444,21 +444,12 @@ void IcebergTableInformation::SetPartitionedBy(IcebergTransaction &transaction,
 }
 
 optional_ptr<CatalogEntry> IcebergTableInformation::GetSchemaVersion(const IcebergSnapshotLookup &snapshot_lookup,
-                                                                     ClientContext &context, bool is_time_travel) {
+                                                                     bool is_time_travel) {
 	D_ASSERT(!schema_versions.empty());
-	if (table_metadata.snapshots.empty()) {
-		return schema_versions[table_metadata.GetCurrentSchemaId()].get();
-	}
-	auto snapshot_info = table_metadata.GetSnapshot(snapshot_lookup);
-	auto &meta_transaction = MetaTransaction::Get(context);
-	auto transaction_start = meta_transaction.GetCurrentTransactionStartTimestamp();
-	auto transaction_start_millis = Timestamp::GetEpochMs(transaction_start);
-
-	if (!is_time_travel &&
-	    (transaction_start_millis > table_metadata.last_updated_ms.value || snapshot_info.snapshot)) {
-		snapshot_info.schema_id = table_metadata.GetCurrentSchemaId();
-	}
-	return schema_versions[snapshot_info.schema_id].get();
+	auto schema_id = !is_time_travel || table_metadata.snapshots.empty()
+	                     ? table_metadata.GetCurrentSchemaId()
+	                     : table_metadata.GetSnapshot(snapshot_lookup).schema_id;
+	return schema_versions[schema_id].get();
 }
 
 idx_t IcebergTableInformation::GetIcebergVersion() const {
@@ -467,7 +458,7 @@ idx_t IcebergTableInformation::GetIcebergVersion() const {
 
 optional_ptr<CatalogEntry> IcebergTableInformation::GetLatestSchema(ClientContext &context) {
 	IcebergSnapshotLookup latest_snapshot;
-	return GetSchemaVersion(latest_snapshot, context);
+	return GetSchemaVersion(latest_snapshot);
 }
 
 string IcebergTableInformation::GetTableKey(const vector<string> &namespace_items, const string &table_name) {
