@@ -125,6 +125,7 @@ void IcebergDelete::WriteDeletionVectorFile(ClientContext &context, IcebergDelet
 	delete_file.delete_count = sorted_deletes.size();
 	delete_file.content_offset = 0;
 	delete_file.content_size_in_bytes = blob_data.size();
+	delete_file.file_size_bytes = delete_file.content_size_in_bytes.GetIndex();
 	global_state.written_files.emplace(filename, std::move(delete_file));
 }
 

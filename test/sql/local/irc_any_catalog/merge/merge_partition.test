@@ -27,6 +27,9 @@ statement ok
 DROP TABLE IF EXISTS my_datalake.default.my_timeseries;
 
 statement ok
+DROP TABLE IF EXISTS my_datalake.default.my_timeseries_new;
+
+statement ok
 CREATE TABLE my_datalake.default.my_timeseries (ts TIMESTAMP, x DOUBLE PRECISION);
 
 statement ok

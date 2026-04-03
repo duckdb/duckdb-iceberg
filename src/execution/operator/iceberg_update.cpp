@@ -76,7 +76,10 @@ IcebergUpdate &IcebergUpdate::PlanUpdateOperator(ClientContext &context, Physica
 	                      .Cast<IcebergUpdate>();
 
 	// Set output types: physical columns + optional _row_id for v3
-	vector<LogicalType> update_output_types = table.GetTypes();
+	vector<LogicalType> update_output_types;
+	for (auto &expr : update_op.expressions) {
+		update_output_types.push_back(expr->return_type);
+	}
 	if (table_metadata.iceberg_version >= 3) {
 		update_output_types.push_back(LogicalType::BIGINT); // _row_id
 	}

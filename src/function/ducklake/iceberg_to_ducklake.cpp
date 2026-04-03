@@ -230,21 +230,38 @@ public:
 					break;
 				}
 				case IcebergManifestContentType::DELETE: {
+					unordered_map<string, string> existing_parquet_deletes;
 					for (auto &manifest_entry : entries) {
 						auto &data_file = manifest_entry.data_file;
 						if (data_file.content == IcebergManifestEntryContentType::EQUALITY_DELETES) {
 							throw InvalidInputException(
 							    "Can't convert a table with equality deletes to a DuckLake table");
 						}
-						if (manifest_entry.status == IcebergManifestEntryStatusType::EXISTING) {
-							//! We don't care about existing entries
+
+						if (manifest_entry.status == IcebergManifestEntryStatusType::DELETED) {
+							deleted_delete_files.push_back(data_file.file_path);
 							continue;
 						}
-						if (manifest_entry.status == IcebergManifestEntryStatusType::ADDED) {
-							new_delete_files.push_back(DuckLakeDeleteFile(manifest_entry, table.table_name));
+						auto delete_file = DuckLakeDeleteFile(manifest_entry, table.table_name);
+						if (manifest_entry.status == IcebergManifestEntryStatusType::EXISTING) {
+							if (delete_file.file_format == "parquet") {
+								//! In Iceberg we ignore remnant parquet deletes, but we have to delete them for
+								//! DuckLake
+								existing_parquet_deletes.emplace(delete_file.data_file_path, delete_file.path);
+							}
+							continue;
 						} else {
-							D_ASSERT(manifest_entry.status == IcebergManifestEntryStatusType::DELETED);
-							deleted_delete_files.push_back(data_file.file_path);
+							D_ASSERT(manifest_entry.status == IcebergManifestEntryStatusType::ADDED);
+							if (delete_file.file_format == "puffin") {
+								//! A deletion vector!, check if there's a parquet file referencing the same data file
+								//! that has to be invalidated
+								auto it = existing_parquet_deletes.find(delete_file.data_file_path);
+								if (it != existing_parquet_deletes.end()) {
+									//! There is: delete it
+									deleted_delete_files.push_back(it->second);
+								}
+							}
+							new_delete_files.push_back(delete_file);
 						}
 					}
 					break;
@@ -253,11 +270,11 @@ public:
 			}
 
 			//! Process changes to delete files
-			for (auto &delete_file : new_delete_files) {
-				table.AddDeleteFile(delete_file, ducklake_snapshot);
-			}
 			for (auto &path : deleted_delete_files) {
 				table.DeleteDeleteFile(path, ducklake_snapshot);
+			}
+			for (auto &delete_file : new_delete_files) {
+				table.AddDeleteFile(delete_file, ducklake_snapshot);
 			}
 
 			//! Process changes to data files

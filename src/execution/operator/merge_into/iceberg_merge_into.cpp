@@ -115,7 +115,9 @@ static unique_ptr<MergeIntoOperator> IcebergPlanMergeIntoAction(IcebergCatalog &
 		update.update_is_del_and_insert = action.update_is_del_and_insert;
 
 		IcebergCopyInput copy_input(context, table_metadata, schema);
-		copy_input.virtual_columns = IcebergInsertVirtualColumns::WRITE_ROW_ID;
+		if (iceberg_version >= 3) {
+			copy_input.virtual_columns = IcebergInsertVirtualColumns::WRITE_ROW_ID;
+		}
 
 		auto &update_op = IcebergUpdate::PlanUpdateOperator(context, planner, update, child_plan, copy_input);
 
