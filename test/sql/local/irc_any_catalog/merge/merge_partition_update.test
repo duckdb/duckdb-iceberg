@@ -2,9 +2,6 @@
 # description: Test merge into with partitions
 # group: [merge]
 
-# Needs UPDATE support for partitioned tables
-mode skip
-
 require-env ICEBERG_SERVER_AVAILABLE
 
 require-env SECRETS_CREATED_AND_CATALOG_ATTACHED
@@ -48,11 +45,8 @@ MERGE INTO my_datalake.default.my_timeseries
     ON my_datalake.default.my_timeseries.ts = timeseries_updates.ts
     WHEN MATCHED THEN UPDATE;
 
-# TODO: use the logs to check if the data files in the partition get hit by a scan?
-mode skip
-
 query I
-SELECT COUNT(*) FROM GLOB('${DATA_PATH}/merge_partition_update/**/year=2025/*')
+SELECT COUNT(*) FROM iceberg_column_stats('my_datalake.default.my_timeseries') where lower_bound.starts_with('2025')
 ----
 2
 
@@ -62,6 +56,6 @@ SET x = 43::DOUBLE PRECISION
 WHERE ts = '2025-09-17'::TIMESTAMP;
 
 query I
-SELECT COUNT(*) FROM GLOB('${DATA_PATH}/merge_partition_update/**/year=2025/*')
+SELECT COUNT(*) FROM iceberg_column_stats('my_datalake.default.my_timeseries') where lower_bound.starts_with('2025')
 ----
 3

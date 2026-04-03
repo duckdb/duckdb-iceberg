@@ -2,9 +2,6 @@
 # description: Test merge into with timestamp partitions
 # group: [merge]
 
-# Needs UPDATE support for partitioned tables
-mode skip
-
 require-env ICEBERG_SERVER_AVAILABLE
 
 require-env SECRETS_CREATED_AND_CATALOG_ATTACHED
@@ -16,6 +13,8 @@ require parquet
 require iceberg
 
 require httpfs
+
+require icu
 
 # Do not ignore 'HTTP' error messages!
 set ignore_error_messages
