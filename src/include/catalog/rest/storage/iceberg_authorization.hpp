@@ -2,6 +2,7 @@
 
 #include "duckdb/main/secret/secret.hpp"
 #include "duckdb/common/http_util.hpp"
+#include "duckdb/main/client_context_state.hpp"
 
 #include "catalog/rest/api/catalog_utils.hpp"
 #include "catalog/rest/api/url_utils.hpp"
@@ -32,6 +33,19 @@ struct IcebergAttachOptions {
 	unordered_map<string, Value> options;
 	// max staleness for cached table metadata in minutes (optional - if not set, always request fresh metadata)
 	optional_idx max_table_staleness_micros;
+};
+
+//! Hold the pre-initialized HTTPClient for a given connection
+struct IcebergAuthorizationContextState : public ClientContextState {
+public:
+	IcebergAuthorizationContextState() {
+	}
+
+public:
+	static unique_ptr<HTTPClient> &GetHTTPClient(ClientContext &context);
+
+public:
+	unique_ptr<HTTPClient> client;
 };
 
 struct IcebergAuthorization {
@@ -70,7 +84,6 @@ public:
 
 public:
 	IcebergAuthorizationType type;
-	unique_ptr<HTTPClient> client;
 	unordered_map<string, string> extra_http_headers;
 };
 

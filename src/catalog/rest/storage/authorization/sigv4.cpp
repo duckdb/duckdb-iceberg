@@ -155,7 +155,7 @@ unique_ptr<HTTPResponse> SIGV4Authorization::Request(RequestType request_type, C
 	}
 
 	auto aws_input = CreateAWSInput(context, endpoint_builder);
-	return aws_input.Request(request_type, context, client, headers, data);
+	return aws_input.Request(request_type, context, headers, data);
 }
 
 } // namespace duckdb

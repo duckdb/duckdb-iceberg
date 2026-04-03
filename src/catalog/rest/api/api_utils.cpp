@@ -29,8 +29,8 @@ const string &APIUtils::GetCURLCertPath() {
 }
 
 unique_ptr<HTTPResponse> APIUtils::Request(RequestType request_type, ClientContext &context,
-                                           const IRCEndpointBuilder &endpoint_builder, unique_ptr<HTTPClient> &client,
-                                           HTTPHeaders &headers, const string &data) {
+                                           const IRCEndpointBuilder &endpoint_builder, HTTPHeaders &headers,
+                                           const string &data) {
 	// load httpfs since iceberg requests do not go through the file system api
 	if (!context.db.get()) {
 		throw InvalidConfigurationException("Context does not have database instance when loading Httpfs in Iceberg");
@@ -47,6 +47,7 @@ unique_ptr<HTTPResponse> APIUtils::Request(RequestType request_type, ClientConte
 	unique_ptr<HTTPParams> params;
 	params = http_util.InitializeParameters(context, request_url);
 
+	auto &client = IcebergAuthorizationContextState::GetHTTPClient(context);
 	if (client) {
 		client->Initialize(*params);
 	}

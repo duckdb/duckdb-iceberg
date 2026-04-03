@@ -30,7 +30,7 @@ unique_ptr<HTTPResponse> NoneAuthorization::Request(RequestType request_type, Cl
 		headers.Insert(entry.first, entry.second);
 	}
 
-	return APIUtils::Request(request_type, context, endpoint_builder, client, headers, data);
+	return APIUtils::Request(request_type, context, endpoint_builder, headers, data);
 }
 
 } // namespace duckdb

@@ -228,8 +228,7 @@ unique_ptr<HTTPResponse> AWSInput::ExecuteRequestLegacy(ClientContext &context, 
 }
 
 unique_ptr<HTTPResponse> AWSInput::ExecuteRequest(ClientContext &context, Aws::Http::HttpMethod method,
-                                                  unique_ptr<HTTPClient> &client, HTTPHeaders &headers,
-                                                  const string &body) {
+                                                  HTTPHeaders &headers, const string &body) {
 	bool use_httputils = true;
 	{
 		Value result;
@@ -341,6 +340,7 @@ unique_ptr<HTTPResponse> AWSInput::ExecuteRequest(ClientContext &context, Aws::H
 
 	params = http_util.InitializeParameters(context, request_url);
 
+	auto &client = IcebergAuthorizationContextState::GetHTTPClient(context);
 	if (client) {
 		client->Initialize(*params);
 	}
@@ -372,17 +372,17 @@ unique_ptr<HTTPResponse> AWSInput::ExecuteRequest(ClientContext &context, Aws::H
 	}
 }
 
-unique_ptr<HTTPResponse> AWSInput::Request(RequestType request_type, ClientContext &context,
-                                           unique_ptr<HTTPClient> &client, HTTPHeaders &headers, const string &data) {
+unique_ptr<HTTPResponse> AWSInput::Request(RequestType request_type, ClientContext &context, HTTPHeaders &headers,
+                                           const string &data) {
 	switch (request_type) {
 	case RequestType::GET_REQUEST:
-		return ExecuteRequest(context, Aws::Http::HttpMethod::HTTP_GET, client, headers);
+		return ExecuteRequest(context, Aws::Http::HttpMethod::HTTP_GET, headers);
 	case RequestType::POST_REQUEST:
-		return ExecuteRequest(context, Aws::Http::HttpMethod::HTTP_POST, client, headers, data);
+		return ExecuteRequest(context, Aws::Http::HttpMethod::HTTP_POST, headers, data);
 	case RequestType::DELETE_REQUEST:
-		return ExecuteRequest(context, Aws::Http::HttpMethod::HTTP_DELETE, client, headers);
+		return ExecuteRequest(context, Aws::Http::HttpMethod::HTTP_DELETE, headers);
 	case RequestType::HEAD_REQUEST:
-		return ExecuteRequest(context, Aws::Http::HttpMethod::HTTP_HEAD, client, headers);
+		return ExecuteRequest(context, Aws::Http::HttpMethod::HTTP_HEAD, headers);
 	default:
 		throw NotImplementedException("Cannot make request of type %s", EnumUtil::ToString(request_type));
 	}
