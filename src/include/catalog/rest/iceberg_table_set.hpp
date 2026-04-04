@@ -46,6 +46,10 @@ public:
 	Catalog &catalog;
 
 private:
+	//! Internal view lookup — caller must hold entry_lock
+	optional_ptr<CatalogEntry> GetViewEntryInternal(ClientContext &context, const string &view_name);
+
+private:
 	case_insensitive_map_t<IcebergTableInformation> entries;
 	case_insensitive_map_t<unique_ptr<CreateViewInfo>> view_entries;
 	//! Cached ViewCatalogEntry instances for Scan

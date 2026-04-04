@@ -391,6 +391,10 @@ void IcebergTableSet::LoadViewEntries(ClientContext &context) {
 
 optional_ptr<CatalogEntry> IcebergTableSet::GetViewEntry(ClientContext &context, const string &view_name) {
 	lock_guard<mutex> l(entry_lock);
+	return GetViewEntryInternal(context, view_name);
+}
+
+optional_ptr<CatalogEntry> IcebergTableSet::GetViewEntryInternal(ClientContext &context, const string &view_name) {
 	auto &ic_catalog = catalog.Cast<IcebergCatalog>();
 	auto &iceberg_transaction = IcebergTransaction::Get(context, catalog);
 
@@ -518,7 +522,7 @@ void IcebergTableSet::ScanViews(ClientContext &context, const std::function<void
 		if (cached_it != view_catalog_entries.end()) {
 			callback(*cached_it->second);
 		} else {
-			auto entry = GetViewEntry(context, view_name);
+			auto entry = GetViewEntryInternal(context, view_name);
 			if (entry) {
 				callback(*entry);
 			}
