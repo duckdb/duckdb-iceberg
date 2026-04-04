@@ -1,0 +1,74 @@
+# name: test/sql/local/irc_any_catalog/create/test_view_scan_no_deadlock.test
+# description: test that SHOW ALL TABLES does not deadlock when views exist in the catalog
+# group: [create]
+
+require-env ICEBERG_SERVER_AVAILABLE
+
+require-env SECRETS_CREATED_AND_CATALOG_ATTACHED
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+set ignore_error_messages
+
+statement ok
+create schema if not exists my_datalake.default;
+
+statement ok
+use my_datalake.default;
+
+# Clean up from previous runs
+statement ok
+drop view if exists deadlock_test_view;
+
+statement ok
+drop table if exists deadlock_test_table;
+
+# Create a table with data and a view
+statement ok
+create table deadlock_test_table (id int, name varchar);
+
+statement ok
+insert into deadlock_test_table values (1, 'alice'), (2, 'bob');
+
+statement ok
+create view deadlock_test_view as select id, name from deadlock_test_table where id > 0;
+
+# Now reconnect — this forces a fresh session where view_catalog_entries cache is empty.
+# The view exists in the REST catalog but has never been loaded in this new session.
+# SHOW ALL TABLES will call ScanViews which must load the view without deadlocking.
+
+statement ok
+ATTACH '' AS my_datalake2 (TYPE ICEBERG,CLIENT_ID 'admin',CLIENT_SECRET 'password',ENDPOINT 'http://127.0.0.1:8181');
+
+statement ok
+use my_datalake2.default;
+
+# This is the critical test: triggers ScanViews on a fresh catalog attachment
+# where views exist but are not cached — hits the GetViewEntry path inside ScanViews
+statement ok
+SHOW ALL TABLES;
+
+# Direct query on the view through the fresh attachment should also work
+query I
+select count(*) from deadlock_test_view;
+----
+2
+
+# Clean up through original attachment
+statement ok
+use my_datalake.default;
+
+statement ok
+drop view deadlock_test_view;
+
+statement ok
+drop table deadlock_test_table;
+
+statement ok
+DETACH my_datalake2;
