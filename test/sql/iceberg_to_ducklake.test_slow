@@ -43,6 +43,7 @@ call iceberg_to_ducklake(
         'row_lineage_test_upgraded_insert',
         'bucket_partitioned_bigint',
         'bucket_partitioned_timestamp',
+        'bucket_partitioned_timestamp_ns',
         'bucket_partitioned_sparse_integer',
         'bucket_partitioned_decimal',
         'bucket_partitioned_date',
