@@ -1,4 +1,4 @@
-# name: test/sql/local/irc_any_catalog/alter/alter_add_column_twice_in_same_transaction.test
+# name: test/sql/local/irc_any_catalog/alter/alter_add_column_twice_in_same_transaction_with_default.test
 # group: [alter]
 
 require-env ICEBERG_SERVER_AVAILABLE
@@ -35,7 +35,7 @@ statement ok
 begin;
 
 statement ok
-ALTER TABLE my_datalake.default.alter_add_column_same_txn_table ADD COLUMN b int;
+ALTER TABLE my_datalake.default.alter_add_column_same_txn_table ADD COLUMN b int DEFAULT 42;
 
 statement ok
 ALTER TABLE my_datalake.default.alter_add_column_same_txn_table ADD COLUMN c int;
@@ -46,13 +46,13 @@ commit;
 query III
 FROM my_datalake.default.alter_add_column_same_txn_table;
 ----
-0	NULL	NULL
-1	NULL	NULL
-2	NULL	NULL
-3	NULL	NULL
-4	NULL	NULL
-5	NULL	NULL
-6	NULL	NULL
-7	NULL	NULL
-8	NULL	NULL
-9	NULL	NULL
+0	42	NULL
+1	42	NULL
+2	42	NULL
+3	42	NULL
+4	42	NULL
+5	42	NULL
+6	42	NULL
+7	42	NULL
+8	42	NULL
+9	42	NULL
