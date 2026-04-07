@@ -265,7 +265,7 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 				auto &default_constant_value = default_value.Cast<ConstantExpression>().value;
 				if (new_iceberg_column->type != default_constant_value.type()) {
 					throw InvalidInputException(
-					    "Type mismatch between new COLUMN %s of type: %s and DEFAULT VALUE of type: %s",
+					    "Type mismatch between new COLUMN %s type: %s and DEFAULT value type: %s",
 					    new_iceberg_column->name, new_iceberg_column->type.ToString(),
 					    default_constant_value.type().ToString());
 				}
