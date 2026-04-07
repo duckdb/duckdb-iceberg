@@ -2,6 +2,7 @@
 
 #include "duckdb/main/secret/secret.hpp"
 #include "duckdb/common/http_util.hpp"
+#include "duckdb/main/client_context_state.hpp"
 
 #include "catalog/rest/api/catalog_utils.hpp"
 #include "catalog/rest/api/url_utils.hpp"
@@ -34,9 +35,23 @@ struct IcebergAttachOptions {
 	optional_idx max_table_staleness_micros;
 };
 
+//! Hold the pre-initialized HTTPClient for a given connection
+struct IcebergAuthorizationContextState : public ClientContextState {
+public:
+	IcebergAuthorizationContextState() {
+	}
+
+public:
+	static unique_ptr<HTTPClient> &GetHTTPClient(AttachedDatabase &db, ClientContext &context);
+
+public:
+	//! For this connection, a map of attached database -> http-client
+	unordered_map<uintptr_t, unique_ptr<HTTPClient>> client_map;
+};
+
 struct IcebergAuthorization {
 public:
-	IcebergAuthorization(IcebergAuthorizationType type) : type(type) {
+	IcebergAuthorization(AttachedDatabase &db, IcebergAuthorizationType type) : db(db), type(type) {
 	}
 	virtual ~IcebergAuthorization() {
 	}
@@ -69,8 +84,8 @@ public:
 	}
 
 public:
+	AttachedDatabase &db;
 	IcebergAuthorizationType type;
-	unique_ptr<HTTPClient> client;
 	unordered_map<string, string> extra_http_headers;
 };
 

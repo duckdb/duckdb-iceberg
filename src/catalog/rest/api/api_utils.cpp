@@ -28,8 +28,8 @@ const string &APIUtils::GetCURLCertPath() {
 	return cert_path;
 }
 
-unique_ptr<HTTPResponse> APIUtils::Request(RequestType request_type, ClientContext &context,
-                                           const IRCEndpointBuilder &endpoint_builder, unique_ptr<HTTPClient> &client,
+unique_ptr<HTTPResponse> APIUtils::Request(RequestType request_type, optional_ptr<AttachedDatabase> attached_db,
+                                           ClientContext &context, const IRCEndpointBuilder &endpoint_builder,
                                            HTTPHeaders &headers, const string &data) {
 	// load httpfs since iceberg requests do not go through the file system api
 	if (!context.db.get()) {
@@ -47,6 +47,9 @@ unique_ptr<HTTPResponse> APIUtils::Request(RequestType request_type, ClientConte
 	unique_ptr<HTTPParams> params;
 	params = http_util.InitializeParameters(context, request_url);
 
+	unique_ptr<HTTPClient> placeholder_client;
+	auto &client =
+	    attached_db ? IcebergAuthorizationContextState::GetHTTPClient(*attached_db, context) : placeholder_client;
 	if (client) {
 		client->Initialize(*params);
 	}
