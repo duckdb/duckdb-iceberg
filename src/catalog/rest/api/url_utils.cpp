@@ -14,6 +14,17 @@ string AddHttpHostIfMissing(const string &url) {
 	return "http://" + url;
 }
 
+string StripScheme(const string &url) {
+	auto lower = StringUtil::Lower(url);
+	if (StringUtil::StartsWith(lower, "https://")) {
+		return url.substr(8);
+	}
+	if (StringUtil::StartsWith(lower, "http://")) {
+		return url.substr(7);
+	}
+	return url;
+}
+
 void IRCEndpointBuilder::AddPathComponent(IRCPathComponent &&component) {
 	if (component.raw.empty()) {
 		return;

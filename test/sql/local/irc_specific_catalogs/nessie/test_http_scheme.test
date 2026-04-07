@@ -1,0 +1,75 @@
+# name: test/sql/local/irc_specific_catalogs/nessie/test_http_scheme.test
+# description: test that http:// scheme is preserved in REST catalog requests
+# group: [nessie]
+
+require-env NESSIE_SERVER_AVAILABLE
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+require aws
+
+set ignore_error_messages
+
+statement ok
+CREATE SECRET storage_secret (
+    TYPE S3,
+    KEY_ID 'minioadmin',
+    SECRET 'minioadmin',
+    ENDPOINT '127.0.0.1:9002',
+    URL_STYLE 'path',
+    USE_SSL 0
+);
+
+statement ok
+create secret my_secret (
+    TYPE ICEBERG,
+    CLIENT_ID 'client1',
+    CLIENT_SECRET 's3cr3t',
+    OAUTH2_SCOPE 'catalog sign',
+    OAUTH2_SERVER_URI 'http://127.0.0.1:8080/realms/iceberg/protocol/openid-connect/token'
+);
+
+# Test 1: Attach with explicit http:// scheme
+statement ok
+attach 'warehouse' as http_catalog (
+    type ICEBERG,
+    ENDPOINT 'http://127.0.0.1:19120/iceberg/',
+    ACCESS_DELEGATION_MODE 'none',
+    SECRET 'my_secret'
+);
+
+statement ok
+call enable_logging(level='debug');
+
+statement ok
+show all tables from http_catalog;
+
+# Verify that the request URL preserves the http:// scheme
+query I
+select bool_and(starts_with(request.url, 'http://')) from duckdb_logs_parsed('HTTP') where starts_with(request.url, 'http://');
+----
+true
+
+# Verify no https:// URLs were generated (we only used http://)
+query I
+select count(*) from duckdb_logs_parsed('HTTP') where starts_with(request.url, 'https://127.0.0.1:19120');
+----
+0
+
+statement ok
+detach http_catalog;
+
+statement ok
+call disable_logging();
+
+statement ok
+drop secret storage_secret;
+
+statement ok
+drop secret my_secret;

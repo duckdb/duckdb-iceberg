@@ -17,6 +17,9 @@ namespace duckdb {
 
 string AddHttpHostIfMissing(const string &url);
 
+//! Strip the scheme (http:// or https://) from a URL string, returning the bare host+path
+string StripScheme(const string &url);
+
 struct IRCPathComponent {
 public:
 	static constexpr const char *DEFAULT_NAMESPACE_SEPARATOR = "\x1f";
