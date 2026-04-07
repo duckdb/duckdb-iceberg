@@ -1,6 +1,6 @@
 services:
   rest:
-    image: apache/iceberg-rest-fixture
+    image: apache/iceberg-rest-fixture@sha256:879354e46b6dbe34561168dc6ccb7140a644e3aee88e0a44fb0b9cf0fef77038
     container_name: iceberg-rest
     networks:
       iceberg_net:
