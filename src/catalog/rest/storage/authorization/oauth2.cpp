@@ -173,6 +173,8 @@ static rest_api_objects::OAuthTokenResponse FetchOAuth2TokenResponse(ClientConte
 	try {
 		auto endpoint_builder = IRCEndpointBuilder::FromURL(uri);
 		response = APIUtils::Request(RequestType::POST_REQUEST, context, endpoint_builder, headers, post_data);
+		//! Reset the cached http client
+		IcebergAuthorizationContextState::GetHTTPClient(context) = nullptr;
 	} catch (std::exception &ex) {
 		// Only catch actual transport/network errors (not HTTP errors)
 		ErrorData error(ex);
