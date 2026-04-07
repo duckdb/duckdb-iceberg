@@ -1,5 +1,5 @@
 # name: test/sql/local/irc_custom_setup/attach_options/sigv4_signing_overrides.test
-# description: test sigv4 signing_name and signing_region attach options for non-AWS endpoints
+# description: test sigv4 sigv4_service and sigv4_region attach options for non-AWS endpoints
 # group: [attach_options]
 
 require-env ICEBERG_SERVER_AVAILABLE
@@ -29,14 +29,14 @@ CREATE SECRET (
 statement ok
 call enable_logging('http');
 
-# signing_name and signing_region override SigV4 service/region parsing from host
+# sigv4_service and sigv4_region override SigV4 service/region parsing from host
 statement error
 ATTACH '' AS my_datalake_both (
     TYPE ICEBERG,
     ENDPOINT 'http://127.0.0.1:8181',
     AUTHORIZATION_TYPE 'sigv4',
-    SIGNING_NAME 'MyCustomService',
-    SIGNING_REGION 'us-west-2'
+    SIGV4_SERVICE 'MyCustomService',
+    SIGV4_REGION 'us-west-2'
 );
 ----
 <!REGEX>:.*([Uu]nrecognized|Could not parse AWS).*
@@ -53,14 +53,14 @@ WHERE request.url LIKE '%127.0.0.1:8181%'
 statement ok
 CALL truncate_duckdb_logs();
 
-# signing_name with a different service name
+# sigv4_service with a different service name
 statement error
 ATTACH '' AS my_datalake_name_only (
     TYPE ICEBERG,
     ENDPOINT 'http://127.0.0.1:8181',
     AUTHORIZATION_TYPE 'sigv4',
-    SIGNING_NAME 'CustomService',
-    SIGNING_REGION 'us-east-1'
+    SIGV4_SERVICE 'CustomService',
+    SIGV4_REGION 'us-east-1'
 );
 ----
 <!REGEX>:.*([Uu]nrecognized|Could not parse AWS).*
@@ -76,7 +76,7 @@ WHERE request.url LIKE '%127.0.0.1:8181%'
 statement ok
 CALL truncate_duckdb_logs();
 
-# without signing_name/signing_region, non-AWS host triggers the original error
+# without sigv4_service/sigv4_region, non-AWS host triggers the original error
 statement error
 ATTACH '' AS my_datalake_no_override (
     TYPE ICEBERG,
