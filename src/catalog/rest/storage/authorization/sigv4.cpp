@@ -34,15 +34,17 @@ HostDecompositionResult DecomposeHost(const string &host) {
 
 } // namespace
 
-SIGV4Authorization::SIGV4Authorization() : IcebergAuthorization(IcebergAuthorizationType::SIGV4) {
+SIGV4Authorization::SIGV4Authorization(AttachedDatabase &db)
+    : IcebergAuthorization(db, IcebergAuthorizationType::SIGV4) {
 }
 
-SIGV4Authorization::SIGV4Authorization(const string &secret)
-    : IcebergAuthorization(IcebergAuthorizationType::SIGV4), secret(secret) {
+SIGV4Authorization::SIGV4Authorization(AttachedDatabase &db, const string &secret)
+    : IcebergAuthorization(db, IcebergAuthorizationType::SIGV4), secret(secret) {
 }
 
-unique_ptr<IcebergAuthorization> SIGV4Authorization::FromAttachOptions(IcebergAttachOptions &input) {
-	auto result = make_uniq<SIGV4Authorization>();
+unique_ptr<IcebergAuthorization> SIGV4Authorization::FromAttachOptions(AttachedDatabase &db,
+                                                                       IcebergAttachOptions &input) {
+	auto result = make_uniq<SIGV4Authorization>(db);
 
 	unordered_map<string, Value> remaining_options;
 	for (auto &entry : input.options) {
@@ -102,7 +104,7 @@ static string GetAwsService(const string &host) {
 }
 
 AWSInput SIGV4Authorization::CreateAWSInput(ClientContext &context, const IRCEndpointBuilder &endpoint_builder) {
-	AWSInput aws_input;
+	AWSInput aws_input(db);
 	aws_input.cert_path = APIUtils::GetCURLCertPath();
 
 	// Set the user Agent
@@ -155,7 +157,7 @@ unique_ptr<HTTPResponse> SIGV4Authorization::Request(RequestType request_type, C
 	}
 
 	auto aws_input = CreateAWSInput(context, endpoint_builder);
-	return aws_input.Request(request_type, context, client, headers, data);
+	return aws_input.Request(request_type, context, headers, data);
 }
 
 } // namespace duckdb
