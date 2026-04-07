@@ -31,6 +31,7 @@
         "test/sql/local/irc_any_catalog/create/default/test_create_default_blob.test",
         "test/sql/local/irc_any_catalog/create/default/test_create_default_bigint.test",
         "test/sql/local/irc_any_catalog/create/default/test_create_default_decimal.test",
+        "test/sql/local/irc_any_catalog/create/default/test_create_default_bool.test",
         "test/sql/local/irc_any_catalog/create/default/test_create_default_float.test",
         "test/sql/local/irc_any_catalog/create/default/test_create_default_timestamp.test",
         "test/sql/local/irc_any_catalog/create/default/test_create_default_date.test",
