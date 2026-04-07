@@ -115,8 +115,8 @@ void IcebergSchemaEntry::DropEntry(ClientContext &context, DropInfo &info, bool 
 		// Add the table to the transaction's deleted_tables
 		auto &transaction = IcebergTransaction::Get(context, catalog).Cast<IcebergTransaction>();
 		auto &table_info = table_info_it->second;
-		auto table_key = table_info.GetTableKey();
-		transaction.deleted_tables.emplace(table_key, table_info.Copy());
+		auto table_key = table_info->GetTableKey();
+		transaction.deleted_tables.emplace(table_key, table_info->Copy());
 		D_ASSERT(transaction.deleted_tables.count(table_key) > 0);
 		auto &deleted_table_info = transaction.deleted_tables.at(table_key);
 		// must init schema versions after copy. Schema versions have a pointer to IcebergTableInformation
