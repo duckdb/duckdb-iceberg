@@ -1,0 +1,174 @@
+# name: test/sql/local/irc_any_catalog/delete/partitions/delete_bucket_partitions.test
+# description: Test delete from iceberg tables partitioned by bucket transform (INT and VARCHAR)
+# group: [partitions]
+
+require-env ICEBERG_SERVER_AVAILABLE
+
+require-env SECRETS_CREATED_AND_CATALOG_ATTACHED
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+CALL enable_logging('HTTP');
+
+statement ok
+set logging_level='debug'
+
+# ---- BUCKET / INT ----
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.test_delete_bucket_int;
+
+statement ok
+CREATE TABLE my_datalake.default.test_delete_bucket_int (id INT, val VARCHAR)
+PARTITIONED BY (bucket(id, 4));
+
+statement ok
+INSERT INTO my_datalake.default.test_delete_bucket_int VALUES
+    (1, 'a'), (1, 'b'), (2, 'c'), (3, 'd'), (4, 'e');
+
+query II
+SELECT * FROM my_datalake.default.test_delete_bucket_int ORDER BY id, val;
+----
+1	a
+1	b
+2	c
+3	d
+4	e
+
+# Delete all rows sharing the same partition column value (same bucket)
+statement ok
+DELETE FROM my_datalake.default.test_delete_bucket_int WHERE id = 1;
+
+query II
+SELECT * FROM my_datalake.default.test_delete_bucket_int ORDER BY id, val;
+----
+2	c
+3	d
+4	e
+
+# Delete by non-partition column (crosses partition boundaries)
+statement ok
+DELETE FROM my_datalake.default.test_delete_bucket_int WHERE val = 'd';
+
+query II
+SELECT * FROM my_datalake.default.test_delete_bucket_int ORDER BY id, val;
+----
+2	c
+4	e
+
+statement ok
+DROP TABLE my_datalake.default.test_delete_bucket_int;
+
+# ---- BUCKET / VARCHAR ----
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.test_delete_bucket_varchar;
+
+statement ok
+CREATE TABLE my_datalake.default.test_delete_bucket_varchar (id INT, category VARCHAR, val VARCHAR)
+PARTITIONED BY (bucket(category, 4));
+
+statement ok
+INSERT INTO my_datalake.default.test_delete_bucket_varchar VALUES
+    (1, 'apple', 'a'),
+    (2, 'apple', 'b'),
+    (3, 'banana', 'c'),
+    (4, 'cherry', 'd'),
+    (5, 'cherry', 'e');
+
+query III
+SELECT * FROM my_datalake.default.test_delete_bucket_varchar ORDER BY id;
+----
+1	apple	a
+2	apple	b
+3	banana	c
+4	cherry	d
+5	cherry	e
+
+# Delete all rows with the same bucket key — both 'apple' rows land in the same bucket
+statement ok
+DELETE FROM my_datalake.default.test_delete_bucket_varchar WHERE category = 'apple';
+
+query III
+SELECT * FROM my_datalake.default.test_delete_bucket_varchar ORDER BY id;
+----
+3	banana	c
+4	cherry	d
+5	cherry	e
+
+# Delete by non-partition column
+statement ok
+DELETE FROM my_datalake.default.test_delete_bucket_varchar WHERE val = 'd';
+
+query III
+SELECT * FROM my_datalake.default.test_delete_bucket_varchar ORDER BY id;
+----
+3	banana	c
+5	cherry	e
+
+# Delete across multiple buckets using a disjunction
+statement ok
+DELETE FROM my_datalake.default.test_delete_bucket_varchar WHERE category IN ('banana', 'cherry');
+
+query I
+SELECT COUNT(*) FROM my_datalake.default.test_delete_bucket_varchar;
+----
+0
+
+statement ok
+DROP TABLE my_datalake.default.test_delete_bucket_varchar;
+
+# ---- BUCKET / BIGINT ----
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.test_delete_bucket_bigint;
+
+statement ok
+CREATE TABLE my_datalake.default.test_delete_bucket_bigint (id INT, val BIGINT, label VARCHAR)
+PARTITIONED BY (bucket(val, 4));
+
+statement ok
+INSERT INTO my_datalake.default.test_delete_bucket_bigint VALUES
+    (1, 100::BIGINT, 'a'),
+    (2, 100::BIGINT, 'b'),
+    (3, 200::BIGINT, 'c'),
+    (4, 300::BIGINT, 'd');
+
+query III
+SELECT * FROM my_datalake.default.test_delete_bucket_bigint ORDER BY id;
+----
+1	100	a
+2	100	b
+3	200	c
+4	300	d
+
+# Both rows with val=100 land in the same bucket
+statement ok
+DELETE FROM my_datalake.default.test_delete_bucket_bigint WHERE val = 100;
+
+query III
+SELECT * FROM my_datalake.default.test_delete_bucket_bigint ORDER BY id;
+----
+3	200	c
+4	300	d
+
+statement ok
+DELETE FROM my_datalake.default.test_delete_bucket_bigint WHERE label = 'c';
+
+query I
+SELECT COUNT(*) FROM my_datalake.default.test_delete_bucket_bigint;
+----
+1
+
+statement ok
+DROP TABLE my_datalake.default.test_delete_bucket_bigint;
