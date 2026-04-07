@@ -1,0 +1,37 @@
+#include "catalog/rest/storage/authorization/none.hpp"
+
+#include "duckdb/common/types/value.hpp"
+
+#include "catalog/rest/api/api_utils.hpp"
+#include "catalog/rest/iceberg_catalog.hpp"
+
+namespace duckdb {
+
+NoneAuthorization::NoneAuthorization(AttachedDatabase &db) : IcebergAuthorization(db, IcebergAuthorizationType::NONE) {
+}
+
+unique_ptr<IcebergAuthorization> NoneAuthorization::FromAttachOptions(AttachedDatabase &db,
+                                                                      IcebergAttachOptions &input) {
+	auto result = make_uniq<NoneAuthorization>(db);
+
+	// Parse extra_http_headers if provided directly in attach options
+	if (input.options.count("extra_http_headers")) {
+		IcebergAuthorization::ParseExtraHttpHeaders(input.options["extra_http_headers"], result->extra_http_headers);
+		input.options.erase("extra_http_headers");
+	}
+
+	return std::move(result);
+}
+
+unique_ptr<HTTPResponse> NoneAuthorization::Request(RequestType request_type, ClientContext &context,
+                                                    const IRCEndpointBuilder &endpoint_builder, HTTPHeaders &headers,
+                                                    const string &data) {
+	// Merge extra HTTP headers
+	for (auto &entry : extra_http_headers) {
+		headers.Insert(entry.first, entry.second);
+	}
+
+	return APIUtils::Request(request_type, db, context, endpoint_builder, headers, data);
+}
+
+} // namespace duckdb

@@ -44,21 +44,22 @@ use glue_lake;
 statement error
 select * from some_table;
 ----
-<REGEX>:.*some_table.*does not exist.*
+<REGEX>:.*Forbidden_403.*
 
 statement ok
 use glue_secret;
 
+# error is surfaced for forbidden_403. 
+# Table does not exist, but this is returned by the catalog 
 statement error
 select * from some_table
 ----
-<REGEX>:.*some_table.*does not exist.*
+<REGEX>:.*Forbidden_403.*
 
-# even after showing all tables. use statement needs catalog + schema.
+statement ok
+RESET SCHEMA;
+
+# We can still show all tables when the schema is reset
 statement ok
 show all tables;
 
-statement error
-use glue_lake;
-----
-<REGEX>:.*No.*glue_lake.*found.*

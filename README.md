@@ -41,7 +41,7 @@ This will build both the separate loadable extension and a duckdb binary with th
 
 #### Generating test data
 
-To generate the test data, run:
+To generate the test data, run: 
 ```shell
 make data
 ```
@@ -63,7 +63,7 @@ Note that this requires to have run `make data` before and also to have the aws 
 
 ### Local catalog setup
 
-The Makefile provides targets to spin up local Iceberg catalogs for development and testing. Each target clones the catalog repo (if needed), starts the service, and generates test data:
+The Makefile provides targets to spin up local Iceberg catalogs for development and testing. Each target clones the catalog repo (if needed) and starts the service:
 
 ```shell
 make fixture      # Apache Iceberg REST Fixture (Docker)
@@ -72,19 +72,23 @@ make lakekeeper   # Lakekeeper catalog (Docker)
 make polaris      # Apache Polaris catalog (Gradle/local)
 ```
 
-You can also run the individual steps separately if needed:
+For starting the service AND generating data (to run tests that need it):
 
-| Step          | Fixture | Nessie | Lakekeeper | Polaris |
-|---------------|---------|--------|------------|---------|
-| Start service | `make fixture_start` | `make nessie_start` | `make lakekeeper_start` | `make polaris_start` |
-| Generate data | `make fixture_data` | `make nessie_data` | `make lakekeeper_data` | `make polaris_data` |
+```shell
+make fixture-data   
+make nessie-data    
+make lakekeeper-data
+make polaris-data   
+```
 
-**Prerequisites:** Docker and Docker Compose are required for Fixture, Nessie, and Lakekeeper. Polaris requires Java/Gradle and builds from source — the build is skipped automatically if it has already completed. To force a clean rebuild of Polaris, run `make polaris_rebuild`.
+Should you need to generate data for only one test (a test found under *scripts/data_generators/tests*), you can pass the test name as an argument, like so: `TEST=all_types_table make fixture-data`. The script will now only generate the needed data for that single test, which is faster.
+
+**Prerequisites:** Docker and Docker Compose are required for Fixture, Nessie, and Lakekeeper. Polaris requires Java/Gradle and builds from source — the build is skipped automatically if it has already completed. To force a clean rebuild of Polaris, run `make polaris-rebuild`.
 
 Fixture also has a local variant that generates data for local file-based testing instead of REST:
 
 ```shell
-make fixture_local
+make fixture-data-local
 ```
 
 ## Acknowledgements
