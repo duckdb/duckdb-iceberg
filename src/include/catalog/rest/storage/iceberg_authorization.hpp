@@ -42,15 +42,16 @@ public:
 	}
 
 public:
-	static unique_ptr<HTTPClient> &GetHTTPClient(ClientContext &context);
+	static unique_ptr<HTTPClient> &GetHTTPClient(AttachedDatabase &db, ClientContext &context);
 
 public:
-	unique_ptr<HTTPClient> client;
+	//! For this connection, a map of attached database -> http-client
+	unordered_map<uintptr_t, unique_ptr<HTTPClient>> client_map;
 };
 
 struct IcebergAuthorization {
 public:
-	IcebergAuthorization(IcebergAuthorizationType type) : type(type) {
+	IcebergAuthorization(AttachedDatabase &db, IcebergAuthorizationType type) : db(db), type(type) {
 	}
 	virtual ~IcebergAuthorization() {
 	}
@@ -83,6 +84,7 @@ public:
 	}
 
 public:
+	AttachedDatabase &db;
 	IcebergAuthorizationType type;
 	unordered_map<string, string> extra_http_headers;
 };

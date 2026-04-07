@@ -340,7 +340,7 @@ unique_ptr<HTTPResponse> AWSInput::ExecuteRequest(ClientContext &context, Aws::H
 
 	params = http_util.InitializeParameters(context, request_url);
 
-	auto &client = IcebergAuthorizationContextState::GetHTTPClient(context);
+	auto &client = IcebergAuthorizationContextState::GetHTTPClient(attached_db, context);
 	if (client) {
 		client->Initialize(*params);
 	}

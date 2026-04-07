@@ -41,13 +41,14 @@ static const case_insensitive_map_t<LogicalType> &IcebergSecretOptions() {
 
 } // namespace
 
-OAuth2Authorization::OAuth2Authorization() : IcebergAuthorization(IcebergAuthorizationType::OAUTH2) {
+OAuth2Authorization::OAuth2Authorization(AttachedDatabase &db)
+    : IcebergAuthorization(db, IcebergAuthorizationType::OAUTH2) {
 }
 
-OAuth2Authorization::OAuth2Authorization(const string &grant_type, const string &uri, const string &client_id,
-                                         const string &client_secret, const string &scope)
-    : IcebergAuthorization(IcebergAuthorizationType::OAUTH2), grant_type(grant_type), uri(uri), client_id(client_id),
-      client_secret(client_secret), scope(scope) {
+OAuth2Authorization::OAuth2Authorization(AttachedDatabase &db, const string &grant_type, const string &uri,
+                                         const string &client_id, const string &client_secret, const string &scope)
+    : IcebergAuthorization(db, IcebergAuthorizationType::OAUTH2), grant_type(grant_type), uri(uri),
+      client_id(client_id), client_secret(client_secret), scope(scope) {
 }
 
 //! NOTE: this doesnt use StringUtil::URLEncode(..., escape_slash=true) because of how ' ' (space) is encoded
@@ -172,9 +173,7 @@ static rest_api_objects::OAuthTokenResponse FetchOAuth2TokenResponse(ClientConte
 	unique_ptr<HTTPResponse> response;
 	try {
 		auto endpoint_builder = IRCEndpointBuilder::FromURL(uri);
-		response = APIUtils::Request(RequestType::POST_REQUEST, context, endpoint_builder, headers, post_data);
-		//! Reset the cached http client
-		IcebergAuthorizationContextState::GetHTTPClient(context) = nullptr;
+		response = APIUtils::Request(RequestType::POST_REQUEST, nullptr, context, endpoint_builder, headers, post_data);
 	} catch (std::exception &ex) {
 		// Only catch actual transport/network errors (not HTTP errors)
 		ErrorData error(ex);
@@ -241,9 +240,9 @@ string OAuth2Authorization::GetToken(ClientContext &context, const string &grant
 	return token_response.access_token;
 }
 
-unique_ptr<OAuth2Authorization> OAuth2Authorization::FromAttachOptions(ClientContext &context,
+unique_ptr<OAuth2Authorization> OAuth2Authorization::FromAttachOptions(AttachedDatabase &db, ClientContext &context,
                                                                        IcebergAttachOptions &input) {
-	auto result = make_uniq<OAuth2Authorization>();
+	auto result = make_uniq<OAuth2Authorization>(db);
 
 	unordered_map<string, Value> remaining_options;
 	case_insensitive_map_t<Value> create_secret_options;
@@ -518,7 +517,7 @@ unique_ptr<HTTPResponse> OAuth2Authorization::Request(RequestType request_type, 
 		headers["Authorization"] = StringUtil::Format("Bearer %s", bearer_token);
 	}
 
-	auto response = APIUtils::Request(request_type, context, endpoint_builder, headers, data);
+	auto response = APIUtils::Request(request_type, db, context, endpoint_builder, headers, data);
 
 	// --- Step 3: Reactive 401 refresh (exactly once) ---
 	// If the server rejected our token (e.g., revoked before expiry, clock skew,
@@ -536,7 +535,7 @@ unique_ptr<HTTPResponse> OAuth2Authorization::Request(RequestType request_type, 
 		// Lock released before retry -- avoid serializing catalog requests
 		if (should_retry) {
 			headers["Authorization"] = StringUtil::Format("Bearer %s", bearer_token);
-			response = APIUtils::Request(request_type, context, endpoint_builder, headers, data);
+			response = APIUtils::Request(request_type, db, context, endpoint_builder, headers, data);
 		}
 	}
 

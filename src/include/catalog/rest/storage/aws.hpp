@@ -14,7 +14,7 @@ namespace duckdb {
 
 class AWSInput {
 public:
-	AWSInput() {
+	AWSInput(AttachedDatabase &db) : attached_db(db) {
 	}
 
 public:
@@ -31,6 +31,7 @@ public:
 	Aws::Client::ClientConfiguration BuildClientConfig();
 
 public:
+	AttachedDatabase &attached_db;
 	//! NOTE: 'scheme' is assumed to be HTTPS!
 	string authority;
 	vector<string> path_segments;
