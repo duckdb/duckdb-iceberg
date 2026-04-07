@@ -94,7 +94,7 @@ void IcebergTableSet::Scan(ClientContext &context, const std::function<void(Cata
 	case_insensitive_set_t non_iceberg_tables;
 	auto table_namespace = IRCAPI::GetEncodedSchemaName(schema.namespace_items);
 	for (auto &entry : entries) {
-		auto &table_info = entry.second;
+		auto &table_info = *entry.second;
 		if (table_info.dummy_entry) {
 			// FIXME: why do we need to return the same entry again?
 			auto &optional = table_info.dummy_entry.get()->Cast<CatalogEntry>();
@@ -127,11 +127,11 @@ void IcebergTableSet::Scan(ClientContext &context, const std::function<void(Cata
 	}
 }
 
-const case_insensitive_map_t<IcebergTableInformation> &IcebergTableSet::GetEntries() {
+const case_insensitive_map_t<shared_ptr<IcebergTableInformation>> &IcebergTableSet::GetEntries() {
 	return entries;
 }
 
-case_insensitive_map_t<IcebergTableInformation> &IcebergTableSet::GetEntriesMutable() {
+case_insensitive_map_t<shared_ptr<IcebergTableInformation>> &IcebergTableSet::GetEntriesMutable() {
 	return entries;
 }
 
@@ -145,7 +145,7 @@ void IcebergTableSet::LoadEntries(ClientContext &context) {
 	auto &ic_catalog = catalog.Cast<IcebergCatalog>();
 	auto tables = IRCAPI::GetTables(context, ic_catalog, schema);
 	for (auto &table : tables) {
-		entries.emplace(table.name, IcebergTableInformation(ic_catalog, schema, table.name));
+		entries.emplace(table.name, make_shared_ptr<IcebergTableInformation>(ic_catalog, schema, table.name));
 	}
 	iceberg_transaction.listed_schemas.insert(schema.name);
 }
@@ -310,7 +310,7 @@ optional_ptr<CatalogEntry> IcebergTableSet::GetEntry(ClientContext &context, con
 			//  will fail regardless
 			return nullptr;
 		}
-		auto &table_info = entry->second;
+		auto &table_info = *entry->second;
 		auto snapshot_lookup = GetSnapshotLookup(table_info, context, lookup);
 		return table_info.GetSchemaVersion(snapshot_lookup);
 	}
@@ -318,15 +318,16 @@ optional_ptr<CatalogEntry> IcebergTableSet::GetEntry(ClientContext &context, con
 	if (entries.find(table_name) != entries.end()) {
 		entries.erase(table_name);
 	}
-	auto it = entries.emplace(table_name, IcebergTableInformation(ic_catalog, schema, table_name));
+	auto it = entries.emplace(table_name, make_shared_ptr<IcebergTableInformation>(ic_catalog, schema, table_name));
 	auto entry = it.first;
-	auto &table_info = entry->second;
+	auto &table_info = *entry->second;
 	if (!FillEntry(context, table_info)) {
 		// Table doesn't exist
 		entries.erase(entry);
 		iceberg_transaction.RecordTableRequest(table_key);
 		return nullptr;
 	}
+	iceberg_transaction.tables[table_key] = entry->second;
 
 	auto snapshot_lookup = GetSnapshotLookup(table_info, context, lookup);
 	auto ret = table_info.GetSchemaVersion(snapshot_lookup);
