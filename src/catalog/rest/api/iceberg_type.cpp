@@ -25,6 +25,9 @@ string IcebergTypeHelper::LogicalTypeToIcebergType(const LogicalType &type) {
 		return "date";
 	case LogicalTypeId::BIGINT:
 		return "long";
+	case LogicalTypeId::HUGEINT:
+		// Iceberg doesnt have native 128bit int, decimal(38,0) covers the range
+		return "decimal(38, 0)";
 	case LogicalTypeId::FLOAT:
 		return "float";
 	case LogicalTypeId::DOUBLE:
