@@ -25,6 +25,10 @@ private:
 public:
 	string secret;
 	string region;
+	//! Optional: override the AWS service name used for SigV4 signing, useful for self-hosted REST catalog services
+	string signing_name;
+	//! Optional: override the AWS region used for SigV4 signing, useful for non-AWS endpoints
+	string signing_region;
 };
 
 } // namespace duckdb
