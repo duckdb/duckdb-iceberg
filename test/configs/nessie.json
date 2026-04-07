@@ -67,7 +67,7 @@
     },
     {
       "reason": "On ALTER TABLE, Nessie updates snapshot's schema_id as well alongside table_metadata.current_schema_id, so we don't log a warning.",
-      "paths": ["test/sql/local/irc_any_catalog/alter/alter_add_column_two_transactions.test"]
+      "paths": ["test/sql/local/irc_any_catalog/alter/alter_add_column_warn_schema_mismatch.test"]
     }
   ]
 }
