@@ -17,13 +17,13 @@ DuckLakeColumn::DuckLakeColumn(const IcebergColumnDefinition &column, idx_t orde
 	column_order = order;
 	column_name = column.name;
 	column_type = DuckLakeUtils::ToDuckLakeColumnType(column.type);
-	initial_default = column.initial_default ? *column.initial_default : Value(column_type);
+	initial_default = column.initial_default ? *column.initial_default : Value(column.type);
 	if (column.write_default) {
 		default_value = *column.write_default;
 	} else if (column.initial_default) {
 		default_value = *column.initial_default;
 	} else {
-		default_value = Value(column_type);
+		default_value = Value(column.type);
 	}
 	nulls_allowed = !column.required;
 }
@@ -71,9 +71,52 @@ string DuckLakeColumn::FinalizeEntry(int64_t table_id, const map<timestamp_t, Du
 	auto default_value = this->default_value.IsNull() ? "NULL" : "'" + this->default_value.ToString() + "'";
 	auto nulls_allowed = this->nulls_allowed ? "true" : "false";
 
-	return StringUtil::Format("VALUES (%d,%d,%s,%d,%d,'%s','%s',%s,%s,%s,%s);", column_id, snapshot_ids.first,
-	                          snapshot_ids.second, table_id, column_order, column_name, column_type, initial_default,
-	                          default_value, nulls_allowed, parent_column);
+	const auto COLUMN_SQL = R"(
+		INSERT INTO {METADATA_CATALOG}.ducklake_column VALUES
+			(
+				%d, -- column_id
+				%d, -- begin_snapshot
+				%s, -- end_snapshot
+				%d, -- table_id
+				%d, -- column_order
+				'%s', -- column_name
+				'%s', -- column_type
+				%s, -- initial_default
+				%s, -- default_value
+				%s, -- nulls_allowed
+				%s, -- parent_column
+				'%s', -- default_value_type
+				'%s' -- default_value_dialect
+			);
+	)";
+
+	return StringUtil::Format(COLUMN_SQL,
+	                          //! column_id
+	                          column_id,
+	                          //! begin_snapshot
+	                          snapshot_ids.first,
+	                          //! end_snapshot
+	                          snapshot_ids.second,
+	                          //! table_id
+	                          table_id,
+	                          //! column_order
+	                          column_order,
+	                          //! column_name
+	                          column_name,
+	                          //! column_type
+	                          column_type,
+	                          //! initial_default
+	                          initial_default,
+	                          //! default_value
+	                          default_value,
+	                          //! nulls_allowed
+	                          nulls_allowed,
+	                          //! parent_column
+	                          parent_column,
+	                          //! default_value_type
+	                          "literal",
+	                          //! default_value_dialect
+	                          "duckdb");
 }
 
 } // namespace ducklake

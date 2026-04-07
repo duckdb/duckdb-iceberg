@@ -402,8 +402,10 @@ SerializeResult IcebergValue::SerializeValue(Value input_value, const LogicalTyp
 	case LogicalTypeId::DECIMAL: {
 		auto decimal_as_string = input_value.GetValue<string>();
 		auto dec_pos = decimal_as_string.find(".");
-		// remove the decimal point
-		decimal_as_string.erase(dec_pos, 1);
+		// remove the decimal point if found (when scale is 0 there is no decimal point)
+		if (dec_pos != string::npos) {
+			decimal_as_string.erase(dec_pos, 1);
+		}
 		auto unscaled = Value(decimal_as_string).DefaultCastAs(LogicalType::HUGEINT);
 		auto unscaled_hugeint = unscaled.GetValue<hugeint_t>();
 		vector<uint8_t> big_endian_bytes;
@@ -438,26 +440,21 @@ SerializeResult IcebergValue::SerializeValue(Value input_value, const LogicalTyp
 			}
 			big_endian_bytes.push_back(get_8);
 		}
-		if (needs_negative_padding) {
-			big_endian_bytes.push_back(0xFF);
-		}
-		if (needs_positive_padding) {
-			big_endian_bytes.push_back(0x00);
-		}
-
-		// reverse the bytes to get them in big-endian order
-		std::reverse(big_endian_bytes.begin(), big_endian_bytes.end());
-
-		hugeint_t result = 0;
-		int n = big_endian_bytes.size();
-		D_ASSERT(n <= 16);
-		for (int i = 0; i < n; i++) {
-			result |= static_cast<hugeint_t>(big_endian_bytes[i]) << (8 * (n - i - 1));
+		if (!first_val) {
+			// value is 0 or -1
+			big_endian_bytes.push_back(is_negative ? (uint8_t)0xFF : (uint8_t)0x00);
+		} else {
+			// insert padding at the beginning so big endian encoding is unambiguous
+			if (needs_negative_padding) {
+				big_endian_bytes.insert(big_endian_bytes.begin(), 0xFF);
+			}
+			if (needs_positive_padding) {
+				big_endian_bytes.insert(big_endian_bytes.begin(), 0x00);
+			}
 		}
 
-		auto serialized_const_data_ptr = const_data_ptr_cast<hugeint_t>(&result);
-		// create blob value of int32, using only big_endian_bytes.size() bytes
-		auto ret_val = Value::BLOB(serialized_const_data_ptr, big_endian_bytes.size());
+		// use big_endian_bytes directly as it is already in big endian order
+		auto ret_val = Value::BLOB(const_data_ptr_cast<uint8_t>(big_endian_bytes.data()), big_endian_bytes.size());
 		auto ret = SerializeResult(column_type, ret_val);
 		return ret;
 	}

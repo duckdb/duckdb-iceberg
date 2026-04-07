@@ -19,7 +19,23 @@ string DuckLakePartition::FinalizeEntry(int64_t table_id, DuckLakeMetadataSerial
 	this->partition_id = partition_id;
 	auto snapshot_ids = DuckLakeUtils::GetSnapshots(start_snapshot, has_end, end_snapshot, snapshots);
 
-	return StringUtil::Format("VALUES(%d, %d, %d, %s);", partition_id, table_id, snapshot_ids.first,
+	const auto PARTITION_SQL = R"(
+		INSERT INTO {METADATA_CATALOG}.ducklake_partition_info VALUES(
+			%d, -- partition_id
+			%d, -- table_id
+			%d, -- begin_snapshot
+			%s -- end_snapshot
+		);
+	)";
+
+	return StringUtil::Format(PARTITION_SQL,
+	                          // partition_id
+	                          partition_id,
+	                          // table_id
+	                          table_id,
+	                          // begin_snapshot
+	                          snapshot_ids.first,
+	                          // end_snapshot
 	                          snapshot_ids.second);
 }
 
