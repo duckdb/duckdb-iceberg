@@ -325,6 +325,14 @@ void IcebergCatalog::AddDefaultSupportedEndpoints() {
 	supported_urls.insert("POST /v1/{prefix}/tables/rename");
 	// commit updates to multiple tables in an atomic transaction
 	supported_urls.insert("POST /v1/{prefix}/transactions/commit");
+	// list all view identifiers
+	supported_urls.insert("GET /v1/{prefix}/namespaces/{namespace}/views");
+	// create view in the namespace
+	supported_urls.insert("POST /v1/{prefix}/namespaces/{namespace}/views");
+	// load view from the catalog
+	supported_urls.insert("GET /v1/{prefix}/namespaces/{namespace}/views/{view}");
+	// drop view from a catalog
+	supported_urls.insert("DELETE /v1/{prefix}/namespaces/{namespace}/views/{view}");
 }
 
 void IcebergCatalog::AddS3TablesEndpoints() {
