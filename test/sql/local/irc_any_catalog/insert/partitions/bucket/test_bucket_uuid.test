@@ -1,0 +1,61 @@
+# name: test/sql/local/irc_any_catalog/insert/partitions/bucket/test_bucket_uuid.test
+# description: Insert into a bucket-partitioned UUID table and verify round-trip
+# group: [bucket]
+
+require-env ICEBERG_SERVER_AVAILABLE
+
+require-env SECRETS_CREATED_AND_CATALOG_ATTACHED
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+create schema if not exists my_datalake.default;
+
+statement ok
+drop table if exists my_datalake.default.test_bucket_uuid;
+
+statement ok
+CREATE TABLE my_datalake.default.test_bucket_uuid (id int, val uuid)
+PARTITIONED BY (bucket(val, 4));
+
+# Use fixed UUID values so results are deterministic.
+statement ok
+create table local_bucket_uuid as
+select * from (values
+    (1,  'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11'::UUID),
+    (2,  'b1eebc99-9c0b-4ef8-bb6d-6bb9bd380a22'::UUID),
+    (3,  'c2eebc99-9c0b-4ef8-bb6d-6bb9bd380a33'::UUID),
+    (4,  'd3eebc99-9c0b-4ef8-bb6d-6bb9bd380a44'::UUID),
+    (5,  'e4eebc99-9c0b-4ef8-bb6d-6bb9bd380a55'::UUID),
+    (6,  'f5eebc99-9c0b-4ef8-bb6d-6bb9bd380a66'::UUID),
+    (7,  'a6eebc99-9c0b-4ef8-bb6d-6bb9bd380a77'::UUID),
+    (8,  'b7eebc99-9c0b-4ef8-bb6d-6bb9bd380a88'::UUID),
+    (9,  'c8eebc99-9c0b-4ef8-bb6d-6bb9bd380a99'::UUID),
+    (10, 'd9eebc99-9c0b-4ef8-bb6d-6bb9bd380aaa'::UUID)
+) t(id, val);
+
+statement ok
+insert into my_datalake.default.test_bucket_uuid
+select id, val from local_bucket_uuid;
+
+query II nosort expected_result
+select * from local_bucket_uuid order by id;
+----
+
+query II nosort expected_result
+select * from my_datalake.default.test_bucket_uuid order by id;
+----
+
+query I
+select count(*) from my_datalake.default.test_bucket_uuid;
+----
+10
