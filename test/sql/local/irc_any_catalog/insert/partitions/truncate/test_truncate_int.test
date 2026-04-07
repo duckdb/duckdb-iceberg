@@ -23,11 +23,11 @@ create schema if not exists my_datalake.default;
 statement ok
 drop table if exists my_datalake.default.test_truncate_int;
 
-# truncate(id, 10): values 0-9 -> 0, values 10-19 -> 10, etc.
+# truncate(10, id): values 0-9 -> 0, values 10-19 -> 10, etc.
 # 30 rows across id 0..29 produces 3 distinct partition values: 0, 10, 20
 statement ok
 CREATE TABLE my_datalake.default.test_truncate_int (id int, val varchar)
-PARTITIONED BY (truncate(id, 10));
+PARTITIONED BY (truncate(10, id));
 
 statement ok
 insert into my_datalake.default.test_truncate_int
@@ -58,7 +58,7 @@ drop table if exists my_datalake.default.test_truncate_int_negative;
 
 statement ok
 CREATE TABLE my_datalake.default.test_truncate_int_negative (id int, val varchar)
-PARTITIONED BY (truncate(id, 10));
+PARTITIONED BY (truncate(10, id));
 
 statement ok
 insert into my_datalake.default.test_truncate_int_negative

@@ -27,7 +27,7 @@ statement ok
 CREATE TABLE my_datalake.default.test_truncate_transform (id int, val varchar);
 
 statement ok
-ALTER TABLE my_datalake.default.test_truncate_transform SET PARTITIONED BY (truncate(val, 4));
+ALTER TABLE my_datalake.default.test_truncate_transform SET PARTITIONED BY (truncate(4, val));
 
 statement ok
 insert into my_datalake.default.test_truncate_transform select range, 'value_' || range::VARCHAR from range(10);

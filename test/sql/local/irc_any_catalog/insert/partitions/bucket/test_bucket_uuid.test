@@ -25,7 +25,7 @@ drop table if exists my_datalake.default.test_bucket_uuid;
 
 statement ok
 CREATE TABLE my_datalake.default.test_bucket_uuid (id int, val uuid)
-PARTITIONED BY (bucket(val, 4));
+PARTITIONED BY (bucket(4, val));
 
 # Use fixed UUID values so results are deterministic.
 statement ok

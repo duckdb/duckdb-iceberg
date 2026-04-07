@@ -532,7 +532,7 @@ static unique_ptr<Expression> GetDateDiffFunction(ClientContext &context, Iceber
 	return function;
 }
 
-//! Get an iceberg_bucket(col, N) expression for bucket partition transforms
+//! Get an iceberg_bucket(N, col) expression for bucket partition transforms
 static unique_ptr<Expression> GetBucketExpression(ClientContext &context, IcebergCopyInput &copy_input,
                                                   const IcebergPartitionSpecField &field) {
 	auto col_idx = GetColumnIndexBySourceId(copy_input.schema.columns, field.source_id);
@@ -542,9 +542,9 @@ static unique_ptr<Expression> GetBucketExpression(ClientContext &context, Iceber
 	}
 
 	vector<unique_ptr<Expression>> children;
-	children.push_back(CreateColumnReference(copy_input, col_type, col_idx));
 	children.push_back(
 	    make_uniq<BoundConstantExpression>(Value::INTEGER(static_cast<int32_t>(field.transform.GetBucketModulo()))));
+	children.push_back(CreateColumnReference(copy_input, col_type, col_idx));
 
 	ErrorData error;
 	FunctionBinder binder(context);
@@ -555,7 +555,7 @@ static unique_ptr<Expression> GetBucketExpression(ClientContext &context, Iceber
 	return function;
 }
 
-//! Get an iceberg_truncate(col, W) expression for truncate partition transforms
+//! Get an iceberg_truncate(W, col) expression for truncate partition transforms
 static unique_ptr<Expression> GetTruncateExpression(ClientContext &context, IcebergCopyInput &copy_input,
                                                     const IcebergPartitionSpecField &field) {
 	auto col_idx = GetColumnIndexBySourceId(copy_input.schema.columns, field.source_id);
@@ -566,9 +566,9 @@ static unique_ptr<Expression> GetTruncateExpression(ClientContext &context, Iceb
 	}
 
 	vector<unique_ptr<Expression>> children;
-	children.push_back(CreateColumnReference(copy_input, col_type, col_idx));
 	children.push_back(
 	    make_uniq<BoundConstantExpression>(Value::INTEGER(static_cast<int32_t>(field.transform.GetTruncateWidth()))));
+	children.push_back(CreateColumnReference(copy_input, col_type, col_idx));
 
 	ErrorData error;
 	FunctionBinder binder(context);

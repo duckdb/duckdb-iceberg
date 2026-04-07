@@ -30,7 +30,7 @@ DROP TABLE IF EXISTS my_datalake.default.test_update_bucket_int_v3;
 
 statement ok
 CREATE TABLE my_datalake.default.test_update_bucket_int_v3 (id INT, val VARCHAR)
-PARTITIONED BY (bucket(id, 4)) WITH ('format-version'=3);
+PARTITIONED BY (bucket(4, id)) WITH ('format-version'=3);
 
 statement ok
 INSERT INTO my_datalake.default.test_update_bucket_int_v3 VALUES
@@ -85,7 +85,7 @@ DROP TABLE IF EXISTS my_datalake.default.test_update_bucket_int_v3_partcol_v3;
 
 statement ok
 CREATE TABLE my_datalake.default.test_update_bucket_int_v3_partcol_v3 (id INT, val VARCHAR)
-PARTITIONED BY (bucket(id, 4)) WITH ('format-version'=3);
+PARTITIONED BY (bucket(4, id)) WITH ('format-version'=3);
 
 statement ok
 INSERT INTO my_datalake.default.test_update_bucket_int_v3_partcol_v3 VALUES
@@ -128,7 +128,7 @@ DROP TABLE IF EXISTS my_datalake.default.test_update_bucket_varchar_v3;
 
 statement ok
 CREATE TABLE my_datalake.default.test_update_bucket_varchar_v3 (id INT, category VARCHAR, val VARCHAR)
-PARTITIONED BY (bucket(category, 4)) WITH ('format-version'=3);
+PARTITIONED BY (bucket(4, category)) WITH ('format-version'=3);
 
 statement ok
 INSERT INTO my_datalake.default.test_update_bucket_varchar_v3 VALUES
@@ -183,7 +183,7 @@ DROP TABLE IF EXISTS my_datalake.default.test_update_bucket_varchar_v3_partcol_v
 
 statement ok
 CREATE TABLE my_datalake.default.test_update_bucket_varchar_v3_partcol_v3 (id INT, category VARCHAR, val VARCHAR)
-PARTITIONED BY (bucket(category, 4)) WITH ('format-version'=3);
+PARTITIONED BY (bucket(4, category)) WITH ('format-version'=3);
 
 statement ok
 INSERT INTO my_datalake.default.test_update_bucket_varchar_v3_partcol_v3 VALUES

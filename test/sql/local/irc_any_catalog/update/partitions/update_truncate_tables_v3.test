@@ -24,14 +24,14 @@ statement ok
 set logging_level='debug'
 
 # ---- TRUNCATE / INT — update non-partition column ----
-# truncate(id, 10): ids 0-9 → partition 0, ids 10-19 → partition 10, ids 20-29 → partition 20
+# truncate(10, id): ids 0-9 → partition 0, ids 10-19 → partition 10, ids 20-29 → partition 20
 
 statement ok
 DROP TABLE IF EXISTS my_datalake.default.test_update_truncate_int_v3;
 
 statement ok
 CREATE TABLE my_datalake.default.test_update_truncate_int_v3 (id INT, val VARCHAR)
-PARTITIONED BY (truncate(id, 10)) WITH ('format-version'=3);
+PARTITIONED BY (truncate(10, id)) WITH ('format-version'=3);
 
 statement ok
 INSERT INTO my_datalake.default.test_update_truncate_int_v3 VALUES
@@ -86,7 +86,7 @@ DROP TABLE IF EXISTS my_datalake.default.test_update_truncate_int_v3_partcol_v3;
 
 statement ok
 CREATE TABLE my_datalake.default.test_update_truncate_int_v3_partcol_v3 (id INT, val VARCHAR)
-PARTITIONED BY (truncate(id, 10)) WITH ('format-version'=3);
+PARTITIONED BY (truncate(10, id)) WITH ('format-version'=3);
 
 statement ok
 INSERT INTO my_datalake.default.test_update_truncate_int_v3_partcol_v3 VALUES
@@ -129,7 +129,7 @@ DROP TABLE IF EXISTS my_datalake.default.test_update_truncate_bigint_v3;
 
 statement ok
 CREATE TABLE my_datalake.default.test_update_truncate_bigint_v3 (id INT, val BIGINT, label VARCHAR)
-PARTITIONED BY (truncate(val, 10)) WITH ('format-version'=3);
+PARTITIONED BY (truncate(10, val)) WITH ('format-version'=3);
 
 statement ok
 INSERT INTO my_datalake.default.test_update_truncate_bigint_v3 VALUES
@@ -164,14 +164,14 @@ statement ok
 DROP TABLE my_datalake.default.test_update_truncate_bigint_v3;
 
 # ---- TRUNCATE / VARCHAR — update non-partition column ----
-# truncate(category, 3): 'aardvark'/'aardwolf' → 'aar', 'bear'/'beaver' → 'bea', 'cat' → 'cat'
+# truncate(3, category): 'aardvark'/'aardwolf' → 'aar', 'bear'/'beaver' → 'bea', 'cat' → 'cat'
 
 statement ok
 DROP TABLE IF EXISTS my_datalake.default.test_update_truncate_varchar_v3;
 
 statement ok
 CREATE TABLE my_datalake.default.test_update_truncate_varchar_v3 (id INT, category VARCHAR, val VARCHAR)
-PARTITIONED BY (truncate(category, 3)) WITH ('format-version'=3);
+PARTITIONED BY (truncate(3, category)) WITH ('format-version'=3);
 
 statement ok
 INSERT INTO my_datalake.default.test_update_truncate_varchar_v3 VALUES
@@ -230,7 +230,7 @@ DROP TABLE IF EXISTS my_datalake.default.test_update_truncate_varchar_v3_partcol
 
 statement ok
 CREATE TABLE my_datalake.default.test_update_truncate_varchar_v3_partcol_v3 (id INT, category VARCHAR, val VARCHAR)
-PARTITIONED BY (truncate(category, 3)) WITH ('format-version'=3);
+PARTITIONED BY (truncate(3, category)) WITH ('format-version'=3);
 
 statement ok
 INSERT INTO my_datalake.default.test_update_truncate_varchar_v3_partcol_v3 VALUES

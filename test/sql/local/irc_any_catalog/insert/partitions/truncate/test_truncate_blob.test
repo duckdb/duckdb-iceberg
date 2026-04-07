@@ -23,11 +23,11 @@ create schema if not exists my_datalake.default;
 statement ok
 drop table if exists my_datalake.default.test_truncate_blob;
 
-# truncate(val, 2): blobs are partitioned by their first 2 bytes.
+# truncate(2, val): blobs are partitioned by their first 2 bytes.
 # Rows with the same 2-byte prefix land in the same partition.
 statement ok
 CREATE TABLE my_datalake.default.test_truncate_blob (id int, val blob)
-PARTITIONED BY (truncate(val, 2));
+PARTITIONED BY (truncate(2, val));
 
 statement ok
 insert into my_datalake.default.test_truncate_blob values

@@ -25,7 +25,7 @@ drop table if exists my_datalake.default.test_bucket_int;
 
 statement ok
 CREATE TABLE my_datalake.default.test_bucket_int (id int, val varchar)
-PARTITIONED BY (bucket(id, 4));
+PARTITIONED BY (bucket(4, id));
 
 statement ok
 insert into my_datalake.default.test_bucket_int

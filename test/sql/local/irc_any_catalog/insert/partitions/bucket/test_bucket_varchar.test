@@ -25,7 +25,7 @@ drop table if exists my_datalake.default.test_bucket_varchar;
 
 statement ok
 CREATE TABLE my_datalake.default.test_bucket_varchar (id int, category varchar)
-PARTITIONED BY (bucket(category, 8));
+PARTITIONED BY (bucket(8, category));
 
 statement ok
 insert into my_datalake.default.test_bucket_varchar

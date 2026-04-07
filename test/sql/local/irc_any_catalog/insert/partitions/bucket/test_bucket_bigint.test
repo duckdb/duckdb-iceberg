@@ -25,7 +25,7 @@ drop table if exists my_datalake.default.test_bucket_bigint;
 
 statement ok
 CREATE TABLE my_datalake.default.test_bucket_bigint (id int, val bigint)
-PARTITIONED BY (bucket(val, 4));
+PARTITIONED BY (bucket(4, val));
 
 statement ok
 insert into my_datalake.default.test_bucket_bigint

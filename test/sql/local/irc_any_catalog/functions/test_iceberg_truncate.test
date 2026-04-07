@@ -19,161 +19,161 @@ set ignore_error_messages
 # Iceberg spec: all transforms return null for null input
 
 query I
-SELECT iceberg_truncate(NULL::INTEGER, 10);
+SELECT iceberg_truncate(10, NULL::INTEGER);
 ----
 NULL
 
 query I
-SELECT iceberg_truncate(NULL::BIGINT, 10);
+SELECT iceberg_truncate(10, NULL::BIGINT);
 ----
 NULL
 
 query I
-SELECT iceberg_truncate(NULL::VARCHAR, 5);
+SELECT iceberg_truncate(5, NULL::VARCHAR);
 ----
 NULL
 
 query I
-SELECT iceberg_truncate(NULL::BLOB, 5);
+SELECT iceberg_truncate(5, NULL::BLOB);
 ----
 NULL
 
 # ---- Return types ----
 
 query I
-SELECT typeof(iceberg_truncate(1::INTEGER, 10));
+SELECT typeof(iceberg_truncate(10, 1::INTEGER));
 ----
 INTEGER
 
 query I
-SELECT typeof(iceberg_truncate(1::BIGINT, 10));
+SELECT typeof(iceberg_truncate(10, 1::BIGINT));
 ----
 BIGINT
 
 query I
-SELECT typeof(iceberg_truncate('hello', 3));
+SELECT typeof(iceberg_truncate(3, 'hello'));
 ----
 VARCHAR
 
 query I
-SELECT typeof(iceberg_truncate('\x01\x02\x03'::BLOB, 2));
+SELECT typeof(iceberg_truncate(2, '\x01\x02\x03'::BLOB));
 ----
 BLOB
 
 # ---- INTEGER: v - (((v % W) + W) % W) ----
 # truncate[10](0) = 0
 query I
-SELECT iceberg_truncate(0::INTEGER, 10);
+SELECT iceberg_truncate(10, 0::INTEGER);
 ----
 0
 
 # truncate[10](1) = 0
 query I
-SELECT iceberg_truncate(1::INTEGER, 10);
+SELECT iceberg_truncate(10, 1::INTEGER);
 ----
 0
 
 # truncate[10](9) = 0
 query I
-SELECT iceberg_truncate(9::INTEGER, 10);
+SELECT iceberg_truncate(10, 9::INTEGER);
 ----
 0
 
 # truncate[10](10) = 10
 query I
-SELECT iceberg_truncate(10::INTEGER, 10);
+SELECT iceberg_truncate(10, 10::INTEGER);
 ----
 10
 
 # truncate[10](11) = 10
 query I
-SELECT iceberg_truncate(11::INTEGER, 10);
+SELECT iceberg_truncate(10, 11::INTEGER);
 ----
 10
 
 # truncate[10](-1) = -10  (floor toward negative infinity)
 query I
-SELECT iceberg_truncate(-1::INTEGER, 10);
+SELECT iceberg_truncate(10, -1::INTEGER);
 ----
 -10
 
 # truncate[10](-10) = -10
 query I
-SELECT iceberg_truncate(-10::INTEGER, 10);
+SELECT iceberg_truncate(10, -10::INTEGER);
 ----
 -10
 
 # truncate[10](-11) = -20
 query I
-SELECT iceberg_truncate(-11::INTEGER, 10);
+SELECT iceberg_truncate(10, -11::INTEGER);
 ----
 -20
 
 # ---- BIGINT ----
 
 query I
-SELECT iceberg_truncate(0::BIGINT, 10);
+SELECT iceberg_truncate(10, 0::BIGINT);
 ----
 0
 
 query I
-SELECT iceberg_truncate(11::BIGINT, 10);
+SELECT iceberg_truncate(10, 11::BIGINT);
 ----
 10
 
 query I
-SELECT iceberg_truncate(-1::BIGINT, 10);
+SELECT iceberg_truncate(10, -1::BIGINT);
 ----
 -10
 
 # ---- VARCHAR: first L grapheme clusters ----
 # truncate[3]("iceberg") = "ice"
 query I
-SELECT iceberg_truncate('iceberg', 3);
+SELECT iceberg_truncate(3, 'iceberg');
 ----
 ice
 
 # truncate[7]("iceberg") = "iceberg" (width >= length, return as-is)
 query I
-SELECT iceberg_truncate('iceberg', 7);
+SELECT iceberg_truncate(7, 'iceberg');
 ----
 iceberg
 
 # truncate[10]("iceberg") = "iceberg" (width > length)
 query I
-SELECT iceberg_truncate('iceberg', 10);
+SELECT iceberg_truncate(10, 'iceberg');
 ----
 iceberg
 
 # Empty string stays empty
 query I
-SELECT iceberg_truncate('', 5);
+SELECT iceberg_truncate(5, '');
 ----
 (empty)
 
 # ---- BLOB: first L bytes ----
 
 query I
-SELECT iceberg_truncate('\x01\x02\x03\x04'::BLOB, 2);
+SELECT iceberg_truncate(2, '\x01\x02\x03\x04'::BLOB);
 ----
 \x01\x02
 
 # Width >= length returns the full blob
 query I
-SELECT iceberg_truncate('\x01\x02'::BLOB, 10);
+SELECT iceberg_truncate(10, '\x01\x02'::BLOB);
 ----
 \x01\x02
 
 # ---- Result is always a multiple of W for integers ----
 
 query I
-SELECT bool_and(iceberg_truncate(range::INTEGER, 10) % 10 = 0)
+SELECT bool_and(iceberg_truncate(10, range::INTEGER) % 10 = 0)
 FROM range(-100, 100);
 ----
 true
 
 query I
-SELECT bool_and(iceberg_truncate(range::INTEGER, 7) % 7 = 0)
+SELECT bool_and(iceberg_truncate(7, range::INTEGER) % 7 = 0)
 FROM range(-100, 100);
 ----
 true
@@ -181,7 +181,7 @@ true
 # ---- Result is <= input for non-negative integers ----
 
 query I
-SELECT bool_and(iceberg_truncate(range::INTEGER, 10) <= range)
+SELECT bool_and(iceberg_truncate(10, range::INTEGER) <= range)
 FROM range(0, 100);
 ----
 true
@@ -189,21 +189,21 @@ true
 # ---- Width = 0 is invalid (Iceberg spec requires positive width) ----
 
 statement error
-SELECT iceberg_truncate(1::INTEGER, 0);
+SELECT iceberg_truncate(0, 1::INTEGER);
 ----
 <REGEX>:.*width must be a positive integer.*
 
 statement error
-SELECT iceberg_truncate(1::BIGINT, 0);
+SELECT iceberg_truncate(0, 1::BIGINT);
 ----
 <REGEX>:.*width must be a positive integer.*
 
 statement error
-SELECT iceberg_truncate('iceberg', 0);
+SELECT iceberg_truncate(0, 'iceberg');
 ----
 <REGEX>:.*width must be a positive integer.*
 
 statement error
-SELECT iceberg_truncate('\x01\x02'::BLOB, 0);
+SELECT iceberg_truncate(0, '\x01\x02'::BLOB);
 ----
 <REGEX>:.*width must be a positive integer.*

@@ -23,11 +23,11 @@ create schema if not exists my_datalake.default;
 statement ok
 drop table if exists my_datalake.default.test_truncate_varchar;
 
-# truncate(category, 3): 'aardvark' -> 'aar', 'bear' -> 'bea', 'ant' -> 'ant'
+# truncate(3, category): 'aardvark' -> 'aar', 'bear' -> 'bea', 'ant' -> 'ant'
 # 3 distinct partition values from 4 input strings
 statement ok
 CREATE TABLE my_datalake.default.test_truncate_varchar (id int, category varchar)
-PARTITIONED BY (truncate(category, 3));
+PARTITIONED BY (truncate(3, category));
 
 statement ok
 insert into my_datalake.default.test_truncate_varchar values

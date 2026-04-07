@@ -30,7 +30,7 @@ DROP TABLE IF EXISTS my_datalake.default.test_delete_bucket_int;
 
 statement ok
 CREATE TABLE my_datalake.default.test_delete_bucket_int (id INT, val VARCHAR)
-PARTITIONED BY (bucket(id, 4));
+PARTITIONED BY (bucket(4, id));
 
 statement ok
 INSERT INTO my_datalake.default.test_delete_bucket_int VALUES
@@ -76,7 +76,7 @@ DROP TABLE IF EXISTS my_datalake.default.test_delete_bucket_varchar;
 
 statement ok
 CREATE TABLE my_datalake.default.test_delete_bucket_varchar (id INT, category VARCHAR, val VARCHAR)
-PARTITIONED BY (bucket(category, 4));
+PARTITIONED BY (bucket(4, category));
 
 statement ok
 INSERT INTO my_datalake.default.test_delete_bucket_varchar VALUES
@@ -135,7 +135,7 @@ DROP TABLE IF EXISTS my_datalake.default.test_delete_bucket_bigint;
 
 statement ok
 CREATE TABLE my_datalake.default.test_delete_bucket_bigint (id INT, val BIGINT, label VARCHAR)
-PARTITIONED BY (bucket(val, 4));
+PARTITIONED BY (bucket(4, val));
 
 statement ok
 INSERT INTO my_datalake.default.test_delete_bucket_bigint VALUES

@@ -25,7 +25,7 @@ drop table if exists my_datalake.default.test_bucket_timestamp_ns;
 
 statement ok
 CREATE TABLE my_datalake.default.test_bucket_timestamp_ns (id int, val timestamp_ns)
-PARTITIONED BY (bucket(val, 4)) WITH ('format-version'=3);
+PARTITIONED BY (bucket(4, val)) WITH ('format-version'=3);
 
 statement ok
 insert into my_datalake.default.test_bucket_timestamp_ns

@@ -1,5 +1,5 @@
 # name: test/sql/local/irc_any_catalog/other_engines/partitions/truncate/test_append_truncate_varchar_for_insert.test
-# description: DuckDB appends the exact same values Spark inserted into a truncate(value, 3)
+# description: DuckDB appends the exact same values Spark inserted into a truncate(3, value)
 # group: [truncate]
 
 #              VARCHAR table. Filtering on each value must return exactly 2 rows — one from Spark,

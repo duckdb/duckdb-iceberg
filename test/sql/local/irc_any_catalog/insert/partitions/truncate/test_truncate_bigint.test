@@ -23,11 +23,11 @@ create schema if not exists my_datalake.default;
 statement ok
 drop table if exists my_datalake.default.test_truncate_bigint;
 
-# truncate(val, 10): values 0-9 -> 0, values 10-19 -> 10, etc.
+# truncate(10, val): values 0-9 -> 0, values 10-19 -> 10, etc.
 # 30 rows across val 0..29 produces 3 distinct partition values: 0, 10, 20
 statement ok
 CREATE TABLE my_datalake.default.test_truncate_bigint (id int, val bigint)
-PARTITIONED BY (truncate(val, 10));
+PARTITIONED BY (truncate(10, val));
 
 statement ok
 insert into my_datalake.default.test_truncate_bigint
@@ -58,7 +58,7 @@ drop table if exists my_datalake.default.test_truncate_bigint_negative;
 
 statement ok
 CREATE TABLE my_datalake.default.test_truncate_bigint_negative (id int, val bigint)
-PARTITIONED BY (truncate(val, 10));
+PARTITIONED BY (truncate(10, val));
 
 statement ok
 insert into my_datalake.default.test_truncate_bigint_negative
