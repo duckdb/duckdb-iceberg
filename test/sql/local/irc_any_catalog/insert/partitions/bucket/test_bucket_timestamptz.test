@@ -29,11 +29,11 @@ PARTITIONED BY (bucket(val, 4));
 
 statement ok
 insert into my_datalake.default.test_bucket_timestamptz
-select range, ('2020-01-01 00:00:00+00'::TIMESTAMPTZ + INTERVAL (range) HOUR) from range(20);
+select range, ('2020-01-01 00:00:00'::TIMESTAMP + INTERVAL (range) HOUR)::TIMESTAMPTZ from range(20);
 
 statement ok
 create table local_bucket_timestamptz as
-select range as id, ('2020-01-01 00:00:00+00'::TIMESTAMPTZ + INTERVAL (range) HOUR) as val from range(20);
+select range as id, ('2020-01-01 00:00:00'::TIMESTAMP + INTERVAL (range) HOUR)::TIMESTAMPTZ as val from range(20);
 
 query II nosort expected_result
 select * from local_bucket_timestamptz order by id;
