@@ -60,14 +60,11 @@ void IcebergTableEntry::PrepareIcebergScanFromEntry(ClientContext &context) cons
 	auto metadata_path = table_info.table_metadata.GetMetadataPath(fs);
 
 	unique_ptr<SecretEntry> http_secret_entry;
-	unique_ptr<SIGV4Authorization> sigv4_auth;
 
 	switch (ic_catalog.auth_handler->type) {
 	case IcebergAuthorizationType::SIGV4: {
 		auto &sigv4 = ic_catalog.auth_handler->Cast<SIGV4Authorization>();
-		sigv4_auth = make_uniq<SIGV4Authorization>(sigv4.secret);
-
-		http_secret_entry = IcebergCatalog::GetHTTPSecret(context, sigv4_auth->secret);
+		http_secret_entry = IcebergCatalog::GetHTTPSecret(context, sigv4.secret);
 		break;
 	}
 	case IcebergAuthorizationType::OAUTH2: {
@@ -99,8 +96,8 @@ void IcebergTableEntry::PrepareIcebergScanFromEntry(ClientContext &context) cons
 		}
 
 		if (StringUtil::StartsWith(ic_catalog.uri, "glue")) {
-			D_ASSERT(sigv4_auth);
-			auto secret_entry = IcebergCatalog::GetStorageSecret(context, sigv4_auth->secret);
+			auto &sigv4 = ic_catalog.auth_handler->Cast<SIGV4Authorization>();
+			auto secret_entry = IcebergCatalog::GetStorageSecret(context, sigv4.secret);
 			auto kv_secret = dynamic_cast<const KeyValueSecret &>(*secret_entry->secret);
 
 			//! Override the endpoint if 'glue' is the host of the catalog
@@ -108,8 +105,8 @@ void IcebergTableEntry::PrepareIcebergScanFromEntry(ClientContext &context) cons
 			auto endpoint = "s3." + region + ".amazonaws.com";
 			info.options["endpoint"] = endpoint;
 		} else if (StringUtil::StartsWith(ic_catalog.uri, "s3tables")) {
-			D_ASSERT(sigv4_auth);
-			auto secret_entry = IcebergCatalog::GetStorageSecret(context, sigv4_auth->secret);
+			auto &sigv4 = ic_catalog.auth_handler->Cast<SIGV4Authorization>();
+			auto secret_entry = IcebergCatalog::GetStorageSecret(context, sigv4.secret);
 			auto kv_secret = dynamic_cast<const KeyValueSecret &>(*secret_entry->secret);
 
 			//! Override all the options if 's3tables' is the host of the catalog

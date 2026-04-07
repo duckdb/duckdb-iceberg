@@ -669,15 +669,15 @@ unique_ptr<Catalog> IcebergCatalog::Attach(optional_ptr<StorageExtensionInfo> st
 	unique_ptr<IcebergAuthorization> auth_handler;
 	switch (attach_options.authorization_type) {
 	case IcebergAuthorizationType::OAUTH2: {
-		auth_handler = OAuth2Authorization::FromAttachOptions(context, attach_options);
+		auth_handler = OAuth2Authorization::FromAttachOptions(db, context, attach_options);
 		break;
 	}
 	case IcebergAuthorizationType::SIGV4: {
-		auth_handler = SIGV4Authorization::FromAttachOptions(attach_options);
+		auth_handler = SIGV4Authorization::FromAttachOptions(db, attach_options);
 		break;
 	}
 	case IcebergAuthorizationType::NONE: {
-		auth_handler = NoneAuthorization::FromAttachOptions(attach_options);
+		auth_handler = NoneAuthorization::FromAttachOptions(db, attach_options);
 		break;
 	}
 	default:
