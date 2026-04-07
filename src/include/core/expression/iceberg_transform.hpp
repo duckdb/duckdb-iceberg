@@ -219,14 +219,13 @@ struct HourTransform {
 		case LogicalTypeId::TIMESTAMP: {
 			auto val = constant.GetValue<timestamp_t>();
 			return Value::INTEGER(static_cast<int32_t>(
-			    // Negative timestamps (time before epoch) must round towards negative infinity, but C++ `/` 
-				// truncates toward zero, so we use floor division here to ensure the correct behavior.
+			    // Negative timestamps (time before epoch) must round towards negative infinity, but C++ `/`
+			    // truncates toward zero, so we use floor division here to ensure the correct behavior.
 			    IcebergFloorDiv(val.value, Interval::MICROS_PER_HOUR)));
 		}
 		case LogicalTypeId::TIMESTAMP_TZ: {
 			auto val = constant.GetValue<timestamp_tz_t>();
-			return Value::INTEGER(static_cast<int32_t>(
-			    IcebergFloorDiv(val.value, Interval::MICROS_PER_HOUR)));
+			return Value::INTEGER(static_cast<int32_t>(IcebergFloorDiv(val.value, Interval::MICROS_PER_HOUR)));
 		}
 		default:
 			throw NotImplementedException("'hour' transform for type %s", constant.type().ToString());
