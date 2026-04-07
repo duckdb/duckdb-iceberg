@@ -90,11 +90,15 @@ bool IcebergTableSet::FillEntry(ClientContext &context, IcebergTableInformation 
 
 void IcebergTableSet::Scan(ClientContext &context, const std::function<void(CatalogEntry &)> &callback) {
 	lock_guard<mutex> lock(entry_lock);
+	auto &iceberg_transaction = IcebergTransaction::Get(context, catalog);
 	LoadEntries(context);
 	case_insensitive_set_t non_iceberg_tables;
 	auto table_namespace = IRCAPI::GetEncodedSchemaName(schema.namespace_items);
 	for (auto &entry : entries) {
 		auto &table_info = *entry.second;
+		auto table_key = table_info.GetTableKey();
+		iceberg_transaction.tables[table_key] = entry.second;
+
 		if (table_info.dummy_entry) {
 			// FIXME: why do we need to return the same entry again?
 			auto &optional = table_info.dummy_entry.get()->Cast<CatalogEntry>();
