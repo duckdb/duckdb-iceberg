@@ -208,11 +208,11 @@ ErrorData IcebergCatalog::SupportsCreateTable(BoundCreateTableInfo &info) {
 //===--------------------------------------------------------------------===//
 
 IRCEndpointBuilder IcebergCatalog::GetBaseUrl() const {
-	auto base_url = IRCEndpointBuilder();
-	base_url.SetHost(uri);
-	base_url.AddPathComponent(version);
+	auto url_builder = IRCEndpointBuilder();
+	url_builder.SetHost(uri);
+	url_builder.AddPathComponent(IRCPathComponent::RegularComponent(version));
 
-	return base_url;
+	return url_builder;
 }
 
 unique_ptr<SecretEntry> IcebergCatalog::GetStorageSecret(ClientContext &context, const string &secret_name) {

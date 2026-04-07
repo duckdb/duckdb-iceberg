@@ -14,11 +14,11 @@ string AddHttpHostIfMissing(const string &url) {
 	return "http://" + url;
 }
 
-void IRCEndpointBuilder::AddPathComponent(const string &component) {
-	if (component.empty()) {
+void IRCEndpointBuilder::AddPathComponent(IRCPathComponent &&component) {
+	if (component.raw.empty()) {
 		return;
 	}
-	path_components.push_back(component);
+	path_components.push_back(std::move(component));
 }
 
 void IRCEndpointBuilder::AddPrefixComponent(const string &component, const bool &prefix_is_one_component) {
@@ -27,16 +27,16 @@ void IRCEndpointBuilder::AddPrefixComponent(const string &component, const bool 
 	}
 
 	// If the component contains slashes, split it into multiple segments
-	if (component.find('/') != string::npos && !prefix_is_one_component) {
+	if (!prefix_is_one_component && component.find('/') != string::npos) {
 		auto segments = StringUtil::Split(component, '/');
 		for (const auto &segment : segments) {
 			if (!segment.empty()) {
-				path_components.push_back(segment);
+				AddPathComponent(IRCPathComponent::RegularComponent(segment));
 			}
 		}
 	} else {
 		// Single component without slashes
-		path_components.push_back(component);
+		AddPathComponent(IRCPathComponent::RegularComponent(component));
 	}
 }
 
@@ -48,18 +48,11 @@ void IRCEndpointBuilder::SetHost(const string &host_) {
 	host = host_;
 }
 
-void IRCEndpointBuilder::SetParam(const string &key, const string &value) {
-	params[key] = value;
+void IRCEndpointBuilder::SetParam(const string &key, IRCPathComponent &&param) {
+	params.emplace(key, std::move(param));
 }
 
-string IRCEndpointBuilder::GetParam(const string &key) const {
-	if (params.find(key) != params.end()) {
-		return params.at(key);
-	}
-	return "";
-}
-
-const std::unordered_map<string, string> IRCEndpointBuilder::GetParams() const {
+const unordered_map<string, IRCPathComponent> &IRCEndpointBuilder::GetParams() const {
 	return params;
 }
 
@@ -67,15 +60,15 @@ string IRCEndpointBuilder::GetURLEncoded() const {
 	//! {host}[/{version}][/{prefix}]/{path_component[0]}/{path_component[1]}
 	string ret = host;
 	for (auto &component : path_components) {
-		ret += "/" + StringUtil::URLEncode(component);
+		ret += "/" + component.encoded;
 	}
 
 	// encode params
 	auto sep = "?";
 	if (params.size() > 0) {
-		for (auto &param : params) {
-			auto key = StringUtil::URLEncode(param.first);
-			auto value = StringUtil::URLEncode(param.second);
+		for (auto &it : params) {
+			auto key = StringUtil::URLEncode(it.first);
+			auto &value = it.second.encoded;
 			ret += sep + key + "=" + value;
 			sep = "&";
 		}
@@ -106,12 +99,12 @@ IRCEndpointBuilder IRCEndpointBuilder::FromURL(const string &url) {
 	while ((pos = path.find('/')) != string::npos) {
 		component = path.substr(0, pos);
 		if (!component.empty()) {
-			ret.path_components.push_back(component);
+			ret.AddPathComponent(IRCPathComponent::RegularComponent(component));
 		}
 		path.erase(0, pos + 1);
 	}
 	if (!path.empty()) {
-		ret.path_components.push_back(path);
+		ret.AddPathComponent(IRCPathComponent::RegularComponent(path));
 	}
 	return ret;
 }

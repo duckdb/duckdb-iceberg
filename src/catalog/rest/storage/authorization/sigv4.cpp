@@ -142,10 +142,10 @@ AWSInput SIGV4Authorization::CreateAWSInput(ClientContext &context, const IRCEnd
 		aws_input.path_segments.push_back(component);
 	}
 	for (auto &component : endpoint_builder.path_components) {
-		aws_input.path_segments.push_back(component);
+		aws_input.path_segments.push_back(component.raw);
 	}
 	for (auto &param : endpoint_builder.GetParams()) {
-		aws_input.query_string_parameters.emplace_back(param);
+		aws_input.query_string_parameters.emplace_back(param.first, param.second.raw);
 	}
 
 	// AWS credentials
