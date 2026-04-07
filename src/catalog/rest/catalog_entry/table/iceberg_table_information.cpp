@@ -320,15 +320,16 @@ int64_t IcebergTableInformation::GetExistingSpecId(IcebergPartitionSpec &spec) {
 			continue;
 		}
 		for (idx_t field_index = 0; field_index < existing_spec.second.fields.size(); field_index++) {
-			auto existing_partition_col_source_id = existing_spec.second.fields[field_index].source_id;
+			auto existing_partition_col_source_id = existing_spec.second.fields[field_index].GetSourceId();
 			// if the number of partition columns don't match, the specs are not the same
-			auto new_spec_col_source_id = spec.fields[field_index].source_id;
+			auto new_spec_col_source_id = spec.fields[field_index].GetSourceId();
 			if (existing_partition_col_source_id != new_spec_col_source_id) {
 				fields_match = false;
 				break;
 			}
-			auto existing_partition_col_transform = existing_spec.second.fields[field_index].transform.RawType();
-			auto new_spec_col_transform = spec.fields[field_index].transform.RawType();
+			auto existing_partition_col_transform =
+			    existing_spec.second.fields[field_index].GetIcebergTransform().RawType();
+			auto new_spec_col_transform = spec.fields[field_index].GetIcebergTransform().RawType();
 			if (existing_partition_col_transform != new_spec_col_transform) {
 				fields_match = false;
 				break;
@@ -361,7 +362,7 @@ void IcebergTableInformation::SetPartitionedBy(IcebergTransaction &transaction,
 
 	for (auto &key : partition_keys) {
 		string column_name;
-		string transform_name = "identity";
+		string transform = "identity";
 		idx_t bucket_modulo_val;
 
 		if (key->type == ExpressionType::COLUMN_REF) {
@@ -369,30 +370,28 @@ void IcebergTableInformation::SetPartitionedBy(IcebergTransaction &transaction,
 			column_name = colref.column_names.back();
 		} else if (key->type == ExpressionType::FUNCTION) {
 			auto &funcexpr = key->Cast<FunctionExpression>();
-			transform_name = funcexpr.function_name;
+			transform = funcexpr.function_name;
 			if (funcexpr.children.empty()) {
-				throw NotImplementedException("Unrecognized transform ('%s')", transform_name);
-			} else if (!IcebergTransform::TransformFunctionSupported(transform_name)) {
-				throw NotImplementedException("Unrecognized transform ('%s')", transform_name);
+				throw NotImplementedException("Unrecognized transform ('%s')", transform);
+			} else if (!IcebergTransform::TransformFunctionSupported(transform)) {
+				throw NotImplementedException("Unrecognized transform ('%s')", transform);
 			}
-			if (transform_name == "bucket" || transform_name == "truncate") {
+			if (transform == "bucket" || transform == "truncate") {
 				// Spark-compatible syntax: bucket(N, col) / truncate(W, col)
 				if (funcexpr.children.size() < 2) {
-					throw InvalidInputException("%s requires two arguments, e.g. %s(16, col)", transform_name,
-					                            transform_name);
+					throw InvalidInputException("%s requires two arguments, e.g. %s(16, col)", transform, transform);
 				}
 				auto &param_expr = *funcexpr.children[0];
 				if (param_expr.type != ExpressionType::VALUE_CONSTANT) {
-					throw InvalidInputException("%s first argument must be a constant integer", transform_name);
+					throw InvalidInputException("%s first argument must be a constant integer", transform);
 				}
 				auto &const_expr = param_expr.Cast<ConstantExpression>();
 				auto raw_val = const_expr.value.GetValue<int32_t>();
 				if (raw_val <= 0) {
-					throw InvalidInputException("%s requires a positive integer argument, got %d", transform_name,
-					                            raw_val);
+					throw InvalidInputException("%s requires a positive integer argument, got %d", transform, raw_val);
 				}
 				bucket_modulo_val = const_expr.value.GetValue<idx_t>();
-				transform_name = StringUtil::Format("%s[%d]", transform_name, bucket_modulo_val);
+				transform = StringUtil::Format("%s[%d]", transform, bucket_modulo_val);
 				if (funcexpr.children[1]->type != ExpressionType::COLUMN_REF) {
 					throw NotImplementedException("Transforms are only supported on column references, not %s",
 					                              EnumUtil::ToChars(funcexpr.children[1]->type));
@@ -424,19 +423,21 @@ void IcebergTableInformation::SetPartitionedBy(IcebergTransaction &transaction,
 		}
 
 		IcebergPartitionSpecField field;
-		field.transform = IcebergTransform(transform_name);
-		switch (field.transform.Type()) {
+		// Create the Iceberg transform
+		auto iceberg_transform = IcebergTransform(transform);
+		switch (iceberg_transform.Type()) {
 		case IcebergTransformType::BUCKET:
 		case IcebergTransformType::TRUNCATE:
-			field.transform.SetBucketOrTruncateValue(bucket_modulo_val);
+			iceberg_transform.SetBucketOrTruncateValue(bucket_modulo_val);
 			break;
 		default:
 			break;
 		}
-		field.source_id = source_id;
-		field.partition_field_id = base_partition_field_id + new_spec.fields.size();
+		field.SetPartitionTransform(iceberg_transform);
+		field.SetPartitionSourceId(source_id);
+		field.SetPartitionFieldId(base_partition_field_id + new_spec.fields.size());
 		// transform field names cannot be the column name. Otherwise Lakekeeper complains
-		field.name = column_name + "_" + field.transform.RawType();
+		field.SetPartitionSpecFieldName(column_name);
 		new_spec.fields.push_back(std::move(field));
 	}
 

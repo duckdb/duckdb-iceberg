@@ -144,7 +144,7 @@ void ManifestPartitions::Create(const IcebergTableMetadata &metadata, const Iceb
 			IcebergExtendedPartitionInfo extended_partition_info;
 			bool partition_info_exists = false;
 			for (auto &pi : data_extended_partition_info) {
-				if (pi.field_id == spec_field.partition_field_id) {
+				if (pi.field_id == spec_field.GetPartitionFieldId()) {
 					extended_partition_info = pi;
 					partition_info_exists = true;
 					break;
@@ -194,7 +194,7 @@ void ManifestPartitions::Create(const IcebergTableMetadata &metadata, const Iceb
 			auto &data_file = entry.data_file;
 			auto data_extended_partition_info = data_file.GetExtendedPartitionInfo(metadata);
 			for (auto &pi : data_extended_partition_info) {
-				if (pi.field_id == spec_field.partition_field_id && !pi.value.IsNull()) {
+				if (pi.field_id == spec_field.GetPartitionFieldId() && !pi.value.IsNull()) {
 					extended_partition_info = pi;
 					have_extended_partition_info = true;
 					break;

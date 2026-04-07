@@ -75,22 +75,6 @@ LogicalType IcebergTransform::GetBoundsType(const LogicalType &input) const {
 	}
 }
 
-string IcebergTransform::GetDataFileFriendlyName(string &column_name) {
-	string result = column_name;
-	for (idx_t i = 0; i < result.size(); i++) {
-		char c = result[i];
-		bool valid = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_';
-		if (!valid) {
-			result[i] = '_';
-		}
-	}
-	// Avro names must not start with a digit
-	if (!result.empty() && result[0] >= '0' && result[0] <= '9') {
-		result = "_" + result;
-	}
-	return result;
-}
-
 LogicalType IcebergTransform::GetSerializedType(const LogicalType &input) const {
 	switch (type) {
 	case IcebergTransformType::IDENTITY:

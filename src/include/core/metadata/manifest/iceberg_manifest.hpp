@@ -30,10 +30,8 @@ string IcebergManifestEntryStatusTypeToString(IcebergManifestEntryStatusType typ
 
 //! Combined partition information for a single partition field in a data file
 struct IcebergExtendedPartitionInfo {
-	//! The partition column name
+	//! The partition field name
 	string name;
-	//! The partition column name used in data_file.partitions struct in avro_files
-	string data_file_friendly_name;
 	//! The source column id from the table schema
 	uint64_t source_id = 0;
 	//! The partition field id (unique within a partition spec)

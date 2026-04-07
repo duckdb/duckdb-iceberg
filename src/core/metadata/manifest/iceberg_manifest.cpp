@@ -50,9 +50,10 @@ map<idx_t, LogicalType> IcebergDataFile::GetFieldIdToTypeMapping(const IcebergSn
 		auto &fields = partition_spec.GetFields();
 
 		for (auto &field : fields) {
-			auto &column_id = source_to_column_id[field.source_id];
+			auto &column_id = source_to_column_id[field.GetSourceId()];
 			auto &column = IcebergTableSchema::GetFromColumnIndex(schema.columns, column_id, 0);
-			partition_field_id_to_type.emplace(field.partition_field_id, field.transform.GetBoundsType(column.type));
+			partition_field_id_to_type.emplace(field.GetPartitionFieldId(),
+			                                   field.GetIcebergTransform().GetBoundsType(column.type));
 		}
 	}
 	return partition_field_id_to_type;
@@ -94,13 +95,13 @@ IcebergDataFile::GetExtendedPartitionInfo(const IcebergTableMetadata &metadata) 
 	unordered_map<uint64_t, ParitionFieldWithSourceType> field_id_to_partition_spec_and_source_type;
 	for (auto &spec_pair : metadata.partition_specs) {
 		for (auto &field : spec_pair.second.fields) {
-			auto type_it = source_id_to_type.find(field.source_id);
+			auto type_it = source_id_to_type.find(field.GetSourceId());
 			if (type_it == source_id_to_type.end()) {
 				throw InternalException(
 				    "Partition %s with field_id %llu in data_file %s with source_id %llu not found in any table schema",
-				    field.name, field.partition_field_id, file_path, field.source_id);
+				    field.GetPartitionSpecFieldName(), field.GetPartitionFieldId(), file_path, field.GetSourceId());
 			}
-			field_id_to_partition_spec_and_source_type.emplace(field.partition_field_id,
+			field_id_to_partition_spec_and_source_type.emplace(field.GetPartitionFieldId(),
 			                                                   ParitionFieldWithSourceType {&field, type_it->second});
 		}
 	}
@@ -114,12 +115,11 @@ IcebergDataFile::GetExtendedPartitionInfo(const IcebergTableMetadata &metadata) 
 		}
 		auto &resolved = it->second;
 		IcebergExtendedPartitionInfo extended;
-		extended.name = resolved.field->name;
+		extended.name = resolved.field->GetPartitionSpecFieldName();
 		extended.field_id = info.field_id;
 		extended.value = info.value;
-		extended.source_id = resolved.field->source_id;
-		extended.transform = resolved.field->transform;
-		extended.data_file_friendly_name = extended.transform.GetDataFileFriendlyName(extended.name);
+		extended.source_id = resolved.field->GetSourceId();
+		extended.transform = resolved.field->GetIcebergTransform();
 		D_ASSERT(resolved.source_type);
 		extended.source_type = *resolved.source_type;
 		ret.push_back(std::move(extended));
@@ -260,7 +260,7 @@ Value IcebergDataFile::ToValue(const IcebergTableMetadata &table_metadata, const
 			const LogicalType actual_type = partition_result_type;
 			bool cast_worked = entry.value.DefaultTryCastAs(actual_type, new_value, &error_message, true);
 			if (cast_worked) {
-				partition_children.emplace_back(entry.data_file_friendly_name, new_value);
+				partition_children.emplace_back(entry.name, new_value);
 			} else {
 				throw InvalidInputException("Could not cast %s to %s", entry.value.type().ToString(),
 				                            actual_type.ToString());
@@ -384,14 +384,14 @@ static LogicalType PartitionStructType(vector<IcebergExtendedPartitionInfo> exte
 			switch (entry.transform.Type()) {
 			case IcebergTransformType::TRUNCATE:
 			case IcebergTransformType::IDENTITY:
-				children.emplace_back(entry.data_file_friendly_name, entry.source_type);
+				children.emplace_back(entry.name, entry.source_type);
 				break;
 			case IcebergTransformType::BUCKET:
 			case IcebergTransformType::DAY:
 			case IcebergTransformType::MONTH:
 			case IcebergTransformType::YEAR:
 			case IcebergTransformType::HOUR:
-				children.emplace_back(entry.data_file_friendly_name, LogicalType::INTEGER);
+				children.emplace_back(entry.name, LogicalType::INTEGER);
 				break;
 			case IcebergTransformType::INVALID:
 			case IcebergTransformType::VOID:
@@ -534,7 +534,7 @@ idx_t WriteToFile(const IcebergTableMetadata &table_metadata, const IcebergManif
 		partition.emplace_back("__duckdb_field_id", Value::INTEGER(PARTITION));
 		partition.emplace_back("__duckdb_nullable", Value::BOOLEAN(false));
 		for (auto &entry : extended_partition_info) {
-			partition.emplace_back(entry.data_file_friendly_name, Value::INTEGER(static_cast<int32_t>(entry.field_id)));
+			partition.emplace_back(entry.name, Value::INTEGER(static_cast<int32_t>(entry.field_id)));
 		}
 		data_file_field_ids.emplace_back("partition", Value::STRUCT(partition));
 
@@ -548,10 +548,9 @@ idx_t WriteToFile(const IcebergTableMetadata &table_metadata, const IcebergManif
 		if (!extended_partition_info.empty()) {
 			for (auto &entry : extended_partition_info) {
 				auto field_obj = yyjson_mut_arr_add_obj(doc, partition_fields);
-				yyjson_mut_obj_add_strcpy(doc, field_obj, "name", entry.data_file_friendly_name.c_str());
+				yyjson_mut_obj_add_strcpy(doc, field_obj, "name", entry.name.c_str());
 				auto types_arr = yyjson_mut_obj_add_arr(doc, field_obj, "type");
 				yyjson_mut_arr_add_strcpy(doc, types_arr, "null");
-				// TODO: Is this correct? I don't think so.
 				yyjson_mut_arr_add_strcpy(doc, types_arr, "int");
 				yyjson_mut_obj_add_int(doc, field_obj, "id", static_cast<int32_t>(entry.field_id));
 			}

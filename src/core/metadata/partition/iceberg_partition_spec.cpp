@@ -42,6 +42,50 @@ const vector<IcebergPartitionSpecField> &IcebergPartitionSpec::GetFields() const
 	return fields;
 }
 
+void IcebergPartitionSpecField::SetPartitionSpecFieldName(string &column_name) {
+	string transform_raw_type = transform.RawType();
+	for (idx_t i = 0; i < transform_raw_type.size(); i++) {
+		char c = transform_raw_type[i];
+		bool valid = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_';
+		if (!valid) {
+			transform_raw_type[i] = '_';
+		}
+	}
+	// Avro names must not start with a digit
+	if (!transform_raw_type.empty() && transform_raw_type[0] >= '0' && transform_raw_type[0] <= '9') {
+		transform_raw_type = "_" + transform_raw_type;
+	}
+	name = transform_raw_type + "_" + column_name + "_" + to_string(source_id);
+}
+
+const string &IcebergPartitionSpecField::GetPartitionSpecFieldName() const {
+	return name;
+}
+
+void IcebergPartitionSpecField::SetPartitionSourceId(idx_t _source_id) {
+	source_id = _source_id;
+}
+
+void IcebergPartitionSpecField::SetPartitionFieldId(idx_t _field_id) {
+	partition_field_id = _field_id;
+}
+
+void IcebergPartitionSpecField::SetPartitionTransform(IcebergTransform &_transform) {
+	transform = _transform;
+}
+
+const IcebergTransform &IcebergPartitionSpecField::GetIcebergTransform() const {
+	return transform;
+}
+
+const uint64_t &IcebergPartitionSpecField::GetSourceId() const {
+	return source_id;
+}
+
+const uint64_t &IcebergPartitionSpecField::GetPartitionFieldId() const {
+	return partition_field_id;
+}
+
 const IcebergPartitionSpecField &IcebergPartitionSpec::GetFieldBySourceId(idx_t source_id) const {
 	for (auto &field : fields) {
 		if (field.source_id == source_id) {
