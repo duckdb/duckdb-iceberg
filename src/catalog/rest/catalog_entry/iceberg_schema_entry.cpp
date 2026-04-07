@@ -203,10 +203,11 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 	updated_table.InitTransactionData(irc_transaction);
 
 	auto &current_schema = updated_table.table_metadata.GetLatestSchema();
-	// Copy the schema, then add it to the table metadata
 	auto new_schema = current_schema.Copy();
-	auto new_schema_id = updated_table.GetMaxSchemaId() + 1;
-	new_schema->schema_id = new_schema_id;
+
+	if (!irc_transaction.has_schema_update) {
+		new_schema->schema_id = updated_table.GetMaxSchemaId() + 1;
+	}
 
 	switch (alter_table_info.alter_table_type) {
 	case AlterTableType::SET_PARTITIONED_BY: {
@@ -236,7 +237,9 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 		}
 
 		// Ensure schema is the same as current
-		updated_table.AddAssertCurrentSchemaId(irc_transaction);
+		if (!irc_transaction.has_schema_update) {
+			updated_table.AddAssertCurrentSchemaId(irc_transaction);
+		}
 
 		// Add the new column
 		auto new_iceberg_column = make_uniq<IcebergColumnDefinition>();
@@ -279,7 +282,7 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 		new_iceberg_column->required = false;
 
 		new_schema->columns.push_back(std::move(new_iceberg_column));
-
+		auto new_schema_id = new_schema->schema_id;
 		updated_table.table_metadata.schemas[new_schema_id] = std::move(new_schema);
 		updated_table.table_metadata.SetCurrentSchemaId(new_schema_id);
 
@@ -288,6 +291,7 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 
 		updated_table.AddSchema(irc_transaction);
 		updated_table.AddSetCurrentSchema(irc_transaction);
+		irc_transaction.has_schema_update = true;
 		return;
 	}
 	default: {

@@ -1,0 +1,69 @@
+# name: test/sql/local/irc_any_catalog/alter/alter_add_column_twice_in_same_transaction.test
+# group: [alter]
+
+require-env ICEBERG_SERVER_AVAILABLE
+
+require-env SECRETS_CREATED_AND_CATALOG_ATTACHED
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+CALL enable_logging(level='warning');
+
+statement ok
+SET warnings_as_errors = True;
+
+statement ok
+CREATE SCHEMA IF NOT EXISTS my_datalake.default;
+
+statement ok
+drop table if exists my_datalake.default.alter_add_column_same_txn_table;
+
+statement ok
+CREATE TABLE my_datalake.default.alter_add_column_same_txn_table AS (select range a FROM range(10));
+
+statement ok
+SET ca_cert_file = '~/.mitmproxy/mitmproxy-ca-cert.pem';
+
+statement ok
+CREATE SECRET http_proxy (
+    TYPE http,
+    HTTP_PROXY 'http://localhost:8878'
+);
+
+# ALTER and SELECT in the same explicit transaction. This exercises HasTransactionUpdates() = true path
+# in IcebergTableEntry::GetScanFunction, where scan_info uses the in-memory updated_table rather than a REST fetch.
+statement ok
+begin;
+
+statement ok
+ALTER TABLE my_datalake.default.alter_add_column_same_txn_table ADD COLUMN b int;
+
+statement ok
+ALTER TABLE my_datalake.default.alter_add_column_same_txn_table ADD COLUMN c varchar;
+
+statement ok
+commit;
+
+query III
+FROM my_datalake.default.alter_add_column_same_txn_table;
+----
+0	NULL	NULL
+1	NULL	NULL
+2	NULL	NULL
+3	NULL	NULL
+4	NULL	NULL
+5	NULL	NULL
+6	NULL	NULL
+7	NULL	NULL
+8	NULL	NULL
+9	NULL	NULL
