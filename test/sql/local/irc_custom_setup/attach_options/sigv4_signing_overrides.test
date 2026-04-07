@@ -39,7 +39,7 @@ ATTACH '' AS my_datalake_both (
     SIGNING_REGION 'us-west-2'
 );
 ----
-<REGEX>:(?!.*[Uu]nrecognized)(?!.*Could not parse AWS).*
+<!REGEX>:.*([Uu]nrecognized|Could not parse AWS).*
 
 # verify the SigV4 Authorization header contains the custom service and region
 query I
@@ -63,7 +63,7 @@ ATTACH '' AS my_datalake_name_only (
     SIGNING_REGION 'us-east-1'
 );
 ----
-<REGEX>:(?!.*[Uu]nrecognized)(?!.*Could not parse AWS).*
+<!REGEX>:.*([Uu]nrecognized|Could not parse AWS).*
 
 query I
 SELECT count(*) > 0
