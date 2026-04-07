@@ -258,9 +258,17 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 			 *  ExtractInitialValue in iceberg_create_table_request.cpp:208-216 gets a value using a ConstantBinder.
 			 */
 			switch (default_value.type) {
-			case ExpressionType::VALUE_CONSTANT:
-				new_iceberg_column->initial_default = make_uniq<Value>(default_value.Cast<ConstantExpression>().value);
+			case ExpressionType::VALUE_CONSTANT: {
+				auto &default_constant_value = default_value.Cast<ConstantExpression>().value;
+				if (new_iceberg_column->type != default_constant_value.type()) {
+					throw InvalidInputException(
+					    "Type mismatch between new COLUMN %s of type: %s and DEFAULT VALUE of type: %s",
+					    new_iceberg_column->name, new_iceberg_column->type.ToString(),
+					    default_constant_value.type().ToString());
+				}
+				new_iceberg_column->initial_default = make_uniq<Value>(default_constant_value);
 				break;
+			}
 			case ExpressionType::VALUE_NULL:
 				break;
 			default:
