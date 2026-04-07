@@ -1,0 +1,21 @@
+# name: test/sql/local/irc_custom_setup/setup_errors/unrecognized_attach_options.test
+# group: [setup_errors]
+
+require-env ICEBERG_SERVER_AVAILABLE
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+statement error
+attach '' as my_datalake (
+	TYPE ICEBERG,
+	ENDPOINT 'http://127.0.0.1:8181',
+	SIGNER 'test'
+)
+----
+Invalid Configuration Error: AUTHORIZATION_TYPE is 'oauth2', yet no 'secret' was provided, and no client_id+client_secret were provided. Please provide one of the listed options or change the 'authorization_type'.

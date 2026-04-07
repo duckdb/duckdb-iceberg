@@ -1,0 +1,173 @@
+# name: test/sql/local/irc_any_catalog/test_row_lineage_write_after_upgrade.test
+# description: test integration with iceberg catalog read
+# group: [irc_any_catalog]
+
+require-env ICEBERG_SERVER_AVAILABLE
+
+require-env SECRETS_CREATED_AND_CATALOG_ATTACHED
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+require core_functions
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+set enable_logging=true
+
+statement ok
+set logging_level='debug'
+
+# INSERT as the first V3 snapshot
+statement ok
+begin transaction
+
+statement ok
+INSERT into my_datalake.default.row_lineage_test_upgraded VALUES
+	(8, 'not_replaced'),
+	(9, 'also_not_replaced');
+
+query II
+select DISTINCT ON(_row_id) id, data from my_datalake.default.row_lineage_test_upgraded order by id;
+----
+1	replaced
+2	b_u1
+4	d_u1
+6	replaced
+7	g_new
+8	not_replaced
+9	also_not_replaced
+
+statement ok
+abort;
+
+# DELETE as the first V3 snapshot
+statement ok
+begin transaction
+
+statement ok
+DELETE FROM my_datalake.default.row_lineage_test_upgraded
+	WHERE (id IN (2,6))
+
+query II
+select id, data from my_datalake.default.row_lineage_test_upgraded order by id;
+----
+1	replaced
+4	d_u1
+7	g_new
+
+statement ok
+abort;
+
+# UPDATE as the first V3 snapshot
+statement ok
+begin transaction
+
+statement ok
+UPDATE my_datalake.default.row_lineage_test_upgraded
+SET data = 'replaced_again'
+WHERE id IN (2, 6);
+
+query II
+select id, data from my_datalake.default.row_lineage_test_upgraded order by id;
+----
+1	replaced
+2	replaced_again
+4	d_u1
+6	replaced_again
+7	g_new
+
+statement ok
+abort;
+
+# UPDATE + DELETE in the same transaction
+statement ok
+begin transaction
+
+statement ok
+UPDATE my_datalake.default.row_lineage_test_upgraded
+SET data = 'replaced_again'
+WHERE id IN (2, 6);
+
+query III
+select _row_id IS NOT NULL, id, data from my_datalake.default.row_lineage_test_upgraded order by id;
+----
+true	1	replaced
+true	2	replaced_again
+true	4	d_u1
+true	6	replaced_again
+true	7	g_new
+
+# Capture the _row_id of these rows
+statement ok
+set variable id2_row_id = (select _row_id from my_datalake.default.row_lineage_test_upgraded where id == 2);
+
+statement ok
+set variable id6_row_id = (select _row_id from my_datalake.default.row_lineage_test_upgraded where id == 6);
+
+query I
+select _row_id = getvariable('id2_row_id') from my_datalake.default.row_lineage_test_upgraded where id = 2;
+----
+true
+
+query I
+select _row_id = getvariable('id6_row_id') from my_datalake.default.row_lineage_test_upgraded where id = 6;
+----
+true
+
+statement ok
+DELETE FROM my_datalake.default.row_lineage_test_upgraded
+WHERE id IN (4, 1);
+
+query II
+select id, data from my_datalake.default.row_lineage_test_upgraded order by id;
+----
+2	replaced_again
+6	replaced_again
+7	g_new
+
+query I
+select _row_id = getvariable('id2_row_id') from my_datalake.default.row_lineage_test_upgraded where id = 2;
+----
+true
+
+query I
+select _row_id = getvariable('id6_row_id') from my_datalake.default.row_lineage_test_upgraded where id = 6;
+----
+true
+
+statement ok
+DELETE FROM my_datalake.default.row_lineage_test_upgraded
+WHERE id IN (6, 8);
+
+query III
+select _last_updated_sequence_number, id, data from my_datalake.default.row_lineage_test_upgraded order by id;
+----
+8	2	replaced_again
+7	7	g_new
+
+query I
+select _row_id = getvariable('id2_row_id') from my_datalake.default.row_lineage_test_upgraded where id = 2;
+----
+true
+
+statement ok
+commit;
+
+query III
+select _last_updated_sequence_number, id, data from my_datalake.default.row_lineage_test_upgraded order by id;
+----
+8	2	replaced_again
+7	7	g_new
+
+query I
+select _row_id = getvariable('id2_row_id') from my_datalake.default.row_lineage_test_upgraded where id = 2;
+----
+true

@@ -21,6 +21,30 @@ SELECT count(*) FROM ICEBERG_SCAN('__WORKING_DIRECTORY__/data/persistent/name_ma
 ----
 10000
 
+# 'b' is deleted from 'schema.name-mapping.default', so 'b' fields are NULL
+query I
+SELECT count(*) FROM ICEBERG_SCAN('__WORKING_DIRECTORY__/data/persistent/name_mapping/warehouse_1/mydb/t1', version=3.1, snapshot_from_id=6597550917742534971) where b is null;
+----
+10000
+
+# all fields are deleted from 'schema.name-mapping.default', so all fields are NULL
+query I
+SELECT count(*) FROM ICEBERG_SCAN('__WORKING_DIRECTORY__/data/persistent/name_mapping/warehouse_1/mydb/t1', version=3.2, snapshot_from_id=6597550917742534971) where a is null and b is null;
+----
+10000
+
+# 'b' is deleted from schema but not 'schema.name-mapping.default', so 'b' fields are not NULL
+query I
+SELECT count(*) FROM ICEBERG_SCAN('__WORKING_DIRECTORY__/data/persistent/name_mapping/warehouse_1/mydb/t1', version=4, snapshot_from_id=6597550917742534971) where b is not null;
+----
+10000
+
+# 'b' is deleted from both schema and 'schema.name-mapping.default', so 'b' fields are NULL
+query I
+SELECT count(*) FROM ICEBERG_SCAN('__WORKING_DIRECTORY__/data/persistent/name_mapping/warehouse_1/mydb/t1', version=4.1, snapshot_from_id=6597550917742534971) where b is null;
+----
+10000
+
 # 'b' is deleted and re-added, with a different field-id, so its default value is NULL
 query I
 SELECT count(*) FROM ICEBERG_SCAN('__WORKING_DIRECTORY__/data/persistent/name_mapping/warehouse_1/mydb/t1', version=7, snapshot_from_id=2651609110244230974) where b is null;

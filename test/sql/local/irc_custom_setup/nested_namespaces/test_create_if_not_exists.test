@@ -1,0 +1,78 @@
+# name: test/sql/local/irc_custom_setup/nested_namespaces/test_create_if_not_exists.test
+# group: [nested_namespaces]
+
+require-env ICEBERG_SERVER_AVAILABLE
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+set enable_logging=true
+
+statement ok
+set logging_level='debug'
+
+statement ok
+CREATE SECRET (
+    TYPE S3,
+    KEY_ID 'admin',
+    SECRET 'password',
+    ENDPOINT '127.0.0.1:9000',
+    URL_STYLE 'path',
+    USE_SSL 0
+);
+
+
+statement ok
+ATTACH '' AS my_datalake (
+    TYPE ICEBERG,
+    CLIENT_ID 'admin',
+    CLIENT_SECRET 'password',
+    ENDPOINT 'http://127.0.0.1:8181',
+    SUPPORT_NESTED_NAMESPACES true
+);
+
+statement ok
+drop table if exists my_datalake.default.a;
+
+# First in a transaction, to verify transaction-local tables and scans work
+statement ok
+BEGIN TRANSACTION;
+
+statement ok
+CREATE TABLE IF NOT EXISTS my_datalake.default.a AS FROM my_datalake.default.empty_table WITH NO DATA;
+
+query III
+select * from my_datalake.default.a;
+----
+
+statement ok
+ABORT;
+
+# Now outside of a transaction
+statement ok
+CREATE TABLE IF NOT EXISTS my_datalake.default.a AS FROM my_datalake.default.empty_table WITH NO DATA;
+
+query III
+select * from my_datalake.default.a;
+----
+
+# Now the table already exists, making the create a no-op
+statement ok
+CREATE TABLE IF NOT EXISTS my_datalake.default.a AS FROM my_datalake.default.empty_table WITH NO DATA;
+
+query III
+select * from my_datalake.default.a;
+----
+
+# FIXME:
+# This needs a DROP 'my_datalake.default.a' to make this test rerunnable.
+

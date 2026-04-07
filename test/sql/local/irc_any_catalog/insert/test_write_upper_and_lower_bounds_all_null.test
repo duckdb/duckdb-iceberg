@@ -1,0 +1,128 @@
+# name: test/sql/local/irc_any_catalog/insert/test_write_upper_and_lower_bounds_all_null.test
+# group: [insert]
+
+require-env ICEBERG_SERVER_AVAILABLE
+
+require-env SECRETS_CREATED_AND_CATALOG_ATTACHED
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+require icu
+
+require core_functions
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+set enable_logging=true
+
+statement ok
+set logging_level='debug'
+
+statement ok
+SET TimeZone = 'UTC';
+
+
+statement ok
+drop table if exists my_datalake.default.duckdb_written_upper_lower_bounds_all_null;
+
+statement ok
+create table my_datalake.default.duckdb_written_upper_lower_bounds_all_null (
+int_type int,
+long_type long,
+varchar_type varchar,
+bool_type bool,
+float_type float,
+double_type double,
+decimal_type_18_3 DECIMAL(18,3),
+date_type DATE,
+timestamp_type TIMESTAMP,
+binary_type BINARY
+);
+
+# Insert 1000 rows with all NULL values for each column
+statement ok
+insert into my_datalake.default.duckdb_written_upper_lower_bounds_all_null 
+select 
+    NULL,
+    NULL,
+    NULL,
+    NULL,
+    NULL,
+    NULL,
+    NULL,
+    NULL,
+    NULL,
+    NULL
+from range(1000);
+
+statement ok
+set variable manifest_path_duckdb = (select manifest_path from iceberg_metadata(my_datalake.default.duckdb_written_upper_lower_bounds_all_null) order by manifest_sequence_number desc limit 1);
+
+statement ok
+set variable manifest_path_spark = (select manifest_path from iceberg_metadata(my_datalake.default.spark_written_upper_lower_bounds_all_null) order by manifest_sequence_number desc limit 1);
+
+# Verify that lower_bounds and upper_bounds maps are empty or don't contain entries for all-NULL columns
+# field ids 1-10 refer to all column types - they should not appear in bounds maps
+query I
+select count(*) from (
+    select unnest(map_keys(lower_bounds)) lower_keys
+    from (select unnest(data_file) from read_avro(getvariable('manifest_path_duckdb')))
+) where lower_keys in (1, 2, 3, 4, 5, 6, 7, 8, 9, 10);
+----
+0
+
+query I
+select count(*) from (
+    select unnest(map_keys(upper_bounds)) upper_keys
+    from (select unnest(data_file) from read_avro(getvariable('manifest_path_duckdb')))
+) where upper_keys in (1, 2, 3, 4, 5, 6, 7, 8, 9, 10);
+----
+0
+
+query I
+select count(*) from (
+    select unnest(map_keys(lower_bounds)) lower_keys
+    from (select unnest(data_file) from read_avro(getvariable('manifest_path_spark')))
+) where lower_keys in (1, 2, 3, 4, 5, 6, 7, 8, 9, 10);
+----
+0
+
+query I
+select count(*) from (
+    select unnest(map_keys(upper_bounds)) upper_keys
+    from (select unnest(data_file) from read_avro(getvariable('manifest_path_spark')))
+) where upper_keys in (1, 2, 3, 4, 5, 6, 7, 8, 9, 10);
+----
+0
+
+# check null counts - should be 1000 for all columns
+query II nosort duckdb_null_value_counts
+select unnest(map_keys(null_value_counts)), unnest(map_values(null_value_counts)) from (select unnest(data_file) from read_avro(getvariable('manifest_path_duckdb'))) order by all;
+
+query II nosort duckdb_null_value_counts
+select unnest(map_keys(null_value_counts)), unnest(map_values(null_value_counts)) from (select unnest(data_file) from read_avro(getvariable('manifest_path_spark'))) order by all;
+
+# Verify all null_value_counts are 1000
+query I
+select count(*) from (
+    select unnest(map_keys(null_value_counts)) as field_id, unnest(map_values(null_value_counts)) as null_count
+    from (select unnest(data_file) from read_avro(getvariable('manifest_path_duckdb')))
+) where field_id in (1, 2, 3, 4, 5, 6, 7, 8, 9, 10) and null_count != 1000;
+----
+0
+
+query I
+select count(*) from (
+    select unnest(map_keys(null_value_counts)) as field_id, unnest(map_values(null_value_counts)) as null_count
+    from (select unnest(data_file) from read_avro(getvariable('manifest_path_spark')))
+) where field_id in (1, 2, 3, 4, 5, 6, 7, 8, 9, 10) and null_count != 1000;
+----
+0

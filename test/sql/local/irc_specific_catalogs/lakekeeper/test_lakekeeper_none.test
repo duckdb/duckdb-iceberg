@@ -1,0 +1,31 @@
+# name: test/sql/local/irc_specific_catalogs/lakekeeper/test_lakekeeper_none.test
+# group: [lakekeeper]
+
+# This test just serves as an example, see scripts/auth_type_none for a way to create a suitable environment
+mode skip
+
+require httpfs
+
+require avro
+
+require parquet
+
+require iceberg
+
+require-env LAKEKEEPER_SERVER_AVAILABLE
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+attach 'demo' as my_datalake (
+	type ICEBERG,
+	ENDPOINT 'http://localhost:8181/catalog',
+	AUTHORIZATION_TYPE 'none'
+);
+
+query III
+select * from my_datalake.my_namespace.my_table;
+----
+12:34:56	12345	click
+08:21:09	67890	purchase

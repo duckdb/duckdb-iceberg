@@ -1,0 +1,81 @@
+# name: test/sql/local/irc_any_catalog/reads/test_read_from_partitioned_table.test
+# group: [reads]
+
+require-env ICEBERG_SERVER_AVAILABLE
+
+require-env SECRETS_CREATED_AND_CATALOG_ATTACHED
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+require icu
+
+require ducklake
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+set enable_logging=true
+
+statement ok
+set logging_level='debug'
+
+statement ok
+SET TimeZone = 'UTC';
+
+query I
+SELECT count(*) FROM my_datalake.default.month_partitioned_table where ts < TIMESTAMPTZ '2025-02-01';
+----
+5
+
+query I
+SELECT count(*) FROM my_datalake.default.month_partitioned_table where ts <= TIMESTAMPTZ '2025-02-01';
+----
+6
+
+query I
+SELECT count(*) FROM my_datalake.default.month_partitioned_table where ts = TIMESTAMPTZ '2025-02-01';
+----
+1
+
+query I
+SELECT count(*) FROM my_datalake.default.month_partitioned_table where ts > TIMESTAMPTZ '2025-02-01';
+----
+9
+
+query I
+SELECT count(*) FROM my_datalake.default.month_partitioned_table where ts >= TIMESTAMPTZ '2025-02-01';
+----
+10
+
+
+query I
+SELECT count(*) FROM my_datalake.default.day_partitioned_table where ts < TIMESTAMPTZ '2025-01-02';
+----
+4
+
+query I
+SELECT count(*) FROM my_datalake.default.day_partitioned_table where ts <= TIMESTAMPTZ '2025-01-02';
+----
+9
+
+query I
+SELECT count(*) FROM my_datalake.default.day_partitioned_table where ts = TIMESTAMPTZ '2025-01-02';
+----
+5
+
+query I
+SELECT count(*) FROM my_datalake.default.day_partitioned_table where ts >= TIMESTAMPTZ '2025-01-02';
+----
+11
+
+query I
+SELECT count(*) FROM my_datalake.default.day_partitioned_table where ts > TIMESTAMPTZ '2025-01-02';
+----
+6

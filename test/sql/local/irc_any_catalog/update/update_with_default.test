@@ -1,0 +1,172 @@
+# name: test/sql/local/irc_any_catalog/update/update_with_default.test
+# group: [update]
+
+require-env ICEBERG_SERVER_AVAILABLE
+
+require-env SECRETS_CREATED_AND_CATALOG_ATTACHED
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+require core_functions
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+set enable_logging=true
+
+statement ok
+set logging_level='debug'
+
+statement ok
+CREATE SCHEMA IF NOT EXISTS my_datalake.default;
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.update_with_defaults;
+
+statement ok
+CREATE TABLE my_datalake.default.update_with_defaults(
+	rowid int,
+	id int DEFAULT -42,
+	varchar_col VARCHAR DEFAULT 'this is a long string'
+) WITH ('format-version'='3');
+
+statement ok
+INSERT INTO my_datalake.default.update_with_defaults(rowid, id, varchar_col) select i, i, NULL from range(1000) t(i)
+
+query I
+select id from my_datalake.default.update_with_defaults limit 5;
+----
+0
+1
+2
+3
+4
+
+query I
+SELECT count(*) FROM my_datalake.default.update_with_defaults where id % 2 == 0;
+----
+500
+
+statement ok
+UPDATE my_datalake.default.update_with_defaults
+	SET id = id + 100,
+	varchar_col = DEFAULT
+WHERE update_with_defaults.id % 2 == 0;
+
+query I
+SELECT count(*) FROM my_datalake.default.update_with_defaults where id % 2 == 0;
+----
+500
+
+query II
+select id, varchar_col from my_datalake.default.update_with_defaults order by rowid limit 10 ;
+----
+100	this is a long string
+1	NULL
+102	this is a long string
+3	NULL
+104	this is a long string
+5	NULL
+106	this is a long string
+7	NULL
+108	this is a long string
+9	NULL
+
+statement ok
+UPDATE my_datalake.default.update_with_defaults
+	SET id = DEFAULT
+WHERE rowid % 4 == 0;
+
+query II
+select id, varchar_col from my_datalake.default.update_with_defaults order by rowid limit 10;
+----
+-42	this is a long string
+1	NULL
+102	this is a long string
+3	NULL
+-42	this is a long string
+5	NULL
+106	this is a long string
+7	NULL
+-42	this is a long string
+9	NULL
+
+# Only basic DEFAULT values, for < V3 tables
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.update_with_null_defaults;
+
+statement ok
+CREATE TABLE my_datalake.default.update_with_null_defaults(
+	rowid int,
+	id int,
+	varchar_col VARCHAR
+) WITH ('format-version'='2');
+
+statement ok
+INSERT INTO my_datalake.default.update_with_null_defaults(rowid, id, varchar_col) select i, i, 'hello world' from range(1000) t(i)
+
+query I
+select id from my_datalake.default.update_with_null_defaults limit 5;
+----
+0
+1
+2
+3
+4
+
+query I
+SELECT count(*) FROM my_datalake.default.update_with_null_defaults where id % 2 == 0;
+----
+500
+
+statement ok
+UPDATE my_datalake.default.update_with_null_defaults
+	SET id = id + 100,
+	varchar_col = DEFAULT
+WHERE update_with_null_defaults.id % 2 == 0;
+
+query I
+SELECT count(*) FROM my_datalake.default.update_with_null_defaults where id % 2 == 0;
+----
+500
+
+query II
+select id, varchar_col from my_datalake.default.update_with_null_defaults order by rowid limit 10 ;
+----
+100	NULL
+1	hello world
+102	NULL
+3	hello world
+104	NULL
+5	hello world
+106	NULL
+7	hello world
+108	NULL
+9	hello world
+
+statement ok
+UPDATE my_datalake.default.update_with_null_defaults
+	SET id = DEFAULT
+WHERE rowid % 4 == 0;
+
+query II
+select id, varchar_col from my_datalake.default.update_with_null_defaults order by rowid limit 10;
+----
+NULL	NULL
+1	hello world
+102	NULL
+3	hello world
+NULL	NULL
+5	hello world
+106	NULL
+7	hello world
+NULL	NULL
+9	hello world

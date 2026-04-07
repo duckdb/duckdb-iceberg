@@ -1,0 +1,62 @@
+# name: test/sql/local/irc_any_catalog/test_tpch.test
+# description: test integration with iceberg catalog read
+# group: [irc_any_catalog]
+
+require-env ICEBERG_SERVER_AVAILABLE
+
+require-env SECRETS_CREATED_AND_CATALOG_ATTACHED
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+require tpch
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+create view customer as select * from my_datalake.default.customer;
+
+statement ok
+create view lineitem as select * from my_datalake.default.lineitem;
+
+statement ok
+create view nation as select * from my_datalake.default.nation;
+
+statement ok
+create view orders as select * from my_datalake.default.orders;
+
+statement ok
+create view part as select * from my_datalake.default.part;
+
+statement ok
+create view partsupp as select * from my_datalake.default.partsupp;
+
+statement ok
+create view region as select * from my_datalake.default.region;
+
+statement ok
+create view supplier as select * from my_datalake.default.supplier;
+
+loop i 1 9
+
+query I
+PRAGMA tpch(${i})
+----
+<FILE>:__WORKING_DIRECTORY__/duckdb/extension/tpch/dbgen/answers/sf1/q0${i}.csv
+
+endloop
+
+loop i 10 23
+
+query I
+PRAGMA tpch(${i})
+----
+<FILE>:__WORKING_DIRECTORY__/duckdb/extension/tpch/dbgen/answers/sf1/q${i}.csv
+
+endloop

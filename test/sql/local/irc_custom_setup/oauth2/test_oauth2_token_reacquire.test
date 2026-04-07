@@ -1,0 +1,86 @@
+# name: test/sql/local/irc_custom_setup/oauth2/test_oauth2_token_reacquire.test
+# description: Test that credentials are stored for token refresh capability
+# group: [oauth2]
+
+require-env ICEBERG_SERVER_AVAILABLE
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+set ignore_error_messages
+
+statement ok
+CALL enable_logging('HTTP');
+
+statement ok
+set logging_level='debug';
+
+# Create S3 storage secret
+statement ok
+CREATE SECRET (
+    TYPE S3,
+    KEY_ID 'admin',
+    SECRET 'password',
+    ENDPOINT '127.0.0.1:9000',
+    URL_STYLE 'path',
+    USE_SSL 0
+);
+
+# Test 1: Attach with full credentials stores them for refresh
+statement ok
+ATTACH '' AS reacquire_lake (
+    TYPE ICEBERG,
+    CLIENT_ID 'admin',
+    CLIENT_SECRET 'password',
+    OAUTH2_SERVER_URI 'http://127.0.0.1:8181/v1/oauth/tokens',
+    ENDPOINT 'http://127.0.0.1:8181'
+);
+
+# Initial token fetch happened
+query I
+SELECT count(*) FROM duckdb_logs_parsed('HTTP')
+WHERE request.type = 'POST'
+  AND request.url LIKE '%oauth/tokens%';
+----
+1
+
+# Verify catalog works
+query I
+SELECT count(*) FROM reacquire_lake.default.supplier;
+----
+10000
+
+statement ok
+DETACH reacquire_lake;
+
+# Test 2: Verify OAuth2 works with CREATE SECRET then ATTACH
+statement ok
+CREATE SECRET refresh_test_secret (
+    TYPE ICEBERG,
+    CLIENT_ID 'admin',
+    CLIENT_SECRET 'password',
+    OAUTH2_SERVER_URI 'http://127.0.0.1:8181/v1/oauth/tokens'
+);
+
+statement ok
+ATTACH '' AS reacquire_lake2 (
+    TYPE ICEBERG,
+    SECRET refresh_test_secret,
+    ENDPOINT 'http://127.0.0.1:8181'
+);
+
+query I
+SELECT count(*) FROM reacquire_lake2.default.supplier;
+----
+10000
+
+statement ok
+DETACH reacquire_lake2;
+
+statement ok
+DROP SECRET refresh_test_secret;

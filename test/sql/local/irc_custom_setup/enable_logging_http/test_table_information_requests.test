@@ -1,0 +1,365 @@
+# name: test/sql/local/irc_custom_setup/enable_logging_http/test_table_information_requests.test
+# description: test integration with iceberg catalog read
+# group: [enable_logging_http]
+
+require-env ICEBERG_SERVER_AVAILABLE
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+set enable_logging=true
+
+statement ok
+set logging_level='debug';
+
+statement ok
+CALL enable_logging('HTTP');
+
+statement ok
+CREATE SECRET (
+    TYPE S3,
+    KEY_ID 'admin',
+    SECRET 'password',
+    ENDPOINT '127.0.0.1:9000',
+    URL_STYLE 'path',
+    USE_SSL 0
+);
+
+
+statement ok
+ATTACH '' AS my_datalake (
+    TYPE ICEBERG,
+    CLIENT_ID 'admin',
+    CLIENT_SECRET 'password',
+    ENDPOINT 'http://127.0.0.1:8181'
+);
+
+query I
+select count(*) > 10 from (show all tables);
+----
+1
+
+# 1 call for oath, 1 call for config
+# 1 call to list namespaces
+# 1 call to list tables in default
+# 1 call to list tables in level1 namespace (no recursive namespace calls)
+query I
+select count(*) from duckdb_logs_parsed('HTTP');
+----
+5
+
+statement ok
+call truncate_duckdb_logs();
+
+query II
+select column_name, column_type from (describe my_datalake.default.supplier);
+----
+s_suppkey	BIGINT
+s_name	VARCHAR
+s_address	VARCHAR
+s_nationkey	INTEGER
+s_phone	VARCHAR
+s_acctbal	DECIMAL(15,2)
+s_comment	VARCHAR
+
+# schema default is saved between queries
+# one request to the table information endpoint
+# FIXME: apparantly there is also a request to an avro file
+query I
+select count(*) from duckdb_logs_parsed('HTTP');
+----
+3
+
+statement ok
+begin;
+
+query I
+select count(*) > 30 from (show all tables);
+----
+1
+
+query I
+select distinct(s_nationkey) from my_datalake.default.supplier order by all limit 5;
+----
+0
+1
+2
+3
+4
+
+statement ok
+commit;
+
+# 3 calls from above
+# 5 calls from show all tables above
+# 1 call to the manifest list
+# 2 calls to read parquet files
+query I
+select count(*) from duckdb_logs_parsed('HTTP');
+----
+9
+
+statement ok
+call truncate_duckdb_logs();
+
+statement ok
+DETACH my_datalake;
+
+# Test empty extra_http_headers
+statement ok
+CREATE SECRET iceberg_secret_empty_headers (
+    TYPE ICEBERG,
+    CLIENT_ID 'admin',
+    CLIENT_SECRET 'password',
+    OAUTH2_SERVER_URI 'http://127.0.0.1:8181/v1/oauth/tokens',
+    EXTRA_HTTP_HEADERS MAP {}
+);
+
+statement ok
+ATTACH '' AS my_datalake_empty (
+    TYPE ICEBERG,
+    SECRET iceberg_secret_empty_headers,
+    ENDPOINT 'http://127.0.0.1:8181'
+);
+
+query I
+SELECT count(*) FROM my_datalake_empty.default.supplier;
+----
+10000
+
+# Verify that no custom headers starting with X- are present (baseline test)
+query I
+SELECT count(*) FROM duckdb_logs_parsed('HTTP') 
+WHERE list_has_any(map_keys(request.headers), ['X-Test-Header', 'X-None-Header', 'X-Custom-1', 'X-Custom-2', 'X-Custom-3']);
+----
+0
+
+statement ok
+DETACH my_datalake_empty;
+
+statement ok
+DROP SECRET iceberg_secret_empty_headers;
+
+statement ok
+call truncate_duckdb_logs();
+
+# OAuth2 with single custom header
+statement ok
+CREATE SECRET iceberg_secret_with_header (
+    TYPE ICEBERG,
+    CLIENT_ID 'admin',
+    CLIENT_SECRET 'password',
+    OAUTH2_SERVER_URI 'http://127.0.0.1:8181/v1/oauth/tokens',
+    EXTRA_HTTP_HEADERS MAP {'X-Test-Header': 'test-value'}
+);
+
+statement ok
+ATTACH '' AS my_datalake_header (
+    TYPE ICEBERG,
+    SECRET iceberg_secret_with_header,
+    ENDPOINT 'http://127.0.0.1:8181'
+);
+
+query I
+SELECT count(*) FROM my_datalake_header.default.supplier;
+----
+10000
+
+# Verify the custom header value is correct in API requests
+query I
+SELECT request.headers['X-Test-Header']
+FROM duckdb_logs_parsed('HTTP')
+WHERE request.url LIKE '%v1/namespaces%'
+LIMIT 1;
+----
+test-value
+
+# Verify the Authorization header is still present (standard header not affected)
+query I
+SELECT count(*) > 0
+FROM duckdb_logs_parsed('HTTP')
+WHERE request.url LIKE '%v1/namespaces%' 
+  AND contains(map_keys(request.headers), 'Authorization');
+----
+1
+
+statement ok
+DETACH my_datalake_header;
+
+statement ok
+DROP SECRET iceberg_secret_with_header;
+
+statement ok
+call truncate_duckdb_logs();
+
+# None authorization with custom header - use direct attach
+statement ok
+ATTACH '' AS my_datalake_none (
+    TYPE ICEBERG,
+    ENDPOINT 'http://127.0.0.1:8181',
+    AUTHORIZATION_TYPE 'none',
+    EXTRA_HTTP_HEADERS MAP {'X-None-Header': 'none-value'}
+);
+
+query I
+SELECT count(*) FROM my_datalake_none.default.supplier;
+----
+10000
+
+# Verify the custom header value is correct
+query I
+SELECT request.headers['X-None-Header']
+FROM duckdb_logs_parsed('HTTP')
+WHERE request.url LIKE '%v1/config%';
+----
+none-value
+
+statement ok
+DETACH my_datalake_none;
+
+statement ok
+call truncate_duckdb_logs();
+
+# Multiple custom headers
+statement ok
+CREATE SECRET iceberg_secret_multiple_headers (
+    TYPE ICEBERG,
+    CLIENT_ID 'admin',
+    CLIENT_SECRET 'password',
+    OAUTH2_SERVER_URI 'http://127.0.0.1:8181/v1/oauth/tokens',
+    EXTRA_HTTP_HEADERS MAP {
+        'X-Custom-1': 'value1',
+        'X-Custom-2': 'value2',
+        'X-Custom-3': 'value3'
+    }
+);
+
+statement ok
+ATTACH '' AS my_datalake_multi (
+    TYPE ICEBERG,
+    SECRET iceberg_secret_multiple_headers,
+    ENDPOINT 'http://127.0.0.1:8181'
+);
+
+query I
+SELECT count(*) FROM my_datalake_multi.default.supplier;
+----
+10000
+
+# Verify each custom header has the correct value
+query III
+SELECT 
+    request.headers['X-Custom-1'],
+    request.headers['X-Custom-2'],
+    request.headers['X-Custom-3']
+FROM duckdb_logs_parsed('HTTP')
+WHERE request.url LIKE '%v1/namespaces%'
+LIMIT 1;
+----
+value1	value2	value3
+
+statement ok
+DETACH my_datalake_multi;
+
+statement ok
+DROP SECRET iceberg_secret_multiple_headers;
+
+statement ok
+call truncate_duckdb_logs();
+
+# Verify standard headers are not affected by custom headers
+statement ok
+CREATE SECRET iceberg_secret_standard_check (
+    TYPE ICEBERG,
+    CLIENT_ID 'admin',
+    CLIENT_SECRET 'password',
+    OAUTH2_SERVER_URI 'http://127.0.0.1:8181/v1/oauth/tokens',
+    EXTRA_HTTP_HEADERS MAP {'X-Custom-Header': 'custom-value'}
+);
+
+statement ok
+ATTACH '' AS my_datalake_standard (
+    TYPE ICEBERG,
+    SECRET iceberg_secret_standard_check,
+    ENDPOINT 'http://127.0.0.1:8181'
+);
+
+query I
+SELECT count(*) FROM my_datalake_standard.default.supplier;
+----
+10000
+
+# Verify Authorization header exists in API requests with Bearer token alongside custom headers
+query I
+SELECT count(*) > 0
+FROM duckdb_logs_parsed('HTTP')
+WHERE request.url LIKE '%v1/namespaces%'
+  AND contains(map_keys(request.headers), 'Authorization')
+  AND contains(map_keys(request.headers), 'X-Custom-Header')
+  AND request.headers['Authorization'] LIKE 'Bearer %';
+----
+1
+
+statement ok
+DETACH my_datalake_standard;
+
+statement ok
+DROP SECRET iceberg_secret_standard_check;
+
+statement ok
+call truncate_duckdb_logs();
+
+# Test DuckDB Bearer token overrides custom Authorization header
+statement ok
+CREATE SECRET iceberg_secret_auth_override (
+    TYPE ICEBERG,
+    CLIENT_ID 'admin',
+    CLIENT_SECRET 'password',
+    OAUTH2_SERVER_URI 'http://127.0.0.1:8181/v1/oauth/tokens',
+    EXTRA_HTTP_HEADERS MAP {'Authorization': 'CustomAuth token123'}
+);
+
+statement ok
+ATTACH '' AS my_datalake_override (
+    TYPE ICEBERG,
+    SECRET iceberg_secret_auth_override,
+    ENDPOINT 'http://127.0.0.1:8181'
+);
+
+query I
+SELECT count(*) FROM my_datalake_override.default.supplier;
+----
+10000
+
+# Verify DuckDB's Bearer token is present (overrides custom Authorization)
+query I
+SELECT count(*) > 0
+FROM duckdb_logs_parsed('HTTP')
+WHERE request.url LIKE '%v1/namespaces%'
+  AND request.headers['Authorization'] LIKE 'Bearer %';
+----
+1
+
+# Verify the custom Authorization is NOT present (was overridden)
+query I
+SELECT count(*) = 0
+FROM duckdb_logs_parsed('HTTP')
+WHERE request.url LIKE '%v1/namespaces%'
+  AND request.headers['Authorization'] = 'CustomAuth token123';
+----
+1
+
+statement ok
+DETACH my_datalake_override;
+
+statement ok
+DROP SECRET iceberg_secret_auth_override;

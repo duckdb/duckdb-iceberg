@@ -1,0 +1,64 @@
+# name: test/sql/local/irc_custom_setup/oauth2/test_oauth2_no_refresh_static.test
+# description: Verify static tokens work without triggering new OAuth2 token fetches
+# group: [oauth2]
+
+require-env ICEBERG_SERVER_AVAILABLE
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+set ignore_error_messages
+
+statement ok
+CALL enable_logging('HTTP');
+
+statement ok
+set logging_level='debug';
+
+# First, get a real token via OAuth2
+statement ok
+CREATE SECRET temp_get_token (
+    TYPE ICEBERG,
+    CLIENT_ID 'admin',
+    CLIENT_SECRET 'password',
+    OAUTH2_SERVER_URI 'http://127.0.0.1:8181/v1/oauth/tokens'
+);
+
+# Verify the OAuth POST happened
+query I
+SELECT count(*) FROM duckdb_logs_parsed('HTTP')
+WHERE request.type = 'POST'
+  AND request.url LIKE '%oauth/tokens%';
+----
+1
+
+# Clear logs for the next test
+statement ok
+call truncate_duckdb_logs();
+
+# Now test that using the secret (which already has a token) doesn't trigger new OAuth calls
+statement ok
+ATTACH '' AS static_lake (
+    TYPE ICEBERG,
+    SECRET temp_get_token,
+    ENDPOINT 'http://127.0.0.1:8181'
+);
+
+# Verify NO new POST requests to OAuth (token was already in the secret)
+query I
+SELECT count(*) FROM duckdb_logs_parsed('HTTP')
+WHERE request.type = 'POST'
+  AND request.url LIKE '%oauth%';
+----
+0
+
+statement ok
+DETACH static_lake;
+
+statement ok
+DROP SECRET temp_get_token;

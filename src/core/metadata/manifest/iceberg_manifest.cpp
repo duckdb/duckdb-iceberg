@@ -1,0 +1,853 @@
+#include "core/metadata/manifest/iceberg_manifest.hpp"
+
+#include "duckdb/storage/caching_file_system.hpp"
+
+#include "catalog/rest/iceberg_table_set.hpp"
+#include "catalog/rest/api/catalog_utils.hpp"
+#include "core/expression/iceberg_value.hpp"
+#include "catalog/rest/catalog_entry/table/iceberg_table_information.hpp"
+
+namespace duckdb {
+
+string IcebergManifestEntryContentTypeToString(IcebergManifestEntryContentType type) {
+	switch (type) {
+	case IcebergManifestEntryContentType::DATA:
+		return "EXISTING";
+	case IcebergManifestEntryContentType::POSITION_DELETES:
+		return "POSITION_DELETES";
+	case IcebergManifestEntryContentType::EQUALITY_DELETES:
+		return "EQUALITY_DELETES";
+	default:
+		throw InvalidConfigurationException("Invalid Manifest Entry Content Type");
+	}
+}
+
+string IcebergManifestEntryStatusTypeToString(IcebergManifestEntryStatusType type) {
+	switch (type) {
+	case IcebergManifestEntryStatusType::EXISTING:
+		return "EXISTING";
+	case IcebergManifestEntryStatusType::ADDED:
+		return "ADDED";
+	case IcebergManifestEntryStatusType::DELETED:
+		return "DELETED";
+	default:
+		throw InvalidConfigurationException("Invalid matifest entry type");
+	}
+}
+
+map<idx_t, LogicalType> IcebergDataFile::GetFieldIdToTypeMapping(const IcebergSnapshotScanInfo &snapshot_info,
+                                                                 const IcebergTableMetadata &metadata,
+                                                                 const unordered_set<int32_t> &partition_spec_ids) {
+	D_ASSERT(!partition_spec_ids.empty());
+	auto &partition_specs = metadata.GetPartitionSpecs();
+	auto &schema = *metadata.GetSchemaFromId(snapshot_info.schema_id);
+
+	unordered_map<uint64_t, ColumnIndex> source_to_column_id;
+	IcebergTableSchema::PopulateSourceIdMap(source_to_column_id, schema.columns, nullptr);
+	map<idx_t, LogicalType> partition_field_id_to_type;
+	for (auto &spec_id : partition_spec_ids) {
+		auto &partition_spec = partition_specs.at(spec_id);
+		auto &fields = partition_spec.GetFields();
+
+		for (auto &field : fields) {
+			auto &column_id = source_to_column_id[field.source_id];
+			auto &column = IcebergTableSchema::GetFromColumnIndex(schema.columns, column_id, 0);
+			partition_field_id_to_type.emplace(field.partition_field_id, field.transform.GetBoundsType(column.type));
+		}
+	}
+	return partition_field_id_to_type;
+}
+
+LogicalType IcebergDataFile::PartitionStructType(const map<idx_t, LogicalType> &partition_field_id_to_type) {
+	child_list_t<LogicalType> children;
+	if (partition_field_id_to_type.empty()) {
+		return LogicalType::SQLNULL;
+	} else {
+		for (auto &it : partition_field_id_to_type) {
+			children.emplace_back(StringUtil::Format("r%d", it.first), it.second);
+		}
+	}
+	return LogicalType::STRUCT(children);
+}
+
+const vector<IcebergExtendedPartitionInfo>
+IcebergDataFile::GetExtendedPartitionInfo(const IcebergTableMetadata &metadata) const {
+	if (partition_info.empty()) {
+		return {};
+	}
+
+	// Build source_id -> LogicalType map from all schemas (schema evolution may spread columns).
+	unordered_map<uint64_t, const LogicalType *> source_id_to_type;
+	for (auto &schema_pair : metadata.schemas) {
+		for (auto &col : schema_pair.second->columns) {
+			source_id_to_type.emplace(static_cast<uint64_t>(col->id), &col->type);
+		}
+	}
+
+	// Build field_id -> (spec field, source_type) map from all partition specs.
+	// Partition field ids are globally unique across all specs per the Iceberg spec.
+	struct ParitionFieldWithSourceType {
+		const IcebergPartitionSpecField *field;
+		const LogicalType *source_type;
+	};
+
+	unordered_map<uint64_t, ParitionFieldWithSourceType> field_id_to_partition_spec_and_source_type;
+	for (auto &spec_pair : metadata.partition_specs) {
+		for (auto &field : spec_pair.second.fields) {
+			auto type_it = source_id_to_type.find(field.source_id);
+			if (type_it == source_id_to_type.end()) {
+				throw InternalException(
+				    "Partition %s with field_id %llu in data_file %s with source_id %llu not found in any table schema",
+				    field.name, field.partition_field_id, file_path, field.source_id);
+			}
+			field_id_to_partition_spec_and_source_type.emplace(field.partition_field_id,
+			                                                   ParitionFieldWithSourceType {&field, type_it->second});
+		}
+	}
+
+	vector<IcebergExtendedPartitionInfo> ret;
+	ret.reserve(partition_info.size());
+	for (auto &info : partition_info) {
+		auto it = field_id_to_partition_spec_and_source_type.find(info.field_id);
+		if (it == field_id_to_partition_spec_and_source_type.end()) {
+			throw InternalException("Partition field_id %llu not found in any partition spec", info.field_id);
+		}
+		auto &resolved = it->second;
+		IcebergExtendedPartitionInfo extended;
+		extended.name = resolved.field->name;
+		extended.field_id = info.field_id;
+		extended.value = info.value;
+		extended.source_id = resolved.field->source_id;
+		extended.transform = resolved.field->transform;
+		D_ASSERT(resolved.source_type);
+		extended.source_type = *resolved.source_type;
+		ret.push_back(std::move(extended));
+	}
+	return ret;
+}
+
+void IcebergDataFile::SetFirstRowId(int64_t value) {
+	has_first_row_id = true;
+	first_row_id = value;
+}
+
+bool IcebergDataFile::HasFirstRowId() const {
+	return has_first_row_id;
+}
+
+int64_t IcebergDataFile::GetFirstRowId() const {
+	D_ASSERT(has_first_row_id);
+	return first_row_id;
+}
+
+LogicalType IcebergDataFile::GetType(const IcebergTableMetadata &metadata, const LogicalType &partition_type) {
+	auto &iceberg_version = metadata.iceberg_version;
+
+	// lower/upper bounds
+	child_list_t<LogicalType> bounds_fields;
+	bounds_fields.emplace_back("key", LogicalType::INTEGER);
+	bounds_fields.emplace_back("value", LogicalType::BLOB);
+
+	// null_value_counts
+	child_list_t<LogicalType> null_value_counts_fields;
+	null_value_counts_fields.emplace_back("key", LogicalType::INTEGER);
+	null_value_counts_fields.emplace_back("value", LogicalType::BIGINT);
+
+	child_list_t<LogicalType> children;
+
+	if (iceberg_version >= 2) {
+		// content: int
+		children.emplace_back("content", LogicalType::INTEGER);
+	}
+	// file_path: string
+	children.emplace_back("file_path", LogicalType::VARCHAR);
+	// file_format: string
+	children.emplace_back("file_format", LogicalType::VARCHAR);
+	// partition: struct(...)
+	children.emplace_back("partition", partition_type);
+	// record_count: long
+	children.emplace_back("record_count", LogicalType::BIGINT);
+	// file_size_in_bytes: long
+	children.emplace_back("file_size_in_bytes", LogicalType::BIGINT);
+	// column_sizes: map<int, binary>
+	children.emplace_back("column_sizes", LogicalType::MAP(LogicalType::STRUCT(null_value_counts_fields)));
+	// value_counts: map<int, binary>
+	children.emplace_back("value_counts", LogicalType::MAP(LogicalType::STRUCT(null_value_counts_fields)));
+	// null_value_counts: map<int, binary>
+	children.emplace_back("null_value_counts", LogicalType::MAP(LogicalType::STRUCT(null_value_counts_fields)));
+	// nan_value_counts: map<int, binary>
+	children.emplace_back("nan_value_counts", LogicalType::MAP(LogicalType::STRUCT(null_value_counts_fields)));
+	// lower bounds: map<int, binary>
+	children.emplace_back("lower_bounds", LogicalType::MAP(LogicalType::STRUCT(bounds_fields)));
+	// upper bounds: map<int, binary>
+	children.emplace_back("upper_bounds", LogicalType::MAP(LogicalType::STRUCT(bounds_fields)));
+	// split_offsets: list<long>
+	children.emplace_back("split_offsets", LogicalType::LIST(LogicalType::BIGINT));
+	// equality_ids: list<int>
+	children.emplace_back("equality_ids", LogicalType::LIST(LogicalType::INTEGER));
+	// sort_id: int
+	children.emplace_back("sort_order_id", LogicalType::INTEGER);
+	// first_row_id: long
+	if (iceberg_version >= 3) {
+		children.emplace_back("first_row_id", LogicalType::BIGINT);
+	}
+	// referenced_data_file: string
+	if (iceberg_version >= 2) {
+		children.emplace_back("referenced_data_file", LogicalType::VARCHAR);
+	}
+	// content_offset: long
+	if (iceberg_version >= 3) {
+		children.emplace_back("content_offset", LogicalType::BIGINT);
+	}
+	// content_size_in_bytes: long
+	if (iceberg_version >= 3) {
+		children.emplace_back("content_size_in_bytes", LogicalType::BIGINT);
+	}
+
+	return LogicalType::STRUCT(std::move(children));
+}
+
+Value IcebergDataFile::ToValue(const IcebergTableMetadata &table_metadata, const LogicalType &type) const {
+	vector<Value> children;
+
+	// content: int
+	children.push_back(Value::INTEGER(static_cast<int32_t>(content)));
+	// file_path: string
+	children.push_back(Value(file_path));
+	// file_format: string
+	children.push_back(Value(file_format));
+	// partition: struct(...)
+	if (partition_info.empty()) {
+		//! NOTE: Spark does *not* like it when this column is NULL, so we populate it with an empty struct value
+		//! instead
+		children.push_back(
+		    Value::STRUCT(child_list_t<Value> {{"__duckdb_empty_struct_marker", Value(LogicalTypeId::VARCHAR)}}));
+	} else {
+		child_list_t<Value> partition_children;
+		auto extended_partition_info = GetExtendedPartitionInfo(table_metadata);
+		for (auto &entry : extended_partition_info) {
+			auto new_value = Value();
+			string error_message;
+			LogicalType partition_result_type;
+			switch (entry.transform.Type()) {
+			case IcebergTransformType::IDENTITY: {
+				if (entry.source_type.IsNested()) {
+					throw NotImplementedException("Using an identity partition on a nested column");
+				}
+				partition_result_type = entry.source_type;
+				break;
+			}
+			case IcebergTransformType::BUCKET:
+			case IcebergTransformType::TRUNCATE:
+				partition_result_type = LogicalType::VARCHAR;
+				break;
+			case IcebergTransformType::DAY:
+			case IcebergTransformType::MONTH:
+			case IcebergTransformType::YEAR:
+			case IcebergTransformType::HOUR:
+				partition_result_type = LogicalType::BIGINT;
+				break;
+			case IcebergTransformType::INVALID:
+			case IcebergTransformType::VOID: {
+				throw InvalidInputException("Cannot use transform type %s in IcebergDataFile::ToValue %s",
+				                            entry.transform.RawType());
+				break;
+			}
+			default:
+				throw InvalidInputException("Unrecognized transform %s", entry.transform.RawType());
+			}
+			const LogicalType actual_type = partition_result_type;
+			bool cast_worked = entry.value.DefaultTryCastAs(actual_type, new_value, &error_message, true);
+			if (cast_worked) {
+				partition_children.emplace_back(entry.name, new_value);
+			} else {
+				throw InvalidInputException("Could not cast %s to %s", entry.value.type().ToString(),
+				                            actual_type.ToString());
+			}
+		}
+		children.push_back(Value::STRUCT(partition_children));
+	}
+
+	// record_count: long
+	children.push_back(Value::BIGINT(record_count));
+	// file_size_in_bytes: long
+	children.push_back(Value::BIGINT(file_size_in_bytes));
+
+	child_list_t<LogicalType> bounds_types;
+	bounds_types.emplace_back("key", LogicalType::INTEGER);
+	bounds_types.emplace_back("value", LogicalType::BLOB);
+
+	vector<Value> lower_bounds_values;
+	// lower bounds: map<int, binary>
+	for (auto &child : lower_bounds) {
+		lower_bounds_values.push_back(Value::STRUCT({{"key", child.first}, {"value", child.second}}));
+	}
+	children.push_back(Value::MAP(LogicalType::STRUCT(bounds_types), lower_bounds_values));
+
+	vector<Value> upper_bounds_values;
+	// upper bounds: map<int, binary>
+	for (auto &child : upper_bounds) {
+		upper_bounds_values.push_back(Value::STRUCT({{"key", child.first}, {"value", child.second}}));
+	}
+	children.push_back(Value::MAP(LogicalType::STRUCT(bounds_types), upper_bounds_values));
+	// null_value_counts
+	child_list_t<LogicalType> null_value_count_types;
+	null_value_count_types.emplace_back("key", LogicalType::INTEGER);
+	null_value_count_types.emplace_back("value", LogicalType::BIGINT);
+
+	vector<Value> null_value_counts_values;
+	for (auto &child : null_value_counts) {
+		null_value_counts_values.push_back(Value::STRUCT({{"key", child.first}, {"value", child.second}}));
+	}
+	children.push_back(Value::MAP(LogicalType::STRUCT(null_value_count_types), null_value_counts_values));
+
+	// referenced_data_file
+	if (table_metadata.iceberg_version >= 3) {
+		children.push_back(Value(referenced_data_file));
+	}
+	// content_size_in_bytes
+	if (table_metadata.iceberg_version >= 3) {
+		children.push_back(content_size_in_bytes);
+	}
+	// content_offset
+	if (table_metadata.iceberg_version >= 3) {
+		children.push_back(content_offset);
+	}
+
+	return Value::STRUCT(type, children);
+}
+
+void IcebergManifestEntry::SetSequenceNumber(sequence_number_t value) {
+	has_sequence_number = true;
+	sequence_number = value;
+}
+
+void IcebergManifestEntry::SetFileSequenceNumber(sequence_number_t value) {
+	has_file_sequence_number = true;
+	file_sequence_number = value;
+}
+
+sequence_number_t IcebergManifestEntry::GetSequenceNumber(const IcebergManifestFile &manifest_file) const {
+	if (!has_sequence_number) {
+		if (status != IcebergManifestEntryStatusType::ADDED) {
+			throw InvalidConfigurationException(
+			    "'manifest_entry.sequence_number' is only allowed to be NULL for ADDED entries");
+		}
+		return manifest_file.sequence_number;
+	}
+	return sequence_number;
+}
+
+sequence_number_t IcebergManifestEntry::GetFileSequenceNumber(const IcebergManifestFile &manifest_file) const {
+	if (!has_file_sequence_number) {
+		if (status != IcebergManifestEntryStatusType::ADDED) {
+			throw InvalidConfigurationException(
+			    "'manifest_entry.file_sequence_number' is only allowed to be NULL for ADDED entries");
+		}
+		return manifest_file.sequence_number;
+	}
+	return file_sequence_number;
+}
+
+void IcebergManifestEntry::SetSnapshotId(int64_t value) {
+	has_snapshot_id = true;
+	snapshot_id = value;
+}
+
+bool IcebergManifestEntry::HasSnapshotId() const {
+	return has_snapshot_id;
+}
+
+int64_t IcebergManifestEntry::GetSnapshotId() const {
+	D_ASSERT(HasSnapshotId());
+	return snapshot_id;
+}
+
+static Value CreateFieldID(int32_t field_id, bool nullable) {
+	child_list_t<Value> fields;
+	fields.emplace_back("__duckdb_field_id", Value::INTEGER(field_id));
+	fields.emplace_back("__duckdb_nullable", Value::BOOLEAN(nullable));
+	return Value::STRUCT(fields);
+}
+
+namespace manifest_file {
+
+static LogicalType PartitionStructType(vector<IcebergExtendedPartitionInfo> extended_partition_info) {
+	child_list_t<LogicalType> children;
+	if (extended_partition_info.empty()) {
+		children.emplace_back("__duckdb_empty_struct_marker", LogicalType::INTEGER);
+	} else {
+		//! NOTE: all entries in the file should have the same schema, otherwise it can't be in the same manifest file
+		//! anyways
+		for (auto &entry : extended_partition_info) {
+			switch (entry.transform.Type()) {
+			case IcebergTransformType::TRUNCATE:
+			case IcebergTransformType::IDENTITY:
+				children.emplace_back(entry.name, entry.source_type);
+				break;
+			case IcebergTransformType::BUCKET:
+			case IcebergTransformType::DAY:
+			case IcebergTransformType::MONTH:
+			case IcebergTransformType::YEAR:
+			case IcebergTransformType::HOUR:
+				children.emplace_back(entry.name, LogicalType::INTEGER);
+				break;
+			case IcebergTransformType::INVALID:
+			case IcebergTransformType::VOID:
+				throw InvalidInputException("Cannot use this transform type");
+				break;
+			default:
+				throw InvalidInputException("Unrecognized transform");
+			}
+		}
+	}
+	return LogicalType::STRUCT(children);
+}
+
+idx_t WriteToFile(const IcebergTableMetadata &table_metadata, const IcebergManifestFile &manifest_file,
+                  const vector<IcebergManifestEntry> &manifest_entries, CopyFunction &copy, DatabaseInstance &db,
+                  ClientContext &context) {
+	D_ASSERT(!manifest_entries.empty());
+	auto &allocator = db.GetBufferManager().GetBufferAllocator();
+	auto &path = manifest_file.manifest_path;
+
+	//! We need to create an iceberg-schema for the manifest file, written in the metadata of the Avro file.
+	std::unique_ptr<yyjson_mut_doc, YyjsonDocDeleter> doc_p(yyjson_mut_doc_new(nullptr));
+	auto doc = doc_p.get();
+	auto root_obj = yyjson_mut_obj(doc);
+	yyjson_mut_doc_set_root(doc, root_obj);
+	yyjson_mut_obj_add_strcpy(doc, root_obj, "type", "struct");
+	yyjson_mut_obj_add_uint(doc, root_obj, "schema-id", 0);
+	auto fields_arr = yyjson_mut_obj_add_arr(doc, root_obj, "fields");
+
+	//! Create the types for the DataChunk
+
+	child_list_t<Value> field_ids;
+	vector<string> names;
+	vector<LogicalType> types;
+
+	auto &current_partition_spec = table_metadata.GetLatestPartitionSpec();
+
+	{
+		// status: int
+		names.push_back("status");
+		types.push_back(LogicalType::INTEGER);
+
+		auto field_obj = yyjson_mut_arr_add_obj(doc, fields_arr);
+		yyjson_mut_obj_add_uint(doc, field_obj, "id", STATUS);
+		yyjson_mut_obj_add_strcpy(doc, field_obj, "name", "status");
+		yyjson_mut_obj_add_bool(doc, field_obj, "required", true);
+		yyjson_mut_obj_add_strcpy(doc, field_obj, "type", "int");
+		field_ids.emplace_back("status", CreateFieldID(STATUS, false));
+	}
+
+	{
+		// snapshot_id: long
+		names.push_back("snapshot_id");
+		types.push_back(LogicalType::BIGINT);
+		field_ids.emplace_back("snapshot_id", Value::INTEGER(SNAPSHOT_ID));
+
+		auto field_obj = yyjson_mut_arr_add_obj(doc, fields_arr);
+		yyjson_mut_obj_add_uint(doc, field_obj, "id", SNAPSHOT_ID);
+		yyjson_mut_obj_add_strcpy(doc, field_obj, "name", "snapshot_id");
+		yyjson_mut_obj_add_bool(doc, field_obj, "required", false);
+		yyjson_mut_obj_add_strcpy(doc, field_obj, "type", "long");
+	}
+
+	{
+		// sequence_number: long
+		names.push_back("sequence_number");
+		types.push_back(LogicalType::BIGINT);
+		field_ids.emplace_back("sequence_number", Value::INTEGER(SEQUENCE_NUMBER));
+
+		auto field_obj = yyjson_mut_arr_add_obj(doc, fields_arr);
+		yyjson_mut_obj_add_uint(doc, field_obj, "id", SEQUENCE_NUMBER);
+		yyjson_mut_obj_add_strcpy(doc, field_obj, "name", "sequence_number");
+		yyjson_mut_obj_add_bool(doc, field_obj, "required", false);
+		yyjson_mut_obj_add_strcpy(doc, field_obj, "type", "long");
+	}
+
+	{
+		// file_sequence_number: long
+		names.push_back("file_sequence_number");
+		types.push_back(LogicalType::BIGINT);
+		field_ids.emplace_back("file_sequence_number", Value::INTEGER(FILE_SEQUENCE_NUMBER));
+
+		auto field_obj = yyjson_mut_arr_add_obj(doc, fields_arr);
+		yyjson_mut_obj_add_uint(doc, field_obj, "id", FILE_SEQUENCE_NUMBER);
+		yyjson_mut_obj_add_strcpy(doc, field_obj, "name", "file_sequence_number");
+		yyjson_mut_obj_add_bool(doc, field_obj, "required", false);
+		yyjson_mut_obj_add_strcpy(doc, field_obj, "type", "long");
+	}
+
+	//! DataFile struct
+
+	child_list_t<Value> data_file_field_ids;
+	child_list_t<LogicalType> children;
+
+	auto child_fields_arr = yyjson_mut_arr(doc);
+	{
+		// content: int
+		children.emplace_back("content", LogicalType::INTEGER);
+		data_file_field_ids.emplace_back("content", CreateFieldID(CONTENT, false));
+
+		auto field_obj = yyjson_mut_arr_add_obj(doc, child_fields_arr);
+		yyjson_mut_obj_add_uint(doc, field_obj, "id", CONTENT);
+		yyjson_mut_obj_add_strcpy(doc, field_obj, "name", "content");
+		yyjson_mut_obj_add_bool(doc, field_obj, "required", true);
+		yyjson_mut_obj_add_strcpy(doc, field_obj, "type", "int");
+	}
+
+	{
+		// file_path: string
+		children.emplace_back("file_path", LogicalType::VARCHAR);
+		data_file_field_ids.emplace_back("file_path", CreateFieldID(FILE_PATH, false));
+
+		auto field_obj = yyjson_mut_arr_add_obj(doc, child_fields_arr);
+		yyjson_mut_obj_add_uint(doc, field_obj, "id", FILE_PATH);
+		yyjson_mut_obj_add_strcpy(doc, field_obj, "name", "file_path");
+		yyjson_mut_obj_add_bool(doc, field_obj, "required", true);
+		yyjson_mut_obj_add_strcpy(doc, field_obj, "type", "string");
+	}
+
+	{
+		// file_format: string
+		children.emplace_back("file_format", LogicalType::VARCHAR);
+		data_file_field_ids.emplace_back("file_format", CreateFieldID(FILE_FORMAT, false));
+
+		auto field_obj = yyjson_mut_arr_add_obj(doc, child_fields_arr);
+		yyjson_mut_obj_add_uint(doc, field_obj, "id", FILE_FORMAT);
+		yyjson_mut_obj_add_strcpy(doc, field_obj, "name", "file_format");
+		yyjson_mut_obj_add_bool(doc, field_obj, "required", true);
+		yyjson_mut_obj_add_strcpy(doc, field_obj, "type", "string");
+	}
+
+	{
+		auto &first_entry = manifest_entries.front();
+		auto &data_file = first_entry.data_file;
+
+		auto extended_partition_info = data_file.GetExtendedPartitionInfo(table_metadata);
+		child_list_t<Value> partition;
+		// partition: struct(...)
+		children.emplace_back("partition", PartitionStructType(extended_partition_info));
+		partition.emplace_back("__duckdb_field_id", Value::INTEGER(PARTITION));
+		partition.emplace_back("__duckdb_nullable", Value::BOOLEAN(false));
+		for (auto &entry : extended_partition_info) {
+			partition.emplace_back(entry.name, Value::INTEGER(static_cast<int32_t>(entry.field_id)));
+		}
+		data_file_field_ids.emplace_back("partition", Value::STRUCT(partition));
+
+		auto field_obj = yyjson_mut_arr_add_obj(doc, child_fields_arr);
+		yyjson_mut_obj_add_uint(doc, field_obj, "id", PARTITION);
+		yyjson_mut_obj_add_strcpy(doc, field_obj, "name", "partition");
+		yyjson_mut_obj_add_bool(doc, field_obj, "required", true);
+		auto partition_struct = yyjson_mut_obj_add_obj(doc, field_obj, "type");
+		yyjson_mut_obj_add_strcpy(doc, partition_struct, "type", "struct");
+		auto partition_fields = yyjson_mut_obj_add_arr(doc, partition_struct, "fields");
+		if (!extended_partition_info.empty()) {
+			for (auto &entry : extended_partition_info) {
+				auto field_obj = yyjson_mut_arr_add_obj(doc, partition_fields);
+				yyjson_mut_obj_add_strcpy(doc, field_obj, "name", entry.name.c_str());
+				auto types_arr = yyjson_mut_obj_add_arr(doc, field_obj, "type");
+				yyjson_mut_arr_add_strcpy(doc, types_arr, "null");
+				// TODO: Is this correct? I don't think so.
+				yyjson_mut_arr_add_strcpy(doc, types_arr, "int");
+				yyjson_mut_obj_add_int(doc, field_obj, "id", static_cast<int32_t>(entry.field_id));
+			}
+		}
+	}
+
+	{
+		// record_count: long
+		children.emplace_back("record_count", LogicalType::BIGINT);
+		data_file_field_ids.emplace_back("record_count", CreateFieldID(RECORD_COUNT, false));
+
+		auto field_obj = yyjson_mut_arr_add_obj(doc, child_fields_arr);
+		yyjson_mut_obj_add_uint(doc, field_obj, "id", RECORD_COUNT);
+		yyjson_mut_obj_add_strcpy(doc, field_obj, "name", "record_count");
+		yyjson_mut_obj_add_bool(doc, field_obj, "required", true);
+		yyjson_mut_obj_add_strcpy(doc, field_obj, "type", "long");
+	}
+
+	{
+		// file_size_in_bytes: long
+		children.emplace_back("file_size_in_bytes", LogicalType::BIGINT);
+		data_file_field_ids.emplace_back("file_size_in_bytes", CreateFieldID(FILE_SIZE_IN_BYTES, false));
+
+		auto field_obj = yyjson_mut_arr_add_obj(doc, child_fields_arr);
+		yyjson_mut_obj_add_uint(doc, field_obj, "id", FILE_SIZE_IN_BYTES);
+		yyjson_mut_obj_add_strcpy(doc, field_obj, "name", "file_size_in_bytes");
+		yyjson_mut_obj_add_bool(doc, field_obj, "required", true);
+		yyjson_mut_obj_add_strcpy(doc, field_obj, "type", "long");
+	}
+
+	//! NOTE: These are optional but we should probably add them, to support better filtering
+	//! column_sizes
+	//! value_counts
+	//! null_value_counts
+	//! nan_value_count
+
+	// lower bounds struct
+	child_list_t<LogicalType> bounds_fields;
+	bounds_fields.emplace_back("key", LogicalType::INTEGER);
+	bounds_fields.emplace_back("value", LogicalType::BLOB);
+	{
+		// child_list_t<Value> lower_bounds_field_ids;
+		// lower bounds: map<int, binary>
+		children.emplace_back("lower_bounds", LogicalType::MAP(LogicalType::STRUCT(bounds_fields)));
+
+		child_list_t<Value> lower_bound_record_field_ids;
+		lower_bound_record_field_ids.emplace_back("__duckdb_field_id", Value::INTEGER(LOWER_BOUNDS));
+		child_list_t<Value> lower_bounds_key_field;
+		lower_bounds_key_field.emplace_back("__duckdb_field_id", Value::INTEGER(LOWER_BOUNDS_KEY));
+		lower_bounds_key_field.emplace_back("__duckdb_nullable", Value::BOOLEAN(false));
+		lower_bound_record_field_ids.emplace_back("key", Value::STRUCT(lower_bounds_key_field));
+		child_list_t<Value> lower_bounds_value_field;
+		lower_bounds_value_field.emplace_back("__duckdb_field_id", Value::INTEGER(LOWER_BOUNDS_VALUE));
+		lower_bounds_value_field.emplace_back("__duckdb_nullable", Value::BOOLEAN(false));
+		lower_bound_record_field_ids.emplace_back("value", Value::STRUCT(lower_bounds_value_field));
+
+		data_file_field_ids.emplace_back("lower_bounds", Value::STRUCT(lower_bound_record_field_ids));
+
+		auto field_obj = yyjson_mut_arr_add_obj(doc, child_fields_arr);
+		yyjson_mut_obj_add_uint(doc, field_obj, "id", LOWER_BOUNDS);
+		yyjson_mut_obj_add_strcpy(doc, field_obj, "name", "lower_bounds");
+		yyjson_mut_obj_add_bool(doc, field_obj, "required", false);
+
+		auto lower_bound_type_struct = yyjson_mut_obj_add_obj(doc, field_obj, "type");
+		yyjson_mut_obj_add_strcpy(doc, lower_bound_type_struct, "type", "array");
+		auto items_obj = yyjson_mut_obj_add_obj(doc, lower_bound_type_struct, "items");
+		yyjson_mut_obj_add_strcpy(doc, items_obj, "type", "record");
+		yyjson_mut_obj_add_strcpy(doc, items_obj, "name",
+		                          StringUtil::Format("k%d_k%d", LOWER_BOUNDS_KEY, LOWER_BOUNDS_VALUE).c_str());
+		auto record_fields_arr = yyjson_mut_obj_add_arr(doc, items_obj, "fields");
+
+		auto key_obj = yyjson_mut_arr_add_obj(doc, record_fields_arr);
+		yyjson_mut_obj_add_strcpy(doc, key_obj, "name", "key");
+		yyjson_mut_obj_add_strcpy(doc, key_obj, "type", "int");
+		yyjson_mut_obj_add_uint(doc, key_obj, "id", LOWER_BOUNDS_KEY);
+
+		auto val_obj = yyjson_mut_arr_add_obj(doc, record_fields_arr);
+		yyjson_mut_obj_add_strcpy(doc, val_obj, "name", "value");
+		yyjson_mut_obj_add_strcpy(doc, val_obj, "type", "binary");
+		yyjson_mut_obj_add_uint(doc, val_obj, "id", LOWER_BOUNDS_VALUE);
+	}
+
+	// upper bounds struct
+	{
+		// child_list_t<Value> upper_bounds_field_ids;
+		// upper bounds: map<int, binary>
+		children.emplace_back("upper_bounds", LogicalType::MAP(LogicalType::STRUCT(bounds_fields)));
+
+		child_list_t<Value> upper_bound_record_field_ids;
+		upper_bound_record_field_ids.emplace_back("__duckdb_field_id", Value::INTEGER(UPPER_BOUNDS));
+		child_list_t<Value> upper_bounds_key_field;
+		upper_bounds_key_field.emplace_back("__duckdb_field_id", Value::INTEGER(UPPER_BOUNDS_KEY));
+		upper_bounds_key_field.emplace_back("__duckdb_nullable", Value::BOOLEAN(false));
+		upper_bound_record_field_ids.emplace_back("key", Value::STRUCT(upper_bounds_key_field));
+		child_list_t<Value> upper_bounds_value_field;
+		upper_bounds_value_field.emplace_back("__duckdb_field_id", Value::INTEGER(UPPER_BOUNDS_VALUE));
+		upper_bounds_value_field.emplace_back("__duckdb_nullable", Value::BOOLEAN(false));
+		upper_bound_record_field_ids.emplace_back("value", Value::STRUCT(upper_bounds_value_field));
+
+		data_file_field_ids.emplace_back("upper_bounds", Value::STRUCT(upper_bound_record_field_ids));
+		auto field_obj = yyjson_mut_arr_add_obj(doc, child_fields_arr);
+		yyjson_mut_obj_add_uint(doc, field_obj, "id", UPPER_BOUNDS);
+		yyjson_mut_obj_add_strcpy(doc, field_obj, "name", "upper_bounds");
+		yyjson_mut_obj_add_bool(doc, field_obj, "required", false);
+
+		auto upper_bound_type_struct = yyjson_mut_obj_add_obj(doc, field_obj, "type");
+		yyjson_mut_obj_add_strcpy(doc, upper_bound_type_struct, "type", "array");
+		auto items_obj = yyjson_mut_obj_add_obj(doc, upper_bound_type_struct, "items");
+		yyjson_mut_obj_add_strcpy(doc, items_obj, "type", "record");
+		yyjson_mut_obj_add_strcpy(doc, items_obj, "name",
+		                          StringUtil::Format("k%d_k%d", UPPER_BOUNDS_KEY, UPPER_BOUNDS_VALUE).c_str());
+		auto record_fields_arr = yyjson_mut_obj_add_arr(doc, items_obj, "fields");
+
+		auto key_obj = yyjson_mut_arr_add_obj(doc, record_fields_arr);
+		yyjson_mut_obj_add_strcpy(doc, key_obj, "name", "key");
+		yyjson_mut_obj_add_strcpy(doc, key_obj, "type", "int");
+		yyjson_mut_obj_add_uint(doc, key_obj, "id", UPPER_BOUNDS_KEY);
+
+		auto val_obj = yyjson_mut_arr_add_obj(doc, record_fields_arr);
+		yyjson_mut_obj_add_strcpy(doc, val_obj, "name", "value");
+		yyjson_mut_obj_add_strcpy(doc, val_obj, "type", "binary");
+		yyjson_mut_obj_add_uint(doc, val_obj, "id", UPPER_BOUNDS_VALUE);
+	}
+
+	// null_value_counts_struct
+	child_list_t<LogicalType> null_value_counts_fields;
+	null_value_counts_fields.emplace_back("key", LogicalType::INTEGER);
+	null_value_counts_fields.emplace_back("value", LogicalType::BIGINT);
+	{
+		// null_value_counts: map<int, binary>
+		children.emplace_back("null_value_counts", LogicalType::MAP(LogicalType::STRUCT(null_value_counts_fields)));
+
+		child_list_t<Value> null_values_counts_record_field_ids;
+		null_values_counts_record_field_ids.emplace_back("__duckdb_field_id", Value::INTEGER(NULL_VALUE_COUNTS));
+		child_list_t<Value> null_value_counts_key_field;
+		null_value_counts_key_field.emplace_back("__duckdb_field_id", Value::INTEGER(NULL_VALUE_COUNTS_KEY));
+		null_value_counts_key_field.emplace_back("__duckdb_nullable", Value::BOOLEAN(false));
+		null_values_counts_record_field_ids.emplace_back("key", Value::STRUCT(null_value_counts_key_field));
+		child_list_t<Value> null_value_counts_value_field;
+		null_value_counts_value_field.emplace_back("__duckdb_field_id", Value::INTEGER(NULL_VALUE_COUNTS_VALUE));
+		null_value_counts_value_field.emplace_back("__duckdb_nullable", Value::BOOLEAN(false));
+		null_values_counts_record_field_ids.emplace_back("value", Value::STRUCT(null_value_counts_value_field));
+
+		data_file_field_ids.emplace_back("null_value_counts", Value::STRUCT(null_values_counts_record_field_ids));
+		auto field_obj = yyjson_mut_arr_add_obj(doc, child_fields_arr);
+		yyjson_mut_obj_add_uint(doc, field_obj, "id", NULL_VALUE_COUNTS);
+		yyjson_mut_obj_add_strcpy(doc, field_obj, "name", "null_value_counts");
+		yyjson_mut_obj_add_bool(doc, field_obj, "required", false);
+
+		auto null_value_counts_type_struct = yyjson_mut_obj_add_obj(doc, field_obj, "type");
+		yyjson_mut_obj_add_strcpy(doc, null_value_counts_type_struct, "type", "array");
+		auto items_obj = yyjson_mut_obj_add_obj(doc, null_value_counts_type_struct, "items");
+		yyjson_mut_obj_add_strcpy(doc, items_obj, "type", "record");
+		yyjson_mut_obj_add_strcpy(
+		    doc, items_obj, "name",
+		    StringUtil::Format("k%d_k%d", NULL_VALUE_COUNTS_KEY, NULL_VALUE_COUNTS_VALUE).c_str());
+		auto record_fields_arr = yyjson_mut_obj_add_arr(doc, items_obj, "fields");
+
+		auto key_obj = yyjson_mut_arr_add_obj(doc, record_fields_arr);
+		yyjson_mut_obj_add_strcpy(doc, key_obj, "name", "key");
+		yyjson_mut_obj_add_strcpy(doc, key_obj, "type", "int");
+		yyjson_mut_obj_add_uint(doc, key_obj, "id", NULL_VALUE_COUNTS_KEY);
+
+		auto val_obj = yyjson_mut_arr_add_obj(doc, record_fields_arr);
+		yyjson_mut_obj_add_strcpy(doc, val_obj, "name", "value");
+		yyjson_mut_obj_add_strcpy(doc, val_obj, "type", "binary");
+		yyjson_mut_obj_add_uint(doc, val_obj, "id", NULL_VALUE_COUNTS_VALUE);
+	}
+	// referenced_data_file
+	if (table_metadata.iceberg_version >= 3) {
+		// referenced_data_file: long
+		children.emplace_back("referenced_data_file", LogicalType::VARCHAR);
+		data_file_field_ids.emplace_back("referenced_data_file", CreateFieldID(REFERENCED_DATA_FILE, true));
+
+		auto field_obj = yyjson_mut_arr_add_obj(doc, child_fields_arr);
+		yyjson_mut_obj_add_uint(doc, field_obj, "id", REFERENCED_DATA_FILE);
+		yyjson_mut_obj_add_strcpy(doc, field_obj, "name", "referenced_data_file");
+		yyjson_mut_obj_add_bool(doc, field_obj, "required", false);
+		yyjson_mut_obj_add_strcpy(doc, field_obj, "type", "string");
+	}
+	// content_size_in_bytes
+	if (table_metadata.iceberg_version >= 3) {
+		// content_size_in_bytes: long
+		children.emplace_back("content_size_in_bytes", LogicalType::BIGINT);
+		data_file_field_ids.emplace_back("content_size_in_bytes", CreateFieldID(CONTENT_SIZE_IN_BYTES, true));
+
+		auto field_obj = yyjson_mut_arr_add_obj(doc, child_fields_arr);
+		yyjson_mut_obj_add_uint(doc, field_obj, "id", CONTENT_SIZE_IN_BYTES);
+		yyjson_mut_obj_add_strcpy(doc, field_obj, "name", "content_size_in_bytes");
+		yyjson_mut_obj_add_bool(doc, field_obj, "required", false);
+		yyjson_mut_obj_add_strcpy(doc, field_obj, "type", "long");
+	}
+	// content_offset
+	if (table_metadata.iceberg_version >= 3) {
+		// content_offset: long
+		children.emplace_back("content_offset", LogicalType::BIGINT);
+		data_file_field_ids.emplace_back("content_offset", CreateFieldID(CONTENT_OFFSET, true));
+
+		auto field_obj = yyjson_mut_arr_add_obj(doc, child_fields_arr);
+		yyjson_mut_obj_add_uint(doc, field_obj, "id", CONTENT_OFFSET);
+		yyjson_mut_obj_add_strcpy(doc, field_obj, "name", "content_offset");
+		yyjson_mut_obj_add_bool(doc, field_obj, "required", false);
+		yyjson_mut_obj_add_strcpy(doc, field_obj, "type", "long");
+	}
+
+	{
+		// data_file: struct(...)
+		names.push_back("data_file");
+		types.push_back(LogicalType::STRUCT(std::move(children)));
+		data_file_field_ids.emplace_back("__duckdb_field_id", Value::INTEGER(DATA_FILE));
+		data_file_field_ids.emplace_back("__duckdb_nullable", Value::BOOLEAN(false));
+		field_ids.emplace_back("data_file", Value::STRUCT(data_file_field_ids));
+
+		auto field_obj = yyjson_mut_arr_add_obj(doc, fields_arr);
+		yyjson_mut_obj_add_uint(doc, field_obj, "id", DATA_FILE);
+		yyjson_mut_obj_add_strcpy(doc, field_obj, "name", "data_file");
+		yyjson_mut_obj_add_bool(doc, field_obj, "required", true);
+
+		auto data_file_struct = yyjson_mut_obj_add_obj(doc, field_obj, "type");
+		yyjson_mut_obj_add_strcpy(doc, data_file_struct, "type", "struct");
+		yyjson_mut_obj_add_val(doc, data_file_struct, "fields", child_fields_arr);
+	}
+
+	//! Populate the DataChunk with the data files
+
+	DataChunk chunk;
+	chunk.Initialize(allocator, types, manifest_entries.size());
+
+	for (idx_t i = 0; i < manifest_entries.size(); i++) {
+		auto &manifest_entry = manifest_entries[i];
+		idx_t col_idx = 0;
+
+		// status: int
+		chunk.SetValue(col_idx++, i, Value::INTEGER(static_cast<int32_t>(manifest_entry.status)));
+		//! FIXME: this is missing logic, needs to be looked into
+		//! SPEC: Snapshot id where the file was added, or deleted if status is 2. Inherited when null.
+		// snapshot_id: long
+		if (manifest_entry.HasSnapshotId()) {
+			chunk.SetValue(col_idx++, i, Value::BIGINT(manifest_entry.GetSnapshotId()));
+		} else {
+			chunk.SetValue(col_idx++, i, Value(LogicalType::BIGINT));
+		}
+		// sequence_number: long
+		// file_sequence_number: long
+		if (manifest_entry.status == IcebergManifestEntryStatusType::ADDED) {
+			chunk.SetValue(col_idx++, i, Value(LogicalType::BIGINT));
+			chunk.SetValue(col_idx++, i, Value(LogicalType::BIGINT));
+		} else {
+			chunk.SetValue(col_idx++, i, Value::BIGINT(manifest_entry.GetFileSequenceNumber(manifest_file)));
+			chunk.SetValue(col_idx++, i, Value::BIGINT(manifest_entry.GetSequenceNumber(manifest_file)));
+		}
+
+		auto &data_file = manifest_entry.data_file;
+		// data_file: struct(...)
+		chunk.SetValue(col_idx, i, data_file.ToValue(table_metadata, chunk.data[col_idx].GetType()));
+		col_idx++;
+	}
+	chunk.SetCardinality(manifest_entries.size());
+	auto iceberg_schema_string = ICUtils::JsonToString(std::move(doc_p));
+
+	child_list_t<Value> metadata_values;
+	metadata_values.emplace_back("schema", iceberg_schema_string);
+	metadata_values.emplace_back("schema-id", std::to_string(table_metadata.GetCurrentSchemaId()));
+	metadata_values.emplace_back("partition-spec", current_partition_spec.FieldsToJSONString());
+	metadata_values.emplace_back("partition-spec-id", std::to_string(current_partition_spec.spec_id));
+	metadata_values.emplace_back("format-version", std::to_string(table_metadata.iceberg_version));
+	metadata_values.emplace_back("content", "data");
+	auto metadata_map = Value::STRUCT(std::move(metadata_values));
+
+	CopyInfo copy_info;
+	copy_info.is_from = false;
+	copy_info.options["root_name"].push_back(Value("manifest_entry"));
+	copy_info.options["field_ids"].push_back(Value::STRUCT(field_ids));
+	copy_info.options["metadata"].push_back(metadata_map);
+
+	CopyFunctionBindInput input(copy_info);
+	input.file_extension = "avro";
+
+	{
+		ThreadContext thread_context(context);
+		ExecutionContext execution_context(context, thread_context, nullptr);
+		auto bind_data = copy.copy_to_bind(context, input, names, types);
+
+		auto global_state = copy.copy_to_initialize_global(context, *bind_data, path);
+		auto local_state = copy.copy_to_initialize_local(execution_context, *bind_data);
+
+		copy.copy_to_sink(execution_context, *bind_data, *global_state, *local_state, chunk);
+		copy.copy_to_combine(execution_context, *bind_data, *global_state, *local_state);
+		copy.copy_to_finalize(context, *bind_data, *global_state);
+	}
+
+	auto file_system = CachingFileSystem::Get(context);
+	auto file_handle = file_system.OpenFile(path, FileOpenFlags::FILE_FLAGS_READ);
+	auto manifest_length = file_handle->GetFileSize();
+	return manifest_length;
+}
+
+} // namespace manifest_file
+
+} // namespace duckdb

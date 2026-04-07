@@ -1,0 +1,106 @@
+# name: test/sql/local/irc_any_catalog/create/test_create_default.test
+# group: [create]
+
+require-env ICEBERG_SERVER_AVAILABLE
+
+require-env SECRETS_CREATED_AND_CATALOG_ATTACHED
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+set enable_logging=true
+
+statement ok
+set logging_level='debug'
+
+statement ok
+CREATE SCHEMA IF NOT EXISTS my_datalake.default;
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.tbl;
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.tbl_multi;
+
+statement error
+CREATE TABLE my_datalake.default.tbl(
+	item_id int,
+	balance int DEFAULT 0
+);
+----
+Invalid Input Error: non-null DEFAULT values are not supported for <V3 tables
+
+# STRUCT default not supported yet
+statement error
+CREATE TABLE my_datalake.default.tbl(
+	item_id int,
+	balance STRUCT(a VARCHAR, b BOOLEAN) DEFAULT {'a': 'test', 'b': true}
+) WITH ('format-version'='3');
+----
+Not implemented Error: DEFAULT values for nested types (like STRUCT(a VARCHAR, b BOOLEAN)) not implemented
+
+# MAP default not supported yet
+statement error
+CREATE TABLE my_datalake.default.tbl(
+	item_id int,
+	balance MAP(VARCHAR, VARCHAR) DEFAULT {'a':'hello', 'b':'world'}
+) WITH ('format-version'='3');
+----
+Not implemented Error: DEFAULT values for nested types (like MAP(VARCHAR, VARCHAR)) not implemented
+
+# LIST default not supported yet
+statement error
+CREATE TABLE my_datalake.default.tbl(
+	item_id int,
+	balance VARCHAR[] DEFAULT ['hello', 'world']
+) WITH ('format-version'='3');
+----
+Not implemented Error: DEFAULT values for nested types (like VARCHAR[]) not implemented
+
+# VARIANT default not supported yet
+statement error
+CREATE TABLE my_datalake.default.tbl(
+	item_id int,
+	balance VARIANT DEFAULT [42, 'hello'::VARIANT, 'world', {'a': true}]
+) WITH ('format-version'='3');
+----
+Not implemented Error: DEFAULT values for VARIANT are not supported yet
+
+# DEFAULT value of unsupported type
+statement error
+CREATE TABLE my_datalake.default.tbl_types(
+	id int,
+	blob_col BLOB DEFAULT 42
+) WITH ('format-version'='3');
+----
+Invalid Input Error: Failed to cast value: Unimplemented type for cast (INTEGER -> BLOB)
+
+# Test multiple defaults in one table
+statement ok
+CREATE TABLE my_datalake.default.tbl_multi(
+	id int,
+	bool_col boolean DEFAULT false,
+	int_col int DEFAULT 42,
+	str_col varchar DEFAULT 'test',
+	date_col date DEFAULT '2024-01-01'::date
+) WITH ('format-version'='3');
+
+statement ok
+INSERT INTO my_datalake.default.tbl_multi VALUES(1, DEFAULT, DEFAULT, DEFAULT, DEFAULT);
+
+query IIIII
+SELECT * FROM my_datalake.default.tbl_multi;
+----
+1	false	42	test	2024-01-01
+
+statement ok
+DROP TABLE my_datalake.default.tbl_multi;

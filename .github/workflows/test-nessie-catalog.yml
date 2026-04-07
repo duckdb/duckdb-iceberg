@@ -15,6 +15,9 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: 'true'
 
       - name: Download DuckDB-Iceberg artifact
         uses: actions/download-artifact@v4
@@ -40,18 +43,25 @@ jobs:
         run: |
           sudo apt update -y -qq
           sudo apt install -y -qq python3-venv
-          git clone https://github.com/projectnessie/nessie.git nessie
 
-      - name: Start Nessie
-        working-directory: nessie/docker
+      - name: Clone Nessie
+        run: |
+          make nessie-clone
+
+      - name: GitHub machine compatibility
+        working-directory: .catalogs/nessie/docker
         run: |
           # replace $ with $$ in all healthcheck lines, otherwise there are interpolation errors
           # on github machines for some reason
           sed -i '/healthcheck/,/]/ s/\$/$$/g' catalog-auth-s3/docker-compose.yml
+          docker compose -f catalog-auth-s3/docker-compose.yml up -d
           # lower client timeouts because they cannot be longer than realm timeouts.
           # all client timeouts are 86400 right now
           sed -i 's/86400/1800/g' authn-keycloak/config/iceberg-realm.json
-          docker compose -f catalog-auth-s3/docker-compose.yml up -d
+
+      - name: Start Nessie
+        run: |
+          make nessie
 
       - name: Wait for Nessie/Keycloak
         run: |
@@ -69,9 +79,21 @@ jobs:
           done
           echo "Keycloak is healthy"
 
-      - name: Run Nessie Tests
+      - name: Run Nessie Specific Tests
         env:
           NESSIE_SERVER_AVAILABLE: 1
         run: |
-          ./build/release/test/unittest "$PWD/test/*" --list-test-names-only || true
-          ./build/release/test/unittest "$PWD/test/*"
+          ./build/release/test/unittest "$PWD/test/sql/local/irc_specific_catalogs/nessie/*" --list-test-names-only || true
+          ./build/release/test/unittest "$PWD/test/sql/local/irc_specific_catalogs/nessie/*"
+
+      - name: Generate data
+        run: |
+          make nessie-data-only
+
+      - name: Run Generic IRC tests
+        env:
+          ICEBERG_SERVER_AVAILABLE: 1
+          SECRETS_CREATED_AND_CATALOG_ATTACHED: 1
+        run: |
+          ./build/release/test/unittest "$PWD/test/sql/local/irc_any_catalog/*" --list-test-names-only || true
+          ./build/release/test/unittest "$PWD/test/sql/local/irc_any_catalog/*" --test-config test/configs/nessie.json

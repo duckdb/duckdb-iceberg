@@ -1,0 +1,136 @@
+# name: test/sql/local/irc_specific_catalogs/nessie/oauth2/test_oauth2_edge_cases.test
+# description: Test OAuth2 edge cases: small expires_in, refresh_token rotation, and omission
+# group: [oauth2]
+
+require-env NESSIE_SERVER_AVAILABLE
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+require aws
+
+set ignore_error_messages
+
+statement ok
+CALL enable_logging('HTTP');
+
+statement ok
+set logging_level='debug';
+
+statement ok
+CREATE SECRET storage_secret (
+    TYPE S3,
+    KEY_ID 'minioadmin',
+    SECRET 'minioadmin',
+    ENDPOINT '127.0.0.1:9002',
+    URL_STYLE 'path',
+    USE_SSL 0
+);
+
+# Test 1: Small expires_in (< 30 seconds) - should not underflow
+# Create a token that expires quickly
+statement ok
+ATTACH '' AS quick_expiry_lake (
+    TYPE ICEBERG,
+    CLIENT_ID 'client1',
+    CLIENT_SECRET 's3cr3t',
+    OAUTH2_SCOPE 'catalog sign',
+    OAUTH2_SERVER_URI 'http://127.0.0.1:8080/realms/iceberg/protocol/openid-connect/token',
+    ENDPOINT 'http://127.0.0.1:19120/iceberg/',
+    ACCESS_DELEGATION_MODE 'none'
+);
+
+# Verify initial token fetch
+query I
+SELECT count(*) >= 1 AS has_token_fetch FROM duckdb_logs_parsed('HTTP')
+WHERE request.type = 'POST'
+  AND request.url LIKE '%openid-connect/token%';
+----
+true
+
+# Basic operation should work even with short-lived tokens
+statement ok
+show all tables;
+
+statement ok
+DETACH quick_expiry_lake;
+
+statement ok
+call truncate_duckdb_logs();
+
+# Test 2: Refresh token rotation
+# Some OAuth2 servers return a NEW refresh_token with each refresh
+# The old refresh_token should be replaced, not blanked
+statement ok
+ATTACH '' AS rotation_lake (
+    TYPE ICEBERG,
+    CLIENT_ID 'client1',
+    CLIENT_SECRET 's3cr3t',
+    OAUTH2_SCOPE 'catalog sign',
+    OAUTH2_SERVER_URI 'http://127.0.0.1:8080/realms/iceberg/protocol/openid-connect/token',
+    ENDPOINT 'http://127.0.0.1:19120/iceberg/',
+    ACCESS_DELEGATION_MODE 'none'
+);
+
+# Initial token fetch
+query I
+SELECT count(*) >= 1 AS has_token_fetch FROM duckdb_logs_parsed('HTTP')
+WHERE request.type = 'POST'
+  AND request.url LIKE '%openid-connect/token%';
+----
+true
+
+statement ok
+call truncate_duckdb_logs();
+
+# Force token expiry to trigger refresh
+statement ok
+SET iceberg_test_force_token_expiry=true;
+
+# This should trigger a refresh - server may return a new refresh_token
+statement ok
+show all tables;
+
+# Verify refresh request happened
+query I
+SELECT count(*) >= 1 AS has_refresh FROM duckdb_logs_parsed('HTTP')
+WHERE request.type = 'POST'
+  AND request.url LIKE '%openid-connect/token%';
+----
+true
+
+# Reset and try another operation - should work with the rotated token
+statement ok
+SET iceberg_test_force_token_expiry=false;
+
+statement ok
+call truncate_duckdb_logs();
+
+# Second expiry + refresh to verify the rotated refresh_token works
+statement ok
+SET iceberg_test_force_token_expiry=true;
+
+statement ok
+show all tables;
+
+# Should have refreshed again successfully
+query I
+SELECT count(*) >= 1 AS has_second_refresh FROM duckdb_logs_parsed('HTTP')
+WHERE request.type = 'POST'
+  AND request.url LIKE '%openid-connect/token%';
+----
+true
+
+statement ok
+SET iceberg_test_force_token_expiry=false;
+
+statement ok
+DETACH rotation_lake;
+
+statement ok
+DROP SECRET storage_secret;

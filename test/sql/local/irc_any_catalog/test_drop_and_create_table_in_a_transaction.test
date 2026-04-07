@@ -1,0 +1,76 @@
+# name: test/sql/local/irc_any_catalog/test_drop_and_create_table_in_a_transaction.test
+# group: [irc_any_catalog]
+
+require-env ICEBERG_SERVER_AVAILABLE
+
+require-env SECRETS_CREATED_AND_CATALOG_ATTACHED
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+require aws
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+use my_datalake.default;
+
+statement ok
+drop table if exists duid;
+
+statement ok
+create table if not exists duid as select range a from range(10);
+
+statement ok
+begin;
+
+statement ok
+drop table if exists duid;
+
+statement error
+select * from duid;
+----
+<REGEX>:.*Catalog Error: Table with name duid does not exist.*
+
+statement error
+create table if not exists duid as select range a from range(10);
+----
+<REGEX>:.*Cannot create table deleted within a transaction: my_datalake.default.duid.*
+
+statement ok
+ROLLBACK;
+
+# duid still exists
+statement ok
+select * from duid
+
+statement ok
+begin;
+
+statement ok
+drop table if exists duid;
+
+statement error
+create table duid as select range a from range(10);
+----
+<REGEX>:.*Not implemented Error: Cannot create table deleted within a transaction: my_datalake.default.duid.*
+
+statement ok
+ROLLBACK
+
+statement error
+create or replace table duid (a int);
+----
+<REGEX>:.*Not implemented Error.*CREATE OR REPLACE not supported in DuckDB-Iceberg. Please use separate Drop and Create Statements.*
+
+statement error
+create or replace schema new_schema;
+----
+<REGEX>:.*Not implemented Error.*CREATE OR REPLACE not supported in DuckDB-Iceberg. Please use separate Drop and Create Statements.*
+

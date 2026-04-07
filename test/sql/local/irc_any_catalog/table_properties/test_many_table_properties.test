@@ -1,0 +1,46 @@
+# name: test/sql/local/irc_any_catalog/table_properties/test_many_table_properties.test
+# group: [table_properties]
+
+require-env ICEBERG_SERVER_AVAILABLE
+
+require-env SECRETS_CREATED_AND_CATALOG_ATTACHED
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+statement ok
+CALL enable_logging('HTTP');
+
+statement ok
+set logging_level='debug';
+
+statement ok
+drop table if exists my_datalake.default.many_properties;
+
+statement ok
+create table my_datalake.default.many_properties (a int);
+
+
+loop i 0 2050
+
+# set more than STANDARD vector size properties
+statement ok
+CALL set_iceberg_table_properties(my_datalake.default.many_properties,
+       {
+        'new_property_${i}': 'value',
+       });
+
+endloop
+
+# Check all properties returned and none are duplicated
+# the iceberg-rest-fixture adds 2 properties on table creation
+# created-at and write.parquet.compression-codec
+query I
+select count(*) from iceberg_table_properties(my_datalake.default.many_properties) group by all;
+----
+2052

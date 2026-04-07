@@ -3,6 +3,8 @@
 
 require-env ICEBERG_SERVER_AVAILABLE
 
+require-env SECRETS_CREATED_AND_CATALOG_ATTACHED
+
 require avro
 
 require parquet
@@ -23,29 +25,6 @@ statement ok
 set logging_level='debug'
 
 statement ok
-CREATE SECRET (
-    TYPE S3,
-    KEY_ID 'admin',
-    SECRET 'password',
-    ENDPOINT '127.0.0.1:9000',
-    URL_STYLE 'path',
-    USE_SSL 0
-);
-
-
-statement ok
-ATTACH '' AS my_datalake (
-    TYPE ICEBERG,
-    CLIENT_ID 'admin',
-    CLIENT_SECRET 'password',
-    ENDPOINT 'http://127.0.0.1:8181'
-);
-
-# Currently there is an error
-# Binder Error: 'iceberg_to_ducklake' failed to commit to the DuckLake metadata catalog: table ducklake_schema_versions has 3 columns but 2 values were supplied
-mode skip
-
-statement ok
 ATTACH 'ducklake:duckdb:__TEST_DIR__/ducklake.duckdb' as my_ducklake (DATA_PATH '__TEST_DIR__/data_path');
 
 statement ok
@@ -56,7 +35,20 @@ call iceberg_to_ducklake(
         'pyspark_iceberg_table_v2',
         'deletion_vectors',
         'variant_column',
-        'simple_v3_table'
+        'simple_v3_table',
+        'truncate_partitioned_varchar',
+        'truncate_partitioned_decimal',
+        'truncate_partitioned_binary',
+        'truncate_partitioned_bigint',
+        'row_lineage_test_upgraded_insert',
+        'bucket_partitioned_bigint',
+        'bucket_partitioned_timestamp',
+        'bucket_partitioned_sparse_integer',
+        'bucket_partitioned_decimal',
+        'bucket_partitioned_date',
+        'bucket_partitioned_string',
+        'bucket_partitioned_binary',
+        'bucket_partitioned_integer',
     ]
 )
 
@@ -74,6 +66,7 @@ call iceberg_to_ducklake(
 
 foreach table_name lineitem_partitioned_l_shipmode_deletes all_types_table day_timestamp day_timestamptz empty_insert filtering_on_bounds complicated_partitioned_table filtering_on_partition_bounds issue_328 lineitem_001_deletes lineitem_partitioned_l_shipmode lineitem_sf_01_1_delete lineitem_sf_01_no_deletes lineitem_sf1_deletes many_adds_deletes nested_types pyspark_iceberg_table_v1 quickstart_table schema_evolve_float_to_double schema_evolve_int_to_bigint schema_evolve_struct schema_evolve_widen_decimal table_more_deletes table_partitioned table_unpartitioned table_with_deletes year_timestamp year_timestamptz
 
+# Verify current state matches
 query I rowsort expected_res
 select * from my_datalake.default.${table_name}
 ----

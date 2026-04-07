@@ -1,0 +1,64 @@
+# name: test/sql/local/irc_any_catalog/update/basic_update.test
+# description: Test ducklake updates
+# group: [update]
+
+require-env ICEBERG_SERVER_AVAILABLE
+
+require-env SECRETS_CREATED_AND_CATALOG_ATTACHED
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+require core_functions
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+CALL enable_logging('HTTP');
+
+statement ok
+set logging_level='debug'
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.test;
+
+statement ok
+CREATE TABLE my_datalake.default.test AS SELECT 1000 + i id, i % 10 as val FROM range(1000) t(i);
+
+statement ok
+BEGIN
+
+query III
+SELECT COUNT(*), SUM(id), SUM(val) FROM my_datalake.default.test
+----
+1000	1499500	4500
+
+query I
+UPDATE my_datalake.default.test SET id=id+2 WHERE id%2=0
+----
+500
+
+query III
+SELECT COUNT(*), SUM(id), SUM(val) FROM my_datalake.default.test
+----
+1000	1500500	4500
+
+statement ok
+COMMIT
+
+query III
+SELECT COUNT(*), SUM(id), SUM(val) FROM my_datalake.default.test
+----
+1000	1500500	4500
+
+# FIXME: query older snapshot (do this by using sequence number)
+# query III
+# SELECT COUNT(*), SUM(id), SUM(val) FROM my_datalake.default.test AT (SNAPSHOT => 1)
+# ----
+# 1000	1499500	4500

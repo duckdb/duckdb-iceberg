@@ -1,0 +1,75 @@
+# name: test/sql/local/irc_any_catalog/update/update_partitioning.test
+# description: Update a partitioned table
+# group: [update]
+
+require-env ICEBERG_SERVER_AVAILABLE
+
+require-env SECRETS_CREATED_AND_CATALOG_ATTACHED
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+CALL enable_logging('HTTP');
+
+statement ok
+set logging_level='debug'
+
+# need to figure out how to test that we do not allow updates to partitioned tables.
+mode skip
+
+statement ok
+CREATE TABLE partitioned_tbl(part_key INTEGER, values VARCHAR);
+
+statement ok
+ALTER TABLE partitioned_tbl SET PARTITIONED BY (part_key);
+
+statement ok
+INSERT INTO partitioned_tbl SELECT i%2, concat('thisisastring_', i) FROM range(10000) t(i)
+
+statement ok
+UPDATE partitioned_tbl SET part_key=2 WHERE part_key=0
+
+# verify files are partitioned
+query III
+SELECT data_file_id, partition_id, regexp_extract(path, '.*(part_key=[0-9])[/\\].*', 1) FROM ducklake_metadata.ducklake_data_file
+ORDER BY ALL
+----
+0	2	part_key=0
+1	2	part_key=1
+2	2	part_key=2
+
+query I
+SELECT COUNT(*) FROM partitioned_tbl
+----
+10000
+
+# query the new partition
+query I
+SELECT COUNT(*) FROM partitioned_tbl WHERE part_key=2
+----
+5000
+
+query II
+EXPLAIN ANALYZE SELECT COUNT(*) FROM partitioned_tbl WHERE part_key=2
+----
+analyzed_plan	<REGEX>:.*Total Files Read: 1.*
+
+# query the old partition with time travel
+query I
+SELECT COUNT(*) FROM partitioned_tbl AT (VERSION => 3) WHERE part_key=0
+----
+5000
+
+query II
+EXPLAIN ANALYZE SELECT COUNT(*) FROM partitioned_tbl AT (VERSION => 3) WHERE part_key=0
+----
+analyzed_plan	<REGEX>:.*Total Files Read: 1.*

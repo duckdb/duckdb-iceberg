@@ -44,11 +44,11 @@ class IcebergSparkRestSingleThreaded(IcebergConnection):
 
     def get_connection(self):
         os.environ["PYSPARK_SUBMIT_ARGS"] = (
-            f"--packages org.apache.iceberg:iceberg-spark-runtime-{SPARK_VERSION}.{SCALA_BINARY_VERSION}:{ICEBERG_LIBRARY_VERSION},org.apache.iceberg:iceberg-aws-bundle:{ICEBERG_LIBRARY_VERSION} pyspark-shell"
+            f"--packages org.apache.iceberg:iceberg-spark-runtime-{SPARK_VERSION}_{SCALA_BINARY_VERSION}:{ICEBERG_LIBRARY_VERSION},org.apache.iceberg:iceberg-aws-bundle:{ICEBERG_LIBRARY_VERSION} pyspark-shell"
         )
         os.environ["AWS_REGION"] = "us-east-1"
-        os.environ["AWS_ACCESS_KEY_ID"] = "admin"
-        os.environ["AWS_SECRET_ACCESS_KEY"] = "password"
+        os.environ["AWS_ACCESS_KEY_ID"] = os.getenv("S3_KEY_ID", "admin")
+        os.environ["AWS_SECRET_ACCESS_KEY"] = os.getenv("S3_SECRET", "password")
         if SparkContext._active_spark_context is not None:
             SparkContext._active_spark_context.stop()
 
@@ -63,9 +63,9 @@ class IcebergSparkRestSingleThreaded(IcebergConnection):
             .config("spark.sql.parquet.int96RebaseModeInWrite", "CORRECTED")
             .config("spark.sql.catalog.demo", "org.apache.iceberg.spark.SparkCatalog")
             .config("spark.sql.catalog.demo.type", "rest")
-            .config("spark.sql.catalog.demo.uri", "http://127.0.0.1:8181")
-            .config("spark.sql.catalog.demo.warehouse", "s3://warehouse/wh/")
-            .config("spark.sql.catalog.demo.s3.endpoint", "http://127.0.0.1:9000")
+            .config("spark.sql.catalog.demo.uri", os.getenv("ICEBERG_ENDPOINT", "http://127.0.0.1:8181"))
+            .config("spark.sql.catalog.demo.warehouse", os.getenv("WAREHOUSE", "s3://warehouse/wh/"))
+            .config("spark.sql.catalog.demo.s3.endpoint", os.getenv("S3_ENDPOINT", "http://127.0.0.1:9000"))
             .config("spark.sql.catalog.demo.s3.path-style-access", "true")
             .config('spark.driver.memory', '10g')
             .config('spark.sql.session.timeZone', 'UTC')

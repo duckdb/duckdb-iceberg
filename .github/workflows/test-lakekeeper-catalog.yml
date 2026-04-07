@@ -1,0 +1,54 @@
+name: Test Lakekeeper Catalog
+on:
+  workflow_call:
+    inputs:
+      artifact-name:
+        description: "Name of the DuckDB-Iceberg artifact to download"
+        required: true
+        type: string
+
+jobs:
+  test-lakekeeper:
+    name: Test against Lakekeeper Catalog
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: 'true'
+
+      - name: Download DuckDB-Iceberg artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.artifact-name }}
+          path: build/release
+
+      - name: Restore permissions
+        run: |
+          find ./build/release -type f -name 'duckdb*' -exec chmod +x {} \;
+          find ./build/release -type f -name 'unittest*' -exec chmod +x {} \;
+
+      - name: Install Lakekeeper dependencies
+        run: |
+          sudo apt update -y -qq
+          sudo apt install -y -qq python3-venv
+
+      - name: Setup Lakekeeper
+        run: |
+          make lakekeeper-data
+
+      - name: Run Lakekeeper Specific Tests
+        env:
+          LAKEKEEPER_SERVER_AVAILABLE: 1
+        run: |
+          ./build/release/test/unittest "$PWD/test/*" --list-test-names-only || true
+          ./build/release/test/unittest "$PWD/test/*"
+
+      - name: Run Generic IRC Tests
+        env:
+          ICEBERG_SERVER_AVAILABLE: 1
+          SECRETS_CREATED_AND_CATALOG_ATTACHED: 1
+        run: |
+          ./build/release/test/unittest "$PWD/test/sql/local/irc_any_catalog/*" --list-test-names-only || true
+          ./build/release/test/unittest "$PWD/test/sql/local/irc_any_catalog/*" --test-config test/configs/lakekeeper.json

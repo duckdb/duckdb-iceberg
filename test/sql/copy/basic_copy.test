@@ -1,0 +1,41 @@
+# name: test/sql/copy/basic_copy.test
+# group: [copy]
+
+require avro
+
+require parquet
+
+require iceberg
+
+statement ok
+COPY (
+	select 42::BIGINT a,
+	'this is a long string' b
+) TO '__TEST_DIR__/iceberg_table' (
+	FORMAT ICEBERG
+)
+
+query II
+select * from iceberg_scan('__TEST_DIR__/iceberg_table')
+----
+42	this is a long string
+
+query I
+select a from iceberg_scan('__TEST_DIR__/iceberg_table')
+----
+42
+
+query I
+select b from iceberg_scan('__TEST_DIR__/iceberg_table')
+----
+this is a long string
+
+query I
+select typeof(a) from iceberg_scan('__TEST_DIR__/iceberg_table')
+----
+BIGINT
+
+query I
+select typeof(b) from iceberg_scan('__TEST_DIR__/iceberg_table')
+----
+VARCHAR

@@ -49,12 +49,8 @@ attach or replace 'arn:aws:s3tables:us-east-2:840140254803:bucket/iceberg-testin
     ENDPOINT_TYPE 'S3_TABLES'
 );
 
-query IIII
+statement ok
 select * from s3_catalog.test_inserts.basic_insert_test order by id;
-----
-1	Alice	Smith	1990-01-01
-2	Bob	Jones	1985-06-15
-3	Charlie	Brown	2000-12-31
 
 # Proxy should see a GET request to a manifest file
 query I

@@ -1,0 +1,46 @@
+# name: test/sql/local/irc_any_catalog/reads/test_read_partitioned_table_type_promotion.test
+# group: [reads]
+
+require-env ICEBERG_SERVER_AVAILABLE
+
+require-env SECRETS_CREATED_AND_CATALOG_ATTACHED
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+require icu
+
+require ducklake
+
+require core_functions
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+SET TimeZone = 'UTC';
+
+statement ok
+call enable_logging(level='debug');
+
+query II
+select id, count(*) from my_datalake.default.type_promotion_partitioned_table where id >= 3 and id <=6 group by all order by id;
+----
+3	6
+4	8
+5	7
+6	8
+
+# reading from files where id was integer and where id was long
+query II
+select request.url[79:84] partitioned_url, count(*) from duckdb_logs_parsed('HTTP') where request.url like '%.parquet' group by all order by partitioned_url;
+----
+id%3D3	2
+id%3D4	2
+id%3D5	2
+id%3D6	1
