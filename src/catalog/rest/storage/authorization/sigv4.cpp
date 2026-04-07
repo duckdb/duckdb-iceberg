@@ -54,6 +54,10 @@ unique_ptr<IcebergAuthorization> SIGV4Authorization::FromAttachOptions(AttachedD
 				throw InvalidInputException("Duplicate 'secret' option detected!");
 			}
 			result->secret = StringUtil::Lower(entry.second.ToString());
+		} else if (lower_name == "sigv4_service") {
+			result->sigv4_service = entry.second.ToString();
+		} else if (lower_name == "sigv4_region") {
+			result->sigv4_region = entry.second.ToString();
 		} else if (lower_name == "extra_http_headers") {
 			// Parse extra_http_headers if provided directly in attach options
 			IcebergAuthorization::ParseExtraHttpHeaders(entry.second, result->extra_http_headers);
@@ -118,9 +122,17 @@ AWSInput SIGV4Authorization::CreateAWSInput(ClientContext &context, const IRCEnd
 		aws_input.request_timeout_in_ms = val.GetValue<idx_t>() * 1000;
 	}
 
-	// AWS service and region
-	aws_input.service = GetAwsService(endpoint_builder.GetHost());
-	aws_input.region = GetAwsRegion(endpoint_builder.GetHost());
+	// AWS service and region: use explicit overrides if provided, otherwise parse from host
+	if (!sigv4_service.empty()) {
+		aws_input.service = sigv4_service;
+	} else {
+		aws_input.service = GetAwsService(endpoint_builder.GetHost());
+	}
+	if (!sigv4_region.empty()) {
+		aws_input.region = sigv4_region;
+	} else {
+		aws_input.region = GetAwsRegion(endpoint_builder.GetHost());
+	}
 
 	// Host decomposition
 	auto decomposed_host = DecomposeHost(endpoint_builder.GetHost());
