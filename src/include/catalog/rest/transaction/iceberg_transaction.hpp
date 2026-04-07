@@ -54,6 +54,7 @@ public:
 	void RecordTableRequest(const string &table_key);
 	TableInfoCache GetTableRequestResult(const string &table_key);
 	IcebergTableInformation &GetTableInfoForTransaction(IcebergTableInformation &table_info);
+	bool StartedBefore(timestamp_t timestamp_ms) const;
 
 private:
 	void CleanupFiles();

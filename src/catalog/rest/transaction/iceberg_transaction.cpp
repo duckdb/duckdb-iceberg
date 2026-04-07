@@ -540,4 +540,12 @@ IcebergTransaction &IcebergTransaction::Get(ClientContext &context, Catalog &cat
 	return Transaction::Get(context, catalog).Cast<IcebergTransaction>();
 }
 
+bool IcebergTransaction::StartedBefore(timestamp_t timestamp_ms) const {
+	auto ctx = context.lock();
+	auto &meta_transaction = MetaTransaction::Get(*ctx);
+	auto meta_transaction_start = meta_transaction.GetCurrentTransactionStartTimestamp();
+	auto start = Timestamp::GetEpochMs(meta_transaction_start);
+	return start < timestamp_ms.value;
+}
+
 } // namespace duckdb

@@ -355,13 +355,8 @@ optional_ptr<CatalogEntry> IcebergTableSet::GetEntry(ClientContext &context, con
 	}
 
 	// Log warning on schema_id mismatch
-	auto &meta_transaction = MetaTransaction::Get(context);
-	auto transaction_start = meta_transaction.GetCurrentTransactionStartTimestamp();
-	auto transaction_start_millis = Timestamp::GetEpochMs(transaction_start);
-
-	auto &table_metadata_last_updated_at = ic_ret.table_info.table_metadata.last_updated_ms;
-
-	if (transaction_start_millis < table_metadata_last_updated_at.value &&
+	const auto &table_metadata_last_updated_at = ic_ret.table_info.table_metadata.last_updated_ms;
+	if (iceberg_transaction.StartedBefore(table_metadata_last_updated_at) &&
 	    latest_snapshot->GetSchemaId() != ic_ret.table_info.table_metadata.GetCurrentSchemaId()) {
 		DUCKDB_LOG_WARNING(
 		    context, "Detected schema change during transaction (schema_id mismatch); ACID guarantees may not hold.");

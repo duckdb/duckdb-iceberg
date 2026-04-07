@@ -1,4 +1,4 @@
-# name: test/sql/local/irc_any_catalog/alter/alter_add_column_two_transactions.test
+# name: test/sql/local/irc_any_catalog/alter/alter_add_column_warn_schema_mismatch.test
 # description: Reading an altered table inside an explicit BEGIN/COMMIT transaction (after ALTER already committed)
 # group: [alter]
 
