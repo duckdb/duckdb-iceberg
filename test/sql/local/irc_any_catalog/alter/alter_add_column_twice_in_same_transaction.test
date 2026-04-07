@@ -32,17 +32,6 @@ statement ok
 CREATE TABLE my_datalake.default.alter_add_column_same_txn_table AS (select range a FROM range(10));
 
 statement ok
-SET ca_cert_file = '~/.mitmproxy/mitmproxy-ca-cert.pem';
-
-statement ok
-CREATE SECRET http_proxy (
-    TYPE http,
-    HTTP_PROXY 'http://localhost:8878'
-);
-
-# ALTER and SELECT in the same explicit transaction. This exercises HasTransactionUpdates() = true path
-# in IcebergTableEntry::GetScanFunction, where scan_info uses the in-memory updated_table rather than a REST fetch.
-statement ok
 begin;
 
 statement ok

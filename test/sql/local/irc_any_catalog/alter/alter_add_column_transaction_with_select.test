@@ -1,4 +1,4 @@
-# name: test/sql/local/irc_any_catalog/alter/alter_add_column_explicit_transaction.test
+# name: test/sql/local/irc_any_catalog/alter/alter_add_column_transaction_with_select.test
 # description: Reading an altered table inside an explicit BEGIN/COMMIT transaction (after ALTER already committed)
 # group: [alter]
 
@@ -36,8 +36,6 @@ CREATE TABLE my_datalake.default.alter_add_column_explicit_txn WITH ('format-ver
 statement ok
 ALTER TABLE my_datalake.default.alter_add_column_explicit_txn ADD COLUMN b int;
 
-# Now read inside an explicit transaction — hits the else branch in GetScanFunction:
-# explicit transaction (BEGIN; ... COMMIT;), no pending writes, no AT clause.
 statement ok
 BEGIN;
 

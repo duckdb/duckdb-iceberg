@@ -1,4 +1,4 @@
-# name: test/sql/local/irc_any_catalog/alter/alter_add_column_same_transaction_aborted.test
+# name: test/sql/local/irc_any_catalog/alter/alter_add_column_transaction_abort.test
 # group: [alter]
 
 require-env ICEBERG_SERVER_AVAILABLE
@@ -31,8 +31,6 @@ drop table if exists my_datalake.default.alter_add_column_same_txn_table;
 statement ok
 CREATE TABLE my_datalake.default.alter_add_column_same_txn_table AS (select range a FROM range(10));
 
-# ALTER and SELECT in the same explicit transaction. This exercises HasTransactionUpdates() = true path
-# in IcebergTableEntry::GetScanFunction, where scan_info uses the in-memory updated_table rather than a REST fetch.
 statement ok
 begin;
 
