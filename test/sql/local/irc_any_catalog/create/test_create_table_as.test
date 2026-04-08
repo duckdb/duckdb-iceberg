@@ -167,3 +167,112 @@ create table bit_table as select bit from test_all_types();
 ----
 <REGEX>:.*Invalid Input.*Column type BIT is not a valid Iceberg Type.*
 
+
+statement ok
+DROP TABLE IF EXISTS hugeint_table;
+
+statement ok
+CREATE TABLE hugeint_table AS SELECT 42::HUGEINT AS hugeint_col;
+
+query I
+SELECT hugeint_col FROM hugeint_table;
+----
+42
+
+statement ok
+DROP TABLE IF EXISTS hugeint_sum_table;
+
+statement ok
+CREATE TABLE hugeint_sum_table AS SELECT SUM(range)::HUGEINT AS total FROM range(100);
+
+query I
+SELECT total FROM hugeint_sum_table;
+----
+4950
+
+statement ok
+DROP TABLE IF EXISTS hugeint_edge_cases;
+
+statement ok
+CREATE TABLE hugeint_edge_cases AS SELECT * FROM (VALUES
+    (0::HUGEINT),
+    (-1::HUGEINT),
+    (1::HUGEINT),
+    (9999999999999999999::HUGEINT),
+    (-9999999999999999999::HUGEINT),
+    (17014118346046923173168730371588410572),
+    (-17014118346046923173168730371588410572)
+) t(val);
+
+query I
+SELECT val FROM hugeint_edge_cases ORDER BY val;
+----
+-17014118346046923173168730371588410572
+-9999999999999999999
+-1
+0
+1
+9999999999999999999
+17014118346046923173168730371588410572
+
+
+query I
+select column_type from (DESCRIBE hugeint_edge_cases);
+----
+DECIMAL(38,0)
+
+statement ok
+DROP TABLE IF EXISTS hugeint_ops;
+
+statement ok
+CREATE TABLE hugeint_ops AS SELECT
+    (1000000000000000000::HUGEINT * 1000000000000000000::HUGEINT) AS multiply_result,
+    (17014118346046923173168730371588410572::HUGEINT - 17014118346046923173168730371588410571::HUGEINT) AS subtract_result,
+    (5000000000000000000::HUGEINT + 5000000000000000000::HUGEINT) AS add_result;
+
+query III
+SELECT * FROM hugeint_ops;
+----
+1000000000000000000000000000000000000	1	10000000000000000000
+
+statement ok
+DROP TABLE IF EXISTS hugeint_ops;
+
+statement ok
+DROP TABLE IF EXISTS hugeint_agg;
+
+statement ok
+CREATE TABLE hugeint_agg AS
+    SELECT SUM(val) AS total FROM (
+        VALUES (1000000000000000000::HUGEINT), (2000000000000000000::HUGEINT), (3000000000000000000::HUGEINT)
+    ) t(val);
+
+query I
+SELECT total FROM hugeint_agg;
+----
+6000000000000000000
+
+statement ok
+DROP TABLE IF EXISTS hugeint_insert_test;
+
+statement ok
+CREATE TABLE hugeint_insert_test (val HUGEINT);
+
+statement ok
+INSERT INTO hugeint_insert_test VALUES (100000000000000000::HUGEINT);
+
+statement ok
+INSERT INTO hugeint_insert_test VALUES (200000000000000000::HUGEINT);
+
+query I
+SELECT SUM(val) FROM hugeint_insert_test;
+----
+300000000000000000
+
+
+statement ok
+DROP TABLE IF EXISTS hugeint_agg;
+
+
+statement ok
+DROP TABLE IF EXISTS hugeint_insert_test;
