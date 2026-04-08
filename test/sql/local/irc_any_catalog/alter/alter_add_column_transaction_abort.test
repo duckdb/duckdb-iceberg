@@ -1,0 +1,61 @@
+# name: test/sql/local/irc_any_catalog/alter/alter_add_column_transaction_abort.test
+# group: [alter]
+
+require-env ICEBERG_SERVER_AVAILABLE
+
+require-env SECRETS_CREATED_AND_CATALOG_ATTACHED
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+CALL enable_logging(level='warning');
+
+statement ok
+SET warnings_as_errors = True;
+
+statement ok
+CREATE SCHEMA IF NOT EXISTS my_datalake.default;
+
+statement ok
+drop table if exists my_datalake.default.alter_add_column_same_txn_table;
+
+statement ok
+CREATE TABLE my_datalake.default.alter_add_column_same_txn_table AS (select range a FROM range(10));
+
+statement ok
+begin;
+
+statement ok
+DELETE FROM my_datalake.default.alter_add_column_same_txn_table WHERE a=0;
+
+statement ok
+ALTER TABLE my_datalake.default.alter_add_column_same_txn_table ADD COLUMN b int;
+
+statement ok
+INSERT INTO my_datalake.default.alter_add_column_same_txn_table VALUES (42, 42);
+
+statement ok
+abort;
+
+query I
+FROM my_datalake.default.alter_add_column_same_txn_table;
+----
+0
+1
+2
+3
+4
+5
+6
+7
+8
+9

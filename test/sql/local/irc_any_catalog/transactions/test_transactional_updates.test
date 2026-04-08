@@ -13,6 +13,12 @@ require iceberg
 
 require httpfs
 
+statement ok
+CALL enable_logging(level='warning');
+
+statement ok
+SET warnings_as_errors = True;
+
 # Do not ignore 'HTTP' error messages!
 set ignore_error_messages
 

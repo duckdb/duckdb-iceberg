@@ -312,7 +312,7 @@ TableTransactionInfo IcebergTransaction::GetTransactionRequest(ClientContext &co
 		for (auto &update : transaction_data.updates) {
 			if (update->type == IcebergTableUpdateType::ADD_SNAPSHOT) {
 				// we need to recreate the keys in the current context.
-				auto &ic_table_entry = table_info.GetLatestSchema()->Cast<IcebergTableEntry>();
+				auto &ic_table_entry = table_info.GetLatestSchema(context)->Cast<IcebergTableEntry>();
 				ic_table_entry.PrepareIcebergScanFromEntry(context);
 			}
 			update->CreateUpdate(db, context, commit_state);
@@ -498,7 +498,7 @@ void IcebergTransaction::CleanupFiles() {
 				continue;
 			}
 			// we need to recreate the keys in the current context.
-			auto &ic_table_entry = table.GetLatestSchema()->Cast<IcebergTableEntry>();
+			auto &ic_table_entry = table.GetLatestSchema(*temp_con_context)->Cast<IcebergTableEntry>();
 			ic_table_entry.PrepareIcebergScanFromEntry(*temp_con_context);
 
 			auto &add_snapshot = update->Cast<IcebergAddSnapshot>();
@@ -537,6 +537,14 @@ TableInfoCache IcebergTransaction::GetTableRequestResult(const string &table_key
 
 IcebergTransaction &IcebergTransaction::Get(ClientContext &context, Catalog &catalog) {
 	return Transaction::Get(context, catalog).Cast<IcebergTransaction>();
+}
+
+bool IcebergTransaction::StartedBefore(timestamp_t timestamp_ms) const {
+	auto ctx = context.lock();
+	auto &meta_transaction = MetaTransaction::Get(*ctx);
+	auto meta_transaction_start = meta_transaction.GetCurrentTransactionStartTimestamp();
+	auto start = Timestamp::GetEpochMs(meta_transaction_start);
+	return start < timestamp_ms.value;
 }
 
 } // namespace duckdb

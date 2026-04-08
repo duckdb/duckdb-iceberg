@@ -215,10 +215,10 @@ unique_ptr<IcebergColumnDefinition> IcebergColumnDefinition::Copy() const {
 	res->type = type;
 	// TODO: initial default and write default need more support here
 	if (initial_default) {
-		res->initial_default = make_uniq<Value>(initial_default.get());
+		res->initial_default = make_uniq<Value>(initial_default->Copy());
 	}
 	if (write_default) {
-		res->write_default = make_uniq<Value>(write_default.get());
+		res->write_default = make_uniq<Value>(write_default->Copy());
 	}
 	res->required = required;
 	for (auto &child : children) {

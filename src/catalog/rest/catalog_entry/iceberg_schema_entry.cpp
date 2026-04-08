@@ -103,7 +103,7 @@ void IcebergSchemaEntry::DropEntry(ClientContext &context, DropInfo &info, bool 
 		if (info.if_not_found == OnEntryNotFound::RETURN_NULL) {
 			return;
 		}
-		throw CatalogException("Table %s does not exist");
+		throw CatalogException("Table %s does not exist", table_name);
 	}
 	if (info.cascade) {
 		throw NotImplementedException("DROP TABLE <table_name> CASCADE is not supported for Iceberg tables currently");
@@ -203,10 +203,11 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 	updated_table.InitTransactionData(irc_transaction);
 
 	auto &current_schema = updated_table.table_metadata.GetLatestSchema();
-	// Copy the schema, then add it to the table metadata
 	auto new_schema = current_schema.Copy();
-	auto new_schema_id = updated_table.GetMaxSchemaId() + 1;
-	new_schema->schema_id = new_schema_id;
+
+	if (!irc_transaction.has_schema_update) {
+		new_schema->schema_id = updated_table.GetMaxSchemaId() + 1;
+	}
 
 	switch (alter_table_info.alter_table_type) {
 	case AlterTableType::SET_PARTITIONED_BY: {
@@ -218,6 +219,81 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 		updated_table.AddAssertLastAssignedPartitionId(irc_transaction);
 
 		updated_table.SetPartitionedBy(irc_transaction, partition_info.partition_keys, *new_schema);
+		return;
+	}
+	case AlterTableType::ADD_COLUMN: {
+		auto &add_column_info = alter_table_info.Cast<AddColumnInfo>();
+		auto &column_definition = add_column_info.new_column;
+		if (column_definition.GetType().IsNested()) {
+			throw NotImplementedException("ADD COLUMN for Nested Types not supported for Iceberg tables");
+		}
+
+		if (add_column_info.if_column_not_exists) {
+			for (auto &col : current_schema.columns) {
+				if (col->name == column_definition.GetName()) {
+					return;
+				}
+			}
+		}
+
+		// Ensure schema is the same as current
+		if (!irc_transaction.has_schema_update) {
+			updated_table.AddAssertCurrentSchemaId(irc_transaction);
+		}
+
+		// Add the new column
+		auto new_iceberg_column = make_uniq<IcebergColumnDefinition>();
+		auto &last_column_id = updated_table.table_metadata.last_column_id;
+		if (!last_column_id.IsValid()) {
+			throw InternalException("No last_column_id when trying to ADD COLUMN %s", add_column_info.name);
+		}
+		new_iceberg_column->id = last_column_id.GetIndex() + 1;
+		last_column_id = optional_idx(new_iceberg_column->id);
+
+		new_iceberg_column->name = column_definition.GetName();
+		new_iceberg_column->type = column_definition.GetType();
+
+		if (column_definition.HasDefaultValue()) {
+			auto &default_value = column_definition.DefaultValue();
+
+			/*TODO: Support more expressions.
+			 *  Which expressions should we support? Some will require binding, should that binding happen here?
+			 *  ExtractInitialValue in iceberg_create_table_request.cpp:208-216 gets a value using a ConstantBinder.
+			 */
+			switch (default_value.type) {
+			case ExpressionType::VALUE_CONSTANT: {
+				auto &default_constant_value = default_value.Cast<ConstantExpression>().value;
+				if (new_iceberg_column->type != default_constant_value.type()) {
+					throw InvalidInputException(
+					    "Type mismatch between new COLUMN %s type: %s and DEFAULT value type: %s",
+					    new_iceberg_column->name, new_iceberg_column->type.ToString(),
+					    default_constant_value.type().ToString());
+				}
+				new_iceberg_column->initial_default = make_uniq<Value>(default_constant_value);
+				break;
+			}
+			case ExpressionType::VALUE_NULL:
+				break;
+			default:
+				throw InvalidInputException("DEFAULT expression not yet supported");
+			}
+		}
+
+		new_iceberg_column->required = false;
+
+		new_schema->columns.push_back(std::move(new_iceberg_column));
+		auto new_schema_id = new_schema->schema_id;
+		updated_table.table_metadata.schemas[new_schema_id] = std::move(new_schema);
+		if (!irc_transaction.has_schema_update) {
+			updated_table.table_metadata.SetCurrentSchemaId(new_schema_id);
+			// Update the Table Metadata to have our new schema
+			updated_table.CreateSchemaVersion(*updated_table.table_metadata.schemas[new_schema_id]);
+
+			updated_table.AddSchema(irc_transaction);
+			updated_table.AddSetCurrentSchema(irc_transaction);
+		}
+
+		irc_transaction.has_schema_update = true;
 		return;
 	}
 	default: {

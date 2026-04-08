@@ -444,22 +444,35 @@ void IcebergTableInformation::SetPartitionedBy(IcebergTransaction &transaction,
 	}
 }
 
-optional_ptr<CatalogEntry> IcebergTableInformation::GetSchemaVersion(const IcebergSnapshotLookup &snapshot_lookup) {
+optional_ptr<CatalogEntry> IcebergTableInformation::GetSchemaVersion(const IcebergSnapshotLookup &snapshot_lookup,
+                                                                     ClientContext &context, bool is_time_travel) {
 	D_ASSERT(!schema_versions.empty());
 	if (table_metadata.snapshots.empty()) {
 		return schema_versions[table_metadata.GetCurrentSchemaId()].get();
 	}
-	auto snapshot_info = table_metadata.GetSnapshot(snapshot_lookup);
-	return schema_versions[snapshot_info.schema_id].get();
+	auto snapshot_info =
+	    table_metadata.GetSnapshot(snapshot_lookup); // first id is: 3580769571520595073, second is 3580769571520595073
+	auto &meta_transaction = MetaTransaction::Get(context);
+	auto transaction_start = meta_transaction.GetCurrentTransactionStartTimestamp();
+	auto transaction_start_millis = Timestamp::GetEpochMs(transaction_start);
+	int32_t schema_id;
+	if ((table_metadata.last_updated_ms.value >= transaction_start_millis && snapshot_info.snapshot) ||
+	    is_time_travel) {
+		// use snapshot
+		schema_id = snapshot_info.schema_id;
+	} else {
+		schema_id = table_metadata.GetCurrentSchemaId();
+	}
+	return schema_versions[schema_id].get();
 }
 
 idx_t IcebergTableInformation::GetIcebergVersion() const {
 	return table_metadata.iceberg_version;
 }
 
-optional_ptr<CatalogEntry> IcebergTableInformation::GetLatestSchema() {
+optional_ptr<CatalogEntry> IcebergTableInformation::GetLatestSchema(ClientContext &context) {
 	IcebergSnapshotLookup latest_snapshot;
-	return GetSchemaVersion(latest_snapshot);
+	return GetSchemaVersion(latest_snapshot, context);
 }
 
 string IcebergTableInformation::GetTableKey(const vector<string> &namespace_items, const string &table_name) {
@@ -525,10 +538,6 @@ IcebergTableInformation IcebergTableInformation::Copy() const {
 
 IcebergTableInformation IcebergTableInformation::Copy(IcebergTransaction &iceberg_transaction) const {
 	auto ret = Copy();
-	// get snapshot from start of transaction
-	// latest_snapshot_id and sequence of copied table information should be asof the transaction start
-	// this is to ensure when the transaction commits, the assert ref snapshot id is the one closest to the start of
-	// this
 	auto snapshot_lookup = GetSnapshotLookup(iceberg_transaction);
 	if (ret.TableIsEmpty(snapshot_lookup)) {
 		return ret;
@@ -542,7 +551,7 @@ IcebergTableInformation IcebergTableInformation::Copy(IcebergTransaction &iceber
 
 	auto &snapshot = snapshot_info.snapshot;
 	D_ASSERT(snapshot);
-	ret.table_metadata.SetCurrentSchemaId(snapshot_info.schema_id);
+	ret.table_metadata.SetCurrentSchemaId(table_metadata.GetCurrentSchemaId());
 	ret.table_metadata.last_sequence_number = snapshot->sequence_number;
 	ret.table_metadata.current_snapshot_id = snapshot->snapshot_id;
 	return ret;

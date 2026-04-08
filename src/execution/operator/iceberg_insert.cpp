@@ -868,7 +868,9 @@ PhysicalOperator &IcebergCatalog::PlanInsert(ClientContext &context, PhysicalPla
 	auto &table_entry = op.table.Cast<IcebergTableEntry>();
 	table_entry.PrepareIcebergScanFromEntry(context);
 	auto &table_metadata = table_entry.table_info.table_metadata;
-	auto &schema = table_metadata.GetLatestSchema();
+
+	auto &schema = table_entry.schema_id.IsValid() ? *table_metadata.GetSchemaFromId(table_entry.schema_id.GetIndex())
+	                                               : table_metadata.GetLatestSchema();
 
 	if (table_metadata.HasSortOrder()) {
 		auto &sort_spec = table_metadata.GetLatestSortOrder();
