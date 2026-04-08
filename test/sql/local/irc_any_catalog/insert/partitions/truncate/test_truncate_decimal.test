@@ -1,0 +1,115 @@
+# name: test/sql/local/irc_any_catalog/insert/partitions/truncate/test_truncate_decimal.test
+# description: Insert into a truncate-partitioned DECIMAL table and verify round-trip
+# group: [truncate]
+
+require-env ICEBERG_SERVER_AVAILABLE
+
+require-env SECRETS_CREATED_AND_CATALOG_ATTACHED
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+create schema if not exists my_datalake.default;
+
+statement ok
+drop table if exists my_datalake.default.test_truncate_decimal;
+
+# truncate(100, amount) on DECIMAL(10,2): width=100 applied to the unscaled value.
+# Unscaled for 1.00 is 100; 1.00*100=100 which is a multiple of 100, so partition key = 1.00.
+# Values 1.00, 2.00, ..., 10.00 each land in their own partition.
+statement ok
+CREATE TABLE my_datalake.default.test_truncate_decimal (id int, amount decimal(10, 2), label varchar)
+PARTITIONED BY (truncate(100, amount));
+
+statement ok
+insert into my_datalake.default.test_truncate_decimal values
+    (1,  1.00,  'one'),
+    (2,  2.00,  'two'),
+    (3,  3.00,  'three'),
+    (4,  4.00,  'four'),
+    (5,  5.00,  'five'),
+    (6,  6.00,  'six'),
+    (7,  7.00,  'seven'),
+    (8,  8.00,  'eight'),
+    (9,  9.00,  'nine'),
+    (10, 10.00, 'ten'),
+    (11, NULL,  'null_row');
+
+query I
+select count(*) from my_datalake.default.test_truncate_decimal;
+----
+11
+
+query III rowsort
+select id, amount, label from my_datalake.default.test_truncate_decimal;
+----
+1	1.00	one
+2	2.00	two
+3	3.00	three
+4	4.00	four
+5	5.00	five
+6	6.00	six
+7	7.00	seven
+8	8.00	eight
+9	9.00	nine
+10	10.00	ten
+11	NULL	null_row
+
+# Values within the same partition bucket (1.00-1.99 all truncate to 1.00)
+statement ok
+drop table if exists my_datalake.default.test_truncate_decimal_same_bucket;
+
+statement ok
+CREATE TABLE my_datalake.default.test_truncate_decimal_same_bucket (id int, amount decimal(10, 2))
+PARTITIONED BY (truncate(100, amount));
+
+statement ok
+insert into my_datalake.default.test_truncate_decimal_same_bucket values
+    (1, 1.00),
+    (2, 1.25),
+    (3, 1.50),
+    (4, 1.99);
+
+# All 4 rows share partition key 1.00 (unscaled 100..199 all truncate to 100)
+query I
+select count(*) from my_datalake.default.test_truncate_decimal_same_bucket;
+----
+4
+
+# Verify negative decimals are floor-truncated correctly
+# truncate(100, -1.01): unscaled=-101, -101-((-101 % 100)+100)%100 = -101-((-1+100)%100) = -101-99 = -200 → -2.00
+statement ok
+drop table if exists my_datalake.default.test_truncate_decimal_neg;
+
+statement ok
+CREATE TABLE my_datalake.default.test_truncate_decimal_neg (id int, amount decimal(10, 2))
+PARTITIONED BY (truncate(100, amount));
+
+statement ok
+insert into my_datalake.default.test_truncate_decimal_neg values
+    (1, -1.00),
+    (2, -1.01),
+    (3, -1.99),
+    (4, -2.00);
+
+query I
+select count(*) from my_datalake.default.test_truncate_decimal_neg;
+----
+4
+
+query II rowsort
+select id, amount from my_datalake.default.test_truncate_decimal_neg;
+----
+1	-1.00
+2	-1.01
+3	-1.99
+4	-2.00

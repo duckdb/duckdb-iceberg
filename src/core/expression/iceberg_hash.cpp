@@ -151,6 +151,56 @@ int32_t IcebergHash::HashDecimal(const Value &value) {
 	return Murmur3Hash32(buf + start, byte_len - start, SEED);
 }
 
+//! Hash raw unscaled decimal stored as int64 (covers INT16/INT32/INT64 physical types)
+//! Serializes to minimum big-endian two's complement bytes, matching Java BigDecimal.unscaledValue().toByteArray()
+int32_t IcebergHash::HashDecimalInt64(int64_t unscaled) {
+	uint8_t buf[8];
+	for (int i = 7; i >= 0; i--) {
+		buf[7 - i] = static_cast<uint8_t>(unscaled >> (i * 8));
+	}
+	idx_t start = 0;
+	while (start < 7) {
+		uint8_t sign_ext = (buf[start + 1] & 0x80) ? 0xFF : 0x00;
+		if (buf[start] == sign_ext) {
+			start++;
+		} else {
+			break;
+		}
+	}
+	return Murmur3Hash32(buf + start, 8 - start, SEED);
+}
+
+//! Hash raw unscaled decimal stored as hugeint (INT128 physical type)
+int32_t IcebergHash::HashDecimalHugeInt(hugeint_t unscaled) {
+	uint8_t buf[16];
+	buf[0] = static_cast<uint8_t>(unscaled.upper >> 56);
+	buf[1] = static_cast<uint8_t>(unscaled.upper >> 48);
+	buf[2] = static_cast<uint8_t>(unscaled.upper >> 40);
+	buf[3] = static_cast<uint8_t>(unscaled.upper >> 32);
+	buf[4] = static_cast<uint8_t>(unscaled.upper >> 24);
+	buf[5] = static_cast<uint8_t>(unscaled.upper >> 16);
+	buf[6] = static_cast<uint8_t>(unscaled.upper >> 8);
+	buf[7] = static_cast<uint8_t>(unscaled.upper);
+	buf[8] = static_cast<uint8_t>(unscaled.lower >> 56);
+	buf[9] = static_cast<uint8_t>(unscaled.lower >> 48);
+	buf[10] = static_cast<uint8_t>(unscaled.lower >> 40);
+	buf[11] = static_cast<uint8_t>(unscaled.lower >> 32);
+	buf[12] = static_cast<uint8_t>(unscaled.lower >> 24);
+	buf[13] = static_cast<uint8_t>(unscaled.lower >> 16);
+	buf[14] = static_cast<uint8_t>(unscaled.lower >> 8);
+	buf[15] = static_cast<uint8_t>(unscaled.lower);
+	idx_t start = 0;
+	while (start < 15) {
+		uint8_t sign_ext = (buf[start + 1] & 0x80) ? 0xFF : 0x00;
+		if (buf[start] == sign_ext) {
+			start++;
+		} else {
+			break;
+		}
+	}
+	return Murmur3Hash32(buf + start, 16 - start, SEED);
+}
+
 //! Hash time value (Iceberg spec: int64 microseconds from midnight)
 int32_t IcebergHash::HashTime(dtime_t t) {
 	return HashInt64(t.micros);

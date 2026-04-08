@@ -537,9 +537,6 @@ static unique_ptr<Expression> GetBucketExpression(ClientContext &context, Iceber
                                                   const IcebergPartitionSpecField &field) {
 	auto col_idx = GetColumnIndexBySourceId(copy_input.schema.columns, field.GetSourceId());
 	auto col_type = GetSourceColumnType(copy_input, field.GetSourceId());
-	if (col_type.id() == LogicalTypeId::DECIMAL) {
-		throw NotImplementedException("bucket partition transform on DECIMAL columns is not yet supported for INSERT");
-	}
 
 	vector<unique_ptr<Expression>> children;
 	children.push_back(make_uniq<BoundConstantExpression>(
@@ -560,10 +557,6 @@ static unique_ptr<Expression> GetTruncateExpression(ClientContext &context, Iceb
                                                     const IcebergPartitionSpecField &field) {
 	auto col_idx = GetColumnIndexBySourceId(copy_input.schema.columns, field.GetSourceId());
 	auto col_type = GetSourceColumnType(copy_input, field.GetSourceId());
-	if (col_type.id() == LogicalTypeId::DECIMAL) {
-		throw NotImplementedException(
-		    "truncate partition transform on DECIMAL columns is not yet supported for INSERT");
-	}
 
 	vector<unique_ptr<Expression>> children;
 	children.push_back(make_uniq<BoundConstantExpression>(

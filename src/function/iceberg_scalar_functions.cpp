@@ -101,6 +101,64 @@ static void IcebergBucketUUID(DataChunk &input, ExpressionState &state, Vector &
 	    [](int32_t n, hugeint_t val) -> int32_t { return (IcebergHash::HashUUID(val) & 0x7FFFFFFF) % n; });
 }
 
+static void IcebergBucketDecimalInt16(DataChunk &input, ExpressionState &state, Vector &result) {
+	BinaryExecutor::Execute<int32_t, int16_t, int32_t>(
+	    input.data[0], input.data[1], result, input.size(), [](int32_t n, int16_t val) -> int32_t {
+		    return (IcebergHash::HashDecimalInt64(static_cast<int64_t>(val)) & 0x7FFFFFFF) % n;
+	    });
+}
+
+static void IcebergBucketDecimalInt32(DataChunk &input, ExpressionState &state, Vector &result) {
+	BinaryExecutor::Execute<int32_t, int32_t, int32_t>(
+	    input.data[0], input.data[1], result, input.size(), [](int32_t n, int32_t val) -> int32_t {
+		    return (IcebergHash::HashDecimalInt64(static_cast<int64_t>(val)) & 0x7FFFFFFF) % n;
+	    });
+}
+
+static void IcebergBucketDecimalInt64(DataChunk &input, ExpressionState &state, Vector &result) {
+	BinaryExecutor::Execute<int32_t, int64_t, int32_t>(
+	    input.data[0], input.data[1], result, input.size(), [](int32_t n, int64_t val) -> int32_t {
+		    return (IcebergHash::HashDecimalInt64(val) & 0x7FFFFFFF) % n;
+	    });
+}
+
+static void IcebergBucketDecimalHugeInt(DataChunk &input, ExpressionState &state, Vector &result) {
+	BinaryExecutor::Execute<int32_t, hugeint_t, int32_t>(
+	    input.data[0], input.data[1], result, input.size(), [](int32_t n, hugeint_t val) -> int32_t {
+		    return (IcebergHash::HashDecimalHugeInt(val) & 0x7FFFFFFF) % n;
+	    });
+}
+
+static unique_ptr<FunctionData> IcebergBucketDecimalBind(ClientContext &context, ScalarFunction &bound_function,
+                                                         vector<unique_ptr<Expression>> &arguments) {
+	D_ASSERT(arguments.size() == 2);
+	auto &num_buckets_expr = *arguments[0];
+	if (num_buckets_expr.IsFoldable()) {
+		auto num_buckets_val = ExpressionExecutor::EvaluateScalar(context, num_buckets_expr);
+		if (!num_buckets_val.IsNull() && num_buckets_val.GetValue<int32_t>() <= 0) {
+			throw InvalidInputException("iceberg_bucket: modulo must be a positive integer, got %d",
+			                            num_buckets_val.GetValue<int32_t>());
+		}
+	}
+	auto &decimal_type = arguments[1]->return_type;
+	bound_function.arguments[1] = decimal_type;
+	switch (decimal_type.InternalType()) {
+	case PhysicalType::INT16:
+		bound_function.SetFunctionCallback(IcebergBucketDecimalInt16);
+		break;
+	case PhysicalType::INT32:
+		bound_function.SetFunctionCallback(IcebergBucketDecimalInt32);
+		break;
+	case PhysicalType::INT64:
+		bound_function.SetFunctionCallback(IcebergBucketDecimalInt64);
+		break;
+	default: // INT128
+		bound_function.SetFunctionCallback(IcebergBucketDecimalHugeInt);
+		break;
+	}
+	return nullptr;
+}
+
 ScalarFunctionSet IcebergFunctions::GetIcebergBucketFunction() {
 	ScalarFunctionSet set("iceberg_bucket");
 	// (num_buckets, value) -> INTEGER
@@ -124,6 +182,11 @@ ScalarFunctionSet IcebergFunctions::GetIcebergBucketFunction() {
 	                               IcebergBucketBind));
 	set.AddFunction(ScalarFunction({LogicalType::INTEGER, LogicalType::UUID}, LogicalType::INTEGER, IcebergBucketUUID,
 	                               IcebergBucketBind));
+	{
+		scalar_function_t null_fn;
+		set.AddFunction(ScalarFunction({LogicalType::INTEGER, LogicalType(LogicalTypeId::DECIMAL)},
+		                               LogicalType::INTEGER, null_fn, IcebergBucketDecimalBind));
+	}
 	return set;
 }
 
@@ -186,6 +249,71 @@ static void IcebergTruncateBlob(DataChunk &input, ExpressionState &state, Vector
 	    });
 }
 
+static void IcebergTruncateDecimalInt16(DataChunk &input, ExpressionState &state, Vector &result) {
+	BinaryExecutor::Execute<int32_t, int16_t, int16_t>(
+	    input.data[0], input.data[1], result, input.size(), [](int32_t W, int16_t v) -> int16_t {
+		    int64_t val = static_cast<int64_t>(v);
+		    int64_t w = static_cast<int64_t>(W);
+		    return static_cast<int16_t>(val - (((val % w) + w) % w));
+	    });
+}
+
+static void IcebergTruncateDecimalInt32(DataChunk &input, ExpressionState &state, Vector &result) {
+	BinaryExecutor::Execute<int32_t, int32_t, int32_t>(
+	    input.data[0], input.data[1], result, input.size(), [](int32_t W, int32_t v) -> int32_t {
+		    int64_t val = static_cast<int64_t>(v);
+		    int64_t w = static_cast<int64_t>(W);
+		    return static_cast<int32_t>(val - (((val % w) + w) % w));
+	    });
+}
+
+static void IcebergTruncateDecimalInt64(DataChunk &input, ExpressionState &state, Vector &result) {
+	BinaryExecutor::Execute<int32_t, int64_t, int64_t>(
+	    input.data[0], input.data[1], result, input.size(), [](int32_t W, int64_t v) -> int64_t {
+		    int64_t w = static_cast<int64_t>(W);
+		    return v - (((v % w) + w) % w);
+	    });
+}
+
+static void IcebergTruncateDecimalHugeInt(DataChunk &input, ExpressionState &state, Vector &result) {
+	BinaryExecutor::Execute<int32_t, hugeint_t, hugeint_t>(
+	    input.data[0], input.data[1], result, input.size(), [](int32_t W, hugeint_t v) -> hugeint_t {
+		    hugeint_t w = hugeint_t(W);
+		    return v - (((v % w) + w) % w);
+	    });
+}
+
+static unique_ptr<FunctionData> IcebergTruncateDecimalBind(ClientContext &context, ScalarFunction &bound_function,
+                                                           vector<unique_ptr<Expression>> &arguments) {
+	D_ASSERT(arguments.size() == 2);
+	auto &width_expr = *arguments[0];
+	if (width_expr.IsFoldable()) {
+		auto width_val = ExpressionExecutor::EvaluateScalar(context, width_expr);
+		if (!width_val.IsNull() && width_val.GetValue<int32_t>() <= 0) {
+			throw InvalidInputException("iceberg_truncate: width must be a positive integer, got %d",
+			                            width_val.GetValue<int32_t>());
+		}
+	}
+	auto &decimal_type = arguments[1]->return_type;
+	bound_function.arguments[1] = decimal_type;
+	bound_function.SetReturnType(decimal_type);
+	switch (decimal_type.InternalType()) {
+	case PhysicalType::INT16:
+		bound_function.SetFunctionCallback(IcebergTruncateDecimalInt16);
+		break;
+	case PhysicalType::INT32:
+		bound_function.SetFunctionCallback(IcebergTruncateDecimalInt32);
+		break;
+	case PhysicalType::INT64:
+		bound_function.SetFunctionCallback(IcebergTruncateDecimalInt64);
+		break;
+	default: // INT128
+		bound_function.SetFunctionCallback(IcebergTruncateDecimalHugeInt);
+		break;
+	}
+	return nullptr;
+}
+
 ScalarFunctionSet IcebergFunctions::GetIcebergTruncateFunction() {
 	ScalarFunctionSet set("iceberg_truncate");
 	// (width, value) -> same type as value
@@ -197,6 +325,11 @@ ScalarFunctionSet IcebergFunctions::GetIcebergTruncateFunction() {
 	                               IcebergTruncateVarchar, IcebergTruncateBind));
 	set.AddFunction(ScalarFunction({LogicalType::INTEGER, LogicalType::BLOB}, LogicalType::BLOB, IcebergTruncateBlob,
 	                               IcebergTruncateBind));
+	{
+		scalar_function_t null_fn;
+		set.AddFunction(ScalarFunction({LogicalType::INTEGER, LogicalType(LogicalTypeId::DECIMAL)},
+		                               LogicalType(LogicalTypeId::DECIMAL), null_fn, IcebergTruncateDecimalBind));
+	}
 	return set;
 }
 

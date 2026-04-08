@@ -297,6 +297,18 @@ class TestSparkReadPartitionedTables:
         res = spark.sql(f"SELECT * FROM default.{table_name} ORDER BY id, val").collect()
         assert res == DECIMAL_ROWS
 
+    # -------------------------------- DECIMAL / BUCKET (DuckDB-created table)
+    def test_bucket_decimal_duckdb_created(self, spark_con):
+        spark = _get_spark(spark_con)
+        res = spark.sql("SELECT * FROM default.test_bucket_decimal ORDER BY id").collect()
+        assert res == TEST_BUCKET_DECIMAL_ROWS
+
+    # ------------------------------- DECIMAL / TRUNCATE (DuckDB-created table)
+    def test_truncate_decimal_duckdb_created(self, spark_con):
+        spark = _get_spark(spark_con)
+        res = spark.sql("SELECT * FROM default.test_truncate_decimal ORDER BY id").collect()
+        assert res == TEST_TRUNCATE_DECIMAL_ROWS
+
     # ---------------------------------------------------------------- FLOAT
     @pytest.mark.parametrize(
         "table_name",
@@ -468,6 +480,9 @@ _BUCKET_BLOB_VALUES = [
     bytearray(b"\x46\x47\x48\x49\x50"),
 ]
 
+_BUCKET_DECIMAL_AMOUNTS = [Decimal(f"{v}.00") for v in [10, 20, 30, 40, 50, 60, 70, 80, 90, 100]]
+_TRUNCATE_DECIMAL_AMOUNTS = [Decimal(f"{v}.00") for v in range(1, 11)]
+
 _TRUNCATE_BINARY_VALUES = [
     bytearray(b"\x01\x02\x03"),
     bytearray(b"\x02\x03\x04"),
@@ -497,11 +512,25 @@ BUCKET_VARCHAR_FOR_INSERT_ROWS = _cross_engine_rows(_ANIMALS)
 BUCKET_DATE_FOR_INSERT_ROWS = _cross_engine_rows(_BUCKET_DATES)
 BUCKET_TIMESTAMP_FOR_INSERT_ROWS = _cross_engine_rows(_BUCKET_TIMESTAMPS)
 # BUCKET_BLOB_FOR_INSERT_ROWS — omitted: Spark binary handling is unreliable across versions
+BUCKET_DECIMAL_FOR_INSERT_ROWS = _cross_engine_rows(_BUCKET_DECIMAL_AMOUNTS)
 
 TRUNCATE_INT_FOR_INSERT_ROWS = _cross_engine_rows(_TRUNCATE_INT_VALUES)
 TRUNCATE_BIGINT_FOR_INSERT_ROWS = _cross_engine_rows(_TRUNCATE_INT_VALUES)
 TRUNCATE_VARCHAR_FOR_INSERT_ROWS = _cross_engine_rows(_ANIMALS)
 TRUNCATE_BINARY_FOR_INSERT_ROWS = _cross_engine_rows(_TRUNCATE_BINARY_VALUES)
+TRUNCATE_DECIMAL_FOR_INSERT_ROWS = _cross_engine_rows(_TRUNCATE_DECIMAL_AMOUNTS)
+
+# Rows written by DuckDB alone into bucket/truncate decimal tables (3 columns: id, amount, label)
+_BUCKET_DECIMAL_LABELS = ["ten", "twenty", "thirty", "forty", "fifty", "sixty", "seventy", "eighty", "ninety", "hundred"]
+TEST_BUCKET_DECIMAL_ROWS = (
+    [Row(id=i, amount=a, label=l) for i, a, l in zip(range(1, 11), _BUCKET_DECIMAL_AMOUNTS, _BUCKET_DECIMAL_LABELS)]
+    + [Row(id=11, amount=None, label="null_row")]
+)
+_TRUNCATE_DECIMAL_LABELS = ["one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten"]
+TEST_TRUNCATE_DECIMAL_ROWS = (
+    [Row(id=i, amount=a, label=l) for i, a, l in zip(range(1, 11), _TRUNCATE_DECIMAL_AMOUNTS, _TRUNCATE_DECIMAL_LABELS)]
+    + [Row(id=11, amount=None, label="null_row")]
+)
 
 
 @requires_iceberg_server
@@ -644,3 +673,31 @@ class TestSparkReadBucketTruncateForInsert:
         ).collect()
         v = bytearray(b"\x01\x02\x03")
         assert res == [Row(id=1, value=v), Row(id=101, value=v)]
+
+    # -------------------------------------------------- BUCKET / DECIMAL
+    def test_bucket_decimal_total_rows(self, spark_con):
+        spark = _get_spark(spark_con)
+        res = spark.sql("SELECT * FROM default.bucket_partitioned_decimal_for_insert ORDER BY id").collect()
+        assert res == BUCKET_DECIMAL_FOR_INSERT_ROWS
+
+    def test_bucket_decimal_filter(self, spark_con):
+        spark = _get_spark(spark_con)
+        res = spark.sql(
+            "SELECT * FROM default.bucket_partitioned_decimal_for_insert WHERE amount = 10.00 ORDER BY id"
+        ).collect()
+        v = Decimal("10.00")
+        assert res == [Row(id=1, amount=v), Row(id=101, amount=v)]
+
+    # ------------------------------------------------- TRUNCATE / DECIMAL
+    def test_truncate_decimal_total_rows(self, spark_con):
+        spark = _get_spark(spark_con)
+        res = spark.sql("SELECT * FROM default.truncate_partitioned_decimal_for_insert ORDER BY id").collect()
+        assert res == TRUNCATE_DECIMAL_FOR_INSERT_ROWS
+
+    def test_truncate_decimal_filter(self, spark_con):
+        spark = _get_spark(spark_con)
+        res = spark.sql(
+            "SELECT * FROM default.truncate_partitioned_decimal_for_insert WHERE amount = 1.00 ORDER BY id"
+        ).collect()
+        v = Decimal("1.00")
+        assert res == [Row(id=1, amount=v), Row(id=101, amount=v)]

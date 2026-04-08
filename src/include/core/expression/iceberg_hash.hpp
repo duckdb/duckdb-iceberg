@@ -33,6 +33,9 @@ public:
 	static int32_t HashString(const string_t &value);
 	static int32_t HashDate(date_t date);
 	static int32_t HashDecimal(const Value &value);
+	//! Hash raw unscaled decimal values (for vector execution without boxing to Value)
+	static int32_t HashDecimalInt64(int64_t unscaled);
+	static int32_t HashDecimalHugeInt(hugeint_t unscaled);
 	static int32_t HashTime(dtime_t t);
 	static int32_t HashTimestampNs(timestamp_ns_t t);
 	static int32_t HashUUID(hugeint_t uuid);
