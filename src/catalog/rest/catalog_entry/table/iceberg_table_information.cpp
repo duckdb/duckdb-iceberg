@@ -450,7 +450,8 @@ optional_ptr<CatalogEntry> IcebergTableInformation::GetSchemaVersion(const Icebe
 	if (table_metadata.snapshots.empty()) {
 		return schema_versions[table_metadata.GetCurrentSchemaId()].get();
 	}
-	auto snapshot_info = table_metadata.GetSnapshot(snapshot_lookup);
+	auto snapshot_info =
+	    table_metadata.GetSnapshot(snapshot_lookup); // first id is: 3580769571520595073, second is 3580769571520595073
 	auto &meta_transaction = MetaTransaction::Get(context);
 	auto transaction_start = meta_transaction.GetCurrentTransactionStartTimestamp();
 	auto transaction_start_millis = Timestamp::GetEpochMs(transaction_start);
@@ -463,11 +464,6 @@ optional_ptr<CatalogEntry> IcebergTableInformation::GetSchemaVersion(const Icebe
 		schema_id = table_metadata.GetCurrentSchemaId();
 	}
 	return schema_versions[schema_id].get();
-	// if (!is_time_travel &&
-	//     (transaction_start_millis > table_metadata.last_updated_ms.value && snapshot_info.snapshot)) {
-	// 	snapshot_info.schema_id = table_metadata.GetCurrentSchemaId();
-	// }
-	// return schema_versions[snapshot_info.schema_id].get();
 }
 
 idx_t IcebergTableInformation::GetIcebergVersion() const {

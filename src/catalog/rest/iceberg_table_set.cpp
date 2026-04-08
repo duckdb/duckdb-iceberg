@@ -332,11 +332,11 @@ optional_ptr<CatalogEntry> IcebergTableSet::GetEntry(ClientContext &context, con
 		iceberg_transaction.RecordTableRequest(table_key);
 		return nullptr;
 	}
-	
+
 	iceberg_transaction.tables[table_key] = entry->second;
 
-  IcebergSnapshotLookup snapshot_lookup;
-  
+	IcebergSnapshotLookup snapshot_lookup;
+
 	bool is_time_travel = lookup.GetAtClause();
 	if (!is_time_travel && !table_info.HasTransactionUpdates()) {
 		// if there is no user supplied AT () clause, and the table does not have transaction updates
