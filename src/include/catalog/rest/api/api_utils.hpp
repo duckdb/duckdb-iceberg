@@ -35,8 +35,8 @@ static string certFileLocations[] = {
 
 class APIUtils {
 public:
-	static unique_ptr<HTTPResponse> Request(RequestType request_type, ClientContext &context,
-	                                        const IRCEndpointBuilder &endpoint_builder, unique_ptr<HTTPClient> &client,
+	static unique_ptr<HTTPResponse> Request(RequestType request_type, optional_ptr<AttachedDatabase> db,
+	                                        ClientContext &context, const IRCEndpointBuilder &endpoint_builder,
 	                                        HTTPHeaders &headers, const string &data);
 
 	//! We use a singleton here to store the path, set by SelectCurlCertPath

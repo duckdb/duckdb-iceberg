@@ -213,7 +213,8 @@ IRCAPITableCredentials IcebergTableInformation::GetVendedCredentials(ClientConte
 	case_insensitive_map_t<Value> config_options;
 	//! TODO: apply the 'defaults' retrieved from the /v1/config endpoint
 	config_options.insert(user_defaults.begin(), user_defaults.end());
-	auto key = IRCAPI::GetEncodedSchemaName(schema.namespace_items) + "." + name;
+	auto schema_component = IRCPathComponent::NamespaceComponent(schema.namespace_items);
+	auto key = schema_component.encoded + "." + name;
 	{
 		// get cache lock when accessing load table result cache
 		lock_guard<std::mutex> cache_lock(catalog.GetMetadataCacheLock());
@@ -482,7 +483,8 @@ string IcebergTableInformation::GetTableKey(const vector<string> &namespace_item
 	if (namespace_items.empty()) {
 		return table_name;
 	}
-	return IRCAPI::GetEncodedSchemaName(namespace_items) + "." + table_name;
+	auto schema_component = IRCPathComponent::NamespaceComponent(namespace_items);
+	return schema_component.encoded + "." + table_name;
 }
 
 string IcebergTableInformation::GetTableKey() const {

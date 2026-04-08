@@ -21,8 +21,8 @@ public:
 	void Scan(ClientContext &context, const std::function<void(CatalogEntry &)> &callback);
 	static IcebergTableInformation &CreateNewEntry(ClientContext &context, IcebergCatalog &catalog,
 	                                               IcebergSchemaEntry &schema, CreateTableInfo &info);
-	const case_insensitive_map_t<IcebergTableInformation> &GetEntries();
-	case_insensitive_map_t<IcebergTableInformation> &GetEntriesMutable();
+	const case_insensitive_map_t<shared_ptr<IcebergTableInformation>> &GetEntries();
+	case_insensitive_map_t<shared_ptr<IcebergTableInformation>> &GetEntriesMutable();
 
 public:
 	void LoadEntries(ClientContext &context);
@@ -35,7 +35,7 @@ public:
 	Catalog &catalog;
 
 private:
-	case_insensitive_map_t<IcebergTableInformation> entries;
+	case_insensitive_map_t<shared_ptr<IcebergTableInformation>> entries;
 	mutex entry_lock;
 };
 

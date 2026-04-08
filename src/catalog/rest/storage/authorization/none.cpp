@@ -7,11 +7,12 @@
 
 namespace duckdb {
 
-NoneAuthorization::NoneAuthorization() : IcebergAuthorization(IcebergAuthorizationType::NONE) {
+NoneAuthorization::NoneAuthorization(AttachedDatabase &db) : IcebergAuthorization(db, IcebergAuthorizationType::NONE) {
 }
 
-unique_ptr<IcebergAuthorization> NoneAuthorization::FromAttachOptions(IcebergAttachOptions &input) {
-	auto result = make_uniq<NoneAuthorization>();
+unique_ptr<IcebergAuthorization> NoneAuthorization::FromAttachOptions(AttachedDatabase &db,
+                                                                      IcebergAttachOptions &input) {
+	auto result = make_uniq<NoneAuthorization>(db);
 
 	// Parse extra_http_headers if provided directly in attach options
 	if (input.options.count("extra_http_headers")) {
@@ -30,7 +31,7 @@ unique_ptr<HTTPResponse> NoneAuthorization::Request(RequestType request_type, Cl
 		headers.Insert(entry.first, entry.second);
 	}
 
-	return APIUtils::Request(request_type, context, endpoint_builder, client, headers, data);
+	return APIUtils::Request(request_type, db, context, endpoint_builder, headers, data);
 }
 
 } // namespace duckdb
