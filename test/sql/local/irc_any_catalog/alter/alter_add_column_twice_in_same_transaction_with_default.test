@@ -35,10 +35,40 @@ statement ok
 begin;
 
 statement ok
-ALTER TABLE my_datalake.default.alter_add_column_same_txn_table ADD COLUMN b int DEFAULT 42;
+ALTER TABLE my_datalake.default.alter_add_column_same_txn_table ADD COLUMN b int;
+
+query II
+from my_datalake.default.alter_add_column_same_txn_table;
+----
+0	NULL
+1	NULL
+2	NULL
+3	NULL
+4	NULL
+5	NULL
+6	NULL
+7	NULL
+8	NULL
+9	NULL
 
 statement ok
-ALTER TABLE my_datalake.default.alter_add_column_same_txn_table ADD COLUMN c int;
+ALTER TABLE my_datalake.default.alter_add_column_same_txn_table ADD COLUMN c int DEFAULT 42;
+
+# TODO: Faulty. This should see the new third column.
+# We should revise the approach of `if (!irc_transaction.has_schema_update) {` in iceberg_schema_entry.cpp
+query II
+from my_datalake.default.alter_add_column_same_txn_table;
+----
+0	NULL
+1	NULL
+2	NULL
+3	NULL
+4	NULL
+5	NULL
+6	NULL
+7	NULL
+8	NULL
+9	NULL
 
 statement ok
 commit;
@@ -46,13 +76,13 @@ commit;
 query III
 FROM my_datalake.default.alter_add_column_same_txn_table;
 ----
-0	42	NULL
-1	42	NULL
-2	42	NULL
-3	42	NULL
-4	42	NULL
-5	42	NULL
-6	42	NULL
-7	42	NULL
-8	42	NULL
-9	42	NULL
+0	NULL	42
+1	NULL	42
+2	NULL	42
+3	NULL	42
+4	NULL	42
+5	NULL	42
+6	NULL	42
+7	NULL	42
+8	NULL	42
+9	NULL	42

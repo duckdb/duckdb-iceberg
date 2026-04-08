@@ -37,8 +37,38 @@ begin;
 statement ok
 ALTER TABLE my_datalake.default.alter_add_column_same_txn_table ADD COLUMN b int;
 
+query II
+FROM my_datalake.default.alter_add_column_same_txn_table;
+----
+0	NULL
+1	NULL
+2	NULL
+3	NULL
+4	NULL
+5	NULL
+6	NULL
+7	NULL
+8	NULL
+9	NULL
+
 statement ok
 ALTER TABLE my_datalake.default.alter_add_column_same_txn_table ADD COLUMN c int;
+
+# TODO: Faulty. This should see the new third column.
+# We should revise the approach of `if (!irc_transaction.has_schema_update) {` in iceberg_schema_entry.cpp
+query II
+FROM my_datalake.default.alter_add_column_same_txn_table;
+----
+0	NULL
+1	NULL
+2	NULL
+3	NULL
+4	NULL
+5	NULL
+6	NULL
+7	NULL
+8	NULL
+9	NULL
 
 statement ok
 commit;
