@@ -82,7 +82,7 @@ INSERT INTO my_datalake.default.alter_add_column_explicit_txn VALUES (42);
 # Now that we did the insert, the code at IcebergTableSet::GetEntry sees that the table has been updated within the transaction,
 # and does a snapshot lookup with LATEST instead of FROM_TIMESTAMP, therefore using current_schema_id instead. That's why we see the new column.
 query II con2
-FROM my_datalake.default.alter_add_column_explicit_txn ORDER BY a; -- tag
+FROM my_datalake.default.alter_add_column_explicit_txn ORDER BY a;
 ----
 0	NULL
 1	NULL
@@ -95,3 +95,6 @@ FROM my_datalake.default.alter_add_column_explicit_txn ORDER BY a; -- tag
 8	NULL
 9	NULL
 42	NULL
+
+statement ok con2
+commit;
