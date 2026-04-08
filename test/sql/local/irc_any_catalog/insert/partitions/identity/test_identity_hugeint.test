@@ -105,3 +105,14 @@ query I
 select count(*) from my_datalake.default.test_identity_hugeint_large where val = 0;
 ----
 2
+
+# check that partition values in the manifest are stored as DECIMAL(38,0)
+statement ok
+set variable manifest_path_large = (select manifest_path from iceberg_metadata(my_datalake.default.test_identity_hugeint_large) order by manifest_sequence_number desc limit 1);
+
+query I
+select typeof(partition.val_identity) from (select unnest(data_file) from read_avro(getvariable('manifest_path_large'))) order by all;
+----
+DECIMAL(38,0)
+DECIMAL(38,0)
+DECIMAL(38,0)

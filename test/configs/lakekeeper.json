@@ -17,7 +17,6 @@
         "test/sql/local/irc_any_catalog/insert/test_write_upper_and_lower_bounds_single_values.test",
         "test/sql/local/irc_any_catalog/insert/test_read_upper_and_lower_bounds.test",
         "test/sql/local/irc_any_catalog/insert/test_write_decimal_bounds.test",
-        "test/sql/local/irc_any_catalog/insert/test_write_decimal_bounds_hugeint.test",
         "test/sql/local/irc_any_catalog/transactions/test_transactional_updates_error_omits_stacktrace.test",
         "test/sql/local/irc_any_catalog/iceberg_catalog_eager_refresh.test",
         "test/sql/local/irc_any_catalog/irc_catalog_read_deletes.test",
