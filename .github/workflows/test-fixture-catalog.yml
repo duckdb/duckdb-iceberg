@@ -71,15 +71,15 @@ jobs:
           SECRETS_CREATED_AND_CATALOG_ATTACHED: 1
           FIXTURE_SERVER_AVAILABLE: 1
         run: |
-          ./build/release/test/unittest "$PWD/test/sql/local/irc_any_catalog/*" --list-test-names-only || true
-          ./build/release/test/unittest "$PWD/test/sql/local/irc_any_catalog/*" --test-config test/configs/fixture.json
+          ./build/release/test/unittest --order lex "$PWD/test/sql/local/irc_any_catalog/*" --list-test-names-only || true
+          ./build/release/test/unittest --order lex "$PWD/test/sql/local/irc_any_catalog/*" --test-config test/configs/fixture.json
 
       - name: Run other tests
         env:
           ICEBERG_SERVER_AVAILABLE: 1
         run: |
-          ./build/release/test/unittest "$PWD/test/*" --list-test-names-only || true
-          ./build/release/test/unittest "$PWD/test/*"
+          ./build/release/test/unittest --order lex "$PWD/test/*" --list-test-names-only || true
+          ./build/release/test/unittest --order lex "$PWD/test/*"
 
       - name: Test reads with PyIceberg
         env:
