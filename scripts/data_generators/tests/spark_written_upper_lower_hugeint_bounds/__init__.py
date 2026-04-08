@@ -9,8 +9,9 @@ class Test(IcebergTest):
 
     def get_connection(self, catalog: str, *, target: str | None = None, **kwargs):
         # Example: tweak behavior for a specific catalog
-        if catalog == "spark-rest":
+        if catalog != "lakekeeper":
             target = "spark-rest-single-thread"
+        if catalog == "spark-rest":
             from scripts.data_generators.connections import IcebergConnection
             # Use base mapping unless explicit target is provided
             registry_key = self.resolve_target_for_catalog(catalog, target)
