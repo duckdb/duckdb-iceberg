@@ -51,34 +51,19 @@ static Value DeserializeHugeintDecimal(const string_t &blob, uint8_t width, uint
 	D_ASSERT(blob.GetSize() <= sizeof(hugeint_t));
 
 	// Convert from big-endian to host byte order
+	// read all bytes into a single 128-bit value
 	const uint8_t *src = reinterpret_cast<const uint8_t *>(blob.GetData());
-	int64_t upper_val = 0;
-	uint64_t lower_val = 0;
+	bool is_negative = blob.GetSize() > 0 && (src[0] & 0x80);
 
-	// Calculate how many bytes go into upper and lower parts
-	idx_t upper_bytes = (blob.GetSize() <= sizeof(uint64_t)) ? blob.GetSize() : (blob.GetSize() - sizeof(uint64_t));
+	// sign extension: 0 for positive, -1 for negative
+	int64_t upper_val = is_negative ? -1 : 0;
+	uint64_t lower_val = is_negative ? ~uint64_t(0) : 0;
 
-	// Read upper part (big-endian)
-	for (idx_t i = 0; i < upper_bytes; i++) {
-		upper_val = (upper_val << 8) | src[i];
-	}
-
-	// Handle sign extension for negative numbers
-	if (blob.GetSize() > 0 && (src[0] & 0x80)) {
-		// Fill remaining bytes with 1s for negative numbers
-		if (upper_bytes < sizeof(int64_t)) {
-			// Create a mask with 1s in the upper bits that need to be filled
-			int64_t mask = ((int64_t)1 << ((sizeof(int64_t) - upper_bytes) * 8)) - 1;
-			mask = mask << (upper_bytes * 8);
-			upper_val |= mask;
-		}
-	}
-
-	// Read lower part if there are remaining bytes
-	if (blob.GetSize() > sizeof(int64_t)) {
-		for (idx_t i = upper_bytes; i < blob.GetSize(); i++) {
-			lower_val = (lower_val << 8) | src[i];
-		}
+	// then split into upper/lower, by shifting each byte from MSB to LSB
+	for (idx_t i = 0; i < blob.GetSize(); i++) {
+		// shift the entire 128 bit value left by 8 bits
+		upper_val = (upper_val << 8) | static_cast<int64_t>(static_cast<uint64_t>(lower_val) >> 56);
+		lower_val = (lower_val << 8) | src[i];
 	}
 
 	ret = hugeint_t(upper_val, lower_val);
