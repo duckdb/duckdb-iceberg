@@ -296,7 +296,7 @@ optional_ptr<CatalogEntry> IcebergTableSet::GetEntry(ClientContext &context, con
 		if (it != iceberg_transaction.updated_tables.end()) {
 			auto &table_info = it->second;
 			auto snapshot_lookup = GetSnapshotLookup(table_info, context, lookup);
-			return table_info.GetSchemaVersion(snapshot_lookup);
+			return table_info.GetSchemaVersion(snapshot_lookup, context);
 		}
 	}
 	auto previous_request_info = iceberg_transaction.GetTableRequestResult(table_key);
@@ -312,7 +312,7 @@ optional_ptr<CatalogEntry> IcebergTableSet::GetEntry(ClientContext &context, con
 		}
 		auto &table_info = entry->second;
 		auto snapshot_lookup = GetSnapshotLookup(table_info, context, lookup);
-		return table_info.GetSchemaVersion(snapshot_lookup);
+		return table_info.GetSchemaVersion(snapshot_lookup, context);
 	}
 
 	if (entries.find(table_name) != entries.end()) {
@@ -339,7 +339,7 @@ optional_ptr<CatalogEntry> IcebergTableSet::GetEntry(ClientContext &context, con
 		snapshot_lookup = IcebergSnapshotLookup::FromAtClause(at);
 	};
 
-	auto ret = table_info.GetSchemaVersion(snapshot_lookup, is_time_travel);
+	auto ret = table_info.GetSchemaVersion(snapshot_lookup, context, is_time_travel);
 
 	// get the latest information and save it to the transaction cache
 	auto &ic_ret = ret->Cast<IcebergTableEntry>();
@@ -355,8 +355,13 @@ optional_ptr<CatalogEntry> IcebergTableSet::GetEntry(ClientContext &context, con
 	}
 
 	// Log warning on schema_id mismatch
-	const auto &table_metadata_last_updated_at = ic_ret.table_info.table_metadata.last_updated_ms;
-	if (iceberg_transaction.StartedBefore(table_metadata_last_updated_at) &&
+	auto &meta_transaction = MetaTransaction::Get(context);
+	auto transaction_start = meta_transaction.GetCurrentTransactionStartTimestamp();
+	auto transaction_start_millis = Timestamp::GetEpochMs(transaction_start);
+
+	auto &table_metadata_last_updated_at = ic_ret.table_info.table_metadata.last_updated_ms;
+
+	if (transaction_start_millis < table_metadata_last_updated_at.value &&
 	    latest_snapshot->GetSchemaId() != ic_ret.table_info.table_metadata.GetCurrentSchemaId()) {
 		DUCKDB_LOG_WARNING(
 		    context, "Detected schema change during transaction (schema_id mismatch); ACID guarantees may not hold.");

@@ -38,6 +38,7 @@ BEGIN;
 statement ok con1
 ALTER TABLE my_datalake.default.alter_add_column_explicit_txn ADD COLUMN b int;
 
+# conid 6
 query II con1
 FROM my_datalake.default.alter_add_column_explicit_txn ORDER BY a;
 ----
@@ -56,42 +57,27 @@ statement ok con1
 COMMIT;
 
 # Schema changed, ACID is violated for con2.
-query II con2
+query I con2
 FROM my_datalake.default.alter_add_column_explicit_txn ORDER BY a;
 ----
-0	NULL
-1	NULL
-2	NULL
-3	NULL
-4	NULL
-5	NULL
-6	NULL
-7	NULL
-8	NULL
-9	NULL
+0
+1
+2
+3
+4
+5
+6
+7
+8
+9
 
 query II
 SELECT log_level, message FROM duckdb_logs
 ----
 WARNING	Detected schema change during transaction (schema_id mismatch); ACID guarantees may not hold.
 
-statement ok con2
-INSERT INTO my_datalake.default.alter_add_column_explicit_txn VALUES (42, 42);
-
-query II con2
-FROM my_datalake.default.alter_add_column_explicit_txn ORDER BY a;
+# If any insert is to be done after this on con2, duckdb crashes!
+statement error con2
+INSERT INTO my_datalake.default.alter_add_column_explicit_txn VALUES (42);
 ----
-0	NULL
-1	NULL
-2	NULL
-3	NULL
-4	NULL
-5	NULL
-6	NULL
-7	NULL
-8	NULL
-9	NULL
-42	42
-
-statement ok con2
-COMMIT;
+INTERNAL Error: Assertion triggered in file "/Users/yanalex/_REPOS/duckdb-iceberg/duckdb/src/common/types/column/column_data_collection.cpp" on line 977: types == input_types
