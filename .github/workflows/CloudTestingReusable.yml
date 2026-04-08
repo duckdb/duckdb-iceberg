@@ -144,7 +144,7 @@ jobs:
           SNOWFLAKE_CATALOG_URI_GCS: ${{secrets.SNOWFLAKE_CATALOG_URI_GCS}}
           NO_REGION_SET: 1
         run: |
-          ./build/release/test/unittest test/sql/cloud/snowflake/no_vended_credentials_region.test
+          ./build/release/test/unittest --order lex test/sql/cloud/snowflake/no_vended_credentials_region.test
 
       - name: File issue if error
         if: ${{ contains(github.ref_name, 'main') && failure() }}
