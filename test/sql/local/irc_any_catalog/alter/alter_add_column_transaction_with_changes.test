@@ -46,13 +46,9 @@ UPDATE my_datalake.default.alter_add_column_same_txn_table SET a=42 WHERE a=3;
 statement ok
 ALTER TABLE my_datalake.default.alter_add_column_same_txn_table ADD COLUMN b int;
 
-# Within-transaction scan returns transaction-local rows (42) first because their
-# manifest batches are pre-queued in memory, while committed rows arrive via async Avro reads, which takes longer.
 query II
-FROM my_datalake.default.alter_add_column_same_txn_table;
+FROM my_datalake.default.alter_add_column_same_txn_table ORDER BY ALL;
 ----
-42	NULL
-42	NULL
 0	NULL
 2	NULL
 4	NULL
@@ -61,12 +57,14 @@ FROM my_datalake.default.alter_add_column_same_txn_table;
 7	NULL
 8	NULL
 9	NULL
+42	NULL
+42	NULL
 
 statement ok
 commit;
 
 query II
-FROM my_datalake.default.alter_add_column_same_txn_table;
+FROM my_datalake.default.alter_add_column_same_txn_table ORDER BY ALL;
 ----
 0	NULL
 2	NULL
