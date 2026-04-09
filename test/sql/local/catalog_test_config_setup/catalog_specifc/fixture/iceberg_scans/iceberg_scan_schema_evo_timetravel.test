@@ -1,4 +1,4 @@
-# name: test/sql/local/iceberg_scans/iceberg_scan_schema_evo_timetravel.test
+# name: test/sql/local/catalog_test_config_setup/catalog_specifc/fixture/iceberg_scans/iceberg_scan_schema_evo_timetravel.test
 # group: [iceberg_scans]
 
 require avro
@@ -9,26 +9,9 @@ require iceberg
 
 require httpfs
 
+require-env TEST_CONFIG_CATALOG_SETUP
+
 require-env FIXTURE_SERVER_AVAILABLE
-
-statement ok
-CREATE SECRET (
-    TYPE S3,
-    KEY_ID 'admin',
-    SECRET 'password',
-    ENDPOINT '127.0.0.1:9000',
-    URL_STYLE 'path',
-    USE_SSL 0
-);
-
-
-statement ok
-ATTACH 'demo' AS my_datalake (
-	TYPE ICEBERG,
-	CLIENT_ID 'admin',
-	CLIENT_SECRET 'password',
-	ENDPOINT 'http://127.0.0.1:8181'
-);
 
 query I
 select count(snapshot_id::BIGINT) from iceberg_snapshots(
