@@ -12,25 +12,25 @@
     {
       "reason": "Not yet supported with Lakekeeper",
       "paths": [
-        "test/sql/local/irc_any_catalog/insert/test_write_upper_and_lower_bounds.test",
-        "test/sql/local/irc_any_catalog/insert/test_write_upper_and_lower_bounds_all_null.test",
-        "test/sql/local/irc_any_catalog/insert/test_write_upper_and_lower_bounds_single_values.test",
-        "test/sql/local/irc_any_catalog/insert/test_read_upper_and_lower_bounds.test",
-        "test/sql/local/irc_any_catalog/insert/test_write_decimal_bounds.test",
-        "test/sql/local/irc_any_catalog/transactions/test_transactional_updates_error_omits_stacktrace.test",
-        "test/sql/local/irc_any_catalog/iceberg_catalog_eager_refresh.test",
-        "test/sql/local/irc_any_catalog/irc_catalog_read_deletes.test",
-        "test/sql/local/irc_any_catalog/table_properties/test_many_table_properties.test",
-        "test/sql/local/irc_any_catalog/delete/delete_table.test",
-        "test/sql/local/irc_any_catalog/reads/test_read_partitioned_table_type_promotion.test",
-        "test/sql/local/irc_any_catalog/create/default/test_create_default_blob.test",
-        "test/sql/local/irc_any_catalog/test_basic_variant.test"
+        "test/sql/local/catalog_test_config_setup/catalog_agnostic/insert/test_write_upper_and_lower_bounds.test",
+        "test/sql/local/catalog_test_config_setup/catalog_agnostic/insert/test_write_upper_and_lower_bounds_all_null.test",
+        "test/sql/local/catalog_test_config_setup/catalog_agnostic/insert/test_write_upper_and_lower_bounds_single_values.test",
+        "test/sql/local/catalog_test_config_setup/catalog_agnostic/insert/test_read_upper_and_lower_bounds.test",
+        "test/sql/local/catalog_test_config_setup/catalog_agnostic/insert/test_write_decimal_bounds.test",
+        "test/sql/local/catalog_test_config_setup/catalog_agnostic/transactions/test_transactional_updates_error_omits_stacktrace.test",
+        "test/sql/local/catalog_test_config_setup/catalog_agnostic/iceberg_catalog_eager_refresh.test",
+        "test/sql/local/catalog_test_config_setup/catalog_agnostic/irc_catalog_read_deletes.test",
+        "test/sql/local/catalog_test_config_setup/catalog_agnostic/table_properties/test_many_table_properties.test",
+        "test/sql/local/catalog_test_config_setup/catalog_agnostic/delete/delete_table.test",
+        "test/sql/local/catalog_test_config_setup/catalog_agnostic/reads/test_read_partitioned_table_type_promotion.test",
+        "test/sql/local/catalog_test_config_setup/catalog_agnostic/create/default/test_create_default_blob.test",
+        "test/sql/local/catalog_test_config_setup/catalog_agnostic/test_basic_variant.test"
       ]
     },
     {
       "reason": "Lakekeeper data generation insert results in a single parquet file",
       "paths": [
-        "test/sql/local/irc_any_catalog/reads/should_do_filter_pruning_on_expressionless_string_filters.test"
+        "test/sql/local/catalog_test_config_setup/catalog_agnostic/reads/should_do_filter_pruning_on_expressionless_string_filters.test"
       ]
     }
   ]
