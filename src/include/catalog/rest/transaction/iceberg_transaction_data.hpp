@@ -10,6 +10,7 @@
 #include "catalog/rest/api/iceberg_table_update.hpp"
 #include "catalog/rest/api/iceberg_table_requirement.hpp"
 #include "catalog/rest/api/iceberg_add_snapshot.hpp"
+#include "catalog/rest/api/table_update.hpp"
 #include "catalog/rest/api/iceberg_create_table_request.hpp"
 #include "catalog/rest/transaction/iceberg_transaction_metadata.hpp"
 
@@ -48,6 +49,8 @@ private:
 	void CacheExistingManifestList(lock_guard<mutex> &guard, const IcebergTableMetadata &metadata);
 
 public:
+	int32_t initial_schema_id;
+
 	ClientContext &context;
 	const IcebergTableInformation &table_info;
 	//! schema updates etc.
@@ -60,14 +63,14 @@ public:
 
 	//! Every insert/update/delete creates an alter of the table data
 	vector<reference<IcebergAddSnapshot>> alters;
+	vector<reference<AddSchemaUpdate>> schema_updates;
 	//! The 'referenced_data_file' -> 'data_file.file_path' of the currently active transaction-local deletes
 	case_insensitive_map_t<string> transactional_delete_files;
 	//! Track the current row id for this transaction
 	int64_t next_row_id = 0;
 
-	bool has_schema_update = false;
-	int32_t initial_schema_id;
-
+	//! If we perform an update that relies on the current schema id staying unchanged
+	bool assert_schema_id = false;
 	mutex lock;
 };
 

@@ -289,7 +289,7 @@ static rest_api_objects::TableUpdate CreateSetSnapshotRefUpdate(int64_t snapshot
 
 static bool NeedsAssertSchemaId(const IcebergTransactionData &transaction_data,
                                 const IcebergTableInformation &table_info) {
-	if (!transaction_data.has_schema_update) {
+	if (!transaction_data.assert_schema_id) {
 		return false;
 	}
 	auto &initial_schema_id = transaction_data.initial_schema_id;
@@ -355,7 +355,7 @@ TableTransactionInfo IcebergTransaction::GetTransactionRequest(ClientContext &co
 			commit_state.table_change.requirements.push_back(CreateAssertNoSnapshotRequirement());
 		}
 
-		if (transaction_data.has_schema_update) {
+		if (!transaction_data.schema_updates.empty()) {
 			SetCurrentSchema update(table_info);
 			update.CreateUpdate(db, context, commit_state);
 		}

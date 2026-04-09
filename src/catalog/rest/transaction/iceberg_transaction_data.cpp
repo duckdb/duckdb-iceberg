@@ -21,6 +21,7 @@ IcebergTransactionData::IcebergTransactionData(ClientContext &context, const Ice
 	if (table_info.table_metadata.has_next_row_id) {
 		next_row_id = table_info.table_metadata.next_row_id;
 	}
+	initial_schema_id = table_info.table_metadata.GetCurrentSchemaId();
 }
 
 void IcebergTransactionData::CacheExistingManifestList(lock_guard<mutex> &guard, const IcebergTableMetadata &metadata) {
@@ -148,11 +149,9 @@ void IcebergTransactionData::AddUpdateSnapshot(vector<IcebergManifestEntry> &&de
 
 void IcebergTransactionData::TableAddSchema(int32_t schema_id) {
 	auto add_schema_update = make_uniq<AddSchemaUpdate>(table_info, schema_id);
+	schema_updates.push_back(*add_schema_update);
 	updates.push_back(std::move(add_schema_update));
-	if (!has_schema_update) {
-		has_schema_update = true;
-		initial_schema_id = table_info.table_metadata.GetCurrentSchemaId();
-	}
+	assert_schema_id = true;
 }
 
 void IcebergTransactionData::TableAssignUUID() {
@@ -164,7 +163,7 @@ void IcebergTransactionData::TableAddAssertCreate() {
 }
 
 void IcebergTransactionData::TableAddAssertCurrentSchemaId() {
-	requirements.push_back(make_uniq<AssertCurrentSchemaIdRequirement>(table_info));
+	assert_schema_id = true;
 }
 
 void IcebergTransactionData::TableAddAssertLastAssignedFieldId() {
