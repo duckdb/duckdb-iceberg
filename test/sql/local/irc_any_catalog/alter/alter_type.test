@@ -1,0 +1,214 @@
+# name: test/sql/local/irc_any_catalog/alter/alter_type.test
+# group: [alter]
+
+require-env ICEBERG_SERVER_AVAILABLE
+
+require-env SECRETS_CREATED_AND_CATALOG_ATTACHED
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+require ducklake
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+set enable_logging=true
+
+statement ok
+set logging_level='debug'
+
+statement ok
+drop table if exists my_datalake.default.schema_evolution_table;
+
+statement ok
+create table my_datalake.default.schema_evolution_table(
+	evolve_to_long INTEGER,
+	evolve_to_timestamp DATE,
+	evolve_to_timestamp_ns DATE,
+	evolve_to_double FLOAT,
+	evolve_precision DECIMAL(7, 2)
+);
+
+statement ok
+begin transaction
+
+statement ok
+insert into my_datalake.default.schema_evolution_table VALUES
+	(
+		23123425, -- evolve_to_long
+		'1983/05/21'::DATE, -- evolve_to_timestamp
+		'1934/11/05'::DATE, -- evolve_to_timestamp_ns
+		9007199254740993::FLOAT, -- evolve_to_double
+		'23456.34'::DECIMAL(7,2), -- evolve_precision
+	);
+
+query IIIII
+select * from my_datalake.default.schema_evolution_table;
+----
+23123425	1983-05-21	1934-11-05	9007199000000000.0	23456.34
+
+# Can't downgrade from INTEGER to SMALLINT
+statement error
+ALTER TABLE my_datalake.default.schema_evolution_table ALTER evolve_to_long TYPE SMALLINT;
+----
+Catalog Error: Column 'evolve_to_long' of type 'INTEGER' can't be altered to type 'SMALLINT'
+
+# ---- INTEGER -> BIGINT ----
+
+statement ok
+ALTER TABLE my_datalake.default.schema_evolution_table ALTER evolve_to_long TYPE BIGINT;
+
+query I
+select evolve_to_long from my_datalake.default.schema_evolution_table;
+----
+23123425
+
+statement ok
+insert into my_datalake.default.schema_evolution_table(evolve_to_long) VALUES
+	(
+		9223372036854775807, -- evolve_to_long
+	);
+
+
+query I
+select evolve_to_long from my_datalake.default.schema_evolution_table;
+----
+23123425
+9223372036854775807
+
+# ---- DATE -> TIMESTAMP ----
+
+statement ok
+ALTER TABLE my_datalake.default.schema_evolution_table ALTER evolve_to_timestamp TYPE TIMESTAMP;
+
+query I
+select evolve_to_timestamp from my_datalake.default.schema_evolution_table where evolve_to_timestamp IS NOT NULL;
+----
+1983-05-21 00:00:00
+
+statement ok
+insert into my_datalake.default.schema_evolution_table(evolve_to_timestamp) VALUES
+	(
+		'2013/11/23 19:53:12'::TIMESTAMP, -- evolve_to_timestamp
+	);
+
+query I
+select evolve_to_timestamp from my_datalake.default.schema_evolution_table where evolve_to_timestamp IS NOT NULL order by all;
+----
+1983-05-21 00:00:00
+2013-11-23 19:53:12
+
+# ---- DATE -> TIMESTAMP_NS (V2) ----
+
+# With a V2 table this fails
+statement error
+ALTER TABLE my_datalake.default.schema_evolution_table ALTER evolve_to_timestamp_ns TYPE TIMESTAMP_NS;
+----
+Catalog Error: Column 'evolve_to_timestamp_ns' of type 'DATE' can't be altered to type 'TIMESTAMP_NS' (DATE to TIMESTAMP_NS is a Iceberg V3 feature)
+
+# ---- FLOAT -> DOUBLE ----
+
+statement ok
+ALTER TABLE my_datalake.default.schema_evolution_table ALTER evolve_to_double TYPE DOUBLE;
+
+query I
+select evolve_to_double from my_datalake.default.schema_evolution_table where evolve_to_double IS NOT NULL;
+----
+9007199000000000.0
+
+statement ok
+insert into my_datalake.default.schema_evolution_table(evolve_to_double) VALUES
+	(
+		9007199254740993::DOUBLE, -- evolve_to_double
+	);
+
+query I
+select evolve_to_double from my_datalake.default.schema_evolution_table where evolve_to_double IS NOT NULL order by all;
+----
+9007199000000000.0
+9007199254740993.0
+
+# ---- DECIMAL -> DECIMAL ----
+
+statement error
+ALTER TABLE my_datalake.default.schema_evolution_table ALTER evolve_precision TYPE DECIMAL(5, 2);
+----
+Catalog Error: Column 'evolve_precision' of type 'DECIMAL(7,2)' can't be altered to type 'DECIMAL(5,2)'(DECIMAL evolution can only increase the width, not lower it, for reference: DECIMAL(width, scale))
+
+statement error
+ALTER TABLE my_datalake.default.schema_evolution_table ALTER evolve_precision TYPE DECIMAL(8, 4);
+----
+Catalog Error: Column 'evolve_precision' of type 'DECIMAL(7,2)' can't be altered to type 'DECIMAL(8,4)'(DECIMAL evolution has to preserve the original scale, for reference: DECIMAL(width, scale))
+
+statement ok
+ALTER TABLE my_datalake.default.schema_evolution_table ALTER evolve_precision TYPE DECIMAL(16, 2);
+
+query I
+select evolve_precision from my_datalake.default.schema_evolution_table where evolve_precision IS NOT NULL;
+----
+23456.34
+
+statement ok
+insert into my_datalake.default.schema_evolution_table(evolve_precision) VALUES
+	(
+		12345123451234.99, -- evolve_precision
+	);
+
+query I
+select evolve_precision from my_datalake.default.schema_evolution_table where evolve_precision IS NOT NULL order by all;
+----
+23456.34
+12345123451234.99
+
+statement ok
+commit
+
+# -------------- V3 Tests --------------
+
+statement ok
+drop table if exists my_datalake.default.schema_evolution_table;
+
+statement ok
+create table my_datalake.default.schema_evolution_table(
+	evolve_to_timestamp_ns DATE
+) WITH ('format-version'='3');
+
+statement ok
+insert into my_datalake.default.schema_evolution_table VALUES
+	(
+		'1934/11/05'::DATE -- evolve_to_timestamp_ns
+	);
+
+# ---- DATE -> TIMESTAMP_NS (V3) ----
+
+statement ok
+ALTER TABLE my_datalake.default.schema_evolution_table ALTER evolve_to_timestamp_ns TYPE TIMESTAMP_NS;
+
+query I
+select evolve_to_timestamp_ns from my_datalake.default.schema_evolution_table where evolve_to_timestamp_ns IS NOT NULL;
+----
+1934-11-05 00:00:00
+
+statement ok
+insert into my_datalake.default.schema_evolution_table(evolve_to_timestamp_ns) VALUES
+	(
+		'2013/11/23 19:53:12'::TIMESTAMP, -- evolve_to_timestamp_ns
+	);
+
+query I
+select evolve_to_timestamp_ns from my_datalake.default.schema_evolution_table where evolve_to_timestamp_ns IS NOT NULL order by all;
+----
+1934-11-05 00:00:00
+2013-11-23 19:53:12
+
+query I
+select typeof(evolve_to_timestamp_ns) from my_datalake.default.schema_evolution_table limit 1
+----
+TIMESTAMP_NS

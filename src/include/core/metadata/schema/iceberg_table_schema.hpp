@@ -20,6 +20,8 @@ public:
 	                                                         const ColumnIndex &column_index, idx_t depth);
 	optional_ptr<const IcebergColumnDefinition> GetFromPath(const vector<string> &path,
 	                                                        optional_ptr<optional_idx> names_offset) const;
+	optional_ptr<IcebergColumnDefinition> GetMutableFromPath(const vector<string> &path,
+	                                                         optional_ptr<optional_idx> names_offset);
 
 	static void SchemaToJson(yyjson_mut_doc *doc, yyjson_mut_val *root_object, const rest_api_objects::Schema &schema);
 	shared_ptr<IcebergTableSchema> Copy() const;

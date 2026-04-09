@@ -106,6 +106,16 @@ IcebergTableSchema::GetFromPath(const vector<string> &path, optional_ptr<optiona
 	return res.get();
 }
 
+optional_ptr<IcebergColumnDefinition> IcebergTableSchema::GetMutableFromPath(const vector<string> &path,
+                                                                             optional_ptr<optional_idx> names_offset) {
+	auto res = GetFromPath(path, names_offset);
+	if (!res) {
+		return nullptr;
+	}
+	auto &col = *res;
+	return const_cast<IcebergColumnDefinition &>(col);
+}
+
 static void AddUnnamedField(yyjson_mut_doc *doc, yyjson_mut_val *field_obj, const rest_api_objects::Type &column);
 
 static yyjson_mut_val *PrimitiveTypeValueToJSON(yyjson_mut_doc *doc,
