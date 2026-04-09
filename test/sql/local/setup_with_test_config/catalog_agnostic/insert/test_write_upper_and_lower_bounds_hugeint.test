@@ -1,0 +1,458 @@
+# name: test/sql/local/setup_with_test_config/catalog_agnostic/insert/test_write_upper_and_lower_bounds_hugeint.test
+# description: test upper and lower bounds for hugeint columns
+# group: [insert]
+
+require-env TEST_CONFIG_CATALOG_SETUP
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+require core_functions
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+set enable_logging=true
+
+statement ok
+set logging_level='debug'
+
+statement ok
+drop table if exists my_datalake.default.hugeint_bounds_test;
+
+statement ok
+create table my_datalake.default.hugeint_bounds_test (
+hugeint_type HUGEINT
+);
+
+statement ok
+insert into my_datalake.default.hugeint_bounds_test values
+    (-17014118346046923173168730371588410572),
+    (0),
+    (42),
+    (17014118346046923173168730371588410572),
+    (NULL);
+
+# check the data round trips correctly
+query I
+select hugeint_type from my_datalake.default.hugeint_bounds_test where hugeint_type is not null order by hugeint_type;
+----
+-17014118346046923173168730371588410572
+0
+42
+17014118346046923173168730371588410572
+
+statement ok
+set variable manifest_path = (select manifest_path from iceberg_metadata(my_datalake.default.hugeint_bounds_test) order by manifest_sequence_number desc limit 1);
+
+query I
+select octet_length(unnest(map_values(lower_bounds))) > 0 from (select unnest(data_file) from read_avro(getvariable('manifest_path')));
+----
+true
+
+query I
+select octet_length(unnest(map_values(upper_bounds))) > 0 from (select unnest(data_file) from read_avro(getvariable('manifest_path')));
+----
+true
+
+query I
+select unnest(map_values(null_value_counts)) from (select unnest(data_file) from read_avro(getvariable('manifest_path')));
+----
+1
+
+
+# filter pushdown works correctly with bounds
+query I
+select count(*) from my_datalake.default.hugeint_bounds_test where hugeint_type = 0;
+----
+1
+
+query I
+select count(*) from my_datalake.default.hugeint_bounds_test where hugeint_type = 42;
+----
+1
+
+query I
+select count(*) from my_datalake.default.hugeint_bounds_test where hugeint_type = 17014118346046923173168730371588410572;
+----
+1
+
+query I
+select count(*) from my_datalake.default.hugeint_bounds_test where hugeint_type = -17014118346046923173168730371588410572;
+----
+1
+
+query I
+select count(*) from my_datalake.default.hugeint_bounds_test where hugeint_type > 17014118346046923173168730371588410572;
+----
+0
+
+query I
+select count(*) from my_datalake.default.hugeint_bounds_test where hugeint_type < -17014118346046923173168730371588410572;
+----
+0
+
+
+statement ok
+drop table if exists my_datalake.default.hugeint_bounds_test;
+
+
+statement ok
+drop table if exists my_datalake.default.hugeint_bounds_single_value;
+
+statement ok
+create table my_datalake.default.hugeint_bounds_single_value (
+hugeint_type HUGEINT
+);
+
+statement ok
+insert into my_datalake.default.hugeint_bounds_single_value
+select 12345678901234567890::HUGEINT from range(100);
+
+query I
+select count(*) from my_datalake.default.hugeint_bounds_single_value;
+----
+100
+
+query I
+select count(distinct hugeint_type) from my_datalake.default.hugeint_bounds_single_value;
+----
+1
+
+query I
+select hugeint_type from my_datalake.default.hugeint_bounds_single_value limit 1;
+----
+12345678901234567890
+
+statement ok
+set variable manifest_path_single = (select manifest_path from iceberg_metadata(my_datalake.default.hugeint_bounds_single_value) order by manifest_sequence_number desc limit 1);
+
+query I
+select unnest(map_values(null_value_counts)) from (select unnest(data_file) from read_avro(getvariable('manifest_path_single')));
+----
+0
+
+query I
+select count(*) from my_datalake.default.hugeint_bounds_single_value where hugeint_type = 12345678901234567890;
+----
+100
+
+query I
+select count(*) from my_datalake.default.hugeint_bounds_single_value where hugeint_type = 99999999999999999999;
+----
+0
+
+statement ok
+drop table if exists my_datalake.default.hugeint_bounds_single_value;
+
+statement ok
+drop table if exists my_datalake.default.hugeint_edge_small_values;
+
+statement ok
+create table my_datalake.default.hugeint_edge_small_values (
+val HUGEINT
+);
+
+# test small values that serialize to fewer than 16 bytes
+# these exercise the sign extension path in deserialization
+# values that fit in 1-2 bytes and exercise sign-extension edge cases:
+#  0        -> 0x00 (1 byte)
+#  1        -> 0x01 (1 byte)
+#  -1       -> 0xFF (1 byte)
+#  127      -> 0x7F (1 byte, max positive single byte)
+#  128      -> 0x00 0x80 (2 bytes, needs positive padding since MSB=1)
+#  -128     -> 0x80 (1 byte, min negative single byte)
+#  -129     -> 0xFF 0x7F (2 bytes, needs negative padding since MSB=0)
+#  255      -> 0x00 0xFF (2 bytes)
+#  -256     -> 0xFF 0x00 (2 bytes)
+statement ok
+insert into my_datalake.default.hugeint_edge_small_values values
+    (0), (1), (-1), (127), (128), (-128), (-129), (255), (-256);
+
+query I
+select val from my_datalake.default.hugeint_edge_small_values order by val;
+----
+-256
+-129
+-128
+-1
+0
+1
+127
+128
+255
+
+# check also that bounds are written
+statement ok
+set variable manifest_path_small = (select manifest_path from iceberg_metadata(my_datalake.default.hugeint_edge_small_values) order by manifest_sequence_number desc limit 1);
+
+query I
+select octet_length(unnest(map_values(lower_bounds))) > 0 from (select unnest(data_file) from read_avro(getvariable('manifest_path_small')));
+----
+true
+
+query I
+select octet_length(unnest(map_values(upper_bounds))) > 0 from (select unnest(data_file) from read_avro(getvariable('manifest_path_small')));
+----
+true
+
+# filter pushdown on small values
+query I
+select count(*) from my_datalake.default.hugeint_edge_small_values where val = 0;
+----
+1
+
+query I
+select count(*) from my_datalake.default.hugeint_edge_small_values where val = -1;
+----
+1
+
+query I
+select count(*) from my_datalake.default.hugeint_edge_small_values where val = 128;
+----
+1
+
+query I
+select count(*) from my_datalake.default.hugeint_edge_small_values where val = -128;
+----
+1
+
+query I
+select count(*) from my_datalake.default.hugeint_edge_small_values where val = -129;
+----
+1
+
+
+
+statement ok
+drop table if exists my_datalake.default.hugeint_edge_8byte_boundary;
+
+statement ok
+create table my_datalake.default.hugeint_edge_8byte_boundary (
+val HUGEINT
+);
+
+# test values at the 8-byte boundary (crossing upper/lower)
+# BIGINT max:      9223372036854775807  (fits in 8 bytes: 0x7FFFFFFFFFFFFFFF)
+# BIGINT max + 1:  9223372036854775808  (needs 9 bytes: 0x00 0x80 0x00 ... spills into upper)
+# BIGINT min:     -9223372036854775808  (fits in 8 bytes: 0x8000000000000000)
+# BIGINT min - 1: -9223372036854775809  (needs 9 bytes: 0xFF 0x7F 0xFF ... spills into upper)
+statement ok
+insert into my_datalake.default.hugeint_edge_8byte_boundary values
+    (9223372036854775807),
+    (9223372036854775808),
+    (-9223372036854775808),
+    (-9223372036854775809);
+
+query I
+select val from my_datalake.default.hugeint_edge_8byte_boundary order by val;
+----
+-9223372036854775809
+-9223372036854775808
+9223372036854775807
+9223372036854775808
+
+# filter pushdown across the boundary
+query I
+select count(*) from my_datalake.default.hugeint_edge_8byte_boundary where val = 9223372036854775807;
+----
+1
+
+query I
+select count(*) from my_datalake.default.hugeint_edge_8byte_boundary where val = 9223372036854775808;
+----
+1
+
+query I
+select count(*) from my_datalake.default.hugeint_edge_8byte_boundary where val = -9223372036854775808;
+----
+1
+
+query I
+select count(*) from my_datalake.default.hugeint_edge_8byte_boundary where val = -9223372036854775809;
+----
+1
+
+# test DECIMAL(38,0) upper and lower bounds
+#         Max: 99999999999999999999999999999999999999
+#         Min: -99999999999999999999999999999999999999
+statement ok
+drop table if exists my_datalake.default.hugeint_edge_decimal_limits;
+
+statement ok
+create table my_datalake.default.hugeint_edge_decimal_limits (
+val HUGEINT
+);
+
+statement ok
+insert into my_datalake.default.hugeint_edge_decimal_limits values
+    ('99999999999999999999999999999999999999'::HUGEINT),
+    ('-99999999999999999999999999999999999999'::HUGEINT),
+    (0);
+
+query I
+select val from my_datalake.default.hugeint_edge_decimal_limits order by val;
+----
+-99999999999999999999999999999999999999
+0
+99999999999999999999999999999999999999
+
+query I
+select count(*) from my_datalake.default.hugeint_edge_decimal_limits where val = '99999999999999999999999999999999999999'::HUGEINT;
+----
+1
+
+query I
+select count(*) from my_datalake.default.hugeint_edge_decimal_limits where val = '-99999999999999999999999999999999999999'::HUGEINT;
+----
+1
+
+query I
+select count(*) from my_datalake.default.hugeint_edge_decimal_limits where val > '99999999999999999999999999999999999999'::HUGEINT;
+----
+0
+
+query I
+select count(*) from my_datalake.default.hugeint_edge_decimal_limits where val < '-99999999999999999999999999999999999999'::HUGEINT;
+----
+0
+
+
+statement ok
+drop table if exists my_datalake.default.hugeint_edge_regression;
+
+statement ok
+create table my_datalake.default.hugeint_edge_regression (
+val HUGEINT
+);
+
+# Specific values that exercise tricky byte patterns:
+#  32768    -> 0x00 0x80 0x00 (3 bytes, positive with MSB padding)
+#  -32768   -> 0x80 0x00 (2 bytes)
+#  -32769   -> 0xFF 0x7F 0xFF (3 bytes, negative with MSB padding)
+#  65535    -> 0x00 0xFF 0xFF (3 bytes)
+#  -65536   -> 0xFF 0x00 0x00 (3 bytes)
+#  16777216 -> 0x01 0x00 0x00 0x00 (4 bytes)
+#  Values that are just below bigint range but multi-byte:
+#  1000000000000000000  -> fits in 8 bytes
+#  -1000000000000000000 -> fits in 8 bytes
+statement ok
+insert into my_datalake.default.hugeint_edge_regression values
+    (32768),
+    (-32768),
+    (-32769),
+    (65535),
+    (-65536),
+    (16777216),
+    (1000000000000000000),
+    (-1000000000000000000);
+
+query I
+select val from my_datalake.default.hugeint_edge_regression order by val;
+----
+-1000000000000000000
+-65536
+-32769
+-32768
+32768
+65535
+16777216
+1000000000000000000
+
+query I
+select count(*) from my_datalake.default.hugeint_edge_regression where val = 32768;
+----
+1
+
+query I
+select count(*) from my_datalake.default.hugeint_edge_regression where val = -32769;
+----
+1
+
+query I
+select count(*) from my_datalake.default.hugeint_edge_regression where val = 65535;
+----
+1
+
+query I
+select count(*) from my_datalake.default.hugeint_edge_regression where val = -65536;
+----
+1
+
+statement ok
+drop table if exists my_datalake.default.hugeint_edge_mixed;
+
+statement ok
+create table my_datalake.default.hugeint_edge_mixed (
+id INTEGER,
+val HUGEINT
+);
+
+# all edge cases in a single table tto verify bound capture
+statement ok
+insert into my_datalake.default.hugeint_edge_mixed values
+    (1,  0),
+    (2,  1),
+    (3,  -1),
+    (4,  127),
+    (5,  128),
+    (6,  -128),
+    (7,  -129),
+    (8,  32768),
+    (9,  -32768),
+    (10, 9223372036854775807),
+    (11, 9223372036854775808),
+    (12, -9223372036854775808),
+    (13, -9223372036854775809),
+    (14, '99999999999999999999999999999999999999'::HUGEINT),
+    (15, '-99999999999999999999999999999999999999'::HUGEINT),
+    (16, NULL);
+
+
+query II
+select id, val from my_datalake.default.hugeint_edge_mixed order by id;
+----
+1	0
+2	1
+3	-1
+4	127
+5	128
+6	-128
+7	-129
+8	32768
+9	-32768
+10	9223372036854775807
+11	9223372036854775808
+12	-9223372036854775808
+13	-9223372036854775809
+14	99999999999999999999999999999999999999
+15	-99999999999999999999999999999999999999
+16	NULL
+
+
+statement ok
+set variable manifest_path_mixed = (select manifest_path from iceberg_metadata(my_datalake.default.hugeint_edge_mixed) order by manifest_sequence_number desc limit 1);
+
+
+query II
+select unnest(map_keys(null_value_counts)) as field_id, unnest(map_values(null_value_counts)) as null_count from (select unnest(data_file) from read_avro(getvariable('manifest_path_mixed'))) order by field_id;
+----
+1	0
+2	1
+
+
+query I
+select count(*) from (select unnest(map_values(lower_bounds)) as lb from (select unnest(data_file) from read_avro(getvariable('manifest_path_mixed')))) where octet_length(lb) > 0;
+----
+2
+
+query I
+select count(*) from (select unnest(map_values(upper_bounds)) as ub from (select unnest(data_file) from read_avro(getvariable('manifest_path_mixed')))) where octet_length(ub) > 0;
+----
+2

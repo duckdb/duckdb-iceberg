@@ -1,0 +1,87 @@
+# name: test/sql/local/setup_manually/attach_options/sigv4_signing_overrides.test
+# description: test sigv4 sigv4_service and sigv4_region attach options for non-AWS endpoints
+# group: [attach_options]
+
+require-env ICEBERG_SERVER_AVAILABLE
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+require aws
+
+set ignore_error_messages
+
+statement ok
+CREATE SECRET (
+    TYPE S3,
+    KEY_ID 'admin',
+    SECRET 'password',
+    ENDPOINT '127.0.0.1:9000',
+    URL_STYLE 'path',
+    USE_SSL 0
+);
+
+statement ok
+call enable_logging('http');
+
+# sigv4_service and sigv4_region override SigV4 service/region parsing from host
+statement error
+ATTACH '' AS my_datalake_both (
+    TYPE ICEBERG,
+    ENDPOINT 'http://127.0.0.1:8181',
+    AUTHORIZATION_TYPE 'sigv4',
+    SIGV4_SERVICE 'MyCustomService',
+    SIGV4_REGION 'us-west-2'
+);
+----
+<!REGEX>:.*([Uu]nrecognized|Could not parse AWS).*
+
+# verify the SigV4 Authorization header contains the custom service and region
+query I
+SELECT count(*) > 0
+FROM duckdb_logs_parsed('HTTP')
+WHERE request.url LIKE '%127.0.0.1:8181%'
+  AND request.headers['Authorization'] LIKE '%us-west-2/MyCustomService/aws4_request%';
+----
+1
+
+statement ok
+CALL truncate_duckdb_logs();
+
+# sigv4_service with a different service name
+statement error
+ATTACH '' AS my_datalake_name_only (
+    TYPE ICEBERG,
+    ENDPOINT 'http://127.0.0.1:8181',
+    AUTHORIZATION_TYPE 'sigv4',
+    SIGV4_SERVICE 'CustomService',
+    SIGV4_REGION 'us-east-1'
+);
+----
+<!REGEX>:.*([Uu]nrecognized|Could not parse AWS).*
+
+query I
+SELECT count(*) > 0
+FROM duckdb_logs_parsed('HTTP')
+WHERE request.url LIKE '%127.0.0.1:8181%'
+  AND request.headers['Authorization'] LIKE '%us-east-1/CustomService/aws4_request%';
+----
+1
+
+statement ok
+CALL truncate_duckdb_logs();
+
+# without sigv4_service/sigv4_region, non-AWS host triggers the original error
+statement error
+ATTACH '' AS my_datalake_no_override (
+    TYPE ICEBERG,
+    ENDPOINT 'http://127.0.0.1:8181',
+    AUTHORIZATION_TYPE 'sigv4'
+);
+----
+Could not parse AWS service from host

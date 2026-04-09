@@ -1,0 +1,31 @@
+# name: test/sql/local/setup_with_test_config/catalog_agnostic/other_engines/test_create_table_then_read_with_other_engine.test
+# description: test create table
+# group: [other_engines]
+
+require-env TEST_CONFIG_CATALOG_SETUP
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+statement ok
+CALL enable_logging('HTTP');
+
+statement ok
+set logging_level='debug'
+
+statement ok
+create schema if not exists my_datalake.default;
+
+statement ok
+use my_datalake.default;
+
+statement ok
+drop table if exists duckdb_written_table;
+
+statement ok
+create table duckdb_written_table as select range a from range(10);

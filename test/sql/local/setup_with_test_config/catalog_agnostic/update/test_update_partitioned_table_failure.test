@@ -1,0 +1,26 @@
+# name: test/sql/local/setup_with_test_config/catalog_agnostic/update/test_update_partitioned_table_failure.test
+# description: Test update on partitioned table
+# group: [update]
+
+require-env TEST_CONFIG_CATALOG_SETUP
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+CALL enable_logging('HTTP');
+
+statement ok
+set logging_level='debug'
+
+statement ok
+select 1 from my_datalake.default.lineitem_partitioned_l_shipmode limit 1;
+

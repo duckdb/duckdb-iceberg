@@ -1,0 +1,63 @@
+# name: test/sql/local/setup_with_test_config/catalog_agnostic/delete/partitions/delete_v2_partitions.test
+# description: Test delete from v2 partitioned iceberg tables
+# group: [partitions]
+
+require-env TEST_CONFIG_CATALOG_SETUP
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+CALL enable_logging('HTTP');
+
+statement ok
+set logging_level='debug'
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.test_delete_partitioned_v2;
+
+statement ok
+CREATE TABLE my_datalake.default.test_delete_partitioned_v2 (id INT, val VARCHAR) PARTITIONED BY (id) WITH ('format-version'=2);
+
+statement ok
+INSERT INTO my_datalake.default.test_delete_partitioned_v2 VALUES (1, 'a'), (1, 'b'), (2, 'c'), (2, 'd'), (3, 'e');
+
+query II
+SELECT * FROM my_datalake.default.test_delete_partitioned_v2 ORDER BY id, val;
+----
+1	a
+1	b
+2	c
+2	d
+3	e
+
+statement ok
+DELETE FROM my_datalake.default.test_delete_partitioned_v2 WHERE id = 1;
+
+query II
+SELECT * FROM my_datalake.default.test_delete_partitioned_v2 ORDER BY id, val;
+----
+2	c
+2	d
+3	e
+
+statement ok
+DELETE FROM my_datalake.default.test_delete_partitioned_v2 WHERE val = 'd';
+
+query II
+SELECT * FROM my_datalake.default.test_delete_partitioned_v2 ORDER BY id, val;
+----
+2	c
+3	e
+
+statement ok
+DROP TABLE my_datalake.default.test_delete_partitioned_v2;
+
