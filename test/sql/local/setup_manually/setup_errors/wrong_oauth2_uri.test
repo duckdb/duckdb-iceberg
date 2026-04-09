@@ -1,7 +1,7 @@
 # name: test/sql/local/setup_manually/setup_errors/wrong_oauth2_uri.test
 # group: [setup_errors]
 
-require-env ICEBERG_SERVER_AVAILABLE
+require-env FIXTURE_SERVER_AVAILABLE
 
 require avro
 

@@ -2,7 +2,7 @@
 # description: Ensure static tokens without expiry info continue to work
 # group: [oauth2]
 
-require-env ICEBERG_SERVER_AVAILABLE
+require-env FIXTURE_SERVER_AVAILABLE
 
 require avro
 

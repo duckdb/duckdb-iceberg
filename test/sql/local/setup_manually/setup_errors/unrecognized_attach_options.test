@@ -1,7 +1,7 @@
 # name: test/sql/local/setup_manually/setup_errors/unrecognized_attach_options.test
 # group: [setup_errors]
 
-require-env ICEBERG_SERVER_AVAILABLE
+require-env FIXTURE_SERVER_AVAILABLE
 
 require avro
 

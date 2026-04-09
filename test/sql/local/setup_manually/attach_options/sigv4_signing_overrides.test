@@ -2,7 +2,7 @@
 # description: test sigv4 sigv4_service and sigv4_region attach options for non-AWS endpoints
 # group: [attach_options]
 
-require-env ICEBERG_SERVER_AVAILABLE
+require-env FIXTURE_SERVER_AVAILABLE
 
 require avro
 

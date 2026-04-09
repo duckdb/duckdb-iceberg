@@ -2,7 +2,7 @@
 # description: Test that OAuth2 token expiry is tracked from the token response
 # group: [oauth2]
 
-require-env ICEBERG_SERVER_AVAILABLE
+require-env FIXTURE_SERVER_AVAILABLE
 
 require avro
 

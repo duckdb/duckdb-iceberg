@@ -9,7 +9,7 @@ require iceberg
 
 require httpfs
 
-require-env ICEBERG_SERVER_AVAILABLE
+require-env FIXTURE_SERVER_AVAILABLE
 
 statement ok
 CREATE SECRET (

@@ -9,7 +9,7 @@ require parquet
 
 require iceberg
 
-require-env ICEBERG_SERVER_AVAILABLE
+require-env FIXTURE_SERVER_AVAILABLE
 
 statement ok
 set enable_logging=true

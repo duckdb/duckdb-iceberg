@@ -75,14 +75,14 @@ jobs:
 
       - name: Run other tests
         env:
-          ICEBERG_SERVER_AVAILABLE: 1
+          FIXTURE_SERVER_AVAILABLE: 1
         run: |
           ./build/release/test/unittest --order lex "$PWD/test/*" --list-test-names-only || true
           ./build/release/test/unittest --order lex "$PWD/test/*"
 
       - name: Test reads with PyIceberg
         env:
-          ICEBERG_SERVER_AVAILABLE: 1
+          FIXTURE_SERVER_AVAILABLE: 1
         run: |
           python3 -m venv .venv-spark3
           source .venv-spark3/bin/activate

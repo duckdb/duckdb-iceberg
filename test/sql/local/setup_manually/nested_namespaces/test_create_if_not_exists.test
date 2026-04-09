@@ -1,7 +1,7 @@
 # name: test/sql/local/setup_manually/nested_namespaces/test_create_if_not_exists.test
 # group: [nested_namespaces]
 
-require-env ICEBERG_SERVER_AVAILABLE
+require-env FIXTURE_SERVER_AVAILABLE
 
 require avro
 

@@ -2,7 +2,7 @@
 # description: Verify static tokens work without triggering new OAuth2 token fetches
 # group: [oauth2]
 
-require-env ICEBERG_SERVER_AVAILABLE
+require-env FIXTURE_SERVER_AVAILABLE
 
 require avro
 

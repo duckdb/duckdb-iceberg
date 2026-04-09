@@ -10,7 +10,7 @@ require iceberg
 
 require httpfs
 
-require-env ICEBERG_SERVER_AVAILABLE
+require-env FIXTURE_SERVER_AVAILABLE
 
 # Do not ignore 'HTTP' error messages!
 set ignore_error_messages
