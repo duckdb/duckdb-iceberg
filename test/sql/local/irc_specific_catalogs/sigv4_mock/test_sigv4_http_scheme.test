@@ -1,0 +1,68 @@
+# name: test/sql/local/irc_specific_catalogs/sigv4_mock/test_sigv4_http_scheme.test
+# description: test that SigV4 requests preserve the http:// scheme from the endpoint URL
+# group: [sigv4_mock]
+
+# Requires: python3 scripts/sigv4_mock_server.py 19130
+require-env SIGV4_MOCK_SERVER_AVAILABLE
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+require aws
+
+set ignore_error_messages
+
+# Create an S3 secret with fake credentials for SigV4 signing
+statement ok
+CREATE SECRET sigv4_secret (
+    TYPE S3,
+    KEY_ID 'test_key_id',
+    SECRET 'test_secret_key',
+    REGION 'us-east-1'
+);
+
+statement ok
+call enable_logging(level='debug');
+
+# Attach with http:// endpoint + explicit sigv4_region/sigv4_service to bypass hostname parsing.
+# The attach triggers a GET /v1/config request through the SigV4 signing path.
+statement ok
+attach 'test_warehouse' as sigv4_http_catalog (
+    type ICEBERG,
+    ENDPOINT 'http://127.0.0.1:19130',
+    AUTHORIZATION_TYPE 'sigv4',
+    SIGV4_REGION 'us-east-1',
+    SIGV4_SERVICE 'execute-api'
+);
+
+# Verify: catalog config request used http:// (not https://)
+query I
+select bool_and(starts_with(request.url, 'http://127.0.0.1:19130')) from duckdb_logs_parsed('HTTP') where starts_with(request.url, 'http://127.0.0.1:19130');
+----
+true
+
+# Verify: no https:// requests were made to our mock server
+query I
+select count(*) from duckdb_logs_parsed('HTTP') where starts_with(request.url, 'https://127.0.0.1:19130');
+----
+0
+
+# Verify: requests have SigV4 Authorization header (AWS4-HMAC-SHA256)
+query I
+select bool_and(starts_with(request.headers['Authorization'], 'AWS4-HMAC-SHA256')) from duckdb_logs_parsed('HTTP') where starts_with(request.url, 'http://127.0.0.1:19130');
+----
+true
+
+statement ok
+detach sigv4_http_catalog;
+
+statement ok
+call disable_logging();
+
+statement ok
+drop secret sigv4_secret;

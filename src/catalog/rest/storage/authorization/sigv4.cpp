@@ -6,6 +6,7 @@
 #include "duckdb/common/types/value.hpp"
 
 #include "catalog/rest/api/api_utils.hpp"
+#include "catalog/rest/api/url_utils.hpp"
 #include "catalog/rest/iceberg_catalog.hpp"
 
 namespace duckdb {
@@ -17,12 +18,21 @@ struct HostDecompositionResult {
 	vector<string> path_components;
 };
 
+//! Detect the scheme from a host string, defaulting to HTTPS
+Aws::Http::Scheme DetectScheme(const string &host) {
+	auto lower = StringUtil::Lower(host);
+	if (StringUtil::StartsWith(lower, "http://")) {
+		return Aws::Http::Scheme::HTTP;
+	}
+	return Aws::Http::Scheme::HTTPS;
+}
+
+//! Decompose a bare host (without scheme) into authority and path components
 HostDecompositionResult DecomposeHost(const string &host) {
 	HostDecompositionResult result;
 
 	auto start_of_path = host.find('/');
 	if (start_of_path != string::npos) {
-		//! Authority consists of everything (assuming the host does not contain the scheme) before the first slash
 		result.authority = host.substr(0, start_of_path);
 		auto remainder = host.substr(start_of_path + 1);
 		result.path_components = StringUtil::Split(remainder, '/');
@@ -122,20 +132,24 @@ AWSInput SIGV4Authorization::CreateAWSInput(ClientContext &context, const IRCEnd
 		aws_input.request_timeout_in_ms = val.GetValue<idx_t>() * 1000;
 	}
 
+	auto host = endpoint_builder.GetHost();
+	aws_input.scheme = DetectScheme(host);
+	auto stripped_host = StripScheme(host);
+
 	// AWS service and region: use explicit overrides if provided, otherwise parse from host
 	if (!sigv4_service.empty()) {
 		aws_input.service = sigv4_service;
 	} else {
-		aws_input.service = GetAwsService(endpoint_builder.GetHost());
+		aws_input.service = GetAwsService(stripped_host);
 	}
 	if (!sigv4_region.empty()) {
 		aws_input.region = sigv4_region;
 	} else {
-		aws_input.region = GetAwsRegion(endpoint_builder.GetHost());
+		aws_input.region = GetAwsRegion(stripped_host);
 	}
 
 	// Host decomposition
-	auto decomposed_host = DecomposeHost(endpoint_builder.GetHost());
+	auto decomposed_host = DecomposeHost(stripped_host);
 	aws_input.authority = decomposed_host.authority;
 
 	for (auto &component : decomposed_host.path_components) {
