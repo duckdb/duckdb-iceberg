@@ -1,6 +1,6 @@
-# name: test/sql/local/irc_custom_setup/test_max_table_staleness.test
+# name: test/sql/local/setup_manually/test_max_table_staleness.test
 # description: Test iceberg deletes
-# group: [irc_custom_setup]
+# group: [setup_manually]
 
 require-env ICEBERG_SERVER_AVAILABLE
 
