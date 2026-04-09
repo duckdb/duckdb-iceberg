@@ -2,7 +2,7 @@
 # description: Hour-partitioned table with a pre-epoch TIMESTAMP; equality filter must prune/scan correctly (HourTransform uses floor division of epoch micros, not truncating /).
 # group: [temporal]
 
-require-env TEST_CONFIG_CATALOG_SETUP
+require-env CATALOG_TEST_CONFIG_SETUP
 
 require avro
 

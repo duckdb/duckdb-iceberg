@@ -2,7 +2,7 @@
 # description: create and populate partitioned tables by various types in v2 and v3, for cross-engine read testing
 # group: [other_engines]
 
-require-env TEST_CONFIG_CATALOG_SETUP
+require-env CATALOG_TEST_CONFIG_SETUP
 
 require avro
 

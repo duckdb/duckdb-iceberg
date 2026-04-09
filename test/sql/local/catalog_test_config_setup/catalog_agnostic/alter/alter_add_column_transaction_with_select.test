@@ -2,7 +2,7 @@
 # description: Reading an altered table inside an explicit BEGIN/COMMIT transaction (after ALTER already committed)
 # group: [alter]
 
-require-env TEST_CONFIG_CATALOG_SETUP
+require-env CATALOG_TEST_CONFIG_SETUP
 
 require avro
 

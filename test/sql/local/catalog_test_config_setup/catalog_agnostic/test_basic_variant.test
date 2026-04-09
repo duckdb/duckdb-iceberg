@@ -2,7 +2,7 @@
 # description: test variant reading capabilities
 # group: [catalog_agnostic]
 
-require-env TEST_CONFIG_CATALOG_SETUP
+require-env CATALOG_TEST_CONFIG_SETUP
 
 require avro
 

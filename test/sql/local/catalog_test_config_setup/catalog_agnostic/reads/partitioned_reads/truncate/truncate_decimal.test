@@ -9,7 +9,7 @@ require iceberg
 
 require-env DUCKDB_ICEBERG_HAVE_GENERATED_DATA
 
-require-env TEST_CONFIG_CATALOG_SETUP
+require-env CATALOG_TEST_CONFIG_SETUP
 
 statement ok
 create view scan as select * from my_datalake.default.truncate_partitioned_decimal;

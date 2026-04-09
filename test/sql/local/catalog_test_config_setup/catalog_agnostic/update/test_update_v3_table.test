@@ -1,7 +1,7 @@
 # name: test/sql/local/catalog_test_config_setup/catalog_agnostic/update/test_update_v3_table.test
 # group: [update]
 
-require-env TEST_CONFIG_CATALOG_SETUP
+require-env CATALOG_TEST_CONFIG_SETUP
 
 require avro
 

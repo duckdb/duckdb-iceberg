@@ -2,7 +2,7 @@
 # description: Test creating and reading from v3 partitioned tables with partition pruning
 # group: [partitioned_reads_v3]
 
-require-env TEST_CONFIG_CATALOG_SETUP
+require-env CATALOG_TEST_CONFIG_SETUP
 
 require avro
 

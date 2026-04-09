@@ -1,7 +1,7 @@
 # name: test/sql/local/catalog_test_config_setup/catalog_specifc/nessie/alter/faulty_alter_add_column_v2.test
 # group: [alter]
 
-require-env TEST_CONFIG_CATALOG_SETUP
+require-env CATALOG_TEST_CONFIG_SETUP
 
 require-env NESSIE_SERVER_AVAILABLE
 

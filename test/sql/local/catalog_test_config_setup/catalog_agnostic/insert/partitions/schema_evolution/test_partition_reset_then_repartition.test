@@ -2,7 +2,7 @@
 # description: Test RESET PARTITIONED BY (unpartition), then repartition and insert
 # group: [schema_evolution]
 
-require-env TEST_CONFIG_CATALOG_SETUP
+require-env CATALOG_TEST_CONFIG_SETUP
 
 require avro
 

@@ -2,7 +2,7 @@
 # description: Test many sequential inserts into a partitioned table, populating the manifest list with many entries
 # group: [large]
 
-require-env TEST_CONFIG_CATALOG_SETUP
+require-env CATALOG_TEST_CONFIG_SETUP
 
 require avro
 

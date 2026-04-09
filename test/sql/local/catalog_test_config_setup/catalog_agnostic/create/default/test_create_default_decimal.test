@@ -1,7 +1,7 @@
 # name: test/sql/local/catalog_test_config_setup/catalog_agnostic/create/default/test_create_default_decimal.test
 # group: [default]
 
-require-env TEST_CONFIG_CATALOG_SETUP
+require-env CATALOG_TEST_CONFIG_SETUP
 
 require avro
 

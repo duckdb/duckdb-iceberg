@@ -2,7 +2,7 @@
 # description: Test that a delete manifest entry has partition information
 # group: [partitions]
 
-require-env TEST_CONFIG_CATALOG_SETUP
+require-env CATALOG_TEST_CONFIG_SETUP
 
 require avro
 

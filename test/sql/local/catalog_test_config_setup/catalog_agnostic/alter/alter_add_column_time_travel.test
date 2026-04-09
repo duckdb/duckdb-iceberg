@@ -2,7 +2,7 @@
 # description: Time travel to a snapshot before ADD COLUMN should return only the old schema
 # group: [alter]
 
-require-env TEST_CONFIG_CATALOG_SETUP
+require-env CATALOG_TEST_CONFIG_SETUP
 
 require avro
 

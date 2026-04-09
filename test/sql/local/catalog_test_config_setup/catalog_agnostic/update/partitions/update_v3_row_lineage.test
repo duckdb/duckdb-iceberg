@@ -4,7 +4,7 @@
 
 #              across insert/update/delete on a partitioned v3 table
 
-require-env TEST_CONFIG_CATALOG_SETUP
+require-env CATALOG_TEST_CONFIG_SETUP
 
 require avro
 

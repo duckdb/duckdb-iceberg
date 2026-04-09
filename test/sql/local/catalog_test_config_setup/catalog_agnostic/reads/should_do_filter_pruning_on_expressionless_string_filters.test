@@ -7,7 +7,7 @@ require parquet
 
 require iceberg
 
-require-env TEST_CONFIG_CATALOG_SETUP
+require-env CATALOG_TEST_CONFIG_SETUP
 
 statement ok
 create schema if not exists my_datalake.default;

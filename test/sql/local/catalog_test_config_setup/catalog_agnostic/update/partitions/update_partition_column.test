@@ -2,7 +2,7 @@
 # description: Test updating the partition column itself - old partition should be empty, new partition should have the rows
 # group: [partitions]
 
-require-env TEST_CONFIG_CATALOG_SETUP
+require-env CATALOG_TEST_CONFIG_SETUP
 
 require avro
 

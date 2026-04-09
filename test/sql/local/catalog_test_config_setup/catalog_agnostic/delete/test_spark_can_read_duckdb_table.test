@@ -2,7 +2,7 @@
 # description: Test iceberg deletes
 # group: [delete]
 
-require-env TEST_CONFIG_CATALOG_SETUP
+require-env CATALOG_TEST_CONFIG_SETUP
 
 require avro
 

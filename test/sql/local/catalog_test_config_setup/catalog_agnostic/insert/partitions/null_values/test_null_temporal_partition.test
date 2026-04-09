@@ -2,7 +2,7 @@
 # description: Test inserting NULL values into temporal partition columns (year, month, day, hour)
 # group: [null_values]
 
-require-env TEST_CONFIG_CATALOG_SETUP
+require-env CATALOG_TEST_CONFIG_SETUP
 
 require avro
 

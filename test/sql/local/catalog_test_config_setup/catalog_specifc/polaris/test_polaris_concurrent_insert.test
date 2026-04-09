@@ -2,7 +2,7 @@
 # description: Test concurrent inserts to a newly created table with no snapshots
 # group: [polaris]
 
-require-env TEST_CONFIG_CATALOG_SETUP
+require-env CATALOG_TEST_CONFIG_SETUP
 
 require-env POLARIS_SERVER_AVAILABLE
 

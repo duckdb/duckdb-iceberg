@@ -4,7 +4,7 @@
 # TODO: V3: support TIMESTAMP_NS type
 mode skip
 
-require-env TEST_CONFIG_CATALOG_SETUP
+require-env CATALOG_TEST_CONFIG_SETUP
 
 require avro
 

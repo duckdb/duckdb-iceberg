@@ -2,7 +2,7 @@
 # description: Test there are no new snapshots if there are no new updates
 # group: [update]
 
-require-env TEST_CONFIG_CATALOG_SETUP
+require-env CATALOG_TEST_CONFIG_SETUP
 
 require avro
 

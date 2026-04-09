@@ -2,7 +2,7 @@
 # description: Verify decimal upper/lower bound serialization matches Spark across precisions, scales and value ranges
 # group: [insert]
 
-require-env TEST_CONFIG_CATALOG_SETUP
+require-env CATALOG_TEST_CONFIG_SETUP
 
 require avro
 

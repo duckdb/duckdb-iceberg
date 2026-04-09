@@ -2,7 +2,7 @@
 # description: Test changing partition schema multiple times and inserting after each change
 # group: [schema_evolution]
 
-require-env TEST_CONFIG_CATALOG_SETUP
+require-env CATALOG_TEST_CONFIG_SETUP
 
 require avro
 

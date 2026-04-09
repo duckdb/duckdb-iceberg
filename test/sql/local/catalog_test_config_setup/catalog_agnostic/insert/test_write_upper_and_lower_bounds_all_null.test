@@ -1,7 +1,7 @@
 # name: test/sql/local/catalog_test_config_setup/catalog_agnostic/insert/test_write_upper_and_lower_bounds_all_null.test
 # group: [insert]
 
-require-env TEST_CONFIG_CATALOG_SETUP
+require-env CATALOG_TEST_CONFIG_SETUP
 
 require avro
 

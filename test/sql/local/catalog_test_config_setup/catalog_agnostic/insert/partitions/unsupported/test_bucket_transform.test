@@ -2,7 +2,7 @@
 # description: Test that BUCKET partition transform is rejected for INSERT
 # group: [unsupported]
 
-require-env TEST_CONFIG_CATALOG_SETUP
+require-env CATALOG_TEST_CONFIG_SETUP
 
 require avro
 

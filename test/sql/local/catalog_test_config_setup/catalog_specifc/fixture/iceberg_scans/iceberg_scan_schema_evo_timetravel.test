@@ -9,7 +9,7 @@ require iceberg
 
 require httpfs
 
-require-env TEST_CONFIG_CATALOG_SETUP
+require-env CATALOG_TEST_CONFIG_SETUP
 
 require-env FIXTURE_SERVER_AVAILABLE
 

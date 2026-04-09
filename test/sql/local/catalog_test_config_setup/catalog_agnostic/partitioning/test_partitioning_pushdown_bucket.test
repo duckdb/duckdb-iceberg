@@ -2,7 +2,7 @@
 # description: Test bucket partition pushdown for multiple types (INTEGER, BIGINT, STRING, DATE, DECIMAL, BINARY, TIMESTAMP)
 # group: [partitioning]
 
-require-env TEST_CONFIG_CATALOG_SETUP
+require-env CATALOG_TEST_CONFIG_SETUP
 
 require avro
 

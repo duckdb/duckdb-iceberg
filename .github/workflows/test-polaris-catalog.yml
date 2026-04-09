@@ -57,7 +57,7 @@ jobs:
  
       - name: Run Generic IRC tests
         env:
-          TEST_CONFIG_CATALOG_SETUP: 1
+          CATALOG_TEST_CONFIG_SETUP: 1
           POLARIS_SERVER_AVAILABLE: 1
         run: |
           export POLARIS_CLIENT_ID=$(cat tmp/polaris_client_id.txt)
