@@ -377,6 +377,8 @@ IcebergTableInformation &IcebergTransaction::GetTableInfoForTransaction(IcebergT
 	auto &updated_table = emplace_res.first->second;
 	if (emplace_res.second) {
 		updated_table.InitSchemaVersions();
+		auto client_context = context.lock();
+		updated_table.transaction_data = make_uniq<IcebergTransactionData>(*client_context, updated_table);
 	}
 	return updated_table;
 }

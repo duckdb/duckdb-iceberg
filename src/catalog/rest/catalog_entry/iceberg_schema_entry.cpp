@@ -316,6 +316,10 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 			    to_remove_column, partition_field->name, partition_field->partition_field_id);
 		}
 
+		if (new_schema->columns.empty()) {
+			throw CatalogException("Cannot drop column: table '%s' only has one column remaining!", table_entry.name);
+		}
+
 		auto new_schema_id = new_schema->schema_id;
 		// Update the Table Metadata to have our new schema
 		updated_table.CreateSchemaVersion(*new_schema);

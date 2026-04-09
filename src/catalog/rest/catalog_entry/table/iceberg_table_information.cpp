@@ -287,7 +287,7 @@ optional_ptr<CatalogEntry> IcebergTableInformation::CreateSchemaVersion(const Ic
 		throw InternalException("IcebergTableSet::CreateEntry called with empty name");
 	}
 
-	schema_versions[table_schema.schema_id] = std::move(table_entry);
+	schema_versions.emplace(table_schema.schema_id, std::move(table_entry));
 	return result;
 }
 

@@ -131,3 +131,11 @@ query II
 select * from my_datalake.default.many_column_tbl
 ----
 test	2324
+
+statement ok
+ALTER TABLE my_datalake.default.many_column_tbl DROP COLUMN a
+
+statement error
+ALTER TABLE my_datalake.default.many_column_tbl DROP COLUMN d
+----
+Catalog Error: Cannot drop column: table 'many_column_tbl' only has one column remaining!
