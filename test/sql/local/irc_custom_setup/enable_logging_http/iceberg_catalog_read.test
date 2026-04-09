@@ -99,4 +99,4 @@ select count(*) from my_datalake.default.pyspark_iceberg_table_v2;
 statement error
 Alter table my_datalake.default.table_more_deletes add column new_column INTEGER default 10;
 ----
-<REGEX>:.*Not implemented Error.*
+Request returned HTTP 500 for HTTP POST

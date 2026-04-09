@@ -66,8 +66,17 @@
         "test/sql/local/irc_any_catalog/update/test_one_update_one_snapshot.test",
         "test/sql/local/irc_any_catalog/transactions/test_transaction_get_from_transaction_start.test",
         "test/sql/local/irc_any_catalog/transactions/test_transactional_updates.test",
-        "test/sql/local/irc_any_catalog/transactions/test_transactional_updates_error_omits_stacktrace.test"
+        "test/sql/local/irc_any_catalog/transactions/test_transactional_updates_error_omits_stacktrace.test",
+        "test/sql/local/irc_any_catalog/alter/alter_add_column_time_travel.test"
       ]
+    },
+    {
+      "reason": "On ALTER TABLE, Nessie updates snapshot's schema_id as well alongside table_metadata.current_schema_id, so we don't log a warning.",
+      "paths": ["test/sql/local/irc_any_catalog/alter/alter_add_column_warn_schema_mismatch.test"]
+    },
+    {
+      "reason": "Nessie ignores DEFAULT values for ADD COLUMN and just populates with NULL.",
+      "paths": ["test/sql/local/irc_any_catalog/alter/alter_add_column_twice_in_same_transaction_with_default.test"]
     }
   ]
 }
