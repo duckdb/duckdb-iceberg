@@ -197,17 +197,14 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 	}
 	auto &table_entry = catalog_entry->Cast<IcebergTableEntry>();
 	auto &catalog_table_info = table_entry.table_info;
-	irc_transaction.updated_tables.emplace(catalog_table_info.GetTableKey(), catalog_table_info.Copy());
-	auto &updated_table = irc_transaction.updated_tables.at(catalog_table_info.GetTableKey());
-	updated_table.InitSchemaVersions();
-	updated_table.InitTransactionData(irc_transaction);
+	auto emplace_res = irc_transaction.updated_tables.emplace(catalog_table_info.GetTableKey(), catalog_table_info.Copy());
+	auto &updated_table = emplace_res.first->second;
+	if (emplace_res.second) {
+		updated_table.InitSchemaVersions();
+		updated_table.InitTransactionData(irc_transaction);
+	}
 
 	auto &current_schema = updated_table.table_metadata.GetLatestSchema();
-	auto new_schema = current_schema.Copy();
-
-	if (!irc_transaction.has_schema_update) {
-		new_schema->schema_id = updated_table.GetMaxSchemaId() + 1;
-	}
 
 	switch (alter_table_info.alter_table_type) {
 	case AlterTableType::SET_PARTITIONED_BY: {
@@ -218,7 +215,7 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 		// Ensure last assigned partition field id is up to date
 		updated_table.AddAssertLastAssignedPartitionId(irc_transaction);
 
-		updated_table.SetPartitionedBy(irc_transaction, partition_info.partition_keys, *new_schema);
+		updated_table.SetPartitionedBy(irc_transaction, partition_info.partition_keys, current_schema);
 		return;
 	}
 	case AlterTableType::ADD_COLUMN: {
@@ -234,11 +231,6 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 					return;
 				}
 			}
-		}
-
-		// Ensure schema is the same as current
-		if (!irc_transaction.has_schema_update) {
-			updated_table.AddAssertCurrentSchemaId(irc_transaction);
 		}
 
 		// Add the new column
@@ -281,19 +273,39 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 
 		new_iceberg_column->required = false;
 
+		auto new_schema = current_schema.Copy();
+		new_schema->schema_id++;
 		new_schema->columns.push_back(std::move(new_iceberg_column));
 		auto new_schema_id = new_schema->schema_id;
-		updated_table.table_metadata.schemas[new_schema_id] = std::move(new_schema);
-		if (!irc_transaction.has_schema_update) {
-			updated_table.table_metadata.SetCurrentSchemaId(new_schema_id);
-			// Update the Table Metadata to have our new schema
-			updated_table.CreateSchemaVersion(*updated_table.table_metadata.schemas[new_schema_id]);
+		// Update the Table Metadata to have our new schema
+		updated_table.CreateSchemaVersion(*new_schema);
+		updated_table.AddSchema(irc_transaction, new_schema_id);
 
-			updated_table.AddSchema(irc_transaction);
-			updated_table.AddSetCurrentSchema(irc_transaction);
+		updated_table.table_metadata.schemas[new_schema_id] = std::move(new_schema);
+		updated_table.table_metadata.SetCurrentSchemaId(new_schema_id);
+		return;
+	}
+	case AlterTableType::REMOVE_COLUMN: {
+		auto &remove_column_info = alter_table_info.Cast<RemoveColumnInfo>();
+		auto &to_remove_column = remove_column_info.removed_column;
+
+		bool column_exists;
+		auto new_schema = current_schema.RemoveColumn(to_remove_column, column_exists);
+		if (!remove_column_info.if_column_exists && !column_exists) {
+			throw CatalogException("Attempted to drop column '%s' from table '%s', but no column by this name exists in the current schema (id: %d)", to_remove_column, table_entry.name, current_schema.schema_id);
+		}
+		if (remove_column_info.if_column_exists && !column_exists) {
+			//! Column doesn't exist, just return
+			return;
 		}
 
-		irc_transaction.has_schema_update = true;
+		auto new_schema_id = new_schema->schema_id;
+		// Update the Table Metadata to have our new schema
+		updated_table.CreateSchemaVersion(*new_schema);
+		updated_table.AddSchema(irc_transaction, new_schema_id);
+
+		updated_table.table_metadata.schemas[new_schema_id] = std::move(new_schema);
+		updated_table.table_metadata.SetCurrentSchemaId(new_schema_id);
 		return;
 	}
 	default: {

@@ -146,8 +146,13 @@ void IcebergTransactionData::AddUpdateSnapshot(vector<IcebergManifestEntry> &&de
 	updates.push_back(std::move(add_snapshot));
 }
 
-void IcebergTransactionData::TableAddSchema() {
-	updates.push_back(make_uniq<AddSchemaUpdate>(table_info));
+void IcebergTransactionData::TableAddSchema(int32_t schema_id) {
+	auto add_schema_update = make_uniq<AddSchemaUpdate>(table_info, schema_id);
+	updates.push_back(std::move(add_schema_update));
+	if (!has_schema_update) {
+		has_schema_update = true;
+		initial_schema_id = table_info.table_metadata.GetCurrentSchemaId();
+	}
 }
 
 void IcebergTransactionData::TableAssignUUID() {
@@ -176,10 +181,6 @@ void IcebergTransactionData::TableAddAssertDefaultSpecId() {
 
 void IcebergTransactionData::TableAddUpradeFormatVersion() {
 	updates.push_back(make_uniq<UpgradeFormatVersion>(table_info));
-}
-
-void IcebergTransactionData::TableAddSetCurrentSchema() {
-	updates.push_back(make_uniq<SetCurrentSchema>(table_info));
 }
 
 void IcebergTransactionData::TableAddPartitionSpec() {

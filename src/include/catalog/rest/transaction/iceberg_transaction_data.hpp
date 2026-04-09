@@ -28,7 +28,7 @@ public:
 	void AddUpdateSnapshot(vector<IcebergManifestEntry> &&delete_files, vector<IcebergManifestEntry> &&data_files,
 	                       IcebergManifestDeletes &&altered_manifests);
 	// add a schema update for a table
-	void TableAddSchema();
+	void TableAddSchema(int32_t schema_id);
 	void TableAddAssertCreate();
 	void TableAddAssertCurrentSchemaId();
 	void TableAddAssertLastAssignedFieldId();
@@ -36,7 +36,6 @@ public:
 	void TableAddAssertDefaultSpecId();
 	void TableAssignUUID();
 	void TableAddUpradeFormatVersion();
-	void TableAddSetCurrentSchema();
 	void TableAddPartitionSpec();
 	void TableAddSortOrder();
 	void TableSetDefaultSortOrder();
@@ -65,6 +64,9 @@ public:
 	case_insensitive_map_t<string> transactional_delete_files;
 	//! Track the current row id for this transaction
 	int64_t next_row_id = 0;
+
+	bool has_schema_update = false;
+	int32_t initial_schema_id;
 
 	mutex lock;
 };

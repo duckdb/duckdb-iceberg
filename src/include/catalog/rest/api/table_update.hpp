@@ -17,13 +17,15 @@ namespace duckdb {
 struct IcebergTableInformation;
 
 struct AddSchemaUpdate : public IcebergTableUpdate {
+public:
+	explicit AddSchemaUpdate(const IcebergTableInformation &table_info, int32_t schema_id);
+public:
 	static constexpr const IcebergTableUpdateType TYPE = IcebergTableUpdateType::ADD_SCHEMA;
 
-	explicit AddSchemaUpdate(const IcebergTableInformation &table_info);
 	void CreateUpdate(DatabaseInstance &db, ClientContext &context, IcebergCommitState &commit_state) const override;
-
+public:
+	int32_t schema_id;
 	optional_idx last_column_id;
-	optional_ptr<const IcebergTableSchema> table_schema = nullptr;
 };
 
 struct AssertCreateRequirement : public IcebergTableRequirement {

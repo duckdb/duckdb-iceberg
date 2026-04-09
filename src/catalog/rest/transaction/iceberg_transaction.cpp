@@ -23,6 +23,7 @@
 #include "catalog/rest/catalog_entry/iceberg_schema_entry.hpp"
 #include "planning/metadata_io/avro/avro_scan.hpp"
 #include "iceberg_logging.hpp"
+#include "catalog/rest/api/table_update.hpp"
 
 namespace duckdb {
 
@@ -286,6 +287,14 @@ static rest_api_objects::TableUpdate CreateSetSnapshotRefUpdate(int64_t snapshot
 	return table_update;
 }
 
+static bool NeedsAssertSchemaId(const IcebergTransactionData &transaction_data, const IcebergTableInformation &table_info) {
+	if (!transaction_data.has_schema_update) {
+		return false;
+	}
+	auto &initial_schema_id = transaction_data.initial_schema_id;
+	return initial_schema_id != table_info.table_metadata.GetCurrentSchemaId();
+}
+
 TableTransactionInfo IcebergTransaction::GetTransactionRequest(ClientContext &context) {
 	TableTransactionInfo info;
 	auto &transaction = info.request;
@@ -321,6 +330,12 @@ TableTransactionInfo IcebergTransaction::GetTransactionRequest(ClientContext &co
 			requirement->CreateRequirement(db, context, commit_state);
 			info.has_assert_create = requirement->type == IcebergTableRequirementType::ASSERT_CREATE;
 		}
+		if (NeedsAssertSchemaId(transaction_data, table_info)) {
+			// Ensure schema is the same as current
+			AssertCurrentSchemaIdRequirement requirement(table_info);
+			requirement.current_schema_id = transaction_data.initial_schema_id;
+			requirement.CreateRequirement(db, context, commit_state);
+		}
 
 		if (!transaction_data.alters.empty()) {
 			auto &snapshot = *commit_state.latest_snapshot;
@@ -339,6 +354,11 @@ TableTransactionInfo IcebergTransaction::GetTransactionRequest(ClientContext &co
 			commit_state.table_change.requirements.push_back(CreateAssertNoSnapshotRequirement());
 		}
 
+		if (transaction_data.has_schema_update) {
+			SetCurrentSchema update(table_info);
+			update.CreateUpdate(db, context, commit_state);
+		}
+
 		transaction.table_changes.push_back(std::move(table_change));
 	}
 	return info;
@@ -352,8 +372,11 @@ IcebergTableInformation &IcebergTransaction::GetTableInfoForTransaction(IcebergT
 	if (it != updated_tables.end()) {
 		return it->second;
 	}
-	auto &updated_table = updated_tables.emplace(table_key, table_info.Copy(*this)).first->second;
-	updated_table.InitSchemaVersions();
+	auto emplace_res = updated_tables.emplace(table_key, table_info.Copy(*this));
+	auto &updated_table = emplace_res.first->second;
+	if (emplace_res.second) {
+		updated_table.InitSchemaVersions();
+	}
 	return updated_table;
 }
 

@@ -20,17 +20,8 @@ static rest_api_objects::Schema CopySchema(const IcebergTableSchema &schema) {
 	return rest_api_objects::Schema::FromJSON(val);
 }
 
-AddSchemaUpdate::AddSchemaUpdate(const IcebergTableInformation &table_info)
-    : IcebergTableUpdate(IcebergTableUpdateType::ADD_SCHEMA, table_info) {
-	auto current_schema_id = table_info.table_metadata.GetCurrentSchemaId();
-	if (table_info.table_metadata.schemas.find(current_schema_id) == table_info.table_metadata.schemas.end()) {
-		throw InvalidConfigurationException("cannot assign a current schema id for a schema that does not yet exist");
-	};
-	auto it = table_info.table_metadata.schemas.find(current_schema_id);
-	if (it == table_info.table_metadata.schemas.end()) {
-		throw InternalException("(AddSchemaUpdate) Could not find schema with id: %d", current_schema_id);
-	}
-	table_schema = it->second.get();
+AddSchemaUpdate::AddSchemaUpdate(const IcebergTableInformation &table_info, int32_t schema_id)
+    : IcebergTableUpdate(IcebergTableUpdateType::ADD_SCHEMA, table_info), schema_id(schema_id) {
 	if (table_info.table_metadata.HasLastColumnId()) {
 		last_column_id = table_info.table_metadata.GetLastColumnId();
 	}
@@ -43,10 +34,10 @@ void AddSchemaUpdate::CreateUpdate(DatabaseInstance &db, ClientContext &context,
 	update.has_add_schema_update = true;
 	update.add_schema_update.has_action = true;
 	update.add_schema_update.action = "add-schema";
-	auto &current_schema = table_info.table_metadata.GetLatestSchema();
-	auto it = table_info.table_metadata.schemas.find(current_schema.schema_id);
+
+	auto it = table_info.table_metadata.schemas.find(schema_id);
 	if (it == table_info.table_metadata.schemas.end()) {
-		throw InternalException("(AddSchemaUpdate) Couldn't find schema with id: %d", current_schema.schema_id);
+		throw InternalException("(AddSchemaUpdate) Couldn't find schema with id: %d", schema_id);
 	}
 	auto &schema = it->second;
 	update.add_schema_update.schema = CopySchema(*schema.get());

@@ -43,7 +43,7 @@ public:
 	                       IcebergManifestDeletes &&altered_manifests);
 	void AddUpdateSnapshot(IcebergTransaction &transaction, vector<IcebergManifestEntry> &&delete_files,
 	                       vector<IcebergManifestEntry> &&data_files, IcebergManifestDeletes &&altered_manifests);
-	void AddSchema(IcebergTransaction &transaction);
+	void AddSchema(IcebergTransaction &transaction, int32_t schema_id);
 	void AddAssertCreate(IcebergTransaction &transaction);
 	void AddAssertDefaultSpecId(IcebergTransaction &transaction);
 	void AddAssertCurrentSchemaId(IcebergTransaction &transaction);
@@ -51,7 +51,6 @@ public:
 	void AddAssertLastAssignedPartitionId(IcebergTransaction &transaction);
 	void AddAssignUUID(IcebergTransaction &transaction);
 	void AddUpradeFormatVersion(IcebergTransaction &transaction);
-	void AddSetCurrentSchema(IcebergTransaction &transaction);
 	void AddPartitionSpec(IcebergTransaction &transaction);
 	void AddSortOrder(IcebergTransaction &transaction);
 	void SetDefaultSortOrder(IcebergTransaction &transaction);

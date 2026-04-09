@@ -286,7 +286,8 @@ optional_ptr<CatalogEntry> IcebergTableInformation::CreateSchemaVersion(const Ic
 	if (result->name.empty()) {
 		throw InternalException("IcebergTableSet::CreateEntry called with empty name");
 	}
-	schema_versions.emplace(table_schema.schema_id, std::move(table_entry));
+
+	schema_versions[table_schema.schema_id] = std::move(table_entry);
 	return result;
 }
 
@@ -602,9 +603,9 @@ void IcebergTableInformation::AddUpdateSnapshot(IcebergTransaction &transaction,
 	transaction_data->AddUpdateSnapshot(std::move(delete_files), std::move(data_files), std::move(altered_manifests));
 }
 
-void IcebergTableInformation::AddSchema(IcebergTransaction &transaction) {
+void IcebergTableInformation::AddSchema(IcebergTransaction &transaction, int32_t schema_id) {
 	InitTransactionData(transaction);
-	transaction_data->TableAddSchema();
+	transaction_data->TableAddSchema(schema_id);
 }
 
 void IcebergTableInformation::AddAssignUUID(IcebergTransaction &transaction) {
@@ -640,10 +641,6 @@ void IcebergTableInformation::AddAssertDefaultSpecId(IcebergTransaction &transac
 void IcebergTableInformation::AddUpradeFormatVersion(IcebergTransaction &transaction) {
 	InitTransactionData(transaction);
 	transaction_data->TableAddUpradeFormatVersion();
-}
-void IcebergTableInformation::AddSetCurrentSchema(IcebergTransaction &transaction) {
-	InitTransactionData(transaction);
-	transaction_data->TableAddSetCurrentSchema();
 }
 void IcebergTableInformation::AddPartitionSpec(IcebergTransaction &transaction) {
 	InitTransactionData(transaction);

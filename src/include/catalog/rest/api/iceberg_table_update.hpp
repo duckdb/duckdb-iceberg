@@ -39,6 +39,7 @@ public:
 
 public:
 	const IcebergTableInformation &table_info;
+	int32_t current_schema_id;
 	optional_ptr<const IcebergSnapshot> latest_snapshot;
 	//! Snapshot(s) created in this commit
 	vector<IcebergSnapshot> created_snapshots;
