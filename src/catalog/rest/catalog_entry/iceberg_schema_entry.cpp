@@ -289,6 +289,10 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 		auto &remove_column_info = alter_table_info.Cast<RemoveColumnInfo>();
 		auto &to_remove_column = remove_column_info.removed_column;
 
+		if (remove_column_info.cascade) {
+			throw NotImplementedException("CASCADE is not implemented for Iceberg table DROP COLUMN");
+		}
+
 		bool column_exists;
 		auto new_schema = current_schema.RemoveColumn(to_remove_column, column_exists);
 		if (!remove_column_info.if_column_exists && !column_exists) {
