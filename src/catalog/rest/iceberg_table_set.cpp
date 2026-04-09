@@ -90,11 +90,16 @@ bool IcebergTableSet::FillEntry(ClientContext &context, IcebergTableInformation 
 
 void IcebergTableSet::Scan(ClientContext &context, const std::function<void(CatalogEntry &)> &callback) {
 	lock_guard<mutex> lock(entry_lock);
+	auto &iceberg_transaction = IcebergTransaction::Get(context, catalog);
 	LoadEntries(context);
 	case_insensitive_set_t non_iceberg_tables;
-	auto table_namespace = IRCAPI::GetEncodedSchemaName(schema.namespace_items);
+	auto schema_component = IRCPathComponent::NamespaceComponent(schema.namespace_items);
+	auto table_namespace = schema_component.encoded;
 	for (auto &entry : entries) {
-		auto &table_info = entry.second;
+		auto &table_info = *entry.second;
+		auto table_key = table_info.GetTableKey();
+		iceberg_transaction.tables[table_key] = entry.second;
+
 		if (table_info.dummy_entry) {
 			// FIXME: why do we need to return the same entry again?
 			auto &optional = table_info.dummy_entry.get()->Cast<CatalogEntry>();
@@ -127,11 +132,11 @@ void IcebergTableSet::Scan(ClientContext &context, const std::function<void(Cata
 	}
 }
 
-const case_insensitive_map_t<IcebergTableInformation> &IcebergTableSet::GetEntries() {
+const case_insensitive_map_t<shared_ptr<IcebergTableInformation>> &IcebergTableSet::GetEntries() {
 	return entries;
 }
 
-case_insensitive_map_t<IcebergTableInformation> &IcebergTableSet::GetEntriesMutable() {
+case_insensitive_map_t<shared_ptr<IcebergTableInformation>> &IcebergTableSet::GetEntriesMutable() {
 	return entries;
 }
 
@@ -145,7 +150,7 @@ void IcebergTableSet::LoadEntries(ClientContext &context) {
 	auto &ic_catalog = catalog.Cast<IcebergCatalog>();
 	auto tables = IRCAPI::GetTables(context, ic_catalog, schema);
 	for (auto &table : tables) {
-		entries.emplace(table.name, IcebergTableInformation(ic_catalog, schema, table.name));
+		entries.emplace(table.name, make_shared_ptr<IcebergTableInformation>(ic_catalog, schema, table.name));
 	}
 	iceberg_transaction.listed_schemas.insert(schema.name);
 }
@@ -296,7 +301,7 @@ optional_ptr<CatalogEntry> IcebergTableSet::GetEntry(ClientContext &context, con
 		if (it != iceberg_transaction.updated_tables.end()) {
 			auto &table_info = it->second;
 			auto snapshot_lookup = GetSnapshotLookup(table_info, context, lookup);
-			return table_info.GetSchemaVersion(snapshot_lookup);
+			return table_info.GetSchemaVersion(snapshot_lookup, context);
 		}
 	}
 	auto previous_request_info = iceberg_transaction.GetTableRequestResult(table_key);
@@ -310,17 +315,17 @@ optional_ptr<CatalogEntry> IcebergTableSet::GetEntry(ClientContext &context, con
 			//  will fail regardless
 			return nullptr;
 		}
-		auto &table_info = entry->second;
+		auto &table_info = *entry->second;
 		auto snapshot_lookup = GetSnapshotLookup(table_info, context, lookup);
-		return table_info.GetSchemaVersion(snapshot_lookup);
+		return table_info.GetSchemaVersion(snapshot_lookup, context);
 	}
 
 	if (entries.find(table_name) != entries.end()) {
 		entries.erase(table_name);
 	}
-	auto it = entries.emplace(table_name, IcebergTableInformation(ic_catalog, schema, table_name));
+	auto it = entries.emplace(table_name, make_shared_ptr<IcebergTableInformation>(ic_catalog, schema, table_name));
 	auto entry = it.first;
-	auto &table_info = entry->second;
+	auto &table_info = *entry->second;
 	if (!FillEntry(context, table_info)) {
 		// Table doesn't exist
 		entries.erase(entry);
@@ -328,8 +333,21 @@ optional_ptr<CatalogEntry> IcebergTableSet::GetEntry(ClientContext &context, con
 		return nullptr;
 	}
 
-	auto snapshot_lookup = GetSnapshotLookup(table_info, context, lookup);
-	auto ret = table_info.GetSchemaVersion(snapshot_lookup);
+	iceberg_transaction.tables[table_key] = entry->second;
+
+	IcebergSnapshotLookup snapshot_lookup;
+
+	bool is_time_travel = lookup.GetAtClause();
+	if (!is_time_travel && !table_info.HasTransactionUpdates()) {
+		// if there is no user supplied AT () clause, and the table does not have transaction updates
+		// use transaction start time
+		snapshot_lookup = table_info.GetSnapshotLookup(context);
+	} else {
+		auto at = lookup.GetAtClause();
+		snapshot_lookup = IcebergSnapshotLookup::FromAtClause(at);
+	};
+
+	auto ret = table_info.GetSchemaVersion(snapshot_lookup, context, is_time_travel);
 
 	// get the latest information and save it to the transaction cache
 	auto &ic_ret = ret->Cast<IcebergTableEntry>();
@@ -342,6 +360,19 @@ optional_ptr<CatalogEntry> IcebergTableSet::GetEntry(ClientContext &context, con
 		// table is not yet initialized.
 		latest_sequence_number = 0;
 		latest_snapshot_id = -1;
+	}
+
+	// Log warning on schema_id mismatch
+	auto &meta_transaction = MetaTransaction::Get(context);
+	auto transaction_start = meta_transaction.GetCurrentTransactionStartTimestamp();
+	auto transaction_start_millis = Timestamp::GetEpochMs(transaction_start);
+
+	auto &table_metadata_last_updated_at = ic_ret.table_info.table_metadata.last_updated_ms;
+
+	if (transaction_start_millis < table_metadata_last_updated_at.value &&
+	    latest_snapshot->GetSchemaId() != ic_ret.table_info.table_metadata.GetCurrentSchemaId()) {
+		DUCKDB_LOG_WARNING(
+		    context, "Detected schema change during transaction (schema_id mismatch); ACID guarantees may not hold.");
 	}
 
 	iceberg_transaction.RecordTableRequest(table_key, latest_sequence_number, latest_snapshot_id);

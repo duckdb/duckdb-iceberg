@@ -24,9 +24,10 @@ public:
 	IcebergTableInformation(IcebergCatalog &catalog, IcebergSchemaEntry &schema, const string &name);
 
 public:
-	optional_ptr<CatalogEntry> GetLatestSchema();
+	optional_ptr<CatalogEntry> GetLatestSchema(ClientContext &context);
 	idx_t GetIcebergVersion() const;
-	optional_ptr<CatalogEntry> GetSchemaVersion(const IcebergSnapshotLookup &snapshot_lookup);
+	optional_ptr<CatalogEntry> GetSchemaVersion(const IcebergSnapshotLookup &snapshot_lookup, ClientContext &context,
+	                                            bool is_time_travel = false);
 	optional_ptr<CatalogEntry> CreateSchemaVersion(const IcebergTableSchema &table_schema);
 	idx_t GetMaxSchemaId();
 	idx_t GetNextPartitionSpecId();

@@ -1,6 +1,6 @@
 services:
   rest:
-    image: apache/iceberg-rest-fixture
+    image: apache/iceberg-rest-fixture:1.10.1
     container_name: iceberg-rest
     networks:
       iceberg_net:

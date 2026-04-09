@@ -782,7 +782,11 @@ static void GenerateProjection(ClientContext &context, PhysicalPlanGenerator &pl
 	// push the projection
 	vector<LogicalType> types;
 	for (auto &expr : expressions) {
-		types.push_back(expr->return_type);
+		auto &type = expr->return_type;
+		if (type.id() == LogicalTypeId::HUGEINT) {
+			type = LogicalType::DECIMAL(38, 0);
+		}
+		types.push_back(type);
 	}
 	auto &proj =
 	    planner.Make<PhysicalProjection>(std::move(types), std::move(expressions), plan->estimated_cardinality);
@@ -869,7 +873,9 @@ PhysicalOperator &IcebergCatalog::PlanInsert(ClientContext &context, PhysicalPla
 	auto &table_entry = op.table.Cast<IcebergTableEntry>();
 	table_entry.PrepareIcebergScanFromEntry(context);
 	auto &table_metadata = table_entry.table_info.table_metadata;
-	auto &schema = table_metadata.GetLatestSchema();
+
+	auto &schema = table_entry.schema_id.IsValid() ? *table_metadata.GetSchemaFromId(table_entry.schema_id.GetIndex())
+	                                               : table_metadata.GetLatestSchema();
 
 	if (table_metadata.HasSortOrder()) {
 		auto &sort_spec = table_metadata.GetLatestSortOrder();

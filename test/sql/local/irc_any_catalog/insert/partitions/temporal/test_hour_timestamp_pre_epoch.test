@@ -1,0 +1,53 @@
+# name: test/sql/local/irc_any_catalog/insert/partitions/temporal/test_hour_timestamp_pre_epoch.test
+# description: Hour-partitioned table with a pre-epoch TIMESTAMP; equality filter must prune/scan correctly (HourTransform uses floor division of epoch micros, not truncating /).
+# group: [temporal]
+
+require-env ICEBERG_SERVER_AVAILABLE
+
+require-env SECRETS_CREATED_AND_CATALOG_ATTACHED
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+create schema if not exists my_datalake.default;
+
+statement ok
+drop table if exists my_datalake.default.test_hour_timestamp_pre_epoch;
+
+statement ok
+CREATE TABLE my_datalake.default.test_hour_timestamp_pre_epoch (id INT, ts TIMESTAMP)
+PARTITIONED BY (hour(ts));
+
+# One microsecond before Unix epoch (epoch micros = -1); hour bucket is -1, not 0.
+statement ok
+INSERT INTO my_datalake.default.test_hour_timestamp_pre_epoch VALUES
+	(1, TIMESTAMP '1969-12-31 23:59:59.999999'),
+	(2, TIMESTAMP '2020-06-15 12:00:00');
+
+query I
+SELECT count(*) FROM my_datalake.default.test_hour_timestamp_pre_epoch;
+----
+2
+
+# Constant filter on pre-epoch ts must still return the row (manifest pruning uses HourTransform on this literal).
+query I
+SELECT id FROM my_datalake.default.test_hour_timestamp_pre_epoch
+WHERE ts = TIMESTAMP '1969-12-31 23:59:59.999999'
+ORDER BY id;
+----
+1
+
+query I
+SELECT count(*) FROM my_datalake.default.test_hour_timestamp_pre_epoch
+WHERE ts = TIMESTAMP '1969-12-31 23:59:59.999999';
+----
+1
