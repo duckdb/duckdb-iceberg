@@ -247,19 +247,17 @@ shared_ptr<IcebergTableSchema> IcebergTableSchema::Copy() const {
 	return res;
 }
 
-shared_ptr<IcebergTableSchema> IcebergTableSchema::RemoveColumn(const string &name, bool &exists) const {
+shared_ptr<IcebergTableSchema> IcebergTableSchema::RemoveColumn(const string &name, optional_idx &column_id) const {
 	auto res = make_shared_ptr<IcebergTableSchema>();
 	res->schema_id = schema_id + 1;
 	res->last_column_id = last_column_id;
-	bool found = false;
 	for (auto &column : columns) {
 		if (column->name == name) {
-			found = true;
+			column_id = column->id;
 			continue;
 		}
 		res->columns.push_back(column->Copy());
 	}
-	exists = found;
 	return res;
 }
 

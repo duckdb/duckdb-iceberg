@@ -294,16 +294,26 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 			throw NotImplementedException("CASCADE is not implemented for Iceberg table DROP COLUMN");
 		}
 
-		bool column_exists;
-		auto new_schema = current_schema.RemoveColumn(to_remove_column, column_exists);
-		if (!remove_column_info.if_column_exists && !column_exists) {
-			throw CatalogException("Attempted to drop column '%s' from table '%s', but no column by this name exists "
-			                       "in the current schema (id: %d)",
-			                       to_remove_column, table_entry.name, current_schema.schema_id);
-		}
-		if (remove_column_info.if_column_exists && !column_exists) {
+		optional_idx column_id;
+		auto new_schema = current_schema.RemoveColumn(to_remove_column, column_id);
+		const bool column_exists = column_id.IsValid();
+		if (!column_exists) {
+			if (!remove_column_info.if_column_exists) {
+				throw CatalogException(
+				    "Attempted to drop column '%s' from table '%s', but no column by this name exists "
+				    "in the current schema (id: %d)",
+				    to_remove_column, table_entry.name, current_schema.schema_id);
+			}
 			//! Column doesn't exist, just return
 			return;
+		}
+
+		auto &partition_spec = updated_table.table_metadata.GetLatestPartitionSpec();
+		auto partition_field = partition_spec.TryGetFieldBySourceId(column_id.GetIndex());
+		if (partition_field) {
+			throw CatalogException(
+			    "Can't drop column '%s' as it is referenced by the current partition spec's field: '%s' (field id: %d)",
+			    to_remove_column, partition_field->name, partition_field->partition_field_id);
 		}
 
 		auto new_schema_id = new_schema->schema_id;
