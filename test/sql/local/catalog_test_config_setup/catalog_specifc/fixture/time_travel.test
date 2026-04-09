@@ -1,6 +1,6 @@
-# name: test/sql/local/time_travel.test
+# name: test/sql/local/catalog_test_config_setup/catalog_specifc/fixture/time_travel.test
 # description: Test time travel using both snapshot id and timestamp
-# group: [local]
+# group: [fixture]
 
 require avro
 
@@ -10,29 +10,12 @@ require iceberg
 
 require httpfs
 
+require-env TEST_CONFIG_CATALOG_SETUP
+
 require-env FIXTURE_SERVER_AVAILABLE
 
 # Do not ignore 'HTTP' error messages!
 set ignore_error_messages
-
-statement ok
-CREATE SECRET (
-    TYPE S3,
-    KEY_ID 'admin',
-    SECRET 'password',
-    ENDPOINT '127.0.0.1:9000',
-    URL_STYLE 'path',
-    USE_SSL 0
-);
-
-
-statement ok
-ATTACH 'demo' AS my_datalake (
-	TYPE ICEBERG,
-	CLIENT_ID 'admin',
-	CLIENT_SECRET 'password',
-	ENDPOINT 'http://127.0.0.1:8181'
-);
 
 # Retrieve the (snapshot_id + timestamp_ms) pairs, using offset and limit
 

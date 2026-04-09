@@ -70,8 +70,8 @@ jobs:
           TEST_CONFIG_CATALOG_SETUP: 1
           FIXTURE_SERVER_AVAILABLE: 1
         run: |
-          ./build/release/test/unittest --order lex "$PWD/test/sql/local/irc_any_catalog/*" --list-test-names-only || true
-          ./build/release/test/unittest --order lex "$PWD/test/sql/local/irc_any_catalog/*" --test-config test/configs/fixture.json
+          ./build/release/test/unittest --order lex "$PWD/test/sql/local/catalog_test_config_setup/*" --list-test-names-only || true
+          ./build/release/test/unittest --order lex "$PWD/test/sql/local/catalog_test_config_setup/*" --test-config test/configs/fixture.json
 
       - name: Run other tests
         env:
