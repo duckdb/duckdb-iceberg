@@ -197,7 +197,8 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 	}
 	auto &table_entry = catalog_entry->Cast<IcebergTableEntry>();
 	auto &catalog_table_info = table_entry.table_info;
-	auto emplace_res = irc_transaction.updated_tables.emplace(catalog_table_info.GetTableKey(), catalog_table_info.Copy());
+	auto emplace_res =
+	    irc_transaction.updated_tables.emplace(catalog_table_info.GetTableKey(), catalog_table_info.Copy());
 	auto &updated_table = emplace_res.first->second;
 	if (emplace_res.second) {
 		updated_table.InitSchemaVersions();
@@ -296,7 +297,9 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 		bool column_exists;
 		auto new_schema = current_schema.RemoveColumn(to_remove_column, column_exists);
 		if (!remove_column_info.if_column_exists && !column_exists) {
-			throw CatalogException("Attempted to drop column '%s' from table '%s', but no column by this name exists in the current schema (id: %d)", to_remove_column, table_entry.name, current_schema.schema_id);
+			throw CatalogException("Attempted to drop column '%s' from table '%s', but no column by this name exists "
+			                       "in the current schema (id: %d)",
+			                       to_remove_column, table_entry.name, current_schema.schema_id);
 		}
 		if (remove_column_info.if_column_exists && !column_exists) {
 			//! Column doesn't exist, just return

@@ -287,7 +287,8 @@ static rest_api_objects::TableUpdate CreateSetSnapshotRefUpdate(int64_t snapshot
 	return table_update;
 }
 
-static bool NeedsAssertSchemaId(const IcebergTransactionData &transaction_data, const IcebergTableInformation &table_info) {
+static bool NeedsAssertSchemaId(const IcebergTransactionData &transaction_data,
+                                const IcebergTableInformation &table_info) {
 	if (!transaction_data.has_schema_update) {
 		return false;
 	}

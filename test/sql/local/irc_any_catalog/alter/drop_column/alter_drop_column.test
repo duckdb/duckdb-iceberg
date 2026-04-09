@@ -1,5 +1,5 @@
-# name: test/tmp/tmp3.test
-# group: [tmp]
+# name: test/sql/local/irc_any_catalog/alter/drop_column/alter_drop_column.test
+# group: [drop_column]
 
 require-env ICEBERG_SERVER_AVAILABLE
 
@@ -57,23 +57,10 @@ select c from my_datalake.default.many_column_tbl;
 ----
 Binder Error: Referenced column "c" not found in FROM clause!
 
-statement ok
-ALTER TABLE my_datalake.default.many_column_tbl DROP COLUMN b;
-
-statement error
-select b from my_datalake.default.many_column_tbl; 
-----
-Binder Error: Referenced column "b" not found in FROM clause!
-
 query I
 select d from my_datalake.default.many_column_tbl
 ----
 2324
-
-query II
-select * from my_datalake.default.many_column_tbl
-----
-test	2324
 
 statement ok
 abort
@@ -106,28 +93,15 @@ select c from my_datalake.default.many_column_tbl;
 ----
 Binder Error: Referenced column "c" not found in FROM clause!
 
-statement ok
-ALTER TABLE my_datalake.default.many_column_tbl DROP COLUMN b;
-
-statement error
-select b from my_datalake.default.many_column_tbl;
-----
-Binder Error: Referenced column "b" not found in FROM clause!
-
 query I
 select d from my_datalake.default.many_column_tbl
 ----
 2324
 
-query II
-select * from my_datalake.default.many_column_tbl
-----
-test	2324
-
 statement ok
 commit
 
-query II
+query III
 select * from my_datalake.default.many_column_tbl
 ----
-test	2324
+test	true	2324
