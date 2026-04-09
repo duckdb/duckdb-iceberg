@@ -47,7 +47,7 @@ select count(*) from my_datalake.default.test_bucket_decimal;
 11
 
 query III rowsort
-select id, amount, label from my_datalake.default.test_bucket_decimal;
+select id, amount, label from my_datalake.default.test_bucket_decimal order by id;
 ----
 1	10.00	ten
 2	20.00	twenty
