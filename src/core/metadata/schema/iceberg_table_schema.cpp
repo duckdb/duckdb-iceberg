@@ -70,8 +70,8 @@ static optional_ptr<const IcebergColumnDefinition> GetColumnChild(const IcebergC
 	return nullptr;
 }
 
-optional_ptr<const IcebergColumnDefinition> IcebergTableSchema::GetFromPath(const vector<string> &path,
-                                                                            optional_ptr<optional_idx> name_offset) {
+optional_ptr<const IcebergColumnDefinition>
+IcebergTableSchema::GetFromPath(const vector<string> &path, optional_ptr<optional_idx> name_offset) const {
 	D_ASSERT(!path.empty());
 
 	optional_ptr<const IcebergColumnDefinition> result;

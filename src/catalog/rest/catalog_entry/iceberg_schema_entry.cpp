@@ -182,6 +182,47 @@ optional_ptr<CatalogEntry> IcebergSchemaEntry::CreateCollation(CatalogTransactio
 	throw BinderException("Iceberg databases do not support creating collations");
 }
 
+static void VerifySchemaEvolution(const IcebergColumnDefinition &column, const LogicalType &target_type) {
+	auto &original_type = column.type;
+	switch (original_type.id()) {
+	case LogicalTypeId::DECIMAL: {
+		if (target_type.id() != LogicalTypeId::DECIMAL) {
+			break;
+		}
+		throw NotImplementedException("DECIMAL -> DECIMAL");
+		return;
+	}
+	case LogicalTypeId::INTEGER: {
+		if (target_type.id() != LogicalTypeId::BIGINT) {
+			break;
+		}
+		throw NotImplementedException("INTEGER -> BIGINT");
+		return;
+	}
+	case LogicalTypeId::FLOAT: {
+		if (target_type.id() != LogicalTypeId::DOUBLE) {
+			break;
+		}
+		throw NotImplementedException("FLOAT -> DOUBLE");
+		return;
+	}
+	case LogicalTypeId::DATE: {
+		if (target_type.id() == LogicalTypeId::TIMESTAMP) {
+			throw NotImplementedException("DATE -> TIMESTAMP");
+		} else if (target_type.id() == LogicalTypeId::TIMESTAMP_NS) {
+			throw NotImplementedException("DATE -> TIMESTAMP_NS");
+		} else {
+			break;
+		}
+		return;
+	}
+	default:
+		break;
+	}
+	throw CatalogException("Column '%s' of type '%s' can't be altered to type '%s'", column.name,
+	                       original_type.ToString(), target_type.ToString());
+}
+
 void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) {
 	if (info.type != AlterType::ALTER_TABLE) {
 		throw NotImplementedException("Only ALTER TABLE is supported for Iceberg");
@@ -327,6 +368,21 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 
 		updated_table.table_metadata.schemas[new_schema_id] = std::move(new_schema);
 		updated_table.table_metadata.SetCurrentSchemaId(new_schema_id);
+		return;
+	}
+	case AlterTableType::ALTER_COLUMN_TYPE: {
+		auto &change_type_info = alter_table_info.Cast<ChangeColumnTypeInfo>();
+		auto &column_name = change_type_info.column_name;
+		auto column_p = current_schema.GetFromPath({column_name}, nullptr);
+		if (!column_p) {
+			throw CatalogException("Column with name '%s' does not exist on the table '%s', ALTER TYPE failed",
+			                       column_name, table_entry.name);
+		}
+		auto &column = *column_p;
+		if (change_type_info.expression->type != ExpressionType::OPERATOR_CAST) {
+			throw NotImplementedException("ALTER TYPE with a USING expression is not supported for Iceberg tables");
+		}
+		VerifySchemaEvolution(column, change_type_info.target_type);
 		return;
 	}
 	default: {
