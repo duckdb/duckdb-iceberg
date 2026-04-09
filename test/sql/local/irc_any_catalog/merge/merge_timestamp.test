@@ -32,7 +32,7 @@ statement ok
 create table my_datalake.default.t (id uuid, ts timestamptz);
 
 statement ok
-alter table my_datalake.default.t set partitioned by (year(ts), month(ts));
+alter table my_datalake.default.t set partitioned by (year(ts));
 
 statement ok
 merge into my_datalake.default.t
