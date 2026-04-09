@@ -1,0 +1,30 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/irc_nested_types.test
+# description: test integration with iceberg catalog read
+# group: [catalog_agnostic]
+
+require-env TEST_CONFIG_CATALOG_SETUP
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+set enable_logging=true
+
+statement ok
+set logging_level='debug'
+
+statement ok
+use my_datalake.default;
+
+query IIIII
+select * from nested_types
+----
+1	Alice	{'street': 123 Main St, 'city': Metropolis, 'zip': 12345}	[123-456-7890, 987-654-3210]	{age=30, membership=gold}

@@ -1,0 +1,26 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/delete/test_delete_from_partitioned_table_errors.test
+# description: test delete from partitioned table
+# group: [delete]
+
+require-env TEST_CONFIG_CATALOG_SETUP
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+CALL enable_logging('HTTP');
+
+statement ok
+set logging_level='debug'
+
+statement ok
+select * from my_datalake.default.lineitem_partitioned_l_shipmode limit 1;
+

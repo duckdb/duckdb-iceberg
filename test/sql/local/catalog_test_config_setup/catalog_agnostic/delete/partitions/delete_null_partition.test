@@ -1,0 +1,195 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/delete/partitions/delete_null_partition.test
+# description: Test deleting rows where the partition transform column is NULL
+# group: [partitions]
+
+require-env TEST_CONFIG_CATALOG_SETUP
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+CALL enable_logging('HTTP');
+
+statement ok
+set logging_level='debug'
+
+# ---- Identity (VARCHAR) transform with NULLs ----
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.test_delete_null_identity;
+
+statement ok
+CREATE TABLE my_datalake.default.test_delete_null_identity (id INT, category VARCHAR)
+PARTITIONED BY (category);
+
+statement ok
+INSERT INTO my_datalake.default.test_delete_null_identity VALUES
+    (1, 'A'),
+    (2, NULL),
+    (3, 'B'),
+    (4, NULL),
+    (5, 'C');
+
+query II
+SELECT id, category FROM my_datalake.default.test_delete_null_identity ORDER BY id;
+----
+1	A
+2	NULL
+3	B
+4	NULL
+5	C
+
+query I
+SELECT COUNT(*) FROM my_datalake.default.test_delete_null_identity WHERE category IS NULL;
+----
+2
+
+statement ok
+DELETE FROM my_datalake.default.test_delete_null_identity WHERE category IS NULL;
+
+query I
+SELECT COUNT(*) FROM my_datalake.default.test_delete_null_identity WHERE category IS NULL;
+----
+0
+
+query II
+SELECT id, category FROM my_datalake.default.test_delete_null_identity ORDER BY id;
+----
+1	A
+3	B
+5	C
+
+statement ok
+DROP TABLE my_datalake.default.test_delete_null_identity;
+
+# ---- Year transform with NULLs ----
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.test_delete_null_year;
+
+statement ok
+CREATE TABLE my_datalake.default.test_delete_null_year (id INT, ts TIMESTAMP, val VARCHAR)
+PARTITIONED BY (year(ts));
+
+statement ok
+INSERT INTO my_datalake.default.test_delete_null_year VALUES
+    (1, '2020-01-15 00:00:00'::TIMESTAMP, 'a'),
+    (2, NULL, 'b'),
+    (3, '2021-06-01 12:00:00'::TIMESTAMP, 'c'),
+    (4, NULL, 'd'),
+    (5, '2022-03-20 09:00:00'::TIMESTAMP, 'e');
+
+query I
+SELECT COUNT(*) FROM my_datalake.default.test_delete_null_year WHERE ts IS NULL;
+----
+2
+
+statement ok
+DELETE FROM my_datalake.default.test_delete_null_year WHERE ts IS NULL;
+
+query I
+SELECT COUNT(*) FROM my_datalake.default.test_delete_null_year WHERE ts IS NULL;
+----
+0
+
+query III
+SELECT id, ts, val FROM my_datalake.default.test_delete_null_year ORDER BY id;
+----
+1	2020-01-15 00:00:00	a
+3	2021-06-01 12:00:00	c
+5	2022-03-20 09:00:00	e
+
+statement ok
+DROP TABLE my_datalake.default.test_delete_null_year;
+
+# ---- Month transform with NULLs ----
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.test_delete_null_month;
+
+statement ok
+CREATE TABLE my_datalake.default.test_delete_null_month (id INT, ts TIMESTAMP)
+PARTITIONED BY (month(ts));
+
+statement ok
+INSERT INTO my_datalake.default.test_delete_null_month VALUES
+    (1, '2021-02-10 00:00:00'::TIMESTAMP),
+    (2, NULL),
+    (3, '2021-04-01 08:00:00'::TIMESTAMP),
+    (4, NULL);
+
+statement ok
+DELETE FROM my_datalake.default.test_delete_null_month WHERE ts IS NULL;
+
+query II
+SELECT id, ts FROM my_datalake.default.test_delete_null_month ORDER BY id;
+----
+1	2021-02-10 00:00:00
+3	2021-04-01 08:00:00
+
+statement ok
+DROP TABLE my_datalake.default.test_delete_null_month;
+
+# ---- Day transform with NULLs ----
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.test_delete_null_day;
+
+statement ok
+CREATE TABLE my_datalake.default.test_delete_null_day (id INT, dt DATE, val VARCHAR)
+PARTITIONED BY (day(dt));
+
+statement ok
+INSERT INTO my_datalake.default.test_delete_null_day VALUES
+    (1, '2021-05-01'::DATE, 'a'),
+    (2, NULL, 'b'),
+    (3, '2021-05-03'::DATE, 'c'),
+    (4, NULL, 'd');
+
+statement ok
+DELETE FROM my_datalake.default.test_delete_null_day WHERE dt IS NULL;
+
+query III
+SELECT id, dt, val FROM my_datalake.default.test_delete_null_day ORDER BY id;
+----
+1	2021-05-01	a
+3	2021-05-03	c
+
+statement ok
+DROP TABLE my_datalake.default.test_delete_null_day;
+
+# ---- Hour transform with NULLs ----
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.test_delete_null_hour;
+
+statement ok
+CREATE TABLE my_datalake.default.test_delete_null_hour (id INT, ts TIMESTAMP, val VARCHAR)
+PARTITIONED BY (hour(ts));
+
+statement ok
+INSERT INTO my_datalake.default.test_delete_null_hour VALUES
+    (1, '2021-05-01 10:00:00'::TIMESTAMP, 'a'),
+    (2, NULL, 'b'),
+    (3, '2021-05-01 12:00:00'::TIMESTAMP, 'c'),
+    (4, NULL, 'd');
+
+statement ok
+DELETE FROM my_datalake.default.test_delete_null_hour WHERE ts IS NULL;
+
+query III
+SELECT id, ts, val FROM my_datalake.default.test_delete_null_hour ORDER BY id;
+----
+1	2021-05-01 10:00:00	a
+3	2021-05-01 12:00:00	c
+
+statement ok
+DROP TABLE my_datalake.default.test_delete_null_hour;

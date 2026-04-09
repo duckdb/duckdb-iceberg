@@ -1,0 +1,41 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/reads/should_not_do_filter_pruning_on_expression_string_filters.test
+# group: [reads]
+
+require avro
+
+require parquet
+
+require iceberg
+
+require-env TEST_CONFIG_CATALOG_SETUP
+
+
+statement ok
+SET enable_logging=true;
+
+statement ok
+SET logging_level='trace';
+
+query I
+SELECT item_id FROM my_datalake.default.issue_791 WHERE length(item_id) = 36;
+----
+10000000-0000-0000-0000-000000000001
+20000000-0000-0000-0000-000000000002
+
+# Should not have skipped any files based on bound checks, as it's unreliable with expression filters (e.g. len())
+query I
+select count(*) FROM duckdb_logs() where type = 'Iceberg' and message.contains('Iceberg Filter Pushdown, skipped ''data_file'':');
+----
+0
+
+query I
+SELECT item_id FROM my_datalake.default.issue_791 WHERE length(item_id) > 35 AND length(item_id) < 37;
+----
+10000000-0000-0000-0000-000000000001
+20000000-0000-0000-0000-000000000002
+
+query I
+SELECT item_id FROM my_datalake.default.issue_791 WHERE length(item_id) IN (36);
+----
+10000000-0000-0000-0000-000000000001
+20000000-0000-0000-0000-000000000002

@@ -1,0 +1,40 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/transactions/test_concurrent_transactions.test
+# group: [transactions]
+
+require-env TEST_CONFIG_CATALOG_SETUP
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+CALL enable_logging('HTTP');
+
+statement ok
+set logging_level='debug'
+
+require avro
+
+require parquet
+
+require iceberg
+
+concurrentloop i 1 10
+
+statement ok
+SELECT schema_name FROM information_schema.schemata;
+
+statement ok
+SELECT * FROM information_schema.columns WHERE table_catalog = 'my_datalake';
+
+statement ok
+SELECT * FROM my_datalake.default.quickstart_table LIMIT 1;
+
+endloop

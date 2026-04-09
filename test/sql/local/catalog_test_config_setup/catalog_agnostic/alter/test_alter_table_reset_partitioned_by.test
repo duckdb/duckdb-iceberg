@@ -1,0 +1,41 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/alter/test_alter_table_reset_partitioned_by.test
+# group: [alter]
+
+require-env TEST_CONFIG_CATALOG_SETUP
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+CALL enable_logging(level='warning');
+
+statement ok
+SET warnings_as_errors = True;
+
+statement ok
+drop table if exists my_datalake.default.alter_table_reset_partitioned_by;
+
+statement ok
+CREATE TABLE my_datalake.default.alter_table_reset_partitioned_by AS (select range a, range%2 b FROM range(10));
+
+statement ok
+Alter table my_datalake.default.alter_table_reset_partitioned_by SET PARTITIONED BY (b);
+
+statement ok
+insert into my_datalake.default.alter_table_reset_partitioned_by values (11, 20);
+
+statement ok
+alter table my_datalake.default.alter_table_reset_partitioned_by RESET PARTITIONED BY;
+
+#TODO verify data_file structure
+
+statement ok
+insert into my_datalake.default.alter_table_reset_partitioned_by values (100, 200);
