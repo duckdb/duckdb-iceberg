@@ -212,3 +212,32 @@ query I
 select typeof(evolve_to_timestamp_ns) from my_datalake.default.schema_evolution_table limit 1
 ----
 TIMESTAMP_NS
+
+# -------------- Partition Tests --------------
+
+statement ok
+drop table if exists my_datalake.default.schema_evolution_table;
+
+statement ok
+create table my_datalake.default.schema_evolution_table(
+	evolve_to_timestamp_partitioned DATE
+)
+
+statement ok
+alter table my_datalake.default.schema_evolution_table SET PARTITIONED BY (year(evolve_to_timestamp_partitioned));
+
+statement ok
+insert into my_datalake.default.schema_evolution_table VALUES
+(
+	'1934/11/05'::DATE -- evolve_to_timestamp_partitioned
+);
+
+query I
+select evolve_to_timestamp_partitioned from my_datalake.default.schema_evolution_table
+----
+1934-11-05
+
+statement error
+ALTER TABLE my_datalake.default.schema_evolution_table ALTER evolve_to_timestamp_partitioned TYPE TIMESTAMP;
+----
+Catalog Error: Column 'evolve_to_timestamp_partitioned' of type 'DATE' can't be altered to type 'TIMESTAMP' (there is a partition field that refers to the column (name: evolve_to_timestamp_partitioned_year, partition_field_id: 1000))

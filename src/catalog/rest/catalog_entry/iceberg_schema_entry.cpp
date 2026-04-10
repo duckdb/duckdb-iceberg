@@ -224,18 +224,25 @@ static void VerifySchemaEvolution(const IcebergTableMetadata &table_metadata, co
 		return;
 	}
 	case LogicalTypeId::DATE: {
-		if (target_type.id() == LogicalTypeId::TIMESTAMP) {
-			return;
-		} else if (target_type.id() == LogicalTypeId::TIMESTAMP_NS) {
-			if (table_metadata.iceberg_version >= 3) {
-				return;
+		if (target_type.id() == LogicalTypeId::TIMESTAMP || target_type.id() == LogicalTypeId::TIMESTAMP_NS) {
+			auto &partition_spec = table_metadata.GetLatestPartitionSpec();
+			auto partition_field = partition_spec.TryGetFieldBySourceId(column.id);
+			if (partition_field) {
+				extra_info = StringUtil::Format(
+				    " (there is a partition field that refers to the column (name: %s, partition_field_id: %d))",
+				    partition_field->name, partition_field->partition_field_id);
+				break;
 			}
-			extra_info = " (DATE to TIMESTAMP_NS is a Iceberg V3 feature)";
-			break;
-		} else {
-			break;
+			if (target_type.id() == LogicalTypeId::TIMESTAMP_NS) {
+				if (table_metadata.iceberg_version >= 3) {
+					return;
+				}
+				extra_info = " (DATE to TIMESTAMP_NS is a Iceberg V3 feature)";
+				break;
+			}
+			return;
 		}
-		return;
+		break;
 	}
 	default:
 		break;
