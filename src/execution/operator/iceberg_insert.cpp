@@ -307,10 +307,6 @@ void IcebergInsertGlobalState::AddFiles(DataChunk &chunk, const string &table_na
 				continue;
 			}
 			auto &column_info = *column_info_p;
-			if (column_info.type.id() == LogicalTypeId::GEOMETRY) {
-				//! Geometry columns have no meaningful min/max bounds
-				continue;
-			}
 			auto stats = ParseColumnStats(column_info.type, col_stats, context);
 
 			// a map type cannot violate not null constraints.

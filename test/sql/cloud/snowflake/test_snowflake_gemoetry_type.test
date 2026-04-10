@@ -1,4 +1,4 @@
-# name: test/sql/cloud/snowflake/test_snowflake_geometry_type.test
+# name: test/sql/cloud/snowflake/test_snowflake_gemoetry_type.test
 # description: test integration with iceberg catalog read
 # group: [snowflake]
 
@@ -34,7 +34,8 @@ create secret polaris_secret (
 statement ok
 attach 's3-catalog' as my_datalake (
 	type ICEBERG,
-	ENDPOINT '${SNOWFLAKE_CATALOG_URI_GCS}'
+	ENDPOINT '${SNOWFLAKE_CATALOG_URI_GCS}',
+	DEFAULT_REGION 'eu-west-2'
 );
 
 
@@ -62,7 +63,7 @@ attach 's3-catalog' as my_datalake (
 # INSERT INTO geometry_test SELECT 20, 'empty_collection',      TO_GEOMETRY('GEOMETRYCOLLECTION EMPTY', 4326);
 # INSERT INTO geometry_test SELECT 19, 'null_geom',  NULL;
 query III
-select * from my_datalake.default.geometry_test;
+select * from my_datalake.default.geometry_test order by all;
 ----
 1	min_min_point	POINT (-180 -90)
 2	max_max_point	POINT (180 90)
