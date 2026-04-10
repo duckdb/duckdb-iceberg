@@ -85,7 +85,7 @@ IcebergDataFile::GetExtendedPartitionInfo(const IcebergTableMetadata &metadata) 
 
 	// Build source_id -> LogicalType map from all schemas (schema evolution may spread columns).
 	unordered_map<uint64_t, const LogicalType *> source_id_to_type;
-	for (auto &schema_pair : metadata.schemas) {
+	for (auto &schema_pair : metadata.GetSchemas()) {
 		for (auto &col : schema_pair.second->columns) {
 			source_id_to_type.emplace(static_cast<uint64_t>(col->id), &col->type);
 		}

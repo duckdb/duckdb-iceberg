@@ -23,14 +23,16 @@ public:
 	static LogicalType ParsePrimitiveTypeString(const string &type_str);
 	static unique_ptr<IcebergColumnDefinition>
 	ParseType(const string &name, int32_t field_id, bool required, rest_api_objects::Type &iceberg_type,
-	          optional_ptr<rest_api_objects::PrimitiveTypeValue> initial_default = nullptr,
+	          const string &doc, optional_ptr<rest_api_objects::PrimitiveTypeValue> initial_default = nullptr,
 	          optional_ptr<rest_api_objects::PrimitiveTypeValue> write_default = nullptr);
 	bool IsIcebergPrimitiveType() const;
 	ColumnDefinition GetColumnDefinition() const;
 	unique_ptr<IcebergColumnDefinition> Copy() const;
+	bool Equals(const IcebergColumnDefinition &other) const;
 
 public:
 	int32_t id;
+	string doc;
 	string name;
 	LogicalType type;
 	unique_ptr<Value> initial_default;

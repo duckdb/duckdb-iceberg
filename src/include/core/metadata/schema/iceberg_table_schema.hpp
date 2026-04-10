@@ -28,6 +28,7 @@ public:
 	shared_ptr<IcebergTableSchema> RemoveColumn(const string &name, optional_idx &column_id) const;
 	const LogicalType &GetColumnTypeFromFieldId(idx_t field_id) const;
 
+	bool Equals(const IcebergTableSchema &other) const;
 	void GetColumnNamesAndTypes(vector<string> &names, vector<LogicalType> &types) const;
 
 public:
@@ -35,6 +36,7 @@ public:
 	// Nessie Needs this for some reason.
 	idx_t last_column_id;
 	vector<unique_ptr<IcebergColumnDefinition>> columns;
+	vector<int32_t> identifier_field_ids;
 };
 
 } // namespace duckdb

@@ -42,7 +42,7 @@ bool IcebergTableSet::FillEntry(ClientContext &context, IcebergTableInformation 
 		if (cached_result) {
 			// Use the cached result instead of making a new request
 			table.table_metadata = IcebergTableMetadata::FromLoadTableResult(*cached_result->load_table_result);
-			auto &schemas = table.table_metadata.schemas;
+			auto &schemas = table.table_metadata.GetSchemas();
 			D_ASSERT(!schemas.empty());
 			for (auto &table_schema : schemas) {
 				table.CreateSchemaVersion(*table_schema.second);
@@ -78,7 +78,7 @@ bool IcebergTableSet::FillEntry(ClientContext &context, IcebergTableInformation 
 		auto &load_table_result = *cached_table_result->load_table_result;
 		table.table_metadata = IcebergTableMetadata::FromLoadTableResult(load_table_result);
 	}
-	auto &schemas = table.table_metadata.schemas;
+	auto &schemas = table.table_metadata.GetSchemas();
 
 	//! It should be impossible to have a metadata file without any schema
 	D_ASSERT(!schemas.empty());
@@ -216,10 +216,12 @@ IcebergTableInformation &IcebergTableSet::CreateNewEntry(ClientContext &context,
 	table_info.schema_versions[0] = std::move(table_entry);
 	table_metadata.iceberg_version = iceberg_version.GetIndex();
 	int32_t last_column_id;
-	table_metadata.schemas[0] = IcebergCreateTableRequest::CreateIcebergSchema(
-	    context, table_metadata, table_ptr->GetColumns(), table_ptr->GetConstraints(), last_column_id);
+
+	auto new_schema = IcebergCreateTableRequest::CreateIcebergSchema(context, table_metadata, table_ptr->GetColumns(),
+	                                                                 table_ptr->GetConstraints(), last_column_id);
+	new_schema->schema_id = 0;
+	table_metadata.AddSchema(std::move(new_schema));
 	table_metadata.SetCurrentSchemaId(0);
-	table_metadata.schemas[0]->schema_id = 0;
 	table_metadata.last_column_id = last_column_id;
 
 	// Get Location
