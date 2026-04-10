@@ -297,10 +297,7 @@ std::vector<uint8_t> HexStringToBytes(const std::string &hex) {
 }
 
 SerializeResult IcebergValue::SerializeValue(Value input_value, const LogicalType &column_type,
-                                             SerializeBound bound_type) {
-	if (input_value.type() != LogicalType::VARCHAR) {
-		throw InternalException("We should not serialize a non string value");
-	}
+                                             SerializeBound bound_type, ClientContext &context) {
 	switch (column_type.id()) {
 	case LogicalTypeId::INTEGER: {
 		int32_t val = input_value.GetValue<int32_t>();
@@ -444,6 +441,10 @@ SerializeResult IcebergValue::SerializeValue(Value input_value, const LogicalTyp
 		return ret;
 	}
 	case LogicalTypeId::BLOB: {
+		// do not double serialize blob values.
+		if (input_value.type() != LogicalType::VARCHAR) {
+			return SerializeResult(column_type, input_value);
+		}
 		// get const data ptr for the string value
 		auto val = input_value.GetValue<string>();
 		auto bytes = HexStringToBytes(val);

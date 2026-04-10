@@ -80,7 +80,8 @@ public:
 
 public:
 	static DeserializeResult DeserializeValue(const string_t &blob, const LogicalType &target);
-	static SerializeResult SerializeValue(Value input_value, const LogicalType &column_type, SerializeBound bound_type);
+	static SerializeResult SerializeValue(Value input_value, const LogicalType &column_type, SerializeBound bound_type,
+	                                      ClientContext &context);
 	static string TruncateString(const string &input);
 	static string TruncateAndIncrementString(const string &input);
 };

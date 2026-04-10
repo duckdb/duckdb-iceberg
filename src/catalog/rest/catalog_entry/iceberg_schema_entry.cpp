@@ -313,7 +313,7 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 		if (partition_field) {
 			throw CatalogException(
 			    "Can't drop column '%s' as it is referenced by the current partition spec's field: '%s' (field id: %d)",
-			    to_remove_column, partition_field->name, partition_field->partition_field_id);
+			    to_remove_column, partition_field->GetPartitionSpecFieldName(), partition_field->GetPartitionFieldId());
 		}
 
 		if (new_schema->columns.empty()) {

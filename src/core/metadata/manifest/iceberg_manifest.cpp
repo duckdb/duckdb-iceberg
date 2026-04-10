@@ -50,7 +50,7 @@ map<idx_t, LogicalType> IcebergDataFile::GetFieldIdToTypeMapping(const IcebergSn
 		auto &fields = partition_spec.GetFields();
 
 		for (auto &field : fields) {
-			auto it = source_to_column_id.find(field.source_id);
+			auto it = source_to_column_id.find(field.GetSourceId());
 			if (it == source_to_column_id.end()) {
 				//! FIXME: is this correct?
 				//! The column doesn't exist (anymore) in the schema we're scanning
