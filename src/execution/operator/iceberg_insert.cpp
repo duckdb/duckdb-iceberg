@@ -782,7 +782,11 @@ static void GenerateProjection(ClientContext &context, PhysicalPlanGenerator &pl
 	// push the projection
 	vector<LogicalType> types;
 	for (auto &expr : expressions) {
-		types.push_back(expr->return_type);
+		auto &type = expr->return_type;
+		if (type.id() == LogicalTypeId::HUGEINT) {
+			type = LogicalType::DECIMAL(38, 0);
+		}
+		types.push_back(type);
 	}
 	auto &proj =
 	    planner.Make<PhysicalProjection>(std::move(types), std::move(expressions), plan->estimated_cardinality);
