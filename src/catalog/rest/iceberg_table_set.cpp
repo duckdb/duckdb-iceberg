@@ -261,8 +261,7 @@ IcebergTableInformation &IcebergTableSet::CreateNewEntry(ClientContext &context,
 	// other required updates to the table
 	table_info.AddAssignUUID(iceberg_transaction);
 	table_info.AddUpradeFormatVersion(iceberg_transaction);
-	table_info.AddSchema(iceberg_transaction);
-	table_info.AddSetCurrentSchema(iceberg_transaction);
+	table_info.AddSchema(iceberg_transaction, 0);
 	table_info.AddPartitionSpec(iceberg_transaction);
 	table_info.SetDefaultSpec(iceberg_transaction);
 	table_info.AddSortOrder(iceberg_transaction);

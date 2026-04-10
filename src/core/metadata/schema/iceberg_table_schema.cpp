@@ -247,6 +247,20 @@ shared_ptr<IcebergTableSchema> IcebergTableSchema::Copy() const {
 	return res;
 }
 
+shared_ptr<IcebergTableSchema> IcebergTableSchema::RemoveColumn(const string &name, optional_idx &column_id) const {
+	auto res = make_shared_ptr<IcebergTableSchema>();
+	res->schema_id = schema_id + 1;
+	res->last_column_id = last_column_id;
+	for (auto &column : columns) {
+		if (column->name == name) {
+			column_id = column->id;
+			continue;
+		}
+		res->columns.push_back(column->Copy());
+	}
+	return res;
+}
+
 const LogicalType &IcebergTableSchema::GetColumnTypeFromFieldId(idx_t field_id) const {
 	for (auto &column : columns) {
 		if (column->id == field_id) {

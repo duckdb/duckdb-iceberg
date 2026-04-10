@@ -17,6 +17,10 @@ namespace duckdb {
 
 IcebergAddSnapshot::IcebergAddSnapshot(const IcebergTableInformation &table_info)
     : IcebergTableUpdate(IcebergTableUpdateType::ADD_SNAPSHOT, table_info) {
+	//! FIXME: Do we also need to capture the current partition spec and sort order?
+	//! This is a bit of a code smell, the `IcebergTableInformation` should instead be const
+	//! and all transactional changes should live in the IcebergTransactionData
+	schema_id = table_info.table_metadata.GetCurrentSchemaId();
 }
 
 static rest_api_objects::TableUpdate CreateAddSnapshotUpdate(const IcebergTableInformation &table_info,
@@ -33,7 +37,7 @@ static rest_api_objects::TableUpdate CreateAddSnapshotUpdate(const IcebergTableI
 }
 
 static IcebergManifestListEntry ScanExistingManifestFile(const IcebergManifestFile &manifest_file,
-                                                         IcebergCommitState &commit_state) {
+                                                         IcebergCommitState &commit_state, int32_t schema_id) {
 	vector<IcebergManifestListEntry> manifest_files;
 	manifest_files.push_back(manifest_file);
 
@@ -43,7 +47,7 @@ static IcebergManifestListEntry ScanExistingManifestFile(const IcebergManifestFi
 
 	IcebergSnapshotScanInfo snapshot_info;
 	snapshot_info.snapshot = commit_state.latest_snapshot;
-	snapshot_info.schema_id = table_metadata.GetCurrentSchemaId();
+	snapshot_info.schema_id = schema_id;
 
 	auto manifest_scan =
 	    AvroScan::ScanManifest(snapshot_info, manifest_files, options, fs, "", table_metadata, commit_state.context);
@@ -131,7 +135,7 @@ void IcebergAddSnapshot::ConstructManifestList(IcebergManifestList &new_manifest
 	for (auto &manifest_list_entry : commit_state.manifests) {
 		auto &existing_manifest_file = manifest_list_entry.file;
 
-		auto scanned_manifest_file = ScanExistingManifestFile(existing_manifest_file, commit_state);
+		auto scanned_manifest_file = ScanExistingManifestFile(existing_manifest_file, commit_state, schema_id);
 		bool needs_rewrite = ManifestFileNeedsToBeRewritten(commit_state, scanned_manifest_file, altered_manifests);
 		if (!needs_rewrite) {
 			new_manifest_list.AddExistingManifestFile(std::move(manifest_list_entry));
@@ -187,7 +191,7 @@ void IcebergAddSnapshot::CreateUpdate(DatabaseInstance &db, ClientContext &conte
 	new_snapshot.operation = IcebergSnapshotOperationType::OVERWRITE;
 	new_snapshot.snapshot_id = snapshot_id;
 	new_snapshot.sequence_number = sequence_number;
-	new_snapshot.SetSchemaId(table_metadata.GetCurrentSchemaId());
+	new_snapshot.SetSchemaId(schema_id);
 	new_snapshot.manifest_list = manifest_list_path;
 	new_snapshot.timestamp_ms = Timestamp::GetEpochMs(Timestamp::GetCurrentTimestamp());
 
