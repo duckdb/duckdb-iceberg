@@ -331,7 +331,7 @@ TableTransactionInfo IcebergTransaction::GetTransactionRequest(ClientContext &co
 			requirement->CreateRequirement(db, context, commit_state);
 			info.has_assert_create = requirement->type == IcebergTableRequirementType::ASSERT_CREATE;
 		}
-		if (NeedsAssertSchemaId(transaction_data, table_info)) {
+		if (!info.has_assert_create && NeedsAssertSchemaId(transaction_data, table_info)) {
 			// Ensure schema is the same as current
 			AssertCurrentSchemaIdRequirement requirement(table_info);
 			requirement.current_schema_id = transaction_data.initial_schema_id;

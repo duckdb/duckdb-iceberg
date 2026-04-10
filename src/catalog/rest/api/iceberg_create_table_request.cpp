@@ -10,14 +10,13 @@
 #include "duckdb/storage/buffer_manager.hpp"
 #include "duckdb/storage/caching_file_system.hpp"
 #include "duckdb/common/types/blob.hpp"
-#include "duckdb/planner/expression_binder/constant_binder.hpp"
-#include "duckdb/planner/binder.hpp"
 
 #include "catalog/rest/api/iceberg_add_snapshot.hpp"
 #include "core/metadata/partition/iceberg_partition_spec.hpp"
 #include "catalog/rest/iceberg_table_set.hpp"
 #include "catalog/rest/catalog_entry/table/iceberg_table_information.hpp"
 #include "catalog/rest/api/iceberg_type.hpp"
+#include "common/iceberg_default.hpp"
 
 using namespace duckdb_yyjson;
 namespace duckdb {
@@ -46,7 +45,7 @@ static string ConvertBlobDefault(const string_t &str) {
 
 static yyjson_mut_val *PrimitiveTypeFromValue(yyjson_mut_doc *doc, const Value &value) {
 	if (value.IsNull()) {
-		return yyjson_mut_null(doc);
+		throw InternalException("Can't produce a PrimitiveTypeValue from NULL");
 	}
 	auto &type = value.type();
 	switch (type.id()) {
@@ -143,10 +142,12 @@ static void AddNamedField(yyjson_mut_doc *doc, yyjson_mut_val *field_obj, const 
 	}
 	yyjson_mut_obj_add_strcpy(doc, field_obj, "type", IcebergTypeHelper::LogicalTypeToIcebergType(column.type).c_str());
 	yyjson_mut_obj_add_bool(doc, field_obj, "required", column.required);
-	if (column.initial_default) {
+	if (column.initial_default && !column.initial_default->IsNull()) {
 		yyjson_mut_obj_add_val(doc, field_obj, "initial-default", PrimitiveTypeFromValue(doc, *column.initial_default));
 	}
-	//! FIXME: write column.write_default;
+	if (column.write_default && !column.write_default->IsNull()) {
+		yyjson_mut_obj_add_val(doc, field_obj, "write-default", PrimitiveTypeFromValue(doc, *column.write_default));
+	}
 }
 
 static void AddUnnamedField(yyjson_mut_doc *doc, yyjson_mut_val *field_obj, const IcebergColumnDefinition &column) {
@@ -205,16 +206,6 @@ static void AddUnnamedField(yyjson_mut_doc *doc, yyjson_mut_val *field_obj, cons
 	}
 }
 
-static Value ExtractInitialValue(ConstantBinder &binder, ClientContext &context,
-                                 optional_ptr<const ParsedExpression> initial_expr, const LogicalType &type) {
-	if (!initial_expr) {
-		return Value(type);
-	}
-	auto expr = initial_expr->Copy();
-	auto bound_expr = binder.Bind(expr, nullptr);
-	return ExpressionExecutor::EvaluateScalar(context, *bound_expr).DefaultCastAs(type);
-}
-
 shared_ptr<IcebergTableSchema> IcebergCreateTableRequest::CreateIcebergSchema(
     ClientContext &context, const IcebergTableMetadata &table_metadata, const ColumnList &columns,
     optional_ptr<const vector<unique_ptr<Constraint>>> constraints_p, int32_t &last_column_id) {
@@ -246,8 +237,7 @@ shared_ptr<IcebergTableSchema> IcebergCreateTableRequest::CreateIcebergSchema(
 		}
 	}
 
-	auto binder = Binder::CreateBinder(context);
-	ConstantBinder constant_binder(*binder, context, "DEFAULT");
+	IcebergDefaultBinder binder(context);
 	for (auto column = column_iterator.begin(); column != column_iterator.end(); ++column) {
 		auto &column_def = *column;
 		auto name = column_def.Name();
@@ -267,7 +257,7 @@ shared_ptr<IcebergTableSchema> IcebergCreateTableRequest::CreateIcebergSchema(
 		auto iceberg_column_def = IcebergColumnDefinition::ParseType(name, first_id, required, type, nullptr);
 		if (column_def.HasDefaultValue()) {
 			auto &default_expr = column_def.DefaultValue();
-			auto val = ExtractInitialValue(constant_binder, context, default_expr, logical_type);
+			auto val = binder.Evaluate(default_expr, logical_type);
 			if (table_metadata.iceberg_version < 3 && !val.IsNull()) {
 				throw InvalidInputException("non-null DEFAULT values are not supported for <V3 tables");
 			}

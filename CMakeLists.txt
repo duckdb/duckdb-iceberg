@@ -36,6 +36,7 @@ set(EXTENSION_SOURCES
 	src/catalog/rest/transaction/iceberg_transaction_manager.cpp
 	src/catalog/rest/transaction/iceberg_transaction.cpp
 	src/common/iceberg_utils.cpp
+	src/common/iceberg_default.cpp
 	src/core/deletes/iceberg_deletion_vector.cpp
 	src/core/deletes/iceberg_equality_delete.cpp
 	src/core/deletes/iceberg_positional_delete.cpp

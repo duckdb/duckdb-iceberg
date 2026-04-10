@@ -15,6 +15,7 @@
 #include "catalog/rest/transaction/iceberg_transaction.hpp"
 #include "catalog/rest/catalog_entry/table/iceberg_table_entry.hpp"
 #include "catalog/rest/api/iceberg_type.hpp"
+#include "common/iceberg_default.hpp"
 
 namespace duckdb {
 
@@ -319,26 +320,11 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 		if (column_definition.HasDefaultValue()) {
 			auto &default_value = column_definition.DefaultValue();
 
-			/*TODO: Support more expressions.
-			 *  Which expressions should we support? Some will require binding, should that binding happen here?
-			 *  ExtractInitialValue in iceberg_create_table_request.cpp:208-216 gets a value using a ConstantBinder.
-			 */
-			switch (default_value.type) {
-			case ExpressionType::VALUE_CONSTANT: {
-				auto &default_constant_value = default_value.Cast<ConstantExpression>().value;
-				if (new_iceberg_column->type != default_constant_value.type()) {
-					throw InvalidInputException(
-					    "Type mismatch between new COLUMN %s type: %s and DEFAULT value type: %s",
-					    new_iceberg_column->name, new_iceberg_column->type.ToString(),
-					    default_constant_value.type().ToString());
-				}
-				new_iceberg_column->initial_default = make_uniq<Value>(default_constant_value);
-				break;
-			}
-			case ExpressionType::VALUE_NULL:
-				break;
-			default:
-				throw InvalidInputException("DEFAULT expression not yet supported");
+			IcebergDefaultBinder binder(context);
+			auto default_constant_value = binder.Evaluate(default_value, new_iceberg_column->type);
+			new_iceberg_column->initial_default = make_uniq<Value>(default_constant_value);
+			if (updated_table.table_metadata.iceberg_version >= 3) {
+				new_iceberg_column->write_default = make_uniq<Value>(default_constant_value);
 			}
 		}
 
@@ -417,6 +403,37 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 		}
 		VerifySchemaEvolution(updated_table.table_metadata, column, change_type_info.target_type);
 		column.type = change_type_info.target_type;
+
+		auto new_schema_id = new_schema->schema_id;
+		// Update the Table Metadata to have our new schema
+		updated_table.CreateSchemaVersion(*new_schema);
+		updated_table.AddSchema(irc_transaction, new_schema_id);
+
+		updated_table.table_metadata.schemas[new_schema_id] = std::move(new_schema);
+		updated_table.table_metadata.SetCurrentSchemaId(new_schema_id);
+		return;
+	}
+	case AlterTableType::SET_DEFAULT: {
+		auto &set_default_info = alter_table_info.Cast<SetDefaultInfo>();
+		auto &column_name = set_default_info.column_name;
+		auto &expression = set_default_info.expression;
+
+		auto new_schema = current_schema.Copy();
+		new_schema->schema_id++;
+
+		auto column_p = new_schema->GetMutableFromPath({column_name}, nullptr);
+		if (!column_p) {
+			throw CatalogException("Column with name '%s' does not exist on the table '%s', SET DEFAULT failed",
+			                       column_name, table_entry.name);
+		}
+		auto &column = *column_p;
+		if (updated_table.table_metadata.iceberg_version < 3) {
+			throw NotImplementedException("SET DEFAULT is not supported on tables < V3");
+		}
+
+		IcebergDefaultBinder binder(context);
+		auto default_constant_value = binder.Evaluate(expression.get(), column.type);
+		column.write_default = make_uniq<Value>(default_constant_value);
 
 		auto new_schema_id = new_schema->schema_id;
 		// Update the Table Metadata to have our new schema
