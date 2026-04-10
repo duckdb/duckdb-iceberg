@@ -1,0 +1,45 @@
+{
+  "description": "Use apache/iceberg-rest-fixture as Iceberg Rest Catalog.",
+  "on_init": "CREATE SECRET (TYPE S3,KEY_ID 'admin',SECRET 'password',ENDPOINT '127.0.0.1:9000',URL_STYLE 'path',USE_SSL 0); ATTACH '' AS my_datalake (TYPE ICEBERG,CLIENT_ID 'admin',CLIENT_SECRET 'password',ENDPOINT 'http://127.0.0.1:8181'); Create schema if not exists my_datalake.default;",
+  "statically_loaded_extensions": [
+    "core_functions",
+    "parquet",
+    "avro",
+    "iceberg",
+    "httpfs"
+  ],
+  "skip_tests": [
+    {
+      "reason": "SEGFAULT",
+      "paths": [
+        "test/sql/alter/rename_table/test_rename_table_many_transactions.test",
+        "test/sql/alter/rename_view/test_rename_view_many_transactions.test",
+        "test/sql/catalog/dependencies/test_prepare_dependencies_transactions.test",
+        "test/sql/catalog/test_schema.test",
+        "test/sql/delete/cleanup_delete_on_conflict.test",
+        "test/sql/index/art/constraints/test_art_tx_conflict_revert.test"
+      ]
+    },
+    {
+      "reason": "Checks the result of SHOW DATABASES; or SHOW SCHEMAS;",
+      "paths": [
+        "test/sql/attach/attach_read_only.test",
+        "test/sql/attach/show_databases.test",
+        "test/sql/attach/show_schemas.test"
+      ]
+    },
+    {
+      "reason": "Checks that parquet extension is not loaded",
+      "paths": [
+        "test/sql/copy/csv/zstd_crash.test"
+      ]
+    },
+    {
+      "reason": "Startup queries provided via on_init failed",
+      "paths": [
+        "test/sql/create/create_objects_readonly.test",
+        "test/sql/function/list/lambdas/test_lambda_storage.test"
+      ]
+    }
+  ]
+}
