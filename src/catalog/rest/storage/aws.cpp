@@ -83,7 +83,8 @@ static void LogAWSHTTPRequest(ClientContext &context, std::shared_ptr<Aws::Http:
 		http_headers.Insert(header.first, header.second);
 	}
 	auto params = HTTPParams(http_util);
-	auto url = string("https://") + req->GetUri().GetAuthority() + req->GetUri().GetPath();
+	auto scheme_str = req->GetUri().GetScheme() == Aws::Http::Scheme::HTTPS ? "https://" : "http://";
+	auto url = string(scheme_str) + req->GetUri().GetAuthority() + req->GetUri().GetPath();
 	const auto query_str = req->GetUri().GetQueryString();
 	if (!query_str.empty()) {
 		url += "?" + query_str;
@@ -132,7 +133,7 @@ Aws::Client::ClientConfiguration AWSInput::BuildClientConfig() {
 
 Aws::Http::URI AWSInput::BuildURI() {
 	Aws::Http::URI uri;
-	uri.SetScheme(Aws::Http::Scheme::HTTPS);
+	uri.SetScheme(scheme);
 	uri.SetAuthority(authority);
 	for (auto &segment : path_segments) {
 		uri.AddPathSegment(segment);
