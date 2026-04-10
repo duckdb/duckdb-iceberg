@@ -21,6 +21,7 @@ ICEBERG_SPARK_RUNTIME = f'iceberg-spark-runtime-{SPARK_VERSION}_{SCALA_BINARY_VE
 
 SPARK_RUNTIME_PATH = os.path.join(os.path.dirname(__file__), '..', '..', f'{ICEBERG_SPARK_RUNTIME}.jar')
 
+
 @IcebergConnection.register(CONNECTION_KEY)
 class IcebergSparkLocal(IcebergConnection):
     def __init__(self):
@@ -41,7 +42,7 @@ class IcebergSparkLocal(IcebergConnection):
         config = SparkConf()
         config.set(
             "spark.jars.packages",
-            f"org.apache.iceberg:iceberg-spark-runtime-{SPARK_VERSION}_{SCALA_BINARY_VERSION}:{ICEBERG_LIBRARY_VERSION},org.apache.iceberg:iceberg-aws-bundle:{ICEBERG_LIBRARY_VERSION} pyspark-shell"
+            f"org.apache.iceberg:iceberg-spark-runtime-{SPARK_VERSION}_{SCALA_BINARY_VERSION}:{ICEBERG_LIBRARY_VERSION},org.apache.iceberg:iceberg-aws-bundle:{ICEBERG_LIBRARY_VERSION} pyspark-shell",
         )
         config.set('spark.sql.iceberg.vectorization.enabled', 'false')
         config.set("spark.sql.extensions", "org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions")
@@ -52,7 +53,10 @@ class IcebergSparkLocal(IcebergConnection):
         config.set("spark.sql.catalog.quickstart_catalog", "org.apache.iceberg.spark.SparkCatalog")
         # Specify the rest catalog endpoint
         config.set("spark.sql.catalog.quickstart_catalog.uri", "http://localhost:8181/api/catalog")
-        config.set("spark.sql.catalog.quickstart_catalog.oauth2-server-uri", "http://localhost:8181/api/catalog/v1/oauth/tokens")
+        config.set(
+            "spark.sql.catalog.quickstart_catalog.oauth2-server-uri",
+            "http://localhost:8181/api/catalog/v1/oauth/tokens",
+        )
         # Enable token refresh
         config.set("spark.sql.catalog.quickstart_catalog.token-refresh-enabled", "true")
         # specify the client_id:client_secret pair

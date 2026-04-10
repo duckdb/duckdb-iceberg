@@ -48,8 +48,6 @@ public:
 	static bool VerifyTableExistence(ClientContext &context, IcebergCatalog &catalog, const IcebergSchemaEntry &schema,
 	                                 const string &table);
 	static vector<string> ParseSchemaName(const string &namespace_name);
-	static string GetSchemaName(const vector<string> &items);
-	static string GetEncodedSchemaName(const vector<string> &items);
 	static APIResult<unique_ptr<const rest_api_objects::LoadTableResult>> GetTable(ClientContext &context,
 	                                                                               IcebergCatalog &catalog,
 	                                                                               const IcebergSchemaEntry &schema,
@@ -62,7 +60,8 @@ public:
 	                              const string &table_name);
 	static void CommitMultiTableUpdate(ClientContext &context, IcebergCatalog &catalog, const string &body);
 	static void CommitNamespaceCreate(ClientContext &context, IcebergCatalog &catalog, string body);
-	static void CommitNamespaceDrop(ClientContext &context, IcebergCatalog &catalog, vector<string> namespace_items);
+	static void CommitNamespaceDrop(ClientContext &context, IcebergCatalog &catalog,
+	                                const vector<string> &namespace_items);
 	//! stage create = false, table is created immediately in the IRC
 	//! stage create = true, table is not created, but metadata is initialized and returned
 	static rest_api_objects::LoadTableResult CommitNewTable(ClientContext &context, IcebergCatalog &catalog,

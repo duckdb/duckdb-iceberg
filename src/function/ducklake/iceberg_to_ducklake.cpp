@@ -849,8 +849,8 @@ static unique_ptr<FunctionData> IcebergToDuckLakeBind(ClientContext &context, Ta
 		tables.LoadEntries(context);
 		for (auto &it : tables.GetEntriesMutable()) {
 			auto &table = it.second;
-			tables.FillEntry(context, table);
-			ret->AddTable(table, context, options);
+			tables.FillEntry(context, *table);
+			ret->AddTable(*table, context, options);
 		}
 	}
 

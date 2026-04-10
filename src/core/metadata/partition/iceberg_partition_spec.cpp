@@ -86,14 +86,22 @@ const uint64_t &IcebergPartitionSpecField::GetPartitionFieldId() const {
 	return partition_field_id;
 }
 
-const IcebergPartitionSpecField &IcebergPartitionSpec::GetFieldBySourceId(idx_t source_id) const {
+optional_ptr<const IcebergPartitionSpecField> IcebergPartitionSpec::TryGetFieldBySourceId(idx_t source_id) const {
 	for (auto &field : fields) {
 		if (field.source_id == source_id) {
 			return field;
 		}
 	}
-	throw InvalidConfigurationException("Field with source_id %d doesn't exist in this partition spec (id %d)",
-	                                    source_id, spec_id);
+	return nullptr;
+}
+
+const IcebergPartitionSpecField &IcebergPartitionSpec::GetFieldBySourceId(idx_t source_id) const {
+	auto res = TryGetFieldBySourceId(source_id);
+	if (!res) {
+		throw InvalidConfigurationException("Field with source_id %d doesn't exist in this partition spec (id %d)",
+		                                    source_id, spec_id);
+	}
+	return *res;
 }
 
 yyjson_mut_val *IcebergPartitionSpec::FieldsToJSON(yyjson_mut_doc *doc) const {

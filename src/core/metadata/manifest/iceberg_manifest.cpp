@@ -50,7 +50,14 @@ map<idx_t, LogicalType> IcebergDataFile::GetFieldIdToTypeMapping(const IcebergSn
 		auto &fields = partition_spec.GetFields();
 
 		for (auto &field : fields) {
-			auto &column_id = source_to_column_id[field.GetSourceId()];
+			auto it = source_to_column_id.find(field.source_id);
+			if (it == source_to_column_id.end()) {
+				//! FIXME: is this correct?
+				//! The column doesn't exist (anymore) in the schema we're scanning
+				//! So this essentially excludes these partition values from the scan
+				continue;
+			}
+			auto &column_id = it->second;
 			auto &column = IcebergTableSchema::GetFromColumnIndex(schema.columns, column_id, 0);
 			partition_field_id_to_type.emplace(field.GetPartitionFieldId(),
 			                                   field.GetIcebergTransform().GetBoundsType(column.type));
@@ -79,7 +86,7 @@ IcebergDataFile::GetExtendedPartitionInfo(const IcebergTableMetadata &metadata) 
 
 	// Build source_id -> LogicalType map from all schemas (schema evolution may spread columns).
 	unordered_map<uint64_t, const LogicalType *> source_id_to_type;
-	for (auto &schema_pair : metadata.schemas) {
+	for (auto &schema_pair : metadata.GetSchemas()) {
 		for (auto &col : schema_pair.second->columns) {
 			source_id_to_type.emplace(static_cast<uint64_t>(col->id), &col->type);
 		}

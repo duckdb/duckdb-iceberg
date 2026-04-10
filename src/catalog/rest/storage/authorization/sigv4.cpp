@@ -6,6 +6,7 @@
 #include "duckdb/common/types/value.hpp"
 
 #include "catalog/rest/api/api_utils.hpp"
+#include "catalog/rest/api/url_utils.hpp"
 #include "catalog/rest/iceberg_catalog.hpp"
 
 namespace duckdb {
@@ -17,12 +18,21 @@ struct HostDecompositionResult {
 	vector<string> path_components;
 };
 
+//! Detect the scheme from a host string, defaulting to HTTPS
+Aws::Http::Scheme DetectScheme(const string &host) {
+	auto lower = StringUtil::Lower(host);
+	if (StringUtil::StartsWith(lower, "http://")) {
+		return Aws::Http::Scheme::HTTP;
+	}
+	return Aws::Http::Scheme::HTTPS;
+}
+
+//! Decompose a bare host (without scheme) into authority and path components
 HostDecompositionResult DecomposeHost(const string &host) {
 	HostDecompositionResult result;
 
 	auto start_of_path = host.find('/');
 	if (start_of_path != string::npos) {
-		//! Authority consists of everything (assuming the host does not contain the scheme) before the first slash
 		result.authority = host.substr(0, start_of_path);
 		auto remainder = host.substr(start_of_path + 1);
 		result.path_components = StringUtil::Split(remainder, '/');
@@ -34,15 +44,17 @@ HostDecompositionResult DecomposeHost(const string &host) {
 
 } // namespace
 
-SIGV4Authorization::SIGV4Authorization() : IcebergAuthorization(IcebergAuthorizationType::SIGV4) {
+SIGV4Authorization::SIGV4Authorization(AttachedDatabase &db)
+    : IcebergAuthorization(db, IcebergAuthorizationType::SIGV4) {
 }
 
-SIGV4Authorization::SIGV4Authorization(const string &secret)
-    : IcebergAuthorization(IcebergAuthorizationType::SIGV4), secret(secret) {
+SIGV4Authorization::SIGV4Authorization(AttachedDatabase &db, const string &secret)
+    : IcebergAuthorization(db, IcebergAuthorizationType::SIGV4), secret(secret) {
 }
 
-unique_ptr<IcebergAuthorization> SIGV4Authorization::FromAttachOptions(IcebergAttachOptions &input) {
-	auto result = make_uniq<SIGV4Authorization>();
+unique_ptr<IcebergAuthorization> SIGV4Authorization::FromAttachOptions(AttachedDatabase &db,
+                                                                       IcebergAttachOptions &input) {
+	auto result = make_uniq<SIGV4Authorization>(db);
 
 	unordered_map<string, Value> remaining_options;
 	for (auto &entry : input.options) {
@@ -52,6 +64,10 @@ unique_ptr<IcebergAuthorization> SIGV4Authorization::FromAttachOptions(IcebergAt
 				throw InvalidInputException("Duplicate 'secret' option detected!");
 			}
 			result->secret = StringUtil::Lower(entry.second.ToString());
+		} else if (lower_name == "sigv4_service") {
+			result->sigv4_service = entry.second.ToString();
+		} else if (lower_name == "sigv4_region") {
+			result->sigv4_region = entry.second.ToString();
 		} else if (lower_name == "extra_http_headers") {
 			// Parse extra_http_headers if provided directly in attach options
 			IcebergAuthorization::ParseExtraHttpHeaders(entry.second, result->extra_http_headers);
@@ -102,7 +118,7 @@ static string GetAwsService(const string &host) {
 }
 
 AWSInput SIGV4Authorization::CreateAWSInput(ClientContext &context, const IRCEndpointBuilder &endpoint_builder) {
-	AWSInput aws_input;
+	AWSInput aws_input(db);
 	aws_input.cert_path = APIUtils::GetCURLCertPath();
 
 	// Set the user Agent
@@ -116,22 +132,34 @@ AWSInput SIGV4Authorization::CreateAWSInput(ClientContext &context, const IRCEnd
 		aws_input.request_timeout_in_ms = val.GetValue<idx_t>() * 1000;
 	}
 
-	// AWS service and region
-	aws_input.service = GetAwsService(endpoint_builder.GetHost());
-	aws_input.region = GetAwsRegion(endpoint_builder.GetHost());
+	auto host = endpoint_builder.GetHost();
+	aws_input.scheme = DetectScheme(host);
+	auto stripped_host = StripScheme(host);
+
+	// AWS service and region: use explicit overrides if provided, otherwise parse from host
+	if (!sigv4_service.empty()) {
+		aws_input.service = sigv4_service;
+	} else {
+		aws_input.service = GetAwsService(stripped_host);
+	}
+	if (!sigv4_region.empty()) {
+		aws_input.region = sigv4_region;
+	} else {
+		aws_input.region = GetAwsRegion(stripped_host);
+	}
 
 	// Host decomposition
-	auto decomposed_host = DecomposeHost(endpoint_builder.GetHost());
+	auto decomposed_host = DecomposeHost(stripped_host);
 	aws_input.authority = decomposed_host.authority;
 
 	for (auto &component : decomposed_host.path_components) {
 		aws_input.path_segments.push_back(component);
 	}
 	for (auto &component : endpoint_builder.path_components) {
-		aws_input.path_segments.push_back(component);
+		aws_input.path_segments.push_back(component.raw);
 	}
 	for (auto &param : endpoint_builder.GetParams()) {
-		aws_input.query_string_parameters.emplace_back(param);
+		aws_input.query_string_parameters.emplace_back(param.first, param.second.raw);
 	}
 
 	// AWS credentials
@@ -155,7 +183,7 @@ unique_ptr<HTTPResponse> SIGV4Authorization::Request(RequestType request_type, C
 	}
 
 	auto aws_input = CreateAWSInput(context, endpoint_builder);
-	return aws_input.Request(request_type, context, client, headers, data);
+	return aws_input.Request(request_type, context, headers, data);
 }
 
 } // namespace duckdb

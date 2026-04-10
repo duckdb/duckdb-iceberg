@@ -14,17 +14,16 @@ namespace duckdb {
 
 class AWSInput {
 public:
-	AWSInput() {
+	AWSInput(AttachedDatabase &db) : attached_db(db) {
 	}
 
 public:
-	unique_ptr<HTTPResponse> Request(RequestType request_type, ClientContext &context, unique_ptr<HTTPClient> &client,
-	                                 HTTPHeaders &headers, const string &data);
+	unique_ptr<HTTPResponse> Request(RequestType request_type, ClientContext &context, HTTPHeaders &headers,
+	                                 const string &data);
 
 	unique_ptr<HTTPResponse> ExecuteRequestLegacy(ClientContext &context, Aws::Http::HttpMethod method,
 	                                              HTTPHeaders &headers, const string &body = "");
-	unique_ptr<HTTPResponse> ExecuteRequest(ClientContext &context, Aws::Http::HttpMethod method,
-	                                        unique_ptr<HTTPClient> &client, HTTPHeaders &headers,
+	unique_ptr<HTTPResponse> ExecuteRequest(ClientContext &context, Aws::Http::HttpMethod method, HTTPHeaders &headers,
 	                                        const string &body = "");
 	std::shared_ptr<Aws::Http::HttpRequest> CreateSignedRequest(Aws::Http::HttpMethod method, const Aws::Http::URI &uri,
 	                                                            HTTPHeaders &headers, const string &body = "");
@@ -32,7 +31,9 @@ public:
 	Aws::Client::ClientConfiguration BuildClientConfig();
 
 public:
-	//! NOTE: 'scheme' is assumed to be HTTPS!
+	AttachedDatabase &attached_db;
+	//! The scheme to use for this request (HTTP or HTTPS), defaults to HTTPS
+	Aws::Http::Scheme scheme = Aws::Http::Scheme::HTTPS;
 	string authority;
 	vector<string> path_segments;
 	vector<std::pair<string, string>> query_string_parameters;

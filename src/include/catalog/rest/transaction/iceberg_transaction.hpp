@@ -54,6 +54,7 @@ public:
 	void RecordTableRequest(const string &table_key);
 	TableInfoCache GetTableRequestResult(const string &table_key);
 	IcebergTableInformation &GetTableInfoForTransaction(IcebergTableInformation &table_info);
+	bool StartedBefore(timestamp_t timestamp_ms) const;
 
 private:
 	void CleanupFiles();
@@ -70,6 +71,8 @@ private:
 	case_insensitive_map_t<TableInfoCache> requested_tables;
 
 public:
+	//! Tables referenced by this transaction that have to stay alive for the duration of the transaction.
+	case_insensitive_map_t<shared_ptr<IcebergTableInformation>> tables;
 	//! tables that have been created in this transaction
 	//! tables are hashed by catalog_name.table name
 	//! Tables that have been updated in this transaction, to be rewritten on commit.

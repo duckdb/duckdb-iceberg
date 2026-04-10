@@ -213,7 +213,8 @@ IRCAPITableCredentials IcebergTableInformation::GetVendedCredentials(ClientConte
 	case_insensitive_map_t<Value> config_options;
 	//! TODO: apply the 'defaults' retrieved from the /v1/config endpoint
 	config_options.insert(user_defaults.begin(), user_defaults.end());
-	auto key = IRCAPI::GetEncodedSchemaName(schema.namespace_items) + "." + name;
+	auto schema_component = IRCPathComponent::NamespaceComponent(schema.namespace_items);
+	auto key = schema_component.encoded + "." + name;
 	{
 		// get cache lock when accessing load table result cache
 		lock_guard<std::mutex> cache_lock(catalog.GetMetadataCacheLock());
@@ -285,6 +286,7 @@ optional_ptr<CatalogEntry> IcebergTableInformation::CreateSchemaVersion(const Ic
 	if (result->name.empty()) {
 		throw InternalException("IcebergTableSet::CreateEntry called with empty name");
 	}
+
 	schema_versions.emplace(table_schema.schema_id, std::move(table_entry));
 	return result;
 }
@@ -458,29 +460,43 @@ void IcebergTableInformation::SetPartitionedBy(IcebergTransaction &transaction,
 	}
 }
 
-optional_ptr<CatalogEntry> IcebergTableInformation::GetSchemaVersion(const IcebergSnapshotLookup &snapshot_lookup) {
+optional_ptr<CatalogEntry> IcebergTableInformation::GetSchemaVersion(const IcebergSnapshotLookup &snapshot_lookup,
+                                                                     ClientContext &context, bool is_time_travel) {
 	D_ASSERT(!schema_versions.empty());
 	if (table_metadata.snapshots.empty()) {
 		return schema_versions[table_metadata.GetCurrentSchemaId()].get();
 	}
-	auto snapshot_info = table_metadata.GetSnapshot(snapshot_lookup);
-	return schema_versions[snapshot_info.schema_id].get();
+	auto snapshot_info =
+	    table_metadata.GetSnapshot(snapshot_lookup); // first id is: 3580769571520595073, second is 3580769571520595073
+	auto &meta_transaction = MetaTransaction::Get(context);
+	auto transaction_start = meta_transaction.GetCurrentTransactionStartTimestamp();
+	auto transaction_start_millis = Timestamp::GetEpochMs(transaction_start);
+	int32_t schema_id;
+	if ((table_metadata.last_updated_ms.value >= transaction_start_millis && snapshot_info.snapshot) ||
+	    is_time_travel) {
+		// use snapshot
+		schema_id = snapshot_info.schema_id;
+	} else {
+		schema_id = table_metadata.GetCurrentSchemaId();
+	}
+	return schema_versions[schema_id].get();
 }
 
 idx_t IcebergTableInformation::GetIcebergVersion() const {
 	return table_metadata.iceberg_version;
 }
 
-optional_ptr<CatalogEntry> IcebergTableInformation::GetLatestSchema() {
+optional_ptr<CatalogEntry> IcebergTableInformation::GetLatestSchema(ClientContext &context) {
 	IcebergSnapshotLookup latest_snapshot;
-	return GetSchemaVersion(latest_snapshot);
+	return GetSchemaVersion(latest_snapshot, context);
 }
 
 string IcebergTableInformation::GetTableKey(const vector<string> &namespace_items, const string &table_name) {
 	if (namespace_items.empty()) {
 		return table_name;
 	}
-	return IRCAPI::GetEncodedSchemaName(namespace_items) + "." + table_name;
+	auto schema_component = IRCPathComponent::NamespaceComponent(namespace_items);
+	return schema_component.encoded + "." + table_name;
 }
 
 string IcebergTableInformation::GetTableKey() const {
@@ -538,10 +554,6 @@ IcebergTableInformation IcebergTableInformation::Copy() const {
 
 IcebergTableInformation IcebergTableInformation::Copy(IcebergTransaction &iceberg_transaction) const {
 	auto ret = Copy();
-	// get snapshot from start of transaction
-	// latest_snapshot_id and sequence of copied table information should be asof the transaction start
-	// this is to ensure when the transaction commits, the assert ref snapshot id is the one closest to the start of
-	// this
 	auto snapshot_lookup = GetSnapshotLookup(iceberg_transaction);
 	if (ret.TableIsEmpty(snapshot_lookup)) {
 		return ret;
@@ -555,14 +567,14 @@ IcebergTableInformation IcebergTableInformation::Copy(IcebergTransaction &iceber
 
 	auto &snapshot = snapshot_info.snapshot;
 	D_ASSERT(snapshot);
-	ret.table_metadata.SetCurrentSchemaId(snapshot_info.schema_id);
+	ret.table_metadata.SetCurrentSchemaId(table_metadata.GetCurrentSchemaId());
 	ret.table_metadata.last_sequence_number = snapshot->sequence_number;
 	ret.table_metadata.current_snapshot_id = snapshot->snapshot_id;
 	return ret;
 }
 
 void IcebergTableInformation::InitSchemaVersions() {
-	for (auto &table_schema : table_metadata.schemas) {
+	for (auto &table_schema : table_metadata.GetSchemas()) {
 		CreateSchemaVersion(*table_schema.second);
 	}
 }
@@ -606,9 +618,9 @@ void IcebergTableInformation::AddUpdateSnapshot(IcebergTransaction &transaction,
 	transaction_data->AddUpdateSnapshot(std::move(delete_files), std::move(data_files), std::move(altered_manifests));
 }
 
-void IcebergTableInformation::AddSchema(IcebergTransaction &transaction) {
+void IcebergTableInformation::AddSchema(IcebergTransaction &transaction, int32_t schema_id) {
 	InitTransactionData(transaction);
-	transaction_data->TableAddSchema();
+	transaction_data->TableAddSchema(schema_id);
 }
 
 void IcebergTableInformation::AddAssignUUID(IcebergTransaction &transaction) {
@@ -644,10 +656,6 @@ void IcebergTableInformation::AddAssertDefaultSpecId(IcebergTransaction &transac
 void IcebergTableInformation::AddUpradeFormatVersion(IcebergTransaction &transaction) {
 	InitTransactionData(transaction);
 	transaction_data->TableAddUpradeFormatVersion();
-}
-void IcebergTableInformation::AddSetCurrentSchema(IcebergTransaction &transaction) {
-	InitTransactionData(transaction);
-	transaction_data->TableAddSetCurrentSchema();
 }
 void IcebergTableInformation::AddPartitionSpec(IcebergTransaction &transaction) {
 	InitTransactionData(transaction);
