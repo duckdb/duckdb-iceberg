@@ -161,7 +161,8 @@ void ManifestPartitions::Create(const IcebergTableMetadata &metadata, const Iceb
 			auto serialized_type =
 			    extended_partition_info.transform.GetSerializedType(extended_partition_info.source_type);
 
-			// Cast the partition value (stored as VARCHAR) to the correct serialized type
+			// Cast the partition value (stored as VARCHAR) to the correct serialized type so we can compare typed
+			// values
 			auto typed_value = extended_partition_info.value.DefaultCastAs(serialized_type);
 
 			if (!initialized[i]) {
@@ -207,9 +208,16 @@ void ManifestPartitions::Create(const IcebergTableMetadata &metadata, const Iceb
 		}
 		D_ASSERT(have_extended_partition_info);
 		auto serialized_type = extended_partition_info.transform.GetSerializedType(extended_partition_info.source_type);
-		// min/max_values are already serialized to their proper types
-		auto lower_result = SerializeResult(min_values[i].type(), min_values[i]);
-		auto upper_result = SerializeResult(max_values[i].type(), max_values[i]);
+		// min/max_values already in their partition result value types. We cast those to varchar to serialize them
+		// again unless they are blob, in which case we do not cast and serialize
+		SerializeResult lower_result = SerializeResult(min_values[i].type(), min_values[i]);
+		SerializeResult upper_result = SerializeResult(max_values[i].type(), max_values[i]);
+		if (min_values[i].type() != LogicalType::BLOB && max_values[i].type() != LogicalType::BLOB) {
+			lower_result = IcebergValue::SerializeValue(min_values[i].DefaultCastAs(LogicalType::VARCHAR),
+			                                            min_values[i].type(), SerializeBound::LOWER_BOUND);
+			upper_result = IcebergValue::SerializeValue(max_values[i].DefaultCastAs(LogicalType::VARCHAR),
+			                                            max_values[i].type(), SerializeBound::LOWER_BOUND);
+		}
 
 		if (lower_result.HasValue()) {
 			field_summary[i].lower_bound = lower_result.GetValue();

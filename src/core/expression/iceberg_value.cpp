@@ -297,7 +297,7 @@ std::vector<uint8_t> HexStringToBytes(const std::string &hex) {
 }
 
 SerializeResult IcebergValue::SerializeValue(Value input_value, const LogicalType &column_type,
-                                             SerializeBound bound_type, ClientContext &context) {
+                                             SerializeBound bound_type) {
 	switch (column_type.id()) {
 	case LogicalTypeId::INTEGER: {
 		int32_t val = input_value.GetValue<int32_t>();
