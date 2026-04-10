@@ -236,7 +236,7 @@ void IcebergInsertGlobalState::AddFiles(DataChunk &chunk, const string &table_na
 		auto partition_values = chunk.GetValue(5, r);
 
 		auto table_current_schema_id = table_metadata.GetCurrentSchemaId();
-		auto &ic_schema = table_metadata.schemas.at(table_current_schema_id);
+		auto &ic_schema = table_metadata.GetSchemas().at(table_current_schema_id);
 
 		auto ic_partition_info = table_metadata.GetLatestPartitionSpec();
 

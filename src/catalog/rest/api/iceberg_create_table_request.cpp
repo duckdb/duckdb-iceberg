@@ -301,7 +301,12 @@ string IcebergCreateTableRequest::CreateTableToJSON(std::unique_ptr<yyjson_mut_d
 	auto schema_json = yyjson_mut_obj_add_obj(doc, root_object, "schema");
 
 	idx_t schema_id = table_info.table_metadata.GetCurrentSchemaId();
-	auto initial_schema = table_info.table_metadata.schemas.find(schema_id);
+	auto &schemas = table_info.table_metadata.GetSchemas();
+	auto initial_schema = schemas.find(schema_id);
+	if (initial_schema == schemas.end()) {
+		throw InternalException(
+		    "Attempted to create a CreateTableRequest referencing schema id %d, but it doesn't exist", schema_id);
+	}
 	PopulateSchema(doc, schema_json, *initial_schema->second);
 
 	auto partition_spec_json = yyjson_mut_obj_add_obj(doc, root_object, "partition-spec");

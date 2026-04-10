@@ -58,7 +58,8 @@ CopyIcebergBindData::CopyIcebergBindData(const CopyInfo &info, vector<string> &&
 	int32_t last_column_id;
 	table_schema =
 	    IcebergCreateTableRequest::CreateIcebergSchema(context, *table_metadata, columns, nullptr, last_column_id);
-	table_metadata->schemas[0] = table_schema;
+	table_schema->schema_id = 0;
+	table_metadata->AddSchema(std::move(table_schema));
 	table_metadata->SetCurrentSchemaId(0);
 	//! FIXME: adapt when we have partitioning support
 	table_metadata->partition_specs.emplace(0, IcebergPartitionSpec(0));
