@@ -49,8 +49,8 @@ select count(*) from my_datalake.default.test_truncate_decimal;
 ----
 11
 
-query III rowsort
-select id, amount, label from my_datalake.default.test_truncate_decimal;
+query III
+select id, amount, label from my_datalake.default.test_truncate_decimal order by id;
 ----
 1	1.00	one
 2	2.00	two
@@ -107,7 +107,7 @@ select count(*) from my_datalake.default.test_truncate_decimal_neg;
 4
 
 query II rowsort
-select id, amount from my_datalake.default.test_truncate_decimal_neg;
+select id, amount from my_datalake.default.test_truncate_decimal_neg order by id;
 ----
 1	-1.00
 2	-1.01
