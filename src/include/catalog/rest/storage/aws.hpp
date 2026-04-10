@@ -32,7 +32,8 @@ public:
 
 public:
 	AttachedDatabase &attached_db;
-	//! NOTE: 'scheme' is assumed to be HTTPS!
+	//! The scheme to use for this request (HTTP or HTTPS), defaults to HTTPS
+	Aws::Http::Scheme scheme = Aws::Http::Scheme::HTTPS;
 	string authority;
 	vector<string> path_segments;
 	vector<std::pair<string, string>> query_string_parameters;
