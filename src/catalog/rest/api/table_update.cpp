@@ -35,8 +35,9 @@ void AddSchemaUpdate::CreateUpdate(DatabaseInstance &db, ClientContext &context,
 	update.add_schema_update.has_action = true;
 	update.add_schema_update.action = "add-schema";
 
-	auto it = table_info.table_metadata.schemas.find(schema_id);
-	if (it == table_info.table_metadata.schemas.end()) {
+	auto &schemas = table_info.table_metadata.GetSchemas();
+	auto it = schemas.find(schema_id);
+	if (it == schemas.end()) {
 		throw InternalException("(AddSchemaUpdate) Couldn't find schema with id: %d", schema_id);
 	}
 	auto &schema = it->second;
