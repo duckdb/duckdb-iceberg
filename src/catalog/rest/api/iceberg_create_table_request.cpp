@@ -264,7 +264,7 @@ shared_ptr<IcebergTableSchema> IcebergCreateTableRequest::CreateIcebergSchema(
 			type.primitive_type = rest_api_objects::PrimitiveType();
 			type.primitive_type.value = IcebergTypeHelper::LogicalTypeToIcebergType(logical_type);
 		}
-		auto iceberg_column_def = IcebergColumnDefinition::ParseType(name, first_id, required, type, nullptr);
+		auto iceberg_column_def = IcebergColumnDefinition::ParseType(name, first_id, required, type, "", nullptr);
 		if (column_def.HasDefaultValue()) {
 			auto &default_expr = column_def.DefaultValue();
 			auto val = ExtractInitialValue(constant_binder, context, default_expr, logical_type);
