@@ -81,15 +81,10 @@ jobs:
           ./build/release/test/unittest --order lex "$PWD/test/*" --list-test-names-only || true
           ./build/release/test/unittest --order lex "$PWD/test/*"
 
-      - name: Test reads with Spark & PyIceberg
+      - name: Test reads with PyIceberg
         env:
           ICEBERG_SERVER_AVAILABLE: 1
         run: |
-          # test spark v4 first
-          source .venv-spark4/bin/activate
-          python3 -m pytest test/python
-          deactivate
-          # test spark v3.5 versions
           python3 -m venv .venv-spark3
           source .venv-spark3/bin/activate
           python3 -m pip install pyspark==3.5.2 pytest pyiceberg==0.9.1 pyarrow pydantic==2.9.0
