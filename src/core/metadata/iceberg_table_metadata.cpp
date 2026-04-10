@@ -282,6 +282,32 @@ int32_t IcebergTableMetadata::GetCurrentSchemaId() const {
 	return current_schema_id;
 }
 
+void IcebergTableMetadata::AddSchema(shared_ptr<IcebergTableSchema> schema) {
+	optional_idx existing_schema_id;
+	for (auto &it : schemas) {
+		auto &id = it.first;
+		auto &existing_schema = *it.second;
+
+		if (schema->Equals(existing_schema)) {
+			existing_schema_id = id;
+			break;
+		}
+	}
+	if (existing_schema_id.IsValid()) {
+		throw NotImplementedException("Attempted to add a schema that already exists in the table");
+	}
+	auto new_schema_id = schema->schema_id;
+	auto res = schemas.emplace(new_schema_id, std::move(schema));
+	if (!res.second) {
+		throw InvalidConfigurationException("Attempted to add schema with id %d, but this already exists in the table!",
+		                                    new_schema_id);
+	}
+}
+
+const unordered_map<int32_t, shared_ptr<IcebergTableSchema>> &IcebergTableMetadata::GetSchemas() const {
+	return schemas;
+}
+
 bool IcebergTableMetadata::HasLastPartitionId() const {
 	return last_partition_field_id.IsValid();
 }

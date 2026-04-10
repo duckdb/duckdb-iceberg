@@ -12,6 +12,7 @@ shared_ptr<IcebergTableSchema> IcebergTableSchema::ParseSchema(const rest_api_ob
 	for (auto &field : schema.struct_type.fields) {
 		res->columns.push_back(IcebergColumnDefinition::ParseStructField(*field));
 	}
+	res->identifier_field_ids = schema.object_1.identifier_field_ids;
 	return res;
 }
 
@@ -279,6 +280,30 @@ void IcebergTableSchema::GetColumnNamesAndTypes(vector<string> &names, vector<Lo
 		names.push_back(column.name);
 		types.push_back(column.type);
 	}
+}
+
+bool IcebergTableSchema::Equals(const IcebergTableSchema &other) const {
+	if (columns.size() != other.columns.size()) {
+		return false;
+	}
+	for (idx_t i = 0; i < columns.size(); i++) {
+		auto &a = *columns[i];
+		auto &b = *other.columns[i];
+
+		if (!a.Equals(b)) {
+			return false;
+		}
+	}
+	if (identifier_field_ids.size() != other.identifier_field_ids.size()) {
+		return false;
+	}
+	for (idx_t i = 0; i < identifier_field_ids.size(); i++) {
+		if (identifier_field_ids[i] != other.identifier_field_ids[i]) {
+			return false;
+		}
+	}
+
+	return true;
 }
 
 } // namespace duckdb
