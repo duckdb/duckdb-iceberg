@@ -1,5 +1,6 @@
 #include "core/metadata/schema/iceberg_column_definition.hpp"
 #include "duckdb/common/types.hpp"
+#include "duckdb/common/value_operations/value_operations.hpp"
 
 namespace duckdb {
 
@@ -250,6 +251,19 @@ ColumnDefinition IcebergColumnDefinition::GetColumnDefinition() const {
 	}
 }
 
+static bool DefaultsAreEqual(const unique_ptr<Value> &a, const unique_ptr<Value> &b) {
+	const bool a_is_null = !a || a->IsNull();
+	const bool b_is_null = !b || b->IsNull();
+
+	if (a_is_null && b_is_null) {
+		return true;
+	}
+	if (a_is_null != b_is_null) {
+		return false;
+	}
+	return ValueOperations::NotDistinctFrom(*a, *b);
+}
+
 bool IcebergColumnDefinition::Equals(const IcebergColumnDefinition &other) const {
 	if (id != other.id) {
 		return false;
@@ -266,16 +280,11 @@ bool IcebergColumnDefinition::Equals(const IcebergColumnDefinition &other) const
 	if (doc != other.doc) {
 		return false;
 	}
-	if (!!initial_default != !!other.initial_default) {
+
+	if (!DefaultsAreEqual(initial_default, other.initial_default)) {
 		return false;
 	}
-	if (initial_default && *initial_default != *other.initial_default) {
-		return false;
-	}
-	if (!!write_default != !!other.write_default) {
-		return false;
-	}
-	if (write_default && *write_default != *other.write_default) {
+	if (!DefaultsAreEqual(write_default, other.write_default)) {
 		return false;
 	}
 	return true;

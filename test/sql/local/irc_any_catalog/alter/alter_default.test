@@ -87,3 +87,30 @@ select * from my_datalake.default.drop_default order by all
 ----
 hello world	false
 test	true
+
+# FIXME: https://github.com/duckdb/duckdb-iceberg/pull/911
+
+# DROP DEFAULT will set the 'write-default' to NULL, which is a state that already existed on the table
+statement error
+ALTER TABLE my_datalake.default.drop_default ALTER COLUMN b DROP DEFAULT;
+----
+Not implemented Error: Attempted to add a schema that already exists in the table
+
+statement ok
+ALTER TABLE my_datalake.default.drop_default ADD COLUMN c INTEGER;
+
+# Now it's fine, because the old state didn't have the 'c' column
+statement ok
+ALTER TABLE my_datalake.default.drop_default ALTER COLUMN b DROP DEFAULT;
+
+statement ok
+insert into my_datalake.default.drop_default(a) VALUES ('not null')
+
+# By dropping the default, the 'initial-default' value gets used instead
+# note that because of this, if 'initial-default' is not NULL, it's not possible to make the DEFAULT for new rows be NULL
+query II
+select a, b from my_datalake.default.drop_default order by all
+----
+hello world	false
+not null	NULL
+test	true
