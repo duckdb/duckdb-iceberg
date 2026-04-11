@@ -306,6 +306,7 @@ class TestSparkRead:
         ]
 
     # Written by Spark, read by Spark
+    # See https://github.com/duckdb/duckdb-iceberg/pull/908 on why spark behavior is unclear
     @pytest.mark.skip(reason="Failures due to unclear Spark behavior regarding row ids")
     @pytest.mark.requires_spark(">=4.0")
     def test_spark_read_row_lineage_from_upgraded(self, spark_con):
