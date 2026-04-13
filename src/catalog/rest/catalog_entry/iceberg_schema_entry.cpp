@@ -421,6 +421,25 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 		updated_table.table_metadata.SetCurrentSchemaId(new_schema_id);
 		return;
 	}
+	case AlterTableType::RENAME_TABLE: {
+		auto &rename_table_info = alter_table_info.Cast<RenameTableInfo>();
+		auto &new_name = rename_table_info.new_table_name;
+
+		EntryLookupInfo lookup(CatalogType::TABLE_ENTRY, new_name);
+		auto other_catalog_entry = tables.GetEntry(context, lookup);
+		if (other_catalog_entry) {
+			//! The table exists at this point, check if it was deleted/renamed in the transaction
+			auto &other_table_entry = other_catalog_entry->Cast<IcebergTableEntry>();
+			auto &other_table_info = table_entry.table_info;
+			auto other_table_key = other_table_info.GetTableKey();
+			auto state = irc_transaction.GetLatestTableState(other_table_key);
+			if (!state || state->status == IcebergTableStatus::ALIVE) {
+				throw CatalogException("Table with name \"%s\" already exists!", new_name);
+			}
+		}
+		irc_transaction.RenameTable(updated_table, new_name);
+		break;
+	}
 	default: {
 		throw NotImplementedException("Alter table type not supported: %s",
 		                              EnumUtil::ToString(alter_table_info.alter_table_type));

@@ -33,7 +33,7 @@ struct TableInfoCache {
 	bool exists;
 };
 
-enum class IcebergTableStatus : uint8_t { ALIVE, DROPPED };
+enum class IcebergTableStatus : uint8_t { ALIVE, DROPPED, RENAMED };
 
 enum class IcebergTableSource : uint8_t {
 	//! Loaded from external source
@@ -80,6 +80,7 @@ public:
 	bool StartedBefore(timestamp_t timestamp_ms) const;
 	IcebergTransactionAlterUpdate &GetOrCreateAlter();
 	IcebergTableInformation &DeleteTable(IcebergTableInformation &table);
+	IcebergTableInformation &RenameTable(IcebergTableInformation &table, const string &new_name);
 
 private:
 	void CleanupFiles();

@@ -46,4 +46,13 @@ IcebergTransactionDeleteUpdate::IcebergTransactionDeleteUpdate(IcebergTransactio
 IcebergTransactionDeleteUpdate::~IcebergTransactionDeleteUpdate() {
 }
 
+IcebergTransactionRenameUpdate::IcebergTransactionRenameUpdate(IcebergTransaction &transaction,
+                                                               const IcebergTableInformation &table,
+                                                               const string &new_name)
+    : IcebergTransactionUpdate(transaction, TYPE), table(table), new_table(table.Copy()), new_name(new_name) {
+	new_table.name = new_name;
+}
+IcebergTransactionRenameUpdate::~IcebergTransactionRenameUpdate() {
+}
+
 } // namespace duckdb

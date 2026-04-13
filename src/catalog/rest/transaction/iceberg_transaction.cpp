@@ -400,6 +400,10 @@ void IcebergTransaction::Commit() {
 				DoTableDeletes(delete_update, *temp_con_context);
 				break;
 			}
+			case IcebergTransactionUpdateType::RENAME: {
+				throw InternalException("TODO: commit rename");
+				break;
+			}
 			default:
 				throw InternalException("IcebergTransactionUpdateType (%d) not implemented",
 				                        static_cast<uint8_t>(type));
@@ -623,6 +627,27 @@ IcebergTableInformation &IcebergTransaction::DeleteTable(IcebergTableInformation
 	}
 	state->status = IcebergTableStatus::DROPPED;
 	transaction_updates.push_back(make_uniq<IcebergTransactionDeleteUpdate>(*this, state->table));
+	return state->table;
+}
+
+IcebergTableInformation &IcebergTransaction::RenameTable(IcebergTableInformation &table, const string &new_name) {
+	auto table_key = table.GetTableKey();
+	auto state = GetLatestTableState(table_key);
+	if (!state) {
+		state = SetLatestTableState(table, IcebergTableSource::EXTERNAL);
+	}
+	//! Set the status of the old name to RENAMED
+	state->status = IcebergTableStatus::RENAMED;
+
+	//! Create the rename update, creating the new IcebergTableInformation in the process
+	auto rename = make_uniq<IcebergTransactionRenameUpdate>(*this, state->table, new_name);
+	auto &rename_update = *rename;
+	transaction_updates.push_back(std::move(rename));
+
+	//! Update the state of the renamed table
+	auto &new_table = rename_update.new_table;
+	auto &new_table_state = SetLatestTableState(new_table, IcebergTableSource::TRANSACTION);
+	new_table_state.status = IcebergTableStatus::ALIVE;
 	return state->table;
 }
 
