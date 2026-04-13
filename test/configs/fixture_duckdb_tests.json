@@ -79,6 +79,12 @@
     {
       "reason": "Wrong row count due to extra databases/schemas from on_init",
       "paths": [
+        "test/sql/attach/attach_show_all_tables.test",
+        "test/sql/catalog/comment_on_column.test",
+        "test/sql/catalog/comment_on_dependencies.test",
+        "test/sql/catalog/comment_on_pg_description.test",
+        "test/sql/copy_database/copy_database_with_index.test",
+        "test/sql/generated_columns/virtual/gcol_duckdb_columns.test",
         "test/sql/index/art/memory/test_art_non_linear.test_slow",
         "test/sql/index/art/memory/test_art_varchar.test_slow",
         "test/sql/index/art/storage/test_art_auto_checkpoint.test",
@@ -88,9 +94,12 @@
         "test/sql/index/art/vacuum/test_art_vacuum_integers.test_slow",
         "test/sql/index/art/vacuum/test_art_vacuum_strings.test_slow",
         "test/sql/pragma/test_pragma_database_list.test",
+        "test/sql/pragma/test_show_tables_temp_views.test",
         "test/sql/secrets/create_secret_hffs_autoload.test",
         "test/sql/secrets/create_secret_persistence_no_client_context.test",
         "test/sql/secrets/secret_autoloading_errors.test",
+        "test/sql/settings/setting_preserve_identifier_case.test",
+        "test/sql/show_select/test_describe_all.test",
         "test/sql/storage/compression/zstd/reclaim_space_column.test_slow",
         "test/sql/storage/compression/zstd/reclaim_space_table.test_slow",
         "test/sql/storage/large_delete_wal.test_slow",
@@ -126,8 +135,13 @@
         "test/sql/storage/vacuum/test_truncate_after_delete.test_slow",
         "test/sql/storage/vacuum/vacuum_deletes_cleanup.test_slow",
         "test/sql/storage/vacuum/vacuum_partial_deletes_cleanup.test_slow",
+        "test/sql/table_function/database_oid.test",
+        "test/sql/table_function/duckdb_columns.test",
         "test/sql/table_function/duckdb_databases.test",
         "test/sql/table_function/duckdb_schemas.test",
+        "test/sql/table_function/duckdb_tables.test",
+        "test/sql/table_function/sqlite_master.test",
+        "test/sql/table_function/sqlite_master_quotes.test",
         "test/sql/types/bignum/test_bignum_sum.test_slow"
       ]
     }
