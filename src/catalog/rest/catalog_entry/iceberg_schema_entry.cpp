@@ -426,6 +426,30 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 		updated_table.table_metadata.SetCurrentSchemaId(new_schema_id);
 		return;
 	}
+	case AlterTableType::SET_NOT_NULL: {
+		auto &set_not_null_info = alter_table_info.Cast<SetNotNullInfo>();
+		auto &column_name = set_not_null_info.column_name;
+
+		auto new_schema = current_schema.Copy();
+		new_schema->schema_id++;
+
+		auto column_p = new_schema->GetMutableFromPath({column_name}, nullptr);
+		if (!column_p) {
+			throw CatalogException("Column with name '%s' does not exist on the table '%s', ALTER TYPE failed",
+			                       column_name, table_entry.name);
+		}
+		auto &column = *column_p;
+		column.required = true;
+
+		auto new_schema_id = new_schema->schema_id;
+		// Update the Table Metadata to have our new schema
+		updated_table.CreateSchemaVersion(*new_schema);
+		transaction_data.TableAddSchema(new_schema_id);
+
+		updated_table.table_metadata.AddSchema(std::move(new_schema));
+		updated_table.table_metadata.SetCurrentSchemaId(new_schema_id);
+		return;
+	}
 	default: {
 		throw NotImplementedException("Alter table type not supported: %s",
 		                              EnumUtil::ToString(alter_table_info.alter_table_type));
