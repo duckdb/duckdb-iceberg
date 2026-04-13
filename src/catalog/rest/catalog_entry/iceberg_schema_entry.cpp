@@ -182,6 +182,76 @@ optional_ptr<CatalogEntry> IcebergSchemaEntry::CreateCollation(CatalogTransactio
 	throw BinderException("Iceberg databases do not support creating collations");
 }
 
+static void VerifySchemaEvolution(const IcebergTableMetadata &table_metadata, const IcebergColumnDefinition &column,
+                                  const LogicalType &target_type) {
+	auto &original_type = column.type;
+
+	string extra_info;
+	switch (original_type.id()) {
+	case LogicalTypeId::DECIMAL: {
+		if (target_type.id() != LogicalTypeId::DECIMAL) {
+			break;
+		}
+		uint8_t width;
+		uint8_t scale;
+		original_type.GetDecimalProperties(width, scale);
+
+		uint8_t other_width;
+		uint8_t other_scale;
+		target_type.GetDecimalProperties(other_width, other_scale);
+
+		if (scale != other_scale) {
+			extra_info = "(DECIMAL evolution has to preserve the original scale, for reference: DECIMAL(width, scale))";
+			break;
+		}
+		if (other_width < width) {
+			extra_info =
+			    "(DECIMAL evolution can only increase the width, not lower it, for reference: DECIMAL(width, scale))";
+			break;
+		}
+		return;
+	}
+	case LogicalTypeId::INTEGER: {
+		if (target_type.id() != LogicalTypeId::BIGINT) {
+			break;
+		}
+		return;
+	}
+	case LogicalTypeId::FLOAT: {
+		if (target_type.id() != LogicalTypeId::DOUBLE) {
+			break;
+		}
+		return;
+	}
+	case LogicalTypeId::DATE: {
+		if (target_type.id() == LogicalTypeId::TIMESTAMP || target_type.id() == LogicalTypeId::TIMESTAMP_NS) {
+			auto &partition_spec = table_metadata.GetLatestPartitionSpec();
+			auto partition_field = partition_spec.TryGetFieldBySourceId(column.id);
+			if (partition_field) {
+				extra_info = StringUtil::Format(
+				    " (there is a partition field that refers to the column (name: %s, partition_field_id: %d))",
+				    partition_field->name, partition_field->partition_field_id);
+				break;
+			}
+			if (target_type.id() == LogicalTypeId::TIMESTAMP_NS) {
+				if (table_metadata.iceberg_version >= 3) {
+					return;
+				}
+				extra_info = " (DATE to TIMESTAMP_NS is a Iceberg V3 feature)";
+				break;
+			}
+			return;
+		}
+		break;
+	}
+	default:
+		break;
+	}
+	auto error = StringUtil::Format("Column '%s' of type '%s' can't be altered to type '%s'%s", column.name,
+	                                original_type.ToString(), target_type.ToString(), extra_info);
+	throw CatalogException(error);
+}
+
 void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) {
 	if (info.type != AlterType::ALTER_TABLE) {
 		throw NotImplementedException("Only ALTER TABLE is supported for Iceberg");
@@ -324,6 +394,34 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 		// Update the Table Metadata to have our new schema
 		updated_table.CreateSchemaVersion(*new_schema);
 		updated_table.AddSchema(irc_transaction, new_schema_id);
+		updated_table.table_metadata.AddSchema(std::move(new_schema));
+		updated_table.table_metadata.SetCurrentSchemaId(new_schema_id);
+		return;
+	}
+	case AlterTableType::ALTER_COLUMN_TYPE: {
+		auto &change_type_info = alter_table_info.Cast<ChangeColumnTypeInfo>();
+		auto &column_name = change_type_info.column_name;
+
+		auto new_schema = current_schema.Copy();
+		new_schema->schema_id++;
+
+		auto column_p = new_schema->GetMutableFromPath({column_name}, nullptr);
+		if (!column_p) {
+			throw CatalogException("Column with name '%s' does not exist on the table '%s', ALTER TYPE failed",
+			                       column_name, table_entry.name);
+		}
+		auto &column = *column_p;
+		if (change_type_info.expression->type != ExpressionType::OPERATOR_CAST) {
+			throw NotImplementedException("ALTER TYPE with a USING expression is not supported for Iceberg tables");
+		}
+		VerifySchemaEvolution(updated_table.table_metadata, column, change_type_info.target_type);
+		column.type = change_type_info.target_type;
+
+		auto new_schema_id = new_schema->schema_id;
+		// Update the Table Metadata to have our new schema
+		updated_table.CreateSchemaVersion(*new_schema);
+		updated_table.AddSchema(irc_transaction, new_schema_id);
+
 		updated_table.table_metadata.AddSchema(std::move(new_schema));
 		updated_table.table_metadata.SetCurrentSchemaId(new_schema_id);
 		return;

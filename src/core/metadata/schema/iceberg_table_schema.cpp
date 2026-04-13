@@ -71,8 +71,8 @@ static optional_ptr<const IcebergColumnDefinition> GetColumnChild(const IcebergC
 	return nullptr;
 }
 
-optional_ptr<const IcebergColumnDefinition> IcebergTableSchema::GetFromPath(const vector<string> &path,
-                                                                            optional_ptr<optional_idx> name_offset) {
+optional_ptr<const IcebergColumnDefinition>
+IcebergTableSchema::GetFromPath(const vector<string> &path, optional_ptr<optional_idx> name_offset) const {
 	D_ASSERT(!path.empty());
 
 	optional_ptr<const IcebergColumnDefinition> result;
@@ -105,6 +105,16 @@ optional_ptr<const IcebergColumnDefinition> IcebergTableSchema::GetFromPath(cons
 		res = *next_child;
 	}
 	return res.get();
+}
+
+optional_ptr<IcebergColumnDefinition> IcebergTableSchema::GetMutableFromPath(const vector<string> &path,
+                                                                             optional_ptr<optional_idx> names_offset) {
+	auto res = GetFromPath(path, names_offset);
+	if (!res) {
+		return nullptr;
+	}
+	auto &col = *res;
+	return const_cast<IcebergColumnDefinition &>(col);
 }
 
 static void AddUnnamedField(yyjson_mut_doc *doc, yyjson_mut_val *field_obj, const rest_api_objects::Type &column);
