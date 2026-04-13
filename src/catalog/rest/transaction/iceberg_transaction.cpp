@@ -24,8 +24,13 @@
 #include "planning/metadata_io/avro/avro_scan.hpp"
 #include "iceberg_logging.hpp"
 #include "catalog/rest/api/table_update.hpp"
+#include "catalog/rest/transaction/iceberg_transaction_update.hpp"
 
 namespace duckdb {
+
+IcebergTransactionTableState::IcebergTransactionTableState(IcebergTableInformation &table, IcebergTableSource source)
+    : table(table), source(source), status(IcebergTableStatus::ALIVE) {
+}
 
 IcebergTransaction::IcebergTransaction(IcebergCatalog &ic_catalog, TransactionManager &manager, ClientContext &context)
     : Transaction(manager, context), db(*context.db), catalog(ic_catalog), access_mode(ic_catalog.access_mode) {
@@ -296,10 +301,11 @@ static bool NeedsAssertSchemaId(const IcebergTransactionData &transaction_data,
 	return initial_schema_id != table_info.table_metadata.GetCurrentSchemaId();
 }
 
-TableTransactionInfo IcebergTransaction::GetTransactionRequest(ClientContext &context) {
+TableTransactionInfo IcebergTransaction::GetTransactionRequest(IcebergTransactionAlterUpdate &alter_update,
+                                                               ClientContext &context) {
 	TableTransactionInfo info;
 	auto &transaction = info.request;
-	for (auto &updated_table : updated_tables) {
+	for (auto &updated_table : alter_update.updated_tables) {
 		auto &table_info = updated_table.second;
 		if (!table_info.transaction_data) {
 			continue;
@@ -365,26 +371,8 @@ TableTransactionInfo IcebergTransaction::GetTransactionRequest(ClientContext &co
 	return info;
 }
 
-IcebergTableInformation &IcebergTransaction::GetTableInfoForTransaction(IcebergTableInformation &table_info) {
-	lock_guard<mutex> guard(lock);
-
-	auto table_key = table_info.GetTableKey();
-	auto it = updated_tables.find(table_key);
-	if (it != updated_tables.end()) {
-		return it->second;
-	}
-	auto emplace_res = updated_tables.emplace(table_key, table_info.Copy(*this));
-	auto &updated_table = emplace_res.first->second;
-	if (emplace_res.second) {
-		updated_table.InitSchemaVersions();
-		auto client_context = context.lock();
-		updated_table.transaction_data = make_uniq<IcebergTransactionData>(*client_context, updated_table);
-	}
-	return updated_table;
-}
-
 void IcebergTransaction::Commit() {
-	if (updated_tables.empty() && deleted_tables.empty() && created_schemas.empty() && deleted_schemas.empty()) {
+	if (transaction_updates.empty() && created_schemas.empty() && deleted_schemas.empty()) {
 		return;
 	}
 
@@ -399,8 +387,22 @@ void IcebergTransaction::Commit() {
 
 	try {
 		DoSchemaCreates(*temp_con_context);
-		DoTableUpdates(*temp_con_context);
-		DoTableDeletes(*temp_con_context);
+		for (auto &transaction_update : transaction_updates) {
+			auto &type = transaction_update->type;
+			switch (type) {
+			case IcebergTransactionUpdateType::ALTER: {
+				auto &alter_update = transaction_update->Cast<IcebergTransactionAlterUpdate>();
+				DoTableUpdates(alter_update, *temp_con_context);
+			}
+			case IcebergTransactionUpdateType::DELETE: {
+				auto &delete_update = transaction_update->Cast<IcebergTransactionDeleteUpdate>();
+				DoTableDeletes(delete_update, *temp_con_context);
+			}
+			default:
+				throw InternalException("IcebergTransactionUpdateType (%d) not implemented",
+				                        static_cast<uint8_t>(type));
+			};
+		}
 		DoSchemaDeletes(*temp_con_context);
 	} catch (std::exception &ex) {
 		ErrorData error(ex);
@@ -413,9 +415,9 @@ void IcebergTransaction::Commit() {
 	temp_con.Rollback();
 }
 
-void IcebergTransaction::DoTableUpdates(ClientContext &context) {
-	if (!updated_tables.empty()) {
-		auto transaction_info = GetTransactionRequest(context);
+void IcebergTransaction::DoTableUpdates(IcebergTransactionAlterUpdate &alter_update, ClientContext &context) {
+	if (!alter_update.updated_tables.empty()) {
+		auto transaction_info = GetTransactionRequest(alter_update, context);
 		auto &transaction = transaction_info.request;
 
 		// if there are no new tables, we can post to the transactions/commit endpoint
@@ -442,28 +444,27 @@ void IcebergTransaction::DoTableUpdates(ClientContext &context) {
 				                          table_change.identifier.name, transaction_json);
 			}
 		}
-		updated_tables.clear();
+		// updated_tables.clear();
 		DropSecrets(context);
 	}
 }
 
-void IcebergTransaction::DoTableDeletes(ClientContext &context) {
+void IcebergTransaction::DoTableDeletes(IcebergTransactionDeleteUpdate &delete_update, ClientContext &context) {
 	auto &ic_catalog = catalog.Cast<IcebergCatalog>();
-	for (auto &deleted_table : deleted_tables) {
-		auto &table = deleted_table.second;
-		auto schema_key = table.schema.name;
-		auto table_key = table.GetTableKey();
-		auto table_name = table.name;
-		IRCAPI::CommitTableDelete(context, catalog, table.schema.namespace_items, table.name);
-		// remove the load table result
-		ic_catalog.RemoveLoadTableResult(table_key);
-		// remove the table entry from the catalog
-		auto &schema_entry = ic_catalog.schemas.GetEntry(schema_key).Cast<IcebergSchemaEntry>();
-		DropInfo drop_info;
-		drop_info.name = table_name;
-		drop_info.if_not_found = OnEntryNotFound::RETURN_NULL;
-		schema_entry.DropEntry(context, drop_info, true);
-	}
+	auto &table = delete_update.table;
+	auto schema_key = table.schema.name;
+	auto table_key = table.GetTableKey();
+	auto table_name = table.name;
+	IRCAPI::CommitTableDelete(context, catalog, table.schema.namespace_items, table.name);
+	// remove the load table result
+	//! FIXME: this can very easily be problematic
+	ic_catalog.RemoveLoadTableResult(table_key);
+	// remove the table entry from the catalog
+	auto &schema_entry = ic_catalog.schemas.GetEntry(schema_key).Cast<IcebergSchemaEntry>();
+	DropInfo drop_info;
+	drop_info.name = table_name;
+	drop_info.if_not_found = OnEntryNotFound::RETURN_NULL;
+	schema_entry.DropEntry(context, drop_info, true);
 }
 
 void IcebergTransaction::DoSchemaCreates(ClientContext &context) {
@@ -510,31 +511,38 @@ void IcebergTransaction::CleanupFiles() {
 	temp_con.BeginTransaction();
 	auto &temp_con_context = temp_con.context;
 	auto &fs = FileSystem::GetFileSystem(*temp_con_context);
-	for (auto &up_table : updated_tables) {
-		auto &table = up_table.second;
-		if (!table.transaction_data) {
-			// error occurred before transaction data was initialized
-			// this can happen during table creation with table schema that cannot convert to
-			// an iceberg table schema due to type incompatabilities
+
+	for (auto &transaction_update : transaction_updates) {
+		if (transaction_update->type != IcebergTransactionUpdateType::ALTER) {
 			continue;
 		}
-		auto &transaction_data = table.transaction_data;
-		for (auto &update : transaction_data->updates) {
-			if (update->type != IcebergTableUpdateType::ADD_SNAPSHOT) {
+		auto &alter_update = transaction_update->Cast<IcebergTransactionAlterUpdate>();
+		for (auto &up_table : alter_update.updated_tables) {
+			auto &table = up_table.second;
+			if (!table.transaction_data) {
+				// error occurred before transaction data was initialized
+				// this can happen during table creation with table schema that cannot convert to
+				// an iceberg table schema due to type incompatabilities
 				continue;
 			}
-			// we need to recreate the keys in the current context.
-			auto &ic_table_entry = table.GetLatestSchema(*temp_con_context)->Cast<IcebergTableEntry>();
-			ic_table_entry.PrepareIcebergScanFromEntry(*temp_con_context);
+			auto &transaction_data = table.transaction_data;
+			for (auto &update : transaction_data->updates) {
+				if (update->type != IcebergTableUpdateType::ADD_SNAPSHOT) {
+					continue;
+				}
+				// we need to recreate the keys in the current context.
+				auto &ic_table_entry = table.GetLatestSchema(*temp_con_context)->Cast<IcebergTableEntry>();
+				ic_table_entry.PrepareIcebergScanFromEntry(*temp_con_context);
 
-			auto &add_snapshot = update->Cast<IcebergAddSnapshot>();
-			const auto manifest_list_entries = add_snapshot.GetManifestFiles();
-			for (const auto &manifest : manifest_list_entries) {
-				for (auto &manifest_entry : manifest.manifest_entries) {
-					auto &data_file = manifest_entry.data_file;
-					if (fs.TryRemoveFile(data_file.file_path)) {
-						DUCKDB_LOG(*temp_con_context, IcebergLogType,
-						           "Iceberg Transaction Cleanup, deleted 'data_file': '%s'", data_file.file_path);
+				auto &add_snapshot = update->Cast<IcebergAddSnapshot>();
+				const auto manifest_list_entries = add_snapshot.GetManifestFiles();
+				for (const auto &manifest : manifest_list_entries) {
+					for (auto &manifest_entry : manifest.manifest_entries) {
+						auto &data_file = manifest_entry.data_file;
+						if (fs.TryRemoveFile(data_file.file_path)) {
+							DUCKDB_LOG(*temp_con_context, IcebergLogType,
+							           "Iceberg Transaction Cleanup, deleted 'data_file': '%s'", data_file.file_path);
+						}
 					}
 				}
 			}
@@ -571,6 +579,57 @@ bool IcebergTransaction::StartedBefore(timestamp_t timestamp_ms) const {
 	auto meta_transaction_start = meta_transaction.GetCurrentTransactionStartTimestamp();
 	auto start = Timestamp::GetEpochMs(meta_transaction_start);
 	return start < timestamp_ms.value;
+}
+
+optional_ptr<IcebergTransactionTableState> IcebergTransaction::GetLatestTableState(const string &table_key) {
+	auto it = current_table_data.find(table_key);
+	if (it == current_table_data.end()) {
+		return nullptr;
+	}
+	return it->second;
+}
+
+IcebergTransactionTableState &IcebergTransaction::SetLatestTableState(IcebergTableInformation &table,
+                                                                      IcebergTableSource source) {
+	auto table_key = table.GetTableKey();
+	auto it = current_table_data.find(table_key);
+	if (it == current_table_data.end()) {
+		it = current_table_data.emplace(table_key, IcebergTransactionTableState(table, source)).first;
+		return it->second;
+	}
+	auto &state = it->second;
+	state.table = table;
+	state.source = source;
+	return state;
+}
+
+IcebergTransactionAlterUpdate &IcebergTransaction::GetOrCreateAlter() {
+	if (transaction_updates.empty() || transaction_updates.back()->type != IcebergTransactionUpdateType::ALTER) {
+		auto alter_p = make_uniq<IcebergTransactionAlterUpdate>(*this);
+		auto &alter = *alter_p;
+		transaction_updates.push_back(std::move(alter_p));
+		return alter;
+	}
+	return transaction_updates.back()->Cast<IcebergTransactionAlterUpdate>();
+}
+
+IcebergTableInformation &IcebergTransaction::DeleteTable(const IcebergTableInformation &table) {
+	auto table_key = table.GetTableKey();
+	auto state = GetLatestTableState(table_key);
+	if (!state) {
+		throw InternalException("Attempting to delete a table (%s) that was never recorded in the transaction",
+		                        table_key);
+	}
+	state->status = IcebergTableStatus::DROPPED;
+	transaction_updates.push_back(make_uniq<IcebergTransactionDeleteUpdate>(*this, state->table));
+	return state->table;
+}
+
+void ApplyTableUpdate(IcebergTableInformation &table_info, IcebergTransaction &iceberg_transaction,
+                      const std::function<void(IcebergTableInformation &)> &callback) {
+	auto &alter = iceberg_transaction.GetOrCreateAlter();
+	auto &updated_table = alter.GetOrInitializeTable(table_info);
+	callback(updated_table);
 }
 
 } // namespace duckdb
