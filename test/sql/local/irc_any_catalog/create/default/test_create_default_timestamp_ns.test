@@ -1,6 +1,8 @@
 # name: test/sql/local/irc_any_catalog/create/default/test_create_default_timestamp_ns.test
 # group: [default]
 
+# Skipped for Polaris/Lakekeeper due to missing support
+
 require-env ICEBERG_SERVER_AVAILABLE
 
 require-env SECRETS_CREATED_AND_CATALOG_ATTACHED
