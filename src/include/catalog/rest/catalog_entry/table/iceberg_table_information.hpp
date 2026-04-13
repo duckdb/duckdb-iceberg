@@ -37,27 +37,7 @@ public:
 	IRCAPITableCredentials GetVendedCredentials(ClientContext &context);
 	const string &BaseFilePath() const;
 
-	void InitTransactionData(IcebergTransaction &transaction);
-	void AddSnapshot(IcebergTransaction &transaction, vector<IcebergManifestEntry> &&data_files);
-	void AddDeleteSnapshot(IcebergTransaction &transaction, vector<IcebergManifestEntry> &&data_files,
-	                       IcebergManifestDeletes &&altered_manifests);
-	void AddUpdateSnapshot(IcebergTransaction &transaction, vector<IcebergManifestEntry> &&delete_files,
-	                       vector<IcebergManifestEntry> &&data_files, IcebergManifestDeletes &&altered_manifests);
-	void AddSchema(IcebergTransaction &transaction, int32_t schema_id);
-	void AddAssertCreate(IcebergTransaction &transaction);
-	void AddAssertDefaultSpecId(IcebergTransaction &transaction);
-	void AddAssertCurrentSchemaId(IcebergTransaction &transaction);
-	void AddAssertLastAssignedFieldId(IcebergTransaction &transaction);
-	void AddAssertLastAssignedPartitionId(IcebergTransaction &transaction);
-	void AddAssignUUID(IcebergTransaction &transaction);
-	void AddUpradeFormatVersion(IcebergTransaction &transaction);
-	void AddPartitionSpec(IcebergTransaction &transaction);
-	void AddSortOrder(IcebergTransaction &transaction);
-	void SetDefaultSortOrder(IcebergTransaction &transaction);
-	void SetDefaultSpec(IcebergTransaction &transaction);
-	void SetProperties(IcebergTransaction &transaction, const case_insensitive_map_t<string> &properties);
-	void RemoveProperties(IcebergTransaction &transaction, const vector<string> &properties);
-	void SetLocation(IcebergTransaction &transaction);
+	IcebergTransactionData &GetOrCreateTransactionData(IcebergTransaction &transaction);
 
 	static string GetTableKey(const vector<string> &namespace_items, const string &table_name);
 	string GetTableKey() const;

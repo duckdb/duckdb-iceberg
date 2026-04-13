@@ -270,9 +270,9 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 	auto emplace_res =
 	    irc_transaction.updated_tables.emplace(catalog_table_info.GetTableKey(), catalog_table_info.Copy());
 	auto &updated_table = emplace_res.first->second;
+	auto &transaction_data = updated_table.GetOrCreateTransactionData(irc_transaction);
 	if (emplace_res.second) {
 		updated_table.InitSchemaVersions();
-		updated_table.InitTransactionData(irc_transaction);
 	}
 
 	auto &current_schema = updated_table.table_metadata.GetLatestSchema();
@@ -282,9 +282,9 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 		auto &partition_info = alter_table_info.Cast<SetPartitionedByInfo>();
 
 		// Ensure schema is the same as current
-		updated_table.AddAssertCurrentSchemaId(irc_transaction);
+		transaction_data.TableAddAssertCurrentSchemaId();
 		// Ensure last assigned partition field id is up to date
-		updated_table.AddAssertLastAssignedPartitionId(irc_transaction);
+		transaction_data.TableAddAssertLastAssignedPartitionId();
 
 		updated_table.SetPartitionedBy(irc_transaction, partition_info.partition_keys, current_schema);
 		return;
@@ -350,7 +350,7 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 		auto new_schema_id = new_schema->schema_id;
 		// Update the Table Metadata to have our new schema
 		updated_table.CreateSchemaVersion(*new_schema);
-		updated_table.AddSchema(irc_transaction, new_schema_id);
+		transaction_data.TableAddSchema(new_schema_id);
 
 		updated_table.table_metadata.AddSchema(std::move(new_schema));
 		updated_table.table_metadata.SetCurrentSchemaId(new_schema_id);
@@ -393,7 +393,7 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 		auto new_schema_id = new_schema->schema_id;
 		// Update the Table Metadata to have our new schema
 		updated_table.CreateSchemaVersion(*new_schema);
-		updated_table.AddSchema(irc_transaction, new_schema_id);
+		transaction_data.TableAddSchema(new_schema_id);
 		updated_table.table_metadata.AddSchema(std::move(new_schema));
 		updated_table.table_metadata.SetCurrentSchemaId(new_schema_id);
 		return;
@@ -420,7 +420,7 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 		auto new_schema_id = new_schema->schema_id;
 		// Update the Table Metadata to have our new schema
 		updated_table.CreateSchemaVersion(*new_schema);
-		updated_table.AddSchema(irc_transaction, new_schema_id);
+		transaction_data.TableAddSchema(new_schema_id);
 
 		updated_table.table_metadata.AddSchema(std::move(new_schema));
 		updated_table.table_metadata.SetCurrentSchemaId(new_schema_id);
