@@ -41,8 +41,9 @@
       ]
     },
     {
-      "reason": "Checks the result of SHOW DATABASES; or SHOW SCHEMAS;",
+      "reason": "Checks available databases/schemas",
       "paths": [
+        "test/sql/attach/attach_did_you_mean.test",
         "test/sql/attach/attach_read_only.test",
         "test/sql/attach/show_databases.test",
         "test/sql/attach/show_schemas.test"
