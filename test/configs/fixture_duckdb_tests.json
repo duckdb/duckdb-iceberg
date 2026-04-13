@@ -1,6 +1,6 @@
 {
   "description": "Use apache/iceberg-rest-fixture as Iceberg Rest Catalog.",
-  "on_init": "CREATE SECRET (TYPE S3,KEY_ID 'admin',SECRET 'password',ENDPOINT '127.0.0.1:9000',URL_STYLE 'path',USE_SSL 0); ATTACH '' AS my_datalake (TYPE ICEBERG,CLIENT_ID 'admin',CLIENT_SECRET 'password',ENDPOINT 'http://127.0.0.1:8181'); DROP SCHEMA IF EXISTS my_datalake.default CASCADE;",
+  "on_init": "CREATE SECRET (TYPE S3,KEY_ID 'admin',SECRET 'password',ENDPOINT '127.0.0.1:9000',URL_STYLE 'path',USE_SSL 0); ATTACH '' AS my_datalake (TYPE ICEBERG,CLIENT_ID 'admin',CLIENT_SECRET 'password',ENDPOINT 'http://127.0.0.1:8181'); DROP SCHEMA IF EXISTS my_datalake.default;",
   "statically_loaded_extensions": [
     "core_functions",
     "parquet",
@@ -44,7 +44,8 @@
       "reason": "Checks the result of SHOW DATABASES; or SHOW SCHEMAS;",
       "paths": [
         "test/sql/attach/attach_read_only.test",
-        "test/sql/attach/show_databases.test"
+        "test/sql/attach/show_databases.test",
+        "test/sql/attach/show_schemas.test"
       ]
     },
     {
@@ -126,7 +127,8 @@
         "test/sql/storage/vacuum/vacuum_deletes_cleanup.test_slow",
         "test/sql/storage/vacuum/vacuum_partial_deletes_cleanup.test_slow",
         "test/sql/table_function/duckdb_databases.test",
-        "test/sql/table_function/duckdb_schemas.test"
+        "test/sql/table_function/duckdb_schemas.test",
+        "test/sql/types/bignum/test_bignum_sum.test_slow"
       ]
     }
   ]
