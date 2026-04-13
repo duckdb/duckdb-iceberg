@@ -1,5 +1,5 @@
 # name: test/sql/local/irc_any_catalog/partitioning/test_partitioning_pushdown_bucket.test
-# description: Test bucket partition pushdown for multiple types (INTEGER, BIGINT, STRING, DATE, DECIMAL, BINARY, TIMESTAMP, plus duplicate timestamp table bucket_partitioned_timestamp_ns)
+# description: Test bucket partition pushdown for multiple types (INTEGER, BIGINT, STRING, DATE, DECIMAL, BINARY, TIMESTAMP)
 # group: [partitioning]
 
 require-env ICEBERG_SERVER_AVAILABLE
@@ -377,53 +377,6 @@ call truncate_duckdb_logs();
 # Filter on 2023-01-01 (bucket 0) - 2 rows (rows 1 and 11 - the duplicate), 1 file
 query I
 select count(*) from my_datalake.default.bucket_partitioned_timestamp where ts_val = TIMESTAMP '2023-01-01 00:00:00';
-----
-2
-
-query I
-select count(distinct request.url) from duckdb_logs_parsed('HTTP') where request.url like '%.parquet';
-----
-1
-
-statement ok
-call truncate_duckdb_logs();
-
-#--------------------------------------------------------------------
-# bucket_partitioned_timestamp_ns: bucket(4, ts_val) — same data/layout as bucket_partitioned_timestamp
-# (Spark writes TIMESTAMP micros; PyIceberg cannot append Iceberg v3 / timestamp_ns yet.)
-# Data: 11 rows (10 months + 1 duplicate Jan) + 1 NULL row
-# Total: 5 parquet files (buckets 0-3 + null)
-#--------------------------------------------------------------------
-
-# Read whole table - 5 files
-statement ok
-select * from my_datalake.default.bucket_partitioned_timestamp_ns;
-
-query I
-select count(distinct request.url) from duckdb_logs_parsed('HTTP') where request.url like '%.parquet';
-----
-5
-
-statement ok
-call truncate_duckdb_logs();
-
-# Filter on 2023-03-01 (bucket 3) - 1 row, 1 file
-query I
-select count(*) from my_datalake.default.bucket_partitioned_timestamp_ns where ts_val = TIMESTAMP '2023-03-01 00:00:00';
-----
-1
-
-query I
-select count(distinct request.url) from duckdb_logs_parsed('HTTP') where request.url like '%.parquet';
-----
-1
-
-statement ok
-call truncate_duckdb_logs();
-
-# Filter on 2023-01-01 (bucket 0) - 2 rows (duplicate Jan), 1 file
-query I
-select count(*) from my_datalake.default.bucket_partitioned_timestamp_ns where ts_val = TIMESTAMP '2023-01-01 00:00:00';
 ----
 2
 
