@@ -42,7 +42,7 @@ bool IcebergTableSet::FillEntry(ClientContext &context, IcebergTableInformation 
 		if (cached_result) {
 			// Use the cached result instead of making a new request
 			table.table_metadata = IcebergTableMetadata::FromLoadTableResult(*cached_result->load_table_result);
-			auto &schemas = table.table_metadata.schemas;
+			auto &schemas = table.table_metadata.GetSchemas();
 			D_ASSERT(!schemas.empty());
 			for (auto &table_schema : schemas) {
 				table.CreateSchemaVersion(*table_schema.second);
@@ -78,7 +78,7 @@ bool IcebergTableSet::FillEntry(ClientContext &context, IcebergTableInformation 
 		auto &load_table_result = *cached_table_result->load_table_result;
 		table.table_metadata = IcebergTableMetadata::FromLoadTableResult(load_table_result);
 	}
-	auto &schemas = table.table_metadata.schemas;
+	auto &schemas = table.table_metadata.GetSchemas();
 
 	//! It should be impossible to have a metadata file without any schema
 	D_ASSERT(!schemas.empty());
@@ -216,10 +216,12 @@ IcebergTableInformation &IcebergTableSet::CreateNewEntry(ClientContext &context,
 	table_info.schema_versions[0] = std::move(table_entry);
 	table_metadata.iceberg_version = iceberg_version.GetIndex();
 	int32_t last_column_id;
-	table_metadata.schemas[0] = IcebergCreateTableRequest::CreateIcebergSchema(
-	    context, table_metadata, table_ptr->GetColumns(), table_ptr->GetConstraints(), last_column_id);
+
+	auto new_schema = IcebergCreateTableRequest::CreateIcebergSchema(context, table_metadata, table_ptr->GetColumns(),
+	                                                                 table_ptr->GetConstraints(), last_column_id);
+	new_schema->schema_id = 0;
+	table_metadata.AddSchema(std::move(new_schema));
 	table_metadata.SetCurrentSchemaId(0);
-	table_metadata.schemas[0]->schema_id = 0;
 	table_metadata.last_column_id = last_column_id;
 
 	// Get Location
@@ -255,20 +257,20 @@ IcebergTableInformation &IcebergTableSet::CreateNewEntry(ClientContext &context,
 	}
 
 	// if we stage created the table, we add an assert create
+	auto &transaction_data = table_info.GetOrCreateTransactionData(iceberg_transaction);
 	if (catalog.attach_options.supports_stage_create) {
-		table_info.AddAssertCreate(iceberg_transaction);
+		transaction_data.TableAddAssertCreate();
 	}
 	// other required updates to the table
-	table_info.AddAssignUUID(iceberg_transaction);
-	table_info.AddUpradeFormatVersion(iceberg_transaction);
-	table_info.AddSchema(iceberg_transaction);
-	table_info.AddSetCurrentSchema(iceberg_transaction);
-	table_info.AddPartitionSpec(iceberg_transaction);
-	table_info.SetDefaultSpec(iceberg_transaction);
-	table_info.AddSortOrder(iceberg_transaction);
-	table_info.SetDefaultSortOrder(iceberg_transaction);
-	table_info.SetLocation(iceberg_transaction);
-	table_info.SetProperties(iceberg_transaction, table_metadata.table_properties);
+	transaction_data.TableAssignUUID();
+	transaction_data.TableAddUpradeFormatVersion();
+	transaction_data.TableAddSchema(0);
+	transaction_data.TableAddPartitionSpec();
+	transaction_data.TableSetDefaultSpec();
+	transaction_data.TableAddSortOrder();
+	transaction_data.TableSetDefaultSortOrder();
+	transaction_data.TableSetLocation();
+	transaction_data.TableSetProperties(table_metadata.table_properties);
 	return table_info;
 }
 

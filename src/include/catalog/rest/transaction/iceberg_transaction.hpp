@@ -88,8 +88,6 @@ public:
 	case_insensitive_set_t created_secrets;
 	case_insensitive_set_t looked_up_entries;
 	mutex lock;
-
-	bool has_schema_update = false;
 };
 
 template <typename Callback>
