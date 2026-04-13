@@ -501,6 +501,8 @@ static void S3TablesAttach(IcebergAttachOptions &input) {
 		throw InvalidInputException("Could not parse S3 Tables ARN warehouse value");
 	}
 	auto region = substrings[3];
+	// Populate sigv4_region so it can be used as a fallback region when creating storage secrets
+	input.options.emplace("sigv4_region", Value(region));
 	S3OrGlueAttachInternal(input, "s3tables", region);
 }
 
