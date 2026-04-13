@@ -15,6 +15,7 @@
 #include "catalog/rest/transaction/iceberg_transaction.hpp"
 #include "catalog/rest/catalog_entry/table/iceberg_table_entry.hpp"
 #include "catalog/rest/api/iceberg_type.hpp"
+#include "core/metadata/manifest/iceberg_manifest_list.hpp"
 
 namespace duckdb {
 
@@ -435,10 +436,32 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 
 		auto column_p = new_schema->GetMutableFromPath({column_name}, nullptr);
 		if (!column_p) {
-			throw CatalogException("Column with name '%s' does not exist on the table '%s', ALTER TYPE failed",
+			throw CatalogException("Column with name '%s' does not exist on the table '%s', SET NOT NULL failed",
 			                       column_name, table_entry.name);
 		}
 		auto &column = *column_p;
+
+		// Check existing data files for null values in this column
+		auto snapshot_lookup = updated_table.GetSnapshotLookup(context);
+		auto snapshot_info = updated_table.table_metadata.GetSnapshot(snapshot_lookup);
+		if (snapshot_info.snapshot) {
+			IcebergOptions options;
+			auto manifest_list = IcebergManifestList::Load(updated_table.BaseFilePath(), updated_table.table_metadata,
+			                                               snapshot_info, context, options);
+			for (auto &list_entry : manifest_list->GetManifestFilesConst()) {
+				for (auto &manifest_entry : list_entry.manifest_entries) {
+					if (manifest_entry.status == IcebergManifestEntryStatusType::DELETED) {
+						continue;
+					}
+					auto &data_file = manifest_entry.data_file;
+					auto null_count_it = data_file.null_value_counts.find(column.id);
+					if (null_count_it != data_file.null_value_counts.end() && null_count_it->second > 0) {
+						throw ConstraintException("NOT NULL constraint failed: %s.%s", table_entry.name, column_name);
+					}
+				}
+			}
+		}
+
 		column.required = true;
 
 		auto new_schema_id = new_schema->schema_id;

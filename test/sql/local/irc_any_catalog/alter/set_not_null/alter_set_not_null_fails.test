@@ -28,23 +28,20 @@ CREATE TABLE my_datalake.default.my_table AS (select range a FROM range(10));
 statement ok
 INSERT INTO my_datalake.default.my_table VALUES (NULL);
 
-statement ok
-INSERT INTO my_datalake.default.my_table VALUES (NULL);
-
-# query I
-# FROM my_datalake.default.my_table ORDER BY ALL;
-# ----
-# 0
-# 1
-# 2
-# 3
-# 4
-# 5
-# 6
-# 7
-# 8
-# 9
-# NULL
+query I
+FROM my_datalake.default.my_table ORDER BY ALL;
+----
+0
+1
+2
+3
+4
+5
+6
+7
+8
+9
+NULL
 
 statement error
 ALTER TABLE my_datalake.default.my_table ALTER COLUMN a SET NOT NULL;
