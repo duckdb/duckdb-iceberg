@@ -251,13 +251,13 @@ class TestSparkRead:
 
     @pytest.mark.requires_spark(">=4.0")
     def test_duckdb_written_deletion_vectors(self, spark_con):
+        # requires test_delete_consolidation_transactional.test to run
         res = spark_con.sql(
             """
             select * from default.write_v3_update_and_delete order by all
             """
         ).collect()
-
-        assert str(res) == "[Row(id=1, data='a')]"
+        assert str(res) == "[Row(id=1, data='a'), Row(id=2, data='b_u1'), Row(id=3, data='c'), Row(id=4, data='d_u1'), Row(id=5, data='e')]"
 
     @pytest.mark.requires_spark(">=4.0")
     def test_spark_read_duckdb_created_variant(self, spark_con):
@@ -306,6 +306,8 @@ class TestSparkRead:
         ]
 
     # Written by Spark, read by Spark
+    # See https://github.com/duckdb/duckdb-iceberg/pull/908 on why spark behavior is unclear
+    @pytest.mark.skip(reason="Failures due to unclear Spark behavior regarding row ids")
     @pytest.mark.requires_spark(">=4.0")
     def test_spark_read_row_lineage_from_upgraded(self, spark_con):
         df = spark_con.sql(
@@ -324,6 +326,7 @@ class TestSparkRead:
 
     # Written by DuckDB (after upgrading with Spark), read by Spark
     @pytest.mark.requires_spark(">=4.0")
+    @pytest.mark.skip(reason="Failures due to unclear Spark behavior regarding row ids")
     def test_spark_read_row_lineage_from_upgraded_by_duckdb(self, spark_con):
         df = spark_con.sql(
             """
