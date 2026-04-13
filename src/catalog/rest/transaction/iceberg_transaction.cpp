@@ -393,10 +393,12 @@ void IcebergTransaction::Commit() {
 			case IcebergTransactionUpdateType::ALTER: {
 				auto &alter_update = transaction_update->Cast<IcebergTransactionAlterUpdate>();
 				DoTableUpdates(alter_update, *temp_con_context);
+				break;
 			}
 			case IcebergTransactionUpdateType::DELETE: {
 				auto &delete_update = transaction_update->Cast<IcebergTransactionDeleteUpdate>();
 				DoTableDeletes(delete_update, *temp_con_context);
+				break;
 			}
 			default:
 				throw InternalException("IcebergTransactionUpdateType (%d) not implemented",
@@ -613,12 +615,11 @@ IcebergTransactionAlterUpdate &IcebergTransaction::GetOrCreateAlter() {
 	return transaction_updates.back()->Cast<IcebergTransactionAlterUpdate>();
 }
 
-IcebergTableInformation &IcebergTransaction::DeleteTable(const IcebergTableInformation &table) {
+IcebergTableInformation &IcebergTransaction::DeleteTable(IcebergTableInformation &table) {
 	auto table_key = table.GetTableKey();
 	auto state = GetLatestTableState(table_key);
 	if (!state) {
-		throw InternalException("Attempting to delete a table (%s) that was never recorded in the transaction",
-		                        table_key);
+		state = SetLatestTableState(table, IcebergTableSource::EXTERNAL);
 	}
 	state->status = IcebergTableStatus::DROPPED;
 	transaction_updates.push_back(make_uniq<IcebergTransactionDeleteUpdate>(*this, state->table));

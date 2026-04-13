@@ -79,7 +79,7 @@ public:
 	IcebergTransactionTableState &SetLatestTableState(IcebergTableInformation &table, IcebergTableSource source);
 	bool StartedBefore(timestamp_t timestamp_ms) const;
 	IcebergTransactionAlterUpdate &GetOrCreateAlter();
-	IcebergTableInformation &DeleteTable(const IcebergTableInformation &table);
+	IcebergTableInformation &DeleteTable(IcebergTableInformation &table);
 
 private:
 	void CleanupFiles();
