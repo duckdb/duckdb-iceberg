@@ -257,19 +257,20 @@ IcebergTableInformation &IcebergTableSet::CreateNewEntry(ClientContext &context,
 	}
 
 	// if we stage created the table, we add an assert create
+	auto &transaction_data = table_info.GetOrCreateTransactionData(iceberg_transaction);
 	if (catalog.attach_options.supports_stage_create) {
-		table_info.AddAssertCreate(iceberg_transaction);
+		transaction_data.TableAddAssertCreate();
 	}
 	// other required updates to the table
-	table_info.AddAssignUUID(iceberg_transaction);
-	table_info.AddUpradeFormatVersion(iceberg_transaction);
-	table_info.AddSchema(iceberg_transaction, 0);
-	table_info.AddPartitionSpec(iceberg_transaction);
-	table_info.SetDefaultSpec(iceberg_transaction);
-	table_info.AddSortOrder(iceberg_transaction);
-	table_info.SetDefaultSortOrder(iceberg_transaction);
-	table_info.SetLocation(iceberg_transaction);
-	table_info.SetProperties(iceberg_transaction, table_metadata.table_properties);
+	transaction_data.TableAssignUUID();
+	transaction_data.TableAddUpradeFormatVersion();
+	transaction_data.TableAddSchema(0);
+	transaction_data.TableAddPartitionSpec();
+	transaction_data.TableSetDefaultSpec();
+	transaction_data.TableAddSortOrder();
+	transaction_data.TableSetDefaultSortOrder();
+	transaction_data.TableSetLocation();
+	transaction_data.TableSetProperties(table_metadata.table_properties);
 	return table_info;
 }
 

@@ -163,14 +163,11 @@ static void SetIcebergTablePropertiesFunction(ClientContext &context, TableFunct
 	auto &iceberg_transaction = IcebergTransaction::Get(context, iceberg_table->catalog);
 	iceberg_transaction.updated_tables.emplace(table_info.GetTableKey(), table_info.Copy(iceberg_transaction));
 	auto &entry = iceberg_transaction.updated_tables.at(table_info.GetTableKey());
-	if (!entry.transaction_data) {
-		entry.InitTransactionData(iceberg_transaction);
-	}
-	auto &transaction_data = entry.transaction_data;
+	auto &transaction_data = entry.GetOrCreateTransactionData(iceberg_transaction);
 
 	auto schema = iceberg_table->schema.name;
 	auto table_name = iceberg_table->name;
-	transaction_data->TableSetProperties(bind_data.properties);
+	transaction_data.TableSetProperties(bind_data.properties);
 	global_state.properties_set = true;
 	// set success output, failure happens during transaction commit.
 	FlatVector::GetData<int64_t>(output.data[0])[0] = bind_data.properties.size();
@@ -195,14 +192,10 @@ static void RemoveIcebergTablePropertiesFunction(ClientContext &context, TableFu
 	auto &iceberg_transaction = IcebergTransaction::Get(context, iceberg_table->catalog);
 	iceberg_transaction.updated_tables.emplace(table_info.GetTableKey(), table_info.Copy(iceberg_transaction));
 	auto &entry = iceberg_transaction.updated_tables.at(table_info.GetTableKey());
-	if (!entry.transaction_data) {
-		entry.InitTransactionData(iceberg_transaction);
-	}
-	auto &transaction_data = entry.transaction_data;
-
+	auto &transaction_data = entry.GetOrCreateTransactionData(iceberg_transaction);
 	auto schema = iceberg_table->schema.name;
 	auto table_name = iceberg_table->name;
-	transaction_data->TableRemoveProperties(bind_data.remove_properties);
+	transaction_data.TableRemoveProperties(bind_data.remove_properties);
 	global_state.properties_removed = true;
 	// set success output, failure happens during transaction commit.
 	FlatVector::GetData<int64_t>(output.data[0])[0] = bind_data.properties.size();
