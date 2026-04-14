@@ -2,6 +2,8 @@
 # description: test that region information from aws service is used as fallback when no region information is provided.
 # group: [s3tables]
 
+require-env ICEBERG_AWS_REMOTE_AVAILABLE
+
 require-env AWS_ACCESS_KEY_ID
 
 require-env AWS_SECRET_ACCESS_KEY
