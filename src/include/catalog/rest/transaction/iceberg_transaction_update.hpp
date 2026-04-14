@@ -68,7 +68,7 @@ public:
 	virtual ~IcebergTransactionDeleteUpdate() override;
 
 public:
-	const IcebergTableInformation &table;
+	IcebergTableInformation deleted_table;
 };
 
 } // namespace duckdb

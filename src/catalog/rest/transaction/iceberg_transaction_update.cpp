@@ -19,7 +19,7 @@ IcebergTableInformation &IcebergTransactionAlterUpdate::GetOrInitializeTable(con
 	auto table_key = table.GetTableKey();
 	auto it = updated_tables.find(table_key);
 	if (it == updated_tables.end()) {
-		it = updated_tables.emplace(table_key, table.Copy()).first;
+		it = updated_tables.emplace(table_key, table.Copy(transaction)).first;
 		it->second.InitSchemaVersions();
 	}
 
@@ -41,7 +41,7 @@ IcebergTableInformation &IcebergTransactionAlterUpdate::CreateTable(const string
 
 IcebergTransactionDeleteUpdate::IcebergTransactionDeleteUpdate(IcebergTransaction &transaction,
                                                                const IcebergTableInformation &table)
-    : IcebergTransactionUpdate(transaction, TYPE), table(table) {
+    : IcebergTransactionUpdate(transaction, TYPE), deleted_table(table.Copy(transaction)) {
 }
 IcebergTransactionDeleteUpdate::~IcebergTransactionDeleteUpdate() {
 }
