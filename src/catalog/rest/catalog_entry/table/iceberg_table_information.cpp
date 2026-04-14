@@ -545,9 +545,8 @@ IcebergTableInformation IcebergTableInformation::Copy(IcebergTransaction &iceber
 		return ret;
 	}
 	IcebergSnapshotScanInfo snapshot_info;
-	try {
-		snapshot_info = ret.table_metadata.GetSnapshot(snapshot_lookup);
-	} catch (InvalidConfigurationException &e) {
+	snapshot_info = ret.table_metadata.GetSnapshot(snapshot_lookup);
+	if (!snapshot_info.snapshot) {
 		throw TransactionException("Table %s is already outdated. Please restart your transaction", GetTableKey());
 	}
 

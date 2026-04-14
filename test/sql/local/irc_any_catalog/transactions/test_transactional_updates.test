@@ -35,7 +35,7 @@ drop table if exists my_datalake.default.multi_transaction_update;
 statement ok
 create table my_datalake.default.multi_transaction_update (a int, b int);
 
-# make sure the table has a snapshot id to start
+# Insert 0,0
 statement ok
 insert into my_datalake.default.multi_transaction_update select 0, 0;
 
@@ -45,23 +45,36 @@ begin
 statement ok con2
 begin
 
+# Insert 2,2
 statement ok con2
 insert into my_datalake.default.multi_transaction_update select 2, 2;
 
 statement ok con2
 commit
 
-# con1 should only see data from con1 and before (from transaction start of con1)
+# con1 doesn't see 2,2 yet
 query II con1
 select * from my_datalake.default.multi_transaction_update;
 ----
 0	0
 
+# con1 updates 0 to 50 for column a (doesn't affect row inserted by con2)
 statement ok con1
 update my_datalake.default.multi_transaction_update set a = 50;
 
-# con1 should error. con1 cannot update the table since the last snapshot it saw was the 1, 1 insert.
+query II con1
+select * from my_datalake.default.multi_transaction_update;
+----
+50	0
+
 statement error con1
 commit;
 ----
-<REGEX>:.*TransactionContext Error:.*Conflict.*
+<REGEX>:.*TransactionContext Error: Failed to commit:.*
+
+# con1 UPDATE didn't go through
+query II
+select * from my_datalake.default.multi_transaction_update order by all
+----
+0	0
+2	2
