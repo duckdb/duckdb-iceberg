@@ -230,7 +230,7 @@ static void VerifySchemaEvolution(const IcebergTableMetadata &table_metadata, co
 			if (partition_field) {
 				extra_info = StringUtil::Format(
 				    " (there is a partition field that refers to the column (name: %s, partition_field_id: %d))",
-				    partition_field->name, partition_field->partition_field_id);
+				    partition_field->GetPartitionSpecFieldName(), partition_field->GetPartitionFieldId());
 				break;
 			}
 			if (target_type.id() == LogicalTypeId::TIMESTAMP_NS) {
