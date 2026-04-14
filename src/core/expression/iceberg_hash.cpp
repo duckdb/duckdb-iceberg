@@ -1,7 +1,9 @@
 #include "core/expression/iceberg_hash.hpp"
+#include "common/iceberg_math.hpp"
 
 #include "duckdb/common/exception.hpp"
 #include "duckdb/common/types/hugeint.hpp"
+#include "duckdb/common/types/timestamp.hpp"
 
 namespace duckdb {
 
@@ -182,6 +184,9 @@ int32_t IcebergHash::HashValue(const Value &value) {
 		return HashInt64(value.GetValue<timestamp_t>().value);
 	case LogicalTypeId::TIMESTAMP_TZ:
 		return HashInt64(value.GetValue<timestamp_tz_t>().value);
+	// timestamp_ns: Iceberg buckets nanos as micros first (BucketTimestampNano in Java)
+	case LogicalTypeId::TIMESTAMP_NS:
+		return HashInt64(IcebergNanosToMicrosFloor(value.GetValue<timestamp_ns_t>().value));
 
 	default:
 		return 0;
