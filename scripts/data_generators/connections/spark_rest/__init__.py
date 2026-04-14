@@ -34,13 +34,7 @@ import sys
 import os
 
 CONNECTION_KEY = 'spark-rest'
-SPARK_RUNTIME_PATH = os.path.join(
-    os.path.dirname(__file__),
-    '..',
-    '..',
-    f'iceberg-spark-runtime-{SPARK_VERSION}_{SCALA_BINARY_VERSION}-{ICEBERG_LIBRARY_VERSION}.jar',
-)
-
+SPARK_RUNTIME_PATH = os.path.join(os.path.dirname(__file__), '..', '..', f'iceberg-spark-runtime-{SPARK_VERSION}_{SCALA_BINARY_VERSION}-{ICEBERG_LIBRARY_VERSION}.jar')
 
 @IcebergConnection.register(CONNECTION_KEY)
 class IcebergSparkRest(IcebergConnection):
