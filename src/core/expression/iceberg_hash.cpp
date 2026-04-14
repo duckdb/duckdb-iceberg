@@ -1,4 +1,6 @@
 #include "core/expression/iceberg_hash.hpp"
+
+#include "utf8proc_wrapper.hpp"
 #include "common/iceberg_math.hpp"
 
 #include "duckdb/common/exception.hpp"
