@@ -55,8 +55,6 @@ public:
 	const IcebergTableInformation &table_info;
 	//! schema updates etc.
 	vector<unique_ptr<IcebergTableUpdate>> updates;
-	//! has the table been deleted in the current transaction
-	bool is_deleted;
 	vector<unique_ptr<IcebergTableRequirement>> requirements;
 	//! Cached manifest list from the source snapshot
 	vector<IcebergManifestListEntry> existing_manifest_list;
