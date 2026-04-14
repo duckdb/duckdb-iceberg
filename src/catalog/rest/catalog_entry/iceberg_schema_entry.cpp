@@ -255,25 +255,37 @@ static void VerifySchemaEvolution(const IcebergTableMetadata &table_metadata, co
 
 //! Ensure existing data files don't contain NULL values in this column
 static void VerifyNotNullConstraint(ClientContext &context, IcebergTableInformation &updated_table,
-                                    IcebergColumnDefinition &column) {
+                                    IcebergColumnDefinition &column, int32_t current_schema_id) {
 	auto snapshot_lookup = updated_table.GetSnapshotLookup(context);
 	auto snapshot_info = updated_table.table_metadata.GetSnapshot(snapshot_lookup);
-	if (snapshot_info.snapshot) {
-		IcebergOptions options;
-		auto manifest_list = IcebergManifestList::Load(updated_table.BaseFilePath(), updated_table.table_metadata,
-		                                               snapshot_info, context, options);
-		for (auto &list_entry : manifest_list->GetManifestFilesConst()) {
-			for (auto &manifest_entry : list_entry.manifest_entries) {
-				if (manifest_entry.status == IcebergManifestEntryStatusType::DELETED) {
-					continue;
-				}
-				auto &data_file = manifest_entry.data_file;
-				auto null_count_it = data_file.null_value_counts.find(column.id);
-				if (null_count_it != data_file.null_value_counts.end() && null_count_it->second > 0) {
-					throw ConstraintException("NOT NULL constraint failed: %s.%s", updated_table.name, column.name);
-				}
+	if (!snapshot_info.snapshot) {
+		// Column is present but there's no snapshot, thus all rows are NULL.
+		throw ConstraintException("NOT NULL constraint failed: %s.%s", updated_table.name, column.name);
+	}
+	IcebergOptions options;
+	auto manifest_list = IcebergManifestList::Load(updated_table.BaseFilePath(), updated_table.table_metadata,
+	                                               snapshot_info, context, options);
+	bool found_column_null_count_at_least_once = false;
+	for (auto &list_entry : manifest_list->GetManifestFilesConst()) {
+		for (auto &manifest_entry : list_entry.manifest_entries) {
+			if (manifest_entry.status == IcebergManifestEntryStatusType::DELETED) {
+				continue;
+			}
+			auto &data_file = manifest_entry.data_file;
+			auto column_null_count_it = data_file.null_value_counts.find(column.id);
+			auto found_column_null_count = column_null_count_it != data_file.null_value_counts.end();
+			found_column_null_count_at_least_once = found_column_null_count_at_least_once || found_column_null_count;
+			// `null_value_counts` is an optional field per the Iceberg spec.
+			if (found_column_null_count && column_null_count_it->second > 0) {
+				throw ConstraintException("NOT NULL constraint failed: %s.%s", updated_table.name, column.name);
 			}
 		}
+	}
+
+	if (!found_column_null_count_at_least_once && !column.initial_default) {
+		// edge case, column present in schema but not in manifest/snapshots, without default value. so all rows are
+		// null. This case can trigger as well if the optional field `null_value_counts` is not present in any manifest
+		throw ConstraintException("NOT NULL constraint failed: %s.%s", updated_table.name, column.name);
 	}
 }
 
@@ -465,7 +477,7 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 		}
 		auto &column = *column_p;
 
-		VerifyNotNullConstraint(context, updated_table, column);
+		VerifyNotNullConstraint(context, updated_table, column, current_schema.schema_id);
 
 		column.required = true;
 
