@@ -12,37 +12,29 @@ using namespace duckdb_yyjson;
 
 namespace duckdb {
 
-struct IcebergPartitionSpec;
-
 struct IcebergPartitionSpecField {
 public:
 	static IcebergPartitionSpecField ParseFromJson(const rest_api_objects::PartitionField &field);
 
-private:
-	//! Spec field name. Derived using the column source id, the raw transform type, and the column name
-	//! by using these three fields names can never collide unless the same transform is used on the same column
-	//! Eventually users will be able to choose a partition name themselves.
-	string name;
+public:
 	//! "Applied to the source column(s) to produce a partition value"
 	IcebergTransform transform;
-	//! NOTE: v3 replaces 'source-id' with 'source-ids'
+	//! NOTE: v3 replaces ‘source-id’ with ‘source-ids’
 	//! "A source column id or a list of source column ids from the table’s schema"
 	uint64_t source_id;
 	//! "Used to identify a partition field and is unique within a partition spec"
 	uint64_t partition_field_id;
 
-public:
-	void SetPartitionSpecFieldName(string &column_name);
+	//! Sets the field name, derived from transform + column_name + source_id with Avro-compliance sanitization.
+	//! Must be called after transform and source_id are set.
+	void SetPartitionSpecFieldName(const string &column_name);
 	const string &GetPartitionSpecFieldName() const;
-	void SetPartitionSourceId(idx_t _source_id);
-	void SetPartitionFieldId(idx_t _field_id);
-	void SetPartitionTransform(IcebergTransform &_transform);
 
-	const IcebergTransform &GetIcebergTransform() const;
-	const uint64_t &GetSourceId() const;
-	const uint64_t &GetPartitionFieldId() const;
-
-	friend IcebergPartitionSpec;
+private:
+	//! Spec field name. Derived using the column source id, the raw transform type, and the column name.
+	//! By using these three fields, names can never collide unless the same transform is used on the same column.
+	//! Eventually users will be able to choose a partition name themselves.
+	string name;
 };
 
 struct IcebergPartitionSpec {

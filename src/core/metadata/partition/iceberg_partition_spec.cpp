@@ -42,7 +42,7 @@ const vector<IcebergPartitionSpecField> &IcebergPartitionSpec::GetFields() const
 	return fields;
 }
 
-void IcebergPartitionSpecField::SetPartitionSpecFieldName(string &column_name) {
+void IcebergPartitionSpecField::SetPartitionSpecFieldName(const string &column_name) {
 	string transform_raw_type = transform.RawType();
 	for (idx_t i = 0; i < transform_raw_type.size(); i++) {
 		char c = transform_raw_type[i];
@@ -60,30 +60,6 @@ void IcebergPartitionSpecField::SetPartitionSpecFieldName(string &column_name) {
 
 const string &IcebergPartitionSpecField::GetPartitionSpecFieldName() const {
 	return name;
-}
-
-void IcebergPartitionSpecField::SetPartitionSourceId(idx_t _source_id) {
-	source_id = _source_id;
-}
-
-void IcebergPartitionSpecField::SetPartitionFieldId(idx_t _field_id) {
-	partition_field_id = _field_id;
-}
-
-void IcebergPartitionSpecField::SetPartitionTransform(IcebergTransform &_transform) {
-	transform = _transform;
-}
-
-const IcebergTransform &IcebergPartitionSpecField::GetIcebergTransform() const {
-	return transform;
-}
-
-const uint64_t &IcebergPartitionSpecField::GetSourceId() const {
-	return source_id;
-}
-
-const uint64_t &IcebergPartitionSpecField::GetPartitionFieldId() const {
-	return partition_field_id;
 }
 
 optional_ptr<const IcebergPartitionSpecField> IcebergPartitionSpec::TryGetFieldBySourceId(idx_t source_id) const {
@@ -108,7 +84,7 @@ yyjson_mut_val *IcebergPartitionSpec::FieldsToJSON(yyjson_mut_doc *doc) const {
 	auto fields_array = yyjson_mut_arr(doc);
 	for (auto &field : fields) {
 		auto field_obj = yyjson_mut_arr_add_obj(doc, fields_array);
-		yyjson_mut_obj_add_strcpy(doc, field_obj, "name", field.name.c_str());
+		yyjson_mut_obj_add_strcpy(doc, field_obj, "name", field.GetPartitionSpecFieldName().c_str());
 		yyjson_mut_obj_add_strcpy(doc, field_obj, "transform", field.transform.RawType().c_str());
 		yyjson_mut_obj_add_uint(doc, field_obj, "source-id", field.source_id);
 		yyjson_mut_obj_add_uint(doc, field_obj, "field-id", field.partition_field_id);

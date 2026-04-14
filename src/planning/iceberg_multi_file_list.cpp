@@ -497,7 +497,7 @@ bool IcebergMultiFileList::FileMatchesFilter(const IcebergManifestFile &manifest
 			for (idx_t i = 0; i < field_summaries.size(); i++) {
 				auto &field = partition_spec.fields[i];
 
-				const auto &column_id = source_to_column_id.at(field.GetSourceId());
+				const auto &column_id = source_to_column_id.at(field.source_id);
 				// Find if we have a filter for this source column
 				auto table_filter = GetFilterForColumnIndex(table_filters, column_id);
 				if (!table_filter) {
@@ -508,7 +508,7 @@ bool IcebergMultiFileList::FileMatchesFilter(const IcebergManifestFile &manifest
 				auto stats = IcebergPredicateStats();
 				bool found_partition_field = false;
 				for (auto &partition_val : data_file.partition_info) {
-					if (field.GetPartitionFieldId() == partition_val.field_id) {
+					if (field.partition_field_id == partition_val.field_id) {
 						found_partition_field = true;
 						stats.lower_bound = partition_val.value;
 						stats.upper_bound = partition_val.value;
@@ -537,7 +537,7 @@ bool IcebergMultiFileList::FileMatchesFilter(const IcebergManifestFile &manifest
 				}
 
 				// if the filter doesn't match the partition value, we don't need to scan the data file
-				if (!IcebergPredicate::MatchBounds(context, *table_filter, stats, field.GetIcebergTransform())) {
+				if (!IcebergPredicate::MatchBounds(context, *table_filter, stats, field.transform)) {
 					return false;
 				}
 			}
@@ -798,7 +798,7 @@ bool IcebergMultiFileList::ManifestMatchesFilter(const IcebergManifestFile &mani
 		auto &field_summary = field_summaries[i];
 		auto &field = partition_spec.fields[i];
 
-		const auto &column_id = source_to_column_id.at(field.GetSourceId());
+		const auto &column_id = source_to_column_id.at(field.source_id);
 
 		// Find if we have a filter for this source column
 		auto table_filter = GetFilterForColumnIndex(table_filters, column_id);
@@ -807,14 +807,14 @@ bool IcebergMultiFileList::ManifestMatchesFilter(const IcebergManifestFile &mani
 		}
 
 		auto &column = IcebergTableSchema::GetFromColumnIndex(schema, column_id, 0);
-		auto result_type = field.GetIcebergTransform().GetSerializedType(column.type);
+		auto result_type = field.transform.GetSerializedType(column.type);
 		auto stats = IcebergPredicateStats::DeserializeBounds(field_summary.lower_bound, field_summary.upper_bound,
 		                                                      column.name, result_type);
 		stats.has_nan = field_summary.contains_nan;
 		stats.has_null = field_summary.contains_null;
 		stats.has_not_null = true; // Not enough information in field_summary to determine if this should be false
 
-		if (!IcebergPredicate::MatchBounds(context, *table_filter, stats, field.GetIcebergTransform())) {
+		if (!IcebergPredicate::MatchBounds(context, *table_filter, stats, field.transform)) {
 			return false;
 		}
 	}

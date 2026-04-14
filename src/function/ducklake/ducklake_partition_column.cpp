@@ -7,13 +7,13 @@ namespace iceberg {
 namespace ducklake {
 
 DuckLakePartitionColumn::DuckLakePartitionColumn(const IcebergPartitionSpecField &field) {
-	switch (field.GetIcebergTransform().Type()) {
+	switch (field.transform.Type()) {
 	case IcebergTransformType::IDENTITY:
 	case IcebergTransformType::YEAR:
 	case IcebergTransformType::MONTH:
 	case IcebergTransformType::DAY:
 	case IcebergTransformType::HOUR: {
-		transform = field.GetIcebergTransform().RawType();
+		transform = field.transform.RawType();
 		break;
 	}
 	case IcebergTransformType::BUCKET:
@@ -21,10 +21,10 @@ DuckLakePartitionColumn::DuckLakePartitionColumn(const IcebergPartitionSpecField
 	case IcebergTransformType::VOID:
 	default:
 		throw InvalidInputException("This type of transform (%s) can not be translated to DuckLake",
-		                            field.GetIcebergTransform().RawType());
+		                            field.transform.RawType());
 	};
-	column_id = field.GetSourceId();
-	partition_field_id = field.GetPartitionFieldId();
+	column_id = field.source_id;
+	partition_field_id = field.partition_field_id;
 }
 
 string DuckLakePartitionColumn::FinalizeEntry(int64_t table_id, int64_t partition_id, int64_t partition_key_index) {

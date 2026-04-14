@@ -348,7 +348,7 @@ void ManifestReader::ReadChunk(DataChunk &chunk, const map<idx_t, LogicalType> &
 			for (auto &id_spec : partition_specs) {
 				auto &spec = id_spec.second;
 				for (auto &field : spec.fields) {
-					if (field_id == field.GetPartitionFieldId()) {
+					if (field_id == field.partition_field_id) {
 						IcebergPartitionInfo info;
 						info.field_id = static_cast<uint64_t>(field_id);
 						info.value = partition_vector.GetValue(i);

@@ -162,8 +162,8 @@ static string GetColumnNameBySourceId(const vector<unique_ptr<IcebergColumnDefin
 //! Check if all partition fields use identity transforms
 static bool AllIdentityTransforms(const IcebergPartitionSpec &spec) {
 	for (auto &field : spec.fields) {
-		if (field.GetIcebergTransform().Type() != IcebergTransformType::IDENTITY &&
-		    field.GetIcebergTransform().Type() != IcebergTransformType::VOID) {
+		if (field.transform.Type() != IcebergTransformType::IDENTITY &&
+		    field.transform.Type() != IcebergTransformType::VOID) {
 			return false;
 		}
 	}
@@ -256,7 +256,7 @@ void IcebergInsertGlobalState::AddFiles(DataChunk &chunk, const string &table_na
 			}
 		} else {
 			for (auto &partition_field : ic_partition_info.fields) {
-				auto actual_col_name = GetColumnNameBySourceId(ic_schema->columns, partition_field.GetSourceId());
+				auto actual_col_name = GetColumnNameBySourceId(ic_schema->columns, partition_field.source_id);
 				partition_colname_to_field.emplace(actual_col_name, partition_field);
 			}
 		}
@@ -271,10 +271,10 @@ void IcebergInsertGlobalState::AddFiles(DataChunk &chunk, const string &table_na
 				auto field_it = partition_colname_to_field.find(partition_name);
 				D_ASSERT(field_it != partition_colname_to_field.end());
 				auto &partition_field = field_it->second.get();
-				auto source_type = ic_schema->GetColumnTypeFromFieldId(partition_field.GetSourceId());
+				auto source_type = ic_schema->GetColumnTypeFromFieldId(partition_field.source_id);
 
 				IcebergPartitionInfo info;
-				info.field_id = partition_field.GetPartitionFieldId();
+				info.field_id = partition_field.partition_field_id;
 				if (!struct_val[1].IsNull()) {
 					info.value = Value(StringValue::Get(struct_val[1]));
 				} else {
@@ -538,12 +538,12 @@ static unique_ptr<Expression> GetDateDiffFunction(ClientContext &context, Iceber
 //! Get an iceberg_bucket(N, col) expression for bucket partition transforms
 static unique_ptr<Expression> GetBucketExpression(ClientContext &context, IcebergCopyInput &copy_input,
                                                   const IcebergPartitionSpecField &field) {
-	auto col_idx = GetColumnIndexBySourceId(copy_input.schema.columns, field.GetSourceId());
-	auto col_type = GetSourceColumnType(copy_input, field.GetSourceId());
+	auto col_idx = GetColumnIndexBySourceId(copy_input.schema.columns, field.source_id);
+	auto col_type = GetSourceColumnType(copy_input, field.source_id);
 
 	vector<unique_ptr<Expression>> children;
 	children.push_back(make_uniq<BoundConstantExpression>(
-	    Value::INTEGER(static_cast<int32_t>(field.GetIcebergTransform().GetBucketModulo()))));
+	    Value::INTEGER(static_cast<int32_t>(field.transform.GetBucketModulo()))));
 	children.push_back(CreateColumnReference(copy_input, col_type, col_idx));
 
 	ErrorData error;
@@ -558,12 +558,12 @@ static unique_ptr<Expression> GetBucketExpression(ClientContext &context, Iceber
 //! Get an iceberg_truncate(W, col) expression for truncate partition transforms
 static unique_ptr<Expression> GetTruncateExpression(ClientContext &context, IcebergCopyInput &copy_input,
                                                     const IcebergPartitionSpecField &field) {
-	auto col_idx = GetColumnIndexBySourceId(copy_input.schema.columns, field.GetSourceId());
-	auto col_type = GetSourceColumnType(copy_input, field.GetSourceId());
+	auto col_idx = GetColumnIndexBySourceId(copy_input.schema.columns, field.source_id);
+	auto col_type = GetSourceColumnType(copy_input, field.source_id);
 
 	vector<unique_ptr<Expression>> children;
 	children.push_back(make_uniq<BoundConstantExpression>(
-	    Value::INTEGER(static_cast<int32_t>(field.GetIcebergTransform().GetTruncateWidth()))));
+	    Value::INTEGER(static_cast<int32_t>(field.transform.GetTruncateWidth()))));
 	children.push_back(CreateColumnReference(copy_input, col_type, col_idx));
 
 	ErrorData error;
@@ -578,20 +578,20 @@ static unique_ptr<Expression> GetTruncateExpression(ClientContext &context, Iceb
 //! Get the partition expression for a partition field based on its transform type
 static unique_ptr<Expression> GetPartitionExpression(ClientContext &context, IcebergCopyInput &copy_input,
                                                      const IcebergPartitionSpecField &field) {
-	switch (field.GetIcebergTransform().Type()) {
+	switch (field.transform.Type()) {
 	case IcebergTransformType::IDENTITY: {
-		auto col_idx = GetColumnIndexBySourceId(copy_input.schema.columns, field.GetSourceId());
-		auto col_type = GetSourceColumnType(copy_input, field.GetSourceId());
+		auto col_idx = GetColumnIndexBySourceId(copy_input.schema.columns, field.source_id);
+		auto col_type = GetSourceColumnType(copy_input, field.source_id);
 		return CreateColumnReference(copy_input, col_type, col_idx);
 	}
 	case IcebergTransformType::YEAR:
-		return GetDateDiffFunction(context, copy_input, "year", field.GetSourceId());
+		return GetDateDiffFunction(context, copy_input, "year", field.source_id);
 	case IcebergTransformType::MONTH:
-		return GetDateDiffFunction(context, copy_input, "month", field.GetSourceId());
+		return GetDateDiffFunction(context, copy_input, "month", field.source_id);
 	case IcebergTransformType::DAY:
-		return GetDateDiffFunction(context, copy_input, "day", field.GetSourceId());
+		return GetDateDiffFunction(context, copy_input, "day", field.source_id);
 	case IcebergTransformType::HOUR:
-		return GetDateDiffFunction(context, copy_input, "hour", field.GetSourceId());
+		return GetDateDiffFunction(context, copy_input, "hour", field.source_id);
 	case IcebergTransformType::BUCKET:
 		return GetBucketExpression(context, copy_input, field);
 	case IcebergTransformType::TRUNCATE:
@@ -619,10 +619,10 @@ static void GeneratePartitionExpressions(ClientContext &context, IcebergCopyInpu
 		// All transforms are identity - we can partition on the columns directly
 		// Just set up the correct references to the partition columns
 		for (auto &field : spec.fields) {
-			if (field.GetIcebergTransform().Type() == IcebergTransformType::VOID) {
+			if (field.transform.Type() == IcebergTransformType::VOID) {
 				continue;
 			}
-			auto col_idx = GetColumnIndexBySourceId(copy_input.schema.columns, field.GetSourceId());
+			auto col_idx = GetColumnIndexBySourceId(copy_input.schema.columns, field.source_id);
 			partition_columns.push_back(col_idx);
 		}
 		write_partition_columns = true;
@@ -655,7 +655,7 @@ static void GeneratePartitionExpressions(ClientContext &context, IcebergCopyInpu
 
 	// Partition transform expressions
 	for (auto &field : spec.fields) {
-		if (field.GetIcebergTransform().Type() == IcebergTransformType::VOID) {
+		if (field.transform.Type() == IcebergTransformType::VOID) {
 			continue;
 		}
 		partition_columns.push_back(partition_column_start++);

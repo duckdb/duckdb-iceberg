@@ -322,16 +322,16 @@ int64_t IcebergTableInformation::GetExistingSpecId(IcebergPartitionSpec &spec) {
 			continue;
 		}
 		for (idx_t field_index = 0; field_index < existing_spec.second.fields.size(); field_index++) {
-			auto existing_partition_col_source_id = existing_spec.second.fields[field_index].GetSourceId();
+			auto existing_partition_col_source_id = existing_spec.second.fields[field_index].source_id;
 			// if the number of partition columns don't match, the specs are not the same
-			auto new_spec_col_source_id = spec.fields[field_index].GetSourceId();
+			auto new_spec_col_source_id = spec.fields[field_index].source_id;
 			if (existing_partition_col_source_id != new_spec_col_source_id) {
 				fields_match = false;
 				break;
 			}
 			auto existing_partition_col_transform =
-			    existing_spec.second.fields[field_index].GetIcebergTransform().RawType();
-			auto new_spec_col_transform = spec.fields[field_index].GetIcebergTransform().RawType();
+			    existing_spec.second.fields[field_index].transform.RawType();
+			auto new_spec_col_transform = spec.fields[field_index].transform.RawType();
 			if (existing_partition_col_transform != new_spec_col_transform) {
 				fields_match = false;
 				break;
@@ -436,9 +436,9 @@ void IcebergTableInformation::SetPartitionedBy(IcebergTransaction &transaction,
 		default:
 			break;
 		}
-		field.SetPartitionTransform(iceberg_transform);
-		field.SetPartitionSourceId(source_id);
-		field.SetPartitionFieldId(base_partition_field_id + new_spec.fields.size());
+		field.transform = iceberg_transform;
+		field.source_id = source_id;
+		field.partition_field_id = base_partition_field_id + new_spec.fields.size();
 		// transform field names cannot be the column name. Otherwise Lakekeeper complains
 		field.SetPartitionSpecFieldName(column_name);
 		new_spec.fields.push_back(std::move(field));

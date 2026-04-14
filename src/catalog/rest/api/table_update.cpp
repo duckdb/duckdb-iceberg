@@ -188,9 +188,9 @@ void AddPartitionSpec::CreateUpdate(DatabaseInstance &db, ClientContext &context
 			req.add_partition_spec_update.spec.fields.push_back(rest_api_objects::PartitionField());
 			auto &updated_field = req.add_partition_spec_update.spec.fields.back();
 			updated_field.name = field.GetPartitionSpecFieldName();
-			updated_field.transform.value = field.GetIcebergTransform().RawType();
-			updated_field.field_id = field.GetPartitionFieldId();
-			updated_field.source_id = field.GetSourceId();
+			updated_field.transform.value = field.transform.RawType();
+			updated_field.field_id = field.partition_field_id;
+			updated_field.source_id = field.source_id;
 			updated_field.has_field_id = true;
 		}
 	}

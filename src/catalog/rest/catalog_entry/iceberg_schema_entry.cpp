@@ -230,7 +230,7 @@ static void VerifySchemaEvolution(const IcebergTableMetadata &table_metadata, co
 			if (partition_field) {
 				extra_info = StringUtil::Format(
 				    " (there is a partition field that refers to the column (name: %s, partition_field_id: %d))",
-				    partition_field->GetPartitionSpecFieldName(), partition_field->GetPartitionFieldId());
+				    partition_field->GetPartitionSpecFieldName(), partition_field->partition_field_id);
 				break;
 			}
 			if (target_type.id() == LogicalTypeId::TIMESTAMP_NS) {
@@ -383,7 +383,7 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 		if (partition_field) {
 			throw CatalogException(
 			    "Can't drop column '%s' as it is referenced by the current partition spec's field: '%s' (field id: %d)",
-			    to_remove_column, partition_field->GetPartitionSpecFieldName(), partition_field->GetPartitionFieldId());
+			    to_remove_column, partition_field->GetPartitionSpecFieldName(), partition_field->partition_field_id);
 		}
 
 		if (new_schema->columns.empty()) {

@@ -50,7 +50,7 @@ map<idx_t, LogicalType> IcebergDataFile::GetFieldIdToTypeMapping(const IcebergSn
 		auto &fields = partition_spec.GetFields();
 
 		for (auto &field : fields) {
-			auto it = source_to_column_id.find(field.GetSourceId());
+			auto it = source_to_column_id.find(field.source_id);
 			if (it == source_to_column_id.end()) {
 				//! FIXME: is this correct?
 				//! The column doesn't exist (anymore) in the schema we're scanning
@@ -59,8 +59,8 @@ map<idx_t, LogicalType> IcebergDataFile::GetFieldIdToTypeMapping(const IcebergSn
 			}
 			auto &column_id = it->second;
 			auto &column = IcebergTableSchema::GetFromColumnIndex(schema.columns, column_id, 0);
-			partition_field_id_to_type.emplace(field.GetPartitionFieldId(),
-			                                   field.GetIcebergTransform().GetBoundsType(column.type));
+			partition_field_id_to_type.emplace(field.partition_field_id,
+			                                   field.transform.GetBoundsType(column.type));
 		}
 	}
 	return partition_field_id_to_type;
@@ -102,13 +102,13 @@ IcebergDataFile::GetExtendedPartitionInfo(const IcebergTableMetadata &metadata) 
 	unordered_map<uint64_t, ParitionFieldWithSourceType> field_id_to_partition_spec_and_source_type;
 	for (auto &spec_pair : metadata.partition_specs) {
 		for (auto &field : spec_pair.second.fields) {
-			auto type_it = source_id_to_type.find(field.GetSourceId());
+			auto type_it = source_id_to_type.find(field.source_id);
 			if (type_it == source_id_to_type.end()) {
 				throw InternalException(
 				    "Partition %s with field_id %llu in data_file %s with source_id %llu not found in any table schema",
-				    field.GetPartitionSpecFieldName(), field.GetPartitionFieldId(), file_path, field.GetSourceId());
+				    field.GetPartitionSpecFieldName(), field.partition_field_id, file_path, field.source_id);
 			}
-			field_id_to_partition_spec_and_source_type.emplace(field.GetPartitionFieldId(),
+			field_id_to_partition_spec_and_source_type.emplace(field.partition_field_id,
 			                                                   ParitionFieldWithSourceType {&field, type_it->second});
 		}
 	}
@@ -125,8 +125,8 @@ IcebergDataFile::GetExtendedPartitionInfo(const IcebergTableMetadata &metadata) 
 		extended.name = resolved.field->GetPartitionSpecFieldName();
 		extended.field_id = info.field_id;
 		extended.value = info.value;
-		extended.source_id = resolved.field->GetSourceId();
-		extended.transform = resolved.field->GetIcebergTransform();
+		extended.source_id = resolved.field->source_id;
+		extended.transform = resolved.field->transform;
 		D_ASSERT(resolved.source_type);
 		extended.source_type = *resolved.source_type;
 		ret.push_back(std::move(extended));

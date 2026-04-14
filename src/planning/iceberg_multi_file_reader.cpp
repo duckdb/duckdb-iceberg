@@ -214,7 +214,7 @@ static void ApplyPartitionConstants(const IcebergMultiFileList &multi_file_list,
 	unordered_map<uint64_t, idx_t> identifier_to_field_index;
 	for (idx_t i = 0; i < partition_spec.fields.size(); i++) {
 		auto &field = partition_spec.fields[i];
-		identifier_to_field_index[field.GetSourceId()] = i;
+		identifier_to_field_index[field.source_id] = i;
 	}
 
 	auto &local_columns = reader.columns;
@@ -247,7 +247,7 @@ static void ApplyPartitionConstants(const IcebergMultiFileList &multi_file_list,
 		}
 
 		auto &field = partition_spec.fields[it->second];
-		if (field.GetIcebergTransform() != IcebergTransformType::IDENTITY) {
+		if (field.transform != IcebergTransformType::IDENTITY) {
 			continue; // Skip non-identity transforms
 		}
 
@@ -257,7 +257,7 @@ static void ApplyPartitionConstants(const IcebergMultiFileList &multi_file_list,
 		}
 		optional_ptr<const Value> partition_value;
 		for (auto &partition_info : data_file.partition_info) {
-			if (partition_info.field_id == field.GetPartitionFieldId() && !partition_info.value.IsNull()) {
+			if (partition_info.field_id == field.partition_field_id && !partition_info.value.IsNull()) {
 				partition_value = partition_info.value;
 				break;
 			}
