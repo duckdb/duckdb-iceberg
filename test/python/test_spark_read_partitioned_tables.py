@@ -521,16 +521,25 @@ TRUNCATE_BINARY_FOR_INSERT_ROWS = _cross_engine_rows(_TRUNCATE_BINARY_VALUES)
 TRUNCATE_DECIMAL_FOR_INSERT_ROWS = _cross_engine_rows(_TRUNCATE_DECIMAL_AMOUNTS)
 
 # Rows written by DuckDB alone into bucket/truncate decimal tables (3 columns: id, amount, label)
-_BUCKET_DECIMAL_LABELS = ["ten", "twenty", "thirty", "forty", "fifty", "sixty", "seventy", "eighty", "ninety", "hundred"]
-TEST_BUCKET_DECIMAL_ROWS = (
-    [Row(id=i, amount=a, label=l) for i, a, l in zip(range(1, 11), _BUCKET_DECIMAL_AMOUNTS, _BUCKET_DECIMAL_LABELS)]
-    + [Row(id=11, amount=None, label="null_row")]
-)
+_BUCKET_DECIMAL_LABELS = [
+    "ten",
+    "twenty",
+    "thirty",
+    "forty",
+    "fifty",
+    "sixty",
+    "seventy",
+    "eighty",
+    "ninety",
+    "hundred",
+]
+TEST_BUCKET_DECIMAL_ROWS = [
+    Row(id=i, amount=a, label=l) for i, a, l in zip(range(1, 11), _BUCKET_DECIMAL_AMOUNTS, _BUCKET_DECIMAL_LABELS)
+] + [Row(id=11, amount=None, label="null_row")]
 _TRUNCATE_DECIMAL_LABELS = ["one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten"]
-TEST_TRUNCATE_DECIMAL_ROWS = (
-    [Row(id=i, amount=a, label=l) for i, a, l in zip(range(1, 11), _TRUNCATE_DECIMAL_AMOUNTS, _TRUNCATE_DECIMAL_LABELS)]
-    + [Row(id=11, amount=None, label="null_row")]
-)
+TEST_TRUNCATE_DECIMAL_ROWS = [
+    Row(id=i, amount=a, label=l) for i, a, l in zip(range(1, 11), _TRUNCATE_DECIMAL_AMOUNTS, _TRUNCATE_DECIMAL_LABELS)
+] + [Row(id=11, amount=None, label="null_row")]
 
 
 @requires_iceberg_server
@@ -556,9 +565,7 @@ class TestSparkReadBucketTruncateForInsert:
 
     def test_bucket_int_filter(self, spark_con):
         spark = _get_spark(spark_con)
-        res = spark.sql(
-            "SELECT * FROM default.bucket_partitioned_int_for_insert WHERE value = 1 ORDER BY id"
-        ).collect()
+        res = spark.sql("SELECT * FROM default.bucket_partitioned_int_for_insert WHERE value = 1 ORDER BY id").collect()
         assert res == [Row(id=1, value=1), Row(id=101, value=1)]
 
     # --------------------------------------------------- BUCKET / BIGINT
