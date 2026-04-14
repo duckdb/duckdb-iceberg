@@ -457,7 +457,7 @@ void IcebergTransaction::DoTableUpdates(IcebergTransactionAlterUpdate &alter_upd
 
 void IcebergTransaction::DoTableDeletes(IcebergTransactionDeleteUpdate &delete_update, ClientContext &context) {
 	auto &ic_catalog = catalog.Cast<IcebergCatalog>();
-	auto &table = delete_update.table;
+	auto &table = delete_update.deleted_table;
 	auto schema_key = table.schema.name;
 	auto table_key = table.GetTableKey();
 	auto table_name = table.name;
@@ -622,12 +622,18 @@ IcebergTransactionAlterUpdate &IcebergTransaction::GetOrCreateAlter() {
 IcebergTableInformation &IcebergTransaction::DeleteTable(IcebergTableInformation &table) {
 	auto table_key = table.GetTableKey();
 	auto state = GetLatestTableState(table_key);
-	if (!state) {
-		state = SetLatestTableState(table, IcebergTableSource::EXTERNAL);
+
+	unique_ptr<IcebergTransactionDeleteUpdate> delete_update;
+	if (state) {
+		delete_update = make_uniq<IcebergTransactionDeleteUpdate>(*this, state->table);
+	} else {
+		delete_update = make_uniq<IcebergTransactionDeleteUpdate>(*this, table);
+		auto &deleted_table = delete_update->deleted_table;
+		state = SetLatestTableState(deleted_table, IcebergTableSource::TRANSACTION);
 	}
+	transaction_updates.push_back(std::move(delete_update));
 	state->status = IcebergTableStatus::DROPPED;
-	transaction_updates.push_back(make_uniq<IcebergTransactionDeleteUpdate>(*this, state->table));
-	return state->table;
+	return state->table.get();
 }
 
 IcebergTableInformation &IcebergTransaction::RenameTable(IcebergTableInformation &table, const string &new_name) {
