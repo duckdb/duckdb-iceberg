@@ -160,14 +160,15 @@ static void SetIcebergTablePropertiesFunction(ClientContext &context, TableFunct
 
 	auto iceberg_table = bind_data.iceberg_table;
 	auto &table_info = iceberg_table->table_info;
+
 	auto &iceberg_transaction = IcebergTransaction::Get(context, iceberg_table->catalog);
-	iceberg_transaction.updated_tables.emplace(table_info.GetTableKey(), table_info.Copy(iceberg_transaction));
-	auto &entry = iceberg_transaction.updated_tables.at(table_info.GetTableKey());
-	auto &transaction_data = entry.GetOrCreateTransactionData(iceberg_transaction);
+	ApplyTableUpdate(table_info, iceberg_transaction, [&](IcebergTableInformation &tbl) {
+		auto &transaction_data = tbl.GetOrCreateTransactionData(iceberg_transaction);
+		transaction_data.TableSetProperties(bind_data.properties);
+	});
 
 	auto schema = iceberg_table->schema.name;
 	auto table_name = iceberg_table->name;
-	transaction_data.TableSetProperties(bind_data.properties);
 	global_state.properties_set = true;
 	// set success output, failure happens during transaction commit.
 	FlatVector::GetData<int64_t>(output.data[0])[0] = bind_data.properties.size();
@@ -190,12 +191,13 @@ static void RemoveIcebergTablePropertiesFunction(ClientContext &context, TableFu
 	auto iceberg_table = bind_data.iceberg_table;
 	auto &table_info = iceberg_table->table_info;
 	auto &iceberg_transaction = IcebergTransaction::Get(context, iceberg_table->catalog);
-	iceberg_transaction.updated_tables.emplace(table_info.GetTableKey(), table_info.Copy(iceberg_transaction));
-	auto &entry = iceberg_transaction.updated_tables.at(table_info.GetTableKey());
-	auto &transaction_data = entry.GetOrCreateTransactionData(iceberg_transaction);
+	ApplyTableUpdate(table_info, iceberg_transaction, [&](IcebergTableInformation &tbl) {
+		auto &transaction_data = tbl.GetOrCreateTransactionData(iceberg_transaction);
+		transaction_data.TableRemoveProperties(bind_data.remove_properties);
+	});
+
 	auto schema = iceberg_table->schema.name;
 	auto table_name = iceberg_table->name;
-	transaction_data.TableRemoveProperties(bind_data.remove_properties);
 	global_state.properties_removed = true;
 	// set success output, failure happens during transaction commit.
 	FlatVector::GetData<int64_t>(output.data[0])[0] = bind_data.properties.size();

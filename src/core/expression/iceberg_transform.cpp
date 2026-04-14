@@ -1,6 +1,7 @@
 #include "core/expression/iceberg_transform.hpp"
 
 #include "duckdb/common/string_util.hpp"
+#include "utf8proc_wrapper.hpp"
 #include "core/expression/iceberg_hash.hpp"
 
 namespace duckdb {

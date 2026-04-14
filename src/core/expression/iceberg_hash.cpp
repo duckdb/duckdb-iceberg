@@ -1,8 +1,9 @@
 #include "core/expression/iceberg_hash.hpp"
+#include "common/iceberg_math.hpp"
 
 #include "duckdb/common/exception.hpp"
 #include "duckdb/common/types/hugeint.hpp"
-#include "utf8proc_wrapper.hpp"
+#include "duckdb/common/types/timestamp.hpp"
 
 namespace duckdb {
 
@@ -225,8 +226,7 @@ int32_t IcebergHash::HashUUID(hugeint_t uuid) {
 }
 
 //! Hash a DuckDB Value based on its type
-//! Supports Iceberg bucket transform types: integer, long, decimal, date, time, timestamp, timestamptz,
-//! timestamp_ns, uuid, string, binary.
+//! Supports Iceberg bucket transform types: integer, long, decimal, date, timestamp, timestamptz, string, binary
 int32_t IcebergHash::HashValue(const Value &value) {
 	D_ASSERT(!value.IsNull());
 	switch (value.type().id()) {
@@ -260,9 +260,9 @@ int32_t IcebergHash::HashValue(const Value &value) {
 	// time: microseconds from midnight, hashed as int64
 	case LogicalTypeId::TIME:
 		return HashTime(value.GetValue<dtime_t>());
-	// timestamp_ns: nanoseconds from epoch, hashed as int64
+	// timestamp_ns: Iceberg buckets nanos as micros first (BucketTimestampNano in Java)
 	case LogicalTypeId::TIMESTAMP_NS:
-		return HashTimestampNs(value.GetValue<timestamp_ns_t>());
+		return HashInt64(IcebergNanosToMicrosFloor(value.GetValue<timestamp_ns_t>().value));
 	// uuid: 16 big-endian bytes
 	case LogicalTypeId::UUID:
 		return HashUUID(value.GetValueUnsafe<hugeint_t>());

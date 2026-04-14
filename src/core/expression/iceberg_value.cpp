@@ -389,6 +389,16 @@ SerializeResult IcebergValue::SerializeValue(Value input_value, const LogicalTyp
 		auto ret = SerializeResult(column_type, serialized_val);
 		return ret;
 	}
+	case LogicalTypeId::TIMESTAMP_NS: {
+		timestamp_ns_t val = input_value.GetValue<timestamp_ns_t>();
+		if (!Value::IsFinite(val)) {
+			throw ConversionException("Cannot write infinity/-infinity for timestamp_ns type");
+		}
+		int64_t nanos_since_epoch = val.value;
+		auto serialized_const_data_ptr = const_data_ptr_cast<int64_t>(&nanos_since_epoch);
+		auto serialized_val = Value::BLOB(serialized_const_data_ptr, sizeof(int64_t));
+		return SerializeResult(column_type, serialized_val);
+	}
 	case LogicalTypeId::DECIMAL: {
 		auto decimal_as_string = input_value.GetValue<string>();
 		auto dec_pos = decimal_as_string.find(".");

@@ -30,6 +30,12 @@
       ]
     },
     {
+      "reason": "TIMESTAMP_NS CREATE DEFAULT: catalog rejects this with 400 BAD REQUEST",
+      "paths": [
+        "test/sql/local/irc_any_catalog/create/default/test_create_default_timestamp_ns.test"
+      ]
+    },
+    {
       "reason": "Need to reparse paths",
       "paths": [
         "test/sql/local/irc_any_catalog/delete/delete_table.test",
