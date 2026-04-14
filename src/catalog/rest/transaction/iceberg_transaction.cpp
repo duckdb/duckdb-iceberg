@@ -489,7 +489,7 @@ void IcebergTransaction::DoTableRename(IcebergTransactionRenameUpdate &rename_up
 	auto &schema = original_table.schema;
 	auto table_key = original_table.GetTableKey();
 	auto &table_name = original_table.name;
-	auto &new_name = renamed_table.name;
+	auto new_name = rename_update.new_name;
 
 	std::unique_ptr<yyjson_mut_doc, YyjsonDocDeleter> doc_p(yyjson_mut_doc_new(nullptr));
 	auto doc = doc_p.get();
@@ -502,6 +502,13 @@ void IcebergTransaction::DoTableRename(IcebergTransactionRenameUpdate &rename_up
 	drop_info.name = table_name;
 	drop_info.if_not_found = OnEntryNotFound::THROW_EXCEPTION;
 	schema.DropEntry(context, drop_info, true);
+
+	lock_guard<mutex> guard(schema.tables.GetEntryLock());
+	shared_ptr<IcebergTableInformation> old_version;
+	schema.tables.CreateEntryInternal(guard, new_name, std::move(rename_update.new_table), old_version);
+	if (old_version) {
+		throw TransactionException("Table %s was already created by a different transaction!", new_name);
+	}
 }
 
 void IcebergTransaction::DoTableDeletes(IcebergTransactionDeleteUpdate &delete_update, ClientContext &context) {
