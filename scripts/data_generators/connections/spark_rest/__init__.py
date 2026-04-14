@@ -34,7 +34,13 @@ import sys
 import os
 
 CONNECTION_KEY = 'spark-rest'
-SPARK_RUNTIME_PATH = os.path.join(os.path.dirname(__file__), '..', '..', f'iceberg-spark-runtime-{SPARK_VERSION}_{SCALA_BINARY_VERSION}-{ICEBERG_LIBRARY_VERSION}.jar')
+SPARK_RUNTIME_PATH = os.path.join(
+    os.path.dirname(__file__),
+    '..',
+    '..',
+    f'iceberg-spark-runtime-{SPARK_VERSION}_{SCALA_BINARY_VERSION}-{ICEBERG_LIBRARY_VERSION}.jar',
+)
+
 
 @IcebergConnection.register(CONNECTION_KEY)
 class IcebergSparkRest(IcebergConnection):
@@ -56,6 +62,9 @@ class IcebergSparkRest(IcebergConnection):
                 "spark.sql.extensions",
                 "org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions",
             )
+            # Pin driver to loopback so multi-homed machines / LAN IPs don't confuse Spark's internal RPC.
+            .config("spark.driver.host", "127.0.0.1")
+            .config("spark.driver.bindAddress", "127.0.0.1")
             .config("spark.sql.catalog.demo", "org.apache.iceberg.spark.SparkCatalog")
             .config("spark.sql.catalog.demo.type", "rest")
             .config("spark.sql.catalog.demo.uri", os.getenv("ICEBERG_ENDPOINT", "http://127.0.0.1:8181"))

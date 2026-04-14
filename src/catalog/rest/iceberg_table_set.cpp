@@ -21,6 +21,7 @@
 #include "catalog/rest/storage/authorization/oauth2.hpp"
 #include "catalog/rest/catalog_entry/iceberg_schema_entry.hpp"
 #include "core/metadata/partition/iceberg_partition_spec.hpp"
+#include "catalog/rest/transaction/iceberg_transaction_update.hpp"
 
 namespace duckdb {
 
@@ -204,12 +205,9 @@ IcebergTableInformation &IcebergTableSet::CreateNewEntry(ClientContext &context,
 	}
 
 	auto key = IcebergTableInformation::GetTableKey(schema.namespace_items, info.table);
-	auto emplace_res =
-	    iceberg_transaction.updated_tables.emplace(key, IcebergTableInformation(catalog, schema, info.table));
-	if (!emplace_res.second) {
-		throw InternalException("Table %s was already created somehow?", key);
-	}
-	auto &table_info = emplace_res.first->second;
+	auto &alter_update = iceberg_transaction.GetOrCreateAlter();
+	auto &table_info = alter_update.CreateTable(key, IcebergTableInformation(catalog, schema, info.table));
+	// auto &table_info = emplace_res.first->second;
 	auto &table_metadata = table_info.table_metadata;
 	auto table_entry = make_uniq<IcebergTableEntry>(table_info, catalog, schema, info, 0);
 	auto table_ptr = table_entry.get();
@@ -290,22 +288,20 @@ optional_ptr<CatalogEntry> IcebergTableSet::GetEntry(ClientContext &context, con
 	lock_guard<mutex> l(entry_lock);
 	auto &ic_catalog = catalog.Cast<IcebergCatalog>();
 	auto &iceberg_transaction = IcebergTransaction::Get(context, catalog);
-	const auto table_name = lookup.GetEntryName();
+	const auto &table_name = lookup.GetEntryName();
 	// first check transaction entries
 	auto table_key = IcebergTableInformation::GetTableKey(schema.namespace_items, table_name);
-	// Check if table has been deleted within in the transaction.
-	if (iceberg_transaction.deleted_tables.count(table_key) > 0) {
-		return nullptr;
-	}
-	// Check if the table has been updated within the transaction
-	{
-		auto it = iceberg_transaction.updated_tables.find(table_key);
-		if (it != iceberg_transaction.updated_tables.end()) {
-			auto &table_info = it->second;
-			auto snapshot_lookup = GetSnapshotLookup(table_info, context, lookup);
-			return table_info.GetSchemaVersion(snapshot_lookup, context);
+	auto latest_state = iceberg_transaction.GetLatestTableState(table_key);
+	if (latest_state) {
+		if (latest_state->status == IcebergTableStatus::DROPPED) {
+			// If table has been deleted within the transaction, return null
+			return nullptr;
 		}
+		auto &table_info = latest_state->table.get();
+		auto snapshot_lookup = GetSnapshotLookup(table_info, context, lookup);
+		return table_info.GetSchemaVersion(snapshot_lookup, context);
 	}
+
 	auto previous_request_info = iceberg_transaction.GetTableRequestResult(table_key);
 	if (previous_request_info.exists) {
 		// transaction has already looked up this table, find it in entries
@@ -336,7 +332,6 @@ optional_ptr<CatalogEntry> IcebergTableSet::GetEntry(ClientContext &context, con
 	}
 
 	iceberg_transaction.tables[table_key] = entry->second;
-
 	IcebergSnapshotLookup snapshot_lookup;
 
 	bool is_time_travel = lookup.GetAtClause();
