@@ -253,6 +253,30 @@ static void VerifySchemaEvolution(const IcebergTableMetadata &table_metadata, co
 	throw CatalogException(error);
 }
 
+//! Ensure existing data files don't contain NULL values in this column
+void IcebergSchemaEntry::VerifyNotNullConstraint(ClientContext &context, IcebergTableInformation &updated_table,
+                                                 IcebergColumnDefinition &column) {
+	auto snapshot_lookup = updated_table.GetSnapshotLookup(context);
+	auto snapshot_info = updated_table.table_metadata.GetSnapshot(snapshot_lookup);
+	if (snapshot_info.snapshot) {
+		IcebergOptions options;
+		auto manifest_list = IcebergManifestList::Load(updated_table.BaseFilePath(), updated_table.table_metadata,
+		                                               snapshot_info, context, options);
+		for (auto &list_entry : manifest_list->GetManifestFilesConst()) {
+			for (auto &manifest_entry : list_entry.manifest_entries) {
+				if (manifest_entry.status == IcebergManifestEntryStatusType::DELETED) {
+					continue;
+				}
+				auto &data_file = manifest_entry.data_file;
+				auto null_count_it = data_file.null_value_counts.find(column.id);
+				if (null_count_it != data_file.null_value_counts.end() && null_count_it->second > 0) {
+					throw ConstraintException("NOT NULL constraint failed: %s.%s", updated_table.name, column.name);
+				}
+			}
+		}
+	}
+}
+
 void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) {
 	if (info.type != AlterType::ALTER_TABLE) {
 		throw NotImplementedException("Only ALTER TABLE is supported for Iceberg");
@@ -441,26 +465,7 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 		}
 		auto &column = *column_p;
 
-		// Check existing data files for null values in this column
-		auto snapshot_lookup = updated_table.GetSnapshotLookup(context);
-		auto snapshot_info = updated_table.table_metadata.GetSnapshot(snapshot_lookup);
-		if (snapshot_info.snapshot) {
-			IcebergOptions options;
-			auto manifest_list = IcebergManifestList::Load(updated_table.BaseFilePath(), updated_table.table_metadata,
-			                                               snapshot_info, context, options);
-			for (auto &list_entry : manifest_list->GetManifestFilesConst()) {
-				for (auto &manifest_entry : list_entry.manifest_entries) {
-					if (manifest_entry.status == IcebergManifestEntryStatusType::DELETED) {
-						continue;
-					}
-					auto &data_file = manifest_entry.data_file;
-					auto null_count_it = data_file.null_value_counts.find(column.id);
-					if (null_count_it != data_file.null_value_counts.end() && null_count_it->second > 0) {
-						throw ConstraintException("NOT NULL constraint failed: %s.%s", table_entry.name, column_name);
-					}
-				}
-			}
-		}
+		VerifyNotNullConstraint(context, updated_table, column);
 
 		column.required = true;
 
