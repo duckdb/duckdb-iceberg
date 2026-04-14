@@ -36,8 +36,6 @@ public:
 	                                                CreatePragmaFunctionInfo &info) override;
 	optional_ptr<CatalogEntry> CreateCollation(CatalogTransaction transaction, CreateCollationInfo &info) override;
 	optional_ptr<CatalogEntry> CreateType(CatalogTransaction transaction, CreateTypeInfo &info) override;
-	void VerifyNotNullConstraint(ClientContext &context, IcebergTableInformation &updated_table,
-	                             IcebergColumnDefinition &column);
 	void Alter(CatalogTransaction transaction, AlterInfo &info) override;
 	void Scan(ClientContext &context, CatalogType type, const std::function<void(CatalogEntry &)> &callback) override;
 	void Scan(CatalogType type, const std::function<void(CatalogEntry &)> &callback) override;

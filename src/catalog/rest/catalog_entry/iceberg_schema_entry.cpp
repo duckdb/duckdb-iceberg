@@ -254,8 +254,8 @@ static void VerifySchemaEvolution(const IcebergTableMetadata &table_metadata, co
 }
 
 //! Ensure existing data files don't contain NULL values in this column
-void IcebergSchemaEntry::VerifyNotNullConstraint(ClientContext &context, IcebergTableInformation &updated_table,
-                                                 IcebergColumnDefinition &column) {
+static void VerifyNotNullConstraint(ClientContext &context, IcebergTableInformation &updated_table,
+                                    IcebergColumnDefinition &column) {
 	auto snapshot_lookup = updated_table.GetSnapshotLookup(context);
 	auto snapshot_info = updated_table.table_metadata.GetSnapshot(snapshot_lookup);
 	if (snapshot_info.snapshot) {
