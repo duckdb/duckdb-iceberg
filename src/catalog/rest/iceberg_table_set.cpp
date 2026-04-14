@@ -293,7 +293,7 @@ optional_ptr<CatalogEntry> IcebergTableSet::GetEntry(ClientContext &context, con
 	auto table_key = IcebergTableInformation::GetTableKey(schema.namespace_items, table_name);
 	auto latest_state = iceberg_transaction.GetLatestTableState(table_key);
 	if (latest_state) {
-		if (latest_state->status == IcebergTableStatus::DROPPED) {
+		if (latest_state->status != IcebergTableStatus::ALIVE) {
 			// If table has been deleted within the transaction, return null
 			return nullptr;
 		}

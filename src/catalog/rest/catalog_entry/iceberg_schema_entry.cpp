@@ -48,7 +48,7 @@ bool IcebergSchemaEntry::HandleCreateConflict(CatalogTransaction &transaction, C
 		auto &iceberg_transaction = GetICTransaction(transaction);
 		auto table_key = IcebergTableInformation::GetTableKey(namespace_items, entry_name);
 		auto latest_state = iceberg_transaction.GetLatestTableState(table_key);
-		if (latest_state && latest_state->status == IcebergTableStatus::DROPPED) {
+		if (latest_state && latest_state->status != IcebergTableStatus::ALIVE) {
 			auto &ic_catalog = catalog.Cast<IcebergCatalog>();
 			vector<string> qualified_name = {ic_catalog.GetName()};
 			qualified_name.insert(qualified_name.end(), namespace_items.begin(), namespace_items.end());
@@ -430,7 +430,7 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 		if (other_catalog_entry) {
 			//! The table exists at this point, check if it was deleted/renamed in the transaction
 			auto &other_table_entry = other_catalog_entry->Cast<IcebergTableEntry>();
-			auto &other_table_info = table_entry.table_info;
+			auto &other_table_info = other_table_entry.table_info;
 			auto other_table_key = other_table_info.GetTableKey();
 			auto state = irc_transaction.GetLatestTableState(other_table_key);
 			if (!state || state->status == IcebergTableStatus::ALIVE) {

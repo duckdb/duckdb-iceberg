@@ -380,6 +380,23 @@ void IRCAPI::CommitTableDelete(ClientContext &context, IcebergCatalog &catalog, 
 	}
 }
 
+void IRCAPI::CommitTableRename(ClientContext &context, IcebergCatalog &catalog, const string &body) {
+	auto url_builder = catalog.GetBaseUrl();
+	url_builder.AddPrefixComponent(catalog.prefix, catalog.prefix_is_one_component);
+	url_builder.AddPathComponent(IRCPathComponent::RegularComponent("tables"));
+	url_builder.AddPathComponent(IRCPathComponent::RegularComponent("rename"));
+
+	HTTPHeaders headers(*context.db);
+	headers.Insert("Content-Type", "application/json");
+	auto response = catalog.auth_handler->Request(RequestType::POST_REQUEST, context, url_builder, headers, body);
+	// Glue/S3Tables follow spec and return 204, apache/iceberg-rest-fixture docker image returns 200
+	if (response->status != HTTPStatusCode::NoContent_204 && response->status != HTTPStatusCode::OK_200) {
+		throw InvalidConfigurationException(
+		    "Request to '%s' returned a non-200 status code (%s), with reason: %s, body: %s",
+		    url_builder.GetURLEncoded(), EnumUtil::ToString(response->status), response->reason, response->body);
+	}
+}
+
 void IRCAPI::CommitNamespaceCreate(ClientContext &context, IcebergCatalog &catalog, string body) {
 	auto url_builder = catalog.GetBaseUrl();
 	url_builder.AddPrefixComponent(catalog.prefix, catalog.prefix_is_one_component);

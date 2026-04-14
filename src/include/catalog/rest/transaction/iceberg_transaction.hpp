@@ -11,6 +11,7 @@ class IcebergTableEntry;
 struct IcebergTransactionUpdate;
 struct IcebergTransactionAlterUpdate;
 struct IcebergTransactionDeleteUpdate;
+struct IcebergTransactionRenameUpdate;
 
 struct TableTransactionInfo {
 	TableTransactionInfo() {};
@@ -67,6 +68,7 @@ public:
 	}
 	void DoTableUpdates(IcebergTransactionAlterUpdate &alter_update, ClientContext &context);
 	void DoTableDeletes(IcebergTransactionDeleteUpdate &delete_update, ClientContext &context);
+	void DoTableRename(IcebergTransactionRenameUpdate &rename_update, ClientContext &context);
 	void DoSchemaCreates(ClientContext &context);
 	void DoSchemaDeletes(ClientContext &context);
 	IcebergCatalog &GetCatalog();

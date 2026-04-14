@@ -74,7 +74,7 @@ public:
 //! Rename a table
 struct IcebergTransactionRenameUpdate : public IcebergTransactionUpdate {
 public:
-	static constexpr const IcebergTransactionUpdateType TYPE = IcebergTransactionUpdateType::DELETE;
+	static constexpr const IcebergTransactionUpdateType TYPE = IcebergTransactionUpdateType::RENAME;
 
 public:
 	IcebergTransactionRenameUpdate(IcebergTransaction &transaction, const IcebergTableInformation &table,
