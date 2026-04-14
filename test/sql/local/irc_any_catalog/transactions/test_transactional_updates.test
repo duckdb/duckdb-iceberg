@@ -70,7 +70,7 @@ select * from my_datalake.default.multi_transaction_update;
 statement error con1
 commit;
 ----
-<REGEX>:.*Requirement failed: branch main has changed:.*
+<REGEX>:.*TransactionContext Error: Failed to commit:.*
 
 # con1 UPDATE didn't go through
 query II
