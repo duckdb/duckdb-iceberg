@@ -654,6 +654,16 @@ IcebergTableInformation &IcebergTransaction::RenameTable(IcebergTableInformation
 	auto &new_table = rename_update.new_table;
 	auto &new_table_state = SetLatestTableState(new_table, IcebergTableSource::TRANSACTION);
 	new_table_state.status = IcebergTableStatus::ALIVE;
+	new_table.InitSchemaVersions();
+
+	//! FIXME: just like the other place, this can easily go wrong
+	//! Migrate the MetadataCache
+	auto new_table_key = new_table.GetTableKey();
+	lock_guard<mutex> cache_guard(catalog.GetMetadataCacheLock());
+	auto cache = catalog.TryGetValidCachedLoadTableResult(table_key, cache_guard, false);
+	catalog.StoreLoadTableResultInternal(new_table_key, std::move(cache->load_table_result), cache_guard,
+	                                     cache->expires_at);
+	catalog.RemoveLoadTableResultInternal(table_key, cache_guard);
 	return state->table;
 }
 

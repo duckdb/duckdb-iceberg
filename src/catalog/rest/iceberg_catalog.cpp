@@ -68,13 +68,21 @@ optional_ptr<SchemaCatalogEntry> IcebergCatalog::LookupSchema(CatalogTransaction
 	return reinterpret_cast<SchemaCatalogEntry *>(entry.get());
 }
 
-void IcebergCatalog::StoreLoadTableResult(const string &table_key,
-                                          unique_ptr<const rest_api_objects::LoadTableResult> load_table_result) {
-	std::lock_guard<std::mutex> g(metadata_cache_mutex);
+void IcebergCatalog::StoreLoadTableResultInternal(const string &table_key,
+                                                  unique_ptr<const rest_api_objects::LoadTableResult> load_table_result,
+                                                  lock_guard<std::mutex> &lock, system_clock::time_point expires_at) {
 	// erase load table result if it exists.
 	if (metadata_cache.find(table_key) != metadata_cache.end()) {
 		metadata_cache.erase(table_key);
 	}
+	auto val = make_uniq<MetadataCacheValue>(expires_at, std::move(load_table_result));
+	metadata_cache.emplace(table_key, std::move(val));
+}
+
+void IcebergCatalog::StoreLoadTableResult(const string &table_key,
+                                          unique_ptr<const rest_api_objects::LoadTableResult> load_table_result) {
+	std::lock_guard<std::mutex> g(metadata_cache_mutex);
+
 	// If max_table_staleness_minutes is not set, use a time in the past so cache is always expired
 	system_clock::time_point expires_at;
 	if (attach_options.max_table_staleness_micros.IsValid()) {
@@ -83,8 +91,7 @@ void IcebergCatalog::StoreLoadTableResult(const string &table_key,
 	} else {
 		expires_at = system_clock::time_point::min();
 	}
-	auto val = make_uniq<MetadataCacheValue>(expires_at, std::move(load_table_result));
-	metadata_cache.emplace(table_key, std::move(val));
+	StoreLoadTableResultInternal(table_key, std::move(load_table_result), g, expires_at);
 }
 
 std::mutex &IcebergCatalog::GetMetadataCacheLock() {
@@ -107,12 +114,16 @@ optional_ptr<MetadataCacheValue> IcebergCatalog::TryGetValidCachedLoadTableResul
 	return &cached_value;
 }
 
-void IcebergCatalog::RemoveLoadTableResult(const string &table_key) {
-	std::lock_guard<std::mutex> g(metadata_cache_mutex);
+void IcebergCatalog::RemoveLoadTableResultInternal(const string &table_key, lock_guard<std::mutex> &lock) {
 	if (metadata_cache.find(table_key) == metadata_cache.end()) {
 		throw InternalException("Attempting to remove table information that was never stored");
 	}
 	metadata_cache.erase(table_key);
+}
+
+void IcebergCatalog::RemoveLoadTableResult(const string &table_key) {
+	std::lock_guard<std::mutex> g(metadata_cache_mutex);
+	RemoveLoadTableResultInternal(table_key, g);
 }
 
 optional_ptr<CatalogEntry> IcebergCatalog::CreateSchema(CatalogTransaction transaction, CreateSchemaInfo &info) {

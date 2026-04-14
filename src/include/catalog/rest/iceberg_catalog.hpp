@@ -109,6 +109,9 @@ public:
 	string GetDBPath() override;
 	static string GetOnlyMergeOnReadSupportedErrorMessage(const string &table_name, const string &property,
 	                                                      const string &property_value);
+	void StoreLoadTableResultInternal(const string &table_key,
+	                                  unique_ptr<const rest_api_objects::LoadTableResult> load_table_result,
+	                                  lock_guard<std::mutex> &lock, system_clock::time_point expires_at);
 	void StoreLoadTableResult(const string &table_key,
 	                          unique_ptr<const rest_api_objects::LoadTableResult> load_table_result);
 	//! Returns a reference to the metadata cache mutex. The caller is responsible for holding the lock
@@ -116,7 +119,9 @@ public:
 	std::mutex &GetMetadataCacheLock();
 	optional_ptr<MetadataCacheValue>
 	TryGetValidCachedLoadTableResult(const string &table_key, lock_guard<std::mutex> &lock, bool validate_cache = true);
+
 	void RemoveLoadTableResult(const string &table_key);
+	void RemoveLoadTableResultInternal(const string &table_key, lock_guard<std::mutex> &lock);
 
 public:
 	AccessMode access_mode;
