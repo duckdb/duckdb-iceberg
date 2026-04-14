@@ -61,6 +61,9 @@ drop table if exists my_datalake.default.renamed_table;
 statement ok
 create table my_datalake.default.renamed_table(b boolean);
 
+statement ok
+insert into my_datalake.default.renamed_table VALUES (true)
+
 statement ok con1
 begin transaction
 
@@ -81,7 +84,16 @@ statement ok con2
 ALTER TABLE my_datalake.default.renamed_table RENAME TO rename_table
 
 statement ok con2
+insert into my_datalake.default.rename_table VALUES (false)
+
+statement ok con2
 commit
+
+query I
+select * from my_datalake.default.rename_table order by all
+----
+false
+true
 
 statement error con1
 commit

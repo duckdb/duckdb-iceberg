@@ -335,10 +335,6 @@ optional_ptr<CatalogEntry> IcebergTableSet::GetEntry(ClientContext &context, con
 		return table_info.GetSchemaVersion(snapshot_lookup, context);
 	}
 
-	if (entries.find(table_name) != entries.end()) {
-		entries.erase(table_name);
-	}
-
 	shared_ptr<IcebergTableInformation> old_version;
 	auto new_version =
 	    CreateEntryInternal(l, table_name, IcebergTableInformation(ic_catalog, schema, table_name), old_version);
