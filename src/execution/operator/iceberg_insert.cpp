@@ -404,9 +404,9 @@ SinkFinalizeType IcebergInsert::Finalize(Pipeline &pipeline, Event &event, Clien
 		auto delete_manifest_entries = IcebergDelete::GenerateDeleteManifestEntries(delete_global_state);
 		if (!written_files.empty()) {
 			ApplyTableUpdate(table_info, iceberg_transaction, [&](IcebergTableInformation &tbl) {
-				tbl.AddUpdateSnapshot(iceberg_transaction, std::move(delete_manifest_entries), std::move(written_files),
-				                      std::move(delete_global_state.altered_manifests));
-				auto &transaction_data = *tbl.transaction_data;
+				auto &transaction_data = tbl.GetOrCreateTransactionData(iceberg_transaction);
+				transaction_data.AddUpdateSnapshot(std::move(delete_manifest_entries), std::move(written_files),
+				                                   std::move(delete_global_state.altered_manifests));
 				for (auto &entry : delete_global_state.written_files) {
 					auto &delete_file = entry.second;
 					if (table_info.table_metadata.iceberg_version >= 3) {
@@ -419,7 +419,10 @@ SinkFinalizeType IcebergInsert::Finalize(Pipeline &pipeline, Event &event, Clien
 		// Regular insert: commit an append snapshot.
 		if (!written_files.empty()) {
 			ApplyTableUpdate(table_info, iceberg_transaction, [&](IcebergTableInformation &tbl) {
-				tbl.AddSnapshot(transaction, std::move(written_files));
+				auto &transaction_data = tbl.GetOrCreateTransactionData(iceberg_transaction);
+				IcebergManifestDeletes empty_deletes;
+				transaction_data.AddSnapshot(IcebergSnapshotOperationType::APPEND, std::move(written_files),
+				                             std::move(empty_deletes));
 			});
 		}
 	}

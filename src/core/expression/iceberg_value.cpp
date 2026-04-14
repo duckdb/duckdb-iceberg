@@ -221,11 +221,19 @@ DeserializeResult IcebergValue::DeserializeValue(const string_t &blob, const Log
 		return Value::TIME(val);
 	}
 	case LogicalTypeId::TIMESTAMP_NS:
-		//! FIXME: When support for 'TIMESTAMP_NS' is added,
-		//! keep in mind that the value should be inferred as DATE when the blob size is 4
-
-		//! TIMESTAMP_NS is added as part of Iceberg V3
-		return DeserializeError(blob, type);
+		if (blob.GetSize() == sizeof(int32_t)) {
+			//! Schema evolution happened: Infer the type as DATE
+			return DeserializeValue(blob, LogicalType::DATE);
+		} else if (blob.GetSize() ==
+		           sizeof(int64_t)) { // Timestamps are typically stored as int64 (microseconds since epoch)
+			int64_t nanos_since_epoch;
+			std::memcpy(&nanos_since_epoch, blob.GetData(), sizeof(int64_t));
+			// Convert to DuckDB timestamp using nanoseconds
+			timestamp_ns_t timestamp(nanos_since_epoch);
+			return Value::TIMESTAMPNS(timestamp);
+		} else {
+			return DeserializeError(blob, type);
+		}
 	case LogicalTypeId::UUID:
 		return DeserializeUUID(blob, type);
 		// Add more types as needed

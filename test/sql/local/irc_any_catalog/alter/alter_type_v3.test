@@ -1,0 +1,68 @@
+# name: test/sql/local/irc_any_catalog/alter/alter_type_v3.test
+# group: [alter]
+
+require-env ICEBERG_SERVER_AVAILABLE
+
+require-env SECRETS_CREATED_AND_CATALOG_ATTACHED
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+require ducklake
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+set enable_logging=true
+
+statement ok
+set logging_level='debug'
+
+# -------------- V3 Tests --------------
+
+statement ok
+drop table if exists my_datalake.default.schema_evolution_table;
+
+statement ok
+create table my_datalake.default.schema_evolution_table(
+	evolve_to_timestamp_ns DATE
+) WITH ('format-version'='3');
+
+statement ok
+insert into my_datalake.default.schema_evolution_table VALUES
+	(
+		'1934/11/05'::DATE -- evolve_to_timestamp_ns
+	);
+
+# ---- DATE -> TIMESTAMP_NS (V3) ----
+
+statement ok
+ALTER TABLE my_datalake.default.schema_evolution_table ALTER evolve_to_timestamp_ns TYPE TIMESTAMP_NS;
+
+query I
+select evolve_to_timestamp_ns from my_datalake.default.schema_evolution_table where evolve_to_timestamp_ns IS NOT NULL;
+----
+1934-11-05 00:00:00
+
+statement ok
+insert into my_datalake.default.schema_evolution_table(evolve_to_timestamp_ns) VALUES
+	(
+		'2013/11/23 19:53:12'::TIMESTAMP, -- evolve_to_timestamp_ns
+	);
+
+query I
+select evolve_to_timestamp_ns from my_datalake.default.schema_evolution_table where evolve_to_timestamp_ns IS NOT NULL order by all;
+----
+1934-11-05 00:00:00
+2013-11-23 19:53:12
+
+query I
+select typeof(evolve_to_timestamp_ns) from my_datalake.default.schema_evolution_table limit 1
+----
+TIMESTAMP_NS
