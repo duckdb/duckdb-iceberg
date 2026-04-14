@@ -1,6 +1,29 @@
 # name: test/sql/local/irc_any_catalog/alter/rename_table/rename_table_test.test
 # group: [rename_table]
 
+require-env ICEBERG_SERVER_AVAILABLE
+
+require-env SECRETS_CREATED_AND_CATALOG_ATTACHED
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+require ducklake
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+set enable_logging=true
+
+statement ok
+set logging_level='debug'
+
 # Clean up any existing tables
 statement ok
 drop table if exists my_datalake.default.t1;
