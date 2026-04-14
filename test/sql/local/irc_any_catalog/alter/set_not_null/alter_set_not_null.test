@@ -23,15 +23,6 @@ statement ok
 drop table if exists my_datalake.default.my_table;
 
 statement ok
-SET ca_cert_file = '~/.mitmproxy/mitmproxy-ca-cert.pem';
-
-statement ok
-CREATE SECRET http_proxy (
-    TYPE http,
-    HTTP_PROXY 'http://localhost:8878'
-);
-
-statement ok
 CREATE TABLE my_datalake.default.my_table AS (select range a FROM range(10));
 
 query I
