@@ -306,6 +306,10 @@ TableTransactionInfo IcebergTransaction::GetTransactionRequest(IcebergTransactio
 	TableTransactionInfo info;
 	auto &transaction = info.request;
 	for (auto &updated_table : alter_update.updated_tables) {
+		if (alter_update.committed_tables.count(updated_table.first)) {
+			//! Table is already committed
+			continue;
+		}
 		auto &table_info = updated_table.second;
 		if (!table_info.transaction_data) {
 			continue;
@@ -367,6 +371,7 @@ TableTransactionInfo IcebergTransaction::GetTransactionRequest(IcebergTransactio
 		}
 
 		transaction.table_changes.push_back(std::move(table_change));
+		info.table_requests.emplace(updated_table.first, transaction.table_changes.back());
 	}
 	return info;
 }
@@ -435,15 +440,20 @@ void IcebergTransaction::DoTableUpdates(IcebergTransactionAlterUpdate &alter_upd
 			CommitTransactionToJSON(doc, root_object, transaction);
 			auto transaction_json = JsonDocToString(std::move(doc_p));
 			IRCAPI::CommitMultiTableUpdate(context, catalog, transaction_json);
+			for (auto &it : alter_update.updated_tables) {
+				alter_update.committed_tables.insert(it.first);
+			}
 		} else {
 			D_ASSERT(catalog.supported_urls.find("POST /v1/{prefix}/namespaces/{namespace}/tables/{table}") !=
 			         catalog.supported_urls.end());
 			// each table change will make a separate request
-			for (auto &table_change : transaction.table_changes) {
+			for (auto &it : transaction_info.table_requests) {
+				auto &table_change = it.second.get();
 				D_ASSERT(table_change.has_identifier);
 				auto transaction_json = ConstructTableUpdateJSON(table_change);
 				IRCAPI::CommitTableUpdate(context, catalog, table_change.identifier._namespace.value,
 				                          table_change.identifier.name, transaction_json);
+				alter_update.committed_tables.insert(it.first);
 			}
 		}
 		// updated_tables.clear();
@@ -520,6 +530,10 @@ void IcebergTransaction::CleanupFiles() {
 		}
 		auto &alter_update = transaction_update->Cast<IcebergTransactionAlterUpdate>();
 		for (auto &up_table : alter_update.updated_tables) {
+			if (alter_update.committed_tables.count(up_table.first)) {
+				//! Successively committed, no need to roll back
+				continue;
+			}
 			auto &table = up_table.second;
 			if (!table.transaction_data) {
 				// error occurred before transaction data was initialized
