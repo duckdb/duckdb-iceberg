@@ -282,20 +282,41 @@ static void VerifyNotNullConstraint(ClientContext &context, IcebergTableInformat
 	}
 
 	if (!found_column_null_count_at_least_once && (!column.initial_default || column.initial_default->IsNull())) {
-		/* edge case, column present in current_schema but not in manifest/snapshots, without no default value, and table is not empty.
-		 * So now we know that either:
-		 * all rows are null
-		 * OR
-		 * the optional field `null_value_counts` for this column is not present in any manifest.
-		 * In either case the constraint fails. We could possibly read the avro file's key-value metadata to be able to discern between these
-		 * two cases, and in the case where the optional field is missing show a different error message, or eventually do a scan to check for nulls.
-		 * We would discern between the two as follows:
-		 * all rows are null (all manifests would be using the OLD schema, without our column)
-		 * OR
-		 * the optional field `null_value_counts` for this column is not present in any manifest. (at least one manifest would use the current_schema_id)
+		/* edge case, column present in current_schema but not in manifest/snapshots, without no default value, and
+		 * table is not empty. So now we know that either: all rows are null OR the optional field `null_value_counts`
+		 * for this column is not present in any manifest. In either case the constraint fails. We could possibly read
+		 * the avro file's key-value metadata to be able to discern between these two cases, and in the case where the
+		 * optional field is missing show a different error message, or eventually do a scan to check for nulls. We
+		 * would discern between the two as follows: all rows are null (all manifests would be using the OLD schema,
+		 * without our column) OR the optional field `null_value_counts` for this column is not present in any manifest.
+		 * (at least one manifest would use the current_schema_id)
 		 */
 		throw ConstraintException("NOT NULL constraint failed: %s.%s", updated_table.name, column.name);
 	}
+}
+
+void IntroduceNewSchema(IcebergTableInformation &updated_table, IcebergTransactionData &transaction_data,
+                        shared_ptr<IcebergTableSchema> new_schema) {
+	auto new_schema_id = new_schema->schema_id;
+	updated_table.CreateSchemaVersion(*new_schema);
+	transaction_data.TableAddSchema(new_schema_id);
+
+	// Update the Table Metadata to have our new schema
+	updated_table.table_metadata.AddSchema(std::move(new_schema));
+	updated_table.table_metadata.SetCurrentSchemaId(new_schema_id);
+}
+
+template <typename T>
+IcebergColumnDefinition &ResolveColumn(T &alter_table_info, const shared_ptr<IcebergTableSchema> &new_schema) {
+	auto &column_name = alter_table_info.column_name;
+
+	auto column_p = new_schema->GetMutableFromPath({column_name}, nullptr);
+	if (!column_p) {
+		throw CatalogException("Column with name '%s' does not exist on the table '%s'", column_name,
+		                       alter_table_info.GetAlterEntryData().name);
+	}
+	auto &column = *column_p;
+	return column;
 }
 
 void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) {
@@ -392,13 +413,8 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 		auto new_schema = current_schema.Copy();
 		new_schema->schema_id++;
 		new_schema->columns.push_back(std::move(new_iceberg_column));
-		auto new_schema_id = new_schema->schema_id;
-		// Update the Table Metadata to have our new schema
-		updated_table.CreateSchemaVersion(*new_schema);
-		transaction_data.TableAddSchema(new_schema_id);
 
-		updated_table.table_metadata.AddSchema(std::move(new_schema));
-		updated_table.table_metadata.SetCurrentSchemaId(new_schema_id);
+		IntroduceNewSchema(updated_table, transaction_data, new_schema);
 		return;
 	}
 	case AlterTableType::REMOVE_COLUMN: {
@@ -435,67 +451,39 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 			throw CatalogException("Cannot drop column: table '%s' only has one column remaining!", table_entry.name);
 		}
 
-		auto new_schema_id = new_schema->schema_id;
-		// Update the Table Metadata to have our new schema
-		updated_table.CreateSchemaVersion(*new_schema);
-		transaction_data.TableAddSchema(new_schema_id);
-		updated_table.table_metadata.AddSchema(std::move(new_schema));
-		updated_table.table_metadata.SetCurrentSchemaId(new_schema_id);
+		IntroduceNewSchema(updated_table, transaction_data, new_schema);
 		return;
 	}
 	case AlterTableType::ALTER_COLUMN_TYPE: {
 		auto &change_type_info = alter_table_info.Cast<ChangeColumnTypeInfo>();
-		auto &column_name = change_type_info.column_name;
 
 		auto new_schema = current_schema.Copy();
 		new_schema->schema_id++;
 
-		auto column_p = new_schema->GetMutableFromPath({column_name}, nullptr);
-		if (!column_p) {
-			throw CatalogException("Column with name '%s' does not exist on the table '%s', ALTER TYPE failed",
-			                       column_name, table_entry.name);
-		}
-		auto &column = *column_p;
+		auto &column = ResolveColumn<ChangeColumnTypeInfo>(change_type_info, new_schema);
+
 		if (change_type_info.expression->type != ExpressionType::OPERATOR_CAST) {
 			throw NotImplementedException("ALTER TYPE with a USING expression is not supported for Iceberg tables");
 		}
 		VerifySchemaEvolution(updated_table.table_metadata, column, change_type_info.target_type);
 		column.type = change_type_info.target_type;
 
-		auto new_schema_id = new_schema->schema_id;
-		// Update the Table Metadata to have our new schema
-		updated_table.CreateSchemaVersion(*new_schema);
-		transaction_data.TableAddSchema(new_schema_id);
-
-		updated_table.table_metadata.AddSchema(std::move(new_schema));
-		updated_table.table_metadata.SetCurrentSchemaId(new_schema_id);
+		IntroduceNewSchema(updated_table, transaction_data, new_schema);
 		return;
 	}
 	case AlterTableType::SET_NOT_NULL: {
 		auto &set_not_null_info = alter_table_info.Cast<SetNotNullInfo>();
-		auto &column_name = set_not_null_info.column_name;
 
-		auto new_schema = current_schema.Copy();
+		const auto new_schema = current_schema.Copy();
 		new_schema->schema_id++;
 
-		auto column_p = new_schema->GetMutableFromPath({column_name}, nullptr);
-		if (!column_p) {
-			throw CatalogException("Column with name '%s' does not exist on the table '%s', SET NOT NULL failed",
-			                       column_name, table_entry.name);
-		}
-		auto &column = *column_p;
+		auto &column = ResolveColumn<SetNotNullInfo>(set_not_null_info, new_schema);
 
 		VerifyNotNullConstraint(context, updated_table, column);
 
 		column.required = true;
 
-		auto new_schema_id = new_schema->schema_id;
-		// Update the Table Metadata to have our new schema
-		updated_table.CreateSchemaVersion(*new_schema);
-		transaction_data.TableAddSchema(new_schema_id);
-
-		updated_table.table_metadata.AddSchema(std::move(new_schema));
-		updated_table.table_metadata.SetCurrentSchemaId(new_schema_id);
+		IntroduceNewSchema(updated_table, transaction_data, new_schema);
 		return;
 	}
 	default: {

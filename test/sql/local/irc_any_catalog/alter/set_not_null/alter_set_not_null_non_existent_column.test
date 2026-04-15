@@ -28,4 +28,4 @@ CREATE TABLE my_datalake.default.my_table AS (select range a FROM range(10));
 statement error
 ALTER TABLE my_datalake.default.my_table ALTER COLUMN non_existent_column SET NOT NULL;
 ----
-Catalog Error: Column with name 'non_existent_column' does not exist on the table 'my_table', SET NOT NULL failed
+Catalog Error: Column with name 'non_existent_column' does not exist on the table 'my_table'
