@@ -289,7 +289,7 @@ static void VerifyNotNullConstraint(ClientContext &context, IcebergTableInformat
 		 * the optional field `null_value_counts` for this column is not present in any manifest.
 		 * In either case the constraint fails. We could possibly read the avro file's key-value metadata to be able to discern between these
 		 * two cases, and in the case where the optional field is missing show a different error message, or eventually do a scan to check for nulls.
-		 * We would discert between the two as follows:
+		 * We would discern between the two as follows:
 		 * all rows are null (all manifests would be using the OLD schema, without our column)
 		 * OR
 		 * the optional field `null_value_counts` for this column is not present in any manifest. (at least one manifest would use the current_schema_id)
