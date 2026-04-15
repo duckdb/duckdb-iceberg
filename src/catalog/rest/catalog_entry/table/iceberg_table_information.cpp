@@ -198,6 +198,9 @@ IRCAPITableCredentials IcebergTableInformation::GetVendedCredentials(ClientConte
 				}
 			}
 		}
+		if (!sigv4_auth.sigv4_region.empty()) {
+			user_defaults.emplace("region", Value(sigv4_auth.sigv4_region));
+		}
 	} else if (catalog.auth_handler->type == IcebergAuthorizationType::OAUTH2) {
 		auto &oauth2_auth = catalog.auth_handler->Cast<OAuth2Authorization>();
 		if (!oauth2_auth.default_region.empty()) {
