@@ -282,14 +282,24 @@ static void VerifyNotNullConstraint(ClientContext &context, IcebergTableInformat
 	}
 
 	if (!found_column_null_count_at_least_once && (!column.initial_default || column.initial_default->IsNull())) {
-		/* edge case, column present in current_schema but not in manifest/snapshots, without no default value, and
-		 * table is not empty. So now we know that either: all rows are null OR the optional field `null_value_counts`
-		 * for this column is not present in any manifest. In either case the constraint fails. We could possibly read
-		 * the avro file's key-value metadata to be able to discern between these two cases, and in the case where the
-		 * optional field is missing show a different error message, or eventually do a scan to check for nulls. We
-		 * would discern between the two as follows: all rows are null (all manifests would be using the OLD schema,
-		 * without our column) OR the optional field `null_value_counts` for this column is not present in any manifest.
-		 * (at least one manifest would use the current_schema_id)
+		/* The column is present in current_schema but not in manifest/snapshots, without a default value, and
+		 * table is not empty.
+		 *
+		 * So now we know that either:
+		 * for this column all rows are null
+		 * OR
+		 * for this column the optional field `null_value_counts` is not present in any manifest.
+		 *
+		 * In either case the constraint fails. We could possibly read the avro file's key-value metadata to be able to
+		 * discern between these two cases, and in the case where the optional field is missing show a different error
+		 * message, e.g. "null_value_counts required for `ALTER ... SET NOT NULL`" , or eventually do a scan to check
+		 * for nulls (time intensive).
+		 *
+		 * We would discern between the two cases as follows:
+		 *	if (no manifest is using the current_schema_id) then we know:
+		 *	for this column all rows are null
+		 *	ELSE
+		 *	for this column the optional field `null_value_counts`  is not present in any manifest.
 		 */
 		throw ConstraintException("NOT NULL constraint failed: %s.%s", updated_table.name, column.name);
 	}
