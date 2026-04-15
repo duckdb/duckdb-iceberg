@@ -16,6 +16,7 @@
 #include "catalog/rest/catalog_entry/table/iceberg_table_entry.hpp"
 #include "catalog/rest/api/iceberg_type.hpp"
 #include "common/iceberg_default.hpp"
+#include "catalog/rest/transaction/iceberg_transaction_update.hpp"
 
 namespace duckdb {
 
@@ -47,8 +48,8 @@ bool IcebergSchemaEntry::HandleCreateConflict(CatalogTransaction &transaction, C
 		// FIXME: With Snapshot operation type overwrite, you can handle create or replace for tables.
 		auto &iceberg_transaction = GetICTransaction(transaction);
 		auto table_key = IcebergTableInformation::GetTableKey(namespace_items, entry_name);
-		auto deleted_table_entry = iceberg_transaction.deleted_tables.find(table_key);
-		if (deleted_table_entry != iceberg_transaction.deleted_tables.end()) {
+		auto latest_state = iceberg_transaction.GetLatestTableState(table_key);
+		if (latest_state && latest_state->status == IcebergTableStatus::DROPPED) {
 			auto &ic_catalog = catalog.Cast<IcebergCatalog>();
 			vector<string> qualified_name = {ic_catalog.GetName()};
 			qualified_name.insert(qualified_name.end(), namespace_items.begin(), namespace_items.end());
@@ -68,7 +69,7 @@ bool IcebergSchemaEntry::HandleCreateConflict(CatalogTransaction &transaction, C
 		return false;
 	}
 	default:
-		throw InternalException("DuckDB-Iceberg, Unsupported conflict type: %s", EnumUtil::ToString(on_conflict));
+		throw NotImplementedException("DuckDB-Iceberg, Unsupported conflict type: %s", EnumUtil::ToString(on_conflict));
 	}
 	return true;
 }
@@ -116,13 +117,11 @@ void IcebergSchemaEntry::DropEntry(ClientContext &context, DropInfo &info, bool 
 		// Add the table to the transaction's deleted_tables
 		auto &transaction = IcebergTransaction::Get(context, catalog).Cast<IcebergTransaction>();
 		auto &table_info = table_info_it->second;
-		auto table_key = table_info->GetTableKey();
-		transaction.deleted_tables.emplace(table_key, table_info->Copy());
-		D_ASSERT(transaction.deleted_tables.count(table_key) > 0);
-		auto &deleted_table_info = transaction.deleted_tables.at(table_key);
+		auto &table = transaction.DeleteTable(*table_info);
+		//! FIXME: what?
 		// must init schema versions after copy. Schema versions have a pointer to IcebergTableInformation
 		// if the IcebergTableInformation is moved, then the pointer is no longer valid.
-		deleted_table_info.InitSchemaVersions();
+		table.InitSchemaVersions();
 	}
 }
 
@@ -268,14 +267,10 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 	}
 	auto &table_entry = catalog_entry->Cast<IcebergTableEntry>();
 	auto &catalog_table_info = table_entry.table_info;
-	auto emplace_res =
-	    irc_transaction.updated_tables.emplace(catalog_table_info.GetTableKey(), catalog_table_info.Copy());
-	auto &updated_table = emplace_res.first->second;
-	if (emplace_res.second) {
-		updated_table.InitSchemaVersions();
-		updated_table.InitTransactionData(irc_transaction);
-	}
 
+	auto &alter = irc_transaction.GetOrCreateAlter();
+	auto &updated_table = alter.GetOrInitializeTable(catalog_table_info);
+	auto &transaction_data = updated_table.GetOrCreateTransactionData(irc_transaction);
 	auto &current_schema = updated_table.table_metadata.GetLatestSchema();
 
 	switch (alter_table_info.alter_table_type) {
@@ -283,9 +278,9 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 		auto &partition_info = alter_table_info.Cast<SetPartitionedByInfo>();
 
 		// Ensure schema is the same as current
-		updated_table.AddAssertCurrentSchemaId(irc_transaction);
+		transaction_data.TableAddAssertCurrentSchemaId();
 		// Ensure last assigned partition field id is up to date
-		updated_table.AddAssertLastAssignedPartitionId(irc_transaction);
+		transaction_data.TableAddAssertLastAssignedPartitionId();
 
 		updated_table.SetPartitionedBy(irc_transaction, partition_info.partition_keys, current_schema);
 		return;
@@ -336,7 +331,7 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 		auto new_schema_id = new_schema->schema_id;
 		// Update the Table Metadata to have our new schema
 		updated_table.CreateSchemaVersion(*new_schema);
-		updated_table.AddSchema(irc_transaction, new_schema_id);
+		transaction_data.TableAddSchema(new_schema_id);
 
 		updated_table.table_metadata.AddSchema(std::move(new_schema));
 		updated_table.table_metadata.SetCurrentSchemaId(new_schema_id);
@@ -379,7 +374,7 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 		auto new_schema_id = new_schema->schema_id;
 		// Update the Table Metadata to have our new schema
 		updated_table.CreateSchemaVersion(*new_schema);
-		updated_table.AddSchema(irc_transaction, new_schema_id);
+		transaction_data.TableAddSchema(new_schema_id);
 		updated_table.table_metadata.AddSchema(std::move(new_schema));
 		updated_table.table_metadata.SetCurrentSchemaId(new_schema_id);
 		return;
@@ -406,7 +401,7 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 		auto new_schema_id = new_schema->schema_id;
 		// Update the Table Metadata to have our new schema
 		updated_table.CreateSchemaVersion(*new_schema);
-		updated_table.AddSchema(irc_transaction, new_schema_id);
+		transaction_data.TableAddSchema(new_schema_id);
 
 		updated_table.table_metadata.AddSchema(std::move(new_schema));
 		updated_table.table_metadata.SetCurrentSchemaId(new_schema_id);
@@ -437,7 +432,7 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 		auto new_schema_id = new_schema->schema_id;
 		// Update the Table Metadata to have our new schema
 		updated_table.CreateSchemaVersion(*new_schema);
-		updated_table.AddSchema(irc_transaction, new_schema_id);
+		transaction_data.TableAddSchema(new_schema_id);
 
 		updated_table.table_metadata.AddSchema(std::move(new_schema));
 		updated_table.table_metadata.SetCurrentSchemaId(new_schema_id);

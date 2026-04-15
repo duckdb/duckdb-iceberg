@@ -15,8 +15,9 @@ static rest_api_objects::Schema CopySchema(const IcebergTableSchema &schema) {
 	auto schema_str = ICUtils::JsonToString(std::move(doc_p));
 
 	// Parse it back as immutable
-	yyjson_doc *new_doc = yyjson_read(schema_str.c_str(), strlen(schema_str.c_str()), 0);
-	yyjson_val *val = yyjson_doc_get_root(new_doc);
+	std::unique_ptr<yyjson_doc, YyjsonDocDeleter> new_doc(
+	    yyjson_read(schema_str.c_str(), strlen(schema_str.c_str()), 0));
+	yyjson_val *val = yyjson_doc_get_root(new_doc.get());
 	return rest_api_objects::Schema::FromJSON(val);
 }
 

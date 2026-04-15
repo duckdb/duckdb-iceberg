@@ -48,6 +48,7 @@ static Value ParseDefaultForType(const LogicalType &type, rest_api_objects::Prim
 	case LogicalTypeId::TIME:
 	case LogicalTypeId::TIMESTAMP:
 	case LogicalTypeId::TIMESTAMP_TZ:
+	case LogicalTypeId::TIMESTAMP_NS:
 	case LogicalTypeId::VARCHAR:
 	case LogicalTypeId::UUID: {
 		D_ASSERT(default_value.has_string_type_value);
@@ -177,6 +178,10 @@ LogicalType IcebergColumnDefinition::ParsePrimitiveTypeString(const string &type
 	if (type_str == "variant") {
 		return LogicalType::VARIANT();
 	}
+	if (type_str == "geometry") {
+		// Geometry is an Iceberg v3 type stored as WKB binary in parquet
+		return LogicalType::GEOMETRY();
+	}
 	throw InvalidConfigurationException("Unrecognized primitive type: %s", type_str);
 }
 
@@ -205,7 +210,9 @@ bool IcebergColumnDefinition::IsIcebergPrimitiveType() const {
 	case LogicalTypeId::TIME:
 	case LogicalTypeId::TIMESTAMP:
 	case LogicalTypeId::TIMESTAMP_TZ:
+	case LogicalTypeId::TIMESTAMP_NS:
 	case LogicalTypeId::VARIANT:
+	case LogicalTypeId::GEOMETRY:
 		return true;
 	default:
 		return false;
