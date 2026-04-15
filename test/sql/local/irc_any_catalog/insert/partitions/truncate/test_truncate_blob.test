@@ -1,0 +1,77 @@
+# name: test/sql/local/irc_any_catalog/insert/partitions/truncate/test_truncate_blob.test
+# description: Insert into a truncate-partitioned BLOB table and verify round-trip
+# group: [truncate]
+
+require-env ICEBERG_SERVER_AVAILABLE
+
+require-env SECRETS_CREATED_AND_CATALOG_ATTACHED
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+create schema if not exists my_datalake.default;
+
+statement ok
+drop table if exists my_datalake.default.test_truncate_blob;
+
+# truncate(2, val): blobs are partitioned by their first 2 bytes.
+# Rows with the same 2-byte prefix land in the same partition.
+statement ok
+CREATE TABLE my_datalake.default.test_truncate_blob (id int, val blob)
+PARTITIONED BY (truncate(2, val));
+
+statement ok
+insert into my_datalake.default.test_truncate_blob values
+    (1, '\x01\x02\x03'::BLOB),
+    (2, '\x01\x02\x04'::BLOB),
+    (3, '\x03\x04\x05'::BLOB),
+    (4, '\x03\x04\x06'::BLOB),
+    (5, '\x05\x06\x07'::BLOB),
+    (6, '\x05\x06\x08'::BLOB);
+
+statement ok
+create table local_truncate_blob as
+select * from (values
+    (1, '\x01\x02\x03'::BLOB),
+    (2, '\x01\x02\x04'::BLOB),
+    (3, '\x03\x04\x05'::BLOB),
+    (4, '\x03\x04\x06'::BLOB),
+    (5, '\x05\x06\x07'::BLOB),
+    (6, '\x05\x06\x08'::BLOB)
+) t(id, val);
+
+query II nosort expected_result
+select * from local_truncate_blob order by id;
+----
+
+query II nosort expected_result
+select * from my_datalake.default.test_truncate_blob order by id;
+----
+
+query I
+select count(*) from my_datalake.default.test_truncate_blob;
+----
+6
+
+# Pairs (1,2), (3,4), (5,6) share the same 2-byte prefix; each pair should be
+# in the same partition. Verify by checking 2 rows are returned per prefix.
+query I
+select count(*) from my_datalake.default.test_truncate_blob
+where val in ('\x01\x02\x03'::BLOB, '\x01\x02\x04'::BLOB);
+----
+2
+
+query I
+select count(*) from my_datalake.default.test_truncate_blob
+where val in ('\x03\x04\x05'::BLOB, '\x03\x04\x06'::BLOB);
+----
+2

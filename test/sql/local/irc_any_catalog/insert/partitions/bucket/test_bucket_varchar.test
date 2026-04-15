@@ -1,0 +1,49 @@
+# name: test/sql/local/irc_any_catalog/insert/partitions/bucket/test_bucket_varchar.test
+# description: Insert into a bucket-partitioned VARCHAR table and verify round-trip
+# group: [bucket]
+
+require-env ICEBERG_SERVER_AVAILABLE
+
+require-env SECRETS_CREATED_AND_CATALOG_ATTACHED
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+create schema if not exists my_datalake.default;
+
+statement ok
+drop table if exists my_datalake.default.test_bucket_varchar;
+
+statement ok
+CREATE TABLE my_datalake.default.test_bucket_varchar (id int, category varchar)
+PARTITIONED BY (bucket(8, category));
+
+statement ok
+insert into my_datalake.default.test_bucket_varchar
+select range, 'category_' || (range % 5)::VARCHAR from range(25);
+
+statement ok
+create table local_bucket_varchar as
+select range as id, 'category_' || (range % 5)::VARCHAR as category from range(25);
+
+query II nosort expected_result
+select * from local_bucket_varchar order by id;
+----
+
+query II nosort expected_result
+select * from my_datalake.default.test_bucket_varchar order by id;
+----
+
+query I
+select count(*) from my_datalake.default.test_bucket_varchar;
+----
+25

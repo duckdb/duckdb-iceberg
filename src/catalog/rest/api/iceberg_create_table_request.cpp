@@ -319,7 +319,7 @@ string IcebergCreateTableRequest::CreateTableToJSON(std::unique_ptr<yyjson_mut_d
 
 	for (auto &field : partition_spec.fields) {
 		auto field_obj = yyjson_mut_arr_add_obj(doc, fields_arr);
-		yyjson_mut_obj_add_strcpy(doc, field_obj, "name", field.name.c_str());
+		yyjson_mut_obj_add_strcpy(doc, field_obj, "name", field.GetPartitionSpecFieldName().c_str());
 		yyjson_mut_obj_add_strcpy(doc, field_obj, "transform", field.transform.RawType().c_str());
 		yyjson_mut_obj_add_int(doc, field_obj, "source-id", field.source_id);
 		yyjson_mut_obj_add_int(doc, field_obj, "field-id", field.partition_field_id);
