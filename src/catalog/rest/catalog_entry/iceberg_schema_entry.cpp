@@ -254,7 +254,7 @@ static void VerifySchemaEvolution(const IcebergTableMetadata &table_metadata, co
 
 //! Ensure existing data files don't contain NULL values in this column
 static void VerifyNotNullConstraint(ClientContext &context, IcebergTableInformation &updated_table,
-                                    IcebergColumnDefinition &column, int32_t current_schema_id) {
+                                    IcebergColumnDefinition &column) {
 	auto snapshot_lookup = updated_table.GetSnapshotLookup(context);
 	auto snapshot_info = updated_table.table_metadata.GetSnapshot(snapshot_lookup);
 	if (!snapshot_info.snapshot) {
@@ -475,7 +475,7 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 		}
 		auto &column = *column_p;
 
-		VerifyNotNullConstraint(context, updated_table, column, current_schema.schema_id);
+		VerifyNotNullConstraint(context, updated_table, column);
 
 		column.required = true;
 
