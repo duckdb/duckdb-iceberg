@@ -370,8 +370,8 @@ TableTransactionInfo IcebergTransaction::GetTransactionRequest(IcebergTransactio
 			update.CreateUpdate(db, context, commit_state);
 		}
 
+		info.table_requests.emplace(updated_table.first, transaction.table_changes.size());
 		transaction.table_changes.push_back(std::move(table_change));
-		info.table_requests.emplace(updated_table.first, transaction.table_changes.back());
 	}
 	return info;
 }
@@ -448,7 +448,7 @@ void IcebergTransaction::DoTableUpdates(IcebergTransactionAlterUpdate &alter_upd
 			         catalog.supported_urls.end());
 			// each table change will make a separate request
 			for (auto &it : transaction_info.table_requests) {
-				auto &table_change = it.second.get();
+				auto &table_change = transaction.table_changes[it.second];
 				D_ASSERT(table_change.has_identifier);
 				auto transaction_json = ConstructTableUpdateJSON(table_change);
 				IRCAPI::CommitTableUpdate(context, catalog, table_change.identifier._namespace.value,

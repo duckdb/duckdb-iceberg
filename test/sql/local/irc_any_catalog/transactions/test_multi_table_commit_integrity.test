@@ -60,11 +60,11 @@ statement ok con1
 insert into my_datalake.default.cleanup_new_tbl values (1, 'from_con1');
 
 # ---------------------------------------------------------------------------
-# con2: INSERT into tbl_0 to create a 409 conflict for con1
+# con2: INSERT into tbl_10 to create a 409 conflict for con1
 # ---------------------------------------------------------------------------
 
 statement ok con2
-insert into my_datalake.default.cleanup_tbl_0 values (2, 'from_con2');
+insert into my_datalake.default.cleanup_tbl_10 values (2, 'from_con2');
 
 # ---------------------------------------------------------------------------
 # con1: commit — per-table fallback loop.
@@ -94,14 +94,24 @@ select * from my_datalake.default.cleanup_tbl_0;
 # All other tables should be readable with just their seed data.
 # If CleanupFiles() deleted data files for already-committed tables,
 # these queries will fail with HTTP 404 / IO errors.
-loop i 1 20
+loop i 0 20
 
-query IT
-select * from my_datalake.default.cleanup_tbl_${i} order by id;
+onlyif i=10
+continue
+
+query I
+select id from my_datalake.default.cleanup_tbl_${i} where val = 'seed' order by id;
 ----
-0	seed
+0
 
 endloop
+
+# Verify that the commit to tbl_10 failed
+query IT
+select * from my_datalake.default.cleanup_tbl_10 order by id;
+----
+0	seed
+2	from_con2
 
 # ---------------------------------------------------------------------------
 # Cleanup

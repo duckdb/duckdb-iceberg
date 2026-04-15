@@ -16,7 +16,7 @@ struct TableTransactionInfo {
 	TableTransactionInfo() {};
 
 	rest_api_objects::CommitTransactionRequest request;
-	case_insensitive_map_t<reference<rest_api_objects::CommitTableRequest>> table_requests;
+	case_insensitive_map_t<idx_t> table_requests;
 
 	// if a table is created with assert create, we cannot use the
 	// transactions/commit endpoint. Instead we iterate through each table
