@@ -1,4 +1,4 @@
-# name: test/sql/local/irc_any_catalog/alter/test_add_existing_schema.test
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/alter/test_add_existing_schema.test
 # group: [alter]
 
 require-env CATALOG_TEST_CONFIG_SETUP

@@ -1,4 +1,4 @@
-# name: test/sql/local/irc_any_catalog/insert/test_create_geometry_type.test
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/insert/test_create_geometry_type.test
 # group: [insert]
 
 require-env CATALOG_TEST_CONFIG_SETUP

@@ -1,4 +1,4 @@
-# name: test/sql/local/irc_any_catalog/transactions/test_multi_table_commit_integrity.test
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/transactions/test_multi_table_commit_integrity.test
 # group: [transactions]
 
 require-env CATALOG_TEST_CONFIG_SETUP

@@ -1,4 +1,4 @@
-# name: test/sql/local/irc_any_catalog/alter/drop_column/alter_drop_column.test
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/alter/drop_column/alter_drop_column.test
 # group: [drop_column]
 
 require-env CATALOG_TEST_CONFIG_SETUP

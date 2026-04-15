@@ -1,4 +1,4 @@
-# name: test/sql/local/irc_any_catalog/alter/alter_type_v3.test
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/alter/alter_type_v3.test
 # group: [alter]
 
 require-env CATALOG_TEST_CONFIG_SETUP
