@@ -258,8 +258,8 @@ static void VerifyNotNullConstraint(ClientContext &context, IcebergTableInformat
 	auto snapshot_lookup = updated_table.GetSnapshotLookup(context);
 	auto snapshot_info = updated_table.table_metadata.GetSnapshot(snapshot_lookup);
 	if (!snapshot_info.snapshot) {
-		// Column is present but there's no snapshot, thus all rows are NULL.
-		throw ConstraintException("NOT NULL constraint failed: %s.%s", updated_table.name, column.name);
+		// Table is empty
+		return;
 	}
 	IcebergOptions options;
 	auto manifest_list = IcebergManifestList::Load(updated_table.BaseFilePath(), updated_table.table_metadata,
