@@ -1,0 +1,87 @@
+# name: test/sql/cloud/snowflake/test_snowflake_gemoetry_type.test
+# description: test integration with iceberg catalog read
+# group: [snowflake]
+
+require-env ICEBERG_SNOWFLAKE_REMOTE_AVAILABLE
+
+require-env SNOWFLAKE_KEY_ID_S3
+
+require-env SNOWFLAKE_SECRET_KEY_S3
+
+require-env SNOWFLAKE_CATALOG_URI_GCS
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+
+statement ok
+create secret polaris_secret (
+	TYPE ICEBERG,
+	CLIENT_ID '${SNOWFLAKE_KEY_ID_S3}',
+	CLIENT_SECRET '${SNOWFLAKE_SECRET_KEY_S3}',
+	ENDPOINT '${SNOWFLAKE_CATALOG_URI_GCS}'
+);
+
+statement ok
+attach 's3-catalog' as my_datalake (
+	type ICEBERG,
+	ENDPOINT '${SNOWFLAKE_CATALOG_URI_GCS}',
+	DEFAULT_REGION 'eu-west-2'
+);
+
+
+# this table is made up of many geometry points, inserted one at a time, 
+# meaning there are many manifest files that store the upper and lower bound information
+# of the geometry type
+# INSERT INTO geometry_test SELECT 1, 'min_min_point', TO_GEOMETRY('POINT (-180 -90)', 4326);
+# INSERT INTO geometry_test SELECT 2, 'max_max_point', TO_GEOMETRY('POINT (180 90)',   4326);
+# INSERT INTO geometry_test SELECT 3, 'min_max_point', TO_GEOMETRY('POINT (-180 90)', 4326) ;
+# INSERT INTO geometry_test SELECT 4, 'max_min_point', TO_GEOMETRY('POINT (180 -90)', 4326);
+# INSERT INTO geometry_test SELECT 5,  'north_pole',            TO_GEOMETRY('POINT(0 90)', 4326);
+# INSERT INTO geometry_test SELECT 6,  'south_pole',            TO_GEOMETRY('POINT(0 -90)', 4326);
+# INSERT INTO geometry_test SELECT 7,  'origin',                TO_GEOMETRY('POINT(0 0)', 4326);
+# INSERT INTO geometry_test SELECT 8,  'antimeridian_pos',      TO_GEOMETRY('POINT(180 0)', 4326);
+# INSERT INTO geometry_test SELECT 9,  'antimeridian_neg',      TO_GEOMETRY('POINT(-180 0)', 4326);
+# INSERT INTO geometry_test SELECT 10, 'antimeridian_crossing', TO_GEOMETRY('LINESTRING(170 10, -170 10)', 4326);
+# INSERT INTO geometry_test SELECT 11, 'full_world_polygon',       TO_GEOMETRY('POLYGON ((-180 -90, 180 -90, 180 90, -180 90, -180 -90))', 4326);
+# INSERT INTO geometry_test SELECT 12, 'near_degenerate_polygon',  TO_GEOMETRY('POLYGON ((45 45, 45.0000001 45, 45.0000001 45.0000001, 45 45))', 4326);
+# INSERT INTO geometry_test SELECT 13, 'equatorial_linestring',    TO_GEOMETRY('LINESTRING (-180 0, 180 0)', 4326);
+# INSERT INTO geometry_test SELECT 14, 'meridian_linestring',      TO_GEOMETRY('LINESTRING (0 -90, 0 90)', 4326);
+# INSERT INTO geometry_test SELECT 15, 'multipoint_extremes',   TO_GEOMETRY('MULTIPOINT ((-180 -90), (0 0), (180 90))', 4326);
+# INSERT INTO geometry_test SELECT 16, 'polygon_with_hole',     TO_GEOMETRY('POLYGON ((-10 -10, 10 -10, 10 10, -10 10, -10 -10), (-5 -5, 5 -5, 5 5, -5 5, -5 -5))', 4326);
+# INSERT INTO geometry_test SELECT 17, 'point_3d_high_z',       TO_GEOMETRY('POINT Z (45 45 8849)', 4326);
+# INSERT INTO geometry_test SELECT 18, 'point_3d_low_z',        TO_GEOMETRY('POINT Z (30 30 -11034)', 4326);
+# INSERT INTO geometry_test SELECT 20, 'empty_collection',      TO_GEOMETRY('GEOMETRYCOLLECTION EMPTY', 4326);
+# INSERT INTO geometry_test SELECT 19, 'null_geom',  NULL;
+query III
+select * from my_datalake.default.geometry_test order by all;
+----
+1	min_min_point	POINT (-180 -90)
+2	max_max_point	POINT (180 90)
+3	min_max_point	POINT (-180 90)
+4	max_min_point	POINT (180 -90)
+5	north_pole	POINT (0 90)
+6	south_pole	POINT (0 -90)
+7	origin	POINT (0 0)
+8	antimeridian_pos	POINT (180 0)
+9	antimeridian_neg	POINT (-180 0)
+10	antimeridian_crossing	LINESTRING (170 10, -170 10)
+11	full_world_polygon	POLYGON ((-180 -90, 180 -90, 180 90, -180 90, -180 -90))
+12	near_degenerate_polygon	POLYGON ((45 45, 45.0000001 45, 45.0000001 45.0000001, 45 45))
+13	equatorial_linestring	LINESTRING (-180 0, 180 0)
+14	meridian_linestring	LINESTRING (0 -90, 0 90)
+15	multipoint_extremes	MULTIPOINT (-180 -90, 0 0, 180 90)
+16	polygon_with_hole	POLYGON ((-10 -10, 10 -10, 10 10, -10 10, -10 -10), (-5 -5, 5 -5, 5 5, -5 5, -5 -5))
+17	point_3d_high_z	POINT Z (45 45 8849)
+18	point_3d_low_z	POINT Z (30 30 -11034)
+19	null_geom	NULL
+20	empty_collection	NULL

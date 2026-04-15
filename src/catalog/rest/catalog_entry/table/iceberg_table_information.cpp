@@ -198,6 +198,9 @@ IRCAPITableCredentials IcebergTableInformation::GetVendedCredentials(ClientConte
 				}
 			}
 		}
+		if (!sigv4_auth.sigv4_region.empty()) {
+			user_defaults.emplace("region", Value(sigv4_auth.sigv4_region));
+		}
 	} else if (catalog.auth_handler->type == IcebergAuthorizationType::OAUTH2) {
 		auto &oauth2_auth = catalog.auth_handler->Cast<OAuth2Authorization>();
 		if (!oauth2_auth.default_region.empty()) {
@@ -286,6 +289,7 @@ optional_ptr<CatalogEntry> IcebergTableInformation::CreateSchemaVersion(const Ic
 	if (result->name.empty()) {
 		throw InternalException("IcebergTableSet::CreateEntry called with empty name");
 	}
+
 	schema_versions.emplace(table_schema.schema_id, std::move(table_entry));
 	return result;
 }
@@ -357,6 +361,7 @@ void IcebergTableInformation::SetPartitionedBy(IcebergTransaction &transaction,
 	if (!first_partition_spec) {
 		new_spec_id = GetNextPartitionSpecId();
 	}
+	auto &transaction_data = GetOrCreateTransactionData(transaction);
 
 	IcebergPartitionSpec new_spec(new_spec_id);
 
@@ -432,15 +437,15 @@ void IcebergTableInformation::SetPartitionedBy(IcebergTransaction &transaction,
 	int64_t existing_spec_id = GetExistingSpecId(new_spec);
 	if (existing_spec_id >= 0) {
 		table_metadata.default_spec_id = existing_spec_id;
-		SetDefaultSpec(transaction);
+		transaction_data.TableSetDefaultSpec();
 		return;
 	}
 
 	table_metadata.partition_specs.emplace(new_spec_id, std::move(new_spec));
 	table_metadata.default_spec_id = new_spec_id;
 	if (!first_partition_spec) {
-		AddPartitionSpec(transaction);
-		SetDefaultSpec(transaction);
+		transaction_data.TableAddPartitionSpec();
+		transaction_data.TableSetDefaultSpec();
 	}
 }
 
@@ -543,9 +548,8 @@ IcebergTableInformation IcebergTableInformation::Copy(IcebergTransaction &iceber
 		return ret;
 	}
 	IcebergSnapshotScanInfo snapshot_info;
-	try {
-		snapshot_info = ret.table_metadata.GetSnapshot(snapshot_lookup);
-	} catch (InvalidConfigurationException &e) {
+	snapshot_info = ret.table_metadata.GetSnapshot(snapshot_lookup);
+	if (!snapshot_info.snapshot) {
 		throw TransactionException("Table %s is already outdated. Please restart your transaction", GetTableKey());
 	}
 
@@ -558,7 +562,7 @@ IcebergTableInformation IcebergTableInformation::Copy(IcebergTransaction &iceber
 }
 
 void IcebergTableInformation::InitSchemaVersions() {
-	for (auto &table_schema : table_metadata.schemas) {
+	for (auto &table_schema : table_metadata.GetSchemas()) {
 		CreateSchemaVersion(*table_schema.second);
 	}
 }
@@ -569,110 +573,13 @@ IcebergTableInformation::IcebergTableInformation(IcebergCatalog &catalog, Iceber
 	table_id = "uuid-" + schema.name + "-" + name;
 }
 
-void IcebergTableInformation::InitTransactionData(IcebergTransaction &transaction) {
+IcebergTransactionData &IcebergTableInformation::GetOrCreateTransactionData(IcebergTransaction &transaction) {
 	lock_guard<mutex> guard(transaction.lock);
 	if (!transaction_data) {
 		auto context = transaction.context.lock();
 		transaction_data = make_uniq<IcebergTransactionData>(*context, *this);
 	}
-}
-
-void IcebergTableInformation::AddSnapshot(IcebergTransaction &transaction, vector<IcebergManifestEntry> &&data_files) {
-	D_ASSERT(!data_files.empty());
-	InitTransactionData(transaction);
-	IcebergManifestDeletes empty_manifest_deletes;
-	transaction_data->AddSnapshot(IcebergSnapshotOperationType::APPEND, std::move(data_files),
-	                              std::move(empty_manifest_deletes));
-}
-
-void IcebergTableInformation::AddDeleteSnapshot(IcebergTransaction &transaction,
-                                                vector<IcebergManifestEntry> &&data_files,
-                                                IcebergManifestDeletes &&altered_manifests) {
-	InitTransactionData(transaction);
-	transaction_data->AddSnapshot(IcebergSnapshotOperationType::DELETE, std::move(data_files),
-	                              std::move(altered_manifests));
-}
-
-void IcebergTableInformation::AddUpdateSnapshot(IcebergTransaction &transaction,
-                                                vector<IcebergManifestEntry> &&delete_files,
-                                                vector<IcebergManifestEntry> &&data_files,
-                                                IcebergManifestDeletes &&altered_manifests) {
-	InitTransactionData(transaction);
-	// Automatically creates new snapshot with SnapshotOperationType::Overwrite
-	transaction_data->AddUpdateSnapshot(std::move(delete_files), std::move(data_files), std::move(altered_manifests));
-}
-
-void IcebergTableInformation::AddSchema(IcebergTransaction &transaction) {
-	InitTransactionData(transaction);
-	transaction_data->TableAddSchema();
-}
-
-void IcebergTableInformation::AddAssignUUID(IcebergTransaction &transaction) {
-	InitTransactionData(transaction);
-	transaction_data->TableAssignUUID();
-}
-
-void IcebergTableInformation::AddAssertCreate(IcebergTransaction &transaction) {
-	InitTransactionData(transaction);
-	transaction_data->TableAddAssertCreate();
-}
-
-void IcebergTableInformation::AddAssertCurrentSchemaId(IcebergTransaction &transaction) {
-	InitTransactionData(transaction);
-	transaction_data->TableAddAssertCurrentSchemaId();
-}
-
-void IcebergTableInformation::AddAssertLastAssignedFieldId(IcebergTransaction &transaction) {
-	InitTransactionData(transaction);
-	transaction_data->TableAddAssertLastAssignedFieldId();
-}
-
-void IcebergTableInformation::AddAssertLastAssignedPartitionId(IcebergTransaction &transaction) {
-	InitTransactionData(transaction);
-	transaction_data->TableAddAssertLastAssignedPartitionId();
-}
-
-void IcebergTableInformation::AddAssertDefaultSpecId(IcebergTransaction &transaction) {
-	InitTransactionData(transaction);
-	transaction_data->TableAddAssertDefaultSpecId();
-}
-
-void IcebergTableInformation::AddUpradeFormatVersion(IcebergTransaction &transaction) {
-	InitTransactionData(transaction);
-	transaction_data->TableAddUpradeFormatVersion();
-}
-void IcebergTableInformation::AddSetCurrentSchema(IcebergTransaction &transaction) {
-	InitTransactionData(transaction);
-	transaction_data->TableAddSetCurrentSchema();
-}
-void IcebergTableInformation::AddPartitionSpec(IcebergTransaction &transaction) {
-	InitTransactionData(transaction);
-	transaction_data->TableAddPartitionSpec();
-}
-void IcebergTableInformation::AddSortOrder(IcebergTransaction &transaction) {
-	InitTransactionData(transaction);
-	transaction_data->TableAddSortOrder();
-}
-void IcebergTableInformation::SetDefaultSortOrder(IcebergTransaction &transaction) {
-	InitTransactionData(transaction);
-	transaction_data->TableSetDefaultSortOrder();
-}
-void IcebergTableInformation::SetDefaultSpec(IcebergTransaction &transaction) {
-	InitTransactionData(transaction);
-	transaction_data->TableSetDefaultSpec();
-}
-void IcebergTableInformation::SetProperties(IcebergTransaction &transaction,
-                                            const case_insensitive_map_t<string> &properties) {
-	InitTransactionData(transaction);
-	transaction_data->TableSetProperties(properties);
-}
-void IcebergTableInformation::RemoveProperties(IcebergTransaction &transaction, const vector<string> &properties) {
-	InitTransactionData(transaction);
-	transaction_data->TableRemoveProperties(properties);
-}
-void IcebergTableInformation::SetLocation(IcebergTransaction &transaction) {
-	InitTransactionData(transaction);
-	transaction_data->TableSetLocation();
+	return *transaction_data;
 }
 
 } // namespace duckdb

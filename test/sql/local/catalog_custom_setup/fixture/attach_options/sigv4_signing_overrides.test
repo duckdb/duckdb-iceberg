@@ -30,7 +30,8 @@ statement ok
 call enable_logging('http');
 
 # sigv4_service and sigv4_region override SigV4 service/region parsing from host
-statement error
+# The fixture catalog at 8181 does not validate auth, so the attach succeeds
+statement ok
 ATTACH '' AS my_datalake_both (
     TYPE ICEBERG,
     ENDPOINT 'http://127.0.0.1:8181',
@@ -38,8 +39,6 @@ ATTACH '' AS my_datalake_both (
     SIGV4_SERVICE 'MyCustomService',
     SIGV4_REGION 'us-west-2'
 );
-----
-<!REGEX>:.*([Uu]nrecognized|Could not parse AWS).*
 
 # verify the SigV4 Authorization header contains the custom service and region
 query I
@@ -51,10 +50,13 @@ WHERE request.url LIKE '%127.0.0.1:8181%'
 1
 
 statement ok
+DETACH my_datalake_both;
+
+statement ok
 CALL truncate_duckdb_logs();
 
 # sigv4_service with a different service name
-statement error
+statement ok
 ATTACH '' AS my_datalake_name_only (
     TYPE ICEBERG,
     ENDPOINT 'http://127.0.0.1:8181',
@@ -62,8 +64,6 @@ ATTACH '' AS my_datalake_name_only (
     SIGV4_SERVICE 'CustomService',
     SIGV4_REGION 'us-east-1'
 );
-----
-<!REGEX>:.*([Uu]nrecognized|Could not parse AWS).*
 
 query I
 SELECT count(*) > 0
@@ -72,6 +72,9 @@ WHERE request.url LIKE '%127.0.0.1:8181%'
   AND request.headers['Authorization'] LIKE '%us-east-1/CustomService/aws4_request%';
 ----
 1
+
+statement ok
+DETACH my_datalake_name_only;
 
 statement ok
 CALL truncate_duckdb_logs();

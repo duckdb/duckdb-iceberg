@@ -19,12 +19,16 @@ public:
 	static const IcebergColumnDefinition &GetFromColumnIndex(const vector<unique_ptr<IcebergColumnDefinition>> &columns,
 	                                                         const ColumnIndex &column_index, idx_t depth);
 	optional_ptr<const IcebergColumnDefinition> GetFromPath(const vector<string> &path,
-	                                                        optional_ptr<optional_idx> names_offset);
+	                                                        optional_ptr<optional_idx> names_offset) const;
+	optional_ptr<IcebergColumnDefinition> GetMutableFromPath(const vector<string> &path,
+	                                                         optional_ptr<optional_idx> names_offset);
 
 	static void SchemaToJson(yyjson_mut_doc *doc, yyjson_mut_val *root_object, const rest_api_objects::Schema &schema);
 	shared_ptr<IcebergTableSchema> Copy() const;
+	shared_ptr<IcebergTableSchema> RemoveColumn(const string &name, optional_idx &column_id) const;
 	const LogicalType &GetColumnTypeFromFieldId(idx_t field_id) const;
 
+	bool Equals(const IcebergTableSchema &other) const;
 	void GetColumnNamesAndTypes(vector<string> &names, vector<LogicalType> &types) const;
 
 public:
@@ -32,6 +36,7 @@ public:
 	// Nessie Needs this for some reason.
 	idx_t last_column_id;
 	vector<unique_ptr<IcebergColumnDefinition>> columns;
+	vector<int32_t> identifier_field_ids;
 };
 
 } // namespace duckdb

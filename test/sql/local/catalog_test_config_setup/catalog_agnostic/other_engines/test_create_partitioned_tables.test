@@ -665,3 +665,62 @@ WITH ('format-version' = 3);
 statement ok
 INSERT INTO my_datalake.default.test_table_partitioned_by_timestampns_hour_format_version_3 VALUES
     (1, '2020-01-15 08:30:00'), (2, '2021-06-20 14:45:00'), (3, '2022-03-10 22:15:00'), (4, '2020-01-15 10:00:00');
+
+# Read back TIMESTAMP_NS partitioned tables (partition transforms + column stats use TIMESTAMP_NS paths)
+query II nosort
+SELECT id, val FROM my_datalake.default.test_table_partitioned_by_timestampns_format_version_3 ORDER BY id;
+----
+1	2020-01-15 08:30:00
+2	2021-06-20 14:45:00
+3	2022-03-10 22:15:00
+4	2020-01-15 10:00:00
+
+query II nosort
+SELECT id, val FROM my_datalake.default.test_table_partitioned_by_timestampns_year_format_version_3 ORDER BY id;
+----
+1	2020-01-15 08:30:00
+2	2021-06-20 14:45:00
+3	2022-03-10 22:15:00
+4	2020-01-15 10:00:00
+
+query II nosort
+SELECT id, val FROM my_datalake.default.test_table_partitioned_by_timestampns_month_format_version_3 ORDER BY id;
+----
+1	2020-01-15 08:30:00
+2	2021-06-20 14:45:00
+3	2022-03-10 22:15:00
+4	2020-01-15 10:00:00
+
+query II nosort
+SELECT id, val FROM my_datalake.default.test_table_partitioned_by_timestampns_day_format_version_3 ORDER BY id;
+----
+1	2020-01-15 08:30:00
+2	2021-06-20 14:45:00
+3	2022-03-10 22:15:00
+4	2020-01-15 10:00:00
+
+query II nosort
+SELECT id, val FROM my_datalake.default.test_table_partitioned_by_timestampns_hour_format_version_3 ORDER BY id;
+----
+1	2020-01-15 08:30:00
+2	2021-06-20 14:45:00
+3	2022-03-10 22:15:00
+4	2020-01-15 10:00:00
+
+# Nanosecond fractional digits roundtrip (manifest column bounds use 8-byte nanosecond encoding)
+statement ok
+drop table if exists my_datalake.default.test_timestamp_ns_fractional_format_version_3;
+
+statement ok
+CREATE TABLE my_datalake.default.test_timestamp_ns_fractional_format_version_3 (id INT, val TIMESTAMP_NS)
+PARTITIONED BY (val)
+WITH ('format-version' = 3);
+
+statement ok
+INSERT INTO my_datalake.default.test_timestamp_ns_fractional_format_version_3 VALUES
+    (1, '2020-01-15 08:30:00.123456789'::TIMESTAMP_NS);
+
+query II
+SELECT id, val FROM my_datalake.default.test_timestamp_ns_fractional_format_version_3;
+----
+1	2020-01-15 08:30:00.123456789

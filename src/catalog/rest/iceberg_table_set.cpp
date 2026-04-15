@@ -21,6 +21,7 @@
 #include "catalog/rest/storage/authorization/oauth2.hpp"
 #include "catalog/rest/catalog_entry/iceberg_schema_entry.hpp"
 #include "core/metadata/partition/iceberg_partition_spec.hpp"
+#include "catalog/rest/transaction/iceberg_transaction_update.hpp"
 
 namespace duckdb {
 
@@ -42,7 +43,7 @@ bool IcebergTableSet::FillEntry(ClientContext &context, IcebergTableInformation 
 		if (cached_result) {
 			// Use the cached result instead of making a new request
 			table.table_metadata = IcebergTableMetadata::FromLoadTableResult(*cached_result->load_table_result);
-			auto &schemas = table.table_metadata.schemas;
+			auto &schemas = table.table_metadata.GetSchemas();
 			D_ASSERT(!schemas.empty());
 			for (auto &table_schema : schemas) {
 				table.CreateSchemaVersion(*table_schema.second);
@@ -78,7 +79,7 @@ bool IcebergTableSet::FillEntry(ClientContext &context, IcebergTableInformation 
 		auto &load_table_result = *cached_table_result->load_table_result;
 		table.table_metadata = IcebergTableMetadata::FromLoadTableResult(load_table_result);
 	}
-	auto &schemas = table.table_metadata.schemas;
+	auto &schemas = table.table_metadata.GetSchemas();
 
 	//! It should be impossible to have a metadata file without any schema
 	D_ASSERT(!schemas.empty());
@@ -204,22 +205,21 @@ IcebergTableInformation &IcebergTableSet::CreateNewEntry(ClientContext &context,
 	}
 
 	auto key = IcebergTableInformation::GetTableKey(schema.namespace_items, info.table);
-	auto emplace_res =
-	    iceberg_transaction.updated_tables.emplace(key, IcebergTableInformation(catalog, schema, info.table));
-	if (!emplace_res.second) {
-		throw InternalException("Table %s was already created somehow?", key);
-	}
-	auto &table_info = emplace_res.first->second;
+	auto &alter_update = iceberg_transaction.GetOrCreateAlter();
+	auto &table_info = alter_update.CreateTable(key, IcebergTableInformation(catalog, schema, info.table));
+	// auto &table_info = emplace_res.first->second;
 	auto &table_metadata = table_info.table_metadata;
 	auto table_entry = make_uniq<IcebergTableEntry>(table_info, catalog, schema, info, 0);
 	auto table_ptr = table_entry.get();
 	table_info.schema_versions[0] = std::move(table_entry);
 	table_metadata.iceberg_version = iceberg_version.GetIndex();
 	int32_t last_column_id;
-	table_metadata.schemas[0] = IcebergCreateTableRequest::CreateIcebergSchema(
-	    context, table_metadata, table_ptr->GetColumns(), table_ptr->GetConstraints(), last_column_id);
+
+	auto new_schema = IcebergCreateTableRequest::CreateIcebergSchema(context, table_metadata, table_ptr->GetColumns(),
+	                                                                 table_ptr->GetConstraints(), last_column_id);
+	new_schema->schema_id = 0;
+	table_metadata.AddSchema(std::move(new_schema));
 	table_metadata.SetCurrentSchemaId(0);
-	table_metadata.schemas[0]->schema_id = 0;
 	table_metadata.last_column_id = last_column_id;
 
 	// Get Location
@@ -255,20 +255,20 @@ IcebergTableInformation &IcebergTableSet::CreateNewEntry(ClientContext &context,
 	}
 
 	// if we stage created the table, we add an assert create
+	auto &transaction_data = table_info.GetOrCreateTransactionData(iceberg_transaction);
 	if (catalog.attach_options.supports_stage_create) {
-		table_info.AddAssertCreate(iceberg_transaction);
+		transaction_data.TableAddAssertCreate();
 	}
 	// other required updates to the table
-	table_info.AddAssignUUID(iceberg_transaction);
-	table_info.AddUpradeFormatVersion(iceberg_transaction);
-	table_info.AddSchema(iceberg_transaction);
-	table_info.AddSetCurrentSchema(iceberg_transaction);
-	table_info.AddPartitionSpec(iceberg_transaction);
-	table_info.SetDefaultSpec(iceberg_transaction);
-	table_info.AddSortOrder(iceberg_transaction);
-	table_info.SetDefaultSortOrder(iceberg_transaction);
-	table_info.SetLocation(iceberg_transaction);
-	table_info.SetProperties(iceberg_transaction, table_metadata.table_properties);
+	transaction_data.TableAssignUUID();
+	transaction_data.TableAddUpradeFormatVersion();
+	transaction_data.TableAddSchema(0);
+	transaction_data.TableAddPartitionSpec();
+	transaction_data.TableSetDefaultSpec();
+	transaction_data.TableAddSortOrder();
+	transaction_data.TableSetDefaultSortOrder();
+	transaction_data.TableSetLocation();
+	transaction_data.TableSetProperties(table_metadata.table_properties);
 	return table_info;
 }
 
@@ -288,22 +288,20 @@ optional_ptr<CatalogEntry> IcebergTableSet::GetEntry(ClientContext &context, con
 	lock_guard<mutex> l(entry_lock);
 	auto &ic_catalog = catalog.Cast<IcebergCatalog>();
 	auto &iceberg_transaction = IcebergTransaction::Get(context, catalog);
-	const auto table_name = lookup.GetEntryName();
+	const auto &table_name = lookup.GetEntryName();
 	// first check transaction entries
 	auto table_key = IcebergTableInformation::GetTableKey(schema.namespace_items, table_name);
-	// Check if table has been deleted within in the transaction.
-	if (iceberg_transaction.deleted_tables.count(table_key) > 0) {
-		return nullptr;
-	}
-	// Check if the table has been updated within the transaction
-	{
-		auto it = iceberg_transaction.updated_tables.find(table_key);
-		if (it != iceberg_transaction.updated_tables.end()) {
-			auto &table_info = it->second;
-			auto snapshot_lookup = GetSnapshotLookup(table_info, context, lookup);
-			return table_info.GetSchemaVersion(snapshot_lookup, context);
+	auto latest_state = iceberg_transaction.GetLatestTableState(table_key);
+	if (latest_state) {
+		if (latest_state->status == IcebergTableStatus::DROPPED) {
+			// If table has been deleted within the transaction, return null
+			return nullptr;
 		}
+		auto &table_info = latest_state->table.get();
+		auto snapshot_lookup = GetSnapshotLookup(table_info, context, lookup);
+		return table_info.GetSchemaVersion(snapshot_lookup, context);
 	}
+
 	auto previous_request_info = iceberg_transaction.GetTableRequestResult(table_key);
 	if (previous_request_info.exists) {
 		// transaction has already looked up this table, find it in entries
@@ -334,7 +332,6 @@ optional_ptr<CatalogEntry> IcebergTableSet::GetEntry(ClientContext &context, con
 	}
 
 	iceberg_transaction.tables[table_key] = entry->second;
-
 	IcebergSnapshotLookup snapshot_lookup;
 
 	bool is_time_travel = lookup.GetAtClause();

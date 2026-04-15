@@ -12,6 +12,7 @@ shared_ptr<IcebergTableSchema> IcebergTableSchema::ParseSchema(const rest_api_ob
 	for (auto &field : schema.struct_type.fields) {
 		res->columns.push_back(IcebergColumnDefinition::ParseStructField(*field));
 	}
+	res->identifier_field_ids = schema.object_1.identifier_field_ids;
 	return res;
 }
 
@@ -70,8 +71,8 @@ static optional_ptr<const IcebergColumnDefinition> GetColumnChild(const IcebergC
 	return nullptr;
 }
 
-optional_ptr<const IcebergColumnDefinition> IcebergTableSchema::GetFromPath(const vector<string> &path,
-                                                                            optional_ptr<optional_idx> name_offset) {
+optional_ptr<const IcebergColumnDefinition>
+IcebergTableSchema::GetFromPath(const vector<string> &path, optional_ptr<optional_idx> name_offset) const {
 	D_ASSERT(!path.empty());
 
 	optional_ptr<const IcebergColumnDefinition> result;
@@ -104,6 +105,16 @@ optional_ptr<const IcebergColumnDefinition> IcebergTableSchema::GetFromPath(cons
 		res = *next_child;
 	}
 	return res.get();
+}
+
+optional_ptr<IcebergColumnDefinition> IcebergTableSchema::GetMutableFromPath(const vector<string> &path,
+                                                                             optional_ptr<optional_idx> names_offset) {
+	auto res = GetFromPath(path, names_offset);
+	if (!res) {
+		return nullptr;
+	}
+	auto &col = *res;
+	return const_cast<IcebergColumnDefinition &>(col);
 }
 
 static void AddUnnamedField(yyjson_mut_doc *doc, yyjson_mut_val *field_obj, const rest_api_objects::Type &column);
@@ -247,6 +258,20 @@ shared_ptr<IcebergTableSchema> IcebergTableSchema::Copy() const {
 	return res;
 }
 
+shared_ptr<IcebergTableSchema> IcebergTableSchema::RemoveColumn(const string &name, optional_idx &column_id) const {
+	auto res = make_shared_ptr<IcebergTableSchema>();
+	res->schema_id = schema_id + 1;
+	res->last_column_id = last_column_id;
+	for (auto &column : columns) {
+		if (column->name == name) {
+			column_id = column->id;
+			continue;
+		}
+		res->columns.push_back(column->Copy());
+	}
+	return res;
+}
+
 const LogicalType &IcebergTableSchema::GetColumnTypeFromFieldId(idx_t field_id) const {
 	for (auto &column : columns) {
 		if (column->id == field_id) {
@@ -265,6 +290,30 @@ void IcebergTableSchema::GetColumnNamesAndTypes(vector<string> &names, vector<Lo
 		names.push_back(column.name);
 		types.push_back(column.type);
 	}
+}
+
+bool IcebergTableSchema::Equals(const IcebergTableSchema &other) const {
+	if (columns.size() != other.columns.size()) {
+		return false;
+	}
+	for (idx_t i = 0; i < columns.size(); i++) {
+		auto &a = *columns[i];
+		auto &b = *other.columns[i];
+
+		if (!a.Equals(b)) {
+			return false;
+		}
+	}
+	if (identifier_field_ids.size() != other.identifier_field_ids.size()) {
+		return false;
+	}
+	for (idx_t i = 0; i < identifier_field_ids.size(); i++) {
+		if (identifier_field_ids[i] != other.identifier_field_ids[i]) {
+			return false;
+		}
+	}
+
+	return true;
 }
 
 } // namespace duckdb

@@ -1,0 +1,41 @@
+# name: test/sql/local/irc_any_catalog/alter/test_add_existing_schema.test
+# group: [alter]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+CALL enable_logging(level='warning');
+
+statement ok
+SET warnings_as_errors = True;
+
+statement ok
+CREATE SCHEMA IF NOT EXISTS my_datalake.default;
+
+statement ok
+drop table if exists my_datalake.default.existing_schema_add;
+
+statement ok
+CREATE TABLE my_datalake.default.existing_schema_add(
+	a VARCHAR,
+	b BOOLEAN
+)
+
+statement ok
+ALTER TABLE my_datalake.default.existing_schema_add ADD COLUMN c INTEGER;
+
+statement error
+ALTER TABLE my_datalake.default.existing_schema_add DROP COLUMN c;
+----
+Not implemented Error: Attempted to add a schema that already exists in the table

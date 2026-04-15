@@ -125,6 +125,7 @@ Value BucketTransform::ApplyTransform(const Value &constant, const IcebergTransf
 	case LogicalTypeId::DATE:
 	case LogicalTypeId::TIMESTAMP:
 	case LogicalTypeId::TIMESTAMP_TZ:
+	case LogicalTypeId::TIMESTAMP_NS:
 	case LogicalTypeId::VARCHAR:
 	case LogicalTypeId::BLOB:
 		break;
