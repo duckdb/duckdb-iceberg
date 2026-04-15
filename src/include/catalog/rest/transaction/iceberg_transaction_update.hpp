@@ -86,7 +86,7 @@ public:
 public:
 	const IcebergTableInformation &table;
 	IcebergTableInformation new_table;
-	const string &new_name;
+	string new_name;
 };
 
 } // namespace duckdb
