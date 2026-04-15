@@ -26,50 +26,50 @@ set logging_level='debug'
 
 # Clean up any existing tables
 statement ok
-drop table if exists my_datalake.default.t1;
+drop table if exists my_datalake.default.renamed_table1;
 
 statement ok
-drop table if exists my_datalake.default.t2;
+drop table if exists my_datalake.default.renamed_table2;
 
 statement ok
-drop table if exists my_datalake.default.t3;
+drop table if exists my_datalake.default.renamed_table3;
 
 # Test 1: Basic rename with commit
 statement ok
-create table my_datalake.default.t1(i INTEGER);
+create table my_datalake.default.renamed_table1(i INTEGER);
 
 statement ok
-insert into my_datalake.default.t1 values (1), (2), (3);
+insert into my_datalake.default.renamed_table1 values (1), (2), (3);
 
 statement ok
 begin transaction
 
 statement ok
-alter table my_datalake.default.t1 rename to t2
+alter table my_datalake.default.renamed_table1 rename to renamed_table2
 
 query I
-select * from my_datalake.default.t2 order by i
+select * from my_datalake.default.renamed_table2 order by i
 ----
 1
 2
 3
 
 statement error
-select * from my_datalake.default.t1
+select * from my_datalake.default.renamed_table1
 ----
 
 statement ok
 commit
 
 query I
-select * from my_datalake.default.t2 order by i
+select * from my_datalake.default.renamed_table2 order by i
 ----
 1
 2
 3
 
 statement error
-select * from my_datalake.default.t1
+select * from my_datalake.default.renamed_table1
 ----
 
 # Test 2: Rename with rollback
@@ -77,10 +77,10 @@ statement ok
 begin transaction
 
 statement ok
-alter table my_datalake.default.t2 rename to t3
+alter table my_datalake.default.renamed_table2 rename to renamed_table3
 
 query I
-select * from my_datalake.default.t3 order by i
+select * from my_datalake.default.renamed_table3 order by i
 ----
 1
 2
@@ -90,14 +90,14 @@ statement ok
 rollback
 
 query I
-select * from my_datalake.default.t2 order by i
+select * from my_datalake.default.renamed_table2 order by i
 ----
 1
 2
 3
 
 statement error
-select * from my_datalake.default.t3
+select * from my_datalake.default.renamed_table3
 ----
 
 # Test 3: Multiple renames in same transaction with commit
@@ -105,47 +105,47 @@ statement ok
 begin transaction
 
 statement ok
-alter table my_datalake.default.t2 rename to t3
+alter table my_datalake.default.renamed_table2 rename to renamed_table3
 
 statement ok
-alter table my_datalake.default.t3 rename to t1
+alter table my_datalake.default.renamed_table3 rename to renamed_table1
 
 statement ok
 commit
 
 query I
-select * from my_datalake.default.t1 order by i
+select * from my_datalake.default.renamed_table1 order by i
 ----
 1
 2
 3
 
 statement error
-select * from my_datalake.default.t2
+select * from my_datalake.default.renamed_table2
 ----
 
 # Test 4: Rename to existing table name (should fail)
 statement ok
-create table my_datalake.default.t2(i INTEGER);
+create table my_datalake.default.renamed_table2(i INTEGER);
 
 statement error
-alter table my_datalake.default.t1 rename to t2
+alter table my_datalake.default.renamed_table1 rename to renamed_table2
 ----
 
 # Test 5: Rename and create table with same name in same transaction
 statement ok
-drop table if exists my_datalake.default.t2;
+drop table if exists my_datalake.default.renamed_table2;
 
 statement ok
 begin transaction
 
 statement ok
-alter table my_datalake.default.t1 rename to t3
+alter table my_datalake.default.renamed_table1 rename to renamed_table3
 
 statement error
-create table my_datalake.default.t1(j VARCHAR);
+create table my_datalake.default.renamed_table1(j VARCHAR);
 ----
-Not implemented Error: Cannot create table deleted within a transaction: my_datalake.default.t1
+Not implemented Error: Cannot create table deleted within a transaction: my_datalake.default.renamed_table1
 
 statement ok
 commit
@@ -154,7 +154,7 @@ statement ok
 begin transaction
 
 statement ok
-alter table my_datalake.default.t1 rename to t3
+alter table my_datalake.default.renamed_table1 rename to renamed_table3
 
 statement ok
 commit
@@ -163,20 +163,20 @@ statement ok
 begin
 
 statement ok
-create table my_datalake.default.t1(j VARCHAR);
+create table my_datalake.default.renamed_table1(j VARCHAR);
 
 statement ok
-insert into my_datalake.default.t1 values ('new');
+insert into my_datalake.default.renamed_table1 values ('new');
 
 query I
-select * from my_datalake.default.t3 order by i
+select * from my_datalake.default.renamed_table3 order by i
 ----
 1
 2
 3
 
 query I
-select * from my_datalake.default.t1
+select * from my_datalake.default.renamed_table1
 ----
 new
 
@@ -184,32 +184,32 @@ statement ok
 commit
 
 query I
-select * from my_datalake.default.t3 order by i
+select * from my_datalake.default.renamed_table3 order by i
 ----
 1
 2
 3
 
 query I
-select * from my_datalake.default.t1
+select * from my_datalake.default.renamed_table1
 ----
 new
 
 # Test 6: Scan, insert, rename, scan, insert, scan
 statement ok
-drop table if exists my_datalake.default.t1;
+drop table if exists my_datalake.default.renamed_table1;
 
 statement ok
-drop table if exists my_datalake.default.t3;
+drop table if exists my_datalake.default.renamed_table3;
 
 statement ok
-create table my_datalake.default.t1(i INTEGER);
+create table my_datalake.default.renamed_table1(i INTEGER);
 
 statement ok
-insert into my_datalake.default.t1 values (10);
+insert into my_datalake.default.renamed_table1 values (10);
 
 query I
-select * from my_datalake.default.t1
+select * from my_datalake.default.renamed_table1
 ----
 10
 
@@ -217,18 +217,18 @@ statement ok
 begin transaction
 
 statement ok
-insert into my_datalake.default.t1 values (20);
+insert into my_datalake.default.renamed_table1 values (20);
 
 query I
-select * from my_datalake.default.t1 order by i
+select * from my_datalake.default.renamed_table1 order by i
 ----
 10
 20
 
 statement error
-alter table my_datalake.default.t1 rename to t2
+alter table my_datalake.default.renamed_table1 rename to renamed_table2
 ----
-Catalog Error: This table (t1) was modified already, can't be renamed!
+Catalog Error: This table (renamed_table1) was modified already, can't be renamed!
 
 statement ok
 commit
@@ -237,19 +237,19 @@ statement ok
 begin
 
 statement ok
-alter table my_datalake.default.t1 rename to t2
+alter table my_datalake.default.renamed_table1 rename to renamed_table2
 
 query I
-select * from my_datalake.default.t2 order by i
+select * from my_datalake.default.renamed_table2 order by i
 ----
 10
 20
 
 statement ok
-insert into my_datalake.default.t2 values (30);
+insert into my_datalake.default.renamed_table2 values (30);
 
 query I
-select * from my_datalake.default.t2 order by i
+select * from my_datalake.default.renamed_table2 order by i
 ----
 10
 20
@@ -259,7 +259,7 @@ statement ok
 commit
 
 query I
-select * from my_datalake.default.t2 order by i
+select * from my_datalake.default.renamed_table2 order by i
 ----
 10
 20
@@ -267,13 +267,13 @@ select * from my_datalake.default.t2 order by i
 
 # Test 7: Two concurrent transactions - isolation
 statement ok
-drop table if exists my_datalake.default.t2;
+drop table if exists my_datalake.default.renamed_table2;
 
 statement ok
-create table my_datalake.default.t1(i INTEGER);
+create table my_datalake.default.renamed_table1(i INTEGER);
 
 statement ok
-insert into my_datalake.default.t1 values (100);
+insert into my_datalake.default.renamed_table1 values (100);
 
 statement ok con1
 begin transaction
@@ -282,24 +282,24 @@ statement ok con2
 begin transaction
 
 statement ok con1
-alter table my_datalake.default.t1 rename to t2
+alter table my_datalake.default.renamed_table1 rename to renamed_table2
 
 query I con1
-select * from my_datalake.default.t2
+select * from my_datalake.default.renamed_table2
 ----
 100
 
 statement error con1
-select * from my_datalake.default.t1
+select * from my_datalake.default.renamed_table1
 ----
 
 query I con2
-select * from my_datalake.default.t1
+select * from my_datalake.default.renamed_table1
 ----
 100
 
 statement error con2
-select * from my_datalake.default.t2
+select * from my_datalake.default.renamed_table2
 ----
 
 statement ok con1
@@ -309,42 +309,42 @@ statement ok con2
 commit
 
 query I con1
-select * from my_datalake.default.t2
+select * from my_datalake.default.renamed_table2
 ----
 100
 
 query I con2
-select * from my_datalake.default.t2
+select * from my_datalake.default.renamed_table2
 ----
 100
 
 # Test 8: Rename after drop in same transaction
 statement ok
-drop table if exists my_datalake.default.t2;
+drop table if exists my_datalake.default.renamed_table2;
 
 statement ok
-create table my_datalake.default.t1(i INTEGER);
+create table my_datalake.default.renamed_table1(i INTEGER);
 
 statement ok
-insert into my_datalake.default.t1 values (1), (2);
+insert into my_datalake.default.renamed_table1 values (1), (2);
 
 statement ok
-create table my_datalake.default.t2(i VARCHAR);
+create table my_datalake.default.renamed_table2(i VARCHAR);
 
 statement ok
-insert into my_datalake.default.t2 values ('a'), ('b');
+insert into my_datalake.default.renamed_table2 values ('a'), ('b');
 
 statement ok
 begin transaction
 
 statement ok
-drop table my_datalake.default.t2;
+drop table my_datalake.default.renamed_table2;
 
 statement ok
-alter table my_datalake.default.t1 rename to t2;
+alter table my_datalake.default.renamed_table1 rename to renamed_table2;
 
 query I
-select * from my_datalake.default.t2 order by i
+select * from my_datalake.default.renamed_table2 order by i
 ----
 1
 2
@@ -353,11 +353,11 @@ statement ok
 commit
 
 query I
-select * from my_datalake.default.t2 order by i
+select * from my_datalake.default.renamed_table2 order by i
 ----
 1
 2
 
 statement error
-select * from my_datalake.default.t1
+select * from my_datalake.default.renamed_table1
 ----
