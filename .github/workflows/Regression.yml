@@ -1,0 +1,152 @@
+name: Regression
+on:
+  workflow_call:
+    inputs:
+      base_hash:
+        type: string
+  workflow_dispatch:
+    inputs:
+      base_hash:
+        description: 'Base hash'
+        type: string
+  repository_dispatch:
+  push:
+    branches-ignore:
+      - 'main'
+  pull_request:
+    types: [opened, reopened, ready_for_review, converted_to_draft, synchronize]
+
+concurrency:
+  group: regression-${{ github.workflow }}-${{ github.ref }}-${{ github.head_ref || '' }}-${{ github.base_ref || '' }}-${{ github.ref != 'refs/heads/main' || github.sha }}
+  cancel-in-progress: true
+
+env:
+  GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  BASE_BRANCH: ${{ github.base_ref || 'main' }}
+  BASE_HASH: ${{ inputs.base_hash }}
+
+jobs:
+  check-draft:
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Preliminary checks on CI 
+        run: echo "Event name is ${{ github.event_name }}"
+      
+  regression-test-benchmark-runner:
+    name: Regression Tests
+    needs: check-draft
+    runs-on: ubuntu-latest
+    env:
+      CC: gcc-10
+      CXX: g++-10
+      GEN: ninja
+      BUILD_BENCHMARK: 1
+      CORE_EXTENSIONS: "tpch;avro;parquet;httpfs"
+      HTTP_PROXY_PUBLIC: http://localhost:8878
+      VCPKG_TARGET_TRIPLET: 'x64-linux-release'
+      VCPKG_FEATURE_FLAGS: "-binarycaching"
+      VCPKG_TOOLCHAIN_PATH: ${{ github.workspace }}/vcpkg/scripts/buildsystems/vcpkg.cmake
+      PIP_BREAK_SYSTEM_PACKAGES: 1
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: 'true'
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Setup vcpkg
+        uses: lukka/run-vcpkg@v11.1
+        with:
+          vcpkgGitCommitId: 84bab45d415d22042bd0b9081aea57f362da3f35
+
+      - name: Install Ninja
+        shell: bash
+        run: sudo apt-get update -y -qq && sudo apt-get install -y -qq ninja-build
+
+      - name: Setup Ccache
+        uses: hendrikmuhs/ccache-action@main
+        with:
+          key: ${{ github.job }}
+          save: ${{ github.ref == 'refs/heads/main' || github.repository != 'duckdb/duckdb' }}
+
+      - name: Build extension
+        env:
+          GEN: ninja
+          STATIC_LIBCPP: 1
+          ENABLE_EXTENSION_AUTOLOADING: 1
+          ENABLE_EXTENSION_AUTOINSTALL: 1
+        run: |
+          make release
+
+      - name: Set up Docker Compose
+        uses: docker/setup-compose-action@v1
+
+      - name: Install fixture catalog dependencies
+        run: |
+          sudo apt update -y -qq
+          sudo apt install -y -qq python3-venv tar pkg-config
+
+      - name: Install CMake 3.x
+        run: |
+          sudo apt-get remove -y cmake cmake-data
+          sudo apt-get install --allow-downgrades -y -qq 'cmake=3.*' 'cmake-data=3.*'
+
+      - name: Install required python packages
+        run: |
+          python3 -m venv .venv-spark4
+          source .venv-spark4/bin/activate
+          python3 -m pip install -r scripts/requirements.txt
+
+      - name: Generate data and start fixture
+        env:
+          S3_KEY_ID: admin
+          S3_SECRET: password
+          S3_ENDPOINT: http://127.0.0.1:9000
+          ICEBERG_ENDPOINT: http://127.0.0.1:8181
+          WAREHOUSE: s3://warehouse/wh/
+        run: |
+          source .venv-spark4/bin/activate
+          rm -rf data/generated
+          ./scripts/start-fixture-rest-catalog.sh
+          python3 -m scripts.data_generators.generate_data spark-rest
+
+      - name: Run mitmproxy
+        shell: bash
+        run: |
+          source .venv-spark4/bin/activate
+          mitmdump --mode regular@8878 --flow-detail 2 > mitmproxy.log 2>&1 &
+
+      - name: Install
+        shell: bash
+        run: sudo apt-get update -y -qq && sudo apt-get install -y -qq ninja-build && pip install requests
+
+      - name: Build Base Branch
+        shell: bash
+        env:
+          GEN: ninja
+          STATIC_LIBCPP: 1
+          ENABLE_EXTENSION_AUTOLOADING: 1
+          ENABLE_EXTENSION_AUTOINSTALL: 1
+        run: |
+          git clone --branch ${{ env.BASE_BRANCH }} https://github.com/${{ github.repository }}.git --depth=1 base
+          cd base
+          git submodule update --init --recursive
+          make release
+          cd ..
+
+      - name: Regression Test TPCH
+        if: always()
+        shell: bash
+        run: |
+          python duckdb/scripts/regression/test_runner.py --old base/build/release/benchmark/benchmark_runner --new build/release/benchmark/benchmark_runner --benchmarks .github/regression/tpch.csv --verbose --threads 2 --clear-benchmark-cache
