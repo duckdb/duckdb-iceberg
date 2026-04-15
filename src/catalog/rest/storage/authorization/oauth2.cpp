@@ -183,12 +183,12 @@ static rest_api_objects::OAuthTokenResponse FetchOAuth2TokenResponse(ClientConte
 	// Check HTTP status code
 	if (response->status >= HTTPStatusCode::OK_200 && response->status < HTTPStatusCode::MultipleChoices_300) {
 		// Success: Parse OAuthTokenResponse
-		auto *doc = yyjson_read(response->body.c_str(), response->body.size(), 0);
+		std::unique_ptr<yyjson_doc, YyjsonDocDeleter> doc(
+		    yyjson_read(response->body.c_str(), response->body.size(), 0));
 		if (!doc) {
 			throw InvalidConfigurationException("Could not get token from %s: server returned invalid JSON", uri);
 		}
-		std::unique_ptr<yyjson_doc, YyjsonDocDeleter> doc_ptr(doc);
-		auto *root = yyjson_doc_get_root(doc);
+		auto *root = yyjson_doc_get_root(doc.get());
 		auto token_response = rest_api_objects::OAuthTokenResponse::FromJSON(root);
 
 		// Validate token_type is bearer
@@ -202,10 +202,10 @@ static rest_api_objects::OAuthTokenResponse FetchOAuth2TokenResponse(ClientConte
 	} else if (response->status >= HTTPStatusCode::BadRequest_400 &&
 	           response->status < HTTPStatusCode::InternalServerError_500) {
 		// Client error: Try to parse OAuth2 error response (RFC 6749 Section 5.2)
-		auto *doc = yyjson_read(response->body.c_str(), response->body.size(), 0);
+		std::unique_ptr<yyjson_doc, YyjsonDocDeleter> doc(
+		    yyjson_read(response->body.c_str(), response->body.size(), 0));
 		if (doc) {
-			std::unique_ptr<yyjson_doc, YyjsonDocDeleter> doc_ptr(doc);
-			auto *root = yyjson_doc_get_root(doc);
+			auto *root = yyjson_doc_get_root(doc.get());
 			try {
 				auto oauth_error = rest_api_objects::OAuthError::FromJSON(root);
 				string error_msg = StringUtil::Format("OAuth2 token request failed (%s): %s",
