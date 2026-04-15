@@ -1,5 +1,5 @@
-# name: test/sql/local/irc_any_catalog/alter/test_alter_table_set_options.test
-# group: [alter]
+# name: test/sql/local/irc_any_catalog/alter/table_properties/test_alter_table_options.test
+# group: [table_properties]
 
 require-env ICEBERG_SERVER_AVAILABLE
 
