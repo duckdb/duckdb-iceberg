@@ -26,4 +26,4 @@ nessie-data-only:
 	if [ -f "$(NESSIE_ENV_FILE)" ]; then echo "Loading env from $(NESSIE_ENV_FILE)"; set -a; . ./$(NESSIE_ENV_FILE); set +a; fi && \
 	python3 -m scripts.data_generators.generate_data nessie $(if $(TEST),--test $(TEST))
 
-nessie-data: nessie nessie-data_only
+nessie-data: nessie nessie-data-only
