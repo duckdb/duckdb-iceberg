@@ -35,6 +35,12 @@
       ]
     },
     {
+      "reason": "Catalog fails with table collisions",
+      "paths": [
+        "test/sql/local/irc_any_catalog/alter/rename_table/create_and_rename.test"
+      ]
+    },
+    {
       "reason": "Lakekeeper data generation insert results in a single parquet file",
       "paths": [
         "test/sql/local/irc_any_catalog/reads/should_do_filter_pruning_on_expressionless_string_filters.test"
