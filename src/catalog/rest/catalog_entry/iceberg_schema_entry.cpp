@@ -281,7 +281,7 @@ static void VerifyNotNullConstraint(ClientContext &context, IcebergTableInformat
 		}
 	}
 
-	if (!found_column_null_count_at_least_once && !column.initial_default) {
+	if (!found_column_null_count_at_least_once && (!column.initial_default || column.initial_default->IsNull())) {
 		// edge case, column present in schema but not in manifest/snapshots, without default value. so all rows are
 		// null. This case can trigger as well if the optional field `null_value_counts` is not present in any manifest
 		throw ConstraintException("NOT NULL constraint failed: %s.%s", updated_table.name, column.name);
