@@ -10,6 +10,12 @@
   ],
   "skip_tests": [
     {
+      "reason": "TIMESTAMP_NS CREATE DEFAULT: catalog does not handle default correctly, instead responds with NULL",
+      "paths": [
+        "test/sql/local/irc_any_catalog/create/default/test_create_default_timestamp_ns.test"
+      ]
+    },
+    {
       "reason": "Not yet supported with Lakekeeper",
       "paths": [
         "test/sql/local/irc_any_catalog/insert/test_write_upper_and_lower_bounds.test",
