@@ -4,10 +4,12 @@
 
 namespace duckdb {
 
-yyjson_val *ICUtils::get_error_message(const string &api_result) {
+yyjson_val *ICUtils::GetErrorMessage(const string &api_result, std::unique_ptr<yyjson_doc, YyjsonDocDeleter> &out_doc) {
 	auto *doc = yyjson_read(api_result.c_str(), api_result.size(), 0);
+	out_doc = std::unique_ptr<yyjson_doc, YyjsonDocDeleter>(doc);
 	auto *root = yyjson_doc_get_root(doc);
 	auto *error = yyjson_obj_get(root, "error");
+
 	if (error == nullptr) {
 		return nullptr;
 	}
@@ -20,8 +22,9 @@ yyjson_val *ICUtils::get_error_message(const string &api_result) {
 	return nullptr;
 }
 
-yyjson_doc *ICUtils::api_result_to_doc(const string &api_result) {
+std::unique_ptr<yyjson_doc, YyjsonDocDeleter> ICUtils::APIResultToDoc(const string &api_result) {
 	auto *doc = yyjson_read(api_result.c_str(), api_result.size(), 0);
+	std::unique_ptr<yyjson_doc, YyjsonDocDeleter> doc_p(doc);
 	auto *root = yyjson_doc_get_root(doc);
 	auto *error = yyjson_obj_get(root, "error");
 	if (error != NULL) {
@@ -35,7 +38,7 @@ yyjson_doc *ICUtils::api_result_to_doc(const string &api_result) {
 		}
 		throw InvalidConfigurationException("Could not parse api_result");
 	}
-	return doc;
+	return doc_p;
 }
 
 string ICUtils::JsonToString(std::unique_ptr<yyjson_mut_doc, YyjsonDocDeleter> doc) {
