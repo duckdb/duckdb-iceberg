@@ -5,9 +5,8 @@
 namespace duckdb {
 
 yyjson_val *ICUtils::GetErrorMessage(const string &api_result, std::unique_ptr<yyjson_doc, YyjsonDocDeleter> &out_doc) {
-	auto *doc = yyjson_read(api_result.c_str(), api_result.size(), 0);
-	out_doc = std::unique_ptr<yyjson_doc, YyjsonDocDeleter>(doc);
-	auto *root = yyjson_doc_get_root(doc);
+	out_doc = std::unique_ptr<yyjson_doc, YyjsonDocDeleter>(yyjson_read(api_result.c_str(), api_result.size(), 0));
+	auto *root = yyjson_doc_get_root(out_doc.get());
 	auto *error = yyjson_obj_get(root, "error");
 
 	if (error == nullptr) {
@@ -23,9 +22,8 @@ yyjson_val *ICUtils::GetErrorMessage(const string &api_result, std::unique_ptr<y
 }
 
 std::unique_ptr<yyjson_doc, YyjsonDocDeleter> ICUtils::APIResultToDoc(const string &api_result) {
-	auto *doc = yyjson_read(api_result.c_str(), api_result.size(), 0);
-	std::unique_ptr<yyjson_doc, YyjsonDocDeleter> doc_p(doc);
-	auto *root = yyjson_doc_get_root(doc);
+	std::unique_ptr<yyjson_doc, YyjsonDocDeleter> doc_p(yyjson_read(api_result.c_str(), api_result.size(), 0));
+	auto *root = yyjson_doc_get_root(doc_p.get());
 	auto *error = yyjson_obj_get(root, "error");
 	if (error != NULL) {
 		try {
