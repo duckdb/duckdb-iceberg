@@ -45,7 +45,8 @@
         "test/sql/local/irc_any_catalog/insert/test_create_geometry_type.test",
         "test/sql/local/irc_any_catalog/other_engines/test_create_partitioned_tables.test",
         "test/sql/local/irc_any_catalog/update/update_with_default.test",
-        "test/sql/local/irc_any_catalog/alter/alter_type_v3.test"
+        "test/sql/local/irc_any_catalog/alter/alter_type_v3.test",
+        "test/sql/local/irc_any_catalog/alter/alter_default.test"
       ]
     },
     {
