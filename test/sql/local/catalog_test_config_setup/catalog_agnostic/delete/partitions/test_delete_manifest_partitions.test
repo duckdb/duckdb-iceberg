@@ -1,0 +1,86 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/delete/partitions/test_delete_manifest_partitions.test
+# description: Test that a delete manifest entry has partition information
+# group: [partitions]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+CALL enable_logging('HTTP');
+
+statement ok
+set logging_level='debug'
+
+# ---- Identity (VARCHAR) transform with NULLs ----
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.test_delete_manifest_partitions;
+
+statement ok
+CREATE TABLE my_datalake.default.test_delete_manifest_partitions (id INT, category VARCHAR) PARTITIONED BY (category);
+
+statement ok
+INSERT INTO my_datalake.default.test_delete_manifest_partitions VALUES
+    (1, 'A'),
+    (2, 'B'),
+    (3, 'C'),
+    (4, 'D'),
+    (5, 'E'),
+    (6, NULL);
+
+query II
+SELECT id, category FROM my_datalake.default.test_delete_manifest_partitions ORDER BY id;
+----
+1	A
+2	B
+3	C
+4	D
+5	E
+6	NULL
+
+query I
+SELECT COUNT(*) FROM my_datalake.default.test_delete_manifest_partitions WHERE category IN ('A', 'D') or category is null;
+----
+3
+
+statement ok
+DELETE FROM my_datalake.default.test_delete_manifest_partitions WHERE category IN ('A', 'D') or category is NULL;
+
+query II
+SELECT id, category FROM my_datalake.default.test_delete_manifest_partitions ORDER BY id;
+----
+2	B
+3	C
+5	E
+
+statement ok
+set variable man_list_path = (select manifest_list from iceberg_snapshots(my_datalake.default.test_delete_manifest_partitions) order by timestamp_ms desc limit 1);
+
+statement ok
+set variable manifest_path = (select manifest_path from read_avro(getvariable('man_list_path')) order by sequence_number desc limit 1);
+
+statement ok
+select * from read_avro(getvariable('manifest_path'));
+
+# manifest path should have 2 entries since entries in 2 partitions were deleted
+query I
+select count(*) from read_avro(getvariable('manifest_path'));
+----
+3
+
+query I
+select partition.category_identity from (select unnest(data_file) from read_avro(getvariable('manifest_path'))) order by all;
+----
+A
+D
+NULL

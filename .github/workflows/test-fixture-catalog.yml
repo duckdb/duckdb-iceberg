@@ -67,23 +67,22 @@ jobs:
 
       - name: Run Generic IRC tests
         env:
-          ICEBERG_SERVER_AVAILABLE: 1
-          SECRETS_CREATED_AND_CATALOG_ATTACHED: 1
+          CATALOG_TEST_CONFIG_SETUP: 1
           FIXTURE_SERVER_AVAILABLE: 1
         run: |
-          ./build/release/test/unittest --order lex "$PWD/test/sql/local/irc_any_catalog/*" --list-test-names-only || true
-          ./build/release/test/unittest --order lex "$PWD/test/sql/local/irc_any_catalog/*" --test-config test/configs/fixture.json
+          ./build/release/test/unittest --order lex "$PWD/test/sql/local/catalog_test_config_setup/*" --list-test-names-only || true
+          ./build/release/test/unittest --order lex "$PWD/test/sql/local/catalog_test_config_setup/*" --test-config test/configs/fixture.json
 
       - name: Run other tests
         env:
-          ICEBERG_SERVER_AVAILABLE: 1
+          FIXTURE_SERVER_AVAILABLE: 1
         run: |
           ./build/release/test/unittest --order lex "$PWD/test/*" --list-test-names-only || true
           ./build/release/test/unittest --order lex "$PWD/test/*"
 
       - name: Test reads with PyIceberg
         env:
-          ICEBERG_SERVER_AVAILABLE: 1
+          FIXTURE_SERVER_AVAILABLE: 1
         run: |
           # test with spark v4
           source .venv-spark4/bin/activate

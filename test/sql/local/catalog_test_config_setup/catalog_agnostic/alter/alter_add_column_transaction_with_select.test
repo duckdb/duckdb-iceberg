@@ -1,0 +1,55 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/alter/alter_add_column_transaction_with_select.test
+# description: Reading an altered table inside an explicit BEGIN/COMMIT transaction (after ALTER already committed)
+# group: [alter]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+CALL enable_logging(level='warning');
+
+statement ok
+SET warnings_as_errors = True;
+
+statement ok
+CREATE SCHEMA IF NOT EXISTS my_datalake.default;
+
+statement ok
+drop table if exists my_datalake.default.alter_add_column_explicit_txn;
+
+statement ok
+CREATE TABLE my_datalake.default.alter_add_column_explicit_txn WITH ('format-version' = 2) AS (select range a FROM range(10));
+
+# ALTER commits in its own autocommit transaction
+statement ok
+ALTER TABLE my_datalake.default.alter_add_column_explicit_txn ADD COLUMN b int;
+
+statement ok
+BEGIN;
+
+query II
+FROM my_datalake.default.alter_add_column_explicit_txn;
+----
+0	NULL
+1	NULL
+2	NULL
+3	NULL
+4	NULL
+5	NULL
+6	NULL
+7	NULL
+8	NULL
+9	NULL
+
+statement ok
+COMMIT;

@@ -1,9 +1,7 @@
 # name: test/sql/iceberg_to_ducklake.test_slow
 # group: [sql]
 
-require-env ICEBERG_SERVER_AVAILABLE
-
-require-env SECRETS_CREATED_AND_CATALOG_ATTACHED
+require-env CATALOG_TEST_CONFIG_SETUP
 
 require avro
 
