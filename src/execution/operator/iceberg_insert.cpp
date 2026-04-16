@@ -542,8 +542,8 @@ static unique_ptr<Expression> GetBucketExpression(ClientContext &context, Iceber
 	auto col_type = GetSourceColumnType(copy_input, field.source_id);
 
 	vector<unique_ptr<Expression>> children;
-	children.push_back(make_uniq<BoundConstantExpression>(
-	    Value::INTEGER(static_cast<int32_t>(field.transform.GetBucketModulo()))));
+	children.push_back(
+	    make_uniq<BoundConstantExpression>(Value::INTEGER(static_cast<int32_t>(field.transform.GetBucketModulo()))));
 	children.push_back(CreateColumnReference(copy_input, col_type, col_idx));
 
 	ErrorData error;
@@ -562,8 +562,8 @@ static unique_ptr<Expression> GetTruncateExpression(ClientContext &context, Iceb
 	auto col_type = GetSourceColumnType(copy_input, field.source_id);
 
 	vector<unique_ptr<Expression>> children;
-	children.push_back(make_uniq<BoundConstantExpression>(
-	    Value::INTEGER(static_cast<int32_t>(field.transform.GetTruncateWidth()))));
+	children.push_back(
+	    make_uniq<BoundConstantExpression>(Value::INTEGER(static_cast<int32_t>(field.transform.GetTruncateWidth()))));
 	children.push_back(CreateColumnReference(copy_input, col_type, col_idx));
 
 	ErrorData error;

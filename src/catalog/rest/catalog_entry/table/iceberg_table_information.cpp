@@ -332,8 +332,7 @@ int64_t IcebergTableInformation::GetExistingSpecId(IcebergPartitionSpec &spec) {
 				fields_match = false;
 				break;
 			}
-			auto existing_partition_col_transform =
-			    existing_spec.second.fields[field_index].transform.RawType();
+			auto existing_partition_col_transform = existing_spec.second.fields[field_index].transform.RawType();
 			auto new_spec_col_transform = spec.fields[field_index].transform.RawType();
 			if (existing_partition_col_transform != new_spec_col_transform) {
 				fields_match = false;
