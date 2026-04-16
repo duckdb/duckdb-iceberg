@@ -98,7 +98,7 @@ true
 statement error con1
 commit
 ----
-<REGEX>:.*ransactionContext Error: Failed to commit:.*
+<REGEX>:.*TransactionContext Error: Failed to commit:.*
 
 # Then do the same but commit the CREATE first
 
@@ -137,4 +137,4 @@ commit
 statement error con2
 commit
 ----
-<REGEX>:.*ransactionContext Error: Failed to commit:.*
+<REGEX>:.*TransactionContext Error: Failed to commit:.*

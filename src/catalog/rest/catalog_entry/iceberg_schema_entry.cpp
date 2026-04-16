@@ -422,6 +422,9 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 			if (!state || state->status == IcebergTableStatus::ALIVE) {
 				throw CatalogException("Table with name \"%s\" already exists!", new_name);
 			}
+			//! The table is dropped or renamed by this transaction, so it's not a conflict anymore
+			D_ASSERT(state &&
+			         (state->status == IcebergTableStatus::DROPPED || state->status == IcebergTableStatus::RENAMED));
 		}
 		irc_transaction.RenameTable(updated_table, new_name);
 		break;
