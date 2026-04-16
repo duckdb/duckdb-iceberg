@@ -75,14 +75,15 @@
     },
     {
       "reason": "On ALTER TABLE, Nessie updates snapshot's schema_id as well alongside table_metadata.current_schema_id, so we don't log a warning.",
-      "paths": ["test/sql/local/irc_any_catalog/alter/alter_add_column_warn_schema_mismatch.test"]
+      "paths": ["test/sql/local/irc_any_catalog/alter/add_column/alter_add_column_warn_schema_mismatch.test"]
     },
     {
       "reason": "Nessie ignores DEFAULT values for ADD COLUMN and just populates with NULL.",
       "paths": [
-        "test/sql/local/irc_any_catalog/alter/alter_add_column_twice_in_same_transaction_with_default.test",
+        "test/sql/local/irc_any_catalog/alter/add_column/alter_add_column_twice_in_same_transaction_with_default.test",
         "test/sql/local/irc_any_catalog/alter/set_not_null/alter_set_not_null_added_column_with_default.test",
-        "test/sql/local/irc_any_catalog/alter/set_not_null/alter_set_not_null_updated_column.test"
+        "test/sql/local/irc_any_catalog/alter/set_not_null/alter_set_not_null_updated_column.test",
+        "test/sql/local/irc_any_catalog/alter/set_not_null/alter_set_not_null_with_delete_one_by_one.test"
       ]
     }
   ]
