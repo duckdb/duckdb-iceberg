@@ -429,6 +429,36 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 		irc_transaction.RenameTable(updated_table, new_name);
 		break;
 	}
+	case AlterTableType::RENAME_COLUMN: {
+		auto &rename_info = alter_table_info.Cast<RenameColumnInfo>();
+		auto &column_name = rename_info.old_name;
+		auto &new_name = rename_info.new_name;
+
+		auto new_schema = current_schema.Copy();
+		new_schema->schema_id++;
+
+		auto column_p = new_schema->GetMutableFromPath({column_name}, nullptr);
+		if (!column_p) {
+			throw CatalogException("Column with name '%s' does not exist on the table '%s', RENAME COLUMN failed",
+			                       column_name, table_entry.name);
+		}
+		auto collision_column_p = new_schema->GetMutableFromPath({new_name}, nullptr);
+		if (collision_column_p) {
+			throw CatalogException("Column with name '%s' already exists on the table '%s', RENAME COLUMN failed",
+			                       new_name, table_entry.name);
+		}
+		auto &column = *column_p;
+		column.name = new_name;
+
+		auto new_schema_id = new_schema->schema_id;
+		// Update the Table Metadata to have our new schema
+		updated_table.CreateSchemaVersion(*new_schema);
+		transaction_data.TableAddSchema(new_schema_id);
+
+		updated_table.table_metadata.AddSchema(std::move(new_schema));
+		updated_table.table_metadata.SetCurrentSchemaId(new_schema_id);
+		return;
+	}
 	case AlterTableType::SET_DEFAULT: {
 		auto &set_default_info = alter_table_info.Cast<SetDefaultInfo>();
 		auto &column_name = set_default_info.column_name;
