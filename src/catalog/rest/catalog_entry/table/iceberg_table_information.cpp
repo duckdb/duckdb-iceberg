@@ -218,42 +218,29 @@ IRCAPITableCredentials IcebergTableInformation::GetVendedCredentials(ClientConte
 	config_options.insert(user_defaults.begin(), user_defaults.end());
 	auto schema_component = IRCPathComponent::NamespaceComponent(schema.namespace_items);
 	auto key = schema_component.encoded + "." + name;
-	{
-		// get cache lock when accessing load table result cache
-		lock_guard<std::mutex> cache_lock(catalog.GetMetadataCacheLock());
-		auto cached_table_result = catalog.TryGetValidCachedLoadTableResult(key, cache_lock, false);
-		D_ASSERT(cached_table_result);
-		auto &load_table_result = *cached_table_result->load_table_result;
-		if (load_table_result.has_config) {
-			auto &config = load_table_result.config;
-			ParseConfigOptions(config, config_options, context, storage_type);
-		}
 
-		if (load_table_result.has_storage_credentials) {
-			auto &storage_credentials = load_table_result.storage_credentials;
+	ParseConfigOptions(config, config_options, context, storage_type);
 
-			//! If there is only one credential listed, we don't really care about the prefix,
-			//! we can use the table_location instead.
-			const bool ignore_credential_prefix = storage_credentials.size() == 1;
-			for (idx_t index = 0; index < storage_credentials.size(); index++) {
-				auto &credential = storage_credentials[index];
-				CreateSecretInput create_secret_input;
-				create_secret_input.on_conflict = OnCreateConflict::REPLACE_ON_CONFLICT;
-				create_secret_input.persist_type = SecretPersistType::TEMPORARY;
+	//! If there is only one credential listed, we don't really care about the prefix,
+	//! we can use the table_location instead.
+	const bool ignore_credential_prefix = storage_credentials.size() == 1;
+	for (idx_t index = 0; index < storage_credentials.size(); index++) {
+		auto &credential = storage_credentials[index];
+		CreateSecretInput create_secret_input;
+		create_secret_input.on_conflict = OnCreateConflict::REPLACE_ON_CONFLICT;
+		create_secret_input.persist_type = SecretPersistType::TEMPORARY;
 
-				create_secret_input.scope.push_back(ignore_credential_prefix ? table_location : credential.prefix);
-				create_secret_input.name = StringUtil::Format("%s_%d_%s", secret_base_name, index, credential.prefix);
+		create_secret_input.scope.push_back(ignore_credential_prefix ? table_location : credential.prefix);
+		create_secret_input.name = StringUtil::Format("%s_%d_%s", secret_base_name, index, credential.prefix);
 
-				create_secret_input.type = storage_type;
-				create_secret_input.provider = "config";
-				create_secret_input.storage_type = "memory";
-				create_secret_input.options = config_options;
+		create_secret_input.type = storage_type;
+		create_secret_input.provider = "config";
+		create_secret_input.storage_type = "memory";
+		create_secret_input.options = config_options;
 
-				ParseConfigOptions(credential.config, create_secret_input.options, context, storage_type);
-				//! TODO: apply the 'overrides' retrieved from the /v1/config endpoint
-				result.storage_credentials.push_back(create_secret_input);
-			}
-		}
+		ParseConfigOptions(credential.config, create_secret_input.options, context, storage_type);
+		//! TODO: apply the 'overrides' retrieved from the /v1/config endpoint
+		result.storage_credentials.push_back(create_secret_input);
 	}
 
 	if (result.storage_credentials.empty() && !config_options.empty()) {
@@ -545,12 +532,11 @@ IcebergTableInformation IcebergTableInformation::Copy() const {
 	auto ret = IcebergTableInformation(catalog, schema, name);
 	auto table_key = ret.GetTableKey();
 	{
-		lock_guard<std::mutex> cache_lock(catalog.GetMetadataCacheLock());
-		auto cached_result = catalog.TryGetValidCachedLoadTableResult(table_key, cache_lock, false);
+		lock_guard<std::mutex> cache_lock(catalog.table_request_cache.Lock());
+		auto cached_result = catalog.table_request_cache.Get(table_key, cache_lock, false);
 		D_ASSERT(cached_result);
 		auto &cached_table_result = *cached_result->load_table_result;
-		ret.table_metadata = IcebergTableMetadata::FromTableMetadata(cached_table_result.metadata);
-		ret.table_metadata.latest_metadata_json = cached_table_result.metadata_location;
+		ret.InitializeFromLoadTableResult(cached_table_result, false);
 	}
 	return ret;
 }
@@ -594,6 +580,25 @@ IcebergTransactionData &IcebergTableInformation::GetOrCreateTransactionData(Iceb
 		transaction_data = make_uniq<IcebergTransactionData>(*context, *this);
 	}
 	return *transaction_data;
+}
+
+void IcebergTableInformation::InitializeFromLoadTableResult(const rest_api_objects::LoadTableResult &load_table_result,
+                                                            bool initialize_schemas) {
+	table_metadata = IcebergTableMetadata::FromTableMetadata(load_table_result.metadata);
+	config = load_table_result.config;
+	storage_credentials.clear();
+	for (auto &credential : load_table_result.storage_credentials) {
+		storage_credentials.push_back(credential);
+	}
+	latest_metadata_json = load_table_result.metadata_location;
+
+	if (initialize_schemas) {
+		auto &schemas = table_metadata.GetSchemas();
+		D_ASSERT(!schemas.empty());
+		for (auto &table_schema : schemas) {
+			CreateSchemaVersion(*table_schema.second);
+		}
+	}
 }
 
 } // namespace duckdb

@@ -38,16 +38,11 @@ bool IcebergTableSet::FillEntry(ClientContext &context, IcebergTableInformation 
 
 	// Only check cache if MAX_TABLE_STALENESS option is set
 	if (ic_catalog.attach_options.max_table_staleness_micros.IsValid()) {
-		lock_guard<std::mutex> cache_lock(ic_catalog.GetMetadataCacheLock());
-		auto cached_result = ic_catalog.TryGetValidCachedLoadTableResult(table_key, cache_lock);
+		lock_guard<mutex> cache_lock(ic_catalog.table_request_cache.Lock());
+		auto cached_result = ic_catalog.table_request_cache.Get(table_key, cache_lock);
 		if (cached_result) {
 			// Use the cached result instead of making a new request
-			table.table_metadata = IcebergTableMetadata::FromLoadTableResult(*cached_result->load_table_result);
-			auto &schemas = table.table_metadata.GetSchemas();
-			D_ASSERT(!schemas.empty());
-			for (auto &table_schema : schemas) {
-				table.CreateSchemaVersion(*table_schema.second);
-			}
+			table.InitializeFromLoadTableResult(*cached_result->load_table_result);
 			return true;
 		}
 	}
@@ -71,20 +66,13 @@ bool IcebergTableSet::FillEntry(ClientContext &context, IcebergTableInformation 
 		    StringUtil::Format("GetTableInformation endpoint returned response code %s with message \"%s\"",
 		                       EnumUtil::ToString(get_table_result.status_), get_table_result.error_._error.message));
 	}
-	ic_catalog.StoreLoadTableResult(table_key, std::move(get_table_result.result_));
+	ic_catalog.table_request_cache.SetOrOverwrite(context, table_key, std::move(get_table_result.result_));
 	{
-		lock_guard<std::mutex> cache_lock(ic_catalog.GetMetadataCacheLock());
-		auto cached_table_result = ic_catalog.TryGetValidCachedLoadTableResult(table_key, cache_lock, false);
+		lock_guard<std::mutex> cache_lock(ic_catalog.table_request_cache.Lock());
+		auto cached_table_result = ic_catalog.table_request_cache.Get(table_key, cache_lock, false);
 		D_ASSERT(cached_table_result);
 		auto &load_table_result = *cached_table_result->load_table_result;
-		table.table_metadata = IcebergTableMetadata::FromLoadTableResult(load_table_result);
-	}
-	auto &schemas = table.table_metadata.GetSchemas();
-
-	//! It should be impossible to have a metadata file without any schema
-	D_ASSERT(!schemas.empty());
-	for (auto &table_schema : schemas) {
-		table.CreateSchemaVersion(*table_schema.second);
+		table.InitializeFromLoadTableResult(load_table_result);
 	}
 	return true;
 }
@@ -245,13 +233,13 @@ IcebergTableInformation &IcebergTableSet::CreateNewEntry(ClientContext &context,
 	auto load_table_result =
 	    make_uniq<const rest_api_objects::LoadTableResult>(IRCAPI::CommitNewTable(context, catalog, *table_ptr));
 
-	catalog.StoreLoadTableResult(key, std::move(load_table_result));
+	catalog.table_request_cache.SetOrOverwrite(context, key, std::move(load_table_result));
 	{
-		lock_guard<std::mutex> cache_lock(catalog.GetMetadataCacheLock());
-		auto cached_table_result = catalog.TryGetValidCachedLoadTableResult(key, cache_lock, false);
+		lock_guard<mutex> cache_lock(catalog.table_request_cache.Lock());
+		auto cached_table_result = catalog.table_request_cache.Get(key, cache_lock, false);
 		D_ASSERT(cached_table_result);
 		auto &load_table_result = cached_table_result->load_table_result;
-		table_metadata = IcebergTableMetadata::FromTableMetadata(load_table_result->metadata);
+		table_info.InitializeFromLoadTableResult(*load_table_result, false);
 	}
 
 	// if we stage created the table, we add an assert create
