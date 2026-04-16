@@ -37,6 +37,7 @@ set(EXTENSION_SOURCES
 	src/catalog/rest/transaction/iceberg_transaction.cpp
 	src/catalog/rest/transaction/iceberg_transaction_update.cpp
 	src/common/iceberg_utils.cpp
+	src/common/iceberg_default.cpp
 	src/core/deletes/iceberg_deletion_vector.cpp
 	src/core/deletes/iceberg_equality_delete.cpp
 	src/core/deletes/iceberg_positional_delete.cpp
@@ -68,6 +69,7 @@ set(EXTENSION_SOURCES
 	src/function/ducklake/ducklake_data_file.cpp
 	src/function/ducklake/ducklake_delete_file.cpp
 	src/function/iceberg_functions.cpp
+	src/function/iceberg_scalar_functions.cpp
 	src/function/metadata/iceberg_column_stats.cpp
 	src/function/metadata/iceberg_metadata.cpp
 	src/function/metadata/iceberg_partition_stats.cpp

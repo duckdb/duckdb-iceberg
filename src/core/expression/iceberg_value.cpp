@@ -459,6 +459,10 @@ SerializeResult IcebergValue::SerializeValue(Value input_value, const LogicalTyp
 		return ret;
 	}
 	case LogicalTypeId::BLOB: {
+		// do not double serialize blob values.
+		if (input_value.type() != LogicalType::VARCHAR) {
+			return SerializeResult(column_type, input_value);
+		}
 		// get const data ptr for the string value
 		auto val = input_value.GetValue<string>();
 		auto bytes = HexStringToBytes(val);

@@ -1,0 +1,227 @@
+# name: test/sql/local/irc_any_catalog/update/partitions/update_bucket_tables.test
+# description: Test update on iceberg tables partitioned by bucket transform (INT and VARCHAR)
+# group: [partitions]
+
+require-env ICEBERG_SERVER_AVAILABLE
+
+require-env SECRETS_CREATED_AND_CATALOG_ATTACHED
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+CALL enable_logging('HTTP');
+
+statement ok
+set logging_level='debug'
+
+# ---- BUCKET / INT — update non-partition column ----
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.test_update_bucket_int;
+
+statement ok
+CREATE TABLE my_datalake.default.test_update_bucket_int (id INT, val VARCHAR)
+PARTITIONED BY (bucket(4, id));
+
+statement ok
+INSERT INTO my_datalake.default.test_update_bucket_int VALUES
+    (1, 'a'), (1, 'b'), (2, 'c'), (3, 'd'), (4, 'e');
+
+query II
+SELECT * FROM my_datalake.default.test_update_bucket_int ORDER BY id, val;
+----
+1	a
+1	b
+2	c
+3	d
+4	e
+
+# Update non-partition column for all rows in one bucket value
+query I
+UPDATE my_datalake.default.test_update_bucket_int SET val = 'updated' WHERE id = 1;
+----
+2
+
+query II
+SELECT * FROM my_datalake.default.test_update_bucket_int ORDER BY id, val;
+----
+1	updated
+1	updated
+2	c
+3	d
+4	e
+
+# Update non-partition column by non-partition predicate
+query I
+UPDATE my_datalake.default.test_update_bucket_int SET val = 'changed' WHERE val = 'c';
+----
+1
+
+query II
+SELECT * FROM my_datalake.default.test_update_bucket_int ORDER BY id, val;
+----
+1	updated
+1	updated
+2	changed
+3	d
+4	e
+
+statement ok
+DROP TABLE my_datalake.default.test_update_bucket_int;
+
+# ---- BUCKET / INT — update partition column (moves rows to new bucket) ----
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.test_update_bucket_int_partcol;
+
+statement ok
+CREATE TABLE my_datalake.default.test_update_bucket_int_partcol (id INT, val VARCHAR)
+PARTITIONED BY (bucket(4, id));
+
+statement ok
+INSERT INTO my_datalake.default.test_update_bucket_int_partcol VALUES
+    (1, 'a'), (1, 'b'), (2, 'c'), (3, 'd');
+
+# Move id=1 rows to id=99, which hashes to a different bucket
+query I
+UPDATE my_datalake.default.test_update_bucket_int_partcol SET id = 99 WHERE id = 1;
+----
+2
+
+# Old bucket value returns no rows
+query II
+SELECT * FROM my_datalake.default.test_update_bucket_int_partcol WHERE id = 1 ORDER BY val;
+----
+
+# New bucket value contains the updated rows
+query II
+SELECT * FROM my_datalake.default.test_update_bucket_int_partcol WHERE id = 99 ORDER BY val;
+----
+99	a
+99	b
+
+# Full scan reflects correct state
+query II
+SELECT * FROM my_datalake.default.test_update_bucket_int_partcol ORDER BY id, val;
+----
+2	c
+3	d
+99	a
+99	b
+
+statement ok
+DROP TABLE my_datalake.default.test_update_bucket_int_partcol;
+
+# ---- BUCKET / VARCHAR — update non-partition column ----
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.test_update_bucket_varchar;
+
+statement ok
+CREATE TABLE my_datalake.default.test_update_bucket_varchar (id INT, category VARCHAR, val VARCHAR)
+PARTITIONED BY (bucket(4, category));
+
+statement ok
+INSERT INTO my_datalake.default.test_update_bucket_varchar VALUES
+    (1, 'apple', 'a'),
+    (2, 'apple', 'b'),
+    (3, 'banana', 'c'),
+    (4, 'cherry', 'd');
+
+query III
+SELECT * FROM my_datalake.default.test_update_bucket_varchar ORDER BY id;
+----
+1	apple	a
+2	apple	b
+3	banana	c
+4	cherry	d
+
+# Update val for both rows in the 'apple' bucket
+query I
+UPDATE my_datalake.default.test_update_bucket_varchar SET val = 'updated' WHERE category = 'apple';
+----
+2
+
+query III
+SELECT * FROM my_datalake.default.test_update_bucket_varchar ORDER BY id;
+----
+1	apple	updated
+2	apple	updated
+3	banana	c
+4	cherry	d
+
+# Update by non-partition predicate
+query I
+UPDATE my_datalake.default.test_update_bucket_varchar SET val = 'changed' WHERE id = 3;
+----
+1
+
+query III
+SELECT * FROM my_datalake.default.test_update_bucket_varchar ORDER BY id;
+----
+1	apple	updated
+2	apple	updated
+3	banana	changed
+4	cherry	d
+
+statement ok
+DROP TABLE my_datalake.default.test_update_bucket_varchar;
+
+# ---- BUCKET / VARCHAR — update partition column (moves rows to new bucket) ----
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.test_update_bucket_varchar_partcol;
+
+statement ok
+CREATE TABLE my_datalake.default.test_update_bucket_varchar_partcol (id INT, category VARCHAR, val VARCHAR)
+PARTITIONED BY (bucket(4, category));
+
+statement ok
+INSERT INTO my_datalake.default.test_update_bucket_varchar_partcol VALUES
+    (1, 'apple', 'a'),
+    (2, 'apple', 'b'),
+    (3, 'banana', 'c');
+
+# Move 'apple' rows to 'mango' — different bucket
+query I
+UPDATE my_datalake.default.test_update_bucket_varchar_partcol SET category = 'mango' WHERE category = 'apple';
+----
+2
+
+# Old bucket value returns no rows
+query III
+SELECT * FROM my_datalake.default.test_update_bucket_varchar_partcol WHERE category = 'apple' ORDER BY id;
+----
+
+# New bucket value contains the updated rows
+query III
+SELECT * FROM my_datalake.default.test_update_bucket_varchar_partcol WHERE category = 'mango' ORDER BY id;
+----
+1	mango	a
+2	mango	b
+
+# Untouched partition is unchanged
+query III
+SELECT * FROM my_datalake.default.test_update_bucket_varchar_partcol WHERE category = 'banana';
+----
+3	banana	c
+
+# Full scan
+query III
+SELECT * FROM my_datalake.default.test_update_bucket_varchar_partcol ORDER BY id;
+----
+1	mango	a
+2	mango	b
+3	banana	c
+
+statement ok
+DROP TABLE my_datalake.default.test_update_bucket_varchar_partcol;

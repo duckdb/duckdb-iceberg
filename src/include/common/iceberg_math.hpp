@@ -1,6 +1,7 @@
 #pragma once
 
 #include "duckdb/common/assert.hpp"
+#include "duckdb/common/types/interval.hpp"
 
 #include <cstdint>
 
@@ -20,8 +21,7 @@ inline int64_t IcebergFloorDiv(int64_t a, int64_t b) {
 
 //! Iceberg DateTimeUtil.nanosToMicros uses Math.floorDiv(nanos, 1000).
 inline int64_t IcebergNanosToMicrosFloor(int64_t nanos) {
-	constexpr int64_t NANOS_PER_MICRO = 1000;
-	return IcebergFloorDiv(nanos, NANOS_PER_MICRO);
+	return IcebergFloorDiv(nanos, Interval::NANOS_PER_MICRO);
 }
 
 } // namespace duckdb

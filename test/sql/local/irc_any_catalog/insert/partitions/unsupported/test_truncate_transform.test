@@ -1,5 +1,5 @@
 # name: test/sql/local/irc_any_catalog/insert/partitions/unsupported/test_truncate_transform.test
-# description: Test that TRUNCATE partition transform is rejected for INSERT
+# description: Test that TRUNCATE partition transform is supported for INSERT
 # group: [unsupported]
 
 require-env ICEBERG_SERVER_AVAILABLE
@@ -26,12 +26,13 @@ drop table if exists my_datalake.default.test_truncate_transform;
 statement ok
 CREATE TABLE my_datalake.default.test_truncate_transform (id int, val varchar);
 
-# Set truncate partition - this should work at the ALTER level
 statement ok
-ALTER TABLE my_datalake.default.test_truncate_transform SET PARTITIONED BY (truncate(val, 4));
+ALTER TABLE my_datalake.default.test_truncate_transform SET PARTITIONED BY (truncate(4, val));
 
-# But INSERT should fail because TRUNCATE transform is not yet supported for writes
-statement error
+statement ok
 insert into my_datalake.default.test_truncate_transform select range, 'value_' || range::VARCHAR from range(10);
+
+query I
+select count(*) from my_datalake.default.test_truncate_transform;
 ----
-<REGEX>:.*TRUNCATE.*not.*supported.*
+10
