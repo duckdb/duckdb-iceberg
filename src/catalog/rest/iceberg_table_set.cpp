@@ -239,7 +239,7 @@ IcebergTableInformation &IcebergTableSet::CreateNewEntry(ClientContext &context,
 		auto cached_table_result = catalog.table_request_cache.Get(key, cache_lock, false);
 		D_ASSERT(cached_table_result);
 		auto &load_table_result = cached_table_result->load_table_result;
-		table_metadata = IcebergTableMetadata::FromTableMetadata(load_table_result->metadata);
+		table_info.InitializeFromLoadTableResult(*load_table_result, false);
 	}
 
 	// if we stage created the table, we add an assert create
