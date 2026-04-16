@@ -1,0 +1,170 @@
+# name: test/sql/local/irc_any_catalog/alter/alter_rename_column.test
+# group: [alter]
+
+require-env ICEBERG_SERVER_AVAILABLE
+
+require-env SECRETS_CREATED_AND_CATALOG_ATTACHED
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+require ducklake
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+set enable_logging=true
+
+statement ok
+set logging_level='debug'
+
+statement ok
+drop table if exists my_datalake.default.tbl;
+
+statement ok
+create table my_datalake.default.tbl(
+	a VARCHAR,
+	b BOOLEAN
+);
+
+statement ok
+insert into my_datalake.default.tbl VALUES ('hello world', true);
+
+# 'b' already exists
+statement error
+ALTER TABLE my_datalake.default.tbl RENAME a TO b;
+----
+Catalog Error: Column with name 'b' already exists on the table 'tbl', RENAME COLUMN failed
+
+# Rename to same name (second alter before commit)
+
+statement ok con1
+begin transaction
+
+statement ok con2
+begin transaction
+
+statement ok con1
+ALTER TABLE my_datalake.default.tbl RENAME a TO c;
+
+statement ok con1
+insert into my_datalake.default.tbl VALUES ('second insert', false);
+
+query II con1
+select * from my_datalake.default.tbl order by all
+----
+hello world	true
+second insert	false
+
+query II con1
+select alias(COLUMNS(*)) from my_datalake.default.tbl limit 1
+----
+c	b
+
+statement ok con2
+ALTER TABLE my_datalake.default.tbl RENAME b TO c;
+
+statement ok con2
+insert into my_datalake.default.tbl VALUES ('third insert', NULL);
+
+query II con2
+select * from my_datalake.default.tbl order by all
+----
+hello world	true
+third insert	NULL
+
+query II con2
+select alias(COLUMNS(*)) from my_datalake.default.tbl limit 1
+----
+a	c
+
+query II con1
+select alias(COLUMNS(*)) from my_datalake.default.tbl limit 1
+----
+c	b
+
+statement ok con1
+commit
+
+query II con2
+select alias(COLUMNS(*)) from my_datalake.default.tbl limit 1
+----
+a	c
+
+statement error con2
+commit
+----
+<REGEX>:.*TransactionContext Error: Failed to commit:.*
+
+# Rename to same name (second alter after commit)
+
+statement ok
+drop table if exists my_datalake.default.tbl;
+
+statement ok
+create table my_datalake.default.tbl(
+	a VARCHAR,
+	b BOOLEAN
+);
+
+statement ok
+insert into my_datalake.default.tbl VALUES ('hello world', true);
+
+statement ok con1
+begin transaction
+
+statement ok con2
+begin transaction
+
+statement ok con1
+ALTER TABLE my_datalake.default.tbl RENAME a TO c;
+
+statement ok con1
+commit
+
+query II con2
+select alias(COLUMNS(*)) from my_datalake.default.tbl limit 1
+----
+a	b
+
+# FIXME: con2 should not see the rename made by con1 yet, but we need to look at metadata-log to fix this
+statement ok con2
+ALTER TABLE my_datalake.default.tbl RENAME b TO c;
+
+query II con2
+select alias(COLUMNS(*)) from my_datalake.default.tbl limit 1
+----
+a	c
+
+statement error con2
+commit
+----
+test
+
+# Rename to previously existing name
+
+statement ok
+drop table if exists my_datalake.default.tbl;
+
+statement ok
+create table my_datalake.default.tbl(
+	a VARCHAR,
+	b BOOLEAN
+);
+
+statement ok
+begin transaction
+
+# a -> d
+statement ok
+ALTER TABLE my_datalake.default.tbl RENAME a TO d;
+
+# b -> a
+statement ok
+ALTER TABLE my_datalake.default.tbl RENAME b TO a;
