@@ -16,6 +16,7 @@
 #include "planning/metadata_io/manifest/iceberg_manifest_reader.hpp"
 #include "planning/metadata_io/manifest_list/iceberg_manifest_list_reader.hpp"
 #include "catalog/rest/api/catalog_utils.hpp"
+#include "re2/re2.h"
 
 namespace duckdb {
 
@@ -160,7 +161,8 @@ void ManifestPartitions::Create(const IcebergTableMetadata &metadata, const Iceb
 			auto serialized_type =
 			    extended_partition_info.transform.GetSerializedType(extended_partition_info.source_type);
 
-			// Cast the partition value (stored as VARCHAR) to the correct serialized type
+			// Cast the partition value (stored as VARCHAR) to the correct serialized type so we can compare typed
+			// values
 			auto typed_value = extended_partition_info.value.DefaultCastAs(serialized_type);
 
 			if (!initialized[i]) {
@@ -206,8 +208,16 @@ void ManifestPartitions::Create(const IcebergTableMetadata &metadata, const Iceb
 		}
 		D_ASSERT(have_extended_partition_info);
 		auto serialized_type = extended_partition_info.transform.GetSerializedType(extended_partition_info.source_type);
-		auto lower_result = IcebergValue::SerializeValue(min_values[i], serialized_type, SerializeBound::LOWER_BOUND);
-		auto upper_result = IcebergValue::SerializeValue(max_values[i], serialized_type, SerializeBound::UPPER_BOUND);
+		// min/max_values already in their partition result value types. We cast those to varchar to serialize them
+		// again unless they are blob, in which case we do not cast and serialize
+		SerializeResult lower_result = SerializeResult(min_values[i].type(), min_values[i]);
+		SerializeResult upper_result = SerializeResult(max_values[i].type(), max_values[i]);
+		if (min_values[i].type() != LogicalType::BLOB && max_values[i].type() != LogicalType::BLOB) {
+			lower_result = IcebergValue::SerializeValue(min_values[i].DefaultCastAs(LogicalType::VARCHAR),
+			                                            min_values[i].type(), SerializeBound::LOWER_BOUND);
+			upper_result = IcebergValue::SerializeValue(max_values[i].DefaultCastAs(LogicalType::VARCHAR),
+			                                            max_values[i].type(), SerializeBound::LOWER_BOUND);
+		}
 
 		if (lower_result.HasValue()) {
 			field_summary[i].lower_bound = lower_result.GetValue();

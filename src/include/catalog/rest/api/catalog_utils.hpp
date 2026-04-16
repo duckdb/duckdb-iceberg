@@ -22,8 +22,9 @@ struct YyjsonDocDeleter {
 
 class ICUtils {
 public:
-	static yyjson_val *get_error_message(const string &api_result);
-	static yyjson_doc *api_result_to_doc(const string &api_result);
+	static yyjson_val *GetErrorMessage(const string &api_result,
+	                                   std::unique_ptr<yyjson_doc, YyjsonDocDeleter> &out_doc);
+	static std::unique_ptr<yyjson_doc, YyjsonDocDeleter> APIResultToDoc(const string &api_result);
 	static string JsonToString(std::unique_ptr<yyjson_mut_doc, YyjsonDocDeleter> doc);
 };
 

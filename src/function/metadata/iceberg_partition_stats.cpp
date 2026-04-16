@@ -206,7 +206,7 @@ static void IcebergPartitionStatsFunction(ClientContext &context, TableFunctionI
 			//! partition_field_id
 			FlatVector::GetData<uint64_t>(output.data[col++])[out] = field.partition_field_id;
 			//! partition_field_name
-			AddString(output.data[col++], out, string_t(field.name));
+			AddString(output.data[col++], out, string_t(field.GetPartitionSpecFieldName()));
 			//! partition_source_columns
 			output.data[col++].SetValue(out, Value::LIST({column.name}));
 			//! partition_field_transform

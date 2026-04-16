@@ -58,7 +58,7 @@ Catalog Error: Attempted to drop column 'e' from table 'many_column_tbl', but no
 statement error
 ALTER TABLE my_datalake.default.many_column_tbl DROP COLUMN c;
 ----
-Catalog Error: Can't drop column 'c' as it is referenced by the current partition spec's field: 'c_identity' (field id: 1001)
+Catalog Error: Can't drop column 'c' as it is referenced by the current partition spec's field: 'identity_c_3' (field id: 1001)
 
 statement ok
 ALTER TABLE my_datalake.default.many_column_tbl SET PARTITIONED BY (a);
@@ -102,7 +102,7 @@ select c from my_datalake.default.many_column_tbl;
 statement error
 ALTER TABLE my_datalake.default.many_column_tbl DROP COLUMN c;
 ----
-Catalog Error: Can't drop column 'c' as it is referenced by the current partition spec's field: 'c_identity' (field id: 1001)
+Catalog Error: Can't drop column 'c' as it is referenced by the current partition spec's field: 'identity_c_3' (field id: 1001)
 
 statement ok
 ALTER TABLE my_datalake.default.many_column_tbl SET PARTITIONED BY (a);

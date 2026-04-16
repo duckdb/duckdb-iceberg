@@ -16,6 +16,8 @@
 #include "duckdb/common/types/date.hpp"
 #include "duckdb/common/types/string_type.hpp"
 #include "duckdb/common/types/timestamp.hpp"
+#include "duckdb/common/types/time.hpp"
+#include "duckdb/common/types/hugeint.hpp"
 
 namespace duckdb {
 
@@ -31,9 +33,21 @@ public:
 	static int32_t HashString(const string_t &value);
 	static int32_t HashDate(date_t date);
 	static int32_t HashDecimal(const Value &value);
+	//! Hash raw unscaled decimal values (for vector execution without boxing to Value)
+	static int32_t HashDecimalInt64(int64_t unscaled);
+	static int32_t HashDecimalHugeInt(hugeint_t unscaled);
+	static int32_t HashTime(dtime_t t);
+	static int32_t HashTimestampNs(timestamp_ns_t t);
+	static int32_t HashUUID(hugeint_t uuid);
 
 	//! Hash a DuckDB Value based on its type
 	static int32_t HashValue(const Value &value);
+
+	//! High-level Iceberg transform helpers (shared by ApplyTransform and scalar functions)
+	//! BucketValue: returns Value::INTEGER(bucket_id), or null Value for null/unsupported input
+	static Value BucketValue(const Value &v, int32_t num_buckets);
+	//! TruncateValue: returns the truncated Value preserving type; throws for unsupported types
+	static Value TruncateValue(const Value &v, idx_t width);
 
 private:
 	static constexpr uint32_t C1 = 0xcc9e2d51;
