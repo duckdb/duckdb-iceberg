@@ -1,0 +1,199 @@
+# name: test/sql/local/irc_any_catalog/insert/test_decimal_predicate_pushdown.test
+# description: Test predicate pushdown behaviour for DECIMAL columns in Iceberg scans
+# group: [insert]
+
+require-env ICEBERG_SERVER_AVAILABLE
+
+require-env SECRETS_CREATED_AND_CATALOG_ATTACHED
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+require core_functions
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+set enable_logging=true
+
+statement ok
+set logging_level='debug'
+
+
+# create a table with DECIMAL columns, insert data and test full scan
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.decimal_filter_test;
+
+statement ok
+CREATE TABLE my_datalake.default.decimal_filter_test (
+    id INTEGER,
+    val10_2 DECIMAL(10,2),
+    val18_4 DECIMAL(18,4),
+    val5_2  DECIMAL(5,2)
+);
+
+statement ok
+INSERT INTO my_datalake.default.decimal_filter_test VALUES
+    (1, 100.50, 1000.0000, 10.50),
+    (2, 200.75, 2000.5000, 20.75),
+    (3, 300.25, 3000.7500, 30.25),
+    (4, 400.00, 4000.1250, 40.00),
+    (5,  50.99,  500.0001,  5.99);
+
+query IIII
+SELECT id, val10_2, val18_4, val5_2 FROM my_datalake.default.decimal_filter_test ORDER BY id;
+----
+1	100.50	1000.0000	10.50
+2	200.75	2000.5000	20.75
+3	300.25	3000.7500	30.25
+4	400.00	4000.1250	40.00
+5	50.99	500.0001	5.99
+
+# test with where clause on decimal column
+
+query I
+SELECT id FROM my_datalake.default.decimal_filter_test WHERE val10_2 > 200 ORDER BY id;
+----
+2
+3
+4
+
+query I
+SELECT id FROM my_datalake.default.decimal_filter_test WHERE val18_4 > 2000 ORDER BY id;
+----
+2
+3
+4
+
+query I
+SELECT id FROM my_datalake.default.decimal_filter_test WHERE val10_2 > 200.00 ORDER BY id;
+----
+2
+3
+4
+
+query I
+SELECT id FROM my_datalake.default.decimal_filter_test WHERE val10_2 > 200.75 ORDER BY id;
+----
+3
+4
+
+
+query I
+SELECT id FROM my_datalake.default.decimal_filter_test WHERE val10_2 >= 200.75 ORDER BY id;
+----
+2
+3
+4
+
+query I
+SELECT id FROM my_datalake.default.decimal_filter_test WHERE val10_2 < 200 ORDER BY id;
+----
+1
+5
+
+query I
+SELECT id FROM my_datalake.default.decimal_filter_test WHERE val10_2 <= 100.50 ORDER BY id;
+----
+1
+5
+
+
+query I
+SELECT id FROM my_datalake.default.decimal_filter_test WHERE val10_2 = 400.00 ORDER BY id;
+----
+4
+
+query I
+SELECT id FROM my_datalake.default.decimal_filter_test WHERE val10_2 <> 400.00 ORDER BY id;
+----
+1
+2
+3
+5
+
+
+query I
+SELECT id FROM my_datalake.default.decimal_filter_test WHERE val10_2 BETWEEN 100.00 AND 300.00 ORDER BY id;
+----
+1
+2
+
+
+query II
+SELECT id, val10_2 FROM my_datalake.default.decimal_filter_test
+WHERE val10_2 > 100 AND id < 4
+ORDER BY id;
+----
+1	100.50
+2	200.75
+3	300.25
+
+
+query I
+SELECT id FROM my_datalake.default.decimal_filter_test WHERE val5_2 > 20 ORDER BY id;
+----
+2
+3
+4
+
+
+# DECIMAL with scale 0 to test no decimal point in string representation
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.decimal_scale0_test;
+
+statement ok
+CREATE TABLE my_datalake.default.decimal_scale0_test (
+    id INTEGER,
+    val DECIMAL(38,0)
+);
+
+statement ok
+INSERT INTO my_datalake.default.decimal_scale0_test VALUES
+    (1, 0),
+    (2, 42),
+    (3, -42),
+    (4, 9999999999999999999),
+    (5, -9999999999999999999);
+
+query II
+SELECT * FROM my_datalake.default.decimal_scale0_test ORDER BY id;
+----
+1	0
+2	42
+3	-42
+4	9999999999999999999
+5	-9999999999999999999
+
+query I
+SELECT id FROM my_datalake.default.decimal_scale0_test WHERE val > 0 ORDER BY id;
+----
+2
+4
+
+query I
+SELECT id FROM my_datalake.default.decimal_scale0_test WHERE val = 42 ORDER BY id;
+----
+2
+
+query I
+SELECT id FROM my_datalake.default.decimal_scale0_test WHERE val < 0 ORDER BY id;
+----
+3
+5
+
+# cleanup tables
+
+statement ok
+DROP TABLE my_datalake.default.decimal_filter_test;
+
+statement ok
+DROP TABLE my_datalake.default.decimal_scale0_test;

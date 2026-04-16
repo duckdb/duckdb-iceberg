@@ -4,7 +4,7 @@ cmake_minimum_required(VERSION 3.5...3.29)
 set(TARGET_NAME iceberg)
 project(${TARGET_NAME})
 
-set(CMAKE_CXX_STANDARD 14 CACHE STRING "C++ standard")
+set(CMAKE_CXX_STANDARD 17 CACHE STRING "C++ standard")
 set(CMAKE_CXX_STANDARD_REQUIRED True)
 
 set(EXTENSION_NAME ${TARGET_NAME}_extension)
@@ -57,6 +57,15 @@ set(EXTENSION_SOURCES
 	src/execution/operator/iceberg_update.cpp
 	src/function/copy/iceberg_copy_function.cpp
 	src/function/ducklake/iceberg_to_ducklake.cpp
+	src/function/ducklake/ducklake_column.cpp
+	src/function/ducklake/ducklake_column_stats.cpp
+	src/function/ducklake/ducklake_partition.cpp
+	src/function/ducklake/ducklake_partition_column.cpp
+	src/function/ducklake/ducklake_table.cpp
+	src/function/ducklake/ducklake_snapshot.cpp
+	src/function/ducklake/ducklake_schema.cpp
+	src/function/ducklake/ducklake_data_file.cpp
+	src/function/ducklake/ducklake_delete_file.cpp
 	src/function/iceberg_functions.cpp
 	src/function/metadata/iceberg_column_stats.cpp
 	src/function/metadata/iceberg_metadata.cpp

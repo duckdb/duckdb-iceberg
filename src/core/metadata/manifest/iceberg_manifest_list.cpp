@@ -103,7 +103,7 @@ IcebergManifestListEntry IcebergManifestListEntry::CreateFromEntries(FileSystem 
 			                        std::to_string(table_metadata.default_spec_id));
 		}
 		auto &partition_spec = partition_spec_it->second;
-		manifest_file.partitions.Create(partition_spec, manifest_entries);
+		manifest_file.partitions.Create(table_metadata, partition_spec, manifest_entries);
 	}
 
 	manifest_list_entry.manifest_entries.insert(manifest_list_entry.manifest_entries.end(),
@@ -112,7 +112,7 @@ IcebergManifestListEntry IcebergManifestListEntry::CreateFromEntries(FileSystem 
 	return manifest_list_entry;
 }
 
-void ManifestPartitions::Create(const IcebergPartitionSpec &partition_spec,
+void ManifestPartitions::Create(const IcebergTableMetadata &metadata, const IcebergPartitionSpec &partition_spec,
                                 const vector<IcebergManifestEntry> &manifest_entries) {
 	if (manifest_entries.empty() || partition_spec.fields.empty()) {
 		return;
@@ -136,28 +136,32 @@ void ManifestPartitions::Create(const IcebergPartitionSpec &partition_spec,
 
 	for (auto &entry : manifest_entries) {
 		auto &data_file = entry.data_file;
+		auto data_extended_partition_info = data_file.GetExtendedPartitionInfo(metadata);
 		for (idx_t i = 0; i < num_fields; i++) {
 			auto &spec_field = partition_spec.fields[i];
 
 			// Find the partition info entry matching this field's partition_field_id
-			optional_ptr<const DataFilePartitionInfo> info_ptr;
-			for (auto &pi : data_file.partition_info) {
+			IcebergExtendedPartitionInfo extended_partition_info;
+			bool partition_info_exists = false;
+			for (auto &pi : data_extended_partition_info) {
 				if (pi.field_id == spec_field.partition_field_id) {
-					info_ptr = &pi;
+					extended_partition_info = pi;
+					partition_info_exists = true;
 					break;
 				}
 			}
 
-			if (!info_ptr || info_ptr->value.IsNull()) {
+			if (!partition_info_exists || extended_partition_info.value.IsNull()) {
 				field_summary[i].contains_null = true;
 				continue;
 			}
 
-			// Get the serialized type from the DataFilePartitionInfo's transform and source_type
-			auto serialized_type = info_ptr->transform.GetSerializedType(info_ptr->source_type);
+			// Get them serialized type from the DataFilePartitionInfo's transform and source_type
+			auto serialized_type =
+			    extended_partition_info.transform.GetSerializedType(extended_partition_info.source_type);
 
 			// Cast the partition value (stored as VARCHAR) to the correct serialized type
-			auto typed_value = info_ptr->value.DefaultCastAs(serialized_type);
+			auto typed_value = extended_partition_info.value.DefaultCastAs(serialized_type);
 
 			if (!initialized[i]) {
 				min_values[i] = typed_value;
@@ -183,21 +187,25 @@ void ManifestPartitions::Create(const IcebergPartitionSpec &partition_spec,
 			continue;
 		}
 		auto &spec_field = partition_spec.fields[i];
-		// Find one DataFilePartitionInfo entry to get the type info
-		optional_ptr<const DataFilePartitionInfo> info_ptr;
+		// Find one IcebergPartitionInfo entry to get the type info
+		IcebergExtendedPartitionInfo extended_partition_info;
+		bool have_extended_partition_info = false;
 		for (auto &entry : manifest_entries) {
-			for (auto &pi : entry.data_file.partition_info) {
+			auto &data_file = entry.data_file;
+			auto data_extended_partition_info = data_file.GetExtendedPartitionInfo(metadata);
+			for (auto &pi : data_extended_partition_info) {
 				if (pi.field_id == spec_field.partition_field_id && !pi.value.IsNull()) {
-					info_ptr = &pi;
+					extended_partition_info = pi;
+					have_extended_partition_info = true;
 					break;
 				}
 			}
-			if (info_ptr) {
+			if (have_extended_partition_info) {
 				break;
 			}
 		}
-		D_ASSERT(info_ptr);
-		auto serialized_type = info_ptr->transform.GetSerializedType(info_ptr->source_type);
+		D_ASSERT(have_extended_partition_info);
+		auto serialized_type = extended_partition_info.transform.GetSerializedType(extended_partition_info.source_type);
 		auto lower_result = IcebergValue::SerializeValue(min_values[i], serialized_type, SerializeBound::LOWER_BOUND);
 		auto upper_result = IcebergValue::SerializeValue(max_values[i], serialized_type, SerializeBound::UPPER_BOUND);
 
@@ -248,18 +256,36 @@ LogicalType IcebergManifestList::FieldSummaryType() {
 
 namespace manifest_list {
 
+namespace {
+
+struct AvroBindSchemaMetadata {
+	child_list_t<Value> field_ids;
+	vector<string> names;
+	vector<LogicalType> types;
+};
+
+static Value CreateFieldID(int32_t field_id, bool nullable) {
+	child_list_t<Value> fields;
+	fields.emplace_back("__duckdb_field_id", Value::INTEGER(field_id));
+	fields.emplace_back("__duckdb_nullable", Value::BOOLEAN(nullable));
+	return Value::STRUCT(fields);
+}
+
+static void AddSimpleColumn(AvroBindSchemaMetadata &metadata, const string &name, const LogicalType &type,
+                            int32_t field_id, bool nullable) {
+	metadata.names.push_back(name);
+	metadata.types.push_back(type);
+	metadata.field_ids.emplace_back(name, CreateFieldID(field_id, nullable));
+}
+
+} // namespace
+
 static Value FieldSummaryFieldIds() {
 	child_list_t<Value> children;
-	child_list_t<Value> contains_null;
-
-	contains_null.emplace_back("__duckdb_field_id", Value::INTEGER(FIELD_SUMMARY_CONTAINS_NULL));
-	contains_null.emplace_back("__duckdb_nullable", Value::BOOLEAN(false));
-
-	children.emplace_back("contains_null", Value::STRUCT(contains_null));
-
-	children.emplace_back("contains_nan", Value::INTEGER(FIELD_SUMMARY_CONTAINS_NAN));
-	children.emplace_back("lower_bound", Value::INTEGER(FIELD_SUMMARY_LOWER_BOUND));
-	children.emplace_back("upper_bound", Value::INTEGER(FIELD_SUMMARY_UPPER_BOUND));
+	children.emplace_back("contains_null", CreateFieldID(FIELD_SUMMARY_CONTAINS_NULL, false));
+	children.emplace_back("contains_nan", CreateFieldID(FIELD_SUMMARY_CONTAINS_NAN, true));
+	children.emplace_back("lower_bound", CreateFieldID(FIELD_SUMMARY_LOWER_BOUND, true));
+	children.emplace_back("upper_bound", CreateFieldID(FIELD_SUMMARY_UPPER_BOUND, true));
 	children.emplace_back("__duckdb_field_id", Value::INTEGER(PARTITIONS_ELEMENT));
 	children.emplace_back("__duckdb_nullable", Value::BOOLEAN(false));
 	auto field_summary = Value::STRUCT(children);
@@ -276,91 +302,63 @@ void WriteToFile(const IcebergTableMetadata &table_metadata, const IcebergManife
 
 	//! Create the types for the DataChunk
 
-	child_list_t<Value> field_ids;
-	vector<string> names;
-	vector<LogicalType> types;
+	AvroBindSchemaMetadata metadata;
 
 	// manifest_path: string - 500
-	names.push_back("manifest_path");
-	types.push_back(LogicalType::VARCHAR);
-	field_ids.emplace_back("manifest_path", Value::INTEGER(MANIFEST_PATH));
+	AddSimpleColumn(metadata, "manifest_path", LogicalType::VARCHAR, MANIFEST_PATH, false);
 
 	// manifest_length: long - 501
-	names.push_back("manifest_length");
-	types.push_back(LogicalType::BIGINT);
-	field_ids.emplace_back("manifest_length", Value::INTEGER(MANIFEST_LENGTH));
+	AddSimpleColumn(metadata, "manifest_length", LogicalType::BIGINT, MANIFEST_LENGTH, false);
 
 	// partition_spec_id: long - 502
-	names.push_back("partition_spec_id");
-	types.push_back(LogicalType::INTEGER);
-	field_ids.emplace_back("partition_spec_id", Value::INTEGER(PARTITION_SPEC_ID));
+	AddSimpleColumn(metadata, "partition_spec_id", LogicalType::INTEGER, PARTITION_SPEC_ID, false);
 
 	// content: int - 517
-	names.push_back("content");
-	types.push_back(LogicalType::INTEGER);
-	field_ids.emplace_back("content", Value::INTEGER(CONTENT));
+	AddSimpleColumn(metadata, "content", LogicalType::INTEGER, CONTENT, false);
 
 	// sequence_number: long - 515
-	names.push_back("sequence_number");
-	types.push_back(LogicalType::BIGINT);
-	field_ids.emplace_back("sequence_number", Value::INTEGER(SEQUENCE_NUMBER));
+	AddSimpleColumn(metadata, "sequence_number", LogicalType::BIGINT, SEQUENCE_NUMBER, false);
 
 	// min_sequence_number: long - 516
-	names.push_back("min_sequence_number");
-	types.push_back(LogicalType::BIGINT);
-	field_ids.emplace_back("min_sequence_number", Value::INTEGER(MIN_SEQUENCE_NUMBER));
+	AddSimpleColumn(metadata, "min_sequence_number", LogicalType::BIGINT, MIN_SEQUENCE_NUMBER, false);
 
 	// added_snapshot_id: long - 503
-	names.push_back("added_snapshot_id");
-	types.push_back(LogicalType::BIGINT);
-	field_ids.emplace_back("added_snapshot_id", Value::INTEGER(ADDED_SNAPSHOT_ID));
+	AddSimpleColumn(metadata, "added_snapshot_id", LogicalType::BIGINT, ADDED_SNAPSHOT_ID, false);
 
 	// added_files_count: int - 504
-	names.push_back("added_files_count");
-	types.push_back(LogicalType::INTEGER);
-	field_ids.emplace_back("added_files_count", Value::INTEGER(ADDED_FILES_COUNT));
+	AddSimpleColumn(metadata, "added_files_count", LogicalType::INTEGER, ADDED_FILES_COUNT, false);
 
 	// existing_files_count: int - 505
-	names.push_back("existing_files_count");
-	types.push_back(LogicalType::INTEGER);
-	field_ids.emplace_back("existing_files_count", Value::INTEGER(EXISTING_FILES_COUNT));
+	AddSimpleColumn(metadata, "existing_files_count", LogicalType::INTEGER, EXISTING_FILES_COUNT, false);
 
 	// deleted_files_count: int - 506
-	names.push_back("deleted_files_count");
-	types.push_back(LogicalType::INTEGER);
-	field_ids.emplace_back("deleted_files_count", Value::INTEGER(DELETED_FILES_COUNT));
+	AddSimpleColumn(metadata, "deleted_files_count", LogicalType::INTEGER, DELETED_FILES_COUNT, false);
 
 	// added_rows_count: long - 512
-	names.push_back("added_rows_count");
-	types.push_back(LogicalType::BIGINT);
-	field_ids.emplace_back("added_rows_count", Value::INTEGER(ADDED_ROWS_COUNT));
+	AddSimpleColumn(metadata, "added_rows_count", LogicalType::BIGINT, ADDED_ROWS_COUNT, false);
 
 	// existing_rows_count: long - 513
-	names.push_back("existing_rows_count");
-	types.push_back(LogicalType::BIGINT);
-	field_ids.emplace_back("existing_rows_count", Value::INTEGER(EXISTING_ROWS_COUNT));
+	AddSimpleColumn(metadata, "existing_rows_count", LogicalType::BIGINT, EXISTING_ROWS_COUNT, false);
 
 	// deleted_rows_count: long - 514
-	names.push_back("deleted_rows_count");
-	types.push_back(LogicalType::BIGINT);
-	field_ids.emplace_back("deleted_rows_count", Value::INTEGER(DELETED_ROWS_COUNT));
+	AddSimpleColumn(metadata, "deleted_rows_count", LogicalType::BIGINT, DELETED_ROWS_COUNT, false);
 
 	// partitions: list<508: field_summary> - 507
-	names.push_back("partitions");
-	types.push_back(IcebergManifestList::FieldSummaryType());
-	field_ids.emplace_back("partitions", FieldSummaryFieldIds());
+	metadata.names.push_back("partitions");
+	metadata.types.push_back(IcebergManifestList::FieldSummaryType());
+	metadata.field_ids.emplace_back("partitions", FieldSummaryFieldIds());
 
 	if (table_metadata.iceberg_version >= 3) {
 		//! first_row_id: long - 520
-		names.push_back("first_row_id");
-		types.push_back(LogicalType::BIGINT);
-		field_ids.emplace_back("first_row_id", Value::INTEGER(FIRST_ROW_ID));
+		metadata.names.push_back("first_row_id");
+		metadata.types.push_back(LogicalType::BIGINT);
+		metadata.field_ids.emplace_back("first_row_id", Value::INTEGER(FIRST_ROW_ID));
 	}
 
 	//! Populate the DataChunk with the manifests
 	auto &manifest_files = manifest_list.GetManifestFilesConst();
 	DataChunk data;
-	data.Initialize(allocator, types, manifest_files.size());
+	data.Initialize(allocator, metadata.types, manifest_files.size());
 
 	idx_t next_row_id;
 	if (table_metadata.has_next_row_id) {
@@ -444,14 +442,14 @@ void WriteToFile(const IcebergTableMetadata &table_metadata, const IcebergManife
 	CopyInfo copy_info;
 	copy_info.is_from = false;
 	copy_info.options["root_name"].push_back(Value("manifest_file"));
-	copy_info.options["field_ids"].push_back(Value::STRUCT(field_ids));
+	copy_info.options["field_ids"].push_back(Value::STRUCT(metadata.field_ids));
 
 	CopyFunctionBindInput input(copy_info);
 	input.file_extension = "avro";
 
 	ThreadContext thread_context(context);
 	ExecutionContext execution_context(context, thread_context, nullptr);
-	auto bind_data = copy.copy_to_bind(context, input, names, types);
+	auto bind_data = copy.copy_to_bind(context, input, metadata.names, metadata.types);
 
 	auto global_state = copy.copy_to_initialize_global(context, *bind_data, manifest_list.GetPath());
 	auto local_state = copy.copy_to_initialize_local(execution_context, *bind_data);
@@ -469,8 +467,9 @@ Value IcebergManifestList::FieldSummaryFieldIds() {
 
 unique_ptr<IcebergManifestList> IcebergManifestList::Load(const string &iceberg_path,
                                                           const IcebergTableMetadata &metadata,
-                                                          const IcebergSnapshot &snapshot, ClientContext &context,
-                                                          const IcebergOptions &options) {
+                                                          const IcebergSnapshotScanInfo &snapshot_info,
+                                                          ClientContext &context, const IcebergOptions &options) {
+	auto &snapshot = *snapshot_info.snapshot;
 	auto ret = make_uniq<IcebergManifestList>(snapshot.snapshot_id, snapshot.sequence_number, snapshot.manifest_list);
 
 	auto &fs = FileSystem::GetFileSystem(context);
@@ -479,7 +478,8 @@ unique_ptr<IcebergManifestList> IcebergManifestList::Load(const string &iceberg_
 	                                   : snapshot.manifest_list;
 
 	//! Read the entire manifest list, producing 'manifest_file' items
-	auto scan = AvroScan::ScanManifestList(snapshot, metadata, context, manifest_list_full_path, ret->manifest_entries);
+	auto scan =
+	    AvroScan::ScanManifestList(snapshot_info, metadata, context, manifest_list_full_path, ret->manifest_entries);
 	auto manifest_list_reader = make_uniq<manifest_list::ManifestListReader>(*scan);
 
 	while (!manifest_list_reader->Finished()) {
@@ -488,7 +488,7 @@ unique_ptr<IcebergManifestList> IcebergManifestList::Load(const string &iceberg_
 
 	//! Read all manifest files, producing 'manifest_entry' items
 	auto manifest_scan =
-	    AvroScan::ScanManifest(snapshot, ret->manifest_entries, options, fs, iceberg_path, metadata, context);
+	    AvroScan::ScanManifest(snapshot_info, ret->manifest_entries, options, fs, iceberg_path, metadata, context);
 	auto manifest_file_reader = make_uniq<manifest_file::ManifestReader>(*manifest_scan);
 
 	while (!manifest_file_reader->Finished()) {

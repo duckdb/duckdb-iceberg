@@ -5,27 +5,21 @@
 
 namespace duckdb {
 
-//! Metadata about an altered delete file
-struct IcebergDataFileDeletes {
-public:
-	IcebergDataFileDeletes(IcebergDeleteType type) : type(type) {
-	}
-
-public:
-	const IcebergDeleteType type;
-	//! The parts of the delete files that are invalidated
-	//! (should be dropped entirely if this contains *all* the referenced data files)
-	vector<string> referenced_data_files;
-};
-
 struct IcebergManifestDeletes {
 public:
-	IcebergManifestDeletes() {
+	void InvalidateFile(const string &file_path) {
+		data_files.insert(file_path);
+	}
+	bool IsInvalidated(const string &file_path) const {
+		return data_files.count(file_path);
+	}
+	bool IsEmpty() const {
+		return data_files.empty();
 	}
 
-public:
+private:
 	//! The 'data_file.file_path' of invalidated data files
-	case_insensitive_map_t<IcebergDataFileDeletes> altered_data_files;
+	unordered_set<string> data_files;
 };
 
 } // namespace duckdb

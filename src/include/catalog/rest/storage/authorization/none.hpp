@@ -9,10 +9,10 @@ public:
 	static constexpr const IcebergAuthorizationType TYPE = IcebergAuthorizationType::NONE;
 
 public:
-	NoneAuthorization();
+	NoneAuthorization(AttachedDatabase &db);
 
 public:
-	static unique_ptr<IcebergAuthorization> FromAttachOptions(IcebergAttachOptions &input);
+	static unique_ptr<IcebergAuthorization> FromAttachOptions(AttachedDatabase &db, IcebergAttachOptions &input);
 	unique_ptr<HTTPResponse> Request(RequestType request_type, ClientContext &context,
 	                                 const IRCEndpointBuilder &endpoint_builder, HTTPHeaders &headers,
 	                                 const string &data = "") override;

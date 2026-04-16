@@ -57,7 +57,7 @@ public:
 	const IcebergTableMetadata &GetMetadata() const;
 	bool HasTransactionData() const;
 	const IcebergTransactionData &GetTransactionData() const;
-	optional_ptr<const IcebergSnapshot> GetSnapshot() const;
+	const IcebergSnapshotScanInfo &GetSnapshot() const;
 	const IcebergTableSchema &GetSchema() const;
 	bool FinishedScanningDeletes() const;
 
@@ -78,6 +78,7 @@ public:
 	GetEqualityDeletesForFile(const BoundIcebergManifestEntry &manifest_entry) const;
 	void GetStatistics(vector<PartitionStatistics> &result) const;
 	const BoundIcebergManifestEntry &GetManifestEntry(idx_t file_id) const;
+	vector<IcebergPartitionInfo> GetPartitionInfoForDataFile(const string &file_path) const;
 	const IcebergManifestFile &GetManifestFileForEntry(const BoundIcebergManifestEntry &entry,
 	                                                   IcebergManifestContentType type) const;
 

@@ -25,16 +25,12 @@ public:
 public:
 	void ConstructManifestList(IcebergManifestList &manifest_list, CopyFunction &avro_copy, DatabaseInstance &db,
 	                           IcebergCommitState &commit_state) const;
-	IcebergManifestListEntry ConstructManifest(CopyFunction &avro_copy, DatabaseInstance &db,
-	                                           IcebergCommitState &commit_state,
-	                                           const IcebergManifestListEntry &manifest_file,
-	                                           const IcebergManifestDeletes &deletes) const;
 	void CreateUpdate(DatabaseInstance &db, ClientContext &context, IcebergCommitState &commit_state) const override;
 	const vector<IcebergManifestListEntry> &GetManifestFiles() const;
 	void AddManifestFile(IcebergManifestListEntry &&manifest_file);
 
 public:
-	case_insensitive_map_t<IcebergManifestDeletes> altered_manifests;
+	IcebergManifestDeletes altered_manifests;
 
 private:
 	vector<IcebergManifestListEntry> manifest_files;

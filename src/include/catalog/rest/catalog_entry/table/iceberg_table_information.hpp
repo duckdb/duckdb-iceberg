@@ -26,8 +26,8 @@ public:
 public:
 	optional_ptr<CatalogEntry> GetLatestSchema();
 	idx_t GetIcebergVersion() const;
-	optional_ptr<CatalogEntry> GetSchemaVersion(optional_ptr<BoundAtClause> at);
-	optional_ptr<CatalogEntry> CreateSchemaVersion(IcebergTableSchema &table_schema);
+	optional_ptr<CatalogEntry> GetSchemaVersion(const IcebergSnapshotLookup &snapshot_lookup);
+	optional_ptr<CatalogEntry> CreateSchemaVersion(const IcebergTableSchema &table_schema);
 	idx_t GetMaxSchemaId();
 	idx_t GetNextPartitionSpecId();
 	int64_t GetExistingSpecId(IcebergPartitionSpec &spec);
@@ -39,10 +39,9 @@ public:
 	void InitTransactionData(IcebergTransaction &transaction);
 	void AddSnapshot(IcebergTransaction &transaction, vector<IcebergManifestEntry> &&data_files);
 	void AddDeleteSnapshot(IcebergTransaction &transaction, vector<IcebergManifestEntry> &&data_files,
-	                       case_insensitive_map_t<IcebergManifestDeletes> &&altered_manifests);
+	                       IcebergManifestDeletes &&altered_manifests);
 	void AddUpdateSnapshot(IcebergTransaction &transaction, vector<IcebergManifestEntry> &&delete_files,
-	                       vector<IcebergManifestEntry> &&data_files,
-	                       case_insensitive_map_t<IcebergManifestDeletes> &&altered_manifests);
+	                       vector<IcebergManifestEntry> &&data_files, IcebergManifestDeletes &&altered_manifests);
 	void AddSchema(IcebergTransaction &transaction);
 	void AddAssertCreate(IcebergTransaction &transaction);
 	void AddAssertDefaultSpecId(IcebergTransaction &transaction);
@@ -72,7 +71,7 @@ public:
 	IcebergSnapshotLookup GetSnapshotLookup(IcebergTransaction &iceberg_transaction) const;
 	IcebergSnapshotLookup GetSnapshotLookup(ClientContext &context) const;
 	bool TableIsEmpty(const IcebergSnapshotLookup &snapshot_lookup) const;
-	bool HasTransactionUpdates();
+	bool HasTransactionUpdates() const;
 
 public:
 	IcebergCatalog &catalog;

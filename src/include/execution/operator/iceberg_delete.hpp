@@ -14,6 +14,7 @@
 
 #include "catalog/rest/catalog_entry/table/iceberg_table_entry.hpp"
 #include "catalog/rest/catalog_entry/iceberg_schema_entry.hpp"
+#include "core/metadata/manifest/iceberg_manifest.hpp"
 
 namespace duckdb {
 
@@ -45,6 +46,7 @@ struct IcebergDeleteFileInfo {
 	idx_t pos_min_value;
 	optional_idx content_size_in_bytes;
 	optional_idx content_offset;
+	vector<IcebergPartitionInfo> partition_info;
 };
 
 class IcebergDeleteGlobalState : public GlobalSinkState {
@@ -61,7 +63,7 @@ public:
 	atomic<idx_t> total_deleted_count;
 	// data file name -> newly deleted rows.
 	unordered_map<string, vector<idx_t>> deleted_rows;
-	case_insensitive_map_t<IcebergManifestDeletes> altered_manifests;
+	IcebergManifestDeletes altered_manifests;
 
 	void Flush(IcebergDeleteLocalState &local_state) {
 		auto &local_entry = local_state.file_row_numbers;

@@ -17,6 +17,7 @@
 
 #include "catalog/rest/iceberg_catalog.hpp"
 #include "catalog/rest/catalog_entry/table/iceberg_table_entry.hpp"
+#include "execution/operator/iceberg_delete.hpp"
 #include "catalog/rest/catalog_entry/table/iceberg_table_information.hpp"
 #include "core/metadata/schema/iceberg_column_definition.hpp"
 #include "planning/iceberg_multi_file_list.hpp"
@@ -66,7 +67,6 @@ IcebergCopyInput::IcebergCopyInput(ClientContext &context, const IcebergTableMet
 
 	// Get partition spec if the table is partitioned
 	auto &metadata = table_metadata;
-	table_schema = table_metadata.GetSchemaFromId(table_metadata.current_schema_id);
 	if (metadata.GetLatestPartitionSpec().IsPartitioned()) {
 		partition_spec = table_metadata.FindPartitionSpecById(table_metadata.default_spec_id);
 	}
@@ -141,7 +141,7 @@ static bool IsMapType(string col_name, IcebergTableSchema &table_schema) {
 	return false;
 }
 
-static idx_t GetColumnIndexBySourceId(vector<unique_ptr<IcebergColumnDefinition>> &columns, idx_t source_id) {
+static idx_t GetColumnIndexBySourceId(const vector<unique_ptr<IcebergColumnDefinition>> &columns, idx_t source_id) {
 	for (idx_t col_idx = 0; col_idx < columns.size(); col_idx++) {
 		if (columns[col_idx]->id == source_id) {
 			return col_idx;
@@ -150,7 +150,7 @@ static idx_t GetColumnIndexBySourceId(vector<unique_ptr<IcebergColumnDefinition>
 	throw InvalidInputException("Partition source column with id %d not found in schema", source_id);
 }
 
-static string GetColumnNameBySourceId(vector<unique_ptr<IcebergColumnDefinition>> &columns, idx_t source_id) {
+static string GetColumnNameBySourceId(const vector<unique_ptr<IcebergColumnDefinition>> &columns, idx_t source_id) {
 	for (idx_t col_idx = 0; col_idx < columns.size(); col_idx++) {
 		if (columns[col_idx]->id == source_id) {
 			return columns[col_idx]->name;
@@ -235,7 +235,7 @@ void IcebergInsertGlobalState::AddFiles(DataChunk &chunk, const string &table_na
 		// column 5 is stats, which we can also use for partition information
 		auto partition_values = chunk.GetValue(5, r);
 
-		auto table_current_schema_id = table_metadata.current_schema_id;
+		auto table_current_schema_id = table_metadata.GetCurrentSchemaId();
 		auto &ic_schema = table_metadata.schemas.at(table_current_schema_id);
 
 		auto ic_partition_info = table_metadata.GetLatestPartitionSpec();
@@ -273,12 +273,8 @@ void IcebergInsertGlobalState::AddFiles(DataChunk &chunk, const string &table_na
 				auto &partition_field = field_it->second.get();
 				auto source_type = ic_schema->GetColumnTypeFromFieldId(partition_field.source_id);
 
-				DataFilePartitionInfo info;
-				info.name = partition_name;
-				info.source_id = partition_field.source_id;
+				IcebergPartitionInfo info;
 				info.field_id = partition_field.partition_field_id;
-				info.transform = partition_field.transform;
-				info.source_type = source_type;
 				if (!struct_val[1].IsNull()) {
 					info.value = Value(StringValue::Get(struct_val[1]));
 				} else {
@@ -402,9 +398,30 @@ SinkFinalizeType IcebergInsert::Finalize(Pipeline &pipeline, Event &event, Clien
 		written_files = std::move(global_state.written_files);
 	}
 
-	if (!written_files.empty()) {
-		ApplyTableUpdate(table_info, iceberg_transaction,
-		                 [&](IcebergTableInformation &tbl) { tbl.AddSnapshot(transaction, std::move(written_files)); });
+	if (update_delete_op) {
+		// This insert is part of an UPDATE: commit a combined delete+insert snapshot.
+		auto &delete_global_state = update_delete_op->sink_state->Cast<IcebergDeleteGlobalState>();
+		auto delete_manifest_entries = IcebergDelete::GenerateDeleteManifestEntries(delete_global_state);
+		if (!written_files.empty()) {
+			ApplyTableUpdate(table_info, iceberg_transaction, [&](IcebergTableInformation &tbl) {
+				tbl.AddUpdateSnapshot(iceberg_transaction, std::move(delete_manifest_entries), std::move(written_files),
+				                      std::move(delete_global_state.altered_manifests));
+				auto &transaction_data = *tbl.transaction_data;
+				for (auto &entry : delete_global_state.written_files) {
+					auto &delete_file = entry.second;
+					if (table_info.table_metadata.iceberg_version >= 3) {
+						transaction_data.transactional_delete_files[delete_file.data_file_path] = delete_file.file_name;
+					}
+				}
+			});
+		}
+	} else {
+		// Regular insert: commit an append snapshot.
+		if (!written_files.empty()) {
+			ApplyTableUpdate(table_info, iceberg_transaction, [&](IcebergTableInformation &tbl) {
+				tbl.AddSnapshot(transaction, std::move(written_files));
+			});
+		}
 	}
 	return SinkFinalizeType::READY;
 }
@@ -462,10 +479,7 @@ static Value WrittenFieldIds(const IcebergCopyInput &copy_input) {
 
 //! Get the logical type for a source column by source_id
 static LogicalType GetSourceColumnType(IcebergCopyInput &copy_input, uint64_t source_id) {
-	if (!copy_input.table_schema) {
-		throw InvalidInputException("Partitioning requires table schema");
-	}
-	auto &columns = copy_input.table_schema->columns;
+	auto &columns = copy_input.schema.columns;
 	for (auto &col : columns) {
 		if (col->id == static_cast<int32_t>(source_id)) {
 			return col->type;
@@ -494,7 +508,7 @@ static unique_ptr<Expression> CreateColumnReference(IcebergCopyInput &copy_input
 //! - hours: date_diff('hour', TIMESTAMP '1970-01-01', source_column)
 static unique_ptr<Expression> GetDateDiffFunction(ClientContext &context, IcebergCopyInput &copy_input,
                                                   const string &date_part, uint64_t source_id) {
-	auto col_idx = GetColumnIndexBySourceId(copy_input.table_schema->columns, source_id);
+	auto col_idx = GetColumnIndexBySourceId(copy_input.schema.columns, source_id);
 	auto col_type = GetSourceColumnType(copy_input, source_id);
 
 	vector<unique_ptr<Expression>> children;
@@ -521,7 +535,7 @@ static unique_ptr<Expression> GetDateDiffFunction(ClientContext &context, Iceber
 //! Get the partition expression for a partition field based on its transform type
 static unique_ptr<Expression> GetPartitionExpression(ClientContext &context, IcebergCopyInput &copy_input,
                                                      const IcebergPartitionSpecField &field) {
-	auto col_idx = GetColumnIndexBySourceId(copy_input.table_schema->columns, field.source_id);
+	auto col_idx = GetColumnIndexBySourceId(copy_input.schema.columns, field.source_id);
 	auto col_type = GetSourceColumnType(copy_input, field.source_id);
 
 	switch (field.transform.Type()) {
@@ -579,7 +593,7 @@ static void GeneratePartitionExpressions(ClientContext &context, IcebergCopyInpu
 			if (field.transform.Type() == IcebergTransformType::VOID) {
 				continue;
 			}
-			auto col_idx = GetColumnIndexBySourceId(copy_input.table_schema->columns, field.source_id);
+			auto col_idx = GetColumnIndexBySourceId(copy_input.schema.columns, field.source_id);
 			partition_columns.push_back(col_idx);
 		}
 		write_partition_columns = true;
@@ -587,16 +601,30 @@ static void GeneratePartitionExpressions(ClientContext &context, IcebergCopyInpu
 	}
 
 	// If we have partition columns with non-identity transforms, we need to compute them separately
-	// and NOT write the computed partition columns to the data files
-	idx_t partition_column_start = copy_input.table_schema->columns.size();
+	// and NOT write the computed partition columns to the data files.
+	// Virtual columns (e.g. _row_id) sit between physical and partition columns in the chunk:
+	//   [col0..colN-1, _row_id?, partition_val0..valK-1]
+	// result.names/expected_types already have physical + virtual prepended before this call.
+	idx_t virtual_column_count = 0;
+	if (WriteRowId(copy_input.virtual_columns)) {
+		virtual_column_count++;
+	}
+	if (WriteSequenceNumber(copy_input.virtual_columns)) {
+		virtual_column_count++;
+	}
+	idx_t partition_column_start = copy_input.schema.columns.size() + virtual_column_count;
 
-	// First, add projections for all the original columns
+	// Pass-through projections for physical columns
 	idx_t col_idx = 0;
-	for (auto &col : copy_input.table_schema->columns) {
+	for (auto &col : copy_input.schema.columns) {
 		projection_expressions.push_back(CreateColumnReference(copy_input, col->type, col_idx++));
 	}
+	// Pass-through projections for virtual columns
+	for (idx_t v = 0; v < virtual_column_count; v++) {
+		projection_expressions.push_back(make_uniq<BoundReferenceExpression>(LogicalType::BIGINT, col_idx++));
+	}
 
-	// Then add the partition expressions
+	// Partition transform expressions
 	for (auto &field : spec.fields) {
 		if (field.transform.Type() == IcebergTransformType::VOID) {
 			continue;
@@ -689,20 +717,10 @@ IcebergCopyOptions IcebergInsert::GetCopyOptions(ClientContext &context, Iceberg
 	vector<string> names_to_write;
 	vector<LogicalType> types_to_write;
 	copy_input.schema.GetColumnNamesAndTypes(names_to_write, types_to_write);
-	if (WriteRowId(copy_input.virtual_columns)) {
-		names_to_write.push_back("_row_id");
-		types_to_write.push_back(LogicalType::BIGINT);
-	}
-	if (WriteSequenceNumber(copy_input.virtual_columns)) {
-		names_to_write.push_back("_last_updated_sequence_number");
-		types_to_write.push_back(LogicalType::BIGINT);
-	}
 
 	// Get Parquet Copy function
 	auto &copy_fun = IcebergUtils::GetCopyFunction(context, file_format);
 	IcebergCopyOptions result(std::move(info), copy_fun.function);
-	auto function_data = copy_fun.function.copy_to_bind(context, bind_input, names_to_write, types_to_write);
-	result.bind_data = std::move(function_data);
 
 	result.use_tmp_file = false;
 	if (copy_input.partition_spec) {
@@ -715,8 +733,12 @@ IcebergCopyOptions IcebergInsert::GetCopyOptions(ClientContext &context, Iceberg
 		result.partition_output = false;
 		result.write_empty_file = false;
 		// file_size_bytes is currently only supported for unpartitioned writes
-		//! FIXME: should use 'write.target-file-size-bytes' instead
-		result.file_size_bytes = IcebergCatalog::DEFAULT_TARGET_FILE_SIZE;
+		auto write_target_file_size = table_properties.find("write.target-file-size-bytes");
+		if (write_target_file_size != table_properties.end()) {
+			result.file_size_bytes = std::stoull(write_target_file_size->second);
+		} else {
+			result.file_size_bytes = IcebergCatalog::DEFAULT_TARGET_FILE_SIZE;
+		}
 		result.rotate = true;
 	}
 
@@ -727,13 +749,31 @@ IcebergCopyOptions IcebergInsert::GetCopyOptions(ClientContext &context, Iceberg
 	result.per_thread_output = false;
 	result.write_partition_columns = true;
 	result.return_type = CopyFunctionReturnType::WRITTEN_FILE_STATISTICS;
+	// Virtual columns come before partition columns, matching the chunk layout:
+	//   [physical_cols..., _row_id, partition_vals...]
+	if (WriteRowId(copy_input.virtual_columns)) {
+		names_to_write.push_back("_row_id");
+		types_to_write.push_back(LogicalType::BIGINT);
+	}
+	if (WriteSequenceNumber(copy_input.virtual_columns)) {
+		names_to_write.push_back("_last_updated_sequence_number");
+		types_to_write.push_back(LogicalType::BIGINT);
+	}
+
+	// copy_to_bind receives physical + virtual only (partition routing columns are stripped
+	// by PhysicalCopyToFile before writing, so including them causes a type mismatch).
+	auto function_data = copy_fun.function.copy_to_bind(context, bind_input, names_to_write, types_to_write);
+	result.bind_data = std::move(function_data);
+
 	result.names = names_to_write;
 	result.expected_types = types_to_write;
 
 	if (copy_input.partition_spec) {
-		// we are partitioning - generate partition expressions (if any)
+		// Partition expressions are appended after physical + virtual.
+		// GeneratePartitionExpressions accounts for virtual_column_count when computing partition_column_start.
 		GeneratePartitionExpressions(context, copy_input, result);
 	}
+
 	return result;
 }
 
@@ -742,7 +782,11 @@ static void GenerateProjection(ClientContext &context, PhysicalPlanGenerator &pl
 	// push the projection
 	vector<LogicalType> types;
 	for (auto &expr : expressions) {
-		types.push_back(expr->return_type);
+		auto &type = expr->return_type;
+		if (type.id() == LogicalTypeId::HUGEINT) {
+			type = LogicalType::DECIMAL(38, 0);
+		}
+		types.push_back(type);
 	}
 	auto &proj =
 	    planner.Make<PhysicalProjection>(std::move(types), std::move(expressions), plan->estimated_cardinality);
@@ -754,7 +798,8 @@ PhysicalOperator &IcebergInsert::PlanCopyForInsert(ClientContext &context, Physi
                                                    IcebergCopyInput &copy_input, optional_ptr<PhysicalOperator> plan) {
 	auto copy_options = GetCopyOptions(context, copy_input);
 
-	// If we have projection expressions, we need to add a projection operator
+	// If there are partition transform expressions (non-identity partitions), push a projection
+	// that computes them on top of the child plan.
 	if (!copy_options.projection_list.empty() && plan) {
 		GenerateProjection(context, planner, copy_options.projection_list, plan);
 	}

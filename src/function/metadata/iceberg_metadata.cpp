@@ -114,18 +114,18 @@ static unique_ptr<FunctionData> IcebergMetaDataBind(ClientContext &context, Tabl
 			}
 			options.version_name_format = value;
 		} else if (loption == "snapshot_from_id") {
-			if (snapshot_lookup.snapshot_source != SnapshotSource::LATEST) {
+			if (snapshot_lookup.GetSource() != SnapshotSource::LATEST) {
 				throw InvalidInputException(
 				    "Can't use 'snapshot_from_id' in combination with 'snapshot_from_timestamp'");
 			}
-			snapshot_lookup.snapshot_source = SnapshotSource::FROM_ID;
+			snapshot_lookup.SetSource(SnapshotSource::FROM_ID);
 			snapshot_lookup.snapshot_id = val.GetValue<uint64_t>();
 		} else if (loption == "snapshot_from_timestamp") {
-			if (snapshot_lookup.snapshot_source != SnapshotSource::LATEST) {
+			if (snapshot_lookup.GetSource() != SnapshotSource::LATEST) {
 				throw InvalidInputException(
 				    "Can't use 'snapshot_from_id' in combination with 'snapshot_from_timestamp'");
 			}
-			snapshot_lookup.snapshot_source = SnapshotSource::FROM_TIMESTAMP;
+			snapshot_lookup.SetSource(SnapshotSource::FROM_TIMESTAMP);
 			snapshot_lookup.snapshot_timestamp = val.GetValue<timestamp_t>();
 		}
 	}
@@ -136,8 +136,8 @@ static unique_ptr<FunctionData> IcebergMetaDataBind(ClientContext &context, Tabl
 
 	auto snapshot_to_scan = metadata.GetSnapshot(options.snapshot_lookup);
 
-	if (snapshot_to_scan) {
-		ret->iceberg_table = IcebergManifestList::Load(filename, metadata, *snapshot_to_scan, context, options);
+	if (snapshot_to_scan.snapshot) {
+		ret->iceberg_table = IcebergManifestList::Load(filename, metadata, snapshot_to_scan, context, options);
 	}
 
 	auto manifest_types = IcebergManifestTypes();
