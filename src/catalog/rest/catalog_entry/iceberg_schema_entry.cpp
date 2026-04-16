@@ -268,7 +268,7 @@ vector<IcebergManifestListEntry> RetrieveManifestFiles(ClientContext &context, I
 
 //! Ensure existing data files don't contain NULL values in this column
 static void VerifyNotNullConstraint(IcebergColumnDefinition &column,
-                                    const vector<IcebergManifestListEntry> &manifest_files) {
+                                    const vector<IcebergManifestListEntry> &manifest_files, string &table_name) {
 	if (manifest_files.empty()) {
 		// Table is empty
 		return;
@@ -285,7 +285,7 @@ static void VerifyNotNullConstraint(IcebergColumnDefinition &column,
 			found_column_null_count_at_least_once = found_column_null_count_at_least_once || found_column_null_count;
 			// `null_value_counts` is an optional field per the Iceberg spec.
 			if (found_column_null_count && column_null_count_it->second > 0) {
-				throw ConstraintException("NOT NULL constraint failed for column: %s", column.name);
+				throw ConstraintException("NOT NULL constraint failed: %s.%s", table_name, column.name);
 			}
 		}
 	}
@@ -310,7 +310,7 @@ static void VerifyNotNullConstraint(IcebergColumnDefinition &column,
 		 *	ELSE
 		 *	for this column the optional field `null_value_counts`  is not present in any manifest.
 		 */
-		throw ConstraintException("NOT NULL constraint failed for column: %s", column.name);
+		throw ConstraintException("NOT NULL constraint failed: %s.%s", table_name, column.name);
 	}
 }
 
@@ -484,7 +484,7 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 		const vector<IcebergManifestListEntry> manifest_files = !transaction_data.existing_manifest_list.empty()
 		                                                            ? transaction_data.existing_manifest_list
 		                                                            : RetrieveManifestFiles(context, updated_table);
-		VerifyNotNullConstraint(column, manifest_files);
+		VerifyNotNullConstraint(column, manifest_files, updated_table.name);
 
 		column.required = true;
 

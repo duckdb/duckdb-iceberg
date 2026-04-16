@@ -48,7 +48,7 @@ ALTER TABLE my_datalake.default.my_table ALTER COLUMN b SET NOT NULL;
 statement error
 INSERT INTO my_datalake.default.my_table VALUES (NULL, NULL);
 ----
-Constraint Error: NOT NULL constraint failed for column: b
+Constraint Error: NOT NULL constraint failed: my_table.b
 
 query II
 FROM my_datalake.default.my_table;
