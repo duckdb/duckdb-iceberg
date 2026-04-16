@@ -262,6 +262,7 @@ shared_ptr<IcebergTableSchema> IcebergCreateTableRequest::CreateIcebergSchema(
 				throw InvalidInputException("non-null DEFAULT values are not supported for <V3 tables");
 			}
 			iceberg_column_def->initial_default = make_uniq<Value>(val);
+			iceberg_column_def->write_default = make_uniq<Value>(val);
 		}
 		schema->columns.push_back(std::move(iceberg_column_def));
 	}
