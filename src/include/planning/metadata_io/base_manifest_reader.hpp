@@ -20,7 +20,7 @@ public:
 	bool Finished() const;
 
 protected:
-	idx_t ScanInternal(idx_t remaining);
+	void ScanInternal();
 	const IcebergAvroScanInfo &GetScanInfo() const;
 
 private:

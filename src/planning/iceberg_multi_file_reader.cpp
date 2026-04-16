@@ -98,7 +98,7 @@ IcebergMultiFileReader::InitializeGlobalState(ClientContext &context, const Mult
 }
 
 static void ApplyFieldMapping(MultiFileColumnDefinition &col, const vector<IcebergFieldMapping> &mappings,
-                              const case_insensitive_map_t<idx_t> &fields,
+                              const case_insensitive_map_t<idx_t> &fields, ClientContext &context,
                               optional_ptr<MultiFileColumnDefinition> parent = nullptr) {
 	if (!col.identifier.IsNull()) {
 		return;
@@ -108,7 +108,7 @@ static void ApplyFieldMapping(MultiFileColumnDefinition &col, const vector<Icebe
 	if (parent && parent->type.id() == LogicalTypeId::MAP && StringUtil::CIEquals(name, "key_value")) {
 		//! Deal with MAP, it has a 'key_value' child, which holds the 'key' + 'value' columns
 		for (auto &child : col.children) {
-			ApplyFieldMapping(child, mappings, fields, parent);
+			ApplyFieldMapping(child, mappings, fields, context, parent);
 		}
 		return;
 	}
@@ -119,8 +119,9 @@ static void ApplyFieldMapping(MultiFileColumnDefinition &col, const vector<Icebe
 
 	auto it = fields.find(name);
 	if (it == fields.end()) {
-		throw InvalidConfigurationException("Column '%s' does not have a field-id, and no field-mapping exists for it!",
-		                                    name);
+		DUCKDB_LOG(context, IcebergLogType, "Column '%s' does not have a field-id, and no field-mapping exists for it!",
+		           name);
+		return;
 	}
 	auto &mapping = mappings[it->second];
 
@@ -129,7 +130,7 @@ static void ApplyFieldMapping(MultiFileColumnDefinition &col, const vector<Icebe
 	}
 
 	for (auto &child : col.children) {
-		ApplyFieldMapping(child, mappings, mapping.field_mapping_indexes, col);
+		ApplyFieldMapping(child, mappings, mapping.field_mapping_indexes, context, col);
 	}
 }
 
@@ -191,12 +192,15 @@ static void ApplyPartitionConstants(const IcebergMultiFileList &multi_file_list,
 	// Get the metadata for this file
 	auto &reader = *reader_data.reader;
 	auto file_id = reader.file_list_idx.GetIndex();
-	auto &manifest_entry = multi_file_list.manifest_entries[file_id];
+	auto &bound_manifest_entry = multi_file_list.GetManifestEntry(file_id);
+	auto &manifest_file =
+	    multi_file_list.GetManifestFileForEntry(bound_manifest_entry, IcebergManifestContentType::DATA);
+	auto &manifest_entry = bound_manifest_entry.entry;
 	auto &data_file = manifest_entry.data_file;
 
 	// Get the partition spec for this file
 	auto &partition_specs = multi_file_list.GetMetadata().partition_specs;
-	auto spec_id = manifest_entry.partition_spec_id;
+	auto spec_id = manifest_file.partition_spec_id;
 	auto partition_spec_it = partition_specs.find(spec_id);
 	if (partition_spec_it == partition_specs.end()) {
 		throw InvalidConfigurationException("'partition_spec_id' %d doesn't exist in the metadata", spec_id);
@@ -217,6 +221,9 @@ static void ApplyPartitionConstants(const IcebergMultiFileList &multi_file_list,
 	unordered_map<uint64_t, idx_t> local_field_id_to_index;
 	for (idx_t i = 0; i < local_columns.size(); i++) {
 		auto &local_column = local_columns[i];
+		if (local_column.identifier.IsNull()) {
+			continue;
+		}
 		auto field_identifier = local_column.identifier.GetValue<int32_t>();
 		auto field_id = static_cast<uint64_t>(field_identifier);
 		local_field_id_to_index[field_id] = i;
@@ -283,19 +290,6 @@ ReaderInitializeType IcebergMultiFileReader::InitializeReader(MultiFileReaderDat
 
 	//! Get the data file that we're preparing to scan
 	const auto &multi_file_list = gstate.file_list.Cast<IcebergMultiFileList>();
-	auto &reader = *reader_data.reader;
-	auto file_id = reader.file_list_idx.GetIndex();
-	auto &manifest_entry = multi_file_list.manifest_entries[file_id];
-
-	//! Collect all the equality delete ids needed
-	unordered_set<int32_t> equality_delete_ids;
-	auto delete_rows = multi_file_list.GetEqualityDeletesForFile(manifest_entry);
-	for (auto &row : delete_rows) {
-		auto &filters = row.get().filters;
-		for (auto &filter : filters) {
-			equality_delete_ids.insert(filter.first);
-		}
-	}
 
 	//! Add the columns needed by the equality deletes if not present
 	auto new_global_column_ids = global_column_ids;
@@ -327,7 +321,8 @@ void IcebergMultiFileReader::FinalizeBind(MultiFileReaderData &reader_data, cons
 
 	{
 		lock_guard<mutex> guard(multi_file_list.lock);
-		const auto &manifest_entry = multi_file_list.manifest_entries[file_id];
+		const auto &bound_manifest_entry = multi_file_list.GetManifestEntry(file_id);
+		const auto &manifest_entry = bound_manifest_entry.entry;
 		const auto &data_file = manifest_entry.data_file;
 		// The path of the data file where this chunk was read from
 		const auto &file_path = data_file.file_path;
@@ -345,7 +340,7 @@ void IcebergMultiFileReader::FinalizeBind(MultiFileReaderData &reader_data, cons
 	if (!multi_file_list.GetMetadata().mappings.empty()) {
 		auto &root = metadata.mappings[0];
 		for (auto &local_column : local_columns) {
-			ApplyFieldMapping(local_column, mappings, root.field_mapping_indexes);
+			ApplyFieldMapping(local_column, mappings, root.field_mapping_indexes, context);
 		}
 	}
 	ApplyPartitionConstants(multi_file_list, reader_data, global_columns, global_column_ids);
@@ -353,9 +348,9 @@ void IcebergMultiFileReader::FinalizeBind(MultiFileReaderData &reader_data, cons
 
 void IcebergMultiFileReader::ApplyEqualityDeletes(ClientContext &context, DataChunk &output_chunk,
                                                   const IcebergMultiFileList &multi_file_list,
-                                                  const IcebergManifestEntry &manifest_entry,
+                                                  const BoundIcebergManifestEntry &bound_manifest_entry,
                                                   const vector<MultiFileColumnDefinition> &local_columns) {
-	auto delete_rows = multi_file_list.GetEqualityDeletesForFile(manifest_entry);
+	auto delete_rows = multi_file_list.GetEqualityDeletesForFile(bound_manifest_entry);
 
 	if (delete_rows.empty()) {
 		return;
@@ -379,7 +374,11 @@ void IcebergMultiFileReader::ApplyEqualityDeletes(ClientContext &context, DataCh
 	vector<unique_ptr<Expression>> rows;
 	for (auto &row : delete_rows) {
 		vector<unique_ptr<Expression>> equalities;
-		for (auto &item : row.get().filters) {
+		auto &filters = row.get().filters;
+		if (filters.empty()) {
+			continue;
+		}
+		for (auto &item : filters) {
 			auto &field_id = item.first;
 			auto &expression = item.second;
 
@@ -411,6 +410,9 @@ void IcebergMultiFileReader::ApplyEqualityDeletes(ClientContext &context, DataCh
 			filter = std::move(equalities[0]);
 		}
 		rows.push_back(std::move(filter));
+	}
+	if (rows.empty()) {
+		return;
 	}
 
 	unique_ptr<Expression> equality_delete_filter;
@@ -457,10 +459,10 @@ void IcebergMultiFileReader::FinalizeChunk(ClientContext &context, const MultiFi
 	D_ASSERT(global_state);
 	// Get the metadata for this file
 	auto file_id = reader.file_list_idx.GetIndex();
-	auto &manifest_entry = multi_file_list.manifest_entries[file_id];
+	auto &bound_manifest_entry = multi_file_list.GetManifestEntry(file_id);
 
 	auto &local_columns = reader.columns;
-	ApplyEqualityDeletes(context, output_chunk, multi_file_list, manifest_entry, local_columns);
+	ApplyEqualityDeletes(context, output_chunk, multi_file_list, bound_manifest_entry, local_columns);
 
 	//! Remove the extra columns we added to perform the equality delete filtering
 	for (idx_t i = 0; i < diff; i++) {
@@ -496,18 +498,18 @@ bool IcebergMultiFileReader::ParseOption(const string &key, const Value &val, Mu
 		return true;
 	}
 	if (loption == "snapshot_from_id") {
-		if (snapshot_lookup.snapshot_source != SnapshotSource::LATEST) {
+		if (snapshot_lookup.GetSource() != SnapshotSource::LATEST) {
 			throw InvalidInputException("Can't use 'snapshot_from_id' in combination with 'snapshot_from_timestamp'");
 		}
-		snapshot_lookup.snapshot_source = SnapshotSource::FROM_ID;
+		snapshot_lookup.SetSource(SnapshotSource::FROM_ID);
 		snapshot_lookup.snapshot_id = val.GetValue<uint64_t>();
 		return true;
 	}
 	if (loption == "snapshot_from_timestamp") {
-		if (snapshot_lookup.snapshot_source != SnapshotSource::LATEST) {
+		if (snapshot_lookup.GetSource() != SnapshotSource::LATEST) {
 			throw InvalidInputException("Can't use 'snapshot_from_id' in combination with 'snapshot_from_timestamp'");
 		}
-		snapshot_lookup.snapshot_source = SnapshotSource::FROM_TIMESTAMP;
+		snapshot_lookup.SetSource(SnapshotSource::FROM_TIMESTAMP);
 		snapshot_lookup.snapshot_timestamp = val.GetValue<timestamp_t>();
 		return true;
 	}
@@ -573,7 +575,7 @@ unique_ptr<Expression> IcebergMultiFileReader::GetVirtualColumnExpression(
 
 				// Transform virtual column to file_row_number for the reference
 				column_id = MultiFileReader::COLUMN_IDENTIFIER_FILE_ROW_NUMBER;
-				return coalesce_expr;
+				return std::move(coalesce_expr);
 			}
 		}
 		if (entry == options.end()) {
@@ -619,7 +621,7 @@ unique_ptr<Expression> IcebergMultiFileReader::GetVirtualColumnExpression(
 
 				// Transform virtual column to file_row_number for the reference
 				column_id = MultiFileReader::COLUMN_IDENTIFIER_FILE_ROW_NUMBER;
-				return coalesce_expr;
+				return std::move(coalesce_expr);
 			}
 		}
 		if (entry == options.end()) {

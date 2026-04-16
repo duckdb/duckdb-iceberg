@@ -4,7 +4,8 @@ on:
     inputs:
       duckdb_ref:
         description: 'DuckDB branch name or commit hash'
-        required: true
+        required: false
+        default: ''
         type: string
       duckdb_iceberg_ref:
         description: 'duckdb-iceberg branch name or commit hash'
@@ -77,6 +78,7 @@ jobs:
         continue-on-error: true
 
       - name: Checkout DuckDB
+        if: ${{ inputs.duckdb_ref != '' }}
         run: |
           cd duckdb
           git fetch
@@ -142,7 +144,7 @@ jobs:
           SNOWFLAKE_CATALOG_URI_GCS: ${{secrets.SNOWFLAKE_CATALOG_URI_GCS}}
           NO_REGION_SET: 1
         run: |
-          ./build/release/test/unittest test/sql/cloud/snowflake/no_vended_credentials_region.test
+          ./build/release/test/unittest --order lex test/sql/cloud/snowflake/no_vended_credentials_region.test
 
       - name: File issue if error
         if: ${{ contains(github.ref_name, 'main') && failure() }}

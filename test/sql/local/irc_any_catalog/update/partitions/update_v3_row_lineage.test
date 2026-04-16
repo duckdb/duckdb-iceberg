@@ -1,0 +1,140 @@
+# name: test/sql/local/irc_any_catalog/update/partitions/update_v3_row_lineage.test
+# description: Verify _row_id preservation and _last_updated_sequence_number correctness
+# group: [partitions]
+
+#              across insert/update/delete on a partitioned v3 table
+
+require-env ICEBERG_SERVER_AVAILABLE
+
+require-env SECRETS_CREATED_AND_CATALOG_ATTACHED
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+CALL enable_logging('HTTP');
+
+statement ok
+set logging_level='debug'
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.test_v3_row_lineage_partitioned;
+
+statement ok
+CREATE TABLE my_datalake.default.test_v3_row_lineage_partitioned (
+    id  INT,
+    ts  TIMESTAMP,
+    val VARCHAR
+) PARTITIONED BY (year(ts))
+WITH ('format-version' = 3);
+
+# ---- Snapshot 1: initial insert, all rows in year 2021 (single partition file) ----
+# All 5 rows land in one partition file so row_ids are contiguous 0-4.
+
+statement ok
+INSERT INTO my_datalake.default.test_v3_row_lineage_partitioned VALUES
+    (1, '2021-01-01 00:00:00'::TIMESTAMP, 'a'),
+    (2, '2021-03-15 00:00:00'::TIMESTAMP, 'b'),
+    (3, '2021-06-01 00:00:00'::TIMESTAMP, 'c'),
+    (4, '2021-09-15 00:00:00'::TIMESTAMP, 'd'),
+    (5, '2021-12-31 00:00:00'::TIMESTAMP, 'e');
+
+query IIII
+SELECT _last_updated_sequence_number, _row_id, id, val
+FROM my_datalake.default.test_v3_row_lineage_partitioned
+ORDER BY _row_id;
+----
+1	0	1	a
+1	1	2	b
+1	2	3	c
+1	3	4	d
+1	4	5	e
+
+# ---- Snapshot 2: update non-partition column for rows id=2 and id=4 ----
+# Row ids must be PRESERVED; only _last_updated_sequence_number changes.
+
+query I
+UPDATE my_datalake.default.test_v3_row_lineage_partitioned
+SET val = val || '_u1'
+WHERE id IN (2, 4);
+----
+2
+
+query IIII
+SELECT _last_updated_sequence_number, _row_id, id, val
+FROM my_datalake.default.test_v3_row_lineage_partitioned
+ORDER BY _row_id;
+----
+1	0	1	a
+2	1	2	b_u1
+1	2	3	c
+2	3	4	d_u1
+1	4	5	e
+
+# ---- Snapshot 3: delete rows id=3 and id=5 ----
+# Deletion vectors are used for v3; next_row_id is NOT advanced by deletes.
+
+statement ok
+DELETE FROM my_datalake.default.test_v3_row_lineage_partitioned
+WHERE id IN (3, 5);
+
+query IIII
+SELECT _last_updated_sequence_number, _row_id, id, val
+FROM my_datalake.default.test_v3_row_lineage_partitioned
+ORDER BY _row_id;
+----
+1	0	1	a
+2	1	2	b_u1
+2	3	4	d_u1
+
+# ---- Snapshot 4: insert two new rows in a different year (2022) ----
+# next_row_id = 7 at this point (5 original + 2 from update re-inserts).
+# New rows get row_ids 7 and 8; lusn = 4.
+
+statement ok
+INSERT INTO my_datalake.default.test_v3_row_lineage_partitioned VALUES
+    (6, '2022-03-10 00:00:00'::TIMESTAMP, 'f'),
+    (7, '2022-09-20 00:00:00'::TIMESTAMP, 'g');
+
+query IIII
+SELECT _last_updated_sequence_number, _row_id, id, val
+FROM my_datalake.default.test_v3_row_lineage_partitioned
+ORDER BY _row_id;
+----
+1	0	1	a
+2	1	2	b_u1
+2	3	4	d_u1
+4	7	6	f
+4	8	7	g
+
+# ---- Snapshot 5: update moves a row to a different partition (change year) ----
+# row_id must be preserved even when the partition changes.
+
+query I
+UPDATE my_datalake.default.test_v3_row_lineage_partitioned
+SET ts = '2023-06-01 00:00:00'::TIMESTAMP
+WHERE id = 6;
+----
+1
+
+query IIIII
+SELECT _last_updated_sequence_number, _row_id, id, ts, val
+FROM my_datalake.default.test_v3_row_lineage_partitioned
+ORDER BY _row_id;
+----
+1	0	1	2021-01-01 00:00:00	a
+2	1	2	2021-03-15 00:00:00	b_u1
+2	3	4	2021-09-15 00:00:00	d_u1
+5	7	6	2023-06-01 00:00:00	f
+4	8	7	2022-09-20 00:00:00	g
+
+statement ok
+DROP TABLE my_datalake.default.test_v3_row_lineage_partitioned;

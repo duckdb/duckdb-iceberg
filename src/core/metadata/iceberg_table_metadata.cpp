@@ -4,7 +4,6 @@
 
 #include "common/iceberg_utils.hpp"
 #include "catalog/rest/api/catalog_utils.hpp"
-#include "function/metadata/iceberg_metadata.hpp"
 #include "core/metadata/snapshot/iceberg_snapshot.hpp"
 #include "rest_catalog/objects/list.hpp"
 #include "catalog/rest/api/iceberg_create_table_request.hpp"
@@ -109,22 +108,28 @@ optional_ptr<const IcebergSnapshot> IcebergTableMetadata::GetSnapshotById(int64_
 }
 
 optional_ptr<const IcebergSnapshot> IcebergTableMetadata::GetSnapshotByTimestamp(timestamp_t timestamp) const {
-	auto snapshot = FindSnapshotByIdTimestampInternal(timestamp);
-	if (!snapshot) {
-		throw InvalidConfigurationException("Could not find latest snapshots for timestamp " +
-		                                    Timestamp::ToString(timestamp));
-	}
-	return snapshot;
+	return FindSnapshotByIdTimestampInternal(timestamp);
 }
 
-optional_ptr<const IcebergSnapshot> IcebergTableMetadata::GetSnapshot(const IcebergSnapshotLookup &lookup) const {
-	switch (lookup.snapshot_source) {
+IcebergSnapshotScanInfo IcebergTableMetadata::GetSnapshot(const IcebergSnapshotLookup &lookup) const {
+	IcebergSnapshotScanInfo snapshot_info;
+	switch (lookup.GetSource()) {
 	case SnapshotSource::LATEST:
-		return GetLatestSnapshot();
+		snapshot_info.snapshot = GetLatestSnapshot();
+		snapshot_info.schema_id = GetCurrentSchemaId();
+		return snapshot_info;
 	case SnapshotSource::FROM_ID:
-		return GetSnapshotById(lookup.snapshot_id);
+		snapshot_info.snapshot = GetSnapshotById(lookup.snapshot_id);
+		snapshot_info.schema_id = snapshot_info.snapshot->GetSchemaId();
+		return snapshot_info;
 	case SnapshotSource::FROM_TIMESTAMP:
-		return GetSnapshotByTimestamp(lookup.snapshot_timestamp);
+		snapshot_info.snapshot = GetSnapshotByTimestamp(lookup.snapshot_timestamp);
+		if (snapshot_info.snapshot) {
+			snapshot_info.schema_id = snapshot_info.snapshot->GetSchemaId();
+		} else {
+			snapshot_info.schema_id = GetCurrentSchemaId();
+		}
+		return snapshot_info;
 	default:
 		throw InternalException("SnapshotSource type not implemented");
 	}
@@ -261,12 +266,20 @@ string IcebergTableMetadata::GetMetaDataPath(ClientContext &context, const strin
 	return GuessTableVersion(meta_path, fs, options);
 }
 
-bool IcebergTableMetadata::HasLastAssignedColumnFieldId() const {
+bool IcebergTableMetadata::HasLastColumnId() const {
 	return last_column_id.IsValid();
 }
 
-idx_t IcebergTableMetadata::GetLastAssignedColumnFieldId() const {
+idx_t IcebergTableMetadata::GetLastColumnId() const {
 	return last_column_id.GetIndex();
+}
+
+void IcebergTableMetadata::SetCurrentSchemaId(int32_t value) {
+	current_schema_id = value;
+}
+
+int32_t IcebergTableMetadata::GetCurrentSchemaId() const {
+	return current_schema_id;
 }
 
 bool IcebergTableMetadata::HasLastPartitionId() const {

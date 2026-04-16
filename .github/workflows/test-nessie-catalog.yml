@@ -46,7 +46,7 @@ jobs:
 
       - name: Clone Nessie
         run: |
-          make nessie_clone
+          make nessie-clone
 
       - name: GitHub machine compatibility
         working-directory: .catalogs/nessie/docker
@@ -61,7 +61,7 @@ jobs:
 
       - name: Start Nessie
         run: |
-          make nessie_start
+          make nessie
 
       - name: Wait for Nessie/Keycloak
         run: |
@@ -83,17 +83,17 @@ jobs:
         env:
           NESSIE_SERVER_AVAILABLE: 1
         run: |
-          ./build/release/test/unittest "$PWD/test/sql/local/irc_specific_catalogs/nessie/*" --list-test-names-only || true
-          ./build/release/test/unittest "$PWD/test/sql/local/irc_specific_catalogs/nessie/*"
+          ./build/release/test/unittest --order lex "$PWD/test/sql/local/irc_specific_catalogs/nessie/*" --list-test-names-only || true
+          ./build/release/test/unittest --order lex "$PWD/test/sql/local/irc_specific_catalogs/nessie/*"
 
       - name: Generate data
         run: |
-          make nessie_data
+          make nessie-data-only
 
       - name: Run Generic IRC tests
         env:
           ICEBERG_SERVER_AVAILABLE: 1
           SECRETS_CREATED_AND_CATALOG_ATTACHED: 1
         run: |
-          ./build/release/test/unittest "$PWD/test/sql/local/irc_any_catalog/*" --list-test-names-only || true
-          ./build/release/test/unittest "$PWD/test/sql/local/irc_any_catalog/*" --test-config test/configs/nessie.json  --autoloading available
+          ./build/release/test/unittest --order lex "$PWD/test/sql/local/irc_any_catalog/*" --list-test-names-only || true
+          ./build/release/test/unittest --order lex "$PWD/test/sql/local/irc_any_catalog/*" --test-config test/configs/nessie.json

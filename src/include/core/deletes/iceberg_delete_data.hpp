@@ -2,6 +2,7 @@
 
 #include "duckdb/common/multi_file/multi_file_data.hpp"
 #include "core/metadata/manifest/iceberg_manifest.hpp"
+#include "planning/metadata_io/manifest/bound_iceberg_manifest_entry.hpp"
 
 namespace duckdb {
 
@@ -9,7 +10,7 @@ enum class IcebergDeleteType : uint8_t { POSITIONAL_DELETE, DELETION_VECTOR };
 
 struct IcebergDeleteData {
 public:
-	IcebergDeleteData(IcebergDeleteType type, const IcebergManifestEntry &entry) : type(type) {
+	IcebergDeleteData(IcebergDeleteType type, const BoundIcebergManifestEntry &entry) : type(type) {
 		entries.push_back(entry);
 	}
 	virtual ~IcebergDeleteData() {
@@ -22,7 +23,7 @@ public:
 public:
 	IcebergDeleteType type;
 	//! The manifest entry(s) that created this delete data
-	vector<reference<const IcebergManifestEntry>> entries;
+	vector<BoundIcebergManifestEntry> entries;
 };
 
 } // namespace duckdb

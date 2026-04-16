@@ -51,34 +51,19 @@ static Value DeserializeHugeintDecimal(const string_t &blob, uint8_t width, uint
 	D_ASSERT(blob.GetSize() <= sizeof(hugeint_t));
 
 	// Convert from big-endian to host byte order
+	// read all bytes into a single 128-bit value
 	const uint8_t *src = reinterpret_cast<const uint8_t *>(blob.GetData());
-	int64_t upper_val = 0;
-	uint64_t lower_val = 0;
+	bool is_negative = blob.GetSize() > 0 && (src[0] & 0x80);
 
-	// Calculate how many bytes go into upper and lower parts
-	idx_t upper_bytes = (blob.GetSize() <= sizeof(uint64_t)) ? blob.GetSize() : (blob.GetSize() - sizeof(uint64_t));
+	// sign extension: 0 for positive, -1 for negative
+	int64_t upper_val = is_negative ? -1 : 0;
+	uint64_t lower_val = is_negative ? ~uint64_t(0) : 0;
 
-	// Read upper part (big-endian)
-	for (idx_t i = 0; i < upper_bytes; i++) {
-		upper_val = (upper_val << 8) | src[i];
-	}
-
-	// Handle sign extension for negative numbers
-	if (blob.GetSize() > 0 && (src[0] & 0x80)) {
-		// Fill remaining bytes with 1s for negative numbers
-		if (upper_bytes < sizeof(int64_t)) {
-			// Create a mask with 1s in the upper bits that need to be filled
-			int64_t mask = ((int64_t)1 << ((sizeof(int64_t) - upper_bytes) * 8)) - 1;
-			mask = mask << (upper_bytes * 8);
-			upper_val |= mask;
-		}
-	}
-
-	// Read lower part if there are remaining bytes
-	if (blob.GetSize() > sizeof(int64_t)) {
-		for (idx_t i = upper_bytes; i < blob.GetSize(); i++) {
-			lower_val = (lower_val << 8) | src[i];
-		}
+	// then split into upper/lower, by shifting each byte from MSB to LSB
+	for (idx_t i = 0; i < blob.GetSize(); i++) {
+		// shift the entire 128 bit value left by 8 bits
+		upper_val = (upper_val << 8) | static_cast<int64_t>(static_cast<uint64_t>(lower_val) >> 56);
+		lower_val = (lower_val << 8) | src[i];
 	}
 
 	ret = hugeint_t(upper_val, lower_val);
@@ -399,8 +384,10 @@ SerializeResult IcebergValue::SerializeValue(Value input_value, const LogicalTyp
 	case LogicalTypeId::DECIMAL: {
 		auto decimal_as_string = input_value.GetValue<string>();
 		auto dec_pos = decimal_as_string.find(".");
-		// remove the decimal point
-		decimal_as_string.erase(dec_pos, 1);
+		// remove the decimal point if found (when scale is 0 there is no decimal point)
+		if (dec_pos != string::npos) {
+			decimal_as_string.erase(dec_pos, 1);
+		}
 		auto unscaled = Value(decimal_as_string).DefaultCastAs(LogicalType::HUGEINT);
 		auto unscaled_hugeint = unscaled.GetValue<hugeint_t>();
 		vector<uint8_t> big_endian_bytes;
@@ -435,26 +422,21 @@ SerializeResult IcebergValue::SerializeValue(Value input_value, const LogicalTyp
 			}
 			big_endian_bytes.push_back(get_8);
 		}
-		if (needs_negative_padding) {
-			big_endian_bytes.push_back(0xFF);
-		}
-		if (needs_positive_padding) {
-			big_endian_bytes.push_back(0x00);
-		}
-
-		// reverse the bytes to get them in big-endian order
-		std::reverse(big_endian_bytes.begin(), big_endian_bytes.end());
-
-		hugeint_t result = 0;
-		int n = big_endian_bytes.size();
-		D_ASSERT(n <= 16);
-		for (int i = 0; i < n; i++) {
-			result |= static_cast<hugeint_t>(big_endian_bytes[i]) << (8 * (n - i - 1));
+		if (!first_val) {
+			// value is 0 or -1
+			big_endian_bytes.push_back(is_negative ? (uint8_t)0xFF : (uint8_t)0x00);
+		} else {
+			// insert padding at the beginning so big endian encoding is unambiguous
+			if (needs_negative_padding) {
+				big_endian_bytes.insert(big_endian_bytes.begin(), 0xFF);
+			}
+			if (needs_positive_padding) {
+				big_endian_bytes.insert(big_endian_bytes.begin(), 0x00);
+			}
 		}
 
-		auto serialized_const_data_ptr = const_data_ptr_cast<hugeint_t>(&result);
-		// create blob value of int32, using only big_endian_bytes.size() bytes
-		auto ret_val = Value::BLOB(serialized_const_data_ptr, big_endian_bytes.size());
+		// use big_endian_bytes directly as it is already in big endian order
+		auto ret_val = Value::BLOB(const_data_ptr_cast<uint8_t>(big_endian_bytes.data()), big_endian_bytes.size());
 		auto ret = SerializeResult(column_type, ret_val);
 		return ret;
 	}

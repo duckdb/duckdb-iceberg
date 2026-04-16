@@ -19,23 +19,24 @@
 #include "duckdb/planner/operator/logical_comparison_join.hpp"
 #include "duckdb/common/file_opener.hpp"
 #include "duckdb/common/file_system.hpp"
+#include "duckdb/common/string.hpp"
 
-#include "function/metadata/iceberg_metadata.hpp"
 #include "function/iceberg_functions.hpp"
 #include "common/iceberg_utils.hpp"
 #include "core/metadata/iceberg_table_metadata.hpp"
+#include "core/metadata/manifest/iceberg_manifest.hpp"
+#include "core/metadata/manifest/iceberg_manifest_list.hpp"
 
-#include <string>
 #include <numeric>
 
 namespace duckdb {
 
 struct IcebergColumnStatsBindData : public TableFunctionData {
-	optional_ptr<const IcebergSnapshot> snapshot_to_scan;
+	unique_ptr<IcebergManifestList> iceberg_table;
+	IcebergSnapshotScanInfo snapshot_to_scan;
 	IcebergTableMetadata metadata;
 	shared_ptr<IcebergTableSchema> schema;
 	unordered_map<uint64_t, ColumnIndex> source_to_column_id;
-	unique_ptr<IcebergTable> iceberg_table;
 };
 
 struct IcebergColumnStatsGlobalTableFunctionState : public GlobalTableFunctionState {
@@ -85,18 +86,18 @@ static unique_ptr<FunctionData> IcebergColumnStatsBind(ClientContext &context, T
 			}
 			options.version_name_format = value;
 		} else if (loption == "snapshot_from_id") {
-			if (snapshot_lookup.snapshot_source != SnapshotSource::LATEST) {
+			if (snapshot_lookup.GetSource() != SnapshotSource::LATEST) {
 				throw InvalidInputException(
 				    "Can't use 'snapshot_from_id' in combination with 'snapshot_from_timestamp'");
 			}
-			snapshot_lookup.snapshot_source = SnapshotSource::FROM_ID;
+			snapshot_lookup.SetSource(SnapshotSource::FROM_ID);
 			snapshot_lookup.snapshot_id = val.GetValue<uint64_t>();
 		} else if (loption == "snapshot_from_timestamp") {
-			if (snapshot_lookup.snapshot_source != SnapshotSource::LATEST) {
+			if (snapshot_lookup.GetSource() != SnapshotSource::LATEST) {
 				throw InvalidInputException(
 				    "Can't use 'snapshot_from_id' in combination with 'snapshot_from_timestamp'");
 			}
-			snapshot_lookup.snapshot_source = SnapshotSource::FROM_TIMESTAMP;
+			snapshot_lookup.SetSource(SnapshotSource::FROM_TIMESTAMP);
 			snapshot_lookup.snapshot_timestamp = val.GetValue<timestamp_t>();
 		}
 	}
@@ -107,9 +108,10 @@ static unique_ptr<FunctionData> IcebergColumnStatsBind(ClientContext &context, T
 
 	ret->snapshot_to_scan = ret->metadata.GetSnapshot(options.snapshot_lookup);
 
-	if (ret->snapshot_to_scan) {
-		ret->iceberg_table = IcebergTable::Load(filename, ret->metadata, *ret->snapshot_to_scan, context, options);
-		ret->schema = ret->metadata.GetSchemaFromId(ret->snapshot_to_scan->schema_id);
+	if (ret->snapshot_to_scan.snapshot) {
+		ret->iceberg_table =
+		    IcebergManifestList::Load(filename, ret->metadata, ret->snapshot_to_scan, context, options);
+		ret->schema = ret->metadata.GetSchemaFromId(ret->snapshot_to_scan.schema_id);
 
 		auto &schema = ret->schema->columns;
 		IcebergTableSchema::PopulateSourceIdMap(ret->source_to_column_id, schema, nullptr);
@@ -166,7 +168,7 @@ static void IcebergColumnStatsFunction(ClientContext &context, TableFunctionInpu
 
 	idx_t out = 0;
 	auto &schema = bind_data.schema->columns;
-	auto &table_entries = bind_data.iceberg_table->entries;
+	auto &table_entries = bind_data.iceberg_table->GetManifestFilesConst();
 	for (; global_state.current_manifest_idx < table_entries.size(); global_state.current_manifest_idx++) {
 		auto &table_entry = table_entries[global_state.current_manifest_idx];
 		auto &entries = table_entry.manifest_entries;
@@ -182,10 +184,10 @@ static void IcebergColumnStatsFunction(ClientContext &context, TableFunctionInpu
 				idx_t col = 0;
 				//! status
 				AddString(output.data[col++], out,
-				          string_t(IcebergManifestEntry::StatusTypeToString(manifest_entry.status)));
+				          string_t(IcebergManifestEntryStatusTypeToString(manifest_entry.status)));
 				//! content
 				AddString(output.data[col++], out,
-				          string_t(IcebergManifestEntry::ContentTypeToString(data_file.content)));
+				          string_t(IcebergManifestEntryContentTypeToString(data_file.content)));
 				//! file_path
 				AddString(output.data[col++], out, string_t(data_file.file_path));
 

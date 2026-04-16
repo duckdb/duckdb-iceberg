@@ -10,12 +10,13 @@ public:
 	static constexpr const IcebergAuthorizationType TYPE = IcebergAuthorizationType::OAUTH2;
 
 public:
-	OAuth2Authorization();
-	OAuth2Authorization(const string &grant_type, const string &uri, const string &client_id,
+	OAuth2Authorization(AttachedDatabase &db);
+	OAuth2Authorization(AttachedDatabase &db, const string &grant_type, const string &uri, const string &client_id,
 	                    const string &client_secret, const string &scope);
 
 public:
-	static unique_ptr<OAuth2Authorization> FromAttachOptions(ClientContext &context, IcebergAttachOptions &input);
+	static unique_ptr<OAuth2Authorization> FromAttachOptions(AttachedDatabase &db, ClientContext &context,
+	                                                         IcebergAttachOptions &input);
 	unique_ptr<HTTPResponse> Request(RequestType request_type, ClientContext &context,
 	                                 const IRCEndpointBuilder &endpoint_builder, HTTPHeaders &headers,
 	                                 const string &data = "") override;

@@ -60,7 +60,8 @@ public:
 	}
 
 public:
-	void Create(const IcebergPartitionSpec &partition_spec, const vector<IcebergManifestEntry> &entries);
+	void Create(const IcebergTableMetadata &metadata, const IcebergPartitionSpec &partition_spec,
+	            const vector<IcebergManifestEntry> &entries);
 
 public:
 	bool has_partitions = false;
@@ -71,6 +72,8 @@ enum class IcebergManifestContentType : uint8_t {
 	DATA = 0,
 	DELETE = 1,
 };
+
+string IcebergManifestContentTypeToString(IcebergManifestContentType type);
 
 struct IcebergManifestFile {
 public:
@@ -107,29 +110,6 @@ public:
 public:
 	IcebergManifestFile(const string &manifest_path) : manifest_path(manifest_path) {
 	}
-
-	static vector<LogicalType> Types() {
-		return {
-		    LogicalType::VARCHAR,
-		    LogicalType::BIGINT,
-		    LogicalType::VARCHAR,
-		};
-	}
-
-	static string ContentTypeToString(IcebergManifestContentType type) {
-		switch (type) {
-		case IcebergManifestContentType::DATA:
-			return "DATA";
-		case IcebergManifestContentType::DELETE:
-			return "DELETE";
-		default:
-			throw InvalidConfigurationException("Invalid Manifest Content Type");
-		}
-	}
-
-	static vector<string> Names() {
-		return {"manifest_path", "manifest_sequence_number", "manifest_content"};
-	}
 };
 
 struct IcebergManifestListEntry {
@@ -150,7 +130,8 @@ public:
 
 struct IcebergManifestList {
 public:
-	IcebergManifestList(const string &path) : path(path) {
+	IcebergManifestList(int64_t snapshot_id, sequence_number_t sequence_number, const string &path)
+	    : path(path), snapshot_id(snapshot_id), sequence_number(sequence_number) {
 	}
 
 public:
@@ -160,7 +141,18 @@ public:
 		return path;
 	}
 
-	void AddManifestFile(IcebergManifestListEntry &&manifest_file) {
+	void AddNewManifestFile(IcebergManifestListEntry &&manifest_list_entry) {
+		auto &manifest_file = manifest_list_entry.file;
+		manifest_file.sequence_number = sequence_number;
+		manifest_file.added_snapshot_id = snapshot_id;
+
+		if (!manifest_file.has_min_sequence_number || manifest_file.min_sequence_number > sequence_number) {
+			manifest_file.min_sequence_number = sequence_number;
+			manifest_file.has_min_sequence_number = true;
+		}
+		manifest_entries.push_back(std::move(manifest_list_entry));
+	}
+	void AddExistingManifestFile(IcebergManifestListEntry &&manifest_file) {
 		manifest_entries.push_back(std::move(manifest_file));
 	}
 	idx_t GetManifestListEntriesCount() const;
@@ -171,9 +163,14 @@ public:
 public:
 	static LogicalType FieldSummaryType();
 	static Value FieldSummaryFieldIds();
+	static unique_ptr<IcebergManifestList> Load(const string &iceberg_path, const IcebergTableMetadata &metadata,
+	                                            const IcebergSnapshotScanInfo &snapshot_info, ClientContext &context,
+	                                            const IcebergOptions &options);
 
 private:
 	string path;
+	int64_t snapshot_id;
+	sequence_number_t sequence_number;
 	vector<IcebergManifestListEntry> manifest_entries;
 };
 

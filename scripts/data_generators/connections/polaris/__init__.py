@@ -32,22 +32,19 @@ class IcebergSparkLocal(IcebergConnection):
             f"--packages org.apache.iceberg:iceberg-spark-runtime-{SPARK_VERSION}_{SCALA_BINARY_VERSION}:{ICEBERG_LIBRARY_VERSION},org.apache.iceberg:iceberg-aws-bundle:{ICEBERG_LIBRARY_VERSION} pyspark-shell"
         )
 
-        client_id = os.getenv('POLARIS_CLIENT_ID', '')
-        client_secret = os.getenv('POLARIS_CLIENT_SECRET', '')
-        os.environ["AWS_REGION"] = "us-east-1"
-        os.environ["AWS_ACCESS_KEY_ID"] = "admin"
-        os.environ["AWS_SECRET_ACCESS_KEY"] = "password"
-
-        if client_id == '' or client_secret == '':
-            print("could not find client id or client secret to connect to polaris, aborting")
-            return
+        client_id = os.getenv('POLARIS_CLIENT_ID', 'root')
+        client_secret = os.getenv('POLARIS_CLIENT_SECRET', 's3cr3t')
+        os.environ["AWS_REGION"] = "us-west-2"
+        os.environ["AWS_ACCESS_KEY_ID"] = "minio_root"
+        os.environ["AWS_SECRET_ACCESS_KEY"] = "m1n1opwd"
 
         config = SparkConf()
         config.set(
             "spark.jars.packages",
-            f"org.apache.iceberg:iceberg-spark-runtime-{SPARK_VERSION}_{SCALA_BINARY_VERSION}:{ICEBERG_LIBRARY_VERSION},org.apache.hadoop:hadoop-aws:3.4.0,software.amazon.awssdk:bundle:2.23.19,software.amazon.awssdk:url-connection-client:2.23.19",
+            f"org.apache.iceberg:iceberg-spark-runtime-{SPARK_VERSION}_{SCALA_BINARY_VERSION}:{ICEBERG_LIBRARY_VERSION},org.apache.iceberg:iceberg-aws-bundle:{ICEBERG_LIBRARY_VERSION} pyspark-shell"
         )
         config.set('spark.sql.iceberg.vectorization.enabled', 'false')
+        config.set("spark.sql.extensions", "org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions")
         # Configure the 'polaris' catalog as an Iceberg rest catalog
         config.set("spark.sql.catalog.quickstart_catalog.type", "rest")
         config.set('spark.driver.memory', '10g')

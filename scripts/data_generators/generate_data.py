@@ -6,6 +6,8 @@ import argparse
 polaris_blacklist = [
     "complicated_partitioned_table",
     "spark_written_upper_lower_bounds",
+    "spark_written_upper_lower_decimal_bounds",
+    "spark_written_upper_lower_hugeint_bounds",
     "nested_namespaces",
     "table_sort_order"
 ]

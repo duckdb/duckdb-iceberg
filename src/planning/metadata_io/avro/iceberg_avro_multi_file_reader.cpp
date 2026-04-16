@@ -2,16 +2,18 @@
 
 #include "duckdb/common/exception.hpp"
 #include "duckdb/planner/expression/bound_constant_expression.hpp"
+#include "duckdb/planner/expression/bound_cast_expression.hpp"
+#include "duckdb/planner/expression/bound_function_expression.hpp"
+#include "duckdb/function/cast/bound_cast_data.hpp"
 
 #include "planning/metadata_io/avro/iceberg_avro_multi_file_list.hpp"
 #include "core/metadata/manifest/iceberg_manifest_list.hpp"
 #include "core/metadata/manifest/iceberg_manifest.hpp"
 #include "common/iceberg_utils.hpp"
+#include "planning/metadata_io/manifest/iceberg_manifest_reader.hpp"
+#include "planning/metadata_io/manifest_list/iceberg_manifest_list_reader.hpp"
 
 namespace duckdb {
-constexpr column_t IcebergAvroMultiFileReader::PARTITION_SPEC_ID_FIELD_ID;
-constexpr column_t IcebergAvroMultiFileReader::SEQUENCE_NUMBER_FIELD_ID;
-constexpr column_t IcebergAvroMultiFileReader::MANIFEST_FILE_PATH_FIELD_ID;
 
 unique_ptr<MultiFileReader> IcebergAvroMultiFileReader::CreateInstance(const TableFunction &table) {
 	return make_uniq<IcebergAvroMultiFileReader>(table.function_info);
@@ -398,7 +400,7 @@ bool IcebergAvroMultiFileReader::Bind(MultiFileOptions &options, MultiFileList &
 	auto &scan_info = *iceberg_avro_list.info;
 	auto &type = scan_info.type;
 	auto &metadata = scan_info.metadata;
-	auto &snapshot = scan_info.snapshot;
+	auto &snapshot = *scan_info.snapshot_info.snapshot;
 
 	// Build the expected schema with field IDs
 	vector<MultiFileColumnDefinition> schema;
@@ -419,8 +421,67 @@ bool IcebergAvroMultiFileReader::Bind(MultiFileOptions &options, MultiFileList &
 	// Set the schema in bind_data - framework will use this for mapping
 	bind_data.schema = std::move(schema);
 	bind_data.mapping = MultiFileColumnMappingMode::BY_FIELD_ID;
-
 	return true;
+}
+
+// Recursively walk a BoundCastInfo and replace TryVectorNullCast → ReinterpretCast wherever
+// the source and target types share the same physical representation.  This handles the case
+// where Spark writes DAY-transform partition values as an avro 'date' logical type
+// (int32) rather than a plain int32. DuckDB-Avro returns DATE, while DuckDB-Iceberg expects INTEGER for a day
+// transform, both are PhysicalType::INT32 so a bitwise reinterpret is always correct. This is only executed for Avro
+// Manifests, and does not happen in any other reads
+static void FixSamePhysicalTypeCasts(BoundCastInfo &cast_info, const LogicalType &source_type,
+                                     const LogicalType &target_type) {
+	if (cast_info.function == DefaultCasts::TryVectorNullCast &&
+	    source_type.InternalType() == target_type.InternalType()) {
+		cast_info.function = DefaultCasts::ReinterpretCast;
+		return;
+	}
+	if (!cast_info.cast_data) {
+		return;
+	}
+	if (source_type.id() != LogicalTypeId::STRUCT || target_type.id() != LogicalTypeId::STRUCT) {
+		return;
+	}
+	auto &struct_data = cast_info.cast_data->Cast<StructBoundCastData>();
+	auto &src_children = StructType::GetChildTypes(source_type);
+	auto &tgt_children = StructType::GetChildTypes(target_type);
+	for (idx_t i = 0; i < struct_data.child_cast_info.size(); i++) {
+		auto src_idx = struct_data.source_indexes[i];
+		auto tgt_idx = struct_data.target_indexes[i];
+		if (src_idx >= src_children.size() || tgt_idx >= tgt_children.size()) {
+			continue;
+		}
+		FixSamePhysicalTypeCasts(struct_data.child_cast_info[i], src_children[src_idx].second,
+		                         tgt_children[tgt_idx].second);
+	}
+}
+
+static void FixSamePhysicalTypeCastsInExpr(Expression &expr) {
+	if (expr.type == ExpressionType::OPERATOR_CAST) {
+		auto &cast_expr = expr.Cast<BoundCastExpression>();
+		FixSamePhysicalTypeCasts(cast_expr.bound_cast, cast_expr.source_type(), cast_expr.return_type);
+	} else if (expr.type == ExpressionType::BOUND_FUNCTION) {
+		for (auto &child : expr.Cast<BoundFunctionExpression>().children) {
+			if (child) {
+				FixSamePhysicalTypeCastsInExpr(*child);
+			}
+		}
+	}
+}
+
+ReaderInitializeType IcebergAvroMultiFileReader::InitializeReader(
+    MultiFileReaderData &reader_data, const MultiFileBindData &bind_data,
+    const vector<MultiFileColumnDefinition> &global_columns, const vector<ColumnIndex> &global_column_ids,
+    optional_ptr<TableFilterSet> table_filters, ClientContext &context, MultiFileGlobalState &gstate) {
+	auto result = MultiFileReader::InitializeReader(reader_data, bind_data, global_columns, global_column_ids,
+	                                                table_filters, context, gstate);
+	for (auto &expr : reader_data.expressions) {
+		if (expr) {
+			FixSamePhysicalTypeCastsInExpr(*expr);
+		}
+	}
+	return result;
 }
 
 void IcebergAvroMultiFileReader::FinalizeChunk(ClientContext &context, const MultiFileBindData &bind_data,
@@ -433,126 +494,32 @@ void IcebergAvroMultiFileReader::FinalizeChunk(ClientContext &context, const Mul
 	                               global_state_p);
 
 	auto scan_info = shared_ptr_cast<TableFunctionInfo, IcebergAvroScanInfo>(function_info);
-	if (scan_info->type == AvroScanInfoType::MANIFEST_LIST) {
-		return;
-	}
-	auto &manifest_scan_info = scan_info->Cast<IcebergManifestFileScanInfo>();
-	auto manifest_file_idx = reader.file_list_idx.GetIndex();
-	auto &manifest_file = manifest_scan_info.manifest_files[manifest_file_idx];
+	auto &metadata = scan_info->metadata;
+	switch (scan_info->type) {
+	case AvroScanInfoType::MANIFEST_FILE: {
+		auto &manifest_scan_info = scan_info->Cast<IcebergManifestFileScanInfo>();
+		auto manifest_file_idx = reader.file_list_idx.GetIndex();
+		auto &manifest_file = manifest_scan_info.manifest_files[manifest_file_idx];
 
-	idx_t count = output_chunk.size();
-	auto &status_column = output_chunk.data[0];
-	status_column.Flatten(count);
-
-	auto &sequence_number_column = output_chunk.data[2];
-	sequence_number_column.Flatten(count);
-	auto &sequence_number_validity = FlatVector::Validity(sequence_number_column);
-	auto sequence_number_data = FlatVector::GetData<int64_t>(sequence_number_column);
-	auto status_column_data = FlatVector::GetData<int32_t>(status_column);
-	for (idx_t i = 0; i < count; i++) {
-		if (sequence_number_validity.RowIsValid(i)) {
-			//! Sequence number is explicitly set
-			continue;
+		idx_t start_index = manifest_file.manifest_entries.size();
+		manifest_file::ManifestReader::ReadChunk(output_chunk, manifest_scan_info.partition_field_id_to_type, metadata,
+		                                         manifest_file.manifest_entries);
+		if (manifest_scan_info.read_state) {
+			auto &read_state = *manifest_scan_info.read_state;
+			read_state.PushBatch(
+			    ManifestReadBatch(manifest_file_idx, start_index, manifest_file.manifest_entries.size()));
 		}
-		sequence_number_validity.SetValid(i);
-		sequence_number_data[i] = manifest_file.file.sequence_number;
+		break;
 	}
-	if (scan_info->metadata.iceberg_version < 3) {
-		//! No row-lineage applies, just return
-		return;
+	case AvroScanInfoType::MANIFEST_LIST: {
+		auto &manifest_scan_info = scan_info->Cast<IcebergManifestListScanInfo>();
+		manifest_list::ManifestListReader::ReadChunk(output_chunk, metadata.iceberg_version, manifest_scan_info.result);
+		break;
 	}
-	if (manifest_file.file.content == IcebergManifestContentType::DELETE) {
-		//! No need to inherit first-row-id for DELETE manifests
-		return;
+	default:
+		throw InternalException("AvroScanInfoType not implemented");
 	}
-
-	auto &global_state = global_state_p->Cast<IcebergAvroMultiFileReaderGlobalState>();
-
-	auto res = global_state.added_rows_per_manifest.emplace(manifest_file_idx, 0);
-	auto &start_row_id = res.first->second;
-
-	//! NOTE: the order of these columns is defined by the order that they are produced in BuildManifestSchema
-	//! see `iceberg_avro_multi_file_reader.cpp`
-	auto &data_file_column = output_chunk.data[4];
-	auto &data_struct_children = StructVector::GetEntries(data_file_column);
-
-	auto &first_row_id_column = *data_struct_children[15];
-	first_row_id_column.Flatten(count);
-
-	auto &record_count_column = *data_struct_children[4];
-	record_count_column.Flatten(count);
-
-	auto &first_row_id_validity = FlatVector::Validity(first_row_id_column);
-	auto first_row_id_data = FlatVector::GetData<int64_t>(first_row_id_column);
-	auto record_count_data = FlatVector::GetData<int64_t>(record_count_column);
-	for (idx_t i = 0; i < count; i++) {
-		if (first_row_id_validity.RowIsValid(i)) {
-			//! First row id is explicitly set
-			continue;
-		}
-		if (status_column_data[i] == 2) {
-			// Manifest entry is deleted, skip
-			continue;
-		}
-		if (manifest_file.file.has_first_row_id) {
-			first_row_id_validity.SetValid(i);
-			first_row_id_data[i] = manifest_file.file.first_row_id + start_row_id;
-			start_row_id += record_count_data[i];
-		}
-	}
-	(void)output_chunk;
-	count += 1;
 	return;
-}
-
-unique_ptr<Expression> IcebergAvroMultiFileReader::GetVirtualColumnExpression(
-    ClientContext &context, MultiFileReaderData &reader_data, const vector<MultiFileColumnDefinition> &local_columns,
-    idx_t &column_id, const LogicalType &type, MultiFileLocalIndex local_idx,
-    optional_ptr<MultiFileColumnDefinition> &global_column_reference) {
-	if (column_id == PARTITION_SPEC_ID_FIELD_ID) {
-		if (!reader_data.file_to_be_opened.extended_info) {
-			throw InternalException("Extended info not found for partition_spec_id column");
-		}
-		auto &options = reader_data.file_to_be_opened.extended_info->options;
-		auto entry = options.find("partition_spec_id");
-		if (entry == options.end()) {
-			throw InternalException("'partition_spec_id' not set when initializing the FileList");
-		}
-		return make_uniq<BoundConstantExpression>(entry->second);
-	}
-	if (column_id == SEQUENCE_NUMBER_FIELD_ID) {
-		if (!reader_data.file_to_be_opened.extended_info) {
-			throw InternalException("Extended info not found for sequence number column");
-		}
-		auto &options = reader_data.file_to_be_opened.extended_info->options;
-		auto entry = options.find("sequence_number");
-		if (entry == options.end()) {
-			throw InternalException("'sequence_number' not set when initializing the FileList");
-		}
-		return make_uniq<BoundConstantExpression>(entry->second);
-	}
-	if (column_id == MANIFEST_FILE_PATH_FIELD_ID) {
-		if (!reader_data.file_to_be_opened.extended_info) {
-			throw InternalException("Extended info not found for manifest_file_path column");
-		}
-		auto &options = reader_data.file_to_be_opened.extended_info->options;
-		auto entry = options.find("manifest_file_path");
-		if (entry == options.end()) {
-			throw InternalException("'manifest_file_path' not set when initializing the FileList");
-		}
-		return make_uniq<BoundConstantExpression>(entry->second);
-	}
-	return MultiFileReader::GetVirtualColumnExpression(context, reader_data, local_columns, column_id, type, local_idx,
-	                                                   global_column_reference);
-}
-
-unique_ptr<MultiFileReaderGlobalState> IcebergAvroMultiFileReader::InitializeGlobalState(
-    ClientContext &context, const MultiFileOptions &file_options, const MultiFileReaderBindData &bind_data,
-    const MultiFileList &file_list, const vector<MultiFileColumnDefinition> &global_columns,
-    const vector<ColumnIndex> &global_column_ids) {
-	vector<LogicalType> extra_columns;
-	auto res = make_uniq<IcebergAvroMultiFileReaderGlobalState>(extra_columns, file_list);
-	return std::move(res);
 }
 
 shared_ptr<MultiFileList> IcebergAvroMultiFileReader::CreateFileList(ClientContext &context,

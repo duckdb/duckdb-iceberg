@@ -58,12 +58,11 @@ jobs:
 
       - name: Setup fixture local
         run: |
-          make fixture_local
+          make fixture-data-local
 
       - name: Run local tests
         env:
           DUCKDB_ICEBERG_HAVE_GENERATED_DATA: 1
         run: |
-          ./build/release/test/unittest "$PWD/test/*" --list-test-names-only || true
-          ./build/release/test/unittest "$PWD/test/*"
+          ./build/release/test/unittest --order lex "$PWD/test/*" --list-test-names-only || true ./build/release/test/unittest --order lex "$PWD/test/*"
 

@@ -10,6 +10,7 @@
 #include "core/metadata/sort/iceberg_sort_order.hpp"
 #include "iceberg_options.hpp"
 #include "rest_catalog/objects/list.hpp"
+#include "planning/snapshot/iceberg_snapshot_scan_info.hpp"
 
 namespace duckdb {
 
@@ -56,7 +57,7 @@ public:
 	shared_ptr<IcebergTableSchema> GetSchemaFromId(int32_t schema_id) const;
 	optional_ptr<const IcebergPartitionSpec> FindPartitionSpecById(int32_t spec_id) const;
 	optional_ptr<const IcebergSortOrder> FindSortOrderById(int32_t sort_id) const;
-	optional_ptr<const IcebergSnapshot> GetSnapshot(const IcebergSnapshotLookup &lookup) const;
+	IcebergSnapshotScanInfo GetSnapshot(const IcebergSnapshotLookup &lookup) const;
 
 	//! Get the data and metadata paths, falling back to default if not set
 	const string &GetLatestMetadataJson() const;
@@ -64,8 +65,8 @@ public:
 	const string GetDataPath(FileSystem &fs) const;
 	const string GetMetadataPath(FileSystem &fs) const;
 
-	bool HasLastAssignedColumnFieldId() const;
-	idx_t GetLastAssignedColumnFieldId() const;
+	bool HasLastColumnId() const;
+	idx_t GetLastColumnId() const;
 
 	bool HasLastPartitionId() const;
 	int32_t GetLastPartitionFieldId() const;
@@ -76,6 +77,10 @@ public:
 	string ToJSON() const;
 	void WriteMetadata(ClientContext &context, const string &path) const;
 	void WriteVersionHint(ClientContext &context, const string &path, const string &metadata_json_path) const;
+
+public:
+	void SetCurrentSchemaId(int32_t schema_id);
+	int32_t GetCurrentSchemaId() const;
 
 private:
 	yyjson_mut_val *SchemasToJSON(yyjson_mut_doc *doc) const;
@@ -92,7 +97,6 @@ public:
 	string location;
 
 	int32_t iceberg_version;
-	int32_t current_schema_id;
 	int32_t default_spec_id;
 	bool has_next_row_id = false;
 	int64_t next_row_id = 0xDEADBEEF;
@@ -122,6 +126,9 @@ public:
 
 	//! table properties
 	case_insensitive_map_t<string> table_properties;
+
+private:
+	int32_t current_schema_id;
 };
 
 } // namespace duckdb

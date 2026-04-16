@@ -323,8 +323,8 @@ TableTransactionInfo IcebergTransaction::GetTransactionRequest(ClientContext &co
 		}
 
 		if (!transaction_data.alters.empty()) {
-			auto &last_alter = transaction_data.alters.back();
-			auto snapshot_id = last_alter.get().snapshot.snapshot_id;
+			auto &snapshot = *commit_state.latest_snapshot;
+			auto snapshot_id = snapshot.snapshot_id;
 			auto set_snapshot_ref_update = CreateSetSnapshotRefUpdate(snapshot_id);
 			commit_state.table_change.updates.push_back(std::move(set_snapshot_ref_update));
 		}
@@ -365,6 +365,12 @@ void IcebergTransaction::Commit() {
 	Connection temp_con(db);
 	temp_con.BeginTransaction();
 	auto &temp_con_context = temp_con.context;
+
+	// Copy user settings from the original context so that e.g. s3_access_key_id are available
+	if (!this->context.expired()) {
+		temp_con_context->config = this->context.lock()->config;
+	}
+
 	try {
 		DoSchemaCreates(*temp_con_context);
 		DoTableUpdates(*temp_con_context);
@@ -460,8 +466,7 @@ void IcebergTransaction::DoSchemaDeletes(ClientContext &context) {
 	for (auto &schema_name : deleted_schemas) {
 		vector<string> namespace_items;
 		auto namespace_identifier = IRCAPI::ParseSchemaName(schema_name);
-		namespace_items.push_back(IRCAPI::GetEncodedSchemaName(namespace_identifier));
-		IRCAPI::CommitNamespaceDrop(context, ic_catalog, namespace_items);
+		IRCAPI::CommitNamespaceDrop(context, ic_catalog, namespace_identifier);
 		ic_catalog.GetSchemas().RemoveEntry(schema_name);
 	}
 	deleted_schemas.clear();
@@ -497,7 +502,7 @@ void IcebergTransaction::CleanupFiles() {
 			ic_table_entry.PrepareIcebergScanFromEntry(*temp_con_context);
 
 			auto &add_snapshot = update->Cast<IcebergAddSnapshot>();
-			auto manifest_list_entries = add_snapshot.manifest_list.GetManifestFilesConst();
+			const auto manifest_list_entries = add_snapshot.GetManifestFiles();
 			for (const auto &manifest : manifest_list_entries) {
 				for (auto &manifest_entry : manifest.manifest_entries) {
 					auto &data_file = manifest_entry.data_file;

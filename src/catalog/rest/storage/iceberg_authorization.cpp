@@ -8,6 +8,12 @@
 
 namespace duckdb {
 
+unique_ptr<HTTPClient> &IcebergAuthorizationContextState::GetHTTPClient(AttachedDatabase &db, ClientContext &context) {
+	auto instance = context.registered_state->GetOrCreate<IcebergAuthorizationContextState>("iceberg_authorization");
+	auto res = instance->client_map.emplace(reinterpret_cast<uintptr_t>(&db), nullptr);
+	return res.first->second;
+}
+
 IcebergAuthorizationType IcebergAuthorization::TypeFromString(const string &type) {
 	static const case_insensitive_map_t<IcebergAuthorizationType> mapping {{"oauth2", IcebergAuthorizationType::OAUTH2},
 	                                                                       {"sigv4", IcebergAuthorizationType::SIGV4},

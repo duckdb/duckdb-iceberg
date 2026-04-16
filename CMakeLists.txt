@@ -4,7 +4,7 @@ cmake_minimum_required(VERSION 3.5...3.29)
 set(TARGET_NAME iceberg)
 project(${TARGET_NAME})
 
-set(CMAKE_CXX_STANDARD 14 CACHE STRING "C++ standard")
+set(CMAKE_CXX_STANDARD 17 CACHE STRING "C++ standard")
 set(CMAKE_CXX_STANDARD_REQUIRED True)
 
 set(EXTENSION_NAME ${TARGET_NAME}_extension)
@@ -57,13 +57,21 @@ set(EXTENSION_SOURCES
 	src/execution/operator/iceberg_update.cpp
 	src/function/copy/iceberg_copy_function.cpp
 	src/function/ducklake/iceberg_to_ducklake.cpp
+	src/function/ducklake/ducklake_column.cpp
+	src/function/ducklake/ducklake_column_stats.cpp
+	src/function/ducklake/ducklake_partition.cpp
+	src/function/ducklake/ducklake_partition_column.cpp
+	src/function/ducklake/ducklake_table.cpp
+	src/function/ducklake/ducklake_snapshot.cpp
+	src/function/ducklake/ducklake_schema.cpp
+	src/function/ducklake/ducklake_data_file.cpp
+	src/function/ducklake/ducklake_delete_file.cpp
 	src/function/iceberg_functions.cpp
 	src/function/metadata/iceberg_column_stats.cpp
 	src/function/metadata/iceberg_metadata.cpp
 	src/function/metadata/iceberg_partition_stats.cpp
 	src/function/metadata/iceberg_snapshots.cpp
 	src/function/metadata/iceberg_table_properties_functions.cpp
-	src/function/metadata/iceberg.cpp
 	src/function/scan/iceberg_scan.cpp
 	src/iceberg_extension.cpp
 	src/iceberg_logging.cpp
@@ -74,7 +82,9 @@ set(EXTENSION_SOURCES
 	src/planning/metadata_io/avro/iceberg_avro_multi_file_reader.cpp
 	src/planning/metadata_io/base_manifest_reader.cpp
 	src/planning/metadata_io/deletes/iceberg_deletes_file_reader.cpp
+	src/planning/metadata_io/manifest/bound_iceberg_manifest_entry.cpp
 	src/planning/metadata_io/manifest/iceberg_manifest_reader.cpp
+	src/planning/metadata_io/manifest_list/bound_iceberg_manifest_list_entry.cpp
 	src/planning/metadata_io/manifest_list/iceberg_manifest_list_reader.cpp
 	src/planning/pruning/iceberg_predicate.cpp
 	src/planning/snapshot/iceberg_snapshot_lookup.cpp

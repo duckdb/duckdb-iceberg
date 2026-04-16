@@ -30,9 +30,9 @@ namespace duckdb {
 IcebergCatalog::IcebergCatalog(AttachedDatabase &db_p, AccessMode access_mode,
                                unique_ptr<IcebergAuthorization> auth_handler, IcebergAttachOptions &attach_options,
                                const string &default_schema)
-    : Catalog(db_p), access_mode(access_mode), auth_handler(std::move(auth_handler)),
-      warehouse(attach_options.warehouse), uri(attach_options.endpoint), version("v1"), attach_options(attach_options),
-      default_schema(default_schema), schemas(*this), metadata_cache() {
+    : Catalog(db_p), access_mode(access_mode), auth_handler(std::move(auth_handler)), uri(attach_options.endpoint),
+      version("v1"), attach_options(attach_options), default_schema(default_schema),
+      warehouse(attach_options.warehouse), schemas(*this), metadata_cache() {
 }
 
 IcebergCatalog::~IcebergCatalog() = default;
@@ -208,11 +208,11 @@ ErrorData IcebergCatalog::SupportsCreateTable(BoundCreateTableInfo &info) {
 //===--------------------------------------------------------------------===//
 
 IRCEndpointBuilder IcebergCatalog::GetBaseUrl() const {
-	auto base_url = IRCEndpointBuilder();
-	base_url.SetHost(uri);
-	base_url.AddPathComponent(version);
+	auto url_builder = IRCEndpointBuilder();
+	url_builder.SetHost(uri);
+	url_builder.AddPathComponent(IRCPathComponent::RegularComponent(version));
 
-	return base_url;
+	return url_builder;
 }
 
 unique_ptr<SecretEntry> IcebergCatalog::GetStorageSecret(ClientContext &context, const string &secret_name) {
@@ -419,7 +419,13 @@ void IcebergCatalog::GetConfig(ClientContext &context, IcebergEndpointType &endp
 	// set the prefix to be empty. To get the config endpoint,
 	// we cannot add a default prefix.
 	D_ASSERT(prefix.empty());
-	auto catalog_config = IRCAPI::GetCatalogConfig(context, *this);
+
+	// For AWS Glue, ":" means "default account catalog" — omit the warehouse param
+	string effective_warehouse = warehouse;
+	if (endpoint_type == IcebergEndpointType::AWS_GLUE && warehouse == ":") {
+		effective_warehouse = "";
+	}
+	auto catalog_config = IRCAPI::GetCatalogConfig(context, *this, effective_warehouse);
 	overrides = catalog_config.overrides;
 	defaults = catalog_config.defaults;
 	ParsePrefix();
@@ -663,15 +669,15 @@ unique_ptr<Catalog> IcebergCatalog::Attach(optional_ptr<StorageExtensionInfo> st
 	unique_ptr<IcebergAuthorization> auth_handler;
 	switch (attach_options.authorization_type) {
 	case IcebergAuthorizationType::OAUTH2: {
-		auth_handler = OAuth2Authorization::FromAttachOptions(context, attach_options);
+		auth_handler = OAuth2Authorization::FromAttachOptions(db, context, attach_options);
 		break;
 	}
 	case IcebergAuthorizationType::SIGV4: {
-		auth_handler = SIGV4Authorization::FromAttachOptions(attach_options);
+		auth_handler = SIGV4Authorization::FromAttachOptions(db, attach_options);
 		break;
 	}
 	case IcebergAuthorizationType::NONE: {
-		auth_handler = NoneAuthorization::FromAttachOptions(attach_options);
+		auth_handler = NoneAuthorization::FromAttachOptions(db, attach_options);
 		break;
 	}
 	default:

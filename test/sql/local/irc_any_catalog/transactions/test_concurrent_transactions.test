@@ -1,0 +1,42 @@
+# name: test/sql/local/irc_any_catalog/transactions/test_concurrent_transactions.test
+# group: [transactions]
+
+require-env ICEBERG_SERVER_AVAILABLE
+
+require-env SECRETS_CREATED_AND_CATALOG_ATTACHED
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+CALL enable_logging('HTTP');
+
+statement ok
+set logging_level='debug'
+
+require avro
+
+require parquet
+
+require iceberg
+
+concurrentloop i 1 10
+
+statement ok
+SELECT schema_name FROM information_schema.schemata;
+
+statement ok
+SELECT * FROM information_schema.columns WHERE table_catalog = 'my_datalake';
+
+statement ok
+SELECT * FROM my_datalake.default.quickstart_table LIMIT 1;
+
+endloop

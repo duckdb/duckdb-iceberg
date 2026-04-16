@@ -25,29 +25,18 @@ const IcebergAvroScanInfo &BaseManifestReader::GetScanInfo() const {
 	return *scan.scan_info;
 }
 
-idx_t BaseManifestReader::ScanInternal(idx_t remaining) {
+void BaseManifestReader::ScanInternal() {
 	if (!initialized) {
 		InitializeInternal();
 	}
 	if (finished) {
-		return 0;
+		return;
 	}
-
-	if (offset >= chunk.size()) {
-		TableFunctionInput function_input(scan.bind_data.get(), local_state.get(), scan.global_state.get());
-		scan.avro_scan->function(scan.context, function_input, chunk);
-		auto count = chunk.size();
-		for (auto &vec : chunk.data) {
-			vec.Flatten(count);
-		}
-
-		if (count == 0) {
-			finished = true;
-			return 0;
-		}
-		offset = 0;
+	TableFunctionInput function_input(scan.bind_data.get(), local_state.get(), scan.global_state.get());
+	scan.avro_scan->function(scan.context, function_input, chunk);
+	if (chunk.size() == 0) {
+		finished = true;
 	}
-	return MinValue(chunk.size() - offset, remaining);
 }
 
 bool BaseManifestReader::Finished() const {
