@@ -59,8 +59,7 @@ map<idx_t, LogicalType> IcebergDataFile::GetFieldIdToTypeMapping(const IcebergSn
 			}
 			auto &column_id = it->second;
 			auto &column = IcebergTableSchema::GetFromColumnIndex(schema.columns, column_id, 0);
-			partition_field_id_to_type.emplace(field.partition_field_id,
-			                                   field.transform.GetBoundsType(column.type));
+			partition_field_id_to_type.emplace(field.partition_field_id, field.transform.GetBoundsType(column.type));
 		}
 	}
 	return partition_field_id_to_type;

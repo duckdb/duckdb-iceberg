@@ -28,7 +28,6 @@ public:
 public:
 	static rest_api_objects::TableMetadata Parse(const string &path, FileSystem &fs,
 	                                             const string &metadata_compression_codec);
-	static IcebergTableMetadata FromLoadTableResult(const rest_api_objects::LoadTableResult &load_table_result);
 	static IcebergTableMetadata FromTableMetadata(const rest_api_objects::TableMetadata &table_metadata);
 	static string GetMetaDataPath(ClientContext &context, const string &path, FileSystem &fs,
 	                              const IcebergOptions &options);
@@ -59,8 +58,6 @@ public:
 	optional_ptr<const IcebergSortOrder> FindSortOrderById(int32_t sort_id) const;
 	IcebergSnapshotScanInfo GetSnapshot(const IcebergSnapshotLookup &lookup) const;
 
-	//! Get the data and metadata paths, falling back to default if not set
-	const string &GetLatestMetadataJson() const;
 	const string &GetLocation() const;
 	const string GetDataPath(FileSystem &fs) const;
 	const string GetMetadataPath(FileSystem &fs) const;
@@ -95,8 +92,6 @@ private:
 
 public:
 	string table_uuid;
-	// when loading table metadata, store the path to the metadata.json for extension functions like iceberg_metadata()
-	string latest_metadata_json;
 	string location;
 
 	int32_t iceberg_version;
