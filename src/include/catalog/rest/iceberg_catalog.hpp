@@ -36,7 +36,7 @@ public:
 
 class LoadTableResultCache {
 public:
-	LoadTableResultCache() {
+	LoadTableResultCache(IcebergAttachOptions &attach_options) : attach_options(attach_options) {
 	}
 
 public:
@@ -66,8 +66,9 @@ public:
 
 		// If max_table_staleness_minutes is not set, use a time in the past so cache is always expired
 		system_clock::time_point expires_at;
-		if (max_table_staleness_micros.IsValid()) {
-			expires_at = system_clock::now() + std::chrono::microseconds(max_table_staleness_micros.GetIndex());
+		if (attach_options.max_table_staleness_micros.IsValid()) {
+			expires_at =
+			    system_clock::now() + std::chrono::microseconds(attach_options.max_table_staleness_micros.GetIndex());
 		} else {
 			expires_at = system_clock::time_point::min();
 		}
@@ -90,12 +91,9 @@ public:
 		}
 		tables.erase(it);
 	}
-	void SetMaxTableStaleness(optional_idx micros) {
-		max_table_staleness_micros = micros;
-	}
 
 private:
-	optional_idx max_table_staleness_micros;
+	IcebergAttachOptions &attach_options;
 	mutex lock;
 	case_insensitive_map_t<MetadataCacheValue> tables;
 };

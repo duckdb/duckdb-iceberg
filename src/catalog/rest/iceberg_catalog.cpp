@@ -28,12 +28,11 @@ using namespace duckdb_yyjson;
 namespace duckdb {
 
 IcebergCatalog::IcebergCatalog(AttachedDatabase &db_p, AccessMode access_mode,
-                               unique_ptr<IcebergAuthorization> auth_handler, IcebergAttachOptions &attach_options,
+                               unique_ptr<IcebergAuthorization> auth_handler, IcebergAttachOptions &attach_options_p,
                                const string &default_schema)
-    : Catalog(db_p), access_mode(access_mode), auth_handler(std::move(auth_handler)), uri(attach_options.endpoint),
-      version("v1"), attach_options(attach_options), default_schema(default_schema),
-      warehouse(attach_options.warehouse), schemas(*this) {
-	table_request_cache.SetMaxTableStaleness(attach_options.max_table_staleness_micros);
+    : Catalog(db_p), access_mode(access_mode), auth_handler(std::move(auth_handler)), uri(attach_options_p.endpoint),
+      version("v1"), attach_options(attach_options_p), default_schema(default_schema),
+      warehouse(attach_options.warehouse), schemas(*this), table_request_cache(attach_options) {
 }
 
 IcebergCatalog::~IcebergCatalog() = default;

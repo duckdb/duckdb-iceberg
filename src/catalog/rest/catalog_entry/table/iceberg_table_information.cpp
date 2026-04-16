@@ -536,7 +536,7 @@ IcebergTableInformation IcebergTableInformation::Copy() const {
 		auto cached_result = catalog.table_request_cache.Get(table_key, cache_lock, false);
 		D_ASSERT(cached_result);
 		auto &cached_table_result = *cached_result->load_table_result;
-		ret.InitializeFromLoadTableResult(cached_table_result);
+		ret.InitializeFromLoadTableResult(cached_table_result, false);
 	}
 	return ret;
 }
@@ -582,8 +582,8 @@ IcebergTransactionData &IcebergTableInformation::GetOrCreateTransactionData(Iceb
 	return *transaction_data;
 }
 
-void IcebergTableInformation::InitializeFromLoadTableResult(
-    const rest_api_objects::LoadTableResult &load_table_result) {
+void IcebergTableInformation::InitializeFromLoadTableResult(const rest_api_objects::LoadTableResult &load_table_result,
+                                                            bool initialize_schemas) {
 	table_metadata = IcebergTableMetadata::FromTableMetadata(load_table_result.metadata);
 	config = load_table_result.config;
 	storage_credentials.clear();
@@ -592,10 +592,12 @@ void IcebergTableInformation::InitializeFromLoadTableResult(
 	}
 	latest_metadata_json = load_table_result.metadata_location;
 
-	auto &schemas = table_metadata.GetSchemas();
-	D_ASSERT(!schemas.empty());
-	for (auto &table_schema : schemas) {
-		CreateSchemaVersion(*table_schema.second);
+	if (initialize_schemas) {
+		auto &schemas = table_metadata.GetSchemas();
+		D_ASSERT(!schemas.empty());
+		for (auto &table_schema : schemas) {
+			CreateSchemaVersion(*table_schema.second);
+		}
 	}
 }
 
