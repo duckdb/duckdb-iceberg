@@ -105,7 +105,7 @@ IcebergDataFile::GetExtendedPartitionInfo(const IcebergTableMetadata &metadata) 
 			if (type_it == source_id_to_type.end()) {
 				throw InternalException(
 				    "Partition %s with field_id %llu in data_file %s with source_id %llu not found in any table schema",
-				    field.name, field.partition_field_id, file_path, field.source_id);
+				    field.GetPartitionSpecFieldName(), field.partition_field_id, file_path, field.source_id);
 			}
 			field_id_to_partition_spec_and_source_type.emplace(field.partition_field_id,
 			                                                   ParitionFieldWithSourceType {&field, type_it->second});
@@ -121,7 +121,7 @@ IcebergDataFile::GetExtendedPartitionInfo(const IcebergTableMetadata &metadata) 
 		}
 		auto &resolved = it->second;
 		IcebergExtendedPartitionInfo extended;
-		extended.name = resolved.field->name;
+		extended.name = resolved.field->GetPartitionSpecFieldName();
 		extended.field_id = info.field_id;
 		extended.value = info.value;
 		extended.source_id = resolved.field->source_id;
@@ -557,7 +557,6 @@ idx_t WriteToFile(const IcebergTableMetadata &table_metadata, const IcebergManif
 				yyjson_mut_obj_add_strcpy(doc, field_obj, "name", entry.name.c_str());
 				auto types_arr = yyjson_mut_obj_add_arr(doc, field_obj, "type");
 				yyjson_mut_arr_add_strcpy(doc, types_arr, "null");
-				// TODO: Is this correct? I don't think so.
 				yyjson_mut_arr_add_strcpy(doc, types_arr, "int");
 				yyjson_mut_obj_add_int(doc, field_obj, "id", static_cast<int32_t>(entry.field_id));
 			}

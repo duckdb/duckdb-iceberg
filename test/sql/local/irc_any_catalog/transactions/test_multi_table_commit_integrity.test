@@ -1,0 +1,128 @@
+# name: test/sql/local/irc_any_catalog/transactions/test_multi_table_commit_integrity.test
+# group: [transactions]
+
+require-env ICEBERG_SERVER_AVAILABLE
+
+require-env SECRETS_CREATED_AND_CATALOG_ATTACHED
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+set ignore_error_messages
+
+statement ok
+set threads=1;
+
+# ---------------------------------------------------------------------------
+# Setup: create and seed 20 existing tables
+# ---------------------------------------------------------------------------
+
+loop i 0 20
+
+statement ok
+drop table if exists my_datalake.default.cleanup_tbl_${i};
+
+statement ok
+create table my_datalake.default.cleanup_tbl_${i} (id int, val varchar);
+
+statement ok
+insert into my_datalake.default.cleanup_tbl_${i} values (0, 'seed');
+
+endloop
+
+statement ok
+drop table if exists my_datalake.default.cleanup_new_tbl;
+
+# ---------------------------------------------------------------------------
+# con1: begin transaction, INSERT into all 20 tables, CREATE TABLE 
+# (forces has_assert_create -> per-table commit fallback loop)
+# ---------------------------------------------------------------------------
+
+statement ok con1
+begin
+
+loop i 0 20
+
+statement ok con1
+insert into my_datalake.default.cleanup_tbl_${i} values (1, 'from_con1');
+
+endloop
+
+statement ok con1
+create table my_datalake.default.cleanup_new_tbl (id int, val varchar);
+
+statement ok con1
+insert into my_datalake.default.cleanup_new_tbl values (1, 'from_con1');
+
+# ---------------------------------------------------------------------------
+# con2: INSERT into tbl_10 to create a 409 conflict for con1
+# ---------------------------------------------------------------------------
+
+statement ok con2
+insert into my_datalake.default.cleanup_tbl_10 values (2, 'from_con2');
+
+# ---------------------------------------------------------------------------
+# con1: commit — per-table fallback loop.
+# Some tables commit before tbl_0 hits 409. CleanupFiles() then deletes
+# data files for ALL tables, corrupting the already-committed ones.
+# ---------------------------------------------------------------------------
+
+statement error con1
+commit
+----
+<REGEX>:.*
+
+# ---------------------------------------------------------------------------
+# Verification: every table should still be readable.
+#
+# If CleanupFiles() deleted data files for already-committed tables,
+# these queries will fail with IO errors — proving the data corruption.
+# ---------------------------------------------------------------------------
+
+# tbl_0 is the conflicted table — con1's insert was rejected.
+# It should still be readable (not corrupted). Con2's insert may or may not
+# be visible depending on catalog cache state, so we just verify it doesn't
+# throw an IO error.
+statement ok
+select * from my_datalake.default.cleanup_tbl_0;
+
+# All other tables should be readable with just their seed data.
+# If CleanupFiles() deleted data files for already-committed tables,
+# these queries will fail with HTTP 404 / IO errors.
+loop i 0 20
+
+onlyif i=10
+continue
+
+query I
+select id from my_datalake.default.cleanup_tbl_${i} where val = 'seed' order by id;
+----
+0
+
+endloop
+
+# Verify that the commit to tbl_10 failed
+query IT
+select * from my_datalake.default.cleanup_tbl_10 order by id;
+----
+0	seed
+2	from_con2
+
+# ---------------------------------------------------------------------------
+# Cleanup
+# ---------------------------------------------------------------------------
+
+loop i 0 20
+
+statement ok
+drop table if exists my_datalake.default.cleanup_tbl_${i};
+
+endloop
+
+statement ok
+drop table if exists my_datalake.default.cleanup_new_tbl;

@@ -306,6 +306,10 @@ TableTransactionInfo IcebergTransaction::GetTransactionRequest(IcebergTransactio
 	TableTransactionInfo info;
 	auto &transaction = info.request;
 	for (auto &updated_table : alter_update.updated_tables) {
+		if (alter_update.committed_tables.count(updated_table.first)) {
+			//! Table is already committed
+			continue;
+		}
 		auto &table_info = updated_table.second;
 		if (!table_info.transaction_data) {
 			continue;
@@ -337,7 +341,7 @@ TableTransactionInfo IcebergTransaction::GetTransactionRequest(IcebergTransactio
 			requirement->CreateRequirement(db, context, commit_state);
 			info.has_assert_create = requirement->type == IcebergTableRequirementType::ASSERT_CREATE;
 		}
-		if (NeedsAssertSchemaId(transaction_data, table_info)) {
+		if (!info.has_assert_create && NeedsAssertSchemaId(transaction_data, table_info)) {
 			// Ensure schema is the same as current
 			AssertCurrentSchemaIdRequirement requirement(table_info);
 			requirement.current_schema_id = transaction_data.initial_schema_id;
@@ -366,6 +370,7 @@ TableTransactionInfo IcebergTransaction::GetTransactionRequest(IcebergTransactio
 			update.CreateUpdate(db, context, commit_state);
 		}
 
+		info.table_requests.emplace(updated_table.first, transaction.table_changes.size());
 		transaction.table_changes.push_back(std::move(table_change));
 	}
 	return info;
@@ -435,15 +440,20 @@ void IcebergTransaction::DoTableUpdates(IcebergTransactionAlterUpdate &alter_upd
 			CommitTransactionToJSON(doc, root_object, transaction);
 			auto transaction_json = JsonDocToString(std::move(doc_p));
 			IRCAPI::CommitMultiTableUpdate(context, catalog, transaction_json);
+			for (auto &it : alter_update.updated_tables) {
+				alter_update.committed_tables.insert(it.first);
+			}
 		} else {
 			D_ASSERT(catalog.supported_urls.find("POST /v1/{prefix}/namespaces/{namespace}/tables/{table}") !=
 			         catalog.supported_urls.end());
 			// each table change will make a separate request
-			for (auto &table_change : transaction.table_changes) {
+			for (auto &it : transaction_info.table_requests) {
+				auto &table_change = transaction.table_changes[it.second];
 				D_ASSERT(table_change.has_identifier);
 				auto transaction_json = ConstructTableUpdateJSON(table_change);
 				IRCAPI::CommitTableUpdate(context, catalog, table_change.identifier._namespace.value,
 				                          table_change.identifier.name, transaction_json);
+				alter_update.committed_tables.insert(it.first);
 			}
 		}
 		// updated_tables.clear();
@@ -459,8 +469,7 @@ void IcebergTransaction::DoTableDeletes(IcebergTransactionDeleteUpdate &delete_u
 	auto table_name = table.name;
 	IRCAPI::CommitTableDelete(context, catalog, table.schema.namespace_items, table.name);
 	// remove the load table result
-	//! FIXME: this can very easily be problematic
-	ic_catalog.RemoveLoadTableResult(table_key);
+	ic_catalog.table_request_cache.Expire(context, table_key);
 	// remove the table entry from the catalog
 	auto &schema_entry = ic_catalog.schemas.GetEntry(schema_key).Cast<IcebergSchemaEntry>();
 	DropInfo drop_info;
@@ -520,6 +529,10 @@ void IcebergTransaction::CleanupFiles() {
 		}
 		auto &alter_update = transaction_update->Cast<IcebergTransactionAlterUpdate>();
 		for (auto &up_table : alter_update.updated_tables) {
+			if (alter_update.committed_tables.count(up_table.first)) {
+				//! Successively committed, no need to roll back
+				continue;
+			}
 			auto &table = up_table.second;
 			if (!table.transaction_data) {
 				// error occurred before transaction data was initialized
@@ -572,6 +585,7 @@ TableInfoCache IcebergTransaction::GetTableRequestResult(const string &table_key
 }
 
 IcebergTransaction &IcebergTransaction::Get(ClientContext &context, Catalog &catalog) {
+	D_ASSERT(catalog.GetCatalogType() == "iceberg");
 	return Transaction::Get(context, catalog).Cast<IcebergTransaction>();
 }
 
