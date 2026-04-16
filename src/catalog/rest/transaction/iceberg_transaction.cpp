@@ -469,8 +469,7 @@ void IcebergTransaction::DoTableDeletes(IcebergTransactionDeleteUpdate &delete_u
 	auto table_name = table.name;
 	IRCAPI::CommitTableDelete(context, catalog, table.schema.namespace_items, table.name);
 	// remove the load table result
-	//! FIXME: this can very easily be problematic
-	ic_catalog.RemoveLoadTableResult(table_key);
+	ic_catalog.table_request_cache.Expire(context, table_key);
 	// remove the table entry from the catalog
 	auto &schema_entry = ic_catalog.schemas.GetEntry(schema_key).Cast<IcebergSchemaEntry>();
 	DropInfo drop_info;

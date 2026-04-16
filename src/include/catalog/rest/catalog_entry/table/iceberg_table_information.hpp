@@ -6,6 +6,7 @@
 #include "core/metadata/manifest/iceberg_manifest.hpp"
 #include "core/metadata/iceberg_table_metadata.hpp"
 #include "catalog/rest/transaction/iceberg_transaction_data.hpp"
+#include "rest_catalog/objects/storage_credential.hpp"
 
 namespace duckdb {
 class IcebergTableSchema;
@@ -17,6 +18,18 @@ struct IcebergManifestEntry;
 struct IRCAPITableCredentials {
 	unique_ptr<CreateSecretInput> config;
 	vector<CreateSecretInput> storage_credentials;
+};
+
+struct IcebergTableStorageCredential {
+public:
+	IcebergTableStorageCredential(const rest_api_objects::StorageCredential &storage_credential) {
+		prefix = storage_credential.prefix;
+		config = storage_credential.config;
+	}
+
+public:
+	string prefix;
+	case_insensitive_map_t<string> config;
 };
 
 struct IcebergTableInformation {
@@ -52,6 +65,7 @@ public:
 	IcebergSnapshotLookup GetSnapshotLookup(ClientContext &context) const;
 	bool TableIsEmpty(const IcebergSnapshotLookup &snapshot_lookup) const;
 	bool HasTransactionUpdates() const;
+	void InitializeFromLoadTableResult(const rest_api_objects::LoadTableResult &load_table_result);
 
 public:
 	IcebergCatalog &catalog;
@@ -59,6 +73,10 @@ public:
 	string name;
 	string table_id;
 	IcebergTableMetadata table_metadata;
+	case_insensitive_map_t<string> config;
+	vector<IcebergTableStorageCredential> storage_credentials;
+	// when loading table metadata, store the path to the metadata.json for extension functions like iceberg_metadata()
+	string latest_metadata_json;
 
 	unordered_map<int32_t, unique_ptr<IcebergTableEntry>> schema_versions;
 	// dummy entry to hold existence of a table, but no schema versions
