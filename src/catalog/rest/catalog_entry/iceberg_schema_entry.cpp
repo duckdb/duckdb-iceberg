@@ -252,20 +252,28 @@ static void VerifySchemaEvolution(const IcebergTableMetadata &table_metadata, co
 	throw CatalogException(error);
 }
 
-//! Ensure existing data files don't contain NULL values in this column
-static void VerifyNotNullConstraint(ClientContext &context, IcebergTableInformation &updated_table,
-                                    IcebergColumnDefinition &column) {
+vector<IcebergManifestListEntry> RetrieveManifestFiles(ClientContext &context, IcebergTableInformation &updated_table) {
 	auto snapshot_lookup = updated_table.GetSnapshotLookup(context);
 	auto snapshot_info = updated_table.table_metadata.GetSnapshot(snapshot_lookup);
+
 	if (!snapshot_info.snapshot) {
-		// Table is empty
-		return;
+		return std::vector<IcebergManifestListEntry>();
 	}
 	IcebergOptions options;
 	auto manifest_list = IcebergManifestList::Load(updated_table.BaseFilePath(), updated_table.table_metadata,
-	                                               snapshot_info, context, options);
+												   snapshot_info, context, options);
+	return manifest_list->GetManifestListEntries();
+}
+
+//! Ensure existing data files don't contain NULL values in this column
+static void VerifyNotNullConstraint(IcebergTableInformation &updated_table,
+                                    IcebergColumnDefinition &column, IcebergTransaction &irc_transaction, vector<IcebergManifestListEntry> manifest_files) {
+	if (manifest_files.empty()) {
+		// Table is empty
+		return;
+	}
 	bool found_column_null_count_at_least_once = false;
-	for (auto &list_entry : manifest_list->GetManifestFilesConst()) {
+	for (auto &list_entry : manifest_files) {
 		for (auto &manifest_entry : list_entry.manifest_entries) {
 			if (manifest_entry.status == IcebergManifestEntryStatusType::DELETED) {
 				continue;
@@ -489,7 +497,12 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 
 		auto &column = ResolveColumn<SetNotNullInfo>(set_not_null_info, new_schema);
 
-		VerifyNotNullConstraint(context, updated_table, column);
+		// Use IcebergTransactionData existing_manifest_list if available
+		const vector<IcebergManifestListEntry> manifest_files = !transaction_data.existing_manifest_list.empty()
+		                                                      ? transaction_data.existing_manifest_list
+		                                                      : RetrieveManifestFiles(context, updated_table);
+
+		VerifyNotNullConstraint(updated_table, column, irc_transaction, manifest_files);
 
 		column.required = true;
 
