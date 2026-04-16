@@ -553,7 +553,9 @@ string IcebergTableMetadata::ToJSON() const {
 	yyjson_mut_obj_add_val(doc, root_obj, "default-spec-id", yyjson_mut_int(doc, default_spec_id));
 	yyjson_mut_obj_add_val(doc, root_obj, "last-partition-id", yyjson_mut_int(doc, last_partition_field_id.GetIndex()));
 	yyjson_mut_obj_add_val(doc, root_obj, "properties", TablePropertiesToJSON(doc));
-	yyjson_mut_obj_add_val(doc, root_obj, "current-snapshot-id", yyjson_mut_int(doc, current_snapshot_id));
+	if (has_current_snapshot) {
+		yyjson_mut_obj_add_val(doc, root_obj, "current-snapshot-id", yyjson_mut_int(doc, current_snapshot_id));
+	}
 	yyjson_mut_obj_add_val(doc, root_obj, "snapshots", SnapshotsToJSON(doc));
 	yyjson_mut_obj_add_val(doc, root_obj, "snapshot-log", SnapshotLogToJSON(doc));
 	// yyjson_mut_obj_add_val(doc, root_obj, "metadata-log", MetadataLogToJSON(doc));
