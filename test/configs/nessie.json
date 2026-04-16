@@ -70,7 +70,7 @@
         "test/sql/local/irc_any_catalog/transactions/test_transaction_get_from_transaction_start.test",
         "test/sql/local/irc_any_catalog/transactions/test_transactional_updates.test",
         "test/sql/local/irc_any_catalog/transactions/test_transactional_updates_error_omits_stacktrace.test",
-        "test/sql/local/irc_any_catalog/alter/alter_add_column_time_travel.test"
+        "test/sql/local/irc_any_catalog/alter/add_column/alter_add_column_time_travel.test"
       ]
     },
     {
