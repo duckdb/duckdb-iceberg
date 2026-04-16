@@ -51,13 +51,7 @@ FROM my_datalake.default.my_table ORDER BY ALL;
 11	NULL
 
 statement ok
-BEGIN;
-
-statement ok
 DELETE FROM my_datalake.default.my_table WHERE a=10;
-
-statement ok
-DELETE FROM my_datalake.default.my_table WHERE a=11;
 
 query II
 FROM my_datalake.default.my_table ORDER BY ALL;
@@ -72,29 +66,29 @@ FROM my_datalake.default.my_table ORDER BY ALL;
 7	42
 8	42
 9	42
+11	NULL
+
+statement error
+ALTER TABLE my_datalake.default.my_table ALTER COLUMN b SET NOT NULL;
+----
+Constraint Error: NOT NULL constraint failed: my_table.b
+
+statement ok
+DELETE FROM my_datalake.default.my_table WHERE a=11;
 
 statement ok
 ALTER TABLE my_datalake.default.my_table ALTER COLUMN b SET NOT NULL;
 
-# statement ok
-# DELETE FROM my_datalake.default.my_table WHERE a=11;
-#
-# statement ok
-# ALTER TABLE my_datalake.default.my_table ALTER COLUMN b SET NOT NULL;
-#
-# statement ok
-# COMMIT;
-#
-# query I
-# FROM my_datalake.default.my_table;
-# ----
-# 0	42
-# 1	42
-# 2	42
-# 3	42
-# 4	42
-# 5	42
-# 6	42
-# 7	42
-# 8	42
-# 9	42
+query II
+FROM my_datalake.default.my_table;
+----
+0	42
+1	42
+2	42
+3	42
+4	42
+5	42
+6	42
+7	42
+8	42
+9	42

@@ -40,15 +40,19 @@ FROM my_datalake.default.my_table;
 9
 
 statement ok
-BEGIN;
-
-statement ok
 INSERT INTO my_datalake.default.my_table VALUES (NULL);
 
-statement error
-ALTER TABLE my_datalake.default.my_table ALTER COLUMN a SET NOT NULL;
+# delete all records
+statement ok
+DELETE FROM my_datalake.default.my_table;
+
+query I
+FROM my_datalake.default.my_table;
 ----
-Constraint Error: NOT NULL constraint failed: my_table.a
 
 statement ok
-COMMIT;
+ALTER TABLE my_datalake.default.my_table ALTER COLUMN a SET NOT NULL;
+
+query I
+FROM my_datalake.default.my_table;
+----

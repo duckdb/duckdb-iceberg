@@ -1,5 +1,6 @@
 #include "catalog/rest/catalog_entry/iceberg_schema_entry.hpp"
 
+#include "duckdb/main/connection.hpp"
 #include "duckdb/parser/column_list.hpp"
 #include "duckdb/parser/constraints/list.hpp"
 #include "duckdb/parser/parsed_data/alter_info.hpp"
@@ -292,58 +293,20 @@ vector<IcebergManifestListEntry> PopulateExistingManifestList(ClientContext &con
 }
 
 //! Ensure existing data files don't contain NULL values in this column
-static void VerifyNotNullConstraint(IcebergColumnDefinition &column,
-                                    const vector<IcebergManifestListEntry> &manifest_files, string &table_name, vector<reference<IcebergAddSnapshot>> &alters) {
-	if (manifest_files.empty()) {
-		// Table is empty
-		return;
+static void VerifyNotNullConstraint(ClientContext &context, IcebergColumnDefinition &column,
+                                    const string &catalog_name, const string &schema_name, const string &table_name) {
+	Connection con(*context.db);
+	auto query = StringUtil::Format("SELECT COUNT(*) FROM %s.%s.%s WHERE %s IS NULL",
+	                                KeywordHelper::WriteOptionallyQuoted(catalog_name),
+	                                KeywordHelper::WriteOptionallyQuoted(schema_name),
+	                                KeywordHelper::WriteOptionallyQuoted(table_name),
+	                                KeywordHelper::WriteOptionallyQuoted(column.name));
+	auto result = con.Query(query);
+	if (result->HasError()) {
+		result->ThrowError();
 	}
-	bool found_column_null_count_at_least_once = false;
-	auto valid_manifests_list_entries = manifest_files;
-	for (auto &alter: alters) {
-		// concatenate the vectors together
-		valid_manifests_list_entries.insert(valid_manifests_list_entries.end(), alter.get().GetManifestFiles().begin(),  alter.get().GetManifestFiles().end());
-	}
-
-	for (auto &list_entry : valid_manifests_list_entries) {
-		if (list_entry.file.content == IcebergManifestContentType::DELETE) {
-			continue;
-		}
-		for (auto &manifest_entry : list_entry.manifest_entries) {
-			// if (manifest_entry.status == IcebergManifestEntryStatusType::DELETED) {
-			// 	continue;
-			// }
-			auto &data_file = manifest_entry.data_file;
-			auto column_null_count_it = data_file.null_value_counts.find(column.id);
-			auto found_column_null_count = column_null_count_it != data_file.null_value_counts.end();
-			found_column_null_count_at_least_once = found_column_null_count_at_least_once || found_column_null_count;
-			// `null_value_counts` is an optional field per the Iceberg spec.
-			if (found_column_null_count && column_null_count_it->second > 0) {
-				throw ConstraintException("NOT NULL constraint failed: %s.%s", table_name, column.name);
-			}
-		}
-	}
-
-	if (!found_column_null_count_at_least_once && (!column.initial_default || column.initial_default->IsNull())) {
-		/* The column is present in current_schema but not in manifest/snapshots, without a default value, and
-		 * table is not empty.
-		 *
-		 * So now we know that either:
-		 * for this column all rows are null
-		 * OR
-		 * for this column the optional field `null_value_counts` is not present in any manifest.
-		 *
-		 * In either case the constraint fails. We could possibly read the avro file's key-value metadata to be able to
-		 * discern between these two cases, and in the case where the optional field is missing show a different error
-		 * message, e.g. "null_value_counts required for `ALTER ... SET NOT NULL`" , or eventually do a scan to check
-		 * for nulls (time intensive).
-		 *
-		 * We would discern between the two cases as follows:
-		 *	if (no manifest is using the current_schema_id) then we know:
-		 *	for this column all rows are null
-		 *	ELSE
-		 *	for this column the optional field `null_value_counts`  is not present in any manifest.
-		 */
+	auto null_count = result->GetValue(0, 0).GetValue<int64_t>();
+	if (null_count > 0) {
 		throw ConstraintException("NOT NULL constraint failed: %s.%s", table_name, column.name);
 	}
 }
@@ -507,6 +470,9 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 		return;
 	}
 	case AlterTableType::SET_NOT_NULL: {
+		if (!transaction_data.alters.empty() || updated_table.HasTransactionUpdates()) {
+			throw NotImplementedException("SET NOT NULL cannot be applied while there are pending transaction changes on this table. Commit or roll back the transaction first.");
+		}
 		auto &set_not_null_info = alter_table_info.Cast<SetNotNullInfo>();
 
 		const auto new_schema = current_schema.Copy();
@@ -514,11 +480,7 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 
 		auto &column = ResolveColumn<SetNotNullInfo>(set_not_null_info, new_schema);
 
-		// Use IcebergTransactionData existing_manifest_list if available
-		const vector<IcebergManifestListEntry> manifest_files = !transaction_data.existing_manifest_list.empty()
-		                                                            ? PopulateExistingManifestList(context, updated_table, transaction_data.existing_manifest_list, table_entry)
-		                                                            : RetrieveManifestFiles(context, updated_table);
-		VerifyNotNullConstraint(column, manifest_files, updated_table.name, transaction_data.alters);
+		VerifyNotNullConstraint(context, column, catalog.GetName(), name, updated_table.name);
 
 		column.required = true;
 
