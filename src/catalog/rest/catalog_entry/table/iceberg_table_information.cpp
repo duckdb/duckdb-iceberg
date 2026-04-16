@@ -462,8 +462,7 @@ optional_ptr<CatalogEntry> IcebergTableInformation::GetSchemaVersion(const Icebe
 	auto transaction_start = meta_transaction.GetCurrentTransactionStartTimestamp();
 	auto transaction_start_millis = Timestamp::GetEpochMs(transaction_start);
 	int32_t schema_id;
-	if ((table_metadata.last_updated_ms.value >= transaction_start_millis && snapshot_info.snapshot) ||
-	    is_time_travel) {
+	if ((table_metadata.last_updated_ms.value > transaction_start_millis && snapshot_info.snapshot) || is_time_travel) {
 		// use snapshot
 		schema_id = snapshot_info.schema_id;
 	} else {
@@ -494,7 +493,8 @@ string IcebergTableInformation::GetTableKey() const {
 }
 
 IcebergSnapshotLookup IcebergTableInformation::GetSnapshotLookup(IcebergTransaction &iceberg_transaction) const {
-	auto &context = *iceberg_transaction.context.lock();
+	auto locked_context = iceberg_transaction.context.lock();
+	auto &context = *locked_context;
 	return GetSnapshotLookup(context);
 }
 
@@ -543,21 +543,54 @@ IcebergTableInformation IcebergTableInformation::Copy() const {
 
 IcebergTableInformation IcebergTableInformation::Copy(IcebergTransaction &iceberg_transaction) const {
 	auto ret = Copy();
-	auto snapshot_lookup = GetSnapshotLookup(iceberg_transaction);
-	if (ret.TableIsEmpty(snapshot_lookup)) {
+
+	auto locked_context = iceberg_transaction.context.lock();
+	auto &context = *locked_context;
+	auto &meta_transaction = MetaTransaction::Get(context);
+	auto transaction_start = meta_transaction.GetCurrentTransactionStartTimestamp();
+	auto transaction_start_millis = Timestamp::GetEpochMs(transaction_start);
+
+	if (table_metadata.last_updated_ms.value > transaction_start_millis) {
+		if (table_metadata.metadata_log.empty()) {
+			auto snapshot_lookup = GetSnapshotLookup(iceberg_transaction);
+			if (ret.TableIsEmpty(snapshot_lookup)) {
+				return ret;
+			}
+			IcebergSnapshotScanInfo snapshot_info;
+			snapshot_info = ret.table_metadata.GetSnapshot(snapshot_lookup);
+			if (!snapshot_info.snapshot) {
+				throw TransactionException("Table %s is already outdated. Please restart your transaction",
+				                           GetTableKey());
+			}
+
+			auto &snapshot = snapshot_info.snapshot;
+			D_ASSERT(snapshot);
+			ret.table_metadata.SetCurrentSchemaId(table_metadata.GetCurrentSchemaId());
+			ret.table_metadata.last_sequence_number = snapshot->sequence_number;
+			ret.table_metadata.current_snapshot_id = snapshot->snapshot_id;
+			return ret;
+		}
+		auto &log = table_metadata.metadata_log;
+
+		optional_idx log_item_index;
+		for (idx_t i = log.size(); i-- > 0;) {
+			if (log[i].timestamp_ms <= transaction_start_millis) {
+				log_item_index = i;
+				break;
+			}
+		}
+		if (!log_item_index.IsValid()) {
+			throw InternalException(
+			    "Metadata-log exists but none of the entries were valid for the current transaction start time (%s)",
+			    Timestamp::ToString(transaction_start));
+		}
+		auto &fs = FileSystem::GetFileSystem(context);
+		auto &path = log[log_item_index.GetIndex()].metadata_file;
+		auto parsed_metadata = IcebergTableMetadata::Parse(path, fs, "");
+		ret.table_metadata = IcebergTableMetadata::FromTableMetadata(parsed_metadata);
+		ret.latest_metadata_json = path;
 		return ret;
 	}
-	IcebergSnapshotScanInfo snapshot_info;
-	snapshot_info = ret.table_metadata.GetSnapshot(snapshot_lookup);
-	if (!snapshot_info.snapshot) {
-		throw TransactionException("Table %s is already outdated. Please restart your transaction", GetTableKey());
-	}
-
-	auto &snapshot = snapshot_info.snapshot;
-	D_ASSERT(snapshot);
-	ret.table_metadata.SetCurrentSchemaId(table_metadata.GetCurrentSchemaId());
-	ret.table_metadata.last_sequence_number = snapshot->sequence_number;
-	ret.table_metadata.current_snapshot_id = snapshot->snapshot_id;
 	return ret;
 }
 
