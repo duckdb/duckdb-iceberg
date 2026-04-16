@@ -262,12 +262,13 @@ vector<IcebergManifestListEntry> RetrieveManifestFiles(ClientContext &context, I
 	}
 	IcebergOptions options;
 	auto manifest_list = IcebergManifestList::Load(updated_table.BaseFilePath(), updated_table.table_metadata,
-												   snapshot_info, context, options);
+	                                               snapshot_info, context, options);
 	return manifest_list->GetManifestListEntries();
 }
 
 //! Ensure existing data files don't contain NULL values in this column
-static void VerifyNotNullConstraint(IcebergColumnDefinition &column, const vector<IcebergManifestListEntry> &manifest_files) {
+static void VerifyNotNullConstraint(IcebergColumnDefinition &column,
+                                    const vector<IcebergManifestListEntry> &manifest_files) {
 	if (manifest_files.empty()) {
 		// Table is empty
 		return;
@@ -284,7 +285,7 @@ static void VerifyNotNullConstraint(IcebergColumnDefinition &column, const vecto
 			found_column_null_count_at_least_once = found_column_null_count_at_least_once || found_column_null_count;
 			// `null_value_counts` is an optional field per the Iceberg spec.
 			if (found_column_null_count && column_null_count_it->second > 0) {
-				throw ConstraintException("NOT NULL constraint failed for column: %s",  column.name);
+				throw ConstraintException("NOT NULL constraint failed for column: %s", column.name);
 			}
 		}
 	}
@@ -309,7 +310,7 @@ static void VerifyNotNullConstraint(IcebergColumnDefinition &column, const vecto
 		 *	ELSE
 		 *	for this column the optional field `null_value_counts`  is not present in any manifest.
 		 */
-		throw ConstraintException("NOT NULL constraint failed for column: %s",  column.name);
+		throw ConstraintException("NOT NULL constraint failed for column: %s", column.name);
 	}
 }
 
@@ -481,8 +482,8 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 
 		// Use IcebergTransactionData existing_manifest_list if available
 		const vector<IcebergManifestListEntry> manifest_files = !transaction_data.existing_manifest_list.empty()
-		                                                      ? transaction_data.existing_manifest_list
-		                                                      : RetrieveManifestFiles(context, updated_table);
+		                                                            ? transaction_data.existing_manifest_list
+		                                                            : RetrieveManifestFiles(context, updated_table);
 		VerifyNotNullConstraint(column, manifest_files);
 
 		column.required = true;
