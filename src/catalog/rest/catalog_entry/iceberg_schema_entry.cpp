@@ -317,6 +317,13 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 
 			IcebergDefaultBinder binder(context);
 			auto default_constant_value = binder.Evaluate(default_value, new_iceberg_column->type);
+			if (new_iceberg_column->type.id() == LogicalTypeId::VARIANT ||
+			    new_iceberg_column->type.id() == LogicalTypeId::GEOMETRY) {
+				if (!default_constant_value.IsNull()) {
+					throw InvalidInputException("Columns of type %s must default to null",
+					                            new_iceberg_column->type.ToString());
+				}
+			}
 			if (updated_table.table_metadata.iceberg_version < 3 && !default_constant_value.IsNull()) {
 				throw InvalidInputException("non-null DEFAULT values are not supported for <V3 tables");
 			}
@@ -455,6 +462,11 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 
 		IcebergDefaultBinder binder(context);
 		auto default_constant_value = binder.Evaluate(expression.get(), column.type);
+		if (column.type.id() == LogicalTypeId::VARIANT || column.type.id() == LogicalTypeId::GEOMETRY) {
+			if (!default_constant_value.IsNull()) {
+				throw InvalidInputException("Columns of type %s must default to null", column.type.ToString());
+			}
+		}
 		if (updated_table.table_metadata.iceberg_version < 3 && !default_constant_value.IsNull()) {
 			throw InvalidInputException("non-null DEFAULT values are not supported for <V3 tables");
 		}
