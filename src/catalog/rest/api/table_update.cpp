@@ -15,8 +15,9 @@ static rest_api_objects::Schema CopySchema(const IcebergTableSchema &schema) {
 	auto schema_str = ICUtils::JsonToString(std::move(doc_p));
 
 	// Parse it back as immutable
-	yyjson_doc *new_doc = yyjson_read(schema_str.c_str(), strlen(schema_str.c_str()), 0);
-	yyjson_val *val = yyjson_doc_get_root(new_doc);
+	std::unique_ptr<yyjson_doc, YyjsonDocDeleter> new_doc(
+	    yyjson_read(schema_str.c_str(), strlen(schema_str.c_str()), 0));
+	yyjson_val *val = yyjson_doc_get_root(new_doc.get());
 	return rest_api_objects::Schema::FromJSON(val);
 }
 
@@ -187,7 +188,7 @@ void AddPartitionSpec::CreateUpdate(DatabaseInstance &db, ClientContext &context
 		for (auto &field : current_partition_spec.fields) {
 			req.add_partition_spec_update.spec.fields.push_back(rest_api_objects::PartitionField());
 			auto &updated_field = req.add_partition_spec_update.spec.fields.back();
-			updated_field.name = field.name;
+			updated_field.name = field.GetPartitionSpecFieldName();
 			updated_field.transform.value = field.transform.RawType();
 			updated_field.field_id = field.partition_field_id;
 			updated_field.source_id = field.source_id;

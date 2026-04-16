@@ -7,6 +7,7 @@
 #include "duckdb/parser/parsed_data/attach_info.hpp"
 #include "duckdb/storage/storage_extension.hpp"
 #include "duckdb/common/http_util.hpp"
+#include "duckdb/transaction/meta_transaction.hpp"
 
 #include "catalog/rest/api/url_utils.hpp"
 #include "catalog/rest/iceberg_schema_set.hpp"
@@ -19,14 +20,89 @@ class IcebergSchemaEntry;
 
 class MetadataCacheValue {
 public:
-	const system_clock::time_point expires_at;
-	unique_ptr<const rest_api_objects::LoadTableResult> load_table_result;
+	MetadataCacheValue(transaction_t creator, const system_clock::time_point expires_at,
+	                   unique_ptr<const rest_api_objects::LoadTableResult> load_table_result)
+	    : creator(creator), expires_at(expires_at), load_table_result(std::move(load_table_result)) {
+	}
 
 public:
-	MetadataCacheValue(const system_clock::time_point expires_at,
-	                   unique_ptr<const rest_api_objects::LoadTableResult> load_table_result)
-	    : expires_at(expires_at), load_table_result(std::move(load_table_result)) {
+	//! Store the id of the transaction that added the entry
+	transaction_t creator;
+	//! The timestamp until when this entry is valid
+	const system_clock::time_point expires_at;
+	//! The payload of the cache entry
+	unique_ptr<const rest_api_objects::LoadTableResult> load_table_result;
+};
+
+class LoadTableResultCache {
+public:
+	LoadTableResultCache(IcebergAttachOptions &attach_options) : attach_options(attach_options) {
 	}
+
+public:
+	mutex &Lock() {
+		return lock;
+	}
+
+	//! NOTE: lock needs to be held by the caller until the result goes out of scope
+	optional_ptr<MetadataCacheValue> Get(const string &table_key, lock_guard<mutex> &lock, bool validate_cache = true) {
+		(void)lock;
+		auto it = tables.find(table_key);
+		if (it == tables.end()) {
+			return nullptr;
+		}
+		auto &entry = it->second;
+		if (validate_cache && system_clock::now() > entry.expires_at) {
+			// cached value has expired
+			return nullptr;
+		}
+		return entry;
+	}
+	void SetOrOverwriteInternal(lock_guard<mutex> &guard, ClientContext &context, const string &table_key,
+	                            system_clock::time_point expires_at,
+	                            unique_ptr<const rest_api_objects::LoadTableResult> load_table_result) {
+		// erase load table result if it exists.
+		tables.erase(table_key);
+		auto &meta_transaction = MetaTransaction::Get(context);
+		tables.emplace(table_key, MetadataCacheValue(meta_transaction.global_transaction_id, expires_at,
+		                                             std::move(load_table_result)));
+	}
+	void SetOrOverwrite(ClientContext &context, const string &table_key,
+	                    unique_ptr<const rest_api_objects::LoadTableResult> load_table_result) {
+		lock_guard<mutex> guard(lock);
+		// If max_table_staleness_minutes is not set, use a time in the past so cache is always expired
+		system_clock::time_point expires_at;
+		if (attach_options.max_table_staleness_micros.IsValid()) {
+			expires_at =
+			    system_clock::now() + std::chrono::microseconds(attach_options.max_table_staleness_micros.GetIndex());
+		} else {
+			expires_at = system_clock::time_point::min();
+		}
+		SetOrOverwriteInternal(guard, context, table_key, expires_at, std::move(load_table_result));
+	}
+	void ExpireInternal(lock_guard<mutex> &guard, ClientContext &context, const string &table_key) {
+		auto &meta_transaction = MetaTransaction::Get(context);
+		tables.erase(table_key);
+		auto it = tables.find(table_key);
+		if (it == tables.end()) {
+			//! Entry doesn't exist anymore
+			return;
+		}
+		auto &entry = it->second;
+		if (entry.creator != meta_transaction.global_transaction_id) {
+			//! The entry we made is no longer the latest version, can't expire
+			return;
+		}
+	}
+	void Expire(ClientContext &context, const string &table_key) {
+		lock_guard<mutex> guard(lock);
+		ExpireInternal(guard, context, table_key);
+	}
+
+private:
+	IcebergAttachOptions &attach_options;
+	mutex lock;
+	case_insensitive_map_t<MetadataCacheValue> tables;
 };
 
 class IcebergCatalog : public Catalog {
@@ -109,19 +185,6 @@ public:
 	string GetDBPath() override;
 	static string GetOnlyMergeOnReadSupportedErrorMessage(const string &table_name, const string &property,
 	                                                      const string &property_value);
-	void StoreLoadTableResultInternal(const string &table_key,
-	                                  unique_ptr<const rest_api_objects::LoadTableResult> load_table_result,
-	                                  lock_guard<std::mutex> &lock, system_clock::time_point expires_at);
-	void StoreLoadTableResult(const string &table_key,
-	                          unique_ptr<const rest_api_objects::LoadTableResult> load_table_result);
-	//! Returns a reference to the metadata cache mutex. The caller is responsible for holding the lock
-	//! for the duration of any access to data returned by TryGetValidCachedLoadTableResult.
-	std::mutex &GetMetadataCacheLock();
-	optional_ptr<MetadataCacheValue>
-	TryGetValidCachedLoadTableResult(const string &table_key, lock_guard<std::mutex> &lock, bool validate_cache = true);
-
-	void RemoveLoadTableResult(const string &table_key);
-	void RemoveLoadTableResultInternal(const string &table_key, lock_guard<std::mutex> &lock);
 
 public:
 	AccessMode access_mode;
@@ -147,10 +210,7 @@ private:
 public:
 	unordered_set<string> supported_urls;
 	IcebergSchemaSet schemas;
-
-private:
-	std::mutex metadata_cache_mutex;
-	case_insensitive_map_t<unique_ptr<MetadataCacheValue>> metadata_cache;
+	LoadTableResultCache table_request_cache;
 };
 
 } // namespace duckdb

@@ -341,7 +341,7 @@ TableTransactionInfo IcebergTransaction::GetTransactionRequest(IcebergTransactio
 			requirement->CreateRequirement(db, context, commit_state);
 			info.has_assert_create = requirement->type == IcebergTableRequirementType::ASSERT_CREATE;
 		}
-		if (NeedsAssertSchemaId(transaction_data, table_info)) {
+		if (!info.has_assert_create && NeedsAssertSchemaId(transaction_data, table_info)) {
 			// Ensure schema is the same as current
 			AssertCurrentSchemaIdRequirement requirement(table_info);
 			requirement.current_schema_id = transaction_data.initial_schema_id;
@@ -495,7 +495,6 @@ static yyjson_mut_val *CreateRenameRequestJSON(yyjson_mut_doc *doc, const Iceber
 
 void IcebergTransaction::DoTableRename(IcebergTransactionRenameUpdate &rename_update, ClientContext &context) {
 	auto &original_table = rename_update.table;
-	auto &renamed_table = rename_update.new_table;
 	auto &schema = original_table.schema;
 	auto table_key = original_table.GetTableKey();
 	auto &table_name = original_table.name;
@@ -529,8 +528,7 @@ void IcebergTransaction::DoTableDeletes(IcebergTransactionDeleteUpdate &delete_u
 	auto &table_name = table.name;
 	IRCAPI::CommitTableDelete(context, catalog, table.schema.namespace_items, table_name);
 	// remove the load table result
-	//! FIXME: this can very easily be problematic
-	ic_catalog.RemoveLoadTableResult(table_key);
+	ic_catalog.table_request_cache.Expire(context, table_key);
 	// remove the table entry from the catalog
 	auto &schema_entry = ic_catalog.schemas.GetEntry(schema_key).Cast<IcebergSchemaEntry>();
 	DropInfo drop_info;
@@ -646,6 +644,7 @@ TableInfoCache IcebergTransaction::GetTableRequestResult(const string &table_key
 }
 
 IcebergTransaction &IcebergTransaction::Get(ClientContext &context, Catalog &catalog) {
+	D_ASSERT(catalog.GetCatalogType() == "iceberg");
 	return Transaction::Get(context, catalog).Cast<IcebergTransaction>();
 }
 
@@ -733,14 +732,17 @@ IcebergTableInformation &IcebergTransaction::RenameTable(IcebergTableInformation
 	new_table_state.status = IcebergTableStatus::ALIVE;
 	new_table.InitSchemaVersions();
 
+	auto locked_context = context.lock();
+	auto &client_context = *locked_context;
 	//! FIXME: just like the other place, this can easily go wrong
 	//! Migrate the MetadataCache
 	auto new_table_key = new_table.GetTableKey();
-	lock_guard<mutex> cache_guard(catalog.GetMetadataCacheLock());
-	auto cache = catalog.TryGetValidCachedLoadTableResult(table_key, cache_guard, false);
-	catalog.StoreLoadTableResultInternal(new_table_key, std::move(cache->load_table_result), cache_guard,
-	                                     cache->expires_at);
-	catalog.RemoveLoadTableResultInternal(table_key, cache_guard);
+	auto &table_request_cache = catalog.table_request_cache;
+	lock_guard<mutex> cache_guard(table_request_cache.Lock());
+	auto cache = table_request_cache.Get(table_key, cache_guard, false);
+	table_request_cache.SetOrOverwriteInternal(cache_guard, client_context, new_table_key, cache->expires_at,
+	                                           std::move(cache->load_table_result));
+	table_request_cache.ExpireInternal(cache_guard, client_context, table_key);
 	return state->table;
 }
 

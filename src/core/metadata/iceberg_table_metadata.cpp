@@ -336,13 +336,6 @@ rest_api_objects::TableMetadata IcebergTableMetadata::Parse(const string &path, 
 	return rest_api_objects::TableMetadata::FromJSON(root);
 }
 
-IcebergTableMetadata
-IcebergTableMetadata::FromLoadTableResult(const rest_api_objects::LoadTableResult &load_table_result) {
-	auto res = FromTableMetadata(load_table_result.metadata);
-	res.latest_metadata_json = load_table_result.metadata_location;
-	return res;
-}
-
 IcebergTableMetadata IcebergTableMetadata::FromTableMetadata(const rest_api_objects::TableMetadata &table_metadata) {
 	IcebergTableMetadata res;
 
@@ -426,10 +419,6 @@ IcebergTableMetadata IcebergTableMetadata::FromTableMetadata(const rest_api_obje
 
 const case_insensitive_map_t<string> &IcebergTableMetadata::GetTableProperties() const {
 	return table_properties;
-}
-
-const string &IcebergTableMetadata::GetLatestMetadataJson() const {
-	return latest_metadata_json;
 }
 
 const string &IcebergTableMetadata::GetLocation() const {

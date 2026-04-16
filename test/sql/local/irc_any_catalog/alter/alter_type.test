@@ -197,4 +197,4 @@ select evolve_to_timestamp_partitioned from my_datalake.default.schema_evolution
 statement error
 ALTER TABLE my_datalake.default.schema_evolution_table ALTER evolve_to_timestamp_partitioned TYPE TIMESTAMP;
 ----
-Catalog Error: Column 'evolve_to_timestamp_partitioned' of type 'DATE' can't be altered to type 'TIMESTAMP' (there is a partition field that refers to the column (name: evolve_to_timestamp_partitioned_year, partition_field_id: 1000))
+Catalog Error: Column 'evolve_to_timestamp_partitioned' of type 'DATE' can't be altered to type 'TIMESTAMP' (there is a partition field that refers to the column (name: year_evolve_to_timestamp_partitioned_1, partition_field_id: 1000))

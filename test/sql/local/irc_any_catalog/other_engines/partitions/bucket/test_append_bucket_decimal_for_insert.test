@@ -1,0 +1,110 @@
+# name: test/sql/local/irc_any_catalog/other_engines/partitions/bucket/test_append_bucket_decimal_for_insert.test
+# description: DuckDB appends the exact same values Spark inserted into a bucket(4, amount)
+# group: [bucket]
+
+#              DECIMAL(10,2) table. Filtering on each value must return exactly 2 rows — one from
+#              Spark, one from DuckDB — proving both ended up in the same partition.
+
+require-env ICEBERG_SERVER_AVAILABLE
+
+require-env SECRETS_CREATED_AND_CATALOG_ATTACHED
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+# ---- Verify Spark's initial state ----
+# Spark inserted amounts 10.00-100.00 (10 distinct decimals across 4 buckets) plus NULL.
+
+query I
+select count(*) from my_datalake.default.bucket_partitioned_decimal_for_insert;
+----
+11
+
+# ---- DuckDB inserts the same values Spark inserted, with new ids ----
+
+statement ok
+INSERT INTO my_datalake.default.bucket_partitioned_decimal_for_insert VALUES
+    (101, 10.00::DECIMAL(10,2)),
+    (102, 20.00::DECIMAL(10,2)),
+    (103, 30.00::DECIMAL(10,2)),
+    (104, 40.00::DECIMAL(10,2)),
+    (105, 50.00::DECIMAL(10,2)),
+    (106, 60.00::DECIMAL(10,2)),
+    (107, 70.00::DECIMAL(10,2)),
+    (108, 80.00::DECIMAL(10,2)),
+    (109, 90.00::DECIMAL(10,2)),
+    (110, 100.00::DECIMAL(10,2)),
+    (111, NULL);
+
+query I
+select count(*) from my_datalake.default.bucket_partitioned_decimal_for_insert;
+----
+22
+
+# ---- For each inserted value, exactly 2 rows should be visible ----
+# One row from Spark (id 1-11) and one from DuckDB (id 101-111).
+# If DuckDB computed a different bucket the row would still be readable,
+# but it would be written to the wrong partition directory and manifest entry.
+
+query I
+select count(*) from my_datalake.default.bucket_partitioned_decimal_for_insert where amount = 10.00::DECIMAL(10,2);
+----
+2
+
+query I
+select count(*) from my_datalake.default.bucket_partitioned_decimal_for_insert where amount = 20.00::DECIMAL(10,2);
+----
+2
+
+query I
+select count(*) from my_datalake.default.bucket_partitioned_decimal_for_insert where amount = 30.00::DECIMAL(10,2);
+----
+2
+
+query I
+select count(*) from my_datalake.default.bucket_partitioned_decimal_for_insert where amount = 40.00::DECIMAL(10,2);
+----
+2
+
+query I
+select count(*) from my_datalake.default.bucket_partitioned_decimal_for_insert where amount = 50.00::DECIMAL(10,2);
+----
+2
+
+query I
+select count(*) from my_datalake.default.bucket_partitioned_decimal_for_insert where amount = 60.00::DECIMAL(10,2);
+----
+2
+
+query I
+select count(*) from my_datalake.default.bucket_partitioned_decimal_for_insert where amount = 70.00::DECIMAL(10,2);
+----
+2
+
+query I
+select count(*) from my_datalake.default.bucket_partitioned_decimal_for_insert where amount = 80.00::DECIMAL(10,2);
+----
+2
+
+query I
+select count(*) from my_datalake.default.bucket_partitioned_decimal_for_insert where amount = 90.00::DECIMAL(10,2);
+----
+2
+
+query I
+select count(*) from my_datalake.default.bucket_partitioned_decimal_for_insert where amount = 100.00::DECIMAL(10,2);
+----
+2
+
+query I
+select count(*) from my_datalake.default.bucket_partitioned_decimal_for_insert where amount is null;
+----
+2

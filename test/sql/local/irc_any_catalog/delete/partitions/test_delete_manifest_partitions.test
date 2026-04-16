@@ -81,7 +81,7 @@ select count(*) from read_avro(getvariable('manifest_path'));
 3
 
 query I
-select partition.category_identity from (select unnest(data_file) from read_avro(getvariable('manifest_path'))) order by all;
+select partition.identity_category_2 from (select unnest(data_file) from read_avro(getvariable('manifest_path'))) order by all;
 ----
 A
 D

@@ -172,7 +172,8 @@ APIResult<unique_ptr<const rest_api_objects::LoadTableResult>> IRCAPI::GetTable(
 	auto ret = APIResult<unique_ptr<const rest_api_objects::LoadTableResult>>();
 	auto result = GetTableMetadata(context, catalog, schema, table_name);
 	if (result->status != HTTPStatusCode::OK_200) {
-		yyjson_val *error_obj = ICUtils::get_error_message(result->body);
+		std::unique_ptr<yyjson_doc, YyjsonDocDeleter> out_doc;
+		yyjson_val *error_obj = ICUtils::GetErrorMessage(result->body, out_doc);
 		if (error_obj == nullptr) {
 			throw InvalidConfigurationException(result->body);
 		}
@@ -182,7 +183,7 @@ APIResult<unique_ptr<const rest_api_objects::LoadTableResult>> IRCAPI::GetTable(
 		return ret;
 	}
 	ret.has_error = false;
-	std::unique_ptr<yyjson_doc, YyjsonDocDeleter> doc(ICUtils::api_result_to_doc(result->body));
+	auto doc = ICUtils::APIResultToDoc(result->body);
 	auto *metadata_root = yyjson_doc_get_root(doc.get());
 	ret.result_ =
 	    make_uniq<const rest_api_objects::LoadTableResult>(rest_api_objects::LoadTableResult::FromJSON(metadata_root));
@@ -226,7 +227,7 @@ vector<rest_api_objects::TableIdentifier> IRCAPI::GetTables(ClientContext &conte
 			ThrowException(url, *response, "GET");
 		}
 
-		std::unique_ptr<yyjson_doc, YyjsonDocDeleter> doc(ICUtils::api_result_to_doc(response->body));
+		auto doc = ICUtils::APIResultToDoc(response->body);
 		auto *root = yyjson_doc_get_root(doc.get());
 		auto list_tables_response = rest_api_objects::ListTablesResponse::FromJSON(root);
 
@@ -278,7 +279,7 @@ vector<IRCAPISchema> IRCAPI::GetSchemas(ClientContext &context, IcebergCatalog &
 			ThrowException(url, *response, "GET");
 		}
 
-		std::unique_ptr<yyjson_doc, YyjsonDocDeleter> doc(ICUtils::api_result_to_doc(response->body));
+		auto doc = ICUtils::APIResultToDoc(response->body);
 		auto *root = yyjson_doc_get_root(doc.get());
 		auto list_namespaces_response = rest_api_objects::ListNamespacesResponse::FromJSON(root);
 		if (!list_namespaces_response.has_namespaces) {
@@ -320,7 +321,8 @@ void IRCAPI::CommitMultiTableUpdate(ClientContext &context, IcebergCatalog &cata
 	headers.Insert("Content-Type", "application/json");
 	auto response = catalog.auth_handler->Request(RequestType::POST_REQUEST, context, url_builder, headers, body);
 	if (response->status != HTTPStatusCode::OK_200 && response->status != HTTPStatusCode::NoContent_204) {
-		yyjson_val *error_obj = ICUtils::get_error_message(response->body);
+		std::unique_ptr<yyjson_doc, YyjsonDocDeleter> out_doc;
+		yyjson_val *error_obj = ICUtils::GetErrorMessage(response->body, out_doc);
 		if (error_obj == nullptr) {
 			throw InvalidConfigurationException(response->body);
 		}
@@ -464,7 +466,7 @@ rest_api_objects::LoadTableResult IRCAPI::CommitNewTable(ClientContext &context,
 			    "Request to '%s' returned a non-200 status code (%s), with reason: %s, body: %s",
 			    url_builder.GetURLEncoded(), EnumUtil::ToString(response->status), response->reason, response->body);
 		}
-		std::unique_ptr<yyjson_doc, YyjsonDocDeleter> doc(ICUtils::api_result_to_doc(response->body));
+		auto doc = ICUtils::APIResultToDoc(response->body);
 		auto *root = yyjson_doc_get_root(doc.get());
 		auto load_table_result = rest_api_objects::LoadTableResult::FromJSON(root);
 		return load_table_result;
@@ -489,7 +491,7 @@ rest_api_objects::CatalogConfig IRCAPI::GetCatalogConfig(ClientContext &context,
 		                                    url_builder.GetURLEncoded(), EnumUtil::ToString(response->status),
 		                                    response->reason);
 	}
-	std::unique_ptr<yyjson_doc, YyjsonDocDeleter> doc(ICUtils::api_result_to_doc(response->body));
+	auto doc = ICUtils::APIResultToDoc(response->body);
 	auto *root = yyjson_doc_get_root(doc.get());
 	return rest_api_objects::CatalogConfig::FromJSON(root);
 }
