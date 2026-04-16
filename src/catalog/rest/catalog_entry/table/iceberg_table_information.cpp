@@ -218,30 +218,29 @@ IRCAPITableCredentials IcebergTableInformation::GetVendedCredentials(ClientConte
 	config_options.insert(user_defaults.begin(), user_defaults.end());
 	auto schema_component = IRCPathComponent::NamespaceComponent(schema.namespace_items);
 	auto key = schema_component.encoded + "." + name;
-	{
-		ParseConfigOptions(config, config_options, context, storage_type);
 
-		//! If there is only one credential listed, we don't really care about the prefix,
-		//! we can use the table_location instead.
-		const bool ignore_credential_prefix = storage_credentials.size() == 1;
-		for (idx_t index = 0; index < storage_credentials.size(); index++) {
-			auto &credential = storage_credentials[index];
-			CreateSecretInput create_secret_input;
-			create_secret_input.on_conflict = OnCreateConflict::REPLACE_ON_CONFLICT;
-			create_secret_input.persist_type = SecretPersistType::TEMPORARY;
+	ParseConfigOptions(config, config_options, context, storage_type);
 
-			create_secret_input.scope.push_back(ignore_credential_prefix ? table_location : credential.prefix);
-			create_secret_input.name = StringUtil::Format("%s_%d_%s", secret_base_name, index, credential.prefix);
+	//! If there is only one credential listed, we don't really care about the prefix,
+	//! we can use the table_location instead.
+	const bool ignore_credential_prefix = storage_credentials.size() == 1;
+	for (idx_t index = 0; index < storage_credentials.size(); index++) {
+		auto &credential = storage_credentials[index];
+		CreateSecretInput create_secret_input;
+		create_secret_input.on_conflict = OnCreateConflict::REPLACE_ON_CONFLICT;
+		create_secret_input.persist_type = SecretPersistType::TEMPORARY;
 
-			create_secret_input.type = storage_type;
-			create_secret_input.provider = "config";
-			create_secret_input.storage_type = "memory";
-			create_secret_input.options = config_options;
+		create_secret_input.scope.push_back(ignore_credential_prefix ? table_location : credential.prefix);
+		create_secret_input.name = StringUtil::Format("%s_%d_%s", secret_base_name, index, credential.prefix);
 
-			ParseConfigOptions(credential.config, create_secret_input.options, context, storage_type);
-			//! TODO: apply the 'overrides' retrieved from the /v1/config endpoint
-			result.storage_credentials.push_back(create_secret_input);
-		}
+		create_secret_input.type = storage_type;
+		create_secret_input.provider = "config";
+		create_secret_input.storage_type = "memory";
+		create_secret_input.options = config_options;
+
+		ParseConfigOptions(credential.config, create_secret_input.options, context, storage_type);
+		//! TODO: apply the 'overrides' retrieved from the /v1/config endpoint
+		result.storage_credentials.push_back(create_secret_input);
 	}
 
 	if (result.storage_credentials.empty() && !config_options.empty()) {

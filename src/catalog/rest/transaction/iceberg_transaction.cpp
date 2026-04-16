@@ -585,6 +585,7 @@ TableInfoCache IcebergTransaction::GetTableRequestResult(const string &table_key
 }
 
 IcebergTransaction &IcebergTransaction::Get(ClientContext &context, Catalog &catalog) {
+	D_ASSERT(catalog.GetCatalogType() == "iceberg");
 	return Transaction::Get(context, catalog).Cast<IcebergTransaction>();
 }
 
