@@ -275,6 +275,9 @@ static void VerifyNotNullConstraint(IcebergColumnDefinition &column,
 	}
 	bool found_column_null_count_at_least_once = false;
 	for (auto &list_entry : manifest_files) {
+		if (list_entry.file.content == IcebergManifestContentType::DELETE) {
+			continue;
+		}
 		for (auto &manifest_entry : list_entry.manifest_entries) {
 			if (manifest_entry.status == IcebergManifestEntryStatusType::DELETED) {
 				continue;
