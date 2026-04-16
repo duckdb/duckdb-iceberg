@@ -315,7 +315,7 @@ static void VerifyNotNullConstraint(IcebergColumnDefinition &column,
 }
 
 void IntroduceNewSchema(IcebergTableInformation &updated_table, IcebergTransactionData &transaction_data,
-                        shared_ptr<IcebergTableSchema> &new_schema) {
+                        shared_ptr<IcebergTableSchema> new_schema) {
 	auto new_schema_id = new_schema->schema_id;
 	updated_table.CreateSchemaVersion(*new_schema);
 	transaction_data.TableAddSchema(new_schema_id);
