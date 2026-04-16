@@ -314,6 +314,13 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 		if (column_definition.HasDefaultValue()) {
 			auto &default_value = column_definition.DefaultValue();
 
+			if (updated_table.table_metadata.iceberg_version < 3) {
+				throw InvalidInputException(
+				    "ALTER TABLE ADD COLUMN with DEFAULT is not supported for Iceberg v%d tables. "
+				    "initial-default requires format version 3 or higher.",
+				    updated_table.table_metadata.iceberg_version);
+			}
+
 			/*TODO: Support more expressions.
 			 *  Which expressions should we support? Some will require binding, should that binding happen here?
 			 *  ExtractInitialValue in iceberg_create_table_request.cpp:208-216 gets a value using a ConstantBinder.
