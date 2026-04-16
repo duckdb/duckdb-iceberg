@@ -58,12 +58,18 @@ public:
 		}
 		return entry;
 	}
+	void SetOrOverwriteInternal(lock_guard<mutex> &guard, ClientContext &context, const string &table_key,
+	                            system_clock::time_point expires_at,
+	                            unique_ptr<const rest_api_objects::LoadTableResult> load_table_result) {
+		// erase load table result if it exists.
+		tables.erase(table_key);
+		auto &meta_transaction = MetaTransaction::Get(context);
+		tables.emplace(table_key, MetadataCacheValue(meta_transaction.global_transaction_id, expires_at,
+		                                             std::move(load_table_result)));
+	}
 	void SetOrOverwrite(ClientContext &context, const string &table_key,
 	                    unique_ptr<const rest_api_objects::LoadTableResult> load_table_result) {
 		lock_guard<mutex> guard(lock);
-		// erase load table result if it exists.
-		tables.erase(table_key);
-
 		// If max_table_staleness_minutes is not set, use a time in the past so cache is always expired
 		system_clock::time_point expires_at;
 		if (attach_options.max_table_staleness_micros.IsValid()) {
@@ -72,13 +78,10 @@ public:
 		} else {
 			expires_at = system_clock::time_point::min();
 		}
-		auto &meta_transaction = MetaTransaction::Get(context);
-		tables.emplace(table_key, MetadataCacheValue(meta_transaction.global_transaction_id, expires_at,
-		                                             std::move(load_table_result)));
+		SetOrOverwriteInternal(guard, context, table_key, expires_at, std::move(load_table_result));
 	}
-	void Expire(ClientContext &context, const string &table_key) {
+	void ExpireInternal(lock_guard<mutex> &guard, ClientContext &context, const string &table_key) {
 		auto &meta_transaction = MetaTransaction::Get(context);
-		lock_guard<mutex> guard(lock);
 		tables.erase(table_key);
 		auto it = tables.find(table_key);
 		if (it == tables.end()) {
@@ -90,6 +93,10 @@ public:
 			//! The entry we made is no longer the latest version, can't expire
 			return;
 		}
+	}
+	void Expire(ClientContext &context, const string &table_key) {
+		lock_guard<mutex> guard(lock);
+		ExpireInternal(guard, context, table_key);
 	}
 
 private:
