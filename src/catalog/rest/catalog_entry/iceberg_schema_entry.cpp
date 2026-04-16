@@ -269,7 +269,10 @@ vector<IcebergManifestListEntry> RetrieveManifestFiles(ClientContext &context, I
 	return manifest_list->GetManifestListEntries();
 }
 
-vector<IcebergManifestListEntry> PopulateExistingManifestList(ClientContext &context, IcebergTableInformation &updated_table, vector<IcebergManifestListEntry> &existing_manifest_list, IcebergTableEntry &table_entry) {
+vector<IcebergManifestListEntry> PopulateExistingManifestList(ClientContext &context,
+                                                              IcebergTableInformation &updated_table,
+                                                              vector<IcebergManifestListEntry> &existing_manifest_list,
+                                                              IcebergTableEntry &table_entry) {
 	// this loads credentials relevant to the table
 	table_entry.PrepareIcebergScanFromEntry(context);
 
@@ -282,8 +285,8 @@ vector<IcebergManifestListEntry> PopulateExistingManifestList(ClientContext &con
 	IcebergOptions options;
 	auto &fs = FileSystem::GetFileSystem(context);
 	//! Read all manifest files, producing 'manifest_entry' items
-	auto manifest_scan =
-		AvroScan::ScanManifest(snapshot_info, existing_manifest_list, options, fs, updated_table.BaseFilePath(), updated_table.table_metadata, context);
+	auto manifest_scan = AvroScan::ScanManifest(snapshot_info, existing_manifest_list, options, fs,
+	                                            updated_table.BaseFilePath(), updated_table.table_metadata, context);
 	auto manifest_file_reader = make_uniq<manifest_file::ManifestReader>(*manifest_scan);
 
 	while (!manifest_file_reader->Finished()) {
@@ -293,14 +296,13 @@ vector<IcebergManifestListEntry> PopulateExistingManifestList(ClientContext &con
 }
 
 //! Ensure existing data files don't contain NULL values in this column
-static void VerifyNotNullConstraint(ClientContext &context, IcebergColumnDefinition &column,
-                                    const string &catalog_name, const string &schema_name, const string &table_name) {
+static void VerifyNotNullConstraint(ClientContext &context, IcebergColumnDefinition &column, const string &catalog_name,
+                                    const string &schema_name, const string &table_name) {
 	Connection con(*context.db);
-	auto query = StringUtil::Format("SELECT COUNT(*) FROM %s.%s.%s WHERE %s IS NULL",
-	                                KeywordHelper::WriteOptionallyQuoted(catalog_name),
-	                                KeywordHelper::WriteOptionallyQuoted(schema_name),
-	                                KeywordHelper::WriteOptionallyQuoted(table_name),
-	                                KeywordHelper::WriteOptionallyQuoted(column.name));
+	auto query = StringUtil::Format(
+	    "SELECT COUNT(*) FROM %s.%s.%s WHERE %s IS NULL", KeywordHelper::WriteOptionallyQuoted(catalog_name),
+	    KeywordHelper::WriteOptionallyQuoted(schema_name), KeywordHelper::WriteOptionallyQuoted(table_name),
+	    KeywordHelper::WriteOptionallyQuoted(column.name));
 	auto result = con.Query(query);
 	if (result->HasError()) {
 		result->ThrowError();
@@ -471,7 +473,8 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 	}
 	case AlterTableType::SET_NOT_NULL: {
 		if (!transaction_data.alters.empty() || updated_table.HasTransactionUpdates()) {
-			throw NotImplementedException("SET NOT NULL cannot be applied while there are pending transaction changes on this table. Commit or roll back the transaction first.");
+			throw NotImplementedException("SET NOT NULL cannot be applied while there are pending transaction changes "
+			                              "on this table. Commit or roll back the transaction first.");
 		}
 		auto &set_not_null_info = alter_table_info.Cast<SetNotNullInfo>();
 

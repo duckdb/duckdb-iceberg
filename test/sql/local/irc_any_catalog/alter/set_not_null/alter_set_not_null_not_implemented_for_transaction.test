@@ -1,4 +1,4 @@
-# name: test/sql/local/irc_any_catalog/alter/set_not_null/alter_set_not_null_for_transaction_added_column.test
+# name: test/sql/local/irc_any_catalog/alter/set_not_null/alter_set_not_null_not_implemented_for_transaction.test
 # group: [set_not_null]
 
 require-env ICEBERG_SERVER_AVAILABLE
