@@ -18,6 +18,8 @@
 #include "core/metadata/manifest/iceberg_manifest_list.hpp"
 #include "catalog/rest/transaction/iceberg_transaction_update.hpp"
 #include "common/iceberg_default.hpp"
+#include "planning/metadata_io/avro/avro_scan.hpp"
+#include "planning/metadata_io/manifest/iceberg_manifest_reader.hpp"
 
 namespace duckdb {
 
@@ -266,22 +268,51 @@ vector<IcebergManifestListEntry> RetrieveManifestFiles(ClientContext &context, I
 	return manifest_list->GetManifestListEntries();
 }
 
+vector<IcebergManifestListEntry> PopulateExistingManifestList(ClientContext &context, IcebergTableInformation &updated_table, vector<IcebergManifestListEntry> &existing_manifest_list, IcebergTableEntry &table_entry) {
+	// this loads credentials relevant to the table
+	table_entry.PrepareIcebergScanFromEntry(context);
+
+	auto snapshot_lookup = updated_table.GetSnapshotLookup(context);
+	auto snapshot_info = updated_table.table_metadata.GetSnapshot(snapshot_lookup);
+
+	if (!snapshot_info.snapshot) {
+		return std::vector<IcebergManifestListEntry>();
+	}
+	IcebergOptions options;
+	auto &fs = FileSystem::GetFileSystem(context);
+	//! Read all manifest files, producing 'manifest_entry' items
+	auto manifest_scan =
+		AvroScan::ScanManifest(snapshot_info, existing_manifest_list, options, fs, updated_table.BaseFilePath(), updated_table.table_metadata, context);
+	auto manifest_file_reader = make_uniq<manifest_file::ManifestReader>(*manifest_scan);
+
+	while (!manifest_file_reader->Finished()) {
+		manifest_file_reader->Read();
+	}
+	return existing_manifest_list;
+}
+
 //! Ensure existing data files don't contain NULL values in this column
 static void VerifyNotNullConstraint(IcebergColumnDefinition &column,
-                                    const vector<IcebergManifestListEntry> &manifest_files, string &table_name) {
+                                    const vector<IcebergManifestListEntry> &manifest_files, string &table_name, vector<reference<IcebergAddSnapshot>> &alters) {
 	if (manifest_files.empty()) {
 		// Table is empty
 		return;
 	}
 	bool found_column_null_count_at_least_once = false;
-	for (auto &list_entry : manifest_files) {
+	auto valid_manifests_list_entries = manifest_files;
+	for (auto &alter: alters) {
+		// concatenate the vectors together
+		valid_manifests_list_entries.insert(valid_manifests_list_entries.end(), alter.get().GetManifestFiles().begin(),  alter.get().GetManifestFiles().end());
+	}
+
+	for (auto &list_entry : valid_manifests_list_entries) {
 		if (list_entry.file.content == IcebergManifestContentType::DELETE) {
 			continue;
 		}
 		for (auto &manifest_entry : list_entry.manifest_entries) {
-			if (manifest_entry.status == IcebergManifestEntryStatusType::DELETED) {
-				continue;
-			}
+			// if (manifest_entry.status == IcebergManifestEntryStatusType::DELETED) {
+			// 	continue;
+			// }
 			auto &data_file = manifest_entry.data_file;
 			auto column_null_count_it = data_file.null_value_counts.find(column.id);
 			auto found_column_null_count = column_null_count_it != data_file.null_value_counts.end();
@@ -485,9 +516,9 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 
 		// Use IcebergTransactionData existing_manifest_list if available
 		const vector<IcebergManifestListEntry> manifest_files = !transaction_data.existing_manifest_list.empty()
-		                                                            ? transaction_data.existing_manifest_list
+		                                                            ? PopulateExistingManifestList(context, updated_table, transaction_data.existing_manifest_list, table_entry)
 		                                                            : RetrieveManifestFiles(context, updated_table);
-		VerifyNotNullConstraint(column, manifest_files, updated_table.name);
+		VerifyNotNullConstraint(column, manifest_files, updated_table.name, transaction_data.alters);
 
 		column.required = true;
 
