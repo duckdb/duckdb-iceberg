@@ -79,17 +79,7 @@ public:
 	void Expire(ClientContext &context, const string &table_key) {
 		auto &meta_transaction = MetaTransaction::Get(context);
 		lock_guard<mutex> guard(lock);
-		auto it = tables.find(table_key);
-		if (it == tables.end()) {
-			//! Entry doesn't exist anymore
-			return;
-		}
-		auto &entry = it->second;
-		if (entry.creator != meta_transaction.global_transaction_id) {
-			//! The entry we made is no longer the latest version, can't expire
-			return;
-		}
-		tables.erase(it);
+		tables.erase(table_key);
 	}
 
 private:
