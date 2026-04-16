@@ -456,6 +456,9 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 
 		if (!new_properties.empty()) {
 			transaction_data.TableSetProperties(new_properties);
+			for (auto &prop : new_properties) {
+				updated_table.table_metadata.table_properties[prop.first] = prop.second;
+			}
 		}
 
 		return;
@@ -467,6 +470,9 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 											reset_options_info.table_options.end());
 		if (!properties_to_remove.empty()) {
 			transaction_data.TableRemoveProperties(properties_to_remove);
+			for (auto &key : properties_to_remove) {
+				updated_table.table_metadata.table_properties.erase(key);
+			}
 		}
 		return;
 	}
