@@ -17,6 +17,7 @@
 #include "catalog/rest/api/iceberg_type.hpp"
 #include "core/metadata/manifest/iceberg_manifest_list.hpp"
 #include "catalog/rest/transaction/iceberg_transaction_update.hpp"
+#include "common/iceberg_default.hpp"
 
 namespace duckdb {
 
@@ -266,8 +267,7 @@ vector<IcebergManifestListEntry> RetrieveManifestFiles(ClientContext &context, I
 }
 
 //! Ensure existing data files don't contain NULL values in this column
-static void VerifyNotNullConstraint(IcebergTableInformation &updated_table,
-                                    IcebergColumnDefinition &column, IcebergTransaction &irc_transaction, vector<IcebergManifestListEntry> manifest_files) {
+static void VerifyNotNullConstraint(IcebergColumnDefinition &column, const vector<IcebergManifestListEntry> &manifest_files) {
 	if (manifest_files.empty()) {
 		// Table is empty
 		return;
@@ -284,7 +284,7 @@ static void VerifyNotNullConstraint(IcebergTableInformation &updated_table,
 			found_column_null_count_at_least_once = found_column_null_count_at_least_once || found_column_null_count;
 			// `null_value_counts` is an optional field per the Iceberg spec.
 			if (found_column_null_count && column_null_count_it->second > 0) {
-				throw ConstraintException("NOT NULL constraint failed: %s.%s", updated_table.name, column.name);
+				throw ConstraintException("NOT NULL constraint failed for column: %s",  column.name);
 			}
 		}
 	}
@@ -309,12 +309,12 @@ static void VerifyNotNullConstraint(IcebergTableInformation &updated_table,
 		 *	ELSE
 		 *	for this column the optional field `null_value_counts`  is not present in any manifest.
 		 */
-		throw ConstraintException("NOT NULL constraint failed: %s.%s", updated_table.name, column.name);
+		throw ConstraintException("NOT NULL constraint failed for column: %s",  column.name);
 	}
 }
 
 void IntroduceNewSchema(IcebergTableInformation &updated_table, IcebergTransactionData &transaction_data,
-                        shared_ptr<IcebergTableSchema> new_schema) {
+                        shared_ptr<IcebergTableSchema> &new_schema) {
 	auto new_schema_id = new_schema->schema_id;
 	updated_table.CreateSchemaVersion(*new_schema);
 	transaction_data.TableAddSchema(new_schema_id);
@@ -483,8 +483,7 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 		const vector<IcebergManifestListEntry> manifest_files = !transaction_data.existing_manifest_list.empty()
 		                                                      ? transaction_data.existing_manifest_list
 		                                                      : RetrieveManifestFiles(context, updated_table);
-
-		VerifyNotNullConstraint(updated_table, column, irc_transaction, manifest_files);
+		VerifyNotNullConstraint(column, manifest_files);
 
 		column.required = true;
 
