@@ -1,0 +1,17 @@
+# name: test/sql/copy/empty_copy.test
+# group: [copy]
+
+require avro
+
+require parquet
+
+require iceberg
+
+# COPY with 0 rows should also produce a readable empty table
+statement ok
+COPY (SELECT 1 AS x WHERE false) TO '__TEST_DIR__/empty_tbl' (FORMAT ICEBERG)
+
+# Fails to read the iceberg table.
+query I
+SELECT * FROM iceberg_scan('__TEST_DIR__/empty_tbl')
+----

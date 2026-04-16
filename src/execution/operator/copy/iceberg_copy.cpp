@@ -66,16 +66,12 @@ SinkResultType IcebergPhysicalCopy::Sink(ExecutionContext &context, DataChunk &c
 
 static void WriteIcebergMetadata(ClientContext &context, CopyIcebergBindData &bind_data,
                                  vector<IcebergManifestEntry> &written_files) {
+	auto last_updated_ms = Timestamp::GetEpochMs(Timestamp::GetCurrentTimestamp());
+
 	auto &table_metadata = *bind_data.table_metadata;
-
-	// Get the avro copy function for writing manifest files
-	auto &db = DatabaseInstance::GetDatabase(context);
-	auto &copy_fun = IcebergUtils::GetCopyFunction(context, "avro");
-
-	int64_t next_row_id = 0;
-	auto snapshot_id = IcebergSnapshot::NewSnapshotId();
-	const auto sequence_number = 0;
-	const auto first_row_id = next_row_id;
+	table_metadata.has_current_snapshot = false;
+	table_metadata.last_sequence_number = 0;
+	table_metadata.last_updated_ms = last_updated_ms;
 
 	auto &fs = FileSystem::GetFileSystem(context);
 	auto metadata_path = table_metadata.GetMetadataPath(fs);
@@ -87,54 +83,63 @@ static void WriteIcebergMetadata(ClientContext &context, CopyIcebergBindData &bi
 		}
 	}
 
-	//! Construct the manifest list
-	auto manifest_list_uuid = UUID::ToString(UUID::GenerateRandomUUID());
-	auto manifest_list_path =
-	    fs.JoinPath(metadata_path, "snap-" + std::to_string(snapshot_id) + "-" + manifest_list_uuid + ".avro");
+	if (!written_files.empty()) {
+		// Get the avro copy function for writing manifest files
+		auto &db = DatabaseInstance::GetDatabase(context);
+		auto &copy_fun = IcebergUtils::GetCopyFunction(context, "avro");
 
-	auto manifest_file = IcebergManifestListEntry::CreateFromEntries(fs, snapshot_id, sequence_number, table_metadata,
-	                                                                 IcebergManifestContentType::DATA,
-	                                                                 std::move(written_files), next_row_id);
+		int64_t next_row_id = 0;
+		auto snapshot_id = IcebergSnapshot::NewSnapshotId();
+		const auto sequence_number = 0;
+		const auto first_row_id = next_row_id;
 
-	// Create a snapshot from the written files
-	IcebergSnapshot snapshot;
-	snapshot.operation = IcebergSnapshotOperationType::APPEND;
-	snapshot.snapshot_id = snapshot_id;
-	snapshot.sequence_number = sequence_number;
-	snapshot.SetSchemaId(0);
-	snapshot.manifest_list = manifest_list_path;
-	snapshot.timestamp_ms = Timestamp::GetEpochMs(Timestamp::GetCurrentTimestamp());
-	snapshot.has_parent_snapshot = false;
+		//! Construct the manifest list
+		auto manifest_list_uuid = UUID::ToString(UUID::GenerateRandomUUID());
+		auto manifest_list_path =
+		    fs.JoinPath(metadata_path, "snap-" + std::to_string(snapshot_id) + "-" + manifest_list_uuid + ".avro");
 
-	snapshot.metrics.AddManifestFile(manifest_file.file);
+		auto manifest_file = IcebergManifestListEntry::CreateFromEntries(
+		    fs, snapshot_id, sequence_number, table_metadata, IcebergManifestContentType::DATA,
+		    std::move(written_files), next_row_id);
 
-	if (table_metadata.iceberg_version >= 3) {
-		snapshot.has_first_row_id = true;
-		snapshot.first_row_id = first_row_id;
+		// Create a snapshot from the written files
+		IcebergSnapshot snapshot;
+		snapshot.operation = IcebergSnapshotOperationType::APPEND;
+		snapshot.snapshot_id = snapshot_id;
+		snapshot.sequence_number = sequence_number;
+		snapshot.SetSchemaId(0);
+		snapshot.manifest_list = manifest_list_path;
+		snapshot.timestamp_ms = last_updated_ms;
+		snapshot.has_parent_snapshot = false;
 
-		snapshot.has_added_rows = true;
-		if (manifest_file.file.content == IcebergManifestContentType::DATA) {
-			snapshot.added_rows = manifest_file.file.added_rows_count;
-		} else {
-			snapshot.added_rows = 0;
+		snapshot.metrics.AddManifestFile(manifest_file.file);
+
+		if (table_metadata.iceberg_version >= 3) {
+			snapshot.has_first_row_id = true;
+			snapshot.first_row_id = first_row_id;
+
+			snapshot.has_added_rows = true;
+			if (manifest_file.file.content == IcebergManifestContentType::DATA) {
+				snapshot.added_rows = manifest_file.file.added_rows_count;
+			} else {
+				snapshot.added_rows = 0;
+			}
 		}
+
+		// Write manifest file(s)
+		manifest_file.file.manifest_length =
+		    manifest_file::WriteToFile(table_metadata, manifest_file.file.manifest_path, manifest_file.manifest_entries,
+		                               copy_fun.function, db, context);
+
+		IcebergManifestList manifest_list(snapshot_id, sequence_number, manifest_list_path);
+		manifest_list.AddNewManifestFile(std::move(manifest_file));
+		manifest_list::WriteToFile(table_metadata, manifest_list, copy_fun.function, db, context);
+
+		// Update table metadata with snapshot
+		table_metadata.has_current_snapshot = true;
+		table_metadata.current_snapshot_id = snapshot.snapshot_id;
+		table_metadata.snapshots[0] = std::move(snapshot);
 	}
-
-	// Write manifest file(s)
-	manifest_file.file.manifest_length =
-	    manifest_file::WriteToFile(table_metadata, manifest_file.file.manifest_path, manifest_file.manifest_entries,
-	                               copy_fun.function, db, context);
-
-	IcebergManifestList manifest_list(snapshot_id, sequence_number, manifest_list_path);
-	manifest_list.AddNewManifestFile(std::move(manifest_file));
-	manifest_list::WriteToFile(table_metadata, manifest_list, copy_fun.function, db, context);
-
-	// Update table metadata with snapshot
-	table_metadata.current_snapshot_id = snapshot.snapshot_id;
-	table_metadata.last_sequence_number = snapshot.sequence_number;
-	table_metadata.last_updated_ms = snapshot.timestamp_ms;
-	table_metadata.snapshots[0] = std::move(snapshot);
-
 	auto version_hint = UUID::ToString(UUID::GenerateRandomUUID());
 
 	// Write metadata.json
@@ -157,12 +162,10 @@ SinkFinalizeType IcebergPhysicalCopy::Finalize(Pipeline &pipeline, Event &event,
 		written_files = std::move(gstate.written_files);
 	}
 
-	if (!written_files.empty()) {
-		// Write manifest files, manifest list, and metadata.json
-		// This is where we differ from IcebergInsert - we write a complete metadata.json
-		// instead of updating a catalog entry
-		WriteIcebergMetadata(context, copy_bind_data, written_files);
-	}
+	// Write manifest files, manifest list, and metadata.json
+	// This is where we differ from IcebergInsert - we write a complete metadata.json
+	// instead of updating a catalog entry
+	WriteIcebergMetadata(context, copy_bind_data, written_files);
 
 	return SinkFinalizeType::READY;
 }
