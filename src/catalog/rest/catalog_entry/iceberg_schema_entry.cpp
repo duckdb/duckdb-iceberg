@@ -315,15 +315,11 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 		if (column_definition.HasDefaultValue()) {
 			auto &default_value = column_definition.DefaultValue();
 
-			if (updated_table.table_metadata.iceberg_version < 3) {
-				throw InvalidInputException(
-				    "ALTER TABLE ADD COLUMN with DEFAULT is not supported for Iceberg v%d tables. "
-				    "initial-default requires format version 3 or higher.",
-				    updated_table.table_metadata.iceberg_version);
-			}
-
 			IcebergDefaultBinder binder(context);
 			auto default_constant_value = binder.Evaluate(default_value, new_iceberg_column->type);
+			if (updated_table.table_metadata.iceberg_version < 3 && !default_constant_value.IsNull()) {
+				throw InvalidInputException("non-null DEFAULT values are not supported for <V3 tables");
+			}
 			new_iceberg_column->initial_default = make_uniq<Value>(default_constant_value);
 			new_iceberg_column->write_default = make_uniq<Value>(default_constant_value);
 		}
