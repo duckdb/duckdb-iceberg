@@ -423,6 +423,19 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 		// Column integrity is not transactionally guaranteed by Iceberg catalogs during SET NOT NULL
 		throw InvalidInputException("Cannot change nullable column to non-nullable");
 	}
+	case AlterTableType::DROP_NOT_NULL: {
+		auto &drop_not_null_info = alter_table_info.Cast<DropNotNullInfo>();
+
+		auto new_schema = current_schema.Copy();
+		new_schema->schema_id++;
+
+		auto &column = ResolveColumn<DropNotNullInfo>(drop_not_null_info, new_schema);
+
+		column.required = false;
+
+		IntroduceNewSchema(updated_table, transaction_data, new_schema);
+		return;
+	}
 	case AlterTableType::RENAME_TABLE: {
 		auto &rename_table_info = alter_table_info.Cast<RenameTableInfo>();
 		auto &new_name = rename_table_info.new_table_name;
