@@ -310,7 +310,6 @@ static void VerifyNotNullConstraint(ClientContext &context, IcebergColumnDefinit
 	TableFunctionInitInput input(bind_data.get(), column_ids, {vector<idx_t>()}, input_filter_set);
 	auto global_state = scan_function.init_global(context, input);
 	auto local_state = scan_function.init_local(execution_context, input, global_state.get());
-	// auto &local_state = local_state_p.Cast<ParquetReadLocalState>();
 
 	// Prepare result chunk
 	DataChunk result;
