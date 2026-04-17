@@ -28,10 +28,11 @@ statement ok
 CREATE TABLE my_datalake.default.alter_add_column_table WITH ('format-version' = 3) AS (select range a FROM range(10));
 
 # Nessie mistakingly accepts this query and poulates the column with NULLs, even though the query specifies `DEFAULT 42`.
-# This test is a mere documentation of this result, and not an assertion of correct behavior.
-# This test should be corrected when nessie fixes this.
-statement ok
+# we catch this by throwing on the client-side
+statement error
 ALTER TABLE my_datalake.default.alter_add_column_table ADD COLUMN b int DEFAULT 42;
+----
+Invalid Input Error: non-null DEFAULT values are not supported for <V3 tables
 
 query II
 FROM my_datalake.default.alter_add_column_table;
