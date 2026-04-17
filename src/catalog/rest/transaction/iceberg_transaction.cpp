@@ -569,6 +569,30 @@ void IcebergTransaction::DoSchemaDeletes(ClientContext &context) {
 	deleted_schemas.clear();
 }
 
+namespace {
+
+struct ScopedTransaction {
+public:
+	ScopedTransaction(DatabaseInstance &db) : connection(db) {
+		connection.BeginTransaction();
+	}
+	~ScopedTransaction() {
+		//! Prevent the connection from destructing with an active transaction
+		//! As that causes it to ROLLBACK and enter CleanupFiles - resulting in a stack overflow due to recursion
+		connection.Commit();
+	}
+
+public:
+	ClientContext &GetContext() {
+		return *connection.context;
+	}
+
+public:
+	Connection connection;
+};
+
+} // namespace
+
 void IcebergTransaction::CleanupFiles() {
 	// remove any files that were written
 	if (!catalog.attach_options.allows_deletes) {
@@ -577,10 +601,9 @@ void IcebergTransaction::CleanupFiles() {
 		// on the aws side will result in an error.
 		return;
 	}
-	Connection temp_con(db);
-	temp_con.BeginTransaction();
-	auto &temp_con_context = temp_con.context;
-	auto &fs = FileSystem::GetFileSystem(*temp_con_context);
+	ScopedTransaction temp_con(db);
+	auto &temp_context = temp_con.GetContext();
+	auto &fs = FileSystem::GetFileSystem(temp_context);
 
 	for (auto &transaction_update : transaction_updates) {
 		if (transaction_update->type != IcebergTransactionUpdateType::ALTER) {
@@ -605,8 +628,8 @@ void IcebergTransaction::CleanupFiles() {
 					continue;
 				}
 				// we need to recreate the keys in the current context.
-				auto &ic_table_entry = table.GetLatestSchema(*temp_con_context)->Cast<IcebergTableEntry>();
-				ic_table_entry.PrepareIcebergScanFromEntry(*temp_con_context);
+				auto &ic_table_entry = table.GetLatestSchema(temp_context)->Cast<IcebergTableEntry>();
+				ic_table_entry.PrepareIcebergScanFromEntry(temp_context);
 
 				auto &add_snapshot = update->Cast<IcebergAddSnapshot>();
 				const auto manifest_list_entries = add_snapshot.GetManifestFiles();
@@ -614,7 +637,7 @@ void IcebergTransaction::CleanupFiles() {
 					for (auto &manifest_entry : manifest.manifest_entries) {
 						auto &data_file = manifest_entry.data_file;
 						if (fs.TryRemoveFile(data_file.file_path)) {
-							DUCKDB_LOG(*temp_con_context, IcebergLogType,
+							DUCKDB_LOG(temp_context, IcebergLogType,
 							           "Iceberg Transaction Cleanup, deleted 'data_file': '%s'", data_file.file_path);
 						}
 					}
