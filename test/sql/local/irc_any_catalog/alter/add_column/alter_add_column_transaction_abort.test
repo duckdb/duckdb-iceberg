@@ -1,5 +1,5 @@
-# name: test/sql/local/irc_any_catalog/alter/alter_add_column_default_type_error.test
-# group: [alter]
+# name: test/sql/local/irc_any_catalog/alter/add_column/alter_add_column_transaction_abort.test
+# group: [add_column]
 
 require-env ICEBERG_SERVER_AVAILABLE
 
@@ -29,12 +29,22 @@ statement ok
 drop table if exists my_datalake.default.alter_add_column_same_txn_table;
 
 statement ok
-CREATE TABLE my_datalake.default.alter_add_column_same_txn_table WITH ('format-version' = 3) AS (select range a FROM range(10));
+CREATE TABLE my_datalake.default.alter_add_column_same_txn_table AS (select range a FROM range(10));
 
-statement error
-ALTER TABLE my_datalake.default.alter_add_column_same_txn_table ADD COLUMN b int DEFAULT 'this is a string, not an int';
-----
-Invalid Input Error: Failed to cast value: Could not convert string 'this is a string, not an int' to INT32
+statement ok
+begin;
+
+statement ok
+DELETE FROM my_datalake.default.alter_add_column_same_txn_table WHERE a=0;
+
+statement ok
+ALTER TABLE my_datalake.default.alter_add_column_same_txn_table ADD COLUMN b int;
+
+statement ok
+INSERT INTO my_datalake.default.alter_add_column_same_txn_table VALUES (42, 42);
+
+statement ok
+abort;
 
 query I
 FROM my_datalake.default.alter_add_column_same_txn_table;

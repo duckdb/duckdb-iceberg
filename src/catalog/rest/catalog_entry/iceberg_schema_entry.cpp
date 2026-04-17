@@ -18,8 +18,8 @@
 #include "catalog/rest/transaction/iceberg_transaction.hpp"
 #include "catalog/rest/catalog_entry/table/iceberg_table_entry.hpp"
 #include "catalog/rest/api/iceberg_type.hpp"
-#include "common/iceberg_default.hpp"
 #include "catalog/rest/transaction/iceberg_transaction_update.hpp"
+#include "common/iceberg_default.hpp"
 
 namespace duckdb {
 
@@ -255,6 +255,34 @@ static void VerifySchemaEvolution(const IcebergTableMetadata &table_metadata, co
 	throw CatalogException(error);
 }
 
+void IntroduceNewSchema(IcebergTableInformation &updated_table, IcebergTransactionData &transaction_data,
+                        shared_ptr<IcebergTableSchema> new_schema) {
+	auto new_schema_id = new_schema->schema_id;
+
+	auto &result_schema = updated_table.table_metadata.AddSchemaOrGetExisting(std::move(new_schema));
+	if (result_schema.schema_id == new_schema_id) {
+		// Update the Table Metadata to have our new schema
+		updated_table.CreateSchemaVersion(result_schema);
+		transaction_data.TableAddSchema(new_schema_id);
+	} else {
+		transaction_data.TableSetCurrentSchema();
+	}
+	updated_table.table_metadata.SetCurrentSchemaId(result_schema.schema_id);
+}
+
+template <typename T>
+IcebergColumnDefinition &ResolveColumn(T &alter_table_info, const shared_ptr<IcebergTableSchema> &new_schema) {
+	auto &column_name = alter_table_info.column_name;
+
+	auto column_p = new_schema->GetMutableFromPath({column_name}, nullptr);
+	if (!column_p) {
+		throw CatalogException("Column with name '%s' does not exist on the table '%s'", column_name,
+		                       alter_table_info.GetAlterEntryData().name);
+	}
+	auto &column = *column_p;
+	return column;
+}
+
 void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) {
 	if (info.type != AlterType::ALTER_TABLE) {
 		throw NotImplementedException("Only ALTER TABLE is supported for Iceberg");
@@ -331,17 +359,9 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 		auto new_schema = current_schema.Copy();
 		new_schema->schema_id++;
 		new_schema->columns.push_back(std::move(new_iceberg_column));
-		auto new_schema_id = new_schema->schema_id;
 
-		auto &result_schema = updated_table.table_metadata.AddSchemaOrGetExisting(std::move(new_schema));
-		if (result_schema.schema_id == new_schema_id) {
-			// Update the Table Metadata to have our new schema
-			updated_table.CreateSchemaVersion(result_schema);
-			transaction_data.TableAddSchema(new_schema_id);
-		} else {
-			transaction_data.TableSetCurrentSchema();
-		}
-		updated_table.table_metadata.SetCurrentSchemaId(result_schema.schema_id);
+		IntroduceNewSchema(updated_table, transaction_data, new_schema);
+
 		return;
 	}
 	case AlterTableType::REMOVE_COLUMN: {
@@ -378,50 +398,30 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 			throw CatalogException("Cannot drop column: table '%s' only has one column remaining!", table_entry.name);
 		}
 
-		auto new_schema_id = new_schema->schema_id;
+		IntroduceNewSchema(updated_table, transaction_data, new_schema);
 
-		auto &result_schema = updated_table.table_metadata.AddSchemaOrGetExisting(std::move(new_schema));
-		if (result_schema.schema_id == new_schema_id) {
-			// Update the Table Metadata to have our new schema
-			updated_table.CreateSchemaVersion(result_schema);
-			transaction_data.TableAddSchema(new_schema_id);
-		} else {
-			transaction_data.TableSetCurrentSchema();
-		}
-		updated_table.table_metadata.SetCurrentSchemaId(result_schema.schema_id);
 		return;
 	}
 	case AlterTableType::ALTER_COLUMN_TYPE: {
 		auto &change_type_info = alter_table_info.Cast<ChangeColumnTypeInfo>();
-		auto &column_name = change_type_info.column_name;
 
 		auto new_schema = current_schema.Copy();
 		new_schema->schema_id++;
 
-		auto column_p = new_schema->GetMutableFromPath({column_name}, nullptr);
-		if (!column_p) {
-			throw CatalogException("Column with name '%s' does not exist on the table '%s', ALTER TYPE failed",
-			                       column_name, table_entry.name);
-		}
-		auto &column = *column_p;
+		auto &column = ResolveColumn<ChangeColumnTypeInfo>(change_type_info, new_schema);
+
 		if (change_type_info.expression->type != ExpressionType::OPERATOR_CAST) {
 			throw NotImplementedException("ALTER TYPE with a USING expression is not supported for Iceberg tables");
 		}
 		VerifySchemaEvolution(updated_table.table_metadata, column, change_type_info.target_type);
 		column.type = change_type_info.target_type;
 
-		auto new_schema_id = new_schema->schema_id;
-
-		auto &result_schema = updated_table.table_metadata.AddSchemaOrGetExisting(std::move(new_schema));
-		if (result_schema.schema_id == new_schema_id) {
-			// Update the Table Metadata to have our new schema
-			updated_table.CreateSchemaVersion(result_schema);
-			transaction_data.TableAddSchema(new_schema_id);
-		} else {
-			transaction_data.TableSetCurrentSchema();
-		}
-		updated_table.table_metadata.SetCurrentSchemaId(result_schema.schema_id);
+		IntroduceNewSchema(updated_table, transaction_data, new_schema);
 		return;
+	}
+	case AlterTableType::SET_NOT_NULL: {
+		// Column integrity is not transactionally guaranteed by Iceberg catalogs during SET NOT NULL
+		throw InvalidInputException("Cannot change nullable column to non-nullable");
 	}
 	case AlterTableType::RENAME_TABLE: {
 		auto &rename_table_info = alter_table_info.Cast<RenameTableInfo>();
