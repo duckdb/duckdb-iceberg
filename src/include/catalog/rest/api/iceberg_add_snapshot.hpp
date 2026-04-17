@@ -34,6 +34,7 @@ public:
 
 private:
 	vector<IcebergManifestListEntry> manifest_files;
+	int32_t schema_id;
 };
 
 } // namespace duckdb

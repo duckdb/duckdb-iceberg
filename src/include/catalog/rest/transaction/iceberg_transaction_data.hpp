@@ -10,6 +10,7 @@
 #include "catalog/rest/api/iceberg_table_update.hpp"
 #include "catalog/rest/api/iceberg_table_requirement.hpp"
 #include "catalog/rest/api/iceberg_add_snapshot.hpp"
+#include "catalog/rest/api/table_update.hpp"
 #include "catalog/rest/api/iceberg_create_table_request.hpp"
 #include "catalog/rest/transaction/iceberg_transaction_metadata.hpp"
 
@@ -28,7 +29,7 @@ public:
 	void AddUpdateSnapshot(vector<IcebergManifestEntry> &&delete_files, vector<IcebergManifestEntry> &&data_files,
 	                       IcebergManifestDeletes &&altered_manifests);
 	// add a schema update for a table
-	void TableAddSchema();
+	void TableAddSchema(int32_t schema_id);
 	void TableAddAssertCreate();
 	void TableAddAssertCurrentSchemaId();
 	void TableAddAssertLastAssignedFieldId();
@@ -36,7 +37,6 @@ public:
 	void TableAddAssertDefaultSpecId();
 	void TableAssignUUID();
 	void TableAddUpradeFormatVersion();
-	void TableAddSetCurrentSchema();
 	void TableAddPartitionSpec();
 	void TableAddSortOrder();
 	void TableSetDefaultSortOrder();
@@ -49,23 +49,26 @@ private:
 	void CacheExistingManifestList(lock_guard<mutex> &guard, const IcebergTableMetadata &metadata);
 
 public:
+	int32_t initial_schema_id;
+
 	ClientContext &context;
 	const IcebergTableInformation &table_info;
 	//! schema updates etc.
 	vector<unique_ptr<IcebergTableUpdate>> updates;
-	//! has the table been deleted in the current transaction
-	bool is_deleted;
 	vector<unique_ptr<IcebergTableRequirement>> requirements;
 	//! Cached manifest list from the source snapshot
 	vector<IcebergManifestListEntry> existing_manifest_list;
 
 	//! Every insert/update/delete creates an alter of the table data
 	vector<reference<IcebergAddSnapshot>> alters;
+	vector<reference<AddSchemaUpdate>> schema_updates;
 	//! The 'referenced_data_file' -> 'data_file.file_path' of the currently active transaction-local deletes
 	case_insensitive_map_t<string> transactional_delete_files;
 	//! Track the current row id for this transaction
 	int64_t next_row_id = 0;
 
+	//! If we perform an update that relies on the current schema id staying unchanged
+	bool assert_schema_id = false;
 	mutex lock;
 };
 

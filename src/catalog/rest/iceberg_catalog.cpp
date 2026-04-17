@@ -28,11 +28,11 @@ using namespace duckdb_yyjson;
 namespace duckdb {
 
 IcebergCatalog::IcebergCatalog(AttachedDatabase &db_p, AccessMode access_mode,
-                               unique_ptr<IcebergAuthorization> auth_handler, IcebergAttachOptions &attach_options,
+                               unique_ptr<IcebergAuthorization> auth_handler, IcebergAttachOptions &attach_options_p,
                                const string &default_schema)
-    : Catalog(db_p), access_mode(access_mode), auth_handler(std::move(auth_handler)), uri(attach_options.endpoint),
-      version("v1"), attach_options(attach_options), default_schema(default_schema),
-      warehouse(attach_options.warehouse), schemas(*this), metadata_cache() {
+    : Catalog(db_p), access_mode(access_mode), auth_handler(std::move(auth_handler)), uri(attach_options_p.endpoint),
+      version("v1"), attach_options(attach_options_p), default_schema(default_schema),
+      warehouse(attach_options.warehouse), schemas(*this), table_request_cache(attach_options) {
 }
 
 IcebergCatalog::~IcebergCatalog() = default;
@@ -66,53 +66,6 @@ optional_ptr<SchemaCatalogEntry> IcebergCatalog::LookupSchema(CatalogTransaction
 	}
 
 	return reinterpret_cast<SchemaCatalogEntry *>(entry.get());
-}
-
-void IcebergCatalog::StoreLoadTableResult(const string &table_key,
-                                          unique_ptr<const rest_api_objects::LoadTableResult> load_table_result) {
-	std::lock_guard<std::mutex> g(metadata_cache_mutex);
-	// erase load table result if it exists.
-	if (metadata_cache.find(table_key) != metadata_cache.end()) {
-		metadata_cache.erase(table_key);
-	}
-	// If max_table_staleness_minutes is not set, use a time in the past so cache is always expired
-	system_clock::time_point expires_at;
-	if (attach_options.max_table_staleness_micros.IsValid()) {
-		expires_at =
-		    system_clock::now() + std::chrono::microseconds(attach_options.max_table_staleness_micros.GetIndex());
-	} else {
-		expires_at = system_clock::time_point::min();
-	}
-	auto val = make_uniq<MetadataCacheValue>(expires_at, std::move(load_table_result));
-	metadata_cache.emplace(table_key, std::move(val));
-}
-
-std::mutex &IcebergCatalog::GetMetadataCacheLock() {
-	return metadata_cache_mutex;
-}
-
-optional_ptr<MetadataCacheValue> IcebergCatalog::TryGetValidCachedLoadTableResult(const string &table_key,
-                                                                                  lock_guard<std::mutex> &lock,
-                                                                                  bool validate_cache) {
-	(void)lock;
-	auto it = metadata_cache.find(table_key);
-	if (it == metadata_cache.end()) {
-		return nullptr;
-	}
-	auto &cached_value = *it->second;
-	if (validate_cache && system_clock::now() > cached_value.expires_at) {
-		// cached value has expired
-		return nullptr;
-	}
-	return &cached_value;
-}
-
-void IcebergCatalog::RemoveLoadTableResult(const string &table_key) {
-	std::lock_guard<std::mutex> g(metadata_cache_mutex);
-	if (metadata_cache.find(table_key) == metadata_cache.end()) {
-		throw InternalException("Attempting to remove table information that was never stored");
-	}
-	metadata_cache.erase(table_key);
 }
 
 optional_ptr<CatalogEntry> IcebergCatalog::CreateSchema(CatalogTransaction transaction, CreateSchemaInfo &info) {
@@ -501,6 +454,8 @@ static void S3TablesAttach(IcebergAttachOptions &input) {
 		throw InvalidInputException("Could not parse S3 Tables ARN warehouse value");
 	}
 	auto region = substrings[3];
+	// Populate sigv4_region so it can be used as a fallback region when creating storage secrets
+	input.options.emplace("sigv4_region", Value(region));
 	S3OrGlueAttachInternal(input, "s3tables", region);
 }
 

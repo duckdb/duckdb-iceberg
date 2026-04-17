@@ -282,6 +282,32 @@ int32_t IcebergTableMetadata::GetCurrentSchemaId() const {
 	return current_schema_id;
 }
 
+void IcebergTableMetadata::AddSchema(shared_ptr<IcebergTableSchema> schema) {
+	optional_idx existing_schema_id;
+	for (auto &it : schemas) {
+		auto &id = it.first;
+		auto &existing_schema = *it.second;
+
+		if (schema->Equals(existing_schema)) {
+			existing_schema_id = id;
+			break;
+		}
+	}
+	if (existing_schema_id.IsValid()) {
+		throw NotImplementedException("Attempted to add a schema that already exists in the table");
+	}
+	auto new_schema_id = schema->schema_id;
+	auto res = schemas.emplace(new_schema_id, std::move(schema));
+	if (!res.second) {
+		throw InvalidConfigurationException("Attempted to add schema with id %d, but this already exists in the table!",
+		                                    new_schema_id);
+	}
+}
+
+const unordered_map<int32_t, shared_ptr<IcebergTableSchema>> &IcebergTableMetadata::GetSchemas() const {
+	return schemas;
+}
+
 bool IcebergTableMetadata::HasLastPartitionId() const {
 	return last_partition_field_id.IsValid();
 }
@@ -308,13 +334,6 @@ rest_api_objects::TableMetadata IcebergTableMetadata::Parse(const string &path, 
 
 	auto root = yyjson_doc_get_root(doc.get());
 	return rest_api_objects::TableMetadata::FromJSON(root);
-}
-
-IcebergTableMetadata
-IcebergTableMetadata::FromLoadTableResult(const rest_api_objects::LoadTableResult &load_table_result) {
-	auto res = FromTableMetadata(load_table_result.metadata);
-	res.latest_metadata_json = load_table_result.metadata_location;
-	return res;
 }
 
 IcebergTableMetadata IcebergTableMetadata::FromTableMetadata(const rest_api_objects::TableMetadata &table_metadata) {
@@ -395,15 +414,14 @@ IcebergTableMetadata IcebergTableMetadata::FromTableMetadata(const rest_api_obje
 		res.last_partition_field_id = table_metadata.last_partition_id;
 	}
 
+	for (auto &item : table_metadata.metadata_log.value) {
+		res.metadata_log.emplace_back(item.metadata_file, item.timestamp_ms);
+	}
 	return res;
 }
 
 const case_insensitive_map_t<string> &IcebergTableMetadata::GetTableProperties() const {
 	return table_properties;
-}
-
-const string &IcebergTableMetadata::GetLatestMetadataJson() const {
-	return latest_metadata_json;
 }
 
 const string &IcebergTableMetadata::GetLocation() const {
@@ -538,7 +556,9 @@ string IcebergTableMetadata::ToJSON() const {
 	yyjson_mut_obj_add_val(doc, root_obj, "default-spec-id", yyjson_mut_int(doc, default_spec_id));
 	yyjson_mut_obj_add_val(doc, root_obj, "last-partition-id", yyjson_mut_int(doc, last_partition_field_id.GetIndex()));
 	yyjson_mut_obj_add_val(doc, root_obj, "properties", TablePropertiesToJSON(doc));
-	yyjson_mut_obj_add_val(doc, root_obj, "current-snapshot-id", yyjson_mut_int(doc, current_snapshot_id));
+	if (has_current_snapshot) {
+		yyjson_mut_obj_add_val(doc, root_obj, "current-snapshot-id", yyjson_mut_int(doc, current_snapshot_id));
+	}
 	yyjson_mut_obj_add_val(doc, root_obj, "snapshots", SnapshotsToJSON(doc));
 	yyjson_mut_obj_add_val(doc, root_obj, "snapshot-log", SnapshotLogToJSON(doc));
 	// yyjson_mut_obj_add_val(doc, root_obj, "metadata-log", MetadataLogToJSON(doc));

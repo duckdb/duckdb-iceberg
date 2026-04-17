@@ -8,11 +8,17 @@ namespace duckdb {
 class IcebergCatalog;
 class IcebergSchemaEntry;
 class IcebergTableEntry;
+struct IcebergTransactionUpdate;
+struct IcebergTransactionAlterUpdate;
+struct IcebergTransactionDeleteUpdate;
+struct IcebergTransactionRenameUpdate;
 
 struct TableTransactionInfo {
 	TableTransactionInfo() {};
 
 	rest_api_objects::CommitTransactionRequest request;
+	case_insensitive_map_t<idx_t> table_requests;
+
 	// if a table is created with assert create, we cannot use the
 	// transactions/commit endpoint. Instead we iterate through each table
 	// update and update each table individually
@@ -30,6 +36,25 @@ struct TableInfoCache {
 	bool exists;
 };
 
+enum class IcebergTableStatus : uint8_t { ALIVE, DROPPED, RENAMED };
+
+enum class IcebergTableSource : uint8_t {
+	//! Loaded from external source
+	EXTERNAL,
+	//! Version that exists within the transaction
+	TRANSACTION
+};
+
+struct IcebergTransactionTableState {
+public:
+	IcebergTransactionTableState(IcebergTableInformation &table, IcebergTableSource source);
+
+public:
+	reference<IcebergTableInformation> table;
+	IcebergTableSource source;
+	IcebergTableStatus status;
+};
+
 class IcebergTransaction : public Transaction {
 public:
 	IcebergTransaction(IcebergCatalog &ic_catalog, TransactionManager &manager, ClientContext &context);
@@ -43,18 +68,23 @@ public:
 	AccessMode GetAccessMode() const {
 		return access_mode;
 	}
-	void DoTableUpdates(ClientContext &context);
-	void DoTableDeletes(ClientContext &context);
+	void DoTableUpdates(IcebergTransactionAlterUpdate &alter_update, ClientContext &context);
+	void DoTableDeletes(IcebergTransactionDeleteUpdate &delete_update, ClientContext &context);
+	void DoTableRename(IcebergTransactionRenameUpdate &rename_update, ClientContext &context);
 	void DoSchemaCreates(ClientContext &context);
 	void DoSchemaDeletes(ClientContext &context);
 	IcebergCatalog &GetCatalog();
 	void DropSecrets(ClientContext &context);
-	TableTransactionInfo GetTransactionRequest(ClientContext &context);
+	TableTransactionInfo GetTransactionRequest(IcebergTransactionAlterUpdate &alter_update, ClientContext &context);
 	void RecordTableRequest(const string &table_key, idx_t sequence_number, idx_t snapshot_id);
 	void RecordTableRequest(const string &table_key);
 	TableInfoCache GetTableRequestResult(const string &table_key);
-	IcebergTableInformation &GetTableInfoForTransaction(IcebergTableInformation &table_info);
+	optional_ptr<IcebergTransactionTableState> GetLatestTableState(const string &table_key);
+	IcebergTransactionTableState &SetLatestTableState(IcebergTableInformation &table, IcebergTableSource source);
 	bool StartedBefore(timestamp_t timestamp_ms) const;
+	IcebergTransactionAlterUpdate &GetOrCreateAlter();
+	IcebergTableInformation &DeleteTable(IcebergTableInformation &table);
+	IcebergTableInformation &RenameTable(IcebergTableInformation &table, const string &new_name);
 
 private:
 	void CleanupFiles();
@@ -73,29 +103,23 @@ private:
 public:
 	//! Tables referenced by this transaction that have to stay alive for the duration of the transaction.
 	case_insensitive_map_t<shared_ptr<IcebergTableInformation>> tables;
-	//! tables that have been created in this transaction
-	//! tables are hashed by catalog_name.table name
-	//! Tables that have been updated in this transaction, to be rewritten on commit.
-	case_insensitive_map_t<IcebergTableInformation> updated_tables;
-	//! tables that have been deleted in this transaction, to be deleted on commit.
-	case_insensitive_map_t<IcebergTableInformation> deleted_tables;
+	vector<unique_ptr<IcebergTransactionUpdate>> transaction_updates;
+	//! The latest state of a table (either points into 'transaction_updates' or 'tables')
+	case_insensitive_map_t<IcebergTransactionTableState> current_table_data;
+
 	unordered_set<string> created_schemas;
 	unordered_set<string> deleted_schemas;
 
 	bool called_list_schemas = false;
+	//! Set of schemas that this transaction has listed tables for
 	case_insensitive_set_t listed_schemas;
 
 	case_insensitive_set_t created_secrets;
 	case_insensitive_set_t looked_up_entries;
 	mutex lock;
-
-	bool has_schema_update = false;
 };
 
-template <typename Callback>
-void ApplyTableUpdate(IcebergTableInformation &table_info, IcebergTransaction &iceberg_transaction, Callback callback) {
-	auto &updated_table = iceberg_transaction.GetTableInfoForTransaction(table_info);
-	callback(updated_table);
-}
+void ApplyTableUpdate(IcebergTableInformation &table_info, IcebergTransaction &iceberg_transaction,
+                      const std::function<void(IcebergTableInformation &)> &callback);
 
 } // namespace duckdb

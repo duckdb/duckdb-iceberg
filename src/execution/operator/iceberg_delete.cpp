@@ -342,10 +342,10 @@ SinkFinalizeType IcebergDelete::Finalize(Pipeline &pipeline, Event &event, Clien
 
 	if (!global_state.written_files.empty()) {
 		ApplyTableUpdate(table_info, iceberg_transaction, [&](IcebergTableInformation &tbl) {
-			tbl.AddDeleteSnapshot(iceberg_transaction, std::move(iceberg_delete_files),
-			                      std::move(global_state.altered_manifests));
+			auto &transaction_data = tbl.GetOrCreateTransactionData(iceberg_transaction);
+			transaction_data.AddSnapshot(IcebergSnapshotOperationType::DELETE, std::move(iceberg_delete_files),
+			                             std::move(global_state.altered_manifests));
 
-			auto &transaction_data = *tbl.transaction_data;
 			//! Add or overwrite the currently active transaction-local delete files
 			for (auto &entry : global_state.written_files) {
 				auto &delete_file = entry.second;

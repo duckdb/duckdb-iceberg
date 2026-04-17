@@ -50,7 +50,14 @@ map<idx_t, LogicalType> IcebergDataFile::GetFieldIdToTypeMapping(const IcebergSn
 		auto &fields = partition_spec.GetFields();
 
 		for (auto &field : fields) {
-			auto &column_id = source_to_column_id[field.source_id];
+			auto it = source_to_column_id.find(field.source_id);
+			if (it == source_to_column_id.end()) {
+				//! FIXME: is this correct?
+				//! The column doesn't exist (anymore) in the schema we're scanning
+				//! So this essentially excludes these partition values from the scan
+				continue;
+			}
+			auto &column_id = it->second;
 			auto &column = IcebergTableSchema::GetFromColumnIndex(schema.columns, column_id, 0);
 			partition_field_id_to_type.emplace(field.partition_field_id, field.transform.GetBoundsType(column.type));
 		}
@@ -78,7 +85,7 @@ IcebergDataFile::GetExtendedPartitionInfo(const IcebergTableMetadata &metadata) 
 
 	// Build source_id -> LogicalType map from all schemas (schema evolution may spread columns).
 	unordered_map<uint64_t, const LogicalType *> source_id_to_type;
-	for (auto &schema_pair : metadata.schemas) {
+	for (auto &schema_pair : metadata.GetSchemas()) {
 		for (auto &col : schema_pair.second->columns) {
 			source_id_to_type.emplace(static_cast<uint64_t>(col->id), &col->type);
 		}
@@ -98,7 +105,7 @@ IcebergDataFile::GetExtendedPartitionInfo(const IcebergTableMetadata &metadata) 
 			if (type_it == source_id_to_type.end()) {
 				throw InternalException(
 				    "Partition %s with field_id %llu in data_file %s with source_id %llu not found in any table schema",
-				    field.name, field.partition_field_id, file_path, field.source_id);
+				    field.GetPartitionSpecFieldName(), field.partition_field_id, file_path, field.source_id);
 			}
 			field_id_to_partition_spec_and_source_type.emplace(field.partition_field_id,
 			                                                   ParitionFieldWithSourceType {&field, type_it->second});
@@ -114,7 +121,7 @@ IcebergDataFile::GetExtendedPartitionInfo(const IcebergTableMetadata &metadata) 
 		}
 		auto &resolved = it->second;
 		IcebergExtendedPartitionInfo extended;
-		extended.name = resolved.field->name;
+		extended.name = resolved.field->GetPartitionSpecFieldName();
 		extended.field_id = info.field_id;
 		extended.value = info.value;
 		extended.source_id = resolved.field->source_id;
@@ -550,7 +557,6 @@ idx_t WriteToFile(const IcebergTableMetadata &table_metadata, const IcebergManif
 				yyjson_mut_obj_add_strcpy(doc, field_obj, "name", entry.name.c_str());
 				auto types_arr = yyjson_mut_obj_add_arr(doc, field_obj, "type");
 				yyjson_mut_arr_add_strcpy(doc, types_arr, "null");
-				// TODO: Is this correct? I don't think so.
 				yyjson_mut_arr_add_strcpy(doc, types_arr, "int");
 				yyjson_mut_obj_add_int(doc, field_obj, "id", static_cast<int32_t>(entry.field_id));
 			}
