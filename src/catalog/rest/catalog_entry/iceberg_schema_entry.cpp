@@ -262,19 +262,6 @@ static void VerifySchemaEvolution(const IcebergTableMetadata &table_metadata, co
 	throw CatalogException(error);
 }
 
-vector<IcebergManifestListEntry> RetrieveManifestFiles(ClientContext &context, IcebergTableInformation &updated_table) {
-	auto snapshot_lookup = updated_table.GetSnapshotLookup(context);
-	auto snapshot_info = updated_table.table_metadata.GetSnapshot(snapshot_lookup);
-
-	if (!snapshot_info.snapshot) {
-		return std::vector<IcebergManifestListEntry>();
-	}
-	IcebergOptions options;
-	auto manifest_list = IcebergManifestList::Load(updated_table.BaseFilePath(), updated_table.table_metadata,
-	                                               snapshot_info, context, options);
-	return manifest_list->GetManifestListEntries();
-}
-
 //! Ensure existing data files don't contain NULL values in this column
 static void VerifyNotNullConstraint(ClientContext &context, IcebergColumnDefinition &column,
                                     IcebergTableEntry &table_entry) {
