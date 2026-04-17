@@ -213,13 +213,20 @@ static void GetIcebergTablePropertiesFunction(ClientContext &context, TableFunct
 		return;
 	}
 	auto iceberg_table = bind_data.iceberg_table;
-	auto &table_info = iceberg_table->table_info;
-	if (table_info.table_metadata.GetTableProperties().empty()) {
+
+	auto &iceberg_transaction = IcebergTransaction::Get(context, iceberg_table->catalog);
+	auto table_key = iceberg_table->table_info.GetTableKey();
+	auto table_txn_state = iceberg_transaction.GetLatestTableState(table_key);
+	const IcebergTableInformation *txn_table_info =
+	    table_txn_state ? &table_txn_state->table.get() : &iceberg_table->table_info;
+
+	const auto &properties = txn_table_info->table_metadata.GetTableProperties();
+	if (properties.empty()) {
 		output.SetCardinality(0);
 		return;
 	}
 	if (!global_state.all_properties_initialized) {
-		for (auto &property : table_info.table_metadata.GetTableProperties()) {
+		for (auto &property : properties) {
 			global_state.all_properties.push_back(make_pair(property.first, property.second));
 		}
 		global_state.all_properties_initialized = true;

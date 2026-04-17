@@ -12,6 +12,9 @@
 #include "duckdb/planner/parsed_data/bound_create_table_info.hpp"
 #include "duckdb/planner/filter/null_filter.hpp"
 #include "duckdb/common/multi_file/multi_file_states.hpp"
+#include "duckdb/planner/binder.hpp"
+#include "duckdb/planner/expression_binder/table_function_binder.hpp"
+#include "duckdb/execution/expression_executor.hpp"
 
 #include "catalog/rest/catalog_entry/table/iceberg_table_information.hpp"
 #include "catalog/rest/iceberg_catalog.hpp"
@@ -459,6 +462,7 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 		new_schema->columns.push_back(std::move(new_iceberg_column));
 
 		IntroduceNewSchema(updated_table, transaction_data, new_schema);
+
 		return;
 	}
 	case AlterTableType::REMOVE_COLUMN: {
@@ -496,6 +500,7 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 		}
 
 		IntroduceNewSchema(updated_table, transaction_data, new_schema);
+
 		return;
 	}
 	case AlterTableType::ALTER_COLUMN_TYPE: {
@@ -528,6 +533,7 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 		column.required = true;
 
 		IntroduceNewSchema(updated_table, transaction_data, new_schema);
+
 		return;
 	}
 	case AlterTableType::RENAME_TABLE: {
@@ -574,12 +580,82 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 		column.name = new_name;
 
 		auto new_schema_id = new_schema->schema_id;
-		// Update the Table Metadata to have our new schema
-		updated_table.CreateSchemaVersion(*new_schema);
-		transaction_data.TableAddSchema(new_schema_id);
 
-		updated_table.table_metadata.AddSchema(std::move(new_schema));
-		updated_table.table_metadata.SetCurrentSchemaId(new_schema_id);
+		auto &result_schema = updated_table.table_metadata.AddSchemaOrGetExisting(std::move(new_schema));
+		if (result_schema.schema_id == new_schema_id) {
+			// Update the Table Metadata to have our new schema
+			updated_table.CreateSchemaVersion(result_schema);
+			transaction_data.TableAddSchema(new_schema_id);
+		} else {
+			transaction_data.TableSetCurrentSchema();
+		}
+		updated_table.table_metadata.SetCurrentSchemaId(result_schema.schema_id);
+		return;
+	}
+	case AlterTableType::SET_TABLE_OPTIONS: {
+		auto &set_options_info = alter_table_info.Cast<SetTableOptionsInfo>();
+
+		auto binder_ptr = Binder::CreateBinder(context);
+		TableFunctionBinder property_binder(*binder_ptr, context, "SET TABLE OPTIONS");
+
+		optional_idx new_format_version;
+		case_insensitive_map_t<string> new_properties;
+
+		for (auto &option : set_options_info.table_options) {
+			auto &key = option.first;
+			auto expr_copy = option.second->Copy();
+			auto bound_expr = property_binder.Bind(expr_copy);
+			if (bound_expr->HasParameter()) {
+				throw ParameterNotResolvedException();
+			}
+			auto val = ExpressionExecutor::EvaluateScalar(context, *bound_expr, true);
+			if (val.IsNull()) {
+				throw BinderException("NULL is not supported as a valid option for '%s'", key);
+			}
+
+			if (StringUtil::CIEquals(key, "format-version")) {
+				if (!val.DefaultTryCastAs(LogicalType::INTEGER, true)) {
+					throw InvalidInputException("Can't cast 'format-version' property (%s) to INTEGER", val.ToString());
+				}
+				new_format_version = val.GetValue<int32_t>();
+			} else {
+				if (!val.DefaultTryCastAs(LogicalType::VARCHAR, true)) {
+					throw InvalidInputException("Can't cast '%s' property (%s) to VARCHAR", key, val.ToString());
+				}
+				new_properties[key] = val.GetValue<string>();
+			}
+		}
+
+		if (new_format_version.IsValid()) {
+			auto current_version = updated_table.table_metadata.iceberg_version;
+			if ((int32_t)new_format_version.GetIndex() < current_version) {
+				throw InvalidInputException("Cannot downgrade format-version from %d to %d", current_version,
+				                            new_format_version.GetIndex());
+			}
+			updated_table.table_metadata.iceberg_version = (int32_t)new_format_version.GetIndex();
+			transaction_data.TableAddUpradeFormatVersion();
+		}
+
+		if (!new_properties.empty()) {
+			transaction_data.TableSetProperties(new_properties);
+			for (auto &prop : new_properties) {
+				updated_table.table_metadata.table_properties[prop.first] = prop.second;
+			}
+		}
+
+		return;
+	}
+	case AlterTableType::RESET_TABLE_OPTIONS: {
+		auto &reset_options_info = alter_table_info.Cast<ResetTableOptionsInfo>();
+
+		vector<string> properties_to_remove(reset_options_info.table_options.begin(),
+											reset_options_info.table_options.end());
+		if (!properties_to_remove.empty()) {
+			transaction_data.TableRemoveProperties(properties_to_remove);
+			for (auto &key : properties_to_remove) {
+				updated_table.table_metadata.table_properties.erase(key);
+			}
+		}
 		return;
 	}
 	case AlterTableType::SET_DEFAULT: {
@@ -593,7 +669,7 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 		auto column_p = new_schema->GetMutableFromPath({column_name}, nullptr);
 		if (!column_p) {
 			throw CatalogException("Column with name '%s' does not exist on the table '%s', SET DEFAULT failed",
-			                       column_name, table_entry.name);
+								   column_name, table_entry.name);
 		}
 		auto &column = *column_p;
 		if (updated_table.table_metadata.iceberg_version < 3) {
@@ -605,12 +681,16 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 		column.write_default = make_uniq<Value>(default_constant_value);
 
 		auto new_schema_id = new_schema->schema_id;
-		// Update the Table Metadata to have our new schema
-		updated_table.CreateSchemaVersion(*new_schema);
-		transaction_data.TableAddSchema(new_schema_id);
 
-		updated_table.table_metadata.AddSchema(std::move(new_schema));
-		updated_table.table_metadata.SetCurrentSchemaId(new_schema_id);
+		auto &result_schema = updated_table.table_metadata.AddSchemaOrGetExisting(std::move(new_schema));
+		if (result_schema.schema_id == new_schema_id) {
+			// Update the Table Metadata to have our new schema
+			updated_table.CreateSchemaVersion(result_schema);
+			transaction_data.TableAddSchema(new_schema_id);
+		} else {
+			transaction_data.TableSetCurrentSchema();
+		}
+		updated_table.table_metadata.SetCurrentSchemaId(result_schema.schema_id);
 		return;
 	}
 	default: {

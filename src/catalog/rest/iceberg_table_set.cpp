@@ -223,7 +223,11 @@ IcebergTableInformation &IcebergTableSet::CreateNewEntry(ClientContext &context,
 	auto new_schema = IcebergCreateTableRequest::CreateIcebergSchema(context, table_metadata, table_ptr->GetColumns(),
 	                                                                 table_ptr->GetConstraints(), last_column_id);
 	new_schema->schema_id = 0;
-	table_metadata.AddSchema(std::move(new_schema));
+	auto &result_schema = table_metadata.AddSchemaOrGetExisting(std::move(new_schema));
+	if (result_schema.schema_id != 0) {
+		throw InternalException("Adding initial schema didn't result in schema id 0? (actual: %d)",
+		                        result_schema.schema_id);
+	}
 	table_metadata.SetCurrentSchemaId(0);
 	table_metadata.last_column_id = last_column_id;
 

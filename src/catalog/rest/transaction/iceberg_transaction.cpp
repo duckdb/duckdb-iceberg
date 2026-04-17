@@ -365,7 +365,7 @@ TableTransactionInfo IcebergTransaction::GetTransactionRequest(IcebergTransactio
 			commit_state.table_change.requirements.push_back(CreateAssertNoSnapshotRequirement());
 		}
 
-		if (!transaction_data.schema_updates.empty()) {
+		if (transaction_data.set_schema_id) {
 			SetCurrentSchema update(table_info);
 			update.CreateUpdate(db, context, commit_state);
 		}
@@ -434,8 +434,9 @@ void IcebergTransaction::DoTableUpdates(IcebergTransactionAlterUpdate &alter_upd
 
 		// if there are no new tables, we can post to the transactions/commit endpoint
 		// otherwise we fall back to posting a commit for each table.
-		if (!transaction_info.has_assert_create &&
-		    catalog.supported_urls.find("POST /v1/{prefix}/transactions/commit") != catalog.supported_urls.end()) {
+		const bool can_use_multi_table_commit = !transaction_info.has_assert_create &&
+		                                        catalog.supported_urls.count("POST /v1/{prefix}/transactions/commit");
+		if (can_use_multi_table_commit) {
 			// commit all transactions at once
 			std::unique_ptr<yyjson_mut_doc, YyjsonDocDeleter> doc_p(yyjson_mut_doc_new(nullptr));
 			auto doc = doc_p.get();
@@ -449,8 +450,7 @@ void IcebergTransaction::DoTableUpdates(IcebergTransactionAlterUpdate &alter_upd
 				alter_update.committed_tables.insert(it.first);
 			}
 		} else {
-			D_ASSERT(catalog.supported_urls.find("POST /v1/{prefix}/namespaces/{namespace}/tables/{table}") !=
-			         catalog.supported_urls.end());
+			D_ASSERT(catalog.supported_urls.count("POST /v1/{prefix}/namespaces/{namespace}/tables/{table}"));
 			// each table change will make a separate request
 			for (auto &it : transaction_info.table_requests) {
 				auto &table_change = transaction.table_changes[it.second];

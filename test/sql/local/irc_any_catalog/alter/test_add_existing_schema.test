@@ -35,9 +35,25 @@ CREATE TABLE my_datalake.default.existing_schema_add(
 )
 
 statement ok
+insert into my_datalake.default.existing_schema_add VALUES ('test', true)
+
+query II
+select * from my_datalake.default.existing_schema_add order by all
+----
+test	true
+
+statement ok
 ALTER TABLE my_datalake.default.existing_schema_add ADD COLUMN c INTEGER;
 
-statement error
-ALTER TABLE my_datalake.default.existing_schema_add DROP COLUMN c;
+query III
+select * from my_datalake.default.existing_schema_add order by all
 ----
-Not implemented Error: Attempted to add a schema that already exists in the table
+test	true	NULL
+
+statement ok
+ALTER TABLE my_datalake.default.existing_schema_add DROP COLUMN c;
+
+query II
+select * from my_datalake.default.existing_schema_add order by all
+----
+test	true
