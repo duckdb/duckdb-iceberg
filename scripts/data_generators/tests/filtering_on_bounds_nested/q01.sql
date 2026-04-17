@@ -8,14 +8,5 @@ VALUES
         array(struct(struct(1, X'deadbeef', 1.0))),
         map(1, X'deadbeef'),
         map(1, struct(1, X'deadbeef', 1.0))
-    ),
-    (
-        2,
-        struct(2, X'deadbef0', 2.0),
-        struct(struct(2, X'deadbef0', 2.0)),
-        array(struct(2, X'deadbef0', 2.0)),
-        array(struct(struct(2, X'deadbef0', 2.0))),
-        map(2, X'deadbef0'),
-        map(2, struct(2, X'deadbef0', 2.0))
     )
 ;

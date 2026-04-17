@@ -34,6 +34,12 @@ create macro count_files_read() as (
     group by all
 );
 
+# there are 5 files to read in total
+query I
+select count(file_path) from iceberg_metadata(my_datalake.default.filtering_on_bounds_nested);
+----
+5
+
 query I
 select count(*) from iceberg
 ----
