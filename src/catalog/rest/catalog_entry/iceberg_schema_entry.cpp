@@ -323,23 +323,26 @@ static void VerifyNotNullConstraint(ClientContext &context, IcebergColumnDefinit
 	TableFilterSet filter_set;
 	filter_set.PushFilter(ColumnIndex(column_idx), make_uniq<IsNullFilter>());
 
-	auto &multi_file_list = multi_file_bind.file_list->Cast<IcebergMultiFileList>();
-	auto filtered_list = multi_file_list.PushdownInternal(context, filter_set);
-	multi_file_bind.file_list = std::move(filtered_list);
+	multi_file_bind.file_list =
+	    multi_file_bind.file_list->Cast<IcebergMultiFileList>().PushdownInternal(context, filter_set);
 
-	auto &return_types = multi_file_bind.types;
+	auto return_types = vector<LogicalType>();
+	return_types.push_back(column.type);
+
 	vector<column_t> column_ids;
-	for (idx_t i = 0; i < return_types.size(); i++) {
-		column_ids.push_back(i);
-	}
+	column_ids.push_back(column_idx);
 
 	ThreadContext thread_context(context);
 	ExecutionContext execution_context(context, thread_context, nullptr);
 
 	// Initialize scan state
-	TableFunctionInitInput input(bind_data.get(), column_ids, {column_idx}, nullptr);
+	TableFilterSet input_filter_set;
+	input_filter_set.PushFilter(ColumnIndex(0), make_uniq<IsNullFilter>());
+
+	TableFunctionInitInput input(bind_data.get(), column_ids, {vector<idx_t>()}, input_filter_set);
 	auto global_state = scan_function.init_global(context, input);
 	auto local_state = scan_function.init_local(execution_context, input, global_state.get());
+	// auto &local_state = local_state_p.Cast<ParquetReadLocalState>();
 
 	// Prepare result chunk
 	DataChunk result;
