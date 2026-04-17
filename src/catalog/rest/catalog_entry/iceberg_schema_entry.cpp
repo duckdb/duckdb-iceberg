@@ -420,7 +420,7 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 		return;
 	}
 	case AlterTableType::SET_NOT_NULL: {
-		// Column integrity is not guaranteed by Iceberg Catalogs, so we cannot safely do this.
+		// Column integrity is not transactionally guaranteed by Iceberg catalogs during SET NOT NULL
 		throw InvalidInputException("Cannot change nullable column to non-nullable");
 	}
 	case AlterTableType::RENAME_TABLE: {
