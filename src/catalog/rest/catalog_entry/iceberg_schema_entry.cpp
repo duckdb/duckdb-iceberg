@@ -363,12 +363,16 @@ static void VerifyNotNullConstraint(ClientContext &context, IcebergColumnDefinit
 void IntroduceNewSchema(IcebergTableInformation &updated_table, IcebergTransactionData &transaction_data,
                         shared_ptr<IcebergTableSchema> new_schema) {
 	auto new_schema_id = new_schema->schema_id;
-	updated_table.CreateSchemaVersion(*new_schema);
-	transaction_data.TableAddSchema(new_schema_id);
 
-	// Update the Table Metadata to have our new schema
-	updated_table.table_metadata.AddSchema(std::move(new_schema));
-	updated_table.table_metadata.SetCurrentSchemaId(new_schema_id);
+	auto &result_schema = updated_table.table_metadata.AddSchemaOrGetExisting(std::move(new_schema));
+	if (result_schema.schema_id == new_schema_id) {
+		// Update the Table Metadata to have our new schema
+		updated_table.CreateSchemaVersion(result_schema);
+		transaction_data.TableAddSchema(new_schema_id);
+	} else {
+		transaction_data.TableSetCurrentSchema();
+	}
+	updated_table.table_metadata.SetCurrentSchemaId(result_schema.schema_id);
 }
 
 template <typename T>
@@ -649,7 +653,7 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 		auto &reset_options_info = alter_table_info.Cast<ResetTableOptionsInfo>();
 
 		vector<string> properties_to_remove(reset_options_info.table_options.begin(),
-											reset_options_info.table_options.end());
+		                                    reset_options_info.table_options.end());
 		if (!properties_to_remove.empty()) {
 			transaction_data.TableRemoveProperties(properties_to_remove);
 			for (auto &key : properties_to_remove) {
@@ -669,7 +673,7 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 		auto column_p = new_schema->GetMutableFromPath({column_name}, nullptr);
 		if (!column_p) {
 			throw CatalogException("Column with name '%s' does not exist on the table '%s', SET DEFAULT failed",
-								   column_name, table_entry.name);
+			                       column_name, table_entry.name);
 		}
 		auto &column = *column_p;
 		if (updated_table.table_metadata.iceberg_version < 3) {
