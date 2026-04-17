@@ -536,7 +536,7 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 		auto &reset_options_info = alter_table_info.Cast<ResetTableOptionsInfo>();
 
 		vector<string> properties_to_remove(reset_options_info.table_options.begin(),
-											reset_options_info.table_options.end());
+		                                    reset_options_info.table_options.end());
 		if (!properties_to_remove.empty()) {
 			transaction_data.TableRemoveProperties(properties_to_remove);
 			for (auto &key : properties_to_remove) {
@@ -556,7 +556,7 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 		auto column_p = new_schema->GetMutableFromPath({column_name}, nullptr);
 		if (!column_p) {
 			throw CatalogException("Column with name '%s' does not exist on the table '%s', SET DEFAULT failed",
-								   column_name, table_entry.name);
+			                       column_name, table_entry.name);
 		}
 		auto &column = *column_p;
 		if (updated_table.table_metadata.iceberg_version < 3) {
