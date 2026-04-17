@@ -275,35 +275,13 @@ vector<IcebergManifestListEntry> RetrieveManifestFiles(ClientContext &context, I
 	return manifest_list->GetManifestListEntries();
 }
 
-vector<IcebergManifestListEntry> PopulateExistingManifestList(ClientContext &context,
-                                                              IcebergTableInformation &updated_table,
-                                                              vector<IcebergManifestListEntry> &existing_manifest_list,
-                                                              IcebergTableEntry &table_entry) {
-	// this loads credentials relevant to the table
-	table_entry.PrepareIcebergScanFromEntry(context);
-
-	auto snapshot_lookup = updated_table.GetSnapshotLookup(context);
-	auto snapshot_info = updated_table.table_metadata.GetSnapshot(snapshot_lookup);
-
-	if (!snapshot_info.snapshot) {
-		return std::vector<IcebergManifestListEntry>();
-	}
-	IcebergOptions options;
-	auto &fs = FileSystem::GetFileSystem(context);
-	//! Read all manifest files, producing 'manifest_entry' items
-	auto manifest_scan = AvroScan::ScanManifest(snapshot_info, existing_manifest_list, options, fs,
-	                                            updated_table.BaseFilePath(), updated_table.table_metadata, context);
-	auto manifest_file_reader = make_uniq<manifest_file::ManifestReader>(*manifest_scan);
-
-	while (!manifest_file_reader->Finished()) {
-		manifest_file_reader->Read();
-	}
-	return existing_manifest_list;
-}
-
 //! Ensure existing data files don't contain NULL values in this column
 static void VerifyNotNullConstraint(ClientContext &context, IcebergColumnDefinition &column,
                                     IcebergTableEntry &table_entry) {
+	if (!column.write_default || column.write_default->IsNull() || !column.initial_default ||
+	    column.initial_default->IsNull()) {
+		throw ConstraintException("NOT NULL constraint failed: %s.%s", table_entry.name, column.name);
+	}
 	// Get the scan function directly from the table entry
 	unique_ptr<FunctionData> bind_data;
 	EntryLookupInfo lookup(CatalogType::TABLE_ENTRY, table_entry.name);
