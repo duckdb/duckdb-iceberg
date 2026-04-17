@@ -516,10 +516,6 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 		return;
 	}
 	case AlterTableType::SET_NOT_NULL: {
-		if (!transaction_data.alters.empty() || updated_table.HasTransactionUpdates()) {
-			throw NotImplementedException("SET NOT NULL cannot be applied while there are pending transaction changes "
-			                              "on this table. Commit or roll back the transaction first.");
-		}
 		auto &set_not_null_info = alter_table_info.Cast<SetNotNullInfo>();
 
 		const auto new_schema = current_schema.Copy();
