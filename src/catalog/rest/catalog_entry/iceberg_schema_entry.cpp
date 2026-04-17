@@ -10,6 +10,8 @@
 #include "duckdb/parser/parsed_data/drop_info.hpp"
 #include "duckdb/parser/parsed_expression_iterator.hpp"
 #include "duckdb/planner/parsed_data/bound_create_table_info.hpp"
+#include "duckdb/planner/filter/null_filter.hpp"
+#include "duckdb/common/multi_file/multi_file_states.hpp"
 
 #include "catalog/rest/catalog_entry/table/iceberg_table_information.hpp"
 #include "catalog/rest/iceberg_catalog.hpp"
@@ -21,6 +23,7 @@
 #include "common/iceberg_default.hpp"
 #include "planning/metadata_io/avro/avro_scan.hpp"
 #include "planning/metadata_io/manifest/iceberg_manifest_reader.hpp"
+#include "planning/iceberg_multi_file_list.hpp"
 
 namespace duckdb {
 
@@ -296,20 +299,58 @@ vector<IcebergManifestListEntry> PopulateExistingManifestList(ClientContext &con
 }
 
 //! Ensure existing data files don't contain NULL values in this column
-static void VerifyNotNullConstraint(ClientContext &context, IcebergColumnDefinition &column, const string &catalog_name,
-                                    const string &schema_name, const string &table_name) {
-	Connection con(*context.db);
-	auto query = StringUtil::Format(
-	    "SELECT COUNT(*) FROM %s.%s.%s WHERE %s IS NULL", KeywordHelper::WriteOptionallyQuoted(catalog_name),
-	    KeywordHelper::WriteOptionallyQuoted(schema_name), KeywordHelper::WriteOptionallyQuoted(table_name),
-	    KeywordHelper::WriteOptionallyQuoted(column.name));
-	auto result = con.Query(query);
-	if (result->HasError()) {
-		result->ThrowError();
+static void VerifyNotNullConstraint(ClientContext &context, IcebergColumnDefinition &column,
+                                    IcebergTableEntry &table_entry) {
+	// Get the scan function directly from the table entry
+	unique_ptr<FunctionData> bind_data;
+	EntryLookupInfo lookup(CatalogType::TABLE_ENTRY, table_entry.name);
+	auto scan_function = table_entry.GetScanFunction(context, bind_data, lookup);
+
+	// Find the column index for the NOT NULL column
+	auto &multi_file_bind = bind_data->Cast<MultiFileBindData>();
+	column_t column_idx = DConstants::INVALID_INDEX;
+	for (idx_t i = 0; i < multi_file_bind.names.size(); i++) {
+		if (multi_file_bind.names[i] == column.name) {
+			column_idx = i;
+			break;
+		}
 	}
-	auto null_count = result->GetValue(0, 0).GetValue<int64_t>();
-	if (null_count > 0) {
-		throw ConstraintException("NOT NULL constraint failed: %s.%s", table_name, column.name);
+	if (column_idx == DConstants::INVALID_INDEX) {
+		throw InternalException("Column %s not found in scan", column.name);
+	}
+
+	// Push IS NULL filter
+	TableFilterSet filter_set;
+	filter_set.PushFilter(ColumnIndex(column_idx), make_uniq<IsNullFilter>());
+
+	auto &multi_file_list = multi_file_bind.file_list->Cast<IcebergMultiFileList>();
+	auto filtered_list = multi_file_list.PushdownInternal(context, filter_set);
+	multi_file_bind.file_list = std::move(filtered_list);
+
+	auto &return_types = multi_file_bind.types;
+	vector<column_t> column_ids;
+	for (idx_t i = 0; i < return_types.size(); i++) {
+		column_ids.push_back(i);
+	}
+
+	ThreadContext thread_context(context);
+	ExecutionContext execution_context(context, thread_context, nullptr);
+
+	// Initialize scan state
+	TableFunctionInitInput input(bind_data.get(), column_ids, {column_idx}, nullptr);
+	auto global_state = scan_function.init_global(context, input);
+	auto local_state = scan_function.init_local(execution_context, input, global_state.get());
+
+	// Prepare result chunk
+	DataChunk result;
+	result.Initialize(context, return_types, STANDARD_VECTOR_SIZE);
+
+	// Check if any rows pass the filter (i.e., any NULLs exist)
+	TableFunctionInput function_input(bind_data.get(), local_state.get(), global_state.get());
+	scan_function.function(context, function_input, result);
+
+	if (result.size() > 0) {
+		throw ConstraintException("NOT NULL constraint failed: %s.%s", table_entry.name, column.name);
 	}
 }
 
@@ -483,7 +524,7 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 
 		auto &column = ResolveColumn<SetNotNullInfo>(set_not_null_info, new_schema);
 
-		VerifyNotNullConstraint(context, column, catalog.GetName(), name, updated_table.name);
+		VerifyNotNullConstraint(context, column, table_entry);
 
 		column.required = true;
 
