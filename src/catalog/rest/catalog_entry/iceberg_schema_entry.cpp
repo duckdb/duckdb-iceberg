@@ -424,12 +424,12 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 		throw InvalidInputException("Cannot change nullable column to non-nullable");
 	}
 	case AlterTableType::DROP_NOT_NULL: {
-		auto &set_not_null_info = alter_table_info.Cast<DropNotNullInfo>();
+		auto &drop_not_null_info = alter_table_info.Cast<DropNotNullInfo>();
 
 		auto new_schema = current_schema.Copy();
 		new_schema->schema_id++;
 
-		auto &column = ResolveColumn<DropNotNullInfo>(set_not_null_info, new_schema);
+		auto &column = ResolveColumn<DropNotNullInfo>(drop_not_null_info, new_schema);
 
 		column.required = false;
 
