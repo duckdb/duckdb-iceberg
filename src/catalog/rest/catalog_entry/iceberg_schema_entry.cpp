@@ -1,6 +1,5 @@
 #include "catalog/rest/catalog_entry/iceberg_schema_entry.hpp"
 
-#include "duckdb/main/connection.hpp"
 #include "duckdb/parser/column_list.hpp"
 #include "duckdb/parser/constraints/list.hpp"
 #include "duckdb/parser/parsed_data/alter_info.hpp"
@@ -10,8 +9,6 @@
 #include "duckdb/parser/parsed_data/drop_info.hpp"
 #include "duckdb/parser/parsed_expression_iterator.hpp"
 #include "duckdb/planner/parsed_data/bound_create_table_info.hpp"
-#include "duckdb/planner/filter/null_filter.hpp"
-#include "duckdb/common/multi_file/multi_file_states.hpp"
 #include "duckdb/planner/binder.hpp"
 #include "duckdb/planner/expression_binder/table_function_binder.hpp"
 #include "duckdb/execution/expression_executor.hpp"
@@ -21,12 +18,8 @@
 #include "catalog/rest/transaction/iceberg_transaction.hpp"
 #include "catalog/rest/catalog_entry/table/iceberg_table_entry.hpp"
 #include "catalog/rest/api/iceberg_type.hpp"
-#include "core/metadata/manifest/iceberg_manifest_list.hpp"
 #include "catalog/rest/transaction/iceberg_transaction_update.hpp"
 #include "common/iceberg_default.hpp"
-#include "planning/metadata_io/avro/avro_scan.hpp"
-#include "planning/metadata_io/manifest/iceberg_manifest_reader.hpp"
-#include "planning/iceberg_multi_file_list.hpp"
 
 namespace duckdb {
 
@@ -262,68 +255,6 @@ static void VerifySchemaEvolution(const IcebergTableMetadata &table_metadata, co
 	throw CatalogException(error);
 }
 
-//! Ensure this column doesn't contain NULL values
-static void VerifyNotNullConstraint(ClientContext &context, IcebergColumnDefinition &column,
-                                    IcebergTableEntry &table_entry) {
-	if (!column.write_default || column.write_default->IsNull() || !column.initial_default ||
-	    column.initial_default->IsNull()) {
-		throw ConstraintException("NOT NULL constraint failed: %s.%s", table_entry.name, column.name);
-	}
-	// Get the scan function directly from the table entry
-	unique_ptr<FunctionData> bind_data;
-	EntryLookupInfo lookup(CatalogType::TABLE_ENTRY, table_entry.name);
-	auto scan_function = table_entry.GetScanFunction(context, bind_data, lookup);
-
-	// Find the column index for the NOT NULL column
-	auto &multi_file_bind = bind_data->Cast<MultiFileBindData>();
-	column_t column_idx = DConstants::INVALID_INDEX;
-	for (idx_t i = 0; i < multi_file_bind.names.size(); i++) {
-		if (multi_file_bind.names[i] == column.name) {
-			column_idx = i;
-			break;
-		}
-	}
-	if (column_idx == DConstants::INVALID_INDEX) {
-		throw InternalException("Column %s not found in scan", column.name);
-	}
-
-	// Push IS NULL filter
-	TableFilterSet filter_set;
-	filter_set.PushFilter(ColumnIndex(column_idx), make_uniq<IsNullFilter>());
-
-	multi_file_bind.file_list =
-	    multi_file_bind.file_list->Cast<IcebergMultiFileList>().PushdownInternal(context, filter_set);
-
-	auto return_types = vector<LogicalType>();
-	return_types.push_back(column.type);
-
-	vector<column_t> column_ids;
-	column_ids.push_back(column_idx);
-
-	ThreadContext thread_context(context);
-	ExecutionContext execution_context(context, thread_context, nullptr);
-
-	// Initialize scan state
-	TableFilterSet input_filter_set;
-	input_filter_set.PushFilter(ColumnIndex(0), make_uniq<IsNullFilter>());
-
-	TableFunctionInitInput input(bind_data.get(), column_ids, {vector<idx_t>()}, input_filter_set);
-	auto global_state = scan_function.init_global(context, input);
-	auto local_state = scan_function.init_local(execution_context, input, global_state.get());
-
-	// Prepare result chunk
-	DataChunk result;
-	result.Initialize(context, return_types, STANDARD_VECTOR_SIZE);
-
-	// Check if any rows pass the filter (i.e., any NULLs exist)
-	TableFunctionInput function_input(bind_data.get(), local_state.get(), global_state.get());
-	scan_function.function(context, function_input, result);
-
-	if (result.size() > 0) {
-		throw ConstraintException("NOT NULL constraint failed: %s.%s", table_entry.name, column.name);
-	}
-}
-
 void IntroduceNewSchema(IcebergTableInformation &updated_table, IcebergTransactionData &transaction_data,
                         shared_ptr<IcebergTableSchema> new_schema) {
 	auto new_schema_id = new_schema->schema_id;
@@ -489,20 +420,8 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 		return;
 	}
 	case AlterTableType::SET_NOT_NULL: {
-		auto &set_not_null_info = alter_table_info.Cast<SetNotNullInfo>();
-
-		const auto new_schema = current_schema.Copy();
-		new_schema->schema_id++;
-
-		auto &column = ResolveColumn<SetNotNullInfo>(set_not_null_info, new_schema);
-
-		VerifyNotNullConstraint(context, column, table_entry);
-
-		column.required = true;
-
-		IntroduceNewSchema(updated_table, transaction_data, new_schema);
-
-		return;
+		// Column integrity is not guaranteed by Iceberg Catalogs, so we cannot safely do this.
+		throw InvalidInputException("Cannot change nullable column to non-nullable");
 	}
 	case AlterTableType::RENAME_TABLE: {
 		auto &rename_table_info = alter_table_info.Cast<RenameTableInfo>();

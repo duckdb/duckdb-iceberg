@@ -1,5 +1,5 @@
-# name: test/sql/local/irc_any_catalog/alter/set_not_null/alter_set_not_null_with_transaction_changes.test
-# group: [set_not_null]
+# name: test/sql/local/irc_any_catalog/alter/alter_set_not_null_not_supported.test
+# group: [alter]
 
 require-env ICEBERG_SERVER_AVAILABLE
 
@@ -39,16 +39,7 @@ FROM my_datalake.default.my_table;
 8
 9
 
-statement ok
-BEGIN;
-
-statement ok
-INSERT INTO my_datalake.default.my_table VALUES (NULL);
-
 statement error
 ALTER TABLE my_datalake.default.my_table ALTER COLUMN a SET NOT NULL;
 ----
-Constraint Error: NOT NULL constraint failed: my_table.a
-
-statement ok
-COMMIT;
+Cannot change nullable column to non-nullable
