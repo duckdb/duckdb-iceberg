@@ -405,6 +405,11 @@ void IcebergTransaction::Commit() {
 				DoTableDeletes(delete_update, *temp_con_context);
 				break;
 			}
+			case IcebergTransactionUpdateType::RENAME: {
+				auto &rename_update = transaction_update->Cast<IcebergTransactionRenameUpdate>();
+				DoTableRename(rename_update, *temp_con_context);
+				break;
+			}
 			default:
 				throw InternalException("IcebergTransactionUpdateType (%d) not implemented",
 				                        static_cast<uint8_t>(type));
@@ -461,13 +466,67 @@ void IcebergTransaction::DoTableUpdates(IcebergTransactionAlterUpdate &alter_upd
 	}
 }
 
+static yyjson_mut_val *CreateRenameComponentJSON(yyjson_mut_doc *doc, const IcebergSchemaEntry &schema,
+                                                 const string &table_name) {
+	auto res = yyjson_mut_obj(doc);
+	auto namespace_arr = yyjson_mut_arr(doc);
+	for (auto &item : schema.namespace_items) {
+		yyjson_mut_arr_add_strcpy(doc, namespace_arr, item.c_str());
+	}
+	yyjson_mut_obj_add_val(doc, res, "namespace", namespace_arr);
+	yyjson_mut_obj_add_strcpy(doc, res, "name", table_name.c_str());
+	return res;
+}
+
+static yyjson_mut_val *CreateRenameRequestJSON(yyjson_mut_doc *doc, const IcebergSchemaEntry &schema,
+                                               const string &source, const string &destination) {
+	//  value: {
+	//    "source": { "namespace": ["accounting", "tax"], "name": "paid" },
+	//    "destination": { "namespace": ["accounting", "tax"], "name": "owed" }
+	//  }
+	auto res = yyjson_mut_obj(doc);
+
+	auto source_obj = CreateRenameComponentJSON(doc, schema, source);
+	auto destination_obj = CreateRenameComponentJSON(doc, schema, destination);
+	yyjson_mut_obj_add_val(doc, res, "source", source_obj);
+	yyjson_mut_obj_add_val(doc, res, "destination", destination_obj);
+	return res;
+}
+
+void IcebergTransaction::DoTableRename(IcebergTransactionRenameUpdate &rename_update, ClientContext &context) {
+	auto &original_table = rename_update.table;
+	auto &schema = original_table.schema;
+	auto table_key = original_table.GetTableKey();
+	auto &table_name = original_table.name;
+	auto new_name = rename_update.new_name;
+
+	std::unique_ptr<yyjson_mut_doc, YyjsonDocDeleter> doc_p(yyjson_mut_doc_new(nullptr));
+	auto doc = doc_p.get();
+	auto root_object = CreateRenameRequestJSON(doc, schema, table_name, new_name);
+	yyjson_mut_doc_set_root(doc, root_object);
+	auto transaction_json = JsonDocToString(std::move(doc_p));
+	IRCAPI::CommitTableRename(context, catalog, transaction_json);
+
+	DropInfo drop_info;
+	drop_info.name = table_name;
+	drop_info.if_not_found = OnEntryNotFound::THROW_EXCEPTION;
+	schema.DropEntry(context, drop_info, true);
+
+	lock_guard<mutex> guard(schema.tables.GetEntryLock());
+	shared_ptr<IcebergTableInformation> old_version;
+	schema.tables.CreateEntryInternal(guard, new_name, std::move(rename_update.new_table), old_version);
+	if (old_version) {
+		throw TransactionException("Table %s was already created by a different transaction!", new_name);
+	}
+}
+
 void IcebergTransaction::DoTableDeletes(IcebergTransactionDeleteUpdate &delete_update, ClientContext &context) {
 	auto &ic_catalog = catalog.Cast<IcebergCatalog>();
 	auto &table = delete_update.deleted_table;
 	auto schema_key = table.schema.name;
 	auto table_key = table.GetTableKey();
-	auto table_name = table.name;
-	IRCAPI::CommitTableDelete(context, catalog, table.schema.namespace_items, table.name);
+	auto &table_name = table.name;
+	IRCAPI::CommitTableDelete(context, catalog, table.schema.namespace_items, table_name);
 	// remove the load table result
 	ic_catalog.table_request_cache.Expire(context, table_key);
 	// remove the table entry from the catalog
@@ -644,6 +703,47 @@ IcebergTableInformation &IcebergTransaction::DeleteTable(IcebergTableInformation
 	transaction_updates.push_back(std::move(delete_update));
 	state->status = IcebergTableStatus::DROPPED;
 	return state->table.get();
+}
+
+IcebergTableInformation &IcebergTransaction::RenameTable(IcebergTableInformation &table, const string &new_name) {
+	auto table_key = table.GetTableKey();
+	auto state = GetLatestTableState(table_key);
+	if (state) {
+		auto &original_table = state->table.get();
+		if (original_table.HasTransactionUpdates()) {
+			throw CatalogException("This table (%s) was modified already, can't be renamed!", table.name);
+		}
+	}
+
+	if (!state) {
+		state = SetLatestTableState(table, IcebergTableSource::EXTERNAL);
+	}
+	//! Set the status of the old name to RENAMED
+	state->status = IcebergTableStatus::RENAMED;
+
+	//! Create the rename update, creating the new IcebergTableInformation in the process
+	auto rename = make_uniq<IcebergTransactionRenameUpdate>(*this, state->table, new_name);
+	auto &rename_update = *rename;
+	transaction_updates.push_back(std::move(rename));
+
+	//! Update the state of the renamed table
+	auto &new_table = rename_update.new_table;
+	auto &new_table_state = SetLatestTableState(new_table, IcebergTableSource::TRANSACTION);
+	new_table_state.status = IcebergTableStatus::ALIVE;
+	new_table.InitSchemaVersions();
+
+	auto locked_context = context.lock();
+	auto &client_context = *locked_context;
+	//! FIXME: just like the other place, this can easily go wrong
+	//! Migrate the MetadataCache
+	auto new_table_key = new_table.GetTableKey();
+	auto &table_request_cache = catalog.table_request_cache;
+	lock_guard<mutex> cache_guard(table_request_cache.Lock());
+	auto cache = table_request_cache.Get(table_key, cache_guard, false);
+	table_request_cache.SetOrOverwriteInternal(cache_guard, client_context, new_table_key, cache->expires_at,
+	                                           std::move(cache->load_table_result));
+	table_request_cache.ExpireInternal(cache_guard, client_context, table_key);
+	return state->table;
 }
 
 void ApplyTableUpdate(IcebergTableInformation &table_info, IcebergTransaction &iceberg_transaction,

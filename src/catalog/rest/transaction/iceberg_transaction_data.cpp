@@ -17,7 +17,7 @@
 namespace duckdb {
 
 IcebergTransactionData::IcebergTransactionData(ClientContext &context, const IcebergTableInformation &table_info)
-    : context(context), table_info(table_info), is_deleted(false) {
+    : context(context), table_info(table_info) {
 	if (table_info.table_metadata.has_next_row_id) {
 		next_row_id = table_info.table_metadata.next_row_id;
 	}

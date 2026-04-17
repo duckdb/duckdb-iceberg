@@ -11,6 +11,7 @@ class IcebergTableEntry;
 struct IcebergTransactionUpdate;
 struct IcebergTransactionAlterUpdate;
 struct IcebergTransactionDeleteUpdate;
+struct IcebergTransactionRenameUpdate;
 
 struct TableTransactionInfo {
 	TableTransactionInfo() {};
@@ -35,7 +36,7 @@ struct TableInfoCache {
 	bool exists;
 };
 
-enum class IcebergTableStatus : uint8_t { ALIVE, DROPPED };
+enum class IcebergTableStatus : uint8_t { ALIVE, DROPPED, RENAMED };
 
 enum class IcebergTableSource : uint8_t {
 	//! Loaded from external source
@@ -69,6 +70,7 @@ public:
 	}
 	void DoTableUpdates(IcebergTransactionAlterUpdate &alter_update, ClientContext &context);
 	void DoTableDeletes(IcebergTransactionDeleteUpdate &delete_update, ClientContext &context);
+	void DoTableRename(IcebergTransactionRenameUpdate &rename_update, ClientContext &context);
 	void DoSchemaCreates(ClientContext &context);
 	void DoSchemaDeletes(ClientContext &context);
 	IcebergCatalog &GetCatalog();
@@ -82,6 +84,7 @@ public:
 	bool StartedBefore(timestamp_t timestamp_ms) const;
 	IcebergTransactionAlterUpdate &GetOrCreateAlter();
 	IcebergTableInformation &DeleteTable(IcebergTableInformation &table);
+	IcebergTableInformation &RenameTable(IcebergTableInformation &table, const string &new_name);
 
 private:
 	void CleanupFiles();

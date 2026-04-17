@@ -129,6 +129,10 @@ case_insensitive_map_t<shared_ptr<IcebergTableInformation>> &IcebergTableSet::Ge
 	return entries;
 }
 
+mutex &IcebergTableSet::GetEntryLock() {
+	return entry_lock;
+}
+
 void IcebergTableSet::LoadEntries(ClientContext &context) {
 	auto &iceberg_transaction = IcebergTransaction::Get(context, catalog);
 	bool schema_listed =
@@ -161,6 +165,19 @@ static Value ParseTableProperty(TableFunctionBinder &binder, ClientContext &cont
 		                            type.ToString());
 	}
 	return val;
+}
+
+shared_ptr<IcebergTableInformation>
+IcebergTableSet::CreateEntryInternal(lock_guard<mutex> &guard, const string &name, IcebergTableInformation &&table,
+                                     shared_ptr<IcebergTableInformation> &old_entry) {
+	auto it = entries.find(name);
+	if (it != entries.end()) {
+		old_entry = std::move(it->second);
+		it->second = make_shared_ptr<IcebergTableInformation>(std::move(table));
+	} else {
+		it = entries.emplace(name, make_shared_ptr<IcebergTableInformation>(std::move(table))).first;
+	}
+	return it->second;
 }
 
 IcebergTableInformation &IcebergTableSet::CreateNewEntry(ClientContext &context, IcebergCatalog &catalog,
@@ -281,7 +298,7 @@ optional_ptr<CatalogEntry> IcebergTableSet::GetEntry(ClientContext &context, con
 	auto table_key = IcebergTableInformation::GetTableKey(schema.namespace_items, table_name);
 	auto latest_state = iceberg_transaction.GetLatestTableState(table_key);
 	if (latest_state) {
-		if (latest_state->status == IcebergTableStatus::DROPPED) {
+		if (latest_state->status != IcebergTableStatus::ALIVE) {
 			// If table has been deleted within the transaction, return null
 			return nullptr;
 		}
@@ -306,20 +323,22 @@ optional_ptr<CatalogEntry> IcebergTableSet::GetEntry(ClientContext &context, con
 		return table_info.GetSchemaVersion(snapshot_lookup, context);
 	}
 
-	if (entries.find(table_name) != entries.end()) {
-		entries.erase(table_name);
-	}
-	auto it = entries.emplace(table_name, make_shared_ptr<IcebergTableInformation>(ic_catalog, schema, table_name));
-	auto entry = it.first;
-	auto &table_info = *entry->second;
+	//! Preserve the old version in case our replacement fails
+	shared_ptr<IcebergTableInformation> old_version;
+	auto new_version =
+	    CreateEntryInternal(l, table_name, IcebergTableInformation(ic_catalog, schema, table_name), old_version);
+	auto &table_info = *new_version;
 	if (!FillEntry(context, table_info)) {
-		// Table doesn't exist
-		entries.erase(entry);
+		if (old_version) {
+			entries[table_name] = std::move(old_version);
+		} else {
+			entries.erase(table_name);
+		}
 		iceberg_transaction.RecordTableRequest(table_key);
 		return nullptr;
 	}
 
-	iceberg_transaction.tables[table_key] = entry->second;
+	iceberg_transaction.tables[table_key] = new_version;
 	IcebergSnapshotLookup snapshot_lookup;
 
 	bool is_time_travel = lookup.GetAtClause();

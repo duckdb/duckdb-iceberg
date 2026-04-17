@@ -18,6 +18,16 @@ namespace duckdb {
 const string WRITE_UPDATE_MODE = "write.update.mode";
 const string WRITE_DELETE_MODE = "write.delete.mode";
 
+struct IcebergMetadataLogItem {
+public:
+	IcebergMetadataLogItem(const string &path, int64_t timestamp_ms) : metadata_file(path), timestamp_ms(timestamp_ms) {
+	}
+
+public:
+	string metadata_file;
+	int64_t timestamp_ms;
+};
+
 //! A structure to store "LoadTableResult" information that changes as a transaction goes on
 //! Everything is parsed from a load table result, but if a transaction changes a schema, those schema
 //! updates are reflected here and never within the catalog that lives beyond transactions
@@ -122,6 +132,8 @@ public:
 
 	//! table properties
 	case_insensitive_map_t<string> table_properties;
+
+	vector<IcebergMetadataLogItem> metadata_log;
 
 private:
 	int32_t current_schema_id;

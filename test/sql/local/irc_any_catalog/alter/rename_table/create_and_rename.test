@@ -1,0 +1,140 @@
+# name: test/sql/local/irc_any_catalog/alter/rename_table/create_and_rename.test
+# group: [rename_table]
+
+require-env ICEBERG_SERVER_AVAILABLE
+
+require-env SECRETS_CREATED_AND_CATALOG_ATTACHED
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+require ducklake
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+set enable_logging=true
+
+statement ok
+set logging_level='debug'
+
+statement ok
+drop table if exists my_datalake.default.rename_table;
+
+statement ok
+drop table if exists my_datalake.default.renamed_table;
+
+statement ok
+create table my_datalake.default.renamed_table(b boolean);
+
+statement ok
+begin transaction
+
+statement ok
+create table my_datalake.default.rename_table(a varchar);
+
+statement error
+alter table my_datalake.default.renamed_table RENAME TO rename_table
+----
+Catalog Error: Table with name "rename_table" already exists!
+
+statement ok
+commit
+
+# Now create them offset by different transactions
+
+# First commit the RENAME first
+
+statement ok
+drop table if exists my_datalake.default.rename_table;
+
+statement ok
+drop table if exists my_datalake.default.renamed_table;
+
+# Create 'renamed' outside of con1 and con2
+statement ok
+create table my_datalake.default.renamed_table(b boolean);
+
+statement ok
+insert into my_datalake.default.renamed_table VALUES (true)
+
+statement ok con1
+begin transaction
+
+statement ok con2
+begin transaction
+
+statement ok con1
+create table my_datalake.default.rename_table(a varchar)
+
+# Can't be seen by con2
+statement error con2
+select * from my_datalake.default.rename_table
+----
+Catalog Error: Table with name rename_table does not exist!
+
+# RENAME doesn't fail, because 'rename' can't be seen by con2 yet
+statement ok con2
+ALTER TABLE my_datalake.default.renamed_table RENAME TO rename_table
+
+statement ok con2
+insert into my_datalake.default.rename_table VALUES (false)
+
+statement ok con2
+commit
+
+query I
+select * from my_datalake.default.rename_table order by all
+----
+false
+true
+
+statement error con1
+commit
+----
+<REGEX>:.*TransactionContext Error: Failed to commit:.*
+
+# Then do the same but commit the CREATE first
+
+statement ok
+drop table if exists my_datalake.default.rename_table;
+
+statement ok
+drop table if exists my_datalake.default.renamed_table;
+
+# Create 'renamed' outside of con1 and con2
+statement ok
+create table my_datalake.default.renamed_table(b boolean);
+
+statement ok con1
+begin transaction
+
+statement ok con2
+begin transaction
+
+statement ok con1
+create table my_datalake.default.rename_table(a varchar)
+
+# Can't be seen by con2
+statement error con2
+select * from my_datalake.default.rename_table
+----
+Catalog Error: Table with name rename_table does not exist!
+
+# RENAME doesn't fail, because 'rename' can't be seen by con2 yet
+statement ok con2
+ALTER TABLE my_datalake.default.renamed_table RENAME TO rename_table
+
+statement ok con1
+commit
+
+statement error con2
+commit
+----
+<REGEX>:.*TransactionContext Error: Failed to commit:.*

@@ -79,41 +79,44 @@ WARNING	Detected schema change during transaction (schema_id mismatch); ACID gua
 statement ok con2
 INSERT INTO my_datalake.default.alter_add_column_explicit_txn VALUES (42);
 
-# Now that we did the insert, the code at IcebergTableSet::GetEntry sees that the table has been updated within the transaction,
-# and does a snapshot lookup with LATEST instead of FROM_TIMESTAMP, therefore using current_schema_id instead. That's why we see the new column.
-query II con2
+query I con2
 FROM my_datalake.default.alter_add_column_explicit_txn ORDER BY a;
 ----
-0	NULL
-1	NULL
-2	NULL
-3	NULL
-4	NULL
-5	NULL
-6	NULL
-7	NULL
-8	NULL
-9	NULL
-42	NULL
+0
+1
+2
+3
+4
+5
+6
+7
+8
+9
+42
+
+statement error con2
+INSERT INTO my_datalake.default.alter_add_column_explicit_txn VALUES (43, 43);
+----
+Binder Error: table alter_add_column_explicit_txn has 1 columns but 2 values were supplied
 
 statement ok con2
-INSERT INTO my_datalake.default.alter_add_column_explicit_txn VALUES (43, 43);
+INSERT INTO my_datalake.default.alter_add_column_explicit_txn VALUES (43);
 
-query II con2
+query I con2
 FROM my_datalake.default.alter_add_column_explicit_txn ORDER BY a;
 ----
-0	NULL
-1	NULL
-2	NULL
-3	NULL
-4	NULL
-5	NULL
-6	NULL
-7	NULL
-8	NULL
-9	NULL
-42	NULL
-43	43
+0
+1
+2
+3
+4
+5
+6
+7
+8
+9
+42
+43
 
 statement ok con2
 commit;

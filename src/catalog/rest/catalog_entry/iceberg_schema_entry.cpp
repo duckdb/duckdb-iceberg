@@ -53,7 +53,7 @@ bool IcebergSchemaEntry::HandleCreateConflict(CatalogTransaction &transaction, C
 		auto &iceberg_transaction = GetICTransaction(transaction);
 		auto table_key = IcebergTableInformation::GetTableKey(namespace_items, entry_name);
 		auto latest_state = iceberg_transaction.GetLatestTableState(table_key);
-		if (latest_state && latest_state->status == IcebergTableStatus::DROPPED) {
+		if (latest_state && latest_state->status != IcebergTableStatus::ALIVE) {
 			auto &ic_catalog = catalog.Cast<IcebergCatalog>();
 			vector<string> qualified_name = {ic_catalog.GetName()};
 			qualified_name.insert(qualified_name.end(), namespace_items.begin(), namespace_items.end());
@@ -489,6 +489,28 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 
 		IntroduceNewSchema(updated_table, transaction_data, new_schema);
 		return;
+	}
+	case AlterTableType::RENAME_TABLE: {
+		auto &rename_table_info = alter_table_info.Cast<RenameTableInfo>();
+		auto &new_name = rename_table_info.new_table_name;
+
+		EntryLookupInfo lookup(CatalogType::TABLE_ENTRY, new_name);
+		auto other_catalog_entry = tables.GetEntry(context, lookup);
+		if (other_catalog_entry) {
+			//! The table exists at this point, check if it was deleted/renamed in the transaction
+			auto &other_table_entry = other_catalog_entry->Cast<IcebergTableEntry>();
+			auto &other_table_info = other_table_entry.table_info;
+			auto other_table_key = other_table_info.GetTableKey();
+			auto state = irc_transaction.GetLatestTableState(other_table_key);
+			if (!state || state->status == IcebergTableStatus::ALIVE) {
+				throw CatalogException("Table with name \"%s\" already exists!", new_name);
+			}
+			//! The table is dropped or renamed by this transaction, so it's not a conflict anymore
+			D_ASSERT(state &&
+			         (state->status == IcebergTableStatus::DROPPED || state->status == IcebergTableStatus::RENAMED));
+		}
+		irc_transaction.RenameTable(updated_table, new_name);
+		break;
 	}
 	case AlterTableType::RENAME_COLUMN: {
 		auto &rename_info = alter_table_info.Cast<RenameColumnInfo>();
