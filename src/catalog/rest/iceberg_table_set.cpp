@@ -378,7 +378,7 @@ optional_ptr<CatalogEntry> IcebergTableSet::GetEntry(ClientContext &context, con
 	auto &table_metadata_last_updated_at = ic_ret.table_info.table_metadata.last_updated_ms;
 
 	if (transaction_start_millis < table_metadata_last_updated_at.value &&
-	    latest_snapshot->GetSchemaId() != ic_ret.table_info.table_metadata.GetCurrentSchemaId()) {
+	    (!latest_snapshot || latest_snapshot->GetSchemaId() != ic_ret.table_info.table_metadata.GetCurrentSchemaId())) {
 		DUCKDB_LOG_WARNING(
 		    context, "Detected schema change during transaction (schema_id mismatch); ACID guarantees may not hold.");
 	}
