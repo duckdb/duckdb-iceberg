@@ -50,7 +50,7 @@ SELECT * FROM my_datalake.default.t ORDER BY id
 query III
 select partition_field_name, lower_bound, upper_bound from iceberg_partition_stats(my_datalake.default.t) order by all
 ----
-ts_month	660	660
-ts_month	662	662
-ts_year	55	55
-ts_year	55	55
+month_ts_2	660	660
+month_ts_2	662	662
+year_ts_2	55	55
+year_ts_2	55	55
