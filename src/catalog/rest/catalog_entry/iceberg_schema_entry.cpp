@@ -262,7 +262,7 @@ static void VerifySchemaEvolution(const IcebergTableMetadata &table_metadata, co
 	throw CatalogException(error);
 }
 
-//! Ensure existing data files don't contain NULL values in this column
+//! Ensure this column doesn't contain NULL values
 static void VerifyNotNullConstraint(ClientContext &context, IcebergColumnDefinition &column,
                                     IcebergTableEntry &table_entry) {
 	if (!column.write_default || column.write_default->IsNull() || !column.initial_default ||
