@@ -39,6 +39,12 @@
         "test/sql/local/irc_any_catalog/insert/test_write_decimal_bounds_hugeint.test",
         "test/sql/local/irc_any_catalog/insert/test_write_decimal_bounds.test"
       ]
+    },
+    {
+      "reason": "does not purge data files synchronously",
+      "paths": [
+        "test/sql/local/irc_any_catalog/drop/test_drop_table.test"
+      ]
     }
   ]
 }

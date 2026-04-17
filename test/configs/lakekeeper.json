@@ -32,6 +32,12 @@
       "paths": [
         "test/sql/local/irc_any_catalog/reads/should_do_filter_pruning_on_expressionless_string_filters.test"
       ]
+    },
+    {
+      "reason": "does not purge data files synchronously",
+      "paths": [
+        "test/sql/local/irc_any_catalog/drop/test_drop_table.test"
+      ]
     }
   ]
 }
