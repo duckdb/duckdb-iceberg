@@ -329,12 +329,16 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 		new_schema->schema_id++;
 		new_schema->columns.push_back(std::move(new_iceberg_column));
 		auto new_schema_id = new_schema->schema_id;
-		// Update the Table Metadata to have our new schema
-		updated_table.CreateSchemaVersion(*new_schema);
-		transaction_data.TableAddSchema(new_schema_id);
 
-		updated_table.table_metadata.AddSchema(std::move(new_schema));
-		updated_table.table_metadata.SetCurrentSchemaId(new_schema_id);
+		auto &result_schema = updated_table.table_metadata.AddSchemaOrGetExisting(std::move(new_schema));
+		if (result_schema.schema_id == new_schema_id) {
+			// Update the Table Metadata to have our new schema
+			updated_table.CreateSchemaVersion(result_schema);
+			transaction_data.TableAddSchema(new_schema_id);
+		} else {
+			transaction_data.TableSetCurrentSchema();
+		}
+		updated_table.table_metadata.SetCurrentSchemaId(result_schema.schema_id);
 		return;
 	}
 	case AlterTableType::REMOVE_COLUMN: {
@@ -372,11 +376,16 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 		}
 
 		auto new_schema_id = new_schema->schema_id;
-		// Update the Table Metadata to have our new schema
-		updated_table.CreateSchemaVersion(*new_schema);
-		transaction_data.TableAddSchema(new_schema_id);
-		updated_table.table_metadata.AddSchema(std::move(new_schema));
-		updated_table.table_metadata.SetCurrentSchemaId(new_schema_id);
+
+		auto &result_schema = updated_table.table_metadata.AddSchemaOrGetExisting(std::move(new_schema));
+		if (result_schema.schema_id == new_schema_id) {
+			// Update the Table Metadata to have our new schema
+			updated_table.CreateSchemaVersion(result_schema);
+			transaction_data.TableAddSchema(new_schema_id);
+		} else {
+			transaction_data.TableSetCurrentSchema();
+		}
+		updated_table.table_metadata.SetCurrentSchemaId(result_schema.schema_id);
 		return;
 	}
 	case AlterTableType::ALTER_COLUMN_TYPE: {
@@ -399,12 +408,16 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 		column.type = change_type_info.target_type;
 
 		auto new_schema_id = new_schema->schema_id;
-		// Update the Table Metadata to have our new schema
-		updated_table.CreateSchemaVersion(*new_schema);
-		transaction_data.TableAddSchema(new_schema_id);
 
-		updated_table.table_metadata.AddSchema(std::move(new_schema));
-		updated_table.table_metadata.SetCurrentSchemaId(new_schema_id);
+		auto &result_schema = updated_table.table_metadata.AddSchemaOrGetExisting(std::move(new_schema));
+		if (result_schema.schema_id == new_schema_id) {
+			// Update the Table Metadata to have our new schema
+			updated_table.CreateSchemaVersion(result_schema);
+			transaction_data.TableAddSchema(new_schema_id);
+		} else {
+			transaction_data.TableSetCurrentSchema();
+		}
+		updated_table.table_metadata.SetCurrentSchemaId(result_schema.schema_id);
 		return;
 	}
 	case AlterTableType::RENAME_TABLE: {
@@ -451,12 +464,16 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 		column.name = new_name;
 
 		auto new_schema_id = new_schema->schema_id;
-		// Update the Table Metadata to have our new schema
-		updated_table.CreateSchemaVersion(*new_schema);
-		transaction_data.TableAddSchema(new_schema_id);
 
-		updated_table.table_metadata.AddSchema(std::move(new_schema));
-		updated_table.table_metadata.SetCurrentSchemaId(new_schema_id);
+		auto &result_schema = updated_table.table_metadata.AddSchemaOrGetExisting(std::move(new_schema));
+		if (result_schema.schema_id == new_schema_id) {
+			// Update the Table Metadata to have our new schema
+			updated_table.CreateSchemaVersion(result_schema);
+			transaction_data.TableAddSchema(new_schema_id);
+		} else {
+			transaction_data.TableSetCurrentSchema();
+		}
+		updated_table.table_metadata.SetCurrentSchemaId(result_schema.schema_id);
 		return;
 	}
 	case AlterTableType::SET_DEFAULT: {
@@ -482,12 +499,16 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 		column.write_default = make_uniq<Value>(default_constant_value);
 
 		auto new_schema_id = new_schema->schema_id;
-		// Update the Table Metadata to have our new schema
-		updated_table.CreateSchemaVersion(*new_schema);
-		transaction_data.TableAddSchema(new_schema_id);
 
-		updated_table.table_metadata.AddSchema(std::move(new_schema));
-		updated_table.table_metadata.SetCurrentSchemaId(new_schema_id);
+		auto &result_schema = updated_table.table_metadata.AddSchemaOrGetExisting(std::move(new_schema));
+		if (result_schema.schema_id == new_schema_id) {
+			// Update the Table Metadata to have our new schema
+			updated_table.CreateSchemaVersion(result_schema);
+			transaction_data.TableAddSchema(new_schema_id);
+		} else {
+			transaction_data.TableSetCurrentSchema();
+		}
+		updated_table.table_metadata.SetCurrentSchemaId(result_schema.schema_id);
 		return;
 	}
 	default: {

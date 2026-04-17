@@ -282,19 +282,18 @@ int32_t IcebergTableMetadata::GetCurrentSchemaId() const {
 	return current_schema_id;
 }
 
-void IcebergTableMetadata::AddSchema(shared_ptr<IcebergTableSchema> schema) {
-	optional_idx existing_schema_id;
+IcebergTableSchema &IcebergTableMetadata::AddSchemaOrGetExisting(shared_ptr<IcebergTableSchema> schema) {
+	optional_ptr<IcebergTableSchema> existing_schema;
 	for (auto &it : schemas) {
-		auto &id = it.first;
-		auto &existing_schema = *it.second;
+		auto &item = *it.second;
 
-		if (schema->Equals(existing_schema)) {
-			existing_schema_id = id;
+		if (schema->Equals(item)) {
+			existing_schema = item;
 			break;
 		}
 	}
-	if (existing_schema_id.IsValid()) {
-		throw NotImplementedException("Attempted to add a schema that already exists in the table");
+	if (existing_schema) {
+		return *existing_schema;
 	}
 	auto new_schema_id = schema->schema_id;
 	auto res = schemas.emplace(new_schema_id, std::move(schema));
@@ -302,6 +301,7 @@ void IcebergTableMetadata::AddSchema(shared_ptr<IcebergTableSchema> schema) {
 		throw InvalidConfigurationException("Attempted to add schema with id %d, but this already exists in the table!",
 		                                    new_schema_id);
 	}
+	return *res.first->second;
 }
 
 const unordered_map<int32_t, shared_ptr<IcebergTableSchema>> &IcebergTableMetadata::GetSchemas() const {
