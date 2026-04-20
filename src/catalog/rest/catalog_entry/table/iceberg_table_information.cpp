@@ -464,8 +464,23 @@ optional_ptr<CatalogEntry> IcebergTableInformation::GetSchemaVersion(ClientConte
 	auto snapshot_lookup = GetSnapshotLookup(context, at);
 	auto snapshot_info = table_metadata.GetSnapshot(snapshot_lookup);
 
-	const bool latest_metadata_is_too_fresh = table_metadata.last_updated_ms.value > transaction_start_millis;
 	int32_t schema_id;
+	if (!snapshot_lookup.IsLatest() && snapshot_info.snapshot) {
+		//! Time travel query, verify this is reachable
+		auto &snapshot = *snapshot_info.snapshot;
+		if (snapshot.timestamp_ms.value > transaction_start.value) {
+			//! Not reachable, return null instead
+			snapshot_info.snapshot = nullptr;
+		}
+	} else {
+		const bool latest_metadata_is_too_fresh = table_metadata.last_updated_ms.value > transaction_start_millis;
+		if (latest_metadata_is_too_fresh && !table_metadata.metadata_log.empty()) {
+			string metadata_path;
+			auto relevant_metadata = CreateMetadataFromLog(transaction_start_millis, metadata_path);
+			snapshot_info.schema_id = relevant_metadata.GetCurrentSchemaId();
+		}
+	}
+
 	if ((latest_metadata_is_too_fresh && snapshot_info.snapshot) || at) {
 		// use snapshot
 		schema_id = snapshot_info.schema_id;
@@ -551,6 +566,28 @@ IcebergTableInformation IcebergTableInformation::Copy() const {
 	return ret;
 }
 
+IcebergTableMetadata IcebergTableInformation::CreateMetadataFromLog(int64_t transaction_start_millis,
+                                                                    string &metadata_path) {
+	optional_idx log_item_index;
+	for (idx_t i = log.size(); i-- > 0;) {
+		if (log[i].timestamp_ms <= transaction_start_millis) {
+			log_item_index = i;
+			break;
+		}
+	}
+	if (!log_item_index.IsValid()) {
+		throw InternalException(
+		    "Metadata-log exists but none of the entries were valid for the current transaction start time (%s)",
+		    Timestamp::ToString(transaction_start));
+	}
+	auto &fs = FileSystem::GetFileSystem(context);
+	auto &path = log[log_item_index.GetIndex()].metadata_file;
+	auto parsed_metadata = IcebergTableMetadata::Parse(path, fs, "");
+
+	metadata_path = path;
+	return IcebergTableMetadata::FromTableMetadata(parsed_metadata);
+}
+
 IcebergTableInformation IcebergTableInformation::Copy(IcebergTransaction &iceberg_transaction) const {
 	auto ret = Copy();
 
@@ -580,25 +617,7 @@ IcebergTableInformation IcebergTableInformation::Copy(IcebergTransaction &iceber
 			ret.table_metadata.current_snapshot_id = snapshot->snapshot_id;
 			return ret;
 		}
-		auto &log = table_metadata.metadata_log;
-
-		optional_idx log_item_index;
-		for (idx_t i = log.size(); i-- > 0;) {
-			if (log[i].timestamp_ms <= transaction_start_millis) {
-				log_item_index = i;
-				break;
-			}
-		}
-		if (!log_item_index.IsValid()) {
-			throw InternalException(
-			    "Metadata-log exists but none of the entries were valid for the current transaction start time (%s)",
-			    Timestamp::ToString(transaction_start));
-		}
-		auto &fs = FileSystem::GetFileSystem(context);
-		auto &path = log[log_item_index.GetIndex()].metadata_file;
-		auto parsed_metadata = IcebergTableMetadata::Parse(path, fs, "");
-		ret.table_metadata = IcebergTableMetadata::FromTableMetadata(parsed_metadata);
-		ret.latest_metadata_json = path;
+		ret.CreateMetadataFromLog(transaction_start_millis, ret.latest_metadata_json);
 		return ret;
 	}
 	return ret;

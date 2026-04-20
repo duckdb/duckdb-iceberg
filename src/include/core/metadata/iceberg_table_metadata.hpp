@@ -65,7 +65,6 @@ public:
 
 	//! Internal JSON parsing functions
 	optional_ptr<const IcebergSnapshot> FindSnapshotByIdInternal(int64_t target_id) const;
-	optional_ptr<const IcebergSnapshot> FindSnapshotByIdTimestampInternal(timestamp_t timestamp) const;
 	shared_ptr<IcebergTableSchema> GetSchemaFromId(int32_t schema_id) const;
 	optional_ptr<const IcebergPartitionSpec> FindPartitionSpecById(int32_t spec_id) const;
 	optional_ptr<const IcebergSortOrder> FindSortOrderById(int32_t sort_id) const;

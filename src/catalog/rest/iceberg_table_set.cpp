@@ -320,6 +320,9 @@ optional_ptr<CatalogEntry> IcebergTableSet::GetEntry(ClientContext &context, con
 
 	iceberg_transaction.tables[table_key] = new_version;
 	auto ret = table_info.GetSchemaVersion(context, at);
+	if (!ret) {
+		return nullptr;
+	}
 
 	// get the latest information and save it to the transaction cache
 	auto &ic_ret = ret->Cast<IcebergTableEntry>();

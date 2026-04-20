@@ -20,8 +20,7 @@ optional_ptr<const IcebergSnapshot> IcebergTableMetadata::FindSnapshotByIdIntern
 	return it->second;
 }
 
-optional_ptr<const IcebergSnapshot>
-IcebergTableMetadata::FindSnapshotByIdTimestampInternal(timestamp_t timestamp) const {
+optional_ptr<const IcebergSnapshot> IcebergTableMetadata::GetSnapshotByTimestamp(timestamp_t timestamp) const {
 	uint64_t max_millis = NumericLimits<uint64_t>::Minimum();
 	optional_ptr<const IcebergSnapshot> max_snapshot = nullptr;
 
@@ -105,10 +104,6 @@ optional_ptr<const IcebergSnapshot> IcebergTableMetadata::GetSnapshotById(int64_
 		throw InvalidConfigurationException("Could not find snapshot with id " + to_string(snapshot_id));
 	}
 	return snapshot;
-}
-
-optional_ptr<const IcebergSnapshot> IcebergTableMetadata::GetSnapshotByTimestamp(timestamp_t timestamp) const {
-	return FindSnapshotByIdTimestampInternal(timestamp);
 }
 
 IcebergSnapshotScanInfo IcebergTableMetadata::GetSnapshot(const IcebergSnapshotLookup &lookup) const {
