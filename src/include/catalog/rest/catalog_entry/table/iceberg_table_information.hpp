@@ -53,7 +53,8 @@ public:
 
 	static string GetTableKey(const vector<string> &namespace_items, const string &table_name);
 	string GetTableKey() const;
-	IcebergTableMetadata CreateMetadataFromLog(int64_t transaction_start_millis) const;
+	IcebergTableMetadata CreateMetadataFromLog(ClientContext &context, int64_t transaction_start_millis,
+	                                           string &metadata_path) const;
 	// we pass the transaction, because we are only allowed to copy table information state provded by the catalog
 	// from before our transaction start time.
 	IcebergTableInformation Copy(IcebergTransaction &iceberg_transaction) const;
