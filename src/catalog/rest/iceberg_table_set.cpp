@@ -278,6 +278,8 @@ IcebergTableInformation &IcebergTableSet::CreateNewEntry(ClientContext &context,
 	transaction_data.TableSetDefaultSortOrder();
 	transaction_data.TableSetLocation();
 	transaction_data.TableSetProperties(table_metadata.table_properties);
+
+	iceberg_transaction.SetLatestTableState(table_info, IcebergTableStatus::ALIVE);
 	return table_info;
 }
 
@@ -323,7 +325,7 @@ optional_ptr<CatalogEntry> IcebergTableSet::GetEntry(ClientContext &context, con
 			entries.erase(table_name);
 		}
 		//! The table doesn't exist in the catalog
-		auto &state = iceberg_transaction.SetLatestTableState(table_key, IcebergTableStatus::MISSING);
+		iceberg_transaction.SetLatestTableState(table_key, IcebergTableStatus::MISSING);
 		return nullptr;
 	}
 
