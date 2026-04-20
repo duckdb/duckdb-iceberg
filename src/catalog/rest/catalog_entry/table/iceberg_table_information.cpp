@@ -450,19 +450,23 @@ void IcebergTableInformation::SetPartitionedBy(IcebergTransaction &transaction,
 	}
 }
 
-optional_ptr<CatalogEntry> IcebergTableInformation::GetSchemaVersion(const IcebergSnapshotLookup &snapshot_lookup,
-                                                                     ClientContext &context, bool is_time_travel) {
-	D_ASSERT(!schema_versions.empty());
+optional_ptr<CatalogEntry> IcebergTableInformation::GetSchemaVersion(ClientContext &context,
+                                                                     optional_ptr<BoundAtClause> at) {
 	if (table_metadata.snapshots.empty()) {
 		return schema_versions[table_metadata.GetCurrentSchemaId()].get();
 	}
-	auto snapshot_info =
-	    table_metadata.GetSnapshot(snapshot_lookup); // first id is: 3580769571520595073, second is 3580769571520595073
+
+	D_ASSERT(!schema_versions.empty());
 	auto &meta_transaction = MetaTransaction::Get(context);
 	auto transaction_start = meta_transaction.GetCurrentTransactionStartTimestamp();
 	auto transaction_start_millis = Timestamp::GetEpochMs(transaction_start);
+
+	auto snapshot_lookup = GetSnapshotLookup(context, at);
+	auto snapshot_info = table_metadata.GetSnapshot(snapshot_lookup);
+
+	const bool latest_metadata_is_too_fresh = table_metadata.last_updated_ms.value > transaction_start_millis;
 	int32_t schema_id;
-	if ((table_metadata.last_updated_ms.value > transaction_start_millis && snapshot_info.snapshot) || is_time_travel) {
+	if ((latest_metadata_is_too_fresh && snapshot_info.snapshot) || at) {
 		// use snapshot
 		schema_id = snapshot_info.schema_id;
 	} else {
@@ -476,8 +480,7 @@ idx_t IcebergTableInformation::GetIcebergVersion() const {
 }
 
 optional_ptr<CatalogEntry> IcebergTableInformation::GetLatestSchema(ClientContext &context) {
-	IcebergSnapshotLookup latest_snapshot;
-	return GetSchemaVersion(latest_snapshot, context);
+	return GetSchemaVersion(context, nullptr);
 }
 
 string IcebergTableInformation::GetTableKey(const vector<string> &namespace_items, const string &table_name) {
@@ -498,17 +501,24 @@ IcebergSnapshotLookup IcebergTableInformation::GetSnapshotLookup(IcebergTransact
 	return GetSnapshotLookup(context);
 }
 
+IcebergSnapshotLookup IcebergTableInformation::GetSnapshotLookup(ClientContext &context,
+                                                                 optional_ptr<BoundAtClause> at) const {
+	if (!at && !HasTransactionUpdates()) {
+		// if there is no user supplied AT () clause, and the table does not have transaction updates
+		// use transaction start time
+		return GetSnapshotLookup(context);
+	}
+	return IcebergSnapshotLookup::FromAtClause(at);
+}
+
 IcebergSnapshotLookup IcebergTableInformation::GetSnapshotLookup(ClientContext &context) const {
-	const auto table_name = name;
 	auto &meta_transaction = MetaTransaction::Get(context);
 	auto transaction_start = meta_transaction.GetCurrentTransactionStartTimestamp();
-	auto start = timestamp_tz_t(transaction_start);
-	BoundAtClause new_at_clause = BoundAtClause("timestamp", Value::TIMESTAMPTZ(start));
-	auto new_lookup_storage = EntryLookupInfo(CatalogType::TABLE_ENTRY, table_name, new_at_clause, QueryErrorContext());
 
-	auto at = new_lookup_storage.GetAtClause();
-	auto snapshot_lookup = IcebergSnapshotLookup::FromAtClause(at);
-	return snapshot_lookup;
+	IcebergSnapshotLookup res;
+	res.snapshot_timestamp = transaction_start;
+	res.SetSource(SnapshotSource::FROM_TIMESTAMP);
+	return res;
 }
 
 bool IcebergTableInformation::TableIsEmpty(const IcebergSnapshotLookup &snapshot_lookup) const {

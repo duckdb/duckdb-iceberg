@@ -39,8 +39,7 @@ public:
 public:
 	optional_ptr<CatalogEntry> GetLatestSchema(ClientContext &context);
 	idx_t GetIcebergVersion() const;
-	optional_ptr<CatalogEntry> GetSchemaVersion(const IcebergSnapshotLookup &snapshot_lookup, ClientContext &context,
-	                                            bool is_time_travel = false);
+	optional_ptr<CatalogEntry> GetSchemaVersion(ClientContext &context, optional_ptr<BoundAtClause> at);
 	optional_ptr<CatalogEntry> CreateSchemaVersion(const IcebergTableSchema &table_schema);
 	idx_t GetMaxSchemaId();
 	idx_t GetNextPartitionSpecId();
@@ -62,6 +61,7 @@ public:
 	void InitSchemaVersions();
 
 	IcebergSnapshotLookup GetSnapshotLookup(IcebergTransaction &iceberg_transaction) const;
+	IcebergSnapshotLookup GetSnapshotLookup(ClientContext &context, optional_ptr<BoundAtClause> at) const;
 	IcebergSnapshotLookup GetSnapshotLookup(ClientContext &context) const;
 	bool TableIsEmpty(const IcebergSnapshotLookup &snapshot_lookup) const;
 	bool HasTransactionUpdates() const;

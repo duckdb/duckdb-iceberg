@@ -281,18 +281,6 @@ IcebergTableInformation &IcebergTableSet::CreateNewEntry(ClientContext &context,
 	return table_info;
 }
 
-static IcebergSnapshotLookup GetSnapshotLookup(const IcebergTableInformation &table_info, ClientContext &context,
-                                               const EntryLookupInfo &lookup) {
-	auto at = lookup.GetAtClause();
-	if (!at && !table_info.HasTransactionUpdates()) {
-		// if there is no user supplied AT () clause, and the table does not have transaction updates
-		// use transaction start time
-		return table_info.GetSnapshotLookup(context);
-	} else {
-		return IcebergSnapshotLookup::FromAtClause(at);
-	}
-}
-
 optional_ptr<CatalogEntry> IcebergTableSet::GetEntry(ClientContext &context, const EntryLookupInfo &lookup) {
 	lock_guard<mutex> l(entry_lock);
 	auto &ic_catalog = catalog.Cast<IcebergCatalog>();
@@ -301,14 +289,15 @@ optional_ptr<CatalogEntry> IcebergTableSet::GetEntry(ClientContext &context, con
 	// first check transaction entries
 	auto table_key = IcebergTableInformation::GetTableKey(schema.namespace_items, table_name);
 	auto latest_state = iceberg_transaction.GetLatestTableState(table_key);
+
+	auto at = lookup.GetAtClause();
 	if (latest_state) {
 		if (latest_state->status != IcebergTableStatus::ALIVE) {
 			// If table has been deleted within the transaction, return null
 			return nullptr;
 		}
 		auto &table_info = latest_state->table.get();
-		auto snapshot_lookup = GetSnapshotLookup(table_info, context, lookup);
-		return table_info.GetSchemaVersion(snapshot_lookup, context);
+		return table_info.GetSchemaVersion(context, at);
 	}
 
 	auto previous_request_info = iceberg_transaction.GetTableRequestResult(table_key);
@@ -323,8 +312,7 @@ optional_ptr<CatalogEntry> IcebergTableSet::GetEntry(ClientContext &context, con
 			return nullptr;
 		}
 		auto &table_info = *entry->second;
-		auto snapshot_lookup = GetSnapshotLookup(table_info, context, lookup);
-		return table_info.GetSchemaVersion(snapshot_lookup, context);
+		return table_info.GetSchemaVersion(context, at);
 	}
 
 	//! Preserve the old version in case our replacement fails
@@ -343,19 +331,7 @@ optional_ptr<CatalogEntry> IcebergTableSet::GetEntry(ClientContext &context, con
 	}
 
 	iceberg_transaction.tables[table_key] = new_version;
-	IcebergSnapshotLookup snapshot_lookup;
-
-	bool is_time_travel = lookup.GetAtClause();
-	if (!is_time_travel && !table_info.HasTransactionUpdates()) {
-		// if there is no user supplied AT () clause, and the table does not have transaction updates
-		// use transaction start time
-		snapshot_lookup = table_info.GetSnapshotLookup(context);
-	} else {
-		auto at = lookup.GetAtClause();
-		snapshot_lookup = IcebergSnapshotLookup::FromAtClause(at);
-	};
-
-	auto ret = table_info.GetSchemaVersion(snapshot_lookup, context, is_time_travel);
+	auto ret = table_info.GetSchemaVersion(context, at);
 
 	// get the latest information and save it to the transaction cache
 	auto &ic_ret = ret->Cast<IcebergTableEntry>();
