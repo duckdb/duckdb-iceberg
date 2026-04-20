@@ -70,7 +70,7 @@ string StructField::TryFromJSON(yyjson_val *obj) {
 		}
 	}
 	auto doc_val = yyjson_obj_get(obj, "doc");
-	if (doc_val) {
+	if (doc_val && !yyjson_is_null(doc_val)) {
 		has_doc = true;
 		if (yyjson_is_str(doc_val)) {
 			doc = yyjson_get_str(doc_val);
