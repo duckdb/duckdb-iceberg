@@ -432,8 +432,7 @@ bool IcebergAvroMultiFileReader::Bind(MultiFileOptions &options, MultiFileList &
 // Manifests, and does not happen in any other reads
 static void FixSamePhysicalTypeCasts(BoundCastInfo &cast_info, const LogicalType &source_type,
                                      const LogicalType &target_type) {
-	if (cast_info.function == DefaultCasts::TryVectorNullCast &&
-	    source_type.InternalType() == target_type.InternalType()) {
+	if (source_type.id() == LogicalTypeId::DATE && target_type.id() == LogicalTypeId::INTEGER) {
 		cast_info.function = DefaultCasts::ReinterpretCast;
 		return;
 	}
@@ -476,9 +475,28 @@ ReaderInitializeType IcebergAvroMultiFileReader::InitializeReader(
     optional_ptr<TableFilterSet> table_filters, ClientContext &context, MultiFileGlobalState &gstate) {
 	auto result = MultiFileReader::InitializeReader(reader_data, bind_data, global_columns, global_column_ids,
 	                                                table_filters, context, gstate);
-	for (auto &expr : reader_data.expressions) {
-		if (expr) {
-			FixSamePhysicalTypeCastsInExpr(*expr);
+	bool has_day_transform = false;
+	auto get_function_info = function_info.get();
+	if (get_function_info) {
+		auto &avro_scan_info = get_function_info->Cast<IcebergAvroScanInfo>();
+		for (auto &partition_spec : avro_scan_info.metadata.partition_specs) {
+			for (auto &spec_field : partition_spec.second.fields) {
+				if (StringUtil::CIEquals(spec_field.transform.RawType(), "day")) {
+					has_day_transform = true;
+					break;
+				}
+			}
+			if (has_day_transform) {
+				break;
+			}
+		}
+	}
+
+	if (has_day_transform || !get_function_info) {
+		for (auto &expr : reader_data.expressions) {
+			if (expr) {
+				FixSamePhysicalTypeCastsInExpr(*expr);
+			}
 		}
 	}
 	return result;
