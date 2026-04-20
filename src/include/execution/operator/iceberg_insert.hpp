@@ -167,8 +167,6 @@ public:
 	static PhysicalOperator &PlanInsert(ClientContext &context, PhysicalPlanGenerator &planner,
 	                                    IcebergTableEntry &table);
 	static vector<IcebergManifestEntry> GetInsertManifestEntries(IcebergInsertGlobalState &global_state);
-	static void AddWrittenFiles(IcebergInsertGlobalState &global_state, DataChunk &chunk,
-	                            optional_ptr<TableCatalogEntry> table);
 
 	bool IsSink() const override {
 		return true;

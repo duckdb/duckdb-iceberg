@@ -351,19 +351,16 @@ void IcebergInsertGlobalState::AddFiles(DataChunk &chunk, const string &table_na
 	}
 }
 
-void IcebergInsert::AddWrittenFiles(IcebergInsertGlobalState &global_state, DataChunk &chunk,
-                                    optional_ptr<TableCatalogEntry> table) {
-	D_ASSERT(table);
-	auto &ic_table = table->Cast<IcebergTableEntry>();
-	auto &table_metadata = ic_table.table_info.table_metadata;
-	global_state.AddFiles(chunk, ic_table.name, table_metadata);
-}
-
 SinkResultType IcebergInsert::Sink(ExecutionContext &context, DataChunk &chunk, OperatorSinkInput &input) const {
-	auto &global_state = input.global_state.Cast<IcebergInsertGlobalState>();
+	D_ASSERT(table);
 
+	auto &transaction = IcebergTransaction::Get(context.client, table->catalog);
+	auto &ic_table = table->Cast<IcebergTableEntry>();
+	auto table_metadata = ic_table.table_info.Copy(transaction).table_metadata;
+
+	auto &global_state = input.global_state.Cast<IcebergInsertGlobalState>();
 	// TODO: pass through the partition id?
-	AddWrittenFiles(global_state, chunk, table);
+	global_state.AddFiles(chunk, table->name, table_metadata);
 
 	return SinkResultType::NEED_MORE_INPUT;
 }
