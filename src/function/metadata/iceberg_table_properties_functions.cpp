@@ -217,10 +217,10 @@ static void GetIcebergTablePropertiesFunction(ClientContext &context, TableFunct
 	auto &iceberg_transaction = IcebergTransaction::Get(context, iceberg_table->catalog);
 	auto table_key = iceberg_table->table_info.GetTableKey();
 	auto table_txn_state = iceberg_transaction.GetLatestTableState(table_key);
-	const IcebergTableInformation *txn_table_info =
-	    table_txn_state ? &table_txn_state->table.get() : &iceberg_table->table_info;
+	const IcebergTableInformation &txn_table_info =
+	    table_txn_state ? table_txn_state->GetInfo() : iceberg_table->table_info;
 
-	const auto &properties = txn_table_info->table_metadata.GetTableProperties();
+	const auto &properties = txn_table_info.table_metadata.GetTableProperties();
 	if (properties.empty()) {
 		output.SetCardinality(0);
 		return;

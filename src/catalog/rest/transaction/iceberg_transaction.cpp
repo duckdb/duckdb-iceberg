@@ -28,8 +28,8 @@
 
 namespace duckdb {
 
-IcebergTransactionTableState::IcebergTransactionTableState(IcebergTableInformation &table, IcebergTableSource source)
-    : table(table), source(source), status(IcebergTableStatus::ALIVE) {
+IcebergTransactionTableState::IcebergTransactionTableState(optional_ptr<IcebergTableInformation> table)
+    : table(table), status(table ? IcebergTableStatus::ALIVE : IcebergTableStatus::MISSING) {
 }
 
 IcebergTransaction::IcebergTransaction(IcebergCatalog &ic_catalog, TransactionManager &manager, ClientContext &context)
@@ -651,21 +651,6 @@ void IcebergTransaction::Rollback() {
 	CleanupFiles();
 }
 
-void IcebergTransaction::RecordTableRequest(const string &table_key, idx_t sequence_number, idx_t snapshot_id) {
-	requested_tables.emplace(table_key, TableInfoCache(sequence_number, snapshot_id));
-}
-
-void IcebergTransaction::RecordTableRequest(const string &table_key) {
-	requested_tables.emplace(table_key, TableInfoCache(false));
-}
-
-TableInfoCache IcebergTransaction::GetTableRequestResult(const string &table_key) {
-	if (requested_tables.find(table_key) == requested_tables.end()) {
-		return TableInfoCache(false);
-	}
-	return requested_tables.at(table_key);
-}
-
 IcebergTransaction &IcebergTransaction::Get(ClientContext &context, Catalog &catalog) {
 	D_ASSERT(catalog.GetCatalogType() == "iceberg");
 	return Transaction::Get(context, catalog).Cast<IcebergTransaction>();
@@ -687,17 +672,21 @@ optional_ptr<IcebergTransactionTableState> IcebergTransaction::GetLatestTableSta
 	return it->second;
 }
 
-IcebergTransactionTableState &IcebergTransaction::SetLatestTableState(IcebergTableInformation &table,
-                                                                      IcebergTableSource source) {
-	auto table_key = table.GetTableKey();
+IcebergTransactionTableState &IcebergTransaction::SetLatestTableState(const string &table_key,
+                                                                      IcebergTableStatus status) {
 	auto it = current_table_data.find(table_key);
 	if (it == current_table_data.end()) {
-		it = current_table_data.emplace(table_key, IcebergTransactionTableState(table, source)).first;
-		return it->second;
+		it = current_table_data.emplace(table_key, IcebergTransactionTableState(nullptr)).first;
 	}
-	auto &state = it->second;
-	state.table = table;
-	state.source = source;
+	it->second.SetStatus(status);
+	return it->second;
+}
+
+IcebergTransactionTableState &IcebergTransaction::SetLatestTableState(IcebergTableInformation &table,
+                                                                      IcebergTableStatus status) {
+	auto table_key = table.GetTableKey();
+	auto &state = SetLatestTableState(table_key, status);
+	state.SetTable(table);
 	return state;
 }
 
@@ -717,42 +706,37 @@ IcebergTableInformation &IcebergTransaction::DeleteTable(IcebergTableInformation
 
 	unique_ptr<IcebergTransactionDeleteUpdate> delete_update;
 	if (state) {
-		delete_update = make_uniq<IcebergTransactionDeleteUpdate>(*this, state->table);
+		auto &table_info = state->GetInfo();
+		delete_update = make_uniq<IcebergTransactionDeleteUpdate>(*this, table_info);
 	} else {
 		delete_update = make_uniq<IcebergTransactionDeleteUpdate>(*this, table);
-		auto &deleted_table = delete_update->deleted_table;
-		state = SetLatestTableState(deleted_table, IcebergTableSource::TRANSACTION);
 	}
+	auto &deleted_table = delete_update->deleted_table;
+	state = SetLatestTableState(deleted_table, IcebergTableStatus::DROPPED);
 	transaction_updates.push_back(std::move(delete_update));
-	state->status = IcebergTableStatus::DROPPED;
-	return state->table.get();
+	return state->GetInfo();
 }
 
 IcebergTableInformation &IcebergTransaction::RenameTable(IcebergTableInformation &table, const string &new_name) {
 	auto table_key = table.GetTableKey();
 	auto state = GetLatestTableState(table_key);
 	if (state) {
-		auto &original_table = state->table.get();
+		auto &original_table = state->GetInfo();
 		if (original_table.HasTransactionUpdates()) {
 			throw CatalogException("This table (%s) was modified already, can't be renamed!", table.name);
 		}
 	}
 
-	if (!state) {
-		state = SetLatestTableState(table, IcebergTableSource::EXTERNAL);
-	}
-	//! Set the status of the old name to RENAMED
-	state->status = IcebergTableStatus::RENAMED;
+	state = SetLatestTableState(table, IcebergTableStatus::RENAMED);
 
 	//! Create the rename update, creating the new IcebergTableInformation in the process
-	auto rename = make_uniq<IcebergTransactionRenameUpdate>(*this, state->table, new_name);
+	auto rename = make_uniq<IcebergTransactionRenameUpdate>(*this, state->GetInfo(), new_name);
 	auto &rename_update = *rename;
 	transaction_updates.push_back(std::move(rename));
 
 	//! Update the state of the renamed table
 	auto &new_table = rename_update.new_table;
-	auto &new_table_state = SetLatestTableState(new_table, IcebergTableSource::TRANSACTION);
-	new_table_state.status = IcebergTableStatus::ALIVE;
+	SetLatestTableState(new_table, IcebergTableStatus::ALIVE);
 	new_table.InitSchemaVersions();
 
 	auto locked_context = context.lock();
@@ -766,7 +750,7 @@ IcebergTableInformation &IcebergTransaction::RenameTable(IcebergTableInformation
 	table_request_cache.SetOrOverwriteInternal(cache_guard, client_context, new_table_key, cache->expires_at,
 	                                           std::move(cache->load_table_result));
 	table_request_cache.ExpireInternal(cache_guard, client_context, table_key);
-	return state->table;
+	return state->GetInfo();
 }
 
 void ApplyTableUpdate(IcebergTableInformation &table_info, IcebergTransaction &iceberg_transaction,

@@ -278,6 +278,8 @@ IcebergTableInformation &IcebergTableSet::CreateNewEntry(ClientContext &context,
 	transaction_data.TableSetDefaultSortOrder();
 	transaction_data.TableSetLocation();
 	transaction_data.TableSetProperties(table_metadata.table_properties);
+
+	iceberg_transaction.SetLatestTableState(table_info, IcebergTableStatus::ALIVE);
 	return table_info;
 }
 
@@ -287,31 +289,16 @@ optional_ptr<CatalogEntry> IcebergTableSet::GetEntry(ClientContext &context, con
 	auto &iceberg_transaction = IcebergTransaction::Get(context, catalog);
 	const auto &table_name = lookup.GetEntryName();
 	// first check transaction entries
-	auto table_key = IcebergTableInformation::GetTableKey(schema.namespace_items, table_name);
+	const auto table_key = IcebergTableInformation::GetTableKey(schema.namespace_items, table_name);
 	auto latest_state = iceberg_transaction.GetLatestTableState(table_key);
 
 	auto at = lookup.GetAtClause();
 	if (latest_state) {
-		if (latest_state->status != IcebergTableStatus::ALIVE) {
-			// If table has been deleted within the transaction, return null
+		if (!latest_state->IsAlive()) {
+			// If table has been deleted or is missing within the transaction, return null
 			return nullptr;
 		}
-		auto &table_info = latest_state->table.get();
-		return table_info.GetSchemaVersion(context, at);
-	}
-
-	auto previous_request_info = iceberg_transaction.GetTableRequestResult(table_key);
-	if (previous_request_info.exists) {
-		// transaction has already looked up this table, find it in entries
-		auto entry = entries.find(table_name);
-		if (entry == entries.end()) {
-			// table no longer exists (was most likely dropped in another transaction)
-			// TODO: we can recreate the table (but not insert it in the IcebergTableSet) by pulling it back
-			//  out of the MetadataCache. This doesn't make sense in the long run, as the transaction
-			//  will fail regardless
-			return nullptr;
-		}
-		auto &table_info = *entry->second;
+		auto &table_info = latest_state->GetInfo();
 		return table_info.GetSchemaVersion(context, at);
 	}
 
@@ -326,7 +313,8 @@ optional_ptr<CatalogEntry> IcebergTableSet::GetEntry(ClientContext &context, con
 		} else {
 			entries.erase(table_name);
 		}
-		iceberg_transaction.RecordTableRequest(table_key);
+		//! The table doesn't exist in the catalog
+		iceberg_transaction.SetLatestTableState(table_key, IcebergTableStatus::MISSING);
 		return nullptr;
 	}
 
@@ -336,15 +324,6 @@ optional_ptr<CatalogEntry> IcebergTableSet::GetEntry(ClientContext &context, con
 	// get the latest information and save it to the transaction cache
 	auto &ic_ret = ret->Cast<IcebergTableEntry>();
 	auto latest_snapshot = ic_ret.table_info.table_metadata.GetLatestSnapshot();
-	idx_t latest_sequence_number, latest_snapshot_id;
-	if (latest_snapshot) {
-		latest_snapshot_id = latest_snapshot->snapshot_id;
-		latest_sequence_number = latest_snapshot->sequence_number;
-	} else {
-		// table is not yet initialized.
-		latest_sequence_number = 0;
-		latest_snapshot_id = -1;
-	}
 
 	// Log warning on schema_id mismatch
 	auto &meta_transaction = MetaTransaction::Get(context);
@@ -359,7 +338,7 @@ optional_ptr<CatalogEntry> IcebergTableSet::GetEntry(ClientContext &context, con
 		    context, "Detected schema change during transaction (schema_id mismatch); ACID guarantees may not hold.");
 	}
 
-	iceberg_transaction.RecordTableRequest(table_key, latest_sequence_number, latest_snapshot_id);
+	iceberg_transaction.SetLatestTableState(table_info, IcebergTableStatus::ALIVE);
 	return ret;
 }
 
