@@ -17,7 +17,18 @@ polaris-stop:
 		echo "Polaris minio directory not found, skipping stop."; \
 	fi
 
-polaris: polaris-clone polaris-stop
+# NB: run through yq once and diff to avoid removing newlines from folded-block arguments to sh -c
+# docker-compose seems to be sensitive to these, even though they should be ignored in standard YAML parsing
+polaris-patch: polaris-clone
+	@echo "Patching Polaris docker-compose.yml to set DROP_WITH_PURGE_ENABLED to true..."
+	cd .catalogs/polaris/site/content/guides/minio && \
+	git checkout -- docker-compose.yml && \
+	yq . docker-compose.yml > docker-compose.yq.yml && \
+	yq '.services.polaris.environment.["polaris.features.DROP_WITH_PURGE_ENABLED"] |= "true"' docker-compose.yml > docker-compose.patched.yml && \
+	(diff docker-compose.yq.yml docker-compose.patched.yml > docker-compose.yml.diff || true) && \
+	patch -i docker-compose.yml.diff docker-compose.yml
+
+polaris: polaris-clone polaris-stop polaris-patch
 	$(call stop_active_catalog)
 	@echo "Starting Polaris catalog..."
 	(cd .catalogs/polaris/site/content/guides/minio && docker compose up -d)

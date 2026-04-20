@@ -1,6 +1,6 @@
 {
   "description": "Use nessie as Iceberg Rest Catalog.",
-  "on_init": "create secret my_secret (TYPE ICEBERG,CLIENT_ID 'spark',CLIENT_SECRET '2OR3eRvYfSZzzZ16MlPd95jhLnOaLM52',OAUTH2_SCOPE 'lakekeeper',OAUTH2_SERVER_URI 'http://localhost:30080/realms/iceberg/protocol/openid-connect/token'); attach 'demo' as my_datalake (type ICEBERG,ENDPOINT 'http://localhost:8181/catalog',SECRET 'my_secret');",
+  "on_init": "create secret my_secret (TYPE ICEBERG,CLIENT_ID 'spark',CLIENT_SECRET '2OR3eRvYfSZzzZ16MlPd95jhLnOaLM52',OAUTH2_SCOPE 'lakekeeper',OAUTH2_SERVER_URI 'http://localhost:30080/realms/iceberg/protocol/openid-connect/token'); attach 'demo' as my_datalake (type ICEBERG,ENDPOINT 'http://localhost:8181/catalog',SECRET 'my_secret',PURGE_REQUESTED true);",
   "statically_loaded_extensions": [
     "core_functions",
     "parquet",
@@ -31,6 +31,12 @@
       "reason": "Lakekeeper data generation insert results in a single parquet file",
       "paths": [
         "test/sql/local/irc_any_catalog/reads/should_do_filter_pruning_on_expressionless_string_filters.test"
+      ]
+    },
+    {
+      "reason": "does not purge data files synchronously",
+      "paths": [
+        "test/sql/local/irc_any_catalog/drop/test_drop_table.test"
       ]
     }
   ]
