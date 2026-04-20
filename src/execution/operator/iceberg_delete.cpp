@@ -428,6 +428,7 @@ PhysicalOperator &IcebergCatalog::PlanDelete(ClientContext &context, PhysicalPla
 		throw BinderException("RETURNING clause not yet supported for deletion from Iceberg table");
 	}
 	auto &table_entry = op.table.Cast<IcebergTableEntry>();
+	table_entry.PrepareIcebergScanFromEntry(context);
 
 	auto &irc_transaction = IcebergTransaction::Get(context, *this);
 	auto &alter = irc_transaction.GetOrCreateAlter();

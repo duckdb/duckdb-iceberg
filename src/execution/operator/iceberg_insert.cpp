@@ -899,6 +899,7 @@ PhysicalOperator &IcebergCatalog::PlanInsert(ClientContext &context, PhysicalPla
 		plan = planner.ResolveDefaultsProjection(op, *plan);
 	}
 	auto &table_entry = op.table.Cast<IcebergTableEntry>();
+	table_entry.PrepareIcebergScanFromEntry(context);
 
 	auto &irc_transaction = IcebergTransaction::Get(context, *this);
 	auto &alter = irc_transaction.GetOrCreateAlter();
@@ -906,8 +907,6 @@ PhysicalOperator &IcebergCatalog::PlanInsert(ClientContext &context, PhysicalPla
 	auto &table_metadata = updated_table.table_metadata;
 	auto &schema = table_metadata.GetLatestSchema();
 	auto &updated_table_entry = *updated_table.schema_versions[schema.schema_id];
-
-	table_entry.PrepareIcebergScanFromEntry(context);
 
 	if (table_metadata.HasSortOrder()) {
 		auto &sort_spec = table_metadata.GetLatestSortOrder();
