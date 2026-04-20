@@ -753,6 +753,12 @@ IcebergCopyOptions IcebergInsert::GetCopyOptions(ClientContext &context, Iceberg
 
 	result.use_tmp_file = false;
 	if (copy_input.partition_spec) {
+		if (table_properties.find("write.target-file-size-bytes") != table_properties.end()) {
+			DUCKDB_LOG_WARNING(context, "Property target-file-size-bytes is currently only supported for unpartitioned writes");
+		}
+		if (table_properties.find("write.parquet.row-group-size-bytes") != table_properties.end()) {
+			DUCKDB_LOG_WARNING(context, "Property row_group_size_bytes is currently only supported for unpartitioned writes");
+		}
 		result.filename_pattern.SetFilenamePattern("{uuidv7}");
 		result.partition_output = true;
 		result.write_empty_file = true;

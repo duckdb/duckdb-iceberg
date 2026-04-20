@@ -1,0 +1,40 @@
+statement ok
+CALL enable_logging(level='warning');
+
+statement ok
+CREATE SCHEMA IF NOT EXISTS my_datalake.default;
+
+statement ok
+drop table if exists my_datalake.default.my_table;
+
+statement ok
+CREATE TABLE my_datalake.default.my_table (
+  user_id INT
+) PARTITIONED BY (user_id) WITH (
+  'write.target-file-size-bytes' = '200'
+);
+
+query II
+SELECT log_level, message FROM duckdb_logs
+----
+
+statement ok
+INSERT INTO my_datalake.default.my_table SELECT * FROM range(100);
+
+query II
+SELECT log_level, message FROM duckdb_logs
+----
+WARNING	Property target-file-size-bytes is currently only supported for unpartitioned writes
+
+statement ok
+set variable my_manifest = (select manifest_path from iceberg_metadata(my_datalake.default.my_table) limit 1);
+
+# TODO: Fix this once partitioned writes with target-file-size-bytes are fully supported
+query I
+select file_size_in_bytes from (select unnest(data_file) from read_avro(getvariable('my_manifest'))) LIMIT 5;
+----
+220
+220
+220
+220
+220

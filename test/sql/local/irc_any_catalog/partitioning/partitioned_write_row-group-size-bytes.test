@@ -1,0 +1,30 @@
+
+statement ok
+CALL enable_logging(level='warning');
+
+statement ok
+CREATE SCHEMA IF NOT EXISTS my_datalake.default;
+
+statement ok
+drop table if exists my_datalake.default.my_table;
+
+statement ok
+CREATE TABLE my_datalake.default.my_table (
+  user_id INT
+) PARTITIONED BY (user_id) WITH (
+  'write.parquet.row-group-size-bytes' = '134217728'
+);
+
+query II
+SELECT log_level, message FROM duckdb_logs
+----
+
+statement error
+INSERT INTO my_datalake.default.my_table SELECT * FROM range(1000);
+----
+Parser Error: Unknown unit for memory: '' (expected: KB, MB, GB, TB for 1000^i units or KiB, MiB, GiB, TiB for 1024^i units)
+
+query II
+SELECT log_level, message FROM duckdb_logs
+----
+WARNING	Property row_group_size_bytes is currently only supported for unpartitioned writes
