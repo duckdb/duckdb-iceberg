@@ -1,4 +1,4 @@
-# name: test/sql/local/irc_any_catalog/partitioning/partitioned_write_row-group-size-bytes.test
+# name: test/sql/local/irc_any_catalog/partitioning/partitioned_write_row-group-size-bytes_memory_specified.test
 # group: [partitioning]
 
 require-env ICEBERG_SERVER_AVAILABLE
@@ -15,7 +15,7 @@ statement ok
 CREATE TABLE my_datalake.default.my_table (
   user_id INT
 ) PARTITIONED BY (user_id) WITH (
-  'write.parquet.row-group-size-bytes' = '134217728'
+  'write.parquet.row-group-size-bytes' = '134217728KB'
 );
 
 query II

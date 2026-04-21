@@ -724,7 +724,11 @@ IcebergCopyOptions IcebergInsert::GetCopyOptions(ClientContext &context, Iceberg
 		auto &mapping = ICEBERG_TABLE_PROPERTY_MAPPING[i];
 		auto it = table_properties.find(mapping.iceberg_option);
 		if (it != table_properties.end()) {
-			info->options[mapping.parquet_option].emplace_back(it->second);
+			if (StringUtil::CIEquals(mapping.parquet_option, "row_group_size_bytes")) {
+				info->options[mapping.parquet_option].emplace_back(Value::UBIGINT(std::stoull(it->second)));
+			} else {
+				info->options[mapping.parquet_option].emplace_back(it->second);
+			}
 		}
 	}
 
@@ -754,10 +758,12 @@ IcebergCopyOptions IcebergInsert::GetCopyOptions(ClientContext &context, Iceberg
 	result.use_tmp_file = false;
 	if (copy_input.partition_spec) {
 		if (table_properties.find("write.target-file-size-bytes") != table_properties.end()) {
-			DUCKDB_LOG_WARNING(context, "Property target-file-size-bytes is currently only supported for unpartitioned writes");
+			DUCKDB_LOG_WARNING(context,
+			                   "Property target-file-size-bytes is currently only supported for unpartitioned writes");
 		}
 		if (table_properties.find("write.parquet.row-group-size-bytes") != table_properties.end()) {
-			DUCKDB_LOG_WARNING(context, "Property row_group_size_bytes is currently only supported for unpartitioned writes");
+			DUCKDB_LOG_WARNING(context,
+			                   "Property row_group_size_bytes is currently only supported for unpartitioned writes");
 		}
 		result.filename_pattern.SetFilenamePattern("{uuidv7}");
 		result.partition_output = true;
