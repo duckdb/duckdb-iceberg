@@ -26,6 +26,7 @@
 #include "core/expression/iceberg_transform.hpp"
 #include "catalog/rest/api/iceberg_type.hpp"
 #include "common/iceberg_utils.hpp"
+#include <cctype>
 
 namespace duckdb {
 
@@ -724,7 +725,8 @@ IcebergCopyOptions IcebergInsert::GetCopyOptions(ClientContext &context, Iceberg
 		auto &mapping = ICEBERG_TABLE_PROPERTY_MAPPING[i];
 		auto it = table_properties.find(mapping.iceberg_option);
 		if (it != table_properties.end()) {
-			if (StringUtil::CIEquals(mapping.parquet_option, "row_group_size_bytes")) {
+			if (StringUtil::CIEquals(mapping.parquet_option, "row_group_size_bytes") &&
+			    std::isdigit(it->second.back())) {
 				info->options[mapping.parquet_option].emplace_back(Value::UBIGINT(std::stoull(it->second)));
 			} else {
 				info->options[mapping.parquet_option].emplace_back(it->second);
