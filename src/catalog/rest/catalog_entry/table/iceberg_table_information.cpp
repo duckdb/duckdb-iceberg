@@ -565,12 +565,12 @@ bool IcebergTableInformation::HasTransactionUpdates() const {
 	return false;
 }
 
-IcebergTableInformation IcebergTableInformation::Copy() const {
+IcebergTableInformation IcebergTableInformation::Copy(ClientContext &context) const {
 	auto ret = IcebergTableInformation(catalog, schema, name);
 	auto table_key = ret.GetTableKey();
 	{
 		lock_guard<std::mutex> cache_lock(catalog.table_request_cache.Lock());
-		auto cached_result = catalog.table_request_cache.Get(table_key, cache_lock, false);
+		auto cached_result = catalog.table_request_cache.Get(context, table_key, cache_lock, false);
 		D_ASSERT(cached_result);
 		auto &cached_table_result = *cached_result->load_table_result;
 		ret.InitializeFromLoadTableResult(cached_table_result, false);
@@ -604,10 +604,10 @@ IcebergTableMetadata IcebergTableInformation::CreateMetadataFromLog(ClientContex
 }
 
 IcebergTableInformation IcebergTableInformation::Copy(IcebergTransaction &iceberg_transaction) const {
-	auto ret = Copy();
-
 	auto locked_context = iceberg_transaction.context.lock();
 	auto &context = *locked_context;
+
+	auto ret = Copy(context);
 	auto &meta_transaction = MetaTransaction::Get(context);
 	auto transaction_start = meta_transaction.GetCurrentTransactionStartTimestamp();
 	auto transaction_start_millis = Timestamp::GetEpochMs(transaction_start);

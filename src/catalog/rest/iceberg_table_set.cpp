@@ -39,7 +39,7 @@ bool IcebergTableSet::FillEntry(ClientContext &context, IcebergTableInformation 
 	// Only check cache if MAX_TABLE_STALENESS option is set
 	if (ic_catalog.attach_options.max_table_staleness_micros.IsValid()) {
 		lock_guard<mutex> cache_lock(ic_catalog.table_request_cache.Lock());
-		auto cached_result = ic_catalog.table_request_cache.Get(table_key, cache_lock);
+		auto cached_result = ic_catalog.table_request_cache.Get(context, table_key, cache_lock);
 		if (cached_result) {
 			// Use the cached result instead of making a new request
 			table.InitializeFromLoadTableResult(*cached_result->load_table_result);
@@ -69,7 +69,7 @@ bool IcebergTableSet::FillEntry(ClientContext &context, IcebergTableInformation 
 	ic_catalog.table_request_cache.SetOrOverwrite(context, table_key, std::move(get_table_result.result_));
 	{
 		lock_guard<std::mutex> cache_lock(ic_catalog.table_request_cache.Lock());
-		auto cached_table_result = ic_catalog.table_request_cache.Get(table_key, cache_lock, false);
+		auto cached_table_result = ic_catalog.table_request_cache.Get(context, table_key, cache_lock, false);
 		D_ASSERT(cached_table_result);
 		auto &load_table_result = *cached_table_result->load_table_result;
 		table.InitializeFromLoadTableResult(load_table_result);
@@ -257,7 +257,7 @@ IcebergTableInformation &IcebergTableSet::CreateNewEntry(ClientContext &context,
 	catalog.table_request_cache.SetOrOverwrite(context, key, std::move(load_table_result));
 	{
 		lock_guard<mutex> cache_lock(catalog.table_request_cache.Lock());
-		auto cached_table_result = catalog.table_request_cache.Get(key, cache_lock, false);
+		auto cached_table_result = catalog.table_request_cache.Get(context, key, cache_lock, false);
 		D_ASSERT(cached_table_result);
 		auto &load_table_result = cached_table_result->load_table_result;
 		table_info.InitializeFromLoadTableResult(*load_table_result, false);

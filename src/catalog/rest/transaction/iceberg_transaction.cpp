@@ -746,8 +746,8 @@ IcebergTableInformation &IcebergTransaction::RenameTable(IcebergTableInformation
 	auto new_table_key = new_table.GetTableKey();
 	auto &table_request_cache = catalog.table_request_cache;
 	lock_guard<mutex> cache_guard(table_request_cache.Lock());
-	auto cache = table_request_cache.Get(table_key, cache_guard, false);
-	table_request_cache.SetOrOverwriteInternal(cache_guard, client_context, new_table_key, cache->expires_at,
+	auto cache = table_request_cache.Get(client_context, table_key, cache_guard, false);
+	table_request_cache.SetOrOverwriteInternal(cache_guard, client_context, new_table_key, cache->expire_timestamp,
 	                                           std::move(cache->load_table_result));
 	table_request_cache.ExpireInternal(cache_guard, client_context, table_key);
 	return state->GetInfo();
