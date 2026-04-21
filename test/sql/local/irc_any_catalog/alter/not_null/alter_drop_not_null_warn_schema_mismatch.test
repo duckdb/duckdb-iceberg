@@ -45,10 +45,10 @@ query II
 SELECT log_level, message FROM duckdb_logs
 ----
 
-# Ideally this statement would fail because at the time of `BEGIN;`, NOT NULL was set.
-# But it succeeds and we log a warning instead. This could be improved by using the metadata_log if present.
-statement ok con2
+statement error con2
 INSERT INTO my_datalake.default.my_table VALUES (NULL);
+----
+Constraint Error: NOT NULL constraint failed: my_table.a
 
 query II
 SELECT log_level, message FROM duckdb_logs

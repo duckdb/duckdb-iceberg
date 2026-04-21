@@ -26,6 +26,16 @@ IcebergTableInformation &IcebergTransactionAlterUpdate::GetOrInitializeTable(con
 	return it->second;
 }
 
+bool IcebergTransactionAlterUpdate::HasUpdates() const {
+	for (auto &it : updated_tables) {
+		auto &table = it.second;
+		if (table.HasTransactionUpdates()) {
+			return true;
+		}
+	}
+	return false;
+}
+
 IcebergTableInformation &IcebergTransactionAlterUpdate::CreateTable(const string &table_key,
                                                                     IcebergTableInformation &&table) {
 	auto emplace_res = updated_tables.emplace(table_key, std::move(table));
