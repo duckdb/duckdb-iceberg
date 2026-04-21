@@ -1,6 +1,7 @@
 #pragma once
 
 #include "duckdb/common/file_system.hpp"
+#include "duckdb/storage/caching_file_system_wrapper.hpp"
 
 #include "core/metadata/schema/iceberg_column_definition.hpp"
 #include "core/metadata/schema/iceberg_table_schema.hpp"

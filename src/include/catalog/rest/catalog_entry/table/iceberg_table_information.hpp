@@ -1,6 +1,7 @@
 #pragma once
 
 #include "duckdb/catalog/catalog_entry.hpp"
+#include "duckdb/storage/caching_file_system_wrapper.hpp"
 
 #include "catalog/rest/catalog_entry/table/iceberg_table_entry.hpp"
 #include "core/metadata/manifest/iceberg_manifest.hpp"

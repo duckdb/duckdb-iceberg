@@ -598,9 +598,10 @@ IcebergTableMetadata IcebergTableInformation::CreateMetadataFromLog(ClientContex
 		    "Metadata-log exists but none of the entries were valid for the current transaction start time (%s)",
 		    Timestamp::ToString(timestamp_ms_t(transaction_start_millis)));
 	}
-	auto &fs = FileSystem::GetFileSystem(context);
+
+	auto fs = make_shared_ptr<CachingFileSystemWrapper>(FileSystem::GetFileSystem(context), *context.db);
 	auto &path = log[log_item_index.GetIndex()].metadata_file;
-	auto parsed_metadata = IcebergTableMetadata::Parse(path, fs, "");
+	auto parsed_metadata = IcebergTableMetadata::Parse(path, *fs, "");
 
 	metadata_path = path;
 	return IcebergTableMetadata::FromTableMetadata(parsed_metadata);

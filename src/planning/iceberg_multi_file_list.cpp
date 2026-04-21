@@ -194,13 +194,15 @@ void IcebergMultiFileList::Bind(vector<LogicalType> &return_types, vector<string
 		return_types = this->types;
 		return;
 	}
-
+	auto &fs = FileSystem::GetFileSystem(context);
+	auto caching_fs = make_shared_ptr<CachingFileSystemWrapper>(FileSystem::GetFileSystem(context), *context.db);
 	if (!scan_info) {
 		D_ASSERT(!path.empty());
 		auto input_string = path;
 		auto iceberg_path = IcebergUtils::GetStorageLocation(context, input_string);
 		auto iceberg_meta_path = IcebergTableMetadata::GetMetaDataPath(context, iceberg_path, fs, options);
-		auto table_metadata = IcebergTableMetadata::Parse(iceberg_meta_path, fs, options.metadata_compression_codec);
+		auto table_metadata =
+		    IcebergTableMetadata::Parse(iceberg_meta_path, *caching_fs, options.metadata_compression_codec);
 
 		auto temp_data = make_uniq<IcebergScanTemporaryData>();
 		temp_data->metadata = IcebergTableMetadata::FromTableMetadata(table_metadata);
