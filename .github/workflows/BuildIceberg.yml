@@ -42,6 +42,23 @@ jobs:
           key: ${{ github.job }}
           save: ${{ github.ref == 'refs/heads/main' || github.repository != 'duckdb/duckdb' }}
 
+      - name: Build extension Not linked
+        env:
+          GEN: ninja
+          STATIC_LIBCPP: 1
+          ENABLE_EXTENSION_AUTOLOADING: 1
+          ENABLE_EXTENSION_AUTOINSTALL: 1
+          DONT_LINK: 1
+        run: |
+          make release
+
+      - name: Upload DuckDB-Iceberg no link folder
+        uses: actions/upload-artifact@v4
+        with:
+          name: duckdb-iceberg-no-link
+          path: build/release/
+          retention-days: 3
+
       - name: Build extension
         env:
           GEN: ninja
@@ -58,23 +75,6 @@ jobs:
           path: build/release/
           retention-days: 3
 
-      - name: Build extension Not linked
-        env:
-          GEN: ninja
-          STATIC_LIBCPP: 1
-          ENABLE_EXTENSION_AUTOLOADING: 1
-          ENABLE_EXTENSION_AUTOINSTALL: 1
-          DONT_LINK: 1
-        run: |
-          make release
-
-      - name: Upload DuckDB-Iceberg release folder
-        uses: actions/upload-artifact@v4
-        with:
-          name: duckdb-iceberg-no-link
-          path: build/release/
-          retention-days: 3
-
   test-fixture:
     name: Test against fixture catalog
     needs: build_iceberg
@@ -88,6 +88,7 @@ jobs:
     uses: ./.github/workflows/test-fixture-catalog.yml
     with:
       artifact-name: duckdb-iceberg-no-link
+      local-extension-repo: build/release/extension
 
   test-nessie:
     name: Test against Nessie Catalog
