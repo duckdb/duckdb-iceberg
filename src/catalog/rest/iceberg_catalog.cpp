@@ -560,8 +560,6 @@ unique_ptr<Catalog> IcebergCatalog::Attach(optional_ptr<StorageExtensionInfo> st
 			default_schema = entry.second.ToString();
 		} else if (lower_name == "encode_entire_prefix") {
 			attach_options.encode_entire_prefix = true;
-		} else if (lower_name == "use_metadata_log") {
-			attach_options.use_metadata_log = entry.second.DefaultCastAs(LogicalType::BOOLEAN).GetValue<bool>();
 		} else if (lower_name == "max_table_staleness") {
 			auto interval_option = entry.second.DefaultCastAs(LogicalType::INTERVAL);
 			auto interval_value = interval_option.GetValue<interval_t>();

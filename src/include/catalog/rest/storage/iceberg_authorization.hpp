@@ -33,9 +33,6 @@ struct IcebergAttachOptions {
 	unordered_map<string, Value> options;
 	// max staleness for cached table metadata in minutes (optional - if not set, always request fresh metadata)
 	optional_idx max_table_staleness_micros;
-	// whether or not to use metadata-log to fetch relevant metadata
-	// in the event the fetched metadata was created after the transaction started
-	bool use_metadata_log = true;
 };
 
 //! Hold the pre-initialized HTTPClient for a given connection
