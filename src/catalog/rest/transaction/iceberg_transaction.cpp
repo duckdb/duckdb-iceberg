@@ -428,42 +428,42 @@ void IcebergTransaction::Commit() {
 }
 
 void IcebergTransaction::DoTableUpdates(IcebergTransactionAlterUpdate &alter_update, ClientContext &context) {
-	if (!alter_update.updated_tables.empty()) {
-		auto transaction_info = GetTransactionRequest(alter_update, context);
-		auto &transaction = transaction_info.request;
-
-		// if there are no new tables, we can post to the transactions/commit endpoint
-		// otherwise we fall back to posting a commit for each table.
-		const bool can_use_multi_table_commit = !transaction_info.has_assert_create &&
-		                                        catalog.supported_urls.count("POST /v1/{prefix}/transactions/commit");
-		if (can_use_multi_table_commit) {
-			// commit all transactions at once
-			std::unique_ptr<yyjson_mut_doc, YyjsonDocDeleter> doc_p(yyjson_mut_doc_new(nullptr));
-			auto doc = doc_p.get();
-			auto root_object = yyjson_mut_obj(doc);
-			yyjson_mut_doc_set_root(doc, root_object);
-
-			CommitTransactionToJSON(doc, root_object, transaction);
-			auto transaction_json = JsonDocToString(std::move(doc_p));
-			IRCAPI::CommitMultiTableUpdate(context, catalog, transaction_json);
-			for (auto &it : alter_update.updated_tables) {
-				alter_update.committed_tables.insert(it.first);
-			}
-		} else {
-			D_ASSERT(catalog.supported_urls.count("POST /v1/{prefix}/namespaces/{namespace}/tables/{table}"));
-			// each table change will make a separate request
-			for (auto &it : transaction_info.table_requests) {
-				auto &table_change = transaction.table_changes[it.second];
-				D_ASSERT(table_change.has_identifier);
-				auto transaction_json = ConstructTableUpdateJSON(table_change);
-				IRCAPI::CommitTableUpdate(context, catalog, table_change.identifier._namespace.value,
-				                          table_change.identifier.name, transaction_json);
-				alter_update.committed_tables.insert(it.first);
-			}
-		}
-		// updated_tables.clear();
-		DropSecrets(context);
+	if (!alter_update.HasUpdates()) {
+		return;
 	}
+	auto transaction_info = GetTransactionRequest(alter_update, context);
+	auto &transaction = transaction_info.request;
+
+	// if there are no new tables, we can post to the transactions/commit endpoint
+	// otherwise we fall back to posting a commit for each table.
+	const bool can_use_multi_table_commit =
+	    !transaction_info.has_assert_create && catalog.supported_urls.count("POST /v1/{prefix}/transactions/commit");
+	if (can_use_multi_table_commit) {
+		// commit all transactions at once
+		std::unique_ptr<yyjson_mut_doc, YyjsonDocDeleter> doc_p(yyjson_mut_doc_new(nullptr));
+		auto doc = doc_p.get();
+		auto root_object = yyjson_mut_obj(doc);
+		yyjson_mut_doc_set_root(doc, root_object);
+
+		CommitTransactionToJSON(doc, root_object, transaction);
+		auto transaction_json = JsonDocToString(std::move(doc_p));
+		IRCAPI::CommitMultiTableUpdate(context, catalog, transaction_json);
+		for (auto &it : alter_update.updated_tables) {
+			alter_update.committed_tables.insert(it.first);
+		}
+	} else {
+		D_ASSERT(catalog.supported_urls.count("POST /v1/{prefix}/namespaces/{namespace}/tables/{table}"));
+		// each table change will make a separate request
+		for (auto &it : transaction_info.table_requests) {
+			auto &table_change = transaction.table_changes[it.second];
+			D_ASSERT(table_change.has_identifier);
+			auto transaction_json = ConstructTableUpdateJSON(table_change);
+			IRCAPI::CommitTableUpdate(context, catalog, table_change.identifier._namespace.value,
+			                          table_change.identifier.name, transaction_json);
+			alter_update.committed_tables.insert(it.first);
+		}
+	}
+	DropSecrets(context);
 }
 
 static yyjson_mut_val *CreateRenameComponentJSON(yyjson_mut_doc *doc, const IcebergSchemaEntry &schema,

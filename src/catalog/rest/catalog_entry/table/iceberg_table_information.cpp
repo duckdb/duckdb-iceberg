@@ -535,7 +535,23 @@ bool IcebergTableInformation::TableIsEmpty(const IcebergSnapshotLookup &snapshot
 }
 
 bool IcebergTableInformation::HasTransactionUpdates() const {
-	return transaction_data && (!transaction_data->updates.empty() || !transaction_data->requirements.empty());
+	if (!transaction_data) {
+		return false;
+	}
+	auto &data = *transaction_data;
+	if (!data.updates.empty()) {
+		return true;
+	}
+	if (!data.requirements.empty()) {
+		return true;
+	}
+	if (data.set_schema_id) {
+		return true;
+	}
+	if (data.assert_schema_id) {
+		return true;
+	}
+	return false;
 }
 
 IcebergTableInformation IcebergTableInformation::Copy() const {
