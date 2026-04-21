@@ -8,7 +8,7 @@ if (NOT EMSCRIPTEN)
 endif()
 
 # Extension from this repo
-if (NOT DONT_LINK)
+if (DONT_LINK OR "$ENV{DONT_LINK}")
     set(ICEBERG_DONT_LINK "DONT_LINK")
 else()
     set(ICEBERG_DONT_LINK "")
