@@ -22,9 +22,18 @@ IcebergTableInformation &IcebergTransactionAlterUpdate::GetOrInitializeTable(con
 		it = updated_tables.emplace(table_key, table.Copy(transaction)).first;
 		it->second.InitSchemaVersions();
 	}
-
-	transaction.SetLatestTableState(it->second, IcebergTableSource::TRANSACTION);
+	transaction.SetLatestTableState(it->second, IcebergTableStatus::ALIVE);
 	return it->second;
+}
+
+bool IcebergTransactionAlterUpdate::HasUpdates() const {
+	for (auto &it : updated_tables) {
+		auto &table = it.second;
+		if (table.HasTransactionUpdates()) {
+			return true;
+		}
+	}
+	return false;
 }
 
 IcebergTableInformation &IcebergTransactionAlterUpdate::CreateTable(const string &table_key,
@@ -34,8 +43,7 @@ IcebergTableInformation &IcebergTransactionAlterUpdate::CreateTable(const string
 		throw InternalException("Table %s was already created somehow?", table_key);
 	}
 
-	transaction.current_table_data.emplace(
-	    table_key, IcebergTransactionTableState(emplace_res.first->second, IcebergTableSource::TRANSACTION));
+	transaction.current_table_data.emplace(table_key, IcebergTransactionTableState(emplace_res.first->second));
 	return emplace_res.first->second;
 }
 

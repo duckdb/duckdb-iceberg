@@ -12,6 +12,7 @@
 #include "catalog/rest/iceberg_catalog.hpp"
 #include "catalog/rest/catalog_entry/table/iceberg_table_entry.hpp"
 #include "catalog/rest/catalog_entry/table/iceberg_table_information.hpp"
+#include "catalog/rest/transaction/iceberg_transaction_update.hpp"
 
 namespace duckdb {
 
@@ -181,9 +182,15 @@ PhysicalOperator &IcebergCatalog::PlanUpdate(ClientContext &context, PhysicalPla
 		throw BinderException("RETURNING clause not yet supported for updates of a Iceberg table");
 	}
 
-	auto &table = op.table.Cast<IcebergTableEntry>();
-	auto &table_metadata = table.table_info.table_metadata;
-	auto &table_schema = table_metadata.GetLatestSchema();
+	auto &table_entry = op.table.Cast<IcebergTableEntry>();
+	table_entry.PrepareIcebergScanFromEntry(context);
+
+	auto &irc_transaction = IcebergTransaction::Get(context, *this);
+	auto &alter = irc_transaction.GetOrCreateAlter();
+	auto &updated_table = alter.GetOrInitializeTable(table_entry.table_info);
+	auto &table_metadata = updated_table.table_metadata;
+	auto &schema = table_metadata.GetLatestSchema();
+	auto &updated_table_entry = *updated_table.schema_versions[schema.schema_id];
 
 	if (table_metadata.HasSortOrder()) {
 		auto &sort_spec = table_metadata.GetLatestSortOrder();
@@ -197,16 +204,17 @@ PhysicalOperator &IcebergCatalog::PlanUpdate(ClientContext &context, PhysicalPla
 
 	// Plan the delete operator (used as a side-sink from IcebergUpdate::Execute)
 	vector<idx_t> row_id_indexes = {0, 1};
-	auto &delete_op = IcebergDelete::PlanDelete(context, planner, table, child_plan, std::move(row_id_indexes));
+	auto &delete_op =
+	    IcebergDelete::PlanDelete(context, planner, updated_table_entry, child_plan, std::move(row_id_indexes));
 
 	// Create the IcebergUpdate intermediate operator
 	auto &update_op = planner
-	                      .Make<IcebergUpdate>(table, op.columns, child_plan, delete_op, std::move(op.expressions),
-	                                           std::move(op.bound_defaults))
+	                      .Make<IcebergUpdate>(updated_table_entry, op.columns, child_plan, delete_op,
+	                                           std::move(op.expressions), std::move(op.bound_defaults))
 	                      .Cast<IcebergUpdate>();
 
 	// Set output types: physical columns + optional _row_id for v3
-	vector<LogicalType> update_output_types = table.GetTypes();
+	vector<LogicalType> update_output_types = updated_table_entry.GetTypes();
 	if (table_metadata.iceberg_version >= 3) {
 		update_output_types.push_back(LogicalType::BIGINT); // _row_id
 	}
@@ -214,7 +222,7 @@ PhysicalOperator &IcebergCatalog::PlanUpdate(ClientContext &context, PhysicalPla
 
 	// Plan the copy operator with update_op as child.
 	// PlanCopyForInsert will add a partition projection on top if needed.
-	IcebergCopyInput copy_input(context, table_metadata, table_schema);
+	IcebergCopyInput copy_input(context, table_metadata, schema);
 	if (table_metadata.iceberg_version >= 3) {
 		copy_input.virtual_columns = IcebergInsertVirtualColumns::WRITE_ROW_ID;
 	}
@@ -222,7 +230,7 @@ PhysicalOperator &IcebergCatalog::PlanUpdate(ClientContext &context, PhysicalPla
 	auto &copy_op = IcebergInsert::PlanCopyForInsert(context, planner, copy_input, plan);
 
 	// Plan the insert sink and wire it up
-	auto &insert_op = IcebergInsert::PlanInsert(context, planner, table).Cast<IcebergInsert>();
+	auto &insert_op = IcebergInsert::PlanInsert(context, planner, updated_table_entry).Cast<IcebergInsert>();
 	insert_op.update_delete_op = delete_op;
 	insert_op.children.push_back(copy_op);
 	return insert_op;
