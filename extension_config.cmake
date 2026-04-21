@@ -8,9 +8,16 @@ if (NOT EMSCRIPTEN)
 endif()
 
 # Extension from this repo
+if (NOT DONT_LINK)
+    set(ICEBERG_DONT_LINK "DONT_LINK")
+else()
+    set(ICEBERG_DONT_LINK "")
+endif()
+
 duckdb_extension_load(iceberg
     SOURCE_DIR ${CMAKE_CURRENT_LIST_DIR}
     LOAD_TESTS
+    ${ICEBERG_DONT_LINK}
 )
 
 if (NOT EMSCRIPTEN)

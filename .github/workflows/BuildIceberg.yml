@@ -58,12 +58,36 @@ jobs:
           path: build/release/
           retention-days: 3
 
+      - name: Build extension Not linked
+        env:
+          GEN: ninja
+          STATIC_LIBCPP: 1
+          ENABLE_EXTENSION_AUTOLOADING: 1
+          ENABLE_EXTENSION_AUTOINSTALL: 1
+          DONT_LINK: 1
+        run: |
+          make release
+
+      - name: Upload DuckDB-Iceberg release folder
+        uses: actions/upload-artifact@v4
+        with:
+          name: duckdb-iceberg-no-link
+          path: build/release/
+          retention-days: 3
+
   test-fixture:
     name: Test against fixture catalog
     needs: build_iceberg
     uses: ./.github/workflows/test-fixture-catalog.yml
     with:
       artifact-name: duckdb-iceberg
+
+  test-fixture:
+    name: Test against fixture catalog no link
+    needs: build_iceberg
+    uses: ./.github/workflows/test-fixture-catalog-no-link.yml
+    with:
+      artifact-name: duckdb-iceberg-no-link
 
   test-nessie:
     name: Test against Nessie Catalog
