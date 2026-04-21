@@ -26,9 +26,7 @@
 #include "core/expression/iceberg_transform.hpp"
 #include "catalog/rest/api/iceberg_type.hpp"
 #include "common/iceberg_utils.hpp"
-#include <cctype>
 #include "catalog/rest/transaction/iceberg_transaction_update.hpp"
-
 
 namespace duckdb {
 
