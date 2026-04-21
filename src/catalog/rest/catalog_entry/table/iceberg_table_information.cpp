@@ -475,7 +475,9 @@ optional_ptr<CatalogEntry> IcebergTableInformation::GetSchemaVersion(ClientConte
 		schema_id = snapshot.GetSchemaId();
 	} else {
 		const bool latest_metadata_is_too_fresh = table_metadata.last_updated_ms.value > transaction_start_millis;
-		if (latest_metadata_is_too_fresh && !table_metadata.metadata_log.empty()) {
+		const bool can_use_metadata_log =
+		    catalog.attach_options.use_metadata_log && !table_metadata.metadata_log.empty();
+		if (latest_metadata_is_too_fresh && can_use_metadata_log) {
 			string metadata_path;
 			auto relevant_metadata = CreateMetadataFromLog(context, transaction_start_millis, metadata_path);
 			schema_id = relevant_metadata.GetCurrentSchemaId();
@@ -582,6 +584,7 @@ IcebergTableMetadata IcebergTableInformation::CreateMetadataFromLog(ClientContex
                                                                     int64_t transaction_start_millis,
                                                                     string &metadata_path) const {
 	auto &log = table_metadata.metadata_log;
+	D_ASSERT(catalog.attach_options.use_metadata_log);
 
 	optional_idx log_item_index;
 	for (idx_t i = log.size(); i-- > 0;) {
@@ -613,7 +616,9 @@ IcebergTableInformation IcebergTableInformation::Copy(IcebergTransaction &iceber
 	auto transaction_start_millis = Timestamp::GetEpochMs(transaction_start);
 
 	if (table_metadata.last_updated_ms.value > transaction_start_millis) {
-		if (table_metadata.metadata_log.empty()) {
+		const bool can_use_metadata_log =
+		    catalog.attach_options.use_metadata_log && !table_metadata.metadata_log.empty();
+		if (!can_use_metadata_log) {
 			auto snapshot_lookup = GetSnapshotLookup(iceberg_transaction);
 			if (ret.TableIsEmpty(snapshot_lookup)) {
 				return ret;

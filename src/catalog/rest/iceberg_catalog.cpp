@@ -519,19 +519,15 @@ void IcebergCatalog::SetAWSCatalogOptions(IcebergAttachOptions &attach_options,
 unique_ptr<Catalog> IcebergCatalog::Attach(optional_ptr<StorageExtensionInfo> storage_info, ClientContext &context,
                                            AttachedDatabase &db, const string &name, AttachInfo &info,
                                            AttachOptions &options) {
-	IRCEndpointBuilder endpoint_builder;
-
-	string endpoint_type_string;
-	string authorization_type_string;
-	string access_mode_string;
-
 	IcebergAttachOptions attach_options;
 	attach_options.warehouse = info.path;
 	attach_options.name = name;
 
 	// check if we have a secret provided
-	string secret_name;
 	string default_schema;
+	string endpoint_type_string;
+	string authorization_type_string;
+	string access_mode_string;
 	case_insensitive_set_t set_by_attach_options;
 	//! First handle generic attach options
 	for (auto &entry : info.options) {
@@ -564,6 +560,8 @@ unique_ptr<Catalog> IcebergCatalog::Attach(optional_ptr<StorageExtensionInfo> st
 			default_schema = entry.second.ToString();
 		} else if (lower_name == "encode_entire_prefix") {
 			attach_options.encode_entire_prefix = true;
+		} else if (lower_name == "use_metadata_log") {
+			attach_options.use_metadata_log = entry.second.DefaultCastAs(LogicalType::BOOLEAN).GetValue<bool>();
 		} else if (lower_name == "max_table_staleness") {
 			auto interval_option = entry.second.DefaultCastAs(LogicalType::INTERVAL);
 			auto interval_value = interval_option.GetValue<interval_t>();
