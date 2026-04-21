@@ -6,6 +6,7 @@
     "parquet",
     "avro",
     "iceberg",
-    "httpfs"
+    "httpfs",
+    "icu"
   ]
 }

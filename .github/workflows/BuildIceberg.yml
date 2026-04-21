@@ -82,10 +82,10 @@ jobs:
     with:
       artifact-name: duckdb-iceberg
 
-  test-fixture:
+  test-fixture-no-link:
     name: Test against fixture catalog no link
     needs: build_iceberg
-    uses: ./.github/workflows/test-fixture-catalog-no-link.yml
+    uses: ./.github/workflows/test-fixture-catalog.yml
     with:
       artifact-name: duckdb-iceberg-no-link
 

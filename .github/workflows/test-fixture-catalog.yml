@@ -13,6 +13,8 @@ jobs:
     runs-on: ubuntu-latest
     env:
       HTTP_PROXY_PUBLIC: http://localhost:8878
+      # needed to test duckdb-iceberg when it is not linked
+      LOCAL_EXTENSION_REPO: 'build/release/extension'
 
     steps:
       - name: Checkout repository
