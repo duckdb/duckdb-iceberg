@@ -12,6 +12,7 @@
 #include "catalog/rest/iceberg_catalog.hpp"
 #include "catalog/rest/catalog_entry/table/iceberg_table_entry.hpp"
 #include "catalog/rest/catalog_entry/table/iceberg_table_information.hpp"
+#include "catalog/rest/transaction/iceberg_transaction_update.hpp"
 
 namespace duckdb {
 
@@ -231,11 +232,12 @@ PhysicalOperator &IcebergCatalog::PlanUpdate(ClientContext &context, PhysicalPla
 
 	auto &table = op.table.Cast<IcebergTableEntry>();
 	auto &table_metadata = table.table_info.table_metadata;
-	auto &table_schema = table_metadata.GetLatestSchema();
+	auto &schema = table.schema_id.IsValid() ? *table_metadata.GetSchemaFromId(table.schema_id.GetIndex())
+	                                         : table_metadata.GetLatestSchema();
 
 	// Plan the copy operator with update_op as child.
 	// PlanCopyForInsert will add a partition projection on top if needed.
-	IcebergCopyInput copy_input(context, table_metadata, table_schema);
+	IcebergCopyInput copy_input(context, table_metadata, schema);
 	if (table_metadata.iceberg_version >= 3) {
 		copy_input.virtual_columns = IcebergInsertVirtualColumns::WRITE_ROW_ID;
 	}
