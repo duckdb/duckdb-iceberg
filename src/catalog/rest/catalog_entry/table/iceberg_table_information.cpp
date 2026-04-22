@@ -461,16 +461,36 @@ optional_ptr<CatalogEntry> IcebergTableInformation::GetSchemaVersion(ClientConte
 	auto transaction_start = meta_transaction.GetCurrentTransactionStartTimestamp();
 	auto transaction_start_millis = Timestamp::GetEpochMs(transaction_start);
 
-	auto snapshot_lookup = GetSnapshotLookup(context, at);
+	auto snapshot_lookup = IcebergSnapshotLookup::FromAtClause(at);
 	auto snapshot_info = table_metadata.GetSnapshot(snapshot_lookup);
 
-	const bool latest_metadata_is_too_fresh = table_metadata.last_updated_ms.value > transaction_start_millis;
 	int32_t schema_id;
-	if ((latest_metadata_is_too_fresh && snapshot_info.snapshot) || at) {
-		// use snapshot
-		schema_id = snapshot_info.schema_id;
+	if (!snapshot_lookup.IsLatest() && snapshot_info.snapshot) {
+		//! Time travel query, verify this is reachable
+		auto &snapshot = *snapshot_info.snapshot;
+		if (snapshot.timestamp_ms.value > transaction_start.value) {
+			//! Not reachable by the current transaction
+			return nullptr;
+		}
+		schema_id = snapshot.GetSchemaId();
 	} else {
-		schema_id = table_metadata.GetCurrentSchemaId();
+		bool use_metadata_log = true;
+		Value val;
+		if (context.TryGetCurrentSetting("iceberg_use_metadata_log", val)) {
+			if (!val.IsNull() && val.type().id() == LogicalTypeId::BOOLEAN) {
+				use_metadata_log = val.GetValue<bool>();
+			}
+		}
+
+		const bool latest_metadata_is_too_fresh = table_metadata.last_updated_ms.value > transaction_start_millis;
+		const bool can_use_metadata_log = use_metadata_log && !table_metadata.metadata_log.empty();
+		if (latest_metadata_is_too_fresh && can_use_metadata_log) {
+			string metadata_path;
+			auto relevant_metadata = CreateMetadataFromLog(context, transaction_start_millis, metadata_path);
+			schema_id = relevant_metadata.GetCurrentSchemaId();
+		} else {
+			schema_id = table_metadata.GetCurrentSchemaId();
+		}
 	}
 	return schema_versions[schema_id].get();
 }
@@ -554,12 +574,12 @@ bool IcebergTableInformation::HasTransactionUpdates() const {
 	return false;
 }
 
-IcebergTableInformation IcebergTableInformation::Copy() const {
+IcebergTableInformation IcebergTableInformation::Copy(ClientContext &context) const {
 	auto ret = IcebergTableInformation(catalog, schema, name);
 	auto table_key = ret.GetTableKey();
 	{
 		lock_guard<std::mutex> cache_lock(catalog.table_request_cache.Lock());
-		auto cached_result = catalog.table_request_cache.Get(table_key, cache_lock, false);
+		auto cached_result = catalog.table_request_cache.Get(context, table_key, cache_lock, false);
 		D_ASSERT(cached_result);
 		auto &cached_table_result = *cached_result->load_table_result;
 		ret.InitializeFromLoadTableResult(cached_table_result, false);
@@ -567,17 +587,52 @@ IcebergTableInformation IcebergTableInformation::Copy() const {
 	return ret;
 }
 
-IcebergTableInformation IcebergTableInformation::Copy(IcebergTransaction &iceberg_transaction) const {
-	auto ret = Copy();
+IcebergTableMetadata IcebergTableInformation::CreateMetadataFromLog(ClientContext &context,
+                                                                    int64_t transaction_start_millis,
+                                                                    string &metadata_path) const {
+	auto &log = table_metadata.metadata_log;
 
+	optional_idx log_item_index;
+	for (idx_t i = log.size(); i-- > 0;) {
+		if (log[i].timestamp_ms <= transaction_start_millis) {
+			log_item_index = i;
+			break;
+		}
+	}
+	if (!log_item_index.IsValid()) {
+		throw InternalException(
+		    "Metadata-log exists but none of the entries were valid for the current transaction start time (%s)",
+		    Timestamp::ToString(timestamp_ms_t(transaction_start_millis)));
+	}
+
+	auto fs = make_shared_ptr<CachingFileSystemWrapper>(FileSystem::GetFileSystem(context), *context.db);
+	auto &path = log[log_item_index.GetIndex()].metadata_file;
+	auto parsed_metadata = IcebergTableMetadata::Parse(path, *fs, "");
+
+	metadata_path = path;
+	return IcebergTableMetadata::FromTableMetadata(parsed_metadata);
+}
+
+IcebergTableInformation IcebergTableInformation::Copy(IcebergTransaction &iceberg_transaction) const {
 	auto locked_context = iceberg_transaction.context.lock();
 	auto &context = *locked_context;
+
+	auto ret = Copy(context);
 	auto &meta_transaction = MetaTransaction::Get(context);
 	auto transaction_start = meta_transaction.GetCurrentTransactionStartTimestamp();
 	auto transaction_start_millis = Timestamp::GetEpochMs(transaction_start);
 
 	if (table_metadata.last_updated_ms.value > transaction_start_millis) {
-		if (table_metadata.metadata_log.empty()) {
+		bool use_metadata_log = true;
+		Value val;
+		if (context.TryGetCurrentSetting("iceberg_use_metadata_log", val)) {
+			if (!val.IsNull() && val.type().id() == LogicalTypeId::BOOLEAN) {
+				use_metadata_log = val.GetValue<bool>();
+			}
+		}
+
+		const bool can_use_metadata_log = use_metadata_log && !table_metadata.metadata_log.empty();
+		if (!can_use_metadata_log) {
 			auto snapshot_lookup = GetSnapshotLookup(iceberg_transaction);
 			if (ret.TableIsEmpty(snapshot_lookup)) {
 				return ret;
@@ -596,25 +651,7 @@ IcebergTableInformation IcebergTableInformation::Copy(IcebergTransaction &iceber
 			ret.table_metadata.current_snapshot_id = snapshot->snapshot_id;
 			return ret;
 		}
-		auto &log = table_metadata.metadata_log;
-
-		optional_idx log_item_index;
-		for (idx_t i = log.size(); i-- > 0;) {
-			if (log[i].timestamp_ms <= transaction_start_millis) {
-				log_item_index = i;
-				break;
-			}
-		}
-		if (!log_item_index.IsValid()) {
-			throw InternalException(
-			    "Metadata-log exists but none of the entries were valid for the current transaction start time (%s)",
-			    Timestamp::ToString(transaction_start));
-		}
-		auto &fs = FileSystem::GetFileSystem(context);
-		auto &path = log[log_item_index.GetIndex()].metadata_file;
-		auto parsed_metadata = IcebergTableMetadata::Parse(path, fs, "");
-		ret.table_metadata = IcebergTableMetadata::FromTableMetadata(parsed_metadata);
-		ret.latest_metadata_json = path;
+		ret.table_metadata = ret.CreateMetadataFromLog(context, transaction_start_millis, ret.latest_metadata_json);
 		return ret;
 	}
 	return ret;
