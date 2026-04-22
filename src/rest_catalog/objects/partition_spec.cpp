@@ -47,7 +47,7 @@ string PartitionSpec::TryFromJSON(yyjson_val *obj) {
 		}
 	}
 	auto spec_id_val = yyjson_obj_get(obj, "spec-id");
-	if (spec_id_val) {
+	if (spec_id_val && !yyjson_is_null(spec_id)) {
 		has_spec_id = true;
 		if (yyjson_is_int(spec_id_val)) {
 			spec_id = yyjson_get_int(spec_id_val);

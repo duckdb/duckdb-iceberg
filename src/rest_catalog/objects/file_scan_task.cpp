@@ -36,7 +36,7 @@ string FileScanTask::TryFromJSON(yyjson_val *obj) {
 		}
 	}
 	auto delete_file_references_val = yyjson_obj_get(obj, "delete-file-references");
-	if (delete_file_references_val) {
+	if (delete_file_references_val && !yyjson_is_null(delete_file_references)) {
 		has_delete_file_references = true;
 		if (yyjson_is_arr(delete_file_references_val)) {
 			size_t idx, max;
@@ -59,7 +59,7 @@ string FileScanTask::TryFromJSON(yyjson_val *obj) {
 		}
 	}
 	auto residual_filter_val = yyjson_obj_get(obj, "residual-filter");
-	if (residual_filter_val) {
+	if (residual_filter_val && !yyjson_is_null(residual_filter)) {
 		has_residual_filter = true;
 		residual_filter = make_uniq<Expression>();
 		error = residual_filter->TryFromJSON(residual_filter_val);

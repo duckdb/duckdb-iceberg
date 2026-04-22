@@ -69,7 +69,7 @@ string CommitTableRequest::TryFromJSON(yyjson_val *obj) {
 		}
 	}
 	auto identifier_val = yyjson_obj_get(obj, "identifier");
-	if (identifier_val) {
+	if (identifier_val && !yyjson_is_null(identifier)) {
 		has_identifier = true;
 		error = identifier.TryFromJSON(identifier_val);
 		if (!error.empty()) {

@@ -55,7 +55,7 @@ string RemovePropertiesUpdate::TryFromJSON(yyjson_val *obj) {
 		}
 	}
 	auto action_val = yyjson_obj_get(obj, "action");
-	if (action_val) {
+	if (action_val && !yyjson_is_null(action)) {
 		has_action = true;
 		if (yyjson_is_str(action_val)) {
 			action = yyjson_get_str(action_val);

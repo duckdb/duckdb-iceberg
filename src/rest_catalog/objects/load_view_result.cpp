@@ -48,7 +48,7 @@ string LoadViewResult::TryFromJSON(yyjson_val *obj) {
 		}
 	}
 	auto config_val = yyjson_obj_get(obj, "config");
-	if (config_val) {
+	if (config_val && !yyjson_is_null(config)) {
 		has_config = true;
 		if (yyjson_is_obj(config_val)) {
 			size_t idx, max;

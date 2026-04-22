@@ -167,6 +167,7 @@ class OptionalProperty:
     # The property name in the JSON code
     property_name: str
     body: List[str]
+    nullable: bool
 
 
 @dataclass
@@ -326,10 +327,14 @@ class CPPClass:
 
     def write_optional_property(self, optional_property: OptionalProperty) -> List[str]:
         res = []
+        if optional_property.nullable:
+            optionally_null = ''
+        else:
+            optionally_null = f' && !yyjson_is_null({optional_property.variable_name})'
         res.extend(
             [
                 f'auto {optional_property.variable_name}_val = yyjson_obj_get(obj, "{optional_property.property_name}");',
-                f'if ({optional_property.variable_name}_val) {{',
+                f'if ({optional_property.variable_name}_val{optionally_null}) {{',
                 f'\thas_{optional_property.variable_name} = true;',
             ]
         )
@@ -769,7 +774,7 @@ class CPPClass:
             variable_name = safe_cpp_name(item)
             body = self.generate_assignment(optional_property, variable_name, f'{variable_name}_val', False)
             self.optional_properties[item] = OptionalProperty(
-                property_name=item, variable_name=variable_name, body=body
+                property_name=item, variable_name=variable_name, body=body, nullable=optional_property.nullable
             )
             variable_type = self.generate_variable_type(optional_property)
             self.variables.append(f'\t{variable_type} {variable_name};')
