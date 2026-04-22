@@ -1,0 +1,38 @@
+# name: test/mytest_iceberg_metadata.test
+# description: test iceberg metadata function
+# group: [test]
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+statement ok
+CREATE SCHEMA IF NOT EXISTS my_datalake.default;
+
+statement ok
+drop table if exists my_datalake.default.my_table;
+
+statement ok
+CREATE TABLE my_datalake.default.my_table AS (select range a FROM range(100));
+
+statement ok
+SET ca_cert_file = '~/.mitmproxy/mitmproxy-ca-cert.pem';
+
+statement ok
+CREATE SECRET http_proxy (
+    TYPE http,
+    HTTP_PROXY 'http://localhost:8878'
+);
+
+# query IIIIIIII
+# SELECT metadata."format-version" FROM iceberg_load_table_response(my_datalake.default.my_table);
+# ----
+
+query I
+SELECT metadata."format-version" FROM iceberg_load_table_response(my_datalake.default.my_table);
+----
+2
