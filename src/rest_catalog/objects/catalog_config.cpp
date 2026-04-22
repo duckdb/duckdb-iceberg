@@ -73,7 +73,7 @@ string CatalogConfig::TryFromJSON(yyjson_val *obj) {
 		}
 	}
 	auto endpoints_val = yyjson_obj_get(obj, "endpoints");
-	if (endpoints_val && !yyjson_is_null(endpoints)) {
+	if (endpoints_val && !yyjson_is_null(endpoints_val)) {
 		has_endpoints = true;
 		if (yyjson_is_arr(endpoints_val)) {
 			size_t idx, max;
@@ -95,7 +95,7 @@ string CatalogConfig::TryFromJSON(yyjson_val *obj) {
 		}
 	}
 	auto idempotency_key_lifetime_val = yyjson_obj_get(obj, "idempotency-key-lifetime");
-	if (idempotency_key_lifetime_val && !yyjson_is_null(idempotency_key_lifetime)) {
+	if (idempotency_key_lifetime_val && !yyjson_is_null(idempotency_key_lifetime_val)) {
 		has_idempotency_key_lifetime = true;
 		if (yyjson_is_str(idempotency_key_lifetime_val)) {
 			idempotency_key_lifetime = yyjson_get_str(idempotency_key_lifetime_val);

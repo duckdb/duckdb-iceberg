@@ -79,7 +79,7 @@ string CreateViewRequest::TryFromJSON(yyjson_val *obj) {
 		}
 	}
 	auto location_val = yyjson_obj_get(obj, "location");
-	if (location_val && !yyjson_is_null(location)) {
+	if (location_val && !yyjson_is_null(location_val)) {
 		has_location = true;
 		if (yyjson_is_str(location_val)) {
 			location = yyjson_get_str(location_val);

@@ -43,7 +43,7 @@ string EqualityDeleteFile::TryFromJSON(yyjson_val *obj) {
 		}
 	}
 	auto equality_ids_val = yyjson_obj_get(obj, "equality-ids");
-	if (equality_ids_val && !yyjson_is_null(equality_ids)) {
+	if (equality_ids_val && !yyjson_is_null(equality_ids_val)) {
 		has_equality_ids = true;
 		if (yyjson_is_arr(equality_ids_val)) {
 			size_t idx, max;

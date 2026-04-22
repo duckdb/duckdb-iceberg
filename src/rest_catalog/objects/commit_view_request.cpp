@@ -47,7 +47,7 @@ string CommitViewRequest::TryFromJSON(yyjson_val *obj) {
 		}
 	}
 	auto identifier_val = yyjson_obj_get(obj, "identifier");
-	if (identifier_val && !yyjson_is_null(identifier)) {
+	if (identifier_val && !yyjson_is_null(identifier_val)) {
 		has_identifier = true;
 		error = identifier.TryFromJSON(identifier_val);
 		if (!error.empty()) {
@@ -55,7 +55,7 @@ string CommitViewRequest::TryFromJSON(yyjson_val *obj) {
 		}
 	}
 	auto requirements_val = yyjson_obj_get(obj, "requirements");
-	if (requirements_val && !yyjson_is_null(requirements)) {
+	if (requirements_val && !yyjson_is_null(requirements_val)) {
 		has_requirements = true;
 		if (yyjson_is_arr(requirements_val)) {
 			size_t idx, max;

@@ -70,7 +70,7 @@ string StructField::TryFromJSON(yyjson_val *obj) {
 		}
 	}
 	auto doc_val = yyjson_obj_get(obj, "doc");
-	if (doc_val && !yyjson_is_null(doc)) {
+	if (doc_val && !yyjson_is_null(doc_val)) {
 		has_doc = true;
 		if (yyjson_is_str(doc_val)) {
 			doc = yyjson_get_str(doc_val);
@@ -80,7 +80,7 @@ string StructField::TryFromJSON(yyjson_val *obj) {
 		}
 	}
 	auto initial_default_val = yyjson_obj_get(obj, "initial-default");
-	if (initial_default_val && !yyjson_is_null(initial_default)) {
+	if (initial_default_val && !yyjson_is_null(initial_default_val)) {
 		has_initial_default = true;
 		error = initial_default.TryFromJSON(initial_default_val);
 		if (!error.empty()) {
@@ -88,7 +88,7 @@ string StructField::TryFromJSON(yyjson_val *obj) {
 		}
 	}
 	auto write_default_val = yyjson_obj_get(obj, "write-default");
-	if (write_default_val && !yyjson_is_null(write_default)) {
+	if (write_default_val && !yyjson_is_null(write_default_val)) {
 		has_write_default = true;
 		error = write_default.TryFromJSON(write_default_val);
 		if (!error.empty()) {

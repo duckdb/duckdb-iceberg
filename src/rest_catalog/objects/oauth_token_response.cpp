@@ -51,7 +51,7 @@ string OAuthTokenResponse::TryFromJSON(yyjson_val *obj) {
 		}
 	}
 	auto expires_in_val = yyjson_obj_get(obj, "expires_in");
-	if (expires_in_val && !yyjson_is_null(expires_in)) {
+	if (expires_in_val && !yyjson_is_null(expires_in_val)) {
 		has_expires_in = true;
 		if (yyjson_is_int(expires_in_val)) {
 			expires_in = yyjson_get_int(expires_in_val);
@@ -62,7 +62,7 @@ string OAuthTokenResponse::TryFromJSON(yyjson_val *obj) {
 		}
 	}
 	auto issued_token_type_val = yyjson_obj_get(obj, "issued_token_type");
-	if (issued_token_type_val && !yyjson_is_null(issued_token_type)) {
+	if (issued_token_type_val && !yyjson_is_null(issued_token_type_val)) {
 		has_issued_token_type = true;
 		error = issued_token_type.TryFromJSON(issued_token_type_val);
 		if (!error.empty()) {
@@ -70,7 +70,7 @@ string OAuthTokenResponse::TryFromJSON(yyjson_val *obj) {
 		}
 	}
 	auto refresh_token_val = yyjson_obj_get(obj, "refresh_token");
-	if (refresh_token_val && !yyjson_is_null(refresh_token)) {
+	if (refresh_token_val && !yyjson_is_null(refresh_token_val)) {
 		has_refresh_token = true;
 		if (yyjson_is_str(refresh_token_val)) {
 			refresh_token = yyjson_get_str(refresh_token_val);
@@ -81,7 +81,7 @@ string OAuthTokenResponse::TryFromJSON(yyjson_val *obj) {
 		}
 	}
 	auto scope_val = yyjson_obj_get(obj, "scope");
-	if (scope_val && !yyjson_is_null(scope)) {
+	if (scope_val && !yyjson_is_null(scope_val)) {
 		has_scope = true;
 		if (yyjson_is_str(scope_val)) {
 			scope = yyjson_get_str(scope_val);

@@ -38,7 +38,7 @@ string CompletedPlanningResult::Object5::TryFromJSON(yyjson_val *obj) {
 		}
 	}
 	auto storage_credentials_val = yyjson_obj_get(obj, "storage-credentials");
-	if (storage_credentials_val && !yyjson_is_null(storage_credentials)) {
+	if (storage_credentials_val && !yyjson_is_null(storage_credentials_val)) {
 		has_storage_credentials = true;
 		if (yyjson_is_arr(storage_credentials_val)) {
 			size_t idx, max;

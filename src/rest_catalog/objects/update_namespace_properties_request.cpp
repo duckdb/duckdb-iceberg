@@ -27,7 +27,7 @@ UpdateNamespacePropertiesRequest UpdateNamespacePropertiesRequest::FromJSON(yyjs
 string UpdateNamespacePropertiesRequest::TryFromJSON(yyjson_val *obj) {
 	string error;
 	auto removals_val = yyjson_obj_get(obj, "removals");
-	if (removals_val && !yyjson_is_null(removals)) {
+	if (removals_val && !yyjson_is_null(removals_val)) {
 		has_removals = true;
 		if (yyjson_is_arr(removals_val)) {
 			size_t idx, max;
@@ -50,7 +50,7 @@ string UpdateNamespacePropertiesRequest::TryFromJSON(yyjson_val *obj) {
 		}
 	}
 	auto updates_val = yyjson_obj_get(obj, "updates");
-	if (updates_val && !yyjson_is_null(updates)) {
+	if (updates_val && !yyjson_is_null(updates_val)) {
 		has_updates = true;
 		if (yyjson_is_obj(updates_val)) {
 			size_t idx, max;

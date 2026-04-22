@@ -115,7 +115,7 @@ string ViewVersion::TryFromJSON(yyjson_val *obj) {
 		}
 	}
 	auto default_catalog_val = yyjson_obj_get(obj, "default-catalog");
-	if (default_catalog_val && !yyjson_is_null(default_catalog)) {
+	if (default_catalog_val && !yyjson_is_null(default_catalog_val)) {
 		has_default_catalog = true;
 		if (yyjson_is_str(default_catalog_val)) {
 			default_catalog = yyjson_get_str(default_catalog_val);

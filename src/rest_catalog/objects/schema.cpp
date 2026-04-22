@@ -29,7 +29,7 @@ Schema::Object1 Schema::Object1::FromJSON(yyjson_val *obj) {
 string Schema::Object1::TryFromJSON(yyjson_val *obj) {
 	string error;
 	auto schema_id_val = yyjson_obj_get(obj, "schema-id");
-	if (schema_id_val && !yyjson_is_null(schema_id)) {
+	if (schema_id_val && !yyjson_is_null(schema_id_val)) {
 		has_schema_id = true;
 		if (yyjson_is_int(schema_id_val)) {
 			schema_id = yyjson_get_int(schema_id_val);
@@ -39,7 +39,7 @@ string Schema::Object1::TryFromJSON(yyjson_val *obj) {
 		}
 	}
 	auto identifier_field_ids_val = yyjson_obj_get(obj, "identifier-field-ids");
-	if (identifier_field_ids_val && !yyjson_is_null(identifier_field_ids)) {
+	if (identifier_field_ids_val && !yyjson_is_null(identifier_field_ids_val)) {
 		has_identifier_field_ids = true;
 		if (yyjson_is_arr(identifier_field_ids_val)) {
 			size_t idx, max;

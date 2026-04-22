@@ -330,7 +330,7 @@ class CPPClass:
         if optional_property.nullable:
             optionally_null = ''
         else:
-            optionally_null = f' && !yyjson_is_null({optional_property.variable_name})'
+            optionally_null = f' && !yyjson_is_null({optional_property.variable_name}_val)'
         res.extend(
             [
                 f'auto {optional_property.variable_name}_val = yyjson_obj_get(obj, "{optional_property.property_name}");',

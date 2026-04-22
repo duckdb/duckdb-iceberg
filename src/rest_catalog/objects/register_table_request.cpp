@@ -51,7 +51,7 @@ string RegisterTableRequest::TryFromJSON(yyjson_val *obj) {
 		}
 	}
 	auto overwrite_val = yyjson_obj_get(obj, "overwrite");
-	if (overwrite_val && !yyjson_is_null(overwrite)) {
+	if (overwrite_val && !yyjson_is_null(overwrite_val)) {
 		has_overwrite = true;
 		if (yyjson_is_bool(overwrite_val)) {
 			overwrite = yyjson_get_bool(overwrite_val);

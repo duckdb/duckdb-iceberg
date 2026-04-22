@@ -60,7 +60,7 @@ string OAuthTokenExchangeRequest::TryFromJSON(yyjson_val *obj) {
 		}
 	}
 	auto scope_val = yyjson_obj_get(obj, "scope");
-	if (scope_val && !yyjson_is_null(scope)) {
+	if (scope_val && !yyjson_is_null(scope_val)) {
 		has_scope = true;
 		if (yyjson_is_str(scope_val)) {
 			scope = yyjson_get_str(scope_val);
@@ -71,7 +71,7 @@ string OAuthTokenExchangeRequest::TryFromJSON(yyjson_val *obj) {
 		}
 	}
 	auto requested_token_type_val = yyjson_obj_get(obj, "requested_token_type");
-	if (requested_token_type_val && !yyjson_is_null(requested_token_type)) {
+	if (requested_token_type_val && !yyjson_is_null(requested_token_type_val)) {
 		has_requested_token_type = true;
 		error = requested_token_type.TryFromJSON(requested_token_type_val);
 		if (!error.empty()) {
@@ -79,7 +79,7 @@ string OAuthTokenExchangeRequest::TryFromJSON(yyjson_val *obj) {
 		}
 	}
 	auto actor_token_val = yyjson_obj_get(obj, "actor_token");
-	if (actor_token_val && !yyjson_is_null(actor_token)) {
+	if (actor_token_val && !yyjson_is_null(actor_token_val)) {
 		has_actor_token = true;
 		if (yyjson_is_str(actor_token_val)) {
 			actor_token = yyjson_get_str(actor_token_val);
@@ -90,7 +90,7 @@ string OAuthTokenExchangeRequest::TryFromJSON(yyjson_val *obj) {
 		}
 	}
 	auto actor_token_type_val = yyjson_obj_get(obj, "actor_token_type");
-	if (actor_token_type_val && !yyjson_is_null(actor_token_type)) {
+	if (actor_token_type_val && !yyjson_is_null(actor_token_type_val)) {
 		has_actor_token_type = true;
 		error = actor_token_type.TryFromJSON(actor_token_type_val);
 		if (!error.empty()) {

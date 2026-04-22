@@ -47,7 +47,7 @@ string CreateTableRequest::TryFromJSON(yyjson_val *obj) {
 		}
 	}
 	auto location_val = yyjson_obj_get(obj, "location");
-	if (location_val && !yyjson_is_null(location)) {
+	if (location_val && !yyjson_is_null(location_val)) {
 		has_location = true;
 		if (yyjson_is_str(location_val)) {
 			location = yyjson_get_str(location_val);
@@ -58,7 +58,7 @@ string CreateTableRequest::TryFromJSON(yyjson_val *obj) {
 		}
 	}
 	auto partition_spec_val = yyjson_obj_get(obj, "partition-spec");
-	if (partition_spec_val && !yyjson_is_null(partition_spec)) {
+	if (partition_spec_val && !yyjson_is_null(partition_spec_val)) {
 		has_partition_spec = true;
 		error = partition_spec.TryFromJSON(partition_spec_val);
 		if (!error.empty()) {
@@ -66,7 +66,7 @@ string CreateTableRequest::TryFromJSON(yyjson_val *obj) {
 		}
 	}
 	auto write_order_val = yyjson_obj_get(obj, "write-order");
-	if (write_order_val && !yyjson_is_null(write_order)) {
+	if (write_order_val && !yyjson_is_null(write_order_val)) {
 		has_write_order = true;
 		error = write_order.TryFromJSON(write_order_val);
 		if (!error.empty()) {
@@ -74,7 +74,7 @@ string CreateTableRequest::TryFromJSON(yyjson_val *obj) {
 		}
 	}
 	auto stage_create_val = yyjson_obj_get(obj, "stage-create");
-	if (stage_create_val && !yyjson_is_null(stage_create)) {
+	if (stage_create_val && !yyjson_is_null(stage_create_val)) {
 		has_stage_create = true;
 		if (yyjson_is_bool(stage_create_val)) {
 			stage_create = yyjson_get_bool(stage_create_val);
@@ -85,7 +85,7 @@ string CreateTableRequest::TryFromJSON(yyjson_val *obj) {
 		}
 	}
 	auto properties_val = yyjson_obj_get(obj, "properties");
-	if (properties_val && !yyjson_is_null(properties)) {
+	if (properties_val && !yyjson_is_null(properties_val)) {
 		has_properties = true;
 		if (yyjson_is_obj(properties_val)) {
 			size_t idx, max;

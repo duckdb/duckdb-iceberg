@@ -52,7 +52,7 @@ string SnapshotReference::TryFromJSON(yyjson_val *obj) {
 		}
 	}
 	auto max_ref_age_ms_val = yyjson_obj_get(obj, "max-ref-age-ms");
-	if (max_ref_age_ms_val && !yyjson_is_null(max_ref_age_ms)) {
+	if (max_ref_age_ms_val && !yyjson_is_null(max_ref_age_ms_val)) {
 		has_max_ref_age_ms = true;
 		if (yyjson_is_sint(max_ref_age_ms_val)) {
 			max_ref_age_ms = yyjson_get_sint(max_ref_age_ms_val);
@@ -65,7 +65,7 @@ string SnapshotReference::TryFromJSON(yyjson_val *obj) {
 		}
 	}
 	auto max_snapshot_age_ms_val = yyjson_obj_get(obj, "max-snapshot-age-ms");
-	if (max_snapshot_age_ms_val && !yyjson_is_null(max_snapshot_age_ms)) {
+	if (max_snapshot_age_ms_val && !yyjson_is_null(max_snapshot_age_ms_val)) {
 		has_max_snapshot_age_ms = true;
 		if (yyjson_is_sint(max_snapshot_age_ms_val)) {
 			max_snapshot_age_ms = yyjson_get_sint(max_snapshot_age_ms_val);
@@ -78,7 +78,7 @@ string SnapshotReference::TryFromJSON(yyjson_val *obj) {
 		}
 	}
 	auto min_snapshots_to_keep_val = yyjson_obj_get(obj, "min-snapshots-to-keep");
-	if (min_snapshots_to_keep_val && !yyjson_is_null(min_snapshots_to_keep)) {
+	if (min_snapshots_to_keep_val && !yyjson_is_null(min_snapshots_to_keep_val)) {
 		has_min_snapshots_to_keep = true;
 		if (yyjson_is_int(min_snapshots_to_keep_val)) {
 			min_snapshots_to_keep = yyjson_get_int(min_snapshots_to_keep_val);

@@ -27,7 +27,7 @@ ListNamespacesResponse ListNamespacesResponse::FromJSON(yyjson_val *obj) {
 string ListNamespacesResponse::TryFromJSON(yyjson_val *obj) {
 	string error;
 	auto next_page_token_val = yyjson_obj_get(obj, "next-page-token");
-	if (next_page_token_val && !yyjson_is_null(next_page_token)) {
+	if (next_page_token_val && !yyjson_is_null(next_page_token_val)) {
 		has_next_page_token = true;
 		error = next_page_token.TryFromJSON(next_page_token_val);
 		if (!error.empty()) {
@@ -35,7 +35,7 @@ string ListNamespacesResponse::TryFromJSON(yyjson_val *obj) {
 		}
 	}
 	auto namespaces_val = yyjson_obj_get(obj, "namespaces");
-	if (namespaces_val && !yyjson_is_null(namespaces)) {
+	if (namespaces_val && !yyjson_is_null(namespaces_val)) {
 		has_namespaces = true;
 		if (yyjson_is_arr(namespaces_val)) {
 			size_t idx, max;
