@@ -26,7 +26,20 @@ CREATE TABLE my_datalake.default.my_table WITH ('format-version' = 2) AS (select
 statement ok
 FROM iceberg_load_table_response(my_datalake.default.my_table);
 
+# format-version
 query I
 SELECT metadata."format-version" FROM iceberg_load_table_response(my_datalake.default.my_table);
 ----
 2
+
+# metadata
+query I
+SELECT metadata."current-schema-id" FROM iceberg_load_table_response(my_datalake.default.my_table);
+----
+0
+
+query I
+SELECT metadata."schemas"[1]."fields"[1]."name" FROM iceberg_load_table_response(my_datalake.default.my_table);
+----
+a
+
