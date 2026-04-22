@@ -24,11 +24,11 @@ struct StorageCredentialData {
 };
 
 struct IcebergLoadTableResponseBindData : public TableFunctionData {
-	string request_endpoint;
 	string metadata_location;
 	string metadata_json;
 	case_insensitive_map_t<string> config;
 	vector<StorageCredentialData> storage_credentials;
+	string request_url;
 };
 
 struct IcebergLoadTableResponseGlobalState : public GlobalTableFunctionState {
@@ -124,6 +124,8 @@ static unique_ptr<FunctionData> IcebergLoadTableResponseBind(ClientContext &cont
 		}
 	}
 
+	ret->request_url = response->url;
+
 	// metadata_location
 	names.push_back("metadata_location");
 	return_types.push_back(LogicalType::VARCHAR);
@@ -143,6 +145,10 @@ static unique_ptr<FunctionData> IcebergLoadTableResponseBind(ClientContext &cont
 	    {"config", LogicalType::MAP(LogicalType::VARCHAR, LogicalType::VARCHAR)},
 	});
 	return_types.push_back(LogicalType::LIST(credential_struct));
+
+	// request_url
+	names.push_back("request_url");
+	return_types.push_back(LogicalType::VARCHAR);
 
 	return std::move(ret);
 }
@@ -230,6 +236,11 @@ static void IcebergLoadTableResponseFunction(ClientContext &context, TableFuncti
 	auto &cred_list_data = FlatVector::GetData<list_entry_t>(storage_credentials_vector)[0];
 	cred_list_data.offset = 0;
 	cred_list_data.length = cred_count;
+
+	// request_url
+	auto &request_endpoint_vector = output.data[4];
+	FlatVector::GetData<string_t>(request_endpoint_vector)[0] =
+	    StringVector::AddString(metadata_location_vector, bind_data.request_url);
 }
 
 TableFunctionSet IcebergFunctions::GetIcebergLoadTableResponseFunction() {
