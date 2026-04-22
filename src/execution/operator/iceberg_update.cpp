@@ -42,9 +42,8 @@ IcebergUpdate::IcebergUpdate(PhysicalPlan &physical_plan, IcebergTableEntry &tab
 }
 
 IcebergUpdate &IcebergUpdate::PlanUpdateOperator(ClientContext &context, PhysicalPlanGenerator &planner,
-                                                 LogicalUpdate &op, PhysicalOperator &child_plan,
-                                                 IcebergCopyInput &copy_input) {
-	auto &table = op.table.Cast<IcebergTableEntry>();
+                                                 IcebergTableEntry &table, LogicalUpdate &op,
+                                                 PhysicalOperator &child_plan, IcebergCopyInput &copy_input) {
 	auto &table_metadata = table.table_info.table_metadata;
 
 	if (table_metadata.HasSortOrder()) {
@@ -230,10 +229,15 @@ PhysicalOperator &IcebergCatalog::PlanUpdate(ClientContext &context, PhysicalPla
 		throw BinderException("RETURNING clause not yet supported for updates of a Iceberg table");
 	}
 
-	auto &table = op.table.Cast<IcebergTableEntry>();
-	auto &table_metadata = table.table_info.table_metadata;
-	auto &schema = table.schema_id.IsValid() ? *table_metadata.GetSchemaFromId(table.schema_id.GetIndex())
-	                                         : table_metadata.GetLatestSchema();
+	auto &table_entry = op.table.Cast<IcebergTableEntry>();
+	table_entry.PrepareIcebergScanFromEntry(context);
+
+	auto &irc_transaction = IcebergTransaction::Get(context, *this);
+	auto &alter = irc_transaction.GetOrCreateAlter();
+	auto &updated_table = alter.GetOrInitializeTable(table_entry.table_info);
+	auto &table_metadata = updated_table.table_metadata;
+	auto &schema = table_metadata.GetLatestSchema();
+	auto &updated_table_entry = *updated_table.schema_versions[schema.schema_id];
 
 	// Plan the copy operator with update_op as child.
 	// PlanCopyForInsert will add a partition projection on top if needed.
@@ -241,13 +245,14 @@ PhysicalOperator &IcebergCatalog::PlanUpdate(ClientContext &context, PhysicalPla
 	if (table_metadata.iceberg_version >= 3) {
 		copy_input.virtual_columns = IcebergInsertVirtualColumns::WRITE_ROW_ID;
 	}
-	auto &update_op = IcebergUpdate::PlanUpdateOperator(context, planner, op, child_plan, copy_input);
+	auto &update_op =
+	    IcebergUpdate::PlanUpdateOperator(context, planner, updated_table_entry, op, child_plan, copy_input);
 
 	optional_ptr<PhysicalOperator> plan = &update_op;
 	auto &copy_op = IcebergInsert::PlanCopyForInsert(context, planner, copy_input, plan);
 
 	// Plan the insert sink and wire it up
-	auto &insert_op = IcebergInsert::PlanInsert(context, planner, table).Cast<IcebergInsert>();
+	auto &insert_op = IcebergInsert::PlanInsert(context, planner, updated_table_entry).Cast<IcebergInsert>();
 	insert_op.update_delete_op = update_op.delete_op;
 	insert_op.children.push_back(copy_op);
 	return insert_op;

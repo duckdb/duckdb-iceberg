@@ -14,6 +14,8 @@
 #include "execution/operator/iceberg_update.hpp"
 #include "execution/operator/iceberg_delete.hpp"
 #include "execution/operator/iceberg_insert.hpp"
+#include "catalog/rest/transaction/iceberg_transaction.hpp"
+#include "catalog/rest/transaction/iceberg_transaction_update.hpp"
 
 namespace duckdb {
 
@@ -99,8 +101,15 @@ static unique_ptr<MergeIntoOperator> IcebergPlanMergeIntoAction(IcebergCatalog &
 	auto return_types = op.types;
 
 	auto &table_entry = op.table.Cast<IcebergTableEntry>();
-	auto &table_metadata = table_entry.table_info.table_metadata;
+	table_entry.PrepareIcebergScanFromEntry(context);
+
+	auto &irc_transaction = IcebergTransaction::Get(context, catalog);
+	auto &alter = irc_transaction.GetOrCreateAlter();
+	auto &updated_table = alter.GetOrInitializeTable(table_entry.table_info);
+	auto &table_metadata = updated_table.table_metadata;
 	auto &schema = table_metadata.GetLatestSchema();
+	auto &updated_table_entry = *updated_table.schema_versions[schema.schema_id];
+
 	auto iceberg_version = table_metadata.iceberg_version;
 
 	switch (action.action_type) {
@@ -119,7 +128,8 @@ static unique_ptr<MergeIntoOperator> IcebergPlanMergeIntoAction(IcebergCatalog &
 			copy_input.virtual_columns = IcebergInsertVirtualColumns::WRITE_ROW_ID;
 		}
 
-		auto &update_op = IcebergUpdate::PlanUpdateOperator(context, planner, update, child_plan, copy_input);
+		auto &update_op =
+		    IcebergUpdate::PlanUpdateOperator(context, planner, updated_table_entry, update, child_plan, copy_input);
 
 		// The row_id comes before the deletion information, that is always the 3 last column of the chunk.
 		if (table_metadata.iceberg_version >= 3) {
@@ -129,8 +139,7 @@ static unique_ptr<MergeIntoOperator> IcebergPlanMergeIntoAction(IcebergCatalog &
 		// plan copy and insert
 		auto copy_options = IcebergInsert::GetCopyOptions(context, copy_input);
 		auto &copy_op = IcebergInsert::PlanCopyForInsert(context, planner, copy_input, nullptr);
-		auto &iceberg_table = op.table.Cast<IcebergTableEntry>();
-		auto &insert_op = IcebergInsert::PlanInsert(context, planner, iceberg_table).Cast<IcebergInsert>();
+		auto &insert_op = IcebergInsert::PlanInsert(context, planner, updated_table_entry).Cast<IcebergInsert>();
 		insert_op.children.push_back(copy_op);
 		insert_op.update_delete_op = update_op.delete_op;
 

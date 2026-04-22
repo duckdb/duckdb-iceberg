@@ -35,8 +35,9 @@ public:
 	vector<unique_ptr<Expression>> expressions;
 
 public:
-	static IcebergUpdate &PlanUpdateOperator(ClientContext &context, PhysicalPlanGenerator &planner, LogicalUpdate &op,
-	                                         PhysicalOperator &child_plan, IcebergCopyInput &copy_input);
+	static IcebergUpdate &PlanUpdateOperator(ClientContext &context, PhysicalPlanGenerator &planner,
+	                                         IcebergTableEntry &table, LogicalUpdate &op, PhysicalOperator &child_plan,
+	                                         IcebergCopyInput &copy_input);
 
 public:
 	// Operator interface
