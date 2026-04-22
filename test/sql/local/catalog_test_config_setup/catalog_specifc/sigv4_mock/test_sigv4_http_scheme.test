@@ -1,4 +1,4 @@
-# name: test/sql/local/irc_specific_catalogs/sigv4_mock/test_sigv4_http_scheme.test
+# name: test/sql/local/catalog_test_config_setup/catalog_specifc/sigv4_mock/test_sigv4_http_scheme.test
 # description: test that SigV4 requests preserve the http:// scheme from the endpoint URL
 # group: [sigv4_mock]
 
