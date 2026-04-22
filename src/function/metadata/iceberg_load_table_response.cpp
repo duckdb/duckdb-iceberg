@@ -64,7 +64,7 @@ static unique_ptr<HTTPResponse> MakeRequest(ClientContext &context, TableFunctio
 	auto &ic_catalog = table_entry.catalog.Cast<IcebergCatalog>();
 	auto &ic_schema = table_entry.schema.Cast<IcebergSchemaEntry>();
 
-	// Make the GET request to the LoadTable endpoint
+	// Make the GET request
 	auto url_builder = ic_catalog.GetBaseUrl();
 	url_builder.AddPrefixComponent(ic_catalog.prefix, ic_catalog.prefix_is_one_component);
 	url_builder.AddPathComponent(IRCPathComponent::RegularComponent("namespaces"));
@@ -84,6 +84,7 @@ static unique_ptr<HTTPResponse> MakeRequest(ClientContext &context, TableFunctio
 	}
 	return response;
 }
+
 static unique_ptr<FunctionData> IcebergLoadTableResponseBind(ClientContext &context, TableFunctionBindInput &input,
                                                              vector<LogicalType> &return_types, vector<string> &names) {
 	auto ret = make_uniq<IcebergLoadTableResponseBindData>();
