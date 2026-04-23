@@ -47,6 +47,9 @@ public:
 	bool DoesExist() const {
 		return exists;
 	}
+	string GetSchemaKey() const {
+		return this->catalog.GetName() + this->name;
+	};
 
 private:
 	IcebergTableSet &GetCatalogSet(CatalogType type);
@@ -56,6 +59,8 @@ private:
 
 public:
 	IcebergTableSet tables;
+	case_insensitive_map_t<string> properties;
+	bool properties_loaded = false;
 };
 
 } // namespace duckdb

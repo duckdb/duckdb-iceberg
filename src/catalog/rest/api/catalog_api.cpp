@@ -189,6 +189,39 @@ APIResult<unique_ptr<const rest_api_objects::LoadTableResult>> IRCAPI::GetTable(
 	    make_uniq<const rest_api_objects::LoadTableResult>(rest_api_objects::LoadTableResult::FromJSON(metadata_root));
 	return ret;
 }
+APIResult<unique_ptr<const rest_api_objects::GetNamespaceResponse>>
+IRCAPI::GetNamespace(ClientContext &context, IcebergCatalog &catalog, const IcebergSchemaEntry &schema) {
+	auto ret = APIResult<unique_ptr<const rest_api_objects::GetNamespaceResponse>>();
+
+	auto url_builder = catalog.GetBaseUrl();
+	url_builder.AddPrefixComponent(catalog.prefix, catalog.prefix_is_one_component);
+	url_builder.AddPathComponent(IRCPathComponent::RegularComponent("namespaces"));
+	url_builder.AddPathComponent(IRCPathComponent::NamespaceComponent(schema.namespace_items));
+
+	HTTPHeaders headers(*context.db);
+	if (catalog.attach_options.access_mode == IRCAccessDelegationMode::VENDED_CREDENTIALS) {
+		headers.Insert("X-Iceberg-Access-Delegation", "vended-credentials");
+	}
+	auto result = catalog.auth_handler->Request(RequestType::GET_REQUEST, context, url_builder, headers);
+
+	if (result->status != HTTPStatusCode::OK_200) {
+		std::unique_ptr<yyjson_doc, YyjsonDocDeleter> out_doc;
+		yyjson_val *error_obj = ICUtils::GetErrorMessage(result->body, out_doc);
+		if (error_obj == nullptr) {
+			throw InvalidConfigurationException(result->body);
+		}
+		ret.has_error = true;
+		ret.status_ = result->status;
+		ret.error_ = rest_api_objects::IcebergErrorResponse::FromJSON(error_obj);
+		return ret;
+	}
+	ret.has_error = false;
+	auto doc = ICUtils::APIResultToDoc(result->body);
+	auto *metadata_root = yyjson_doc_get_root(doc.get());
+	ret.result_ = make_uniq<const rest_api_objects::GetNamespaceResponse>(
+	    rest_api_objects::GetNamespaceResponse::FromJSON(metadata_root));
+	return ret;
+}
 
 vector<rest_api_objects::TableIdentifier> IRCAPI::GetTables(ClientContext &context, IcebergCatalog &catalog,
                                                             const IcebergSchemaEntry &schema) {

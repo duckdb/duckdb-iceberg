@@ -25,7 +25,7 @@ namespace duckdb {
 struct IcebergSchemaPropertiesBindData : public TableFunctionData {
 	optional_ptr<IcebergSchemaEntry> iceberg_schema;
 	case_insensitive_map_t<string> properties;
-	vector<string> remove_properties;
+	set<string> remove_properties;
 };
 
 struct IcebergSchemaPropertiesGlobalTableFunctionState : public GlobalTableFunctionState {
@@ -47,7 +47,7 @@ public:
 	bool properties_removed = false;
 };
 
-static bool CheckEntryIsIcebergSchema(optional_ptr<CatalogEntry> entry) {
+static bool CheckEntryIsIcebergSchema(optional_ptr<SchemaCatalogEntry> entry) {
 	auto &catalog_entry = entry->Cast<InCatalogEntry>();
 	auto &catalog = catalog_entry.catalog;
 	if (catalog.GetCatalogType() != "iceberg") {
@@ -100,7 +100,7 @@ static unique_ptr<FunctionData> RemoveIcebergSchemaPropertiesBind(ClientContext 
 	auto &list_children = ListValue::GetChildren(remove_values);
 	for (idx_t col_idx = 0; col_idx < list_children.size(); col_idx++) {
 		auto &remove_property = StringValue::Get(list_children[0]);
-		ret->remove_properties.push_back(remove_property);
+		ret->remove_properties.insert(remove_property);
 	}
 
 	return_types.insert(return_types.end(), LogicalType::BIGINT);
@@ -145,15 +145,16 @@ static void SetIcebergSchemaPropertiesFunction(ClientContext &context, TableFunc
 	auto iceberg_schema = bind_data.iceberg_schema;
 	auto &iceberg_transaction = IcebergTransaction::Get(context, iceberg_schema->catalog);
 
-	auto schema_identifier = iceberg_schema->catalog.GetName() + iceberg_schema->name;
-	if (iceberg_transaction.schema_property_updates.find(schema_identifier) ==
+	auto schema_key = iceberg_schema->GetSchemaKey();
+	if (iceberg_transaction.schema_property_updates.find(schema_key) ==
 	    iceberg_transaction.schema_property_updates.end()) {
 		// not present, create one
-		iceberg_transaction.schema_property_updates[schema_identifier] =
-		    SchemaPropertyUpdates(bind_data.properties, nullptr);
+		auto properties = SchemaPropertyUpdates();
+		properties.schema_property_updates = bind_data.properties;
+		iceberg_transaction.schema_property_updates[schema_key] = properties;
 	} else {
 		for (auto property : bind_data.properties) {
-			iceberg_transaction.schema_property_updates[schema_identifier].schema_property_updates[property.first] =
+			iceberg_transaction.schema_property_updates[schema_key].schema_property_updates[property.first] =
 			    property.second;
 		}
 	}
@@ -179,16 +180,17 @@ static void RemoveIcebergSchemaPropertiesFunction(ClientContext &context, TableF
 	auto iceberg_schema = bind_data.iceberg_schema;
 	auto &iceberg_transaction = IcebergTransaction::Get(context, iceberg_schema->catalog);
 
-	auto schema_identifier = iceberg_schema->catalog.GetName() + iceberg_schema->name;
-	if (iceberg_transaction.schema_property_updates.find(schema_identifier) ==
+	auto schema_key = iceberg_schema->GetSchemaKey();
+	if (iceberg_transaction.schema_property_updates.find(schema_key) ==
 	    iceberg_transaction.schema_property_updates.end()) {
 		// not present, create one
-		iceberg_transaction.schema_property_removals.insert(
-		    SchemaPropertyUpdates(nullptr, bind_data.remove_properties));
+		auto properties = SchemaPropertyUpdates();
+		properties.schema_property_removals = bind_data.remove_properties;
+		iceberg_transaction.schema_property_updates[schema_key] = properties;
+
 	} else {
 		for (auto property_to_remove : bind_data.remove_properties) {
-			iceberg_transaction.schema_property_updates[schema_identifier].schema_property_removals.insert(
-			    property_to_remove);
+			iceberg_transaction.schema_property_updates[schema_key].schema_property_removals.insert(property_to_remove);
 		}
 	}
 
@@ -205,23 +207,21 @@ static void GetIcebergSchemaPropertiesFunction(ClientContext &context, TableFunc
 	if (!bind_data.iceberg_schema) {
 		return;
 	}
-	// TODO: It seems `iceberg_schema` doesn't have properties. Maybe we're not reading it yet?
 	auto iceberg_schema = bind_data.iceberg_schema;
+	auto schema_key = iceberg_schema->GetSchemaKey();
 
 	auto &iceberg_transaction = IcebergTransaction::Get(context, iceberg_schema->catalog);
-	auto table_key = iceberg_schema->table_info.GetTableKey();
-	auto table_txn_state = iceberg_transaction.GetLatestTableState(table_key);
-	// FIXME remove table logic in favor of schema
-	const IcebergTableInformation &txn_table_info =
-	    table_txn_state ? table_txn_state->GetInfo() : iceberg_schema->table_info;
+	auto current_schema_properties = iceberg_transaction.current_schema_properties.find(schema_key);
+	bool found_transaction_changes = current_schema_properties != iceberg_transaction.current_schema_properties.end();
+	auto &schema_properties =
+	    found_transaction_changes ? current_schema_properties->second : iceberg_schema->properties;
 
-	const auto &properties = txn_table_info.table_metadata.GetSchemaProperties();
-	if (properties.empty()) {
+	if (schema_properties.empty()) {
 		output.SetCardinality(0);
 		return;
 	}
 	if (!global_state.all_properties_initialized) {
-		for (auto &property : properties) {
+		for (auto &property : schema_properties) {
 			global_state.all_properties.push_back(make_pair(property.first, property.second));
 		}
 		global_state.all_properties_initialized = true;
