@@ -154,7 +154,7 @@ static unique_ptr<FunctionData> IcebergLoadTableResponseBind(ClientContext &cont
 	return std::move(ret);
 }
 
-static void OutputMap(const case_insensitive_map_t<string> &config, vector<Vector>::value_type &config_vec) {
+static void OutputMap(const case_insensitive_map_t<string> &config, Vector &config_vec) {
 	auto config_count = config.size();
 	ListVector::Reserve(config_vec, config_count);
 	auto &config_key_vec = MapVector::GetKeys(config_vec);
