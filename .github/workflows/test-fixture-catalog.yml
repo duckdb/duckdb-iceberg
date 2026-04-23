@@ -60,9 +60,11 @@ jobs:
         with:
           python-version: '3.13'
 
-      - name: Set LOCAL_EXTENSION_REPO
+      - name: Set LOCAL_EXTENSION_REPO and install iceberg from build/release/extension
         if: inputs.local-extension-repo != ''
-        run: echo "LOCAL_EXTENSION_REPO=${{ inputs.local-extension-repo }}" >> $GITHUB_ENV
+        run: |
+          echo "LOCAL_EXTENSION_REPO=${{ inputs.local-extension-repo }}" >> $GITHUB_ENV
+          ./build/release/duckdb "FORCE INSTALL ICEBERG;"
 
       - name: Setup fixture
         run: |
@@ -73,6 +75,9 @@ jobs:
         run: |
           source .venv-spark4/bin/activate
           mitmdump --mode regular@8878 --flow-detail 2 > mitmproxy.log 2>&1 &
+
+      - name: Setup tmate session
+        uses: mxschmitt/action-tmate@v3    
 
       - name: Run Generic IRC tests
         env:
