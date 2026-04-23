@@ -64,7 +64,7 @@ jobs:
         if: inputs.local-extension-repo != ''
         run: |
           # remove already installed extension if it is installed
-          rm ~/.duckdb/extensions/**/**/iceberg.*
+          rm ~/.duckdb/extensions/**/**/iceberg.* || true
           echo "LOCAL_EXTENSION_REPO=${{ inputs.local-extension-repo }}" >> $GITHUB_ENV
           # check that we can load the extension
           ./build/release/duckdb -unsigned -c "LOAD 'build/release/extension/iceberg/iceberg.duckdb_extension';"
