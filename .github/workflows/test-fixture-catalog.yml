@@ -69,9 +69,6 @@ jobs:
         run: |
           source .venv-spark4/bin/activate
           mitmdump --mode regular@8878 --flow-detail 2 > mitmproxy.log 2>&1 &
-      
-      - name: Setup tmate session
-        uses: mxschmitt/action-tmate@v3
 
       - name: Install Iceberg & Run Generic Tests Set local extension repo, Install iceberg from build/release/extension and remove require iceberg from tests
         if: inputs.local-extension-repo != ''
@@ -90,6 +87,8 @@ jobs:
              FROM duckdb_extensions() where extension_name = 'iceberg';"
           # remove require iceberg from tests
           grep -rl "require iceberg" test/sql/ | xargs sed -i '/^require iceberg$/d'
+          # not sure why this is needed. Apparently tpch is also not linked
+          grep -rl "require tpch" test/sql/ | xargs sed -i '/^require tpch$/d'
           ./build/release/test/unittest --order lex "$PWD/test/sql/local/irc_any_catalog/*" --list-test-names-only || true
           ./build/release/test/unittest --order lex "$PWD/test/sql/local/irc_any_catalog/*" --test-config test/configs/fixture.json
 
