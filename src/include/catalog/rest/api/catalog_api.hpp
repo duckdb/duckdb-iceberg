@@ -63,6 +63,8 @@ public:
 	static void CommitNamespaceCreate(ClientContext &context, IcebergCatalog &catalog, string body);
 	static void CommitNamespaceDrop(ClientContext &context, IcebergCatalog &catalog,
 	                                const vector<string> &namespace_items);
+	static void CommitNamespacePropertiesUpdate(ClientContext &context, IcebergCatalog &catalog, string body,
+	                                            string _namespace);
 	//! stage create = false, table is created immediately in the IRC
 	//! stage create = true, table is not created, but metadata is initialized and returned
 	static rest_api_objects::LoadTableResult CommitNewTable(ClientContext &context, IcebergCatalog &catalog,

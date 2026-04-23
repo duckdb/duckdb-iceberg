@@ -431,6 +431,24 @@ void IRCAPI::CommitNamespaceDrop(ClientContext &context, IcebergCatalog &catalog
 	}
 }
 
+void IRCAPI::CommitNamespacePropertiesUpdate(ClientContext &context, IcebergCatalog &catalog, string body,
+                                             string _namespace) {
+	auto url_builder = catalog.GetBaseUrl();
+	url_builder.AddPrefixComponent(catalog.prefix, catalog.prefix_is_one_component);
+	url_builder.AddPathComponent(IRCPathComponent::RegularComponent("namespaces"));
+	url_builder.AddPathComponent(IRCPathComponent::RegularComponent(_namespace));
+	url_builder.AddPathComponent(IRCPathComponent::RegularComponent("/properties"));
+
+	HTTPHeaders headers(*context.db);
+	headers.Insert("Content-Type", "application/json");
+	auto response = catalog.auth_handler->Request(RequestType::POST_REQUEST, context, url_builder, headers, body);
+	if (response->status != HTTPStatusCode::OK_200) {
+		throw InvalidConfigurationException(
+		    "Request to '%s' returned a non-200 status code (%s), with reason: %s, body: %s",
+		    url_builder.GetURLEncoded(), EnumUtil::ToString(response->status), response->reason, response->body);
+	}
+}
+
 rest_api_objects::LoadTableResult IRCAPI::CommitNewTable(ClientContext &context, IcebergCatalog &catalog,
                                                          const IcebergTableEntry &table) {
 	auto &ic_schema = table.schema.Cast<IcebergSchemaEntry>();

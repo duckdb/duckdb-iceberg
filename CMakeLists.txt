@@ -75,6 +75,7 @@ set(EXTENSION_SOURCES
 	src/function/metadata/iceberg_partition_stats.cpp
 	src/function/metadata/iceberg_snapshots.cpp
 	src/function/metadata/iceberg_table_properties_functions.cpp
+	src/function/metadata/iceberg_schema_properties_functions.cpp
 	src/function/scan/iceberg_scan.cpp
 	src/iceberg_extension.cpp
 	src/iceberg_logging.cpp

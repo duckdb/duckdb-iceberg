@@ -1,0 +1,20 @@
+# name: test/sql/local/irc_any_catalog/schema_properties/schema_properties_update.test
+# group: [schema_properties]
+
+statement ok
+CREATE SCHEMA IF NOT EXISTS my_datalake.default;
+
+# statement ok
+# drop table if exists my_datalake.default.test;
+#
+# statement ok
+# create table if not exists my_datalake.default.test as select range a from range(100);
+
+statement ok
+CALL set_iceberg_schema_properties(my_datalake.default,
+    {
+    'myprop1' : '1',
+    'myprop2' : '2',
+    'myprop3' : '3',
+    }
+);

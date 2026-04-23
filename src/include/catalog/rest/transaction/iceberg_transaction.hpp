@@ -62,6 +62,11 @@ private:
 	IcebergTableStatus status;
 };
 
+struct SchemaPropertyUpdates {
+	case_insensitive_map_t<string> schema_property_updates;
+	set<string> schema_property_removals;
+};
+
 class IcebergTransaction : public Transaction {
 public:
 	IcebergTransaction(IcebergCatalog &ic_catalog, TransactionManager &manager, ClientContext &context);
@@ -80,6 +85,7 @@ public:
 	void DoTableRename(IcebergTransactionRenameUpdate &rename_update, ClientContext &context);
 	void DoSchemaCreates(ClientContext &context);
 	void DoSchemaDeletes(ClientContext &context);
+	void DoSchemaPropertyUpdates(ClientContext &context);
 	IcebergCatalog &GetCatalog();
 	void DropSecrets(ClientContext &context);
 	TableTransactionInfo GetTransactionRequest(IcebergTransactionAlterUpdate &alter_update, ClientContext &context);
@@ -116,6 +122,8 @@ public:
 	case_insensitive_set_t created_secrets;
 	case_insensitive_set_t looked_up_entries;
 	mutex lock;
+
+	case_insensitive_map_t<SchemaPropertyUpdates> schema_property_updates;
 };
 
 void ApplyTableUpdate(IcebergTableInformation &table_info, IcebergTransaction &iceberg_transaction,
