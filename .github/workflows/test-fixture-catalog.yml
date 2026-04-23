@@ -60,10 +60,11 @@ jobs:
         with:
           python-version: '3.13'
 
-      - name: Install iceberg from build/release/extension
+      - name: Install iceberg from build/release/extension and remove require iceberg from tests
         if: inputs.local-extension-repo != ''
         run: |
-          LOCAL_EXTENSION_REPO=${{ inputs.local-extension-repo }} ./build/release/duckdb -c "FORCE INSTALL ICEBERG;"
+          ./build/release/duckdb -unsigned -c "LOAD 'build/release/extension/iceberg/iceberg.duckdb_extension';"
+          grep -rl "require iceberg" test/sql/ | xargs sed -i '/^require iceberg$/d'
 
       - name: Setup fixture
         run: |
@@ -73,10 +74,7 @@ jobs:
         shell: bash
         run: |
           source .venv-spark4/bin/activate
-          mitmdump --mode regular@8878 --flow-detail 2 > mitmproxy.log 2>&1 &
-
-      - name: Setup tmate session
-        uses: mxschmitt/action-tmate@v3    
+          mitmdump --mode regular@8878 --flow-detail 2 > mitmproxy.log 2>&1 &   
 
       - name: Run Generic IRC tests
         env:
