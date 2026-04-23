@@ -1,4 +1,4 @@
-#include "catalog/rest/catalog_entry/iceberg_schema_entry.hpp"
+#include "../../../include/catalog/rest/catalog_entry/schema/iceberg_schema_entry.hpp"
 
 #include "duckdb/parser/column_list.hpp"
 #include "duckdb/parser/constraints/list.hpp"

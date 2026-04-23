@@ -20,7 +20,7 @@
 #include "catalog/rest/api/catalog_utils.hpp"
 #include "core/metadata/snapshot/iceberg_snapshot.hpp"
 #include "catalog/rest/iceberg_catalog.hpp"
-#include "catalog/rest/catalog_entry/iceberg_schema_entry.hpp"
+#include "../../../include/catalog/rest/catalog_entry/schema/iceberg_schema_entry.hpp"
 #include "planning/metadata_io/avro/avro_scan.hpp"
 #include "iceberg_logging.hpp"
 #include "catalog/rest/api/table_update.hpp"

@@ -1,4 +1,4 @@
-#include "../../include/catalog/rest/catalog_entry/iceberg_schema_entry.hpp"
+#include "../../include/catalog/rest/catalog_entry/schema/iceberg_schema_entry.hpp"
 #include "duckdb/catalog/catalog_entry/table_catalog_entry.hpp"
 #include "duckdb/catalog/catalog_entry/table_function_catalog_entry.hpp"
 #include "duckdb/parser/tableref/joinref.hpp"
