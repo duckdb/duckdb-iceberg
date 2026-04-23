@@ -18,6 +18,7 @@
 #include "catalog/rest/storage/authorization/oauth2.hpp"
 #include "catalog/rest/storage/authorization/sigv4.hpp"
 #include "catalog/rest/storage/authorization/none.hpp"
+#include "catalog/rest/storage/authorization/sigv4_utils.hpp"
 #include "core/expression/iceberg_transform.hpp"
 
 #include <climits>
@@ -26,20 +27,6 @@ namespace duckdb {
 
 const string &IcebergTableInformation::BaseFilePath() const {
 	return table_metadata.location;
-}
-
-static string DetectStorageType(const string &location) {
-	// Detect storage type from the location URL
-	if (StringUtil::StartsWith(location, "gs://") || StringUtil::Contains(location, "storage.googleapis.com")) {
-		return "gcs";
-	} else if (StringUtil::StartsWith(location, "s3://") || StringUtil::StartsWith(location, "s3a://")) {
-		return "s3";
-	} else if (StringUtil::StartsWith(location, "abfs://") || StringUtil::StartsWith(location, "abfss://") ||
-	           StringUtil::StartsWith(location, "az://")) {
-		return "azure";
-	}
-	// Default to s3 for backward compatibility
-	return "s3";
 }
 
 static void ParseGCSConfigOptions(const case_insensitive_map_t<string> &config,
@@ -226,11 +213,29 @@ IRCAPITableCredentials IcebergTableInformation::GetVendedCredentials(ClientConte
 	const bool ignore_credential_prefix = storage_credentials.size() == 1;
 	for (idx_t index = 0; index < storage_credentials.size(); index++) {
 		auto &credential = storage_credentials[index];
+
+		//! Only use credentials whose prefix matches the storage type (e.g. "s3"),
+		//! matching Iceberg Java S3FileIO behavior: filter(c -> c.prefix().startsWith(ROOT_PREFIX))
+		if (!ignore_credential_prefix &&
+		    !CredentialMatchesStorageType(credential.prefix, storage_type)) {
+			continue;
+		}
+
 		CreateSecretInput create_secret_input;
 		create_secret_input.on_conflict = OnCreateConflict::REPLACE_ON_CONFLICT;
 		create_secret_input.persist_type = SecretPersistType::TEMPORARY;
 
-		create_secret_input.scope.push_back(ignore_credential_prefix ? table_location : credential.prefix);
+		if (ignore_credential_prefix) {
+			create_secret_input.scope.push_back(table_location);
+		} else {
+			create_secret_input.scope.push_back(credential.prefix);
+			//! Also match paths whose scheme differs from the credential prefix
+			//! (e.g. oss:// files with s3 credentials), equivalent to Java S3FileIO's
+			//! ROOT_PREFIX fallback in clientForStoragePath()
+			if (!StringUtil::StartsWith(table_location, credential.prefix)) {
+				create_secret_input.scope.push_back(table_location);
+			}
+		}
 		create_secret_input.name = StringUtil::Format("%s_%d_%s", secret_base_name, index, credential.prefix);
 
 		create_secret_input.type = storage_type;
