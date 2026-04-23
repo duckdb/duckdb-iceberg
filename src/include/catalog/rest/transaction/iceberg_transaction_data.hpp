@@ -32,6 +32,7 @@ public:
 	void TableAddSchema(int32_t schema_id);
 	void TableSetCurrentSchema();
 	void TableAddAssertCreate();
+	void TableAddAssertUUID();
 	void TableAddAssertCurrentSchemaId();
 	void TableAddAssertLastAssignedFieldId();
 	void TableAddAssertLastAssignedPartitionId();

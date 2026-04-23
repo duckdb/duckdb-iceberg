@@ -77,6 +77,19 @@ void AssertCreateRequirement::CreateRequirement(DatabaseInstance &db, ClientCont
 	req.has_assert_create = true;
 }
 
+AssertTableUUIDRequirement::AssertTableUUIDRequirement(const IcebergTableInformation &table_info)
+    : IcebergTableRequirement(IcebergTableRequirementType::ASSERT_TABLE_UUID, table_info) {
+}
+
+void AssertTableUUIDRequirement::CreateRequirement(DatabaseInstance &db, ClientContext &context,
+                                                   IcebergCommitState &commit_state) {
+	commit_state.table_change.requirements.push_back(rest_api_objects::TableRequirement());
+	auto &req = commit_state.table_change.requirements.back();
+	req.assert_table_uuid.type.value = "assert-table-uuid";
+	req.assert_table_uuid.uuid = commit_state.table_info.table_metadata.table_uuid;
+	req.has_assert_table_uuid = true;
+}
+
 AssertCurrentSchemaIdRequirement::AssertCurrentSchemaIdRequirement(const IcebergTableInformation &table_info)
     : IcebergTableRequirement(IcebergTableRequirementType::ASSERT_CURRENT_SCHEMA_ID, table_info) {
 	current_schema_id = table_info.table_metadata.GetCurrentSchemaId();

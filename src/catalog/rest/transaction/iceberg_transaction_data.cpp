@@ -77,6 +77,9 @@ void IcebergTransactionData::AddSnapshot(IcebergSnapshotOperationType operation,
 	//! NOTE: Lock has to be held to make sure the rows are assigned the correct row ids
 	lock_guard<mutex> guard(lock);
 
+	// make sure our table hasn't been swapped by another one with the same name
+	TableAddAssertUUID();
+
 	//! Generate a new snapshot id
 	auto &table_metadata = table_info.table_metadata;
 	CacheExistingManifestList(guard, table_metadata);
@@ -164,6 +167,10 @@ void IcebergTransactionData::TableAssignUUID() {
 
 void IcebergTransactionData::TableAddAssertCreate() {
 	requirements.push_back(make_uniq<AssertCreateRequirement>(table_info));
+}
+
+void IcebergTransactionData::TableAddAssertUUID() {
+	requirements.push_back(make_uniq<AssertTableUUIDRequirement>(table_info));
 }
 
 void IcebergTransactionData::TableAddAssertCurrentSchemaId() {
