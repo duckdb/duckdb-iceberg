@@ -1,0 +1,56 @@
+# name: test/sql/local/irc_any_catalog/merge/merge_multi_partition_timestamp.test
+# description: MERGE with multiple timestamp partition transforms produces incorrect partition values
+# group: [merge]
+
+require-env ICEBERG_SERVER_AVAILABLE
+
+require-env SECRETS_CREATED_AND_CATALOG_ATTACHED
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+set enable_logging=true
+
+statement ok
+set logging_level='debug'
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.t;
+
+statement ok
+CREATE TABLE my_datalake.default.t (id INTEGER, ts TIMESTAMP);
+
+statement ok
+ALTER TABLE my_datalake.default.t SET PARTITIONED BY (year(ts), month(ts));
+
+statement ok
+INSERT INTO my_datalake.default.t VALUES (1, '2025-01-15');
+
+# MERGE a new row with ts='2025-03-20' (year=2025, month=3)
+statement ok
+MERGE INTO my_datalake.default.t USING (SELECT 2 as id, '2025-03-20'::TIMESTAMP as ts) AS src ON my_datalake.default.t.id = src.id
+WHEN NOT MATCHED THEN INSERT *;
+
+# Verify data is correct
+query II
+SELECT * FROM my_datalake.default.t ORDER BY id
+----
+1	2025-01-15 00:00:00
+2	2025-03-20 00:00:00
+
+query III
+select partition_field_name, lower_bound, upper_bound from iceberg_partition_stats(my_datalake.default.t) order by all
+----
+month_ts_2	660	660
+month_ts_2	662	662
+year_ts_2	55	55
+year_ts_2	55	55
