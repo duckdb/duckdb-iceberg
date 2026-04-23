@@ -159,11 +159,11 @@ static void OutputMap(const case_insensitive_map_t<string> &config, Vector &conf
 	ListVector::Reserve(config_vec, config_count);
 	auto &config_key_vec = MapVector::GetKeys(config_vec);
 	auto &config_val_vec = MapVector::GetValues(config_vec);
-	idx_t i = 0;
+	idx_t config_idx = 0;
 	for (auto &kv : config) {
-		FlatVector::GetData<string_t>(config_key_vec)[i] = StringVector::AddString(config_key_vec, kv.first);
-		FlatVector::GetData<string_t>(config_val_vec)[i] = StringVector::AddString(config_val_vec, kv.second);
-		i++;
+		FlatVector::GetData<string_t>(config_key_vec)[config_idx] = StringVector::AddString(config_key_vec, kv.first);
+		FlatVector::GetData<string_t>(config_val_vec)[config_idx] = StringVector::AddString(config_val_vec, kv.second);
+		config_idx++;
 	}
 	ListVector::SetListSize(config_vec, config_count);
 	auto &config_list_data = FlatVector::GetData<list_entry_t>(config_vec)[0];
@@ -208,9 +208,8 @@ static void IcebergLoadTableResponseFunction(ClientContext &context, TableFuncti
 	auto &prefix_vec = StructVector::GetEntries(cred_entry)[0];
 	auto &cred_config_vec = StructVector::GetEntries(cred_entry)[1];
 
-	for (idx_t i = 0; i < cred_count; i++) {
-		auto &cred = bind_data.storage_credentials[i];
-		idx_t struct_idx = i;
+	for (idx_t struct_idx = 0; struct_idx < cred_count; struct_idx++) {
+		auto &cred = bind_data.storage_credentials[struct_idx];
 
 		// prefix
 		FlatVector::GetData<string_t>(*prefix_vec)[struct_idx] = StringVector::AddString(*prefix_vec, cred.prefix);
@@ -222,11 +221,13 @@ static void IcebergLoadTableResponseFunction(ClientContext &context, TableFuncti
 		ListVector::Reserve(*cred_config_vec, inner_config_count);
 		auto &inner_key_vec = MapVector::GetKeys(*cred_config_vec);
 		auto &inner_val_vec = MapVector::GetValues(*cred_config_vec);
-		idx_t j = 0;
+		idx_t cred_config_idx = 0;
 		for (auto &kv : cred.config) {
-			FlatVector::GetData<string_t>(inner_key_vec)[j] = StringVector::AddString(inner_key_vec, kv.first);
-			FlatVector::GetData<string_t>(inner_val_vec)[j] = StringVector::AddString(inner_val_vec, kv.second);
-			j++;
+			FlatVector::GetData<string_t>(inner_key_vec)[cred_config_idx] =
+			    StringVector::AddString(inner_key_vec, kv.first);
+			FlatVector::GetData<string_t>(inner_val_vec)[cred_config_idx] =
+			    StringVector::AddString(inner_val_vec, kv.second);
+			cred_config_idx++;
 		}
 		ListVector::SetListSize(*cred_config_vec, inner_config_count);
 		auto &inner_list_data = FlatVector::GetData<list_entry_t>(*cred_config_vec)[struct_idx];
