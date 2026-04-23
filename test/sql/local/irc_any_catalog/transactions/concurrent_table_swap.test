@@ -1,5 +1,5 @@
-# name: test/sql/local/irc_any_catalog/table_properties/bank_transaction.test
-# group: [table_properties]
+# name: test/sql/local/irc_any_catalog/transactions/concurrent_table_swap.test
+# group: [transactions]
 
 require-env ICEBERG_SERVER_AVAILABLE
 
@@ -67,15 +67,6 @@ from my_datalake.default.accounts;
 ----
 1	Alice	1000.00
 2	Bob	500.00
-
-statement ok
-SET ca_cert_file = '~/.mitmproxy/mitmproxy-ca-cert.pem';
-
-statement ok
-CREATE SECRET http_proxy (
-    TYPE http,
-    HTTP_PROXY 'http://localhost:8878'
-);
 
 # --- con1: table migration ---
 statement ok con1
