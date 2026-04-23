@@ -143,8 +143,15 @@ static void SetIcebergSchemaPropertiesFunction(ClientContext &context, TableFunc
 	}
 
 	auto iceberg_schema = bind_data.iceberg_schema;
-	auto &iceberg_transaction = IcebergTransaction::Get(context, iceberg_schema->catalog);
+	iceberg_schema->LoadPropertiesFromIRCAPIIfNeeded(context);
 
+	// reflect changes to IcebergSchemaEntry
+	for (auto property : bind_data.properties) {
+		iceberg_schema->schema_info.properties[property.first] = property.second;
+	}
+
+	// populate removals to be sent to IRC API
+	auto &iceberg_transaction = IcebergTransaction::Get(context, iceberg_schema->catalog);
 	auto schema_key = iceberg_schema->GetSchemaKey();
 	if (iceberg_transaction.schema_property_updates.find(schema_key) ==
 	    iceberg_transaction.schema_property_updates.end()) {
@@ -178,9 +185,17 @@ static void RemoveIcebergSchemaPropertiesFunction(ClientContext &context, TableF
 	}
 
 	auto iceberg_schema = bind_data.iceberg_schema;
-	auto &iceberg_transaction = IcebergTransaction::Get(context, iceberg_schema->catalog);
+	iceberg_schema->LoadPropertiesFromIRCAPIIfNeeded(context);
 
 	auto schema_key = iceberg_schema->GetSchemaKey();
+
+	// reflect changes to IcebergSchemaEntry
+	for (auto property_to_remove : bind_data.remove_properties) {
+		iceberg_schema->schema_info.properties.erase(property_to_remove);
+	}
+
+	// populate removals to be sent to IRC API
+	auto &iceberg_transaction = IcebergTransaction::Get(context, iceberg_schema->catalog);
 	if (iceberg_transaction.schema_property_updates.find(schema_key) ==
 	    iceberg_transaction.schema_property_updates.end()) {
 		// not present, create one
@@ -208,13 +223,15 @@ static void GetIcebergSchemaPropertiesFunction(ClientContext &context, TableFunc
 		return;
 	}
 	auto iceberg_schema = bind_data.iceberg_schema;
+	iceberg_schema->LoadPropertiesFromIRCAPIIfNeeded(context);
+
 	auto schema_key = iceberg_schema->GetSchemaKey();
 
 	auto &iceberg_transaction = IcebergTransaction::Get(context, iceberg_schema->catalog);
 	auto current_schema_properties = iceberg_transaction.current_schema_properties.find(schema_key);
 	bool found_transaction_changes = current_schema_properties != iceberg_transaction.current_schema_properties.end();
 	auto &schema_properties =
-	    found_transaction_changes ? current_schema_properties->second : iceberg_schema->properties;
+	    found_transaction_changes ? current_schema_properties->second : iceberg_schema->schema_info.properties;
 
 	if (schema_properties.empty()) {
 		output.SetCardinality(0);

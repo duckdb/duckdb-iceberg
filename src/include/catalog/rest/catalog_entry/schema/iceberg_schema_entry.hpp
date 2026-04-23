@@ -1,6 +1,7 @@
 
 #pragma once
 
+#include "iceberg_schema_information.hpp"
 #include "duckdb/catalog/catalog_entry/schema_catalog_entry.hpp"
 #include "duckdb/common/enums/on_entry_not_found.hpp"
 
@@ -50,6 +51,7 @@ public:
 	string GetSchemaKey() const {
 		return this->catalog.GetName() + this->name;
 	};
+	void LoadPropertiesFromIRCAPIIfNeeded(ClientContext &context);
 
 private:
 	IcebergTableSet &GetCatalogSet(CatalogType type);
@@ -59,8 +61,7 @@ private:
 
 public:
 	IcebergTableSet tables;
-	case_insensitive_map_t<string> properties;
-	bool properties_loaded = false;
+	IcebergSchemaInformation schema_info;
 };
 
 } // namespace duckdb
