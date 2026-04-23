@@ -63,9 +63,11 @@ jobs:
       - name: Set local extension repo, Install iceberg from build/release/extension and remove require iceberg from tests
         if: inputs.local-extension-repo != ''
         run: |
+          # remove already installed extension if it is installed
+          rm ~/.duckdb/extensions/**/**/iceberg.*
           echo "LOCAL_EXTENSION_REPO=${{ inputs.local-extension-repo }}" >> $GITHUB_ENV
+          # check that we can load the extension
           ./build/release/duckdb -unsigned -c "LOAD 'build/release/extension/iceberg/iceberg.duckdb_extension';"
-          grep -rl "require iceberg" test/sql/ | xargs sed -i '/^require iceberg$/d'
 
       - name: Setup fixture
         run: |
