@@ -482,7 +482,7 @@ static Value WrittenFieldIds(const IcebergCopyInput &copy_input) {
 //===--------------------------------------------------------------------===//
 
 //! Get the logical type for a source column by source_id
-static LogicalType GetSourceColumnType(IcebergCopyInput &copy_input, uint64_t source_id) {
+static LogicalType GetSourceColumnType(const IcebergCopyInput &copy_input, uint64_t source_id) {
 	auto &columns = copy_input.schema.columns;
 	for (auto &col : columns) {
 		if (col->id == static_cast<int32_t>(source_id)) {
@@ -493,7 +493,7 @@ static LogicalType GetSourceColumnType(IcebergCopyInput &copy_input, uint64_t so
 }
 
 //! Create a column reference expression for the given column index
-static unique_ptr<Expression> CreateColumnReference(IcebergCopyInput &copy_input, const LogicalType &type,
+static unique_ptr<Expression> CreateColumnReference(const IcebergCopyInput &copy_input, const LogicalType &type,
                                                     idx_t column_index) {
 	if (copy_input.get_table_index.IsValid()) {
 		// logical plan generation: generate a bound column ref
@@ -510,7 +510,7 @@ static unique_ptr<Expression> CreateColumnReference(IcebergCopyInput &copy_input
 //! - months: date_diff('month', DATE '1970-01-01', source_column)
 //! - days: date_diff('day', DATE '1970-01-01', source_column)
 //! - hours: date_diff('hour', TIMESTAMP '1970-01-01', source_column)
-static unique_ptr<Expression> GetDateDiffFunction(ClientContext &context, IcebergCopyInput &copy_input,
+static unique_ptr<Expression> GetDateDiffFunction(ClientContext &context, const IcebergCopyInput &copy_input,
                                                   const string &date_part, uint64_t source_id) {
 	auto col_idx = GetColumnIndexBySourceId(copy_input.schema.columns, source_id);
 	auto col_type = GetSourceColumnType(copy_input, source_id);
@@ -537,7 +537,7 @@ static unique_ptr<Expression> GetDateDiffFunction(ClientContext &context, Iceber
 }
 
 //! Get an iceberg_bucket(N, col) expression for bucket partition transforms
-static unique_ptr<Expression> GetBucketExpression(ClientContext &context, IcebergCopyInput &copy_input,
+static unique_ptr<Expression> GetBucketExpression(ClientContext &context, const IcebergCopyInput &copy_input,
                                                   const IcebergPartitionSpecField &field) {
 	auto col_idx = GetColumnIndexBySourceId(copy_input.schema.columns, field.source_id);
 	auto col_type = GetSourceColumnType(copy_input, field.source_id);
@@ -557,7 +557,7 @@ static unique_ptr<Expression> GetBucketExpression(ClientContext &context, Iceber
 }
 
 //! Get an iceberg_truncate(W, col) expression for truncate partition transforms
-static unique_ptr<Expression> GetTruncateExpression(ClientContext &context, IcebergCopyInput &copy_input,
+static unique_ptr<Expression> GetTruncateExpression(ClientContext &context, const IcebergCopyInput &copy_input,
                                                     const IcebergPartitionSpecField &field) {
 	auto col_idx = GetColumnIndexBySourceId(copy_input.schema.columns, field.source_id);
 	auto col_type = GetSourceColumnType(copy_input, field.source_id);
@@ -577,7 +577,7 @@ static unique_ptr<Expression> GetTruncateExpression(ClientContext &context, Iceb
 }
 
 //! Get the partition expression for a partition field based on its transform type
-static unique_ptr<Expression> GetPartitionExpression(ClientContext &context, IcebergCopyInput &copy_input,
+static unique_ptr<Expression> GetPartitionExpression(ClientContext &context, const IcebergCopyInput &copy_input,
                                                      const IcebergPartitionSpecField &field) {
 	switch (field.transform.Type()) {
 	case IcebergTransformType::IDENTITY: {
@@ -605,7 +605,7 @@ static unique_ptr<Expression> GetPartitionExpression(ClientContext &context, Ice
 }
 
 //! Generate partition expressions and configure copy options for partitioned writes
-static void GeneratePartitionExpressions(ClientContext &context, IcebergCopyInput &copy_input,
+static void GeneratePartitionExpressions(ClientContext &context, const IcebergCopyInput &copy_input,
                                          IcebergCopyOptions &result) {
 	D_ASSERT(copy_input.partition_spec);
 	auto &spec = *copy_input.partition_spec;
@@ -701,7 +701,7 @@ static const idx_t ICEBERG_TABLE_PROPERTY_MAPPING_SIZE =
 
 } // namespace
 
-IcebergCopyOptions IcebergInsert::GetCopyOptions(ClientContext &context, IcebergCopyInput &copy_input) {
+IcebergCopyOptions IcebergInsert::GetCopyOptions(ClientContext &context, const IcebergCopyInput &copy_input) {
 	auto info = make_uniq<CopyInfo>();
 	info->file_path = copy_input.data_path;
 
@@ -825,7 +825,8 @@ static void GenerateProjection(ClientContext &context, PhysicalPlanGenerator &pl
 }
 
 PhysicalOperator &IcebergInsert::PlanCopyForInsert(ClientContext &context, PhysicalPlanGenerator &planner,
-                                                   IcebergCopyInput &copy_input, optional_ptr<PhysicalOperator> plan) {
+                                                   const IcebergCopyInput &copy_input,
+                                                   optional_ptr<PhysicalOperator> plan) {
 	auto copy_options = GetCopyOptions(context, copy_input);
 
 	// If there are partition transform expressions (non-identity partitions), push a projection

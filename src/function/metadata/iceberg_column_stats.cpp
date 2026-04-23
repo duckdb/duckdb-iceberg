@@ -60,7 +60,8 @@ static unique_ptr<FunctionData> IcebergColumnStatsBind(ClientContext &context, T
 	// return a TableRef that contains the scans for the
 	auto ret = make_uniq<IcebergColumnStatsBindData>();
 
-	FileSystem &fs = FileSystem::GetFileSystem(context);
+	auto &fs = FileSystem::GetFileSystem(context);
+	auto caching_fs = make_shared_ptr<CachingFileSystemWrapper>(FileSystem::GetFileSystem(context), *context.db);
 	auto input_string = input.inputs[0].ToString();
 	auto filename = IcebergUtils::GetStorageLocation(context, input_string);
 
@@ -103,7 +104,8 @@ static unique_ptr<FunctionData> IcebergColumnStatsBind(ClientContext &context, T
 	}
 
 	auto iceberg_meta_path = IcebergTableMetadata::GetMetaDataPath(context, filename, fs, options);
-	auto table_metadata = IcebergTableMetadata::Parse(iceberg_meta_path, fs, options.metadata_compression_codec);
+	auto table_metadata =
+	    IcebergTableMetadata::Parse(iceberg_meta_path, *caching_fs, options.metadata_compression_codec);
 	ret->metadata = IcebergTableMetadata::FromTableMetadata(table_metadata);
 
 	ret->snapshot_to_scan = ret->metadata.GetSnapshot(options.snapshot_lookup);

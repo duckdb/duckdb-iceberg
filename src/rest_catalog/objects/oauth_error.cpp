@@ -38,7 +38,7 @@ string OAuthError::TryFromJSON(yyjson_val *obj) {
 		}
 	}
 	auto error_description_val = yyjson_obj_get(obj, "error_description");
-	if (error_description_val) {
+	if (error_description_val && !yyjson_is_null(error_description_val)) {
 		has_error_description = true;
 		if (yyjson_is_str(error_description_val)) {
 			error_description = yyjson_get_str(error_description_val);
@@ -49,7 +49,7 @@ string OAuthError::TryFromJSON(yyjson_val *obj) {
 		}
 	}
 	auto error_uri_val = yyjson_obj_get(obj, "error_uri");
-	if (error_uri_val) {
+	if (error_uri_val && !yyjson_is_null(error_uri_val)) {
 		has_error_uri = true;
 		if (yyjson_is_str(error_uri_val)) {
 			error_uri = yyjson_get_str(error_uri_val);

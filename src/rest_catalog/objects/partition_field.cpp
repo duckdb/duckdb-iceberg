@@ -59,7 +59,7 @@ string PartitionField::TryFromJSON(yyjson_val *obj) {
 		}
 	}
 	auto field_id_val = yyjson_obj_get(obj, "field-id");
-	if (field_id_val) {
+	if (field_id_val && !yyjson_is_null(field_id_val)) {
 		has_field_id = true;
 		if (yyjson_is_int(field_id_val)) {
 			field_id = yyjson_get_int(field_id_val);

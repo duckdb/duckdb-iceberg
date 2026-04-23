@@ -20,16 +20,16 @@ class IcebergSchemaEntry;
 
 class MetadataCacheValue {
 public:
-	MetadataCacheValue(transaction_t creator, const system_clock::time_point expires_at,
+	MetadataCacheValue(transaction_t creator, timestamp_t expire_timestamp,
 	                   unique_ptr<const rest_api_objects::LoadTableResult> load_table_result)
-	    : creator(creator), expires_at(expires_at), load_table_result(std::move(load_table_result)) {
+	    : creator(creator), expire_timestamp(expire_timestamp), load_table_result(std::move(load_table_result)) {
 	}
 
 public:
 	//! Store the id of the transaction that added the entry
 	transaction_t creator;
 	//! The timestamp until when this entry is valid
-	const system_clock::time_point expires_at;
+	timestamp_t expire_timestamp;
 	//! The payload of the cache entry
 	unique_ptr<const rest_api_objects::LoadTableResult> load_table_result;
 };
@@ -45,26 +45,32 @@ public:
 	}
 
 	//! NOTE: lock needs to be held by the caller until the result goes out of scope
-	optional_ptr<MetadataCacheValue> Get(const string &table_key, lock_guard<mutex> &lock, bool validate_cache = true) {
+	optional_ptr<MetadataCacheValue> Get(ClientContext &context, const string &table_key, lock_guard<mutex> &lock,
+	                                     bool validate_cache = true) {
 		(void)lock;
 		auto it = tables.find(table_key);
 		if (it == tables.end()) {
 			return nullptr;
 		}
+
+		auto &meta_transaction = MetaTransaction::Get(context);
+		auto transaction_start = meta_transaction.GetCurrentTransactionStartTimestamp();
+
 		auto &entry = it->second;
-		if (validate_cache && system_clock::now() > entry.expires_at) {
+		if (validate_cache && transaction_start > entry.expire_timestamp) {
 			// cached value has expired
 			return nullptr;
 		}
 		return entry;
 	}
 	void SetOrOverwriteInternal(lock_guard<mutex> &guard, ClientContext &context, const string &table_key,
-	                            system_clock::time_point expires_at,
+	                            timestamp_t expire_timestamp,
 	                            unique_ptr<const rest_api_objects::LoadTableResult> load_table_result) {
 		// erase load table result if it exists.
 		tables.erase(table_key);
 		auto &meta_transaction = MetaTransaction::Get(context);
-		tables.emplace(table_key, MetadataCacheValue(meta_transaction.global_transaction_id, expires_at,
+
+		tables.emplace(table_key, MetadataCacheValue(meta_transaction.global_transaction_id, expire_timestamp,
 		                                             std::move(load_table_result)));
 	}
 	void SetOrOverwrite(ClientContext &context, const string &table_key,
@@ -78,7 +84,9 @@ public:
 		} else {
 			expires_at = system_clock::time_point::min();
 		}
-		SetOrOverwriteInternal(guard, context, table_key, expires_at, std::move(load_table_result));
+		auto epoch_micros = duration_cast<microseconds>(expires_at.time_since_epoch()).count();
+		auto expire_timestamp = Timestamp::FromEpochMicroSeconds(epoch_micros);
+		SetOrOverwriteInternal(guard, context, table_key, expire_timestamp, std::move(load_table_result));
 	}
 	void ExpireInternal(lock_guard<mutex> &guard, ClientContext &context, const string &table_key) {
 		auto &meta_transaction = MetaTransaction::Get(context);
@@ -174,6 +182,8 @@ public:
 	                             PhysicalOperator &plan) override;
 	PhysicalOperator &PlanUpdate(ClientContext &context, PhysicalPlanGenerator &planner, LogicalUpdate &op,
 	                             PhysicalOperator &plan) override;
+	PhysicalOperator &PlanMergeInto(ClientContext &context, PhysicalPlanGenerator &planner, LogicalMergeInto &op,
+	                                PhysicalOperator &plan) override;
 	unique_ptr<LogicalOperator> BindCreateIndex(Binder &binder, CreateStatement &stmt, TableCatalogEntry &table,
 	                                            unique_ptr<LogicalOperator> plan) override;
 	DatabaseSize GetDatabaseSize(ClientContext &context) override;

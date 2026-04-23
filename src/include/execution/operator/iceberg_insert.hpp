@@ -161,8 +161,8 @@ public:
 	                          OperatorSinkFinalizeInput &input) const override;
 	unique_ptr<GlobalSinkState> GetGlobalSinkState(ClientContext &context) const override;
 	static PhysicalOperator &PlanCopyForInsert(ClientContext &context, PhysicalPlanGenerator &planner,
-	                                           IcebergCopyInput &copy_input, optional_ptr<PhysicalOperator> plan);
-	static IcebergCopyOptions GetCopyOptions(ClientContext &context, IcebergCopyInput &copy_input);
+	                                           const IcebergCopyInput &copy_input, optional_ptr<PhysicalOperator> plan);
+	static IcebergCopyOptions GetCopyOptions(ClientContext &context, const IcebergCopyInput &copy_input);
 
 	static PhysicalOperator &PlanInsert(ClientContext &context, PhysicalPlanGenerator &planner,
 	                                    IcebergTableEntry &table);

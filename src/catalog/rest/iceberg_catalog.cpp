@@ -519,19 +519,15 @@ void IcebergCatalog::SetAWSCatalogOptions(IcebergAttachOptions &attach_options,
 unique_ptr<Catalog> IcebergCatalog::Attach(optional_ptr<StorageExtensionInfo> storage_info, ClientContext &context,
                                            AttachedDatabase &db, const string &name, AttachInfo &info,
                                            AttachOptions &options) {
-	IRCEndpointBuilder endpoint_builder;
-
-	string endpoint_type_string;
-	string authorization_type_string;
-	string access_mode_string;
-
 	IcebergAttachOptions attach_options;
 	attach_options.warehouse = info.path;
 	attach_options.name = name;
 
 	// check if we have a secret provided
-	string secret_name;
 	string default_schema;
+	string endpoint_type_string;
+	string authorization_type_string;
+	string access_mode_string;
 	case_insensitive_set_t set_by_attach_options;
 	//! First handle generic attach options
 	for (auto &entry : info.options) {

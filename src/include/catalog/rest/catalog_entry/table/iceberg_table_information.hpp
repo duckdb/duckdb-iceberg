@@ -1,6 +1,7 @@
 #pragma once
 
 #include "duckdb/catalog/catalog_entry.hpp"
+#include "duckdb/storage/caching_file_system_wrapper.hpp"
 
 #include "catalog/rest/catalog_entry/table/iceberg_table_entry.hpp"
 #include "core/metadata/manifest/iceberg_manifest.hpp"
@@ -53,11 +54,13 @@ public:
 
 	static string GetTableKey(const vector<string> &namespace_items, const string &table_name);
 	string GetTableKey() const;
+	IcebergTableMetadata CreateMetadataFromLog(ClientContext &context, int64_t transaction_start_millis,
+	                                           string &metadata_path) const;
 	// we pass the transaction, because we are only allowed to copy table information state provded by the catalog
 	// from before our transaction start time.
 	IcebergTableInformation Copy(IcebergTransaction &iceberg_transaction) const;
 	// This copy is used for deletes, where we don't care about valid table state
-	IcebergTableInformation Copy() const;
+	IcebergTableInformation Copy(ClientContext &context) const;
 	void InitSchemaVersions();
 
 	IcebergSnapshotLookup GetSnapshotLookup(IcebergTransaction &iceberg_transaction) const;
