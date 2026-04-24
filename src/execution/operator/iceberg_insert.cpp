@@ -933,10 +933,30 @@ PhysicalOperator &IcebergCatalog::PlanCreateTableAs(ClientContext &context, Phys
 	auto &ic_schema_entry = schema.Cast<IcebergSchemaEntry>();
 	auto &catalog = ic_schema_entry.catalog;
 	auto transaction = catalog.GetCatalogTransaction(context);
+	auto &iceberg_transaction = IcebergTransaction::Get(context, catalog);
 
-	// create the table. Takes care of committing to rest catalog and getting the metadata location etc.
-	// setting the schema
-	auto table = ic_schema_entry.CreateTable(transaction, context, *op.info);
+	optional_ptr<IcebergTableInformation> transaction_created_table;
+	auto table_key = IcebergTableInformation::GetTableKey(ic_schema_entry.namespace_items, op.info->Base().table);
+	for (auto &update : iceberg_transaction.transaction_updates) {
+		if (update->type != IcebergTransactionUpdateType::ALTER) {
+			continue;
+		}
+		auto &alter = update->Cast<IcebergTransactionAlterUpdate>();
+		transaction_created_table = alter.GetCreatedTable(table_key);
+		if (transaction_created_table) {
+			break;
+		}
+	}
+
+	optional_ptr<CatalogEntry> table;
+	if (transaction_created_table) {
+		// Prepared statements can be rebound before execution. Reuse the table staged during the first bind.
+		table = transaction_created_table->GetLatestSchema(context);
+	} else {
+		// create the table. Takes care of committing to rest catalog and getting the metadata location etc.
+		// setting the schema
+		table = ic_schema_entry.CreateTable(transaction, context, *op.info);
+	}
 	if (!table) {
 		throw InternalException("Table could not be created");
 	}
