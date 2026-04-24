@@ -179,7 +179,7 @@ static void RemoveIcebergSchemaPropertiesFunction(ClientContext &context, TableF
 	if (!bind_data.iceberg_schema) {
 		return;
 	}
-	if (global_state.properties_set) {
+	if (global_state.properties_removed) {
 		output.SetCardinality(0);
 		return;
 	}

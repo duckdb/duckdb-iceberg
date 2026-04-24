@@ -2,6 +2,10 @@
 # group: [schema_properties]
 
 statement ok
+CREATE SCHEMA IF NOT EXISTS my_datalake.default;
+
+
+statement ok
 SET ca_cert_file = '~/.mitmproxy/mitmproxy-ca-cert.pem';
 
 statement ok
@@ -10,21 +14,12 @@ CREATE SECRET http_proxy (
     HTTP_PROXY 'http://localhost:8878'
 );
 
-statement ok
-CREATE SCHEMA IF NOT EXISTS my_datalake.default;
-
-statement ok
-SELECT schema_name FROM information_schema.schemata;
-
-statement ok
-SELECT * FROM information_schema.columns WHERE table_catalog = 'my_datalake';
-
 query II
 CALL iceberg_schema_properties(my_datalake.default);
 ----
 location	s3://warehouse/default
 
-statement ok
+query I
 CALL set_iceberg_schema_properties(my_datalake.default,
     {
     'myprop1' : '1',
@@ -32,6 +27,8 @@ CALL set_iceberg_schema_properties(my_datalake.default,
     'myprop3' : '3',
     }
 );
+----
+3
 
 query II
 CALL iceberg_schema_properties(my_datalake.default);
@@ -41,8 +38,10 @@ myprop3	3
 myprop1	1
 location	s3://warehouse/default
 
-statement ok
+query I
 CALL remove_iceberg_schema_properties(my_datalake.default, ['myprop2']);
+----
+0
 
 query II
 CALL iceberg_schema_properties(my_datalake.default);
@@ -50,3 +49,8 @@ CALL iceberg_schema_properties(my_datalake.default);
 myprop3	3
 myprop1	1
 location	s3://warehouse/default
+
+query I
+CALL remove_iceberg_schema_properties(my_datalake.default, ['non_exisiting_prop']);
+----
+0
