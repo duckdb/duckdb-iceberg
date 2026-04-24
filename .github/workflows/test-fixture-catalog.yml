@@ -109,7 +109,7 @@ jobs:
           ICEBERG_SERVER_AVAILABLE: 1
         run: |
           ./build/release/test/unittest --order lex "$PWD/test/*" --list-test-names-only || true
-          ./build/release/test/unittest --order lex "$PWD/test/*"
+          ./build/release/test/unittest --order lex "$PWD/test/*" --autoloading available
 
       - name: Test reads with PyIceberg
         env:
@@ -128,4 +128,4 @@ jobs:
       - name: Run all duckdb/duckdb tests
         run: |
           ./build/release/test/unittest --order lex --test-dir duckdb "test/sql/*" --list-test-names-only || true
-          ./build/release/test/unittest --order lex --test-dir duckdb "test/sql/*" --test-config test/configs/fixture_duckdb_tests.json
+          ./build/release/test/unittest --order lex --test-dir duckdb "test/sql/*" --test-config test/configs/fixture_duckdb_tests.json --autoloading available
