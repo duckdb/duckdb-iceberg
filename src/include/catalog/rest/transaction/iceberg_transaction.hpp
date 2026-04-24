@@ -63,8 +63,8 @@ private:
 };
 
 struct SchemaPropertyUpdates {
-	case_insensitive_map_t<string> schema_property_updates;
-	set<string> schema_property_removals;
+	case_insensitive_map_t<string> updates;
+	set<string> removals;
 };
 
 class IcebergTransaction : public Transaction {

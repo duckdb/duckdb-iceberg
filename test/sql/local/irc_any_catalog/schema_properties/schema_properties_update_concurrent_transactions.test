@@ -1,0 +1,64 @@
+# name: test/sql/local/irc_any_catalog/schema_properties/schema_properties_update_concurrent_transactions.test
+# group: [schema_properties]
+
+statement ok
+DROP SCHEMA IF EXISTS my_datalake.myschema124;
+
+statement ok
+CREATE SCHEMA IF NOT EXISTS my_datalake.myschema124;
+
+query II
+CALL iceberg_schema_properties(my_datalake.myschema124);
+----
+location	s3://warehouse/myschema124
+
+query I
+CALL set_iceberg_schema_properties(my_datalake.myschema124,
+    {
+    'counter' : '10',
+    }
+);
+----
+2
+
+
+statement ok con1
+BEGIN;
+
+statement ok con2
+BEGIN;
+
+query II con1
+CALL iceberg_schema_properties(my_datalake.myschema124);
+----
+counter	10
+location	s3://warehouse/myschema124
+
+# con2 decreases the counter by 1
+
+query I con2
+CALL set_iceberg_schema_properties(my_datalake.myschema124,
+    {
+    'counter' : '9',
+    }
+);
+----
+2
+
+statement ok con2
+COMMIT;
+
+
+# con1 wants to do counter++ , but they don't con2 decreased it.
+# there's nothing we can do to prevent this, this is just a limitation of Iceberg
+query I con1
+CALL set_iceberg_schema_properties(my_datalake.myschema124,
+    {
+    'counter' : '11',
+    }
+);
+----
+2
+
+statement ok con1
+COMMIT;

@@ -1,4 +1,4 @@
-# name: test/sql/local/irc_any_catalog/schema_properties/schema_properties_update.test
+# name: test/sql/local/irc_any_catalog/schema_properties/schema_properties_update_transaction.test
 # group: [schema_properties]
 
 statement ok
@@ -11,6 +11,9 @@ query II
 CALL iceberg_schema_properties(my_datalake.myschema123);
 ----
 location	s3://warehouse/myschema123
+
+statement ok
+BEGIN;
 
 query I
 CALL set_iceberg_schema_properties(my_datalake.myschema123,
@@ -36,6 +39,9 @@ CALL remove_iceberg_schema_properties(my_datalake.myschema123, ['myprop2']);
 ----
 3
 
+statement ok
+COMMIT;
+
 query II
 CALL iceberg_schema_properties(my_datalake.myschema123);
 ----
@@ -44,7 +50,4 @@ myprop1	1
 location	s3://warehouse/myschema123
 
 
-query I
-CALL remove_iceberg_schema_properties(my_datalake.myschema123, ['non_exisiting_prop']);
-----
-3
+

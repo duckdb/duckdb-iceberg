@@ -587,11 +587,11 @@ void IcebergTransaction::DoSchemaPropertyUpdates(ClientContext &context) {
 		yyjson_mut_doc_set_root(doc, root_object);
 
 		auto removal_arr = yyjson_mut_obj_add_arr(doc, root_object, "removals");
-		for (auto &removal : schema_property_updates.schema_property_removals) {
+		for (auto &removal : schema_property_updates.removals) {
 			yyjson_mut_arr_add_strcpy(doc, removal_arr, removal.c_str());
 		}
 		auto updates_arr = yyjson_mut_obj_add_obj(doc, root_object, "updates");
-		for (auto &update : schema_property_updates.schema_property_updates) {
+		for (auto &update : schema_property_updates.updates) {
 			yyjson_mut_obj_add_strcpy(doc, updates_arr, update.first.c_str(), update.second.c_str());
 		}
 		auto create_body = JsonDocToString(std::move(doc_p));
