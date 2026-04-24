@@ -1,0 +1,106 @@
+# name: test/sql/local/irc_any_catalog/transactions/concurrent_table_swap.test
+# group: [transactions]
+
+require-env ICEBERG_SERVER_AVAILABLE
+
+require-env SECRETS_CREATED_AND_CATALOG_ATTACHED
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+require core_functions
+
+statement ok
+CALL enable_logging('HTTP');
+
+statement ok
+set logging_level='debug';
+
+statement ok
+CREATE SCHEMA IF NOT EXISTS my_datalake.default;
+
+statement ok
+drop table if exists my_datalake.default.accounts;
+
+statement ok
+drop table if exists my_datalake.default.external_accounts;
+
+# --- Setup: two distinct tables ---
+statement ok
+create table my_datalake.default.accounts (
+    account_id INTEGER,
+    owner      VARCHAR,
+    balance    DECIMAL(18,2)
+);
+
+statement ok
+create table my_datalake.default.external_accounts (
+    account_id INTEGER,
+    owner      VARCHAR,
+    balance    DECIMAL(18,2)
+);
+
+statement ok
+insert into my_datalake.default.accounts values
+    (1, 'Alice', 1000.00),
+    (2, 'Bob',    500.00);
+
+statement ok
+insert into my_datalake.default.external_accounts values
+    (1, 'CorpX',  99000.00),
+    (2, 'CorpY',  42000.00);
+
+statement ok con1
+BEGIN;
+
+statement ok con2
+BEGIN;
+
+query III con2
+from my_datalake.default.accounts;
+----
+1	Alice	1000.00
+2	Bob	500.00
+
+# --- con1: table migration ---
+statement ok con1
+DROP TABLE my_datalake.default.accounts;
+
+statement ok con1
+ALTER TABLE my_datalake.default.external_accounts RENAME TO accounts;
+
+# --- con2: funds transfer ---
+# Alice wants to pay 500 to Bob
+# con2 still thinks this is Alice and Bob, but it's actually changing the corporations now
+statement ok con2
+UPDATE my_datalake.default.accounts
+SET balance = balance - 500.00
+WHERE account_id = 1;
+
+statement ok con2
+UPDATE my_datalake.default.accounts
+SET balance = balance + 500.00
+WHERE account_id = 2;
+
+statement ok con1
+COMMIT;
+
+# con2 must be rejected, the table it resolved no longer exists under that identity
+statement error con2
+COMMIT;
+----
+TransactionContext Error: Failed to commit: Failed to commit Iceberg transaction
+
+# --- Verify final state ---
+query III
+SELECT account_id, owner, balance
+FROM my_datalake.default.accounts
+ORDER BY account_id;
+----
+1	CorpX	99000.00
+2	CorpY	42000.00
