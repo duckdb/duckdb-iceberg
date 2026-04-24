@@ -348,10 +348,18 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 
 			IcebergDefaultBinder binder(context);
 			auto default_constant_value = binder.Evaluate(default_value, new_iceberg_column->type);
-			new_iceberg_column->initial_default = make_uniq<Value>(default_constant_value);
-			if (updated_table.table_metadata.iceberg_version >= 3) {
-				new_iceberg_column->write_default = make_uniq<Value>(default_constant_value);
+			if (new_iceberg_column->type.id() == LogicalTypeId::VARIANT ||
+			    new_iceberg_column->type.id() == LogicalTypeId::GEOMETRY) {
+				if (!default_constant_value.IsNull()) {
+					throw InvalidInputException("Columns of type %s must default to null",
+					                            new_iceberg_column->type.ToString());
+				}
 			}
+			if (updated_table.table_metadata.iceberg_version < 3 && !default_constant_value.IsNull()) {
+				throw InvalidInputException("non-null DEFAULT values are not supported for <V3 tables");
+			}
+			new_iceberg_column->initial_default = make_uniq<Value>(default_constant_value);
+			new_iceberg_column->write_default = make_uniq<Value>(default_constant_value);
 		}
 
 		new_iceberg_column->required = false;
@@ -571,13 +579,20 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 			                       column_name, table_entry.name);
 		}
 		auto &column = *column_p;
-		if (updated_table.table_metadata.iceberg_version < 3) {
-			throw NotImplementedException("SET DEFAULT is not supported on tables < V3");
-		}
 
 		IcebergDefaultBinder binder(context);
 		auto default_constant_value = binder.Evaluate(expression.get(), column.type);
-		column.write_default = make_uniq<Value>(default_constant_value);
+		if (column.type.id() == LogicalTypeId::VARIANT || column.type.id() == LogicalTypeId::GEOMETRY) {
+			if (!default_constant_value.IsNull()) {
+				throw InvalidInputException("Columns of type %s must default to null", column.type.ToString());
+			}
+		}
+		if (updated_table.table_metadata.iceberg_version < 3 && !default_constant_value.IsNull()) {
+			throw InvalidInputException("non-null DEFAULT values are not supported for <V3 tables");
+		}
+		if (updated_table.table_metadata.iceberg_version >= 3) {
+			column.write_default = make_uniq<Value>(default_constant_value);
+		}
 
 		auto new_schema_id = new_schema->schema_id;
 

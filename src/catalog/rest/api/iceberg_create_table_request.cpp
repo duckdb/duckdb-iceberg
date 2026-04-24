@@ -258,10 +258,16 @@ shared_ptr<IcebergTableSchema> IcebergCreateTableRequest::CreateIcebergSchema(
 		if (column_def.HasDefaultValue()) {
 			auto &default_expr = column_def.DefaultValue();
 			auto val = binder.Evaluate(default_expr, logical_type);
+			if (logical_type.id() == LogicalTypeId::VARIANT || logical_type.id() == LogicalTypeId::GEOMETRY) {
+				if (!val.IsNull()) {
+					throw InvalidInputException("Columns of type %s must default to null", logical_type.ToString());
+				}
+			}
 			if (table_metadata.iceberg_version < 3 && !val.IsNull()) {
 				throw InvalidInputException("non-null DEFAULT values are not supported for <V3 tables");
 			}
 			iceberg_column_def->initial_default = make_uniq<Value>(val);
+			iceberg_column_def->write_default = make_uniq<Value>(val);
 		}
 		schema->columns.push_back(std::move(iceberg_column_def));
 	}
