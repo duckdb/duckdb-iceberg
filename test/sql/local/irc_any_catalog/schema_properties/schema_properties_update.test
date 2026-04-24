@@ -1,7 +1,7 @@
 # name: test/sql/local/irc_any_catalog/schema_properties/schema_properties_update.test
 # group: [schema_properties]
 
-IIIstatement ok
+statement ok
 SET ca_cert_file = '~/.mitmproxy/mitmproxy-ca-cert.pem';
 
 statement ok
@@ -19,6 +19,11 @@ SELECT schema_name FROM information_schema.schemata;
 statement ok
 SELECT * FROM information_schema.columns WHERE table_catalog = 'my_datalake';
 
+query II
+CALL iceberg_schema_properties(my_datalake.default);
+----
+location	s3://warehouse/default
+
 statement ok
 CALL set_iceberg_schema_properties(my_datalake.default,
     {
@@ -27,3 +32,21 @@ CALL set_iceberg_schema_properties(my_datalake.default,
     'myprop3' : '3',
     }
 );
+
+query II
+CALL iceberg_schema_properties(my_datalake.default);
+----
+myprop2	2
+myprop3	3
+myprop1	1
+location	s3://warehouse/default
+
+statement ok
+CALL remove_iceberg_schema_properties(my_datalake.default, ['myprop2']);
+
+query II
+CALL iceberg_schema_properties(my_datalake.default);
+----
+myprop3	3
+myprop1	1
+location	s3://warehouse/default
