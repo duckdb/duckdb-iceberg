@@ -110,7 +110,7 @@ jobs:
           ICEBERG_SERVER_AVAILABLE: 1
         run: |
           ./build/release/test/unittest --order lex "$PWD/test/*" --list-test-names-only || true
-          ./build/release/test/unittest --order lex "$PWD/test/*" --autoloading available
+          ./build/release/test/unittest --order lex "$PWD/test/*"
 
       - name: Test reads with PyIceberg
         if: inputs.local-extension-repo == ''
