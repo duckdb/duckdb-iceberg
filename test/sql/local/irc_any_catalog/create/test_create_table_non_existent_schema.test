@@ -1,0 +1,50 @@
+# name: test/sql/local/irc_any_catalog/create/test_create_table_non_existent_schema.test
+# description: test create table
+# group: [create]
+
+require-env ICEBERG_SERVER_AVAILABLE
+
+require-env SECRETS_CREATED_AND_CATALOG_ATTACHED
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+CALL enable_logging('HTTP');
+
+statement ok
+set logging_level='debug'
+
+# cleanup
+statement ok
+DROP TABLE IF EXISTS my_datalake.non_existent_schema.create_table_t1;
+
+statement ok
+DROP SCHEMA IF EXISTS my_datalake.now_this_schema_exists;
+
+# test
+statement error
+create table my_datalake.non_existent_schema.create_table_t1 (a int, b varchar);
+----
+Catalog Error: Schema with name "non_existent_schema" not found
+
+# transaction test
+statement ok
+BEGIN;
+
+statement ok
+create schema if not exists my_datalake.now_this_schema_exists;
+
+statement ok
+create table my_datalake.now_this_schema_exists.create_table_t1 (a int, b varchar);
+
+statement ok
+COMMIT;
