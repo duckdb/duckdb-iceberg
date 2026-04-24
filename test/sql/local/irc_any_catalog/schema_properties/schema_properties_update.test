@@ -7,15 +7,6 @@ DROP SCHEMA IF EXISTS my_datalake.myschema123;
 statement ok
 CREATE SCHEMA IF NOT EXISTS my_datalake.myschema123;
 
-statement ok
-SET ca_cert_file = '~/.mitmproxy/mitmproxy-ca-cert.pem';
-
-statement ok
-CREATE SECRET http_proxy (
-    TYPE http,
-    HTTP_PROXY 'http://localhost:8878'
-);
-
 query II
 CALL iceberg_schema_properties(my_datalake.myschema123);
 ----
