@@ -62,6 +62,11 @@ private:
 	IcebergTableStatus status;
 };
 
+struct SchemaPropertyUpdates {
+	case_insensitive_map_t<string> updates;
+	set<string> removals;
+};
+
 class IcebergTransaction : public Transaction {
 public:
 	IcebergTransaction(IcebergCatalog &ic_catalog, TransactionManager &manager, ClientContext &context);
@@ -80,6 +85,7 @@ public:
 	void DoTableRename(IcebergTransactionRenameUpdate &rename_update, ClientContext &context);
 	void DoSchemaCreates(ClientContext &context);
 	void DoSchemaDeletes(ClientContext &context);
+	void DoSchemaPropertyUpdates(ClientContext &context);
 	IcebergCatalog &GetCatalog();
 	void DropSecrets(ClientContext &context);
 	TableTransactionInfo GetTransactionRequest(IcebergTransactionAlterUpdate &alter_update, ClientContext &context);
@@ -105,6 +111,7 @@ public:
 	vector<unique_ptr<IcebergTransactionUpdate>> transaction_updates;
 	//! The latest state of a table (either points into 'transaction_updates' or 'tables')
 	case_insensitive_map_t<IcebergTransactionTableState> current_table_data;
+	case_insensitive_map_t<case_insensitive_map_t<string>> current_schema_properties;
 
 	unordered_set<string> created_schemas;
 	unordered_set<string> deleted_schemas;
@@ -116,6 +123,8 @@ public:
 	case_insensitive_set_t created_secrets;
 	case_insensitive_set_t looked_up_entries;
 	mutex lock;
+
+	case_insensitive_map_t<SchemaPropertyUpdates> schema_property_updates;
 };
 
 void ApplyTableUpdate(IcebergTableInformation &table_info, IcebergTransaction &iceberg_transaction,

@@ -31,6 +31,7 @@ public:
 	static string GetFullPath(const string &iceberg_path, const string &relative_file_path, FileSystem &fs);
 	static string GetStorageLocation(ClientContext &context, const string &input);
 	static optional_ptr<CatalogEntry> GetTableEntry(ClientContext &context, string &input_string);
+	static optional_ptr<SchemaCatalogEntry> GetSchemaEntry(ClientContext &context, string &input_string);
 	static idx_t CountOccurrences(const string &input, const string &to_find);
 	static CopyFunctionCatalogEntry &GetCopyFunction(ClientContext &context, const string &name);
 };

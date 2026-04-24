@@ -14,7 +14,7 @@
 #include "duckdb/planner/tableref/bound_at_clause.hpp"
 
 #include "catalog/rest/iceberg_catalog.hpp"
-#include "catalog/rest/catalog_entry/iceberg_schema_entry.hpp"
+#include "catalog/rest/catalog_entry/schema/iceberg_schema_entry.hpp"
 #include "catalog/rest/api/catalog_api.hpp"
 #include "planning/iceberg_multi_file_reader.hpp"
 #include "planning/iceberg_multi_file_reader.hpp"

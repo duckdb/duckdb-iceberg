@@ -10,6 +10,7 @@
 #include "catalog/rest/catalog_entry/table/iceberg_table_entry.hpp"
 #include "catalog/rest/catalog_entry/table/iceberg_table_information.hpp"
 #include "core/metadata/iceberg_table_metadata.hpp"
+#include "duckdb/catalog/catalog_entry_retriever.hpp"
 
 namespace duckdb {
 
@@ -118,6 +119,28 @@ optional_ptr<CatalogEntry> IcebergUtils::GetTableEntry(ClientContext &context, s
 	}
 	default:
 		throw InvalidInputException("Too many identifiers in table name %s", input_string);
+	}
+}
+
+optional_ptr<SchemaCatalogEntry> IcebergUtils::GetSchemaEntry(ClientContext &context, string &input_string) {
+	auto qualified_name = QualifiedName::ParseComponents(input_string);
+	auto default_db = DatabaseManager::GetDefaultDatabase(context);
+
+	switch (qualified_name.size()) {
+	case 2: {
+		// input: catalog.schema
+		auto lookup_info = EntryLookupInfo(CatalogType::SCHEMA_ENTRY, qualified_name[1]);
+		auto retriever = CatalogEntryRetriever(context);
+		return retriever.GetSchema(qualified_name[0], lookup_info, OnEntryNotFound::THROW_EXCEPTION);
+	}
+	case 1: {
+		// input: schema
+		// we assume the catalog from context
+		auto &catalog = Catalog::GetCatalog(context, default_db);
+		return catalog.GetSchema(context, qualified_name[0], OnEntryNotFound::THROW_EXCEPTION);
+	}
+	default:
+		throw InvalidInputException("Too many identifiers in schema name %s", input_string);
 	}
 }
 

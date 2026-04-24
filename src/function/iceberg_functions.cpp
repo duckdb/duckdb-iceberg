@@ -19,6 +19,9 @@ vector<TableFunctionSet> IcebergFunctions::GetTableFunctions(ExtensionLoader &lo
 	functions.push_back(GetIcebergTablePropertiesFunctions());
 	functions.push_back(SetIcebergTablePropertiesFunctions());
 	functions.push_back(RemoveIcebergTablePropertiesFunctions());
+	functions.push_back(GetIcebergSchemaPropertiesFunctions());
+	functions.push_back(SetIcebergSchemaPropertiesFunctions());
+	functions.push_back(RemoveIcebergSchemaPropertiesFunctions());
 	functions.push_back(GetIcebergToDuckLakeFunction());
 
 	return functions;

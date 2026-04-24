@@ -19,7 +19,7 @@
 #include "catalog/rest/storage/authorization/sigv4.hpp"
 #include "catalog/rest/catalog_entry/table/iceberg_table_information.hpp"
 #include "catalog/rest/storage/authorization/oauth2.hpp"
-#include "catalog/rest/catalog_entry/iceberg_schema_entry.hpp"
+#include "catalog/rest/catalog_entry/schema/iceberg_schema_entry.hpp"
 #include "core/metadata/partition/iceberg_partition_spec.hpp"
 #include "catalog/rest/transaction/iceberg_transaction_update.hpp"
 

@@ -1,0 +1,59 @@
+# name: test/sql/local/irc_any_catalog/schema_properties/schema_properties_update_transaction.test
+# group: [schema_properties]
+
+require-env ICEBERG_SERVER_AVAILABLE
+
+require-env SECRETS_CREATED_AND_CATALOG_ATTACHED
+
+statement ok
+DROP SCHEMA IF EXISTS my_datalake.myschema123;
+
+statement ok
+CREATE SCHEMA IF NOT EXISTS my_datalake.myschema123;
+
+query II
+CALL iceberg_schema_properties(my_datalake.myschema123);
+----
+location	s3://warehouse/myschema123
+
+statement ok
+BEGIN;
+
+query I
+CALL set_iceberg_schema_properties(my_datalake.myschema123,
+    {
+    'myprop1' : '1',
+    'myprop2' : '2',
+    'myprop3' : '3',
+    }
+);
+----
+4
+
+query II
+FROM iceberg_schema_properties(my_datalake.myschema123) ORDER BY ALL;
+----
+location	s3://warehouse/myschema123
+myprop1	1
+myprop2	2
+myprop3	3
+
+query I
+CALL remove_iceberg_schema_properties(my_datalake.myschema123, ['myprop2']);
+----
+3
+
+statement ok
+COMMIT;
+
+query II
+FROM iceberg_schema_properties(my_datalake.myschema123) ORDER BY ALL;
+----
+location	s3://warehouse/myschema123
+myprop1	1
+myprop3	3
+
+#cleanup
+statement ok
+DROP SCHEMA my_datalake.myschema123;
+
