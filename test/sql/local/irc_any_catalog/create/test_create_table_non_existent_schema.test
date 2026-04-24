@@ -25,16 +25,16 @@ set logging_level='debug'
 
 # cleanup
 statement ok
-DROP TABLE IF EXISTS my_datalake.non_existent_schema.create_table_t1;
+DROP TABLE IF EXISTS my_datalake.now_this_schema_exists.mytable;
 
 statement ok
 DROP SCHEMA IF EXISTS my_datalake.now_this_schema_exists;
 
 # test
 statement error
-create table my_datalake.non_existent_schema.create_table_t1 (a int, b varchar);
+create table my_datalake.non_existent_schema.mytable (a int, b varchar);
 ----
-Catalog Error: Schema with name "non_existent_schema" not found
+Invalid Input Error: Schema with name "non_existent_schema" does not exist
 
 # transaction test
 statement ok
@@ -44,7 +44,7 @@ statement ok
 create schema if not exists my_datalake.now_this_schema_exists;
 
 statement ok
-create table my_datalake.now_this_schema_exists.create_table_t1 (a int, b varchar);
+create table my_datalake.now_this_schema_exists.mytable (a int, b varchar);
 
 statement ok
 COMMIT;
