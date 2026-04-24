@@ -27,7 +27,7 @@
 #include "common/iceberg_utils.hpp"
 #include "catalog/rest/iceberg_catalog.hpp"
 #include "catalog/rest/transaction/iceberg_transaction.hpp"
-#include "../../include/catalog/rest/catalog_entry/schema/iceberg_schema_entry.hpp"
+#include "catalog/rest/catalog_entry/schema/iceberg_schema_entry.hpp"
 #include "catalog/rest/iceberg_schema_set.hpp"
 #include "catalog/rest/iceberg_table_set.hpp"
 #include "catalog/rest/catalog_entry/table/iceberg_table_entry.hpp"
