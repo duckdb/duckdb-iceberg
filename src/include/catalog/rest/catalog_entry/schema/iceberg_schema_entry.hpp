@@ -49,7 +49,7 @@ public:
 		return exists;
 	}
 	string GetSchemaKey() const {
-		return this->catalog.GetName() + this->name;
+		return this->catalog.GetName() + "." + this->name;
 	};
 	void LoadPropertiesFromIRCAPIIfNeeded(ClientContext &context);
 

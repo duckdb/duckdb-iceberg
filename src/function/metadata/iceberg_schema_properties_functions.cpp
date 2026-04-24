@@ -168,7 +168,7 @@ static void SetIcebergSchemaPropertiesFunction(ClientContext &context, TableFunc
 
 	global_state.properties_set = true;
 	// set success output, failure happens during transaction commit.
-	FlatVector::GetData<int64_t>(output.data[0])[0] = bind_data.properties.size();
+	FlatVector::GetData<int64_t>(output.data[0])[0] = iceberg_schema->schema_info.properties.size();
 	output.SetCardinality(1);
 }
 
@@ -211,7 +211,7 @@ static void RemoveIcebergSchemaPropertiesFunction(ClientContext &context, TableF
 
 	global_state.properties_removed = true;
 	// set success output, failure happens during transaction commit.
-	FlatVector::GetData<int64_t>(output.data[0])[0] = bind_data.properties.size();
+	FlatVector::GetData<int64_t>(output.data[0])[0] = iceberg_schema->schema_info.properties.size();
 	output.SetCardinality(1);
 }
 

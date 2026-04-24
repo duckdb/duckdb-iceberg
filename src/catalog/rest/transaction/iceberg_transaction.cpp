@@ -574,9 +574,12 @@ void IcebergTransaction::DoSchemaDeletes(ClientContext &context) {
 void IcebergTransaction::DoSchemaPropertyUpdates(ClientContext &context) {
 	auto &ic_catalog = catalog.Cast<IcebergCatalog>();
 	for (auto &properties_update : this->schema_property_updates) {
-		auto schema_name = properties_update.first;
+		auto schema_name_with_catalog = properties_update.first;
+		auto catalog_splitter = schema_name_with_catalog.find(".");
+		auto schema_name_no_catalog = schema_name_with_catalog.erase(0, catalog_splitter + 1);
+
 		auto schema_property_updates = properties_update.second;
-		auto namespace_identifiers = IRCAPI::ParseSchemaName(schema_name);
+		auto namespace_identifiers = IRCAPI::ParseSchemaName(schema_name_no_catalog);
 
 		std::unique_ptr<yyjson_mut_doc, YyjsonDocDeleter> doc_p(yyjson_mut_doc_new(nullptr));
 		auto doc = doc_p.get();
@@ -589,11 +592,11 @@ void IcebergTransaction::DoSchemaPropertyUpdates(ClientContext &context) {
 		}
 		auto updates_arr = yyjson_mut_obj_add_obj(doc, root_object, "updates");
 		for (auto &update : schema_property_updates.schema_property_updates) {
-			yyjson_mut_obj_add_strcpy(doc, removal_arr, update.first.c_str(), update.second.c_str());
+			yyjson_mut_obj_add_strcpy(doc, updates_arr, update.first.c_str(), update.second.c_str());
 		}
 		auto create_body = JsonDocToString(std::move(doc_p));
 
-		IRCAPI::CommitNamespacePropertiesUpdate(context, ic_catalog, create_body, schema_name);
+		IRCAPI::CommitNamespacePropertiesUpdate(context, ic_catalog, create_body, schema_name_no_catalog);
 	}
 	created_schemas.clear();
 }

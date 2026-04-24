@@ -470,7 +470,7 @@ void IRCAPI::CommitNamespacePropertiesUpdate(ClientContext &context, IcebergCata
 	url_builder.AddPrefixComponent(catalog.prefix, catalog.prefix_is_one_component);
 	url_builder.AddPathComponent(IRCPathComponent::RegularComponent("namespaces"));
 	url_builder.AddPathComponent(IRCPathComponent::RegularComponent(_namespace));
-	url_builder.AddPathComponent(IRCPathComponent::RegularComponent("/properties"));
+	url_builder.AddPathComponent(IRCPathComponent::RegularComponent("properties"));
 
 	HTTPHeaders headers(*context.db);
 	headers.Insert("Content-Type", "application/json");

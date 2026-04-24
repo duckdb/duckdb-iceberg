@@ -2,8 +2,10 @@
 # group: [schema_properties]
 
 statement ok
-CREATE SCHEMA IF NOT EXISTS my_datalake.default;
+DROP SCHEMA IF EXISTS my_datalake.myschema123;
 
+statement ok
+CREATE SCHEMA IF NOT EXISTS my_datalake.myschema123;
 
 statement ok
 SET ca_cert_file = '~/.mitmproxy/mitmproxy-ca-cert.pem';
@@ -15,12 +17,12 @@ CREATE SECRET http_proxy (
 );
 
 query II
-CALL iceberg_schema_properties(my_datalake.default);
+CALL iceberg_schema_properties(my_datalake.myschema123);
 ----
-location	s3://warehouse/default
+location	s3://warehouse/myschema123
 
 query I
-CALL set_iceberg_schema_properties(my_datalake.default,
+CALL set_iceberg_schema_properties(my_datalake.myschema123,
     {
     'myprop1' : '1',
     'myprop2' : '2',
@@ -28,29 +30,29 @@ CALL set_iceberg_schema_properties(my_datalake.default,
     }
 );
 ----
-3
+4
 
 query II
-CALL iceberg_schema_properties(my_datalake.default);
+CALL iceberg_schema_properties(my_datalake.myschema123);
 ----
 myprop2	2
 myprop3	3
 myprop1	1
-location	s3://warehouse/default
+location	s3://warehouse/myschema123
 
 query I
-CALL remove_iceberg_schema_properties(my_datalake.default, ['myprop2']);
+CALL remove_iceberg_schema_properties(my_datalake.myschema123, ['myprop2']);
 ----
-0
+3
 
 query II
-CALL iceberg_schema_properties(my_datalake.default);
+CALL iceberg_schema_properties(my_datalake.myschema123);
 ----
 myprop3	3
 myprop1	1
-location	s3://warehouse/default
+location	s3://warehouse/myschema123
 
 query I
-CALL remove_iceberg_schema_properties(my_datalake.default, ['non_exisiting_prop']);
+CALL remove_iceberg_schema_properties(my_datalake.myschema123, ['non_exisiting_prop']);
 ----
-0
+3
