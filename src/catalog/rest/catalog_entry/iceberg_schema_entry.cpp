@@ -52,7 +52,7 @@ bool IcebergSchemaEntry::HandleCreateConflict(CatalogTransaction &transaction, C
 		auto &iceberg_transaction = GetICTransaction(transaction);
 		auto table_key = IcebergTableInformation::GetTableKey(namespace_items, entry_name);
 		auto latest_state = iceberg_transaction.GetLatestTableState(table_key);
-		if (latest_state && latest_state->status != IcebergTableStatus::ALIVE) {
+		if (latest_state && latest_state->IsDroppedOrRenamed()) {
 			auto &ic_catalog = catalog.Cast<IcebergCatalog>();
 			vector<string> qualified_name = {ic_catalog.GetName()};
 			qualified_name.insert(qualified_name.end(), namespace_items.begin(), namespace_items.end());
@@ -448,12 +448,11 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 			auto &other_table_info = other_table_entry.table_info;
 			auto other_table_key = other_table_info.GetTableKey();
 			auto state = irc_transaction.GetLatestTableState(other_table_key);
-			if (!state || state->status == IcebergTableStatus::ALIVE) {
+			if (!state || state->IsAlive()) {
 				throw CatalogException("Table with name \"%s\" already exists!", new_name);
 			}
 			//! The table is dropped or renamed by this transaction, so it's not a conflict anymore
-			D_ASSERT(state &&
-			         (state->status == IcebergTableStatus::DROPPED || state->status == IcebergTableStatus::RENAMED));
+			D_ASSERT(state && state->IsDroppedOrRenamed());
 		}
 		irc_transaction.RenameTable(updated_table, new_name);
 		break;

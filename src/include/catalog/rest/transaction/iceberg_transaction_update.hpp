@@ -52,8 +52,7 @@ public:
 public:
 	IcebergTableInformation &CreateTable(const string &table_key, IcebergTableInformation &&table);
 	IcebergTableInformation &GetOrInitializeTable(const IcebergTableInformation &table);
-
-public:
+	bool HasUpdates() const;
 	//! All the tables touched in this atomic block
 	case_insensitive_map_t<IcebergTableInformation> updated_tables;
 	//! The tables successively committed (used if multi-table commit isn't available)

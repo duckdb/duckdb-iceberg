@@ -1,5 +1,6 @@
 #include "duckdb/common/file_opener.hpp"
 #include "duckdb/common/file_system.hpp"
+#include "duckdb/storage/caching_file_system_wrapper.hpp"
 
 #include "function/iceberg_functions.hpp"
 #include "iceberg_options.hpp"
@@ -22,12 +23,13 @@ public:
 		auto bind_data = input.bind_data->Cast<IcebergSnaphotsBindData>();
 		auto global_state = make_uniq<IcebergSnapshotGlobalTableFunctionState>();
 
-		FileSystem &fs = FileSystem::GetFileSystem(context);
+		auto &fs = FileSystem::GetFileSystem(context);
+		auto caching_fs = make_shared_ptr<CachingFileSystemWrapper>(fs, *context.db);
 
 		auto iceberg_meta_path =
 		    IcebergTableMetadata::GetMetaDataPath(context, bind_data.filename, fs, bind_data.options);
 		auto table_metadata =
-		    IcebergTableMetadata::Parse(iceberg_meta_path, fs, bind_data.options.metadata_compression_codec);
+		    IcebergTableMetadata::Parse(iceberg_meta_path, *caching_fs, bind_data.options.metadata_compression_codec);
 		global_state->metadata = IcebergTableMetadata::FromTableMetadata(table_metadata);
 
 		auto &info = global_state->metadata;
