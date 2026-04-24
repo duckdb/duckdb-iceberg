@@ -1,38 +1,135 @@
----
-name: Bug report
-about: Create a report to help us improve
-title: ''
-labels: ''
-assignees: ''
+description: Create a report to help us improve
+labels:
+  - needs triage
+body:
+  - type: markdown
+    attributes:
+      value: >
+        This repository is purely for DuckDB-Iceberg related issues.
+        If you have found a bug in DuckDB, please refer to the [core DuckDB](https://github.com/duckdb/duckdb/issues/new) repository.
+        For issues regarding the DuckDB-Iceberg documentation, refer to [Documentation/website](https://github.com/duckdb/duckdb-web/issues/new).
 
----
+  - type: textarea
+    attributes:
+      label: What happens?
+      description: A short, clear and concise description of what the bug is.
+      Please include the catalog type (if applicable), and what engine was used to create the table (if not DuckDB-Iceberg). For example,
+        1. On a [S3Tables/LakeKeeper/R2] Catalog
+        2. Create a table using (Spark/PyIceberg)
+          ```sql
+          CREATE TABLE t1 as ...
+          ```
+        3. (maybe) Alter the table with (Spark/PyIceberg/DuckDB-Iceberg)
+        4. (maybe) Alter/INSERT/SELECT with (Spark/PyIceberg/DuckDB-Iceberg) and observe the error
+    validations:
+      required: true
 
-**Describe the bug**
-A clear and concise description of what the bug is.
+  - type: textarea
+    attributes:
+      label: To Reproduce
+      description: |
+        Please provide steps to reproduce the behavior, preferably a [minimal reproducible example](https://en.wikipedia.org/wiki/Minimal_reproducible_example). Please adhere the following guidelines:
 
-**To Reproduce**
-Steps to reproduce the behavior:
-1. Go to '...'
-2. Click on '....'
-3. Scroll down to '....'
-4. See error
+        * Format the code and the output as [code blocks](https://docs.github.com/en/get-started/writing-on-github/working-with-advanced-formatting/creating-and-highlighting-code-blocks) using triple backticks:
 
-**Expected behavior**
-A clear and concise description of what you expected to happen.
+          ````
+          ```
+          CODE HERE
+          ```
+          ````
+        * Add all required imports for scripts, e.g., `import duckdb`, `import pandas as pd`.
+        * Remove all prompts from the scripts. This include DuckDB's 'D' prompt and Python's `>>>` prompt. Removing these prompts makes reproduction attempts quicker.
+        * Make sure that the script and its outputs are provided in separate code blocks.
+        * If applicable, please check whether the issue is reproducible via running plain SQL queries from the DuckDB CLI client.
 
-**Screenshots**
-If applicable, add screenshots to help explain your problem.
+    validations:
+      required: true
 
-**Desktop (please complete the following information):**
- - OS: [e.g. iOS]
- - Browser [e.g. chrome, safari]
- - Version [e.g. 22]
+  - type: markdown
+    attributes:
+      value: "# Environment (please complete the following information):"
+  - type: input
+    attributes:
+      label: "OS:"
+      placeholder: e.g., iOS
+      description: Please include operating system version and architecture (e.g., aarch64, x86_64, etc.).
+    validations:
+      required: true
+  - type: input
+    attributes:
+      label: "DuckDB Version:"
+      placeholder: e.g., 22
+    validations:
+      required: true
+  - type: input
+    attributes:
+      label: "DuckDB Client:"
+      placeholder: e.g., Python, CLI
+    validations:
+      required: true
+  - type: input
+    attributes:
+      label: "Hardware:"
+      placeholder: If your issue is performance-related, please include information on your CPU and memory.
+    validations:
+      required: false
+  - type: markdown
+    attributes:
+      value: "# Identity Disclosure:"
+  - type: input
+    attributes:
+      label: "Full Name:"
+      placeholder: e.g., John Doe
+    validations:
+      required: true
+  - type: input
+    attributes:
+      label: "Affiliation:"
+      placeholder: e.g., Acme Corporation
+    validations:
+      required: true
 
-**Smartphone (please complete the following information):**
- - Device: [e.g. iPhone6]
- - OS: [e.g. iOS8.1]
- - Browser [e.g. stock browser, safari]
- - Version [e.g. 22]
+  - type: markdown
+    attributes:
+      value: |
+        If the above is not given and is not obvious from your GitHub profile page, we might close your issue without further review. Please refer to the [reasoning behind this rule](https://berthub.eu/articles/posts/anonymous-help/) if you have questions.
 
-**Additional context**
-Add any other context about the problem here.
+        # Before Submitting:
+
+  - type: dropdown
+    attributes:
+      label: What is the latest build you tested with? If possible, we recommend testing with the latest nightly build.
+      description: |
+        Visit the [DuckDB installation page](https://duckdb.org/docs/installation/)
+      options:
+        - I have not tested with any build
+        - I have tested with a stable release
+        - I have tested with a nightly build
+        - I have tested with a source build
+    validations:
+      required: true
+
+  - type: dropdown
+    attributes:
+      label: Did you include all relevant data sets for reproducing the issue?
+      options:
+        - "No - Other reason (please specify in the issue body)"
+        - "No - I cannot share the data sets because they are confidential"
+        - "No - I cannot easily share my data sets due to their large size"
+        - "Not applicable - the reproduction does not require a data set"
+        - "Yes"
+      default: 0
+    validations:
+      required: true
+
+  - type: checkboxes
+    attributes:
+      label: Did you include all code required to reproduce the issue?
+      options:
+        - label: Yes, I have
+
+  - type: checkboxes
+    attributes:
+      label: Did you include all relevant configuration (e.g., CPU architecture, Python version, Linux distribution) to reproduce the issue?
+      options:
+        - label: Yes, I have
