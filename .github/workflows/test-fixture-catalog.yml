@@ -84,8 +84,8 @@ jobs:
           ./build/release/duckdb -unsigned -c \
             "LOAD 'build/release/extension/iceberg/iceberg.duckdb_extension'; \
              INSTALL 'build/release/extension/iceberg/iceberg.duckdb_extension'; \
-             LOAD 'build/release/extension/iceberg/tpch.duckdb_extension'; \
-             INSTALL 'build/release/extension/iceberg/tpch.duckdb_extension'; \
+             LOAD 'build/release/extension/tpch/tpch.duckdb_extension'; \
+             INSTALL 'build/release/extension/tpch/tpch.duckdb_extension'; \
              FROM duckdb_extensions() where extension_name = 'iceberg';"
           # remove require iceberg from tests
           grep -rl "require iceberg" test/sql/ | xargs sed -i '/^require iceberg$/d'
