@@ -105,6 +105,7 @@ jobs:
           ./build/release/test/unittest --order lex "$PWD/test/sql/local/irc_any_catalog/*" --test-config test/configs/fixture.json
 
       - name: Run other tests
+        if: inputs.local-extension-repo == ''
         env:
           ICEBERG_SERVER_AVAILABLE: 1
         run: |
@@ -112,6 +113,7 @@ jobs:
           ./build/release/test/unittest --order lex "$PWD/test/*" --autoloading available
 
       - name: Test reads with PyIceberg
+        if: inputs.local-extension-repo == ''
         env:
           ICEBERG_SERVER_AVAILABLE: 1
         run: |
@@ -126,6 +128,7 @@ jobs:
           python3 -m pytest test/python
 
       - name: Run all duckdb/duckdb tests
+        if: inputs.local-extension-repo == ''
         run: |
           ./build/release/test/unittest --order lex --test-dir duckdb "test/sql/*" --list-test-names-only || true
-          ./build/release/test/unittest --order lex --test-dir duckdb "test/sql/*" --test-config test/configs/fixture_duckdb_tests.json --autoloading available
+          ./build/release/test/unittest --order lex --test-dir duckdb "test/sql/*" --test-config test/configs/fixture_duckdb_tests.json
