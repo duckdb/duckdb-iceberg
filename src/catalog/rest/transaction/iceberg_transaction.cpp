@@ -360,7 +360,7 @@ TableTransactionInfo IcebergTransaction::GetTransactionRequest(IcebergTransactio
 			commit_state.table_change.updates.push_back(std::move(set_snapshot_ref_update));
 		}
 
-		if (!info.has_assert_create && !transaction_data.alters.empty()) {
+		if (!info.has_assert_create && commit_state.table_info.HasTransactionUpdates()) {
 			// ensure table hasn't been swapped by another one with the same name
 			auto uuid_requirement = AssertTableUUIDRequirement(table_info);
 			uuid_requirement.CreateRequirement(db, context, commit_state);
