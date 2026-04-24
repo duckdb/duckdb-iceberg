@@ -33,7 +33,7 @@ statement ok con2
 BEGIN;
 
 query II con1
-CALL iceberg_schema_properties(my_datalake.myschema124);
+FROM iceberg_schema_properties(my_datalake.myschema124) ORDER BY ALL;
 ----
 counter	10
 location	s3://warehouse/myschema124

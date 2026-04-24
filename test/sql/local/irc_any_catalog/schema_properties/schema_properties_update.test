@@ -28,12 +28,12 @@ CALL set_iceberg_schema_properties(my_datalake.myschema123,
 4
 
 query II
-CALL iceberg_schema_properties(my_datalake.myschema123);
+FROM iceberg_schema_properties(my_datalake.myschema123) ORDER BY ALL;
 ----
+location	s3://warehouse/myschema123
+myprop1	1
 myprop2	2
 myprop3	3
-myprop1	1
-location	s3://warehouse/myschema123
 
 query I
 CALL remove_iceberg_schema_properties(my_datalake.myschema123, ['myprop2']);
@@ -41,11 +41,11 @@ CALL remove_iceberg_schema_properties(my_datalake.myschema123, ['myprop2']);
 3
 
 query II
-CALL iceberg_schema_properties(my_datalake.myschema123);
+FROM iceberg_schema_properties(my_datalake.myschema123) ORDER BY ALL;
 ----
-myprop3	3
-myprop1	1
 location	s3://warehouse/myschema123
+myprop1	1
+myprop3	3
 
 
 query I
