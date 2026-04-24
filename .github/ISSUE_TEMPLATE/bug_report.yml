@@ -1,4 +1,4 @@
-name: Bug Report
+name: Bug report
 description: Create a report to help us improve
 labels:
   - needs triage
@@ -13,15 +13,17 @@ body:
   - type: textarea
     attributes:
       label: What happens?
-      description: A short, clear and concise description of what the bug is.
-      Please include the catalog type (if applicable), and what engine was used to create the table (if not DuckDB-Iceberg). For example,
+      description: |
+        A short, clear and concise description of what the bug is.
+        Please include the catalog type (if applicable), and what engine was used to create the table (if not DuckDB-Iceberg). For example,
         1. On a [S3Tables/LakeKeeper/R2] Catalog
         2. Create a table using (Spark/PyIceberg)
-          ```sql
-          CREATE TABLE t1 as ...
-          ```
+           ```sql
+           CREATE TABLE t1 as ...
+           ```
         3. (maybe) Alter the table with (Spark/PyIceberg/DuckDB-Iceberg)
         4. (maybe) Alter/INSERT/SELECT with (Spark/PyIceberg/DuckDB-Iceberg) and observe the error
+
     validations:
       required: true
 
@@ -42,7 +44,6 @@ body:
         * Remove all prompts from the scripts. This include DuckDB's 'D' prompt and Python's `>>>` prompt. Removing these prompts makes reproduction attempts quicker.
         * Make sure that the script and its outputs are provided in separate code blocks.
         * If applicable, please check whether the issue is reproducible via running plain SQL queries from the DuckDB CLI client.
-
     validations:
       required: true
 
@@ -96,19 +97,6 @@ body:
         If the above is not given and is not obvious from your GitHub profile page, we might close your issue without further review. Please refer to the [reasoning behind this rule](https://berthub.eu/articles/posts/anonymous-help/) if you have questions.
 
         # Before Submitting:
-
-  - type: dropdown
-    attributes:
-      label: What is the latest build you tested with? If possible, we recommend testing with the latest nightly build.
-      description: |
-        Visit the [DuckDB installation page](https://duckdb.org/docs/installation/)
-      options:
-        - I have not tested with any build
-        - I have tested with a stable release
-        - I have tested with a nightly build
-        - I have tested with a source build
-    validations:
-      required: true
 
   - type: dropdown
     attributes:
