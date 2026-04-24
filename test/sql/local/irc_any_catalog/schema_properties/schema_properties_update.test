@@ -52,3 +52,6 @@ query I
 CALL remove_iceberg_schema_properties(my_datalake.myschema123, ['non_exisiting_prop']);
 ----
 3
+
+statement ok
+DROP SCHEMA my_datalake.myschema123;

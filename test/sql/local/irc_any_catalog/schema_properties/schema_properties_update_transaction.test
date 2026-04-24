@@ -53,5 +53,7 @@ location	s3://warehouse/myschema123
 myprop1	1
 myprop3	3
 
-
+#cleanup
+statement ok
+DROP SCHEMA my_datalake.myschema123;
 

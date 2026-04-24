@@ -6,18 +6,18 @@ require-env ICEBERG_SERVER_AVAILABLE
 require-env SECRETS_CREATED_AND_CATALOG_ATTACHED
 
 statement ok
-DROP SCHEMA IF EXISTS my_datalake.myschema124;
+DROP SCHEMA IF EXISTS my_datalake.myschema123;
 
 statement ok
-CREATE SCHEMA IF NOT EXISTS my_datalake.myschema124;
+CREATE SCHEMA IF NOT EXISTS my_datalake.myschema123;
 
 query II
-CALL iceberg_schema_properties(my_datalake.myschema124);
+CALL iceberg_schema_properties(my_datalake.myschema123);
 ----
-location	s3://warehouse/myschema124
+location	s3://warehouse/myschema123
 
 query I
-CALL set_iceberg_schema_properties(my_datalake.myschema124,
+CALL set_iceberg_schema_properties(my_datalake.myschema123,
     {
     'counter' : '10',
     }
@@ -33,15 +33,15 @@ statement ok con2
 BEGIN;
 
 query II con1
-FROM iceberg_schema_properties(my_datalake.myschema124) ORDER BY ALL;
+FROM iceberg_schema_properties(my_datalake.myschema123) ORDER BY ALL;
 ----
 counter	10
-location	s3://warehouse/myschema124
+location	s3://warehouse/myschema123
 
 # con2 decreases the counter by 1
 
 query I con2
-CALL set_iceberg_schema_properties(my_datalake.myschema124,
+CALL set_iceberg_schema_properties(my_datalake.myschema123,
     {
     'counter' : '9',
     }
@@ -56,7 +56,7 @@ COMMIT;
 # con1 wants to do counter++ , but they don't know that con2 decreased it.
 # there's nothing we can do to prevent this, this is just a limitation of Iceberg
 query I con1
-CALL set_iceberg_schema_properties(my_datalake.myschema124,
+CALL set_iceberg_schema_properties(my_datalake.myschema123,
     {
     'counter' : '11',
     }
@@ -66,3 +66,6 @@ CALL set_iceberg_schema_properties(my_datalake.myschema124,
 
 statement ok con1
 COMMIT;
+
+statement ok
+DROP SCHEMA my_datalake.myschema123;
