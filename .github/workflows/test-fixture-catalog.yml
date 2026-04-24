@@ -86,13 +86,13 @@ jobs:
              INSTALL 'build/release/extension/iceberg/iceberg.duckdb_extension'; \
              LOAD 'build/release/extension/tpch/tpch.duckdb_extension'; \
              INSTALL 'build/release/extension/tpch/tpch.duckdb_extension'; \
-             FROM duckdb_extensions() where extension_name = 'iceberg';"
+             FROM duckdb_extensions() where extension_name in ('iceberg', 'tpch');"
           # remove require iceberg from tests
           grep -rl "require iceberg" test/sql/ | xargs sed -i '/^require iceberg$/d'
           # not sure why this is needed. Apparently tpch is also not linked
           grep -rl "require tpch" test/sql/ | xargs sed -i '/^require tpch$/d'
           ./build/release/test/unittest --order lex "$PWD/test/sql/local/irc_any_catalog/*" --list-test-names-only || true
-          ./build/release/test/unittest --order lex "$PWD/test/sql/local/irc_any_catalog/*" --test-config test/configs/fixture.json
+          ./build/release/test/unittest --order lex "$PWD/test/sql/local/irc_any_catalog/*" --test-config test/configs/fixture.json --autoloading available
 
       - name: Run Generic IRC tests
         if: inputs.local-extension-repo == ''
