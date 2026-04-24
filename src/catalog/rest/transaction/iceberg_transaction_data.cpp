@@ -166,6 +166,10 @@ void IcebergTransactionData::TableAddAssertCreate() {
 	requirements.push_back(make_uniq<AssertCreateRequirement>(table_info));
 }
 
+void IcebergTransactionData::TableAddAssertUUID() {
+	requirements.push_back(make_uniq<AssertTableUUIDRequirement>(table_info));
+}
+
 void IcebergTransactionData::TableAddAssertCurrentSchemaId() {
 	assert_schema_id = true;
 }

@@ -88,6 +88,11 @@ void CommitTableToJSON(yyjson_mut_doc *doc, yyjson_mut_val *root_object,
 			auto requirement_json = yyjson_mut_arr_add_obj(doc, requirements_array);
 			yyjson_mut_obj_add_strcpy(doc, requirement_json, "type", assert_default_spec_id.type.value.c_str());
 			yyjson_mut_obj_add_int(doc, requirement_json, "default-spec-id", assert_default_spec_id.default_spec_id);
+		} else if (requirement.has_assert_table_uuid) {
+			auto &assert_table_uuid = requirement.assert_table_uuid;
+			auto requirement_json = yyjson_mut_arr_add_obj(doc, requirements_array);
+			yyjson_mut_obj_add_strcpy(doc, requirement_json, "type", assert_table_uuid.type.value.c_str());
+			yyjson_mut_obj_add_strcpy(doc, requirement_json, "uuid", assert_table_uuid.uuid.c_str());
 		} else {
 			throw NotImplementedException("Can't serialize this TableRequirement type to JSON");
 		}
@@ -353,6 +358,12 @@ TableTransactionInfo IcebergTransaction::GetTransactionRequest(IcebergTransactio
 			auto snapshot_id = snapshot.snapshot_id;
 			auto set_snapshot_ref_update = CreateSetSnapshotRefUpdate(snapshot_id);
 			commit_state.table_change.updates.push_back(std::move(set_snapshot_ref_update));
+		}
+
+		if (!info.has_assert_create && commit_state.table_info.HasTransactionUpdates()) {
+			// ensure table hasn't been swapped by another one with the same name
+			auto uuid_requirement = AssertTableUUIDRequirement(table_info);
+			uuid_requirement.CreateRequirement(db, context, commit_state);
 		}
 
 		if (current_snapshot && !transaction_data.alters.empty()) {

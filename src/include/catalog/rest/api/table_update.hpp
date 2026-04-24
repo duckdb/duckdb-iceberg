@@ -37,6 +37,13 @@ struct AssertCreateRequirement : public IcebergTableRequirement {
 	void CreateRequirement(DatabaseInstance &db, ClientContext &context, IcebergCommitState &commit_state);
 };
 
+struct AssertTableUUIDRequirement : public IcebergTableRequirement {
+	static constexpr const IcebergTableRequirementType TYPE = IcebergTableRequirementType::ASSERT_TABLE_UUID;
+
+	explicit AssertTableUUIDRequirement(const IcebergTableInformation &table_info);
+	void CreateRequirement(DatabaseInstance &db, ClientContext &context, IcebergCommitState &commit_state);
+};
+
 struct AssertCurrentSchemaIdRequirement : public IcebergTableRequirement {
 	static constexpr const IcebergTableRequirementType TYPE = IcebergTableRequirementType::ASSERT_CURRENT_SCHEMA_ID;
 
