@@ -42,21 +42,9 @@ IcebergTableInformation &IcebergTransactionAlterUpdate::CreateTable(const string
 	if (!emplace_res.second) {
 		throw InternalException("Table %s was already created somehow?", table_key);
 	}
-	created_tables.insert(table_key);
 
 	transaction.current_table_data.emplace(table_key, IcebergTransactionTableState(emplace_res.first->second));
 	return emplace_res.first->second;
-}
-
-optional_ptr<IcebergTableInformation> IcebergTransactionAlterUpdate::GetCreatedTable(const string &table_key) {
-	if (created_tables.find(table_key) == created_tables.end()) {
-		return nullptr;
-	}
-	auto table = updated_tables.find(table_key);
-	if (table == updated_tables.end()) {
-		throw InternalException("Created table %s is missing from transaction updates", table_key);
-	}
-	return table->second;
 }
 
 IcebergTransactionDeleteUpdate::IcebergTransactionDeleteUpdate(IcebergTransaction &transaction,

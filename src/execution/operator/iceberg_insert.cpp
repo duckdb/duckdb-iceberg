@@ -14,8 +14,11 @@
 #include "duckdb/planner/expression/bound_reference_expression.hpp"
 #include "duckdb/planner/expression/bound_constant_expression.hpp"
 #include "duckdb/common/multi_file/multi_file_reader.hpp"
+#include "duckdb/common/constants.hpp"
+#include "duckdb/execution/operator/scan/physical_empty_result.hpp"
 
 #include "catalog/rest/iceberg_catalog.hpp"
+#include "catalog/rest/iceberg_prepare_state.hpp"
 #include "catalog/rest/catalog_entry/table/iceberg_table_entry.hpp"
 #include "execution/operator/iceberg_delete.hpp"
 #include "catalog/rest/catalog_entry/table/iceberg_table_information.hpp"
@@ -29,6 +32,10 @@
 #include "catalog/rest/transaction/iceberg_transaction_update.hpp"
 
 namespace duckdb {
+
+static bool IsPrepareOnlyPlanning(ClientContext &context) {
+	return context.transaction.GetActiveQuery() == MAXIMUM_QUERY_ID;
+}
 
 static bool WriteRowId(IcebergInsertVirtualColumns virtual_columns) {
 	return virtual_columns == IcebergInsertVirtualColumns::WRITE_ROW_ID ||
@@ -933,30 +940,17 @@ PhysicalOperator &IcebergCatalog::PlanCreateTableAs(ClientContext &context, Phys
 	auto &ic_schema_entry = schema.Cast<IcebergSchemaEntry>();
 	auto &catalog = ic_schema_entry.catalog;
 	auto transaction = catalog.GetCatalogTransaction(context);
-	auto &iceberg_transaction = IcebergTransaction::Get(context, catalog);
 
-	optional_ptr<IcebergTableInformation> transaction_created_table;
-	auto table_key = IcebergTableInformation::GetTableKey(ic_schema_entry.namespace_items, op.info->Base().table);
-	for (auto &update : iceberg_transaction.transaction_updates) {
-		if (update->type != IcebergTransactionUpdateType::ALTER) {
-			continue;
-		}
-		auto &alter = update->Cast<IcebergTransactionAlterUpdate>();
-		transaction_created_table = alter.GetCreatedTable(table_key);
-		if (transaction_created_table) {
-			break;
-		}
+	if (IsPrepareOnlyPlanning(context)) {
+		// CTAS has catalog side effects. Prepare caches a no-op plan and execution rebinds with an active query.
+		auto state = context.registered_state->GetOrCreate<IcebergPrepareContextState>(IcebergPrepareContextState::KEY);
+		state->RequireRebindOnPrepare();
+		return planner.Make<PhysicalEmptyResult>(op.types, op.estimated_cardinality);
 	}
 
-	optional_ptr<CatalogEntry> table;
-	if (transaction_created_table) {
-		// Prepared statements can be rebound before execution. Reuse the table staged during the first bind.
-		table = transaction_created_table->GetLatestSchema(context);
-	} else {
-		// create the table. Takes care of committing to rest catalog and getting the metadata location etc.
-		// setting the schema
-		table = ic_schema_entry.CreateTable(transaction, context, *op.info);
-	}
+	// create the table. Takes care of committing to rest catalog and getting the metadata location etc.
+	// setting the schema
+	auto table = ic_schema_entry.CreateTable(transaction, context, *op.info);
 	if (!table) {
 		throw InternalException("Table could not be created");
 	}
