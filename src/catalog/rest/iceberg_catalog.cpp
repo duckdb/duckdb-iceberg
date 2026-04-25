@@ -18,6 +18,7 @@
 #include "iceberg_logging.hpp"
 #include "catalog/rest/api/api_utils.hpp"
 #include "catalog/rest/storage/iceberg_authorization.hpp"
+#include "catalog/rest/iceberg_prepare_state.hpp"
 #include "catalog/rest/storage/authorization/oauth2.hpp"
 #include "catalog/rest/storage/authorization/sigv4.hpp"
 #include "catalog/rest/storage/authorization/none.hpp"
@@ -519,6 +520,8 @@ void IcebergCatalog::SetAWSCatalogOptions(IcebergAttachOptions &attach_options,
 unique_ptr<Catalog> IcebergCatalog::Attach(optional_ptr<StorageExtensionInfo> storage_info, ClientContext &context,
                                            AttachedDatabase &db, const string &name, AttachInfo &info,
                                            AttachOptions &options) {
+	context.registered_state->GetOrCreate<IcebergPrepareContextState>(IcebergPrepareContextState::KEY);
+
 	IcebergAttachOptions attach_options;
 	attach_options.warehouse = info.path;
 	attach_options.name = name;
