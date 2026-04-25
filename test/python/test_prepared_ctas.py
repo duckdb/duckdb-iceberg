@@ -6,6 +6,8 @@ import pathlib
 import pytest
 
 
+# SQL PREPARE does not accept CTAS, but ADBC prepares and executes CTAS through
+# DuckDB's C API. Exercise that path directly to cover issue #595 without dbt.
 pytestmark = pytest.mark.skipif(
     os.getenv("ICEBERG_SERVER_AVAILABLE") is None,
     reason="Iceberg test catalog is not available",
