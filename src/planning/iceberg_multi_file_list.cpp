@@ -825,6 +825,26 @@ vector<reference<const IcebergEqualityDeleteRow>>
 IcebergMultiFileList::GetEqualityDeletesForFile(const BoundIcebergManifestEntry &bound_manifest_entry) const {
 	vector<reference<const IcebergEqualityDeleteRow>> result;
 
+	//! Fast-path: no equality delete files exist in this snapshot. Skips the
+	//! unconditional `data_manifests[manifest_file_idx]` dereference below,
+	//! which crashes on tables where `manifest_file_idx` is invalid (see
+	//! issue #940 — regression of #282/#285 where the index can be
+	//! invalidated when a filter column is pruned from the projection). Also
+	//! covers by spec all Iceberg v3 tables, which use deletion vectors
+	//! instead of equality deletes (e.g. Snowflake-managed v3 emits no
+	//! equality delete files), so the function is a no-op for them anyway.
+	if (equality_delete_data.empty()) {
+		return result;
+	}
+
+	//! Defensive bounds check on the per-entry manifest_file_idx. When the
+	//! invariant holds, this is unreachable; when it's violated (#940), we
+	//! prefer returning "no deletes apply" over an InternalException that
+	//! invalidates the entire DuckDB connection.
+	if (bound_manifest_entry.manifest_file_idx >= data_manifests.size()) {
+		return result;
+	}
+
 	//! Look through all the equality delete files with a *higher* sequence number
 	auto &manifest_entry = bound_manifest_entry.entry;
 	auto &manifest_file = data_manifests[bound_manifest_entry.manifest_file_idx].entry.file;
