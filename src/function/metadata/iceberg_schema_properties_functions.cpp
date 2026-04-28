@@ -160,11 +160,10 @@ static void SetIcebergSchemaPropertiesFunction(ClientContext &context, TableFunc
 		properties.updates = bind_data.properties;
 		iceberg_transaction.schema_property_updates[schema_key] = properties;
 	} else {
+		auto &schema_property_updates = iceberg_transaction.schema_property_updates[schema_key];
+		auto &removals = schema_property_updates.removals;
+		auto &updates = schema_property_updates.updates;
 		for (auto &property : bind_data.properties) {
-			auto &schema_property_updates = iceberg_transaction.schema_property_updates[schema_key];
-			auto &removals = schema_property_updates.removals;
-			auto &updates = schema_property_updates.updates;
-
 			if (removals.find(property.first) != removals.end()) {
 				removals.erase(property.first);
 			}
@@ -210,11 +209,11 @@ static void RemoveIcebergSchemaPropertiesFunction(ClientContext &context, TableF
 		iceberg_transaction.schema_property_updates[schema_key] = properties;
 
 	} else {
-		for (auto &property_to_remove : bind_data.remove_properties) {
-			auto &schema_property_updates = iceberg_transaction.schema_property_updates[schema_key];
-			auto &removals = schema_property_updates.removals;
-			auto &updates = schema_property_updates.updates;
+		auto &schema_property_updates = iceberg_transaction.schema_property_updates[schema_key];
+		auto &removals = schema_property_updates.removals;
+		auto &updates = schema_property_updates.updates;
 
+		for (auto &property_to_remove : bind_data.remove_properties) {
 			if (updates.find(property_to_remove) != updates.end()) {
 				updates.erase(property_to_remove);
 			}
