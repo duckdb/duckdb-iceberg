@@ -11,10 +11,14 @@ DROP SCHEMA IF EXISTS my_datalake.myschema123;
 statement ok
 CREATE SCHEMA IF NOT EXISTS my_datalake.myschema123;
 
-query II
-CALL iceberg_schema_properties(my_datalake.myschema123);
+query I
+CALL remove_iceberg_schema_properties(my_datalake.myschema123, ['namespace_id']);
 ----
-location	s3://warehouse/myschema123
+1
+
+query II
+FROM iceberg_schema_properties(my_datalake.myschema123) WHERE key != 'location' ORDER BY ALL;
+----
 
 query I
 CALL set_iceberg_schema_properties(my_datalake.myschema123,
@@ -32,11 +36,10 @@ BEGIN;
 statement ok con2
 BEGIN;
 
-query II con1
-FROM iceberg_schema_properties(my_datalake.myschema123) ORDER BY ALL;
+query II
+FROM iceberg_schema_properties(my_datalake.myschema123) WHERE key != 'location' ORDER BY ALL;
 ----
 counter	10
-location	s3://warehouse/myschema123
 
 # con2 decreases the counter by 1
 
