@@ -13,7 +13,7 @@
 #include "duckdb/common/multi_file/multi_file_reader.hpp"
 
 #include "catalog/rest/catalog_entry/table/iceberg_table_entry.hpp"
-#include "../../catalog/rest/catalog_entry/schema/iceberg_schema_entry.hpp"
+#include "catalog/rest/catalog_entry/schema/iceberg_schema_entry.hpp"
 #include "core/metadata/manifest/iceberg_manifest.hpp"
 
 namespace duckdb {
