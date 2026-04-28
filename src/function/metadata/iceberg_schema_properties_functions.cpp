@@ -240,10 +240,7 @@ static void GetIcebergSchemaPropertiesFunction(ClientContext &context, TableFunc
 	auto schema_key = iceberg_schema->GetSchemaKey();
 
 	auto &iceberg_transaction = IcebergTransaction::Get(context, iceberg_schema->catalog);
-	auto current_schema_properties = iceberg_transaction.current_schema_properties.find(schema_key);
-	bool found_transaction_changes = current_schema_properties != iceberg_transaction.current_schema_properties.end();
-	auto &schema_properties =
-	    found_transaction_changes ? current_schema_properties->second : iceberg_schema->schema_info.properties;
+	auto &schema_properties = iceberg_schema->schema_info.properties;
 
 	if (schema_properties.empty()) {
 		output.SetCardinality(0);

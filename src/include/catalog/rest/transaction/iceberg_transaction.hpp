@@ -111,7 +111,6 @@ public:
 	vector<unique_ptr<IcebergTransactionUpdate>> transaction_updates;
 	//! The latest state of a table (either points into 'transaction_updates' or 'tables')
 	case_insensitive_map_t<IcebergTransactionTableState> current_table_data;
-	case_insensitive_map_t<case_insensitive_map_t<string>> current_schema_properties;
 
 	unordered_set<string> created_schemas;
 	unordered_set<string> deleted_schemas;
