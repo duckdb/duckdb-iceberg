@@ -143,7 +143,7 @@ static void SetIcebergSchemaPropertiesFunction(ClientContext &context, TableFunc
 	}
 
 	auto iceberg_schema = bind_data.iceberg_schema;
-	iceberg_schema->LoadPropertiesFromIRCAPIIfNeeded(context);
+	iceberg_schema->LoadProperties(context);
 
 	// reflect changes to IcebergSchemaEntry
 	for (auto property : bind_data.properties) {
@@ -191,7 +191,7 @@ static void RemoveIcebergSchemaPropertiesFunction(ClientContext &context, TableF
 	}
 
 	auto iceberg_schema = bind_data.iceberg_schema;
-	iceberg_schema->LoadPropertiesFromIRCAPIIfNeeded(context);
+	iceberg_schema->LoadProperties(context);
 
 	auto schema_key = iceberg_schema->GetSchemaKey();
 
@@ -236,7 +236,7 @@ static void GetIcebergSchemaPropertiesFunction(ClientContext &context, TableFunc
 		return;
 	}
 	auto iceberg_schema = bind_data.iceberg_schema;
-	iceberg_schema->LoadPropertiesFromIRCAPIIfNeeded(context);
+	iceberg_schema->LoadProperties(context);
 
 	auto schema_key = iceberg_schema->GetSchemaKey();
 

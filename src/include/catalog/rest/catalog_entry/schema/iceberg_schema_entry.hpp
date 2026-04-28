@@ -51,7 +51,7 @@ public:
 	string GetSchemaKey() const {
 		return this->catalog.GetName() + "." + this->name;
 	};
-	void LoadPropertiesFromIRCAPIIfNeeded(ClientContext &context);
+	void LoadProperties(ClientContext &context);
 
 private:
 	IcebergTableSet &GetCatalogSet(CatalogType type);

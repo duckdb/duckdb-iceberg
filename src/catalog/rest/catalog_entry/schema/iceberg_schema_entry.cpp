@@ -657,7 +657,7 @@ IcebergTableSet &IcebergSchemaEntry::GetCatalogSet(CatalogType type) {
 	}
 }
 
-void IcebergSchemaEntry::LoadPropertiesFromIRCAPIIfNeeded(ClientContext &context) {
+void IcebergSchemaEntry::LoadProperties(ClientContext &context) {
 	if (schema_info.properties_loaded) {
 		// not needed
 		return;
