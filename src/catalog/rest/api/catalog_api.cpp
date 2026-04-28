@@ -191,6 +191,10 @@ APIResult<unique_ptr<const rest_api_objects::LoadTableResult>> IRCAPI::GetTable(
 }
 APIResult<unique_ptr<const rest_api_objects::GetNamespaceResponse>>
 IRCAPI::GetNamespace(ClientContext &context, IcebergCatalog &catalog, const IcebergSchemaEntry &schema) {
+	if (catalog.supported_urls.find("GET /v1/{prefix}/namespaces/{namespace}") == catalog.supported_urls.end()) {
+		throw NotImplementedException("This Iceberg REST catalog server does not support this operation");
+	}
+
 	auto ret = APIResult<unique_ptr<const rest_api_objects::GetNamespaceResponse>>();
 
 	auto url_builder = catalog.GetBaseUrl();
@@ -466,6 +470,10 @@ void IRCAPI::CommitNamespaceDrop(ClientContext &context, IcebergCatalog &catalog
 
 void IRCAPI::CommitNamespacePropertiesUpdate(ClientContext &context, IcebergCatalog &catalog, string body,
                                              string _namespace) {
+	if (catalog.supported_urls.find("POST /v1/{prefix}/namespaces/{namespace}/properties") ==
+	    catalog.supported_urls.end()) {
+		throw NotImplementedException("This Iceberg REST catalog server does not support this operation");
+	}
 	auto url_builder = catalog.GetBaseUrl();
 	url_builder.AddPrefixComponent(catalog.prefix, catalog.prefix_is_one_component);
 	url_builder.AddPathComponent(IRCPathComponent::RegularComponent("namespaces"));
