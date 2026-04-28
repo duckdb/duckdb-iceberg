@@ -22,7 +22,7 @@ IcebergTableInformation &IcebergTransactionAlterUpdate::GetOrInitializeTable(con
 		it = updated_tables.emplace(table_key, table.Copy(transaction)).first;
 		// Preserve the table_uuid from the original table info (resolved at transaction start).
 		// Copy() reads from the global request cache, which can be contaminated by another
-		// transaction's in-flight RENAME overwriting the entry with a different table's metadata.
+		// transaction's RENAME overwriting the entry with a different table's metadata.
 		// Only override when the original has a known UUID (skip for newly created tables).
 		if (!table.table_metadata.table_uuid.empty()) {
 			it->second.table_metadata.table_uuid = table.table_metadata.table_uuid;
