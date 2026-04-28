@@ -28,6 +28,7 @@ private:
 	static TableFunctionSet GetIcebergSnapshotsFunction();
 	static TableFunctionSet GetIcebergScanFunction(ExtensionLoader &loader);
 	static TableFunctionSet GetIcebergMetadataFunction();
+	static TableFunctionSet GetIcebergLoadTableResponseFunction();
 	static TableFunctionSet GetIcebergColumnStatsFunction();
 	static TableFunctionSet GetIcebergPartitionStatsFunction();
 	static TableFunctionSet GetIcebergToDuckLakeFunction();
