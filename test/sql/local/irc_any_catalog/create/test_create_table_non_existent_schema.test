@@ -1,0 +1,21 @@
+# name: test/sql/local/irc_any_catalog/create/test_create_table_non_existent_schema.test
+# description: test create table
+# group: [create]
+
+require-env ICEBERG_SERVER_AVAILABLE
+
+require-env SECRETS_CREATED_AND_CATALOG_ATTACHED
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+# test
+statement error
+create table my_datalake.non_existent_schema.mytable (a int, b varchar);
+----
+Invalid Input Error: Schema with name "non_existent_schema" does not exist
