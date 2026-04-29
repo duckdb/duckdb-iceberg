@@ -1,9 +1,7 @@
-# name: test/sql/local/irc_any_catalog/schema_properties/schema_properties_update.test
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/schema_properties/schema_properties_update.test
 # group: [schema_properties]
 
-require-env ICEBERG_SERVER_AVAILABLE
-
-require-env SECRETS_CREATED_AND_CATALOG_ATTACHED
+require-env CATALOG_TEST_CONFIG_SETUP
 
 statement ok
 DROP SCHEMA IF EXISTS my_datalake.myschema123;

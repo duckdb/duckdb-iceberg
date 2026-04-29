@@ -54,7 +54,7 @@
     },
     {
       "reason": "Polaris can't handle removals and updates of schema properties in the same request",
-      "paths": ["test/sql/local/irc_any_catalog/schema_properties/schema_properties_update_transaction.test"]
+      "paths": ["test/sql/local/catalog_test_config_setup/catalog_agnostic/schema_properties/schema_properties_update_transaction.test"]
     }
   ]
 }
