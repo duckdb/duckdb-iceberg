@@ -12,84 +12,84 @@
     {
       "reason": "V3 tests, not yet supported with Nessie",
       "paths": [
-        "test/sql/local/irc_any_catalog/delete/test_delete_from_v3_table.test",
-        "test/sql/local/irc_any_catalog/insert/test_insert_to_v3_tables.test",
-        "test/sql/local/irc_any_catalog/insert/test_transactional_insert_v3.test",
-        "test/sql/local/irc_any_catalog/table_properties/test_many_table_properties.test",
-        "test/sql/local/irc_any_catalog/test_row_lineage_read.test",
-        "test/sql/local/irc_any_catalog/test_row_lineage_write.test",
-        "test/sql/local/irc_any_catalog/test_select_row_id.test",
-        "test/sql/local/irc_any_catalog/update/test_update_v3_table.test",
-        "test/sql/local/irc_any_catalog/delete/test_delete_consolidation_transactional.test",
-        "test/sql/local/irc_any_catalog/delete/test_delete_consolidation_commit.test",
-        "test/sql/local/irc_any_catalog/update/test_update_deletion_vector_consolidation_commit.test",
-        "test/sql/local/irc_any_catalog/test_row_lineage_read_from_upgraded.test",
-        "test/sql/local/irc_any_catalog/test_row_lineage_write_after_upgrade.test",
-        "test/sql/local/irc_any_catalog/test_basic_variant.test",
-        "test/sql/local/irc_any_catalog/update/partitions/update_v3_row_lineage.test",
-        "test/sql/local/irc_any_catalog/create/default/test_create_default_varchar.test",
-        "test/sql/local/irc_any_catalog/create/default/test_create_default_blob.test",
-        "test/sql/local/irc_any_catalog/create/default/test_create_default_bigint.test",
-        "test/sql/local/irc_any_catalog/create/default/test_create_default_decimal.test",
-        "test/sql/local/irc_any_catalog/create/default/test_create_default_bool.test",
-        "test/sql/local/irc_any_catalog/create/default/test_create_default_float.test",
-        "test/sql/local/irc_any_catalog/create/default/test_create_default_timestamp.test",
-        "test/sql/local/irc_any_catalog/create/default/test_create_default_date.test",
-        "test/sql/local/irc_any_catalog/create/default/test_create_default_timestamp_tz.test",
-        "test/sql/local/irc_any_catalog/create/default/test_create_default_integer.test",
-        "test/sql/local/irc_any_catalog/create/default/test_create_default_timestamp_ns.test",
-        "test/sql/local/irc_any_catalog/create/default/test_create_default_double.test",
-        "test/sql/local/irc_any_catalog/create/default/test_create_default_uuid.test",
-        "test/sql/local/irc_any_catalog/create/default/test_create_default_time.test",
-        "test/sql/local/irc_any_catalog/insert/partitions/bucket/test_bucket_timestamp_ns.test",
-        "test/sql/local/irc_any_catalog/delete/partitions/delete_truncate_partitions_v3.test",
-        "test/sql/local/irc_any_catalog/delete/partitions/delete_bucket_partitions_v3.test",
-        "test/sql/local/irc_any_catalog/update/partitions/update_bucket_tables_v3.test",
-        "test/sql/local/irc_any_catalog/update/partitions/update_truncate_tables_v3.test",
-        "test/sql/local/irc_any_catalog/create/test_create_default.test",
-        "test/sql/local/irc_any_catalog/update/update_with_default.test",
-        "test/sql/local/irc_any_catalog/merge/merge_into_default.test",
-        "test/sql/local/irc_any_catalog/other_engines/test_create_partitioned_tables.test",
-        "test/sql/local/irc_any_catalog/insert/test_create_geometry_type.test",
-        "test/sql/local/irc_any_catalog/other_engines/test_create_partitioned_tables.test",
-        "test/sql/local/irc_any_catalog/update/update_with_default.test",
-        "test/sql/local/irc_any_catalog/alter/alter_type_v3.test",
-        "test/sql/local/irc_any_catalog/alter/table_properties/test_alter_table_options.test",
-        "test/sql/local/irc_any_catalog/alter/table_properties/test_upgrade_format_version_2_to_3.test",
-        "test/sql/local/irc_any_catalog/alter/alter_default.test"
+        "test/sql/local/catalog_test_config_setup/catalog_agnostic/delete/test_delete_from_v3_table.test",
+        "test/sql/local/catalog_test_config_setup/catalog_agnostic/insert/test_insert_to_v3_tables.test",
+        "test/sql/local/catalog_test_config_setup/catalog_agnostic/insert/test_transactional_insert_v3.test",
+        "test/sql/local/catalog_test_config_setup/catalog_agnostic/table_properties/test_many_table_properties.test",
+        "test/sql/local/catalog_test_config_setup/catalog_agnostic/test_row_lineage_read.test",
+        "test/sql/local/catalog_test_config_setup/catalog_agnostic/test_row_lineage_write.test",
+        "test/sql/local/catalog_test_config_setup/catalog_agnostic/test_select_row_id.test",
+        "test/sql/local/catalog_test_config_setup/catalog_agnostic/update/test_update_v3_table.test",
+        "test/sql/local/catalog_test_config_setup/catalog_agnostic/delete/test_delete_consolidation_transactional.test",
+        "test/sql/local/catalog_test_config_setup/catalog_agnostic/delete/test_delete_consolidation_commit.test",
+        "test/sql/local/catalog_test_config_setup/catalog_agnostic/update/test_update_deletion_vector_consolidation_commit.test",
+        "test/sql/local/catalog_test_config_setup/catalog_agnostic/test_row_lineage_read_from_upgraded.test",
+        "test/sql/local/catalog_test_config_setup/catalog_agnostic/test_row_lineage_write_after_upgrade.test",
+        "test/sql/local/catalog_test_config_setup/catalog_agnostic/test_basic_variant.test",
+        "test/sql/local/catalog_test_config_setup/catalog_agnostic/update/partitions/update_v3_row_lineage.test",
+        "test/sql/local/catalog_test_config_setup/catalog_agnostic/create/default/test_create_default_varchar.test",
+        "test/sql/local/catalog_test_config_setup/catalog_agnostic/create/default/test_create_default_blob.test",
+        "test/sql/local/catalog_test_config_setup/catalog_agnostic/create/default/test_create_default_bigint.test",
+        "test/sql/local/catalog_test_config_setup/catalog_agnostic/create/default/test_create_default_decimal.test",
+        "test/sql/local/catalog_test_config_setup/catalog_agnostic/create/default/test_create_default_bool.test",
+        "test/sql/local/catalog_test_config_setup/catalog_agnostic/create/default/test_create_default_float.test",
+        "test/sql/local/catalog_test_config_setup/catalog_agnostic/create/default/test_create_default_timestamp.test",
+        "test/sql/local/catalog_test_config_setup/catalog_agnostic/create/default/test_create_default_date.test",
+        "test/sql/local/catalog_test_config_setup/catalog_agnostic/create/default/test_create_default_timestamp_tz.test",
+        "test/sql/local/catalog_test_config_setup/catalog_agnostic/create/default/test_create_default_integer.test",
+        "test/sql/local/catalog_test_config_setup/catalog_agnostic/create/default/test_create_default_timestamp_ns.test",
+        "test/sql/local/catalog_test_config_setup/catalog_agnostic/create/default/test_create_default_double.test",
+        "test/sql/local/catalog_test_config_setup/catalog_agnostic/create/default/test_create_default_uuid.test",
+        "test/sql/local/catalog_test_config_setup/catalog_agnostic/create/default/test_create_default_time.test",
+        "test/sql/local/catalog_test_config_setup/catalog_agnostic/insert/partitions/bucket/test_bucket_timestamp_ns.test",
+        "test/sql/local/catalog_test_config_setup/catalog_agnostic/delete/partitions/delete_truncate_partitions_v3.test",
+        "test/sql/local/catalog_test_config_setup/catalog_agnostic/delete/partitions/delete_bucket_partitions_v3.test",
+        "test/sql/local/catalog_test_config_setup/catalog_agnostic/update/partitions/update_bucket_tables_v3.test",
+        "test/sql/local/catalog_test_config_setup/catalog_agnostic/update/partitions/update_truncate_tables_v3.test",
+        "test/sql/local/catalog_test_config_setup/catalog_agnostic/create/test_create_default.test",
+        "test/sql/local/catalog_test_config_setup/catalog_agnostic/update/update_with_default.test",
+        "test/sql/local/catalog_test_config_setup/catalog_agnostic/merge/merge_into_default.test",
+        "test/sql/local/catalog_test_config_setup/catalog_agnostic/other_engines/test_create_partitioned_tables.test",
+        "test/sql/local/catalog_test_config_setup/catalog_agnostic/insert/test_create_geometry_type.test",
+        "test/sql/local/catalog_test_config_setup/catalog_agnostic/other_engines/test_create_partitioned_tables.test",
+        "test/sql/local/catalog_test_config_setup/catalog_agnostic/update/update_with_default.test",
+        "test/sql/local/catalog_test_config_setup/catalog_agnostic/alter/alter_type_v3.test",
+        "test/sql/local/catalog_test_config_setup/catalog_agnostic/alter/table_properties/test_alter_table_options.test",
+        "test/sql/local/catalog_test_config_setup/catalog_agnostic/alter/table_properties/test_upgrade_format_version_2_to_3.test",
+        "test/sql/local/catalog_test_config_setup/catalog_agnostic/alter/alter_default.test"
       ]
     },
     {
       "reason": "Requires reparsing url paths in logs or paths in data files",
       "paths": [
-        "test/sql/local/irc_any_catalog/iceberg_catalog_eager_refresh.test",
-        "test/sql/local/irc_any_catalog/reads/test_read_partitioned_table_type_promotion.test",
-        "test/sql/local/irc_any_catalog/irc_catalog_read_deletes.test"
+        "test/sql/local/catalog_test_config_setup/catalog_agnostic/iceberg_catalog_eager_refresh.test",
+        "test/sql/local/catalog_test_config_setup/catalog_agnostic/reads/test_read_partitioned_table_type_promotion.test",
+        "test/sql/local/catalog_test_config_setup/catalog_agnostic/irc_catalog_read_deletes.test"
       ]
     },
     {
       "reason": "Requires supporting time travel for nessie",
       "paths": [
-        "test/sql/local/irc_any_catalog/transactions/test_get_transaction_snapshot.test",
-        "test/sql/local/irc_any_catalog/update/test_one_update_one_snapshot.test",
-        "test/sql/local/irc_any_catalog/transactions/test_transaction_get_from_transaction_start.test",
-        "test/sql/local/irc_any_catalog/transactions/test_transactional_updates.test",
-        "test/sql/local/irc_any_catalog/transactions/test_transactional_updates_error_omits_stacktrace.test",
-        "test/sql/local/irc_any_catalog/alter/add_column/alter_add_column_time_travel.test",
-        "test/sql/local/irc_any_catalog/alter/alter_rename_column.test"
+        "test/sql/local/catalog_test_config_setup/catalog_agnostic/transactions/test_get_transaction_snapshot.test",
+        "test/sql/local/catalog_test_config_setup/catalog_agnostic/update/test_one_update_one_snapshot.test",
+        "test/sql/local/catalog_test_config_setup/catalog_agnostic/transactions/test_transaction_get_from_transaction_start.test",
+        "test/sql/local/catalog_test_config_setup/catalog_agnostic/transactions/test_transactional_updates.test",
+        "test/sql/local/catalog_test_config_setup/catalog_agnostic/transactions/test_transactional_updates_error_omits_stacktrace.test",
+        "test/sql/local/catalog_test_config_setup/catalog_agnostic/alter/add_column/alter_add_column_time_travel.test",
+        "test/sql/local/catalog_test_config_setup/catalog_agnostic/alter/alter_rename_column.test"
       ]
     },
     {
       "reason": "On ALTER TABLE, Nessie updates snapshot's schema_id as well alongside table_metadata.current_schema_id, so we don't log a warning.",
       "paths": [
-        "test/sql/local/irc_any_catalog/alter/add_column/alter_add_column_warn_schema_mismatch.test",
-        "test/sql/local/irc_any_catalog/alter/not_null/alter_drop_not_null_warn_schema_mismatch.test"
+        "test/sql/local/catalog_test_config_setup/catalog_agnostic/alter/add_column/alter_add_column_warn_schema_mismatch.test",
+        "test/sql/local/catalog_test_config_setup/catalog_agnostic/alter/not_null/alter_drop_not_null_warn_schema_mismatch.test"
       ]
     },
     {
       "reason": "Nessie ignores DEFAULT values for ADD COLUMN and just populates with NULL.",
       "paths": [
-        "test/sql/local/irc_any_catalog/alter/add_column/alter_add_column_twice_in_same_transaction_with_default.test"
+        "test/sql/local/catalog_test_config_setup/catalog_agnostic/alter/add_column/alter_add_column_twice_in_same_transaction_with_default.test"
       ]
     }
   ]

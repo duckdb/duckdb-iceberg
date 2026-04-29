@@ -58,8 +58,8 @@ def rest_catalog(bearer_token):
 
 
 requires_iceberg_server = pytest.mark.skipif(
-    os.getenv("ICEBERG_SERVER_AVAILABLE", None) is None,
-    reason="Test data wasn't generated, run tests in test/sql/local/irc first (and set 'export ICEBERG_SERVER_AVAILABLE=1')",
+    os.getenv("FIXTURE_SERVER_AVAILABLE", None) is None,
+    reason="Test data wasn't generated, run tests in test/sql/local/irc first (and set 'export FIXTURE_SERVER_AVAILABLE=1')",
 )
 
 # ---------------------------------------------------------------------------
