@@ -1,0 +1,102 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/alter/alter_default.test
+# group: [alter]
+
+require-env ICEBERG_SERVER_AVAILABLE
+
+require-env SECRETS_CREATED_AND_CATALOG_ATTACHED
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+require ducklake
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+set enable_logging=true
+
+statement ok
+set logging_level='debug'
+
+statement ok
+drop table if exists my_datalake.default.drop_default;
+
+statement ok
+begin transaction
+
+statement ok
+create table my_datalake.default.drop_default(
+	a VARCHAR,
+	b BOOLEAN
+) WITH (
+	'format-version'='3'
+);
+
+statement error
+ALTER TABLE my_datalake.default.drop_default ALTER COLUMN b SET DEFAULT uuid()
+----
+Not implemented Error: Only foldable expressions are allowed as DEFAULT values
+
+statement ok
+abort
+
+statement ok
+begin transaction
+
+statement ok
+create table my_datalake.default.drop_default(
+	a VARCHAR
+) WITH (
+	'format-version'='3'
+);
+
+statement ok
+insert into my_datalake.default.drop_default (a) VALUES ('hello world')
+
+statement ok
+ALTER TABLE my_datalake.default.drop_default ADD COLUMN b bool DEFAULT false
+
+query II
+select * from my_datalake.default.drop_default
+----
+hello world	false
+
+statement ok
+ALTER TABLE my_datalake.default.drop_default ALTER COLUMN b SET DEFAULT true
+
+statement ok
+insert into my_datalake.default.drop_default (a) VALUES ('test')
+
+query II
+select * from my_datalake.default.drop_default order by all
+----
+hello world	false
+test	true
+
+statement ok
+commit
+
+query II
+select * from my_datalake.default.drop_default order by all
+----
+hello world	false
+test	true
+
+statement ok
+ALTER TABLE my_datalake.default.drop_default ALTER COLUMN b DROP DEFAULT;
+
+statement ok
+insert into my_datalake.default.drop_default(a) VALUES ('not null')
+
+query II
+select a, b from my_datalake.default.drop_default order by all
+----
+hello world	false
+not null	NULL
+test	true

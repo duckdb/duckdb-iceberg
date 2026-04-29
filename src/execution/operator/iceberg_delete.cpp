@@ -20,6 +20,7 @@
 #include "core/metadata/manifest/iceberg_manifest.hpp"
 
 #include "core/deletes/iceberg_deletion_vector.hpp"
+#include "catalog/rest/transaction/iceberg_transaction_update.hpp"
 
 namespace duckdb {
 class IcebergDeleteLocalState;
@@ -337,6 +338,7 @@ SinkFinalizeType IcebergDelete::Finalize(Pipeline &pipeline, Event &event, Clien
 
 	// write out the new manifest file
 	auto &irc_table = table.Cast<IcebergTableEntry>();
+
 	auto &table_info = irc_table.table_info;
 	auto iceberg_delete_files = GenerateDeleteManifestEntries(global_state);
 
@@ -425,11 +427,20 @@ PhysicalOperator &IcebergCatalog::PlanDelete(ClientContext &context, PhysicalPla
 	if (op.return_chunk) {
 		throw BinderException("RETURNING clause not yet supported for deletion from Iceberg table");
 	}
-	auto &ic_table_entry = op.table.Cast<IcebergTableEntry>();
-	auto iceberg_version = ic_table_entry.table_info.table_metadata.iceberg_version;
+	auto &table_entry = op.table.Cast<IcebergTableEntry>();
+	table_entry.PrepareIcebergScanFromEntry(context);
+
+	auto &irc_transaction = IcebergTransaction::Get(context, *this);
+	auto &alter = irc_transaction.GetOrCreateAlter();
+	auto &updated_table = alter.GetOrInitializeTable(table_entry.table_info);
+	auto &table_metadata = updated_table.table_metadata;
+	auto &schema = table_metadata.GetLatestSchema();
+	auto &updated_table_entry = *updated_table.schema_versions[schema.schema_id];
+
+	auto iceberg_version = updated_table_entry.table_info.table_metadata.iceberg_version;
 	if (iceberg_version < 2) {
 		throw NotImplementedException("Delete from Iceberg V%d tables",
-		                              ic_table_entry.table_info.table_metadata.iceberg_version);
+		                              updated_table_entry.table_info.table_metadata.iceberg_version);
 	}
 
 	vector<idx_t> row_id_indexes;
@@ -444,16 +455,16 @@ PhysicalOperator &IcebergCatalog::PlanDelete(ClientContext &context, PhysicalPla
 		row_id_indexes.push_back(bound_ref.index);
 	}
 
-	auto allows_positional_deletes =
-	    ic_table_entry.table_info.table_metadata.PropertiesAllowPositionalDeletes(IcebergSnapshotOperationType::DELETE);
+	auto allows_positional_deletes = updated_table_entry.table_info.table_metadata.PropertiesAllowPositionalDeletes(
+	    IcebergSnapshotOperationType::DELETE);
 	if (!allows_positional_deletes) {
-		auto delete_table_property = ic_table_entry.table_info.table_metadata.GetTableProperty(WRITE_DELETE_MODE);
+		auto delete_table_property = updated_table_entry.table_info.table_metadata.GetTableProperty(WRITE_DELETE_MODE);
 		auto error_message = IcebergCatalog::GetOnlyMergeOnReadSupportedErrorMessage(
-		    ic_table_entry.name, WRITE_DELETE_MODE, delete_table_property);
+		    updated_table_entry.name, WRITE_DELETE_MODE, delete_table_property);
 		throw NotImplementedException(error_message);
 	}
 
-	auto &iceberg_delete = IcebergDelete::PlanDelete(context, planner, ic_table_entry, plan, row_id_indexes);
+	auto &iceberg_delete = IcebergDelete::PlanDelete(context, planner, updated_table_entry, plan, row_id_indexes);
 	return iceberg_delete;
 }
 

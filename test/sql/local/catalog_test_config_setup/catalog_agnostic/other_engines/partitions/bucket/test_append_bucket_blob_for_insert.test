@@ -1,0 +1,114 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/other_engines/partitions/bucket/test_append_bucket_blob_for_insert.test
+# description: DuckDB appends the exact same values Spark inserted into a bucket(4, value)
+# group: [bucket]
+
+#              BLOB table. Filtering on each value must return exactly 2 rows — one from Spark,
+#              one from DuckDB — proving both ended up in the same partition.
+
+require-env ICEBERG_SERVER_AVAILABLE
+
+require-env SECRETS_CREATED_AND_CATALOG_ATTACHED
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+# ---- Verify Spark's initial state ----
+# Spark inserted 10 binary values (spread across 4 buckets) plus NULL.
+
+query I
+select count(*) from my_datalake.default.bucket_partitioned_blob_for_insert;
+----
+11
+
+statement ok
+set variable manifest_list_path = (select manifest_list from iceberg_snapshots(my_datalake.default.bucket_partitioned_blob_for_insert) order by sequence_number desc limit 1);
+
+statement ok
+set variable manifest_file_path = (select manifest_path from read_avro(getvariable('manifest_list_path')) order by sequence_number desc limit 1);
+
+# ---- DuckDB inserts the same values Spark inserted, with new ids ----
+
+statement ok
+INSERT INTO my_datalake.default.bucket_partitioned_blob_for_insert VALUES
+    (101, '\x01\x02\x03\x04\x05'::BLOB),
+    (102, '\x06\x07\x08\x09\x10'::BLOB),
+    (103, '\x11\x12\x13\x14\x15'::BLOB),
+    (104, '\x16\x17\x18\x19\x20'::BLOB),
+    (105, '\x21\x22\x23\x24\x25'::BLOB),
+    (106, '\x26\x27\x28\x29\x30'::BLOB),
+    (107, '\x31\x32\x33\x34\x35'::BLOB),
+    (108, '\x36\x37\x38\x39\x40'::BLOB),
+    (109, '\x41\x42\x43\x44\x45'::BLOB),
+    (110, '\x46\x47\x48\x49\x50'::BLOB),
+    (111, NULL);
+
+query I
+select count(*) from my_datalake.default.bucket_partitioned_blob_for_insert;
+----
+22
+
+# ---- For each inserted value, exactly 2 rows should be visible ----
+# One row from Spark (id 1-11) and one from DuckDB (id 101-111).
+
+query I
+select count(*) from my_datalake.default.bucket_partitioned_blob_for_insert where value = '\x01\x02\x03\x04\x05'::BLOB;
+----
+2
+
+query I
+select count(*) from my_datalake.default.bucket_partitioned_blob_for_insert where value = '\x06\x07\x08\x09\x10'::BLOB;
+----
+2
+
+query I
+select count(*) from my_datalake.default.bucket_partitioned_blob_for_insert where value = '\x11\x12\x13\x14\x15'::BLOB;
+----
+2
+
+query I
+select count(*) from my_datalake.default.bucket_partitioned_blob_for_insert where value = '\x16\x17\x18\x19\x20'::BLOB;
+----
+2
+
+query I
+select count(*) from my_datalake.default.bucket_partitioned_blob_for_insert where value = '\x21\x22\x23\x24\x25'::BLOB;
+----
+2
+
+query I
+select count(*) from my_datalake.default.bucket_partitioned_blob_for_insert where value = '\x26\x27\x28\x29\x30'::BLOB;
+----
+2
+
+query I
+select count(*) from my_datalake.default.bucket_partitioned_blob_for_insert where value = '\x31\x32\x33\x34\x35'::BLOB;
+----
+2
+
+query I
+select count(*) from my_datalake.default.bucket_partitioned_blob_for_insert where value = '\x36\x37\x38\x39\x40'::BLOB;
+----
+2
+
+query I
+select count(*) from my_datalake.default.bucket_partitioned_blob_for_insert where value = '\x41\x42\x43\x44\x45'::BLOB;
+----
+2
+
+query I
+select count(*) from my_datalake.default.bucket_partitioned_blob_for_insert where value = '\x46\x47\x48\x49\x50'::BLOB;
+----
+2
+
+query I
+select count(*) from my_datalake.default.bucket_partitioned_blob_for_insert where value is null;
+----
+2

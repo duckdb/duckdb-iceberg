@@ -30,6 +30,7 @@ public:
 	                       IcebergManifestDeletes &&altered_manifests);
 	// add a schema update for a table
 	void TableAddSchema(int32_t schema_id);
+	void TableSetCurrentSchema();
 	void TableAddAssertCreate();
 	void TableAddAssertCurrentSchemaId();
 	void TableAddAssertLastAssignedFieldId();
@@ -55,15 +56,12 @@ public:
 	const IcebergTableInformation &table_info;
 	//! schema updates etc.
 	vector<unique_ptr<IcebergTableUpdate>> updates;
-	//! has the table been deleted in the current transaction
-	bool is_deleted;
 	vector<unique_ptr<IcebergTableRequirement>> requirements;
 	//! Cached manifest list from the source snapshot
 	vector<IcebergManifestListEntry> existing_manifest_list;
 
 	//! Every insert/update/delete creates an alter of the table data
 	vector<reference<IcebergAddSnapshot>> alters;
-	vector<reference<AddSchemaUpdate>> schema_updates;
 	//! The 'referenced_data_file' -> 'data_file.file_path' of the currently active transaction-local deletes
 	case_insensitive_map_t<string> transactional_delete_files;
 	//! Track the current row id for this transaction
@@ -71,6 +69,8 @@ public:
 
 	//! If we perform an update that relies on the current schema id staying unchanged
 	bool assert_schema_id = false;
+	//! Whether the current schema of the table should be updated
+	bool set_schema_id = false;
 	mutex lock;
 };
 

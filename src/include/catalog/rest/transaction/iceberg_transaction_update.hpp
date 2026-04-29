@@ -9,7 +9,7 @@ namespace duckdb {
 
 class IcebergTransaction;
 
-enum class IcebergTransactionUpdateType : uint8_t { ALTER, DELETE };
+enum class IcebergTransactionUpdateType : uint8_t { ALTER, DELETE, RENAME };
 
 struct IcebergTransactionUpdate {
 public:
@@ -52,8 +52,7 @@ public:
 public:
 	IcebergTableInformation &CreateTable(const string &table_key, IcebergTableInformation &&table);
 	IcebergTableInformation &GetOrInitializeTable(const IcebergTableInformation &table);
-
-public:
+	bool HasUpdates() const;
 	//! All the tables touched in this atomic block
 	case_insensitive_map_t<IcebergTableInformation> updated_tables;
 	//! The tables successively committed (used if multi-table commit isn't available)
@@ -71,6 +70,22 @@ public:
 
 public:
 	IcebergTableInformation deleted_table;
+};
+
+//! Rename a table
+struct IcebergTransactionRenameUpdate : public IcebergTransactionUpdate {
+public:
+	static constexpr const IcebergTransactionUpdateType TYPE = IcebergTransactionUpdateType::RENAME;
+
+public:
+	IcebergTransactionRenameUpdate(IcebergTransaction &transaction, const IcebergTableInformation &table,
+	                               const string &new_name);
+	virtual ~IcebergTransactionRenameUpdate() override;
+
+public:
+	const IcebergTableInformation &table;
+	IcebergTableInformation new_table;
+	string new_name;
 };
 
 } // namespace duckdb

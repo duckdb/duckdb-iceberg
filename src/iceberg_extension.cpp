@@ -63,6 +63,11 @@ static void LoadInternal(ExtensionLoader &loader) {
 	config.AddExtensionOption("iceberg_test_force_token_expiry",
 	                          "DEBUG SETTING: force OAuth2 token expiry for testing automatic refresh",
 	                          LogicalType::BOOLEAN, Value::BOOLEAN(false));
+	config.AddExtensionOption(
+	    "iceberg_use_metadata_log",
+	    "Whether or not to make use of the (optional) 'metadata-log' of a table to ensure atomicity guarantees hold, "
+	    "at the cost of making another GET for json metadata in rare circumstances",
+	    LogicalType::BOOLEAN, Value::BOOLEAN(true));
 
 	// Iceberg Table Functions
 	for (auto &fun : IcebergFunctions::GetTableFunctions(loader)) {

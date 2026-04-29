@@ -1,5 +1,5 @@
 # name: test/sql/local/catalog_test_config_setup/catalog_agnostic/insert/partitions/unsupported/test_bucket_transform.test
-# description: Test that BUCKET partition transform is rejected for INSERT
+# description: Test that BUCKET partition transform is supported for INSERT
 # group: [unsupported]
 
 require-env CATALOG_TEST_CONFIG_SETUP
@@ -24,12 +24,13 @@ drop table if exists my_datalake.default.test_bucket_transform;
 statement ok
 CREATE TABLE my_datalake.default.test_bucket_transform (id int, val varchar);
 
-# Set bucket partition - this should work at the ALTER level
 statement ok
-ALTER TABLE my_datalake.default.test_bucket_transform SET PARTITIONED BY (bucket(id, 16));
+ALTER TABLE my_datalake.default.test_bucket_transform SET PARTITIONED BY (bucket(16, id));
 
-# But INSERT should fail because BUCKET transform is not yet supported for writes
-statement error
+statement ok
 insert into my_datalake.default.test_bucket_transform select range, 'val' from range(10);
+
+query I
+select count(*) from my_datalake.default.test_bucket_transform;
 ----
-<REGEX>:.*BUCKET.*not.*supported.*
+10

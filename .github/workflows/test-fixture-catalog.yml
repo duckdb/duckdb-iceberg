@@ -6,6 +6,11 @@ on:
         description: "Name of the DuckDB-Iceberg artifact to download"
         required: true
         type: string
+      local-extension-repo:
+        description: "Path to set as LOCAL_EXTENSION_REPO environment variable"
+        required: false
+        type: string
+        default: ""
 
 jobs:
   test-spark:
@@ -65,7 +70,32 @@ jobs:
           source .venv-spark4/bin/activate
           mitmdump --mode regular@8878 --flow-detail 2 > mitmproxy.log 2>&1 &
 
+      - name: Install Iceberg & Run Generic Tests Set local extension repo, Install iceberg from build/release/extension and remove require iceberg from tests
+        if: inputs.local-extension-repo != ''
+        env:
+          ICEBERG_SERVER_AVAILABLE: 1
+          SECRETS_CREATED_AND_CATALOG_ATTACHED: 1
+          FIXTURE_SERVER_AVAILABLE: 1
+        run: |
+          # remove already installed extension if it is installed
+          rm ~/.duckdb/extensions/**/**/iceberg.* || true
+          echo "LOCAL_EXTENSION_REPO=${{ inputs.local-extension-repo }}" >> $GITHUB_ENV
+          # check that we can load the extension
+          ./build/release/duckdb -unsigned -c \
+            "LOAD 'build/release/extension/iceberg/iceberg.duckdb_extension'; \
+             INSTALL 'build/release/extension/iceberg/iceberg.duckdb_extension'; \
+             LOAD 'build/release/extension/tpch/tpch.duckdb_extension'; \
+             INSTALL 'build/release/extension/tpch/tpch.duckdb_extension'; \
+             FROM duckdb_extensions() where extension_name in ('iceberg', 'tpch');"
+          # remove require iceberg from tests
+          grep -rl "require iceberg" test/sql/ | xargs sed -i '/^require iceberg$/d'
+          # not sure why this is needed. Apparently tpch is also not linked
+          grep -rl "require tpch" test/sql/ | xargs sed -i '/^require tpch$/d'
+          ./build/release/test/unittest --order lex "$PWD/test/sql/local/irc_any_catalog/*" --list-test-names-only || true
+          ./build/release/test/unittest --order lex "$PWD/test/sql/local/irc_any_catalog/*" --test-config test/configs/fixture.json --autoloading available
+
       - name: Run Generic IRC tests
+        if: inputs.local-extension-repo == ''
         env:
           CATALOG_TEST_CONFIG_SETUP: 1
           FIXTURE_SERVER_AVAILABLE: 1
@@ -74,6 +104,7 @@ jobs:
           ./build/release/test/unittest --order lex "$PWD/test/sql/local/catalog_test_config_setup/*" --test-config test/configs/fixture.json
 
       - name: Run other tests
+        if: inputs.local-extension-repo == ''
         env:
           FIXTURE_SERVER_AVAILABLE: 1
         run: |
@@ -81,6 +112,7 @@ jobs:
           ./build/release/test/unittest --order lex "$PWD/test/*"
 
       - name: Test reads with PyIceberg
+        if: inputs.local-extension-repo == ''
         env:
           FIXTURE_SERVER_AVAILABLE: 1
         run: |
@@ -95,6 +127,7 @@ jobs:
           python3 -m pytest test/python
 
       - name: Run all duckdb/duckdb tests
+        if: inputs.local-extension-repo == ''
         run: |
           ./build/release/test/unittest --order lex --test-dir duckdb "test/sql/*" --list-test-names-only || true
           ./build/release/test/unittest --order lex --test-dir duckdb "test/sql/*" --test-config test/configs/fixture_duckdb_tests.json

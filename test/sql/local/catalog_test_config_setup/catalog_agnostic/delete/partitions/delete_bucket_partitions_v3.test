@@ -1,0 +1,174 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/delete/partitions/delete_bucket_partitions_v3.test
+# description: Test delete from v3 iceberg tables partitioned by bucket transform (INT and VARCHAR)
+# group: [partitions]
+
+require-env ICEBERG_SERVER_AVAILABLE
+
+require-env SECRETS_CREATED_AND_CATALOG_ATTACHED
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+CALL enable_logging('HTTP');
+
+statement ok
+set logging_level='debug'
+
+# ---- BUCKET / INT ----
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.test_delete_bucket_int_v3;
+
+statement ok
+CREATE TABLE my_datalake.default.test_delete_bucket_int_v3 (id INT, val VARCHAR)
+PARTITIONED BY (bucket(4, id)) WITH ('format-version'=3);
+
+statement ok
+INSERT INTO my_datalake.default.test_delete_bucket_int_v3 VALUES
+    (1, 'a'), (1, 'b'), (2, 'c'), (3, 'd'), (4, 'e');
+
+query II
+SELECT * FROM my_datalake.default.test_delete_bucket_int_v3 ORDER BY id, val;
+----
+1	a
+1	b
+2	c
+3	d
+4	e
+
+# Delete all rows sharing the same partition column value (same bucket)
+statement ok
+DELETE FROM my_datalake.default.test_delete_bucket_int_v3 WHERE id = 1;
+
+query II
+SELECT * FROM my_datalake.default.test_delete_bucket_int_v3 ORDER BY id, val;
+----
+2	c
+3	d
+4	e
+
+# Delete by non-partition column (crosses partition boundaries)
+statement ok
+DELETE FROM my_datalake.default.test_delete_bucket_int_v3 WHERE val = 'd';
+
+query II
+SELECT * FROM my_datalake.default.test_delete_bucket_int_v3 ORDER BY id, val;
+----
+2	c
+4	e
+
+statement ok
+DROP TABLE my_datalake.default.test_delete_bucket_int_v3;
+
+# ---- BUCKET / VARCHAR ----
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.test_delete_bucket_varchar_v3;
+
+statement ok
+CREATE TABLE my_datalake.default.test_delete_bucket_varchar_v3 (id INT, category VARCHAR, val VARCHAR)
+PARTITIONED BY (bucket(4, category)) WITH ('format-version'=3);
+
+statement ok
+INSERT INTO my_datalake.default.test_delete_bucket_varchar_v3 VALUES
+    (1, 'apple', 'a'),
+    (2, 'apple', 'b'),
+    (3, 'banana', 'c'),
+    (4, 'cherry', 'd'),
+    (5, 'cherry', 'e');
+
+query III
+SELECT * FROM my_datalake.default.test_delete_bucket_varchar_v3 ORDER BY id;
+----
+1	apple	a
+2	apple	b
+3	banana	c
+4	cherry	d
+5	cherry	e
+
+# Delete all rows with the same bucket key — both 'apple' rows land in the same bucket
+statement ok
+DELETE FROM my_datalake.default.test_delete_bucket_varchar_v3 WHERE category = 'apple';
+
+query III
+SELECT * FROM my_datalake.default.test_delete_bucket_varchar_v3 ORDER BY id;
+----
+3	banana	c
+4	cherry	d
+5	cherry	e
+
+# Delete by non-partition column
+statement ok
+DELETE FROM my_datalake.default.test_delete_bucket_varchar_v3 WHERE val = 'd';
+
+query III
+SELECT * FROM my_datalake.default.test_delete_bucket_varchar_v3 ORDER BY id;
+----
+3	banana	c
+5	cherry	e
+
+# Delete across multiple buckets using a disjunction
+statement ok
+DELETE FROM my_datalake.default.test_delete_bucket_varchar_v3 WHERE category IN ('banana', 'cherry');
+
+query I
+SELECT COUNT(*) FROM my_datalake.default.test_delete_bucket_varchar_v3;
+----
+0
+
+statement ok
+DROP TABLE my_datalake.default.test_delete_bucket_varchar_v3;
+
+# ---- BUCKET / BIGINT ----
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.test_delete_bucket_bigint_v3;
+
+statement ok
+CREATE TABLE my_datalake.default.test_delete_bucket_bigint_v3 (id INT, val BIGINT, label VARCHAR)
+PARTITIONED BY (bucket(4, val)) WITH ('format-version'=3);
+
+statement ok
+INSERT INTO my_datalake.default.test_delete_bucket_bigint_v3 VALUES
+    (1, 100::BIGINT, 'a'),
+    (2, 100::BIGINT, 'b'),
+    (3, 200::BIGINT, 'c'),
+    (4, 300::BIGINT, 'd');
+
+query III
+SELECT * FROM my_datalake.default.test_delete_bucket_bigint_v3 ORDER BY id;
+----
+1	100	a
+2	100	b
+3	200	c
+4	300	d
+
+# Both rows with val=100 land in the same bucket
+statement ok
+DELETE FROM my_datalake.default.test_delete_bucket_bigint_v3 WHERE val = 100;
+
+query III
+SELECT * FROM my_datalake.default.test_delete_bucket_bigint_v3 ORDER BY id;
+----
+3	200	c
+4	300	d
+
+statement ok
+DELETE FROM my_datalake.default.test_delete_bucket_bigint_v3 WHERE label = 'c';
+
+query I
+SELECT COUNT(*) FROM my_datalake.default.test_delete_bucket_bigint_v3;
+----
+1
+
+statement ok
+DROP TABLE my_datalake.default.test_delete_bucket_bigint_v3;

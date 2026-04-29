@@ -1,0 +1,51 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/alter/not_null/alter_drop_not_null_with_snapshot.test
+# group: [not_null]
+
+require-env ICEBERG_SERVER_AVAILABLE
+
+require-env SECRETS_CREATED_AND_CATALOG_ATTACHED
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+CREATE SCHEMA IF NOT EXISTS my_datalake.default;
+
+statement ok
+drop table if exists my_datalake.default.my_table;
+
+statement ok
+CREATE TABLE my_datalake.default.my_table (a int NOT NULL);
+
+statement ok
+INSERT INTO  my_datalake.default.my_table VALUES (42);
+
+statement error
+INSERT INTO my_datalake.default.my_table VALUES (NULL);
+----
+Constraint Error: NOT NULL constraint failed: my_table.a
+
+query I
+FROM my_datalake.default.my_table;
+----
+42
+
+statement ok
+ALTER TABLE my_datalake.default.my_table ALTER COLUMN a DROP NOT NULL;
+
+statement ok
+INSERT INTO my_datalake.default.my_table VALUES (NULL);
+
+query I
+FROM my_datalake.default.my_table;
+----
+42
+NULL

@@ -58,7 +58,8 @@ static unique_ptr<FunctionData> IcebergPartitionStatsBind(ClientContext &context
 	// return a TableRef that contains the scans for the
 	auto ret = make_uniq<IcebergPartitionStatsBindData>();
 
-	FileSystem &fs = FileSystem::GetFileSystem(context);
+	auto &fs = FileSystem::GetFileSystem(context);
+	auto caching_fs = make_shared_ptr<CachingFileSystemWrapper>(fs, *context.db);
 	auto input_string = input.inputs[0].ToString();
 	auto filename = IcebergUtils::GetStorageLocation(context, input_string);
 
@@ -101,7 +102,8 @@ static unique_ptr<FunctionData> IcebergPartitionStatsBind(ClientContext &context
 	}
 
 	auto iceberg_meta_path = IcebergTableMetadata::GetMetaDataPath(context, filename, fs, options);
-	auto table_metadata = IcebergTableMetadata::Parse(iceberg_meta_path, fs, options.metadata_compression_codec);
+	auto table_metadata =
+	    IcebergTableMetadata::Parse(iceberg_meta_path, *caching_fs, options.metadata_compression_codec);
 	ret->metadata = IcebergTableMetadata::FromTableMetadata(table_metadata);
 
 	ret->snapshot_to_scan = ret->metadata.GetSnapshot(options.snapshot_lookup);
@@ -206,7 +208,7 @@ static void IcebergPartitionStatsFunction(ClientContext &context, TableFunctionI
 			//! partition_field_id
 			FlatVector::GetData<uint64_t>(output.data[col++])[out] = field.partition_field_id;
 			//! partition_field_name
-			AddString(output.data[col++], out, string_t(field.name));
+			AddString(output.data[col++], out, string_t(field.GetPartitionSpecFieldName()));
 			//! partition_source_columns
 			output.data[col++].SetValue(out, Value::LIST({column.name}));
 			//! partition_field_transform

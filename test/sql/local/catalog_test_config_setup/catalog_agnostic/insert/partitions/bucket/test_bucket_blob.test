@@ -1,0 +1,69 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/insert/partitions/bucket/test_bucket_blob.test
+# description: Insert into a bucket-partitioned BLOB table and verify round-trip
+# group: [bucket]
+
+require-env ICEBERG_SERVER_AVAILABLE
+
+require-env SECRETS_CREATED_AND_CATALOG_ATTACHED
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+create schema if not exists my_datalake.default;
+
+statement ok
+drop table if exists my_datalake.default.test_bucket_blob;
+
+statement ok
+CREATE TABLE my_datalake.default.test_bucket_blob (id int, val blob)
+PARTITIONED BY (bucket(4, val));
+
+statement ok
+insert into my_datalake.default.test_bucket_blob values
+    (1,  '\x01\x02\x03\x04\x05'::BLOB),
+    (2,  '\x06\x07\x08\x09\x10'::BLOB),
+    (3,  '\x11\x12\x13\x14\x15'::BLOB),
+    (4,  '\x16\x17\x18\x19\x20'::BLOB),
+    (5,  '\x21\x22\x23\x24\x25'::BLOB),
+    (6,  '\x26\x27\x28\x29\x30'::BLOB),
+    (7,  '\x31\x32\x33\x34\x35'::BLOB),
+    (8,  '\x36\x37\x38\x39\x40'::BLOB),
+    (9,  '\x41\x42\x43\x44\x45'::BLOB),
+    (10, '\x46\x47\x48\x49\x50'::BLOB);
+
+statement ok
+create table local_bucket_blob as
+select * from (values
+    (1,  '\x01\x02\x03\x04\x05'::BLOB),
+    (2,  '\x06\x07\x08\x09\x10'::BLOB),
+    (3,  '\x11\x12\x13\x14\x15'::BLOB),
+    (4,  '\x16\x17\x18\x19\x20'::BLOB),
+    (5,  '\x21\x22\x23\x24\x25'::BLOB),
+    (6,  '\x26\x27\x28\x29\x30'::BLOB),
+    (7,  '\x31\x32\x33\x34\x35'::BLOB),
+    (8,  '\x36\x37\x38\x39\x40'::BLOB),
+    (9,  '\x41\x42\x43\x44\x45'::BLOB),
+    (10, '\x46\x47\x48\x49\x50'::BLOB)
+) t(id, val);
+
+query II nosort expected_result
+select * from local_bucket_blob order by id;
+----
+
+query II nosort expected_result
+select * from my_datalake.default.test_bucket_blob order by id;
+----
+
+query I
+select count(*) from my_datalake.default.test_bucket_blob;
+----
+10

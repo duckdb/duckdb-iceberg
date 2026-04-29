@@ -10,37 +10,6 @@
   ],
   "skip_tests": [
     {
-      "reason": "SEGFAULT",
-      "paths": [
-        "test/sql/alter/rename_table/test_rename_table_many_transactions.test",
-        "test/sql/alter/rename_view/test_rename_view_many_transactions.test",
-        "test/sql/catalog/dependencies/test_prepare_dependencies_transactions.test",
-        "test/sql/catalog/test_schema.test",
-        "test/sql/delete/cleanup_delete_on_conflict.test",
-        "test/sql/insert/unaligned_interleaved_appends.test",
-        "test/sql/parallelism/interquery/concurrent_pk_transactional_appends.test_slow",
-        "test/sql/storage/multiple_clients_checkpoing_dependents.test_slow",
-        "test/sql/transactions/conflict_drop_then_delete.test",
-        "test/sql/transactions/conflict_rename_append.test",
-        "test/sql/transactions/rollback_drop.test",
-        "test/sql/transactions/test_null_version.test",
-        "test/sql/update/test_cascading_updates.test",
-        "test/sql/update/test_update_many_updaters.test",
-        "test/sql/update/test_update_many_updaters_nulls.test",
-        "test/sql/index/art/constraints/test_art_tx_conflict_revert.test",
-        "test/sql/index/art/constraints/test_art_tx_deletes_list.test",
-        "test/sql/index/art/constraints/test_art_tx_deletes_rollback.test",
-        "test/sql/index/art/constraints/test_art_tx_deletes_varchar.test",
-        "test/sql/index/art/constraints/test_art_tx_updates_list.test",
-        "test/sql/index/art/constraints/test_art_tx_updates_rollback.test",
-        "test/sql/index/art/constraints/test_art_tx_upserts_list.test",
-        "test/sql/index/art/constraints/test_art_tx_upserts_rollback.test",
-        "test/sql/index/art/create_drop/test_art_create_index_delete.test",
-        "test/sql/index/art/create_drop/test_art_create_if_exists.test",
-        "test/sql/index/art/create_drop/test_art_many_versions.test"
-      ]
-    },
-    {
       "reason": "Checks available databases/schemas",
       "paths": [
         "test/sql/attach/attach_did_you_mean.test",

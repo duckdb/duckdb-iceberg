@@ -1,0 +1,61 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/merge/merge_partition_update.test
+# description: Test merge into with partitions
+# group: [merge]
+
+require-env ICEBERG_SERVER_AVAILABLE
+
+require-env SECRETS_CREATED_AND_CATALOG_ATTACHED
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+set enable_logging=true
+
+statement ok
+set logging_level='debug'
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.my_timeseries;
+
+statement ok
+CREATE TABLE my_datalake.default.my_timeseries (ts TIMESTAMP, x DOUBLE PRECISION);
+
+statement ok
+ALTER TABLE my_datalake.default.my_timeseries SET PARTITIONED BY (year(ts));
+
+statement ok
+INSERT INTO my_datalake.default.my_timeseries VALUES ('2025-09-17'::TIMESTAMP, 42::DOUBLE PRECISION);
+
+statement ok
+MERGE INTO my_datalake.default.my_timeseries
+    USING (
+        SELECT
+            '2025-09-17'::TIMESTAMP as ts,
+            43::DOUBLE PRECISION as x
+    ) AS timeseries_updates
+    ON my_datalake.default.my_timeseries.ts = timeseries_updates.ts
+    WHEN MATCHED THEN UPDATE;
+
+query I
+SELECT COUNT(*) FROM iceberg_column_stats('my_datalake.default.my_timeseries') where lower_bound.starts_with('2025')
+----
+2
+
+statement ok
+UPDATE my_datalake.default.my_timeseries
+SET x = 43::DOUBLE PRECISION
+WHERE ts = '2025-09-17'::TIMESTAMP;
+
+query I
+SELECT COUNT(*) FROM iceberg_column_stats('my_datalake.default.my_timeseries') where lower_bound.starts_with('2025')
+----
+3

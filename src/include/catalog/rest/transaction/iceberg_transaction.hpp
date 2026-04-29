@@ -11,6 +11,7 @@ class IcebergTableEntry;
 struct IcebergTransactionUpdate;
 struct IcebergTransactionAlterUpdate;
 struct IcebergTransactionDeleteUpdate;
+struct IcebergTransactionRenameUpdate;
 
 struct TableTransactionInfo {
 	TableTransactionInfo() {};
@@ -24,33 +25,40 @@ struct TableTransactionInfo {
 	bool has_assert_create = false;
 };
 
-struct TableInfoCache {
-	TableInfoCache(idx_t sequence_number, idx_t snapshot_id)
-	    : sequence_number(sequence_number), snapshot_id(snapshot_id), exists(true) {
-	}
-	TableInfoCache(bool exists_) : sequence_number(0), snapshot_id(0), exists(exists_) {
-	}
-	idx_t sequence_number;
-	idx_t snapshot_id;
-	bool exists;
-};
-
-enum class IcebergTableStatus : uint8_t { ALIVE, DROPPED };
-
-enum class IcebergTableSource : uint8_t {
-	//! Loaded from external source
-	EXTERNAL,
-	//! Version that exists within the transaction
-	TRANSACTION
-};
+enum class IcebergTableStatus : uint8_t { ALIVE, DROPPED, RENAMED, MISSING };
 
 struct IcebergTransactionTableState {
 public:
-	IcebergTransactionTableState(IcebergTableInformation &table, IcebergTableSource source);
+	IcebergTransactionTableState(optional_ptr<IcebergTableInformation> table);
 
 public:
-	reference<IcebergTableInformation> table;
-	IcebergTableSource source;
+	IcebergTableInformation &GetInfo() {
+		if (!table) {
+			throw InternalException("GetInfo called on IcebergTransactionTableState without a table, status: %d",
+			                        static_cast<uint8_t>(status));
+		}
+		return *table;
+	}
+
+public:
+	bool IsDroppedOrRenamed() const {
+		return status == IcebergTableStatus::DROPPED || status == IcebergTableStatus::RENAMED;
+	}
+	bool IsMissing() const {
+		return status == IcebergTableStatus::MISSING;
+	}
+	bool IsAlive() const {
+		return status == IcebergTableStatus::ALIVE;
+	}
+	void SetStatus(IcebergTableStatus value) {
+		status = value;
+	}
+	void SetTable(IcebergTableInformation &value) {
+		table = value;
+	}
+
+private:
+	optional_ptr<IcebergTableInformation> table;
 	IcebergTableStatus status;
 };
 
@@ -69,19 +77,19 @@ public:
 	}
 	void DoTableUpdates(IcebergTransactionAlterUpdate &alter_update, ClientContext &context);
 	void DoTableDeletes(IcebergTransactionDeleteUpdate &delete_update, ClientContext &context);
+	void DoTableRename(IcebergTransactionRenameUpdate &rename_update, ClientContext &context);
 	void DoSchemaCreates(ClientContext &context);
 	void DoSchemaDeletes(ClientContext &context);
 	IcebergCatalog &GetCatalog();
 	void DropSecrets(ClientContext &context);
 	TableTransactionInfo GetTransactionRequest(IcebergTransactionAlterUpdate &alter_update, ClientContext &context);
-	void RecordTableRequest(const string &table_key, idx_t sequence_number, idx_t snapshot_id);
-	void RecordTableRequest(const string &table_key);
-	TableInfoCache GetTableRequestResult(const string &table_key);
 	optional_ptr<IcebergTransactionTableState> GetLatestTableState(const string &table_key);
-	IcebergTransactionTableState &SetLatestTableState(IcebergTableInformation &table, IcebergTableSource source);
+	IcebergTransactionTableState &SetLatestTableState(IcebergTableInformation &table, IcebergTableStatus status);
+	IcebergTransactionTableState &SetLatestTableState(const string &table_key, IcebergTableStatus status);
 	bool StartedBefore(timestamp_t timestamp_ms) const;
 	IcebergTransactionAlterUpdate &GetOrCreateAlter();
 	IcebergTableInformation &DeleteTable(IcebergTableInformation &table);
+	IcebergTableInformation &RenameTable(IcebergTableInformation &table, const string &new_name);
 
 private:
 	void CleanupFiles();
@@ -90,12 +98,6 @@ private:
 	DatabaseInstance &db;
 	IcebergCatalog &catalog;
 	AccessMode access_mode;
-	//! Tables that have been requested in the current transaction
-	//! and do not need to be requested again. When we request, we also
-	//! store the latest snapshot id, so if the table is requested again
-	//! (with no updates), we can return table information at that snapshot
-	//! while other transactions can still request up to date tables
-	case_insensitive_map_t<TableInfoCache> requested_tables;
 
 public:
 	//! Tables referenced by this transaction that have to stay alive for the duration of the transaction.

@@ -1,0 +1,73 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/insert/partitions/truncate/test_truncate_varchar.test
+# description: Insert into a truncate-partitioned VARCHAR table and verify round-trip
+# group: [truncate]
+
+require-env ICEBERG_SERVER_AVAILABLE
+
+require-env SECRETS_CREATED_AND_CATALOG_ATTACHED
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+create schema if not exists my_datalake.default;
+
+statement ok
+drop table if exists my_datalake.default.test_truncate_varchar;
+
+# truncate(3, category): 'aardvark' -> 'aar', 'bear' -> 'bea', 'ant' -> 'ant'
+# 3 distinct partition values from 4 input strings
+statement ok
+CREATE TABLE my_datalake.default.test_truncate_varchar (id int, category varchar)
+PARTITIONED BY (truncate(3, category));
+
+statement ok
+insert into my_datalake.default.test_truncate_varchar values
+(1, 'aardvark'),
+(2, 'aardwolf'),
+(3, 'bear'),
+(4, 'beaver'),
+(5, 'ant'),
+(6, 'ape');
+
+statement ok
+create table local_truncate_varchar as
+select * from (values
+    (1, 'aardvark'),
+    (2, 'aardwolf'),
+    (3, 'bear'),
+    (4, 'beaver'),
+    (5, 'ant'),
+    (6, 'ape')
+) t(id, category);
+
+query II nosort expected_result
+select * from local_truncate_varchar order by id;
+----
+
+query II nosort expected_result
+select * from my_datalake.default.test_truncate_varchar order by id;
+----
+
+query I
+select count(*) from my_datalake.default.test_truncate_varchar;
+----
+6
+
+# Strings shorter than the width are stored as-is and land in the same
+# partition as other strings with the same prefix (e.g. 'ant' and 'ape'
+# both truncate to 'ant'/'ape' respectively — no shared prefix here,
+# but 'aardvark' and 'aardwolf' both truncate to 'aar')
+query I
+select count(*) from my_datalake.default.test_truncate_varchar
+where category in ('aardvark', 'aardwolf');
+----
+2

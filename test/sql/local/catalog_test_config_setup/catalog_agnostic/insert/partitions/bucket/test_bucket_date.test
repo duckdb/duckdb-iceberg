@@ -1,0 +1,49 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/insert/partitions/bucket/test_bucket_date.test
+# description: Insert into a bucket-partitioned DATE table and verify round-trip
+# group: [bucket]
+
+require-env ICEBERG_SERVER_AVAILABLE
+
+require-env SECRETS_CREATED_AND_CATALOG_ATTACHED
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+create schema if not exists my_datalake.default;
+
+statement ok
+drop table if exists my_datalake.default.test_bucket_date;
+
+statement ok
+CREATE TABLE my_datalake.default.test_bucket_date (id int, val date)
+PARTITIONED BY (bucket(4, val));
+
+statement ok
+insert into my_datalake.default.test_bucket_date
+select range, ('2020-01-01'::DATE + INTERVAL (range) DAY)::DATE from range(20);
+
+statement ok
+create table local_bucket_date as
+select range as id, ('2020-01-01'::DATE + INTERVAL (range) DAY)::DATE as val from range(20);
+
+query II nosort expected_result
+select * from local_bucket_date order by id;
+----
+
+query II nosort expected_result
+select * from my_datalake.default.test_bucket_date order by id;
+----
+
+query I
+select count(*) from my_datalake.default.test_bucket_date;
+----
+20

@@ -58,6 +58,7 @@ public:
 	                              const string &table_name, const string &body);
 	static void CommitTableDelete(ClientContext &context, IcebergCatalog &catalog, const vector<string> &schema,
 	                              const string &table_name);
+	static void CommitTableRename(ClientContext &context, IcebergCatalog &catalog, const string &body);
 	static void CommitMultiTableUpdate(ClientContext &context, IcebergCatalog &catalog, const string &body);
 	static void CommitNamespaceCreate(ClientContext &context, IcebergCatalog &catalog, string body);
 	static void CommitNamespaceDrop(ClientContext &context, IcebergCatalog &catalog,

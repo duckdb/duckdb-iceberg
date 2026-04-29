@@ -20,12 +20,16 @@ vector<TableFunctionSet> IcebergFunctions::GetTableFunctions(ExtensionLoader &lo
 	functions.push_back(SetIcebergTablePropertiesFunctions());
 	functions.push_back(RemoveIcebergTablePropertiesFunctions());
 	functions.push_back(GetIcebergToDuckLakeFunction());
+	functions.push_back(GetIcebergLoadTableResponseFunction());
 
 	return functions;
 }
 
-vector<ScalarFunction> IcebergFunctions::GetScalarFunctions() {
-	vector<ScalarFunction> functions;
+vector<ScalarFunctionSet> IcebergFunctions::GetScalarFunctions() {
+	vector<ScalarFunctionSet> functions;
+
+	functions.push_back(GetIcebergBucketFunction());
+	functions.push_back(GetIcebergTruncateFunction());
 
 	return functions;
 }

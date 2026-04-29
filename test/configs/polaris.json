@@ -36,6 +36,12 @@
       ]
     },
     {
+      "reason": "Catalog fails with table collisions",
+      "paths": [
+        "test/sql/local/irc_any_catalog/alter/rename_table/rename_table_test.test"
+      ]
+    },
+    {
       "reason": "Need to reparse paths",
       "paths": [
         "test/sql/local/catalog_test_config_setup/catalog_agnostic/delete/delete_table.test",

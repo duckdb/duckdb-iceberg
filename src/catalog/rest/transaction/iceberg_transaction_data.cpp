@@ -17,7 +17,7 @@
 namespace duckdb {
 
 IcebergTransactionData::IcebergTransactionData(ClientContext &context, const IcebergTableInformation &table_info)
-    : context(context), table_info(table_info), is_deleted(false) {
+    : context(context), table_info(table_info) {
 	if (table_info.table_metadata.has_next_row_id) {
 		next_row_id = table_info.table_metadata.next_row_id;
 	}
@@ -149,9 +149,13 @@ void IcebergTransactionData::AddUpdateSnapshot(vector<IcebergManifestEntry> &&de
 
 void IcebergTransactionData::TableAddSchema(int32_t schema_id) {
 	auto add_schema_update = make_uniq<AddSchemaUpdate>(table_info, schema_id);
-	schema_updates.push_back(*add_schema_update);
 	updates.push_back(std::move(add_schema_update));
 	assert_schema_id = true;
+	set_schema_id = true;
+}
+
+void IcebergTransactionData::TableSetCurrentSchema() {
+	set_schema_id = true;
 }
 
 void IcebergTransactionData::TableAssignUUID() {
