@@ -1,9 +1,7 @@
 # name: test/sql/local/catalog_test_config_setup/catalog_agnostic/transactions/concurrent_table_swap.test
 # group: [transactions]
 
-require-env ICEBERG_SERVER_AVAILABLE
-
-require-env SECRETS_CREATED_AND_CATALOG_ATTACHED
+require-env CATALOG_TEST_CONFIG_SETUP
 
 require avro
 
