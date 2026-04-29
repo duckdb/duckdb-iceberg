@@ -1,9 +1,7 @@
 # name: test/sql/local/catalog_test_config_setup/catalog_agnostic/alter/rename_table/create_and_rename.test
 # group: [rename_table]
 
-require-env ICEBERG_SERVER_AVAILABLE
-
-require-env SECRETS_CREATED_AND_CATALOG_ATTACHED
+require-env CATALOG_TEST_CONFIG_SETUP
 
 require avro
 

@@ -2,9 +2,7 @@
 # description: Test that bucket(0, col) and truncate(0, col) are rejected at table creation and alteration time
 # group: [unsupported]
 
-require-env ICEBERG_SERVER_AVAILABLE
-
-require-env SECRETS_CREATED_AND_CATALOG_ATTACHED
+require-env CATALOG_TEST_CONFIG_SETUP
 
 require avro
 

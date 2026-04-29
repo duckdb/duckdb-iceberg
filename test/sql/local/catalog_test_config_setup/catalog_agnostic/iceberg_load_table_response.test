@@ -2,9 +2,7 @@
 # description: test iceberg metadata function
 # group: [catalog_agnostic]
 
-require-env ICEBERG_SERVER_AVAILABLE
-
-require-env SECRETS_CREATED_AND_CATALOG_ATTACHED
+require-env CATALOG_TEST_CONFIG_SETUP
 
 require avro
 
