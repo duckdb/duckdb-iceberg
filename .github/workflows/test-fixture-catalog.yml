@@ -73,8 +73,7 @@ jobs:
       - name: Install Iceberg & Run Generic Tests Set local extension repo, Install iceberg from build/release/extension and remove require iceberg from tests
         if: inputs.local-extension-repo != ''
         env:
-          ICEBERG_SERVER_AVAILABLE: 1
-          SECRETS_CREATED_AND_CATALOG_ATTACHED: 1
+          CATALOG_TEST_CONFIG_SETUP: 1
           FIXTURE_SERVER_AVAILABLE: 1
         run: |
           # remove already installed extension if it is installed
@@ -91,23 +90,22 @@ jobs:
           grep -rl "require iceberg" test/sql/ | xargs sed -i '/^require iceberg$/d'
           # not sure why this is needed. Apparently tpch is also not linked
           grep -rl "require tpch" test/sql/ | xargs sed -i '/^require tpch$/d'
-          ./build/release/test/unittest --order lex "$PWD/test/sql/local/irc_any_catalog/*" --list-test-names-only || true
-          ./build/release/test/unittest --order lex "$PWD/test/sql/local/irc_any_catalog/*" --test-config test/configs/fixture.json --autoloading available
+          ./build/release/test/unittest --order lex "$PWD/test/sql/local/catalog_test_config_setup/*" --list-test-names-only || true
+          ./build/release/test/unittest --order lex "$PWD/test/sql/local/catalog_test_config_setup/*" --test-config test/configs/fixture.json --autoloading available
 
       - name: Run Generic IRC tests
         if: inputs.local-extension-repo == ''
         env:
-          ICEBERG_SERVER_AVAILABLE: 1
-          SECRETS_CREATED_AND_CATALOG_ATTACHED: 1
+          CATALOG_TEST_CONFIG_SETUP: 1
           FIXTURE_SERVER_AVAILABLE: 1
         run: |
-          ./build/release/test/unittest --order lex "$PWD/test/sql/local/irc_any_catalog/*" --list-test-names-only || true
-          ./build/release/test/unittest --order lex "$PWD/test/sql/local/irc_any_catalog/*" --test-config test/configs/fixture.json
+          ./build/release/test/unittest --order lex "$PWD/test/sql/local/catalog_test_config_setup/*" --list-test-names-only || true
+          ./build/release/test/unittest --order lex "$PWD/test/sql/local/catalog_test_config_setup/*" --test-config test/configs/fixture.json
 
       - name: Run other tests
         if: inputs.local-extension-repo == ''
         env:
-          ICEBERG_SERVER_AVAILABLE: 1
+          FIXTURE_SERVER_AVAILABLE: 1
         run: |
           ./build/release/test/unittest --order lex "$PWD/test/*" --list-test-names-only || true
           ./build/release/test/unittest --order lex "$PWD/test/*"
@@ -115,7 +113,7 @@ jobs:
       - name: Test reads with PyIceberg
         if: inputs.local-extension-repo == ''
         env:
-          ICEBERG_SERVER_AVAILABLE: 1
+          FIXTURE_SERVER_AVAILABLE: 1
         run: |
           # test with spark v4
           source .venv-spark4/bin/activate

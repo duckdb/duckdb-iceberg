@@ -312,15 +312,9 @@ class CPPClass:
             res.extend([f'\t{x}' for x in required_property.default])
         else:
             res.extend(
-                [
-                    f"""\treturn "{self.name} required property '{required_property.property_name}' is missing";"""
-                ]
+                [f"""\treturn "{self.name} required property '{required_property.property_name}' is missing";"""]
             )
-        res.extend(
-            [
-                '} else {'
-            ]
-        )
+        res.extend(['} else {'])
         res.extend([f'\t{x}' for x in required_property.body])
         res.append('}')
         return res
@@ -617,14 +611,14 @@ class CPPClass:
         if property.nullable is not None:
             prefix = '} else '
             if property.nullable == True:
-                res.extend([
-                    f'if (yyjson_is_null({source})) {{',
-                    '\t//! do nothing, property is explicitly nullable',
-                ])
+                res.extend(
+                    [
+                        f'if (yyjson_is_null({source})) {{',
+                        '\t//! do nothing, property is explicitly nullable',
+                    ]
+                )
                 if not is_required:
-                    res.extend([
-                        f'\thas_{target} = false;'
-                    ])
+                    res.extend([f'\thas_{target} = false;'])
             else:
                 res.extend(
                     [
@@ -713,7 +707,9 @@ class CPPClass:
             res.append(f'\t\t{self.generate_variable_type(additional_properties)} tmp;')
 
             if additional_properties.type != Property.Type.SCHEMA_REFERENCE:
-                item_definition = [f'\t\t{x}' for x in self.generate_item_parse(additional_properties, 'val', 'tmp', True)]
+                item_definition = [
+                    f'\t\t{x}' for x in self.generate_item_parse(additional_properties, 'val', 'tmp', True)
+                ]
                 res.extend(item_definition)
             else:
                 schema_property = cast(SchemaReferenceProperty, additional_properties)
@@ -788,9 +784,7 @@ class CPPClass:
             variable_name = safe_cpp_name(item)
             body = self.generate_assignment(required_property, variable_name, f'{variable_name}_val', True)
             if required_property.default is not None:
-                default = [
-                    f'{variable_name} = "{str(required_property.default)}";'
-                ]
+                default = [f'{variable_name} = "{str(required_property.default)}";']
             else:
                 default = None
             self.required_properties[item] = RequiredProperty(

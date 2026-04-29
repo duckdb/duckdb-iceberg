@@ -1,0 +1,44 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/merge/merge_timestamp.test
+# description: Test merge into with timestamp partitions
+# group: [merge]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+require icu
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+set enable_logging=true
+
+statement ok
+set logging_level='debug'
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.t;
+
+statement ok
+create table my_datalake.default.t (id uuid, ts timestamptz);
+
+statement ok
+alter table my_datalake.default.t set partitioned by (year(ts));
+
+statement ok
+merge into my_datalake.default.t
+using (select uuidv7() id, current_timestamp ts) m on (my_datalake.default.t.id = m.id)
+when matched then update set id = m.id, ts=m.ts
+when not matched then insert (id, ts) values (m.id, m.ts);
+
+query I
+SELECT count (*) FROM my_datalake.default.t;
+----
+1
