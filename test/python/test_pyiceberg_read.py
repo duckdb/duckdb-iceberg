@@ -57,7 +57,7 @@ def rest_catalog(bearer_token):
 
 
 @pytest.mark.skipif(
-    os.getenv('ICEBERG_SERVER_AVAILABLE', None) == None, reason="Test data wasn't generated, run 'make data' first"
+    os.getenv('FIXTURE_SERVER_AVAILABLE', None) == None, reason="Test data wasn't generated, run 'make data' first"
 )
 class TestPyIcebergRead:
     def test_pyiceberg_read(self, rest_catalog):
@@ -76,7 +76,7 @@ class TestPyIcebergRead:
 
 
 @pytest.mark.skipif(
-    os.getenv('ICEBERG_SERVER_AVAILABLE', None) == None, reason="Test data wasn't generated, run 'make data' first"
+    os.getenv('FIXTURE_SERVER_AVAILABLE', None) == None, reason="Test data wasn't generated, run 'make data' first"
 )
 class TestPyIcebergRead:
     def test_pyiceberg_read(self, rest_catalog):
@@ -99,7 +99,7 @@ class TestPyIcebergRead:
 
 
 @pytest.mark.skipif(
-    os.getenv('ICEBERG_SERVER_AVAILABLE', None) == None, reason="Test data wasn't generated, run 'make data' first"
+    os.getenv('FIXTURE_SERVER_AVAILABLE', None) == None, reason="Test data wasn't generated, run 'make data' first"
 )
 class TestPyIcebergRead:
     def test_pyiceberg_read(self, rest_catalog):
@@ -132,7 +132,7 @@ class TestPyIcebergRead:
 
 
 @pytest.mark.skipif(
-    os.getenv('ICEBERG_SERVER_AVAILABLE', None) == None, reason="Test data wasn't generated, run 'make data' first"
+    os.getenv('FIXTURE_SERVER_AVAILABLE', None) == None, reason="Test data wasn't generated, run 'make data' first"
 )
 class TestPyIcebergRead:
     def test_pyiceberg_read(self, rest_catalog):
@@ -145,7 +145,7 @@ class TestPyIcebergRead:
 
 
 @pytest.mark.skipif(
-    os.getenv('ICEBERG_SERVER_AVAILABLE', None) == None, reason="Test data wasn't generated, run 'make data' first"
+    os.getenv('FIXTURE_SERVER_AVAILABLE', None) == None, reason="Test data wasn't generated, run 'make data' first"
 )
 class TestPyIcebergRead:
     def test_pyiceberg_read_duckdb_upper_lower_bounds(self, rest_catalog):
@@ -194,7 +194,7 @@ class TestPyIcebergRead:
 
 
 @pytest.mark.skipif(
-    os.getenv('ICEBERG_SERVER_AVAILABLE', None) == None, reason="Test data wasn't generated, run 'make data' first"
+    os.getenv('FIXTURE_SERVER_AVAILABLE', None) == None, reason="Test data wasn't generated, run 'make data' first"
 )
 class TestPyIcebergRead:
     def test_pyiceberg_read_duckdb_infinities(self, rest_catalog):
@@ -206,7 +206,7 @@ class TestPyIcebergRead:
 
 
 @pytest.mark.skipif(
-    os.getenv('ICEBERG_SERVER_AVAILABLE', None) == None, reason="Test data wasn't generated, run 'make data' first"
+    os.getenv('FIXTURE_SERVER_AVAILABLE', None) == None, reason="Test data wasn't generated, run 'make data' first"
 )
 class TestPyIcebergReadDuckDBNestedTypes:
     def test_pyiceberg_read_duckdb_nested_types(self, rest_catalog):

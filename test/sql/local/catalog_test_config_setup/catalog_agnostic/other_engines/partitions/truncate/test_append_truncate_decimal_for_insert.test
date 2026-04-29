@@ -1,0 +1,111 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/other_engines/partitions/truncate/test_append_truncate_decimal_for_insert.test
+# description: DuckDB appends the exact same values Spark inserted into a truncate(amount, 100)
+# group: [truncate]
+
+#              DECIMAL(10,2) table. Filtering on each value must return exactly 2 rows — one from
+#              Spark, one from DuckDB — proving both ended up in the same partition.
+#              truncate(amount, 100) on DECIMAL(10,2): width=100 on the unscaled value.
+#              Values 1.00-10.00 (unscaled 100-1000, all multiples of 100) each get their own
+#              partition, so every filter on amount returns exactly the 2 inserted rows.
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+# ---- Verify Spark's initial state ----
+# Spark inserted amounts 1.00-10.00 (10 distinct partition keys) plus NULL.
+
+query I
+select count(*) from my_datalake.default.truncate_partitioned_decimal_for_insert;
+----
+11
+
+# ---- DuckDB inserts the same values Spark inserted, with new ids ----
+
+statement ok
+INSERT INTO my_datalake.default.truncate_partitioned_decimal_for_insert VALUES
+    (101, 1.00::DECIMAL(10,2)),
+    (102, 2.00::DECIMAL(10,2)),
+    (103, 3.00::DECIMAL(10,2)),
+    (104, 4.00::DECIMAL(10,2)),
+    (105, 5.00::DECIMAL(10,2)),
+    (106, 6.00::DECIMAL(10,2)),
+    (107, 7.00::DECIMAL(10,2)),
+    (108, 8.00::DECIMAL(10,2)),
+    (109, 9.00::DECIMAL(10,2)),
+    (110, 10.00::DECIMAL(10,2)),
+    (111, NULL);
+
+query I
+select count(*) from my_datalake.default.truncate_partitioned_decimal_for_insert;
+----
+22
+
+# ---- For each inserted value, exactly 2 rows should be visible ----
+# One row from Spark (id 1-11) and one from DuckDB (id 101-111).
+# If DuckDB wrote to the wrong partition the row would still be readable,
+# but a follow-up pushdown test would catch incorrect manifest partition values.
+
+query I
+select count(*) from my_datalake.default.truncate_partitioned_decimal_for_insert where amount = 1.00::DECIMAL(10,2);
+----
+2
+
+query I
+select count(*) from my_datalake.default.truncate_partitioned_decimal_for_insert where amount = 2.00::DECIMAL(10,2);
+----
+2
+
+query I
+select count(*) from my_datalake.default.truncate_partitioned_decimal_for_insert where amount = 3.00::DECIMAL(10,2);
+----
+2
+
+query I
+select count(*) from my_datalake.default.truncate_partitioned_decimal_for_insert where amount = 4.00::DECIMAL(10,2);
+----
+2
+
+query I
+select count(*) from my_datalake.default.truncate_partitioned_decimal_for_insert where amount = 5.00::DECIMAL(10,2);
+----
+2
+
+query I
+select count(*) from my_datalake.default.truncate_partitioned_decimal_for_insert where amount = 6.00::DECIMAL(10,2);
+----
+2
+
+query I
+select count(*) from my_datalake.default.truncate_partitioned_decimal_for_insert where amount = 7.00::DECIMAL(10,2);
+----
+2
+
+query I
+select count(*) from my_datalake.default.truncate_partitioned_decimal_for_insert where amount = 8.00::DECIMAL(10,2);
+----
+2
+
+query I
+select count(*) from my_datalake.default.truncate_partitioned_decimal_for_insert where amount = 9.00::DECIMAL(10,2);
+----
+2
+
+query I
+select count(*) from my_datalake.default.truncate_partitioned_decimal_for_insert where amount = 10.00::DECIMAL(10,2);
+----
+2
+
+query I
+select count(*) from my_datalake.default.truncate_partitioned_decimal_for_insert where amount is null;
+----
+2

@@ -1,0 +1,66 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/insert/partitions/unsupported/test_invalid_partition_params.test
+# description: Test that bucket(0, col) and truncate(0, col) are rejected at table creation and alteration time
+# group: [unsupported]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+create schema if not exists my_datalake.default;
+
+statement ok
+drop table if exists my_datalake.default.test_invalid_partition_params;
+
+statement ok
+CREATE TABLE my_datalake.default.test_invalid_partition_params (id int, val varchar);
+
+# --- bucket with 0 buckets must fail ---
+
+statement error
+CREATE TABLE my_datalake.default.test_bucket_zero (id int, val varchar)
+PARTITIONED BY (bucket(0, id));
+----
+<REGEX>:.*bucket requires a positive integer argument.*
+
+statement error
+ALTER TABLE my_datalake.default.test_invalid_partition_params SET PARTITIONED BY (bucket(0, id));
+----
+<REGEX>:.*bucket requires a positive integer argument.*
+
+# --- truncate with width 0 must fail ---
+
+statement error
+CREATE TABLE my_datalake.default.test_truncate_zero (id int, val varchar)
+PARTITIONED BY (truncate(0, val));
+----
+<REGEX>:.*truncate requires a positive integer argument.*
+
+statement error
+ALTER TABLE my_datalake.default.test_invalid_partition_params SET PARTITIONED BY (truncate(0, val));
+----
+<REGEX>:.*truncate requires a positive integer argument.*
+
+# --- negative values must also fail ---
+
+statement error
+ALTER TABLE my_datalake.default.test_invalid_partition_params SET PARTITIONED BY (bucket(-1, id));
+----
+<REGEX>:.*bucket requires a positive integer argument.*
+
+statement error
+ALTER TABLE my_datalake.default.test_invalid_partition_params SET PARTITIONED BY (truncate(-1, val));
+----
+<REGEX>:.*truncate requires a positive integer argument.*
+
+statement ok
+drop table my_datalake.default.test_invalid_partition_params;

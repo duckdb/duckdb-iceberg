@@ -1,0 +1,43 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_specifc/polaris/alter/alter_add_column_v3.test
+# group: [alter]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require-env POLARIS_SERVER_AVAILABLE
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+CREATE SCHEMA IF NOT EXISTS my_datalake.default;
+
+statement ok
+drop table if exists my_datalake.default.alter_add_column_table;
+
+statement ok
+CREATE TABLE my_datalake.default.alter_add_column_table WITH ('format-version' = 3) AS (select range a FROM range(10));
+
+statement ok
+ALTER TABLE my_datalake.default.alter_add_column_table ADD COLUMN b int DEFAULT 42;
+
+query II
+FROM my_datalake.default.alter_add_column_table;
+----
+0	42
+1	42
+2	42
+3	42
+4	42
+5	42
+6	42
+7	42
+8	42
+9	42

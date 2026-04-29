@@ -1,0 +1,47 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/iceberg_load_table_response.test
+# description: test iceberg metadata function
+# group: [catalog_agnostic]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+statement ok
+CREATE SCHEMA IF NOT EXISTS my_datalake.default;
+
+statement ok
+drop table if exists my_datalake.default.my_table;
+
+statement ok
+CREATE TABLE my_datalake.default.my_table WITH ('format-version' = 2) AS (select range a FROM range(100));
+
+statement error
+FROM iceberg_load_table_response(my_datalake.default.non_existing_table);
+----
+Catalog Error: Table with name non_existing_table does not exist!
+
+statement ok
+FROM iceberg_load_table_response(my_datalake.default.my_table);
+
+# format-version
+query I
+SELECT metadata."format-version" FROM iceberg_load_table_response(my_datalake.default.my_table);
+----
+2
+
+# metadata
+query I
+SELECT metadata."current-schema-id" FROM iceberg_load_table_response(my_datalake.default.my_table);
+----
+0
+
+query I
+SELECT metadata."schemas"[1]."fields"[1]."name" FROM iceberg_load_table_response(my_datalake.default.my_table);
+----
+a
