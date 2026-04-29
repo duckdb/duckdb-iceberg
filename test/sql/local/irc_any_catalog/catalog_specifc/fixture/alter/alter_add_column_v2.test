@@ -47,7 +47,7 @@ FROM my_datalake.default.alter_add_column_table;
 statement error
 ALTER TABLE my_datalake.default.alter_add_column_table ADD COLUMN c int DEFAULT 42;
 ----
-Request returned HTTP 500 for HTTP POST to
+Invalid Input Error: non-null DEFAULT values are not supported for <V3 tables
 
 query II
 FROM my_datalake.default.alter_add_column_table;
