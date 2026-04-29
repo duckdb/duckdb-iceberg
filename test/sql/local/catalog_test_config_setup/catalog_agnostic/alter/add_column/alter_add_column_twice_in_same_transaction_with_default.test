@@ -1,5 +1,5 @@
-# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/alter/alter_add_column_twice_in_same_transaction.test
-# group: [alter]
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/alter/add_column/alter_add_column_twice_in_same_transaction_with_default.test
+# group: [add_column]
 
 require-env CATALOG_TEST_CONFIG_SETUP
 
@@ -36,7 +36,7 @@ statement ok
 ALTER TABLE my_datalake.default.alter_add_column_same_txn_table ADD COLUMN b int;
 
 query II
-FROM my_datalake.default.alter_add_column_same_txn_table;
+from my_datalake.default.alter_add_column_same_txn_table;
 ----
 0	NULL
 1	NULL
@@ -50,21 +50,21 @@ FROM my_datalake.default.alter_add_column_same_txn_table;
 9	NULL
 
 statement ok
-ALTER TABLE my_datalake.default.alter_add_column_same_txn_table ADD COLUMN c int;
+ALTER TABLE my_datalake.default.alter_add_column_same_txn_table ADD COLUMN c int DEFAULT 42;
 
 query III
-FROM my_datalake.default.alter_add_column_same_txn_table;
+from my_datalake.default.alter_add_column_same_txn_table;
 ----
-0	NULL	NULL
-1	NULL	NULL
-2	NULL	NULL
-3	NULL	NULL
-4	NULL	NULL
-5	NULL	NULL
-6	NULL	NULL
-7	NULL	NULL
-8	NULL	NULL
-9	NULL	NULL
+0	NULL	42
+1	NULL	42
+2	NULL	42
+3	NULL	42
+4	NULL	42
+5	NULL	42
+6	NULL	42
+7	NULL	42
+8	NULL	42
+9	NULL	42
 
 statement ok
 commit;
@@ -72,13 +72,13 @@ commit;
 query III
 FROM my_datalake.default.alter_add_column_same_txn_table;
 ----
-0	NULL	NULL
-1	NULL	NULL
-2	NULL	NULL
-3	NULL	NULL
-4	NULL	NULL
-5	NULL	NULL
-6	NULL	NULL
-7	NULL	NULL
-8	NULL	NULL
-9	NULL	NULL
+0	NULL	42
+1	NULL	42
+2	NULL	42
+3	NULL	42
+4	NULL	42
+5	NULL	42
+6	NULL	42
+7	NULL	42
+8	NULL	42
+9	NULL	42

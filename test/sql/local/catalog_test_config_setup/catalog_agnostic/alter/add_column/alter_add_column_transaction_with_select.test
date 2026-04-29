@@ -1,6 +1,6 @@
-# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/alter/alter_add_column_transaction_with_select.test
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/alter/add_column/alter_add_column_transaction_with_select.test
 # description: Reading an altered table inside an explicit BEGIN/COMMIT transaction (after ALTER already committed)
-# group: [alter]
+# group: [add_column]
 
 require-env CATALOG_TEST_CONFIG_SETUP
 

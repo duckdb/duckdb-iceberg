@@ -1,5 +1,5 @@
-# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/alter/alter_add_column_if_not_exists.test
-# group: [alter]
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/alter/add_column/alter_add_column_if_not_exists.test
+# group: [add_column]
 
 require-env CATALOG_TEST_CONFIG_SETUP
 
