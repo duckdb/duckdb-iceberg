@@ -42,7 +42,7 @@ string DataFile::TryFromJSON(yyjson_val *obj) {
 		}
 	}
 	auto first_row_id_val = yyjson_obj_get(obj, "first-row-id");
-	if (first_row_id_val) {
+	if (first_row_id_val && !yyjson_is_null(first_row_id_val)) {
 		has_first_row_id = true;
 		if (yyjson_is_sint(first_row_id_val)) {
 			first_row_id = yyjson_get_sint(first_row_id_val);
@@ -54,7 +54,7 @@ string DataFile::TryFromJSON(yyjson_val *obj) {
 		}
 	}
 	auto column_sizes_val = yyjson_obj_get(obj, "column-sizes");
-	if (column_sizes_val) {
+	if (column_sizes_val && !yyjson_is_null(column_sizes_val)) {
 		has_column_sizes = true;
 		error = column_sizes.TryFromJSON(column_sizes_val);
 		if (!error.empty()) {
@@ -62,7 +62,7 @@ string DataFile::TryFromJSON(yyjson_val *obj) {
 		}
 	}
 	auto value_counts_val = yyjson_obj_get(obj, "value-counts");
-	if (value_counts_val) {
+	if (value_counts_val && !yyjson_is_null(value_counts_val)) {
 		has_value_counts = true;
 		error = value_counts.TryFromJSON(value_counts_val);
 		if (!error.empty()) {
@@ -70,7 +70,7 @@ string DataFile::TryFromJSON(yyjson_val *obj) {
 		}
 	}
 	auto null_value_counts_val = yyjson_obj_get(obj, "null-value-counts");
-	if (null_value_counts_val) {
+	if (null_value_counts_val && !yyjson_is_null(null_value_counts_val)) {
 		has_null_value_counts = true;
 		error = null_value_counts.TryFromJSON(null_value_counts_val);
 		if (!error.empty()) {
@@ -78,7 +78,7 @@ string DataFile::TryFromJSON(yyjson_val *obj) {
 		}
 	}
 	auto nan_value_counts_val = yyjson_obj_get(obj, "nan-value-counts");
-	if (nan_value_counts_val) {
+	if (nan_value_counts_val && !yyjson_is_null(nan_value_counts_val)) {
 		has_nan_value_counts = true;
 		error = nan_value_counts.TryFromJSON(nan_value_counts_val);
 		if (!error.empty()) {
@@ -86,7 +86,7 @@ string DataFile::TryFromJSON(yyjson_val *obj) {
 		}
 	}
 	auto lower_bounds_val = yyjson_obj_get(obj, "lower-bounds");
-	if (lower_bounds_val) {
+	if (lower_bounds_val && !yyjson_is_null(lower_bounds_val)) {
 		has_lower_bounds = true;
 		error = lower_bounds.TryFromJSON(lower_bounds_val);
 		if (!error.empty()) {
@@ -94,7 +94,7 @@ string DataFile::TryFromJSON(yyjson_val *obj) {
 		}
 	}
 	auto upper_bounds_val = yyjson_obj_get(obj, "upper-bounds");
-	if (upper_bounds_val) {
+	if (upper_bounds_val && !yyjson_is_null(upper_bounds_val)) {
 		has_upper_bounds = true;
 		error = upper_bounds.TryFromJSON(upper_bounds_val);
 		if (!error.empty()) {

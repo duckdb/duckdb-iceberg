@@ -89,7 +89,7 @@ string BlobMetadata::TryFromJSON(yyjson_val *obj) {
 		}
 	}
 	auto properties_val = yyjson_obj_get(obj, "properties");
-	if (properties_val) {
+	if (properties_val && !yyjson_is_null(properties_val)) {
 		has_properties = true;
 		if (yyjson_is_obj(properties_val)) {
 			size_t idx, max;

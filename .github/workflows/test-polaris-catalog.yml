@@ -57,14 +57,13 @@ jobs:
  
       - name: Run Generic IRC tests
         env:
-          ICEBERG_SERVER_AVAILABLE: 1
-          SECRETS_CREATED_AND_CATALOG_ATTACHED: 1
+          CATALOG_TEST_CONFIG_SETUP: 1
           POLARIS_SERVER_AVAILABLE: 1
         run: |
           export POLARIS_CLIENT_ID=$(cat tmp/polaris_client_id.txt)
           export POLARIS_CLIENT_SECRET=$(cat tmp/polaris_client_secret.txt)
-          ./build/release/test/unittest --order lex "$PWD/test/sql/local/irc_any_catalog/*" --list-test-names-only || true
-          ./build/release/test/unittest --order lex "$PWD/test/sql/local/irc_any_catalog/*" --test-config test/configs/polaris.json
+          ./build/release/test/unittest --order lex "$PWD/test/sql/local/catalog_test_config_setup/*" --list-test-names-only || true
+          ./build/release/test/unittest --order lex "$PWD/test/sql/local/catalog_test_config_setup/*" --test-config test/configs/polaris.json
 
       - name: Upload Polaris Logs
         if: always()

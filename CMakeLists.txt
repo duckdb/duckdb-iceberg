@@ -57,6 +57,9 @@ set(EXTENSION_SOURCES
 	src/execution/operator/iceberg_delete.cpp
 	src/execution/operator/iceberg_insert.cpp
 	src/execution/operator/iceberg_update.cpp
+	src/execution/operator/merge_into/iceberg_merge_into.cpp
+	src/execution/operator/merge_into/iceberg_merge_insert.cpp
+	src/execution/operator/merge_into/iceberg_merge_update.cpp
 	src/function/copy/iceberg_copy_function.cpp
 	src/function/ducklake/iceberg_to_ducklake.cpp
 	src/function/ducklake/ducklake_column.cpp
@@ -71,6 +74,7 @@ set(EXTENSION_SOURCES
 	src/function/iceberg_functions.cpp
 	src/function/iceberg_scalar_functions.cpp
 	src/function/metadata/iceberg_column_stats.cpp
+	src/function/metadata/iceberg_load_table_response.cpp
 	src/function/metadata/iceberg_metadata.cpp
 	src/function/metadata/iceberg_partition_stats.cpp
 	src/function/metadata/iceberg_snapshots.cpp

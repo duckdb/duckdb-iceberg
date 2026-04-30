@@ -27,7 +27,7 @@ ScanTasks ScanTasks::FromJSON(yyjson_val *obj) {
 string ScanTasks::TryFromJSON(yyjson_val *obj) {
 	string error;
 	auto delete_files_val = yyjson_obj_get(obj, "delete-files");
-	if (delete_files_val) {
+	if (delete_files_val && !yyjson_is_null(delete_files_val)) {
 		has_delete_files = true;
 		if (yyjson_is_arr(delete_files_val)) {
 			size_t idx, max;
@@ -46,7 +46,7 @@ string ScanTasks::TryFromJSON(yyjson_val *obj) {
 		}
 	}
 	auto file_scan_tasks_val = yyjson_obj_get(obj, "file-scan-tasks");
-	if (file_scan_tasks_val) {
+	if (file_scan_tasks_val && !yyjson_is_null(file_scan_tasks_val)) {
 		has_file_scan_tasks = true;
 		if (yyjson_is_arr(file_scan_tasks_val)) {
 			size_t idx, max;
@@ -65,7 +65,7 @@ string ScanTasks::TryFromJSON(yyjson_val *obj) {
 		}
 	}
 	auto plan_tasks_val = yyjson_obj_get(obj, "plan-tasks");
-	if (plan_tasks_val) {
+	if (plan_tasks_val && !yyjson_is_null(plan_tasks_val)) {
 		has_plan_tasks = true;
 		if (yyjson_is_arr(plan_tasks_val)) {
 			size_t idx, max;

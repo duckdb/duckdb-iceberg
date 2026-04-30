@@ -40,7 +40,7 @@ string AddSchemaUpdate::TryFromJSON(yyjson_val *obj) {
 		}
 	}
 	auto action_val = yyjson_obj_get(obj, "action");
-	if (action_val) {
+	if (action_val && !yyjson_is_null(action_val)) {
 		has_action = true;
 		if (yyjson_is_str(action_val)) {
 			action = yyjson_get_str(action_val);
@@ -50,7 +50,7 @@ string AddSchemaUpdate::TryFromJSON(yyjson_val *obj) {
 		}
 	}
 	auto last_column_id_val = yyjson_obj_get(obj, "last-column-id");
-	if (last_column_id_val) {
+	if (last_column_id_val && !yyjson_is_null(last_column_id_val)) {
 		has_last_column_id = true;
 		if (yyjson_is_int(last_column_id_val)) {
 			last_column_id = yyjson_get_int(last_column_id_val);

@@ -11,6 +11,7 @@
 #include "duckdb/common/printer.hpp"
 #include "duckdb/common/file_system.hpp"
 #include "yyjson.hpp"
+#include "duckdb/storage/caching_file_system.hpp"
 
 #include "catalog/rest/catalog_entry/table/iceberg_table_entry.hpp"
 
