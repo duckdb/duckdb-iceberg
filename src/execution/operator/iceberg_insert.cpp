@@ -760,12 +760,24 @@ IcebergCopyOptions IcebergInsert::GetCopyOptions(ClientContext &context, Iceberg
 	result.use_tmp_file = false;
 	if (copy_input.partition_spec) {
 		if (table_properties.find("write.target-file-size-bytes") != table_properties.end()) {
-			DUCKDB_LOG_WARNING(context,
-			                   "Property target-file-size-bytes is currently only supported for unpartitioned writes");
+			Value ignore_target_file_size_bytes_for_partitioned_tables;
+			if (!context.TryGetCurrentSetting("ignore_target_file_size_bytes_for_partitioned_tables",
+			                                  ignore_target_file_size_bytes_for_partitioned_tables) ||
+			    !ignore_target_file_size_bytes_for_partitioned_tables.GetValue<bool>()) {
+				throw InvalidInputException("Table property target-file-size-bytes is currently not supported for "
+				                            "partitioned tables. This property is being ignored.\nTo ignore this error "
+				                            "run \"SET ignore_target_file_size_bytes_for_partitioned_tables=true\"");
+			}
 		}
 		if (table_properties.find("write.parquet.row-group-size-bytes") != table_properties.end()) {
-			DUCKDB_LOG_WARNING(context,
-			                   "Property row_group_size_bytes is currently only supported for unpartitioned writes");
+			Value ignore_row_group_size_bytes_for_partitioned_tables;
+			if (!context.TryGetCurrentSetting("ignore_row_group_size_bytes_for_partitioned_tables",
+			                                  ignore_row_group_size_bytes_for_partitioned_tables) ||
+			    !ignore_row_group_size_bytes_for_partitioned_tables.GetValue<bool>()) {
+				throw InvalidInputException("Table property row-group-size-bytes is currently not supported for "
+				                            "partitioned tables. This property is being ignored.\nTo ignore this error "
+				                            "run \"SET ignore_row_group_size_bytes_for_partitioned_tables=true\"");
+			}
 		}
 		result.filename_pattern.SetFilenamePattern("{uuidv7}");
 		result.partition_output = true;

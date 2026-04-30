@@ -6,9 +6,6 @@ require-env ICEBERG_SERVER_AVAILABLE
 require-env SECRETS_CREATED_AND_CATALOG_ATTACHED
 
 statement ok
-CALL enable_logging(level='warning');
-
-statement ok
 drop table if exists my_datalake.default.my_table;
 
 statement ok
@@ -25,6 +22,15 @@ SELECT log_level, message FROM duckdb_logs
 statement error
 INSERT INTO my_datalake.default.my_table SELECT * FROM range(1000);
 ----
+Invalid Input Error: Table property row-group-size-bytes is currently not supported for partitioned tables. This property is being ignored.
+To ignore this error run "SET ignore_row_group_size_bytes_for_partitioned_tables=true"
+
+statement ok
+SET ignore_row_group_size_bytes_for_partitioned_tables=true
+
+statement error
+INSERT INTO my_datalake.default.my_table SELECT * FROM range(1000);
+----
 Binder Error: ROW_GROUP_SIZE_BYTES does not work while preserving insertion order. Use "SET preserve_insertion_order=false;" to disable preserving insertion order.
 
 statement ok
@@ -32,9 +38,3 @@ SET preserve_insertion_order=false;
 
 statement ok
 INSERT INTO my_datalake.default.my_table SELECT * FROM range(1000);
-
-query II
-SELECT log_level, message FROM duckdb_logs
-----
-WARNING	Property row_group_size_bytes is currently only supported for unpartitioned writes
-WARNING	Property row_group_size_bytes is currently only supported for unpartitioned writes

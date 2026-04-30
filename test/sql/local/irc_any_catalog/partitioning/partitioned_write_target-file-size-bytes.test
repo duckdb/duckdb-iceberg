@@ -18,14 +18,14 @@ CREATE TABLE my_datalake.default.my_table (
   'write.target-file-size-bytes' = '200'
 );
 
-query II
-SELECT log_level, message FROM duckdb_logs
+statement error
+INSERT INTO my_datalake.default.my_table SELECT * FROM range(100);
 ----
+Invalid Input Error: Table property target-file-size-bytes is currently not supported for partitioned tables. This property is being ignored.
+To ignore this error run "SET ignore_target_file_size_bytes_for_partitioned_tables=true"
+
+statement ok
+SET ignore_target_file_size_bytes_for_partitioned_tables=true
 
 statement ok
 INSERT INTO my_datalake.default.my_table SELECT * FROM range(100);
-
-query II
-SELECT log_level, message FROM duckdb_logs
-----
-WARNING	Property target-file-size-bytes is currently only supported for unpartitioned writes

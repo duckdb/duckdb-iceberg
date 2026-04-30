@@ -63,6 +63,13 @@ static void LoadInternal(ExtensionLoader &loader) {
 	config.AddExtensionOption("iceberg_test_force_token_expiry",
 	                          "DEBUG SETTING: force OAuth2 token expiry for testing automatic refresh",
 	                          LogicalType::BOOLEAN, Value::BOOLEAN(false));
+	config.AddExtensionOption("ignore_target_file_size_bytes_for_partitioned_tables",
+	                          "Ignore unsupported write.target-file-size-bytes table property for partitioned tables",
+	                          LogicalType::BOOLEAN, Value::BOOLEAN(false));
+	config.AddExtensionOption(
+	    "ignore_row_group_size_bytes_for_partitioned_tables",
+	    "Ignore unsupported write.parquet.row-group-size-bytes table property for partitioned tables",
+	    LogicalType::BOOLEAN, Value::BOOLEAN(false));
 
 	// Iceberg Table Functions
 	for (auto &fun : IcebergFunctions::GetTableFunctions(loader)) {
