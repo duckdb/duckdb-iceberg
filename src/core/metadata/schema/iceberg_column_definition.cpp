@@ -178,9 +178,20 @@ LogicalType IcebergColumnDefinition::ParsePrimitiveTypeString(const string &type
 	if (type_str == "variant") {
 		return LogicalType::VARIANT();
 	}
-	if (type_str == "geometry") {
-		// Geometry is an Iceberg v3 type stored as WKB binary in parquet
-		return LogicalType::GEOMETRY();
+	if (StringUtil::StartsWith(type_str, "geometry")) {
+		// Geometry is an Iceberg v3 type stored as WKB binary in parquet.
+		// The type string may include a CRS parameter: geometry(<crs>)
+		if (type_str == "geometry") {
+			return LogicalType::GEOMETRY();
+		}
+		if (type_str.size() > 9 && type_str[8] == '(' && type_str.back() == ')') {
+			auto crs_str = type_str.substr(9, type_str.size() - 10);
+			return LogicalType::GEOMETRY(crs_str);
+		}
+		throw InvalidConfigurationException("Invalid geometry type format: %s", type_str);
+	}
+	if (StringUtil::StartsWith(type_str, "geography")) {
+		throw NotImplementedException("Geography support");
 	}
 	throw InvalidConfigurationException("Unrecognized primitive type: %s", type_str);
 }

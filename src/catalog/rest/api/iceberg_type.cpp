@@ -58,8 +58,13 @@ string IcebergTypeHelper::LogicalTypeToIcebergType(const LogicalType &type) {
 		return "map";
 	case LogicalTypeId::VARIANT:
 		return "variant";
-	case LogicalTypeId::GEOMETRY:
-		return "geometry";
+	case LogicalTypeId::GEOMETRY: {
+		if (GeoType::HasCRS(type)) {
+			return StringUtil::Format("geometry(%s)", GeoType::GetCRS(type).GetIdentifier());
+		}
+		// use default coordinate system
+		return "geometry(" + StringUtil::Lower("OGC:CRS84") + ")";
+	}
 	default:
 		throw InvalidInputException("Column type %s is not a valid Iceberg Type.", LogicalTypeIdToString(type.id()));
 	}
