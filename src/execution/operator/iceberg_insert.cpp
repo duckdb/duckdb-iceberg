@@ -726,8 +726,8 @@ IcebergCopyOptions IcebergInsert::GetCopyOptions(ClientContext &context, const I
 		auto it = table_properties.find(mapping.iceberg_option);
 		if (it != table_properties.end()) {
 			if (StringUtil::CIEquals(mapping.parquet_option, "row_group_size_bytes") &&
-			    std::isdigit(it->second.back())) {
-				info->options[mapping.parquet_option].emplace_back(Value::UBIGINT(std::stoull(it->second)));
+			    StringUtil::CharacterIsDigit(it->second.back())) {
+				info->options[mapping.parquet_option].emplace_back(Value::UBIGINT(StringUtil::ToUnsigned(it->second)));
 			} else {
 				info->options[mapping.parquet_option].emplace_back(it->second);
 			}
@@ -765,7 +765,7 @@ IcebergCopyOptions IcebergInsert::GetCopyOptions(ClientContext &context, const I
 			                                  ignore_target_file_size_bytes_for_partitioned_tables) ||
 			    !ignore_target_file_size_bytes_for_partitioned_tables.GetValue<bool>()) {
 				throw InvalidInputException("Table property target-file-size-bytes is currently not supported for "
-				                            "partitioned tables. This property is being ignored.\nTo ignore this error "
+				                            "partitioned tables.\nTo ignore this error "
 				                            "run \"SET ignore_target_file_size_bytes_for_partitioned_tables=true\"");
 			}
 		}
@@ -775,7 +775,7 @@ IcebergCopyOptions IcebergInsert::GetCopyOptions(ClientContext &context, const I
 			                                  ignore_row_group_size_bytes_for_partitioned_tables) ||
 			    !ignore_row_group_size_bytes_for_partitioned_tables.GetValue<bool>()) {
 				throw InvalidInputException("Table property row-group-size-bytes is currently not supported for "
-				                            "partitioned tables. This property is being ignored.\nTo ignore this error "
+				                            "partitioned tables.\nTo ignore this error "
 				                            "run \"SET ignore_row_group_size_bytes_for_partitioned_tables=true\"");
 			}
 		}

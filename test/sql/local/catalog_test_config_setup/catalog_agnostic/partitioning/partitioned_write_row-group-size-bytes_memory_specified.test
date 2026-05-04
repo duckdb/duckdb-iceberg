@@ -16,7 +16,7 @@ CREATE TABLE my_datalake.default.my_table (
 statement error
 INSERT INTO my_datalake.default.my_table SELECT * FROM range(1000);
 ----
-Invalid Input Error: Table property row-group-size-bytes is currently not supported for partitioned tables. This property is being ignored.
+Invalid Input Error: Table property row-group-size-bytes is currently not supported for partitioned tables.
 To ignore this error run "SET ignore_row_group_size_bytes_for_partitioned_tables=true"
 
 statement ok
