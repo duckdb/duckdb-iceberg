@@ -1,5 +1,5 @@
 # name: test/sql/local/irc_any_catalog/insert/iceberg_types/test_geometry_type.test
-# group: [insert]
+# group: [iceberg_types]
 
 require-env ICEBERG_SERVER_AVAILABLE
 

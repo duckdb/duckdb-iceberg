@@ -1,5 +1,5 @@
-# name: test/sql/local/irc_any_catalog/insert/iceberg_types/test_create_geometry_type_nested.test
-# group: [insert]
+# name: test/sql/local/irc_any_catalog/insert/iceberg_types/test_geometry_type_nested.test
+# group: [iceberg_types]
 
 require-env ICEBERG_SERVER_AVAILABLE
 
