@@ -158,7 +158,7 @@ static void SetIcebergSchemaPropertiesFunction(ClientContext &context, TableFunc
 		// not present, create one
 		auto properties = SchemaPropertyUpdates();
 		properties.updates = bind_data.properties;
-		iceberg_transaction.schema_property_updates[schema_key] = properties;
+		iceberg_transaction.schema_property_updates[schema_key] = std::move(properties);
 	} else {
 		auto &schema_property_updates = iceberg_transaction.schema_property_updates[schema_key];
 		auto &removals = schema_property_updates.removals;
