@@ -1,4 +1,5 @@
 #include "catalog/rest/api/iceberg_type.hpp"
+#include "common/iceberg_constants.hpp"
 
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/common/extra_type_info.hpp"
@@ -63,7 +64,7 @@ string IcebergTypeHelper::LogicalTypeToIcebergType(const LogicalType &type) {
 			return StringUtil::Format("geometry(%s)", GeoType::GetCRS(type).GetIdentifier());
 		}
 		// use default coordinate system
-		return "geometry(" + StringUtil::Lower("OGC:CRS84") + ")";
+		return "geometry(" + StringUtil::Lower(IcebergConstants::DefaultGeometryCRS) + ")";
 	}
 	default:
 		throw InvalidInputException("Column type %s is not a valid Iceberg Type.", LogicalTypeIdToString(type.id()));
