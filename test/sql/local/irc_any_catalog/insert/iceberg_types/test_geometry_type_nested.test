@@ -1,0 +1,68 @@
+# name: test/sql/local/irc_any_catalog/insert/iceberg_types/test_geometry_type_nested.test
+# group: [iceberg_types]
+
+require-env ICEBERG_SERVER_AVAILABLE
+
+require-env SECRETS_CREATED_AND_CATALOG_ATTACHED
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+set enable_logging=true
+
+statement ok
+set logging_level='debug'
+
+statement ok
+drop table if exists my_datalake.default.geometry_type;
+
+statement ok
+drop table if exists my_datalake.default.geometry_list;
+
+statement ok
+drop table if exists my_datalake.default.geometry_in_struct;
+
+statement ok
+create table my_datalake.default.geometry_type (goe_type GEOMETRY) with ('format-version'='3');
+
+statement ok
+insert into my_datalake.default.geometry_type VALUES ('POINT(1 2)'::GEOMETRY), ('LINESTRING Z (5 5 5, 10 10 10)'::GEOMETRY);
+
+query I
+select * from my_datalake.default.geometry_type;
+----
+POINT (1 2)
+LINESTRING Z (5 5 5, 10 10 10)
+
+
+statement ok
+create table my_datalake.default.geometry_list (geo_type_list GEOMETRY[]) with ('format-version'='3');
+
+statement ok
+insert into my_datalake.default.geometry_list VALUES (ARRAY['POINT(1 2)'::GEOMETRY, 'LINESTRING(0 0, 1 1)'::GEOMETRY]);
+
+query I
+select * from my_datalake.default.geometry_list;
+----
+['POINT (1 2)', 'LINESTRING (0 0, 1 1)']
+
+statement ok
+create table my_datalake.default.geometry_in_struct (geo_struct STRUCT(label VARCHAR, geom GEOMETRY)) with ('format-version'='3');
+
+statement ok
+insert into my_datalake.default.geometry_in_struct VALUES ({'label': 'point', 'geom': 'POINT(1 2)'::GEOMETRY}), ({'label': 'line', 'geom': 'LINESTRING(0 0, 1 1)'::GEOMETRY});
+
+query I
+select * from my_datalake.default.geometry_in_struct;
+----
+{'label': point, 'geom': 'POINT (1 2)'}
+{'label': line, 'geom': 'LINESTRING (0 0, 1 1)'}
