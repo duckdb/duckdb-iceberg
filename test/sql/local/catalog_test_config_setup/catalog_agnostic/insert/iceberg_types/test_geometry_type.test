@@ -1,4 +1,4 @@
-# name: test/sql/local/irc_any_catalog/insert/iceberg_types/test_geometry_type.test
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/insert/iceberg_types/test_geometry_type.test
 # group: [iceberg_types]
 
 require-env ICEBERG_SERVER_AVAILABLE

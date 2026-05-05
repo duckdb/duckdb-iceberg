@@ -1,5 +1,6 @@
 #include "core/metadata/schema/iceberg_column_definition.hpp"
 #include "duckdb/common/types.hpp"
+#include "common/iceberg_constants.hpp"
 #include "duckdb/common/value_operations/value_operations.hpp"
 
 namespace duckdb {
@@ -182,7 +183,7 @@ LogicalType IcebergColumnDefinition::ParsePrimitiveTypeString(const string &type
 		// Geometry is an Iceberg v3 type stored as WKB binary in parquet.
 		// The type string may include a CRS parameter: geometry(<crs>)
 		if (type_str == "geometry") {
-			return LogicalType::GEOMETRY();
+			return LogicalType::GEOMETRY(IcebergConstants::DefaultGeometryCRS);
 		}
 		if (type_str.size() > 9 && type_str[8] == '(' && type_str.back() == ')') {
 			auto crs_str = type_str.substr(9, type_str.size() - 10);
