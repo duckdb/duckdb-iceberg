@@ -142,6 +142,12 @@ endif()
 target_link_libraries(${EXTENSION_NAME} PUBLIC roaring::roaring roaring::roaring-headers roaring::roaring-headers-cpp)
 target_link_libraries(${TARGET_NAME}_loadable_extension roaring::roaring roaring::roaring-headers roaring::roaring-headers-cpp)
 
+# Unit tests
+option(BUILD_ICEBERG_UNIT_TESTS "Build iceberg C++ unit tests" OFF)
+if(BUILD_ICEBERG_UNIT_TESTS)
+    add_subdirectory(test/cpp)
+endif()
+
 install(
   TARGETS ${EXTENSION_NAME} ${TARGET_NAME}_loadable_extension
   EXPORT "${DUCKDB_EXPORT_SET}"
