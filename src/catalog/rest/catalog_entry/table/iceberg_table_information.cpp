@@ -12,7 +12,7 @@
 #include "catalog/rest/api/catalog_api.hpp"
 #include "catalog/rest/transaction/iceberg_transaction.hpp"
 #include "catalog/rest/transaction/iceberg_transaction_data.hpp"
-#include "catalog/rest/catalog_entry/iceberg_schema_entry.hpp"
+#include "catalog/rest/catalog_entry/schema/iceberg_schema_entry.hpp"
 #include "catalog/rest/iceberg_catalog.hpp"
 #include "catalog/rest/storage/iceberg_authorization.hpp"
 #include "catalog/rest/storage/authorization/oauth2.hpp"

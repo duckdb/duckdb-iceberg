@@ -1,0 +1,72 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/schema_properties/schema_properties_update_concurrent_transactions.test
+# group: [schema_properties]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+statement ok
+DROP SCHEMA IF EXISTS my_datalake.myschema123;
+
+statement ok
+CREATE SCHEMA IF NOT EXISTS my_datalake.myschema123;
+
+query I
+CALL remove_iceberg_schema_properties(my_datalake.myschema123, ['namespace_id']);
+----
+1
+
+query II
+FROM iceberg_schema_properties(my_datalake.myschema123) WHERE key != 'location' ORDER BY ALL;
+----
+
+query I
+CALL set_iceberg_schema_properties(my_datalake.myschema123,
+    {
+    'counter' : '10',
+    }
+);
+----
+2
+
+
+statement ok con1
+BEGIN;
+
+statement ok con2
+BEGIN;
+
+query II
+FROM iceberg_schema_properties(my_datalake.myschema123) WHERE key != 'location' ORDER BY ALL;
+----
+counter	10
+
+# con2 decreases the counter by 1
+
+query I con2
+CALL set_iceberg_schema_properties(my_datalake.myschema123,
+    {
+    'counter' : '9',
+    }
+);
+----
+2
+
+statement ok con2
+COMMIT;
+
+
+# con1 wants to do counter++ , but they don't know that con2 decreased it.
+# there's nothing we can do to prevent this, this is just a limitation of Iceberg
+query I con1
+CALL set_iceberg_schema_properties(my_datalake.myschema123,
+    {
+    'counter' : '11',
+    }
+);
+----
+2
+
+statement ok con1
+COMMIT;
+
+statement ok
+DROP SCHEMA my_datalake.myschema123;

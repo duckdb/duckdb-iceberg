@@ -20,7 +20,7 @@
 #include "catalog/rest/api/catalog_utils.hpp"
 #include "core/metadata/snapshot/iceberg_snapshot.hpp"
 #include "catalog/rest/iceberg_catalog.hpp"
-#include "catalog/rest/catalog_entry/iceberg_schema_entry.hpp"
+#include "catalog/rest/catalog_entry/schema/iceberg_schema_entry.hpp"
 #include "planning/metadata_io/avro/avro_scan.hpp"
 #include "iceberg_logging.hpp"
 #include "catalog/rest/api/table_update.hpp"
@@ -388,7 +388,8 @@ TableTransactionInfo IcebergTransaction::GetTransactionRequest(IcebergTransactio
 }
 
 void IcebergTransaction::Commit() {
-	if (transaction_updates.empty() && created_schemas.empty() && deleted_schemas.empty()) {
+	if (transaction_updates.empty() && created_schemas.empty() && deleted_schemas.empty() &&
+	    schema_property_updates.empty()) {
 		return;
 	}
 
@@ -403,6 +404,7 @@ void IcebergTransaction::Commit() {
 
 	try {
 		DoSchemaCreates(*temp_con_context);
+		DoSchemaPropertyUpdates(*temp_con_context);
 		for (auto &transaction_update : transaction_updates) {
 			auto &type = transaction_update->type;
 			switch (type) {
@@ -578,6 +580,36 @@ void IcebergTransaction::DoSchemaDeletes(ClientContext &context) {
 		ic_catalog.GetSchemas().RemoveEntry(schema_name);
 	}
 	deleted_schemas.clear();
+}
+
+void IcebergTransaction::DoSchemaPropertyUpdates(ClientContext &context) {
+	auto &ic_catalog = catalog.Cast<IcebergCatalog>();
+	for (auto &properties_update : this->schema_property_updates) {
+		auto schema_name_with_catalog = properties_update.first;
+		auto catalog_splitter = schema_name_with_catalog.find(".");
+		auto schema_name_no_catalog = schema_name_with_catalog.erase(0, catalog_splitter + 1);
+
+		auto schema_property_updates = properties_update.second;
+		auto namespace_identifiers = IRCAPI::ParseSchemaName(schema_name_no_catalog);
+
+		std::unique_ptr<yyjson_mut_doc, YyjsonDocDeleter> doc_p(yyjson_mut_doc_new(nullptr));
+		auto doc = doc_p.get();
+		auto root_object = yyjson_mut_obj(doc);
+		yyjson_mut_doc_set_root(doc, root_object);
+
+		auto removal_arr = yyjson_mut_obj_add_arr(doc, root_object, "removals");
+		for (auto &removal : schema_property_updates.removals) {
+			yyjson_mut_arr_add_strcpy(doc, removal_arr, removal.c_str());
+		}
+		auto updates_arr = yyjson_mut_obj_add_obj(doc, root_object, "updates");
+		for (auto &update : schema_property_updates.updates) {
+			yyjson_mut_obj_add_strcpy(doc, updates_arr, update.first.c_str(), update.second.c_str());
+		}
+		auto create_body = JsonDocToString(std::move(doc_p));
+
+		IRCAPI::CommitNamespacePropertiesUpdate(context, ic_catalog, create_body, schema_name_no_catalog);
+	}
+	created_schemas.clear();
 }
 
 namespace {

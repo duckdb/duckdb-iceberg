@@ -200,7 +200,7 @@ static void RemoveIcebergTablePropertiesFunction(ClientContext &context, TableFu
 	auto table_name = iceberg_table->name;
 	global_state.properties_removed = true;
 	// set success output, failure happens during transaction commit.
-	FlatVector::GetData<int64_t>(output.data[0])[0] = bind_data.properties.size();
+	FlatVector::GetData<int64_t>(output.data[0])[0] = table_info.table_metadata.table_properties.size();
 	output.SetCardinality(1);
 }
 

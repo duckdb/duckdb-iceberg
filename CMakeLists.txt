@@ -21,7 +21,7 @@ set(EXTENSION_SOURCES
 	src/catalog/rest/api/iceberg_type.cpp
 	src/catalog/rest/api/table_update.cpp
 	src/catalog/rest/api/url_utils.cpp
-	src/catalog/rest/catalog_entry/iceberg_schema_entry.cpp
+	src/catalog/rest/catalog_entry/schema/iceberg_schema_entry.cpp
 	src/catalog/rest/catalog_entry/table/iceberg_table_entry.cpp
 	src/catalog/rest/catalog_entry/table/iceberg_table_information.cpp
 	src/catalog/rest/iceberg_catalog.cpp
@@ -79,6 +79,7 @@ set(EXTENSION_SOURCES
 	src/function/metadata/iceberg_partition_stats.cpp
 	src/function/metadata/iceberg_snapshots.cpp
 	src/function/metadata/iceberg_table_properties_functions.cpp
+	src/function/metadata/iceberg_schema_properties_functions.cpp
 	src/function/scan/iceberg_scan.cpp
 	src/iceberg_extension.cpp
 	src/iceberg_logging.cpp

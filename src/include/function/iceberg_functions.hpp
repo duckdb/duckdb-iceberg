@@ -35,6 +35,9 @@ private:
 	static TableFunctionSet GetIcebergTablePropertiesFunctions();
 	static TableFunctionSet SetIcebergTablePropertiesFunctions();
 	static TableFunctionSet RemoveIcebergTablePropertiesFunctions();
+	static TableFunctionSet GetIcebergSchemaPropertiesFunctions();
+	static TableFunctionSet SetIcebergSchemaPropertiesFunctions();
+	static TableFunctionSet RemoveIcebergSchemaPropertiesFunctions();
 };
 
 } // namespace duckdb

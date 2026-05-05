@@ -14,7 +14,7 @@
 #include "duckdb/common/index_vector.hpp"
 
 #include "catalog/rest/catalog_entry/table/iceberg_table_entry.hpp"
-#include "catalog/rest/catalog_entry/iceberg_schema_entry.hpp"
+#include "catalog/rest/catalog_entry/schema/iceberg_schema_entry.hpp"
 #include "core/metadata/partition/iceberg_partition_spec.hpp"
 #include "core/metadata/schema/iceberg_table_schema.hpp"
 
