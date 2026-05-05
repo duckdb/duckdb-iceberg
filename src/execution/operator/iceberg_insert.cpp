@@ -14,8 +14,11 @@
 #include "duckdb/planner/expression/bound_reference_expression.hpp"
 #include "duckdb/planner/expression/bound_constant_expression.hpp"
 #include "duckdb/common/multi_file/multi_file_reader.hpp"
+#include "duckdb/common/constants.hpp"
+#include "duckdb/execution/operator/scan/physical_empty_result.hpp"
 
 #include "catalog/rest/iceberg_catalog.hpp"
+#include "catalog/rest/iceberg_prepare_state.hpp"
 #include "catalog/rest/catalog_entry/table/iceberg_table_entry.hpp"
 #include "execution/operator/iceberg_delete.hpp"
 #include "catalog/rest/catalog_entry/table/iceberg_table_information.hpp"
@@ -29,6 +32,10 @@
 #include "catalog/rest/transaction/iceberg_transaction_update.hpp"
 
 namespace duckdb {
+
+static bool IsPrepareOnlyPlanning(ClientContext &context) {
+	return context.transaction.GetActiveQuery() == MAXIMUM_QUERY_ID;
+}
 
 static bool WriteRowId(IcebergInsertVirtualColumns virtual_columns) {
 	return virtual_columns == IcebergInsertVirtualColumns::WRITE_ROW_ID ||
@@ -933,6 +940,13 @@ PhysicalOperator &IcebergCatalog::PlanCreateTableAs(ClientContext &context, Phys
 	auto &ic_schema_entry = schema.Cast<IcebergSchemaEntry>();
 	auto &catalog = ic_schema_entry.catalog;
 	auto transaction = catalog.GetCatalogTransaction(context);
+
+	if (IsPrepareOnlyPlanning(context)) {
+		// CTAS has catalog side effects. Prepare caches a no-op plan and execution rebinds with an active query.
+		auto state = context.registered_state->GetOrCreate<IcebergPrepareContextState>(IcebergPrepareContextState::KEY);
+		state->RequireRebindOnPrepare();
+		return planner.Make<PhysicalEmptyResult>(op.types, op.estimated_cardinality);
+	}
 
 	// create the table. Takes care of committing to rest catalog and getting the metadata location etc.
 	// setting the schema
