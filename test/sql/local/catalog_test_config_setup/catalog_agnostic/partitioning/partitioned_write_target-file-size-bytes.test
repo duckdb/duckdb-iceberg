@@ -1,0 +1,29 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/partitioning/partitioned_write_target-file-size-bytes.test
+# group: [partitioning]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+statement ok
+CALL enable_logging(level='warning');
+
+statement ok
+drop table if exists my_datalake.default.my_table;
+
+statement ok
+CREATE TABLE my_datalake.default.my_table (
+  user_id INT
+) PARTITIONED BY (user_id) WITH (
+  'write.target-file-size-bytes' = '200'
+);
+
+statement error
+INSERT INTO my_datalake.default.my_table SELECT * FROM range(100);
+----
+Invalid Input Error: Table property target-file-size-bytes is currently not supported for partitioned tables.
+To ignore this error run "SET ignore_target_file_size_bytes_for_partitioned_tables=true"
+
+statement ok
+SET ignore_target_file_size_bytes_for_partitioned_tables=true
+
+statement ok
+INSERT INTO my_datalake.default.my_table SELECT * FROM range(100);

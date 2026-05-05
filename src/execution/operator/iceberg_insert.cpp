@@ -725,7 +725,12 @@ IcebergCopyOptions IcebergInsert::GetCopyOptions(ClientContext &context, const I
 		auto &mapping = ICEBERG_TABLE_PROPERTY_MAPPING[i];
 		auto it = table_properties.find(mapping.iceberg_option);
 		if (it != table_properties.end()) {
-			info->options[mapping.parquet_option].emplace_back(it->second);
+			if (StringUtil::CIEquals(mapping.parquet_option, "row_group_size_bytes") &&
+			    StringUtil::CharacterIsDigit(it->second.back())) {
+				info->options[mapping.parquet_option].emplace_back(Value::UBIGINT(StringUtil::ToUnsigned(it->second)));
+			} else {
+				info->options[mapping.parquet_option].emplace_back(it->second);
+			}
 		}
 	}
 
@@ -754,6 +759,26 @@ IcebergCopyOptions IcebergInsert::GetCopyOptions(ClientContext &context, const I
 
 	result.use_tmp_file = false;
 	if (copy_input.partition_spec) {
+		if (table_properties.find("write.target-file-size-bytes") != table_properties.end()) {
+			Value ignore_target_file_size_bytes_for_partitioned_tables;
+			if (!context.TryGetCurrentSetting("ignore_target_file_size_bytes_for_partitioned_tables",
+			                                  ignore_target_file_size_bytes_for_partitioned_tables) ||
+			    !ignore_target_file_size_bytes_for_partitioned_tables.GetValue<bool>()) {
+				throw InvalidInputException("Table property target-file-size-bytes is currently not supported for "
+				                            "partitioned tables.\nTo ignore this error "
+				                            "run \"SET ignore_target_file_size_bytes_for_partitioned_tables=true\"");
+			}
+		}
+		if (table_properties.find("write.parquet.row-group-size-bytes") != table_properties.end()) {
+			Value ignore_row_group_size_bytes_for_partitioned_tables;
+			if (!context.TryGetCurrentSetting("ignore_row_group_size_bytes_for_partitioned_tables",
+			                                  ignore_row_group_size_bytes_for_partitioned_tables) ||
+			    !ignore_row_group_size_bytes_for_partitioned_tables.GetValue<bool>()) {
+				throw InvalidInputException("Table property row-group-size-bytes is currently not supported for "
+				                            "partitioned tables.\nTo ignore this error "
+				                            "run \"SET ignore_row_group_size_bytes_for_partitioned_tables=true\"");
+			}
+		}
 		result.filename_pattern.SetFilenamePattern("{uuidv7}");
 		result.partition_output = true;
 		result.write_empty_file = true;

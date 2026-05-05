@@ -47,6 +47,7 @@ drop table if exists properties_table;
 statement ok
 SET preserve_insertion_order=false;
 
+# with KB
 statement ok
 create table properties_table (my_col int)
 WITH (
@@ -57,6 +58,34 @@ query II
 select * from iceberg_table_properties(my_datalake.default.properties_table) where key like '%row-group-size-bytes%';
 ----
 write.parquet.row-group-size-bytes	200KB
+
+statement ok
+insert into my_datalake.default.properties_table SELECT * FROM range(100000) my_col;
+
+statement ok
+set variable parquet_filepath = (select file_path from iceberg_metadata(my_datalake.default.properties_table) limit 1);
+
+query I
+select row_group_bytes from parquet_metadata(getvariable('parquet_filepath'));
+----
+196639
+196639
+6811
+
+statement ok
+drop table properties_table;
+
+# With no memory unit
+statement ok
+create table properties_table (my_col int)
+WITH (
+    'write.parquet.row-group-size-bytes'='200000'
+);
+
+query II
+select * from iceberg_table_properties(my_datalake.default.properties_table) where key like '%row-group-size-bytes%';
+----
+write.parquet.row-group-size-bytes	200000
 
 statement ok
 insert into my_datalake.default.properties_table SELECT * FROM range(100000) my_col;

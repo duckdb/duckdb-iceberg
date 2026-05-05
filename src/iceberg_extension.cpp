@@ -68,6 +68,13 @@ static void LoadInternal(ExtensionLoader &loader) {
 	    "Whether or not to make use of the (optional) 'metadata-log' of a table to ensure atomicity guarantees hold, "
 	    "at the cost of making another GET for json metadata in rare circumstances",
 	    LogicalType::BOOLEAN, Value::BOOLEAN(true));
+	config.AddExtensionOption("ignore_target_file_size_bytes_for_partitioned_tables",
+	                          "Ignore unsupported write.target-file-size-bytes table property for partitioned tables",
+	                          LogicalType::BOOLEAN, Value::BOOLEAN(false));
+	config.AddExtensionOption(
+	    "ignore_row_group_size_bytes_for_partitioned_tables",
+	    "Ignore unsupported write.parquet.row-group-size-bytes table property for partitioned tables",
+	    LogicalType::BOOLEAN, Value::BOOLEAN(false));
 
 	// Iceberg Table Functions
 	for (auto &fun : IcebergFunctions::GetTableFunctions(loader)) {

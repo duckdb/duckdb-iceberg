@@ -1,0 +1,38 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/partitioning/partitioned_write_row-group-size-bytes.test
+# group: [partitioning]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+statement ok
+drop table if exists my_datalake.default.my_table;
+
+statement ok
+CREATE TABLE my_datalake.default.my_table (
+  user_id INT
+) PARTITIONED BY (user_id) WITH (
+  'write.parquet.row-group-size-bytes' = '134217728'
+);
+
+query II
+SELECT log_level, message FROM duckdb_logs
+----
+
+statement error
+INSERT INTO my_datalake.default.my_table SELECT * FROM range(1000);
+----
+Invalid Input Error: Table property row-group-size-bytes is currently not supported for partitioned tables.
+To ignore this error run "SET ignore_row_group_size_bytes_for_partitioned_tables=true"
+
+statement ok
+SET ignore_row_group_size_bytes_for_partitioned_tables=true
+
+statement error
+INSERT INTO my_datalake.default.my_table SELECT * FROM range(1000);
+----
+Binder Error: ROW_GROUP_SIZE_BYTES does not work while preserving insertion order. Use "SET preserve_insertion_order=false;" to disable preserving insertion order.
+
+statement ok
+SET preserve_insertion_order=false;
+
+statement ok
+INSERT INTO my_datalake.default.my_table SELECT * FROM range(1000);
