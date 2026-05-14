@@ -16,6 +16,7 @@
 
 #include "catalog/rest/api/catalog_api.hpp"
 #include "catalog/rest/api/catalog_utils.hpp"
+#include "common/iceberg_constants.hpp"
 #include "catalog/rest/iceberg_catalog.hpp"
 #include "catalog/rest/catalog_entry/table/iceberg_table_schema_version.hpp"
 #include "catalog/rest/transaction/iceberg_transaction.hpp"
@@ -479,7 +480,7 @@ optional_ptr<CatalogEntry> IcebergTableSet::GetViewEntryInternal(ClientContext &
 		return nullptr;
 	}
 
-	// Find a SQL representation with dialect "duckdb", or fall back to any SQL representation
+	// Find a SQL representation with the DuckDB dialect first, fall back to any SQL representation.
 	string view_sql;
 	auto &metadata = load_result.metadata;
 	// Find the current version
@@ -492,7 +493,7 @@ optional_ptr<CatalogEntry> IcebergTableSet::GetViewEntryInternal(ClientContext &
 			if (!repr.has_sqlview_representation) {
 				continue;
 			}
-			if (repr.sqlview_representation.dialect == "duckdb") {
+			if (repr.sqlview_representation.dialect == IcebergConstants::ViewDuckDBDialect) {
 				view_sql = repr.sqlview_representation.sql;
 				break;
 			}
@@ -501,6 +502,11 @@ optional_ptr<CatalogEntry> IcebergTableSet::GetViewEntryInternal(ClientContext &
 		if (view_sql.empty()) {
 			for (auto &repr : version.representations) {
 				if (repr.has_sqlview_representation) {
+					DUCKDB_LOG_WARNING(context,
+					                   "View '%s' has no representation with dialect '%s'; falling back to "
+					                   "dialect '%s' (the SQL may not parse cleanly in DuckDB)",
+					                   view_name, IcebergConstants::ViewDuckDBDialect,
+					                   repr.sqlview_representation.dialect);
 					view_sql = repr.sqlview_representation.sql;
 					break;
 				}

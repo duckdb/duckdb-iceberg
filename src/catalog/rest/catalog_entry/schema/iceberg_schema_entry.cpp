@@ -134,8 +134,16 @@ void IcebergSchemaEntry::DropEntry(ClientContext &context, DropInfo &info) {
 void IcebergSchemaEntry::DropEntry(ClientContext &context, DropInfo &info, bool delete_entry) {
 	auto entry_name = info.name;
 
-	// Handle VIEW_ENTRY drops
-	if (info.type == CatalogType::VIEW_ENTRY) {
+	// CASCADE is not part of the Iceberg REST spec — reject before any type-specific handling.
+	if (info.cascade) {
+		if (info.type == CatalogType::VIEW_ENTRY) {
+			throw NotImplementedException("DROP VIEW <view_name> CASCADE is not supported for Iceberg views currently");
+		}
+		throw NotImplementedException("DROP TABLE <table_name> CASCADE is not supported for Iceberg tables currently");
+	}
+
+	switch (info.type) {
+	case CatalogType::VIEW_ENTRY: {
 		auto &transaction = IcebergTransaction::Get(context, catalog).Cast<IcebergTransaction>();
 		auto view_key = IcebergTableInformation::GetTableKey(namespace_items, entry_name);
 
@@ -166,8 +174,12 @@ void IcebergSchemaEntry::DropEntry(ClientContext &context, DropInfo &info, bool 
 		}
 		return;
 	}
-
-	tables.DropEntry(context, info, delete_entry);
+	case CatalogType::TABLE_ENTRY:
+		tables.DropEntry(context, info, delete_entry);
+		return;
+	default:
+		throw NotImplementedException("DropEntry not implemented for CatalogType '%s'", CatalogTypeToString(info.type));
+	}
 }
 
 optional_ptr<CatalogEntry> IcebergSchemaEntry::CreateFunction(CatalogTransaction transaction,
@@ -241,10 +253,7 @@ optional_ptr<CatalogEntry> IcebergSchemaEntry::CreateView(CatalogTransaction tra
 	auto &iceberg_transaction = GetICTransaction(transaction);
 	auto view_key = IcebergTableInformation::GetTableKey(namespace_items, info.view_name);
 
-	// Workaround: CreateViewInfo::Copy() does not copy `names`, so we patch it manually.
-	// See: https://github.com/duckdb/duckdb/pull/21817
 	auto view_info = unique_ptr_cast<CreateInfo, CreateViewInfo>(info.Copy());
-	view_info->names = info.names;
 	// Preserve the SELECT SQL — ViewCatalogEntry::Initialize() will move the query out,
 	// so we need the SQL string available at commit time for the REST API request.
 	if (view_info->query) {
