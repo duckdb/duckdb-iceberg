@@ -10,6 +10,7 @@
 #include "duckdb/main/client_data.hpp"
 #include "yyjson.hpp"
 
+#include "common/iceberg_constants.hpp"
 #include "planning/metadata_io/manifest/iceberg_manifest_reader.hpp"
 #include "catalog/rest/transaction/iceberg_transaction.hpp"
 #include "catalog/rest/iceberg_catalog.hpp"
@@ -390,8 +391,8 @@ TableTransactionInfo IcebergTransaction::GetTransactionRequest(IcebergTransactio
 }
 
 void IcebergTransaction::Commit() {
-	if (transaction_updates.empty() && created_schemas.empty() && deleted_schemas.empty() &&
-	    created_views.empty() && deleted_views.empty()) {
+	if (transaction_updates.empty() && created_schemas.empty() && deleted_schemas.empty() && created_views.empty() &&
+	    deleted_views.empty()) {
 		return;
 	}
 
@@ -524,6 +525,7 @@ void IcebergTransaction::DoTableRename(IcebergTransactionRenameUpdate &rename_up
 	IRCAPI::CommitTableRename(context, catalog, transaction_json);
 
 	DropInfo drop_info;
+	drop_info.type = CatalogType::TABLE_ENTRY;
 	drop_info.name = table_name;
 	drop_info.if_not_found = OnEntryNotFound::THROW_EXCEPTION;
 	schema.DropEntry(context, drop_info, true);
@@ -548,6 +550,7 @@ void IcebergTransaction::DoTableDeletes(IcebergTransactionDeleteUpdate &delete_u
 	// remove the table entry from the catalog
 	auto &schema_entry = ic_catalog.schemas.GetEntry(schema_key).Cast<IcebergSchemaEntry>();
 	DropInfo drop_info;
+	drop_info.type = CatalogType::TABLE_ENTRY;
 	drop_info.name = table_name;
 	drop_info.if_not_found = OnEntryNotFound::RETURN_NULL;
 	schema_entry.DropEntry(context, drop_info, true);
@@ -680,9 +683,9 @@ void IcebergTransaction::DoViewCreates(ClientContext &context) {
 		// representations
 		auto repr_arr = yyjson_mut_obj_add_arr(doc, version_obj, "representations");
 		auto repr_obj = yyjson_mut_arr_add_obj(doc, repr_arr);
-		yyjson_mut_obj_add_strcpy(doc, repr_obj, "type", "sql");
+		yyjson_mut_obj_add_strcpy(doc, repr_obj, "type", IcebergConstants::ViewSQLRepresentationType);
 		yyjson_mut_obj_add_strcpy(doc, repr_obj, "sql", view_sql.c_str());
-		yyjson_mut_obj_add_strcpy(doc, repr_obj, "dialect", "duckdb");
+		yyjson_mut_obj_add_strcpy(doc, repr_obj, "dialect", IcebergConstants::ViewDuckDBDialect);
 
 		// properties (empty)
 		yyjson_mut_obj_add_obj(doc, root_object, "properties");
