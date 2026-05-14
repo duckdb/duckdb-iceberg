@@ -111,8 +111,16 @@ void IcebergSchemaEntry::DropEntry(ClientContext &context, DropInfo &info) {
 void IcebergSchemaEntry::DropEntry(ClientContext &context, DropInfo &info, bool delete_entry) {
 	auto entry_name = info.name;
 
-	// Handle VIEW_ENTRY drops
-	if (info.type == CatalogType::VIEW_ENTRY) {
+	// CASCADE is not part of the Iceberg REST spec — reject before any type-specific handling.
+	if (info.cascade) {
+		if (info.type == CatalogType::VIEW_ENTRY) {
+			throw NotImplementedException("DROP VIEW <view_name> CASCADE is not supported for Iceberg views currently");
+		}
+		throw NotImplementedException("DROP TABLE <table_name> CASCADE is not supported for Iceberg tables currently");
+	}
+
+	switch (info.type) {
+	case CatalogType::VIEW_ENTRY: {
 		auto &transaction = IcebergTransaction::Get(context, catalog).Cast<IcebergTransaction>();
 		auto view_key = IcebergTableInformation::GetTableKey(namespace_items, entry_name);
 
@@ -143,30 +151,31 @@ void IcebergSchemaEntry::DropEntry(ClientContext &context, DropInfo &info, bool 
 		}
 		return;
 	}
-
-	// Handle TABLE_ENTRY drops (existing logic)
-	auto table_info_it = tables.GetEntries().find(entry_name);
-	if (table_info_it == tables.GetEntries().end()) {
-		if (info.if_not_found == OnEntryNotFound::RETURN_NULL) {
-			return;
+	case CatalogType::TABLE_ENTRY: {
+		auto table_info_it = tables.GetEntries().find(entry_name);
+		if (table_info_it == tables.GetEntries().end()) {
+			if (info.if_not_found == OnEntryNotFound::RETURN_NULL) {
+				return;
+			}
+			throw CatalogException("Table %s does not exist", entry_name);
 		}
-		throw CatalogException("Table %s does not exist", entry_name);
+		if (delete_entry) {
+			// Remove the entry from the catalog
+			tables.GetEntriesMutable().erase(entry_name);
+		} else {
+			// Add the table to the transaction's deleted_tables
+			auto &transaction = IcebergTransaction::Get(context, catalog).Cast<IcebergTransaction>();
+			auto &table_info = table_info_it->second;
+			auto &table = transaction.DeleteTable(*table_info);
+			//! FIXME: what?
+			// must init schema versions after copy. Schema versions have a pointer to IcebergTableInformation
+			// if the IcebergTableInformation is moved, then the pointer is no longer valid.
+			table.InitSchemaVersions();
+		}
+		return;
 	}
-	if (info.cascade) {
-		throw NotImplementedException("DROP TABLE <table_name> CASCADE is not supported for Iceberg tables currently");
-	}
-	if (delete_entry) {
-		// Remove the entry from the catalog
-		tables.GetEntriesMutable().erase(entry_name);
-	} else {
-		// Add the table to the transaction's deleted_tables
-		auto &transaction = IcebergTransaction::Get(context, catalog).Cast<IcebergTransaction>();
-		auto &table_info = table_info_it->second;
-		auto &table = transaction.DeleteTable(*table_info);
-		//! FIXME: what?
-		// must init schema versions after copy. Schema versions have a pointer to IcebergTableInformation
-		// if the IcebergTableInformation is moved, then the pointer is no longer valid.
-		table.InitSchemaVersions();
+	default:
+		throw NotImplementedException("DropEntry not implemented for CatalogType '%s'", CatalogTypeToString(info.type));
 	}
 }
 
@@ -241,10 +250,7 @@ optional_ptr<CatalogEntry> IcebergSchemaEntry::CreateView(CatalogTransaction tra
 	auto &iceberg_transaction = GetICTransaction(transaction);
 	auto view_key = IcebergTableInformation::GetTableKey(namespace_items, info.view_name);
 
-	// Workaround: CreateViewInfo::Copy() does not copy `names`, so we patch it manually.
-	// See: https://github.com/duckdb/duckdb/pull/21817
 	auto view_info = unique_ptr_cast<CreateInfo, CreateViewInfo>(info.Copy());
-	view_info->names = info.names;
 	// Preserve the SELECT SQL — ViewCatalogEntry::Initialize() will move the query out,
 	// so we need the SQL string available at commit time for the REST API request.
 	if (view_info->query) {
