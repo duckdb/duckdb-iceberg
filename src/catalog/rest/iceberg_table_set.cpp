@@ -439,12 +439,18 @@ optional_ptr<CatalogEntry> IcebergTableSet::GetViewEntryInternal(ClientContext &
 	}
 
 	// Load the view from the REST catalog
-	rest_api_objects::LoadViewResult load_result;
-	try {
-		load_result = IRCAPI::GetView(context, ic_catalog, schema, view_name);
-	} catch (...) {
-		return nullptr;
+	auto get_view_result = IRCAPI::GetView(context, ic_catalog, schema, view_name);
+	if (get_view_result.has_error) {
+		if (get_view_result.status_ == HTTPStatusCode::NotFound_404) {
+			// View legitimately does not exist in the catalog — let DuckDB report "View ... does not exist".
+			return nullptr;
+		}
+		// 401 / 403 / 500 / etc. — surface the real error rather than silently masking it as "not found".
+		throw HTTPException(StringUtil::Format("GetView endpoint returned response code %s with message \"%s\"",
+		                                       EnumUtil::ToString(get_view_result.status_),
+		                                       get_view_result.error_._error.message));
 	}
+	auto &load_result = *get_view_result.result_;
 
 	// Find a SQL representation with the DuckDB dialect first, fall back to any SQL representation.
 	string view_sql;
@@ -493,9 +499,14 @@ optional_ptr<CatalogEntry> IcebergTableSet::GetViewEntryInternal(ClientContext &
 	unique_ptr<SelectStatement> view_query;
 	try {
 		view_query = CreateViewInfo::ParseSelect(view_sql);
-	} catch (std::exception &) {
-		// View exists but SQL can't be parsed (e.g., Spark-only syntax) — create a placeholder
-		// that will produce a clear error when queried
+	} catch (std::exception &ex) {
+		// View exists but its SQL can't be parsed by DuckDB (e.g., Spark/Trino-only syntax).
+		// Log the parse error for debugging, then fall back to a placeholder that produces
+		// a clear error if anyone queries it.
+		DUCKDB_LOG_WARNING(context,
+		                   "View '%s' SQL could not be parsed by DuckDB: %s. "
+		                   "Replacing with an error() placeholder.",
+		                   view_name, ex.what());
 		auto error_sql = StringUtil::Format(
 		    "SELECT error('View \"%s\" exists in the Iceberg catalog but its SQL dialect cannot be parsed by DuckDB')",
 		    view_name);
