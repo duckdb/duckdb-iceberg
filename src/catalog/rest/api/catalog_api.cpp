@@ -526,8 +526,12 @@ vector<rest_api_objects::TableIdentifier> IRCAPI::GetViews(ClientContext &contex
 	return all_identifiers;
 }
 
-rest_api_objects::LoadViewResult IRCAPI::GetView(ClientContext &context, IcebergCatalog &catalog,
-                                                 const IcebergSchemaEntry &schema, const string &view_name) {
+APIResult<unique_ptr<const rest_api_objects::LoadViewResult>> IRCAPI::GetView(ClientContext &context,
+                                                                              IcebergCatalog &catalog,
+                                                                              const IcebergSchemaEntry &schema,
+                                                                              const string &view_name) {
+	auto ret = APIResult<unique_ptr<const rest_api_objects::LoadViewResult>>();
+
 	auto url_builder = catalog.GetBaseUrl();
 	url_builder.AddPrefixComponent(catalog.prefix, catalog.prefix_is_one_component);
 	url_builder.AddPathComponent(IRCPathComponent::RegularComponent("namespaces"));
@@ -538,13 +542,21 @@ rest_api_objects::LoadViewResult IRCAPI::GetView(ClientContext &context, Iceberg
 	HTTPHeaders headers(*context.db);
 	auto response = catalog.auth_handler->Request(RequestType::GET_REQUEST, context, url_builder, headers);
 	if (response->status != HTTPStatusCode::OK_200) {
-		throw InvalidConfigurationException(
-		    "Request to '%s' returned a non-200 status code (%s), with reason: %s, body: %s",
-		    url_builder.GetURLEncoded(), EnumUtil::ToString(response->status), response->reason, response->body);
+		std::unique_ptr<yyjson_doc, YyjsonDocDeleter> out_doc;
+		yyjson_val *error_obj = ICUtils::GetErrorMessage(response->body, out_doc);
+		if (error_obj == nullptr) {
+			throw InvalidConfigurationException(response->body);
+		}
+		ret.has_error = true;
+		ret.status_ = response->status;
+		ret.error_ = rest_api_objects::IcebergErrorResponse::FromJSON(error_obj);
+		return ret;
 	}
+	ret.has_error = false;
 	auto doc = ICUtils::APIResultToDoc(response->body);
 	auto *root = yyjson_doc_get_root(doc.get());
-	return rest_api_objects::LoadViewResult::FromJSON(root);
+	ret.result_ = make_uniq<const rest_api_objects::LoadViewResult>(rest_api_objects::LoadViewResult::FromJSON(root));
+	return ret;
 }
 
 void IRCAPI::CommitNewView(ClientContext &context, IcebergCatalog &catalog, const IcebergSchemaEntry &schema,

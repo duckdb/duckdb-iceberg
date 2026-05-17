@@ -74,8 +74,8 @@ public:
 	//! View operations
 	static vector<rest_api_objects::TableIdentifier> GetViews(ClientContext &context, IcebergCatalog &catalog,
 	                                                          const IcebergSchemaEntry &schema);
-	static rest_api_objects::LoadViewResult GetView(ClientContext &context, IcebergCatalog &catalog,
-	                                                const IcebergSchemaEntry &schema, const string &view_name);
+	static APIResult<unique_ptr<const rest_api_objects::LoadViewResult>>
+	GetView(ClientContext &context, IcebergCatalog &catalog, const IcebergSchemaEntry &schema, const string &view_name);
 	static void CommitNewView(ClientContext &context, IcebergCatalog &catalog, const IcebergSchemaEntry &schema,
 	                          const string &json_body);
 	static void CommitViewDelete(ClientContext &context, IcebergCatalog &catalog, const vector<string> &schema,
