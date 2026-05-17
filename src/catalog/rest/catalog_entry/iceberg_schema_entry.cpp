@@ -112,10 +112,16 @@ void IcebergSchemaEntry::DropEntry(ClientContext &context, DropInfo &info, bool 
 
 	// CASCADE is not part of the Iceberg REST spec — reject before any type-specific handling.
 	if (info.cascade) {
-		if (info.type == CatalogType::VIEW_ENTRY) {
+		switch (info.type) {
+		case CatalogType::VIEW_ENTRY:
 			throw NotImplementedException("DROP VIEW <view_name> CASCADE is not supported for Iceberg views currently");
+		case CatalogType::TABLE_ENTRY:
+			throw NotImplementedException(
+			    "DROP TABLE <table_name> CASCADE is not supported for Iceberg tables currently");
+		default:
+			throw NotImplementedException("DROP %s CASCADE is not supported for Iceberg currently",
+			                              CatalogTypeToString(info.type));
 		}
-		throw NotImplementedException("DROP TABLE <table_name> CASCADE is not supported for Iceberg tables currently");
 	}
 
 	switch (info.type) {
