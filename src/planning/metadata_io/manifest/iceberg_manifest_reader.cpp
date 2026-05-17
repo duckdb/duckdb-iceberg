@@ -165,6 +165,11 @@ void ManifestReader::ReadChunk(DataChunk &chunk, const map<idx_t, LogicalType> &
 	file_sequence_number.ToUnifiedFormat(count, file_sequence_number_format);
 
 	auto &data_file = chunk.data[vector_index++];
+	//! StructVector::GetEntries() returns the inner STRUCT's children directly when
+	//! 'data_file' is dictionary- or constant-encoded, so the children's row count
+	//! does not match 'count' and the per-child ToUnifiedFormat() builds a stale sel.
+	//! Flatten just this struct (cheap) so the children naturally span 0..count-1.
+	data_file.Flatten(count);
 	idx_t entry_index = 0;
 	auto &data_file_entries = StructVector::GetEntries(data_file);
 

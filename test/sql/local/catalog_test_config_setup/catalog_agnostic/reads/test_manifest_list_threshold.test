@@ -1,0 +1,53 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/reads/test_manifest_list_threshold.test
+# description: Regression for non-flat vector in ManifestListReader when manifest_list has many entries
+# group: [reads]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+drop table if exists my_datalake.default.manifest_list_threshold;
+
+# CTAS first so the table has an initial snapshot. Subsequent single-row
+# INSERTs each add one manifest to the manifest_list.
+statement ok
+create table my_datalake.default.manifest_list_threshold as
+    select 0::INTEGER as id, 'seed' as v;
+
+# 20 individual commits => 21 manifests in the current manifest_list.
+loop i 1 21
+
+statement ok
+insert into my_datalake.default.manifest_list_threshold values (${i}, 'r${i}');
+
+endloop
+
+# DESCRIBE only needs the table schema; it must not crash on the
+# manifest_list read that snapshot resolution triggers.
+query IIIIII
+describe my_datalake.default.manifest_list_threshold;
+----
+id	INTEGER	YES	NULL	NULL	NULL
+v	VARCHAR	YES	NULL	NULL	NULL
+
+# Pruning predicate fires before any data is scanned: regression guard
+# for crashes that happened during manifest enumeration.
+query I
+select 1 from my_datalake.default.manifest_list_threshold where id = -1 limit 1;
+----
+
+# Full count after all commits.
+query I
+select count(*) from my_datalake.default.manifest_list_threshold;
+----
+21
