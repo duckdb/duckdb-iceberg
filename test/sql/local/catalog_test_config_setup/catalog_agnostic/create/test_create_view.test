@@ -109,6 +109,29 @@ select col_a, col_b from test_view_v2 order by col_a;
 2	world
 3	foo
 
+# ─── REST 404 path with no cache ──────────────────────────────────────────────
+# Cross-attachment query of a view that has never been created.
+# Forces IRCAPI::GetView to hit the REST catalog and receive a 404
+# (no transaction or cache state can short-circuit the lookup).
+
+statement ok
+ATTACH '' AS my_datalake_404 (TYPE ICEBERG, CLIENT_ID 'admin', CLIENT_SECRET 'password', ENDPOINT 'http://127.0.0.1:8181');
+
+statement ok
+use my_datalake_404.default;
+
+statement error
+select * from never_created_view_for_404_test;
+----
+does not exist
+
+# Switch back to the primary attachment before cleanup
+statement ok
+use my_datalake.default;
+
+statement ok
+DETACH my_datalake_404;
+
 # Clean up
 statement ok
 drop view test_view_v2;
