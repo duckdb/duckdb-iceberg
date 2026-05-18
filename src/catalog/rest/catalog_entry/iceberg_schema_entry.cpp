@@ -234,14 +234,8 @@ optional_ptr<CatalogEntry> IcebergSchemaEntry::CreateView(CatalogTransaction tra
 		}
 	}
 
-	// Ensure names are populated — the binder populates types+names on the original info,
-	// but as a safety net, fill them in if missing.
-	if (info.types.empty() && info.query) {
-		auto copy = unique_ptr_cast<CreateInfo, CreateViewInfo>(info.Copy());
-		auto bound = CreateViewInfo::FromSelect(transaction.GetContext(), std::move(copy));
-		info.types = bound->types;
-		info.names = bound->names;
-	} else if (info.names.empty() && !info.types.empty()) {
+	// Generate default column names if the caller gave us types but no names.
+	if (info.names.empty() && !info.types.empty()) {
 		for (idx_t i = 0; i < info.types.size(); i++) {
 			if (i < info.aliases.size() && !info.aliases[i].empty()) {
 				info.names.push_back(info.aliases[i]);
