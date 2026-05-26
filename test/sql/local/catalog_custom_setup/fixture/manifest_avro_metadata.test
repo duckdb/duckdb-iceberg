@@ -1,0 +1,64 @@
+# name: test/sql/local/catalog_custom_setup/fixture/manifest_avro_metadata.test
+# description: DuckDB-written manifest Avro files should include Iceberg-compatible metadata headers
+# group: [fixture]
+
+require-env FIXTURE_SERVER_AVAILABLE
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+set ignore_error_messages
+
+statement ok
+CREATE SECRET (
+    TYPE S3,
+    KEY_ID 'admin',
+    SECRET 'password',
+    ENDPOINT '127.0.0.1:9000',
+    URL_STYLE 'path',
+    USE_SSL 0
+);
+
+statement ok
+ATTACH '' AS my_datalake (
+    TYPE ICEBERG,
+    CLIENT_ID 'admin',
+    CLIENT_SECRET 'password',
+    ENDPOINT 'http://127.0.0.1:8181'
+);
+
+statement ok
+create schema if not exists my_datalake.default;
+
+statement ok
+drop table if exists my_datalake.default.test_manifest_avro_metadata;
+
+statement ok
+create table my_datalake.default.test_manifest_avro_metadata (id int, label varchar);
+
+statement ok
+insert into my_datalake.default.test_manifest_avro_metadata values (1, 'databricks');
+
+statement ok
+set variable manifest_path = (
+    select manifest_path
+    from iceberg_metadata(my_datalake.default.test_manifest_avro_metadata)
+    order by manifest_sequence_number desc
+    limit 1
+);
+
+query II
+select
+    contains(content::varchar, 'iceberg.schema'),
+    contains(content::varchar, 'schema-id')
+from read_blob(getvariable('manifest_path'));
+----
+true	true
+
+statement ok
+drop table if exists my_datalake.default.test_manifest_avro_metadata;

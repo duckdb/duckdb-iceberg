@@ -33,7 +33,7 @@ def generate_jar_location(config: IcebergRuntimeConfig) -> str:
 
 # uses {spark}_{scala}:{iceberg}
 def generate_package(config: IcebergRuntimeConfig) -> str:
-    return f'org.apache.iceberg:iceberg-spark-runtime-{config.spark_version}_{config.scala_binary_version}:{config.iceberg_library_version}'
+    return f"org.apache.iceberg:iceberg-spark-runtime-{config.spark_version}_{config.scala_binary_version}:{config.iceberg_library_version}"
 
 
 # List of runtimes you want to test
@@ -74,7 +74,9 @@ def spark_con(request):
 
     runtime_jar = generate_jar_location(runtime_config)
     runtime_pkg = generate_package(runtime_config)
-    runtime_path = os.path.abspath(os.path.join(SCRIPT_DIR, '..', '..', 'scripts', 'data_generators', runtime_jar))
+    runtime_path = os.path.abspath(
+        os.path.join(SCRIPT_DIR, "..", "..", "scripts", "data_generators", runtime_jar)
+    )
 
     os.environ["PYSPARK_SUBMIT_ARGS"] = (
         f"--packages {runtime_pkg},org.apache.iceberg:iceberg-aws-bundle:{runtime_config.iceberg_library_version} pyspark-shell"
@@ -96,7 +98,7 @@ def spark_con(request):
         .config("spark.sql.catalog.demo.s3.endpoint", "http://127.0.0.1:9000")
         .config("spark.sql.catalog.demo.s3.path-style-access", "true")
         .config("spark.driver.memory", "10g")
-        .config('spark.jars', runtime_path)
+        .config("spark.jars", runtime_path)
         .config("spark.sql.catalogImplementation", "in-memory")
         .config("spark.sql.catalog.demo.io-impl", "org.apache.iceberg.aws.s3.S3FileIO")
         .getOrCreate()
@@ -116,23 +118,27 @@ requires_iceberg_server = pytest.mark.skipif(
 @requires_iceberg_server
 class TestSparkRead:
     def test_spark_read_insert_test(self, spark_con):
-        df = spark_con.sql("""
+        df = spark_con.sql(
+            """
             select * from default.insert_test order by col1, col2, col3
-        """)
+        """
+        )
         res = df.collect()
         assert res == [
-            Row(col1=datetime.date(2010, 6, 11), col2=42, col3='test'),
-            Row(col1=datetime.date(2020, 8, 12), col2=45345, col3='inserted by con1'),
-            Row(col1=datetime.date(2020, 8, 13), col2=1, col3='insert 1'),
-            Row(col1=datetime.date(2020, 8, 14), col2=2, col3='insert 2'),
-            Row(col1=datetime.date(2020, 8, 15), col2=3, col3='insert 3'),
-            Row(col1=datetime.date(2020, 8, 16), col2=4, col3='insert 4'),
+            Row(col1=datetime.date(2010, 6, 11), col2=42, col3="test"),
+            Row(col1=datetime.date(2020, 8, 12), col2=45345, col3="inserted by con1"),
+            Row(col1=datetime.date(2020, 8, 13), col2=1, col3="insert 1"),
+            Row(col1=datetime.date(2020, 8, 14), col2=2, col3="insert 2"),
+            Row(col1=datetime.date(2020, 8, 15), col2=3, col3="insert 3"),
+            Row(col1=datetime.date(2020, 8, 16), col2=4, col3="insert 4"),
         ]
 
     def test_spark_read_duckdb_table(self, spark_con):
-        df = spark_con.sql("""
+        df = spark_con.sql(
+            """
             select * from default.duckdb_written_table order by a
-            """)
+            """
+        )
         res = df.collect()
         assert res == [
             Row(a=0),
@@ -148,9 +154,11 @@ class TestSparkRead:
         ]
 
     def test_spark_read_table_with_deletes(self, spark_con):
-        df = spark_con.sql("""
+        df = spark_con.sql(
+            """
             select * from default.duckdb_deletes_for_other_engines order by a
-            """)
+            """
+        )
         res = df.collect()
         assert res == [
             Row(a=1),
@@ -166,35 +174,37 @@ class TestSparkRead:
         ]
 
     def test_spark_read_upper_and_lower_bounds(self, spark_con):
-        df = spark_con.sql("""
+        df = spark_con.sql(
+            """
             select * from default.lower_upper_bounds_test;
-            """)
+            """
+        )
         res = df.collect()
         assert len(res) == 3
         assert res == [
             Row(
                 int_type=-2147483648,
                 long_type=-9223372036854775808,
-                varchar_type='',
+                varchar_type="",
                 bool_type=False,
                 float_type=-3.4028234663852886e38,
                 double_type=-1.7976931348623157e308,
-                decimal_type_18_3=Decimal('-9999999999999.999'),
+                decimal_type_18_3=Decimal("-9999999999999.999"),
                 date_type=datetime.date(1, 1, 1),
                 timestamp_type=datetime.datetime(1, 1, 1, 0, 0),
-                binary_type=bytearray(b''),
+                binary_type=bytearray(b""),
             ),
             Row(
                 int_type=2147483647,
                 long_type=9223372036854775807,
-                varchar_type='ZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZ',
+                varchar_type="ZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZ",
                 bool_type=True,
                 float_type=3.4028234663852886e38,
                 double_type=1.7976931348623157e308,
-                decimal_type_18_3=Decimal('9999999999999.999'),
+                decimal_type_18_3=Decimal("9999999999999.999"),
                 date_type=datetime.date(9999, 12, 31),
                 timestamp_type=datetime.datetime(9999, 12, 31, 23, 59, 59, 999999),
-                binary_type=bytearray(b'\xff\xff\xff\xff\xff\xff\xff\xff'),
+                binary_type=bytearray(b"\xff\xff\xff\xff\xff\xff\xff\xff"),
             ),
             Row(
                 int_type=None,
@@ -211,9 +221,11 @@ class TestSparkRead:
         ]
 
     def test_spark_read_infinities(self, spark_con):
-        df = spark_con.sql("""
+        df = spark_con.sql(
+            """
             select * from default.test_infinities;
-            """)
+            """
+        )
         res = df.collect()
         assert len(res) == 2
         assert res == [
@@ -222,18 +234,20 @@ class TestSparkRead:
         ]
 
     def test_duckdb_written_nested_types(self, spark_con):
-        df = spark_con.sql("""
+        df = spark_con.sql(
+            """
             select * from default.duckdb_nested_types;
-            """)
+            """
+        )
         res = df.collect()
         assert len(res) == 1
         assert res == [
             Row(
                 id=1,
-                name='Alice',
-                address=Row(street='123 Main St', city='Metropolis', zip='12345'),
-                phone_numbers=['123-456-7890', '987-654-3210'],
-                metadata={'age': '30', 'membership': 'gold'},
+                name="Alice",
+                address=Row(street="123 Main St", city="Metropolis", zip="12345"),
+                phone_numbers=["123-456-7890", "987-654-3210"],
+                metadata={"age": "30", "membership": "gold"},
             ),
         ]
 
@@ -258,38 +272,42 @@ class TestSparkRead:
             assert bytes(actual.value) == value_bytes
             assert bytes(actual.metadata) == metadata_bytes
 
-        res = spark_con.sql("""
+        res = spark_con.sql(
+            """
             select * from default.my_variant_tbl order by b
-            """).collect()
+            """
+        ).collect()
 
         row = res[0]
         assert row.b == 42
         assert_variant_equal(
             row.a,
-            b'\x11test',
-            b'\x11\x00\x00',
+            b"\x11test",
+            b"\x11\x00\x00",
         )
         row = res[1]
         assert row.b == 43
         assert_variant_equal(
             row.a,
-            b'\x02\x02\x00\x01\x00\x05&\x149\x05\x00\x00\x03\x03\x00\x05\x11\x1b\x14\x01\x00\x00\x00-hello world\x02\x01\x02\x00\x05\x14)\x00\x00\x00',
-            b'\x11\x03\x00\x01\x02\x03abd',
+            b"\x02\x02\x00\x01\x00\x05&\x149\x05\x00\x00\x03\x03\x00\x05\x11\x1b\x14\x01\x00\x00\x00-hello world\x02\x01\x02\x00\x05\x14)\x00\x00\x00",
+            b"\x11\x03\x00\x01\x02\x03abd",
         )
 
     @pytest.mark.requires_spark(">=4.0")
     def test_duckdb_written_row_lineage(self, spark_con):
-        df = spark_con.sql("""
+        df = spark_con.sql(
+            """
             select _last_updated_sequence_number, _row_id, * from default.duckdb_row_lineage order by _row_id;
-            """)
+            """
+        )
         res = df.collect()
         print(res)
         assert res == [
-            Row(_last_updated_sequence_number=5, _row_id=0, id=1, data='replaced'),
-            Row(_last_updated_sequence_number=2, _row_id=1, id=2, data='b_u1'),
-            Row(_last_updated_sequence_number=2, _row_id=3, id=4, data='d_u1'),
-            Row(_last_updated_sequence_number=5, _row_id=7, id=6, data='replaced'),
-            Row(_last_updated_sequence_number=7, _row_id=11, id=7, data='g_new'),
+            Row(_last_updated_sequence_number=5, _row_id=0, id=1, data="replaced"),
+            Row(_last_updated_sequence_number=2, _row_id=1, id=2, data="b_u1"),
+            Row(_last_updated_sequence_number=2, _row_id=3, id=4, data="d_u1"),
+            Row(_last_updated_sequence_number=5, _row_id=7, id=6, data="replaced"),
+            Row(_last_updated_sequence_number=7, _row_id=11, id=7, data="g_new"),
         ]
 
     # Written by Spark, read by Spark
@@ -297,27 +315,37 @@ class TestSparkRead:
     @pytest.mark.skip(reason="Failures due to unclear Spark behavior regarding row ids")
     @pytest.mark.requires_spark(">=4.0")
     def test_spark_read_row_lineage_from_upgraded(self, spark_con):
-        df = spark_con.sql("""
+        df = spark_con.sql(
+            """
             select _last_updated_sequence_number, _row_id, * from default.row_lineage_test_upgraded_insert order by id;
-            """)
+            """
+        )
         res = df.collect()
         assert res == [
-            Row(_last_updated_sequence_number=5, _row_id=3, id=1, data='replaced'),
-            Row(_last_updated_sequence_number=8, _row_id=0, id=2, data='replaced_again'),
-            Row(_last_updated_sequence_number=2, _row_id=6, id=4, data='d_u1'),
-            Row(_last_updated_sequence_number=8, _row_id=1, id=6, data='replaced_again'),
-            Row(_last_updated_sequence_number=7, _row_id=2, id=7, data='g_new'),
+            Row(_last_updated_sequence_number=5, _row_id=3, id=1, data="replaced"),
+            Row(
+                _last_updated_sequence_number=8, _row_id=0, id=2, data="replaced_again"
+            ),
+            Row(_last_updated_sequence_number=2, _row_id=6, id=4, data="d_u1"),
+            Row(
+                _last_updated_sequence_number=8, _row_id=1, id=6, data="replaced_again"
+            ),
+            Row(_last_updated_sequence_number=7, _row_id=2, id=7, data="g_new"),
         ]
 
     # Written by DuckDB (after upgrading with Spark), read by Spark
     @pytest.mark.requires_spark(">=4.0")
     @pytest.mark.skip(reason="Failures due to unclear Spark behavior regarding row ids")
     def test_spark_read_row_lineage_from_upgraded_by_duckdb(self, spark_con):
-        df = spark_con.sql("""
+        df = spark_con.sql(
+            """
             select _last_updated_sequence_number, _row_id, * from default.row_lineage_test_upgraded order by id;
-            """)
+            """
+        )
         res = df.collect()
         assert res == [
-            Row(_last_updated_sequence_number=8, _row_id=3, id=2, data='replaced_again'),
-            Row(_last_updated_sequence_number=7, _row_id=0, id=7, data='g_new'),
+            Row(
+                _last_updated_sequence_number=8, _row_id=3, id=2, data="replaced_again"
+            ),
+            Row(_last_updated_sequence_number=7, _row_id=0, id=7, data="g_new"),
         ]
