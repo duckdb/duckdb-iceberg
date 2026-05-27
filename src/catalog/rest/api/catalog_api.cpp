@@ -172,14 +172,19 @@ APIResult<unique_ptr<const rest_api_objects::LoadTableResult>> IRCAPI::GetTable(
 	auto ret = APIResult<unique_ptr<const rest_api_objects::LoadTableResult>>();
 	auto result = GetTableMetadata(context, catalog, schema, table_name);
 	if (result->status != HTTPStatusCode::OK_200) {
-		std::unique_ptr<yyjson_doc, YyjsonDocDeleter> out_doc;
-		yyjson_val *error_obj = ICUtils::GetErrorMessage(result->body, out_doc);
-		if (error_obj == nullptr) {
-			throw InvalidConfigurationException(result->body);
-		}
 		ret.has_error = true;
 		ret.status_ = result->status;
-		ret.error_ = rest_api_objects::IcebergErrorResponse::FromJSON(error_obj);
+		std::unique_ptr<yyjson_doc, YyjsonDocDeleter> out_doc;
+		yyjson_val *error_obj = ICUtils::GetErrorMessage(result->body, out_doc);
+		if (error_obj != nullptr) {
+			ret.error_ = rest_api_objects::IcebergErrorResponse::FromJSON(error_obj);
+		} else {
+			// Catalog returned a non-spec error body (e.g. OneLake omits 'type' and uses a string 'code').
+			// Keep the raw body as the message so non-recoverable failures still report something useful,
+			// and let the caller decide what to do based on the status code (notably: a 404 means the
+			// table does not exist, regardless of whether the body parsed).
+			ret.error_._error.message = result->body;
+		}
 		return ret;
 	}
 	ret.has_error = false;
