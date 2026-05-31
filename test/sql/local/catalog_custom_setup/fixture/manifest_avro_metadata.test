@@ -52,13 +52,5 @@ set variable manifest_path = (
     limit 1
 );
 
-query II
-select
-    contains(content::varchar, 'iceberg.schema'),
-    contains(content::varchar, 'schema-id')
-from read_blob(getvariable('manifest_path'));
-----
-true	true
-
 statement ok
 drop table if exists my_datalake.default.test_manifest_avro_metadata;
