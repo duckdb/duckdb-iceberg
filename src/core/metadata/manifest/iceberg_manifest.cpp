@@ -419,15 +419,6 @@ idx_t WriteToFile(const IcebergTableMetadata &table_metadata, const IcebergManif
 	auto &allocator = db.GetBufferManager().GetBufferAllocator();
 	auto &path = manifest_file.manifest_path;
 
-	//! We need to create an iceberg-schema for the manifest file, written in the metadata of the Avro file.
-	std::unique_ptr<yyjson_mut_doc, YyjsonDocDeleter> doc_p(yyjson_mut_doc_new(nullptr));
-	auto doc = doc_p.get();
-	auto root_obj = yyjson_mut_obj(doc);
-	yyjson_mut_doc_set_root(doc, root_obj);
-	yyjson_mut_obj_add_strcpy(doc, root_obj, "type", "struct");
-	yyjson_mut_obj_add_uint(doc, root_obj, "schema-id", 0);
-	auto fields_arr = yyjson_mut_obj_add_arr(doc, root_obj, "fields");
-
 	//! Create the types for the DataChunk
 
 	child_list_t<Value> field_ids;
@@ -440,13 +431,6 @@ idx_t WriteToFile(const IcebergTableMetadata &table_metadata, const IcebergManif
 		// status: int
 		names.push_back("status");
 		types.push_back(LogicalType::INTEGER);
-
-		auto field_obj = yyjson_mut_arr_add_obj(doc, fields_arr);
-		yyjson_mut_obj_add_uint(doc, field_obj, "id", STATUS);
-		yyjson_mut_obj_add_strcpy(doc, field_obj, "name", "status");
-		yyjson_mut_obj_add_bool(doc, field_obj, "required", true);
-		yyjson_mut_obj_add_strcpy(doc, field_obj, "type", "int");
-		field_ids.emplace_back("status", CreateFieldID(STATUS, false));
 	}
 
 	{
@@ -454,12 +438,6 @@ idx_t WriteToFile(const IcebergTableMetadata &table_metadata, const IcebergManif
 		names.push_back("snapshot_id");
 		types.push_back(LogicalType::BIGINT);
 		field_ids.emplace_back("snapshot_id", Value::INTEGER(SNAPSHOT_ID));
-
-		auto field_obj = yyjson_mut_arr_add_obj(doc, fields_arr);
-		yyjson_mut_obj_add_uint(doc, field_obj, "id", SNAPSHOT_ID);
-		yyjson_mut_obj_add_strcpy(doc, field_obj, "name", "snapshot_id");
-		yyjson_mut_obj_add_bool(doc, field_obj, "required", false);
-		yyjson_mut_obj_add_strcpy(doc, field_obj, "type", "long");
 	}
 
 	{
@@ -467,12 +445,6 @@ idx_t WriteToFile(const IcebergTableMetadata &table_metadata, const IcebergManif
 		names.push_back("sequence_number");
 		types.push_back(LogicalType::BIGINT);
 		field_ids.emplace_back("sequence_number", Value::INTEGER(SEQUENCE_NUMBER));
-
-		auto field_obj = yyjson_mut_arr_add_obj(doc, fields_arr);
-		yyjson_mut_obj_add_uint(doc, field_obj, "id", SEQUENCE_NUMBER);
-		yyjson_mut_obj_add_strcpy(doc, field_obj, "name", "sequence_number");
-		yyjson_mut_obj_add_bool(doc, field_obj, "required", false);
-		yyjson_mut_obj_add_strcpy(doc, field_obj, "type", "long");
 	}
 
 	{
@@ -480,12 +452,6 @@ idx_t WriteToFile(const IcebergTableMetadata &table_metadata, const IcebergManif
 		names.push_back("file_sequence_number");
 		types.push_back(LogicalType::BIGINT);
 		field_ids.emplace_back("file_sequence_number", Value::INTEGER(FILE_SEQUENCE_NUMBER));
-
-		auto field_obj = yyjson_mut_arr_add_obj(doc, fields_arr);
-		yyjson_mut_obj_add_uint(doc, field_obj, "id", FILE_SEQUENCE_NUMBER);
-		yyjson_mut_obj_add_strcpy(doc, field_obj, "name", "file_sequence_number");
-		yyjson_mut_obj_add_bool(doc, field_obj, "required", false);
-		yyjson_mut_obj_add_strcpy(doc, field_obj, "type", "long");
 	}
 
 	//! DataFile struct
@@ -493,41 +459,22 @@ idx_t WriteToFile(const IcebergTableMetadata &table_metadata, const IcebergManif
 	child_list_t<Value> data_file_field_ids;
 	child_list_t<LogicalType> children;
 
-	auto child_fields_arr = yyjson_mut_arr(doc);
 	{
 		// content: int
 		children.emplace_back("content", LogicalType::INTEGER);
 		data_file_field_ids.emplace_back("content", CreateFieldID(CONTENT, false));
-
-		auto field_obj = yyjson_mut_arr_add_obj(doc, child_fields_arr);
-		yyjson_mut_obj_add_uint(doc, field_obj, "id", CONTENT);
-		yyjson_mut_obj_add_strcpy(doc, field_obj, "name", "content");
-		yyjson_mut_obj_add_bool(doc, field_obj, "required", true);
-		yyjson_mut_obj_add_strcpy(doc, field_obj, "type", "int");
 	}
 
 	{
 		// file_path: string
 		children.emplace_back("file_path", LogicalType::VARCHAR);
 		data_file_field_ids.emplace_back("file_path", CreateFieldID(FILE_PATH, false));
-
-		auto field_obj = yyjson_mut_arr_add_obj(doc, child_fields_arr);
-		yyjson_mut_obj_add_uint(doc, field_obj, "id", FILE_PATH);
-		yyjson_mut_obj_add_strcpy(doc, field_obj, "name", "file_path");
-		yyjson_mut_obj_add_bool(doc, field_obj, "required", true);
-		yyjson_mut_obj_add_strcpy(doc, field_obj, "type", "string");
 	}
 
 	{
 		// file_format: string
 		children.emplace_back("file_format", LogicalType::VARCHAR);
 		data_file_field_ids.emplace_back("file_format", CreateFieldID(FILE_FORMAT, false));
-
-		auto field_obj = yyjson_mut_arr_add_obj(doc, child_fields_arr);
-		yyjson_mut_obj_add_uint(doc, field_obj, "id", FILE_FORMAT);
-		yyjson_mut_obj_add_strcpy(doc, field_obj, "name", "file_format");
-		yyjson_mut_obj_add_bool(doc, field_obj, "required", true);
-		yyjson_mut_obj_add_strcpy(doc, field_obj, "type", "string");
 	}
 
 	{
@@ -544,48 +491,18 @@ idx_t WriteToFile(const IcebergTableMetadata &table_metadata, const IcebergManif
 			partition.emplace_back(entry.name, Value::INTEGER(static_cast<int32_t>(entry.field_id)));
 		}
 		data_file_field_ids.emplace_back("partition", Value::STRUCT(partition));
-
-		auto field_obj = yyjson_mut_arr_add_obj(doc, child_fields_arr);
-		yyjson_mut_obj_add_uint(doc, field_obj, "id", PARTITION);
-		yyjson_mut_obj_add_strcpy(doc, field_obj, "name", "partition");
-		yyjson_mut_obj_add_bool(doc, field_obj, "required", true);
-		auto partition_struct = yyjson_mut_obj_add_obj(doc, field_obj, "type");
-		yyjson_mut_obj_add_strcpy(doc, partition_struct, "type", "struct");
-		auto partition_fields = yyjson_mut_obj_add_arr(doc, partition_struct, "fields");
-		if (!extended_partition_info.empty()) {
-			for (auto &entry : extended_partition_info) {
-				auto field_obj = yyjson_mut_arr_add_obj(doc, partition_fields);
-				yyjson_mut_obj_add_strcpy(doc, field_obj, "name", entry.name.c_str());
-				auto types_arr = yyjson_mut_obj_add_arr(doc, field_obj, "type");
-				yyjson_mut_arr_add_strcpy(doc, types_arr, "null");
-				yyjson_mut_arr_add_strcpy(doc, types_arr, "int");
-				yyjson_mut_obj_add_int(doc, field_obj, "id", static_cast<int32_t>(entry.field_id));
-			}
-		}
 	}
 
 	{
 		// record_count: long
 		children.emplace_back("record_count", LogicalType::BIGINT);
 		data_file_field_ids.emplace_back("record_count", CreateFieldID(RECORD_COUNT, false));
-
-		auto field_obj = yyjson_mut_arr_add_obj(doc, child_fields_arr);
-		yyjson_mut_obj_add_uint(doc, field_obj, "id", RECORD_COUNT);
-		yyjson_mut_obj_add_strcpy(doc, field_obj, "name", "record_count");
-		yyjson_mut_obj_add_bool(doc, field_obj, "required", true);
-		yyjson_mut_obj_add_strcpy(doc, field_obj, "type", "long");
 	}
 
 	{
 		// file_size_in_bytes: long
 		children.emplace_back("file_size_in_bytes", LogicalType::BIGINT);
 		data_file_field_ids.emplace_back("file_size_in_bytes", CreateFieldID(FILE_SIZE_IN_BYTES, false));
-
-		auto field_obj = yyjson_mut_arr_add_obj(doc, child_fields_arr);
-		yyjson_mut_obj_add_uint(doc, field_obj, "id", FILE_SIZE_IN_BYTES);
-		yyjson_mut_obj_add_strcpy(doc, field_obj, "name", "file_size_in_bytes");
-		yyjson_mut_obj_add_bool(doc, field_obj, "required", true);
-		yyjson_mut_obj_add_strcpy(doc, field_obj, "type", "long");
 	}
 
 	//! NOTE: These are optional but we should probably add them, to support better filtering
@@ -615,19 +532,6 @@ idx_t WriteToFile(const IcebergTableMetadata &table_metadata, const IcebergManif
 		lower_bound_record_field_ids.emplace_back("value", Value::STRUCT(lower_bounds_value_field));
 
 		data_file_field_ids.emplace_back("lower_bounds", Value::STRUCT(lower_bound_record_field_ids));
-
-		auto field_obj = yyjson_mut_arr_add_obj(doc, child_fields_arr);
-		yyjson_mut_obj_add_uint(doc, field_obj, "id", LOWER_BOUNDS);
-		yyjson_mut_obj_add_strcpy(doc, field_obj, "name", "lower_bounds");
-		yyjson_mut_obj_add_bool(doc, field_obj, "required", false);
-
-		auto lower_bound_type_struct = yyjson_mut_obj_add_obj(doc, field_obj, "type");
-		yyjson_mut_obj_add_strcpy(doc, lower_bound_type_struct, "type", "map");
-		yyjson_mut_obj_add_strcpy(doc, lower_bound_type_struct, "key", "int");
-		yyjson_mut_obj_add_uint(doc, lower_bound_type_struct, "key-id", LOWER_BOUNDS_KEY);
-		yyjson_mut_obj_add_strcpy(doc, lower_bound_type_struct, "value", "binary");
-		yyjson_mut_obj_add_uint(doc, lower_bound_type_struct, "value-id", LOWER_BOUNDS_VALUE);
-		yyjson_mut_obj_add_bool(doc, lower_bound_type_struct, "value-required", true);
 	}
 
 	// upper bounds struct
@@ -648,18 +552,6 @@ idx_t WriteToFile(const IcebergTableMetadata &table_metadata, const IcebergManif
 		upper_bound_record_field_ids.emplace_back("value", Value::STRUCT(upper_bounds_value_field));
 
 		data_file_field_ids.emplace_back("upper_bounds", Value::STRUCT(upper_bound_record_field_ids));
-		auto field_obj = yyjson_mut_arr_add_obj(doc, child_fields_arr);
-		yyjson_mut_obj_add_uint(doc, field_obj, "id", UPPER_BOUNDS);
-		yyjson_mut_obj_add_strcpy(doc, field_obj, "name", "upper_bounds");
-		yyjson_mut_obj_add_bool(doc, field_obj, "required", false);
-
-		auto upper_bound_type_struct = yyjson_mut_obj_add_obj(doc, field_obj, "type");
-		yyjson_mut_obj_add_strcpy(doc, upper_bound_type_struct, "type", "map");
-		yyjson_mut_obj_add_strcpy(doc, upper_bound_type_struct, "key", "int");
-		yyjson_mut_obj_add_uint(doc, upper_bound_type_struct, "key-id", UPPER_BOUNDS_KEY);
-		yyjson_mut_obj_add_strcpy(doc, upper_bound_type_struct, "value", "binary");
-		yyjson_mut_obj_add_uint(doc, upper_bound_type_struct, "value-id", UPPER_BOUNDS_VALUE);
-		yyjson_mut_obj_add_bool(doc, upper_bound_type_struct, "value-required", true);
 	}
 
 	// null_value_counts_struct
@@ -682,54 +574,24 @@ idx_t WriteToFile(const IcebergTableMetadata &table_metadata, const IcebergManif
 		null_values_counts_record_field_ids.emplace_back("value", Value::STRUCT(null_value_counts_value_field));
 
 		data_file_field_ids.emplace_back("null_value_counts", Value::STRUCT(null_values_counts_record_field_ids));
-		auto field_obj = yyjson_mut_arr_add_obj(doc, child_fields_arr);
-		yyjson_mut_obj_add_uint(doc, field_obj, "id", NULL_VALUE_COUNTS);
-		yyjson_mut_obj_add_strcpy(doc, field_obj, "name", "null_value_counts");
-		yyjson_mut_obj_add_bool(doc, field_obj, "required", false);
-
-		auto null_value_counts_type_struct = yyjson_mut_obj_add_obj(doc, field_obj, "type");
-		yyjson_mut_obj_add_strcpy(doc, null_value_counts_type_struct, "type", "map");
-		yyjson_mut_obj_add_strcpy(doc, null_value_counts_type_struct, "key", "int");
-		yyjson_mut_obj_add_uint(doc, null_value_counts_type_struct, "key-id", NULL_VALUE_COUNTS_KEY);
-		yyjson_mut_obj_add_strcpy(doc, null_value_counts_type_struct, "value", "long");
-		yyjson_mut_obj_add_uint(doc, null_value_counts_type_struct, "value-id", NULL_VALUE_COUNTS_VALUE);
-		yyjson_mut_obj_add_bool(doc, null_value_counts_type_struct, "value-required", true);
 	}
 	// referenced_data_file
 	if (table_metadata.iceberg_version >= 3) {
 		// referenced_data_file: long
 		children.emplace_back("referenced_data_file", LogicalType::VARCHAR);
 		data_file_field_ids.emplace_back("referenced_data_file", CreateFieldID(REFERENCED_DATA_FILE, true));
-
-		auto field_obj = yyjson_mut_arr_add_obj(doc, child_fields_arr);
-		yyjson_mut_obj_add_uint(doc, field_obj, "id", REFERENCED_DATA_FILE);
-		yyjson_mut_obj_add_strcpy(doc, field_obj, "name", "referenced_data_file");
-		yyjson_mut_obj_add_bool(doc, field_obj, "required", false);
-		yyjson_mut_obj_add_strcpy(doc, field_obj, "type", "string");
 	}
 	// content_size_in_bytes
 	if (table_metadata.iceberg_version >= 3) {
 		// content_size_in_bytes: long
 		children.emplace_back("content_size_in_bytes", LogicalType::BIGINT);
 		data_file_field_ids.emplace_back("content_size_in_bytes", CreateFieldID(CONTENT_SIZE_IN_BYTES, true));
-
-		auto field_obj = yyjson_mut_arr_add_obj(doc, child_fields_arr);
-		yyjson_mut_obj_add_uint(doc, field_obj, "id", CONTENT_SIZE_IN_BYTES);
-		yyjson_mut_obj_add_strcpy(doc, field_obj, "name", "content_size_in_bytes");
-		yyjson_mut_obj_add_bool(doc, field_obj, "required", false);
-		yyjson_mut_obj_add_strcpy(doc, field_obj, "type", "long");
 	}
 	// content_offset
 	if (table_metadata.iceberg_version >= 3) {
 		// content_offset: long
 		children.emplace_back("content_offset", LogicalType::BIGINT);
 		data_file_field_ids.emplace_back("content_offset", CreateFieldID(CONTENT_OFFSET, true));
-
-		auto field_obj = yyjson_mut_arr_add_obj(doc, child_fields_arr);
-		yyjson_mut_obj_add_uint(doc, field_obj, "id", CONTENT_OFFSET);
-		yyjson_mut_obj_add_strcpy(doc, field_obj, "name", "content_offset");
-		yyjson_mut_obj_add_bool(doc, field_obj, "required", false);
-		yyjson_mut_obj_add_strcpy(doc, field_obj, "type", "long");
 	}
 
 	{
@@ -739,15 +601,6 @@ idx_t WriteToFile(const IcebergTableMetadata &table_metadata, const IcebergManif
 		data_file_field_ids.emplace_back("__duckdb_field_id", Value::INTEGER(DATA_FILE));
 		data_file_field_ids.emplace_back("__duckdb_nullable", Value::BOOLEAN(false));
 		field_ids.emplace_back("data_file", Value::STRUCT(data_file_field_ids));
-
-		auto field_obj = yyjson_mut_arr_add_obj(doc, fields_arr);
-		yyjson_mut_obj_add_uint(doc, field_obj, "id", DATA_FILE);
-		yyjson_mut_obj_add_strcpy(doc, field_obj, "name", "data_file");
-		yyjson_mut_obj_add_bool(doc, field_obj, "required", true);
-
-		auto data_file_struct = yyjson_mut_obj_add_obj(doc, field_obj, "type");
-		yyjson_mut_obj_add_strcpy(doc, data_file_struct, "type", "struct");
-		yyjson_mut_obj_add_val(doc, data_file_struct, "fields", child_fields_arr);
 	}
 
 	//! Populate the DataChunk with the data files
@@ -785,14 +638,16 @@ idx_t WriteToFile(const IcebergTableMetadata &table_metadata, const IcebergManif
 		col_idx++;
 	}
 	chunk.SetCardinality(manifest_entries.size());
-	auto iceberg_manifest_schema_string = ICUtils::JsonToString(std::move(doc_p));
 
 	std::unique_ptr<yyjson_mut_doc, YyjsonDocDeleter> schema_doc_p(yyjson_mut_doc_new(nullptr));
 	auto schema_doc = schema_doc_p.get();
 	auto schema_root_obj = yyjson_mut_obj(schema_doc);
 	yyjson_mut_doc_set_root(schema_doc, schema_root_obj);
-	IcebergCreateTableRequest::PopulateSchema(schema_doc, schema_root_obj,
-	                                          *table_metadata.GetSchemaFromId(table_metadata.GetCurrentSchemaId()));
+	IcebergCreateTableRequest::PopulateSchema(
+		schema_doc,
+		schema_root_obj,
+		*table_metadata.GetSchemaFromId(table_metadata.GetCurrentSchemaId())
+	);
 	auto iceberg_table_schema_string = ICUtils::JsonToString(std::move(schema_doc_p));
 
 	child_list_t<Value> metadata_values;
@@ -802,7 +657,6 @@ idx_t WriteToFile(const IcebergTableMetadata &table_metadata, const IcebergManif
 	metadata_values.emplace_back("partition-spec-id", std::to_string(current_partition_spec.spec_id));
 	metadata_values.emplace_back("format-version", std::to_string(table_metadata.iceberg_version));
 	metadata_values.emplace_back("content", "data");
-	metadata_values.emplace_back("iceberg.schema", iceberg_manifest_schema_string);
 	auto metadata_map = Value::STRUCT(std::move(metadata_values));
 
 	CopyInfo copy_info;
