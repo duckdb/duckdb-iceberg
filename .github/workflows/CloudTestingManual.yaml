@@ -8,10 +8,6 @@ on:
         description: 'DuckDB branch name or commit hash'
         required: false
         default: 'v1.5-variegata'
-      duckdb_iceberg_ref:
-        description: 'duckdb-iceberg branch name or commit hash'
-        required: false
-        default: 'main'
       httpfs_fork:
         description: 'URL of a duckdb-httpfs fork. Leave empty to use default duckdb/duckdb-httpfs.'
         required: false
@@ -26,7 +22,8 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  cloud-tests:
+  cloud-tests-main:
+    name: Run Cloud tests on main
     uses: ./.github/workflows/CloudTestingReusable.yml
     with:
       duckdb_ref: ${{ github.event.inputs.duckdb_ref || '' }}
@@ -34,3 +31,15 @@ jobs:
       httpfs_fork: ${{ github.event.inputs.httpfs_fork || 'https://github.com/duckdb/duckdb-httpfs' }}
       httpfs_ref: ${{ github.event.inputs.httpfs_ref || '' }}
     secrets: inherit
+
+  cloud-tests-v1.5:
+    name: Run Cloud tests on v1.5-variegata
+    uses: ./.github/workflows/CloudTestingReusable.yml
+    with:
+      duckdb_ref: ${{ github.event.inputs.duckdb_ref || '' }}
+      duckdb_iceberg_ref: ${{ github.event.inputs.duckdb_iceberg_ref || 'main' }}
+      httpfs_fork: ${{ github.event.inputs.httpfs_fork || 'https://github.com/duckdb/duckdb-httpfs' }}
+      httpfs_ref: ${{ github.event.inputs.httpfs_ref || '' }}
+    secrets: inherit
+
+
