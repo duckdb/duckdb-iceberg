@@ -75,26 +75,26 @@ select count(*) from ICEBERG_SCAN('{WORKING_DIRECTORY}/data/generated/iceberg/sp
 
 # 1 data file
 query I
-select count(*) from ICEBERG_METADATA('__WORKING_DIRECTORY__/data/generated/iceberg/spark-local/default/deletion_vectors')
+select count(*) from ICEBERG_METADATA('{WORKING_DIRECTORY}/data/generated/iceberg/spark-local/default/deletion_vectors')
 where manifest_content = 'DATA';
 ----
 1
 
 # 1 delete file (puffin DV)
 query I
-select count(*) from ICEBERG_METADATA('__WORKING_DIRECTORY__/data/generated/iceberg/spark-local/default/deletion_vectors')
+select count(*) from ICEBERG_METADATA('{WORKING_DIRECTORY}/data/generated/iceberg/spark-local/default/deletion_vectors')
 where manifest_content = 'DELETE';
 ----
 1
 
-# EXPLAIN shows the net count ~50,000 (gross 100,000 - 50,000 DV deletes)
+# Due to the partition stats, the entire query is replaced with a constant
 query II
-explain select count(*) from ICEBERG_SCAN('__WORKING_DIRECTORY__/data/generated/iceberg/spark-local/default/deletion_vectors');
+explain select count(*) from ICEBERG_SCAN('{WORKING_DIRECTORY}/data/generated/iceberg/spark-local/default/deletion_vectors');
 ----
-physical_plan	<REGEX>:.*~50,000.*
+physical_plan	<REGEX>:.*COLUMN_DATA_SCAN.*~1 row.*
 
 query I
-select count(*) from ICEBERG_SCAN('__WORKING_DIRECTORY__/data/generated/iceberg/spark-local/default/deletion_vectors');
+select count(*) from ICEBERG_SCAN('{WORKING_DIRECTORY}/data/generated/iceberg/spark-local/default/deletion_vectors');
 ----
 50000
 
