@@ -131,7 +131,7 @@ public:
 	void EnumerateDeleteManifestEntries() const;
 	void ProcessDeletes() const;
 	void ScanDeleteFiles() const;
-	vector<reference<const IcebergEqualityDeleteRow>>
+	vector<reference<const IcebergEqualityDeleteFile>>
 	GetEqualityDeletesForFile(const BoundIcebergManifestEntry &manifest_entry) const;
 	void GetStatistics(vector<PartitionStatistics> &result) const;
 	const BoundIcebergManifestEntry &GetManifestEntry(idx_t file_id) const;

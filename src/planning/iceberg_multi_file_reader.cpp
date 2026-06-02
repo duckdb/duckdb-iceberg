@@ -337,7 +337,11 @@ void IcebergMultiFileReader::ApplyEqualityDeletes(ClientContext &context, DataCh
                                                   const vector<MultiFileColumnDefinition> &local_columns) {
 	// returns a vector<IcebergEqualityDeleteRow>
 	// IcebergEqualityDeleteRow = <field_id, FilterExpression>
-	auto delete_rows = multi_file_list.GetEqualityDeletesForFile(bound_manifest_entry);
+	auto delete_files = multi_file_list.GetEqualityDeletesForFile(bound_manifest_entry);
+	vector<reference<const IcebergEqualityDeleteRow>> delete_rows;
+	for (auto &file : delete_files) {
+		delete_rows.insert(delete_rows.end(), file.get().rows.begin(), file.get().rows.end());
+	}
 
 	if (delete_rows.empty()) {
 		return;

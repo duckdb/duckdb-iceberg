@@ -1061,9 +1061,9 @@ bool IcebergMultiFileList::ManifestMatchesFilter(const IcebergManifestFile &mani
 	return true;
 }
 
-vector<reference<const IcebergEqualityDeleteRow>>
+vector<reference<const IcebergEqualityDeleteFile>>
 IcebergMultiFileList::GetEqualityDeletesForFile(const BoundIcebergManifestEntry &bound_manifest_entry) const {
-	vector<reference<const IcebergEqualityDeleteRow>> result;
+	vector<reference<const IcebergEqualityDeleteFile>> result;
 
 	//! Look through all the equality delete files with a *higher* sequence number
 	auto &manifest_entry = bound_manifest_entry.entry;
@@ -1090,7 +1090,7 @@ IcebergMultiFileList::GetEqualityDeletesForFile(const BoundIcebergManifestEntry 
 					}
 				}
 			}
-			result.insert(result.end(), file.rows.begin(), file.rows.end());
+			result.emplace_back(file);
 		}
 	}
 	return result;
