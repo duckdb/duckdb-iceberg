@@ -463,9 +463,9 @@ static void FixSamePhysicalTypeCastsInExpr(Expression &expr) {
 	auto expression_type = expr.GetExpressionType();
 	if (expression_type == ExpressionType::OPERATOR_CAST) {
 		auto &cast_expr = expr.Cast<BoundCastExpression>();
-		FixSamePhysicalTypeCasts(cast_expr.bound_cast, cast_expr.source_type(), cast_expr.GetReturnType());
+		FixSamePhysicalTypeCasts(cast_expr.GetBoundCastMutable(), cast_expr.source_type(), cast_expr.GetReturnType());
 	} else if (expression_type == ExpressionType::BOUND_FUNCTION) {
-		for (auto &child : expr.Cast<BoundFunctionExpression>().children) {
+		for (auto &child : expr.Cast<BoundFunctionExpression>().GetChildrenMutable()) {
 			if (child) {
 				FixSamePhysicalTypeCastsInExpr(*child);
 			}

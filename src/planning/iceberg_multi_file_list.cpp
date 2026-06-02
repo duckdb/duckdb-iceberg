@@ -91,10 +91,10 @@ static bool TryGetFilterPath(const Expression &expr, vector<idx_t> &path) {
 	case ExpressionClass::BOUND_FUNCTION: {
 		auto &func = expr.Cast<BoundFunctionExpression>();
 		idx_t child_idx;
-		if (!TryGetStructExtractChildIndex(func, child_idx) || func.children.empty()) {
+		if (!TryGetStructExtractChildIndex(func, child_idx) || func.GetChildren().empty()) {
 			return false;
 		}
-		if (!TryGetFilterPath(*func.children[0], path)) {
+		if (!TryGetFilterPath(*func.GetChildren()[0], path)) {
 			return false;
 		}
 		path.push_back(child_idx);
@@ -144,12 +144,12 @@ static void ReplaceFilterPathExpressions(unique_ptr<Expression> &expr, const vec
 static unique_ptr<Expression> ExtractFilterExpressionForPath(const Expression &expr, const vector<idx_t> &path) {
 	if (expr.GetExpressionClass() == ExpressionClass::BOUND_FUNCTION) {
 		auto &func = expr.Cast<BoundFunctionExpression>();
-		if (func.function.GetName() == OptionalFilterScalarFun::NAME && func.bind_info) {
-			auto &data = func.bind_info->Cast<OptionalFilterFunctionData>();
+		if (func.Function().GetName() == OptionalFilterScalarFun::NAME && func.BindInfo()) {
+			auto &data = func.BindInfo()->Cast<OptionalFilterFunctionData>();
 			return data.child_filter_expr ? ExtractFilterExpressionForPath(*data.child_filter_expr, path) : nullptr;
 		}
-		if (func.function.GetName() == SelectivityOptionalFilterScalarFun::NAME && func.bind_info) {
-			auto &data = func.bind_info->Cast<SelectivityOptionalFilterFunctionData>();
+		if (func.Function().GetName() == SelectivityOptionalFilterScalarFun::NAME && func.BindInfo()) {
+			auto &data = func.BindInfo()->Cast<SelectivityOptionalFilterFunctionData>();
 			return data.child_filter_expr ? ExtractFilterExpressionForPath(*data.child_filter_expr, path) : nullptr;
 		}
 	}
@@ -157,17 +157,17 @@ static unique_ptr<Expression> ExtractFilterExpressionForPath(const Expression &e
 	    expr.GetExpressionType() == ExpressionType::CONJUNCTION_AND) {
 		auto &conjunction = expr.Cast<BoundConjunctionExpression>();
 		auto result = make_uniq<BoundConjunctionExpression>(ExpressionType::CONJUNCTION_AND);
-		for (auto &child : conjunction.children) {
+		for (auto &child : conjunction.GetChildren()) {
 			auto extracted_child = ExtractFilterExpressionForPath(*child, path);
 			if (extracted_child) {
-				result->children.push_back(std::move(extracted_child));
+				result->GetChildrenMutable().push_back(std::move(extracted_child));
 			}
 		}
-		if (result->children.empty()) {
+		if (result->GetChildren().empty()) {
 			return nullptr;
 		}
-		if (result->children.size() == 1) {
-			return std::move(result->children[0]);
+		if (result->GetChildren().size() == 1) {
+			return std::move(result->GetChildrenMutable()[0]);
 		}
 		return std::move(result);
 	}

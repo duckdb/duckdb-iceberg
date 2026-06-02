@@ -102,9 +102,9 @@ bool IcebergDelete::TryGetEqualityDeletePredicates(ClientContext &context, Icebe
 
 		optional_ptr<const Value> constant_value;
 		if (IsDirectReference(left) && right.GetExpressionClass() == ExpressionClass::BOUND_CONSTANT) {
-			constant_value = right.Cast<BoundConstantExpression>().value;
+			constant_value = right.Cast<BoundConstantExpression>().GetValue();
 		} else if (left.GetExpressionClass() == ExpressionClass::BOUND_CONSTANT && IsDirectReference(right)) {
-			constant_value = left.Cast<BoundConstantExpression>().value;
+			constant_value = left.Cast<BoundConstantExpression>().GetValue();
 		} else {
 			return false;
 		}

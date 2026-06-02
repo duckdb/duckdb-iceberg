@@ -102,10 +102,7 @@ void IcebergMultiFileList::FinalizeEqualityDeletes(const vector<MultiFileColumnD
                                                    const vector<idx_t> &projection_ids) const {
 	unordered_map<int32_t, column_t> field_id_to_global_column;
 	for (idx_t i = 0; i < global_columns.size(); i++) {
-		auto &global_col = global_columns[i];
-		if (global_col.identifier.IsNull()) {
-			continue;
-		}
+		auto &global_col = global_columns.at(i);
 		field_id_to_global_column[global_col.GetIdentifierFieldId()] = i;
 	}
 
@@ -174,7 +171,7 @@ void IcebergMultiFileList::FinalizeEqualityDeletes(const vector<MultiFileColumnD
 						auto is_not_null =
 						    make_uniq<BoundOperatorExpression>(ExpressionType::OPERATOR_IS_NOT_NULL,
 						                                      LogicalType::BOOLEAN);
-						is_not_null->children.push_back(std::move(bound_ref));
+						is_not_null->GetChildrenMutable().push_back(std::move(bound_ref));
 						equality_filter = std::move(is_not_null);
 					}
 					row.filters.emplace(std::make_pair(field_id, std::move(equality_filter)));

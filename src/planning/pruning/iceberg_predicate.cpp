@@ -254,11 +254,11 @@ static bool MatchBoundsExpression(ClientContext &context, const Expression &expr
 		auto &left = BoundComparisonExpression::Left(compare_expr);
 		auto &right = BoundComparisonExpression::Right(compare_expr);
 		if (IsDirectReference(left) && right.GetExpressionClass() == ExpressionClass::BOUND_CONSTANT) {
-			return MatchBoundsConstant<TRANSFORM>(right.Cast<BoundConstantExpression>().value, comparison_type, stats,
+			return MatchBoundsConstant<TRANSFORM>(right.Cast<BoundConstantExpression>().GetValue(), comparison_type, stats,
 			                                      transform);
 		}
 		if (left.GetExpressionClass() == ExpressionClass::BOUND_CONSTANT && IsDirectReference(right)) {
-			return MatchBoundsConstant<TRANSFORM>(left.Cast<BoundConstantExpression>().value,
+			return MatchBoundsConstant<TRANSFORM>(left.Cast<BoundConstantExpression>().GetValue(),
 			                                      FlipComparisonExpression(comparison_type), stats, transform);
 		}
 		if (comparison_type == ExpressionType::COMPARE_EQUAL && stats.lower_bound.type() == LogicalType::VARCHAR) {
@@ -287,7 +287,7 @@ static bool MatchBoundsExpression(ClientContext &context, const Expression &expr
 		if (conjunction.GetExpressionType() != ExpressionType::CONJUNCTION_AND) {
 			return true;
 		}
-		for (auto &child : conjunction.children) {
+		for (auto &child : conjunction.GetChildren()) {
 			if (!MatchBoundsExpression<TRANSFORM>(context, *child, stats, transform)) {
 				return false;
 			}
@@ -304,7 +304,7 @@ static bool MatchBoundsExpression(ClientContext &context, const Expression &expr
 			//! with a single child expression of type BOUND_REF.
 			//!
 			//! See duckdb/duckdb-iceberg#464
-			if (bound_operator_expr.children.size() != 1 || !IsDirectReference(*bound_operator_expr.children[0])) {
+			if (bound_operator_expr.GetChildren().size() != 1 || !IsDirectReference(*bound_operator_expr.GetChildren()[0])) {
 				//! We can't evaluate expressions that aren't direct column references
 				return true;
 			}
@@ -315,14 +315,14 @@ static bool MatchBoundsExpression(ClientContext &context, const Expression &expr
 			return MatchBoundsIsNotNullFilter<TRANSFORM>(stats, transform);
 		}
 		case ExpressionType::COMPARE_IN: {
-			if (bound_operator_expr.children.empty() || !IsDirectReference(*bound_operator_expr.children[0])) {
+			if (bound_operator_expr.GetChildren().empty() || !IsDirectReference(*bound_operator_expr.GetChildren()[0])) {
 				return true;
 			}
-			for (idx_t i = 1; i < bound_operator_expr.children.size(); i++) {
-				if (bound_operator_expr.children[i]->GetExpressionClass() != ExpressionClass::BOUND_CONSTANT) {
+			for (idx_t i = 1; i < bound_operator_expr.GetChildren().size(); i++) {
+				if (bound_operator_expr.GetChildren()[i]->GetExpressionClass() != ExpressionClass::BOUND_CONSTANT) {
 					return true;
 				}
-				auto &value = bound_operator_expr.children[i]->Cast<BoundConstantExpression>().value;
+				auto &value = bound_operator_expr.GetChildren()[i]->Cast<BoundConstantExpression>().GetValue();
 				if (MatchBoundsConstant<TRANSFORM>(value, ExpressionType::COMPARE_EQUAL, stats, transform)) {
 					return true;
 				}
@@ -335,16 +335,16 @@ static bool MatchBoundsExpression(ClientContext &context, const Expression &expr
 	}
 	case ExpressionClass::BOUND_FUNCTION: {
 		auto &func = expr.Cast<BoundFunctionExpression>();
-		if (func.function.GetName() == OptionalFilterScalarFun::NAME && func.bind_info) {
-			auto &data = func.bind_info->Cast<OptionalFilterFunctionData>();
+		if (func.Function().GetName() == OptionalFilterScalarFun::NAME && func.BindInfo()) {
+			auto &data = func.BindInfo()->Cast<OptionalFilterFunctionData>();
 			if (data.child_filter_expr) {
 				return MatchBoundsExpression<TRANSFORM>(context, *data.child_filter_expr, stats, transform);
 			}
 			//! child filter wasn't populated (yet?) for some reason, just be conservative
 			return true;
 		}
-		if (func.function.GetName() == SelectivityOptionalFilterScalarFun::NAME && func.bind_info) {
-			auto &data = func.bind_info->Cast<SelectivityOptionalFilterFunctionData>();
+		if (func.Function().GetName() == SelectivityOptionalFilterScalarFun::NAME && func.BindInfo()) {
+			auto &data = func.BindInfo()->Cast<SelectivityOptionalFilterFunctionData>();
 			if (data.child_filter_expr) {
 				return MatchBoundsExpression<TRANSFORM>(context, *data.child_filter_expr, stats, transform);
 			}

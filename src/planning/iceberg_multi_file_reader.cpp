@@ -395,7 +395,7 @@ void IcebergMultiFileReader::ApplyEqualityDeletes(ClientContext &context, DataCh
 		D_ASSERT(!equalities.empty());
 		if (equalities.size() > 1) {
 			auto conjunction_or = make_uniq<BoundConjunctionExpression>(ExpressionType::CONJUNCTION_OR);
-			conjunction_or->children = std::move(equalities);
+			conjunction_or->GetChildrenMutable() = std::move(equalities);
 			filter = std::move(conjunction_or);
 		} else {
 			filter = std::move(equalities[0]);
@@ -412,7 +412,7 @@ void IcebergMultiFileReader::ApplyEqualityDeletes(ClientContext &context, DataCh
 		equality_delete_filter = std::move(rows[0]);
 	} else {
 		auto conjunction_and = make_uniq<BoundConjunctionExpression>(ExpressionType::CONJUNCTION_AND);
-		conjunction_and->children = std::move(rows);
+		conjunction_and->GetChildrenMutable() = std::move(rows);
 		equality_delete_filter = std::move(conjunction_and);
 	}
 
@@ -549,8 +549,8 @@ unique_ptr<Expression> IcebergMultiFileReader::GetVirtualColumnExpression(
 				// Create COALESCE(_row_id, computed_row_id)
 				auto coalesce_expr = make_uniq<BoundOperatorExpression>(ExpressionType::OPERATOR_COALESCE, type);
 				auto file_row_id = make_uniq<BoundReferenceExpression>(type, local_idx.GetIndex());
-				coalesce_expr->children.push_back(std::move(file_row_id));
-				coalesce_expr->children.push_back(std::move(computed_row_id));
+				coalesce_expr->GetChildrenMutable().push_back(std::move(file_row_id));
+				coalesce_expr->GetChildrenMutable().push_back(std::move(computed_row_id));
 
 				// Transform virtual column to file_row_number for the reference
 				column_id = MultiFileReader::COLUMN_IDENTIFIER_FILE_ROW_NUMBER;
@@ -595,8 +595,8 @@ unique_ptr<Expression> IcebergMultiFileReader::GetVirtualColumnExpression(
 				// Create COALESCE(_last_updated_sequence_number, computed_sequence_number)
 				auto coalesce_expr = make_uniq<BoundOperatorExpression>(ExpressionType::OPERATOR_COALESCE, type);
 				auto sequence_number = make_uniq<BoundReferenceExpression>(type, local_idx.GetIndex());
-				coalesce_expr->children.push_back(std::move(sequence_number));
-				coalesce_expr->children.push_back(std::move(computed_sequence_number));
+				coalesce_expr->GetChildrenMutable().push_back(std::move(sequence_number));
+				coalesce_expr->GetChildrenMutable().push_back(std::move(computed_sequence_number));
 
 				// Transform virtual column to file_row_number for the reference
 				column_id = MultiFileReader::COLUMN_IDENTIFIER_FILE_ROW_NUMBER;

@@ -357,21 +357,21 @@ IcebergTableInformation::BuildPartitionSpec(const vector<unique_ptr<ParsedExpres
 		auto key_type = key->GetExpressionType();
 		if (key_type == ExpressionType::COLUMN_REF) {
 			auto &colref = key->Cast<ColumnRefExpression>();
-			column_name = colref.column_names.back();
+			column_name = colref.ColumnNames().back();
 		} else if (key_type == ExpressionType::FUNCTION) {
 			auto &funcexpr = key->Cast<FunctionExpression>();
-			transform = funcexpr.function_name;
-			if (funcexpr.children.empty()) {
+			transform = funcexpr.FunctionName();
+			if (funcexpr.GetChildren().empty()) {
 				throw NotImplementedException("Unrecognized transform ('%s')", transform);
 			} else if (!IcebergTransform::TransformFunctionSupported(transform)) {
 				throw NotImplementedException("Unrecognized transform ('%s')", transform);
 			}
 			if (transform == "bucket" || transform == "truncate") {
 				// Spark-compatible syntax: bucket(N, col) / truncate(W, col)
-				if (funcexpr.children.size() < 2) {
+				if (funcexpr.GetChildren().size() < 2) {
 					throw InvalidInputException("%s requires two arguments, e.g. %s(16, col)", transform, transform);
 				}
-				auto &param_expr = *funcexpr.children[0];
+				auto &param_expr = *funcexpr.GetChildren()[0];
 				if (param_expr.GetExpressionType() != ExpressionType::VALUE_CONSTANT) {
 					throw InvalidInputException("%s first argument must be a constant integer", transform);
 				}
@@ -382,19 +382,19 @@ IcebergTableInformation::BuildPartitionSpec(const vector<unique_ptr<ParsedExpres
 				}
 				bucket_modulo_val = const_expr.GetValue().GetValue<idx_t>();
 				transform = StringUtil::Format("%s[%d]", transform, bucket_modulo_val);
-				if (funcexpr.children[1]->GetExpressionType() != ExpressionType::COLUMN_REF) {
+				if (funcexpr.GetChildren()[1]->GetExpressionType() != ExpressionType::COLUMN_REF) {
 					throw NotImplementedException("Transforms are only supported on column references, not %s",
-					                              EnumUtil::ToChars(funcexpr.children[1]->GetExpressionType()));
+					                              EnumUtil::ToChars(funcexpr.GetChildren()[1]->GetExpressionType()));
 				}
-				auto &colref = funcexpr.children[1]->Cast<ColumnRefExpression>();
-				column_name = colref.column_names.back();
+				auto &colref = funcexpr.GetChildren()[1]->Cast<ColumnRefExpression>();
+				column_name = colref.ColumnNames().back();
 			} else {
-				if (funcexpr.children[0]->GetExpressionType() != ExpressionType::COLUMN_REF) {
+				if (funcexpr.GetChildren()[0]->GetExpressionType() != ExpressionType::COLUMN_REF) {
 					throw NotImplementedException("Transforms are only supported on column references, not %s",
-					                              EnumUtil::ToChars(funcexpr.children[0]->GetExpressionType()));
+					                              EnumUtil::ToChars(funcexpr.GetChildren()[0]->GetExpressionType()));
 				}
-				auto &colref = funcexpr.children[0]->Cast<ColumnRefExpression>();
-				column_name = colref.column_names.back();
+				auto &colref = funcexpr.GetChildren()[0]->Cast<ColumnRefExpression>();
+				column_name = colref.ColumnNames().back();
 			}
 		} else {
 			throw NotImplementedException("Unsupported partition key type: %s", key->ToString());

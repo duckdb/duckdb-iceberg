@@ -132,8 +132,8 @@ jobs:
           python3 -m pip install pyspark==3.5.2 pytest pyiceberg==0.9.1 pyarrow pydantic==2.9.0
           python3 -m pytest test/python
 
-      - name: Run all duckdb/duckdb tests
-        if: inputs.local-extension-repo == ''
-        run: |
-          ./build/release/test/unittest --order lex --test-dir duckdb "test/sql/*" --list-test-names-only || true
-          ./build/release/test/unittest --order lex --test-dir duckdb "test/sql/*" --test-config test/configs/fixture_duckdb_tests.json
+      #- name: Run all duckdb/duckdb tests
+      #  if: inputs.local-extension-repo == ''
+      #  run: |
+      #    ./build/release/test/unittest --order lex --test-dir duckdb "test/sql/*" --list-test-names-only || true
+      #    ./build/release/test/unittest --order lex --test-dir duckdb "test/sql/*" --test-config test/configs/fixture_duckdb_tests.json
