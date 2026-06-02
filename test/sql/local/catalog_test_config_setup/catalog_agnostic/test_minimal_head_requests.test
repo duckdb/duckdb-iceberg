@@ -1,0 +1,62 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/test_minimal_head_requests.test
+# description: test integration with iceberg catalog read
+# group: [catalog_agnostic]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+CALL enable_logging('HTTP');
+
+query III nosort expected_res
+select * from my_datalake.default.table_unpartitioned order by all;
+----
+2023-03-01	1	a
+2023-03-02	2	b
+2023-03-03	3	c
+2023-03-04	4	d
+2023-03-05	5	e
+2023-03-06	6	f
+2023-03-07	7	g
+2023-03-08	8	h
+2023-03-09	9	i
+2023-03-10	10	j
+2023-03-11	11	k
+2023-03-12	12	l
+
+# 0 head requests to scan all files
+query I
+select count(*) from duckdb_logs_parsed('HTTP') where request.type = 'HEAD';
+----
+0
+
+statement ok
+CALL truncate_duckdb_logs();
+
+query III nosort expected_res
+select * from my_datalake.default.table_unpartitioned order by all;
+----
+
+# No additional HEAD requests should be made
+query I
+select request.url from duckdb_logs_parsed('HTTP') where request.type = 'HEAD';
+----
+
+# No additional GET requests should be made
+query I
+SELECT
+	count(*)
+FROM duckdb_logs_parsed('HTTP')
+WHERE request.type = 'GET' AND (request.url LIKE '%.avro' OR request.url LIKE '%.parquet')
+----
+0

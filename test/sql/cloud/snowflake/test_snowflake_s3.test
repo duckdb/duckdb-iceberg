@@ -3,7 +3,7 @@
 
 require-env SNOWFLAKE_KEY_ID_S3
 
-require-env SNOWFLAKE_SECRET_ID_S3
+require-env SNOWFLAKE_SECRET_KEY_S3
 
 require-env SNOWFLAKE_CATALOG_URI_GCS
 

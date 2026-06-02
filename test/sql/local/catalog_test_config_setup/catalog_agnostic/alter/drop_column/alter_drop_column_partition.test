@@ -1,0 +1,127 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/alter/drop_column/alter_drop_column_partition.test
+# group: [drop_column]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+require ducklake
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+set enable_logging=true
+
+statement ok
+set logging_level='debug'
+
+statement ok
+drop table if exists my_datalake.default.many_column_tbl;
+
+statement ok
+create table my_datalake.default.many_column_tbl(
+	a VARCHAR,
+	b BOOLEAN,
+	c DATE,
+	d INTEGER
+) PARTITIONED BY (a, c);
+
+# Perform a DROP in the transaction, then aborting the transaction
+
+statement ok
+begin transaction
+
+statement ok
+insert into my_datalake.default.many_column_tbl VALUES
+	('test', true, '1983/05/21'::DATE, 2324);
+
+query I
+select c from my_datalake.default.many_column_tbl;
+----
+1983-05-21
+
+# Drop a COLUMN that never existed
+statement error
+ALTER TABLE my_datalake.default.many_column_tbl DROP COLUMN e;
+----
+Catalog Error: Attempted to drop column 'e' from table 'many_column_tbl', but no column by this name exists in the current schema (id: 0)
+
+statement error
+ALTER TABLE my_datalake.default.many_column_tbl DROP COLUMN c;
+----
+Catalog Error: Can't drop column 'c' as it is referenced by the current partition spec's field: 'identity_c_3' (field id: 1001)
+
+statement ok
+ALTER TABLE my_datalake.default.many_column_tbl SET PARTITIONED BY (a);
+
+statement ok
+insert into my_datalake.default.many_column_tbl VALUES
+	('hello world', false, '2083/11/05'::DATE, -34234);
+
+statement ok
+ALTER TABLE my_datalake.default.many_column_tbl DROP COLUMN c;
+
+query I
+select d from my_datalake.default.many_column_tbl
+----
+2324
+-34234
+
+statement ok
+abort
+
+# Verify that no trace of the modifications in the transaction persisted
+
+query I
+select d from my_datalake.default.many_column_tbl;
+----
+
+# Perform the same DROP in a transaction, but COMMIT this time
+
+statement ok
+begin transaction
+
+statement ok
+insert into my_datalake.default.many_column_tbl VALUES
+	('test', true, '1983/05/21'::DATE, 2324);
+
+query I
+select c from my_datalake.default.many_column_tbl;
+----
+1983-05-21
+
+statement error
+ALTER TABLE my_datalake.default.many_column_tbl DROP COLUMN c;
+----
+Catalog Error: Can't drop column 'c' as it is referenced by the current partition spec's field: 'identity_c_3' (field id: 1001)
+
+statement ok
+ALTER TABLE my_datalake.default.many_column_tbl SET PARTITIONED BY (a);
+
+statement ok
+ALTER TABLE my_datalake.default.many_column_tbl DROP COLUMN c;
+
+statement error
+select c from my_datalake.default.many_column_tbl;
+----
+Binder Error: Referenced column "c" not found in FROM clause!
+
+query I
+select d from my_datalake.default.many_column_tbl
+----
+2324
+
+statement ok
+commit
+
+query III
+select * from my_datalake.default.many_column_tbl
+----
+test	true	2324

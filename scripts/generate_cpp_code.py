@@ -167,6 +167,7 @@ class OptionalProperty:
     # The property name in the JSON code
     property_name: str
     body: List[str]
+    nullable: bool
 
 
 @dataclass
@@ -311,25 +312,23 @@ class CPPClass:
             res.extend([f'\t{x}' for x in required_property.default])
         else:
             res.extend(
-                [
-                    f"""\treturn "{self.name} required property '{required_property.property_name}' is missing";"""
-                ]
+                [f"""\treturn "{self.name} required property '{required_property.property_name}' is missing";"""]
             )
-        res.extend(
-            [
-                '} else {'
-            ]
-        )
+        res.extend(['} else {'])
         res.extend([f'\t{x}' for x in required_property.body])
         res.append('}')
         return res
 
     def write_optional_property(self, optional_property: OptionalProperty) -> List[str]:
         res = []
+        if optional_property.nullable:
+            optionally_null = ''
+        else:
+            optionally_null = f' && !yyjson_is_null({optional_property.variable_name}_val)'
         res.extend(
             [
                 f'auto {optional_property.variable_name}_val = yyjson_obj_get(obj, "{optional_property.property_name}");',
-                f'if ({optional_property.variable_name}_val) {{',
+                f'if ({optional_property.variable_name}_val{optionally_null}) {{',
                 f'\thas_{optional_property.variable_name} = true;',
             ]
         )
@@ -612,14 +611,14 @@ class CPPClass:
         if property.nullable is not None:
             prefix = '} else '
             if property.nullable == True:
-                res.extend([
-                    f'if (yyjson_is_null({source})) {{',
-                    '\t//! do nothing, property is explicitly nullable',
-                ])
+                res.extend(
+                    [
+                        f'if (yyjson_is_null({source})) {{',
+                        '\t//! do nothing, property is explicitly nullable',
+                    ]
+                )
                 if not is_required:
-                    res.extend([
-                        f'\thas_{target} = false;'
-                    ])
+                    res.extend([f'\thas_{target} = false;'])
             else:
                 res.extend(
                     [
@@ -708,7 +707,9 @@ class CPPClass:
             res.append(f'\t\t{self.generate_variable_type(additional_properties)} tmp;')
 
             if additional_properties.type != Property.Type.SCHEMA_REFERENCE:
-                item_definition = [f'\t\t{x}' for x in self.generate_item_parse(additional_properties, 'val', 'tmp', True)]
+                item_definition = [
+                    f'\t\t{x}' for x in self.generate_item_parse(additional_properties, 'val', 'tmp', True)
+                ]
                 res.extend(item_definition)
             else:
                 schema_property = cast(SchemaReferenceProperty, additional_properties)
@@ -769,7 +770,7 @@ class CPPClass:
             variable_name = safe_cpp_name(item)
             body = self.generate_assignment(optional_property, variable_name, f'{variable_name}_val', False)
             self.optional_properties[item] = OptionalProperty(
-                property_name=item, variable_name=variable_name, body=body
+                property_name=item, variable_name=variable_name, body=body, nullable=optional_property.nullable
             )
             variable_type = self.generate_variable_type(optional_property)
             self.variables.append(f'\t{variable_type} {variable_name};')
@@ -783,9 +784,7 @@ class CPPClass:
             variable_name = safe_cpp_name(item)
             body = self.generate_assignment(required_property, variable_name, f'{variable_name}_val', True)
             if required_property.default is not None:
-                default = [
-                    f'{variable_name} = "{str(required_property.default)}";'
-                ]
+                default = [f'{variable_name} = "{str(required_property.default)}";']
             else:
                 default = None
             self.required_properties[item] = RequiredProperty(

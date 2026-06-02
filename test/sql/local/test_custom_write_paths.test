@@ -12,12 +12,12 @@ require iceberg
 # and the properties are properly parsed from the metadata
 
 query II
-SELECT * FROM iceberg_scan('__WORKING_DIRECTORY__/data/persistent/custom_write_paths', allow_moved_paths=true);
+SELECT * FROM iceberg_scan('{WORKING_DIRECTORY}/data/persistent/custom_write_paths', allow_moved_paths=true);
 ----
 
 # Verify the metadata is properly parsed by checking the table metadata
 query I
-SELECT COUNT(*) FROM iceberg_metadata('__WORKING_DIRECTORY__/data/persistent/custom_write_paths', allow_moved_paths=true);
+SELECT COUNT(*) FROM iceberg_metadata('{WORKING_DIRECTORY}/data/persistent/custom_write_paths', allow_moved_paths=true);
 ----
 0
 

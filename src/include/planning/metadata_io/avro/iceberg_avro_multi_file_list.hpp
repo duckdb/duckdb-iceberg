@@ -1,0 +1,93 @@
+#pragma once
+
+#include "duckdb/common/multi_file/multi_file_list.hpp"
+#include "duckdb/common/file_system.hpp"
+
+#include "core/metadata/iceberg_table_metadata.hpp"
+#include "core/metadata/manifest/iceberg_manifest_list.hpp"
+#include "iceberg_options.hpp"
+#include "planning/iceberg_manifest_read_state.hpp"
+#include "planning/snapshot/iceberg_snapshot_scan_info.hpp"
+
+namespace duckdb {
+
+enum class AvroScanInfoType : uint8_t { MANIFEST_LIST, MANIFEST_FILE };
+
+class IcebergAvroScanInfo : public TableFunctionInfo {
+public:
+	IcebergAvroScanInfo(AvroScanInfoType type, const IcebergTableMetadata &metadata,
+	                    const IcebergSnapshotScanInfo &snapshot_info);
+	virtual ~IcebergAvroScanInfo();
+
+public:
+	idx_t IcebergVersion() const {
+		return metadata.iceberg_version;
+	}
+
+public:
+	AvroScanInfoType type;
+	const IcebergTableMetadata &metadata;
+	const IcebergSnapshotScanInfo &snapshot_info;
+
+public:
+	template <class TARGET>
+	TARGET &Cast() {
+		if (type != TARGET::TYPE) {
+			throw InternalException("Failed to cast AvroScanInfo to type - AvroScanInfo type mismatch");
+		}
+		return reinterpret_cast<TARGET &>(*this);
+	}
+
+	template <class TARGET>
+	const TARGET &Cast() const {
+		if (type != TARGET::TYPE) {
+			throw InternalException("Failed to cast AvroScanInfo to type - AvroScanInfo type mismatch");
+		}
+		return reinterpret_cast<const TARGET &>(*this);
+	}
+};
+
+class IcebergManifestListScanInfo : public IcebergAvroScanInfo {
+public:
+	static constexpr const AvroScanInfoType TYPE = AvroScanInfoType::MANIFEST_LIST;
+
+public:
+	IcebergManifestListScanInfo(const IcebergTableMetadata &metadata, const IcebergSnapshotScanInfo &snapshot_info,
+	                            vector<IcebergManifestListEntry> &result);
+	virtual ~IcebergManifestListScanInfo();
+
+public:
+	vector<IcebergManifestListEntry> &result;
+};
+
+class IcebergManifestFileScanInfo : public IcebergAvroScanInfo {
+public:
+	static constexpr const AvroScanInfoType TYPE = AvroScanInfoType::MANIFEST_FILE;
+
+public:
+	IcebergManifestFileScanInfo(const IcebergTableMetadata &metadata, const IcebergSnapshotScanInfo &snapshot_info,
+	                            vector<IcebergManifestListEntry> &manifest_files, const IcebergOptions &options,
+	                            FileSystem &fs, const string &iceberg_pat,
+	                            optional_ptr<ManifestEntryReadState> read_state);
+	virtual ~IcebergManifestFileScanInfo();
+
+public:
+	vector<IcebergManifestListEntry> &manifest_files;
+	const IcebergOptions &options;
+	FileSystem &fs;
+	string iceberg_path;
+	//! partition_field_id -> semantic column type (e.g. INTEGER for DAY)
+	map<idx_t, LogicalType> partition_field_id_to_type;
+	optional_ptr<ManifestEntryReadState> read_state;
+};
+
+class IcebergAvroMultiFileList : public SimpleMultiFileList {
+public:
+	IcebergAvroMultiFileList(shared_ptr<IcebergAvroScanInfo> info, vector<OpenFileInfo> paths);
+	virtual ~IcebergAvroMultiFileList();
+
+public:
+	shared_ptr<IcebergAvroScanInfo> info;
+};
+
+} // namespace duckdb

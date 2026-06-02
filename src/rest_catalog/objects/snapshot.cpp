@@ -117,7 +117,7 @@ string Snapshot::TryFromJSON(yyjson_val *obj) {
 		}
 	}
 	auto parent_snapshot_id_val = yyjson_obj_get(obj, "parent-snapshot-id");
-	if (parent_snapshot_id_val) {
+	if (parent_snapshot_id_val && !yyjson_is_null(parent_snapshot_id_val)) {
 		has_parent_snapshot_id = true;
 		if (yyjson_is_sint(parent_snapshot_id_val)) {
 			parent_snapshot_id = yyjson_get_sint(parent_snapshot_id_val);
@@ -130,7 +130,7 @@ string Snapshot::TryFromJSON(yyjson_val *obj) {
 		}
 	}
 	auto sequence_number_val = yyjson_obj_get(obj, "sequence-number");
-	if (sequence_number_val) {
+	if (sequence_number_val && !yyjson_is_null(sequence_number_val)) {
 		has_sequence_number = true;
 		if (yyjson_is_sint(sequence_number_val)) {
 			sequence_number = yyjson_get_sint(sequence_number_val);
@@ -143,7 +143,7 @@ string Snapshot::TryFromJSON(yyjson_val *obj) {
 		}
 	}
 	auto first_row_id_val = yyjson_obj_get(obj, "first-row-id");
-	if (first_row_id_val) {
+	if (first_row_id_val && !yyjson_is_null(first_row_id_val)) {
 		has_first_row_id = true;
 		if (yyjson_is_sint(first_row_id_val)) {
 			first_row_id = yyjson_get_sint(first_row_id_val);
@@ -155,7 +155,7 @@ string Snapshot::TryFromJSON(yyjson_val *obj) {
 		}
 	}
 	auto added_rows_val = yyjson_obj_get(obj, "added-rows");
-	if (added_rows_val) {
+	if (added_rows_val && !yyjson_is_null(added_rows_val)) {
 		has_added_rows = true;
 		if (yyjson_is_sint(added_rows_val)) {
 			added_rows = yyjson_get_sint(added_rows_val);
@@ -167,7 +167,7 @@ string Snapshot::TryFromJSON(yyjson_val *obj) {
 		}
 	}
 	auto schema_id_val = yyjson_obj_get(obj, "schema-id");
-	if (schema_id_val) {
+	if (schema_id_val && !yyjson_is_null(schema_id_val)) {
 		has_schema_id = true;
 		if (yyjson_is_int(schema_id_val)) {
 			schema_id = yyjson_get_int(schema_id_val);

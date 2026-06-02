@@ -1,0 +1,105 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/test_drop_and_create_table_in_a_transaction.test
+# group: [catalog_agnostic]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+require aws
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+drop table if exists my_datalake.default.duid;
+
+statement ok
+create table if not exists my_datalake.default.duid as select range a from range(10);
+
+statement ok con1
+begin;
+
+statement ok con2
+begin;
+
+statement ok con3
+begin;
+
+statement ok con2
+drop table if exists my_datalake.default.duid;
+
+statement ok con3
+drop table if exists my_datalake.default.duid;
+
+statement ok con1
+drop table if exists my_datalake.default.duid;
+
+statement error con2
+select * from my_datalake.default.duid;
+----
+<REGEX>:.*Catalog Error: Table with name duid does not exist.*
+
+statement error con3
+create table if not exists my_datalake.default.duid as select range a from range(10);
+----
+<REGEX>:.*Cannot create table deleted within a transaction: my_datalake.default.duid.*
+
+statement ok con1
+ABORT;
+
+statement ok con2
+ABORT;
+
+statement ok con3
+ABORT;
+
+# my_datalake.default.duid still exists
+statement ok con1
+select * from my_datalake.default.duid
+
+statement ok con1
+begin;
+
+statement ok con2
+begin;
+
+statement ok con3
+begin;
+
+statement ok con1
+drop table if exists my_datalake.default.duid;
+
+statement ok con2
+drop table if exists my_datalake.default.duid;
+
+statement ok con3
+drop table if exists my_datalake.default.duid;
+
+statement error con2
+create table my_datalake.default.duid as select range a from range(10);
+----
+<REGEX>:.*Not implemented Error: Cannot create table deleted within a transaction: my_datalake.default.duid.*
+
+statement ok con1
+ROLLBACK
+
+statement ok con3
+ROLLBACK
+
+statement error con3
+create or replace table my_datalake.default.duid (a int);
+----
+<REGEX>:.*Not implemented Error.*CREATE OR REPLACE not supported in DuckDB-Iceberg. Please use separate Drop and Create Statements.*
+
+# Should be: <REGEX>:.*Not implemented Error.*CREATE OR REPLACE not supported in DuckDB-Iceberg. Please use separate Drop and Create Statements.*
+# FIXME: parser support is missing in PEG Parser
+statement error con1
+create or replace schema my_datalake.default.new_schema;
+----
+Parser Error: CREATE SCHEMA too many dots: expected "catalog.schema" or "schema"

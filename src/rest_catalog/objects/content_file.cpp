@@ -117,7 +117,7 @@ string ContentFile::TryFromJSON(yyjson_val *obj) {
 		}
 	}
 	auto key_metadata_val = yyjson_obj_get(obj, "key-metadata");
-	if (key_metadata_val) {
+	if (key_metadata_val && !yyjson_is_null(key_metadata_val)) {
 		has_key_metadata = true;
 		error = key_metadata.TryFromJSON(key_metadata_val);
 		if (!error.empty()) {
@@ -125,7 +125,7 @@ string ContentFile::TryFromJSON(yyjson_val *obj) {
 		}
 	}
 	auto split_offsets_val = yyjson_obj_get(obj, "split-offsets");
-	if (split_offsets_val) {
+	if (split_offsets_val && !yyjson_is_null(split_offsets_val)) {
 		has_split_offsets = true;
 		if (yyjson_is_arr(split_offsets_val)) {
 			size_t idx, max;
@@ -148,7 +148,7 @@ string ContentFile::TryFromJSON(yyjson_val *obj) {
 		}
 	}
 	auto sort_order_id_val = yyjson_obj_get(obj, "sort-order-id");
-	if (sort_order_id_val) {
+	if (sort_order_id_val && !yyjson_is_null(sort_order_id_val)) {
 		has_sort_order_id = true;
 		if (yyjson_is_int(sort_order_id_val)) {
 			sort_order_id = yyjson_get_int(sort_order_id_val);

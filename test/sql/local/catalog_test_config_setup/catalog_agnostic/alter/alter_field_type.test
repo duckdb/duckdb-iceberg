@@ -1,0 +1,65 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/alter/alter_field_type.test
+# group: [alter]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+require ducklake
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+set enable_logging=true
+
+statement ok
+set logging_level='debug'
+
+statement ok
+drop table if exists my_datalake.default.alter_struct_field;
+
+statement ok
+create table my_datalake.default.alter_struct_field(
+	col STRUCT(
+		a VARCHAR,
+		b FLOAT,
+		nested STRUCT(d DATE),
+		also_nested STRUCT(e VARCHAR, f BIGINT)
+	),
+	not_a_struct BOOLEAN
+);
+
+statement ok
+insert into my_datalake.default.alter_struct_field VALUES (
+	{
+		'a': 'test',
+		'b': 0.213123,
+		'nested': {
+			'd': '2012/8/19'::DATE
+		},
+		'also_nested': {
+			'e': 'test',
+			'f': 42
+		}
+	},
+	false
+);
+
+# FIXME: Needs support in core for the ALTER COLUMN col.field syntax
+mode skip
+
+# FLOAT -> BIGINT promotion is not supported
+statement error
+ALTER TABLE my_datalake.default.alter_struct_field ALTER COLUMN not_a_struct.b TYPE BIGINT;
+----
+Catalog Error: The column ('not_a_struct.b') doesnt exist on the table 'alter_struct_field', DROP COLUMN failed to remove the field
+
+statement ok
+ALTER TABLE my_datalake.default.alter_struct_field ALTER COLUMN not_a_struct.b TYPE BIGINT;

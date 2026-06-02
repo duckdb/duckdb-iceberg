@@ -12,6 +12,6 @@ require httpfs
 set ignore_error_messages
 
 query I
-select count(*) from ICEBERG_SCAN('__WORKING_DIRECTORY__/data/persistent/moved_positional_delete_path', allow_moved_paths=true);
+select count(*) from ICEBERG_SCAN('{WORKING_DIRECTORY}/data/persistent/moved_positional_delete_path', allow_moved_paths=true);
 ----
 13136

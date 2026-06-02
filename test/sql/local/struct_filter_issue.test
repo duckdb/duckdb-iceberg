@@ -26,7 +26,7 @@ CALL enable_logging('Iceberg');
 # FIXME: this becomes a ConjunctionAndFilter on 'partition', with the 2 children being StructExtract
 # Which we don't enter yet
 query II
-SELECT * FROM iceberg_scan('__WORKING_DIRECTORY__/data/persistent/struct_filter_issue') WHERE redpanda.partition = 0 AND redpanda.timestamp = '2025-06-26 19:45:32.478';
+SELECT * FROM iceberg_scan('{WORKING_DIRECTORY}/data/persistent/struct_filter_issue') WHERE redpanda.partition = 0 AND redpanda.timestamp = '2025-06-26 19:45:32.478';
 ----
 {'partition': 0, 'offset': 0, 'timestamp': '2025-06-26 19:45:32.478', 'headers': NULL, 'key': NULL}	hello world
 
@@ -36,7 +36,7 @@ FROM (
 	SELECT message.split(': ')[2][2:-2] AS msg
 	FROM duckdb_logs() where type = 'Iceberg'
 ) logs
-JOIN ICEBERG_METADATA('__WORKING_DIRECTORY__/data/persistent/struct_filter_issue') meta
+JOIN ICEBERG_METADATA('{WORKING_DIRECTORY}/data/persistent/struct_filter_issue') meta
 ON logs.msg = meta.file_path;
 ----
 NULL
@@ -47,7 +47,7 @@ CALL truncate_duckdb_logs();
 # The issue here was that we expected to find redpanda.timestamp (that's where the partition is on),
 # now we correctly return nullptr instead of error
 query II
-SELECT * FROM iceberg_scan('__WORKING_DIRECTORY__/data/persistent/struct_filter_issue') WHERE redpanda.partition = 0;
+SELECT * FROM iceberg_scan('{WORKING_DIRECTORY}/data/persistent/struct_filter_issue') WHERE redpanda.partition = 0;
 ----
 {'partition': 0, 'offset': 0, 'timestamp': '2025-06-26 19:45:32.478', 'headers': NULL, 'key': NULL}	hello world
 
@@ -57,7 +57,7 @@ FROM (
 	SELECT message.split(': ')[2][2:-2] AS msg
 	FROM duckdb_logs() where type = 'Iceberg'
 ) logs
-JOIN ICEBERG_METADATA('__WORKING_DIRECTORY__/data/persistent/struct_filter_issue') meta
+JOIN ICEBERG_METADATA('{WORKING_DIRECTORY}/data/persistent/struct_filter_issue') meta
 ON logs.msg = meta.file_path;
 ----
 NULL
@@ -66,7 +66,7 @@ statement ok
 CALL truncate_duckdb_logs();
 
 query II
-SELECT * FROM iceberg_scan('__WORKING_DIRECTORY__/data/persistent/struct_filter_issue') WHERE redpanda.timestamp = '2026-06-26 19:45:32.478';
+SELECT * FROM iceberg_scan('{WORKING_DIRECTORY}/data/persistent/struct_filter_issue') WHERE redpanda.timestamp = '2026-06-26 19:45:32.478';
 ----
 
 query I
@@ -75,7 +75,7 @@ FROM (
 	SELECT message.split(': ')[2][2:-2] AS msg
 	FROM duckdb_logs() where type = 'Iceberg' and message.contains('manifest_file')
 ) logs
-JOIN ICEBERG_METADATA('__WORKING_DIRECTORY__/data/persistent/struct_filter_issue') meta
+JOIN ICEBERG_METADATA('{WORKING_DIRECTORY}/data/persistent/struct_filter_issue') meta
 ON logs.msg = meta.manifest_path;
 ----
 1
@@ -84,6 +84,6 @@ statement ok
 CALL truncate_duckdb_logs();
 
 query II
-SELECT * FROM iceberg_scan('__WORKING_DIRECTORY__/data/persistent/struct_filter_issue') WHERE redpanda.timestamp = '2025-06-26 19:45:32.478';
+SELECT * FROM iceberg_scan('{WORKING_DIRECTORY}/data/persistent/struct_filter_issue') WHERE redpanda.timestamp = '2025-06-26 19:45:32.478';
 ----
 {'partition': 0, 'offset': 0, 'timestamp': '2025-06-26 19:45:32.478', 'headers': NULL, 'key': NULL}	hello world

@@ -1,0 +1,163 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/alter/add_field.test
+# group: [alter]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+require ducklake
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+set enable_logging=true
+
+statement ok
+set logging_level='debug'
+
+statement ok
+drop table if exists my_datalake.default.add_struct_field;
+
+statement ok
+create table my_datalake.default.add_struct_field(
+	col STRUCT(
+		a VARCHAR,
+		b BOOLEAN,
+		nested STRUCT(d DATE)
+	),
+	not_a_struct BOOLEAN
+);
+
+statement ok
+insert into my_datalake.default.add_struct_field VALUES (
+	{'a': 'test', 'b': false, 'nested': {'d': '2012/8/19'::DATE}}, false
+);
+
+# Field 'not_a_struct' is not a struct
+statement error
+ALTER TABLE my_datalake.default.add_struct_field ADD COLUMN not_a_struct.b DATE;
+----
+Catalog Error: Can't add field 'b' to column 'not_a_struct', because the parent is not a struct (type: BOOLEAN)
+
+# Path doesn't exist
+statement error
+ALTER TABLE my_datalake.default.add_struct_field ADD COLUMN col.not_existant.path DATE;
+----
+Catalog Error: The parent column ('col.not_existant') does not exist on the table 'add_struct_field', ADD COLUMN failed to add a new field
+
+# Field 'b' already exists
+statement error
+ALTER TABLE my_datalake.default.add_struct_field ADD COLUMN col.b DATE;
+----
+Catalog Error: The column ('col.b') already exists on the table 'add_struct_field', ADD COLUMN failed to add a new field
+
+# Alter doesn't fail because we add IF NOT EXISTS (even though the type is different...)
+statement ok
+ALTER TABLE my_datalake.default.add_struct_field ADD COLUMN IF NOT EXISTS col.b DATE;
+
+# No difference
+query I
+select typeof(col) from my_datalake.default.add_struct_field limit 1;
+----
+STRUCT(a VARCHAR, b BOOLEAN, nested STRUCT(d DATE))
+
+# ---------- Add primitive type to STRUCT ----------
+
+statement ok
+ALTER TABLE my_datalake.default.add_struct_field ADD COLUMN IF NOT EXISTS col.c DATE;
+
+# Added the new field 'c' to 'col'
+query I
+select typeof(col) from my_datalake.default.add_struct_field limit 1;
+----
+STRUCT(a VARCHAR, b BOOLEAN, nested STRUCT(d DATE), c DATE)
+
+statement ok
+insert into my_datalake.default.add_struct_field VALUES (
+	{'a': 'hello world', 'b': NULL, 'c': '1934/5/21'::DATE, 'nested': {'d': '1982/2/12'::DATE}}, true
+)
+
+query II
+select * from my_datalake.default.add_struct_field order by all;
+----
+{'a': hello world, 'b': NULL, 'nested': {'d': 1982-02-12}, 'c': 1934-05-21}	true
+{'a': test, 'b': false, 'nested': {'d': 2012-08-19}, 'c': NULL}	false
+
+# ---------- Add primitive type to nested STRUCT ----------
+
+statement ok
+ALTER TABLE my_datalake.default.add_struct_field ADD COLUMN IF NOT EXISTS col.nested.prim VARCHAR;
+
+query I
+select typeof(col) from my_datalake.default.add_struct_field limit 1;
+----
+STRUCT(a VARCHAR, b BOOLEAN, nested STRUCT(d DATE, prim VARCHAR), c DATE)
+
+statement ok
+insert into my_datalake.default.add_struct_field VALUES (
+	{
+		'a': 'hello world',
+		'b': NULL,
+		'c': '1934/5/21'::DATE,
+		'nested': {
+			'd': '1982/2/12'::DATE,
+			'prim': 'this is a long string'
+		}
+	},
+	true
+);
+
+query II
+select * from my_datalake.default.add_struct_field order by all;
+----
+{'a': hello world, 'b': NULL, 'nested': {'d': 1982-02-12, 'prim': this is a long string}, 'c': 1934-05-21}	true
+{'a': hello world, 'b': NULL, 'nested': {'d': 1982-02-12, 'prim': NULL}, 'c': 1934-05-21}	true
+{'a': test, 'b': false, 'nested': {'d': 2012-08-19, 'prim': NULL}, 'c': NULL}	false
+
+# ---------- Add STRUCT type to STRUCT ----------
+
+statement ok
+ALTER TABLE my_datalake.default.add_struct_field ADD COLUMN IF NOT EXISTS col.another_struct STRUCT(
+	col STRUCT(
+		inception BOOLEAN
+	)
+);
+
+query I
+select typeof(col) from my_datalake.default.add_struct_field limit 1;
+----
+STRUCT(a VARCHAR, b BOOLEAN, nested STRUCT(d DATE, prim VARCHAR), c DATE, another_struct STRUCT(col STRUCT(inception BOOLEAN)))
+
+statement ok
+insert into my_datalake.default.add_struct_field VALUES (
+	{
+		'a': 'hello world',
+		'b': NULL,
+		'another_struct': {
+			'col': {
+				'inception': true
+			}
+		},
+		'c': '1934/5/21'::DATE,
+		'nested': {
+			'd': '1982/2/12'::DATE,
+			'prim': 'test test test'
+		}
+	},
+	true
+);
+
+query II
+select * from my_datalake.default.add_struct_field order by all;
+----
+{'a': hello world, 'b': NULL, 'nested': {'d': 1982-02-12, 'prim': test test test}, 'c': 1934-05-21, 'another_struct': {'col': {'inception': true}}}	true
+{'a': hello world, 'b': NULL, 'nested': {'d': 1982-02-12, 'prim': this is a long string}, 'c': 1934-05-21, 'another_struct': NULL}	true
+{'a': hello world, 'b': NULL, 'nested': {'d': 1982-02-12, 'prim': NULL}, 'c': 1934-05-21, 'another_struct': NULL}	true
+{'a': test, 'b': false, 'nested': {'d': 2012-08-19, 'prim': NULL}, 'c': NULL, 'another_struct': NULL}	false

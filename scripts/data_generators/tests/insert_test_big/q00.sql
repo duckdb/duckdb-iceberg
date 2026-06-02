@@ -4,5 +4,6 @@ CREATE or REPLACE TABLE default.insert_test_big (
 )
 TBLPROPERTIES (
     'format-version'='2',
-    'write.update.mode'='merge-on-read'
+    'write.update.mode'='merge-on-read',
+    'write.parquet.compression-codec'='snappy'
 );

@@ -1,0 +1,51 @@
+{
+  "description": "Use Lakekeeper as Iceberg Rest Catalog.",
+  "on_init": "create secret my_secret (TYPE ICEBERG,CLIENT_ID 'spark',CLIENT_SECRET '2OR3eRvYfSZzzZ16MlPd95jhLnOaLM52',OAUTH2_SCOPE 'lakekeeper',OAUTH2_SERVER_URI 'http://localhost:30080/realms/iceberg/protocol/openid-connect/token'); attach 'demo' as my_datalake (type ICEBERG,ENDPOINT 'http://localhost:8181/catalog',SECRET 'my_secret');",
+  "statically_loaded_extensions": [
+    "core_functions",
+    "parquet",
+    "avro",
+    "iceberg",
+    "httpfs"
+  ],
+  "skip_tests": [
+    {
+      "reason": "TIMESTAMP_NS CREATE DEFAULT: catalog does not handle default correctly, instead responds with NULL",
+      "paths": [
+        "test/sql/local/catalog_test_config_setup/catalog_agnostic/create/default/test_create_default_timestamp_ns.test"
+      ]
+    },
+    {
+      "reason": "Not yet supported with Lakekeeper",
+      "paths": [
+        "test/sql/local/catalog_test_config_setup/catalog_agnostic/insert/test_write_upper_and_lower_bounds.test",
+        "test/sql/local/catalog_test_config_setup/catalog_agnostic/insert/test_write_upper_and_lower_bounds_all_null.test",
+        "test/sql/local/catalog_test_config_setup/catalog_agnostic/insert/test_write_upper_and_lower_bounds_single_values.test",
+        "test/sql/local/catalog_test_config_setup/catalog_agnostic/insert/test_read_upper_and_lower_bounds.test",
+        "test/sql/local/catalog_test_config_setup/catalog_agnostic/insert/test_write_decimal_bounds.test",
+        "test/sql/local/catalog_test_config_setup/catalog_agnostic/transactions/test_transactional_updates_error_omits_stacktrace.test",
+        "test/sql/local/catalog_test_config_setup/catalog_agnostic/iceberg_catalog_eager_refresh.test",
+        "test/sql/local/catalog_test_config_setup/catalog_agnostic/irc_catalog_read_deletes.test",
+        "test/sql/local/catalog_test_config_setup/catalog_agnostic/table_properties/test_many_table_properties.test",
+        "test/sql/local/catalog_test_config_setup/catalog_agnostic/delete/delete_table.test",
+        "test/sql/local/catalog_test_config_setup/catalog_agnostic/reads/test_read_partitioned_table_type_promotion.test",
+        "test/sql/local/catalog_test_config_setup/catalog_agnostic/merge/merge_multi_partition_timestamp.test",
+        "test/sql/local/catalog_test_config_setup/catalog_agnostic/create/default/test_create_default_blob.test",
+        "test/sql/local/catalog_test_config_setup/catalog_agnostic/test_basic_variant.test",
+        "test/sql/local/catalog_test_config_setup/catalog_agnostic/insert/test_create_geometry_type.test"
+      ]
+    },
+    {
+      "reason": "Catalog fails with table collisions",
+      "paths": [
+        "test/sql/local/catalog_test_config_setup/catalog_agnostic/alter/rename_table/create_and_rename.test"
+      ]
+    },
+    {
+      "reason": "Lakekeeper data generation insert results in a single parquet file",
+      "paths": [
+        "test/sql/local/catalog_test_config_setup/catalog_agnostic/reads/should_do_filter_pruning_on_expressionless_string_filters.test"
+      ]
+    }
+  ]
+}

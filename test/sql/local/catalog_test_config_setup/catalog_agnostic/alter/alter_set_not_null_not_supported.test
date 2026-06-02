@@ -1,0 +1,43 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/alter/alter_set_not_null_not_supported.test
+# group: [alter]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+CREATE SCHEMA IF NOT EXISTS my_datalake.default;
+
+statement ok
+drop table if exists my_datalake.default.my_table;
+
+statement ok
+CREATE TABLE my_datalake.default.my_table AS (select range a FROM range(10));
+
+query I
+FROM my_datalake.default.my_table;
+----
+0
+1
+2
+3
+4
+5
+6
+7
+8
+9
+
+statement error
+ALTER TABLE my_datalake.default.my_table ALTER COLUMN a SET NOT NULL;
+----
+Cannot change nullable column to non-nullable

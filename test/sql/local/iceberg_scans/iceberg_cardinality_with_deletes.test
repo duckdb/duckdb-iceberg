@@ -2,24 +2,6 @@
 # description: Test cardinality estimation when partition pruning and deletions interact.
 # group: [iceberg_scans]
 
-#
-#   partitioned_deletion_vectors:
-#     - 3 identity-partitioned partitions (seq=1, seq=2, seq=3), 1000 rows each (3000 gross)
-#     - seq=1 has 500 rows deleted via V3 puffin deletion vectors (col%2=0)
-#     - seq=2 and seq=3 have no deletions
-#
-#   Without this PR's fix:
-#     Any table with delete files fell back to COUNT_APPROXIMATE with the *gross*
-#     record_count per file.  A filter that prunes seq=2 and seq=3 would still
-#     produce EXPLAIN ~1,000 for seq=1 (gross), not the correct ~500.
-#
-#   With this PR's fix:
-#     Positional-delete files that carry referenced_data_file (deletion vectors,
-#     and optimised V2 positional deletes) are resolved to exact per-file net
-#     counts.  Only equality deletes (or V2 positional without referenced_data_file)
-#     remain COUNT_APPROXIMATE.  So a filter on seq=1 now produces EXPLAIN ~500.
-#
-
 require-env DUCKDB_ICEBERG_HAVE_GENERATED_DATA
 
 require avro

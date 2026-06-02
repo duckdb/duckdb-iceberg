@@ -36,6 +36,7 @@ class IcebergTest:
         "lakekeeper": "lakekeeper",
         "spark-rest": "spark-rest",
         "local": "local",
+        "nessie": "nessie",
     }
 
     def resolve_target_for_catalog(self, catalog: str, target: Optional[str] = None) -> str:

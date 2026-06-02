@@ -1,0 +1,34 @@
+# name: test/sql/cloud/s3tables/test_attach_no_aws_extension.test
+# description: test that region information from aws service is used as fallback when no region information is provided.
+# group: [s3tables]
+
+require-env ICEBERG_AWS_REMOTE_AVAILABLE
+
+require-env AWS_ACCESS_KEY_ID
+
+require-env AWS_SECRET_ACCESS_KEY
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+statement ok
+create secret s3 (
+    type s3,
+    KEY_ID '${AWS_ACCESS_KEY_ID}',
+    SECRET '${AWS_SECRET_ACCESS_KEY}'
+);
+
+statement ok
+attach 'arn:aws:s3tables:us-east-1:840140254803:bucket/duckdblabs-iceberg-testing' as my_datalake (
+    secret s3,
+    type iceberg,
+    endpoint_type s3_tables
+);
+
+statement ok
+select * from my_datalake.tpch_sf01.part;

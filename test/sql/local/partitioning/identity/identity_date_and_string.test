@@ -21,7 +21,7 @@ require httpfs
 # - 2024-01-04	86420	view
 
 query III
-select * from ICEBERG_SCAN('__WORKING_DIRECTORY__/data/persistent/hive_partitioned_table') order by all;
+select * from ICEBERG_SCAN('{WORKING_DIRECTORY}/data/persistent/hive_partitioned_table') order by all;
 ----
 2024-01-01	12345	click
 2024-01-02	67890	purchase
@@ -31,6 +31,6 @@ select * from ICEBERG_SCAN('__WORKING_DIRECTORY__/data/persistent/hive_partition
 2024-01-04	97531	purchase
 
 query I
-select user_id from ICEBERG_SCAN('__WORKING_DIRECTORY__/data/persistent/hive_partitioned_table') WHERE event_date = '2024-01-02';
+select user_id from ICEBERG_SCAN('{WORKING_DIRECTORY}/data/persistent/hive_partitioned_table') WHERE event_date = '2024-01-02';
 ----
 67890

@@ -50,7 +50,7 @@ string EncryptedKey::TryFromJSON(yyjson_val *obj) {
 		}
 	}
 	auto encrypted_by_id_val = yyjson_obj_get(obj, "encrypted-by-id");
-	if (encrypted_by_id_val) {
+	if (encrypted_by_id_val && !yyjson_is_null(encrypted_by_id_val)) {
 		has_encrypted_by_id = true;
 		if (yyjson_is_str(encrypted_by_id_val)) {
 			encrypted_by_id = yyjson_get_str(encrypted_by_id_val);
@@ -61,7 +61,7 @@ string EncryptedKey::TryFromJSON(yyjson_val *obj) {
 		}
 	}
 	auto properties_val = yyjson_obj_get(obj, "properties");
-	if (properties_val) {
+	if (properties_val && !yyjson_is_null(properties_val)) {
 		has_properties = true;
 		if (yyjson_is_obj(properties_val)) {
 			size_t idx, max;

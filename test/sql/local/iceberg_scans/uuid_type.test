@@ -15,7 +15,7 @@ statement ok
 call enable_logging('Iceberg');
 
 query I
-select * from ICEBERG_SCAN('__WORKING_DIRECTORY__/data/persistent/uuid');
+select * from ICEBERG_SCAN('{WORKING_DIRECTORY}/data/persistent/uuid');
 ----
 8dc314d8-3fd4-4b3a-8bf5-c008f363c2e4
 a217c09f-06fa-4e91-8315-ff44753c4a54
@@ -32,7 +32,7 @@ statement ok
 CALL truncate_duckdb_logs();
 
 query I
-select * from ICEBERG_SCAN('__WORKING_DIRECTORY__/data/persistent/uuid') WHERE "uuid" = '1571effb-facd-42a3-90e9-0af522e9b6c2';
+select * from ICEBERG_SCAN('{WORKING_DIRECTORY}/data/persistent/uuid') WHERE "uuid" = '1571effb-facd-42a3-90e9-0af522e9b6c2';
 ----
 1571effb-facd-42a3-90e9-0af522e9b6c2
 
@@ -43,7 +43,7 @@ FROM (
 	SELECT message.split(': ')[2][2:-2] AS msg
 	FROM duckdb_logs() where type = 'Iceberg'
 ) logs
-JOIN ICEBERG_METADATA('__WORKING_DIRECTORY__/data/persistent/uuid') meta
+JOIN ICEBERG_METADATA('{WORKING_DIRECTORY}/data/persistent/uuid') meta
 ON logs.msg = meta.file_path;
 ----
 5

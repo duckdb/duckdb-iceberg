@@ -1,0 +1,68 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/alter/rename_field.test
+# group: [alter]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+require ducklake
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+set enable_logging=true
+
+statement ok
+set logging_level='debug'
+
+statement ok
+drop table if exists my_datalake.default.rename_struct_field;
+
+statement ok
+create table my_datalake.default.rename_struct_field(
+	col STRUCT(
+		a VARCHAR,
+		b FLOAT,
+		nested STRUCT(d DATE),
+		also_nested STRUCT(e VARCHAR, f BIGINT)
+	),
+	not_a_struct BOOLEAN
+);
+
+statement ok
+insert into my_datalake.default.rename_struct_field VALUES (
+	{
+		'a': 'test',
+		'b': 0.213123,
+		'nested': {
+			'd': '2012/8/19'::DATE
+		},
+		'also_nested': {
+			'e': 'test',
+			'f': 42
+		}
+	},
+	false
+);
+
+# 'a' already exists - collision
+statement error
+ALTER TABLE my_datalake.default.rename_struct_field RENAME COLUMN col.b TO a
+----
+Catalog Error: The column ('col.a') already exists on the table 'rename_struct_field', RENAME COLUMN failed to rename the field
+
+# field 'd' doesn't exist
+statement error
+ALTER TABLE my_datalake.default.rename_struct_field RENAME COLUMN col.d TO c
+----
+Catalog Error: The column ('col.d') doesn't exist on the table 'rename_struct_field', RENAME COLUMN failed
+
+statement ok
+ALTER TABLE my_datalake.default.rename_struct_field RENAME COLUMN col.b TO not_b

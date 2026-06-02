@@ -1,8 +1,7 @@
 #pragma once
 
 #include "duckdb/common/string.hpp"
-#include "duckdb/common/types/timestamp.hpp"
-#include "duckdb/planner/tableref/bound_at_clause.hpp"
+#include "planning/snapshot/iceberg_snapshot_lookup.hpp"
 
 namespace duckdb {
 
@@ -24,21 +23,6 @@ static string DEFAULT_VERSION_HINT_FILE = "version-hint.text";
 
 // By default we will use the unknown version behavior mentioned above
 static string DEFAULT_TABLE_VERSION = UNKNOWN_TABLE_VERSION;
-
-enum class SnapshotSource : uint8_t { LATEST, FROM_TIMESTAMP, FROM_ID };
-
-struct IcebergSnapshotLookup {
-public:
-	SnapshotSource snapshot_source = SnapshotSource::LATEST;
-	int64_t snapshot_id;
-	timestamp_t snapshot_timestamp;
-
-public:
-	bool IsLatest() const {
-		return snapshot_source == SnapshotSource::LATEST;
-	}
-	static IcebergSnapshotLookup FromAtClause(optional_ptr<BoundAtClause> at);
-};
 
 struct IcebergOptions {
 	bool allow_moved_paths = false;

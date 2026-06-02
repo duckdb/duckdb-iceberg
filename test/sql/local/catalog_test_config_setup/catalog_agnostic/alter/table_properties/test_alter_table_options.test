@@ -1,0 +1,82 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/alter/table_properties/test_alter_table_options.test
+# group: [table_properties]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+require core_functions
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+drop table if exists my_datalake.default.alter_table_set_options;
+
+statement ok
+CREATE TABLE my_datalake.default.alter_table_set_options AS (select range a, range%2 b FROM range(10));
+
+# test upgrading the format version
+statement ok
+ALTER TABLE my_datalake.default.alter_table_set_options SET ('format-version'=3);
+
+# test downgrading the format version returns an error
+statement error
+ALTER TABLE my_datalake.default.alter_table_set_options SET ('format-version'=2);
+----
+<REGEX>:.*Cannot downgrade format-version.*
+
+# test setting arbitrary table properties
+statement ok
+ALTER TABLE my_datalake.default.alter_table_set_options SET (
+    'write.update.mode' = 'copy-on-write',
+    'write.delete.mode' = 'copy-on-write',
+    'foo' = 'buzz',
+    'page-write-size' = '10000'
+);
+
+# verify properties are visible
+query II
+select * from iceberg_table_properties(my_datalake.default.alter_table_set_options) where key in ('write.update.mode', 'write.delete.mode', 'page-write-size', 'foo') order by all;
+----
+foo	buzz
+page-write-size	10000
+write.delete.mode	copy-on-write
+write.update.mode	copy-on-write
+
+# remove the foo property via RESET
+statement ok
+ALTER TABLE my_datalake.default.alter_table_set_options RESET ('foo');
+
+# foo should no longer appear
+query II
+select * from iceberg_table_properties(my_datalake.default.alter_table_set_options) where key in ('write.update.mode', 'write.delete.mode', 'page-write-size', 'foo') order by all;
+----
+page-write-size	10000
+write.delete.mode	copy-on-write
+write.update.mode	copy-on-write
+
+# table property is copy-on-write, so delete returns an error
+statement error
+delete from my_datalake.default.alter_table_set_options where a % 2 = 0;
+----
+<REGEX>:.*Not implemented Error.*write.delete.mode.*copy-on-write.*alter_table_set_options.*
+
+# set write.delete.mode back to merge-on-read
+statement ok
+ALTER TABLE my_datalake.default.alter_table_set_options SET ('write.delete.mode' = 'merge-on-read');
+
+# now delete should succeed
+statement ok
+delete from my_datalake.default.alter_table_set_options where a % 2 = 0;
+
+query I
+select count(*) from my_datalake.default.alter_table_set_options;
+----
+5

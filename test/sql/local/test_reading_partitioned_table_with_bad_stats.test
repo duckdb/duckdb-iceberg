@@ -20,7 +20,7 @@ statement ok
 call enable_logging(level='debug');
 
 query III
-select * from ICEBERG_SCAN('__WORKING_DIRECTORY__/data/persistent/large_partitioned_table/metadata/v2.metadata.json') where joined >= '1984-12-01 00:00:00+01'::TIMESTAMP order by id desc limit 10;
+select * from ICEBERG_SCAN('{WORKING_DIRECTORY}/data/persistent/large_partitioned_table/metadata/v2.metadata.json') where joined >= '1984-12-01 00:00:00+01'::TIMESTAMP order by id desc limit 10;
 ----
 66454	User_66454	1985-01-31 23:00:00+00
 66453	User_66453	1985-01-31 23:00:00+00
@@ -51,7 +51,7 @@ statement ok
 call truncate_duckdb_logs();
 
 query I
-select count(*) from ICEBERG_SCAN('__WORKING_DIRECTORY__/data/persistent/large_partitioned_table/metadata/v2.metadata.json') where id > 66450;
+select count(*) from ICEBERG_SCAN('{WORKING_DIRECTORY}/data/persistent/large_partitioned_table/metadata/v2.metadata.json') where id > 66450;
 ----
 4
 
@@ -62,7 +62,7 @@ select count(*) from duckdb_logs() where type = 'Iceberg';
 0
 
 query I
-select count(*) from ICEBERG_SCAN('__WORKING_DIRECTORY__/data/persistent/large_partitioned_table/metadata/v2.metadata.json') where id > 66450 or joined >= '1985-01-31 23:00:00+00'::TIMESTAMP;
+select count(*) from ICEBERG_SCAN('{WORKING_DIRECTORY}/data/persistent/large_partitioned_table/metadata/v2.metadata.json') where id > 66450 or joined >= '1985-01-31 23:00:00+00'::TIMESTAMP;
 ----
 61
 
@@ -73,7 +73,7 @@ select count(*) from duckdb_logs() where type = 'Iceberg';
 0
 
 query I
-select count(*) from ICEBERG_SCAN('__WORKING_DIRECTORY__/data/persistent/large_partitioned_table/metadata/v2.metadata.json') where joined >= '1984-12-01 00:00:00+01'::TIMESTAMP and  id > 66450;
+select count(*) from ICEBERG_SCAN('{WORKING_DIRECTORY}/data/persistent/large_partitioned_table/metadata/v2.metadata.json') where joined >= '1984-12-01 00:00:00+01'::TIMESTAMP and  id > 66450;
 ----
 4
 

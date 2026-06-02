@@ -4,7 +4,7 @@
 
 # Before we load the extension, this will fail
 statement error
-SELECT * FROM ICEBERG_COLUMN_STATS('__WORKING_DIRECTORY__/data/persistent/hive_partitioned_table') order by all;
+SELECT * FROM ICEBERG_COLUMN_STATS('{WORKING_DIRECTORY}/data/persistent/hive_partitioned_table') order by all;
 ----
 Error
 
@@ -15,7 +15,7 @@ require parquet
 require iceberg
 
 query IIIIIIIIIII
-SELECT * FROM ICEBERG_COLUMN_STATS('__WORKING_DIRECTORY__/data/persistent/hive_partitioned_table', ALLOW_MOVED_PATHS=TRUE) order by all;
+SELECT * FROM ICEBERG_COLUMN_STATS('{WORKING_DIRECTORY}/data/persistent/hive_partitioned_table', ALLOW_MOVED_PATHS=TRUE) order by all;
 ----
 ADDED	EXISTING	data/persistent/hive_partitioned_table/data/event_date=2024-01-01/00000-3-249d8105-f013-47e6-8600-a855387633e5-00001.parquet	event_date	DATE	2024-01-01	2024-01-01	36	1	0	NULL
 ADDED	EXISTING	data/persistent/hive_partitioned_table/data/event_date=2024-01-01/00000-3-249d8105-f013-47e6-8600-a855387633e5-00001.parquet	event_type	VARCHAR	click	click	41	1	0	NULL
@@ -37,11 +37,11 @@ ADDED	EXISTING	data/persistent/hive_partitioned_table/data/event_date=2024-01-04
 ADDED	EXISTING	data/persistent/hive_partitioned_table/data/event_date=2024-01-04/event_type=view/00000-8-c8ef1f50-38e5-4f6c-bc66-8b6410198355-00004.parquet	user_id	BIGINT	86420	86420	40	1	0	NULL
 
 query IIIIIIIIIII
-SELECT * FROM ICEBERG_COLUMN_STATS('__WORKING_DIRECTORY__/data/persistent/hive_partitioned_table', ALLOW_MOVED_PATHS=TRUE, version='1') order by all;
+SELECT * FROM ICEBERG_COLUMN_STATS('{WORKING_DIRECTORY}/data/persistent/hive_partitioned_table', ALLOW_MOVED_PATHS=TRUE, version='1') order by all;
 ----
 
 query IIIIIIIIIII
-SELECT * FROM ICEBERG_COLUMN_STATS('__WORKING_DIRECTORY__/data/persistent/hive_partitioned_table', ALLOW_MOVED_PATHS=TRUE, version_name_format='v%s%s.metadata.json') order by all;
+SELECT * FROM ICEBERG_COLUMN_STATS('{WORKING_DIRECTORY}/data/persistent/hive_partitioned_table', ALLOW_MOVED_PATHS=TRUE, version_name_format='v%s%s.metadata.json') order by all;
 ----
 ADDED	EXISTING	data/persistent/hive_partitioned_table/data/event_date=2024-01-01/00000-3-249d8105-f013-47e6-8600-a855387633e5-00001.parquet	event_date	DATE	2024-01-01	2024-01-01	36	1	0	NULL
 ADDED	EXISTING	data/persistent/hive_partitioned_table/data/event_date=2024-01-01/00000-3-249d8105-f013-47e6-8600-a855387633e5-00001.parquet	event_type	VARCHAR	click	click	41	1	0	NULL
@@ -63,7 +63,7 @@ ADDED	EXISTING	data/persistent/hive_partitioned_table/data/event_date=2024-01-04
 ADDED	EXISTING	data/persistent/hive_partitioned_table/data/event_date=2024-01-04/event_type=view/00000-8-c8ef1f50-38e5-4f6c-bc66-8b6410198355-00004.parquet	user_id	BIGINT	86420	86420	40	1	0	NULL
 
 query IIIIIIIIIII
-SELECT * FROM ICEBERG_COLUMN_STATS('__WORKING_DIRECTORY__/data/persistent/hive_partitioned_table', ALLOW_MOVED_PATHS=TRUE, version='2', version_name_format='v%s%s.metadata.json') order by all;
+SELECT * FROM ICEBERG_COLUMN_STATS('{WORKING_DIRECTORY}/data/persistent/hive_partitioned_table', ALLOW_MOVED_PATHS=TRUE, version='2', version_name_format='v%s%s.metadata.json') order by all;
 ----
 ADDED	EXISTING	data/persistent/hive_partitioned_table/data/event_date=2024-01-01/00000-3-249d8105-f013-47e6-8600-a855387633e5-00001.parquet	event_date	DATE	2024-01-01	2024-01-01	36	1	0	NULL
 ADDED	EXISTING	data/persistent/hive_partitioned_table/data/event_date=2024-01-01/00000-3-249d8105-f013-47e6-8600-a855387633e5-00001.parquet	event_type	VARCHAR	click	click	41	1	0	NULL
@@ -73,6 +73,6 @@ ADDED	EXISTING	data/persistent/hive_partitioned_table/data/event_date=2024-01-02
 ADDED	EXISTING	data/persistent/hive_partitioned_table/data/event_date=2024-01-02/00000-3-249d8105-f013-47e6-8600-a855387633e5-00002.parquet	user_id	BIGINT	67890	67890	40	1	0	NULL
 
 statement error
-SELECT * FROM ICEBERG_COLUMN_STATS('__WORKING_DIRECTORY__/data/persistent/hive_partitioned_table_nonexistent') order by all;
+SELECT * FROM ICEBERG_COLUMN_STATS('{WORKING_DIRECTORY}/data/persistent/hive_partitioned_table_nonexistent') order by all;
 ----
 Invalid Configuration Error: Failed to read iceberg table. No version was provided and no version-hint could be found,

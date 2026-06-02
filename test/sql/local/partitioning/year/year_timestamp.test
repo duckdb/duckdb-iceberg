@@ -21,7 +21,7 @@ set logging_storage='memory';
 set enable_logging=true;
 
 query III
-select * from ICEBERG_SCAN('__WORKING_DIRECTORY__/data/generated/iceberg/spark-local/default/year_timestamp') ORDER BY partition_col;
+select * from ICEBERG_SCAN('{WORKING_DIRECTORY}/data/generated/iceberg/spark-local/default/year_timestamp') ORDER BY partition_col;
 ----
 2020-05-15 14:30:45	12345	click
 2021-08-22 09:15:20	67890	purchase
@@ -34,7 +34,7 @@ statement ok
 CALL truncate_duckdb_logs();
 
 query I
-select user_id from ICEBERG_SCAN('__WORKING_DIRECTORY__/data/generated/iceberg/spark-local/default/year_timestamp')
+select user_id from ICEBERG_SCAN('{WORKING_DIRECTORY}/data/generated/iceberg/spark-local/default/year_timestamp')
 WHERE partition_col = NULL::TIMESTAMP
 ----
 
@@ -45,7 +45,7 @@ WHERE type = 'duckdb.Extensions.Iceberg' and message.contains('manifest_file')
 ----
 
 query I
-select user_id from ICEBERG_SCAN('__WORKING_DIRECTORY__/data/generated/iceberg/spark-local/default/year_timestamp')
+select user_id from ICEBERG_SCAN('{WORKING_DIRECTORY}/data/generated/iceberg/spark-local/default/year_timestamp')
 WHERE partition_col IS NULL
 ----
 99999
@@ -57,7 +57,7 @@ FROM (
 	SELECT message.split(': ')[2][2:-2] AS msg
 	FROM duckdb_logs() where type = 'Iceberg' and message.contains('manifest_file')
 ) logs
-JOIN ICEBERG_METADATA('__WORKING_DIRECTORY__/data/generated/iceberg/spark-local/default/year_timestamp') meta
+JOIN ICEBERG_METADATA('{WORKING_DIRECTORY}/data/generated/iceberg/spark-local/default/year_timestamp') meta
 ON logs.msg = meta.manifest_path;
 ----
 5
@@ -66,7 +66,7 @@ statement ok
 CALL truncate_duckdb_logs();
 
 query I
-select user_id from ICEBERG_SCAN('__WORKING_DIRECTORY__/data/generated/iceberg/spark-local/default/year_timestamp') 
+select user_id from ICEBERG_SCAN('{WORKING_DIRECTORY}/data/generated/iceberg/spark-local/default/year_timestamp') 
 WHERE partition_col IS NOT NULL ORDER BY user_id
 ----
 12345
@@ -83,7 +83,7 @@ FROM (
 	SELECT message.split(': ')[2][2:-2] AS msg
 	FROM duckdb_logs() where type = 'Iceberg' and message.contains('data_file')
 ) logs
-JOIN ICEBERG_METADATA('__WORKING_DIRECTORY__/data/generated/iceberg/spark-local/default/year_timestamp') meta
+JOIN ICEBERG_METADATA('{WORKING_DIRECTORY}/data/generated/iceberg/spark-local/default/year_timestamp') meta
 ON logs.msg = meta.file_path;
 ----
 1
@@ -93,7 +93,7 @@ CALL truncate_duckdb_logs();
 
 # Test filtering by year
 query I
-select user_id from ICEBERG_SCAN('__WORKING_DIRECTORY__/data/generated/iceberg/spark-local/default/year_timestamp') 
+select user_id from ICEBERG_SCAN('{WORKING_DIRECTORY}/data/generated/iceberg/spark-local/default/year_timestamp') 
 WHERE partition_col = '2020-05-15 14:30:45'
 ----
 12345
@@ -104,7 +104,7 @@ FROM (
 	SELECT message.split(': ')[2][2:-2] AS msg
 	FROM duckdb_logs() where type = 'Iceberg' and message.contains('manifest_file')
 ) logs
-JOIN ICEBERG_METADATA('__WORKING_DIRECTORY__/data/generated/iceberg/spark-local/default/year_timestamp') meta
+JOIN ICEBERG_METADATA('{WORKING_DIRECTORY}/data/generated/iceberg/spark-local/default/year_timestamp') meta
 ON logs.msg = meta.manifest_path;
 ----
 2
@@ -113,7 +113,7 @@ statement ok
 CALL truncate_duckdb_logs();
 
 query I
-select user_id from ICEBERG_SCAN('__WORKING_DIRECTORY__/data/generated/iceberg/spark-local/default/year_timestamp') 
+select user_id from ICEBERG_SCAN('{WORKING_DIRECTORY}/data/generated/iceberg/spark-local/default/year_timestamp') 
 WHERE partition_col = '2021-08-22 09:15:20'
 ----
 67890
@@ -124,7 +124,7 @@ FROM (
 	SELECT message.split(': ')[2][2:-2] AS msg
 	FROM duckdb_logs() where type = 'Iceberg' and message.contains('manifest_file')
 ) logs
-JOIN ICEBERG_METADATA('__WORKING_DIRECTORY__/data/generated/iceberg/spark-local/default/year_timestamp') meta
+JOIN ICEBERG_METADATA('{WORKING_DIRECTORY}/data/generated/iceberg/spark-local/default/year_timestamp') meta
 ON logs.msg = meta.manifest_path;
 ----
 2
@@ -133,7 +133,7 @@ statement ok
 CALL truncate_duckdb_logs();
 
 query I
-select user_id from ICEBERG_SCAN('__WORKING_DIRECTORY__/data/generated/iceberg/spark-local/default/year_timestamp') 
+select user_id from ICEBERG_SCAN('{WORKING_DIRECTORY}/data/generated/iceberg/spark-local/default/year_timestamp') 
 WHERE partition_col = '2022-03-10 11:45:30'
 ----
 54321
@@ -144,7 +144,7 @@ FROM (
 	SELECT message.split(': ')[2][2:-2] AS msg
 	FROM duckdb_logs() where type = 'Iceberg' and message.contains('manifest_file')
 ) logs
-JOIN ICEBERG_METADATA('__WORKING_DIRECTORY__/data/generated/iceberg/spark-local/default/year_timestamp') meta
+JOIN ICEBERG_METADATA('{WORKING_DIRECTORY}/data/generated/iceberg/spark-local/default/year_timestamp') meta
 ON logs.msg = meta.manifest_path;
 ----
 2
@@ -154,7 +154,7 @@ CALL truncate_duckdb_logs();
 
 # Test filtering by timestamp range
 query I
-select user_id from ICEBERG_SCAN('__WORKING_DIRECTORY__/data/generated/iceberg/spark-local/default/year_timestamp') 
+select user_id from ICEBERG_SCAN('{WORKING_DIRECTORY}/data/generated/iceberg/spark-local/default/year_timestamp') 
 WHERE partition_col >= '2021-01-01' AND partition_col < '2022-01-01';
 ----
 67890
@@ -165,7 +165,7 @@ FROM (
 	SELECT message.split(': ')[2][2:-2] AS msg
 	FROM duckdb_logs() where type = 'Iceberg' and message.contains('manifest_file')
 ) logs
-JOIN ICEBERG_METADATA('__WORKING_DIRECTORY__/data/generated/iceberg/spark-local/default/year_timestamp') meta
+JOIN ICEBERG_METADATA('{WORKING_DIRECTORY}/data/generated/iceberg/spark-local/default/year_timestamp') meta
 ON logs.msg = meta.manifest_path;
 ----
 2

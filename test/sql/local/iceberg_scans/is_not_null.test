@@ -16,7 +16,7 @@ statement ok
 create schema my_datalake.default;
 
 statement ok
-create view my_datalake.default.is_not_null as select * from ICEBERG_SCAN('__WORKING_DIRECTORY__/data/persistent/is_null_is_not_null');
+create view my_datalake.default.is_not_null as select * from ICEBERG_SCAN('{WORKING_DIRECTORY}/data/persistent/is_null_is_not_null');
 
 statement ok
 CALL enable_logging('Iceberg');

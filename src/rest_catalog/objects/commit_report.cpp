@@ -86,7 +86,7 @@ string CommitReport::TryFromJSON(yyjson_val *obj) {
 		}
 	}
 	auto metadata_val = yyjson_obj_get(obj, "metadata");
-	if (metadata_val) {
+	if (metadata_val && !yyjson_is_null(metadata_val)) {
 		has_metadata = true;
 		if (yyjson_is_obj(metadata_val)) {
 			size_t idx, max;

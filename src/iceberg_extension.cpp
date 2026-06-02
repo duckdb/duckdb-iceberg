@@ -1,23 +1,27 @@
 #include "iceberg_extension.hpp"
-#include "storage/catalog/iceberg_catalog.hpp"
-#include "storage/iceberg_transaction_manager.hpp"
-#include "duckdb.hpp"
+
 #include "duckdb/main/secret/secret_manager.hpp"
 #include "duckdb/common/exception.hpp"
 #include "duckdb/common/exception/http_exception.hpp"
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/function/scalar_function.hpp"
+#include "duckdb/function/cast/default_casts.hpp"
 #include "duckdb/main/extension/extension_loader.hpp"
 #include "duckdb/catalog/catalog_entry/macro_catalog_entry.hpp"
 #include "duckdb/catalog/default/default_functions.hpp"
 #include "duckdb/storage/storage_extension.hpp"
-#include "iceberg_functions.hpp"
-#include "catalog_api.hpp"
 #include "duckdb/main/extension_helper.hpp"
-#include "storage/authorization/oauth2.hpp"
-#include "storage/authorization/sigv4.hpp"
-#include "iceberg_utils.hpp"
+#include "duckdb.hpp"
+
+#include "catalog/rest/iceberg_catalog.hpp"
+#include "catalog/rest/transaction/iceberg_transaction_manager.hpp"
+#include "function/iceberg_functions.hpp"
+#include "catalog/rest/api/catalog_api.hpp"
+#include "catalog/rest/storage/authorization/oauth2.hpp"
+#include "catalog/rest/storage/authorization/sigv4.hpp"
+#include "common/iceberg_utils.hpp"
 #include "iceberg_logging.hpp"
+#include "function/copy/iceberg_copy_function.hpp"
 
 namespace duckdb {
 
@@ -59,6 +63,18 @@ static void LoadInternal(ExtensionLoader &loader) {
 	config.AddExtensionOption("iceberg_test_force_token_expiry",
 	                          "DEBUG SETTING: force OAuth2 token expiry for testing automatic refresh",
 	                          LogicalType::BOOLEAN, Value::BOOLEAN(false));
+	config.AddExtensionOption(
+	    "iceberg_use_metadata_log",
+	    "Whether or not to make use of the (optional) 'metadata-log' of a table to ensure atomicity guarantees hold, "
+	    "at the cost of making another GET for json metadata in rare circumstances",
+	    LogicalType::BOOLEAN, Value::BOOLEAN(true));
+	config.AddExtensionOption("ignore_target_file_size_for_partitioned_tables",
+	                          "Ignore unsupported write.target-file-size-bytes table property for partitioned tables",
+	                          LogicalType::BOOLEAN, Value::BOOLEAN(false));
+	config.AddExtensionOption(
+	    "ignore_row_group_size_for_partitioned_tables",
+	    "Ignore unsupported write.parquet.row-group-size-bytes table property for partitioned tables",
+	    LogicalType::BOOLEAN, Value::BOOLEAN(false));
 
 	// Iceberg Table Functions
 	for (auto &fun : IcebergFunctions::GetTableFunctions(loader)) {
@@ -69,6 +85,9 @@ static void LoadInternal(ExtensionLoader &loader) {
 	for (auto &fun : IcebergFunctions::GetScalarFunctions()) {
 		loader.RegisterFunction(fun);
 	}
+
+	// Iceberg COPY Function
+	loader.RegisterFunction(IcebergCopyFunction::Create());
 
 	SecretType secret_type;
 	secret_type.name = "iceberg";

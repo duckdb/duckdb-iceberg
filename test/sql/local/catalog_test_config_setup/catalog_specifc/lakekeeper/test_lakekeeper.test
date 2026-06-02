@@ -1,0 +1,22 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_specifc/lakekeeper/test_lakekeeper.test
+# group: [lakekeeper]
+
+require httpfs
+
+require avro
+
+require parquet
+
+require iceberg
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require-env LAKEKEEPER_SERVER_AVAILABLE
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+query III
+select * from my_datalake.my_namespace.my_table;
+----
+1	a-string	2.2

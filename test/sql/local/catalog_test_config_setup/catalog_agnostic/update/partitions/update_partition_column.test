@@ -1,0 +1,124 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/update/partitions/update_partition_column.test
+# description: Test updating the partition column itself - old partition should be empty, new partition should have the rows
+# group: [partitions]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+CALL enable_logging('HTTP');
+
+statement ok
+set logging_level='debug'
+
+# ---- Identity (VARCHAR) partition ----
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.test_update_partition_col_varchar;
+
+statement ok
+CREATE TABLE my_datalake.default.test_update_partition_col_varchar (id INT, category VARCHAR, val INT)
+PARTITIONED BY (category);
+
+statement ok
+INSERT INTO my_datalake.default.test_update_partition_col_varchar VALUES
+    (1, 'A', 10),
+    (2, 'A', 20),
+    (3, 'B', 30);
+
+query III
+SELECT id, category, val FROM my_datalake.default.test_update_partition_col_varchar ORDER BY id;
+----
+1	A	10
+2	A	20
+3	B	30
+
+# Update the partition column - moves rows from partition 'A' to partition 'C'
+query I
+UPDATE my_datalake.default.test_update_partition_col_varchar SET category = 'C' WHERE category = 'A';
+----
+2
+
+# Old partition value should return no rows
+query III
+SELECT id, category, val FROM my_datalake.default.test_update_partition_col_varchar WHERE category = 'A' ORDER BY id;
+----
+
+# New partition value should contain the updated rows
+query III
+SELECT id, category, val FROM my_datalake.default.test_update_partition_col_varchar WHERE category = 'C' ORDER BY id;
+----
+1	C	10
+2	C	20
+
+# Untouched partition is unchanged
+query III
+SELECT id, category, val FROM my_datalake.default.test_update_partition_col_varchar WHERE category = 'B';
+----
+3	B	30
+
+# Full table scan should reflect the updated state
+query III
+SELECT id, category, val FROM my_datalake.default.test_update_partition_col_varchar ORDER BY id;
+----
+1	C	10
+2	C	20
+3	B	30
+
+statement ok
+DROP TABLE my_datalake.default.test_update_partition_col_varchar;
+
+# ---- Identity (INT) partition ----
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.test_update_partition_col_int;
+
+statement ok
+CREATE TABLE my_datalake.default.test_update_partition_col_int (id INT, region INT, val VARCHAR)
+PARTITIONED BY (region);
+
+statement ok
+INSERT INTO my_datalake.default.test_update_partition_col_int VALUES
+    (1, 1, 'a'),
+    (2, 1, 'b'),
+    (3, 2, 'c'),
+    (4, 3, 'd');
+
+query I
+UPDATE my_datalake.default.test_update_partition_col_int SET region = 99 WHERE region = 1;
+----
+2
+
+# Old partition value should return no rows
+query III
+SELECT id, region, val FROM my_datalake.default.test_update_partition_col_int WHERE region = 1 ORDER BY id;
+----
+
+# New partition value should contain the updated rows
+query III
+SELECT id, region, val FROM my_datalake.default.test_update_partition_col_int WHERE region = 99 ORDER BY id;
+----
+1	99	a
+2	99	b
+
+# Full table scan
+query III
+SELECT id, region, val FROM my_datalake.default.test_update_partition_col_int ORDER BY id;
+----
+1	99	a
+2	99	b
+3	2	c
+4	3	d
+
+statement ok
+DROP TABLE my_datalake.default.test_update_partition_col_int;

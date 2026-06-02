@@ -1,0 +1,66 @@
+# name: test/sql/local/test_basic_deletion_vectors.test
+# group: [local]
+
+require-env DUCKDB_ICEBERG_HAVE_GENERATED_DATA
+
+require avro
+
+require parquet
+
+require iceberg
+
+statement ok
+attach ':memory:' as my_datalake;
+
+statement ok
+create schema my_datalake.default;
+
+statement ok
+create view my_datalake.default.deletion_vectors as select * from ICEBERG_SCAN('data/generated/iceberg/spark-local/default/deletion_vectors');
+
+statement ok
+CALL enable_logging('Iceberg');
+
+query I
+select count(*) from my_datalake.default.deletion_vectors
+----
+50000
+
+query I
+select count(*) from my_datalake.default.deletion_vectors where col > 25_000
+----
+37500
+
+query I
+select count(*) from my_datalake.default.deletion_vectors where col > 50_000
+----
+25000
+
+query I
+select count(*) from my_datalake.default.deletion_vectors where col > 75_000
+----
+12500
+
+query I
+select count(*) from my_datalake.default.deletion_vectors where col > 25_000 and col < 75_000
+----
+25000
+
+query I
+select count(*) from my_datalake.default.deletion_vectors where col < 25_000
+----
+12500
+
+query I
+select * from my_datalake.default.deletion_vectors where col > 25_000 limit 10;
+----
+25001
+25003
+25005
+25007
+25009
+25011
+25013
+25015
+25017
+25019

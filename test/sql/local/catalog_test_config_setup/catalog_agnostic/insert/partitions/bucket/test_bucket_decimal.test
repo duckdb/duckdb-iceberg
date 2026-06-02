@@ -1,0 +1,79 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/insert/partitions/bucket/test_bucket_decimal.test
+# description: Insert into a bucket-partitioned DECIMAL table and verify round-trip
+# group: [bucket]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+create schema if not exists my_datalake.default;
+
+statement ok
+drop table if exists my_datalake.default.test_bucket_decimal;
+
+statement ok
+CREATE TABLE my_datalake.default.test_bucket_decimal (id int, amount decimal(10, 2), label varchar)
+PARTITIONED BY (bucket(4, amount));
+
+statement ok
+insert into my_datalake.default.test_bucket_decimal values
+    (1,  10.00, 'ten'),
+    (2,  20.00, 'twenty'),
+    (3,  30.00, 'thirty'),
+    (4,  40.00, 'forty'),
+    (5,  50.00, 'fifty'),
+    (6,  60.00, 'sixty'),
+    (7,  70.00, 'seventy'),
+    (8,  80.00, 'eighty'),
+    (9,  90.00, 'ninety'),
+    (10, 100.00, 'hundred'),
+    (11, NULL,   'null_row');
+
+query I
+select count(*) from my_datalake.default.test_bucket_decimal;
+----
+11
+
+query III
+select id, amount, label from my_datalake.default.test_bucket_decimal order by id;
+----
+1	10.00	ten
+2	20.00	twenty
+3	30.00	thirty
+4	40.00	forty
+5	50.00	fifty
+6	60.00	sixty
+7	70.00	seventy
+8	80.00	eighty
+9	90.00	ninety
+10	100.00	hundred
+11	NULL	null_row
+
+# Verify negative decimals are bucketed correctly
+statement ok
+drop table if exists my_datalake.default.test_bucket_decimal_neg;
+
+statement ok
+CREATE TABLE my_datalake.default.test_bucket_decimal_neg (id int, amount decimal(10, 2))
+PARTITIONED BY (bucket(4, amount));
+
+statement ok
+insert into my_datalake.default.test_bucket_decimal_neg values
+    (1, -1.50),
+    (2, -10.00),
+    (3, -99.99);
+
+query I
+select count(*) from my_datalake.default.test_bucket_decimal_neg;
+----
+3

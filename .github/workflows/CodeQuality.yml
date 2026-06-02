@@ -46,9 +46,9 @@ jobs:
           fetch-depth: 0
           submodules: 'true'
 
-      - name: Install
-        shell: bash
-        run: sudo apt-get update -y -qq && sudo apt-get install -y -qq ninja-build clang-format-11 && sudo pip3 install cmake-format 'black==24.*' cxxheaderparser pcpp 'clang_format==11.0.1'
+      - name: Install tools
+        timeout-minutes: 10
+        run: python3 duckdb/scripts/ci/retry.py --timeout 2m -- make -C duckdb -j4 format_tools
 
       - name: List Installed Packages
         shell: bash

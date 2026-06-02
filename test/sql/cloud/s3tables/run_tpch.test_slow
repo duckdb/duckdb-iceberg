@@ -46,9 +46,9 @@ use s3_catalog.tpch_sf01;
 foreach i 1 4 6
 
 query I
-PRAGMA tpch(${i})
+PRAGMA tpch({i})
 ----
-<FILE>:__WORKING_DIRECTORY__/duckdb/extension/tpch/dbgen/answers/sf0.1/q0${i}.csv
+<FILE>:{WORKING_DIRECTORY}/duckdb/extension/tpch/dbgen/answers/sf0.1/q0{i}.csv
 
 endloop
 
@@ -56,8 +56,8 @@ endloop
 foreach i 14 19 22
 
 query I
-PRAGMA tpch(${i})
+PRAGMA tpch({i})
 ----
-<FILE>:__WORKING_DIRECTORY__/duckdb/extension/tpch/dbgen/answers/sf0.1/q${i}.csv
+<FILE>:{WORKING_DIRECTORY}/duckdb/extension/tpch/dbgen/answers/sf0.1/q{i}.csv
 
 endloop
