@@ -67,3 +67,34 @@ select count(*) from ICEBERG_SCAN('{WORKING_DIRECTORY}/data/generated/iceberg/sp
 ----
 40000
 
+
+# ── deletion_vectors: V3 puffin deletion vectors ─────────────────────────────
+# 100,000 rows inserted, every even col value deleted (50,000 rows deleted).
+# Net: 50,000 rows.  Because referenced_data_file is always set for puffin DVs,
+# PartitionStatistics reports COUNT_EXACT with the net per-file counts.
+
+# 1 data file
+query I
+select count(*) from ICEBERG_METADATA('{WORKING_DIRECTORY}/data/generated/iceberg/spark-local/default/deletion_vectors')
+where manifest_content = 'DATA';
+----
+1
+
+# 1 delete file (puffin DV)
+query I
+select count(*) from ICEBERG_METADATA('{WORKING_DIRECTORY}/data/generated/iceberg/spark-local/default/deletion_vectors')
+where manifest_content = 'DELETE';
+----
+1
+
+# Due to the partition stats, the entire query is replaced with a constant
+query II
+explain select count(*) from ICEBERG_SCAN('{WORKING_DIRECTORY}/data/generated/iceberg/spark-local/default/deletion_vectors');
+----
+physical_plan	<REGEX>:.*COLUMN_DATA_SCAN.*~1 row.*
+
+query I
+select count(*) from ICEBERG_SCAN('{WORKING_DIRECTORY}/data/generated/iceberg/spark-local/default/deletion_vectors');
+----
+50000
+

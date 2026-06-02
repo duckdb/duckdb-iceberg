@@ -42,11 +42,21 @@ static void ColumnsReferencedByEqualityIds(DataChunk &source, DataChunk &result,
 	result.ReferenceColumns(source, column_ids);
 }
 
+bool IcebergMultiFileList::EqualityDeletesFinalized() const {
+	for (auto &entry : equality_delete_data) {
+		auto &deletes = *entry.second;
+		for (auto &file : deletes.files) {
+			if (!file.finalized) {
+				return false;
+			}
+		}
+	}
+	return true;
+}
+
 void IcebergMultiFileList::ScanEqualityDeleteFile(const BoundIcebergManifestEntry &bound_manifest_entry,
-                                                  DataChunk &source, vector<MultiFileColumnDefinition> &local_columns,
-                                                  const vector<MultiFileColumnDefinition> &global_columns,
-                                                  const vector<ColumnIndex> &global_column_ids,
-                                                  const vector<idx_t> &projection_ids) const {
+                                                  DataChunk &source,
+                                                  vector<MultiFileColumnDefinition> &local_columns) const {
 	auto &manifest_entry = bound_manifest_entry.entry;
 	auto &data_file = manifest_entry.data_file;
 	auto &manifest_file = GetManifestFileForEntry(bound_manifest_entry, IcebergManifestContentType::DELETE);
@@ -71,9 +81,31 @@ void IcebergMultiFileList::ScanEqualityDeleteFile(const BoundIcebergManifestEntr
 	}
 	auto &deletes = *it->second;
 
-	// We are scanning the delete file even before the optimizer runs
-	// All equality delete columns will be projected from the scan due to our optimizer
-	// we want to know where in the output the equality delete columns will be projected
+	deletes.files.emplace_back(data_file.partition_info, manifest_file.partition_spec_id);
+	auto &file = deletes.files.back();
+	file.rows.resize(count);
+	D_ASSERT(result.ColumnCount() == data_file.equality_ids.size());
+
+	for (idx_t col_idx = 0; col_idx < result.ColumnCount(); col_idx++) {
+		auto field_id = data_file.equality_ids[col_idx];
+		auto &values = file.equality_values[field_id];
+		values.reserve(count);
+		auto &vec = result.data[col_idx];
+		for (idx_t i = 0; i < count; i++) {
+			values.push_back(vec.GetValue(i));
+		}
+	}
+}
+
+void IcebergMultiFileList::FinalizeEqualityDeletes(const vector<MultiFileColumnDefinition> &global_columns,
+                                                   const vector<ColumnIndex> &global_column_ids,
+                                                   const vector<idx_t> &projection_ids) const {
+	unordered_map<int32_t, column_t> field_id_to_global_column;
+	for (idx_t i = 0; i < global_columns.size(); i++) {
+		auto &global_col = global_columns.at(i);
+		field_id_to_global_column[global_col.GetIdentifierFieldId()] = i;
+	}
+
 	unordered_map<idx_t, idx_t> global_id_to_projection_index;
 	for (idx_t result_id = 0; result_id < global_column_ids.size(); result_id++) {
 		auto global_col = global_column_ids[result_id];
@@ -83,67 +115,69 @@ void IcebergMultiFileList::ScanEqualityDeleteFile(const BoundIcebergManifestEntr
 		D_ASSERT(global_col.GetPrimaryIndex() < global_columns.size());
 		// index_in_global_columns = index in input_chunk
 		auto index_in_global_columns = global_col.GetPrimaryIndex();
-		auto &col = global_columns[index_in_global_columns];
-		for (auto &equality_delete_col : local_columns) {
-			if (equality_delete_col.GetIdentifierFieldId() == col.GetIdentifierFieldId()) {
-				if (projection_ids.empty()) {
-					global_id_to_projection_index[index_in_global_columns] = result_id;
-				} else {
-					for (idx_t proj_index = 0; proj_index < projection_ids.size(); proj_index++) {
-						idx_t projection_col = projection_ids[proj_index];
-						if (projection_col == result_id) {
-							global_id_to_projection_index[index_in_global_columns] = proj_index;
-						}
-					}
+		if (projection_ids.empty()) {
+			global_id_to_projection_index[index_in_global_columns] = result_id;
+		} else {
+			for (idx_t proj_index = 0; proj_index < projection_ids.size(); proj_index++) {
+				idx_t projection_col = projection_ids[proj_index];
+				if (projection_col == result_id) {
+					global_id_to_projection_index[index_in_global_columns] = proj_index;
+					break;
 				}
-				// here we can break. col has one identifier field id and equality deletes should only have unique
-				// values
-				break;
 			}
 		}
 	}
 
-	unordered_map<int32_t, column_t> field_id_to_global_column;
-	for (idx_t i = 0; i < global_columns.size(); i++) {
-		auto &global_col = global_columns.at(i);
-		field_id_to_global_column[global_col.GetIdentifierFieldId()] = i;
-	}
-
-	deletes.files.emplace_back(data_file.partition_info, manifest_file.partition_spec_id);
-	auto &rows = deletes.files.back().rows;
-	rows.resize(count);
-	D_ASSERT(result.ColumnCount() == data_file.equality_ids.size());
-
-	for (idx_t col_idx = 0; col_idx < result.ColumnCount(); col_idx++) {
-		auto &field_id = data_file.equality_ids[col_idx];
-		auto global_column_id = field_id_to_global_column[field_id];
-		auto &col = global_columns[global_column_id];
-		auto &vec = result.data[col_idx];
-
-		auto it = global_id_to_projection_index.find(global_column_id);
-		D_ASSERT(it != global_id_to_projection_index.end());
-		auto result_column_id = it->second;
-
-		for (idx_t i = 0; i < count; i++) {
-			auto &row = rows[i];
-			auto constant = vec.GetValue(i);
-
-			unique_ptr<Expression> equality_filter;
-			// this bound ref is on the position of the output_chunk data.
-			auto bound_ref = make_uniq<BoundReferenceExpression>(col.type, result_column_id);
-			if (!constant.IsNull()) {
-				//! Create a COMPARE_NOT_EQUAL expression
-				equality_filter =
-				    BoundComparisonExpression::Create(ExpressionType::COMPARE_NOTEQUAL, std::move(bound_ref),
-				                                      make_uniq<BoundConstantExpression>(constant));
-			} else {
-				//! Construct an OPERATOR_IS_NOT_NULL expression instead
-				auto is_not_null =
-				    make_uniq<BoundOperatorExpression>(ExpressionType::OPERATOR_IS_NOT_NULL, LogicalType::BOOLEAN);
-				is_not_null->GetChildrenMutable().push_back(std::move(bound_ref));
-				equality_filter = std::move(is_not_null);
+	for (auto &entry : equality_delete_data) {
+		auto &deletes = *entry.second;
+		for (auto &file : deletes.files) {
+			if (file.finalized) {
+				continue;
 			}
-			row.filters.emplace(std::make_pair(field_id, std::move(equality_filter)));
+			auto row_count = file.rows.size();
+			for (auto &field_values : file.equality_values) {
+				if (row_count == 0) {
+					row_count = field_values.second.size();
+				}
+				D_ASSERT(row_count == field_values.second.size());
+			}
+			file.rows.resize(row_count);
+
+			for (auto &field_values : file.equality_values) {
+				auto field_id = field_values.first;
+				auto global_column_it = field_id_to_global_column.find(field_id);
+				D_ASSERT(global_column_it != field_id_to_global_column.end());
+				auto global_column_id = global_column_it->second;
+				auto &col = global_columns[global_column_id];
+
+				auto projection_it = global_id_to_projection_index.find(global_column_id);
+				D_ASSERT(projection_it != global_id_to_projection_index.end());
+				auto result_column_id = projection_it->second;
+
+				auto &values = field_values.second;
+				D_ASSERT(values.size() == row_count);
+				for (idx_t i = 0; i < row_count; i++) {
+					auto &row = file.rows[i];
+					auto &constant = values[i];
+
+					unique_ptr<Expression> equality_filter;
+					// This bound ref is on the position of the output_chunk data.
+					auto bound_ref = make_uniq<BoundReferenceExpression>(col.type, result_column_id);
+					if (!constant.IsNull()) {
+						equality_filter =
+						    BoundComparisonExpression::Create(ExpressionType::COMPARE_NOTEQUAL, std::move(bound_ref),
+						                                      make_uniq<BoundConstantExpression>(constant));
+					} else {
+						auto is_not_null =
+						    make_uniq<BoundOperatorExpression>(ExpressionType::OPERATOR_IS_NOT_NULL,
+						                                      LogicalType::BOOLEAN);
+						is_not_null->GetChildrenMutable().push_back(std::move(bound_ref));
+						equality_filter = std::move(is_not_null);
+					}
+					row.filters.emplace(std::make_pair(field_id, std::move(equality_filter)));
+				}
+			}
+			file.finalized = true;
 		}
 	}
 }

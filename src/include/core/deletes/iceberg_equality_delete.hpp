@@ -12,10 +12,6 @@ namespace duckdb {
 
 using sequence_number_t = int64_t;
 
-struct EqualityDeleteValuelist {
-	unordered_map<idx_t, vector<Value>> field_id_value_to_remove;
-};
-
 struct IcebergEqualityDeleteRow {
 public:
 	IcebergEqualityDeleteRow() {
@@ -43,7 +39,11 @@ public:
 	//! The partition info if the equality delete has partition information
 	vector<IcebergPartitionInfo> partition_info;
 	int32_t partition_spec_id;
+	//! Raw equality delete values, keyed by Iceberg field-id. These are converted to bound expressions once the
+	//! scan output projection is known.
+	unordered_map<int32_t, vector<Value>> equality_values;
 	vector<IcebergEqualityDeleteRow> rows;
+	bool finalized = false;
 };
 
 struct IcebergEqualityDeleteData {

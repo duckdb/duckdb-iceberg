@@ -26,8 +26,13 @@
 #include "function/iceberg_functions.hpp"
 #include "catalog/rest/catalog_entry/table/iceberg_table_entry.hpp"
 
-#include <string>
-#include <numeric>
+#include "duckdb/common/multi_file/multi_file_states.hpp"
+#include "duckdb/function/partition_stats.hpp"
+#include "duckdb/storage/statistics/numeric_stats.hpp"
+#include "duckdb/storage/statistics/string_stats.hpp"
+#include "core/metadata/schema/iceberg_column_definition.hpp"
+#include "core/expression/iceberg_predicate_stats.hpp"
+#include "core/expression/iceberg_value.hpp"
 
 namespace duckdb {
 

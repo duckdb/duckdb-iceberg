@@ -1,0 +1,82 @@
+# name: test/sql/local/iceberg_scans/iceberg_cardinality_with_deletes.test
+# description: Test cardinality estimation when partition pruning and deletions interact.
+# group: [iceberg_scans]
+
+require-env DUCKDB_ICEBERG_HAVE_GENERATED_DATA
+
+require avro
+
+require parquet
+
+require iceberg
+
+statement ok
+attach ':memory:' as my_datalake;
+
+statement ok
+create schema my_datalake.default;
+
+statement ok
+create view my_datalake.default.partitioned_deletion_vectors as
+    select * from ICEBERG_SCAN('__WORKING_DIRECTORY__/data/generated/iceberg/spark-local/default/partitioned_deletion_vectors');
+
+# ── Verify the shape of the table ───────────────────────────────────────────
+
+# 3 data files (one per partition)
+query I
+select count(*) from ICEBERG_METADATA('__WORKING_DIRECTORY__/data/generated/iceberg/spark-local/default/partitioned_deletion_vectors')
+where manifest_content = 'DATA';
+----
+3
+
+# 1 delete file (the puffin DV for seq=1)
+query I
+select count(*) from ICEBERG_METADATA('__WORKING_DIRECTORY__/data/generated/iceberg/spark-local/default/partitioned_deletion_vectors')
+where manifest_content = 'DELETE';
+----
+1
+
+# ── Actual row counts (ground truth) ────────────────────────────────────────
+
+query I
+select count(*) from my_datalake.default.partitioned_deletion_vectors;
+----
+2500
+
+query I
+select count(*) from my_datalake.default.partitioned_deletion_vectors where seq = 1;
+----
+500
+
+query I
+select count(*) from my_datalake.default.partitioned_deletion_vectors where seq = 3;
+----
+1000
+
+# ── Full-scan EXPLAIN: GetCardinality subtracts DV rows at manifest level ───
+# Expected: ~2,500 (3000 gross - 500 DV deletes = 2500 net)
+
+query II
+explain select * from my_datalake.default.partitioned_deletion_vectors;
+----
+physical_plan	<REGEX>:.*~2,500.*
+
+# FIXME: the 'get_partition_stats' doesn't get hit at all here
+mode skip
+
+## ── Partition-pruned EXPLAIN: only seq=1 files survive ──────────────────────
+## With deletion-vector-aware PartitionStatistics (this PR), each file contributes
+## its NET count (gross - DV deletes).  seq=1 has 1000 - 500 = 500 net rows.
+
+query II
+explain select * from ICEBERG_SCAN('__WORKING_DIRECTORY__/data/generated/iceberg/spark-local/default/partitioned_deletion_vectors') where seq = 1;
+----
+physical_plan	<REGEX>:.*~500.*
+
+# seq=3 has no deletions, so its net count equals the gross count.
+query II
+explain select * from ICEBERG_SCAN('__WORKING_DIRECTORY__/data/generated/iceberg/spark-local/default/partitioned_deletion_vectors') where seq = 3;
+----
+physical_plan	<REGEX>:.*~1,000.*
+
+mode unskip

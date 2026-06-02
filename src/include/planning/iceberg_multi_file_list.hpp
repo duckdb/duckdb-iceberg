@@ -31,6 +31,22 @@
 
 namespace duckdb {
 
+struct IcebergPartitionRowGroup : public PartitionRowGroup {
+public:
+	IcebergPartitionRowGroup(const vector<unique_ptr<IcebergColumnDefinition>> &schema,
+	                         const IcebergDataFile &data_file)
+	    : schema(schema), data_file(data_file) {
+	}
+public:
+	unique_ptr<BaseStatistics> GetColumnStatistics(const StorageIndex &storage_index) override;
+	bool MinMaxIsExact(const BaseStatistics &stats, const StorageIndex &storage_index) override;
+public:
+	//! Schema columns for mapping column_index -> field_id
+	const vector<unique_ptr<IcebergColumnDefinition>> &schema;
+	//! Reference to the data file with bounds
+	const IcebergDataFile &data_file;
+};
+
 struct IcebergTableFilters {
 	using filter_set_t = unordered_map<idx_t, unique_ptr<ExpressionFilter>>;
 	using iterator = filter_set_t::iterator;
@@ -98,26 +114,24 @@ public:
 	const IcebergSnapshotScanInfo &GetSnapshot() const;
 	const IcebergTableSchema &GetSchema() const;
 	bool FinishedScanningDeletes() const;
+	bool EqualityDeletesFinalized() const;
 
 	void Bind(vector<LogicalType> &return_types, vector<string> &names);
 	unique_ptr<IcebergMultiFileList> PushdownInternal(ClientContext &context, TableFilterSet &new_filters,
 	                                                  vector<column_t> column_indexes) const;
 	void ScanPositionalDeleteFile(const BoundIcebergManifestEntry &manifest_entry, DataChunk &result) const;
 	void ScanEqualityDeleteFile(const BoundIcebergManifestEntry &manifest_entry, DataChunk &result,
-	                            vector<MultiFileColumnDefinition> &columns,
-	                            const vector<MultiFileColumnDefinition> &global_columns,
-	                            const vector<ColumnIndex> &global_column_ids,
-	                            const vector<idx_t> &projection_ids) const;
-	void ScanDeleteFile(const BoundIcebergManifestEntry &entry, const vector<MultiFileColumnDefinition> &global_columns,
-	                    const vector<ColumnIndex> &global_column_ids, const vector<idx_t> &projection_ids) const;
+	                            vector<MultiFileColumnDefinition> &columns) const;
+	void FinalizeEqualityDeletes(const vector<MultiFileColumnDefinition> &global_columns,
+	                             const vector<ColumnIndex> &global_column_ids,
+	                             const vector<idx_t> &projection_ids) const;
+	void ScanDeleteFile(const BoundIcebergManifestEntry &entry) const;
 	void ScanPuffinFile(const BoundIcebergManifestEntry &entry) const;
 	unique_ptr<DeleteFilter> GetPositionalDeletesForFile(const string &file_path) const;
 	void EnumerateDeleteManifestEntries() const;
-	void ProcessDeletes(const vector<MultiFileColumnDefinition> &global_columns,
-	                    const vector<ColumnIndex> &global_column_ids, const vector<idx_t> &projection_ids) const;
-	void ScanDeleteFiles(const vector<MultiFileColumnDefinition> &global_columns,
-	                     const vector<ColumnIndex> &global_column_ids, const vector<idx_t> &projection_ids) const;
-	vector<reference<const IcebergEqualityDeleteRow>>
+	void ProcessDeletes() const;
+	void ScanDeleteFiles() const;
+	vector<reference<const IcebergEqualityDeleteFile>>
 	GetEqualityDeletesForFile(const BoundIcebergManifestEntry &manifest_entry) const;
 	void GetStatistics(vector<PartitionStatistics> &result) const;
 	const BoundIcebergManifestEntry &GetManifestEntry(idx_t file_id) const;

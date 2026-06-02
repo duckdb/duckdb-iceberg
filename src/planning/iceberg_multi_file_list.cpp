@@ -511,28 +511,125 @@ const IcebergManifestFile &IcebergMultiFileList::GetManifestFileForEntry(const B
 	}
 }
 
+unique_ptr<BaseStatistics> IcebergPartitionRowGroup::GetColumnStatistics(const StorageIndex &storage_index) {
+	auto col_idx = storage_index.GetPrimaryIndex();
+	if (col_idx >= schema.size()) {
+		return nullptr;
+	}
+	auto &column = *schema[col_idx];
+	auto field_id = column.id;
+
+	auto lower_it = data_file.lower_bounds.find(field_id);
+	auto upper_it = data_file.upper_bounds.find(field_id);
+	if (lower_it == data_file.lower_bounds.end() && upper_it == data_file.upper_bounds.end()) {
+		return nullptr;
+	}
+
+	Value lower_bound, upper_bound;
+	if (lower_it != data_file.lower_bounds.end()) {
+		lower_bound = lower_it->second;
+	}
+	if (upper_it != data_file.upper_bounds.end()) {
+		upper_bound = upper_it->second;
+	}
+
+	// DeserializeBounds converts from BLOB to typed values
+	IcebergPredicateStats pred_stats;
+	try {
+		pred_stats = IcebergPredicateStats::DeserializeBounds(lower_bound, upper_bound, column.name, column.type);
+	} catch (...) {
+		return nullptr;
+	}
+
+	if (!pred_stats.has_lower_bounds && !pred_stats.has_upper_bounds) {
+		return nullptr;
+	}
+
+	auto &type = column.type;
+	if (type.IsNumeric() || type.IsTemporal()) {
+		auto stats = NumericStats::CreateEmpty(type);
+		if (pred_stats.has_lower_bounds) {
+			NumericStats::SetMin(stats, pred_stats.lower_bound);
+		}
+		if (pred_stats.has_upper_bounds) {
+			NumericStats::SetMax(stats, pred_stats.upper_bound);
+		}
+		return stats.ToUnique();
+	} else if (type.id() == LogicalTypeId::VARCHAR) {
+		auto stats = StringStats::CreateEmpty(type);
+		if (pred_stats.has_lower_bounds) {
+			StringStats::SetMin(stats, pred_stats.lower_bound.GetValueUnsafe<string_t>());
+		}
+		if (pred_stats.has_upper_bounds) {
+			StringStats::SetMax(stats, pred_stats.upper_bound.GetValueUnsafe<string_t>());
+		}
+		return stats.ToUnique();
+	}
+	return nullptr;
+}
+
+bool IcebergPartitionRowGroup::MinMaxIsExact(const BaseStatistics &stats, const StorageIndex &storage_index) {
+	// File-level bounds are not exact (they are min/max across the file, not single values)
+	// This is fine for partition pruning but not for eager MIN/MAX aggregates
+	return false;
+}
+
 void IcebergMultiFileList::GetStatistics(vector<PartitionStatistics> &result) const {
 	if (GetMetadata().iceberg_version == 1) {
 		//! We collect no statistics information from manifests for V1 tables.
 		return;
 	}
 
-	if (!delete_manifests.empty()) {
-		//! if exist delete_manifests, return;
-		return;
+	lock_guard<mutex> guard(lock);
+	if (!initialized) {
+		InitializeFiles(guard);
 	}
 
-	idx_t count = 0;
-	for (idx_t i = 0; i < data_manifests.size(); i++) {
-		auto &manifest = data_manifests[i].entry.file;
-		count += manifest.existing_rows_count;
-		count += manifest.added_rows_count;
+	{
+		lock_guard<mutex> delete_guard(delete_lock);
+		if (!FinishedScanningDeletes() || transaction_delete_idx < transaction_delete_manifests.size()) {
+			ProcessDeletes();
+		}
+		if (!scanned_delete_manifests) {
+			ScanDeleteFiles();
+		}
 	}
 
-	PartitionStatistics partition_stats;
-	partition_stats.count = count;
-	partition_stats.count_type = CountType::COUNT_EXACT;
-	result.push_back(partition_stats);
+	auto &schema = GetSchema().columns;
+
+	//! Iterate through the data
+	for (auto &bound_entry : data_manifest_entries) {
+		auto &entry = bound_entry.entry;
+		auto &data_file = entry.data_file;
+
+		idx_t deleted_rows = 0;
+		bool count_is_exact = true;
+		auto it = positional_delete_data.find(data_file.file_path);
+		if (it != positional_delete_data.end()) {
+			auto &delete_data = *it->second;
+			if (delete_data.type != IcebergDeleteType::DELETION_VECTOR) {
+				count_is_exact = false;
+			}
+			for (auto &bound_delete_entry : delete_data.entries) {
+				auto &delete_entry = bound_delete_entry.entry;
+				deleted_rows += delete_entry.data_file.record_count;
+			}
+		}
+
+		auto equality_deletes = GetEqualityDeletesForFile(bound_entry);
+		if (!equality_deletes.empty()) {
+			//! No clue how many rows are deleted
+			count_is_exact = false;
+		}
+
+		PartitionStatistics stats;
+		stats.count = NumericCast<idx_t>(data_file.record_count - deleted_rows);
+		stats.count_type = count_is_exact ? CountType::COUNT_EXACT : CountType::COUNT_APPROXIMATE;
+		if (!data_file.lower_bounds.empty() || !data_file.upper_bounds.empty()) {
+			stats.partition_row_group = make_shared_ptr<IcebergPartitionRowGroup>(schema, data_file);
+		}
+		result.push_back(std::move(stats));
+	}
 }
 
 void IcebergPredicateStats::SetLowerBound(const Value &new_lower_bound) {
@@ -964,9 +1061,9 @@ bool IcebergMultiFileList::ManifestMatchesFilter(const IcebergManifestFile &mani
 	return true;
 }
 
-vector<reference<const IcebergEqualityDeleteRow>>
+vector<reference<const IcebergEqualityDeleteFile>>
 IcebergMultiFileList::GetEqualityDeletesForFile(const BoundIcebergManifestEntry &bound_manifest_entry) const {
-	vector<reference<const IcebergEqualityDeleteRow>> result;
+	vector<reference<const IcebergEqualityDeleteFile>> result;
 
 	//! Look through all the equality delete files with a *higher* sequence number
 	auto &manifest_entry = bound_manifest_entry.entry;
@@ -993,7 +1090,7 @@ IcebergMultiFileList::GetEqualityDeletesForFile(const BoundIcebergManifestEntry 
 					}
 				}
 			}
-			result.insert(result.end(), file.rows.begin(), file.rows.end());
+			result.emplace_back(file);
 		}
 	}
 	return result;
@@ -1210,14 +1307,12 @@ void IcebergMultiFileList::EnumerateDeleteManifestEntries() const {
 	D_ASSERT(FinishedScanningDeletes());
 }
 
-void IcebergMultiFileList::ScanDeleteFiles(const vector<MultiFileColumnDefinition> &global_columns,
-                                           const vector<ColumnIndex> &global_column_ids,
-                                           const vector<idx_t> &projection_ids) const {
+void IcebergMultiFileList::ScanDeleteFiles() const {
 	for (auto &bound_manifest_entry : delete_manifest_entries) {
 		auto &manifest_entry = bound_manifest_entry.entry;
 		auto &data_file = manifest_entry.data_file;
 		if (StringUtil::CIEquals(data_file.file_format, "parquet")) {
-			ScanDeleteFile(bound_manifest_entry, global_columns, global_column_ids, projection_ids);
+			ScanDeleteFile(bound_manifest_entry);
 		} else if (StringUtil::CIEquals(data_file.file_format, "puffin")) {
 			ScanPuffinFile(bound_manifest_entry);
 		} else {
@@ -1229,22 +1324,17 @@ void IcebergMultiFileList::ScanDeleteFiles(const vector<MultiFileColumnDefinitio
 	scanned_delete_manifests = true;
 }
 
-void IcebergMultiFileList::ProcessDeletes(const vector<MultiFileColumnDefinition> &global_columns,
-                                          const vector<ColumnIndex> &global_column_ids,
-                                          const vector<idx_t> &projection_ids) const {
+void IcebergMultiFileList::ProcessDeletes() const {
 	//! Enumerate the delete manifest entries, then read the delete files they reference.
 	//! EnumerateDeleteManifestEntries() is idempotent, so this is safe even if the entries were
 	//! already enumerated earlier (e.g. by the optimizer).
 	EnumerateDeleteManifestEntries();
 	if (!scanned_delete_manifests) {
-		ScanDeleteFiles(global_columns, global_column_ids, projection_ids);
+		ScanDeleteFiles();
 	}
 }
 
-void IcebergMultiFileList::ScanDeleteFile(const BoundIcebergManifestEntry &bound_manifest_entry,
-                                          const vector<MultiFileColumnDefinition> &global_columns,
-                                          const vector<ColumnIndex> &global_column_ids,
-                                          const vector<idx_t> &projection_ids) const {
+void IcebergMultiFileList::ScanDeleteFile(const BoundIcebergManifestEntry &bound_manifest_entry) const {
 	auto &manifest_entry = bound_manifest_entry.entry;
 	auto &data_file = manifest_entry.data_file;
 	auto delete_file_path = data_file.file_path;
@@ -1315,8 +1405,7 @@ void IcebergMultiFileList::ScanDeleteFile(const BoundIcebergManifestEntry &bound
 			result.Reset();
 			delete_scan_function.function(context, function_input, result);
 			result.Flatten();
-			ScanEqualityDeleteFile(bound_manifest_entry, result, multi_file_local_state.reader->columns, global_columns,
-			                       global_column_ids, projection_ids);
+			ScanEqualityDeleteFile(bound_manifest_entry, result, multi_file_local_state.reader->columns);
 		} while (result.size() != 0);
 	}
 }
