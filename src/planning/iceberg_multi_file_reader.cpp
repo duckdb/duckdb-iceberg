@@ -299,10 +299,13 @@ void IcebergMultiFileReader::FinalizeBind(MultiFileReaderData &reader_data, cons
 		lock_guard<mutex> delete_guard(multi_file_list.delete_lock);
 		if (!multi_file_list.FinishedScanningDeletes() ||
 		    multi_file_list.transaction_delete_idx < multi_file_list.transaction_delete_manifests.size()) {
-			multi_file_list.ProcessDeletes(global_columns, global_column_ids, gstate.projection_ids);
+			multi_file_list.ProcessDeletes();
 		}
 		if (!multi_file_list.scanned_delete_manifests) {
-			multi_file_list.ScanDeleteFiles(global_columns, global_column_ids, gstate.projection_ids);
+			multi_file_list.ScanDeleteFiles();
+		}
+		if (!multi_file_list.EqualityDeletesFinalized()) {
+			multi_file_list.FinalizeEqualityDeletes(global_columns, global_column_ids, gstate.projection_ids);
 		}
 		reader.deletion_filter = multi_file_list.GetPositionalDeletesForFile(file_path);
 	}
