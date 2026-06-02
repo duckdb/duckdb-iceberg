@@ -7,6 +7,11 @@ namespace duckdb {
 
 static string VERSION_GUESSING_CONFIG_VARIABLE = "unsafe_enable_version_guessing";
 
+// When this is true, a DELETE on a v2 Iceberg table whose WHERE clause is a pure
+// conjunction of equality predicates writes an Iceberg equality-delete file instead
+// of a positional delete. This exists only to exercise the equality-delete read path.
+static string ENABLE_EQUALITY_DELETES_CONFIG_VARIABLE = "unsafe_and_disabled_for_iceberg_v3_enable_equality_deletes";
+
 // When this is provided (and unsafe_enable_version_guessing is true)
 // we first look for DEFAULT_VERSION_HINT_FILE, if it doesn't exist we
 // then search for versions matching the DEFAULT_TABLE_VERSION_FORMAT

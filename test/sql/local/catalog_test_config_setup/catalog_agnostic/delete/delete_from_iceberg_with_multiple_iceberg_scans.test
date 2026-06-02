@@ -1,0 +1,46 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/delete/delete_from_iceberg_with_multiple_iceberg_scans.test
+# description: test integration with iceberg catalog read
+# group: [delete]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+set logging_level='debug'
+
+loop i 2 4
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.test;
+
+statement ok
+CREATE TABLE my_datalake.default.test WITH ('format-version'='${i}') AS SELECT i id FROM range(1000) t(i);
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.test2;
+
+statement ok
+CREATE TABLE my_datalake.default.test2 WITH ('format-version'='${i}') AS SELECT i id FROM range(100) t(i);
+
+statement ok
+call enable_logging(level='debug');
+
+statement ok
+DELETE FROM my_datalake.default.test2 WHERE id in (select id from my_datalake.default.test);
+
+query I
+select count(*) from my_datalake.default.test2;
+----
+0
+
+endloop

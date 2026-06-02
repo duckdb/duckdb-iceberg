@@ -27,8 +27,6 @@
 #include "core/metadata/manifest/iceberg_manifest.hpp"
 #include "core/metadata/manifest/iceberg_manifest_list.hpp"
 
-#include <numeric>
-
 namespace duckdb {
 
 struct IcebergColumnStatsBindData : public TableFunctionData {

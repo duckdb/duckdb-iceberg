@@ -1,0 +1,54 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/delete/delete_from_empty_source.test
+# description: test integration with iceberg catalog read
+# group: [delete]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+set logging_level='debug'
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.test;
+
+statement ok
+CREATE TABLE my_datalake.default.test AS SELECT i id FROM range(10) t(i);
+
+statement ok
+INSERT INTO my_datalake.default.test VALUES (NULL);
+
+query I
+FROM my_datalake.default.test ORDER BY ALL;
+----
+0
+1
+2
+3
+4
+5
+6
+7
+8
+9
+NULL
+
+statement ok
+call enable_logging(level='debug');
+
+statement ok
+DELETE FROM my_datalake.default.test WHERE id=NULL;
+
+query I
+select count(*) from duckdb_logs() where message like '%Could not find IcebergDelete source%';
+----
+1

@@ -1,0 +1,67 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/logging/test_reads_on_bounds.test
+# group: [logging]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+require icu
+
+require ducklake
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+set threads=1;
+
+statement ok
+set enable_logging=true
+
+statement ok
+SET TimeZone = 'UTC';
+
+statement ok
+call enable_logging('Iceberg');
+
+statement ok
+drop table if exists my_datalake.default.test_filter_on_bounds;
+
+statement ok
+create table my_datalake.default.test_filter_on_bounds as select range col1 from range(1000);
+
+statement ok
+insert into my_datalake.default.test_filter_on_bounds select range col1 from range(1000, 2000);
+
+statement ok
+insert into my_datalake.default.test_filter_on_bounds select range col1 from range(2000, 3000);
+
+statement ok
+insert into my_datalake.default.test_filter_on_bounds select range col1 from range(3000, 4000);
+
+statement ok
+insert into my_datalake.default.test_filter_on_bounds select range col1 from range(4000, 5000);
+
+query I
+select count(*) from my_datalake.default.test_filter_on_bounds where col1 >= 50 and col1 < 100;
+----
+50
+
+
+# verify there are 5 files
+query I
+select count(*) = 5 from (from iceberg_metadata(my_datalake.default.test_filter_on_bounds) select manifest_sequence_number, file_path group by all order by manifest_sequence_number);
+----
+1
+
+# verify 4 have been filtered out.
+query I
+select count(*) = 4 from duckdb_logs() where type = 'Iceberg' and regexp_matches(message, '.*col1.*did not match filter.*');
+----
+1

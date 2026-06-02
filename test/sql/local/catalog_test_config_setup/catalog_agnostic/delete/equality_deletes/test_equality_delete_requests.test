@@ -1,0 +1,87 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/delete/equality_deletes/test_equality_delete_requests.test
+# description: Test iceberg deletes
+# group: [equality_deletes]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require-env EQUALITY_DELETE_WRITES_ENABLED 1
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+set unsafe_and_disabled_for_iceberg_v3_enable_equality_deletes=true;
+
+statement ok
+set threads=1;
+
+# help when inspecting explain statements
+# disable join order to disable requests to data files during GetCardinality
+statement ok
+set disabled_optimizers='column_lifetime,statistics_propagation,join_order';
+
+statement ok
+set enable_external_file_cache=false;
+
+statement ok
+drop table if exists my_datalake.default.equality_delete_table_1;
+
+statement ok
+create table my_datalake.default.equality_delete_table_1 as select range a, range % 5 b, range % 10 c from range(21);
+
+statement ok
+delete from my_datalake.default.equality_delete_table_1 where b = 1;
+
+statement ok
+call enable_logging('HTTP');
+
+statement ok
+EXPLAIN select c, count(*) from my_datalake.default.equality_delete_table_1 group by all order by c;
+
+# equality delete file is not scanned.
+query I
+select count(*) from duckdb_logs_parsed('http') where request.url like '%-deletes.parquet' and request.type = 'GET';
+----
+0
+
+query II
+select c, count(*) from my_datalake.default.equality_delete_table_1 group by all order by c;
+----
+0	3
+2	2
+3	2
+4	2
+5	2
+7	2
+8	2
+9	2
+
+# 1 get to the equality delete file
+statement ok
+select request from duckdb_logs_parsed('http') where request.url like '%-deletes.parquet' and request.type = 'GET';
+
+
+# Currently doese not work, all manifest are always downloaded
+# statement ok
+# call truncate_duckdb_logs();
+#
+# # explain does not read delete files, but enumerates all delete manifests
+# statement ok
+# explain select c, count(*) from my_datalake.default.equality_delete_table_1 group by all order by c
+#
+# # 1 get to the manifest list
+# # 1 get to the delete manifest containing the equality delete information
+# query I
+# select request.url from duckdb_logs_parsed('http') where request.url like '%.avro';
+# ----
+# 2
+
+

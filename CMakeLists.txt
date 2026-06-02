@@ -10,6 +10,16 @@ set(CMAKE_CXX_STANDARD_REQUIRED True)
 set(EXTENSION_NAME ${TARGET_NAME}_extension)
 include_directories(src/include)
 
+# Compile-time toggle for the experimental, testing-only Iceberg equality-delete WRITE path.
+# Off by default: the shipped extension cannot create equality-delete files. Enable it to
+# generate equality-delete files locally for testing the equality-delete READ path:
+#   cmake ... -DICEBERG_ENABLE_EQUALITY_DELETE_WRITES=ON
+option(ICEBERG_ENABLE_EQUALITY_DELETE_WRITES
+       "Compile in the experimental Iceberg equality-delete write path (testing only)" OFF)
+if(ICEBERG_ENABLE_EQUALITY_DELETE_WRITES)
+	add_definitions(-DICEBERG_ENABLE_EQUALITY_DELETE_WRITES)
+endif()
+
 
 set(EXTENSION_SOURCES
 	src/catalog/rest/api/api_utils.cpp
@@ -21,7 +31,7 @@ set(EXTENSION_SOURCES
 	src/catalog/rest/api/iceberg_type.cpp
 	src/catalog/rest/api/table_update.cpp
 	src/catalog/rest/api/url_utils.cpp
-	src/catalog/rest/catalog_entry/iceberg_schema_entry.cpp
+	src/catalog/rest/catalog_entry/schema/iceberg_schema_entry.cpp
 	src/catalog/rest/catalog_entry/table/iceberg_table_entry.cpp
 	src/catalog/rest/catalog_entry/table/iceberg_table_information.cpp
 	src/catalog/rest/iceberg_catalog.cpp
@@ -53,6 +63,7 @@ set(EXTENSION_SOURCES
 	src/core/metadata/schema/iceberg_table_schema.cpp
 	src/core/metadata/snapshot/iceberg_snapshot.cpp
 	src/core/metadata/sort/iceberg_sort_order.cpp
+	src/execution/helpers/equality_delete_helpers.cpp
 	src/execution/operator/copy/iceberg_copy.cpp
 	src/execution/operator/iceberg_delete.cpp
 	src/execution/operator/iceberg_insert.cpp
@@ -80,11 +91,14 @@ set(EXTENSION_SOURCES
 	src/function/metadata/iceberg_partition_stats.cpp
 	src/function/metadata/iceberg_snapshots.cpp
 	src/function/metadata/iceberg_table_properties_functions.cpp
+	src/function/metadata/iceberg_verify_equality_deletes.cpp
+	src/function/metadata/iceberg_schema_properties_functions.cpp
 	src/function/scan/iceberg_scan.cpp
 	src/iceberg_extension.cpp
 	src/iceberg_logging.cpp
 	src/planning/iceberg_multi_file_list.cpp
 	src/planning/iceberg_multi_file_reader.cpp
+	src/planning/iceberg_optimizer.cpp
 	src/planning/metadata_io/avro/avro_scan.cpp
 	src/planning/metadata_io/avro/iceberg_avro_multi_file_list.cpp
 	src/planning/metadata_io/avro/iceberg_avro_multi_file_reader.cpp

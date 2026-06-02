@@ -12,6 +12,10 @@ namespace duckdb {
 
 using sequence_number_t = int64_t;
 
+struct EqualityDeleteValuelist {
+	unordered_map<idx_t, vector<Value>> field_id_value_to_remove;
+};
+
 struct IcebergEqualityDeleteRow {
 public:
 	IcebergEqualityDeleteRow() {

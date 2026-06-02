@@ -1,0 +1,61 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_specifc/polaris/test_issue_969_branch_ref_timestamp.test
+# description: duckdb-iceberg#969 - default read must follow refs.main, not pick the largest timestamp_ms across all branch refs.
+# group: [polaris]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require-env POLARIS_SERVER_AVAILABLE
+
+require avro
+
+require parquet
+
+require httpfs
+
+require iceberg
+
+require aws
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+# The secret and the `my_datalake` attach are created by polaris.json's on_init.
+# Setup produces: main tip with 5 rows, side_branch tip after DELETE-all with a
+# newer timestamp_ms. Precondition for the bug.
+query I
+select count(*) >= 2 from iceberg_snapshots(my_datalake.default.issue_969);
+----
+true
+
+query I
+select max(timestamp_ms) > min(timestamp_ms) from iceberg_snapshots(my_datalake.default.issue_969);
+----
+true
+
+# Default read must resolve to refs.main (5 rows), not the side-branch tip (0).
+query I
+select count(*) from my_datalake.default.issue_969;
+----
+5
+
+# Explicit-id time travel against refs.main's snapshot keeps working.
+statement ok
+set variable main_snapshot_id = (
+	select snapshot_id from iceberg_snapshots(my_datalake.default.issue_969)
+		order by timestamp_ms asc limit 1
+);
+
+statement ok
+set variable time_travel_query = $$
+	select count(*) from my_datalake.default.issue_969 AT (VERSION => COMPONENT)
+$$
+
+query I
+select * from query(
+	getvariable('time_travel_query').replace(
+		'COMPONENT'::VARCHAR,
+		getvariable('main_snapshot_id')::VARCHAR
+	)
+)
+----
+5

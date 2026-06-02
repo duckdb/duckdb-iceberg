@@ -22,6 +22,8 @@ static void ColumnsReferencedByEqualityIds(DataChunk &source, DataChunk &result,
                                            const vector<MultiFileColumnDefinition> &local_columns,
                                            const vector<int32_t> &equality_ids) {
 	//! Map from column_id to 'local_columns' index, to figure out which columns from the 'source' are relevant here
+	// 'local_columns' are columns from the equality delete file.
+	// id_to_column -> equality_delete_column_field_id_to_output_column_id
 	unordered_map<int32_t, column_t> id_to_column;
 	for (column_t i = 0; i < local_columns.size(); i++) {
 		auto &col = local_columns[i];
@@ -29,12 +31,13 @@ static void ColumnsReferencedByEqualityIds(DataChunk &source, DataChunk &result,
 		id_to_column[col.identifier.GetValue<int32_t>()] = i;
 	}
 
+	// column_ids we want to slice.
 	vector<column_t> column_ids;
 	for (auto id : equality_ids) {
 		D_ASSERT(id_to_column.count(id));
 		column_ids.push_back(id_to_column[id]);
 	}
-	//! Take only the relevant columns from the source
+	//! Take only the relevant columns from the source (equality_delete_file)
 	InitializeFromOtherChunk(result, source, column_ids);
 	result.ReferenceColumns(source, column_ids);
 }
@@ -42,7 +45,8 @@ static void ColumnsReferencedByEqualityIds(DataChunk &source, DataChunk &result,
 void IcebergMultiFileList::ScanEqualityDeleteFile(const BoundIcebergManifestEntry &bound_manifest_entry,
                                                   DataChunk &source, vector<MultiFileColumnDefinition> &local_columns,
                                                   const vector<MultiFileColumnDefinition> &global_columns,
-                                                  const vector<ColumnIndex> &column_indexes) const {
+                                                  const vector<ColumnIndex> &global_column_ids,
+                                                  const vector<idx_t> &projection_ids) const {
 	auto &manifest_entry = bound_manifest_entry.entry;
 	auto &data_file = manifest_entry.data_file;
 	auto &manifest_file = GetManifestFileForEntry(bound_manifest_entry, IcebergManifestContentType::DELETE);
@@ -54,6 +58,8 @@ void IcebergMultiFileList::ScanEqualityDeleteFile(const BoundIcebergManifestEntr
 		return;
 	}
 
+	// make result only reference the columns from source (equality delete file) that have equality_ids
+	// mentioned in the manifest file
 	DataChunk result;
 	ColumnsReferencedByEqualityIds(source, result, local_columns, data_file.equality_ids);
 
@@ -65,54 +71,65 @@ void IcebergMultiFileList::ScanEqualityDeleteFile(const BoundIcebergManifestEntr
 	}
 	auto &deletes = *it->second;
 
-	//! Map from column_id to 'global_columns' index, so we can create a reference to the correct global index
-	unordered_map<int32_t, column_t> id_to_global_column;
-	for (column_t i = 0; i < global_columns.size(); i++) {
-		auto &col = global_columns[i];
-		D_ASSERT(!col.identifier.IsNull());
-		id_to_global_column[col.identifier.GetValue<int32_t>()] = i;
+	// We are scanning the delete file even before the optimizer runs
+	// All equality delete columns will be projected from the scan due to our optimizer
+	// we want to know where in the output the equality delete columns will be projected
+	unordered_map<idx_t, idx_t> global_id_to_projection_index;
+	for (idx_t result_id = 0; result_id < global_column_ids.size(); result_id++) {
+		auto global_col = global_column_ids[result_id];
+		if (IsVirtualColumn(global_col.GetPrimaryIndex())) {
+			continue;
+		}
+		D_ASSERT(global_col.GetPrimaryIndex() < global_columns.size());
+		// index_in_global_columns = index in input_chunk
+		auto index_in_global_columns = global_col.GetPrimaryIndex();
+		auto &col = global_columns[index_in_global_columns];
+		for (auto &equality_delete_col : local_columns) {
+			if (equality_delete_col.GetIdentifierFieldId() == col.GetIdentifierFieldId()) {
+				if (projection_ids.empty()) {
+					global_id_to_projection_index[index_in_global_columns] = result_id;
+				} else {
+					for (idx_t proj_index = 0; proj_index < projection_ids.size(); proj_index++) {
+						idx_t projection_col = projection_ids[proj_index];
+						if (projection_col == result_id) {
+							global_id_to_projection_index[index_in_global_columns] = proj_index;
+						}
+					}
+				}
+				// here we can break. col has one identifier field id and equality deletes should only have unique
+				// values
+				break;
+			}
+		}
 	}
 
-	unordered_map<idx_t, idx_t> global_id_to_result_id;
-	for (idx_t i = 0; i < column_indexes.size(); i++) {
-		auto &column_index = column_indexes[i];
-		if (column_index.IsVirtualColumn()) {
-			continue;
-		}
-		auto global_id = column_index.GetPrimaryIndex();
-		global_id_to_result_id[global_id] = i;
+	unordered_map<int32_t, column_t> field_id_to_global_column;
+	for (idx_t i = 0; i < global_columns.size(); i++) {
+		auto &global_col = global_columns.at(i);
+		field_id_to_global_column[global_col.GetIdentifierFieldId()] = i;
 	}
-	//! For the column(s) that are needed but aren't referenced, add them to the map
-	for (auto field_id : data_file.equality_ids) {
-		auto global_column_id = id_to_global_column[field_id];
-		ColumnIndex equality_index(global_column_id);
-		//! Check if the column needed by the equality delete is present
-		if (std::find(column_indexes.begin(), column_indexes.end(), equality_index) != column_indexes.end()) {
-			continue;
-		}
-		auto new_result_id = column_indexes.size() + equality_id_to_result_id.size();
-		//! Create or get the result id mapping for this equality id
-		auto result_id = equality_id_to_result_id.emplace(field_id, new_result_id).first->second;
-		global_id_to_result_id[global_column_id] = result_id;
-	}
+
 	deletes.files.emplace_back(data_file.partition_info, manifest_file.partition_spec_id);
 	auto &rows = deletes.files.back().rows;
 	rows.resize(count);
 	D_ASSERT(result.ColumnCount() == data_file.equality_ids.size());
+
 	for (idx_t col_idx = 0; col_idx < result.ColumnCount(); col_idx++) {
 		auto &field_id = data_file.equality_ids[col_idx];
-		auto global_column_id = id_to_global_column[field_id];
+		auto global_column_id = field_id_to_global_column[field_id];
 		auto &col = global_columns[global_column_id];
 		auto &vec = result.data[col_idx];
 
-		auto it = global_id_to_result_id.find(global_column_id);
-		D_ASSERT(it != global_id_to_result_id.end());
+		auto it = global_id_to_projection_index.find(global_column_id);
+		D_ASSERT(it != global_id_to_projection_index.end());
 		auto result_column_id = it->second;
 
 		for (idx_t i = 0; i < count; i++) {
 			auto &row = rows[i];
 			auto constant = vec.GetValue(i);
+
 			unique_ptr<Expression> equality_filter;
+			// this bound ref is on the position of the output_chunk data.
 			auto bound_ref = make_uniq<BoundReferenceExpression>(col.type, result_column_id);
 			if (!constant.IsNull()) {
 				//! Create a COMPARE_NOT_EQUAL expression

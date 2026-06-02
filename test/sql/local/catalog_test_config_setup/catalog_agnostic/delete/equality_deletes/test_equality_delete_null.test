@@ -1,0 +1,71 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/delete/equality_deletes/test_equality_delete_null.test
+# description: Test iceberg deletes
+# group: [equality_deletes]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require-env EQUALITY_DELETE_WRITES_ENABLED 1
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+set unsafe_and_disabled_for_iceberg_v3_enable_equality_deletes=true;
+
+statement ok
+drop table if exists my_datalake.default.equality_delete_null;
+
+statement ok
+create table my_datalake.default.equality_delete_null as select range a, range b, range c from range(10);
+
+statement ok
+insert into my_datalake.default.equality_delete_null select NULL, NULL, NULL from range (5);
+
+query III
+select * from my_datalake.default.equality_delete_null order by all NULLS LAST
+----
+0	0	0
+1	1	1
+2	2	2
+3	3	3
+4	4	4
+5	5	5
+6	6	6
+7	7	7
+8	8	8
+9	9	9
+NULL	NULL	NULL
+NULL	NULL	NULL
+NULL	NULL	NULL
+NULL	NULL	NULL
+NULL	NULL	NULL
+
+# drop all nulls
+statement ok
+delete from my_datalake.default.equality_delete_null where b IS NULL;
+
+# maybe we should throw an error when dropping a column that has equality deletes?
+statement ok
+alter table my_datalake.default.equality_delete_null drop column b;
+
+query II
+select * from my_datalake.default.equality_delete_null order by all;
+----
+0	0
+1	1
+2	2
+3	3
+4	4
+5	5
+6	6
+7	7
+8	8
+9	9

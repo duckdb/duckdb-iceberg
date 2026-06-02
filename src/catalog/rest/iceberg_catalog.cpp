@@ -9,7 +9,7 @@
 #include "duckdb/common/exception/conversion_exception.hpp"
 #include "regex"
 
-#include "catalog/rest/catalog_entry/iceberg_schema_entry.hpp"
+#include "catalog/rest/catalog_entry/schema/iceberg_schema_entry.hpp"
 #include "catalog/rest/catalog_entry/table/iceberg_table_entry.hpp"
 #include "catalog/rest/transaction/iceberg_transaction.hpp"
 #include "catalog/rest/api/catalog_api.hpp"

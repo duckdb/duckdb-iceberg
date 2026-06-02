@@ -1,0 +1,41 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/functions/test_verify_equality_deletes.test
+# description: Test iceberg_truncate scalar function against Iceberg spec
+# group: [functions]
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+select * from duckdb_functions();
+
+statement ok
+select iceberg_verify_equality_deletes('a');
+
+statement ok
+create table table1 as select range a from range(10);
+
+statement ok
+select iceberg_verify_equality_deletes(a) from table1;
+
+query I
+select iceberg_verify_equality_deletes(a, a, a, a, a) from table1;
+----
+true
+true
+true
+true
+true
+true
+true
+true
+true
+true
+

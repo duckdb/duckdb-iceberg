@@ -8,15 +8,11 @@
 #include "catalog/rest/api/api_utils.hpp"
 #include "catalog/rest/api/url_utils.hpp"
 #include "catalog/rest/iceberg_catalog.hpp"
+#include "catalog/rest/storage/authorization/sigv4_utils.hpp"
 
 namespace duckdb {
 
 namespace {
-
-struct HostDecompositionResult {
-	string authority;
-	vector<string> path_components;
-};
 
 //! Detect the scheme from a host string, defaulting to HTTPS
 Aws::Http::Scheme DetectScheme(const string &host) {
@@ -25,21 +21,6 @@ Aws::Http::Scheme DetectScheme(const string &host) {
 		return Aws::Http::Scheme::HTTP;
 	}
 	return Aws::Http::Scheme::HTTPS;
-}
-
-//! Decompose a bare host (without scheme) into authority and path components
-HostDecompositionResult DecomposeHost(const string &host) {
-	HostDecompositionResult result;
-
-	auto start_of_path = host.find('/');
-	if (start_of_path != string::npos) {
-		result.authority = host.substr(0, start_of_path);
-		auto remainder = host.substr(start_of_path + 1);
-		result.path_components = StringUtil::Split(remainder, '/');
-	} else {
-		result.authority = host;
-	}
-	return result;
 }
 
 } // namespace
@@ -77,44 +58,6 @@ unique_ptr<IcebergAuthorization> SIGV4Authorization::FromAttachOptions(AttachedD
 	}
 	input.options = std::move(remaining_options);
 	return std::move(result);
-}
-
-static bool IsAwsRegion(const string &token) {
-	static const vector<string> prefixes = {"us-", "eu-", "ap-", "sa-", "ca-", "me-", "af-", "il-", "mx-"};
-	bool has_prefix = false;
-	for (auto &prefix : prefixes) {
-		if (StringUtil::StartsWith(token, prefix)) {
-			has_prefix = true;
-			break;
-		}
-	}
-	if (!has_prefix) {
-		return false;
-	}
-	if (token.empty() || !StringUtil::CharacterIsDigit(token.back())) {
-		return false;
-	}
-	return true;
-}
-
-static string GetAwsRegion(const string &host) {
-	auto parts = StringUtil::Split(host, '.');
-	for (auto &part : parts) {
-		if (IsAwsRegion(part)) {
-			return part;
-		}
-	}
-	throw InvalidInputException("Could not parse AWS region from host: %s", host);
-}
-
-static string GetAwsService(const string &host) {
-	auto parts = StringUtil::Split(host, '.');
-	for (idx_t i = 0; i < parts.size(); i++) {
-		if (IsAwsRegion(parts[i]) && i > 0) {
-			return parts[i - 1];
-		}
-	}
-	throw InvalidInputException("Could not parse AWS service from host: %s", host);
 }
 
 AWSInput SIGV4Authorization::CreateAWSInput(ClientContext &context, const IRCEndpointBuilder &endpoint_builder) {

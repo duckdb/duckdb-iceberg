@@ -189,6 +189,7 @@ idx_t IcebergDeletionVector::Filter(row_t start_row_index, idx_t count, Selectio
 		//! FIXME: How do we test this? These offsets are **huge**
 		const idx_t next_offset = MinValue<idx_t>(start_row_index + count, next_high_boundary) - start_row_index;
 
+		lock_guard<mutex> guard(lock);
 		//! Update the state
 		if (!has_current_high || current_high != high) {
 			auto it = bitmaps.find(high);
@@ -215,6 +216,7 @@ idx_t IcebergDeletionVector::Filter(row_t start_row_index, idx_t count, Selectio
 				selection_idx += !is_deleted;
 			}
 		}
+
 		offset = next_offset;
 	}
 	return selection_idx;

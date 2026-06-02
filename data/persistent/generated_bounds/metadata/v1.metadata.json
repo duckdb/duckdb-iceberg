@@ -1,0 +1,74 @@
+{
+  "location": "data/persistent/generated_bounds",
+  "table-uuid": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+  "last-updated-ms": 1700000000000,
+  "last-column-id": 2,
+  "schemas": [
+    {
+      "type": "struct",
+      "fields": [
+        {
+          "id": 1,
+          "name": "block_number",
+          "type": "int",
+          "required": false
+        },
+        {
+          "id": 2,
+          "name": "from",
+          "type": "string",
+          "required": false
+        }
+      ],
+      "schema-id": 0,
+      "identifier-field-ids": []
+    }
+  ],
+  "current-schema-id": 0,
+  "partition-specs": [
+    {
+      "spec-id": 0,
+      "fields": []
+    }
+  ],
+  "default-spec-id": 0,
+  "last-partition-id": 999,
+  "properties": {},
+  "current-snapshot-id": 1000000000000000001,
+  "snapshots": [
+    {
+      "snapshot-id": 1000000000000000001,
+      "sequence-number": 1,
+      "timestamp-ms": 1700000000000,
+      "manifest-list": "data/persistent/generated_bounds/metadata/snap-1000000000000000001.avro",
+      "summary": {
+        "operation": "append"
+      },
+      "schema-id": 0
+    }
+  ],
+  "snapshot-log": [
+    {
+      "snapshot-id": 1000000000000000001,
+      "timestamp-ms": 1700000000000
+    }
+  ],
+  "metadata-log": [],
+  "sort-orders": [
+    {
+      "order-id": 0,
+      "fields": []
+    }
+  ],
+  "default-sort-order-id": 0,
+  "refs": {
+    "main": {
+      "snapshot-id": 1000000000000000001,
+      "type": "branch"
+    }
+  },
+  "statistics": [],
+  "partition-statistics": [],
+  "format-version": 2,
+  "last-sequence-number": 1
+}

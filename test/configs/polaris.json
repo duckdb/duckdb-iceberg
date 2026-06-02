@@ -23,6 +23,7 @@
       "reason" : "For some reason the tables cannot be generated in polaris yet",
       "paths" : [
         "test/sql/local/catalog_test_config_setup/catalog_agnostic/insert/test_insert_into_sorted_table_fails.test",
+        "test/sql/local/catalog_test_config_setup/catalog_agnostic/update/test_update_into_sorted_table_fails.test",
         "test/sql/local/catalog_test_config_setup/catalog_agnostic/reads/test_requests_to_partitioned_table.test",
         "test/sql/local/catalog_test_config_setup/catalog_agnostic/irc_catalog_read_deletes.test",
         "test/sql/local/catalog_test_config_setup/catalog_agnostic/insert/test_read_upper_and_lower_bounds.test",
@@ -51,6 +52,10 @@
         "test/sql/local/catalog_test_config_setup/catalog_agnostic/insert/test_write_decimal_bounds_hugeint.test",
         "test/sql/local/catalog_test_config_setup/catalog_agnostic/insert/test_write_decimal_bounds.test"
       ]
+    },
+    {
+      "reason": "Polaris can't handle removals and updates of schema properties in the same request",
+      "paths": ["test/sql/local/catalog_test_config_setup/catalog_agnostic/schema_properties/schema_properties_update_transaction.test"]
     }
   ]
 }

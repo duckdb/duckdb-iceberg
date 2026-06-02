@@ -1,0 +1,54 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/delete/equality_deletes/test_equality_deletes_metadata.test
+# description: Test iceberg deletes
+# group: [equality_deletes]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require-env EQUALITY_DELETE_WRITES_ENABLED 1
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+use my_datalake.default;
+
+statement ok
+set unsafe_and_disabled_for_iceberg_v3_enable_equality_deletes=true;
+
+statement ok
+drop table if exists test_equality_delete_metadata;
+
+statement ok
+create table test_equality_delete_metadata as select range a, range % 5 b, range % 10 c from range(21);
+
+statement ok
+delete from test_equality_delete_metadata where b = 1;
+
+# only 2 entries in iceberg_metadata 1 equality delete file and 1 data file.
+query I
+select count(*) from iceberg_metadata(my_datalake.default.test_equality_delete_metadata);
+----
+2
+
+# 1 data file and 1 delete file.
+statement ok
+set variable avro_file = (select manifest_path from iceberg_metadata(my_datalake.default.test_equality_delete_metadata)where manifest_content = 'DELETE' limit 1);
+
+statement ok
+set variable parquet_file_path = (select file_path from iceberg_metadata(my_datalake.default.test_equality_delete_metadata)where manifest_content = 'DATA' limit 1);
+
+# make sure equality deletes list in avro manifest file matches field ids of the parquet file.
+query I nosort manifest_equality_ids
+select unnest(equality_ids) from (select unnest(data_file) from read_avro(getvariable('avro_file'))) order by all;
+
+query I nosort manifest_equality_ids
+select field_id from parquet_schema(getvariable('parquet_file_path')) where name = 'b' order by all;
+

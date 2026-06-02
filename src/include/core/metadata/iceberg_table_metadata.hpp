@@ -67,6 +67,9 @@ public:
 	//! Internal JSON parsing functions
 	optional_ptr<const IcebergSnapshot> FindSnapshotByIdInternal(int64_t target_id) const;
 	shared_ptr<IcebergTableSchema> GetSchemaFromId(int32_t schema_id) const;
+	//! Searches every schema (current and historical) for a top-level column with the given field-id.
+	//! Used to resolve equality-delete columns that have since been dropped from the table.
+	optional_ptr<const IcebergColumnDefinition> FindColumnByFieldId(int32_t field_id) const;
 	optional_ptr<const IcebergPartitionSpec> FindPartitionSpecById(int32_t spec_id) const;
 	optional_ptr<const IcebergSortOrder> FindSortOrderById(int32_t sort_id) const;
 	IcebergSnapshotScanInfo GetSnapshot(const IcebergSnapshotLookup &lookup) const;
@@ -127,6 +130,12 @@ public:
 	unordered_map<int32_t, IcebergSortOrder> sort_specs;
 	//! snapshot_id -> snapshot
 	unordered_map<int64_t, IcebergSnapshot> snapshots;
+	//! History of refs.main per Iceberg spec "snapshot-log": (snapshot_id, raw millis)
+	//! pairs recording each change to current-snapshot-id, sorted ascending by ms.
+	//! Used for spec-compliant point-in-time resolution; side-branch commits are absent.
+	//! Stored as raw millis (matching the REST API representation and last_updated_ms)
+	//! to keep all timestamp comparisons in a single unit.
+	vector<pair<int64_t /*snapshot_id*/, int64_t /*timestamp_ms*/>> snapshot_log;
 	vector<IcebergFieldMapping> mappings;
 
 	//! Custom write paths from table properties

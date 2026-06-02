@@ -1,0 +1,87 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/delete/equality_deletes/test_no_equality_delete_read_if_sequence_number_is_before_equality_delete.test
+# description: Test equality deletes more thoroughly. This include changing the type of the equality delete column and a number of virtual columns to test test ordering
+# group: [equality_deletes]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require-env EQUALITY_DELETE_WRITES_ENABLED 1
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+use my_datalake.default;
+
+statement ok
+set unsafe_and_disabled_for_iceberg_v3_enable_equality_deletes=true;
+
+statement ok
+drop table if exists equality_delete_sequence_number_tests;
+
+statement ok
+create table equality_delete_sequence_number_tests (a int, b int, c int);
+
+statement ok
+insert into equality_delete_sequence_number_tests select range a, range b, range c from range(3);
+
+statement ok
+insert into equality_delete_sequence_number_tests select range a, range b, range c from range(3, 6);
+
+statement ok
+insert into equality_delete_sequence_number_tests select range a, range b, range c from range(6, 9);
+
+statement ok
+set variable last_snapshot_number = (select snapshot_id from iceberg_snapshots(my_datalake.default.equality_delete_sequence_number_tests) order by sequence_number desc limit 1);
+
+statement ok
+insert into equality_delete_sequence_number_tests select range a, range b, range c from range(9, 12);
+
+statement ok
+delete from equality_delete_sequence_number_tests where a = 7;
+
+statement ok
+call enable_logging('HTTP');
+
+query III
+select * from equality_delete_sequence_number_tests AT (VERSION => getvariable('last_snapshot_number')) order by all;
+----
+0	0	0
+1	1	1
+2	2	2
+3	3	3
+4	4	4
+5	5	5
+6	6	6
+7	7	7
+8	8	8
+
+# equality delete file should not be requested because it only applies when the sequence number is higher
+# than the one requested
+query I
+select count(*) from duckdb_logs_parsed('HTTP') where request.url like '%-equality-deletes.parquet';
+----
+0
+
+statement ok
+set iceberg_use_metadata_log = false;
+
+# the optimizer should also not be created in this case.
+query II
+explain select * from equality_delete_sequence_number_tests AT (VERSION => getvariable('last_snapshot_number')) order by all;
+----
+physical_plan	<!REGEX>:.*FILTER.*iceberg_verify_equality_del.*ICEBERG_SCAN.*
+
+
+# the optimizer will kick in when reading latest table state
+query II
+explain select * from equality_delete_sequence_number_tests order by all;
+----
+physical_plan	<REGEX>:.*FILTER.*iceberg_verify_equality_del.*ICEBERG_SCAN.*

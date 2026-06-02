@@ -1,0 +1,32 @@
+# name: test/sql/local/generated_bounds.test
+# group: [local]
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+query I
+SELECT
+	COUNT(*)
+FROM iceberg_scan('__WORKING_DIRECTORY__/data/persistent/generated_bounds')
+WHERE
+	block_number BETWEEN 5000000 AND 5000100;
+----
+0
+
+query I
+select lower_bound FROM iceberg_column_stats('__WORKING_DIRECTORY__/data/persistent/generated_bounds') where column_name = 'block_number' offset 2999 limit 2
+----
+299901
+300001
+
+# Only after 3000 rows this bound gets written
+query I
+select lower_bound FROM iceberg_column_stats('__WORKING_DIRECTORY__/data/persistent/generated_bounds') where column_name = 'from' offset 2999 limit 2
+----
+NULL
+0x0000000000000000000000000000000000000bb8

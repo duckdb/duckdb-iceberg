@@ -1,0 +1,58 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_specifc/fixture/schema_properties/schema_properties_update_nested.test
+# group: [schema_properties]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require-env FIXTURE_SERVER_AVAILABLE
+
+statement ok
+drop table if exists my_datalake."my.nested.namespace".table1;
+
+statement ok
+drop schema if exists my_datalake."my.nested.namespace";
+
+statement ok
+create schema my_datalake."my.nested.namespace";
+
+# now on to the "real test": property update
+query I
+CALL remove_iceberg_schema_properties(my_datalake."my.nested.namespace", ['namespace_id']);
+----
+1
+
+query II
+FROM iceberg_schema_properties(my_datalake."my.nested.namespace") WHERE key != 'location' ORDER BY ALL;
+----
+
+query I
+CALL set_iceberg_schema_properties(my_datalake."my.nested.namespace",
+    {
+    'myprop1' : '1',
+    'myprop2' : '2',
+    'myprop3' : '3',
+    }
+);
+----
+4
+
+query II
+FROM iceberg_schema_properties(my_datalake."my.nested.namespace") WHERE key != 'location' ORDER BY ALL;
+----
+myprop1	1
+myprop2	2
+myprop3	3
+
+query I
+CALL remove_iceberg_schema_properties(my_datalake."my.nested.namespace", ['myprop2']);
+----
+3
+
+query II
+FROM iceberg_schema_properties(my_datalake."my.nested.namespace") WHERE key != 'location' ORDER BY ALL;
+----
+myprop1	1
+myprop3	3
+
+
+statement ok
+drop schema my_datalake."my.nested.namespace";

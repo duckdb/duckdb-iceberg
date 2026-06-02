@@ -73,6 +73,23 @@ jobs:
           path: build/release/
           retention-days: 3
 
+      - name: Build extension Enable Equality Delete
+        env:
+          GEN: ninja
+          STATIC_LIBCPP: 1
+          ENABLE_EXTENSION_AUTOLOADING: 1
+          ENABLE_EXTENSION_AUTOINSTALL: 1
+          EXT_FLAGS: -DICEBERG_ENABLE_EQUALITY_DELETE_WRITES=1
+        run: |
+          make release
+
+      - name: Upload DuckDB-Iceberg release folder with Equality Delete
+        uses: actions/upload-artifact@v4
+        with:
+          name: duckdb-iceberg-equality-delete-support
+          path: build/release/
+          retention-days: 3
+
   test-fixture:
     name: Test against fixture catalog
     needs: build_iceberg
@@ -87,6 +104,14 @@ jobs:
   #  with:
   #    artifact-name: duckdb-iceberg-no-link
   #    local-extension-repo: build/release/extension
+
+  test-fixture-equality-delete:
+    name: Test against fixture Equality Deletes enabled
+    needs: build_iceberg
+    uses: ./.github/workflows/test-fixture-catalog.yml
+    with:
+      artifact-name: duckdb-iceberg-equality-delete-support
+      equality-delete-writes-enabled: 1
 
   test-nessie:
     name: Test against Nessie Catalog

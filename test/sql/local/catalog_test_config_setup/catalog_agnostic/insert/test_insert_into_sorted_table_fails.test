@@ -31,6 +31,44 @@ insert into my_datalake.default.table_sort_order select * from lineitem limit 5;
 ----
 <REGEX>:.*Not implemented Error.*INSERT into a sorted iceberg table is not supported yet.*
 
+# With the unsafe override enabled, the INSERT succeeds. The written data is
+# not sorted by the table's declared sort order, which the Iceberg spec permits
+# (writers are not required to honour the declared order, and readers do not
+# assume files are sorted).
+# Wrap in a transaction so the row-count assertions below stay stable.
+statement ok
+BEGIN;
+
+statement ok
+SET unsafe_iceberg_ignore_sort_order=true;
+
+statement ok
+insert into my_datalake.default.table_sort_order select * from lineitem limit 5;
+
+# Read back the staged rows inside the same transaction
+query I
+select count(*) from my_datalake.default.table_sort_order;
+----
+60180
+
+statement ok
+ABORT;
+
+# After ABORT the staged rows are gone
+query I
+select count(*) from my_datalake.default.table_sort_order;
+----
+60175
+
+statement ok
+SET unsafe_iceberg_ignore_sort_order=false;
+
+# Without the override the guard still applies
+statement error
+insert into my_datalake.default.table_sort_order select * from lineitem limit 5;
+----
+<REGEX>:.*Not implemented Error.*INSERT into a sorted iceberg table is not supported yet.*
+
 statement ok
 BEGIN;
 
@@ -49,4 +87,56 @@ select count(*) from my_datalake.default.table_sort_order;
 
 statement ok
 ABORT;
+
+# Commit an unsorted INSERT and read it back from a fresh transaction to prove
+# the rows survive the round-trip through the catalog. The inserted rows carry
+# a sentinel in l_comment so a follow-up commit can delete exactly those rows
+# and leave the table at its original row count for subsequent runs.
+statement ok
+SET unsafe_iceberg_ignore_sort_order=true;
+
+statement ok
+BEGIN;
+
+statement ok
+insert into my_datalake.default.table_sort_order
+select
+    l_orderkey, l_partkey, l_suppkey, l_linenumber,
+    l_quantity, l_extendedprice, l_discount, l_tax,
+    l_returnflag, l_linestatus,
+    l_shipdate, l_commitdate, l_receiptdate,
+    l_shipinstruct, l_shipmode,
+    'unsafe_sort_order_test_marker' as l_comment
+from lineitem limit 5;
+
+statement ok
+COMMIT;
+
+query I
+select count(*) from my_datalake.default.table_sort_order;
+----
+60180
+
+query I
+select count(*) from my_datalake.default.table_sort_order where l_comment = 'unsafe_sort_order_test_marker';
+----
+5
+
+# Clean up the marker rows so the table is back at its pristine row count
+statement ok
+BEGIN;
+
+statement ok
+delete from my_datalake.default.table_sort_order where l_comment = 'unsafe_sort_order_test_marker';
+
+statement ok
+COMMIT;
+
+statement ok
+SET unsafe_iceberg_ignore_sort_order=false;
+
+query I
+select count(*) from my_datalake.default.table_sort_order;
+----
+60175
 

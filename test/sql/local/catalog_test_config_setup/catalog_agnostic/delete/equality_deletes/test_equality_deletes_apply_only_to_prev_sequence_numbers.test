@@ -1,0 +1,55 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/delete/equality_deletes/test_equality_deletes_apply_only_to_prev_sequence_numbers.test
+# description: Test iceberg deletes
+# group: [equality_deletes]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require-env EQUALITY_DELETE_WRITES_ENABLED 1
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+use my_datalake.default;
+
+statement ok
+set unsafe_and_disabled_for_iceberg_v3_enable_equality_deletes=true;
+
+statement ok
+drop table if exists equality_delete_table_test_multiple_equality_deletes;
+
+statement ok
+create table equality_delete_table_test_multiple_equality_deletes as select range a, range % 5 b, range % 10 c from range(21);
+
+statement ok
+delete from equality_delete_table_test_multiple_equality_deletes where b = 1;
+
+query II
+select c, count(*) from equality_delete_table_test_multiple_equality_deletes group by all order by c;
+----
+0	3
+2	2
+3	2
+4	2
+5	2
+7	2
+8	2
+9	2
+
+statement ok
+insert into equality_delete_table_test_multiple_equality_deletes values (1, 1, 1), (11, 1, 1);
+
+# values are restored
+query III
+select * from equality_delete_table_test_multiple_equality_deletes where b = 1 order by a;
+----
+1	1	1
+11	1	1

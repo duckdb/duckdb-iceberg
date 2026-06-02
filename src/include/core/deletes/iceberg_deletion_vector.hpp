@@ -38,6 +38,10 @@ public:
 public:
 	//! Immutable state of the deletion vector
 	shared_ptr<const IcebergDeletionVectorData> data;
+
+	//! Lock to protect the mutable cache state,
+	//! since this instance can be shared by multiple threads
+	mutex lock;
 	//! State shared between Filter calls
 	roaring::BulkContext bulk_context;
 	optional_ptr<const roaring::Roaring> current_bitmap = nullptr;

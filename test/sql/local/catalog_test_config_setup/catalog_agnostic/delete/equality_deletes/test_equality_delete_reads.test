@@ -1,0 +1,131 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/delete/equality_deletes/test_equality_delete_reads.test
+# description: Test iceberg deletes
+# group: [equality_deletes]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require-env EQUALITY_DELETE_WRITES_ENABLED 1
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+set unsafe_and_disabled_for_iceberg_v3_enable_equality_deletes=true;
+
+# help when inspecting explain statements
+statement ok
+set disabled_optimizers='column_lifetime,statistics_propagation';
+
+statement ok
+drop table if exists my_datalake.default.equality_delete_table_1;
+
+statement ok
+create table my_datalake.default.equality_delete_table_1 as select range a, range % 5 b, range % 10 c from range(21);
+
+statement ok
+delete from my_datalake.default.equality_delete_table_1 where b = 1;
+
+query II
+explain select c, count(*) from my_datalake.default.equality_delete_table_1 group by all order by c;
+----
+physical_plan	<REGEX>:.*FILTER.*iceberg_verify_equality_del.*ICEBERG_SCAN.*
+
+query II
+select c, count(*) from my_datalake.default.equality_delete_table_1 group by all order by c;
+----
+0	3
+2	2
+3	2
+4	2
+5	2
+7	2
+8	2
+9	2
+
+# equality deletes have applied (project all columns)
+query III
+select * from my_datalake.default.equality_delete_table_1 where b = 1;
+----
+
+# equality deletes have applied even with filter on non equality delete column
+# projects all columns
+query III
+select * from my_datalake.default.equality_delete_table_1 where a = 4;
+----
+4	4	4
+
+# equality deletes have applied even with filter on non equality delete column
+# projects non-equality delete column
+query I
+select a from my_datalake.default.equality_delete_table_1 where a = 4;
+----
+4
+
+# equality deletes have applied even with filter on non equality delete column
+# projects non-equality delete column
+query I
+select a from my_datalake.default.equality_delete_table_1 where c = 4;
+----
+4
+14
+
+# drop the equality delete column
+statement ok
+alter table my_datalake.default.equality_delete_table_1 drop column b;
+
+query II
+select c, count(*) from my_datalake.default.equality_delete_table_1 group by all order by c;
+----
+0	3
+2	2
+3	2
+4	2
+5	2
+7	2
+8	2
+9	2
+
+# equality deletes have applied even with filter on non equality delete column
+# projects non-equality delete column
+query I
+select a from my_datalake.default.equality_delete_table_1 where a = 4;
+----
+4
+
+# equality deletes have applied even with filter on non equality delete column
+# projects non-equality delete column
+query I
+select a from my_datalake.default.equality_delete_table_1 where c = 4;
+----
+4
+14
+
+# insert data that does not have the column b. so equality delete must no-op
+statement ok
+insert into my_datalake.default.equality_delete_table_1 select range a, range c from range(100, 106);
+
+query II
+select c, count(*) from my_datalake.default.equality_delete_table_1 group by all order by c;
+----
+0	3
+2	2
+3	2
+4	2
+5	2
+7	2
+8	2
+9	2
+100	1
+101	1
+102	1
+103	1
+104	1
+105	1

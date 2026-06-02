@@ -1,0 +1,55 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/update/test_update_into_sorted_table_fails.test
+# group: [update]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+require tpch
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+set enable_logging=true
+
+statement ok
+set logging_level='debug'
+
+# Without the override, UPDATE on a sorted iceberg table is rejected
+statement error
+update my_datalake.default.table_sort_order set l_partkey = l_partkey + 1 where l_orderkey = 1;
+----
+<REGEX>:.*Not implemented Error.*Update on a sorted iceberg table is not supported yet.*
+
+# With the unsafe override enabled, the UPDATE succeeds. The written data is
+# not sorted by the table's declared sort order, which the Iceberg spec permits
+# (writers are not required to honour the declared order, and readers do not
+# assume files are sorted).
+# Wrap in a transaction so we don't leak state into other tests.
+statement ok
+BEGIN;
+
+statement ok
+SET unsafe_iceberg_ignore_sort_order=true;
+
+statement ok
+update my_datalake.default.table_sort_order set l_partkey = l_partkey + 1 where l_orderkey = 1;
+
+statement ok
+ABORT;
+
+statement ok
+SET unsafe_iceberg_ignore_sort_order=false;
+
+# Without the override the guard still applies
+statement error
+update my_datalake.default.table_sort_order set l_partkey = l_partkey + 1 where l_orderkey = 1;
+----
+<REGEX>:.*Not implemented Error.*Update on a sorted iceberg table is not supported yet.*

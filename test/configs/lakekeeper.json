@@ -1,6 +1,6 @@
 {
   "description": "Use Lakekeeper as Iceberg Rest Catalog.",
-  "on_init": "create secret my_secret (TYPE ICEBERG,CLIENT_ID 'spark',CLIENT_SECRET '2OR3eRvYfSZzzZ16MlPd95jhLnOaLM52',OAUTH2_SCOPE 'lakekeeper',OAUTH2_SERVER_URI 'http://localhost:30080/realms/iceberg/protocol/openid-connect/token'); attach 'demo' as my_datalake (type ICEBERG,ENDPOINT 'http://localhost:8181/catalog',SECRET 'my_secret');",
+  "on_init": "create secret my_secret (TYPE ICEBERG,CLIENT_ID 'spark',CLIENT_SECRET '2OR3eRvYfSZzzZ16MlPd95jhLnOaLM52',OAUTH2_SCOPE 'lakekeeper',OAUTH2_SERVER_URI 'http://localhost:30080/realms/iceberg/protocol/openid-connect/token'); attach 'demo' as my_datalake (type ICEBERG,ENDPOINT 'http://localhost:8181/catalog',SECRET 'my_secret');Create schema if not exists my_datalake.default;",
   "statically_loaded_extensions": [
     "core_functions",
     "parquet",
@@ -45,6 +45,12 @@
       "reason": "Lakekeeper data generation insert results in a single parquet file",
       "paths": [
         "test/sql/local/catalog_test_config_setup/catalog_agnostic/reads/should_do_filter_pruning_on_expressionless_string_filters.test"
+      ]
+    },
+    {
+      "reason": "Lakekeeper does not have this table generated due to weird bugs in spark table creation logic",
+      "paths": [
+        "test/sql/local/catalog_test_config_setup/catalog_agnostic/other_engines/partitions/truncate/test_append_truncate_varchar_for_insert.test"
       ]
     }
   ]

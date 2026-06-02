@@ -31,6 +31,7 @@
 #include "catalog/rest/api/iceberg_type.hpp"
 #include "common/iceberg_utils.hpp"
 #include "catalog/rest/transaction/iceberg_transaction_update.hpp"
+#include "iceberg_logging.hpp"
 
 namespace duckdb {
 
@@ -351,6 +352,9 @@ void IcebergInsertGlobalState::AddFiles(DataChunk &chunk, const string &table_na
 			//! nan_value_counts won't work, we can only indicate if they exist.
 			//! TODO: revisit when duckdb/duckdb can record nan_value_counts
 		}
+		DUCKDB_LOG(context, IcebergLogType,
+		           "Iceberg INSERT, wrote data_file '%s', record_count=%lld, file_size=%lld bytes", data_file.file_path,
+		           data_file.record_count, data_file.file_size_in_bytes);
 
 		written_files.push_back(std::move(manifest_entry));
 	}
@@ -968,7 +972,14 @@ PhysicalOperator &IcebergCatalog::PlanInsert(ClientContext &context, PhysicalPla
 	if (table_metadata.HasSortOrder()) {
 		auto &sort_spec = table_metadata.GetLatestSortOrder();
 		if (sort_spec.IsSorted()) {
-			throw NotImplementedException("INSERT into a sorted iceberg table is not supported yet");
+			Value unsafe_ignore_sort_order;
+			if (!context.TryGetCurrentSetting("unsafe_iceberg_ignore_sort_order", unsafe_ignore_sort_order) ||
+			    !unsafe_ignore_sort_order.GetValue<bool>()) {
+				throw NotImplementedException(
+				    "INSERT into a sorted iceberg table is not supported yet.\nTo bypass this guard and "
+				    "write without applying the table's declared sort order, "
+				    "run \"SET unsafe_iceberg_ignore_sort_order=true\"");
+			}
 		}
 	}
 

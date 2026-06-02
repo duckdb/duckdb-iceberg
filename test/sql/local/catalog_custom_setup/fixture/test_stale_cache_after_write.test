@@ -1,0 +1,177 @@
+# name: test/sql/local/catalog_custom_setup/fixture/test_stale_cache_after_write.test
+# description: Test that metadata cache is invalidated after writes
+# group: [fixture]
+
+require-env FIXTURE_SERVER_AVAILABLE
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+set ignore_error_messages
+
+statement ok
+CREATE SECRET (
+    TYPE S3,
+    KEY_ID 'admin',
+    SECRET 'password',
+    ENDPOINT '127.0.0.1:9000',
+    URL_STYLE 'path',
+    USE_SSL 0
+);
+
+statement ok
+ATTACH '' AS my_datalake (
+    TYPE ICEBERG,
+    CLIENT_ID 'admin',
+    CLIENT_SECRET 'password',
+    ENDPOINT 'http://127.0.0.1:8181',
+    MAX_TABLE_STALENESS '5 minutes'
+);
+
+statement ok
+CREATE SCHEMA IF NOT EXISTS my_datalake.default;
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.cache_test;
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.merge_source;
+
+statement ok
+CREATE TABLE my_datalake.default.cache_test (a INTEGER, b VARCHAR);
+
+# INSERT
+statement ok
+INSERT INTO my_datalake.default.cache_test VALUES (1, 'first'), (2, 'second');
+
+query II
+SELECT * FROM my_datalake.default.cache_test ORDER BY a;
+----
+1	first
+2	second
+
+# UPDATE
+statement ok
+UPDATE my_datalake.default.cache_test SET b = 'updated' WHERE a = 1;
+
+query II
+SELECT * FROM my_datalake.default.cache_test ORDER BY a;
+----
+1	updated
+2	second
+
+# DELETE
+statement ok
+DELETE FROM my_datalake.default.cache_test WHERE a = 2;
+
+query II
+SELECT * FROM my_datalake.default.cache_test;
+----
+1	updated
+
+# MERGE
+statement ok
+INSERT INTO my_datalake.default.cache_test VALUES (3, 'target');
+
+statement ok
+CREATE TABLE my_datalake.default.merge_source (a INTEGER, b VARCHAR);
+
+statement ok
+INSERT INTO my_datalake.default.merge_source VALUES (3, 'merged'), (4, 'new');
+
+statement ok
+MERGE INTO my_datalake.default.cache_test AS t
+USING my_datalake.default.merge_source AS s
+ON t.a = s.a
+WHEN MATCHED THEN UPDATE SET b = s.b
+WHEN NOT MATCHED THEN INSERT VALUES (s.a, s.b);
+
+query II
+SELECT * FROM my_datalake.default.cache_test ORDER BY a;
+----
+1	updated
+3	merged
+4	new
+
+# ALTER TABLE
+statement ok
+ALTER TABLE my_datalake.default.cache_test ADD COLUMN c INTEGER;
+
+query III
+SELECT * FROM my_datalake.default.cache_test ORDER BY a;
+----
+1	updated	NULL
+3	merged	NULL
+4	new	NULL
+
+# MULTI-TABLE COMMIT (uses POST /transactions/commit)
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.multi_a;
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.multi_b;
+
+statement ok
+CREATE TABLE my_datalake.default.multi_a (x INTEGER);
+
+statement ok
+CREATE TABLE my_datalake.default.multi_b (y INTEGER);
+
+statement ok
+INSERT INTO my_datalake.default.multi_a VALUES (10);
+
+statement ok
+INSERT INTO my_datalake.default.multi_b VALUES (20);
+
+statement ok
+BEGIN TRANSACTION;
+
+statement ok
+INSERT INTO my_datalake.default.multi_a VALUES (11);
+
+statement ok
+INSERT INTO my_datalake.default.multi_b VALUES (21);
+
+statement ok
+COMMIT;
+
+query I
+SELECT * FROM my_datalake.default.multi_a ORDER BY x;
+----
+10
+11
+
+query I
+SELECT * FROM my_datalake.default.multi_b ORDER BY y;
+----
+20
+21
+
+statement ok
+DROP TABLE my_datalake.default.multi_a;
+
+statement ok
+DROP TABLE my_datalake.default.multi_b;
+
+# RENAME TABLE
+statement ok
+ALTER TABLE my_datalake.default.cache_test RENAME TO cache_test_renamed;
+
+query III
+SELECT * FROM my_datalake.default.cache_test_renamed ORDER BY a;
+----
+1	updated	NULL
+3	merged	NULL
+4	new	NULL
+
+# Cleanup
+statement ok
+DROP TABLE my_datalake.default.cache_test_renamed;
+
+statement ok
+DROP TABLE my_datalake.default.merge_source;

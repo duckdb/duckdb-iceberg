@@ -1,0 +1,138 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/delete/equality_deletes/test_equality_deletes_type_change.test
+# description: Test equality deletes more thoroughly. This include changing the type of the equality delete column and a number of virtual columns to test test ordering
+# group: [equality_deletes]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require-env EQUALITY_DELETE_WRITES_ENABLED 1
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+use my_datalake.default;
+
+statement ok
+set unsafe_and_disabled_for_iceberg_v3_enable_equality_deletes=true;
+
+statement ok
+drop table if exists equality_delete_type_change;
+
+statement ok
+create table equality_delete_type_change (a int, b int, c int);
+
+statement ok
+insert into equality_delete_type_change select range a, range b, range c from range(10);
+
+# promote every type
+statement ok
+alter table equality_delete_type_change alter column b set type BIGINT;
+
+statement ok
+insert into equality_delete_type_change select range a, range b, range c from range(500, 510);
+
+statement ok
+delete from equality_delete_type_change where b = 1;
+
+statement ok
+delete from equality_delete_type_change where b = 501;
+
+query III
+select * from equality_delete_type_change order by all;
+----
+0	0	0
+2	2	2
+3	3	3
+4	4	4
+5	5	5
+6	6	6
+7	7	7
+8	8	8
+9	9	9
+500	500	500
+502	502	502
+503	503	503
+504	504	504
+505	505	505
+506	506	506
+507	507	507
+508	508	508
+509	509	509
+
+
+# add a virtual column as well at the beginning
+query III
+select filename[-8:], b, c from equality_delete_type_change order by all;
+----
+.parquet	0	0
+.parquet	2	2
+.parquet	3	3
+.parquet	4	4
+.parquet	5	5
+.parquet	6	6
+.parquet	7	7
+.parquet	8	8
+.parquet	9	9
+.parquet	500	500
+.parquet	502	502
+.parquet	503	503
+.parquet	504	504
+.parquet	505	505
+.parquet	506	506
+.parquet	507	507
+.parquet	508	508
+.parquet	509	509
+
+# add a virtual column at the end
+query III
+select b, c, filename[-8:] from equality_delete_type_change order by all;
+----
+0	0	.parquet
+2	2	.parquet
+3	3	.parquet
+4	4	.parquet
+5	5	.parquet
+6	6	.parquet
+7	7	.parquet
+8	8	.parquet
+9	9	.parquet
+500	500	.parquet
+502	502	.parquet
+503	503	.parquet
+504	504	.parquet
+505	505	.parquet
+506	506	.parquet
+507	507	.parquet
+508	508	.parquet
+509	509	.parquet
+
+# virtual columns and we do not select the equality delete columns
+query III
+select filename[-8:], c, filename[-8:] from equality_delete_type_change order by all;
+----
+.parquet	0	.parquet
+.parquet	2	.parquet
+.parquet	3	.parquet
+.parquet	4	.parquet
+.parquet	5	.parquet
+.parquet	6	.parquet
+.parquet	7	.parquet
+.parquet	8	.parquet
+.parquet	9	.parquet
+.parquet	500	.parquet
+.parquet	502	.parquet
+.parquet	503	.parquet
+.parquet	504	.parquet
+.parquet	505	.parquet
+.parquet	506	.parquet
+.parquet	507	.parquet
+.parquet	508	.parquet
+.parquet	509	.parquet

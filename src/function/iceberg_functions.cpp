@@ -19,6 +19,9 @@ vector<TableFunctionSet> IcebergFunctions::GetTableFunctions(ExtensionLoader &lo
 	functions.push_back(GetIcebergTablePropertiesFunctions());
 	functions.push_back(SetIcebergTablePropertiesFunctions());
 	functions.push_back(RemoveIcebergTablePropertiesFunctions());
+	functions.push_back(GetIcebergSchemaPropertiesFunctions());
+	functions.push_back(SetIcebergSchemaPropertiesFunctions());
+	functions.push_back(RemoveIcebergSchemaPropertiesFunctions());
 	functions.push_back(GetIcebergToDuckLakeFunction());
 	functions.push_back(GetIcebergLoadTableResponseFunction());
 
@@ -30,6 +33,7 @@ vector<ScalarFunctionSet> IcebergFunctions::GetScalarFunctions() {
 
 	functions.push_back(GetIcebergBucketFunction());
 	functions.push_back(GetIcebergTruncateFunction());
+	functions.push_back(GetVerifyEqualityDeletesFunction());
 
 	return functions;
 }

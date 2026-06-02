@@ -4,7 +4,7 @@
 #include "duckdb/common/string.hpp"
 #include "duckdb/common/unique_ptr.hpp"
 
-#include "catalog/rest/catalog_entry/iceberg_schema_entry.hpp"
+#include "catalog_entry/schema/iceberg_schema_entry.hpp"
 
 namespace duckdb {
 struct CreateSchemaInfo;

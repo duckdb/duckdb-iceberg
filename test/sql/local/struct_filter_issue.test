@@ -33,7 +33,7 @@ SELECT * FROM iceberg_scan('{WORKING_DIRECTORY}/data/persistent/struct_filter_is
 query I
 SELECT SUM(meta.record_count) AS total_record_count
 FROM (
-	SELECT message.split(': ')[2][2:-2] AS msg
+	SELECT message.split(': ')[2].split('''')[2] AS msg
 	FROM duckdb_logs() where type = 'Iceberg'
 ) logs
 JOIN ICEBERG_METADATA('{WORKING_DIRECTORY}/data/persistent/struct_filter_issue') meta
@@ -54,7 +54,7 @@ SELECT * FROM iceberg_scan('{WORKING_DIRECTORY}/data/persistent/struct_filter_is
 query I
 SELECT SUM(meta.record_count) AS total_record_count
 FROM (
-	SELECT message.split(': ')[2][2:-2] AS msg
+	SELECT message.split(': ')[2].split('''')[2] AS msg
 	FROM duckdb_logs() where type = 'Iceberg'
 ) logs
 JOIN ICEBERG_METADATA('{WORKING_DIRECTORY}/data/persistent/struct_filter_issue') meta
@@ -72,7 +72,7 @@ SELECT * FROM iceberg_scan('{WORKING_DIRECTORY}/data/persistent/struct_filter_is
 query I
 SELECT SUM(meta.record_count) AS total_record_count
 FROM (
-	SELECT message.split(': ')[2][2:-2] AS msg
+	SELECT message.split(': ')[2].split('''')[2] AS msg
 	FROM duckdb_logs() where type = 'Iceberg' and message.contains('manifest_file')
 ) logs
 JOIN ICEBERG_METADATA('{WORKING_DIRECTORY}/data/persistent/struct_filter_issue') meta

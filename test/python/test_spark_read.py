@@ -33,7 +33,7 @@ def generate_jar_location(config: IcebergRuntimeConfig) -> str:
 
 # uses {spark}_{scala}:{iceberg}
 def generate_package(config: IcebergRuntimeConfig) -> str:
-    return f'org.apache.iceberg:iceberg-spark-runtime-{config.spark_version}_{config.scala_binary_version}:{config.iceberg_library_version}'
+    return f"org.apache.iceberg:iceberg-spark-runtime-{config.spark_version}_{config.scala_binary_version}:{config.iceberg_library_version}"
 
 
 # List of runtimes you want to test
@@ -74,7 +74,7 @@ def spark_con(request):
 
     runtime_jar = generate_jar_location(runtime_config)
     runtime_pkg = generate_package(runtime_config)
-    runtime_path = os.path.abspath(os.path.join(SCRIPT_DIR, '..', '..', 'scripts', 'data_generators', runtime_jar))
+    runtime_path = os.path.abspath(os.path.join(SCRIPT_DIR, "..", "..", "scripts", "data_generators", runtime_jar))
 
     os.environ["PYSPARK_SUBMIT_ARGS"] = (
         f"--packages {runtime_pkg},org.apache.iceberg:iceberg-aws-bundle:{runtime_config.iceberg_library_version} pyspark-shell"
@@ -96,7 +96,7 @@ def spark_con(request):
         .config("spark.sql.catalog.demo.s3.endpoint", "http://127.0.0.1:9000")
         .config("spark.sql.catalog.demo.s3.path-style-access", "true")
         .config("spark.driver.memory", "10g")
-        .config('spark.jars', runtime_path)
+        .config("spark.jars", runtime_path)
         .config("spark.sql.catalogImplementation", "in-memory")
         .config("spark.sql.catalog.demo.io-impl", "org.apache.iceberg.aws.s3.S3FileIO")
         .getOrCreate()
@@ -113,6 +113,13 @@ requires_iceberg_server = pytest.mark.skipif(
 )
 
 
+requires_equality_deletes_available = pytest.mark.skipif(
+    (os.getenv("EQUALITY_DELETE_WRITES_ENABLED", None) is None)
+    or (os.getenv("EQUALITY_DELETE_WRITES_ENABLED", '0') == '0'),
+    reason="Test data wasn't generated, run tests in test/sql/local/irc first (and set 'export EQUALITY_DELETE_WRITES_ENABLED=1')",
+)
+
+
 @requires_iceberg_server
 class TestSparkRead:
     def test_spark_read_insert_test(self, spark_con):
@@ -123,12 +130,12 @@ class TestSparkRead:
         )
         res = df.collect()
         assert res == [
-            Row(col1=datetime.date(2010, 6, 11), col2=42, col3='test'),
-            Row(col1=datetime.date(2020, 8, 12), col2=45345, col3='inserted by con1'),
-            Row(col1=datetime.date(2020, 8, 13), col2=1, col3='insert 1'),
-            Row(col1=datetime.date(2020, 8, 14), col2=2, col3='insert 2'),
-            Row(col1=datetime.date(2020, 8, 15), col2=3, col3='insert 3'),
-            Row(col1=datetime.date(2020, 8, 16), col2=4, col3='insert 4'),
+            Row(col1=datetime.date(2010, 6, 11), col2=42, col3="test"),
+            Row(col1=datetime.date(2020, 8, 12), col2=45345, col3="inserted by con1"),
+            Row(col1=datetime.date(2020, 8, 13), col2=1, col3="insert 1"),
+            Row(col1=datetime.date(2020, 8, 14), col2=2, col3="insert 2"),
+            Row(col1=datetime.date(2020, 8, 15), col2=3, col3="insert 3"),
+            Row(col1=datetime.date(2020, 8, 16), col2=4, col3="insert 4"),
         ]
 
     def test_spark_read_duckdb_table(self, spark_con):
@@ -183,26 +190,26 @@ class TestSparkRead:
             Row(
                 int_type=-2147483648,
                 long_type=-9223372036854775808,
-                varchar_type='',
+                varchar_type="",
                 bool_type=False,
                 float_type=-3.4028234663852886e38,
                 double_type=-1.7976931348623157e308,
-                decimal_type_18_3=Decimal('-9999999999999.999'),
+                decimal_type_18_3=Decimal("-9999999999999.999"),
                 date_type=datetime.date(1, 1, 1),
                 timestamp_type=datetime.datetime(1, 1, 1, 0, 0),
-                binary_type=bytearray(b''),
+                binary_type=bytearray(b""),
             ),
             Row(
                 int_type=2147483647,
                 long_type=9223372036854775807,
-                varchar_type='ZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZ',
+                varchar_type="ZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZ",
                 bool_type=True,
                 float_type=3.4028234663852886e38,
                 double_type=1.7976931348623157e308,
-                decimal_type_18_3=Decimal('9999999999999.999'),
+                decimal_type_18_3=Decimal("9999999999999.999"),
                 date_type=datetime.date(9999, 12, 31),
                 timestamp_type=datetime.datetime(9999, 12, 31, 23, 59, 59, 999999),
-                binary_type=bytearray(b'\xff\xff\xff\xff\xff\xff\xff\xff'),
+                binary_type=bytearray(b"\xff\xff\xff\xff\xff\xff\xff\xff"),
             ),
             Row(
                 int_type=None,
@@ -242,10 +249,10 @@ class TestSparkRead:
         assert res == [
             Row(
                 id=1,
-                name='Alice',
-                address=Row(street='123 Main St', city='Metropolis', zip='12345'),
-                phone_numbers=['123-456-7890', '987-654-3210'],
-                metadata={'age': '30', 'membership': 'gold'},
+                name="Alice",
+                address=Row(street="123 Main St", city="Metropolis", zip="12345"),
+                phone_numbers=["123-456-7890", "987-654-3210"],
+                metadata={"age": "30", "membership": "gold"},
             ),
         ]
 
@@ -280,15 +287,15 @@ class TestSparkRead:
         assert row.b == 42
         assert_variant_equal(
             row.a,
-            b'\x11test',
-            b'\x11\x00\x00',
+            b"\x11test",
+            b"\x11\x00\x00",
         )
         row = res[1]
         assert row.b == 43
         assert_variant_equal(
             row.a,
-            b'\x02\x02\x00\x01\x00\x05&\x149\x05\x00\x00\x03\x03\x00\x05\x11\x1b\x14\x01\x00\x00\x00-hello world\x02\x01\x02\x00\x05\x14)\x00\x00\x00',
-            b'\x11\x03\x00\x01\x02\x03abd',
+            b"\x02\x02\x00\x01\x00\x05&\x149\x05\x00\x00\x03\x03\x00\x05\x11\x1b\x14\x01\x00\x00\x00-hello world\x02\x01\x02\x00\x05\x14)\x00\x00\x00",
+            b"\x11\x03\x00\x01\x02\x03abd",
         )
 
     @pytest.mark.requires_spark(">=4.0")
@@ -301,11 +308,11 @@ class TestSparkRead:
         res = df.collect()
         print(res)
         assert res == [
-            Row(_last_updated_sequence_number=5, _row_id=0, id=1, data='replaced'),
-            Row(_last_updated_sequence_number=2, _row_id=1, id=2, data='b_u1'),
-            Row(_last_updated_sequence_number=2, _row_id=3, id=4, data='d_u1'),
-            Row(_last_updated_sequence_number=5, _row_id=7, id=6, data='replaced'),
-            Row(_last_updated_sequence_number=7, _row_id=11, id=7, data='g_new'),
+            Row(_last_updated_sequence_number=5, _row_id=0, id=1, data="replaced"),
+            Row(_last_updated_sequence_number=2, _row_id=1, id=2, data="b_u1"),
+            Row(_last_updated_sequence_number=2, _row_id=3, id=4, data="d_u1"),
+            Row(_last_updated_sequence_number=5, _row_id=7, id=6, data="replaced"),
+            Row(_last_updated_sequence_number=7, _row_id=11, id=7, data="g_new"),
         ]
 
     # Written by Spark, read by Spark
@@ -320,11 +327,11 @@ class TestSparkRead:
         )
         res = df.collect()
         assert res == [
-            Row(_last_updated_sequence_number=5, _row_id=3, id=1, data='replaced'),
-            Row(_last_updated_sequence_number=8, _row_id=0, id=2, data='replaced_again'),
-            Row(_last_updated_sequence_number=2, _row_id=6, id=4, data='d_u1'),
-            Row(_last_updated_sequence_number=8, _row_id=1, id=6, data='replaced_again'),
-            Row(_last_updated_sequence_number=7, _row_id=2, id=7, data='g_new'),
+            Row(_last_updated_sequence_number=5, _row_id=3, id=1, data="replaced"),
+            Row(_last_updated_sequence_number=8, _row_id=0, id=2, data="replaced_again"),
+            Row(_last_updated_sequence_number=2, _row_id=6, id=4, data="d_u1"),
+            Row(_last_updated_sequence_number=8, _row_id=1, id=6, data="replaced_again"),
+            Row(_last_updated_sequence_number=7, _row_id=2, id=7, data="g_new"),
         ]
 
     # Written by DuckDB (after upgrading with Spark), read by Spark
@@ -338,6 +345,74 @@ class TestSparkRead:
         )
         res = df.collect()
         assert res == [
-            Row(_last_updated_sequence_number=8, _row_id=3, id=2, data='replaced_again'),
-            Row(_last_updated_sequence_number=7, _row_id=0, id=7, data='g_new'),
+            Row(_last_updated_sequence_number=8, _row_id=3, id=2, data="replaced_again"),
+            Row(_last_updated_sequence_number=7, _row_id=0, id=7, data="g_new"),
+        ]
+
+
+@requires_equality_deletes_available
+class TestSparkReadEqualityDeletes:
+    @pytest.mark.skip(
+        reason="Spark errors when reading tables with a column that has an equality delete applied and the column has been dropped"
+    )
+    def test_spark_read_equality_deletes_with_dropped_column(self, spark_con):
+        df = spark_con.sql(
+            """
+            select * from default.equality_delete_table_1 order by all
+            """
+        )
+        res = df.collect()
+        assert res == [
+            Row(a=0, c=0),
+            Row(a=2, c=2),
+            Row(a=3, c=3),
+            Row(a=4, c=4),
+            Row(a=5, c=5),
+            Row(a=7, c=7),
+            Row(a=8, c=8),
+            Row(a=9, c=9),
+            Row(a=10, c=0),
+            Row(a=12, c=2),
+            Row(a=13, c=3),
+            Row(a=14, c=4),
+            Row(a=15, c=5),
+            Row(a=17, c=7),
+            Row(a=18, c=8),
+            Row(a=19, c=9),
+            Row(a=20, c=0),
+            Row(a=100, c=100),
+            Row(a=101, c=101),
+            Row(a=102, c=102),
+            Row(a=103, c=103),
+            Row(a=104, c=104),
+            Row(a=105, c=105),
+        ]
+
+    def test_spark_read_equality_deletes(self, spark_con):
+        df = spark_con.sql(
+            """
+            select * from default.equality_delete_table_test_multiple_equality_deletes order by all
+            """
+        )
+        res = df.collect()
+        assert res == [
+            Row(a=0, b=0, c=0),
+            Row(a=1, b=1, c=1),
+            Row(a=2, b=2, c=2),
+            Row(a=3, b=3, c=3),
+            Row(a=4, b=4, c=4),
+            Row(a=5, b=0, c=5),
+            Row(a=7, b=2, c=7),
+            Row(a=8, b=3, c=8),
+            Row(a=9, b=4, c=9),
+            Row(a=10, b=0, c=0),
+            Row(a=11, b=1, c=1),
+            Row(a=12, b=2, c=2),
+            Row(a=13, b=3, c=3),
+            Row(a=14, b=4, c=4),
+            Row(a=15, b=0, c=5),
+            Row(a=17, b=2, c=7),
+            Row(a=18, b=3, c=8),
+            Row(a=19, b=4, c=9),
+            Row(a=20, b=0, c=0),
         ]

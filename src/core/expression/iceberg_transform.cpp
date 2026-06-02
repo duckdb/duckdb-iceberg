@@ -96,6 +96,36 @@ LogicalType IcebergTransform::GetSerializedType(const LogicalType &input) const 
 	}
 }
 
+string IcebergTransform::PartitionValueToString(const Value &partition_value) const {
+	if (partition_value.IsNull()) {
+		return "NULL";
+	}
+	switch (type) {
+	case IcebergTransformType::DAY: {
+		date_t d;
+		d.days = partition_value.GetValue<int32_t>();
+		return Date::ToString(d);
+	}
+	case IcebergTransformType::MONTH: {
+		int32_t m = partition_value.GetValue<int32_t>();
+		// Floor-divide to correctly handle months before 1970
+		int32_t year = 1970 + (m >= 0 ? m : m - 11) / 12;
+		int32_t month = ((m % 12) + 12) % 12 + 1;
+		return StringUtil::Format("%04d-%02d", year, month);
+	}
+	case IcebergTransformType::YEAR: {
+		return std::to_string(1970 + partition_value.GetValue<int32_t>());
+	}
+	case IcebergTransformType::HOUR: {
+		int64_t hours = partition_value.GetValue<int32_t>();
+		timestamp_t ts(hours * Interval::MICROS_PER_HOUR);
+		return Timestamp::ToString(ts);
+	}
+	default:
+		return partition_value.ToString();
+	}
+}
+
 void IcebergTransform::SetBucketOrTruncateValue(idx_t value) {
 	switch (type) {
 	case IcebergTransformType::BUCKET:
