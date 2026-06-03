@@ -23,7 +23,6 @@ from dataclasses import dataclass
 from packaging.version import Version
 from packaging.specifiers import SpecifierSet
 
-
 @dataclass
 class IcebergRuntimeConfig:
     spark_version: Version
@@ -31,14 +30,11 @@ class IcebergRuntimeConfig:
     iceberg_library_version: str
     supports_v3: bool = True
 
-
 def generate_jar_location(config: IcebergRuntimeConfig) -> str:
     return f"iceberg-spark-runtime-{config.spark_version}_{config.scala_binary_version}-{config.iceberg_library_version}.jar"
 
-
 def generate_package(config: IcebergRuntimeConfig) -> str:
     return f"org.apache.iceberg:iceberg-spark-runtime-{config.spark_version}_{config.scala_binary_version}:{config.iceberg_library_version}"
-
 
 ICEBERG_RUNTIMES = [
     IcebergRuntimeConfig(
@@ -124,8 +120,8 @@ def spark_con(request):
 
 
 requires_iceberg_server = pytest.mark.skipif(
-    os.getenv("ICEBERG_SERVER_AVAILABLE", None) is None,
-    reason="Test data wasn't generated, run tests in test/sql/local/irc first (and set 'export ICEBERG_SERVER_AVAILABLE=1')",
+    os.getenv("FIXTURE_SERVER_AVAILABLE", None) is None,
+    reason="Test data wasn't generated, run tests in test/sql/local/irc first (and set 'export FIXTURE_SERVER_AVAILABLE=1')",
 )
 
 # ---------------------------------------------------------------------------
