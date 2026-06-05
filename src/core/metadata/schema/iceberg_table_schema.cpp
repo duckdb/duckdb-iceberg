@@ -75,23 +75,35 @@ const IcebergColumnDefinition &
 IcebergTableSchema::GetFromColumnIndex(const vector<unique_ptr<IcebergColumnDefinition>> &columns,
                                        const ColumnIndex &column_index, idx_t depth) {
 	auto &child_indexes = column_index.GetChildIndexes();
-	auto &selected_index = depth ? child_indexes[depth - 1] : column_index;
-
+	auto &selected_index = (depth && !column_index.IsPushdownExtract()) ? child_indexes[depth - 1] : column_index;
 	auto index = selected_index.GetPrimaryIndex();
 	if (index >= columns.size()) {
 		throw InvalidConfigurationException("ColumnIndex out of bounds for columns (index %d, 'columns' size: %d)",
 		                                    index, columns.size());
 	}
 	auto &column = columns[index];
-	if (depth == child_indexes.size()) {
-		return *column;
+
+	if (column_index.IsPushdownExtract()) {
+		if (child_indexes.empty()) {
+			return *column;
+		}
+
+		D_ASSERT(child_indexes.size() == 1);
+		auto &child = child_indexes[0];
+		return GetFromColumnIndex(column->GetChildren(), child, 0);
+
+	} else {
+		if (depth == child_indexes.size()) {
+			return *column;
+		}
+		if (!column->GetChildCount()) {
+			throw InvalidConfigurationException(
+			    "Expected column to have children, ColumnIndex has a depth of %d, we reached only %d",
+			    column_index.ChildIndexCount(), depth);
+		}
+
+		return GetFromColumnIndex(column->GetChildren(), column_index, depth + 1);
 	}
-	if (!column->GetChildCount()) {
-		throw InvalidConfigurationException(
-		    "Expected column to have children, ColumnIndex has a depth of %d, we reached only %d",
-		    column_index.ChildIndexCount(), depth);
-	}
-	return GetFromColumnIndex(column->GetChildren(), column_index, depth + 1);
 }
 
 const unordered_map<uint64_t, ColumnIndex> &IcebergTableSchema::GetSourceIdMap() const {
