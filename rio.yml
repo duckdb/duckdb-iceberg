@@ -1,0 +1,204 @@
+schemaVersion: 2.0
+
+machine:
+  env: &DEFAULT_ENV
+    COMMIT: "$(git rev-parse --short HEAD)"
+    PUBLISH_TIME: '$(/usr/bin/env date +"%Y%m%d%H%M%S")'
+    GEN: ninja
+    VCPKG_COMMIT: "84bab45d415d22042bd0b9081aea57f362da3f35"
+    DUCKDB_COMMIT: "14eca11bd9d4a0de2ea0f078be588a9c1c5b279c"
+    CI_TOOLS_COMMIT: "4b3b37b0c9de00da54e1765d65abfea3f94617f4"
+
+pipelines:
+# Build DuckDB Iceberg Extension (linux_amd64)
+- group: duckdb-iceberg-extension-build
+  branchName: feature/credential-auto-refresh-v1.5
+  trigger:
+    gitPush: true
+  machine:
+    env:
+      <<: *DEFAULT_ENV
+    baseImage: quay.io/pypa/manylinux_2_28_x86_64
+  build:
+    template: freestyle:v4:publish
+    steps:
+      # Install build dependencies
+      - yum groupinstall -y "Development Tools"
+      - yum install -y curl zip unzip tar ninja-build perl-IPC-Cmd perl-core ccache wget git jq
+
+      # Install CMake 4.x
+      - wget -q https://github.com/Kitware/CMake/releases/download/v4.0.2/cmake-4.0.2-linux-x86_64.sh
+      - chmod +x cmake-4.0.2-linux-x86_64.sh && ./cmake-4.0.2-linux-x86_64.sh --skip-license --prefix=/usr/local
+      - cmake --version
+
+      # Setup vcpkg
+      - git clone https://github.com/microsoft/vcpkg.git /vcpkg
+      - (cd /vcpkg && git checkout ${VCPKG_COMMIT} && ./bootstrap-vcpkg.sh)
+      - export VCPKG_ROOT=/vcpkg
+      - export VCPKG_TOOLCHAIN_PATH=/vcpkg/scripts/buildsystems/vcpkg.cmake
+
+      # Allow git operations
+      - git config --global --add safe.directory "*"
+
+      # Initialize submodules (fallback: clone explicitly if Rio didn't check them out)
+      - git submodule update --init --recursive || true
+      - |
+        if [ ! -f duckdb/CMakeLists.txt ]; then
+          echo "Submodule 'duckdb' missing, cloning explicitly..."
+          rm -rf duckdb
+          git clone --depth 1 https://github.com/duckdb/duckdb.git duckdb
+          (cd duckdb && git fetch --depth 1 origin ${DUCKDB_COMMIT} && git checkout ${DUCKDB_COMMIT})
+        fi
+      - |
+        if [ ! -f extension-ci-tools/makefiles/duckdb_extension.Makefile ]; then
+          echo "Submodule 'extension-ci-tools' missing, cloning explicitly..."
+          rm -rf extension-ci-tools
+          git clone --depth 1 https://github.com/duckdb/extension-ci-tools.git extension-ci-tools
+          (cd extension-ci-tools && git fetch --depth 1 origin ${CI_TOOLS_COMMIT} && git checkout ${CI_TOOLS_COMMIT})
+        fi
+
+      # Verify
+      - ls duckdb/CMakeLists.txt extension-ci-tools/makefiles/duckdb_extension.Makefile
+      - echo "PWD=$(pwd)" && ls Makefile CMakeLists.txt extension_config.cmake 2>&1 || true
+
+      # Build extension directly with cmake (Makefile may not be present in Rio checkout)
+      - |
+        export VCPKG_ROOT=/vcpkg
+        export VCPKG_TOOLCHAIN_PATH=/vcpkg/scripts/buildsystems/vcpkg.cmake
+        mkdir -p build/release
+        cmake -G Ninja \
+          -DEXTENSION_STATIC_BUILD=1 \
+          -DDUCKDB_EXTENSION_CONFIGS="$(pwd)/extension_config.cmake" \
+          -DVCPKG_BUILD=1 \
+          -DCMAKE_TOOLCHAIN_FILE=${VCPKG_TOOLCHAIN_PATH} \
+          -DVCPKG_MANIFEST_DIR="$(pwd)" \
+          -DCMAKE_BUILD_TYPE=Release \
+          -S ./duckdb/ \
+          -B build/release
+        cmake --build build/release --config Release
+
+      # Stage the built extension artifact
+      - export EXT_VERSION="v1.5.3-$(git rev-parse --short HEAD)"
+      - mkdir -p .out
+      - cp build/release/extension/iceberg/iceberg.duckdb_extension .out/iceberg.duckdb_extension
+      - echo "${EXT_VERSION}" > .out/VERSION
+      - ci stage-lib --label extension ".out/iceberg.duckdb_extension,com/apple/maps/data/infra/duckdb/iceberg-extension/${EXT_VERSION}/"
+      - ci stage-lib --label extension ".out/VERSION,com/apple/maps/data/infra/duckdb/iceberg-extension/${EXT_VERSION}/"
+  test:
+    sidecar: true
+  package:
+    release: false
+    freeform:
+      - publish:
+          - packageFilters: [extension]
+            repo: "m2:maps-libs-public"
+
+# Release build (manually triggered)
+- group: duckdb-iceberg-extension-release
+  branchRules:
+    includePatterns:
+      - "release/iceberg-extension/.*"
+  trigger:
+    gitPush: false
+  machine:
+    env:
+      <<: *DEFAULT_ENV
+    baseImage: quay.io/pypa/manylinux_2_28_x86_64
+  build:
+    template: freestyle:v4:publish
+    steps:
+      - yum groupinstall -y "Development Tools"
+      - yum install -y curl zip unzip tar ninja-build perl-IPC-Cmd perl-core ccache wget git jq
+      - wget -q https://github.com/Kitware/CMake/releases/download/v4.0.2/cmake-4.0.2-linux-x86_64.sh
+      - chmod +x cmake-4.0.2-linux-x86_64.sh && ./cmake-4.0.2-linux-x86_64.sh --skip-license --prefix=/usr/local
+      - git clone https://github.com/microsoft/vcpkg.git /vcpkg
+      - (cd /vcpkg && git checkout ${VCPKG_COMMIT} && ./bootstrap-vcpkg.sh)
+      - export VCPKG_ROOT=/vcpkg
+      - export VCPKG_TOOLCHAIN_PATH=/vcpkg/scripts/buildsystems/vcpkg.cmake
+      - git config --global --add safe.directory "*"
+      - git submodule update --init --recursive || true
+      - |
+        if [ ! -f duckdb/CMakeLists.txt ]; then
+          rm -rf duckdb && git clone --depth 1 https://github.com/duckdb/duckdb.git duckdb
+          (cd duckdb && git fetch --depth 1 origin ${DUCKDB_COMMIT} && git checkout ${DUCKDB_COMMIT})
+        fi
+      - |
+        if [ ! -f extension-ci-tools/makefiles/duckdb_extension.Makefile ]; then
+          rm -rf extension-ci-tools && git clone --depth 1 https://github.com/duckdb/extension-ci-tools.git extension-ci-tools
+          (cd extension-ci-tools && git fetch --depth 1 origin ${CI_TOOLS_COMMIT} && git checkout ${CI_TOOLS_COMMIT})
+        fi
+      - |
+        export VCPKG_ROOT=/vcpkg
+        export VCPKG_TOOLCHAIN_PATH=/vcpkg/scripts/buildsystems/vcpkg.cmake
+        mkdir -p build/release
+        cmake -G Ninja \
+          -DEXTENSION_STATIC_BUILD=1 \
+          -DDUCKDB_EXTENSION_CONFIGS="$(pwd)/extension_config.cmake" \
+          -DVCPKG_BUILD=1 \
+          -DCMAKE_TOOLCHAIN_FILE=${VCPKG_TOOLCHAIN_PATH} \
+          -DVCPKG_MANIFEST_DIR="$(pwd)" \
+          -DCMAKE_BUILD_TYPE=Release \
+          -S ./duckdb/ \
+          -B build/release
+        cmake --build build/release --config Release
+      - export EXT_VERSION="v1.5.3-$(git rev-parse --short HEAD)"
+      - mkdir -p .out
+      - cp build/release/extension/iceberg/iceberg.duckdb_extension .out/iceberg.duckdb_extension
+      - echo "${EXT_VERSION}" > .out/VERSION
+      - ci stage-lib --label extension ".out/iceberg.duckdb_extension,com/apple/maps/data/infra/duckdb/iceberg-extension/${EXT_VERSION}/"
+      - ci stage-lib --label extension ".out/VERSION,com/apple/maps/data/infra/duckdb/iceberg-extension/${EXT_VERSION}/"
+  test:
+    sidecar: true
+  package:
+    release: true
+    freeform:
+      - publish:
+          - packageFilters: [extension]
+            repo: "m2:maps-libs-public"
+
+# Pull Request Build (compile check only)
+- group: pull-request-build
+  branchName: main
+  build:
+    template: freestyle:v4:prb
+    steps:
+      - yum groupinstall -y "Development Tools"
+      - yum install -y curl zip unzip tar ninja-build perl-IPC-Cmd perl-core ccache wget git jq
+      - wget -q https://github.com/Kitware/CMake/releases/download/v4.0.2/cmake-4.0.2-linux-x86_64.sh
+      - chmod +x cmake-4.0.2-linux-x86_64.sh && ./cmake-4.0.2-linux-x86_64.sh --skip-license --prefix=/usr/local
+      - git clone https://github.com/microsoft/vcpkg.git /vcpkg
+      - (cd /vcpkg && git checkout ${VCPKG_COMMIT} && ./bootstrap-vcpkg.sh)
+      - export VCPKG_ROOT=/vcpkg
+      - export VCPKG_TOOLCHAIN_PATH=/vcpkg/scripts/buildsystems/vcpkg.cmake
+      - git config --global --add safe.directory "*"
+      - git submodule update --init --recursive || true
+      - |
+        if [ ! -f duckdb/CMakeLists.txt ]; then
+          rm -rf duckdb && git clone --depth 1 https://github.com/duckdb/duckdb.git duckdb
+          (cd duckdb && git fetch --depth 1 origin ${DUCKDB_COMMIT} && git checkout ${DUCKDB_COMMIT})
+        fi
+      - |
+        if [ ! -f extension-ci-tools/makefiles/duckdb_extension.Makefile ]; then
+          rm -rf extension-ci-tools && git clone --depth 1 https://github.com/duckdb/extension-ci-tools.git extension-ci-tools
+          (cd extension-ci-tools && git fetch --depth 1 origin ${CI_TOOLS_COMMIT} && git checkout ${CI_TOOLS_COMMIT})
+        fi
+      - |
+        export VCPKG_ROOT=/vcpkg
+        export VCPKG_TOOLCHAIN_PATH=/vcpkg/scripts/buildsystems/vcpkg.cmake
+        mkdir -p build/release
+        cmake -G Ninja \
+          -DEXTENSION_STATIC_BUILD=1 \
+          -DDUCKDB_EXTENSION_CONFIGS="$(pwd)/extension_config.cmake" \
+          -DVCPKG_BUILD=1 \
+          -DCMAKE_TOOLCHAIN_FILE=${VCPKG_TOOLCHAIN_PATH} \
+          -DVCPKG_MANIFEST_DIR="$(pwd)" \
+          -DCMAKE_BUILD_TYPE=Release \
+          -S ./duckdb/ \
+          -B build/release
+        cmake --build build/release --config Release
+  test:
+    sidecar: true
+  machine:
+    env:
+      <<: *DEFAULT_ENV
+    baseImage: quay.io/pypa/manylinux_2_28_x86_64
