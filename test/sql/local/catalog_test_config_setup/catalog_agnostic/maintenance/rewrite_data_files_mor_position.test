@@ -1,0 +1,185 @@
+# name: test/sql/local/irc_any_catalog/maintenance/rewrite_data_files_mor_position.test
+# description: end-to-end V2 merge-on-read rewrite. A DELETE on a V2 table writes
+#              real POSITION_DELETES files (DuckDB emits MoR position deletes, not
+#              copy-on-write), so this exercises iceberg_rewrite_data_files over a
+#              table carrying live data files AND position-delete files. We assert
+#              (a) the deleted rows stay deleted across the REPLACE — the rewrite
+#              MATERIALIZES the position deletes into the compacted file and must
+#              never resurrect the rows; and (b) the rewritten file's
+#              data_sequence_number is pinned to the STARTING snapshot seq, which
+#              for a MoR table is the DELETE's snapshot seq (one ABOVE the max
+#              data-file seq), not the max data-file seq. Parity:
+#              RewriteDataFilesCommitManager.useStartingSequenceNumber /
+#              Trino finishOptimize rewriteFiles.dataSequenceNumber.
+# group: [maintenance]
+
+require-env ICEBERG_SERVER_AVAILABLE
+
+require-env SECRETS_CREATED_AND_CATALOG_ATTACHED
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+set ignore_error_messages
+
+statement ok
+drop table if exists my_datalake.default.rewrite_mor_position;
+
+# format-version 2 so DELETE produces position-delete files (merge-on-read) instead
+# of a copy-on-write rewrite of the data files.
+statement ok
+create table my_datalake.default.rewrite_mor_position (id INTEGER, payload VARCHAR) with ('format-version' = 2);
+
+# Six separate inserts ⇒ six data files at six successive sequence numbers ⇒
+# planner accepts the bucket (min_input_files default is 5).
+statement ok
+insert into my_datalake.default.rewrite_mor_position values (1, 'a'), (2, 'b');
+
+statement ok
+insert into my_datalake.default.rewrite_mor_position values (3, 'c'), (4, 'd');
+
+statement ok
+insert into my_datalake.default.rewrite_mor_position values (5, 'e'), (6, 'f');
+
+statement ok
+insert into my_datalake.default.rewrite_mor_position values (7, 'g'), (8, 'h');
+
+statement ok
+insert into my_datalake.default.rewrite_mor_position values (9, 'i'), (10, 'j');
+
+statement ok
+insert into my_datalake.default.rewrite_mor_position values (11, 'k'), (12, 'l');
+
+# DELETE three rows spread across three different data files. On a V2 table this
+# appends three POSITION_DELETES files (one per touched data file) and bumps the
+# table's snapshot sequence number to one ABOVE the highest data-file seq.
+statement ok
+delete from my_datalake.default.rewrite_mor_position where id in (4, 7, 10);
+
+# GATE: re-read so every preceding REST commit (6 inserts + 1 delete) is visible
+# before we plan the rewrite. 9 live rows, id_sum 57 (78 − 4 − 7 − 10). This both
+# documents ground truth and forces commit visibility (see CLAUDE.md REST caveat).
+query I
+select count(*) from my_datalake.default.rewrite_mor_position;
+----
+9
+
+query I
+select sum(id) from my_datalake.default.rewrite_mor_position;
+----
+57
+
+# Six ADDED data files ...
+query I
+select count(*)
+from iceberg_metadata('my_datalake.default.rewrite_mor_position')
+where content = 'DATA' and status = 'ADDED';
+----
+6
+
+# ... and three ADDED position-delete files (one per data file touched by the DELETE).
+query I
+select count(*)
+from iceberg_metadata('my_datalake.default.rewrite_mor_position')
+where content = 'POSITION_DELETES' and status = 'ADDED';
+----
+3
+
+# The STARTING snapshot's seq is the max data_sequence_number over ALL live entries
+# (NOT just DATA): the DELETE bumped the snapshot seq to one above the max data-file
+# seq, so a POSITION_DELETES entry now carries the highest seq. The pin must use
+# THIS value. Capturing it here keeps the post-rewrite assertion independent of the
+# catalog's seq base.
+statement ok
+set variable starting_seq = (
+    select max(data_sequence_number)
+    from iceberg_metadata('my_datalake.default.rewrite_mor_position')
+    where status <> 'DELETED'
+);
+
+# Compact the six data files into one REPLACE output. The executor scans the table
+# (which applies the position deletes during the read), so the rewritten file holds
+# only the surviving rows.
+query III
+call iceberg_rewrite_data_files('my_datalake.default.rewrite_mor_position');
+----
+6	1	<REGEX>:[1-9][0-9]*
+
+# THE CORE CHECK: deleted rows stay deleted across the REPLACE. If the rewrite had
+# dropped the position deletes without materializing them, count would jump back to
+# 12 and ids 4/7/10 would resurrect.
+query I
+select count(*) from my_datalake.default.rewrite_mor_position;
+----
+9
+
+query I
+select sum(id) from my_datalake.default.rewrite_mor_position;
+----
+57
+
+query I
+select count(*) from my_datalake.default.rewrite_mor_position where id in (4, 7, 10);
+----
+0
+
+# Full result set after compaction — exactly the nine surviving rows.
+query II
+select id, payload from my_datalake.default.rewrite_mor_position order by id;
+----
+1	a
+2	b
+3	c
+5	e
+6	f
+8	h
+9	i
+11	k
+12	l
+
+# Exactly one live data file remains.
+query I
+select count(*)
+from iceberg_metadata('my_datalake.default.rewrite_mor_position')
+where content = 'DATA' and status <> 'DELETED';
+----
+1
+
+# THE PIN CHECK: the rewritten file's data_sequence_number equals the starting
+# snapshot seq (the DELETE's seq), NOT the new REPLACE snapshot seq. This keeps any
+# later equality deletes with seq > starting_seq still applying to the compacted
+# file.
+query I
+select count(*)
+from iceberg_metadata('my_datalake.default.rewrite_mor_position')
+where content = 'DATA' and status <> 'DELETED'
+  and data_sequence_number = getvariable('starting_seq');
+----
+1
+
+# COMPLEMENTARY CHECK: file_sequence_number must NOT be pinned — per spec it "is
+# always assigned at commit", so it records the REPLACE snapshot (= the new manifest
+# seq) and is strictly GREATER than the pinned data_sequence_number. A regression
+# that also pinned file_sequence_number to the starting snapshot would make these
+# equal and drive this count to 0.
+query I
+select count(*)
+from iceberg_metadata('my_datalake.default.rewrite_mor_position')
+where content = 'DATA' and status <> 'DELETED'
+  and file_sequence_number = manifest_sequence_number
+  and file_sequence_number > data_sequence_number;
+----
+1
+
+# NOTE: the three POSITION_DELETES files are now dangling — they reference the
+# compacted-away data files, so they no longer match the rewritten file's path and
+# cannot resurrect rows. Removing them is a separate maintenance step (matching
+# Spark RewriteDataFiles which does not clean V2 position deletes either).
+
+statement ok
+drop table if exists my_datalake.default.rewrite_mor_position;

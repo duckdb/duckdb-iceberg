@@ -121,6 +121,16 @@ void CommitTableToJSON(yyjson_mut_doc *doc, yyjson_mut_val *root_object,
 			yyjson_mut_obj_add_strcpy(doc, update_json, "type", ref_update.snapshot_reference.type.c_str());
 			//! updates[...].snapshot-id
 			yyjson_mut_obj_add_uint(doc, update_json, "snapshot-id", ref_update.snapshot_reference.snapshot_id);
+		} else if (update.has_remove_snapshots_update) {
+			auto update_json = yyjson_mut_arr_add_obj(doc, updates_array);
+			auto &ref_update = update.remove_snapshots_update;
+			//! updates[...].action
+			yyjson_mut_obj_add_strcpy(doc, update_json, "action", "remove-snapshots");
+			//! updates[...].snapshot-ids
+			auto snapshot_ids_arr = yyjson_mut_obj_add_arr(doc, update_json, "snapshot-ids");
+			for (auto &snapshot_id : ref_update.snapshot_ids) {
+				yyjson_mut_arr_add_int(doc, snapshot_ids_arr, snapshot_id);
+			}
 		} else if (update.has_assign_uuidupdate) {
 			auto update_json = yyjson_mut_arr_add_obj(doc, updates_array);
 			auto &ref_update = update.assign_uuidupdate;

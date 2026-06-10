@@ -1,0 +1,84 @@
+# name: test/sql/local/maintenance/rewrite_data_files_validation.test
+# description: bind-time validation for iceberg_rewrite_data_files parameters
+# group: [maintenance]
+
+require avro
+
+require parquet
+
+require iceberg
+
+# Identifier shape: must be exactly catalog.schema.table.
+
+statement error
+SELECT * FROM iceberg_rewrite_data_files('bad');
+----
+table identifier must be 'catalog.schema.table'
+
+statement error
+SELECT * FROM iceberg_rewrite_data_files('a.b');
+----
+table identifier must be 'catalog.schema.table'
+
+statement error
+SELECT * FROM iceberg_rewrite_data_files('a.b.c.d');
+----
+table identifier must be 'catalog.schema.table'
+
+statement error
+SELECT * FROM iceberg_rewrite_data_files('.b.c');
+----
+has an empty component
+
+statement error
+SELECT * FROM iceberg_rewrite_data_files('a..c');
+----
+has an empty component
+
+# strategy: only 'binpack' for now.
+
+statement error
+SELECT * FROM iceberg_rewrite_data_files('a.b.c', strategy => 'sort');
+----
+only 'binpack' strategy is supported
+
+statement error
+SELECT * FROM iceberg_rewrite_data_files('a.b.c', strategy => 'zorder');
+----
+only 'binpack' strategy is supported
+
+# Numeric bounds.
+
+statement error
+SELECT * FROM iceberg_rewrite_data_files('a.b.c', target_file_size_bytes => 0);
+----
+'target_file_size_bytes' must be > 0
+
+statement error
+SELECT * FROM iceberg_rewrite_data_files('a.b.c', target_file_size_bytes => -1);
+----
+'target_file_size_bytes' must be > 0
+
+statement error
+SELECT * FROM iceberg_rewrite_data_files('a.b.c', min_input_files => 0);
+----
+'min_input_files' must be >= 1
+
+# Happy path: all valid params accepted by Bind. Execute resolves the
+# catalog — since 'cat' isn't attached here, the planner throws.
+
+statement error
+SELECT * FROM iceberg_rewrite_data_files(
+    'cat.sch.tbl',
+    strategy => 'binpack',
+    target_file_size_bytes => 268435456,
+    min_input_files => 3,
+    rewrite_all => false
+);
+----
+Catalog "cat" does not exist
+
+statement error
+SELECT * FROM iceberg_rewrite_data_files('cat.sch.tbl');
+----
+Catalog "cat" does not exist

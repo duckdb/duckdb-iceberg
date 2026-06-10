@@ -13,7 +13,7 @@ namespace duckdb {
 string IcebergManifestEntryContentTypeToString(IcebergManifestEntryContentType type) {
 	switch (type) {
 	case IcebergManifestEntryContentType::DATA:
-		return "EXISTING";
+		return "DATA";
 	case IcebergManifestEntryContentType::POSITION_DELETES:
 		return "POSITION_DELETES";
 	case IcebergManifestEntryContentType::EQUALITY_DELETES:
@@ -616,14 +616,33 @@ idx_t WriteToFile(const IcebergTableMetadata &table_metadata, const IcebergManif
 		} else {
 			chunk.SetValue(col_idx++, i, Value(LogicalType::BIGINT));
 		}
-		// sequence_number: long
-		// file_sequence_number: long
+		// sequence_number: long      ← schema column 0 (declared at line 466)
+		// file_sequence_number: long ← schema column 1 (declared at line 479)
+		// NOTE: previous writer code swapped these two slots (wrote file_seq into
+		// the sequence_number column and vice versa). Fixed here for both ADDED
+		// (with optional explicit seq) and EXISTING/DELETED (inherited or explicit
+		// seq via Get*) branches.
 		if (manifest_entry.status == IcebergManifestEntryStatusType::ADDED) {
-			chunk.SetValue(col_idx++, i, Value(LogicalType::BIGINT));
-			chunk.SetValue(col_idx++, i, Value(LogicalType::BIGINT));
+			//! V2 spec allows ADDED entries to carry an explicit data_sequence_number
+			//! (overriding the default NULL+inherit-from-manifest behaviour). The
+			//! rewrite_data_files (compaction) path uses this to pin new files to
+			//! the starting snapshot's sequence_number so concurrently-written
+			//! equality deletes still apply by `delete.seq > data.seq`. INSERT keeps
+			//! has_sequence_number=false → writes NULL → reader inherits, preserving
+			//! manifest byte-level reuse on retry (Iceberg spec §4.2.4).
+			if (manifest_entry.HasSequenceNumber()) {
+				chunk.SetValue(col_idx++, i, Value::BIGINT(manifest_entry.GetExplicitSequenceNumber()));
+			} else {
+				chunk.SetValue(col_idx++, i, Value(LogicalType::BIGINT));
+			}
+			if (manifest_entry.HasFileSequenceNumber()) {
+				chunk.SetValue(col_idx++, i, Value::BIGINT(manifest_entry.GetExplicitFileSequenceNumber()));
+			} else {
+				chunk.SetValue(col_idx++, i, Value(LogicalType::BIGINT));
+			}
 		} else {
-			chunk.SetValue(col_idx++, i, Value::BIGINT(manifest_entry.GetFileSequenceNumber(manifest_file)));
 			chunk.SetValue(col_idx++, i, Value::BIGINT(manifest_entry.GetSequenceNumber(manifest_file)));
+			chunk.SetValue(col_idx++, i, Value::BIGINT(manifest_entry.GetFileSequenceNumber(manifest_file)));
 		}
 
 		auto &data_file = manifest_entry.data_file;

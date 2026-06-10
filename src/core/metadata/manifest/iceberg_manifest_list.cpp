@@ -86,10 +86,13 @@ IcebergManifestListEntry IcebergManifestListEntry::CreateFromEntries(FileSystem 
 		}
 		}
 
-		//! NOTE: this gets overwritten on commit
-		if (!manifest_file.has_min_sequence_number ||
-		    manifest_file.sequence_number < manifest_file.min_sequence_number) {
-			manifest_file.min_sequence_number = manifest_file.sequence_number;
+		//! min_sequence_number must reflect the actual data_sequence_number of
+		//! each entry. For ADDED entries with an explicit seq (e.g. compaction
+		//! pinning to starting_snapshot_seq), use that; otherwise fall back to
+		//! the manifest's own sequence_number (which represents the new snapshot).
+		auto entry_data_seq = manifest_entry.GetSequenceNumber(manifest_file);
+		if (!manifest_file.has_min_sequence_number || entry_data_seq < manifest_file.min_sequence_number) {
+			manifest_file.min_sequence_number = entry_data_seq;
 		}
 		manifest_file.has_min_sequence_number = true;
 	}

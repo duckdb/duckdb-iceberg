@@ -15,8 +15,9 @@
 
 namespace duckdb {
 
-IcebergAddSnapshot::IcebergAddSnapshot(const IcebergTableInformation &table_info)
-    : IcebergTableUpdate(IcebergTableUpdateType::ADD_SNAPSHOT, table_info) {
+IcebergAddSnapshot::IcebergAddSnapshot(const IcebergTableInformation &table_info,
+                                       IcebergSnapshotOperationType operation)
+    : IcebergTableUpdate(IcebergTableUpdateType::ADD_SNAPSHOT, table_info), operation(operation) {
 	//! FIXME: Do we also need to capture the current partition spec and sort order?
 	//! This is a bit of a code smell, the `IcebergTableInformation` should instead be const
 	//! and all transactional changes should live in the IcebergTransactionData
@@ -188,7 +189,7 @@ void IcebergAddSnapshot::CreateUpdate(DatabaseInstance &db, ClientContext &conte
 
 	//! Construct the snapshot
 	IcebergSnapshot new_snapshot;
-	new_snapshot.operation = IcebergSnapshotOperationType::OVERWRITE;
+	new_snapshot.operation = operation;
 	new_snapshot.snapshot_id = snapshot_id;
 	new_snapshot.sequence_number = sequence_number;
 	new_snapshot.SetSchemaId(schema_id);

@@ -20,7 +20,8 @@ struct IcebergAddSnapshot : public IcebergTableUpdate {
 	static constexpr const IcebergTableUpdateType TYPE = IcebergTableUpdateType::ADD_SNAPSHOT;
 
 public:
-	IcebergAddSnapshot(const IcebergTableInformation &table_info);
+	IcebergAddSnapshot(const IcebergTableInformation &table_info,
+	                   IcebergSnapshotOperationType operation = IcebergSnapshotOperationType::OVERWRITE);
 
 public:
 	void ConstructManifestList(IcebergManifestList &manifest_list, CopyFunction &avro_copy, DatabaseInstance &db,
@@ -35,6 +36,7 @@ public:
 private:
 	vector<IcebergManifestListEntry> manifest_files;
 	int32_t schema_id;
+	IcebergSnapshotOperationType operation;
 };
 
 } // namespace duckdb

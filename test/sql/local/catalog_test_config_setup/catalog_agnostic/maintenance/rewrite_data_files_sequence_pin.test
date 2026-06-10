@@ -1,0 +1,135 @@
+# name: test/sql/local/irc_any_catalog/maintenance/rewrite_data_files_sequence_pin.test
+# description: iceberg_rewrite_data_files must pin the rewritten data file's
+#              data_sequence_number to the STARTING snapshot's sequence number
+#              (parity: Iceberg RewriteDataFilesCommitManager.useStartingSequenceNumber
+#              / Trino finishOptimize rewriteFiles.dataSequenceNumber). If the new
+#              file instead inherited the REPLACE snapshot's seq, concurrently
+#              written equality deletes (delete.seq > data.seq) would silently stop
+#              applying. We observe the pinned seq through iceberg_metadata's
+#              data_sequence_number column.
+# group: [maintenance]
+
+require-env ICEBERG_SERVER_AVAILABLE
+
+require-env SECRETS_CREATED_AND_CATALOG_ATTACHED
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+set ignore_error_messages
+
+statement ok
+drop table if exists my_datalake.default.rewrite_seq_pin;
+
+statement ok
+create table my_datalake.default.rewrite_seq_pin (id INTEGER, payload VARCHAR);
+
+# Six separate inserts ⇒ six data files at six successive sequence numbers ⇒
+# planner accepts the bucket (min_input_files default is 5).
+statement ok
+insert into my_datalake.default.rewrite_seq_pin values (1, 'a'), (2, 'b');
+
+statement ok
+insert into my_datalake.default.rewrite_seq_pin values (3, 'c'), (4, 'd');
+
+statement ok
+insert into my_datalake.default.rewrite_seq_pin values (5, 'e'), (6, 'f');
+
+statement ok
+insert into my_datalake.default.rewrite_seq_pin values (7, 'g'), (8, 'h');
+
+statement ok
+insert into my_datalake.default.rewrite_seq_pin values (9, 'i'), (10, 'j');
+
+statement ok
+insert into my_datalake.default.rewrite_seq_pin values (11, 'k'), (12, 'l');
+
+# The starting snapshot's sequence number == the highest data_sequence_number over
+# the current data files (each insert bumped the seq by one). Capture it before the
+# rewrite so the post-rewrite assertion is independent of the catalog's seq base.
+statement ok
+set variable starting_seq = (
+    select max(data_sequence_number)
+    from iceberg_metadata('my_datalake.default.rewrite_seq_pin')
+    where content = 'DATA' and status <> 'DELETED'
+);
+
+# Six live data files before compaction. After the REPLACE below, iceberg_metadata
+# keeps the six compacted-away files as status='DELETED' content='DATA' rows in the
+# new manifest (Iceberg REPLACE retains DELETED entries for one commit), so every
+# post-rewrite data-file assertion filters status <> 'DELETED' to count only live
+# files and to isolate the rewritten file from a deleted original sharing its seq.
+query I
+select count(*)
+from iceberg_metadata('my_datalake.default.rewrite_seq_pin')
+where content = 'DATA' and status <> 'DELETED';
+----
+6
+
+# Compact: six tiny files collapse into one REPLACE output.
+query III
+call iceberg_rewrite_data_files('my_datalake.default.rewrite_seq_pin');
+----
+6	1	<REGEX>:[1-9][0-9]*
+
+# Data is preserved across the REPLACE.
+query I
+select count(*) from my_datalake.default.rewrite_seq_pin;
+----
+12
+
+# Exactly one live data file remains after the rewrite.
+query I
+select count(*)
+from iceberg_metadata('my_datalake.default.rewrite_seq_pin')
+where content = 'DATA' and status <> 'DELETED';
+----
+1
+
+# THE CORE CHECK: the rewritten file's data_sequence_number equals the starting
+# snapshot's seq (captured above), NOT the new REPLACE snapshot's seq.
+query I
+select count(*)
+from iceberg_metadata('my_datalake.default.rewrite_seq_pin')
+where content = 'DATA' and status <> 'DELETED' and data_sequence_number = getvariable('starting_seq');
+----
+1
+
+# Equivalent framing that catches a NULL-inherit / new-snapshot-seq regression:
+# the rewritten file lives in the new REPLACE manifest (manifest_sequence_number =
+# new snapshot seq), but its own data_sequence_number must be strictly lower,
+# because it was pinned to the starting snapshot. If the file had inherited the
+# manifest seq, these two would be equal and this count would be 0.
+query I
+select count(*)
+from iceberg_metadata('my_datalake.default.rewrite_seq_pin')
+where content = 'DATA' and status <> 'DELETED' and data_sequence_number < manifest_sequence_number;
+----
+1
+
+# THE COMPLEMENTARY CHECK: file_sequence_number must NOT be pinned. The spec says
+# it "is always assigned at commit and cannot be provided explicitly" — it records
+# the snapshot in which the file was PHYSICALLY added, which for a compaction
+# output is the new REPLACE snapshot. So the rewritten file inherits the new
+# manifest's seq: file_sequence_number == manifest_sequence_number and is strictly
+# GREATER than the pinned data_sequence_number. A regression that also pins
+# file_sequence_number to the starting snapshot (deviating from Iceberg
+# GenericManifestEntry.wrapAppend, which sets fileSequenceNumber=null, and Trino
+# finishOptimize, which sets only dataSequenceNumber) would make these equal and
+# drive this count to 0.
+query I
+select count(*)
+from iceberg_metadata('my_datalake.default.rewrite_seq_pin')
+where content = 'DATA' and status <> 'DELETED'
+  and file_sequence_number = manifest_sequence_number
+  and file_sequence_number > data_sequence_number;
+----
+1
+
+statement ok
+drop table if exists my_datalake.default.rewrite_seq_pin;

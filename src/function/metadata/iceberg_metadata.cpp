@@ -43,11 +43,16 @@ static vector<LogicalType> IcebergManifestEntryTypes() {
 	    LogicalType::VARCHAR,
 	    //! record_count
 	    LogicalType::BIGINT,
+	    //! data_sequence_number
+	    LogicalType::BIGINT,
+	    //! file_sequence_number
+	    LogicalType::BIGINT,
 	};
 }
 
 static vector<string> IcebergManifestEntryNames() {
-	return {"status", "content", "file_path", "file_format", "record_count"};
+	return {"status",       "content",          "file_path",         "file_format",
+	        "record_count", "data_sequence_number", "file_sequence_number"};
 }
 
 static vector<LogicalType> IcebergManifestTypes() {
@@ -201,6 +206,21 @@ static void IcebergMetaDataFunction(ClientContext &context, TableFunctionInput &
 			AddString(output.data[6], out, string_t(data_file.file_format));
 			//! record_count
 			FlatVector::GetData<int64_t>(output.data[7])[out] = data_file.record_count;
+			//! data_sequence_number (effective): the explicit value when the entry
+			//! carries one — rewrite_data_files pins ADDED files to the starting
+			//! snapshot's seq — otherwise the inherited manifest sequence_number.
+			//! Mirrors IcebergManifestEntry::GetSequenceNumber but never throws on a
+			//! NULL non-ADDED entry: introspection must not abort on odd manifests.
+			FlatVector::GetData<int64_t>(output.data[8])[out] =
+			    manifest_entry.HasSequenceNumber() ? manifest_entry.GetExplicitSequenceNumber() : manifest.sequence_number;
+			//! file_sequence_number (effective): the snapshot in which the file was
+			//! physically added. Unlike data_sequence_number it is never pinned —
+			//! rewrite_data_files leaves it NULL so it inherits the new manifest's
+			//! seq, which is why a compaction output shows file_sequence_number >
+			//! data_sequence_number. Same no-throw inheritance as above.
+			FlatVector::GetData<int64_t>(output.data[9])[out] =
+			    manifest_entry.HasFileSequenceNumber() ? manifest_entry.GetExplicitFileSequenceNumber()
+			                                           : manifest.sequence_number;
 			out++;
 		}
 		global_state.current_manifest_entry_idx = 0;

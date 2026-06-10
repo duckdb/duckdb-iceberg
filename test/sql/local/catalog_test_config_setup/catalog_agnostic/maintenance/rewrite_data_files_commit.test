@@ -1,0 +1,101 @@
+# name: test/sql/local/irc_any_catalog/maintenance/rewrite_data_files_commit.test
+# description: end-to-end check that iceberg_rewrite_data_files commits a REPLACE
+#              snapshot — row count + file count both observable through a fresh
+#              metadata refresh.
+# group: [maintenance]
+
+require-env ICEBERG_SERVER_AVAILABLE
+
+require-env SECRETS_CREATED_AND_CATALOG_ATTACHED
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+set ignore_error_messages
+
+statement ok
+drop table if exists my_datalake.default.rewrite_commit_basic;
+
+statement ok
+create table my_datalake.default.rewrite_commit_basic (id INTEGER, payload VARCHAR);
+
+# Six separate inserts ⇒ six manifest entries ⇒ planner accepts the bucket
+# (min_input_files default is 5).
+statement ok
+insert into my_datalake.default.rewrite_commit_basic values (1, 'a'), (2, 'b');
+
+statement ok
+insert into my_datalake.default.rewrite_commit_basic values (3, 'c'), (4, 'd');
+
+statement ok
+insert into my_datalake.default.rewrite_commit_basic values (5, 'e'), (6, 'f');
+
+statement ok
+insert into my_datalake.default.rewrite_commit_basic values (7, 'g'), (8, 'h');
+
+statement ok
+insert into my_datalake.default.rewrite_commit_basic values (9, 'i'), (10, 'j');
+
+statement ok
+insert into my_datalake.default.rewrite_commit_basic values (11, 'k'), (12, 'l');
+
+query I
+select count(*) from my_datalake.default.rewrite_commit_basic;
+----
+12
+
+query II
+explain analyze select * from my_datalake.default.rewrite_commit_basic;
+----
+analyzed_plan	<REGEX>:.*Total Files Read: 6.*
+
+# Compact. Default target (128 MiB) trivially fits all six tiny files into one
+# output file.
+query III
+call iceberg_rewrite_data_files('my_datalake.default.rewrite_commit_basic');
+----
+6	1	<REGEX>:[1-9][0-9]*
+
+# Row count is preserved across the REPLACE — the snapshot semantically replaces
+# the six source files with one output file containing the same rows.
+query I
+select count(*) from my_datalake.default.rewrite_commit_basic;
+----
+12
+
+query II
+select id, payload from my_datalake.default.rewrite_commit_basic order by id;
+----
+1	a
+2	b
+3	c
+4	d
+5	e
+6	f
+7	g
+8	h
+9	i
+10	j
+11	k
+12	l
+
+# Post-commit the scanner only sees the consolidated file.
+query II
+explain analyze select * from my_datalake.default.rewrite_commit_basic;
+----
+analyzed_plan	<REGEX>:.*Total Files Read: 1.*
+
+# Re-running the action is a no-op: only one input file remains, which is below
+# `min_input_files`. Zero rewritten files.
+query III
+call iceberg_rewrite_data_files('my_datalake.default.rewrite_commit_basic');
+----
+0	0	0
+
+statement ok
+drop table if exists my_datalake.default.rewrite_commit_basic;

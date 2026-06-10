@@ -132,6 +132,23 @@ public:
 	void SetFileSequenceNumber(sequence_number_t value);
 	sequence_number_t GetSequenceNumber(const IcebergManifestFile &manifest_file) const;
 	sequence_number_t GetFileSequenceNumber(const IcebergManifestFile &manifest_file) const;
+	//! Whether an explicit data_sequence_number was set on this entry. ADDED
+	//! entries normally write NULL and inherit from the enclosing manifest, but
+	//! the rewrite_data_files compaction path pins the starting snapshot's seq
+	//! explicitly. The manifest writer uses these flags to decide between
+	//! "write NULL" and "write explicit value" (Iceberg spec §4.2.4).
+	bool HasSequenceNumber() const {
+		return has_sequence_number;
+	}
+	bool HasFileSequenceNumber() const {
+		return has_file_sequence_number;
+	}
+	sequence_number_t GetExplicitSequenceNumber() const {
+		return sequence_number;
+	}
+	sequence_number_t GetExplicitFileSequenceNumber() const {
+		return file_sequence_number;
+	}
 
 private:
 	bool has_snapshot_id = false;

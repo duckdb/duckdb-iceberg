@@ -14,28 +14,28 @@ require parquet
 
 require iceberg
 
-query IIIIIIII
+query IIIIIIIIII
 SELECT * FROM ICEBERG_METADATA('__WORKING_DIRECTORY__/data/persistent/iceberg/lineitem_iceberg', ALLOW_MOVED_PATHS=TRUE);
 ----
-lineitem_iceberg/metadata/179b4fb1-0366-4f7d-ad35-99ee8da0abf5-m1.avro	2	DATA	ADDED	EXISTING	lineitem_iceberg/data/00000-5-dad9988f-2a3b-464c-adb6-6034de93da19-00001.parquet	PARQUET	51793
-lineitem_iceberg/metadata/179b4fb1-0366-4f7d-ad35-99ee8da0abf5-m0.avro	2	DATA	DELETED	EXISTING	lineitem_iceberg/data/00000-1-66fee7c2-c97c-4af9-963d-930afd99ace4-00001.parquet	PARQUET	60175
+lineitem_iceberg/metadata/179b4fb1-0366-4f7d-ad35-99ee8da0abf5-m1.avro	2	DATA	ADDED	DATA	lineitem_iceberg/data/00000-5-dad9988f-2a3b-464c-adb6-6034de93da19-00001.parquet	PARQUET	51793	2	2
+lineitem_iceberg/metadata/179b4fb1-0366-4f7d-ad35-99ee8da0abf5-m0.avro	2	DATA	DELETED	DATA	lineitem_iceberg/data/00000-1-66fee7c2-c97c-4af9-963d-930afd99ace4-00001.parquet	PARQUET	60175	1	1
 
-query IIIIIIII
+query IIIIIIIIII
 SELECT * FROM ICEBERG_METADATA('__WORKING_DIRECTORY__/data/persistent/iceberg/lineitem_iceberg', ALLOW_MOVED_PATHS=TRUE, version='1');
 ----
-lineitem_iceberg/metadata/787a5996-87e9-4d93-b258-066d524e82cc-m0.avro	1	DATA	ADDED	EXISTING	lineitem_iceberg/data/00000-1-66fee7c2-c97c-4af9-963d-930afd99ace4-00001.parquet	PARQUET	60175
+lineitem_iceberg/metadata/787a5996-87e9-4d93-b258-066d524e82cc-m0.avro	1	DATA	ADDED	DATA	lineitem_iceberg/data/00000-1-66fee7c2-c97c-4af9-963d-930afd99ace4-00001.parquet	PARQUET	60175	1	1
 
-query IIIIIIII
+query IIIIIIIIII
 SELECT * FROM ICEBERG_METADATA('__WORKING_DIRECTORY__/data/persistent/iceberg/lineitem_iceberg', ALLOW_MOVED_PATHS=TRUE, version_name_format='v%s%s.metadata.json');
 ----
-lineitem_iceberg/metadata/179b4fb1-0366-4f7d-ad35-99ee8da0abf5-m1.avro	2	DATA	ADDED	EXISTING	lineitem_iceberg/data/00000-5-dad9988f-2a3b-464c-adb6-6034de93da19-00001.parquet	PARQUET	51793
-lineitem_iceberg/metadata/179b4fb1-0366-4f7d-ad35-99ee8da0abf5-m0.avro	2	DATA	DELETED	EXISTING	lineitem_iceberg/data/00000-1-66fee7c2-c97c-4af9-963d-930afd99ace4-00001.parquet	PARQUET	60175
+lineitem_iceberg/metadata/179b4fb1-0366-4f7d-ad35-99ee8da0abf5-m1.avro	2	DATA	ADDED	DATA	lineitem_iceberg/data/00000-5-dad9988f-2a3b-464c-adb6-6034de93da19-00001.parquet	PARQUET	51793	2	2
+lineitem_iceberg/metadata/179b4fb1-0366-4f7d-ad35-99ee8da0abf5-m0.avro	2	DATA	DELETED	DATA	lineitem_iceberg/data/00000-1-66fee7c2-c97c-4af9-963d-930afd99ace4-00001.parquet	PARQUET	60175	1	1
 
-query IIIIIIII
+query IIIIIIIIII
 SELECT * FROM ICEBERG_METADATA('__WORKING_DIRECTORY__/data/persistent/iceberg/lineitem_iceberg', ALLOW_MOVED_PATHS=TRUE, version='2', version_name_format='v%s%s.metadata.json');
 ----
-lineitem_iceberg/metadata/179b4fb1-0366-4f7d-ad35-99ee8da0abf5-m1.avro	2	DATA	ADDED	EXISTING	lineitem_iceberg/data/00000-5-dad9988f-2a3b-464c-adb6-6034de93da19-00001.parquet	PARQUET	51793
-lineitem_iceberg/metadata/179b4fb1-0366-4f7d-ad35-99ee8da0abf5-m0.avro	2	DATA	DELETED	EXISTING	lineitem_iceberg/data/00000-1-66fee7c2-c97c-4af9-963d-930afd99ace4-00001.parquet	PARQUET	60175
+lineitem_iceberg/metadata/179b4fb1-0366-4f7d-ad35-99ee8da0abf5-m1.avro	2	DATA	ADDED	DATA	lineitem_iceberg/data/00000-5-dad9988f-2a3b-464c-adb6-6034de93da19-00001.parquet	PARQUET	51793	2	2
+lineitem_iceberg/metadata/179b4fb1-0366-4f7d-ad35-99ee8da0abf5-m0.avro	2	DATA	DELETED	DATA	lineitem_iceberg/data/00000-1-66fee7c2-c97c-4af9-963d-930afd99ace4-00001.parquet	PARQUET	60175	1	1
 
 statement error
 SELECT * FROM ICEBERG_METADATA('__WORKING_DIRECTORY__/data/persistent/iceberg/lineitem_iceberg_gz', ALLOW_MOVED_PATHS=TRUE);
@@ -47,10 +47,10 @@ SELECT * FROM ICEBERG_METADATA('__WORKING_DIRECTORY__/data/persistent/iceberg/li
 ----
 Invalid Configuration Error: Iceberg metadata file not found for table version '2' using 'blarg' compression and format(s): 'blat%s%s'
 
-query IIIIIIII
+query IIIIIIIIII
 SELECT * FROM ICEBERG_METADATA('__WORKING_DIRECTORY__/data/persistent/iceberg/lineitem_iceberg_gz', ALLOW_MOVED_PATHS=TRUE, METADATA_COMPRESSION_CODEC="gzip");
 ----
-lineitem_iceberg_gz/metadata/23f9dbea-1e7f-4694-a82c-dc3c9a94953e-m0.avro	0	DATA	ADDED	EXISTING	lineitem_iceberg_gz/data/00000-2-371a340c-ded5-4e85-aa49-9c788d6f21cd-00001.parquet	PARQUET	111968
+lineitem_iceberg_gz/metadata/23f9dbea-1e7f-4694-a82c-dc3c9a94953e-m0.avro	0	DATA	ADDED	DATA	lineitem_iceberg_gz/data/00000-2-371a340c-ded5-4e85-aa49-9c788d6f21cd-00001.parquet	PARQUET	111968	0	0
 
 statement error
 SELECT * FROM ICEBERG_METADATA('__WORKING_DIRECTORY__/data/persistent/iceberg/lineitem_iceberg_nonexistent');
@@ -65,38 +65,38 @@ SELECT * FROM ICEBERG_METADATA('__WORKING_DIRECTORY__/data/persistent/iceberg/li
 statement ok
 SET unsafe_enable_version_guessing = true;
 
-query IIIIIIII
+query IIIIIIIIII
 SELECT * FROM ICEBERG_METADATA('__WORKING_DIRECTORY__/data/persistent/iceberg/lineitem_iceberg_no_hint', ALLOW_MOVED_PATHS=TRUE);
 ----
-lineitem_iceberg/metadata/179b4fb1-0366-4f7d-ad35-99ee8da0abf5-m1.avro	2	DATA	ADDED	EXISTING	lineitem_iceberg/data/00000-5-dad9988f-2a3b-464c-adb6-6034de93da19-00001.parquet	PARQUET	51793
-lineitem_iceberg/metadata/179b4fb1-0366-4f7d-ad35-99ee8da0abf5-m0.avro	2	DATA	DELETED	EXISTING	lineitem_iceberg/data/00000-1-66fee7c2-c97c-4af9-963d-930afd99ace4-00001.parquet	PARQUET	60175
+lineitem_iceberg/metadata/179b4fb1-0366-4f7d-ad35-99ee8da0abf5-m1.avro	2	DATA	ADDED	DATA	lineitem_iceberg/data/00000-5-dad9988f-2a3b-464c-adb6-6034de93da19-00001.parquet	PARQUET	51793	2	2
+lineitem_iceberg/metadata/179b4fb1-0366-4f7d-ad35-99ee8da0abf5-m0.avro	2	DATA	DELETED	DATA	lineitem_iceberg/data/00000-1-66fee7c2-c97c-4af9-963d-930afd99ace4-00001.parquet	PARQUET	60175	1	1
 
-query IIIIIIII
+query IIIIIIIIII
 SELECT * FROM ICEBERG_METADATA('__WORKING_DIRECTORY__/data/persistent/iceberg/lineitem_iceberg_no_hint', ALLOW_MOVED_PATHS=TRUE, version='1');
 ----
-lineitem_iceberg/metadata/787a5996-87e9-4d93-b258-066d524e82cc-m0.avro	1	DATA	ADDED	EXISTING	lineitem_iceberg/data/00000-1-66fee7c2-c97c-4af9-963d-930afd99ace4-00001.parquet	PARQUET	60175
+lineitem_iceberg/metadata/787a5996-87e9-4d93-b258-066d524e82cc-m0.avro	1	DATA	ADDED	DATA	lineitem_iceberg/data/00000-1-66fee7c2-c97c-4af9-963d-930afd99ace4-00001.parquet	PARQUET	60175	1	1
 
-query IIIIIIII
+query IIIIIIIIII
 SELECT * FROM ICEBERG_METADATA('__WORKING_DIRECTORY__/data/persistent/iceberg/lineitem_iceberg_no_hint', ALLOW_MOVED_PATHS=TRUE, version_name_format='v%s%s.metadata.json');
 ----
-lineitem_iceberg/metadata/179b4fb1-0366-4f7d-ad35-99ee8da0abf5-m1.avro	2	DATA	ADDED	EXISTING	lineitem_iceberg/data/00000-5-dad9988f-2a3b-464c-adb6-6034de93da19-00001.parquet	PARQUET	51793
-lineitem_iceberg/metadata/179b4fb1-0366-4f7d-ad35-99ee8da0abf5-m0.avro	2	DATA	DELETED	EXISTING	lineitem_iceberg/data/00000-1-66fee7c2-c97c-4af9-963d-930afd99ace4-00001.parquet	PARQUET	60175
+lineitem_iceberg/metadata/179b4fb1-0366-4f7d-ad35-99ee8da0abf5-m1.avro	2	DATA	ADDED	DATA	lineitem_iceberg/data/00000-5-dad9988f-2a3b-464c-adb6-6034de93da19-00001.parquet	PARQUET	51793	2	2
+lineitem_iceberg/metadata/179b4fb1-0366-4f7d-ad35-99ee8da0abf5-m0.avro	2	DATA	DELETED	DATA	lineitem_iceberg/data/00000-1-66fee7c2-c97c-4af9-963d-930afd99ace4-00001.parquet	PARQUET	60175	1	1
 
-query IIIIIIII
+query IIIIIIIIII
 SELECT * FROM ICEBERG_METADATA('__WORKING_DIRECTORY__/data/persistent/iceberg/lineitem_iceberg_no_hint', ALLOW_MOVED_PATHS=TRUE, version='?', version_name_format='v%s%s.metadata.json');
 ----
-lineitem_iceberg/metadata/179b4fb1-0366-4f7d-ad35-99ee8da0abf5-m1.avro	2	DATA	ADDED	EXISTING	lineitem_iceberg/data/00000-5-dad9988f-2a3b-464c-adb6-6034de93da19-00001.parquet	PARQUET	51793
-lineitem_iceberg/metadata/179b4fb1-0366-4f7d-ad35-99ee8da0abf5-m0.avro	2	DATA	DELETED	EXISTING	lineitem_iceberg/data/00000-1-66fee7c2-c97c-4af9-963d-930afd99ace4-00001.parquet	PARQUET	60175
+lineitem_iceberg/metadata/179b4fb1-0366-4f7d-ad35-99ee8da0abf5-m1.avro	2	DATA	ADDED	DATA	lineitem_iceberg/data/00000-5-dad9988f-2a3b-464c-adb6-6034de93da19-00001.parquet	PARQUET	51793	2	2
+lineitem_iceberg/metadata/179b4fb1-0366-4f7d-ad35-99ee8da0abf5-m0.avro	2	DATA	DELETED	DATA	lineitem_iceberg/data/00000-1-66fee7c2-c97c-4af9-963d-930afd99ace4-00001.parquet	PARQUET	60175	1	1
 
-query IIIIIIII
+query IIIIIIIIII
 SELECT * FROM ICEBERG_METADATA('__WORKING_DIRECTORY__/data/persistent/iceberg/lineitem_iceberg_gz_no_hint', ALLOW_MOVED_PATHS=TRUE, METADATA_COMPRESSION_CODEC='gzip', version='?');
 ----
-lineitem_iceberg_gz/metadata/23f9dbea-1e7f-4694-a82c-dc3c9a94953e-m0.avro	0	DATA	ADDED	EXISTING	lineitem_iceberg_gz/data/00000-2-371a340c-ded5-4e85-aa49-9c788d6f21cd-00001.parquet	PARQUET	111968
+lineitem_iceberg_gz/metadata/23f9dbea-1e7f-4694-a82c-dc3c9a94953e-m0.avro	0	DATA	ADDED	DATA	lineitem_iceberg_gz/data/00000-2-371a340c-ded5-4e85-aa49-9c788d6f21cd-00001.parquet	PARQUET	111968	0	0
 
-query IIIIIIII
+query IIIIIIIIII
 SELECT * FROM ICEBERG_METADATA('__WORKING_DIRECTORY__/data/persistent/iceberg/lineitem_iceberg_gz_no_hint', ALLOW_MOVED_PATHS=TRUE, METADATA_COMPRESSION_CODEC='gzip');
 ----
-lineitem_iceberg_gz/metadata/23f9dbea-1e7f-4694-a82c-dc3c9a94953e-m0.avro	0	DATA	ADDED	EXISTING	lineitem_iceberg_gz/data/00000-2-371a340c-ded5-4e85-aa49-9c788d6f21cd-00001.parquet	PARQUET	111968
+lineitem_iceberg_gz/metadata/23f9dbea-1e7f-4694-a82c-dc3c9a94953e-m0.avro	0	DATA	ADDED	DATA	lineitem_iceberg_gz/data/00000-2-371a340c-ded5-4e85-aa49-9c788d6f21cd-00001.parquet	PARQUET	111968	0	0
 
 statement ok
 create table t1 as select range a from range(10);

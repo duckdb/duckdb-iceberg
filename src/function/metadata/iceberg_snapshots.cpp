@@ -6,10 +6,26 @@
 #include "iceberg_options.hpp"
 #include "common/iceberg_utils.hpp"
 #include "core/metadata/iceberg_table_metadata.hpp"
+#include "core/metadata/snapshot/iceberg_snapshot.hpp"
 
 #include <string>
 
 namespace duckdb {
+
+static string SnapshotOperationToString(IcebergSnapshotOperationType type) {
+	switch (type) {
+	case IcebergSnapshotOperationType::APPEND:
+		return "append";
+	case IcebergSnapshotOperationType::REPLACE:
+		return "replace";
+	case IcebergSnapshotOperationType::OVERWRITE:
+		return "overwrite";
+	case IcebergSnapshotOperationType::DELETE:
+		return "delete";
+	default:
+		return "unknown";
+	}
+}
 
 struct IcebergSnaphotsBindData : public TableFunctionData {
 	IcebergSnaphotsBindData() {};
@@ -76,6 +92,9 @@ static unique_ptr<FunctionData> IcebergSnapshotsBind(ClientContext &context, Tab
 	names.emplace_back("manifest_list");
 	return_types.emplace_back(LogicalType::VARCHAR);
 
+	names.emplace_back("operation");
+	return_types.emplace_back(LogicalType::VARCHAR);
+
 	return std::move(bind_data);
 }
 
@@ -96,6 +115,8 @@ static void IcebergSnapshotsFunction(ClientContext &context, TableFunctionInput 
 		FlatVector::GetData<timestamp_t>(output.data[2])[i] = snapshot.timestamp_ms;
 		string_t manifest_string_t = StringVector::AddString(output.data[3], string_t(snapshot.manifest_list));
 		FlatVector::GetData<string_t>(output.data[3])[i] = manifest_string_t;
+		auto operation_str = SnapshotOperationToString(snapshot.operation);
+		FlatVector::GetData<string_t>(output.data[4])[i] = StringVector::AddString(output.data[4], operation_str);
 		i++;
 	}
 	output.SetCardinality(i);

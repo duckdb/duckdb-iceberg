@@ -210,7 +210,7 @@ ADDED
 query I
 select distinct content from iceberg_metadata('my_datalake.default.insert_test');
 ----
-EXISTING
+DATA
 
 query I
 select distinct manifest_content from iceberg_metadata('my_datalake.default.insert_test');
