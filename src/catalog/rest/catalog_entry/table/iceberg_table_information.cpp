@@ -26,6 +26,43 @@
 
 namespace duckdb {
 
+//! Attempt to refresh the catalog's storage secret if it supports auto-refresh.
+//! Rebuilds the secret via its original provider (e.g., web_identity/sts credential chain)
+//! which fetches fresh STS tokens. No-op if the secret lacks refresh_info.
+static bool TryRefreshStorageSecret(ClientContext &context, const SecretEntry &secret_entry) {
+	const auto &kv_secret = dynamic_cast<const KeyValueSecret &>(*secret_entry.secret);
+	Value refresh_info;
+	if (!kv_secret.TryGetValue("refresh_info", refresh_info)) {
+		return false;
+	}
+
+	// Reconstruct a CreateSecretInput from refresh_info — this mirrors what httpfs does
+	CreateSecretInput refresh_input;
+	refresh_input.on_conflict = OnCreateConflict::REPLACE_ON_CONFLICT;
+	refresh_input.persist_type = SecretPersistType::TEMPORARY;
+	refresh_input.type = kv_secret.GetType();
+	refresh_input.name = kv_secret.GetName();
+	refresh_input.provider = kv_secret.GetProvider();
+	refresh_input.storage_type = secret_entry.storage_mode;
+	refresh_input.scope = kv_secret.GetScope();
+
+	auto child_count = StructType::GetChildCount(refresh_info.type());
+	auto children = StructValue::GetChildren(refresh_info);
+	for (idx_t i = 0; i < child_count; i++) {
+		auto &key = StructType::GetChildName(refresh_info.type(), i);
+		refresh_input.options[key] = children[i];
+	}
+
+	try {
+		auto &secret_manager = context.db->GetSecretManager();
+		(void)secret_manager.CreateSecret(context, refresh_input);
+		return true;
+	} catch (std::exception &) {
+		// Refresh failed — caller will proceed with existing (possibly expired) credentials
+		return false;
+	}
+}
+
 const string &IcebergTableInformation::BaseFilePath() const {
 	return table_metadata.location;
 }
@@ -173,17 +210,21 @@ IRCAPITableCredentials IcebergTableInformation::GetVendedCredentials(ClientConte
 	if (catalog.auth_handler->type == IcebergAuthorizationType::SIGV4) {
 		auto &sigv4_auth = catalog.auth_handler->Cast<SIGV4Authorization>();
 		auto catalog_credentials = IcebergCatalog::GetStorageSecret(context, sigv4_auth.secret);
-		// start with the credentials needed for the catalog and overwrite information contained
-		// in the vended credentials. We do it this way to maintain the region info from the catalog credentials
+		// Start with the credentials needed for the catalog and overwrite information contained
+		// in the vended credentials. We do it this way to maintain the region info from the catalog credentials.
 		if (catalog_credentials) {
+			// Attempt to refresh the catalog secret before snapshotting its values.
+			// This ensures we start with fresh credentials if the secret supports auto-refresh
+			// (e.g., web_identity or sts credential chains).
+			TryRefreshStorageSecret(context, *catalog_credentials);
+			// Re-fetch to get the (potentially) refreshed credentials
+			catalog_credentials = IcebergCatalog::GetStorageSecret(context, sigv4_auth.secret);
+
 			auto kv_secret = dynamic_cast<const KeyValueSecret &>(*catalog_credentials->secret);
 			for (auto &option : kv_secret.secret_map) {
-				// Ignore refresh info.
-				// if the credentials are the same as for the catalog, then refreshing the catalog secret is enough
-				// otherwise the vended credentials contain their own information for refreshing.
-				if (option.first != "refresh_info" && option.first != "refresh") {
-					user_defaults.emplace(option);
-				}
+				// Propagate refresh_info so that per-table secrets can be auto-refreshed by httpfs
+				// when credentials expire during long-running queries.
+				user_defaults.emplace(option);
 			}
 		}
 		if (!sigv4_auth.sigv4_region.empty()) {
