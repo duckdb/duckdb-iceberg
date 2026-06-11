@@ -730,7 +730,8 @@ static const IcebergParquetOptionMapping ICEBERG_TABLE_PROPERTY_MAPPING[] = {
     {"write.parquet.dict-size-bytes", "string_dictionary_page_size_limit"},
     {"write.parquet.row-group-size", "row_group_size"},
     {"write.parquet.page-size-bytes", "chunk_size"},
-    {"write.parquet.row-groups-per-file", "row_groups_per_file"}};
+    {"write.parquet.row-groups-per-file", "row_groups_per_file"},
+    {"write.parquet.format-version", "parquet_version"}};
 
 static const idx_t ICEBERG_TABLE_PROPERTY_MAPPING_SIZE =
     sizeof(ICEBERG_TABLE_PROPERTY_MAPPING) / sizeof(IcebergParquetOptionMapping);
