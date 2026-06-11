@@ -9,7 +9,7 @@ require parquet
 
 require iceberg
 
-require-env FIXTURE_SERVER_AVAILABLE
+require-env CATALOG_TEST_CONFIG_SETUP fixture
 
 statement ok
 set enable_logging=true

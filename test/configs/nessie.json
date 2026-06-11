@@ -8,6 +8,12 @@
     "iceberg",
     "httpfs"
   ],
+  "test_env": [
+    {
+      "env_name": "CATALOG_TEST_CONFIG_SETUP",
+      "env_value": "nessie"
+    }
+  ],
   "skip_tests": [
     {
       "reason": "V3 tests, not yet supported with Nessie",

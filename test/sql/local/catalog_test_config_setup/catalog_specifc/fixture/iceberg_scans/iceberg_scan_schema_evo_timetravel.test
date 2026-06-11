@@ -9,9 +9,7 @@ require iceberg
 
 require httpfs
 
-require-env CATALOG_TEST_CONFIG_SETUP
-
-require-env FIXTURE_SERVER_AVAILABLE
+require-env CATALOG_TEST_CONFIG_SETUP fixture
 
 query I
 select count(snapshot_id::BIGINT) from iceberg_snapshots(

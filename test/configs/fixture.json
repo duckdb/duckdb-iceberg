@@ -8,5 +8,11 @@
     "iceberg",
     "httpfs",
     "icu"
+  ],
+  "test_env": [
+    {
+      "env_name": "CATALOG_TEST_CONFIG_SETUP",
+      "env_value": "fixture"
+    }
   ]
 }

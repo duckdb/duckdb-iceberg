@@ -2,9 +2,7 @@
 # description: test integration with iceberg catalog read
 # group: [polaris]
 
-require-env CATALOG_TEST_CONFIG_SETUP
-
-require-env POLARIS_SERVER_AVAILABLE
+require-env CATALOG_TEST_CONFIG_SETUP polaris
 
 require avro
 

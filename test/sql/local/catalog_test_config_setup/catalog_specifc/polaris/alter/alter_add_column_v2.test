@@ -1,9 +1,7 @@
 # name: test/sql/local/catalog_test_config_setup/catalog_specifc/polaris/alter/alter_add_column_v2.test
 # group: [alter]
 
-require-env CATALOG_TEST_CONFIG_SETUP
-
-require-env POLARIS_SERVER_AVAILABLE
+require-env CATALOG_TEST_CONFIG_SETUP polaris
 
 require avro
 

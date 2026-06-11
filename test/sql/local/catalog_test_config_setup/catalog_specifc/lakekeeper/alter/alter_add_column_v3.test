@@ -1,9 +1,7 @@
 # name: test/sql/local/catalog_test_config_setup/catalog_specifc/lakekeeper/alter/alter_add_column_v3.test
 # group: [alter]
 
-require-env CATALOG_TEST_CONFIG_SETUP
-
-require-env LAKEKEEPER_SERVER_AVAILABLE
+require-env CATALOG_TEST_CONFIG_SETUP lakekeeper
 
 require avro
 

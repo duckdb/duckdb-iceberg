@@ -1,7 +1,7 @@
 # name: test/sql/local/partitioning/foldable_expression_filter.test
 # group: [partitioning]
 
-require-env FIXTURE_SERVER_AVAILABLE
+require-env CATALOG_TEST_CONFIG_SETUP fixture
 
 require httpfs
 

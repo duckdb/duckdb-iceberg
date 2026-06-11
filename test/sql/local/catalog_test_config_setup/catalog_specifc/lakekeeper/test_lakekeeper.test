@@ -9,9 +9,7 @@ require parquet
 
 require iceberg
 
-require-env CATALOG_TEST_CONFIG_SETUP
-
-require-env LAKEKEEPER_SERVER_AVAILABLE
+require-env CATALOG_TEST_CONFIG_SETUP lakekeeper
 
 # Do not ignore 'HTTP' error messages!
 set ignore_error_messages

@@ -1,9 +1,7 @@
 # name: test/sql/local/catalog_test_config_setup/catalog_specifc/fixture/schema_properties/schema_properties_update_nested.test
 # group: [schema_properties]
 
-require-env CATALOG_TEST_CONFIG_SETUP
-
-require-env FIXTURE_SERVER_AVAILABLE
+require-env CATALOG_TEST_CONFIG_SETUP fixture
 
 statement ok
 drop table if exists my_datalake."my.nested.namespace".table1;

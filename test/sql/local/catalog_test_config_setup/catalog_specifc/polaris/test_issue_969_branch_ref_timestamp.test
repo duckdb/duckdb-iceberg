@@ -2,9 +2,7 @@
 # description: duckdb-iceberg#969 - default read must follow refs.main, not pick the largest timestamp_ms across all branch refs.
 # group: [polaris]
 
-require-env CATALOG_TEST_CONFIG_SETUP
-
-require-env POLARIS_SERVER_AVAILABLE
+require-env CATALOG_TEST_CONFIG_SETUP polaris
 
 require avro
 

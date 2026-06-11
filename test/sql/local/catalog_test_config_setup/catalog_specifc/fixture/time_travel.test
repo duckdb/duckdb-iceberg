@@ -10,9 +10,7 @@ require iceberg
 
 require httpfs
 
-require-env CATALOG_TEST_CONFIG_SETUP
-
-require-env FIXTURE_SERVER_AVAILABLE
+require-env CATALOG_TEST_CONFIG_SETUP fixture
 
 # Do not ignore 'HTTP' error messages!
 set ignore_error_messages
