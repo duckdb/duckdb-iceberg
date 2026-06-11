@@ -72,12 +72,11 @@ s_acctbal	DECIMAL(15,2)
 s_comment	VARCHAR
 
 # schema default is saved between queries
-# one request to the table information endpoint
-# FIXME: apparantly there is also a request to an avro file
+# table info + table metadata; no manifest list needed for DESCRIBE
 query I
 select count(*) from duckdb_logs_parsed('HTTP');
 ----
-3
+2
 
 statement ok
 begin;

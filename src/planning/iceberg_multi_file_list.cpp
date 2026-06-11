@@ -216,10 +216,6 @@ void IcebergMultiFileList::Bind(vector<LogicalType> &return_types, vector<string
 		scan_info = make_shared_ptr<IcebergScanInfo>(iceberg_path, std::move(temp_data), snapshot_info, *schema);
 	}
 
-	if (!initialized) {
-		InitializeFiles(guard);
-	}
-
 	auto &schema = GetSchema().columns;
 	for (auto &schema_entry : schema) {
 		names.push_back(schema_entry->name);
@@ -322,10 +318,6 @@ vector<OpenFileInfo> IcebergMultiFileList::GetAllFiles() const {
 }
 
 FileExpandResult IcebergMultiFileList::GetExpandResult() const {
-	// GetFileInternal(1) will ensure files with index 0 and index 1 are expanded if they are available
-	lock_guard<mutex> guard(lock);
-	GetFileInternal(1, guard);
-
 	// always return multiple files, In the case there is only 1 data file,
 	// we only lose performance if it is small
 	return FileExpandResult::MULTIPLE_FILES;
@@ -349,9 +341,10 @@ unique_ptr<NodeStatistics> IcebergMultiFileList::GetCardinality(ClientContext &c
 		return nullptr;
 	}
 
-	//! Make sure we have fetched all manifests
-	(void)GetTotalFileCount();
-	D_ASSERT(initialized);
+	if (!initialized) {
+		//! Avoid forcing manifest initialization before filter pushdown has had a chance to narrow the table.
+		return nullptr;
+	}
 
 	idx_t cardinality = 0;
 	for (idx_t i = 0; i < data_manifests.size(); i++) {
@@ -398,6 +391,11 @@ const IcebergManifestFile &IcebergMultiFileList::GetManifestFileForEntry(const B
 void IcebergMultiFileList::GetStatistics(vector<PartitionStatistics> &result) const {
 	if (GetMetadata().iceberg_version == 1) {
 		//! We collect no statistics information from manifests for V1 tables.
+		return;
+	}
+
+	if (!initialized) {
+		//! Avoid forcing manifest initialization before filter pushdown has had a chance to narrow the table.
 		return;
 	}
 
