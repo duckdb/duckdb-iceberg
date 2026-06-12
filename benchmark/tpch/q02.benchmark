@@ -1,0 +1,7 @@
+# name: benchmark/tpch/sf10/q02.benchmark
+# description: Run query 02 from the TPC-H benchmark
+# group: [sf10]
+
+template benchmark/tpch/tpch.benchmark.in
+QUERY_NUMBER=2
+QUERY_NUMBER_PADDED=02

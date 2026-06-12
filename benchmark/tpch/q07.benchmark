@@ -1,0 +1,7 @@
+# name: benchmark/tpch/sf10/q07.benchmark
+# description: Run query 07 from the TPC-H benchmark
+# group: [sf10]
+
+template benchmark/tpch/tpch.benchmark.in
+QUERY_NUMBER=7
+QUERY_NUMBER_PADDED=07
