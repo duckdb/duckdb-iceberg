@@ -50,6 +50,10 @@ jobs:
         run: |
           make release
 
+      - name: Run C++ logic unit tests (MergeAppend #790 / commit-retry #786)
+        run: |
+          make test_logic
+
       - name: Upload DuckDB-Iceberg no link folder
         uses: actions/upload-artifact@v4
         with:

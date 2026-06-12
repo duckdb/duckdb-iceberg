@@ -519,6 +519,13 @@ optional_ptr<CatalogEntry> IcebergTableInformation::GetLatestSchema(ClientContex
 	return GetSchemaVersion(context, nullptr);
 }
 
+optional_ptr<CatalogEntry> IcebergTableInformation::GetCurrentSchemaEntry() {
+	//! No snapshot-isolation rewind: resolve the entry for the current metadata's schema directly.
+	//! Used by the commit path, which always operates against the latest (refreshed) metadata.
+	D_ASSERT(!schema_versions.empty());
+	return schema_versions[table_metadata.GetCurrentSchemaId()].get();
+}
+
 string IcebergTableInformation::GetTableKey(const vector<string> &namespace_items, const string &table_name) {
 	if (namespace_items.empty()) {
 		return table_name;

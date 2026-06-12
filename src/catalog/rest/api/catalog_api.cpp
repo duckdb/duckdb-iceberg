@@ -1,4 +1,5 @@
 #include "catalog/rest/api/catalog_api.hpp"
+#include "catalog/rest/api/iceberg_commit_exceptions.hpp"
 
 #include "duckdb/main/secret/secret.hpp"
 #include "duckdb/main/secret/secret_manager.hpp"
@@ -10,6 +11,7 @@
 #include "catalog/rest/api/catalog_utils.hpp"
 #include "iceberg_logging.hpp"
 #include "catalog/rest/iceberg_catalog.hpp"
+#include "catalog/rest/catalog_entry/table/iceberg_table_information.hpp"
 #include "catalog/rest/catalog_entry/schema/iceberg_schema_entry.hpp"
 #include "catalog/rest/catalog_entry/table/iceberg_table_entry.hpp"
 #include "common/iceberg_utils.hpp"
@@ -76,6 +78,40 @@ static void LogPostBody(ClientContext &context, const IRCEndpointBuilder &url_bu
 		body_to_log = body;
 	}
 	DUCKDB_LOG(context, IcebergLogType, "POST %s body=%s", url_builder.GetURLEncoded(), body_to_log);
+}
+
+//! Send a commit POST, converting a transport-level throw (connection reset / timeout / DNS, which
+//! makes the HTTP layer throw rather than return a status) into an UNKNOWN-outcome commit exception.
+//! A commit POST that failed in transit is ambiguous: it may have reached the catalog and been
+//! applied, so the retry driver must run a status-check and never clean up data files (design doc
+//! B13a). Shared by the single- and multi-table commit paths so this safety-critical conversion is
+//! defined once.
+static unique_ptr<HTTPResponse> SendCommitPost(ClientContext &context, IcebergCatalog &catalog,
+                                               IRCEndpointBuilder &url_builder, HTTPHeaders &headers,
+                                               const string &body) {
+	try {
+		return catalog.auth_handler->Request(RequestType::POST_REQUEST, context, url_builder, headers, body);
+	} catch (std::exception &ex) {
+		ErrorData error(ex);
+		throw IcebergCommitException(IcebergCommitOutcome::UNKNOWN,
+		                             StringUtil::Format("Commit request to '%s' failed at the transport level (outcome "
+		                                                "unknown, not retried blindly): %s",
+		                                                url_builder.GetURLEncoded(), error.RawMessage()));
+	}
+}
+
+//! Throw the right exception for a non-2xx commit response: FATAL keeps the original exception type
+//! so non-retry callers are unaffected; CONFLICT/UNKNOWN throw the retry-classified exception,
+//! honoring any server-supplied Retry-After (e.g. a rate-limited 429/503). Shared by both commit
+//! paths so the classification + Retry-After handling cannot drift between them.
+static void ThrowCommitResponseError(const HTTPResponse &response, const string &message) {
+	auto outcome = ClassifyCommitStatus(response.status);
+	if (outcome == IcebergCommitOutcome::FATAL) {
+		throw InvalidConfigurationException(message);
+	}
+	auto retry_after_ms =
+	    response.HasHeader("Retry-After") ? ParseRetryAfterMs(response.GetHeaderValue("Retry-After")) : -1;
+	throw IcebergCommitException(outcome, message, retry_after_ms);
 }
 
 static IRCEntryLookupStatus CheckVerificationResponse(ClientContext &context, HTTPStatusCode &status) {
@@ -377,26 +413,25 @@ void IRCAPI::CommitMultiTableUpdate(ClientContext &context, IcebergCatalog &cata
 	HTTPHeaders headers(*context.db);
 	headers.Insert("Content-Type", "application/json");
 	LogPostBody(context, url_builder, body);
-	auto response = catalog.auth_handler->Request(RequestType::POST_REQUEST, context, url_builder, headers, body);
+	auto response = SendCommitPost(context, catalog, url_builder, headers, body);
 	if (response->status != HTTPStatusCode::OK_200 && response->status != HTTPStatusCode::NoContent_204) {
 		std::unique_ptr<yyjson_doc, YyjsonDocDeleter> out_doc;
 		yyjson_val *error_obj = ICUtils::GetErrorMessage(response->body, out_doc);
-		if (error_obj == nullptr) {
-			throw InvalidConfigurationException(response->body);
-		}
-		auto error = rest_api_objects::IcebergErrorResponse::FromJSON(error_obj);
-		string stack_trace;
-		for (const auto &str : error._error.stack) {
-			stack_trace.append(str + "\n");
-		}
-		DUCKDB_LOG(context, IcebergLogType, stack_trace);
 
-		// Omit stack from error output
-		error._error.stack = vector<string>();
-		throw InvalidConfigurationException(
-		    "Request to '%s' returned a non-200 status code (%s). \n message: %s\n type: %s\n reason: %s\n",
-		    url_builder.GetURLEncoded(), EnumUtil::ToString(response->status), error._error.message, error._error.type,
-		    response->reason);
+		string message = response->body;
+		if (error_obj != nullptr) {
+			auto error = rest_api_objects::IcebergErrorResponse::FromJSON(error_obj);
+			string stack_trace;
+			for (const auto &str : error._error.stack) {
+				stack_trace.append(str + "\n");
+			}
+			DUCKDB_LOG(context, IcebergLogType, stack_trace);
+			message = StringUtil::Format(
+			    "Request to '%s' returned a non-200 status code (%s). \n message: %s\n type: %s\n reason: %s\n",
+			    url_builder.GetURLEncoded(), EnumUtil::ToString(response->status), error._error.message,
+			    error._error.type, response->reason);
+		}
+		ThrowCommitResponseError(*response, message);
 	}
 }
 
@@ -411,11 +446,35 @@ void IRCAPI::CommitTableUpdate(ClientContext &context, IcebergCatalog &catalog, 
 	HTTPHeaders headers(*context.db);
 	headers.Insert("Content-Type", "application/json");
 	LogPostBody(context, url_builder, body);
-	auto response = catalog.auth_handler->Request(RequestType::POST_REQUEST, context, url_builder, headers, body);
+	auto response = SendCommitPost(context, catalog, url_builder, headers, body);
 	if (response->status != HTTPStatusCode::OK_200 && response->status != HTTPStatusCode::NoContent_204) {
-		throw InvalidConfigurationException(
-		    "Request to '%s' returned a non-200 status code (%s), with reason: %s, body: %s",
-		    url_builder.GetURLEncoded(), EnumUtil::ToString(response->status), response->reason, response->body);
+		auto message =
+		    StringUtil::Format("Request to '%s' returned a non-200 status code (%s), with reason: %s, body: %s",
+		                       url_builder.GetURLEncoded(), EnumUtil::ToString(response->status), response->reason,
+		                       response->body);
+		ThrowCommitResponseError(*response, message);
+	}
+
+	//! Success: the Iceberg REST UpdateTable response carries the new LoadTableResult (full committed
+	//! metadata). Refill the per-table cache with it so the next operation reuses it instead of
+	//! issuing a fresh GET -- this is exactly what Java's RESTTableOperations.commit() does via
+	//! updateCurrentMetadata(response). Best-effort: a catalog returning an empty/partial body (or
+	//! 204) must not fail the (already successful) commit, so swallow any parse error and leave the
+	//! cache to be refreshed by the normal GET path. The refill is only consulted when
+	//! max_table_staleness is enabled (otherwise SetOrOverwrite stores it already-expired).
+	try {
+		if (!response->body.empty()) {
+			auto doc = ICUtils::APIResultToDoc(response->body);
+			auto *root = yyjson_doc_get_root(doc.get());
+			if (root) {
+				auto load_result = make_uniq<const rest_api_objects::LoadTableResult>(
+				    rest_api_objects::LoadTableResult::FromJSON(root));
+				auto table_key = IcebergTableInformation::GetTableKey(schema, table);
+				catalog.table_request_cache.SetOrOverwrite(context, table_key, std::move(load_result));
+			}
+		}
+	} catch (std::exception &refill_ex) {
+		// Ignore: commit already succeeded; the cache will be (re)loaded by the normal GET path.
 	}
 }
 

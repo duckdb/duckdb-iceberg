@@ -1,0 +1,65 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/transactions/test_commit_retry_concurrent.test
+# description: Commit retry (#786) end-to-end. Many connections insert into the SAME table at once.
+#   Each commit races against the others on the table's current snapshot; losers get a 409 conflict,
+#   refresh the metadata, regenerate manifests against the new parent, and retry (optimistic
+#   concurrency). The test passes only if EVERY concurrent insert eventually lands -- i.e. the retry
+#   loop actually re-bases and re-commits rather than dropping conflicting commits.
+# group: [transactions]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+# Requires a catalog that enforces serializable commits (real compare-and-swap on the table ref), so
+# a stale-parent commit gets a 409 the retry loop can re-base on. The apache/iceberg-rest-fixture used
+# by the fixture CI job is SQLite-backed and does NOT enforce this under true parallelism -- it returns
+# 200 to commits that should conflict, silently dropping them, which no client retry can recover. We
+# therefore gate this on the Lakekeeper (Postgres-backed) CI job, where concurrent commits behave like
+# a production catalog (also verified manually against AWS S3 Tables). Skips cleanly elsewhere.
+require-env LAKEKEEPER_SERVER_AVAILABLE
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+set ignore_error_messages
+
+statement ok
+drop table if exists my_datalake.default.retry_concurrent;
+
+# Generous retry budget so the slowest loser still gets enough attempts under contention.
+statement ok
+create table my_datalake.default.retry_concurrent (
+	thread_id INTEGER,
+	seq INTEGER
+) WITH (
+	'commit.retry.num-retries' = '10',
+	'commit.retry.min-wait-ms' = '20',
+	'commit.retry.max-wait-ms' = '2000'
+);
+
+# 8 connections, each inserting one row into the shared table concurrently. Without a working retry
+# loop, conflicting commits would fail; with it, all 8 must succeed.
+concurrentloop i 0 8
+
+statement ok
+insert into my_datalake.default.retry_concurrent values (${i}, 1);
+
+endloop
+
+# All 8 concurrent inserts committed -> retry re-based and re-committed every loser.
+query I
+select count(*) from my_datalake.default.retry_concurrent;
+----
+8
+
+# Every thread id is present exactly once: no commit was lost or duplicated by the retry path.
+query I
+select count(distinct thread_id) from my_datalake.default.retry_concurrent;
+----
+8
+
+statement ok
+drop table my_datalake.default.retry_concurrent;

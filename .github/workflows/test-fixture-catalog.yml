@@ -23,6 +23,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       HTTP_PROXY_PUBLIC: http://localhost:8878
+      HTTP_FAULT_PROXY: http://localhost:8879
 
     steps:
       - name: Checkout repository
@@ -74,6 +75,14 @@ jobs:
         run: |
           source .venv-spark4/bin/activate
           mitmdump --mode regular@8878 --flow-detail 2 > mitmproxy.log 2>&1 &
+
+      - name: Run fault-injection mitmproxy (commit-retry #786 UNKNOWN status-check test)
+        shell: bash
+        run: |
+          source .venv-spark4/bin/activate
+          mitmdump --mode regular@8879 -s scripts/fault_injection_addon.py --flow-detail 1 > mitmproxy_fault.log 2>&1 &
+          # Give the proxy a moment to start listening and generate its CA cert.
+          sleep 3
 
       - name: Install Iceberg & Run Generic Tests Set local extension repo, Install iceberg from build/release/extension and remove require iceberg from tests
         if: inputs.local-extension-repo != ''

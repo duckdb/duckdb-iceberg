@@ -16,6 +16,9 @@ public:
 	bool IsEmpty() const {
 		return data_files.empty();
 	}
+	const unordered_set<string> &GetInvalidatedFiles() const {
+		return data_files;
+	}
 
 private:
 	//! The 'data_file.file_path' of invalidated data files

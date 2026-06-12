@@ -47,8 +47,18 @@ public:
 
 	ClientContext &context;
 
+	//! Resolved Avro codec for manifests written during this commit ("null"/"deflate"), decided once
+	//! per apply from write.manifest.compression-codec AND the catalog's delete capability. All
+	//! manifest/manifest-list writes in the apply path use it.
+	string manifest_avro_codec = "null";
+
 	//! All the 'manifest_file' entries we will write to the new manifest list
 	vector<IcebergManifestListEntry> manifests;
+	//! Paths of manifest / manifest-list files written while applying this commit. Tracked so that a
+	//! failed transaction (or a discarded retry attempt) can delete the metadata files it wrote,
+	//! instead of leaking them (the data files are cleaned separately). Never deleted on success --
+	//! they are referenced by the committed snapshot.
+	vector<string> written_metadata_paths;
 	rest_api_objects::CommitTableRequest table_change;
 };
 

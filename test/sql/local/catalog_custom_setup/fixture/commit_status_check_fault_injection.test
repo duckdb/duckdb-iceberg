@@ -1,0 +1,107 @@
+# name: test/sql/local/catalog_custom_setup/fixture/commit_status_check_fault_injection.test
+# description: Commit retry (#786) UNKNOWN-outcome status-check, end-to-end with fault injection.
+#   A mitmproxy addon (scripts/fault_injection_addon.py) lets the catalog actually apply the commit
+#   but rewrites its successful response to a 502 for a table named with the marker
+#   "inject_unknown_once". The extension must NOT treat this as a hard failure or clean up data files;
+#   its status-check must re-load the table, find the committed snapshot, and resolve the commit as
+#   success -- so the rows are present and nothing is lost. This exercises the
+#   IcebergCommitOutcome::UNKNOWN -> CheckCommitStatus -> ALL_COMMITTED path that SQL alone cannot
+#   trigger. Routed through a dedicated fault-injecting proxy (HTTP_FAULT_PROXY) so only this test sees
+#   the injected fault.
+# group: [fixture]
+
+require-env HTTP_FAULT_PROXY
+
+require-env FIXTURE_SERVER_AVAILABLE
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+# This test depends on connection behavior; do not silently swallow HTTP errors.
+set ignore_error_messages
+
+statement ok
+CREATE SECRET (
+    TYPE S3,
+    KEY_ID 'admin',
+    SECRET 'password',
+    ENDPOINT '127.0.0.1:9000',
+    URL_STYLE 'path',
+    USE_SSL 0,
+    http_proxy '${HTTP_FAULT_PROXY}',
+    VERIFY_SSL 0
+);
+
+statement ok
+SET ca_cert_file = '~/.mitmproxy/mitmproxy-ca-cert.pem';
+
+statement ok
+CREATE SECRET http_proxy (
+    TYPE HTTP,
+    http_proxy '${HTTP_FAULT_PROXY}'
+);
+
+statement ok
+ATTACH '' AS my_datalake (
+    TYPE ICEBERG,
+    CLIENT_ID 'admin',
+    CLIENT_SECRET 'password',
+    ENDPOINT 'http://127.0.0.1:8181'
+);
+
+statement ok
+drop table if exists my_datalake.default.inject_unknown_once_tbl;
+
+statement ok
+create table my_datalake.default.inject_unknown_once_tbl (id INTEGER, data VARCHAR);
+
+# Snapshot the fault-proxy log length before the injected insert, so we can assert below that the
+# proxy actually rewrote the commit response to 502 (otherwise a mis-wired proxy / unmatched marker
+# would let a normal 200 through and this test would pass without exercising the UNKNOWN path).
+statement ok
+CREATE TABLE fault_log_tracker AS SELECT len(content) AS log_length FROM read_text('mitmproxy_fault.log');
+
+# This insert's commit response is rewritten to 502 by the proxy, but the catalog applied it. The
+# extension must resolve the ambiguous outcome via the status-check and report success.
+statement ok
+insert into my_datalake.default.inject_unknown_once_tbl values (1, 'a'), (2, 'b');
+
+# The fault was actually injected: the proxy logged the rewrite for this table's commit.
+query I
+SELECT regexp_matches(
+    substr((SELECT content FROM read_text('mitmproxy_fault.log')), (SELECT log_length FROM fault_log_tracker) + 1),
+    'ICEBERG_FAULT_INJECTED.*inject_unknown_once'
+);
+----
+true
+
+# The committed snapshot must be visible and complete: no data loss, no duplication from a spurious
+# retry, no corruption from an erroneous cleanup of the (actually committed) files.
+query II
+select id, data from my_datalake.default.inject_unknown_once_tbl order by id;
+----
+1	a
+2	b
+
+query I
+select count(*) from my_datalake.default.inject_unknown_once_tbl;
+----
+2
+
+# A subsequent normal commit (injection budget exhausted) still works, proving the table is in a
+# consistent state after the resolved-UNKNOWN commit.
+statement ok
+insert into my_datalake.default.inject_unknown_once_tbl values (3, 'c');
+
+query I
+select count(*) from my_datalake.default.inject_unknown_once_tbl;
+----
+3
+
+statement ok
+drop table my_datalake.default.inject_unknown_once_tbl;

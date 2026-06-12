@@ -1,0 +1,108 @@
+# name: test/sql/local/catalog_custom_setup/fixture/commit_status_check_none_committed.test
+# description: Commit retry (#786) UNKNOWN-outcome status-check, NONE_COMMITTED branch, end-to-end.
+#   A mitmproxy addon (scripts/fault_injection_addon.py) answers the FIRST commit POST for a table
+#   named with the marker "inject_fail_before_apply_once" with a 502 in the REQUEST hook, WITHOUT
+#   forwarding it to the catalog -- so the commit provably never applied. The extension classifies
+#   the 502 as UNKNOWN, runs its status-check, finds its snapshot id absent on reload (NONE_COMMITTED),
+#   and therefore safely RETRIES. The second attempt (injection budget exhausted) reaches the catalog
+#   and succeeds. This exercises the UNKNOWN -> CheckCommitStatus -> NONE_COMMITTED -> retry-to-success
+#   path (a transient 5xx that never reached/applied at the catalog), complementing the ALL_COMMITTED
+#   test (commit landed but response lost). Routed through a dedicated fault-injecting proxy so only
+#   this test sees the injected fault.
+# group: [fixture]
+
+require-env HTTP_FAULT_PROXY
+
+require-env FIXTURE_SERVER_AVAILABLE
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+# This test depends on connection behavior; do not silently swallow HTTP errors.
+set ignore_error_messages
+
+statement ok
+CREATE SECRET (
+    TYPE S3,
+    KEY_ID 'admin',
+    SECRET 'password',
+    ENDPOINT '127.0.0.1:9000',
+    URL_STYLE 'path',
+    USE_SSL 0,
+    http_proxy '${HTTP_FAULT_PROXY}',
+    VERIFY_SSL 0
+);
+
+statement ok
+SET ca_cert_file = '~/.mitmproxy/mitmproxy-ca-cert.pem';
+
+statement ok
+CREATE SECRET http_proxy (
+    TYPE HTTP,
+    http_proxy '${HTTP_FAULT_PROXY}'
+);
+
+statement ok
+ATTACH '' AS my_datalake (
+    TYPE ICEBERG,
+    CLIENT_ID 'admin',
+    CLIENT_SECRET 'password',
+    ENDPOINT 'http://127.0.0.1:8181'
+);
+
+statement ok
+drop table if exists my_datalake.default.inject_fail_before_apply_once_tbl;
+
+statement ok
+create table my_datalake.default.inject_fail_before_apply_once_tbl (id INTEGER, data VARCHAR);
+
+# Snapshot the fault-proxy log length before the injected insert, so we can assert below that the
+# proxy actually short-circuited the first commit (otherwise a mis-wired proxy / unmatched marker
+# would let the commit through and this test would pass without exercising the NONE_COMMITTED path).
+statement ok
+CREATE TABLE fault_log_tracker AS SELECT len(content) AS log_length FROM read_text('mitmproxy_fault.log');
+
+# The first commit POST is rewritten to 502 before reaching the catalog (the commit does NOT apply).
+# The extension sees UNKNOWN, status-checks (snapshot absent -> NONE_COMMITTED), and retries; the
+# retry is not injected and succeeds. The statement therefore SUCCEEDS overall, with the row present
+# exactly once (no double-apply, no loss).
+statement ok
+insert into my_datalake.default.inject_fail_before_apply_once_tbl values (1, 'a'), (2, 'b');
+
+# The fault was actually injected from the REQUEST hook for this table's commit.
+query I
+SELECT regexp_matches(
+    substr((SELECT content FROM read_text('mitmproxy_fault.log')), (SELECT log_length FROM fault_log_tracker) + 1),
+    'ICEBERG_FAULT_INJECTED.*hook=request.*inject_fail_before_apply_once'
+);
+----
+true
+
+# The retried commit landed exactly once: both rows present, none duplicated by the retry.
+query II
+select id, data from my_datalake.default.inject_fail_before_apply_once_tbl order by id;
+----
+1	a
+2	b
+
+query I
+select count(*) from my_datalake.default.inject_fail_before_apply_once_tbl;
+----
+2
+
+# A subsequent normal commit (injection budget exhausted) still works, proving consistent state.
+statement ok
+insert into my_datalake.default.inject_fail_before_apply_once_tbl values (3, 'c');
+
+query I
+select count(*) from my_datalake.default.inject_fail_before_apply_once_tbl;
+----
+3
+
+statement ok
+drop table my_datalake.default.inject_fail_before_apply_once_tbl;

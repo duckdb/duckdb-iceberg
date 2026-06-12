@@ -81,6 +81,21 @@ public:
 		return access_mode;
 	}
 	void DoTableUpdates(IcebergTransactionAlterUpdate &alter_update, ClientContext &context);
+	//! Build the REST request from the current state and submit it once (one commit attempt).
+	void SubmitTableUpdates(IcebergTransactionAlterUpdate &alter_update, ClientContext &context);
+	//! Refresh table metadata + reset per-table apply state before a retry attempt. Returns true if
+	//! a retry has a chance of succeeding (parent advanced), false to fail fast.
+	bool RefreshForRetry(IcebergTransactionAlterUpdate &alter_update, ClientContext &context);
+	//! Outcome of resolving an ambiguous (UNKNOWN) commit by re-loading the table.
+	enum class StatusCheckResult { ALL_COMMITTED, NONE_COMMITTED, UNKNOWN };
+	//! After an ambiguous commit failure, re-load every uncommitted table and check whether this
+	//! transaction's stable snapshot id(s) are present. Used to resolve UNKNOWN deterministically.
+	StatusCheckResult CheckCommitStatus(IcebergTransactionAlterUpdate &alter_update, ClientContext &context);
+	//! Before retrying a DELETE/OVERWRITE, verify the data files this operation targets still exist in
+	//! the refreshed parent. If a concurrent commit already removed one, retrying would be unsafe
+	//! (lost/duplicated delete), so throw a non-retryable error. APPEND-only commits have nothing to
+	//! validate. Mirrors Java's validateDataFilesExist for the delete/overwrite path.
+	void ValidateRetrySafe(IcebergTableInformation &table_info, ClientContext &context);
 	void DoTableDeletes(IcebergTransactionDeleteUpdate &delete_update, ClientContext &context);
 	void DoTableRename(IcebergTransactionRenameUpdate &rename_update, ClientContext &context);
 	void DoSchemaCreates(ClientContext &context);
