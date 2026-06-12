@@ -1,0 +1,38 @@
+# name: test/sql/cloud/gcloud/test_gcloud.test
+# group: [gcloud]
+
+require avro
+
+require parquet
+
+
+require httpfs
+
+require aws
+
+require tpch
+
+set ignore_error_messages
+
+mode skip
+
+# TO BE RUN LOCALLY ONLY
+# get the token by running `gcloud auth application-default print-access-token` locally
+# x-goog-user-project should be your google project id
+
+statement ok
+CREATE SECRET biglake_secret (
+             TYPE iceberg,
+             endpoint 'https://biglake.googleapis.com/iceberg/v1/restcatalog',
+             token '...',
+             extra_http_headers MAP {'x-goog-user-project': '...'}
+         );
+
+statement ok
+ATTACH 'gs://biglake-public-nyc-taxi-iceberg' AS bqms (
+   TYPE iceberg,
+   SECRET biglake_secret
+);
+
+statement ok
+select * from bqms.public_data.nyc_taxicab limit 10;
