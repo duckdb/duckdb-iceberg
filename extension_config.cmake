@@ -1,9 +1,13 @@
 # This file is included by DuckDB's build system. It specifies which extension to load
 if (NOT EMSCRIPTEN)
+  # TEMPORARY: points at the avro fork branch that implements copy_to_get_written_statistics
+  # (duckdb/duckdb-avro#105). Revert GIT_URL to https://github.com/duckdb/duckdb-avro and bump
+  # GIT_TAG to the merge commit once that PR lands. This extension's manifest writer uses that
+  # callback to record manifest_length without a read-back HEAD request on object stores.
   duckdb_extension_load(avro
   LOAD_TESTS
-  GIT_URL https://github.com/duckdb/duckdb-avro
-  GIT_TAG 7f423d69709045e38f8431b3470e0395fce1a595
+  GIT_URL https://github.com/cjnoname/duckdb-avro
+  GIT_TAG 5bc4505d0877aa9bf13c486661374f5134c142e1
 )
 endif()
 
