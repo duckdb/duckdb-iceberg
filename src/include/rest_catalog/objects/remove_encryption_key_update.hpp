@@ -22,6 +22,7 @@ public:
 
 public:
 	static RemoveEncryptionKeyUpdate FromJSON(yyjson_val *obj);
+	RemoveEncryptionKeyUpdate Copy() const;
 
 public:
 	string TryFromJSON(yyjson_val *obj);

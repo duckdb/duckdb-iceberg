@@ -24,6 +24,11 @@ StringTypeValue StringTypeValue::FromJSON(yyjson_val *obj) {
 	return res;
 }
 
+StringTypeValue StringTypeValue::Copy() const {
+	StringTypeValue res;
+	res.value = value;
+	return res;
+}
 string StringTypeValue::TryFromJSON(yyjson_val *obj) {
 	string error;
 	if (yyjson_is_str(obj)) {

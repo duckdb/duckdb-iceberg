@@ -24,6 +24,11 @@ TimestampTypeValue TimestampTypeValue::FromJSON(yyjson_val *obj) {
 	return res;
 }
 
+TimestampTypeValue TimestampTypeValue::Copy() const {
+	TimestampTypeValue res;
+	res.value = value;
+	return res;
+}
 string TimestampTypeValue::TryFromJSON(yyjson_val *obj) {
 	string error;
 	if (yyjson_is_str(obj)) {

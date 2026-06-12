@@ -24,6 +24,18 @@ PartitionSpec PartitionSpec::FromJSON(yyjson_val *obj) {
 	return res;
 }
 
+PartitionSpec PartitionSpec::Copy() const {
+	PartitionSpec res;
+	res.fields.reserve(fields.size());
+	for (auto &item : fields) {
+		res.fields.emplace_back(item.Copy());
+	}
+	if (has_spec_id) {
+		res.spec_id = spec_id;
+	}
+	res.has_spec_id = has_spec_id;
+	return res;
+}
 string PartitionSpec::TryFromJSON(yyjson_val *obj) {
 	string error;
 	auto fields_val = yyjson_obj_get(obj, "fields");

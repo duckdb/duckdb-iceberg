@@ -24,6 +24,19 @@ EqualityDeleteFile EqualityDeleteFile::FromJSON(yyjson_val *obj) {
 	return res;
 }
 
+EqualityDeleteFile EqualityDeleteFile::Copy() const {
+	EqualityDeleteFile res;
+	res.content_file = content_file.Copy();
+	res.content = content;
+	if (has_equality_ids) {
+		res.equality_ids.reserve(equality_ids.size());
+		for (auto &item : equality_ids) {
+			res.equality_ids.emplace_back(item);
+		}
+	}
+	res.has_equality_ids = has_equality_ids;
+	return res;
+}
 string EqualityDeleteFile::TryFromJSON(yyjson_val *obj) {
 	string error;
 	error = content_file.TryFromJSON(obj);

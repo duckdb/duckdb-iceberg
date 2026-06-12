@@ -24,6 +24,32 @@ ViewMetadata ViewMetadata::FromJSON(yyjson_val *obj) {
 	return res;
 }
 
+ViewMetadata ViewMetadata::Copy() const {
+	ViewMetadata res;
+	res.view_uuid = view_uuid;
+	res.format_version = format_version;
+	res.location = location;
+	res.current_version_id = current_version_id;
+	res.versions.reserve(versions.size());
+	for (auto &item : versions) {
+		res.versions.emplace_back(item.Copy());
+	}
+	res.version_log.reserve(version_log.size());
+	for (auto &item : version_log) {
+		res.version_log.emplace_back(item.Copy());
+	}
+	res.schemas.reserve(schemas.size());
+	for (auto &item : schemas) {
+		res.schemas.emplace_back(item.Copy());
+	}
+	if (has_properties) {
+		for (auto &entry : properties) {
+			res.properties.emplace(entry.first, entry.second);
+		}
+	}
+	res.has_properties = has_properties;
+	return res;
+}
 string ViewMetadata::TryFromJSON(yyjson_val *obj) {
 	string error;
 	auto view_uuid_val = yyjson_obj_get(obj, "view-uuid");

@@ -22,6 +22,7 @@ public:
 
 public:
 	static UpgradeFormatVersionUpdate FromJSON(yyjson_val *obj);
+	UpgradeFormatVersionUpdate Copy() const;
 
 public:
 	string TryFromJSON(yyjson_val *obj);

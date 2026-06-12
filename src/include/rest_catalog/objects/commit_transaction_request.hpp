@@ -22,6 +22,7 @@ public:
 
 public:
 	static CommitTransactionRequest FromJSON(yyjson_val *obj);
+	CommitTransactionRequest Copy() const;
 
 public:
 	string TryFromJSON(yyjson_val *obj);

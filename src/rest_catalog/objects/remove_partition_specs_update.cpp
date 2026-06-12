@@ -24,6 +24,19 @@ RemovePartitionSpecsUpdate RemovePartitionSpecsUpdate::FromJSON(yyjson_val *obj)
 	return res;
 }
 
+RemovePartitionSpecsUpdate RemovePartitionSpecsUpdate::Copy() const {
+	RemovePartitionSpecsUpdate res;
+	res.base_update = base_update.Copy();
+	res.spec_ids.reserve(spec_ids.size());
+	for (auto &item : spec_ids) {
+		res.spec_ids.emplace_back(item);
+	}
+	if (has_action) {
+		res.action = action;
+	}
+	res.has_action = has_action;
+	return res;
+}
 string RemovePartitionSpecsUpdate::TryFromJSON(yyjson_val *obj) {
 	string error;
 	error = base_update.TryFromJSON(obj);

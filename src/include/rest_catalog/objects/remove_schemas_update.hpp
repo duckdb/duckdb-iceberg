@@ -22,6 +22,7 @@ public:
 
 public:
 	static RemoveSchemasUpdate FromJSON(yyjson_val *obj);
+	RemoveSchemasUpdate Copy() const;
 
 public:
 	string TryFromJSON(yyjson_val *obj);

@@ -24,6 +24,11 @@ BooleanTypeValue BooleanTypeValue::FromJSON(yyjson_val *obj) {
 	return res;
 }
 
+BooleanTypeValue BooleanTypeValue::Copy() const {
+	BooleanTypeValue res;
+	res.value = value;
+	return res;
+}
 string BooleanTypeValue::TryFromJSON(yyjson_val *obj) {
 	string error;
 	if (yyjson_is_bool(obj)) {

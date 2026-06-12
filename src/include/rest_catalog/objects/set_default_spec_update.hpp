@@ -22,6 +22,7 @@ public:
 
 public:
 	static SetDefaultSpecUpdate FromJSON(yyjson_val *obj);
+	SetDefaultSpecUpdate Copy() const;
 
 public:
 	string TryFromJSON(yyjson_val *obj);

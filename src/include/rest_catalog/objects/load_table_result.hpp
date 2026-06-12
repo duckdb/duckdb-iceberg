@@ -23,6 +23,7 @@ public:
 
 public:
 	static LoadTableResult FromJSON(yyjson_val *obj);
+	LoadTableResult Copy() const;
 
 public:
 	string TryFromJSON(yyjson_val *obj);

@@ -21,6 +21,7 @@ public:
 
 public:
 	static StorageCredential FromJSON(yyjson_val *obj);
+	StorageCredential Copy() const;
 
 public:
 	string TryFromJSON(yyjson_val *obj);

@@ -24,6 +24,14 @@ ViewRequirement ViewRequirement::FromJSON(yyjson_val *obj) {
 	return res;
 }
 
+ViewRequirement ViewRequirement::Copy() const {
+	ViewRequirement res;
+	if (has_assert_view_uuid) {
+		res.assert_view_uuid = assert_view_uuid.Copy();
+	}
+	res.has_assert_view_uuid = has_assert_view_uuid;
+	return res;
+}
 string ViewRequirement::TryFromJSON(yyjson_val *obj) {
 	string error;
 	do {

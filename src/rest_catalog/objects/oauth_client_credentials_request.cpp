@@ -24,6 +24,17 @@ OAuthClientCredentialsRequest OAuthClientCredentialsRequest::FromJSON(yyjson_val
 	return res;
 }
 
+OAuthClientCredentialsRequest OAuthClientCredentialsRequest::Copy() const {
+	OAuthClientCredentialsRequest res;
+	res.grant_type = grant_type;
+	res.client_id = client_id;
+	res.client_secret = client_secret;
+	if (has_scope) {
+		res.scope = scope;
+	}
+	res.has_scope = has_scope;
+	return res;
+}
 string OAuthClientCredentialsRequest::TryFromJSON(yyjson_val *obj) {
 	string error;
 	auto grant_type_val = yyjson_obj_get(obj, "grant_type");

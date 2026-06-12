@@ -24,6 +24,25 @@ ViewVersion ViewVersion::FromJSON(yyjson_val *obj) {
 	return res;
 }
 
+ViewVersion ViewVersion::Copy() const {
+	ViewVersion res;
+	res.version_id = version_id;
+	res.timestamp_ms = timestamp_ms;
+	res.schema_id = schema_id;
+	for (auto &entry : summary) {
+		res.summary.emplace(entry.first, entry.second);
+	}
+	res.representations.reserve(representations.size());
+	for (auto &item : representations) {
+		res.representations.emplace_back(item.Copy());
+	}
+	res.default_namespace = default_namespace.Copy();
+	if (has_default_catalog) {
+		res.default_catalog = default_catalog;
+	}
+	res.has_default_catalog = has_default_catalog;
+	return res;
+}
 string ViewVersion::TryFromJSON(yyjson_val *obj) {
 	string error;
 	auto version_id_val = yyjson_obj_get(obj, "version-id");

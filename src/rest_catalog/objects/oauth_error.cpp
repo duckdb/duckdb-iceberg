@@ -24,6 +24,19 @@ OAuthError OAuthError::FromJSON(yyjson_val *obj) {
 	return res;
 }
 
+OAuthError OAuthError::Copy() const {
+	OAuthError res;
+	res._error = _error;
+	if (has_error_description) {
+		res.error_description = error_description;
+	}
+	res.has_error_description = has_error_description;
+	if (has_error_uri) {
+		res.error_uri = error_uri;
+	}
+	res.has_error_uri = has_error_uri;
+	return res;
+}
 string OAuthError::TryFromJSON(yyjson_val *obj) {
 	string error;
 	auto _error_val = yyjson_obj_get(obj, "error");

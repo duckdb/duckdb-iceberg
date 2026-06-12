@@ -24,6 +24,15 @@ StructType StructType::FromJSON(yyjson_val *obj) {
 	return res;
 }
 
+StructType StructType::Copy() const {
+	StructType res;
+	res.type = type;
+	res.fields.reserve(fields.size());
+	for (auto &item : fields) {
+		res.fields.emplace_back(item ? make_uniq<StructField>(item->Copy()) : nullptr);
+	}
+	return res;
+}
 string StructType::TryFromJSON(yyjson_val *obj) {
 	string error;
 	auto type_val = yyjson_obj_get(obj, "type");

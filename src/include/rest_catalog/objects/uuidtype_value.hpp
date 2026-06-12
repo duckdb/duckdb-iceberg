@@ -21,6 +21,7 @@ public:
 
 public:
 	static UUIDTypeValue FromJSON(yyjson_val *obj);
+	UUIDTypeValue Copy() const;
 
 public:
 	string TryFromJSON(yyjson_val *obj);

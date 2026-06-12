@@ -21,6 +21,7 @@ public:
 
 public:
 	static PageToken FromJSON(yyjson_val *obj);
+	PageToken Copy() const;
 
 public:
 	string TryFromJSON(yyjson_val *obj);

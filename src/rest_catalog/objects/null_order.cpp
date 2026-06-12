@@ -24,6 +24,11 @@ NullOrder NullOrder::FromJSON(yyjson_val *obj) {
 	return res;
 }
 
+NullOrder NullOrder::Copy() const {
+	NullOrder res;
+	res.value = value;
+	return res;
+}
 string NullOrder::TryFromJSON(yyjson_val *obj) {
 	string error;
 	if (yyjson_is_str(obj)) {

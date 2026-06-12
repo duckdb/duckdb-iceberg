@@ -24,6 +24,13 @@ TimerResult TimerResult::FromJSON(yyjson_val *obj) {
 	return res;
 }
 
+TimerResult TimerResult::Copy() const {
+	TimerResult res;
+	res.time_unit = time_unit;
+	res.count = count;
+	res.total_duration = total_duration;
+	return res;
+}
 string TimerResult::TryFromJSON(yyjson_val *obj) {
 	string error;
 	auto time_unit_val = yyjson_obj_get(obj, "time-unit");

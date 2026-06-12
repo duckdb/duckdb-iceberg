@@ -21,6 +21,7 @@ public:
 
 public:
 	static BinaryTypeValue FromJSON(yyjson_val *obj);
+	BinaryTypeValue Copy() const;
 
 public:
 	string TryFromJSON(yyjson_val *obj);

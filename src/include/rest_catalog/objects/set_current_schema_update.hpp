@@ -22,6 +22,7 @@ public:
 
 public:
 	static SetCurrentSchemaUpdate FromJSON(yyjson_val *obj);
+	SetCurrentSchemaUpdate Copy() const;
 
 public:
 	string TryFromJSON(yyjson_val *obj);

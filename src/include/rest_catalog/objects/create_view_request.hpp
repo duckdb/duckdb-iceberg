@@ -23,6 +23,7 @@ public:
 
 public:
 	static CreateViewRequest FromJSON(yyjson_val *obj);
+	CreateViewRequest Copy() const;
 
 public:
 	string TryFromJSON(yyjson_val *obj);

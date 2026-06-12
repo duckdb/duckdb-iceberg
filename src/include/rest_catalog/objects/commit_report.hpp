@@ -22,6 +22,7 @@ public:
 
 public:
 	static CommitReport FromJSON(yyjson_val *obj);
+	CommitReport Copy() const;
 
 public:
 	string TryFromJSON(yyjson_val *obj);

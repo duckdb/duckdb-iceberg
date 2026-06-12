@@ -24,6 +24,12 @@ ViewHistoryEntry ViewHistoryEntry::FromJSON(yyjson_val *obj) {
 	return res;
 }
 
+ViewHistoryEntry ViewHistoryEntry::Copy() const {
+	ViewHistoryEntry res;
+	res.version_id = version_id;
+	res.timestamp_ms = timestamp_ms;
+	return res;
+}
 string ViewHistoryEntry::TryFromJSON(yyjson_val *obj) {
 	string error;
 	auto version_id_val = yyjson_obj_get(obj, "version-id");

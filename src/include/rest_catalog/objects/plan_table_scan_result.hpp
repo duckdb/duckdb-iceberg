@@ -25,6 +25,7 @@ public:
 
 public:
 	static PlanTableScanResult FromJSON(yyjson_val *obj);
+	PlanTableScanResult Copy() const;
 
 public:
 	string TryFromJSON(yyjson_val *obj);

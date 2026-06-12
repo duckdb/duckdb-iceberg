@@ -26,6 +26,21 @@ Schema::Object1 Schema::Object1::FromJSON(yyjson_val *obj) {
 	return res;
 }
 
+Schema::Object1 Schema::Object1::Copy() const {
+	Object1 res;
+	if (has_schema_id) {
+		res.schema_id = schema_id;
+	}
+	res.has_schema_id = has_schema_id;
+	if (has_identifier_field_ids) {
+		res.identifier_field_ids.reserve(identifier_field_ids.size());
+		for (auto &item : identifier_field_ids) {
+			res.identifier_field_ids.emplace_back(item);
+		}
+	}
+	res.has_identifier_field_ids = has_identifier_field_ids;
+	return res;
+}
 string Schema::Object1::TryFromJSON(yyjson_val *obj) {
 	string error;
 	auto schema_id_val = yyjson_obj_get(obj, "schema-id");
@@ -72,6 +87,12 @@ Schema Schema::FromJSON(yyjson_val *obj) {
 	return res;
 }
 
+Schema Schema::Copy() const {
+	Schema res;
+	res.struct_type = struct_type.Copy();
+	res.object_1 = object_1.Copy();
+	return res;
+}
 string Schema::TryFromJSON(yyjson_val *obj) {
 	string error;
 	error = struct_type.TryFromJSON(obj);

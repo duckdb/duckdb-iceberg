@@ -24,6 +24,35 @@ ContentFile ContentFile::FromJSON(yyjson_val *obj) {
 	return res;
 }
 
+ContentFile ContentFile::Copy() const {
+	ContentFile res;
+	res.spec_id = spec_id;
+	res.partition.reserve(partition.size());
+	for (auto &item : partition) {
+		res.partition.emplace_back(item.Copy());
+	}
+	res.content = content;
+	res.file_path = file_path;
+	res.file_format = file_format.Copy();
+	res.file_size_in_bytes = file_size_in_bytes;
+	res.record_count = record_count;
+	if (has_key_metadata) {
+		res.key_metadata = key_metadata.Copy();
+	}
+	res.has_key_metadata = has_key_metadata;
+	if (has_split_offsets) {
+		res.split_offsets.reserve(split_offsets.size());
+		for (auto &item : split_offsets) {
+			res.split_offsets.emplace_back(item);
+		}
+	}
+	res.has_split_offsets = has_split_offsets;
+	if (has_sort_order_id) {
+		res.sort_order_id = sort_order_id;
+	}
+	res.has_sort_order_id = has_sort_order_id;
+	return res;
+}
 string ContentFile::TryFromJSON(yyjson_val *obj) {
 	string error;
 	auto spec_id_val = yyjson_obj_get(obj, "spec-id");

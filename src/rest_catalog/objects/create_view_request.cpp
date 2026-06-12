@@ -24,6 +24,20 @@ CreateViewRequest CreateViewRequest::FromJSON(yyjson_val *obj) {
 	return res;
 }
 
+CreateViewRequest CreateViewRequest::Copy() const {
+	CreateViewRequest res;
+	res.name = name;
+	res.schema = schema.Copy();
+	res.view_version = view_version.Copy();
+	for (auto &entry : properties) {
+		res.properties.emplace(entry.first, entry.second);
+	}
+	if (has_location) {
+		res.location = location;
+	}
+	res.has_location = has_location;
+	return res;
+}
 string CreateViewRequest::TryFromJSON(yyjson_val *obj) {
 	string error;
 	auto name_val = yyjson_obj_get(obj, "name");

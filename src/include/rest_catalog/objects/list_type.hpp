@@ -23,6 +23,7 @@ public:
 
 public:
 	static ListType FromJSON(yyjson_val *obj);
+	ListType Copy() const;
 
 public:
 	string TryFromJSON(yyjson_val *obj);

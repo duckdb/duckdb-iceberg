@@ -22,6 +22,7 @@ public:
 
 public:
 	static PartitionField FromJSON(yyjson_val *obj);
+	PartitionField Copy() const;
 
 public:
 	string TryFromJSON(yyjson_val *obj);

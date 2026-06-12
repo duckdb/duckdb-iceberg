@@ -24,6 +24,23 @@ BlobMetadata BlobMetadata::FromJSON(yyjson_val *obj) {
 	return res;
 }
 
+BlobMetadata BlobMetadata::Copy() const {
+	BlobMetadata res;
+	res.type = type;
+	res.snapshot_id = snapshot_id;
+	res.sequence_number = sequence_number;
+	res.fields.reserve(fields.size());
+	for (auto &item : fields) {
+		res.fields.emplace_back(item);
+	}
+	if (has_properties) {
+		for (auto &entry : properties) {
+			res.properties.emplace(entry.first, entry.second);
+		}
+	}
+	res.has_properties = has_properties;
+	return res;
+}
 string BlobMetadata::TryFromJSON(yyjson_val *obj) {
 	string error;
 	auto type_val = yyjson_obj_get(obj, "type");

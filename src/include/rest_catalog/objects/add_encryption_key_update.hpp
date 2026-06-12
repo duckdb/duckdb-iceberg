@@ -23,6 +23,7 @@ public:
 
 public:
 	static AddEncryptionKeyUpdate FromJSON(yyjson_val *obj);
+	AddEncryptionKeyUpdate Copy() const;
 
 public:
 	string TryFromJSON(yyjson_val *obj);

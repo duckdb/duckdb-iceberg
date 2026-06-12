@@ -24,6 +24,29 @@ OAuthTokenExchangeRequest OAuthTokenExchangeRequest::FromJSON(yyjson_val *obj) {
 	return res;
 }
 
+OAuthTokenExchangeRequest OAuthTokenExchangeRequest::Copy() const {
+	OAuthTokenExchangeRequest res;
+	res.grant_type = grant_type;
+	res.subject_token = subject_token;
+	res.subject_token_type = subject_token_type.Copy();
+	if (has_scope) {
+		res.scope = scope;
+	}
+	res.has_scope = has_scope;
+	if (has_requested_token_type) {
+		res.requested_token_type = requested_token_type.Copy();
+	}
+	res.has_requested_token_type = has_requested_token_type;
+	if (has_actor_token) {
+		res.actor_token = actor_token;
+	}
+	res.has_actor_token = has_actor_token;
+	if (has_actor_token_type) {
+		res.actor_token_type = actor_token_type.Copy();
+	}
+	res.has_actor_token_type = has_actor_token_type;
+	return res;
+}
 string OAuthTokenExchangeRequest::TryFromJSON(yyjson_val *obj) {
 	string error;
 	auto grant_type_val = yyjson_obj_get(obj, "grant_type");

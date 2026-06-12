@@ -24,6 +24,17 @@ CreateNamespaceResponse CreateNamespaceResponse::FromJSON(yyjson_val *obj) {
 	return res;
 }
 
+CreateNamespaceResponse CreateNamespaceResponse::Copy() const {
+	CreateNamespaceResponse res;
+	res._namespace = _namespace.Copy();
+	if (has_properties) {
+		for (auto &entry : properties) {
+			res.properties.emplace(entry.first, entry.second);
+		}
+	}
+	res.has_properties = has_properties;
+	return res;
+}
 string CreateNamespaceResponse::TryFromJSON(yyjson_val *obj) {
 	string error;
 	auto _namespace_val = yyjson_obj_get(obj, "namespace");

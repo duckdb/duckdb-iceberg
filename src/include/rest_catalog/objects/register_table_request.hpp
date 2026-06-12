@@ -21,6 +21,7 @@ public:
 
 public:
 	static RegisterTableRequest FromJSON(yyjson_val *obj);
+	RegisterTableRequest Copy() const;
 
 public:
 	string TryFromJSON(yyjson_val *obj);

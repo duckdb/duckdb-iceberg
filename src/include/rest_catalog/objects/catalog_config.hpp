@@ -21,6 +21,7 @@ public:
 
 public:
 	static CatalogConfig FromJSON(yyjson_val *obj);
+	CatalogConfig Copy() const;
 
 public:
 	string TryFromJSON(yyjson_val *obj);

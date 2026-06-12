@@ -24,6 +24,7 @@ public:
 
 public:
 	static ScanTasks FromJSON(yyjson_val *obj);
+	ScanTasks Copy() const;
 
 public:
 	string TryFromJSON(yyjson_val *obj);

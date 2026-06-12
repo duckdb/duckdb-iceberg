@@ -21,6 +21,7 @@ public:
 
 public:
 	static AssertViewUUID FromJSON(yyjson_val *obj);
+	AssertViewUUID Copy() const;
 
 public:
 	string TryFromJSON(yyjson_val *obj);

@@ -23,6 +23,7 @@ public:
 
 public:
 	static SetStatisticsUpdate FromJSON(yyjson_val *obj);
+	SetStatisticsUpdate Copy() const;
 
 public:
 	string TryFromJSON(yyjson_val *obj);

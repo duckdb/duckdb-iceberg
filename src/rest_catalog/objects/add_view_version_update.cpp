@@ -24,6 +24,16 @@ AddViewVersionUpdate AddViewVersionUpdate::FromJSON(yyjson_val *obj) {
 	return res;
 }
 
+AddViewVersionUpdate AddViewVersionUpdate::Copy() const {
+	AddViewVersionUpdate res;
+	res.base_update = base_update.Copy();
+	res.view_version = view_version.Copy();
+	if (has_action) {
+		res.action = action;
+	}
+	res.has_action = has_action;
+	return res;
+}
 string AddViewVersionUpdate::TryFromJSON(yyjson_val *obj) {
 	string error;
 	error = base_update.TryFromJSON(obj);

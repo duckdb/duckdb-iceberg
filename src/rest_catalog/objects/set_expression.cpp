@@ -24,6 +24,16 @@ SetExpression SetExpression::FromJSON(yyjson_val *obj) {
 	return res;
 }
 
+SetExpression SetExpression::Copy() const {
+	SetExpression res;
+	res.type = type.Copy();
+	res.term = term.Copy();
+	res.values.reserve(values.size());
+	for (auto &item : values) {
+		res.values.emplace_back(item.Copy());
+	}
+	return res;
+}
 string SetExpression::TryFromJSON(yyjson_val *obj) {
 	string error;
 	auto type_val = yyjson_obj_get(obj, "type");

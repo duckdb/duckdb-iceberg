@@ -24,6 +24,12 @@ NotExpression NotExpression::FromJSON(yyjson_val *obj) {
 	return res;
 }
 
+NotExpression NotExpression::Copy() const {
+	NotExpression res;
+	res.type = type.Copy();
+	res.child = child ? make_uniq<Expression>(child->Copy()) : nullptr;
+	return res;
+}
 string NotExpression::TryFromJSON(yyjson_val *obj) {
 	string error;
 	auto type_val = yyjson_obj_get(obj, "type");

@@ -22,6 +22,7 @@ public:
 
 public:
 	static CommitTableResponse FromJSON(yyjson_val *obj);
+	CommitTableResponse Copy() const;
 
 public:
 	string TryFromJSON(yyjson_val *obj);

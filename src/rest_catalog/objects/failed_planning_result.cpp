@@ -26,6 +26,11 @@ FailedPlanningResult::Object7 FailedPlanningResult::Object7::FromJSON(yyjson_val
 	return res;
 }
 
+FailedPlanningResult::Object7 FailedPlanningResult::Object7::Copy() const {
+	Object7 res;
+	res.status = status.Copy();
+	return res;
+}
 string FailedPlanningResult::Object7::TryFromJSON(yyjson_val *obj) {
 	string error;
 	auto status_val = yyjson_obj_get(obj, "status");
@@ -49,6 +54,12 @@ FailedPlanningResult FailedPlanningResult::FromJSON(yyjson_val *obj) {
 	return res;
 }
 
+FailedPlanningResult FailedPlanningResult::Copy() const {
+	FailedPlanningResult res;
+	res.iceberg_error_response = iceberg_error_response.Copy();
+	res.object_7 = object_7.Copy();
+	return res;
+}
 string FailedPlanningResult::TryFromJSON(yyjson_val *obj) {
 	string error;
 	error = iceberg_error_response.TryFromJSON(obj);

@@ -24,6 +24,21 @@ CommitReport CommitReport::FromJSON(yyjson_val *obj) {
 	return res;
 }
 
+CommitReport CommitReport::Copy() const {
+	CommitReport res;
+	res.table_name = table_name;
+	res.snapshot_id = snapshot_id;
+	res.sequence_number = sequence_number;
+	res.operation = operation;
+	res.metrics = metrics.Copy();
+	if (has_metadata) {
+		for (auto &entry : metadata) {
+			res.metadata.emplace(entry.first, entry.second);
+		}
+	}
+	res.has_metadata = has_metadata;
+	return res;
+}
 string CommitReport::TryFromJSON(yyjson_val *obj) {
 	string error;
 	auto table_name_val = yyjson_obj_get(obj, "table-name");

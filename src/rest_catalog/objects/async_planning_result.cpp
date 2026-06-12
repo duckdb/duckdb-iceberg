@@ -24,6 +24,12 @@ AsyncPlanningResult AsyncPlanningResult::FromJSON(yyjson_val *obj) {
 	return res;
 }
 
+AsyncPlanningResult AsyncPlanningResult::Copy() const {
+	AsyncPlanningResult res;
+	res.status = status.Copy();
+	res.plan_id = plan_id;
+	return res;
+}
 string AsyncPlanningResult::TryFromJSON(yyjson_val *obj) {
 	string error;
 	auto status_val = yyjson_obj_get(obj, "status");

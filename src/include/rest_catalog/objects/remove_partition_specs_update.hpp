@@ -22,6 +22,7 @@ public:
 
 public:
 	static RemovePartitionSpecsUpdate FromJSON(yyjson_val *obj);
+	RemovePartitionSpecsUpdate Copy() const;
 
 public:
 	string TryFromJSON(yyjson_val *obj);

@@ -24,6 +24,26 @@ PlanTableScanResult PlanTableScanResult::FromJSON(yyjson_val *obj) {
 	return res;
 }
 
+PlanTableScanResult PlanTableScanResult::Copy() const {
+	PlanTableScanResult res;
+	if (has_completed_planning_with_idresult) {
+		res.completed_planning_with_idresult = completed_planning_with_idresult.Copy();
+	}
+	res.has_completed_planning_with_idresult = has_completed_planning_with_idresult;
+	if (has_failed_planning_result) {
+		res.failed_planning_result = failed_planning_result.Copy();
+	}
+	res.has_failed_planning_result = has_failed_planning_result;
+	if (has_async_planning_result) {
+		res.async_planning_result = async_planning_result.Copy();
+	}
+	res.has_async_planning_result = has_async_planning_result;
+	if (has_empty_planning_result) {
+		res.empty_planning_result = empty_planning_result.Copy();
+	}
+	res.has_empty_planning_result = has_empty_planning_result;
+	return res;
+}
 string PlanTableScanResult::TryFromJSON(yyjson_val *obj) {
 	string error;
 	do {

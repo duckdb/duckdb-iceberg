@@ -23,6 +23,7 @@ public:
 
 public:
 	static StructType FromJSON(yyjson_val *obj);
+	StructType Copy() const;
 
 public:
 	string TryFromJSON(yyjson_val *obj);

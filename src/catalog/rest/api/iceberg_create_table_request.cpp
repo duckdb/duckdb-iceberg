@@ -28,106 +28,6 @@ IcebergCreateTableRequest::IcebergCreateTableRequest(const IcebergTableInformati
     : table_info(table_info) {
 }
 
-static string ConvertBlobDefault(const string_t &str) {
-	string result;
-	result.resize(str.GetSize() * 2);
-	idx_t str_idx = 0;
-	auto data = str.GetData();
-	auto len = str.GetSize();
-	for (idx_t i = 0; i < len; i++) {
-		auto byte_a = (data[i] >> 4) & 0x0F;
-		auto byte_b = data[i] & 0x0F;
-		D_ASSERT(byte_a >= 0 && byte_a < 16);
-		D_ASSERT(byte_b >= 0 && byte_b < 16);
-		// non-ascii characters are rendered as hexadecimal (e.g. \x00)
-		result[str_idx++] = Blob::HEX_TABLE[byte_a];
-		result[str_idx++] = Blob::HEX_TABLE[byte_b];
-	}
-	return result;
-}
-
-static yyjson_mut_val *PrimitiveTypeFromValue(yyjson_mut_doc *doc, const Value &value) {
-	if (value.IsNull()) {
-		throw InternalException("Can't produce a PrimitiveTypeValue from NULL");
-	}
-	auto &type = value.type();
-	switch (type.id()) {
-	case LogicalTypeId::VARIANT: {
-		throw NotImplementedException("DEFAULT values for VARIANT are not supported yet");
-	}
-	//! BooleanTypeValue
-	case LogicalTypeId::BOOLEAN: {
-		auto val = value.GetValue<bool>();
-		return yyjson_mut_bool(doc, val);
-	}
-	//! IntegerTypeValue
-	case LogicalTypeId::INTEGER: {
-		auto val = value.GetValue<int32_t>();
-		return yyjson_mut_sint(doc, val);
-	}
-	//! LongTypeValue
-	case LogicalTypeId::BIGINT: {
-		auto val = value.GetValue<int64_t>();
-		return yyjson_mut_sint(doc, val);
-	}
-	//! FloatTypeValue
-	case LogicalTypeId::FLOAT: {
-		auto val = value.GetValue<float>();
-		return yyjson_mut_real(doc, val);
-	}
-	//! DoubleTypeValue
-	case LogicalTypeId::DOUBLE: {
-		auto val = value.GetValue<double>();
-		return yyjson_mut_real(doc, val);
-	}
-	//! DecimalTypeValue
-	case LogicalTypeId::DECIMAL: {
-		//! FIXME: Spec says scientific notation should be used for negative scale decimals
-		return yyjson_mut_strcpy(doc, value.ToString().c_str());
-	}
-	//! StringTypeValue
-	//! UUIDTypeValue
-	//! DateTypeValue
-	//! TimeTypeValue
-	//! TimestampTypeValue
-	//! TimestampTzTypeValue
-	//! TimestampNanoTypeValue
-	case LogicalTypeId::VARCHAR:
-	case LogicalTypeId::UUID:
-	case LogicalTypeId::DATE:
-	case LogicalTypeId::TIME: {
-		auto str = value.ToString();
-		return yyjson_mut_strcpy(doc, str.c_str());
-	}
-	case LogicalTypeId::TIMESTAMP:
-	case LogicalTypeId::TIMESTAMP_NS: {
-		auto raw = value.ToString();
-		auto splits = StringUtil::Split(raw, ' ');
-		D_ASSERT(splits.size() == 2);
-		auto str = StringUtil::Join(splits, "T");
-		return yyjson_mut_strcpy(doc, str.c_str());
-	}
-	case LogicalTypeId::TIMESTAMP_TZ: {
-		auto raw = value.ToString();
-		auto splits = StringUtil::Split(raw, ' ');
-		D_ASSERT(splits.size() == 2);
-		auto str = StringUtil::Join(splits, "T");
-		str += ":00";
-		return yyjson_mut_strcpy(doc, str.c_str());
-	}
-	//! FIXME: missing TimestampTzNanoTypeValue
-	//! FIXME: missing FixedTypeValue
-	//! BinaryTypeValue
-	case LogicalTypeId::BLOB: {
-		auto str = value.GetValueUnsafe<string_t>();
-		auto blob_str = ConvertBlobDefault(str);
-		return yyjson_mut_strncpy(doc, blob_str.c_str(), blob_str.size());
-	}
-	default:
-		throw InvalidConfigurationException("Type %s not supported for Iceberg tables", type.ToString());
-	}
-}
-
 static void AddUnnamedField(yyjson_mut_doc *doc, yyjson_mut_val *field_obj, const IcebergColumnDefinition &column);
 
 static void AddNamedField(yyjson_mut_doc *doc, yyjson_mut_val *field_obj, const IcebergColumnDefinition &column) {
@@ -146,10 +46,14 @@ static void AddNamedField(yyjson_mut_doc *doc, yyjson_mut_val *field_obj, const 
 	yyjson_mut_obj_add_strcpy(doc, field_obj, "type", IcebergTypeHelper::LogicalTypeToIcebergType(column.type).c_str());
 	yyjson_mut_obj_add_bool(doc, field_obj, "required", column.required);
 	if (column.initial_default && !column.initial_default->IsNull()) {
-		yyjson_mut_obj_add_val(doc, field_obj, "initial-default", PrimitiveTypeFromValue(doc, *column.initial_default));
+		auto primitive_type_value = IcebergTypeHelper::PrimitiveTypeFromValue(*column.initial_default);
+		yyjson_mut_obj_add_val(doc, field_obj, "initial-default",
+		                       IcebergTypeHelper::PrimitiveTypeValueToJSON(doc, primitive_type_value));
 	}
 	if (column.write_default && !column.write_default->IsNull()) {
-		yyjson_mut_obj_add_val(doc, field_obj, "write-default", PrimitiveTypeFromValue(doc, *column.write_default));
+		auto primitive_type_value = IcebergTypeHelper::PrimitiveTypeFromValue(*column.write_default);
+		yyjson_mut_obj_add_val(doc, field_obj, "write-default",
+		                       IcebergTypeHelper::PrimitiveTypeValueToJSON(doc, primitive_type_value));
 	}
 }
 
@@ -215,24 +119,19 @@ IcebergCreateTableRequest::CreateIcebergColumn(const ColumnDefinition &column_de
                                                idx_t iceberg_version) {
 	const auto &name = column_def.Name();
 	const auto &logical_type = column_def.GetType();
-	idx_t first_id = next_field_id();
-	rest_api_objects::Type type;
-	if (logical_type.IsNested()) {
-		type = IcebergTypeHelper::CreateIcebergRestType(logical_type, next_field_id);
-	} else {
-		type.has_primitive_type = true;
-		type.primitive_type = rest_api_objects::PrimitiveType();
-		type.primitive_type.value = IcebergTypeHelper::LogicalTypeToIcebergType(logical_type);
-	}
-	auto iceberg_column_def = IcebergColumnDefinition::ParseType(name, first_id, required, type, "", nullptr);
+
+	Value default_value;
 	if (column_def.HasDefaultValue()) {
 		auto &default_expr = column_def.DefaultValue();
-		auto val = default_binder.Evaluate(default_expr, logical_type);
-		if (iceberg_version < 3 && !val.IsNull()) {
+		default_value = default_binder.Evaluate(default_expr, logical_type);
+		if (iceberg_version < 3 && !default_value.IsNull()) {
 			throw InvalidInputException("non-null DEFAULT values are not supported for <V3 tables");
 		}
-		iceberg_column_def->initial_default = make_uniq<Value>(val);
 	}
+
+	auto rest_type =
+	    IcebergTypeHelper::CreateIcebergRestType(name, logical_type, required, "", default_value, next_field_id);
+	auto iceberg_column_def = IcebergColumnDefinition::ParseStructField(rest_type);
 	return iceberg_column_def;
 }
 

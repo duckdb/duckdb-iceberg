@@ -24,6 +24,29 @@ ScanReport ScanReport::FromJSON(yyjson_val *obj) {
 	return res;
 }
 
+ScanReport ScanReport::Copy() const {
+	ScanReport res;
+	res.table_name = table_name;
+	res.snapshot_id = snapshot_id;
+	res.filter = filter ? make_uniq<Expression>(filter->Copy()) : nullptr;
+	res.schema_id = schema_id;
+	res.projected_field_ids.reserve(projected_field_ids.size());
+	for (auto &item : projected_field_ids) {
+		res.projected_field_ids.emplace_back(item);
+	}
+	res.projected_field_names.reserve(projected_field_names.size());
+	for (auto &item : projected_field_names) {
+		res.projected_field_names.emplace_back(item);
+	}
+	res.metrics = metrics.Copy();
+	if (has_metadata) {
+		for (auto &entry : metadata) {
+			res.metadata.emplace(entry.first, entry.second);
+		}
+	}
+	res.has_metadata = has_metadata;
+	return res;
+}
 string ScanReport::TryFromJSON(yyjson_val *obj) {
 	string error;
 	auto table_name_val = yyjson_obj_get(obj, "table-name");

@@ -24,6 +24,12 @@ AssertDefaultSpecId AssertDefaultSpecId::FromJSON(yyjson_val *obj) {
 	return res;
 }
 
+AssertDefaultSpecId AssertDefaultSpecId::Copy() const {
+	AssertDefaultSpecId res;
+	res.type = type.Copy();
+	res.default_spec_id = default_spec_id;
+	return res;
+}
 string AssertDefaultSpecId::TryFromJSON(yyjson_val *obj) {
 	string error;
 	auto type_val = yyjson_obj_get(obj, "type");

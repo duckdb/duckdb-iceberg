@@ -24,6 +24,18 @@ DeleteFile DeleteFile::FromJSON(yyjson_val *obj) {
 	return res;
 }
 
+DeleteFile DeleteFile::Copy() const {
+	DeleteFile res;
+	if (has_position_delete_file) {
+		res.position_delete_file = position_delete_file.Copy();
+	}
+	res.has_position_delete_file = has_position_delete_file;
+	if (has_equality_delete_file) {
+		res.equality_delete_file = equality_delete_file.Copy();
+	}
+	res.has_equality_delete_file = has_equality_delete_file;
+	return res;
+}
 string DeleteFile::TryFromJSON(yyjson_val *obj) {
 	string error;
 	do {

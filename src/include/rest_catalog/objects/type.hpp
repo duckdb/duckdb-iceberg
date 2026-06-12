@@ -25,6 +25,7 @@ public:
 
 public:
 	static Type FromJSON(yyjson_val *obj);
+	Type Copy() const;
 
 public:
 	string TryFromJSON(yyjson_val *obj);

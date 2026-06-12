@@ -23,6 +23,7 @@ public:
 
 public:
 	static ValueMap FromJSON(yyjson_val *obj);
+	ValueMap Copy() const;
 
 public:
 	string TryFromJSON(yyjson_val *obj);

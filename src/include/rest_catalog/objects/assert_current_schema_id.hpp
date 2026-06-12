@@ -22,6 +22,7 @@ public:
 
 public:
 	static AssertCurrentSchemaId FromJSON(yyjson_val *obj);
+	AssertCurrentSchemaId Copy() const;
 
 public:
 	string TryFromJSON(yyjson_val *obj);

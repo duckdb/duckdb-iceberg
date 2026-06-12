@@ -23,6 +23,7 @@ public:
 
 public:
 	static ListTablesResponse FromJSON(yyjson_val *obj);
+	ListTablesResponse Copy() const;
 
 public:
 	string TryFromJSON(yyjson_val *obj);

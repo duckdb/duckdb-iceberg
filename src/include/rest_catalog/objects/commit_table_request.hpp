@@ -24,6 +24,7 @@ public:
 
 public:
 	static CommitTableRequest FromJSON(yyjson_val *obj);
+	CommitTableRequest Copy() const;
 
 public:
 	string TryFromJSON(yyjson_val *obj);

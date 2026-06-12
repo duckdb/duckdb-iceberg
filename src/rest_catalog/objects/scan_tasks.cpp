@@ -24,6 +24,31 @@ ScanTasks ScanTasks::FromJSON(yyjson_val *obj) {
 	return res;
 }
 
+ScanTasks ScanTasks::Copy() const {
+	ScanTasks res;
+	if (has_delete_files) {
+		res.delete_files.reserve(delete_files.size());
+		for (auto &item : delete_files) {
+			res.delete_files.emplace_back(item.Copy());
+		}
+	}
+	res.has_delete_files = has_delete_files;
+	if (has_file_scan_tasks) {
+		res.file_scan_tasks.reserve(file_scan_tasks.size());
+		for (auto &item : file_scan_tasks) {
+			res.file_scan_tasks.emplace_back(item.Copy());
+		}
+	}
+	res.has_file_scan_tasks = has_file_scan_tasks;
+	if (has_plan_tasks) {
+		res.plan_tasks.reserve(plan_tasks.size());
+		for (auto &item : plan_tasks) {
+			res.plan_tasks.emplace_back(item.Copy());
+		}
+	}
+	res.has_plan_tasks = has_plan_tasks;
+	return res;
+}
 string ScanTasks::TryFromJSON(yyjson_val *obj) {
 	string error;
 	auto delete_files_val = yyjson_obj_get(obj, "delete-files");

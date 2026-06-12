@@ -24,6 +24,11 @@ IntegerTypeValue IntegerTypeValue::FromJSON(yyjson_val *obj) {
 	return res;
 }
 
+IntegerTypeValue IntegerTypeValue::Copy() const {
+	IntegerTypeValue res;
+	res.value = value;
+	return res;
+}
 string IntegerTypeValue::TryFromJSON(yyjson_val *obj) {
 	string error;
 	if (yyjson_is_int(obj)) {

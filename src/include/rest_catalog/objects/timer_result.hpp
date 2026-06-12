@@ -21,6 +21,7 @@ public:
 
 public:
 	static TimerResult FromJSON(yyjson_val *obj);
+	TimerResult Copy() const;
 
 public:
 	string TryFromJSON(yyjson_val *obj);

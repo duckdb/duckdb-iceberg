@@ -24,6 +24,16 @@ RemovePartitionStatisticsUpdate RemovePartitionStatisticsUpdate::FromJSON(yyjson
 	return res;
 }
 
+RemovePartitionStatisticsUpdate RemovePartitionStatisticsUpdate::Copy() const {
+	RemovePartitionStatisticsUpdate res;
+	res.base_update = base_update.Copy();
+	res.snapshot_id = snapshot_id;
+	if (has_action) {
+		res.action = action;
+	}
+	res.has_action = has_action;
+	return res;
+}
 string RemovePartitionStatisticsUpdate::TryFromJSON(yyjson_val *obj) {
 	string error;
 	error = base_update.TryFromJSON(obj);

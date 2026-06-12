@@ -24,6 +24,16 @@ MapType MapType::FromJSON(yyjson_val *obj) {
 	return res;
 }
 
+MapType MapType::Copy() const {
+	MapType res;
+	res.type = type;
+	res.key_id = key_id;
+	res.key = key ? make_uniq<Type>(key->Copy()) : nullptr;
+	res.value_id = value_id;
+	res.value = value ? make_uniq<Type>(value->Copy()) : nullptr;
+	res.value_required = value_required;
+	return res;
+}
 string MapType::TryFromJSON(yyjson_val *obj) {
 	string error;
 	auto type_val = yyjson_obj_get(obj, "type");

@@ -22,6 +22,7 @@ public:
 
 public:
 	static SetPropertiesUpdate FromJSON(yyjson_val *obj);
+	SetPropertiesUpdate Copy() const;
 
 public:
 	string TryFromJSON(yyjson_val *obj);

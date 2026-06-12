@@ -24,6 +24,13 @@ Metrics Metrics::FromJSON(yyjson_val *obj) {
 	return res;
 }
 
+Metrics Metrics::Copy() const {
+	Metrics res;
+	for (auto &entry : additional_properties) {
+		res.additional_properties.emplace(entry.first, entry.second.Copy());
+	}
+	return res;
+}
 string Metrics::TryFromJSON(yyjson_val *obj) {
 	string error;
 	size_t idx, max;

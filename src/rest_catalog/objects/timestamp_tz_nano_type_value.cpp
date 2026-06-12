@@ -24,6 +24,11 @@ TimestampTzNanoTypeValue TimestampTzNanoTypeValue::FromJSON(yyjson_val *obj) {
 	return res;
 }
 
+TimestampTzNanoTypeValue TimestampTzNanoTypeValue::Copy() const {
+	TimestampTzNanoTypeValue res;
+	res.value = value;
+	return res;
+}
 string TimestampTzNanoTypeValue::TryFromJSON(yyjson_val *obj) {
 	string error;
 	if (yyjson_is_str(obj)) {

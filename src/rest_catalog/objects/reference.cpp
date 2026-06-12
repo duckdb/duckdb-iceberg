@@ -24,6 +24,11 @@ Reference Reference::FromJSON(yyjson_val *obj) {
 	return res;
 }
 
+Reference Reference::Copy() const {
+	Reference res;
+	res.value = value;
+	return res;
+}
 string Reference::TryFromJSON(yyjson_val *obj) {
 	string error;
 	if (yyjson_is_str(obj)) {

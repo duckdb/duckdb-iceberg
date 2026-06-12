@@ -24,6 +24,11 @@ LongTypeValue LongTypeValue::FromJSON(yyjson_val *obj) {
 	return res;
 }
 
+LongTypeValue LongTypeValue::Copy() const {
+	LongTypeValue res;
+	res.value = value;
+	return res;
+}
 string LongTypeValue::TryFromJSON(yyjson_val *obj) {
 	string error;
 	if (yyjson_is_sint(obj)) {

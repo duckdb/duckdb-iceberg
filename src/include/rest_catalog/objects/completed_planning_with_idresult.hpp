@@ -29,6 +29,7 @@ public:
 
 	public:
 		static Object6 FromJSON(yyjson_val *obj);
+		Object6 Copy() const;
 
 	public:
 		string TryFromJSON(yyjson_val *obj);
@@ -39,6 +40,7 @@ public:
 
 public:
 	static CompletedPlanningWithIDResult FromJSON(yyjson_val *obj);
+	CompletedPlanningWithIDResult Copy() const;
 
 public:
 	string TryFromJSON(yyjson_val *obj);

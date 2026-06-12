@@ -24,6 +24,24 @@ CountMap CountMap::FromJSON(yyjson_val *obj) {
 	return res;
 }
 
+CountMap CountMap::Copy() const {
+	CountMap res;
+	if (has_keys) {
+		res.keys.reserve(keys.size());
+		for (auto &item : keys) {
+			res.keys.emplace_back(item.Copy());
+		}
+	}
+	res.has_keys = has_keys;
+	if (has_values) {
+		res.values.reserve(values.size());
+		for (auto &item : values) {
+			res.values.emplace_back(item.Copy());
+		}
+	}
+	res.has_values = has_values;
+	return res;
+}
 string CountMap::TryFromJSON(yyjson_val *obj) {
 	string error;
 	auto keys_val = yyjson_obj_get(obj, "keys");

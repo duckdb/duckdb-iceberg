@@ -22,6 +22,7 @@ public:
 
 public:
 	static SnapshotReferences FromJSON(yyjson_val *obj);
+	SnapshotReferences Copy() const;
 
 public:
 	string TryFromJSON(yyjson_val *obj);

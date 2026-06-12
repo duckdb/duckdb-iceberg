@@ -24,6 +24,7 @@ public:
 
 public:
 	static FileScanTask FromJSON(yyjson_val *obj);
+	FileScanTask Copy() const;
 
 public:
 	string TryFromJSON(yyjson_val *obj);

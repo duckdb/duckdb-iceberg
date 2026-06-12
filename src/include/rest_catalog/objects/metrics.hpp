@@ -22,6 +22,7 @@ public:
 
 public:
 	static Metrics FromJSON(yyjson_val *obj);
+	Metrics Copy() const;
 
 public:
 	string TryFromJSON(yyjson_val *obj);

@@ -24,6 +24,11 @@ DateTypeValue DateTypeValue::FromJSON(yyjson_val *obj) {
 	return res;
 }
 
+DateTypeValue DateTypeValue::Copy() const {
+	DateTypeValue res;
+	res.value = value;
+	return res;
+}
 string DateTypeValue::TryFromJSON(yyjson_val *obj) {
 	string error;
 	if (yyjson_is_str(obj)) {

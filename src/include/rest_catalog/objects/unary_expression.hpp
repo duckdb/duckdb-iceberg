@@ -23,6 +23,7 @@ public:
 
 public:
 	static UnaryExpression FromJSON(yyjson_val *obj);
+	UnaryExpression Copy() const;
 
 public:
 	string TryFromJSON(yyjson_val *obj);

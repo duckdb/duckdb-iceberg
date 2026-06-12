@@ -21,6 +21,7 @@ public:
 
 public:
 	static TokenType FromJSON(yyjson_val *obj);
+	TokenType Copy() const;
 
 public:
 	string TryFromJSON(yyjson_val *obj);

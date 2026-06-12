@@ -22,6 +22,7 @@ public:
 
 public:
 	static AssertTableUUID FromJSON(yyjson_val *obj);
+	AssertTableUUID Copy() const;
 
 public:
 	string TryFromJSON(yyjson_val *obj);

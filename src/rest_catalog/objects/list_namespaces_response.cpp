@@ -24,6 +24,21 @@ ListNamespacesResponse ListNamespacesResponse::FromJSON(yyjson_val *obj) {
 	return res;
 }
 
+ListNamespacesResponse ListNamespacesResponse::Copy() const {
+	ListNamespacesResponse res;
+	if (has_next_page_token) {
+		res.next_page_token = next_page_token.Copy();
+	}
+	res.has_next_page_token = has_next_page_token;
+	if (has_namespaces) {
+		res.namespaces.reserve(namespaces.size());
+		for (auto &item : namespaces) {
+			res.namespaces.emplace_back(item.Copy());
+		}
+	}
+	res.has_namespaces = has_namespaces;
+	return res;
+}
 string ListNamespacesResponse::TryFromJSON(yyjson_val *obj) {
 	string error;
 	auto next_page_token_val = yyjson_obj_get(obj, "next-page-token");

@@ -21,6 +21,7 @@ public:
 
 public:
 	static ExpressionType FromJSON(yyjson_val *obj);
+	ExpressionType Copy() const;
 
 public:
 	string TryFromJSON(yyjson_val *obj);

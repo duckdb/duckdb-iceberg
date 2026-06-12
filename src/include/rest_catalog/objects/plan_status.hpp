@@ -21,6 +21,7 @@ public:
 
 public:
 	static PlanStatus FromJSON(yyjson_val *obj);
+	PlanStatus Copy() const;
 
 public:
 	string TryFromJSON(yyjson_val *obj);

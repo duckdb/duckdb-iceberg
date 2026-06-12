@@ -24,6 +24,7 @@ public:
 
 public:
 	static ScanReport FromJSON(yyjson_val *obj);
+	ScanReport Copy() const;
 
 public:
 	string TryFromJSON(yyjson_val *obj);

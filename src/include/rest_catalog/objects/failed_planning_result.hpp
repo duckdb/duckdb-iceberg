@@ -30,6 +30,7 @@ public:
 
 	public:
 		static Object7 FromJSON(yyjson_val *obj);
+		Object7 Copy() const;
 
 	public:
 		string TryFromJSON(yyjson_val *obj);
@@ -40,6 +41,7 @@ public:
 
 public:
 	static FailedPlanningResult FromJSON(yyjson_val *obj);
+	FailedPlanningResult Copy() const;
 
 public:
 	string TryFromJSON(yyjson_val *obj);

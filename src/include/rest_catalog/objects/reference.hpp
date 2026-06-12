@@ -21,6 +21,7 @@ public:
 
 public:
 	static Reference FromJSON(yyjson_val *obj);
+	Reference Copy() const;
 
 public:
 	string TryFromJSON(yyjson_val *obj);

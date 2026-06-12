@@ -21,6 +21,7 @@ public:
 
 public:
 	static PlanTask FromJSON(yyjson_val *obj);
+	PlanTask Copy() const;
 
 public:
 	string TryFromJSON(yyjson_val *obj);

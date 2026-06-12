@@ -22,6 +22,7 @@ public:
 
 public:
 	static AssignUUIDUpdate FromJSON(yyjson_val *obj);
+	AssignUUIDUpdate Copy() const;
 
 public:
 	string TryFromJSON(yyjson_val *obj);

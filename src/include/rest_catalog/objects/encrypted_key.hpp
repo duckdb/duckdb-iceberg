@@ -21,6 +21,7 @@ public:
 
 public:
 	static EncryptedKey FromJSON(yyjson_val *obj);
+	EncryptedKey Copy() const;
 
 public:
 	string TryFromJSON(yyjson_val *obj);

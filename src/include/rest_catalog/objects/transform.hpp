@@ -21,6 +21,7 @@ public:
 
 public:
 	static Transform FromJSON(yyjson_val *obj);
+	Transform Copy() const;
 
 public:
 	string TryFromJSON(yyjson_val *obj);

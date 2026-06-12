@@ -24,6 +24,11 @@ TokenType TokenType::FromJSON(yyjson_val *obj) {
 	return res;
 }
 
+TokenType TokenType::Copy() const {
+	TokenType res;
+	res.value = value;
+	return res;
+}
 string TokenType::TryFromJSON(yyjson_val *obj) {
 	string error;
 	if (yyjson_is_str(obj)) {

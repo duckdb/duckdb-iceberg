@@ -22,6 +22,7 @@ public:
 
 public:
 	static RemoveSnapshotRefUpdate FromJSON(yyjson_val *obj);
+	RemoveSnapshotRefUpdate Copy() const;
 
 public:
 	string TryFromJSON(yyjson_val *obj);

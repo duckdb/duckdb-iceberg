@@ -24,6 +24,34 @@ CreateTableRequest CreateTableRequest::FromJSON(yyjson_val *obj) {
 	return res;
 }
 
+CreateTableRequest CreateTableRequest::Copy() const {
+	CreateTableRequest res;
+	res.name = name;
+	res.schema = schema.Copy();
+	if (has_location) {
+		res.location = location;
+	}
+	res.has_location = has_location;
+	if (has_partition_spec) {
+		res.partition_spec = partition_spec.Copy();
+	}
+	res.has_partition_spec = has_partition_spec;
+	if (has_write_order) {
+		res.write_order = write_order.Copy();
+	}
+	res.has_write_order = has_write_order;
+	if (has_stage_create) {
+		res.stage_create = stage_create;
+	}
+	res.has_stage_create = has_stage_create;
+	if (has_properties) {
+		for (auto &entry : properties) {
+			res.properties.emplace(entry.first, entry.second);
+		}
+	}
+	res.has_properties = has_properties;
+	return res;
+}
 string CreateTableRequest::TryFromJSON(yyjson_val *obj) {
 	string error;
 	auto name_val = yyjson_obj_get(obj, "name");

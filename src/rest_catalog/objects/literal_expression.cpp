@@ -24,6 +24,13 @@ LiteralExpression LiteralExpression::FromJSON(yyjson_val *obj) {
 	return res;
 }
 
+LiteralExpression LiteralExpression::Copy() const {
+	LiteralExpression res;
+	res.type = type.Copy();
+	res.term = term.Copy();
+	res.value = value.Copy();
+	return res;
+}
 string LiteralExpression::TryFromJSON(yyjson_val *obj) {
 	string error;
 	auto type_val = yyjson_obj_get(obj, "type");

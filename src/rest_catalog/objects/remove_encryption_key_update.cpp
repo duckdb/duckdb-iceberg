@@ -24,6 +24,16 @@ RemoveEncryptionKeyUpdate RemoveEncryptionKeyUpdate::FromJSON(yyjson_val *obj) {
 	return res;
 }
 
+RemoveEncryptionKeyUpdate RemoveEncryptionKeyUpdate::Copy() const {
+	RemoveEncryptionKeyUpdate res;
+	res.base_update = base_update.Copy();
+	res.key_id = key_id;
+	if (has_action) {
+		res.action = action;
+	}
+	res.has_action = has_action;
+	return res;
+}
 string RemoveEncryptionKeyUpdate::TryFromJSON(yyjson_val *obj) {
 	string error;
 	error = base_update.TryFromJSON(obj);

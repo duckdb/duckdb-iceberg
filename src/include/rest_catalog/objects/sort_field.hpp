@@ -24,6 +24,7 @@ public:
 
 public:
 	static SortField FromJSON(yyjson_val *obj);
+	SortField Copy() const;
 
 public:
 	string TryFromJSON(yyjson_val *obj);

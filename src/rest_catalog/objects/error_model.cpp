@@ -24,6 +24,20 @@ ErrorModel ErrorModel::FromJSON(yyjson_val *obj) {
 	return res;
 }
 
+ErrorModel ErrorModel::Copy() const {
+	ErrorModel res;
+	res.message = message;
+	res.type = type;
+	res.code = code;
+	if (has_stack) {
+		res.stack.reserve(stack.size());
+		for (auto &item : stack) {
+			res.stack.emplace_back(item);
+		}
+	}
+	res.has_stack = has_stack;
+	return res;
+}
 string ErrorModel::TryFromJSON(yyjson_val *obj) {
 	string error;
 	auto message_val = yyjson_obj_get(obj, "message");

@@ -23,6 +23,7 @@ public:
 
 public:
 	static AddSnapshotUpdate FromJSON(yyjson_val *obj);
+	AddSnapshotUpdate Copy() const;
 
 public:
 	string TryFromJSON(yyjson_val *obj);

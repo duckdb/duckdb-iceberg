@@ -24,6 +24,17 @@ PartitionField PartitionField::FromJSON(yyjson_val *obj) {
 	return res;
 }
 
+PartitionField PartitionField::Copy() const {
+	PartitionField res;
+	res.source_id = source_id;
+	res.transform = transform.Copy();
+	res.name = name;
+	if (has_field_id) {
+		res.field_id = field_id;
+	}
+	res.has_field_id = has_field_id;
+	return res;
+}
 string PartitionField::TryFromJSON(yyjson_val *obj) {
 	string error;
 	auto source_id_val = yyjson_obj_get(obj, "source-id");

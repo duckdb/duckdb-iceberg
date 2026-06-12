@@ -24,6 +24,16 @@ AssignUUIDUpdate AssignUUIDUpdate::FromJSON(yyjson_val *obj) {
 	return res;
 }
 
+AssignUUIDUpdate AssignUUIDUpdate::Copy() const {
+	AssignUUIDUpdate res;
+	res.base_update = base_update.Copy();
+	res.uuid = uuid;
+	if (has_action) {
+		res.action = action;
+	}
+	res.has_action = has_action;
+	return res;
+}
 string AssignUUIDUpdate::TryFromJSON(yyjson_val *obj) {
 	string error;
 	error = base_update.TryFromJSON(obj);

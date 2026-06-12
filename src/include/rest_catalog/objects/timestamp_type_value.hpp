@@ -21,6 +21,7 @@ public:
 
 public:
 	static TimestampTypeValue FromJSON(yyjson_val *obj);
+	TimestampTypeValue Copy() const;
 
 public:
 	string TryFromJSON(yyjson_val *obj);

@@ -21,6 +21,7 @@ public:
 
 public:
 	static BaseUpdate FromJSON(yyjson_val *obj);
+	BaseUpdate Copy() const;
 
 public:
 	string TryFromJSON(yyjson_val *obj);

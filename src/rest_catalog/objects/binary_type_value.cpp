@@ -24,6 +24,11 @@ BinaryTypeValue BinaryTypeValue::FromJSON(yyjson_val *obj) {
 	return res;
 }
 
+BinaryTypeValue BinaryTypeValue::Copy() const {
+	BinaryTypeValue res;
+	res.value = value;
+	return res;
+}
 string BinaryTypeValue::TryFromJSON(yyjson_val *obj) {
 	string error;
 	if (yyjson_is_str(obj)) {

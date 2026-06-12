@@ -24,6 +24,14 @@ StorageCredential StorageCredential::FromJSON(yyjson_val *obj) {
 	return res;
 }
 
+StorageCredential StorageCredential::Copy() const {
+	StorageCredential res;
+	res.prefix = prefix;
+	for (auto &entry : config) {
+		res.config.emplace(entry.first, entry.second);
+	}
+	return res;
+}
 string StorageCredential::TryFromJSON(yyjson_val *obj) {
 	string error;
 	auto prefix_val = yyjson_obj_get(obj, "prefix");

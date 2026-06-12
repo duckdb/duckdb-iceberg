@@ -24,6 +24,16 @@ SetCurrentViewVersionUpdate SetCurrentViewVersionUpdate::FromJSON(yyjson_val *ob
 	return res;
 }
 
+SetCurrentViewVersionUpdate SetCurrentViewVersionUpdate::Copy() const {
+	SetCurrentViewVersionUpdate res;
+	res.base_update = base_update.Copy();
+	res.view_version_id = view_version_id;
+	if (has_action) {
+		res.action = action;
+	}
+	res.has_action = has_action;
+	return res;
+}
 string SetCurrentViewVersionUpdate::TryFromJSON(yyjson_val *obj) {
 	string error;
 	error = base_update.TryFromJSON(obj);

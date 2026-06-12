@@ -24,6 +24,18 @@ StatisticsFile StatisticsFile::FromJSON(yyjson_val *obj) {
 	return res;
 }
 
+StatisticsFile StatisticsFile::Copy() const {
+	StatisticsFile res;
+	res.snapshot_id = snapshot_id;
+	res.statistics_path = statistics_path;
+	res.file_size_in_bytes = file_size_in_bytes;
+	res.file_footer_size_in_bytes = file_footer_size_in_bytes;
+	res.blob_metadata.reserve(blob_metadata.size());
+	for (auto &item : blob_metadata) {
+		res.blob_metadata.emplace_back(item.Copy());
+	}
+	return res;
+}
 string StatisticsFile::TryFromJSON(yyjson_val *obj) {
 	string error;
 	auto snapshot_id_val = yyjson_obj_get(obj, "snapshot-id");

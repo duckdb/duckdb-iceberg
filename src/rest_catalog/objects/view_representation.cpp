@@ -24,6 +24,14 @@ ViewRepresentation ViewRepresentation::FromJSON(yyjson_val *obj) {
 	return res;
 }
 
+ViewRepresentation ViewRepresentation::Copy() const {
+	ViewRepresentation res;
+	if (has_sqlview_representation) {
+		res.sqlview_representation = sqlview_representation.Copy();
+	}
+	res.has_sqlview_representation = has_sqlview_representation;
+	return res;
+}
 string ViewRepresentation::TryFromJSON(yyjson_val *obj) {
 	string error;
 	do {

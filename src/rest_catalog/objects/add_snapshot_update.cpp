@@ -24,6 +24,16 @@ AddSnapshotUpdate AddSnapshotUpdate::FromJSON(yyjson_val *obj) {
 	return res;
 }
 
+AddSnapshotUpdate AddSnapshotUpdate::Copy() const {
+	AddSnapshotUpdate res;
+	res.base_update = base_update.Copy();
+	res.snapshot = snapshot.Copy();
+	if (has_action) {
+		res.action = action;
+	}
+	res.has_action = has_action;
+	return res;
+}
 string AddSnapshotUpdate::TryFromJSON(yyjson_val *obj) {
 	string error;
 	error = base_update.TryFromJSON(obj);

@@ -24,6 +24,7 @@ public:
 
 public:
 	static ViewMetadata FromJSON(yyjson_val *obj);
+	ViewMetadata Copy() const;
 
 public:
 	string TryFromJSON(yyjson_val *obj);

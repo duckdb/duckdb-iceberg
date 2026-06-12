@@ -24,6 +24,7 @@ public:
 
 public:
 	static CreateTableRequest FromJSON(yyjson_val *obj);
+	CreateTableRequest Copy() const;
 
 public:
 	string TryFromJSON(yyjson_val *obj);

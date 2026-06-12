@@ -24,6 +24,18 @@ LoadViewResult LoadViewResult::FromJSON(yyjson_val *obj) {
 	return res;
 }
 
+LoadViewResult LoadViewResult::Copy() const {
+	LoadViewResult res;
+	res.metadata_location = metadata_location;
+	res.metadata = metadata.Copy();
+	if (has_config) {
+		for (auto &entry : config) {
+			res.config.emplace(entry.first, entry.second);
+		}
+	}
+	res.has_config = has_config;
+	return res;
+}
 string LoadViewResult::TryFromJSON(yyjson_val *obj) {
 	string error;
 	auto metadata_location_val = yyjson_obj_get(obj, "metadata-location");

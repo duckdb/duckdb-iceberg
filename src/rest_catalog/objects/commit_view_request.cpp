@@ -24,6 +24,25 @@ CommitViewRequest CommitViewRequest::FromJSON(yyjson_val *obj) {
 	return res;
 }
 
+CommitViewRequest CommitViewRequest::Copy() const {
+	CommitViewRequest res;
+	res.updates.reserve(updates.size());
+	for (auto &item : updates) {
+		res.updates.emplace_back(item.Copy());
+	}
+	if (has_identifier) {
+		res.identifier = identifier.Copy();
+	}
+	res.has_identifier = has_identifier;
+	if (has_requirements) {
+		res.requirements.reserve(requirements.size());
+		for (auto &item : requirements) {
+			res.requirements.emplace_back(item.Copy());
+		}
+	}
+	res.has_requirements = has_requirements;
+	return res;
+}
 string CommitViewRequest::TryFromJSON(yyjson_val *obj) {
 	string error;
 	auto updates_val = yyjson_obj_get(obj, "updates");

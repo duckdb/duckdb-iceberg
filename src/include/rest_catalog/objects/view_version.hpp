@@ -23,6 +23,7 @@ public:
 
 public:
 	static ViewVersion FromJSON(yyjson_val *obj);
+	ViewVersion Copy() const;
 
 public:
 	string TryFromJSON(yyjson_val *obj);

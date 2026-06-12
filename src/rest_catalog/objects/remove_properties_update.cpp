@@ -24,6 +24,19 @@ RemovePropertiesUpdate RemovePropertiesUpdate::FromJSON(yyjson_val *obj) {
 	return res;
 }
 
+RemovePropertiesUpdate RemovePropertiesUpdate::Copy() const {
+	RemovePropertiesUpdate res;
+	res.base_update = base_update.Copy();
+	res.removals.reserve(removals.size());
+	for (auto &item : removals) {
+		res.removals.emplace_back(item);
+	}
+	if (has_action) {
+		res.action = action;
+	}
+	res.has_action = has_action;
+	return res;
+}
 string RemovePropertiesUpdate::TryFromJSON(yyjson_val *obj) {
 	string error;
 	error = base_update.TryFromJSON(obj);

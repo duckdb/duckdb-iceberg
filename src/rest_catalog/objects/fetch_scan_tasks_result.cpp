@@ -24,6 +24,11 @@ FetchScanTasksResult FetchScanTasksResult::FromJSON(yyjson_val *obj) {
 	return res;
 }
 
+FetchScanTasksResult FetchScanTasksResult::Copy() const {
+	FetchScanTasksResult res;
+	res.scan_tasks = scan_tasks.Copy();
+	return res;
+}
 string FetchScanTasksResult::TryFromJSON(yyjson_val *obj) {
 	string error;
 	error = scan_tasks.TryFromJSON(obj);

@@ -24,6 +24,12 @@ AssertTableUUID AssertTableUUID::FromJSON(yyjson_val *obj) {
 	return res;
 }
 
+AssertTableUUID AssertTableUUID::Copy() const {
+	AssertTableUUID res;
+	res.type = type.Copy();
+	res.uuid = uuid;
+	return res;
+}
 string AssertTableUUID::TryFromJSON(yyjson_val *obj) {
 	string error;
 	auto type_val = yyjson_obj_get(obj, "type");
