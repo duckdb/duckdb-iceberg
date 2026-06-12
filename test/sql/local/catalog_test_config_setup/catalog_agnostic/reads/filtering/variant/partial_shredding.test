@@ -1,0 +1,100 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/reads/filtering/variant/partial_shredding.test
+# description: partially shredded / unshredded VARIANT columns produce no usable bounds, so pruning stays conservative
+# group: [variant]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+require icu
+
+require core_functions
+
+# ------------------------------------------------------------------------------
+# partial shredding: a field that is INT in one row group and VARCHAR in another
+# is not fully shredded, so no bounds are emitted for it and it can't be pruned.
+# ------------------------------------------------------------------------------
+
+statement ok
+drop table if exists my_datalake.default.variant_partial_tbl;
+
+# data file 1: 'i' is uniformly INT -> fully shredded -> bounds [0, 99]
+statement ok
+create table my_datalake.default.variant_partial_tbl WITH ('format-version'='3') as
+select {'i': i}::VARIANT as variant_col from range(100) t(i);
+
+# data file 2: 'i' is INT for i < 2048 and VARCHAR otherwise -> not fully shredded -> no bounds for 'i'
+statement ok
+insert into my_datalake.default.variant_partial_tbl
+select case when i < 2048 then {'i': i}::VARIANT else {'i': 'str_' || i}::VARIANT end
+from range(4096) t(i);
+
+statement ok
+call enable_logging('Iceberg');
+
+# i stores str and varchar types, so the two need to be cast
+statement error
+select * from my_datalake.default.variant_partial_tbl where variant_col.i = 1500;
+----
+<REGEX>:.*an explicit cast is required.*
+
+statement ok
+select * from my_datalake.default.variant_partial_tbl where variant_col.i::VARCHAR = '1500';
+
+query I
+select count(*) from duckdb_logs() where type = 'Iceberg' and message like '%skipped%';
+----
+1
+
+# the matching row from the not-fully-shredded file is still returned
+query I
+select count(*) from my_datalake.default.variant_partial_tbl where variant_col.i::VARCHAR = '1500';
+----
+1
+
+statement ok
+CALL truncate_duckdb_logs();
+
+# ------------------------------------------------------------------------------
+# no shredding at all: rows alternate between scalar and object variants, so the
+# column never shreds, no bounds exist, and no file may be pruned.
+# ------------------------------------------------------------------------------
+
+statement ok
+drop table if exists my_datalake.default.variant_unshredded_tbl;
+
+# data file 1
+statement ok
+create table my_datalake.default.variant_unshredded_tbl WITH ('format-version'='3') as
+select case when i % 2 = 0 then i::VARIANT else {'x': i}::VARIANT end as variant_col
+from range(100) t(i);
+
+# data file 2
+statement ok
+insert into my_datalake.default.variant_unshredded_tbl
+select case when i % 2 = 0 then (i + 1000)::VARIANT else {'x': i}::VARIANT end
+from range(100) t(i);
+
+statement ok
+CALL truncate_duckdb_logs();
+
+# x = 500 is out of range for both files, but with no bounds nothing can be pruned
+statement ok
+select * from my_datalake.default.variant_unshredded_tbl where variant_col.x = 500;
+
+query I
+select count(*) from duckdb_logs() where type = 'Iceberg' and message like '%skipped%';
+----
+0
+
+# and the predicate still returns the correct (empty) result without crashing
+query I
+select count(*) from my_datalake.default.variant_unshredded_tbl where variant_col.x = 500;
+----
+0

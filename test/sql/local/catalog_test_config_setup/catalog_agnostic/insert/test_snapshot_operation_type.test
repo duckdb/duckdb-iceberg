@@ -1,0 +1,187 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/insert/test_snapshot_operation_type.test
+# description: Test that snapshot operation type is correctly set (APPEND for insert, DELETE for delete, OVERWRITE for update)
+# group: [insert]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+set enable_logging=true
+
+statement ok
+set logging_level='debug'
+
+# Create a fresh table for testing operation types
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.test_snapshot_operation_type;
+
+statement ok
+CREATE TABLE my_datalake.default.test_snapshot_operation_type (id INTEGER, data VARCHAR);
+
+# After CREATE TABLE, there should be no snapshots (empty table)
+query I
+select count(*) from iceberg_snapshots(my_datalake.default.test_snapshot_operation_type);
+----
+0
+
+# INSERT should produce a snapshot with operation=append
+statement ok
+INSERT INTO my_datalake.default.test_snapshot_operation_type VALUES (1, 'hello'), (2, 'world'), (3, 'foo');
+
+# Verify operation type is 'append'
+query II
+select sequence_number, operation from iceberg_snapshots(my_datalake.default.test_snapshot_operation_type) order by sequence_number;
+----
+1	append
+
+# Verify the data is correct
+query II
+select * from my_datalake.default.test_snapshot_operation_type order by id;
+----
+1	hello
+2	world
+3	foo
+
+# INSERT more data - should produce another snapshot with operation=append
+statement ok
+INSERT INTO my_datalake.default.test_snapshot_operation_type VALUES (4, 'bar'), (5, 'baz');
+
+# Both snapshots should have operation=append
+query II
+select sequence_number, operation from iceberg_snapshots(my_datalake.default.test_snapshot_operation_type) order by sequence_number;
+----
+1	append
+2	append
+
+# DELETE should produce a snapshot with operation=delete
+statement ok
+DELETE FROM my_datalake.default.test_snapshot_operation_type WHERE id IN (2, 4);
+
+# Verify: two appends and one delete
+query II
+select sequence_number, operation from iceberg_snapshots(my_datalake.default.test_snapshot_operation_type) order by sequence_number;
+----
+1	append
+2	append
+3	delete
+
+# Verify the remaining data
+query II
+select * from my_datalake.default.test_snapshot_operation_type order by id;
+----
+1	hello
+3	foo
+5	baz
+
+# INSERT after DELETE should still produce operation=append
+statement ok
+INSERT INTO my_datalake.default.test_snapshot_operation_type VALUES (6, 'new_entry');
+
+query II
+select sequence_number, operation from iceberg_snapshots(my_datalake.default.test_snapshot_operation_type) order by sequence_number;
+----
+1	append
+2	append
+3	delete
+4	append
+
+query II
+select * from my_datalake.default.test_snapshot_operation_type order by id;
+----
+1	hello
+3	foo
+5	baz
+6	new_entry
+
+# UPDATE should produce a snapshot with operation=overwrite
+# (UPDATE both removes the old row and adds a new data file, which Iceberg classifies as 'overwrite')
+statement ok
+UPDATE my_datalake.default.test_snapshot_operation_type SET data = 'updated_hello' WHERE id = 1;
+
+query II
+select sequence_number, operation from iceberg_snapshots(my_datalake.default.test_snapshot_operation_type) order by sequence_number;
+----
+1	append
+2	append
+3	delete
+4	append
+5	overwrite
+
+# Verify the data after UPDATE
+query II
+select * from my_datalake.default.test_snapshot_operation_type order by id;
+----
+1	updated_hello
+3	foo
+5	baz
+6	new_entry
+
+# UPDATE that touches multiple rows should also produce a single snapshot with operation=overwrite
+statement ok
+UPDATE my_datalake.default.test_snapshot_operation_type SET data = data || '_v2' WHERE id IN (3, 5);
+
+query II
+select sequence_number, operation from iceberg_snapshots(my_datalake.default.test_snapshot_operation_type) order by sequence_number;
+----
+1	append
+2	append
+3	delete
+4	append
+5	overwrite
+6	overwrite
+
+query II
+select * from my_datalake.default.test_snapshot_operation_type order by id;
+----
+1	updated_hello
+3	foo_v2
+5	baz_v2
+6	new_entry
+
+# UPDATE that matches no rows should NOT create a new snapshot
+statement ok
+UPDATE my_datalake.default.test_snapshot_operation_type SET data = 'nope' WHERE id = 9999;
+
+query II
+select sequence_number, operation from iceberg_snapshots(my_datalake.default.test_snapshot_operation_type) order by sequence_number;
+----
+1	append
+2	append
+3	delete
+4	append
+5	overwrite
+6	overwrite
+
+# A subsequent INSERT should still produce operation=append (i.e. the previous UPDATE didn't mutate global state)
+statement ok
+INSERT INTO my_datalake.default.test_snapshot_operation_type VALUES (7, 'after_update');
+
+query II
+select sequence_number, operation from iceberg_snapshots(my_datalake.default.test_snapshot_operation_type) order by sequence_number;
+----
+1	append
+2	append
+3	delete
+4	append
+5	overwrite
+6	overwrite
+7	append
+
+query II
+select * from my_datalake.default.test_snapshot_operation_type order by id;
+----
+1	updated_hello
+3	foo_v2
+5	baz_v2
+6	new_entry
+7	after_update

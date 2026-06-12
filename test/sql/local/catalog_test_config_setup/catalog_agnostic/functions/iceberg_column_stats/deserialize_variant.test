@@ -1,0 +1,72 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/functions/iceberg_column_stats/deserialize_variant.test
+# description: iceberg_column_stats deserializes the VARIANT lower/upper bound blobs into readable values
+# group: [iceberg_column_stats]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+require icu
+
+require core_functions
+
+set ignore_error_messages
+
+statement ok
+drop table if exists my_datalake.default.variant_stats_tbl;
+
+# single data file with two shredded fields: age in [20, 60], name in ['Alice', 'Eric']
+statement ok
+create table my_datalake.default.variant_stats_tbl WITH ('format-version'=3) as from values
+({'age': 20, 'name': 'Alice'}::VARIANT),
+({'age': 30, 'name': 'Bob'}::VARIANT),
+({'age': 40, 'name': 'Chad'}::VARIANT),
+({'age': 50, 'name': 'Dylan'}::VARIANT),
+({'age': 60, 'name': 'Eric'}::VARIANT) t(variant_col);
+
+# the variant column is reported and its bounds deserialize without error
+query I
+select column_name from iceberg_column_stats(my_datalake.default.variant_stats_tbl);
+----
+variant_col
+
+# lower bound carries the per-field minimums, upper bound the per-field maximums
+query II
+select lower_bound, upper_bound from iceberg_column_stats(my_datalake.default.variant_stats_tbl);
+----
+{'$[\'age\']': 20, '$[\'name\']': Alice}	{'$[\'age\']': 60, '$[\'name\']': Eric}
+
+
+statement ok
+insert into my_datalake.default.variant_stats_tbl values ({'root': 'str_val'}::VARIANT), ({'root':50}::VARIANT);
+
+# after inserting unshredded type, lower_bounds and upper_bounds are NULL
+query II
+select lower_bound, upper_bound from iceberg_column_stats(my_datalake.default.variant_stats_tbl);
+----
+{'$[\'age\']': 20, '$[\'name\']': Alice}	{'$[\'age\']': 60, '$[\'name\']': Eric}
+NULL	NULL
+
+# ------------------------------------------------------------------------------
+# a variant column that never shreds has no bounds: the function must report NULL
+# rather than crashing while trying to deserialize.
+# ------------------------------------------------------------------------------
+
+statement ok
+drop table if exists my_datalake.default.variant_nobounds_tbl;
+
+statement ok
+create table my_datalake.default.variant_nobounds_tbl WITH ('format-version'='3') as
+select case when i % 2 = 0 then i::VARIANT else {'x': i}::VARIANT end as variant_col
+from range(10) t(i);
+
+query III
+select column_name, lower_bound, upper_bound from iceberg_column_stats(my_datalake.default.variant_nobounds_tbl);
+----
+variant_col	NULL	NULL

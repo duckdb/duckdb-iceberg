@@ -193,6 +193,8 @@ public:
 	//! Whether or not this is an in-memory Iceberg database
 	bool InMemory() override;
 	string GetDBPath() override;
+	//! Allow ATTACH OR REPLACE to actually re-attach when iceberg-specific options change
+	bool HasConflictingAttachOptions(const string &path, const AttachOptions &options) override;
 	static string GetOnlyMergeOnReadSupportedErrorMessage(const string &table_name, const string &property,
 	                                                      const string &property_value);
 
@@ -216,6 +218,8 @@ private:
 	// defaults and overrides provided by a catalog.
 	case_insensitive_map_t<string> defaults;
 	case_insensitive_map_t<string> overrides;
+	//! raw attach options (after core stripping) used to detect a conflicting ATTACH OR REPLACE
+	case_insensitive_map_t<Value> raw_attach_options;
 
 public:
 	unordered_set<string> supported_urls;

@@ -25,6 +25,7 @@
 #include "catalog/rest/transaction/iceberg_transaction.hpp"
 #include "core/expression/iceberg_predicate_stats.hpp"
 #include "core/metadata/iceberg_table_metadata.hpp"
+#include "storage/statistics/iceberg_variant_statistics.hpp"
 #include "planning/metadata_io/manifest/iceberg_manifest_reader.hpp"
 #include "planning/metadata_io/manifest_list/iceberg_manifest_list_reader.hpp"
 #include "planning/metadata_io/manifest_list/bound_iceberg_manifest_list_entry.hpp"
@@ -638,8 +639,29 @@ bool IcebergMultiFileList::FileMatchesFilter(const IcebergManifestFile &manifest
 		if (upper_bound_it != data_file.upper_bounds.end()) {
 			upper_bound = upper_bound_it->second;
 		}
+		IcebergPredicateStats stats;
 
-		auto stats = IcebergPredicateStats::DeserializeBounds(lower_bound, upper_bound, column.name, column.type);
+		if (column.type.id() == LogicalTypeId::VARIANT) {
+			if (lower_bound.IsNull() || upper_bound.IsNull()) {
+				// if there are no variant stats, scan the whole file
+				return true;
+			}
+			Value lower_decoded, upper_decoded;
+			auto lower_blob = lower_bound.GetValueUnsafe<string_t>();
+			auto upper_blob = upper_bound.GetValueUnsafe<string_t>();
+
+			Value lower_variant, upper_variant;
+			if (IcebergVariantBoundsReader::Deserialize(context, lower_blob, lower_decoded) &&
+			    IcebergVariantBoundsReader::RekeyBoundsVariant(lower_decoded, lower_variant)) {
+				stats.SetLowerBound(lower_variant);
+			}
+			if (IcebergVariantBoundsReader::Deserialize(context, upper_blob, upper_decoded) &&
+			    IcebergVariantBoundsReader::RekeyBoundsVariant(upper_decoded, upper_variant)) {
+				stats.SetUpperBound(upper_variant);
+			}
+		} else {
+			stats = IcebergPredicateStats::DeserializeBounds(lower_bound, upper_bound, column.name, column.type);
+		}
 
 		int64_t value_count = 0;
 		bool has_value_counts = false;

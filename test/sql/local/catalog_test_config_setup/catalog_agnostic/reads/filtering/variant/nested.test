@@ -1,0 +1,66 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/reads/filtering/variant/nested.test
+# description: file pruning on deeply nested shredded VARIANT fields via upper/lower bounds
+# group: [variant]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+require icu
+
+require core_functions
+
+statement ok
+drop table if exists my_datalake.default.variant_nested_tbl;
+
+# data file 1: nested zip codes 1000-1200
+statement ok
+create table my_datalake.default.variant_nested_tbl WITH ('format-version'='3') as from values
+({'person': {'name': 'Alice', 'address': {'city': 'NYC', 'zip': 1000}}}::VARIANT),
+({'person': {'name': 'Bob',   'address': {'city': 'LA',  'zip': 1100}}}::VARIANT),
+({'person': {'name': 'Chad',  'address': {'city': 'SF',  'zip': 1200}}}::VARIANT) t(variant_col);
+
+# data file 2: nested zip codes 2000-2200
+statement ok
+insert into my_datalake.default.variant_nested_tbl values
+({'person': {'name': 'Dylan', 'address': {'city': 'ATX', 'zip': 2000}}}::VARIANT),
+({'person': {'name': 'Eric',  'address': {'city': 'SEA', 'zip': 2100}}}::VARIANT),
+({'person': {'name': 'Frank', 'address': {'city': 'BOS', 'zip': 2200}}}::VARIANT);
+
+statement ok
+call enable_logging('Iceberg');
+
+# zip > 1500 prunes data file 1 (max zip 1200)
+query I
+select * from my_datalake.default.variant_nested_tbl where variant_col.person.address.zip > 1500;
+----
+{'person': {'address': {'city': ATX, 'zip': 2000}, 'name': Dylan}}
+{'person': {'address': {'city': SEA, 'zip': 2100}, 'name': Eric}}
+{'person': {'address': {'city': BOS, 'zip': 2200}, 'name': Frank}}
+
+query I
+select count(*) from duckdb_logs() where type = 'Iceberg' and message like '%skipped%';
+----
+1
+
+statement ok
+CALL truncate_duckdb_logs();
+
+# zip < 1500 prunes data file 2 (min zip 2000)
+query I
+select * from my_datalake.default.variant_nested_tbl where variant_col.person.address.zip < 1500;
+----
+{'person': {'address': {'city': NYC, 'zip': 1000}, 'name': Alice}}
+{'person': {'address': {'city': LA, 'zip': 1100}, 'name': Bob}}
+{'person': {'address': {'city': SF, 'zip': 1200}, 'name': Chad}}
+
+query I
+select count(*) from duckdb_logs() where type = 'Iceberg' and message like '%skipped%';
+----
+1

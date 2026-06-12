@@ -1,0 +1,29 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/insert/iceberg_types/variant/test_write_variant_bounds_simple.test
+# description: writing lower/upper bounds for shredded VARIANT columns into the manifest
+# group: [variant]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+require icu
+
+require core_functions
+
+statement ok
+drop table if exists my_datalake.default.variant_bounds_tbl;
+
+statement ok
+create table my_datalake.default.variant_bounds_tbl WITH ('format-version'='3') as from values
+({'age': 20, 'name': 'Alice'}::VARIANT),
+({'age': 30, 'name': 'Bob'}::VARIANT),
+({'age': 40, 'name': 'Jerry'}::VARIANT),
+({'age': 50, 'name': 'Dylan'}::VARIANT),
+({'age': 60, 'name': 'Zack'}::VARIANT) t(variant_col);
+

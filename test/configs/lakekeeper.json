@@ -32,7 +32,6 @@
         "test/sql/local/catalog_test_config_setup/catalog_agnostic/merge/merge_multi_partition_timestamp.test",
         "test/sql/local/catalog_test_config_setup/catalog_agnostic/create/default/test_create_default_blob.test",
         "test/sql/local/catalog_test_config_setup/catalog_agnostic/test_basic_variant.test",
-        "test/sql/local/catalog_test_config_setup/catalog_agnostic/insert/test_create_geometry_type.test",
         "test/sql/local/catalog_test_config_setup/catalog_agnostic/insert/iceberg_types/test_geometry_type.test",
         "test/sql/local/catalog_test_config_setup/catalog_agnostic/insert/iceberg_types/test_geometry_type_nested.test",
         "test/sql/local/catalog_test_config_setup/catalog_agnostic/insert/iceberg_types/test_write_geometry_bounds.test",

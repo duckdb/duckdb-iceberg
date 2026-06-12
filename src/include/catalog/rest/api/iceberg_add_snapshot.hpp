@@ -20,7 +20,8 @@ struct IcebergAddSnapshot : public IcebergTableUpdate {
 	static constexpr const IcebergTableUpdateType TYPE = IcebergTableUpdateType::ADD_SNAPSHOT;
 
 public:
-	IcebergAddSnapshot(const IcebergTableInformation &table_info, IcebergSnapshotOperationType operation);
+	IcebergAddSnapshot(const IcebergTableInformation &table_info,
+	                   IcebergSnapshotOperationType operation = IcebergSnapshotOperationType::OVERWRITE);
 
 public:
 	void ConstructManifestList(IcebergManifestList &manifest_list, CopyFunction &avro_copy, DatabaseInstance &db,

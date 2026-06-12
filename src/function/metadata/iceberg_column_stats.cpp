@@ -10,6 +10,7 @@
 #include "core/metadata/iceberg_table_metadata.hpp"
 #include "core/metadata/manifest/iceberg_manifest.hpp"
 #include "core/metadata/manifest/iceberg_manifest_list.hpp"
+#include "storage/statistics/iceberg_variant_statistics.hpp"
 
 namespace duckdb {
 
@@ -230,33 +231,49 @@ static void IcebergColumnStatsFunction(ClientContext &context, TableFunctionInpu
 					nan_value_count = Value::BIGINT(nan_value_count_it->second);
 				}
 
-				auto stats =
-				    IcebergPredicateStats::DeserializeBounds(lower_bound, upper_bound, column.name, column.type);
-
 				//! column_name
 				AddString(output.data[col++], out, string_t(column.name));
 				//! column_type
 				AddString(output.data[col++], out, string_t(column.type.ToString()));
 
-				//! GEOMETRY bounds are a bounding box (no scalar min/max), so lower_bound /
-				//! upper_bound carry the box serialized as a JSON object instead of a scalar.
-				bool is_geometry = column.type.id() == LogicalTypeId::GEOMETRY && stats.geometry_stats;
+				string lower_bound_str;
+				string upper_bound_str;
+				if (column.type.id() == LogicalTypeId::VARIANT) {
+					//! VARIANT lower/upper bounds are stored as a binary Variant value (an object keyed by JSON
+					//! path); decode them into a readable VARIANT instead of attempting a scalar deserialization.
+					Value decoded;
+					if (!lower_bound.IsNull() && IcebergVariantBoundsReader::Deserialize(
+					                                 context, lower_bound.GetValueUnsafe<string_t>(), decoded)) {
+						lower_bound_str = decoded.ToString();
+					} else {
+						lower_bound_str = Value().ToString();
+					}
+					if (!upper_bound.IsNull() && IcebergVariantBoundsReader::Deserialize(
+					                                 context, upper_bound.GetValueUnsafe<string_t>(), decoded)) {
+						upper_bound_str = decoded.ToString();
+					} else {
+						upper_bound_str = Value().ToString();
+					}
+				} else {
+					auto stats =
+					    IcebergPredicateStats::DeserializeBounds(lower_bound, upper_bound, column.name, column.type);
+					//! GEOMETRY bounds are a bounding box (no scalar min/max), so lower_bound /
+					//! upper_bound carry the box serialized as a JSON object instead of a scalar.
+					bool is_geometry = column.type.id() == LogicalTypeId::GEOMETRY && stats.geometry_stats;
+					if (is_geometry) {
+						auto &extent = GeometryStats::GetExtent(*stats.geometry_stats);
+						lower_bound_str = GeometryBoundJson(extent, true);
+						upper_bound_str = GeometryBoundJson(extent, false);
+					} else {
+						lower_bound_str = stats.lower_bound.ToString();
+						upper_bound_str = stats.upper_bound.ToString();
+					}
+				}
 
 				//! lower_bound
-				if (is_geometry) {
-					auto &extent = GeometryStats::GetExtent(*stats.geometry_stats);
-					AddString(output.data[col++], out, string_t(GeometryBoundJson(extent, true)));
-				} else {
-					AddString(output.data[col++], out, string_t(stats.lower_bound.ToString()));
-				}
+				AddString(output.data[col++], out, string_t(lower_bound_str));
 				//! upper_bound
-				if (is_geometry) {
-					auto &extent = GeometryStats::GetExtent(*stats.geometry_stats);
-					AddString(output.data[col++], out, string_t(GeometryBoundJson(extent, false)));
-				} else {
-					AddString(output.data[col++], out, string_t(stats.upper_bound.ToString()));
-				}
-
+				AddString(output.data[col++], out, string_t(upper_bound_str));
 				// column_size
 				output.data[col++].SetValue(out, column_size);
 				// value_count

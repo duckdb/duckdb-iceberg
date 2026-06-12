@@ -59,7 +59,6 @@ select request.url[26:] from duckdb_logs_parsed('http') where request.url not li
 ----
 namespaces/default/tables/spark_written_upper_lower_bounds
 
-# test parsing of interval
 statement ok
 ATTACH OR REPLACE '' AS my_datalake (
     TYPE ICEBERG,

@@ -1,0 +1,130 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/reads/filtering/variant/comparisons.test
+# description: VARIANT bound pruning across all comparison operators (> >= < <= =), including boundary cases
+# group: [variant]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+require icu
+
+require core_functions
+
+statement ok
+drop table if exists my_datalake.default.variant_cmp_tbl;
+
+# data file 1: age bounds [10, 30]
+statement ok
+create table my_datalake.default.variant_cmp_tbl WITH ('format-version'='3') as from values
+({'age': 10}::VARIANT),
+({'age': 20}::VARIANT),
+({'age': 30}::VARIANT) t(variant_col);
+
+# data file 2: age bounds [70, 90]
+statement ok
+insert into my_datalake.default.variant_cmp_tbl values
+({'age': 70}::VARIANT),
+({'age': 80}::VARIANT),
+({'age': 90}::VARIANT);
+
+statement ok
+call enable_logging('Iceberg');
+
+# '>' prunes data file 1 (max 30)
+statement ok
+select * from my_datalake.default.variant_cmp_tbl where variant_col.age > 50;
+
+query I
+select count(*) from duckdb_logs() where type = 'Iceberg' and message like '%skipped%';
+----
+1
+
+statement ok
+CALL truncate_duckdb_logs();
+
+# '>=' prunes data file 1 (max 30)
+statement ok
+select * from my_datalake.default.variant_cmp_tbl where variant_col.age >= 70;
+
+query I
+select count(*) from duckdb_logs() where type = 'Iceberg' and message like '%skipped%';
+----
+1
+
+statement ok
+CALL truncate_duckdb_logs();
+
+# '<' prunes data file 2 (min 70)
+statement ok
+select * from my_datalake.default.variant_cmp_tbl where variant_col.age < 50;
+
+query I
+select count(*) from duckdb_logs() where type = 'Iceberg' and message like '%skipped%';
+----
+1
+
+statement ok
+CALL truncate_duckdb_logs();
+
+# '<=' prunes data file 2 (min 70)
+statement ok
+select * from my_datalake.default.variant_cmp_tbl where variant_col.age <= 30;
+
+query I
+select count(*) from duckdb_logs() where type = 'Iceberg' and message like '%skipped%';
+----
+1
+
+statement ok
+CALL truncate_duckdb_logs();
+
+# '=' to a value only in range of data file 1 prunes data file 2
+statement ok
+select * from my_datalake.default.variant_cmp_tbl where variant_col.age = 20;
+
+query I
+select count(*) from duckdb_logs() where type = 'Iceberg' and message like '%skipped%';
+----
+1
+
+statement ok
+CALL truncate_duckdb_logs();
+
+# '=' to a value outside both ranges prunes both data files
+statement ok
+select * from my_datalake.default.variant_cmp_tbl where variant_col.age = 1000;
+
+query I
+select count(*) from duckdb_logs() where type = 'Iceberg' and message like '%skipped%';
+----
+2
+
+statement ok
+CALL truncate_duckdb_logs();
+
+# inclusive boundary: '>= 30' must NOT prune data file 1 (30 is its max)
+statement ok
+select * from my_datalake.default.variant_cmp_tbl where variant_col.age >= 30;
+
+query I
+select count(*) from duckdb_logs() where type = 'Iceberg' and message like '%skipped%';
+----
+0
+
+statement ok
+CALL truncate_duckdb_logs();
+
+# inclusive boundary: '<= 70' must NOT prune data file 2 (70 is its min)
+statement ok
+select * from my_datalake.default.variant_cmp_tbl where variant_col.age <= 70;
+
+query I
+select count(*) from duckdb_logs() where type = 'Iceberg' and message like '%skipped%';
+----
+0

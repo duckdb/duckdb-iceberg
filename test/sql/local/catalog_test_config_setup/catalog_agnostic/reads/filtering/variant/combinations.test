@@ -1,0 +1,91 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/reads/filtering/variant/combinations.test
+# description: filters on different VARIANT fields prune different data files (and combine)
+# group: [variant]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+require icu
+
+require core_functions
+
+statement ok
+drop table if exists my_datalake.default.variant_combo_tbl;
+
+# data file 1: 'a' low (1-3), 'b' low (100-102)
+statement ok
+create table my_datalake.default.variant_combo_tbl WITH ('format-version'='3') as from values
+({'a': 1, 'b': 100}::VARIANT),
+({'a': 2, 'b': 101}::VARIANT),
+({'a': 3, 'b': 102}::VARIANT) t(variant_col);
+
+# data file 2: 'a' high (10-12), 'b' high (200-202)
+statement ok
+insert into my_datalake.default.variant_combo_tbl values
+({'a': 10, 'b': 200}::VARIANT),
+({'a': 11, 'b': 201}::VARIANT),
+({'a': 12, 'b': 202}::VARIANT);
+
+statement ok
+call enable_logging('Iceberg');
+
+# filter on 'a' prunes data file 1 (max a = 3)
+statement ok
+select * from my_datalake.default.variant_combo_tbl where variant_col.a > 5;
+
+query I
+select count(*) from duckdb_logs() where type = 'Iceberg' and message like '%skipped%';
+----
+1
+
+statement ok
+CALL truncate_duckdb_logs();
+
+# filter on 'b' prunes data file 2 (min b = 200)
+statement ok
+select * from my_datalake.default.variant_combo_tbl where variant_col.b < 150;
+
+query I
+select count(*) from duckdb_logs() where type = 'Iceberg' and message like '%skipped%';
+----
+1
+
+statement ok
+CALL truncate_duckdb_logs();
+
+# combined: data file 1 fails (a > 5), data file 2 fails (b < 150) -> both pruned
+statement ok
+select * from my_datalake.default.variant_combo_tbl where variant_col.a > 5 and variant_col.b < 150;
+
+query I
+select count(*) from duckdb_logs() where type = 'Iceberg' and message like '%skipped%';
+----
+2
+
+statement ok
+CALL truncate_duckdb_logs();
+
+# the combined predicate eliminates every row
+query I
+select count(*) from my_datalake.default.variant_combo_tbl where variant_col.a > 5 and variant_col.b < 150;
+----
+0
+
+statement ok
+CALL truncate_duckdb_logs();
+
+# a predicate that matches both files prunes nothing
+statement ok
+select * from my_datalake.default.variant_combo_tbl where variant_col.a > 0;
+
+query I
+select count(*) from duckdb_logs() where type = 'Iceberg' and message like '%skipped%';
+----
+0

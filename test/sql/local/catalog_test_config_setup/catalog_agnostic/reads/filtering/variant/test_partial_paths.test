@@ -1,0 +1,63 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/reads/filtering/variant/test_partial_paths.test
+# description: partially shredded / unshredded VARIANT columns produce no usable bounds, so pruning stays conservative
+# group: [variant]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+require icu
+
+require core_functions
+
+statement ok
+drop table if exists my_datalake.default.variant_partial_tbl;
+
+# data file 1: 'i' is uniformly INT -> fully shredded -> bounds [0, 99]
+statement ok
+create table my_datalake.default.variant_partial_tbl WITH ('format-version'='3') as
+select
+    {'a': {'b' : range }}::VARIANT as variant_col_1,
+    CASE WHEN range%2 = 0 THEN {'a': {'c' : {'d' : {'e': range }}}}::VARIANT ELSE {'a': {'c' : {'d' : {'e': (range::VARCHAR || '_str') }}}}::VARIANT END variant_col_2
+from range(100);
+
+# filter on column with no stats works
+query I
+select variant_col_2 from my_datalake.default.variant_partial_tbl where variant_col_2.a.c.d.e::VARCHAR = '10';
+----
+{'a': {'c': {'d': {'e': 10}}}}
+
+statement ok
+DROP TABLE my_datalake.default.variant_partial_tbl;
+
+# test creating unshredded variant on deep keys but shredded on shallow keys
+statement ok
+create table my_datalake.default.variant_partial_tbl WITH ('format-version'='3') as
+select
+    CASE range%3 WHEN 0 THEN {'a': {'c' : {'d' : {'e': range }}}}::VARIANT
+                 WHEN 1 THEN {'a': {'c' : {'d' : {'e': (range::VARCHAR || '_str') }}}}::VARIANT
+                 WHEN 2 THEN {'a': {'b': range}}::VARIANT END variant_col_1
+from range(30);
+
+statement ok
+insert into my_datalake.default.variant_partial_tbl
+select {'a': {'b': range}}::VARIANT variant_col_1
+from range(30, 60);
+
+statement ok
+call enable_logging('Iceberg');
+
+statement ok
+select * from my_datalake.default.variant_partial_tbl where variant_col_1.a.b < 20;
+
+# first data file can still be skipped
+query I
+select count(*) from duckdb_logs() where type like 'Iceberg' and message like '%skipped%';
+----
+1

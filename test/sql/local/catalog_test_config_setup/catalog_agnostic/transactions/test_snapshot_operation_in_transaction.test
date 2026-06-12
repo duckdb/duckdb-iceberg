@@ -1,0 +1,142 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/transactions/test_snapshot_operation_in_transaction.test
+# description: Test that snapshot operation type is correctly passed through transactions
+# group: [transactions]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+set enable_logging=true
+
+statement ok
+set logging_level='debug'
+
+# Create a fresh table
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.test_txn_operation_type;
+
+statement ok
+CREATE TABLE my_datalake.default.test_txn_operation_type (id INTEGER, value VARCHAR);
+
+# Test INSERT in explicit transaction produces correct operation type (append)
+statement ok
+begin transaction;
+
+statement ok
+INSERT INTO my_datalake.default.test_txn_operation_type VALUES (1, 'a'), (2, 'b'), (3, 'c');
+
+statement ok
+commit;
+
+query II
+select sequence_number, operation from iceberg_snapshots(my_datalake.default.test_txn_operation_type) order by sequence_number;
+----
+1	append
+
+# Test DELETE in explicit transaction produces correct operation type (delete)
+statement ok
+begin transaction;
+
+statement ok
+DELETE FROM my_datalake.default.test_txn_operation_type WHERE id = 2;
+
+statement ok
+commit;
+
+# Verify: one append and one delete
+query II
+select sequence_number, operation from iceberg_snapshots(my_datalake.default.test_txn_operation_type) order by sequence_number;
+----
+1	append
+2	delete
+
+# Verify final state
+query II
+select * from my_datalake.default.test_txn_operation_type order by id;
+----
+1	a
+3	c
+
+# Test UPDATE in explicit transaction produces correct operation type (overwrite)
+statement ok
+begin transaction;
+
+statement ok
+UPDATE my_datalake.default.test_txn_operation_type SET value = 'a_updated' WHERE id = 1;
+
+statement ok
+commit;
+
+# Verify: append, delete, overwrite
+query II
+select sequence_number, operation from iceberg_snapshots(my_datalake.default.test_txn_operation_type) order by sequence_number;
+----
+1	append
+2	delete
+3	overwrite
+
+query II
+select * from my_datalake.default.test_txn_operation_type order by id;
+----
+1	a_updated
+3	c
+
+# Test UPDATE rolled back in a transaction does NOT create a snapshot
+statement ok
+begin transaction;
+
+statement ok
+UPDATE my_datalake.default.test_txn_operation_type SET value = 'should_not_persist' WHERE id = 3;
+
+statement ok
+rollback;
+
+query II
+select sequence_number, operation from iceberg_snapshots(my_datalake.default.test_txn_operation_type) order by sequence_number;
+----
+1	append
+2	delete
+3	overwrite
+
+query II
+select * from my_datalake.default.test_txn_operation_type order by id;
+----
+1	a_updated
+3	c
+
+# Test multiple operations in a single transaction each produce their own snapshot with correct operation type
+statement ok
+begin transaction;
+
+statement ok
+INSERT INTO my_datalake.default.test_txn_operation_type VALUES (4, 'd'), (5, 'e');
+
+statement ok
+UPDATE my_datalake.default.test_txn_operation_type SET value = 'd_v2' WHERE id = 4;
+
+statement ok
+DELETE FROM my_datalake.default.test_txn_operation_type WHERE id = 5;
+
+statement ok
+commit;
+
+# Three new snapshots should have been added: append, overwrite, delete
+query II
+select sequence_number, operation from iceberg_snapshots(my_datalake.default.test_txn_operation_type) order by sequence_number;
+----
+1	append
+2	delete
+3	overwrite
+4	append
+5	overwrite
+6	delete

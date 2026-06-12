@@ -1,0 +1,83 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/reads/filtering/variant/edge_cases.test
+# description: VARIANT bound pruning must not crash on empty objects, missing fields, or NULL variants
+# group: [variant]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+require icu
+
+require core_functions
+
+statement ok
+drop table if exists my_datalake.default.variant_edge_tbl;
+
+# data file 1: normal shredded values
+statement ok
+create table my_datalake.default.variant_edge_tbl WITH ('format-version'='3') as from values
+({'age': 10}::VARIANT),
+({'age': 20}::VARIANT),
+({'age': 30}::VARIANT) t(variant_col);
+
+# data file 3: a present-but-NULL field, and fully NULL variants
+statement ok
+insert into my_datalake.default.variant_edge_tbl values
+({'age': NULL}::VARIANT),
+(NULL::VARIANT),
+(NULL::VARIANT);
+
+statement ok
+call enable_logging('Iceberg');
+
+# filtering on 'age' must not crash even though files 2/3 have no usable 'age' bounds
+statement ok
+select * from my_datalake.default.variant_edge_tbl where variant_col.age > 100;
+
+# data file 1 (max age 30) is pruned; files without 'age' bounds are conservatively kept
+query I
+select count(*) from duckdb_logs() where type = 'Iceberg' and message like '%skipped%';
+----
+1
+
+statement ok
+CALL truncate_duckdb_logs();
+
+# results are still correct: empty/NULL rows yield NULL for variant_col.age and drop out of the comparison
+query I
+select count(*) from my_datalake.default.variant_edge_tbl where variant_col.age > 5;
+----
+3
+
+query I
+select count(*) from my_datalake.default.variant_edge_tbl where variant_col.age > 100;
+----
+0
+
+# every row is still readable (3 normal + 2 empty + 3 null)
+query I
+select count(*) from my_datalake.default.variant_edge_tbl;
+----
+6
+
+# a table made up entirely of empty/NULL variants must also scan and filter without crashing
+statement ok
+drop table if exists my_datalake.default.variant_empty_tbl;
+
+statement ok
+create table my_datalake.default.variant_empty_tbl WITH ('format-version'='3') as from values
+(NULL::VARIANT) t(variant_col);
+
+statement ok
+select * from my_datalake.default.variant_empty_tbl where variant_col.age > 1;
+
+query I
+select count(*) from my_datalake.default.variant_empty_tbl where variant_col.age > 1;
+----
+0

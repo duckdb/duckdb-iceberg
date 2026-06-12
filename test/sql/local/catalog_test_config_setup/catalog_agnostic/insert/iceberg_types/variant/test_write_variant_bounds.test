@@ -1,0 +1,60 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/insert/iceberg_types/variant/test_write_variant_bounds.test
+# description: writing lower/upper bounds for shredded VARIANT columns into the manifest
+# group: [variant]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+require icu
+
+require core_functions
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+pragma threads=1;
+
+statement ok
+use my_datalake.default;
+
+statement ok
+drop table if exists my_datalake.default.variant_bounds_tbl;
+
+statement ok
+create table my_datalake.default.variant_bounds_tbl(v VARIANT) WITH ('format-version'='3');
+
+# uniformly typed shredded object fields: age (INT) and city (VARCHAR)
+statement ok
+insert into my_datalake.default.variant_bounds_tbl VALUES
+	({'age': 25, 'city': 'amsterdam'}),
+	({'age': 30, 'city': 'berlin'}),
+	({'age': 40, 'city': 'cairo'});
+
+# grab the manifest written by the insert
+statement ok
+set variable manifest_path = (select manifest_path from iceberg_metadata(my_datalake.default.variant_bounds_tbl) order by manifest_sequence_number desc limit 1);
+
+# the VARIANT column is field id 1 - assert it has non-empty lower and upper bound blobs.
+# the bound blobs are serialized parquet-variant (metadata + value) objects keyed by JSON path.
+query III
+select lk, octet_length(lv) > 0, octet_length(uv) > 0 from (
+	select
+		unnest(map_keys(lower_bounds)) lk,
+		unnest(map_values(lower_bounds)) lv,
+		unnest(map_keys(upper_bounds)) uk,
+		unnest(map_values(upper_bounds)) uv
+	from (select unnest(data_file) from read_avro(getvariable('manifest_path')))
+) where lk = 1;
+----
+1	true	true
+
+statement ok
+drop table if exists my_datalake.default.variant_bounds_tbl;

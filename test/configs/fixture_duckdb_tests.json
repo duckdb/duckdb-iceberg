@@ -64,7 +64,6 @@
         "test/sql/types/nested/map/map_from_entries/column_null_entry.test",
         "test/sql/types/nested/map/test_map_nested_keys.test",
         "test/sql/types/struct/nested_structs.test",
-        "test/sql/types/variant/implicit_cast_from_variant.test",
         "test/sql/function/list/aggregates/entropy.test",
         "test/sql/function/list/list_unique.test",
         "test/sql/function/timestamp/test_icu_datediff.test",
@@ -539,7 +538,7 @@
       ]
     },
     {
-      "reason": "Variant type / timestamp_ns not supported by iceberg-rest-fixture",
+      "reason": "Variant type / timestamp_ns need a default 'format-version'=3",
       "paths": [
         "test/sql/function/timestamp/test_strftime_timestamp_ns.test",
         "test/sql/function/variant/variant_extract_try_cast.test",
@@ -547,6 +546,7 @@
         "test/sql/function/variant/variant_typeof.test",
         "test/sql/storage/types/variant/append_shredded.test",
         "test/sql/storage/types/variant/big_table.test_slow",
+        "test/sql/storage/types/variant/extension_types.test",
         "test/sql/storage/types/variant/index_fetch.test",
         "test/sql/storage/types/variant/list_of_variant.test_slow",
         "test/sql/storage/types/variant/null_tests.test_slow",
@@ -555,15 +555,26 @@
         "test/sql/storage/types/variant/test_all_types_single_object.test",
         "test/sql/storage/types/variant/test_all_types_single_table.test",
         "test/sql/storage/types/variant/test_all_types_variant.test",
+        "test/sql/storage/types/variant/tpcds_sf1.test_slow",
+        "test/sql/storage/types/variant/tpch_sf1.test_slow",
         "test/sql/storage/types/variant/update.test",
         "test/sql/storage/types/variant/variant_extract_stats.test",
         "test/sql/storage/types/variant/variant_index.test",
         "test/sql/storage/types/variant/variant_null_missing.test",
+        "test/sql/storage/types/variant/variant_null_shredding_inconsistency_issue.test",
         "test/sql/storage/types/variant/variant_shredding.test_slow",
+        "test/sql/storage/types/variant/variant_shredding_inconsistent.test",
         "test/sql/storage/types/variant/variant_shredding_omit_untyped.test",
         "test/sql/storage/types/variant/variant_stats_merging.test_slow",
         "test/sql/storage/types/variant/variant_storage_version.test",
-        "test/sql/storage/types/variant/variant_shredding_inconsistent.test"
+        "test/sql/types/variant/implicit_cast_from_variant.test",
+        "test/sql/types/variant/tpch_test_through_json.test",
+        "test/sql/types/variant/json_cast.test",
+        "test/sql/types/variant/try_cast_from_variant.test",
+        "test/sql/types/variant/test_all_types.test",
+        "test/sql/types/variant/variant_distinct.test",
+        "test/sql/types/variant/tpch_test.test",
+        "test/sql/types/variant/variant_map_to_variant_filter.test"
       ]
     },
     {
@@ -887,22 +898,31 @@
       ]
     },
     {
-      "reason": "Geometry type not supported by iceberg-rest-fixture",
+      "reason": "Geometry type needs default 'format-version'=3 table property",
       "paths": [
         "test/sql/types/geo/geometry.test",
+        "test/sql/types/geo/geometry_shred_checkpoint.test_slow",
         "test/sql/types/geo/geometry_compatability.test",
-        "test/sql/types/geo/geometry_crs.test",
-        "test/sql/types/geo/geometry_intersection_filter.test_slow",
-        "test/sql/types/geo/geometry_persist.test",
-        "test/sql/types/geo/geometry_shred.test",
         "test/sql/types/geo/geometry_shred_empty.test",
+        "test/sql/types/geo/geometry_crs.test",
         "test/sql/types/geo/geometry_shred_fetch.test",
+        "test/sql/types/geo/geometry_crs_projjson.test",
         "test/sql/types/geo/geometry_shred_limit.test",
+        "test/sql/types/geo/geometry_crs_wkt2.test",
         "test/sql/types/geo/geometry_shred_list.test",
+        "test/sql/types/geo/geometry_intersection_filter.test_slow",
         "test/sql/types/geo/geometry_shred_types.test_slow",
+        "test/sql/types/geo/geometry_intersection_filter_parquet.test",
         "test/sql/types/geo/geometry_stats.test",
+        "test/sql/types/geo/geometry_intersects.test",
+        "test/sql/types/geo/geometry_stats_prune.test",
+        "test/sql/types/geo/geometry_parquet_pushdown.test",
+        "test/sql/types/geo/geometry_stats_prune_shredded.test",
+        "test/sql/types/geo/geometry_persist.test",
         "test/sql/types/geo/geometry_storage_version.test",
+        "test/sql/types/geo/geometry_persist_wal.test",
         "test/sql/types/geo/geometry_update.test",
+        "test/sql/types/geo/geometry_shred.test",
         "test/sql/types/geo/geometry_wkb.test"
       ]
     },
@@ -1291,6 +1311,12 @@
       "paths": [
         "test/sql/binder/test_implicit_struct_pack.test",
         "test/sql/catalog/function/attached_macro.test"
+      ]
+    },
+    {
+      "reason": "Contains attach and use call, when config already uses iceberg attached db",
+      "paths": [
+        "test/sql/storage/metadata/partial_column_metadata_reuse_small_block.test"
       ]
     },
     {

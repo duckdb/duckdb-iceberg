@@ -652,8 +652,32 @@ unique_ptr<Catalog> IcebergCatalog::Attach(optional_ptr<StorageExtensionInfo> st
 	D_ASSERT(auth_handler);
 	auto catalog =
 	    make_uniq<IcebergCatalog>(db, options.access_mode, std::move(auth_handler), attach_options, default_schema);
+	//! Remember the raw attach options so that a later ATTACH OR REPLACE can detect when they change.
+	catalog->raw_attach_options.insert(options.options.begin(), options.options.end());
 	catalog->GetConfig(context, endpoint_type);
 	return std::move(catalog);
+}
+
+bool IcebergCatalog::HasConflictingAttachOptions(const string &path, const AttachOptions &options) {
+	//! If the base catalog already considers the path or catalog type to conflict, re-attach.
+	if (Catalog::HasConflictingAttachOptions(path, options)) {
+		return true;
+	}
+	//! Otherwise compare the iceberg-specific attach options (endpoint, credentials, MAX_TABLE_STALENESS, ...)
+	//! so that ATTACH OR REPLACE re-runs Attach when any of them changes.
+	if (options.options.size() != raw_attach_options.size()) {
+		return true;
+	}
+	for (auto &entry : options.options) {
+		auto it = raw_attach_options.find(entry.first);
+		if (it == raw_attach_options.end()) {
+			return true;
+		}
+		if (it->second.type() != entry.second.type() || it->second.ToString() != entry.second.ToString()) {
+			return true;
+		}
+	}
+	return false;
 }
 
 string IcebergCatalog::GetOnlyMergeOnReadSupportedErrorMessage(const string &table_name, const string &property,

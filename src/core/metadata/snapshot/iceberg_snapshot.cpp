@@ -185,6 +185,19 @@ IcebergSnapshot IcebergSnapshot::ParseSnapshot(const rest_api_objects::Snapshot 
 	ret.manifest_list = snapshot.manifest_list;
 	ret.metrics = MetricsFromSummary(snapshot.summary.additional_properties);
 
+	auto &op = snapshot.summary.operation;
+	if (op == "append") {
+		ret.operation = IcebergSnapshotOperationType::APPEND;
+	} else if (op == "replace") {
+		ret.operation = IcebergSnapshotOperationType::REPLACE;
+	} else if (op == "overwrite") {
+		ret.operation = IcebergSnapshotOperationType::OVERWRITE;
+	} else if (op == "delete") {
+		ret.operation = IcebergSnapshotOperationType::DELETE;
+	} else {
+		throw InvalidConfigurationException("Unknown snapshot operation type: '%s'", op);
+	}
+
 	ret.has_first_row_id = snapshot.has_first_row_id;
 	ret.first_row_id = snapshot.first_row_id;
 

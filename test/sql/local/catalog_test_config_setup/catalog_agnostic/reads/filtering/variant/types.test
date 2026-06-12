@@ -1,0 +1,94 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/reads/filtering/variant/types.test
+# description: file pruning on shredded VARIANT fields of various scalar types (DOUBLE/FLOAT/VARCHAR/DATE/TIMESTAMP)
+# group: [variant]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+require icu
+
+require core_functions
+
+statement ok
+drop table if exists my_datalake.default.variant_types_tbl;
+
+# data file 1: low values for every typed field
+statement ok
+create table my_datalake.default.variant_types_tbl WITH ('format-version'='3') as from values
+({'dbl': 1.5, 'flt': 1.5::FLOAT, 'str': 'apple',  'd': DATE '2020-01-01', 'ts': TIMESTAMP '2020-01-01 12:00:00'}::VARIANT),
+({'dbl': 2.5, 'flt': 2.5::FLOAT, 'str': 'banana', 'd': DATE '2020-06-01', 'ts': TIMESTAMP '2020-06-01 12:00:00'}::VARIANT),
+({'dbl': 3.5, 'flt': 3.5::FLOAT, 'str': 'cherry', 'd': DATE '2020-12-01', 'ts': TIMESTAMP '2020-12-01 12:00:00'}::VARIANT) t(variant_col);
+
+# data file 2: high values for every typed field
+statement ok
+insert into my_datalake.default.variant_types_tbl values
+({'dbl': 10.5, 'flt': 10.5::FLOAT, 'str': 'xigua',    'd': DATE '2030-01-01', 'ts': TIMESTAMP '2030-01-01 12:00:00'}::VARIANT),
+({'dbl': 11.5, 'flt': 11.5::FLOAT, 'str': 'yam',      'd': DATE '2030-06-01', 'ts': TIMESTAMP '2030-06-01 12:00:00'}::VARIANT),
+({'dbl': 12.5, 'flt': 12.5::FLOAT, 'str': 'zucchini', 'd': DATE '2030-12-01', 'ts': TIMESTAMP '2030-12-01 12:00:00'}::VARIANT);
+
+statement ok
+call enable_logging('Iceberg');
+
+# DOUBLE: data file 1 (max 3.5) is pruned
+statement ok
+select * from my_datalake.default.variant_types_tbl where variant_col.dbl > 5.0;
+
+query I
+select count(*) from duckdb_logs() where type = 'Iceberg' and message like '%skipped%';
+----
+1
+
+statement ok
+CALL truncate_duckdb_logs();
+
+# FLOAT: data file 1 (max 3.5) is pruned
+statement ok
+select * from my_datalake.default.variant_types_tbl where variant_col.flt > 5.0::FLOAT;
+
+query I
+select count(*) from duckdb_logs() where type = 'Iceberg' and message like '%skipped%';
+----
+1
+
+statement ok
+CALL truncate_duckdb_logs();
+
+# VARCHAR: data file 1 (max 'cherry') is pruned
+statement ok
+select * from my_datalake.default.variant_types_tbl where variant_col.str > 'mango';
+
+query I
+select count(*) from duckdb_logs() where type = 'Iceberg' and message like '%skipped%';
+----
+1
+
+statement ok
+CALL truncate_duckdb_logs();
+
+# DATE: data file 1 (max 2020-12-01) is pruned
+statement ok
+select * from my_datalake.default.variant_types_tbl where variant_col.d > DATE '2025-01-01';
+
+query I
+select count(*) from duckdb_logs() where type = 'Iceberg' and message like '%skipped%';
+----
+1
+
+statement ok
+CALL truncate_duckdb_logs();
+
+# TIMESTAMP: data file 1 (max 2020-12-01) is pruned
+statement ok
+select * from my_datalake.default.variant_types_tbl where variant_col.ts > TIMESTAMP '2025-01-01 00:00:00';
+
+query I
+select count(*) from duckdb_logs() where type = 'Iceberg' and message like '%skipped%';
+----
+1

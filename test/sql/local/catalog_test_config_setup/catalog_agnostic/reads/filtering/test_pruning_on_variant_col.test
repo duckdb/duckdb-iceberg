@@ -1,0 +1,49 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/reads/filtering/test_pruning_on_variant_col.test
+# description: writing lower/upper bounds for shredded VARIANT columns into the manifest
+# group: [filtering]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+require icu
+
+require core_functions
+
+statement ok
+drop table if exists my_datalake.default.variant_bounds_tbl;
+
+statement ok
+create table my_datalake.default.variant_bounds_tbl WITH ('format-version'='3') as from values
+({'age': 20, 'name': 'Alice'}::VARIANT),
+({'age': 30, 'name': 'Bob'}::VARIANT),
+({'age': 40, 'name': 'Chad'}::VARIANT),
+({'age': 50, 'name': 'Dylan'}::VARIANT),
+({'age': 60, 'name': 'Eric'}::VARIANT) t(variant_col);
+
+statement ok
+Insert into my_datalake.default.variant_bounds_tbl values
+({'age': 70, 'name': 'Frank'}::VARIANT),
+({'age': 80, 'name': 'George'}::VARIANT),
+({'age': 90, 'name': 'Howard'}::VARIANT),
+({'age': 100, 'name': 'Ian'}::VARIANT),
+({'age': 110, 'name': 'Jill'}::VARIANT);
+
+statement ok
+call enable_logging('Iceberg');
+
+statement ok
+select * from my_datalake.default.variant_bounds_tbl where variant_col.age > 60;
+
+# skipped the first file.
+query I
+select count(*) from duckdb_logs() where type = 'Iceberg' and message like '%skipped%';
+----
+1
+

@@ -27,6 +27,7 @@
 #include "catalog/rest/transaction/iceberg_transaction.hpp"
 #include "core/expression/iceberg_value.hpp"
 #include "core/expression/iceberg_transform.hpp"
+#include "storage/statistics/iceberg_variant_statistics.hpp"
 #include "catalog/rest/api/iceberg_type.hpp"
 #include "common/iceberg_utils.hpp"
 #include "catalog/rest/transaction/iceberg_transaction_update.hpp"
@@ -253,6 +254,10 @@ void IcebergInsertGlobalState::AddFiles(DataChunk &chunk, const string &table_na
 
 		insert_count += data_file.record_count;
 
+		// variant columns emit one stats entry per shredded leaf - accumulate them per variant column
+		// (keyed by field id) and serialize the lower/upper bound variants once all entries are seen
+		unordered_map<int32_t, IcebergVariantBounds> variant_bounds;
+
 		for (idx_t col_idx = 0; col_idx < map_children.size(); col_idx++) {
 			auto &struct_children = StructValue::GetChildren(map_children[col_idx]);
 			auto &col_name = StringValue::Get(struct_children[0]);
@@ -270,7 +275,8 @@ void IcebergInsertGlobalState::AddFiles(DataChunk &chunk, const string &table_na
 				                        normalized_col_name);
 			}
 			if (name_offset.IsValid()) {
-				//! FIXME: deal with variant stats
+				// stats path descends into a variant column - buffer it for bounds serialization
+				variant_bounds[column_info_p->id].AddStatsEntry(column_names, name_offset.GetIndex(), col_stats);
 				continue;
 			}
 			auto &column_info = *column_info_p;
@@ -343,6 +349,23 @@ void IcebergInsertGlobalState::AddFiles(DataChunk &chunk, const string &table_na
 		DUCKDB_LOG(context, IcebergLogType,
 		           "Iceberg INSERT, wrote data_file '%s', record_count=%lld, file_size=%lld bytes", data_file.file_path,
 		           data_file.record_count, data_file.file_size_in_bytes);
+
+		// serialize the accumulated variant bounds into the data file's lower/upper bounds
+		for (auto &entry : variant_bounds) {
+			bool has_lower = false;
+			bool has_upper = false;
+			string lower_blob;
+			string upper_blob;
+			if (!entry.second.Finalize(context, has_lower, lower_blob, has_upper, upper_blob)) {
+				continue;
+			}
+			if (has_lower) {
+				data_file.lower_bounds[entry.first] = Value::BLOB_RAW(lower_blob);
+			}
+			if (has_upper) {
+				data_file.upper_bounds[entry.first] = Value::BLOB_RAW(upper_blob);
+			}
+		}
 
 		written_files.push_back(std::move(manifest_entry));
 	}
