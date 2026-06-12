@@ -88,21 +88,24 @@ IcebergMultiFileReader::InitializeGlobalState(ClientContext &context, const Mult
 static void ApplyFieldMapping(MultiFileColumnDefinition &col, const vector<IcebergFieldMapping> &mappings,
                               const case_insensitive_map_t<idx_t> &fields, ClientContext &context,
                               optional_ptr<MultiFileColumnDefinition> parent = nullptr) {
+	auto name = col.name;
+	if (parent && parent->type.id() == LogicalTypeId::LIST) {
+		if (fields.find(name) == fields.end() && fields.find("element") != fields.end()) {
+			name = "element";
+		}
+		col.name = "list";
+	}
+
 	if (!col.identifier.IsNull()) {
 		return;
 	}
 
-	auto name = col.name;
 	if (parent && parent->type.id() == LogicalTypeId::MAP && StringUtil::CIEquals(name, "key_value")) {
 		//! Deal with MAP, it has a 'key_value' child, which holds the 'key' + 'value' columns
 		for (auto &child : col.children) {
 			ApplyFieldMapping(child, mappings, fields, context, parent);
 		}
 		return;
-	}
-	if (parent && parent->type.id() == LogicalTypeId::LIST && StringUtil::CIEquals(name, "list")) {
-		//! Deal with LIST, it has a 'element' child, which has the column for the underlying list data
-		name = "element";
 	}
 
 	auto it = fields.find(name);
