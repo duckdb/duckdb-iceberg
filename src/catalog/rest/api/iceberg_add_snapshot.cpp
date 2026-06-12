@@ -7,6 +7,7 @@
 #include "duckdb/main/extension/extension_loader.hpp"
 #include "duckdb/storage/caching_file_system.hpp"
 #include "duckdb/common/types/uuid.hpp"
+#include "duckdb/common/unordered_set.hpp"
 
 #include "core/metadata/manifest/iceberg_manifest_list.hpp"
 #include "core/metadata/manifest/iceberg_avro_codec.hpp"
@@ -97,7 +98,14 @@ static void RewriteManifestFile(IcebergManifestListEntry &list_entry, CopyFuncti
 	auto &manifest_entries = list_entry.manifest_entries;
 	auto &table_metadata = commit_state.table_info.table_metadata;
 
-	//! Finally overwrite the input 'manifest_file' with our edited copy
+	//! A rewritten manifest is a NEW file of this snapshot, so write it under a fresh path rather
+	//! than overwriting the carried-over manifest's existing location. Reusing the path would both
+	//! mutate a file still referenced by the parent snapshot and fail with HTTP 412 on retry (the
+	//! object already exists; stores create with If-None-Match). A new UUID per write avoids both.
+	auto &fs = FileSystem::GetFileSystem(commit_state.context);
+	auto manifest_uuid = UUID::ToString(UUID::GenerateRandomUUID());
+	manifest_file.manifest_path = fs.JoinPath(table_metadata.GetMetadataPath(fs), manifest_uuid + "-m0.avro");
+
 	auto manifest_length = manifest_file::WriteToFile(table_metadata, manifest_file, manifest_entries, avro_copy, db,
 	                                                  commit_state.context, commit_state.manifest_avro_codec);
 	manifest_file.manifest_length = manifest_length;
@@ -131,10 +139,21 @@ static IcebergManifestListEntry WriteManifestListEntry(const IcebergTableInforma
                                                        const IcebergManifestListEntry &list_entry,
                                                        CopyFunction &avro_copy, DatabaseInstance &db,
                                                        ClientContext &context, const string &avro_codec) {
-	auto manifest_length = manifest_file::WriteToFile(table_info.table_metadata, list_entry.file,
-	                                                  list_entry.manifest_entries, avro_copy, db, context, avro_codec);
 	IcebergManifestListEntry new_entry(list_entry.file);
 	new_entry.manifest_entries = list_entry.manifest_entries;
+	//! Generate a fresh manifest file path for THIS write. The staged entry's path was minted once
+	//! when the snapshot was assembled; reusing it across commit-retry attempts would re-write the
+	//! same object, which fails with HTTP 412 (Precondition Failed) on stores that create with
+	//! If-None-Match (e.g. S3 Tables / FILE_FLAGS_FILE_CREATE_NEW). A new UUID per attempt makes each
+	//! attempt write a distinct, never-before-seen object. Losing-attempt files are tracked for
+	//! cleanup separately, so this does not leak (and S3-Tables-style catalogs GC them anyway).
+	auto &fs = FileSystem::GetFileSystem(context);
+	auto manifest_uuid = UUID::ToString(UUID::GenerateRandomUUID());
+	new_entry.file.manifest_path =
+	    fs.JoinPath(table_info.table_metadata.GetMetadataPath(fs), manifest_uuid + "-m0.avro");
+
+	auto manifest_length = manifest_file::WriteToFile(table_info.table_metadata, new_entry.file,
+	                                                  new_entry.manifest_entries, avro_copy, db, context, avro_codec);
 	new_entry.file.manifest_length = manifest_length;
 	return new_entry;
 }
@@ -220,6 +239,11 @@ void IcebergAddSnapshot::MergeManifestList(IcebergManifestList &new_manifest_lis
 
 void IcebergAddSnapshot::CreateUpdate(DatabaseInstance &db, ClientContext &context,
                                       IcebergCommitState &commit_state) const {
+	ApplyTableChanges(db, context, commit_state);
+}
+
+void IcebergAddSnapshot::ApplyTableChanges(DatabaseInstance &db, ClientContext &context,
+                                           IcebergCommitState &commit_state) const {
 	auto &system_catalog = Catalog::GetSystemCatalog(db);
 	auto data = CatalogTransaction::GetSystemTransaction(db);
 	auto &schema = system_catalog.GetSchema(data, DEFAULT_SCHEMA);
@@ -239,7 +263,11 @@ void IcebergAddSnapshot::CreateUpdate(DatabaseInstance &db, ClientContext &conte
 	    table_metadata.GetTableProperty("write.manifest.compression-codec"),
 	    commit_state.table_info.catalog.attach_options.allows_deletes);
 
-	const auto snapshot_id = IcebergSnapshot::NewSnapshotId();
+	//! Assign the snapshot id once and keep it stable across retry attempts (see GetSnapshotId). This
+	//! lets a post-ambiguous-failure status-check look for exactly this id in the refreshed table.
+	if (snapshot_id < 0) {
+		snapshot_id = IcebergSnapshot::NewSnapshotId();
+	}
 	const auto sequence_number = commit_state.next_sequence_number++;
 
 	auto &fs = FileSystem::GetFileSystem(context);
@@ -253,6 +281,11 @@ void IcebergAddSnapshot::CreateUpdate(DatabaseInstance &db, ClientContext &conte
 
 	//! Construct the snapshot
 	IcebergSnapshot new_snapshot;
+	//! Use the operation the caller declared when staging this change: INSERT =>
+	//! APPEND, DELETE => DELETE, UPDATE/mixed => OVERWRITE. The old code hard-coded OVERWRITE, which
+	//! mislabels a plain append to external incremental readers (Spark/Trino/PyIceberg append scans,
+	//! CDC). The label is informational here -- it never feeds this extension's own read path or the
+	//! retry validation (ValidateRetrySafe keys on the actual delete content, not on this enum).
 	new_snapshot.operation = operation;
 	new_snapshot.snapshot_id = snapshot_id;
 	new_snapshot.sequence_number = sequence_number;
@@ -280,6 +313,13 @@ void IcebergAddSnapshot::CreateUpdate(DatabaseInstance &db, ClientContext &conte
 
 		auto new_manifest_list_entry =
 		    WriteManifestListEntry(table_info, manifest_list_entry, avro_copy, db, context, commit_state.manifest_avro_codec);
+		//! Track the file we just physically wrote for cleanup-on-failure. We record it here, before
+		//! the merge below may repack it into a different file: a merged-away manifest is an orphan on
+		//! disk that the post-merge entry list no longer references, so tracking only the final entries
+		//! would leak it on a failed/aborted commit. Over-tracking is safe: cleanup
+		//! only runs for uncommitted tables and only when the catalog allows deletes, and these are all
+		//! freshly-written this-attempt files (never carried-over history).
+		commit_state.written_metadata_paths.push_back(new_manifest_list_entry.file.manifest_path);
 		new_manifest_list.AddNewManifestFile(std::move(new_manifest_list_entry));
 
 		if (table_metadata.iceberg_version >= 3) {
@@ -291,13 +331,27 @@ void IcebergAddSnapshot::CreateUpdate(DatabaseInstance &db, ClientContext &conte
 		}
 	}
 
-	//! Physically reorganize the manifest list to bound manifest growth. This is a pure repacking of
-	//! the manifests we just assembled -- it does not change the snapshot's logical added/deleted
-	//! stats (already accumulated above), only how entries are grouped into files.
+	//! Physically reorganize the manifest list to bound manifest growth. This is a
+	//! pure repacking of the manifests we just assembled -- it does not change the snapshot's logical
+	//! added/deleted stats (already accumulated above), only how entries are grouped into files.
 	MergeManifestList(new_manifest_list, snapshot_id, avro_copy, db, commit_state);
 
 	manifest_list::WriteToFile(table_metadata, new_manifest_list, avro_copy, db, context, commit_state.manifest_avro_codec);
 	commit_state.manifests = new_manifest_list.GetManifestListEntries();
+
+	//! Track the remaining metadata files we wrote for cleanup-on-failure. The pre-merge manifests
+	//! were already recorded as they were written (above); here we add the manifest list itself and
+	//! any merge-product manifests (also created by this snapshot, but written during MergeManifestList
+	//! after the loop above). Carried-over manifests belong to history and must never be deleted.
+	//! Dedup against what we already tracked so a surviving-unmerged manifest is not listed twice.
+	commit_state.written_metadata_paths.push_back(manifest_list_path);
+	unordered_set<string> already_tracked(commit_state.written_metadata_paths.begin(),
+	                                       commit_state.written_metadata_paths.end());
+	for (auto &entry : commit_state.manifests) {
+		if (entry.file.added_snapshot_id == snapshot_id && !already_tracked.count(entry.file.manifest_path)) {
+			commit_state.written_metadata_paths.push_back(entry.file.manifest_path);
+		}
+	}
 
 	commit_state.created_snapshots.push_back(new_snapshot);
 	commit_state.latest_snapshot = commit_state.created_snapshots.back();
@@ -308,6 +362,27 @@ void IcebergAddSnapshot::CreateUpdate(DatabaseInstance &db, ClientContext &conte
 
 void IcebergAddSnapshot::AddManifestFile(IcebergManifestListEntry &&manifest_file) {
 	manifest_files.push_back(std::move(manifest_file));
+}
+
+int64_t IcebergAddSnapshot::GetSnapshotId() const {
+	return snapshot_id;
+}
+
+void IcebergAddSnapshot::ReassignFirstRowIds(int64_t &next_row_id) {
+	//! Only V3 manifests carry a first_row_id; V2 manifests have none. DELETE manifests never carry
+	//! a first_row_id. Reassign DATA manifests in their staged order so the assignment stays
+	//! contiguous and matches what manifest_list::WriteToFile / the snapshot's first_row_id expect.
+	for (auto &manifest_list_entry : manifest_files) {
+		auto &manifest_file = manifest_list_entry.file;
+		if (manifest_file.content != IcebergManifestContentType::DATA) {
+			continue;
+		}
+		if (!manifest_file.has_first_row_id) {
+			continue;
+		}
+		manifest_file.first_row_id = next_row_id;
+		next_row_id += manifest_file.added_rows_count + manifest_file.existing_rows_count;
+	}
 }
 
 const vector<IcebergManifestListEntry> &IcebergAddSnapshot::GetManifestFiles() const {

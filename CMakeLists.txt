@@ -28,6 +28,7 @@ set(EXTENSION_SOURCES
 	src/catalog/rest/api/iceberg_add_snapshot.cpp
 	src/catalog/rest/api/iceberg_create_table_request.cpp
 	src/catalog/rest/api/iceberg_manifest_merge.cpp
+	src/catalog/rest/api/iceberg_retry.cpp
 	src/catalog/rest/api/iceberg_table_update.cpp
 	src/catalog/rest/api/iceberg_type.cpp
 	src/catalog/rest/api/table_update.cpp

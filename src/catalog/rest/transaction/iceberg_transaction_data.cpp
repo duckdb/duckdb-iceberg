@@ -24,14 +24,59 @@ IcebergTransactionData::IcebergTransactionData(ClientContext &context, const Ice
 	initial_schema_id = table_info.table_metadata.GetCurrentSchemaId();
 }
 
-void IcebergTransactionData::CacheExistingManifestList(lock_guard<mutex> &guard, const IcebergTableMetadata &metadata) {
-	if (!alters.empty()) {
+void IcebergTransactionData::RefreshForRetry(ClientContext &context) {
+	//! A retry re-applies against the concurrently-updated table state. Reset the row-id baseline so
+	//! we do not reuse a value advanced by the failed attempt, then re-read the parent manifest list
+	//! from the refreshed metadata so carried-over data is not lost when regenerating the snapshot.
+	//! Uses the passed (commit-time) context: secret resolution for the manifest read needs an active
+	//! transaction, which the member `context` (captured during the operator) no longer has here.
+	lock_guard<mutex> guard(lock);
+	if (table_info.table_metadata.has_next_row_id) {
+		next_row_id = table_info.table_metadata.next_row_id;
+	} else {
+		next_row_id = 0;
+	}
+	manifest_list_cached = false;
+	existing_manifest_list.clear();
+	//! Re-populate immediately from the (already refreshed) metadata rather than lazily: the apply
+	//! path only reads existing_manifest_list, it never triggers the cache load.
+	CacheExistingManifestList(guard, table_info.table_metadata, context);
+
+	//! V3 row lineage: each pending snapshot's DATA manifests had their manifest-level first_row_id
+	//! materialized when staged, against the then-current next_row_id. A concurrent commit may have
+	//! advanced the table's next_row_id, so re-base every pending manifest onto the refreshed
+	//! baseline, in staged order, keeping the assignment contiguous (and consistent with the
+	//! snapshot first_row_id that apply derives from commit_state.next_row_id). No-op for V2.
+	if (table_info.table_metadata.iceberg_version >= 3) {
+		int64_t row_id_cursor = next_row_id;
+		for (auto &add_snapshot : alters) {
+			add_snapshot.get().ReassignFirstRowIds(row_id_cursor);
+		}
+	}
+}
+
+void IcebergTransactionData::CacheExistingManifestList(lock_guard<mutex> &guard, const IcebergTableMetadata &metadata,
+                                                       ClientContext &context) {
+	if (manifest_list_cached) {
+		//! Already read for this transaction. (On a retry, RefreshForRetry resets this flag so we
+		//! re-read the parent manifest list from the refreshed snapshot.)
 		return;
 	}
+	manifest_list_cached = true;
+	existing_manifest_list.clear();
 
 	auto current_snapshot = metadata.GetLatestSnapshot();
 	if (!current_snapshot) {
 		return;
+	}
+
+	//! Capture the starting snapshot id exactly once -- on the first apply, before any retry. This
+	//! is the parent of our first attempt; the ancestry/rollback guard at retry time walks the
+	//! refreshed parent back to this id. RefreshForRetry deliberately does not reset the captured
+	//! flag, so this survives every retry even though the manifest-list cache is re-read.
+	if (!starting_snapshot_captured) {
+		starting_snapshot_captured = true;
+		starting_snapshot_id = current_snapshot->snapshot_id;
 	}
 
 	IcebergSnapshotScanInfo snapshot_info;
@@ -79,7 +124,7 @@ void IcebergTransactionData::AddSnapshot(IcebergSnapshotOperationType operation,
 
 	//! Generate a new snapshot id
 	auto &table_metadata = table_info.table_metadata;
-	CacheExistingManifestList(guard, table_metadata);
+	CacheExistingManifestList(guard, table_metadata, context);
 
 	IcebergManifestContentType manifest_content_type;
 	switch (operation) {
@@ -123,7 +168,7 @@ void IcebergTransactionData::AddUpdateSnapshot(vector<IcebergManifestEntry> &&de
 	auto &table_metadata = table_info.table_metadata;
 	auto last_sequence_number = table_metadata.last_sequence_number;
 
-	CacheExistingManifestList(guard, table_metadata);
+	CacheExistingManifestList(guard, table_metadata, context);
 
 	auto snapshot_id = IcebergSnapshot::NewSnapshotId();
 	const auto sequence_number = last_sequence_number + alters.size() + 1;
@@ -138,7 +183,8 @@ void IcebergTransactionData::AddUpdateSnapshot(vector<IcebergManifestEntry> &&de
 	    fs, snapshot_id, sequence_number, table_metadata, IcebergManifestContentType::DATA, std::move(data_files),
 	    next_row_id);
 
-	auto add_snapshot = make_uniq<IcebergAddSnapshot>(table_info);
+	//! An update writes both new data and deletes in one snapshot -> OVERWRITE (row-level), per B14.
+	auto add_snapshot = make_uniq<IcebergAddSnapshot>(table_info, IcebergSnapshotOperationType::OVERWRITE);
 	add_snapshot->AddManifestFile(std::move(delete_manifest_file));
 	add_snapshot->AddManifestFile(std::move(data_manifest_file));
 	add_snapshot->altered_manifests = std::move(altered_manifests);
