@@ -639,6 +639,12 @@ deleted for a commit that may have landed.
 > external incremental readers (Spark/Trino/PyIceberg append scans, CDC). Verified end-to-end against
 > AWS S3 Tables by capturing the commit POST body: INSERT -> `"operation":"append"`, DELETE ->
 > `"delete"`, UPDATE -> `"overwrite"`.
+> NOTE (post-merge): upstream PR #997 ("fix: pass correct operation type to IcebergAddSnapshot")
+> independently made the same fix on `v1.5-variegata` while this work was in progress. The two
+> converged on an identical design (constructor-threaded `operation`), so the merge kept upstream's
+> form (constructor default `= OVERWRITE`, plus its read-side `ParseSnapshot` operation parsing and
+> the `iceberg_snapshots` operation column / `test_snapshot_operation_type` tests) and dropped this
+> branch's now-duplicate declaration. The write-side behavior is unchanged and still verified as above.
 
 **B15. Retry state must be per-table for the multi-table commit path.**
 A naive retry loop would keep a single `snapshot_id`. But the default path is the atomic multi-table `transactions/commit` endpoint, which commits several tables at once. Each table has its own stable snapshot id, parent snapshot, sequence number, manifest-list, and cleanup artifact set. (The Phase D pseudocode reflects this with per-table `T.snapshot_id` and per-table `commit_state`.) **Resolution:** the retry loop holds per-table state keyed by table-key: `{stable snapshot_id, parent_snapshot_id, next_sequence_number, next_row_id, written artifacts}`. On a conflict, refresh and re-`apply` *every* table in the transaction, rebuild the combined request, and re-POST once. The snapshot id is stable per table across attempts; everything else is recomputed per table per attempt. **Unknown-state on the multi-table endpoint is all-or-none:** because the endpoint is atomic, the status check (B13) must find *every* table's expected `snapshot_id` to declare success; finding some-but-not-all is a catalog inconsistency -> surface as unknown and delete nothing.
@@ -864,11 +870,17 @@ observed on a running catalog and fixed/validated.
 
 Steady-state INSERT on S3 Tables went from **7 -> 5 HTTP requests** per commit:
 - **HEAD eliminated.** `manifest_file::WriteToFile` previously read the file size back (a HEAD round
-  trip on object stores) to set `manifest_length`. The `duckdb-avro` fork now implements
-  `copy_to_get_written_statistics` (a `bytes_written` counter funneled through the single `WriteData`
-  chokepoint), so the uncompressed path takes the byte count directly from the COPY; the compressed
-  path already got it from `RecompressManifestFile`. A graceful fallback to `GetFileSize()` remains if
-  a COPY without that capability is ever used.
+  trip on object stores) to set `manifest_length`. This is removed by implementing
+  `copy_to_get_written_statistics` in the `avro` COPY function (a `bytes_written` counter funneled
+  through the single `WriteData` chokepoint), so the uncompressed path takes the byte count directly
+  from the COPY; the compressed path already got it from `RecompressManifestFile`. A graceful fallback
+  to `GetFileSize()` remains if a COPY without that capability is ever used. **Cross-repo dependency:**
+  the callback lives in `duckdb/duckdb-avro` (upstream iceberg's `iceberg_delete.cpp` already *calls*
+  `copy_to_get_written_statistics` unconditionally, but the pinned avro tag did not yet *implement* it).
+  This is delivered as a small standalone PR to duckdb-avro that adds the implementation; iceberg then
+  bumps its `extension_config.cmake` avro `GIT_TAG` to include it. The iceberg side already null-checks
+  the callback in `WriteToFile`, so iceberg is correct against any avro; the unconditional call in the
+  pre-existing `iceberg_delete.cpp` is what makes the avro implementation a hard build dependency.
 - **Redundant table GET eliminated.** On a successful single-table commit, the Iceberg REST
   `UpdateTable` response carries the full new `LoadTableResult`. `CommitTableUpdate` now parses it and
   refills `table_request_cache` (C5), so the next operation reuses fresh post-commit metadata instead
@@ -969,6 +981,10 @@ A full re-read of the implementation after it was working produced the following
   covers the `UNKNOWN -> NONE_COMMITTED -> retry-to-success` path (section 5.3).
 - Both `test_commit_retry_concurrent*` gated to `LAKEKEEPER_SERVER_AVAILABLE` (the SQLite fixture
   cannot pass them, section 10.3).
+- Snapshot `operation` is now SQL-observable: the merge with upstream brought in #997's `operation`
+  column on `iceberg_snapshots` plus its `test_snapshot_operation_type` / `..._in_transaction` tests,
+  which assert the APPEND/DELETE/OVERWRITE labels end-to-end. The B14 write-side fix is therefore
+  covered by those upstream tests in addition to the manual S3 Tables verification.
 - A **fragile assertion was deliberately reverted**: an attempt to assert the on-disk Avro codec in
   `test_manifest_compression.test` via `read_blob` failed because (a) `read_blob` does not accept a
   subquery/lateral-join path argument in sqllogictest, and (b) the codec is catalog-dependent (S3
@@ -977,8 +993,9 @@ A full re-read of the implementation after it was working produced the following
   offline against fastavro (5.1); a portable, non-fragile SQL assertion was not worth forcing.
 
 ### 11.4 Things deliberately NOT changed (to avoid over-engineering)
-- **`WriteAvroGlobalState::BytesWritten()` lock-free read** in the avro fork: harmless under the
-  current single-threaded `REGULAR_COPY_TO_FILE` mode (the read happens after all writes complete).
+- **`WriteAvroGlobalState::BytesWritten()` lock-free read** in the avro `copy_to_get_written_statistics`
+  implementation: harmless under the current single-threaded `REGULAR_COPY_TO_FILE` mode (the read
+  happens after all writes complete).
   Making it atomic would add overhead to the hot `WriteData` path for a race that cannot occur unless
   the writer is parallelized (which would require broader changes anyway). Flagged, not changed.
 - **B1 write-once optimization** (decide merge layout before writing): the orphan it avoids is already
