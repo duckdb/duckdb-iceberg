@@ -37,7 +37,7 @@ IcebergManifestListEntry IcebergManifestListEntry::CreateFromEntries(FileSystem 
                                                                      const IcebergTableMetadata &table_metadata,
                                                                      IcebergManifestContentType manifest_content_type,
                                                                      vector<IcebergManifestEntry> &&manifest_entries,
-                                                                     int64_t &next_row_id) {
+                                                                     int64_t &next_row_id, int32_t partition_spec_id) {
 	//! create manifest file path
 	auto manifest_file_uuid = UUID::ToString(UUID::GenerateRandomUUID());
 	auto manifest_file_path = fs.JoinPath(table_metadata.GetMetadataPath(fs), manifest_file_uuid + "-m0.avro");
@@ -61,7 +61,10 @@ IcebergManifestListEntry IcebergManifestListEntry::CreateFromEntries(FileSystem 
 	manifest_file.added_rows_count = 0;
 	manifest_file.existing_rows_count = 0;
 	manifest_file.deleted_rows_count = 0;
-	manifest_file.partition_spec_id = table_metadata.default_spec_id;
+	//! Caller may pin the spec id (e.g. when merging a manifest that belongs to a historical spec);
+	//! otherwise default to the table's current default spec.
+	const int32_t effective_spec_id = partition_spec_id >= 0 ? partition_spec_id : table_metadata.default_spec_id;
+	manifest_file.partition_spec_id = effective_spec_id;
 
 	//! Add the files to the manifest
 	for (auto &manifest_entry : manifest_entries) {
@@ -97,12 +100,12 @@ IcebergManifestListEntry IcebergManifestListEntry::CreateFromEntries(FileSystem 
 	//! NOTE: this gets overwritten on commit
 	manifest_file.added_snapshot_id = snapshot_id;
 
-	// Compute partition field summaries (upper/lower bounds) for the manifest list entry
+	// Compute partition field summaries (upper/lower bounds) for the manifest list entry, using the
+	// manifest's own partition spec (which may be a historical spec when merging carried-over data).
 	if (table_metadata.HasPartitionSpec() && table_metadata.GetLatestPartitionSpec().IsPartitioned()) {
-		auto partition_spec_it = table_metadata.partition_specs.find(table_metadata.default_spec_id);
+		auto partition_spec_it = table_metadata.partition_specs.find(effective_spec_id);
 		if (partition_spec_it == table_metadata.partition_specs.end()) {
-			throw InternalException("Cannot find partition spec with id " +
-			                        std::to_string(table_metadata.default_spec_id));
+			throw InternalException("Cannot find partition spec with id " + std::to_string(effective_spec_id));
 		}
 		auto &partition_spec = partition_spec_it->second;
 		manifest_file.partitions.Create(table_metadata, partition_spec, manifest_entries);

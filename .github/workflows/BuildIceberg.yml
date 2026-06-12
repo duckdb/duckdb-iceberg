@@ -50,7 +50,7 @@ jobs:
         run: |
           make release
 
-      - name: Run C++ logic unit tests (manifest compression)
+      - name: Run C++ logic unit tests (manifest compression + merge)
         run: |
           make test_logic
 
