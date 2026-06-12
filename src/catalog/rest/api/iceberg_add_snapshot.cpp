@@ -9,7 +9,10 @@
 #include "duckdb/common/types/uuid.hpp"
 
 #include "core/metadata/manifest/iceberg_manifest_list.hpp"
+#include "core/metadata/manifest/iceberg_avro_codec.hpp"
 #include "catalog/rest/iceberg_table_set.hpp"
+#include "catalog/rest/iceberg_catalog.hpp"
+#include "catalog/rest/catalog_entry/table/iceberg_table_information.hpp"
 #include "planning/metadata_io/avro/avro_scan.hpp"
 #include "planning/metadata_io/manifest/iceberg_manifest_reader.hpp"
 
@@ -119,7 +122,7 @@ static void RewriteManifestFile(IcebergManifestListEntry &list_entry, CopyFuncti
 
 	//! Finally overwrite the input 'manifest_file' with our edited copy
 	auto manifest_length = manifest_file::WriteToFile(table_metadata, manifest_file, manifest_entries, avro_copy, db,
-	                                                  commit_state.context);
+	                                                  commit_state.context, commit_state.manifest_avro_codec);
 	manifest_file.manifest_length = manifest_length;
 }
 
@@ -152,9 +155,9 @@ void IcebergAddSnapshot::ConstructManifestList(IcebergManifestList &new_manifest
 static IcebergManifestListEntry WriteManifestListEntry(const IcebergTableInformation &table_info,
                                                        const IcebergManifestListEntry &list_entry,
                                                        CopyFunction &avro_copy, DatabaseInstance &db,
-                                                       ClientContext &context) {
+                                                       ClientContext &context, const string &avro_codec) {
 	auto manifest_length = manifest_file::WriteToFile(table_info.table_metadata, list_entry.file,
-	                                                  list_entry.manifest_entries, avro_copy, db, context);
+	                                                  list_entry.manifest_entries, avro_copy, db, context, avro_codec);
 	IcebergManifestListEntry new_entry(list_entry.file);
 	new_entry.manifest_entries = list_entry.manifest_entries;
 	new_entry.file.manifest_length = manifest_length;
@@ -174,6 +177,13 @@ void IcebergAddSnapshot::CreateUpdate(DatabaseInstance &db, ClientContext &conte
 	D_ASSERT(!uncommitted_manifest_files.empty());
 
 	auto &table_metadata = commit_state.table_info.table_metadata;
+
+	//! Resolve the manifest Avro codec once for this apply: from write.manifest.compression-codec,
+	//! but forced to uncompressed when the catalog forbids client deletes (compression needs a
+	//! deletable temp file). Every manifest/manifest-list write below uses commit_state.manifest_avro_codec.
+	commit_state.manifest_avro_codec = iceberg_avro_codec::ResolveAvroCodec(
+	    table_metadata.GetTableProperty("write.manifest.compression-codec"),
+	    commit_state.table_info.catalog.attach_options.allows_deletes);
 
 	const auto snapshot_id = IcebergSnapshot::NewSnapshotId();
 	const auto sequence_number = commit_state.next_sequence_number++;
@@ -214,7 +224,8 @@ void IcebergAddSnapshot::CreateUpdate(DatabaseInstance &db, ClientContext &conte
 		auto &manifest_file = manifest_list_entry.file;
 		new_snapshot.metrics.AddManifestFile(manifest_file);
 
-		auto new_manifest_list_entry = WriteManifestListEntry(table_info, manifest_list_entry, avro_copy, db, context);
+		auto new_manifest_list_entry =
+		    WriteManifestListEntry(table_info, manifest_list_entry, avro_copy, db, context, commit_state.manifest_avro_codec);
 		new_manifest_list.AddNewManifestFile(std::move(new_manifest_list_entry));
 
 		if (table_metadata.iceberg_version >= 3) {
@@ -226,7 +237,7 @@ void IcebergAddSnapshot::CreateUpdate(DatabaseInstance &db, ClientContext &conte
 		}
 	}
 
-	manifest_list::WriteToFile(table_metadata, new_manifest_list, avro_copy, db, context);
+	manifest_list::WriteToFile(table_metadata, new_manifest_list, avro_copy, db, context, commit_state.manifest_avro_codec);
 	commit_state.manifests = new_manifest_list.GetManifestListEntries();
 
 	commit_state.created_snapshots.push_back(new_snapshot);

@@ -57,6 +57,7 @@ set(EXTENSION_SOURCES
 	src/core/metadata/iceberg_table_metadata.cpp
 	src/core/metadata/manifest/iceberg_manifest_list.cpp
 	src/core/metadata/manifest/iceberg_manifest.cpp
+	src/core/metadata/manifest/iceberg_avro_codec.cpp
 	src/core/metadata/partition/iceberg_partition_spec.cpp
 	src/core/metadata/schema/iceberg_column_definition.cpp
 	src/core/metadata/schema/iceberg_field_mapping.cpp

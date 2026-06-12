@@ -1,11 +1,13 @@
 #include "core/metadata/manifest/iceberg_manifest.hpp"
 
 #include "duckdb/storage/caching_file_system.hpp"
+#include "duckdb/function/copy_function.hpp"
 
 #include "catalog/rest/iceberg_table_set.hpp"
 #include "catalog/rest/api/iceberg_create_table_request.hpp"
 #include "catalog/rest/api/catalog_utils.hpp"
 #include "core/expression/iceberg_value.hpp"
+#include "core/metadata/manifest/iceberg_avro_codec.hpp"
 #include "catalog/rest/catalog_entry/table/iceberg_table_information.hpp"
 
 namespace duckdb {
@@ -426,7 +428,7 @@ static LogicalType PartitionStructType(vector<IcebergExtendedPartitionInfo> exte
 
 idx_t WriteToFile(const IcebergTableMetadata &table_metadata, const IcebergManifestFile &manifest_file,
                   const vector<IcebergManifestEntry> &manifest_entries, CopyFunction &copy, DatabaseInstance &db,
-                  ClientContext &context) {
+                  ClientContext &context, const string &avro_codec) {
 	D_ASSERT(!manifest_entries.empty());
 	auto &allocator = db.GetBufferManager().GetBufferAllocator();
 	auto &path = manifest_file.manifest_path;
@@ -659,19 +661,58 @@ idx_t WriteToFile(const IcebergTableMetadata &table_metadata, const IcebergManif
 	CopyFunctionBindInput input(copy_info);
 	input.file_extension = "avro";
 
+	//! Honor write.manifest.compression-codec (default deflate, matching Java). The Avro COPY
+	//! function cannot emit a codec, so for a compressing codec we COPY to a temp path and recompress
+	//! into the final path (a single fresh write, never reopening/truncating -- object-store safe),
+	//! then delete the temp. The caller resolves the codec to "null" when the catalog forbids client
+	//! deletes (e.g. S3 Tables), so on those catalogs we never produce a temp and write the final
+	//! path directly -- no delete to fail.
+	const bool compress = iceberg_avro_codec::RequiresRecompression(avro_codec);
+	string copy_path = compress ? path + ".uncompressed.tmp" : path;
+
+	idx_t copy_bytes_written = 0;
+	bool have_copy_size = false;
 	{
 		ThreadContext thread_context(context);
 		ExecutionContext execution_context(context, thread_context, nullptr);
 		auto bind_data = copy.copy_to_bind(context, input, names, types);
 
-		auto global_state = copy.copy_to_initialize_global(context, *bind_data, path);
+		auto global_state = copy.copy_to_initialize_global(context, *bind_data, copy_path);
 		auto local_state = copy.copy_to_initialize_local(execution_context, *bind_data);
 
 		copy.copy_to_sink(execution_context, *bind_data, *global_state, *local_state, chunk);
 		copy.copy_to_combine(execution_context, *bind_data, *global_state, *local_state);
 		copy.copy_to_finalize(context, *bind_data, *global_state);
+
+		//! Capture the exact bytes the Avro COPY wrote, if it reports them (the avro extension
+		//! implements copy_to_get_written_statistics). This avoids a separate file-size probe (a HEAD
+		//! round trip on object stores) for the uncompressed path. Only meaningful when not
+		//! recompressing (the compressed path gets its size from RecompressManifestFile instead).
+		if (!compress && copy.copy_to_get_written_statistics) {
+			CopyFunctionFileStatistics stats;
+			copy.copy_to_get_written_statistics(context, *bind_data, *global_state, stats);
+			copy_bytes_written = stats.file_size_bytes;
+			have_copy_size = true;
+		}
 	}
 
+	if (compress) {
+		//! Recompress the temp into the final path, then remove the temp. This path is only taken when
+		//! the caller resolved a compressing codec, which it does only for delete-capable catalogs, so
+		//! the remove is safe here (S3 Tables and other delete-forbidden catalogs never reach this).
+		//! RecompressManifestFile returns the exact bytes written, so no size-probe (HEAD) is needed.
+		auto manifest_length = iceberg_avro_codec::RecompressManifestFile(context, copy_path, path, avro_codec);
+		FileSystem::GetFileSystem(context).RemoveFile(copy_path);
+		return manifest_length;
+	}
+
+	//! Uncompressed path: prefer the byte count the COPY reported (no extra request). Fall back to a
+	//! read-back GetFileSize only if the COPY did not provide statistics.
+	if (have_copy_size) {
+		return copy_bytes_written;
+	}
+	//! Fallback (a COPY function without written-statistics support): read the size back, which is a
+	//! metadata/HEAD round trip on object stores.
 	auto file_system = CachingFileSystem::Get(context);
 	auto file_handle = file_system.OpenFile(path, FileOpenFlags::FILE_FLAGS_READ);
 	auto manifest_length = file_handle->GetFileSize();

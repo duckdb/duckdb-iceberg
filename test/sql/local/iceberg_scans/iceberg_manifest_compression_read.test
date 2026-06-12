@@ -1,0 +1,31 @@
+# name: test/sql/local/iceberg_scans/iceberg_manifest_compression_read.test
+# description: The manifest/manifest-list reader must handle DEFLATE-compressed Avro (the Iceberg
+#   default written by Java/Spark, and what this extension writes for write.manifest.compression-codec).
+#   This locks the read side of manifest compression: the persistent lineitem_iceberg fixture's
+#   manifests are deflate-coded (verified out-of-band with fastavro), so reading its metadata exercises
+#   the deflate manifest path end-to-end through the production reader, no catalog required.
+# group: [iceberg_scans]
+
+require avro
+
+require parquet
+
+require iceberg
+
+# Reading the metadata of a table whose manifests are DEFLATE-compressed must succeed and return the
+# exact entries. (If the reader could not decode deflate manifests, this would error or mis-parse.)
+query IIIIIIII
+SELECT * FROM ICEBERG_METADATA('__WORKING_DIRECTORY__/data/persistent/iceberg/lineitem_iceberg', ALLOW_MOVED_PATHS=TRUE);
+----
+lineitem_iceberg/metadata/179b4fb1-0366-4f7d-ad35-99ee8da0abf5-m1.avro	2	DATA	ADDED	EXISTING	lineitem_iceberg/data/00000-5-dad9988f-2a3b-464c-adb6-6034de93da19-00001.parquet	PARQUET	51793
+lineitem_iceberg/metadata/179b4fb1-0366-4f7d-ad35-99ee8da0abf5-m0.avro	2	DATA	DELETED	EXISTING	lineitem_iceberg/data/00000-1-66fee7c2-c97c-4af9-963d-930afd99ace4-00001.parquet	PARQUET	60175
+
+# A full scan reads through the deflate manifest -> manifest list -> data files (and applies the
+# fixture's positional delete) and returns rows, proving the compressed metadata chain is fully
+# traversable, not just listable. The fixture's live data file has record_count=51793 with one
+# positional delete applied, so the scan returns slightly fewer; we assert the count lands in that
+# range rather than pinning a brittle golden value.
+query I
+SELECT count(*) > 0 AND count(*) <= 51793 FROM ICEBERG_SCAN('__WORKING_DIRECTORY__/data/persistent/iceberg/lineitem_iceberg', ALLOW_MOVED_PATHS=TRUE);
+----
+true

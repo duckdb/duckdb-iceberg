@@ -47,6 +47,11 @@ public:
 
 	ClientContext &context;
 
+	//! Resolved Avro codec for manifests written during this commit ("null"/"deflate"), decided once
+	//! per apply from write.manifest.compression-codec AND the catalog's delete capability. All
+	//! manifest/manifest-list writes in the apply path use it.
+	string manifest_avro_codec = "null";
+
 	//! All the 'manifest_file' entries we will write to the new manifest list
 	vector<IcebergManifestListEntry> manifests;
 	rest_api_objects::CommitTableRequest table_change;
