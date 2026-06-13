@@ -39,6 +39,12 @@ public:
 
 public:
 	optional_ptr<CatalogEntry> GetLatestSchema(ClientContext &context);
+	//! The schema entry for the table's CURRENT metadata, with no read-time snapshot isolation /
+	//! metadata-log rewind. The commit path must use this: a commit always targets the latest
+	//! (refreshed) metadata, like Java's SnapshotProducer which refreshes then applies against it.
+	//! GetLatestSchema/GetSchemaVersion are for read queries (as-of transaction start) and would, in
+	//! the commit path, mis-resolve against a concurrent writer's "too fresh" metadata.
+	optional_ptr<CatalogEntry> GetCurrentSchemaEntry();
 	idx_t GetIcebergVersion() const;
 	optional_ptr<CatalogEntry> GetSchemaVersion(ClientContext &context, optional_ptr<BoundAtClause> at);
 	optional_ptr<CatalogEntry> CreateSchemaVersion(const IcebergTableSchema &table_schema);

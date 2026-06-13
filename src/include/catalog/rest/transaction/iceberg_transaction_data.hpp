@@ -48,7 +48,20 @@ public:
 	void TableSetLocation();
 
 private:
-	void CacheExistingManifestList(lock_guard<mutex> &guard, const IcebergTableMetadata &metadata);
+	//! Read the current snapshot's manifest list into existing_manifest_list. `context` must be a
+	//! context with an active transaction at call time, because resolving storage secrets (e.g. S3
+	//! SIGV4 / credential_chain) requires one. The operator phase passes its live context; the commit
+	//! retry passes the commit-time context (the member `context`, captured at construction during the
+	//! operator, is no longer transaction-active during commit).
+	void CacheExistingManifestList(lock_guard<mutex> &guard, const IcebergTableMetadata &metadata,
+	                               ClientContext &context);
+
+public:
+	//! Drop the cached parent manifest list so the next apply re-reads it from the (refreshed)
+	//! current snapshot. Required for retry: on a commit conflict the parent has moved, and reusing
+	//! the stale cache would miss manifests added by the concurrent commit. `context`
+	//! must have an active transaction (the commit-time context), used for the manifest re-read.
+	void RefreshForRetry(ClientContext &context);
 
 public:
 	int32_t initial_schema_id;
@@ -60,6 +73,17 @@ public:
 	vector<unique_ptr<IcebergTableRequirement>> requirements;
 	//! Cached manifest list from the source snapshot
 	vector<IcebergManifestListEntry> existing_manifest_list;
+	//! Whether existing_manifest_list has been read for this transaction (reset on retry).
+	bool manifest_list_cached = false;
+
+	//! The snapshot id of the table at the time this transaction first started applying (the parent
+	//! of our very first attempt). Captured once and kept stable across retries (NOT reset by
+	//! RefreshForRetry, unlike manifest_list_cached). Used by the retry-time conflict validation to
+	//! (a) walk the refreshed parent's ancestry back to this id -- detecting a concurrent rollback
+	//! that would make a retry validate against unrelated history -- and (b) bound the set of
+	//! concurrently-added snapshots to inspect. -1 means "not yet captured".
+	int64_t starting_snapshot_id = -1;
+	bool starting_snapshot_captured = false;
 
 	//! Every insert/update/delete creates an alter of the table data
 	vector<reference<IcebergAddSnapshot>> alters;
@@ -67,6 +91,10 @@ public:
 	case_insensitive_map_t<string> transactional_delete_files;
 	//! Track the current row id for this transaction
 	int64_t next_row_id = 0;
+	//! Paths of manifest / manifest-list files written across all commit attempts for this table.
+	//! Used by CleanupFiles to delete metadata files left behind by a failed transaction or by
+	//! discarded retry attempts. Never used on a successful commit.
+	vector<string> written_metadata_paths;
 
 	//! If we perform an update that relies on the current schema id staying unchanged
 	bool assert_schema_id = false;

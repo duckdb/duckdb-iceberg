@@ -7,6 +7,7 @@
 
 #include "core/metadata/partition/iceberg_partition_spec.hpp"
 #include "core/expression/iceberg_value.hpp"
+#include "core/metadata/manifest/iceberg_avro_codec.hpp"
 #include "catalog/rest/catalog_entry/table/iceberg_table_information.hpp"
 #include "core/expression/iceberg_transform.hpp"
 #include "planning/metadata_io/avro/avro_scan.hpp"
@@ -36,7 +37,7 @@ IcebergManifestListEntry IcebergManifestListEntry::CreateFromEntries(FileSystem 
                                                                      const IcebergTableMetadata &table_metadata,
                                                                      IcebergManifestContentType manifest_content_type,
                                                                      vector<IcebergManifestEntry> &&manifest_entries,
-                                                                     int64_t &next_row_id) {
+                                                                     int64_t &next_row_id, int32_t partition_spec_id) {
 	//! create manifest file path
 	auto manifest_file_uuid = UUID::ToString(UUID::GenerateRandomUUID());
 	auto manifest_file_path = fs.JoinPath(table_metadata.GetMetadataPath(fs), manifest_file_uuid + "-m0.avro");
@@ -60,7 +61,10 @@ IcebergManifestListEntry IcebergManifestListEntry::CreateFromEntries(FileSystem 
 	manifest_file.added_rows_count = 0;
 	manifest_file.existing_rows_count = 0;
 	manifest_file.deleted_rows_count = 0;
-	manifest_file.partition_spec_id = table_metadata.default_spec_id;
+	//! Caller may pin the spec id (e.g. when merging a manifest that belongs to a historical spec);
+	//! otherwise default to the table's current default spec.
+	const int32_t effective_spec_id = partition_spec_id >= 0 ? partition_spec_id : table_metadata.default_spec_id;
+	manifest_file.partition_spec_id = effective_spec_id;
 
 	//! Add the files to the manifest
 	for (auto &manifest_entry : manifest_entries) {
@@ -96,12 +100,12 @@ IcebergManifestListEntry IcebergManifestListEntry::CreateFromEntries(FileSystem 
 	//! NOTE: this gets overwritten on commit
 	manifest_file.added_snapshot_id = snapshot_id;
 
-	// Compute partition field summaries (upper/lower bounds) for the manifest list entry
+	// Compute partition field summaries (upper/lower bounds) for the manifest list entry, using the
+	// manifest's own partition spec (which may be a historical spec when merging carried-over data).
 	if (table_metadata.HasPartitionSpec() && table_metadata.GetLatestPartitionSpec().IsPartitioned()) {
-		auto partition_spec_it = table_metadata.partition_specs.find(table_metadata.default_spec_id);
+		auto partition_spec_it = table_metadata.partition_specs.find(effective_spec_id);
 		if (partition_spec_it == table_metadata.partition_specs.end()) {
-			throw InternalException("Cannot find partition spec with id " +
-			                        std::to_string(table_metadata.default_spec_id));
+			throw InternalException("Cannot find partition spec with id " + std::to_string(effective_spec_id));
 		}
 		auto &partition_spec = partition_spec_it->second;
 		manifest_file.partitions.Create(table_metadata, partition_spec, manifest_entries);
@@ -307,7 +311,7 @@ static Value FieldSummaryFieldIds() {
 }
 
 void WriteToFile(const IcebergTableMetadata &table_metadata, const IcebergManifestList &manifest_list,
-                 CopyFunction &copy, DatabaseInstance &db, ClientContext &context) {
+                 CopyFunction &copy, DatabaseInstance &db, ClientContext &context, const string &avro_codec) {
 	auto &allocator = db.GetBufferManager().GetBufferAllocator();
 
 	//! Create the types for the DataChunk
@@ -457,16 +461,32 @@ void WriteToFile(const IcebergTableMetadata &table_metadata, const IcebergManife
 	CopyFunctionBindInput input(copy_info);
 	input.file_extension = "avro";
 
+	//! Honor write.manifest.compression-codec. The Avro COPY cannot emit a codec, so for a
+	//! compressing codec we COPY to a temp path and recompress into the final path (a single fresh
+	//! write), then delete the temp. The caller resolves the codec to "null" when the catalog forbids
+	//! client deletes (e.g. S3 Tables), so on those catalogs no temp is produced and the final path is
+	//! written directly -- no delete to fail.
+	const bool compress = iceberg_avro_codec::RequiresRecompression(avro_codec);
+	const string final_path = manifest_list.GetPath();
+	string copy_path = compress ? final_path + ".uncompressed.tmp" : final_path;
+
 	ThreadContext thread_context(context);
 	ExecutionContext execution_context(context, thread_context, nullptr);
 	auto bind_data = copy.copy_to_bind(context, input, metadata.names, metadata.types);
 
-	auto global_state = copy.copy_to_initialize_global(context, *bind_data, manifest_list.GetPath());
+	auto global_state = copy.copy_to_initialize_global(context, *bind_data, copy_path);
 	auto local_state = copy.copy_to_initialize_local(execution_context, *bind_data);
 
 	copy.copy_to_sink(execution_context, *bind_data, *global_state, *local_state, data);
 	copy.copy_to_combine(execution_context, *bind_data, *global_state, *local_state);
 	copy.copy_to_finalize(context, *bind_data, *global_state);
+
+	if (compress) {
+		//! Only reached for a compressing codec, which the caller resolves only for delete-capable
+		//! catalogs, so removing the temp is safe here.
+		iceberg_avro_codec::RecompressManifestFile(context, copy_path, final_path, avro_codec);
+		FileSystem::GetFileSystem(context).RemoveFile(copy_path);
+	}
 }
 
 } // namespace manifest_list

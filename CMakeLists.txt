@@ -27,6 +27,8 @@ set(EXTENSION_SOURCES
 	src/catalog/rest/api/catalog_utils.cpp
 	src/catalog/rest/api/iceberg_add_snapshot.cpp
 	src/catalog/rest/api/iceberg_create_table_request.cpp
+	src/catalog/rest/api/iceberg_manifest_merge.cpp
+	src/catalog/rest/api/iceberg_retry.cpp
 	src/catalog/rest/api/iceberg_table_update.cpp
 	src/catalog/rest/api/iceberg_type.cpp
 	src/catalog/rest/api/table_update.cpp
@@ -57,6 +59,7 @@ set(EXTENSION_SOURCES
 	src/core/metadata/iceberg_table_metadata.cpp
 	src/core/metadata/manifest/iceberg_manifest_list.cpp
 	src/core/metadata/manifest/iceberg_manifest.cpp
+	src/core/metadata/manifest/iceberg_avro_codec.cpp
 	src/core/metadata/partition/iceberg_partition_spec.cpp
 	src/core/metadata/schema/iceberg_column_definition.cpp
 	src/core/metadata/schema/iceberg_field_mapping.cpp

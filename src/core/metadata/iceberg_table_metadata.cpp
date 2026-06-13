@@ -126,6 +126,26 @@ optional_ptr<const IcebergSnapshot> IcebergTableMetadata::GetSnapshotById(int64_
 	return snapshot;
 }
 
+bool IcebergTableMetadata::IsAncestorOf(int64_t ancestor_id, int64_t descendant_id) const {
+	//! Walk parent links from the descendant back toward the ancestor. A snapshot is its own
+	//! ancestor. Stop if a link is missing (elided snapshot) -- treat as "not provably an ancestor".
+	int64_t current = descendant_id;
+	while (true) {
+		if (current == ancestor_id) {
+			return true;
+		}
+		auto snapshot = FindSnapshotByIdInternal(current);
+		if (!snapshot || !snapshot->has_parent_snapshot) {
+			return false;
+		}
+		if (snapshot->parent_snapshot_id == current) {
+			//! Defensive: a self-referential parent would loop forever.
+			return false;
+		}
+		current = snapshot->parent_snapshot_id;
+	}
+}
+
 IcebergSnapshotScanInfo IcebergTableMetadata::GetSnapshot(const IcebergSnapshotLookup &lookup) const {
 	IcebergSnapshotScanInfo snapshot_info;
 	switch (lookup.GetSource()) {

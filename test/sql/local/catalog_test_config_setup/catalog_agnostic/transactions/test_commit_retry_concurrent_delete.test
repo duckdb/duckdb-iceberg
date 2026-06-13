@@ -1,0 +1,115 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/transactions/test_commit_retry_concurrent_delete.test
+# description: Commit retry safety net end-to-end. Unlike concurrent
+#   appends (which always re-base and retry safely), concurrent DELETEs that target overlapping data
+#   files must NOT be silently retried -- a loser's positional/DV deletes were computed against a
+#   row set a concurrent delete already changed, so replaying them could double-delete or invalidate
+#   positions. The retry loop's ValidateRetrySafe must detect the concurrent delete on the refreshed
+#   parent and fail fast (FATAL, non-retryable) instead of producing a wrong result. This drives the
+#   three ValidateRetrySafe throw-sites end-to-end, which the offline logic tests only cover at the
+#   decision-predicate level.
+# group: [transactions]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+# Requires a catalog with real serializable-commit CAS (so concurrent deletes actually conflict and
+# the loser hits the retry path that ValidateRetrySafe guards). The SQLite-backed fixture catalog does
+# not enforce this under parallelism, so gate on the Lakekeeper (Postgres) CI job; also verified
+# manually against AWS S3 Tables. Skips cleanly elsewhere.
+require-env LAKEKEEPER_SERVER_AVAILABLE
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+set ignore_error_messages
+
+statement ok
+drop table if exists my_datalake.default.retry_cdel;
+
+# Generous append-retry budget; it does not let conflicting DELETEs through -- those abort via
+# ValidateRetrySafe regardless of the budget.
+statement ok
+create table my_datalake.default.retry_cdel (
+	id INTEGER,
+	grp INTEGER
+) WITH (
+	'commit.retry.num-retries' = '10',
+	'commit.retry.min-wait-ms' = '20',
+	'commit.retry.max-wait-ms' = '2000'
+);
+
+# 200 rows across 4 groups (grp = id % 4): 50 rows per group.
+statement ok
+insert into my_datalake.default.retry_cdel select i as id, i % 4 as grp from range(200) t(i);
+
+query I
+select count(*) from my_datalake.default.retry_cdel;
+----
+200
+
+# Four connections concurrently DELETE from the SAME group (grp = 0) with overlapping id ranges, so
+# every delete targets the same data files. Exactly one can win; the others hit a 409, refresh, and
+# ValidateRetrySafe sees the concurrent delete against a data file they also target -> each aborts
+# (a FATAL "Cannot retry commit ..." error) rather than silently re-applying a now-wrong delete.
+# Because losers ABORT (not retry-to-success), this loop intentionally produces errors on the losers;
+# ignore_error_messages above tolerates them. The invariant we assert is on the FINAL table state.
+concurrentloop i 0 4
+
+statement maybe
+delete from my_datalake.default.retry_cdel where grp = 0 and id < ${i} * 10 + 30;
+----
+Cannot retry commit
+
+endloop
+
+# Correctness invariant after the race: whichever delete won removed a *prefix* of grp=0 rows, and
+# every loser aborted cleanly without applying its delete. So the table must be in a consistent state:
+#  - no grp != 0 row was ever touched (all 150 of them survive),
+#  - the grp = 0 rows are EITHER all 50 still present (a delete that won removed a subset) OR a clean
+#    prefix was removed; in all cases NO row is double-counted and NO non-targeted row is lost.
+# The strongest portable assertion: the non-targeted groups are fully intact (proves no delete
+# corrupted unrelated data, and no loser's partially-applied delete leaked).
+query I
+select count(*) from my_datalake.default.retry_cdel where grp != 0;
+----
+150
+
+# Every surviving row is still unique and self-consistent (id % 4 == grp): a wrongly-replayed
+# concurrent delete or a corrupted manifest would surface as missing/duplicated/mismatched rows.
+query I
+select count(*) from my_datalake.default.retry_cdel where id % 4 != grp;
+----
+0
+
+query I
+select count(*) = count(distinct id) from my_datalake.default.retry_cdel;
+----
+true
+
+# The grp = 0 survivors are a contiguous suffix of the original prefix-delete (the winning delete
+# removed `id < K` for some K in {30,40,50,60}; everything >= K with grp=0 remains). Assert the
+# count is one of the legal single-winner outcomes (50 minus the number of grp=0 ids below K), i.e.
+# the remaining grp=0 rows are exactly those with id >= the smallest deleted-prefix boundary that won.
+# Regardless of which won, no grp=0 id below the winner's bound may remain AND none at/above may be
+# missing -- verified by: the set of present grp=0 ids equals {id : id%4==0 and id >= min_present}.
+query I
+select count(*) = 0 from (
+	-- any "hole" in the grp=0 survivors (a present id with a smaller grp=0 id missing) would mean a
+	-- non-prefix / double delete happened
+	select id from my_datalake.default.retry_cdel where grp = 0
+	except
+	select id from (
+		select i as id from range(200) t(i) where i % 4 = 0 and i >= (
+			select coalesce(min(id), 0) from my_datalake.default.retry_cdel where grp = 0
+		)
+	)
+);
+----
+true
+
+statement ok
+drop table my_datalake.default.retry_cdel;

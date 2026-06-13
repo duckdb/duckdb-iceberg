@@ -58,6 +58,14 @@ public:
 	optional_ptr<const IcebergSnapshot> GetSnapshotById(int64_t snapshot_id) const;
 	optional_ptr<const IcebergSnapshot> GetSnapshotByTimestamp(timestamp_t timestamp) const;
 
+	//! Whether `descendant_id` is `ancestor_id`, or reachable from it by following parent_snapshot_id
+	//! links. Used by the retry-time guard to confirm the refreshed parent still descends from the
+	//! snapshot this transaction started against (a concurrent rollback would break this). If a link
+	//! in the chain is missing from the loaded `snapshots` map (e.g. the catalog elided an expired
+	//! snapshot), the walk stops and returns false -- callers treat "cannot prove ancestry" as a
+	//! conflict, which is the safe choice.
+	bool IsAncestorOf(int64_t ancestor_id, int64_t descendant_id) const;
+
 	//! Version extraction and identification
 	static bool UnsafeVersionGuessingEnabled(ClientContext &context);
 	static string GetTableVersionFromHint(const string &path, FileSystem &fs, string version_format);
