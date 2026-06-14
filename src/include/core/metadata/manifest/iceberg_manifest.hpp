@@ -193,9 +193,13 @@ static constexpr const int32_t REFERENCED_DATA_FILE = 143;
 static constexpr const int32_t CONTENT_OFFSET = 144;
 static constexpr const int32_t CONTENT_SIZE_IN_BYTES = 145;
 
+//! Write a manifest file. `avro_codec` is the already-resolved Avro codec ("null" = uncompressed,
+//! "deflate" = compressed). It is resolved by the caller (which knows whether the catalog allows the
+//! temp-file deletes that compression needs), defaulting to uncompressed so callers that do not opt
+//! in stay safe on every catalog.
 idx_t WriteToFile(const IcebergTableMetadata &table_metadata, const IcebergManifestFile &manifest_file,
                   const vector<IcebergManifestEntry> &entries, CopyFunction &copy_function, DatabaseInstance &db,
-                  ClientContext &context);
+                  ClientContext &context, const string &avro_codec = "null");
 
 } // namespace manifest_file
 

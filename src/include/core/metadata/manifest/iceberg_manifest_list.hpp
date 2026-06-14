@@ -198,8 +198,12 @@ static constexpr const int32_t FIELD_SUMMARY_UPPER_BOUND = 511;
 static constexpr const int32_t KEY_METADATA = 519;
 static constexpr const int32_t FIRST_ROW_ID = 520;
 
+//! Write a manifest list. `avro_codec` is the already-resolved Avro codec ("null" = uncompressed,
+//! "deflate" = compressed), resolved by the caller (see manifest_file::WriteToFile). Defaults to
+//! uncompressed so callers that do not opt in stay safe on every catalog.
 void WriteToFile(const IcebergTableMetadata &table_metadata, const IcebergManifestList &manifest_list,
-                 CopyFunction &copy_function, DatabaseInstance &db, ClientContext &context);
+                 CopyFunction &copy_function, DatabaseInstance &db, ClientContext &context,
+                 const string &avro_codec = "null");
 
 } // namespace manifest_list
 
