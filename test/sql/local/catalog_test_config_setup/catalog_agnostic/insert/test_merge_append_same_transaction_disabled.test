@@ -1,0 +1,74 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/insert/test_merge_append_same_transaction_disabled.test
+# description: MergeAppend (#790) - multiple inserts in a single transaction with merge DISABLED.
+#              Each in-transaction insert still produces its own snapshot/manifest; with
+#              commit.manifest-merge.enabled=false they are NOT collapsed, so the data manifests
+#              survive separately. Data must still be fully correct. (Control case for the
+#              "multiple inserts in the same transaction" review question on #1060.)
+# group: [insert]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+set ignore_error_messages
+
+statement ok
+drop table if exists my_datalake.default.no_merge_same_txn;
+
+statement ok
+create table my_datalake.default.no_merge_same_txn (
+	id INTEGER,
+	data VARCHAR
+) WITH (
+	'commit.manifest-merge.enabled' = 'false',
+	'commit.manifest.min-count-to-merge' = '2'
+);
+
+statement ok
+BEGIN
+
+statement ok
+insert into my_datalake.default.no_merge_same_txn values (1, 'a'), (2, 'b');
+
+statement ok
+insert into my_datalake.default.no_merge_same_txn values (3, 'c'), (4, 'd');
+
+statement ok
+insert into my_datalake.default.no_merge_same_txn values (5, 'e'), (6, 'f');
+
+statement ok
+COMMIT
+
+# Data is fully correct regardless of merge being disabled.
+query II
+select id, data from my_datalake.default.no_merge_same_txn order by id;
+----
+1	a
+2	b
+3	c
+4	d
+5	e
+6	f
+
+query I
+select count(*) from my_datalake.default.no_merge_same_txn;
+----
+6
+
+# With merge disabled, the three per-insert data manifests are NOT collapsed.
+query I
+select count(*) >= 3 from (
+	select distinct manifest_path
+	from iceberg_metadata(my_datalake.default.no_merge_same_txn)
+);
+----
+true
+
+statement ok
+drop table my_datalake.default.no_merge_same_txn;

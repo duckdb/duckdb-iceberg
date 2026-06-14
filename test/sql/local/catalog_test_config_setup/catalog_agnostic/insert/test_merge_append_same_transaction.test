@@ -1,0 +1,255 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/insert/test_merge_append_same_transaction.test
+# description: MergeAppend (#790) - behaviour when MULTIPLE writes happen inside a SINGLE transaction.
+#              Each insert/delete in a transaction produces its own snapshot (add_snapshot), so a
+#              transaction with N writes assembles N chained snapshots committed atomically. This
+#              verifies the manifest-merge-on-commit path interacts correctly with that: read-your-
+#              own-writes across in-flight writes, atomic visibility on COMMIT, atomic discard on
+#              ROLLBACK, correct merged manifest count, and no rows lost/duplicated. (Answers the
+#              "what happens when we are performing multiple inserts in the same transaction?"
+#              review question on #1060.)
+# group: [insert]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Case 1: three inserts in one transaction; merge collapses the per-insert
+#         data manifests into one on commit.
+# ─────────────────────────────────────────────────────────────────────────────
+statement ok
+drop table if exists my_datalake.default.merge_same_txn;
+
+# Aggressive min-count-to-merge so a merge is observable after only a couple of snapshots.
+statement ok
+create table my_datalake.default.merge_same_txn (
+	id INTEGER,
+	data VARCHAR
+) WITH (
+	'commit.manifest.min-count-to-merge' = '2',
+	'commit.manifest.target-size-bytes' = '8388608'
+);
+
+statement ok
+BEGIN
+
+statement ok
+insert into my_datalake.default.merge_same_txn values (1, 'a'), (2, 'b');
+
+statement ok
+insert into my_datalake.default.merge_same_txn values (3, 'c'), (4, 'd');
+
+statement ok
+insert into my_datalake.default.merge_same_txn values (5, 'e'), (6, 'f');
+
+# Read-your-own-writes: inside the transaction all three inserts are visible before COMMIT.
+query I
+select count(*) from my_datalake.default.merge_same_txn;
+----
+6
+
+query II
+select id, data from my_datalake.default.merge_same_txn order by id;
+----
+1	a
+2	b
+3	c
+4	d
+5	e
+6	f
+
+statement ok
+COMMIT
+
+# Atomic visibility: after COMMIT all rows from every in-transaction insert are durable and correct.
+query II
+select id, data from my_datalake.default.merge_same_txn order by id;
+----
+1	a
+2	b
+3	c
+4	d
+5	e
+6	f
+
+query I
+select count(*) from my_datalake.default.merge_same_txn;
+----
+6
+
+# MergeAppend correctness across the chained in-transaction snapshots: the per-snapshot data
+# manifests must be bin-packed into a single merged data manifest (min-count=2).
+query I
+select count(*) from (
+	select distinct manifest_path
+	from iceberg_metadata(my_datalake.default.merge_same_txn)
+);
+----
+1
+
+# Entries pulled in from earlier in-transaction snapshots' manifests are rewritten with status
+# EXISTING (proof the status demotion happened during the merge); genuinely-new entries stay ADDED.
+query I
+select count(*) > 0 from iceberg_metadata(my_datalake.default.merge_same_txn) where status = 'EXISTING';
+----
+true
+
+# A further single-statement insert (separate transaction) still reads back everything.
+statement ok
+insert into my_datalake.default.merge_same_txn values (7, 'g'), (8, 'h');
+
+query I
+select count(*) from my_datalake.default.merge_same_txn;
+----
+8
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Case 2: ROLLBACK of a multi-insert transaction discards everything atomically.
+# ─────────────────────────────────────────────────────────────────────────────
+statement ok
+BEGIN
+
+statement ok
+insert into my_datalake.default.merge_same_txn values (100, 'x'), (101, 'y');
+
+statement ok
+insert into my_datalake.default.merge_same_txn values (102, 'z');
+
+# Visible inside the transaction.
+query I
+select count(*) from my_datalake.default.merge_same_txn;
+----
+11
+
+statement ok
+ROLLBACK
+
+# After ROLLBACK none of the in-transaction inserts survive; the table is exactly as before.
+query I
+select count(*) from my_datalake.default.merge_same_txn;
+----
+8
+
+query I
+select count(*) from my_datalake.default.merge_same_txn where id >= 100;
+----
+0
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Case 3: insert then delete some of the just-inserted rows in the SAME txn.
+#         Exercises a DATA snapshot followed by a DELETE snapshot in one commit.
+# ─────────────────────────────────────────────────────────────────────────────
+statement ok
+BEGIN
+
+statement ok
+insert into my_datalake.default.merge_same_txn values (200, 'p'), (201, 'q'), (202, 'r');
+
+# Delete part of what we just inserted, within the same transaction.
+query I
+delete from my_datalake.default.merge_same_txn where id = 201;
+----
+1
+
+# Read-your-own-writes reflects insert+delete combined.
+query I
+select count(*) from my_datalake.default.merge_same_txn where id >= 200;
+----
+2
+
+statement ok
+COMMIT
+
+# After commit: 200 and 202 survive, 201 does not; earlier rows untouched.
+query I
+select count(*) from my_datalake.default.merge_same_txn;
+----
+10
+
+query II
+select id, data from my_datalake.default.merge_same_txn where id >= 200 order by id;
+----
+200	p
+202	r
+
+# Full data integrity check across all rows.
+query I
+select count(*) from my_datalake.default.merge_same_txn;
+----
+10
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Case 4: many small inserts in one transaction (stress the chained-snapshot
+#         + merge path with more than a couple of snapshots).
+# ─────────────────────────────────────────────────────────────────────────────
+statement ok
+drop table if exists my_datalake.default.merge_same_txn_many;
+
+statement ok
+create table my_datalake.default.merge_same_txn_many (
+	id INTEGER
+) WITH (
+	'commit.manifest.min-count-to-merge' = '2',
+	'commit.manifest.target-size-bytes' = '8388608'
+);
+
+statement ok
+BEGIN
+
+statement ok
+insert into my_datalake.default.merge_same_txn_many values (1);
+
+statement ok
+insert into my_datalake.default.merge_same_txn_many values (2);
+
+statement ok
+insert into my_datalake.default.merge_same_txn_many values (3);
+
+statement ok
+insert into my_datalake.default.merge_same_txn_many values (4);
+
+statement ok
+insert into my_datalake.default.merge_same_txn_many values (5);
+
+query I
+select count(*) from my_datalake.default.merge_same_txn_many;
+----
+5
+
+statement ok
+COMMIT
+
+# All five single-row inserts present after commit.
+query I
+select count(*) from my_datalake.default.merge_same_txn_many;
+----
+5
+
+query I
+select sum(id) from my_datalake.default.merge_same_txn_many;
+----
+15
+
+# Merge collapsed the five per-insert data manifests into one.
+query I
+select count(*) from (
+	select distinct manifest_path
+	from iceberg_metadata(my_datalake.default.merge_same_txn_many)
+);
+----
+1
+
+statement ok
+drop table my_datalake.default.merge_same_txn_many;
+
+statement ok
+drop table my_datalake.default.merge_same_txn;

@@ -9,7 +9,11 @@
 #include "duckdb/common/types/uuid.hpp"
 
 #include "core/metadata/manifest/iceberg_manifest_list.hpp"
+#include "core/metadata/manifest/iceberg_avro_codec.hpp"
+#include "catalog/rest/api/iceberg_manifest_merge.hpp"
 #include "catalog/rest/iceberg_table_set.hpp"
+#include "catalog/rest/iceberg_catalog.hpp"
+#include "catalog/rest/catalog_entry/table/iceberg_table_information.hpp"
 #include "planning/metadata_io/avro/avro_scan.hpp"
 #include "planning/metadata_io/manifest/iceberg_manifest_reader.hpp"
 
@@ -35,30 +39,6 @@ static rest_api_objects::TableUpdate CreateAddSnapshotUpdate(const IcebergTableI
 	update.action = "add-snapshot";
 	update.snapshot = snapshot.ToRESTObject(table_info.table_metadata);
 	return table_update;
-}
-
-static IcebergManifestListEntry ScanExistingManifestFile(const IcebergManifestFile &manifest_file,
-                                                         IcebergCommitState &commit_state, int32_t schema_id) {
-	vector<IcebergManifestListEntry> manifest_files;
-	manifest_files.push_back(manifest_file);
-
-	IcebergOptions options;
-	auto &fs = FileSystem::GetFileSystem(commit_state.context);
-	auto &table_metadata = commit_state.table_info.table_metadata;
-
-	IcebergSnapshotScanInfo snapshot_info;
-	snapshot_info.snapshot = commit_state.latest_snapshot;
-	snapshot_info.schema_id = schema_id;
-
-	auto manifest_scan =
-	    AvroScan::ScanManifest(snapshot_info, manifest_files, options, fs, "", table_metadata, commit_state.context);
-	auto manifest_file_reader = make_uniq<manifest_file::ManifestReader>(*manifest_scan);
-
-	while (!manifest_file_reader->Finished()) {
-		manifest_file_reader->Read();
-	}
-
-	return std::move(manifest_files[0]);
 }
 
 static bool ManifestFileNeedsToBeRewritten(IcebergCommitState &commit_state, IcebergManifestListEntry &list_entry,
@@ -119,7 +99,7 @@ static void RewriteManifestFile(IcebergManifestListEntry &list_entry, CopyFuncti
 
 	//! Finally overwrite the input 'manifest_file' with our edited copy
 	auto manifest_length = manifest_file::WriteToFile(table_metadata, manifest_file, manifest_entries, avro_copy, db,
-	                                                  commit_state.context);
+	                                                  commit_state.context, commit_state.manifest_avro_codec);
 	manifest_file.manifest_length = manifest_length;
 }
 
@@ -134,9 +114,7 @@ void IcebergAddSnapshot::ConstructManifestList(IcebergManifestList &new_manifest
 	}
 
 	for (auto &manifest_list_entry : commit_state.manifests) {
-		auto &existing_manifest_file = manifest_list_entry.file;
-
-		auto scanned_manifest_file = ScanExistingManifestFile(existing_manifest_file, commit_state, schema_id);
+		auto scanned_manifest_file = ScanManifestEntries(manifest_list_entry, commit_state, schema_id);
 		bool needs_rewrite = ManifestFileNeedsToBeRewritten(commit_state, scanned_manifest_file, altered_manifests);
 		if (!needs_rewrite) {
 			new_manifest_list.AddExistingManifestFile(std::move(manifest_list_entry));
@@ -152,13 +130,92 @@ void IcebergAddSnapshot::ConstructManifestList(IcebergManifestList &new_manifest
 static IcebergManifestListEntry WriteManifestListEntry(const IcebergTableInformation &table_info,
                                                        const IcebergManifestListEntry &list_entry,
                                                        CopyFunction &avro_copy, DatabaseInstance &db,
-                                                       ClientContext &context) {
+                                                       ClientContext &context, const string &avro_codec) {
 	auto manifest_length = manifest_file::WriteToFile(table_info.table_metadata, list_entry.file,
-	                                                  list_entry.manifest_entries, avro_copy, db, context);
+	                                                  list_entry.manifest_entries, avro_copy, db, context, avro_codec);
 	IcebergManifestListEntry new_entry(list_entry.file);
 	new_entry.manifest_entries = list_entry.manifest_entries;
 	new_entry.file.manifest_length = manifest_length;
 	return new_entry;
+}
+
+//! Physically repack the assembled manifest list to reduce the number of manifest files. DATA and
+//! DELETE manifests are merged independently and never mixed. A manifest is "new in this
+//! transaction" iff it was added by the snapshot we are building (`added_snapshot_id ==
+//! snapshot_id`); the min-count guard only applies to bins containing such a manifest.
+void IcebergAddSnapshot::MergeManifestList(IcebergManifestList &new_manifest_list, int64_t snapshot_id,
+                                           CopyFunction &avro_copy, DatabaseInstance &db,
+                                           IcebergCommitState &commit_state) const {
+	auto config = ManifestMergeConfig::FromTableMetadata(commit_state.table_info.table_metadata);
+	if (!config.enabled) {
+		return;
+	}
+
+	auto &entries = new_manifest_list.GetManifestFilesMutable();
+	if (entries.size() <= 1) {
+		return;
+	}
+
+	//! V3 row lineage: a row's first_row_id is a stable per-row identifier and, per spec, MUST be
+	//! preserved when a manifest is rewritten/merged -- it may never be reassigned. Already-committed
+	//! ("carried-over") manifests have their first_row_id settled, so merging them is safe (each
+	//! merged manifest keeps the minimum first_row_id of the manifests it absorbs). This transaction's
+	//! brand-new data manifests, however, do not yet have per-entry first_row_id materialized -- those
+	//! rows still rely on manifest-level inheritance assigned later in manifest_list::WriteToFile.
+	//! Folding such not-yet-assigned rows into a merged manifest alongside already-assigned rows would
+	//! break the per-manifest inheritance basis. Correctly merging them requires materializing every
+	//! entry's first_row_id before merging, which needs end-to-end V3 row-lineage tests to validate;
+	//! a silent error here corrupts row identity (not just a crash). We therefore leave new V3 data
+	//! manifests unmerged. This costs almost nothing: next commit they are carried-over and become
+	//! eligible, so V3 manifest growth still converges -- it is merely delayed by one commit.
+	//! V2 has no row lineage, so everything is eligible there.
+	const bool is_v3 = commit_state.table_info.table_metadata.iceberg_version >= 3;
+
+	//! Split by content type, tagging each manifest's origin. Manifests excluded from merging are
+	//! kept aside and re-appended unchanged.
+	vector<MergeInputManifest> data_input;
+	vector<MergeInputManifest> delete_input;
+	vector<IcebergManifestListEntry> kept;
+	for (auto &entry : entries) {
+		auto source =
+		    entry.file.added_snapshot_id == snapshot_id ? ManifestSource::NEW_THIS_TRANSACTION : ManifestSource::CARRIED_OVER;
+		//! V3 row lineage only constrains DATA manifests (first_row_id). New DELETE manifests carry no
+		//! first_row_id, so they remain eligible for merging even on V3.
+		if (is_v3 && source == ManifestSource::NEW_THIS_TRANSACTION &&
+		    entry.file.content == IcebergManifestContentType::DATA) {
+			kept.push_back(std::move(entry));
+			continue;
+		}
+		auto &target = entry.file.content == IcebergManifestContentType::DELETE ? delete_input : data_input;
+		target.push_back(MergeInputManifest {std::move(entry), source});
+	}
+
+	auto merged_data = MergeManifests(std::move(data_input), IcebergManifestContentType::DATA, config, avro_copy, db,
+	                                  commit_state, schema_id, snapshot_id);
+	auto merged_delete = MergeManifests(std::move(delete_input), IcebergManifestContentType::DELETE, config, avro_copy,
+	                                    db, commit_state, schema_id, snapshot_id);
+
+	//! Reassemble. A manifest produced by the merge is a brand-new file created by this snapshot, so
+	//! stamp it with the snapshot's sequence number / id while preserving its computed
+	//! min_sequence_number (which reflects the historical entries it absorbed). The merge writes its
+	//! products with a placeholder snapshot id of -1 (see CreateFromEntries call in the merge), which
+	//! distinguishes them from both new and carried-over manifests that pass through unmerged.
+	entries.clear();
+	auto reassemble = [&](vector<IcebergManifestListEntry> &merged) {
+		for (auto &entry : merged) {
+			if (entry.file.added_snapshot_id < 0) {
+				entry.file.added_snapshot_id = snapshot_id;
+				entry.file.sequence_number = new_manifest_list.GetSequenceNumber();
+			}
+			entries.push_back(std::move(entry));
+		}
+	};
+	reassemble(merged_data);
+	reassemble(merged_delete);
+	//! Re-append manifests that were excluded from merging (e.g. V3 new-data manifests) unchanged.
+	for (auto &entry : kept) {
+		entries.push_back(std::move(entry));
+	}
 }
 
 void IcebergAddSnapshot::CreateUpdate(DatabaseInstance &db, ClientContext &context,
@@ -174,6 +231,13 @@ void IcebergAddSnapshot::CreateUpdate(DatabaseInstance &db, ClientContext &conte
 	D_ASSERT(!uncommitted_manifest_files.empty());
 
 	auto &table_metadata = commit_state.table_info.table_metadata;
+
+	//! Resolve the manifest Avro codec once for this apply: from write.manifest.compression-codec,
+	//! but forced to uncompressed when the catalog forbids client deletes (compression needs a
+	//! deletable temp file). Every manifest/manifest-list write below uses commit_state.manifest_avro_codec.
+	commit_state.manifest_avro_codec = iceberg_avro_codec::ResolveAvroCodec(
+	    table_metadata.GetTableProperty("write.manifest.compression-codec"),
+	    commit_state.table_info.catalog.attach_options.allows_deletes);
 
 	const auto snapshot_id = IcebergSnapshot::NewSnapshotId();
 	const auto sequence_number = commit_state.next_sequence_number++;
@@ -214,7 +278,8 @@ void IcebergAddSnapshot::CreateUpdate(DatabaseInstance &db, ClientContext &conte
 		auto &manifest_file = manifest_list_entry.file;
 		new_snapshot.metrics.AddManifestFile(manifest_file);
 
-		auto new_manifest_list_entry = WriteManifestListEntry(table_info, manifest_list_entry, avro_copy, db, context);
+		auto new_manifest_list_entry =
+		    WriteManifestListEntry(table_info, manifest_list_entry, avro_copy, db, context, commit_state.manifest_avro_codec);
 		new_manifest_list.AddNewManifestFile(std::move(new_manifest_list_entry));
 
 		if (table_metadata.iceberg_version >= 3) {
@@ -226,7 +291,12 @@ void IcebergAddSnapshot::CreateUpdate(DatabaseInstance &db, ClientContext &conte
 		}
 	}
 
-	manifest_list::WriteToFile(table_metadata, new_manifest_list, avro_copy, db, context);
+	//! Physically reorganize the manifest list to bound manifest growth. This is a pure repacking of
+	//! the manifests we just assembled -- it does not change the snapshot's logical added/deleted
+	//! stats (already accumulated above), only how entries are grouped into files.
+	MergeManifestList(new_manifest_list, snapshot_id, avro_copy, db, commit_state);
+
+	manifest_list::WriteToFile(table_metadata, new_manifest_list, avro_copy, db, context, commit_state.manifest_avro_codec);
 	commit_state.manifests = new_manifest_list.GetManifestListEntries();
 
 	commit_state.created_snapshots.push_back(new_snapshot);

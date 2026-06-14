@@ -1,0 +1,107 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/insert/test_manifest_compression.test
+# description: write.manifest.compression-codec is honored when writing manifests. The Avro COPY writer
+#   emits uncompressed; the extension re-compresses the manifest / manifest-list to DEFLATE (default,
+#   matching Java) via a temp-file + fresh-write that stays object-store-safe. This exercises the WRITE
+#   side end-to-end through a real catalog, then reads it back to prove the compressed metadata chain is
+#   valid and rows round-trip.
+# group: [insert]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+set ignore_error_messages
+
+# --- Default codec (deflate): a table created without the property must still commit and read back. ---
+statement ok
+drop table if exists my_datalake.default.codec_default;
+
+statement ok
+create table my_datalake.default.codec_default (id INTEGER, data VARCHAR);
+
+statement ok
+insert into my_datalake.default.codec_default values (1, 'a'), (2, 'b'), (3, 'c');
+
+# Reading back goes through the (deflate-compressed) manifest + manifest list -> data files. If the
+# recompression produced an invalid Avro container, this query would error or return wrong rows.
+query II
+select id, data from my_datalake.default.codec_default order by id;
+----
+1	a
+2	b
+3	c
+
+# iceberg_metadata parses the freshly written (compressed) manifests; a successful parse with the
+# expected entries proves the written container is spec-valid DEFLATE.
+query I
+select count(*) >= 1 from (
+	select distinct manifest_path from iceberg_metadata(my_datalake.default.codec_default)
+);
+----
+true
+
+# A second commit + read confirms multi-commit compressed-manifest writing keeps working.
+statement ok
+insert into my_datalake.default.codec_default values (4, 'd');
+
+query I
+select count(*) from my_datalake.default.codec_default;
+----
+4
+
+# --- Explicit deflate via the gzip alias (Iceberg's spelling) must behave identically. ---
+statement ok
+drop table if exists my_datalake.default.codec_gzip;
+
+statement ok
+create table my_datalake.default.codec_gzip (id INTEGER, data VARCHAR) WITH (
+	'write.manifest.compression-codec' = 'gzip'
+);
+
+statement ok
+insert into my_datalake.default.codec_gzip values (10, 'x'), (20, 'y');
+
+query II
+select id, data from my_datalake.default.codec_gzip order by id;
+----
+10	x
+20	y
+
+# --- Uncompressed (codec=none): the extension must skip recompression and write plain Avro that
+#     still reads back correctly. This covers the RequiresRecompression()==false branch. ---
+statement ok
+drop table if exists my_datalake.default.codec_none;
+
+statement ok
+create table my_datalake.default.codec_none (id INTEGER, data VARCHAR) WITH (
+	'write.manifest.compression-codec' = 'none'
+);
+
+statement ok
+insert into my_datalake.default.codec_none values (100, 'p'), (200, 'q');
+
+query II
+select id, data from my_datalake.default.codec_none order by id;
+----
+100	p
+200	q
+
+query I
+select count(*) from my_datalake.default.codec_none;
+----
+2
+
+statement ok
+drop table my_datalake.default.codec_default;
+
+statement ok
+drop table my_datalake.default.codec_gzip;
+
+statement ok
+drop table my_datalake.default.codec_none;

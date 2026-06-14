@@ -121,7 +121,8 @@ public:
 	static IcebergManifestListEntry
 	CreateFromEntries(FileSystem &fs, int64_t snapshot_id, sequence_number_t sequence_number,
 	                  const IcebergTableMetadata &table_metadata, IcebergManifestContentType manifest_content_type,
-	                  vector<IcebergManifestEntry> &&manifest_entries, int64_t &next_row_id);
+	                  vector<IcebergManifestEntry> &&manifest_entries, int64_t &next_row_id,
+	                  int32_t partition_spec_id = -1);
 
 public:
 	IcebergManifestFile file;
@@ -139,6 +140,9 @@ public:
 	const vector<IcebergManifestListEntry> &GetManifestFilesConst() const;
 	const string &GetPath() const {
 		return path;
+	}
+	sequence_number_t GetSequenceNumber() const {
+		return sequence_number;
 	}
 
 	void AddNewManifestFile(IcebergManifestListEntry &&manifest_list_entry) {
@@ -198,8 +202,12 @@ static constexpr const int32_t FIELD_SUMMARY_UPPER_BOUND = 511;
 static constexpr const int32_t KEY_METADATA = 519;
 static constexpr const int32_t FIRST_ROW_ID = 520;
 
+//! Write a manifest list. `avro_codec` is the already-resolved Avro codec ("null" = uncompressed,
+//! "deflate" = compressed), resolved by the caller (see manifest_file::WriteToFile). Defaults to
+//! uncompressed so callers that do not opt in stay safe on every catalog.
 void WriteToFile(const IcebergTableMetadata &table_metadata, const IcebergManifestList &manifest_list,
-                 CopyFunction &copy_function, DatabaseInstance &db, ClientContext &context);
+                 CopyFunction &copy_function, DatabaseInstance &db, ClientContext &context,
+                 const string &avro_codec = "null");
 
 } // namespace manifest_list
 

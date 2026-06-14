@@ -34,6 +34,10 @@ public:
 	IcebergManifestDeletes altered_manifests;
 
 private:
+	//! Repack the assembled manifest list into fewer manifests, in place.
+	void MergeManifestList(IcebergManifestList &new_manifest_list, int64_t snapshot_id, CopyFunction &avro_copy,
+	                       DatabaseInstance &db, IcebergCommitState &commit_state) const;
+
 	vector<IcebergManifestListEntry> manifest_files;
 	int32_t schema_id;
 	IcebergSnapshotOperationType operation;

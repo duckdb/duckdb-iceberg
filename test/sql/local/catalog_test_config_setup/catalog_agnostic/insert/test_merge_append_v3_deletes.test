@@ -1,0 +1,87 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/insert/test_merge_append_v3_deletes.test
+# description: Manifest merge on a V3 table with row-level deletes. Exercises merging across
+#   multiple commits including DELETE manifests / deletion vectors, and verifies the merge is a pure
+#   physical reorganization: all surviving rows remain correct after repeated merge rounds.
+# group: [insert]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+set ignore_error_messages
+
+statement ok
+drop table if exists my_datalake.default.merge_v3;
+
+# V3 table (deletion vectors) with an aggressive merge threshold so merges are observable quickly.
+statement ok
+create table my_datalake.default.merge_v3 (
+	id INTEGER,
+	data VARCHAR
+) WITH (
+	'format-version' = 3,
+	'commit.manifest.min-count-to-merge' = '2',
+	'commit.manifest.target-size-bytes' = '8388608'
+);
+
+statement ok
+insert into my_datalake.default.merge_v3 values (1, 'a'), (2, 'b'), (3, 'c');
+
+statement ok
+insert into my_datalake.default.merge_v3 values (4, 'd'), (5, 'e'), (6, 'f');
+
+statement ok
+insert into my_datalake.default.merge_v3 values (7, 'g'), (8, 'h'), (9, 'i');
+
+# Delete some rows: produces DELETE manifests / deletion vectors that also participate in merging.
+statement ok
+delete from my_datalake.default.merge_v3 where id in (2, 5, 8);
+
+# Data correctness after merge + deletes: the deleted rows are gone, everything else survives.
+query II
+select id, data from my_datalake.default.merge_v3 order by id;
+----
+1	a
+3	c
+4	d
+6	f
+7	g
+9	i
+
+query I
+select count(*) from my_datalake.default.merge_v3;
+----
+6
+
+# Another insert after deletes (multi-round merge with mixed DATA/DELETE manifests) keeps data intact.
+statement ok
+insert into my_datalake.default.merge_v3 values (10, 'j'), (11, 'k');
+
+query I
+select count(*) from my_datalake.default.merge_v3;
+----
+8
+
+# A second delete round, then read: still correct (no lost/duplicated rows across merge rounds).
+statement ok
+delete from my_datalake.default.merge_v3 where id = 10;
+
+query II
+select id, data from my_datalake.default.merge_v3 order by id;
+----
+1	a
+3	c
+4	d
+6	f
+7	g
+9	i
+11	k
+
+statement ok
+drop table my_datalake.default.merge_v3;
