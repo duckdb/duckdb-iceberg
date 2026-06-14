@@ -105,8 +105,45 @@ AWSInput SIGV4Authorization::CreateAWSInput(ClientContext &context, const IRCEnd
 		aws_input.query_string_parameters.emplace_back(param.first, param.second.raw);
 	}
 
-	// AWS credentials
+	// AWS credentials — trigger refresh if the secret supports it (web_identity/sts chains)
 	auto secret_entry = IcebergCatalog::GetStorageSecret(context, secret);
+	{
+		const auto &kv_secret_pre = dynamic_cast<const KeyValueSecret &>(*secret_entry->secret);
+		Value refresh_info;
+		if (kv_secret_pre.TryGetValue("refresh_info", refresh_info)) {
+			// Reconstruct a CreateSecretInput to re-run the credential chain
+			CreateSecretInput refresh_input;
+			refresh_input.on_conflict = OnCreateConflict::REPLACE_ON_CONFLICT;
+			refresh_input.persist_type = SecretPersistType::TEMPORARY;
+			refresh_input.type = kv_secret_pre.GetType();
+			refresh_input.name = kv_secret_pre.GetName();
+			refresh_input.provider = kv_secret_pre.GetProvider();
+			refresh_input.storage_type = secret_entry->storage_mode;
+			refresh_input.scope = kv_secret_pre.GetScope();
+
+			// Reconstruct the original CreateSecretInput options from refresh_info.
+			// refresh_info is a STRUCT containing the original named parameters used to
+			// create the secret (e.g., 'chain', 'region', 'profile', etc.) — these are
+			// stored by the aws extension when refresh='auto' is set. Re-passing them to
+			// SecretManager::CreateSecret re-runs the credential chain provider, which
+			// fetches fresh STS tokens.
+			auto child_count = StructType::GetChildCount(refresh_info.type());
+			auto children = StructValue::GetChildren(refresh_info);
+			for (idx_t i = 0; i < child_count; i++) {
+				auto &key = StructType::GetChildName(refresh_info.type(), i);
+				refresh_input.options[key] = children[i];
+			}
+
+			try {
+				auto &secret_manager = context.db->GetSecretManager();
+				(void)secret_manager.CreateSecret(context, refresh_input);
+				// Re-fetch to get updated credentials after refresh
+				secret_entry = IcebergCatalog::GetStorageSecret(context, secret);
+			} catch (std::exception &) {
+				// Refresh failed — continue with existing credentials
+			}
+		}
+	}
 	auto kv_secret = dynamic_cast<const KeyValueSecret &>(*secret_entry->secret);
 	aws_input.key_id = kv_secret.secret_map["key_id"].GetValue<string>();
 	aws_input.secret = kv_secret.secret_map["secret"].GetValue<string>();
