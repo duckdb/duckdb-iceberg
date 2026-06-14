@@ -22,6 +22,7 @@ public:
 
 public:
 	static FetchScanTasksResult FromJSON(yyjson_val *obj);
+	FetchScanTasksResult Copy() const;
 
 public:
 	string TryFromJSON(yyjson_val *obj);

@@ -24,6 +24,16 @@ AddEncryptionKeyUpdate AddEncryptionKeyUpdate::FromJSON(yyjson_val *obj) {
 	return res;
 }
 
+AddEncryptionKeyUpdate AddEncryptionKeyUpdate::Copy() const {
+	AddEncryptionKeyUpdate res;
+	res.base_update = base_update.Copy();
+	res.encryption_key = encryption_key.Copy();
+	if (has_action) {
+		res.action = action;
+	}
+	res.has_action = has_action;
+	return res;
+}
 string AddEncryptionKeyUpdate::TryFromJSON(yyjson_val *obj) {
 	string error;
 	error = base_update.TryFromJSON(obj);

@@ -21,6 +21,7 @@ public:
 
 public:
 	static RegisterViewRequest FromJSON(yyjson_val *obj);
+	RegisterViewRequest Copy() const;
 
 public:
 	string TryFromJSON(yyjson_val *obj);

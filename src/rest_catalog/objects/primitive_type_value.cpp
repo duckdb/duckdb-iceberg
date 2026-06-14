@@ -24,6 +24,74 @@ PrimitiveTypeValue PrimitiveTypeValue::FromJSON(yyjson_val *obj) {
 	return res;
 }
 
+PrimitiveTypeValue PrimitiveTypeValue::Copy() const {
+	PrimitiveTypeValue res;
+	if (has_boolean_type_value) {
+		res.boolean_type_value = boolean_type_value.Copy();
+	}
+	res.has_boolean_type_value = has_boolean_type_value;
+	if (has_integer_type_value) {
+		res.integer_type_value = integer_type_value.Copy();
+	}
+	res.has_integer_type_value = has_integer_type_value;
+	if (has_long_type_value) {
+		res.long_type_value = long_type_value.Copy();
+	}
+	res.has_long_type_value = has_long_type_value;
+	if (has_float_type_value) {
+		res.float_type_value = float_type_value.Copy();
+	}
+	res.has_float_type_value = has_float_type_value;
+	if (has_double_type_value) {
+		res.double_type_value = double_type_value.Copy();
+	}
+	res.has_double_type_value = has_double_type_value;
+	if (has_decimal_type_value) {
+		res.decimal_type_value = decimal_type_value.Copy();
+	}
+	res.has_decimal_type_value = has_decimal_type_value;
+	if (has_string_type_value) {
+		res.string_type_value = string_type_value.Copy();
+	}
+	res.has_string_type_value = has_string_type_value;
+	if (has_uuidtype_value) {
+		res.uuidtype_value = uuidtype_value.Copy();
+	}
+	res.has_uuidtype_value = has_uuidtype_value;
+	if (has_date_type_value) {
+		res.date_type_value = date_type_value.Copy();
+	}
+	res.has_date_type_value = has_date_type_value;
+	if (has_time_type_value) {
+		res.time_type_value = time_type_value.Copy();
+	}
+	res.has_time_type_value = has_time_type_value;
+	if (has_timestamp_type_value) {
+		res.timestamp_type_value = timestamp_type_value.Copy();
+	}
+	res.has_timestamp_type_value = has_timestamp_type_value;
+	if (has_timestamp_tz_type_value) {
+		res.timestamp_tz_type_value = timestamp_tz_type_value.Copy();
+	}
+	res.has_timestamp_tz_type_value = has_timestamp_tz_type_value;
+	if (has_timestamp_nano_type_value) {
+		res.timestamp_nano_type_value = timestamp_nano_type_value.Copy();
+	}
+	res.has_timestamp_nano_type_value = has_timestamp_nano_type_value;
+	if (has_timestamp_tz_nano_type_value) {
+		res.timestamp_tz_nano_type_value = timestamp_tz_nano_type_value.Copy();
+	}
+	res.has_timestamp_tz_nano_type_value = has_timestamp_tz_nano_type_value;
+	if (has_fixed_type_value) {
+		res.fixed_type_value = fixed_type_value.Copy();
+	}
+	res.has_fixed_type_value = has_fixed_type_value;
+	if (has_binary_type_value) {
+		res.binary_type_value = binary_type_value.Copy();
+	}
+	res.has_binary_type_value = has_binary_type_value;
+	return res;
+}
 string PrimitiveTypeValue::TryFromJSON(yyjson_val *obj) {
 	string error;
 	error = boolean_type_value.TryFromJSON(obj);

@@ -24,6 +24,14 @@ CommitTransactionRequest CommitTransactionRequest::FromJSON(yyjson_val *obj) {
 	return res;
 }
 
+CommitTransactionRequest CommitTransactionRequest::Copy() const {
+	CommitTransactionRequest res;
+	res.table_changes.reserve(table_changes.size());
+	for (auto &item : table_changes) {
+		res.table_changes.emplace_back(item.Copy());
+	}
+	return res;
+}
 string CommitTransactionRequest::TryFromJSON(yyjson_val *obj) {
 	string error;
 	auto table_changes_val = yyjson_obj_get(obj, "table-changes");

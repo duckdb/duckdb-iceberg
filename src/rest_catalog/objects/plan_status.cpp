@@ -24,6 +24,11 @@ PlanStatus PlanStatus::FromJSON(yyjson_val *obj) {
 	return res;
 }
 
+PlanStatus PlanStatus::Copy() const {
+	PlanStatus res;
+	res.value = value;
+	return res;
+}
 string PlanStatus::TryFromJSON(yyjson_val *obj) {
 	string error;
 	if (yyjson_is_str(obj)) {

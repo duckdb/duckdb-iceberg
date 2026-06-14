@@ -24,6 +24,12 @@ TableIdentifier TableIdentifier::FromJSON(yyjson_val *obj) {
 	return res;
 }
 
+TableIdentifier TableIdentifier::Copy() const {
+	TableIdentifier res;
+	res._namespace = _namespace.Copy();
+	res.name = name;
+	return res;
+}
 string TableIdentifier::TryFromJSON(yyjson_val *obj) {
 	string error;
 	auto _namespace_val = yyjson_obj_get(obj, "namespace");

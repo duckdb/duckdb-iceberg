@@ -24,6 +24,12 @@ AssertLastAssignedPartitionId AssertLastAssignedPartitionId::FromJSON(yyjson_val
 	return res;
 }
 
+AssertLastAssignedPartitionId AssertLastAssignedPartitionId::Copy() const {
+	AssertLastAssignedPartitionId res;
+	res.type = type.Copy();
+	res.last_assigned_partition_id = last_assigned_partition_id;
+	return res;
+}
 string AssertLastAssignedPartitionId::TryFromJSON(yyjson_val *obj) {
 	string error;
 	auto type_val = yyjson_obj_get(obj, "type");

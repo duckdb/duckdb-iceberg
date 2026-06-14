@@ -21,6 +21,7 @@ public:
 
 public:
 	static DecimalTypeValue FromJSON(yyjson_val *obj);
+	DecimalTypeValue Copy() const;
 
 public:
 	string TryFromJSON(yyjson_val *obj);

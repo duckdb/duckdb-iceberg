@@ -24,6 +24,24 @@ SnapshotReference SnapshotReference::FromJSON(yyjson_val *obj) {
 	return res;
 }
 
+SnapshotReference SnapshotReference::Copy() const {
+	SnapshotReference res;
+	res.type = type;
+	res.snapshot_id = snapshot_id;
+	if (has_max_ref_age_ms) {
+		res.max_ref_age_ms = max_ref_age_ms;
+	}
+	res.has_max_ref_age_ms = has_max_ref_age_ms;
+	if (has_max_snapshot_age_ms) {
+		res.max_snapshot_age_ms = max_snapshot_age_ms;
+	}
+	res.has_max_snapshot_age_ms = has_max_snapshot_age_ms;
+	if (has_min_snapshots_to_keep) {
+		res.min_snapshots_to_keep = min_snapshots_to_keep;
+	}
+	res.has_min_snapshots_to_keep = has_min_snapshots_to_keep;
+	return res;
+}
 string SnapshotReference::TryFromJSON(yyjson_val *obj) {
 	string error;
 	auto type_val = yyjson_obj_get(obj, "type");

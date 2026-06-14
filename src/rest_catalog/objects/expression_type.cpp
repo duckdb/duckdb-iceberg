@@ -24,6 +24,11 @@ ExpressionType ExpressionType::FromJSON(yyjson_val *obj) {
 	return res;
 }
 
+ExpressionType ExpressionType::Copy() const {
+	ExpressionType res;
+	res.value = value;
+	return res;
+}
 string ExpressionType::TryFromJSON(yyjson_val *obj) {
 	string error;
 	if (yyjson_is_str(obj)) {

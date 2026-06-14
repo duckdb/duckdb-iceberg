@@ -24,6 +24,7 @@ public:
 
 public:
 	static FetchPlanningResult FromJSON(yyjson_val *obj);
+	FetchPlanningResult Copy() const;
 
 public:
 	string TryFromJSON(yyjson_val *obj);

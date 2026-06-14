@@ -21,6 +21,7 @@ public:
 
 public:
 	static OAuthError FromJSON(yyjson_val *obj);
+	OAuthError Copy() const;
 
 public:
 	string TryFromJSON(yyjson_val *obj);

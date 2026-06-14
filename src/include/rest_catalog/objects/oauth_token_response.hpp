@@ -22,6 +22,7 @@ public:
 
 public:
 	static OAuthTokenResponse FromJSON(yyjson_val *obj);
+	OAuthTokenResponse Copy() const;
 
 public:
 	string TryFromJSON(yyjson_val *obj);

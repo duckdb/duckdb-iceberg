@@ -24,6 +24,24 @@ ValueMap ValueMap::FromJSON(yyjson_val *obj) {
 	return res;
 }
 
+ValueMap ValueMap::Copy() const {
+	ValueMap res;
+	if (has_keys) {
+		res.keys.reserve(keys.size());
+		for (auto &item : keys) {
+			res.keys.emplace_back(item.Copy());
+		}
+	}
+	res.has_keys = has_keys;
+	if (has_values) {
+		res.values.reserve(values.size());
+		for (auto &item : values) {
+			res.values.emplace_back(item.Copy());
+		}
+	}
+	res.has_values = has_values;
+	return res;
+}
 string ValueMap::TryFromJSON(yyjson_val *obj) {
 	string error;
 	auto keys_val = yyjson_obj_get(obj, "keys");

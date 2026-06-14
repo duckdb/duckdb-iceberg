@@ -24,6 +24,11 @@ DoubleTypeValue DoubleTypeValue::FromJSON(yyjson_val *obj) {
 	return res;
 }
 
+DoubleTypeValue DoubleTypeValue::Copy() const {
+	DoubleTypeValue res;
+	res.value = value;
+	return res;
+}
 string DoubleTypeValue::TryFromJSON(yyjson_val *obj) {
 	string error;
 	if (yyjson_is_num(obj)) {

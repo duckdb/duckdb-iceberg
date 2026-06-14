@@ -22,6 +22,7 @@ public:
 
 public:
 	static AssertDefaultSortOrderId FromJSON(yyjson_val *obj);
+	AssertDefaultSortOrderId Copy() const;
 
 public:
 	string TryFromJSON(yyjson_val *obj);

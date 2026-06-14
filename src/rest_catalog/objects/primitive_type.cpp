@@ -24,6 +24,11 @@ PrimitiveType PrimitiveType::FromJSON(yyjson_val *obj) {
 	return res;
 }
 
+PrimitiveType PrimitiveType::Copy() const {
+	PrimitiveType res;
+	res.value = value;
+	return res;
+}
 string PrimitiveType::TryFromJSON(yyjson_val *obj) {
 	string error;
 	if (yyjson_is_str(obj)) {

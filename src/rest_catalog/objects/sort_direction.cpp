@@ -24,6 +24,11 @@ SortDirection SortDirection::FromJSON(yyjson_val *obj) {
 	return res;
 }
 
+SortDirection SortDirection::Copy() const {
+	SortDirection res;
+	res.value = value;
+	return res;
+}
 string SortDirection::TryFromJSON(yyjson_val *obj) {
 	string error;
 	if (yyjson_is_str(obj)) {

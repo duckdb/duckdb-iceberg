@@ -24,6 +24,7 @@ public:
 
 public:
 	static DataFile FromJSON(yyjson_val *obj);
+	DataFile Copy() const;
 
 public:
 	string TryFromJSON(yyjson_val *obj);

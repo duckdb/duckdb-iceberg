@@ -28,6 +28,7 @@ public:
 
 	public:
 		static Object2 FromJSON(yyjson_val *obj);
+		Object2 Copy() const;
 
 	public:
 		string TryFromJSON(yyjson_val *obj);
@@ -39,6 +40,7 @@ public:
 
 public:
 	static Snapshot FromJSON(yyjson_val *obj);
+	Snapshot Copy() const;
 
 public:
 	string TryFromJSON(yyjson_val *obj);

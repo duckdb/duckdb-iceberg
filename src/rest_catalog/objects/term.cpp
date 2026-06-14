@@ -24,6 +24,18 @@ Term Term::FromJSON(yyjson_val *obj) {
 	return res;
 }
 
+Term Term::Copy() const {
+	Term res;
+	if (has_reference) {
+		res.reference = reference.Copy();
+	}
+	res.has_reference = has_reference;
+	if (has_transform_term) {
+		res.transform_term = transform_term.Copy();
+	}
+	res.has_transform_term = has_transform_term;
+	return res;
+}
 string Term::TryFromJSON(yyjson_val *obj) {
 	string error;
 	do {

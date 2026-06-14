@@ -180,6 +180,17 @@ class AdditionalProperty:
 
 
 @dataclass
+class CPPMember:
+    """A generated C++ class member"""
+
+    variable_name: str
+    variable_type: str
+    schema: Optional[Property]
+    initializer: Optional[str] = None
+    copy_guard: Optional[str] = None
+
+
+@dataclass
 class PrimitiveTypeMapping:
     conversion: str
     type_check: str
@@ -220,8 +231,29 @@ class CPPClass:
         self.nested_classes: Dict[str, "CPPClass"] = {}
         # (member) variables of the class
         self.variables: List[str] = []
+        self.members: List[CPPMember] = []
         self.referenced_schemas: Set[str] = set()
         self.try_from_json_body: List[str] = []
+
+    def add_member(
+        self,
+        variable_name: str,
+        variable_type: str,
+        schema: Optional[Property],
+        initializer: Optional[str] = None,
+        copy_guard: Optional[str] = None,
+    ) -> None:
+        initializer_text = f' = {initializer}' if initializer is not None else ''
+        self.variables.append(f'\t{variable_type} {variable_name}{initializer_text};')
+        self.members.append(
+            CPPMember(
+                variable_name=variable_name,
+                variable_type=variable_type,
+                schema=schema,
+                initializer=initializer,
+                copy_guard=copy_guard,
+            )
+        )
 
     def get_all_referenced_schemas(self) -> Set[str]:
         res = set()
@@ -277,7 +309,7 @@ class CPPClass:
         nested_classes = self.generate_nested_class_definitions()
 
         variable_type = self.generate_variable_type(schema)
-        self.variables.append(f'\t{variable_type} value;')
+        self.add_member('value', variable_type, schema)
 
     def from_primitive_property(self, schema: PrimitiveProperty):
         assert not schema.all_of
@@ -287,7 +319,7 @@ class CPPClass:
         self.try_from_json_body = self.generate_assignment(schema, 'value', 'obj', True)
 
         variable_type = self.generate_variable_type(schema)
-        self.variables.append(f'\t{variable_type} value;')
+        self.add_member('value', variable_type, schema)
 
     def from_property(self, schema: Property) -> None:
         if schema.type == Property.Type.OBJECT:
@@ -452,6 +484,61 @@ class CPPClass:
             res.extend(self.variables)
         return res
 
+    def direct_copy_expression(self, source: str, schema: Property) -> str:
+        if schema.type == Property.Type.PRIMITIVE:
+            return source
+        if schema.type == Property.Type.OBJECT:
+            object_property = cast(ObjectProperty, schema)
+            if object_property.is_raw_object():
+                return source
+            print(f"Unhandled object copy expression for '{source}'")
+            exit(1)
+        if schema.type == Property.Type.SCHEMA_REFERENCE:
+            schema_property = cast(SchemaReferenceProperty, schema)
+            if schema_property.ref in self.parse_info.recursive_schemas:
+                return f'{source} ? make_uniq<{schema_property.ref}>({source}->Copy()) : nullptr'
+            return f'{source}.Copy()'
+        print(f"Unhandled direct copy expression type for '{source}': {schema.type}")
+        exit(1)
+
+    def write_copy_assignment_lines(self, target: str, source: str, schema: Optional[Property]) -> List[str]:
+        if schema is None:
+            return [f'{target} = {source};']
+        if schema.type == Property.Type.ARRAY:
+            array_property = cast(ArrayProperty, schema)
+            item_type = array_property.item_type
+            item_copy = self.direct_copy_expression('item', item_type)
+            return [
+                f'{target}.reserve({source}.size());',
+                f'for (auto &item : {source}) {{',
+                f'\t{target}.emplace_back({item_copy});',
+                '}',
+            ]
+        if schema.type == Property.Type.OBJECT:
+            object_property = cast(ObjectProperty, schema)
+            if object_property.additional_properties:
+                value_copy = self.direct_copy_expression('entry.second', object_property.additional_properties)
+                return [
+                    f'for (auto &entry : {source}) {{',
+                    f'\t{target}.emplace(entry.first, {value_copy});',
+                    '}',
+                ]
+        return [f'{target} = {self.direct_copy_expression(source, schema)};']
+
+    def write_copy_method_source(self, base: str) -> List[str]:
+        res = [
+            '',
+            f'{base}{self.name} {base}{self.name}::Copy() const {{',
+            f'\t{self.name} res;',
+        ]
+        for member in self.members:
+            lines = self.write_copy_assignment_lines(f'res.{member.variable_name}', member.variable_name, member.schema)
+            if member.copy_guard is not None:
+                lines = [f'if ({member.copy_guard}) {{'] + [f'\t{x}' for x in lines] + ['}']
+            res.extend([f'\t{x}' for x in lines])
+        res.extend(['\treturn res;', '}'])
+        return res
+
     def write_source(self, base_class: List[str]) -> List[str]:
         res = []
         base = ''
@@ -471,7 +558,11 @@ class CPPClass:
                 '\t}',
                 '\treturn res;',
                 '}',
-                '',
+            ]
+        )
+        res.extend(self.write_copy_method_source(base))
+        res.extend(
+            [
                 f'string {base}{self.name}::TryFromJSON(yyjson_val *obj) {{',
                 '\tstring error;',
             ]
@@ -501,6 +592,7 @@ class CPPClass:
             [
                 'public:',
                 f'\tstatic {self.name} FromJSON(yyjson_val *obj);',
+                f'\t{self.name} Copy() const;',
                 'public:',
                 '\tstring TryFromJSON(yyjson_val *obj);',
             ]
@@ -521,7 +613,7 @@ class CPPClass:
             dereference_style = '->' if item.ref in self.parse_info.recursive_schemas else '.'
 
             self.all_of.append(AllOf(name=property_name, dereference_style=dereference_style, class_name=class_name))
-            self.variables.append(f'\t{item.ref} {property_name};')
+            self.add_member(property_name, self.generate_variable_type(item), item)
 
     def generate_any_of(self, property: Property):
         if not property.any_of:
@@ -535,8 +627,8 @@ class CPPClass:
             dereference_style = '->' if item.ref in self.parse_info.recursive_schemas else '.'
 
             self.any_of.append(AnyOf(name=property_name, dereference_style=dereference_style, class_name=class_name))
-            self.variables.append(f'\t{item.ref} {property_name};')
-            self.variables.append(f'\tbool has_{property_name} = false;')
+            self.add_member(property_name, self.generate_variable_type(item), item, copy_guard=f'has_{property_name}')
+            self.add_member(f'has_{property_name}', 'bool', None, 'false')
 
     def generate_one_of(self, property: Property):
         if not property.one_of:
@@ -550,8 +642,8 @@ class CPPClass:
             dereference_style = '->' if item.ref in self.parse_info.recursive_schemas else '.'
 
             self.one_of.append(OneOf(name=property_name, dereference_style=dereference_style, class_name=class_name))
-            self.variables.append(f'\t{item.ref} {property_name};')
-            self.variables.append(f'\tbool has_{property_name} = false;')
+            self.add_member(property_name, self.generate_variable_type(item), item, copy_guard=f'has_{property_name}')
+            self.add_member(f'has_{property_name}', 'bool', None, 'false')
 
     def generate_array_loop(self, array_name, destination_name, array_property: ArrayProperty) -> List[str]:
         item_type = array_property.item_type
@@ -773,8 +865,8 @@ class CPPClass:
                 property_name=item, variable_name=variable_name, body=body, nullable=optional_property.nullable
             )
             variable_type = self.generate_variable_type(optional_property)
-            self.variables.append(f'\t{variable_type} {variable_name};')
-            self.variables.append(f'\tbool has_{variable_name} = false;')
+            self.add_member(variable_name, variable_type, optional_property, copy_guard=f'has_{variable_name}')
+            self.add_member(f'has_{variable_name}', 'bool', None, 'false')
 
     def generate_required_properties(self, name: str, properties: Dict[str, Property]):
         if not properties:
@@ -791,7 +883,7 @@ class CPPClass:
                 property_name=item, variable_name=variable_name, body=body, default=default
             )
             variable_type = self.generate_variable_type(required_property)
-            self.variables.append(f'\t{variable_type} {variable_name};')
+            self.add_member(variable_name, variable_type, required_property)
 
     def generate_additional_properties(self, properties: List[str], additional_properties: Property):
         if not additional_properties:
@@ -833,7 +925,9 @@ class CPPClass:
             body=body, exclude_list=exclude_list, skip_if_excluded=skip_if_excluded
         )
         variable_type = self.generate_variable_type(additional_properties)
-        self.variables.append(f'\tcase_insensitive_map_t<{variable_type}> additional_properties;')
+        member_schema = ObjectProperty()
+        member_schema.additional_properties = additional_properties
+        self.add_member('additional_properties', f'case_insensitive_map_t<{variable_type}>', member_schema)
 
     def generate_variable_type(self, schema: Property) -> str:
         if schema.type == Property.Type.OBJECT:

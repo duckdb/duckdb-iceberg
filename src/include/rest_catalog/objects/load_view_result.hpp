@@ -22,6 +22,7 @@ public:
 
 public:
 	static LoadViewResult FromJSON(yyjson_val *obj);
+	LoadViewResult Copy() const;
 
 public:
 	string TryFromJSON(yyjson_val *obj);

@@ -23,6 +23,7 @@ public:
 
 public:
 	static MapType FromJSON(yyjson_val *obj);
+	MapType Copy() const;
 
 public:
 	string TryFromJSON(yyjson_val *obj);

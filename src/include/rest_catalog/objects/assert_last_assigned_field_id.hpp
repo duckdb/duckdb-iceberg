@@ -22,6 +22,7 @@ public:
 
 public:
 	static AssertLastAssignedFieldId FromJSON(yyjson_val *obj);
+	AssertLastAssignedFieldId Copy() const;
 
 public:
 	string TryFromJSON(yyjson_val *obj);

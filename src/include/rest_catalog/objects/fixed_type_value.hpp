@@ -21,6 +21,7 @@ public:
 
 public:
 	static FixedTypeValue FromJSON(yyjson_val *obj);
+	FixedTypeValue Copy() const;
 
 public:
 	string TryFromJSON(yyjson_val *obj);

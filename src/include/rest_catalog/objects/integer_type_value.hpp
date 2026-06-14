@@ -21,6 +21,7 @@ public:
 
 public:
 	static IntegerTypeValue FromJSON(yyjson_val *obj);
+	IntegerTypeValue Copy() const;
 
 public:
 	string TryFromJSON(yyjson_val *obj);

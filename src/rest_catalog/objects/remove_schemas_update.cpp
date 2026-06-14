@@ -24,6 +24,19 @@ RemoveSchemasUpdate RemoveSchemasUpdate::FromJSON(yyjson_val *obj) {
 	return res;
 }
 
+RemoveSchemasUpdate RemoveSchemasUpdate::Copy() const {
+	RemoveSchemasUpdate res;
+	res.base_update = base_update.Copy();
+	res.schema_ids.reserve(schema_ids.size());
+	for (auto &item : schema_ids) {
+		res.schema_ids.emplace_back(item);
+	}
+	if (has_action) {
+		res.action = action;
+	}
+	res.has_action = has_action;
+	return res;
+}
 string RemoveSchemasUpdate::TryFromJSON(yyjson_val *obj) {
 	string error;
 	error = base_update.TryFromJSON(obj);

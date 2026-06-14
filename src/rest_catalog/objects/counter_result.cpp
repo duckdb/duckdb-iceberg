@@ -24,6 +24,12 @@ CounterResult CounterResult::FromJSON(yyjson_val *obj) {
 	return res;
 }
 
+CounterResult CounterResult::Copy() const {
+	CounterResult res;
+	res.unit = unit;
+	res.value = value;
+	return res;
+}
 string CounterResult::TryFromJSON(yyjson_val *obj) {
 	string error;
 	auto unit_val = yyjson_obj_get(obj, "unit");

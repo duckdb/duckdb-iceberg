@@ -24,6 +24,11 @@ BaseUpdate BaseUpdate::FromJSON(yyjson_val *obj) {
 	return res;
 }
 
+BaseUpdate BaseUpdate::Copy() const {
+	BaseUpdate res;
+	res.action = action;
+	return res;
+}
 string BaseUpdate::TryFromJSON(yyjson_val *obj) {
 	string error;
 	auto action_val = yyjson_obj_get(obj, "action");

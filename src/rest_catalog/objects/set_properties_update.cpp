@@ -24,6 +24,18 @@ SetPropertiesUpdate SetPropertiesUpdate::FromJSON(yyjson_val *obj) {
 	return res;
 }
 
+SetPropertiesUpdate SetPropertiesUpdate::Copy() const {
+	SetPropertiesUpdate res;
+	res.base_update = base_update.Copy();
+	for (auto &entry : updates) {
+		res.updates.emplace(entry.first, entry.second);
+	}
+	if (has_action) {
+		res.action = action;
+	}
+	res.has_action = has_action;
+	return res;
+}
 string SetPropertiesUpdate::TryFromJSON(yyjson_val *obj) {
 	string error;
 	error = base_update.TryFromJSON(obj);

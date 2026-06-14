@@ -22,6 +22,7 @@ public:
 
 public:
 	static PartitionSpec FromJSON(yyjson_val *obj);
+	PartitionSpec Copy() const;
 
 public:
 	string TryFromJSON(yyjson_val *obj);

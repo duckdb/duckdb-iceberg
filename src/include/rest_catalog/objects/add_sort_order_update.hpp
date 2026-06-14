@@ -23,6 +23,7 @@ public:
 
 public:
 	static AddSortOrderUpdate FromJSON(yyjson_val *obj);
+	AddSortOrderUpdate Copy() const;
 
 public:
 	string TryFromJSON(yyjson_val *obj);

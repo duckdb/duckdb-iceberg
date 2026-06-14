@@ -24,6 +24,11 @@ FixedTypeValue FixedTypeValue::FromJSON(yyjson_val *obj) {
 	return res;
 }
 
+FixedTypeValue FixedTypeValue::Copy() const {
+	FixedTypeValue res;
+	res.value = value;
+	return res;
+}
 string FixedTypeValue::TryFromJSON(yyjson_val *obj) {
 	string error;
 	if (yyjson_is_str(obj)) {

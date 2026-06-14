@@ -24,6 +24,13 @@ SnapshotReferences SnapshotReferences::FromJSON(yyjson_val *obj) {
 	return res;
 }
 
+SnapshotReferences SnapshotReferences::Copy() const {
+	SnapshotReferences res;
+	for (auto &entry : additional_properties) {
+		res.additional_properties.emplace(entry.first, entry.second.Copy());
+	}
+	return res;
+}
 string SnapshotReferences::TryFromJSON(yyjson_val *obj) {
 	string error;
 	size_t idx, max;

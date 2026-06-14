@@ -24,6 +24,28 @@ OAuthTokenResponse OAuthTokenResponse::FromJSON(yyjson_val *obj) {
 	return res;
 }
 
+OAuthTokenResponse OAuthTokenResponse::Copy() const {
+	OAuthTokenResponse res;
+	res.access_token = access_token;
+	res.token_type = token_type;
+	if (has_expires_in) {
+		res.expires_in = expires_in;
+	}
+	res.has_expires_in = has_expires_in;
+	if (has_issued_token_type) {
+		res.issued_token_type = issued_token_type.Copy();
+	}
+	res.has_issued_token_type = has_issued_token_type;
+	if (has_refresh_token) {
+		res.refresh_token = refresh_token;
+	}
+	res.has_refresh_token = has_refresh_token;
+	if (has_scope) {
+		res.scope = scope;
+	}
+	res.has_scope = has_scope;
+	return res;
+}
 string OAuthTokenResponse::TryFromJSON(yyjson_val *obj) {
 	string error;
 	auto access_token_val = yyjson_obj_get(obj, "access_token");

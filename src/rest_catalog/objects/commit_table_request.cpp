@@ -24,6 +24,22 @@ CommitTableRequest CommitTableRequest::FromJSON(yyjson_val *obj) {
 	return res;
 }
 
+CommitTableRequest CommitTableRequest::Copy() const {
+	CommitTableRequest res;
+	res.requirements.reserve(requirements.size());
+	for (auto &item : requirements) {
+		res.requirements.emplace_back(item.Copy());
+	}
+	res.updates.reserve(updates.size());
+	for (auto &item : updates) {
+		res.updates.emplace_back(item.Copy());
+	}
+	if (has_identifier) {
+		res.identifier = identifier.Copy();
+	}
+	res.has_identifier = has_identifier;
+	return res;
+}
 string CommitTableRequest::TryFromJSON(yyjson_val *obj) {
 	string error;
 	auto requirements_val = yyjson_obj_get(obj, "requirements");

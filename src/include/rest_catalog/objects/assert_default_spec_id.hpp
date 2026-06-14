@@ -22,6 +22,7 @@ public:
 
 public:
 	static AssertDefaultSpecId FromJSON(yyjson_val *obj);
+	AssertDefaultSpecId Copy() const;
 
 public:
 	string TryFromJSON(yyjson_val *obj);

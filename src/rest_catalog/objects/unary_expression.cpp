@@ -24,6 +24,12 @@ UnaryExpression UnaryExpression::FromJSON(yyjson_val *obj) {
 	return res;
 }
 
+UnaryExpression UnaryExpression::Copy() const {
+	UnaryExpression res;
+	res.type = type.Copy();
+	res.term = term.Copy();
+	return res;
+}
 string UnaryExpression::TryFromJSON(yyjson_val *obj) {
 	string error;
 	auto type_val = yyjson_obj_get(obj, "type");

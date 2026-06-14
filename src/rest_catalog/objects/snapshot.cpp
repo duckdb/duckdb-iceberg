@@ -26,6 +26,14 @@ Snapshot::Object2 Snapshot::Object2::FromJSON(yyjson_val *obj) {
 	return res;
 }
 
+Snapshot::Object2 Snapshot::Object2::Copy() const {
+	Object2 res;
+	res.operation = operation;
+	for (auto &entry : additional_properties) {
+		res.additional_properties.emplace(entry.first, entry.second);
+	}
+	return res;
+}
 string Snapshot::Object2::TryFromJSON(yyjson_val *obj) {
 	string error;
 	auto operation_val = yyjson_obj_get(obj, "operation");
@@ -68,6 +76,34 @@ Snapshot Snapshot::FromJSON(yyjson_val *obj) {
 	return res;
 }
 
+Snapshot Snapshot::Copy() const {
+	Snapshot res;
+	res.snapshot_id = snapshot_id;
+	res.timestamp_ms = timestamp_ms;
+	res.manifest_list = manifest_list;
+	res.summary = summary.Copy();
+	if (has_parent_snapshot_id) {
+		res.parent_snapshot_id = parent_snapshot_id;
+	}
+	res.has_parent_snapshot_id = has_parent_snapshot_id;
+	if (has_sequence_number) {
+		res.sequence_number = sequence_number;
+	}
+	res.has_sequence_number = has_sequence_number;
+	if (has_first_row_id) {
+		res.first_row_id = first_row_id;
+	}
+	res.has_first_row_id = has_first_row_id;
+	if (has_added_rows) {
+		res.added_rows = added_rows;
+	}
+	res.has_added_rows = has_added_rows;
+	if (has_schema_id) {
+		res.schema_id = schema_id;
+	}
+	res.has_schema_id = has_schema_id;
+	return res;
+}
 string Snapshot::TryFromJSON(yyjson_val *obj) {
 	string error;
 	auto snapshot_id_val = yyjson_obj_get(obj, "snapshot-id");

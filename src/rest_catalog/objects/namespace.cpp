@@ -24,6 +24,14 @@ Namespace Namespace::FromJSON(yyjson_val *obj) {
 	return res;
 }
 
+Namespace Namespace::Copy() const {
+	Namespace res;
+	res.value.reserve(value.size());
+	for (auto &item : value) {
+		res.value.emplace_back(item);
+	}
+	return res;
+}
 string Namespace::TryFromJSON(yyjson_val *obj) {
 	string error;
 	if (yyjson_is_arr(obj)) {

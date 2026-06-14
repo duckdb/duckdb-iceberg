@@ -22,6 +22,7 @@ public:
 
 public:
 	static ViewRequirement FromJSON(yyjson_val *obj);
+	ViewRequirement Copy() const;
 
 public:
 	string TryFromJSON(yyjson_val *obj);

@@ -24,6 +24,94 @@ TableUpdate TableUpdate::FromJSON(yyjson_val *obj) {
 	return res;
 }
 
+TableUpdate TableUpdate::Copy() const {
+	TableUpdate res;
+	if (has_assign_uuidupdate) {
+		res.assign_uuidupdate = assign_uuidupdate.Copy();
+	}
+	res.has_assign_uuidupdate = has_assign_uuidupdate;
+	if (has_upgrade_format_version_update) {
+		res.upgrade_format_version_update = upgrade_format_version_update.Copy();
+	}
+	res.has_upgrade_format_version_update = has_upgrade_format_version_update;
+	if (has_add_schema_update) {
+		res.add_schema_update = add_schema_update.Copy();
+	}
+	res.has_add_schema_update = has_add_schema_update;
+	if (has_set_current_schema_update) {
+		res.set_current_schema_update = set_current_schema_update.Copy();
+	}
+	res.has_set_current_schema_update = has_set_current_schema_update;
+	if (has_add_partition_spec_update) {
+		res.add_partition_spec_update = add_partition_spec_update.Copy();
+	}
+	res.has_add_partition_spec_update = has_add_partition_spec_update;
+	if (has_set_default_spec_update) {
+		res.set_default_spec_update = set_default_spec_update.Copy();
+	}
+	res.has_set_default_spec_update = has_set_default_spec_update;
+	if (has_add_sort_order_update) {
+		res.add_sort_order_update = add_sort_order_update.Copy();
+	}
+	res.has_add_sort_order_update = has_add_sort_order_update;
+	if (has_set_default_sort_order_update) {
+		res.set_default_sort_order_update = set_default_sort_order_update.Copy();
+	}
+	res.has_set_default_sort_order_update = has_set_default_sort_order_update;
+	if (has_add_snapshot_update) {
+		res.add_snapshot_update = add_snapshot_update.Copy();
+	}
+	res.has_add_snapshot_update = has_add_snapshot_update;
+	if (has_set_snapshot_ref_update) {
+		res.set_snapshot_ref_update = set_snapshot_ref_update.Copy();
+	}
+	res.has_set_snapshot_ref_update = has_set_snapshot_ref_update;
+	if (has_remove_snapshots_update) {
+		res.remove_snapshots_update = remove_snapshots_update.Copy();
+	}
+	res.has_remove_snapshots_update = has_remove_snapshots_update;
+	if (has_remove_snapshot_ref_update) {
+		res.remove_snapshot_ref_update = remove_snapshot_ref_update.Copy();
+	}
+	res.has_remove_snapshot_ref_update = has_remove_snapshot_ref_update;
+	if (has_set_location_update) {
+		res.set_location_update = set_location_update.Copy();
+	}
+	res.has_set_location_update = has_set_location_update;
+	if (has_set_properties_update) {
+		res.set_properties_update = set_properties_update.Copy();
+	}
+	res.has_set_properties_update = has_set_properties_update;
+	if (has_remove_properties_update) {
+		res.remove_properties_update = remove_properties_update.Copy();
+	}
+	res.has_remove_properties_update = has_remove_properties_update;
+	if (has_set_statistics_update) {
+		res.set_statistics_update = set_statistics_update.Copy();
+	}
+	res.has_set_statistics_update = has_set_statistics_update;
+	if (has_remove_statistics_update) {
+		res.remove_statistics_update = remove_statistics_update.Copy();
+	}
+	res.has_remove_statistics_update = has_remove_statistics_update;
+	if (has_remove_partition_specs_update) {
+		res.remove_partition_specs_update = remove_partition_specs_update.Copy();
+	}
+	res.has_remove_partition_specs_update = has_remove_partition_specs_update;
+	if (has_remove_schemas_update) {
+		res.remove_schemas_update = remove_schemas_update.Copy();
+	}
+	res.has_remove_schemas_update = has_remove_schemas_update;
+	if (has_add_encryption_key_update) {
+		res.add_encryption_key_update = add_encryption_key_update.Copy();
+	}
+	res.has_add_encryption_key_update = has_add_encryption_key_update;
+	if (has_remove_encryption_key_update) {
+		res.remove_encryption_key_update = remove_encryption_key_update.Copy();
+	}
+	res.has_remove_encryption_key_update = has_remove_encryption_key_update;
+	return res;
+}
 string TableUpdate::TryFromJSON(yyjson_val *obj) {
 	string error;
 	error = assign_uuidupdate.TryFromJSON(obj);

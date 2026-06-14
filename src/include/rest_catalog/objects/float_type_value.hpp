@@ -21,6 +21,7 @@ public:
 
 public:
 	static FloatTypeValue FromJSON(yyjson_val *obj);
+	FloatTypeValue Copy() const;
 
 public:
 	string TryFromJSON(yyjson_val *obj);

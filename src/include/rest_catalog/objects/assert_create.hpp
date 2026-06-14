@@ -22,6 +22,7 @@ public:
 
 public:
 	static AssertCreate FromJSON(yyjson_val *obj);
+	AssertCreate Copy() const;
 
 public:
 	string TryFromJSON(yyjson_val *obj);

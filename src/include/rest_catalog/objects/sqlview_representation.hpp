@@ -21,6 +21,7 @@ public:
 
 public:
 	static SQLViewRepresentation FromJSON(yyjson_val *obj);
+	SQLViewRepresentation Copy() const;
 
 public:
 	string TryFromJSON(yyjson_val *obj);

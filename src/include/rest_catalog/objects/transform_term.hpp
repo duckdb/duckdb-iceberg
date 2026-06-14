@@ -23,6 +23,7 @@ public:
 
 public:
 	static TransformTerm FromJSON(yyjson_val *obj);
+	TransformTerm Copy() const;
 
 public:
 	string TryFromJSON(yyjson_val *obj);

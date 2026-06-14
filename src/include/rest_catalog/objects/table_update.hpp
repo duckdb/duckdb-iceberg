@@ -42,6 +42,7 @@ public:
 
 public:
 	static TableUpdate FromJSON(yyjson_val *obj);
+	TableUpdate Copy() const;
 
 public:
 	string TryFromJSON(yyjson_val *obj);

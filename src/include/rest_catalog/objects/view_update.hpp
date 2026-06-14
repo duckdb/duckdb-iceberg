@@ -29,6 +29,7 @@ public:
 
 public:
 	static ViewUpdate FromJSON(yyjson_val *obj);
+	ViewUpdate Copy() const;
 
 public:
 	string TryFromJSON(yyjson_val *obj);

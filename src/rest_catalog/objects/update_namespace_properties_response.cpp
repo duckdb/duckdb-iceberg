@@ -24,6 +24,25 @@ UpdateNamespacePropertiesResponse UpdateNamespacePropertiesResponse::FromJSON(yy
 	return res;
 }
 
+UpdateNamespacePropertiesResponse UpdateNamespacePropertiesResponse::Copy() const {
+	UpdateNamespacePropertiesResponse res;
+	res.updated.reserve(updated.size());
+	for (auto &item : updated) {
+		res.updated.emplace_back(item);
+	}
+	res.removed.reserve(removed.size());
+	for (auto &item : removed) {
+		res.removed.emplace_back(item);
+	}
+	if (has_missing) {
+		res.missing.reserve(missing.size());
+		for (auto &item : missing) {
+			res.missing.emplace_back(item);
+		}
+	}
+	res.has_missing = has_missing;
+	return res;
+}
 string UpdateNamespacePropertiesResponse::TryFromJSON(yyjson_val *obj) {
 	string error;
 	auto updated_val = yyjson_obj_get(obj, "updated");

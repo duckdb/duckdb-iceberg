@@ -22,6 +22,7 @@ public:
 
 public:
 	static SetDefaultSortOrderUpdate FromJSON(yyjson_val *obj);
+	SetDefaultSortOrderUpdate Copy() const;
 
 public:
 	string TryFromJSON(yyjson_val *obj);

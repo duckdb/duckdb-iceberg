@@ -24,6 +24,11 @@ AssertCreate AssertCreate::FromJSON(yyjson_val *obj) {
 	return res;
 }
 
+AssertCreate AssertCreate::Copy() const {
+	AssertCreate res;
+	res.type = type.Copy();
+	return res;
+}
 string AssertCreate::TryFromJSON(yyjson_val *obj) {
 	string error;
 	auto type_val = yyjson_obj_get(obj, "type");

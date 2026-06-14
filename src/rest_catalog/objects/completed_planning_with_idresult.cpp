@@ -26,6 +26,11 @@ CompletedPlanningWithIDResult::Object6 CompletedPlanningWithIDResult::Object6::F
 	return res;
 }
 
+CompletedPlanningWithIDResult::Object6 CompletedPlanningWithIDResult::Object6::Copy() const {
+	Object6 res;
+	res.plan_id = plan_id;
+	return res;
+}
 string CompletedPlanningWithIDResult::Object6::TryFromJSON(yyjson_val *obj) {
 	string error;
 	auto plan_id_val = yyjson_obj_get(obj, "plan-id");
@@ -51,6 +56,12 @@ CompletedPlanningWithIDResult CompletedPlanningWithIDResult::FromJSON(yyjson_val
 	return res;
 }
 
+CompletedPlanningWithIDResult CompletedPlanningWithIDResult::Copy() const {
+	CompletedPlanningWithIDResult res;
+	res.completed_planning_result = completed_planning_result.Copy();
+	res.object_6 = object_6.Copy();
+	return res;
+}
 string CompletedPlanningWithIDResult::TryFromJSON(yyjson_val *obj) {
 	string error;
 	error = completed_planning_result.TryFromJSON(obj);

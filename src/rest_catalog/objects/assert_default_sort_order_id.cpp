@@ -24,6 +24,12 @@ AssertDefaultSortOrderId AssertDefaultSortOrderId::FromJSON(yyjson_val *obj) {
 	return res;
 }
 
+AssertDefaultSortOrderId AssertDefaultSortOrderId::Copy() const {
+	AssertDefaultSortOrderId res;
+	res.type = type.Copy();
+	res.default_sort_order_id = default_sort_order_id;
+	return res;
+}
 string AssertDefaultSortOrderId::TryFromJSON(yyjson_val *obj) {
 	string error;
 	auto type_val = yyjson_obj_get(obj, "type");

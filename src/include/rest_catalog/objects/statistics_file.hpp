@@ -22,6 +22,7 @@ public:
 
 public:
 	static StatisticsFile FromJSON(yyjson_val *obj);
+	StatisticsFile Copy() const;
 
 public:
 	string TryFromJSON(yyjson_val *obj);

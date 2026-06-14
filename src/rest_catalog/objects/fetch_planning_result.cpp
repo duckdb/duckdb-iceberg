@@ -24,6 +24,22 @@ FetchPlanningResult FetchPlanningResult::FromJSON(yyjson_val *obj) {
 	return res;
 }
 
+FetchPlanningResult FetchPlanningResult::Copy() const {
+	FetchPlanningResult res;
+	if (has_completed_planning_result) {
+		res.completed_planning_result = completed_planning_result.Copy();
+	}
+	res.has_completed_planning_result = has_completed_planning_result;
+	if (has_failed_planning_result) {
+		res.failed_planning_result = failed_planning_result.Copy();
+	}
+	res.has_failed_planning_result = has_failed_planning_result;
+	if (has_empty_planning_result) {
+		res.empty_planning_result = empty_planning_result.Copy();
+	}
+	res.has_empty_planning_result = has_empty_planning_result;
+	return res;
+}
 string FetchPlanningResult::TryFromJSON(yyjson_val *obj) {
 	string error;
 	do {

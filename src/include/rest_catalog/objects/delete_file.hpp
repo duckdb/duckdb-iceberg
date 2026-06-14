@@ -23,6 +23,7 @@ public:
 
 public:
 	static DeleteFile FromJSON(yyjson_val *obj);
+	DeleteFile Copy() const;
 
 public:
 	string TryFromJSON(yyjson_val *obj);

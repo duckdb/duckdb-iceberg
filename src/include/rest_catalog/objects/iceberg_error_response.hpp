@@ -22,6 +22,7 @@ public:
 
 public:
 	static IcebergErrorResponse FromJSON(yyjson_val *obj);
+	IcebergErrorResponse Copy() const;
 
 public:
 	string TryFromJSON(yyjson_val *obj);

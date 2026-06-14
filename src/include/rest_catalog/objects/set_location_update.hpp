@@ -22,6 +22,7 @@ public:
 
 public:
 	static SetLocationUpdate FromJSON(yyjson_val *obj);
+	SetLocationUpdate Copy() const;
 
 public:
 	string TryFromJSON(yyjson_val *obj);

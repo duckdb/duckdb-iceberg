@@ -22,6 +22,7 @@ public:
 
 public:
 	static ViewRepresentation FromJSON(yyjson_val *obj);
+	ViewRepresentation Copy() const;
 
 public:
 	string TryFromJSON(yyjson_val *obj);

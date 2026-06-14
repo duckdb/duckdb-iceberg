@@ -24,6 +24,14 @@ ListType ListType::FromJSON(yyjson_val *obj) {
 	return res;
 }
 
+ListType ListType::Copy() const {
+	ListType res;
+	res.type = type;
+	res.element_id = element_id;
+	res.element = element ? make_uniq<Type>(element->Copy()) : nullptr;
+	res.element_required = element_required;
+	return res;
+}
 string ListType::TryFromJSON(yyjson_val *obj) {
 	string error;
 	auto type_val = yyjson_obj_get(obj, "type");

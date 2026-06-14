@@ -24,6 +24,11 @@ FalseExpression FalseExpression::FromJSON(yyjson_val *obj) {
 	return res;
 }
 
+FalseExpression FalseExpression::Copy() const {
+	FalseExpression res;
+	res.type = type.Copy();
+	return res;
+}
 string FalseExpression::TryFromJSON(yyjson_val *obj) {
 	string error;
 	auto type_val = yyjson_obj_get(obj, "type");

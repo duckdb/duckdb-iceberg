@@ -24,6 +24,13 @@ TransformTerm TransformTerm::FromJSON(yyjson_val *obj) {
 	return res;
 }
 
+TransformTerm TransformTerm::Copy() const {
+	TransformTerm res;
+	res.type = type;
+	res.transform = transform.Copy();
+	res.term = term.Copy();
+	return res;
+}
 string TransformTerm::TryFromJSON(yyjson_val *obj) {
 	string error;
 	auto type_val = yyjson_obj_get(obj, "type");

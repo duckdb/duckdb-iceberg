@@ -24,6 +24,18 @@ OAuthTokenRequest OAuthTokenRequest::FromJSON(yyjson_val *obj) {
 	return res;
 }
 
+OAuthTokenRequest OAuthTokenRequest::Copy() const {
+	OAuthTokenRequest res;
+	if (has_oauth_client_credentials_request) {
+		res.oauth_client_credentials_request = oauth_client_credentials_request.Copy();
+	}
+	res.has_oauth_client_credentials_request = has_oauth_client_credentials_request;
+	if (has_oauth_token_exchange_request) {
+		res.oauth_token_exchange_request = oauth_token_exchange_request.Copy();
+	}
+	res.has_oauth_token_exchange_request = has_oauth_token_exchange_request;
+	return res;
+}
 string OAuthTokenRequest::TryFromJSON(yyjson_val *obj) {
 	string error;
 	error = oauth_client_credentials_request.TryFromJSON(obj);

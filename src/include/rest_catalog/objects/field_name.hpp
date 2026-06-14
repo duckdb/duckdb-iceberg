@@ -21,6 +21,7 @@ public:
 
 public:
 	static FieldName FromJSON(yyjson_val *obj);
+	FieldName Copy() const;
 
 public:
 	string TryFromJSON(yyjson_val *obj);

@@ -23,6 +23,7 @@ public:
 
 public:
 	static AddSchemaUpdate FromJSON(yyjson_val *obj);
+	AddSchemaUpdate Copy() const;
 
 public:
 	string TryFromJSON(yyjson_val *obj);

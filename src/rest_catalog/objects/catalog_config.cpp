@@ -24,6 +24,27 @@ CatalogConfig CatalogConfig::FromJSON(yyjson_val *obj) {
 	return res;
 }
 
+CatalogConfig CatalogConfig::Copy() const {
+	CatalogConfig res;
+	for (auto &entry : defaults) {
+		res.defaults.emplace(entry.first, entry.second);
+	}
+	for (auto &entry : overrides) {
+		res.overrides.emplace(entry.first, entry.second);
+	}
+	if (has_endpoints) {
+		res.endpoints.reserve(endpoints.size());
+		for (auto &item : endpoints) {
+			res.endpoints.emplace_back(item);
+		}
+	}
+	res.has_endpoints = has_endpoints;
+	if (has_idempotency_key_lifetime) {
+		res.idempotency_key_lifetime = idempotency_key_lifetime;
+	}
+	res.has_idempotency_key_lifetime = has_idempotency_key_lifetime;
+	return res;
+}
 string CatalogConfig::TryFromJSON(yyjson_val *obj) {
 	string error;
 	auto defaults_val = yyjson_obj_get(obj, "defaults");

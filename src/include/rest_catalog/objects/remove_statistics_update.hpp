@@ -22,6 +22,7 @@ public:
 
 public:
 	static RemoveStatisticsUpdate FromJSON(yyjson_val *obj);
+	RemoveStatisticsUpdate Copy() const;
 
 public:
 	string TryFromJSON(yyjson_val *obj);

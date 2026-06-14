@@ -24,6 +24,52 @@ PlanTableScanRequest PlanTableScanRequest::FromJSON(yyjson_val *obj) {
 	return res;
 }
 
+PlanTableScanRequest PlanTableScanRequest::Copy() const {
+	PlanTableScanRequest res;
+	if (has_snapshot_id) {
+		res.snapshot_id = snapshot_id;
+	}
+	res.has_snapshot_id = has_snapshot_id;
+	if (has_select) {
+		res.select.reserve(select.size());
+		for (auto &item : select) {
+			res.select.emplace_back(item.Copy());
+		}
+	}
+	res.has_select = has_select;
+	if (has_filter) {
+		res.filter = filter ? make_uniq<Expression>(filter->Copy()) : nullptr;
+	}
+	res.has_filter = has_filter;
+	if (has_min_rows_requested) {
+		res.min_rows_requested = min_rows_requested;
+	}
+	res.has_min_rows_requested = has_min_rows_requested;
+	if (has_case_sensitive) {
+		res.case_sensitive = case_sensitive;
+	}
+	res.has_case_sensitive = has_case_sensitive;
+	if (has_use_snapshot_schema) {
+		res.use_snapshot_schema = use_snapshot_schema;
+	}
+	res.has_use_snapshot_schema = has_use_snapshot_schema;
+	if (has_start_snapshot_id) {
+		res.start_snapshot_id = start_snapshot_id;
+	}
+	res.has_start_snapshot_id = has_start_snapshot_id;
+	if (has_end_snapshot_id) {
+		res.end_snapshot_id = end_snapshot_id;
+	}
+	res.has_end_snapshot_id = has_end_snapshot_id;
+	if (has_stats_fields) {
+		res.stats_fields.reserve(stats_fields.size());
+		for (auto &item : stats_fields) {
+			res.stats_fields.emplace_back(item.Copy());
+		}
+	}
+	res.has_stats_fields = has_stats_fields;
+	return res;
+}
 string PlanTableScanRequest::TryFromJSON(yyjson_val *obj) {
 	string error;
 	auto snapshot_id_val = yyjson_obj_get(obj, "snapshot-id");

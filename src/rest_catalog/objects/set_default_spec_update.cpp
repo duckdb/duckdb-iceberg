@@ -24,6 +24,16 @@ SetDefaultSpecUpdate SetDefaultSpecUpdate::FromJSON(yyjson_val *obj) {
 	return res;
 }
 
+SetDefaultSpecUpdate SetDefaultSpecUpdate::Copy() const {
+	SetDefaultSpecUpdate res;
+	res.base_update = base_update.Copy();
+	res.spec_id = spec_id;
+	if (has_action) {
+		res.action = action;
+	}
+	res.has_action = has_action;
+	return res;
+}
 string SetDefaultSpecUpdate::TryFromJSON(yyjson_val *obj) {
 	string error;
 	error = base_update.TryFromJSON(obj);

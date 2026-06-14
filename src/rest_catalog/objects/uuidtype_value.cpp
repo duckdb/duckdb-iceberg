@@ -24,6 +24,11 @@ UUIDTypeValue UUIDTypeValue::FromJSON(yyjson_val *obj) {
 	return res;
 }
 
+UUIDTypeValue UUIDTypeValue::Copy() const {
+	UUIDTypeValue res;
+	res.value = value;
+	return res;
+}
 string UUIDTypeValue::TryFromJSON(yyjson_val *obj) {
 	string error;
 	if (yyjson_is_str(obj)) {

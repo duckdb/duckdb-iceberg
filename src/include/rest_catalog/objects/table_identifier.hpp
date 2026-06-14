@@ -22,6 +22,7 @@ public:
 
 public:
 	static TableIdentifier FromJSON(yyjson_val *obj);
+	TableIdentifier Copy() const;
 
 public:
 	string TryFromJSON(yyjson_val *obj);

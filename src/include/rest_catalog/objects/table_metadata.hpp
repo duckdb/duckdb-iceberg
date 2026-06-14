@@ -31,6 +31,7 @@ public:
 
 public:
 	static TableMetadata FromJSON(yyjson_val *obj);
+	TableMetadata Copy() const;
 
 public:
 	string TryFromJSON(yyjson_val *obj);

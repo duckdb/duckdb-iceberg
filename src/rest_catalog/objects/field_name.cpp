@@ -24,6 +24,11 @@ FieldName FieldName::FromJSON(yyjson_val *obj) {
 	return res;
 }
 
+FieldName FieldName::Copy() const {
+	FieldName res;
+	res.value = value;
+	return res;
+}
 string FieldName::TryFromJSON(yyjson_val *obj) {
 	string error;
 	if (yyjson_is_str(obj)) {

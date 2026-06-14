@@ -21,6 +21,7 @@ public:
 
 public:
 	static TimestampNanoTypeValue FromJSON(yyjson_val *obj);
+	TimestampNanoTypeValue Copy() const;
 
 public:
 	string TryFromJSON(yyjson_val *obj);

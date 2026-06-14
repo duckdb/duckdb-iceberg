@@ -24,6 +24,16 @@ SetDefaultSortOrderUpdate SetDefaultSortOrderUpdate::FromJSON(yyjson_val *obj) {
 	return res;
 }
 
+SetDefaultSortOrderUpdate SetDefaultSortOrderUpdate::Copy() const {
+	SetDefaultSortOrderUpdate res;
+	res.base_update = base_update.Copy();
+	res.sort_order_id = sort_order_id;
+	if (has_action) {
+		res.action = action;
+	}
+	res.has_action = has_action;
+	return res;
+}
 string SetDefaultSortOrderUpdate::TryFromJSON(yyjson_val *obj) {
 	string error;
 	error = base_update.TryFromJSON(obj);

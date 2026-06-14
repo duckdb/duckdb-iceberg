@@ -24,6 +24,28 @@ LoadTableResult LoadTableResult::FromJSON(yyjson_val *obj) {
 	return res;
 }
 
+LoadTableResult LoadTableResult::Copy() const {
+	LoadTableResult res;
+	res.metadata = metadata.Copy();
+	if (has_metadata_location) {
+		res.metadata_location = metadata_location;
+	}
+	res.has_metadata_location = has_metadata_location;
+	if (has_config) {
+		for (auto &entry : config) {
+			res.config.emplace(entry.first, entry.second);
+		}
+	}
+	res.has_config = has_config;
+	if (has_storage_credentials) {
+		res.storage_credentials.reserve(storage_credentials.size());
+		for (auto &item : storage_credentials) {
+			res.storage_credentials.emplace_back(item.Copy());
+		}
+	}
+	res.has_storage_credentials = has_storage_credentials;
+	return res;
+}
 string LoadTableResult::TryFromJSON(yyjson_val *obj) {
 	string error;
 	auto metadata_val = yyjson_obj_get(obj, "metadata");

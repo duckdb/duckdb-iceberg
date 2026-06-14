@@ -22,6 +22,7 @@ public:
 
 public:
 	static AsyncPlanningResult FromJSON(yyjson_val *obj);
+	AsyncPlanningResult Copy() const;
 
 public:
 	string TryFromJSON(yyjson_val *obj);

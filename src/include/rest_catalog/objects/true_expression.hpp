@@ -22,6 +22,7 @@ public:
 
 public:
 	static TrueExpression FromJSON(yyjson_val *obj);
+	TrueExpression Copy() const;
 
 public:
 	string TryFromJSON(yyjson_val *obj);

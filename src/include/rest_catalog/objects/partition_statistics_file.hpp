@@ -21,6 +21,7 @@ public:
 
 public:
 	static PartitionStatisticsFile FromJSON(yyjson_val *obj);
+	PartitionStatisticsFile Copy() const;
 
 public:
 	string TryFromJSON(yyjson_val *obj);

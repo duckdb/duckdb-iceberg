@@ -24,6 +24,13 @@ SQLViewRepresentation SQLViewRepresentation::FromJSON(yyjson_val *obj) {
 	return res;
 }
 
+SQLViewRepresentation SQLViewRepresentation::Copy() const {
+	SQLViewRepresentation res;
+	res.type = type;
+	res.sql = sql;
+	res.dialect = dialect;
+	return res;
+}
 string SQLViewRepresentation::TryFromJSON(yyjson_val *obj) {
 	string error;
 	auto type_val = yyjson_obj_get(obj, "type");

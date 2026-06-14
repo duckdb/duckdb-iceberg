@@ -22,6 +22,7 @@ public:
 
 public:
 	static EqualityDeleteFile FromJSON(yyjson_val *obj);
+	EqualityDeleteFile Copy() const;
 
 public:
 	string TryFromJSON(yyjson_val *obj);

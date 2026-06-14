@@ -24,6 +24,22 @@ EncryptedKey EncryptedKey::FromJSON(yyjson_val *obj) {
 	return res;
 }
 
+EncryptedKey EncryptedKey::Copy() const {
+	EncryptedKey res;
+	res.key_id = key_id;
+	res.encrypted_key_metadata = encrypted_key_metadata;
+	if (has_encrypted_by_id) {
+		res.encrypted_by_id = encrypted_by_id;
+	}
+	res.has_encrypted_by_id = has_encrypted_by_id;
+	if (has_properties) {
+		for (auto &entry : properties) {
+			res.properties.emplace(entry.first, entry.second);
+		}
+	}
+	res.has_properties = has_properties;
+	return res;
+}
 string EncryptedKey::TryFromJSON(yyjson_val *obj) {
 	string error;
 	auto key_id_val = yyjson_obj_get(obj, "key-id");

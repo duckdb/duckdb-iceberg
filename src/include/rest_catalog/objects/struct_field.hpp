@@ -24,6 +24,7 @@ public:
 
 public:
 	static StructField FromJSON(yyjson_val *obj);
+	StructField Copy() const;
 
 public:
 	string TryFromJSON(yyjson_val *obj);

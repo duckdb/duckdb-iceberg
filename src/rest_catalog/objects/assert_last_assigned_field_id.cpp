@@ -24,6 +24,12 @@ AssertLastAssignedFieldId AssertLastAssignedFieldId::FromJSON(yyjson_val *obj) {
 	return res;
 }
 
+AssertLastAssignedFieldId AssertLastAssignedFieldId::Copy() const {
+	AssertLastAssignedFieldId res;
+	res.type = type.Copy();
+	res.last_assigned_field_id = last_assigned_field_id;
+	return res;
+}
 string AssertLastAssignedFieldId::TryFromJSON(yyjson_val *obj) {
 	string error;
 	auto type_val = yyjson_obj_get(obj, "type");

@@ -24,6 +24,13 @@ AndOrExpression AndOrExpression::FromJSON(yyjson_val *obj) {
 	return res;
 }
 
+AndOrExpression AndOrExpression::Copy() const {
+	AndOrExpression res;
+	res.type = type.Copy();
+	res.left = left ? make_uniq<Expression>(left->Copy()) : nullptr;
+	res.right = right ? make_uniq<Expression>(right->Copy()) : nullptr;
+	return res;
+}
 string AndOrExpression::TryFromJSON(yyjson_val *obj) {
 	string error;
 	auto type_val = yyjson_obj_get(obj, "type");

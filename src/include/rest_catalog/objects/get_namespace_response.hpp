@@ -22,6 +22,7 @@ public:
 
 public:
 	static GetNamespaceResponse FromJSON(yyjson_val *obj);
+	GetNamespaceResponse Copy() const;
 
 public:
 	string TryFromJSON(yyjson_val *obj);

@@ -37,6 +37,7 @@ public:
 
 public:
 	static PrimitiveTypeValue FromJSON(yyjson_val *obj);
+	PrimitiveTypeValue Copy() const;
 
 public:
 	string TryFromJSON(yyjson_val *obj);

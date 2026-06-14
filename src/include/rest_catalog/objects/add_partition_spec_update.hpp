@@ -23,6 +23,7 @@ public:
 
 public:
 	static AddPartitionSpecUpdate FromJSON(yyjson_val *obj);
+	AddPartitionSpecUpdate Copy() const;
 
 public:
 	string TryFromJSON(yyjson_val *obj);

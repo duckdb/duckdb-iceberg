@@ -21,6 +21,7 @@ public:
 
 public:
 	static NullOrder FromJSON(yyjson_val *obj);
+	NullOrder Copy() const;
 
 public:
 	string TryFromJSON(yyjson_val *obj);

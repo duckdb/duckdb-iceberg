@@ -24,6 +24,11 @@ DecimalTypeValue DecimalTypeValue::FromJSON(yyjson_val *obj) {
 	return res;
 }
 
+DecimalTypeValue DecimalTypeValue::Copy() const {
+	DecimalTypeValue res;
+	res.value = value;
+	return res;
+}
 string DecimalTypeValue::TryFromJSON(yyjson_val *obj) {
 	string error;
 	if (yyjson_is_str(obj)) {

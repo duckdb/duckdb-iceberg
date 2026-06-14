@@ -24,6 +24,19 @@ RemoveSnapshotsUpdate RemoveSnapshotsUpdate::FromJSON(yyjson_val *obj) {
 	return res;
 }
 
+RemoveSnapshotsUpdate RemoveSnapshotsUpdate::Copy() const {
+	RemoveSnapshotsUpdate res;
+	res.base_update = base_update.Copy();
+	res.snapshot_ids.reserve(snapshot_ids.size());
+	for (auto &item : snapshot_ids) {
+		res.snapshot_ids.emplace_back(item);
+	}
+	if (has_action) {
+		res.action = action;
+	}
+	res.has_action = has_action;
+	return res;
+}
 string RemoveSnapshotsUpdate::TryFromJSON(yyjson_val *obj) {
 	string error;
 	error = base_update.TryFromJSON(obj);

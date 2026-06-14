@@ -21,6 +21,7 @@ public:
 
 public:
 	static ViewHistoryEntry FromJSON(yyjson_val *obj);
+	ViewHistoryEntry Copy() const;
 
 public:
 	string TryFromJSON(yyjson_val *obj);

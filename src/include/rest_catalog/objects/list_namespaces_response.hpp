@@ -23,6 +23,7 @@ public:
 
 public:
 	static ListNamespacesResponse FromJSON(yyjson_val *obj);
+	ListNamespacesResponse Copy() const;
 
 public:
 	string TryFromJSON(yyjson_val *obj);

@@ -21,6 +21,7 @@ public:
 
 public:
 	static ErrorModel FromJSON(yyjson_val *obj);
+	ErrorModel Copy() const;
 
 public:
 	string TryFromJSON(yyjson_val *obj);

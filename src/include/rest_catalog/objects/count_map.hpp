@@ -23,6 +23,7 @@ public:
 
 public:
 	static CountMap FromJSON(yyjson_val *obj);
+	CountMap Copy() const;
 
 public:
 	string TryFromJSON(yyjson_val *obj);

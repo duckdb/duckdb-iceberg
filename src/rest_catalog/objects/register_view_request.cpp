@@ -24,6 +24,12 @@ RegisterViewRequest RegisterViewRequest::FromJSON(yyjson_val *obj) {
 	return res;
 }
 
+RegisterViewRequest RegisterViewRequest::Copy() const {
+	RegisterViewRequest res;
+	res.name = name;
+	res.metadata_location = metadata_location;
+	return res;
+}
 string RegisterViewRequest::TryFromJSON(yyjson_val *obj) {
 	string error;
 	auto name_val = yyjson_obj_get(obj, "name");

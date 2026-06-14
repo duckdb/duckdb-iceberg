@@ -22,6 +22,7 @@ public:
 
 public:
 	static EmptyPlanningResult FromJSON(yyjson_val *obj);
+	EmptyPlanningResult Copy() const;
 
 public:
 	string TryFromJSON(yyjson_val *obj);

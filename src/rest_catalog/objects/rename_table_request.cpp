@@ -24,6 +24,12 @@ RenameTableRequest RenameTableRequest::FromJSON(yyjson_val *obj) {
 	return res;
 }
 
+RenameTableRequest RenameTableRequest::Copy() const {
+	RenameTableRequest res;
+	res.source = source.Copy();
+	res.destination = destination.Copy();
+	return res;
+}
 string RenameTableRequest::TryFromJSON(yyjson_val *obj) {
 	string error;
 	auto source_val = yyjson_obj_get(obj, "source");

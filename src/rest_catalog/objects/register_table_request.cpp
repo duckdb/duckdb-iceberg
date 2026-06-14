@@ -24,6 +24,16 @@ RegisterTableRequest RegisterTableRequest::FromJSON(yyjson_val *obj) {
 	return res;
 }
 
+RegisterTableRequest RegisterTableRequest::Copy() const {
+	RegisterTableRequest res;
+	res.name = name;
+	res.metadata_location = metadata_location;
+	if (has_overwrite) {
+		res.overwrite = overwrite;
+	}
+	res.has_overwrite = has_overwrite;
+	return res;
+}
 string RegisterTableRequest::TryFromJSON(yyjson_val *obj) {
 	string error;
 	auto name_val = yyjson_obj_get(obj, "name");

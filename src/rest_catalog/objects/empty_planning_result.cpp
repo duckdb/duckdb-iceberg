@@ -24,6 +24,11 @@ EmptyPlanningResult EmptyPlanningResult::FromJSON(yyjson_val *obj) {
 	return res;
 }
 
+EmptyPlanningResult EmptyPlanningResult::Copy() const {
+	EmptyPlanningResult res;
+	res.status = status.Copy();
+	return res;
+}
 string EmptyPlanningResult::TryFromJSON(yyjson_val *obj) {
 	string error;
 	auto status_val = yyjson_obj_get(obj, "status");

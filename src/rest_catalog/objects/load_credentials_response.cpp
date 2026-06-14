@@ -24,6 +24,14 @@ LoadCredentialsResponse LoadCredentialsResponse::FromJSON(yyjson_val *obj) {
 	return res;
 }
 
+LoadCredentialsResponse LoadCredentialsResponse::Copy() const {
+	LoadCredentialsResponse res;
+	res.storage_credentials.reserve(storage_credentials.size());
+	for (auto &item : storage_credentials) {
+		res.storage_credentials.emplace_back(item.Copy());
+	}
+	return res;
+}
 string LoadCredentialsResponse::TryFromJSON(yyjson_val *obj) {
 	string error;
 	auto storage_credentials_val = yyjson_obj_get(obj, "storage-credentials");

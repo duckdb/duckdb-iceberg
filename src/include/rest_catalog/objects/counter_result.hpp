@@ -21,6 +21,7 @@ public:
 
 public:
 	static CounterResult FromJSON(yyjson_val *obj);
+	CounterResult Copy() const;
 
 public:
 	string TryFromJSON(yyjson_val *obj);

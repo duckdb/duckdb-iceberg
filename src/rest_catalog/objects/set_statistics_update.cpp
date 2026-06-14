@@ -24,6 +24,20 @@ SetStatisticsUpdate SetStatisticsUpdate::FromJSON(yyjson_val *obj) {
 	return res;
 }
 
+SetStatisticsUpdate SetStatisticsUpdate::Copy() const {
+	SetStatisticsUpdate res;
+	res.base_update = base_update.Copy();
+	res.statistics = statistics.Copy();
+	if (has_action) {
+		res.action = action;
+	}
+	res.has_action = has_action;
+	if (has_snapshot_id) {
+		res.snapshot_id = snapshot_id;
+	}
+	res.has_snapshot_id = has_snapshot_id;
+	return res;
+}
 string SetStatisticsUpdate::TryFromJSON(yyjson_val *obj) {
 	string error;
 	error = base_update.TryFromJSON(obj);

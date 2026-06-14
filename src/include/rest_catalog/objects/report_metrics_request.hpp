@@ -23,6 +23,7 @@ public:
 
 public:
 	static ReportMetricsRequest FromJSON(yyjson_val *obj);
+	ReportMetricsRequest Copy() const;
 
 public:
 	string TryFromJSON(yyjson_val *obj);

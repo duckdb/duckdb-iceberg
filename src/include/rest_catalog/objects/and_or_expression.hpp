@@ -24,6 +24,7 @@ public:
 
 public:
 	static AndOrExpression FromJSON(yyjson_val *obj);
+	AndOrExpression Copy() const;
 
 public:
 	string TryFromJSON(yyjson_val *obj);

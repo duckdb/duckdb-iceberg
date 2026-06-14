@@ -21,6 +21,7 @@ public:
 
 public:
 	static SortDirection FromJSON(yyjson_val *obj);
+	SortDirection Copy() const;
 
 public:
 	string TryFromJSON(yyjson_val *obj);

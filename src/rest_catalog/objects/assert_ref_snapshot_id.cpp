@@ -24,6 +24,16 @@ AssertRefSnapshotId AssertRefSnapshotId::FromJSON(yyjson_val *obj) {
 	return res;
 }
 
+AssertRefSnapshotId AssertRefSnapshotId::Copy() const {
+	AssertRefSnapshotId res;
+	res.type = type.Copy();
+	res.ref = ref;
+	if (has_snapshot_id) {
+		res.snapshot_id = snapshot_id;
+	}
+	res.has_snapshot_id = has_snapshot_id;
+	return res;
+}
 string AssertRefSnapshotId::TryFromJSON(yyjson_val *obj) {
 	string error;
 	auto type_val = yyjson_obj_get(obj, "type");

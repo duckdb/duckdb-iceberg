@@ -24,6 +24,17 @@ SetSnapshotRefUpdate SetSnapshotRefUpdate::FromJSON(yyjson_val *obj) {
 	return res;
 }
 
+SetSnapshotRefUpdate SetSnapshotRefUpdate::Copy() const {
+	SetSnapshotRefUpdate res;
+	res.base_update = base_update.Copy();
+	res.snapshot_reference = snapshot_reference.Copy();
+	res.ref_name = ref_name;
+	if (has_action) {
+		res.action = action;
+	}
+	res.has_action = has_action;
+	return res;
+}
 string SetSnapshotRefUpdate::TryFromJSON(yyjson_val *obj) {
 	string error;
 	error = base_update.TryFromJSON(obj);

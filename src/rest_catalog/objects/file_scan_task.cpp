@@ -24,6 +24,22 @@ FileScanTask FileScanTask::FromJSON(yyjson_val *obj) {
 	return res;
 }
 
+FileScanTask FileScanTask::Copy() const {
+	FileScanTask res;
+	res.data_file = data_file.Copy();
+	if (has_delete_file_references) {
+		res.delete_file_references.reserve(delete_file_references.size());
+		for (auto &item : delete_file_references) {
+			res.delete_file_references.emplace_back(item);
+		}
+	}
+	res.has_delete_file_references = has_delete_file_references;
+	if (has_residual_filter) {
+		res.residual_filter = residual_filter ? make_uniq<Expression>(residual_filter->Copy()) : nullptr;
+	}
+	res.has_residual_filter = has_residual_filter;
+	return res;
+}
 string FileScanTask::TryFromJSON(yyjson_val *obj) {
 	string error;
 	auto data_file_val = yyjson_obj_get(obj, "data-file");

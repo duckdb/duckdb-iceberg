@@ -24,6 +24,19 @@ ReportMetricsRequest ReportMetricsRequest::FromJSON(yyjson_val *obj) {
 	return res;
 }
 
+ReportMetricsRequest ReportMetricsRequest::Copy() const {
+	ReportMetricsRequest res;
+	if (has_scan_report) {
+		res.scan_report = scan_report.Copy();
+	}
+	res.has_scan_report = has_scan_report;
+	if (has_commit_report) {
+		res.commit_report = commit_report.Copy();
+	}
+	res.has_commit_report = has_commit_report;
+	res.report_type = report_type;
+	return res;
+}
 string ReportMetricsRequest::TryFromJSON(yyjson_val *obj) {
 	string error;
 	error = scan_report.TryFromJSON(obj);

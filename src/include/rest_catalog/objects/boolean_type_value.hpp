@@ -21,6 +21,7 @@ public:
 
 public:
 	static BooleanTypeValue FromJSON(yyjson_val *obj);
+	BooleanTypeValue Copy() const;
 
 public:
 	string TryFromJSON(yyjson_val *obj);

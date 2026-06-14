@@ -21,6 +21,7 @@ public:
 
 public:
 	static DoubleTypeValue FromJSON(yyjson_val *obj);
+	DoubleTypeValue Copy() const;
 
 public:
 	string TryFromJSON(yyjson_val *obj);

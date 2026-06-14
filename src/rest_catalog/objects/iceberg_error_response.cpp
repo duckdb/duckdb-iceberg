@@ -24,6 +24,11 @@ IcebergErrorResponse IcebergErrorResponse::FromJSON(yyjson_val *obj) {
 	return res;
 }
 
+IcebergErrorResponse IcebergErrorResponse::Copy() const {
+	IcebergErrorResponse res;
+	res._error = _error.Copy();
+	return res;
+}
 string IcebergErrorResponse::TryFromJSON(yyjson_val *obj) {
 	string error;
 	auto _error_val = yyjson_obj_get(obj, "error");

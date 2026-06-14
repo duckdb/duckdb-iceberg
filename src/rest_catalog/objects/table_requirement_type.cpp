@@ -24,6 +24,11 @@ TableRequirementType TableRequirementType::FromJSON(yyjson_val *obj) {
 	return res;
 }
 
+TableRequirementType TableRequirementType::Copy() const {
+	TableRequirementType res;
+	res.value = value;
+	return res;
+}
 string TableRequirementType::TryFromJSON(yyjson_val *obj) {
 	string error;
 	if (yyjson_is_str(obj)) {

@@ -21,6 +21,7 @@ public:
 
 public:
 	static FileFormat FromJSON(yyjson_val *obj);
+	FileFormat Copy() const;
 
 public:
 	string TryFromJSON(yyjson_val *obj);

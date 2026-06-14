@@ -21,6 +21,7 @@ public:
 
 public:
 	static TimeTypeValue FromJSON(yyjson_val *obj);
+	TimeTypeValue Copy() const;
 
 public:
 	string TryFromJSON(yyjson_val *obj);

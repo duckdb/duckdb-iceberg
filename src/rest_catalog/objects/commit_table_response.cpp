@@ -24,6 +24,12 @@ CommitTableResponse CommitTableResponse::FromJSON(yyjson_val *obj) {
 	return res;
 }
 
+CommitTableResponse CommitTableResponse::Copy() const {
+	CommitTableResponse res;
+	res.metadata_location = metadata_location;
+	res.metadata = metadata.Copy();
+	return res;
+}
 string CommitTableResponse::TryFromJSON(yyjson_val *obj) {
 	string error;
 	auto metadata_location_val = yyjson_obj_get(obj, "metadata-location");

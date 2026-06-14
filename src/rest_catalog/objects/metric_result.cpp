@@ -24,6 +24,18 @@ MetricResult MetricResult::FromJSON(yyjson_val *obj) {
 	return res;
 }
 
+MetricResult MetricResult::Copy() const {
+	MetricResult res;
+	if (has_counter_result) {
+		res.counter_result = counter_result.Copy();
+	}
+	res.has_counter_result = has_counter_result;
+	if (has_timer_result) {
+		res.timer_result = timer_result.Copy();
+	}
+	res.has_timer_result = has_timer_result;
+	return res;
+}
 string MetricResult::TryFromJSON(yyjson_val *obj) {
 	string error;
 	error = counter_result.TryFromJSON(obj);

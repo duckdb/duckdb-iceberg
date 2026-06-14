@@ -24,6 +24,15 @@ SortOrder SortOrder::FromJSON(yyjson_val *obj) {
 	return res;
 }
 
+SortOrder SortOrder::Copy() const {
+	SortOrder res;
+	res.order_id = order_id;
+	res.fields.reserve(fields.size());
+	for (auto &item : fields) {
+		res.fields.emplace_back(item.Copy());
+	}
+	return res;
+}
 string SortOrder::TryFromJSON(yyjson_val *obj) {
 	string error;
 	auto order_id_val = yyjson_obj_get(obj, "order-id");

@@ -22,6 +22,7 @@ public:
 
 public:
 	static RemovePropertiesUpdate FromJSON(yyjson_val *obj);
+	RemovePropertiesUpdate Copy() const;
 
 public:
 	string TryFromJSON(yyjson_val *obj);

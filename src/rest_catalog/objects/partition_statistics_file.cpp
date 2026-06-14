@@ -24,6 +24,13 @@ PartitionStatisticsFile PartitionStatisticsFile::FromJSON(yyjson_val *obj) {
 	return res;
 }
 
+PartitionStatisticsFile PartitionStatisticsFile::Copy() const {
+	PartitionStatisticsFile res;
+	res.snapshot_id = snapshot_id;
+	res.statistics_path = statistics_path;
+	res.file_size_in_bytes = file_size_in_bytes;
+	return res;
+}
 string PartitionStatisticsFile::TryFromJSON(yyjson_val *obj) {
 	string error;
 	auto snapshot_id_val = yyjson_obj_get(obj, "snapshot-id");

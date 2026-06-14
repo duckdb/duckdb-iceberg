@@ -23,6 +23,7 @@ public:
 
 public:
 	static SetPartitionStatisticsUpdate FromJSON(yyjson_val *obj);
+	SetPartitionStatisticsUpdate Copy() const;
 
 public:
 	string TryFromJSON(yyjson_val *obj);

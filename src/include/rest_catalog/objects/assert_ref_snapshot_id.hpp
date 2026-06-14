@@ -22,6 +22,7 @@ public:
 
 public:
 	static AssertRefSnapshotId FromJSON(yyjson_val *obj);
+	AssertRefSnapshotId Copy() const;
 
 public:
 	string TryFromJSON(yyjson_val *obj);

@@ -24,6 +24,11 @@ FetchScanTasksRequest FetchScanTasksRequest::FromJSON(yyjson_val *obj) {
 	return res;
 }
 
+FetchScanTasksRequest FetchScanTasksRequest::Copy() const {
+	FetchScanTasksRequest res;
+	res.plan_task = plan_task.Copy();
+	return res;
+}
 string FetchScanTasksRequest::TryFromJSON(yyjson_val *obj) {
 	string error;
 	auto plan_task_val = yyjson_obj_get(obj, "plan-task");

@@ -28,6 +28,7 @@ public:
 
 	public:
 		static Object4 FromJSON(yyjson_val *obj);
+		Object4 Copy() const;
 
 	public:
 		string TryFromJSON(yyjson_val *obj);
@@ -39,6 +40,7 @@ public:
 
 public:
 	static MetadataLog FromJSON(yyjson_val *obj);
+	MetadataLog Copy() const;
 
 public:
 	string TryFromJSON(yyjson_val *obj);

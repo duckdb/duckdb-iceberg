@@ -24,6 +24,12 @@ AssertCurrentSchemaId AssertCurrentSchemaId::FromJSON(yyjson_val *obj) {
 	return res;
 }
 
+AssertCurrentSchemaId AssertCurrentSchemaId::Copy() const {
+	AssertCurrentSchemaId res;
+	res.type = type.Copy();
+	res.current_schema_id = current_schema_id;
+	return res;
+}
 string AssertCurrentSchemaId::TryFromJSON(yyjson_val *obj) {
 	string error;
 	auto type_val = yyjson_obj_get(obj, "type");

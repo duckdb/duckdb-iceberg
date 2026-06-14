@@ -22,6 +22,7 @@ public:
 
 public:
 	static PositionDeleteFile FromJSON(yyjson_val *obj);
+	PositionDeleteFile Copy() const;
 
 public:
 	string TryFromJSON(yyjson_val *obj);

@@ -21,6 +21,7 @@ public:
 
 public:
 	static BlobMetadata FromJSON(yyjson_val *obj);
+	BlobMetadata Copy() const;
 
 public:
 	string TryFromJSON(yyjson_val *obj);

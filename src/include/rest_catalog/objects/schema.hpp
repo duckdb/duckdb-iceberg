@@ -29,6 +29,7 @@ public:
 
 	public:
 		static Object1 FromJSON(yyjson_val *obj);
+		Object1 Copy() const;
 
 	public:
 		string TryFromJSON(yyjson_val *obj);
@@ -42,6 +43,7 @@ public:
 
 public:
 	static Schema FromJSON(yyjson_val *obj);
+	Schema Copy() const;
 
 public:
 	string TryFromJSON(yyjson_val *obj);

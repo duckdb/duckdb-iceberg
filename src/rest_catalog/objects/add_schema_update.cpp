@@ -24,6 +24,20 @@ AddSchemaUpdate AddSchemaUpdate::FromJSON(yyjson_val *obj) {
 	return res;
 }
 
+AddSchemaUpdate AddSchemaUpdate::Copy() const {
+	AddSchemaUpdate res;
+	res.base_update = base_update.Copy();
+	res.schema = schema.Copy();
+	if (has_action) {
+		res.action = action;
+	}
+	res.has_action = has_action;
+	if (has_last_column_id) {
+		res.last_column_id = last_column_id;
+	}
+	res.has_last_column_id = has_last_column_id;
+	return res;
+}
 string AddSchemaUpdate::TryFromJSON(yyjson_val *obj) {
 	string error;
 	error = base_update.TryFromJSON(obj);

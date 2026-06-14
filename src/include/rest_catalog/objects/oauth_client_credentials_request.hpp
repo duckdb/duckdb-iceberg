@@ -21,6 +21,7 @@ public:
 
 public:
 	static OAuthClientCredentialsRequest FromJSON(yyjson_val *obj);
+	OAuthClientCredentialsRequest Copy() const;
 
 public:
 	string TryFromJSON(yyjson_val *obj);

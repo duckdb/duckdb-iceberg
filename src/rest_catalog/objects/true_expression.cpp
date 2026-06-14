@@ -24,6 +24,11 @@ TrueExpression TrueExpression::FromJSON(yyjson_val *obj) {
 	return res;
 }
 
+TrueExpression TrueExpression::Copy() const {
+	TrueExpression res;
+	res.type = type.Copy();
+	return res;
+}
 string TrueExpression::TryFromJSON(yyjson_val *obj) {
 	string error;
 	auto type_val = yyjson_obj_get(obj, "type");

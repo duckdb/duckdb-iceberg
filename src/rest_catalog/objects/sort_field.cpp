@@ -24,6 +24,14 @@ SortField SortField::FromJSON(yyjson_val *obj) {
 	return res;
 }
 
+SortField SortField::Copy() const {
+	SortField res;
+	res.source_id = source_id;
+	res.transform = transform.Copy();
+	res.direction = direction.Copy();
+	res.null_order = null_order.Copy();
+	return res;
+}
 string SortField::TryFromJSON(yyjson_val *obj) {
 	string error;
 	auto source_id_val = yyjson_obj_get(obj, "source-id");

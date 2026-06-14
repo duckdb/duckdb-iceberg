@@ -22,6 +22,7 @@ public:
 
 public:
 	static FalseExpression FromJSON(yyjson_val *obj);
+	FalseExpression Copy() const;
 
 public:
 	string TryFromJSON(yyjson_val *obj);

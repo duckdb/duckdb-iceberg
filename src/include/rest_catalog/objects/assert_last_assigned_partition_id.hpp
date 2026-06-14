@@ -22,6 +22,7 @@ public:
 
 public:
 	static AssertLastAssignedPartitionId FromJSON(yyjson_val *obj);
+	AssertLastAssignedPartitionId Copy() const;
 
 public:
 	string TryFromJSON(yyjson_val *obj);

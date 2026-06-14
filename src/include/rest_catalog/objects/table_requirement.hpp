@@ -29,6 +29,7 @@ public:
 
 public:
 	static TableRequirement FromJSON(yyjson_val *obj);
+	TableRequirement Copy() const;
 
 public:
 	string TryFromJSON(yyjson_val *obj);

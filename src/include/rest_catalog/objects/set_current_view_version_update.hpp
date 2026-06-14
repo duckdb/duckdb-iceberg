@@ -22,6 +22,7 @@ public:
 
 public:
 	static SetCurrentViewVersionUpdate FromJSON(yyjson_val *obj);
+	SetCurrentViewVersionUpdate Copy() const;
 
 public:
 	string TryFromJSON(yyjson_val *obj);

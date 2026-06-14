@@ -24,6 +24,26 @@ StructField StructField::FromJSON(yyjson_val *obj) {
 	return res;
 }
 
+StructField StructField::Copy() const {
+	StructField res;
+	res.id = id;
+	res.name = name;
+	res.type = type ? make_uniq<Type>(type->Copy()) : nullptr;
+	res.required = required;
+	if (has_doc) {
+		res.doc = doc;
+	}
+	res.has_doc = has_doc;
+	if (has_initial_default) {
+		res.initial_default = initial_default.Copy();
+	}
+	res.has_initial_default = has_initial_default;
+	if (has_write_default) {
+		res.write_default = write_default.Copy();
+	}
+	res.has_write_default = has_write_default;
+	return res;
+}
 string StructField::TryFromJSON(yyjson_val *obj) {
 	string error;
 	auto id_val = yyjson_obj_get(obj, "id");

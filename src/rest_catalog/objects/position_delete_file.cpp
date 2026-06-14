@@ -24,6 +24,20 @@ PositionDeleteFile PositionDeleteFile::FromJSON(yyjson_val *obj) {
 	return res;
 }
 
+PositionDeleteFile PositionDeleteFile::Copy() const {
+	PositionDeleteFile res;
+	res.content_file = content_file.Copy();
+	res.content = content;
+	if (has_content_offset) {
+		res.content_offset = content_offset;
+	}
+	res.has_content_offset = has_content_offset;
+	if (has_content_size_in_bytes) {
+		res.content_size_in_bytes = content_size_in_bytes;
+	}
+	res.has_content_size_in_bytes = has_content_size_in_bytes;
+	return res;
+}
 string PositionDeleteFile::TryFromJSON(yyjson_val *obj) {
 	string error;
 	error = content_file.TryFromJSON(obj);

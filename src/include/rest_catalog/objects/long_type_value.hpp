@@ -21,6 +21,7 @@ public:
 
 public:
 	static LongTypeValue FromJSON(yyjson_val *obj);
+	LongTypeValue Copy() const;
 
 public:
 	string TryFromJSON(yyjson_val *obj);

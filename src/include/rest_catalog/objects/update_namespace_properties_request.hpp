@@ -21,6 +21,7 @@ public:
 
 public:
 	static UpdateNamespacePropertiesRequest FromJSON(yyjson_val *obj);
+	UpdateNamespacePropertiesRequest Copy() const;
 
 public:
 	string TryFromJSON(yyjson_val *obj);

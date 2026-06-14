@@ -24,6 +24,40 @@ DataFile DataFile::FromJSON(yyjson_val *obj) {
 	return res;
 }
 
+DataFile DataFile::Copy() const {
+	DataFile res;
+	res.content_file = content_file.Copy();
+	res.content = content;
+	if (has_first_row_id) {
+		res.first_row_id = first_row_id;
+	}
+	res.has_first_row_id = has_first_row_id;
+	if (has_column_sizes) {
+		res.column_sizes = column_sizes.Copy();
+	}
+	res.has_column_sizes = has_column_sizes;
+	if (has_value_counts) {
+		res.value_counts = value_counts.Copy();
+	}
+	res.has_value_counts = has_value_counts;
+	if (has_null_value_counts) {
+		res.null_value_counts = null_value_counts.Copy();
+	}
+	res.has_null_value_counts = has_null_value_counts;
+	if (has_nan_value_counts) {
+		res.nan_value_counts = nan_value_counts.Copy();
+	}
+	res.has_nan_value_counts = has_nan_value_counts;
+	if (has_lower_bounds) {
+		res.lower_bounds = lower_bounds.Copy();
+	}
+	res.has_lower_bounds = has_lower_bounds;
+	if (has_upper_bounds) {
+		res.upper_bounds = upper_bounds.Copy();
+	}
+	res.has_upper_bounds = has_upper_bounds;
+	return res;
+}
 string DataFile::TryFromJSON(yyjson_val *obj) {
 	string error;
 	error = content_file.TryFromJSON(obj);

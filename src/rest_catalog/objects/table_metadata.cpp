@@ -24,6 +24,119 @@ TableMetadata TableMetadata::FromJSON(yyjson_val *obj) {
 	return res;
 }
 
+TableMetadata TableMetadata::Copy() const {
+	TableMetadata res;
+	res.format_version = format_version;
+	res.table_uuid = table_uuid;
+	if (has_location) {
+		res.location = location;
+	}
+	res.has_location = has_location;
+	if (has_last_updated_ms) {
+		res.last_updated_ms = last_updated_ms;
+	}
+	res.has_last_updated_ms = has_last_updated_ms;
+	if (has_next_row_id) {
+		res.next_row_id = next_row_id;
+	}
+	res.has_next_row_id = has_next_row_id;
+	if (has_properties) {
+		for (auto &entry : properties) {
+			res.properties.emplace(entry.first, entry.second);
+		}
+	}
+	res.has_properties = has_properties;
+	if (has_schemas) {
+		res.schemas.reserve(schemas.size());
+		for (auto &item : schemas) {
+			res.schemas.emplace_back(item.Copy());
+		}
+	}
+	res.has_schemas = has_schemas;
+	if (has_current_schema_id) {
+		res.current_schema_id = current_schema_id;
+	}
+	res.has_current_schema_id = has_current_schema_id;
+	if (has_last_column_id) {
+		res.last_column_id = last_column_id;
+	}
+	res.has_last_column_id = has_last_column_id;
+	if (has_partition_specs) {
+		res.partition_specs.reserve(partition_specs.size());
+		for (auto &item : partition_specs) {
+			res.partition_specs.emplace_back(item.Copy());
+		}
+	}
+	res.has_partition_specs = has_partition_specs;
+	if (has_default_spec_id) {
+		res.default_spec_id = default_spec_id;
+	}
+	res.has_default_spec_id = has_default_spec_id;
+	if (has_last_partition_id) {
+		res.last_partition_id = last_partition_id;
+	}
+	res.has_last_partition_id = has_last_partition_id;
+	if (has_sort_orders) {
+		res.sort_orders.reserve(sort_orders.size());
+		for (auto &item : sort_orders) {
+			res.sort_orders.emplace_back(item.Copy());
+		}
+	}
+	res.has_sort_orders = has_sort_orders;
+	if (has_default_sort_order_id) {
+		res.default_sort_order_id = default_sort_order_id;
+	}
+	res.has_default_sort_order_id = has_default_sort_order_id;
+	if (has_encryption_keys) {
+		res.encryption_keys.reserve(encryption_keys.size());
+		for (auto &item : encryption_keys) {
+			res.encryption_keys.emplace_back(item.Copy());
+		}
+	}
+	res.has_encryption_keys = has_encryption_keys;
+	if (has_snapshots) {
+		res.snapshots.reserve(snapshots.size());
+		for (auto &item : snapshots) {
+			res.snapshots.emplace_back(item.Copy());
+		}
+	}
+	res.has_snapshots = has_snapshots;
+	if (has_refs) {
+		res.refs = refs.Copy();
+	}
+	res.has_refs = has_refs;
+	if (has_current_snapshot_id) {
+		res.current_snapshot_id = current_snapshot_id;
+	}
+	res.has_current_snapshot_id = has_current_snapshot_id;
+	if (has_last_sequence_number) {
+		res.last_sequence_number = last_sequence_number;
+	}
+	res.has_last_sequence_number = has_last_sequence_number;
+	if (has_snapshot_log) {
+		res.snapshot_log = snapshot_log.Copy();
+	}
+	res.has_snapshot_log = has_snapshot_log;
+	if (has_metadata_log) {
+		res.metadata_log = metadata_log.Copy();
+	}
+	res.has_metadata_log = has_metadata_log;
+	if (has_statistics) {
+		res.statistics.reserve(statistics.size());
+		for (auto &item : statistics) {
+			res.statistics.emplace_back(item.Copy());
+		}
+	}
+	res.has_statistics = has_statistics;
+	if (has_partition_statistics) {
+		res.partition_statistics.reserve(partition_statistics.size());
+		for (auto &item : partition_statistics) {
+			res.partition_statistics.emplace_back(item.Copy());
+		}
+	}
+	res.has_partition_statistics = has_partition_statistics;
+	return res;
+}
 string TableMetadata::TryFromJSON(yyjson_val *obj) {
 	string error;
 	auto format_version_val = yyjson_obj_get(obj, "format-version");

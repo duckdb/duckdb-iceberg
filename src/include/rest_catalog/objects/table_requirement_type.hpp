@@ -21,6 +21,7 @@ public:
 
 public:
 	static TableRequirementType FromJSON(yyjson_val *obj);
+	TableRequirementType Copy() const;
 
 public:
 	string TryFromJSON(yyjson_val *obj);

@@ -24,6 +24,38 @@ Expression Expression::FromJSON(yyjson_val *obj) {
 	return res;
 }
 
+Expression Expression::Copy() const {
+	Expression res;
+	if (has_true_expression) {
+		res.true_expression = true_expression.Copy();
+	}
+	res.has_true_expression = has_true_expression;
+	if (has_false_expression) {
+		res.false_expression = false_expression.Copy();
+	}
+	res.has_false_expression = has_false_expression;
+	if (has_and_or_expression) {
+		res.and_or_expression = and_or_expression.Copy();
+	}
+	res.has_and_or_expression = has_and_or_expression;
+	if (has_not_expression) {
+		res.not_expression = not_expression.Copy();
+	}
+	res.has_not_expression = has_not_expression;
+	if (has_set_expression) {
+		res.set_expression = set_expression.Copy();
+	}
+	res.has_set_expression = has_set_expression;
+	if (has_literal_expression) {
+		res.literal_expression = literal_expression.Copy();
+	}
+	res.has_literal_expression = has_literal_expression;
+	if (has_unary_expression) {
+		res.unary_expression = unary_expression.Copy();
+	}
+	res.has_unary_expression = has_unary_expression;
+	return res;
+}
 string Expression::TryFromJSON(yyjson_val *obj) {
 	string error;
 	do {

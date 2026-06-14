@@ -26,6 +26,12 @@ MetadataLog::Object4 MetadataLog::Object4::FromJSON(yyjson_val *obj) {
 	return res;
 }
 
+MetadataLog::Object4 MetadataLog::Object4::Copy() const {
+	Object4 res;
+	res.metadata_file = metadata_file;
+	res.timestamp_ms = timestamp_ms;
+	return res;
+}
 string MetadataLog::Object4::TryFromJSON(yyjson_val *obj) {
 	string error;
 	auto metadata_file_val = yyjson_obj_get(obj, "metadata-file");
@@ -64,6 +70,14 @@ MetadataLog MetadataLog::FromJSON(yyjson_val *obj) {
 	return res;
 }
 
+MetadataLog MetadataLog::Copy() const {
+	MetadataLog res;
+	res.value.reserve(value.size());
+	for (auto &item : value) {
+		res.value.emplace_back(item.Copy());
+	}
+	return res;
+}
 string MetadataLog::TryFromJSON(yyjson_val *obj) {
 	string error;
 	if (yyjson_is_arr(obj)) {

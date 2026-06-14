@@ -24,6 +24,7 @@ public:
 
 public:
 	static LiteralExpression FromJSON(yyjson_val *obj);
+	LiteralExpression Copy() const;
 
 public:
 	string TryFromJSON(yyjson_val *obj);

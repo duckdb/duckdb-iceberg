@@ -24,6 +24,7 @@ public:
 
 public:
 	static NotExpression FromJSON(yyjson_val *obj);
+	NotExpression Copy() const;
 
 public:
 	string TryFromJSON(yyjson_val *obj);

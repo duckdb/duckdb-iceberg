@@ -22,6 +22,7 @@ public:
 
 public:
 	static RenameTableRequest FromJSON(yyjson_val *obj);
+	RenameTableRequest Copy() const;
 
 public:
 	string TryFromJSON(yyjson_val *obj);
