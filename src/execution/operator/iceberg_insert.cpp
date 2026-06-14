@@ -348,6 +348,11 @@ void IcebergInsertGlobalState::AddFiles(DataChunk &chunk, const string &table_na
 			if (stats.has_null_count) {
 				data_file.null_value_counts[column_info.id] = stats.null_count;
 			}
+			if (stats.has_num_values) {
+				//! Iceberg 'value_counts' is the total number of values (including nulls). The Parquet writer's
+				//! 'num_values' has the same semantics.
+				data_file.value_counts[column_info.id] = stats.num_values;
+			}
 
 			//! nan_value_counts won't work, we can only indicate if they exist.
 			//! TODO: revisit when duckdb/duckdb can record nan_value_counts

@@ -299,11 +299,20 @@ Value IcebergDataFile::ToValue(const IcebergTableMetadata &table_metadata, const
 		upper_bounds_values.push_back(Value::STRUCT({{"key", child.first}, {"value", child.second}}));
 	}
 	children.push_back(Value::MAP(LogicalType::STRUCT(bounds_types), upper_bounds_values));
-	// null_value_counts
+
+	// counts struct (shared shape for value_counts / null_value_counts)
 	child_list_t<LogicalType> null_value_count_types;
 	null_value_count_types.emplace_back("key", LogicalType::INTEGER);
 	null_value_count_types.emplace_back("value", LogicalType::BIGINT);
 
+	// value_counts
+	vector<Value> value_counts_values;
+	for (auto &child : value_counts) {
+		value_counts_values.push_back(Value::STRUCT({{"key", child.first}, {"value", child.second}}));
+	}
+	children.push_back(Value::MAP(LogicalType::STRUCT(null_value_count_types), value_counts_values));
+
+	// null_value_counts
 	vector<Value> null_value_counts_values;
 	for (auto &child : null_value_counts) {
 		null_value_counts_values.push_back(Value::STRUCT({{"key", child.first}, {"value", child.second}}));
@@ -543,12 +552,28 @@ idx_t WriteToFile(const IcebergTableMetadata &table_metadata, const IcebergManif
 
 	data_file_field_ids.emplace_back("upper_bounds", Value::STRUCT(upper_bound_record_field_ids));
 
-	// null_value_counts_struct
+	// counts struct (shared shape for value_counts / null_value_counts)
 	child_list_t<LogicalType> null_value_counts_fields;
 	null_value_counts_fields.emplace_back("key", LogicalType::INTEGER);
 	null_value_counts_fields.emplace_back("value", LogicalType::BIGINT);
 
-	// null_value_counts: map<int, binary>
+	// value_counts: map<int, long>
+	children.emplace_back("value_counts", LogicalType::MAP(LogicalType::STRUCT(null_value_counts_fields)));
+
+	child_list_t<Value> value_counts_record_field_ids;
+	value_counts_record_field_ids.emplace_back("__duckdb_field_id", Value::INTEGER(VALUE_COUNTS));
+	child_list_t<Value> value_counts_key_field;
+	value_counts_key_field.emplace_back("__duckdb_field_id", Value::INTEGER(VALUE_COUNTS_KEY));
+	value_counts_key_field.emplace_back("__duckdb_nullable", Value::BOOLEAN(false));
+	value_counts_record_field_ids.emplace_back("key", Value::STRUCT(value_counts_key_field));
+	child_list_t<Value> value_counts_value_field;
+	value_counts_value_field.emplace_back("__duckdb_field_id", Value::INTEGER(VALUE_COUNTS_VALUE));
+	value_counts_value_field.emplace_back("__duckdb_nullable", Value::BOOLEAN(false));
+	value_counts_record_field_ids.emplace_back("value", Value::STRUCT(value_counts_value_field));
+
+	data_file_field_ids.emplace_back("value_counts", Value::STRUCT(value_counts_record_field_ids));
+
+	// null_value_counts: map<int, long>
 	children.emplace_back("null_value_counts", LogicalType::MAP(LogicalType::STRUCT(null_value_counts_fields)));
 
 	child_list_t<Value> null_values_counts_record_field_ids;

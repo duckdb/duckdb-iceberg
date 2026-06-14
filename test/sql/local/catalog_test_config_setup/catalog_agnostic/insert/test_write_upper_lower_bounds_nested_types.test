@@ -111,3 +111,10 @@ phone_numbers	VARCHAR[]	NULL	NULL
 street	VARCHAR	123 Main St	123 Main St
 value	VARCHAR	gold	30
 zip	VARCHAR	12345	12345
+
+# value_counts are written to the manifest on INSERT (one row -> value_count of 1 for the top-level columns)
+query II
+select column_name, value_count from iceberg_column_stats(my_datalake.default.duckdb_nested_types) where column_name in ('id', 'name') order by column_name;
+----
+id	1
+name	1
