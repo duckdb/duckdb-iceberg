@@ -1,0 +1,48 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/delete/test_deletion_vector_is_valid_puffin.test
+# description: A v3 DELETE must write its deletion vector as a valid Puffin file (leading + trailing PFA1 magic + footer), not a bare deletion-vector blob
+# group: [delete]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.dv_puffin_container;
+
+statement ok
+CREATE TABLE my_datalake.default.dv_puffin_container (id INTEGER, data VARCHAR) WITH ('format-version' = 3);
+
+statement ok
+INSERT INTO my_datalake.default.dv_puffin_container VALUES (1, 'a'), (2, 'b'), (3, 'c'), (4, 'd'), (5, 'e');
+
+# A v3 DELETE writes a deletion vector (a Puffin file) for the affected data file.
+statement ok
+DELETE FROM my_datalake.default.dv_puffin_container WHERE id IN (2, 4);
+
+# Exactly one deletion-vector file (POSITION_DELETES) is referenced by the current snapshot.
+query I
+SELECT count(*) FROM iceberg_metadata(my_datalake.default.dv_puffin_container) WHERE content = 'POSITION_DELETES';
+----
+1
+
+# Resolve the deletion-vector file path from the manifest.
+statement ok
+set variable dv_path = (
+    SELECT file_path FROM iceberg_metadata(my_datalake.default.dv_puffin_container)
+    WHERE content = 'POSITION_DELETES'
+    LIMIT 1
+);
+
+# The deletion-vector file must be a valid Puffin file: it begins AND ends with the Puffin
+# magic "PFA1" (0x50 0x46 0x41 0x31). A bare deletion-vector blob (the bug this guards
+# against) would instead begin with the blob's 4-byte big-endian length.
+query II
+SELECT content[1:4]::VARCHAR, content[size - 3:size]::VARCHAR FROM read_blob(getvariable('dv_path'));
+----
+PFA1	PFA1

@@ -13,6 +13,7 @@
       "reason": "V3 tests, not yet supported with Nessie",
       "paths": [
         "test/sql/local/catalog_test_config_setup/catalog_agnostic/delete/test_delete_from_v3_table.test",
+        "test/sql/local/catalog_test_config_setup/catalog_agnostic/delete/test_deletion_vector_is_valid_puffin.test",
         "test/sql/local/catalog_test_config_setup/catalog_agnostic/insert/test_insert_to_v3_tables.test",
         "test/sql/local/catalog_test_config_setup/catalog_agnostic/insert/test_transactional_insert_v3.test",
         "test/sql/local/catalog_test_config_setup/catalog_agnostic/table_properties/test_many_table_properties.test",

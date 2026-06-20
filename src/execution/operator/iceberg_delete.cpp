@@ -132,26 +132,30 @@ void IcebergDelete::WriteDeletionVectorFile(ClientContext &context, IcebergDelet
 		bitmap.add(low_bits);
 	}
 
-	// Serialize to blob
+	// Serialize the deletion vector to a blob, then wrap it in a valid Puffin file
+	// container (Magic + Blob + Footer) so the output is a spec-compliant Puffin file
+	// rather than a bare blob. The blob is placed at offset 4, after the leading magic.
 	auto blob_data = IcebergDeletionVectorData::ToBlob(bitmaps);
+	auto puffin_file = IcebergDeletionVectorData::ToPuffinFile(blob_data, filename, sorted_deletes.size());
 
-	// Write blob to file
+	// Write the Puffin file
 	auto &fs = FileSystem::GetFileSystem(context);
 	auto file_handle =
 	    fs.OpenFile(delete_file_path, FileOpenFlags::FILE_FLAGS_WRITE | FileOpenFlags::FILE_FLAGS_FILE_CREATE);
-	file_handle->Write(blob_data.data(), blob_data.size());
+	file_handle->Write(puffin_file.data(), puffin_file.size());
 	file_handle->Close();
 
 	delete_file.file_name = delete_file_path;
 	delete_file.file_format = "puffin";
 	delete_file.delete_count = sorted_deletes.size();
-	delete_file.content_offset = 0;
+	// The deletion-vector blob is written immediately after the 4-byte leading Puffin magic.
+	delete_file.content_offset = 4;
 	delete_file.content_size_in_bytes = blob_data.size();
-	delete_file.file_size_bytes = delete_file.content_size_in_bytes.GetIndex();
+	delete_file.file_size_bytes = puffin_file.size();
 	DUCKDB_LOG(context, IcebergLogType,
 	           "Iceberg DELETE, wrote deletion_vector_file '%s' for data_file '%s', delete_count=%llu, "
 	           "file_size=%llu bytes",
-	           delete_file_path, filename, sorted_deletes.size(), blob_data.size());
+	           delete_file_path, filename, sorted_deletes.size(), puffin_file.size());
 	global_state.written_files.emplace(filename, std::move(delete_file));
 }
 

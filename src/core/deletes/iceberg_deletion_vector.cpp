@@ -5,6 +5,7 @@
 
 #include "planning/iceberg_multi_file_list.hpp"
 #include "catalog/rest/catalog_entry/table/iceberg_table_information.hpp"
+#include "catalog/rest/api/catalog_utils.hpp"
 
 namespace duckdb {
 
@@ -299,6 +300,72 @@ vector<data_t> IcebergDeletionVectorData::ToBlob(const unordered_map<int32_t, ro
 	// Write CRC checksum (placeholder - set to 0)
 	Store<uint32_t>(BSwap(checksum), blob_ptr);
 	return blob_output;
+}
+
+vector<data_t> IcebergDeletionVectorData::ToPuffinFile(const vector<data_t> &blob, const string &referenced_data_file,
+                                                       idx_t cardinality) {
+	//! Wrap a `deletion-vector-v1` blob in a valid Puffin file container.
+	//! https://iceberg.apache.org/puffin-spec/
+	//! File layout:   Magic | Blob | Footer
+	//! Footer layout: Magic | FooterPayload (JSON) | FooterPayloadSize (4 bytes, little-endian) |
+	//!                Flags (4 bytes) | Magic
+	constexpr data_t PUFFIN_MAGIC[4] = {0x50, 0x46, 0x41, 0x31}; //! "PFA1"
+	const idx_t blob_offset = sizeof(PUFFIN_MAGIC);
+
+	//! Build the FooterPayload (FileMetadata). Per the spec, for `deletion-vector-v1` the blob's
+	//! `snapshot-id` and `sequence-number` must be -1, and it must carry the `referenced-data-file`
+	//! and `cardinality` properties. The blob is not compressed (no `compression-codec`).
+	std::unique_ptr<yyjson_mut_doc, YyjsonDocDeleter> doc_p(yyjson_mut_doc_new(nullptr));
+	auto doc = doc_p.get();
+	auto root = yyjson_mut_obj(doc);
+	yyjson_mut_doc_set_root(doc, root);
+	auto blobs = yyjson_mut_arr(doc);
+	yyjson_mut_obj_add_val(doc, root, "blobs", blobs);
+	auto blob_meta = yyjson_mut_obj(doc);
+	yyjson_mut_arr_add_val(blobs, blob_meta);
+	yyjson_mut_obj_add_val(doc, blob_meta, "type", yyjson_mut_str(doc, "deletion-vector-v1"));
+	yyjson_mut_obj_add_val(doc, blob_meta, "fields", yyjson_mut_arr(doc));
+	yyjson_mut_obj_add_val(doc, blob_meta, "snapshot-id", yyjson_mut_int(doc, -1));
+	yyjson_mut_obj_add_val(doc, blob_meta, "sequence-number", yyjson_mut_int(doc, -1));
+	yyjson_mut_obj_add_val(doc, blob_meta, "offset", yyjson_mut_int(doc, static_cast<int64_t>(blob_offset)));
+	yyjson_mut_obj_add_val(doc, blob_meta, "length", yyjson_mut_int(doc, static_cast<int64_t>(blob.size())));
+	auto props = yyjson_mut_obj(doc);
+	yyjson_mut_obj_add_val(doc, blob_meta, "properties", props);
+	yyjson_mut_obj_add_strcpy(doc, props, "referenced-data-file", referenced_data_file.c_str());
+	yyjson_mut_obj_add_strcpy(doc, props, "cardinality", std::to_string(cardinality).c_str());
+	auto footer_payload = ICUtils::JsonToString(std::move(doc_p));
+
+	const idx_t footer_payload_size = footer_payload.size();
+	const idx_t total_size = blob_offset + blob.size() + sizeof(PUFFIN_MAGIC) + footer_payload_size +
+	                         sizeof(int32_t) /* FooterPayloadSize */ + sizeof(uint32_t) /* Flags */ +
+	                         sizeof(PUFFIN_MAGIC);
+
+	vector<data_t> file_output;
+	file_output.resize(total_size);
+	data_ptr_t ptr = file_output.data();
+
+	//! Magic
+	memcpy(ptr, PUFFIN_MAGIC, sizeof(PUFFIN_MAGIC));
+	ptr += sizeof(PUFFIN_MAGIC);
+	//! Blob (starts at blob_offset == 4)
+	memcpy(ptr, blob.data(), blob.size());
+	ptr += blob.size();
+	//! Footer: leading Magic
+	memcpy(ptr, PUFFIN_MAGIC, sizeof(PUFFIN_MAGIC));
+	ptr += sizeof(PUFFIN_MAGIC);
+	//! Footer: FooterPayload (uncompressed UTF-8 JSON)
+	memcpy(ptr, footer_payload.c_str(), footer_payload_size);
+	ptr += footer_payload_size;
+	//! Footer: FooterPayloadSize (4-byte signed int, little-endian)
+	Store<int32_t>(static_cast<int32_t>(footer_payload_size), ptr);
+	ptr += sizeof(int32_t);
+	//! Footer: Flags (4 bytes; bit 0 of byte 0 = FooterPayload compressed -> 0 == uncompressed)
+	Store<uint32_t>(0, ptr);
+	ptr += sizeof(uint32_t);
+	//! Footer: trailing Magic
+	memcpy(ptr, PUFFIN_MAGIC, sizeof(PUFFIN_MAGIC));
+
+	return file_output;
 }
 
 } // namespace duckdb

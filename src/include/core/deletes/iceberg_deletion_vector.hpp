@@ -18,6 +18,11 @@ public:
 	static shared_ptr<IcebergDeletionVectorData> FromBlob(const BoundIcebergManifestEntry &entry, data_ptr_t blob_start,
 	                                                      idx_t blob_length);
 	static vector<data_t> ToBlob(const unordered_map<int32_t, roaring::Roaring> &bitmaps);
+	//! Wrap a `deletion-vector-v1` blob (from ToBlob) in a spec-compliant Puffin file
+	//! container: leading magic + blob + footer. The blob is placed at offset 4 (right
+	//! after the leading magic), so the manifest entry's content_offset must be set to 4.
+	static vector<data_t> ToPuffinFile(const vector<data_t> &blob, const string &referenced_data_file,
+	                                   idx_t cardinality);
 
 public:
 	unique_ptr<DeleteFilter> ToFilter() const override;
