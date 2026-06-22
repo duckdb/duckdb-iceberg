@@ -530,6 +530,8 @@ unique_ptr<Catalog> IcebergCatalog::Attach(optional_ptr<StorageExtensionInfo> st
 	string endpoint_type_string;
 	string authorization_type_string;
 	string access_mode_string;
+	bool lake_formation_data_filters = false;
+	string lf_session_tag;
 	case_insensitive_set_t set_by_attach_options;
 	//! First handle generic attach options
 	for (auto &entry : info.options) {
@@ -579,6 +581,10 @@ unique_ptr<Catalog> IcebergCatalog::Attach(optional_ptr<StorageExtensionInfo> st
 				throw ConversionException("Could not get interval information from %s", interval_option.ToString());
 			}
 			attach_options.max_table_staleness_micros = interval_in_micros;
+		} else if (lower_name == "lake_formation_data_filters") {
+			lake_formation_data_filters = entry.second.DefaultCastAs(LogicalType::BOOLEAN).GetValue<bool>();
+		} else if (lower_name == "lf_session_tag") {
+			lf_session_tag = entry.second.ToString();
 		} else {
 			attach_options.options.emplace(std::move(entry));
 		}
@@ -617,11 +623,33 @@ unique_ptr<Catalog> IcebergCatalog::Attach(optional_ptr<StorageExtensionInfo> st
 			attach_options.access_mode = IRCAccessDelegationMode::VENDED_CREDENTIALS;
 		} else if (access_mode_string == "none") {
 			attach_options.access_mode = IRCAccessDelegationMode::NONE;
+		} else if (access_mode_string == "lf_filtered") {
+			attach_options.access_mode = IRCAccessDelegationMode::LF_FILTERED;
 		} else {
 			throw InvalidInputException(
-			    "Unrecognized access mode '%s'. Supported options are 'vended_credentials' and 'none'",
+			    "Unrecognized access mode '%s'. Supported options are 'vended_credentials', 'none', and 'lf_filtered'",
 			    access_mode_string);
 		}
+	}
+	if (lake_formation_data_filters) {
+		attach_options.lake_formation_data_filters = true;
+		attach_options.access_mode = IRCAccessDelegationMode::LF_FILTERED;
+	}
+	if (attach_options.access_mode == IRCAccessDelegationMode::LF_FILTERED) {
+		// LF data filters are a Glue-only path: catalog REST still talks to the Glue
+		// Iceberg endpoint, but object access goes through LF temporary credentials.
+		if (endpoint_type == IcebergEndpointType::AWS_S3TABLES) {
+			throw InvalidConfigurationException(
+			    "LAKE_FORMATION_DATA_FILTERS is only supported with ENDPOINT_TYPE 'GLUE'");
+		}
+		if (!access_mode_string.empty() && access_mode_string == "vended_credentials") {
+			throw InvalidConfigurationException(
+			    "LAKE_FORMATION_DATA_FILTERS cannot be combined with access_delegation_mode 'vended_credentials'");
+		}
+		if (lf_session_tag.empty()) {
+			throw InvalidConfigurationException("LF_SESSION_TAG is required when LAKE_FORMATION_DATA_FILTERS is enabled");
+		}
+		attach_options.lf_session_tag = std::move(lf_session_tag);
 	}
 	if (attach_options.authorization_type == IcebergAuthorizationType::INVALID) {
 		attach_options.authorization_type = IcebergAuthorizationType::OAUTH2;

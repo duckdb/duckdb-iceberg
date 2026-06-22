@@ -1,0 +1,11 @@
+{
+  "description": "Lake Formation filtered Glue catalog for cloud LF integration tests.",
+  "statically_loaded_extensions": [
+    "core_functions",
+    "parquet",
+    "avro",
+    "iceberg",
+    "httpfs",
+    "aws"
+  ]
+}

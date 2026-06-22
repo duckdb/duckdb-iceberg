@@ -36,6 +36,9 @@
 #include "planning/metadata_io/manifest/iceberg_manifest_reader.hpp"
 #include "planning/metadata_io/manifest_list/iceberg_manifest_list_reader.hpp"
 #include "planning/metadata_io/manifest_list/bound_iceberg_manifest_list_entry.hpp"
+#include "catalog/rest/catalog_entry/table/iceberg_table_entry.hpp"
+#include "catalog/rest/iceberg_catalog.hpp"
+#include "catalog/rest/storage/iceberg_authorization.hpp"
 
 namespace duckdb {
 
@@ -992,6 +995,16 @@ OpenFileInfo IcebergMultiFileList::GetFileInternal(idx_t file_id, lock_guard<mut
 		auto &fs = FileSystem::GetFileSystem(context);
 		file_path = IcebergUtils::GetFullPath(iceberg_path, path, fs);
 	}
+
+#ifndef EMSCRIPTEN
+	if (table && table->table_info.catalog.attach_options.access_mode == IRCAccessDelegationMode::LF_FILTERED &&
+	    !data_file.partition_info.empty()) {
+		// Table-level LF credentials may not cover every partition's S3 prefix; refresh
+		// secrets lazily as we discover files in each partition during manifest walks.
+		table->table_info.EnsureLakeFormationPartitionCredentials(context, data_file.partition_info, file_path);
+	}
+#endif
+
 	OpenFileInfo res(file_path);
 	auto extended_info = make_shared_ptr<ExtendedOpenFileInfo>();
 	extended_info->options["file_size"] = Value::UBIGINT(data_file.file_size_in_bytes);

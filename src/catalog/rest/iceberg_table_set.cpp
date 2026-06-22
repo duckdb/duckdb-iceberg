@@ -44,6 +44,13 @@ bool IcebergTableSet::FillEntry(ClientContext &context, IcebergTableInformation 
 		if (cached_result) {
 			// Use the cached result instead of making a new request
 			table.InitializeFromLoadTableResult(*cached_result->load_table_result);
+#ifndef EMSCRIPTEN
+			if (ic_catalog.attach_options.access_mode == IRCAccessDelegationMode::LF_FILTERED) {
+				// IRC cache has Iceberg metadata only; LF policy is caller-specific and
+				// must be refreshed from Glue even when the table load is served from cache.
+				table.LoadLakeFormationPolicy(context);
+			}
+#endif
 			return true;
 		}
 	}
@@ -75,6 +82,12 @@ bool IcebergTableSet::FillEntry(ClientContext &context, IcebergTableInformation 
 		auto &load_table_result = *cached_table_result->load_table_result;
 		table.InitializeFromLoadTableResult(load_table_result);
 	}
+#ifndef EMSCRIPTEN
+	if (ic_catalog.attach_options.access_mode == IRCAccessDelegationMode::LF_FILTERED) {
+		// LF policy is caller-specific and not included in IRC GetTable responses.
+		table.LoadLakeFormationPolicy(context);
+	}
+#endif
 	return true;
 }
 

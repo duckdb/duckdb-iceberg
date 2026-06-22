@@ -5,9 +5,15 @@
 
 #include "catalog/rest/catalog_entry/table/iceberg_table_entry.hpp"
 #include "core/metadata/manifest/iceberg_manifest.hpp"
+#include "core/metadata/manifest/iceberg_manifest.hpp"
 #include "core/metadata/iceberg_table_metadata.hpp"
 #include "catalog/rest/transaction/iceberg_transaction_data.hpp"
 #include "rest_catalog/objects/storage_credential.hpp"
+#include "catalog/aws/lakeformation/lf_types.hpp"
+
+#ifndef EMSCRIPTEN
+#include "catalog/aws/lakeformation/lf_client.hpp"
+#endif
 
 namespace duckdb {
 class IcebergTableSchema;
@@ -52,6 +58,12 @@ public:
 	                                               const IcebergTableSchema &schema, int32_t spec_id,
 	                                               idx_t base_partition_field_id);
 	IRCAPITableCredentials GetVendedCredentials(ClientContext &context);
+	IRCAPITableCredentials GetLakeFormationCredentials(ClientContext &context,
+	                                                   optional_ptr<const vector<Value>> partition_values = nullptr);
+	void LoadLakeFormationPolicy(ClientContext &context);
+	void EnsureLakeFormationPartitionCredentials(ClientContext &context,
+	                                             const vector<IcebergPartitionInfo> &partition_info,
+	                                             const string &file_path);
 	const string &BaseFilePath() const;
 
 	IcebergTransactionData &GetOrCreateTransactionData(IcebergTransaction &transaction);
@@ -90,6 +102,11 @@ public:
 	// dummy entry to hold existence of a table, but no schema versions
 	unique_ptr<IcebergTableEntry> dummy_entry;
 	unique_ptr<IcebergTransactionData> transaction_data;
+
+	LakeFormationTablePolicy lf_policy;
+#ifndef EMSCRIPTEN
+	LakeFormationTableIdentifiers lf_identifiers;
+#endif
 };
 
 } // namespace duckdb

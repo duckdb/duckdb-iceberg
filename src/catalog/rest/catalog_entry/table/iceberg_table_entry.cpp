@@ -22,6 +22,7 @@
 #include "rest_catalog/objects/list.hpp"
 #include "catalog/rest/catalog_entry/table/iceberg_table_information.hpp"
 #include "common/iceberg_default.hpp"
+#include "catalog/aws/lakeformation/lf_filter_parser.hpp"
 
 namespace duckdb {
 class OAuth2Authorization;
@@ -50,6 +51,18 @@ void AddHTTPSecretsToOptions(SecretEntry &http_secret_entry, case_insensitive_ma
 void IcebergTableEntry::PrepareIcebergScanFromEntry(ClientContext &context) const {
 	auto &ic_catalog = catalog.Cast<IcebergCatalog>();
 	auto &secret_manager = SecretManager::Get(context);
+
+	if (ic_catalog.attach_options.access_mode == IRCAccessDelegationMode::LF_FILTERED) {
+#ifndef EMSCRIPTEN
+		// LF mode replaces catalog vended credentials: exchange the caller's Glue/LF
+		// identity for scoped S3 keys before the scan touches object storage.
+		auto table_credentials = table_info.GetLakeFormationCredentials(context);
+		if (table_credentials.config) {
+			(void)secret_manager.CreateSecret(context, *table_credentials.config);
+		}
+#endif
+		return;
+	}
 
 	if (ic_catalog.attach_options.access_mode != IRCAccessDelegationMode::VENDED_CREDENTIALS) {
 		// assume secret already exists
@@ -248,6 +261,23 @@ TableFunction IcebergTableEntry::GetScanFunction(ClientContext &context, unique_
 	D_ASSERT(file_bind_data.file_list);
 	auto &ic_file_list = file_bind_data.file_list->Cast<IcebergMultiFileList>();
 	ic_file_list.SetTable(this);
+
+#ifndef EMSCRIPTEN
+	auto &ic_catalog = table_info.catalog.Cast<IcebergCatalog>();
+	if (ic_catalog.attach_options.access_mode == IRCAccessDelegationMode::LF_FILTERED &&
+	    !table_info.lf_policy.row_filter_sql.empty()) {
+		// Glue returns row-filter SQL as a string; compile it into mandatory scan filters
+		// so user predicates cannot widen the LF grant (also reinforced in the optimizer).
+		auto filter_result =
+		    ParseLakeFormationRowFilter(context, table_info.lf_policy.row_filter_sql, iceberg_schema);
+		scan_info->mandatory_lf_filter_parsed = std::move(filter_result.parsed_filter);
+		scan_info->mandatory_lf_filter_bound = std::move(filter_result.bound_filter);
+		for (auto &entry : filter_result.table_filters) {
+			ic_file_list.table_filters.PushFilter(entry.first, entry.second->Copy());
+		}
+	}
+#endif
+
 	return iceberg_scan_function;
 }
 

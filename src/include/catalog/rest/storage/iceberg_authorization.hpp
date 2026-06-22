@@ -13,7 +13,7 @@ enum class IcebergEndpointType : uint8_t { AWS_S3TABLES, AWS_GLUE, INVALID };
 
 enum class IcebergAuthorizationType : uint8_t { OAUTH2, SIGV4, NONE, INVALID };
 
-enum class IRCAccessDelegationMode : uint8_t { NONE, VENDED_CREDENTIALS };
+enum class IRCAccessDelegationMode : uint8_t { NONE, VENDED_CREDENTIALS, LF_FILTERED };
 
 struct IcebergAttachOptions {
 	string endpoint;
@@ -37,6 +37,8 @@ struct IcebergAttachOptions {
 	unordered_map<string, Value> options;
 	// max staleness for cached table metadata in minutes (optional - if not set, always request fresh metadata)
 	optional_idx max_table_staleness_micros;
+	bool lake_formation_data_filters = false;
+	string lf_session_tag;
 };
 
 //! Hold the pre-initialized HTTPClient for a given connection

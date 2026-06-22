@@ -1,0 +1,41 @@
+# name: test/sql/cloud/lakeformation/test_lf_bypass_attempt.test
+# description: User WHERE cannot bypass mandatory Lake Formation row filter
+# group: [lakeformation]
+
+require-env ICEBERG_LF_REMOTE_AVAILABLE
+
+require-env LAKEFORMATION_TEST_CONFIG_SETUP
+
+require-env AWS_ACCESS_KEY_ID
+
+require-env AWS_SECRET_ACCESS_KEY
+
+require-env ICEBERG_LF_REGION
+
+require-env ICEBERG_LF_CATALOG_ID
+
+require-env ICEBERG_LF_TEST_ROLE_ARN
+
+require-env ICEBERG_LF_SESSION_TAG
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+require aws
+
+include test/sql/cloud/lakeformation/lf_cloud_setup.inc
+
+query I
+SELECT count(*) FROM lf_datalake.test_inserts.basic_insert_test WHERE id = 999;
+----
+0
+
+query II
+SELECT count(*) FROM lf_datalake.test_inserts.basic_insert_test;
+----
+3

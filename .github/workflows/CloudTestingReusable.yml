@@ -111,6 +111,16 @@ jobs:
         run: |
           python3 scripts/create_s3_insert_table.py --action=delete-and-create --catalogs=s3tables,r2,glue
 
+      - name: Set up Lake Formation data filters
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.S3_ICEBERG_TEST_USER_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.S3_ICEBERG_TEST_USER_SECRET }}
+          AWS_DEFAULT_REGION: ${{ secrets.S3_ICEBERG_TEST_USER_REGION }}
+          AWS_REGION: ${{ secrets.S3_ICEBERG_TEST_USER_REGION }}
+          ICEBERG_LF_REGION: ${{ secrets.S3_ICEBERG_TEST_USER_REGION }}
+        run: |
+          python3 scripts/setup_lf_data_filters.py --action=create
+
       - name: Run mitmproxy
         shell: bash
         run: |
@@ -157,6 +167,20 @@ jobs:
           NO_REGION_SET: 1
         run: |
           ./build/release/test/unittest --order lex test/sql/cloud/snowflake/no_vended_credentials_region.test
+
+      - name: Test Lake Formation cloud tests
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.S3_ICEBERG_TEST_USER_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.S3_ICEBERG_TEST_USER_SECRET }}
+          AWS_DEFAULT_REGION: ${{ secrets.S3_ICEBERG_TEST_USER_REGION }}
+          ICEBERG_LF_REMOTE_AVAILABLE: 1
+          LAKEFORMATION_TEST_CONFIG_SETUP: 1
+          ICEBERG_LF_REGION: ${{ secrets.S3_ICEBERG_TEST_USER_REGION }}
+          ICEBERG_LF_CATALOG_ID: 840140254803:s3tablescatalog/duckdblabs-iceberg-testing
+          ICEBERG_LF_TEST_ROLE_ARN: arn:aws:iam::840140254803:role/pyiceberg-etl-role
+          ICEBERG_LF_SESSION_TAG: duckdb
+        run: |
+          ./build/release/test/unittest --order lex "$PWD/test/sql/cloud/lakeformation/*" --test-config test/configs/lakeformation.json
 
       - name: File issue if error
         if: ${{ contains(github.ref_name, 'main') && failure() }}

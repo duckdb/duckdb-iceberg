@@ -21,6 +21,15 @@ public:
 	void VisitOperator(unique_ptr<LogicalOperator> &op);
 };
 
+class LakeFormationRowFilterOptimizer {
+public:
+	ClientContext &context;
+
+public:
+	LakeFormationRowFilterOptimizer(ClientContext &context);
+	void VisitOperator(unique_ptr<LogicalOperator> &op);
+};
+
 class IcebergOptimizer {
 public:
 	static OptimizerExtension Create();

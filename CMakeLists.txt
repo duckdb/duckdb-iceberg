@@ -114,6 +114,16 @@ set(EXTENSION_SOURCES
 	src/storage/statistics/iceberg_statistics.cpp
 )
 
+if(NOT CMAKE_SYSTEM_NAME STREQUAL "Emscripten")
+	list(APPEND EXTENSION_SOURCES
+		src/catalog/aws/lakeformation/lf_client.cpp
+		src/catalog/aws/lakeformation/lf_credentials.cpp
+		src/catalog/aws/lakeformation/lf_table_metadata.cpp
+		src/catalog/aws/lakeformation/lf_filter_parser.cpp
+		src/catalog/aws/lakeformation/lf_credential_cache.cpp
+	)
+endif()
+
 add_subdirectory(src/rest_catalog/objects)
 
 add_library(${EXTENSION_NAME} STATIC ${EXTENSION_SOURCES} ${ALL_OBJECT_FILES})
@@ -129,7 +139,7 @@ build_loadable_extension(${TARGET_NAME} ${PARAMETERS} ${EXTENSION_SOURCES} ${ALL
 
 if(NOT CMAKE_SYSTEM_NAME STREQUAL "Emscripten")
     find_package(CURL REQUIRED)
-    find_package(AWSSDK REQUIRED COMPONENTS core sso sts)
+    find_package(AWSSDK REQUIRED COMPONENTS core glue lakeformation sso sts)
     include_directories(${CURL_INCLUDE_DIRS})
 endif()
 

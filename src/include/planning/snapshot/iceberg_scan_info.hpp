@@ -9,6 +9,9 @@
 #include "catalog/rest/transaction/iceberg_transaction_data.hpp"
 #include "planning/snapshot/iceberg_snapshot_scan_info.hpp"
 
+#include "duckdb/parser/parsed_expression.hpp"
+#include "duckdb/planner/expression.hpp"
+
 namespace duckdb {
 
 struct IcebergTransactionData;
@@ -38,6 +41,9 @@ public:
 
 	IcebergSnapshotScanInfo snapshot_info;
 	const IcebergTableSchema &schema;
+
+	unique_ptr<ParsedExpression> mandatory_lf_filter_parsed;
+	unique_ptr<Expression> mandatory_lf_filter_bound;
 };
 
 } // namespace duckdb

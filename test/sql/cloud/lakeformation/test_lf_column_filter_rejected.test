@@ -1,0 +1,36 @@
+# name: test/sql/cloud/lakeformation/test_lf_column_filter_rejected.test
+# description: Column-restricted Lake Formation grant returns v1 not-implemented error
+# group: [lakeformation]
+
+require-env ICEBERG_LF_REMOTE_AVAILABLE
+
+require-env LAKEFORMATION_TEST_CONFIG_SETUP
+
+require-env AWS_ACCESS_KEY_ID
+
+require-env AWS_SECRET_ACCESS_KEY
+
+require-env ICEBERG_LF_REGION
+
+require-env ICEBERG_LF_CATALOG_ID
+
+require-env ICEBERG_LF_TEST_ROLE_ARN
+
+require-env ICEBERG_LF_SESSION_TAG
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+require aws
+
+include test/sql/cloud/lakeformation/lf_cloud_setup.inc
+
+statement error
+SELECT * FROM lf_datalake.test_inserts.basic_insert_test;
+----
+<REGEX>:.*(column-level permissions are not supported|cell-level data filters are not supported).*

@@ -8,6 +8,8 @@
 		{
 			"name": "aws-sdk-cpp",
 			"features": [
+				"glue",
+				"lakeformation",
 				"sso",
 				"sts",
 				"identity-management",

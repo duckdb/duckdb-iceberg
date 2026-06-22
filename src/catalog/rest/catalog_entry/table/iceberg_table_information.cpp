@@ -22,6 +22,12 @@
 #include "catalog/rest/storage/authorization/sigv4_utils.hpp"
 #include "core/expression/iceberg_transform.hpp"
 #include "duckdb/parser/column_definition.hpp"
+#include "duckdb/main/secret/secret_manager.hpp"
+#include "duckdb/transaction/meta_transaction.hpp"
+
+#ifndef EMSCRIPTEN
+#include "catalog/aws/lakeformation/lf_client.hpp"
+#endif
 
 #include <climits>
 
@@ -718,5 +724,173 @@ void IcebergTableInformation::InitializeFromLoadTableResult(const rest_api_objec
 		}
 	}
 }
+
+#ifndef EMSCRIPTEN
+
+static vector<Value> PartitionValuesFromInfo(const IcebergTableMetadata &metadata,
+                                             const vector<IcebergPartitionInfo> &partition_info) {
+	vector<Value> result;
+	if (partition_info.empty()) {
+		return result;
+	}
+	auto spec_id = metadata.default_spec_id;
+	auto spec_it = metadata.partition_specs.find(spec_id);
+	if (spec_it == metadata.partition_specs.end()) {
+		throw InvalidInputException("Partition spec %d not found in table metadata", spec_id);
+	}
+	auto &spec = spec_it->second;
+	for (auto &field : spec.fields) {
+		bool found = false;
+		for (auto &part : partition_info) {
+			if (part.field_id == field.partition_field_id) {
+				result.push_back(part.value);
+				found = true;
+				break;
+			}
+		}
+		if (!found) {
+			result.emplace_back(LogicalType::VARCHAR);
+		}
+	}
+	return result;
+}
+
+static IRCAPITableCredentials
+BuildLakeFormationSecretCredentials(ClientContext &context, IcebergTableInformation &table,
+                                  const LakeFormationTemporaryCredentials &lf_credentials, const string &secret_name,
+                                  const string &storage_scope) {
+	IRCAPITableCredentials result;
+	auto &catalog = table.catalog;
+
+	case_insensitive_map_t<Value> config_options;
+	if (catalog.auth_handler->type == IcebergAuthorizationType::SIGV4) {
+		auto &sigv4_auth = catalog.auth_handler->Cast<SIGV4Authorization>();
+		auto catalog_credentials = IcebergCatalog::GetStorageSecret(context, sigv4_auth.secret);
+		if (catalog_credentials) {
+			auto kv_secret = dynamic_cast<const KeyValueSecret &>(*catalog_credentials->secret);
+			if (!kv_secret.TryGetValue("region").IsNull()) {
+				config_options.emplace("region", kv_secret.TryGetValue("region"));
+			}
+		}
+		if (!sigv4_auth.sigv4_region.empty()) {
+			config_options.emplace("region", Value(sigv4_auth.sigv4_region));
+		}
+	}
+
+	config_options.emplace("key_id", Value(lf_credentials.access_key_id));
+	config_options.emplace("secret", Value(lf_credentials.secret_access_key));
+	config_options.emplace("session_token", Value(lf_credentials.session_token));
+
+	if (StringUtil::StartsWith(catalog.uri, "glue")) {
+		auto region = config_options["region"].ToString();
+		config_options.emplace("endpoint", Value("s3." + region + ".amazonaws.com"));
+	}
+
+	result.config = make_uniq<CreateSecretInput>();
+	auto &info = *result.config;
+	info.on_conflict = OnCreateConflict::REPLACE_ON_CONFLICT;
+	info.persist_type = SecretPersistType::TEMPORARY;
+	info.name = secret_name;
+	info.type = "s3";
+	info.provider = "config";
+	info.storage_type = "memory";
+	info.options = config_options;
+	if (!storage_scope.empty()) {
+		info.scope = {storage_scope};
+	}
+	return result;
+}
+
+void IcebergTableInformation::LoadLakeFormationPolicy(ClientContext &context) {
+	if (lf_policy.loaded) {
+		return;
+	}
+	if (catalog.attach_options.access_mode != IRCAccessDelegationMode::LF_FILTERED) {
+		return;
+	}
+	// Glue catalog metadata (IRC) gives us Iceberg schema/location; Glue LF APIs give us
+	// the caller's data-filter grant. Load once per table and cache on table_info.
+	auto latest_schema = GetLatestSchema(context);
+	if (!latest_schema) {
+		throw InvalidConfigurationException("Cannot load Lake Formation policy before table schema is available");
+	}
+	auto &table_entry = latest_schema->Cast<IcebergTableEntry>();
+	auto iceberg_schema = table_metadata.GetSchemaFromId(table_entry.schema_id.GetIndex());
+	LakeFormationClient lf_client(context, catalog);
+	lf_identifiers = lf_client.GetTableIdentifiers(schema, name);
+	lf_policy = lf_client.FetchTablePolicy(schema, name, *iceberg_schema, table_metadata);
+}
+
+IRCAPITableCredentials IcebergTableInformation::GetLakeFormationCredentials(ClientContext &context,
+                                                                            optional_ptr<const vector<Value>> partition_values) {
+	LoadLakeFormationPolicy(context);
+
+	auto transaction_id = MetaTransaction::Get(context).global_transaction_id;
+	auto &transaction = IcebergTransaction::Get(context, catalog);
+	auto secret_base_name =
+	    StringUtil::Format("__internal_ic_lf_%s__%s__%s__%s", table_id, schema.name, name, to_string(transaction_id));
+	transaction.created_secrets.insert(secret_base_name);
+
+	const auto &table_location = table_metadata.GetLocation();
+	string storage_scope = table_location;
+	if (!storage_scope.empty() && !StringUtil::EndsWith(storage_scope, "/")) {
+		storage_scope += "/";
+	}
+
+	LakeFormationClient lf_client(context, catalog);
+	LakeFormationTemporaryCredentials lf_credentials;
+	if (partition_values && !partition_values->empty()) {
+		// Partitioned tables: LF scopes credentials per partition value list, not just
+		// per table ARN. Each distinct partition gets its own temporary secret.
+		string partition_key;
+		for (auto &value : *partition_values) {
+			partition_key += value.ToString() + "_";
+		}
+		auto secret_name = StringUtil::Format("%s_partition_%s", secret_base_name, partition_key);
+		lf_credentials =
+		    lf_client.GetPartitionCredentials(lf_identifiers, lf_policy, *partition_values, table_location);
+		return BuildLakeFormationSecretCredentials(context, *this, lf_credentials, secret_name, storage_scope);
+	}
+
+	lf_credentials = lf_client.GetTableCredentials(lf_identifiers, lf_policy, table_location);
+	return BuildLakeFormationSecretCredentials(context, *this, lf_credentials, secret_base_name, storage_scope);
+}
+
+void IcebergTableInformation::EnsureLakeFormationPartitionCredentials(ClientContext &context,
+                                                                     const vector<IcebergPartitionInfo> &partition_info,
+                                                                     const string &file_path) {
+	if (catalog.attach_options.access_mode != IRCAccessDelegationMode::LF_FILTERED) {
+		return;
+	}
+	if (partition_info.empty()) {
+		return;
+	}
+	// Called while enumerating manifest data files: S3 reads must use credentials
+	// vended for that file's partition, which may differ from the table-level secret.
+	auto partition_values = PartitionValuesFromInfo(table_metadata, partition_info);
+	auto table_credentials = GetLakeFormationCredentials(context, partition_values);
+	auto &secret_manager = SecretManager::Get(context);
+	if (table_credentials.config) {
+		(void)secret_manager.CreateSecret(context, *table_credentials.config);
+	}
+}
+
+#else
+
+void IcebergTableInformation::LoadLakeFormationPolicy(ClientContext &context) {
+	throw NotImplementedException("Lake Formation integration is not available in duckdb-wasm builds");
+}
+
+IRCAPITableCredentials IcebergTableInformation::GetLakeFormationCredentials(ClientContext &context,
+                                                                            optional_ptr<const vector<Value>> partition_values) {
+	throw NotImplementedException("Lake Formation integration is not available in duckdb-wasm builds");
+}
+
+void IcebergTableInformation::EnsureLakeFormationPartitionCredentials(ClientContext &context,
+                                                                     const vector<IcebergPartitionInfo> &partition_info,
+                                                                     const string &file_path) {
+}
+
+#endif
 
 } // namespace duckdb
