@@ -624,18 +624,18 @@ unique_ptr<Catalog> IcebergCatalog::Attach(optional_ptr<StorageExtensionInfo> st
 		} else if (access_mode_string == "none") {
 			attach_options.access_mode = IRCAccessDelegationMode::NONE;
 		} else if (access_mode_string == "lf_filtered") {
-			attach_options.access_mode = IRCAccessDelegationMode::LF_FILTERED;
+			throw InvalidConfigurationException(
+			    "access_delegation_mode 'lf_filtered' is not supported; use LAKE_FORMATION_DATA_FILTERS true instead");
 		} else {
 			throw InvalidInputException(
-			    "Unrecognized access mode '%s'. Supported options are 'vended_credentials', 'none', and 'lf_filtered'",
+			    "Unrecognized access mode '%s'. Supported options are 'vended_credentials' and 'none'",
 			    access_mode_string);
 		}
 	}
 	if (lake_formation_data_filters) {
-		attach_options.lake_formation_data_filters = true;
-		attach_options.access_mode = IRCAccessDelegationMode::LF_FILTERED;
+		attach_options.access_mode = IRCAccessDelegationMode::LAKE_FORMATION;
 	}
-	if (attach_options.access_mode == IRCAccessDelegationMode::LF_FILTERED) {
+	if (attach_options.access_mode == IRCAccessDelegationMode::LAKE_FORMATION) {
 		// LF data filters are a Glue-only path: catalog REST still talks to the Glue
 		// Iceberg endpoint, but object access goes through LF temporary credentials.
 		if (endpoint_type == IcebergEndpointType::AWS_S3TABLES) {

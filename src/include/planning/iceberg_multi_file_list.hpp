@@ -154,8 +154,10 @@ public:
 	const IcebergSnapshotScanInfo &GetSnapshot() const;
 	const IcebergTableSchema &GetSchema() const;
 	IcebergTableEntry *GetTable() const;
+	const shared_ptr<IcebergScanInfo> &GetScanInfo() const;
 	void SetTable(IcebergTableEntry *table);
 	void SetOptions(const IcebergOptions &options);
+	void PushTableFilter(column_t column_idx, unique_ptr<ExpressionFilter> filter);
 
 	void Bind(vector<LogicalType> &return_types, vector<Identifier> &names);
 	unique_ptr<IcebergMultiFileList> PushdownInternal(ClientContext &context, TableFilterSet &new_filters,

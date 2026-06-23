@@ -41,15 +41,15 @@ LakeFormationFilterParseResult ParseLakeFormationRowFilter(ClientContext &contex
 	// parser and binder can treat them like a regular WHERE clause over table columns.
 	result.parsed_filter = ExtractWhereExpression(row_filter_sql);
 
-	vector<string> names;
+	vector<Identifier> names;
 	vector<LogicalType> types;
 	for (auto &col : schema.columns) {
-		names.push_back(col->name);
+		names.emplace_back(col->name);
 		types.push_back(col->type);
 	}
 
 	auto binder = Binder::CreateBinder(context);
-	binder->bind_context.AddGenericBinding(TableIndex(0), "lf_filter_source", names, types);
+	binder->bind_context.AddGenericBinding(TableIndex(0), Identifier("lf_filter_source"), names, types);
 
 	WhereBinder where_binder(*binder, context);
 	auto bound_expr = where_binder.Bind(result.parsed_filter);

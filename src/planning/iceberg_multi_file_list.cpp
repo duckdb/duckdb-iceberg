@@ -291,12 +291,20 @@ IcebergTableEntry *IcebergMultiFileList::GetTable() const {
 	return shared_state->table;
 }
 
+const shared_ptr<IcebergScanInfo> &IcebergMultiFileList::GetScanInfo() const {
+	return shared_state->scan_info;
+}
+
 void IcebergMultiFileList::SetTable(IcebergTableEntry *table) {
 	shared_state->table = table;
 }
 
 void IcebergMultiFileList::SetOptions(const IcebergOptions &options) {
 	shared_state->options = options;
+}
+
+void IcebergMultiFileList::PushTableFilter(column_t column_idx, unique_ptr<ExpressionFilter> filter) {
+	table_filters.PushFilter(column_idx, std::move(filter));
 }
 
 unique_ptr<ExpressionFilter> IcebergMultiFileList::GetFilterForColumnIndex(const IcebergTableFilters &filter_set,
@@ -997,7 +1005,8 @@ OpenFileInfo IcebergMultiFileList::GetFileInternal(idx_t file_id, lock_guard<mut
 	}
 
 #ifndef EMSCRIPTEN
-	if (table && table->table_info.catalog.attach_options.access_mode == IRCAccessDelegationMode::LF_FILTERED &&
+	auto table = GetTable();
+	if (table && table->table_info.catalog.attach_options.access_mode == IRCAccessDelegationMode::LAKE_FORMATION &&
 	    !data_file.partition_info.empty()) {
 		// Table-level LF credentials may not cover every partition's S3 prefix; refresh
 		// secrets lazily as we discover files in each partition during manifest walks.

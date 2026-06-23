@@ -168,7 +168,8 @@ void LakeFormationRowFilterOptimizer::VisitOperator(unique_ptr<LogicalOperator> 
 			continue;
 		}
 		auto &iceberg_list = mfbd.file_list->Cast<IcebergMultiFileList>();
-		if (!iceberg_list.scan_info || !iceberg_list.scan_info->mandatory_lf_filter_bound) {
+		auto &scan_info = iceberg_list.GetScanInfo();
+		if (!scan_info || !scan_info->mandatory_lf_filter_bound) {
 			continue;
 		}
 
@@ -176,7 +177,7 @@ void LakeFormationRowFilterOptimizer::VisitOperator(unique_ptr<LogicalOperator> 
 		// table_filters were elided or the user added predicates that try to bypass it.
 		auto bindings = get.GetColumnBindings();
 		auto remapped =
-		    RemapFilterBindings(*iceberg_list.scan_info->mandatory_lf_filter_bound, bindings);
+		    RemapFilterBindings(*scan_info->mandatory_lf_filter_bound, bindings);
 		auto filter = make_uniq<LogicalFilter>();
 		filter->expressions.push_back(std::move(remapped));
 		filter->children.push_back(std::move(op->children[child_index]));

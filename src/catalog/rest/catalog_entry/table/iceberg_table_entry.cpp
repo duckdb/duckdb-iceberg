@@ -52,7 +52,7 @@ void IcebergTableEntry::PrepareIcebergScanFromEntry(ClientContext &context) cons
 	auto &ic_catalog = catalog.Cast<IcebergCatalog>();
 	auto &secret_manager = SecretManager::Get(context);
 
-	if (ic_catalog.attach_options.access_mode == IRCAccessDelegationMode::LF_FILTERED) {
+	if (ic_catalog.attach_options.access_mode == IRCAccessDelegationMode::LAKE_FORMATION) {
 #ifndef EMSCRIPTEN
 		// LF mode replaces catalog vended credentials: exchange the caller's Glue/LF
 		// identity for scoped S3 keys before the scan touches object storage.
@@ -264,7 +264,7 @@ TableFunction IcebergTableEntry::GetScanFunction(ClientContext &context, unique_
 
 #ifndef EMSCRIPTEN
 	auto &ic_catalog = table_info.catalog.Cast<IcebergCatalog>();
-	if (ic_catalog.attach_options.access_mode == IRCAccessDelegationMode::LF_FILTERED &&
+	if (ic_catalog.attach_options.access_mode == IRCAccessDelegationMode::LAKE_FORMATION &&
 	    !table_info.lf_policy.row_filter_sql.empty()) {
 		// Glue returns row-filter SQL as a string; compile it into mandatory scan filters
 		// so user predicates cannot widen the LF grant (also reinforced in the optimizer).
@@ -273,7 +273,7 @@ TableFunction IcebergTableEntry::GetScanFunction(ClientContext &context, unique_
 		scan_info->mandatory_lf_filter_parsed = std::move(filter_result.parsed_filter);
 		scan_info->mandatory_lf_filter_bound = std::move(filter_result.bound_filter);
 		for (auto &entry : filter_result.table_filters) {
-			ic_file_list.table_filters.PushFilter(entry.first, entry.second->Copy());
+			ic_file_list.PushTableFilter(entry.first, entry.second->Copy());
 		}
 	}
 #endif

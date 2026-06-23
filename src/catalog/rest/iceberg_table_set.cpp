@@ -45,7 +45,7 @@ bool IcebergTableSet::FillEntry(ClientContext &context, IcebergTableInformation 
 			// Use the cached result instead of making a new request
 			table.InitializeFromLoadTableResult(*cached_result->load_table_result);
 #ifndef EMSCRIPTEN
-			if (ic_catalog.attach_options.access_mode == IRCAccessDelegationMode::LF_FILTERED) {
+			if (ic_catalog.attach_options.access_mode == IRCAccessDelegationMode::LAKE_FORMATION) {
 				// IRC cache has Iceberg metadata only; LF policy is caller-specific and
 				// must be refreshed from Glue even when the table load is served from cache.
 				table.LoadLakeFormationPolicy(context);
@@ -83,7 +83,7 @@ bool IcebergTableSet::FillEntry(ClientContext &context, IcebergTableInformation 
 		table.InitializeFromLoadTableResult(load_table_result);
 	}
 #ifndef EMSCRIPTEN
-	if (ic_catalog.attach_options.access_mode == IRCAccessDelegationMode::LF_FILTERED) {
+	if (ic_catalog.attach_options.access_mode == IRCAccessDelegationMode::LAKE_FORMATION) {
 		// LF policy is caller-specific and not included in IRC GetTable responses.
 		table.LoadLakeFormationPolicy(context);
 	}

@@ -790,8 +790,8 @@ BuildLakeFormationSecretCredentials(ClientContext &context, IcebergTableInformat
 	auto &info = *result.config;
 	info.on_conflict = OnCreateConflict::REPLACE_ON_CONFLICT;
 	info.persist_type = SecretPersistType::TEMPORARY;
-	info.name = secret_name;
-	info.type = "s3";
+	info.name = Identifier(secret_name);
+	info.type = Identifier("s3");
 	info.provider = "config";
 	info.storage_type = "memory";
 	info.options = config_options;
@@ -805,7 +805,7 @@ void IcebergTableInformation::LoadLakeFormationPolicy(ClientContext &context) {
 	if (lf_policy.loaded) {
 		return;
 	}
-	if (catalog.attach_options.access_mode != IRCAccessDelegationMode::LF_FILTERED) {
+	if (catalog.attach_options.access_mode != IRCAccessDelegationMode::LAKE_FORMATION) {
 		return;
 	}
 	// Glue catalog metadata (IRC) gives us Iceberg schema/location; Glue LF APIs give us
@@ -859,7 +859,7 @@ IRCAPITableCredentials IcebergTableInformation::GetLakeFormationCredentials(Clie
 void IcebergTableInformation::EnsureLakeFormationPartitionCredentials(ClientContext &context,
                                                                      const vector<IcebergPartitionInfo> &partition_info,
                                                                      const string &file_path) {
-	if (catalog.attach_options.access_mode != IRCAccessDelegationMode::LF_FILTERED) {
+	if (catalog.attach_options.access_mode != IRCAccessDelegationMode::LAKE_FORMATION) {
 		return;
 	}
 	if (partition_info.empty()) {
