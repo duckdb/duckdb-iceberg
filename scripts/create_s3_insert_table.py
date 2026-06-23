@@ -10,6 +10,10 @@ import sys
 import duckdb
 from datetime import date
 
+REGION = "us-east-2"
+TABLE_BUCKET = "iceberg-testing"
+DATABASE_NAME = "test_inserts"
+
 
 def catalog_region(catalog_env: str, default: str) -> str:
     # DuckDB Labs CI sets AWS_DEFAULT_REGION for credentials but upstream hardcoded
@@ -24,9 +28,9 @@ def catalog_region(catalog_env: str, default: str) -> str:
 
 # DuckDB Labs defaults (must match upstream and test/sql/cloud/* fixtures).
 GLUE_REGION = catalog_region("ICEBERG_GLUE_REGION", "us-east-1")
-S3TABLES_REGION = catalog_region("ICEBERG_S3TABLES_REGION", "us-east-2")
+S3TABLES_REGION = catalog_region("ICEBERG_S3TABLES_REGION", REGION)
 ACCOUNT_ID = os.getenv("ICEBERG_ACCOUNT_ID", os.getenv("ICEBERG_LF_ACCOUNT_ID", "840140254803"))
-S3TABLES_BUCKET = os.getenv("ICEBERG_S3TABLES_BUCKET", "iceberg-testing")
+S3TABLES_BUCKET = os.getenv("ICEBERG_S3TABLES_BUCKET", TABLE_BUCKET)
 GLUE_WAREHOUSE = os.getenv(
     "ICEBERG_GLUE_WAREHOUSE",
     os.getenv(
@@ -35,7 +39,7 @@ GLUE_WAREHOUSE = os.getenv(
     ),
 )
 
-DATABASE_NAME = os.getenv("ICEBERG_LF_DATABASE", "test_inserts")
+DATABASE_NAME = os.getenv("ICEBERG_LF_DATABASE", DATABASE_NAME)
 TABLE_NAME = "basic_insert_test"
 PARTITIONED_TABLE_NAME = os.getenv("ICEBERG_LF_PARTITIONED_TABLE", "basic_insert_test_partitioned")
 NO_LF_GRANT_TABLE_NAME = os.getenv("ICEBERG_LF_NO_GRANT_TABLE", "no_lf_grant_test")
