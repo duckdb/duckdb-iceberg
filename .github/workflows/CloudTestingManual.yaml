@@ -33,15 +33,3 @@ jobs:
       httpfs_fork: ${{ github.event.inputs.httpfs_fork || 'https://github.com/duckdb/duckdb-httpfs' }}
       httpfs_ref: ${{ github.event.inputs.httpfs_ref || '' }}
     secrets: inherit
-
-  cloud-tests-main:
-    name: Run Cloud tests on main
-    uses: ./.github/workflows/CloudTestingReusable.yml
-    with:
-      duckdb_ref: ${{ github.event.inputs.duckdb_ref || 'main' }}
-      duckdb_iceberg_ref: ${{ github.event.inputs.duckdb_iceberg_ref || 'main' }}
-      httpfs_fork: ${{ github.event.inputs.httpfs_fork || 'https://github.com/duckdb/duckdb-httpfs' }}
-      httpfs_ref: ${{ github.event.inputs.httpfs_ref || '' }}
-    secrets: inherit
-
-
