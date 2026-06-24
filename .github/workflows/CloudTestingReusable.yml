@@ -7,6 +7,11 @@ on:
         required: false
         default: ''
         type: string
+      duckdb_iceberg_ref:
+        description: 'duckdb-iceberg branch name or commit hash'
+        required: false
+        default: ''
+        type: string
       httpfs_fork:
         description: 'URL of a duckdb-httpfs fork (e.g. https://github.com/myfork/duckdb-httpfs). Leave empty to use the default duckdb/duckdb-httpfs.'
         required: false
@@ -60,6 +65,7 @@ jobs:
 
       - uses: actions/checkout@v4
         with:
+          ref: ${{ inputs.duckdb_iceberg_ref || github.ref }}
           fetch-depth: 0
           submodules: 'true'
 
