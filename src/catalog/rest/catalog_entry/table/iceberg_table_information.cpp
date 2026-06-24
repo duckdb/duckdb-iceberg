@@ -757,8 +757,8 @@ static vector<Value> PartitionValuesFromInfo(const IcebergTableMetadata &metadat
 
 static IRCAPITableCredentials
 BuildLakeFormationSecretCredentials(ClientContext &context, IcebergTableInformation &table,
-                                  const LakeFormationTemporaryCredentials &lf_credentials, const string &secret_name,
-                                  const string &storage_scope) {
+                                    const LakeFormationTemporaryCredentials &lf_credentials, const string &secret_name,
+                                    const string &storage_scope) {
 	IRCAPITableCredentials result;
 	auto &catalog = table.catalog;
 
@@ -821,8 +821,9 @@ void IcebergTableInformation::LoadLakeFormationPolicy(ClientContext &context) {
 	lf_policy = lf_client.FetchTablePolicy(schema, name, *iceberg_schema, table_metadata);
 }
 
-IRCAPITableCredentials IcebergTableInformation::GetLakeFormationCredentials(ClientContext &context,
-                                                                            optional_ptr<const vector<Value>> partition_values) {
+IRCAPITableCredentials
+IcebergTableInformation::GetLakeFormationCredentials(ClientContext &context,
+                                                     optional_ptr<const vector<Value>> partition_values) {
 	LoadLakeFormationPolicy(context);
 
 	auto transaction_id = MetaTransaction::Get(context).global_transaction_id;
@@ -856,9 +857,8 @@ IRCAPITableCredentials IcebergTableInformation::GetLakeFormationCredentials(Clie
 	return BuildLakeFormationSecretCredentials(context, *this, lf_credentials, secret_base_name, storage_scope);
 }
 
-void IcebergTableInformation::EnsureLakeFormationPartitionCredentials(ClientContext &context,
-                                                                     const vector<IcebergPartitionInfo> &partition_info,
-                                                                     const string &file_path) {
+void IcebergTableInformation::EnsureLakeFormationPartitionCredentials(
+    ClientContext &context, const vector<IcebergPartitionInfo> &partition_info, const string &file_path) {
 	if (catalog.attach_options.access_mode != IRCAccessDelegationMode::LAKE_FORMATION) {
 		return;
 	}
@@ -881,14 +881,14 @@ void IcebergTableInformation::LoadLakeFormationPolicy(ClientContext &context) {
 	throw NotImplementedException("Lake Formation integration is not available in duckdb-wasm builds");
 }
 
-IRCAPITableCredentials IcebergTableInformation::GetLakeFormationCredentials(ClientContext &context,
-                                                                            optional_ptr<const vector<Value>> partition_values) {
+IRCAPITableCredentials
+IcebergTableInformation::GetLakeFormationCredentials(ClientContext &context,
+                                                     optional_ptr<const vector<Value>> partition_values) {
 	throw NotImplementedException("Lake Formation integration is not available in duckdb-wasm builds");
 }
 
-void IcebergTableInformation::EnsureLakeFormationPartitionCredentials(ClientContext &context,
-                                                                     const vector<IcebergPartitionInfo> &partition_info,
-                                                                     const string &file_path) {
+void IcebergTableInformation::EnsureLakeFormationPartitionCredentials(
+    ClientContext &context, const vector<IcebergPartitionInfo> &partition_info, const string &file_path) {
 }
 
 #endif

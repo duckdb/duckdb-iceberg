@@ -176,8 +176,7 @@ void LakeFormationRowFilterOptimizer::VisitOperator(unique_ptr<LogicalOperator> 
 		// Safety net: re-apply the LF row filter above the scan even if bind-time
 		// table_filters were elided or the user added predicates that try to bypass it.
 		auto bindings = get.GetColumnBindings();
-		auto remapped =
-		    RemapFilterBindings(*scan_info->mandatory_lf_filter_bound, bindings);
+		auto remapped = RemapFilterBindings(*scan_info->mandatory_lf_filter_bound, bindings);
 		auto filter = make_uniq<LogicalFilter>();
 		filter->expressions.push_back(std::move(remapped));
 		filter->children.push_back(std::move(op->children[child_index]));

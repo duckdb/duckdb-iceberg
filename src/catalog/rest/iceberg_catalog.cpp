@@ -647,7 +647,8 @@ unique_ptr<Catalog> IcebergCatalog::Attach(optional_ptr<StorageExtensionInfo> st
 			    "LAKE_FORMATION_DATA_FILTERS cannot be combined with access_delegation_mode 'vended_credentials'");
 		}
 		if (lf_session_tag.empty()) {
-			throw InvalidConfigurationException("LF_SESSION_TAG is required when LAKE_FORMATION_DATA_FILTERS is enabled");
+			throw InvalidConfigurationException(
+			    "LF_SESSION_TAG is required when LAKE_FORMATION_DATA_FILTERS is enabled");
 		}
 		attach_options.lf_session_tag = std::move(lf_session_tag);
 	}

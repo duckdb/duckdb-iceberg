@@ -268,8 +268,7 @@ TableFunction IcebergTableEntry::GetScanFunction(ClientContext &context, unique_
 	    !table_info.lf_policy.row_filter_sql.empty()) {
 		// Glue returns row-filter SQL as a string; compile it into mandatory scan filters
 		// so user predicates cannot widen the LF grant (also reinforced in the optimizer).
-		auto filter_result =
-		    ParseLakeFormationRowFilter(context, table_info.lf_policy.row_filter_sql, iceberg_schema);
+		auto filter_result = ParseLakeFormationRowFilter(context, table_info.lf_policy.row_filter_sql, iceberg_schema);
 		scan_info->mandatory_lf_filter_parsed = std::move(filter_result.parsed_filter);
 		scan_info->mandatory_lf_filter_bound = std::move(filter_result.bound_filter);
 		for (auto &entry : filter_result.table_filters) {

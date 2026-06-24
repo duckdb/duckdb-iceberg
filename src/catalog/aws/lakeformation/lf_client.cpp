@@ -53,8 +53,8 @@ static vector<::Aws::LakeFormation::Model::PermissionType> SupportedPermissionTy
 	return {::Aws::LakeFormation::Model::PermissionType::CELL_FILTER_PERMISSION};
 }
 
-static LakeFormationTemporaryCredentials ParseTemporaryCredentials(
-    const ::Aws::LakeFormation::Model::GetTemporaryGlueTableCredentialsResult &result) {
+static LakeFormationTemporaryCredentials
+ParseTemporaryCredentials(const ::Aws::LakeFormation::Model::GetTemporaryGlueTableCredentialsResult &result) {
 	LakeFormationTemporaryCredentials credentials;
 	credentials.access_key_id = result.GetAccessKeyId();
 	credentials.secret_access_key = result.GetSecretAccessKey();
@@ -70,7 +70,7 @@ LakeFormationClient::LakeFormationClient(ClientContext &context, IcebergCatalog 
 }
 
 LakeFormationTableIdentifiers LakeFormationClient::GetTableIdentifiers(IcebergSchemaEntry &schema,
-                                                                         const string &table_name) const {
+                                                                       const string &table_name) const {
 	LakeFormationTableIdentifiers identifiers;
 	identifiers.catalog_id = catalog.GetWarehouse();
 	identifiers.database_name = GetDatabaseName(schema);
@@ -105,8 +105,7 @@ LakeFormationTablePolicy LakeFormationClient::FetchTablePolicy(IcebergSchemaEntr
 
 	auto outcome = glue_client.GetUnfilteredTableMetadata(request);
 	if (!outcome.IsSuccess()) {
-		throw InvalidConfigurationException("GetUnfilteredTableMetadata failed: %s",
-		                                  outcome.GetError().GetMessage());
+		throw InvalidConfigurationException("GetUnfilteredTableMetadata failed: %s", outcome.GetError().GetMessage());
 	}
 
 	auto policy = ParseUnfilteredTableMetadata(outcome.GetResult());
@@ -125,7 +124,7 @@ LakeFormationTablePolicy LakeFormationClient::FetchTablePolicy(IcebergSchemaEntr
 		auto partitions_outcome = glue_client.GetUnfilteredPartitionsMetadata(partitions_request);
 		if (!partitions_outcome.IsSuccess()) {
 			throw InvalidConfigurationException("GetUnfilteredPartitionsMetadata failed: %s",
-			                                  partitions_outcome.GetError().GetMessage());
+			                                    partitions_outcome.GetError().GetMessage());
 		}
 		policy.is_partitioned = true;
 		for (auto &partition : partitions_outcome.GetResult().GetUnfilteredPartitions()) {
@@ -139,8 +138,8 @@ LakeFormationTablePolicy LakeFormationClient::FetchTablePolicy(IcebergSchemaEntr
 LakeFormationTemporaryCredentials
 LakeFormationClient::GetTableCredentials(const LakeFormationTableIdentifiers &identifiers,
                                          const LakeFormationTablePolicy &policy, const string &s3_path) {
-	string cache_key = StringUtil::Format("table:%s:%s:%s", identifiers.catalog_id, identifiers.database_name,
-	                                      identifiers.table_name);
+	string cache_key =
+	    StringUtil::Format("table:%s:%s:%s", identifiers.catalog_id, identifiers.database_name, identifiers.table_name);
 	// LF temporary credentials are short-lived; cache within a scan to avoid
 	// repeated GetTemporaryGlue* calls for the same table or partition.
 	if (auto cached = credential_cache.Get(cache_key)) {
@@ -162,7 +161,7 @@ LakeFormationClient::GetTableCredentials(const LakeFormationTableIdentifiers &id
 	auto outcome = lf_client.GetTemporaryGlueTableCredentials(request);
 	if (!outcome.IsSuccess()) {
 		throw InvalidConfigurationException("GetTemporaryGlueTableCredentials failed: %s",
-		                                  outcome.GetError().GetMessage());
+		                                    outcome.GetError().GetMessage());
 	}
 
 	auto credentials = ParseTemporaryCredentials(outcome.GetResult());
@@ -172,8 +171,8 @@ LakeFormationClient::GetTableCredentials(const LakeFormationTableIdentifiers &id
 
 LakeFormationTemporaryCredentials
 LakeFormationClient::GetPartitionCredentials(const LakeFormationTableIdentifiers &identifiers,
-                                               const LakeFormationTablePolicy &policy,
-                                               const vector<Value> &partition_values, const string &s3_path) {
+                                             const LakeFormationTablePolicy &policy,
+                                             const vector<Value> &partition_values, const string &s3_path) {
 	string partition_key;
 	for (auto &value : partition_values) {
 		partition_key += value.ToString() + "|";
@@ -203,15 +202,14 @@ LakeFormationClient::GetPartitionCredentials(const LakeFormationTableIdentifiers
 	auto outcome = lf_client.GetTemporaryGluePartitionCredentials(request);
 	if (!outcome.IsSuccess()) {
 		throw InvalidConfigurationException("GetTemporaryGluePartitionCredentials failed: %s",
-		                                  outcome.GetError().GetMessage());
+		                                    outcome.GetError().GetMessage());
 	}
 
 	LakeFormationTemporaryCredentials credentials;
 	credentials.access_key_id = outcome.GetResult().GetAccessKeyId();
 	credentials.secret_access_key = outcome.GetResult().GetSecretAccessKey();
 	credentials.session_token = outcome.GetResult().GetSessionToken();
-	credentials.expiration =
-	    outcome.GetResult().GetExpiration().ToGmtString(::Aws::Utils::DateFormat::ISO_8601);
+	credentials.expiration = outcome.GetResult().GetExpiration().ToGmtString(::Aws::Utils::DateFormat::ISO_8601);
 	credential_cache.Put(cache_key, credentials);
 	return credentials;
 }

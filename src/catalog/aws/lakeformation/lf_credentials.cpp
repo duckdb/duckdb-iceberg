@@ -41,8 +41,8 @@ public:
 	    : base_provider(std::move(base_provider)), role_arn(role_arn), session_tag(session_tag) {
 		::Aws::Client::ClientConfiguration config;
 		config.region = region;
-		sts_client = Aws::MakeShared<::Aws::STS::STSClient>("LakeFormationTaggedAssumeRoleProvider", base_provider,
-		                                                    config);
+		sts_client =
+		    Aws::MakeShared<::Aws::STS::STSClient>("LakeFormationTaggedAssumeRoleProvider", base_provider, config);
 	}
 
 	Aws::Auth::AWSCredentials GetAWSCredentials() override {
@@ -53,7 +53,7 @@ public:
 		auto outcome = sts_client->AssumeRole(request);
 		if (!outcome.IsSuccess()) {
 			throw InvalidConfigurationException("Failed to assume role for Lake Formation integration: %s",
-			                                  outcome.GetError().GetMessage());
+			                                    outcome.GetError().GetMessage());
 		}
 		auto &creds = outcome.GetResult().GetCredentials();
 		return Aws::Auth::AWSCredentials(creds.GetAccessKeyId(), creds.GetSecretAccessKey(), creds.GetSessionToken());

@@ -30,12 +30,12 @@ public:
 	                                          const IcebergTableSchema &iceberg_schema,
 	                                          const IcebergTableMetadata &table_metadata);
 	LakeFormationTemporaryCredentials GetTableCredentials(const LakeFormationTableIdentifiers &identifiers,
-	                                                     const LakeFormationTablePolicy &policy,
-	                                                     const string &s3_path = "");
+	                                                      const LakeFormationTablePolicy &policy,
+	                                                      const string &s3_path = "");
 	LakeFormationTemporaryCredentials GetPartitionCredentials(const LakeFormationTableIdentifiers &identifiers,
-	                                                        const LakeFormationTablePolicy &policy,
-	                                                        const vector<Value> &partition_values,
-	                                                        const string &s3_path = "");
+	                                                          const LakeFormationTablePolicy &policy,
+	                                                          const vector<Value> &partition_values,
+	                                                          const string &s3_path = "");
 
 private:
 	ClientContext &context;

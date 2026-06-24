@@ -80,9 +80,8 @@ namespace duckdb {
 void ValidateLakeFormationPolicyV1(const LakeFormationTablePolicy &policy, const IcebergTableSchema &schema) {
 	// Fail closed on grant shapes Glue can express but we do not enforce yet.
 	if (!policy.cell_filters.empty()) {
-		throw NotImplementedException(
-		    "Lake Formation cell-level data filters are not supported in v1. "
-		    "Only row-level filters are supported when using LAKE_FORMATION_DATA_FILTERS.");
+		throw NotImplementedException("Lake Formation cell-level data filters are not supported in v1. "
+		                              "Only row-level filters are supported when using LAKE_FORMATION_DATA_FILTERS.");
 	}
 	if (!policy.all_columns_authorized) {
 		case_insensitive_set_t authorized;
@@ -91,9 +90,8 @@ void ValidateLakeFormationPolicyV1(const LakeFormationTablePolicy &policy, const
 		}
 		for (auto &col : schema.columns) {
 			if (authorized.find(col->name) == authorized.end()) {
-				throw NotImplementedException(
-				    "Lake Formation column-level permissions are not supported in v1. "
-				    "Grant access to all columns or use row-level filters only.");
+				throw NotImplementedException("Lake Formation column-level permissions are not supported in v1. "
+				                              "Grant access to all columns or use row-level filters only.");
 			}
 		}
 	}
