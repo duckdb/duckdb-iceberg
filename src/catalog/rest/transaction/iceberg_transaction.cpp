@@ -387,6 +387,31 @@ TableTransactionInfo IcebergTransaction::GetTransactionRequest(IcebergTransactio
 	return info;
 }
 
+static shared_ptr<IcebergTableInformation> CreateCommittedTableInfo(IcebergTableInformation &table) {
+	auto published = make_shared_ptr<IcebergTableInformation>(table.catalog, table.schema, table.name);
+	published->table_id = std::move(table.table_id);
+	published->table_metadata = std::move(table.table_metadata);
+	published->config = std::move(table.config);
+	published->storage_credentials = std::move(table.storage_credentials);
+	published->latest_metadata_json = std::move(table.latest_metadata_json);
+	published->InitSchemaVersions();
+	return published;
+}
+
+static void PublishCommittedAlter(IcebergTransactionAlterUpdate &alter_update) {
+	for (auto &table_key : alter_update.committed_tables) {
+		auto table = alter_update.updated_tables.find(table_key);
+		if (table == alter_update.updated_tables.end()) {
+			continue;
+		}
+		auto &table_info = table->second;
+		auto &schema = table_info.schema.Cast<IcebergSchemaEntry>();
+		auto published = CreateCommittedTableInfo(table_info);
+		lock_guard<mutex> guard(schema.tables.GetEntryLock());
+		schema.tables.GetEntriesMutable()[published->name] = std::move(published);
+	}
+}
+
 void IcebergTransaction::Commit() {
 	if (transaction_updates.empty() && created_schemas.empty() && deleted_schemas.empty() &&
 	    schema_property_updates.empty()) {
@@ -438,6 +463,12 @@ void IcebergTransaction::Commit() {
 	}
 
 	temp_con.Rollback();
+
+	for (auto &transaction_update : transaction_updates) {
+		if (transaction_update->type == IcebergTransactionUpdateType::ALTER) {
+			PublishCommittedAlter(transaction_update->Cast<IcebergTransactionAlterUpdate>());
+		}
+	}
 }
 
 void IcebergTransaction::DoTableUpdates(IcebergTransactionAlterUpdate &alter_update, ClientContext &context) {
@@ -538,12 +569,13 @@ void IcebergTransaction::DoTableRename(IcebergTransactionRenameUpdate &rename_up
 	drop_info.if_not_found = OnEntryNotFound::THROW_EXCEPTION;
 	schema.DropEntry(context, drop_info, true);
 
+	auto published = CreateCommittedTableInfo(rename_update.new_table);
 	lock_guard<mutex> guard(schema.tables.GetEntryLock());
-	shared_ptr<IcebergTableInformation> old_version;
-	schema.tables.CreateEntryInternal(guard, new_name, std::move(rename_update.new_table), old_version);
-	if (old_version) {
+	auto &entries = schema.tables.GetEntriesMutable();
+	if (entries.find(new_name) != entries.end()) {
 		throw TransactionException("Table %s was already created by a different transaction!", new_name);
 	}
+	entries[new_name] = std::move(published);
 }
 
 void IcebergTransaction::DoTableDeletes(IcebergTransactionDeleteUpdate &delete_update, ClientContext &context) {
