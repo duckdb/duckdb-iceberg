@@ -1,4 +1,4 @@
-# name: test/sql/local/irc_any_catalog/create/test_view_scan_no_deadlock.test
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/create/test_view_scan_no_deadlock.test
 # description: test that SHOW ALL TABLES does not deadlock when views exist in the catalog
 # group: [create]
 

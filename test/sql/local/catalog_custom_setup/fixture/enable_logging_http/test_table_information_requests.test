@@ -52,10 +52,12 @@ select count(*) > 10 from (show all tables);
 # 1 call to list namespaces
 # 1 call to list tables in default
 # 1 call to list tables in level1 namespace (no recursive namespace calls)
+# 1 call to list views in default
+# 1 call to list views in level1 namespace
 query I
 select count(*) from duckdb_logs_parsed('HTTP');
 ----
-5
+7
 
 statement ok
 call truncate_duckdb_logs();
@@ -101,12 +103,13 @@ commit;
 
 # 3 calls from above
 # 5 calls from show all tables above
+# 2 calls to list views (default + level1) during show all tables
 # 1 call to the manifest list
 # 2 calls to read parquet files
 query I
 select count(*) from duckdb_logs_parsed('HTTP');
 ----
-9
+11
 
 statement ok
 call truncate_duckdb_logs();
