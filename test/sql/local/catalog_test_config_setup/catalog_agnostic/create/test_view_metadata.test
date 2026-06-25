@@ -1,0 +1,68 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/create/test_view_metadata.test
+# description: iceberg_view_metadata table function returns the LoadView REST response
+# group: [create]
+
+require-env ICEBERG_SERVER_AVAILABLE
+
+require-env SECRETS_CREATED_AND_CATALOG_ATTACHED
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+statement ok
+create schema if not exists my_datalake.default;
+
+statement ok
+use my_datalake.default;
+
+# Clean up from previous runs
+statement ok
+drop view if exists vm_view;
+
+statement ok
+drop table if exists vm_base;
+
+statement ok
+create table vm_base (a int, b varchar);
+
+statement ok
+insert into vm_base values (1, 'x'), (2, 'y');
+
+statement ok
+create view vm_view as select a, b from vm_base where a > 0;
+
+# iceberg_view_metadata returns exactly one row
+query I
+select count(*) from iceberg_view_metadata('my_datalake.default.vm_view');
+----
+1
+
+# metadata VARIANT is populated and the request hit the views endpoint
+query II
+select metadata is not null, request_url like '%/views/vm_view' from iceberg_view_metadata('my_datalake.default.vm_view');
+----
+true	true
+
+# a non-existent view should raise a clear catalog error
+statement error
+select * from iceberg_view_metadata('my_datalake.default.this_view_does_not_exist_vm');
+----
+<REGEX>:.*does not exist.*
+
+# a non-qualified name is rejected
+statement error
+select * from iceberg_view_metadata('vm_view');
+----
+<REGEX>:.*fully qualified view name.*
+
+# Clean up
+statement ok
+drop view vm_view;
+
+statement ok
+drop table vm_base;
