@@ -1,4 +1,4 @@
-# name: test/sql/local/irc_any_catalog/create/test_create_view.test
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/create/test_create_view.test
 # description: test create view, drop view, and querying views in iceberg catalog
 # group: [create]
 
@@ -64,17 +64,19 @@ select * from test_view_v1 order by i;
 2	world
 3	foo
 
-# ─── CREATE OR REPLACE VIEW ──────────────────────────────────────────────────
-
-statement ok
+# ─── CREATE OR REPLACE VIEW  ──────────────────────
+# Should fail, CREATE OR REPLACE isn't supported
+statement error
 create or replace view test_view_v1 as select i * 10 as i_times_10 from test_view_base_table;
-
-query I
-select * from test_view_v1 order by i_times_10;
 ----
-10
-20
-30
+<REGEX>:.*CREATE OR REPLACE not supported.*
+
+# The original view must be untouched by the rejected REPLACE
+query II
+select * from test_view_v1 order by i;
+----
+2	world
+3	foo
 
 # ─── DROP VIEW ────────────────────────────────────────────────────────────────
 
@@ -85,7 +87,7 @@ drop view test_view_v1;
 statement error
 select * from test_view_v1;
 ----
-does not exist
+<REGEX>:.*does not exist.*
 
 # DROP VIEW IF EXISTS on non-existent view
 statement ok
@@ -95,7 +97,7 @@ drop view if exists test_view_v1;
 statement error
 drop view test_view_v1;
 ----
-does not exist
+<REGEX>:.*does not exist.*
 
 # ─── VIEW WITH COLUMN ALIASES ────────────────────────────────────────────────
 
@@ -123,7 +125,7 @@ use my_datalake_404.default;
 statement error
 select * from never_created_view_for_404_test;
 ----
-does not exist
+<REGEX>:.*does not exist.*
 
 # Switch back to the primary attachment before cleanup
 statement ok

@@ -1,0 +1,141 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/create/test_view_features.test
+# description: iceberg view edge cases — creation-time validation, select *, select * exclude, joins, catalog functions
+# group: [create]
+
+require-env ICEBERG_SERVER_AVAILABLE
+
+require-env SECRETS_CREATED_AND_CATALOG_ATTACHED
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+statement ok
+create schema if not exists my_datalake.default;
+
+statement ok
+use my_datalake.default;
+
+# Clean up from previous runs
+statement ok
+drop view if exists v_star;
+
+statement ok
+drop view if exists v_exclude;
+
+statement ok
+drop view if exists v_join;
+
+statement ok
+drop table if exists vf_orders;
+
+statement ok
+drop table if exists vf_customers;
+
+# Base tables to back the views
+statement ok
+create table vf_customers (cust_id int, name varchar, region varchar);
+
+statement ok
+insert into vf_customers values (1, 'alice', 'EU'), (2, 'bob', 'US'), (3, 'carol', 'EU');
+
+statement ok
+create table vf_orders (order_id int, cust_id int, amount int);
+
+statement ok
+insert into vf_orders values (10, 1, 100), (11, 1, 50), (12, 2, 200);
+
+# ───────────────── view selecting a non-existent column errors at CREATE ───────
+statement error
+create view v_bad_col as select nonexistent_column from vf_customers;
+----
+<REGEX>:.*not found.*
+
+# the rejected view must not exist
+query I
+select count(*) from duckdb_views() where view_name = 'v_bad_col';
+----
+0
+
+# ───────────────── view selecting from a non-existent table errors at CREATE ───
+statement error
+create view v_bad_tbl as select * from table_that_does_not_exist_vf;
+----
+<REGEX>:.*does not exist.*
+
+# ─── SELECT * view ────────────────────────────────────────────────────────────
+statement ok
+create view v_star as select * from vf_customers;
+
+query III
+select * from v_star order by cust_id;
+----
+1	alice	EU
+2	bob	US
+3	carol	EU
+
+# ───────────────── selecting a non-existent column from a valid view ──────────
+statement error
+select no_such_col from v_star;
+----
+<REGEX>:.*not found.*
+
+# ─── SELECT * EXCLUDE view ────────────────────────────────────────────────────
+statement ok
+create view v_exclude as select * exclude (region) from vf_customers;
+
+query II
+select * from v_exclude order by cust_id;
+----
+1	alice
+2	bob
+3	carol
+
+# ─── view that joins tables ───────────────────────────────────────────────────
+statement ok
+create view v_join as
+  select c.name, o.order_id, o.amount
+  from vf_customers c join vf_orders o on c.cust_id = o.cust_id;
+
+query III
+select * from v_join order by order_id;
+----
+alice	10	100
+alice	11	50
+bob	12	200
+
+# ─── catalog functions must not crash with iceberg views present ──────────────
+statement ok
+from duckdb_views();
+
+statement ok
+from duckdb_tables();
+
+statement ok
+show all tables;
+
+# the iceberg views should be discoverable via duckdb_views()
+query I
+select count(*) >= 3 from duckdb_views() where view_name in ('v_star', 'v_exclude', 'v_join');
+----
+true
+
+# Clean up
+statement ok
+drop view v_join;
+
+statement ok
+drop view v_exclude;
+
+statement ok
+drop view v_star;
+
+statement ok
+drop table vf_orders;
+
+statement ok
+drop table vf_customers;

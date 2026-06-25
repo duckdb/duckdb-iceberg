@@ -211,28 +211,19 @@ optional_ptr<CatalogEntry> IcebergSchemaEntry::CreateView(CatalogTransaction tra
 	}
 	auto &context = transaction.GetContext();
 
-	// Handle CREATE OR REPLACE and CREATE IF NOT EXISTS
-	if (info.on_conflict == OnCreateConflict::REPLACE_ON_CONFLICT ||
-	    info.on_conflict == OnCreateConflict::IGNORE_ON_CONFLICT) {
-		auto existing_entry = GetEntry(transaction, CatalogType::VIEW_ENTRY, info.view_name);
-		if (existing_entry) {
-			if (info.on_conflict == OnCreateConflict::IGNORE_ON_CONFLICT) {
-				return existing_entry;
-			}
-			// CREATE OR REPLACE — drop first, then create
-			DropInfo drop_info;
-			drop_info.type = CatalogType::VIEW_ENTRY;
-			drop_info.name = info.view_name;
-			drop_info.cascade = false;
-			drop_info.if_not_found = OnEntryNotFound::RETURN_NULL;
-			DropEntry(context, drop_info, false);
+	if (info.on_conflict == OnCreateConflict::REPLACE_ON_CONFLICT) {
+		throw NotImplementedException(
+		    "CREATE OR REPLACE not supported in DuckDB-Iceberg. Please use separate Drop and Create Statements");
+	}
+
+	auto existing_entry = GetEntry(transaction, CatalogType::VIEW_ENTRY, info.view_name);
+	if (existing_entry) {
+		if (info.on_conflict == OnCreateConflict::IGNORE_ON_CONFLICT) {
+			// CREATE VIEW IF NOT EXISTS — view already exists, nothing to do.
+			return existing_entry;
 		}
-	} else {
-		// ERROR_ON_CONFLICT — check existence
-		auto existing_entry = GetEntry(transaction, CatalogType::VIEW_ENTRY, info.view_name);
-		if (existing_entry) {
-			throw CatalogException("View with name \"%s\" already exists", info.view_name);
-		}
+		// ERROR_ON_CONFLICT
+		throw CatalogException("View with name \"%s\" already exists", info.view_name);
 	}
 
 	// Generate default column names if the caller gave us types but no names.
