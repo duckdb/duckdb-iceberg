@@ -54,7 +54,9 @@ select split(request.url, 'v1')[2] from duckdb_logs_parsed('HTTP') order by all;
 /config
 /namespaces
 /namespaces/default/tables
+/namespaces/default/views
 /namespaces/level1/tables
+/namespaces/level1/views
 /oauth/tokens
 
 statement ok
@@ -127,6 +129,8 @@ select CASE WHEN contains(val, '.') THEN (split(val, '.')[2]) ELSE NULL END FROM
 avro
 avro
 parquet
+NULL
+NULL
 NULL
 
 statement ok
