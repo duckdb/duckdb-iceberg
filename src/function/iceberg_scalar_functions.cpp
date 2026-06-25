@@ -10,6 +10,7 @@
 
 #include "function/iceberg_functions.hpp"
 #include "core/expression/iceberg_hash.hpp"
+#include "core/expression/iceberg_transform.hpp"
 
 #include "duckdb.hpp"
 #include "duckdb/common/vector_operations/binary_executor.hpp"
@@ -328,6 +329,30 @@ ScalarFunctionSet IcebergFunctions::GetIcebergTruncateFunction() {
 		set.AddFunction(ScalarFunction({LogicalType::INTEGER, LogicalType(LogicalTypeId::DECIMAL)},
 		                               LogicalType(LogicalTypeId::DECIMAL), null_fn, IcebergTruncateDecimalBind));
 	}
+	return set;
+}
+
+//===--------------------------------------------------------------------===//
+// iceberg_partition_to_human(transform, ordinal) -> VARCHAR
+// Format a temporal partition ordinal as the human-readable path segment
+// (e.g. 'month', 634 -> "2022-11"), via Transform.toHumanString.
+//===--------------------------------------------------------------------===//
+
+static void IcebergPartitionToHuman(DataChunk &input, ExpressionState &state, Vector &result) {
+	BinaryExecutor::Execute<string_t, int64_t, string_t>(
+	    input.data[0], input.data[1], result, input.size(),
+	    [&result](string_t transform_name, int64_t ordinal) -> string_t {
+		    IcebergTransform transform(transform_name.GetString());
+		    auto human = transform.PartitionValueToString(Value::INTEGER(static_cast<int32_t>(ordinal)));
+		    return StringVector::AddString(result, human);
+	    });
+}
+
+ScalarFunctionSet IcebergFunctions::GetIcebergPartitionToHumanFunction() {
+	ScalarFunctionSet set("iceberg_partition_to_human");
+	// (transform_name, ordinal) -> VARCHAR
+	set.AddFunction(
+	    ScalarFunction({LogicalType::VARCHAR, LogicalType::BIGINT}, LogicalType::VARCHAR, IcebergPartitionToHuman));
 	return set;
 }
 

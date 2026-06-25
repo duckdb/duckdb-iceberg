@@ -1,6 +1,7 @@
 #include "core/expression/iceberg_transform.hpp"
 
 #include "duckdb/common/string_util.hpp"
+#include "duckdb/common/types/date.hpp"
 #include "utf8proc_wrapper.hpp"
 #include "core/expression/iceberg_hash.hpp"
 
@@ -114,15 +115,44 @@ string IcebergTransform::PartitionValueToString(const Value &partition_value) co
 		return StringUtil::Format("%04d-%02d", year, month);
 	}
 	case IcebergTransformType::YEAR: {
-		return std::to_string(1970 + partition_value.GetValue<int32_t>());
+		return StringUtil::Format("%04d", 1970 + partition_value.GetValue<int32_t>());
 	}
 	case IcebergTransformType::HOUR: {
-		int64_t hours = partition_value.GetValue<int32_t>();
-		timestamp_t ts(hours * Interval::MICROS_PER_HOUR);
-		return Timestamp::ToString(ts);
+		// yyyy-MM-dd-HH (UTC), not a full timestamp
+		int32_t hours = partition_value.GetValue<int32_t>();
+		int64_t day_ordinal = IcebergFloorDiv(hours, 24);
+		int32_t hour_of_day = static_cast<int32_t>(hours - day_ordinal * 24);
+		int32_t year, month, day;
+		Date::Convert(date_t(static_cast<int32_t>(day_ordinal)), year, month, day);
+		return StringUtil::Format("%04d-%02d-%02d-%02d", year, month, day, hour_of_day);
 	}
 	default:
 		return partition_value.ToString();
+	}
+}
+
+Value IcebergTransform::PartitionStringToValue(const string &partition_string) const {
+	switch (type) {
+	case IcebergTransformType::DAY: {
+		return Value::INTEGER(Date::FromString(partition_string).days);
+	}
+	case IcebergTransformType::MONTH: {
+		auto dash = partition_string.find('-', 1);
+		int32_t year = std::stoi(partition_string.substr(0, dash));
+		int32_t month = std::stoi(partition_string.substr(dash + 1));
+		return Value::INTEGER((year - 1970) * 12 + (month - 1));
+	}
+	case IcebergTransformType::YEAR: {
+		return Value::INTEGER(std::stoi(partition_string) - 1970);
+	}
+	case IcebergTransformType::HOUR: {
+		auto last_dash = partition_string.rfind('-');
+		int32_t hour_of_day = std::stoi(partition_string.substr(last_dash + 1));
+		date_t d = Date::FromString(partition_string.substr(0, last_dash));
+		return Value::INTEGER(static_cast<int32_t>(static_cast<int64_t>(d.days) * 24 + hour_of_day));
+	}
+	default:
+		return Value(partition_string);
 	}
 }
 

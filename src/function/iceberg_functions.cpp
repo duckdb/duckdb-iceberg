@@ -33,6 +33,7 @@ vector<ScalarFunctionSet> IcebergFunctions::GetScalarFunctions() {
 
 	functions.push_back(GetIcebergBucketFunction());
 	functions.push_back(GetIcebergTruncateFunction());
+	functions.push_back(GetIcebergPartitionToHumanFunction());
 	functions.push_back(GetVerifyEqualityDeletesFunction());
 
 	return functions;

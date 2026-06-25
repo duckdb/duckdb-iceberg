@@ -44,6 +44,7 @@ public:
 	LogicalType GetSerializedType(const LogicalType &input) const;
 	LogicalType GetBoundsType(const LogicalType &input) const;
 	string PartitionValueToString(const Value &partition_value) const;
+	Value PartitionStringToValue(const string &partition_string) const;
 	void SetBucketOrTruncateValue(idx_t value);
 
 private:

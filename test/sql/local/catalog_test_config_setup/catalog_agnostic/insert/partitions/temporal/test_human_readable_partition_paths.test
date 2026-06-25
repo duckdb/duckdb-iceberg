@@ -1,0 +1,125 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/insert/partitions/temporal/test_human_readable_partition_paths.test
+# description: Temporal partition writes use the Iceberg human-readable path segment, not the raw ordinal
+# group: [temporal]
+
+# Partition directories use Transform.toHumanString: month -> "2022-11", year -> "2022",
+# day -> "2022-11-15", hour -> "2022-11-15-13" (not the raw integer ordinal). The manifest
+# partition value is unchanged (the INSERT would fail the BIGINT cast if the ordinal were
+# lost), so existing / other-engine files in the same logical partition are unaffected.
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+create schema if not exists my_datalake.default;
+
+# ---- month(ts) -> "2022-11" (ordinal 634) ----
+
+statement ok
+drop table if exists my_datalake.default.hrpp_month;
+
+statement ok
+CREATE TABLE my_datalake.default.hrpp_month (id int, ts TIMESTAMP)
+PARTITIONED BY (month(ts));
+
+statement ok
+INSERT INTO my_datalake.default.hrpp_month VALUES (1, TIMESTAMP '2022-11-15 10:30:00');
+
+# Directory segment is the human-readable month, not the raw ordinal 634.
+query I
+select count(*) from iceberg_metadata(my_datalake.default.hrpp_month) where file_path like '%=2022-11/%';
+----
+1
+
+query I
+select count(*) from iceberg_metadata(my_datalake.default.hrpp_month) where file_path like '%=634/%';
+----
+0
+
+# Data round-trips and partition pruning still resolves against the manifest ordinal.
+query II
+select id, ts from my_datalake.default.hrpp_month
+where ts >= TIMESTAMP '2022-11-01' and ts < TIMESTAMP '2022-12-01';
+----
+1	2022-11-15 10:30:00
+
+# ---- year(dt) -> "2022" (ordinal 52) ----
+
+statement ok
+drop table if exists my_datalake.default.hrpp_year;
+
+statement ok
+CREATE TABLE my_datalake.default.hrpp_year (id int, dt DATE)
+PARTITIONED BY (year(dt));
+
+statement ok
+INSERT INTO my_datalake.default.hrpp_year VALUES (1, DATE '2022-06-15');
+
+query I
+select count(*) from iceberg_metadata(my_datalake.default.hrpp_year) where file_path like '%=2022/%';
+----
+1
+
+query I
+select count(*) from iceberg_metadata(my_datalake.default.hrpp_year) where file_path like '%=52/%';
+----
+0
+
+query II
+select id, dt from my_datalake.default.hrpp_year;
+----
+1	2022-06-15
+
+# ---- day(ts) -> "2022-11-15" ----
+
+statement ok
+drop table if exists my_datalake.default.hrpp_day;
+
+statement ok
+CREATE TABLE my_datalake.default.hrpp_day (id int, ts TIMESTAMP)
+PARTITIONED BY (day(ts));
+
+statement ok
+INSERT INTO my_datalake.default.hrpp_day VALUES (1, TIMESTAMP '2022-11-15 10:30:00');
+
+query I
+select count(*) from iceberg_metadata(my_datalake.default.hrpp_day) where file_path like '%=2022-11-15/%';
+----
+1
+
+query II
+select id, ts from my_datalake.default.hrpp_day;
+----
+1	2022-11-15 10:30:00
+
+# ---- hour(ts) -> "2022-11-15-13" (yyyy-MM-dd-HH, not a full timestamp) ----
+
+statement ok
+drop table if exists my_datalake.default.hrpp_hour;
+
+statement ok
+CREATE TABLE my_datalake.default.hrpp_hour (id int, ts TIMESTAMP)
+PARTITIONED BY (hour(ts));
+
+statement ok
+INSERT INTO my_datalake.default.hrpp_hour VALUES (1, TIMESTAMP '2022-11-15 13:30:00');
+
+query I
+select count(*) from iceberg_metadata(my_datalake.default.hrpp_hour) where file_path like '%=2022-11-15-13/%';
+----
+1
+
+query II
+select id, ts from my_datalake.default.hrpp_hour;
+----
+1	2022-11-15 13:30:00

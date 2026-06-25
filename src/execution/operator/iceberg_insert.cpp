@@ -246,7 +246,8 @@ void IcebergInsertGlobalState::AddFiles(DataChunk &chunk, const string &table_na
 				IcebergPartitionInfo info;
 				info.field_id = partition_field.partition_field_id;
 				if (!struct_val[1].IsNull()) {
-					info.value = Value(StringValue::Get(struct_val[1]));
+					// Restore the raw ordinal the manifest stores (temporal routing values are human-readable).
+					info.value = partition_field.transform.PartitionStringToValue(StringValue::Get(struct_val[1]));
 				} else {
 					info.value = Value();
 				}
@@ -585,6 +586,26 @@ static unique_ptr<Expression> GetDateDiffFunction(ClientContext &context, const 
 	return function;
 }
 
+// Format the temporal ordinal as the human-readable routing value (hence the hive directory);
+// partition assignment is unchanged and AddFiles restores the ordinal for the manifest.
+static unique_ptr<Expression> GetTemporalHumanExpression(ClientContext &context, const IcebergCopyInput &copy_input,
+                                                         const string &date_part, uint64_t source_id) {
+	auto ordinal_expr = GetDateDiffFunction(context, copy_input, date_part, source_id);
+
+	vector<unique_ptr<Expression>> children;
+	children.push_back(make_uniq<BoundConstantExpression>(Value(date_part)));
+	children.push_back(std::move(ordinal_expr));
+
+	ErrorData error;
+	FunctionBinder binder(context);
+	auto function =
+	    binder.BindScalarFunction(DEFAULT_SCHEMA, "iceberg_partition_to_human", std::move(children), error, false);
+	if (!function) {
+		error.Throw();
+	}
+	return function;
+}
+
 //! Get an iceberg_bucket(N, col) expression for bucket partition transforms
 static unique_ptr<Expression> GetBucketExpression(ClientContext &context, const IcebergCopyInput &copy_input,
                                                   const IcebergPartitionSpecField &field) {
@@ -635,13 +656,13 @@ static unique_ptr<Expression> GetPartitionExpression(ClientContext &context, con
 		return CreateColumnReference(copy_input, col_type, col_idx);
 	}
 	case IcebergTransformType::YEAR:
-		return GetDateDiffFunction(context, copy_input, "year", field.source_id);
+		return GetTemporalHumanExpression(context, copy_input, "year", field.source_id);
 	case IcebergTransformType::MONTH:
-		return GetDateDiffFunction(context, copy_input, "month", field.source_id);
+		return GetTemporalHumanExpression(context, copy_input, "month", field.source_id);
 	case IcebergTransformType::DAY:
-		return GetDateDiffFunction(context, copy_input, "day", field.source_id);
+		return GetTemporalHumanExpression(context, copy_input, "day", field.source_id);
 	case IcebergTransformType::HOUR:
-		return GetDateDiffFunction(context, copy_input, "hour", field.source_id);
+		return GetTemporalHumanExpression(context, copy_input, "hour", field.source_id);
 	case IcebergTransformType::BUCKET:
 		return GetBucketExpression(context, copy_input, field);
 	case IcebergTransformType::TRUNCATE:
