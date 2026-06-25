@@ -22,17 +22,43 @@
 #include "core/expression/iceberg_transform.hpp"
 #include "duckdb/parser/column_definition.hpp"
 
+#include <chrono>
 #include <climits>
+#include <mutex>
 
 namespace duckdb {
 
 //! Attempt to refresh the catalog's storage secret if it supports auto-refresh.
-//! Rebuilds the secret via its original provider (e.g., web_identity/sts credential chain)
-//! which fetches fresh STS tokens. No-op if the secret lacks refresh_info.
+//! Uses SIGV4Authorization's shared mutex to prevent write-write conflicts with
+//! MaybeRefreshSecret (both call CreateSecret on the same aws_secret).
 static bool TryRefreshStorageSecret(ClientContext &context, const SecretEntry &secret_entry) {
+	auto &refresh_mutex = SIGV4Authorization::GetRefreshMutex();
+	auto &last_refresh_time = SIGV4Authorization::GetLastRefreshTime();
+	static constexpr int REFRESH_INTERVAL_SECONDS = 300;
+
+	// Fast path: skip if refreshed recently
+	auto now = std::chrono::steady_clock::now();
+	auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(now - last_refresh_time).count();
+	if (elapsed < REFRESH_INTERVAL_SECONDS) {
+		return false;
+	}
+
+	std::unique_lock<std::mutex> lock(refresh_mutex, std::try_to_lock);
+	if (!lock.owns_lock()) {
+		return false;
+	}
+
+	// Double-check after lock
+	now = std::chrono::steady_clock::now();
+	elapsed = std::chrono::duration_cast<std::chrono::seconds>(now - last_refresh_time).count();
+	if (elapsed < REFRESH_INTERVAL_SECONDS) {
+		return false;
+	}
+
 	const auto &kv_secret = dynamic_cast<const KeyValueSecret &>(*secret_entry.secret);
 	Value refresh_info;
 	if (!kv_secret.TryGetValue("refresh_info", refresh_info)) {
+		last_refresh_time = std::chrono::steady_clock::now();
 		return false;
 	}
 
@@ -56,11 +82,12 @@ static bool TryRefreshStorageSecret(ClientContext &context, const SecretEntry &s
 	try {
 		auto &secret_manager = context.db->GetSecretManager();
 		(void)secret_manager.CreateSecret(context, refresh_input);
-		return true;
 	} catch (std::exception &) {
-		// Refresh failed — caller will proceed with existing (possibly expired) credentials
-		return false;
+		// Refresh failed — continue with existing credentials
 	}
+	// Always back off (prevents cascading retries on failure)
+	last_refresh_time = std::chrono::steady_clock::now();
+	return true;
 }
 
 const string &IcebergTableInformation::BaseFilePath() const {
