@@ -13,6 +13,9 @@
 #include "duckdb/planner/expression_binder/table_function_binder.hpp"
 #include "duckdb/execution/expression_executor.hpp"
 
+#include "duckdb/parser/parsed_data/create_view_info.hpp"
+#include "duckdb/catalog/catalog_entry/view_catalog_entry.hpp"
+
 #include "catalog/rest/catalog_entry/table/iceberg_table_information.hpp"
 #include "catalog/rest/iceberg_catalog.hpp"
 #include "catalog/rest/transaction/iceberg_transaction.hpp"
@@ -106,30 +109,79 @@ void IcebergSchemaEntry::DropEntry(ClientContext &context, DropInfo &info) {
 }
 
 void IcebergSchemaEntry::DropEntry(ClientContext &context, DropInfo &info, bool delete_entry) {
-	auto table_name = info.name;
-	// find if info has a table name, if so look for it in
-	auto table_info_it = tables.GetEntries().find(table_name);
-	if (table_info_it == tables.GetEntries().end()) {
-		if (info.if_not_found == OnEntryNotFound::RETURN_NULL) {
+	auto entry_name = info.name;
+
+	// CASCADE is not part of the Iceberg REST spec — reject before any type-specific handling.
+	if (info.cascade) {
+		switch (info.type) {
+		case CatalogType::VIEW_ENTRY:
+			throw NotImplementedException("DROP VIEW <view_name> CASCADE is not supported for Iceberg views currently");
+		case CatalogType::TABLE_ENTRY:
+			throw NotImplementedException(
+			    "DROP TABLE <table_name> CASCADE is not supported for Iceberg tables currently");
+		default:
+			throw NotImplementedException("DROP %s CASCADE is not supported for Iceberg currently",
+			                              CatalogTypeToString(info.type));
+		}
+	}
+
+	switch (info.type) {
+	case CatalogType::VIEW_ENTRY: {
+		auto &transaction = IcebergTransaction::Get(context, catalog).Cast<IcebergTransaction>();
+		auto view_key = IcebergTableInformation::GetTableKey(namespace_items, entry_name);
+
+		// Check if view was created in this transaction — just remove from created_views
+		if (transaction.created_views.erase(view_key) > 0) {
+			tables.InvalidateViewCache(entry_name);
 			return;
 		}
-		throw CatalogException("Table %s does not exist", table_name);
+
+		// Load view entries if not yet loaded, then check if view exists
+		tables.LoadViewEntries(context);
+		auto view_it = tables.GetViewEntries().find(entry_name);
+		if (view_it == tables.GetViewEntries().end()) {
+			if (info.if_not_found == OnEntryNotFound::RETURN_NULL) {
+				return;
+			}
+			throw CatalogException("View %s does not exist", entry_name);
+		}
+
+		if (delete_entry) {
+			tables.InvalidateViewCache(entry_name);
+		} else {
+			IcebergTransaction::DeletedViewInfo info;
+			info.namespace_items = namespace_items;
+			info.schema_name = name;
+			info.view_name = entry_name;
+			transaction.deleted_views.emplace(view_key, std::move(info));
+		}
+		return;
 	}
-	if (info.cascade) {
-		throw NotImplementedException("DROP TABLE <table_name> CASCADE is not supported for Iceberg tables currently");
+	case CatalogType::TABLE_ENTRY: {
+		auto table_info_it = tables.GetEntries().find(entry_name);
+		if (table_info_it == tables.GetEntries().end()) {
+			if (info.if_not_found == OnEntryNotFound::RETURN_NULL) {
+				return;
+			}
+			throw CatalogException("Table %s does not exist", entry_name);
+		}
+		if (delete_entry) {
+			// Remove the entry from the catalog
+			tables.GetEntriesMutable().erase(entry_name);
+		} else {
+			// Add the table to the transaction's deleted_tables
+			auto &transaction = IcebergTransaction::Get(context, catalog).Cast<IcebergTransaction>();
+			auto &table_info = table_info_it->second;
+			auto &table = transaction.DeleteTable(*table_info);
+			//! FIXME: what?
+			// must init schema versions after copy. Schema versions have a pointer to IcebergTableInformation
+			// if the IcebergTableInformation is moved, then the pointer is no longer valid.
+			table.InitSchemaVersions();
+		}
+		return;
 	}
-	if (delete_entry) {
-		// Remove the entry from the catalog
-		tables.GetEntriesMutable().erase(table_name);
-	} else {
-		// Add the table to the transaction's deleted_tables
-		auto &transaction = IcebergTransaction::Get(context, catalog).Cast<IcebergTransaction>();
-		auto &table_info = table_info_it->second;
-		auto &table = transaction.DeleteTable(*table_info);
-		//! FIXME: what?
-		// must init schema versions after copy. Schema versions have a pointer to IcebergTableInformation
-		// if the IcebergTableInformation is moved, then the pointer is no longer valid.
-		table.InitSchemaVersions();
+	default:
+		throw NotImplementedException("DropEntry not implemented for CatalogType '%s'", CatalogTypeToString(info.type));
 	}
 }
 
@@ -153,12 +205,57 @@ optional_ptr<CatalogEntry> IcebergSchemaEntry::CreateIndex(CatalogTransaction tr
 	throw NotImplementedException("Create Index");
 }
 
-string GetUCCreateView(CreateViewInfo &info) {
-	throw NotImplementedException("Get Create View");
-}
-
 optional_ptr<CatalogEntry> IcebergSchemaEntry::CreateView(CatalogTransaction transaction, CreateViewInfo &info) {
-	throw NotImplementedException("Create View");
+	if (info.sql.empty() && !info.query) {
+		throw BinderException("Cannot create view in Iceberg without a query");
+	}
+	auto &context = transaction.GetContext();
+
+	if (info.on_conflict == OnCreateConflict::REPLACE_ON_CONFLICT) {
+		throw NotImplementedException(
+		    "CREATE OR REPLACE not supported in DuckDB-Iceberg. Please use separate Drop and Create Statements");
+	}
+
+	auto existing_entry = GetEntry(transaction, CatalogType::VIEW_ENTRY, info.view_name);
+	if (existing_entry) {
+		if (info.on_conflict == OnCreateConflict::IGNORE_ON_CONFLICT) {
+			// CREATE VIEW IF NOT EXISTS — view already exists, nothing to do.
+			return existing_entry;
+		}
+		// ERROR_ON_CONFLICT
+		throw CatalogException("View with name \"%s\" already exists", info.view_name);
+	}
+
+	// Generate default column names if the caller gave us types but no names.
+	if (info.names.empty() && !info.types.empty()) {
+		for (idx_t i = 0; i < info.types.size(); i++) {
+			if (i < info.aliases.size() && !info.aliases[i].empty()) {
+				info.names.push_back(info.aliases[i]);
+			} else {
+				info.names.push_back("col" + to_string(i));
+			}
+		}
+	}
+
+	// Track the view in the transaction
+	auto &iceberg_transaction = GetICTransaction(transaction);
+	auto view_key = IcebergTableInformation::GetTableKey(namespace_items, info.view_name);
+
+	auto view_info = unique_ptr_cast<CreateInfo, CreateViewInfo>(info.Copy());
+	// Preserve the SELECT SQL — ViewCatalogEntry::Initialize() will move the query out,
+	// so we need the SQL string available at commit time for the REST API request.
+	if (view_info->query) {
+		view_info->sql = view_info->query->ToString();
+	}
+
+	iceberg_transaction.created_views.erase(view_key);
+	iceberg_transaction.created_views.emplace(view_key, std::move(view_info));
+
+	// Invalidate stale caches
+	tables.InvalidateViewCache(info.view_name);
+
+	// Return a pointer to an owned entry (avoid dangling pointer)
+	return tables.GetViewEntry(transaction.GetContext(), info.view_name);
 }
 
 optional_ptr<CatalogEntry> IcebergSchemaEntry::CreateType(CatalogTransaction transaction, CreateTypeInfo &info) {
@@ -738,6 +835,10 @@ void IcebergSchemaEntry::Scan(ClientContext &context, CatalogType type,
 	if (!CatalogTypeIsSupported(type)) {
 		return;
 	}
+	if (type == CatalogType::VIEW_ENTRY) {
+		GetCatalogSet(type).ScanViews(context, callback);
+		return;
+	}
 	GetCatalogSet(type).Scan(context, callback);
 }
 void IcebergSchemaEntry::Scan(CatalogType type, const std::function<void(CatalogEntry &)> &callback) {
@@ -752,13 +853,26 @@ optional_ptr<CatalogEntry> IcebergSchemaEntry::LookupEntry(CatalogTransaction tr
 	}
 	auto &context = transaction.GetContext();
 	auto &ic_catalog = catalog.Cast<IcebergCatalog>();
+
+	// For VIEW_ENTRY, try the view path
+	if (type == CatalogType::VIEW_ENTRY) {
+		auto view_entry = GetCatalogSet(type).GetViewEntry(context, lookup_info.GetEntryName());
+		if (view_entry) {
+			return view_entry;
+		}
+		return nullptr;
+	}
+
+	// For TABLE_ENTRY, use the existing table lookup
 	auto table_entry = GetCatalogSet(type).GetEntry(context, lookup_info);
 	if (!table_entry) {
+		// Try looking up as a view — DuckDB sometimes looks up views as TABLE_ENTRY
+		auto view_entry = GetCatalogSet(type).GetViewEntry(context, lookup_info.GetEntryName());
+		if (view_entry) {
+			return view_entry;
+		}
 		// verify the schema exists
 		if (!IRCAPI::VerifySchemaExistence(context, ic_catalog, name)) {
-			// set exists to false here
-			// we would like to throw an error, but this code is also called when listing schemas,
-			// and throwing an error will abort the listing process.
 			exists = false;
 			return nullptr;
 		}

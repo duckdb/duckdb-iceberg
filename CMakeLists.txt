@@ -87,6 +87,7 @@ set(EXTENSION_SOURCES
 	src/function/iceberg_scalar_functions.cpp
 	src/function/metadata/iceberg_column_stats.cpp
 	src/function/metadata/iceberg_load_table_response.cpp
+	src/function/metadata/iceberg_view_metadata.cpp
 	src/function/metadata/iceberg_metadata.cpp
 	src/function/metadata/iceberg_partition_stats.cpp
 	src/function/metadata/iceberg_snapshots.cpp

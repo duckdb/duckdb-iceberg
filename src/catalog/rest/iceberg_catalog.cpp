@@ -278,6 +278,7 @@ void IcebergCatalog::AddDefaultSupportedEndpoints() {
 	supported_urls.insert("POST /v1/{prefix}/tables/rename");
 	// commit updates to multiple tables in an atomic transaction
 	supported_urls.insert("POST /v1/{prefix}/transactions/commit");
+	// Views aren't in the spec defaults; catalogs that support them advertise via /v1/config
 }
 
 void IcebergCatalog::AddS3TablesEndpoints() {
