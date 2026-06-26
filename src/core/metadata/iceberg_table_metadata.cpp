@@ -2,6 +2,8 @@
 
 #include "duckdb/common/exception.hpp"
 
+#include "catalog/rest/catalog_entry/table/iceberg_table_information.hpp"
+#include "catalog/rest/transaction/iceberg_transaction_data.hpp"
 #include "common/iceberg_utils.hpp"
 #include "catalog/rest/api/catalog_utils.hpp"
 #include "core/metadata/snapshot/iceberg_snapshot.hpp"
@@ -344,6 +346,73 @@ int32_t IcebergTableMetadata::GetLastPartitionFieldId() const {
 	return static_cast<int32_t>(last_partition_field_id.GetIndex());
 }
 
+idx_t IcebergTableMetadata::GetNextPartitionSpecId() const {
+	idx_t max_partition_spec_id = default_spec_id;
+	for (auto &spec : GetPartitionSpecs()) {
+		if (spec.first > max_partition_spec_id) {
+			max_partition_spec_id = spec.first;
+		}
+	}
+	return max_partition_spec_id + 1;
+}
+
+int64_t IcebergTableMetadata::GetExistingSpecId(const IcebergPartitionSpec &spec) const {
+	for (auto &existing_spec : GetPartitionSpecs()) {
+		bool fields_match = true;
+		if (existing_spec.second.fields.size() != spec.fields.size()) {
+			continue;
+		}
+		for (idx_t field_index = 0; field_index < existing_spec.second.fields.size(); field_index++) {
+			auto existing_partition_col_source_id = existing_spec.second.fields[field_index].source_id;
+			auto new_spec_col_source_id = spec.fields[field_index].source_id;
+			if (existing_partition_col_source_id != new_spec_col_source_id) {
+				fields_match = false;
+				break;
+			}
+			auto existing_partition_col_transform = existing_spec.second.fields[field_index].transform.RawType();
+			auto new_spec_col_transform = spec.fields[field_index].transform.RawType();
+			if (existing_partition_col_transform != new_spec_col_transform) {
+				fields_match = false;
+				break;
+			}
+		}
+		if (fields_match) {
+			return existing_spec.second.spec_id;
+		}
+	}
+	return -1;
+}
+
+void IcebergTableMetadata::SetPartitionedBy(IcebergTransactionData &transaction_data,
+                                            const vector<unique_ptr<ParsedExpression>> &partition_keys,
+                                            const IcebergTableSchema &schema, bool first_partition_spec) {
+	idx_t base_partition_field_id = 1000;
+	if (!first_partition_spec && HasLastPartitionId()) {
+		base_partition_field_id = GetLastPartitionFieldId() + 1;
+	}
+
+	idx_t new_spec_id = 0;
+	if (!first_partition_spec) {
+		new_spec_id = GetNextPartitionSpecId();
+	}
+	auto new_spec = IcebergTableInformation::BuildPartitionSpec(
+	    partition_keys, schema, static_cast<int32_t>(new_spec_id), base_partition_field_id);
+
+	auto existing_spec_id = GetExistingSpecId(new_spec);
+	if (existing_spec_id >= 0) {
+		default_spec_id = existing_spec_id;
+		transaction_data.TableSetDefaultSpec();
+		return;
+	}
+
+	partition_specs.emplace(new_spec_id, std::move(new_spec));
+	default_spec_id = new_spec_id;
+	if (!first_partition_spec) {
+		transaction_data.TableAddPartitionSpec();
+		transaction_data.TableSetDefaultSpec();
+	}
+}
+
 //! ----------- Parse the Metadata JSON -----------
 
 rest_api_objects::TableMetadata IcebergTableMetadata::Parse(const string &path, FileSystem &fs,
@@ -470,6 +539,35 @@ IcebergTableMetadata IcebergTableMetadata::FromTableMetadata(const rest_api_obje
 		}
 	}
 	return res;
+}
+
+IcebergTableMetadata IcebergTableMetadata::Copy() const {
+	IcebergTableMetadata copy;
+	copy.table_uuid = table_uuid;
+	copy.location = location;
+	copy.iceberg_version = iceberg_version;
+	copy.default_spec_id = default_spec_id;
+	copy.has_next_row_id = has_next_row_id;
+	copy.next_row_id = next_row_id;
+	copy.default_sort_order_id = default_sort_order_id;
+	copy.has_current_snapshot = has_current_snapshot;
+	copy.current_snapshot_id = current_snapshot_id;
+	copy.last_sequence_number = last_sequence_number;
+	copy.last_updated_ms = last_updated_ms;
+	copy.last_column_id = last_column_id;
+	copy.last_partition_field_id = last_partition_field_id;
+	copy.partition_specs = partition_specs;
+	copy.sort_specs = sort_specs;
+	copy.snapshots = snapshots;
+	copy.snapshot_log = snapshot_log;
+	copy.mappings = mappings;
+	copy.write_data_path = write_data_path;
+	copy.write_metadata_path = write_metadata_path;
+	copy.table_properties = table_properties;
+	copy.metadata_log = metadata_log;
+	copy.current_schema_id = current_schema_id;
+	copy.schemas = schemas;
+	return copy;
 }
 
 const case_insensitive_map_t<string> &IcebergTableMetadata::GetTableProperties() const {

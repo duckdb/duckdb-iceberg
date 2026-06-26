@@ -3,11 +3,14 @@
 
 #include "duckdb/transaction/transaction.hpp"
 #include "catalog/rest/iceberg_schema_set.hpp"
+#include "core/metadata/iceberg_table_metadata.hpp"
 
 namespace duckdb {
 class IcebergCatalog;
 class IcebergSchemaEntry;
 class IcebergTableEntry;
+class IcebergTableSchema;
+class BoundAtClause;
 struct IcebergTransactionUpdate;
 struct IcebergTransactionAlterUpdate;
 struct IcebergTransactionDeleteUpdate;
@@ -30,13 +33,54 @@ public:
 	IcebergTransactionTableState(optional_ptr<IcebergTableInformation> table);
 
 public:
+	IcebergTableInformation &GetBaseTableInfo() {
+		return GetInfo();
+	}
 	IcebergTableInformation &GetInfo() {
+		if (owned_table) {
+			return *owned_table;
+		}
 		if (!table) {
 			throw InternalException("GetInfo called on IcebergTransactionTableState without a table, status: %d",
 			                        static_cast<uint8_t>(status));
 		}
 		return *table;
 	}
+	const IcebergTableInformation &GetInfo() const {
+		if (owned_table) {
+			return *owned_table;
+		}
+		if (!table) {
+			throw InternalException("GetInfo called on IcebergTransactionTableState without a table, status: %d",
+			                        static_cast<uint8_t>(status));
+		}
+		return *table;
+	}
+	IcebergTableMetadata &GetMetadata() {
+		D_ASSERT(has_effective_metadata);
+		return effective_metadata;
+	}
+	const IcebergTableMetadata &GetMetadata() const {
+		if (has_effective_metadata) {
+			return effective_metadata;
+		}
+		return GetInfo().table_metadata;
+	}
+	bool HasEffectiveMetadata() const {
+		return has_effective_metadata;
+	}
+	void SetMetadata(IcebergTableMetadata metadata) {
+		effective_metadata = std::move(metadata);
+		has_effective_metadata = true;
+	}
+	optional_ptr<IcebergTransactionData> GetTransactionData() const {
+		return transaction_data.get();
+	}
+	IcebergTransactionData &GetOrCreateTransactionData(IcebergTransaction &transaction);
+	optional_ptr<CatalogEntry> GetSchemaVersion(ClientContext &context, optional_ptr<BoundAtClause> at);
+	optional_ptr<CatalogEntry> GetLatestSchema(ClientContext &context);
+	IcebergTableEntry &GetOrCreateSchemaEntry(const IcebergTableSchema &table_schema);
+	IcebergTableEntry &GetOrCreateDummyEntry();
 
 public:
 	bool IsDroppedOrRenamed() const {
@@ -52,12 +96,23 @@ public:
 		status = value;
 	}
 	void SetTable(IcebergTableInformation &value) {
+		owned_table.reset();
 		table = value;
+	}
+	void SetOwnedTable(IcebergTableInformation &&value) {
+		owned_table = make_uniq<IcebergTableInformation>(std::move(value));
+		table = *owned_table;
 	}
 
 private:
 	optional_ptr<IcebergTableInformation> table;
+	unique_ptr<IcebergTableInformation> owned_table;
 	IcebergTableStatus status;
+	bool has_effective_metadata = false;
+	IcebergTableMetadata effective_metadata;
+	unordered_map<int32_t, unique_ptr<IcebergTableEntry>> schema_versions;
+	unique_ptr<IcebergTableEntry> dummy_entry;
+	unique_ptr<IcebergTransactionData> transaction_data;
 };
 
 struct SchemaPropertyUpdates {
@@ -77,6 +132,9 @@ public:
 	static IcebergTransaction &Get(ClientContext &context, Catalog &catalog);
 	AccessMode GetAccessMode() const {
 		return access_mode;
+	}
+	timestamp_t GetTransactionStartTimestamp() const {
+		return transaction_start_timestamp;
 	}
 	void DoTableUpdates(IcebergTransactionAlterUpdate &alter_update, ClientContext &context);
 	void DoTableDeletes(IcebergTransactionDeleteUpdate &delete_update, ClientContext &context);
@@ -110,6 +168,7 @@ private:
 	DatabaseInstance &db;
 	IcebergCatalog &catalog;
 	AccessMode access_mode;
+	timestamp_t transaction_start_timestamp;
 
 public:
 	//! Tables referenced by this transaction that have to stay alive for the duration of the transaction.
@@ -133,6 +192,6 @@ public:
 };
 
 void ApplyTableUpdate(IcebergTableInformation &table_info, IcebergTransaction &iceberg_transaction,
-                      const std::function<void(IcebergTableInformation &, IcebergTransactionData &)> &callback);
+                      const std::function<void(IcebergTransactionTableState &, IcebergTransactionData &)> &callback);
 
 } // namespace duckdb

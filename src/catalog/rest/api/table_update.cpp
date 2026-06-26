@@ -22,7 +22,7 @@ static rest_api_objects::Schema CopySchema(const IcebergTableSchema &schema) {
 }
 
 AddSchemaUpdate::AddSchemaUpdate(const IcebergTableInformation &table_info, int32_t schema_id)
-    : IcebergTableUpdate(IcebergTableUpdateType::ADD_SCHEMA, table_info), schema_id(schema_id) {
+    : IcebergTableUpdate(IcebergTableUpdateType::ADD_SCHEMA), schema_id(schema_id) {
 	if (table_info.table_metadata.HasLastColumnId()) {
 		last_column_id = table_info.table_metadata.GetLastColumnId();
 	}
@@ -35,7 +35,7 @@ void AddSchemaUpdate::CreateUpdate(DatabaseInstance &db, ClientContext &context,
 	update.add_schema_update = rest_api_objects::AddSchemaUpdate();
 	update.add_schema_update->base_update.action = "add-schema";
 
-	auto &schemas = table_info.table_metadata.GetSchemas();
+	auto &schemas = commit_state.table_info.table_metadata.GetSchemas();
 	auto it = schemas.find(schema_id);
 	if (it == schemas.end()) {
 		throw InternalException("(AddSchemaUpdate) Couldn't find schema with id: %d", schema_id);
@@ -49,7 +49,7 @@ void AddSchemaUpdate::CreateUpdate(DatabaseInstance &db, ClientContext &context,
 }
 
 AssignUUIDUpdate::AssignUUIDUpdate(const IcebergTableInformation &table_info)
-    : IcebergTableUpdate(IcebergTableUpdateType::ADD_SCHEMA, table_info) {
+    : IcebergTableUpdate(IcebergTableUpdateType::ADD_SCHEMA) {
 }
 
 void AssignUUIDUpdate::CreateUpdate(DatabaseInstance &db, ClientContext &context,
@@ -59,11 +59,11 @@ void AssignUUIDUpdate::CreateUpdate(DatabaseInstance &db, ClientContext &context
 	update.assign_uuidupdate = rest_api_objects::AssignUUIDUpdate();
 	update.assign_uuidupdate->base_update.action = "assign-uuid";
 	// uuid most likely created by the rest catalog?
-	update.assign_uuidupdate->uuid = table_info.table_metadata.table_uuid;
+	update.assign_uuidupdate->uuid = commit_state.table_info.table_metadata.table_uuid;
 }
 
 AssertCreateRequirement::AssertCreateRequirement(const IcebergTableInformation &table_info)
-    : IcebergTableRequirement(IcebergTableRequirementType::ASSERT_CREATE, table_info) {
+    : IcebergTableRequirement(IcebergTableRequirementType::ASSERT_CREATE) {
 }
 
 void AssertCreateRequirement::CreateRequirement(DatabaseInstance &db, ClientContext &context,
@@ -75,7 +75,7 @@ void AssertCreateRequirement::CreateRequirement(DatabaseInstance &db, ClientCont
 }
 
 AssertTableUUIDRequirement::AssertTableUUIDRequirement(const IcebergTableInformation &table_info)
-    : IcebergTableRequirement(IcebergTableRequirementType::ASSERT_TABLE_UUID, table_info) {
+    : IcebergTableRequirement(IcebergTableRequirementType::ASSERT_TABLE_UUID) {
 }
 
 void AssertTableUUIDRequirement::CreateRequirement(DatabaseInstance &db, ClientContext &context,
@@ -88,7 +88,7 @@ void AssertTableUUIDRequirement::CreateRequirement(DatabaseInstance &db, ClientC
 }
 
 AssertCurrentSchemaIdRequirement::AssertCurrentSchemaIdRequirement(const IcebergTableInformation &table_info)
-    : IcebergTableRequirement(IcebergTableRequirementType::ASSERT_CURRENT_SCHEMA_ID, table_info) {
+    : IcebergTableRequirement(IcebergTableRequirementType::ASSERT_CURRENT_SCHEMA_ID) {
 	current_schema_id = table_info.table_metadata.GetCurrentSchemaId();
 }
 
@@ -102,7 +102,7 @@ void AssertCurrentSchemaIdRequirement::CreateRequirement(DatabaseInstance &db, C
 }
 
 AssertLastAssignedFieldIdRequirement::AssertLastAssignedFieldIdRequirement(const IcebergTableInformation &table_info)
-    : IcebergTableRequirement(IcebergTableRequirementType::ASSERT_LAST_ASSIGNED_FIELD_ID, table_info) {
+    : IcebergTableRequirement(IcebergTableRequirementType::ASSERT_LAST_ASSIGNED_FIELD_ID) {
 	D_ASSERT(table_info.table_metadata.HasLastColumnId());
 	last_assigned_field_id = static_cast<int32_t>(table_info.table_metadata.GetLastColumnId());
 }
@@ -118,7 +118,7 @@ void AssertLastAssignedFieldIdRequirement::CreateRequirement(DatabaseInstance &d
 
 AssertLastAssignedPartitionIdRequirement::AssertLastAssignedPartitionIdRequirement(
     const IcebergTableInformation &table_info)
-    : IcebergTableRequirement(IcebergTableRequirementType::ASSERT_LAST_ASSIGNED_PARTITION_ID, table_info) {
+    : IcebergTableRequirement(IcebergTableRequirementType::ASSERT_LAST_ASSIGNED_PARTITION_ID) {
 	if (table_info.table_metadata.HasLastPartitionId()) {
 		last_assigned_partition_id = table_info.table_metadata.GetLastPartitionFieldId();
 	} else {
@@ -138,7 +138,7 @@ void AssertLastAssignedPartitionIdRequirement::CreateRequirement(DatabaseInstanc
 }
 
 AssertDefaultSpecIdRequirement::AssertDefaultSpecIdRequirement(const IcebergTableInformation &table_info)
-    : IcebergTableRequirement(IcebergTableRequirementType::ASSERT_DEFAULT_SPEC_ID, table_info) {
+    : IcebergTableRequirement(IcebergTableRequirementType::ASSERT_DEFAULT_SPEC_ID) {
 	default_spec_id = table_info.table_metadata.default_spec_id;
 }
 
@@ -152,7 +152,7 @@ void AssertDefaultSpecIdRequirement::CreateRequirement(DatabaseInstance &db, Cli
 }
 
 UpgradeFormatVersion::UpgradeFormatVersion(const IcebergTableInformation &table_info)
-    : IcebergTableUpdate(IcebergTableUpdateType::UPGRADE_FORMAT_VERSION, table_info) {
+    : IcebergTableUpdate(IcebergTableUpdateType::UPGRADE_FORMAT_VERSION) {
 }
 
 void UpgradeFormatVersion::CreateUpdate(DatabaseInstance &db, ClientContext &context,
@@ -161,11 +161,11 @@ void UpgradeFormatVersion::CreateUpdate(DatabaseInstance &db, ClientContext &con
 	auto &req = commit_state.table_change.updates.back();
 	req.upgrade_format_version_update = rest_api_objects::UpgradeFormatVersionUpdate();
 	req.upgrade_format_version_update->base_update.action = "upgrade-format-version";
-	req.upgrade_format_version_update->format_version = table_info.table_metadata.iceberg_version;
+	req.upgrade_format_version_update->format_version = commit_state.table_info.table_metadata.iceberg_version;
 }
 
 SetCurrentSchema::SetCurrentSchema(const IcebergTableInformation &table_info)
-    : IcebergTableUpdate(IcebergTableUpdateType::SET_CURRENT_SCHEMA, table_info) {
+    : IcebergTableUpdate(IcebergTableUpdateType::SET_CURRENT_SCHEMA) {
 }
 
 void SetCurrentSchema::CreateUpdate(DatabaseInstance &db, ClientContext &context,
@@ -175,11 +175,11 @@ void SetCurrentSchema::CreateUpdate(DatabaseInstance &db, ClientContext &context
 	req.set_current_schema_update = rest_api_objects::SetCurrentSchemaUpdate();
 	req.set_current_schema_update->base_update.action = "set-current-schema";
 	// TODO: should this be a different value? or is the rest catalog setting this again?
-	req.set_current_schema_update->schema_id = table_info.table_metadata.GetCurrentSchemaId();
+	req.set_current_schema_update->schema_id = commit_state.table_info.table_metadata.GetCurrentSchemaId();
 }
 
 AddPartitionSpec::AddPartitionSpec(const IcebergTableInformation &table_info)
-    : IcebergTableUpdate(IcebergTableUpdateType::ADD_PARTITION_SPEC, table_info) {
+    : IcebergTableUpdate(IcebergTableUpdateType::ADD_PARTITION_SPEC) {
 }
 
 void AddPartitionSpec::CreateUpdate(DatabaseInstance &db, ClientContext &context,
@@ -189,9 +189,9 @@ void AddPartitionSpec::CreateUpdate(DatabaseInstance &db, ClientContext &context
 	req.add_partition_spec_update = rest_api_objects::AddPartitionSpecUpdate();
 	req.add_partition_spec_update->base_update.action = "add-spec";
 	// need to get the spec id from table_info() so we can also check updated tables.
-	req.add_partition_spec_update->spec.spec_id = table_info.table_metadata.default_spec_id;
-	if (table_info.table_metadata.HasPartitionSpec()) {
-		auto &current_partition_spec = table_info.table_metadata.GetLatestPartitionSpec();
+	req.add_partition_spec_update->spec.spec_id = commit_state.table_info.table_metadata.default_spec_id;
+	if (commit_state.table_info.table_metadata.HasPartitionSpec()) {
+		auto &current_partition_spec = commit_state.table_info.table_metadata.GetLatestPartitionSpec();
 		for (auto &field : current_partition_spec.fields) {
 			req.add_partition_spec_update->spec.fields.push_back(rest_api_objects::PartitionField());
 			auto &updated_field = req.add_partition_spec_update->spec.fields.back();
@@ -204,7 +204,7 @@ void AddPartitionSpec::CreateUpdate(DatabaseInstance &db, ClientContext &context
 }
 
 AddSortOrder::AddSortOrder(const IcebergTableInformation &table_info)
-    : IcebergTableUpdate(IcebergTableUpdateType::ADD_SORT_ORDER, table_info) {
+    : IcebergTableUpdate(IcebergTableUpdateType::ADD_SORT_ORDER) {
 }
 
 void AddSortOrder::CreateUpdate(DatabaseInstance &db, ClientContext &context, IcebergCommitState &commit_state) const {
@@ -212,13 +212,14 @@ void AddSortOrder::CreateUpdate(DatabaseInstance &db, ClientContext &context, Ic
 	auto &req = commit_state.table_change.updates.back();
 	req.add_sort_order_update = rest_api_objects::AddSortOrderUpdate();
 	req.add_sort_order_update->base_update.action = "add-sort-order";
-	if (table_info.table_metadata.HasSortOrder()) {
-		req.add_sort_order_update->sort_order.order_id = table_info.table_metadata.default_sort_order_id.GetIndex();
+	if (commit_state.table_info.table_metadata.HasSortOrder()) {
+		req.add_sort_order_update->sort_order.order_id =
+		    commit_state.table_info.table_metadata.default_sort_order_id.GetIndex();
 	}
 
-	if (table_info.table_metadata.HasSortOrder()) {
+	if (commit_state.table_info.table_metadata.HasSortOrder()) {
 		// FIXME: is it correct to just get the latest sort order?
-		auto &current_sort_order = table_info.table_metadata.GetLatestSortOrder();
+		auto &current_sort_order = commit_state.table_info.table_metadata.GetLatestSortOrder();
 		for (auto &field : current_sort_order.fields) {
 			req.add_sort_order_update->sort_order.fields.push_back(rest_api_objects::SortField());
 			auto &updated_field = req.add_sort_order_update->sort_order.fields.back();
@@ -231,7 +232,7 @@ void AddSortOrder::CreateUpdate(DatabaseInstance &db, ClientContext &context, Ic
 }
 
 SetDefaultSortOrder::SetDefaultSortOrder(const IcebergTableInformation &table_info)
-    : IcebergTableUpdate(IcebergTableUpdateType::SET_DEFAULT_SORT_ORDER, table_info) {
+    : IcebergTableUpdate(IcebergTableUpdateType::SET_DEFAULT_SORT_ORDER) {
 }
 
 void SetDefaultSortOrder::CreateUpdate(DatabaseInstance &db, ClientContext &context,
@@ -240,12 +241,13 @@ void SetDefaultSortOrder::CreateUpdate(DatabaseInstance &db, ClientContext &cont
 	auto &req = commit_state.table_change.updates.back();
 	req.set_default_sort_order_update = rest_api_objects::SetDefaultSortOrderUpdate();
 	req.set_default_sort_order_update->base_update.action = "set-default-sort-order";
-	D_ASSERT(table_info.table_metadata.HasSortOrder());
-	req.set_default_sort_order_update->sort_order_id = table_info.table_metadata.GetLatestSortOrder().sort_order_id;
+	D_ASSERT(commit_state.table_info.table_metadata.HasSortOrder());
+	req.set_default_sort_order_update->sort_order_id =
+	    commit_state.table_info.table_metadata.GetLatestSortOrder().sort_order_id;
 }
 
 SetDefaultSpec::SetDefaultSpec(const IcebergTableInformation &table_info)
-    : IcebergTableUpdate(IcebergTableUpdateType::SET_DEFAULT_SPEC, table_info) {
+    : IcebergTableUpdate(IcebergTableUpdateType::SET_DEFAULT_SPEC) {
 }
 
 void SetDefaultSpec::CreateUpdate(DatabaseInstance &db, ClientContext &context,
@@ -254,12 +256,12 @@ void SetDefaultSpec::CreateUpdate(DatabaseInstance &db, ClientContext &context,
 	auto &req = commit_state.table_change.updates.back();
 	req.set_default_spec_update = rest_api_objects::SetDefaultSpecUpdate();
 	req.set_default_spec_update->base_update.action = "set-default-spec";
-	req.set_default_spec_update->spec_id = table_info.table_metadata.default_spec_id;
+	req.set_default_spec_update->spec_id = commit_state.table_info.table_metadata.default_spec_id;
 }
 
 SetProperties::SetProperties(const IcebergTableInformation &table_info,
                              const case_insensitive_map_t<string> &properties)
-    : IcebergTableUpdate(IcebergTableUpdateType::SET_PROPERTIES, table_info), properties(properties) {
+    : IcebergTableUpdate(IcebergTableUpdateType::SET_PROPERTIES), properties(properties) {
 }
 
 void SetProperties::CreateUpdate(DatabaseInstance &db, ClientContext &context, IcebergCommitState &commit_state) const {
@@ -271,7 +273,7 @@ void SetProperties::CreateUpdate(DatabaseInstance &db, ClientContext &context, I
 }
 
 RemoveProperties::RemoveProperties(const IcebergTableInformation &table_info, const vector<string> &properties)
-    : IcebergTableUpdate(IcebergTableUpdateType::SET_PROPERTIES, table_info), properties(properties) {
+    : IcebergTableUpdate(IcebergTableUpdateType::SET_PROPERTIES), properties(properties) {
 }
 
 void RemoveProperties::CreateUpdate(DatabaseInstance &db, ClientContext &context,
@@ -284,7 +286,7 @@ void RemoveProperties::CreateUpdate(DatabaseInstance &db, ClientContext &context
 }
 
 SetLocation::SetLocation(const IcebergTableInformation &table_info)
-    : IcebergTableUpdate(IcebergTableUpdateType::SET_LOCATION, table_info) {
+    : IcebergTableUpdate(IcebergTableUpdateType::SET_LOCATION) {
 }
 
 void SetLocation::CreateUpdate(DatabaseInstance &db, ClientContext &context, IcebergCommitState &commit_state) const {
@@ -292,7 +294,7 @@ void SetLocation::CreateUpdate(DatabaseInstance &db, ClientContext &context, Ice
 	auto &req = commit_state.table_change.updates.back();
 	req.set_location_update = rest_api_objects::SetLocationUpdate();
 	req.set_location_update->base_update.action = "set-location";
-	req.set_location_update->location = table_info.table_metadata.location;
+	req.set_location_update->location = commit_state.table_info.table_metadata.location;
 }
 
 } // namespace duckdb

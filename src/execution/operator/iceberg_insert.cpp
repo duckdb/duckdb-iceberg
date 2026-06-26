@@ -452,13 +452,13 @@ SinkFinalizeType IcebergInsert::Finalize(Pipeline &pipeline, Event &event, Clien
 		auto delete_manifest_entries = IcebergDelete::GenerateDeleteManifestEntries(delete_global_state);
 		if (!written_files.empty()) {
 			ApplyTableUpdate(table_info, iceberg_transaction,
-			                 [&](IcebergTableInformation &tbl, IcebergTransactionData &transaction_data) {
+			                 [&](IcebergTransactionTableState &tbl, IcebergTransactionData &transaction_data) {
 				                 transaction_data.AddUpdateSnapshot(std::move(delete_manifest_entries),
 				                                                    std::move(written_files),
 				                                                    std::move(delete_global_state.altered_manifests));
 				                 for (auto &entry : delete_global_state.written_files) {
 					                 auto &delete_file = entry.second;
-					                 if (table_info.table_metadata.iceberg_version >= 3) {
+					                 if (tbl.GetMetadata().iceberg_version >= 3) {
 						                 transaction_data.transactional_delete_files[delete_file.data_file_path] =
 						                     delete_file.file_name;
 					                 }
@@ -469,7 +469,7 @@ SinkFinalizeType IcebergInsert::Finalize(Pipeline &pipeline, Event &event, Clien
 		// Regular insert: commit an append snapshot.
 		if (!written_files.empty()) {
 			ApplyTableUpdate(table_info, iceberg_transaction,
-			                 [&](IcebergTableInformation &tbl, IcebergTransactionData &transaction_data) {
+			                 [&](IcebergTransactionTableState &tbl, IcebergTransactionData &transaction_data) {
 				                 IcebergManifestDeletes empty_deletes;
 				                 transaction_data.AddSnapshot(IcebergSnapshotOperationType::APPEND,
 				                                              std::move(written_files), std::move(empty_deletes));
@@ -980,9 +980,9 @@ PhysicalOperator &IcebergCatalog::PlanInsert(ClientContext &context, PhysicalPla
 	auto &irc_transaction = IcebergTransaction::Get(context, *this);
 	auto &alter = irc_transaction.GetOrCreateAlter();
 	auto &updated_table = alter.GetOrInitializeTable(table_entry.table_info);
-	auto &table_metadata = updated_table.table_metadata;
+	auto &table_metadata = updated_table.GetMetadata();
 	auto &schema = table_metadata.GetLatestSchema();
-	auto &updated_table_entry = *updated_table.schema_versions[schema.schema_id];
+	auto &updated_table_entry = updated_table.GetOrCreateSchemaEntry(schema);
 
 	if (table_metadata.HasSortOrder()) {
 		auto &sort_spec = table_metadata.GetLatestSortOrder();

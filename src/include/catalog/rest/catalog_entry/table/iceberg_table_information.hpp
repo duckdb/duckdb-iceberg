@@ -60,6 +60,8 @@ public:
 	string GetTableKey() const;
 	IcebergTableMetadata CreateMetadataFromLog(ClientContext &context, int64_t transaction_start_millis,
 	                                           string &metadata_path) const;
+	IcebergTableMetadata GetTransactionStartMetadata(ClientContext &context,
+	                                                 IcebergTransaction &iceberg_transaction) const;
 	// we pass the transaction, because we are only allowed to copy table information state provded by the catalog
 	// from before our transaction start time.
 	IcebergTableInformation Copy(IcebergTransaction &iceberg_transaction) const;
@@ -70,6 +72,7 @@ public:
 	IcebergSnapshotLookup GetSnapshotLookup(IcebergTransaction &iceberg_transaction) const;
 	IcebergSnapshotLookup GetSnapshotLookup(ClientContext &context, optional_ptr<BoundAtClause> at) const;
 	IcebergSnapshotLookup GetSnapshotLookup(ClientContext &context) const;
+	IcebergSnapshotLookup GetSnapshotLookup(timestamp_t transaction_start) const;
 	bool TableIsEmpty(const IcebergSnapshotLookup &snapshot_lookup) const;
 	void InitializeFromLoadTableResult(const rest_api_objects::LoadTableResult &load_table_result,
 	                                   bool initialize_schemas = true);

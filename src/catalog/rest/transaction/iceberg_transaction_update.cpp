@@ -16,45 +16,39 @@ IcebergTransactionAlterUpdate::IcebergTransactionAlterUpdate(IcebergTransaction 
 IcebergTransactionAlterUpdate::~IcebergTransactionAlterUpdate() {
 }
 
-IcebergTableInformation &IcebergTransactionAlterUpdate::GetOrInitializeTable(const IcebergTableInformation &table) {
+IcebergTransactionTableState &IcebergTransactionAlterUpdate::GetOrInitializeTable(IcebergTableInformation &table) {
+	auto locked_context = transaction.context.lock();
+	auto &client_context = *locked_context;
+
 	auto table_key = table.GetTableKey();
 	auto it = updated_tables.find(table_key);
 	if (it == updated_tables.end()) {
-		it = updated_tables.emplace(table_key, table.Copy(transaction)).first;
-		// Preserve the table_uuid from the original table info (resolved at transaction start).
-		// Copy() reads from the global request cache, which can be contaminated by another
-		// transaction's RENAME overwriting the entry with a different table's metadata.
-		// Only override when the original has a known UUID (skip for newly created tables).
+		it = updated_tables.emplace(table_key, IcebergTransactionTableState(table)).first;
+		auto metadata = table.GetTransactionStartMetadata(client_context, transaction);
 		if (!table.table_metadata.table_uuid.empty()) {
-			it->second.table_metadata.table_uuid = table.table_metadata.table_uuid;
+			metadata.table_uuid = table.table_metadata.table_uuid;
 		}
-		it->second.InitSchemaVersions();
+		it->second.SetMetadata(std::move(metadata));
 	}
-	transaction.SetLatestTableState(it->second, IcebergTableStatus::ALIVE);
+	transaction.SetLatestTableState(it->second.GetInfo(), IcebergTableStatus::ALIVE);
 	return it->second;
 }
 
-IcebergTransactionData &IcebergTransactionAlterUpdate::GetOrCreateTransactionData(IcebergTableInformation &table) {
-	auto table_key = table.GetTableKey();
-	auto it = table_transaction_data.find(table_key);
-	if (it == table_transaction_data.end()) {
-		auto context = transaction.context.lock();
-		it = table_transaction_data.emplace(table_key, make_uniq<IcebergTransactionData>(*context, table)).first;
-	}
-	return *it->second;
+IcebergTransactionData &IcebergTransactionAlterUpdate::GetOrCreateTransactionData(IcebergTransactionTableState &table) {
+	return table.GetOrCreateTransactionData(transaction);
 }
 
 optional_ptr<IcebergTransactionData> IcebergTransactionAlterUpdate::GetTransactionData(const string &table_key) const {
-	auto it = table_transaction_data.find(table_key);
-	if (it == table_transaction_data.end()) {
+	auto it = updated_tables.find(table_key);
+	if (it == updated_tables.end()) {
 		return nullptr;
 	}
-	return it->second.get();
+	return it->second.GetTransactionData();
 }
 
 optional_ptr<IcebergTransactionData>
-IcebergTransactionAlterUpdate::GetTransactionData(const IcebergTableInformation &table) const {
-	return GetTransactionData(table.GetTableKey());
+IcebergTransactionAlterUpdate::GetTransactionData(const IcebergTransactionTableState &table) const {
+	return GetTransactionData(table.GetInfo().GetTableKey());
 }
 
 bool IcebergTransactionAlterUpdate::HasTransactionUpdates(const string &table_key) const {
@@ -62,8 +56,8 @@ bool IcebergTransactionAlterUpdate::HasTransactionUpdates(const string &table_ke
 	return transaction_data && transaction_data->HasUpdates();
 }
 
-bool IcebergTransactionAlterUpdate::HasTransactionUpdates(const IcebergTableInformation &table) const {
-	return HasTransactionUpdates(table.GetTableKey());
+bool IcebergTransactionAlterUpdate::HasTransactionUpdates(const IcebergTransactionTableState &table) const {
+	return HasTransactionUpdates(table.GetInfo().GetTableKey());
 }
 
 bool IcebergTransactionAlterUpdate::HasUpdates() const {
@@ -77,13 +71,16 @@ bool IcebergTransactionAlterUpdate::HasUpdates() const {
 
 IcebergTableInformation &IcebergTransactionAlterUpdate::CreateTable(const string &table_key,
                                                                     IcebergTableInformation &&table) {
-	auto emplace_res = updated_tables.emplace(table_key, std::move(table));
+	auto emplace_res = updated_tables.emplace(table_key, IcebergTransactionTableState(nullptr));
 	if (!emplace_res.second) {
 		throw InternalException("Table %s was already created somehow?", table_key);
 	}
+	emplace_res.first->second.SetOwnedTable(std::move(table));
+	emplace_res.first->second.SetMetadata(emplace_res.first->second.GetInfo().table_metadata.Copy());
 
-	transaction.current_table_data.emplace(table_key, IcebergTransactionTableState(emplace_res.first->second));
-	return emplace_res.first->second;
+	transaction.current_table_data.emplace(table_key,
+	                                       IcebergTransactionTableState(emplace_res.first->second.GetInfo()));
+	return emplace_res.first->second.GetInfo();
 }
 
 IcebergTransactionDeleteUpdate::IcebergTransactionDeleteUpdate(IcebergTransaction &transaction,

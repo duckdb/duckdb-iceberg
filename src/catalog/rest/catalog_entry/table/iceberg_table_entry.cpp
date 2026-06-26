@@ -30,9 +30,25 @@ class OAuth2Authorization;
 constexpr column_t IcebergMultiFileReader::COLUMN_IDENTIFIER_LAST_SEQUENCE_NUMBER;
 
 IcebergTableEntry::IcebergTableEntry(IcebergTableInformation &table_info, Catalog &catalog, SchemaCatalogEntry &schema,
-                                     CreateTableInfo &info, optional_idx schema_id)
-    : TableCatalogEntry(catalog, schema, info), table_info(table_info), schema_id(schema_id) {
+                                     CreateTableInfo &info, optional_idx schema_id,
+                                     optional_ptr<IcebergTransactionTableState> transaction_state)
+    : TableCatalogEntry(catalog, schema, info), table_info(table_info), schema_id(schema_id),
+      transaction_state(transaction_state) {
 	this->internal = false;
+}
+
+const IcebergTableMetadata &IcebergTableEntry::GetTableMetadata() const {
+	if (transaction_state) {
+		return transaction_state->GetMetadata();
+	}
+	return table_info.table_metadata;
+}
+
+optional_ptr<IcebergTransactionData> IcebergTableEntry::GetTransactionData() const {
+	if (transaction_state) {
+		return transaction_state->GetTransactionData();
+	}
+	return nullptr;
 }
 
 unique_ptr<BaseStatistics> IcebergTableEntry::GetStatistics(ClientContext &context, column_t column_id) {
@@ -60,7 +76,8 @@ void IcebergTableEntry::PrepareIcebergScanFromEntry(ClientContext &context) cons
 	// Get Credentials from IRC API
 	auto &fs = FileSystem::GetFileSystem(context);
 	auto table_credentials = table_info.GetVendedCredentials(context);
-	auto metadata_path = table_info.table_metadata.GetMetadataPath(fs);
+	auto &table_metadata = GetTableMetadata();
+	auto metadata_path = table_metadata.GetMetadataPath(fs);
 
 	unique_ptr<SecretEntry> http_secret_entry;
 
@@ -90,11 +107,11 @@ void IcebergTableEntry::PrepareIcebergScanFromEntry(ClientContext &context) cons
 		auto &info = *table_credentials.config;
 		D_ASSERT(info.scope.empty());
 		string storage_scope;
-		auto data_path = table_info.table_metadata.table_properties.find("write.data.path");
-		if (data_path != table_info.table_metadata.table_properties.end()) {
+		auto data_path = table_metadata.table_properties.find("write.data.path");
+		if (data_path != table_metadata.table_properties.end()) {
 			storage_scope = data_path->second;
 		} else {
-			storage_scope = table_info.table_metadata.GetLocation();
+			storage_scope = table_metadata.GetLocation();
 		}
 		if (!storage_scope.empty()) {
 			if (!StringUtil::EndsWith(storage_scope, "/")) {
@@ -188,14 +205,17 @@ TableFunction IcebergTableEntry::GetScanFunction(ClientContext &context, unique_
 		throw InternalException("GetScanFunction was called with a dummy IcebergTableEntry, this should never happen");
 	}
 	const auto schema_id = this->schema_id.GetIndex();
-	const auto &metadata = table_info.table_metadata;
+	const auto &metadata = GetTableMetadata();
 	const auto &iceberg_schema = *metadata.GetSchemaFromId(schema_id);
 
 	// lookup should be asof start of the transaction if the lookup info is empty and there are no transaction updates
 	bool using_transaction_timestamp = false;
 	IcebergSnapshotLookup snapshot_lookup;
-	auto &iceberg_transaction = IcebergTransaction::Get(context, catalog);
-	auto transaction_data = iceberg_transaction.GetTransactionData(table_info.GetTableKey());
+	auto transaction_data = GetTransactionData();
+	if (!transaction_data) {
+		auto &iceberg_transaction = IcebergTransaction::Get(context, catalog);
+		transaction_data = iceberg_transaction.GetTransactionData(table_info.GetTableKey());
+	}
 	const bool has_transaction_updates = transaction_data && transaction_data->HasUpdates();
 	if (!lookup.GetAtClause() && !has_transaction_updates) {
 		// if there is no user supplied AT () clause, and the table does not have transaction updates
@@ -272,7 +292,7 @@ virtual_column_map_t IcebergTableEntry::VirtualColumns() {
 
 vector<column_t> IcebergTableEntry::GetRowIdColumns() const {
 	vector<column_t> result;
-	auto &table_metadata = table_info.table_metadata;
+	auto &table_metadata = GetTableMetadata();
 	if (table_metadata.iceberg_version >= 3) {
 		//! Project the _row_id column as part of the row-id-columns
 		result.push_back(COLUMN_IDENTIFIER_ROW_ID);

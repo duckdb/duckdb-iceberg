@@ -415,14 +415,14 @@ SinkFinalizeType IcebergDelete::Finalize(Pipeline &pipeline, Event &event, Clien
 	if (!global_state.written_files.empty()) {
 		ApplyTableUpdate(
 		    table_info, iceberg_transaction,
-		    [&](IcebergTableInformation &tbl, IcebergTransactionData &transaction_data) {
+		    [&](IcebergTransactionTableState &tbl, IcebergTransactionData &transaction_data) {
 			    transaction_data.AddSnapshot(IcebergSnapshotOperationType::DELETE, std::move(iceberg_delete_files),
 			                                 std::move(global_state.altered_manifests));
 
 			    //! Add or overwrite the currently active transaction-local delete files
 			    for (auto &entry : global_state.written_files) {
 				    auto &delete_file = entry.second;
-				    if (table_info.table_metadata.iceberg_version >= 3) {
+				    if (tbl.GetMetadata().iceberg_version >= 3) {
 					    transaction_data.transactional_delete_files[delete_file.data_file_path] = delete_file.file_name;
 				    }
 			    }
@@ -514,9 +514,9 @@ PhysicalOperator &IcebergCatalog::PlanDelete(ClientContext &context, PhysicalPla
 	auto &irc_transaction = IcebergTransaction::Get(context, *this);
 	auto &alter = irc_transaction.GetOrCreateAlter();
 	auto &updated_table = alter.GetOrInitializeTable(table_entry.table_info);
-	auto &table_metadata = updated_table.table_metadata;
+	auto &table_metadata = updated_table.GetMetadata();
 	auto &schema = table_metadata.GetLatestSchema();
-	auto &updated_table_entry = *updated_table.schema_versions[schema.schema_id];
+	auto &updated_table_entry = updated_table.GetOrCreateSchemaEntry(schema);
 
 	auto iceberg_version = updated_table_entry.table_info.table_metadata.iceberg_version;
 	if (iceberg_version < 2) {

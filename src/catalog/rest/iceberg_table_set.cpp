@@ -260,7 +260,8 @@ IcebergTableInformation &IcebergTableSet::CreateNewEntry(ClientContext &context,
 
 	auto &current_schema = table_info.table_metadata.GetLatestSchema();
 	table_ptr->table_info.table_metadata.default_spec_id = 0;
-	auto &transaction_data = alter_update.GetOrCreateTransactionData(table_info);
+	auto &created_table = alter_update.GetOrInitializeTable(table_info);
+	auto &transaction_data = alter_update.GetOrCreateTransactionData(created_table);
 	table_ptr->table_info.SetPartitionedBy(transaction_data, info.partition_keys, current_schema, true);
 
 	// Immediately create the table with stage_create = true to get metadata & data location(s)

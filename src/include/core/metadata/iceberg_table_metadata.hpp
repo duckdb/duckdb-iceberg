@@ -15,6 +15,10 @@
 
 namespace duckdb {
 
+class ParsedExpression;
+class IcebergTableSchema;
+struct IcebergTransactionData;
+
 // common Iceberg table property keys
 const string WRITE_UPDATE_MODE = "write.update.mode";
 const string WRITE_DELETE_MODE = "write.delete.mode";
@@ -43,6 +47,7 @@ public:
 	static rest_api_objects::TableMetadata Parse(const string &path, FileSystem &fs,
 	                                             const string &metadata_compression_codec);
 	static IcebergTableMetadata FromTableMetadata(const rest_api_objects::TableMetadata &table_metadata);
+	IcebergTableMetadata Copy() const;
 	static string GetMetaDataPath(ClientContext &context, const string &path, FileSystem &fs,
 	                              const IcebergOptions &options);
 	optional_ptr<const IcebergSnapshot> GetLatestSnapshot() const;
@@ -83,6 +88,8 @@ public:
 
 	bool HasLastPartitionId() const;
 	int32_t GetLastPartitionFieldId() const;
+	idx_t GetNextPartitionSpecId() const;
+	int64_t GetExistingSpecId(const IcebergPartitionSpec &spec) const;
 
 	const case_insensitive_map_t<string> &GetTableProperties() const;
 	string GetTableProperty(string property_string) const;
@@ -90,6 +97,9 @@ public:
 	string ToJSON() const;
 	void WriteMetadata(ClientContext &context, const string &path) const;
 	void WriteVersionHint(ClientContext &context, const string &path, const string &metadata_json_path) const;
+	void SetPartitionedBy(IcebergTransactionData &transaction_data,
+	                      const vector<unique_ptr<ParsedExpression>> &partition_keys, const IcebergTableSchema &schema,
+	                      bool first_partition_spec = false);
 
 public:
 	void SetCurrentSchemaId(int32_t schema_id);
