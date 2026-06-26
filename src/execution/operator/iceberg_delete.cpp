@@ -14,6 +14,7 @@
 
 #include "catalog/rest/iceberg_catalog.hpp"
 #include "catalog/rest/transaction/iceberg_transaction.hpp"
+#include "catalog/rest/transaction/iceberg_transaction_data.hpp"
 #include "catalog/rest/catalog_entry/table/iceberg_table_entry.hpp"
 #include "catalog/rest/catalog_entry/table/iceberg_table_information.hpp"
 #include "planning/iceberg_multi_file_reader.hpp"
@@ -412,19 +413,20 @@ SinkFinalizeType IcebergDelete::Finalize(Pipeline &pipeline, Event &event, Clien
 	auto iceberg_delete_files = GenerateDeleteManifestEntries(global_state);
 
 	if (!global_state.written_files.empty()) {
-		ApplyTableUpdate(table_info, iceberg_transaction, [&](IcebergTableInformation &tbl) {
-			auto &transaction_data = tbl.GetOrCreateTransactionData(iceberg_transaction);
-			transaction_data.AddSnapshot(IcebergSnapshotOperationType::DELETE, std::move(iceberg_delete_files),
-			                             std::move(global_state.altered_manifests));
+		ApplyTableUpdate(
+		    table_info, iceberg_transaction,
+		    [&](IcebergTableInformation &tbl, IcebergTransactionData &transaction_data) {
+			    transaction_data.AddSnapshot(IcebergSnapshotOperationType::DELETE, std::move(iceberg_delete_files),
+			                                 std::move(global_state.altered_manifests));
 
-			//! Add or overwrite the currently active transaction-local delete files
-			for (auto &entry : global_state.written_files) {
-				auto &delete_file = entry.second;
-				if (table_info.table_metadata.iceberg_version >= 3) {
-					transaction_data.transactional_delete_files[delete_file.data_file_path] = delete_file.file_name;
-				}
-			}
-		});
+			    //! Add or overwrite the currently active transaction-local delete files
+			    for (auto &entry : global_state.written_files) {
+				    auto &delete_file = entry.second;
+				    if (table_info.table_metadata.iceberg_version >= 3) {
+					    transaction_data.transactional_delete_files[delete_file.data_file_path] = delete_file.file_name;
+				    }
+			    }
+		    });
 	}
 	return SinkFinalizeType::READY;
 }

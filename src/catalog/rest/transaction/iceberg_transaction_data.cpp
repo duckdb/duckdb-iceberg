@@ -99,6 +99,22 @@ int64_t IcebergTransactionData::GetCommitRetryCount() const {
 	return result;
 }
 
+bool IcebergTransactionData::HasUpdates() const {
+	if (!updates.empty()) {
+		return true;
+	}
+	if (!requirements.empty()) {
+		return true;
+	}
+	if (set_schema_id) {
+		return true;
+	}
+	if (assert_schema_id) {
+		return true;
+	}
+	return false;
+}
+
 bool IcebergTransactionData::SupportsAppendRetry() const {
 	if (!requirements.empty() || set_schema_id) {
 		return false;

@@ -16,6 +16,8 @@
 #include "catalog/rest/iceberg_catalog.hpp"
 #include "catalog/rest/catalog_entry/schema/iceberg_schema_entry.hpp"
 #include "catalog/rest/api/catalog_api.hpp"
+#include "catalog/rest/transaction/iceberg_transaction.hpp"
+#include "catalog/rest/transaction/iceberg_transaction_data.hpp"
 #include "planning/iceberg_multi_file_reader.hpp"
 #include "planning/iceberg_multi_file_reader.hpp"
 #include "catalog/rest/storage/authorization/sigv4.hpp"
@@ -192,7 +194,10 @@ TableFunction IcebergTableEntry::GetScanFunction(ClientContext &context, unique_
 	// lookup should be asof start of the transaction if the lookup info is empty and there are no transaction updates
 	bool using_transaction_timestamp = false;
 	IcebergSnapshotLookup snapshot_lookup;
-	if (!lookup.GetAtClause() && !table_info.HasTransactionUpdates()) {
+	auto &iceberg_transaction = IcebergTransaction::Get(context, catalog);
+	auto transaction_data = iceberg_transaction.GetTransactionData(table_info.GetTableKey());
+	const bool has_transaction_updates = transaction_data && transaction_data->HasUpdates();
+	if (!lookup.GetAtClause() && !has_transaction_updates) {
 		// if there is no user supplied AT () clause, and the table does not have transaction updates
 		// use transaction start time
 		snapshot_lookup = table_info.GetSnapshotLookup(context);
@@ -219,8 +224,8 @@ TableFunction IcebergTableEntry::GetScanFunction(ClientContext &context, unique_
 	auto &fs = FileSystem::GetFileSystem(context);
 	auto scan_info =
 	    make_shared_ptr<IcebergScanInfo>(metadata.GetMetadataPath(fs), metadata, snapshot_info, iceberg_schema);
-	if (table_info.transaction_data && snapshot_lookup.IsLatest()) {
-		scan_info->transaction_data = table_info.transaction_data.get();
+	if (transaction_data && snapshot_lookup.IsLatest()) {
+		scan_info->transaction_data = transaction_data;
 	}
 
 	iceberg_scan_function.function_info = scan_info;

@@ -8,6 +8,7 @@
 namespace duckdb {
 
 class IcebergTransaction;
+struct IcebergTransactionData;
 
 enum class IcebergTransactionUpdateType : uint8_t { ALTER, DELETE, RENAME };
 
@@ -52,9 +53,16 @@ public:
 public:
 	IcebergTableInformation &CreateTable(const string &table_key, IcebergTableInformation &&table);
 	IcebergTableInformation &GetOrInitializeTable(const IcebergTableInformation &table);
+	IcebergTransactionData &GetOrCreateTransactionData(IcebergTableInformation &table);
+	optional_ptr<IcebergTransactionData> GetTransactionData(const string &table_key) const;
+	optional_ptr<IcebergTransactionData> GetTransactionData(const IcebergTableInformation &table) const;
+	bool HasTransactionUpdates(const string &table_key) const;
+	bool HasTransactionUpdates(const IcebergTableInformation &table) const;
 	bool HasUpdates() const;
 	//! All the tables touched in this atomic block
 	case_insensitive_map_t<IcebergTableInformation> updated_tables;
+	//! Transaction-local changes for each touched table. The catalog table information never owns this state.
+	case_insensitive_map_t<unique_ptr<IcebergTransactionData>> table_transaction_data;
 	//! The tables successively committed (used if multi-table commit isn't available)
 	case_insensitive_set_t committed_tables;
 };

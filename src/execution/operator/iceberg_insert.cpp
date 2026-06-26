@@ -26,6 +26,7 @@
 #include "core/metadata/partition/iceberg_partition_spec.hpp"
 #include "planning/iceberg_multi_file_list.hpp"
 #include "catalog/rest/transaction/iceberg_transaction.hpp"
+#include "catalog/rest/transaction/iceberg_transaction_data.hpp"
 #include "core/expression/iceberg_value.hpp"
 #include "core/expression/iceberg_transform.hpp"
 #include "storage/statistics/iceberg_variant_statistics.hpp"
@@ -450,27 +451,29 @@ SinkFinalizeType IcebergInsert::Finalize(Pipeline &pipeline, Event &event, Clien
 		auto &delete_global_state = update_delete_op->sink_state->Cast<IcebergDeleteGlobalState>();
 		auto delete_manifest_entries = IcebergDelete::GenerateDeleteManifestEntries(delete_global_state);
 		if (!written_files.empty()) {
-			ApplyTableUpdate(table_info, iceberg_transaction, [&](IcebergTableInformation &tbl) {
-				auto &transaction_data = tbl.GetOrCreateTransactionData(iceberg_transaction);
-				transaction_data.AddUpdateSnapshot(std::move(delete_manifest_entries), std::move(written_files),
-				                                   std::move(delete_global_state.altered_manifests));
-				for (auto &entry : delete_global_state.written_files) {
-					auto &delete_file = entry.second;
-					if (table_info.table_metadata.iceberg_version >= 3) {
-						transaction_data.transactional_delete_files[delete_file.data_file_path] = delete_file.file_name;
-					}
-				}
-			});
+			ApplyTableUpdate(table_info, iceberg_transaction,
+			                 [&](IcebergTableInformation &tbl, IcebergTransactionData &transaction_data) {
+				                 transaction_data.AddUpdateSnapshot(std::move(delete_manifest_entries),
+				                                                    std::move(written_files),
+				                                                    std::move(delete_global_state.altered_manifests));
+				                 for (auto &entry : delete_global_state.written_files) {
+					                 auto &delete_file = entry.second;
+					                 if (table_info.table_metadata.iceberg_version >= 3) {
+						                 transaction_data.transactional_delete_files[delete_file.data_file_path] =
+						                     delete_file.file_name;
+					                 }
+				                 }
+			                 });
 		}
 	} else {
 		// Regular insert: commit an append snapshot.
 		if (!written_files.empty()) {
-			ApplyTableUpdate(table_info, iceberg_transaction, [&](IcebergTableInformation &tbl) {
-				auto &transaction_data = tbl.GetOrCreateTransactionData(iceberg_transaction);
-				IcebergManifestDeletes empty_deletes;
-				transaction_data.AddSnapshot(IcebergSnapshotOperationType::APPEND, std::move(written_files),
-				                             std::move(empty_deletes));
-			});
+			ApplyTableUpdate(table_info, iceberg_transaction,
+			                 [&](IcebergTableInformation &tbl, IcebergTransactionData &transaction_data) {
+				                 IcebergManifestDeletes empty_deletes;
+				                 transaction_data.AddSnapshot(IcebergSnapshotOperationType::APPEND,
+				                                              std::move(written_files), std::move(empty_deletes));
+			                 });
 		}
 	}
 	return SinkFinalizeType::READY;

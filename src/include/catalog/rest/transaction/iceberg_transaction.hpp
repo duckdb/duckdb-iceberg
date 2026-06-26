@@ -12,6 +12,7 @@ struct IcebergTransactionUpdate;
 struct IcebergTransactionAlterUpdate;
 struct IcebergTransactionDeleteUpdate;
 struct IcebergTransactionRenameUpdate;
+struct IcebergTransactionData;
 
 struct TableTransactionInfo {
 	TableTransactionInfo() {};
@@ -93,6 +94,8 @@ public:
 	IcebergTransactionTableState &SetLatestTableState(const string &table_key, IcebergTableStatus status);
 	bool StartedBefore(timestamp_t timestamp_ms) const;
 	IcebergTransactionAlterUpdate &GetOrCreateAlter();
+	optional_ptr<IcebergTransactionData> GetTransactionData(const string &table_key) const;
+	bool HasTransactionUpdates(const string &table_key) const;
 	IcebergTableInformation &DeleteTable(IcebergTableInformation &table);
 	IcebergTableInformation &RenameTable(IcebergTableInformation &table, const string &new_name);
 
@@ -130,6 +133,6 @@ public:
 };
 
 void ApplyTableUpdate(IcebergTableInformation &table_info, IcebergTransaction &iceberg_transaction,
-                      const std::function<void(IcebergTableInformation &)> &callback);
+                      const std::function<void(IcebergTableInformation &, IcebergTransactionData &)> &callback);
 
 } // namespace duckdb

@@ -175,11 +175,11 @@ static idx_t GetMaxRetries(const IcebergTransactionAlterUpdate &alter_update) {
 		if (alter_update.committed_tables.count(entry.first)) {
 			continue;
 		}
-		const auto &table_info = entry.second;
-		if (!table_info.transaction_data || !table_info.HasTransactionUpdates()) {
+		auto transaction_data = alter_update.GetTransactionData(entry.first);
+		if (!transaction_data || !transaction_data->HasUpdates()) {
 			continue;
 		}
-		auto table_max_retries = GetMaxRetries(*table_info.transaction_data);
+		auto table_max_retries = GetMaxRetries(*transaction_data);
 		if (!saw_table) {
 			max_retries = table_max_retries;
 			saw_table = true;
@@ -202,7 +202,7 @@ static void CreateTableRequirements(DatabaseInstance &db, ClientContext &context
 		requirement.current_schema_id = transaction_data.initial_schema_id;
 		requirement.CreateRequirement(db, context, commit_state);
 	}
-	if (!has_assert_create && commit_state.table_info.HasTransactionUpdates()) {
+	if (!has_assert_create && transaction_data.HasUpdates()) {
 		auto uuid_requirement = AssertTableUUIDRequirement(commit_state.table_info);
 		uuid_requirement.CreateRequirement(db, context, commit_state);
 	}
@@ -214,6 +214,7 @@ static void CreateTableRequirements(DatabaseInstance &db, ClientContext &context
 }
 
 static SingleTableStagedCommit StageSingleTableCommit(DatabaseInstance &db, IcebergTableInformation &table_info,
+                                                      IcebergTransactionData &transaction_data,
                                                       ClientContext &context) {
 	SingleTableStagedCommit info;
 	IcebergCommitState commit_state(table_info, context);
@@ -225,7 +226,6 @@ static SingleTableStagedCommit StageSingleTableCommit(DatabaseInstance &db, Iceb
 
 	auto &metadata = commit_state.table_info.table_metadata;
 	auto current_snapshot = metadata.GetLatestSnapshot();
-	auto &transaction_data = *commit_state.table_info.transaction_data;
 	info.retryable = transaction_data.SupportsAppendRetry();
 	if (!transaction_data.alters.empty()) {
 		commit_state.LoadExistingManifests(std::move(transaction_data.existing_manifest_list));
@@ -273,12 +273,13 @@ TableTransactionInfo IcebergTransaction::GetTransactionRequest(IcebergTransactio
 			continue;
 		}
 		auto &table_info = updated_table.second;
-		if (!table_info.HasTransactionUpdates()) {
+		auto transaction_data = alter_update.GetTransactionData(table_key);
+		if (!transaction_data || !transaction_data->HasUpdates()) {
 			//! No changes to commit
 			continue;
 		}
 
-		auto table_transaction_info = StageSingleTableCommit(db, table_info, context);
+		auto table_transaction_info = StageSingleTableCommit(db, table_info, *transaction_data, context);
 		info.created_metadata_files.emplace(table_key, std::move(table_transaction_info.created_metadata_files));
 		info.table_requests.emplace(table_key, transaction.table_changes.size());
 		transaction.table_changes.push_back(std::move(table_transaction_info.request));
@@ -295,11 +296,11 @@ bool IcebergTransaction::CanUseMultiTableCommit(const IcebergTransactionAlterUpd
 		return false;
 	}
 	for (const auto &entry : alter_update.updated_tables) {
-		const auto &table_info = entry.second;
-		if (!table_info.transaction_data) {
+		auto transaction_data = alter_update.GetTransactionData(entry.first);
+		if (!transaction_data) {
 			continue;
 		}
-		if (table_info.transaction_data->has_assert_create) {
+		if (transaction_data->has_assert_create) {
 			return false;
 		}
 	}
@@ -333,14 +334,15 @@ void IcebergTransaction::RefreshRetryTables(IcebergTransactionAlterUpdate &alter
 			continue;
 		}
 		auto &table_info = it->second;
-		if (!table_info.transaction_data) {
+		auto transaction_data = alter_update.GetTransactionData(table_key);
+		if (!transaction_data) {
 			continue;
 		}
-		if (!table_info.transaction_data->RetryStateMatches(table_info)) {
+		if (!transaction_data->RetryStateMatches(table_info)) {
 			throw TransactionException("Table %s changed incompatibly while retrying commit", table_key);
 		}
 		table_info.RefreshFromCatalog(context);
-		if (!table_info.transaction_data->RetryStateMatches(table_info)) {
+		if (!transaction_data->RetryStateMatches(table_info)) {
 			throw TransactionException("Table %s changed incompatibly while retrying commit", table_key);
 		}
 		SetLatestTableState(table_info, IcebergTableStatus::ALIVE);
@@ -517,18 +519,19 @@ void IcebergTransaction::DoSingleTableCommitUpdates(IcebergTransactionAlterUpdat
 	D_ASSERT(catalog.supported_urls.count("POST /v1/{prefix}/namespaces/{namespace}/tables/{table}"));
 	for (auto &entry : alter_update.updated_tables) {
 		auto &table_key = entry.first;
-		const auto max_retries =
-		    entry.second.transaction_data ? GetMaxRetries(*entry.second.transaction_data) : idx_t(0);
+		auto transaction_data = alter_update.GetTransactionData(table_key);
+		const auto max_retries = transaction_data ? GetMaxRetries(*transaction_data) : idx_t(0);
 		for (idx_t attempt = 0;; attempt++) {
 			if (alter_update.committed_tables.count(table_key)) {
 				break;
 			}
 			auto &table_info = entry.second;
-			if (!table_info.HasTransactionUpdates()) {
+			transaction_data = alter_update.GetTransactionData(table_key);
+			if (!transaction_data || !transaction_data->HasUpdates()) {
 				break;
 			}
 
-			auto table_transaction_info = StageSingleTableCommit(db, table_info, context);
+			auto table_transaction_info = StageSingleTableCommit(db, table_info, *transaction_data, context);
 			auto &table_change = table_transaction_info.request;
 			D_ASSERT(table_change.identifier);
 			auto &identifier = *table_change.identifier;
@@ -662,13 +665,13 @@ void IcebergTransaction::CleanupFiles() {
 				continue;
 			}
 			auto &table = up_table.second;
-			if (!table.transaction_data) {
+			auto transaction_data = alter_update.GetTransactionData(up_table.first);
+			if (!transaction_data) {
 				// error occurred before transaction data was initialized
 				// this can happen during table creation with table schema that cannot convert to
 				// an iceberg table schema due to type incompatabilities
 				continue;
 			}
-			auto &transaction_data = table.transaction_data;
 			for (auto &update : transaction_data->updates) {
 				if (update->type != IcebergTableUpdateType::ADD_SNAPSHOT) {
 					continue;
@@ -746,6 +749,26 @@ IcebergTransactionAlterUpdate &IcebergTransaction::GetOrCreateAlter() {
 	return transaction_updates.back()->Cast<IcebergTransactionAlterUpdate>();
 }
 
+optional_ptr<IcebergTransactionData> IcebergTransaction::GetTransactionData(const string &table_key) const {
+	for (idx_t i = transaction_updates.size(); i-- > 0;) {
+		auto &transaction_update = transaction_updates[i];
+		if (transaction_update->type != IcebergTransactionUpdateType::ALTER) {
+			continue;
+		}
+		auto &alter_update = transaction_update->Cast<IcebergTransactionAlterUpdate>();
+		auto transaction_data = alter_update.GetTransactionData(table_key);
+		if (transaction_data) {
+			return transaction_data;
+		}
+	}
+	return nullptr;
+}
+
+bool IcebergTransaction::HasTransactionUpdates(const string &table_key) const {
+	auto transaction_data = GetTransactionData(table_key);
+	return transaction_data && transaction_data->HasUpdates();
+}
+
 IcebergTableInformation &IcebergTransaction::DeleteTable(IcebergTableInformation &table) {
 	auto table_key = table.GetTableKey();
 	auto state = GetLatestTableState(table_key);
@@ -768,7 +791,7 @@ IcebergTableInformation &IcebergTransaction::RenameTable(IcebergTableInformation
 	auto state = GetLatestTableState(table_key);
 	if (state) {
 		auto &original_table = state->GetInfo();
-		if (original_table.HasTransactionUpdates()) {
+		if (HasTransactionUpdates(original_table.GetTableKey())) {
 			throw CatalogException("This table (%s) was modified already, can't be renamed!", table.name);
 		}
 	}
@@ -800,10 +823,11 @@ IcebergTableInformation &IcebergTransaction::RenameTable(IcebergTableInformation
 }
 
 void ApplyTableUpdate(IcebergTableInformation &table_info, IcebergTransaction &iceberg_transaction,
-                      const std::function<void(IcebergTableInformation &)> &callback) {
+                      const std::function<void(IcebergTableInformation &, IcebergTransactionData &)> &callback) {
 	auto &alter = iceberg_transaction.GetOrCreateAlter();
 	auto &updated_table = alter.GetOrInitializeTable(table_info);
-	callback(updated_table);
+	auto &transaction_data = alter.GetOrCreateTransactionData(updated_table);
+	callback(updated_table, transaction_data);
 }
 
 } // namespace duckdb

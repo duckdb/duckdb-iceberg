@@ -25,6 +25,7 @@ public:
 
 public:
 	int64_t GetCommitRetryCount() const;
+	bool HasUpdates() const;
 	bool SupportsAppendRetry() const;
 	bool RetryStateMatches(const IcebergTableInformation &table_info) const;
 

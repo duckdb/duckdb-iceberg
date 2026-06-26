@@ -438,7 +438,7 @@ IcebergTableInformation::BuildPartitionSpec(const vector<unique_ptr<ParsedExpres
 	return new_spec;
 }
 
-void IcebergTableInformation::SetPartitionedBy(IcebergTransaction &transaction,
+void IcebergTableInformation::SetPartitionedBy(IcebergTransactionData &transaction_data,
                                                const vector<unique_ptr<ParsedExpression>> &partition_keys,
                                                const IcebergTableSchema &schema, bool first_partition_spec) {
 	idx_t base_partition_field_id = 1000;
@@ -450,8 +450,6 @@ void IcebergTableInformation::SetPartitionedBy(IcebergTransaction &transaction,
 	if (!first_partition_spec) {
 		new_spec_id = GetNextPartitionSpecId();
 	}
-	auto &transaction_data = GetOrCreateTransactionData(transaction);
-
 	auto new_spec =
 	    BuildPartitionSpec(partition_keys, schema, static_cast<int32_t>(new_spec_id), base_partition_field_id);
 
@@ -545,7 +543,7 @@ IcebergSnapshotLookup IcebergTableInformation::GetSnapshotLookup(IcebergTransact
 
 IcebergSnapshotLookup IcebergTableInformation::GetSnapshotLookup(ClientContext &context,
                                                                  optional_ptr<BoundAtClause> at) const {
-	if (!at && !HasTransactionUpdates()) {
+	if (!at) {
 		// if there is no user supplied AT () clause, and the table does not have transaction updates
 		// use transaction start time
 		return GetSnapshotLookup(context);
@@ -566,26 +564,6 @@ IcebergSnapshotLookup IcebergTableInformation::GetSnapshotLookup(ClientContext &
 bool IcebergTableInformation::TableIsEmpty(const IcebergSnapshotLookup &snapshot_lookup) const {
 	(void)snapshot_lookup;
 	if (!table_metadata.GetLatestSnapshot()) {
-		return true;
-	}
-	return false;
-}
-
-bool IcebergTableInformation::HasTransactionUpdates() const {
-	if (!transaction_data) {
-		return false;
-	}
-	auto &data = *transaction_data;
-	if (!data.updates.empty()) {
-		return true;
-	}
-	if (!data.requirements.empty()) {
-		return true;
-	}
-	if (data.set_schema_id) {
-		return true;
-	}
-	if (data.assert_schema_id) {
 		return true;
 	}
 	return false;
@@ -706,15 +684,6 @@ IcebergTableInformation::IcebergTableInformation(IcebergCatalog &catalog, Iceber
                                                  const string &name)
     : catalog(catalog), schema(schema), name(name) {
 	table_id = "uuid-" + schema.name + "-" + name;
-}
-
-IcebergTransactionData &IcebergTableInformation::GetOrCreateTransactionData(IcebergTransaction &transaction) {
-	lock_guard<mutex> guard(transaction.lock);
-	if (!transaction_data) {
-		auto context = transaction.context.lock();
-		transaction_data = make_uniq<IcebergTransactionData>(*context, *this);
-	}
-	return *transaction_data;
 }
 
 void IcebergTableInformation::InitializeFromLoadTableResult(const rest_api_objects::LoadTableResult &load_table_result,

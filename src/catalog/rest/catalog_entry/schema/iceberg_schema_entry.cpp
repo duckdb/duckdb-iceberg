@@ -308,7 +308,7 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 
 	auto &alter = irc_transaction.GetOrCreateAlter();
 	auto &updated_table = alter.GetOrInitializeTable(catalog_table_info);
-	auto &transaction_data = updated_table.GetOrCreateTransactionData(irc_transaction);
+	auto &transaction_data = alter.GetOrCreateTransactionData(updated_table);
 	auto &current_schema = updated_table.table_metadata.GetLatestSchema();
 
 	switch (alter_table_info.alter_table_type) {
@@ -320,7 +320,7 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 		// Ensure last assigned partition field id is up to date
 		transaction_data.TableAddAssertLastAssignedPartitionId();
 
-		updated_table.SetPartitionedBy(irc_transaction, partition_info.partition_keys, current_schema);
+		updated_table.SetPartitionedBy(transaction_data, partition_info.partition_keys, current_schema);
 		return;
 	}
 	case AlterTableType::ADD_COLUMN: {

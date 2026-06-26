@@ -176,10 +176,10 @@ static void SetIcebergTablePropertiesFunction(ClientContext &context, TableFunct
 	auto &table_info = iceberg_table->table_info;
 
 	auto &iceberg_transaction = IcebergTransaction::Get(context, iceberg_table->catalog);
-	ApplyTableUpdate(table_info, iceberg_transaction, [&](IcebergTableInformation &tbl) {
-		auto &transaction_data = tbl.GetOrCreateTransactionData(iceberg_transaction);
-		transaction_data.TableSetProperties(bind_data.properties);
-	});
+	ApplyTableUpdate(table_info, iceberg_transaction,
+	                 [&](IcebergTableInformation &tbl, IcebergTransactionData &transaction_data) {
+		                 transaction_data.TableSetProperties(bind_data.properties);
+	                 });
 
 	auto schema = iceberg_table->schema.name;
 	auto table_name = iceberg_table->name;
@@ -205,10 +205,10 @@ static void RemoveIcebergTablePropertiesFunction(ClientContext &context, TableFu
 	auto iceberg_table = bind_data.iceberg_table;
 	auto &table_info = iceberg_table->table_info;
 	auto &iceberg_transaction = IcebergTransaction::Get(context, iceberg_table->catalog);
-	ApplyTableUpdate(table_info, iceberg_transaction, [&](IcebergTableInformation &tbl) {
-		auto &transaction_data = tbl.GetOrCreateTransactionData(iceberg_transaction);
-		transaction_data.TableRemoveProperties(bind_data.remove_properties);
-	});
+	ApplyTableUpdate(table_info, iceberg_transaction,
+	                 [&](IcebergTableInformation &tbl, IcebergTransactionData &transaction_data) {
+		                 transaction_data.TableRemoveProperties(bind_data.remove_properties);
+	                 });
 
 	auto schema = iceberg_table->schema.name;
 	auto table_name = iceberg_table->name;

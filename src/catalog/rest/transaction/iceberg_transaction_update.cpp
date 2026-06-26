@@ -1,5 +1,6 @@
 #include "catalog/rest/transaction/iceberg_transaction_update.hpp"
 #include "catalog/rest/transaction/iceberg_transaction.hpp"
+#include "catalog/rest/transaction/iceberg_transaction_data.hpp"
 
 namespace duckdb {
 
@@ -33,10 +34,41 @@ IcebergTableInformation &IcebergTransactionAlterUpdate::GetOrInitializeTable(con
 	return it->second;
 }
 
+IcebergTransactionData &IcebergTransactionAlterUpdate::GetOrCreateTransactionData(IcebergTableInformation &table) {
+	auto table_key = table.GetTableKey();
+	auto it = table_transaction_data.find(table_key);
+	if (it == table_transaction_data.end()) {
+		auto context = transaction.context.lock();
+		it = table_transaction_data.emplace(table_key, make_uniq<IcebergTransactionData>(*context, table)).first;
+	}
+	return *it->second;
+}
+
+optional_ptr<IcebergTransactionData> IcebergTransactionAlterUpdate::GetTransactionData(const string &table_key) const {
+	auto it = table_transaction_data.find(table_key);
+	if (it == table_transaction_data.end()) {
+		return nullptr;
+	}
+	return it->second.get();
+}
+
+optional_ptr<IcebergTransactionData>
+IcebergTransactionAlterUpdate::GetTransactionData(const IcebergTableInformation &table) const {
+	return GetTransactionData(table.GetTableKey());
+}
+
+bool IcebergTransactionAlterUpdate::HasTransactionUpdates(const string &table_key) const {
+	auto transaction_data = GetTransactionData(table_key);
+	return transaction_data && transaction_data->HasUpdates();
+}
+
+bool IcebergTransactionAlterUpdate::HasTransactionUpdates(const IcebergTableInformation &table) const {
+	return HasTransactionUpdates(table.GetTableKey());
+}
+
 bool IcebergTransactionAlterUpdate::HasUpdates() const {
 	for (auto &it : updated_tables) {
-		auto &table = it.second;
-		if (table.HasTransactionUpdates()) {
+		if (HasTransactionUpdates(it.first)) {
 			return true;
 		}
 	}
