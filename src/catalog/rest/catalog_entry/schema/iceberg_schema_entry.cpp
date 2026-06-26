@@ -270,7 +270,7 @@ void IntroduceNewSchema(IcebergTransactionTableState &updated_table, IcebergTran
 	auto &result_schema = table_metadata.AddSchemaOrGetExisting(std::move(new_schema));
 	if (result_schema.schema_id == new_schema_id) {
 		updated_table.GetOrCreateSchemaEntry(result_schema);
-		transaction_data.TableAddSchema(new_schema_id);
+		transaction_data.TableAddSchema(table_metadata, new_schema_id);
 	} else {
 		transaction_data.TableSetCurrentSchema();
 	}
@@ -481,7 +481,7 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 		auto &result_schema = table_metadata.AddSchemaOrGetExisting(std::move(new_schema));
 		if (result_schema.schema_id == new_schema_id) {
 			updated_table.GetOrCreateSchemaEntry(result_schema);
-			transaction_data.TableAddSchema(new_schema_id);
+			transaction_data.TableAddSchema(table_metadata, new_schema_id);
 		} else {
 			transaction_data.TableSetCurrentSchema();
 		}
@@ -581,7 +581,7 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 		auto &result_schema = table_metadata.AddSchemaOrGetExisting(std::move(new_schema));
 		if (result_schema.schema_id == new_schema_id) {
 			updated_table.GetOrCreateSchemaEntry(result_schema);
-			transaction_data.TableAddSchema(new_schema_id);
+			transaction_data.TableAddSchema(table_metadata, new_schema_id);
 		} else {
 			transaction_data.TableSetCurrentSchema();
 		}

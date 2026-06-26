@@ -4,28 +4,24 @@
 
 namespace duckdb {
 
-static rest_api_objects::Schema CopySchema(const IcebergTableSchema &schema) {
-	// the rest api objects are currently not copyable. Without having to modify generated code
-	//  the easiest way to copy for now is to write the schema to string, then parse it again
+AddSchemaUpdate::AddSchemaUpdate(const IcebergTableInformation &table_info, const IcebergTableMetadata &table_metadata,
+                                 int32_t schema_id)
+    : IcebergTableUpdate(IcebergTableUpdateType::ADD_SCHEMA), schema_id(schema_id) {
+	if (table_metadata.HasLastColumnId()) {
+		last_column_id = table_metadata.GetLastColumnId();
+	}
+
+	auto &schemas = table_metadata.GetSchemas();
+	auto it = schemas.find(schema_id);
+	if (it == schemas.end()) {
+		throw InternalException("(AddSchemaUpdate) Couldn't find schema with id: %d", schema_id);
+	}
 	std::unique_ptr<yyjson_mut_doc, YyjsonDocDeleter> doc_p(yyjson_mut_doc_new(nullptr));
 	yyjson_mut_doc *doc = doc_p.get();
 	auto root_object = yyjson_mut_obj(doc);
 	yyjson_mut_doc_set_root(doc, root_object);
-	IcebergCreateTableRequest::PopulateSchema(doc, root_object, schema);
-	auto schema_str = ICUtils::JsonToString(std::move(doc_p));
-
-	// Parse it back as immutable
-	std::unique_ptr<yyjson_doc, YyjsonDocDeleter> new_doc(
-	    yyjson_read(schema_str.c_str(), strlen(schema_str.c_str()), 0));
-	yyjson_val *val = yyjson_doc_get_root(new_doc.get());
-	return rest_api_objects::Schema::FromJSON(val);
-}
-
-AddSchemaUpdate::AddSchemaUpdate(const IcebergTableInformation &table_info, int32_t schema_id)
-    : IcebergTableUpdate(IcebergTableUpdateType::ADD_SCHEMA), schema_id(schema_id) {
-	if (table_info.table_metadata.HasLastColumnId()) {
-		last_column_id = table_info.table_metadata.GetLastColumnId();
-	}
+	IcebergCreateTableRequest::PopulateSchema(doc, root_object, *it->second);
+	schema_json = ICUtils::JsonToString(std::move(doc_p));
 }
 
 void AddSchemaUpdate::CreateUpdate(DatabaseInstance &db, ClientContext &context,
@@ -35,13 +31,9 @@ void AddSchemaUpdate::CreateUpdate(DatabaseInstance &db, ClientContext &context,
 	update.add_schema_update = rest_api_objects::AddSchemaUpdate();
 	update.add_schema_update->base_update.action = "add-schema";
 
-	auto &schemas = commit_state.table_info.table_metadata.GetSchemas();
-	auto it = schemas.find(schema_id);
-	if (it == schemas.end()) {
-		throw InternalException("(AddSchemaUpdate) Couldn't find schema with id: %d", schema_id);
-	}
-	auto &schema = it->second;
-	update.add_schema_update->schema = CopySchema(*schema.get());
+	std::unique_ptr<yyjson_doc, YyjsonDocDeleter> new_doc(yyjson_read(schema_json.c_str(), schema_json.size(), 0));
+	yyjson_val *val = yyjson_doc_get_root(new_doc.get());
+	update.add_schema_update->schema = rest_api_objects::Schema::FromJSON(val);
 	// last-column-id is technically deprecated in AddSchemaUpdate, but some catalogs still use it (nessie).
 	if (last_column_id.IsValid()) {
 		update.add_schema_update->last_column_id = last_column_id.GetIndex();

@@ -238,8 +238,8 @@ void IcebergTransactionData::AddUpdateSnapshot(vector<IcebergManifestEntry> &&de
 	updates.push_back(std::move(add_snapshot));
 }
 
-void IcebergTransactionData::TableAddSchema(int32_t schema_id) {
-	auto add_schema_update = make_uniq<AddSchemaUpdate>(table_info, schema_id);
+void IcebergTransactionData::TableAddSchema(const IcebergTableMetadata &table_metadata, int32_t schema_id) {
+	auto add_schema_update = make_uniq<AddSchemaUpdate>(table_info, table_metadata, schema_id);
 	updates.push_back(std::move(add_schema_update));
 	assert_schema_id = true;
 	set_schema_id = true;

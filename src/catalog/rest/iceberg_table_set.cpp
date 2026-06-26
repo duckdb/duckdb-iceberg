@@ -288,7 +288,7 @@ IcebergTableInformation &IcebergTableSet::CreateNewEntry(ClientContext &context,
 	// other required updates to the table
 	transaction_data.TableAssignUUID();
 	transaction_data.TableAddUpradeFormatVersion();
-	transaction_data.TableAddSchema(0);
+	transaction_data.TableAddSchema(table_metadata, 0);
 	transaction_data.TableAddPartitionSpec();
 	transaction_data.TableSetDefaultSpec();
 	transaction_data.TableAddSortOrder();

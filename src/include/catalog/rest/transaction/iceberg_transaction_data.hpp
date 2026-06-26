@@ -34,7 +34,7 @@ public:
 	void AddUpdateSnapshot(vector<IcebergManifestEntry> &&delete_files, vector<IcebergManifestEntry> &&data_files,
 	                       IcebergManifestDeletes &&altered_manifests);
 	// add a schema update for a table
-	void TableAddSchema(int32_t schema_id);
+	void TableAddSchema(const IcebergTableMetadata &table_metadata, int32_t schema_id);
 	void TableSetCurrentSchema();
 	void TableAddAssertCreate();
 	void TableAddAssertUUID();

@@ -18,7 +18,8 @@ struct IcebergTableInformation;
 
 struct AddSchemaUpdate : public IcebergTableUpdate {
 public:
-	explicit AddSchemaUpdate(const IcebergTableInformation &table_info, int32_t schema_id);
+	explicit AddSchemaUpdate(const IcebergTableInformation &table_info, const IcebergTableMetadata &table_metadata,
+	                         int32_t schema_id);
 
 public:
 	static constexpr const IcebergTableUpdateType TYPE = IcebergTableUpdateType::ADD_SCHEMA;
@@ -28,6 +29,7 @@ public:
 public:
 	int32_t schema_id;
 	optional_idx last_column_id;
+	string schema_json;
 };
 
 struct AssertCreateRequirement : public IcebergTableRequirement {
@@ -98,15 +100,14 @@ struct UpgradeFormatVersion : public IcebergTableUpdate {
 };
 
 struct SetCurrentSchema : public IcebergTableUpdate {
-	static constexpr const IcebergTableUpdateType TYPE = IcebergTableUpdateType::UPGRADE_FORMAT_VERSION;
+	static constexpr const IcebergTableUpdateType TYPE = IcebergTableUpdateType::SET_CURRENT_SCHEMA;
 
 	explicit SetCurrentSchema(const IcebergTableInformation &table_info);
 	void CreateUpdate(DatabaseInstance &db, ClientContext &context, IcebergCommitState &commit_state) const override;
 };
 
 struct AddPartitionSpec : public IcebergTableUpdate {
-	static constexpr const IcebergTableUpdateType TYPE = IcebergTableUpdateType::UPGRADE_FORMAT_VERSION;
-
+	static constexpr const IcebergTableUpdateType TYPE = IcebergTableUpdateType::ADD_PARTITION_SPEC;
 	explicit AddPartitionSpec(const IcebergTableInformation &table_info);
 	void CreateUpdate(DatabaseInstance &db, ClientContext &context, IcebergCommitState &commit_state) const override;
 };
