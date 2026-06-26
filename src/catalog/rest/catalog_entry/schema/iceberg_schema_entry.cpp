@@ -308,7 +308,8 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 	auto &updated_table = alter.GetOrInitializeTable(catalog_table_info);
 	auto &transaction_data = alter.GetOrCreateTransactionData(updated_table);
 	auto table_metadata = updated_table.GetTransactionMetadata();
-	auto &current_schema = table_metadata.GetLatestSchema();
+	auto current_schema = table_metadata.GetSchemaFromId(table_metadata.GetCurrentSchemaId());
+	D_ASSERT(current_schema);
 
 	switch (alter_table_info.alter_table_type) {
 	case AlterTableType::SET_PARTITIONED_BY: {
@@ -319,7 +320,7 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 		// Ensure last assigned partition field id is up to date
 		transaction_data.TableAddAssertLastAssignedPartitionId(table_metadata);
 
-		table_metadata.SetPartitionedBy(transaction_data, partition_info.partition_keys, current_schema);
+		table_metadata.SetPartitionedBy(transaction_data, partition_info.partition_keys, *current_schema);
 		return;
 	}
 	case AlterTableType::ADD_COLUMN: {
@@ -330,7 +331,7 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 		}
 
 		if (add_column_info.if_column_not_exists) {
-			for (auto &col : current_schema.columns) {
+			for (auto &col : current_schema->columns) {
 				if (col->name == column_definition.GetName()) {
 					return;
 				}
@@ -351,7 +352,7 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 		    column_definition, binder, false, next_field_id, table_metadata.iceberg_version);
 		last_column_id = field_id - 1;
 
-		auto new_schema = current_schema.Copy();
+		auto new_schema = current_schema->Copy();
 		new_schema->schema_id++;
 		new_schema->columns.push_back(std::move(new_iceberg_column));
 
@@ -368,14 +369,14 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 		}
 
 		optional_idx column_id;
-		auto new_schema = current_schema.RemoveColumn(to_remove_column.GetIdentifierName(), column_id);
+		auto new_schema = current_schema->RemoveColumn(to_remove_column.GetIdentifierName(), column_id);
 		const bool column_exists = column_id.IsValid();
 		if (!column_exists) {
 			if (!remove_column_info.if_column_exists) {
 				throw CatalogException(
 				    "Attempted to drop column '%s' from table '%s', but no column by this name exists "
 				    "in the current schema (id: %d)",
-				    to_remove_column, table_entry.name, current_schema.schema_id);
+				    to_remove_column, table_entry.name, current_schema->schema_id);
 			}
 			//! Column doesn't exist, just return
 			return;
@@ -400,7 +401,7 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 	case AlterTableType::ALTER_COLUMN_TYPE: {
 		auto &change_type_info = alter_table_info.Cast<ChangeColumnTypeInfo>();
 
-		auto new_schema = current_schema.Copy();
+		auto new_schema = current_schema->Copy();
 		new_schema->schema_id++;
 
 		auto &column = ResolveColumn<ChangeColumnTypeInfo>(change_type_info, new_schema);
@@ -421,7 +422,7 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 	case AlterTableType::DROP_NOT_NULL: {
 		auto &drop_not_null_info = alter_table_info.Cast<DropNotNullInfo>();
 
-		auto new_schema = current_schema.Copy();
+		auto new_schema = current_schema->Copy();
 		new_schema->schema_id++;
 
 		auto &column = ResolveColumn<DropNotNullInfo>(drop_not_null_info, new_schema);
@@ -457,7 +458,7 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 		auto &column_name = rename_info.old_name;
 		auto &new_name = rename_info.new_name;
 
-		auto new_schema = current_schema.Copy();
+		auto new_schema = current_schema->Copy();
 		new_schema->schema_id++;
 
 		auto column_p = new_schema->GetMutableFromPath({column_name}, nullptr);
@@ -548,7 +549,7 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 		auto &column_name = set_default_info.column_name;
 		auto &expression = set_default_info.expression;
 
-		auto new_schema = current_schema.Copy();
+		auto new_schema = current_schema->Copy();
 		new_schema->schema_id++;
 
 		auto column_p = new_schema->GetMutableFromPath({column_name}, nullptr);
@@ -574,7 +575,7 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 		auto &new_field = add_field_info.new_field;
 		auto &if_field_not_exists = add_field_info.if_field_not_exists;
 
-		auto new_schema = current_schema.Copy();
+		auto new_schema = current_schema->Copy();
 		new_schema->schema_id++;
 
 		auto parent_path = column_path;
@@ -628,7 +629,7 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 		auto &column_path = rename_field_info.column_path;
 		auto &new_name = rename_field_info.new_name;
 
-		auto new_schema = current_schema.Copy();
+		auto new_schema = current_schema->Copy();
 		new_schema->schema_id++;
 
 		auto column_p = new_schema->GetMutableFromPath(column_path, nullptr);
@@ -658,7 +659,7 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 		auto &cascade = remove_field_info.cascade;
 		auto &if_column_exists = remove_field_info.if_column_exists;
 
-		auto new_schema = current_schema.Copy();
+		auto new_schema = current_schema->Copy();
 		new_schema->schema_id++;
 
 		D_ASSERT(column_path.size() > 1);
