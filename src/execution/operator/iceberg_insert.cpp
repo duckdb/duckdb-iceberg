@@ -1027,7 +1027,7 @@ static unique_ptr<IcebergTableMetadata> BuildPlaceholderMetadata(BoundCreateTabl
 		schema->columns.push_back(std::move(col_def));
 	}
 	schema->last_column_id = static_cast<idx_t>(next_field_id - 1);
-	metadata->AddSchemaOrGetExisting(schema);
+	metadata->AddSchema(schema);
 	metadata->SetCurrentSchemaId(0);
 
 	// Build a placeholder partition spec from the parsed PARTITIONED BY clause so that

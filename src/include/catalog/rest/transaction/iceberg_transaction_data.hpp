@@ -18,6 +18,7 @@ namespace duckdb {
 
 struct IcebergTableInformation;
 struct IcebergCreateTableRequest;
+class IcebergTableSchema;
 
 struct IcebergTransactionData {
 public:
@@ -30,14 +31,16 @@ public:
 	bool RetryStateMatches(const IcebergTableInformation &table_info) const;
 	IcebergTableMetadata GetTransactionMetadata(const IcebergTableMetadata &base_metadata) const;
 	void MarkCreateSeeded();
+	shared_ptr<IcebergTableSchema> AddSchemaOrGetExisting(const IcebergTableMetadata &base_metadata,
+	                                                      shared_ptr<IcebergTableSchema> schema, bool &created);
 
 	void AddSnapshot(const IcebergTableMetadata &table_metadata, IcebergSnapshotOperationType operation,
 	                 vector<IcebergManifestEntry> &&data_files, IcebergManifestDeletes &&altered_manifests);
 	void AddUpdateSnapshot(const IcebergTableMetadata &table_metadata, vector<IcebergManifestEntry> &&delete_files,
 	                       vector<IcebergManifestEntry> &&data_files, IcebergManifestDeletes &&altered_manifests);
 	// add a schema update for a table
-	void TableAddSchema(const IcebergTableMetadata &table_metadata, int32_t schema_id);
-	void TableSetCurrentSchema(const IcebergTableMetadata &table_metadata);
+	void TableAddSchema(shared_ptr<IcebergTableSchema> schema, optional_idx last_column_id);
+	void TableSetCurrentSchema(int32_t schema_id);
 	void TableAddAssertCreate();
 	void TableAddAssertUUID();
 	void TableAddAssertCurrentSchemaId();
@@ -79,6 +82,7 @@ public:
 	case_insensitive_map_t<string> transactional_delete_files;
 	//! Track the current row id for this transaction
 	int64_t next_row_id = 0;
+	unordered_map<int32_t, shared_ptr<IcebergTableSchema>> staged_schemas;
 
 	//! If we perform an update that relies on the current schema id staying unchanged
 	bool assert_schema_id = false;

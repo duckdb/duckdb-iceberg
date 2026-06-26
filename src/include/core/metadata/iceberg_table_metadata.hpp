@@ -105,7 +105,7 @@ public:
 	void SetCurrentSchemaId(int32_t schema_id);
 	int32_t GetCurrentSchemaId() const;
 
-	IcebergTableSchema &AddSchemaOrGetExisting(shared_ptr<IcebergTableSchema> schema);
+	IcebergTableSchema &AddSchema(shared_ptr<IcebergTableSchema> schema);
 	const unordered_map<int32_t, shared_ptr<IcebergTableSchema>> &GetSchemas() const;
 
 private:

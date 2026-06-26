@@ -236,7 +236,7 @@ IcebergTableInformation &IcebergTableSet::CreateNewEntry(ClientContext &context,
 	auto new_schema = IcebergCreateTableRequest::CreateIcebergSchema(context, table_metadata, table_ptr->GetColumns(),
 	                                                                 table_ptr->GetConstraints(), last_column_id);
 	new_schema->schema_id = 0;
-	auto &result_schema = table_metadata.AddSchemaOrGetExisting(std::move(new_schema));
+	auto &result_schema = table_metadata.AddSchema(std::move(new_schema));
 	if (result_schema.schema_id != 0) {
 		throw InternalException("Adding initial schema didn't result in schema id 0? (actual: %d)",
 		                        result_schema.schema_id);
@@ -289,7 +289,7 @@ IcebergTableInformation &IcebergTableSet::CreateNewEntry(ClientContext &context,
 	// other required updates to the table
 	transaction_data.TableAssignUUID(table_metadata);
 	transaction_data.TableAddUpradeFormatVersion(table_metadata);
-	transaction_data.TableAddSchema(table_metadata, 0);
+	transaction_data.TableAddSchema(current_schema.Copy(), table_metadata.last_column_id);
 	transaction_data.TableAddPartitionSpec(table_metadata);
 	transaction_data.TableSetDefaultSpec(table_metadata);
 	transaction_data.TableAddSortOrder(table_metadata);

@@ -151,6 +151,32 @@ bool IcebergTransactionData::RetryStateMatches(const IcebergTableInformation &ta
 	return true;
 }
 
+shared_ptr<IcebergTableSchema> IcebergTransactionData::AddSchemaOrGetExisting(const IcebergTableMetadata &base_metadata,
+                                                                              shared_ptr<IcebergTableSchema> schema,
+                                                                              bool &created) {
+	for (auto &entry : staged_schemas) {
+		if (schema->Equals(*entry.second)) {
+			created = false;
+			return entry.second;
+		}
+	}
+	for (auto &entry : base_metadata.GetSchemas()) {
+		if (schema->Equals(*entry.second)) {
+			created = false;
+			return entry.second;
+		}
+	}
+
+	auto schema_id = schema->schema_id;
+	auto result = staged_schemas.emplace(schema_id, schema);
+	if (!result.second) {
+		throw InvalidConfigurationException(
+		    "Attempted to stage schema with id %d twice without an equivalent existing schema", schema_id);
+	}
+	created = true;
+	return result.first->second;
+}
+
 void IcebergTransactionData::ApplyMetadataUpdates(IcebergTableMetadata &metadata) const {
 	for (idx_t update_idx = metadata_view_update_offset; update_idx < updates.size(); update_idx++) {
 		auto &update = *updates[update_idx];
@@ -164,7 +190,7 @@ void IcebergTransactionData::ApplyMetadataUpdates(IcebergTableMetadata &metadata
 		case IcebergTableUpdateType::ADD_SCHEMA: {
 			auto &schema_update = update.Cast<AddSchemaUpdate>();
 			D_ASSERT(schema_update.schema);
-			metadata.AddSchemaOrGetExisting(schema_update.schema);
+			metadata.AddSchema(schema_update.schema);
 			if (schema_update.last_column_id.IsValid()) {
 				metadata.last_column_id = schema_update.last_column_id;
 			}
@@ -315,16 +341,17 @@ void IcebergTransactionData::AddUpdateSnapshot(const IcebergTableMetadata &table
 	updates.push_back(std::move(add_snapshot));
 }
 
-void IcebergTransactionData::TableAddSchema(const IcebergTableMetadata &table_metadata, int32_t schema_id) {
-	auto add_schema_update = make_uniq<AddSchemaUpdate>(table_metadata, schema_id);
+void IcebergTransactionData::TableAddSchema(shared_ptr<IcebergTableSchema> schema, optional_idx last_column_id) {
+	auto add_schema_update = make_uniq<AddSchemaUpdate>(std::move(schema), last_column_id);
+	auto schema_id = add_schema_update->schema->schema_id;
 	updates.push_back(std::move(add_schema_update));
-	updates.push_back(make_uniq<SetCurrentSchema>(table_metadata.GetCurrentSchemaId()));
+	updates.push_back(make_uniq<SetCurrentSchema>(schema_id));
 	assert_schema_id = true;
 	set_schema_id = true;
 }
 
-void IcebergTransactionData::TableSetCurrentSchema(const IcebergTableMetadata &table_metadata) {
-	updates.push_back(make_uniq<SetCurrentSchema>(table_metadata.GetCurrentSchemaId()));
+void IcebergTransactionData::TableSetCurrentSchema(int32_t schema_id) {
+	updates.push_back(make_uniq<SetCurrentSchema>(schema_id));
 	set_schema_id = true;
 }
 

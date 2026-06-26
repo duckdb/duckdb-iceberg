@@ -20,7 +20,7 @@ struct IcebergTableInformation;
 
 struct AddSchemaUpdate : public IcebergTableUpdate {
 public:
-	explicit AddSchemaUpdate(const IcebergTableMetadata &table_metadata, int32_t schema_id);
+	AddSchemaUpdate(shared_ptr<IcebergTableSchema> schema, optional_idx last_column_id);
 
 public:
 	static constexpr const IcebergTableUpdateType TYPE = IcebergTableUpdateType::ADD_SCHEMA;
@@ -28,7 +28,6 @@ public:
 	void CreateUpdate(DatabaseInstance &db, ClientContext &context, IcebergCommitState &commit_state) const override;
 
 public:
-	int32_t schema_id;
 	optional_idx last_column_id;
 	string schema_json;
 	shared_ptr<IcebergTableSchema> schema;

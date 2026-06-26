@@ -59,7 +59,7 @@ CopyIcebergBindData::CopyIcebergBindData(const CopyInfo &info, vector<string> &&
 	table_schema =
 	    IcebergCreateTableRequest::CreateIcebergSchema(context, *table_metadata, columns, nullptr, last_column_id);
 	table_schema->schema_id = 0;
-	auto &result_schema = table_metadata->AddSchemaOrGetExisting(table_schema);
+	auto &result_schema = table_metadata->AddSchema(table_schema);
 	if (result_schema.schema_id != 0) {
 		throw InternalException("Iceberg COPY created non-0 schema id (%d)", result_schema.schema_id);
 	}

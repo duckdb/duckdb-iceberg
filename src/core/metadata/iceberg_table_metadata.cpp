@@ -299,19 +299,7 @@ int32_t IcebergTableMetadata::GetCurrentSchemaId() const {
 	return current_schema_id;
 }
 
-IcebergTableSchema &IcebergTableMetadata::AddSchemaOrGetExisting(shared_ptr<IcebergTableSchema> schema) {
-	optional_ptr<IcebergTableSchema> existing_schema;
-	for (auto &it : schemas) {
-		auto &item = *it.second;
-
-		if (schema->Equals(item)) {
-			existing_schema = item;
-			break;
-		}
-	}
-	if (existing_schema) {
-		return *existing_schema;
-	}
+IcebergTableSchema &IcebergTableMetadata::AddSchema(shared_ptr<IcebergTableSchema> schema) {
 	auto new_schema_id = schema->schema_id;
 	auto res = schemas.emplace(new_schema_id, std::move(schema));
 	if (!res.second) {

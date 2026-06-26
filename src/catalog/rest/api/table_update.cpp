@@ -4,18 +4,12 @@
 
 namespace duckdb {
 
-AddSchemaUpdate::AddSchemaUpdate(const IcebergTableMetadata &table_metadata, int32_t schema_id)
-    : IcebergTableUpdate(IcebergTableUpdateType::ADD_SCHEMA), schema_id(schema_id) {
-	if (table_metadata.HasLastColumnId()) {
-		last_column_id = table_metadata.GetLastColumnId();
+AddSchemaUpdate::AddSchemaUpdate(shared_ptr<IcebergTableSchema> schema_p, optional_idx last_column_id_p)
+    : IcebergTableUpdate(IcebergTableUpdateType::ADD_SCHEMA), last_column_id(last_column_id_p),
+      schema(std::move(schema_p)) {
+	if (!schema) {
+		throw InternalException("(AddSchemaUpdate) Missing schema payload");
 	}
-
-	auto &schemas = table_metadata.GetSchemas();
-	auto it = schemas.find(schema_id);
-	if (it == schemas.end()) {
-		throw InternalException("(AddSchemaUpdate) Couldn't find schema with id: %d", schema_id);
-	}
-	schema = it->second;
 	std::unique_ptr<yyjson_mut_doc, YyjsonDocDeleter> doc_p(yyjson_mut_doc_new(nullptr));
 	yyjson_mut_doc *doc = doc_p.get();
 	auto root_object = yyjson_mut_obj(doc);

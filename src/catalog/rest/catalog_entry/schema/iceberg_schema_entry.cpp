@@ -264,16 +264,15 @@ static void VerifySchemaEvolution(const IcebergTableMetadata &table_metadata, co
 
 void IntroduceNewSchema(IcebergTransactionTableState &updated_table, IcebergTransactionData &transaction_data,
                         IcebergTableMetadata &table_metadata, shared_ptr<IcebergTableSchema> new_schema) {
-	auto new_schema_id = new_schema->schema_id;
-
-	auto &result_schema = table_metadata.AddSchemaOrGetExisting(std::move(new_schema));
-	if (result_schema.schema_id == new_schema_id) {
-		updated_table.GetOrCreateSchemaEntry(result_schema);
-		transaction_data.TableAddSchema(table_metadata, new_schema_id);
+	bool created = false;
+	auto result_schema =
+	    transaction_data.AddSchemaOrGetExisting(updated_table.GetBaseMetadata(), std::move(new_schema), created);
+	if (created) {
+		updated_table.GetOrCreateSchemaEntry(*result_schema);
+		transaction_data.TableAddSchema(result_schema, table_metadata.last_column_id);
 	} else {
-		transaction_data.TableSetCurrentSchema(table_metadata);
+		transaction_data.TableSetCurrentSchema(result_schema->schema_id);
 	}
-	table_metadata.SetCurrentSchemaId(result_schema.schema_id);
 }
 
 template <typename T>
@@ -475,16 +474,7 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 		column.name = new_name.GetIdentifierName();
 		column.RewriteType();
 
-		auto new_schema_id = new_schema->schema_id;
-
-		auto &result_schema = table_metadata.AddSchemaOrGetExisting(std::move(new_schema));
-		if (result_schema.schema_id == new_schema_id) {
-			updated_table.GetOrCreateSchemaEntry(result_schema);
-			transaction_data.TableAddSchema(table_metadata, new_schema_id);
-		} else {
-			transaction_data.TableSetCurrentSchema(table_metadata);
-		}
-		table_metadata.SetCurrentSchemaId(result_schema.schema_id);
+		IntroduceNewSchema(updated_table, transaction_data, table_metadata, new_schema);
 		return;
 	}
 	case AlterTableType::SET_TABLE_OPTIONS: {
@@ -575,16 +565,7 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 		auto default_constant_value = binder.Evaluate(expression.get(), column.type);
 		column.write_default = make_uniq<Value>(default_constant_value);
 
-		auto new_schema_id = new_schema->schema_id;
-
-		auto &result_schema = table_metadata.AddSchemaOrGetExisting(std::move(new_schema));
-		if (result_schema.schema_id == new_schema_id) {
-			updated_table.GetOrCreateSchemaEntry(result_schema);
-			transaction_data.TableAddSchema(table_metadata, new_schema_id);
-		} else {
-			transaction_data.TableSetCurrentSchema(table_metadata);
-		}
-		table_metadata.SetCurrentSchemaId(result_schema.schema_id);
+		IntroduceNewSchema(updated_table, transaction_data, table_metadata, new_schema);
 		return;
 	}
 	case AlterTableType::ADD_FIELD: {
