@@ -413,20 +413,21 @@ SinkFinalizeType IcebergDelete::Finalize(Pipeline &pipeline, Event &event, Clien
 	auto iceberg_delete_files = GenerateDeleteManifestEntries(global_state);
 
 	if (!global_state.written_files.empty()) {
-		ApplyTableUpdate(
-		    table_info, iceberg_transaction,
-		    [&](IcebergTransactionTableState &tbl, IcebergTransactionData &transaction_data) {
-			    transaction_data.AddSnapshot(IcebergSnapshotOperationType::DELETE, std::move(iceberg_delete_files),
-			                                 std::move(global_state.altered_manifests));
+		ApplyTableUpdate(table_info, iceberg_transaction,
+		                 [&](IcebergTransactionTableState &tbl, IcebergTransactionData &transaction_data) {
+			                 transaction_data.AddSnapshot(tbl.GetMetadata(), IcebergSnapshotOperationType::DELETE,
+			                                              std::move(iceberg_delete_files),
+			                                              std::move(global_state.altered_manifests));
 
-			    //! Add or overwrite the currently active transaction-local delete files
-			    for (auto &entry : global_state.written_files) {
-				    auto &delete_file = entry.second;
-				    if (tbl.GetMetadata().iceberg_version >= 3) {
-					    transaction_data.transactional_delete_files[delete_file.data_file_path] = delete_file.file_name;
-				    }
-			    }
-		    });
+			                 //! Add or overwrite the currently active transaction-local delete files
+			                 for (auto &entry : global_state.written_files) {
+				                 auto &delete_file = entry.second;
+				                 if (tbl.GetMetadata().iceberg_version >= 3) {
+					                 transaction_data.transactional_delete_files[delete_file.data_file_path] =
+					                     delete_file.file_name;
+				                 }
+			                 }
+		                 });
 	}
 	return SinkFinalizeType::READY;
 }

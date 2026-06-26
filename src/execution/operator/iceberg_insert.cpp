@@ -453,9 +453,9 @@ SinkFinalizeType IcebergInsert::Finalize(Pipeline &pipeline, Event &event, Clien
 		if (!written_files.empty()) {
 			ApplyTableUpdate(table_info, iceberg_transaction,
 			                 [&](IcebergTransactionTableState &tbl, IcebergTransactionData &transaction_data) {
-				                 transaction_data.AddUpdateSnapshot(std::move(delete_manifest_entries),
-				                                                    std::move(written_files),
-				                                                    std::move(delete_global_state.altered_manifests));
+				                 transaction_data.AddUpdateSnapshot(
+				                     tbl.GetMetadata(), std::move(delete_manifest_entries), std::move(written_files),
+				                     std::move(delete_global_state.altered_manifests));
 				                 for (auto &entry : delete_global_state.written_files) {
 					                 auto &delete_file = entry.second;
 					                 if (tbl.GetMetadata().iceberg_version >= 3) {
@@ -471,7 +471,7 @@ SinkFinalizeType IcebergInsert::Finalize(Pipeline &pipeline, Event &event, Clien
 			ApplyTableUpdate(table_info, iceberg_transaction,
 			                 [&](IcebergTransactionTableState &tbl, IcebergTransactionData &transaction_data) {
 				                 IcebergManifestDeletes empty_deletes;
-				                 transaction_data.AddSnapshot(IcebergSnapshotOperationType::APPEND,
+				                 transaction_data.AddSnapshot(tbl.GetMetadata(), IcebergSnapshotOperationType::APPEND,
 				                                              std::move(written_files), std::move(empty_deletes));
 			                 });
 		}

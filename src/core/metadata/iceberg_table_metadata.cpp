@@ -401,15 +401,15 @@ void IcebergTableMetadata::SetPartitionedBy(IcebergTransactionData &transaction_
 	auto existing_spec_id = GetExistingSpecId(new_spec);
 	if (existing_spec_id >= 0) {
 		default_spec_id = existing_spec_id;
-		transaction_data.TableSetDefaultSpec();
+		transaction_data.TableSetDefaultSpec(*this);
 		return;
 	}
 
 	partition_specs.emplace(new_spec_id, std::move(new_spec));
 	default_spec_id = new_spec_id;
 	if (!first_partition_spec) {
-		transaction_data.TableAddPartitionSpec();
-		transaction_data.TableSetDefaultSpec();
+		transaction_data.TableAddPartitionSpec(*this);
+		transaction_data.TableSetDefaultSpec(*this);
 	}
 }
 

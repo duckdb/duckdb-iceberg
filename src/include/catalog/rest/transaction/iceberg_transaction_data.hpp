@@ -29,28 +29,28 @@ public:
 	bool SupportsAppendRetry() const;
 	bool RetryStateMatches(const IcebergTableInformation &table_info) const;
 
-	void AddSnapshot(IcebergSnapshotOperationType operation, vector<IcebergManifestEntry> &&data_files,
-	                 IcebergManifestDeletes &&altered_manifests);
-	void AddUpdateSnapshot(vector<IcebergManifestEntry> &&delete_files, vector<IcebergManifestEntry> &&data_files,
-	                       IcebergManifestDeletes &&altered_manifests);
+	void AddSnapshot(const IcebergTableMetadata &table_metadata, IcebergSnapshotOperationType operation,
+	                 vector<IcebergManifestEntry> &&data_files, IcebergManifestDeletes &&altered_manifests);
+	void AddUpdateSnapshot(const IcebergTableMetadata &table_metadata, vector<IcebergManifestEntry> &&delete_files,
+	                       vector<IcebergManifestEntry> &&data_files, IcebergManifestDeletes &&altered_manifests);
 	// add a schema update for a table
 	void TableAddSchema(const IcebergTableMetadata &table_metadata, int32_t schema_id);
-	void TableSetCurrentSchema();
+	void TableSetCurrentSchema(const IcebergTableMetadata &table_metadata);
 	void TableAddAssertCreate();
 	void TableAddAssertUUID();
 	void TableAddAssertCurrentSchemaId();
 	void TableAddAssertLastAssignedFieldId();
 	void TableAddAssertLastAssignedPartitionId();
 	void TableAddAssertDefaultSpecId();
-	void TableAssignUUID();
-	void TableAddUpradeFormatVersion();
-	void TableAddPartitionSpec();
-	void TableAddSortOrder();
-	void TableSetDefaultSortOrder();
-	void TableSetDefaultSpec();
+	void TableAssignUUID(const IcebergTableMetadata &table_metadata);
+	void TableAddUpradeFormatVersion(const IcebergTableMetadata &table_metadata);
+	void TableAddPartitionSpec(const IcebergTableMetadata &table_metadata);
+	void TableAddSortOrder(const IcebergTableMetadata &table_metadata);
+	void TableSetDefaultSortOrder(const IcebergTableMetadata &table_metadata);
+	void TableSetDefaultSpec(const IcebergTableMetadata &table_metadata);
 	void TableSetProperties(const case_insensitive_map_t<string> &properties);
 	void TableRemoveProperties(const vector<string> &properties);
-	void TableSetLocation();
+	void TableSetLocation(const IcebergTableMetadata &table_metadata);
 
 private:
 	void CacheExistingManifestList(lock_guard<mutex> &guard, const IcebergTableMetadata &metadata);
@@ -60,6 +60,7 @@ public:
 	int32_t initial_schema_id;
 	int32_t initial_default_spec_id = 0;
 	optional_idx initial_default_sort_order_id;
+	int64_t commit_retry_count;
 
 	ClientContext &context;
 	const IcebergTableInformation &table_info;

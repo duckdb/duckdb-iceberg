@@ -286,14 +286,14 @@ IcebergTableInformation &IcebergTableSet::CreateNewEntry(ClientContext &context,
 		return table_info;
 	}
 	// other required updates to the table
-	transaction_data.TableAssignUUID();
-	transaction_data.TableAddUpradeFormatVersion();
+	transaction_data.TableAssignUUID(table_metadata);
+	transaction_data.TableAddUpradeFormatVersion(table_metadata);
 	transaction_data.TableAddSchema(table_metadata, 0);
-	transaction_data.TableAddPartitionSpec();
-	transaction_data.TableSetDefaultSpec();
-	transaction_data.TableAddSortOrder();
-	transaction_data.TableSetDefaultSortOrder();
-	transaction_data.TableSetLocation();
+	transaction_data.TableAddPartitionSpec(table_metadata);
+	transaction_data.TableSetDefaultSpec(table_metadata);
+	transaction_data.TableAddSortOrder(table_metadata);
+	transaction_data.TableSetDefaultSortOrder(table_metadata);
+	transaction_data.TableSetLocation(table_metadata);
 	transaction_data.TableSetProperties(table_metadata.table_properties);
 
 	iceberg_transaction.SetLatestTableState(table_info, IcebergTableStatus::ALIVE);
