@@ -1,0 +1,111 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/table_properties/test_table_properties_transaction.test
+# description: Test that table property updates are only reflected after a commit.
+# group: [table_properties]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require avro
+
+require parquet
+
+require httpfs
+
+require core_functions
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.table_properties_in_transaction;
+
+statement ok
+CREATE TABLE my_datalake.default.table_properties_in_transaction AS (SELECT range AS a FROM range(5));
+
+# --- Abort: property changes must not survive a rollback ---
+
+statement ok
+BEGIN;
+
+statement ok
+ALTER TABLE my_datalake.default.table_properties_in_transaction SET ('my.key' = 'txn-value');
+
+# Within the transaction the new value is visible locally
+query II
+SELECT key, value FROM iceberg_table_properties(my_datalake.default.table_properties_in_transaction) WHERE key = 'my.key';
+----
+my.key	txn-value
+
+statement ok
+ABORT;
+
+# After abort the property must not exist
+query I
+SELECT count(*) FROM iceberg_table_properties(my_datalake.default.table_properties_in_transaction) WHERE key = 'my.key';
+----
+0
+
+# --- Commit: property changes must be visible after commit ---
+
+statement ok
+BEGIN;
+
+statement ok
+ALTER TABLE my_datalake.default.table_properties_in_transaction SET ('my.key' = 'committed-value');
+
+# Visible inside the transaction
+query II
+SELECT key, value FROM iceberg_table_properties(my_datalake.default.table_properties_in_transaction) WHERE key = 'my.key';
+----
+my.key	committed-value
+
+statement ok
+COMMIT;
+
+# Visible after commit
+query II
+SELECT key, value FROM iceberg_table_properties(my_datalake.default.table_properties_in_transaction) WHERE key = 'my.key';
+----
+my.key	committed-value
+
+# --- Abort: RESET must not survive a rollback ---
+
+statement ok
+BEGIN;
+
+statement ok
+ALTER TABLE my_datalake.default.table_properties_in_transaction RESET ('my.key');
+
+# Removed inside the transaction
+query I
+SELECT count(*) FROM iceberg_table_properties(my_datalake.default.table_properties_in_transaction) WHERE key = 'my.key';
+----
+0
+
+statement ok
+ABORT;
+
+# After abort the property is still present
+query II
+SELECT key, value FROM iceberg_table_properties(my_datalake.default.table_properties_in_transaction) WHERE key = 'my.key';
+----
+my.key	committed-value
+
+# --- Commit: RESET is persisted after commit ---
+
+statement ok
+BEGIN;
+
+statement ok
+ALTER TABLE my_datalake.default.table_properties_in_transaction RESET ('my.key');
+
+statement ok
+COMMIT;
+
+# Property is gone after committed RESET
+query I
+SELECT count(*) FROM iceberg_table_properties(my_datalake.default.table_properties_in_transaction) WHERE key = 'my.key';
+----
+0
+
+statement ok
+DROP TABLE my_datalake.default.table_properties_in_transaction;

@@ -1,0 +1,42 @@
+# name: test/sql/cloud/glue/test_equality_deletes.test
+# description: test integration with iceberg catalog read
+# group: [glue]
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+require aws
+
+require-env ICEBERG_AWS_REMOTE_AVAILABLE
+
+require-env AWS_ACCESS_KEY_ID
+
+require-env AWS_SECRET_ACCESS_KEY
+
+statement ok
+create secret s3 (
+  type s3,
+  provider 'credential_chain',
+  profile 'iceberg_ci',
+  region 'us-east-1');
+
+statement ok
+SET unsafe_enable_version_guessing = true;
+
+query II
+select * from (
+    select avg("metric") as "avg_metric",
+    count(*) as "total_count"
+    from (
+        select * from iceberg_scan('s3://duckdblabs-glue-iceberg-database-on-s3-bucket/iceberg-database/simple_glue_database.db/metrics', allow_moved_paths=true)
+    ) as "t"
+    where "machineid" = 5 and
+    ts > TIMESTAMPTZ '2024-01-01T00:00:00Z'
+) x limit 5 offset 0;
+----
+445.4400405754701	11
