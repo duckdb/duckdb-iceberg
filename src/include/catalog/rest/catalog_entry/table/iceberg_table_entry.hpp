@@ -21,7 +21,8 @@ public:
 	static virtual_column_map_t VirtualColumns();
 	virtual_column_map_t GetVirtualColumns() const override;
 	vector<column_t> GetRowIdColumns() const override;
-	const IcebergTableMetadata &GetTableMetadata() const;
+	const IcebergTableMetadata &GetBaseTableMetadata() const;
+	IcebergTableMetadata GetTransactionTableMetadata() const;
 	optional_ptr<IcebergTransactionData> GetTransactionData() const;
 
 public:

@@ -153,7 +153,7 @@ static unique_ptr<MergeIntoOperator> IcebergPlanMergeIntoAction(IcebergCatalog &
 	auto &irc_transaction = IcebergTransaction::Get(context, catalog);
 	auto &alter = irc_transaction.GetOrCreateAlter();
 	auto &updated_table = alter.GetOrInitializeTable(table_entry.table_info);
-	auto &table_metadata = updated_table.GetMetadata();
+	auto table_metadata = updated_table.GetTransactionMetadata();
 	auto &schema = table_metadata.GetLatestSchema();
 	auto &updated_table_entry = updated_table.GetOrCreateSchemaEntry(schema);
 

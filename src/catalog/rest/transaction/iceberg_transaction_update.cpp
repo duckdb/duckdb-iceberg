@@ -28,7 +28,7 @@ IcebergTransactionTableState &IcebergTransactionAlterUpdate::GetOrInitializeTabl
 		if (!table.table_metadata.table_uuid.empty()) {
 			metadata.table_uuid = table.table_metadata.table_uuid;
 		}
-		it->second.SetMetadata(std::move(metadata));
+		it->second.SetBaseMetadata(std::move(metadata));
 	}
 	transaction.SetLatestTableState(it->second.GetInfo(), IcebergTableStatus::ALIVE);
 	return it->second;
@@ -76,7 +76,7 @@ IcebergTableInformation &IcebergTransactionAlterUpdate::CreateTable(const string
 		throw InternalException("Table %s was already created somehow?", table_key);
 	}
 	emplace_res.first->second.SetOwnedTable(std::move(table));
-	emplace_res.first->second.SetMetadata(emplace_res.first->second.GetInfo().table_metadata.Copy());
+	emplace_res.first->second.SetBaseMetadata(emplace_res.first->second.GetInfo().table_metadata.Copy());
 
 	transaction.current_table_data.emplace(table_key,
 	                                       IcebergTransactionTableState(emplace_res.first->second.GetInfo()));

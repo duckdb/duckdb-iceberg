@@ -56,22 +56,19 @@ public:
 		}
 		return *table;
 	}
-	IcebergTableMetadata &GetMetadata() {
-		D_ASSERT(has_effective_metadata);
-		return effective_metadata;
-	}
-	const IcebergTableMetadata &GetMetadata() const {
-		if (has_effective_metadata) {
-			return effective_metadata;
+	const IcebergTableMetadata &GetBaseMetadata() const {
+		if (has_base_metadata) {
+			return base_metadata;
 		}
 		return GetInfo().table_metadata;
 	}
-	bool HasEffectiveMetadata() const {
-		return has_effective_metadata;
+	void SetBaseMetadata(IcebergTableMetadata metadata) {
+		base_metadata = std::move(metadata);
+		has_base_metadata = true;
 	}
-	void SetMetadata(IcebergTableMetadata metadata) {
-		effective_metadata = std::move(metadata);
-		has_effective_metadata = true;
+	IcebergTableMetadata GetTransactionMetadata() const;
+	bool HasBaseMetadata() const {
+		return has_base_metadata;
 	}
 	optional_ptr<IcebergTransactionData> GetTransactionData() const {
 		return transaction_data.get();
@@ -108,8 +105,8 @@ private:
 	optional_ptr<IcebergTableInformation> table;
 	unique_ptr<IcebergTableInformation> owned_table;
 	IcebergTableStatus status;
-	bool has_effective_metadata = false;
-	IcebergTableMetadata effective_metadata;
+	bool has_base_metadata = false;
+	IcebergTableMetadata base_metadata;
 	unordered_map<int32_t, unique_ptr<IcebergTableEntry>> schema_versions;
 	unique_ptr<IcebergTableEntry> dummy_entry;
 	unique_ptr<IcebergTransactionData> transaction_data;

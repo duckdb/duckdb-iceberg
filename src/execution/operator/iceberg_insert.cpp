@@ -383,7 +383,7 @@ void IcebergInsert::AddWrittenFiles(IcebergInsertGlobalState &global_state, Data
                                     optional_ptr<TableCatalogEntry> table) {
 	D_ASSERT(table);
 	auto &ic_table = table->Cast<IcebergTableEntry>();
-	auto &table_metadata = ic_table.table_info.table_metadata;
+	auto table_metadata = ic_table.GetTransactionTableMetadata();
 	global_state.AddFiles(chunk, ic_table.name.GetIdentifierName(), table_metadata);
 }
 
@@ -453,12 +453,13 @@ SinkFinalizeType IcebergInsert::Finalize(Pipeline &pipeline, Event &event, Clien
 		if (!written_files.empty()) {
 			ApplyTableUpdate(table_info, iceberg_transaction,
 			                 [&](IcebergTransactionTableState &tbl, IcebergTransactionData &transaction_data) {
-				                 transaction_data.AddUpdateSnapshot(
-				                     tbl.GetMetadata(), std::move(delete_manifest_entries), std::move(written_files),
-				                     std::move(delete_global_state.altered_manifests));
+				                 auto table_metadata = tbl.GetTransactionMetadata();
+				                 transaction_data.AddUpdateSnapshot(table_metadata, std::move(delete_manifest_entries),
+				                                                    std::move(written_files),
+				                                                    std::move(delete_global_state.altered_manifests));
 				                 for (auto &entry : delete_global_state.written_files) {
 					                 auto &delete_file = entry.second;
-					                 if (tbl.GetMetadata().iceberg_version >= 3) {
+					                 if (table_metadata.iceberg_version >= 3) {
 						                 transaction_data.transactional_delete_files[delete_file.data_file_path] =
 						                     delete_file.file_name;
 					                 }
@@ -471,7 +472,8 @@ SinkFinalizeType IcebergInsert::Finalize(Pipeline &pipeline, Event &event, Clien
 			ApplyTableUpdate(table_info, iceberg_transaction,
 			                 [&](IcebergTransactionTableState &tbl, IcebergTransactionData &transaction_data) {
 				                 IcebergManifestDeletes empty_deletes;
-				                 transaction_data.AddSnapshot(tbl.GetMetadata(), IcebergSnapshotOperationType::APPEND,
+				                 auto table_metadata = tbl.GetTransactionMetadata();
+				                 transaction_data.AddSnapshot(table_metadata, IcebergSnapshotOperationType::APPEND,
 				                                              std::move(written_files), std::move(empty_deletes));
 			                 });
 		}
@@ -980,7 +982,7 @@ PhysicalOperator &IcebergCatalog::PlanInsert(ClientContext &context, PhysicalPla
 	auto &irc_transaction = IcebergTransaction::Get(context, *this);
 	auto &alter = irc_transaction.GetOrCreateAlter();
 	auto &updated_table = alter.GetOrInitializeTable(table_entry.table_info);
-	auto &table_metadata = updated_table.GetMetadata();
+	auto table_metadata = updated_table.GetTransactionMetadata();
 	auto &schema = table_metadata.GetLatestSchema();
 	auto &updated_table_entry = updated_table.GetOrCreateSchemaEntry(schema);
 

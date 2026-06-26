@@ -277,6 +277,7 @@ IcebergTableInformation &IcebergTableSet::CreateNewEntry(ClientContext &context,
 		auto &load_table_result = cached_table_result->load_table_result;
 		table_info.InitializeFromLoadTableResult(*load_table_result, false);
 	}
+	created_table.SetBaseMetadata(table_info.table_metadata.Copy());
 
 	// if we stage created the table, we add an assert create
 	if (catalog.attach_options.stage_create_tables) {
@@ -295,6 +296,7 @@ IcebergTableInformation &IcebergTableSet::CreateNewEntry(ClientContext &context,
 	transaction_data.TableSetDefaultSortOrder(table_metadata);
 	transaction_data.TableSetLocation(table_metadata);
 	transaction_data.TableSetProperties(table_metadata.table_properties);
+	transaction_data.MarkCreateSeeded();
 
 	iceberg_transaction.SetLatestTableState(table_info, IcebergTableStatus::ALIVE);
 	return table_info;

@@ -42,6 +42,14 @@ IcebergTransactionData &IcebergTransactionTableState::GetOrCreateTransactionData
 	return *transaction_data;
 }
 
+IcebergTableMetadata IcebergTransactionTableState::GetTransactionMetadata() const {
+	auto metadata = GetBaseMetadata().Copy();
+	if (!transaction_data || !transaction_data->HasUpdates()) {
+		return metadata;
+	}
+	return transaction_data->GetTransactionMetadata(metadata);
+}
+
 IcebergTableEntry &IcebergTransactionTableState::GetOrCreateSchemaEntry(const IcebergTableSchema &table_schema) {
 	auto it = schema_versions.find(table_schema.schema_id);
 	if (it != schema_versions.end()) {
@@ -86,7 +94,7 @@ optional_ptr<CatalogEntry> IcebergTransactionTableState::GetLatestSchema(ClientC
 
 optional_ptr<CatalogEntry> IcebergTransactionTableState::GetSchemaVersion(ClientContext &context,
                                                                           optional_ptr<BoundAtClause> at) {
-	auto &metadata = GetMetadata();
+	auto metadata = GetTransactionMetadata();
 	if (metadata.snapshots.empty()) {
 		auto schema = metadata.GetSchemaFromId(metadata.GetCurrentSchemaId());
 		D_ASSERT(schema);
@@ -302,12 +310,11 @@ static void CreateTableRequirements(DatabaseInstance &db, ClientContext &context
 		requirement->CreateRequirement(db, context, commit_state);
 	}
 	if (!has_assert_create && NeedsAssertSchemaId(transaction_data, commit_state.table_info)) {
-		AssertCurrentSchemaIdRequirement requirement(commit_state.table_info);
-		requirement.current_schema_id = transaction_data.initial_schema_id;
+		AssertCurrentSchemaIdRequirement requirement(transaction_data.initial_schema_id);
 		requirement.CreateRequirement(db, context, commit_state);
 	}
 	if (!has_assert_create && transaction_data.HasUpdates()) {
-		auto uuid_requirement = AssertTableUUIDRequirement(commit_state.table_info);
+		auto uuid_requirement = AssertTableUUIDRequirement(transaction_data.initial_table_uuid);
 		uuid_requirement.CreateRequirement(db, context, commit_state);
 	}
 	if (current_snapshot && !transaction_data.alters.empty()) {
@@ -324,7 +331,7 @@ static SingleTableStagedCommit StageSingleTableCommit(DatabaseInstance &db, Iceb
 	auto &table_info = table_state.GetInfo();
 	auto commit_table = table_info.Copy(context);
 	if (!transaction_data.SupportsAppendRetry()) {
-		commit_table.table_metadata = table_state.GetMetadata().Copy();
+		commit_table.table_metadata = table_state.GetTransactionMetadata();
 	}
 	IcebergCommitState commit_state(commit_table, context);
 	auto &table_change = commit_state.table_change;

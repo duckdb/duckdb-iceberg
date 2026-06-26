@@ -4,8 +4,7 @@
 
 namespace duckdb {
 
-AddSchemaUpdate::AddSchemaUpdate(const IcebergTableInformation &table_info, const IcebergTableMetadata &table_metadata,
-                                 int32_t schema_id)
+AddSchemaUpdate::AddSchemaUpdate(const IcebergTableMetadata &table_metadata, int32_t schema_id)
     : IcebergTableUpdate(IcebergTableUpdateType::ADD_SCHEMA), schema_id(schema_id) {
 	if (table_metadata.HasLastColumnId()) {
 		last_column_id = table_metadata.GetLastColumnId();
@@ -16,11 +15,12 @@ AddSchemaUpdate::AddSchemaUpdate(const IcebergTableInformation &table_info, cons
 	if (it == schemas.end()) {
 		throw InternalException("(AddSchemaUpdate) Couldn't find schema with id: %d", schema_id);
 	}
+	schema = it->second;
 	std::unique_ptr<yyjson_mut_doc, YyjsonDocDeleter> doc_p(yyjson_mut_doc_new(nullptr));
 	yyjson_mut_doc *doc = doc_p.get();
 	auto root_object = yyjson_mut_obj(doc);
 	yyjson_mut_doc_set_root(doc, root_object);
-	IcebergCreateTableRequest::PopulateSchema(doc, root_object, *it->second);
+	IcebergCreateTableRequest::PopulateSchema(doc, root_object, *schema);
 	schema_json = ICUtils::JsonToString(std::move(doc_p));
 }
 
@@ -66,9 +66,8 @@ void AssertCreateRequirement::CreateRequirement(DatabaseInstance &db, ClientCont
 	req.assert_create->type.value = "assert-create";
 }
 
-AssertTableUUIDRequirement::AssertTableUUIDRequirement(const IcebergTableInformation &table_info)
-    : IcebergTableRequirement(IcebergTableRequirementType::ASSERT_TABLE_UUID),
-      uuid(table_info.table_metadata.table_uuid) {
+AssertTableUUIDRequirement::AssertTableUUIDRequirement(string uuid)
+    : IcebergTableRequirement(IcebergTableRequirementType::ASSERT_TABLE_UUID), uuid(std::move(uuid)) {
 }
 
 void AssertTableUUIDRequirement::CreateRequirement(DatabaseInstance &db, ClientContext &context,
@@ -80,9 +79,9 @@ void AssertTableUUIDRequirement::CreateRequirement(DatabaseInstance &db, ClientC
 	req.assert_table_uuid->uuid = uuid;
 }
 
-AssertCurrentSchemaIdRequirement::AssertCurrentSchemaIdRequirement(const IcebergTableInformation &table_info)
-    : IcebergTableRequirement(IcebergTableRequirementType::ASSERT_CURRENT_SCHEMA_ID) {
-	current_schema_id = table_info.table_metadata.GetCurrentSchemaId();
+AssertCurrentSchemaIdRequirement::AssertCurrentSchemaIdRequirement(int32_t current_schema_id)
+    : IcebergTableRequirement(IcebergTableRequirementType::ASSERT_CURRENT_SCHEMA_ID),
+      current_schema_id(current_schema_id) {
 }
 
 void AssertCurrentSchemaIdRequirement::CreateRequirement(DatabaseInstance &db, ClientContext &context,
@@ -94,10 +93,9 @@ void AssertCurrentSchemaIdRequirement::CreateRequirement(DatabaseInstance &db, C
 	req.assert_current_schema_id->current_schema_id = current_schema_id;
 }
 
-AssertLastAssignedFieldIdRequirement::AssertLastAssignedFieldIdRequirement(const IcebergTableInformation &table_info)
-    : IcebergTableRequirement(IcebergTableRequirementType::ASSERT_LAST_ASSIGNED_FIELD_ID) {
-	D_ASSERT(table_info.table_metadata.HasLastColumnId());
-	last_assigned_field_id = static_cast<int32_t>(table_info.table_metadata.GetLastColumnId());
+AssertLastAssignedFieldIdRequirement::AssertLastAssignedFieldIdRequirement(int32_t last_assigned_field_id)
+    : IcebergTableRequirement(IcebergTableRequirementType::ASSERT_LAST_ASSIGNED_FIELD_ID),
+      last_assigned_field_id(last_assigned_field_id) {
 }
 
 void AssertLastAssignedFieldIdRequirement::CreateRequirement(DatabaseInstance &db, ClientContext &context,
@@ -109,16 +107,9 @@ void AssertLastAssignedFieldIdRequirement::CreateRequirement(DatabaseInstance &d
 	req.assert_last_assigned_field_id->last_assigned_field_id = last_assigned_field_id;
 }
 
-AssertLastAssignedPartitionIdRequirement::AssertLastAssignedPartitionIdRequirement(
-    const IcebergTableInformation &table_info)
-    : IcebergTableRequirement(IcebergTableRequirementType::ASSERT_LAST_ASSIGNED_PARTITION_ID) {
-	if (table_info.table_metadata.HasLastPartitionId()) {
-		last_assigned_partition_id = table_info.table_metadata.GetLastPartitionFieldId();
-	} else {
-		// If no partition field IDs have been assigned, use 999 as the last assigned so 1000 becomes the
-		// next partition id. Based on assignments in v1 in https://iceberg.apache.org/spec/#partition-evolution
-		last_assigned_partition_id = 999;
-	}
+AssertLastAssignedPartitionIdRequirement::AssertLastAssignedPartitionIdRequirement(int32_t last_assigned_partition_id)
+    : IcebergTableRequirement(IcebergTableRequirementType::ASSERT_LAST_ASSIGNED_PARTITION_ID),
+      last_assigned_partition_id(last_assigned_partition_id) {
 }
 
 void AssertLastAssignedPartitionIdRequirement::CreateRequirement(DatabaseInstance &db, ClientContext &context,
@@ -130,9 +121,8 @@ void AssertLastAssignedPartitionIdRequirement::CreateRequirement(DatabaseInstanc
 	req.assert_last_assigned_partition_id->last_assigned_partition_id = last_assigned_partition_id;
 }
 
-AssertDefaultSpecIdRequirement::AssertDefaultSpecIdRequirement(const IcebergTableInformation &table_info)
-    : IcebergTableRequirement(IcebergTableRequirementType::ASSERT_DEFAULT_SPEC_ID) {
-	default_spec_id = table_info.table_metadata.default_spec_id;
+AssertDefaultSpecIdRequirement::AssertDefaultSpecIdRequirement(int32_t default_spec_id)
+    : IcebergTableRequirement(IcebergTableRequirementType::ASSERT_DEFAULT_SPEC_ID), default_spec_id(default_spec_id) {
 }
 
 void AssertDefaultSpecIdRequirement::CreateRequirement(DatabaseInstance &db, ClientContext &context,
@@ -239,8 +229,7 @@ void SetDefaultSpec::CreateUpdate(DatabaseInstance &db, ClientContext &context,
 	req.set_default_spec_update->spec_id = spec_id;
 }
 
-SetProperties::SetProperties(const IcebergTableInformation &table_info,
-                             const case_insensitive_map_t<string> &properties)
+SetProperties::SetProperties(const case_insensitive_map_t<string> &properties)
     : IcebergTableUpdate(IcebergTableUpdateType::SET_PROPERTIES), properties(properties) {
 }
 
@@ -252,7 +241,7 @@ void SetProperties::CreateUpdate(DatabaseInstance &db, ClientContext &context, I
 	req.set_properties_update->updates = properties;
 }
 
-RemoveProperties::RemoveProperties(const IcebergTableInformation &table_info, const vector<string> &properties)
+RemoveProperties::RemoveProperties(const vector<string> &properties)
     : IcebergTableUpdate(IcebergTableUpdateType::SET_PROPERTIES), properties(properties) {
 }
 

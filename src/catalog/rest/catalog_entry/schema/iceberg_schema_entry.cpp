@@ -263,10 +263,9 @@ static void VerifySchemaEvolution(const IcebergTableMetadata &table_metadata, co
 }
 
 void IntroduceNewSchema(IcebergTransactionTableState &updated_table, IcebergTransactionData &transaction_data,
-                        shared_ptr<IcebergTableSchema> new_schema) {
+                        IcebergTableMetadata &table_metadata, shared_ptr<IcebergTableSchema> new_schema) {
 	auto new_schema_id = new_schema->schema_id;
 
-	auto &table_metadata = updated_table.GetMetadata();
 	auto &result_schema = table_metadata.AddSchemaOrGetExisting(std::move(new_schema));
 	if (result_schema.schema_id == new_schema_id) {
 		updated_table.GetOrCreateSchemaEntry(result_schema);
@@ -309,7 +308,7 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 	auto &alter = irc_transaction.GetOrCreateAlter();
 	auto &updated_table = alter.GetOrInitializeTable(catalog_table_info);
 	auto &transaction_data = alter.GetOrCreateTransactionData(updated_table);
-	auto &table_metadata = updated_table.GetMetadata();
+	auto table_metadata = updated_table.GetTransactionMetadata();
 	auto &current_schema = table_metadata.GetLatestSchema();
 
 	switch (alter_table_info.alter_table_type) {
@@ -319,7 +318,7 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 		// Ensure schema is the same as current
 		transaction_data.TableAddAssertCurrentSchemaId();
 		// Ensure last assigned partition field id is up to date
-		transaction_data.TableAddAssertLastAssignedPartitionId();
+		transaction_data.TableAddAssertLastAssignedPartitionId(table_metadata);
 
 		table_metadata.SetPartitionedBy(transaction_data, partition_info.partition_keys, current_schema);
 		return;
@@ -357,7 +356,7 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 		new_schema->schema_id++;
 		new_schema->columns.push_back(std::move(new_iceberg_column));
 
-		IntroduceNewSchema(updated_table, transaction_data, new_schema);
+		IntroduceNewSchema(updated_table, transaction_data, table_metadata, new_schema);
 
 		return;
 	}
@@ -395,7 +394,7 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 			throw CatalogException("Cannot drop column: table '%s' only has one column remaining!", table_entry.name);
 		}
 
-		IntroduceNewSchema(updated_table, transaction_data, new_schema);
+		IntroduceNewSchema(updated_table, transaction_data, table_metadata, new_schema);
 
 		return;
 	}
@@ -413,7 +412,7 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 		VerifySchemaEvolution(table_metadata, column, change_type_info.target_type);
 		column.type = change_type_info.target_type;
 
-		IntroduceNewSchema(updated_table, transaction_data, new_schema);
+		IntroduceNewSchema(updated_table, transaction_data, table_metadata, new_schema);
 		return;
 	}
 	case AlterTableType::SET_NOT_NULL: {
@@ -430,7 +429,7 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 
 		column.required = false;
 
-		IntroduceNewSchema(updated_table, transaction_data, new_schema);
+		IntroduceNewSchema(updated_table, transaction_data, table_metadata, new_schema);
 		return;
 	}
 	case AlterTableType::RENAME_TABLE: {
@@ -640,7 +639,7 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 		last_column_id = field_id - 1;
 
 		parent.AddChild(std::move(new_iceberg_column));
-		IntroduceNewSchema(updated_table, transaction_data, new_schema);
+		IntroduceNewSchema(updated_table, transaction_data, table_metadata, new_schema);
 		return;
 	}
 	case AlterTableType::RENAME_FIELD: {
@@ -669,7 +668,7 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 		}
 		column_p->name = new_name.GetIdentifierName();
 		column_p->RewriteType();
-		IntroduceNewSchema(updated_table, transaction_data, new_schema);
+		IntroduceNewSchema(updated_table, transaction_data, table_metadata, new_schema);
 		return;
 	}
 	case AlterTableType::REMOVE_FIELD: {
@@ -713,7 +712,7 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 			                       StringUtil::Join(IdentifiersToStrings(column_path), "."));
 		}
 		parent.RemoveChild(child->name);
-		IntroduceNewSchema(updated_table, transaction_data, new_schema);
+		IntroduceNewSchema(updated_table, transaction_data, table_metadata, new_schema);
 		return;
 	}
 	default: {

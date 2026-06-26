@@ -37,11 +37,18 @@ IcebergTableEntry::IcebergTableEntry(IcebergTableInformation &table_info, Catalo
 	this->internal = false;
 }
 
-const IcebergTableMetadata &IcebergTableEntry::GetTableMetadata() const {
+const IcebergTableMetadata &IcebergTableEntry::GetBaseTableMetadata() const {
 	if (transaction_state) {
-		return transaction_state->GetMetadata();
+		return transaction_state->GetBaseMetadata();
 	}
 	return table_info.table_metadata;
+}
+
+IcebergTableMetadata IcebergTableEntry::GetTransactionTableMetadata() const {
+	if (transaction_state) {
+		return transaction_state->GetTransactionMetadata();
+	}
+	return table_info.table_metadata.Copy();
 }
 
 optional_ptr<IcebergTransactionData> IcebergTableEntry::GetTransactionData() const {
@@ -76,7 +83,7 @@ void IcebergTableEntry::PrepareIcebergScanFromEntry(ClientContext &context) cons
 	// Get Credentials from IRC API
 	auto &fs = FileSystem::GetFileSystem(context);
 	auto table_credentials = table_info.GetVendedCredentials(context);
-	auto &table_metadata = GetTableMetadata();
+	auto table_metadata = GetTransactionTableMetadata();
 	auto metadata_path = table_metadata.GetMetadataPath(fs);
 
 	unique_ptr<SecretEntry> http_secret_entry;
@@ -205,18 +212,20 @@ TableFunction IcebergTableEntry::GetScanFunction(ClientContext &context, unique_
 		throw InternalException("GetScanFunction was called with a dummy IcebergTableEntry, this should never happen");
 	}
 	const auto schema_id = this->schema_id.GetIndex();
-	const auto &metadata = GetTableMetadata();
-	const auto &iceberg_schema = *metadata.GetSchemaFromId(schema_id);
-
-	// lookup should be asof start of the transaction if the lookup info is empty and there are no transaction updates
-	bool using_transaction_timestamp = false;
-	IcebergSnapshotLookup snapshot_lookup;
 	auto transaction_data = GetTransactionData();
 	if (!transaction_data) {
 		auto &iceberg_transaction = IcebergTransaction::Get(context, catalog);
 		transaction_data = iceberg_transaction.GetTransactionData(table_info.GetTableKey());
 	}
 	const bool has_transaction_updates = transaction_data && transaction_data->HasUpdates();
+	auto metadata = GetBaseTableMetadata().Copy();
+	if (has_transaction_updates && !lookup.GetAtClause()) {
+		metadata = GetTransactionTableMetadata();
+	}
+
+	// lookup should be asof start of the transaction if the lookup info is empty and there are no transaction updates
+	bool using_transaction_timestamp = false;
+	IcebergSnapshotLookup snapshot_lookup;
 	if (!lookup.GetAtClause() && !has_transaction_updates) {
 		// if there is no user supplied AT () clause, and the table does not have transaction updates
 		// use transaction start time
@@ -242,8 +251,12 @@ TableFunction IcebergTableEntry::GetScanFunction(ClientContext &context, unique_
 	}
 
 	auto &fs = FileSystem::GetFileSystem(context);
-	auto scan_info =
-	    make_shared_ptr<IcebergScanInfo>(metadata.GetMetadataPath(fs), metadata, snapshot_info, iceberg_schema);
+	auto temp_data = make_uniq<IcebergScanTemporaryData>();
+	temp_data->metadata = std::move(metadata);
+	auto &scan_metadata = temp_data->metadata;
+	const auto &iceberg_schema = *scan_metadata.GetSchemaFromId(schema_id);
+	auto scan_info = make_shared_ptr<IcebergScanInfo>(scan_metadata.GetMetadataPath(fs), std::move(temp_data),
+	                                                  snapshot_info, iceberg_schema);
 	if (transaction_data && snapshot_lookup.IsLatest()) {
 		scan_info->transaction_data = transaction_data;
 	}
@@ -292,7 +305,7 @@ virtual_column_map_t IcebergTableEntry::VirtualColumns() {
 
 vector<column_t> IcebergTableEntry::GetRowIdColumns() const {
 	vector<column_t> result;
-	auto &table_metadata = GetTableMetadata();
+	auto table_metadata = GetTransactionTableMetadata();
 	if (table_metadata.iceberg_version >= 3) {
 		//! Project the _row_id column as part of the row-id-columns
 		result.push_back(COLUMN_IDENTIFIER_ROW_ID);

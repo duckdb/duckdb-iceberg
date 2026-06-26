@@ -263,7 +263,8 @@ static void PopulateAlteredManifests(const IcebergMultiFileList &multi_file_list
 
 void IcebergDelete::FlushDeletes(IcebergTransaction &transaction, ClientContext &context,
                                  IcebergDeleteGlobalState &global_state) const {
-	bool write_deletion_vector = table.table_info.table_metadata.iceberg_version >= 3;
+	auto table_metadata = table.GetTransactionTableMetadata();
+	bool write_deletion_vector = table_metadata.iceberg_version >= 3;
 
 	if (!multi_file_list) {
 		throw InternalException("IcebergDelete multi_file_list is NULL");
@@ -415,14 +416,15 @@ SinkFinalizeType IcebergDelete::Finalize(Pipeline &pipeline, Event &event, Clien
 	if (!global_state.written_files.empty()) {
 		ApplyTableUpdate(table_info, iceberg_transaction,
 		                 [&](IcebergTransactionTableState &tbl, IcebergTransactionData &transaction_data) {
-			                 transaction_data.AddSnapshot(tbl.GetMetadata(), IcebergSnapshotOperationType::DELETE,
+			                 auto table_metadata = tbl.GetTransactionMetadata();
+			                 transaction_data.AddSnapshot(table_metadata, IcebergSnapshotOperationType::DELETE,
 			                                              std::move(iceberg_delete_files),
 			                                              std::move(global_state.altered_manifests));
 
 			                 //! Add or overwrite the currently active transaction-local delete files
 			                 for (auto &entry : global_state.written_files) {
 				                 auto &delete_file = entry.second;
-				                 if (tbl.GetMetadata().iceberg_version >= 3) {
+				                 if (table_metadata.iceberg_version >= 3) {
 					                 transaction_data.transactional_delete_files[delete_file.data_file_path] =
 					                     delete_file.file_name;
 				                 }
@@ -515,14 +517,13 @@ PhysicalOperator &IcebergCatalog::PlanDelete(ClientContext &context, PhysicalPla
 	auto &irc_transaction = IcebergTransaction::Get(context, *this);
 	auto &alter = irc_transaction.GetOrCreateAlter();
 	auto &updated_table = alter.GetOrInitializeTable(table_entry.table_info);
-	auto &table_metadata = updated_table.GetMetadata();
+	auto table_metadata = updated_table.GetTransactionMetadata();
 	auto &schema = table_metadata.GetLatestSchema();
 	auto &updated_table_entry = updated_table.GetOrCreateSchemaEntry(schema);
 
-	auto iceberg_version = updated_table_entry.table_info.table_metadata.iceberg_version;
+	auto iceberg_version = table_metadata.iceberg_version;
 	if (iceberg_version < 2) {
-		throw NotImplementedException("Delete from Iceberg V%d tables",
-		                              updated_table_entry.table_info.table_metadata.iceberg_version);
+		throw NotImplementedException("Delete from Iceberg V%d tables", iceberg_version);
 	}
 
 	vector<idx_t> row_id_indexes;
@@ -537,10 +538,10 @@ PhysicalOperator &IcebergCatalog::PlanDelete(ClientContext &context, PhysicalPla
 		row_id_indexes.push_back(bound_ref.Index());
 	}
 
-	auto allows_positional_deletes = updated_table_entry.table_info.table_metadata.PropertiesAllowPositionalDeletes(
-	    IcebergSnapshotOperationType::DELETE);
+	auto allows_positional_deletes =
+	    table_metadata.PropertiesAllowPositionalDeletes(IcebergSnapshotOperationType::DELETE);
 	if (!allows_positional_deletes) {
-		auto delete_table_property = updated_table_entry.table_info.table_metadata.GetTableProperty(WRITE_DELETE_MODE);
+		auto delete_table_property = table_metadata.GetTableProperty(WRITE_DELETE_MODE);
 		auto error_message = IcebergCatalog::GetOnlyMergeOnReadSupportedErrorMessage(
 		    updated_table_entry.name.GetIdentifierName(), WRITE_DELETE_MODE, delete_table_property);
 		throw NotImplementedException(error_message);

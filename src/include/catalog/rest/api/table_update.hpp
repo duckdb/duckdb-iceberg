@@ -20,8 +20,7 @@ struct IcebergTableInformation;
 
 struct AddSchemaUpdate : public IcebergTableUpdate {
 public:
-	explicit AddSchemaUpdate(const IcebergTableInformation &table_info, const IcebergTableMetadata &table_metadata,
-	                         int32_t schema_id);
+	explicit AddSchemaUpdate(const IcebergTableMetadata &table_metadata, int32_t schema_id);
 
 public:
 	static constexpr const IcebergTableUpdateType TYPE = IcebergTableUpdateType::ADD_SCHEMA;
@@ -32,6 +31,7 @@ public:
 	int32_t schema_id;
 	optional_idx last_column_id;
 	string schema_json;
+	shared_ptr<IcebergTableSchema> schema;
 };
 
 struct AssertCreateRequirement : public IcebergTableRequirement {
@@ -44,7 +44,7 @@ struct AssertCreateRequirement : public IcebergTableRequirement {
 struct AssertTableUUIDRequirement : public IcebergTableRequirement {
 	static constexpr const IcebergTableRequirementType TYPE = IcebergTableRequirementType::ASSERT_TABLE_UUID;
 
-	explicit AssertTableUUIDRequirement(const IcebergTableInformation &table_info);
+	explicit AssertTableUUIDRequirement(string uuid);
 	void CreateRequirement(DatabaseInstance &db, ClientContext &context, IcebergCommitState &commit_state);
 
 	string uuid;
@@ -53,7 +53,7 @@ struct AssertTableUUIDRequirement : public IcebergTableRequirement {
 struct AssertCurrentSchemaIdRequirement : public IcebergTableRequirement {
 	static constexpr const IcebergTableRequirementType TYPE = IcebergTableRequirementType::ASSERT_CURRENT_SCHEMA_ID;
 
-	explicit AssertCurrentSchemaIdRequirement(const IcebergTableInformation &table_info);
+	explicit AssertCurrentSchemaIdRequirement(int32_t current_schema_id);
 	void CreateRequirement(DatabaseInstance &db, ClientContext &context, IcebergCommitState &commit_state);
 
 	int32_t current_schema_id;
@@ -64,7 +64,7 @@ struct AssertLastAssignedFieldIdRequirement : public IcebergTableRequirement {
 	static constexpr const IcebergTableRequirementType TYPE =
 	    IcebergTableRequirementType::ASSERT_LAST_ASSIGNED_FIELD_ID;
 
-	explicit AssertLastAssignedFieldIdRequirement(const IcebergTableInformation &table_info);
+	explicit AssertLastAssignedFieldIdRequirement(int32_t last_assigned_field_id);
 	void CreateRequirement(DatabaseInstance &db, ClientContext &context, IcebergCommitState &commit_state);
 
 	int32_t last_assigned_field_id;
@@ -74,7 +74,7 @@ struct AssertLastAssignedPartitionIdRequirement : public IcebergTableRequirement
 	static constexpr const IcebergTableRequirementType TYPE =
 	    IcebergTableRequirementType::ASSERT_LAST_ASSIGNED_PARTITION_ID;
 
-	explicit AssertLastAssignedPartitionIdRequirement(const IcebergTableInformation &table_info);
+	explicit AssertLastAssignedPartitionIdRequirement(int32_t last_assigned_partition_id);
 	void CreateRequirement(DatabaseInstance &db, ClientContext &context, IcebergCommitState &commit_state);
 
 	int32_t last_assigned_partition_id;
@@ -83,7 +83,7 @@ struct AssertLastAssignedPartitionIdRequirement : public IcebergTableRequirement
 struct AssertDefaultSpecIdRequirement : public IcebergTableRequirement {
 	static constexpr const IcebergTableRequirementType TYPE = IcebergTableRequirementType::ASSERT_DEFAULT_SPEC_ID;
 
-	explicit AssertDefaultSpecIdRequirement(const IcebergTableInformation &table_info);
+	explicit AssertDefaultSpecIdRequirement(int32_t default_spec_id);
 	void CreateRequirement(DatabaseInstance &db, ClientContext &context, IcebergCommitState &commit_state);
 
 	int32_t default_spec_id;
@@ -155,7 +155,7 @@ struct SetDefaultSpec : public IcebergTableUpdate {
 struct SetProperties : public IcebergTableUpdate {
 	static constexpr const IcebergTableUpdateType TYPE = IcebergTableUpdateType::SET_PROPERTIES;
 
-	explicit SetProperties(const IcebergTableInformation &table_info, const case_insensitive_map_t<string> &properties);
+	explicit SetProperties(const case_insensitive_map_t<string> &properties);
 	void CreateUpdate(DatabaseInstance &db, ClientContext &context, IcebergCommitState &commit_state) const override;
 
 	case_insensitive_map_t<string> properties;
@@ -164,7 +164,7 @@ struct SetProperties : public IcebergTableUpdate {
 struct RemoveProperties : public IcebergTableUpdate {
 	static constexpr const IcebergTableUpdateType TYPE = IcebergTableUpdateType::REMOVE_PROPERTIES;
 
-	explicit RemoveProperties(const IcebergTableInformation &table_info, const vector<string> &properties);
+	explicit RemoveProperties(const vector<string> &properties);
 	void CreateUpdate(DatabaseInstance &db, ClientContext &context, IcebergCommitState &commit_state) const override;
 
 	vector<string> properties;

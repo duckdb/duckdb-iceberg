@@ -28,6 +28,8 @@ public:
 	bool HasUpdates() const;
 	bool SupportsAppendRetry() const;
 	bool RetryStateMatches(const IcebergTableInformation &table_info) const;
+	IcebergTableMetadata GetTransactionMetadata(const IcebergTableMetadata &base_metadata) const;
+	void MarkCreateSeeded();
 
 	void AddSnapshot(const IcebergTableMetadata &table_metadata, IcebergSnapshotOperationType operation,
 	                 vector<IcebergManifestEntry> &&data_files, IcebergManifestDeletes &&altered_manifests);
@@ -39,9 +41,9 @@ public:
 	void TableAddAssertCreate();
 	void TableAddAssertUUID();
 	void TableAddAssertCurrentSchemaId();
-	void TableAddAssertLastAssignedFieldId();
-	void TableAddAssertLastAssignedPartitionId();
-	void TableAddAssertDefaultSpecId();
+	void TableAddAssertLastAssignedFieldId(const IcebergTableMetadata &table_metadata);
+	void TableAddAssertLastAssignedPartitionId(const IcebergTableMetadata &table_metadata);
+	void TableAddAssertDefaultSpecId(const IcebergTableMetadata &table_metadata);
 	void TableAssignUUID(const IcebergTableMetadata &table_metadata);
 	void TableAddUpradeFormatVersion(const IcebergTableMetadata &table_metadata);
 	void TableAddPartitionSpec(const IcebergTableMetadata &table_metadata);
@@ -54,6 +56,7 @@ public:
 
 private:
 	void CacheExistingManifestList(lock_guard<mutex> &guard, const IcebergTableMetadata &metadata);
+	void ApplyMetadataUpdates(IcebergTableMetadata &metadata) const;
 
 public:
 	string initial_table_uuid;
@@ -83,6 +86,7 @@ public:
 	bool has_assert_create = false;
 	//! Whether the current schema of the table should be updated
 	bool set_schema_id = false;
+	idx_t metadata_view_update_offset = 0;
 	mutex lock;
 };
 
