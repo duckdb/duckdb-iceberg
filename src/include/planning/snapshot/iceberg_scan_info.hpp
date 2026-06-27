@@ -9,6 +9,9 @@
 #include "catalog/rest/transaction/iceberg_transaction_data.hpp"
 #include "planning/snapshot/iceberg_snapshot_scan_info.hpp"
 
+#include "duckdb/parser/parsed_expression.hpp"
+#include "duckdb/planner/expression.hpp"
+
 namespace duckdb {
 
 struct IcebergTransactionData;
@@ -38,6 +41,12 @@ public:
 
 	IcebergSnapshotScanInfo snapshot_info;
 	const IcebergTableSchema &schema;
+
+	//! A mandatory scan filter installed by the active access-delegation provider (e.g. a Lake
+	//! Formation row filter). The bound form is re-applied above the scan by the iceberg optimizer
+	//! so user predicates cannot widen it; both are null when no provider/filter is active.
+	unique_ptr<ParsedExpression> mandatory_delegation_filter_parsed;
+	unique_ptr<Expression> mandatory_delegation_filter_bound;
 };
 
 } // namespace duckdb

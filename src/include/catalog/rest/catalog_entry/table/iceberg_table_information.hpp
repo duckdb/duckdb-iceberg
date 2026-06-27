@@ -7,6 +7,7 @@
 #include "core/metadata/manifest/iceberg_manifest.hpp"
 #include "core/metadata/iceberg_table_metadata.hpp"
 #include "catalog/rest/transaction/iceberg_transaction_data.hpp"
+#include "catalog/rest/iceberg_access_delegation.hpp"
 #include "rest_catalog/objects/storage_credential.hpp"
 
 namespace duckdb {
@@ -90,6 +91,10 @@ public:
 	// dummy entry to hold existence of a table, but no schema versions
 	unique_ptr<IcebergTableEntry> dummy_entry;
 	unique_ptr<IcebergTransactionData> transaction_data;
+
+	//! Opaque per-table state owned by the active access-delegation provider (if any). Iceberg never
+	//! inspects its concrete type; the provider downcasts it. See IcebergAccessDelegationProvider.
+	shared_ptr<IcebergDelegationTableState> delegation_state;
 };
 
 } // namespace duckdb

@@ -154,6 +154,14 @@ public:
 	const IcebergSnapshotScanInfo &GetSnapshot() const;
 	const IcebergTableSchema &GetSchema() const;
 	IcebergTableEntry *GetTable() const;
+	//! Defined inline so external access-delegation provider extensions (separate loadable binaries that
+	//! link only against DuckDB core, not iceberg) can call them.
+	const shared_ptr<IcebergScanInfo> &GetScanInfo() const {
+		return shared_state->scan_info;
+	}
+	void PushTableFilter(column_t column_idx, unique_ptr<ExpressionFilter> filter) {
+		table_filters.PushFilter(column_idx, std::move(filter));
+	}
 	void SetTable(IcebergTableEntry *table);
 	void SetOptions(const IcebergOptions &options);
 

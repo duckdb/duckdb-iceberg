@@ -34,7 +34,13 @@ struct IcebergAttachOptions {
 	bool purge_requested = false;
 	IRCAccessDelegationMode access_mode = IRCAccessDelegationMode::VENDED_CREDENTIALS;
 	IcebergAuthorizationType authorization_type = IcebergAuthorizationType::INVALID;
+	// Name of an access-delegation provider (registered by an external extension) selected via
+	// ACCESS_DELEGATION_MODE. Empty for the built-in 'vended_credentials' / 'none' modes.
+	string access_delegation_provider;
 	unordered_map<string, Value> options;
+	// Attach options consumed by the access-delegation provider during validation. Moved here out of
+	// `options` so they don't trip the "unhandled options" check; read back by the provider at runtime.
+	unordered_map<string, Value> delegation_options;
 	// max staleness for cached table metadata in minutes (optional - if not set, always request fresh metadata)
 	optional_idx max_table_staleness_micros;
 };

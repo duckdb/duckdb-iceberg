@@ -15,6 +15,7 @@
 #include "catalog/rest/api/catalog_utils.hpp"
 #include "iceberg_logging.hpp"
 #include "catalog/rest/iceberg_catalog.hpp"
+#include "catalog/rest/iceberg_access_delegation.hpp"
 #include "catalog/rest/catalog_entry/table/iceberg_table_entry.hpp"
 #include "catalog/rest/transaction/iceberg_transaction.hpp"
 #include "catalog/rest/storage/authorization/sigv4.hpp"
@@ -44,6 +45,9 @@ bool IcebergTableSet::FillEntry(ClientContext &context, IcebergTableInformation 
 		if (cached_result) {
 			// Use the cached result instead of making a new request
 			table.InitializeFromLoadTableResult(*cached_result->load_table_result);
+			// The IRC cache holds Iceberg metadata only; a delegation provider's policy is caller-specific
+			// and must be (re)loaded even when the table load is served from cache.
+			IcebergAccessDelegation::OnTableLoaded(table, context);
 			return true;
 		}
 	}
@@ -75,6 +79,7 @@ bool IcebergTableSet::FillEntry(ClientContext &context, IcebergTableInformation 
 		auto &load_table_result = *cached_table_result->load_table_result;
 		table.InitializeFromLoadTableResult(load_table_result);
 	}
+	IcebergAccessDelegation::OnTableLoaded(table, context);
 	return true;
 }
 
