@@ -258,12 +258,12 @@ IcebergTableInformation &IcebergTableSet::CreateNewEntry(ClientContext &context,
 		table_metadata.table_properties.emplace(option.first, option_val);
 	}
 
-	auto current_schema = table_info.table_metadata.GetSchemaFromId(table_info.table_metadata.GetCurrentSchemaId());
-	D_ASSERT(current_schema);
+	auto request_schema = table_info.table_metadata.GetSchemaFromId(table_info.table_metadata.GetCurrentSchemaId());
+	D_ASSERT(request_schema);
 	table_ptr->table_info.table_metadata.default_spec_id = 0;
 	auto &created_table = alter_update.GetOrInitializeTable(table_info);
 	auto &transaction_data = alter_update.GetOrCreateTransactionData(created_table);
-	table_ptr->table_info.SetPartitionedBy(transaction_data, info.partition_keys, *current_schema, true);
+	table_ptr->table_info.SetPartitionedBy(transaction_data, info.partition_keys, *request_schema, true);
 
 	// Immediately create the table with stage_create = true to get metadata & data location(s)
 	// transaction commit will either commit with data (OR) create the table with stage_create = false
@@ -279,6 +279,8 @@ IcebergTableInformation &IcebergTableSet::CreateNewEntry(ClientContext &context,
 		table_info.InitializeFromLoadTableResult(*load_table_result, false);
 	}
 	created_table.SetBaseMetadata(table_info.table_metadata.Copy());
+	auto current_schema = table_info.table_metadata.GetSchemaFromId(table_info.table_metadata.GetCurrentSchemaId());
+	D_ASSERT(current_schema);
 
 	// if we stage created the table, we add an assert create
 	if (catalog.attach_options.stage_create_tables) {
