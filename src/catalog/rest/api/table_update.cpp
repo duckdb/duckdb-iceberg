@@ -236,7 +236,7 @@ void SetProperties::CreateUpdate(DatabaseInstance &db, ClientContext &context, I
 }
 
 RemoveProperties::RemoveProperties(const vector<string> &properties)
-    : IcebergTableUpdate(IcebergTableUpdateType::SET_PROPERTIES), properties(properties) {
+    : IcebergTableUpdate(IcebergTableUpdateType::REMOVE_PROPERTIES), properties(properties) {
 }
 
 void RemoveProperties::CreateUpdate(DatabaseInstance &db, ClientContext &context,

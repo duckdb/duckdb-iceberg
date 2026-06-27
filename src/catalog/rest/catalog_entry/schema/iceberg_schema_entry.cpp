@@ -535,8 +535,11 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 	case AlterTableType::RESET_TABLE_OPTIONS: {
 		auto &reset_options_info = alter_table_info.Cast<ResetTableOptionsInfo>();
 
-		vector<string> properties_to_remove(reset_options_info.table_options.begin(),
-		                                    reset_options_info.table_options.end());
+		vector<string> properties_to_remove;
+		properties_to_remove.reserve(reset_options_info.table_options.size());
+		for (auto &option : reset_options_info.table_options) {
+			properties_to_remove.push_back(option.GetIdentifierName());
+		}
 		if (!properties_to_remove.empty()) {
 			transaction_data.TableRemoveProperties(properties_to_remove);
 			for (auto &key : properties_to_remove) {
