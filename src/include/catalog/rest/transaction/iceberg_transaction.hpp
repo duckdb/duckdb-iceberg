@@ -33,7 +33,10 @@ public:
 	IcebergTransactionTableState(optional_ptr<IcebergTableInformation> table);
 
 public:
-	IcebergTableInformation &GetBaseTableInfo() {
+	const IcebergTableInformation &GetBaseTableInfo() const {
+		return GetInfo();
+	}
+	const IcebergTableInformation &GetVisibleTableInfo() const {
 		return GetInfo();
 	}
 	IcebergTableInformation &GetInfo() {
@@ -84,6 +87,9 @@ public:
 	}
 	bool IsAlive() const {
 		return status == IcebergTableStatus::ALIVE;
+	}
+	bool HasOwnedTable() const {
+		return owned_table != nullptr;
 	}
 	void SetStatus(IcebergTableStatus value) {
 		status = value;

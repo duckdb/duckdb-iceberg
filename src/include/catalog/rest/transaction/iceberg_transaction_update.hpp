@@ -72,6 +72,7 @@ public:
 
 public:
 	IcebergTransactionDeleteUpdate(IcebergTransaction &transaction, const IcebergTableInformation &table);
+	IcebergTransactionDeleteUpdate(IcebergTransaction &transaction, IcebergTableInformation &&table);
 	virtual ~IcebergTransactionDeleteUpdate() override;
 
 public:
@@ -85,6 +86,8 @@ public:
 
 public:
 	IcebergTransactionRenameUpdate(IcebergTransaction &transaction, const IcebergTableInformation &table,
+	                               const string &new_name);
+	IcebergTransactionRenameUpdate(IcebergTransaction &transaction, IcebergTableInformation &&table,
 	                               const string &new_name);
 	virtual ~IcebergTransactionRenameUpdate() override;
 

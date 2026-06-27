@@ -580,6 +580,7 @@ void IcebergTransaction::DoTableRename(IcebergTransactionRenameUpdate &rename_up
 	    IcebergTableInformation::GetTableKey(rename_update.source_namespace_items, rename_update.source_name);
 	auto &table_name = rename_update.source_name;
 	auto new_name = rename_update.new_name;
+	auto new_table_key = new_table.GetTableKey();
 
 	rest_api_objects::RenameTableRequest request;
 	request.source._namespace.value = rename_update.source_namespace_items;
@@ -588,6 +589,20 @@ void IcebergTransaction::DoTableRename(IcebergTransactionRenameUpdate &rename_up
 	request.destination.name = new_name;
 	auto transaction_json = RESTObjectToJSONString(request);
 	IRCAPI::CommitTableRename(context, catalog, transaction_json);
+
+	auto &ic_catalog = catalog.Cast<IcebergCatalog>();
+	auto &table_request_cache = ic_catalog.table_request_cache;
+	{
+		lock_guard<mutex> cache_guard(table_request_cache.Lock());
+		auto cache = table_request_cache.Get(context, table_key, cache_guard, false);
+		if (cache) {
+			table_request_cache.SetOrOverwriteInternal(cache_guard, context, new_table_key, cache->expire_timestamp,
+			                                           std::move(cache->load_table_result));
+		} else {
+			table_request_cache.ExpireInternal(cache_guard, context, new_table_key);
+		}
+		table_request_cache.ExpireInternal(cache_guard, context, table_key);
+	}
 
 	DropInfo drop_info;
 	drop_info.name = Identifier(table_name);
@@ -740,6 +755,16 @@ void IcebergTransaction::DoSchemaPropertyUpdates(ClientContext &context) {
 }
 
 namespace {
+
+static IcebergTableInformation CopyTransactionTableInfo(const IcebergTableInformation &source) {
+	auto result = IcebergTableInformation(source.catalog, source.schema, source.name);
+	result.table_id = source.table_id;
+	result.table_metadata = source.table_metadata.Copy();
+	result.config = source.config;
+	result.storage_credentials = source.storage_credentials;
+	result.latest_metadata_json = source.latest_metadata_json;
+	return result;
+}
 
 struct ScopedTransaction {
 public:
@@ -908,7 +933,11 @@ IcebergTableInformation &IcebergTransaction::DeleteTable(IcebergTableInformation
 	unique_ptr<IcebergTransactionDeleteUpdate> delete_update;
 	if (state) {
 		auto &table_info = state->GetInfo();
-		delete_update = make_uniq<IcebergTransactionDeleteUpdate>(*this, table_info);
+		if (state->HasOwnedTable()) {
+			delete_update = make_uniq<IcebergTransactionDeleteUpdate>(*this, CopyTransactionTableInfo(table_info));
+		} else {
+			delete_update = make_uniq<IcebergTransactionDeleteUpdate>(*this, table_info);
+		}
 	} else {
 		delete_update = make_uniq<IcebergTransactionDeleteUpdate>(*this, table);
 	}
@@ -921,6 +950,7 @@ IcebergTableInformation &IcebergTransaction::DeleteTable(IcebergTableInformation
 IcebergTableInformation &IcebergTransaction::RenameTable(IcebergTableInformation &table, const string &new_name) {
 	auto table_key = table.GetTableKey();
 	auto state = GetLatestTableState(table_key);
+	const bool source_is_transaction_local = state && state->HasOwnedTable();
 	if (state) {
 		auto &original_table = state->GetInfo();
 		if (HasTransactionUpdates(original_table.GetTableKey())) {
@@ -931,7 +961,12 @@ IcebergTableInformation &IcebergTransaction::RenameTable(IcebergTableInformation
 	state = SetLatestTableState(table, IcebergTableStatus::RENAMED);
 
 	//! Create the rename update, creating the new IcebergTableInformation in the process
-	auto rename = make_uniq<IcebergTransactionRenameUpdate>(*this, state->GetInfo(), new_name);
+	unique_ptr<IcebergTransactionRenameUpdate> rename;
+	if (source_is_transaction_local) {
+		rename = make_uniq<IcebergTransactionRenameUpdate>(*this, CopyTransactionTableInfo(state->GetInfo()), new_name);
+	} else {
+		rename = make_uniq<IcebergTransactionRenameUpdate>(*this, state->GetInfo(), new_name);
+	}
 	auto &rename_update = *rename;
 	transaction_updates.push_back(std::move(rename));
 
@@ -940,22 +975,8 @@ IcebergTableInformation &IcebergTransaction::RenameTable(IcebergTableInformation
 	auto &new_state = SetLatestTableState(new_table, IcebergTableStatus::ALIVE);
 	new_table.InitSchemaVersions();
 
-	auto locked_context = context.lock();
-	auto &client_context = *locked_context;
-	//! FIXME: just like the other place, this can easily go wrong
-	//! Migrate the MetadataCache
-	auto new_table_key = new_table.GetTableKey();
-	auto &table_request_cache = catalog.table_request_cache;
-	{
-		lock_guard<mutex> cache_guard(table_request_cache.Lock());
-		auto cache = table_request_cache.Get(client_context, table_key, cache_guard, false);
-		table_request_cache.SetOrOverwriteInternal(cache_guard, client_context, new_table_key, cache->expire_timestamp,
-		                                           std::move(cache->load_table_result));
-		table_request_cache.ExpireInternal(cache_guard, client_context, table_key);
-	}
-
 	//! Decouple subsequent transaction-local operations on the renamed table from the rename update's storage.
-	new_state.SetOwnedTable(new_table.Copy(client_context));
+	new_state.SetOwnedTable(CopyTransactionTableInfo(new_table));
 	new_state.GetInfo().InitSchemaVersions();
 	return state->GetInfo();
 }

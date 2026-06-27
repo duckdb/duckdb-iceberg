@@ -59,7 +59,7 @@ bool IcebergDelete::TryGetEqualityDeletePredicates(ClientContext &context, Icebe
 	}
 
 	//! Equality-delete writing is only supported for v2, unpartitioned tables.
-	auto &table_metadata = table.table_info.table_metadata;
+	auto table_metadata = table.GetTransactionTableMetadata();
 	if (table_metadata.iceberg_version != 2) {
 		return false;
 	}
@@ -146,7 +146,7 @@ void IcebergDelete::WriteEqualityDeleteFile(ClientContext &context, IcebergDelet
 	D_ASSERT(!equality_predicates.empty());
 
 	auto &fs = FileSystem::GetFileSystem(context);
-	auto data_path = table.table_info.table_metadata.GetDataPath(fs);
+	auto data_path = table.GetTransactionTableMetadata().GetDataPath(fs);
 	string delete_filename = UUID::ToString(UUID::GenerateRandomUUID()) + "-equality-deletes.parquet";
 	string delete_file_path = fs.JoinPath(data_path, delete_filename);
 

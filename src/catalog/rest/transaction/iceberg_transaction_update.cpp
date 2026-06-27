@@ -16,6 +16,16 @@ IcebergTransactionAlterUpdate::IcebergTransactionAlterUpdate(IcebergTransaction 
 IcebergTransactionAlterUpdate::~IcebergTransactionAlterUpdate() {
 }
 
+static IcebergTableInformation CopyTransactionTableInfo(const IcebergTableInformation &source) {
+	auto result = IcebergTableInformation(source.catalog, source.schema, source.name);
+	result.table_id = source.table_id;
+	result.table_metadata = source.table_metadata.Copy();
+	result.config = source.config;
+	result.storage_credentials = source.storage_credentials;
+	result.latest_metadata_json = source.latest_metadata_json;
+	return result;
+}
+
 IcebergTransactionTableState &IcebergTransactionAlterUpdate::GetOrInitializeTable(IcebergTableInformation &table) {
 	auto locked_context = transaction.context.lock();
 	auto &client_context = *locked_context;
@@ -23,12 +33,20 @@ IcebergTransactionTableState &IcebergTransactionAlterUpdate::GetOrInitializeTabl
 	auto table_key = table.GetTableKey();
 	auto it = updated_tables.find(table_key);
 	if (it == updated_tables.end()) {
-		it = updated_tables.emplace(table_key, IcebergTransactionTableState(table)).first;
-		auto metadata = table.GetTransactionStartMetadata(client_context, transaction);
-		if (!table.table_metadata.table_uuid.empty()) {
-			metadata.table_uuid = table.table_metadata.table_uuid;
+		auto latest_state = transaction.GetLatestTableState(table_key);
+		if (latest_state && latest_state->HasOwnedTable()) {
+			it = updated_tables.emplace(table_key, IcebergTransactionTableState(nullptr)).first;
+			it->second.SetOwnedTable(CopyTransactionTableInfo(latest_state->GetInfo()));
+			it->second.SetStatus(IcebergTableStatus::ALIVE);
+			it->second.SetBaseMetadata(latest_state->GetTransactionMetadata());
+		} else {
+			it = updated_tables.emplace(table_key, IcebergTransactionTableState(table)).first;
+			auto metadata = table.GetTransactionStartMetadata(client_context, transaction);
+			if (!table.table_metadata.table_uuid.empty()) {
+				metadata.table_uuid = table.table_metadata.table_uuid;
+			}
+			it->second.SetBaseMetadata(std::move(metadata));
 		}
-		it->second.SetBaseMetadata(std::move(metadata));
 	}
 	transaction.SetLatestTableState(it->second.GetInfo(), IcebergTableStatus::ALIVE);
 	return it->second;
@@ -86,7 +104,12 @@ IcebergTableInformation &IcebergTransactionAlterUpdate::CreateTable(const string
 
 IcebergTransactionDeleteUpdate::IcebergTransactionDeleteUpdate(IcebergTransaction &transaction,
                                                                const IcebergTableInformation &table)
-    : IcebergTransactionUpdate(transaction, TYPE), deleted_table(table.Copy(transaction)) {
+    : IcebergTransactionDeleteUpdate(transaction, table.Copy(transaction)) {
+}
+
+IcebergTransactionDeleteUpdate::IcebergTransactionDeleteUpdate(IcebergTransaction &transaction,
+                                                               IcebergTableInformation &&table)
+    : IcebergTransactionUpdate(transaction, TYPE), deleted_table(std::move(table)) {
 }
 IcebergTransactionDeleteUpdate::~IcebergTransactionDeleteUpdate() {
 }
@@ -94,8 +117,13 @@ IcebergTransactionDeleteUpdate::~IcebergTransactionDeleteUpdate() {
 IcebergTransactionRenameUpdate::IcebergTransactionRenameUpdate(IcebergTransaction &transaction,
                                                                const IcebergTableInformation &table,
                                                                const string &new_name)
+    : IcebergTransactionRenameUpdate(transaction, table.Copy(transaction), new_name) {
+}
+
+IcebergTransactionRenameUpdate::IcebergTransactionRenameUpdate(IcebergTransaction &transaction,
+                                                               IcebergTableInformation &&table, const string &new_name)
     : IcebergTransactionUpdate(transaction, TYPE), source_namespace_items(table.schema.namespace_items),
-      source_name(table.name), new_table(table.Copy(transaction)), new_name(new_name) {
+      source_name(table.name), new_table(std::move(table)), new_name(new_name) {
 	new_table.name = new_name;
 }
 IcebergTransactionRenameUpdate::~IcebergTransactionRenameUpdate() {

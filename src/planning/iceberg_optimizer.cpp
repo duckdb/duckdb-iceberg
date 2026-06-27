@@ -78,9 +78,7 @@ void GuaranteeEqualityDeleteColumnsOptimizer::VisitOperator(unique_ptr<LogicalOp
 				// column was deleted and exists most likely in an old schemas
 				// TODO: if the type of the equality delete column was evolved, then grabbing just any schema could be a
 				// problem
-				auto table = iceberg_list.GetTable();
-				D_ASSERT(table);
-				auto col_info = table->table_info.table_metadata.FindColumnByFieldId(fid);
+				auto col_info = iceberg_list.GetMetadata().FindColumnByFieldId(fid);
 				if (!col_info) {
 					throw InvalidConfigurationException(
 					    "column %d must apply equality deletes, but no schema has a column with that field id", fid);

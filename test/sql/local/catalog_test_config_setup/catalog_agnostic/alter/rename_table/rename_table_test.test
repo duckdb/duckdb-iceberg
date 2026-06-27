@@ -99,6 +99,22 @@ statement error
 select * from my_datalake.default.renamed_table3
 ----
 
+statement ok
+begin transaction
+
+statement ok
+drop table my_datalake.default.renamed_table2
+
+statement ok
+rollback
+
+query I
+select * from my_datalake.default.renamed_table2 order by i
+----
+1
+2
+3
+
 # Test 3: Multiple renames in same transaction with commit
 statement ok
 begin transaction

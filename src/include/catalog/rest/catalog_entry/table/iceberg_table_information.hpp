@@ -53,7 +53,7 @@ public:
 	static IcebergPartitionSpec BuildPartitionSpec(const vector<unique_ptr<ParsedExpression>> &partition_keys,
 	                                               const IcebergTableSchema &schema, int32_t spec_id,
 	                                               idx_t base_partition_field_id);
-	IRCAPITableCredentials GetVendedCredentials(ClientContext &context);
+	IRCAPITableCredentials GetVendedCredentials(ClientContext &context, const IcebergTableMetadata &table_metadata);
 	const string &BaseFilePath() const;
 
 	static string GetTableKey(const vector<string> &namespace_items, const string &table_name);

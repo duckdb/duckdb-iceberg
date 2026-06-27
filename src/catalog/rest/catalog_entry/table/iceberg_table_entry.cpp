@@ -82,8 +82,8 @@ void IcebergTableEntry::PrepareIcebergScanFromEntry(ClientContext &context) cons
 	}
 	// Get Credentials from IRC API
 	auto &fs = FileSystem::GetFileSystem(context);
-	auto table_credentials = table_info.GetVendedCredentials(context);
 	auto table_metadata = GetTransactionTableMetadata();
+	auto table_credentials = table_info.GetVendedCredentials(context, table_metadata);
 	auto metadata_path = table_metadata.GetMetadataPath(fs);
 
 	unique_ptr<SecretEntry> http_secret_entry;

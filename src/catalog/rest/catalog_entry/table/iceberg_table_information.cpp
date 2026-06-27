@@ -163,7 +163,8 @@ static void ParseConfigOptions(const case_insensitive_map_t<string> &config, cas
 	endpoint_it->second = endpoint;
 }
 
-IRCAPITableCredentials IcebergTableInformation::GetVendedCredentials(ClientContext &context) {
+IRCAPITableCredentials IcebergTableInformation::GetVendedCredentials(ClientContext &context,
+                                                                     const IcebergTableMetadata &metadata) {
 	IRCAPITableCredentials result;
 	auto transaction_id = MetaTransaction::Get(context).global_transaction_id;
 	auto &transaction = IcebergTransaction::Get(context, catalog);
@@ -199,7 +200,7 @@ IRCAPITableCredentials IcebergTableInformation::GetVendedCredentials(ClientConte
 	}
 
 	// Detect storage type from metadata location
-	const auto &table_location = table_metadata.GetLocation();
+	const auto &table_location = metadata.GetLocation();
 	string storage_type = DetectStorageType(table_location);
 
 	// Mapping from config key to a duckdb secret option

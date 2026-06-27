@@ -94,7 +94,7 @@ optional_ptr<CatalogEntry> IcebergSchemaEntry::CreateTable(CatalogTransaction &t
 	}
 
 	auto &table_info = IcebergTableSet::CreateNewEntry(context, ir_catalog, *this, base_info);
-	return table_info.schema_versions[0].get();
+	return table_info.GetLatestSchema(context);
 }
 
 optional_ptr<CatalogEntry> IcebergSchemaEntry::CreateTable(CatalogTransaction transaction, BoundCreateTableInfo &info) {

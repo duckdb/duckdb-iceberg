@@ -35,6 +35,42 @@ CALL set_iceberg_table_properties(my_datalake.default.test,
     }
 );
 
+statement ok
+begin transaction;
+
+statement ok
+CALL set_iceberg_table_properties(my_datalake.default.test,
+    {
+    'foo' : 'txn-buzz',
+    'txn-local-property' : 'visible'
+    }
+);
+
+statement ok
+CALL remove_iceberg_table_properties(my_datalake.default.test, ['page-write-size', 'write.update.mode']);
+
+query II
+select * from iceberg_table_properties(my_datalake.default.test)
+where key in ('write.update.mode', 'write.delete.mode', 'foo', 'page-write-size', 'txn-local-property')
+order by all;
+----
+foo	txn-buzz
+txn-local-property	visible
+write.delete.mode	copy-on-write
+
+statement ok
+rollback;
+
+query II
+select * from iceberg_table_properties(my_datalake.default.test)
+where key in ('write.update.mode', 'write.delete.mode', 'foo', 'page-write-size', 'txn-local-property')
+order by all;
+----
+foo	buzz
+page-write-size	10000
+write.delete.mode	copy-on-write
+write.update.mode	copy-on-write
+
 statement error
 CALL set_iceberg_table_properties(my_datalake.default.test,'blah');
 ----
