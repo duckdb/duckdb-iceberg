@@ -62,20 +62,21 @@ static void LoadExistingManifestList(ClientContext &context, const IcebergTableM
 	}
 }
 
-IcebergTransactionData::IcebergTransactionData(ClientContext &context, const IcebergTableInformation &table_info)
+IcebergTransactionData::IcebergTransactionData(ClientContext &context, const IcebergTableInformation &table_info,
+                                               const IcebergTableMetadata &base_metadata)
     : commit_retry_count(DEFAULT_RETRY_COUNT), context(context), table_info(table_info) {
-	initial_table_uuid = table_info.table_metadata.table_uuid;
-	if (table_info.table_metadata.has_next_row_id) {
-		next_row_id = table_info.table_metadata.next_row_id;
+	initial_table_uuid = base_metadata.table_uuid;
+	if (base_metadata.has_next_row_id) {
+		next_row_id = base_metadata.next_row_id;
 	}
-	initial_schema_id = table_info.table_metadata.GetCurrentSchemaId();
-	initial_default_spec_id = table_info.table_metadata.default_spec_id;
-	if (table_info.table_metadata.HasSortOrder()) {
-		initial_default_sort_order_id = table_info.table_metadata.default_sort_order_id;
+	initial_schema_id = base_metadata.GetCurrentSchemaId();
+	initial_default_spec_id = base_metadata.default_spec_id;
+	if (base_metadata.HasSortOrder()) {
+		initial_default_sort_order_id = base_metadata.default_sort_order_id;
 	}
 
-	auto it = table_info.table_metadata.table_properties.find("commit.retry.num-retries");
-	if (it != table_info.table_metadata.table_properties.end()) {
+	auto it = base_metadata.table_properties.find("commit.retry.num-retries");
+	if (it != base_metadata.table_properties.end()) {
 		try {
 			size_t processed = 0;
 			commit_retry_count = std::stoll(it->second, &processed);

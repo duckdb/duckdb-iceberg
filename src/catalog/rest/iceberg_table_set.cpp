@@ -318,8 +318,7 @@ optional_ptr<CatalogEntry> IcebergTableSet::GetEntry(ClientContext &context, con
 			// If table has been deleted or is missing within the transaction, return null
 			return nullptr;
 		}
-		auto &table_info = latest_state->GetInfo();
-		return table_info.GetSchemaVersion(context, at);
+		return latest_state->GetSchemaVersion(context, at);
 	}
 
 	//! Preserve the old version in case our replacement fails

@@ -22,7 +22,8 @@ class IcebergTableSchema;
 
 struct IcebergTransactionData {
 public:
-	IcebergTransactionData(ClientContext &context, const IcebergTableInformation &table_info);
+	IcebergTransactionData(ClientContext &context, const IcebergTableInformation &table_info,
+	                       const IcebergTableMetadata &base_metadata);
 
 public:
 	int64_t GetCommitRetryCount() const;

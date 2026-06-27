@@ -37,7 +37,7 @@ IcebergTransactionTableState::IcebergTransactionTableState(optional_ptr<IcebergT
 IcebergTransactionData &IcebergTransactionTableState::GetOrCreateTransactionData(IcebergTransaction &transaction) {
 	if (!transaction_data) {
 		auto context = transaction.context.lock();
-		transaction_data = make_uniq<IcebergTransactionData>(*context, GetInfo());
+		transaction_data = make_uniq<IcebergTransactionData>(*context, GetInfo(), GetBaseMetadata());
 	}
 	return *transaction_data;
 }
@@ -116,22 +116,27 @@ optional_ptr<CatalogEntry> IcebergTransactionTableState::GetSchemaVersion(Client
 		}
 		schema_id = snapshot.GetSchemaId();
 	} else {
-		bool use_metadata_log = true;
-		Value val;
-		if (context.TryGetCurrentSetting("iceberg_use_metadata_log", val)) {
-			if (!val.IsNull() && val.type().id() == LogicalTypeId::BOOLEAN) {
-				use_metadata_log = val.GetValue<bool>();
-			}
-		}
-
-		const bool latest_metadata_is_too_fresh = metadata.last_updated_ms.value > transaction_start_millis;
-		const bool can_use_metadata_log = use_metadata_log && !metadata.metadata_log.empty();
-		if (latest_metadata_is_too_fresh && can_use_metadata_log) {
-			string metadata_path;
-			auto relevant_metadata = GetInfo().CreateMetadataFromLog(context, transaction_start_millis, metadata_path);
-			schema_id = relevant_metadata.GetCurrentSchemaId();
-		} else {
+		if (transaction_data && transaction_data->HasUpdates()) {
 			schema_id = metadata.GetCurrentSchemaId();
+		} else {
+			bool use_metadata_log = true;
+			Value val;
+			if (context.TryGetCurrentSetting("iceberg_use_metadata_log", val)) {
+				if (!val.IsNull() && val.type().id() == LogicalTypeId::BOOLEAN) {
+					use_metadata_log = val.GetValue<bool>();
+				}
+			}
+
+			const bool latest_metadata_is_too_fresh = metadata.last_updated_ms.value > transaction_start_millis;
+			const bool can_use_metadata_log = use_metadata_log && !metadata.metadata_log.empty();
+			if (latest_metadata_is_too_fresh && can_use_metadata_log) {
+				string metadata_path;
+				auto relevant_metadata =
+				    GetInfo().CreateMetadataFromLog(context, transaction_start_millis, metadata_path);
+				schema_id = relevant_metadata.GetCurrentSchemaId();
+			} else {
+				schema_id = metadata.GetCurrentSchemaId();
+			}
 		}
 	}
 	auto schema = metadata.GetSchemaFromId(schema_id);
@@ -823,11 +828,25 @@ bool IcebergTransaction::StartedBefore(timestamp_t timestamp_ms) const {
 }
 
 optional_ptr<IcebergTransactionTableState> IcebergTransaction::GetLatestTableState(const string &table_key) {
-	auto it = current_table_data.find(table_key);
-	if (it == current_table_data.end()) {
+	auto current_it = current_table_data.find(table_key);
+	if (current_it != current_table_data.end() && !current_it->second.IsAlive()) {
+		return current_it->second;
+	}
+	for (idx_t i = transaction_updates.size(); i-- > 0;) {
+		auto &transaction_update = transaction_updates[i];
+		if (transaction_update->type != IcebergTransactionUpdateType::ALTER) {
+			continue;
+		}
+		auto &alter_update = transaction_update->Cast<IcebergTransactionAlterUpdate>();
+		auto alter_it = alter_update.updated_tables.find(table_key);
+		if (alter_it != alter_update.updated_tables.end()) {
+			return alter_it->second;
+		}
+	}
+	if (current_it == current_table_data.end()) {
 		return nullptr;
 	}
-	return it->second;
+	return current_it->second;
 }
 
 IcebergTransactionTableState &IcebergTransaction::SetLatestTableState(const string &table_key,
