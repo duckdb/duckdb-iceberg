@@ -67,6 +67,7 @@ public:
 	IcebergTableInformation Copy(IcebergTransaction &iceberg_transaction) const;
 	// This copy is used for deletes, where we don't care about valid table state
 	IcebergTableInformation Copy(ClientContext &context) const;
+	std::optional<IcebergTableInformation> TryCopy(ClientContext &context) const;
 	void InitSchemaVersions();
 
 	IcebergSnapshotLookup GetSnapshotLookup(IcebergTransaction &iceberg_transaction) const;

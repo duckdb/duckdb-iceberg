@@ -529,17 +529,27 @@ void IcebergTableInformation::RefreshFromCatalog(ClientContext &context) {
 	}
 }
 
-IcebergTableInformation IcebergTableInformation::Copy(ClientContext &context) const {
+std::optional<IcebergTableInformation> IcebergTableInformation::TryCopy(ClientContext &context) const {
 	auto ret = IcebergTableInformation(catalog, schema, name);
 	auto table_key = ret.GetTableKey();
 	{
 		lock_guard<std::mutex> cache_lock(catalog.table_request_cache.Lock());
 		auto cached_result = catalog.table_request_cache.Get(context, table_key, cache_lock, false);
-		D_ASSERT(cached_result);
+		if (!cached_result) {
+			return std::nullopt;
+		}
 		auto &cached_table_result = *cached_result->load_table_result;
 		ret.InitializeFromLoadTableResult(cached_table_result, false);
 	}
 	return ret;
+}
+
+IcebergTableInformation IcebergTableInformation::Copy(ClientContext &context) const {
+	auto res = TryCopy(context);
+	if (!res) {
+		throw InvalidInputException("Table '%s' can't be reached anymore, likely deleted from the catalog", name);
+	}
+	return std::move(*res);
 }
 
 IcebergTableMetadata IcebergTableInformation::CreateMetadataFromLog(ClientContext &context,

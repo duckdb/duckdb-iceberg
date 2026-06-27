@@ -334,11 +334,14 @@ static SingleTableStagedCommit StageSingleTableCommit(DatabaseInstance &db, Iceb
                                                       ClientContext &context) {
 	SingleTableStagedCommit info;
 	auto &table_info = table_state.GetInfo();
-	auto commit_table = table_info.Copy(context);
-	if (!transaction_data.SupportsAppendRetry()) {
-		commit_table.table_metadata = table_state.GetTransactionMetadata();
+	auto commit_table = table_info.TryCopy(context);
+	if (!commit_table) {
+		throw CatalogException("Table '%s' no longer exists, failed to commit", table_info.name);
 	}
-	IcebergCommitState commit_state(commit_table, context);
+	if (!transaction_data.SupportsAppendRetry()) {
+		commit_table->table_metadata = table_state.GetTransactionMetadata();
+	}
+	IcebergCommitState commit_state(*commit_table, context);
 	auto &table_change = commit_state.table_change;
 	auto &schema = table_info.schema.Cast<IcebergSchemaEntry>();
 	table_change.identifier = rest_api_objects::TableIdentifier();
