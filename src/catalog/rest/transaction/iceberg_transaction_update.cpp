@@ -76,6 +76,7 @@ IcebergTableInformation &IcebergTransactionAlterUpdate::CreateTable(const string
 		throw InternalException("Table %s was already created somehow?", table_key);
 	}
 	emplace_res.first->second.SetOwnedTable(std::move(table));
+	emplace_res.first->second.SetStatus(IcebergTableStatus::ALIVE);
 	emplace_res.first->second.SetBaseMetadata(emplace_res.first->second.GetInfo().table_metadata.Copy());
 
 	transaction.current_table_data.emplace(table_key,
@@ -93,8 +94,8 @@ IcebergTransactionDeleteUpdate::~IcebergTransactionDeleteUpdate() {
 IcebergTransactionRenameUpdate::IcebergTransactionRenameUpdate(IcebergTransaction &transaction,
                                                                const IcebergTableInformation &table,
                                                                const string &new_name)
-    : IcebergTransactionUpdate(transaction, TYPE), table(table), new_table(table.Copy(transaction)),
-      new_name(new_name) {
+    : IcebergTransactionUpdate(transaction, TYPE), source_namespace_items(table.schema.namespace_items),
+      source_name(table.name), new_table(table.Copy(transaction)), new_name(new_name) {
 	new_table.name = new_name;
 }
 IcebergTransactionRenameUpdate::~IcebergTransactionRenameUpdate() {

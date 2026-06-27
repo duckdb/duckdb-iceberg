@@ -89,10 +89,22 @@ public:
 		status = value;
 	}
 	void SetTable(IcebergTableInformation &value) {
+		if (owned_table && owned_table.get() == &value) {
+			table = *owned_table;
+			return;
+		}
+		schema_versions.clear();
+		dummy_entry.reset();
+		base_metadata.reset();
+		transaction_data.reset();
 		owned_table.reset();
 		table = value;
 	}
 	void SetOwnedTable(IcebergTableInformation &&value) {
+		schema_versions.clear();
+		dummy_entry.reset();
+		base_metadata.reset();
+		transaction_data.reset();
 		owned_table = make_uniq<IcebergTableInformation>(std::move(value));
 		table = *owned_table;
 	}

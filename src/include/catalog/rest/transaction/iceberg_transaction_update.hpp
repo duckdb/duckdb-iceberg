@@ -89,7 +89,8 @@ public:
 	virtual ~IcebergTransactionRenameUpdate() override;
 
 public:
-	const IcebergTableInformation &table;
+	vector<string> source_namespace_items;
+	string source_name;
 	IcebergTableInformation new_table;
 	string new_name;
 };

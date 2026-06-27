@@ -571,14 +571,15 @@ void IcebergTransaction::DoTableUpdates(IcebergTransactionAlterUpdate &alter_upd
 }
 
 void IcebergTransaction::DoTableRename(IcebergTransactionRenameUpdate &rename_update, ClientContext &context) {
-	auto &original_table = rename_update.table;
-	auto &schema = original_table.schema;
-	auto table_key = original_table.GetTableKey();
-	auto &table_name = original_table.name;
+	auto &new_table = rename_update.new_table;
+	auto &schema = new_table.schema;
+	auto table_key =
+	    IcebergTableInformation::GetTableKey(rename_update.source_namespace_items, rename_update.source_name);
+	auto &table_name = rename_update.source_name;
 	auto new_name = rename_update.new_name;
 
 	rest_api_objects::RenameTableRequest request;
-	request.source._namespace.value = schema.namespace_items;
+	request.source._namespace.value = rename_update.source_namespace_items;
 	request.source.name = table_name;
 	request.destination._namespace.value = schema.namespace_items;
 	request.destination.name = new_name;
@@ -592,7 +593,7 @@ void IcebergTransaction::DoTableRename(IcebergTransactionRenameUpdate &rename_up
 
 	lock_guard<mutex> guard(schema.tables.GetEntryLock());
 	shared_ptr<IcebergTableInformation> old_version;
-	schema.tables.CreateEntryInternal(guard, new_name, std::move(rename_update.new_table), old_version);
+	schema.tables.CreateEntryInternal(guard, new_name, std::move(new_table), old_version);
 	if (old_version) {
 		throw TransactionException("Table %s was already created by a different transaction!", new_name);
 	}
@@ -933,7 +934,7 @@ IcebergTableInformation &IcebergTransaction::RenameTable(IcebergTableInformation
 
 	//! Update the state of the renamed table
 	auto &new_table = rename_update.new_table;
-	SetLatestTableState(new_table, IcebergTableStatus::ALIVE);
+	auto &new_state = SetLatestTableState(new_table, IcebergTableStatus::ALIVE);
 	new_table.InitSchemaVersions();
 
 	auto locked_context = context.lock();
@@ -942,11 +943,17 @@ IcebergTableInformation &IcebergTransaction::RenameTable(IcebergTableInformation
 	//! Migrate the MetadataCache
 	auto new_table_key = new_table.GetTableKey();
 	auto &table_request_cache = catalog.table_request_cache;
-	lock_guard<mutex> cache_guard(table_request_cache.Lock());
-	auto cache = table_request_cache.Get(client_context, table_key, cache_guard, false);
-	table_request_cache.SetOrOverwriteInternal(cache_guard, client_context, new_table_key, cache->expire_timestamp,
-	                                           std::move(cache->load_table_result));
-	table_request_cache.ExpireInternal(cache_guard, client_context, table_key);
+	{
+		lock_guard<mutex> cache_guard(table_request_cache.Lock());
+		auto cache = table_request_cache.Get(client_context, table_key, cache_guard, false);
+		table_request_cache.SetOrOverwriteInternal(cache_guard, client_context, new_table_key, cache->expire_timestamp,
+		                                           std::move(cache->load_table_result));
+		table_request_cache.ExpireInternal(cache_guard, client_context, table_key);
+	}
+
+	//! Decouple subsequent transaction-local operations on the renamed table from the rename update's storage.
+	new_state.SetOwnedTable(new_table.Copy(client_context));
+	new_state.GetInfo().InitSchemaVersions();
 	return state->GetInfo();
 }
 
