@@ -30,14 +30,20 @@ void IcebergAccessDelegation::ResolveProviderForAttach(IcebergAttachOptions &opt
 	auto provider = registry.GetProvider(provider_name);
 	if (!provider) {
 		// The provider lives in a separate community extension named after the mode; autoload it so
-		// `ATTACH ... (ACCESS_DELEGATION_MODE 'lake_formation')` works without an explicit LOAD.
-		ExtensionHelper::AutoLoadExtension(context, provider_name);
-		provider = registry.GetProvider(provider_name);
+		// `ATTACH ... (ACCESS_DELEGATION_MODE 'lake_formation')` works without an explicit LOAD. Swallow
+		// autoload failures here so we can surface a single, clear access-mode error below regardless of
+		// whether the extension is missing or simply did not register a provider.
+		try {
+			ExtensionHelper::AutoLoadExtension(context, provider_name);
+			provider = registry.GetProvider(provider_name);
+		} catch (std::exception &) {
+		}
 	}
 	if (!provider) {
 		throw InvalidConfigurationException(
-		    "ACCESS_DELEGATION_MODE '%s' did not register an Iceberg access delegation provider. Is the '%s' "
-		    "extension installed and loadable?",
+		    "Unrecognized access mode '%s'. Built-in options are 'vended_credentials' and 'none'; any other "
+		    "value must name an extension that registers an Iceberg access-delegation provider, but the '%s' "
+		    "extension could not be loaded or did not register one.",
 		    provider_name, provider_name);
 	}
 	provider->ValidateAttachOptions(options);
