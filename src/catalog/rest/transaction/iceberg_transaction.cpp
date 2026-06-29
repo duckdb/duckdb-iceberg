@@ -275,10 +275,16 @@ static bool NeedsAssertSchemaId(const IcebergTransactionData &transaction_data,
 
 namespace {
 
+static IcebergTableInformation CopyTransactionTableInfo(const IcebergTableInformation &source);
+
 struct SingleTableStagedCommit {
+	IcebergTableInformation table_info;
 	rest_api_objects::CommitTableRequest request;
 	vector<string> created_metadata_files;
 	bool retryable = false;
+
+	SingleTableStagedCommit(IcebergTableInformation &&table_info_p) : table_info(std::move(table_info_p)) {
+	}
 };
 
 static idx_t GetMaxRetries(const IcebergTransactionData &transaction_data) {
@@ -332,21 +338,21 @@ static void CreateTableRequirements(DatabaseInstance &db, ClientContext &context
 static SingleTableStagedCommit StageSingleTableCommit(DatabaseInstance &db, IcebergTransactionTableState &table_state,
                                                       IcebergTransactionData &transaction_data,
                                                       ClientContext &context) {
-	SingleTableStagedCommit info;
-	auto &table_info = table_state.GetInfo();
-	auto commit_table = table_info.TryCopy(context);
+	auto &base_table_info = table_state.GetInfo();
+	auto commit_table = base_table_info.TryCopy(context);
 	if (!commit_table) {
-		throw CatalogException("Table '%s' no longer exists, failed to commit", table_info.name);
+		throw CatalogException("Table '%s' no longer exists, failed to commit", base_table_info.name);
 	}
 	if (!transaction_data.SupportsAppendRetry()) {
 		commit_table->table_metadata = table_state.GetTransactionMetadata();
 	}
+	SingleTableStagedCommit info(CopyTransactionTableInfo(*commit_table));
 	IcebergCommitState commit_state(*commit_table, context);
 	auto &table_change = commit_state.table_change;
-	auto &schema = table_info.schema.Cast<IcebergSchemaEntry>();
+	auto &schema = base_table_info.schema.Cast<IcebergSchemaEntry>();
 	table_change.identifier = rest_api_objects::TableIdentifier();
 	table_change.identifier->_namespace.value = schema.namespace_items;
-	table_change.identifier->name = table_info.name;
+	table_change.identifier->name = base_table_info.name;
 
 	auto &metadata = commit_state.table_info.table_metadata;
 	auto current_snapshot = metadata.GetLatestSnapshot();
@@ -379,8 +385,10 @@ static SingleTableStagedCommit StageSingleTableCommit(DatabaseInstance &db, Iceb
 
 } // namespace
 
-TableTransactionInfo IcebergTransaction::GetTransactionRequest(IcebergTransactionAlterUpdate &alter_update,
-                                                               ClientContext &context) {
+TableTransactionInfo
+IcebergTransaction::GetTransactionRequest(IcebergTransactionAlterUpdate &alter_update,
+                                          case_insensitive_map_t<IcebergTableInformation> &staged_tables,
+                                          ClientContext &context) {
 	TableTransactionInfo info;
 	auto &transaction = info.request;
 	bool all_retryable = true;
@@ -399,6 +407,7 @@ TableTransactionInfo IcebergTransaction::GetTransactionRequest(IcebergTransactio
 		}
 
 		auto table_transaction_info = StageSingleTableCommit(db, table_state, *transaction_data, context);
+		staged_tables.emplace(table_key, std::move(table_transaction_info.table_info));
 		info.created_metadata_files.emplace(table_key, std::move(table_transaction_info.created_metadata_files));
 		info.table_requests.emplace(table_key, transaction.table_changes.size());
 		transaction.table_changes.push_back(std::move(table_transaction_info.request));
@@ -446,26 +455,21 @@ void IcebergTransaction::CleanupMetadataFiles(ClientContext &context, const vect
 }
 
 void IcebergTransaction::RefreshRetryTables(IcebergTransactionAlterUpdate &alter_update,
-                                            const case_insensitive_set_t &table_keys, ClientContext &context) {
-	for (const auto &table_key : table_keys) {
-		auto it = alter_update.updated_tables.find(table_key);
-		if (it == alter_update.updated_tables.end()) {
-			continue;
-		}
-		auto &table_state = it->second;
-		auto transaction_data = alter_update.GetTransactionData(table_key);
+                                            case_insensitive_map_t<IcebergTableInformation> &retry_tables,
+                                            ClientContext &context) {
+	for (auto &entry : retry_tables) {
+		auto transaction_data = alter_update.GetTransactionData(entry.first);
 		if (!transaction_data) {
 			continue;
 		}
-		auto &base_table = table_state.GetInfo();
-		if (!transaction_data->RetryStateMatches(base_table)) {
-			throw TransactionException("Table %s changed incompatibly while retrying commit", table_key);
+		auto &commit_table = entry.second;
+		if (!transaction_data->RetryStateMatches(commit_table)) {
+			throw TransactionException("Table %s changed incompatibly while retrying commit", entry.first);
 		}
-		base_table.RefreshFromCatalog(context);
-		if (!transaction_data->RetryStateMatches(base_table)) {
-			throw TransactionException("Table %s changed incompatibly while retrying commit", table_key);
+		commit_table.RefreshFromCatalog(context);
+		if (!transaction_data->RetryStateMatches(commit_table)) {
+			throw TransactionException("Table %s changed incompatibly while retrying commit", entry.first);
 		}
-		SetLatestTableState(base_table, IcebergTableStatus::ALIVE);
 	}
 }
 
@@ -491,14 +495,6 @@ static vector<string> GetCreatedMetadataFiles(const TableTransactionInfo &transa
 		created_metadata_files.insert(created_metadata_files.end(), entry.second.begin(), entry.second.end());
 	}
 	return created_metadata_files;
-}
-
-static case_insensitive_set_t GetRetryTableKeys(const TableTransactionInfo &transaction_info) {
-	case_insensitive_set_t table_keys;
-	for (const auto &entry : transaction_info.table_requests) {
-		table_keys.insert(entry.first);
-	}
-	return table_keys;
 }
 
 void IcebergTransaction::Commit() {
@@ -621,7 +617,8 @@ void IcebergTransaction::DoMultiTableCommitUpdates(IcebergTransactionAlterUpdate
                                                    ClientContext &context) {
 	const auto max_retries = GetMaxRetries(alter_update);
 	for (idx_t attempt = 0;; attempt++) {
-		auto transaction_info = GetTransactionRequest(alter_update, context);
+		case_insensitive_map_t<IcebergTableInformation> staged_tables;
+		auto transaction_info = GetTransactionRequest(alter_update, staged_tables, context);
 		if (transaction_info.request.table_changes.empty()) {
 			alter_update.updated_tables.clear();
 			return;
@@ -645,8 +642,7 @@ void IcebergTransaction::DoMultiTableCommitUpdates(IcebergTransactionAlterUpdate
 			result.Throw(catalog.GetBaseUrl().GetURLEncoded());
 		}
 		CleanupMetadataFiles(context, created_metadata_files);
-		auto table_keys = GetRetryTableKeys(transaction_info);
-		RefreshRetryTables(alter_update, table_keys, context);
+		RefreshRetryTables(alter_update, staged_tables, context);
 	}
 }
 
@@ -683,8 +679,8 @@ void IcebergTransaction::DoSingleTableCommitUpdates(IcebergTransactionAlterUpdat
 				result.Throw(catalog.GetBaseUrl().GetURLEncoded());
 			}
 			CleanupMetadataFiles(context, table_transaction_info.created_metadata_files);
-			case_insensitive_set_t retry_tables;
-			retry_tables.insert(table_key);
+			case_insensitive_map_t<IcebergTableInformation> retry_tables;
+			retry_tables.emplace(table_key, std::move(table_transaction_info.table_info));
 			RefreshRetryTables(alter_update, retry_tables, context);
 		}
 	}
@@ -950,7 +946,7 @@ IcebergTableInformation &IcebergTransaction::DeleteTable(IcebergTableInformation
 IcebergTableInformation &IcebergTransaction::RenameTable(IcebergTableInformation &table, const string &new_name) {
 	auto table_key = table.GetTableKey();
 	auto state = GetLatestTableState(table_key);
-	const bool source_is_transaction_local = state && state->HasOwnedTable();
+	const bool source_is_transaction_local = state && state->IsTransactionLocalTable();
 	if (state) {
 		auto &original_table = state->GetInfo();
 		if (HasTransactionUpdates(original_table.GetTableKey())) {
@@ -976,7 +972,7 @@ IcebergTableInformation &IcebergTransaction::RenameTable(IcebergTableInformation
 	new_table.InitSchemaVersions();
 
 	//! Decouple subsequent transaction-local operations on the renamed table from the rename update's storage.
-	new_state.SetOwnedTable(CopyTransactionTableInfo(new_table));
+	new_state.SetOwnedTable(CopyTransactionTableInfo(new_table), true);
 	new_state.GetInfo().InitSchemaVersions();
 	return state->GetInfo();
 }

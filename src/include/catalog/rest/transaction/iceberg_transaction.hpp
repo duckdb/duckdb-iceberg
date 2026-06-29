@@ -33,12 +33,6 @@ public:
 	IcebergTransactionTableState(optional_ptr<IcebergTableInformation> table);
 
 public:
-	const IcebergTableInformation &GetBaseTableInfo() const {
-		return GetInfo();
-	}
-	const IcebergTableInformation &GetVisibleTableInfo() const {
-		return GetInfo();
-	}
 	IcebergTableInformation &GetInfo() {
 		if (owned_table) {
 			return *owned_table;
@@ -60,13 +54,7 @@ public:
 		return *table;
 	}
 	const IcebergTableMetadata &GetBaseMetadata() const {
-		if (base_metadata) {
-			return *base_metadata;
-		}
 		return GetInfo().table_metadata;
-	}
-	void SetBaseMetadata(IcebergTableMetadata metadata) {
-		base_metadata = std::move(metadata);
 	}
 	IcebergTableMetadata GetTransactionMetadata() const;
 	optional_ptr<IcebergTransactionData> GetTransactionData() const {
@@ -91,6 +79,9 @@ public:
 	bool HasOwnedTable() const {
 		return owned_table != nullptr;
 	}
+	bool IsTransactionLocalTable() const {
+		return transaction_local_table;
+	}
 	void SetStatus(IcebergTableStatus value) {
 		status = value;
 	}
@@ -101,17 +92,17 @@ public:
 		}
 		schema_versions.clear();
 		dummy_entry.reset();
-		base_metadata.reset();
 		transaction_data.reset();
 		owned_table.reset();
+		transaction_local_table = false;
 		table = value;
 	}
-	void SetOwnedTable(IcebergTableInformation &&value) {
+	void SetOwnedTable(IcebergTableInformation &&value, bool transaction_local = false) {
 		schema_versions.clear();
 		dummy_entry.reset();
-		base_metadata.reset();
 		transaction_data.reset();
 		owned_table = make_uniq<IcebergTableInformation>(std::move(value));
+		transaction_local_table = transaction_local;
 		table = *owned_table;
 	}
 
@@ -119,7 +110,7 @@ private:
 	optional_ptr<IcebergTableInformation> table;
 	unique_ptr<IcebergTableInformation> owned_table;
 	IcebergTableStatus status;
-	optional<IcebergTableMetadata> base_metadata;
+	bool transaction_local_table = false;
 	unordered_map<int32_t, unique_ptr<IcebergTableEntry>> schema_versions;
 	unique_ptr<IcebergTableEntry> dummy_entry;
 	unique_ptr<IcebergTransactionData> transaction_data;
@@ -154,7 +145,9 @@ public:
 	void DoSchemaPropertyUpdates(ClientContext &context);
 	IcebergCatalog &GetCatalog();
 	void DropSecrets(ClientContext &context);
-	TableTransactionInfo GetTransactionRequest(IcebergTransactionAlterUpdate &alter_update, ClientContext &context);
+	TableTransactionInfo GetTransactionRequest(IcebergTransactionAlterUpdate &alter_update,
+	                                           case_insensitive_map_t<IcebergTableInformation> &staged_tables,
+	                                           ClientContext &context);
 	void DoMultiTableCommitUpdates(IcebergTransactionAlterUpdate &alter_update, ClientContext &context);
 	void DoSingleTableCommitUpdates(IcebergTransactionAlterUpdate &alter_update, ClientContext &context);
 	optional_ptr<IcebergTransactionTableState> GetLatestTableState(const string &table_key);
@@ -170,8 +163,8 @@ public:
 private:
 	bool CanUseMultiTableCommit(const IcebergTransactionAlterUpdate &alter_update) const;
 	void CleanupMetadataFiles(ClientContext &context, const vector<string> &paths);
-	void RefreshRetryTables(IcebergTransactionAlterUpdate &alter_update, const case_insensitive_set_t &table_keys,
-	                        ClientContext &context);
+	void RefreshRetryTables(IcebergTransactionAlterUpdate &alter_update,
+	                        case_insensitive_map_t<IcebergTableInformation> &retry_tables, ClientContext &context);
 	void CleanupFiles();
 
 private:

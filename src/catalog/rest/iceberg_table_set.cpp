@@ -280,7 +280,6 @@ IcebergTableInformation &IcebergTableSet::CreateNewEntry(ClientContext &context,
 		table_info.InitializeFromLoadTableResult(*load_table_result, false);
 	}
 	auto &created_table = alter_update.GetOrInitializeTable(table_info);
-	created_table.SetBaseMetadata(table_info.table_metadata.Copy());
 	auto current_schema = table_info.table_metadata.GetSchemaFromId(table_info.table_metadata.GetCurrentSchemaId());
 	D_ASSERT(current_schema);
 	table_info.CreateSchemaVersion(*current_schema);

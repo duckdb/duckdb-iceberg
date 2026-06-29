@@ -34,18 +34,22 @@ IcebergTransactionTableState &IcebergTransactionAlterUpdate::GetOrInitializeTabl
 	auto it = updated_tables.find(table_key);
 	if (it == updated_tables.end()) {
 		auto latest_state = transaction.GetLatestTableState(table_key);
-		if (latest_state && latest_state->HasOwnedTable()) {
+		if (latest_state && latest_state->IsTransactionLocalTable()) {
+			auto owned_table = CopyTransactionTableInfo(latest_state->GetInfo());
+			owned_table.table_metadata = latest_state->GetTransactionMetadata();
 			it = updated_tables.emplace(table_key, IcebergTransactionTableState(nullptr)).first;
-			it->second.SetOwnedTable(CopyTransactionTableInfo(latest_state->GetInfo()));
+			it->second.SetOwnedTable(std::move(owned_table), true);
 			it->second.SetStatus(IcebergTableStatus::ALIVE);
-			it->second.SetBaseMetadata(latest_state->GetTransactionMetadata());
 		} else {
-			it = updated_tables.emplace(table_key, IcebergTransactionTableState(table)).first;
 			auto metadata = table.GetTransactionStartMetadata(client_context, transaction);
 			if (!table.table_metadata.table_uuid.empty()) {
 				metadata.table_uuid = table.table_metadata.table_uuid;
 			}
-			it->second.SetBaseMetadata(std::move(metadata));
+			auto owned_table = CopyTransactionTableInfo(table);
+			owned_table.table_metadata = std::move(metadata);
+			it = updated_tables.emplace(table_key, IcebergTransactionTableState(nullptr)).first;
+			it->second.SetOwnedTable(std::move(owned_table));
+			it->second.SetStatus(IcebergTableStatus::ALIVE);
 		}
 	}
 	transaction.SetLatestTableState(it->second.GetInfo(), IcebergTableStatus::ALIVE);
@@ -93,9 +97,8 @@ IcebergTableInformation &IcebergTransactionAlterUpdate::CreateTable(const string
 	if (!emplace_res.second) {
 		throw InternalException("Table %s was already created somehow?", table_key);
 	}
-	emplace_res.first->second.SetOwnedTable(std::move(table));
+	emplace_res.first->second.SetOwnedTable(std::move(table), true);
 	emplace_res.first->second.SetStatus(IcebergTableStatus::ALIVE);
-	emplace_res.first->second.SetBaseMetadata(emplace_res.first->second.GetInfo().table_metadata.Copy());
 
 	transaction.current_table_data.emplace(table_key,
 	                                       IcebergTransactionTableState(emplace_res.first->second.GetInfo()));
