@@ -666,6 +666,9 @@ unique_ptr<Catalog> IcebergCatalog::Attach(optional_ptr<StorageExtensionInfo> st
 	//! Remember the raw attach options so that a later ATTACH OR REPLACE can detect when they change.
 	catalog->raw_attach_options.insert(options.options.begin(), options.options.end());
 	catalog->GetConfig(context, endpoint_type);
+	if (!default_schema.empty() && !IRCAPI::VerifySchemaExistence(context, *catalog, default_schema)) {
+		throw InvalidConfigurationException("default_schema '%s' does not exist", default_schema);
+	}
 	return std::move(catalog);
 }
 
