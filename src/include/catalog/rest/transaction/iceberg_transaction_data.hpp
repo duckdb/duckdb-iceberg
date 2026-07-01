@@ -18,47 +18,56 @@ namespace duckdb {
 
 struct IcebergTableInformation;
 struct IcebergCreateTableRequest;
+class IcebergTableSchema;
 
 struct IcebergTransactionData {
 public:
-	IcebergTransactionData(ClientContext &context, const IcebergTableInformation &table_info);
+	IcebergTransactionData(ClientContext &context, const IcebergTableInformation &table_info,
+	                       const IcebergTableMetadata &base_metadata);
 
 public:
 	int64_t GetCommitRetryCount() const;
+	bool HasUpdates() const;
 	bool SupportsAppendRetry() const;
 	bool RetryStateMatches(const IcebergTableInformation &table_info) const;
+	IcebergTableMetadata GetTransactionMetadata(const IcebergTableMetadata &base_metadata) const;
+	void MarkCreateSeeded();
+	shared_ptr<IcebergTableSchema> AddSchemaOrGetExisting(const IcebergTableMetadata &base_metadata,
+	                                                      shared_ptr<IcebergTableSchema> schema, bool &created);
 
-	void AddSnapshot(IcebergSnapshotOperationType operation, vector<IcebergManifestEntry> &&data_files,
-	                 IcebergManifestDeletes &&altered_manifests);
-	void AddUpdateSnapshot(vector<IcebergManifestEntry> &&delete_files, vector<IcebergManifestEntry> &&data_files,
-	                       IcebergManifestDeletes &&altered_manifests);
+	void AddSnapshot(const IcebergTableMetadata &table_metadata, IcebergSnapshotOperationType operation,
+	                 vector<IcebergManifestEntry> &&data_files, IcebergManifestDeletes &&altered_manifests);
+	void AddUpdateSnapshot(const IcebergTableMetadata &table_metadata, vector<IcebergManifestEntry> &&delete_files,
+	                       vector<IcebergManifestEntry> &&data_files, IcebergManifestDeletes &&altered_manifests);
 	// add a schema update for a table
-	void TableAddSchema(int32_t schema_id);
-	void TableSetCurrentSchema();
+	void TableAddSchema(shared_ptr<IcebergTableSchema> schema, optional_idx last_column_id);
+	void TableSetCurrentSchema(int32_t schema_id);
 	void TableAddAssertCreate();
 	void TableAddAssertUUID();
 	void TableAddAssertCurrentSchemaId();
-	void TableAddAssertLastAssignedFieldId();
-	void TableAddAssertLastAssignedPartitionId();
-	void TableAddAssertDefaultSpecId();
-	void TableAssignUUID();
-	void TableAddUpradeFormatVersion();
-	void TableAddPartitionSpec();
-	void TableAddSortOrder();
-	void TableSetDefaultSortOrder();
-	void TableSetDefaultSpec();
+	void TableAddAssertLastAssignedFieldId(const IcebergTableMetadata &table_metadata);
+	void TableAddAssertLastAssignedPartitionId(const IcebergTableMetadata &table_metadata);
+	void TableAddAssertDefaultSpecId(const IcebergTableMetadata &table_metadata);
+	void TableAssignUUID(const IcebergTableMetadata &table_metadata);
+	void TableAddUpradeFormatVersion(const IcebergTableMetadata &table_metadata);
+	void TableAddPartitionSpec(const IcebergTableMetadata &table_metadata);
+	void TableAddSortOrder(const IcebergTableMetadata &table_metadata);
+	void TableSetDefaultSortOrder(const IcebergTableMetadata &table_metadata);
+	void TableSetDefaultSpec(const IcebergTableMetadata &table_metadata);
 	void TableSetProperties(const case_insensitive_map_t<string> &properties);
 	void TableRemoveProperties(const vector<string> &properties);
-	void TableSetLocation();
+	void TableSetLocation(const IcebergTableMetadata &table_metadata);
 
 private:
 	void CacheExistingManifestList(lock_guard<mutex> &guard, const IcebergTableMetadata &metadata);
+	void ApplyMetadataUpdates(IcebergTableMetadata &metadata) const;
 
 public:
 	string initial_table_uuid;
 	int32_t initial_schema_id;
 	int32_t initial_default_spec_id = 0;
 	optional_idx initial_default_sort_order_id;
+	int64_t commit_retry_count;
 
 	ClientContext &context;
 	const IcebergTableInformation &table_info;
@@ -74,6 +83,7 @@ public:
 	case_insensitive_map_t<string> transactional_delete_files;
 	//! Track the current row id for this transaction
 	int64_t next_row_id = 0;
+	unordered_map<int32_t, shared_ptr<IcebergTableSchema>> staged_schemas;
 
 	//! If we perform an update that relies on the current schema id staying unchanged
 	bool assert_schema_id = false;
@@ -81,6 +91,7 @@ public:
 	bool has_assert_create = false;
 	//! Whether the current schema of the table should be updated
 	bool set_schema_id = false;
+	idx_t metadata_view_update_offset = 0;
 	mutex lock;
 };
 

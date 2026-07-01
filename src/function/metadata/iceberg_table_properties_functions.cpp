@@ -126,7 +126,7 @@ static unique_ptr<FunctionData> RemoveIcebergTablePropertiesBind(ClientContext &
 	auto &remove_values = input.inputs[1];
 	auto &list_children = ListValue::GetChildren(remove_values);
 	for (idx_t col_idx = 0; col_idx < list_children.size(); col_idx++) {
-		auto &remove_property = StringValue::Get(list_children[0]);
+		auto &remove_property = StringValue::Get(list_children[col_idx]);
 		ret->remove_properties.push_back(remove_property);
 	}
 
@@ -176,16 +176,18 @@ static void SetIcebergTablePropertiesFunction(ClientContext &context, TableFunct
 	auto &table_info = iceberg_table->table_info;
 
 	auto &iceberg_transaction = IcebergTransaction::Get(context, iceberg_table->catalog);
-	ApplyTableUpdate(table_info, iceberg_transaction, [&](IcebergTableInformation &tbl) {
-		auto &transaction_data = tbl.GetOrCreateTransactionData(iceberg_transaction);
-		transaction_data.TableSetProperties(bind_data.properties);
-	});
+	idx_t property_count = 0;
+	ApplyTableUpdate(table_info, iceberg_transaction,
+	                 [&](IcebergTransactionTableState &tbl, IcebergTransactionData &transaction_data) {
+		                 transaction_data.TableSetProperties(bind_data.properties);
+		                 property_count = tbl.GetTransactionMetadata().table_properties.size();
+	                 });
 
 	auto schema = iceberg_table->schema.name;
 	auto table_name = iceberg_table->name;
 	global_state.properties_set = true;
 	// set success output, failure happens during transaction commit.
-	FlatVector::GetDataMutable<int64_t>(output.data[0])[0] = bind_data.properties.size();
+	FlatVector::GetDataMutable<int64_t>(output.data[0])[0] = property_count;
 	output.SetChildCardinality(1);
 }
 
@@ -205,16 +207,18 @@ static void RemoveIcebergTablePropertiesFunction(ClientContext &context, TableFu
 	auto iceberg_table = bind_data.iceberg_table;
 	auto &table_info = iceberg_table->table_info;
 	auto &iceberg_transaction = IcebergTransaction::Get(context, iceberg_table->catalog);
-	ApplyTableUpdate(table_info, iceberg_transaction, [&](IcebergTableInformation &tbl) {
-		auto &transaction_data = tbl.GetOrCreateTransactionData(iceberg_transaction);
-		transaction_data.TableRemoveProperties(bind_data.remove_properties);
-	});
+	idx_t property_count = 0;
+	ApplyTableUpdate(table_info, iceberg_transaction,
+	                 [&](IcebergTransactionTableState &tbl, IcebergTransactionData &transaction_data) {
+		                 transaction_data.TableRemoveProperties(bind_data.remove_properties);
+		                 property_count = tbl.GetTransactionMetadata().table_properties.size();
+	                 });
 
 	auto schema = iceberg_table->schema.name;
 	auto table_name = iceberg_table->name;
 	global_state.properties_removed = true;
 	// set success output, failure happens during transaction commit.
-	FlatVector::GetDataMutable<int64_t>(output.data[0])[0] = table_info.table_metadata.table_properties.size();
+	FlatVector::GetDataMutable<int64_t>(output.data[0])[0] = property_count;
 	output.SetChildCardinality(1);
 }
 
@@ -231,10 +235,10 @@ static void GetIcebergTablePropertiesFunction(ClientContext &context, TableFunct
 	auto &iceberg_transaction = IcebergTransaction::Get(context, iceberg_table->catalog);
 	auto table_key = iceberg_table->table_info.GetTableKey();
 	auto table_txn_state = iceberg_transaction.GetLatestTableState(table_key);
-	const IcebergTableInformation &txn_table_info =
-	    table_txn_state ? table_txn_state->GetInfo() : iceberg_table->table_info;
+	auto metadata =
+	    table_txn_state ? table_txn_state->GetTransactionMetadata() : iceberg_table->GetTransactionTableMetadata();
 
-	const auto &properties = txn_table_info.table_metadata.GetTableProperties();
+	const auto &properties = metadata.GetTableProperties();
 	if (properties.empty()) {
 		output.SetChildCardinality(0);
 		return;

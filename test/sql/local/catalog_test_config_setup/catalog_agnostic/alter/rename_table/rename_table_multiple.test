@@ -1,0 +1,163 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/alter/rename_table/rename_table_multiple.test
+# group: [rename_table]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+statement ok
+SET default_transaction_invalidation_policy='SYNTACTIC_ERRORS_DO_NOT_INVALIDATE';
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+set enable_logging=true
+
+statement ok
+set logging_level='debug'
+
+statement ok
+drop table if exists my_datalake.default.rename_table_multiple_a;
+
+statement ok
+drop table if exists my_datalake.default.rename_table_multiple_b;
+
+statement ok
+drop table if exists my_datalake.default.rename_table_multiple_c;
+
+statement ok
+create table my_datalake.default.rename_table_multiple_a(a INTEGER, b VARCHAR);
+
+statement ok
+insert into my_datalake.default.rename_table_multiple_a values (10, 'ten');
+
+statement ok
+begin transaction
+
+statement ok
+alter table my_datalake.default.rename_table_multiple_a rename to rename_table_multiple_b;
+
+statement ok
+alter table my_datalake.default.rename_table_multiple_b rename to rename_table_multiple_c;
+
+statement error
+select * from my_datalake.default.rename_table_multiple_a
+----
+<REGEX>:.*does not exist!.*
+
+statement error
+select * from my_datalake.default.rename_table_multiple_b
+----
+<REGEX>:.*does not exist!.*
+
+statement ok
+insert into my_datalake.default.rename_table_multiple_c values (18, 'eighteen');
+
+query IT
+select * from my_datalake.default.rename_table_multiple_c order by a
+----
+10	ten
+18	eighteen
+
+statement ok
+alter table my_datalake.default.rename_table_multiple_c rename column a to id;
+
+statement ok
+insert into my_datalake.default.rename_table_multiple_c values (20, 'twenty');
+
+statement error
+select a from my_datalake.default.rename_table_multiple_c
+----
+<REGEX>:.*column "a" not found.*
+
+query I
+select id from my_datalake.default.rename_table_multiple_c order by id
+----
+10
+18
+20
+
+query IT
+select * from my_datalake.default.rename_table_multiple_c order by id
+----
+10	ten
+18	eighteen
+20	twenty
+
+statement ok
+commit
+
+statement error
+select * from my_datalake.default.rename_table_multiple_a
+----
+<REGEX>:.*does not exist!.*
+
+statement error
+select * from my_datalake.default.rename_table_multiple_b
+----
+<REGEX>:.*does not exist!.*
+
+statement error
+select a from my_datalake.default.rename_table_multiple_c
+----
+<REGEX>:.*column "a" not found.*
+
+query I
+select id from my_datalake.default.rename_table_multiple_c order by id
+----
+10
+18
+20
+
+query IT
+select * from my_datalake.default.rename_table_multiple_c order by id
+----
+10	ten
+18	eighteen
+20	twenty
+
+# Writing through an intermediate renamed handle blocks another rename in the same transaction.
+statement ok
+drop table if exists my_datalake.default.rename_table_multiple_a;
+
+statement ok
+drop table if exists my_datalake.default.rename_table_multiple_b;
+
+statement ok
+drop table if exists my_datalake.default.rename_table_multiple_c;
+
+statement ok
+create table my_datalake.default.rename_table_multiple_a(a INTEGER, b VARCHAR);
+
+statement ok
+insert into my_datalake.default.rename_table_multiple_a values (30, 'thirty');
+
+statement ok
+begin transaction
+
+statement ok
+alter table my_datalake.default.rename_table_multiple_a rename to rename_table_multiple_b;
+
+statement ok
+insert into my_datalake.default.rename_table_multiple_b values (35, 'thirty-five');
+
+query IT
+select * from my_datalake.default.rename_table_multiple_b order by a
+----
+30	thirty
+35	thirty-five
+
+statement error
+alter table my_datalake.default.rename_table_multiple_b rename to rename_table_multiple_c;
+----
+Catalog Error: This table (rename_table_multiple_b) was modified already, can't be renamed!
+
+statement ok
+rollback

@@ -95,17 +95,19 @@ drop table if exists nested_types_2;
 # create nested types table from test all types
 statement ok
 create table nested_types_2 as select
-int_array,
-double_array,
-array_filter(date_array, lambda x: (x != 'infinity' and x != '-infinity')),
-array_filter(timestamp_array, lambda x: (x != 'infinity' and x != '-infinity')),
-array_filter(timestamptz_array, lambda x: (x != 'infinity' and x != '-infinity')),
-varchar_array,
-nested_int_array,
-struct,
-struct_of_arrays,
-array_of_structs,
-map from test_all_types();
+	int_array,
+	double_array,
+	array_filter(date_array, lambda x: (x != 'infinity' and x != '-infinity')),
+	array_filter(timestamp_array, lambda x: (x != 'infinity' and x != '-infinity')),
+	array_filter(timestamptz_array, lambda x: (x != 'infinity' and x != '-infinity')),
+	varchar_array,
+	nested_int_array,
+	struct,
+	struct_of_arrays,
+	array_of_structs,
+	map
+from
+	test_all_types();
 
 query T nosort res2
 select * from nested_types_2;

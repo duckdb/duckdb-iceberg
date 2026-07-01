@@ -1,0 +1,94 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/alter/rename_table/rename_table_with_alter.test
+# group: [rename_table]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+statement ok
+SET default_transaction_invalidation_policy='SYNTACTIC_ERRORS_DO_NOT_INVALIDATE';
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+set enable_logging=true
+
+statement ok
+set logging_level='debug'
+
+statement ok
+drop table if exists my_datalake.default.rename_table_with_alter_src;
+
+statement ok
+drop table if exists my_datalake.default.rename_table_with_alter_dst;
+
+statement ok
+create table my_datalake.default.rename_table_with_alter_src(i INTEGER, j VARCHAR);
+
+statement ok
+insert into my_datalake.default.rename_table_with_alter_src values (1, 'a');
+
+statement ok
+begin transaction
+
+statement ok
+alter table my_datalake.default.rename_table_with_alter_src rename to rename_table_with_alter_dst;
+
+statement error
+select * from my_datalake.default.rename_table_with_alter_src
+----
+
+statement ok
+alter table my_datalake.default.rename_table_with_alter_dst rename column j to payload;
+
+statement ok
+alter table my_datalake.default.rename_table_with_alter_dst add column k BOOLEAN;
+
+statement ok
+insert into my_datalake.default.rename_table_with_alter_dst values (2, 'b', false);
+
+statement error
+select j from my_datalake.default.rename_table_with_alter_dst
+----
+
+query T
+select payload from my_datalake.default.rename_table_with_alter_dst order by i
+----
+a
+b
+
+query ITT
+select * from my_datalake.default.rename_table_with_alter_dst order by i
+----
+1	a	NULL
+2	b	false
+
+statement ok
+commit
+
+statement error
+select * from my_datalake.default.rename_table_with_alter_src
+----
+
+statement error
+select j from my_datalake.default.rename_table_with_alter_dst
+----
+
+query T
+select payload from my_datalake.default.rename_table_with_alter_dst order by i
+----
+a
+b
+
+query ITT
+select * from my_datalake.default.rename_table_with_alter_dst order by i
+----
+1	a	NULL
+2	b	false

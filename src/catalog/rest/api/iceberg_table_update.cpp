@@ -69,8 +69,7 @@ void IcebergCommitState::LoadExistingManifests(vector<IcebergManifestListEntry> 
 	AssignManifestFirstRowIds(table_info.table_metadata, current_snapshot, manifests, next_row_id);
 }
 
-IcebergTableUpdate::IcebergTableUpdate(IcebergTableUpdateType type, const IcebergTableInformation &table_info)
-    : type(type), table_info(table_info) {
+IcebergTableUpdate::IcebergTableUpdate(IcebergTableUpdateType type) : type(type) {
 }
 
 } // namespace duckdb

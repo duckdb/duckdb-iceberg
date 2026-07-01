@@ -26,6 +26,7 @@
 #include "core/metadata/partition/iceberg_partition_spec.hpp"
 #include "planning/iceberg_multi_file_list.hpp"
 #include "catalog/rest/transaction/iceberg_transaction.hpp"
+#include "catalog/rest/transaction/iceberg_transaction_data.hpp"
 #include "core/expression/iceberg_value.hpp"
 #include "core/expression/iceberg_transform.hpp"
 #include "storage/statistics/iceberg_variant_statistics.hpp"
@@ -382,7 +383,7 @@ void IcebergInsert::AddWrittenFiles(IcebergInsertGlobalState &global_state, Data
                                     optional_ptr<TableCatalogEntry> table) {
 	D_ASSERT(table);
 	auto &ic_table = table->Cast<IcebergTableEntry>();
-	auto &table_metadata = ic_table.table_info.table_metadata;
+	auto table_metadata = ic_table.GetTransactionTableMetadata();
 	global_state.AddFiles(chunk, ic_table.name.GetIdentifierName(), table_metadata);
 }
 
@@ -450,27 +451,31 @@ SinkFinalizeType IcebergInsert::Finalize(Pipeline &pipeline, Event &event, Clien
 		auto &delete_global_state = update_delete_op->sink_state->Cast<IcebergDeleteGlobalState>();
 		auto delete_manifest_entries = IcebergDelete::GenerateDeleteManifestEntries(delete_global_state);
 		if (!written_files.empty()) {
-			ApplyTableUpdate(table_info, iceberg_transaction, [&](IcebergTableInformation &tbl) {
-				auto &transaction_data = tbl.GetOrCreateTransactionData(iceberg_transaction);
-				transaction_data.AddUpdateSnapshot(std::move(delete_manifest_entries), std::move(written_files),
-				                                   std::move(delete_global_state.altered_manifests));
-				for (auto &entry : delete_global_state.written_files) {
-					auto &delete_file = entry.second;
-					if (table_info.table_metadata.iceberg_version >= 3) {
-						transaction_data.transactional_delete_files[delete_file.data_file_path] = delete_file.file_name;
-					}
-				}
-			});
+			ApplyTableUpdate(table_info, iceberg_transaction,
+			                 [&](IcebergTransactionTableState &tbl, IcebergTransactionData &transaction_data) {
+				                 auto table_metadata = tbl.GetTransactionMetadata();
+				                 transaction_data.AddUpdateSnapshot(table_metadata, std::move(delete_manifest_entries),
+				                                                    std::move(written_files),
+				                                                    std::move(delete_global_state.altered_manifests));
+				                 for (auto &entry : delete_global_state.written_files) {
+					                 auto &delete_file = entry.second;
+					                 if (table_metadata.iceberg_version >= 3) {
+						                 transaction_data.transactional_delete_files[delete_file.data_file_path] =
+						                     delete_file.file_name;
+					                 }
+				                 }
+			                 });
 		}
 	} else {
 		// Regular insert: commit an append snapshot.
 		if (!written_files.empty()) {
-			ApplyTableUpdate(table_info, iceberg_transaction, [&](IcebergTableInformation &tbl) {
-				auto &transaction_data = tbl.GetOrCreateTransactionData(iceberg_transaction);
-				IcebergManifestDeletes empty_deletes;
-				transaction_data.AddSnapshot(IcebergSnapshotOperationType::APPEND, std::move(written_files),
-				                             std::move(empty_deletes));
-			});
+			ApplyTableUpdate(table_info, iceberg_transaction,
+			                 [&](IcebergTransactionTableState &tbl, IcebergTransactionData &transaction_data) {
+				                 IcebergManifestDeletes empty_deletes;
+				                 auto table_metadata = tbl.GetTransactionMetadata();
+				                 transaction_data.AddSnapshot(table_metadata, IcebergSnapshotOperationType::APPEND,
+				                                              std::move(written_files), std::move(empty_deletes));
+			                 });
 		}
 	}
 	return SinkFinalizeType::READY;
@@ -977,9 +982,9 @@ PhysicalOperator &IcebergCatalog::PlanInsert(ClientContext &context, PhysicalPla
 	auto &irc_transaction = IcebergTransaction::Get(context, *this);
 	auto &alter = irc_transaction.GetOrCreateAlter();
 	auto &updated_table = alter.GetOrInitializeTable(table_entry.table_info);
-	auto &table_metadata = updated_table.table_metadata;
+	auto table_metadata = updated_table.GetTransactionMetadata();
 	auto &schema = table_metadata.GetLatestSchema();
-	auto &updated_table_entry = *updated_table.schema_versions[schema.schema_id];
+	auto &updated_table_entry = updated_table.GetOrCreateSchemaEntry(schema);
 
 	if (table_metadata.HasSortOrder()) {
 		auto &sort_spec = table_metadata.GetLatestSortOrder();
@@ -1022,7 +1027,7 @@ static unique_ptr<IcebergTableMetadata> BuildPlaceholderMetadata(BoundCreateTabl
 		schema->columns.push_back(std::move(col_def));
 	}
 	schema->last_column_id = static_cast<idx_t>(next_field_id - 1);
-	metadata->AddSchemaOrGetExisting(schema);
+	metadata->AddSchema(schema);
 	metadata->SetCurrentSchemaId(0);
 
 	// Build a placeholder partition spec from the parsed PARTITIONED BY clause so that

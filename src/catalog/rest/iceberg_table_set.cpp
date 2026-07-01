@@ -223,30 +223,28 @@ IcebergTableInformation &IcebergTableSet::CreateNewEntry(ClientContext &context,
 
 	auto key = IcebergTableInformation::GetTableKey(schema.namespace_items, info.table.GetIdentifierName());
 	auto &alter_update = iceberg_transaction.GetOrCreateAlter();
-	auto &table_info =
-	    alter_update.CreateTable(key, IcebergTableInformation(catalog, schema, info.table.GetIdentifierName()));
-	// auto &table_info = emplace_res.first->second;
-	auto &table_metadata = table_info.table_metadata;
-	auto table_entry = make_uniq<IcebergTableEntry>(table_info, catalog, schema, info, 0);
+	auto request_table_info = IcebergTableInformation(catalog, schema, info.table.GetIdentifierName());
+	auto &request_metadata = request_table_info.table_metadata;
+	auto table_entry = make_uniq<IcebergTableEntry>(request_table_info, catalog, schema, info, 0);
 	auto table_ptr = table_entry.get();
-	table_info.schema_versions[0] = std::move(table_entry);
-	table_metadata.iceberg_version = iceberg_version.GetIndex();
+	request_table_info.schema_versions[0] = std::move(table_entry);
+	request_metadata.iceberg_version = iceberg_version.GetIndex();
 	int32_t last_column_id;
 
-	auto new_schema = IcebergCreateTableRequest::CreateIcebergSchema(context, table_metadata, table_ptr->GetColumns(),
+	auto new_schema = IcebergCreateTableRequest::CreateIcebergSchema(context, request_metadata, table_ptr->GetColumns(),
 	                                                                 table_ptr->GetConstraints(), last_column_id);
 	new_schema->schema_id = 0;
-	auto &result_schema = table_metadata.AddSchemaOrGetExisting(std::move(new_schema));
+	auto &result_schema = request_metadata.AddSchema(std::move(new_schema));
 	if (result_schema.schema_id != 0) {
 		throw InternalException("Adding initial schema didn't result in schema id 0? (actual: %d)",
 		                        result_schema.schema_id);
 	}
-	table_metadata.SetCurrentSchemaId(0);
-	table_metadata.last_column_id = last_column_id;
+	request_metadata.SetCurrentSchemaId(0);
+	request_metadata.last_column_id = last_column_id;
 
 	// Get Location
 	if (!location.empty()) {
-		table_metadata.location = location;
+		request_metadata.location = location;
 	}
 	for (auto &option : info.options) {
 		if (option.first == "format-version" || option.first == "location") {
@@ -255,18 +253,24 @@ IcebergTableInformation &IcebergTableSet::CreateNewEntry(ClientContext &context,
 		auto option_val =
 		    ParseTableProperty(property_binder, context, *option.second, option.first, LogicalType::VARCHAR)
 		        .GetValue<string>();
-		table_metadata.table_properties.emplace(option.first, option_val);
+		request_metadata.table_properties.emplace(option.first, option_val);
 	}
 
-	auto &current_schema = table_info.table_metadata.GetLatestSchema();
+	auto request_schema =
+	    request_table_info.table_metadata.GetSchemaFromId(request_table_info.table_metadata.GetCurrentSchemaId());
+	D_ASSERT(request_schema);
+	auto request_partition_spec =
+	    IcebergTableInformation::BuildPartitionSpec(info.partition_keys, *request_schema, 0, 1000);
+	table_ptr->table_info.table_metadata.partition_specs.emplace(0, std::move(request_partition_spec));
 	table_ptr->table_info.table_metadata.default_spec_id = 0;
-	table_ptr->table_info.SetPartitionedBy(iceberg_transaction, info.partition_keys, current_schema, true);
 
 	// Immediately create the table with stage_create = true to get metadata & data location(s)
 	// transaction commit will either commit with data (OR) create the table with stage_create = false
 	auto load_table_result =
 	    make_uniq<const rest_api_objects::LoadTableResult>(IRCAPI::CommitNewTable(context, catalog, *table_ptr));
 
+	auto &table_info =
+	    alter_update.CreateTable(key, IcebergTableInformation(catalog, schema, info.table.GetIdentifierName()));
 	catalog.table_request_cache.SetOrOverwrite(context, key, std::move(load_table_result));
 	{
 		lock_guard<mutex> cache_lock(catalog.table_request_cache.Lock());
@@ -275,9 +279,13 @@ IcebergTableInformation &IcebergTableSet::CreateNewEntry(ClientContext &context,
 		auto &load_table_result = cached_table_result->load_table_result;
 		table_info.InitializeFromLoadTableResult(*load_table_result, false);
 	}
+	auto &created_table = alter_update.GetOrInitializeTable(table_info);
+	auto current_schema = table_info.table_metadata.GetSchemaFromId(table_info.table_metadata.GetCurrentSchemaId());
+	D_ASSERT(current_schema);
+	table_info.CreateSchemaVersion(*current_schema);
+	auto &transaction_data = alter_update.GetOrCreateTransactionData(created_table);
 
 	// if we stage created the table, we add an assert create
-	auto &transaction_data = table_info.GetOrCreateTransactionData(iceberg_transaction);
 	if (catalog.attach_options.stage_create_tables) {
 		transaction_data.TableAddAssertCreate();
 	}
@@ -285,15 +293,16 @@ IcebergTableInformation &IcebergTableSet::CreateNewEntry(ClientContext &context,
 		return table_info;
 	}
 	// other required updates to the table
-	transaction_data.TableAssignUUID();
-	transaction_data.TableAddUpradeFormatVersion();
-	transaction_data.TableAddSchema(0);
-	transaction_data.TableAddPartitionSpec();
-	transaction_data.TableSetDefaultSpec();
-	transaction_data.TableAddSortOrder();
-	transaction_data.TableSetDefaultSortOrder();
-	transaction_data.TableSetLocation();
-	transaction_data.TableSetProperties(table_metadata.table_properties);
+	transaction_data.TableAssignUUID(table_info.table_metadata);
+	transaction_data.TableAddUpradeFormatVersion(table_info.table_metadata);
+	transaction_data.TableAddSchema(current_schema->Copy(), table_info.table_metadata.last_column_id);
+	transaction_data.TableAddPartitionSpec(table_info.table_metadata);
+	transaction_data.TableSetDefaultSpec(table_info.table_metadata);
+	transaction_data.TableAddSortOrder(table_info.table_metadata);
+	transaction_data.TableSetDefaultSortOrder(table_info.table_metadata);
+	transaction_data.TableSetLocation(table_info.table_metadata);
+	transaction_data.TableSetProperties(table_info.table_metadata.table_properties);
+	transaction_data.MarkCreateSeeded();
 
 	iceberg_transaction.SetLatestTableState(table_info, IcebergTableStatus::ALIVE);
 	return table_info;
@@ -314,8 +323,7 @@ optional_ptr<CatalogEntry> IcebergTableSet::GetEntry(ClientContext &context, con
 			// If table has been deleted or is missing within the transaction, return null
 			return nullptr;
 		}
-		auto &table_info = latest_state->GetInfo();
-		return table_info.GetSchemaVersion(context, at);
+		return latest_state->GetSchemaVersion(context, at);
 	}
 
 	//! Preserve the old version in case our replacement fails

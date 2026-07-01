@@ -8,6 +8,7 @@
 namespace duckdb {
 
 class IcebergTransaction;
+struct IcebergTransactionData;
 
 enum class IcebergTransactionUpdateType : uint8_t { ALTER, DELETE, RENAME };
 
@@ -51,10 +52,15 @@ public:
 
 public:
 	IcebergTableInformation &CreateTable(const string &table_key, IcebergTableInformation &&table);
-	IcebergTableInformation &GetOrInitializeTable(const IcebergTableInformation &table);
+	IcebergTransactionTableState &GetOrInitializeTable(IcebergTableInformation &table);
+	IcebergTransactionData &GetOrCreateTransactionData(IcebergTransactionTableState &table);
+	optional_ptr<IcebergTransactionData> GetTransactionData(const string &table_key) const;
+	optional_ptr<IcebergTransactionData> GetTransactionData(const IcebergTransactionTableState &table) const;
+	bool HasTransactionUpdates(const string &table_key) const;
+	bool HasTransactionUpdates(const IcebergTransactionTableState &table) const;
 	bool HasUpdates() const;
 	//! All the tables touched in this atomic block
-	case_insensitive_map_t<IcebergTableInformation> updated_tables;
+	case_insensitive_map_t<IcebergTransactionTableState> updated_tables;
 	//! The tables successively committed (used if multi-table commit isn't available)
 	case_insensitive_set_t committed_tables;
 };
@@ -66,6 +72,7 @@ public:
 
 public:
 	IcebergTransactionDeleteUpdate(IcebergTransaction &transaction, const IcebergTableInformation &table);
+	IcebergTransactionDeleteUpdate(IcebergTransaction &transaction, IcebergTableInformation &&table);
 	virtual ~IcebergTransactionDeleteUpdate() override;
 
 public:
@@ -80,10 +87,13 @@ public:
 public:
 	IcebergTransactionRenameUpdate(IcebergTransaction &transaction, const IcebergTableInformation &table,
 	                               const string &new_name);
+	IcebergTransactionRenameUpdate(IcebergTransaction &transaction, IcebergTableInformation &&table,
+	                               const string &new_name);
 	virtual ~IcebergTransactionRenameUpdate() override;
 
 public:
-	const IcebergTableInformation &table;
+	vector<string> source_namespace_items;
+	string source_name;
 	IcebergTableInformation new_table;
 	string new_name;
 };
