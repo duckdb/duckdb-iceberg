@@ -1,0 +1,138 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/maintenance/rewrite_data_files_mor_position.test
+# description: end-to-end V2 merge-on-read rewrite with position deletes
+# group: [maintenance]
+
+require-env ICEBERG_SERVER_AVAILABLE
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+set ignore_error_messages
+
+statement ok
+drop table if exists my_datalake.default.rewrite_mor_position;
+
+statement ok
+create table my_datalake.default.rewrite_mor_position (id INTEGER, payload VARCHAR) with ('format-version' = 2);
+
+statement ok
+insert into my_datalake.default.rewrite_mor_position values (1, 'a'), (2, 'b');
+
+statement ok
+insert into my_datalake.default.rewrite_mor_position values (3, 'c'), (4, 'd');
+
+statement ok
+insert into my_datalake.default.rewrite_mor_position values (5, 'e'), (6, 'f');
+
+statement ok
+insert into my_datalake.default.rewrite_mor_position values (7, 'g'), (8, 'h');
+
+statement ok
+insert into my_datalake.default.rewrite_mor_position values (9, 'i'), (10, 'j');
+
+statement ok
+insert into my_datalake.default.rewrite_mor_position values (11, 'k'), (12, 'l');
+
+statement ok
+delete from my_datalake.default.rewrite_mor_position where id in (4, 7, 10);
+
+# GATE: re-read so every preceding REST commit (6 inserts + 1 delete) is visible
+# before we plan the rewrite. 9 live rows, id_sum 57 (78 − 4 − 7 − 10). This both
+# documents ground truth and forces commit visibility (see CLAUDE.md REST caveat).
+query I
+select count(*) from my_datalake.default.rewrite_mor_position;
+----
+9
+
+query I
+select sum(id) from my_datalake.default.rewrite_mor_position;
+----
+57
+
+query I
+select count(*)
+from iceberg_metadata('my_datalake.default.rewrite_mor_position')
+where content = 'DATA' and status = 'ADDED';
+----
+6
+
+query I
+select count(*)
+from iceberg_metadata('my_datalake.default.rewrite_mor_position')
+where content = 'POSITION_DELETES' and status = 'ADDED';
+----
+3
+
+statement ok
+set variable starting_seq = (
+    select max(data_sequence_number)
+    from iceberg_metadata('my_datalake.default.rewrite_mor_position')
+    where status <> 'DELETED'
+);
+
+query III
+call iceberg_rewrite_data_files('my_datalake.default.rewrite_mor_position');
+----
+6	1	<REGEX>:[1-9][0-9]*
+
+query I
+select count(*) from my_datalake.default.rewrite_mor_position;
+----
+9
+
+query I
+select sum(id) from my_datalake.default.rewrite_mor_position;
+----
+57
+
+query I
+select count(*) from my_datalake.default.rewrite_mor_position where id in (4, 7, 10);
+----
+0
+
+query II
+select id, payload from my_datalake.default.rewrite_mor_position order by id;
+----
+1	a
+2	b
+3	c
+5	e
+6	f
+8	h
+9	i
+11	k
+12	l
+
+query I
+select count(*)
+from iceberg_metadata('my_datalake.default.rewrite_mor_position')
+where content = 'DATA' and status <> 'DELETED';
+----
+1
+
+query I
+select count(*)
+from iceberg_metadata('my_datalake.default.rewrite_mor_position')
+where content = 'DATA' and status <> 'DELETED'
+  and data_sequence_number = getvariable('starting_seq');
+----
+1
+
+query I
+select count(*)
+from iceberg_metadata('my_datalake.default.rewrite_mor_position')
+where content = 'DATA' and status <> 'DELETED'
+  and file_sequence_number = manifest_sequence_number
+  and file_sequence_number > data_sequence_number;
+----
+1
+
+statement ok
+drop table if exists my_datalake.default.rewrite_mor_position;

@@ -1,0 +1,92 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/maintenance/rewrite_data_files_commit.test
+# description: end-to-end REPLACE snapshot compaction check
+# group: [maintenance]
+
+require-env ICEBERG_SERVER_AVAILABLE
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+set ignore_error_messages
+
+statement ok
+drop table if exists my_datalake.default.rewrite_commit_basic;
+
+statement ok
+create table my_datalake.default.rewrite_commit_basic (id INTEGER, payload VARCHAR);
+
+statement ok
+insert into my_datalake.default.rewrite_commit_basic values (1, 'a'), (2, 'b');
+
+statement ok
+insert into my_datalake.default.rewrite_commit_basic values (3, 'c'), (4, 'd');
+
+statement ok
+insert into my_datalake.default.rewrite_commit_basic values (5, 'e'), (6, 'f');
+
+statement ok
+insert into my_datalake.default.rewrite_commit_basic values (7, 'g'), (8, 'h');
+
+statement ok
+insert into my_datalake.default.rewrite_commit_basic values (9, 'i'), (10, 'j');
+
+statement ok
+insert into my_datalake.default.rewrite_commit_basic values (11, 'k'), (12, 'l');
+
+query I
+select count(*) from my_datalake.default.rewrite_commit_basic;
+----
+12
+
+query II
+explain analyze select * from my_datalake.default.rewrite_commit_basic;
+----
+analyzed_plan	<REGEX>:.*Total Files Read: 6.*
+
+query III
+call iceberg_rewrite_data_files('my_datalake.default.rewrite_commit_basic');
+----
+6	1	<REGEX>:[1-9][0-9]*
+
+query I
+select count(*) from my_datalake.default.rewrite_commit_basic;
+----
+12
+
+query II
+select id, payload from my_datalake.default.rewrite_commit_basic order by id;
+----
+1	a
+2	b
+3	c
+4	d
+5	e
+6	f
+7	g
+8	h
+9	i
+10	j
+11	k
+12	l
+
+query II
+explain analyze select * from my_datalake.default.rewrite_commit_basic;
+----
+analyzed_plan	<REGEX>:.*Total Files Read: 1.*
+
+# Re-running the action is a no-op: only one input file remains, which is below
+# `min_input_files`. Zero rewritten files.
+query III
+call iceberg_rewrite_data_files('my_datalake.default.rewrite_commit_basic');
+----
+0	0	0
+
+statement ok
+drop table if exists my_datalake.default.rewrite_commit_basic;

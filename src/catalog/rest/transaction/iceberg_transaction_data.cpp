@@ -162,10 +162,12 @@ void IcebergTransactionData::AddSnapshot(IcebergSnapshotOperationType operation,
 		manifest_content_type = IcebergManifestContentType::DELETE;
 		break;
 	case IcebergSnapshotOperationType::APPEND:
+	case IcebergSnapshotOperationType::REPLACE:
+		//! This helper currently writes DATA manifest entries; REPLACE itself is not limited to data files.
 		manifest_content_type = IcebergManifestContentType::DATA;
 		break;
 	default:
-		throw NotImplementedException("Cannot have use snapshot operation type REPLACE or OVERWRITE here");
+		throw NotImplementedException("Cannot have use snapshot operation type OVERWRITE here");
 	};
 
 	auto bogus_snapshot_id = IcebergSnapshot::NewSnapshotId();

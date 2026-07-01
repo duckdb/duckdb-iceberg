@@ -1,0 +1,126 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/maintenance/rewrite_data_files_all_types.test
+# description: rewrite_data_files preserves primitive test_all_types columns
+# group: [maintenance]
+
+require-env ICEBERG_SERVER_AVAILABLE
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+require core_functions
+
+set ignore_error_messages
+
+statement ok
+drop table if exists my_datalake.default.rewrite_all_types;
+
+statement ok
+create table my_datalake.default.rewrite_all_types as select
+    row_number() over () as row_id,
+    bool,
+    int,
+    bigint,
+    date,
+    time,
+    timestamp,
+    timestamp_tz,
+    float,
+    double,
+    dec_4_1,
+    dec_9_4,
+    dec_18_6,
+    dec38_10,
+    uuid,
+    varchar,
+    blob
+from test_all_types();
+
+statement ok
+insert into my_datalake.default.rewrite_all_types
+select
+    1000 + row_number() over () as row_id,
+    bool,
+    int,
+    bigint,
+    date,
+    time,
+    timestamp,
+    timestamp_tz,
+    float,
+    double,
+    dec_4_1,
+    dec_9_4,
+    dec_18_6,
+    dec38_10,
+    uuid,
+    varchar,
+    blob
+from test_all_types();
+
+statement ok
+insert into my_datalake.default.rewrite_all_types
+select
+    2000 + row_number() over () as row_id,
+    bool,
+    int,
+    bigint,
+    date,
+    time,
+    timestamp,
+    timestamp_tz,
+    float,
+    double,
+    dec_4_1,
+    dec_9_4,
+    dec_18_6,
+    dec38_10,
+    uuid,
+    varchar,
+    blob
+from test_all_types();
+
+query I
+select count(*)
+from iceberg_metadata('my_datalake.default.rewrite_all_types')
+where content = 'DATA' and status <> 'DELETED';
+----
+3
+
+query T nosort all_types_before
+select * from my_datalake.default.rewrite_all_types order by row_id;
+----
+
+query III
+call iceberg_rewrite_data_files(
+    'my_datalake.default.rewrite_all_types',
+    min_input_files => 3
+);
+----
+3	1	<REGEX>:[1-9][0-9]*
+
+query T nosort all_types_before
+select * from my_datalake.default.rewrite_all_types order by row_id;
+----
+
+query I
+select count(*) = 3 * (select count(*) from test_all_types())
+from my_datalake.default.rewrite_all_types;
+----
+true
+
+query I
+select count(*)
+from iceberg_metadata('my_datalake.default.rewrite_all_types')
+where content = 'DATA' and status <> 'DELETED';
+----
+1
+
+statement ok
+drop table if exists my_datalake.default.rewrite_all_types;

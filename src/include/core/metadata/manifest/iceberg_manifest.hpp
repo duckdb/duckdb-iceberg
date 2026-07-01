@@ -132,6 +132,8 @@ public:
 	void SetFileSequenceNumber(sequence_number_t value);
 	sequence_number_t GetSequenceNumber(const IcebergManifestFile &manifest_file) const;
 	sequence_number_t GetFileSequenceNumber(const IcebergManifestFile &manifest_file) const;
+	optional<sequence_number_t> ExplicitSequenceNumber() const;
+	optional<sequence_number_t> ExplicitFileSequenceNumber() const;
 
 private:
 	bool has_snapshot_id = false;

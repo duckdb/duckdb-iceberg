@@ -1,6 +1,7 @@
 #pragma once
 
 #include "duckdb/common/column_index.hpp"
+#include "duckdb/common/types/value.hpp"
 
 #include "core/metadata/schema/iceberg_column_definition.hpp"
 #include "rest_catalog/objects/schema.hpp"
@@ -29,6 +30,8 @@ public:
 
 	bool Equals(const IcebergTableSchema &other) const;
 	void GetColumnNamesAndTypes(vector<string> &names, vector<LogicalType> &types) const;
+	void GetFieldIdValues(child_list_t<Value> &values) const;
+	Value GetFieldIds() const;
 
 public:
 	int32_t schema_id;

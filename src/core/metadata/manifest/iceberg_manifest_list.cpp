@@ -89,9 +89,9 @@ IcebergManifestListEntry IcebergManifestListEntry::CreateFromEntries(FileSystem 
 		}
 
 		//! NOTE: this gets overwritten on commit
-		if (!manifest_file.has_min_sequence_number ||
-		    manifest_file.sequence_number < manifest_file.min_sequence_number) {
-			manifest_file.min_sequence_number = manifest_file.sequence_number;
+		auto entry_data_seq = manifest_entry.GetSequenceNumber(manifest_file);
+		if (!manifest_file.has_min_sequence_number || entry_data_seq < manifest_file.min_sequence_number) {
+			manifest_file.min_sequence_number = entry_data_seq;
 		}
 		manifest_file.has_min_sequence_number = true;
 	}

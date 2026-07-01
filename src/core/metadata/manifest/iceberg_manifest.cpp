@@ -16,7 +16,7 @@ namespace duckdb {
 string IcebergManifestEntryContentTypeToString(IcebergManifestEntryContentType type) {
 	switch (type) {
 	case IcebergManifestEntryContentType::DATA:
-		return "EXISTING";
+		return "DATA";
 	case IcebergManifestEntryContentType::POSITION_DELETES:
 		return "POSITION_DELETES";
 	case IcebergManifestEntryContentType::EQUALITY_DELETES:
@@ -359,6 +359,20 @@ void IcebergManifestEntry::SetFileSequenceNumber(sequence_number_t value) {
 	file_sequence_number = value;
 }
 
+optional<sequence_number_t> IcebergManifestEntry::ExplicitSequenceNumber() const {
+	if (!has_sequence_number) {
+		return optional<sequence_number_t>();
+	}
+	return sequence_number;
+}
+
+optional<sequence_number_t> IcebergManifestEntry::ExplicitFileSequenceNumber() const {
+	if (!has_file_sequence_number) {
+		return optional<sequence_number_t>();
+	}
+	return file_sequence_number;
+}
+
 sequence_number_t IcebergManifestEntry::GetSequenceNumber(const IcebergManifestFile &manifest_file) const {
 	if (!has_sequence_number) {
 		if (status != IcebergManifestEntryStatusType::ADDED) {
@@ -644,14 +658,19 @@ idx_t WriteToFile(const IcebergTableMetadata &table_metadata, const IcebergManif
 		} else {
 			chunk.data[col_idx++].Append(Value(LogicalType::BIGINT));
 		}
+		//! SPEC: ADDED entries may omit sequence numbers and inherit them from the manifest file.
 		// sequence_number: long
 		// file_sequence_number: long
 		if (manifest_entry.status == IcebergManifestEntryStatusType::ADDED) {
-			chunk.data[col_idx++].Append(Value(LogicalType::BIGINT));
-			chunk.data[col_idx++].Append(Value(LogicalType::BIGINT));
+			auto sequence_number = manifest_entry.ExplicitSequenceNumber();
+			chunk.data[col_idx++].Append(sequence_number ? Value::BIGINT(*sequence_number)
+			                                             : Value(LogicalType::BIGINT));
+			auto file_sequence_number = manifest_entry.ExplicitFileSequenceNumber();
+			chunk.data[col_idx++].Append(file_sequence_number ? Value::BIGINT(*file_sequence_number)
+			                                                  : Value(LogicalType::BIGINT));
 		} else {
-			chunk.data[col_idx++].Append(Value::BIGINT(manifest_entry.GetFileSequenceNumber(manifest_file)));
 			chunk.data[col_idx++].Append(Value::BIGINT(manifest_entry.GetSequenceNumber(manifest_file)));
+			chunk.data[col_idx++].Append(Value::BIGINT(manifest_entry.GetFileSequenceNumber(manifest_file)));
 		}
 
 		auto &data_file = manifest_entry.data_file;

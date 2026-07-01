@@ -501,31 +501,9 @@ InsertionOrderPreservingMap<string> IcebergInsert::ParamsToString() const {
 //===--------------------------------------------------------------------===//
 // Plan
 //===--------------------------------------------------------------------===//
-static Value GetFieldIdValue(const IcebergColumnDefinition &column) {
-	auto column_value = Value::BIGINT(column.id);
-	if (!column.GetChildCount()) {
-		// primitive type - return the field-id directly
-		return column_value;
-	}
-	// nested type - generate a struct and recurse into children
-	child_list_t<Value> values;
-	values.emplace_back("__duckdb_field_id", std::move(column_value));
-	for (idx_t i = 0; i < column.GetChildCount(); i++) {
-		auto child = column.GetChild(i);
-		values.emplace_back(child->name, GetFieldIdValue(*child));
-	}
-	return Value::STRUCT(std::move(values));
-}
-
 static Value WrittenFieldIds(const IcebergCopyInput &copy_input) {
-	auto &schema = copy_input.schema;
-	auto &columns = schema.columns;
-
 	child_list_t<Value> values;
-	for (idx_t c_idx = 0; c_idx < columns.size(); c_idx++) {
-		auto &column = columns[c_idx];
-		values.emplace_back(column->name, GetFieldIdValue(*column));
-	}
+	copy_input.schema.GetFieldIdValues(values);
 	if (WriteRowId(copy_input.virtual_columns)) {
 		values.emplace_back("_row_id", Value::BIGINT(MultiFileReader::ROW_ID_FIELD_ID));
 	}

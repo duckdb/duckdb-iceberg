@@ -7,6 +7,24 @@
 
 namespace duckdb {
 
+namespace {
+
+static Value GetFieldIdValue(const IcebergColumnDefinition &column) {
+	auto column_value = Value::BIGINT(column.id);
+	if (!column.GetChildCount()) {
+		return column_value;
+	}
+	child_list_t<Value> values;
+	values.emplace_back("__duckdb_field_id", std::move(column_value));
+	for (idx_t i = 0; i < column.GetChildCount(); i++) {
+		auto child = column.GetChild(i);
+		values.emplace_back(child->name, GetFieldIdValue(*child));
+	}
+	return Value::STRUCT(std::move(values));
+}
+
+} // namespace
+
 shared_ptr<IcebergTableSchema> IcebergTableSchema::ParseSchema(const rest_api_objects::Schema &schema) {
 	auto res = make_shared_ptr<IcebergTableSchema>();
 	D_ASSERT(schema.object_1.schema_id);
@@ -152,6 +170,18 @@ void IcebergTableSchema::GetColumnNamesAndTypes(vector<string> &names, vector<Lo
 		names.push_back(column.name);
 		types.push_back(column.type);
 	}
+}
+
+void IcebergTableSchema::GetFieldIdValues(child_list_t<Value> &values) const {
+	for (auto &column : columns) {
+		values.emplace_back(column->name, GetFieldIdValue(*column));
+	}
+}
+
+Value IcebergTableSchema::GetFieldIds() const {
+	child_list_t<Value> values;
+	GetFieldIdValues(values);
+	return Value::STRUCT(std::move(values));
 }
 
 bool IcebergTableSchema::Equals(const IcebergTableSchema &other) const {

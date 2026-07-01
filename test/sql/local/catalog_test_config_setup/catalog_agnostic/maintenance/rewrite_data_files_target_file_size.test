@@ -1,0 +1,132 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/maintenance/rewrite_data_files_target_file_size.test
+# description: rewrite_data_files resolves target file size from argument and table properties
+# group: [maintenance]
+
+require-env ICEBERG_SERVER_AVAILABLE
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+require core_functions
+
+set ignore_error_messages
+
+statement ok
+drop table if exists my_datalake.default.rewrite_target_file_size;
+
+statement ok
+create table my_datalake.default.rewrite_target_file_size (id INTEGER, payload VARCHAR)
+with (
+    'write.target-file-size-bytes'='20971520',
+    'write.parquet.target-file-size-bytes'='20971520',
+    'write.parquet.compression-codec'='snappy'
+);
+
+query I
+insert into my_datalake.default.rewrite_target_file_size
+select i, concat('thisisalongstring', i)
+from range(500000) t(i);
+----
+500000
+
+query I
+select count(*)
+from iceberg_metadata('my_datalake.default.rewrite_target_file_size')
+where content = 'DATA' and status <> 'DELETED';
+----
+1
+
+query III
+call iceberg_rewrite_data_files(
+    'my_datalake.default.rewrite_target_file_size',
+    target_file_size_bytes => 4194304,
+    min_input_files => 1,
+    rewrite_all => true
+);
+----
+1	<REGEX>:[2-9][0-9]*	<REGEX>:[1-9][0-9]*
+
+statement ok
+set variable target_4m_file_count = (
+    select count(*)
+    from iceberg_metadata('my_datalake.default.rewrite_target_file_size')
+    where content = 'DATA' and status <> 'DELETED'
+);
+
+statement ok
+CALL set_iceberg_table_properties(
+    my_datalake.default.rewrite_target_file_size,
+    {
+        'write.target-file-size-bytes': '20971520',
+        'write.parquet.target-file-size-bytes': '2097152'
+    }
+);
+
+query III
+call iceberg_rewrite_data_files(
+    'my_datalake.default.rewrite_target_file_size',
+    min_input_files => 1,
+    rewrite_all => true
+);
+----
+<REGEX>:[2-9][0-9]*	<REGEX>:[2-9][0-9]*	<REGEX>:[1-9][0-9]*
+
+statement ok
+set variable target_2m_file_count = (
+    select count(*)
+    from iceberg_metadata('my_datalake.default.rewrite_target_file_size')
+    where content = 'DATA' and status <> 'DELETED'
+);
+
+query I
+select getvariable('target_2m_file_count') > getvariable('target_4m_file_count');
+----
+true
+
+statement ok
+CALL remove_iceberg_table_properties(
+    my_datalake.default.rewrite_target_file_size,
+    ['write.parquet.target-file-size-bytes']
+);
+
+statement ok
+CALL set_iceberg_table_properties(
+    my_datalake.default.rewrite_target_file_size,
+    {'write.target-file-size-bytes': '1048576'}
+);
+
+query III
+call iceberg_rewrite_data_files(
+    'my_datalake.default.rewrite_target_file_size',
+    min_input_files => 1,
+    rewrite_all => true
+);
+----
+<REGEX>:[2-9][0-9]*	<REGEX>:[2-9][0-9]*	<REGEX>:[1-9][0-9]*
+
+statement ok
+set variable target_1m_file_count = (
+    select count(*)
+    from iceberg_metadata('my_datalake.default.rewrite_target_file_size')
+    where content = 'DATA' and status <> 'DELETED'
+);
+
+query I
+select getvariable('target_1m_file_count') > getvariable('target_2m_file_count');
+----
+true
+
+query I
+select count(*) from my_datalake.default.rewrite_target_file_size;
+----
+500000
+
+statement ok
+drop table if exists my_datalake.default.rewrite_target_file_size;
