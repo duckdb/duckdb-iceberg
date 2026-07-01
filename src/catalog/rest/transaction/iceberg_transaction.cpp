@@ -426,6 +426,7 @@ void IcebergTransaction::Commit() {
 		CleanupFiles();
 		DropSecrets(*temp_con_context);
 		temp_con.Rollback();
+		EvictCachedTables();
 		error.Throw("Failed to commit Iceberg transaction: ");
 	}
 
@@ -625,7 +626,10 @@ public:
 	~ScopedTransaction() {
 		//! Prevent the connection from destructing with an active transaction
 		//! As that causes it to ROLLBACK and enter CleanupFiles - resulting in a stack overflow due to recursion
-		connection.Commit();
+		auto result = connection.Query("COMMIT");
+		if (result->HasError()) {
+			connection.Query("ROLLBACK");
+		}
 	}
 
 public:
@@ -689,6 +693,41 @@ void IcebergTransaction::CleanupFiles() {
 					}
 				}
 			}
+		}
+	}
+}
+
+void IcebergTransaction::EvictCachedTables() {
+	if (!catalog.attach_options.max_table_staleness_micros.IsValid()) {
+		return;
+	}
+	ScopedTransaction temp_con(db);
+	auto &temp_context = temp_con.GetContext();
+	for (auto &transaction_update : transaction_updates) {
+		switch (transaction_update->type) {
+		case IcebergTransactionUpdateType::ALTER: {
+			auto &alter_update = transaction_update->Cast<IcebergTransactionAlterUpdate>();
+			for (auto &up_table : alter_update.updated_tables) {
+				if (alter_update.committed_tables.count(up_table.first)) {
+					//! Already committed (and its cache entry already evicted on that success)
+					continue;
+				}
+				catalog.table_request_cache.Expire(temp_context, up_table.first);
+			}
+			break;
+		}
+		case IcebergTransactionUpdateType::DELETE: {
+			auto &delete_update = transaction_update->Cast<IcebergTransactionDeleteUpdate>();
+			catalog.table_request_cache.Expire(temp_context, delete_update.deleted_table.GetTableKey());
+			break;
+		}
+		case IcebergTransactionUpdateType::RENAME: {
+			auto &rename_update = transaction_update->Cast<IcebergTransactionRenameUpdate>();
+			catalog.table_request_cache.Expire(temp_context, rename_update.table.GetTableKey());
+			break;
+		}
+		default:
+			break;
 		}
 	}
 }

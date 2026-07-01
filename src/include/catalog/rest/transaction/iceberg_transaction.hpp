@@ -102,6 +102,9 @@ private:
 	void RefreshRetryTables(IcebergTransactionAlterUpdate &alter_update, const case_insensitive_set_t &table_keys,
 	                        ClientContext &context);
 	void CleanupFiles();
+	//! Evict the touched tables' cached LoadTableResult so a retry after a failed commit (e.g. a 409
+	//! conflict) doesn't keep reusing the same stale metadata.
+	void EvictCachedTables();
 
 private:
 	DatabaseInstance &db;
