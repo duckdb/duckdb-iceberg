@@ -3,6 +3,7 @@
 #include "duckdb/catalog/catalog_entry/table_function_catalog_entry.hpp"
 #include "duckdb/common/exception.hpp"
 #include "duckdb/common/file_system.hpp"
+#include "duckdb/common/numeric_utils.hpp"
 #include "duckdb/execution/execution_context.hpp"
 #include "duckdb/parallel/thread_context.hpp"
 #include "duckdb/parallel/event.hpp"
@@ -18,6 +19,7 @@
 #include "duckdb/execution/executor.hpp"
 #include "duckdb/optimizer/filter_combiner.hpp"
 #include "duckdb/function/scalar/struct_utils.hpp"
+#include "duckdb/storage/table/row_group_reorderer.hpp"
 
 #include "planning/iceberg_multi_file_reader.hpp"
 #include "function/iceberg_functions.hpp"
@@ -36,6 +38,8 @@
 #include "planning/metadata_io/manifest/iceberg_manifest_reader.hpp"
 #include "planning/metadata_io/manifest_list/iceberg_manifest_list_reader.hpp"
 #include "planning/metadata_io/manifest_list/bound_iceberg_manifest_list_entry.hpp"
+
+#include <algorithm>
 
 namespace duckdb {
 
@@ -296,6 +300,11 @@ void IcebergMultiFileList::SetOptions(const IcebergOptions &options) {
 	shared_state->options = options;
 }
 
+void IcebergMultiFileList::SetScanOrder(unique_ptr<RowGroupOrderOptions> options) {
+	scan_order_options = std::move(options);
+	scan_order_applied = false;
+}
+
 unique_ptr<ExpressionFilter> IcebergMultiFileList::GetFilterForColumnIndex(const IcebergTableFilters &filter_set,
                                                                            const ColumnIndex &column_index) const {
 	auto primary_index = column_index.GetPrimaryIndex();
@@ -393,6 +402,9 @@ unique_ptr<IcebergMultiFileList> IcebergMultiFileList::PushdownInternal(ClientCo
 	filtered_list->names = names;
 	filtered_list->types = types;
 	filtered_list->have_bound = true;
+	if (scan_order_options) {
+		filtered_list->scan_order_options = make_uniq<RowGroupOrderOptions>(*scan_order_options);
+	}
 	return filtered_list;
 }
 
@@ -965,10 +977,143 @@ optional_ptr<const BoundIcebergManifestEntry> IcebergMultiFileList::GetDataFile(
 	return data_manifest_entries[file_id];
 }
 
+namespace {
+
+bool ScanOrderCompare(const Value &v1, const Value &v2, OrderByStatistics stat_type) {
+	return (stat_type == OrderByStatistics::MAX && v1 < v2) || (stat_type == OrderByStatistics::MIN && v1 > v2);
+}
+
+struct IcebergOrderEntry {
+	idx_t entry_idx;
+	Value lower;
+	Value upper;
+	idx_t count;
+};
+
+} // namespace
+
+void IcebergMultiFileList::EnsureScanOrderApplied(lock_guard<mutex> &guard) const {
+	if (!scan_order_options || scan_order_applied) {
+		return;
+	}
+	scan_order_applied = true;
+
+	auto &opts = *scan_order_options;
+	//! Iceberg only stores reliable min/max for numeric/temporal columns; string bounds may be truncated.
+	if (opts.column_type != OrderByColumnType::NUMERIC || opts.column_idx.HasChildren()) {
+		return;
+	}
+
+	idx_t materialized = 0;
+	while (GetDataFile(materialized, guard)) {
+		materialized++;
+	}
+	if (data_manifest_entries.size() <= 1) {
+		return;
+	}
+
+	auto &schema_columns = GetSchema().columns;
+	idx_t schema_idx = opts.column_idx.GetPrimaryIndex();
+	if (schema_idx >= schema_columns.size()) {
+		return;
+	}
+	auto &order_column = *schema_columns[schema_idx];
+	int32_t field_id = order_column.id;
+
+	bool can_prune = opts.row_limit.IsValid();
+	vector<IcebergOrderEntry> order_entries;
+	order_entries.reserve(data_manifest_entries.size());
+	for (idx_t i = 0; i < data_manifest_entries.size(); i++) {
+		auto &data_file = data_manifest_entries[i].entry.data_file;
+		auto lower_it = data_file.lower_bounds.find(field_id);
+		auto upper_it = data_file.upper_bounds.find(field_id);
+		if (lower_it == data_file.lower_bounds.end() || upper_it == data_file.upper_bounds.end()) {
+			//! A file without usable bounds for the order column cannot be placed; leave order untouched.
+			return;
+		}
+		//! lower/upper bounds are stored as raw Iceberg-encoded blobs; decode to typed Values before comparing.
+		auto stats = IcebergPredicateStats::DeserializeBounds(lower_it->second, upper_it->second, order_column.name,
+		                                                      order_column.type);
+		if (!stats.has_lower_bounds || !stats.has_upper_bounds || stats.lower_bound.IsNull() ||
+		    stats.upper_bound.IsNull()) {
+			return;
+		}
+		auto null_it = data_file.null_value_counts.find(field_id);
+		if (null_it != data_file.null_value_counts.end() && null_it->second > 0) {
+			//! NULLs interact with NULLS FIRST/LAST: reordering stays safe, limit pruning does not.
+			can_prune = false;
+		}
+		order_entries.push_back({i, stats.lower_bound, stats.upper_bound, NumericCast<idx_t>(data_file.record_count)});
+	}
+
+	if (can_prune) {
+		for (idx_t i = 0; i < delete_manifest_matches.size(); i++) {
+			if (delete_manifest_matches[i]) {
+				//! record_count is pre-delete; pruning by it would drop files that still hold live rows.
+				can_prune = false;
+				break;
+			}
+		}
+	}
+
+	const auto stat_type = opts.order_by;
+	const bool ascending = opts.order_type == OrderType::ASCENDING;
+	auto primary = [&](const IcebergOrderEntry &e) -> const Value & {
+		return stat_type == OrderByStatistics::MAX ? e.upper : e.lower;
+	};
+	auto opposite = [&](const IcebergOrderEntry &e) -> const Value & {
+		return stat_type == OrderByStatistics::MAX ? e.lower : e.upper;
+	};
+
+	std::stable_sort(order_entries.begin(), order_entries.end(),
+	                 [&](const IcebergOrderEntry &a, const IcebergOrderEntry &b) {
+		                 return ascending ? primary(a) < primary(b) : primary(b) < primary(a);
+	                 });
+
+	idx_t keep = order_entries.size();
+	if (can_prune && opts.row_limit.GetIndex() > 0) {
+		const idx_t row_limit = opts.row_limit.GetIndex();
+		keep = 0;
+		//! Keep the prefix [0..k): prune the rest once the kept files hold >= row_limit rows that are each
+		//! guaranteed to outrank every remaining file. order_entries[k]'s primary bound is the best any pruned
+		//! file can reach, so a kept file qualifies in full only if its opposite bound already beats it.
+		for (idx_t k = 0; k < order_entries.size(); k++) {
+			const Value &frontier = primary(order_entries[k]);
+			idx_t guaranteed = 0;
+			for (idx_t j = 0; j < k; j++) {
+				if (!ScanOrderCompare(opposite(order_entries[j]), frontier, stat_type)) {
+					guaranteed += order_entries[j].count;
+				}
+				if (guaranteed >= row_limit) {
+					break;
+				}
+			}
+			if (guaranteed >= row_limit) {
+				break;
+			}
+			keep = k + 1;
+		}
+	}
+
+	if (keep < order_entries.size()) {
+		DUCKDB_LOG(context, IcebergLogType,
+		           "Iceberg Scan Order Pushdown, kept %llu of %llu 'data_file's for ORDER BY LIMIT %llu", keep,
+		           order_entries.size(), opts.row_limit.GetIndex());
+	}
+
+	vector<BoundIcebergManifestEntry> reordered;
+	reordered.reserve(keep);
+	for (idx_t i = 0; i < keep; i++) {
+		reordered.push_back(data_manifest_entries[order_entries[i].entry_idx]);
+	}
+	data_manifest_entries = std::move(reordered);
+}
+
 OpenFileInfo IcebergMultiFileList::GetFileInternal(idx_t file_id, lock_guard<mutex> &guard) const {
 	if (!view_initialized) {
 		InitializeFiles(guard);
 	}
+	EnsureScanOrderApplied(guard);
 
 	auto found_manifest_entry = GetDataFile(file_id, guard);
 	if (!found_manifest_entry) {
