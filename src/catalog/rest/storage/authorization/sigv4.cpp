@@ -2,6 +2,7 @@
 
 #include "duckdb/main/client_context.hpp"
 #include "duckdb/common/file_system.hpp"
+#include "duckdb/main/secret/secret_manager.hpp"
 #include "duckdb/main/setting_info.hpp"
 #include "duckdb/common/types/value.hpp"
 
@@ -105,7 +106,9 @@ AWSInput SIGV4Authorization::CreateAWSInput(ClientContext &context, const IRCEnd
 		aws_input.query_string_parameters.emplace_back(param.first, param.second.raw);
 	}
 
-	// AWS credentials
+	// AWS credentials — refresh if needed (per-catalog, time-gated)
+	MaybeRefreshSecret(context);
+
 	auto secret_entry = IcebergCatalog::GetStorageSecret(context, secret);
 	auto kv_secret = dynamic_cast<const KeyValueSecret &>(*secret_entry->secret);
 	aws_input.key_id = kv_secret.secret_map["key_id"].GetValue<string>();
@@ -114,6 +117,67 @@ AWSInput SIGV4Authorization::CreateAWSInput(ClientContext &context, const IRCEnd
 	    kv_secret.secret_map["session_token"].IsNull() ? "" : kv_secret.secret_map["session_token"].GetValue<string>();
 
 	return aws_input;
+}
+
+void SIGV4Authorization::MaybeRefreshSecret(ClientContext &context) {
+	// Fast path: if we refreshed recently, skip entirely (no lock needed)
+	auto now = std::chrono::steady_clock::now();
+	auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(now - last_refresh_time).count();
+	if (elapsed < REFRESH_INTERVAL_SECONDS) {
+		return;
+	}
+
+	// Try to acquire the per-catalog lock; if another thread is already refreshing, skip
+	std::unique_lock<std::mutex> lock(refresh_mutex, std::try_to_lock);
+	if (!lock.owns_lock()) {
+		return;
+	}
+
+	// Double-check after acquiring the lock
+	now = std::chrono::steady_clock::now();
+	elapsed = std::chrono::duration_cast<std::chrono::seconds>(now - last_refresh_time).count();
+	if (elapsed < REFRESH_INTERVAL_SECONDS) {
+		return;
+	}
+
+	auto secret_entry = IcebergCatalog::GetStorageSecret(context, secret);
+	const auto &kv_secret = dynamic_cast<const KeyValueSecret &>(*secret_entry->secret);
+	Value refresh_info;
+	if (!kv_secret.TryGetValue("refresh_info", refresh_info)) {
+		// No refresh_info — static credentials, nothing to refresh
+		last_refresh_time = std::chrono::steady_clock::now();
+		return;
+	}
+
+	// Reconstruct the original CreateSecretInput options from refresh_info.
+	// refresh_info is a STRUCT containing the original named parameters used to
+	// create the secret (e.g., 'chain', 'region', 'profile'). These are stored by
+	// the aws extension when refresh='auto' is set. Re-passing them to
+	// SecretManager::CreateSecret re-runs the credential chain provider, which
+	// fetches fresh STS tokens.
+	CreateSecretInput refresh_input;
+	refresh_input.on_conflict = OnCreateConflict::REPLACE_ON_CONFLICT;
+	refresh_input.persist_type = SecretPersistType::TEMPORARY;
+	refresh_input.type = kv_secret.GetType();
+	refresh_input.name = kv_secret.GetName();
+	refresh_input.provider = kv_secret.GetProvider();
+	refresh_input.storage_type = secret_entry->storage_mode;
+	refresh_input.scope = kv_secret.GetScope();
+
+	auto child_count = StructType::GetChildCount(refresh_info.type());
+	auto children = StructValue::GetChildren(refresh_info);
+	for (idx_t i = 0; i < child_count; i++) {
+		auto &key = StructType::GetChildName(refresh_info.type(), i);
+		refresh_input.options[key] = children[i];
+	}
+
+	try {
+		auto &secret_manager = context.db->GetSecretManager();
+		(void)secret_manager.CreateSecret(context, refresh_input);
+		last_refresh_time = std::chrono::steady_clock::now();
+	} catch (std::exception &) {
+		// Refresh failed — don't update last_refresh_time so we retry next time
+	}
 }
 
 unique_ptr<HTTPResponse> SIGV4Authorization::Request(RequestType request_type, ClientContext &context,
