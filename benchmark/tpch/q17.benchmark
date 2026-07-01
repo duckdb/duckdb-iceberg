@@ -1,0 +1,7 @@
+# name: benchmark/tpch/sf10/q17.benchmark
+# description: Run query 17 from the TPC-H benchmark
+# group: [sf10]
+
+template benchmark/tpch/tpch.benchmark.in
+QUERY_NUMBER=17
+QUERY_NUMBER_PADDED=17
