@@ -27,6 +27,9 @@ public:
 	bool IsRetryable() const override;
 	void ConstructManifestList(IcebergManifestList &manifest_list, CopyFunction &avro_copy, DatabaseInstance &db,
 	                           IcebergCommitState &commit_state) const;
+	//! Repack the assembled manifest list into fewer manifests, in place (MergeAppend, #790).
+	void MergeManifestList(IcebergManifestList &new_manifest_list, int64_t snapshot_id, CopyFunction &avro_copy,
+	                       DatabaseInstance &db, IcebergCommitState &commit_state) const;
 	void CreateUpdate(DatabaseInstance &db, ClientContext &context, IcebergCommitState &commit_state) const override;
 	const vector<IcebergManifestListEntry> &GetManifestFiles() const;
 	void AddManifestFile(IcebergManifestListEntry &&manifest_file);

@@ -1,5 +1,7 @@
 #include "catalog/rest/api/iceberg_add_snapshot.hpp"
 
+#include "catalog/rest/api/iceberg_manifest_merge.hpp"
+
 #include "duckdb/common/enums/catalog_type.hpp"
 #include "duckdb/catalog/catalog_entry/copy_function_catalog_entry.hpp"
 #include "duckdb/parallel/thread_context.hpp"
@@ -152,6 +154,84 @@ void IcebergAddSnapshot::ConstructManifestList(IcebergManifestList &new_manifest
 	commit_state.manifests.clear();
 }
 
+void IcebergAddSnapshot::MergeManifestList(IcebergManifestList &new_manifest_list, int64_t snapshot_id,
+                                           CopyFunction &avro_copy, DatabaseInstance &db,
+                                           IcebergCommitState &commit_state) const {
+	auto config = ManifestMergeConfig::FromTableMetadata(commit_state.table_info.table_metadata);
+	if (!config.enabled) {
+		return;
+	}
+
+	//! Merging manifests written under different schema ids is unsafe: the schema id determines the
+	//! data_file.partition layout and column stats, so mixing them can drop or misalign stats. A
+	//! manifest_file does not currently expose its schema id (that needs #1129), so until then we
+	//! only merge when the table has a single schema -- then every manifest is unambiguously that
+	//! schema. Tables that have gone through schema evolution skip merging for now.
+	if (commit_state.table_info.table_metadata.GetSchemas().size() > 1) {
+		return;
+	}
+
+	auto &entries = new_manifest_list.GetManifestFilesMutable();
+	if (entries.size() <= 1) {
+		return;
+	}
+
+	//! V3 row lineage: a row's first_row_id is a stable per-row identifier and, per spec, MUST be
+	//! preserved when a manifest is rewritten/merged. Already-committed ("carried-over") manifests
+	//! have their first_row_id settled, so merging them is safe (each merged manifest keeps the
+	//! minimum first_row_id of the manifests it absorbs). This transaction's brand-new data
+	//! manifests do not yet have per-entry first_row_id materialized -- those rows rely on
+	//! manifest-level inheritance assigned later in manifest_list::WriteToFile -- so folding them
+	//! into a merged manifest would break that inheritance basis. We therefore leave new V3 data
+	//! manifests unmerged; next commit they are carried-over and become eligible, so growth still
+	//! converges, merely delayed by one commit. V2 has no row lineage, so everything is eligible.
+	const bool is_v3 = commit_state.table_info.table_metadata.iceberg_version >= 3;
+
+	//! Split by content type, tagging each manifest's origin. Excluded manifests are kept aside.
+	vector<MergeInputManifest> data_input;
+	vector<MergeInputManifest> delete_input;
+	vector<IcebergManifestListEntry> kept;
+	for (auto &entry : entries) {
+		auto source = entry.file.added_snapshot_id == snapshot_id ? ManifestSource::NEW_THIS_TRANSACTION
+		                                                          : ManifestSource::CARRIED_OVER;
+		//! V3 row lineage only constrains DATA manifests (first_row_id). New DELETE manifests carry
+		//! no first_row_id, so they remain eligible for merging even on V3.
+		if (is_v3 && source == ManifestSource::NEW_THIS_TRANSACTION &&
+		    entry.file.content == IcebergManifestContentType::DATA) {
+			kept.push_back(std::move(entry));
+			continue;
+		}
+		auto &target = entry.file.content == IcebergManifestContentType::DELETE ? delete_input : data_input;
+		target.push_back(MergeInputManifest {std::move(entry), source});
+	}
+
+	auto merged_data = MergeManifests(std::move(data_input), IcebergManifestContentType::DATA, config, avro_copy, db,
+	                                  commit_state, schema_id, snapshot_id);
+	auto merged_delete = MergeManifests(std::move(delete_input), IcebergManifestContentType::DELETE, config, avro_copy,
+	                                    db, commit_state, schema_id, snapshot_id);
+
+	//! Reassemble. A manifest produced by the merge is a brand-new file created by this snapshot, so
+	//! stamp it with the snapshot's sequence number / id while preserving its computed
+	//! min_sequence_number. The merge writes its products with a placeholder snapshot id of -1,
+	//! which distinguishes them from new and carried-over manifests that pass through unmerged.
+	entries.clear();
+	auto reassemble = [&](vector<IcebergManifestListEntry> &merged) {
+		for (auto &entry : merged) {
+			if (entry.file.added_snapshot_id < 0) {
+				entry.file.added_snapshot_id = snapshot_id;
+				entry.file.sequence_number = new_manifest_list.GetSequenceNumber();
+			}
+			entries.push_back(std::move(entry));
+		}
+	};
+	reassemble(merged_data);
+	reassemble(merged_delete);
+	//! Re-append manifests that were excluded from merging (e.g. V3 new-data manifests) unchanged.
+	for (auto &entry : kept) {
+		entries.push_back(std::move(entry));
+	}
+}
+
 static IcebergManifestListEntry WriteManifestListEntry(const IcebergTableInformation &table_info,
                                                        const IcebergManifestListEntry &list_entry,
                                                        CopyFunction &avro_copy, DatabaseInstance &db,
@@ -246,6 +326,9 @@ void IcebergAddSnapshot::CreateUpdate(DatabaseInstance &db, ClientContext &conte
 			}
 		}
 	}
+
+	//! MergeAppend (#790): repack the assembled manifest list into fewer manifests before writing.
+	MergeManifestList(new_manifest_list, snapshot_id, avro_copy, db, commit_state);
 
 	manifest_list::WriteToFile(table_metadata, new_manifest_list, avro_copy, db, context);
 	commit_state.created_metadata_files.push_back(manifest_list_path);

@@ -1,0 +1,59 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/insert/test_merge_append_disabled.test
+# description: With commit.manifest-merge.enabled=false, behaves as FastAppend (data unchanged)
+# group: [insert]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+set ignore_error_messages
+
+statement ok
+drop table if exists my_datalake.default.no_merge_tbl;
+
+statement ok
+create table my_datalake.default.no_merge_tbl (
+	id INTEGER,
+	data VARCHAR
+) WITH (
+	'commit.manifest-merge.enabled' = 'false',
+	'commit.manifest.min-count-to-merge' = '2'
+);
+
+statement ok
+insert into my_datalake.default.no_merge_tbl values (1, 'a'), (2, 'b');
+
+statement ok
+insert into my_datalake.default.no_merge_tbl values (3, 'c'), (4, 'd');
+
+statement ok
+insert into my_datalake.default.no_merge_tbl values (5, 'e'), (6, 'f');
+
+# Data is correct regardless of merge being disabled.
+query II
+select id, data from my_datalake.default.no_merge_tbl order by id;
+----
+1	a
+2	b
+3	c
+4	d
+5	e
+6	f
+
+# With merge disabled, FastAppend keeps one manifest per commit: three commits -> three manifests.
+query I
+select count(*) >= 3 from (
+	select distinct manifest_path
+	from iceberg_metadata(my_datalake.default.no_merge_tbl)
+);
+----
+true
+
+statement ok
+drop table my_datalake.default.no_merge_tbl;

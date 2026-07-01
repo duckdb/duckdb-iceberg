@@ -23,6 +23,7 @@
         "test/sql/local/catalog_test_config_setup/catalog_agnostic/insert/test_insert_to_v3_tables.test",
         "test/sql/local/catalog_test_config_setup/catalog_agnostic/insert/test_transactional_insert_v3.test",
         "test/sql/local/catalog_test_config_setup/catalog_agnostic/insert/test_manifest_compression_v3.test",
+        "test/sql/local/catalog_test_config_setup/catalog_agnostic/insert/test_merge_append_v3_deletes.test",
         "test/sql/local/catalog_test_config_setup/catalog_agnostic/table_properties/test_many_table_properties.test",
         "test/sql/local/catalog_test_config_setup/catalog_agnostic/test_row_lineage_read.test",
         "test/sql/local/catalog_test_config_setup/catalog_agnostic/test_row_lineage_write.test",
