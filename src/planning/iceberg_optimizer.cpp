@@ -13,6 +13,8 @@
 #include "planning/iceberg_multi_file_reader.hpp"
 #include "duckdb/parser/expression/constant_expression.hpp"
 #include "duckdb/planner/operator/logical_get.hpp"
+#include "duckdb/planner/expression/bound_columnref_expression.hpp"
+#include "duckdb/planner/expression_iterator.hpp"
 
 namespace duckdb {
 
@@ -143,12 +145,63 @@ void GuaranteeEqualityDeleteColumnsOptimizer::VisitOperator(unique_ptr<LogicalOp
 	}
 }
 
+DelegationRowFilterOptimizer::DelegationRowFilterOptimizer(ClientContext &context) : context(context) {
+}
+
+static unique_ptr<Expression> RemapFilterBindings(Expression &expr, const vector<ColumnBinding> &bindings) {
+	auto copy = expr.Copy();
+	ExpressionIterator::EnumerateExpression(copy, [&](unique_ptr<Expression> &child) {
+		if (child->GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF) {
+			auto &colref = child->Cast<BoundColumnRefExpression>();
+			if (colref.Binding().column_index < bindings.size()) {
+				colref.BindingMutable() = bindings[colref.Binding().column_index];
+			}
+		}
+	});
+	return copy;
+}
+
+void DelegationRowFilterOptimizer::VisitOperator(unique_ptr<LogicalOperator> &op) {
+	for (idx_t child_index = 0; child_index < op->children.size(); child_index++) {
+		auto &child = op->children[child_index];
+		if (child->type != LogicalOperatorType::LOGICAL_GET) {
+			VisitOperator(child);
+			continue;
+		}
+		auto &get = child->Cast<LogicalGet>();
+		if (get.function.name != "iceberg_scan" || !get.bind_data) {
+			VisitOperator(child);
+			continue;
+		}
+		auto &mfbd = get.bind_data->Cast<MultiFileBindData>();
+		if (!mfbd.file_list) {
+			continue;
+		}
+		auto &iceberg_list = mfbd.file_list->Cast<IcebergMultiFileList>();
+		auto &scan_info = iceberg_list.GetScanInfo();
+		if (!scan_info || !scan_info->mandatory_delegation_filter_bound) {
+			continue;
+		}
+
+		// Re-apply the provider's mandatory filter above the scan even if bind-time table_filters were
+		// elided or the user added predicates that try to bypass it.
+		auto bindings = get.GetColumnBindings();
+		auto remapped = RemapFilterBindings(*scan_info->mandatory_delegation_filter_bound, bindings);
+		auto filter = make_uniq<LogicalFilter>();
+		filter->expressions.push_back(std::move(remapped));
+		filter->children.push_back(std::move(op->children[child_index]));
+		op->children[child_index] = std::move(filter);
+	}
+}
+
 void IcebergOptimizer::PreOptimize(OptimizerExtensionInput &input, unique_ptr<LogicalOperator> &plan) {
 	GuaranteeEqualityDeleteColumnsOptimizer guarantee_equality_delete_columns_optimizer(input.context);
+	DelegationRowFilterOptimizer delegation_row_filter_optimizer(input.context);
 	if (plan->children.size() == 0) {
 		return;
 	}
 	guarantee_equality_delete_columns_optimizer.VisitOperator(plan);
+	delegation_row_filter_optimizer.VisitOperator(plan);
 }
 
 OptimizerExtension IcebergOptimizer::Create() {

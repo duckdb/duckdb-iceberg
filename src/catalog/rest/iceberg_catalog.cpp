@@ -17,6 +17,7 @@
 #include "common/iceberg_utils.hpp"
 #include "iceberg_logging.hpp"
 #include "catalog/rest/api/api_utils.hpp"
+#include "catalog/rest/iceberg_access_delegation.hpp"
 #include "catalog/rest/storage/iceberg_authorization.hpp"
 #include "catalog/rest/storage/authorization/oauth2.hpp"
 #include "catalog/rest/storage/authorization/sigv4.hpp"
@@ -621,9 +622,11 @@ unique_ptr<Catalog> IcebergCatalog::Attach(optional_ptr<StorageExtensionInfo> st
 		} else if (access_mode_string == "none") {
 			attach_options.access_mode = IRCAccessDelegationMode::NONE;
 		} else {
-			throw InvalidInputException(
-			    "Unrecognized access mode '%s'. Supported options are 'vended_credentials' and 'none'",
-			    access_mode_string);
+			// Any other value names an access-delegation provider supplied by an external extension
+			// (e.g. 'lake_formation'). Such a provider vends its own object-storage credentials, so the
+			// built-in vended-credentials delegation header must not be sent on IRC requests.
+			attach_options.access_delegation_provider = access_mode_string;
+			attach_options.access_mode = IRCAccessDelegationMode::NONE;
 		}
 	}
 	if (attach_options.authorization_type == IcebergAuthorizationType::INVALID) {
@@ -648,6 +651,10 @@ unique_ptr<Catalog> IcebergCatalog::Attach(optional_ptr<StorageExtensionInfo> st
 	default:
 		throw InternalException("Authorization Type (%s) not implemented", authorization_type_string);
 	}
+
+	//! If an access-delegation provider was requested, resolve it (autoloading its extension) and let it
+	//! validate and consume any provider-specific attach options before we reject unhandled options.
+	IcebergAccessDelegation::ResolveProviderForAttach(attach_options, context);
 
 	//! We throw if there are any additional options not handled by previous steps
 	if (!attach_options.options.empty()) {

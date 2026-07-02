@@ -43,7 +43,7 @@ attach '' as my_datalake (
     SECRET 'my_secret'
 );
 ----
-<REGEX>:.*Unrecognized access mode.*Supported options are 'vended_credentials' and 'none'.*
+<REGEX>:.*Unrecognized access mode.*Built-in options are 'vended_credentials' and 'none'.*
 
 statement ok
 attach 'warehouse' as my_datalake (
