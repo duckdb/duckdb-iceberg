@@ -125,6 +125,8 @@ public:
 
 public:
 	IcebergManifestFile file;
+	//! The key-value metadata of the manifest file this entry describes
+	unordered_map<string, string> metadata;
 	vector<IcebergManifestEntry> manifest_entries;
 };
 

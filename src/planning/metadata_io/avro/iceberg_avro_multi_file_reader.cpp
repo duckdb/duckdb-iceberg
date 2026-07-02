@@ -1,5 +1,6 @@
 #include "planning/metadata_io/avro/iceberg_avro_multi_file_reader.hpp"
 
+#include "duckdb/catalog/catalog_entry/table_function_catalog_entry.hpp"
 #include "duckdb/common/exception.hpp"
 #include "duckdb/planner/expression/bound_constant_expression.hpp"
 #include "duckdb/planner/expression/bound_cast_expression.hpp"
@@ -7,18 +8,31 @@
 #include "duckdb/function/cast/bound_cast_data.hpp"
 #include "duckdb/common/vector/map_vector.hpp"
 #include "duckdb/common/vector/struct_vector.hpp"
+#include "duckdb/main/database.hpp"
+#include "duckdb/parser/tableref/table_function_ref.hpp"
 
 #include "planning/metadata_io/avro/iceberg_avro_multi_file_list.hpp"
 #include "core/metadata/manifest/iceberg_manifest_list.hpp"
 #include "core/metadata/manifest/iceberg_manifest.hpp"
+#include "core/metadata/schema/iceberg_table_schema.hpp"
 #include "common/iceberg_utils.hpp"
 #include "planning/metadata_io/manifest/iceberg_manifest_reader.hpp"
 #include "planning/metadata_io/manifest_list/iceberg_manifest_list_reader.hpp"
+#include "rest_catalog/objects/schema.hpp"
+#include "yyjson.hpp"
 
 namespace duckdb {
 
 unique_ptr<MultiFileReader> IcebergAvroMultiFileReader::CreateInstance(const TableFunction &table) {
 	return make_uniq<IcebergAvroMultiFileReader>(table.function_info);
+}
+
+static unordered_map<string, string> GetAvroMetadata(InsertionOrderPreservingMap<Value> &&metadata) {
+	unordered_map<string, string> result;
+	for (auto &[key, value] : metadata) {
+		result.emplace(key, value.GetValue<string>());
+	}
+	return result;
 }
 
 namespace manifest_list {
@@ -483,6 +497,12 @@ ReaderInitializeType IcebergAvroMultiFileReader::InitializeReader(
 	auto get_function_info = function_info.get();
 	if (get_function_info) {
 		auto &avro_scan_info = get_function_info->Cast<IcebergAvroScanInfo>();
+		if (avro_scan_info.type == AvroScanInfoType::MANIFEST_FILE) {
+			auto &manifest_scan_info = avro_scan_info.Cast<IcebergManifestFileScanInfo>();
+			auto file_idx = reader_data.reader->file_list_idx.GetIndex();
+			auto &manifest_list_entry = manifest_scan_info.manifest_files[file_idx];
+			manifest_list_entry.metadata = GetAvroMetadata(reader_data.reader->GetMetadata());
+		}
 		for (auto &partition_spec : avro_scan_info.metadata.partition_specs) {
 			for (auto &spec_field : partition_spec.second.fields) {
 				if (StringUtil::CIEquals(spec_field.transform.RawType(), "day")) {
