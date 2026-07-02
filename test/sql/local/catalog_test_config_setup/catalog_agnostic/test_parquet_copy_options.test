@@ -97,3 +97,52 @@ query I
 select count(row_group_bytes) from parquet_metadata(getvariable('parquet_filepath'));
 ----
 49
+
+statement ok
+drop table if exists properties_table;
+
+# Parquet file format version defaults to v1
+statement ok
+create table properties_table (my_col bigint);
+
+statement ok
+insert into my_datalake.default.properties_table SELECT * FROM range(20000) my_col;
+
+statement ok
+set variable parquet_filepath = (select file_path from iceberg_metadata(my_datalake.default.properties_table) limit 1);
+
+query I
+select format_version from parquet_file_metadata(getvariable('parquet_filepath'));
+----
+1
+
+statement ok
+drop table if exists properties_table;
+
+# write.parquet.format-version maps to DuckDB's parquet_version copy option
+statement ok
+create table properties_table (my_col bigint)
+WITH (
+    'write.parquet.format-version'='v2'
+);
+
+query II
+select * from iceberg_table_properties(my_datalake.default.properties_table) where key = 'write.parquet.format-version';
+----
+write.parquet.format-version	v2
+
+statement ok
+insert into my_datalake.default.properties_table SELECT * FROM range(20000) my_col;
+
+statement ok
+set variable parquet_filepath = (select file_path from iceberg_metadata(my_datalake.default.properties_table) limit 1);
+
+query I
+select format_version from parquet_file_metadata(getvariable('parquet_filepath'));
+----
+2
+
+query I
+select encodings from parquet_metadata(getvariable('parquet_filepath'));
+----
+DELTA_BINARY_PACKED
