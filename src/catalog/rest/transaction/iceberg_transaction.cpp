@@ -9,8 +9,13 @@
 #include "duckdb/main/client_data.hpp"
 #include "yyjson.hpp"
 
+#include <chrono>
+#include <random>
+#include <thread>
+
 #include "planning/metadata_io/manifest/iceberg_manifest_reader.hpp"
 #include "catalog/rest/transaction/iceberg_transaction.hpp"
+#include "catalog/rest/api/iceberg_retry.hpp"
 #include "catalog/rest/iceberg_catalog.hpp"
 #include "catalog/rest/storage/iceberg_authorization.hpp"
 #include "catalog/rest/catalog_entry/table/iceberg_table_information.hpp"
@@ -162,33 +167,43 @@ struct SingleTableStagedCommit {
 	rest_api_objects::CommitTableRequest request;
 	vector<string> created_metadata_files;
 	bool retryable = false;
+	IcebergRetryConfig retry_config;
 };
 
-static idx_t GetMaxRetries(const IcebergTransactionData &transaction_data) {
-	return NumericCast<idx_t>(transaction_data.GetCommitRetryCount());
-}
-
-static idx_t GetMaxRetries(const IcebergTransactionAlterUpdate &alter_update) {
-	idx_t max_retries = 0;
-	bool saw_table = false;
-	for (const auto &entry : alter_update.updated_tables) {
-		if (alter_update.committed_tables.count(entry.first)) {
-			continue;
-		}
-		const auto &table_info = entry.second;
-		if (!table_info.transaction_data || !table_info.HasTransactionUpdates()) {
-			continue;
-		}
-		auto table_max_retries = GetMaxRetries(*table_info.transaction_data);
-		if (!saw_table) {
-			max_retries = table_max_retries;
-			saw_table = true;
-		} else {
-			max_retries = MinValue<idx_t>(max_retries, table_max_retries);
-		}
+//! Per-retry-loop backoff state: decorrelated jitter (de-synchronizes a thundering herd of
+//! concurrent writers) plus a cumulative total-timeout budget. Independent RNG per loop so
+//! concurrent committers do not wake in lockstep.
+struct IcebergRetryBackoff {
+	explicit IcebergRetryBackoff(const IcebergRetryConfig &config_p)
+	    : config(config_p), prev_sleep_ms(config_p.min_wait_ms), start(std::chrono::steady_clock::now()),
+	      rng(std::random_device {}() ^
+	          static_cast<uint64_t>(std::chrono::steady_clock::now().time_since_epoch().count())),
+	      dist(0.0, 1.0) {
 	}
-	return max_retries;
-}
+
+	//! Sleep before the next attempt (attempt is the just-failed 0-based attempt index). Returns
+	//! false if the wait would exceed commit.retry.total-timeout-ms (only after >=1 retry, mirroring
+	//! Java's Tasks.runTaskWithRetry), signalling the caller to stop retrying.
+	bool WaitBeforeRetry(idx_t attempt) {
+		auto wait_ms = config.DecorrelatedBackoffMs(prev_sleep_ms, dist(rng));
+		prev_sleep_ms = wait_ms;
+		auto elapsed_ms =
+		    std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start).count();
+		if (attempt > 0 && (wait_ms > config.total_wait_ms || elapsed_ms > config.total_wait_ms - wait_ms)) {
+			return false;
+		}
+		if (wait_ms > 0) {
+			std::this_thread::sleep_for(std::chrono::milliseconds(wait_ms));
+		}
+		return true;
+	}
+
+	IcebergRetryConfig config;
+	int64_t prev_sleep_ms;
+	std::chrono::steady_clock::time_point start;
+	std::mt19937_64 rng;
+	std::uniform_real_distribution<double> dist;
+};
 
 static void CreateTableRequirements(DatabaseInstance &db, ClientContext &context, IcebergCommitState &commit_state,
                                     const IcebergTransactionData &transaction_data,
@@ -227,6 +242,7 @@ static SingleTableStagedCommit StageSingleTableCommit(DatabaseInstance &db, Iceb
 	auto current_snapshot = metadata.GetLatestSnapshot();
 	auto &transaction_data = *commit_state.table_info.transaction_data;
 	info.retryable = transaction_data.SupportsAppendRetry();
+	info.retry_config = IcebergRetryConfig::FromTableMetadata(metadata);
 	if (!transaction_data.alters.empty()) {
 		commit_state.LoadExistingManifests(std::move(transaction_data.existing_manifest_list));
 	}
@@ -282,6 +298,10 @@ TableTransactionInfo IcebergTransaction::GetTransactionRequest(IcebergTransactio
 		info.created_metadata_files.emplace(table_key, std::move(table_transaction_info.created_metadata_files));
 		info.table_requests.emplace(table_key, transaction.table_changes.size());
 		transaction.table_changes.push_back(std::move(table_transaction_info.request));
+		//! Tables in one atomic transaction share a single retry loop, so fold their retry policies
+		//! into the most lenient one (first table seeds it, the rest are merged in).
+		info.retry_config = saw_table ? info.retry_config.MostLenient(table_transaction_info.retry_config)
+		                              : table_transaction_info.retry_config;
 		saw_table = true;
 		all_retryable = all_retryable && table_transaction_info.retryable;
 	}
@@ -481,12 +501,18 @@ void IcebergTransaction::DoTableRename(IcebergTransactionRenameUpdate &rename_up
 
 void IcebergTransaction::DoMultiTableCommitUpdates(IcebergTransactionAlterUpdate &alter_update,
                                                    ClientContext &context) {
-	const auto max_retries = GetMaxRetries(alter_update);
+	//! The retry policy is the tables' folded (most-lenient) config, produced by GetTransactionRequest.
+	//! It is stable across attempts (same tables), so the backoff state is created once, lazily, from
+	//! the first staged request and reused for every retry.
+	unique_ptr<IcebergRetryBackoff> backoff;
 	for (idx_t attempt = 0;; attempt++) {
 		auto transaction_info = GetTransactionRequest(alter_update, context);
 		if (transaction_info.request.table_changes.empty()) {
 			alter_update.updated_tables.clear();
 			return;
+		}
+		if (!backoff) {
+			backoff = make_uniq<IcebergRetryBackoff>(transaction_info.retry_config);
 		}
 
 		std::unique_ptr<yyjson_mut_doc, YyjsonDocDeleter> doc_p(yyjson_mut_doc_new(nullptr));
@@ -503,12 +529,18 @@ void IcebergTransaction::DoMultiTableCommitUpdates(IcebergTransactionAlterUpdate
 			return;
 		}
 		auto created_metadata_files = GetCreatedMetadataFiles(transaction_info);
-		if (!CommitIsRetryable(transaction_info.retryable, max_retries, result, attempt)) {
+		if (!CommitIsRetryable(transaction_info.retryable, transaction_info.retry_config.num_retries, result,
+		                       attempt)) {
 			result.Throw(catalog.GetBaseUrl().GetURLEncoded());
 		}
 		CleanupMetadataFiles(context, created_metadata_files);
 		auto table_keys = GetRetryTableKeys(transaction_info);
 		RefreshRetryTables(alter_update, table_keys, context);
+		//! Back off before the next attempt to de-synchronize concurrent writers; stop if the
+		//! cumulative retry budget (commit.retry.total-timeout-ms) would be exceeded.
+		if (!backoff->WaitBeforeRetry(attempt)) {
+			result.Throw(catalog.GetBaseUrl().GetURLEncoded());
+		}
 	}
 }
 
@@ -517,8 +549,9 @@ void IcebergTransaction::DoSingleTableCommitUpdates(IcebergTransactionAlterUpdat
 	D_ASSERT(catalog.supported_urls.count("POST /v1/{prefix}/namespaces/{namespace}/tables/{table}"));
 	for (auto &entry : alter_update.updated_tables) {
 		auto &table_key = entry.first;
-		const auto max_retries =
-		    entry.second.transaction_data ? GetMaxRetries(*entry.second.transaction_data) : idx_t(0);
+		//! Backoff state is created once per table (lazily, from the first staged commit's config)
+		//! and reused across this table's retries.
+		unique_ptr<IcebergRetryBackoff> backoff;
 		for (idx_t attempt = 0;; attempt++) {
 			if (alter_update.committed_tables.count(table_key)) {
 				break;
@@ -529,6 +562,9 @@ void IcebergTransaction::DoSingleTableCommitUpdates(IcebergTransactionAlterUpdat
 			}
 
 			auto table_transaction_info = StageSingleTableCommit(db, table_info, context);
+			if (!backoff) {
+				backoff = make_uniq<IcebergRetryBackoff>(table_transaction_info.retry_config);
+			}
 			auto &table_change = table_transaction_info.request;
 			D_ASSERT(table_change.identifier);
 			auto &identifier = *table_change.identifier;
@@ -540,13 +576,18 @@ void IcebergTransaction::DoSingleTableCommitUpdates(IcebergTransactionAlterUpdat
 				break;
 			}
 
-			if (!CommitIsRetryable(table_transaction_info.retryable, max_retries, result, attempt)) {
+			if (!CommitIsRetryable(table_transaction_info.retryable, table_transaction_info.retry_config.num_retries,
+			                       result, attempt)) {
 				result.Throw(catalog.GetBaseUrl().GetURLEncoded());
 			}
 			CleanupMetadataFiles(context, table_transaction_info.created_metadata_files);
 			case_insensitive_set_t retry_tables;
 			retry_tables.insert(table_key);
 			RefreshRetryTables(alter_update, retry_tables, context);
+			//! Back off before the next attempt; stop if the retry budget would be exceeded.
+			if (!backoff->WaitBeforeRetry(attempt)) {
+				result.Throw(catalog.GetBaseUrl().GetURLEncoded());
+			}
 		}
 	}
 }

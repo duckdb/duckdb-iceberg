@@ -3,6 +3,7 @@
 
 #include "duckdb/transaction/transaction.hpp"
 #include "catalog/rest/iceberg_schema_set.hpp"
+#include "catalog/rest/api/iceberg_retry.hpp"
 
 namespace duckdb {
 class IcebergCatalog;
@@ -20,6 +21,7 @@ struct TableTransactionInfo {
 	case_insensitive_map_t<idx_t> table_requests;
 	case_insensitive_map_t<vector<string>> created_metadata_files;
 	bool retryable = false;
+	IcebergRetryConfig retry_config;
 };
 
 enum class IcebergTableStatus : uint8_t { ALIVE, DROPPED, RENAMED, MISSING };
