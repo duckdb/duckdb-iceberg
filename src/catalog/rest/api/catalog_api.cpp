@@ -28,16 +28,16 @@ void CommitResult::Throw(const string &url) const {
 	if (success) {
 		return;
 	}
+	// Throw HTTPException so the status lands in ExtraInfo()["status_code"] for commit-state classification.
 	if (error_) {
 		auto error_copy = error_->Copy();
 		error_copy._error.stack = vector<string>();
-		throw InvalidConfigurationException(
-		    "Request to '%s' returned a non-200 status code (%s). \n message: %s\n type: %s\n reason: %s\n", url,
+		throw HTTPException(
+		    *this, "Request to '%s' returned a non-200 status code (%s). \n message: %s\n type: %s\n reason: %s\n", url,
 		    EnumUtil::ToString(status), error_copy._error.message, error_copy._error.type, reason);
 	}
-	throw InvalidConfigurationException(
-	    "Request to '%s' returned a non-200 status code (%s), with reason: %s, body: %s", url,
-	    EnumUtil::ToString(status), reason, body);
+	throw HTTPException(*this, "Request to '%s' returned a non-200 status code (%s), with reason: %s, body: %s", url,
+	                    EnumUtil::ToString(status), reason, body);
 }
 
 vector<string> IRCAPI::ParseSchemaName(const string &namespace_name) {
@@ -388,6 +388,7 @@ static CommitResult BuildCommitResult(ClientContext &context, const unique_ptr<H
 	result.status = response->status;
 	result.reason = response->reason;
 	result.body = response->body;
+	result.headers = response->headers;
 	result.success = response->status == HTTPStatusCode::OK_200 || response->status == HTTPStatusCode::NoContent_204;
 	if (result.success) {
 		return result;
@@ -451,9 +452,9 @@ void IRCAPI::CommitTableDelete(ClientContext &context, IcebergCatalog &catalog, 
 	auto response = catalog.auth_handler->Request(RequestType::DELETE_REQUEST, context, url_builder, headers);
 	// Glue/S3Tables follow spec and return 204, apache/iceberg-rest-fixture docker image returns 200
 	if (response->status != HTTPStatusCode::NoContent_204 && response->status != HTTPStatusCode::OK_200) {
-		throw InvalidConfigurationException(
-		    "Request to '%s' returned a non-200 status code (%s), with reason: %s, body: %s",
-		    url_builder.GetURLEncoded(), EnumUtil::ToString(response->status), response->reason, response->body);
+		throw HTTPException(*response, "Request to '%s' returned a non-200 status code (%s), with reason: %s, body: %s",
+		                    url_builder.GetURLEncoded(), EnumUtil::ToString(response->status), response->reason,
+		                    response->body);
 	}
 }
 
@@ -469,9 +470,9 @@ void IRCAPI::CommitTableRename(ClientContext &context, IcebergCatalog &catalog, 
 	auto response = catalog.auth_handler->Request(RequestType::POST_REQUEST, context, url_builder, headers, body);
 	// Glue/S3Tables follow spec and return 204, apache/iceberg-rest-fixture docker image returns 200
 	if (response->status != HTTPStatusCode::NoContent_204 && response->status != HTTPStatusCode::OK_200) {
-		throw InvalidConfigurationException(
-		    "Request to '%s' returned a non-200 status code (%s), with reason: %s, body: %s",
-		    url_builder.GetURLEncoded(), EnumUtil::ToString(response->status), response->reason, response->body);
+		throw HTTPException(*response, "Request to '%s' returned a non-200 status code (%s), with reason: %s, body: %s",
+		                    url_builder.GetURLEncoded(), EnumUtil::ToString(response->status), response->reason,
+		                    response->body);
 	}
 }
 
@@ -484,9 +485,9 @@ void IRCAPI::CommitNamespaceCreate(ClientContext &context, IcebergCatalog &catal
 	LogPostBody(context, url_builder, body);
 	auto response = catalog.auth_handler->Request(RequestType::POST_REQUEST, context, url_builder, headers, body);
 	if (response->status != HTTPStatusCode::OK_200) {
-		throw InvalidConfigurationException(
-		    "Request to '%s' returned a non-200 status code (%s), with reason: %s, body: %s",
-		    url_builder.GetURLEncoded(), EnumUtil::ToString(response->status), response->reason, response->body);
+		throw HTTPException(*response, "Request to '%s' returned a non-200 status code (%s), with reason: %s, body: %s",
+		                    url_builder.GetURLEncoded(), EnumUtil::ToString(response->status), response->reason,
+		                    response->body);
 	}
 }
 
@@ -502,9 +503,9 @@ void IRCAPI::CommitNamespaceDrop(ClientContext &context, IcebergCatalog &catalog
 	auto response = catalog.auth_handler->Request(RequestType::DELETE_REQUEST, context, url_builder, headers, body);
 	// Glue/S3Tables follow spec and return 204, apache/iceberg-rest-fixture docker image returns 200
 	if (response->status != HTTPStatusCode::NoContent_204 && response->status != HTTPStatusCode::OK_200) {
-		throw InvalidConfigurationException(
-		    "Request to '%s' returned a non-200 status code (%s), with reason: %s, body: %s",
-		    url_builder.GetURLEncoded(), EnumUtil::ToString(response->status), response->reason, response->body);
+		throw HTTPException(*response, "Request to '%s' returned a non-200 status code (%s), with reason: %s, body: %s",
+		                    url_builder.GetURLEncoded(), EnumUtil::ToString(response->status), response->reason,
+		                    response->body);
 	}
 }
 
@@ -524,9 +525,9 @@ void IRCAPI::CommitNamespacePropertiesUpdate(ClientContext &context, IcebergCata
 	headers.Insert("Content-Type", "application/json");
 	auto response = catalog.auth_handler->Request(RequestType::POST_REQUEST, context, url_builder, headers, body);
 	if (response->status != HTTPStatusCode::OK_200) {
-		throw InvalidConfigurationException(
-		    "Request to '%s' returned a non-200 status code (%s), with reason: %s, body: %s",
-		    url_builder.GetURLEncoded(), EnumUtil::ToString(response->status), response->reason, response->body);
+		throw HTTPException(*response, "Request to '%s' returned a non-200 status code (%s), with reason: %s, body: %s",
+		                    url_builder.GetURLEncoded(), EnumUtil::ToString(response->status), response->reason,
+		                    response->body);
 	}
 }
 
@@ -562,17 +563,19 @@ rest_api_objects::LoadTableResult IRCAPI::CommitNewTable(ClientContext &context,
 		auto response =
 		    catalog.auth_handler->Request(RequestType::POST_REQUEST, context, url_builder, headers, create_table_json);
 		if (response->status != HTTPStatusCode::OK_200) {
-			throw InvalidConfigurationException(
-			    "Request to '%s' returned a non-200 status code (%s), with reason: %s, body: %s",
+			throw HTTPException(
+			    *response, "Request to '%s' returned a non-200 status code (%s), with reason: %s, body: %s",
 			    url_builder.GetURLEncoded(), EnumUtil::ToString(response->status), response->reason, response->body);
 		}
 		auto doc = ICUtils::APIResultToDoc(response->body);
 		auto *root = yyjson_doc_get_root(doc.get());
 		auto load_table_result = rest_api_objects::LoadTableResult::FromJSON(root);
 		return load_table_result;
+	} catch (const HTTPException &) {
+		// Non-200 already classified by HTTP status; rethrow so the status survives.
+		throw;
 	} catch (const std::exception &e) {
-		throw InvalidConfigurationException("Request to '%s' returned a non-200 status code body: %s",
-		                                    url_builder.GetURLEncoded(), e.what());
+		throw InvalidConfigurationException("Request to '%s' failed: %s", url_builder.GetURLEncoded(), e.what());
 	}
 }
 
@@ -587,6 +590,7 @@ rest_api_objects::CatalogConfig IRCAPI::GetCatalogConfig(ClientContext &context,
 	HTTPHeaders headers(*context.db);
 	auto response = catalog.auth_handler->Request(RequestType::GET_REQUEST, context, url_builder, headers, body);
 	if (response->status != HTTPStatusCode::OK_200) {
+		// Attach-time config read (not a commit path), so this keeps InvalidConfigurationException.
 		throw InvalidConfigurationException("Request to '%s' returned a non-200 status code (%s), with reason: %s",
 		                                    url_builder.GetURLEncoded(), EnumUtil::ToString(response->status),
 		                                    response->reason);

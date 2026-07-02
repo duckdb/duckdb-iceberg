@@ -4,6 +4,7 @@
 #include "duckdb/common/types.hpp"
 #include "duckdb/common/optional.hpp"
 #include "duckdb/common/enums/http_status_code.hpp"
+#include "duckdb/common/http_util.hpp"
 #include "duckdb/parser/parsed_data/create_table_info.hpp"
 #include "duckdb/parser/parsed_data/create_secret_info.hpp"
 
@@ -57,6 +58,7 @@ public:
 	HTTPStatusCode status = HTTPStatusCode::OK_200;
 	string reason;
 	string body;
+	HTTPHeaders headers;
 	optional<rest_api_objects::IcebergErrorResponse> error_;
 };
 

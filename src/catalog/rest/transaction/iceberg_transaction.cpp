@@ -379,6 +379,26 @@ static case_insensitive_set_t GetRetryTableKeys(const TableTransactionInfo &tran
 	return table_keys;
 }
 
+// 4xx = definitive rejection (commit did not land) -> delete the orphan. 5xx / no HTTP status
+// (connection error/timeout) = outcome unknown (may have landed) -> keep files. Status is in
+// extra_info (HTTPException) or the message "status code (<status>)" (fallback).
+static bool CommitStateUnknown(const ErrorData &error) {
+	auto &extra = error.ExtraInfo();
+	auto it = extra.find("status_code");
+	if (it != extra.end()) {
+		return it->second.empty() || it->second[0] != '4';
+	}
+	auto &msg = error.RawMessage();
+	auto pos = msg.find("status code (");
+	if (pos != string::npos) {
+		auto digit = msg.find_first_of("0123456789", pos);
+		if (digit != string::npos) {
+			return msg[digit] != '4';
+		}
+	}
+	return true;
+}
+
 void IcebergTransaction::Commit() {
 	if (transaction_updates.empty() && created_schemas.empty() && deleted_schemas.empty() &&
 	    schema_property_updates.empty()) {
@@ -423,6 +443,7 @@ void IcebergTransaction::Commit() {
 		DoSchemaDeletes(*temp_con_context);
 	} catch (std::exception &ex) {
 		ErrorData error(ex);
+		commit_state_unknown = CommitStateUnknown(error);
 		CleanupFiles();
 		DropSecrets(*temp_con_context);
 		temp_con.Rollback();
@@ -645,6 +666,10 @@ void IcebergTransaction::CleanupFiles() {
 		// certain catalogs don't allow deletes and will have a s3.deletes attribute in the config describing this
 		// aws s3 tables rejects deletes and will handle garbage collection on its own, any attempt to delete the files
 		// on the aws side will result in an error.
+		return;
+	}
+	if (commit_state_unknown) {
+		// Commit may have landed (CommitStateUnknownException); keep the files.
 		return;
 	}
 	ScopedTransaction temp_con(db);

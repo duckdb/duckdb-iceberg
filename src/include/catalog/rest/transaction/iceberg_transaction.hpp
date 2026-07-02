@@ -102,6 +102,8 @@ private:
 	void RefreshRetryTables(IcebergTransactionAlterUpdate &alter_update, const case_insensitive_set_t &table_keys,
 	                        ClientContext &context);
 	void CleanupFiles();
+	//! Commit outcome unknown (5xx / no HTTP status); CleanupFiles() then keeps the written files.
+	bool commit_state_unknown = false;
 
 private:
 	DatabaseInstance &db;
