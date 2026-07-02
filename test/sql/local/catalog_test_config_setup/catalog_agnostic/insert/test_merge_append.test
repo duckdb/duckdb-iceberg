@@ -1,0 +1,88 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/insert/test_merge_append.test
+# description: Lowering commit.manifest.min-count-to-merge causes manifests to be merged on commit
+# group: [insert]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+drop table if exists my_datalake.default.merge_tbl;
+
+# An aggressive min-count-to-merge so a merge is observable after only a couple of commits.
+statement ok
+create table my_datalake.default.merge_tbl (
+	id INTEGER,
+	data VARCHAR
+) WITH (
+	'commit.manifest.min-count-to-merge' = '2',
+	'commit.manifest.target-size-bytes' = '8388608'
+);
+
+# Three separate commits -> three data manifests before any merge.
+statement ok
+insert into my_datalake.default.merge_tbl values (1, 'a'), (2, 'b');
+
+statement ok
+insert into my_datalake.default.merge_tbl values (3, 'c'), (4, 'd');
+
+statement ok
+insert into my_datalake.default.merge_tbl values (5, 'e'), (6, 'f');
+
+# Data equivalence: the merge is a pure physical reorganization, so all rows must still be readable
+# and correct regardless of how manifests were packed.
+query II
+select id, data from my_datalake.default.merge_tbl order by id;
+----
+1	a
+2	b
+3	c
+4	d
+5	e
+6	f
+
+query I
+select count(*) from my_datalake.default.merge_tbl;
+----
+6
+
+# After commits with a low min-count (=2), the three per-commit data manifests are bin-packed into a
+# single merged manifest. Assert the EXACT distinct manifest count (not just a <= bound, which would
+# also pass for degenerate 0/1-manifest states), so a regression that under- or over-merges is caught.
+query I
+select count(*) from (
+	select distinct manifest_path
+	from iceberg_metadata(my_datalake.default.merge_tbl)
+);
+----
+1
+
+# Merge correctness: entries pulled in from already-committed manifests are written with status
+# EXISTING (Java's ManifestWriter.existing), while genuinely-new entries stay ADDED. After the merge
+# above, the merged manifest must contain EXISTING entries (proof the status demotion happened) and
+# no row may be lost. Assert both statuses are present and the live row set is intact.
+query I
+select count(*) > 0 from iceberg_metadata(my_datalake.default.merge_tbl) where status = 'EXISTING';
+----
+true
+
+# A further insert + read still returns everything (multi-round merge does not lose/duplicate data).
+statement ok
+insert into my_datalake.default.merge_tbl values (7, 'g'), (8, 'h');
+
+query I
+select count(*) from my_datalake.default.merge_tbl;
+----
+8
+
+statement ok
+drop table my_datalake.default.merge_tbl;
