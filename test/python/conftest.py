@@ -163,6 +163,15 @@ def print_unittest_stdin(pytestconfig):
     return pytestconfig.getoption("--print-unittest-stdin")
 
 
+@pytest.fixture()
+def paired_sqllogic_test_path(request) -> Path:
+    test_name = getattr(request.node, "originalname", None) or request.function.__name__
+    sqllogic_path = Path(str(request.fspath)).with_name(f"{test_name}.test")
+    if not sqllogic_path.is_file():
+        raise pytest.UsageError(f"{request.node.nodeid} expects a colocated sqllogic file at {sqllogic_path}")
+    return sqllogic_path
+
+
 @pytest.fixture(scope="session")
 def catalog_profile(pytestconfig):
     profile = getattr(pytestconfig, "_catalog_profile", None)

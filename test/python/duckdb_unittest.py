@@ -43,11 +43,13 @@ class DuckDBUnittestRunner:
         test_config: Path | str = DEFAULT_TEST_CONFIG,
         env: dict[str, str] | None = None,
         print_stdin: bool = False,
+        preamble: str | None = STANDARD_PREAMBLE,
     ) -> None:
         self.unittest_binary = unittest_binary
         self.test_config = Path(test_config)
         self.env = env
         self.print_stdin = print_stdin
+        self.preamble = preamble
         self.process: subprocess.Popen[str] | None = None
         self.stdin_log: list[str] = []
         self._final_result: tuple[str, str, int] | None = None
@@ -66,7 +68,8 @@ class DuckDBUnittestRunner:
             text=True,
             env={**os.environ, **(self.env or {})},
         )
-        self.send(STANDARD_PREAMBLE)
+        if self.preamble is not None:
+            self.send(self.preamble)
         return self
 
     def __exit__(self, exc_type, exc_value, traceback) -> bool:
@@ -87,13 +90,23 @@ class DuckDBUnittestRunner:
         return self.process
 
     def send(self, text: str) -> None:
-        process = self._active_process()
         block = textwrap.dedent(text).strip()
-        if not block:
+        if block:
+            self.send_raw(block)
+
+    def send_raw(self, text: str) -> None:
+        process = self._active_process()
+        if not text.strip():
             return
-        self.stdin_log.append(block)
-        process.stdin.write(f"{block}\n\n")
+        self.stdin_log.append(text)
+        process.stdin.write(text)
+        if not text.endswith("\n"):
+            process.stdin.write("\n")
+        process.stdin.write("\n")
         process.stdin.flush()
+
+    def run_sqllogic_file(self, path: Path | str) -> None:
+        self.send_raw(Path(path).read_text())
 
     @property
     def stdin_text(self) -> str:

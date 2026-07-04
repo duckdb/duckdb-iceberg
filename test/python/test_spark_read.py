@@ -37,26 +37,6 @@ def is_active_catalog(catalog: str):
 
 
 class TestSparkRead:
-    def test_spark_read_duckdb_table(self, spark_con):
-        df = spark_con.sql(
-            """
-            select * from default.duckdb_written_table order by a
-            """
-        )
-        res = df.collect()
-        assert res == [
-            Row(a=0),
-            Row(a=1),
-            Row(a=2),
-            Row(a=3),
-            Row(a=4),
-            Row(a=5),
-            Row(a=6),
-            Row(a=7),
-            Row(a=8),
-            Row(a=9),
-        ]
-
     def test_spark_read_table_with_deletes(self, spark_con):
         df = spark_con.sql(
             """

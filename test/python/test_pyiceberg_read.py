@@ -59,16 +59,6 @@ class TestPyIcebergRead:
 
 
 class TestPyIcebergRead:
-    def test_pyiceberg_read(self, rest_catalog):
-        tbl = rest_catalog.load_table("default.test_metadata_for_pyiceberg")
-        scan = tbl.scan(row_filter=pyice.expressions.EqualTo("a", 350))
-        # Collect the file paths Iceberg selects
-        matched_files = [task.file.file_path for task in scan.plan_files()]
-        # only 1 data file should match the filter
-        assert len(matched_files) == 1
-
-
-class TestPyIcebergRead:
     def test_pyiceberg_read_duckdb_upper_lower_bounds(self, rest_catalog):
         tbl = rest_catalog.load_table("default.lower_upper_bounds_test")
         arrow_table: pa.Table = tbl.scan().to_arrow()
