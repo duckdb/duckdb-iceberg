@@ -1,8 +1,6 @@
 # name: test/sql/local/iceberg_scans/expression_filter.test
 # group: [iceberg_scans]
 
-require-env DUCKDB_ICEBERG_HAVE_GENERATED_DATA
-
 require avro
 
 require parquet

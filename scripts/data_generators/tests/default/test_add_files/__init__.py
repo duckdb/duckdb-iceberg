@@ -2,16 +2,13 @@ from scripts.data_generators.tests.base import IcebergTest
 import pathlib
 import duckdb
 
-import os
-
-SCRIPT_DIR = os.path.dirname(__file__)
-FILES_DIR = os.path.join(SCRIPT_DIR, '..', '..', '..', 'data', 'generated', 'files')
+SCRIPTS_DIR = pathlib.Path(__file__).resolve().parents[4]
+FILES_DIR = SCRIPTS_DIR / "data" / "generated" / "files"
 
 def generate_files():
     n_rows = 100_000
 
-    parquet_dir = pathlib.Path(FILES_DIR)
-    parquet_dir.mkdir(parents=True, exist_ok=True)
+    FILES_DIR.mkdir(parents=True, exist_ok=True)
 
     con = duckdb.connect()
     con.execute("select setseed(0.42)")
@@ -41,7 +38,7 @@ def generate_files():
 
     # Write one parquet file per category
     for i, category in enumerate(categories):
-        file_path = parquet_dir / f"file_{i}.parquet"
+        file_path = FILES_DIR / f"file_{i}.parquet"
         con.execute(f"""
             COPY (
                 SELECT * FROM fake_data

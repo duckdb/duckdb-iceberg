@@ -11,8 +11,6 @@ require httpfs
 
 require icu
 
-require-env DUCKDB_ICEBERG_HAVE_GENERATED_DATA
-
 statement ok
 SET TimeZone='UTC'
 

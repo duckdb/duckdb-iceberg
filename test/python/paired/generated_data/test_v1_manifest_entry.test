@@ -1,6 +1,6 @@
-# name: test/sql/local/test_v1_manifest_entry.test
+# name: test/python/paired/generated_data/test_v1_manifest_entry.test
 # description: Test ducklake updates
-# group: [local]
+# group: [generated_data]
 
 require avro
 
