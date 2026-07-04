@@ -97,12 +97,6 @@ Should you need to generate data for only one test (a test found under *scripts/
 
 **Prerequisites:** Docker and Docker Compose are required for Fixture, Nessie, and Lakekeeper. Polaris requires Java/Gradle and builds from source — the build is skipped automatically if it has already completed. To force a clean rebuild of Polaris, run `make polaris-rebuild`.
 
-Fixture also has a local variant that generates data for local file-based testing instead of REST:
-
-```shell
-make fixture-data-local
-```
-
 ## Acknowledgements
 
 This extension was initially developed as part of a customer project for [RelationalAI](https://relational.ai/),
