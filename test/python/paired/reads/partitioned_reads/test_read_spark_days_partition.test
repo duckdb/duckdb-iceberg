@@ -1,4 +1,4 @@
-# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/reads/partitioned_reads/test_read_spark_days_partition.test
+# name: test/python/paired/reads/partitioned_reads/test_read_spark_days_partition.test
 # group: [partitioned_reads]
 
 require-env CATALOG_TEST_CONFIG_SETUP

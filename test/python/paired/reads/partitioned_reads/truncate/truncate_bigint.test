@@ -1,4 +1,4 @@
-# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/reads/partitioned_reads/truncate/truncate_bigint.test
+# name: test/python/paired/reads/partitioned_reads/truncate/truncate_bigint.test
 # group: [truncate]
 
 require avro

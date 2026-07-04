@@ -1,4 +1,4 @@
-# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/update/test_update_partitioned_table_failure.test
+# name: test/python/paired/update/test_update_partitioned_table_failure.test
 # description: Test update on partitioned table
 # group: [update]
 

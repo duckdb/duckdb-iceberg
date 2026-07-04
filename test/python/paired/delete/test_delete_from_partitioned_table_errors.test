@@ -1,4 +1,4 @@
-# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/delete/test_delete_from_partitioned_table_errors.test
+# name: test/python/paired/delete/test_delete_from_partitioned_table_errors.test
 # description: test delete from partitioned table
 # group: [delete]
 

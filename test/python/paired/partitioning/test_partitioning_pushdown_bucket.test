@@ -1,4 +1,4 @@
-# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/partitioning/test_partitioning_pushdown_bucket.test
+# name: test/python/paired/partitioning/test_partitioning_pushdown_bucket.test
 # description: Test bucket partition pushdown for multiple types (INTEGER, BIGINT, STRING, DATE, DECIMAL, BINARY, TIMESTAMP)
 # group: [partitioning]
 
@@ -13,6 +13,12 @@ require iceberg
 require httpfs
 
 require core_functions
+
+statement ok
+SET calendar = 'Gregorian';
+
+statement ok
+SET TimeZone = 'UTC';
 
 # Do not ignore 'HTTP' error messages!
 set ignore_error_messages
