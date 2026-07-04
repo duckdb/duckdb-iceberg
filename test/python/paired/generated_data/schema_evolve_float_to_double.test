@@ -9,7 +9,6 @@ require iceberg
 
 require httpfs
 
-require-env DUCKDB_ICEBERG_HAVE_GENERATED_DATA
 
 query I
 select * from ICEBERG_SCAN('{WORKING_DIRECTORY}/data/generated/iceberg/spark-local/default/schema_evolve_float_to_double') order by all;

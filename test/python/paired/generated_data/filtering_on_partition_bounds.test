@@ -1,8 +1,6 @@
 # name: test/python/paired/generated_data/filtering_on_partition_bounds.test
 # group: [generated_data]
 
-require-env DUCKDB_ICEBERG_HAVE_GENERATED_DATA
-
 require avro
 
 require parquet

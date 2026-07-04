@@ -5,9 +5,6 @@ import pytest
 from duckdb_unittest import DuckDBUnittestRunner
 
 
-GENERATED_DATA_ENV = {"DUCKDB_ICEBERG_HAVE_GENERATED_DATA": "1"}
-
-
 @pytest.mark.spark_seed_tables("default.year_timestamptz")
 @pytest.mark.generator_catalog("local")
 def test_year_timestamptz(
@@ -17,6 +14,5 @@ def test_year_timestamptz(
     with DuckDBUnittestRunner(
         unittest_binary,
         print_stdin=print_unittest_stdin,
-        env=GENERATED_DATA_ENV,
     ) as runner:
         runner.run_sqllogic_file(Path(__file__).with_name("year_timestamptz.test"))
