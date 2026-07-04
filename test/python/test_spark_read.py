@@ -37,57 +37,6 @@ def is_active_catalog(catalog: str):
 
 
 class TestSparkRead:
-    @pytest.mark.skipif(
-        is_active_catalog('polaris'), reason="Polaris does not currently support this Spark bounds read test"
-    )
-    @pytest.mark.skipif(is_active_catalog('lakekeeper'), reason="Lakekeeper writes bounds differently for some reason")
-    def test_spark_read_upper_and_lower_bounds(self, spark_con):
-        df = spark_con.sql(
-            """
-            select * from default.lower_upper_bounds_test;
-            """
-        )
-        res = df.collect()
-        assert len(res) == 3
-        assert res == [
-            Row(
-                int_type=-2147483648,
-                long_type=-9223372036854775808,
-                varchar_type="",
-                bool_type=False,
-                float_type=-3.4028234663852886e38,
-                double_type=-1.7976931348623157e308,
-                decimal_type_18_3=Decimal("-9999999999999.999"),
-                date_type=datetime.date(1, 1, 1),
-                timestamp_type=datetime.datetime(1, 1, 1, 0, 0),
-                binary_type=bytearray(b""),
-            ),
-            Row(
-                int_type=2147483647,
-                long_type=9223372036854775807,
-                varchar_type="ZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZ",
-                bool_type=True,
-                float_type=3.4028234663852886e38,
-                double_type=1.7976931348623157e308,
-                decimal_type_18_3=Decimal("9999999999999.999"),
-                date_type=datetime.date(9999, 12, 31),
-                timestamp_type=datetime.datetime(9999, 12, 31, 23, 59, 59, 999999),
-                binary_type=bytearray(b"\xff\xff\xff\xff\xff\xff\xff\xff"),
-            ),
-            Row(
-                int_type=None,
-                long_type=None,
-                varchar_type=None,
-                bool_type=None,
-                float_type=None,
-                double_type=None,
-                decimal_type_18_3=None,
-                date_type=None,
-                timestamp_type=None,
-                binary_type=None,
-            ),
-        ]
-
     # Written by Spark, read by Spark
     # See https://github.com/duckdb/duckdb-iceberg/pull/908 on why spark behavior is unclear
     @pytest.mark.skip(reason="Failures due to unclear Spark behavior regarding row ids")

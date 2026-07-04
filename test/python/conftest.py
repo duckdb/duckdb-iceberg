@@ -13,6 +13,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from scripts.data_generators.integration_config import (
+    GENERATOR_CATALOG_NAMES,
     REST_CATALOG_NAMES,
     get_rest_catalog_profile,
     resolve_active_catalog,
@@ -115,6 +116,11 @@ def pytest_configure(config):
         "markers",
         "requires_capabilities(*requirements): require named catalog/runtime capabilities before test setup "
         "(currently: 'format_v3', 'row_lineage')",
+    )
+    config.addinivalue_line(
+        "markers",
+        "generator_catalog(name): override the data-generator catalog used by spark_seed_tables "
+        "(e.g. 'local' for local-generator-backed paired tests)",
     )
 
 
@@ -233,26 +239,118 @@ def _resolve_seed_table(table):
     )
 
 
+def _apply_generator_expectations(request, generator_case: IcebergTest, active_catalog: str) -> None:
+    skip_reason = generator_case.skips.get(active_catalog)
+    if skip_reason is not None:
+        pytest.skip(skip_reason)
+
+    supported_catalogs = generator_case.supported_catalogs
+    if supported_catalogs is not None and active_catalog not in supported_catalogs:
+        pytest.skip(f"{generator_case.qualified_name} does not apply to catalog '{active_catalog}'")
+
+    xfail_reason = generator_case.expected_failures.get(active_catalog)
+    if xfail_reason is not None:
+        request.node.add_marker(pytest.mark.xfail(reason=xfail_reason, strict=True))
+
+
+def _seed_generator_catalog(item, default_catalog: str) -> str:
+    marker = item.get_closest_marker("generator_catalog")
+    if marker is None:
+        return default_catalog
+    if len(marker.args) != 1 or not isinstance(marker.args[0], str):
+        raise pytest.UsageError(
+            f"{item.nodeid} uses generator_catalog with invalid arguments: expected exactly one string catalog name"
+        )
+    catalog = marker.args[0]
+    if catalog not in GENERATOR_CATALOG_NAMES:
+        allowed = ", ".join(GENERATOR_CATALOG_NAMES)
+        raise pytest.UsageError(
+            f"{item.nodeid} uses unsupported generator_catalog '{catalog}'. Expected one of: {allowed}."
+        )
+    return catalog
+
+
 @pytest.fixture(scope="session")
-def catalog_session_connection(catalog_profile, spark_runtime):
+def _catalog_connection_manager(catalog_profile, spark_runtime):
     from scripts.data_generators.connections import IcebergConnection
 
-    connection = IcebergConnection.get_class(catalog_profile.connection_key)(runtime=spark_runtime)
-    yield connection
-    connection.close()
+    manager = {
+        "active_connection": None,
+        "active_connection_key": None,
+    }
+
+    def switch_to(connection_key: str):
+        active_connection = manager["active_connection"]
+        active_connection_key = manager["active_connection_key"]
+        if active_connection_key != connection_key:
+            if active_connection is not None:
+                active_connection.close()
+            active_connection = IcebergConnection.get_class(connection_key)(runtime=spark_runtime)
+            manager["active_connection"] = active_connection
+            manager["active_connection_key"] = connection_key
+        return active_connection
+
+    switch_to(catalog_profile.connection_key)
+    manager["switch_to"] = switch_to
+    yield manager
+
+
+class _CatalogConnectionProxy:
+    def __init__(self, manager, default_connection_key: str):
+        self._manager = manager
+        self._default_connection_key = default_connection_key
+
+    def use_connection_key(self, connection_key: str):
+        return self._manager["switch_to"](connection_key)
+
+    def use_default_connection(self):
+        return self.use_connection_key(self._default_connection_key)
+
+    @property
+    def active_connection(self):
+        return self._manager["active_connection"]
+
+    @property
+    def con(self):
+        return self.active_connection.con
+
+    def restart(self):
+        connection = self.active_connection
+        if connection is None:
+            connection = self.use_default_connection()
+        return connection.restart()
+
+    def __getattr__(self, name):
+        connection = self.active_connection
+        if connection is None:
+            connection = self.use_default_connection()
+        return getattr(connection, name)
+
+
+@pytest.fixture(scope="session")
+def catalog_session_connection(catalog_profile, _catalog_connection_manager):
+    return _CatalogConnectionProxy(_catalog_connection_manager, catalog_profile.connection_key)
 
 
 @pytest.fixture()
-def catalog_connection(request, catalog_session_connection):
+def catalog_connection(request, catalog_profile, catalog_session_connection):
     connection = catalog_session_connection
     seed_marker = request.node.get_closest_marker("spark_seed_tables")
     seed_names = list(seed_marker.args) if seed_marker else []
+    seed_catalog = _seed_generator_catalog(request.node, catalog_profile.name)
 
     for table in seed_names:
         seed_table = _resolve_seed_table(table)
         if isinstance(seed_table, IcebergTest):
+            _apply_generator_expectations(request, seed_table, seed_catalog)
             seed_table.write_intermediates = False
-        seed_table.generate(connection)
+            connection_key = seed_table.catalog_mapping.get(seed_catalog, seed_catalog)
+        else:
+            connection_key = catalog_profile.connection_key
+        seed_connection = connection.use_connection_key(connection_key)
+        seed_table.generate(seed_connection)
+
+    connection.use_default_connection()
 
     yield connection
 
@@ -277,6 +375,8 @@ def pytest_collection_modifyitems(config, items):
         config._requirement_skip_log = []
 
     for item in items:
+        seed_catalog = _seed_generator_catalog(item, "fixture") if _requires_catalog_options(str(item.fspath)) else None
+
         if needs_catalog_options and _requires_catalog_options(str(item.fspath)):
             failures = _collect_requirement_failures(item, config._catalog_profile, config._spark_runtime)
             if failures:
