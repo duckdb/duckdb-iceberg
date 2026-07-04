@@ -1,4 +1,4 @@
-# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/table_properties/test_set_table_properties.test
+# name: test/python/paired/table_properties/test_set_table_properties.test
 # group: [table_properties]
 
 require-env CATALOG_TEST_CONFIG_SETUP
