@@ -1,4 +1,4 @@
-# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/test_column_doc_comment.test
+# name: test/python/paired/catalog_agnostic/test_column_doc_comment.test
 # description: Iceberg schema field 'doc' is surfaced as a DuckDB column comment
 # group: [catalog_agnostic]
 

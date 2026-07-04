@@ -1,4 +1,4 @@
-# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/test_read_empty_table.test
+# name: test/python/paired/catalog_agnostic/test_read_empty_table.test
 # description: test integration with iceberg catalog read
 # group: [catalog_agnostic]
 

@@ -1,4 +1,4 @@
-# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/reads/test_read_nulls.test
+# name: test/python/paired/reads/test_read_nulls.test
 # group: [reads]
 
 require-env CATALOG_TEST_CONFIG_SETUP
