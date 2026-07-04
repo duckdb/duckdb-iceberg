@@ -355,6 +355,12 @@ def catalog_connection(request, catalog_profile, catalog_session_connection):
     yield connection
 
 
+@pytest.fixture(autouse=True)
+def _apply_spark_seed_tables_marker(request):
+    if request.node.get_closest_marker("spark_seed_tables") is not None:
+        request.getfixturevalue("catalog_connection")
+
+
 @pytest.fixture()
 def spark_con(catalog_connection):
     return catalog_connection.con
