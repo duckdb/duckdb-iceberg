@@ -381,9 +381,14 @@ def pytest_collection_modifyitems(config, items):
         config._requirement_skip_log = []
 
     for item in items:
-        seed_catalog = _seed_generator_catalog(item, "fixture") if _requires_catalog_options(str(item.fspath)) else None
-
         if needs_catalog_options and _requires_catalog_options(str(item.fspath)):
+            seed_catalog = _seed_generator_catalog(item, config._catalog_profile.name)
+            if seed_catalog == "local" and config._catalog_profile.name != "fixture":
+                item.add_marker(
+                    pytest.mark.skip(reason="Local-generator paired tests only run in the fixture test/python matrix")
+                )
+                continue
+
             failures = _collect_requirement_failures(item, config._catalog_profile, config._spark_runtime)
             if failures:
                 skip_reason = "Test requirements not met: " + "; ".join(failures)

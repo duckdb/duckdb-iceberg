@@ -1,5 +1,5 @@
-# name: test/sql/local/schema_evolve_float_to_double.test
-# group: [local]
+# name: test/python/paired/generated_data/schema_evolve_float_to_double.test
+# group: [generated_data]
 
 require avro
 

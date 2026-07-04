@@ -1,5 +1,5 @@
-# name: test/sql/local/nested_types.test
-# group: [local]
+# name: test/python/paired/generated_data/nested_types.test
+# group: [generated_data]
 
 require avro
 
