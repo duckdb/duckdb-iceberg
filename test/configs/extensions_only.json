@@ -1,0 +1,11 @@
+{
+  "description": "Load the DuckDB extensions needed by paired sqllogic tests without catalog initialization.",
+  "statically_loaded_extensions": [
+    "core_functions",
+    "parquet",
+    "avro",
+    "iceberg",
+    "httpfs",
+    "icu"
+  ]
+}

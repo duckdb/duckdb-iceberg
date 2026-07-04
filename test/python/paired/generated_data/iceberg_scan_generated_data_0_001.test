@@ -1,6 +1,6 @@
-# name: test/sql/local/iceberg_scans/iceberg_scan_generated_data_0_001.test
+# name: test/python/paired/generated_data/iceberg_scan_generated_data_0_001.test
 # description: test iceberg extension with the sf0.001 generated test set
-# group: [iceberg_scans]
+# group: [generated_data]
 
 statement ok
 SET profiling_renderer_settings = MAP {'operator_casing': 'upper'};
@@ -36,10 +36,10 @@ statement ok
 create schema intermediates.default;
 
 statement ok
-create view intermediates.default.pyspark_iceberg_table_v1 as select * from PARQUET_SCAN('{WORKING_DIRECTORY}/data/generated/intermediates/spark-local/pyspark_iceberg_table_v1/last/data.parquet/*.parquet');
+create view intermediates.default.pyspark_iceberg_table_v1 as select * from PARQUET_SCAN('{WORKING_DIRECTORY}/data/generated/intermediates/spark-local/default/pyspark_iceberg_table_v1/last/data.parquet/*.parquet');
 
 statement ok
-create view intermediates.default.pyspark_iceberg_table_v2 as select * from PARQUET_SCAN('{WORKING_DIRECTORY}/data/generated/intermediates/spark-local/pyspark_iceberg_table_v2/last/data.parquet/*.parquet');
+create view intermediates.default.pyspark_iceberg_table_v2 as select * from PARQUET_SCAN('{WORKING_DIRECTORY}/data/generated/intermediates/spark-local/default/pyspark_iceberg_table_v2/last/data.parquet/*.parquet');
 
 ### Iceberg spec v1
 

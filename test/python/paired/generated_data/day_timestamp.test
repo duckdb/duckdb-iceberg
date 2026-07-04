@@ -1,5 +1,5 @@
-# name: test/sql/local/partitioning/day/day_timestamp.test
-# group: [day]
+# name: test/python/paired/generated_data/day_timestamp.test
+# group: [generated_data]
 
 require avro
 

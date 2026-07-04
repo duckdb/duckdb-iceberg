@@ -1,5 +1,5 @@
-# name: test/sql/local/test_basic_deletion_vectors.test
-# group: [local]
+# name: test/python/paired/generated_data/test_basic_deletion_vectors.test
+# group: [generated_data]
 
 require-env DUCKDB_ICEBERG_HAVE_GENERATED_DATA
 

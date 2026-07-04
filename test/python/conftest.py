@@ -20,7 +20,7 @@ from scripts.data_generators.integration_config import (
     resolve_pyspark_runtime,
 )
 from scripts.data_generators.tests import IcebergTest
-from spark_seed import SparkSeedTable
+from spark_seed import RegisteredSeedTable, SparkSeedTable
 
 
 if importlib.util.find_spec("pyspark") is not None:
@@ -110,7 +110,8 @@ def pytest_configure(config):
     )
     config.addinivalue_line(
         "markers",
-        "spark_seed_tables(*tables): seed catalog_connection with registered names or SparkSeedTable objects",
+        "spark_seed_tables(*tables): seed catalog_connection with registered names, RegisteredSeedTable objects, "
+        "or SparkSeedTable objects",
     )
     config.addinivalue_line(
         "markers",
@@ -230,11 +231,14 @@ def _find_generator_case(table_name: str):
 
 def _resolve_seed_table(table):
     if isinstance(table, str):
-        return _find_generator_case(table)
+        return RegisteredSeedTable(table)
+    if isinstance(table, RegisteredSeedTable):
+        return table
     if isinstance(table, SparkSeedTable):
         return table
     raise ValueError(
-        "spark_seed_tables entries must be registered table names or SparkSeedTable objects, "
+        "spark_seed_tables entries must be registered table names, RegisteredSeedTable objects, "
+        "or SparkSeedTable objects, "
         f"got {type(table).__name__}"
     )
 
@@ -341,9 +345,16 @@ def catalog_connection(request, catalog_profile, catalog_session_connection):
 
     for table in seed_names:
         seed_table = _resolve_seed_table(table)
-        if isinstance(seed_table, IcebergTest):
+        if isinstance(seed_table, RegisteredSeedTable):
+            generator_case = _find_generator_case(seed_table.qualified_name)
+            _apply_generator_expectations(request, generator_case, seed_catalog)
+            generator_case.write_intermediates = (
+                seed_table.write_intermediates if seed_table.write_intermediates is not None else False
+            )
+            seed_table = generator_case
+            connection_key = seed_table.catalog_mapping.get(seed_catalog, seed_catalog)
+        elif isinstance(seed_table, IcebergTest):
             _apply_generator_expectations(request, seed_table, seed_catalog)
-            seed_table.write_intermediates = False
             connection_key = seed_table.catalog_mapping.get(seed_catalog, seed_catalog)
         else:
             connection_key = catalog_profile.connection_key

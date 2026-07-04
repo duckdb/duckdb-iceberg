@@ -1,6 +1,6 @@
-# name: test/sql/local/iceberg_scans/iceberg_scan.test
+# name: test/python/paired/generated_data/iceberg_scan.test
 # description: test iceberg extension
-# group: [iceberg_scans]
+# group: [generated_data]
 
 # Before we load the extension, this will fail
 statement error

@@ -8,6 +8,7 @@ from typing import Iterator, Sequence
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_TEST_CONFIG = REPO_ROOT / "test" / "configs" / "fixture.json"
+NO_INIT_TEST_CONFIG = REPO_ROOT / "test" / "configs" / "extensions_only.json"
 
 STANDARD_PREAMBLE = """
 require-env CATALOG_TEST_CONFIG_SETUP
@@ -32,6 +33,30 @@ statement ok
 set logging_level='debug'
 """
 
+NO_INIT_PREAMBLE = """
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+require core_functions
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+set timezone = 'UTC'
+
+statement ok
+set enable_logging=true
+
+statement ok
+set logging_level='debug'
+"""
+
 ALL_TESTS_SKIPPED_MARKER = "All tests were skipped"
 
 
@@ -40,15 +65,20 @@ class DuckDBUnittestRunner:
         self,
         unittest_binary: str,
         *,
-        test_config: Path | str = DEFAULT_TEST_CONFIG,
+        test_config: Path | str | None = None,
         env: dict[str, str] | None = None,
         print_stdin: bool = False,
-        preamble: str | None = STANDARD_PREAMBLE,
+        preamble: str | None = None,
+        initialize: bool = True,
     ) -> None:
         self.unittest_binary = unittest_binary
+        if test_config is None:
+            test_config = DEFAULT_TEST_CONFIG if initialize else NO_INIT_TEST_CONFIG
         self.test_config = Path(test_config)
         self.env = env
         self.print_stdin = print_stdin
+        if preamble is None:
+            preamble = STANDARD_PREAMBLE if initialize else NO_INIT_PREAMBLE
         self.preamble = preamble
         self.process: subprocess.Popen[str] | None = None
         self.stdin_log: list[str] = []

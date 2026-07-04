@@ -1,5 +1,5 @@
-# name: test/sql/local/iceberg_scans/test_read_empty_insert.test
-# group: [iceberg_scans]
+# name: test/python/paired/generated_data/test_read_empty_insert.test
+# group: [generated_data]
 
 require-env DUCKDB_ICEBERG_HAVE_GENERATED_DATA
 

@@ -30,7 +30,7 @@ statement ok
 create schema intermediates.default;
 
 statement ok
-create view intermediates.default.pyspark_iceberg_table_v1 as select * from PARQUET_SCAN('{WORKING_DIRECTORY}/data/generated/intermediates/spark-local/pyspark_iceberg_table_v1/last/data.parquet/*.parquet');
+create view intermediates.default.pyspark_iceberg_table_v1 as select * from PARQUET_SCAN('{WORKING_DIRECTORY}/data/generated/intermediates/spark-local/default/pyspark_iceberg_table_v1/last/data.parquet/*.parquet');
 
 # Check count matches
 query I nosort count_iceberg_scan

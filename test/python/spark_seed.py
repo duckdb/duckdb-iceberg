@@ -4,6 +4,12 @@ from scripts.data_generators.tests.base import cleanup_generated_table, sql_stat
 
 
 @dataclass(frozen=True)
+class RegisteredSeedTable:
+    qualified_name: str
+    write_intermediates: bool | None = None
+
+
+@dataclass(frozen=True)
 class SparkSeedTable:
     qualified_name: str
     sql: str

@@ -1,5 +1,5 @@
-# name: test/sql/local/iceberg_scans/filtering_on_partition_bounds.test
-# group: [iceberg_scans]
+# name: test/python/paired/generated_data/filtering_on_partition_bounds.test
+# group: [generated_data]
 
 require-env DUCKDB_ICEBERG_HAVE_GENERATED_DATA
 

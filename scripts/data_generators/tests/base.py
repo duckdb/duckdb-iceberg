@@ -71,6 +71,8 @@ class IcebergTest:
         self.setup(con)
 
         intermediate_dir = INTERMEDIATE_DIR / con.name / Path(*self.namespace) / self.table
+        if self.write_intermediates:
+            shutil.rmtree(intermediate_dir, ignore_errors=True)
         last_file = None
         for path in self.files:
             full_file_path = self.test_dir / path
