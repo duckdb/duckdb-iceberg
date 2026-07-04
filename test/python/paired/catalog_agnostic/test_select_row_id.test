@@ -1,4 +1,4 @@
-# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/test_select_row_id.test
+# name: test/python/paired/catalog_agnostic/test_select_row_id.test
 # description: test integration with iceberg catalog read
 # group: [catalog_agnostic]
 
