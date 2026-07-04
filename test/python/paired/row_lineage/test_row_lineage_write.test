@@ -1,6 +1,6 @@
-# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/test_row_lineage_write.test
+# name: test/python/paired/row_lineage/test_row_lineage_write.test
 # description: test integration with iceberg catalog read
-# group: [catalog_agnostic]
+# group: [row_lineage]
 
 require-env CATALOG_TEST_CONFIG_SETUP
 

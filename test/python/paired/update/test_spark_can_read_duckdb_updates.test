@@ -1,4 +1,4 @@
-# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/update/test_spark_can_read_duckdb_updates.test
+# name: test/python/paired/update/test_spark_can_read_duckdb_updates.test
 # description: Test iceberg deletes
 # group: [update]
 

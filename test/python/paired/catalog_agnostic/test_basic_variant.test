@@ -1,4 +1,4 @@
-# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/test_basic_variant.test
+# name: test/python/paired/catalog_agnostic/test_basic_variant.test
 # description: test variant reading capabilities
 # group: [catalog_agnostic]
 

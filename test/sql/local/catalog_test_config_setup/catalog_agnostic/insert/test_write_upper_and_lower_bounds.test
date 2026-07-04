@@ -107,6 +107,3 @@ select unnest(map_keys(null_value_counts)), unnest(map_values(null_value_counts)
 # FIXME :
 # bool values need to be fixed (field id 4)
 # BLOB/BIT does not match spark because they max out blob upper/lower bounds at 4 bytes.
-
-
-

@@ -9,56 +9,6 @@ pa = pytest.importorskip("pyarrow")
 
 
 class TestPyIcebergRead:
-    def test_pyiceberg_read(self, rest_catalog):
-        table = rest_catalog.load_table("default.duckdb_deletes_for_other_engines")
-        arrow_table: pa.Table = table.scan().to_arrow()
-        res = arrow_table.to_pylist()
-        assert len(res) == 10
-        assert res == [
-            {'a': 1},
-            {'a': 3},
-            {'a': 5},
-            {'a': 7},
-            {'a': 9},
-            {'a': 51},
-            {'a': 53},
-            {'a': 55},
-            {'a': 57},
-            {'a': 59},
-        ]
-
-
-class TestPyIcebergRead:
-    def test_pyiceberg_read(self, rest_catalog):
-        table = rest_catalog.load_table("default.duckdb_updates_for_other_engines")
-        arrow_table: pa.Table = table.scan().to_arrow()
-        res = arrow_table.to_pylist()
-        assert len(res) == 20
-        assert res == [
-            {'a': 1},
-            {'a': 3},
-            {'a': 5},
-            {'a': 7},
-            {'a': 9},
-            {'a': 51},
-            {'a': 53},
-            {'a': 55},
-            {'a': 57},
-            {'a': 59},
-            {'a': 100},
-            {'a': 100},
-            {'a': 100},
-            {'a': 100},
-            {'a': 100},
-            {'a': 100},
-            {'a': 100},
-            {'a': 100},
-            {'a': 100},
-            {'a': 100},
-        ]
-
-
-class TestPyIcebergRead:
     def test_pyiceberg_read_duckdb_upper_lower_bounds(self, rest_catalog):
         tbl = rest_catalog.load_table("default.lower_upper_bounds_test")
         arrow_table: pa.Table = tbl.scan().to_arrow()
@@ -101,32 +51,6 @@ class TestPyIcebergRead:
                 'timestamp_type': None,
                 'binary_type': None,
             },
-        ]
-
-
-class TestPyIcebergRead:
-    def test_pyiceberg_read_duckdb_infinities(self, rest_catalog):
-        tbl = rest_catalog.load_table("default.test_infinities")
-        arrow_table: pa.Table = tbl.scan().to_arrow()
-        res = arrow_table.to_pylist()
-        assert len(res) == 2
-        assert res == [{'float_type': inf, 'double_type': inf}, {'float_type': -inf, 'double_type': -inf}]
-
-
-class TestPyIcebergReadDuckDBNestedTypes:
-    def test_pyiceberg_read_duckdb_nested_types(self, rest_catalog):
-        tbl = rest_catalog.load_table("default.duckdb_nested_types")
-        arrow_table: pa.Table = tbl.scan().to_arrow()
-        res = arrow_table.to_pylist()
-        assert len(res) == 1
-        assert res == [
-            {
-                'id': 1,
-                'name': 'Alice',
-                'address': {'street': '123 Main St', 'city': 'Metropolis', 'zip': '12345'},
-                'phone_numbers': ['123-456-7890', '987-654-3210'],
-                'metadata': [('age', '30'), ('membership', 'gold')],
-            }
         ]
 
 
