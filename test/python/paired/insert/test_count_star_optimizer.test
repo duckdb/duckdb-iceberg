@@ -1,4 +1,4 @@
-# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/insert/count_star_optimizer.test
+# name: test/python/paired/insert/test_count_star_optimizer.test
 # description: Test count star optimizer in an iceberg scan
 # group: [insert]
 
