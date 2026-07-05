@@ -1,4 +1,4 @@
-# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/transactions/test_commit_retry_concurrent.test
+# name: test/python/paired/catalog/lakekeeper/transactions/test_commit_retry_concurrent.test
 # description: Commit retry end-to-end: many connections insert into the same table; losers get a 409, refresh, and retry until all land
 # group: [transactions]
 
@@ -15,8 +15,6 @@ require-env CATALOG_TEST_CONFIG_SETUP
 # 200 to commits that should conflict, silently dropping them, which no client retry can recover. We
 # therefore gate this on the Lakekeeper (Postgres-backed) CI job, where concurrent commits behave like
 # a production catalog (also verified manually against AWS S3 Tables). Skips cleanly elsewhere.
-require-env LAKEKEEPER_SERVER_AVAILABLE
-
 require avro
 
 require parquet

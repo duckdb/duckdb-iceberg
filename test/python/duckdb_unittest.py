@@ -66,15 +66,17 @@ class DuckDBUnittestRunner:
         unittest_binary: str,
         *,
         test_config: Path | str | None = None,
+        use_test_config: bool = True,
         env: dict[str, str] | None = None,
         print_stdin: bool = False,
         preamble: str | None = None,
         initialize: bool = True,
     ) -> None:
         self.unittest_binary = unittest_binary
-        if test_config is None:
+        self.use_test_config = use_test_config
+        if self.use_test_config and test_config is None:
             test_config = DEFAULT_TEST_CONFIG if initialize else NO_INIT_TEST_CONFIG
-        self.test_config = Path(test_config)
+        self.test_config = Path(test_config) if test_config is not None else None
         self.env = env
         self.print_stdin = print_stdin
         if preamble is None:
@@ -85,13 +87,14 @@ class DuckDBUnittestRunner:
         self._final_result: tuple[str, str, int] | None = None
 
     def __enter__(self):
+        command = [self.unittest_binary, "--stdin"]
+        if self.use_test_config:
+            if self.test_config is None:
+                raise RuntimeError("DuckDBUnittestRunner requires a test_config when use_test_config=True")
+            command.extend(["--test-config", str(self.test_config)])
+
         self.process = subprocess.Popen(
-            [
-                self.unittest_binary,
-                "--stdin",
-                "--test-config",
-                str(self.test_config),
-            ],
+            command,
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,

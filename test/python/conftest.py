@@ -99,6 +99,24 @@ def _collect_requirement_failures(item, catalog_profile, spark_runtime) -> list[
     return failures
 
 
+def _collect_catalog_failures(item, catalog_profile) -> list[str]:
+    failures = []
+    for marker in item.iter_markers(name="requires_catalog"):
+        required_catalogs = marker.args
+        if not required_catalogs:
+            raise pytest.UsageError(f"{item.nodeid} uses requires_catalog without any catalog names")
+        non_strings = [catalog for catalog in required_catalogs if not isinstance(catalog, str)]
+        if non_strings:
+            raise pytest.UsageError(
+                f"{item.nodeid} uses requires_catalog with non-string catalog names: {non_strings!r}"
+            )
+        if catalog_profile.name not in required_catalogs:
+            failures.append(
+                f"Catalog '{catalog_profile.name}' is not in required catalogs: {', '.join(required_catalogs)}"
+            )
+    return failures
+
+
 def capability_param(value, *requirements: str, id: str | None = None):
     marks = ()
     if requirements:
@@ -126,6 +144,10 @@ def pytest_configure(config):
         "markers",
         "generator_catalog(name): override the data-generator catalog used by spark_seed_tables "
         "(e.g. 'local' for local-generator-backed paired tests)",
+    )
+    config.addinivalue_line(
+        "markers",
+        "requires_catalog(*catalog_names): require the active catalog to match one of the given names",
     )
 
 
@@ -424,6 +446,10 @@ def pytest_collection_modifyitems(config, items):
 
         if needs_catalog_options and _requires_catalog_options(str(item.fspath)):
             seed_catalog = _seed_generator_catalog(item, config._catalog_profile.name)
+            catalog_failures = _collect_catalog_failures(item, config._catalog_profile)
+            if catalog_failures:
+                item.add_marker(pytest.mark.skip(reason="Catalog requirements not met: " + "; ".join(catalog_failures)))
+                continue
             if seed_catalog == "local" and config._catalog_profile.name != "fixture":
                 item.add_marker(
                     pytest.mark.skip(reason="Local-generator paired tests only run in the fixture test/python matrix")
