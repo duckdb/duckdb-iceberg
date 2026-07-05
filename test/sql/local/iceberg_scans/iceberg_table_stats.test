@@ -1,0 +1,42 @@
+# name: test/sql/local/iceberg_scans/iceberg_table_stats.test
+# description: test iceberg table statistics function
+# group: [iceberg_scans]
+
+statement error
+SELECT * FROM ICEBERG_TABLE_STATS('{WORKING_DIRECTORY}/data/persistent/table_statistics') order by all;
+----
+Error
+
+require avro
+
+require parquet
+
+require iceberg
+
+query III
+SELECT statistics_snapshot_id, blob_snapshot_id, ndv
+FROM ICEBERG_TABLE_STATS('{WORKING_DIRECTORY}/data/persistent/table_statistics')
+ORDER BY ALL;
+----
+1001	1001	42
+1002	1002	7
+
+query TTT
+SELECT field_ids, field_names, properties['ndv']
+FROM ICEBERG_TABLE_STATS('{WORKING_DIRECTORY}/data/persistent/table_statistics')
+ORDER BY ALL;
+----
+[1]	[id]	42
+[2]	[region]	7
+
+query III
+SELECT statistics_snapshot_id, blob_snapshot_id, ndv
+FROM ICEBERG_TABLE_STATS('{WORKING_DIRECTORY}/data/persistent/table_statistics', snapshot_from_id=1001)
+ORDER BY ALL;
+----
+1001	1001	42
+
+statement error
+SELECT * FROM ICEBERG_TABLE_STATS('{WORKING_DIRECTORY}/data/persistent/table_statistics_bad_footer');
+----
+Invalid Configuration Error
