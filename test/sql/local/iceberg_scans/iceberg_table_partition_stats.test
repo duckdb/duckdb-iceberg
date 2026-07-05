@@ -1,0 +1,50 @@
+# name: test/sql/local/iceberg_scans/iceberg_table_partition_stats.test
+# description: test iceberg table partition statistics function
+# group: [iceberg_scans]
+
+statement error
+SELECT * FROM ICEBERG_TABLE_PARTITION_STATS('{WORKING_DIRECTORY}/data/persistent/table_partition_statistics') ORDER BY ALL;
+----
+Error
+
+require avro
+
+require parquet
+
+require iceberg
+
+query TIIII
+SELECT partition.region, statistics_snapshot_id, spec_id, data_record_count, total_record_count
+FROM ICEBERG_TABLE_PARTITION_STATS('{WORKING_DIRECTORY}/data/persistent/table_partition_statistics')
+ORDER BY ALL;
+----
+apac	1002	1	7	NULL
+eu	1001	1	10	12
+latam	1002	1	3	NULL
+us	1001	1	20	21
+
+query TIIII
+SELECT partition.region, statistics_snapshot_id, position_delete_record_count, position_delete_file_count, dv_count
+FROM ICEBERG_TABLE_PARTITION_STATS('{WORKING_DIRECTORY}/data/persistent/table_partition_statistics')
+ORDER BY ALL;
+----
+apac	1002	NULL	NULL	NULL
+eu	1001	2	1	0
+latam	1002	NULL	NULL	NULL
+us	1001	0	0	1
+
+query TII
+SELECT partition.region, statistics_snapshot_id, data_record_count
+FROM ICEBERG_TABLE_PARTITION_STATS(
+    '{WORKING_DIRECTORY}/data/persistent/table_partition_statistics',
+    snapshot_from_id=1001
+)
+ORDER BY ALL;
+----
+eu	1001	10
+us	1001	20
+
+statement error
+SELECT * FROM ICEBERG_TABLE_PARTITION_STATS('{WORKING_DIRECTORY}/data/persistent/table_partition_statistics_bad_size');
+----
+Invalid Configuration Error

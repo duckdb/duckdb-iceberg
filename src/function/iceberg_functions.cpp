@@ -16,6 +16,7 @@ vector<TableFunctionSet> IcebergFunctions::GetTableFunctions(ExtensionLoader &lo
 	functions.push_back(GetIcebergMetadataFunction());
 	functions.push_back(GetIcebergColumnStatsFunction());
 	functions.push_back(GetIcebergPartitionStatsFunction());
+	functions.push_back(GetIcebergTablePartitionStatsFunction());
 	functions.push_back(GetIcebergTableStatsFunction());
 	functions.push_back(GetIcebergTablePropertiesFunctions());
 	functions.push_back(SetIcebergTablePropertiesFunctions());

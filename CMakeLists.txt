@@ -92,6 +92,7 @@ set(EXTENSION_SOURCES
 	src/function/metadata/iceberg_load_table_response.cpp
 	src/function/metadata/iceberg_metadata.cpp
 	src/function/metadata/iceberg_partition_stats.cpp
+	src/function/metadata/iceberg_table_partition_stats.cpp
 	src/function/metadata/iceberg_snapshots.cpp
 	src/function/metadata/iceberg_table_stats.cpp
 	src/function/metadata/iceberg_table_properties_functions.cpp
