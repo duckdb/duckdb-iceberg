@@ -1,0 +1,150 @@
+# name: test/python/paired/local/iceberg_scan_generated_data_0_001.test
+# description: test iceberg extension with the sf0.001 generated test set
+# group: [local]
+
+statement ok
+SET profiling_renderer_settings = MAP {'operator_casing': 'upper'};
+
+require avro
+
+require parquet
+
+require iceberg
+
+
+# Define the iceberg table
+
+statement ok
+attach ':memory:' as my_datalake;
+
+statement ok
+create schema my_datalake.default;
+
+statement ok
+create view my_datalake.default.pyspark_iceberg_table_v1 as select * from ICEBERG_SCAN('{WORKING_DIRECTORY}/data/generated/iceberg/spark-local/default/pyspark_iceberg_table_v1');
+
+statement ok
+create view my_datalake.default.pyspark_iceberg_table_v2 as select * from ICEBERG_SCAN('{WORKING_DIRECTORY}/data/generated/iceberg/spark-local/default/pyspark_iceberg_table_v2');
+
+# Define the intermediates table
+
+statement ok
+attach ':memory:' as intermediates;
+
+statement ok
+create schema intermediates.default;
+
+statement ok
+create view intermediates.default.pyspark_iceberg_table_v1 as select * from PARQUET_SCAN('{WORKING_DIRECTORY}/data/generated/intermediates/spark-local/default/pyspark_iceberg_table_v1/last/data.parquet/*.parquet');
+
+statement ok
+create view intermediates.default.pyspark_iceberg_table_v2 as select * from PARQUET_SCAN('{WORKING_DIRECTORY}/data/generated/intermediates/spark-local/default/pyspark_iceberg_table_v2/last/data.parquet/*.parquet');
+
+### Iceberg spec v1
+
+# Check count matches the same as last file
+query I nosort table_v1_count
+SELECT count(*) FROM my_datalake.default.pyspark_iceberg_table_v1;
+----
+
+query I nosort table_v1_count
+SELECT count(*) FROM intermediates.default.pyspark_iceberg_table_v1;
+----
+
+
+# Check schema is identical, sorting by uuid to guarantee unique order
+query I nosort q1-schema
+DESCRIBE SELECT * FROM my_datalake.default.pyspark_iceberg_table_v1 ORDER BY uuid;
+----
+
+query I nosort q1-schema
+DESCRIBE SELECT * FROM iceberg_scan(my_datalake.default.pyspark_iceberg_table_v1, version=10) ORDER BY uuid;
+----
+
+query I nosort q1-schema
+DESCRIBE SELECT * FROM intermediates.default.pyspark_iceberg_table_v1 ORDER BY uuid;
+----
+
+# Check data is identical, sorting by uuid to guarantee unique order
+query I nosort q1-data
+SELECT * FROM my_datalake.default.pyspark_iceberg_table_v1 ORDER BY uuid;
+----
+
+query I nosort q1-data
+SELECT * FROM iceberg_scan(my_datalake.default.pyspark_iceberg_table_v1, version=10) ORDER BY uuid;
+----
+
+query I nosort q1-data
+SELECT * FROM intermediates.default.pyspark_iceberg_table_v1 ORDER BY uuid;
+----
+
+# Confirm the type matches that of the iceberg schema
+query IIIIII
+DESCRIBE SELECT schema_evol_added_col_1 FROM my_datalake.default.pyspark_iceberg_table_v1 ORDER BY uuid;
+----
+schema_evol_added_col_1	BIGINT	YES	NULL	NULL	NULL
+
+### Iceberg spec v2
+
+# Check count matches
+query I nosort count_match_r1
+SELECT count(*) FROM my_datalake.default.pyspark_iceberg_table_v2;
+----
+
+# We should also be able to scan the metadata file directly
+query I nosort count_match_r1
+SELECT count(*) FROM iceberg_scan(my_datalake.default.pyspark_iceberg_table_v2, version=10);
+----
+
+# Check schema is identical, sorting by uuid to guarantee unique order
+query I nosort q2-schema
+DESCRIBE SELECT * FROM my_datalake.default.pyspark_iceberg_table_v2 ORDER BY uuid;
+----
+
+query I nosort q2-schema
+DESCRIBE SELECT * FROM iceberg_scan(my_datalake.default.pyspark_iceberg_table_v2, version=10) ORDER BY uuid;
+----
+
+query I nosort q2-schema
+DESCRIBE SELECT * FROM intermediates.default.pyspark_iceberg_table_v2 ORDER BY uuid;
+----
+
+# Check data is identical, sorting by uuid to guarantee unique order
+query I nosort q2-data
+SELECT * FROM my_datalake.default.pyspark_iceberg_table_v2 ORDER BY uuid;
+----
+
+# Check data is identical, sorting by uuid to guarantee unique order
+query I nosort q2-data
+SELECT * FROM iceberg_scan(my_datalake.default.pyspark_iceberg_table_v2, version=10) ORDER BY uuid;
+----
+
+query I nosort q2-data
+SELECT * FROM intermediates.default.pyspark_iceberg_table_v2 ORDER BY uuid;
+----
+
+### Test schema evolution
+
+# Latest metadata version has correct type
+query IIIIII
+DESCRIBE SELECT schema_evol_added_col_1 FROM iceberg_scan(my_datalake.default.pyspark_iceberg_table_v2, version=10) ORDER BY uuid;
+----
+schema_evol_added_col_1	BIGINT	YES	NULL	NULL	NULL
+
+# One before has the old type
+query IIIIII
+DESCRIBE SELECT schema_evol_added_col_1 FROM iceberg_scan(my_datalake.default.pyspark_iceberg_table_v2, version=8) ORDER BY uuid;
+----
+schema_evol_added_col_1	INTEGER	YES	NULL	NULL	NULL
+
+# Even older: it did not exist yet
+statement error
+DESCRIBE SELECT schema_evol_added_col_1 FROM iceberg_scan(my_datalake.default.pyspark_iceberg_table_v2, version=6) ORDER BY uuid;
+----
+Binder Error
+
+# Check that there are injected cardinality
+query II
+EXPLAIN SELECT count(*) FROM my_datalake.default.pyspark_iceberg_table_v2;
+----
+physical_plan	<REGEX>:.*ICEBERG_SCAN.*rows.*

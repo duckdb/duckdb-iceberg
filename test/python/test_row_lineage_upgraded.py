@@ -201,7 +201,7 @@ class TestRowLineageUnittestStdin:
                 [(True,)],
             )
 
-        catalog_connection.restart()
+        catalog_connection.refresh_table(QUALIFIED_TABLE_NAME)
         df = catalog_connection.con.sql(
             f"""
             select _last_updated_sequence_number, _row_id IS NOT NULL as has_row_id, *

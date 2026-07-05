@@ -1,0 +1,87 @@
+# name: test/python/paired/local/filtering_on_bounds.test
+# group: [local]
+
+require avro
+
+require parquet
+
+require iceberg
+
+statement ok
+attach ':memory:' as my_datalake;
+
+statement ok
+create schema my_datalake.default;
+
+statement ok
+create view my_datalake.default.filtering_on_bounds as select * from ICEBERG_SCAN('{WORKING_DIRECTORY}/data/generated/iceberg/spark-local/default/filtering_on_bounds');
+
+statement ok
+CALL enable_logging('Iceberg');
+
+# 5 snapshots that each add 1000 rows (incremental)
+query I
+select count(*) from my_datalake.default.filtering_on_bounds;
+----
+5000
+
+statement ok
+CALL truncate_duckdb_logs();
+
+query I
+select count(*) from my_datalake.default.filtering_on_bounds where col1 > 500;
+----
+4499
+
+# Using the logs (which contains the data_file path), join it against the iceberg metadata to sum the record_counts of the skipped data files
+query I
+SELECT SUM(meta.record_count) AS total_record_count
+FROM (
+	SELECT message.split(': ')[2].split('''')[2] AS msg
+	FROM duckdb_logs() where type = 'Iceberg'
+) logs
+JOIN ICEBERG_METADATA('{WORKING_DIRECTORY}/data/generated/iceberg/spark-local/default/filtering_on_bounds') meta
+ON logs.msg = meta.file_path;
+----
+500
+
+statement ok
+CALL truncate_duckdb_logs();
+
+query I
+select count(*) from my_datalake.default.filtering_on_bounds where col1 > 1500;
+----
+3499
+
+query I
+SELECT SUM(meta.record_count) AS total_record_count
+FROM (
+	SELECT message.split(': ')[2].split('''')[2] AS msg
+	FROM duckdb_logs() where type = 'Iceberg'
+) logs
+JOIN ICEBERG_METADATA('{WORKING_DIRECTORY}/data/generated/iceberg/spark-local/default/filtering_on_bounds') meta
+ON logs.msg = meta.file_path;
+----
+1500
+
+statement ok
+CALL truncate_duckdb_logs();
+
+query I
+select count(*) from my_datalake.default.filtering_on_bounds where col1 >= 2300 and col1 < 3500;
+----
+1200
+
+query I
+WITH result as (
+	SELECT SUM(meta.record_count) AS total_record_count
+	FROM (
+		SELECT message.split(': ')[2].split('''')[2] AS msg
+		FROM duckdb_logs() where type = 'Iceberg'
+	) logs
+	JOIN ICEBERG_METADATA('{WORKING_DIRECTORY}/data/generated/iceberg/spark-local/default/filtering_on_bounds') meta
+	ON logs.msg = meta.file_path
+)
+select total_record_count >= 3500 AND total_record_count <= 3800 from result
+----
+true

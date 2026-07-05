@@ -1,0 +1,39 @@
+# name: test/python/paired/catalog/test_column_doc_comment.test
+# description: Iceberg schema field 'doc' is surfaced as a DuckDB column comment
+# group: [catalog]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+set enable_logging=true
+
+statement ok
+set logging_level='debug'
+
+# Resolve the table so its full schema is loaded. Until a table is resolved the
+# catalog only exposes a lazy placeholder column (see #515), so column comments
+# are not available in a bare listing.
+statement ok
+describe my_datalake.default.column_doc_comment;
+
+# The Iceberg field 'doc' is mapped to the DuckDB column comment. Fields without
+# a 'doc' (e.g. 'name') have a NULL comment.
+query II
+select column_name, comment from duckdb_columns()
+where database_name = 'my_datalake' and table_name = 'column_doc_comment'
+order by column_index;
+----
+id	Primary identifier
+population	Resident count, 2024 census
+name	NULL

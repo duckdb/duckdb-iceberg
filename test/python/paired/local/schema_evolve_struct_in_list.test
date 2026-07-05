@@ -1,0 +1,19 @@
+# name: test/python/paired/local/schema_evolve_struct_in_list.test
+# group: [local]
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+
+query I
+select * from ICEBERG_SCAN('{WORKING_DIRECTORY}/data/generated/iceberg/spark-local/default/schema_evolve_struct_in_list') order by all;
+----
+[{'given_name': Alice, 'age': 43}, {'given_name': Bob, 'age': 35}]
+[{'given_name': Ancient Being, 'age': 9223372036854775807}, {'given_name': Bobby Droptables, 'age': 2147483649}]
+[{'given_name': Duck, 'age': 5}]
+[{'given_name': Hello, 'age': 9223372036854775807}]

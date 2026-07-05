@@ -446,7 +446,7 @@ class TestPartitionedInsertsEndToEnd:
                 )
             test.query("I", f"SELECT count(*) FROM {case.catalog_table_name} WHERE {case.column_name} IS NULL", [(2,)])
 
-        catalog_connection.restart()
+        catalog_connection.refresh_table(case.qualified_table_name)
         total_rows = catalog_connection.con.sql(f"SELECT * FROM {case.qualified_table_name} ORDER BY id").collect()
         assert total_rows == case.spark_expected_rows
 

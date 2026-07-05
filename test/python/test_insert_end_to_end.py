@@ -232,7 +232,7 @@ class TestInsertEndToEnd:
                 [("DATA",)],
             )
 
-        catalog_connection.restart()
+        catalog_connection.refresh_tables("default.insert_test", "default.insert_all_types")
 
         spark_insert_rows = catalog_connection.con.sql(
             "SELECT * FROM default.insert_test ORDER BY col1, col2, col3"

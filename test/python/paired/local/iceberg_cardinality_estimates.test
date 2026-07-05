@@ -1,0 +1,71 @@
+# name: test/python/paired/local/iceberg_cardinality_estimates.test
+# description: test iceberg snapshots function
+# group: [local]
+
+statement ok
+SET profiling_renderer_settings = MAP {'operator_casing': 'upper'};
+
+require avro
+
+require parquet
+
+require iceberg
+
+
+statement ok
+attach ':memory:' as my_datalake;
+
+statement ok
+create schema my_datalake.default;
+
+statement ok
+create view my_datalake.default.lineitem_001_deletes as select * from ICEBERG_SCAN('{WORKING_DIRECTORY}/data/generated/iceberg/spark-local/default/lineitem_001_deletes');
+
+
+# only 2 data files
+query I
+select count(*) from ICEBERG_METADATA('{WORKING_DIRECTORY}/data/generated/iceberg/spark-local/default/lineitem_001_deletes') where manifest_content = 'DATA';
+----
+2
+
+# only 1 delete files
+query I
+select count(*) from ICEBERG_METADATA('{WORKING_DIRECTORY}/data/generated/iceberg/spark-local/default/lineitem_001_deletes') where manifest_content = 'DELETE';
+----
+1
+
+query II
+explain select * from my_datalake.default.lineitem_001_deletes;
+----
+physical_plan	<REGEX>:.*~60,175.*
+
+
+# check we estimated it correctlry
+query I
+select count(*) from my_datalake.default.lineitem_001_deletes;
+----
+60175
+
+
+query I
+select count(*) from ICEBERG_METADATA('{WORKING_DIRECTORY}/data/generated/iceberg/spark-local/default/many_adds_deletes') where manifest_content = 'DATA';
+----
+8
+
+# only 4 delete files
+query I
+select count(*) from ICEBERG_METADATA('{WORKING_DIRECTORY}/data/generated/iceberg/spark-local/default/many_adds_deletes') where manifest_content = 'DELETE';
+----
+4
+
+query II
+explain select count(*) from ICEBERG_SCAN('{WORKING_DIRECTORY}/data/generated/iceberg/spark-local/default/many_adds_deletes');
+----
+physical_plan	<REGEX>:.*~40,000.*
+
+
+query I
+select count(*) from ICEBERG_SCAN('{WORKING_DIRECTORY}/data/generated/iceberg/spark-local/default/many_adds_deletes');
+----
+40000
+

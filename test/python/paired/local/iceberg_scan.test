@@ -1,0 +1,88 @@
+# name: test/python/paired/local/iceberg_scan.test
+# description: test iceberg extension
+# group: [local]
+
+# Before we load the extension, this will fail
+statement error
+SELECT * FROM ICEBERG_SCAN('{WORKING_DIRECTORY}/data/iceberg/lineitem_iceberg');
+----
+Error
+
+require avro
+
+require parquet
+
+require iceberg
+
+
+# Define the iceberg table
+
+statement ok
+attach ':memory:' as my_datalake;
+
+statement ok
+create schema my_datalake.default;
+
+statement ok
+create view my_datalake.default.pyspark_iceberg_table_v1 as select * from ICEBERG_SCAN('{WORKING_DIRECTORY}/data/generated/iceberg/spark-local/default/pyspark_iceberg_table_v1');
+
+
+query I
+SELECT typeof(l_orderkey_bool) FROM my_datalake.default.pyspark_iceberg_table_v1 LIMIT 1;
+----
+BOOLEAN
+
+query I
+SELECT typeof(l_partkey_int) FROM my_datalake.default.pyspark_iceberg_table_v1 LIMIT 1;
+----
+INTEGER
+
+query I
+SELECT typeof(l_suppkey_long) FROM my_datalake.default.pyspark_iceberg_table_v1 LIMIT 1;
+----
+BIGINT
+
+query I
+SELECT typeof(l_extendedprice_float) FROM my_datalake.default.pyspark_iceberg_table_v1 LIMIT 1;
+----
+FLOAT
+
+query I
+SELECT typeof(l_extendedprice_double) FROM my_datalake.default.pyspark_iceberg_table_v1 LIMIT 1;
+----
+DOUBLE
+
+query I
+SELECT typeof(l_extendedprice_dec9_2) FROM my_datalake.default.pyspark_iceberg_table_v1 LIMIT 1;
+----
+DECIMAL(9,2)
+
+query I
+SELECT typeof(l_shipdate_date) FROM my_datalake.default.pyspark_iceberg_table_v1 LIMIT 1;
+----
+DATE
+
+# query I
+# SELECT typeof(l_partkey_time) FROM my_datalake.default.pyspark_iceberg_table_v1 LIMIT 1;
+# ----
+# INTEGER
+
+query I
+SELECT typeof(l_commitdate_timestamp) FROM my_datalake.default.pyspark_iceberg_table_v1 LIMIT 1;
+----
+TIMESTAMP
+
+query I
+SELECT typeof(l_commitdate_timestamp_tz) FROM my_datalake.default.pyspark_iceberg_table_v1 LIMIT 1;
+----
+TIMESTAMP WITH TIME ZONE
+
+query I
+SELECT typeof(l_comment_string) FROM my_datalake.default.pyspark_iceberg_table_v1 LIMIT 1;
+----
+VARCHAR
+
+query I
+SELECT typeof(l_comment_blob) FROM my_datalake.default.pyspark_iceberg_table_v1 LIMIT 1;
+----
+BLOB

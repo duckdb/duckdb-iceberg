@@ -1,0 +1,35 @@
+# name: test/python/paired/local/schema_evolve_int_to_bigint.test
+# group: [local]
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+
+query I
+select * from ICEBERG_SCAN('{WORKING_DIRECTORY}/data/generated/iceberg/spark-local/default/schema_evolve_int_to_bigint') order by all;
+----
+-9223372036854775808
+-2147483648
+-1
+-1
+0
+0
+1
+1
+2147483647
+9223372036854775807
+
+query I
+select col from ICEBERG_SCAN('{WORKING_DIRECTORY}/data/generated/iceberg/spark-local/default/schema_evolve_int_to_bigint') WHERE col < 1 ORDER BY ALL;
+----
+-9223372036854775808
+-2147483648
+-1
+-1
+0
+0

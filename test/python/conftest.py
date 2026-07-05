@@ -326,6 +326,18 @@ class _CatalogConnectionProxy:
     def con(self):
         return self.default_connection.con
 
+    def _refresh_table_name(self, table_name: str) -> str:
+        if table_name.count(".") >= 2:
+            return table_name
+        return f"{self.default_connection.catalog}.{table_name}"
+
+    def refresh_table(self, table_name: str) -> None:
+        self.default_connection.con.catalog.refreshTable(self._refresh_table_name(table_name))
+
+    def refresh_tables(self, *table_names: str) -> None:
+        for table_name in table_names:
+            self.refresh_table(table_name)
+
     def restart(self):
         return self.default_connection.restart()
 
