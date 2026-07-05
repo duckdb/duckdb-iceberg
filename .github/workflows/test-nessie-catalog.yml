@@ -104,7 +104,7 @@ jobs:
 
       - name: Generate data
         run: |
-          make nessie-data-only
+          make nessie
 
       - name: Run Generic IRC tests
         env:

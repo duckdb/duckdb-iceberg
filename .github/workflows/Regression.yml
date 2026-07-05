@@ -118,7 +118,7 @@ jobs:
 
       - name: Setup fixture
         run: |
-          make fixture-data TEST=tpch
+          make fixture
 
       - name: Run mitmproxy
         shell: bash
