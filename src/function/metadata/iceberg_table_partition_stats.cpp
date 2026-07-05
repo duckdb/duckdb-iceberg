@@ -179,6 +179,9 @@ void IcebergTablePartitionStatsLocalState::InitializeNestedScan(ExecutionContext
                                                                 const IcebergTablePartitionStatsBindData &bind_data) {
 	vector<LogicalType> return_types;
 	vector<string> return_names;
+	if (bind_data.paths.empty()) {
+		return;
+	}
 	nested_bind_data = BindParquetScan(context.client, bind_data, return_types, return_names);
 
 	vector<column_t> column_ids;
@@ -258,7 +261,7 @@ static unique_ptr<FunctionData> IcebergTablePartitionStatsBind(ClientContext &co
 		}
 	}
 
-	LogicalType partition_type = LogicalType::STRUCT({});
+	LogicalType partition_type = LogicalType::SQLNULL;
 	if (!bind_data->paths.empty()) {
 		vector<LogicalType> nested_return_types;
 		vector<string> nested_return_names;
