@@ -1,4 +1,4 @@
-# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/reads/filtering/should_not_do_filter_pruning_on_expression_string_filters.test
+# name: test/python/paired/catalog/reads/filtering/should_not_do_filter_pruning_on_expression_string_filters.test
 # group: [filtering]
 
 require avro

@@ -1,6 +1,6 @@
-# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/irc_nested_types.test
+# name: test/python/paired/catalog/test_irc_nested_types.test
 # description: test integration with iceberg catalog read
-# group: [catalog_agnostic]
+# group: [catalog]
 
 require-env CATALOG_TEST_CONFIG_SETUP
 

@@ -71,7 +71,6 @@ jobs:
       - name: Build (relassert → ASan + UBSan + LSan)
         uses: duckdb/duckdb-ci/build-duckdb@main
         env:
-          CATALOG_TEST_CONFIG_SETUP: 1
           STATIC_LIBCPP: 1
           # Add debug symbol names.
           # Reduce the binary size and dynamically link extensions.

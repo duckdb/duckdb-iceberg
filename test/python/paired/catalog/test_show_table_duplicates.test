@@ -1,6 +1,6 @@
-# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/test_show_table_duplicates.test
+# name: test/python/paired/catalog/test_show_table_duplicates.test
 # description: test integration with iceberg catalog read
-# group: [catalog_agnostic]
+# group: [catalog]
 
 require-env CATALOG_TEST_CONFIG_SETUP
 
