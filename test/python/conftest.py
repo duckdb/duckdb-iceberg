@@ -298,6 +298,10 @@ def _catalog_connection_manager(catalog_profile, spark_runtime):
     manager["switch_to"] = switch_to
     yield manager
 
+    active_connection = manager["active_connection"]
+    if active_connection is not None:
+        active_connection.close()
+
 
 class _CatalogConnectionProxy:
     def __init__(self, manager, default_connection_key: str):
@@ -315,20 +319,18 @@ class _CatalogConnectionProxy:
         return self._manager["active_connection"]
 
     @property
+    def default_connection(self):
+        return self.use_default_connection()
+
+    @property
     def con(self):
-        return self.active_connection.con
+        return self.default_connection.con
 
     def restart(self):
-        connection = self.active_connection
-        if connection is None:
-            connection = self.use_default_connection()
-        return connection.restart()
+        return self.default_connection.restart()
 
     def __getattr__(self, name):
-        connection = self.active_connection
-        if connection is None:
-            connection = self.use_default_connection()
-        return getattr(connection, name)
+        return getattr(self.default_connection, name)
 
 
 @pytest.fixture(scope="session")
@@ -360,8 +362,6 @@ def catalog_connection(request, catalog_profile, catalog_session_connection):
             connection_key = catalog_profile.connection_key
         seed_connection = connection.use_connection_key(connection_key)
         seed_table.generate(seed_connection)
-
-    connection.use_default_connection()
 
     yield connection
 
