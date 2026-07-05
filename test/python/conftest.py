@@ -65,6 +65,10 @@ def _is_verbose_test_python_run(config: pytest.Config) -> bool:
     return _test_python_verbosity(config) == "verbose"
 
 
+def _include_local_generator_tests(config: pytest.Config) -> bool:
+    return config.getoption("--include-local-generator-tests")
+
+
 def _requirement_failure_message(requirement: str, catalog_profile, spark_runtime) -> list[str]:
     if requirement == "format_v3":
         failures = []
@@ -144,6 +148,12 @@ def pytest_addoption(parser):
         choices=TEST_PYTHON_VERBOSITY_LEVELS,
         default="normal",
         help="Higher-level verbosity for test/python runs. 'verbose' prints selected environment and requirement skips.",
+    )
+    parser.addoption(
+        "--include-local-generator-tests",
+        action="store_true",
+        default=False,
+        help="Include paired/local test/python tests that rely on the local data-generator catalog.",
     )
 
 
@@ -404,6 +414,14 @@ def pytest_collection_modifyitems(config, items):
         config._requirement_skip_log = []
 
     for item in items:
+        if not _include_local_generator_tests(config):
+            seed_catalog = _seed_generator_catalog(item, "fixture")
+            if seed_catalog == "local":
+                item.add_marker(
+                    pytest.mark.skip(reason="Local-generator paired tests need --include-local-generator-tests")
+                )
+                continue
+
         if needs_catalog_options and _requires_catalog_options(str(item.fspath)):
             seed_catalog = _seed_generator_catalog(item, config._catalog_profile.name)
             if seed_catalog == "local" and config._catalog_profile.name != "fixture":

@@ -70,4 +70,4 @@ jobs:
 
       - name: Run local tests
         run: |
-          python3 -m pytest --unittest-binary ./build/relassert/test/unittest test/python/paired/local
+          python3 -m pytest --include-local-generator-tests --unittest-binary ./build/relassert/test/unittest test/python/paired/local
