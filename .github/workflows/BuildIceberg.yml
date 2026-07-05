@@ -146,6 +146,13 @@ jobs:
     with:
       artifact-name: duckdb-iceberg
 
+  test-local:
+    name: Test against local Catalog
+    needs: build_iceberg
+    uses: ./.github/workflows/test-local-catalog.yml
+    with:
+      artifact-name: duckdb-iceberg
+
   test-polaris:
     name: Test against Polaris Catalog
     needs: build_iceberg
