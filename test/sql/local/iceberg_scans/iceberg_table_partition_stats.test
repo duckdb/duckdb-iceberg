@@ -44,6 +44,17 @@ ORDER BY ALL;
 eu	1001	10
 us	1001	20
 
+query IIIIIIIIIIIIIIII
+SELECT *
+FROM ICEBERG_TABLE_PARTITION_STATS(
+    '{WORKING_DIRECTORY}/data/persistent/table_partition_statistics',
+    snapshot_from_id=1001
+)
+ORDER BY ALL;
+----
+1001	data/persistent/table_partition_statistics/metadata/partition-stats-1001.parquet	1933	{'region': eu}	1	10	1	1000	2	1	0	0	0	12	1700000000000	1001
+1001	data/persistent/table_partition_statistics/metadata/partition-stats-1001.parquet	1933	{'region': us}	1	20	2	2200	0	0	1	0	0	21	1700000000000	1001
+
 statement error
 SELECT * FROM ICEBERG_TABLE_PARTITION_STATS('{WORKING_DIRECTORY}/data/persistent/table_partition_statistics_bad_size');
 ----

@@ -3,8 +3,6 @@
 #include "duckdb/common/file_system.hpp"
 #include "duckdb/common/string.hpp"
 #include "duckdb/common/string_util.hpp"
-#include "duckdb/common/vector/flat_vector.hpp"
-#include "duckdb/common/vector_operations/vector_operations.hpp"
 #include "duckdb/execution/execution_context.hpp"
 #include "duckdb/main/database.hpp"
 #include "duckdb/parser/tableref/table_function_ref.hpp"
@@ -19,28 +17,34 @@ namespace duckdb {
 
 namespace {
 
-struct IcebergTablePartitionStatsFile {
+static constexpr const char *SCAN_FILENAME_COLUMN = "__partition_stats_filename";
+static constexpr const char *PARTITION_COLUMN = "partition";
+static constexpr const char *SPEC_ID_COLUMN = "spec_id";
+static constexpr const char *DATA_RECORD_COUNT_COLUMN = "data_record_count";
+static constexpr const char *DATA_FILE_COUNT_COLUMN = "data_file_count";
+static constexpr const char *TOTAL_DATA_FILE_SIZE_COLUMN = "total_data_file_size_in_bytes";
+static constexpr const char *POSITION_DELETE_RECORD_COUNT_COLUMN = "position_delete_record_count";
+static constexpr const char *POSITION_DELETE_FILE_COUNT_COLUMN = "position_delete_file_count";
+static constexpr const char *DV_COUNT_COLUMN = "dv_count";
+static constexpr const char *EQUALITY_DELETE_RECORD_COUNT_COLUMN = "equality_delete_record_count";
+static constexpr const char *EQUALITY_DELETE_FILE_COUNT_COLUMN = "equality_delete_file_count";
+static constexpr const char *TOTAL_RECORD_COUNT_COLUMN = "total_record_count";
+static constexpr const char *LAST_UPDATED_AT_COLUMN = "last_updated_at";
+static constexpr const char *LAST_UPDATED_SNAPSHOT_ID_COLUMN = "last_updated_snapshot_id";
+
+struct PartitionStatsFileMetadata {
 	int64_t snapshot_id;
 	string statistics_path;
 	int64_t file_size_in_bytes;
 };
 
-struct NestedScanState {
-	TableFunction function;
-	unique_ptr<FunctionData> bind_data;
-	unique_ptr<GlobalTableFunctionState> global_state;
-	unique_ptr<LocalTableFunctionState> local_state;
-	DataChunk chunk;
-	case_insensitive_map_t<idx_t> column_name_to_index;
-	idx_t chunk_offset = 0;
-};
-
 struct IcebergTablePartitionStatsBindData : public TableFunctionData {
-	vector<IcebergTablePartitionStatsFile> files;
-	IcebergTableMetadata metadata;
 	TableFunction parquet_scan;
-	vector<string> file_column_names;
-	vector<LogicalType> file_column_types;
+	vector<string> paths;
+	unordered_map<string, PartitionStatsFileMetadata> file_metadata;
+	case_insensitive_map_t<idx_t> nested_column_name_to_index;
+	vector<string> output_column_names;
+	vector<LogicalType> output_column_types;
 };
 
 struct IcebergTablePartitionStatsGlobalState : public GlobalTableFunctionState {
@@ -58,36 +62,24 @@ struct IcebergTablePartitionStatsGlobalState : public GlobalTableFunctionState {
 	}
 
 	const IcebergTablePartitionStatsBindData &bind_data;
-	idx_t file_index = 0;
 };
 
 struct IcebergTablePartitionStatsLocalState : public LocalTableFunctionState {
-	explicit IcebergTablePartitionStatsLocalState(ExecutionContext &execution_context)
-	    : execution_context(execution_context) {
-	}
-
 	static unique_ptr<LocalTableFunctionState> Init(ExecutionContext &context, TableFunctionInitInput &input,
 	                                                GlobalTableFunctionState *global_state) {
-		return make_uniq<IcebergTablePartitionStatsLocalState>(context);
+		auto &bind_data = input.bind_data->Cast<IcebergTablePartitionStatsBindData>();
+		auto result = make_uniq<IcebergTablePartitionStatsLocalState>();
+		result->InitializeNestedScan(context, bind_data);
+		return std::move(result);
 	}
 
-	ExecutionContext &execution_context;
-	unique_ptr<NestedScanState> nested_scan;
-};
+	void InitializeNestedScan(ExecutionContext &context, const IcebergTablePartitionStatsBindData &bind_data);
 
-static constexpr const char *PARTITION_COLUMN = "partition";
-static constexpr const char *SPEC_ID_COLUMN = "spec_id";
-static constexpr const char *DATA_RECORD_COUNT_COLUMN = "data_record_count";
-static constexpr const char *DATA_FILE_COUNT_COLUMN = "data_file_count";
-static constexpr const char *TOTAL_DATA_FILE_SIZE_COLUMN = "total_data_file_size_in_bytes";
-static constexpr const char *POSITION_DELETE_RECORD_COUNT_COLUMN = "position_delete_record_count";
-static constexpr const char *POSITION_DELETE_FILE_COUNT_COLUMN = "position_delete_file_count";
-static constexpr const char *DV_COUNT_COLUMN = "dv_count";
-static constexpr const char *EQUALITY_DELETE_RECORD_COUNT_COLUMN = "equality_delete_record_count";
-static constexpr const char *EQUALITY_DELETE_FILE_COUNT_COLUMN = "equality_delete_file_count";
-static constexpr const char *TOTAL_RECORD_COUNT_COLUMN = "total_record_count";
-static constexpr const char *LAST_UPDATED_AT_COLUMN = "last_updated_at";
-static constexpr const char *LAST_UPDATED_SNAPSHOT_ID_COLUMN = "last_updated_snapshot_id";
+	unique_ptr<FunctionData> nested_bind_data;
+	unique_ptr<GlobalTableFunctionState> nested_global_state;
+	unique_ptr<LocalTableFunctionState> nested_local_state;
+	DataChunk nested_chunk;
+};
 
 static void ParseTableFunctionOptions(IcebergOptions &options, const named_parameter_map_t &named_parameters) {
 	auto &snapshot_lookup = options.snapshot_lookup;
@@ -143,42 +135,6 @@ static bool SupportsPartitionStatisticsFormat(const string &path) {
 	return StringUtil::EndsWith(lower_path, ".parquet");
 }
 
-static void PopulateSourceIdToTypeMap(const vector<unique_ptr<IcebergColumnDefinition>> &columns,
-                                      unordered_map<uint64_t, const LogicalType *> &source_id_to_type) {
-	for (auto &col : columns) {
-		source_id_to_type.emplace(static_cast<uint64_t>(col->id), &col->type);
-		PopulateSourceIdToTypeMap(col->GetChildren(), source_id_to_type);
-	}
-}
-
-static LogicalType BuildUnifiedPartitionType(const IcebergTableMetadata &metadata) {
-	unordered_map<uint64_t, const LogicalType *> source_id_to_type;
-	for (auto &schema_pair : metadata.GetSchemas()) {
-		PopulateSourceIdToTypeMap(schema_pair.second->columns, source_id_to_type);
-	}
-
-	map<uint64_t, pair<string, LogicalType>> fields_by_id;
-	for (auto &spec_pair : metadata.GetPartitionSpecs()) {
-		for (auto &field : spec_pair.second.GetFields()) {
-			auto type_it = source_id_to_type.find(field.source_id);
-			if (type_it == source_id_to_type.end()) {
-				throw InvalidConfigurationException(
-				    "Partition statistics field '%s' references source column id %llu, but that column was not found "
-				    "in any table schema",
-				    field.GetPartitionSpecFieldName(), field.source_id);
-			}
-			auto result_type = field.transform.GetSerializedType(*type_it->second);
-			fields_by_id.emplace(field.partition_field_id, make_pair(field.GetPartitionSpecFieldName(), result_type));
-		}
-	}
-
-	child_list_t<LogicalType> children;
-	for (auto &entry : fields_by_id) {
-		children.emplace_back(entry.second.first, entry.second.second);
-	}
-	return LogicalType::STRUCT(std::move(children));
-}
-
 static TableFunction GetParquetScanFunction(ClientContext &context) {
 	auto &instance = DatabaseInstance::GetDatabase(context);
 	auto &system_catalog = Catalog::GetSystemCatalog(instance);
@@ -191,63 +147,55 @@ static TableFunction GetParquetScanFunction(ClientContext &context) {
 	return catalog_entry->Cast<TableFunctionCatalogEntry>().functions.functions[0];
 }
 
-static unique_ptr<NestedScanState> InitializeNestedScan(const IcebergTablePartitionStatsBindData &bind_data,
-                                                        IcebergTablePartitionStatsLocalState &local_state,
-                                                        const IcebergTablePartitionStatsFile &file) {
-	if (!SupportsPartitionStatisticsFormat(file.statistics_path)) {
-		throw NotImplementedException(
-		    "Only Parquet-backed Iceberg partition statistics files are currently supported, got '%s'",
-		    file.statistics_path);
+static vector<Value> BuildPathListValues(const vector<string> &paths) {
+	vector<Value> result;
+	result.reserve(paths.size());
+	for (auto &path : paths) {
+		result.emplace_back(path);
 	}
+	return result;
+}
 
+static unique_ptr<FunctionData> BindParquetScan(ClientContext &context,
+                                                const IcebergTablePartitionStatsBindData &bind_data,
+                                                vector<LogicalType> &return_types, vector<string> &return_names) {
 	vector<Value> children;
-	children.emplace_back(file.statistics_path);
+	children.emplace_back(Value::LIST(LogicalType::VARCHAR, BuildPathListValues(bind_data.paths)));
 
 	named_parameter_map_t named_params;
+	named_params["union_by_name"] = Value::BOOLEAN(true);
+	named_params["filename"] = Value(SCAN_FILENAME_COLUMN);
+
 	vector<LogicalType> input_types;
 	vector<Identifier> input_names;
 	TableFunctionRef empty;
 	auto parquet_scan = bind_data.parquet_scan;
-	vector<LogicalType> return_types;
-	vector<string> return_names;
 	TableFunctionBindInput bind_input(children, named_params, input_types, input_names, nullptr, nullptr, parquet_scan,
 	                                  empty);
-	auto nested = make_uniq<NestedScanState>();
-	nested->function = parquet_scan;
-	nested->bind_data = parquet_scan.bind(local_state.execution_context.client, bind_input, return_types, return_names);
+	return parquet_scan.bind(context, bind_input, return_types, return_names);
+}
+
+void IcebergTablePartitionStatsLocalState::InitializeNestedScan(ExecutionContext &context,
+                                                                const IcebergTablePartitionStatsBindData &bind_data) {
+	vector<LogicalType> return_types;
+	vector<string> return_names;
+	nested_bind_data = BindParquetScan(context.client, bind_data, return_types, return_names);
 
 	vector<column_t> column_ids;
 	column_ids.reserve(return_types.size());
 	for (idx_t i = 0; i < return_types.size(); i++) {
 		column_ids.push_back(i);
-		nested->column_name_to_index.emplace(return_names[i], i);
 	}
 
-	TableFunctionInitInput init_input(nested->bind_data.get(), column_ids, vector<idx_t>(), nullptr);
-	nested->global_state = parquet_scan.init_global(local_state.execution_context.client, init_input);
-	nested->local_state =
-	    parquet_scan.init_local(local_state.execution_context, init_input, nested->global_state.get());
-	nested->chunk.Initialize(local_state.execution_context.client, return_types, STANDARD_VECTOR_SIZE);
-	return nested;
+	TableFunctionInitInput init_input(nested_bind_data.get(), column_ids, vector<idx_t>(), nullptr);
+	nested_global_state = bind_data.parquet_scan.init_global(context.client, init_input);
+	nested_local_state = bind_data.parquet_scan.init_local(context, init_input, nested_global_state.get());
+	nested_chunk.Initialize(context.client, return_types, STANDARD_VECTOR_SIZE);
 }
 
-static void FillMetadataColumn(Vector &vector, idx_t offset, idx_t count, const Value &value) {
-	for (idx_t i = 0; i < count; i++) {
-		vector.SetValue(offset + i, value);
-	}
-}
-
-static void FillNullColumn(Vector &vector, idx_t offset, idx_t count, const LogicalType &type) {
-	auto null_value = Value(type);
-	for (idx_t i = 0; i < count; i++) {
-		vector.SetValue(offset + i, null_value);
-	}
-}
-
-static void CopyColumnValues(const Vector &source, Vector &target, idx_t source_offset, idx_t target_offset,
-                             idx_t count) {
-	for (idx_t i = 0; i < count; i++) {
-		target.SetValue(target_offset + i, source.GetValue(source_offset + i));
+static void ValidateRequiredColumn(const case_insensitive_map_t<idx_t> &column_map, const char *column_name) {
+	if (!column_map.count(column_name)) {
+		throw InvalidConfigurationException("Partition statistics scan is missing required column '%s'", column_name);
 	}
 }
 
@@ -267,13 +215,13 @@ static unique_ptr<FunctionData> IcebergTablePartitionStatsBind(ClientContext &co
 	auto iceberg_meta_path = IcebergTableMetadata::GetMetaDataPath(context, filename, fs, options);
 	auto table_metadata =
 	    IcebergTableMetadata::Parse(iceberg_meta_path, *caching_fs, options.metadata_compression_codec);
-	bind_data->metadata = IcebergTableMetadata::FromTableMetadata(table_metadata);
+	auto metadata = IcebergTableMetadata::FromTableMetadata(table_metadata);
 	bind_data->parquet_scan = GetParquetScanFunction(context);
 
 	optional<int64_t> requested_snapshot_id;
 	bool no_matching_snapshot = false;
 	if (!options.snapshot_lookup.IsLatest()) {
-		auto snapshot = bind_data->metadata.GetSnapshot(options.snapshot_lookup);
+		auto snapshot = metadata.GetSnapshot(options.snapshot_lookup);
 		if (!snapshot.snapshot) {
 			no_matching_snapshot = true;
 		} else {
@@ -282,150 +230,141 @@ static unique_ptr<FunctionData> IcebergTablePartitionStatsBind(ClientContext &co
 	}
 
 	if (!no_matching_snapshot) {
-		for (auto &statistics_file : bind_data->metadata.partition_statistics) {
+		for (auto &statistics_file : metadata.partition_statistics) {
 			if (requested_snapshot_id && statistics_file.snapshot_id != *requested_snapshot_id) {
 				continue;
 			}
-			IcebergTablePartitionStatsFile file;
-			file.snapshot_id = statistics_file.snapshot_id;
-			file.statistics_path =
-			    ResolveStatisticsPath(bind_data->metadata, fs, options, statistics_file.statistics_path);
-			file.file_size_in_bytes = statistics_file.file_size_in_bytes;
-			bind_data->files.emplace_back(std::move(file));
+			auto resolved_path = ResolveStatisticsPath(metadata, fs, options, statistics_file.statistics_path);
+			if (!SupportsPartitionStatisticsFormat(resolved_path)) {
+				throw NotImplementedException(
+				    "Only Parquet-backed Iceberg partition statistics files are currently supported, got '%s'",
+				    resolved_path);
+			}
+
+			auto file_handle = fs.OpenFile(resolved_path, FileFlags::FILE_FLAGS_READ);
+			auto actual_size = NumericCast<int64_t>(fs.GetFileSize(*file_handle));
+			if (actual_size != statistics_file.file_size_in_bytes) {
+				throw InvalidConfigurationException(
+				    "Partition statistics file '%s' has size %lld bytes, but the table metadata registered %lld bytes",
+				    resolved_path, actual_size, statistics_file.file_size_in_bytes);
+			}
+
+			PartitionStatsFileMetadata file_metadata;
+			file_metadata.snapshot_id = statistics_file.snapshot_id;
+			file_metadata.statistics_path = resolved_path;
+			file_metadata.file_size_in_bytes = statistics_file.file_size_in_bytes;
+			bind_data->paths.push_back(resolved_path);
+			bind_data->file_metadata.emplace(resolved_path, std::move(file_metadata));
 		}
 	}
 
-	names.emplace_back("statistics_snapshot_id");
-	return_types.emplace_back(LogicalType::BIGINT);
-	names.emplace_back("statistics_path");
-	return_types.emplace_back(LogicalType::VARCHAR);
-	names.emplace_back("file_size_in_bytes");
-	return_types.emplace_back(LogicalType::BIGINT);
+	LogicalType partition_type = LogicalType::STRUCT({});
+	if (!bind_data->paths.empty()) {
+		vector<LogicalType> nested_return_types;
+		vector<string> nested_return_names;
+		auto nested_bind_data = BindParquetScan(context, *bind_data, nested_return_types, nested_return_names);
+		(void)nested_bind_data;
 
-	auto partition_type = BuildUnifiedPartitionType(bind_data->metadata);
-	names.emplace_back(PARTITION_COLUMN);
-	return_types.emplace_back(std::move(partition_type));
-	names.emplace_back(SPEC_ID_COLUMN);
-	return_types.emplace_back(LogicalType::INTEGER);
-	names.emplace_back(DATA_RECORD_COUNT_COLUMN);
-	return_types.emplace_back(LogicalType::BIGINT);
-	names.emplace_back(DATA_FILE_COUNT_COLUMN);
-	return_types.emplace_back(LogicalType::INTEGER);
-	names.emplace_back(TOTAL_DATA_FILE_SIZE_COLUMN);
-	return_types.emplace_back(LogicalType::BIGINT);
-	names.emplace_back(POSITION_DELETE_RECORD_COUNT_COLUMN);
-	return_types.emplace_back(LogicalType::BIGINT);
-	names.emplace_back(POSITION_DELETE_FILE_COUNT_COLUMN);
-	return_types.emplace_back(LogicalType::INTEGER);
-	names.emplace_back(DV_COUNT_COLUMN);
-	return_types.emplace_back(LogicalType::INTEGER);
-	names.emplace_back(EQUALITY_DELETE_RECORD_COUNT_COLUMN);
-	return_types.emplace_back(LogicalType::BIGINT);
-	names.emplace_back(EQUALITY_DELETE_FILE_COUNT_COLUMN);
-	return_types.emplace_back(LogicalType::INTEGER);
-	names.emplace_back(TOTAL_RECORD_COUNT_COLUMN);
-	return_types.emplace_back(LogicalType::BIGINT);
-	names.emplace_back(LAST_UPDATED_AT_COLUMN);
-	return_types.emplace_back(LogicalType::BIGINT);
-	names.emplace_back(LAST_UPDATED_SNAPSHOT_ID_COLUMN);
-	return_types.emplace_back(LogicalType::BIGINT);
+		for (idx_t i = 0; i < nested_return_names.size(); i++) {
+			bind_data->nested_column_name_to_index.emplace(nested_return_names[i], i);
+		}
 
-	bind_data->file_column_names = {PARTITION_COLUMN,
-	                                SPEC_ID_COLUMN,
-	                                DATA_RECORD_COUNT_COLUMN,
-	                                DATA_FILE_COUNT_COLUMN,
-	                                TOTAL_DATA_FILE_SIZE_COLUMN,
-	                                POSITION_DELETE_RECORD_COUNT_COLUMN,
-	                                POSITION_DELETE_FILE_COUNT_COLUMN,
-	                                DV_COUNT_COLUMN,
-	                                EQUALITY_DELETE_RECORD_COUNT_COLUMN,
-	                                EQUALITY_DELETE_FILE_COUNT_COLUMN,
-	                                TOTAL_RECORD_COUNT_COLUMN,
-	                                LAST_UPDATED_AT_COLUMN,
-	                                LAST_UPDATED_SNAPSHOT_ID_COLUMN};
-	for (idx_t i = 3; i < return_types.size(); i++) {
-		bind_data->file_column_types.push_back(return_types[i]);
+		ValidateRequiredColumn(bind_data->nested_column_name_to_index, PARTITION_COLUMN);
+		ValidateRequiredColumn(bind_data->nested_column_name_to_index, SPEC_ID_COLUMN);
+		ValidateRequiredColumn(bind_data->nested_column_name_to_index, DATA_RECORD_COUNT_COLUMN);
+		ValidateRequiredColumn(bind_data->nested_column_name_to_index, DATA_FILE_COUNT_COLUMN);
+		ValidateRequiredColumn(bind_data->nested_column_name_to_index, TOTAL_DATA_FILE_SIZE_COLUMN);
+		ValidateRequiredColumn(bind_data->nested_column_name_to_index, SCAN_FILENAME_COLUMN);
+
+		partition_type = nested_return_types[bind_data->nested_column_name_to_index[PARTITION_COLUMN]];
 	}
 
+	names = {"statistics_snapshot_id",
+	         "statistics_path",
+	         "file_size_in_bytes",
+	         PARTITION_COLUMN,
+	         SPEC_ID_COLUMN,
+	         DATA_RECORD_COUNT_COLUMN,
+	         DATA_FILE_COUNT_COLUMN,
+	         TOTAL_DATA_FILE_SIZE_COLUMN,
+	         POSITION_DELETE_RECORD_COUNT_COLUMN,
+	         POSITION_DELETE_FILE_COUNT_COLUMN,
+	         DV_COUNT_COLUMN,
+	         EQUALITY_DELETE_RECORD_COUNT_COLUMN,
+	         EQUALITY_DELETE_FILE_COUNT_COLUMN,
+	         TOTAL_RECORD_COUNT_COLUMN,
+	         LAST_UPDATED_AT_COLUMN,
+	         LAST_UPDATED_SNAPSHOT_ID_COLUMN};
+
+	return_types = {LogicalType::BIGINT,  LogicalType::VARCHAR, LogicalType::BIGINT,  partition_type,
+	                LogicalType::INTEGER, LogicalType::BIGINT,  LogicalType::INTEGER, LogicalType::BIGINT,
+	                LogicalType::BIGINT,  LogicalType::INTEGER, LogicalType::INTEGER, LogicalType::BIGINT,
+	                LogicalType::INTEGER, LogicalType::BIGINT,  LogicalType::BIGINT,  LogicalType::BIGINT};
+
+	bind_data->output_column_names = names;
+	bind_data->output_column_types = return_types;
 	return std::move(bind_data);
 }
 
-static void ValidateRequiredColumn(const NestedScanState &nested_scan, const string &path, const char *column_name) {
-	if (!nested_scan.column_name_to_index.count(column_name)) {
-		throw InvalidConfigurationException("Partition statistics file '%s' is missing required column '%s'", path,
-		                                    column_name);
+static void SetMetadataValue(Vector &vector, idx_t row_idx, const PartitionStatsFileMetadata &metadata,
+                             idx_t column_idx) {
+	switch (column_idx) {
+	case 0:
+		vector.SetValue(row_idx, Value::BIGINT(metadata.snapshot_id));
+		return;
+	case 1:
+		vector.SetValue(row_idx, Value(metadata.statistics_path));
+		return;
+	case 2:
+		vector.SetValue(row_idx, Value::BIGINT(metadata.file_size_in_bytes));
+		return;
+	default:
+		throw InternalException("Unexpected metadata column index");
 	}
-}
-
-static void EnsureRequiredColumnsPresent(const NestedScanState &nested_scan, const string &path) {
-	ValidateRequiredColumn(nested_scan, path, PARTITION_COLUMN);
-	ValidateRequiredColumn(nested_scan, path, SPEC_ID_COLUMN);
-	ValidateRequiredColumn(nested_scan, path, DATA_RECORD_COUNT_COLUMN);
-	ValidateRequiredColumn(nested_scan, path, DATA_FILE_COUNT_COLUMN);
-	ValidateRequiredColumn(nested_scan, path, TOTAL_DATA_FILE_SIZE_COLUMN);
 }
 
 static void IcebergTablePartitionStatsFunction(ClientContext &context, TableFunctionInput &data, DataChunk &output) {
 	auto &bind_data = data.bind_data->Cast<IcebergTablePartitionStatsBindData>();
-	auto &global_state = data.global_state->Cast<IcebergTablePartitionStatsGlobalState>();
 	auto &local_state = data.local_state->Cast<IcebergTablePartitionStatsLocalState>();
-	auto &fs = FileSystem::GetFileSystem(context);
-
-	idx_t out = 0;
-	while (out < STANDARD_VECTOR_SIZE) {
-		if (!local_state.nested_scan) {
-			if (global_state.file_index >= bind_data.files.size()) {
-				break;
-			}
-			auto &file = bind_data.files[global_state.file_index];
-			auto file_handle = fs.OpenFile(file.statistics_path, FileFlags::FILE_FLAGS_READ);
-			auto actual_size = NumericCast<int64_t>(fs.GetFileSize(*file_handle));
-			if (actual_size != file.file_size_in_bytes) {
-				throw InvalidConfigurationException(
-				    "Partition statistics file '%s' has size %lld bytes, but the table metadata registered %lld bytes",
-				    file.statistics_path, actual_size, file.file_size_in_bytes);
-			}
-			local_state.nested_scan = InitializeNestedScan(bind_data, local_state, file);
-			EnsureRequiredColumnsPresent(*local_state.nested_scan, file.statistics_path);
-		}
-
-		auto &nested_scan = *local_state.nested_scan;
-		if (nested_scan.chunk_offset >= nested_scan.chunk.size()) {
-			nested_scan.chunk.Reset();
-			TableFunctionInput nested_input(nested_scan.bind_data.get(), nested_scan.local_state.get(),
-			                                nested_scan.global_state.get());
-			nested_scan.function.function(context, nested_input, nested_scan.chunk);
-			nested_scan.chunk.Flatten();
-			nested_scan.chunk_offset = 0;
-			if (nested_scan.chunk.size() == 0) {
-				local_state.nested_scan.reset();
-				global_state.file_index++;
-				continue;
-			}
-		}
-
-		auto &file = bind_data.files[global_state.file_index];
-		auto copy_count =
-		    MinValue<idx_t>(STANDARD_VECTOR_SIZE - out, nested_scan.chunk.size() - nested_scan.chunk_offset);
-		FillMetadataColumn(output.data[0], out, copy_count, Value::BIGINT(file.snapshot_id));
-		FillMetadataColumn(output.data[1], out, copy_count, Value(file.statistics_path));
-		FillMetadataColumn(output.data[2], out, copy_count, Value::BIGINT(file.file_size_in_bytes));
-
-		for (idx_t i = 0; i < bind_data.file_column_names.size(); i++) {
-			auto target_col = i + 3;
-			auto source_it = nested_scan.column_name_to_index.find(bind_data.file_column_names[i]);
-			if (source_it == nested_scan.column_name_to_index.end()) {
-				FillNullColumn(output.data[target_col], out, copy_count, bind_data.file_column_types[i]);
-				continue;
-			}
-			CopyColumnValues(nested_scan.chunk.data[source_it->second], output.data[target_col],
-			                 nested_scan.chunk_offset, out, copy_count);
-		}
-
-		out += copy_count;
-		nested_scan.chunk_offset += copy_count;
+	if (bind_data.paths.empty()) {
+		return;
 	}
-	output.SetChildCardinality(out);
+
+	local_state.nested_chunk.Reset();
+	TableFunctionInput nested_input(local_state.nested_bind_data.get(), local_state.nested_local_state.get(),
+	                                local_state.nested_global_state.get());
+	bind_data.parquet_scan.function(context, nested_input, local_state.nested_chunk);
+	local_state.nested_chunk.Flatten();
+	if (local_state.nested_chunk.size() == 0) {
+		return;
+	}
+
+	for (idx_t row_idx = 0; row_idx < local_state.nested_chunk.size(); row_idx++) {
+		auto path = local_state.nested_chunk.data[bind_data.nested_column_name_to_index.at(SCAN_FILENAME_COLUMN)]
+		                .GetValue(row_idx)
+		                .ToString();
+		auto metadata_it = bind_data.file_metadata.find(path);
+		if (metadata_it == bind_data.file_metadata.end()) {
+			throw InvalidConfigurationException(
+			    "Scanned partition statistics file '%s' was not registered in table metadata", path);
+		}
+
+		for (idx_t col_idx = 0; col_idx < bind_data.output_column_names.size(); col_idx++) {
+			if (col_idx < 3) {
+				SetMetadataValue(output.data[col_idx], row_idx, metadata_it->second, col_idx);
+				continue;
+			}
+			auto nested_name = bind_data.output_column_names[col_idx];
+			auto nested_it = bind_data.nested_column_name_to_index.find(nested_name);
+			if (nested_it == bind_data.nested_column_name_to_index.end()) {
+				output.data[col_idx].SetValue(row_idx, Value(bind_data.output_column_types[col_idx]));
+			} else {
+				output.data[col_idx].SetValue(row_idx,
+				                              local_state.nested_chunk.data[nested_it->second].GetValue(row_idx));
+			}
+		}
+	}
+	output.SetChildCardinality(local_state.nested_chunk.size());
 }
 
 } // namespace
