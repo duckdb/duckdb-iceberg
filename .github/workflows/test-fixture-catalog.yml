@@ -83,6 +83,7 @@ jobs:
       - name: Setup fixture
         run: |
           make fixture
+          python3 -m venv .venv-spark4
 
       - name: Run mitmproxy
         shell: bash

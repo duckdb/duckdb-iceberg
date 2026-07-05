@@ -59,6 +59,7 @@ jobs:
       - name: Setup Lakekeeper
         run: |
           make lakekeeper
+          python3 -m venv .venv-spark4
 
       - name: Run Lakekeeper Specific Tests
         env:

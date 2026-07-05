@@ -102,9 +102,10 @@ jobs:
           ./build/relassert/test/unittest --order lex "$PWD/test/sql/local/catalog_custom_setup/nessie/*" --list-test-names-only || true
           ./build/relassert/test/unittest --order lex "$PWD/test/sql/local/catalog_custom_setup/nessie/*"
 
-      - name: Generate data
+      - name: Setup Nessie
         run: |
           make nessie
+          python3 -m venv .venv-spark4
 
       - name: Run Generic IRC tests
         env:

@@ -61,6 +61,7 @@ jobs:
       - name: Setup Polaris
         run: |
           make polaris
+          python3 -m venv .venv-spark4
 
       - name: Run Polaris Specific Tests
         env:
