@@ -194,7 +194,12 @@ def unittest_binary(request):
         raise ValueError(
             "Please provide a unittest binary path to the tester, using '--unittest-binary <path_to_unittest>'"
         )
-    return custom_arg
+    binary_path = Path(custom_arg)
+    if not binary_path.is_absolute():
+        binary_path = (REPO_ROOT / binary_path).resolve()
+    if not binary_path.is_file():
+        raise ValueError(f"Provided unittest binary does not exist: {binary_path}")
+    return str(binary_path)
 
 
 @pytest.fixture()

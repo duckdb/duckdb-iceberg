@@ -1,8 +1,6 @@
-# name: test/sql/local/catalog_custom_setup/fixture/test_max_table_staleness.test
+# name: test/python/paired/catalog/fixture/test_max_table_staleness.test
 # description: Test iceberg deletes
 # group: [fixture]
-
-require-env FIXTURE_SERVER_AVAILABLE
 
 require avro
 

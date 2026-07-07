@@ -1,8 +1,6 @@
-# name: test/sql/local/catalog_custom_setup/fixture/enable_logging_http/iceberg_catalog_read.test
+# name: test/python/paired/catalog/fixture/enable_logging_http/iceberg_catalog_read.test
 # description: test integration with iceberg catalog read
 # group: [enable_logging_http]
-
-require-env FIXTURE_SERVER_AVAILABLE
 
 require avro
 

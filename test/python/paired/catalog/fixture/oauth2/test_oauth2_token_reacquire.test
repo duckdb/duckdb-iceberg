@@ -1,8 +1,6 @@
-# name: test/sql/local/catalog_custom_setup/fixture/oauth2/test_oauth2_token_reacquire.test
+# name: test/python/paired/catalog/fixture/oauth2/test_oauth2_token_reacquire.test
 # description: Test that credentials are stored for token refresh capability
 # group: [oauth2]
-
-require-env FIXTURE_SERVER_AVAILABLE
 
 require avro
 
