@@ -233,6 +233,11 @@ def spark_runtime(pytestconfig):
 
 
 @pytest.fixture(scope="session")
+def optional_catalog_profile(pytestconfig):
+    return getattr(pytestconfig, "_catalog_profile", None)
+
+
+@pytest.fixture(scope="session")
 def unittest_test_config(catalog_profile):
     return catalog_profile.unittest_config
 
@@ -311,8 +316,12 @@ def _seed_generator_catalog(item, default_catalog: str) -> str:
     return catalog
 
 
+def _is_local_generator_test(item, default_catalog: str) -> bool:
+    return _seed_generator_catalog(item, default_catalog) == "local"
+
+
 @pytest.fixture(scope="session")
-def _catalog_connection_manager(catalog_profile, spark_runtime):
+def _catalog_connection_manager(optional_catalog_profile, spark_runtime):
     from scripts.data_generators.connections import IcebergConnection
 
     manager = {
@@ -331,7 +340,10 @@ def _catalog_connection_manager(catalog_profile, spark_runtime):
             manager["active_connection_key"] = connection_key
         return active_connection
 
-    switch_to(catalog_profile.connection_key)
+    default_connection_key = (
+        optional_catalog_profile.connection_key if optional_catalog_profile is not None else "local"
+    )
+    switch_to(default_connection_key)
     manager["switch_to"] = switch_to
     yield manager
 
@@ -383,16 +395,21 @@ class _CatalogConnectionProxy:
 
 
 @pytest.fixture(scope="session")
-def catalog_session_connection(catalog_profile, _catalog_connection_manager):
-    return _CatalogConnectionProxy(_catalog_connection_manager, catalog_profile.connection_key)
+def catalog_session_connection(optional_catalog_profile, _catalog_connection_manager):
+    default_connection_key = (
+        optional_catalog_profile.connection_key if optional_catalog_profile is not None else "local"
+    )
+    return _CatalogConnectionProxy(_catalog_connection_manager, default_connection_key)
 
 
 @pytest.fixture()
-def catalog_connection(request, catalog_profile, catalog_session_connection):
+def catalog_connection(request, optional_catalog_profile, catalog_session_connection):
     connection = catalog_session_connection
     seed_marker = request.node.get_closest_marker("spark_seed_tables")
     seed_names = list(seed_marker.args) if seed_marker else []
-    seed_catalog = _seed_generator_catalog(request.node, catalog_profile.name)
+    seed_catalog = _seed_generator_catalog(
+        request.node, optional_catalog_profile.name if optional_catalog_profile else "local"
+    )
 
     for table in seed_names:
         seed_table = _resolve_seed_table(table)
@@ -408,7 +425,9 @@ def catalog_connection(request, catalog_profile, catalog_session_connection):
             _apply_generator_expectations(request, seed_table, seed_catalog)
             connection_key = seed_table.catalog_mapping.get(seed_catalog, seed_catalog)
         else:
-            connection_key = catalog_profile.connection_key
+            connection_key = (
+                optional_catalog_profile.connection_key if optional_catalog_profile is not None else "local"
+            )
         seed_connection = connection.use_connection_key(connection_key)
         seed_table.generate(seed_connection)
 
@@ -434,10 +453,15 @@ def pytest_report_header(config):
 
 
 def pytest_collection_modifyitems(config, items):
-    needs_catalog_options = any(_requires_catalog_options(str(item.fspath)) for item in items)
+    needs_catalog_options = any(
+        _requires_catalog_options(str(item.fspath)) and not _is_local_generator_test(item, "fixture") for item in items
+    )
+    needs_spark_runtime = any("cloud" not in Path(str(item.fspath)).parts for item in items)
     if needs_catalog_options:
         config._catalog_profile = _selected_catalog_profile(config)
+    if needs_spark_runtime:
         config._spark_runtime = _selected_spark_runtime(config)
+    if needs_catalog_options:
         config._requirement_skip_log = []
 
     for item in items:
