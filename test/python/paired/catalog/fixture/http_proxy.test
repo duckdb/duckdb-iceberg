@@ -1,10 +1,8 @@
-# name: test/sql/local/catalog_custom_setup/fixture/http_proxy.test
+# name: test/python/paired/catalog/fixture/http_proxy.test
 # description: Test http proxy
 # group: [fixture]
 
 require-env HTTP_PROXY_PUBLIC
-
-require-env FIXTURE_SERVER_AVAILABLE
 
 require avro
 
