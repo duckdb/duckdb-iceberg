@@ -53,6 +53,7 @@ set(EXTENSION_SOURCES
 	src/core/deletes/iceberg_equality_delete.cpp
 	src/core/deletes/iceberg_positional_delete.cpp
 	src/core/expression/iceberg_hash.cpp
+	src/core/expression/iceberg_metrics.cpp
 	src/core/expression/iceberg_transform.cpp
 	src/core/expression/iceberg_value.cpp
 	src/core/metadata/iceberg_table_metadata.cpp

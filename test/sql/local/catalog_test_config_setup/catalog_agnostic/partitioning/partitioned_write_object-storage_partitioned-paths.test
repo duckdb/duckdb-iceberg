@@ -1,0 +1,65 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/partitioning/partitioned_write_object-storage_partitioned-paths.test
+# group: [partitioning]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+set ignore_error_messages
+
+statement ok
+drop table if exists my_datalake.default.partitioned_paths_default;
+
+statement ok
+CREATE TABLE my_datalake.default.partitioned_paths_default (
+  id INT,
+  category VARCHAR
+) PARTITIONED BY (category);
+
+statement ok
+INSERT INTO my_datalake.default.partitioned_paths_default VALUES
+  (1, 'blue'),
+  (2, 'green');
+
+query I
+SELECT count(*)
+FROM iceberg_metadata(my_datalake.default.partitioned_paths_default)
+WHERE file_path LIKE '%=%/%';
+----
+2
+
+statement ok
+drop table if exists my_datalake.default.partitioned_paths_flat;
+
+statement ok
+CREATE TABLE my_datalake.default.partitioned_paths_flat (
+  id INT,
+  category VARCHAR
+) PARTITIONED BY (category) WITH (
+  'write.object-storage.partitioned-paths' = 'false'
+);
+
+query II
+SELECT * FROM iceberg_table_properties(my_datalake.default.partitioned_paths_flat)
+WHERE key = 'write.object-storage.partitioned-paths';
+----
+write.object-storage.partitioned-paths	false
+
+statement ok
+INSERT INTO my_datalake.default.partitioned_paths_flat VALUES
+  (1, 'blue'),
+  (2, 'green');
+
+query II
+SELECT
+  count(*) AS total_files,
+  count_if(file_path LIKE '%=%/%') AS hive_style_files
+FROM iceberg_metadata(my_datalake.default.partitioned_paths_flat);
+----
+2	0

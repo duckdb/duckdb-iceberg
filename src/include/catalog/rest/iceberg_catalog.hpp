@@ -115,10 +115,6 @@ private:
 
 class IcebergCatalog : public Catalog {
 public:
-	// default target file size: 8.4MB
-	static constexpr const idx_t DEFAULT_TARGET_FILE_SIZE = 1 << 23;
-
-public:
 	explicit IcebergCatalog(AttachedDatabase &db_p, AccessMode access_mode,
 	                        unique_ptr<IcebergAuthorization> auth_handler, IcebergAttachOptions &attach_options,
 	                        const string &default_schema);

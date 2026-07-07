@@ -121,3 +121,126 @@ select column_name, value_count from iceberg_column_stats(my_datalake.default.du
 ----
 id	1
 name	1
+
+# --- write.metadata.metrics.* gates the primitive-leaf bounds ---------------
+
+# truncate(8): leaf string bounds are truncated on a code-point boundary
+statement ok
+drop table if exists my_datalake.default.mm_nested_trunc;
+
+statement ok
+create table my_datalake.default.mm_nested_trunc (
+    s STRUCT(sf VARCHAR),
+    l VARCHAR[],
+    m MAP(VARCHAR, VARCHAR)
+) WITH ('write.metadata.metrics.default'='truncate(8)');
+
+statement ok
+insert into my_datalake.default.mm_nested_trunc VALUES (
+    {'sf': 'abcdefghijklmnop'},
+    ['abcdefghijklmnop'],
+    MAP(['abcdefghijklmnop'], ['abcdefghijklmnop'])
+);
+
+query II
+select column_name, lower_bound from iceberg_column_stats(my_datalake.default.mm_nested_trunc)
+where column_name in ('sf', 'element', 'key', 'value') order by column_name;
+----
+element	abcdefgh
+key	abcdefgh
+sf	abcdefgh
+value	abcdefgh
+
+# full: leaf string bounds are written untruncated
+statement ok
+drop table if exists my_datalake.default.mm_nested_full;
+
+statement ok
+create table my_datalake.default.mm_nested_full (
+    s STRUCT(sf VARCHAR),
+    l VARCHAR[],
+    m MAP(VARCHAR, VARCHAR)
+) WITH ('write.metadata.metrics.default'='full');
+
+statement ok
+insert into my_datalake.default.mm_nested_full VALUES (
+    {'sf': 'abcdefghijklmnop'},
+    ['abcdefghijklmnop'],
+    MAP(['abcdefghijklmnop'], ['abcdefghijklmnop'])
+);
+
+query II
+select column_name, lower_bound from iceberg_column_stats(my_datalake.default.mm_nested_full)
+where column_name in ('sf', 'element', 'key', 'value') order by column_name;
+----
+element	abcdefghijklmnop
+key	abcdefghijklmnop
+sf	abcdefghijklmnop
+value	abcdefghijklmnop
+
+# none: no leaf bounds and no value_counts for any column
+statement ok
+drop table if exists my_datalake.default.mm_nested_none;
+
+statement ok
+create table my_datalake.default.mm_nested_none (
+    s STRUCT(sf VARCHAR),
+    l VARCHAR[],
+    m MAP(VARCHAR, VARCHAR)
+) WITH ('write.metadata.metrics.default'='none');
+
+statement ok
+insert into my_datalake.default.mm_nested_none VALUES (
+    {'sf': 'abcdefghijklmnop'},
+    ['abcdefghijklmnop'],
+    MAP(['abcdefghijklmnop'], ['abcdefghijklmnop'])
+);
+
+statement ok
+set variable nested_none_mp = (select manifest_path from iceberg_metadata(my_datalake.default.mm_nested_none) order by manifest_sequence_number desc limit 1);
+
+query II
+select
+    (select count(*) from (select unnest(map_keys(lower_bounds)) k from (select unnest(data_file) from read_avro(getvariable('nested_none_mp'))))),
+    (select count(*) from (select unnest(map_keys(value_counts)) k from (select unnest(data_file) from read_avro(getvariable('nested_none_mp')))));
+----
+0	0
+
+# --- per-column overrides on nested leaves via the Iceberg dotted field name -----
+# Iceberg names the synthetic nested fields 'element' (list), 'key'/'value' (map),
+# so a leaf override is keyed as write.metadata.metrics.column.<parent>.<leaf> - the
+# same path DuckDB resolves via GetFromPath. Give each leaf a different truncate
+# length and let one leaf fall through to the table default to prove each override
+# is honored independently.
+statement ok
+drop table if exists my_datalake.default.mm_nested_percol;
+
+statement ok
+create table my_datalake.default.mm_nested_percol (
+    s STRUCT(sf VARCHAR),
+    l VARCHAR[],
+    m MAP(VARCHAR, VARCHAR)
+) WITH (
+    'write.metadata.metrics.default'='truncate(16)',
+    'write.metadata.metrics.column.s.sf'='truncate(4)',
+    'write.metadata.metrics.column.l.element'='full',
+    'write.metadata.metrics.column.m.key'='truncate(8)'
+);
+
+statement ok
+insert into my_datalake.default.mm_nested_percol VALUES (
+    {'sf': 'abcdefghijklmnopqrstuvwxyz'},
+    ['abcdefghijklmnopqrstuvwxyz'],
+    MAP(['abcdefghijklmnopqrstuvwxyz'], ['abcdefghijklmnopqrstuvwxyz'])
+);
+
+# sf -> truncate(4); element -> full (untruncated); key -> truncate(8);
+# value has no override so it inherits the table default truncate(16)
+query II
+select column_name, lower_bound from iceberg_column_stats(my_datalake.default.mm_nested_percol)
+where column_name in ('sf', 'element', 'key', 'value') order by column_name;
+----
+element	abcdefghijklmnopqrstuvwxyz
+key	abcdefgh
+sf	abcd
+value	abcdefghijklmnop

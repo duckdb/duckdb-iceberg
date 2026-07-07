@@ -18,6 +18,7 @@ def test_write_upper_lower_bounds_nested_types(
 ):
     with DuckDBUnittestRunner(
         unittest_binary,
+        preamble='',
         test_config=unittest_test_config,
         print_stdin=print_unittest_stdin,
     ) as runner:

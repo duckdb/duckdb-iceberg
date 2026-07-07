@@ -16,6 +16,7 @@
 #include "duckdb/planner/expression/bound_cast_expression.hpp"
 #include "duckdb/planner/bound_result_modifier.hpp"
 #include "duckdb/common/multi_file/multi_file_reader.hpp"
+#include "duckdb/common/string_util.hpp"
 
 #include "catalog/rest/iceberg_catalog.hpp"
 #include "catalog/rest/catalog_entry/table/iceberg_table_entry.hpp"
@@ -29,6 +30,7 @@
 #include "planning/iceberg_multi_file_list.hpp"
 #include "catalog/rest/transaction/iceberg_transaction.hpp"
 #include "core/expression/iceberg_value.hpp"
+#include "core/expression/iceberg_metrics.hpp"
 #include "core/expression/iceberg_transform.hpp"
 #include "storage/statistics/iceberg_variant_statistics.hpp"
 #include "catalog/rest/api/iceberg_type.hpp"
@@ -281,6 +283,9 @@ void IcebergInsertGlobalState::AddFiles(DataChunk &chunk, const string &table_na
 		// (keyed by field id) and serialize the lower/upper bound variants once all entries are seen
 		unordered_map<int32_t, IcebergVariantBounds> variant_bounds;
 
+		// Resolve the table-level metrics mode once; per-column overrides are resolved in the loop.
+		auto default_metrics = GetDefaultMetricsConfig(table_metadata);
+
 		for (idx_t col_idx = 0; col_idx < map_children.size(); col_idx++) {
 			auto &struct_children = StructValue::GetChildren(map_children[col_idx]);
 			auto &col_name = StringValue::Get(struct_children[0]);
@@ -312,20 +317,30 @@ void IcebergInsertGlobalState::AddFiles(DataChunk &chunk, const string &table_na
 				auto normalized_col_name = StringUtil::Join(column_names, ".");
 				throw ConstraintException("NOT NULL constraint failed: %s.%s", table_name, normalized_col_name);
 			}
+			// Resolve the metrics mode for this column: per-column override -> table default ->
+			// Iceberg's truncate(16) default.
+			auto metrics = GetColumnMetricsConfig(table_metadata, default_metrics, StringUtil::Join(column_names, "."));
+			if (metrics.mode == IcebergMetricsMode::NONE) {
+				// No metrics recorded for this column.
+				continue;
+			}
+			const bool write_bounds =
+			    metrics.mode == IcebergMetricsMode::TRUNCATE || metrics.mode == IcebergMetricsMode::FULL;
+
 			// go through stats and add upper and lower bounds
 			// Do serialization of values here in case we read transaction updates
-			if (stats.has_min) {
+			if (write_bounds && stats.has_min) {
 				auto serialized_value =
-				    IcebergValue::SerializeValue(stats.min, column_info.type, SerializeBound::LOWER_BOUND);
+				    IcebergValue::SerializeValue(stats.min, column_info.type, SerializeBound::LOWER_BOUND, metrics);
 				if (serialized_value.HasError()) {
 					throw InvalidConfigurationException(serialized_value.GetError());
 				} else if (serialized_value.HasValue()) {
 					data_file.lower_bounds[column_info.id] = serialized_value.GetValue();
 				}
 			}
-			if (stats.has_max) {
+			if (write_bounds && stats.has_max) {
 				auto serialized_value =
-				    IcebergValue::SerializeValue(stats.max, column_info.type, SerializeBound::UPPER_BOUND);
+				    IcebergValue::SerializeValue(stats.max, column_info.type, SerializeBound::UPPER_BOUND, metrics);
 				if (serialized_value.HasError()) {
 					throw InvalidConfigurationException(serialized_value.GetError());
 				} else if (serialized_value.HasValue()) {
@@ -333,7 +348,7 @@ void IcebergInsertGlobalState::AddFiles(DataChunk &chunk, const string &table_na
 				}
 			}
 			// See Iceberg v3 (Appendix D) for geometry stats info
-			if (column_info.type.id() == LogicalTypeId::GEOMETRY && stats.has_bbox_xy) {
+			if (write_bounds && column_info.type.id() == LogicalTypeId::GEOMETRY && stats.has_bbox_xy) {
 				vector<double> lower {stats.bbox_xmin, stats.bbox_ymin};
 				vector<double> upper {stats.bbox_xmax, stats.bbox_ymax};
 				if (stats.has_bbox_z) {
@@ -380,6 +395,13 @@ void IcebergInsertGlobalState::AddFiles(DataChunk &chunk, const string &table_na
 
 		// serialize the accumulated variant bounds into the data file's lower/upper bounds
 		for (auto &entry : variant_bounds) {
+			// Respect the column's metrics mode; skip bounds under none/counts.
+			auto variant_metrics = GetColumnMetricsConfig(table_metadata, default_metrics,
+			                                              GetColumnNameBySourceId(*ic_schema, entry.first));
+			if (variant_metrics.mode != IcebergMetricsMode::TRUNCATE &&
+			    variant_metrics.mode != IcebergMetricsMode::FULL) {
+				continue;
+			}
 			bool has_lower = false;
 			bool has_upper = false;
 			string lower_blob;
@@ -785,12 +807,11 @@ struct IcebergParquetOptionMapping {
 // to
 // https://github.com/duckdb/duckdb/blob/9cbb0656cd34fa3eb890963b9f961bbc8a221fa9/extension/parquet/parquet_extension.cpp#L121
 static const IcebergParquetOptionMapping ICEBERG_TABLE_PROPERTY_MAPPING[] = {
-    {"write.parquet.row-group-size-bytes", "row_group_size_bytes"},
     {"write.parquet.compression-codec", "codec"},
     {"write.parquet.compression-level", "compression_level"},
     {"write.parquet.dict-size-bytes", "string_dictionary_page_size_limit"},
+    {"write.parquet.row-group-size-bytes", "row_group_size_bytes"},
     {"write.parquet.row-group-size", "row_group_size"},
-    {"write.parquet.page-size-bytes", "chunk_size"},
     {"write.parquet.row-groups-per-file", "row_groups_per_file"}};
 
 static const idx_t ICEBERG_TABLE_PROPERTY_MAPPING_SIZE =
@@ -821,14 +842,16 @@ IcebergCopyOptions IcebergInsert::GetCopyOptions(ClientContext &context, const I
 	for (idx_t i = 0; i < ICEBERG_TABLE_PROPERTY_MAPPING_SIZE; i++) {
 		auto &mapping = ICEBERG_TABLE_PROPERTY_MAPPING[i];
 		auto it = table_properties.find(mapping.iceberg_option);
-		if (it != table_properties.end()) {
-			if (StringUtil::CIEquals(mapping.parquet_option, "row_group_size_bytes") &&
-			    StringUtil::CharacterIsDigit(it->second.back())) {
+		if (it == table_properties.end()) {
+			continue;
+		}
+		if (StringUtil::CIEquals(mapping.parquet_option, "row_group_size_bytes")) {
+			if (StringUtil::CharacterIsDigit(it->second.back())) {
 				info->options[mapping.parquet_option].emplace_back(Value::UBIGINT(StringUtil::ToUnsigned(it->second)));
-			} else {
-				info->options[mapping.parquet_option].emplace_back(it->second);
+				continue;
 			}
 		}
+		info->options[mapping.parquet_option].emplace_back(it->second);
 	}
 
 	// Always use native parquet geometry for writing
@@ -855,41 +878,17 @@ IcebergCopyOptions IcebergInsert::GetCopyOptions(ClientContext &context, const I
 	IcebergCopyOptions result(std::move(info), copy_fun.function);
 	GenerateSortOrderExpressions(context, copy_input, result);
 
-	result.use_tmp_file = false;
+	result.filename_pattern.SetFilenamePattern("{uuidv7}");
+	auto write_target_file_size = table_properties.find("write.target-file-size-bytes");
+	if (write_target_file_size != table_properties.end()) {
+		result.file_size_bytes = IcebergUtils::ParseByteSizeOptionallyFormatted(write_target_file_size->second);
+	}
 	if (copy_input.partition_spec) {
-		if (table_properties.find("write.target-file-size-bytes") != table_properties.end()) {
-			Value ignore_target_file_size_bytes_for_partitioned_tables;
-			if (!context.TryGetCurrentSetting("ignore_target_file_size_for_partitioned_tables",
-			                                  ignore_target_file_size_bytes_for_partitioned_tables) ||
-			    !ignore_target_file_size_bytes_for_partitioned_tables.GetValue<bool>()) {
-				throw InvalidInputException("Table property target-file-size-bytes is currently not supported for "
-				                            "partitioned tables.\nTo ignore this error "
-				                            "run \"SET ignore_target_file_size_for_partitioned_tables=true\"");
-			}
-		}
-		if (table_properties.find("write.parquet.row-group-size-bytes") != table_properties.end()) {
-			Value ignore_row_group_size_bytes_for_partitioned_tables;
-			if (!context.TryGetCurrentSetting("ignore_row_group_size_for_partitioned_tables",
-			                                  ignore_row_group_size_bytes_for_partitioned_tables) ||
-			    !ignore_row_group_size_bytes_for_partitioned_tables.GetValue<bool>()) {
-				throw InvalidInputException("Table property row-group-size-bytes is currently not supported for "
-				                            "partitioned tables.\nTo ignore this error "
-				                            "run \"SET ignore_row_group_size_for_partitioned_tables=true\"");
-			}
-		}
-		result.filename_pattern.SetFilenamePattern("{uuidv7}");
 		result.partition_output = true;
 		result.write_empty_file = true;
 	} else {
-		result.filename_pattern.SetFilenamePattern("{uuidv7}");
 		result.partition_output = false;
 		result.write_empty_file = false;
-		auto write_target_file_size = table_properties.find("write.target-file-size-bytes");
-		if (write_target_file_size != table_properties.end()) {
-			result.file_size_bytes = std::stoull(write_target_file_size->second);
-		} else {
-			result.file_size_bytes = IcebergCatalog::DEFAULT_TARGET_FILE_SIZE;
-		}
 	}
 
 	result.file_path = copy_input.data_path;
@@ -908,6 +907,12 @@ IcebergCopyOptions IcebergInsert::GetCopyOptions(ClientContext &context, const I
 	if (WriteSequenceNumber(copy_input.virtual_columns)) {
 		names_to_write.push_back("_last_updated_sequence_number");
 		types_to_write.push_back(LogicalType::BIGINT);
+	}
+
+	auto partitioned_paths = table_properties.find("write.object-storage.partitioned-paths");
+	if (partitioned_paths != table_properties.end()) {
+		result.partitioned_paths =
+		    Value(partitioned_paths->second).DefaultCastAs(LogicalType::BOOLEAN).GetValue<bool>();
 	}
 
 	// copy_to_bind receives physical + virtual only (partition routing columns are stripped
@@ -983,7 +988,7 @@ PhysicalOperator &IcebergInsert::PlanCopyForInsert(ClientContext &context, Physi
 	                          .Cast<PhysicalCopyToFile>();
 
 	physical_copy.file_path = std::move(copy_options.file_path);
-	physical_copy.use_tmp_file = copy_options.use_tmp_file;
+	physical_copy.use_tmp_file = false;
 	physical_copy.filename_pattern = std::move(copy_options.filename_pattern);
 	physical_copy.file_extension = std::move(copy_options.file_extension);
 	physical_copy.overwrite_mode = copy_options.overwrite_mode;
@@ -999,7 +1004,7 @@ PhysicalOperator &IcebergInsert::PlanCopyForInsert(ClientContext &context, Physi
 	physical_copy.names = std::move(copy_options.names);
 	physical_copy.expected_types = std::move(copy_options.expected_types);
 	physical_copy.parallel = true;
-	physical_copy.hive_file_pattern = true;
+	physical_copy.hive_file_pattern = copy_options.partitioned_paths;
 	if (plan) {
 		physical_copy.children.push_back(*plan);
 	}
