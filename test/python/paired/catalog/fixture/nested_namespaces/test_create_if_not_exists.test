@@ -1,7 +1,5 @@
-# name: test/sql/local/catalog_custom_setup/fixture/nested_namespaces/test_create_if_not_exists.test
+# name: test/python/paired/catalog/fixture/nested_namespaces/test_create_if_not_exists.test
 # group: [nested_namespaces]
-
-require-env FIXTURE_SERVER_AVAILABLE
 
 require avro
 
@@ -75,4 +73,3 @@ select * from my_datalake.default.a;
 
 # FIXME:
 # This needs a DROP 'my_datalake.default.a' to make this test rerunnable.
-

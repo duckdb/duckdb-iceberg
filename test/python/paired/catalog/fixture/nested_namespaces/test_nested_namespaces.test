@@ -1,7 +1,5 @@
-# name: test/sql/local/catalog_custom_setup/fixture/nested_namespaces/test_nested_namespaces.test
+# name: test/python/paired/catalog/fixture/nested_namespaces/test_nested_namespaces.test
 # group: [nested_namespaces]
-
-require-env FIXTURE_SERVER_AVAILABLE
 
 require avro
 

@@ -1,8 +1,6 @@
-# name: test/sql/local/catalog_custom_setup/fixture/oauth2/test_oauth2_static_token.test
+# name: test/python/paired/catalog/fixture/oauth2/test_oauth2_static_token.test
 # description: Ensure static tokens without expiry info continue to work
 # group: [oauth2]
-
-require-env FIXTURE_SERVER_AVAILABLE
 
 require avro
 
