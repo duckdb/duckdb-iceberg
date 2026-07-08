@@ -65,8 +65,10 @@
         "test/sql/local/catalog_test_config_setup/catalog_agnostic/insert/iceberg_types/test_geometry_type.test",
         "test/sql/local/catalog_test_config_setup/catalog_agnostic/insert/iceberg_types/test_geometry_type_nested.test",
         "test/sql/local/catalog_test_config_setup/catalog_agnostic/alter/alter_type_v3.test",
+        "test/sql/local/catalog_test_config_setup/catalog_agnostic/alter/alter_type_timestamptz_ns_v3.test",
         "test/sql/local/catalog_test_config_setup/catalog_agnostic/create/default/test_create_default_struct.test",
         "test/sql/local/catalog_test_config_setup/catalog_agnostic/create/default/test_create_default_struct_nested.test",
+        "test/sql/local/catalog_test_config_setup/catalog_agnostic/create/default/test_create_default_timestamptz_ns.test",
         "test/sql/local/catalog_test_config_setup/catalog_agnostic/merge/merge_into_default_struct.test",
         "test/sql/local/catalog_test_config_setup/catalog_agnostic/merge/merge_into_default_struct_nested.test",
         "test/sql/local/catalog_test_config_setup/catalog_agnostic/update/test_update_default_struct.test",
@@ -90,7 +92,16 @@
         "test/sql/local/catalog_test_config_setup/catalog_agnostic/reads/filtering/variant/nested.test",
         "test/sql/local/catalog_test_config_setup/catalog_agnostic/reads/filtering/variant/partial_shredding.test",
         "test/sql/local/catalog_test_config_setup/catalog_agnostic/reads/filtering/variant/test_partial_paths.test",
-        "test/sql/local/catalog_test_config_setup/catalog_agnostic/reads/filtering/variant/types.test"
+        "test/sql/local/catalog_test_config_setup/catalog_agnostic/reads/filtering/variant/types.test",
+        "test/sql/local/catalog_test_config_setup/catalog_agnostic/alter/add_column/alter_add_column_timestamptz_ns_initial_default.test",
+        "test/sql/local/catalog_test_config_setup/catalog_agnostic/insert/partitions/timestamptz_ns/test_partition_timestamptz_ns_temporal.test",
+        "test/sql/local/catalog_test_config_setup/catalog_agnostic/insert/partitions/bucket/test_bucket_timestamptz_ns.test",
+        "test/sql/local/catalog_test_config_setup/catalog_agnostic/other_engines/test_spark_can_read_duckdb_timestamptz_ns.test",
+        "test/sql/local/catalog_test_config_setup/catalog_agnostic/sorting/year/year_timestamptz_ns.test",
+        "test/sql/local/catalog_test_config_setup/catalog_agnostic/sorting/month/month_timestamptz_ns.test",
+        "test/sql/local/catalog_test_config_setup/catalog_agnostic/sorting/day/day_timestamptz_ns.test",
+        "test/sql/local/catalog_test_config_setup/catalog_agnostic/sorting/hour/hour_timestamptz_ns.test",
+        "test/sql/local/catalog_test_config_setup/catalog_agnostic/sorting/bucket/bucket_timestamptz_ns.test"
       ]
     },
     {

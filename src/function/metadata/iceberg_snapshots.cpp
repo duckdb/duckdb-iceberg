@@ -110,8 +110,15 @@ static void IcebergSnapshotsFunction(ClientContext &context, TableFunctionInput 
 		}
 
 		auto &snapshot = it->second;
-		FlatVector::GetDataMutable<uint64_t>(output.data[0])[i] = snapshot.sequence_number;
-		FlatVector::GetDataMutable<uint64_t>(output.data[1])[i] = snapshot.snapshot_id;
+
+		if (!snapshot.sequence_number) {
+			throw InvalidConfigurationException("snapshot.sequence_number is not set");
+		}
+		if (!snapshot.snapshot_id) {
+			throw InvalidConfigurationException("snapshot.snapshot_id is not set");
+		}
+		FlatVector::GetDataMutable<uint64_t>(output.data[0])[i] = *snapshot.sequence_number;
+		FlatVector::GetDataMutable<uint64_t>(output.data[1])[i] = *snapshot.snapshot_id;
 		FlatVector::GetDataMutable<timestamp_t>(output.data[2])[i] = snapshot.timestamp_ms;
 		string_t manifest_string_t = StringVector::AddString(output.data[3], string_t(snapshot.manifest_list));
 		FlatVector::GetDataMutable<string_t>(output.data[3])[i] = manifest_string_t;

@@ -4,12 +4,21 @@ import datetime
 from decimal import Decimal
 from math import inf
 
+from conftest import is_active_catalog
+
 pyice = pytest.importorskip("pyiceberg")
 pa = pytest.importorskip("pyarrow")
 
 
+def arrow_column_values(table: pa.Table, name: str):
+    column = table.column(name).combine_chunks()
+    if pa.types.is_timestamp(column.type) and column.type.unit == "ns":
+        return [column[idx].value if column[idx].is_valid else None for idx in range(len(column))]
+    return column.to_pylist()
+
+
 class TestPyIcebergRead:
-    def test_pyiceberg_read(self, rest_catalog):
+    def test_pyiceberg_read_deletes(self, rest_catalog):
         table = rest_catalog.load_table("default.duckdb_deletes_for_other_engines")
         arrow_table: pa.Table = table.scan().to_arrow()
         res = arrow_table.to_pylist()
@@ -27,9 +36,7 @@ class TestPyIcebergRead:
             {'a': 59},
         ]
 
-
-class TestPyIcebergRead:
-    def test_pyiceberg_read(self, rest_catalog):
+    def test_pyiceberg_read_updates(self, rest_catalog):
         table = rest_catalog.load_table("default.duckdb_updates_for_other_engines")
         arrow_table: pa.Table = table.scan().to_arrow()
         res = arrow_table.to_pylist()
@@ -57,8 +64,17 @@ class TestPyIcebergRead:
             {'a': 100},
         ]
 
+    @pytest.mark.requires_capabilities("format_v3")
+    def test_pyiceberg_read_duckdb_timestamptz_ns(self, rest_catalog):
+        table = rest_catalog.load_table("default.duckdb_timestamptz_ns_for_other_engines")
+        arrow_table: pa.Table = table.scan().to_arrow()
+        rows = sorted(zip(arrow_column_values(arrow_table, "id"), arrow_column_values(arrow_table, "val")))
 
-class TestPyIcebergRead:
+        assert rows == [
+            (1, 1579077000123456789),
+            (2, 1624200300987654321),
+        ]
+
     def test_pyiceberg_read(self, rest_catalog):
         tbl = rest_catalog.load_table("default.test_metadata_for_pyiceberg")
         scan = tbl.scan(row_filter=pyice.expressions.EqualTo("a", 350))
@@ -67,8 +83,14 @@ class TestPyIcebergRead:
         # only 1 data file should match the filter
         assert len(matched_files) == 1
 
-
-class TestPyIcebergRead:
+    @pytest.mark.skipif(
+        is_active_catalog('polaris'),
+        reason="Polaris skips the bounds setup table in this suite",
+    )
+    @pytest.mark.skipif(
+        is_active_catalog('lakekeeper'),
+        reason="Lakekeeper skips the bounds setup table in this suite",
+    )
     def test_pyiceberg_read_duckdb_upper_lower_bounds(self, rest_catalog):
         tbl = rest_catalog.load_table("default.lower_upper_bounds_test")
         arrow_table: pa.Table = tbl.scan().to_arrow()
@@ -113,8 +135,6 @@ class TestPyIcebergRead:
             },
         ]
 
-
-class TestPyIcebergRead:
     def test_pyiceberg_read_duckdb_infinities(self, rest_catalog):
         tbl = rest_catalog.load_table("default.test_infinities")
         arrow_table: pa.Table = tbl.scan().to_arrow()
@@ -122,8 +142,6 @@ class TestPyIcebergRead:
         assert len(res) == 2
         assert res == [{'float_type': inf, 'double_type': inf}, {'float_type': -inf, 'double_type': -inf}]
 
-
-class TestPyIcebergReadDuckDBNestedTypes:
     def test_pyiceberg_read_duckdb_nested_types(self, rest_catalog):
         tbl = rest_catalog.load_table("default.duckdb_nested_types")
         arrow_table: pa.Table = tbl.scan().to_arrow()

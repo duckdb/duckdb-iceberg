@@ -119,6 +119,12 @@ struct YearTransform {
 			auto components = Timestamp::GetComponents(timestamp_t(micros));
 			return Value::INTEGER(components.year - 1970);
 		}
+		case LogicalTypeId::TIMESTAMP_TZ_NS: {
+			auto val = constant.GetValue<timestamp_tz_ns_t>();
+			auto micros = IcebergNanosToMicrosFloor(val.value);
+			auto components = Timestamp::GetComponents(timestamp_t(micros));
+			return Value::INTEGER(components.year - 1970);
+		}
 		case LogicalTypeId::DATE: {
 			int32_t year;
 			int32_t month;
@@ -163,6 +169,12 @@ struct MonthTransform {
 		}
 		case LogicalTypeId::TIMESTAMP_NS: {
 			auto val = constant.GetValue<timestamp_ns_t>();
+			auto ts = timestamp_t(IcebergNanosToMicrosFloor(val.value));
+			auto diff = Interval::GetAge(ts, timestamp_t::epoch());
+			return Value::INTEGER(diff.months);
+		}
+		case LogicalTypeId::TIMESTAMP_TZ_NS: {
+			auto val = constant.GetValue<timestamp_tz_ns_t>();
 			auto ts = timestamp_t(IcebergNanosToMicrosFloor(val.value));
 			auto diff = Interval::GetAge(ts, timestamp_t::epoch());
 			return Value::INTEGER(diff.months);
@@ -213,6 +225,12 @@ struct DayTransform {
 			auto diff = Interval::GetDifference(ts, timestamp_t::epoch());
 			return Value::INTEGER(diff.days);
 		}
+		case LogicalTypeId::TIMESTAMP_TZ_NS: {
+			auto val = constant.GetValue<timestamp_tz_ns_t>();
+			auto ts = timestamp_t(IcebergNanosToMicrosFloor(val.value));
+			auto diff = Interval::GetDifference(ts, timestamp_t::epoch());
+			return Value::INTEGER(diff.days);
+		}
 		case LogicalTypeId::DATE: {
 			auto val = constant.GetValue<date_t>();
 			return Value::INTEGER(val.days);
@@ -257,6 +275,10 @@ struct HourTransform {
 			auto val = constant.GetValue<timestamp_ns_t>();
 			return Value::INTEGER(static_cast<int32_t>(IcebergFloorDiv(val.value, Interval::NANOS_PER_HOUR)));
 		}
+		case LogicalTypeId::TIMESTAMP_TZ_NS: {
+			auto val = constant.GetValue<timestamp_tz_ns_t>();
+			return Value::INTEGER(static_cast<int32_t>(IcebergFloorDiv(val.value, Interval::NANOS_PER_HOUR)));
+		}
 		default:
 			throw NotImplementedException("'hour' transform for type %s", constant.type().ToString());
 		}
@@ -285,13 +307,19 @@ struct BucketTransform {
 	static bool CompareEqual(const Value &constant, const IcebergPredicateStats &stats) {
 		// ApplyTransform returns null for null inputs (Iceberg spec) and for
 		// unsupported types; in both cases skip filtering (conservative).
-		if (constant.IsNull() || stats.lower_bound.IsNull() || stats.upper_bound.IsNull()) {
+		if (constant.IsNull()) {
+			return true;
+		}
+		if (!stats.lower_bound || stats.lower_bound->IsNull()) {
+			return true;
+		}
+		if (!stats.upper_bound || stats.upper_bound->IsNull()) {
 			return true;
 		}
 
 		int32_t bucket_id = constant.GetValue<int32_t>();
-		int32_t lower_bucket = stats.lower_bound.GetValue<int32_t>();
-		int32_t upper_bucket = stats.upper_bound.GetValue<int32_t>();
+		int32_t lower_bucket = stats.lower_bound->GetValue<int32_t>();
+		int32_t upper_bucket = stats.upper_bound->GetValue<int32_t>();
 		return (bucket_id >= lower_bucket && bucket_id <= upper_bucket);
 	}
 	static bool CompareLessThan(const Value &constant, const IcebergPredicateStats &stats) {

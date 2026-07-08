@@ -668,8 +668,14 @@ IcebergTableInformation IcebergTableInformation::Copy(IcebergTransaction &iceber
 			auto &snapshot = snapshot_info.snapshot;
 			D_ASSERT(snapshot);
 			ret.table_metadata.SetCurrentSchemaId(table_metadata.GetCurrentSchemaId());
-			ret.table_metadata.last_sequence_number = snapshot->sequence_number;
-			ret.table_metadata.current_snapshot_id = snapshot->snapshot_id;
+			if (!snapshot->sequence_number) {
+				throw InvalidConfigurationException("snapshot.sequence_number is not set");
+			}
+			ret.table_metadata.last_sequence_number = *snapshot->sequence_number;
+			if (!snapshot->snapshot_id) {
+				throw InvalidConfigurationException("snapshot.snapshot_id is not set");
+			}
+			ret.table_metadata.current_snapshot_id = *snapshot->snapshot_id;
 			return ret;
 		}
 		ret.table_metadata = ret.CreateMetadataFromLog(context, transaction_start_millis, ret.latest_metadata_json);

@@ -71,6 +71,16 @@ SELECT typeof(iceberg_bucket(16, '2023-01-01'::TIMESTAMPTZ));
 INTEGER
 
 query I
+SELECT typeof(iceberg_bucket(16, '2023-01-01 00:00:00.123456789'::TIMESTAMP_NS));
+----
+INTEGER
+
+query I
+SELECT typeof(iceberg_bucket(16, '2023-01-01 00:00:00.123456789+00'::TIMESTAMPTZ_NS));
+----
+INTEGER
+
+query I
 SELECT typeof(iceberg_bucket(16, '\x01\x02'::BLOB));
 ----
 INTEGER
@@ -106,6 +116,22 @@ query I
 SELECT iceberg_bucket(100, '2017-11-16'::DATE);
 ----
 26
+
+# TIMESTAMP_NS follows the Iceberg timestamp_ns hash vectors, which floor nanos to micros before hashing.
+query II
+SELECT
+	iceberg_bucket(16, '2017-11-16T22:31:08.000000001'::TIMESTAMP_NS),
+	iceberg_bucket(16, '2017-11-16T22:31:08.000001001'::TIMESTAMP_NS);
+----
+7	6
+
+# TIMESTAMPTZ_NS follows the same instant-based hash vectors.
+query II
+SELECT
+	iceberg_bucket(16, '2017-11-16T14:31:08.000000001-08:00'::TIMESTAMPTZ_NS),
+	iceberg_bucket(16, '2017-11-16T14:31:08.000001001-08:00'::TIMESTAMPTZ_NS);
+----
+7	6
 
 # ---- Result is always in range [0, num_buckets) ----
 

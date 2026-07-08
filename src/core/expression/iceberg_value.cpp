@@ -230,6 +230,14 @@ DeserializeResult IcebergValue::DeserializeValue(const string_t &blob, const Log
 		} else {
 			return DeserializeError(blob, type);
 		}
+	case LogicalTypeId::TIMESTAMP_TZ_NS: {
+		if (blob.GetSize() != sizeof(int64_t)) {
+			return DeserializeError(blob, type);
+		}
+		int64_t nanos_since_epoch;
+		std::memcpy(&nanos_since_epoch, blob.GetData(), sizeof(int64_t));
+		return Value::TIMESTAMPTZNS(timestamp_tz_ns_t(nanos_since_epoch));
+	}
 	case LogicalTypeId::UUID:
 		return DeserializeUUID(blob, type);
 	default:
@@ -240,32 +248,35 @@ DeserializeResult IcebergValue::DeserializeValue(const string_t &blob, const Log
 
 const idx_t IcebergValue::MAX_STRING_UPPERBOUND_LENGTH;
 
-// Largest length <= MAX_STRING_UPPERBOUND_LENGTH that does not split a multi-byte
-// UTF-8 character, so a truncated bound stays valid UTF-8.
-static idx_t TruncateToCodePointBoundary(const string &input) {
-	idx_t len = std::min<idx_t>(IcebergValue::MAX_STRING_UPPERBOUND_LENGTH, input.size());
+// Largest length <= max_length that doesn't split a multi-byte UTF-8 character
+// (INVALID_INDEX = no truncation), so a truncated bound stays valid UTF-8.
+static idx_t TruncateToCodePointBoundary(const string &input, idx_t max_length) {
+	if (max_length >= input.size()) {
+		return input.size();
+	}
+	idx_t len = max_length;
 	while (len < input.size() && (static_cast<unsigned char>(input[len]) & 0xC0) == 0x80) {
 		len--;
 	}
 	return len;
 }
 
-string IcebergValue::TruncateString(const string &input) {
+string IcebergValue::TruncateString(const string &input, idx_t max_length) {
 	// A prefix truncated on a code-point boundary is a valid lower bound (<= input).
-	return input.substr(0, TruncateToCodePointBoundary(input));
+	return input.substr(0, TruncateToCodePointBoundary(input, max_length));
 }
 
-bool IcebergValue::TruncateAndIncrementString(const string &input, string &result) {
+bool IcebergValue::TruncateAndIncrementString(const string &input, string &result, idx_t max_length) {
 	// If the whole value fits within the bound length it is itself a valid
 	// (exact) upper bound; nothing to truncate or increment.
-	if (input.size() <= IcebergValue::MAX_STRING_UPPERBOUND_LENGTH) {
+	if (input.size() <= max_length) {
 		result = input;
 		return true;
 	}
 
 	// Truncate to a code-point boundary, then round up to a valid upper bound by
 	// incrementing the last code point below.
-	idx_t len = TruncateToCodePointBoundary(input);
+	idx_t len = TruncateToCodePointBoundary(input, max_length);
 
 	// Round the truncated prefix up to a valid upper bound by incrementing the
 	// last code point to the next scalar value (skipping the UTF-16 surrogate
@@ -312,7 +323,7 @@ std::vector<uint8_t> HexStringToBytes(const std::string &hex) {
 }
 
 SerializeResult IcebergValue::SerializeValue(Value input_value, const LogicalType &column_type,
-                                             SerializeBound bound_type) {
+                                             SerializeBound bound_type, const IcebergMetricsConfig &metrics_config) {
 	switch (column_type.id()) {
 	case LogicalTypeId::INTEGER: {
 		int32_t val = input_value.GetValue<int32_t>();
@@ -331,20 +342,20 @@ SerializeResult IcebergValue::SerializeValue(Value input_value, const LogicalTyp
 		return ret;
 	}
 	case LogicalTypeId::VARCHAR: {
+		auto input = input_value.GetValue<string>();
 		string val;
 		if (bound_type == SerializeBound::UPPER_BOUND) {
-			// if we are serializing upper bound, we must truncate and increment
-			if (!IcebergValue::TruncateAndIncrementString(input_value.GetValue<string>(), val)) {
+			// an upper bound must be truncated and rounded up to stay >= every value
+			if (!TruncateAndIncrementString(input, val, metrics_config.truncate_length)) {
 				// No representable upper bound could be produced; omit it (optional per spec).
 				return SerializeResult();
 			}
 		} else {
-			// for lower bound truncating is enough
-			val = IcebergValue::TruncateString(input_value.GetValue<string>());
+			// a truncated prefix is already a valid lower bound (<= every value)
+			val = TruncateString(input, metrics_config.truncate_length);
 		}
 		auto serialized_val = Value::BLOB(reinterpret_cast<const_data_ptr_t>(val.data()), val.size());
-		auto ret = SerializeResult(column_type, serialized_val);
-		return ret;
+		return SerializeResult(column_type, serialized_val);
 	}
 	case LogicalTypeId::FLOAT: {
 		float val = input_value.GetValue<float>();
@@ -403,6 +414,16 @@ SerializeResult IcebergValue::SerializeValue(Value input_value, const LogicalTyp
 		timestamp_ns_t val = input_value.GetValue<timestamp_ns_t>();
 		if (!Value::IsFinite(val)) {
 			throw ConversionException("Cannot write infinity/-infinity for timestamp_ns type");
+		}
+		int64_t nanos_since_epoch = val.value;
+		auto serialized_const_data_ptr = const_data_ptr_cast<int64_t>(&nanos_since_epoch);
+		auto serialized_val = Value::BLOB(serialized_const_data_ptr, sizeof(int64_t));
+		return SerializeResult(column_type, serialized_val);
+	}
+	case LogicalTypeId::TIMESTAMP_TZ_NS: {
+		timestamp_tz_ns_t val = input_value.GetValue<timestamp_tz_ns_t>();
+		if (!Value::IsFinite(val)) {
+			throw ConversionException("Cannot write infinity/-infinity for timestamptz_ns type");
 		}
 		int64_t nanos_since_epoch = val.value;
 		auto serialized_const_data_ptr = const_data_ptr_cast<int64_t>(&nanos_since_epoch);

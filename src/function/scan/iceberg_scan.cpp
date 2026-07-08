@@ -17,6 +17,7 @@
 #include "duckdb/parser/tableref/emptytableref.hpp"
 #include "duckdb/planner/operator/logical_get.hpp"
 #include "duckdb/planner/operator/logical_comparison_join.hpp"
+#include "duckdb/storage/table/row_group_reorderer.hpp"
 #include "duckdb/common/file_opener.hpp"
 #include "duckdb/common/file_system.hpp"
 #include "duckdb/main/extension/extension_loader.hpp"
@@ -71,6 +72,12 @@ BindInfo IcebergBindInfo(const optional_ptr<FunctionData> bind_data) {
 	return BindInfo(*table);
 }
 
+static void IcebergSetScanOrder(unique_ptr<RowGroupOrderOptions> order_options, optional_ptr<FunctionData> bind_data) {
+	auto &multi_file_data = bind_data->Cast<MultiFileBindData>();
+	auto &file_list = multi_file_data.file_list->Cast<IcebergMultiFileList>();
+	file_list.SetScanOrder(std::move(order_options));
+}
+
 //! FIXME: needs v1.5.1, causes a crash on v1.5.0
 // static bool IcebergScanSupportsPushdownType(const FunctionData &bind_data_p, idx_t column_id) {
 //	// Don't push down filters on the _row_id virtual column
@@ -104,6 +111,7 @@ TableFunctionSet IcebergFunctions::GetIcebergScanFunction(ExtensionLoader &loade
 		function.get_bind_info = IcebergBindInfo;
 		function.get_virtual_columns = IcebergVirtualColumns;
 		function.get_partition_stats = IcebergMultiFileReader::IcebergGetPartitionStats;
+		function.set_scan_order = IcebergSetScanOrder;
 		// function.supports_pushdown_type = IcebergScanSupportsPushdownType;
 
 		// Schema param is just confusing here

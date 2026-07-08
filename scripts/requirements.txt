@@ -1,7 +1,7 @@
 pyspark==4.0.1
 duckdb==1.4.0
 pydantic==2.9.0
-pyiceberg==0.9.1
+pyiceberg==0.11.1
 pyarrow==24.0.0
 pytest==9.0.3
 mitmproxy==12.2.1

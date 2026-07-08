@@ -208,28 +208,24 @@ void IcebergAddSnapshot::CreateUpdate(DatabaseInstance &db, ClientContext &conte
 	ConstructManifestList(new_manifest_list, avro_copy, db, commit_state);
 
 	//! Construct the snapshot
-	IcebergSnapshot new_snapshot;
+	IcebergSnapshot new_snapshot(schema_id);
 	new_snapshot.operation = operation;
 	new_snapshot.snapshot_id = snapshot_id;
 	new_snapshot.sequence_number = sequence_number;
-	new_snapshot.SetSchemaId(schema_id);
 	new_snapshot.manifest_list = manifest_list_path;
 	new_snapshot.timestamp_ms = Timestamp::GetEpochMs(Timestamp::GetCurrentTimestamp());
 
 	optional_ptr<const IcebergSnapshot> parent_snapshot = commit_state.latest_snapshot;
 	if (parent_snapshot) {
-		new_snapshot.has_parent_snapshot = true;
 		new_snapshot.metrics = IcebergSnapshotMetrics(*parent_snapshot);
 		new_snapshot.parent_snapshot_id = parent_snapshot->snapshot_id;
 	}
 
 	if (table_metadata.iceberg_version >= 3) {
-		new_snapshot.has_first_row_id = true;
 		new_snapshot.first_row_id = commit_state.next_row_id;
-		new_snapshot.has_added_rows = true;
+		new_snapshot.added_rows = 0;
 	}
 
-	new_snapshot.added_rows = 0;
 	for (auto &manifest_list_entry : uncommitted_manifest_files) {
 		auto &manifest_file = manifest_list_entry.file;
 		new_snapshot.metrics.AddManifestFile(manifest_file);
@@ -242,7 +238,7 @@ void IcebergAddSnapshot::CreateUpdate(DatabaseInstance &db, ClientContext &conte
 			commit_state.next_row_id += manifest_file.existing_rows_count + manifest_file.added_rows_count;
 
 			if (manifest_file.content == IcebergManifestContentType::DATA) {
-				new_snapshot.added_rows += manifest_file.added_rows_count;
+				*new_snapshot.added_rows += manifest_file.added_rows_count;
 			}
 		}
 	}

@@ -220,9 +220,9 @@ static void IcebergPartitionStatsFunction(ClientContext &context, TableFunctionI
 			AddString(output.data[col++], out, string_t(result_type.ToString()));
 
 			//! lower_bound
-			AddString(output.data[col++], out, string_t(stats.lower_bound.ToString()));
+			AddString(output.data[col++], out, string_t(stats.lower_bound->ToString()));
 			//! upper_bound
-			AddString(output.data[col++], out, string_t(stats.upper_bound.ToString()));
+			AddString(output.data[col++], out, string_t(stats.upper_bound->ToString()));
 
 			//! contains_null
 			FlatVector::GetDataMutable<bool>(output.data[col++])[out] = field_summary.contains_null;

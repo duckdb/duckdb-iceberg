@@ -1,0 +1,47 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/other_engines/test_spark_can_read_duckdb_timestamptz_ns.test
+# group: [other_engines]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+require icu
+
+statement ok
+SET TimeZone='Europe/Amsterdam';
+
+statement ok
+SET Calendar='gregorian';
+
+set ignore_error_messages
+
+statement ok
+CREATE SCHEMA IF NOT EXISTS my_datalake.default;
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.duckdb_timestamptz_ns_for_other_engines;
+
+statement ok
+CREATE TABLE my_datalake.default.duckdb_timestamptz_ns_for_other_engines (
+	id INT,
+	val TIMESTAMPTZ_NS
+) WITH ('format-version' = 3);
+
+statement ok
+INSERT INTO my_datalake.default.duckdb_timestamptz_ns_for_other_engines VALUES
+	(1, '2020-01-15 09:30:00.123456789+01'::TIMESTAMPTZ_NS),
+	(2, '2021-06-20 16:45:00.987654321+02'::TIMESTAMPTZ_NS);
+
+query II
+SELECT id, val
+FROM my_datalake.default.duckdb_timestamptz_ns_for_other_engines
+ORDER BY id;
+----
+1	2020-01-15 09:30:00.123456789+01
+2	2021-06-20 16:45:00.987654321+02

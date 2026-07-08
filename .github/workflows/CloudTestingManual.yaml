@@ -3,11 +3,7 @@ on:
   workflow_dispatch:
     inputs:
       duckdb_ref:
-        description: 'DuckDB branch name or commit hash'
-        required: false
-        default: 'main'
-      duckdb_iceberg_ref:
-        description: 'duckdb-iceberg branch name or commit hash'
+        description: 'DuckDB branch name or commit hash. Leave empty to use submodule in the branch'
         required: false
         default: 'main'
       httpfs_fork:

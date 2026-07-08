@@ -187,7 +187,10 @@ static void IcebergMetaDataFunction(ClientContext &context, TableFunctionInput &
 			//! manifest_path
 			AddString(output.data[0], out, string_t(manifest.manifest_path));
 			//! manifest_sequence_number
-			FlatVector::GetDataMutable<int64_t>(output.data[1])[out] = manifest.sequence_number;
+			if (!manifest.sequence_number) {
+				throw InvalidConfigurationException("manifest_file.sequence_number is not set");
+			}
+			FlatVector::GetDataMutable<int64_t>(output.data[1])[out] = *manifest.sequence_number;
 			//! manifest_content
 			AddString(output.data[2], out, string_t(IcebergManifestContentTypeToString(manifest.content)));
 

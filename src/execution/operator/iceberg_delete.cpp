@@ -359,10 +359,10 @@ vector<IcebergManifestEntry> IcebergDelete::GenerateDeleteManifestEntries(Iceber
 		data_file.record_count = delete_file.delete_count;
 		data_file.file_size_in_bytes = delete_file.file_size_bytes;
 		if (delete_file.content_size_in_bytes.IsValid()) {
-			data_file.content_size_in_bytes = Value::BIGINT(delete_file.content_size_in_bytes.GetIndex());
+			data_file.content_size_in_bytes = delete_file.content_size_in_bytes.GetIndex();
 		}
 		if (delete_file.content_offset.IsValid()) {
-			data_file.content_offset = Value::BIGINT(delete_file.content_offset.GetIndex());
+			data_file.content_offset = delete_file.content_offset.GetIndex();
 		}
 
 		// set lower and upper bound for the filename column

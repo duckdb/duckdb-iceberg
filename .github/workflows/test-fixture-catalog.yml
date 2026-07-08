@@ -135,11 +135,14 @@ jobs:
           FIXTURE_SERVER_AVAILABLE: 1
           EQUALITY_DELETE_WRITES_ENABLED: ${{ inputs.equality-delete-writes-enabled }}
         run: |
-          # test with spark v4
+          # Only one SparkContext can live per JVM/process, so to genuinely test
+          # multiple Iceberg runtimes we run the suite once per runtime, isolated
+          # in its own process via the ICEBERG_RUNTIME selector.
+          # test with spark v4 (Scala 2.13 runtimes)
           source .venv-spark4/bin/activate
           python3 -m pytest -vv test/python --unittest-binary ${{ inputs.build-path }}/test/unittest --test-python-verbosity verbose
           deactivate
-          # test with spark v3
+          # test with spark v3 (Scala 2.12 runtimes)
           python3 -m venv .venv-spark3
           source .venv-spark3/bin/activate
           python3 -m pip install pyspark==3.5.2 pytest pyiceberg==0.9.1 pyarrow pydantic==2.9.0

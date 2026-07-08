@@ -18,6 +18,9 @@ require httpfs
 
 require aws
 
+# see https://github.com/duckdblabs/duckdb-internal/issues/9540
+mode skip
+
 # override the default behaviour of skipping HTTP errors and connection failures: this test fails on connection issues
 set ignore_error_messages
 
@@ -28,7 +31,7 @@ CREATE TABLE logs_tracker AS SELECT len(content) AS log_length FROM read_text('m
 statement ok
 CREATE SECRET r2_secret (
     TYPE ICEBERG,
-    TOKEN '${R2_TOKEN}'
+    TOKEN '{R2_TOKEN}'
 );
 
 statement ok
@@ -37,7 +40,7 @@ SET ca_cert_file = '~/.mitmproxy/mitmproxy-ca-cert.pem';
 statement ok
 CREATE SECRET http_proxy (
     TYPE HTTP,
-    http_proxy '${HTTP_PROXY_PUBLIC}'
+    http_proxy '{HTTP_PROXY_PUBLIC}'
 );
 
 statement ok

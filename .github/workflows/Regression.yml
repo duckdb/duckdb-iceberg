@@ -111,7 +111,7 @@ jobs:
               exit 1
             fi
           else
-            BASE_REF="origin/${BASE_BRANCH}"
+            BASE_REF="$(git rev-parse "origin/${BASE_BRANCH}")"
           fi
           echo "Selected base ref: ${BASE_REF}"
           echo "BASE_REF=${BASE_REF}" >> "$GITHUB_ENV"
@@ -119,12 +119,6 @@ jobs:
       - name: Setup fixture
         run: |
           make fixture-data TEST=tpch
-
-      - name: Run mitmproxy
-        shell: bash
-        run: |
-          source .venv-spark4/bin/activate
-          mitmdump --mode regular@8878 --flow-detail 2 > mitmproxy.log 2>&1 &
 
       - name: Checkout Base Branch
         run: |

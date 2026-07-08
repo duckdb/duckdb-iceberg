@@ -1,0 +1,25 @@
+# name: test/sql/local/iceberg_scans/timestamptz_ns_type.test
+# group: [iceberg_scans]
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+require icu
+
+statement ok
+SET TimeZone='UTC';
+
+query TTTTTT
+DESCRIBE SELECT val FROM ICEBERG_SCAN('{WORKING_DIRECTORY}/data/persistent/timestamptz_ns/metadata/v1.metadata.json');
+----
+val	TIMESTAMPTZ_NS	YES	NULL	NULL	NULL
+
+query I
+SELECT count(*) FROM ICEBERG_SCAN('{WORKING_DIRECTORY}/data/persistent/timestamptz_ns/metadata/v1.metadata.json');
+----
+0

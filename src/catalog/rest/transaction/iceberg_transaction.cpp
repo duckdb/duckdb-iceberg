@@ -10,6 +10,7 @@
 #include "yyjson.hpp"
 
 #include <chrono>
+#include <optional>
 #include <random>
 #include <thread>
 
@@ -260,7 +261,10 @@ static SingleTableStagedCommit StageSingleTableCommit(DatabaseInstance &db, Iceb
 
 	if (!transaction_data.alters.empty()) {
 		auto &snapshot = *commit_state.latest_snapshot;
-		auto set_snapshot_ref_update = CreateSetSnapshotRefUpdate(snapshot.snapshot_id);
+		if (!snapshot.snapshot_id) {
+			throw InvalidConfigurationException("snapshot.snapshot_id is not set");
+		}
+		auto set_snapshot_ref_update = CreateSetSnapshotRefUpdate(*snapshot.snapshot_id);
 		commit_state.table_change.updates.push_back(std::move(set_snapshot_ref_update));
 	}
 
@@ -467,6 +471,7 @@ void IcebergTransaction::Commit() {
 		CleanupFiles();
 		DropSecrets(*temp_con_context);
 		temp_con.Rollback();
+		EvictCachedTables();
 		error.Throw("Failed to commit Iceberg transaction: ");
 	}
 
@@ -525,7 +530,7 @@ void IcebergTransaction::DoMultiTableCommitUpdates(IcebergTransactionAlterUpdate
 	//! The retry policy is the tables' folded (most-lenient) config, produced by GetTransactionRequest.
 	//! It is stable across attempts (same tables), so the backoff state is created once, lazily, from
 	//! the first staged request and reused for every retry.
-	unique_ptr<IcebergRetryBackoff> backoff;
+	std::optional<IcebergRetryBackoff> backoff;
 	for (idx_t attempt = 0;; attempt++) {
 		auto transaction_info = GetTransactionRequest(alter_update, context);
 		if (transaction_info.request.table_changes.empty()) {
@@ -533,7 +538,7 @@ void IcebergTransaction::DoMultiTableCommitUpdates(IcebergTransactionAlterUpdate
 			return;
 		}
 		if (!backoff) {
-			backoff = make_uniq<IcebergRetryBackoff>(transaction_info.retry_config);
+			backoff.emplace(transaction_info.retry_config);
 		}
 
 		std::unique_ptr<yyjson_mut_doc, YyjsonDocDeleter> doc_p(yyjson_mut_doc_new(nullptr));
@@ -572,7 +577,7 @@ void IcebergTransaction::DoSingleTableCommitUpdates(IcebergTransactionAlterUpdat
 		auto &table_key = entry.first;
 		//! Backoff state is created once per table (lazily, from the first staged commit's config)
 		//! and reused across this table's retries.
-		unique_ptr<IcebergRetryBackoff> backoff;
+		std::optional<IcebergRetryBackoff> backoff;
 		for (idx_t attempt = 0;; attempt++) {
 			if (alter_update.committed_tables.count(table_key)) {
 				break;
@@ -584,7 +589,7 @@ void IcebergTransaction::DoSingleTableCommitUpdates(IcebergTransactionAlterUpdat
 
 			auto table_transaction_info = StageSingleTableCommit(db, table_info, context);
 			if (!backoff) {
-				backoff = make_uniq<IcebergRetryBackoff>(table_transaction_info.retry_config);
+				backoff.emplace(table_transaction_info.retry_config);
 			}
 			auto &table_change = table_transaction_info.request;
 			D_ASSERT(table_change.identifier);
@@ -687,7 +692,10 @@ public:
 	~ScopedTransaction() {
 		//! Prevent the connection from destructing with an active transaction
 		//! As that causes it to ROLLBACK and enter CleanupFiles - resulting in a stack overflow due to recursion
-		connection.Commit();
+		auto result = connection.Query("COMMIT");
+		if (result->HasError()) {
+			connection.Query("ROLLBACK");
+		}
 	}
 
 public:
@@ -755,6 +763,41 @@ void IcebergTransaction::CleanupFiles() {
 					}
 				}
 			}
+		}
+	}
+}
+
+void IcebergTransaction::EvictCachedTables() {
+	if (!catalog.attach_options.max_table_staleness_micros.IsValid()) {
+		return;
+	}
+	ScopedTransaction temp_con(db);
+	auto &temp_context = temp_con.GetContext();
+	for (auto &transaction_update : transaction_updates) {
+		switch (transaction_update->type) {
+		case IcebergTransactionUpdateType::ALTER: {
+			auto &alter_update = transaction_update->Cast<IcebergTransactionAlterUpdate>();
+			for (auto &up_table : alter_update.updated_tables) {
+				if (alter_update.committed_tables.count(up_table.first)) {
+					//! Already committed (and its cache entry already evicted on that success)
+					continue;
+				}
+				catalog.table_request_cache.Expire(temp_context, up_table.first);
+			}
+			break;
+		}
+		case IcebergTransactionUpdateType::DELETE: {
+			auto &delete_update = transaction_update->Cast<IcebergTransactionDeleteUpdate>();
+			catalog.table_request_cache.Expire(temp_context, delete_update.deleted_table.GetTableKey());
+			break;
+		}
+		case IcebergTransactionUpdateType::RENAME: {
+			auto &rename_update = transaction_update->Cast<IcebergTransactionRenameUpdate>();
+			catalog.table_request_cache.Expire(temp_context, rename_update.table.GetTableKey());
+			break;
+		}
+		default:
+			break;
 		}
 	}
 }

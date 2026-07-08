@@ -46,14 +46,14 @@ static void LoadExistingManifestList(ClientContext &context, const IcebergTableM
 		if (manifest_file.content != IcebergManifestContentType::DATA) {
 			continue;
 		}
-		if (manifest_file.has_first_row_id) {
+		if (manifest_file.first_row_id) {
 			continue;
 		}
-		if (current_snapshot->has_first_row_id) {
-			throw InternalException("Table is corrupted, snapshot has 'first-row-id' but not all 'manifest_file' "
-			                        "entries have a 'first_row_id'");
+		if (current_snapshot->first_row_id) {
+			throw InvalidConfigurationException(
+			    "Table is corrupted, snapshot has 'first-row-id' but not all 'manifest_file' "
+			    "entries have a 'first_row_id'");
 		}
-		manifest_file.has_first_row_id = true;
 		manifest_file.first_row_id = next_row_id;
 		next_row_id += manifest_file.added_rows_count;
 		next_row_id += manifest_file.existing_rows_count;
@@ -63,8 +63,8 @@ static void LoadExistingManifestList(ClientContext &context, const IcebergTableM
 IcebergTransactionData::IcebergTransactionData(ClientContext &context, const IcebergTableInformation &table_info)
     : context(context), table_info(table_info) {
 	initial_table_uuid = table_info.table_metadata.table_uuid;
-	if (table_info.table_metadata.has_next_row_id) {
-		next_row_id = table_info.table_metadata.next_row_id;
+	if (table_info.table_metadata.next_row_id) {
+		next_row_id = *table_info.table_metadata.next_row_id;
 	}
 	initial_schema_id = table_info.table_metadata.GetCurrentSchemaId();
 	initial_default_spec_id = table_info.table_metadata.default_spec_id;
@@ -139,8 +139,8 @@ void IcebergTransactionData::CacheExistingManifestList(lock_guard<mutex> &guard,
 		return;
 	}
 	int64_t loaded_next_row_id = 0;
-	if (metadata.has_next_row_id) {
-		loaded_next_row_id = metadata.next_row_id;
+	if (metadata.next_row_id) {
+		loaded_next_row_id = *metadata.next_row_id;
 	}
 	LoadExistingManifestList(context, metadata, existing_manifest_list, loaded_next_row_id);
 	next_row_id = loaded_next_row_id;
@@ -179,7 +179,7 @@ void IcebergTransactionData::AddSnapshot(IcebergSnapshotOperationType operation,
 	auto add_snapshot = make_uniq<IcebergAddSnapshot>(table_info, operation);
 	add_snapshot->AddManifestFile(std::move(manifest_file));
 	// make sure we are still inserting into the current schema
-	if (table_metadata.has_current_snapshot) {
+	if (table_metadata.current_snapshot_id) {
 		TableAddAssertCurrentSchemaId();
 	}
 	add_snapshot->altered_manifests = std::move(altered_manifests);

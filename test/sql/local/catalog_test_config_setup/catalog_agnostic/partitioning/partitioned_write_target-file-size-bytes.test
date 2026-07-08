@@ -3,27 +3,108 @@
 
 require-env CATALOG_TEST_CONFIG_SETUP
 
-statement ok
-CALL enable_logging(level='warning');
+require avro
 
+require parquet
+
+require iceberg
+
+require httpfs
+
+set ignore_error_messages
+
+# With 'target-file-size-bytes' set, 500_000 rows -> 4-6 files
 statement ok
 drop table if exists my_datalake.default.my_table;
 
 statement ok
 CREATE TABLE my_datalake.default.my_table (
-  user_id INT
-) PARTITIONED BY (user_id) WITH (
-  'write.target-file-size-bytes' = '200'
+  user_id INT,
+  data VARCHAR,
+  partition_id INT
+) PARTITIONED BY (partition_id) WITH (
+  'write.target-file-size-bytes' = '1048576',
+  'write.parquet.compression-codec' = 'snappy'
 );
 
-statement error
-INSERT INTO my_datalake.default.my_table SELECT * FROM range(100);
+query II
+SELECT * FROM iceberg_table_properties(my_datalake.default.my_table)
+WHERE key = 'write.target-file-size-bytes';
 ----
-Invalid Input Error: Table property target-file-size-bytes is currently not supported for partitioned tables.
-To ignore this error run "SET ignore_target_file_size_for_partitioned_tables=true"
+write.target-file-size-bytes	1048576
+
+query I
+INSERT INTO my_datalake.default.my_table
+SELECT i, concat('thisisalongstring', i), 1
+FROM range(500_000) t(i);
+----
+500000
+
+query II
+EXPLAIN ANALYZE SELECT * FROM my_datalake.default.my_table
+----
+analyzed_plan	<REGEX>:.*Total Files Read: [4-6].*
+
+# Verify with a "human-readable" format for bytes
+statement ok
+drop table if exists my_datalake.default.my_table;
 
 statement ok
-SET ignore_target_file_size_for_partitioned_tables=true
+CREATE TABLE my_datalake.default.my_table (
+  user_id INT,
+  data VARCHAR,
+  partition_id INT
+) PARTITIONED BY (partition_id) WITH (
+  'write.target-file-size-bytes' = '1024KB',
+  'write.parquet.compression-codec' = 'snappy'
+);
+
+# FIXME: to be good citizens, we should probably transform to a non-human-readable representation (not formatted with KB)
+query II
+SELECT * FROM iceberg_table_properties(my_datalake.default.my_table)
+WHERE key = 'write.target-file-size-bytes';
+----
+write.target-file-size-bytes	1024KB
+
+query I
+INSERT INTO my_datalake.default.my_table
+SELECT i, concat('thisisalongstring', i), 1
+FROM range(500_000) t(i);
+----
+500000
+
+query II
+EXPLAIN ANALYZE SELECT * FROM my_datalake.default.my_table
+----
+analyzed_plan	<REGEX>:.*Total Files Read: [4-6].*
+
+# Without 'target-file-size-bytes' set, 500_000 rows -> 1 file
+statement ok
+drop table if exists my_datalake.default.my_table;
 
 statement ok
-INSERT INTO my_datalake.default.my_table SELECT * FROM range(100);
+CREATE TABLE my_datalake.default.my_table (
+  user_id INT,
+  data VARCHAR,
+  partition_id INT
+) PARTITIONED BY (partition_id) WITH (
+  'write.parquet.compression-codec' = 'snappy'
+);
+
+# Verify that it's not set
+query II
+SELECT * FROM iceberg_table_properties(my_datalake.default.my_table)
+WHERE key = 'write.target-file-size-bytes';
+----
+
+query I
+INSERT INTO my_datalake.default.my_table
+SELECT i, concat('thisisalongstring', i), 1
+FROM range(500_000) t(i);
+----
+500000
+
+query II
+EXPLAIN ANALYZE SELECT * FROM my_datalake.default.my_table
+----
+analyzed_plan	<REGEX>:.*Total Files Read: 1.*

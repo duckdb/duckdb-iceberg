@@ -112,12 +112,10 @@ public:
 
 	int32_t iceberg_version;
 	int32_t default_spec_id;
-	bool has_next_row_id = false;
-	int64_t next_row_id = 0xDEADBEEF;
+	optional<int64_t> next_row_id;
 	optional_idx default_sort_order_id;
 
-	bool has_current_snapshot = false;
-	int64_t current_snapshot_id;
+	optional<int64_t> current_snapshot_id;
 	int64_t last_sequence_number;
 	timestamp_t last_updated_ms;
 

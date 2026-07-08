@@ -23,19 +23,6 @@ requires_equality_deletes_available = pytest.mark.skipif(
 )
 
 
-def is_active_catalog(catalog: str):
-    try:
-        return (
-            resolve_active_catalog(
-                allowed_catalogs=REST_CATALOG_NAMES,
-                purpose="catalog-backed test/python runs",
-            )
-            == catalog
-        )
-    except:
-        return False
-
-
 class TestSparkRead:
     def test_spark_read_duckdb_table(self, spark_con):
         df = spark_con.sql(
@@ -75,6 +62,27 @@ class TestSparkRead:
             Row(a=55),
             Row(a=57),
             Row(a=59),
+        ]
+
+    @pytest.mark.requires_spark(">=4.0")
+    @pytest.mark.requires_capabilities("format_v3")
+    @pytest.mark.xfail(
+        raises=Exception,
+        reason="Cannot convert unsupported type to Spark: timestamptz_ns",
+        strict=True,
+    )
+    def test_spark_read_duckdb_timestamptz_ns(self, spark_con):
+        df = spark_con.sql(
+            """
+            select id, val
+            from default.duckdb_timestamptz_ns_for_other_engines
+            order by id
+            """
+        )
+        res = df.collect()
+        assert res == [
+            Row(id=1, val=datetime.datetime(2020, 1, 15, 8, 30, 0, 123456)),
+            Row(id=2, val=datetime.datetime(2021, 6, 20, 14, 45, 0, 987654)),
         ]
 
     @pytest.mark.skipif(

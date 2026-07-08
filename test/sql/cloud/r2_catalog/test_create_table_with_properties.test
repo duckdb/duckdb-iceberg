@@ -21,7 +21,7 @@ require tpch
 statement ok
 CREATE SECRET r2_secret (
     TYPE ICEBERG,
-    TOKEN '${R2_TOKEN}'
+    TOKEN '{R2_TOKEN}'
 );
 
 

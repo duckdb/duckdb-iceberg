@@ -35,6 +35,7 @@ public:
 	static optional_ptr<SchemaCatalogEntry> GetSchemaEntry(ClientContext &context, string &input_string);
 	static idx_t CountOccurrences(const string &input, const string &to_find);
 	static CopyFunctionCatalogEntry &GetCopyFunction(ClientContext &context, const string &name);
+	static idx_t ParseByteSizeOptionallyFormatted(const string &input);
 };
 
 } // namespace duckdb

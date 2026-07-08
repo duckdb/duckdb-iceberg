@@ -52,6 +52,7 @@ static Value ParseDefaultForType(const LogicalType &type, const rest_api_objects
 	case LogicalTypeId::TIMESTAMP:
 	case LogicalTypeId::TIMESTAMP_TZ:
 	case LogicalTypeId::TIMESTAMP_NS:
+	case LogicalTypeId::TIMESTAMP_TZ_NS:
 	case LogicalTypeId::VARCHAR:
 	case LogicalTypeId::UUID: {
 		D_ASSERT(default_value.string_type_value);
@@ -101,6 +102,9 @@ LogicalType IcebergColumnDefinition::ParsePrimitiveTypeString(const string &type
 	}
 	if (type_str == "timestamp_ns") {
 		return LogicalType::TIMESTAMP_NS;
+	}
+	if (type_str == "timestamptz_ns") {
+		return LogicalType::TIMESTAMP_TZ_NS;
 	}
 	if (type_str == "string") {
 		return LogicalType::VARCHAR;
@@ -248,6 +252,7 @@ bool IcebergColumnDefinition::IsIcebergPrimitiveType() const {
 	case LogicalTypeId::TIMESTAMP:
 	case LogicalTypeId::TIMESTAMP_TZ:
 	case LogicalTypeId::TIMESTAMP_NS:
+	case LogicalTypeId::TIMESTAMP_TZ_NS:
 	case LogicalTypeId::VARIANT:
 	case LogicalTypeId::GEOMETRY:
 		return true;

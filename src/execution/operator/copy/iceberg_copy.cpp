@@ -69,7 +69,6 @@ static void WriteIcebergMetadata(ClientContext &context, CopyIcebergBindData &bi
 	auto last_updated_ms = Timestamp::GetEpochMs(Timestamp::GetCurrentTimestamp());
 
 	auto &table_metadata = *bind_data.table_metadata;
-	table_metadata.has_current_snapshot = false;
 	table_metadata.last_sequence_number = 0;
 	table_metadata.last_updated_ms = last_updated_ms;
 
@@ -103,22 +102,18 @@ static void WriteIcebergMetadata(ClientContext &context, CopyIcebergBindData &bi
 		    std::move(written_files), next_row_id);
 
 		// Create a snapshot from the written files
-		IcebergSnapshot snapshot;
+		IcebergSnapshot snapshot(0);
 		snapshot.operation = IcebergSnapshotOperationType::APPEND;
 		snapshot.snapshot_id = snapshot_id;
 		snapshot.sequence_number = sequence_number;
-		snapshot.SetSchemaId(0);
 		snapshot.manifest_list = manifest_list_path;
 		snapshot.timestamp_ms = last_updated_ms;
-		snapshot.has_parent_snapshot = false;
 
 		snapshot.metrics.AddManifestFile(manifest_file.file);
 
 		if (table_metadata.iceberg_version >= 3) {
-			snapshot.has_first_row_id = true;
 			snapshot.first_row_id = first_row_id;
 
-			snapshot.has_added_rows = true;
 			if (manifest_file.file.content == IcebergManifestContentType::DATA) {
 				snapshot.added_rows = manifest_file.file.added_rows_count;
 			} else {
@@ -136,9 +131,8 @@ static void WriteIcebergMetadata(ClientContext &context, CopyIcebergBindData &bi
 		manifest_list::WriteToFile(table_metadata, manifest_list, copy_fun.function, db, context);
 
 		// Update table metadata with snapshot
-		table_metadata.has_current_snapshot = true;
 		table_metadata.current_snapshot_id = snapshot.snapshot_id;
-		table_metadata.snapshots[0] = std::move(snapshot);
+		table_metadata.snapshots.emplace(0, std::move(snapshot));
 	}
 	auto version_hint = UUID::ToString(UUID::GenerateRandomUUID());
 

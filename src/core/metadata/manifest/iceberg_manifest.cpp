@@ -104,8 +104,8 @@ struct DataFileVectorWriters {
 			WriteInt32List(equality_ids, data_file.equality_ids);
 		}
 
-		if (data_file.has_sort_order_id) {
-			sort_order_id.WriteValue(data_file.sort_order_id);
+		if (data_file.sort_order_id) {
+			sort_order_id.WriteValue(*data_file.sort_order_id);
 		} else {
 			sort_order_id.WriteNull();
 		}
@@ -119,26 +119,26 @@ struct DataFileVectorWriters {
 		}
 
 		if (referenced_data_file) {
-			if (data_file.referenced_data_file.empty()) {
+			if (!data_file.referenced_data_file) {
 				referenced_data_file->WriteNull();
 			} else {
-				referenced_data_file->WriteValue(string_t(data_file.referenced_data_file));
+				referenced_data_file->WriteValue(string_t(*data_file.referenced_data_file));
 			}
 		}
 
 		if (content_offset) {
-			if (data_file.content_offset.IsNull()) {
+			if (!data_file.content_offset) {
 				content_offset->WriteNull();
 			} else {
-				content_offset->WriteValue(data_file.content_offset.GetValue<int64_t>());
+				content_offset->WriteValue(*data_file.content_offset);
 			}
 		}
 
 		if (content_size_in_bytes) {
-			if (data_file.content_size_in_bytes.IsNull()) {
+			if (!data_file.content_size_in_bytes) {
 				content_size_in_bytes->WriteNull();
 			} else {
-				content_size_in_bytes->WriteValue(data_file.content_size_in_bytes.GetValue<int64_t>());
+				content_size_in_bytes->WriteValue(*data_file.content_size_in_bytes);
 			}
 		}
 	}
@@ -312,18 +312,17 @@ IcebergDataFile::GetExtendedPartitionInfo(const IcebergTableMetadata &metadata) 
 	return ret;
 }
 
-void IcebergDataFile::SetFirstRowId(int64_t value) {
-	has_first_row_id = true;
+void IcebergDataFile::SetFirstRowId(optional<int64_t> value) {
 	first_row_id = value;
 }
 
 bool IcebergDataFile::HasFirstRowId() const {
-	return has_first_row_id;
+	return !!first_row_id;
 }
 
 int64_t IcebergDataFile::GetFirstRowId() const {
-	D_ASSERT(has_first_row_id);
-	return first_row_id;
+	D_ASSERT(HasFirstRowId());
+	return *first_row_id;
 }
 
 LogicalType IcebergDataFile::GetType(const IcebergTableMetadata &metadata, const LogicalType &partition_type) {
@@ -391,50 +390,53 @@ LogicalType IcebergDataFile::GetType(const IcebergTableMetadata &metadata, const
 	return LogicalType::STRUCT(std::move(children));
 }
 
-void IcebergManifestEntry::SetSequenceNumber(sequence_number_t value) {
-	has_sequence_number = true;
+void IcebergManifestEntry::SetSequenceNumber(optional<sequence_number_t> value) {
 	sequence_number = value;
 }
 
-void IcebergManifestEntry::SetFileSequenceNumber(sequence_number_t value) {
-	has_file_sequence_number = true;
+void IcebergManifestEntry::SetFileSequenceNumber(optional<sequence_number_t> value) {
 	file_sequence_number = value;
 }
 
 sequence_number_t IcebergManifestEntry::GetSequenceNumber(const IcebergManifestFile &manifest_file) const {
-	if (!has_sequence_number) {
+	if (!sequence_number) {
 		if (status != IcebergManifestEntryStatusType::ADDED) {
 			throw InvalidConfigurationException(
 			    "'manifest_entry.sequence_number' is only allowed to be NULL for ADDED entries");
 		}
-		return manifest_file.sequence_number;
+		if (!manifest_file.sequence_number) {
+			throw InvalidConfigurationException("'manifest_file.sequence_number' is not set");
+		}
+		return *manifest_file.sequence_number;
 	}
-	return sequence_number;
+	return *sequence_number;
 }
 
 sequence_number_t IcebergManifestEntry::GetFileSequenceNumber(const IcebergManifestFile &manifest_file) const {
-	if (!has_file_sequence_number) {
+	if (!file_sequence_number) {
 		if (status != IcebergManifestEntryStatusType::ADDED) {
 			throw InvalidConfigurationException(
 			    "'manifest_entry.file_sequence_number' is only allowed to be NULL for ADDED entries");
 		}
-		return manifest_file.sequence_number;
+		if (!manifest_file.sequence_number) {
+			throw InvalidConfigurationException("'manifest_file.sequence_number' is not set");
+		}
+		return *manifest_file.sequence_number;
 	}
-	return file_sequence_number;
+	return *file_sequence_number;
 }
 
-void IcebergManifestEntry::SetSnapshotId(int64_t value) {
-	has_snapshot_id = true;
+void IcebergManifestEntry::SetSnapshotId(optional<int64_t> value) {
 	snapshot_id = value;
 }
 
 bool IcebergManifestEntry::HasSnapshotId() const {
-	return has_snapshot_id;
+	return !!snapshot_id;
 }
 
 int64_t IcebergManifestEntry::GetSnapshotId() const {
 	D_ASSERT(HasSnapshotId());
-	return snapshot_id;
+	return *snapshot_id;
 }
 
 static Value CreateFieldID(int32_t field_id, bool nullable) {

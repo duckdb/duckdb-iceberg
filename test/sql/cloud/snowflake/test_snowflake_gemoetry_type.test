@@ -26,15 +26,15 @@ set ignore_error_messages
 statement ok
 create secret polaris_secret (
 	TYPE ICEBERG,
-	CLIENT_ID '${SNOWFLAKE_KEY_ID_S3}',
-	CLIENT_SECRET '${SNOWFLAKE_SECRET_KEY_S3}',
-	ENDPOINT '${SNOWFLAKE_CATALOG_URI_GCS}'
+	CLIENT_ID '{SNOWFLAKE_KEY_ID_S3}',
+	CLIENT_SECRET '{SNOWFLAKE_SECRET_KEY_S3}',
+	ENDPOINT '{SNOWFLAKE_CATALOG_URI_GCS}'
 );
 
 statement ok
 attach 's3-catalog' as my_datalake (
 	type ICEBERG,
-	ENDPOINT '${SNOWFLAKE_CATALOG_URI_GCS}',
+	ENDPOINT '{SNOWFLAKE_CATALOG_URI_GCS}',
 	DEFAULT_REGION 'eu-west-2'
 );
 

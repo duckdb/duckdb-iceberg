@@ -23,8 +23,8 @@ set ignore_error_messages
 statement ok
 CREATE SECRET s1 (
       TYPE S3,
-      KEY_ID '${AWS_ACCESS_KEY_ID}',
-      SECRET '${AWS_SECRET_ACCESS_KEY}',
+      KEY_ID '{AWS_ACCESS_KEY_ID}',
+      SECRET '{AWS_SECRET_ACCESS_KEY}',
       REGION 'us-east-1'
 );
 

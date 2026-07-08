@@ -50,8 +50,8 @@ IcebergManifestListEntry IcebergManifestListEntry::CreateFromEntries(FileSystem 
 	IcebergManifestListEntry manifest_list_entry(manifest_file_path);
 	auto &manifest_file = manifest_list_entry.file;
 	manifest_file.manifest_path = manifest_file_path;
-	if (table_metadata.iceberg_version >= 3) {
-		manifest_file.has_first_row_id = true;
+	if (table_metadata.iceberg_version >= 3 && manifest_content_type == IcebergManifestContentType::DATA) {
+		//! 'first_row_id' is only assigned to data manifests (row lineage), deletes manifests leave it null
 		manifest_file.first_row_id = next_row_id;
 	}
 
@@ -92,11 +92,9 @@ IcebergManifestListEntry IcebergManifestListEntry::CreateFromEntries(FileSystem 
 		}
 
 		//! NOTE: this gets overwritten on commit
-		if (!manifest_file.has_min_sequence_number ||
-		    manifest_file.sequence_number < manifest_file.min_sequence_number) {
+		if (!manifest_file.min_sequence_number || manifest_file.sequence_number < *manifest_file.min_sequence_number) {
 			manifest_file.min_sequence_number = manifest_file.sequence_number;
 		}
-		manifest_file.has_min_sequence_number = true;
 	}
 	//! NOTE: this gets overwritten on commit
 	manifest_file.added_snapshot_id = snapshot_id;
@@ -363,28 +361,29 @@ struct ManifestListVectorWriters {
 
 		if (content) {
 			content->WriteValue(static_cast<int32_t>(manifest.content));
-			sequence_number->WriteValue(manifest.sequence_number);
-			if (!manifest.has_min_sequence_number) {
+			if (!manifest.sequence_number) {
+				throw InvalidConfigurationException("manifest_file.sequence_number is not set");
+			}
+			sequence_number->WriteValue(*manifest.sequence_number);
+			if (!manifest.min_sequence_number) {
 				min_sequence_number->WriteValue(int64_t(-1));
 			} else {
-				min_sequence_number->WriteValue(manifest.min_sequence_number);
+				min_sequence_number->WriteValue(*manifest.min_sequence_number);
 			}
 		}
 
 		if (!first_row_id) {
 			return;
 		}
-		bool has_first_row_id = manifest.has_first_row_id;
-		int64_t row_id = manifest.first_row_id;
-		if (!has_first_row_id && manifest.content == IcebergManifestContentType::DATA) {
+		auto row_id = manifest.first_row_id;
+		if (!row_id && manifest.content == IcebergManifestContentType::DATA) {
 			D_ASSERT(next_row_id);
 			row_id = static_cast<int64_t>(*next_row_id);
-			has_first_row_id = true;
 			*next_row_id += manifest.added_rows_count;
 			*next_row_id += manifest.existing_rows_count;
 		}
-		if (has_first_row_id) {
-			first_row_id->WriteValue(row_id);
+		if (row_id) {
+			first_row_id->WriteValue(*row_id);
 		} else {
 			first_row_id->WriteNull();
 		}
@@ -507,8 +506,8 @@ void WriteToFile(const IcebergTableMetadata &table_metadata, const IcebergManife
 	data.Initialize(allocator, metadata.types, STANDARD_VECTOR_SIZE);
 
 	idx_t next_row_id;
-	if (table_metadata.has_next_row_id) {
-		next_row_id = table_metadata.next_row_id;
+	if (table_metadata.next_row_id) {
+		next_row_id = *table_metadata.next_row_id;
 	} else {
 		next_row_id = 0;
 	}
@@ -567,7 +566,13 @@ unique_ptr<IcebergManifestList> IcebergManifestList::Load(const string &iceberg_
                                                           const IcebergSnapshotScanInfo &snapshot_info,
                                                           ClientContext &context, const IcebergOptions &options) {
 	auto &snapshot = *snapshot_info.snapshot;
-	auto ret = make_uniq<IcebergManifestList>(snapshot.snapshot_id, snapshot.sequence_number, snapshot.manifest_list);
+	if (!snapshot.snapshot_id) {
+		throw InvalidConfigurationException("snapshot.snapshot_id is not set");
+	}
+	if (!snapshot.sequence_number) {
+		throw InvalidConfigurationException("snapshot.sequence_number is not set");
+	}
+	auto ret = make_uniq<IcebergManifestList>(*snapshot.snapshot_id, *snapshot.sequence_number, snapshot.manifest_list);
 
 	auto &fs = FileSystem::GetFileSystem(context);
 	auto manifest_list_full_path = options.allow_moved_paths

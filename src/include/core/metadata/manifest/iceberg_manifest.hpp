@@ -79,7 +79,7 @@ public:
 	const vector<IcebergExtendedPartitionInfo> GetExtendedPartitionInfo(const IcebergTableMetadata &metadata) const;
 
 public:
-	void SetFirstRowId(int64_t first_row_id);
+	void SetFirstRowId(optional<int64_t> first_row_id);
 	bool HasFirstRowId() const;
 	int64_t GetFirstRowId() const;
 
@@ -103,16 +103,14 @@ public:
 	vector<int32_t> equality_ids;
 	vector<int64_t> split_offsets;
 
-	bool has_sort_order_id = false;
-	int32_t sort_order_id;
+	optional<int32_t> sort_order_id;
 
-	string referenced_data_file;
-	Value content_offset;
-	Value content_size_in_bytes;
+	optional<string> referenced_data_file;
+	optional<int64_t> content_offset;
+	optional<int64_t> content_size_in_bytes;
 
 private:
-	bool has_first_row_id = false;
-	int64_t first_row_id = 0xDEADBEEF;
+	optional<int64_t> first_row_id;
 };
 
 //! An entry in a manifest file
@@ -122,23 +120,18 @@ public:
 	IcebergDataFile data_file;
 
 public:
-	void SetSnapshotId(int64_t snapshot_id);
+	void SetSnapshotId(optional<int64_t> snapshot_id);
 	bool HasSnapshotId() const;
 	int64_t GetSnapshotId() const;
-	void SetSequenceNumber(sequence_number_t value);
-	void SetFileSequenceNumber(sequence_number_t value);
+	void SetSequenceNumber(optional<sequence_number_t> value);
+	void SetFileSequenceNumber(optional<sequence_number_t> value);
 	sequence_number_t GetSequenceNumber(const IcebergManifestFile &manifest_file) const;
 	sequence_number_t GetFileSequenceNumber(const IcebergManifestFile &manifest_file) const;
 
 private:
-	bool has_snapshot_id = false;
-	int64_t snapshot_id;
-
-	bool has_sequence_number = false;
-	sequence_number_t sequence_number;
-
-	bool has_file_sequence_number = false;
-	sequence_number_t file_sequence_number;
+	optional<int64_t> snapshot_id;
+	optional<sequence_number_t> sequence_number;
+	optional<sequence_number_t> file_sequence_number;
 };
 
 struct IcebergManifestListEntry;

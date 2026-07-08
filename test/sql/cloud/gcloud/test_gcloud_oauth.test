@@ -1,0 +1,37 @@
+# name: test/sql/cloud/gcloud/test_gcloud_oauth.test
+# group: [gcloud]
+
+require avro
+
+require parquet
+
+require httpfs
+
+require aws
+
+require tpch
+
+set ignore_error_messages
+
+mode skip
+
+statement ok
+CREATE SECRET biglake_auto_refresh (
+    TYPE ICEBERG,
+    CLIENT_ID '...',
+    CLIENT_SECRET '...',
+    REFRESH_TOKEN '...',
+    OAUTH2_SERVER_URI 'https://oauth2.googleapis.com/token',
+    EXTRA_HTTP_HEADERS MAP {'x-goog-user-project': '<user project>'}
+);
+
+
+statement ok
+ATTACH 'gs://biglake-public-nyc-taxi-iceberg' AS biglake_public (
+    TYPE ICEBERG,
+    SECRET biglake_auto_refresh,
+    ENDPOINT 'https://biglake.googleapis.com/iceberg/v1/restcatalog'
+);
+
+statement ok
+SELECT * FROM biglake_public.public_data.nyc_taxicab limit 10;

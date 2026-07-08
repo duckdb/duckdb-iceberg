@@ -14,7 +14,8 @@
 				"sso",
 				"sts",
 				"identity-management",
-				"rds"
+				"rds",
+				"cloudformation"
 			]
 		}
 	],

@@ -61,7 +61,7 @@ static bool MatchBoundsConstant(const Value &constant, ExpressionType comparison
 		return false;
 	}
 
-	if (!stats.has_upper_bounds || !stats.has_lower_bounds) {
+	if (!stats.upper_bound || !stats.lower_bound) {
 		// we do not have upper or lower bounds, assume the file matches.
 		return true;
 	}
@@ -97,8 +97,8 @@ template <class TRANSFORM>
 bool MatchTransformedBounds(ClientContext &context, ExpressionType comparison_type, const Expression &left,
                             const Expression &right, const IcebergPredicateStats &stats,
                             const IcebergTransform &transform) {
-	BoundExpressionReplacer lower_replacer(stats.lower_bound);
-	BoundExpressionReplacer upper_replacer(stats.upper_bound);
+	BoundExpressionReplacer lower_replacer(*stats.lower_bound);
+	BoundExpressionReplacer upper_replacer(*stats.upper_bound);
 	auto lower_copy = left.Copy();
 	auto upper_copy = left.Copy();
 	lower_replacer.VisitExpression(&lower_copy);

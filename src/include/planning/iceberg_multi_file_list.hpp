@@ -70,6 +70,7 @@ private:
 
 class IcebergTableEntry;
 struct IcebergMultiFileList;
+struct RowGroupOrderOptions;
 
 struct IcebergManifestScanningState {
 public:
@@ -156,6 +157,7 @@ public:
 	IcebergTableEntry *GetTable() const;
 	void SetTable(IcebergTableEntry *table);
 	void SetOptions(const IcebergOptions &options);
+	void SetScanOrder(unique_ptr<RowGroupOrderOptions> options);
 
 	void Bind(vector<LogicalType> &return_types, vector<Identifier> &names);
 	unique_ptr<IcebergMultiFileList> PushdownInternal(ClientContext &context, TableFilterSet &new_filters,
@@ -194,10 +196,16 @@ protected:
 
 protected:
 	bool ManifestMatchesFilter(const IcebergManifestFile &manifest) const;
+	bool FilePartitionMatchesFilter(const IcebergDataFile &data_file, const IcebergManifestFile &manifest_file,
+	                                const IcebergTableMetadata &metadata, const IcebergTableSchema &schema) const;
 	bool FileMatchesFilter(const IcebergManifestFile &manifest_file, const IcebergManifestEntry &manifest_entry,
 	                       IcebergManifestContentType file_type) const;
 	// TODO: How to guarantee we only call this after the filter pushdown?
 	void InitializeFiles(lock_guard<mutex> &guard) const;
+
+	//! Reorder (and prune, when a LIMIT is present) the materialized data files by the
+	//! ORDER BY column's per-file min/max bounds, mirroring the native RowGroupReorderer.
+	void EnsureScanOrderApplied(lock_guard<mutex> &guard) const;
 
 	//! NOTE: this requires the lock because it modifies the 'data_files' vector, potentially invalidating references
 	optional_ptr<const BoundIcebergManifestEntry> GetDataFile(idx_t file_id, lock_guard<mutex> &guard) const;
@@ -245,6 +253,10 @@ private:
 	mutable vector<bool> delete_manifest_matches;
 
 private:
+	//! Set by the table function's set_scan_order callback when an ORDER BY ... LIMIT can drive scan order.
+	mutable unique_ptr<RowGroupOrderOptions> scan_order_options;
+	mutable bool scan_order_applied = false;
+
 	//! References to items inside the 'manifest_entries' of the list entries in the 'data_manifests'
 	mutable vector<BoundIcebergManifestEntry> data_manifest_entries;
 	//! Combination of committed + transaction data manifests

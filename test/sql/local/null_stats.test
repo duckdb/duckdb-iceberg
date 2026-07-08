@@ -7,6 +7,11 @@ require parquet
 
 require iceberg
 
+require icu;
+
+statement ok
+set timezone='UTC';
+
 query IIII
 select * from iceberg_scan('{WORKING_DIRECTORY}/data/persistent/null_stats/default/test_nulls', version='00003-9d6a621e-8a72-4190-a880-f6ca02e32b86') order by all
 ----

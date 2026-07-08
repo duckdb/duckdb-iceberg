@@ -599,7 +599,10 @@ shared_ptr<MultiFileList> IcebergAvroMultiFileReader::CreateFileList(ClientConte
 			file_info.extended_info->options["etag"] = Value("");
 			file_info.extended_info->options["last_modified"] = Value::TIMESTAMP(timestamp_t(0));
 			file_info.extended_info->options["partition_spec_id"] = Value::INTEGER(manifest.file.partition_spec_id);
-			file_info.extended_info->options["sequence_number"] = Value::BIGINT(manifest.file.sequence_number);
+			if (!manifest.file.sequence_number) {
+				throw InvalidConfigurationException("manifest_file.sequence_number is not set");
+			}
+			file_info.extended_info->options["sequence_number"] = Value::BIGINT(*manifest.file.sequence_number);
 			file_info.extended_info->options["manifest_file_path"] = Value(manifest.file.manifest_path);
 		}
 	}

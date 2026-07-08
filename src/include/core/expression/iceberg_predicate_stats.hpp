@@ -2,6 +2,7 @@
 
 #include "duckdb/common/types/value.hpp"
 #include "duckdb/common/shared_ptr.hpp"
+#include "duckdb/common/optional.hpp"
 
 namespace duckdb {
 
@@ -21,13 +22,11 @@ public:
 	bool BoundsAreNull() const;
 
 public:
-	bool has_lower_bounds = false;
-	bool has_upper_bounds = false;
-	Value lower_bound;
-	Value upper_bound;
-	bool has_null = false;
-	bool has_not_null = false;
-	bool has_nan = false;
+	optional<Value> lower_bound;
+	optional<Value> upper_bound;
+	bool has_null = true;
+	bool has_not_null = true;
+	bool has_nan = true;
 	//! For GEOMETRY columns: a GEOMETRY_STATS BaseStatistics carrying the file's
 	//! bounding-box extent, used to delegate spatial predicate pruning to
 	//! GeometryStats::CheckZonemap. Null for non-geometry columns.

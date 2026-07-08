@@ -18,7 +18,9 @@
     {
       "reason": "TIMESTAMP_NS CREATE DEFAULT: catalog does not handle default correctly, instead responds with NULL",
       "paths": [
-        "test/sql/local/catalog_test_config_setup/catalog_agnostic/create/default/test_create_default_timestamp_ns.test"
+        "test/sql/local/catalog_test_config_setup/catalog_agnostic/create/default/test_create_default_timestamp_ns.test",
+        "test/sql/local/catalog_test_config_setup/catalog_agnostic/create/default/test_create_default_timestamptz_ns.test",
+        "test/sql/local/catalog_test_config_setup/catalog_agnostic/alter/add_column/alter_add_column_timestamptz_ns_initial_default.test"
       ]
     },
     {

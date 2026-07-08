@@ -83,10 +83,10 @@ const unordered_map<int32_t, IcebergPartitionSpec> &IcebergTableMetadata::GetPar
 }
 
 optional_ptr<const IcebergSnapshot> IcebergTableMetadata::GetLatestSnapshot() const {
-	if (!has_current_snapshot) {
+	if (!current_snapshot_id) {
 		return nullptr;
 	}
-	return GetSnapshotById(current_snapshot_id);
+	return GetSnapshotById(*current_snapshot_id);
 }
 
 const IcebergTableSchema &IcebergTableMetadata::GetLatestSchema() const {
@@ -410,15 +410,11 @@ IcebergTableMetadata IcebergTableMetadata::FromTableMetadata(const rest_api_obje
 	}
 	res.current_schema_id = *table_metadata.current_schema_id;
 	if (table_metadata.next_row_id) {
-		res.has_next_row_id = true;
 		res.next_row_id = *table_metadata.next_row_id;
 	}
 
 	if (table_metadata.current_snapshot_id && *table_metadata.current_snapshot_id != -1) {
-		res.has_current_snapshot = true;
 		res.current_snapshot_id = *table_metadata.current_snapshot_id;
-	} else {
-		res.has_current_snapshot = false;
 	}
 
 	if (table_metadata.last_sequence_number) {
@@ -602,7 +598,10 @@ yyjson_mut_val *IcebergTableMetadata::SnapshotLogToJSON(yyjson_mut_doc *doc) con
 	for (auto &it : snapshots) {
 		auto &snapshot = it.second;
 		auto log_item = yyjson_mut_obj(doc);
-		yyjson_mut_obj_add_int(doc, log_item, "snapshot-id", snapshot.snapshot_id);
+		if (!snapshot.snapshot_id) {
+			throw InvalidConfigurationException("snapshot.snapshot_id is not set");
+		}
+		yyjson_mut_obj_add_int(doc, log_item, "snapshot-id", *snapshot.snapshot_id);
 		yyjson_mut_obj_add_int(doc, log_item, "timestamp-ms", snapshot.timestamp_ms.value);
 		yyjson_mut_arr_add_val(log_array, log_item);
 	}
@@ -636,8 +635,8 @@ string IcebergTableMetadata::ToJSON() const {
 	yyjson_mut_obj_add_val(doc, root_obj, "default-spec-id", yyjson_mut_int(doc, default_spec_id));
 	yyjson_mut_obj_add_val(doc, root_obj, "last-partition-id", yyjson_mut_int(doc, last_partition_field_id.GetIndex()));
 	yyjson_mut_obj_add_val(doc, root_obj, "properties", TablePropertiesToJSON(doc));
-	if (has_current_snapshot) {
-		yyjson_mut_obj_add_val(doc, root_obj, "current-snapshot-id", yyjson_mut_int(doc, current_snapshot_id));
+	if (current_snapshot_id) {
+		yyjson_mut_obj_add_val(doc, root_obj, "current-snapshot-id", yyjson_mut_int(doc, *current_snapshot_id));
 	}
 	yyjson_mut_obj_add_val(doc, root_obj, "snapshots", SnapshotsToJSON(doc));
 	yyjson_mut_obj_add_val(doc, root_obj, "snapshot-log", SnapshotLogToJSON(doc));

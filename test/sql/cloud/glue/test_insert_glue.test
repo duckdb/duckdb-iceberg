@@ -164,6 +164,7 @@ select * from my_datalake.test_inserts.basic_insert_test order by id;
 1	Alice	Smith	1990-01-01
 2	Bob	Jones	1985-06-15
 3	Charlie	Brown	2000-12-31
+8	mr.scroog	bitlane	2010-06-11
 10	duckman	byteway	2010-06-11
 15	mr.scroog	bitlane	2010-06-11
 16	mr.Goose	ponder	2010-06-11

@@ -32,12 +32,11 @@ static T ReadRequiredField(const char *name, const typename VectorIterator<T>::V
 }
 
 template <class T>
-static bool ReadOptionalField(const typename VectorIterator<T>::ValueEntry &entry, T &result) {
+static optional<T> ReadOptionalField(const typename VectorIterator<T>::ValueEntry &entry) {
 	if (entry.IsValid()) {
-		result = entry.GetValueUnsafe();
-		return true;
+		return entry.GetValueUnsafe();
 	}
-	return false;
+	return std::nullopt;
 }
 
 void ManifestListReader::ReadChunk(DataChunk &chunk, idx_t iceberg_version, vector<IcebergManifestListEntry> &result) {
@@ -123,8 +122,6 @@ void ManifestListReader::ReadChunk(DataChunk &chunk, idx_t iceberg_version, vect
 		manifest.existing_rows_count =
 		    ReadRequiredField<int64_t>("existing_rows_count", existing_rows_count_entries[i]);
 		manifest.deleted_rows_count = ReadRequiredField<int64_t>("deleted_rows_count", deleted_rows_count_entries[i]);
-		//! This flag is only used for writing, not for reading
-		manifest.has_min_sequence_number = true;
 
 		if (iceberg_version >= 2) {
 			manifest.content = IcebergManifestContentType(ReadRequiredField<int32_t>("content", (*content_entries)[i]));
@@ -141,11 +138,7 @@ void ManifestListReader::ReadChunk(DataChunk &chunk, idx_t iceberg_version, vect
 		}
 
 		if (iceberg_version >= 3) {
-			int64_t first_row_id_val;
-			if (ReadOptionalField<int64_t>((*first_row_id_entries)[i], first_row_id_val)) {
-				manifest.first_row_id = first_row_id_val;
-				manifest.has_first_row_id = true;
-			}
+			manifest.first_row_id = ReadOptionalField<int64_t>((*first_row_id_entries)[i]);
 		}
 
 		auto partition_entry = partitions_entries[i];
