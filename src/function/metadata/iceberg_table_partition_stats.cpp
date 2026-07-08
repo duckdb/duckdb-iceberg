@@ -12,6 +12,8 @@
 #include "common/iceberg_utils.hpp"
 #include "core/metadata/iceberg_table_metadata.hpp"
 #include "iceberg_options.hpp"
+#include "planning/metadata_io/parquet/iceberg_partition_stats_multi_file_list.hpp"
+#include "planning/metadata_io/parquet/iceberg_partition_stats_multi_file_reader.hpp"
 
 namespace duckdb {
 
@@ -42,6 +44,7 @@ struct IcebergTablePartitionStatsBindData : public TableFunctionData {
 	TableFunction parquet_scan;
 	vector<string> paths;
 	unordered_map<string, PartitionStatsFileMetadata> file_metadata;
+	shared_ptr<IcebergPartitionStatsScanInfo> scan_info;
 	case_insensitive_map_t<idx_t> nested_column_name_to_index;
 	vector<string> output_column_names;
 	vector<LogicalType> output_column_types;
@@ -163,16 +166,19 @@ static unique_ptr<FunctionData> BindParquetScan(ClientContext &context,
 	children.emplace_back(Value::LIST(LogicalType::VARCHAR, BuildPathListValues(bind_data.paths)));
 
 	named_parameter_map_t named_params;
-	named_params["union_by_name"] = Value::BOOLEAN(true);
 	named_params["filename"] = Value(SCAN_FILENAME_COLUMN);
 
 	vector<LogicalType> input_types;
 	vector<Identifier> input_names;
 	TableFunctionRef empty;
-	auto parquet_scan = bind_data.parquet_scan;
-	TableFunctionBindInput bind_input(children, named_params, input_types, input_names, nullptr, nullptr, parquet_scan,
-	                                  empty);
-	return parquet_scan.bind(context, bind_input, return_types, return_names);
+	TableFunction dummy_table_function;
+	dummy_table_function.name = Identifier("IcebergPartitionStatsParquet");
+	dummy_table_function.get_multi_file_reader = IcebergPartitionStatsMultiFileReader::CreateInstance;
+	dummy_table_function.function_info = bind_data.scan_info;
+
+	TableFunctionBindInput bind_input(children, named_params, input_types, input_names, nullptr, nullptr,
+	                                  dummy_table_function, empty);
+	return bind_data.parquet_scan.bind(context, bind_input, return_types, return_names);
 }
 
 void IcebergTablePartitionStatsLocalState::InitializeNestedScan(ExecutionContext &context,
@@ -233,6 +239,7 @@ static unique_ptr<FunctionData> IcebergTablePartitionStatsBind(ClientContext &co
 	}
 
 	if (!no_matching_snapshot) {
+		vector<IcebergPartitionStatsScanFile> scan_files;
 		for (auto &statistics_file : metadata.partition_statistics) {
 			if (requested_snapshot_id && statistics_file.snapshot_id != *requested_snapshot_id) {
 				continue;
@@ -258,10 +265,11 @@ static unique_ptr<FunctionData> IcebergTablePartitionStatsBind(ClientContext &co
 			file_metadata.file_size_in_bytes = statistics_file.file_size_in_bytes;
 			bind_data->paths.push_back(resolved_path);
 			bind_data->file_metadata.emplace(resolved_path, std::move(file_metadata));
+			scan_files.push_back({resolved_path, statistics_file.file_size_in_bytes});
 		}
+		bind_data->scan_info = make_shared_ptr<IcebergPartitionStatsScanInfo>(std::move(scan_files));
 	}
 
-	LogicalType partition_type = LogicalType::SQLNULL;
 	if (!bind_data->paths.empty()) {
 		vector<LogicalType> nested_return_types;
 		vector<string> nested_return_names;
@@ -278,8 +286,6 @@ static unique_ptr<FunctionData> IcebergTablePartitionStatsBind(ClientContext &co
 		ValidateRequiredColumn(bind_data->nested_column_name_to_index, DATA_FILE_COUNT_COLUMN);
 		ValidateRequiredColumn(bind_data->nested_column_name_to_index, TOTAL_DATA_FILE_SIZE_COLUMN);
 		ValidateRequiredColumn(bind_data->nested_column_name_to_index, SCAN_FILENAME_COLUMN);
-
-		partition_type = nested_return_types[bind_data->nested_column_name_to_index[PARTITION_COLUMN]];
 	}
 
 	names = {"statistics_snapshot_id",
@@ -299,7 +305,7 @@ static unique_ptr<FunctionData> IcebergTablePartitionStatsBind(ClientContext &co
 	         LAST_UPDATED_AT_COLUMN,
 	         LAST_UPDATED_SNAPSHOT_ID_COLUMN};
 
-	return_types = {LogicalType::BIGINT,  LogicalType::VARCHAR, LogicalType::BIGINT,  partition_type,
+	return_types = {LogicalType::BIGINT,  LogicalType::VARCHAR, LogicalType::BIGINT,  LogicalType::VARCHAR,
 	                LogicalType::INTEGER, LogicalType::BIGINT,  LogicalType::INTEGER, LogicalType::BIGINT,
 	                LogicalType::BIGINT,  LogicalType::INTEGER, LogicalType::INTEGER, LogicalType::BIGINT,
 	                LogicalType::INTEGER, LogicalType::BIGINT,  LogicalType::BIGINT,  LogicalType::BIGINT};
@@ -362,8 +368,11 @@ static void IcebergTablePartitionStatsFunction(ClientContext &context, TableFunc
 			if (nested_it == bind_data.nested_column_name_to_index.end()) {
 				output.data[col_idx].SetValue(row_idx, Value(bind_data.output_column_types[col_idx]));
 			} else {
-				output.data[col_idx].SetValue(row_idx,
-				                              local_state.nested_chunk.data[nested_it->second].GetValue(row_idx));
+				auto value = local_state.nested_chunk.data[nested_it->second].GetValue(row_idx);
+				if (col_idx == 3 && !value.IsNull()) {
+					value = value.DefaultCastAs(LogicalType::VARCHAR);
+				}
+				output.data[col_idx].SetValue(row_idx, value);
 			}
 		}
 	}

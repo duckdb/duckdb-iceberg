@@ -14,35 +14,42 @@ require parquet
 require iceberg
 
 query TIIII
-SELECT partition.region, statistics_snapshot_id, spec_id, data_record_count, total_record_count
+SELECT partition, statistics_snapshot_id, spec_id, data_record_count, total_record_count
 FROM ICEBERG_TABLE_PARTITION_STATS('{WORKING_DIRECTORY}/data/persistent/table_partition_statistics')
 ORDER BY ALL;
 ----
-apac	1002	1	7	NULL
-eu	1001	1	10	12
-latam	1002	1	3	NULL
-us	1001	1	20	21
+{'region': apac}	1002	1	7	NULL
+{'region': eu}	1001	1	10	12
+{'region': latam}	1002	1	3	NULL
+{'region': us}	1001	1	20	21
 
 query TIIII
-SELECT partition.region, statistics_snapshot_id, position_delete_record_count, position_delete_file_count, dv_count
+SELECT partition, statistics_snapshot_id, position_delete_record_count, position_delete_file_count, dv_count
 FROM ICEBERG_TABLE_PARTITION_STATS('{WORKING_DIRECTORY}/data/persistent/table_partition_statistics')
 ORDER BY ALL;
 ----
-apac	1002	NULL	NULL	NULL
-eu	1001	2	1	0
-latam	1002	NULL	NULL	NULL
-us	1001	0	0	1
+{'region': apac}	1002	NULL	NULL	NULL
+{'region': eu}	1001	2	1	0
+{'region': latam}	1002	NULL	NULL	NULL
+{'region': us}	1001	0	0	1
 
 query TII
-SELECT partition.region, statistics_snapshot_id, data_record_count
+SELECT partition, statistics_snapshot_id, data_record_count
 FROM ICEBERG_TABLE_PARTITION_STATS(
     '{WORKING_DIRECTORY}/data/persistent/table_partition_statistics',
     snapshot_from_id=1001
 )
 ORDER BY ALL;
 ----
-eu	1001	10
-us	1001	20
+{'region': eu}	1001	10
+{'region': us}	1001	20
+
+query I
+SELECT typeof(partition)
+FROM ICEBERG_TABLE_PARTITION_STATS('{WORKING_DIRECTORY}/data/persistent/table_partition_statistics')
+LIMIT 1;
+----
+VARCHAR
 
 query IIIIIIIIIIIIIIII
 SELECT *
