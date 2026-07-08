@@ -1,0 +1,58 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/partition_statistics/test_partition_stats_partition_evolution.test
+# description: verify iceberg_table_partition_stats on the Spark partition evolution statistics table
+# group: [partition_statistics]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+set variable partition_evolution_latest_snapshot = (
+    select snapshot_id
+    from iceberg_snapshots(my_datalake.default.partition_stats_partition_evolution)
+    order by timestamp_ms desc
+    limit 1
+);
+
+query TIIIIIIIII
+select
+    partition,
+    spec_id,
+    data_record_count,
+    data_file_count,
+    total_data_file_size_in_bytes,
+    position_delete_record_count,
+    position_delete_file_count,
+    equality_delete_record_count,
+    equality_delete_file_count,
+    total_record_count
+from iceberg_table_partition_stats('my_datalake.default.partition_stats_partition_evolution')
+where statistics_snapshot_id = getvariable('partition_evolution_latest_snapshot')
+order by all;
+----
+{'ts_year': 50, 'ts_month': NULL}	0	2	1	1171	1	1	0	0	NULL
+{'ts_year': 51, 'ts_month': NULL}	0	1	1	1154	1	1	0	0	NULL
+{'ts_year': NULL, 'ts_month': 601}	1	2	2	2331	1	1	0	0	NULL
+{'ts_year': NULL, 'ts_month': 612}	1	1	1	1178	0	0	0	0	NULL
+{'ts_year': NULL, 'ts_month': 613}	1	1	1	1154	0	0	0	0	NULL
+{'ts_year': NULL, 'ts_month': NULL}	0	1	1	1090	1	1	0	0	NULL
+{'ts_year': NULL, 'ts_month': NULL}	1	1	1	1090	0	0	0	0	NULL
+
+query III
+select
+    count(*) filter (where spec_id = 0 and partition = '{''ts_year'': NULL, ''ts_month'': NULL}'),
+    count(*) filter (where spec_id = 1 and partition = '{''ts_year'': NULL, ''ts_month'': NULL}'),
+    count(*)
+from iceberg_table_partition_stats('my_datalake.default.partition_stats_partition_evolution')
+where statistics_snapshot_id = getvariable('partition_evolution_latest_snapshot');
+----
+1	1	7
