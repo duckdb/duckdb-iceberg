@@ -27,6 +27,7 @@ class SparkRuntime:
     scala_binary_version: str
     iceberg_library_version: str
     supports_v3: bool
+    supports_compute_partition_stats: bool
 
     @property
     def jar_filename(self) -> str:
@@ -58,6 +59,8 @@ class SparkRuntime:
         capabilities = set()
         if self.supports_v3:
             capabilities.add("format_v3")
+        if self.supports_compute_partition_stats:
+            capabilities.add("compute_partition_stats")
         return frozenset(capabilities)
 
 
@@ -109,6 +112,7 @@ SPARK_RUNTIMES = {
         scala_binary_version="2.12",
         iceberg_library_version="1.9.0",
         supports_v3=False,
+        supports_compute_partition_stats=False,
     ),
     "4.0": SparkRuntime(
         name="4.0",
@@ -116,6 +120,7 @@ SPARK_RUNTIMES = {
         scala_binary_version="2.13",
         iceberg_library_version="1.10.0",
         supports_v3=True,
+        supports_compute_partition_stats=True,
     ),
 }
 

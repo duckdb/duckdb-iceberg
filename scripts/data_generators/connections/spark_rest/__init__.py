@@ -34,7 +34,7 @@ CONNECTION_KEY = "fixture"
 @IcebergConnection.register(CONNECTION_KEY)
 class IcebergSparkRest(IcebergConnection):
     def __init__(self, runtime=None):
-        super().__init__(CONNECTION_KEY, "demo")
+        super().__init__(CONNECTION_KEY, "iceberg_catalog")
         self.runtime = get_spark_runtime(runtime)
         self.con = self.get_connection()
 
@@ -56,16 +56,16 @@ class IcebergSparkRest(IcebergConnection):
             )
             .config("spark.driver.host", "127.0.0.1")
             .config("spark.driver.bindAddress", "127.0.0.1")
-            .config("spark.sql.catalog.demo", "org.apache.iceberg.spark.SparkCatalog")
-            .config("spark.sql.catalog.demo.type", "rest")
-            .config("spark.sql.catalog.demo.uri", os.getenv("ICEBERG_ENDPOINT", "http://127.0.0.1:8181"))
-            .config("spark.sql.catalog.demo.warehouse", os.getenv("WAREHOUSE", "s3://warehouse/wh/"))
-            .config("spark.sql.catalog.demo.s3.endpoint", os.getenv("S3_ENDPOINT", "http://127.0.0.1:9000"))
-            .config("spark.sql.catalog.demo.s3.path-style-access", "true")
+            .config("spark.sql.catalog.iceberg_catalog", "org.apache.iceberg.spark.SparkCatalog")
+            .config("spark.sql.catalog.iceberg_catalog.type", "rest")
+            .config("spark.sql.catalog.iceberg_catalog.uri", os.getenv("ICEBERG_ENDPOINT", "http://127.0.0.1:8181"))
+            .config("spark.sql.catalog.iceberg_catalog.warehouse", os.getenv("WAREHOUSE", "s3://warehouse/wh/"))
+            .config("spark.sql.catalog.iceberg_catalog.s3.endpoint", os.getenv("S3_ENDPOINT", "http://127.0.0.1:9000"))
+            .config("spark.sql.catalog.iceberg_catalog.s3.path-style-access", "true")
             .config("spark.driver.memory", "10g")
             .config("spark.sql.session.timeZone", "UTC")
             .config("spark.sql.catalogImplementation", "in-memory")
-            .config("spark.sql.catalog.demo.io-impl", "org.apache.iceberg.aws.s3.S3FileIO")
+            .config("spark.sql.catalog.iceberg_catalog.io-impl", "org.apache.iceberg.aws.s3.S3FileIO")
             .config("spark.jars", self.runtime.jar_path.as_posix())
             .getOrCreate()
         )
@@ -75,6 +75,6 @@ class IcebergSparkRest(IcebergConnection):
             logger.setLevel(jvm.org.apache.log4j.Level.ERROR)
         except Exception:
             pass
-        spark.sql("USE demo")
+        spark.sql("USE iceberg_catalog")
         spark.sql("CREATE NAMESPACE IF NOT EXISTS default")
         return spark
