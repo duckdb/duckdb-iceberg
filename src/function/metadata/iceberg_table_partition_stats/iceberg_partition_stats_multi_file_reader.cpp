@@ -1,10 +1,10 @@
-#include "planning/metadata_io/parquet/iceberg_partition_stats_multi_file_reader.hpp"
+#include "function/metadata/iceberg_table_partition_stats/iceberg_partition_stats_multi_file_reader.hpp"
 
 #include "duckdb/parser/expression/constant_expression.hpp"
 #include "duckdb/common/file_system.hpp"
 #include "duckdb/common/open_file_info.hpp"
 
-#include "planning/metadata_io/parquet/iceberg_partition_stats_multi_file_list.hpp"
+#include "function/metadata/iceberg_table_partition_stats/iceberg_partition_stats_multi_file_list.hpp"
 
 namespace duckdb {
 

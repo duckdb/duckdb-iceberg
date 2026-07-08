@@ -1,4 +1,4 @@
-#include "planning/metadata_io/parquet/iceberg_partition_stats_multi_file_list.hpp"
+#include "function/metadata/iceberg_table_partition_stats/iceberg_partition_stats_multi_file_list.hpp"
 
 namespace duckdb {
 

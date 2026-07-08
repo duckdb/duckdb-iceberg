@@ -108,8 +108,8 @@ set(EXTENSION_SOURCES
 	src/planning/metadata_io/avro/avro_scan.cpp
 	src/planning/metadata_io/avro/iceberg_avro_multi_file_list.cpp
 	src/planning/metadata_io/avro/iceberg_avro_multi_file_reader.cpp
-	src/planning/metadata_io/parquet/iceberg_partition_stats_multi_file_list.cpp
-	src/planning/metadata_io/parquet/iceberg_partition_stats_multi_file_reader.cpp
+	src/function/metadata/iceberg_table_partition_stats/iceberg_partition_stats_multi_file_list.cpp
+	src/function/metadata/iceberg_table_partition_stats/iceberg_partition_stats_multi_file_reader.cpp
 	src/planning/metadata_io/base_manifest_reader.cpp
 	src/planning/metadata_io/deletes/iceberg_deletes_file_reader.cpp
 	src/planning/metadata_io/manifest/bound_iceberg_manifest_entry.cpp

@@ -12,8 +12,8 @@
 #include "common/iceberg_utils.hpp"
 #include "core/metadata/iceberg_table_metadata.hpp"
 #include "iceberg_options.hpp"
-#include "planning/metadata_io/parquet/iceberg_partition_stats_multi_file_list.hpp"
-#include "planning/metadata_io/parquet/iceberg_partition_stats_multi_file_reader.hpp"
+#include "function/metadata/iceberg_table_partition_stats/iceberg_partition_stats_multi_file_list.hpp"
+#include "function/metadata/iceberg_table_partition_stats/iceberg_partition_stats_multi_file_reader.hpp"
 
 namespace duckdb {
 
