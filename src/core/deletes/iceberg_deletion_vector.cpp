@@ -144,18 +144,23 @@ shared_ptr<IcebergDeletionVectorData> IcebergDeletionVectorData::FromBlob(const 
 //! blob's offset/length agree with the manifest content_offset/content_size_in_bytes used below.
 static void VerifyPuffinDeletionVector(FileSystem &fs, FileHandle &handle, int64_t content_offset,
                                        int64_t content_size) {
-	auto footer = IcebergPuffinReader::ReadFooter(fs, handle, "<deletion-vector>");
-	if (footer.file_metadata.blobs.size() != 1) {
-		throw InvalidConfigurationException("Deletion vector Puffin file must contain exactly one blob");
+	auto footer = IcebergPuffinReader::ReadFooter(fs, handle, handle.GetPath());
+
+	bool contains_blob = false;
+	for (auto &blob : footer.file_metadata.blobs) {
+		if (blob.type != "deletion-vector-v1") {
+			throw InvalidConfigurationException(
+			    "Deletion vector Puffin blob type mismatch: expected deletion-vector-v1");
+		}
+		if (blob.offset != content_offset || blob.length != content_size) {
+			continue;
+		}
+		contains_blob = true;
 	}
-	auto &blob = footer.file_metadata.blobs[0];
-	if (blob.type != "deletion-vector-v1") {
-		throw InvalidConfigurationException("Deletion vector Puffin blob type mismatch: expected deletion-vector-v1");
-	}
-	if (blob.offset != content_offset || blob.length != content_size) {
+	if (!contains_blob) {
 		throw InvalidConfigurationException(
-		    "Deletion vector Puffin blob offset/length mismatch: expected (%lld, %lld), found (%lld, %lld)",
-		    content_offset, content_size, blob.offset, blob.length);
+		    "Deletion vector blob with offset (%d) and length (%d) not found in Puffin file", content_offset,
+		    content_size);
 	}
 }
 
