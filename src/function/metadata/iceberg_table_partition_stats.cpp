@@ -368,11 +368,8 @@ static void IcebergTablePartitionStatsFunction(ClientContext &context, TableFunc
 			if (nested_it == bind_data.nested_column_name_to_index.end()) {
 				output.data[col_idx].SetValue(row_idx, Value(bind_data.output_column_types[col_idx]));
 			} else {
-				auto value = local_state.nested_chunk.data[nested_it->second].GetValue(row_idx);
-				if (col_idx == 3 && !value.IsNull()) {
-					value = value.DefaultCastAs(LogicalType::VARCHAR);
-				}
-				output.data[col_idx].SetValue(row_idx, value);
+				output.data[col_idx].SetValue(row_idx,
+				                              local_state.nested_chunk.data[nested_it->second].GetValue(row_idx));
 			}
 		}
 	}

@@ -20,6 +20,19 @@ public:
 	          vector<Identifier> &names, MultiFileReaderBindData &bind_data) override;
 	void BindOptions(MultiFileOptions &options, MultiFileList &files, vector<LogicalType> &return_types,
 	                 vector<Identifier> &names, MultiFileReaderBindData &bind_data) override;
+	ReaderInitializeType CreateMapping(ClientContext &context, MultiFileReaderData &reader_data,
+	                                   const vector<MultiFileColumnDefinition> &global_columns,
+	                                   const vector<ColumnIndex> &global_column_ids,
+	                                   optional_ptr<TableFilterSet> filters, MultiFileList &multi_file_list,
+	                                   const MultiFileReaderBindData &bind_data,
+	                                   const virtual_column_map_t &virtual_columns,
+	                                   MultiFileColumnMappingMode mapping_mode) override;
+	ReaderInitializeType CreateMapping(ClientContext &context, MultiFileReaderData &reader_data,
+	                                   const vector<MultiFileColumnDefinition> &global_columns,
+	                                   const vector<ColumnIndex> &global_column_ids,
+	                                   optional_ptr<TableFilterSet> filters, MultiFileList &multi_file_list,
+	                                   const MultiFileReaderBindData &bind_data,
+	                                   const virtual_column_map_t &virtual_columns) override;
 
 public:
 	shared_ptr<TableFunctionInfo> function_info;

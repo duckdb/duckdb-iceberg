@@ -1,5 +1,7 @@
 #include "function/metadata/iceberg_table_partition_stats/iceberg_partition_stats_multi_file_reader.hpp"
 
+#include "duckdb/planner/expression/bound_cast_expression.hpp"
+#include "duckdb/planner/expression/bound_reference_expression.hpp"
 #include "duckdb/parser/expression/constant_expression.hpp"
 #include "duckdb/common/file_system.hpp"
 #include "duckdb/common/open_file_info.hpp"
@@ -95,6 +97,68 @@ void IcebergPartitionStatsMultiFileReader::BindOptions(MultiFileOptions &options
 	options.hive_partitioning = false;
 	options.union_by_name = false;
 	MultiFileReader::BindOptions(options, files, return_types, names, bind_data);
+}
+
+ReaderInitializeType IcebergPartitionStatsMultiFileReader::CreateMapping(
+    ClientContext &context, MultiFileReaderData &reader_data, const vector<MultiFileColumnDefinition> &global_columns,
+    const vector<ColumnIndex> &global_column_ids, optional_ptr<TableFilterSet> filters, MultiFileList &multi_file_list,
+    const MultiFileReaderBindData &bind_data, const virtual_column_map_t &virtual_columns,
+    MultiFileColumnMappingMode mapping_mode) {
+	auto result = MultiFileReader::CreateMapping(context, reader_data, global_columns, global_column_ids, filters,
+	                                             multi_file_list, bind_data, virtual_columns, mapping_mode);
+	if (result != ReaderInitializeType::INITIALIZED) {
+		return result;
+	}
+
+	auto &local_columns = reader_data.reader->GetColumns();
+	optional_idx partition_global_idx;
+	for (idx_t i = 0; i < global_column_ids.size(); i++) {
+		auto global_column_id = global_column_ids[i].GetPrimaryIndex();
+		if (global_columns[global_column_id].name.GetIdentifierName() == PARTITION_COLUMN) {
+			partition_global_idx = i;
+			break;
+		}
+	}
+	if (!partition_global_idx.IsValid()) {
+		return result;
+	}
+
+	optional_idx partition_local_column_id;
+	for (idx_t i = 0; i < local_columns.size(); i++) {
+		if (local_columns[i].name.GetIdentifierName() == PARTITION_COLUMN) {
+			partition_local_column_id = i;
+			break;
+		}
+	}
+	if (!partition_local_column_id.IsValid()) {
+		return result;
+	}
+
+	optional_idx partition_projection_idx;
+	for (idx_t i = 0; i < reader_data.reader->column_ids.size(); i++) {
+		if (reader_data.reader->column_ids[MultiFileLocalIndex(i)].GetId() == partition_local_column_id.GetIndex()) {
+			partition_projection_idx = i;
+			break;
+		}
+	}
+	if (!partition_projection_idx.IsValid()) {
+		return result;
+	}
+
+	auto &local_partition_type = local_columns[partition_local_column_id.GetIndex()].type;
+	unique_ptr<Expression> partition_expr =
+	    make_uniq<BoundReferenceExpression>(local_partition_type, partition_projection_idx.GetIndex());
+	partition_expr = BoundCastExpression::AddCastToType(context, std::move(partition_expr), LogicalType::VARCHAR);
+	reader_data.expressions[partition_global_idx.GetIndex()] = std::move(partition_expr);
+	return result;
+}
+
+ReaderInitializeType IcebergPartitionStatsMultiFileReader::CreateMapping(
+    ClientContext &context, MultiFileReaderData &reader_data, const vector<MultiFileColumnDefinition> &global_columns,
+    const vector<ColumnIndex> &global_column_ids, optional_ptr<TableFilterSet> filters, MultiFileList &multi_file_list,
+    const MultiFileReaderBindData &bind_data, const virtual_column_map_t &virtual_columns) {
+	return CreateMapping(context, reader_data, global_columns, global_column_ids, filters, multi_file_list, bind_data,
+	                     virtual_columns, bind_data.mapping);
 }
 
 } // namespace duckdb

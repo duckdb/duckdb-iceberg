@@ -56,3 +56,21 @@ from iceberg_table_partition_stats('my_datalake.default.partition_stats_partitio
 where statistics_snapshot_id = getvariable('partition_evolution_latest_snapshot');
 ----
 1	1	7
+
+statement ok
+set variable partition_evolution_first_snapshot = (
+    select snapshot_id
+    from iceberg_snapshots(my_datalake.default.partition_stats_partition_evolution)
+    order by timestamp_ms asc
+    limit 1
+);
+
+query TI
+select partition, spec_id
+from iceberg_table_partition_stats('my_datalake.default.partition_stats_partition_evolution')
+where statistics_snapshot_id = getvariable('partition_evolution_first_snapshot')
+order by all;
+----
+{'ts_year': 50}	0
+{'ts_year': 51}	0
+{'ts_year': NULL}	0
