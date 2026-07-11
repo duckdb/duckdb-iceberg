@@ -21,6 +21,7 @@
 #include "duckdb/execution/executor.hpp"
 #include "duckdb/optimizer/filter_combiner.hpp"
 #include "duckdb/function/scalar/struct_utils.hpp"
+#include "duckdb/storage/statistics/numeric_stats.hpp"
 #include "duckdb/storage/table/row_group_reorderer.hpp"
 
 #include "planning/iceberg_multi_file_reader.hpp"
@@ -544,15 +545,125 @@ const IcebergManifestFile &IcebergMultiFileList::GetManifestFileForEntry(const B
 	}
 }
 
+IcebergPartitionRowGroup::IcebergPartitionRowGroup(const vector<unique_ptr<IcebergColumnDefinition>> &schema_p,
+                                                   vector<reference<const IcebergDataFile>> data_files_p)
+    : schema(schema_p), data_files(std::move(data_files_p)) {
+}
+
+bool IcebergPartitionRowGroup::SupportsExactMinMaxBounds(const LogicalType &type) {
+	//! FLOAT/DOUBLE are excluded because of the Iceberg spec (not a DuckDB limit):
+	//! the spec defines float/double manifest lower_bounds/upper_bounds to *exclude*
+	//! NaN (tracked separately via nan_value_counts) and to treat -0.0 == +0.0.
+	//! SQL MIN/MAX in DuckDB orders NaN as the largest value, so a file containing
+	//! NaN would have an upper_bound that disagrees with the true MAX. The manifest
+	//! bounds are therefore not a safe source of truth for exact float/double
+	//! MIN/MAX, so we fall back to scanning for those types.
+	//! See https://iceberg.apache.org/spec/#appendix-d-single-value-serialization
+	if (type.id() == LogicalTypeId::FLOAT || type.id() == LogicalTypeId::DOUBLE) {
+		return false;
+	}
+	//! VARCHAR/BLOB are implicitly excluded here as well: the spec permits writers
+	//! to store *truncated* string/binary bounds (lower rounded down, upper rounded
+	//! up), which bound the true value but are not exact enough to fold MIN/MAX.
+	return type.IsNumeric() || type.IsTemporal();
+}
+
+unique_ptr<BaseStatistics> IcebergPartitionRowGroup::GetColumnStatistics(const StorageIndex &storage_index) {
+	//! Build exact table-level min/max for one column from Iceberg manifest bounds.
+	//! Returning nullptr tells StatisticsPropagator::TryExecuteAggregates to fall
+	//! back to a normal scan for MIN/MAX on this column.
+	//!
+	//! storage_index is the logical column position in the Iceberg schema (same
+	//! mapping LogicalGet uses for path-based iceberg_scan). Nested paths are
+	//! not supported — only top-level columns.
+
+	if (storage_index.HasChildren()) {
+		return nullptr;
+	}
+	auto col_idx = storage_index.GetPrimaryIndex();
+	if (col_idx >= schema.size()) {
+		return nullptr;
+	}
+	auto &column = *schema[col_idx];
+	auto &type = column.type;
+	//! Skip types whose written bounds are not exact (truncated strings, floats
+	//! with NaN). See SupportsExactMinMaxBounds.
+	if (!SupportsExactMinMaxBounds(type)) {
+		return nullptr;
+	}
+	if (data_files.empty()) {
+		return nullptr;
+	}
+
+	//! Iceberg keys bounds by field id (stable across renames), not by name/index.
+	const auto field_id = column.id;
+	//! Reduce per-file [lower, upper] into a single table-wide [min, max].
+	//! Each file's lower_bound is the exact min of that file (for allowlisted
+	//! types), so min(lower across files) is the exact table MIN — same for MAX.
+	optional<Value> global_min;
+	optional<Value> global_max;
+	for (auto &file_ref : data_files) {
+		auto &data_file = file_ref.get();
+		auto lower_it = data_file.lower_bounds.find(field_id);
+		auto upper_it = data_file.upper_bounds.find(field_id);
+		//! Bounds are optional in the spec (e.g. all-null columns, metrics=none).
+		//! If any file lacks them we cannot prove an exact global min/max.
+		if (lower_it == data_file.lower_bounds.end() || upper_it == data_file.upper_bounds.end()) {
+			return nullptr;
+		}
+		//! Manifest stores bounds as Iceberg binary blobs; decode to typed Values.
+		IcebergPredicateStats pred_stats;
+		try {
+			pred_stats =
+			    IcebergPredicateStats::DeserializeBounds(lower_it->second, upper_it->second, column.name, type);
+		} catch (...) {
+			//! Corrupt / unexpected encoding — be conservative and skip the fold.
+			return nullptr;
+		}
+		//! Null decoded bounds (e.g. all-null file) are not usable for MIN/MAX.
+		if (!pred_stats.lower_bound || !pred_stats.upper_bound || pred_stats.lower_bound->IsNull() ||
+		    pred_stats.upper_bound->IsNull()) {
+			return nullptr;
+		}
+		if (!global_min || *pred_stats.lower_bound < *global_min) {
+			global_min = *pred_stats.lower_bound;
+		}
+		if (!global_max || *pred_stats.upper_bound > *global_max) {
+			global_max = *pred_stats.upper_bound;
+		}
+	}
+	D_ASSERT(global_min && global_max);
+
+	//! Package as DuckDB NumericStats so TryExecuteAggregates / MinMaxIsExact
+	//! can fold SELECT MIN/MAX into a constant without scanning data files.
+	auto stats = NumericStats::CreateEmpty(type);
+	NumericStats::SetMin(stats, *global_min);
+	NumericStats::SetMax(stats, *global_max);
+	return stats.ToUnique();
+}
+
+bool IcebergPartitionRowGroup::MinMaxIsExact(const BaseStatistics &stats, const StorageIndex &storage_index) {
+	//! GetColumnStatistics only returns stats for exact-capable types when every
+	//! data file has usable (non-truncated) lower and upper bounds, so those
+	//! values are exact table min/max.
+	(void)stats;
+	(void)storage_index;
+	return true;
+}
+
 void IcebergMultiFileList::GetStatistics(vector<PartitionStatistics> &result) const {
 	if (GetMetadata().iceberg_version == 1) {
 		//! We collect no statistics information from manifests for V1 tables.
 		return;
 	}
 
+	lock_guard<mutex> guard(shared_state->lock);
+	InitializeFiles(guard);
+
 	for (idx_t i = 0; i < delete_manifests.size(); i++) {
 		if (delete_manifest_matches[i]) {
-			//! if a matching delete manifest exists, return;
+			//! Matching delete manifests can invalidate data-file bounds / counts;
+			//! omit partition stats so MIN/MAX/COUNT(*) fall back to a scan.
 			return;
 		}
 	}
@@ -567,10 +678,25 @@ void IcebergMultiFileList::GetStatistics(vector<PartitionStatistics> &result) co
 		count += manifest.added_rows_count;
 	}
 
+	//! Materialize data-file entries so column bounds are available for MIN/MAX.
+	idx_t materialized = 0;
+	while (GetDataFile(materialized, guard)) {
+		materialized++;
+	}
+	vector<reference<const IcebergDataFile>> data_files;
+	data_files.reserve(data_manifest_entries.size());
+	for (auto &entry : data_manifest_entries) {
+		data_files.push_back(entry.entry.data_file);
+	}
+
 	PartitionStatistics partition_stats;
 	partition_stats.count = count;
 	partition_stats.count_type = CountType::COUNT_EXACT;
-	result.push_back(partition_stats);
+	//! Manifest column bounds (not Iceberg partition-statistics files) — those
+	//! files have no per-column min/max.
+	partition_stats.partition_row_group =
+	    make_shared_ptr<IcebergPartitionRowGroup>(GetSchema().columns, std::move(data_files));
+	result.push_back(std::move(partition_stats));
 }
 
 void IcebergPredicateStats::SetLowerBound(const Value &new_lower_bound) {

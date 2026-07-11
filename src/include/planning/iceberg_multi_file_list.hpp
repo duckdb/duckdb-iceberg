@@ -13,6 +13,7 @@
 #include "duckdb/common/multi_file/multi_file_data.hpp"
 #include "duckdb/common/list.hpp"
 #include "duckdb/common/unordered_map.hpp"
+#include "duckdb/function/partition_stats.hpp"
 #include "duckdb/planner/filter/expression_filter.hpp"
 #include "duckdb/planner/filter/null_filter.hpp"
 #include "duckdb/planner/table_filter.hpp"
@@ -30,6 +31,32 @@
 #include "planning/metadata_io/manifest/bound_iceberg_manifest_entry.hpp"
 
 namespace duckdb {
+
+//! Exposes per-column min/max from Iceberg manifest data_file.lower_bounds /
+//! upper_bounds to DuckDB's PartitionStatistics API. Used by
+//! StatisticsPropagator::TryExecuteAggregates for metadata-only MIN/MAX.
+//!
+//! Intentionally reads manifest column bounds — not Iceberg partition-statistics
+//! files (https://iceberg.apache.org/spec/#partition-statistics), which carry
+//! only counts/sizes and have no per-column min/max.
+struct IcebergPartitionRowGroup : public PartitionRowGroup {
+public:
+	IcebergPartitionRowGroup(const vector<unique_ptr<IcebergColumnDefinition>> &schema,
+	                         vector<reference<const IcebergDataFile>> data_files);
+
+public:
+	unique_ptr<BaseStatistics> GetColumnStatistics(const StorageIndex &storage_index) override;
+	bool MinMaxIsExact(const BaseStatistics &stats, const StorageIndex &storage_index) override;
+
+public:
+	const vector<unique_ptr<IcebergColumnDefinition>> &schema;
+	vector<reference<const IcebergDataFile>> data_files;
+
+private:
+	//! Numeric/temporal types whose Iceberg bounds are stored without truncation.
+	//! FLOAT/DOUBLE are excluded (NaN semantics). VARCHAR/BLOB bounds may be truncated.
+	static bool SupportsExactMinMaxBounds(const LogicalType &type);
+};
 
 struct IcebergTableFilters {
 	using filter_set_t = unordered_map<idx_t, unique_ptr<ExpressionFilter>>;
