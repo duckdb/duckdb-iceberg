@@ -551,6 +551,13 @@ IcebergPartitionRowGroup::IcebergPartitionRowGroup(const vector<unique_ptr<Icebe
 }
 
 bool IcebergPartitionRowGroup::SupportsExactMinMaxBounds(const LogicalType &type) {
+	//! Nested types (STRUCT/LIST/MAP/ARRAY/UNION) have no single composite bound in
+	//! the Iceberg manifest (bounds are keyed per primitive field id), so there is
+	//! nothing to fold into an exact table-level MIN/MAX. Excluding them here also
+	//! guards against a nested float/truncated leaf slipping past the checks below.
+	if (type.IsNested()) {
+		return false;
+	}
 	//! FLOAT/DOUBLE are excluded because of the Iceberg spec (not a DuckDB limit):
 	//! the spec defines float/double manifest lower_bounds/upper_bounds to *exclude*
 	//! NaN (tracked separately via nan_value_counts) and to treat -0.0 == +0.0.
