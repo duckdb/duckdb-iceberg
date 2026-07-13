@@ -103,6 +103,36 @@ SELECT min(f), max(f) FROM iceberg_scan('{TEST_DIR}/agg_minmax_float');
 ----
 0.0	999.0
 
+# Nested types have no single composite bound in the manifest (bounds are keyed per
+# primitive field id), so MIN/MAX must fall back to a scan even when the leaves would
+# otherwise be exact. A STRUCT wrapping a FLOAT also guards against a nested float leaf.
+statement ok
+COPY (select {'f': range::FLOAT} as s from range(1000)) TO '{TEST_DIR}/agg_minmax_struct_float' (FORMAT ICEBERG);
+
+query II
+EXPLAIN SELECT min(s), max(s) FROM iceberg_scan('{TEST_DIR}/agg_minmax_struct_float');
+----
+physical_plan	<REGEX>:.*(ICEBERG_SCAN|AGGREGATE).*
+
+query II
+SELECT min(s), max(s) FROM iceberg_scan('{TEST_DIR}/agg_minmax_struct_float');
+----
+{'f': 0.0}	{'f': 999.0}
+
+# A LIST of an otherwise-exact type is still nested — no composite bound to fold.
+statement ok
+COPY (select [range] as l from range(1000)) TO '{TEST_DIR}/agg_minmax_list_int' (FORMAT ICEBERG);
+
+query II
+EXPLAIN SELECT min(l), max(l) FROM iceberg_scan('{TEST_DIR}/agg_minmax_list_int');
+----
+physical_plan	<REGEX>:.*(ICEBERG_SCAN|AGGREGATE).*
+
+query II
+SELECT min(l), max(l) FROM iceberg_scan('{TEST_DIR}/agg_minmax_list_int');
+----
+[0]	[999]
+
 # Filtered MIN/MAX is not fully answered from whole-table metadata alone.
 query II
 EXPLAIN SELECT min(id), max(id)
