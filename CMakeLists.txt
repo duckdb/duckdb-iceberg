@@ -36,6 +36,7 @@ set(EXTENSION_SOURCES
 	src/catalog/rest/catalog_entry/schema/iceberg_schema_entry.cpp
 	src/catalog/rest/catalog_entry/table/iceberg_table_entry.cpp
 	src/catalog/rest/catalog_entry/table/iceberg_table_information.cpp
+	src/catalog/rest/iceberg_access_delegation.cpp
 	src/catalog/rest/iceberg_catalog.cpp
 	src/catalog/rest/iceberg_schema_set.cpp
 	src/catalog/rest/iceberg_table_set.cpp

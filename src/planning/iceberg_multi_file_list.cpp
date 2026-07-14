@@ -40,6 +40,8 @@
 #include "planning/metadata_io/manifest/iceberg_manifest_reader.hpp"
 #include "planning/metadata_io/manifest_list/iceberg_manifest_list_reader.hpp"
 #include "planning/metadata_io/manifest_list/bound_iceberg_manifest_list_entry.hpp"
+#include "catalog/rest/catalog_entry/table/iceberg_table_entry.hpp"
+#include "catalog/rest/iceberg_access_delegation.hpp"
 
 #include <algorithm>
 
@@ -1161,6 +1163,14 @@ OpenFileInfo IcebergMultiFileList::GetFileInternal(idx_t file_id, lock_guard<mut
 		auto &fs = FileSystem::GetFileSystem(context);
 		file_path = IcebergUtils::GetFullPath(iceberg_path, path, fs);
 	}
+
+	auto table = GetTable();
+	if (table && !data_file.partition_info.empty()) {
+		// An access-delegation provider may vend credentials scoped per partition; give it a chance to
+		// refresh the relevant secret as we discover each file. No-op when no provider is active.
+		IcebergAccessDelegation::OnPartitionFile(table->table_info, context, data_file.partition_info, file_path);
+	}
+
 	OpenFileInfo res(file_path);
 	auto extended_info = make_shared_ptr<ExtendedOpenFileInfo>();
 	extended_info->options["file_size"] = Value::UBIGINT(data_file.file_size_in_bytes);

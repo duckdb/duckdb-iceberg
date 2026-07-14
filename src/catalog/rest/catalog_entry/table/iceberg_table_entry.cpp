@@ -15,6 +15,7 @@
 #include "duckdb/planner/tableref/bound_at_clause.hpp"
 
 #include "catalog/rest/iceberg_catalog.hpp"
+#include "catalog/rest/iceberg_access_delegation.hpp"
 #include "catalog/rest/catalog_entry/schema/iceberg_schema_entry.hpp"
 #include "catalog/rest/api/catalog_api.hpp"
 #include "planning/iceberg_multi_file_reader.hpp"
@@ -51,6 +52,12 @@ void AddHTTPSecretsToOptions(SecretEntry &http_secret_entry, case_insensitive_ma
 void IcebergTableEntry::PrepareIcebergScanFromEntry(ClientContext &context) const {
 	auto &ic_catalog = catalog.Cast<IcebergCatalog>();
 	auto &secret_manager = SecretManager::Get(context);
+
+	// An access-delegation provider, if configured, vends its own scan credentials in place of the
+	// catalog's vended credentials.
+	if (IcebergAccessDelegation::PrepareScanCredentials(table_info, context, nullptr)) {
+		return;
+	}
 
 	if (ic_catalog.attach_options.access_mode != IRCAccessDelegationMode::VENDED_CREDENTIALS) {
 		// assume secret already exists
@@ -244,6 +251,10 @@ TableFunction IcebergTableEntry::GetScanFunction(ClientContext &context, unique_
 	D_ASSERT(file_bind_data.file_list);
 	auto &ic_file_list = file_bind_data.file_list->Cast<IcebergMultiFileList>();
 	ic_file_list.SetTable(this);
+
+	// Let the active access-delegation provider (if any) install mandatory scan filters for this table.
+	IcebergAccessDelegation::ApplyMandatoryScanFilters(table_info, context, *scan_info, ic_file_list, iceberg_schema);
+
 	return iceberg_scan_function;
 }
 
