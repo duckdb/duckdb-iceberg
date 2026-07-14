@@ -326,8 +326,7 @@ void IcebergDelete::FlushDeletes(IcebergTransaction &transaction, ClientContext 
 			if (existing_delete) {
 				for (auto &bound_entry : existing_delete->entries) {
 					auto &delete_data_file = bound_entry.entry.data_file;
-					if (delete_data_file.referenced_data_file &&
-					    *delete_data_file.referenced_data_file == filename) {
+					if (delete_data_file.referenced_data_file && *delete_data_file.referenced_data_file == filename) {
 						global_state.altered_manifests.InvalidateFile(delete_data_file.file_path);
 					}
 				}
