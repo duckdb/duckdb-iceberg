@@ -159,29 +159,34 @@ void IcebergTransactionData::AddSnapshot(IcebergSnapshotOperationType operation,
 	auto &table_metadata = table_info.table_metadata;
 	CacheExistingManifestList(guard, table_metadata);
 
-	IcebergManifestContentType manifest_content_type;
-	switch (operation) {
-	case IcebergSnapshotOperationType::DELETE:
-		manifest_content_type = IcebergManifestContentType::DELETE;
-		break;
-	case IcebergSnapshotOperationType::APPEND:
-	case IcebergSnapshotOperationType::REPLACE:
-		//! This helper currently writes DATA manifest entries; REPLACE itself is not limited to data files.
-		manifest_content_type = IcebergManifestContentType::DATA;
-		break;
-	default:
-		throw NotImplementedException("Cannot have use snapshot operation type OVERWRITE here");
-	};
-
-	auto temp_sequence_number = table_metadata.last_sequence_number + alters.size() + 1;
-
-	auto &fs = FileSystem::GetFileSystem(context);
-	auto manifest_metadata = IcebergManifestMetadata::FromTableMetadata(table_metadata, manifest_content_type);
-	auto manifest_file = IcebergManifestListEntry::CreateFromEntries(
-	    fs, temp_sequence_number, table_metadata, manifest_metadata, std::move(data_files), next_row_id);
-
 	auto add_snapshot = make_uniq<IcebergAddSnapshot>(table_info, operation);
-	add_snapshot->AddManifestFile(std::move(manifest_file));
+
+	//! A metadata-only delete has no new entries (only altered_manifests); add no manifest file
+	//! rather than an empty one.
+	if (!data_files.empty()) {
+		IcebergManifestContentType manifest_content_type;
+		switch (operation) {
+		case IcebergSnapshotOperationType::DELETE:
+			manifest_content_type = IcebergManifestContentType::DELETE;
+			break;
+		case IcebergSnapshotOperationType::APPEND:
+		case IcebergSnapshotOperationType::REPLACE:
+			//! This helper currently writes DATA manifest entries; REPLACE itself is not limited to data files.
+			manifest_content_type = IcebergManifestContentType::DATA;
+			break;
+		default:
+			throw NotImplementedException("Cannot have use snapshot operation type OVERWRITE here");
+		};
+
+		auto temp_sequence_number = table_metadata.last_sequence_number + alters.size() + 1;
+
+		auto &fs = FileSystem::GetFileSystem(context);
+		auto manifest_metadata = IcebergManifestMetadata::FromTableMetadata(table_metadata, manifest_content_type);
+		auto manifest_file = IcebergManifestListEntry::CreateFromEntries(
+		    fs, temp_sequence_number, table_metadata, manifest_metadata, std::move(data_files), next_row_id);
+		add_snapshot->AddManifestFile(std::move(manifest_file));
+	}
+
 	// make sure we are still inserting into the current schema
 	if (table_metadata.current_snapshot_id) {
 		TableAddAssertCurrentSchemaId();

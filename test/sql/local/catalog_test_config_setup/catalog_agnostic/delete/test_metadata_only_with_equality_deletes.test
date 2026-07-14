@@ -1,0 +1,71 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/delete/test_metadata_only_with_equality_deletes.test
+# description: Safety: when a data file already has equality deletes, a later delete of the remaining live rows must NOT be mis-detected as a whole-file delete. The positional union never reaches record_count (equality-deleted rows are not positional), so it falls back to merge-on-read and reads stay correct.
+# group: [delete]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require-env EQUALITY_DELETE_WRITES_ENABLED 1
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+statement ok
+set unsafe_and_disabled_for_iceberg_v3_enable_equality_deletes=true;
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.metadata_only_equality;
+
+# equality-delete writes are only supported on unpartitioned v2 tables
+statement ok
+CREATE TABLE my_datalake.default.metadata_only_equality (a INTEGER, b INTEGER) WITH ('format-version'=2);
+
+# one data file, 5 physical rows
+statement ok
+INSERT INTO my_datalake.default.metadata_only_equality VALUES (1, 1), (2, 1), (3, 2), (4, 2), (5, 2);
+
+# pure equality predicate -> equality delete file (removes the two b=1 rows)
+statement ok
+DELETE FROM my_datalake.default.metadata_only_equality WHERE b = 1;
+
+query II
+SELECT * FROM my_datalake.default.metadata_only_equality ORDER BY a;
+----
+3	2
+4	2
+5	2
+
+query I
+SELECT count(*) FROM iceberg_metadata(my_datalake.default.metadata_only_equality) WHERE content = 'EQUALITY_DELETES' AND status != 'DELETED';
+----
+1
+
+# delete the remaining live rows. The three live positions do not add up to the file's physical
+# record_count (5), because the equality-deleted rows are not part of the positional set, so this
+# is NOT a whole-file drop: it falls back to a positional delete file.
+statement ok
+DELETE FROM my_datalake.default.metadata_only_equality WHERE a >= 3;
+
+# reads are correct: the table is logically empty
+query I
+SELECT count(*) FROM my_datalake.default.metadata_only_equality;
+----
+0
+
+# the data file was NOT metadata-dropped (still live), and a positional delete file was written
+query I
+SELECT count(*) FROM iceberg_metadata(my_datalake.default.metadata_only_equality) WHERE content = 'DATA' AND status != 'DELETED';
+----
+1
+
+query I
+SELECT count(*) FROM iceberg_metadata(my_datalake.default.metadata_only_equality) WHERE content = 'POSITION_DELETES' AND status != 'DELETED';
+----
+1
+
+statement ok
+DROP TABLE my_datalake.default.metadata_only_equality;

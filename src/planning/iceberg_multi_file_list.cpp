@@ -522,6 +522,15 @@ vector<IcebergPartitionInfo> IcebergMultiFileList::GetPartitionInfoForDataFile(c
 	throw InternalException("Could not find data file '%s' in manifest entries", file_path);
 }
 
+int64_t IcebergMultiFileList::GetRecordCountForDataFile(const string &file_path) const {
+	lock_guard<mutex> guard(shared_state->lock);
+	auto entry = shared_state->data_file_record_count.find(file_path);
+	if (entry != shared_state->data_file_record_count.end()) {
+		return entry->second;
+	}
+	throw InternalException("Could not find data file '%s' in manifest entries", file_path);
+}
+
 const IcebergManifestFile &IcebergMultiFileList::GetManifestFileForEntry(const BoundIcebergManifestEntry &entry,
                                                                          IcebergManifestContentType type) const {
 	if (type == IcebergManifestContentType::DATA) {
@@ -960,6 +969,8 @@ optional_ptr<const BoundIcebergManifestEntry> IcebergMultiFileList::GetDataFile(
 			}
 			shared_state->data_file_partition_info[entry_path] = data_file.partition_info;
 			shared_state->data_file_partition_info[data_file.file_path] = data_file.partition_info;
+			shared_state->data_file_record_count[entry_path] = data_file.record_count;
+			shared_state->data_file_record_count[data_file.file_path] = data_file.record_count;
 
 			if (manifest_entry.status == IcebergManifestEntryStatusType::DELETED) {
 				continue;

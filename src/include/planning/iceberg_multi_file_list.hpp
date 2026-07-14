@@ -134,6 +134,9 @@ private:
 
 	//! Populated as parsed data-file entries become visible to any filtered view.
 	mutable case_insensitive_map_t<vector<IcebergPartitionInfo>> data_file_partition_info;
+	//! Physical row count per data file (file_path -> record_count), used by DELETE to detect
+	//! whole-file deletes.
+	mutable case_insensitive_map_t<int64_t> data_file_record_count;
 };
 
 struct IcebergDataViewCursor {
@@ -174,6 +177,7 @@ public:
 	void GetStatistics(vector<PartitionStatistics> &result) const;
 	BoundIcebergManifestEntry GetManifestEntry(idx_t file_id) const;
 	vector<IcebergPartitionInfo> GetPartitionInfoForDataFile(const string &file_path) const;
+	int64_t GetRecordCountForDataFile(const string &file_path) const;
 	const IcebergManifestFile &GetManifestFileForEntry(const BoundIcebergManifestEntry &entry,
 	                                                   IcebergManifestContentType type) const;
 	vector<BoundIcebergManifestEntry> GetDeleteManifestEntries() const;
