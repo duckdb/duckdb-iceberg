@@ -212,20 +212,27 @@ void IcebergTransactionData::AddUpdateSnapshot(vector<IcebergManifestEntry> &&de
 	const auto sequence_number = last_sequence_number + alters.size() + 1;
 
 	auto &fs = FileSystem::GetFileSystem(context);
-	auto delete_manifest_metadata =
-	    IcebergManifestMetadata::FromTableMetadata(table_metadata, IcebergManifestContentType::DELETE);
-	auto data_manifest_metadata =
-	    IcebergManifestMetadata::FromTableMetadata(table_metadata, IcebergManifestContentType::DATA);
-
-	auto delete_manifest_file = IcebergManifestListEntry::CreateFromEntries(
-	    fs, sequence_number, table_metadata, delete_manifest_metadata, std::move(delete_files), next_row_id);
-	// Add a manifest_file for the new insert data
-	auto data_manifest_file = IcebergManifestListEntry::CreateFromEntries(
-	    fs, sequence_number, table_metadata, data_manifest_metadata, std::move(data_files), next_row_id);
 
 	auto add_snapshot = make_uniq<IcebergAddSnapshot>(table_info);
-	add_snapshot->AddManifestFile(std::move(delete_manifest_file));
-	add_snapshot->AddManifestFile(std::move(data_manifest_file));
+
+	//! The delete side of an UPDATE can be a metadata-only whole-file delete, which produces no
+	//! delete-file entries (only altered_manifests). Only add a manifest file when it has entries;
+	//! an empty manifest is invalid.
+	if (!delete_files.empty()) {
+		auto delete_manifest_metadata =
+		    IcebergManifestMetadata::FromTableMetadata(table_metadata, IcebergManifestContentType::DELETE);
+		auto delete_manifest_file = IcebergManifestListEntry::CreateFromEntries(
+		    fs, sequence_number, table_metadata, delete_manifest_metadata, std::move(delete_files), next_row_id);
+		add_snapshot->AddManifestFile(std::move(delete_manifest_file));
+	}
+	// Add a manifest_file for the new insert data
+	if (!data_files.empty()) {
+		auto data_manifest_metadata =
+		    IcebergManifestMetadata::FromTableMetadata(table_metadata, IcebergManifestContentType::DATA);
+		auto data_manifest_file = IcebergManifestListEntry::CreateFromEntries(
+		    fs, sequence_number, table_metadata, data_manifest_metadata, std::move(data_files), next_row_id);
+		add_snapshot->AddManifestFile(std::move(data_manifest_file));
+	}
 	add_snapshot->altered_manifests = std::move(altered_manifests);
 
 	alters.push_back(*add_snapshot);
