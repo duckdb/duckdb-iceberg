@@ -58,11 +58,12 @@ select count(*) from my_datalake.default.count_star_optimizer;
 ----
 1
 
-# contain delete file, do not use the statistics information.
+# the delete removed an entire data file with a metadata-only manifest edit (no delete file), so
+# the metadata row count stays exact and the count(*) optimizer keeps using it.
 query II
 explain SELECT count(*) FROM  my_datalake.default.count_star_optimizer;
 ----
-physical_plan	<REGEX>:.*ICEBERG_SCAN.*row.*
+physical_plan	<REGEX>:.*COLUMN_DATA_SCAN.*~1.*
 
 
 

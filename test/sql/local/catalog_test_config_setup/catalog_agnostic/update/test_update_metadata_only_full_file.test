@@ -1,0 +1,171 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/update/test_update_metadata_only_full_file.test
+# description: Regression test — an UPDATE/MERGE whose delete portion removes every live row of a data file must drop that file with a metadata-only manifest edit (no delete file) and still commit. Previously this produced an empty DELETE manifest in AddUpdateSnapshot and crashed.
+# group: [update]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+# ------------------------------------------------------------------
+# v2 UPDATE: rewriting a whole partition (one data file) -> the delete
+# portion is metadata-only, the insert adds new data. Must commit and
+# write no positional delete file.
+# ------------------------------------------------------------------
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.update_metadata_only_v2;
+
+statement ok
+CREATE TABLE my_datalake.default.update_metadata_only_v2 (id INT, val VARCHAR) PARTITIONED BY (id) WITH ('format-version'=2);
+
+statement ok
+INSERT INTO my_datalake.default.update_metadata_only_v2 VALUES (1, 'a'), (1, 'b'), (2, 'c'), (2, 'd'), (3, 'e');
+
+# update every row of the id=1 file (regression: used to crash on an empty delete manifest)
+statement ok
+UPDATE my_datalake.default.update_metadata_only_v2 SET val = 'X' WHERE id = 1;
+
+query II
+SELECT * FROM my_datalake.default.update_metadata_only_v2 ORDER BY id, val;
+----
+1	X
+1	X
+2	c
+2	d
+3	e
+
+# delete portion was metadata-only: no positional delete file
+query I
+SELECT count(*) FROM iceberg_metadata(my_datalake.default.update_metadata_only_v2) WHERE content = 'POSITION_DELETES' AND status != 'DELETED';
+----
+0
+
+# partial update (one of two rows in the id=2 file) still uses merge-on-read
+statement ok
+UPDATE my_datalake.default.update_metadata_only_v2 SET val = 'Y' WHERE id = 2 AND val = 'c';
+
+query II
+SELECT * FROM my_datalake.default.update_metadata_only_v2 ORDER BY id, val;
+----
+1	X
+1	X
+2	Y
+2	d
+3	e
+
+query I
+SELECT count(*) FROM iceberg_metadata(my_datalake.default.update_metadata_only_v2) WHERE content = 'POSITION_DELETES' AND status != 'DELETED';
+----
+1
+
+statement ok
+DROP TABLE my_datalake.default.update_metadata_only_v2;
+
+# ------------------------------------------------------------------
+# v2 MERGE ... WHEN MATCHED THEN UPDATE, exercising the same
+# delete+insert path as UPDATE.
+# ------------------------------------------------------------------
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.merge_metadata_only_v2;
+
+statement ok
+CREATE TABLE my_datalake.default.merge_metadata_only_v2 (id INT, val VARCHAR) PARTITIONED BY (id) WITH ('format-version'=2);
+
+statement ok
+INSERT INTO my_datalake.default.merge_metadata_only_v2 VALUES (1, 'a'), (2, 'b'), (3, 'c');
+
+# match the single row of the id=3 file and update it -> metadata-only delete + new data
+statement ok
+MERGE INTO my_datalake.default.merge_metadata_only_v2
+    USING (SELECT 3 AS id, 'Z' AS val) AS src
+    ON my_datalake.default.merge_metadata_only_v2.id = src.id
+    WHEN MATCHED THEN UPDATE;
+
+query II
+SELECT * FROM my_datalake.default.merge_metadata_only_v2 ORDER BY id, val;
+----
+1	a
+2	b
+3	Z
+
+query I
+SELECT count(*) FROM iceberg_metadata(my_datalake.default.merge_metadata_only_v2) WHERE content = 'POSITION_DELETES' AND status != 'DELETED';
+----
+0
+
+statement ok
+DROP TABLE my_datalake.default.merge_metadata_only_v2;
+
+# ------------------------------------------------------------------
+# Transaction-local visibility: a whole-file UPDATE inside an explicit
+# transaction must hide the metadata-only-invalidated file from reads in
+# the same transaction (regression: it used to double-count, since the
+# manifest rewrite only lands at commit).
+# ------------------------------------------------------------------
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.update_metadata_only_txn;
+
+statement ok
+CREATE TABLE my_datalake.default.update_metadata_only_txn AS SELECT 1000 + i id, i % 10 as val FROM range(1000) t(i);
+
+statement ok
+BEGIN;
+
+# updates every row of the single data file -> delete portion is metadata-only
+statement ok
+UPDATE my_datalake.default.update_metadata_only_txn SET id = id + 1;
+
+# in-transaction read must see exactly 1000 rows (not 2000)
+query III
+SELECT COUNT(*), SUM(id), SUM(val) FROM my_datalake.default.update_metadata_only_txn;
+----
+1000	1500500	4500
+
+statement ok
+ROLLBACK;
+
+# after rollback the original data is intact
+query III
+SELECT COUNT(*), SUM(id), SUM(val) FROM my_datalake.default.update_metadata_only_txn;
+----
+1000	1499500	4500
+
+statement ok
+DROP TABLE my_datalake.default.update_metadata_only_txn;
+
+# ------------------------------------------------------------------
+# v3 UPDATE: same behaviour with deletion vectors.
+# ------------------------------------------------------------------
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.update_metadata_only_v3;
+
+statement ok
+CREATE TABLE my_datalake.default.update_metadata_only_v3 (id INT, val VARCHAR) PARTITIONED BY (id) WITH ('format-version'=3);
+
+statement ok
+INSERT INTO my_datalake.default.update_metadata_only_v3 VALUES (1, 'a'), (1, 'b'), (2, 'c'), (2, 'd'), (3, 'e');
+
+statement ok
+UPDATE my_datalake.default.update_metadata_only_v3 SET val = 'X' WHERE id = 1;
+
+query II
+SELECT * FROM my_datalake.default.update_metadata_only_v3 ORDER BY id, val;
+----
+1	X
+1	X
+2	c
+2	d
+3	e
+
+query I
+SELECT count(*) FROM iceberg_metadata(my_datalake.default.update_metadata_only_v3) WHERE content = 'POSITION_DELETES' AND status != 'DELETED';
+----
+0
+
+statement ok
+DROP TABLE my_datalake.default.update_metadata_only_v3;

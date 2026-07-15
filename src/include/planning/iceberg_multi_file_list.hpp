@@ -13,6 +13,7 @@
 #include "duckdb/common/multi_file/multi_file_data.hpp"
 #include "duckdb/common/list.hpp"
 #include "duckdb/common/unordered_map.hpp"
+#include "duckdb/common/unordered_set.hpp"
 #include "duckdb/planner/filter/expression_filter.hpp"
 #include "duckdb/planner/filter/null_filter.hpp"
 #include "duckdb/planner/table_filter.hpp"
@@ -137,6 +138,9 @@ private:
 	//! Physical row count per data file (file_path -> record_count), used by DELETE to detect
 	//! whole-file deletes.
 	mutable case_insensitive_map_t<int64_t> data_file_record_count;
+	//! Committed data files dropped by a metadata-only delete earlier in this transaction. Their
+	//! manifest rewrite only lands at commit, so transaction-local reads must hide them here.
+	mutable unordered_set<string> transaction_invalidated_files;
 };
 
 struct IcebergDataViewCursor {

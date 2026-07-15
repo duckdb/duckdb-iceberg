@@ -976,6 +976,14 @@ optional_ptr<const BoundIcebergManifestEntry> IcebergMultiFileList::GetDataFile(
 				continue;
 			}
 
+			//! Skip committed data files dropped by a metadata-only delete earlier in this
+			//! transaction (the manifest rewrite only lands at commit).
+			if (!shared_state->transaction_invalidated_files.empty() &&
+			    (shared_state->transaction_invalidated_files.count(entry_path) ||
+			     shared_state->transaction_invalidated_files.count(data_file.file_path))) {
+				continue;
+			}
+
 			// Check whether current data file is filtered out.
 			if (table_filters.HasFilters() &&
 			    !FileMatchesFilter(manifest_file, manifest_entry, IcebergManifestContentType::DATA)) {
@@ -1371,6 +1379,11 @@ void IcebergMultiFileList::LoadManifestList(lock_guard<mutex> &guard) const {
 		auto &transaction_data = GetTransactionData();
 		for (auto &alter_p : transaction_data.alters) {
 			auto &alter = alter_p.get();
+			//! Data files dropped by a metadata-only delete earlier in this transaction are only
+			//! removed from the manifests at commit, so hide them from transaction-local reads.
+			for (auto &invalidated : alter.altered_manifests.InvalidatedFiles()) {
+				shared_state->transaction_invalidated_files.insert(invalidated);
+			}
 			const auto &manifest_list_entries = alter.GetManifestFiles();
 			for (auto &manifest_list_entry : manifest_list_entries) {
 				auto &manifest = manifest_list_entry.file;
