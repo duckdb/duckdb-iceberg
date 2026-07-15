@@ -46,12 +46,18 @@ EXPLAIN SELECT min(id), max(id) FROM iceberg_scan('{WORKING_DIRECTORY}/data/pers
 ----
 physical_plan	<REGEX>:.*COLUMN_DATA_SCAN.*
 
-# Multi-file timestamp table: insert enough rows for multiple data files.
+# COUNT(*) folds from manifest row counts alone (no data-file bound materialization).
+query II
+EXPLAIN SELECT count(*) FROM iceberg_scan('{WORKING_DIRECTORY}/data/persistent/is_null_is_not_null');
+----
+physical_plan	<REGEX>:.*COLUMN_DATA_SCAN.*
+
+# Multi-file timestamp table: pin target file size so COPY rotates (default 512MB would be one file).
 statement ok
 COPY (
   select TIMESTAMP '2020-01-01' + INTERVAL (range) HOUR as ts
   from range(3000000)
-) TO '{TEST_DIR}/agg_minmax_ts' (FORMAT ICEBERG);
+) TO '{TEST_DIR}/agg_minmax_ts' (FORMAT ICEBERG, "write.target-file-size-bytes" '8MB', "write.parquet.row-group-size" 100000);
 
 query I
 SELECT count(*) > 1 FROM iceberg_metadata('{TEST_DIR}/agg_minmax_ts');
