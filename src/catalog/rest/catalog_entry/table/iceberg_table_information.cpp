@@ -176,17 +176,21 @@ IRCAPITableCredentials IcebergTableInformation::GetVendedCredentials(ClientConte
 	if (catalog.auth_handler->type == IcebergAuthorizationType::SIGV4) {
 		auto &sigv4_auth = catalog.auth_handler->Cast<SIGV4Authorization>();
 		auto catalog_credentials = IcebergCatalog::GetStorageSecret(context, sigv4_auth.secret);
-		// start with the credentials needed for the catalog and overwrite information contained
-		// in the vended credentials. We do it this way to maintain the region info from the catalog credentials
+		// Start with the credentials needed for the catalog and overwrite information contained
+		// in the vended credentials. We do it this way to maintain the region info from the catalog credentials.
 		if (catalog_credentials) {
+			// Refresh the catalog secret before snapshotting its values into per-table secrets.
+			// Uses the same per-catalog MaybeRefreshSecret as SigV4 API calls — time-gated
+			// and serialized so it won't refresh redundantly or race.
+			sigv4_auth.MaybeRefreshSecret(context);
+			// Re-fetch to get the (potentially) refreshed credentials
+			catalog_credentials = IcebergCatalog::GetStorageSecret(context, sigv4_auth.secret);
+
 			auto kv_secret = dynamic_cast<const KeyValueSecret &>(*catalog_credentials->secret);
 			for (auto &option : kv_secret.secret_map) {
-				// Ignore refresh info.
-				// if the credentials are the same as for the catalog, then refreshing the catalog secret is enough
-				// otherwise the vended credentials contain their own information for refreshing.
-				if (option.first != "refresh_info" && option.first != "refresh") {
-					user_defaults.emplace(option);
-				}
+				// Propagate refresh_info so that per-table secrets can be auto-refreshed
+				// by httpfs when credentials expire during long-running queries.
+				user_defaults.emplace(option);
 			}
 		}
 		if (!sigv4_auth.sigv4_region.empty()) {
