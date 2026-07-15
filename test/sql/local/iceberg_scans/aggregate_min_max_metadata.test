@@ -46,6 +46,12 @@ EXPLAIN SELECT min(id), max(id) FROM iceberg_scan('{WORKING_DIRECTORY}/data/pers
 ----
 physical_plan	<REGEX>:.*COLUMN_DATA_SCAN.*
 
+# COUNT(*) folds from manifest row counts alone (no data-file bound materialization).
+query II
+EXPLAIN SELECT count(*) FROM iceberg_scan('{WORKING_DIRECTORY}/data/persistent/is_null_is_not_null');
+----
+physical_plan	<REGEX>:.*COLUMN_DATA_SCAN.*
+
 # Multi-file timestamp table: insert enough rows for multiple data files.
 statement ok
 COPY (

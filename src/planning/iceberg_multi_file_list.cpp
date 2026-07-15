@@ -545,9 +545,15 @@ const IcebergManifestFile &IcebergMultiFileList::GetManifestFileForEntry(const B
 	}
 }
 
-IcebergPartitionRowGroup::IcebergPartitionRowGroup(const vector<unique_ptr<IcebergColumnDefinition>> &schema_p,
-                                                   vector<reference<const IcebergDataFile>> data_files_p)
-    : schema(schema_p), data_files(std::move(data_files_p)) {
+IcebergPartitionRowGroup::IcebergPartitionRowGroup(const IcebergMultiFileList &file_list_p) : file_list(file_list_p) {
+}
+
+void IcebergPartitionRowGroup::EnsureDataFilesMaterialized() {
+	if (data_files_materialized) {
+		return;
+	}
+	data_files_materialized = true;
+	file_list.EnsureDataFilesMaterialized(data_files);
 }
 
 bool IcebergPartitionRowGroup::SupportsExactMinMaxBounds(const LogicalType &type) {
@@ -587,6 +593,7 @@ unique_ptr<BaseStatistics> IcebergPartitionRowGroup::GetColumnStatistics(const S
 	if (storage_index.HasChildren()) {
 		return nullptr;
 	}
+	auto &schema = file_list.GetSchema().columns;
 	auto col_idx = storage_index.GetPrimaryIndex();
 	if (col_idx >= schema.size()) {
 		return nullptr;
@@ -598,6 +605,8 @@ unique_ptr<BaseStatistics> IcebergPartitionRowGroup::GetColumnStatistics(const S
 	if (!SupportsExactMinMaxBounds(type)) {
 		return nullptr;
 	}
+	//! Materialize only when column bounds are actually needed (not for COUNT(*)).
+	EnsureDataFilesMaterialized();
 	if (data_files.empty()) {
 		return nullptr;
 	}
@@ -685,25 +694,28 @@ void IcebergMultiFileList::GetStatistics(vector<PartitionStatistics> &result) co
 		count += manifest.added_rows_count;
 	}
 
-	//! Materialize data-file entries so column bounds are available for MIN/MAX.
+	PartitionStatistics partition_stats;
+	partition_stats.count = count;
+	partition_stats.count_type = CountType::COUNT_EXACT;
+	//! Lazy IcebergPartitionRowGroup: data-file bounds are materialized only when
+	//! GetColumnStatistics runs (MIN/MAX). COUNT(*) uses count alone.
+	partition_stats.partition_row_group = make_shared_ptr<IcebergPartitionRowGroup>(*this);
+	result.push_back(std::move(partition_stats));
+}
+
+void IcebergMultiFileList::EnsureDataFilesMaterialized(vector<reference<const IcebergDataFile>> &result) const {
+	lock_guard<mutex> guard(shared_state->lock);
+	InitializeFiles(guard);
+
 	idx_t materialized = 0;
 	while (GetDataFile(materialized, guard)) {
 		materialized++;
 	}
-	vector<reference<const IcebergDataFile>> data_files;
-	data_files.reserve(data_manifest_entries.size());
+	result.clear();
+	result.reserve(data_manifest_entries.size());
 	for (auto &entry : data_manifest_entries) {
-		data_files.push_back(entry.entry.data_file);
+		result.push_back(entry.entry.data_file);
 	}
-
-	PartitionStatistics partition_stats;
-	partition_stats.count = count;
-	partition_stats.count_type = CountType::COUNT_EXACT;
-	//! Manifest column bounds (not Iceberg partition-statistics files) — those
-	//! files have no per-column min/max.
-	partition_stats.partition_row_group =
-	    make_shared_ptr<IcebergPartitionRowGroup>(GetSchema().columns, std::move(data_files));
-	result.push_back(std::move(partition_stats));
 }
 
 void IcebergPredicateStats::SetLowerBound(const Value &new_lower_bound) {
