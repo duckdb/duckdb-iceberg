@@ -50,20 +50,26 @@ select count(*) from my_datalake.default.count_star_optimizer;
 statement ok
 ABORT;
 
+# Insert two rows as a single data file, then delete one of them. Deleting a strict subset of a
+# file's rows is always a merge-on-read (positional) delete regardless of how the catalog laid out
+# the pre-existing rows, so this exercises the "delete file present" path deterministically (a
+# whole-file delete would instead be metadata-only and leave no delete file).
 statement ok
-delete from my_datalake.default.count_star_optimizer where id = 1;
+insert into my_datalake.default.count_star_optimizer values (10, 'j'), (11, 'k');
+
+statement ok
+delete from my_datalake.default.count_star_optimizer where id = 10;
 
 query I
 select count(*) from my_datalake.default.count_star_optimizer;
 ----
-1
+3
 
-# the delete removed an entire data file with a metadata-only manifest edit (no delete file), so
-# the metadata row count stays exact and the count(*) optimizer keeps using it.
+# a positional delete file is present, so the count(*) optimizer cannot use the metadata row count.
 query II
 explain SELECT count(*) FROM  my_datalake.default.count_star_optimizer;
 ----
-physical_plan	<REGEX>:.*COLUMN_DATA_SCAN.*~1.*
+physical_plan	<REGEX>:.*ICEBERG_SCAN.*row.*
 
 
 
