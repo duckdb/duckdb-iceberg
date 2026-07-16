@@ -25,44 +25,41 @@ class Test(IcebergTest):
         super().__init__(__file__)
 
     def generate(self, con):
-        try:
+        con.con.sql(
+            """
+            CREATE OR REPLACE TABLE default.vended_refresh_table (
+                dt date,
+                number integer,
+                letter string
+            )
+            USING iceberg
+            """
+        )
+        con.con.sql(
+            """
+            INSERT INTO default.vended_refresh_table
+            VALUES
+                (CAST('2023-03-01' AS date), 1, 'a'),
+                (CAST('2023-03-02' AS date), 2, 'b'),
+                (CAST('2023-03-03' AS date), 3, 'c'),
+                (CAST('2023-03-04' AS date), 4, 'd'),
+                (CAST('2023-03-05' AS date), 5, 'e'),
+                (CAST('2023-03-06' AS date), 6, 'f'),
+                (CAST('2023-03-07' AS date), 7, 'g'),
+                (CAST('2023-03-08' AS date), 8, 'h'),
+                (CAST('2023-03-09' AS date), 9, 'i'),
+                (CAST('2023-03-10' AS date), 10, 'j'),
+                (CAST('2023-03-11' AS date), 11, 'k'),
+                (CAST('2023-03-12' AS date), 12, 'l')
+            """
+        )
+
+        for table in REFRESH_METADATA_TABLES:
             con.con.sql(
-                """
-                CREATE OR REPLACE TABLE default.vended_refresh_table (
-                    dt date,
-                    number integer,
-                    letter string
+                f"""
+                CREATE OR REPLACE TABLE default.{table} (
+                    id integer
                 )
                 USING iceberg
                 """
             )
-            con.con.sql(
-                """
-                INSERT INTO default.vended_refresh_table
-                VALUES
-                    (CAST('2023-03-01' AS date), 1, 'a'),
-                    (CAST('2023-03-02' AS date), 2, 'b'),
-                    (CAST('2023-03-03' AS date), 3, 'c'),
-                    (CAST('2023-03-04' AS date), 4, 'd'),
-                    (CAST('2023-03-05' AS date), 5, 'e'),
-                    (CAST('2023-03-06' AS date), 6, 'f'),
-                    (CAST('2023-03-07' AS date), 7, 'g'),
-                    (CAST('2023-03-08' AS date), 8, 'h'),
-                    (CAST('2023-03-09' AS date), 9, 'i'),
-                    (CAST('2023-03-10' AS date), 10, 'j'),
-                    (CAST('2023-03-11' AS date), 11, 'k'),
-                    (CAST('2023-03-12' AS date), 12, 'l')
-                """
-            )
-
-            for table in REFRESH_METADATA_TABLES:
-                con.con.sql(
-                    f"""
-                    CREATE OR REPLACE TABLE default.{table} (
-                        id integer
-                    )
-                    USING iceberg
-                    """
-                )
-        finally:
-            self.close_connection(con)
