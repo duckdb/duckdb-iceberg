@@ -1,6 +1,6 @@
 from scripts.data_generators.tests.base import IcebergTest
 from typing import Optional
-
+import pathlib
 
 REFRESH_METADATA_TABLES = [
     "vended_init_refresh",
@@ -21,10 +21,10 @@ REFRESH_METADATA_TABLES = [
 @IcebergTest.register()
 class Test(IcebergTest):
     def __init__(self):
-        super().__init__("vended_credentials_refresh_tables", write_intermediates=False)
+        path = pathlib.PurePath(__file__)
+        super().__init__(__file__)
 
-    def generate(self, catalog: str, *, target: Optional[str] = None, connection_kwargs: Optional[dict] = None):
-        con = self.get_connection(catalog, target=target, **(connection_kwargs or {}))
+    def generate(self, con):
         try:
             con.con.sql(
                 """
