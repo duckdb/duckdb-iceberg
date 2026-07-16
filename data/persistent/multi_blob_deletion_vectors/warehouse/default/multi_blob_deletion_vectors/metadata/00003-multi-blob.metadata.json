@@ -1,0 +1,138 @@
+{
+  "location": "data/persistent/multi_blob_deletion_vectors/warehouse/default/multi_blob_deletion_vectors",
+  "table-uuid": "7717e558-d070-4345-96e7-b798a1499236",
+  "last-updated-ms": 1784206297638,
+  "last-column-id": 2,
+  "schemas": [
+    {
+      "type": "struct",
+      "fields": [
+        {
+          "id": 1,
+          "name": "id",
+          "type": "long",
+          "required": true
+        },
+        {
+          "id": 2,
+          "name": "source",
+          "type": "string",
+          "required": true
+        }
+      ],
+      "schema-id": 0,
+      "identifier-field-ids": []
+    }
+  ],
+  "current-schema-id": 0,
+  "partition-specs": [
+    {
+      "spec-id": 0,
+      "fields": []
+    }
+  ],
+  "default-spec-id": 0,
+  "last-partition-id": 999,
+  "properties": {},
+  "current-snapshot-id": 7777777777777777777,
+  "snapshots": [
+    {
+      "snapshot-id": 4008342791228255080,
+      "sequence-number": 1,
+      "timestamp-ms": 1784206297629,
+      "manifest-list": "data/persistent/multi_blob_deletion_vectors/warehouse/default/multi_blob_deletion_vectors/metadata/snap-4008342791228255080-0-aeff6b64-fd21-4e4d-9808-356eb50b96a5.avro",
+      "summary": {
+        "operation": "append",
+        "added-files-size": "922",
+        "added-data-files": "1",
+        "added-records": "3",
+        "total-data-files": "1",
+        "total-delete-files": "0",
+        "total-records": "3",
+        "total-files-size": "922",
+        "total-position-deletes": "0",
+        "total-equality-deletes": "0"
+      },
+      "schema-id": 0
+    },
+    {
+      "snapshot-id": 6085737399650530681,
+      "parent-snapshot-id": 4008342791228255080,
+      "sequence-number": 2,
+      "timestamp-ms": 1784206297637,
+      "manifest-list": "data/persistent/multi_blob_deletion_vectors/warehouse/default/multi_blob_deletion_vectors/metadata/snap-6085737399650530681-0-6a3b52ad-e883-4912-9187-bc11bc6a0740.avro",
+      "summary": {
+        "operation": "append",
+        "added-files-size": "928",
+        "added-data-files": "1",
+        "added-records": "3",
+        "total-data-files": "2",
+        "total-delete-files": "0",
+        "total-records": "6",
+        "total-files-size": "1850",
+        "total-position-deletes": "0",
+        "total-equality-deletes": "0"
+      },
+      "schema-id": 0
+    },
+    {
+      "sequence-number": 3,
+      "snapshot-id": 7777777777777777777,
+      "parent-snapshot-id": 6085737399650530681,
+      "timestamp-ms": 1784206297638,
+      "summary": {
+        "operation": "delete",
+        "added-delete-files": "2",
+        "added-position-deletes": "3",
+        "total-delete-files": "2",
+        "total-position-deletes": "3",
+        "total-data-files": "2",
+        "total-records": "6"
+      },
+      "manifest-list": "data/persistent/multi_blob_deletion_vectors/warehouse/default/multi_blob_deletion_vectors/metadata/snap-multiple-deletion-vectors.avro",
+      "schema-id": 0
+    }
+  ],
+  "snapshot-log": [
+    {
+      "snapshot-id": 4008342791228255080,
+      "timestamp-ms": 1784206297629
+    },
+    {
+      "snapshot-id": 6085737399650530681,
+      "timestamp-ms": 1784206297637
+    },
+    {
+      "snapshot-id": 7777777777777777777,
+      "timestamp-ms": 1784206297638
+    }
+  ],
+  "metadata-log": [
+    {
+      "metadata-file": "data/persistent/multi_blob_deletion_vectors/warehouse/default/multi_blob_deletion_vectors/metadata/00000-933f7a39-d496-4547-b3e8-e05fdecce1cc.metadata.json",
+      "timestamp-ms": 1784206297260
+    },
+    {
+      "metadata-file": "data/persistent/multi_blob_deletion_vectors/warehouse/default/multi_blob_deletion_vectors/metadata/00001-7e928673-11ea-404d-9449-fb8d7e42d4e7.metadata.json",
+      "timestamp-ms": 1784206297629
+    }
+  ],
+  "sort-orders": [
+    {
+      "order-id": 0,
+      "fields": []
+    }
+  ],
+  "default-sort-order-id": 0,
+  "refs": {
+    "main": {
+      "snapshot-id": 7777777777777777777,
+      "type": "branch"
+    }
+  },
+  "statistics": [],
+  "partition-statistics": [],
+  "format-version": 3,
+  "last-sequence-number": 3,
+  "next-row-id": 6
+}
