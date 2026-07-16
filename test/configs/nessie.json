@@ -65,6 +65,8 @@
         "test/sql/local/catalog_test_config_setup/catalog_agnostic/merge/merge_into_default.test",
         "test/sql/local/catalog_test_config_setup/catalog_agnostic/merge/merge_into_multiple_update_delete_actions.test",
         "test/sql/local/catalog_test_config_setup/catalog_agnostic/other_engines/test_create_partitioned_tables.test",
+        "test/sql/local/catalog_test_config_setup/catalog_agnostic/create/test_create_geo.test",
+        "test/sql/local/catalog_test_config_setup/catalog_agnostic/insert/test_create_geometry_type.test",
         "test/sql/local/catalog_test_config_setup/catalog_agnostic/insert/iceberg_types/test_geometry_type.test",
         "test/sql/local/catalog_test_config_setup/catalog_agnostic/insert/iceberg_types/test_geometry_type_nested.test",
         "test/sql/local/catalog_test_config_setup/catalog_agnostic/alter/alter_type_v3.test",

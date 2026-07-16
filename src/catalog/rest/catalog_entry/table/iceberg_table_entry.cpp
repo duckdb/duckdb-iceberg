@@ -23,6 +23,7 @@
 #include "rest_catalog/objects/list.hpp"
 #include "catalog/rest/catalog_entry/table/iceberg_table_information.hpp"
 #include "common/iceberg_default.hpp"
+#include "catalog/rest/transaction/iceberg_transaction.hpp"
 
 namespace duckdb {
 class OAuth2Authorization;

@@ -249,7 +249,8 @@ rest_api_objects::PrimitiveTypeValue IcebergTypeHelper::PrimitiveTypeFromValue(c
 rest_api_objects::StructField IcebergTypeHelper::CreateIcebergRestType(const string &name, const LogicalType &type,
                                                                        bool required, const string &doc,
                                                                        const Value &default_val,
-                                                                       const std::function<idx_t()> &get_next_id) {
+                                                                       const std::function<idx_t()> &get_next_id,
+                                                                       idx_t iceberg_version) {
 	rest_api_objects::StructField result;
 	result.id = static_cast<int32_t>(get_next_id());
 	result.name = name;
@@ -262,6 +263,9 @@ rest_api_objects::StructField IcebergTypeHelper::CreateIcebergRestType(const str
 	case_insensitive_map_t<reference<const Value>> child_defaults;
 	if (!default_val.IsNull() && type.id() != LogicalTypeId::STRUCT) {
 		result.initial_default = std::move(IcebergTypeHelper::PrimitiveTypeFromValue(default_val));
+		if (iceberg_version >= 3) {
+			result.write_default = std::move(IcebergTypeHelper::PrimitiveTypeFromValue(default_val));
+		}
 	}
 	auto &rest_type = *result.type;
 
@@ -273,14 +277,14 @@ rest_api_objects::StructField IcebergTypeHelper::CreateIcebergRestType(const str
 		auto key_type = MapType::KeyType(type);
 		auto key_field = IcebergTypeHelper::CreateIcebergRestType("key", key_type, true, "",
 		                                                          Value(), //! FIXME: extract from parent
-		                                                          get_next_id);
+		                                                          get_next_id, iceberg_version);
 		rest_type.map_type->key_id = key_field.id;
 		rest_type.map_type->key = std::move(key_field.type);
 
 		//! Value
 		auto value_type = MapType::ValueType(type);
-		auto value_field =
-		    IcebergTypeHelper::CreateIcebergRestType("value", value_type, false, "", Value(), get_next_id);
+		auto value_field = IcebergTypeHelper::CreateIcebergRestType("value", value_type, false, "", Value(),
+		                                                            get_next_id, iceberg_version);
 		rest_type.map_type->value_id = value_field.id;
 		rest_type.map_type->value = std::move(value_field.type);
 		rest_type.map_type->value_required = value_field.required;
@@ -297,7 +301,7 @@ rest_api_objects::StructField IcebergTypeHelper::CreateIcebergRestType(const str
 			auto &child_type = child.second;
 			auto child_default = !default_val.IsNull() ? StructValue::GetChildren(default_val)[i] : Value();
 			auto struct_child = make_uniq<rest_api_objects::StructField>(IcebergTypeHelper::CreateIcebergRestType(
-			    child_name.GetIdentifierName(), child_type, false, "", child_default, get_next_id));
+			    child_name.GetIdentifierName(), child_type, false, "", child_default, get_next_id, iceberg_version));
 			rest_type.struct_type->fields.push_back(std::move(struct_child));
 		}
 		return result;
@@ -309,7 +313,7 @@ rest_api_objects::StructField IcebergTypeHelper::CreateIcebergRestType(const str
 		const auto &element_type = ListType::GetChildType(type);
 		auto element_field = IcebergTypeHelper::CreateIcebergRestType("element", element_type, false, "",
 		                                                              Value(), //! FIXME: extract default from parent
-		                                                              get_next_id);
+		                                                              get_next_id, iceberg_version);
 		rest_type.list_type->type = "list";
 		rest_type.list_type->element_id = element_field.id;
 		rest_type.list_type->element = std::move(element_field.type);

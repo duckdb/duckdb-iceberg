@@ -56,7 +56,6 @@ import pathlib
 
 import pytest
 
-
 # ---------------------------------------------------------------------------
 # Load libduckdb BEFORE importing snowpark.
 #

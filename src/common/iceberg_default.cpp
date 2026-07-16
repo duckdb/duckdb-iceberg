@@ -18,13 +18,19 @@ Value IcebergDefaultBinder::Evaluate(optional_ptr<const ParsedExpression> expr, 
 	}
 	auto expr_copy = expr->Copy();
 	auto bound_expr = constant_binder.Bind(expr_copy, nullptr);
+
+	if (!bound_expr->IsFoldable()) {
+		throw NotImplementedException("Only foldable expressions are allowed as DEFAULT values");
+	}
+	auto val = ExpressionExecutor::EvaluateScalar(context, *bound_expr, false).DefaultCastAs(type);
+
 	auto type_id = type.id();
 	switch (type_id) {
 	case LogicalTypeId::SQLNULL:
 	case LogicalTypeId::VARIANT:
 	// case LogicalTypeId::GEOGRAPHY:
 	case LogicalTypeId::GEOMETRY: {
-		if (bound_expr->GetReturnType().id() != LogicalTypeId::SQLNULL) {
+		if (!val.IsNull()) {
 			//! SPEC: All columns of unknown, variant, geometry, and geography types must default to null. Non-null
 			//! values for initial-default or write-default are invalid.
 			throw InvalidInputException("Non-null DEFAULT values are not accepted for columns of type %s",
@@ -35,11 +41,7 @@ Value IcebergDefaultBinder::Evaluate(optional_ptr<const ParsedExpression> expr, 
 	default:
 		break;
 	};
-
-	if (!bound_expr->IsFoldable()) {
-		throw NotImplementedException("Only foldable expressions are allowed as DEFAULT values");
-	}
-	return ExpressionExecutor::EvaluateScalar(context, *bound_expr, false).DefaultCastAs(type);
+	return val;
 }
 
 namespace {

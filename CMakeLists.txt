@@ -44,6 +44,7 @@ set(EXTENSION_SOURCES
 	src/catalog/rest/storage/authorization/sigv4.cpp
 	src/catalog/rest/storage/aws.cpp
 	src/catalog/rest/storage/iceberg_authorization.cpp
+	src/catalog/rest/storage/iceberg_table_secret_provider.cpp
 	src/catalog/rest/transaction/iceberg_transaction_data.cpp
 	src/catalog/rest/transaction/iceberg_transaction_manager.cpp
 	src/catalog/rest/transaction/iceberg_transaction.cpp

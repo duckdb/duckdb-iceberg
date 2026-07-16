@@ -121,6 +121,29 @@ jobs:
           ${{ inputs.build-path }}/test/unittest --order lex "$PWD/test/sql/local/catalog_test_config_setup/*" --list-test-names-only || true
           ${{ inputs.build-path }}/test/unittest --order lex "$PWD/test/sql/local/catalog_test_config_setup/*" --test-config test/configs/fixture.json
 
+      - name: Run vended credential refresh tests
+        if: inputs.local-extension-repo == ''
+        shell: bash
+        env:
+          FIXTURE_SERVER_AVAILABLE: 1
+          VENDED_CREDENTIAL_REFRESH_PROXY: http://127.0.0.1:19133
+        run: |
+          source .venv-spark4/bin/activate
+          mitmdump --mode regular@19133 -s scripts/vended_credentials_refresh_proxy.py --flow-detail 2 > vended_credentials_refresh_proxy.log 2>&1 &
+          proxy_pid=$!
+          trap 'kill "$proxy_pid" || true; wait "$proxy_pid" 2>/dev/null || true' EXIT
+
+          for i in {1..30}; do
+            if curl -fsS --proxy "${VENDED_CREDENTIAL_REFRESH_PROXY}" http://127.0.0.1:8181/v1/config > /dev/null; then
+              ./build/release/test/unittest --order lex "$PWD/test/sql/local/catalog_custom_setup/fixture/vended_credentials_refresh.test"
+              exit 0
+            fi
+            sleep 1
+          done
+
+          cat vended_credentials_refresh_proxy.log
+          exit 1
+
       - name: Run other tests
         if: inputs.local-extension-repo == ''
         env:
@@ -153,3 +176,8 @@ jobs:
       #  run: |
       #    ${{ inputs.build-path }}/test/unittest --order lex --test-dir duckdb "test/sql/*" --list-test-names-only || true
       #    ${{ inputs.build-path }}/test/unittest --order lex --test-dir duckdb "test/sql/*" --test-config test/configs/fixture_duckdb_tests.json
+
+      - name: Print vended credential refresh proxy log
+        if: failure() && inputs.local-extension-repo == ''
+        run: |
+          cat vended_credentials_refresh_proxy.log || true

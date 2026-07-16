@@ -115,6 +115,7 @@
         "test/sql/catalog/comment_on_column.test",
         "test/sql/catalog/comment_on_dependencies.test",
         "test/sql/catalog/comment_on_pg_description.test",
+        "test/sql/catalog/test_alter_oid_stability.test",
         "test/sql/copy_database/copy_database_with_index.test",
         "test/sql/generated_columns/virtual/gcol_duckdb_columns.test",
         "test/sql/index/art/memory/test_art_non_linear.test_slow",
@@ -314,7 +315,8 @@
     {
       "reason": "Schema visibility / concurrent schema creation in Iceberg differs from DuckDB",
       "paths": [
-        "test/sql/catalog/dependencies/test_concurrent_schema_creation.test"
+        "test/sql/catalog/dependencies/test_concurrent_schema_creation.test",
+        "test/sql/select/test_select_qualified_view.test"
       ]
     },
     {
@@ -448,6 +450,7 @@
       "paths": [
         "test/sql/delete/in_memory_bulk_delete.test_slow",
         "test/sql/function/date/date_part_stats.test",
+        "test/sql/function/time/test_extract_stats.test",
         "test/sql/function/generic/test_stats.test",
         "test/sql/filter/test_transitive_filters.test"
       ]
@@ -574,6 +577,7 @@
         "test/sql/storage/types/variant/variant_shredding.test_slow",
         "test/sql/storage/types/variant/variant_shredding_inconsistent.test",
         "test/sql/storage/types/variant/variant_shredding_omit_untyped.test",
+        "test/sql/storage/types/variant/variant_parquet_shredding_bug.test",
         "test/sql/storage/types/variant/variant_stats_merging.test_slow",
         "test/sql/storage/types/variant/variant_storage_version.test",
         "test/sql/storage/types/variant/variant_shredding_empty_keys.test",
@@ -703,6 +707,8 @@
     {
       "reason": "DuckDB checkpoint / many_checkpoints semantics don't apply to Iceberg",
       "paths": [
+        "test/sql/storage/attach/attach_invalidation_default_db.test",
+        "test/sql/storage/checkpoint/initial_database_autocheckpoint_failure.test",
         "test/sql/storage/many_checkpoints.test"
       ]
     },
@@ -763,6 +769,7 @@
     {
       "reason": "DuckDB overflow_strings / partial_blocks / nested struct internal storage tests",
       "paths": [
+        "test/sql/storage/compression/dictionary/dict_corrupted_offset.test",
         "test/sql/storage/overflow_strings/load_overflow_strings_slowly.test_slow",
         "test/sql/storage/partial_blocks/many_columns_drop_table.test",
         "test/sql/storage/types/list/list_compression.test_slow",
@@ -933,6 +940,8 @@
         "test/sql/types/geo/geometry_persist_wal.test",
         "test/sql/types/geo/geometry_update.test",
         "test/sql/types/geo/geometry_shred.test",
+        "test/sql/types/geo/geometry_shred_deletes.test",
+        "test/sql/types/geo/geometry_shred_more.test",
         "test/sql/types/geo/geometry_wkb.test"
       ]
     },
