@@ -1,7 +1,7 @@
 {
   "location": "file:///Users/thijs/DuckDBLabs/duckdb_iceberg/data/persistent/multi_blob_deletion_vectors/warehouse/default/multi_blob_deletion_vectors",
-  "table-uuid": "0023dfcc-ad5e-422d-96a5-0f2c6953fe58",
-  "last-updated-ms": 1784198527087,
+  "table-uuid": "4da6f465-550d-4b05-b8cf-d29b5f5ea57b",
+  "last-updated-ms": 1784200020832,
   "last-column-id": 2,
   "schemas": [
     {
@@ -37,10 +37,10 @@
   "current-snapshot-id": 7777777777777777777,
   "snapshots": [
     {
-      "snapshot-id": 5348698238234249384,
+      "snapshot-id": 7350917975990838399,
       "sequence-number": 1,
-      "timestamp-ms": 1784198527077,
-      "manifest-list": "file:///Users/thijs/DuckDBLabs/duckdb_iceberg/data/persistent/multi_blob_deletion_vectors/warehouse/default/multi_blob_deletion_vectors/metadata/snap-5348698238234249384-0-f3e37a68-8fa6-4ae3-b219-52282fceb016.avro",
+      "timestamp-ms": 1784200020818,
+      "manifest-list": "file:///Users/thijs/DuckDBLabs/duckdb_iceberg/data/persistent/multi_blob_deletion_vectors/warehouse/default/multi_blob_deletion_vectors/metadata/snap-7350917975990838399-0-3e0d3a5c-4984-4187-b507-e215fef4f250.avro",
       "summary": {
         "operation": "append",
         "added-files-size": "922",
@@ -56,11 +56,11 @@
       "schema-id": 0
     },
     {
-      "snapshot-id": 4324102358971560670,
-      "parent-snapshot-id": 5348698238234249384,
+      "snapshot-id": 1336304610584474577,
+      "parent-snapshot-id": 7350917975990838399,
       "sequence-number": 2,
-      "timestamp-ms": 1784198527086,
-      "manifest-list": "file:///Users/thijs/DuckDBLabs/duckdb_iceberg/data/persistent/multi_blob_deletion_vectors/warehouse/default/multi_blob_deletion_vectors/metadata/snap-4324102358971560670-0-89d4bfa5-ebad-4cbe-a591-b8f9256e59ee.avro",
+      "timestamp-ms": 1784200020831,
+      "manifest-list": "file:///Users/thijs/DuckDBLabs/duckdb_iceberg/data/persistent/multi_blob_deletion_vectors/warehouse/default/multi_blob_deletion_vectors/metadata/snap-1336304610584474577-0-0681d806-8c7b-4bdc-8aa5-05f9d72ba116.avro",
       "summary": {
         "operation": "append",
         "added-files-size": "928",
@@ -78,8 +78,8 @@
     {
       "sequence-number": 3,
       "snapshot-id": 7777777777777777777,
-      "parent-snapshot-id": 4324102358971560670,
-      "timestamp-ms": 1784198527087,
+      "parent-snapshot-id": 1336304610584474577,
+      "timestamp-ms": 1784200020832,
       "summary": {
         "operation": "delete",
         "added-delete-files": "2",
@@ -95,26 +95,26 @@
   ],
   "snapshot-log": [
     {
-      "snapshot-id": 5348698238234249384,
-      "timestamp-ms": 1784198527077
+      "snapshot-id": 7350917975990838399,
+      "timestamp-ms": 1784200020818
     },
     {
-      "snapshot-id": 4324102358971560670,
-      "timestamp-ms": 1784198527086
+      "snapshot-id": 1336304610584474577,
+      "timestamp-ms": 1784200020831
     },
     {
       "snapshot-id": 7777777777777777777,
-      "timestamp-ms": 1784198527087
+      "timestamp-ms": 1784200020832
     }
   ],
   "metadata-log": [
     {
-      "metadata-file": "file:///Users/thijs/DuckDBLabs/duckdb_iceberg/data/persistent/multi_blob_deletion_vectors/warehouse/default/multi_blob_deletion_vectors/metadata/00000-de390a92-7c2d-4e5d-ab0d-b7bd37b4d0fe.metadata.json",
-      "timestamp-ms": 1784198526815
+      "metadata-file": "file:///Users/thijs/DuckDBLabs/duckdb_iceberg/data/persistent/multi_blob_deletion_vectors/warehouse/default/multi_blob_deletion_vectors/metadata/00000-e888ca0c-69f8-4973-b3e7-d218cb623f30.metadata.json",
+      "timestamp-ms": 1784200020400
     },
     {
-      "metadata-file": "file:///Users/thijs/DuckDBLabs/duckdb_iceberg/data/persistent/multi_blob_deletion_vectors/warehouse/default/multi_blob_deletion_vectors/metadata/00001-231937c6-b389-4b10-9295-b3a9cec7083b.metadata.json",
-      "timestamp-ms": 1784198527077
+      "metadata-file": "file:///Users/thijs/DuckDBLabs/duckdb_iceberg/data/persistent/multi_blob_deletion_vectors/warehouse/default/multi_blob_deletion_vectors/metadata/00001-81d401dc-4f8c-49f6-bf0a-0bce3fdd7951.metadata.json",
+      "timestamp-ms": 1784200020818
     }
   ],
   "sort-orders": [

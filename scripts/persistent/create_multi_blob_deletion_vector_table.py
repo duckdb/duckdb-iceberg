@@ -9,6 +9,7 @@ import zlib
 from pathlib import Path
 
 import pyarrow as pa
+import pyarrow.parquet as pq
 from pyroaring import BitMap
 from pyiceberg.avro.file import AvroOutputFile
 from pyiceberg.catalog.sql import SqlCatalog
@@ -171,7 +172,14 @@ def build_table() -> Path:
         if entry.status != ManifestEntryStatus.DELETED
     ]
     assert len(data_files) == 2
-    data_files.sort(key=lambda data_file: data_file.file_path)
+
+    data_files_by_source = {}
+    for data_file in data_files:
+        parquet_path = data_file.file_path.removeprefix("file://")
+        sources = pq.read_table(parquet_path, columns=["source"])["source"].unique().to_pylist()
+        assert len(sources) == 1
+        data_files_by_source[sources[0]] = data_file
+    assert set(data_files_by_source) == {"first", "second"}
 
     table_root = Path(table.location().removeprefix("file://"))
     puffin_path = table_root / "data" / "multiple-deletion-vectors.puffin"
@@ -180,8 +188,8 @@ def build_table() -> Path:
     blob_locations = write_puffin(
         puffin_path,
         [
-            (data_files[0].file_path, blobs[0], 1),
-            (data_files[1].file_path, blobs[1], 2),
+            (data_files_by_source["first"].file_path, blobs[0], 1),
+            (data_files_by_source["second"].file_path, blobs[1], 2),
         ],
     )
 
@@ -194,7 +202,11 @@ def build_table() -> Path:
         snapshot_id=SNAPSHOT_ID,
         avro_compression="gzip",
     ) as writer:
-        for data_file, (offset, length), cardinality in zip(data_files, blob_locations, (1, 2)):
+        vector_specs = [
+            (data_files_by_source["first"], blob_locations[0], 1),
+            (data_files_by_source["second"], blob_locations[1], 2),
+        ]
+        for data_file, (offset, length), cardinality in vector_specs:
             writer.add_entry(
                 ManifestEntry.from_args(
                     status=ManifestEntryStatus.ADDED,
