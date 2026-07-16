@@ -2,6 +2,7 @@
 
 #include "duckdb/common/multi_file/multi_file_list.hpp"
 #include "duckdb/function/function.hpp"
+#include "duckdb/function/table_function.hpp"
 
 namespace duckdb {
 

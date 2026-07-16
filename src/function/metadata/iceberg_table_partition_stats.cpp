@@ -5,6 +5,8 @@
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/execution/execution_context.hpp"
 #include "duckdb/main/database.hpp"
+#include "duckdb/catalog/catalog.hpp"
+#include "duckdb/main/client_context.hpp"
 #include "duckdb/parser/tableref/table_function_ref.hpp"
 #include "duckdb/storage/external_file_cache/caching_file_system_wrapper.hpp"
 
@@ -83,44 +85,6 @@ struct IcebergTablePartitionStatsLocalState : public LocalTableFunctionState {
 	unique_ptr<LocalTableFunctionState> nested_local_state;
 	DataChunk nested_chunk;
 };
-
-static void ParseTableFunctionOptions(IcebergOptions &options, const named_parameter_map_t &named_parameters) {
-	auto &snapshot_lookup = options.snapshot_lookup;
-	for (auto &kv : named_parameters) {
-		auto loption = StringUtil::Lower(kv.first.GetIdentifierName());
-		auto &val = kv.second;
-		if (loption == "allow_moved_paths") {
-			options.allow_moved_paths = BooleanValue::Get(val);
-		} else if (loption == "metadata_compression_codec") {
-			options.metadata_compression_codec = StringValue::Get(val);
-		} else if (loption == "version") {
-			options.table_version = StringValue::Get(val);
-		} else if (loption == "version_name_format") {
-			auto value = StringValue::Get(kv.second);
-			auto string_substitutions = IcebergUtils::CountOccurrences(value, "%s");
-			if (string_substitutions != 2) {
-				throw InvalidInputException(
-				    "'version_name_format' has to contain two occurrences of '%%s' in it, found %d",
-				    string_substitutions);
-			}
-			options.version_name_format = value;
-		} else if (loption == "snapshot_from_id") {
-			if (snapshot_lookup.GetSource() != SnapshotSource::LATEST) {
-				throw InvalidInputException(
-				    "Can't use 'snapshot_from_id' in combination with 'snapshot_from_timestamp'");
-			}
-			snapshot_lookup.SetSource(SnapshotSource::FROM_ID);
-			snapshot_lookup.snapshot_id = val.GetValue<uint64_t>();
-		} else if (loption == "snapshot_from_timestamp") {
-			if (snapshot_lookup.GetSource() != SnapshotSource::LATEST) {
-				throw InvalidInputException(
-				    "Can't use 'snapshot_from_id' in combination with 'snapshot_from_timestamp'");
-			}
-			snapshot_lookup.SetSource(SnapshotSource::FROM_TIMESTAMP);
-			snapshot_lookup.snapshot_timestamp = val.GetValue<timestamp_t>();
-		}
-	}
-}
 
 static string ResolveStatisticsPath(const IcebergTableMetadata &metadata, FileSystem &fs, const IcebergOptions &options,
                                     const string &statistics_path) {
@@ -218,8 +182,7 @@ static unique_ptr<FunctionData> IcebergTablePartitionStatsBind(ClientContext &co
 	auto input_string = input.inputs[0].ToString();
 	auto filename = IcebergUtils::GetStorageLocation(context, input_string);
 
-	IcebergOptions options;
-	ParseTableFunctionOptions(options, input.named_parameters);
+	IcebergOptions options(input.named_parameters);
 
 	auto iceberg_meta_path = IcebergTableMetadata::GetMetaDataPath(context, filename, fs, options);
 	auto table_metadata =
@@ -229,8 +192,8 @@ static unique_ptr<FunctionData> IcebergTablePartitionStatsBind(ClientContext &co
 
 	optional<int64_t> requested_snapshot_id;
 	bool no_matching_snapshot = false;
-	if (!options.snapshot_lookup.IsLatest()) {
-		auto snapshot = metadata.GetSnapshot(options.snapshot_lookup);
+	if (!options.snapshot_lookup->IsLatest()) {
+		auto snapshot = metadata.GetSnapshot(*options.snapshot_lookup);
 		if (!snapshot.snapshot) {
 			no_matching_snapshot = true;
 		} else {
