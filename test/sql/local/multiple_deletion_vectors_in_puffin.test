@@ -1,0 +1,21 @@
+# name: test/sql/local/multiple_deletion_vectors_in_puffin.test
+# description: Read multiple deletion-vector blobs stored in a single Puffin file
+# group: [local]
+
+require avro
+
+require parquet
+
+require iceberg
+
+query II
+SELECT id, source
+FROM iceberg_scan(
+    '__WORKING_DIRECTORY__/data/persistent/multi_blob_deletion_vectors/warehouse/default/multi_blob_deletion_vectors',
+    allow_moved_paths = true
+)
+ORDER BY id;
+----
+1	first
+3	first
+5	second
