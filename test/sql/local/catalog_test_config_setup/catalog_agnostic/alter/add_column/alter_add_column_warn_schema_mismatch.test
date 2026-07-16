@@ -16,6 +16,9 @@ require httpfs
 set ignore_error_messages
 
 statement ok
+set iceberg_use_metadata_log = true;
+
+statement ok
 CALL enable_logging(level='warning');
 
 statement ok
@@ -71,29 +74,18 @@ FROM my_datalake.default.alter_add_column_explicit_txn ORDER BY a;
 8
 9
 
-# schema changed, ACID is violated for con2
+# con2 owns the table state as it existed at transaction start, including its schema
 query II
 SELECT log_level, message FROM duckdb_logs
 ----
-WARNING	Detected schema change during transaction (schema_id mismatch); ACID guarantees may not hold.
 
 statement ok con2
 INSERT INTO my_datalake.default.alter_add_column_explicit_txn VALUES (42);
 
-query I con2
-FROM my_datalake.default.alter_add_column_explicit_txn ORDER BY a;
+query II con2
+SELECT count(*), max(a) FROM my_datalake.default.alter_add_column_explicit_txn;
 ----
-0
-1
-2
-3
-4
-5
-6
-7
-8
-9
-42
+11	42
 
 statement error con3
 INSERT INTO my_datalake.default.alter_add_column_explicit_txn VALUES (43, 43);
@@ -103,24 +95,28 @@ Binder Error: table alter_add_column_explicit_txn has 1 columns but 2 values wer
 statement ok con2
 INSERT INTO my_datalake.default.alter_add_column_explicit_txn VALUES (43);
 
-query I con2
-FROM my_datalake.default.alter_add_column_explicit_txn ORDER BY a;
+query II con2
+SELECT count(*), max(a) FROM my_datalake.default.alter_add_column_explicit_txn;
 ----
-0
-1
-2
-3
-4
-5
-6
-7
-8
-9
-42
-43
+12	43
 
-# COMMIT failed because the schema id is different from when the transaction started
+# The append was constructed successfully, but retry cannot rebase it across the schema change.
 statement error con2
 commit;
 ----
-<REGEX>:TransactionContext Error.*changed incompatibly while retrying commit.*
+<REGEX>:.*changed incompatibly while retrying commit.*
+
+# Only con1 changed the table
+query II
+select * from my_datalake.default.alter_add_column_explicit_txn
+----
+0	NULL
+1	NULL
+2	NULL
+3	NULL
+4	NULL
+5	NULL
+6	NULL
+7	NULL
+8	NULL
+9	NULL

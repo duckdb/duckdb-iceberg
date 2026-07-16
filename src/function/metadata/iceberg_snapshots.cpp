@@ -1,4 +1,5 @@
 #include "duckdb/common/file_opener.hpp"
+#include "duckdb/main/client_context.hpp"
 #include "duckdb/common/file_system.hpp"
 #include "duckdb/storage/external_file_cache/caching_file_system_wrapper.hpp"
 
@@ -87,7 +88,7 @@ static unique_ptr<FunctionData> IcebergSnapshotsBind(ClientContext &context, Tab
 	return_types.emplace_back(LogicalType::UBIGINT);
 
 	names.emplace_back("timestamp_ms");
-	return_types.emplace_back(LogicalType::TIMESTAMP);
+	return_types.emplace_back(LogicalType::TIMESTAMP_MS);
 
 	names.emplace_back("manifest_list");
 	return_types.emplace_back(LogicalType::VARCHAR);
@@ -119,7 +120,7 @@ static void IcebergSnapshotsFunction(ClientContext &context, TableFunctionInput 
 		}
 		FlatVector::GetDataMutable<uint64_t>(output.data[0])[i] = *snapshot.sequence_number;
 		FlatVector::GetDataMutable<uint64_t>(output.data[1])[i] = *snapshot.snapshot_id;
-		FlatVector::GetDataMutable<timestamp_t>(output.data[2])[i] = snapshot.timestamp_ms;
+		FlatVector::GetDataMutable<timestamp_ms_t>(output.data[2])[i] = snapshot.timestamp_ms;
 		string_t manifest_string_t = StringVector::AddString(output.data[3], string_t(snapshot.manifest_list));
 		FlatVector::GetDataMutable<string_t>(output.data[3])[i] = manifest_string_t;
 		auto operation_str = SnapshotOperationToString(snapshot.operation);

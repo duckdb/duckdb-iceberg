@@ -1,0 +1,101 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/transactions/test_transaction_metadata_log_missing.test
+# description: Strict metadata-log reconstruction explains how to accept latest state when history is unavailable
+# group: [transactions]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+set ignore_error_messages
+
+# A newly-created table has no prior metadata file to place in metadata-log.
+statement ok
+drop table if exists my_datalake.default.metadata_log_missing;
+
+statement ok
+set iceberg_use_metadata_log = true;
+
+statement ok con1
+begin
+
+statement ok con2
+begin
+
+statement ok con2
+create table my_datalake.default.metadata_log_missing (a integer);
+
+statement ok con2
+commit
+
+# con1 needs a table version from before creation, but the current metadata has
+# no metadata-log from which that version could be reconstructed.
+statement error con1
+select count(*) from my_datalake.default.metadata_log_missing;
+----
+<REGEX>:.*iceberg_use_metadata_log is enabled.*does not contain a metadata-log.*Set iceberg_use_metadata_log = false.*accept the latest table state.*
+
+statement ok con1
+rollback
+
+# A log that starts after the transaction is equally unusable. Creating a
+# snapshot adds the creation metadata to metadata-log, but that entry is still
+# newer than con5's start.
+statement ok
+drop table if exists my_datalake.default.metadata_log_too_new;
+
+statement ok con5
+begin
+
+statement ok con6
+begin
+
+statement ok con6
+create table my_datalake.default.metadata_log_too_new (a integer);
+
+statement ok con6
+insert into my_datalake.default.metadata_log_too_new values (1);
+
+statement ok con6
+commit
+
+statement error con5
+select count(*) from my_datalake.default.metadata_log_too_new;
+----
+Invalid Configuration Error: Cannot reconstruct table 'default.metadata_log_too_new' at the transaction start because iceberg_use_metadata_log is enabled, but the table metadata does not contain a metadata-log. Set iceberg_use_metadata_log = false to accept the latest table state resolved by this transaction instead
+
+statement ok con5
+rollback
+
+# Disabling strict reconstruction opts into accepting the complete state that
+# is latest when the transaction first resolves the table.
+statement ok
+set iceberg_use_metadata_log = false;
+
+statement ok
+drop table if exists my_datalake.default.metadata_log_missing_fallback;
+
+statement ok con3
+begin
+
+statement ok con4
+begin
+
+statement ok con4
+create table my_datalake.default.metadata_log_missing_fallback (a integer);
+
+statement ok con4
+commit
+
+query I con3
+select count(*) from my_datalake.default.metadata_log_missing_fallback;
+----
+0
+
+statement ok con3
+rollback

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "duckdb/common/optional.hpp"
 #include "duckdb/main/client_context.hpp"
 #include "duckdb/function/copy_function.hpp"
 
@@ -21,7 +22,8 @@ struct IcebergCreateTableRequest;
 
 struct IcebergTransactionData {
 public:
-	IcebergTransactionData(ClientContext &context, const IcebergTableInformation &table_info);
+	IcebergTransactionData(ClientContext &context, IcebergTransaction &transaction,
+	                       const IcebergTableInformation &table_info);
 
 public:
 	int64_t GetCommitRetryCount() const;
@@ -34,7 +36,7 @@ public:
 	                       IcebergManifestDeletes &&altered_manifests);
 	// add a schema update for a table
 	void TableAddSchema(int32_t schema_id);
-	void TableSetCurrentSchema();
+	void TableSetCurrentSchema(int32_t schema_id);
 	void TableAddAssertCreate();
 	void TableAddAssertUUID();
 	void TableAddAssertCurrentSchemaId();
@@ -61,6 +63,7 @@ public:
 	optional_idx initial_default_sort_order_id;
 
 	ClientContext &context;
+	IcebergTransaction &transaction;
 	const IcebergTableInformation &table_info;
 	//! schema updates etc.
 	vector<unique_ptr<IcebergTableUpdate>> updates;
@@ -79,8 +82,8 @@ public:
 	bool assert_schema_id = false;
 	//! Whether this transaction explicitly requires the table to be newly created.
 	bool has_assert_create = false;
-	//! Whether the current schema of the table should be updated
-	bool set_schema_id = false;
+	//! The schema id that should become current when the commit is staged.
+	optional<int32_t> pending_current_schema_id;
 	mutex lock;
 };
 

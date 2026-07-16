@@ -52,7 +52,8 @@ DROP TABLE IF EXISTS my_datalake.default.manifest_list_chunked_files;
 statement ok
 CREATE TABLE my_datalake.default.manifest_list_chunked_files (id INT)
 WITH (
-	'format-version' = 3
+	'format-version' = 3,
+	'commit.manifest-merge.enabled' = 'false'
 );
 
 loop i 0 2050

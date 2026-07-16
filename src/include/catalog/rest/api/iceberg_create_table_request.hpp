@@ -8,6 +8,7 @@
 #include "catalog/rest/api/catalog_utils.hpp"
 #include "catalog/rest/api/iceberg_table_update.hpp"
 #include "core/metadata/manifest/iceberg_manifest.hpp"
+#include "core/metadata/partition/iceberg_partition_spec.hpp"
 #include "core/metadata/schema/iceberg_table_schema.hpp"
 #include "core/metadata/manifest/iceberg_manifest_list.hpp"
 #include "core/metadata/snapshot/iceberg_snapshot.hpp"
@@ -17,11 +18,10 @@ using namespace duckdb_yyjson;
 namespace duckdb {
 
 struct YyjsonDocDeleter;
-struct IcebergTableInformation;
-class IcebergTableEntry;
 
 struct IcebergCreateTableRequest {
-	explicit IcebergCreateTableRequest(const IcebergTableInformation &table_info);
+	IcebergCreateTableRequest(string name, shared_ptr<IcebergTableSchema> schema, IcebergPartitionSpec partition_spec,
+	                          idx_t iceberg_version, case_insensitive_map_t<string> table_properties, string location);
 
 public:
 	static unique_ptr<IcebergColumnDefinition>
@@ -31,11 +31,16 @@ public:
 	static shared_ptr<IcebergTableSchema>
 	CreateIcebergSchema(ClientContext &context, const IcebergTableMetadata &table_metadata, const ColumnList &columns,
 	                    optional_ptr<const vector<unique_ptr<Constraint>>> constraints, int32_t &last_column_id);
-	string CreateTableToJSON(std::unique_ptr<yyjson_mut_doc, YyjsonDocDeleter> doc_p);
+	string CreateTableToJSON(bool stage_create) const;
 	static void PopulateSchema(yyjson_mut_doc *doc, yyjson_mut_val *schema_json, const IcebergTableSchema &schema);
 
 private:
-	const IcebergTableInformation &table_info;
+	string name;
+	shared_ptr<IcebergTableSchema> schema;
+	IcebergPartitionSpec partition_spec;
+	idx_t iceberg_version;
+	case_insensitive_map_t<string> table_properties;
+	string location;
 };
 
 } // namespace duckdb

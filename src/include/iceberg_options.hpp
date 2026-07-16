@@ -1,6 +1,8 @@
 #pragma once
 
 #include "duckdb/common/string.hpp"
+#include "duckdb/common/optional.hpp"
+#include "duckdb/common/named_parameter_map.hpp"
 #include "planning/snapshot/iceberg_snapshot_lookup.hpp"
 
 namespace duckdb {
@@ -30,13 +32,20 @@ static string DEFAULT_VERSION_HINT_FILE = "version-hint.text";
 static string DEFAULT_TABLE_VERSION = UNKNOWN_TABLE_VERSION;
 
 struct IcebergOptions {
+public:
+	IcebergOptions();
+	IcebergOptions(named_parameter_map_t &named_parameters);
+	IcebergOptions(const IcebergOptions &) = default;
+	IcebergOptions &operator=(const IcebergOptions &other);
+
+public:
 	bool allow_moved_paths = false;
 	string metadata_compression_codec = "none";
 	bool infer_schema = true;
 	string table_version = DEFAULT_TABLE_VERSION;
 	string version_name_format = DEFAULT_TABLE_VERSION_FORMAT;
 
-	IcebergSnapshotLookup snapshot_lookup;
+	optional<IcebergSnapshotLookup> snapshot_lookup;
 };
 
 } // namespace duckdb

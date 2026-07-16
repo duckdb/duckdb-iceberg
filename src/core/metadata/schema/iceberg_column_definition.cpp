@@ -347,9 +347,9 @@ ColumnDefinition IcebergColumnDefinition::GetColumnDefinition() const {
 		res.SetDefaultValue(make_uniq<ConstantExpression>(default_value));
 	}
 
-	if (!doc.empty()) {
+	if (doc) {
 		//! Surface the Iceberg field `doc` as the DuckDB column comment
-		res.SetComment(Value(doc));
+		res.SetComment(Value(*doc));
 	}
 	return res;
 }

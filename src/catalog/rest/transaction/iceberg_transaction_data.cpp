@@ -1,5 +1,7 @@
 #include "catalog/rest/transaction/iceberg_transaction_data.hpp"
 
+#include "catalog/rest/transaction/iceberg_transaction.hpp"
+
 #include "duckdb/common/multi_file/multi_file_reader.hpp"
 #include "duckdb/common/types/uuid.hpp"
 
@@ -60,8 +62,9 @@ static void LoadExistingManifestList(ClientContext &context, const IcebergTableM
 	}
 }
 
-IcebergTransactionData::IcebergTransactionData(ClientContext &context, const IcebergTableInformation &table_info)
-    : context(context), table_info(table_info) {
+IcebergTransactionData::IcebergTransactionData(ClientContext &context, IcebergTransaction &transaction,
+                                               const IcebergTableInformation &table_info)
+    : context(context), transaction(transaction), table_info(table_info) {
 	initial_table_uuid = table_info.table_metadata.table_uuid;
 	if (table_info.table_metadata.next_row_id) {
 		next_row_id = *table_info.table_metadata.next_row_id;
@@ -100,7 +103,7 @@ int64_t IcebergTransactionData::GetCommitRetryCount() const {
 }
 
 bool IcebergTransactionData::SupportsAppendRetry() const {
-	if (!requirements.empty() || set_schema_id) {
+	if (!requirements.empty() || pending_current_schema_id.has_value()) {
 		return false;
 	}
 	if (updates.empty()) {
@@ -162,19 +165,20 @@ void IcebergTransactionData::AddSnapshot(IcebergSnapshotOperationType operation,
 		manifest_content_type = IcebergManifestContentType::DELETE;
 		break;
 	case IcebergSnapshotOperationType::APPEND:
+	case IcebergSnapshotOperationType::REPLACE:
+		//! This helper currently writes DATA manifest entries; REPLACE itself is not limited to data files.
 		manifest_content_type = IcebergManifestContentType::DATA;
 		break;
 	default:
-		throw NotImplementedException("Cannot have use snapshot operation type REPLACE or OVERWRITE here");
+		throw NotImplementedException("Cannot have use snapshot operation type OVERWRITE here");
 	};
 
-	auto bogus_snapshot_id = IcebergSnapshot::NewSnapshotId();
 	auto temp_sequence_number = table_metadata.last_sequence_number + alters.size() + 1;
 
 	auto &fs = FileSystem::GetFileSystem(context);
-	auto manifest_file =
-	    IcebergManifestListEntry::CreateFromEntries(fs, bogus_snapshot_id, temp_sequence_number, table_metadata,
-	                                                manifest_content_type, std::move(data_files), next_row_id);
+	auto manifest_metadata = IcebergManifestMetadata::FromTableMetadata(table_metadata, manifest_content_type);
+	auto manifest_file = IcebergManifestListEntry::CreateFromEntries(
+	    fs, temp_sequence_number, table_metadata, manifest_metadata, std::move(data_files), next_row_id);
 
 	auto add_snapshot = make_uniq<IcebergAddSnapshot>(table_info, operation);
 	add_snapshot->AddManifestFile(std::move(manifest_file));
@@ -200,18 +204,19 @@ void IcebergTransactionData::AddUpdateSnapshot(vector<IcebergManifestEntry> &&de
 
 	CacheExistingManifestList(guard, table_metadata);
 
-	auto snapshot_id = IcebergSnapshot::NewSnapshotId();
 	const auto sequence_number = last_sequence_number + alters.size() + 1;
 
 	auto &fs = FileSystem::GetFileSystem(context);
+	auto delete_manifest_metadata =
+	    IcebergManifestMetadata::FromTableMetadata(table_metadata, IcebergManifestContentType::DELETE);
+	auto data_manifest_metadata =
+	    IcebergManifestMetadata::FromTableMetadata(table_metadata, IcebergManifestContentType::DATA);
 
 	auto delete_manifest_file = IcebergManifestListEntry::CreateFromEntries(
-	    fs, snapshot_id, sequence_number, table_metadata, IcebergManifestContentType::DELETE, std::move(delete_files),
-	    next_row_id);
+	    fs, sequence_number, table_metadata, delete_manifest_metadata, std::move(delete_files), next_row_id);
 	// Add a manifest_file for the new insert data
 	auto data_manifest_file = IcebergManifestListEntry::CreateFromEntries(
-	    fs, snapshot_id, sequence_number, table_metadata, IcebergManifestContentType::DATA, std::move(data_files),
-	    next_row_id);
+	    fs, sequence_number, table_metadata, data_manifest_metadata, std::move(data_files), next_row_id);
 
 	auto add_snapshot = make_uniq<IcebergAddSnapshot>(table_info);
 	add_snapshot->AddManifestFile(std::move(delete_manifest_file));
@@ -223,27 +228,34 @@ void IcebergTransactionData::AddUpdateSnapshot(vector<IcebergManifestEntry> &&de
 }
 
 void IcebergTransactionData::TableAddSchema(int32_t schema_id) {
-	auto add_schema_update = make_uniq<AddSchemaUpdate>(table_info, schema_id);
+	auto schema = table_info.table_metadata.GetSchemaFromId(schema_id);
+	if (!schema) {
+		throw InternalException("(TableAddSchema) Couldn't find schema with id: %d", schema_id);
+	}
+	auto add_schema_update = make_uniq<AddSchemaUpdate>(schema->Copy(), table_info.table_metadata.last_column_id);
 	updates.push_back(std::move(add_schema_update));
 	assert_schema_id = true;
-	set_schema_id = true;
+	pending_current_schema_id = schema_id;
 }
 
-void IcebergTransactionData::TableSetCurrentSchema() {
-	set_schema_id = true;
+void IcebergTransactionData::TableSetCurrentSchema(int32_t schema_id) {
+	pending_current_schema_id = schema_id;
 }
 
 void IcebergTransactionData::TableAssignUUID() {
-	updates.push_back(make_uniq<AssignUUIDUpdate>(table_info));
+	updates.push_back(make_uniq<AssignUUIDUpdate>(table_info.table_metadata.table_uuid));
 }
 
 void IcebergTransactionData::TableAddAssertCreate() {
 	has_assert_create = true;
-	requirements.push_back(make_uniq<AssertCreateRequirement>(table_info));
+	requirements.push_back(make_uniq<AssertCreateRequirement>());
+	auto alter_update = transaction.GetAlterUpdate();
+	D_ASSERT(alter_update);
+	transaction.VerifyAlterUpdateAtomicity(*alter_update);
 }
 
 void IcebergTransactionData::TableAddAssertUUID() {
-	requirements.push_back(make_uniq<AssertTableUUIDRequirement>(table_info));
+	requirements.push_back(make_uniq<AssertTableUUIDRequirement>(table_info.table_metadata.table_uuid));
 }
 
 void IcebergTransactionData::TableAddAssertCurrentSchemaId() {
@@ -251,47 +263,54 @@ void IcebergTransactionData::TableAddAssertCurrentSchemaId() {
 }
 
 void IcebergTransactionData::TableAddAssertLastAssignedFieldId() {
-	requirements.push_back(make_uniq<AssertLastAssignedFieldIdRequirement>(table_info));
+	D_ASSERT(table_info.table_metadata.HasLastColumnId());
+	requirements.push_back(make_uniq<AssertLastAssignedFieldIdRequirement>(
+	    static_cast<int32_t>(table_info.table_metadata.GetLastColumnId())));
 }
 
 void IcebergTransactionData::TableAddAssertLastAssignedPartitionId() {
-	requirements.push_back(make_uniq<AssertLastAssignedPartitionIdRequirement>(table_info));
+	int32_t last_assigned_partition_id = 999;
+	if (table_info.table_metadata.HasLastPartitionId()) {
+		last_assigned_partition_id = table_info.table_metadata.GetLastPartitionFieldId();
+	}
+	requirements.push_back(make_uniq<AssertLastAssignedPartitionIdRequirement>(last_assigned_partition_id));
 }
 
 void IcebergTransactionData::TableAddAssertDefaultSpecId() {
-	requirements.push_back(make_uniq<AssertDefaultSpecIdRequirement>(table_info));
+	requirements.push_back(make_uniq<AssertDefaultSpecIdRequirement>(table_info.table_metadata.default_spec_id));
 }
 
 void IcebergTransactionData::TableAddUpradeFormatVersion() {
-	updates.push_back(make_uniq<UpgradeFormatVersion>(table_info));
+	updates.push_back(make_uniq<UpgradeFormatVersion>(table_info.table_metadata.iceberg_version));
 }
 
 void IcebergTransactionData::TableAddPartitionSpec() {
-	updates.push_back(make_uniq<AddPartitionSpec>(table_info));
+	updates.push_back(make_uniq<AddPartitionSpec>(table_info.table_metadata.GetLatestPartitionSpec()));
 }
 
 void IcebergTransactionData::TableAddSortOrder() {
-	updates.push_back(make_uniq<AddSortOrder>(table_info));
+	updates.push_back(make_uniq<AddSortOrder>(table_info.table_metadata.GetLatestSortOrder()));
 }
 
 void IcebergTransactionData::TableSetDefaultSortOrder() {
-	updates.push_back(make_uniq<SetDefaultSortOrder>(table_info));
+	D_ASSERT(table_info.table_metadata.HasSortOrder());
+	updates.push_back(make_uniq<SetDefaultSortOrder>(table_info.table_metadata.GetLatestSortOrder().sort_order_id));
 }
 
 void IcebergTransactionData::TableSetDefaultSpec() {
-	updates.push_back(make_uniq<SetDefaultSpec>(table_info));
+	updates.push_back(make_uniq<SetDefaultSpec>(table_info.table_metadata.default_spec_id));
 }
 
 void IcebergTransactionData::TableSetProperties(const case_insensitive_map_t<string> &properties) {
-	updates.push_back(make_uniq<SetProperties>(table_info, properties));
+	updates.push_back(make_uniq<SetProperties>(properties));
 }
 
 void IcebergTransactionData::TableRemoveProperties(const vector<string> &properties) {
-	updates.push_back(make_uniq<RemoveProperties>(table_info, properties));
+	updates.push_back(make_uniq<RemoveProperties>(properties));
 }
 
 void IcebergTransactionData::TableSetLocation() {
-	updates.push_back(make_uniq<SetLocation>(table_info));
+	updates.push_back(make_uniq<SetLocation>(table_info.table_metadata.location));
 }
 
 } // namespace duckdb

@@ -1,0 +1,124 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/partitioning/struct_filter_issue.test
+# group: [partitioning]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+set enable_logging=true
+
+statement ok
+set logging_level='debug'
+
+statement ok
+CALL enable_logging('Iceberg');
+
+statement ok
+CREATE SCHEMA IF NOT EXISTS my_datalake.default;
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.struct_filter_issue;
+
+statement ok
+CREATE TABLE my_datalake.default.struct_filter_issue (
+	redpanda STRUCT(
+		"partition" INTEGER,
+		"offset" BIGINT,
+		"timestamp" TIMESTAMP,
+		headers STRUCT(
+			"key" BLOB,
+			"value" BLOB
+		)[],
+		"key" BLOB
+	),
+	"value" BLOB
+) PARTITIONED BY (
+	hour(redpanda.timestamp)
+);
+
+statement ok
+INSERT INTO my_datalake.default.struct_filter_issue VALUES (
+	{
+		'partition': 0,
+		'offset': 0,
+		'timestamp': '2025-06-26 19:45:32.478'::TIMESTAMP,
+		'headers': null::STRUCT("key" BLOB, "value" BLOB)[],
+		'key': null,
+	},
+	'hello world'
+)
+
+# FIXME: this becomes a ConjunctionAndFilter on 'partition', with the 2 children being StructExtract
+# Which we don't enter yet
+query II
+SELECT * FROM my_datalake.default.struct_filter_issue WHERE redpanda.partition = 0 AND redpanda.timestamp = '2025-06-26 19:45:32.478';
+----
+{'partition': 0, 'offset': 0, 'timestamp': '2025-06-26 19:45:32.478', 'headers': NULL, 'key': NULL}	hello world
+
+query I
+SELECT SUM(meta.record_count) AS total_record_count
+FROM (
+	SELECT message.split(': ')[2].split('''')[2] AS msg
+	FROM duckdb_logs() where type = 'Iceberg'
+) logs
+JOIN ICEBERG_METADATA('my_datalake.default.struct_filter_issue') meta
+ON logs.msg = meta.file_path;
+----
+NULL
+
+statement ok
+CALL truncate_duckdb_logs();
+
+# The issue here was that we expected to find redpanda.timestamp (that's where the partition is on),
+# now we correctly return nullptr instead of error
+query II
+SELECT * FROM my_datalake.default.struct_filter_issue WHERE redpanda.partition = 0;
+----
+{'partition': 0, 'offset': 0, 'timestamp': '2025-06-26 19:45:32.478', 'headers': NULL, 'key': NULL}	hello world
+
+query I
+SELECT SUM(meta.record_count) AS total_record_count
+FROM (
+	SELECT message.split(': ')[2].split('''')[2] AS msg
+	FROM duckdb_logs() where type = 'Iceberg'
+) logs
+JOIN ICEBERG_METADATA('my_datalake.default.struct_filter_issue') meta
+ON logs.msg = meta.file_path;
+----
+NULL
+
+statement ok
+CALL truncate_duckdb_logs();
+
+query II
+SELECT * FROM my_datalake.default.struct_filter_issue WHERE redpanda.timestamp = '2026-06-26 19:45:32.478';
+----
+
+query I
+SELECT SUM(meta.record_count) AS total_record_count
+FROM (
+	SELECT message.split(': ')[2].split('''')[2] AS msg
+	FROM duckdb_logs() where type = 'Iceberg' and message.contains('manifest_file')
+) logs
+JOIN ICEBERG_METADATA('my_datalake.default.struct_filter_issue') meta
+ON logs.msg = meta.manifest_path;
+----
+1
+
+statement ok
+CALL truncate_duckdb_logs();
+
+query II
+SELECT * FROM my_datalake.default.struct_filter_issue WHERE redpanda.timestamp = '2025-06-26 19:45:32.478';
+----
+{'partition': 0, 'offset': 0, 'timestamp': '2025-06-26 19:45:32.478', 'headers': NULL, 'key': NULL}	hello world

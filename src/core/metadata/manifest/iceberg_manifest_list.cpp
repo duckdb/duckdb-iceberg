@@ -36,10 +36,46 @@ string IcebergManifestContentTypeToString(IcebergManifestContentType type) {
 	}
 }
 
-IcebergManifestListEntry IcebergManifestListEntry::CreateFromEntries(FileSystem &fs, int64_t snapshot_id,
-                                                                     sequence_number_t sequence_number,
+IcebergManifestMetadata IcebergManifestMetadata::FromTableMetadata(const IcebergTableMetadata &table_metadata,
+                                                                   IcebergManifestContentType content,
+                                                                   optional<int32_t> partition_spec_id) {
+	return IcebergManifestMetadata(table_metadata.GetCurrentSchemaId(),
+	                               partition_spec_id ? *partition_spec_id
+	                                                 : NumericCast<int32_t>(table_metadata.default_spec_id),
+	                               NumericCast<int32_t>(table_metadata.iceberg_version), content);
+}
+
+unordered_map<string, string> GetManifestMetadataMap(const IcebergTableMetadata &table_metadata,
+                                                     const IcebergManifestMetadata &manifest_metadata) {
+	unordered_map<string, string> result;
+	result.reserve(6);
+	auto schema_id = manifest_metadata.schema_id;
+	auto partition_spec_id = manifest_metadata.partition_spec_id;
+	auto format_version = manifest_metadata.format_version;
+	auto content = manifest_metadata.content;
+
+	std::unique_ptr<yyjson_mut_doc, YyjsonDocDeleter> schema_doc_p(yyjson_mut_doc_new(nullptr));
+	auto schema_doc = schema_doc_p.get();
+	auto schema_root_obj = yyjson_mut_obj(schema_doc);
+	yyjson_mut_doc_set_root(schema_doc, schema_root_obj);
+	IcebergCreateTableRequest::PopulateSchema(schema_doc, schema_root_obj, *table_metadata.GetSchemaFromId(schema_id));
+	result.emplace("schema", ICUtils::JsonToString(std::move(schema_doc_p)));
+	result.emplace("schema-id", std::to_string(schema_id));
+
+	auto partition_spec = table_metadata.FindPartitionSpecById(partition_spec_id);
+	if (!partition_spec) {
+		throw InternalException("Cannot find partition spec with id " + std::to_string(partition_spec_id));
+	}
+	result.emplace("partition-spec", partition_spec->FieldsToJSONString());
+	result.emplace("partition-spec-id", std::to_string(partition_spec_id));
+	result.emplace("format-version", std::to_string(format_version));
+	result.emplace("content", content == IcebergManifestContentType::DATA ? "data" : "deletes");
+	return result;
+}
+
+IcebergManifestListEntry IcebergManifestListEntry::CreateFromEntries(FileSystem &fs, sequence_number_t sequence_number,
                                                                      const IcebergTableMetadata &table_metadata,
-                                                                     IcebergManifestContentType manifest_content_type,
+                                                                     const IcebergManifestMetadata &manifest_metadata,
                                                                      vector<IcebergManifestEntry> &&manifest_entries,
                                                                      int64_t &next_row_id) {
 	//! create manifest file path
@@ -47,16 +83,18 @@ IcebergManifestListEntry IcebergManifestListEntry::CreateFromEntries(FileSystem 
 	auto manifest_file_path = fs.JoinPath(table_metadata.GetMetadataPath(fs), manifest_file_uuid + "-m0.avro");
 
 	// Add a manifest list entry for the entries
-	IcebergManifestListEntry manifest_list_entry(manifest_file_path);
+	IcebergManifestListEntry manifest_list_entry(IcebergManifestFile {manifest_file_path}, manifest_metadata);
+	auto manifest_content = manifest_metadata.content;
+	auto manifest_partition_spec_id = manifest_metadata.partition_spec_id;
 	auto &manifest_file = manifest_list_entry.file;
 	manifest_file.manifest_path = manifest_file_path;
-	if (table_metadata.iceberg_version >= 3 && manifest_content_type == IcebergManifestContentType::DATA) {
+	if (table_metadata.iceberg_version >= 3 && manifest_content == IcebergManifestContentType::DATA) {
 		//! 'first_row_id' is only assigned to data manifests (row lineage), deletes manifests leave it null
 		manifest_file.first_row_id = next_row_id;
 	}
 
 	manifest_file.manifest_path = manifest_file_path;
-	manifest_file.content = manifest_content_type;
+	manifest_file.content = manifest_content;
 	//! NOTE: this gets overwritten on commit
 	manifest_file.sequence_number = sequence_number;
 	manifest_file.added_files_count = 0;
@@ -65,7 +103,7 @@ IcebergManifestListEntry IcebergManifestListEntry::CreateFromEntries(FileSystem 
 	manifest_file.added_rows_count = 0;
 	manifest_file.existing_rows_count = 0;
 	manifest_file.deleted_rows_count = 0;
-	manifest_file.partition_spec_id = table_metadata.default_spec_id;
+	manifest_file.partition_spec_id = manifest_partition_spec_id;
 
 	//! Add the files to the manifest
 	for (auto &manifest_entry : manifest_entries) {
@@ -92,27 +130,27 @@ IcebergManifestListEntry IcebergManifestListEntry::CreateFromEntries(FileSystem 
 		}
 
 		//! NOTE: this gets overwritten on commit
-		if (!manifest_file.min_sequence_number || manifest_file.sequence_number < *manifest_file.min_sequence_number) {
-			manifest_file.min_sequence_number = manifest_file.sequence_number;
+		auto entry_data_seq = manifest_entry.GetSequenceNumber(manifest_file);
+		if (!manifest_file.min_sequence_number || entry_data_seq < *manifest_file.min_sequence_number) {
+			manifest_file.min_sequence_number = entry_data_seq;
 		}
 	}
-	//! NOTE: this gets overwritten on commit
-	manifest_file.added_snapshot_id = snapshot_id;
+	//! NOTE: this gets assigned when the manifest is added to a manifest list
+	manifest_file.added_snapshot_id = nullopt;
 
 	// Compute partition field summaries (upper/lower bounds) for the manifest list entry
 	if (table_metadata.HasPartitionSpec() && table_metadata.GetLatestPartitionSpec().IsPartitioned()) {
-		auto partition_spec_it = table_metadata.partition_specs.find(table_metadata.default_spec_id);
+		auto partition_spec_it = table_metadata.partition_specs.find(manifest_partition_spec_id);
 		if (partition_spec_it == table_metadata.partition_specs.end()) {
-			throw InternalException("Cannot find partition spec with id " +
-			                        std::to_string(table_metadata.default_spec_id));
+			throw InternalException("Cannot find partition spec with id " + std::to_string(manifest_partition_spec_id));
 		}
 		auto &partition_spec = partition_spec_it->second;
 		manifest_file.partitions.Create(table_metadata, partition_spec, manifest_entries);
 	}
 
-	manifest_list_entry.manifest_entries.insert(manifest_list_entry.manifest_entries.end(),
-	                                            std::make_move_iterator(manifest_entries.begin()),
-	                                            std::make_move_iterator(manifest_entries.end()));
+	auto &stored_entries = manifest_list_entry.GetOrCreateManifestEntries();
+	stored_entries.insert(stored_entries.end(), std::make_move_iterator(manifest_entries.begin()),
+	                      std::make_move_iterator(manifest_entries.end()));
 	return manifest_list_entry;
 }
 
@@ -350,7 +388,10 @@ struct ManifestListVectorWriters {
 		manifest_path.WriteValue(string_t(manifest.manifest_path));
 		manifest_length.WriteValue(manifest.manifest_length);
 		partition_spec_id.WriteValue(manifest.partition_spec_id);
-		added_snapshot_id.WriteValue(manifest.added_snapshot_id);
+		if (!manifest.added_snapshot_id) {
+			throw InvalidConfigurationException("manifest_file.added_snapshot_id is not set");
+		}
+		added_snapshot_id.WriteValue(*manifest.added_snapshot_id);
 		added_files_count.WriteValue(static_cast<int32_t>(manifest.added_files_count));
 		existing_files_count.WriteValue(static_cast<int32_t>(manifest.existing_files_count));
 		deleted_files_count.WriteValue(static_cast<int32_t>(manifest.deleted_files_count));

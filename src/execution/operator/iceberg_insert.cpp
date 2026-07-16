@@ -1,6 +1,7 @@
 #include "execution/operator/iceberg_insert.hpp"
 
 #include "duckdb/catalog/catalog_entry/copy_function_catalog_entry.hpp"
+#include "duckdb/logging/logger.hpp"
 #include "duckdb/main/client_data.hpp"
 #include "duckdb/execution/physical_operator_states.hpp"
 #include "duckdb/planner/operator/logical_copy_to_file.hpp"
@@ -32,7 +33,7 @@
 #include "core/expression/iceberg_value.hpp"
 #include "core/expression/iceberg_metrics.hpp"
 #include "core/expression/iceberg_transform.hpp"
-#include "storage/statistics/iceberg_variant_statistics.hpp"
+#include "storage/statistics/iceberg_data_file_stats.hpp"
 #include "catalog/rest/api/iceberg_type.hpp"
 #include "catalog/rest/api/iceberg_create_table_request.hpp"
 #include "common/iceberg_utils.hpp"
@@ -104,17 +105,6 @@ unique_ptr<GlobalSinkState> IcebergInsert::GetGlobalSinkState(ClientContext &con
 // Sink
 //===--------------------------------------------------------------------===//
 
-static bool IsMapType(string col_name, IcebergTableSchema &table_schema) {
-	for (auto &col : table_schema.columns) {
-		if (col->name == col_name) {
-			if (col->type.id() == LogicalTypeId::MAP) {
-				return true;
-			}
-		}
-	}
-	return false;
-}
-
 static vector<idx_t> GetColumnPath(const ColumnIndex &column_index) {
 	vector<idx_t> path;
 	path.reserve(column_index.ChildIndexCount());
@@ -156,47 +146,6 @@ static bool CanWriteIdentityPartitionsDirectly(const IcebergPartitionSpec &spec,
 	return true;
 }
 
-static string ParseQuotedValue(const string &input, idx_t &pos) {
-	if (pos >= input.size() || input[pos] != '"') {
-		throw InvalidInputException("Failed to parse quoted value - expected a quote");
-	}
-	string result;
-	pos++;
-	for (; pos < input.size(); pos++) {
-		if (input[pos] == '"') {
-			pos++;
-			// check if this is an escaped quote
-			if (pos < input.size() && input[pos] == '"') {
-				// escaped quote
-				result += '"';
-				continue;
-			}
-			return result;
-		}
-		result += input[pos];
-	}
-	throw InvalidInputException("Failed to parse quoted value - unterminated quote");
-}
-
-static vector<string> ParseQuotedList(const string &input, char list_separator) {
-	vector<string> result;
-	if (input.empty()) {
-		return result;
-	}
-	idx_t pos = 0;
-	while (true) {
-		result.push_back(ParseQuotedValue(input, pos));
-		if (pos >= input.size()) {
-			break;
-		}
-		if (input[pos] != list_separator) {
-			throw InvalidInputException("Failed to parse list - expected a %s", string(1, list_separator));
-		}
-		pos++;
-	}
-	return result;
-}
-
 void IcebergInsertGlobalState::AddFiles(DataChunk &chunk, const string &table_name,
                                         const IcebergTableMetadata &table_metadata) {
 	// grab lock for written files vector
@@ -216,7 +165,6 @@ void IcebergInsertGlobalState::AddFiles(DataChunk &chunk, const string &table_na
 
 		// extract the column stats
 		auto column_stats = chunk.GetValue(4, r);
-		auto &map_children = MapValue::GetChildren(column_stats);
 
 		// column 5 is stats, which we can also use for partition information
 		auto partition_values = chunk.GetValue(5, r);
@@ -278,141 +226,10 @@ void IcebergInsertGlobalState::AddFiles(DataChunk &chunk, const string &table_na
 
 		insert_count += data_file.record_count;
 
-		// variant columns emit one stats entry per shredded leaf - accumulate them per variant column
-		// (keyed by field id) and serialize the lower/upper bound variants once all entries are seen
-		unordered_map<int32_t, IcebergVariantBounds> variant_bounds;
-
-		// Resolve the table-level metrics mode once; per-column overrides are resolved in the loop.
-		auto default_metrics = GetDefaultMetricsConfig(table_metadata);
-
-		for (idx_t col_idx = 0; col_idx < map_children.size(); col_idx++) {
-			auto &struct_children = StructValue::GetChildren(map_children[col_idx]);
-			auto &col_name = StringValue::Get(struct_children[0]);
-			auto &col_stats = MapValue::GetChildren(struct_children[1]);
-			auto column_names = ParseQuotedList(col_name, '.');
-			if (column_names[0] == "_row_id") {
-				continue;
-			}
-
-			optional_idx name_offset;
-			auto column_info_p = ic_schema->GetFromPath(StringsToIdentifiers(column_names), &name_offset);
-			if (!column_info_p) {
-				auto normalized_col_name = StringUtil::Join(column_names, ".");
-				throw InternalException("Column '%s' can not be found in the schema, but returned by RETURN_STATS",
-				                        normalized_col_name);
-			}
-			if (name_offset.IsValid()) {
-				// stats path descends into a variant column - buffer it for bounds serialization
-				variant_bounds[column_info_p->id].AddStatsEntry(column_names, name_offset.GetIndex(), col_stats);
-				continue;
-			}
-			auto &column_info = *column_info_p;
-			auto stats = IcebergColumnStats::ParseColumnStats(column_info.type, col_stats, context);
-
-			// a map type cannot violate not null constraints.
-			// Null value counts can be off since an empty map is the same as a null map.
-			bool is_map = IsMapType(column_names[0], *ic_schema);
-			if (!is_map && column_info.required && stats.null_count && *stats.null_count > 0) {
-				auto normalized_col_name = StringUtil::Join(column_names, ".");
-				throw ConstraintException("NOT NULL constraint failed: %s.%s", table_name, normalized_col_name);
-			}
-			// Resolve the metrics mode for this column: per-column override -> table default ->
-			// Iceberg's truncate(16) default.
-			auto metrics = GetColumnMetricsConfig(table_metadata, default_metrics, StringUtil::Join(column_names, "."));
-			if (metrics.mode == IcebergMetricsMode::NONE) {
-				// No metrics recorded for this column.
-				continue;
-			}
-			const bool write_bounds =
-			    metrics.mode == IcebergMetricsMode::TRUNCATE || metrics.mode == IcebergMetricsMode::FULL;
-
-			// go through stats and add upper and lower bounds
-			// Do serialization of values here in case we read transaction updates
-			if (write_bounds && stats.min) {
-				auto serialized_value =
-				    IcebergValue::SerializeValue(*stats.min, column_info.type, SerializeBound::LOWER_BOUND, metrics);
-				if (serialized_value.HasError()) {
-					throw InvalidConfigurationException(serialized_value.GetError());
-				} else if (serialized_value.HasValue()) {
-					data_file.lower_bounds[column_info.id] = serialized_value.GetValue();
-				}
-			}
-			if (write_bounds && stats.max) {
-				auto serialized_value =
-				    IcebergValue::SerializeValue(*stats.max, column_info.type, SerializeBound::UPPER_BOUND, metrics);
-				if (serialized_value.HasError()) {
-					throw InvalidConfigurationException(serialized_value.GetError());
-				} else if (serialized_value.HasValue()) {
-					data_file.upper_bounds[column_info.id] = serialized_value.GetValue();
-				}
-			}
-			// See Iceberg v3 (Appendix D) for geometry stats info
-			if (write_bounds && column_info.type.id() == LogicalTypeId::GEOMETRY && stats.has_bbox_xy) {
-				vector<double> lower {stats.bbox_xmin, stats.bbox_ymin};
-				vector<double> upper {stats.bbox_xmax, stats.bbox_ymax};
-				if (stats.has_bbox_z) {
-					lower.push_back(stats.bbox_zmin);
-					upper.push_back(stats.bbox_zmax);
-				} else if (stats.has_bbox_m) {
-					// Spark treats a 3-double bound as XYZ always, so for an
-					// XYM column we'd otherwise be misread as XYZ. Pad the Z slot with
-					// +infinity in both bounds so the encoding is unambiguously 4D and
-					// the M value lands in the right slot.
-					const auto z_max = GeometryExtent::UNKNOWN_MAX;
-					const auto z_min = GeometryExtent::UNKNOWN_MIN;
-					lower.push_back(z_min);
-					upper.push_back(z_max);
-				}
-				if (stats.has_bbox_m) {
-					lower.push_back(stats.bbox_mmin);
-					upper.push_back(stats.bbox_mmax);
-				}
-				const auto byte_count = lower.size() * sizeof(double);
-				data_file.lower_bounds[column_info.id] =
-				    Value::BLOB(const_data_ptr_cast<double>(lower.data()), byte_count);
-				data_file.upper_bounds[column_info.id] =
-				    Value::BLOB(const_data_ptr_cast<double>(upper.data()), byte_count);
-			}
-			if (stats.column_size_bytes) {
-				data_file.column_sizes[column_info.id] = *stats.column_size_bytes;
-			}
-			if (stats.null_count) {
-				data_file.null_value_counts[column_info.id] = *stats.null_count;
-			}
-			if (stats.num_values) {
-				//! Iceberg 'value_counts' is the total number of values (including nulls). The Parquet writer's
-				//! 'num_values' has the same semantics.
-				data_file.value_counts[column_info.id] = *stats.num_values;
-			}
-
-			//! nan_value_counts won't work, we can only indicate if they exist.
-			//! TODO: revisit when duckdb/duckdb can record nan_value_counts
-		}
+		IcebergDataFileStats::PopulateFromReturnStats(context, data_file, column_stats, table_metadata, table_name);
 		DUCKDB_LOG(context, IcebergLogType,
 		           "Iceberg INSERT, wrote data_file '%s', record_count=%lld, file_size=%lld bytes", data_file.file_path,
 		           data_file.record_count, data_file.file_size_in_bytes);
-
-		// serialize the accumulated variant bounds into the data file's lower/upper bounds
-		for (auto &entry : variant_bounds) {
-			// Respect the column's metrics mode; skip bounds under none/counts.
-			auto variant_metrics = GetColumnMetricsConfig(table_metadata, default_metrics,
-			                                              GetColumnNameBySourceId(*ic_schema, entry.first));
-			if (variant_metrics.mode != IcebergMetricsMode::TRUNCATE &&
-			    variant_metrics.mode != IcebergMetricsMode::FULL) {
-				continue;
-			}
-			optional<string> lower_blob;
-			optional<string> upper_blob;
-			if (!entry.second.Finalize(context, lower_blob, upper_blob)) {
-				continue;
-			}
-			if (lower_blob) {
-				data_file.lower_bounds[entry.first] = Value::BLOB_RAW(*lower_blob);
-			}
-			if (upper_blob) {
-				data_file.upper_bounds[entry.first] = Value::BLOB_RAW(*upper_blob);
-			}
-		}
 
 		written_files.push_back(std::move(manifest_entry));
 	}
@@ -541,31 +358,9 @@ InsertionOrderPreservingMap<string> IcebergInsert::ParamsToString() const {
 //===--------------------------------------------------------------------===//
 // Plan
 //===--------------------------------------------------------------------===//
-static Value GetFieldIdValue(const IcebergColumnDefinition &column) {
-	auto column_value = Value::BIGINT(column.id);
-	if (!column.GetChildCount()) {
-		// primitive type - return the field-id directly
-		return column_value;
-	}
-	// nested type - generate a struct and recurse into children
-	child_list_t<Value> values;
-	values.emplace_back("__duckdb_field_id", std::move(column_value));
-	for (idx_t i = 0; i < column.GetChildCount(); i++) {
-		auto child = column.GetChild(i);
-		values.emplace_back(child->name, GetFieldIdValue(*child));
-	}
-	return Value::STRUCT(std::move(values));
-}
-
 static Value WrittenFieldIds(const IcebergCopyInput &copy_input) {
-	auto &schema = copy_input.schema;
-	auto &columns = schema.columns;
-
 	child_list_t<Value> values;
-	for (idx_t c_idx = 0; c_idx < columns.size(); c_idx++) {
-		auto &column = columns[c_idx];
-		values.emplace_back(column->name, GetFieldIdValue(*column));
-	}
+	copy_input.schema.GetFieldIdValues(values);
 	if (WriteRowId(copy_input.virtual_columns)) {
 		values.emplace_back("_row_id", Value::BIGINT(MultiFileReader::ROW_ID_FIELD_ID));
 	}
@@ -1035,6 +830,7 @@ PhysicalOperator &IcebergCatalog::PlanInsert(ClientContext &context, PhysicalPla
 	table_entry.PrepareIcebergScanFromEntry(context);
 
 	auto &irc_transaction = IcebergTransaction::Get(context, *this);
+
 	auto &alter = irc_transaction.GetOrCreateAlter();
 	auto &updated_table = alter.GetOrInitializeTable(table_entry.table_info);
 	auto &table_metadata = updated_table.table_metadata;

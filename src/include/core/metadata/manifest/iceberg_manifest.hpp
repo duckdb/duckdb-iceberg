@@ -127,6 +127,8 @@ public:
 	void SetFileSequenceNumber(optional<sequence_number_t> value);
 	sequence_number_t GetSequenceNumber(const IcebergManifestFile &manifest_file) const;
 	sequence_number_t GetFileSequenceNumber(const IcebergManifestFile &manifest_file) const;
+	optional<sequence_number_t> ExplicitSequenceNumber() const;
+	optional<sequence_number_t> ExplicitFileSequenceNumber() const;
 
 private:
 	optional<int64_t> snapshot_id;
@@ -183,9 +185,9 @@ static constexpr const int32_t REFERENCED_DATA_FILE = 143;
 static constexpr const int32_t CONTENT_OFFSET = 144;
 static constexpr const int32_t CONTENT_SIZE_IN_BYTES = 145;
 
-idx_t WriteToFile(const IcebergTableMetadata &table_metadata, const IcebergManifestFile &manifest_file,
-                  const vector<IcebergManifestEntry> &entries, CopyFunction &copy_function, DatabaseInstance &db,
-                  ClientContext &context);
+//! Writes the manifest file using the precomputed metadata stored on the list entry.
+idx_t WriteToFile(const IcebergTableMetadata &table_metadata, const IcebergManifestListEntry &manifest_entry,
+                  CopyFunction &copy_function, DatabaseInstance &db, ClientContext &context);
 
 } // namespace manifest_file
 

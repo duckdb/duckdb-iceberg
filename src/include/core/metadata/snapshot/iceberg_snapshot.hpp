@@ -63,7 +63,7 @@ public:
 	optional<int64_t> first_row_id;
 	optional<int64_t> added_rows;
 	IcebergSnapshotOperationType operation;
-	timestamp_t timestamp_ms;
+	timestamp_ms_t timestamp_ms;
 	string manifest_list;
 	IcebergSnapshotMetrics metrics;
 };

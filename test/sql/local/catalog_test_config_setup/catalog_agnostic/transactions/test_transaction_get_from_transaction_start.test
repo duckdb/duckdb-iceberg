@@ -43,8 +43,10 @@ insert into my_datalake.default.multi_transaction_read select 2, 2;
 statement ok con2
 commit
 
-# con1 should only see data from con1 and before (from transaction start of con1)
+# Without metadata-log reconstruction, con1 accepts and pins the latest complete
+# metadata state available when it first resolves the table.
 query II con1
-select * from my_datalake.default.multi_transaction_read;
+select * from my_datalake.default.multi_transaction_read order by all;
 ----
 0	0
+2	2

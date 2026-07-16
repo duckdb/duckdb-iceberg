@@ -4,6 +4,7 @@
 #include "duckdb/parser/constraints/list.hpp"
 #include "duckdb/parser/parsed_data/alter_info.hpp"
 #include "duckdb/parser/parsed_data/alter_table_info.hpp"
+#include "duckdb/parser/parsed_data/comment_on_column_info.hpp"
 #include "duckdb/parser/parsed_data/create_index_info.hpp"
 #include "duckdb/parser/parsed_data/create_schema_info.hpp"
 #include "duckdb/parser/parsed_data/drop_info.hpp"
@@ -321,7 +322,7 @@ void IntroduceNewSchema(IcebergTableInformation &updated_table, IcebergTransacti
 		updated_table.CreateSchemaVersion(result_schema);
 		transaction_data.TableAddSchema(new_schema_id);
 	} else {
-		transaction_data.TableSetCurrentSchema();
+		transaction_data.TableSetCurrentSchema(result_schema.schema_id);
 	}
 	updated_table.table_metadata.SetCurrentSchemaId(result_schema.schema_id);
 }
@@ -340,25 +341,72 @@ IcebergColumnDefinition &ResolveColumn(T &alter_table_info, const shared_ptr<Ice
 }
 
 void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) {
-	if (info.type != AlterType::ALTER_TABLE) {
-		throw NotImplementedException("Only ALTER TABLE is supported for Iceberg");
-	}
-	auto &alter_table_info = info.Cast<AlterTableInfo>();
 	auto &irc_transaction = GetICTransaction(transaction);
 	auto &context = transaction.GetContext();
 
-	EntryLookupInfo lookup(CatalogType::TABLE_ENTRY, alter_table_info.GetQualifiedName().Name());
+	EntryLookupInfo lookup(CatalogType::TABLE_ENTRY, QualifiedName(info.GetQualifiedName().Name()));
 	auto catalog_entry = tables.GetEntry(context, lookup);
 	if (!catalog_entry) {
-		throw CatalogException("Table with name \"%s\" does not exist!", alter_table_info.GetQualifiedName().Name());
+		throw CatalogException("Table with name \"%s\" does not exist!", info.GetQualifiedName().Name());
 	}
 	auto &table_entry = catalog_entry->Cast<IcebergTableEntry>();
 	auto &catalog_table_info = table_entry.table_info;
+
+	if (info.type == AlterType::ALTER_TABLE) {
+		auto &alter_table_info = info.Cast<AlterTableInfo>();
+		if (alter_table_info.alter_table_type == AlterTableType::RENAME_TABLE) {
+			auto &rename_table_info = alter_table_info.Cast<RenameTableInfo>();
+			auto &new_name = rename_table_info.new_table_name;
+
+			EntryLookupInfo lookup(CatalogType::TABLE_ENTRY, new_name);
+			auto other_catalog_entry = tables.GetEntry(context, lookup);
+			if (other_catalog_entry) {
+				//! The table exists at this point, check if it was deleted/renamed in the transaction
+				auto &other_table_entry = other_catalog_entry->Cast<IcebergTableEntry>();
+				auto &other_table_info = other_table_entry.table_info;
+				auto other_table_key = other_table_info.GetTableKey();
+				auto state = irc_transaction.GetLatestTableState(other_table_key);
+				if (!state || state->IsAlive()) {
+					throw CatalogException("Table with name \"%s\" already exists!", new_name);
+				}
+				D_ASSERT(state && state->IsDroppedOrRenamed());
+			}
+			irc_transaction.RenameTable(catalog_table_info, new_name.GetIdentifierName());
+			return;
+		}
+	}
 
 	auto &alter = irc_transaction.GetOrCreateAlter();
 	auto &updated_table = alter.GetOrInitializeTable(catalog_table_info);
 	auto &transaction_data = updated_table.GetOrCreateTransactionData(irc_transaction);
 	auto &current_schema = updated_table.table_metadata.GetLatestSchema();
+
+	if (info.type == AlterType::SET_COLUMN_COMMENT) {
+		auto &comment_info = info.Cast<SetColumnCommentInfo>();
+
+		auto new_schema = current_schema.Copy();
+		new_schema->schema_id++;
+
+		auto column_p = new_schema->GetMutableFromPath({comment_info.column_name}, nullptr);
+		if (!column_p) {
+			throw CatalogException("Column with name '%s' does not exist on the table '%s', COMMENT ON COLUMN failed",
+			                       comment_info.column_name, table_entry.name);
+		}
+
+		auto &column = *column_p;
+		column.doc = std::nullopt;
+		if (!comment_info.comment_value.IsNull()) {
+			column.doc = comment_info.comment_value.GetValue<string>();
+		}
+
+		IntroduceNewSchema(updated_table, transaction_data, new_schema);
+		return;
+	}
+
+	if (info.type != AlterType::ALTER_TABLE) {
+		throw NotImplementedException("Only ALTER TABLE is supported for Iceberg");
+	}
+	auto &alter_table_info = info.Cast<AlterTableInfo>();
 
 	switch (alter_table_info.alter_table_type) {
 	case AlterTableType::SET_PARTITIONED_BY: {
@@ -495,27 +543,6 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 		IntroduceNewSchema(updated_table, transaction_data, new_schema);
 		return;
 	}
-	case AlterTableType::RENAME_TABLE: {
-		auto &rename_table_info = alter_table_info.Cast<RenameTableInfo>();
-		auto &new_name = rename_table_info.new_table_name;
-
-		EntryLookupInfo lookup(CatalogType::TABLE_ENTRY, new_name);
-		auto other_catalog_entry = tables.GetEntry(context, lookup);
-		if (other_catalog_entry) {
-			//! The table exists at this point, check if it was deleted/renamed in the transaction
-			auto &other_table_entry = other_catalog_entry->Cast<IcebergTableEntry>();
-			auto &other_table_info = other_table_entry.table_info;
-			auto other_table_key = other_table_info.GetTableKey();
-			auto state = irc_transaction.GetLatestTableState(other_table_key);
-			if (!state || state->IsAlive()) {
-				throw CatalogException("Table with name \"%s\" already exists!", new_name);
-			}
-			//! The table is dropped or renamed by this transaction, so it's not a conflict anymore
-			D_ASSERT(state && state->IsDroppedOrRenamed());
-		}
-		irc_transaction.RenameTable(updated_table, new_name.GetIdentifierName());
-		break;
-	}
 	case AlterTableType::RENAME_COLUMN: {
 		auto &rename_info = alter_table_info.Cast<RenameColumnInfo>();
 		auto &column_name = rename_info.old_name;
@@ -546,7 +573,7 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 			updated_table.CreateSchemaVersion(result_schema);
 			transaction_data.TableAddSchema(new_schema_id);
 		} else {
-			transaction_data.TableSetCurrentSchema();
+			transaction_data.TableSetCurrentSchema(result_schema.schema_id);
 		}
 		updated_table.table_metadata.SetCurrentSchemaId(result_schema.schema_id);
 		return;
@@ -647,7 +674,7 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 			updated_table.CreateSchemaVersion(result_schema);
 			transaction_data.TableAddSchema(new_schema_id);
 		} else {
-			transaction_data.TableSetCurrentSchema();
+			transaction_data.TableSetCurrentSchema(result_schema.schema_id);
 		}
 		updated_table.table_metadata.SetCurrentSchemaId(result_schema.schema_id);
 		return;

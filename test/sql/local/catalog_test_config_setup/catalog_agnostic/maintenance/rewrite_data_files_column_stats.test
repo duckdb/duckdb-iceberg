@@ -1,0 +1,83 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/maintenance/rewrite_data_files_column_stats.test
+# description: rewritten files retain manifest column stats / bounds
+# group: [maintenance]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+set ignore_error_messages
+
+statement ok
+drop table if exists my_datalake.default.rewrite_column_stats;
+
+statement ok
+create table my_datalake.default.rewrite_column_stats (id INTEGER, payload VARCHAR);
+
+statement ok
+insert into my_datalake.default.rewrite_column_stats values (1, 'a'), (2, 'b');
+
+statement ok
+insert into my_datalake.default.rewrite_column_stats values (10, 'j'), (20, 't');
+
+statement ok
+insert into my_datalake.default.rewrite_column_stats values (3, 'c'), (4, 'd');
+
+statement ok
+insert into my_datalake.default.rewrite_column_stats values (5, 'e'), (6, 'f');
+
+statement ok
+insert into my_datalake.default.rewrite_column_stats values (7, 'g'), (8, 'h');
+
+# Confirm pre-rewrite inserts already wrote column stats.
+query III
+select column_name, lower_bound, upper_bound
+from iceberg_column_stats(my_datalake.default.rewrite_column_stats)
+where status = 'ADDED' and column_name in ('id', 'payload')
+order by column_name, try_cast(lower_bound AS BIGINT) NULLS LAST, lower_bound;
+----
+id	1	2
+id	3	4
+id	5	6
+id	7	8
+id	10	20
+payload	a	b
+payload	c	d
+payload	e	f
+payload	g	h
+payload	j	t
+
+query III
+call iceberg_rewrite_data_files('my_datalake.default.rewrite_column_stats');
+----
+5	1	<REGEX>:[1-9][0-9]*
+
+# After rewrite there is a single ADDED data file whose bounds span the full table.
+query III
+select column_name, lower_bound, upper_bound
+from iceberg_column_stats(my_datalake.default.rewrite_column_stats)
+where status = 'ADDED' and column_name in ('id', 'payload')
+order by column_name;
+----
+id	1	20
+payload	a	t
+
+# File pruning still works via the rewritten bounds.
+query II
+explain analyze select * from my_datalake.default.rewrite_column_stats where id = 1;
+----
+analyzed_plan	<REGEX>:.*Total Files Read: 1.*
+
+query II
+explain analyze select * from my_datalake.default.rewrite_column_stats where id = 999;
+----
+analyzed_plan	<REGEX>:.*Total Files Read: 0.*
+
+statement ok
+drop table if exists my_datalake.default.rewrite_column_stats;

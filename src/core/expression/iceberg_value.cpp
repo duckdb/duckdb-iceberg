@@ -503,13 +503,21 @@ SerializeResult IcebergValue::SerializeValue(Value input_value, const LogicalTyp
 		auto ret = SerializeResult(column_type, ret_val);
 		return ret;
 	}
+	case LogicalTypeId::BOOLEAN: {
+		//! Iceberg serializes boolean bounds as a single byte: 0x00 = false, 0x01 = true.
+		//! The value arrives as a string ("0"/"1" from parquet RETURN_STATS column stats —
+		//! proper since duckdb#20222 — or "true"/"false" from the partition-value VARCHAR
+		//! cast in the manifest-list writer); the BOOLEAN cast accepts both forms.
+		const uint8_t val = input_value.DefaultCastAs(LogicalType::BOOLEAN).GetValue<bool>() ? 1 : 0;
+		auto serialized_val = Value::BLOB(const_data_ptr_cast(&val), sizeof(uint8_t));
+		auto ret = SerializeResult(column_type, serialized_val);
+		return ret;
+	}
 		// GEOMETRY and VARIANT bounds are not produced via this string-Value path;
 		// they require multi-double / variant-binary encodings built inline at the
 		// stats-collection site (see IcebergInsertGlobalState::AddFiles).
 	case LogicalTypeId::GEOMETRY:
 	case LogicalTypeId::VARIANT:
-		// boolean does not yet return proper values so we skip
-	case LogicalTypeId::BOOLEAN:
 	default:
 		break;
 	}

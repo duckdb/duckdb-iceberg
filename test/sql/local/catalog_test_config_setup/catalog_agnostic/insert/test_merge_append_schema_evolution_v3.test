@@ -1,0 +1,85 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/insert/test_merge_append_schema_evolution_v3.test
+# description: On V3 tables, manifest merge still groups by schema id across a schema evolution
+# group: [insert]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+drop table if exists my_datalake.default.merge_schema_evo_v3;
+
+statement ok
+create table my_datalake.default.merge_schema_evo_v3 (
+	id INTEGER,
+	data VARCHAR
+) WITH (
+	'format-version' = 3,
+	'commit.manifest.min-count-to-merge' = '2',
+	'commit.manifest.target-size-bytes' = '8388608'
+);
+
+# Two commits under the original schema (schema id 0).
+statement ok
+insert into my_datalake.default.merge_schema_evo_v3 values (1, 'a'), (2, 'b');
+
+statement ok
+insert into my_datalake.default.merge_schema_evo_v3 values (3, 'c'), (4, 'd');
+
+# Evolve the schema. On V3 the current schema id changes, so subsequent data manifests must not be
+# merged with the pre-evolution ones.
+statement ok
+ALTER TABLE my_datalake.default.merge_schema_evo_v3 ADD COLUMN extra INTEGER;
+
+statement ok
+insert into my_datalake.default.merge_schema_evo_v3 values (5, 'e', 50), (6, 'f', 60);
+
+statement ok
+insert into my_datalake.default.merge_schema_evo_v3 values (7, 'g', 70), (8, 'h', 80);
+
+# One more commit so the new-schema data manifests become carried-over and thus eligible for merge
+# (V3 defers merging a transaction's brand-new data manifests by one commit for row-lineage safety).
+statement ok
+insert into my_datalake.default.merge_schema_evo_v3 values (9, 'i', 90), (10, 'j', 100);
+
+# Row lineage + data equivalence: every row (old and new schema) reads back correctly, no loss/dup.
+query III
+select id, data, extra from my_datalake.default.merge_schema_evo_v3 order by id;
+----
+1	a	NULL
+2	b	NULL
+3	c	NULL
+4	d	NULL
+5	e	50
+6	f	60
+7	g	70
+8	h	80
+9	i	90
+10	j	100
+
+query I
+select count(*) from my_datalake.default.merge_schema_evo_v3;
+----
+10
+
+# The old-schema manifests merge among themselves and the new-schema manifests among themselves, but
+# never across the schema boundary: at least two distinct data manifests must remain.
+query I
+select count(*) >= 2 from (
+	select distinct manifest_path
+	from iceberg_metadata(my_datalake.default.merge_schema_evo_v3)
+);
+----
+true
+
+statement ok
+drop table my_datalake.default.merge_schema_evo_v3;

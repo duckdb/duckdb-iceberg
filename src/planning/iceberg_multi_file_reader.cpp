@@ -1,6 +1,8 @@
 #include "planning/iceberg_multi_file_reader.hpp"
 
 #include "duckdb/catalog/catalog_entry/table_function_catalog_entry.hpp"
+#include "duckdb/function/partition_stats.hpp"
+#include "duckdb/logging/logger.hpp"
 #include "duckdb/common/exception.hpp"
 #include "duckdb/function/function_binder.hpp"
 #include "duckdb/execution/execution_context.hpp"
@@ -468,19 +470,18 @@ bool IcebergMultiFileReader::ParseOption(const string &key, const Value &val, Mu
 		return true;
 	}
 	if (loption == "snapshot_from_id") {
-		if (snapshot_lookup.GetSource() != SnapshotSource::LATEST) {
+		if (snapshot_lookup->GetSource() != SnapshotSource::LATEST) {
 			throw InvalidInputException("Can't use 'snapshot_from_id' in combination with 'snapshot_from_timestamp'");
 		}
-		snapshot_lookup.SetSource(SnapshotSource::FROM_ID);
-		snapshot_lookup.snapshot_id = val.GetValue<uint64_t>();
+		snapshot_lookup.emplace(IcebergSnapshotLookup::FromSnapshotId(val.GetValue<uint64_t>()));
 		return true;
 	}
 	if (loption == "snapshot_from_timestamp") {
-		if (snapshot_lookup.GetSource() != SnapshotSource::LATEST) {
+		if (snapshot_lookup->GetSource() != SnapshotSource::LATEST) {
 			throw InvalidInputException("Can't use 'snapshot_from_id' in combination with 'snapshot_from_timestamp'");
 		}
-		snapshot_lookup.SetSource(SnapshotSource::FROM_TIMESTAMP);
-		snapshot_lookup.snapshot_timestamp = val.GetValue<timestamp_t>();
+		snapshot_lookup.emplace(IcebergSnapshotLookup::FromTimestamp(
+		    val.DefaultCastAs(LogicalType::TIMESTAMP_MS).GetValue<timestamp_ms_t>()));
 		return true;
 	}
 	return MultiFileReader::ParseOption(key, val, options, context);

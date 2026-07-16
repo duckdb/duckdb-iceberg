@@ -2,6 +2,7 @@
 
 #include "duckdb/common/types.hpp"
 #include "duckdb/common/string.hpp"
+#include "duckdb/common/optional.hpp"
 #include "duckdb/common/vector.hpp"
 #include "duckdb/common/types/value.hpp"
 #include "duckdb/function/copy_function.hpp"
@@ -44,6 +45,27 @@ enum class IcebergManifestContentType : uint8_t {
 
 string IcebergManifestContentTypeToString(IcebergManifestContentType type);
 
+struct IcebergManifestMetadata {
+public:
+	IcebergManifestMetadata(int32_t schema_id, int32_t partition_spec_id, int32_t format_version,
+	                        IcebergManifestContentType content)
+	    : schema_id(schema_id), partition_spec_id(partition_spec_id), format_version(format_version), content(content) {
+	}
+
+	static IcebergManifestMetadata FromTableMetadata(const IcebergTableMetadata &table_metadata,
+	                                                 IcebergManifestContentType content,
+	                                                 optional<int32_t> partition_spec_id = nullopt);
+
+public:
+	const int32_t schema_id;
+	const int32_t partition_spec_id;
+	const int32_t format_version;
+	const IcebergManifestContentType content;
+};
+
+unordered_map<string, string> GetManifestMetadataMap(const IcebergTableMetadata &table_metadata,
+                                                     const IcebergManifestMetadata &manifest_metadata);
+
 struct IcebergManifestFile {
 public:
 	//! Path to the manifest AVRO file
@@ -58,7 +80,7 @@ public:
 	//! sequence_number when manifest was added to table (0 for Iceberg v1)
 	optional<sequence_number_t> sequence_number;
 	optional<sequence_number_t> min_sequence_number;
-	int64_t added_snapshot_id = -1;
+	optional<int64_t> added_snapshot_id;
 	//! added files count
 	idx_t added_files_count = 0;
 	//! existing files count
@@ -83,18 +105,66 @@ struct IcebergManifestListEntry {
 public:
 	IcebergManifestListEntry(IcebergManifestFile file) : file(std::move(file)) {
 	}
+	IcebergManifestListEntry(IcebergManifestFile file, IcebergManifestMetadata manifest_metadata)
+	    : file(std::move(file)), manifest_metadata(std::move(manifest_metadata)) {
+	}
+	IcebergManifestListEntry(const IcebergManifestListEntry &) = default;
+	IcebergManifestListEntry(IcebergManifestListEntry &&) = default;
+	IcebergManifestListEntry &operator=(const IcebergManifestListEntry &other) {
+		if (this != &other) {
+			file = other.file;
+			manifest_entries = other.manifest_entries;
+			if (other.manifest_metadata) {
+				manifest_metadata.reset();
+				manifest_metadata.emplace(*other.manifest_metadata);
+			} else {
+				manifest_metadata.reset();
+			}
+		}
+		return *this;
+	}
+	IcebergManifestListEntry &operator=(IcebergManifestListEntry &&other) {
+		if (this != &other) {
+			file = std::move(other.file);
+			manifest_entries = std::move(other.manifest_entries);
+			if (other.manifest_metadata) {
+				manifest_metadata.reset();
+				manifest_metadata.emplace(*other.manifest_metadata);
+			} else {
+				manifest_metadata.reset();
+			}
+		}
+		return *this;
+	}
 
 public:
-	static IcebergManifestListEntry
-	CreateFromEntries(FileSystem &fs, int64_t snapshot_id, sequence_number_t sequence_number,
-	                  const IcebergTableMetadata &table_metadata, IcebergManifestContentType manifest_content_type,
-	                  vector<IcebergManifestEntry> &&manifest_entries, int64_t &next_row_id);
+	static IcebergManifestListEntry CreateFromEntries(FileSystem &fs, sequence_number_t sequence_number,
+	                                                  const IcebergTableMetadata &table_metadata,
+	                                                  const IcebergManifestMetadata &manifest_metadata,
+	                                                  vector<IcebergManifestEntry> &&manifest_entries,
+	                                                  int64_t &next_row_id);
+	bool HasManifestEntries() const {
+		return manifest_entries.has_value();
+	}
+	vector<IcebergManifestEntry> &GetManifestEntries() {
+		D_ASSERT(manifest_entries);
+		return *manifest_entries;
+	}
+	const vector<IcebergManifestEntry> &GetManifestEntries() const {
+		D_ASSERT(manifest_entries);
+		return *manifest_entries;
+	}
+	vector<IcebergManifestEntry> &GetOrCreateManifestEntries() {
+		if (!manifest_entries) {
+			manifest_entries.emplace();
+		}
+		return *manifest_entries;
+	}
 
 public:
 	IcebergManifestFile file;
-	//! The key-value metadata of the manifest file this entry describes
-	unordered_map<string, string> metadata;
-	vector<IcebergManifestEntry> manifest_entries;
+	optional<IcebergManifestMetadata> manifest_metadata;
+	optional<vector<IcebergManifestEntry>> manifest_entries;
 };
 
 struct IcebergManifestList {
@@ -108,6 +178,9 @@ public:
 	const vector<IcebergManifestListEntry> &GetManifestFilesConst() const;
 	const string &GetPath() const {
 		return path;
+	}
+	sequence_number_t GetSequenceNumber() const {
+		return sequence_number;
 	}
 
 	void AddNewManifestFile(IcebergManifestListEntry &&manifest_list_entry) {

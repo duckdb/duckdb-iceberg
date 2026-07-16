@@ -24,6 +24,9 @@
         "test/sql/local/catalog_test_config_setup/catalog_agnostic/insert/test_insert_to_v3_tables.test",
         "test/sql/local/catalog_test_config_setup/catalog_agnostic/insert/test_transactional_insert_v3.test",
         "test/sql/local/catalog_test_config_setup/catalog_agnostic/insert/test_manifest_compression_v3.test",
+        "test/sql/local/catalog_test_config_setup/catalog_agnostic/insert/test_merge_append_v3_deletes.test",
+        "test/sql/local/catalog_test_config_setup/catalog_agnostic/insert/test_merge_append_schema_evolution_v3.test",
+        "test/sql/local/catalog_test_config_setup/catalog_agnostic/insert/test_merge_append_v3_row_lineage.test",
         "test/sql/local/catalog_test_config_setup/catalog_agnostic/table_properties/test_many_table_properties.test",
         "test/sql/local/catalog_test_config_setup/catalog_agnostic/test_row_lineage_read.test",
         "test/sql/local/catalog_test_config_setup/catalog_agnostic/test_row_lineage_write.test",
@@ -120,6 +123,8 @@
         "test/sql/local/catalog_test_config_setup/catalog_agnostic/transactions/test_transactional_deletes_not_retried.test",
         "test/sql/local/catalog_test_config_setup/catalog_agnostic/transactions/test_transaction_get_from_transaction_start.test",
         "test/sql/local/catalog_test_config_setup/catalog_agnostic/transactions/test_transactional_updates.test",
+        "test/sql/local/catalog_test_config_setup/catalog_agnostic/delete/test_transactional_delete.test",
+        "test/sql/local/catalog_test_config_setup/catalog_agnostic/insert/test_transactional_insert.test",
         "test/sql/local/catalog_test_config_setup/catalog_agnostic/transactions/test_transactional_updates_error_omits_stacktrace.test",
         "test/sql/local/catalog_test_config_setup/catalog_agnostic/alter/add_column/alter_add_column_time_travel.test",
         "test/sql/local/catalog_test_config_setup/catalog_agnostic/alter/alter_rename_column.test",
@@ -141,6 +146,16 @@
       "reason": "Nessie ignores DEFAULT values for ADD COLUMN and just populates with NULL.",
       "paths": [
         "test/sql/local/catalog_test_config_setup/catalog_agnostic/alter/add_column/alter_add_column_twice_in_same_transaction_with_default.test"
+      ]
+    },
+    {
+      "reason": "Nessie doesn't provide 'metadata_log' in the LoadTableResult.",
+      "paths": [
+        "test/sql/local/catalog_test_config_setup/catalog_agnostic/transactions/test_transaction_metadata_log_layout.test",
+        "test/sql/local/catalog_test_config_setup/catalog_agnostic/transactions/test_transaction_metadata_log_schema.test",
+        "test/sql/local/catalog_test_config_setup/catalog_agnostic/transactions/test_transactional_merge_into.test",
+        "test/sql/local/catalog_test_config_setup/catalog_agnostic/transactions/test_transactions_reading_empty_tables.test",
+        "test/sql/local/catalog_test_config_setup/catalog_agnostic/transactions/test_transaction_metadata_log_properties.test"
       ]
     }
   ]

@@ -1,0 +1,105 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/insert/test_merge_append_v3_row_lineage.test
+# description: Merging manifests preserves each data file's first_row_id so _row_id is not shuffled
+# group: [insert]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+drop table if exists my_datalake.default.merge_v3_lineage;
+
+# Aggressive min-count so the per-commit manifests get merged after a couple of commits.
+statement ok
+create table my_datalake.default.merge_v3_lineage (
+	id INTEGER,
+	data VARCHAR
+) WITH (
+	'format-version' = 3,
+	'commit.manifest.min-count-to-merge' = '2',
+	'commit.manifest.target-size-bytes' = '8388608'
+);
+
+# Four separate commits -> four data manifests, each with its own first_row_id (0, 2, 4, 6).
+statement ok
+insert into my_datalake.default.merge_v3_lineage values (1, 'a'), (2, 'b');
+
+statement ok
+insert into my_datalake.default.merge_v3_lineage values (3, 'c'), (4, 'd');
+
+statement ok
+insert into my_datalake.default.merge_v3_lineage values (5, 'e'), (6, 'f');
+
+statement ok
+insert into my_datalake.default.merge_v3_lineage values (7, 'g'), (8, 'h');
+
+# One more commit so the earlier manifests are carried-over and get merged this commit.
+statement ok
+insert into my_datalake.default.merge_v3_lineage values (9, 'i'), (10, 'j');
+
+# _row_id is assigned by inheritance from each data file's first_row_id. Rows were inserted in order,
+# so each row's _row_id must equal its 0-based insertion order (1->0, 2->1, ... 10->9). Merging
+# rewrites carried-over entries into a new manifest with a different first_row_id; materializing the
+# inherited first_row_id onto each entry keeps _row_id stable (Iceberg spec requires the inherited
+# value be written when creating existing/deleted entries). This is a regression guard on that
+# stability. Assert the exact mapping.
+query II
+select id, _row_id from my_datalake.default.merge_v3_lineage order by id;
+----
+1	0
+2	1
+3	2
+4	3
+5	4
+6	5
+7	6
+8	7
+9	8
+10	9
+
+# Data equivalence: every row still present and correct.
+query II
+select id, data from my_datalake.default.merge_v3_lineage order by id;
+----
+1	a
+2	b
+3	c
+4	d
+5	e
+6	f
+7	g
+8	h
+9	i
+10	j
+
+# It must survive another round of merges too.
+statement ok
+insert into my_datalake.default.merge_v3_lineage values (11, 'k'), (12, 'l');
+
+query II
+select id, _row_id from my_datalake.default.merge_v3_lineage order by id;
+----
+1	0
+2	1
+3	2
+4	3
+5	4
+6	5
+7	6
+8	7
+9	8
+10	9
+11	10
+12	11
+
+statement ok
+drop table my_datalake.default.merge_v3_lineage;

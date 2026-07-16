@@ -224,7 +224,7 @@ class TestInsertEndToEnd:
                 "I", "SELECT distinct status FROM iceberg_metadata('my_datalake.default.insert_test')", [("ADDED",)]
             )
             test.query(
-                "I", "SELECT distinct content FROM iceberg_metadata('my_datalake.default.insert_test')", [("EXISTING",)]
+                "I", "SELECT distinct content FROM iceberg_metadata('my_datalake.default.insert_test')", [("DATA",)]
             )
             test.query(
                 "I",

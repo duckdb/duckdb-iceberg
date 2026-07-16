@@ -2,6 +2,7 @@
 
 #include "iceberg_logging.hpp"
 #include "duckdb/planner/expression/bound_reference_expression.hpp"
+#include "duckdb/logging/logger.hpp"
 #include "duckdb/planner/filter/constant_filter.hpp"
 #include "duckdb/catalog/catalog_entry/copy_function_catalog_entry.hpp"
 #include "duckdb/execution/operator/scan/physical_table_scan.hpp"
@@ -29,6 +30,30 @@ namespace duckdb {
 class IcebergDeleteLocalState;
 class IcebergDeleteGlobalState;
 class IcebergTableEntry;
+
+optional_ptr<PhysicalTableScan> IcebergDelete::FindIcebergScan(PhysicalOperator &plan) {
+	if (plan.type == PhysicalOperatorType::TABLE_SCAN) {
+		// does this emit the virtual columns?
+		auto &scan = plan.Cast<PhysicalTableScan>();
+
+		if (scan.function.GetName() == "iceberg_scan") {
+			for (auto &col : scan.column_ids) {
+				if (col.GetPrimaryIndex() == MultiFileReader::COLUMN_IDENTIFIER_FILE_ROW_NUMBER) {
+					return scan;
+				}
+			}
+		}
+		return nullptr;
+	}
+
+	for (auto &children : plan.children) {
+		auto result = FindIcebergScan(children.get());
+		if (result) {
+			return result;
+		}
+	}
+	return nullptr;
+}
 
 IcebergDelete::IcebergDelete(PhysicalPlan &physical_plan, IcebergTableEntry &table,
                              optional_ptr<IcebergMultiFileList> multi_file_list, PhysicalOperator &child,
@@ -454,39 +479,16 @@ InsertionOrderPreservingMap<string> IcebergDelete::ParamsToString() const {
 	return result;
 }
 
-optional_ptr<PhysicalTableScan> IcebergDelete::FindDeleteSource(PhysicalOperator &plan) {
-	if (plan.type == PhysicalOperatorType::TABLE_SCAN) {
-		// does this emit the virtual columns?
-		auto &scan = plan.Cast<PhysicalTableScan>();
-		bool found = false;
-		for (auto &col : scan.column_ids) {
-			if (col.GetPrimaryIndex() == MultiFileReader::COLUMN_IDENTIFIER_FILE_ROW_NUMBER) {
-				found = true;
-				break;
-			}
-		}
-		if (!found) {
-			return nullptr;
-		}
-		return scan;
-	}
-	for (auto &children : plan.children) {
-		auto result = FindDeleteSource(children.get());
-		if (result) {
-			return result;
-		}
-	}
-	return nullptr;
-}
-
 PhysicalOperator &IcebergDelete::PlanDelete(ClientContext &context, PhysicalPlanGenerator &planner,
                                             IcebergTableEntry &table, PhysicalOperator &child_plan,
                                             vector<idx_t> row_id_indexes) {
-	auto table_scan = FindDeleteSource(child_plan);
-	optional_ptr<IcebergMultiFileList> file_list;
-	if (table_scan) {
-		auto &bind_data = table_scan->bind_data->Cast<MultiFileBindData>();
-		file_list = &bind_data.file_list->Cast<IcebergMultiFileList>();
+	auto &catalog = table.ParentCatalog();
+	auto scan = FindIcebergScan(child_plan);
+
+	optional_ptr<IcebergMultiFileList> multi_file_list;
+	if (scan) {
+		auto &bind_data = scan->bind_data->Cast<MultiFileBindData>();
+		multi_file_list = bind_data.file_list->Cast<IcebergMultiFileList>();
 	} else {
 		DUCKDB_LOG_DEBUG(context, "Could not find IcebergDelete source. Iceberg Multi File list is empty");
 	}
@@ -494,10 +496,10 @@ PhysicalOperator &IcebergDelete::PlanDelete(ClientContext &context, PhysicalPlan
 #ifdef ICEBERG_ENABLE_EQUALITY_DELETE_WRITES
 	vector<IcebergEqualityDeletePredicate> equality_predicates;
 	bool is_equality_delete = TryGetEqualityDeletePredicates(context, table, child_plan, equality_predicates);
-	return planner.Make<IcebergDelete>(table, file_list, child_plan, std::move(row_id_indexes), is_equality_delete,
-	                                   std::move(equality_predicates));
+	return planner.Make<IcebergDelete>(table, multi_file_list, child_plan, std::move(row_id_indexes),
+	                                   is_equality_delete, std::move(equality_predicates));
 #else
-	return planner.Make<IcebergDelete>(table, file_list, child_plan, std::move(row_id_indexes));
+	return planner.Make<IcebergDelete>(table, multi_file_list, child_plan, std::move(row_id_indexes));
 #endif
 }
 

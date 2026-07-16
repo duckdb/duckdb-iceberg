@@ -22,7 +22,6 @@ statement ok
 create secret s3 (
   type s3,
   provider 'credential_chain',
-  profile 'iceberg_ci',
   region 'us-east-1');
 
 statement ok

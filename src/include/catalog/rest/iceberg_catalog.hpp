@@ -13,6 +13,7 @@
 #include "catalog/rest/iceberg_schema_set.hpp"
 #include "rest_catalog/objects/load_table_result.hpp"
 #include "catalog/rest/storage/iceberg_authorization.hpp"
+#include "common/iceberg_utils.hpp"
 
 namespace duckdb {
 
@@ -20,16 +21,16 @@ class IcebergSchemaEntry;
 
 class MetadataCacheValue {
 public:
-	MetadataCacheValue(transaction_t creator, timestamp_t expire_timestamp,
+	MetadataCacheValue(transaction_t creator, timestamp_ms_t expire_timestamp_ms,
 	                   unique_ptr<const rest_api_objects::LoadTableResult> load_table_result)
-	    : creator(creator), expire_timestamp(expire_timestamp), load_table_result(std::move(load_table_result)) {
+	    : creator(creator), expire_timestamp_ms(expire_timestamp_ms), load_table_result(std::move(load_table_result)) {
 	}
 
 public:
 	//! Store the id of the transaction that added the entry
 	transaction_t creator;
 	//! The timestamp until when this entry is valid
-	timestamp_t expire_timestamp;
+	timestamp_ms_t expire_timestamp_ms;
 	//! The payload of the cache entry
 	unique_ptr<const rest_api_objects::LoadTableResult> load_table_result;
 };
@@ -53,24 +54,23 @@ public:
 			return nullptr;
 		}
 
-		auto &meta_transaction = MetaTransaction::Get(context);
-		auto transaction_start = meta_transaction.GetCurrentTransactionStartTimestamp();
+		auto transaction_start_ms = IcebergUtils::GetTransactionStartTimeMS(context);
 
 		auto &entry = it->second;
-		if (validate_cache && transaction_start > entry.expire_timestamp) {
+		if (validate_cache && transaction_start_ms > entry.expire_timestamp_ms) {
 			// cached value has expired
 			return nullptr;
 		}
 		return entry;
 	}
 	void SetOrOverwriteInternal(lock_guard<mutex> &guard, ClientContext &context, const string &table_key,
-	                            timestamp_t expire_timestamp,
+	                            timestamp_ms_t expire_timestamp_ms,
 	                            unique_ptr<const rest_api_objects::LoadTableResult> load_table_result) {
 		// erase load table result if it exists.
 		tables.erase(table_key);
 		auto &meta_transaction = MetaTransaction::Get(context);
 
-		tables.emplace(table_key, MetadataCacheValue(meta_transaction.global_transaction_id, expire_timestamp,
+		tables.emplace(table_key, MetadataCacheValue(meta_transaction.global_transaction_id, expire_timestamp_ms,
 		                                             std::move(load_table_result)));
 	}
 	void SetOrOverwrite(ClientContext &context, const string &table_key,
@@ -84,10 +84,11 @@ public:
 		} else {
 			expires_at = system_clock::time_point::min();
 		}
-		auto epoch_micros = duration_cast<microseconds>(expires_at.time_since_epoch()).count();
-		auto expire_timestamp = Timestamp::FromEpochMicroSeconds(epoch_micros);
-		SetOrOverwriteInternal(guard, context, table_key, expire_timestamp, std::move(load_table_result));
+		auto epoch_micros = timestamp_t(duration_cast<microseconds>(expires_at.time_since_epoch()).count());
+		auto expire_timestamp_ms = timestamp_ms_t(Timestamp::GetEpochMs(epoch_micros));
+		SetOrOverwriteInternal(guard, context, table_key, expire_timestamp_ms, std::move(load_table_result));
 	}
+
 	void ExpireInternal(lock_guard<mutex> &guard, ClientContext &context, const string &table_key) {
 		auto &meta_transaction = MetaTransaction::Get(context);
 		tables.erase(table_key);

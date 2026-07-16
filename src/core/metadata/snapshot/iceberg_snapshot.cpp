@@ -238,7 +238,7 @@ IcebergSnapshot IcebergSnapshot::ParseSnapshot(const rest_api_objects::Snapshot 
 	}
 
 	ret.snapshot_id = snapshot.snapshot_id;
-	ret.timestamp_ms = Timestamp::FromEpochMs(snapshot.timestamp_ms);
+	ret.timestamp_ms = timestamp_ms_t(snapshot.timestamp_ms);
 	ret.manifest_list = snapshot.manifest_list;
 	ret.metrics = MetricsFromSummary(snapshot.summary.additional_properties);
 

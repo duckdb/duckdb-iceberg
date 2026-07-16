@@ -1,6 +1,7 @@
 #include "catalog/rest/iceberg_catalog.hpp"
 
 #include "duckdb/storage/database_size.hpp"
+#include "duckdb/logging/logger.hpp"
 #include "duckdb/main/database.hpp"
 #include "duckdb/parser/parsed_data/drop_info.hpp"
 #include "duckdb/parser/parsed_data/create_schema_info.hpp"

@@ -1,0 +1,120 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/transactions/test_transaction_metadata_log_schema.test
+# description: Transaction state reconstructs complete historical schemas from metadata-log
+# group: [transactions]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+set ignore_error_messages
+
+statement ok
+set iceberg_use_metadata_log = true;
+
+# --- Current schema, field definitions, and last-column-id ---
+
+statement ok
+drop table if exists my_datalake.default.metadata_log_schema;
+
+statement ok
+create table my_datalake.default.metadata_log_schema (a integer);
+
+statement ok
+insert into my_datalake.default.metadata_log_schema values (1);
+
+statement ok con1
+begin
+
+statement ok con2
+begin
+
+statement ok con2
+alter table my_datalake.default.metadata_log_schema add column b integer;
+
+statement ok con2
+alter table my_datalake.default.metadata_log_schema alter column a type bigint;
+
+statement ok con2
+commit
+
+# con1 resolves the table for the first time after con2 committed. Its schema
+# must still be reconstructed as the single INTEGER column visible at BEGIN.
+query I con1
+select alias(COLUMNS(*)) from my_datalake.default.metadata_log_schema limit 1;
+----
+a
+
+query I con1
+select typeof(a) from my_datalake.default.metadata_log_schema limit 1;
+----
+INTEGER
+
+# b does not exist in con1's historical schema, so adding it locally succeeds
+# and allocates from con1's historical last-column-id.
+statement ok con1
+alter table my_datalake.default.metadata_log_schema add column b integer;
+
+query II con1
+select alias(COLUMNS(*)) from my_datalake.default.metadata_log_schema limit 1;
+----
+a	b
+
+statement ok con1
+rollback
+
+# --- Schema write-default ---
+
+statement ok
+drop table if exists my_datalake.default.metadata_log_default;
+
+statement ok
+create table my_datalake.default.metadata_log_default (
+	a integer default 10
+) with (
+	'format-version' = 3
+);
+
+statement ok
+insert into my_datalake.default.metadata_log_default default values;
+
+statement ok con1
+begin
+
+statement ok con2
+begin
+
+statement ok con2
+alter table my_datalake.default.metadata_log_default alter column a set default 20;
+
+statement ok con2
+commit
+
+# The insert binds against the schema at con1's start and therefore uses 10,
+# even though the catalog's current schema now has a write-default of 20.
+statement ok con1
+insert into my_datalake.default.metadata_log_default default values;
+
+query I con1
+select a from my_datalake.default.metadata_log_default order by all;
+----
+10
+10
+
+statement ok con1
+rollback
+
+# The committed schema remains the one installed by con2.
+statement ok
+insert into my_datalake.default.metadata_log_default default values;
+
+query I
+select a from my_datalake.default.metadata_log_default order by all;
+----
+10
+20

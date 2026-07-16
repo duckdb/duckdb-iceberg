@@ -43,19 +43,30 @@ insert into my_datalake.default.rename_table VALUES (
 	'test', true
 )
 
-# FIXME: support renaming a table with outstanding updates
 statement error
 ALTER TABLE my_datalake.default.rename_table RENAME TO renamed_table
 ----
-Catalog Error: This table (rename_table) was modified already, can't be renamed!
+TransactionContext Error: Iceberg REST Catalog cannot commit this transaction atomically because it mixes table updates with rename/drop requests
 
 statement error
 select * from my_datalake.default.renamed_table
 ----
 Catalog Error: Table with name renamed_table does not exist!
 
+# Transaction invalidated, needs to be separate statements
 statement ok
-commit
+abort
+
+statement ok
+create table my_datalake.default.rename_table(
+	a VARCHAR,
+	b BOOLEAN
+);
+
+statement ok
+insert into my_datalake.default.rename_table VALUES (
+	'test', true
+)
 
 statement error
 select * from my_datalake.default.renamed_table

@@ -1,18 +1,19 @@
 #pragma once
 
 #include "duckdb/common/column_index.hpp"
+#include "duckdb/common/optional.hpp"
+#include "duckdb/common/types/value.hpp"
 
 #include "core/metadata/schema/iceberg_column_definition.hpp"
 #include "rest_catalog/objects/schema.hpp"
 #include "rest_catalog/objects/add_schema_update.hpp"
-
-#include <optional>
 
 namespace duckdb {
 
 class IcebergTableSchema {
 public:
 	static shared_ptr<IcebergTableSchema> ParseSchema(const rest_api_objects::Schema &schema);
+	rest_api_objects::Schema ToRESTObject() const;
 
 public:
 	static void PopulateSourceIdMap(unordered_map<uint64_t, ColumnIndex> &source_to_column_id,
@@ -33,6 +34,8 @@ public:
 
 	bool Equals(const IcebergTableSchema &other) const;
 	void GetColumnNamesAndTypes(vector<string> &names, vector<LogicalType> &types) const;
+	void GetFieldIdValues(child_list_t<Value> &values) const;
+	Value GetFieldIds() const;
 
 public:
 	int32_t schema_id;

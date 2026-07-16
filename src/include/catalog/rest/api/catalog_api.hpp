@@ -14,6 +14,7 @@
 namespace duckdb {
 
 class IcebergCatalog;
+struct IcebergCreateTableRequest;
 class IcebergSchemaEntry;
 class IcebergTableEntry;
 
@@ -95,7 +96,8 @@ public:
 	//! stage create = false, table is created immediately in the IRC
 	//! stage create = true, table is not created, but metadata is initialized and returned
 	static rest_api_objects::LoadTableResult CommitNewTable(ClientContext &context, IcebergCatalog &catalog,
-	                                                        const IcebergTableEntry &table);
+	                                                        const vector<string> &namespace_items,
+	                                                        const IcebergCreateTableRequest &request);
 	static rest_api_objects::CatalogConfig GetCatalogConfig(ClientContext &context, IcebergCatalog &catalog,
 	                                                        const string &warehouse);
 };

@@ -43,7 +43,7 @@ static void PopulateSourceIdToTypeMap(const vector<unique_ptr<IcebergColumnDefin
 
 struct DataFileVectorWriters {
 	explicit DataFileVectorWriters(Vector &data_file_vector, idx_t row_count,
-	                               const IcebergTableMetadata &table_metadata)
+	                               const IcebergTableMetadata &table_metadata, int32_t manifest_format_version)
 	    : table_metadata(table_metadata), data_file_entries(StructVector::GetEntries(data_file_vector)),
 	      file_path(data_file_entries[FILE_PATH_INDEX], row_count, 0),
 	      file_format(data_file_entries[FILE_FORMAT_INDEX], row_count, 0),
@@ -59,11 +59,11 @@ struct DataFileVectorWriters {
 	      split_offsets(data_file_entries[SPLIT_OFFSETS_INDEX], row_count, 0),
 	      equality_ids(data_file_entries[EQUALITY_IDS_INDEX], row_count, 0),
 	      sort_order_id(data_file_entries[SORT_ORDER_ID_INDEX], row_count, 0) {
-		if (table_metadata.iceberg_version >= 2) {
+		if (manifest_format_version >= 2) {
 			content.emplace(data_file_entries[CONTENT_INDEX], row_count, 0);
 			referenced_data_file.emplace(data_file_entries[REFERENCED_DATA_FILE_INDEX], row_count, 0);
 		}
-		if (table_metadata.iceberg_version >= 3) {
+		if (manifest_format_version >= 3) {
 			first_row_id.emplace(data_file_entries[FIRST_ROW_ID_INDEX], row_count, 0);
 			content_offset.emplace(data_file_entries[CONTENT_OFFSET_INDEX], row_count, 0);
 			content_size_in_bytes.emplace(data_file_entries[CONTENT_SIZE_IN_BYTES_INDEX], row_count, 0);
@@ -193,7 +193,7 @@ public:
 string IcebergManifestEntryContentTypeToString(IcebergManifestEntryContentType type) {
 	switch (type) {
 	case IcebergManifestEntryContentType::DATA:
-		return "EXISTING";
+		return "DATA";
 	case IcebergManifestEntryContentType::POSITION_DELETES:
 		return "POSITION_DELETES";
 	case IcebergManifestEntryContentType::EQUALITY_DELETES:
@@ -398,6 +398,14 @@ void IcebergManifestEntry::SetFileSequenceNumber(optional<sequence_number_t> val
 	file_sequence_number = value;
 }
 
+optional<sequence_number_t> IcebergManifestEntry::ExplicitSequenceNumber() const {
+	return sequence_number;
+}
+
+optional<sequence_number_t> IcebergManifestEntry::ExplicitFileSequenceNumber() const {
+	return file_sequence_number;
+}
+
 sequence_number_t IcebergManifestEntry::GetSequenceNumber(const IcebergManifestFile &manifest_file) const {
 	if (!sequence_number) {
 		if (status != IcebergManifestEntryStatusType::ADDED) {
@@ -592,9 +600,17 @@ static Value FieldIdsForList(int32_t list_field_id, int32_t element_field_id) {
 	return Value::STRUCT(members);
 }
 
-idx_t WriteToFile(const IcebergTableMetadata &table_metadata, const IcebergManifestFile &manifest_file,
-                  const vector<IcebergManifestEntry> &manifest_entries, CopyFunction &copy, DatabaseInstance &db,
-                  ClientContext &context) {
+idx_t WriteToFile(const IcebergTableMetadata &table_metadata, const IcebergManifestListEntry &manifest_entry,
+                  CopyFunction &copy, DatabaseInstance &db, ClientContext &context) {
+	auto &manifest_file = manifest_entry.file;
+	if (!manifest_entry.manifest_metadata) {
+		throw InternalException("Manifest entry for '%s' is missing typed manifest metadata",
+		                        manifest_file.manifest_path);
+	}
+	auto &manifest_entries = manifest_entry.GetManifestEntries();
+	auto &entry_metadata = *manifest_entry.manifest_metadata;
+	auto manifest_metadata = GetManifestMetadataMap(table_metadata, entry_metadata);
+	auto manifest_format_version = entry_metadata.format_version;
 	D_ASSERT(!manifest_entries.empty());
 	auto &allocator = db.GetBufferManager().GetBufferAllocator();
 	auto &path = manifest_file.manifest_path;
@@ -604,8 +620,6 @@ idx_t WriteToFile(const IcebergTableMetadata &table_metadata, const IcebergManif
 	child_list_t<Value> field_ids;
 	vector<Identifier> names;
 	vector<LogicalType> types;
-
-	auto &current_partition_spec = table_metadata.GetLatestPartitionSpec();
 
 	// status: int
 	names.push_back("status");
@@ -713,7 +727,7 @@ idx_t WriteToFile(const IcebergTableMetadata &table_metadata, const IcebergManif
 	data_file_field_ids.emplace_back("sort_order_id", CreateFieldID(SORT_ORDER_ID, true));
 
 	// v2-only suffix
-	if (table_metadata.iceberg_version >= 2) {
+	if (manifest_format_version >= 2) {
 		// content: int
 		children.emplace_back("content", LogicalType::INTEGER);
 		data_file_field_ids.emplace_back("content", CreateFieldID(CONTENT, false));
@@ -724,7 +738,7 @@ idx_t WriteToFile(const IcebergTableMetadata &table_metadata, const IcebergManif
 	}
 
 	// v3-only suffix
-	if (table_metadata.iceberg_version >= 3) {
+	if (manifest_format_version >= 3) {
 		// first_row_id: optional long
 		children.emplace_back("first_row_id", LogicalType::BIGINT);
 		data_file_field_ids.emplace_back("first_row_id", CreateFieldID(FIRST_ROW_ID, true));
@@ -750,22 +764,16 @@ idx_t WriteToFile(const IcebergTableMetadata &table_metadata, const IcebergManif
 	DataChunk chunk;
 	chunk.Initialize(allocator, types, STANDARD_VECTOR_SIZE);
 
-	std::unique_ptr<yyjson_mut_doc, YyjsonDocDeleter> schema_doc_p(yyjson_mut_doc_new(nullptr));
-	auto schema_doc = schema_doc_p.get();
-	auto schema_root_obj = yyjson_mut_obj(schema_doc);
-	yyjson_mut_doc_set_root(schema_doc, schema_root_obj);
-	IcebergCreateTableRequest::PopulateSchema(schema_doc, schema_root_obj,
-	                                          *table_metadata.GetSchemaFromId(table_metadata.GetCurrentSchemaId()));
-	auto iceberg_table_schema_string = ICUtils::JsonToString(std::move(schema_doc_p));
-
 	child_list_t<Value> metadata_values;
-	metadata_values.emplace_back("schema", iceberg_table_schema_string);
-	metadata_values.emplace_back("schema-id", std::to_string(table_metadata.GetCurrentSchemaId()));
-	metadata_values.emplace_back("partition-spec", current_partition_spec.FieldsToJSONString());
-	metadata_values.emplace_back("partition-spec-id", std::to_string(current_partition_spec.spec_id));
-	metadata_values.emplace_back("format-version", std::to_string(table_metadata.iceberg_version));
-	metadata_values.emplace_back("content",
-	                             manifest_file.content == IcebergManifestContentType::DATA ? "data" : "deletes");
+	constexpr const char *required_keys[] = {"schema",         "schema-id", "partition-spec", "partition-spec-id",
+	                                         "format-version", "content"};
+	for (auto key : required_keys) {
+		auto entry = manifest_metadata.find(key);
+		if (entry == manifest_metadata.end()) {
+			throw InvalidInputException("Manifest metadata missing required key '%s'", key);
+		}
+		metadata_values.emplace_back(key, entry->second);
+	}
 	auto metadata_map = Value::STRUCT(std::move(metadata_values));
 
 	CopyInfo copy_info;
@@ -804,7 +812,7 @@ idx_t WriteToFile(const IcebergTableMetadata &table_metadata, const IcebergManif
 		auto snapshot_id_writer = FlatVector::Writer<int64_t>(chunk.data[1], chunk_count);
 		auto sequence_number_writer = FlatVector::Writer<int64_t>(chunk.data[2], chunk_count);
 		auto file_sequence_number_writer = FlatVector::Writer<int64_t>(chunk.data[3], chunk_count);
-		DataFileVectorWriters data_file_writers(chunk.data[4], chunk_count, table_metadata);
+		DataFileVectorWriters data_file_writers(chunk.data[4], chunk_count, table_metadata, manifest_format_version);
 
 		for (idx_t i = 0; i < chunk_count; i++) {
 			auto &manifest_entry = manifest_entries[offset + i];
@@ -820,8 +828,18 @@ idx_t WriteToFile(const IcebergTableMetadata &table_metadata, const IcebergManif
 			// sequence_number: long
 			// file_sequence_number: long
 			if (manifest_entry.status == IcebergManifestEntryStatusType::ADDED) {
-				sequence_number_writer.WriteNull();
-				file_sequence_number_writer.WriteNull();
+				auto sequence_number = manifest_entry.ExplicitSequenceNumber();
+				if (sequence_number) {
+					sequence_number_writer.WriteValue(*sequence_number);
+				} else {
+					sequence_number_writer.WriteNull();
+				}
+				auto file_sequence_number = manifest_entry.ExplicitFileSequenceNumber();
+				if (file_sequence_number) {
+					file_sequence_number_writer.WriteValue(*file_sequence_number);
+				} else {
+					file_sequence_number_writer.WriteNull();
+				}
 			} else {
 				sequence_number_writer.WriteValue(manifest_entry.GetSequenceNumber(manifest_file));
 				file_sequence_number_writer.WriteValue(manifest_entry.GetFileSequenceNumber(manifest_file));

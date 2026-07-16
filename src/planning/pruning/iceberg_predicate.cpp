@@ -61,6 +61,14 @@ static bool MatchBoundsConstant(const Value &constant, ExpressionType comparison
 		return false;
 	}
 
+	if (!stats.has_not_null && comparison_type != ExpressionType::COMPARE_DISTINCT_FROM &&
+	    comparison_type != ExpressionType::COMPARE_NOT_DISTINCT_FROM) {
+		// has_not_null is false when every row of this column is NULL. Ordinary comparisons
+		// against a constant cannot match NULL so the file can be pruned. IS [NOT] DISTINCT FROM
+		// must consider NULL so cannot be pruned.
+		return false;
+	}
+
 	if (!stats.upper_bound || !stats.lower_bound) {
 		// we do not have upper or lower bounds, assume the file matches.
 		return true;

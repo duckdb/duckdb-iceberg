@@ -1,6 +1,7 @@
 #include "catalog/rest/api/catalog_api.hpp"
 
 #include "duckdb/main/secret/secret.hpp"
+#include "duckdb/logging/logger.hpp"
 #include "duckdb/main/secret/secret_manager.hpp"
 #include "duckdb/common/error_data.hpp"
 #include "duckdb/common/http_util.hpp"
@@ -532,25 +533,16 @@ void IRCAPI::CommitNamespacePropertiesUpdate(ClientContext &context, IcebergCata
 }
 
 rest_api_objects::LoadTableResult IRCAPI::CommitNewTable(ClientContext &context, IcebergCatalog &catalog,
-                                                         const IcebergTableEntry &table) {
-	auto &ic_schema = table.schema.Cast<IcebergSchemaEntry>();
+                                                         const vector<string> &namespace_items,
+                                                         const IcebergCreateTableRequest &request) {
 	auto url_builder = catalog.GetBaseUrl();
 	url_builder.AddPrefixComponent(catalog.prefix, catalog.prefix_is_one_component);
 	url_builder.AddPathComponent(IRCPathComponent::RegularComponent("namespaces"));
-	url_builder.AddPathComponent(IRCPathComponent::NamespaceComponent(ic_schema.namespace_items));
+	url_builder.AddPathComponent(IRCPathComponent::NamespaceComponent(namespace_items));
 	url_builder.AddPathComponent(IRCPathComponent::RegularComponent("tables"));
 
-	std::unique_ptr<yyjson_mut_doc, YyjsonDocDeleter> doc_p(yyjson_mut_doc_new(nullptr));
-	yyjson_mut_doc *doc = doc_p.get();
-	auto root_object = yyjson_mut_obj(doc);
-	yyjson_mut_doc_set_root(doc, root_object);
-
-	auto create_transaction = make_uniq<IcebergCreateTableRequest>(table.table_info);
-	// if stage create is supported, create the table with stage_create = true and the table update will
-	// commit the table.
-	auto stage_create_tables = catalog.attach_options.stage_create_tables;
-	yyjson_mut_obj_add_bool(doc, root_object, "stage-create", stage_create_tables);
-	auto create_table_json = create_transaction->CreateTableToJSON(std::move(doc_p));
+	const auto stage_create = catalog.attach_options.stage_create_tables;
+	auto create_table_json = request.CreateTableToJSON(stage_create);
 
 	try {
 		HTTPHeaders headers(*context.db);

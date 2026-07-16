@@ -1,6 +1,8 @@
 #include "planning/iceberg_multi_file_list.hpp"
 
 #include "duckdb/catalog/catalog_entry/table_function_catalog_entry.hpp"
+#include "duckdb/function/partition_stats.hpp"
+#include "duckdb/logging/logger.hpp"
 #include "duckdb/common/exception.hpp"
 #include "duckdb/common/file_system.hpp"
 #include "duckdb/common/numeric_utils.hpp"
@@ -350,7 +352,7 @@ void IcebergMultiFileList::Bind(vector<LogicalType> &return_types, vector<Identi
 		auto &metadata = temp_data->metadata;
 
 		IcebergSnapshotScanInfo snapshot_info;
-		snapshot_info = metadata.GetSnapshot(options.snapshot_lookup);
+		snapshot_info = metadata.GetSnapshot(*options.snapshot_lookup);
 		auto schema = metadata.GetSchemaFromId(snapshot_info.schema_id);
 		shared_state->scan_info =
 		    make_shared_ptr<IcebergScanInfo>(iceberg_path, std::move(temp_data), snapshot_info, *schema);
@@ -954,7 +956,7 @@ optional_ptr<const BoundIcebergManifestEntry> IcebergMultiFileList::GetDataFile(
 		auto &current_batch = view_cursor.current_batch;
 		auto &bound_manifest_list_entry = data_manifests[current_batch.manifest_list_entry_idx];
 		auto &manifest_list_entry = bound_manifest_list_entry.entry;
-		auto &manifest_entries = manifest_list_entry.manifest_entries;
+		auto &manifest_entries = manifest_list_entry.GetManifestEntries();
 		auto &manifest_file = manifest_list_entry.file;
 		if (!data_manifest_matches[current_batch.manifest_list_entry_idx]) {
 			view_cursor.current_batch_offset = current_batch.end_index;
@@ -1357,9 +1359,12 @@ void IcebergMultiFileList::InitializeSharedState(lock_guard<mutex> &guard) const
 		}
 
 		for (auto &manifest : shared_state->committed_data_manifests) {
+			if (!manifest.HasManifestEntries()) {
+				continue;
+			}
 			auto &file = manifest.file;
 			idx_t reserve_size = file.existing_files_count + file.added_files_count + file.deleted_files_count;
-			manifest.manifest_entries.reserve(reserve_size);
+			manifest.GetManifestEntries().reserve(reserve_size);
 		}
 		if (!shared_state->committed_delete_manifests.empty()) {
 			shared_state->delete_manifest_scan = AvroScan::ScanManifest(
@@ -1396,7 +1401,7 @@ void IcebergMultiFileList::InitializeSharedState(lock_guard<mutex> &guard) const
 	idx_t transaction_manifest_idx = shared_state->committed_data_manifests.size();
 	for (auto &manifest : shared_state->transaction_data_manifests) {
 		shared_state->read_state.PushBatch(
-		    ManifestReadBatch {transaction_manifest_idx++, 0, manifest.get().manifest_entries.size()});
+		    ManifestReadBatch {transaction_manifest_idx++, 0, manifest.get().GetManifestEntries().size()});
 	}
 
 	if (!shared_state->committed_data_manifests.empty()) {
@@ -1448,7 +1453,7 @@ void IcebergMultiFileList::EnumerateDeleteManifestEntriesInternal() const {
 	for (idx_t i = 0; i < shared_state->committed_delete_manifests.size(); i++) {
 		auto &manifest_list_entry = shared_state->committed_delete_manifests[i];
 		auto manifest = BoundIcebergManifestListEntry(i, manifest_list_entry);
-		for (auto &manifest_entry : manifest_list_entry.manifest_entries) {
+		for (auto &manifest_entry : manifest_list_entry.GetManifestEntries()) {
 			if (manifest_entry.status == IcebergManifestEntryStatusType::DELETED) {
 				continue;
 			}
@@ -1469,7 +1474,7 @@ void IcebergMultiFileList::EnumerateDeleteManifestEntriesInternal() const {
 	     transaction_delete_idx++) {
 		auto &manifest_list_entry = shared_state->transaction_delete_manifests[transaction_delete_idx].get();
 		auto delete_manifest = BoundIcebergManifestListEntry(offset + transaction_delete_idx, manifest_list_entry);
-		for (auto &manifest_entry : manifest_list_entry.manifest_entries) {
+		for (auto &manifest_entry : manifest_list_entry.GetManifestEntries()) {
 			auto &data_file = manifest_entry.data_file;
 			auto &referenced_data_file = data_file.referenced_data_file;
 			if (referenced_data_file && transactional_delete_files) {

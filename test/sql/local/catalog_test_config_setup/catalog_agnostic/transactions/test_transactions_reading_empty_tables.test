@@ -17,6 +17,9 @@ require icu
 set ignore_error_messages
 
 statement ok
+set iceberg_use_metadata_log = false;
+
+statement ok
 set enable_logging=true
 
 statement ok
@@ -47,8 +50,43 @@ insert into my_datalake.default.multi_transaction_read_empty select 2, 2;
 statement ok con2
 commit
 
-# con1 does not see a table, this is a bug in the iceberg spec
-statement error con1
+# Without metadata-log reconstruction, con1 pins the complete metadata state
+# resolved after con2's commit and sees its current snapshot.
+query II con1
 select * from my_datalake.default.multi_transaction_read_empty;
 ----
-<REGEX>:.*Table default.multi_transaction_read_empty does not have a reachable state in this transaction.*
+2	2
+
+statement ok con1
+rollback
+
+# With metadata-log enabled, the pre-insert metadata file represents the empty
+# transaction-start state completely, so the same sequence produces an empty scan.
+statement ok
+set iceberg_use_metadata_log = true;
+
+statement ok
+drop table if exists my_datalake.default.multi_transaction_read_reconstructed_empty;
+
+statement ok
+create table my_datalake.default.multi_transaction_read_reconstructed_empty (a int, b int);
+
+statement ok con3
+begin
+
+statement ok con4
+begin
+
+statement ok con4
+insert into my_datalake.default.multi_transaction_read_reconstructed_empty select 2, 2;
+
+statement ok con4
+commit
+
+query I con3
+select count(*) from my_datalake.default.multi_transaction_read_reconstructed_empty;
+----
+0
+
+statement ok con3
+rollback

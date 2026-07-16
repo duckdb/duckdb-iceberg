@@ -38,9 +38,10 @@ public:
 	IcebergTableInformation(IcebergCatalog &catalog, IcebergSchemaEntry &schema, const string &name);
 
 public:
-	optional_ptr<CatalogEntry> GetLatestSchema(ClientContext &context);
+	void LoadCredentials(ClientContext &context) const;
+	optional_ptr<CatalogEntry> GetLatestSchema();
 	idx_t GetIcebergVersion() const;
-	optional_ptr<CatalogEntry> GetSchemaVersion(ClientContext &context, optional_ptr<BoundAtClause> at);
+	optional_ptr<CatalogEntry> GetSchemaVersion(optional_ptr<BoundAtClause> at);
 	optional_ptr<CatalogEntry> CreateSchemaVersion(const IcebergTableSchema &table_schema);
 	idx_t GetMaxSchemaId();
 	idx_t GetNextPartitionSpecId();
@@ -48,7 +49,7 @@ public:
 	optional<int64_t> GetExistingSpecId(IcebergPartitionSpec &spec);
 	optional<int64_t> GetExistingSortOrderId(IcebergSortOrder &sort_order);
 	void SetPartitionedBy(IcebergTransaction &transaction, const vector<unique_ptr<ParsedExpression>> &partition_keys,
-	                      const IcebergTableSchema &schema, bool first_partition_spec = false);
+	                      const IcebergTableSchema &schema);
 	void SetSortedBy(IcebergTransaction &transaction, const vector<OrderByNode> &orders,
 	                 const IcebergTableSchema &schema, bool first_sort_spec = false);
 	//! Build an IcebergPartitionSpec from parsed PARTITIONED BY expressions and a schema.
@@ -57,26 +58,22 @@ public:
 	                                               idx_t base_partition_field_id);
 	static IcebergSortOrder BuildSortOrder(const vector<OrderByNode> &orders, const IcebergTableSchema &schema,
 	                                       int32_t sort_order_id);
-	IRCAPITableCredentials GetVendedCredentials(ClientContext &context);
+	IRCAPITableCredentials GetVendedCredentials(ClientContext &context) const;
 	const string &BaseFilePath() const;
 
 	IcebergTransactionData &GetOrCreateTransactionData(IcebergTransaction &transaction);
 
 	static string GetTableKey(const vector<string> &namespace_items, const string &table_name);
 	string GetTableKey() const;
-	IcebergTableMetadata CreateMetadataFromLog(ClientContext &context, int64_t transaction_start_millis,
+	IcebergTableMetadata CreateMetadataFromLog(ClientContext &context, timestamp_ms_t transaction_start_ms,
 	                                           string &metadata_path) const;
-	// we pass the transaction, because we are only allowed to copy table information state provded by the catalog
-	// from before our transaction start time.
+	// With metadata-log enabled, reconstruct the complete table state at transaction start. Otherwise pin and copy
+	// the complete catalog state that was resolved for this transaction.
 	IcebergTableInformation Copy(IcebergTransaction &iceberg_transaction) const;
 	// This copy is used for deletes, where we don't care about valid table state
-	IcebergTableInformation Copy(ClientContext &context) const;
+	IcebergTableInformation Copy() const;
 	void InitSchemaVersions();
 
-	IcebergSnapshotLookup GetSnapshotLookup(IcebergTransaction &iceberg_transaction) const;
-	IcebergSnapshotLookup GetSnapshotLookup(ClientContext &context, optional_ptr<BoundAtClause> at) const;
-	IcebergSnapshotLookup GetSnapshotLookup(ClientContext &context) const;
-	bool TableIsEmpty(const IcebergSnapshotLookup &snapshot_lookup) const;
 	bool HasTransactionUpdates() const;
 	void InitializeFromLoadTableResult(const rest_api_objects::LoadTableResult &load_table_result,
 	                                   bool initialize_schemas = true);

@@ -1,0 +1,131 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/maintenance/rewrite_data_files_spark_mor_residual_deletes.test
+# description: rewrite Spark-created V2 merge-on-read table while preserving residual position deletes
+# group: [maintenance]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+set ignore_error_messages
+
+query I
+select count(*) from my_datalake.default.spark_rewrite_mor_residual_deletes;
+----
+7
+
+query III
+select id, category, payload
+from my_datalake.default.spark_rewrite_mor_residual_deletes
+order by id;
+----
+1	compact	c1
+2	compact	c2_u
+4	compact	c4
+5	compact	c5
+6	compact	c6
+100	residual	r100
+101	residual	r101_u
+
+query I
+select count(*)
+from my_datalake.default.spark_rewrite_mor_residual_deletes
+where id in (3, 102);
+----
+0
+
+query I
+select count(*) >= 3
+from iceberg_metadata('my_datalake.default.spark_rewrite_mor_residual_deletes')
+where content = 'DATA' and status <> 'DELETED'
+  and file_path like '%/category=compact/%';
+----
+true
+
+query I
+select count(*) < 3
+from iceberg_metadata('my_datalake.default.spark_rewrite_mor_residual_deletes')
+where content = 'DATA' and status <> 'DELETED'
+  and file_path like '%/category=residual/%';
+----
+true
+
+query I
+select count(*) > 0
+from iceberg_metadata('my_datalake.default.spark_rewrite_mor_residual_deletes')
+where content = 'POSITION_DELETES' and status <> 'DELETED';
+----
+true
+
+query III
+call iceberg_rewrite_data_files(
+    'my_datalake.default.spark_rewrite_mor_residual_deletes',
+    min_input_files => 3
+);
+----
+<REGEX>:[3-9][0-9]*	<REGEX>:[1-9][0-9]*	<REGEX>:[1-9][0-9]*
+
+query I
+select count(*) from my_datalake.default.spark_rewrite_mor_residual_deletes;
+----
+7
+
+query III
+select id, category, payload
+from my_datalake.default.spark_rewrite_mor_residual_deletes
+order by id;
+----
+1	compact	c1
+2	compact	c2_u
+4	compact	c4
+5	compact	c5
+6	compact	c6
+100	residual	r100
+101	residual	r101_u
+
+query I
+select count(*)
+from my_datalake.default.spark_rewrite_mor_residual_deletes
+where id in (3, 102);
+----
+0
+
+query I
+select count(*)
+from iceberg_metadata('my_datalake.default.spark_rewrite_mor_residual_deletes')
+where content = 'DATA' and status = 'ADDED'
+  and file_path not like '%/category=%';
+----
+1
+
+query I
+select count(*) >= 1
+from iceberg_metadata('my_datalake.default.spark_rewrite_mor_residual_deletes')
+where content = 'DATA' and status <> 'DELETED'
+  and file_path like '%/category=residual/%';
+----
+true
+
+query I
+select count(*) = 0
+from (
+    select file_path
+    from iceberg_metadata('my_datalake.default.spark_rewrite_mor_residual_deletes')
+    where content = 'DATA' and status <> 'DELETED'
+    group by file_path
+    having count(*) > 1
+);
+----
+true
+
+query I
+select count(*) > 0
+from iceberg_metadata('my_datalake.default.spark_rewrite_mor_residual_deletes')
+where content = 'POSITION_DELETES' and status <> 'DELETED';
+----
+true

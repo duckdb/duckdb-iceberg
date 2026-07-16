@@ -69,12 +69,24 @@ from my_datalake.default.accounts;
 statement ok con1
 DROP TABLE my_datalake.default.accounts;
 
+# Can't DROP and RENAME in the same transaction
+statement error con1
+ALTER TABLE my_datalake.default.external_accounts RENAME TO accounts;
+----
+TransactionContext Error: Iceberg REST Catalog cannot commit this transaction atomically because it mixes table updates with rename/drop requests
+
+statement ok con1
+ABORT;
+
+# Perform the changes one at a time instead
+statement ok con1
+DROP TABLE my_datalake.default.accounts;
+
 statement ok con1
 ALTER TABLE my_datalake.default.external_accounts RENAME TO accounts;
 
 # --- con2: funds transfer ---
 # Alice wants to pay 500 to Bob
-# con2 still thinks this is Alice and Bob, but it's actually changing the corporations now
 statement ok con2
 UPDATE my_datalake.default.accounts
 SET balance = balance - 500.00
@@ -84,9 +96,6 @@ statement ok con2
 UPDATE my_datalake.default.accounts
 SET balance = balance + 500.00
 WHERE account_id = 2;
-
-statement ok con1
-COMMIT;
 
 # con2 must be rejected, the table it resolved no longer exists under that identity
 statement error con2

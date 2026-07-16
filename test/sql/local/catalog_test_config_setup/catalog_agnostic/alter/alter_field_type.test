@@ -52,15 +52,3 @@ insert into my_datalake.default.alter_struct_field VALUES (
 	},
 	false
 );
-
-# FIXME: Needs support in core for the ALTER COLUMN col.field syntax
-mode skip
-
-# FLOAT -> BIGINT promotion is not supported
-statement error
-ALTER TABLE my_datalake.default.alter_struct_field ALTER COLUMN not_a_struct.b TYPE BIGINT;
-----
-Catalog Error: The column ('not_a_struct.b') doesnt exist on the table 'alter_struct_field', DROP COLUMN failed to remove the field
-
-statement ok
-ALTER TABLE my_datalake.default.alter_struct_field ALTER COLUMN not_a_struct.b TYPE BIGINT;

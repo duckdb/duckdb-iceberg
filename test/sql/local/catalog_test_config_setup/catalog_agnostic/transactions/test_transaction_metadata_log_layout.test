@@ -1,0 +1,106 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/transactions/test_transaction_metadata_log_layout.test
+# description: Transaction state reconstructs historical partition specs and sort orders from metadata-log
+# group: [transactions]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+set ignore_error_messages
+
+statement ok
+set iceberg_use_metadata_log = true;
+
+# --- Partition specs, default-spec-id, and last-partition-id ---
+
+statement ok
+create schema if not exists my_datalake.default;
+
+statement ok
+drop table if exists my_datalake.default.metadata_log_partition_spec;
+
+statement ok
+create table my_datalake.default.metadata_log_partition_spec (
+	a integer,
+	b integer
+);
+
+statement ok
+alter table my_datalake.default.metadata_log_partition_spec set partitioned by (a);
+
+statement ok
+insert into my_datalake.default.metadata_log_partition_spec values (1, 10);
+
+statement ok con1
+begin
+
+statement ok con2
+begin
+
+statement ok con2
+alter table my_datalake.default.metadata_log_partition_spec set partitioned by (b);
+
+statement ok con2
+commit
+
+statement ok con1
+alter table my_datalake.default.metadata_log_partition_spec drop column b;
+
+query I con1
+select alias(COLUMNS(*)) from my_datalake.default.metadata_log_partition_spec limit 1;
+----
+a
+
+# Dropping column b can't be committed because the current partition spec needs it
+statement error con1
+commit
+----
+<REGEX>:.*Failed to commit.*
+
+# --- Sort orders and default-sort-order-id ---
+
+statement ok
+drop table if exists my_datalake.default.metadata_log_sort_order;
+
+statement ok
+create table my_datalake.default.metadata_log_sort_order (
+	a integer,
+	b integer
+);
+
+statement ok
+alter table my_datalake.default.metadata_log_sort_order set sorted by (a);
+
+statement ok
+insert into my_datalake.default.metadata_log_sort_order values (1, 10);
+
+statement ok con1
+begin
+
+statement ok con2
+begin
+
+statement ok con2
+alter table my_datalake.default.metadata_log_sort_order set sorted by (b);
+
+statement ok con2
+commit
+
+# con1's active sort order still references a, not b. This also checks that
+# reconstruction restores the historical default order, not just the order map.
+statement ok con1
+alter table my_datalake.default.metadata_log_sort_order drop column b;
+
+query I con1
+select alias(COLUMNS(*)) from my_datalake.default.metadata_log_sort_order limit 1;
+----
+a
+
+statement ok con1
+rollback

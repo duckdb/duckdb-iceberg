@@ -27,12 +27,105 @@ unique_ptr<MultiFileReader> IcebergAvroMultiFileReader::CreateInstance(const Tab
 	return make_uniq<IcebergAvroMultiFileReader>(table.function_info);
 }
 
-static unordered_map<string, string> GetAvroMetadata(InsertionOrderPreservingMap<Value> &&metadata) {
-	unordered_map<string, string> result;
-	for (auto &[key, value] : metadata) {
-		result.emplace(key, value.GetValue<string>());
+static optional<int32_t> TryGetMetadataInt(const InsertionOrderPreservingMap<Value> &metadata, const string &key) {
+	auto entry = metadata.find(key);
+	if (entry == metadata.end()) {
+		return nullopt;
 	}
-	return result;
+	try {
+		return std::stoi(entry->second.GetValue<string>());
+	} catch (...) {
+		return nullopt;
+	}
+}
+
+static optional<string> TryGetMetadataString(const InsertionOrderPreservingMap<Value> &metadata, const string &key) {
+	auto entry = metadata.find(key);
+	if (entry == metadata.end()) {
+		return nullopt;
+	}
+	return entry->second.GetValue<string>();
+}
+
+static string ManifestMetadataErrorPrefix(const string &path) {
+	if (path.empty()) {
+		return "Manifest";
+	}
+	return StringUtil::Format("Manifest '%s'", path);
+}
+
+static int32_t GetRequiredMetadataInt(const InsertionOrderPreservingMap<Value> &metadata, const string &key,
+                                      const string &path) {
+	auto value = TryGetMetadataInt(metadata, key);
+	if (!value) {
+		throw InvalidConfigurationException("%s is missing required Avro key-value metadata field '%s'",
+		                                    ManifestMetadataErrorPrefix(path), key);
+	}
+	return *value;
+}
+
+static string GetRequiredMetadataString(const InsertionOrderPreservingMap<Value> &metadata, const string &key,
+                                        const string &path) {
+	auto value = TryGetMetadataString(metadata, key);
+	if (!value) {
+		throw InvalidConfigurationException("%s is missing required Avro key-value metadata field '%s'",
+		                                    ManifestMetadataErrorPrefix(path), key);
+	}
+	return *value;
+}
+
+static optional<int32_t> TryParseSchemaIdFromSchemaJson(const string &schema_json) {
+	using namespace duckdb_yyjson;
+
+	auto doc = std::unique_ptr<yyjson_doc, void (*)(yyjson_doc *)>(
+	    yyjson_read(schema_json.c_str(), schema_json.size(), 0), yyjson_doc_free);
+	if (!doc) {
+		return nullopt;
+	}
+	auto root = yyjson_doc_get_root(doc.get());
+	if (!root) {
+		return nullopt;
+	}
+	auto schema_id_val = yyjson_obj_get(root, "schema-id");
+	if (!schema_id_val || !yyjson_is_int(schema_id_val)) {
+		return nullopt;
+	}
+	return static_cast<int32_t>(yyjson_get_int(schema_id_val));
+}
+
+static IcebergManifestMetadata ParseManifestMetadata(const InsertionOrderPreservingMap<Value> &metadata,
+                                                     const string &path) {
+	auto schema_id = TryGetMetadataInt(metadata, "schema-id");
+	if (!schema_id) {
+		auto schema_json = GetRequiredMetadataString(metadata, "schema", path);
+		schema_id = TryParseSchemaIdFromSchemaJson(schema_json);
+		if (!schema_id) {
+			throw InvalidConfigurationException(
+			    "%s is missing required Avro key-value metadata field 'schema-id' and its 'schema' JSON does not "
+			    "contain one",
+			    ManifestMetadataErrorPrefix(path));
+		}
+	}
+
+	auto partition_spec_id = GetRequiredMetadataInt(metadata, "partition-spec-id", path);
+	auto format_version = GetRequiredMetadataInt(metadata, "format-version", path);
+
+	IcebergManifestContentType content = IcebergManifestContentType::DATA;
+	auto content_str = TryGetMetadataString(metadata, "content");
+	if (content_str) {
+		if (*content_str == "data") {
+			content = IcebergManifestContentType::DATA;
+		} else if (*content_str == "deletes") {
+			content = IcebergManifestContentType::DELETE;
+		} else {
+			throw InvalidConfigurationException("%s has invalid Avro key-value metadata content '%s'",
+			                                    ManifestMetadataErrorPrefix(path), content);
+		}
+	} else if (format_version > 1) {
+		throw InvalidConfigurationException("%s has invalid Avro key-value metadata, content is missing",
+		                                    ManifestMetadataErrorPrefix(path));
+	}
+	return IcebergManifestMetadata(*schema_id, partition_spec_id, format_version, content);
 }
 
 namespace manifest_list {
@@ -501,7 +594,11 @@ ReaderInitializeType IcebergAvroMultiFileReader::InitializeReader(
 			auto &manifest_scan_info = avro_scan_info.Cast<IcebergManifestFileScanInfo>();
 			auto file_idx = reader_data.reader->file_list_idx.GetIndex();
 			auto &manifest_list_entry = manifest_scan_info.manifest_files[file_idx];
-			manifest_list_entry.metadata = GetAvroMetadata(reader_data.reader->GetMetadata());
+			auto manifest_path = manifest_list_entry.file.manifest_path.empty()
+			                         ? reader_data.reader->GetFileName()
+			                         : manifest_list_entry.file.manifest_path;
+			manifest_list_entry.manifest_metadata.emplace(
+			    ParseManifestMetadata(reader_data.reader->GetMetadata(), manifest_path));
 		}
 		for (auto &partition_spec : avro_scan_info.metadata.partition_specs) {
 			for (auto &spec_field : partition_spec.second.fields) {
@@ -543,13 +640,13 @@ void IcebergAvroMultiFileReader::FinalizeChunk(ClientContext &context, const Mul
 		auto manifest_file_idx = reader.file_list_idx.GetIndex();
 		auto &manifest_file = manifest_scan_info.manifest_files[manifest_file_idx];
 
-		idx_t start_index = manifest_file.manifest_entries.size();
+		auto &manifest_entries = manifest_file.GetOrCreateManifestEntries();
+		idx_t start_index = manifest_entries.size();
 		manifest_file::ManifestReader::ReadChunk(output_chunk, manifest_scan_info.partition_field_id_to_type, metadata,
-		                                         manifest_file.manifest_entries);
+		                                         manifest_entries);
 		if (manifest_scan_info.read_state) {
 			auto &read_state = *manifest_scan_info.read_state;
-			read_state.PushBatch(
-			    ManifestReadBatch(manifest_file_idx, start_index, manifest_file.manifest_entries.size()));
+			read_state.PushBatch(ManifestReadBatch(manifest_file_idx, start_index, manifest_entries.size()));
 		}
 		break;
 	}

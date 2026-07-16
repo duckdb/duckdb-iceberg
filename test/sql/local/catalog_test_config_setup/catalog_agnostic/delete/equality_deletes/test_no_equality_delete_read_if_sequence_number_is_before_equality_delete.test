@@ -73,9 +73,6 @@ select count(*) from duckdb_logs_parsed('HTTP') where request.url like '%-equali
 ----
 0
 
-statement ok
-set iceberg_use_metadata_log = false;
-
 # the optimizer should also not be created in this case.
 query II
 explain select * from equality_delete_sequence_number_tests AT (VERSION => getvariable('last_snapshot_number')) order by all;

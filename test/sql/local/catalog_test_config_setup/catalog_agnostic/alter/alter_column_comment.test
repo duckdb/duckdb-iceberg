@@ -1,0 +1,77 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/alter/alter_column_comment.test
+# group: [alter]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+statement ok
+SET default_transaction_invalidation_policy='SYNTACTIC_ERRORS_DO_NOT_INVALIDATE';
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+set enable_logging=true
+
+statement ok
+set logging_level='debug'
+
+statement ok
+drop table if exists my_datalake.default.comment_table;
+
+statement ok
+create table my_datalake.default.comment_table(
+	id INTEGER,
+	name VARCHAR,
+	payload STRUCT(city VARCHAR, zip INTEGER)
+);
+
+statement ok
+COMMENT ON COLUMN my_datalake.default.comment_table.id IS 'Primary identifier';
+
+statement ok
+describe my_datalake.default.comment_table;
+
+query II
+select column_name, comment from duckdb_columns()
+where database_name = 'my_datalake' and table_name = 'comment_table'
+order by column_index;
+----
+id	Primary identifier
+name	NULL
+payload	NULL
+
+statement ok
+COMMENT ON COLUMN my_datalake.default.comment_table.id IS NULL;
+
+# FIXME: we have to issue another query to re-fetch the updated state of the table
+statement ok
+select * from my_datalake.default.comment_table LIMIT 0;
+
+query II
+select column_name, comment from duckdb_columns()
+where database_name = 'my_datalake' and table_name = 'comment_table'
+order by column_index;
+----
+id	NULL
+name	NULL
+payload	NULL
+
+statement error
+COMMENT ON COLUMN my_datalake.default.comment_table.missing IS 'nope';
+----
+Catalog Error: Column with name 'missing' does not exist on the table 'comment_table', COMMENT ON COLUMN failed
+
+# Nested struct fields are not supported by COMMENT ON COLUMN yet. The parser
+# only supports relation qualification plus a single column identifier.
+statement error
+COMMENT ON COLUMN my_datalake.default.comment_table.payload.city IS 'nested city';
+----
+<REGEX>:(.*Parser Error.*Too many qualifications found.*|.*Parser Error.*Invalid column reference.*)
