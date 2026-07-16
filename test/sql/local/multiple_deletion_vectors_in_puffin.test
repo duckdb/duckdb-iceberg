@@ -11,8 +11,7 @@ require iceberg
 query II
 SELECT id, source
 FROM iceberg_scan(
-    '__WORKING_DIRECTORY__/data/persistent/multi_blob_deletion_vectors/warehouse/default/multi_blob_deletion_vectors',
-    allow_moved_paths = true
+    '__WORKING_DIRECTORY__/data/persistent/multi_blob_deletion_vectors/warehouse/default/multi_blob_deletion_vectors'
 )
 ORDER BY id;
 ----

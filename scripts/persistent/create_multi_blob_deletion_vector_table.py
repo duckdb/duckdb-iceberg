@@ -126,8 +126,8 @@ def build_table() -> Path:
 
     catalog = SqlCatalog(
         "persistent",
-        uri=f"sqlite:///{OUTPUT_ROOT.resolve()}/catalog.db",
-        warehouse=f"file://{OUTPUT_ROOT.resolve() / 'warehouse'}",
+        uri=f"sqlite:///{OUTPUT_ROOT}/catalog.db",
+        warehouse=str(OUTPUT_ROOT / "warehouse"),
     )
     catalog.create_namespace("default")
     schema = Schema(
@@ -175,15 +175,14 @@ def build_table() -> Path:
 
     data_files_by_source = {}
     for data_file in data_files:
-        parquet_path = data_file.file_path.removeprefix("file://")
-        sources = pq.read_table(parquet_path, columns=["source"])["source"].unique().to_pylist()
+        sources = pq.read_table(data_file.file_path, columns=["source"])["source"].unique().to_pylist()
         assert len(sources) == 1
         data_files_by_source[sources[0]] = data_file
     assert set(data_files_by_source) == {"first", "second"}
 
-    table_root = Path(table.location().removeprefix("file://"))
+    table_root = Path(table.location())
     puffin_path = table_root / "data" / "multiple-deletion-vectors.puffin"
-    puffin_location = f"file://{puffin_path}"
+    puffin_location = str(puffin_path)
     blobs = [deletion_vector_blob(1), deletion_vector_blob(0, 2)]
     blob_locations = write_puffin(
         puffin_path,
@@ -198,7 +197,7 @@ def build_table() -> Path:
     with DeleteManifestWriterV3(
         spec=PartitionSpec(spec_id=0),
         schema=table.schema(),
-        output_file=table.io.new_output(f"file://{delete_manifest_path}"),
+        output_file=table.io.new_output(str(delete_manifest_path)),
         snapshot_id=SNAPSHOT_ID,
         avro_compression="gzip",
     ) as writer:
@@ -234,7 +233,7 @@ def build_table() -> Path:
 
     manifest_list_path = table_root / "metadata" / "snap-multiple-deletion-vectors.avro"
     with ManifestListWriterV3(
-        output_file=table.io.new_output(f"file://{manifest_list_path}"),
+        output_file=table.io.new_output(str(manifest_list_path)),
         snapshot_id=SNAPSHOT_ID,
         parent_snapshot_id=base_snapshot.snapshot_id,
         sequence_number=sequence_number,
@@ -242,7 +241,7 @@ def build_table() -> Path:
     ) as manifest_list_writer:
         manifest_list_writer.add_manifests([*data_manifests, delete_manifest])
 
-    old_metadata = json.loads(Path(table.metadata_location.removeprefix("file://")).read_text())
+    old_metadata = json.loads(Path(table.metadata_location).read_text())
     timestamp_ms = base_snapshot.timestamp_ms + 1
     old_metadata["format-version"] = 3
     old_metadata["next-row-id"] = 6
@@ -261,7 +260,7 @@ def build_table() -> Path:
                 "total-data-files": "2",
                 "total-records": "6",
             },
-            "manifest-list": f"file://{manifest_list_path}",
+            "manifest-list": str(manifest_list_path),
             "schema-id": table.schema().schema_id,
         }
     )
