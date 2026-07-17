@@ -39,3 +39,8 @@ query I
 select typeof(b) from iceberg_scan('__TEST_DIR__/iceberg_table')
 ----
 VARCHAR
+
+query I
+select operation from iceberg_snapshots('__TEST_DIR__/iceberg_table')
+----
+append

@@ -1,0 +1,59 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/functions/test_snapshot_operation.test
+# description: Snapshot summary.operation is labeled append/delete/overwrite correctly
+# group: [functions]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.snapshot_operation_test;
+
+statement ok
+CREATE TABLE my_datalake.default.snapshot_operation_test AS SELECT range AS id FROM range(10);
+
+query I
+SELECT operation FROM iceberg_snapshots(my_datalake.default.snapshot_operation_test)
+ORDER BY sequence_number DESC
+LIMIT 1;
+----
+append
+
+statement ok
+INSERT INTO my_datalake.default.snapshot_operation_test SELECT range AS id FROM range(10, 20);
+
+query I
+SELECT operation FROM iceberg_snapshots(my_datalake.default.snapshot_operation_test)
+ORDER BY sequence_number DESC
+LIMIT 1;
+----
+append
+
+statement ok
+DELETE FROM my_datalake.default.snapshot_operation_test WHERE id % 2 = 0;
+
+query I
+SELECT operation FROM iceberg_snapshots(my_datalake.default.snapshot_operation_test)
+ORDER BY sequence_number DESC
+LIMIT 1;
+----
+delete
+
+statement ok
+UPDATE my_datalake.default.snapshot_operation_test SET id = id + 1000 WHERE id = 1;
+
+query I
+SELECT operation FROM iceberg_snapshots(my_datalake.default.snapshot_operation_test)
+ORDER BY sequence_number DESC
+LIMIT 1;
+----
+overwrite

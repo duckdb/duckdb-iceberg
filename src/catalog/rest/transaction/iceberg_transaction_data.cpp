@@ -218,7 +218,7 @@ void IcebergTransactionData::AddUpdateSnapshot(vector<IcebergManifestEntry> &&de
 	auto data_manifest_file = IcebergManifestListEntry::CreateFromEntries(
 	    fs, sequence_number, table_metadata, data_manifest_metadata, std::move(data_files), next_row_id);
 
-	auto add_snapshot = make_uniq<IcebergAddSnapshot>(table_info);
+	auto add_snapshot = make_uniq<IcebergAddSnapshot>(table_info, IcebergSnapshotOperationType::OVERWRITE);
 	add_snapshot->AddManifestFile(std::move(delete_manifest_file));
 	add_snapshot->AddManifestFile(std::move(data_manifest_file));
 	add_snapshot->altered_manifests = std::move(altered_manifests);
