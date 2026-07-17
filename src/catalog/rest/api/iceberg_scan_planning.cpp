@@ -14,10 +14,12 @@
 #include "catalog/rest/storage/iceberg_authorization.hpp"
 #include "core/expression/iceberg_value.hpp"
 #include "core/metadata/partition/iceberg_partition_spec.hpp"
+#include "rest_catalog/objects/completed_planning_result.hpp"
 #include "rest_catalog/objects/data_file.hpp"
-#include "rest_catalog/objects/equality_delete_file.hpp"
+#include "rest_catalog/objects/fetch_scan_tasks_request.hpp"
+#include "rest_catalog/objects/fetch_scan_tasks_result.hpp"
 #include "rest_catalog/objects/load_credentials_response.hpp"
-#include "rest_catalog/objects/position_delete_file.hpp"
+#include "rest_catalog/objects/scan_tasks.hpp"
 
 #include <chrono>
 #include <thread>
@@ -73,109 +75,6 @@ static string GetRequiredString(yyjson_val *obj, const char *key) {
 	return yyjson_get_str(value);
 }
 
-static string AddEscapesToBlob(const string &hexadecimal_string) {
-	if (hexadecimal_string.size() % 2 != 0) {
-		throw InvalidInputException("Invalid odd-length hexadecimal Iceberg REST primitive value");
-	}
-	string result;
-	result.reserve(hexadecimal_string.size() * 2);
-	for (idx_t i = 0; i < hexadecimal_string.size(); i += 2) {
-		result += "\\x";
-		result += hexadecimal_string.substr(i, 2);
-	}
-	return result;
-}
-
-static Value PrimitiveValue(const rest_api_objects::PrimitiveTypeValue &value, const LogicalType &type) {
-	if (value.is_null) {
-		return Value(type);
-	}
-	switch (type.id()) {
-	case LogicalTypeId::BOOLEAN:
-		if (value.boolean_type_value) {
-			return Value::BOOLEAN(value.boolean_type_value->value);
-		}
-		break;
-	case LogicalTypeId::INTEGER:
-		if (value.integer_type_value) {
-			return Value::INTEGER(value.integer_type_value->value);
-		}
-		break;
-	case LogicalTypeId::BIGINT:
-		if (value.long_type_value) {
-			return Value::BIGINT(value.long_type_value->value);
-		}
-		break;
-	case LogicalTypeId::FLOAT:
-		if (value.float_type_value) {
-			return Value::FLOAT(static_cast<float>(value.float_type_value->value));
-		}
-		break;
-	case LogicalTypeId::DOUBLE:
-		if (value.double_type_value) {
-			return Value::DOUBLE(value.double_type_value->value);
-		}
-		break;
-	case LogicalTypeId::DECIMAL:
-		if (value.decimal_type_value) {
-			return Value(value.decimal_type_value->value).DefaultCastAs(type);
-		}
-		break;
-	case LogicalTypeId::VARCHAR:
-		if (value.string_type_value) {
-			return Value(value.string_type_value->value);
-		}
-		break;
-	case LogicalTypeId::UUID:
-		if (value.uuidtype_value) {
-			return Value(value.uuidtype_value->value).DefaultCastAs(type);
-		}
-		break;
-	case LogicalTypeId::DATE:
-		if (value.date_type_value) {
-			return Value(value.date_type_value->value).DefaultCastAs(type);
-		}
-		break;
-	case LogicalTypeId::TIME:
-		if (value.time_type_value) {
-			return Value(value.time_type_value->value).DefaultCastAs(type);
-		}
-		break;
-	case LogicalTypeId::TIMESTAMP:
-		if (value.timestamp_type_value) {
-			return Value(value.timestamp_type_value->value).DefaultCastAs(type);
-		}
-		break;
-	case LogicalTypeId::TIMESTAMP_TZ:
-		if (value.timestamp_tz_type_value) {
-			return Value(value.timestamp_tz_type_value->value).DefaultCastAs(type);
-		}
-		break;
-	case LogicalTypeId::TIMESTAMP_NS:
-		if (value.timestamp_nano_type_value) {
-			return Value(value.timestamp_nano_type_value->value).DefaultCastAs(type);
-		}
-		break;
-	case LogicalTypeId::TIMESTAMP_TZ_NS:
-		if (value.timestamp_tz_nano_type_value) {
-			return Value(value.timestamp_tz_nano_type_value->value).DefaultCastAs(type);
-		}
-		break;
-	case LogicalTypeId::BLOB:
-		if (value.binary_type_value) {
-			return Value::BLOB(AddEscapesToBlob(value.binary_type_value->value));
-		}
-		if (value.fixed_type_value) {
-			return Value::BLOB(AddEscapesToBlob(value.fixed_type_value->value));
-		}
-		break;
-	default:
-		break;
-	}
-	throw InvalidInputException("Iceberg REST scan-planning returned a primitive value incompatible with type %s",
-	                            type.ToString());
-}
-
 static void CopyCountMap(const optional<rest_api_objects::CountMap> &source, unordered_map<int32_t, int64_t> &target) {
 	if (!source || !source->keys || !source->values) {
 		return;
@@ -202,7 +101,7 @@ static void CopyValueMap(const optional<rest_api_objects::ValueMap> &source, con
 		if (!column) {
 			continue;
 		}
-		auto value = PrimitiveValue((*source->values)[i], column->type);
+		auto value = IcebergColumnDefinition::ParsePrimitiveValue(column->type, (*source->values)[i]);
 		if (value.IsNull()) {
 			continue;
 		}
@@ -259,7 +158,8 @@ static IcebergDataFile ConvertContentFile(const rest_api_objects::ContentFile &s
 		}
 		auto partition_type = fields[i].transform.GetSerializedType(column->type);
 		result.partition_info.push_back(
-		    IcebergPartitionInfo {fields[i].partition_field_id, PrimitiveValue(source.partition[i], partition_type)});
+		    IcebergPartitionInfo {fields[i].partition_field_id,
+		                          IcebergColumnDefinition::ParsePrimitiveValue(partition_type, source.partition[i])});
 	}
 	return result;
 }
@@ -277,69 +177,48 @@ static PlannedContentFile ConvertDataFile(const rest_api_objects::DataFile &sour
 	return PlannedContentFile {std::move(result), source.content_file.spec_id};
 }
 
-static PlannedContentFile ConvertDeleteFile(yyjson_val *value, const IcebergTableMetadata &metadata) {
-	auto content = GetRequiredString(value, "content");
-	if (content == "position-deletes") {
-		auto source = rest_api_objects::PositionDeleteFile::FromJSON(value);
-		auto result =
-		    ConvertContentFile(source.content_file, metadata, IcebergManifestEntryContentType::POSITION_DELETES);
-		result.content_offset = source.content_offset;
-		result.content_size_in_bytes = source.content_size_in_bytes;
-		return PlannedContentFile {std::move(result), source.content_file.spec_id};
+static PlannedContentFile ConvertDeleteFile(rest_api_objects::DeleteFile &source,
+                                            const IcebergTableMetadata &metadata) {
+	if (source.position_delete_file) {
+		auto &position_delete = *source.position_delete_file;
+		auto result = ConvertContentFile(position_delete.content_file, metadata,
+		                                 IcebergManifestEntryContentType::POSITION_DELETES);
+		result.content_offset = position_delete.content_offset;
+		result.content_size_in_bytes = position_delete.content_size_in_bytes;
+		return PlannedContentFile {std::move(result), position_delete.content_file.spec_id};
 	}
-	if (content == "equality-deletes") {
-		auto source = rest_api_objects::EqualityDeleteFile::FromJSON(value);
-		auto result =
-		    ConvertContentFile(source.content_file, metadata, IcebergManifestEntryContentType::EQUALITY_DELETES);
-		if (source.equality_ids) {
-			result.equality_ids = *source.equality_ids;
+	if (source.equality_delete_file) {
+		auto &equality_delete = *source.equality_delete_file;
+		auto result = ConvertContentFile(equality_delete.content_file, metadata,
+		                                 IcebergManifestEntryContentType::EQUALITY_DELETES);
+		if (equality_delete.equality_ids) {
+			result.equality_ids = *equality_delete.equality_ids;
 		}
-		return PlannedContentFile {std::move(result), source.content_file.spec_id};
+		return PlannedContentFile {std::move(result), equality_delete.content_file.spec_id};
 	}
-	throw InvalidInputException("Unknown Iceberg REST scan-planning delete-file content '%s'", content);
+	throw InvalidInputException("Iceberg REST scan-planning returned an invalid delete file");
 }
 
-static void ParseTasks(yyjson_val *root, const IcebergTableMetadata &metadata, PlanningAccumulator &result) {
+static void AppendTasks(rest_api_objects::ScanTasks tasks, const IcebergTableMetadata &metadata,
+                        PlanningAccumulator &result) {
 	vector<idx_t> local_delete_indexes;
-	auto deletes = yyjson_obj_get(root, "delete-files");
-	if (deletes) {
-		if (!yyjson_is_arr(deletes)) {
-			throw InvalidInputException("Iceberg REST scan-planning 'delete-files' must be an array");
-		}
-		size_t idx, count;
-		yyjson_val *value;
-		yyjson_arr_foreach(deletes, idx, count, value) {
+	if (tasks.delete_files) {
+		for (auto &delete_file : *tasks.delete_files) {
 			local_delete_indexes.push_back(result.delete_files.size());
-			result.delete_files.push_back(ConvertDeleteFile(value, metadata));
+			result.delete_files.push_back(ConvertDeleteFile(delete_file, metadata));
 		}
 	}
 
-	auto file_tasks = yyjson_obj_get(root, "file-scan-tasks");
-	if (file_tasks) {
-		if (!yyjson_is_arr(file_tasks)) {
-			throw InvalidInputException("Iceberg REST scan-planning 'file-scan-tasks' must be an array");
-		}
-		size_t idx, count;
-		yyjson_val *value;
-		yyjson_arr_foreach(file_tasks, idx, count, value) {
-			auto data_file_value = yyjson_obj_get(value, "data-file");
-			if (!data_file_value) {
-				throw InvalidInputException("Iceberg REST file scan task is missing 'data-file'");
-			}
+	if (tasks.file_scan_tasks) {
+		for (auto &file_task : *tasks.file_scan_tasks) {
 			PlannedFileTask task;
-			task.data_file = ConvertDataFile(rest_api_objects::DataFile::FromJSON(data_file_value), metadata);
-			auto refs = yyjson_obj_get(value, "delete-file-references");
-			if (refs) {
-				if (!yyjson_is_arr(refs)) {
-					throw InvalidInputException("Iceberg REST 'delete-file-references' must be an array");
-				}
-				size_t ref_idx, ref_count;
-				yyjson_val *ref;
-				yyjson_arr_foreach(refs, ref_idx, ref_count, ref) {
-					if (!yyjson_is_int(ref) || (yyjson_is_sint(ref) && yyjson_get_sint(ref) < 0)) {
-						throw InvalidInputException("Iceberg REST delete-file reference must be an integer");
+			task.data_file = ConvertDataFile(file_task.data_file, metadata);
+			if (file_task.delete_file_references) {
+				for (auto reference : *file_task.delete_file_references) {
+					if (reference < 0) {
+						throw InvalidInputException("Iceberg REST delete-file reference must be non-negative");
 					}
-					auto local_index = NumericCast<idx_t>(yyjson_get_uint(ref));
+					auto local_index = NumericCast<idx_t>(reference);
 					if (local_index >= local_delete_indexes.size()) {
 						throw InvalidInputException("Iceberg REST delete-file reference %d is out of range",
 						                            local_index);
@@ -351,34 +230,10 @@ static void ParseTasks(yyjson_val *root, const IcebergTableMetadata &metadata, P
 		}
 	}
 
-	auto plan_tasks = yyjson_obj_get(root, "plan-tasks");
-	if (plan_tasks) {
-		if (!yyjson_is_arr(plan_tasks)) {
-			throw InvalidInputException("Iceberg REST scan-planning 'plan-tasks' must be an array");
+	if (tasks.plan_tasks) {
+		for (auto &plan_task : *tasks.plan_tasks) {
+			result.plan_tasks.push_back(std::move(plan_task.value));
 		}
-		size_t idx, count;
-		yyjson_val *value;
-		yyjson_arr_foreach(plan_tasks, idx, count, value) {
-			if (!yyjson_is_str(value)) {
-				throw InvalidInputException("Iceberg REST plan task must be a string");
-			}
-			result.plan_tasks.emplace_back(yyjson_get_str(value));
-		}
-	}
-}
-
-static void ParseCredentials(yyjson_val *root, IcebergRESTScanPlan &result) {
-	auto credentials = yyjson_obj_get(root, "storage-credentials");
-	if (!credentials) {
-		return;
-	}
-	if (!yyjson_is_arr(credentials)) {
-		throw InvalidInputException("Iceberg REST scan-planning 'storage-credentials' must be an array");
-	}
-	size_t idx, count;
-	yyjson_val *value;
-	yyjson_arr_foreach(credentials, idx, count, value) {
-		result.storage_credentials.push_back(rest_api_objects::StorageCredential::FromJSON(value));
 	}
 }
 
@@ -396,10 +251,10 @@ static void FetchPlanTasks(ClientContext &context, IcebergTableInformation &tabl
 		}
 		auto endpoint = TableEndpoint(table_info);
 		endpoint.AddPathComponent(IRCPathComponent::RegularComponent("tasks"));
+		rest_api_objects::FetchScanTasksRequest request;
+		request.plan_task.value = accumulator.plan_tasks[task_idx];
 		unique_ptr<yyjson_mut_doc, YyjsonDocDeleter> doc(yyjson_mut_doc_new(nullptr));
-		auto root = yyjson_mut_obj(doc.get());
-		yyjson_mut_doc_set_root(doc.get(), root);
-		yyjson_mut_obj_add_strcpy(doc.get(), root, "plan-task", accumulator.plan_tasks[task_idx].c_str());
+		yyjson_mut_doc_set_root(doc.get(), request.ToJSON(doc.get()));
 		auto body = ICUtils::JsonToString(std::move(doc));
 		auto headers = PlanningHeaders(context);
 		headers.Insert("Idempotency-Key", UUID::ToString(UUID::GenerateRandomUUID()));
@@ -409,7 +264,9 @@ static void FetchPlanTasks(ClientContext &context, IcebergTableInformation &tabl
 			ThrowResponseError(endpoint, *response);
 		}
 		auto response_doc = ICUtils::APIResultToDoc(response->body);
-		ParseTasks(yyjson_doc_get_root(response_doc.get()), table_info.table_metadata, accumulator);
+		auto tasks =
+		    rest_api_objects::FetchScanTasksResult::FromJSON(yyjson_doc_get_root(response_doc.get())).scan_tasks;
+		AppendTasks(std::move(tasks), table_info.table_metadata, accumulator);
 	}
 }
 
@@ -514,8 +371,11 @@ bool IcebergScanPlanning::Plan(ClientContext &context, IcebergTableInformation &
 			auto root = yyjson_doc_get_root(doc.get());
 			auto status = GetRequiredString(root, "status");
 			if (status == "completed") {
-				ParseTasks(root, table_info.table_metadata, accumulator);
-				ParseCredentials(root, result);
+				auto completed = rest_api_objects::CompletedPlanningResult::FromJSON(root);
+				AppendTasks(std::move(completed.scan_tasks), table_info.table_metadata, accumulator);
+				if (completed.object_5.storage_credentials) {
+					result.storage_credentials = std::move(*completed.object_5.storage_credentials);
+				}
 				auto plan_id = yyjson_obj_get(root, "plan-id");
 				if (plan_id && yyjson_is_str(plan_id)) {
 					active_plan_id = string(yyjson_get_str(plan_id));

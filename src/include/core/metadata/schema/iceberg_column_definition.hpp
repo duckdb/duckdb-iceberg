@@ -22,6 +22,8 @@ public:
 public:
 	static LogicalType ParsePrimitiveType(const rest_api_objects::PrimitiveType &type);
 	static LogicalType ParsePrimitiveTypeString(const string &type_str);
+	static Value ParsePrimitiveValue(const LogicalType &type,
+	                                 const rest_api_objects::PrimitiveTypeValue &primitive_value);
 	bool IsIcebergPrimitiveType() const;
 
 	ColumnDefinition GetColumnDefinition() const;

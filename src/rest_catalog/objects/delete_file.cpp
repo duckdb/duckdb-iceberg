@@ -38,25 +38,31 @@ DeleteFile DeleteFile::Copy() const {
 }
 
 string DeleteFile::TryFromJSON(yyjson_val *obj) {
+	auto content = yyjson_obj_get(obj, "content");
+	if (!content || !yyjson_is_str(content)) {
+		return "DeleteFile discriminator property 'content' must be a string";
+	}
 	string error;
-	do {
+	auto content_value = string(yyjson_get_str(content));
+	if (content_value == "position-deletes") {
 		position_delete_file.emplace();
 		error = position_delete_file->TryFromJSON(obj);
-		if (error.empty()) {
-			break;
-		} else {
+		if (!error.empty()) {
 			position_delete_file = nullopt;
+			return error;
 		}
+		return "";
+	}
+	if (content_value == "equality-deletes") {
 		equality_delete_file.emplace();
 		error = equality_delete_file->TryFromJSON(obj);
-		if (error.empty()) {
-			break;
-		} else {
+		if (!error.empty()) {
 			equality_delete_file = nullopt;
+			return error;
 		}
-		return "DeleteFile failed to parse, none of the oneOf candidates matched";
-	} while (false);
-	return "";
+		return "";
+	}
+	return StringUtil::Format("Unknown DeleteFile discriminator value '%s'", content_value);
 }
 
 void DeleteFile::PopulateJSON(yyjson_mut_doc *doc, yyjson_mut_val *obj) const {

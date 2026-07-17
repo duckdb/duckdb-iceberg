@@ -52,13 +52,6 @@ void IcebergMultiFileList::ScanPositionalDeleteFile(const BoundIcebergManifestEn
 		if (!deletes) {
 			continue;
 		}
-		if (shared_state->rest_planned) {
-			auto refs = shared_state->rest_delete_files_by_data_file.find(name.GetString());
-			if (refs == shared_state->rest_delete_files_by_data_file.end() ||
-			    !refs->second.count(bound_entry.entry.data_file.file_path)) {
-				continue;
-			}
-		}
 		deletes->AddRow(row_id);
 	}
 }
