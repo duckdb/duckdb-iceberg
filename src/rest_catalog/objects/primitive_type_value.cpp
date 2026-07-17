@@ -26,6 +26,7 @@ PrimitiveTypeValue PrimitiveTypeValue::FromJSON(yyjson_val *obj) {
 
 PrimitiveTypeValue PrimitiveTypeValue::Copy() const {
 	PrimitiveTypeValue res;
+	res.is_null = is_null;
 	if (boolean_type_value.has_value()) {
 		res.boolean_type_value.emplace();
 		(*res.boolean_type_value) = (*boolean_type_value).Copy();
@@ -94,6 +95,10 @@ PrimitiveTypeValue PrimitiveTypeValue::Copy() const {
 }
 
 string PrimitiveTypeValue::TryFromJSON(yyjson_val *obj) {
+	if (yyjson_is_null(obj)) {
+		is_null = true;
+		return "";
+	}
 	string error;
 	boolean_type_value.emplace();
 	error = boolean_type_value->TryFromJSON(obj);
@@ -204,6 +209,9 @@ string PrimitiveTypeValue::TryFromJSON(yyjson_val *obj) {
 }
 
 yyjson_mut_val *PrimitiveTypeValue::ToJSON(yyjson_mut_doc *doc) const {
+	if (is_null) {
+		return yyjson_mut_null(doc);
+	}
 	if (long_type_value.has_value()) {
 		return long_type_value->ToJSON(doc);
 	} else if (double_type_value.has_value()) {

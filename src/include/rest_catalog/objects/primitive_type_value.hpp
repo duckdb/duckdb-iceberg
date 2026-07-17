@@ -48,6 +48,8 @@ public:
 	yyjson_mut_val *ToJSON(yyjson_mut_doc *doc) const;
 
 public:
+	//! Partition values may be null even though the generated OpenAPI union has no null alternative.
+	bool is_null = false;
 	optional<BooleanTypeValue> boolean_type_value;
 	optional<IntegerTypeValue> integer_type_value;
 	optional<LongTypeValue> long_type_value;

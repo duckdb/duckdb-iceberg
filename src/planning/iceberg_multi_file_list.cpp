@@ -15,6 +15,9 @@
 #include "duckdb/planner/expression/bound_conjunction_expression.hpp"
 #include "duckdb/planner/expression/bound_function_expression.hpp"
 #include "duckdb/planner/expression/bound_reference_expression.hpp"
+#include "duckdb/planner/expression/bound_constant_expression.hpp"
+#include "duckdb/planner/expression/bound_comparison_expression.hpp"
+#include "duckdb/planner/expression/bound_operator_expression.hpp"
 #include "duckdb/planner/expression_iterator.hpp"
 #include "duckdb/planner/filter/expression_filter.hpp"
 #include "duckdb/planner/filter/table_filter_functions.hpp"
@@ -34,6 +37,10 @@
 #include "duckdb/common/types/geometry.hpp"
 #include "core/metadata/manifest/iceberg_manifest.hpp"
 #include "catalog/rest/transaction/iceberg_transaction.hpp"
+#include "catalog/rest/api/iceberg_scan_planning.hpp"
+#include "catalog/rest/api/iceberg_type.hpp"
+#include "catalog/rest/catalog_entry/table/iceberg_table_entry.hpp"
+#include "catalog/rest/iceberg_catalog.hpp"
 #include "core/expression/iceberg_predicate_stats.hpp"
 #include "core/metadata/iceberg_table_metadata.hpp"
 #include "storage/statistics/iceberg_variant_statistics.hpp"
@@ -63,6 +70,135 @@ namespace {
 
 static unique_ptr<Expression> CreateReferenceExpression(const LogicalType &type) {
 	return make_uniq<BoundReferenceExpression>(type, 0ULL);
+}
+
+static rest_api_objects::Term RESTReference(const string &column_name) {
+	rest_api_objects::Term result;
+	result.reference.emplace();
+	result.reference->value = column_name;
+	return result;
+}
+
+static unique_ptr<rest_api_objects::Expression> RESTLiteral(const string &type, const string &column_name,
+                                                            const Value &value) {
+	if (value.IsNull()) {
+		return nullptr;
+	}
+	auto result = make_uniq<rest_api_objects::Expression>();
+	result->literal_expression.emplace();
+	result->literal_expression->type.value = type;
+	result->literal_expression->term = RESTReference(column_name);
+	try {
+		result->literal_expression->value = IcebergTypeHelper::PrimitiveTypeFromValue(value);
+	} catch (...) {
+		return nullptr;
+	}
+	return result;
+}
+
+static unique_ptr<rest_api_objects::Expression> RESTUnary(const string &type, const string &column_name) {
+	auto result = make_uniq<rest_api_objects::Expression>();
+	result->unary_expression.emplace();
+	result->unary_expression->type.value = type;
+	result->unary_expression->term = RESTReference(column_name);
+	return result;
+}
+
+static unique_ptr<rest_api_objects::Expression> RESTAnd(unique_ptr<rest_api_objects::Expression> left,
+                                                        unique_ptr<rest_api_objects::Expression> right) {
+	if (!left) {
+		return right;
+	}
+	if (!right) {
+		return left;
+	}
+	auto result = make_uniq<rest_api_objects::Expression>();
+	result->and_or_expression.emplace();
+	result->and_or_expression->type.value = "and";
+	result->and_or_expression->left = std::move(left);
+	result->and_or_expression->right = std::move(right);
+	return result;
+}
+
+static optional<string> RESTComparisonType(ExpressionType type, bool flip) {
+	switch (type) {
+	case ExpressionType::COMPARE_EQUAL:
+		return "eq";
+	case ExpressionType::COMPARE_NOTEQUAL:
+		return "not-eq";
+	case ExpressionType::COMPARE_LESSTHAN:
+		return flip ? "gt" : "lt";
+	case ExpressionType::COMPARE_LESSTHANOREQUALTO:
+		return flip ? "gt-eq" : "lt-eq";
+	case ExpressionType::COMPARE_GREATERTHAN:
+		return flip ? "lt" : "gt";
+	case ExpressionType::COMPARE_GREATERTHANOREQUALTO:
+		return flip ? "lt-eq" : "gt-eq";
+	default:
+		return nullopt;
+	}
+}
+
+static unique_ptr<rest_api_objects::Expression> TryConvertRESTFilter(const Expression &expr,
+                                                                     const string &column_name) {
+	if (expr.GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
+		auto &conjunction = expr.Cast<BoundConjunctionExpression>();
+		const bool is_and = expr.GetExpressionType() == ExpressionType::CONJUNCTION_AND;
+		unique_ptr<rest_api_objects::Expression> result;
+		for (auto &child : conjunction.GetChildren()) {
+			auto converted = TryConvertRESTFilter(*child, column_name);
+			if (!converted) {
+				// Dropping an unsupported conjunct is safe; dropping an OR branch is not.
+				if (!is_and) {
+					return nullptr;
+				}
+				continue;
+			}
+			if (!result) {
+				result = std::move(converted);
+				continue;
+			}
+			auto combined = make_uniq<rest_api_objects::Expression>();
+			combined->and_or_expression.emplace();
+			combined->and_or_expression->type.value = is_and ? "and" : "or";
+			combined->and_or_expression->left = std::move(result);
+			combined->and_or_expression->right = std::move(converted);
+			result = std::move(combined);
+		}
+		return result;
+	}
+	if (BoundComparisonExpression::IsComparison(expr)) {
+		auto &comparison = expr.Cast<BoundFunctionExpression>();
+		auto &left = BoundComparisonExpression::Left(comparison);
+		auto &right = BoundComparisonExpression::Right(comparison);
+		bool flip = false;
+		optional_ptr<const BoundConstantExpression> constant;
+		if (left.GetExpressionClass() == ExpressionClass::BOUND_REF &&
+		    right.GetExpressionClass() == ExpressionClass::BOUND_CONSTANT) {
+			constant = &right.Cast<BoundConstantExpression>();
+		} else if (right.GetExpressionClass() == ExpressionClass::BOUND_REF &&
+		           left.GetExpressionClass() == ExpressionClass::BOUND_CONSTANT) {
+			constant = &left.Cast<BoundConstantExpression>();
+			flip = true;
+		} else {
+			return nullptr;
+		}
+		auto type = RESTComparisonType(expr.GetExpressionType(), flip);
+		return type ? RESTLiteral(*type, column_name, constant->GetValue()) : nullptr;
+	}
+	if (expr.GetExpressionClass() == ExpressionClass::BOUND_OPERATOR) {
+		auto &op = expr.Cast<BoundOperatorExpression>();
+		if (op.GetChildren().size() != 1 || op.GetChildren()[0]->GetExpressionClass() != ExpressionClass::BOUND_REF) {
+			return nullptr;
+		}
+		if (expr.GetExpressionType() == ExpressionType::OPERATOR_IS_NULL) {
+			return RESTUnary("is-null", column_name);
+		}
+		if (expr.GetExpressionType() == ExpressionType::OPERATOR_IS_NOT_NULL) {
+			return RESTUnary("not-null", column_name);
+		}
+	}
+	return nullptr;
 }
 
 static void AppendColumnPath(const ColumnIndex &column_index, vector<idx_t> &path) {
@@ -307,6 +443,13 @@ void IcebergMultiFileList::SetScanOrder(unique_ptr<RowGroupOrderOptions> options
 	scan_order_applied = false;
 }
 
+void IcebergMultiFileList::DisableRESTPlanning() {
+	lock_guard<mutex> guard(shared_state->lock);
+	if (!shared_state->initialized) {
+		shared_state->rest_planning_enabled = false;
+	}
+}
+
 unique_ptr<ExpressionFilter> IcebergMultiFileList::GetFilterForColumnIndex(const IcebergTableFilters &filter_set,
                                                                            const ColumnIndex &column_index) const {
 	auto primary_index = column_index.GetPrimaryIndex();
@@ -356,10 +499,6 @@ void IcebergMultiFileList::Bind(vector<LogicalType> &return_types, vector<Identi
 		auto schema = metadata.GetSchemaFromId(snapshot_info.schema_id);
 		shared_state->scan_info =
 		    make_shared_ptr<IcebergScanInfo>(iceberg_path, std::move(temp_data), snapshot_info, *schema);
-	}
-
-	if (!view_initialized) {
-		InitializeFiles(guard);
 	}
 
 	auto &schema = GetSchema().columns;
@@ -464,8 +603,12 @@ vector<OpenFileInfo> IcebergMultiFileList::GetAllFiles() const {
 	vector<OpenFileInfo> file_list;
 	//! Lock is required because it reads the 'manifest_entries' vector
 	lock_guard<mutex> guard(shared_state->lock);
-	for (idx_t i = 0; i < data_manifest_entries.size(); i++) {
-		file_list.push_back(GetFileInternal(i, guard));
+	for (idx_t i = 0;; i++) {
+		auto file = GetFileInternal(i, guard);
+		if (file.path.empty()) {
+			break;
+		}
+		file_list.push_back(std::move(file));
 	}
 	return file_list;
 }
@@ -1260,6 +1403,13 @@ IcebergMultiFileList::GetEqualityDeletesForFile(const BoundIcebergManifestEntry 
 	for (; it != shared_state->equality_delete_data.end(); it++) {
 		auto &files = it->second->files;
 		for (auto &file : files) {
+			if (shared_state->rest_planned) {
+				auto refs = shared_state->rest_delete_files_by_data_file.find(data_file.file_path);
+				if (refs == shared_state->rest_delete_files_by_data_file.end() ||
+				    !refs->second.count(file.source_file_path)) {
+					continue;
+				}
+			}
 			auto &partition_spec = metadata.partition_specs.at(file.partition_spec_id);
 			if (partition_spec.IsPartitioned()) {
 				if (file.partition_spec_id != manifest_file.partition_spec_id) {
@@ -1323,6 +1473,53 @@ void IcebergMultiFileList::InitializeSharedState(lock_guard<mutex> &guard) const
 
 	auto &snapshot_info = shared_state->scan_info->snapshot_info;
 	if (snapshot_info.snapshot) {
+		if (shared_state->rest_planning_enabled && shared_state->table && !HasTransactionData()) {
+			auto &table_info = shared_state->table->table_info;
+			auto &catalog = table_info.catalog;
+			if (catalog.supported_urls.find(IcebergScanPlanning::PLAN_ENDPOINT) != catalog.supported_urls.end()) {
+				rest_api_objects::PlanTableScanRequest request;
+				request.snapshot_id = snapshot_info.snapshot->snapshot_id;
+				request.case_sensitive = true;
+				request.use_snapshot_schema = snapshot_info.snapshot->snapshot_id != GetMetadata().current_snapshot_id;
+				unique_ptr<rest_api_objects::Expression> rest_filter;
+				for (auto &filter : table_filters) {
+					if (filter.first >= GetSchema().columns.size()) {
+						continue;
+					}
+					auto converted =
+					    TryConvertRESTFilter(*filter.second->expr, GetSchema().columns[filter.first]->name);
+					rest_filter = RESTAnd(std::move(rest_filter), std::move(converted));
+				}
+				request.filter = std::move(rest_filter);
+				if (scan_order_options) {
+					if (scan_order_options->row_limit.IsValid()) {
+						request.min_rows_requested = NumericCast<int64_t>(scan_order_options->row_limit.GetIndex() +
+						                                                  scan_order_options->row_group_offset);
+					}
+					if (scan_order_options->column_idx.HasPrimaryIndex() &&
+					    scan_order_options->column_idx.GetPrimaryIndex() < GetSchema().columns.size()) {
+						rest_api_objects::FieldName stats_field;
+						stats_field.value = GetSchema().columns[scan_order_options->column_idx.GetPrimaryIndex()]->name;
+						request.stats_fields.emplace();
+						request.stats_fields->push_back(std::move(stats_field));
+					}
+				}
+				IcebergRESTScanPlan plan;
+				if (IcebergScanPlanning::Plan(context, table_info, std::move(request), plan)) {
+					shared_state->rest_planned = true;
+					shared_state->rest_delete_files_by_data_file = std::move(plan.delete_files_by_data_file);
+					shared_state->committed_data_manifests = std::move(plan.data_manifests);
+					shared_state->committed_delete_manifests = std::move(plan.delete_manifests);
+					for (auto &credential : plan.storage_credentials) {
+						table_info.storage_credentials.emplace_back(credential);
+					}
+					if (!plan.storage_credentials.empty()) {
+						table_info.LoadCredentials(context);
+					}
+				}
+			}
+		}
+
 		//! Load the snapshot
 		auto iceberg_path = GetPath();
 		auto &snapshot_info = GetSnapshot();
@@ -1331,7 +1528,9 @@ void IcebergMultiFileList::InitializeSharedState(lock_guard<mutex> &guard) const
 		auto &fs = FileSystem::GetFileSystem(context);
 
 		vector<IcebergManifestListEntry> manifest_list_entries;
-		if (HasTransactionData() && !GetTransactionData().alters.empty()) {
+		if (shared_state->rest_planned) {
+			// The REST adapter populated the committed manifest vectors directly.
+		} else if (HasTransactionData() && !GetTransactionData().alters.empty()) {
 			auto &transaction_data = GetTransactionData();
 			manifest_list_entries = transaction_data.existing_manifest_list;
 		} else {
@@ -1366,7 +1565,7 @@ void IcebergMultiFileList::InitializeSharedState(lock_guard<mutex> &guard) const
 			idx_t reserve_size = file.existing_files_count + file.added_files_count + file.deleted_files_count;
 			manifest.GetManifestEntries().reserve(reserve_size);
 		}
-		if (!shared_state->committed_delete_manifests.empty()) {
+		if (!shared_state->rest_planned && !shared_state->committed_delete_manifests.empty()) {
 			shared_state->delete_manifest_scan = AvroScan::ScanManifest(
 			    snapshot_info, shared_state->committed_delete_manifests, options, fs, iceberg_path, metadata, context);
 			shared_state->delete_manifest_reader =
@@ -1399,12 +1598,18 @@ void IcebergMultiFileList::InitializeSharedState(lock_guard<mutex> &guard) const
 	}
 
 	idx_t transaction_manifest_idx = shared_state->committed_data_manifests.size();
+	if (shared_state->rest_planned) {
+		for (idx_t i = 0; i < shared_state->committed_data_manifests.size(); i++) {
+			auto &manifest = shared_state->committed_data_manifests[i];
+			shared_state->read_state.PushBatch(ManifestReadBatch {i, 0, manifest.GetManifestEntries().size()});
+		}
+	}
 	for (auto &manifest : shared_state->transaction_data_manifests) {
 		shared_state->read_state.PushBatch(
 		    ManifestReadBatch {transaction_manifest_idx++, 0, manifest.get().GetManifestEntries().size()});
 	}
 
-	if (!shared_state->committed_data_manifests.empty()) {
+	if (!shared_state->rest_planned && !shared_state->committed_data_manifests.empty()) {
 		auto &metadata = GetMetadata();
 		auto &snapshot_info = GetSnapshot();
 		auto iceberg_path = GetPath();

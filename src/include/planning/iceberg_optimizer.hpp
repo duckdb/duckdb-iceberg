@@ -19,6 +19,9 @@ public:
 public:
 	GuaranteeEqualityDeleteColumnsOptimizer(ClientContext &context);
 	void VisitOperator(unique_ptr<LogicalOperator> &op);
+
+private:
+	void VisitOperator(unique_ptr<LogicalOperator> &op, bool below_write);
 };
 
 class IcebergOptimizer {

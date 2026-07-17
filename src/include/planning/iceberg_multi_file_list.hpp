@@ -108,6 +108,11 @@ private:
 	mutable ManifestEntryReadState read_state;
 
 	mutable bool initialized = false;
+	mutable bool rest_planning_enabled = true;
+	//! True when committed manifests were synthesized from REST file scan tasks.
+	mutable bool rest_planned = false;
+	//! In REST plans, delete applicability is explicit rather than sequence/partition inferred.
+	mutable case_insensitive_map_t<unordered_set<string>> rest_delete_files_by_data_file;
 
 	//! Scanned delete manifests and their owners.
 	mutable vector<IcebergManifestListEntry> committed_delete_manifests;
@@ -158,6 +163,7 @@ public:
 	void SetTable(IcebergTableEntry *table);
 	void SetOptions(const IcebergOptions &options);
 	void SetScanOrder(unique_ptr<RowGroupOrderOptions> options);
+	void DisableRESTPlanning();
 
 	void Bind(vector<LogicalType> &return_types, vector<Identifier> &names);
 	unique_ptr<IcebergMultiFileList> PushdownInternal(ClientContext &context, TableFilterSet &new_filters,

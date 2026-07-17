@@ -65,7 +65,11 @@ string LiteralExpression::TryFromJSON(yyjson_val *obj) {
 }
 
 yyjson_mut_val *LiteralExpression::ToJSON(yyjson_mut_doc *doc) const {
-	throw InternalException("Can't serialize this class (LiteralExpression)");
+	yyjson_mut_val *obj = yyjson_mut_obj(doc);
+	yyjson_mut_obj_add_val(doc, obj, "type", type.ToJSON(doc));
+	yyjson_mut_obj_add_val(doc, obj, "term", term.ToJSON(doc));
+	yyjson_mut_obj_add_val(doc, obj, "value", value.ToJSON(doc));
+	return obj;
 }
 
 } // namespace rest_api_objects
