@@ -7,6 +7,7 @@ import pytest
 from scripts.data_generators.connections import IcebergConnection
 from scripts.data_generators.integration_config import (
     GENERATOR_CATALOG_NAMES,
+    get_spark_runtime,
     resolve_active_catalog,
     resolve_pyspark_runtime,
 )
@@ -51,7 +52,10 @@ def pytest_configure(config: pytest.Config) -> None:
             allowed_catalogs=GENERATOR_CATALOG_NAMES,
             purpose="data generator tests",
         )
-        config._spark_runtime, _ = resolve_pyspark_runtime(purpose="data generator tests")
+        if runtime_name := config._connection_args.pop("runtime", None):
+            config._spark_runtime = get_spark_runtime(runtime_name)
+        else:
+            config._spark_runtime, _ = resolve_pyspark_runtime(purpose="data generator tests")
     except RuntimeError as exc:
         raise pytest.UsageError(str(exc)) from exc
 
@@ -77,7 +81,7 @@ def catalog_mapping(generator_case) -> dict[str, str]:
 
 
 @pytest.fixture
-def _generator_status(request: pytest.FixtureRequest, active_catalog: str, generator_case) -> None:
+def _generator_status(request: pytest.FixtureRequest, active_catalog: str, generator_case, spark_runtime) -> None:
     skip_reason = generator_case.skips.get(active_catalog)
     if skip_reason is not None:
         pytest.skip(skip_reason)
@@ -85,6 +89,14 @@ def _generator_status(request: pytest.FixtureRequest, active_catalog: str, gener
     supported_catalogs = generator_case.supported_catalogs
     if supported_catalogs is not None and active_catalog not in supported_catalogs:
         pytest.skip(f"{generator_case.table} does not apply to catalog '{active_catalog}'")
+
+    missing_runtime_capabilities = generator_case.required_runtime_capabilities - spark_runtime.capabilities
+    if missing_runtime_capabilities:
+        missing_caps = ", ".join(sorted(missing_runtime_capabilities))
+        pytest.skip(
+            f"{generator_case.table} requires Spark runtime capabilities [{missing_caps}], "
+            f"but runtime '{spark_runtime.name}' only provides [{', '.join(sorted(spark_runtime.capabilities))}]"
+        )
 
     xfail_reason = generator_case.expected_failures.get(active_catalog)
     if xfail_reason is not None:

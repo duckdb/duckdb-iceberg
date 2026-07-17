@@ -1,0 +1,45 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/partition_statistics/test_partition_stats_v2_mor_deletes_updates.test
+# description: verify iceberg_table_partition_stats on the Spark v2 merge-on-read deletes and updates table
+# group: [partition_statistics]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+set variable v2_mor_latest_snapshot = (
+    select snapshot_id
+    from iceberg_snapshots(my_datalake.default.partition_stats_v2_mor_deletes_updates)
+    order by timestamp_ms desc
+    limit 1
+);
+
+query TIIIIIIIII
+select
+    partition,
+    spec_id,
+    data_record_count,
+    data_file_count,
+    total_data_file_size_in_bytes,
+    position_delete_record_count,
+    position_delete_file_count,
+    equality_delete_record_count,
+    equality_delete_file_count,
+    total_record_count
+from iceberg_table_partition_stats('my_datalake.default.partition_stats_v2_mor_deletes_updates')
+where statistics_snapshot_id = getvariable('v2_mor_latest_snapshot')
+order by all;
+----
+{'region': NULL}	0	1	1	1098	1	1	0	0	NULL
+{'region': apac}	0	1	1	1137	0	0	0	0	NULL
+{'region': eu}	0	4	3	3515	2	1	0	0	NULL
+{'region': us}	0	3	2	2393	1	1	0	0	NULL

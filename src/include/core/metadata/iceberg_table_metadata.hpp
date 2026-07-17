@@ -146,6 +146,8 @@ public:
 	case_insensitive_map_t<string> table_properties;
 
 	vector<IcebergMetadataLogItem> metadata_log;
+	vector<rest_api_objects::StatisticsFile> statistics;
+	vector<rest_api_objects::PartitionStatisticsFile> partition_statistics;
 
 public:
 	IcebergTableMetadata() = default;
@@ -154,6 +156,8 @@ private:
 	int32_t current_schema_id;
 	//! schema_id -> schema
 	unordered_map<int32_t, shared_ptr<IcebergTableSchema>> schemas;
+	yyjson_mut_val *StatisticsToJSON(yyjson_mut_doc *doc) const;
+	yyjson_mut_val *PartitionStatisticsToJSON(yyjson_mut_doc *doc) const;
 };
 
 } // namespace duckdb

@@ -1,0 +1,108 @@
+{
+  "location": "data/persistent/table_statistics_bad_footer",
+  "table-uuid": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+  "last-updated-ms": 1700000001000,
+  "last-column-id": 2,
+  "schemas": [
+    {
+      "type": "struct",
+      "fields": [
+        {
+          "id": 1,
+          "name": "id",
+          "type": "long",
+          "required": false
+        },
+        {
+          "id": 2,
+          "name": "region",
+          "type": "string",
+          "required": false
+        }
+      ],
+      "schema-id": 0,
+      "identifier-field-ids": []
+    }
+  ],
+  "current-schema-id": 0,
+  "partition-specs": [
+    {
+      "spec-id": 0,
+      "fields": []
+    }
+  ],
+  "default-spec-id": 0,
+  "last-partition-id": 999,
+  "properties": {},
+  "current-snapshot-id": 1002,
+  "snapshots": [
+    {
+      "snapshot-id": 1001,
+      "sequence-number": 1,
+      "timestamp-ms": 1700000000000,
+      "manifest-list": "data/persistent/table_statistics_bad_footer/metadata/snap-1001.avro",
+      "summary": {
+        "operation": "append"
+      },
+      "schema-id": 0
+    },
+    {
+      "snapshot-id": 1002,
+      "sequence-number": 2,
+      "timestamp-ms": 1700000001000,
+      "manifest-list": "data/persistent/table_statistics_bad_footer/metadata/snap-1002.avro",
+      "summary": {
+        "operation": "append"
+      },
+      "schema-id": 0
+    }
+  ],
+  "snapshot-log": [
+    {
+      "snapshot-id": 1001,
+      "timestamp-ms": 1700000000000
+    },
+    {
+      "snapshot-id": 1002,
+      "timestamp-ms": 1700000001000
+    }
+  ],
+  "metadata-log": [],
+  "sort-orders": [
+    {
+      "order-id": 0,
+      "fields": []
+    }
+  ],
+  "default-sort-order-id": 0,
+  "refs": {
+    "main": {
+      "snapshot-id": 1002,
+      "type": "branch"
+    }
+  },
+  "statistics": [
+    {
+      "snapshot-id": 1001,
+      "statistics-path": "metadata/stats-bad-footer.puffin",
+      "file-size-in-bytes": 178,
+      "file-footer-size-in-bytes": 165,
+      "blob-metadata": [
+        {
+          "type": "apache-datasketches-theta-v1",
+          "snapshot-id": 1001,
+          "sequence-number": 1,
+          "fields": [
+            1
+          ],
+          "properties": {
+            "ndv": "3"
+          }
+        }
+      ]
+    }
+  ],
+  "partition-statistics": [],
+  "format-version": 2,
+  "last-sequence-number": 2
+}

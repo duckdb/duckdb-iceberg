@@ -461,6 +461,18 @@ IcebergTableMetadata IcebergTableMetadata::FromTableMetadata(const rest_api_obje
 			res.metadata_log.emplace_back(item.metadata_file, timestamp_ms_t(item.timestamp_ms));
 		}
 	}
+	if (table_metadata.statistics) {
+		res.statistics.reserve(table_metadata.statistics->size());
+		for (auto &statistics_file : *table_metadata.statistics) {
+			res.statistics.emplace_back(statistics_file.Copy());
+		}
+	}
+	if (table_metadata.partition_statistics) {
+		res.partition_statistics.reserve(table_metadata.partition_statistics->size());
+		for (auto &statistics_file : *table_metadata.partition_statistics) {
+			res.partition_statistics.emplace_back(statistics_file.Copy());
+		}
+	}
 	return res;
 }
 
@@ -577,6 +589,22 @@ yyjson_mut_val *IcebergTableMetadata::TablePropertiesToJSON(yyjson_mut_doc *doc)
 	return properties_obj;
 }
 
+yyjson_mut_val *IcebergTableMetadata::StatisticsToJSON(yyjson_mut_doc *doc) const {
+	auto statistics_array = yyjson_mut_arr(doc);
+	for (auto &statistics_file : statistics) {
+		yyjson_mut_arr_add_val(statistics_array, statistics_file.ToJSON(doc));
+	}
+	return statistics_array;
+}
+
+yyjson_mut_val *IcebergTableMetadata::PartitionStatisticsToJSON(yyjson_mut_doc *doc) const {
+	auto statistics_array = yyjson_mut_arr(doc);
+	for (auto &statistics_file : partition_statistics) {
+		yyjson_mut_arr_add_val(statistics_array, statistics_file.ToJSON(doc));
+	}
+	return statistics_array;
+}
+
 yyjson_mut_val *IcebergTableMetadata::SnapshotsToJSON(yyjson_mut_doc *doc) const {
 	auto snapshots_array = yyjson_mut_arr(doc);
 	for (auto &it : snapshots) {
@@ -635,6 +663,12 @@ string IcebergTableMetadata::ToJSON() const {
 	}
 	yyjson_mut_obj_add_val(doc, root_obj, "snapshots", SnapshotsToJSON(doc));
 	yyjson_mut_obj_add_val(doc, root_obj, "snapshot-log", SnapshotLogToJSON(doc));
+	if (!statistics.empty()) {
+		yyjson_mut_obj_add_val(doc, root_obj, "statistics", StatisticsToJSON(doc));
+	}
+	if (!partition_statistics.empty()) {
+		yyjson_mut_obj_add_val(doc, root_obj, "partition-statistics", PartitionStatisticsToJSON(doc));
+	}
 	// yyjson_mut_obj_add_val(doc, root_obj, "metadata-log", MetadataLogToJSON(doc));
 	yyjson_mut_obj_add_val(doc, root_obj, "sort-orders", SortOrdersToJSON(doc));
 	yyjson_mut_obj_add_val(doc, root_obj, "default-sort-order-id",

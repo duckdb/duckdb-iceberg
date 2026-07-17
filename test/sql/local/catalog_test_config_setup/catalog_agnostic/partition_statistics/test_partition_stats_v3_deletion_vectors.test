@@ -1,0 +1,46 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/partition_statistics/test_partition_stats_v3_deletion_vectors.test
+# description: verify iceberg_table_partition_stats on the Spark v3 deletion vectors partition statistics table
+# group: [partition_statistics]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+set variable v3_dv_latest_snapshot = (
+    select snapshot_id
+    from iceberg_snapshots(my_datalake.default.partition_stats_v3_deletion_vectors)
+    order by timestamp_ms desc
+    limit 1
+);
+
+query TIIIIIIIIII
+select
+    partition,
+    spec_id,
+    data_record_count,
+    data_file_count,
+    total_data_file_size_in_bytes,
+    position_delete_record_count,
+    position_delete_file_count,
+    equality_delete_record_count,
+    equality_delete_file_count,
+    total_record_count,
+    dv_count
+from iceberg_table_partition_stats('my_datalake.default.partition_stats_v3_deletion_vectors')
+where statistics_snapshot_id = getvariable('v3_dv_latest_snapshot')
+order by all;
+----
+{'bucket': NULL}	0	1	1	1087	0	0	0	0	NULL	0
+{'bucket': center}	0	1	1	1133	0	0	0	0	NULL	0
+{'bucket': left}	0	3	2	3021	2	0	0	0	NULL	1
+{'bucket': right}	0	4	3	4161	2	0	0	0	NULL	1
