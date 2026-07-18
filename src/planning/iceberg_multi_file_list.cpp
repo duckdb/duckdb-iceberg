@@ -505,7 +505,21 @@ unique_ptr<NodeStatistics> IcebergMultiFileList::GetCardinality(ClientContext &c
 		}
 		cardinality -= manifest.added_rows_count;
 	}
+	//! Subtract pending metadata-only deletes, still included in the manifest totals until commit.
+	auto invalidated_rows = GetTransactionInvalidatedRowCount();
+	cardinality -= invalidated_rows <= cardinality ? invalidated_rows : cardinality;
 	return make_uniq<NodeStatistics>(cardinality, cardinality);
+}
+
+idx_t IcebergMultiFileList::GetTransactionInvalidatedRowCount() const {
+	idx_t invalidated_rows = 0;
+	for (auto &invalidated : shared_state->transaction_invalidated_files) {
+		auto entry = shared_state->data_file_record_count.find(invalidated);
+		if (entry != shared_state->data_file_record_count.end()) {
+			invalidated_rows += static_cast<idx_t>(entry->second);
+		}
+	}
+	return invalidated_rows;
 }
 
 BoundIcebergManifestEntry IcebergMultiFileList::GetManifestEntry(idx_t file_id) const {
@@ -555,6 +569,12 @@ void IcebergMultiFileList::GetStatistics(vector<PartitionStatistics> &result) co
 		}
 	}
 
+	//! Pending metadata-only deletes are still in the manifest totals until commit. Their per-file
+	//! record counts only exist once files are enumerated, so force that before discounting them.
+	if (!shared_state->transaction_invalidated_files.empty()) {
+		(void)GetTotalFileCount();
+	}
+
 	idx_t count = 0;
 	for (idx_t i = 0; i < data_manifests.size(); i++) {
 		auto &manifest = data_manifests[i].entry.file;
@@ -564,6 +584,9 @@ void IcebergMultiFileList::GetStatistics(vector<PartitionStatistics> &result) co
 		count += manifest.existing_rows_count;
 		count += manifest.added_rows_count;
 	}
+	//! Subtract pending metadata-only deletes, still included in the manifest totals until commit.
+	auto invalidated_rows = GetTransactionInvalidatedRowCount();
+	count -= invalidated_rows <= count ? invalidated_rows : count;
 
 	PartitionStatistics partition_stats;
 	partition_stats.count = count;

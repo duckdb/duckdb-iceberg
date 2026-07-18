@@ -221,6 +221,9 @@ protected:
 	//! NOTE: this requires the lock because it modifies the 'data_files' vector, potentially invalidating references
 	optional_ptr<const BoundIcebergManifestEntry> GetDataFile(idx_t file_id, lock_guard<mutex> &guard) const;
 
+	//! Total rows in data files dropped by an in-transaction metadata-only delete.
+	idx_t GetTransactionInvalidatedRowCount() const;
+
 	unique_ptr<ExpressionFilter> GetFilterForColumnIndex(const IcebergTableFilters &filter_set,
 	                                                     const ColumnIndex &column_index) const;
 
