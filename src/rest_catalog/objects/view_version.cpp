@@ -109,15 +109,16 @@ string ViewVersion::TryFromJSON(yyjson_val *obj) {
 		return "ViewVersion required property 'representations' is missing";
 	} else {
 		if (yyjson_is_arr(representations_val)) {
-			size_t idx, max;
-			yyjson_val *val;
-			yyjson_arr_foreach(representations_val, idx, max, val) {
-				ViewRepresentation tmp;
-				error = tmp.TryFromJSON(val);
+			size_t representations_idx, representations_max;
+			yyjson_val *representations_item_val;
+			yyjson_arr_foreach(representations_val, representations_idx, representations_max,
+			                   representations_item_val) {
+				ViewRepresentation representations_item;
+				error = representations_item.TryFromJSON(representations_item_val);
 				if (!error.empty()) {
 					return error;
 				}
-				representations.emplace_back(std::move(tmp));
+				representations.emplace_back(std::move(representations_item));
 			}
 		} else {
 			return StringUtil::Format(

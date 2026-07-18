@@ -43,30 +43,32 @@ FetchPlanningResult FetchPlanningResult::Copy() const {
 
 string FetchPlanningResult::TryFromJSON(yyjson_val *obj) {
 	string error;
-	do {
+	auto discriminator_val = yyjson_obj_get(obj, "status");
+	if (!discriminator_val || !yyjson_is_str(discriminator_val)) {
+		return "FetchPlanningResult discriminator 'status' is missing or is not a string";
+	}
+	string discriminator = yyjson_get_str(discriminator_val);
+	if (discriminator == "completed") {
 		completed_planning_result.emplace();
 		error = completed_planning_result->TryFromJSON(obj);
-		if (error.empty()) {
-			break;
-		} else {
-			completed_planning_result = nullopt;
+		if (!error.empty()) {
+			return error;
 		}
+	} else if (discriminator == "failed") {
 		failed_planning_result.emplace();
 		error = failed_planning_result->TryFromJSON(obj);
-		if (error.empty()) {
-			break;
-		} else {
-			failed_planning_result = nullopt;
+		if (!error.empty()) {
+			return error;
 		}
+	} else if (discriminator == "cancelled") {
 		empty_planning_result.emplace();
 		error = empty_planning_result->TryFromJSON(obj);
-		if (error.empty()) {
-			break;
-		} else {
-			empty_planning_result = nullopt;
+		if (!error.empty()) {
+			return error;
 		}
-		return "FetchPlanningResult failed to parse, none of the oneOf candidates matched";
-	} while (false);
+	} else {
+		return StringUtil::Format("FetchPlanningResult has unknown discriminator value '%s'", discriminator.c_str());
+	}
 	return "";
 }
 

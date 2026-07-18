@@ -26,7 +26,7 @@ AssertTableUUID AssertTableUUID::FromJSON(yyjson_val *obj) {
 
 AssertTableUUID AssertTableUUID::Copy() const {
 	AssertTableUUID res;
-	res.type = type.Copy();
+	res.type = type;
 	res.uuid = uuid;
 	return res;
 }
@@ -37,9 +37,14 @@ string AssertTableUUID::TryFromJSON(yyjson_val *obj) {
 	if (!type_val) {
 		return "AssertTableUUID required property 'type' is missing";
 	} else {
-		error = type.TryFromJSON(type_val);
-		if (!error.empty()) {
-			return error;
+		if (yyjson_is_str(type_val)) {
+			type = yyjson_get_str(type_val);
+		} else {
+			return StringUtil::Format("AssertTableUUID property 'type' is not of type 'string', found '%s' instead",
+			                          yyjson_get_type_desc(type_val));
+		}
+		if (!yyjson_is_null(type_val) && type != "assert-table-uuid") {
+			return "AssertTableUUID property 'type' does not match its required const value";
 		}
 	}
 	auto uuid_val = yyjson_obj_get(obj, "uuid");
@@ -62,8 +67,7 @@ void AssertTableUUID::PopulateJSON(yyjson_mut_doc *doc, yyjson_mut_val *obj) con
 	}
 
 	// Serialize: type
-	yyjson_mut_val *type_val = type.ToJSON(doc);
-	yyjson_mut_obj_add_val(doc, obj, "type", type_val);
+	yyjson_mut_obj_add_strcpy(doc, obj, "type", type.c_str());
 
 	// Serialize: uuid
 	yyjson_mut_obj_add_strcpy(doc, obj, "uuid", uuid.c_str());

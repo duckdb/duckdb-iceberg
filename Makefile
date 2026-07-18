@@ -20,19 +20,3 @@ include make/catalogs/polaris.mk
 
 install_requirements:
 	python3 -m pip install -r scripts/requirements.txt
-
-# Custom makefile targets
-data: data_clean fixture_start
-	python3 -m pytest scripts/data_generators/test_generate_data.py
-	$(call set_active_catalog,local)
-	python3 -m pytest scripts/data_generators/test_generate_data.py
-	$(call set_active_catalog,fixture)
-
-data_large: data data_clean
-	python3 -m pytest scripts/data_generators/test_generate_data.py
-	$(call set_active_catalog,local)
-	python3 -m pytest scripts/data_generators/test_generate_data.py
-	$(call set_active_catalog,fixture)
-
-data_clean:
-	rm -rf data/generated

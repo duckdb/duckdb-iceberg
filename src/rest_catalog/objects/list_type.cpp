@@ -45,6 +45,9 @@ string ListType::TryFromJSON(yyjson_val *obj) {
 			return StringUtil::Format("ListType property 'type' is not of type 'string', found '%s' instead",
 			                          yyjson_get_type_desc(type_val));
 		}
+		if (!yyjson_is_null(type_val) && type != "list") {
+			return "ListType property 'type' does not match its required const value";
+		}
 	}
 	auto element_id_val = yyjson_obj_get(obj, "element-id");
 	if (!element_id_val) {

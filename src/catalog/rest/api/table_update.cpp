@@ -50,7 +50,7 @@ void AssertCreateRequirement::CreateRequirement(DatabaseInstance &db, ClientCont
 	commit_state.table_change.requirements.push_back(rest_api_objects::TableRequirement());
 	auto &req = commit_state.table_change.requirements.back();
 	req.assert_create = rest_api_objects::AssertCreate();
-	req.assert_create->type.value = "assert-create";
+	req.assert_create->type = "assert-create";
 }
 
 AssertTableUUIDRequirement::AssertTableUUIDRequirement(string uuid)
@@ -62,7 +62,7 @@ void AssertTableUUIDRequirement::CreateRequirement(DatabaseInstance &db, ClientC
 	commit_state.table_change.requirements.push_back(rest_api_objects::TableRequirement());
 	auto &req = commit_state.table_change.requirements.back();
 	req.assert_table_uuid = rest_api_objects::AssertTableUUID();
-	req.assert_table_uuid->type.value = "assert-table-uuid";
+	req.assert_table_uuid->type = "assert-table-uuid";
 	req.assert_table_uuid->uuid = uuid;
 }
 
@@ -76,7 +76,7 @@ void AssertCurrentSchemaIdRequirement::CreateRequirement(DatabaseInstance &db, C
 	commit_state.table_change.requirements.push_back(rest_api_objects::TableRequirement());
 	auto &req = commit_state.table_change.requirements.back();
 	req.assert_current_schema_id = rest_api_objects::AssertCurrentSchemaId();
-	req.assert_current_schema_id->type.value = "assert-current-schema-id";
+	req.assert_current_schema_id->type = "assert-current-schema-id";
 	req.assert_current_schema_id->current_schema_id = current_schema_id;
 }
 
@@ -89,7 +89,7 @@ void AssertRefSnapshotId::CreateRequirement(DatabaseInstance &db, ClientContext 
 	commit_state.table_change.requirements.push_back(rest_api_objects::TableRequirement());
 	auto &req = commit_state.table_change.requirements.back();
 	req.assert_ref_snapshot_id = rest_api_objects::AssertRefSnapshotId();
-	req.assert_ref_snapshot_id->type.value = "assert-ref-snapshot-id";
+	req.assert_ref_snapshot_id->type = "assert-ref-snapshot-id";
 	req.assert_ref_snapshot_id->ref = "main";
 	req.assert_ref_snapshot_id->snapshot_id = snapshot_id;
 }
@@ -104,7 +104,7 @@ void AssertLastAssignedFieldIdRequirement::CreateRequirement(DatabaseInstance &d
 	commit_state.table_change.requirements.push_back(rest_api_objects::TableRequirement());
 	auto &req = commit_state.table_change.requirements.back();
 	req.assert_last_assigned_field_id = rest_api_objects::AssertLastAssignedFieldId();
-	req.assert_last_assigned_field_id->type.value = "assert-last-assigned-field-id";
+	req.assert_last_assigned_field_id->type = "assert-last-assigned-field-id";
 	req.assert_last_assigned_field_id->last_assigned_field_id = last_assigned_field_id;
 }
 
@@ -118,7 +118,7 @@ void AssertLastAssignedPartitionIdRequirement::CreateRequirement(DatabaseInstanc
 	commit_state.table_change.requirements.push_back(rest_api_objects::TableRequirement());
 	auto &req = commit_state.table_change.requirements.back();
 	req.assert_last_assigned_partition_id = rest_api_objects::AssertLastAssignedPartitionId();
-	req.assert_last_assigned_partition_id->type.value = "assert-last-assigned-partition-id";
+	req.assert_last_assigned_partition_id->type = "assert-last-assigned-partition-id";
 	req.assert_last_assigned_partition_id->last_assigned_partition_id = last_assigned_partition_id;
 }
 
@@ -131,7 +131,7 @@ void AssertDefaultSpecIdRequirement::CreateRequirement(DatabaseInstance &db, Cli
 	commit_state.table_change.requirements.push_back(rest_api_objects::TableRequirement());
 	auto &req = commit_state.table_change.requirements.back();
 	req.assert_default_spec_id = rest_api_objects::AssertDefaultSpecId();
-	req.assert_default_spec_id->type.value = "assert-default-spec-id";
+	req.assert_default_spec_id->type = "assert-default-spec-id";
 	req.assert_default_spec_id->default_spec_id = default_spec_id;
 }
 

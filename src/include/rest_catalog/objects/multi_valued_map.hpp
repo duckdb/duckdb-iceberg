@@ -12,27 +12,28 @@ using namespace duckdb_yyjson;
 namespace duckdb {
 namespace rest_api_objects {
 
-class TableRequirementType {
+class MultiValuedMap {
 public:
-	TableRequirementType();
-	TableRequirementType(const TableRequirementType &) = delete;
-	TableRequirementType &operator=(const TableRequirementType &) = delete;
-	TableRequirementType(TableRequirementType &&) = default;
-	TableRequirementType &operator=(TableRequirementType &&) = default;
+	MultiValuedMap();
+	MultiValuedMap(const MultiValuedMap &) = delete;
+	MultiValuedMap &operator=(const MultiValuedMap &) = delete;
+	MultiValuedMap(MultiValuedMap &&) = default;
+	MultiValuedMap &operator=(MultiValuedMap &&) = default;
 
 public:
 	// Deserialization
-	static TableRequirementType FromJSON(yyjson_val *obj);
+	static MultiValuedMap FromJSON(yyjson_val *obj);
 	string TryFromJSON(yyjson_val *obj);
 
 	// Copy
-	TableRequirementType Copy() const;
+	MultiValuedMap Copy() const;
 
 	// Serialization
+	void PopulateJSON(yyjson_mut_doc *doc, yyjson_mut_val *obj) const;
 	yyjson_mut_val *ToJSON(yyjson_mut_doc *doc) const;
 
 public:
-	string value;
+	case_insensitive_map_t<vector<string>> additional_properties;
 };
 
 } // namespace rest_api_objects

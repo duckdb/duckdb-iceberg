@@ -100,17 +100,19 @@ string ScanReport::TryFromJSON(yyjson_val *obj) {
 		return "ScanReport required property 'projected-field-ids' is missing";
 	} else {
 		if (yyjson_is_arr(projected_field_ids_val)) {
-			size_t idx, max;
-			yyjson_val *val;
-			yyjson_arr_foreach(projected_field_ids_val, idx, max, val) {
-				int32_t tmp;
-				if (yyjson_is_int(val)) {
-					tmp = yyjson_get_int(val);
+			size_t projected_field_ids_idx, projected_field_ids_max;
+			yyjson_val *projected_field_ids_item_val;
+			yyjson_arr_foreach(projected_field_ids_val, projected_field_ids_idx, projected_field_ids_max,
+			                   projected_field_ids_item_val) {
+				int32_t projected_field_ids_item;
+				if (yyjson_is_int(projected_field_ids_item_val)) {
+					projected_field_ids_item = yyjson_get_int(projected_field_ids_item_val);
 				} else {
-					return StringUtil::Format("ScanReport property 'tmp' is not of type 'integer', found '%s' instead",
-					                          yyjson_get_type_desc(val));
+					return StringUtil::Format(
+					    "ScanReport property 'projected_field_ids_item' is not of type 'integer', found '%s' instead",
+					    yyjson_get_type_desc(projected_field_ids_item_val));
 				}
-				projected_field_ids.emplace_back(std::move(tmp));
+				projected_field_ids.emplace_back(std::move(projected_field_ids_item));
 			}
 		} else {
 			return StringUtil::Format(
@@ -123,17 +125,19 @@ string ScanReport::TryFromJSON(yyjson_val *obj) {
 		return "ScanReport required property 'projected-field-names' is missing";
 	} else {
 		if (yyjson_is_arr(projected_field_names_val)) {
-			size_t idx, max;
-			yyjson_val *val;
-			yyjson_arr_foreach(projected_field_names_val, idx, max, val) {
-				string tmp;
-				if (yyjson_is_str(val)) {
-					tmp = yyjson_get_str(val);
+			size_t projected_field_names_idx, projected_field_names_max;
+			yyjson_val *projected_field_names_item_val;
+			yyjson_arr_foreach(projected_field_names_val, projected_field_names_idx, projected_field_names_max,
+			                   projected_field_names_item_val) {
+				string projected_field_names_item;
+				if (yyjson_is_str(projected_field_names_item_val)) {
+					projected_field_names_item = yyjson_get_str(projected_field_names_item_val);
 				} else {
-					return StringUtil::Format("ScanReport property 'tmp' is not of type 'string', found '%s' instead",
-					                          yyjson_get_type_desc(val));
+					return StringUtil::Format(
+					    "ScanReport property 'projected_field_names_item' is not of type 'string', found '%s' instead",
+					    yyjson_get_type_desc(projected_field_names_item_val));
 				}
-				projected_field_names.emplace_back(std::move(tmp));
+				projected_field_names.emplace_back(std::move(projected_field_names_item));
 			}
 		} else {
 			return StringUtil::Format(

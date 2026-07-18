@@ -63,65 +63,62 @@ TableRequirement TableRequirement::Copy() const {
 
 string TableRequirement::TryFromJSON(yyjson_val *obj) {
 	string error;
-	do {
+	auto discriminator_val = yyjson_obj_get(obj, "type");
+	if (!discriminator_val || !yyjson_is_str(discriminator_val)) {
+		return "TableRequirement discriminator 'type' is missing or is not a string";
+	}
+	string discriminator = yyjson_get_str(discriminator_val);
+	if (discriminator == "assert-create") {
 		assert_create.emplace();
 		error = assert_create->TryFromJSON(obj);
-		if (error.empty()) {
-			break;
-		} else {
-			assert_create = nullopt;
+		if (!error.empty()) {
+			return error;
 		}
+	} else if (discriminator == "assert-table-uuid") {
 		assert_table_uuid.emplace();
 		error = assert_table_uuid->TryFromJSON(obj);
-		if (error.empty()) {
-			break;
-		} else {
-			assert_table_uuid = nullopt;
+		if (!error.empty()) {
+			return error;
 		}
+	} else if (discriminator == "assert-ref-snapshot-id") {
 		assert_ref_snapshot_id.emplace();
 		error = assert_ref_snapshot_id->TryFromJSON(obj);
-		if (error.empty()) {
-			break;
-		} else {
-			assert_ref_snapshot_id = nullopt;
+		if (!error.empty()) {
+			return error;
 		}
+	} else if (discriminator == "assert-last-assigned-field-id") {
 		assert_last_assigned_field_id.emplace();
 		error = assert_last_assigned_field_id->TryFromJSON(obj);
-		if (error.empty()) {
-			break;
-		} else {
-			assert_last_assigned_field_id = nullopt;
+		if (!error.empty()) {
+			return error;
 		}
+	} else if (discriminator == "assert-current-schema-id") {
 		assert_current_schema_id.emplace();
 		error = assert_current_schema_id->TryFromJSON(obj);
-		if (error.empty()) {
-			break;
-		} else {
-			assert_current_schema_id = nullopt;
+		if (!error.empty()) {
+			return error;
 		}
+	} else if (discriminator == "assert-last-assigned-partition-id") {
 		assert_last_assigned_partition_id.emplace();
 		error = assert_last_assigned_partition_id->TryFromJSON(obj);
-		if (error.empty()) {
-			break;
-		} else {
-			assert_last_assigned_partition_id = nullopt;
+		if (!error.empty()) {
+			return error;
 		}
+	} else if (discriminator == "assert-default-spec-id") {
 		assert_default_spec_id.emplace();
 		error = assert_default_spec_id->TryFromJSON(obj);
-		if (error.empty()) {
-			break;
-		} else {
-			assert_default_spec_id = nullopt;
+		if (!error.empty()) {
+			return error;
 		}
+	} else if (discriminator == "assert-default-sort-order-id") {
 		assert_default_sort_order_id.emplace();
 		error = assert_default_sort_order_id->TryFromJSON(obj);
-		if (error.empty()) {
-			break;
-		} else {
-			assert_default_sort_order_id = nullopt;
+		if (!error.empty()) {
+			return error;
 		}
-		return "TableRequirement failed to parse, none of the oneOf candidates matched";
-	} while (false);
+	} else {
+		return StringUtil::Format("TableRequirement has unknown discriminator value '%s'", discriminator.c_str());
+	}
 	return "";
 }
 

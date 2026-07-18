@@ -7,6 +7,7 @@ from parse_openapi_spec import (
     ObjectProperty,
 )
 import os
+import json
 from typing import Dict, List, Tuple, Set, Optional, cast, Callable
 from enum import Enum, auto
 from dataclasses import dataclass, field
@@ -130,6 +131,7 @@ class OneOf:
     name: str
     dereference_style: str
     class_name: str
+    discriminator_value: Optional[str] = None
 
 
 @dataclass
@@ -230,6 +232,7 @@ class CPPClass:
         self.one_of: List[OneOf] = []
         self.all_of: List[AllOf] = []
         self.any_of: List[AnyOf] = []
+        self.discriminator_property: Optional[str] = None
 
         # Parsing code of the TryFromJSON method
         self.required_properties: Dict[str, RequiredProperty] = {}
@@ -284,6 +287,7 @@ class CPPClass:
 
         inherited_properties = self.collect_all_of_property_names(schema)
         self.validate_polymorphic_property_ownership(schema, inherited_properties)
+        refinement_body = self.generate_inherited_property_refinements(object_property, inherited_properties)
 
         required = object_property.required
         if not required:
@@ -312,8 +316,34 @@ class CPPClass:
         for _, item in self.optional_properties.items():
             res.extend([f'\t{x}' for x in self.write_optional_property(item)])
         res.extend([f'\t{x}' for x in self.write_additional_properties()])
-        self.try_from_json_body = res
+        self.try_from_json_body = refinement_body + res
         self.generate_nested_class_definitions()
+
+    def generate_inherited_property_refinements(
+        self, object_property: ObjectProperty, inherited_properties: Set[str]
+    ) -> List[str]:
+        result = []
+        required = set(object_property.required or [])
+        for property_name in object_property.properties.keys() & inherited_properties:
+            property_schema = object_property.properties[property_name]
+            variable_name = safe_cpp_name(property_name) + '_refinement'
+            value_name = variable_name + '_val'
+            result.append(f'auto {value_name} = yyjson_obj_get(obj, "{property_name}");')
+            result.append(f'if ({value_name}) {{')
+            result.append(f'\t{self.generate_variable_type(property_schema)} {variable_name};')
+            assignment = self.generate_assignment(property_schema, variable_name, value_name, True)
+            result.extend([f'\t{x}' for x in assignment])
+            if property_name in required:
+                result.extend(
+                    [
+                        '} else {',
+                        f'''\treturn "{self.name} required property '{property_name}' is missing";''',
+                        '}',
+                    ]
+                )
+            else:
+                result.append('}')
+        return result
 
     def from_array_property(self, schema: ArrayProperty):
         assert schema.type == Property.Type.ARRAY
@@ -437,6 +467,40 @@ class CPPClass:
     def write_one_of(self) -> List[str]:
         if not self.one_of:
             return []
+        if self.discriminator_property and all(item.discriminator_value is not None for item in self.one_of):
+            res = [
+                f'auto discriminator_val = yyjson_obj_get(obj, "{self.discriminator_property}");',
+                'if (!discriminator_val || !yyjson_is_str(discriminator_val)) {',
+                f'''\treturn "{self.name} discriminator '{self.discriminator_property}' is missing or is not a string";''',
+                '}',
+                'string discriminator = yyjson_get_str(discriminator_val);',
+            ]
+            for index, item in enumerate(self.one_of):
+                prefix = 'if' if index == 0 else 'else if'
+                res.append(f'{prefix} (discriminator == {json.dumps(item.discriminator_value)}) {{')
+                is_recursive = item.class_name in self.parse_info.recursive_schemas
+                if is_recursive:
+                    res.append(f'\t{item.name} = make_uniq<{item.class_name}>();')
+                else:
+                    res.append(f'\t{item.name}.emplace();')
+                res.extend(
+                    [
+                        f'\terror = {item.name}->TryFromJSON(obj);',
+                        '\tif (!error.empty()) {',
+                        '\t\treturn error;',
+                        '\t}',
+                        '}',
+                    ]
+                )
+            res.extend(
+                [
+                    'else {',
+                    f'''\treturn StringUtil::Format("{self.name} has unknown discriminator value '%s'", discriminator.c_str());''',
+                    '}',
+                ]
+            )
+            return res
+
         res = []
         res.append('do {')
         for item in self.one_of:
@@ -566,6 +630,12 @@ class CPPClass:
     def direct_copy_expression(self, source: str, schema: Property) -> str:
         if schema.type == Property.Type.PRIMITIVE:
             return source
+        if schema.type == Property.Type.ARRAY:
+            array_property = cast(ArrayProperty, schema)
+            if self.schema_is_directly_copyable(array_property.item_type):
+                return source
+            print(f"Unhandled array copy expression for '{source}'")
+            exit(1)
         if schema.type == Property.Type.OBJECT:
             object_property = cast(ObjectProperty, schema)
             if object_property.is_raw_object():
@@ -579,6 +649,15 @@ class CPPClass:
             return f'{source}.Copy()'
         print(f"Unhandled direct copy expression type for '{source}': {schema.type}")
         exit(1)
+
+    def schema_is_directly_copyable(self, schema: Property) -> bool:
+        if schema.type == Property.Type.PRIMITIVE:
+            return True
+        if schema.type == Property.Type.ARRAY:
+            return self.schema_is_directly_copyable(cast(ArrayProperty, schema).item_type)
+        if schema.type == Property.Type.OBJECT:
+            return cast(ObjectProperty, schema).is_raw_object()
+        return False
 
     def uses_pointer_storage(self, schema: Property) -> bool:
         return (
@@ -614,6 +693,25 @@ class CPPClass:
             res.append(f'{target} = std::move({tmp_name});')
             return res
         return self.generate_assignment(schema, target, source, True, handle_nullable=False)
+
+    def generate_nullable_assignment(self, schema: Property, target: str, source: str) -> List[str]:
+        uses_optional_wrapper = self.uses_optional_wrapper(schema)
+        result = [f'if (yyjson_is_null({source})) {{']
+        result.append(f'\t{target} = {"nullopt" if uses_optional_wrapper else "nullptr"};')
+        result.append('} else {')
+        if uses_optional_wrapper:
+            temporary = f'{target}_tmp'
+            result.append(f'\t{self.generate_variable_type(schema)} {temporary};')
+            assignment = self.generate_assignment(
+                schema, temporary, source, True, handle_nullable=False
+            )
+            result.extend([f'\t{x}' for x in assignment])
+            result.append(f'\t{target} = std::move({temporary});')
+        else:
+            assignment = self.generate_assignment(schema, target, source, True, handle_nullable=False)
+            result.extend([f'\t{x}' for x in assignment])
+        result.append('}')
+        return result
 
     def write_copy_assignment_lines(self, target: str, source: str, schema: Optional[Property]) -> List[str]:
         if schema is None:
@@ -774,10 +872,10 @@ class CPPClass:
             self.all_of.append(AllOf(name=property_name, dereference_style=dereference_style, class_name=class_name))
             self.add_member(property_name, self.generate_variable_type(item), item)
 
-    def generate_any_of(self, property: Property):
-        if not property.any_of:
+    def generate_any_of_items(self, items: List[Property]) -> None:
+        if not items:
             return
-        for item in property.any_of:
+        for item in items:
             assert item.type == Property.Type.SCHEMA_REFERENCE
             self.referenced_schemas.add(item.ref)
 
@@ -795,9 +893,38 @@ class CPPClass:
                 uses_optional_wrapper=uses_optional_wrapper,
             )
 
+    def generate_any_of(self, property: Property):
+        self.generate_any_of_items(property.any_of)
+
+    def composition_items_are_primitive(self, items: List[Property]) -> bool:
+        if not items:
+            return False
+        for item in items:
+            if item.type != Property.Type.SCHEMA_REFERENCE:
+                return False
+            if self.parse_info.parsed_schemas[item.ref].type != Property.Type.PRIMITIVE:
+                return False
+        return True
+
     def generate_one_of(self, property: Property):
         if not property.one_of:
             return
+        # Primitive Iceberg values have semantic alternatives that intentionally
+        # overlap at the JSON-type level (for example int/long and many strings).
+        # Preserve all matching views so the caller's Iceberg type can select one.
+        if self.composition_items_are_primitive(property.one_of):
+            self.generate_any_of_items(property.one_of)
+            return
+
+        discriminator_mapping = {}
+        if property.type == Property.Type.OBJECT:
+            object_property = cast(ObjectProperty, property)
+            if object_property.discriminator:
+                self.discriminator_property = object_property.discriminator.get('propertyName')
+                discriminator_mapping = {
+                    mapped_ref.split('/')[-1]: value
+                    for value, mapped_ref in object_property.discriminator.get('mapping', {}).items()
+                }
         for item in property.one_of:
             assert item.type == Property.Type.SCHEMA_REFERENCE
             self.referenced_schemas.add(item.ref)
@@ -807,7 +934,14 @@ class CPPClass:
             dereference_style = '->' if item.ref in self.parse_info.recursive_schemas else '.'
             uses_optional_wrapper = item.ref not in self.parse_info.recursive_schemas
 
-            self.one_of.append(OneOf(name=property_name, dereference_style=dereference_style, class_name=class_name))
+            self.one_of.append(
+                OneOf(
+                    name=property_name,
+                    dereference_style=dereference_style,
+                    class_name=class_name,
+                    discriminator_value=discriminator_mapping.get(class_name),
+                )
+            )
             self.add_member(
                 property_name,
                 self.optional_member_type(item),
@@ -820,25 +954,43 @@ class CPPClass:
         self, array_name, destination_name, array_property: ArrayProperty, handle_nullable: bool = True
     ) -> List[str]:
         item_type = array_property.item_type
+        item_name = f'{destination_name}_item'
+        item_value_name = f'{destination_name}_item_val'
+        index_name = f'{destination_name}_idx'
+        max_name = f'{destination_name}_max'
         body = []
-        body.append('size_t idx, max;')
-        body.append('yyjson_val *val;')
-        body.append(f'yyjson_arr_foreach({array_name}, idx, max, val) {{')
+        body.append(f'size_t {index_name}, {max_name};')
+        body.append(f'yyjson_val *{item_value_name};')
+        body.append(
+            f'yyjson_arr_foreach({array_name}, {index_name}, {max_name}, {item_value_name}) {{'
+        )
 
-        assignment = 'std::move(tmp)'
+        assignment = f'std::move({item_name})'
         if item_type.type != Property.Type.SCHEMA_REFERENCE:
-            body.append(f'{self.generate_variable_type(item_type)} tmp;')
-            body.extend(self.generate_item_parse(item_type, 'val', 'tmp', True))
+            body.append(f'{self.generate_variable_type(item_type)} {item_name};')
+            body.extend(self.generate_assignment(item_type, item_name, item_value_name, True))
         else:
             schema_property = cast(SchemaReferenceProperty, item_type)
             self.referenced_schemas.add(schema_property.ref)
-            item_definition = ''
             if schema_property.ref in self.parse_info.recursive_schemas:
-                body.extend([f'\tauto tmp_p = make_uniq<{schema_property.ref}>();', '\tauto &tmp = *tmp_p;'])
-                assignment = 'std::move(tmp_p)'
+                item_pointer_name = f'{item_name}_p'
+                body.extend(
+                    [
+                        f'\tauto {item_pointer_name} = make_uniq<{schema_property.ref}>();',
+                        f'\tauto &{item_name} = *{item_pointer_name};',
+                    ]
+                )
+                assignment = f'std::move({item_pointer_name})'
             else:
-                body.append(f'\t{schema_property.ref} tmp;')
-            body.extend(['\terror = tmp.TryFromJSON(val);', '\tif (!error.empty()) {', '\t\treturn error;', '\t}'])
+                body.append(f'\t{schema_property.ref} {item_name};')
+            body.extend(
+                [
+                    f'\terror = {item_name}.TryFromJSON({item_value_name});',
+                    '\tif (!error.empty()) {',
+                    '\t\treturn error;',
+                    '\t}',
+                ]
+            )
         body.append(f'\t{destination_name}.emplace_back({assignment});')
         body.append('}')
 
@@ -896,9 +1048,9 @@ class CPPClass:
             print(f"Unrecognized property type {property.type}, {source}")
             exit(1)
         if property.type == Property.Type.ARRAY:
-            # TODO: maybe we move the array parse to a function that creates a vector<...>, instead of parsing it inline
-            print(f'Nested arrays are not supported, hopefully we dont have to!')
-            exit(1)
+            return self.generate_array_loop(
+                source, target, cast(ArrayProperty, property), handle_nullable=handle_nullable
+            )
         elif property.type == Property.Type.PRIMITIVE:
             # FIXME: add a check to see that the yyjson_val* is of the right type
             # FIXME: check for null in returned char* for 'yyjson_get_str?
@@ -945,6 +1097,20 @@ class CPPClass:
                     '}',
                 ]
             )
+            if primitive_property.const is not None:
+                if isinstance(primitive_property.const, str):
+                    const_literal = json.dumps(primitive_property.const)
+                elif isinstance(primitive_property.const, bool):
+                    const_literal = 'true' if primitive_property.const else 'false'
+                else:
+                    const_literal = str(primitive_property.const)
+                res.extend(
+                    [
+                        f'if (!yyjson_is_null({source}) && {target} != {const_literal}) {{',
+                        f'''\treturn "{self.name} property '{target}' does not match its required const value";''',
+                        '}',
+                    ]
+                )
         elif property.type == Property.Type.OBJECT and property.is_raw_object():
             res.extend(
                 [
@@ -1060,7 +1226,14 @@ class CPPClass:
         res = []
         for item, required_property in properties.items():
             variable_name = safe_cpp_name(item)
-            body = self.generate_assignment(required_property, variable_name, f'{variable_name}_val', True)
+            is_nullable = required_property.nullable is True
+            uses_optional_wrapper = is_nullable and self.uses_optional_wrapper(required_property)
+            if is_nullable:
+                body = self.generate_nullable_assignment(
+                    required_property, variable_name, f'{variable_name}_val'
+                )
+            else:
+                body = self.generate_assignment(required_property, variable_name, f'{variable_name}_val', True)
             if required_property.default is not None:
                 default = [f'{variable_name} = "{str(required_property.default)}";']
             else:
@@ -1068,8 +1241,22 @@ class CPPClass:
             self.required_properties[item] = RequiredProperty(
                 property_name=item, variable_name=variable_name, body=body, default=default, schema=required_property
             )
-            variable_type = self.generate_variable_type(required_property)
-            self.add_member(variable_name, variable_type, required_property)
+            variable_type = (
+                self.optional_member_type(required_property)
+                if is_nullable
+                else self.generate_variable_type(required_property)
+            )
+            self.add_member(
+                variable_name,
+                variable_type,
+                required_property,
+                copy_guard=(
+                    self.presence_condition(variable_name, uses_optional_wrapper)
+                    if is_nullable
+                    else None
+                ),
+                uses_optional_wrapper=uses_optional_wrapper,
+            )
 
     def generate_additional_properties(self, properties: List[str], additional_properties: Property):
         if not additional_properties:
@@ -1496,7 +1683,7 @@ class CPPClass:
         # Comment
         lines.append(f"\t// Serialize: {json_name}")
         
-        if not required:
+        if not required or property_schema.nullable is True:
             uses_optional_wrapper = self.uses_optional_wrapper(property_schema)
             lines.append(f"\tif ({self.presence_condition(var_name, uses_optional_wrapper)}) {{")
             serialization_var_name = var_name
@@ -1508,6 +1695,14 @@ class CPPClass:
             )
             lines.extend(inner_lines)
             lines.append("\t}")
+            if required:
+                lines.extend(
+                    [
+                        "\telse {",
+                        f'\t\tyyjson_mut_obj_add_null(doc, obj, "{json_name}");',
+                        "\t}",
+                    ]
+                )
         else:
             lines.extend(
                 self._serialize_value(
@@ -2254,6 +2449,37 @@ class CPPClass:
                     "\t\tauto key_ptr = unsafe_yyjson_mut_strncpy(doc, key.c_str(), strlen(key.c_str()));",
                     "\t\tyyjson_mut_obj_add_val(doc, obj, key_ptr, value_obj);"
                 ])
+        elif add_prop.type == Property.Type.ARRAY:
+            array_property = cast(ArrayProperty, add_prop)
+            item_property = array_property.item_type
+            lines.append("\t\tyyjson_mut_val *value_obj = yyjson_mut_arr(doc);")
+            lines.append("\t\tfor (const auto &array_item : value) {")
+            if item_property.type == Property.Type.PRIMITIVE:
+                primitive_item = cast(PrimitiveProperty, item_property)
+                if primitive_item.primitive_type == 'string':
+                    lines.append(
+                        "\t\t\tyyjson_mut_arr_append(value_obj, yyjson_mut_strcpy(doc, array_item.c_str()));"
+                    )
+                elif primitive_item.primitive_type == 'integer':
+                    constructor = 'yyjson_mut_sint' if primitive_item.format == 'int64' else 'yyjson_mut_int'
+                    lines.append(f"\t\t\tyyjson_mut_arr_append(value_obj, {constructor}(doc, array_item));")
+                elif primitive_item.primitive_type == 'boolean':
+                    lines.append("\t\t\tyyjson_mut_arr_append(value_obj, yyjson_mut_bool(doc, array_item));")
+                elif primitive_item.primitive_type == 'number':
+                    lines.append("\t\t\tyyjson_mut_arr_append(value_obj, yyjson_mut_real(doc, array_item));")
+            elif item_property.type == Property.Type.SCHEMA_REFERENCE:
+                item_ref = cast(SchemaReferenceProperty, item_property)
+                accessor = 'array_item->' if item_ref.ref in self.parse_info.recursive_schemas else 'array_item.'
+                lines.append(f"\t\t\tyyjson_mut_arr_append(value_obj, {accessor}ToJSON(doc));")
+            else:
+                lines.append(
+                    '\t\t\tthrow InvalidInputException("Unsupported nested array value in additionalProperties");'
+                )
+            lines.extend([
+                "\t\t}",
+                "\t\tauto key_ptr = unsafe_yyjson_mut_strncpy(doc, key.c_str(), strlen(key.c_str()));",
+                "\t\tyyjson_mut_obj_add_val(doc, obj, key_ptr, value_obj);",
+            ])
         
         lines.extend([
             "\t}",

@@ -40,15 +40,16 @@ string LoadCredentialsResponse::TryFromJSON(yyjson_val *obj) {
 		return "LoadCredentialsResponse required property 'storage-credentials' is missing";
 	} else {
 		if (yyjson_is_arr(storage_credentials_val)) {
-			size_t idx, max;
-			yyjson_val *val;
-			yyjson_arr_foreach(storage_credentials_val, idx, max, val) {
-				StorageCredential tmp;
-				error = tmp.TryFromJSON(val);
+			size_t storage_credentials_idx, storage_credentials_max;
+			yyjson_val *storage_credentials_item_val;
+			yyjson_arr_foreach(storage_credentials_val, storage_credentials_idx, storage_credentials_max,
+			                   storage_credentials_item_val) {
+				StorageCredential storage_credentials_item;
+				error = storage_credentials_item.TryFromJSON(storage_credentials_item_val);
 				if (!error.empty()) {
 					return error;
 				}
-				storage_credentials.emplace_back(std::move(tmp));
+				storage_credentials.emplace_back(std::move(storage_credentials_item));
 			}
 		} else {
 			return StringUtil::Format(

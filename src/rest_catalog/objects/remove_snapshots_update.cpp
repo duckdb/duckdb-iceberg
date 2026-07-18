@@ -40,25 +40,41 @@ string RemoveSnapshotsUpdate::TryFromJSON(yyjson_val *obj) {
 	if (!error.empty()) {
 		return error;
 	}
+	auto action_refinement_val = yyjson_obj_get(obj, "action");
+	if (action_refinement_val) {
+		string action_refinement;
+		if (yyjson_is_str(action_refinement_val)) {
+			action_refinement = yyjson_get_str(action_refinement_val);
+		} else {
+			return StringUtil::Format(
+			    "RemoveSnapshotsUpdate property 'action_refinement' is not of type 'string', found '%s' instead",
+			    yyjson_get_type_desc(action_refinement_val));
+		}
+		if (!yyjson_is_null(action_refinement_val) && action_refinement != "remove-snapshots") {
+			return "RemoveSnapshotsUpdate property 'action_refinement' does not match its required const value";
+		}
+	} else {
+		return "RemoveSnapshotsUpdate required property 'action' is missing";
+	}
 	auto snapshot_ids_val = yyjson_obj_get(obj, "snapshot-ids");
 	if (!snapshot_ids_val) {
 		return "RemoveSnapshotsUpdate required property 'snapshot-ids' is missing";
 	} else {
 		if (yyjson_is_arr(snapshot_ids_val)) {
-			size_t idx, max;
-			yyjson_val *val;
-			yyjson_arr_foreach(snapshot_ids_val, idx, max, val) {
-				int64_t tmp;
-				if (yyjson_is_sint(val)) {
-					tmp = yyjson_get_sint(val);
-				} else if (yyjson_is_uint(val)) {
-					tmp = yyjson_get_uint(val);
+			size_t snapshot_ids_idx, snapshot_ids_max;
+			yyjson_val *snapshot_ids_item_val;
+			yyjson_arr_foreach(snapshot_ids_val, snapshot_ids_idx, snapshot_ids_max, snapshot_ids_item_val) {
+				int64_t snapshot_ids_item;
+				if (yyjson_is_sint(snapshot_ids_item_val)) {
+					snapshot_ids_item = yyjson_get_sint(snapshot_ids_item_val);
+				} else if (yyjson_is_uint(snapshot_ids_item_val)) {
+					snapshot_ids_item = yyjson_get_uint(snapshot_ids_item_val);
 				} else {
-					return StringUtil::Format(
-					    "RemoveSnapshotsUpdate property 'tmp' is not of type 'integer', found '%s' instead",
-					    yyjson_get_type_desc(val));
+					return StringUtil::Format("RemoveSnapshotsUpdate property 'snapshot_ids_item' is not of type "
+					                          "'integer', found '%s' instead",
+					                          yyjson_get_type_desc(snapshot_ids_item_val));
 				}
-				snapshot_ids.emplace_back(std::move(tmp));
+				snapshot_ids.emplace_back(std::move(snapshot_ids_item));
 			}
 		} else {
 			return StringUtil::Format(

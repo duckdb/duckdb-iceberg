@@ -37,6 +37,22 @@ string AddEncryptionKeyUpdate::TryFromJSON(yyjson_val *obj) {
 	if (!error.empty()) {
 		return error;
 	}
+	auto action_refinement_val = yyjson_obj_get(obj, "action");
+	if (action_refinement_val) {
+		string action_refinement;
+		if (yyjson_is_str(action_refinement_val)) {
+			action_refinement = yyjson_get_str(action_refinement_val);
+		} else {
+			return StringUtil::Format(
+			    "AddEncryptionKeyUpdate property 'action_refinement' is not of type 'string', found '%s' instead",
+			    yyjson_get_type_desc(action_refinement_val));
+		}
+		if (!yyjson_is_null(action_refinement_val) && action_refinement != "add-encryption-key") {
+			return "AddEncryptionKeyUpdate property 'action_refinement' does not match its required const value";
+		}
+	} else {
+		return "AddEncryptionKeyUpdate required property 'action' is missing";
+	}
 	auto encryption_key_val = yyjson_obj_get(obj, "encryption-key");
 	if (!encryption_key_val) {
 		return "AddEncryptionKeyUpdate required property 'encryption-key' is missing";

@@ -43,26 +43,27 @@ string DeleteFile::TryFromJSON(yyjson_val *obj) {
 		return "DeleteFile discriminator property 'content' must be a string";
 	}
 	string error;
-	auto content_value = string(yyjson_get_str(content));
-	if (content_value == "position-deletes") {
+	auto discriminator_val = yyjson_obj_get(obj, "content");
+	if (!discriminator_val || !yyjson_is_str(discriminator_val)) {
+		return "DeleteFile discriminator 'content' is missing or is not a string";
+	}
+	string discriminator = yyjson_get_str(discriminator_val);
+	if (discriminator == "position-deletes") {
 		position_delete_file.emplace();
 		error = position_delete_file->TryFromJSON(obj);
 		if (!error.empty()) {
-			position_delete_file = nullopt;
 			return error;
 		}
-		return "";
-	}
-	if (content_value == "equality-deletes") {
+	} else if (discriminator == "equality-deletes") {
 		equality_delete_file.emplace();
 		error = equality_delete_file->TryFromJSON(obj);
 		if (!error.empty()) {
-			equality_delete_file = nullopt;
 			return error;
 		}
-		return "";
+	} else {
+		return StringUtil::Format("DeleteFile has unknown discriminator value '%s'", discriminator.c_str());
 	}
-	return StringUtil::Format("Unknown DeleteFile discriminator value '%s'", content_value);
+	return "";
 }
 
 void DeleteFile::PopulateJSON(yyjson_mut_doc *doc, yyjson_mut_val *obj) const {
