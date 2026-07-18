@@ -15,6 +15,7 @@
 #include "rest_catalog/objects/float_type_value.hpp"
 #include "rest_catalog/objects/integer_type_value.hpp"
 #include "rest_catalog/objects/long_type_value.hpp"
+#include "rest_catalog/objects/null_type_value.hpp"
 #include "rest_catalog/objects/string_type_value.hpp"
 #include "rest_catalog/objects/time_type_value.hpp"
 #include "rest_catalog/objects/timestamp_nano_type_value.hpp"
@@ -48,8 +49,7 @@ public:
 	yyjson_mut_val *ToJSON(yyjson_mut_doc *doc) const;
 
 public:
-	//! Partition values may be null even though the generated OpenAPI union has no null alternative.
-	bool is_null = false;
+	optional<NullTypeValue> null_type_value;
 	optional<BooleanTypeValue> boolean_type_value;
 	optional<IntegerTypeValue> integer_type_value;
 	optional<LongTypeValue> long_type_value;

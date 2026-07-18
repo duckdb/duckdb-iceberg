@@ -7,7 +7,7 @@ from enum import Enum, auto
 SCRIPT_PATH = os.path.dirname(os.path.realpath(__file__))
 API_SPEC_PATH = os.path.join(SCRIPT_PATH, 'api.yaml')
 
-PRIMITIVE_TYPES = ['string', 'number', 'integer', 'boolean']
+PRIMITIVE_TYPES = [None, 'string', 'number', 'integer', 'boolean']
 
 class Property:
     class Type(Enum):

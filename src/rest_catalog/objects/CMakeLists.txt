@@ -146,6 +146,7 @@ add_library(
   statistics_file.cpp
   blob_metadata.cpp
   partition_statistics_file.cpp
+  null_type_value.cpp
   boolean_type_value.cpp
   integer_type_value.cpp
   long_type_value.cpp

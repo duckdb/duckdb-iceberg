@@ -147,6 +147,7 @@
 #include "rest_catalog/objects/statistics_file.hpp"
 #include "rest_catalog/objects/blob_metadata.hpp"
 #include "rest_catalog/objects/partition_statistics_file.hpp"
+#include "rest_catalog/objects/null_type_value.hpp"
 #include "rest_catalog/objects/boolean_type_value.hpp"
 #include "rest_catalog/objects/integer_type_value.hpp"
 #include "rest_catalog/objects/long_type_value.hpp"

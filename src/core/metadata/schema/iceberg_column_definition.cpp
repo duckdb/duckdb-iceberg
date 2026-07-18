@@ -22,7 +22,7 @@ static string AddEscapesToBlob(const string &hexadecimal_string) {
 
 Value IcebergColumnDefinition::ParsePrimitiveValue(const LogicalType &type,
                                                    const rest_api_objects::PrimitiveTypeValue &default_value) {
-	if (default_value.is_null) {
+	if (default_value.null_type_value) {
 		return Value(type);
 	}
 	if (type.IsNested() && type.id() != LogicalTypeId::STRUCT) {

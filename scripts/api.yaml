@@ -4819,6 +4819,11 @@ components:
           type: integer
           format: int64
 
+    NullTypeValue:
+      type: null
+      nullable: true
+      example: null
+
     BooleanTypeValue:
       type: boolean
       example: true
@@ -4958,6 +4963,7 @@ components:
 
     PrimitiveTypeValue:
       oneOf:
+        - $ref: '#/components/schemas/NullTypeValue'
         - $ref: '#/components/schemas/BooleanTypeValue'
         - $ref: '#/components/schemas/IntegerTypeValue'
         - $ref: '#/components/schemas/LongTypeValue'

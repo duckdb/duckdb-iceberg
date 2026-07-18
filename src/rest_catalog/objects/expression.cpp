@@ -130,29 +130,9 @@ void Expression::PopulateJSON(yyjson_mut_doc *doc, yyjson_mut_val *obj) const {
 	} else if (set_expression.has_value()) {
 		set_expression->PopulateJSON(doc, obj);
 	} else if (literal_expression.has_value()) {
-		yyjson_mut_val *literal_expression_obj = literal_expression->ToJSON(doc);
-		if (!yyjson_mut_is_obj(literal_expression_obj)) {
-			throw InternalException("PopulateJSON requires an object-like JSON value");
-		}
-		{
-			size_t idx, max;
-			yyjson_mut_val *key, *val;
-			yyjson_mut_obj_foreach(literal_expression_obj, idx, max, key, val) {
-				yyjson_mut_obj_add(obj, key, val);
-			}
-		}
+		literal_expression->PopulateJSON(doc, obj);
 	} else if (unary_expression.has_value()) {
-		yyjson_mut_val *unary_expression_obj = unary_expression->ToJSON(doc);
-		if (!yyjson_mut_is_obj(unary_expression_obj)) {
-			throw InternalException("PopulateJSON requires an object-like JSON value");
-		}
-		{
-			size_t idx, max;
-			yyjson_mut_val *key, *val;
-			yyjson_mut_obj_foreach(unary_expression_obj, idx, max, key, val) {
-				yyjson_mut_obj_add(obj, key, val);
-			}
-		}
+		unary_expression->PopulateJSON(doc, obj);
 	}
 }
 

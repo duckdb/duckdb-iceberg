@@ -26,7 +26,10 @@ PrimitiveTypeValue PrimitiveTypeValue::FromJSON(yyjson_val *obj) {
 
 PrimitiveTypeValue PrimitiveTypeValue::Copy() const {
 	PrimitiveTypeValue res;
-	res.is_null = is_null;
+	if (null_type_value.has_value()) {
+		res.null_type_value.emplace();
+		(*res.null_type_value) = (*null_type_value).Copy();
+	}
 	if (boolean_type_value.has_value()) {
 		res.boolean_type_value.emplace();
 		(*res.boolean_type_value) = (*boolean_type_value).Copy();
@@ -95,11 +98,13 @@ PrimitiveTypeValue PrimitiveTypeValue::Copy() const {
 }
 
 string PrimitiveTypeValue::TryFromJSON(yyjson_val *obj) {
-	if (yyjson_is_null(obj)) {
-		is_null = true;
-		return "";
-	}
 	string error;
+	null_type_value.emplace();
+	error = null_type_value->TryFromJSON(obj);
+	if (error.empty()) {
+	} else {
+		null_type_value = nullopt;
+	}
 	boolean_type_value.emplace();
 	error = boolean_type_value->TryFromJSON(obj);
 	if (error.empty()) {
@@ -199,7 +204,7 @@ string PrimitiveTypeValue::TryFromJSON(yyjson_val *obj) {
 	if (!(binary_type_value.has_value()) && !(boolean_type_value.has_value()) && !(date_type_value.has_value()) &&
 	    !(decimal_type_value.has_value()) && !(double_type_value.has_value()) && !(fixed_type_value.has_value()) &&
 	    !(float_type_value.has_value()) && !(integer_type_value.has_value()) && !(long_type_value.has_value()) &&
-	    !(string_type_value.has_value()) && !(time_type_value.has_value()) &&
+	    !(null_type_value.has_value()) && !(string_type_value.has_value()) && !(time_type_value.has_value()) &&
 	    !(timestamp_nano_type_value.has_value()) && !(timestamp_type_value.has_value()) &&
 	    !(timestamp_tz_nano_type_value.has_value()) && !(timestamp_tz_type_value.has_value()) &&
 	    !(uuidtype_value.has_value())) {
@@ -209,9 +214,6 @@ string PrimitiveTypeValue::TryFromJSON(yyjson_val *obj) {
 }
 
 yyjson_mut_val *PrimitiveTypeValue::ToJSON(yyjson_mut_doc *doc) const {
-	if (is_null) {
-		return yyjson_mut_null(doc);
-	}
 	if (long_type_value.has_value()) {
 		return long_type_value->ToJSON(doc);
 	} else if (double_type_value.has_value()) {
@@ -220,6 +222,8 @@ yyjson_mut_val *PrimitiveTypeValue::ToJSON(yyjson_mut_doc *doc) const {
 		return integer_type_value->ToJSON(doc);
 	} else if (float_type_value.has_value()) {
 		return float_type_value->ToJSON(doc);
+	} else if (null_type_value.has_value()) {
+		return null_type_value->ToJSON(doc);
 	} else if (boolean_type_value.has_value()) {
 		return boolean_type_value->ToJSON(doc);
 	} else if (decimal_type_value.has_value()) {

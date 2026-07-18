@@ -38,10 +38,6 @@ DeleteFile DeleteFile::Copy() const {
 }
 
 string DeleteFile::TryFromJSON(yyjson_val *obj) {
-	auto content = yyjson_obj_get(obj, "content");
-	if (!content || !yyjson_is_str(content)) {
-		return "DeleteFile discriminator property 'content' must be a string";
-	}
 	string error;
 	auto discriminator_val = yyjson_obj_get(obj, "content");
 	if (!discriminator_val || !yyjson_is_str(discriminator_val)) {
