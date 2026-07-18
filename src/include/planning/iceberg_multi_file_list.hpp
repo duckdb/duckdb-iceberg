@@ -141,6 +141,9 @@ private:
 	//! Committed data files dropped by a metadata-only delete earlier in this transaction. Their
 	//! manifest rewrite only lands at commit, so transaction-local reads must hide them here.
 	mutable unordered_set<string> transaction_invalidated_files;
+	//! Live rows removed per data file dropped by a metadata-only DELETE (keyed by file_path). Absent
+	//! for wholesale invalidations (e.g. compaction), which fall back to the full record count.
+	mutable case_insensitive_map_t<idx_t> transaction_invalidated_live_rows;
 };
 
 struct IcebergDataViewCursor {

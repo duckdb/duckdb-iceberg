@@ -199,3 +199,63 @@ SELECT count(*) FROM iceberg_metadata(my_datalake.default.metadata_only_unpart_v
 
 statement ok
 DROP TABLE my_datalake.default.metadata_only_unpart_v3;
+
+# ------------------------------------------------------------------
+# Transaction-local cardinality: a metadata-only drop of a file that already had a positional delete
+# must discount only the file's LIVE rows, not its full record count. The delete-manifest totals
+# already account for the pre-existing delete, so subtracting the whole record count double-counts
+# the already-deleted rows. A second live file keeps the zero-floor clamp from masking it.
+# ------------------------------------------------------------------
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.metadata_only_card_v2;
+
+statement ok
+CREATE TABLE my_datalake.default.metadata_only_card_v2 (a INTEGER) WITH ('format-version'=2);
+
+# File A: 2 rows.
+statement ok
+INSERT INTO my_datalake.default.metadata_only_card_v2 SELECT i FROM range(0, 2) t(i);
+
+# File B: 3 rows (separate data file).
+statement ok
+INSERT INTO my_datalake.default.metadata_only_card_v2 SELECT i FROM range(10, 13) t(i);
+
+# Partial delete of A -> positional delete file (1 of A's 2 rows).
+statement ok
+DELETE FROM my_datalake.default.metadata_only_card_v2 WHERE a = 0;
+
+# 4 live rows (A: 1, B: 3); the estimate discounts the positional delete.
+query II
+EXPLAIN SELECT * FROM my_datalake.default.metadata_only_card_v2;
+----
+physical_plan	<REGEX>:.*ICEBERG_SCAN.*~4 rows.*
+
+statement ok
+BEGIN;
+
+# Delete A's remaining live row: existing positional delete + this delete cover all of A, so A becomes
+# a metadata-only drop. B is untouched.
+statement ok
+DELETE FROM my_datalake.default.metadata_only_card_v2 WHERE a = 1;
+
+# Transaction-local estimate must be 3 (A gone, B=3). The double-count bug produced ~2.
+query II
+EXPLAIN SELECT * FROM my_datalake.default.metadata_only_card_v2;
+----
+physical_plan	<REGEX>:.*ICEBERG_SCAN.*~3 rows.*
+
+query I
+SELECT count(*) FROM my_datalake.default.metadata_only_card_v2;
+----
+3
+
+statement ok
+COMMIT;
+
+query I
+SELECT count(*) FROM my_datalake.default.metadata_only_card_v2;
+----
+3
+
+statement ok
+DROP TABLE my_datalake.default.metadata_only_card_v2;

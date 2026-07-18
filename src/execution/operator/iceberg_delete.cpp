@@ -319,7 +319,7 @@ void IcebergDelete::FlushDeletes(IcebergTransaction &transaction, ClientContext 
 		}
 		auto record_count = multi_file_list->GetRecordCountForDataFile(filename);
 		if (record_count >= 0 && all_deletes.size() == static_cast<idx_t>(record_count)) {
-			global_state.altered_manifests.InvalidateFile(filename);
+			global_state.altered_manifests.InvalidateFile(filename, sorted_deletes.size());
 			//! Drop delete files scoped to only this data file (referenced_data_file set): v3 deletion
 			//! vectors and DuckDB's file-scoped positional deletes. Multi-file deletes from other
 			//! engines still apply elsewhere, so leave them.

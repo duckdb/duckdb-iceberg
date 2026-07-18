@@ -514,6 +514,15 @@ unique_ptr<NodeStatistics> IcebergMultiFileList::GetCardinality(ClientContext &c
 idx_t IcebergMultiFileList::GetTransactionInvalidatedRowCount() const {
 	idx_t invalidated_rows = 0;
 	for (auto &invalidated : shared_state->transaction_invalidated_files) {
+		//! A metadata-only DELETE records its live-row count; rows already covered by delete files
+		//! are discounted by the delete-manifest totals, so only the live rows are subtracted here.
+		auto live_entry = shared_state->transaction_invalidated_live_rows.find(invalidated);
+		if (live_entry != shared_state->transaction_invalidated_live_rows.end()) {
+			invalidated_rows += live_entry->second;
+			continue;
+		}
+		//! Wholesale invalidations (e.g. compaction) carry no live-row count; the file is replaced
+		//! entirely, so subtract its full record count.
 		auto entry = shared_state->data_file_record_count.find(invalidated);
 		if (entry != shared_state->data_file_record_count.end()) {
 			invalidated_rows += static_cast<idx_t>(entry->second);
@@ -1407,6 +1416,9 @@ void IcebergMultiFileList::LoadManifestList(lock_guard<mutex> &guard) const {
 			//! removed from the manifests at commit, so hide them from transaction-local reads.
 			for (auto &invalidated : alter.altered_manifests.InvalidatedFiles()) {
 				shared_state->transaction_invalidated_files.insert(invalidated);
+			}
+			for (auto &live_rows : alter.altered_manifests.InvalidatedDataFileLiveRows()) {
+				shared_state->transaction_invalidated_live_rows[live_rows.first] = live_rows.second;
 			}
 			const auto &manifest_list_entries = alter.GetManifestFiles();
 			for (auto &manifest_list_entry : manifest_list_entries) {
