@@ -1476,7 +1476,7 @@ void IcebergMultiFileList::InitializeSharedState(lock_guard<mutex> &guard) const
 		if (shared_state->rest_planning_enabled && shared_state->table && !HasTransactionData()) {
 			auto &table_info = shared_state->table->table_info;
 			auto &catalog = table_info.catalog;
-			if (catalog.supported_urls.find(IcebergScanPlanning::PLAN_ENDPOINT) != catalog.supported_urls.end()) {
+			if (catalog.supported_urls.count(IcebergScanPlanning::PLAN_ENDPOINT)) {
 				rest_api_objects::PlanTableScanRequest request;
 				request.snapshot_id = snapshot_info.snapshot->snapshot_id;
 				request.case_sensitive = true;
