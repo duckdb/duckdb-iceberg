@@ -140,6 +140,82 @@ statement ok
 DROP TABLE my_datalake.default.merge_metadata_only_v2;
 
 # ------------------------------------------------------------------
+# v2 MERGE WHEN MATCHED THEN UPDATE that only touches a subset of a
+# data file's rows -> merge-on-read (a delete file is written), covering
+# the non-metadata-only branch of the MERGE delete+insert path.
+# ------------------------------------------------------------------
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.merge_partial_v2;
+
+# unpartitioned: a single INSERT lands all rows in one data file
+statement ok
+CREATE TABLE my_datalake.default.merge_partial_v2 (id INT, val VARCHAR) WITH ('format-version'=2);
+
+statement ok
+INSERT INTO my_datalake.default.merge_partial_v2 VALUES (1, 'a'), (2, 'b'), (3, 'c');
+
+# match only id=2 (one of three rows in the file) -> partial delete -> delete file written
+query I
+MERGE INTO my_datalake.default.merge_partial_v2 AS t
+    USING (SELECT 2 AS id, 'B' AS val) AS s ON t.id = s.id
+    WHEN MATCHED THEN UPDATE SET val = s.val;
+----
+1
+
+query II
+SELECT * FROM my_datalake.default.merge_partial_v2 ORDER BY id, val;
+----
+1	a
+2	B
+3	c
+
+query I
+SELECT count(*) FROM iceberg_metadata(my_datalake.default.merge_partial_v2) WHERE content = 'POSITION_DELETES' AND status != 'DELETED';
+----
+1
+
+statement ok
+DROP TABLE my_datalake.default.merge_partial_v2;
+
+# ------------------------------------------------------------------
+# v3 MERGE (deletion vectors): combined WHEN MATCHED (whole-file update ->
+# metadata-only) + WHEN NOT MATCHED (insert) in a single statement.
+# ------------------------------------------------------------------
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.merge_metadata_only_v3;
+
+statement ok
+CREATE TABLE my_datalake.default.merge_metadata_only_v3 (id INT, val VARCHAR) PARTITIONED BY (id) WITH ('format-version'=3);
+
+statement ok
+INSERT INTO my_datalake.default.merge_metadata_only_v3 VALUES (1, 'a'), (2, 'b'), (3, 'c');
+
+query I
+MERGE INTO my_datalake.default.merge_metadata_only_v3 AS t
+    USING (VALUES (1, 'A'), (4, 'd')) AS s(id, val) ON t.id = s.id
+    WHEN MATCHED THEN UPDATE SET val = s.val
+    WHEN NOT MATCHED THEN INSERT VALUES (s.id, s.val);
+----
+2
+
+query II
+SELECT * FROM my_datalake.default.merge_metadata_only_v3 ORDER BY id, val;
+----
+1	A
+2	b
+3	c
+4	d
+
+# the matched UPDATE rewrote a whole partition file, so no deletion vector was written
+query I
+SELECT count(*) FROM iceberg_metadata(my_datalake.default.merge_metadata_only_v3) WHERE content = 'POSITION_DELETES' AND status != 'DELETED';
+----
+0
+
+statement ok
+DROP TABLE my_datalake.default.merge_metadata_only_v3;
+
+# ------------------------------------------------------------------
 # Transaction-local visibility: a whole-file UPDATE inside an explicit
 # transaction must hide the metadata-only-invalidated file from reads in
 # the same transaction (regression: it used to double-count, since the
