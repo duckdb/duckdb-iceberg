@@ -7,6 +7,7 @@
 #include "duckdb/common/vector.hpp"
 #include "duckdb/common/case_insensitive_map.hpp"
 #include "rest_catalog/objects/and_or_expression.hpp"
+#include "rest_catalog/objects/boolean_expression.hpp"
 #include "rest_catalog/objects/false_expression.hpp"
 #include "rest_catalog/objects/literal_expression.hpp"
 #include "rest_catalog/objects/not_expression.hpp"
@@ -36,10 +37,10 @@ public:
 	Expression Copy() const;
 
 	// Serialization
-	void PopulateJSON(yyjson_mut_doc *doc, yyjson_mut_val *obj) const;
 	yyjson_mut_val *ToJSON(yyjson_mut_doc *doc) const;
 
 public:
+	optional<BooleanExpression> boolean_expression;
 	optional<TrueExpression> true_expression;
 	optional<FalseExpression> false_expression;
 	optional<AndOrExpression> and_or_expression;

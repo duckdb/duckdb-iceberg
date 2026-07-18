@@ -83,10 +83,23 @@ def test_overlapping_primitive_one_of_keeps_all_matching_views():
     cpp_class, _, source = render_class(parser, parse_info, "PrimitiveTypeValue")
 
     assert not cpp_class.one_of
-    assert len(cpp_class.any_of) == 16
+    assert len(cpp_class.any_of) == 17
     assert "integer_type_value.emplace()" in source
     assert "long_type_value.emplace()" in source
     assert "string_type_value.emplace()" in source
+
+
+def test_expression_accepts_canonical_boolean_constants():
+    parser, parse_info = parse_spec()
+    schema = parser.parsed_schemas["Expression"]
+
+    assert schema.one_of[0].ref == "BooleanExpression"
+
+    cpp_class, header, source = render_class(parser, parse_info, "Expression")
+    assert not cpp_class.supports_json_object_population()
+    assert "optional<BooleanExpression> boolean_expression" in header
+    assert "boolean_expression->TryFromJSON(obj)" in source
+    assert "return boolean_expression->ToJSON(doc)" in source
 
 
 def test_inherited_const_and_array_valued_map_are_generated():

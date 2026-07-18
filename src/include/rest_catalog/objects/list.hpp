@@ -18,6 +18,7 @@
 #include "rest_catalog/objects/type.hpp"
 #include "rest_catalog/objects/schema.hpp"
 #include "rest_catalog/objects/expression.hpp"
+#include "rest_catalog/objects/boolean_expression.hpp"
 #include "rest_catalog/objects/expression_type.hpp"
 #include "rest_catalog/objects/true_expression.hpp"
 #include "rest_catalog/objects/false_expression.hpp"

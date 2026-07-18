@@ -17,6 +17,7 @@ add_library(
   type.cpp
   schema.cpp
   expression.cpp
+  boolean_expression.cpp
   expression_type.cpp
   true_expression.cpp
   false_expression.cpp

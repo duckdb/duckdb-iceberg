@@ -26,6 +26,10 @@ Expression Expression::FromJSON(yyjson_val *obj) {
 
 Expression Expression::Copy() const {
 	Expression res;
+	if (boolean_expression.has_value()) {
+		res.boolean_expression.emplace();
+		(*res.boolean_expression) = (*boolean_expression).Copy();
+	}
 	if (true_expression.has_value()) {
 		res.true_expression.emplace();
 		(*res.true_expression) = (*true_expression).Copy();
@@ -60,6 +64,13 @@ Expression Expression::Copy() const {
 string Expression::TryFromJSON(yyjson_val *obj) {
 	string error;
 	do {
+		boolean_expression.emplace();
+		error = boolean_expression->TryFromJSON(obj);
+		if (error.empty()) {
+			break;
+		} else {
+			boolean_expression = nullopt;
+		}
 		true_expression.emplace();
 		error = true_expression->TryFromJSON(obj);
 		if (error.empty()) {
@@ -114,32 +125,26 @@ string Expression::TryFromJSON(yyjson_val *obj) {
 	return "";
 }
 
-void Expression::PopulateJSON(yyjson_mut_doc *doc, yyjson_mut_val *obj) const {
-	if (!yyjson_mut_is_obj(obj)) {
-		throw InternalException("PopulateJSON requires obj to be a JSON object");
-	}
-
-	if (true_expression.has_value()) {
-		true_expression->PopulateJSON(doc, obj);
-	} else if (false_expression.has_value()) {
-		false_expression->PopulateJSON(doc, obj);
-	} else if (and_or_expression.has_value()) {
-		and_or_expression->PopulateJSON(doc, obj);
-	} else if (not_expression.has_value()) {
-		not_expression->PopulateJSON(doc, obj);
-	} else if (set_expression.has_value()) {
-		set_expression->PopulateJSON(doc, obj);
-	} else if (literal_expression.has_value()) {
-		literal_expression->PopulateJSON(doc, obj);
-	} else if (unary_expression.has_value()) {
-		unary_expression->PopulateJSON(doc, obj);
-	}
-}
-
 yyjson_mut_val *Expression::ToJSON(yyjson_mut_doc *doc) const {
-	yyjson_mut_val *obj = yyjson_mut_obj(doc);
-	PopulateJSON(doc, obj);
-	return obj;
+	if (boolean_expression.has_value()) {
+		return boolean_expression->ToJSON(doc);
+	} else if (true_expression.has_value()) {
+		return true_expression->ToJSON(doc);
+	} else if (false_expression.has_value()) {
+		return false_expression->ToJSON(doc);
+	} else if (and_or_expression.has_value()) {
+		return and_or_expression->ToJSON(doc);
+	} else if (not_expression.has_value()) {
+		return not_expression->ToJSON(doc);
+	} else if (set_expression.has_value()) {
+		return set_expression->ToJSON(doc);
+	} else if (literal_expression.has_value()) {
+		return literal_expression->ToJSON(doc);
+	} else if (unary_expression.has_value()) {
+		return unary_expression->ToJSON(doc);
+	}
+	// No variant is active - return empty object
+	return yyjson_mut_obj(doc);
 }
 
 } // namespace rest_api_objects
