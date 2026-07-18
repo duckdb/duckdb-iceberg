@@ -978,9 +978,10 @@ optional_ptr<const BoundIcebergManifestEntry> IcebergMultiFileList::GetDataFile(
 
 			//! Skip committed data files dropped by a metadata-only delete earlier in this
 			//! transaction (the manifest rewrite only lands at commit).
-			if (!shared_state->transaction_invalidated_files.empty() &&
-			    (shared_state->transaction_invalidated_files.count(entry_path) ||
-			     shared_state->transaction_invalidated_files.count(data_file.file_path))) {
+			if (shared_state->transaction_invalidated_files.count(entry_path)) {
+				continue;
+			}
+			if (shared_state->transaction_invalidated_files.count(data_file.file_path)) {
 				continue;
 			}
 

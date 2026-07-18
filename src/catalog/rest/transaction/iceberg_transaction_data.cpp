@@ -185,6 +185,9 @@ void IcebergTransactionData::AddSnapshot(IcebergSnapshotOperationType operation,
 		auto manifest_file = IcebergManifestListEntry::CreateFromEntries(
 		    fs, temp_sequence_number, table_metadata, manifest_metadata, std::move(data_files), next_row_id);
 		add_snapshot->AddManifestFile(std::move(manifest_file));
+	} else if (operation != IcebergSnapshotOperationType::DELETE) {
+		//! A snapshot with no new manifest entries is only valid for a metadata-only delete.
+		throw InternalException("AddSnapshot: empty data_files is only valid for a metadata-only DELETE");
 	}
 
 	// make sure we are still inserting into the current schema
@@ -225,14 +228,16 @@ void IcebergTransactionData::AddUpdateSnapshot(vector<IcebergManifestEntry> &&de
 		    fs, sequence_number, table_metadata, delete_manifest_metadata, std::move(delete_files), next_row_id);
 		add_snapshot->AddManifestFile(std::move(delete_manifest_file));
 	}
-	// Add a manifest_file for the new insert data
-	if (!data_files.empty()) {
-		auto data_manifest_metadata =
-		    IcebergManifestMetadata::FromTableMetadata(table_metadata, IcebergManifestContentType::DATA);
-		auto data_manifest_file = IcebergManifestListEntry::CreateFromEntries(
-		    fs, sequence_number, table_metadata, data_manifest_metadata, std::move(data_files), next_row_id);
-		add_snapshot->AddManifestFile(std::move(data_manifest_file));
+	// Add a manifest_file for the new insert data. An UPDATE always re-inserts the updated rows, so
+	// (unlike the delete side) the data side must never be empty.
+	if (data_files.empty()) {
+		throw InternalException("AddUpdateSnapshot: an UPDATE must produce new data files");
 	}
+	auto data_manifest_metadata =
+	    IcebergManifestMetadata::FromTableMetadata(table_metadata, IcebergManifestContentType::DATA);
+	auto data_manifest_file = IcebergManifestListEntry::CreateFromEntries(
+	    fs, sequence_number, table_metadata, data_manifest_metadata, std::move(data_files), next_row_id);
+	add_snapshot->AddManifestFile(std::move(data_manifest_file));
 	add_snapshot->altered_manifests = std::move(altered_manifests);
 
 	alters.push_back(*add_snapshot);
