@@ -101,15 +101,15 @@ MetadataLog MetadataLog::Copy() const {
 string MetadataLog::TryFromJSON(yyjson_val *obj) {
 	string error;
 	if (yyjson_is_arr(obj)) {
-		size_t idx, max;
-		yyjson_val *val;
-		yyjson_arr_foreach(obj, idx, max, val) {
-			Object4 tmp;
-			error = tmp.TryFromJSON(val);
+		size_t value_idx, value_max;
+		yyjson_val *value_item_val;
+		yyjson_arr_foreach(obj, value_idx, value_max, value_item_val) {
+			Object4 value_item;
+			error = value_item.TryFromJSON(value_item_val);
 			if (!error.empty()) {
 				return error;
 			}
-			value.emplace_back(std::move(tmp));
+			value.emplace_back(std::move(value_item));
 		}
 	} else {
 		return StringUtil::Format("MetadataLog property 'value' is not of type 'array', found '%s' instead",

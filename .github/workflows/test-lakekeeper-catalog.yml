@@ -11,6 +11,11 @@ jobs:
   test-lakekeeper:
     name: Test against Lakekeeper Catalog
     runs-on: ubuntu-latest
+    env:
+      ASAN_SYMBOLIZER_PATH: "/usr/bin/llvm-symbolizer"
+      ASAN_OPTIONS: "detect_leaks=1:halt_on_error=1:abort_on_error=0:external_symbolizer_path=/usr/bin/llvm-symbolizer"
+      LSAN_OPTIONS: "suppressions=${{ github.workspace }}/.combined-sanitizer-leak-suppressions.txt"
+      UBSAN_OPTIONS: "halt_on_error=1:print_stacktrace=1"
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -22,7 +27,13 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: ${{ inputs.artifact-name }}
-          path: build/release
+          path: build
+
+      - name: Extract relassert build artifact
+        run: |
+          rm -rf build/relassert
+          tar -xzf build/relassert-artifact.tar.gz -C build
+          ls -lh build/relassert/test/unittest
 
       - name: Set up Java
         uses: actions/setup-java@v4
@@ -34,15 +45,16 @@ jobs:
         with:
           python-version: '3.13'
 
-      - name: Restore permissions
+      - name: Prepare leak suppressions
         run: |
-          find ./build/release -type f -name 'duckdb*' -exec chmod +x {} \;
-          find ./build/release -type f -name 'unittest*' -exec chmod +x {} \;
+          cp duckdb/.sanitizer-leak-suppressions.txt .combined-sanitizer-leak-suppressions.txt
+          printf '\n' >> .combined-sanitizer-leak-suppressions.txt
+          cat .sanitizer-leak-suppressions.txt >> .combined-sanitizer-leak-suppressions.txt
 
       - name: Install Lakekeeper dependencies
         run: |
           sudo apt update -y -qq
-          sudo apt install -y -qq python3-venv
+          sudo apt install -y -qq python3-venv llvm
 
       - name: Setup Lakekeeper
         run: |
@@ -52,17 +64,17 @@ jobs:
         env:
           LAKEKEEPER_SERVER_AVAILABLE: 1
         run: |
-          ./build/release/test/unittest --order lex "$PWD/test/*" --list-test-names-only || true
-          ./build/release/test/unittest --order lex "$PWD/test/*"
+          ./build/relassert/test/unittest --order lex "$PWD/test/*" --list-test-names-only || true
+          ./build/relassert/test/unittest --order lex "$PWD/test/*"
 
       - name: Run Generic IRC Tests
         env:
           LAKEKEEPER_SERVER_AVAILABLE: 1
         run: |
-          ./build/release/test/unittest --order lex "$PWD/test/sql/local/catalog_test_config_setup/*" --list-test-names-only || true
-          ./build/release/test/unittest --order lex "$PWD/test/sql/local/catalog_test_config_setup/*" --test-config test/configs/lakekeeper.json
+          ./build/relassert/test/unittest --order lex "$PWD/test/sql/local/catalog_test_config_setup/*" --list-test-names-only || true
+          ./build/relassert/test/unittest --order lex "$PWD/test/sql/local/catalog_test_config_setup/*" --test-config test/configs/lakekeeper.json
 
       - name: Test reads with PyIceberg and Spark
         run: |
           source .venv-spark4/bin/activate
-          python3 -m pytest -vv test/python --unittest-binary ./build/release/test/unittest --test-python-verbosity verbose
+          python3 -m pytest -vv test/python --unittest-binary ./build/relassert/test/unittest --test-python-verbosity verbose

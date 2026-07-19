@@ -13,14 +13,36 @@ IcebergSortOrderField IcebergSortOrderField::ParseFromJson(const rest_api_object
 }
 
 IcebergSortOrder IcebergSortOrder::ParseFromJson(const rest_api_objects::SortOrder &sort_order_spec) {
-	IcebergSortOrder result;
-
-	result.sort_order_id = sort_order_spec.order_id;
+	IcebergSortOrder result(sort_order_spec.order_id);
 	for (auto &field : sort_order_spec.fields) {
 		result.fields.push_back(IcebergSortOrderField::ParseFromJson(field));
 	}
 
 	return result;
+}
+
+bool IcebergSortOrder::Equals(const IcebergSortOrder &other) const {
+	if (other.fields.size() != fields.size()) {
+		return false;
+	}
+	for (idx_t i = 0; i < other.fields.size(); i++) {
+		//! Compare source ids
+		if (other.fields[i].source_id != fields[i].source_id) {
+			return false;
+		}
+		//! Compare transforms
+		if (other.fields[i].transform.RawType() != fields[i].transform.RawType()) {
+			return false;
+		}
+		//! Compare transforms
+		if (other.fields[i].direction != fields[i].direction) {
+			return false;
+		}
+		if (other.fields[i].null_order != fields[i].null_order) {
+			return false;
+		}
+	}
+	return true;
 }
 
 bool IcebergSortOrder::IsSorted() const {

@@ -70,7 +70,9 @@ statement ok con2
 begin transaction
 
 statement ok con1
-create table my_datalake.default.rename_table(a varchar)
+create table my_datalake.default.rename_table(
+	a varchar
+)
 
 # Can't be seen by con2
 statement error con2
@@ -82,22 +84,26 @@ Catalog Error: Table with name rename_table does not exist!
 statement ok con2
 ALTER TABLE my_datalake.default.renamed_table RENAME TO rename_table
 
-statement ok con2
+statement error con2
 insert into my_datalake.default.rename_table VALUES (false)
+----
+TransactionContext Error: Iceberg REST Catalog cannot commit this transaction atomically because it mixes table updates with rename/drop requests
+
+statement error con2
+select * from my_datalake.default.rename_table;
+----
+TransactionContext Error: Current transaction is aborted (please ROLLBACK)
 
 statement ok con2
-commit
+abort
 
-query I
+statement error
 select * from my_datalake.default.rename_table order by all
 ----
-false
-true
+Catalog Error: Table with name rename_table does not exist!
 
-statement error con1
+statement ok con1
 commit
-----
-<REGEX>:.*TransactionContext Error: Failed to commit:.*
 
 # Then do the same but commit the CREATE first
 
@@ -118,7 +124,9 @@ statement ok con2
 begin transaction
 
 statement ok con1
-create table my_datalake.default.rename_table(a varchar)
+create table my_datalake.default.rename_table(
+	a varchar
+)
 
 # Can't be seen by con2
 statement error con2

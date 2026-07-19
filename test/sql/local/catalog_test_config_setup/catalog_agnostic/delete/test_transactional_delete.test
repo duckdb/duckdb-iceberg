@@ -1,0 +1,150 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/delete/test_transactional_delete.test
+# group: [delete]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+statement ok
+CALL enable_logging(level='warning');
+
+statement ok
+SET warnings_as_errors = True;
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+set iceberg_use_metadata_log = true;
+
+statement ok
+set enable_logging=true
+
+statement ok
+set logging_level='debug'
+
+# Perform an INSERT and COMMIT it so table has a snapshot id other transactions can find
+statement ok
+drop table if exists my_datalake.default.multi_transaction_insert;
+
+statement ok
+create table my_datalake.default.multi_transaction_insert (
+	a int,
+	b int
+);
+
+# Insert base values
+statement ok
+insert into my_datalake.default.multi_transaction_insert VALUES
+	(0, 0),
+	(1, 0),
+	(2, 0),
+	(3, 0),
+;
+
+statement ok con1
+begin
+
+statement ok con2
+begin
+
+# Insert 2,2
+statement ok con2
+insert into my_datalake.default.multi_transaction_insert VALUES
+	(2, 2);
+
+statement ok con2
+commit
+
+# con1 doesn't see 2,2 yet
+query II con1
+select * from my_datalake.default.multi_transaction_insert order by all;
+----
+0	0
+1	0
+2	0
+3	0
+
+# The delete is evaluated against con1's transaction snapshot, where no rows match.
+# The newer catalog head must not cause an eager client-side write-write conflict.
+statement ok con1
+DELETE FROM my_datalake.default.multi_transaction_insert WHERE b = 2;
+
+statement ok con1
+commit;
+
+# con1's DELETE was a no-op; con2's committed row remains.
+query II
+select * from my_datalake.default.multi_transaction_insert order by all
+----
+0	0
+1	0
+2	0
+2	2
+3	0
+
+# Now perform a delete that would match both for the "unseen" data, added by con2, and existing data, that con1 *can* see
+
+statement ok con1
+begin
+
+statement ok con2
+begin
+
+statement ok con2
+insert into my_datalake.default.multi_transaction_insert VALUES
+	(4, 1),
+	(3, 3);
+
+statement ok con2
+commit
+
+# con1 doesn't see the new data yet
+query II con1
+select * from my_datalake.default.multi_transaction_insert order by all;
+----
+0	0
+1	0
+2	0
+2	2
+3	0
+
+# The delete is evaluated against con1's transaction snapshot, where only 1 row matches.
+# The newer catalog head must not cause an eager client-side write-write conflict.
+# But the delete shouldn't hit the "unseen" data
+statement ok con1
+DELETE FROM my_datalake.default.multi_transaction_insert WHERE a = 3;
+
+# con1 doesn't see the new data yet
+query II con1
+select * from my_datalake.default.multi_transaction_insert order by all;
+----
+0	0
+1	0
+2	0
+2	2
+
+# FIXME: In the future, retries should alleviate this error
+# Commit fails because the snapshot changed
+statement error con1
+commit;
+----
+<REGEX>:.*Failed to commit.*
+
+# con1's DELETE was a no-op; con2's committed row remains.
+query II
+select * from my_datalake.default.multi_transaction_insert order by all
+----
+0	0
+1	0
+2	0
+2	2
+3	0
+3	3
+4	1

@@ -1,0 +1,48 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/transactions/test_append_retry_schema_conflict.test
+# group: [transactions]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+set ignore_error_messages
+
+statement ok
+drop table if exists my_datalake.default.append_retry_schema_conflict;
+
+statement ok
+create table my_datalake.default.append_retry_schema_conflict (a int);
+
+statement ok
+insert into my_datalake.default.append_retry_schema_conflict values (0);
+
+statement ok con1
+begin
+
+statement ok con2
+begin
+
+statement ok con1
+insert into my_datalake.default.append_retry_schema_conflict values (1);
+
+statement ok con2
+alter table my_datalake.default.append_retry_schema_conflict add column b int;
+
+statement ok con2
+commit
+
+statement error con1
+commit
+----
+<REGEX>:.*TransactionContext Error.*changed incompatibly while retrying commit.*
+
+query II
+select a, b from my_datalake.default.append_retry_schema_conflict order by a;
+----
+0	NULL

@@ -1,0 +1,51 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/alter/add_column/alter_add_column_timestamptz_ns_initial_default.test
+# group: [add_column]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+require icu
+
+statement ok
+SET Calendar='gregorian';
+
+statement ok
+SET TimeZone='Europe/Amsterdam';
+
+set ignore_error_messages
+
+statement ok
+CREATE SCHEMA IF NOT EXISTS my_datalake.default;
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.test_timestamptz_ns_initial_default;
+
+statement ok
+CREATE TABLE my_datalake.default.test_timestamptz_ns_initial_default (
+	id INT
+) WITH ('format-version' = 3);
+
+statement ok
+INSERT INTO my_datalake.default.test_timestamptz_ns_initial_default VALUES (1), (2);
+
+statement ok
+ALTER TABLE my_datalake.default.test_timestamptz_ns_initial_default
+ADD COLUMN val TIMESTAMPTZ_NS DEFAULT '2020-01-15 09:30:00.123456789+01'::TIMESTAMPTZ_NS;
+
+query II
+SELECT id, val
+FROM my_datalake.default.test_timestamptz_ns_initial_default
+ORDER BY id;
+----
+1	2020-01-15 09:30:00.123456789+01
+2	2020-01-15 09:30:00.123456789+01
+
+statement ok
+DROP TABLE my_datalake.default.test_timestamptz_ns_initial_default;

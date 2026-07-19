@@ -1,0 +1,150 @@
+# name: test/sql/local/catalog_custom_setup/fixture/conflict_invalidates_cache.test
+# description: A 409 conflict must evict the stale LoadTableResult from the staleness cache so the next auto-commit statement succeeds, but transaction-local table state must remain stable once touched
+# group: [fixture]
+
+require-env FIXTURE_SERVER_AVAILABLE
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+require core_functions
+
+set ignore_error_messages
+
+statement ok
+CREATE SECRET (
+    TYPE S3,
+    KEY_ID 'admin',
+    SECRET 'password',
+    ENDPOINT '127.0.0.1:9000',
+    URL_STYLE 'path',
+    USE_SSL 0
+);
+
+# Re-attach with high staleness so the cache does not expire during the test
+statement ok
+ATTACH OR REPLACE '' AS my_datalake (
+    TYPE ICEBERG,
+    CLIENT_ID 'admin',
+    CLIENT_SECRET 'password',
+    ENDPOINT 'http://127.0.0.1:8181',
+    MAX_TABLE_STALENESS '10 minutes'
+);
+
+statement ok
+CREATE SCHEMA IF NOT EXISTS my_datalake.default;
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.conflict_cache_test;
+
+# Disable the built-in commit retry (default: 4 retries, refreshing metadata
+# and reattempting on a 409) so a conflicting append surfaces to the user
+# immediately instead of being silently healed within the same statement.
+statement ok
+CREATE TABLE my_datalake.default.conflict_cache_test (id INTEGER, val VARCHAR)
+WITH ('commit.retry.num-retries' = '0');
+
+statement ok
+INSERT INTO my_datalake.default.conflict_cache_test VALUES (1, 'seed');
+
+# Populate the staleness cache with snapshot S1
+statement ok
+SELECT * FROM my_datalake.default.conflict_cache_test;
+
+# con2 attaches its own catalog (its own staleness cache) to the same REST
+# catalog, simulating an external writer that advances the server to S2.
+# The default connection's cache is untouched by con2's commit, so it still
+# holds S1.
+statement ok con2
+ATTACH '' AS con2_datalake (
+    TYPE ICEBERG,
+    CLIENT_ID 'admin',
+    CLIENT_SECRET 'password',
+    ENDPOINT 'http://127.0.0.1:8181'
+);
+
+statement ok con2
+INSERT INTO con2_datalake.default.conflict_cache_test VALUES (2, 'from_con2');
+
+# Auto-commit INSERT on the default connection uses the stale S1
+# metadata from the cache. The REST catalog rejects with 409.
+statement error
+INSERT INTO my_datalake.default.conflict_cache_test VALUES (3, 'first_attempt');
+----
+<REGEX>:.*Failed to commit.*
+
+# Retry: the 409 should have evicted the stale cache entry, so fresh
+# metadata (S2) is loaded from the catalog and the commit succeeds.
+statement ok
+INSERT INTO my_datalake.default.conflict_cache_test VALUES (4, 'retry_after_conflict');
+
+query IT
+SELECT id, val FROM my_datalake.default.conflict_cache_test ORDER BY id;
+----
+1	seed
+2	from_con2
+4	retry_after_conflict
+
+# Cleanup
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.conflict_cache_test;
+
+# ------------------------------------------------------------------
+# Transaction-local table state must remain stable once touched, even
+# when the shared staleness cache is evicted by commits on other
+# connections.
+# ------------------------------------------------------------------
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.txn_local_test;
+
+statement ok
+CREATE TABLE my_datalake.default.txn_local_test (id INTEGER, val VARCHAR);
+
+statement ok
+INSERT INTO my_datalake.default.txn_local_test VALUES (1, 'seed');
+
+# con1 begins an explicit transaction and touches the table,
+# pinning the snapshot in its transaction-local state.
+statement ok con1
+BEGIN;
+
+query IT con1
+SELECT id, val FROM my_datalake.default.txn_local_test ORDER BY id;
+----
+1	seed
+
+# External writes advance the server snapshot and evict the shared
+# staleness cache (successful commits evict when MAX_TABLE_STALENESS is set).
+statement ok
+INSERT INTO my_datalake.default.txn_local_test VALUES (2, 'external_1');
+
+statement ok
+INSERT INTO my_datalake.default.txn_local_test VALUES (3, 'external_2');
+
+# con1's transaction-local state must be unaffected by the shared cache evictions.
+# It should still see only the original snapshot.
+query IT con1
+SELECT id, val FROM my_datalake.default.txn_local_test ORDER BY id;
+----
+1	seed
+
+statement ok con1
+COMMIT;
+
+# Outside the transaction, the latest data is visible.
+query IT
+SELECT id, val FROM my_datalake.default.txn_local_test ORDER BY id;
+----
+1	seed
+2	external_1
+3	external_2
+
+# Cleanup
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.txn_local_test;

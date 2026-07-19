@@ -1,0 +1,97 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/maintenance/rewrite_data_files_sequence_pin.test
+# description: rewritten data files keep the starting data sequence number
+# group: [maintenance]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+set ignore_error_messages
+
+statement ok
+drop table if exists my_datalake.default.rewrite_seq_pin;
+
+statement ok
+create table my_datalake.default.rewrite_seq_pin (id INTEGER, payload VARCHAR);
+
+statement ok
+insert into my_datalake.default.rewrite_seq_pin values (1, 'a'), (2, 'b');
+
+statement ok
+insert into my_datalake.default.rewrite_seq_pin values (3, 'c'), (4, 'd');
+
+statement ok
+insert into my_datalake.default.rewrite_seq_pin values (5, 'e'), (6, 'f');
+
+statement ok
+insert into my_datalake.default.rewrite_seq_pin values (7, 'g'), (8, 'h');
+
+statement ok
+insert into my_datalake.default.rewrite_seq_pin values (9, 'i'), (10, 'j');
+
+statement ok
+insert into my_datalake.default.rewrite_seq_pin values (11, 'k'), (12, 'l');
+
+statement ok
+set variable starting_seq = (
+    select max(data_sequence_number)
+    from iceberg_metadata('my_datalake.default.rewrite_seq_pin')
+    where content = 'DATA' and status <> 'DELETED'
+);
+
+query I
+select count(*)
+from iceberg_metadata('my_datalake.default.rewrite_seq_pin')
+where content = 'DATA' and status <> 'DELETED';
+----
+6
+
+query III
+call iceberg_rewrite_data_files('my_datalake.default.rewrite_seq_pin');
+----
+6	1	<REGEX>:[1-9][0-9]*
+
+query I
+select count(*) from my_datalake.default.rewrite_seq_pin;
+----
+12
+
+query I
+select count(*)
+from iceberg_metadata('my_datalake.default.rewrite_seq_pin')
+where content = 'DATA' and status <> 'DELETED';
+----
+1
+
+# Rewritten data file keeps the starting data sequence number.
+query I
+select count(*)
+from iceberg_metadata('my_datalake.default.rewrite_seq_pin')
+where content = 'DATA' and status <> 'DELETED' and data_sequence_number = getvariable('starting_seq');
+----
+1
+
+query I
+select count(*)
+from iceberg_metadata('my_datalake.default.rewrite_seq_pin')
+where content = 'DATA' and status <> 'DELETED' and data_sequence_number < manifest_sequence_number;
+----
+1
+
+query I
+select count(*)
+from iceberg_metadata('my_datalake.default.rewrite_seq_pin')
+where content = 'DATA' and status <> 'DELETED'
+  and file_sequence_number = manifest_sequence_number
+  and file_sequence_number > data_sequence_number;
+----
+1
+
+statement ok
+drop table if exists my_datalake.default.rewrite_seq_pin;

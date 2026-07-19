@@ -40,7 +40,16 @@ statement ok
 DROP TABLE IF EXISTS my_datalake.default.cache_test;
 
 statement ok
+DROP TABLE IF EXISTS my_datalake.default.cache_test_renamed;
+
+statement ok
 DROP TABLE IF EXISTS my_datalake.default.merge_source;
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.cache_txn_old;
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.cache_txn_new;
 
 statement ok
 CREATE TABLE my_datalake.default.cache_test (a INTEGER, b VARCHAR);
@@ -169,9 +178,76 @@ SELECT * FROM my_datalake.default.cache_test_renamed ORDER BY a;
 3	merged	NULL
 4	new	NULL
 
+statement error
+SELECT * FROM my_datalake.default.cache_test;
+----
+
+# RENAME TABLE ROLLBACK / TRANSACTION ISOLATION
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.cache_txn_old;
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.cache_txn_new;
+
+statement ok
+CREATE TABLE my_datalake.default.cache_txn_old (id INTEGER);
+
+statement ok
+INSERT INTO my_datalake.default.cache_txn_old VALUES (42);
+
+query I
+SELECT * FROM my_datalake.default.cache_txn_old;
+----
+42
+
+statement ok con1
+BEGIN;
+
+statement ok con2
+BEGIN;
+
+statement ok con1
+ALTER TABLE my_datalake.default.cache_txn_old RENAME TO cache_txn_new;
+
+query I con1
+SELECT * FROM my_datalake.default.cache_txn_new;
+----
+42
+
+statement error con1
+SELECT * FROM my_datalake.default.cache_txn_old;
+----
+
+query I con2
+SELECT * FROM my_datalake.default.cache_txn_old;
+----
+42
+
+statement error con2
+SELECT * FROM my_datalake.default.cache_txn_new;
+----
+
+statement ok con1
+ROLLBACK;
+
+statement ok con2
+COMMIT;
+
+query I
+SELECT * FROM my_datalake.default.cache_txn_old;
+----
+42
+
+statement error
+SELECT * FROM my_datalake.default.cache_txn_new;
+----
+
 # Cleanup
 statement ok
 DROP TABLE my_datalake.default.cache_test_renamed;
 
 statement ok
 DROP TABLE my_datalake.default.merge_source;
+
+statement ok
+DROP TABLE my_datalake.default.cache_txn_old;

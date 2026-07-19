@@ -40,23 +40,39 @@ string RemovePropertiesUpdate::TryFromJSON(yyjson_val *obj) {
 	if (!error.empty()) {
 		return error;
 	}
+	auto action_refinement_val = yyjson_obj_get(obj, "action");
+	if (action_refinement_val) {
+		string action_refinement;
+		if (yyjson_is_str(action_refinement_val)) {
+			action_refinement = yyjson_get_str(action_refinement_val);
+		} else {
+			return StringUtil::Format(
+			    "RemovePropertiesUpdate property 'action_refinement' is not of type 'string', found '%s' instead",
+			    yyjson_get_type_desc(action_refinement_val));
+		}
+		if (!yyjson_is_null(action_refinement_val) && action_refinement != "remove-properties") {
+			return "RemovePropertiesUpdate property 'action_refinement' does not match its required const value";
+		}
+	} else {
+		return "RemovePropertiesUpdate required property 'action' is missing";
+	}
 	auto removals_val = yyjson_obj_get(obj, "removals");
 	if (!removals_val) {
 		return "RemovePropertiesUpdate required property 'removals' is missing";
 	} else {
 		if (yyjson_is_arr(removals_val)) {
-			size_t idx, max;
-			yyjson_val *val;
-			yyjson_arr_foreach(removals_val, idx, max, val) {
-				string tmp;
-				if (yyjson_is_str(val)) {
-					tmp = yyjson_get_str(val);
+			size_t removals_idx, removals_max;
+			yyjson_val *removals_item_val;
+			yyjson_arr_foreach(removals_val, removals_idx, removals_max, removals_item_val) {
+				string removals_item;
+				if (yyjson_is_str(removals_item_val)) {
+					removals_item = yyjson_get_str(removals_item_val);
 				} else {
 					return StringUtil::Format(
-					    "RemovePropertiesUpdate property 'tmp' is not of type 'string', found '%s' instead",
-					    yyjson_get_type_desc(val));
+					    "RemovePropertiesUpdate property 'removals_item' is not of type 'string', found '%s' instead",
+					    yyjson_get_type_desc(removals_item_val));
 				}
-				removals.emplace_back(std::move(tmp));
+				removals.emplace_back(std::move(removals_item));
 			}
 		} else {
 			return StringUtil::Format(

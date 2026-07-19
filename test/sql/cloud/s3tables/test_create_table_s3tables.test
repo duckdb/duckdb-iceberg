@@ -27,7 +27,7 @@ CREATE SECRET (
 foreach aws_sdk_val true false
 
 statement ok
-SET iceberg_via_aws_sdk_for_catalog_interactions=${aws_sdk_val};
+SET iceberg_via_aws_sdk_for_catalog_interactions={aws_sdk_val};
 
 statement ok
 attach or replace 'arn:aws:s3tables:us-east-2:840140254803:bucket/iceberg-testing' as s3_catalog (

@@ -1,0 +1,208 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/insert/test_merge_append_txn_schema_change.test
+# description: Manifests written before and after an ALTER in one transaction group by their own schema id
+# group: [insert]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+drop table if exists my_datalake.default.merge_txn_schema;
+
+statement ok
+create table my_datalake.default.merge_txn_schema (
+	id INTEGER,
+	data VARCHAR
+) WITH (
+	'commit.manifest.min-count-to-merge' = '2',
+	'commit.manifest.target-size-bytes' = '8388608'
+);
+
+# Two committed inserts under the original schema.
+statement ok
+insert into my_datalake.default.merge_txn_schema values
+	(1, 'a'),
+	(2, 'b');
+
+statement ok
+insert into my_datalake.default.merge_txn_schema values
+	(3, 'c'),
+	(4, 'd');
+
+# One transaction that inserts under the old schema, evolves it, then inserts under the new schema.
+# The manifest written before the ALTER carries schema id 0; the one after carries schema id 1. Merge
+# must group them by their own schema id, never fold the pre-ALTER manifest into the new-schema group.
+statement ok
+BEGIN TRANSACTION;
+
+statement ok
+insert into my_datalake.default.merge_txn_schema values
+	(5, 'e'),
+	(6, 'f');
+
+statement ok
+ALTER TABLE my_datalake.default.merge_txn_schema ADD COLUMN extra INTEGER;
+
+statement ok
+insert into my_datalake.default.merge_txn_schema values
+	(7, 'g', 70),
+	(8, 'h', 80);
+
+statement ok
+COMMIT;
+
+# Data equivalence: old-schema rows read NULL for the new column, new rows keep their values.
+query III
+select id, data, extra from my_datalake.default.merge_txn_schema order by id;
+----
+1	a	NULL
+2	b	NULL
+3	c	NULL
+4	d	NULL
+5	e	NULL
+6	f	NULL
+7	g	70
+8	h	80
+
+query I
+select count(*) from my_datalake.default.merge_txn_schema;
+----
+8
+
+# The mixed-schema commit merges once at commit time, so the two pre-transaction schema-0 manifests
+# compact into one carried-over manifest, while the transaction still contributes one schema-0 and
+# one schema-1 new manifest. Inspect the latest published manifest list directly so we catch any
+# commit-time restamping to the latest table schema without relying on random manifest_path ordering.
+query I
+select count(*) from (
+	select distinct manifest_path
+	from iceberg_metadata(my_datalake.default.merge_txn_schema)
+);
+----
+3
+
+statement ok
+set variable latest_txn_manifest_list = (
+	select manifest_list
+	from iceberg_snapshots(my_datalake.default.merge_txn_schema)
+	order by sequence_number desc
+	limit 1
+);
+
+statement ok
+set variable txn_manifest_1 = (
+	select manifest_path
+	from read_avro(getvariable('latest_txn_manifest_list'))
+	order by manifest_path
+	limit 1
+);
+
+statement ok
+set variable txn_manifest_2 = (
+	select manifest_path
+	from read_avro(getvariable('latest_txn_manifest_list'))
+	order by manifest_path
+	limit 1 offset 1
+);
+
+statement ok
+set variable txn_manifest_3 = (
+	select manifest_path
+	from read_avro(getvariable('latest_txn_manifest_list'))
+	order by manifest_path
+	limit 1 offset 2
+);
+
+query II
+select
+	count(*) filter (where schema_id = '0'),
+	count(*) filter (where schema_id = '1')
+from (
+	select value as schema_id from avro_metadata(getvariable('txn_manifest_1')) where key = 'schema-id'
+	union all
+	select value as schema_id from avro_metadata(getvariable('txn_manifest_2')) where key = 'schema-id'
+	union all
+	select value as schema_id from avro_metadata(getvariable('txn_manifest_3')) where key = 'schema-id'
+) t;
+----
+2	1
+
+# A further insert + read still returns everything intact after the mixed-schema transaction.
+statement ok
+insert into my_datalake.default.merge_txn_schema values
+	(9, 'i', 90),
+	(10, 'j', 100);
+
+query I
+select count(*) from my_datalake.default.merge_txn_schema;
+----
+10
+
+# After the last insert, we merge the 2 manifests with schema_id = 0 into a single manifest
+# The 1 manifest with schema_id = 1 stays untouched
+# And we add a new manifest for the INSERT of the last (implicit) transaction
+query I
+select count(*) from (
+	select distinct manifest_path
+	from iceberg_metadata(my_datalake.default.merge_txn_schema)
+);
+----
+3
+
+statement ok
+set variable latest_txn_manifest_list = (
+	select manifest_list
+	from iceberg_snapshots(my_datalake.default.merge_txn_schema)
+	order by sequence_number desc
+	limit 1
+);
+
+statement ok
+set variable txn_manifest_1 = (
+	select manifest_path
+	from read_avro(getvariable('latest_txn_manifest_list'))
+	order by manifest_path
+	limit 1
+);
+
+statement ok
+set variable txn_manifest_2 = (
+	select manifest_path
+	from read_avro(getvariable('latest_txn_manifest_list'))
+	order by manifest_path
+	limit 1 offset 1
+);
+
+statement ok
+set variable txn_manifest_3 = (
+	select manifest_path
+	from read_avro(getvariable('latest_txn_manifest_list'))
+	order by manifest_path
+	limit 1 offset 2
+);
+
+query II
+select
+	count(*) filter (where schema_id = '0'),
+	count(*) filter (where schema_id = '1')
+from (
+	select value as schema_id from avro_metadata(getvariable('txn_manifest_1')) where key = 'schema-id'
+	union all
+	select value as schema_id from avro_metadata(getvariable('txn_manifest_2')) where key = 'schema-id'
+	union all
+	select value as schema_id from avro_metadata(getvariable('txn_manifest_3')) where key = 'schema-id'
+) t;
+----
+1	2
+
+statement ok
+drop table my_datalake.default.merge_txn_schema;

@@ -39,8 +39,19 @@ select database, schema, name from (show all tables) where name = 'metrics';
 ----
 glue_catalog	simple_glue_database	metrics
 
+statement ok
+insert into glue_catalog.simple_glue_database.duckdb_created_table select range a from range(10);
+
 query I
-select * from glue_catalog.simple_glue_database.duckdb_created_table limit 10;
+select a from glue_catalog.simple_glue_database.duckdb_created_table group by a order by a limit 10;
 ----
+0
 1
 2
+3
+4
+5
+6
+7
+8
+9

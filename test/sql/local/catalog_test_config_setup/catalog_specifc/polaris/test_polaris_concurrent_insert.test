@@ -21,7 +21,12 @@ statement ok
 DROP TABLE IF EXISTS my_datalake.default.concurrent_new_table_test;
 
 statement ok
-CREATE TABLE my_datalake.default.concurrent_new_table_test (id INTEGER, name VARCHAR);
+CREATE TABLE my_datalake.default.concurrent_new_table_test (
+	id INTEGER,
+	name VARCHAR
+) WITH (
+	'commit.retry.num-retries' = '0'
+);
 
 # con1 starts a transaction and inserts
 statement ok con1
@@ -73,7 +78,12 @@ statement ok
 DROP TABLE IF EXISTS my_datalake.default.concurrent_new_table_test;
 
 statement ok
-CREATE TABLE my_datalake.default.concurrent_new_table_test (id INTEGER, name VARCHAR);
+CREATE TABLE my_datalake.default.concurrent_new_table_test (
+	id INTEGER,
+	name VARCHAR
+) WITH (
+	'commit.retry.num-retries' = '0'
+)
 
 # con1 starts a transaction and inserts
 statement ok con1

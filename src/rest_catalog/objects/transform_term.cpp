@@ -44,6 +44,9 @@ string TransformTerm::TryFromJSON(yyjson_val *obj) {
 			return StringUtil::Format("TransformTerm property 'type' is not of type 'string', found '%s' instead",
 			                          yyjson_get_type_desc(type_val));
 		}
+		if (!yyjson_is_null(type_val) && type != "transform") {
+			return "TransformTerm property 'type' does not match its required const value";
+		}
 	}
 	auto transform_val = yyjson_obj_get(obj, "transform");
 	if (!transform_val) {

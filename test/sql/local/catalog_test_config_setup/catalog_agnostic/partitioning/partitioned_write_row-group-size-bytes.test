@@ -3,30 +3,90 @@
 
 require-env CATALOG_TEST_CONFIG_SETUP
 
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+set ignore_error_messages
+
+statement ok
+SET threads=1;
+
+statement ok
+SET preserve_insertion_order=false;
+
 statement ok
 drop table if exists my_datalake.default.my_table;
 
 statement ok
 CREATE TABLE my_datalake.default.my_table (
-  user_id INT
-) PARTITIONED BY (user_id) WITH (
-  'write.parquet.row-group-size-bytes' = '134217728'
+  user_id INT,
+  partition_id INT
+) PARTITIONED BY (partition_id) WITH (
+  'write.parquet.row-group-size-bytes' = '200000'
 );
 
 query II
-SELECT log_level, message FROM duckdb_logs
+SELECT * FROM iceberg_table_properties(my_datalake.default.my_table)
+WHERE key = 'write.parquet.row-group-size-bytes';
 ----
-
-statement error
-INSERT INTO my_datalake.default.my_table SELECT * FROM range(1000);
-----
-Invalid Input Error: Table property row-group-size-bytes is currently not supported for partitioned tables.
-To ignore this error run "SET ignore_row_group_size_for_partitioned_tables=true"
+write.parquet.row-group-size-bytes	200000
 
 statement ok
-SET ignore_row_group_size_for_partitioned_tables=true
+INSERT INTO my_datalake.default.my_table
+SELECT i, i % 10
+FROM range(100_000) t(i);
+
+statement ok
+SET VARIABLE parquet_filepath = (
+  SELECT file_path
+  FROM iceberg_metadata(my_datalake.default.my_table)
+  LIMIT 1
+);
 
 query I
-INSERT INTO my_datalake.default.my_table SELECT * FROM range(1000);
+SELECT count(row_group_bytes)
+FROM parquet_metadata(getvariable('parquet_filepath'));
 ----
-1000
+10
+
+# Now test with human-readable format
+statement ok
+drop table if exists my_datalake.default.my_table;
+
+statement ok
+CREATE TABLE my_datalake.default.my_table (
+  user_id INT,
+  partition_id INT
+) PARTITIONED BY (partition_id) WITH (
+  'write.parquet.row-group-size-bytes' = '200KB'
+);
+
+# FIXME: to be good citizens, we should probably transform to a non-human-readable representation (not formatted with KB)
+query II
+SELECT * FROM iceberg_table_properties(my_datalake.default.my_table)
+WHERE key = 'write.parquet.row-group-size-bytes';
+----
+write.parquet.row-group-size-bytes	200KB
+
+statement ok
+INSERT INTO my_datalake.default.my_table
+SELECT i, i % 10
+FROM range(100_000) t(i);
+
+statement ok
+SET VARIABLE parquet_filepath = (
+  SELECT file_path
+  FROM iceberg_metadata(my_datalake.default.my_table)
+  LIMIT 1
+);
+
+query I
+SELECT count(row_group_bytes)
+FROM parquet_metadata(getvariable('parquet_filepath'));
+----
+10

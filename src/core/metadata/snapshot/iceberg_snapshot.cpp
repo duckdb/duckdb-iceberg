@@ -188,7 +188,10 @@ static IcebergSnapshotMetrics MetricsFromSummary(const case_insensitive_map_t<st
 rest_api_objects::Snapshot IcebergSnapshot::ToRESTObject(const IcebergTableMetadata &table_metadata) const {
 	rest_api_objects::Snapshot res;
 
-	res.snapshot_id = snapshot_id;
+	if (!snapshot_id) {
+		throw InvalidConfigurationException("snapshot.snapshot_id is not set");
+	}
+	res.snapshot_id = *snapshot_id;
 	res.timestamp_ms = timestamp_ms.value;
 	res.manifest_list = manifest_list;
 
@@ -198,20 +201,20 @@ rest_api_objects::Snapshot IcebergSnapshot::ToRESTObject(const IcebergTableMetad
 		res.summary.additional_properties[MetricsTypeToString(entry.first)] = std::to_string(entry.second);
 	}
 
-	if (has_parent_snapshot) {
-		res.parent_snapshot_id = parent_snapshot_id;
+	if (parent_snapshot_id) {
+		res.parent_snapshot_id = *parent_snapshot_id;
 	}
 
-	if (has_added_rows) {
-		res.added_rows = added_rows;
+	if (added_rows) {
+		res.added_rows = *added_rows;
 	}
 
 	res.sequence_number = sequence_number;
 
 	res.schema_id = schema_id;
 
-	if (has_first_row_id) {
-		res.first_row_id = first_row_id;
+	if (first_row_id) {
+		res.first_row_id = *first_row_id;
 	} else if (table_metadata.iceberg_version >= 3) {
 		throw InternalException("first-row-id required for V3 tables!");
 	}
@@ -221,7 +224,11 @@ rest_api_objects::Snapshot IcebergSnapshot::ToRESTObject(const IcebergTableMetad
 
 IcebergSnapshot IcebergSnapshot::ParseSnapshot(const rest_api_objects::Snapshot &snapshot,
                                                IcebergTableMetadata &metadata) {
-	IcebergSnapshot ret;
+	if (!snapshot.schema_id) {
+		throw InvalidConfigurationException("snapshot.schema_id is not set");
+	}
+
+	IcebergSnapshot ret(*snapshot.schema_id);
 	if (metadata.iceberg_version == 1) {
 		//! SPEC: Snapshot field sequence-number must default to 0
 		ret.sequence_number = 0;
@@ -231,9 +238,7 @@ IcebergSnapshot IcebergSnapshot::ParseSnapshot(const rest_api_objects::Snapshot 
 	}
 
 	ret.snapshot_id = snapshot.snapshot_id;
-	ret.timestamp_ms = Timestamp::FromEpochMs(snapshot.timestamp_ms);
-	D_ASSERT(snapshot.schema_id);
-	ret.schema_id = *snapshot.schema_id;
+	ret.timestamp_ms = timestamp_ms_t(snapshot.timestamp_ms);
 	ret.manifest_list = snapshot.manifest_list;
 	ret.metrics = MetricsFromSummary(snapshot.summary.additional_properties);
 
@@ -252,18 +257,12 @@ IcebergSnapshot IcebergSnapshot::ParseSnapshot(const rest_api_objects::Snapshot 
 
 	if (snapshot.first_row_id) {
 		ret.first_row_id = *snapshot.first_row_id;
-		ret.has_first_row_id = true;
 	}
 
 	if (snapshot.added_rows) {
 		ret.added_rows = *snapshot.added_rows;
-		ret.has_added_rows = true;
 	}
 	return ret;
-}
-
-void IcebergSnapshot::SetSchemaId(int32_t value) {
-	schema_id = value;
 }
 
 int32_t IcebergSnapshot::GetSchemaId() const {

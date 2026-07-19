@@ -3,6 +3,8 @@
 
 #include "duckdb/common/types.hpp"
 #include "duckdb/common/optional.hpp"
+#include "duckdb/common/enums/http_status_code.hpp"
+#include "duckdb/common/http_util.hpp"
 #include "duckdb/parser/parsed_data/create_table_info.hpp"
 #include "duckdb/parser/parsed_data/create_secret_info.hpp"
 
@@ -12,6 +14,7 @@
 namespace duckdb {
 
 class IcebergCatalog;
+struct IcebergCreateTableRequest;
 class IcebergSchemaEntry;
 class IcebergTableEntry;
 
@@ -37,6 +40,29 @@ public:
 	optional<rest_api_objects::IcebergErrorResponse> error_;
 };
 
+class CommitResult {
+public:
+	CommitResult() {
+	}
+
+public:
+	bool Success() const {
+		return success;
+	}
+	bool IsConflict() const {
+		return status == HTTPStatusCode::Conflict_409;
+	}
+	void Throw(const string &url) const;
+
+public:
+	bool success = false;
+	HTTPStatusCode status = HTTPStatusCode::OK_200;
+	string reason;
+	string body;
+	HTTPHeaders headers;
+	optional<rest_api_objects::IcebergErrorResponse> error_;
+};
+
 class IRCAPI {
 public:
 	static const string API_VERSION_1;
@@ -56,12 +82,12 @@ public:
 	GetNamespace(ClientContext &context, IcebergCatalog &catalog, const IcebergSchemaEntry &schema);
 	static vector<IRCAPISchema> GetSchemas(ClientContext &context, IcebergCatalog &catalog,
 	                                       const vector<string> &parent);
-	static void CommitTableUpdate(ClientContext &context, IcebergCatalog &catalog, const vector<string> &schema,
-	                              const string &table_name, const string &body);
+	static CommitResult CommitTableUpdate(ClientContext &context, IcebergCatalog &catalog, const vector<string> &schema,
+	                                      const string &table_name, const string &body);
 	static void CommitTableDelete(ClientContext &context, IcebergCatalog &catalog, const vector<string> &schema,
 	                              const string &table_name);
 	static void CommitTableRename(ClientContext &context, IcebergCatalog &catalog, const string &body);
-	static void CommitMultiTableUpdate(ClientContext &context, IcebergCatalog &catalog, const string &body);
+	static CommitResult CommitMultiTableUpdate(ClientContext &context, IcebergCatalog &catalog, const string &body);
 	static void CommitNamespaceCreate(ClientContext &context, IcebergCatalog &catalog, string body);
 	static void CommitNamespaceDrop(ClientContext &context, IcebergCatalog &catalog,
 	                                const vector<string> &namespace_items);
@@ -70,7 +96,8 @@ public:
 	//! stage create = false, table is created immediately in the IRC
 	//! stage create = true, table is not created, but metadata is initialized and returned
 	static rest_api_objects::LoadTableResult CommitNewTable(ClientContext &context, IcebergCatalog &catalog,
-	                                                        const IcebergTableEntry &table);
+	                                                        const vector<string> &namespace_items,
+	                                                        const IcebergCreateTableRequest &request);
 	static rest_api_objects::CatalogConfig GetCatalogConfig(ClientContext &context, IcebergCatalog &catalog,
 	                                                        const string &warehouse);
 };

@@ -206,12 +206,17 @@ int32_t IcebergHash::HashDecimalHugeInt(hugeint_t unscaled) {
 
 //! Hash time value (Iceberg spec: int64 microseconds from midnight)
 int32_t IcebergHash::HashTime(dtime_t t) {
-	return HashInt64(t.micros);
+	return HashInt64(t.value);
 }
 
-//! Hash timestamp_ns value (Iceberg spec: int64 nanoseconds from epoch)
+//! Hash timestamp_ns bucket values as microseconds from epoch.
 int32_t IcebergHash::HashTimestampNs(timestamp_ns_t t) {
-	return HashInt64(t.value);
+	return HashInt64(IcebergNanosToMicrosFloor(t.value));
+}
+
+//! Hash timestamptz_ns bucket values as microseconds from epoch.
+int32_t IcebergHash::HashTimestampTzNs(timestamp_tz_ns_t t) {
+	return HashInt64(IcebergNanosToMicrosFloor(t.value));
 }
 
 //! Hash UUID value (Iceberg spec: 16 big-endian bytes, MSB first)
@@ -264,7 +269,9 @@ int32_t IcebergHash::HashValue(const Value &value) {
 		return HashTime(value.GetValue<dtime_t>());
 	// timestamp_ns: Iceberg buckets nanos as micros first (BucketTimestampNano in Java)
 	case LogicalTypeId::TIMESTAMP_NS:
-		return HashInt64(IcebergNanosToMicrosFloor(value.GetValue<timestamp_ns_t>().value));
+		return HashTimestampNs(value.GetValue<timestamp_ns_t>());
+	case LogicalTypeId::TIMESTAMP_TZ_NS:
+		return HashTimestampTzNs(value.GetValue<timestamp_tz_ns_t>());
 	// uuid: 16 big-endian bytes
 	case LogicalTypeId::UUID:
 		return HashUUID(value.GetValueUnsafe<hugeint_t>());
@@ -289,6 +296,7 @@ Value IcebergHash::BucketValue(const Value &v, int32_t num_buckets) {
 	case LogicalTypeId::TIMESTAMP:
 	case LogicalTypeId::TIMESTAMP_TZ:
 	case LogicalTypeId::TIMESTAMP_NS:
+	case LogicalTypeId::TIMESTAMP_TZ_NS:
 	case LogicalTypeId::UUID:
 	case LogicalTypeId::VARCHAR:
 	case LogicalTypeId::BLOB:

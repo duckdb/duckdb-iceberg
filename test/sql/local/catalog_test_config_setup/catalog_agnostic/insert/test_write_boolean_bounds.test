@@ -1,0 +1,50 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/insert/test_write_boolean_bounds.test
+# group: [insert]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+require icu
+
+require core_functions
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+create schema if not exists my_datalake.default;
+
+statement ok
+drop table if exists my_datalake.default.bounds_boolean;
+
+statement ok
+create table my_datalake.default.bounds_boolean (
+b_mixed BOOLEAN,
+b_all_true BOOLEAN,
+b_all_false BOOLEAN,
+b_with_nulls BOOLEAN
+);
+
+statement ok
+insert into my_datalake.default.bounds_boolean values
+(false, true, false, NULL),
+(true, true, false, true);
+
+# Boolean bounds are serialized as a single byte (0x00 = false, 0x01 = true);
+# before this they were skipped entirely (a leftover from before duckdb#20222,
+# when RETURN_STATS did not produce boolean min/max), so readers could not
+# prune on boolean columns at all.
+query III
+select column_name, upper_bound, lower_bound from iceberg_column_stats(my_datalake.default.bounds_boolean) order by all;
+----
+b_all_false	false	false
+b_all_true	true	true
+b_mixed	true	false
+b_with_nulls	true	true

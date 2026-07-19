@@ -14,6 +14,7 @@
 #include "rest_catalog/objects/assign_uuidupdate.hpp"
 #include "rest_catalog/objects/remove_encryption_key_update.hpp"
 #include "rest_catalog/objects/remove_partition_specs_update.hpp"
+#include "rest_catalog/objects/remove_partition_statistics_update.hpp"
 #include "rest_catalog/objects/remove_properties_update.hpp"
 #include "rest_catalog/objects/remove_schemas_update.hpp"
 #include "rest_catalog/objects/remove_snapshot_ref_update.hpp"
@@ -23,6 +24,7 @@
 #include "rest_catalog/objects/set_default_sort_order_update.hpp"
 #include "rest_catalog/objects/set_default_spec_update.hpp"
 #include "rest_catalog/objects/set_location_update.hpp"
+#include "rest_catalog/objects/set_partition_statistics_update.hpp"
 #include "rest_catalog/objects/set_properties_update.hpp"
 #include "rest_catalog/objects/set_snapshot_ref_update.hpp"
 #include "rest_catalog/objects/set_statistics_update.hpp"
@@ -71,6 +73,8 @@ public:
 	optional<RemovePropertiesUpdate> remove_properties_update;
 	optional<SetStatisticsUpdate> set_statistics_update;
 	optional<RemoveStatisticsUpdate> remove_statistics_update;
+	optional<SetPartitionStatisticsUpdate> set_partition_statistics_update;
+	optional<RemovePartitionStatisticsUpdate> remove_partition_statistics_update;
 	optional<RemovePartitionSpecsUpdate> remove_partition_specs_update;
 	optional<RemoveSchemasUpdate> remove_schemas_update;
 	optional<AddEncryptionKeyUpdate> add_encryption_key_update;

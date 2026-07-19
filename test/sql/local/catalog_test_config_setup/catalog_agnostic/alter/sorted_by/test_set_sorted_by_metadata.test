@@ -1,0 +1,228 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/alter/sorted_by/test_set_sorted_by_metadata.test
+# description: Test ALTER TABLE SET SORTED BY metadata and sort-order reuse
+# group: [sorted_by]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+CREATE SCHEMA IF NOT EXISTS my_datalake.default;
+
+statement ok
+drop table if exists my_datalake.default.test_set_sorted_by_orderings;
+
+statement ok
+CREATE TABLE my_datalake.default.test_set_sorted_by_orderings (
+	a INTEGER,
+	b INTEGER,
+	c INTEGER,
+	d INTEGER
+);
+
+# Add a new sort spec
+statement ok
+ALTER TABLE my_datalake.default.test_set_sorted_by_orderings SET SORTED BY (
+	a ASC NULLS FIRST
+);
+
+# New sort spec uses sort_order_id 1
+query ITT
+SELECT
+	metadata."default-sort-order-id",
+	sort_order.fields[1].direction,
+	sort_order.fields[1]."null-order"
+FROM iceberg_load_table_response(my_datalake.default.test_set_sorted_by_orderings),
+unnest(metadata."sort-orders"::VARIANT[]) AS t(sort_order)
+WHERE try_cast(sort_order."order-id" AS INTEGER) = metadata."default-sort-order-id";
+----
+1	asc	nulls-first
+
+# Add another new sort spec
+statement ok
+ALTER TABLE my_datalake.default.test_set_sorted_by_orderings SET SORTED BY (
+	b ASC NULLS LAST
+);
+
+# New sort spec uses sort_order_id 2
+query ITT
+SELECT
+	metadata."default-sort-order-id",
+	sort_order.fields[1].direction,
+	sort_order.fields[1]."null-order"
+FROM iceberg_load_table_response(my_datalake.default.test_set_sorted_by_orderings),
+unnest(metadata."sort-orders"::VARIANT[]) AS t(sort_order)
+WHERE try_cast(sort_order."order-id" AS INTEGER) = metadata."default-sort-order-id";
+----
+2	asc	nulls-last
+
+# And another
+statement ok
+ALTER TABLE my_datalake.default.test_set_sorted_by_orderings SET SORTED BY (
+	c DESC NULLS FIRST
+);
+
+query ITT
+SELECT
+	metadata."default-sort-order-id",
+	sort_order.fields[1].direction,
+	sort_order.fields[1]."null-order"
+FROM iceberg_load_table_response(my_datalake.default.test_set_sorted_by_orderings),
+unnest(metadata."sort-orders"::VARIANT[]) AS t(sort_order)
+WHERE try_cast(sort_order."order-id" AS INTEGER) = metadata."default-sort-order-id";
+----
+3	desc	nulls-first
+
+# Yet another
+statement ok
+ALTER TABLE my_datalake.default.test_set_sorted_by_orderings SET SORTED BY (
+	d DESC NULLS LAST
+);
+
+query ITT
+SELECT
+	metadata."default-sort-order-id",
+	sort_order.fields[1].direction,
+	sort_order.fields[1]."null-order"
+FROM iceberg_load_table_response(my_datalake.default.test_set_sorted_by_orderings),
+unnest(metadata."sort-orders"::VARIANT[]) AS t(sort_order)
+WHERE try_cast(sort_order."order-id" AS INTEGER) = metadata."default-sort-order-id";
+----
+4	desc	nulls-last
+
+statement ok
+drop table if exists my_datalake.default.test_set_sorted_by_reuse;
+
+statement ok
+CREATE TABLE my_datalake.default.test_set_sorted_by_reuse (
+	a INTEGER,
+	b INTEGER
+);
+
+# No sort orders except for the default one
+query II
+SELECT
+	metadata."default-sort-order-id",
+	len(metadata."sort-orders"::VARIANT[])
+FROM iceberg_load_table_response(my_datalake.default.test_set_sorted_by_reuse);
+----
+0	1
+
+statement ok
+ALTER TABLE my_datalake.default.test_set_sorted_by_reuse SET SORTED BY (
+	a DESC NULLS FIRST
+);
+
+query II
+SELECT
+	metadata."default-sort-order-id",
+	len(metadata."sort-orders"::VARIANT[])
+FROM iceberg_load_table_response(my_datalake.default.test_set_sorted_by_reuse);
+----
+1	2
+
+statement ok
+ALTER TABLE my_datalake.default.test_set_sorted_by_reuse SET SORTED BY (
+	b ASC NULLS LAST
+);
+
+query II
+SELECT
+	metadata."default-sort-order-id",
+	len(metadata."sort-orders"::VARIANT[])
+FROM iceberg_load_table_response(my_datalake.default.test_set_sorted_by_reuse);
+----
+2	3
+
+# Reuse the same sort order
+statement ok
+ALTER TABLE my_datalake.default.test_set_sorted_by_reuse SET SORTED BY (
+	a DESC NULLS FIRST
+);
+
+# Results in no new sort spec, and reusing the existing spec instead
+query II
+SELECT
+	metadata."default-sort-order-id",
+	len(metadata."sort-orders"::VARIANT[])
+FROM iceberg_load_table_response(my_datalake.default.test_set_sorted_by_reuse);
+----
+1	3
+
+statement ok
+ALTER TABLE my_datalake.default.test_set_sorted_by_reuse RESET SORTED BY;
+
+query II
+SELECT
+	metadata."default-sort-order-id",
+	len(metadata."sort-orders"::VARIANT[])
+FROM iceberg_load_table_response(my_datalake.default.test_set_sorted_by_reuse);
+----
+0	3
+
+statement ok
+ALTER TABLE my_datalake.default.test_set_sorted_by_reuse SET SORTED BY (
+	b ASC NULLS LAST
+);
+
+# Again, reusing an existing sort spec
+query II
+SELECT
+	metadata."default-sort-order-id",
+	len(metadata."sort-orders"::VARIANT[])
+FROM iceberg_load_table_response(my_datalake.default.test_set_sorted_by_reuse);
+----
+2	3
+
+statement ok
+drop table if exists my_datalake.default.test_set_sorted_by_struct_fields;
+
+statement ok
+CREATE TABLE my_datalake.default.test_set_sorted_by_struct_fields (
+	id INTEGER,
+	payload STRUCT(
+		category VARCHAR,
+		nested STRUCT(ts TIMESTAMP)
+	)
+);
+
+statement ok
+ALTER TABLE my_datalake.default.test_set_sorted_by_struct_fields SET SORTED BY (
+	payload.category ASC NULLS LAST
+);
+
+query TTT
+SELECT
+	sort_order.fields[1].transform,
+	sort_order.fields[1].direction,
+	sort_order.fields[1]."null-order"
+FROM iceberg_load_table_response(my_datalake.default.test_set_sorted_by_struct_fields),
+unnest(metadata."sort-orders"::VARIANT[]) AS t(sort_order)
+WHERE try_cast(sort_order."order-id" AS INTEGER) = metadata."default-sort-order-id";
+----
+identity	asc	nulls-last
+
+statement ok
+ALTER TABLE my_datalake.default.test_set_sorted_by_struct_fields SET SORTED BY (
+	year(payload.nested.ts) DESC NULLS FIRST
+);
+
+query TTT
+SELECT
+	sort_order.fields[1].transform,
+	sort_order.fields[1].direction,
+	sort_order.fields[1]."null-order"
+FROM iceberg_load_table_response(my_datalake.default.test_set_sorted_by_struct_fields),
+unnest(metadata."sort-orders"::VARIANT[]) AS t(sort_order)
+WHERE try_cast(sort_order."order-id" AS INTEGER) = metadata."default-sort-order-id";
+----
+year	desc	nulls-first

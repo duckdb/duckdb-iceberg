@@ -35,16 +35,20 @@ ViewRequirement ViewRequirement::Copy() const {
 
 string ViewRequirement::TryFromJSON(yyjson_val *obj) {
 	string error;
-	do {
+	auto discriminator_val = yyjson_obj_get(obj, "type");
+	if (!discriminator_val || !yyjson_is_str(discriminator_val)) {
+		return "ViewRequirement discriminator 'type' is missing or is not a string";
+	}
+	string discriminator = yyjson_get_str(discriminator_val);
+	if (discriminator == "assert-view-uuid") {
 		assert_view_uuid.emplace();
 		error = assert_view_uuid->TryFromJSON(obj);
-		if (error.empty()) {
-			break;
-		} else {
-			assert_view_uuid = nullopt;
+		if (!error.empty()) {
+			return error;
 		}
-		return "ViewRequirement failed to parse, none of the oneOf candidates matched";
-	} while (false);
+	} else {
+		return StringUtil::Format("ViewRequirement has unknown discriminator value '%s'", discriminator.c_str());
+	}
 	return "";
 }
 

@@ -69,8 +69,6 @@ POINT (5 7)
 statement ok
 select * from duckdb_logs() where type = 'Iceberg' and message.contains('Iceberg Filter Pushdown, skipped ''data_file'':');
 
-mode skip
-
 query I
 select count(*) from duckdb_logs()
 where type = 'Iceberg' and message.contains('Iceberg Filter Pushdown, skipped ''data_file'':');

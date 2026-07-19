@@ -5,6 +5,7 @@
 #include "duckdb/planner/operator/logical_get.hpp"
 #include "duckdb/planner/operator/logical_projection.hpp"
 #include "duckdb/planner/expression/bound_reference_expression.hpp"
+#include "duckdb/execution/operator/scan/physical_table_scan.hpp"
 
 #include "execution/operator/iceberg_delete.hpp"
 #include "execution/operator/iceberg_insert.hpp"
@@ -13,6 +14,7 @@
 #include "catalog/rest/catalog_entry/table/iceberg_table_entry.hpp"
 #include "catalog/rest/catalog_entry/table/iceberg_table_information.hpp"
 #include "catalog/rest/transaction/iceberg_transaction_update.hpp"
+#include "planning/iceberg_multi_file_list.hpp"
 
 namespace duckdb {
 
@@ -45,20 +47,6 @@ IcebergUpdate &IcebergUpdate::PlanUpdateOperator(ClientContext &context, Physica
                                                  IcebergTableEntry &table, LogicalUpdate &op,
                                                  PhysicalOperator &child_plan, IcebergCopyInput &copy_input) {
 	auto &table_metadata = table.table_info.table_metadata;
-
-	if (table_metadata.HasSortOrder()) {
-		auto &sort_spec = table_metadata.GetLatestSortOrder();
-		if (sort_spec.IsSorted()) {
-			Value unsafe_ignore_sort_order;
-			if (!context.TryGetCurrentSetting("unsafe_iceberg_ignore_sort_order", unsafe_ignore_sort_order) ||
-			    !unsafe_ignore_sort_order.GetValue<bool>()) {
-				throw NotImplementedException(
-				    "Update on a sorted iceberg table is not supported yet.\nTo bypass this guard and "
-				    "write without applying the table's declared sort order, "
-				    "run \"SET unsafe_iceberg_ignore_sort_order=true\"");
-			}
-		}
-	}
 	if (table_metadata.iceberg_version < 2) {
 		throw NotImplementedException("Update Iceberg V%d tables", table_metadata.iceberg_version);
 	}

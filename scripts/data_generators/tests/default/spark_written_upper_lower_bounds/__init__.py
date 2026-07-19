@@ -12,6 +12,7 @@ POLARIS_SKIP_REASON = (
 class Test(IcebergTest):
     catalog_mapping = {
         "fixture": "fixture-single-thread",
+        "gravitino": "fixture-single-thread",
         "nessie": "fixture-single-thread"
     }
     skips = {"polaris": POLARIS_SKIP_REASON}

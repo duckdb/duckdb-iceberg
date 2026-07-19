@@ -1,0 +1,50 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/insert/test_merge_append_invalid_properties.test
+# description: Malformed commit.manifest.* properties log warnings and fall back to defaults
+# group: [insert]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+set ignore_error_messages
+
+statement ok
+CALL enable_logging(level='warning');
+
+statement ok
+drop table if exists my_datalake.default.merge_invalid_properties_tbl;
+
+statement ok
+create table my_datalake.default.merge_invalid_properties_tbl (
+	id INTEGER,
+	data VARCHAR
+) WITH (
+	'commit.manifest-merge.enabled' = 'maybe',
+	'commit.manifest.min-count-to-merge' = '-2',
+	'commit.manifest.target-size-bytes' = 'abc'
+);
+
+statement ok
+insert into my_datalake.default.merge_invalid_properties_tbl values (1, 'a'), (2, 'b');
+
+# Trigger LoadExistingManifests, which reads and validates the merge config.
+statement ok
+insert into my_datalake.default.merge_invalid_properties_tbl values (3, 'c'), (4, 'd');
+
+query II rowsort
+select distinct on (message) log_level, message
+from duckdb_logs
+where message like 'Invalid value % for Iceberg table property ''commit.manifest%' order by timestamp;
+----
+WARNING	Invalid value '-2' for Iceberg table property 'commit.manifest.min-count-to-merge'; expected a positive integer, using default value '100'.
+WARNING	Invalid value 'abc' for Iceberg table property 'commit.manifest.target-size-bytes'; expected a positive integer, using default value '8388608'.
+WARNING	Invalid value 'maybe' for Iceberg table property 'commit.manifest-merge.enabled'; expected true or false, using default value 'true'.
+
+statement ok
+drop table my_datalake.default.merge_invalid_properties_tbl;

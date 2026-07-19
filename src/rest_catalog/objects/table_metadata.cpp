@@ -230,15 +230,15 @@ string TableMetadata::TryFromJSON(yyjson_val *obj) {
 	if (schemas_val) {
 		vector<Schema> schemas_tmp;
 		if (yyjson_is_arr(schemas_val)) {
-			size_t idx, max;
-			yyjson_val *val;
-			yyjson_arr_foreach(schemas_val, idx, max, val) {
-				Schema tmp;
-				error = tmp.TryFromJSON(val);
+			size_t schemas_tmp_idx, schemas_tmp_max;
+			yyjson_val *schemas_tmp_item_val;
+			yyjson_arr_foreach(schemas_val, schemas_tmp_idx, schemas_tmp_max, schemas_tmp_item_val) {
+				Schema schemas_tmp_item;
+				error = schemas_tmp_item.TryFromJSON(schemas_tmp_item_val);
 				if (!error.empty()) {
 					return error;
 				}
-				schemas_tmp.emplace_back(std::move(tmp));
+				schemas_tmp.emplace_back(std::move(schemas_tmp_item));
 			}
 		} else {
 			return StringUtil::Format("TableMetadata property 'schemas_tmp' is not of type 'array', found '%s' instead",
@@ -274,15 +274,16 @@ string TableMetadata::TryFromJSON(yyjson_val *obj) {
 	if (partition_specs_val) {
 		vector<PartitionSpec> partition_specs_tmp;
 		if (yyjson_is_arr(partition_specs_val)) {
-			size_t idx, max;
-			yyjson_val *val;
-			yyjson_arr_foreach(partition_specs_val, idx, max, val) {
-				PartitionSpec tmp;
-				error = tmp.TryFromJSON(val);
+			size_t partition_specs_tmp_idx, partition_specs_tmp_max;
+			yyjson_val *partition_specs_tmp_item_val;
+			yyjson_arr_foreach(partition_specs_val, partition_specs_tmp_idx, partition_specs_tmp_max,
+			                   partition_specs_tmp_item_val) {
+				PartitionSpec partition_specs_tmp_item;
+				error = partition_specs_tmp_item.TryFromJSON(partition_specs_tmp_item_val);
 				if (!error.empty()) {
 					return error;
 				}
-				partition_specs_tmp.emplace_back(std::move(tmp));
+				partition_specs_tmp.emplace_back(std::move(partition_specs_tmp_item));
 			}
 		} else {
 			return StringUtil::Format(
@@ -319,15 +320,15 @@ string TableMetadata::TryFromJSON(yyjson_val *obj) {
 	if (sort_orders_val) {
 		vector<SortOrder> sort_orders_tmp;
 		if (yyjson_is_arr(sort_orders_val)) {
-			size_t idx, max;
-			yyjson_val *val;
-			yyjson_arr_foreach(sort_orders_val, idx, max, val) {
-				SortOrder tmp;
-				error = tmp.TryFromJSON(val);
+			size_t sort_orders_tmp_idx, sort_orders_tmp_max;
+			yyjson_val *sort_orders_tmp_item_val;
+			yyjson_arr_foreach(sort_orders_val, sort_orders_tmp_idx, sort_orders_tmp_max, sort_orders_tmp_item_val) {
+				SortOrder sort_orders_tmp_item;
+				error = sort_orders_tmp_item.TryFromJSON(sort_orders_tmp_item_val);
 				if (!error.empty()) {
 					return error;
 				}
-				sort_orders_tmp.emplace_back(std::move(tmp));
+				sort_orders_tmp.emplace_back(std::move(sort_orders_tmp_item));
 			}
 		} else {
 			return StringUtil::Format(
@@ -352,15 +353,16 @@ string TableMetadata::TryFromJSON(yyjson_val *obj) {
 	if (encryption_keys_val) {
 		vector<EncryptedKey> encryption_keys_tmp;
 		if (yyjson_is_arr(encryption_keys_val)) {
-			size_t idx, max;
-			yyjson_val *val;
-			yyjson_arr_foreach(encryption_keys_val, idx, max, val) {
-				EncryptedKey tmp;
-				error = tmp.TryFromJSON(val);
+			size_t encryption_keys_tmp_idx, encryption_keys_tmp_max;
+			yyjson_val *encryption_keys_tmp_item_val;
+			yyjson_arr_foreach(encryption_keys_val, encryption_keys_tmp_idx, encryption_keys_tmp_max,
+			                   encryption_keys_tmp_item_val) {
+				EncryptedKey encryption_keys_tmp_item;
+				error = encryption_keys_tmp_item.TryFromJSON(encryption_keys_tmp_item_val);
 				if (!error.empty()) {
 					return error;
 				}
-				encryption_keys_tmp.emplace_back(std::move(tmp));
+				encryption_keys_tmp.emplace_back(std::move(encryption_keys_tmp_item));
 			}
 		} else {
 			return StringUtil::Format(
@@ -373,15 +375,15 @@ string TableMetadata::TryFromJSON(yyjson_val *obj) {
 	if (snapshots_val) {
 		vector<Snapshot> snapshots_tmp;
 		if (yyjson_is_arr(snapshots_val)) {
-			size_t idx, max;
-			yyjson_val *val;
-			yyjson_arr_foreach(snapshots_val, idx, max, val) {
-				Snapshot tmp;
-				error = tmp.TryFromJSON(val);
+			size_t snapshots_tmp_idx, snapshots_tmp_max;
+			yyjson_val *snapshots_tmp_item_val;
+			yyjson_arr_foreach(snapshots_val, snapshots_tmp_idx, snapshots_tmp_max, snapshots_tmp_item_val) {
+				Snapshot snapshots_tmp_item;
+				error = snapshots_tmp_item.TryFromJSON(snapshots_tmp_item_val);
 				if (!error.empty()) {
 					return error;
 				}
-				snapshots_tmp.emplace_back(std::move(tmp));
+				snapshots_tmp.emplace_back(std::move(snapshots_tmp_item));
 			}
 		} else {
 			return StringUtil::Format(
@@ -453,15 +455,15 @@ string TableMetadata::TryFromJSON(yyjson_val *obj) {
 	if (statistics_val) {
 		vector<StatisticsFile> statistics_tmp;
 		if (yyjson_is_arr(statistics_val)) {
-			size_t idx, max;
-			yyjson_val *val;
-			yyjson_arr_foreach(statistics_val, idx, max, val) {
-				StatisticsFile tmp;
-				error = tmp.TryFromJSON(val);
+			size_t statistics_tmp_idx, statistics_tmp_max;
+			yyjson_val *statistics_tmp_item_val;
+			yyjson_arr_foreach(statistics_val, statistics_tmp_idx, statistics_tmp_max, statistics_tmp_item_val) {
+				StatisticsFile statistics_tmp_item;
+				error = statistics_tmp_item.TryFromJSON(statistics_tmp_item_val);
 				if (!error.empty()) {
 					return error;
 				}
-				statistics_tmp.emplace_back(std::move(tmp));
+				statistics_tmp.emplace_back(std::move(statistics_tmp_item));
 			}
 		} else {
 			return StringUtil::Format(
@@ -474,15 +476,16 @@ string TableMetadata::TryFromJSON(yyjson_val *obj) {
 	if (partition_statistics_val) {
 		vector<PartitionStatisticsFile> partition_statistics_tmp;
 		if (yyjson_is_arr(partition_statistics_val)) {
-			size_t idx, max;
-			yyjson_val *val;
-			yyjson_arr_foreach(partition_statistics_val, idx, max, val) {
-				PartitionStatisticsFile tmp;
-				error = tmp.TryFromJSON(val);
+			size_t partition_statistics_tmp_idx, partition_statistics_tmp_max;
+			yyjson_val *partition_statistics_tmp_item_val;
+			yyjson_arr_foreach(partition_statistics_val, partition_statistics_tmp_idx, partition_statistics_tmp_max,
+			                   partition_statistics_tmp_item_val) {
+				PartitionStatisticsFile partition_statistics_tmp_item;
+				error = partition_statistics_tmp_item.TryFromJSON(partition_statistics_tmp_item_val);
 				if (!error.empty()) {
 					return error;
 				}
-				partition_statistics_tmp.emplace_back(std::move(tmp));
+				partition_statistics_tmp.emplace_back(std::move(partition_statistics_tmp_item));
 			}
 		} else {
 			return StringUtil::Format(

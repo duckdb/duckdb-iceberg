@@ -16,6 +16,10 @@ on:
         required: false
         type: number
         default: 0
+      build-path:
+        description: "The path to the build artifact"
+        required: true
+        type: string
 
 jobs:
   test-spark:
@@ -23,6 +27,10 @@ jobs:
     runs-on: ubuntu-latest
     env:
       HTTP_PROXY_PUBLIC: http://localhost:8878
+      ASAN_SYMBOLIZER_PATH: "/usr/bin/llvm-symbolizer"
+      ASAN_OPTIONS: "detect_leaks=1:halt_on_error=1:abort_on_error=0:external_symbolizer_path=/usr/bin/llvm-symbolizer"
+      LSAN_OPTIONS: "suppressions=${{ github.workspace }}/.combined-sanitizer-leak-suppressions.txt"
+      UBSAN_OPTIONS: "halt_on_error=1:print_stacktrace=1"
 
     steps:
       - name: Checkout repository
@@ -32,15 +40,22 @@ jobs:
           submodules: 'true'
 
       - name: Download DuckDB-Iceberg artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: ${{ inputs.artifact-name }}
-          path: build/release
+          path: build
 
-      - name: Restore permissions
+      - name: Extract build artifact
         run: |
-          find ./build/release -type f -name 'duckdb*' -exec chmod +x {} \;
-          find ./build/release -type f -name 'unittest*' -exec chmod +x {} \;
+          rm -rf "${{ inputs.build-path }}"
+          tar -xzf "${{ inputs.build-path }}-artifact.tar.gz" -C build
+          ls -lh "${{ inputs.build-path }}"/test/unittest
+
+      - name: Prepare leak suppressions
+        run: |
+          cp duckdb/.sanitizer-leak-suppressions.txt .combined-sanitizer-leak-suppressions.txt
+          printf '\n' >> .combined-sanitizer-leak-suppressions.txt
+          cat .sanitizer-leak-suppressions.txt >> .combined-sanitizer-leak-suppressions.txt
 
       - name: Set up Java
         uses: actions/setup-java@v4
@@ -54,7 +69,7 @@ jobs:
       - name: Install fixture catalog dependencies
         run: |
           sudo apt update -y -qq
-          sudo apt install -y -qq python3-venv tar pkg-config
+          sudo apt install -y -qq python3-venv tar pkg-config llvm
 
       - name: Install CMake 3.x
         run: |
@@ -103,16 +118,16 @@ jobs:
           FIXTURE_SERVER_AVAILABLE: 1
           EQUALITY_DELETE_WRITES_ENABLED: ${{ inputs.equality-delete-writes-enabled }}
         run: |
-          ./build/release/test/unittest --order lex "$PWD/test/sql/local/catalog_test_config_setup/*" --list-test-names-only || true
-          ./build/release/test/unittest --order lex "$PWD/test/sql/local/catalog_test_config_setup/*" --test-config test/configs/fixture.json
+          ${{ inputs.build-path }}/test/unittest --order lex "$PWD/test/sql/local/catalog_test_config_setup/*" --list-test-names-only || true
+          ${{ inputs.build-path }}/test/unittest --order lex "$PWD/test/sql/local/catalog_test_config_setup/*" --test-config test/configs/fixture.json
 
       - name: Run other tests
         if: inputs.local-extension-repo == ''
         env:
           FIXTURE_SERVER_AVAILABLE: 1
         run: |
-          ./build/release/test/unittest --order lex "$PWD/test/*" --list-test-names-only || true
-          ./build/release/test/unittest --order lex "$PWD/test/*"
+          ${{ inputs.build-path }}/test/unittest --order lex "$PWD/test/*" --list-test-names-only || true
+          ${{ inputs.build-path }}/test/unittest --order lex "$PWD/test/*"
 
       - name: Test reads with PyIceberg and Spark
         if: inputs.local-extension-repo == ''
@@ -120,18 +135,21 @@ jobs:
           FIXTURE_SERVER_AVAILABLE: 1
           EQUALITY_DELETE_WRITES_ENABLED: ${{ inputs.equality-delete-writes-enabled }}
         run: |
-          # test with spark v4
+          # Only one SparkContext can live per JVM/process, so to genuinely test
+          # multiple Iceberg runtimes we run the suite once per runtime, isolated
+          # in its own process via the ICEBERG_RUNTIME selector.
+          # test with spark v4 (Scala 2.13 runtimes)
           source .venv-spark4/bin/activate
-          python3 -m pytest -vv test/python --unittest-binary ./build/release/test/unittest --test-python-verbosity verbose
+          python3 -m pytest -vv test/python --unittest-binary ${{ inputs.build-path }}/test/unittest --test-python-verbosity verbose
           deactivate
-          # test with spark v3
+          # test with spark v3 (Scala 2.12 runtimes)
           python3 -m venv .venv-spark3
           source .venv-spark3/bin/activate
           python3 -m pip install pyspark==3.5.2 pytest pyiceberg==0.9.1 pyarrow pydantic==2.9.0
-          python3 -m pytest -vv test/python --unittest-binary ./build/release/test/unittest --test-python-verbosity verbose
+          python3 -m pytest -vv test/python --unittest-binary ${{ inputs.build-path }}/test/unittest --test-python-verbosity verbose
 
       #- name: Run all duckdb/duckdb tests
       #  if: inputs.local-extension-repo == ''
       #  run: |
-      #    ./build/release/test/unittest --order lex --test-dir duckdb "test/sql/*" --list-test-names-only || true
-      #    ./build/release/test/unittest --order lex --test-dir duckdb "test/sql/*" --test-config test/configs/fixture_duckdb_tests.json
+      #    ${{ inputs.build-path }}/test/unittest --order lex --test-dir duckdb "test/sql/*" --list-test-names-only || true
+      #    ${{ inputs.build-path }}/test/unittest --order lex --test-dir duckdb "test/sql/*" --test-config test/configs/fixture_duckdb_tests.json

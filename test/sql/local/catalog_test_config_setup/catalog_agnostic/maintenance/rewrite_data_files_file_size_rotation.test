@@ -1,0 +1,69 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/maintenance/rewrite_data_files_file_size_rotation.test
+# description: rewrite_data_files can rotate one rewrite task into multiple output files
+# group: [maintenance]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+set ignore_error_messages
+
+statement ok
+drop table if exists my_datalake.default.rewrite_file_size_rotation;
+
+statement ok
+create table my_datalake.default.rewrite_file_size_rotation (id INTEGER, payload VARCHAR)
+with (
+    'write.target-file-size-bytes'='20971520',
+    'write.parquet.compression-codec'='snappy'
+);
+
+query I
+insert into my_datalake.default.rewrite_file_size_rotation
+select i, concat('thisisalongstring', i)
+from range(500000) t(i);
+----
+500000
+
+query I
+select count(*) from my_datalake.default.rewrite_file_size_rotation;
+----
+500000
+
+query I
+select count(*)
+from iceberg_metadata('my_datalake.default.rewrite_file_size_rotation')
+where content = 'DATA' and status <> 'DELETED';
+----
+1
+
+query III
+call iceberg_rewrite_data_files(
+    'my_datalake.default.rewrite_file_size_rotation',
+    target_file_size_bytes => 1048576,
+    min_input_files => 1,
+    rewrite_all => true
+);
+----
+1	<REGEX>:[2-9][0-9]*	<REGEX>:[1-9][0-9]*
+
+query I
+select count(*) from my_datalake.default.rewrite_file_size_rotation;
+----
+500000
+
+query I
+select count(*) > 1
+from iceberg_metadata('my_datalake.default.rewrite_file_size_rotation')
+where content = 'DATA' and status <> 'DELETED';
+----
+true
+
+statement ok
+drop table if exists my_datalake.default.rewrite_file_size_rotation;

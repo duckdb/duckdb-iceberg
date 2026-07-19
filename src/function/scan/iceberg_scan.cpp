@@ -17,6 +17,7 @@
 #include "duckdb/parser/tableref/emptytableref.hpp"
 #include "duckdb/planner/operator/logical_get.hpp"
 #include "duckdb/planner/operator/logical_comparison_join.hpp"
+#include "duckdb/storage/table/row_group_reorderer.hpp"
 #include "duckdb/common/file_opener.hpp"
 #include "duckdb/common/file_system.hpp"
 #include "duckdb/main/extension/extension_loader.hpp"
@@ -42,7 +43,7 @@ static void AddNamedParameters(TableFunction &fun) {
 	fun.named_parameters["metadata_compression_codec"] = LogicalType::VARCHAR;
 	fun.named_parameters["version"] = LogicalType::VARCHAR;
 	fun.named_parameters["version_name_format"] = LogicalType::VARCHAR;
-	fun.named_parameters["snapshot_from_timestamp"] = LogicalType::TIMESTAMP;
+	fun.named_parameters["snapshot_from_timestamp"] = LogicalType::TIMESTAMP_MS;
 	fun.named_parameters["snapshot_from_id"] = LogicalType::UBIGINT;
 }
 
@@ -69,6 +70,12 @@ BindInfo IcebergBindInfo(const optional_ptr<FunctionData> bind_data) {
 		return BindInfo(ScanType::EXTERNAL);
 	}
 	return BindInfo(*table);
+}
+
+static void IcebergSetScanOrder(unique_ptr<RowGroupOrderOptions> order_options, optional_ptr<FunctionData> bind_data) {
+	auto &multi_file_data = bind_data->Cast<MultiFileBindData>();
+	auto &file_list = multi_file_data.file_list->Cast<IcebergMultiFileList>();
+	file_list.SetScanOrder(std::move(order_options));
 }
 
 //! FIXME: needs v1.5.1, causes a crash on v1.5.0
@@ -104,6 +111,7 @@ TableFunctionSet IcebergFunctions::GetIcebergScanFunction(ExtensionLoader &loade
 		function.get_bind_info = IcebergBindInfo;
 		function.get_virtual_columns = IcebergVirtualColumns;
 		function.get_partition_stats = IcebergMultiFileReader::IcebergGetPartitionStats;
+		function.set_scan_order = IcebergSetScanOrder;
 		// function.supports_pushdown_type = IcebergScanSupportsPushdownType;
 
 		// Schema param is just confusing here

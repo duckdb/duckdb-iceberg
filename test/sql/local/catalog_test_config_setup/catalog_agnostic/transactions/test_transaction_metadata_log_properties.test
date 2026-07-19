@@ -1,0 +1,98 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/transactions/test_transaction_metadata_log_properties.test
+# description: Transaction state reconstructs historical table properties and format version from metadata-log
+# group: [transactions]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+require core_functions
+
+set ignore_error_messages
+
+statement ok
+set iceberg_use_metadata_log = true;
+
+# --- Table properties, including properties used to derive write behavior ---
+
+statement ok
+drop table if exists my_datalake.default.metadata_log_properties;
+
+statement ok
+create table my_datalake.default.metadata_log_properties (
+	a integer
+) with (
+	'metadata-log.probe' = 'old',
+	'write.delete.mode' = 'copy-on-write'
+);
+
+statement ok
+insert into my_datalake.default.metadata_log_properties values (1);
+
+statement ok con1
+begin
+
+statement ok con2
+begin
+
+statement ok con2
+alter table my_datalake.default.metadata_log_properties set (
+	'metadata-log.probe' = 'new',
+	'write.delete.mode' = 'merge-on-read'
+);
+
+statement ok con2
+commit
+
+# Resolve only after con2 commits. Both arbitrary and behavior-driving
+# properties must come from con1's historical metadata file.
+query II con1
+select key, value
+from iceberg_table_properties(my_datalake.default.metadata_log_properties)
+where key in ('metadata-log.probe', 'write.delete.mode')
+order by key;
+----
+metadata-log.probe	old
+write.delete.mode	copy-on-write
+
+statement ok con1
+rollback
+
+# --- Format version ---
+
+statement ok
+drop table if exists my_datalake.default.metadata_log_format_version;
+
+statement ok
+create table my_datalake.default.metadata_log_format_version (a integer);
+
+statement ok
+insert into my_datalake.default.metadata_log_format_version values (1);
+
+statement ok con1
+begin
+
+statement ok con2
+begin
+
+statement ok con2
+alter table my_datalake.default.metadata_log_format_version set ('format-version' = 3);
+
+statement ok con2
+commit
+
+# SET DEFAULT is supported only in v3. con1 must still behave as a v2 table;
+# accepting this statement would prove that catalog-head metadata leaked in.
+statement error con1
+alter table my_datalake.default.metadata_log_format_version alter column a set default 42;
+----
+Not implemented Error: SET DEFAULT is not supported on tables < V3
+
+statement ok con1
+rollback

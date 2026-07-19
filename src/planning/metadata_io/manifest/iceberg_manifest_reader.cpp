@@ -42,12 +42,11 @@ static T ReadRequiredField(const char *name, const ENTRY &entry) {
 }
 
 template <class T, class ENTRY>
-static bool ReadOptionalField(const ENTRY &entry, T &result) {
+static optional<T> ReadOptionalField(const ENTRY &entry) {
 	if (entry.IsValid()) {
-		result = entry.GetValueUnsafe();
-		return true;
+		return entry.GetValueUnsafe();
 	}
-	return false;
+	return std::nullopt;
 }
 
 static unordered_map<int32_t, Value> GetBounds(const IntStringMapEntries::ValueEntry &entry) {
@@ -139,14 +138,6 @@ void ManifestReader::ReadChunk(DataChunk &chunk, const map<idx_t, LogicalType> &
 	auto &data_file = chunk.data[vector_index++];
 	idx_t entry_index = 0;
 	auto &data_file_entries = StructVector::GetEntries(data_file);
-
-	optional_ptr<Vector> content;
-	optional<Int32Entries> content_entries;
-	if (iceberg_version >= 2) {
-		content = data_file_entries[entry_index++];
-		content_entries.emplace(content->Values<int32_t>());
-	}
-
 	auto &file_path = data_file_entries[entry_index++];
 	auto file_path_entries = file_path.Values<string_t>();
 
@@ -188,18 +179,23 @@ void ManifestReader::ReadChunk(DataChunk &chunk, const map<idx_t, LogicalType> &
 	auto &sort_order_id = data_file_entries[entry_index++];
 	auto sort_order_id_entries = sort_order_id.Values<int32_t>();
 
+	optional_ptr<Vector> content;
+	optional<Int32Entries> content_entries;
+	optional_ptr<Vector> referenced_data_file;
+	optional<StringEntries> referenced_data_file_entries;
+	if (iceberg_version >= 2) {
+		content = data_file_entries[entry_index++];
+		content_entries.emplace(content->Values<int32_t>());
+
+		referenced_data_file = data_file_entries[entry_index++];
+		referenced_data_file_entries.emplace(referenced_data_file->Values<string_t>());
+	}
+
 	optional_ptr<Vector> first_row_id;
 	optional<Int64Entries> first_row_id_entries;
 	if (iceberg_version >= 3) {
 		first_row_id = data_file_entries[entry_index++];
 		first_row_id_entries.emplace(first_row_id->Values<int64_t>());
-	}
-
-	optional_ptr<Vector> referenced_data_file;
-	optional<StringEntries> referenced_data_file_entries;
-	if (iceberg_version >= 2) {
-		referenced_data_file = data_file_entries[entry_index++];
-		referenced_data_file_entries.emplace(referenced_data_file->Values<string_t>());
 	}
 	optional_ptr<Vector> content_offset;
 	optional<Int64Entries> content_offset_entries;
@@ -243,16 +239,9 @@ void ManifestReader::ReadChunk(DataChunk &chunk, const map<idx_t, LogicalType> &
 		data_file.nan_value_counts = GetCounts("nan_value_counts", nan_value_counts_entries[i]);
 
 		data_file.split_offsets = GetSplitOffsets(split_offsets_entries[i]);
-		int32_t sort_order_id;
-		if (ReadOptionalField<int32_t>(sort_order_id_entries[i], sort_order_id)) {
-			data_file.has_sort_order_id = true;
-			data_file.sort_order_id = sort_order_id;
-		}
+		data_file.sort_order_id = ReadOptionalField<int32_t>(sort_order_id_entries[i]);
 
-		int64_t snapshot_id;
-		if (ReadOptionalField<int64_t>(snapshot_id_entries[i], snapshot_id)) {
-			entry.SetSnapshotId(snapshot_id);
-		}
+		entry.SetSnapshotId(ReadOptionalField<int64_t>(snapshot_id_entries[i]));
 
 		//! >= V2
 		if (iceberg_version >= 2) {
@@ -260,18 +249,11 @@ void ManifestReader::ReadChunk(DataChunk &chunk, const map<idx_t, LogicalType> &
 			    (IcebergManifestEntryContentType)ReadRequiredField<int32_t>("content", (*content_entries)[i]);
 			data_file.equality_ids = GetEqualityIds(equality_ids_entries[i]);
 
-			int64_t sequence_number;
-			if (ReadOptionalField<int64_t>(sequence_number_entries[i], sequence_number)) {
-				entry.SetSequenceNumber(sequence_number);
-			}
-			int64_t file_sequence_number;
-			if (ReadOptionalField<int64_t>(file_sequence_number_entries[i], file_sequence_number)) {
-				entry.SetFileSequenceNumber(file_sequence_number);
-			}
+			entry.SetSequenceNumber(ReadOptionalField<int64_t>(sequence_number_entries[i]));
+			entry.SetFileSequenceNumber(ReadOptionalField<int64_t>(file_sequence_number_entries[i]));
 
-			string_t referenced_data_file_val;
-			if (ReadOptionalField<string_t>((*referenced_data_file_entries)[i], referenced_data_file_val)) {
-				data_file.referenced_data_file = referenced_data_file_val.GetString();
+			if (auto val = ReadOptionalField<string_t>((*referenced_data_file_entries)[i])) {
+				data_file.referenced_data_file = val->GetString();
 			}
 		} else {
 			//! SPEC: Data file field content must default to 0 (data)
@@ -284,24 +266,9 @@ void ManifestReader::ReadChunk(DataChunk &chunk, const map<idx_t, LogicalType> &
 
 		//! >= V3
 		if (iceberg_version >= 3) {
-			int64_t first_row_id_val;
-			if (ReadOptionalField<int64_t>((*first_row_id_entries)[i], first_row_id_val)) {
-				data_file.SetFirstRowId(first_row_id_val);
-			}
-
-			int64_t content_offset_val;
-			if (ReadOptionalField<int64_t>((*content_offset_entries)[i], content_offset_val)) {
-				data_file.content_offset = Value::BIGINT(content_offset_val);
-			} else {
-				data_file.content_offset = Value(LogicalType::BIGINT);
-			}
-
-			int64_t content_size_in_bytes_val;
-			if (ReadOptionalField<int64_t>((*content_size_in_bytes_entries)[i], content_size_in_bytes_val)) {
-				data_file.content_size_in_bytes = Value::BIGINT(content_size_in_bytes_val);
-			} else {
-				data_file.content_size_in_bytes = Value(LogicalType::BIGINT);
-			}
+			data_file.SetFirstRowId(ReadOptionalField<int64_t>((*first_row_id_entries)[i]));
+			data_file.content_offset = ReadOptionalField<int64_t>((*content_offset_entries)[i]);
+			data_file.content_size_in_bytes = ReadOptionalField<int64_t>((*content_size_in_bytes_entries)[i]);
 		}
 
 		for (auto &it : partition_vectors) {

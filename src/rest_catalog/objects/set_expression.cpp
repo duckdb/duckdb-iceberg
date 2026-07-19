@@ -60,15 +60,15 @@ string SetExpression::TryFromJSON(yyjson_val *obj) {
 		return "SetExpression required property 'values' is missing";
 	} else {
 		if (yyjson_is_arr(values_val)) {
-			size_t idx, max;
-			yyjson_val *val;
-			yyjson_arr_foreach(values_val, idx, max, val) {
-				PrimitiveTypeValue tmp;
-				error = tmp.TryFromJSON(val);
+			size_t values_idx, values_max;
+			yyjson_val *values_item_val;
+			yyjson_arr_foreach(values_val, values_idx, values_max, values_item_val) {
+				PrimitiveTypeValue values_item;
+				error = values_item.TryFromJSON(values_item_val);
 				if (!error.empty()) {
 					return error;
 				}
-				values.emplace_back(std::move(tmp));
+				values.emplace_back(std::move(values_item));
 			}
 		} else {
 			return StringUtil::Format("SetExpression property 'values' is not of type 'array', found '%s' instead",

@@ -91,6 +91,13 @@ static void IcebergBucketTimestampNs(DataChunk &input, ExpressionState &state, V
 	    [](int32_t n, timestamp_ns_t val) -> int32_t { return (IcebergHash::HashTimestampNs(val) & 0x7FFFFFFF) % n; });
 }
 
+static void IcebergBucketTimestampTzNs(DataChunk &input, ExpressionState &state, Vector &result) {
+	BinaryExecutor::Execute<int32_t, timestamp_tz_ns_t, int32_t>(
+	    input.data[0], input.data[1], result, input.size(), [](int32_t n, timestamp_tz_ns_t val) -> int32_t {
+		    return (IcebergHash::HashTimestampTzNs(val) & 0x7FFFFFFF) % n;
+	    });
+}
+
 static void IcebergBucketTime(DataChunk &input, ExpressionState &state, Vector &result) {
 	BinaryExecutor::Execute<int32_t, dtime_t, int32_t>(
 	    input.data[0], input.data[1], result, input.size(),
@@ -181,6 +188,8 @@ ScalarFunctionSet IcebergFunctions::GetIcebergBucketFunction() {
 	                               IcebergBucketTimestampTz, IcebergBucketBind));
 	set.AddFunction(ScalarFunction({LogicalType::INTEGER, LogicalType::TIMESTAMP_NS}, LogicalType::INTEGER,
 	                               IcebergBucketTimestampNs, IcebergBucketBind));
+	set.AddFunction(ScalarFunction({LogicalType::INTEGER, LogicalType::TIMESTAMP_TZ_NS}, LogicalType::INTEGER,
+	                               IcebergBucketTimestampTzNs, IcebergBucketBind));
 	set.AddFunction(ScalarFunction({LogicalType::INTEGER, LogicalType::TIME}, LogicalType::INTEGER, IcebergBucketTime,
 	                               IcebergBucketBind));
 	set.AddFunction(ScalarFunction({LogicalType::INTEGER, LogicalType::UUID}, LogicalType::INTEGER, IcebergBucketUUID,

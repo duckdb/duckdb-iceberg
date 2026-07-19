@@ -98,18 +98,18 @@ string CatalogConfig::TryFromJSON(yyjson_val *obj) {
 	if (endpoints_val) {
 		vector<string> endpoints_tmp;
 		if (yyjson_is_arr(endpoints_val)) {
-			size_t idx, max;
-			yyjson_val *val;
-			yyjson_arr_foreach(endpoints_val, idx, max, val) {
-				string tmp;
-				if (yyjson_is_str(val)) {
-					tmp = yyjson_get_str(val);
+			size_t endpoints_tmp_idx, endpoints_tmp_max;
+			yyjson_val *endpoints_tmp_item_val;
+			yyjson_arr_foreach(endpoints_val, endpoints_tmp_idx, endpoints_tmp_max, endpoints_tmp_item_val) {
+				string endpoints_tmp_item;
+				if (yyjson_is_str(endpoints_tmp_item_val)) {
+					endpoints_tmp_item = yyjson_get_str(endpoints_tmp_item_val);
 				} else {
 					return StringUtil::Format(
-					    "CatalogConfig property 'tmp' is not of type 'string', found '%s' instead",
-					    yyjson_get_type_desc(val));
+					    "CatalogConfig property 'endpoints_tmp_item' is not of type 'string', found '%s' instead",
+					    yyjson_get_type_desc(endpoints_tmp_item_val));
 				}
-				endpoints_tmp.emplace_back(std::move(tmp));
+				endpoints_tmp.emplace_back(std::move(endpoints_tmp_item));
 			}
 		} else {
 			return StringUtil::Format(

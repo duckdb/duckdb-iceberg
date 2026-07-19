@@ -13,38 +13,40 @@ env:
 jobs:
   build_iceberg:
     name: Build
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.repository_owner == 'duckdb' && 'namespace-profile-linux-x64' || 'ubuntu-latest' }}
     env:
-      VCPKG_TARGET_TRIPLET: 'x64-linux-release'
       GEN: ninja
-      VCPKG_FEATURE_FLAGS: "-binarycaching"
-      VCPKG_TOOLCHAIN_PATH: ${{ github.workspace }}/vcpkg/scripts/buildsystems/vcpkg.cmake
-      PIP_BREAK_SYSTEM_PACKAGES: 1
+      CC: clang-20
+      CXX: clang++-20
+
 
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
           submodules: 'true'
-
-      - name: Setup vcpkg
-        uses: lukka/run-vcpkg@v11.1
-        with:
-          vcpkgGitCommitId: 84bab45d415d22042bd0b9081aea57f362da3f35
-
-      - name: Install Ninja
-        shell: bash
-        run: sudo apt-get update -y -qq && sudo apt-get install -y -qq ninja-build
-
+      - name: Install tools
+        run: python3 duckdb/scripts/ci/retry.py -- make -C duckdb toolsci
+      - name: Fix ASan runtime
+        # libclang_rt.asan_static.a is missing in ubuntu 24.04 — workaround
+        # mirrored from upstream Main.yml.
+        run: |
+          asan_static_dir="/usr/lib/llvm-20/lib/clang/20/lib/x86_64-pc-linux-gnu"
+          asan_static_target="/usr/lib/llvm-20/lib/clang/20/lib/linux/libclang_rt.asan_static-x86_64.a"
+          if [[ ! -e "${asan_static_dir}/libclang_rt.asan_static.a" && -e "${asan_static_target}" ]]; then
+            sudo mkdir -p "${asan_static_dir}"
+            sudo ln -sf "${asan_static_target}" "${asan_static_dir}/libclang_rt.asan_static.a"
+          fi
       - name: Setup Ccache
         uses: hendrikmuhs/ccache-action@main
         with:
           key: ${{ github.job }}
           save: ${{ github.ref == 'refs/heads/main' || github.repository != 'duckdb/duckdb' }}
+          max-size: 5GB
+          evict-old-files: job
 
       #- name: Build extension Not linked
       #  env:
-      #    GEN: ninja
       #    STATIC_LIBCPP: 1
       #    DONT_LINK: 1
       #  run: |
@@ -57,38 +59,60 @@ jobs:
       #    path: build/release/
       #    retention-days: 3
 
-      - name: Build extension
+      #- name: Build extension
+      #  env:
+      #    STATIC_LIBCPP: 1
+      #    ENABLE_EXTENSION_AUTOLOADING: 1
+      #    ENABLE_EXTENSION_AUTOINSTALL: 1
+      #  run: |
+      #    make release
+
+      
+      - name: Build (relassert → ASan + UBSan + LSan)
+        uses: duckdb/duckdb-ci/build-duckdb@main
         env:
-          GEN: ninja
+          CATALOG_TEST_CONFIG_SETUP: 1
           STATIC_LIBCPP: 1
-          ENABLE_EXTENSION_AUTOLOADING: 1
-          ENABLE_EXTENSION_AUTOINSTALL: 1
-        run: |
-          make release
-
-      - name: Upload DuckDB-Iceberg release folder
-        uses: actions/upload-artifact@v4
+          # Add debug symbol names.
+          # Reduce the binary size and dynamically link extensions.
+          EXPORT_DYNAMIC_SYMBOLS: 1
+          REDUCE_SYMBOLS: 1
+          EXTENSION_STATIC_BUILD: 0
+          # Enable -DDEBUG slow verifiers (expression verifier, operator
+          # round-trips, etc.) without changing the optimization level.
+          FORCE_DEBUG: 1
+          FORCE_ASSERT: 1
         with:
-          name: duckdb-iceberg
-          path: build/release/
-          retention-days: 3
+          build-type: relassert
+          build: python3 duckdb/scripts/ci/retry.py -- make relassert
+          vcpkg-commit: 84bab45d415d22042bd0b9081aea57f362da3f35
+          bundle: bash duckdb/scripts/prepare_build_artifact.sh relassert
+          upload-name: duckdb-iceberg
+          upload-path: build/relassert-artifact.tar.gz
 
-      - name: Build extension Enable Equality Delete
+      #- name: Build extension Enable Equality Delete
+      #  env:
+      #    GEN: ninja
+      #    STATIC_LIBCPP: 1
+      #    ENABLE_EXTENSION_AUTOLOADING: 1
+      #    ENABLE_EXTENSION_AUTOINSTALL: 1
+      #    EXT_FLAGS: -DICEBERG_ENABLE_EQUALITY_DELETE_WRITES=1
+      #  run: |
+      #    make release
+
+      - name: Build (release)
+        uses: duckdb/duckdb-ci/build-duckdb@main
         env:
-          GEN: ninja
           STATIC_LIBCPP: 1
           ENABLE_EXTENSION_AUTOLOADING: 1
           ENABLE_EXTENSION_AUTOINSTALL: 1
           EXT_FLAGS: -DICEBERG_ENABLE_EQUALITY_DELETE_WRITES=1
-        run: |
-          make release
-
-      - name: Upload DuckDB-Iceberg release folder with Equality Delete
-        uses: actions/upload-artifact@v4
         with:
-          name: duckdb-iceberg-equality-delete-support
-          path: build/release/
-          retention-days: 3
+          build-type: release
+          build: python3 duckdb/scripts/ci/retry.py -- make release
+          vcpkg-commit: 84bab45d415d22042bd0b9081aea57f362da3f35
+          bundle: bash duckdb/scripts/prepare_build_artifact.sh release
+          upload-name: duckdb-iceberg-equality-delete-support
 
   test-fixture:
     name: Test against fixture catalog
@@ -96,6 +120,7 @@ jobs:
     uses: ./.github/workflows/test-fixture-catalog.yml
     with:
       artifact-name: duckdb-iceberg
+      build-path: build/relassert
 
   #test-fixture-no-link:
   #  name: Test against fixture catalog no link
@@ -112,11 +137,19 @@ jobs:
     with:
       artifact-name: duckdb-iceberg-equality-delete-support
       equality-delete-writes-enabled: 1
+      build-path: build/release
 
   test-nessie:
     name: Test against Nessie Catalog
     needs: build_iceberg
     uses: ./.github/workflows/test-nessie-catalog.yml
+    with:
+      artifact-name: duckdb-iceberg
+
+  test-gravitino:
+    name: Test against Gravitino Catalog
+    needs: build_iceberg
+    uses: ./.github/workflows/test-gravitino-catalog.yml
     with:
       artifact-name: duckdb-iceberg
 

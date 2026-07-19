@@ -37,7 +37,7 @@ select id, count(*) from my_datalake.default.type_promotion_partitioned_table wh
 
 # reading from files where id was integer and where id was long
 query II
-select request.url[79:84] partitioned_url, count(*) from duckdb_logs_parsed('HTTP') where request.url like '%.parquet' group by all order by partitioned_url;
+select regexp_extract(request.url, '.*/data/(.*)/.*', 1) partitioned_url, count(*) from duckdb_logs_parsed('HTTP') where request.url like '%.parquet' group by all order by partitioned_url;
 ----
 id%3D3	2
 id%3D4	2

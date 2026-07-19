@@ -83,14 +83,14 @@ create table my_datalake.default.test_timestamp_ns_inf WITH (
 	'format-version'='2'
 ) as select TIMESTAMP_NS 'infinity' timestamp_ns_type;
 ----
-<REGEX>:.*Invalid Configuration Error.*
+<REGEX>:.*HTTP Error.*
 
 statement error
 create table my_datalake.default.test_timestamp_ns_ninf WITH (
 	'format-version'='2'
 ) as select TIMESTAMP_NS '-infinity' timestamp_ns_type;
 ----
-<REGEX>:.*Invalid Configuration Error.*
+<REGEX>:.*HTTP Error.*
 
 statement ok
 drop table if exists my_datalake.default.test_infinities;

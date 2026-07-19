@@ -1,6 +1,8 @@
 #pragma once
 
 #include "duckdb/common/column_index.hpp"
+#include "duckdb/common/optional.hpp"
+#include "duckdb/common/types/value.hpp"
 
 #include "core/metadata/schema/iceberg_column_definition.hpp"
 #include "rest_catalog/objects/schema.hpp"
@@ -11,6 +13,7 @@ namespace duckdb {
 class IcebergTableSchema {
 public:
 	static shared_ptr<IcebergTableSchema> ParseSchema(const rest_api_objects::Schema &schema);
+	rest_api_objects::Schema ToRESTObject() const;
 
 public:
 	static void PopulateSourceIdMap(unordered_map<uint64_t, ColumnIndex> &source_to_column_id,
@@ -18,6 +21,8 @@ public:
 	                                optional_ptr<ColumnIndex> parent);
 	static const IcebergColumnDefinition &GetFromColumnIndex(const vector<unique_ptr<IcebergColumnDefinition>> &columns,
 	                                                         const ColumnIndex &column_index, idx_t depth);
+	optional<ColumnIndex> TryGetColumnIndexByFieldId(idx_t field_id) const;
+	const IcebergColumnDefinition &GetColumnByFieldId(idx_t field_id) const;
 	optional_ptr<const IcebergColumnDefinition> GetFromPath(const vector<Identifier> &path,
 	                                                        optional_ptr<optional_idx> names_offset) const;
 	optional_ptr<IcebergColumnDefinition> GetMutableFromPath(const vector<Identifier> &path,
@@ -29,6 +34,8 @@ public:
 
 	bool Equals(const IcebergTableSchema &other) const;
 	void GetColumnNamesAndTypes(vector<string> &names, vector<LogicalType> &types) const;
+	void GetFieldIdValues(child_list_t<Value> &values) const;
+	Value GetFieldIds() const;
 
 public:
 	int32_t schema_id;

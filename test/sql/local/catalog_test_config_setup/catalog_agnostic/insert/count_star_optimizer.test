@@ -2,6 +2,9 @@
 # description: Test count star optimizer in an iceberg scan
 # group: [insert]
 
+statement ok
+SET profiling_renderer_settings = MAP {'operator_casing': 'upper'};
+
 require-env CATALOG_TEST_CONFIG_SETUP
 
 require avro

@@ -95,10 +95,10 @@ static string BuildJsonPath(const vector<string> &field_names) {
 
 //! Serialize a bounds object (a struct keyed by JSON path) to the parquet-variant encoding by casting
 //! it to VARIANT and calling variant_to_parquet_variant, then concatenating the metadata and value blobs.
-static bool SerializeBoundsVariant(ClientContext &context, Value bounds_struct, string &out) {
+static optional<string> SerializeBoundsVariant(ClientContext &context, Value bounds_struct) {
 	Value variant_value;
 	if (!bounds_struct.DefaultTryCastAs(LogicalType::VARIANT(), variant_value, nullptr)) {
-		return false;
+		return std::nullopt;
 	}
 
 	vector<unique_ptr<Expression>> children;
@@ -108,22 +108,21 @@ static bool SerializeBoundsVariant(ClientContext &context, Value bounds_struct, 
 	FunctionBinder binder(context);
 	auto expr = binder.BindScalarFunction(DEFAULT_SCHEMA, "variant_to_parquet_variant", std::move(children), error);
 	if (!expr) {
-		return false;
+		return std::nullopt;
 	}
 
 	Value result;
 	if (!ExpressionExecutor::TryEvaluateScalar(context, *expr, result) || result.IsNull()) {
-		return false;
+		return std::nullopt;
 	}
 
 	// parquet variant is STRUCT(metadata BLOB, value BLOB)
 	auto &result_children = StructValue::GetChildren(result);
 	if (result_children.size() < 2 || result_children[0].IsNull() || result_children[1].IsNull()) {
-		return false;
+		return std::nullopt;
 	}
 	// return metadata + value
-	out = StringValue::Get(result_children[0]) + StringValue::Get(result_children[1]);
-	return true;
+	return StringValue::Get(result_children[0]) + StringValue::Get(result_children[1]);
 }
 
 //===--------------------------------------------------------------------===//
@@ -141,7 +140,6 @@ void IcebergVariantBounds::AddStatsEntry(const vector<string> &full_path, idx_t 
 			auto &stat_children = StructValue::GetChildren(stat);
 			if (StringValue::Get(stat_children[0]) == "variant_type") {
 				variant_type_str = StringValue::Get(stat_children[1]);
-				has_variant_type = true;
 			}
 		}
 		return;
@@ -149,20 +147,17 @@ void IcebergVariantBounds::AddStatsEntry(const vector<string> &full_path, idx_t 
 
 	// check leafs have values. That means path is not fully shredded
 	if (leaf == "value") {
-		bool has_null_count = false, has_num_values = false;
-		idx_t null_count = 0, num_values = 0;
+		optional<idx_t> null_count, num_values;
 		for (auto &child : col_stats) {
 			auto &child_children = StructValue::GetChildren(child);
 			if (StringValue::Get(child_children[0]) == "null_count") {
 				null_count = StringUtil::ToUnsigned(StringValue::Get(child_children[1]));
-				has_null_count = true;
 			}
 			if (StringValue::Get(child_children[0]) == "num_values") {
 				num_values = StringUtil::ToUnsigned(StringValue::Get(child_children[1]));
-				has_num_values = true;
 			}
 		}
-		if (!has_num_values || !has_null_count || (num_values - null_count) > 0) {
+		if (!num_values || !null_count || (*num_values - *null_count) > 0) {
 			// be conservative: missing counts OR any non-null -> treat as partial
 			partial_paths.push_back(ExtractVariantFieldNames(full_path, variant_field_start));
 		}
@@ -179,32 +174,28 @@ void IcebergVariantBounds::AddStatsEntry(const vector<string> &full_path, idx_t 
 		auto &name = StringValue::Get(stat_children[0]);
 		if (name == "min") {
 			bound.min_value = StringValue::Get(stat_children[1]);
-			bound.has_min = true;
 		} else if (name == "max") {
 			bound.max_value = StringValue::Get(stat_children[1]);
-			bound.has_max = true;
 		}
 	}
-	if (bound.has_min || bound.has_max) {
+	if (bound.min_value || bound.max_value) {
 		fields.push_back(std::move(bound));
 	}
 }
 
 bool IcebergVariantBounds::HasBounds() const {
-	return has_variant_type && !fields.empty();
+	return variant_type_str && !fields.empty();
 }
 
-bool IcebergVariantBounds::Finalize(ClientContext &context, bool &has_lower, string &lower_blob, bool &has_upper,
-                                    string &upper_blob) {
-	has_lower = false;
-	has_upper = false;
+bool IcebergVariantBounds::Finalize(ClientContext &context, optional<string> &lower_blob,
+                                    optional<string> &upper_blob) {
 	if (!HasBounds()) {
 		return false;
 	}
 
 	LogicalType shredding_type;
 	try {
-		shredding_type = TransformStringToLogicalType(variant_type_str, context);
+		shredding_type = TransformStringToLogicalType(*variant_type_str, context);
 	} catch (...) {
 		return false;
 	}
@@ -240,15 +231,15 @@ bool IcebergVariantBounds::Finalize(ClientContext &context, bool &has_lower, str
 			// could not resolve this field in the first pass - skip it
 			continue;
 		}
-		if (field.has_min) {
+		if (field.min_value) {
 			Value typed;
-			if (Value(field.min_value).DefaultTryCastAs(leaf_type, typed, nullptr)) {
+			if (Value(*field.min_value).DefaultTryCastAs(leaf_type, typed, nullptr)) {
 				lower_children.emplace_back(json_path, std::move(typed));
 			}
 		}
-		if (field.has_max) {
+		if (field.max_value) {
 			Value typed;
-			if (Value(field.max_value).DefaultTryCastAs(leaf_type, typed, nullptr)) {
+			if (Value(*field.max_value).DefaultTryCastAs(leaf_type, typed, nullptr)) {
 				upper_children.emplace_back(json_path, std::move(typed));
 			}
 		}
@@ -258,12 +249,12 @@ bool IcebergVariantBounds::Finalize(ClientContext &context, bool &has_lower, str
 		return false;
 	}
 	if (!lower_children.empty()) {
-		has_lower = SerializeBoundsVariant(context, Value::STRUCT(std::move(lower_children)), lower_blob);
+		lower_blob = SerializeBoundsVariant(context, Value::STRUCT(std::move(lower_children)));
 	}
 	if (!upper_children.empty()) {
-		has_upper = SerializeBoundsVariant(context, Value::STRUCT(std::move(upper_children)), upper_blob);
+		upper_blob = SerializeBoundsVariant(context, Value::STRUCT(std::move(upper_children)));
 	}
-	return has_lower || has_upper;
+	return lower_blob || upper_blob;
 }
 
 //===--------------------------------------------------------------------===//

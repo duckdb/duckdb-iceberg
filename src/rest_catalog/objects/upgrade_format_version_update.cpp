@@ -37,6 +37,22 @@ string UpgradeFormatVersionUpdate::TryFromJSON(yyjson_val *obj) {
 	if (!error.empty()) {
 		return error;
 	}
+	auto action_refinement_val = yyjson_obj_get(obj, "action");
+	if (action_refinement_val) {
+		string action_refinement;
+		if (yyjson_is_str(action_refinement_val)) {
+			action_refinement = yyjson_get_str(action_refinement_val);
+		} else {
+			return StringUtil::Format(
+			    "UpgradeFormatVersionUpdate property 'action_refinement' is not of type 'string', found '%s' instead",
+			    yyjson_get_type_desc(action_refinement_val));
+		}
+		if (!yyjson_is_null(action_refinement_val) && action_refinement != "upgrade-format-version") {
+			return "UpgradeFormatVersionUpdate property 'action_refinement' does not match its required const value";
+		}
+	} else {
+		return "UpgradeFormatVersionUpdate required property 'action' is missing";
+	}
 	auto format_version_val = yyjson_obj_get(obj, "format-version");
 	if (!format_version_val) {
 		return "UpgradeFormatVersionUpdate required property 'format-version' is missing";

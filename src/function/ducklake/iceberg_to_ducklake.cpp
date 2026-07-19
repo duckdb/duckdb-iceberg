@@ -23,6 +23,7 @@
 #include "duckdb/common/numeric_utils.hpp"
 #include "duckdb/common/printer.hpp"
 #include "duckdb/common/sql_identifier.hpp"
+#include "duckdb/common/operator/cast_operators.hpp"
 
 #include "function/iceberg_functions.hpp"
 #include "common/iceberg_utils.hpp"
@@ -110,7 +111,8 @@ public:
 
 		map<timestamp_t, reference<IcebergSnapshot>> snapshots;
 		for (auto &it : metadata.snapshots) {
-			snapshots.emplace(it.second.timestamp_ms, it.second);
+			auto timestamp = duckdb::Cast::Operation<timestamp_ms_t, timestamp_t>(it.second.timestamp_ms);
+			snapshots.emplace(timestamp, it.second);
 		}
 
 		auto &schema_entry = table_info.schema;
@@ -194,9 +196,9 @@ public:
 			vector<string> deleted_delete_files;
 			for (auto &entry : iceberg_manifest_list->GetManifestFilesConst()) {
 				auto &manifest = entry.file;
-				auto &entries = entry.manifest_entries;
+				auto &entries = entry.GetManifestEntries();
 
-				if (manifest.added_snapshot_id != snapshot.snapshot_id) {
+				if (!manifest.added_snapshot_id || *manifest.added_snapshot_id != snapshot.snapshot_id) {
 					//! This is essentially an "EXISTING" manifest
 					//! there just isn't a 'status' field to indicate that
 					continue;
@@ -503,8 +505,8 @@ public:
 					}
 
 					auto contains_nan = stats.has_nan ? "true" : "false";
-					auto min_value = stats.lower_bound.IsNull() ? "NULL" : "'" + stats.lower_bound.ToString() + "'";
-					auto max_value = stats.upper_bound.IsNull() ? "NULL" : "'" + stats.upper_bound.ToString() + "'";
+					auto min_value = stats.lower_bound->IsNull() ? "NULL" : "'" + stats.lower_bound->ToString() + "'";
+					auto max_value = stats.upper_bound->IsNull() ? "NULL" : "'" + stats.upper_bound->ToString() + "'";
 
 					auto insert_statement = StringUtil::Format(FILE_COLUMN_STATS_SQL,
 					                                           // data_file_id
@@ -807,26 +809,11 @@ static unique_ptr<FunctionData> IcebergToDuckLakeBind(ClientContext &context, Ta
 	auto &iceberg_catalog = catalog.Cast<IcebergCatalog>();
 	auto &schema_set = iceberg_catalog.GetSchemas();
 
-	IcebergOptions options;
+	IcebergOptions options(input.named_parameters);
 	for (auto &kv : input.named_parameters) {
 		auto loption = StringUtil::Lower(kv.first.GetIdentifierName());
 		auto &val = kv.second;
-		if (loption == "allow_moved_paths") {
-			options.allow_moved_paths = BooleanValue::Get(val);
-		} else if (loption == "metadata_compression_codec") {
-			options.metadata_compression_codec = StringValue::Get(val);
-		} else if (loption == "version") {
-			options.table_version = StringValue::Get(val);
-		} else if (loption == "version_name_format") {
-			auto value = StringValue::Get(kv.second);
-			int string_substitutions = IcebergUtils::CountOccurrences(value, "%s");
-			if (string_substitutions != 2) {
-				throw InvalidInputException(
-				    "'version_name_format' has to contain two occurrences of '%%s' in it, found %d",
-				    string_substitutions);
-			}
-			options.version_name_format = value;
-		} else if (loption == "skip_tables") {
+		if (loption == "skip_tables") {
 			auto &type = kv.second.type();
 			if (kv.second.IsNull() || type.id() != LogicalTypeId::LIST) {
 				throw InvalidInputException("'skip_tables' has to be provided as a list of strings");

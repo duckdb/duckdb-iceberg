@@ -26,7 +26,7 @@ AssertRefSnapshotId AssertRefSnapshotId::FromJSON(yyjson_val *obj) {
 
 AssertRefSnapshotId AssertRefSnapshotId::Copy() const {
 	AssertRefSnapshotId res;
-	res.type = type.Copy();
+	res.type = type;
 	res.ref = ref;
 	if (snapshot_id.has_value()) {
 		res.snapshot_id.emplace();
@@ -41,9 +41,14 @@ string AssertRefSnapshotId::TryFromJSON(yyjson_val *obj) {
 	if (!type_val) {
 		return "AssertRefSnapshotId required property 'type' is missing";
 	} else {
-		error = type.TryFromJSON(type_val);
-		if (!error.empty()) {
-			return error;
+		if (yyjson_is_str(type_val)) {
+			type = yyjson_get_str(type_val);
+		} else {
+			return StringUtil::Format("AssertRefSnapshotId property 'type' is not of type 'string', found '%s' instead",
+			                          yyjson_get_type_desc(type_val));
+		}
+		if (!yyjson_is_null(type_val) && type != "assert-ref-snapshot-id") {
+			return "AssertRefSnapshotId property 'type' does not match its required const value";
 		}
 	}
 	auto ref_val = yyjson_obj_get(obj, "ref");
@@ -58,9 +63,11 @@ string AssertRefSnapshotId::TryFromJSON(yyjson_val *obj) {
 		}
 	}
 	auto snapshot_id_val = yyjson_obj_get(obj, "snapshot-id");
-	if (snapshot_id_val) {
+	if (!snapshot_id_val) {
+		return "AssertRefSnapshotId required property 'snapshot-id' is missing";
+	} else {
 		if (yyjson_is_null(snapshot_id_val)) {
-			//! do nothing, property is explicitly nullable
+			snapshot_id = nullopt;
 		} else {
 			int64_t snapshot_id_tmp;
 			if (yyjson_is_sint(snapshot_id_val)) {
@@ -84,8 +91,7 @@ void AssertRefSnapshotId::PopulateJSON(yyjson_mut_doc *doc, yyjson_mut_val *obj)
 	}
 
 	// Serialize: type
-	yyjson_mut_val *type_val = type.ToJSON(doc);
-	yyjson_mut_obj_add_val(doc, obj, "type", type_val);
+	yyjson_mut_obj_add_strcpy(doc, obj, "type", type.c_str());
 
 	// Serialize: ref
 	yyjson_mut_obj_add_strcpy(doc, obj, "ref", ref.c_str());
@@ -94,6 +100,8 @@ void AssertRefSnapshotId::PopulateJSON(yyjson_mut_doc *doc, yyjson_mut_val *obj)
 	if (snapshot_id.has_value()) {
 		auto &snapshot_id_value = *snapshot_id;
 		yyjson_mut_obj_add_sint(doc, obj, "snapshot-id", snapshot_id_value);
+	} else {
+		yyjson_mut_obj_add_null(doc, obj, "snapshot-id");
 	}
 }
 

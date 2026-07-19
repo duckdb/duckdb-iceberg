@@ -94,6 +94,14 @@ TableUpdate TableUpdate::Copy() const {
 		res.remove_statistics_update.emplace();
 		(*res.remove_statistics_update) = (*remove_statistics_update).Copy();
 	}
+	if (set_partition_statistics_update.has_value()) {
+		res.set_partition_statistics_update.emplace();
+		(*res.set_partition_statistics_update) = (*set_partition_statistics_update).Copy();
+	}
+	if (remove_partition_statistics_update.has_value()) {
+		res.remove_partition_statistics_update.emplace();
+		(*res.remove_partition_statistics_update) = (*remove_partition_statistics_update).Copy();
+	}
 	if (remove_partition_specs_update.has_value()) {
 		res.remove_partition_specs_update.emplace();
 		(*res.remove_partition_specs_update) = (*remove_partition_specs_update).Copy();
@@ -217,6 +225,18 @@ string TableUpdate::TryFromJSON(yyjson_val *obj) {
 	} else {
 		remove_statistics_update = nullopt;
 	}
+	set_partition_statistics_update.emplace();
+	error = set_partition_statistics_update->TryFromJSON(obj);
+	if (error.empty()) {
+	} else {
+		set_partition_statistics_update = nullopt;
+	}
+	remove_partition_statistics_update.emplace();
+	error = remove_partition_statistics_update->TryFromJSON(obj);
+	if (error.empty()) {
+	} else {
+		remove_partition_statistics_update = nullopt;
+	}
 	remove_partition_specs_update.emplace();
 	error = remove_partition_specs_update->TryFromJSON(obj);
 	if (error.empty()) {
@@ -245,11 +265,12 @@ string TableUpdate::TryFromJSON(yyjson_val *obj) {
 	    !(add_schema_update.has_value()) && !(add_snapshot_update.has_value()) &&
 	    !(add_sort_order_update.has_value()) && !(assign_uuidupdate.has_value()) &&
 	    !(remove_encryption_key_update.has_value()) && !(remove_partition_specs_update.has_value()) &&
-	    !(remove_properties_update.has_value()) && !(remove_schemas_update.has_value()) &&
-	    !(remove_snapshot_ref_update.has_value()) && !(remove_snapshots_update.has_value()) &&
-	    !(remove_statistics_update.has_value()) && !(set_current_schema_update.has_value()) &&
-	    !(set_default_sort_order_update.has_value()) && !(set_default_spec_update.has_value()) &&
-	    !(set_location_update.has_value()) && !(set_properties_update.has_value()) &&
+	    !(remove_partition_statistics_update.has_value()) && !(remove_properties_update.has_value()) &&
+	    !(remove_schemas_update.has_value()) && !(remove_snapshot_ref_update.has_value()) &&
+	    !(remove_snapshots_update.has_value()) && !(remove_statistics_update.has_value()) &&
+	    !(set_current_schema_update.has_value()) && !(set_default_sort_order_update.has_value()) &&
+	    !(set_default_spec_update.has_value()) && !(set_location_update.has_value()) &&
+	    !(set_partition_statistics_update.has_value()) && !(set_properties_update.has_value()) &&
 	    !(set_snapshot_ref_update.has_value()) && !(set_statistics_update.has_value()) &&
 	    !(upgrade_format_version_update.has_value())) {
 		return "TableUpdate failed to parse, none of the anyOf candidates matched";
@@ -296,6 +317,10 @@ void TableUpdate::PopulateJSON(yyjson_mut_doc *doc, yyjson_mut_val *obj) const {
 		set_statistics_update->PopulateJSON(doc, obj);
 	} else if (remove_statistics_update.has_value()) {
 		remove_statistics_update->PopulateJSON(doc, obj);
+	} else if (set_partition_statistics_update.has_value()) {
+		set_partition_statistics_update->PopulateJSON(doc, obj);
+	} else if (remove_partition_statistics_update.has_value()) {
+		remove_partition_statistics_update->PopulateJSON(doc, obj);
 	} else if (remove_partition_specs_update.has_value()) {
 		remove_partition_specs_update->PopulateJSON(doc, obj);
 	} else if (remove_schemas_update.has_value()) {

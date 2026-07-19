@@ -2,6 +2,9 @@
 # description: test iceberg extension with the sf0.001 generated test set
 # group: [iceberg_scans]
 
+statement ok
+SET profiling_renderer_settings = MAP {'operator_casing': 'upper'};
+
 require avro
 
 require parquet

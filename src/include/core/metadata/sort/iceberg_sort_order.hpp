@@ -30,9 +30,14 @@ public:
 
 struct IcebergSortOrder {
 public:
+	IcebergSortOrder(int32_t sort_order_id) : sort_order_id(sort_order_id) {
+	}
+
+public:
 	static IcebergSortOrder ParseFromJson(const rest_api_objects::SortOrder &sort_order_spec);
 	bool IsSorted() const;
 	yyjson_mut_val *ToJSON(yyjson_mut_doc *doc) const;
+	bool Equals(const IcebergSortOrder &other) const;
 
 public:
 	int32_t sort_order_id;

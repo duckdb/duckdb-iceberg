@@ -26,9 +26,9 @@ set ignore_error_messages
 statement ok
 create secret test_namespace_permissions (
     TYPE ICEBERG,
-    CLIENT_ID '${SNOWFLAKE_KEY_ID_S3_PERMISSION_TEST}',
-    CLIENT_SECRET '${SNOWFLAKE_SECRET_KEY_S3_PERMISSION_TEST}',
-    ENDPOINT '${SNOWFLAKE_CATALOG_URI_GCS}'
+    CLIENT_ID '{SNOWFLAKE_KEY_ID_S3_PERMISSION_TEST}',
+    CLIENT_SECRET '{SNOWFLAKE_SECRET_KEY_S3_PERMISSION_TEST}',
+    ENDPOINT '{SNOWFLAKE_CATALOG_URI_GCS}'
 );
 
 statement ok
@@ -36,7 +36,7 @@ attach 's3-catalog' as my_datalake (
   	type ICEBERG,
   	default_region 'eu-west-2',
   	secret test_namespace_permissions,
-  	ENDPOINT '${SNOWFLAKE_CATALOG_URI_GCS}',
+  	ENDPOINT '{SNOWFLAKE_CATALOG_URI_GCS}',
   	support_nested_namespaces true
 );
 

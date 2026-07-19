@@ -1,0 +1,69 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/alter/sorted_by/test_set_sorted_by_schema_changes.test
+# description: Test schema changes are prohibited when the active sort order depends on the column
+# group: [sorted_by]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+CREATE SCHEMA IF NOT EXISTS my_datalake.default;
+
+statement ok
+drop table if exists my_datalake.default.test_set_sorted_by_drop_column;
+
+statement ok
+CREATE TABLE my_datalake.default.test_set_sorted_by_drop_column (
+	a INTEGER,
+	b INTEGER
+);
+
+statement ok
+ALTER TABLE my_datalake.default.test_set_sorted_by_drop_column SET SORTED BY (a DESC NULLS FIRST);
+
+statement error
+ALTER TABLE my_datalake.default.test_set_sorted_by_drop_column DROP COLUMN a;
+----
+<REGEX>:.*sort order.*a.*
+
+statement ok
+drop table if exists my_datalake.default.test_set_sorted_by_rename_column;
+
+statement ok
+CREATE TABLE my_datalake.default.test_set_sorted_by_rename_column (
+	a INTEGER,
+	b INTEGER
+);
+
+statement ok
+ALTER TABLE my_datalake.default.test_set_sorted_by_rename_column SET SORTED BY (a DESC NULLS FIRST);
+
+# Rename is allowed because sort specs target source-id, which doesn't change through a rename
+statement ok
+ALTER TABLE my_datalake.default.test_set_sorted_by_rename_column RENAME COLUMN a TO a_new;
+
+statement ok
+drop table if exists my_datalake.default.test_set_sorted_by_alter_type;
+
+statement ok
+CREATE TABLE my_datalake.default.test_set_sorted_by_alter_type (
+	a INTEGER,
+	b INTEGER
+);
+
+statement ok
+ALTER TABLE my_datalake.default.test_set_sorted_by_alter_type SET SORTED BY (a DESC NULLS FIRST);
+
+statement error
+ALTER TABLE my_datalake.default.test_set_sorted_by_alter_type ALTER a TYPE BIGINT;
+----
+<REGEX>:.*sort order.*a.*

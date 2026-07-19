@@ -1,0 +1,42 @@
+# name: test/sql/local/catalog_custom_setup/fixture/setup_errors/nonexistent_default_schema.test
+# group: [setup_errors]
+
+require-env FIXTURE_SERVER_AVAILABLE
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+statement ok
+CREATE SECRET iceberg_secret (
+	TYPE ICEBERG,
+	CLIENT_ID 'admin',
+	CLIENT_SECRET 'password',
+	ENDPOINT 'http://127.0.0.1:8181'
+);
+
+statement error
+attach '' as my_datalake (
+	TYPE ICEBERG,
+	SECRET iceberg_secret,
+	DEFAULT_SCHEMA 'does_not_exist_namespace'
+)
+----
+Invalid Configuration Error: default_schema 'does_not_exist_namespace' does not exist
+
+statement ok
+attach '' as my_datalake (
+	TYPE ICEBERG,
+	SECRET iceberg_secret,
+	DEFAULT_SCHEMA 'default'
+)
+
+statement ok
+DETACH my_datalake;
+
+statement ok
+DROP SECRET iceberg_secret;

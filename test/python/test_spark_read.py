@@ -23,19 +23,6 @@ requires_equality_deletes_available = pytest.mark.skipif(
 )
 
 
-def is_active_catalog(catalog: str):
-    try:
-        return (
-            resolve_active_catalog(
-                allowed_catalogs=REST_CATALOG_NAMES,
-                purpose="catalog-backed test/python runs",
-            )
-            == catalog
-        )
-    except:
-        return False
-
-
 class TestSparkRead:
     def test_spark_read_duckdb_table(self, spark_con):
         df = spark_con.sql(
@@ -75,6 +62,45 @@ class TestSparkRead:
             Row(a=55),
             Row(a=57),
             Row(a=59),
+        ]
+
+    def test_spark_read_duckdb_compacted_spark_rewrite_mor_residual_deletes(self, spark_con):
+        # requires rewrite_data_files_spark_mor_residual_deletes.test to run
+        df = spark_con.sql(
+            """
+            select * from default.spark_rewrite_mor_residual_deletes order by id
+            """
+        )
+        res = df.collect()
+        assert res == [
+            Row(id=1, category="compact", payload="c1"),
+            Row(id=2, category="compact", payload="c2_u"),
+            Row(id=4, category="compact", payload="c4"),
+            Row(id=5, category="compact", payload="c5"),
+            Row(id=6, category="compact", payload="c6"),
+            Row(id=100, category="residual", payload="r100"),
+            Row(id=101, category="residual", payload="r101_u"),
+        ]
+
+    @pytest.mark.requires_spark(">=4.0")
+    @pytest.mark.requires_capabilities("format_v3")
+    @pytest.mark.xfail(
+        raises=Exception,
+        reason="Cannot convert unsupported type to Spark: timestamptz_ns",
+        strict=True,
+    )
+    def test_spark_read_duckdb_timestamptz_ns(self, spark_con):
+        df = spark_con.sql(
+            """
+            select id, val
+            from default.duckdb_timestamptz_ns_for_other_engines
+            order by id
+            """
+        )
+        res = df.collect()
+        assert res == [
+            Row(id=1, val=datetime.datetime(2020, 1, 15, 8, 30, 0, 123456)),
+            Row(id=2, val=datetime.datetime(2021, 6, 20, 14, 45, 0, 987654)),
         ]
 
     @pytest.mark.skipif(

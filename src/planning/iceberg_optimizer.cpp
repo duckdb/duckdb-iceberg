@@ -2,6 +2,7 @@
 
 #include "iceberg_logging.hpp"
 #include "duckdb/planner/logical_operator.hpp"
+#include "duckdb/logging/logger.hpp"
 #include "duckdb/common/multi_file/multi_file_data.hpp"
 #include "duckdb/common/multi_file/multi_file_states.hpp"
 #include "duckdb/function/function_binder.hpp"

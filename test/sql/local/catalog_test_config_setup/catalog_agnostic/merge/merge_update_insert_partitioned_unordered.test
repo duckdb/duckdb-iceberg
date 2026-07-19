@@ -1,0 +1,118 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/merge/merge_update_insert_partitioned_unordered.test
+# description: MERGE INTO update+insert on a partitioned unordered table
+# group: [merge]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+set threads=1;
+
+statement ok
+CREATE SCHEMA IF NOT EXISTS my_datalake.default;
+
+statement ok
+drop table if exists my_datalake.default.merge_update_insert_partitioned_unordered;
+
+statement ok
+create table my_datalake.default.merge_update_insert_partitioned_unordered (
+	id int,
+	p int,
+	a int,
+	b int
+)
+partitioned by (p);
+
+statement ok
+insert into my_datalake.default.merge_update_insert_partitioned_unordered values
+	(1, 1, 2, 20),
+	(2, 1, 1, 30),
+	(3, 2, 2, 10),
+	(4, 2, 1, 40);
+
+query I
+MERGE INTO my_datalake.default.merge_update_insert_partitioned_unordered AS t
+USING (VALUES
+	(3, 2, 1, 5),
+	(5, 1, 1, 10)
+) AS s(id, p, a, b)
+ON t.id = s.id
+WHEN MATCHED THEN UPDATE SET
+	p = s.p,
+	a = s.a,
+	b = s.b
+WHEN NOT MATCHED THEN INSERT VALUES (s.id, s.p, s.a, s.b);
+----
+2
+
+query IIII
+select * from my_datalake.default.merge_update_insert_partitioned_unordered order by id;
+----
+1	1	2	20
+2	1	1	30
+3	2	1	5
+4	2	1	40
+5	1	1	10
+
+statement ok
+set variable latest_manifest_sequence = (
+	select max(manifest_sequence_number)
+	from iceberg_metadata(my_datalake.default.merge_update_insert_partitioned_unordered)
+);
+
+statement ok
+set variable manifest_path = (
+	select manifest_path
+	from iceberg_metadata(my_datalake.default.merge_update_insert_partitioned_unordered)
+	where manifest_sequence_number = cast(getvariable('latest_manifest_sequence') as bigint)
+	and manifest_content = 'DATA'
+	and status = 'ADDED'
+	limit 1
+);
+
+query I
+with latest_files as (
+	select file_path
+	from iceberg_metadata(my_datalake.default.merge_update_insert_partitioned_unordered)
+	where manifest_sequence_number = cast(getvariable('latest_manifest_sequence') as bigint)
+	and manifest_content = 'DATA'
+	and status = 'ADDED'
+),
+file_partition_counts as (
+	select filename, count(distinct p) as partition_count
+	from my_datalake.default.merge_update_insert_partitioned_unordered
+	where filename in (select file_path from latest_files)
+	group by filename
+)
+select count(*)
+from file_partition_counts
+where partition_count != 1;
+----
+0
+
+query I
+select count(*)
+from (select unnest(data_file) from read_avro(getvariable('manifest_path')))
+where file_path in (
+	select file_path
+	from iceberg_metadata(my_datalake.default.merge_update_insert_partitioned_unordered)
+	where manifest_sequence_number = cast(getvariable('latest_manifest_sequence') as bigint)
+	and manifest_content = 'DATA'
+	and status = 'ADDED'
+)
+and sort_order_id is not null;
+----
+0
+
+statement ok
+drop table my_datalake.default.merge_update_insert_partitioned_unordered;

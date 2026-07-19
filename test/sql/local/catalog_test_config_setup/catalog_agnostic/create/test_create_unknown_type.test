@@ -30,7 +30,7 @@ create table create_unknown_type (
 	b "NULL"
 );
 ----
-Invalid Configuration Error
+HTTP Error
 
 # Can't set DEFAULT to a non-null value
 statement error

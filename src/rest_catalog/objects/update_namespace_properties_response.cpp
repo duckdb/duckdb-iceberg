@@ -51,18 +51,18 @@ string UpdateNamespacePropertiesResponse::TryFromJSON(yyjson_val *obj) {
 		return "UpdateNamespacePropertiesResponse required property 'updated' is missing";
 	} else {
 		if (yyjson_is_arr(updated_val)) {
-			size_t idx, max;
-			yyjson_val *val;
-			yyjson_arr_foreach(updated_val, idx, max, val) {
-				string tmp;
-				if (yyjson_is_str(val)) {
-					tmp = yyjson_get_str(val);
+			size_t updated_idx, updated_max;
+			yyjson_val *updated_item_val;
+			yyjson_arr_foreach(updated_val, updated_idx, updated_max, updated_item_val) {
+				string updated_item;
+				if (yyjson_is_str(updated_item_val)) {
+					updated_item = yyjson_get_str(updated_item_val);
 				} else {
-					return StringUtil::Format(
-					    "UpdateNamespacePropertiesResponse property 'tmp' is not of type 'string', found '%s' instead",
-					    yyjson_get_type_desc(val));
+					return StringUtil::Format("UpdateNamespacePropertiesResponse property 'updated_item' is not of "
+					                          "type 'string', found '%s' instead",
+					                          yyjson_get_type_desc(updated_item_val));
 				}
-				updated.emplace_back(std::move(tmp));
+				updated.emplace_back(std::move(updated_item));
 			}
 		} else {
 			return StringUtil::Format(
@@ -75,18 +75,18 @@ string UpdateNamespacePropertiesResponse::TryFromJSON(yyjson_val *obj) {
 		return "UpdateNamespacePropertiesResponse required property 'removed' is missing";
 	} else {
 		if (yyjson_is_arr(removed_val)) {
-			size_t idx, max;
-			yyjson_val *val;
-			yyjson_arr_foreach(removed_val, idx, max, val) {
-				string tmp;
-				if (yyjson_is_str(val)) {
-					tmp = yyjson_get_str(val);
+			size_t removed_idx, removed_max;
+			yyjson_val *removed_item_val;
+			yyjson_arr_foreach(removed_val, removed_idx, removed_max, removed_item_val) {
+				string removed_item;
+				if (yyjson_is_str(removed_item_val)) {
+					removed_item = yyjson_get_str(removed_item_val);
 				} else {
-					return StringUtil::Format(
-					    "UpdateNamespacePropertiesResponse property 'tmp' is not of type 'string', found '%s' instead",
-					    yyjson_get_type_desc(val));
+					return StringUtil::Format("UpdateNamespacePropertiesResponse property 'removed_item' is not of "
+					                          "type 'string', found '%s' instead",
+					                          yyjson_get_type_desc(removed_item_val));
 				}
-				removed.emplace_back(std::move(tmp));
+				removed.emplace_back(std::move(removed_item));
 			}
 		} else {
 			return StringUtil::Format(
@@ -101,18 +101,18 @@ string UpdateNamespacePropertiesResponse::TryFromJSON(yyjson_val *obj) {
 		} else {
 			vector<string> missing_tmp;
 			if (yyjson_is_arr(missing_val)) {
-				size_t idx, max;
-				yyjson_val *val;
-				yyjson_arr_foreach(missing_val, idx, max, val) {
-					string tmp;
-					if (yyjson_is_str(val)) {
-						tmp = yyjson_get_str(val);
+				size_t missing_tmp_idx, missing_tmp_max;
+				yyjson_val *missing_tmp_item_val;
+				yyjson_arr_foreach(missing_val, missing_tmp_idx, missing_tmp_max, missing_tmp_item_val) {
+					string missing_tmp_item;
+					if (yyjson_is_str(missing_tmp_item_val)) {
+						missing_tmp_item = yyjson_get_str(missing_tmp_item_val);
 					} else {
-						return StringUtil::Format("UpdateNamespacePropertiesResponse property 'tmp' is not of type "
-						                          "'string', found '%s' instead",
-						                          yyjson_get_type_desc(val));
+						return StringUtil::Format("UpdateNamespacePropertiesResponse property 'missing_tmp_item' is "
+						                          "not of type 'string', found '%s' instead",
+						                          yyjson_get_type_desc(missing_tmp_item_val));
 					}
-					missing_tmp.emplace_back(std::move(tmp));
+					missing_tmp.emplace_back(std::move(missing_tmp_item));
 				}
 			} else {
 				return StringUtil::Format("UpdateNamespacePropertiesResponse property 'missing_tmp' is not of type "

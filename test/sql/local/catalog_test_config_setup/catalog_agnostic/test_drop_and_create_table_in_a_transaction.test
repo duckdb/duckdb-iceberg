@@ -97,9 +97,7 @@ create or replace table my_datalake.default.duid (a int);
 ----
 <REGEX>:.*Not implemented Error.*CREATE OR REPLACE not supported in DuckDB-Iceberg. Please use separate Drop and Create Statements.*
 
-# Should be: <REGEX>:.*Not implemented Error.*CREATE OR REPLACE not supported in DuckDB-Iceberg. Please use separate Drop and Create Statements.*
-# FIXME: parser support is missing in PEG Parser
 statement error con1
 create or replace schema my_datalake.default.new_schema;
 ----
-Parser Error: CREATE SCHEMA too many dots: expected "catalog.schema" or "schema"
+Not implemented Error: CREATE OR REPLACE not supported in DuckDB-Iceberg. Please use separate Drop and Create Statements

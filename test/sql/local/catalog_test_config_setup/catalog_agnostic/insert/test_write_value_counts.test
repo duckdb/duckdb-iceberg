@@ -64,6 +64,17 @@ ORDER BY ALL;
 3	100
 4	100
 
+query IIIII
+SELECT
+	column_sizes IS NOT NULL,
+	nan_value_counts IS NOT NULL,
+	split_offsets IS NULL,
+	sort_order_id IS NULL,
+	referenced_data_file IS NULL
+FROM (SELECT unnest(data_file) FROM read_avro(getvariable('manifest_all_null')));
+----
+true	true	true	true	true
+
 # --- All NaN floats: value_counts = 100, null_value_counts = 0 ---
 statement ok
 DROP TABLE IF EXISTS my_datalake.default.value_counts_all_nan;

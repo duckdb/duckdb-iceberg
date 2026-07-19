@@ -61,7 +61,15 @@ static bool MatchBoundsConstant(const Value &constant, ExpressionType comparison
 		return false;
 	}
 
-	if (!stats.has_upper_bounds || !stats.has_lower_bounds) {
+	if (!stats.has_not_null && comparison_type != ExpressionType::COMPARE_DISTINCT_FROM &&
+	    comparison_type != ExpressionType::COMPARE_NOT_DISTINCT_FROM) {
+		// has_not_null is false when every row of this column is NULL. Ordinary comparisons
+		// against a constant cannot match NULL so the file can be pruned. IS [NOT] DISTINCT FROM
+		// must consider NULL so cannot be pruned.
+		return false;
+	}
+
+	if (!stats.upper_bound || !stats.lower_bound) {
 		// we do not have upper or lower bounds, assume the file matches.
 		return true;
 	}
@@ -97,8 +105,8 @@ template <class TRANSFORM>
 bool MatchTransformedBounds(ClientContext &context, ExpressionType comparison_type, const Expression &left,
                             const Expression &right, const IcebergPredicateStats &stats,
                             const IcebergTransform &transform) {
-	BoundExpressionReplacer lower_replacer(stats.lower_bound);
-	BoundExpressionReplacer upper_replacer(stats.upper_bound);
+	BoundExpressionReplacer lower_replacer(*stats.lower_bound);
+	BoundExpressionReplacer upper_replacer(*stats.upper_bound);
 	auto lower_copy = left.Copy();
 	auto upper_copy = left.Copy();
 	lower_replacer.VisitExpression(&lower_copy);
@@ -262,7 +270,7 @@ static bool MatchBoundsExpression(ClientContext &context, const unique_ptr<Expre
 	}
 	case ExpressionClass::BOUND_FUNCTION: {
 		if (stats.geometry_stats) {
-			auto result = GeometryStats::CheckZonemap(*stats.geometry_stats, expr_p);
+			auto result = ExpressionFilter::CheckExpressionStatistics(expr, *stats.geometry_stats);
 			return result != FilterPropagateResult::FILTER_ALWAYS_FALSE;
 		}
 

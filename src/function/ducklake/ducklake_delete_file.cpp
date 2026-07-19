@@ -38,8 +38,17 @@ DuckLakeDeleteFile::DuckLakeDeleteFile(const IcebergManifestEntry &manifest_entr
 		}
 		data_file_path = lower_bound.GetValue<string>();
 	} else if (file_format == "puffin") {
-		auto content_offset = data_file.content_offset.GetValue<int64_t>();
-		auto content_size_in_bytes = data_file.content_size_in_bytes.GetValue<int64_t>();
+		if (!data_file.content_offset) {
+			throw InvalidConfigurationException("Puffin delete file is missing 'content_offset'");
+		}
+		if (!data_file.content_size_in_bytes) {
+			throw InvalidConfigurationException("Puffin delete file is missing 'content_size_in_bytes'");
+		}
+		if (!data_file.referenced_data_file) {
+			throw InvalidConfigurationException("Puffin delete file is missing 'referenced_data_file'");
+		}
+		auto content_offset = *data_file.content_offset;
+		auto content_size_in_bytes = *data_file.content_size_in_bytes;
 		if (content_offset != 0) {
 			throw InvalidInputException(
 			    "Only deletion vectors that start at offset 0 can be converted to DuckLake currently");
@@ -48,7 +57,7 @@ DuckLakeDeleteFile::DuckLakeDeleteFile(const IcebergManifestEntry &manifest_entr
 			throw InvalidInputException("Only deletion vectors that have 'content_size_in_bytes' equal to "
 			                            "'file_size_in_bytes' can be converted to DuckLake currently");
 		}
-		data_file_path = data_file.referenced_data_file;
+		data_file_path = *data_file.referenced_data_file;
 	} else {
 		throw InvalidInputException("Can't convert Iceberg table (name: %s) to DuckLake, as it contains a delete "
 		                            "files with file_format '%s'",

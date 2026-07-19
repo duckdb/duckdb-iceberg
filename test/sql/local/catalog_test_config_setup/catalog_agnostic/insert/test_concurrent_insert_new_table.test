@@ -40,16 +40,15 @@ INSERT INTO my_datalake.default.concurrent_new_table_test VALUES (2, 'con2');
 statement ok con2
 commit
 
-# con1 should fail because con2 already added a snapshot
-statement error con1
+# con1 refreshes and retries against the snapshot con2 created
+statement ok con1
 commit
-----
-<REGEX>:.*TransactionContext Error.*Conflict_409.*
 
-# only con2's data is in the table
+# both rows are committed
 query II
 SELECT * FROM my_datalake.default.concurrent_new_table_test ORDER BY id;
 ----
+1	con1
 2	con2
 
 statement ok

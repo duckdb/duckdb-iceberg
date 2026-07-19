@@ -1,6 +1,9 @@
 #include "common/iceberg_default.hpp"
 #include "duckdb/execution/expression_executor.hpp"
 #include "duckdb/function/scalar/struct_functions.hpp"
+#include "duckdb/planner/expression/bound_constant_expression.hpp"
+#include "duckdb/planner/expression/bound_columnref_expression.hpp"
+#include "duckdb/planner/expression/bound_function_expression.hpp"
 #include "catalog/rest/api/iceberg_type.hpp"
 
 namespace duckdb {
@@ -43,19 +46,22 @@ namespace {
 
 //! Used to determine if the field of a struct is mapped or not
 struct StructFieldMapping {
-	case_insensitive_map_t<StructFieldMapping> child_mapping;
+	case_insensitive_map_t<unique_ptr<StructFieldMapping>> child_mapping;
 };
 
 static Value CreateStructMapping(const LogicalType &struct_type, const string &name,
-                                 case_insensitive_map_t<StructFieldMapping> &out_mapping) {
+                                 case_insensitive_map_t<unique_ptr<StructFieldMapping>> &out_mapping) {
 	child_list_t<Value> field_mapping;
 
 	auto &struct_children = StructType::GetChildTypes(struct_type);
 	for (auto &[field_name, field_type] : struct_children) {
 		auto &child_mapping = out_mapping[field_name.GetIdentifierName()];
+		if (!child_mapping) {
+			child_mapping = make_uniq<StructFieldMapping>();
+		}
 		Value mapping;
 		if (field_type.id() == LogicalTypeId::STRUCT) {
-			mapping = CreateStructMapping(field_type, field_name.GetIdentifierName(), child_mapping.child_mapping);
+			mapping = CreateStructMapping(field_type, field_name.GetIdentifierName(), child_mapping->child_mapping);
 		} else {
 			mapping = Value(field_name);
 		}
@@ -66,10 +72,11 @@ static Value CreateStructMapping(const LogicalType &struct_type, const string &n
 		//! Root column
 		return struct_value;
 	}
-	return Value::STRUCT({{"", Value(name)}, {"", struct_value}});
+	return Value::TUPLE({Value(name), struct_value});
 }
 
-static Value CreateStructDefault(const Value &value, const case_insensitive_map_t<StructFieldMapping> &mapping = {}) {
+static Value CreateStructDefault(const Value &value,
+                                 const case_insensitive_map_t<unique_ptr<StructFieldMapping>> &mapping = {}) {
 	child_list_t<Value> field_defaults;
 	auto &field_values = StructValue::GetChildren(value);
 	auto &struct_children = StructType::GetChildTypes(value.type());
@@ -84,7 +91,7 @@ static Value CreateStructDefault(const Value &value, const case_insensitive_map_
 		Value field_default;
 		if (field_type.id() == LogicalTypeId::STRUCT) {
 			if (is_mapped) {
-				field_default = CreateStructDefault(field_value, it->second.child_mapping);
+				field_default = CreateStructDefault(field_value, it->second->child_mapping);
 			} else {
 				field_default = CreateStructDefault(field_value);
 			}
@@ -138,7 +145,7 @@ unique_ptr<Expression> IcebergDefaultProjectionResolver::ResolveDefault(ClientCo
 	children.push_back(make_uniq<BoundColumnRefExpression>(input_type, binding));
 	children.push_back(make_uniq<BoundConstantExpression>(Value(result_type)));
 
-	case_insensitive_map_t<StructFieldMapping> mapping;
+	case_insensitive_map_t<unique_ptr<StructFieldMapping>> mapping;
 	children.push_back(make_uniq<BoundConstantExpression>(CreateStructMapping(input_type, "", mapping)));
 	children.push_back(make_uniq<BoundConstantExpression>(CreateStructDefault(default_value, mapping)));
 	return RemapStructFun::GetFunction().Bind(context, std::move(children));

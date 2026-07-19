@@ -1,6 +1,9 @@
 #include "core/metadata/manifest/iceberg_manifest_list.hpp"
 
+#include "core/metadata/manifest/iceberg_avro_codec.hpp"
+#include "duckdb/common/string_util.hpp"
 #include "duckdb/common/exception/conversion_exception.hpp"
+#include "duckdb/common/vector/struct_vector.hpp"
 #include "duckdb/main/database.hpp"
 #include "duckdb/storage/buffer_manager.hpp"
 #include "duckdb/common/types/uuid.hpp"
@@ -18,6 +21,8 @@
 #include "catalog/rest/api/catalog_utils.hpp"
 #include "re2/re2.h"
 
+#include <optional>
+
 namespace duckdb {
 
 string IcebergManifestContentTypeToString(IcebergManifestContentType type) {
@@ -31,27 +36,65 @@ string IcebergManifestContentTypeToString(IcebergManifestContentType type) {
 	}
 }
 
-IcebergManifestListEntry IcebergManifestListEntry::CreateFromEntries(FileSystem &fs, int64_t snapshot_id,
-                                                                     sequence_number_t sequence_number,
+IcebergManifestMetadata IcebergManifestMetadata::FromTableMetadata(const IcebergTableMetadata &table_metadata,
+                                                                   IcebergManifestContentType content,
+                                                                   optional<int32_t> partition_spec_id) {
+	return IcebergManifestMetadata(table_metadata.GetCurrentSchemaId(),
+	                               partition_spec_id ? *partition_spec_id
+	                                                 : NumericCast<int32_t>(table_metadata.default_spec_id),
+	                               NumericCast<int32_t>(table_metadata.iceberg_version), content);
+}
+
+unordered_map<string, string> GetManifestMetadataMap(const IcebergTableMetadata &table_metadata,
+                                                     const IcebergManifestMetadata &manifest_metadata) {
+	unordered_map<string, string> result;
+	result.reserve(6);
+	auto schema_id = manifest_metadata.schema_id;
+	auto partition_spec_id = manifest_metadata.partition_spec_id;
+	auto format_version = manifest_metadata.format_version;
+	auto content = manifest_metadata.content;
+
+	std::unique_ptr<yyjson_mut_doc, YyjsonDocDeleter> schema_doc_p(yyjson_mut_doc_new(nullptr));
+	auto schema_doc = schema_doc_p.get();
+	auto schema_root_obj = yyjson_mut_obj(schema_doc);
+	yyjson_mut_doc_set_root(schema_doc, schema_root_obj);
+	IcebergCreateTableRequest::PopulateSchema(schema_doc, schema_root_obj, *table_metadata.GetSchemaFromId(schema_id));
+	result.emplace("schema", ICUtils::JsonToString(std::move(schema_doc_p)));
+	result.emplace("schema-id", std::to_string(schema_id));
+
+	auto partition_spec = table_metadata.FindPartitionSpecById(partition_spec_id);
+	if (!partition_spec) {
+		throw InternalException("Cannot find partition spec with id " + std::to_string(partition_spec_id));
+	}
+	result.emplace("partition-spec", partition_spec->FieldsToJSONString());
+	result.emplace("partition-spec-id", std::to_string(partition_spec_id));
+	result.emplace("format-version", std::to_string(format_version));
+	result.emplace("content", content == IcebergManifestContentType::DATA ? "data" : "deletes");
+	return result;
+}
+
+IcebergManifestListEntry IcebergManifestListEntry::CreateFromEntries(FileSystem &fs, sequence_number_t sequence_number,
                                                                      const IcebergTableMetadata &table_metadata,
-                                                                     IcebergManifestContentType manifest_content_type,
+                                                                     const IcebergManifestMetadata &manifest_metadata,
                                                                      vector<IcebergManifestEntry> &&manifest_entries,
                                                                      int64_t &next_row_id) {
 	//! create manifest file path
 	auto manifest_file_uuid = UUID::ToString(UUID::GenerateRandomUUID());
 	auto manifest_file_path = fs.JoinPath(table_metadata.GetMetadataPath(fs), manifest_file_uuid + "-m0.avro");
 
-	// Add a manifest list entry for the delete files
-	IcebergManifestListEntry manifest_list_entry(manifest_file_path);
+	// Add a manifest list entry for the entries
+	IcebergManifestListEntry manifest_list_entry(IcebergManifestFile {manifest_file_path}, manifest_metadata);
+	auto manifest_content = manifest_metadata.content;
+	auto manifest_partition_spec_id = manifest_metadata.partition_spec_id;
 	auto &manifest_file = manifest_list_entry.file;
 	manifest_file.manifest_path = manifest_file_path;
-	if (table_metadata.iceberg_version >= 3) {
-		manifest_file.has_first_row_id = true;
+	if (table_metadata.iceberg_version >= 3 && manifest_content == IcebergManifestContentType::DATA) {
+		//! 'first_row_id' is only assigned to data manifests (row lineage), deletes manifests leave it null
 		manifest_file.first_row_id = next_row_id;
 	}
 
 	manifest_file.manifest_path = manifest_file_path;
-	manifest_file.content = manifest_content_type;
+	manifest_file.content = manifest_content;
 	//! NOTE: this gets overwritten on commit
 	manifest_file.sequence_number = sequence_number;
 	manifest_file.added_files_count = 0;
@@ -60,7 +103,7 @@ IcebergManifestListEntry IcebergManifestListEntry::CreateFromEntries(FileSystem 
 	manifest_file.added_rows_count = 0;
 	manifest_file.existing_rows_count = 0;
 	manifest_file.deleted_rows_count = 0;
-	manifest_file.partition_spec_id = table_metadata.default_spec_id;
+	manifest_file.partition_spec_id = manifest_partition_spec_id;
 
 	//! Add the files to the manifest
 	for (auto &manifest_entry : manifest_entries) {
@@ -87,29 +130,27 @@ IcebergManifestListEntry IcebergManifestListEntry::CreateFromEntries(FileSystem 
 		}
 
 		//! NOTE: this gets overwritten on commit
-		if (!manifest_file.has_min_sequence_number ||
-		    manifest_file.sequence_number < manifest_file.min_sequence_number) {
-			manifest_file.min_sequence_number = manifest_file.sequence_number;
+		auto entry_data_seq = manifest_entry.GetSequenceNumber(manifest_file);
+		if (!manifest_file.min_sequence_number || entry_data_seq < *manifest_file.min_sequence_number) {
+			manifest_file.min_sequence_number = entry_data_seq;
 		}
-		manifest_file.has_min_sequence_number = true;
 	}
-	//! NOTE: this gets overwritten on commit
-	manifest_file.added_snapshot_id = snapshot_id;
+	//! NOTE: this gets assigned when the manifest is added to a manifest list
+	manifest_file.added_snapshot_id = nullopt;
 
 	// Compute partition field summaries (upper/lower bounds) for the manifest list entry
 	if (table_metadata.HasPartitionSpec() && table_metadata.GetLatestPartitionSpec().IsPartitioned()) {
-		auto partition_spec_it = table_metadata.partition_specs.find(table_metadata.default_spec_id);
+		auto partition_spec_it = table_metadata.partition_specs.find(manifest_partition_spec_id);
 		if (partition_spec_it == table_metadata.partition_specs.end()) {
-			throw InternalException("Cannot find partition spec with id " +
-			                        std::to_string(table_metadata.default_spec_id));
+			throw InternalException("Cannot find partition spec with id " + std::to_string(manifest_partition_spec_id));
 		}
 		auto &partition_spec = partition_spec_it->second;
 		manifest_file.partitions.Create(table_metadata, partition_spec, manifest_entries);
 	}
 
-	manifest_list_entry.manifest_entries.insert(manifest_list_entry.manifest_entries.end(),
-	                                            std::make_move_iterator(manifest_entries.begin()),
-	                                            std::make_move_iterator(manifest_entries.end()));
+	auto &stored_entries = manifest_list_entry.GetOrCreateManifestEntries();
+	stored_entries.insert(stored_entries.end(), std::make_move_iterator(manifest_entries.begin()),
+	                      std::make_move_iterator(manifest_entries.end()));
 	return manifest_list_entry;
 }
 
@@ -268,11 +309,15 @@ namespace manifest_list {
 
 namespace {
 
+using std::optional;
+
 struct AvroBindSchemaMetadata {
 	child_list_t<Value> field_ids;
 	vector<Identifier> names;
 	vector<LogicalType> types;
 };
+
+using FieldSummaryListWriter = VectorWriter<VectorListType<VectorStructType<bool, bool, string_t, string_t>>>;
 
 static Value CreateFieldID(int32_t field_id, bool nullable) {
 	child_list_t<Value> fields;
@@ -287,6 +332,137 @@ static void AddSimpleColumn(AvroBindSchemaMetadata &metadata, const string &name
 	metadata.types.push_back(type);
 	metadata.field_ids.emplace_back(name, CreateFieldID(field_id, nullable));
 }
+
+template <class WRITER>
+static void WriteBlobField(WRITER &writer, const Value &value) {
+	if (value.IsNull()) {
+		writer.WriteNull();
+		return;
+	}
+	writer.WriteValue(value.GetValueUnsafe<string_t>());
+}
+
+static void WritePartitions(FieldSummaryListWriter &writer, const ManifestPartitions &partitions) {
+	if (!partitions.has_partitions) {
+		writer.WriteNull();
+		return;
+	}
+	auto summaries = writer.WriteList(partitions.field_summary.size());
+	auto it = partitions.field_summary.begin();
+	for (auto &summary_writer : summaries) {
+		auto &summary = *it++;
+		summary_writer.WriteValue([&](auto &contains_null_writer, auto &contains_nan_writer, auto &lower_bound_writer,
+		                              auto &upper_bound_writer) {
+			contains_null_writer.WriteValue(summary.contains_null);
+			contains_nan_writer.WriteValue(summary.contains_nan);
+			WriteBlobField(lower_bound_writer, summary.lower_bound);
+			WriteBlobField(upper_bound_writer, summary.upper_bound);
+		});
+	}
+}
+
+struct ManifestListVectorWriters {
+	explicit ManifestListVectorWriters(DataChunk &data, idx_t row_count)
+	    : manifest_path(data.data[MANIFEST_PATH_INDEX], row_count, 0),
+	      manifest_length(data.data[MANIFEST_LENGTH_INDEX], row_count, 0),
+	      partition_spec_id(data.data[PARTITION_SPEC_ID_INDEX], row_count, 0),
+	      added_snapshot_id(data.data[ADDED_SNAPSHOT_ID_INDEX], row_count, 0),
+	      added_files_count(data.data[ADDED_FILES_COUNT_INDEX], row_count, 0),
+	      existing_files_count(data.data[EXISTING_FILES_COUNT_INDEX], row_count, 0),
+	      deleted_files_count(data.data[DELETED_FILES_COUNT_INDEX], row_count, 0),
+	      added_rows_count(data.data[ADDED_ROWS_COUNT_INDEX], row_count, 0),
+	      existing_rows_count(data.data[EXISTING_ROWS_COUNT_INDEX], row_count, 0),
+	      deleted_rows_count(data.data[DELETED_ROWS_COUNT_INDEX], row_count, 0),
+	      partitions(data.data[PARTITIONS_INDEX], row_count, 0) {
+		if (data.ColumnCount() > CONTENT_INDEX) {
+			content.emplace(data.data[CONTENT_INDEX], row_count, 0);
+			sequence_number.emplace(data.data[SEQUENCE_NUMBER_INDEX], row_count, 0);
+			min_sequence_number.emplace(data.data[MIN_SEQUENCE_NUMBER_INDEX], row_count, 0);
+		}
+		if (data.ColumnCount() > FIRST_ROW_ID_INDEX) {
+			first_row_id.emplace(data.data[FIRST_ROW_ID_INDEX], row_count, 0);
+		}
+	}
+
+	void WriteRow(const IcebergManifestFile &manifest, idx_t *next_row_id = nullptr) {
+		manifest_path.WriteValue(string_t(manifest.manifest_path));
+		manifest_length.WriteValue(manifest.manifest_length);
+		partition_spec_id.WriteValue(manifest.partition_spec_id);
+		if (!manifest.added_snapshot_id) {
+			throw InvalidConfigurationException("manifest_file.added_snapshot_id is not set");
+		}
+		added_snapshot_id.WriteValue(*manifest.added_snapshot_id);
+		added_files_count.WriteValue(static_cast<int32_t>(manifest.added_files_count));
+		existing_files_count.WriteValue(static_cast<int32_t>(manifest.existing_files_count));
+		deleted_files_count.WriteValue(static_cast<int32_t>(manifest.deleted_files_count));
+		added_rows_count.WriteValue(static_cast<int64_t>(manifest.added_rows_count));
+		existing_rows_count.WriteValue(static_cast<int64_t>(manifest.existing_rows_count));
+		deleted_rows_count.WriteValue(static_cast<int64_t>(manifest.deleted_rows_count));
+		WritePartitions(partitions, manifest.partitions);
+
+		if (content) {
+			content->WriteValue(static_cast<int32_t>(manifest.content));
+			if (!manifest.sequence_number) {
+				throw InvalidConfigurationException("manifest_file.sequence_number is not set");
+			}
+			sequence_number->WriteValue(*manifest.sequence_number);
+			if (!manifest.min_sequence_number) {
+				min_sequence_number->WriteValue(int64_t(-1));
+			} else {
+				min_sequence_number->WriteValue(*manifest.min_sequence_number);
+			}
+		}
+
+		if (!first_row_id) {
+			return;
+		}
+		auto row_id = manifest.first_row_id;
+		if (!row_id && manifest.content == IcebergManifestContentType::DATA) {
+			D_ASSERT(next_row_id);
+			row_id = static_cast<int64_t>(*next_row_id);
+			*next_row_id += manifest.added_rows_count;
+			*next_row_id += manifest.existing_rows_count;
+		}
+		if (row_id) {
+			first_row_id->WriteValue(*row_id);
+		} else {
+			first_row_id->WriteNull();
+		}
+	}
+
+private:
+	static constexpr idx_t MANIFEST_PATH_INDEX = 0;
+	static constexpr idx_t MANIFEST_LENGTH_INDEX = 1;
+	static constexpr idx_t PARTITION_SPEC_ID_INDEX = 2;
+	static constexpr idx_t ADDED_SNAPSHOT_ID_INDEX = 3;
+	static constexpr idx_t ADDED_FILES_COUNT_INDEX = 4;
+	static constexpr idx_t EXISTING_FILES_COUNT_INDEX = 5;
+	static constexpr idx_t DELETED_FILES_COUNT_INDEX = 6;
+	static constexpr idx_t ADDED_ROWS_COUNT_INDEX = 7;
+	static constexpr idx_t EXISTING_ROWS_COUNT_INDEX = 8;
+	static constexpr idx_t DELETED_ROWS_COUNT_INDEX = 9;
+	static constexpr idx_t PARTITIONS_INDEX = 10;
+	static constexpr idx_t CONTENT_INDEX = 11;
+	static constexpr idx_t SEQUENCE_NUMBER_INDEX = 12;
+	static constexpr idx_t MIN_SEQUENCE_NUMBER_INDEX = 13;
+	static constexpr idx_t FIRST_ROW_ID_INDEX = 14;
+
+	VectorWriter<string_t> manifest_path;
+	VectorWriter<int64_t> manifest_length;
+	VectorWriter<int32_t> partition_spec_id;
+	VectorWriter<int64_t> added_snapshot_id;
+	VectorWriter<int32_t> added_files_count;
+	VectorWriter<int32_t> existing_files_count;
+	VectorWriter<int32_t> deleted_files_count;
+	VectorWriter<int64_t> added_rows_count;
+	VectorWriter<int64_t> existing_rows_count;
+	VectorWriter<int64_t> deleted_rows_count;
+	FieldSummaryListWriter partitions;
+	optional<VectorWriter<int32_t>> content;
+	optional<VectorWriter<int64_t>> sequence_number;
+	optional<VectorWriter<int64_t>> min_sequence_number;
+	optional<VectorWriter<int64_t>> first_row_id;
+};
 
 } // namespace
 
@@ -323,15 +499,6 @@ void WriteToFile(const IcebergTableMetadata &table_metadata, const IcebergManife
 	// partition_spec_id: long - 502
 	AddSimpleColumn(metadata, "partition_spec_id", LogicalType::INTEGER, PARTITION_SPEC_ID, false);
 
-	// content: int - 517
-	AddSimpleColumn(metadata, "content", LogicalType::INTEGER, CONTENT, false);
-
-	// sequence_number: long - 515
-	AddSimpleColumn(metadata, "sequence_number", LogicalType::BIGINT, SEQUENCE_NUMBER, false);
-
-	// min_sequence_number: long - 516
-	AddSimpleColumn(metadata, "min_sequence_number", LogicalType::BIGINT, MIN_SEQUENCE_NUMBER, false);
-
 	// added_snapshot_id: long - 503
 	AddSimpleColumn(metadata, "added_snapshot_id", LogicalType::BIGINT, ADDED_SNAPSHOT_ID, false);
 
@@ -358,103 +525,46 @@ void WriteToFile(const IcebergTableMetadata &table_metadata, const IcebergManife
 	metadata.types.push_back(IcebergManifestList::FieldSummaryType());
 	metadata.field_ids.emplace_back("partitions", FieldSummaryFieldIds());
 
+	if (table_metadata.iceberg_version >= 2) {
+		// content: int - 517
+		AddSimpleColumn(metadata, "content", LogicalType::INTEGER, CONTENT, false);
+
+		// sequence_number: long - 515
+		AddSimpleColumn(metadata, "sequence_number", LogicalType::BIGINT, SEQUENCE_NUMBER, false);
+
+		// min_sequence_number: long - 516
+		AddSimpleColumn(metadata, "min_sequence_number", LogicalType::BIGINT, MIN_SEQUENCE_NUMBER, false);
+	}
+
 	if (table_metadata.iceberg_version >= 3) {
 		//! first_row_id: long - 520
-		metadata.names.push_back("first_row_id");
-		metadata.types.push_back(LogicalType::BIGINT);
-		metadata.field_ids.emplace_back("first_row_id", Value::INTEGER(FIRST_ROW_ID));
+		AddSimpleColumn(metadata, "first_row_id", LogicalType::BIGINT, FIRST_ROW_ID, true);
 	}
 
 	//! Populate the DataChunk with the manifests
 	auto &manifest_files = manifest_list.GetManifestFilesConst();
 	DataChunk data;
-	data.Initialize(allocator, metadata.types, manifest_files.size());
+	data.Initialize(allocator, metadata.types, STANDARD_VECTOR_SIZE);
 
 	idx_t next_row_id;
-	if (table_metadata.has_next_row_id) {
-		next_row_id = table_metadata.next_row_id;
+	if (table_metadata.next_row_id) {
+		next_row_id = *table_metadata.next_row_id;
 	} else {
 		next_row_id = 0;
 	}
-
-	for (idx_t i = 0; i < manifest_files.size(); i++) {
-		const auto &manifest_entry = manifest_files[i];
-		const auto &manifest = manifest_entry.file;
-		idx_t col_idx = 0;
-
-		// manifest_path: string - 500
-		data.data[col_idx++].Append(Value(manifest.manifest_path));
-
-		// manifest_length: long - 501
-		data.data[col_idx++].Append(Value::BIGINT(manifest.manifest_length));
-
-		// partition_spec_id: long - 502
-		data.data[col_idx++].Append(Value::BIGINT(manifest.partition_spec_id));
-
-		// content: int - 517
-		data.data[col_idx++].Append(Value::INTEGER(static_cast<int32_t>(manifest.content)));
-
-		// sequence_number: long - 515
-		data.data[col_idx++].Append(Value::BIGINT(manifest.sequence_number));
-
-		// min_sequence_number: long - 516
-		if (!manifest.has_min_sequence_number) {
-			//! Behavior copied from pyiceberg
-			data.data[col_idx++].Append(Value::BIGINT(-1));
-		} else {
-			data.data[col_idx++].Append(Value::BIGINT(manifest.min_sequence_number));
-		}
-
-		// added_snapshot_id: long - 503
-		data.data[col_idx++].Append(Value::BIGINT(manifest.added_snapshot_id));
-
-		// added_files_count: int - 504
-		data.data[col_idx++].Append(Value::INTEGER(manifest.added_files_count));
-
-		// existing_files_count: int - 505
-		data.data[col_idx++].Append(Value::INTEGER(manifest.existing_files_count));
-
-		// deleted_files_count: int - 506
-		data.data[col_idx++].Append(Value::INTEGER(manifest.deleted_files_count));
-
-		// added_rows_count: long - 512
-		data.data[col_idx++].Append(Value::BIGINT(static_cast<int64_t>(manifest.added_rows_count)));
-
-		// existing_rows_count: long - 513
-		data.data[col_idx++].Append(Value::BIGINT(static_cast<int64_t>(manifest.existing_rows_count)));
-
-		// deleted_rows_count: long - 514
-		data.data[col_idx++].Append(Value::BIGINT(static_cast<int64_t>(manifest.deleted_rows_count)));
-
-		// partitions: list<508: field_summary> - 507
-		data.data[col_idx++].Append(manifest.partitions.ToValue());
-
-		if (table_metadata.iceberg_version < 3) {
-			continue;
-		}
-
-		bool has_first_row_id = manifest.has_first_row_id;
-		int64_t first_row_id = manifest.first_row_id;
-		if (!has_first_row_id && manifest.content == IcebergManifestContentType::DATA) {
-			//! Assign first_row_id to old manifest_file entries
-			first_row_id = next_row_id;
-			has_first_row_id = true;
-			next_row_id += manifest.added_rows_count;
-			next_row_id += manifest.existing_rows_count;
-		}
-
-		if (has_first_row_id) {
-			data.data[col_idx++].Append(first_row_id);
-		} else {
-			data.data[col_idx++].Append(Value(LogicalType::BIGINT));
-		}
-	}
-	data.SetChildCardinality(manifest_files.size());
 
 	CopyInfo copy_info;
 	copy_info.is_from = false;
 	copy_info.options["root_name"].push_back(Value("manifest_file"));
 	copy_info.options["field_ids"].push_back(Value::STRUCT(metadata.field_ids));
+
+	//! write.manifest.compression-codec: let the Avro COPY writer emit the codec natively.
+	//! "null" is the COPY default (uncompressed), so only set the option for a compressing codec.
+	auto avro_codec =
+	    iceberg_avro_codec::ResolveAvroCodec(table_metadata.GetTableProperty("write.manifest.compression-codec"));
+	if (!StringUtil::CIEquals(avro_codec, "null")) {
+		copy_info.options["codec"].push_back(Value(avro_codec));
+	}
 
 	CopyFunctionBindInput input(copy_info);
 	input.file_extension = "avro";
@@ -466,7 +576,22 @@ void WriteToFile(const IcebergTableMetadata &table_metadata, const IcebergManife
 	auto global_state = copy.copy_to_initialize_global(context, *bind_data, manifest_list.GetPath());
 	auto local_state = copy.copy_to_initialize_local(execution_context, *bind_data);
 
-	copy.copy_to_sink(execution_context, *bind_data, *global_state, *local_state, data);
+	for (idx_t offset = 0; offset < manifest_files.size(); offset += STANDARD_VECTOR_SIZE) {
+		const auto chunk_count = MinValue<idx_t>(STANDARD_VECTOR_SIZE, manifest_files.size() - offset);
+		if (offset > 0) {
+			data.Reset();
+		}
+
+		ManifestListVectorWriters writers(data, chunk_count);
+		for (idx_t i = 0; i < chunk_count; i++) {
+			const auto &manifest_entry = manifest_files[offset + i];
+			const auto &manifest = manifest_entry.file;
+			writers.WriteRow(manifest, table_metadata.iceberg_version >= 3 ? &next_row_id : nullptr);
+		}
+
+		data.SetChildCardinality(chunk_count);
+		copy.copy_to_sink(execution_context, *bind_data, *global_state, *local_state, data);
+	}
 	copy.copy_to_combine(execution_context, *bind_data, *global_state, *local_state);
 	copy.copy_to_finalize(context, *bind_data, *global_state);
 }
@@ -482,7 +607,13 @@ unique_ptr<IcebergManifestList> IcebergManifestList::Load(const string &iceberg_
                                                           const IcebergSnapshotScanInfo &snapshot_info,
                                                           ClientContext &context, const IcebergOptions &options) {
 	auto &snapshot = *snapshot_info.snapshot;
-	auto ret = make_uniq<IcebergManifestList>(snapshot.snapshot_id, snapshot.sequence_number, snapshot.manifest_list);
+	if (!snapshot.snapshot_id) {
+		throw InvalidConfigurationException("snapshot.snapshot_id is not set");
+	}
+	if (!snapshot.sequence_number) {
+		throw InvalidConfigurationException("snapshot.sequence_number is not set");
+	}
+	auto ret = make_uniq<IcebergManifestList>(*snapshot.snapshot_id, *snapshot.sequence_number, snapshot.manifest_list);
 
 	auto &fs = FileSystem::GetFileSystem(context);
 	auto manifest_list_full_path = options.allow_moved_paths

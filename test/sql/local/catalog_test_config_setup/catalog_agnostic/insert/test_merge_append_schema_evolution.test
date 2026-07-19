@@ -1,0 +1,87 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/insert/test_merge_append_schema_evolution.test
+# description: Manifest merge only groups manifests written under the same schema id
+# group: [insert]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+drop table if exists my_datalake.default.merge_schema_evo;
+
+# Aggressive min-count so a merge is observable after only a couple of commits.
+statement ok
+create table my_datalake.default.merge_schema_evo (
+	id INTEGER,
+	data VARCHAR
+) WITH (
+	'commit.manifest.min-count-to-merge' = '2',
+	'commit.manifest.target-size-bytes' = '8388608'
+);
+
+# Two commits under the original schema (schema id 0) -> two data manifests.
+statement ok
+insert into my_datalake.default.merge_schema_evo values (1, 'a'), (2, 'b');
+
+statement ok
+insert into my_datalake.default.merge_schema_evo values (3, 'c'), (4, 'd');
+
+# Evolve the schema: ADD COLUMN bumps the current schema id. Manifests written after this point
+# describe a different data_file.partition/stats layout and must not be merged with the earlier ones.
+statement ok
+ALTER TABLE my_datalake.default.merge_schema_evo ADD COLUMN extra INTEGER;
+
+# Two more commits under the new schema.
+statement ok
+insert into my_datalake.default.merge_schema_evo values (5, 'e', 50), (6, 'f', 60);
+
+statement ok
+insert into my_datalake.default.merge_schema_evo values (7, 'g', 70), (8, 'h', 80);
+
+# Data equivalence: rows from the old schema read back with NULL for the new column; new rows keep
+# their values. No row may be lost or duplicated regardless of how manifests were packed.
+query III
+select id, data, extra from my_datalake.default.merge_schema_evo order by id;
+----
+1	a	NULL
+2	b	NULL
+3	c	NULL
+4	d	NULL
+5	e	50
+6	f	60
+7	g	70
+8	h	80
+
+query I
+select count(*) from my_datalake.default.merge_schema_evo;
+----
+8
+
+# Merge groups by (schema id, partition spec id): the two old-schema manifests merge into one, and
+# the two new-schema manifests merge into another. They are NEVER folded together across the schema
+# boundary.
+query I
+select count(*) from (
+	select distinct manifest_path
+	from iceberg_metadata(my_datalake.default.merge_schema_evo)
+);
+----
+3
+
+# Merge correctness: the cross-schema-safe merge still demotes carried-over entries to EXISTING.
+query I
+select count(*) > 0 from iceberg_metadata(my_datalake.default.merge_schema_evo) where status = 'EXISTING';
+----
+true
+
+statement ok
+drop table my_datalake.default.merge_schema_evo;

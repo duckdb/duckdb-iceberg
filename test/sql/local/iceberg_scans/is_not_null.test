@@ -67,7 +67,18 @@ select * from my_datalake.default.is_not_null WHERE value IS NOT NULL ORDER BY i
 6	baz
 8	blah
 
-# Using the logs (which contains the data_file path), join it against the iceberg metadata to sum the record_counts of the skipped data files
+statement ok
+CALL truncate_duckdb_logs();
+
+# The 'value' column is all-NULL in the file holding ids 1-3, so has_not_null is false and the
+# file is pruned: an ordinary comparison against a constant cannot match NULL. The file holding
+# 'blah' is kept and returns its row; the file with other non-null values is kept and returns none.
+query II
+select * from my_datalake.default.is_not_null WHERE value = 'blah' ORDER BY id ASC;
+----
+8	blah
+
+# Exactly the all-null file (record_count 3) is skipped, not the files that hold non-null values.
 query I
 SELECT SUM(meta.record_count) AS total_record_count
 FROM (
@@ -78,3 +89,25 @@ JOIN ICEBERG_METADATA(my_datalake.default.is_not_null) meta
 ON logs.msg = meta.file_path;
 ----
 3
+
+# IS NOT DISTINCT FROM NULL (= IS NULL) must match the all-null file's rows, not prune it as a non-null constant comparison would.
+query II
+select * from my_datalake.default.is_not_null WHERE value IS NOT DISTINCT FROM NULL ORDER BY id ASC;
+----
+1	NULL
+2	NULL
+3	NULL
+7	NULL
+
+# IS DISTINCT FROM a non-null constant also matches the all-null file (NULL differs from any value), so nothing is pruned.
+query II
+select * from my_datalake.default.is_not_null WHERE value IS DISTINCT FROM 'zzz' ORDER BY id ASC;
+----
+1	NULL
+2	NULL
+3	NULL
+4	foo
+5	bar
+6	baz
+7	NULL
+8	blah

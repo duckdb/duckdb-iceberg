@@ -1,0 +1,94 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/sorting/identity/identity_date_and_string.test
+# group: [identity]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+set ignore_error_messages
+
+statement ok
+set threads=1;
+
+statement ok
+CREATE SCHEMA IF NOT EXISTS my_datalake.default;
+
+statement ok
+drop table if exists my_datalake.default.sort_identity_date;
+
+statement ok
+create table my_datalake.default.sort_identity_date (id int, sort_col date);
+
+statement ok
+alter table my_datalake.default.sort_identity_date set sorted by (sort_col asc nulls last, id asc nulls last);
+
+statement ok
+insert into my_datalake.default.sort_identity_date values
+	(4, '2020-02-01'), (2, '2020-01-01'), (3, '2020-03-01'), (1, '2020-01-01');
+
+statement ok
+set variable latest_manifest_sequence = (select max(manifest_sequence_number) from iceberg_metadata(my_datalake.default.sort_identity_date));
+
+statement ok
+set variable file_path = (
+	select file_path from iceberg_metadata(my_datalake.default.sort_identity_date)
+	where manifest_sequence_number = cast(getvariable('latest_manifest_sequence') as bigint)
+	and manifest_content = 'DATA' and status = 'ADDED' limit 1
+);
+
+query IT
+select id, sort_col
+from my_datalake.default.sort_identity_date
+where filename = getvariable('file_path')
+order by file_row_number;
+----
+1	2020-01-01
+2	2020-01-01
+4	2020-02-01
+3	2020-03-01
+
+statement ok
+drop table my_datalake.default.sort_identity_date;
+
+statement ok
+drop table if exists my_datalake.default.sort_identity_string;
+
+statement ok
+create table my_datalake.default.sort_identity_string (id int, sort_col varchar);
+
+statement ok
+alter table my_datalake.default.sort_identity_string set sorted by (sort_col asc nulls last, id asc nulls last);
+
+statement ok
+insert into my_datalake.default.sort_identity_string values
+	(4, 'beta'), (2, 'alpha'), (3, 'gamma'), (1, 'alpha');
+
+statement ok
+set variable latest_manifest_sequence = (select max(manifest_sequence_number) from iceberg_metadata(my_datalake.default.sort_identity_string));
+
+statement ok
+set variable file_path = (
+	select file_path from iceberg_metadata(my_datalake.default.sort_identity_string)
+	where manifest_sequence_number = cast(getvariable('latest_manifest_sequence') as bigint)
+	and manifest_content = 'DATA' and status = 'ADDED' limit 1
+);
+
+query IT
+select id, sort_col
+from my_datalake.default.sort_identity_string
+where filename = getvariable('file_path')
+order by file_row_number;
+----
+1	alpha
+2	alpha
+4	beta
+3	gamma
+
+statement ok
+drop table my_datalake.default.sort_identity_string;

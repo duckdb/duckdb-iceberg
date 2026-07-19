@@ -10,6 +10,7 @@
 #include "duckdb/common/types.hpp"
 #include "duckdb/common/types/value.hpp"
 #include "duckdb/common/vector.hpp"
+#include "duckdb/common/optional.hpp"
 
 namespace duckdb {
 class ClientContext;
@@ -31,19 +32,16 @@ public:
 
 	//! Build the serialized parquet-variant bounds blobs (metadata + value concatenated) for the
 	//! lower and upper bounds.
-	bool Finalize(ClientContext &context, bool &has_lower, string &lower_blob, bool &has_upper, string &upper_blob);
+	bool Finalize(ClientContext &context, optional<string> &lower_blob, optional<string> &upper_blob);
 
 private:
 	struct FieldBound {
 		vector<string> field_names; // empty == variant root ("$")
-		bool has_min = false;
-		string min_value;
-		bool has_max = false;
-		string max_value;
+		optional<string> min_value;
+		optional<string> max_value;
 	};
 
-	bool has_variant_type = false;
-	string variant_type_str;
+	optional<string> variant_type_str;
 	vector<FieldBound> fields;
 	// path of partially shredded variant values.
 	// we do not record stats for partially shredded values since the types may be different

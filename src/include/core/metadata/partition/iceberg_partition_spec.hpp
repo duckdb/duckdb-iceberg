@@ -53,6 +53,7 @@ public:
 	yyjson_mut_val *ToJSON(yyjson_mut_doc *doc) const;
 	string FieldsToJSONString() const;
 	const vector<IcebergPartitionSpecField> &GetFields() const;
+	bool Equals(const IcebergPartitionSpec &other) const;
 
 private:
 	yyjson_mut_val *FieldsToJSON(yyjson_mut_doc *doc) const;

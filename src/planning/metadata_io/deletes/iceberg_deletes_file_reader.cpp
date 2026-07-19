@@ -1,6 +1,8 @@
 #include "planning/metadata_io/deletes/iceberg_deletes_file_reader.hpp"
 
 #include "duckdb/catalog/catalog_entry/table_function_catalog_entry.hpp"
+#include "duckdb/catalog/catalog_entry/schema_catalog_entry.hpp"
+#include "duckdb/catalog/catalog.hpp"
 #include "duckdb/main/database.hpp"
 
 #include "function/iceberg_functions.hpp"

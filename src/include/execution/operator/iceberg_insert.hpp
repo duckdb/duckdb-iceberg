@@ -50,23 +50,23 @@ public:
 	unique_ptr<FunctionData> bind_data;
 
 	string file_path;
-	bool use_tmp_file;
 	FilenamePattern filename_pattern;
 	string file_extension;
 	CopyOverwriteMode overwrite_mode;
 	bool per_thread_output;
-	optional_idx file_size_bytes;
-	bool rotate;
+	//! default target file size: 8.4MB
+	idx_t file_size_bytes = 1 << 23;
 	CopyFunctionReturnType return_type;
-	bool hive_file_pattern;
 
 	//! Partitioning
-	bool partition_output;
-	bool write_partition_columns;
+	bool partition_output = false;
+	bool write_partition_columns = true;
 	bool write_empty_file = true;
 	vector<idx_t> partition_columns;
+	vector<BoundOrderByNode> order_columns;
 	vector<Identifier> names;
 	vector<LogicalType> expected_types;
+	bool partitioned_paths = true;
 
 	//! Set of projection columns to execute prior to inserting (if any)
 	vector<unique_ptr<Expression>> projection_list;

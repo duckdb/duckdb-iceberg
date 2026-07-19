@@ -78,6 +78,8 @@ string IcebergTypeHelper::LogicalTypeToIcebergType(const LogicalType &type) {
 		return "timestamptz";
 	case LogicalTypeId::TIMESTAMP_NS:
 		return "timestamp_ns";
+	case LogicalTypeId::TIMESTAMP_TZ_NS:
+		return "timestamptz_ns";
 	case LogicalTypeId::MAP:
 		return "map";
 	case LogicalTypeId::VARIANT: {

@@ -101,15 +101,16 @@ string LoadTableResult::TryFromJSON(yyjson_val *obj) {
 	if (storage_credentials_val) {
 		vector<StorageCredential> storage_credentials_tmp;
 		if (yyjson_is_arr(storage_credentials_val)) {
-			size_t idx, max;
-			yyjson_val *val;
-			yyjson_arr_foreach(storage_credentials_val, idx, max, val) {
-				StorageCredential tmp;
-				error = tmp.TryFromJSON(val);
+			size_t storage_credentials_tmp_idx, storage_credentials_tmp_max;
+			yyjson_val *storage_credentials_tmp_item_val;
+			yyjson_arr_foreach(storage_credentials_val, storage_credentials_tmp_idx, storage_credentials_tmp_max,
+			                   storage_credentials_tmp_item_val) {
+				StorageCredential storage_credentials_tmp_item;
+				error = storage_credentials_tmp_item.TryFromJSON(storage_credentials_tmp_item_val);
 				if (!error.empty()) {
 					return error;
 				}
-				storage_credentials_tmp.emplace_back(std::move(tmp));
+				storage_credentials_tmp.emplace_back(std::move(storage_credentials_tmp_item));
 			}
 		} else {
 			return StringUtil::Format(

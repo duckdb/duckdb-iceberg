@@ -41,6 +41,85 @@ statement ok
 drop table if exists my_datalake.default.alter_table_partitioned_date_transform;
 
 statement ok
+drop table if exists my_datalake.default.alter_table_partitioned_struct_identity;
+
+statement ok
+CREATE TABLE my_datalake.default.alter_table_partitioned_struct_identity (
+	id INTEGER,
+	payload STRUCT(
+		category VARCHAR,
+		nested STRUCT(ts TIMESTAMP)
+	)
+);
+
+statement ok
+ALTER TABLE my_datalake.default.alter_table_partitioned_struct_identity SET PARTITIONED BY (payload.category);
+
+statement ok
+insert into my_datalake.default.alter_table_partitioned_struct_identity values
+	(1, {'category': 'alpha', 'nested': {'ts': '2020-01-01 01:02:03'::TIMESTAMP}}),
+	(2, {'category': 'beta', 'nested': {'ts': '2021-02-02 02:03:04'::TIMESTAMP}});
+
+query IT
+SELECT
+	id,
+	payload.category
+FROM my_datalake.default.alter_table_partitioned_struct_identity
+ORDER BY id;
+----
+1	alpha
+2	beta
+
+query T
+SELECT spec.fields[1].transform
+FROM iceberg_load_table_response('my_datalake.default.alter_table_partitioned_struct_identity'),
+unnest(metadata."partition-specs"::VARIANT[]) AS t(spec)
+WHERE try_cast(spec."spec-id" AS INTEGER) = metadata."default-spec-id";
+----
+identity
+
+statement ok
+drop table if exists my_datalake.default.alter_table_partitioned_struct_transform;
+
+statement ok
+CREATE TABLE my_datalake.default.alter_table_partitioned_struct_transform (
+	id INTEGER,
+	payload STRUCT(
+		category VARCHAR,
+		nested STRUCT(ts TIMESTAMP)
+	)
+);
+
+statement ok
+ALTER TABLE my_datalake.default.alter_table_partitioned_struct_transform SET PARTITIONED BY (year(payload.nested.ts));
+
+statement ok
+insert into my_datalake.default.alter_table_partitioned_struct_transform values
+	(1, {'category': 'alpha', 'nested': {'ts': '2020-01-01 01:02:03'::TIMESTAMP}}),
+	(2, {'category': 'beta', 'nested': {'ts': '2021-02-02 02:03:04'::TIMESTAMP}});
+
+query IT
+SELECT
+	id,
+	payload.nested.ts
+FROM my_datalake.default.alter_table_partitioned_struct_transform
+ORDER BY id;
+----
+1	2020-01-01 01:02:03
+2	2021-02-02 02:03:04
+
+query T
+SELECT spec.fields[1].transform
+FROM iceberg_load_table_response('my_datalake.default.alter_table_partitioned_struct_transform'),
+unnest(metadata."partition-specs"::VARIANT[]) AS t(spec)
+WHERE try_cast(spec."spec-id" AS INTEGER) = metadata."default-spec-id";
+----
+year
+
+statement ok
+drop table if exists my_datalake.default.alter_table_partitioned_struct_transform;
+
+statement ok
 CREATE TABLE my_datalake.default.alter_table_partitioned_date_transform AS (FROM values
 (1, '2020-10-10'::DATE),
 (2, '2021-09-09'::DATE),

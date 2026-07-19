@@ -1,0 +1,79 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/sorting/day/day_timestamptz_ns.test
+# group: [day]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+require icu
+
+statement ok
+SET Calendar='gregorian';
+
+statement ok
+SET TimeZone='Europe/Amsterdam';
+
+set ignore_error_messages
+
+statement ok
+set threads=1;
+
+statement ok
+CREATE SCHEMA IF NOT EXISTS my_datalake.default;
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.sort_day_timestamptz_ns;
+
+statement ok
+CREATE TABLE my_datalake.default.sort_day_timestamptz_ns (
+	id INT,
+	ts TIMESTAMPTZ_NS
+) WITH ('format-version' = 3);
+
+statement ok
+ALTER TABLE my_datalake.default.sort_day_timestamptz_ns
+SET SORTED BY (day(ts) ASC NULLS LAST, id ASC NULLS LAST);
+
+query T
+SELECT sort_order.fields[1].transform
+FROM iceberg_load_table_response(my_datalake.default.sort_day_timestamptz_ns),
+unnest(metadata."sort-orders"::VARIANT[]) AS t(sort_order)
+WHERE try_cast(sort_order."order-id" AS INTEGER) = metadata."default-sort-order-id";
+----
+day
+
+statement ok
+INSERT INTO my_datalake.default.sort_day_timestamptz_ns VALUES
+	(4, '2022-03-10 23:15:00.000000001+01'::TIMESTAMPTZ_NS),
+	(2, '2020-01-15 09:30:00.123456789+01'::TIMESTAMPTZ_NS),
+	(3, '2021-06-20 16:45:00.987654321+02'::TIMESTAMPTZ_NS),
+	(1, '2019-07-04 05:00:00.000000001+02'::TIMESTAMPTZ_NS);
+
+query IT
+SELECT id, ts
+FROM my_datalake.default.sort_day_timestamptz_ns
+ORDER BY _row_id;
+----
+1	2019-07-04 05:00:00.000000001+02
+2	2020-01-15 09:30:00.123456789+01
+3	2021-06-20 16:45:00.987654321+02
+4	2022-03-10 23:15:00.000000001+01
+
+query IT
+SELECT id, ts
+FROM my_datalake.default.sort_day_timestamptz_ns
+ORDER BY ts, id;
+----
+1	2019-07-04 05:00:00.000000001+02
+2	2020-01-15 09:30:00.123456789+01
+3	2021-06-20 16:45:00.987654321+02
+4	2022-03-10 23:15:00.000000001+01
+
+statement ok
+DROP TABLE my_datalake.default.sort_day_timestamptz_ns;

@@ -2,6 +2,10 @@
 # description: test integration with iceberg catalog read
 # group: [polaris]
 
+# Needs:
+# - default.quickstart_table (read-only)
+# - default.all_types_table (read-only)
+
 require-env CATALOG_TEST_CONFIG_SETUP polaris
 
 require avro

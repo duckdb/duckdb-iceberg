@@ -2,6 +2,9 @@
 # description: Test iceberg deletes
 # group: [equality_deletes]
 
+statement ok
+SET profiling_renderer_settings = MAP {'operator_casing': 'upper'};
+
 require-env CATALOG_TEST_CONFIG_SETUP
 
 require-env EQUALITY_DELETE_WRITES_ENABLED 1

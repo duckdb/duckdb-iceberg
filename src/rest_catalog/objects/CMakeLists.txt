@@ -8,6 +8,7 @@ add_library(
   namespace.cpp
   page_token.cpp
   table_identifier.cpp
+  catalog_object_identifier.cpp
   primitive_type.cpp
   struct_field.cpp
   struct_type.cpp
@@ -74,7 +75,6 @@ add_library(
   remove_encryption_key_update.cpp
   table_update.cpp
   view_update.cpp
-  table_requirement_type.cpp
   table_requirement.cpp
   assert_create.cpp
   assert_table_uuid.cpp
@@ -104,6 +104,7 @@ add_library(
   commit_transaction_request.cpp
   create_table_request.cpp
   register_table_request.cpp
+  unregister_table_result.cpp
   create_view_request.cpp
   load_view_result.cpp
   register_view_request.cpp
@@ -124,7 +125,22 @@ add_library(
   create_namespace_response.cpp
   get_namespace_response.cpp
   list_tables_response.cpp
+  list_functions_response.cpp
   list_namespaces_response.cpp
+  load_function_result.cpp
+  function_metadata.cpp
+  function_definition.cpp
+  function_parameter.cpp
+  function_data_type.cpp
+  function_list_type.cpp
+  function_map_type.cpp
+  function_struct_type.cpp
+  function_struct_field.cpp
+  function_definition_version.cpp
+  function_representation.cpp
+  function_sqlrepresentation.cpp
+  function_definition_log_entry.cpp
+  function_definition_version_ref.cpp
   update_namespace_properties_response.cpp
   commit_table_response.cpp
   statistics_file.cpp
@@ -159,7 +175,10 @@ add_library(
   field_name.cpp
   fetch_scan_tasks_request.cpp
   plan_task.cpp
-  file_scan_task.cpp)
+  file_scan_task.cpp
+  multi_valued_map.cpp
+  remote_sign_request.cpp
+  remote_sign_result.cpp)
 
 set(ALL_OBJECT_FILES
     ${ALL_OBJECT_FILES} $<TARGET_OBJECTS:rest_catalog_objects>

@@ -24,6 +24,7 @@ public:
 	                   IcebergSnapshotOperationType operation = IcebergSnapshotOperationType::OVERWRITE);
 
 public:
+	bool IsRetryable() const override;
 	void ConstructManifestList(IcebergManifestList &manifest_list, CopyFunction &avro_copy, DatabaseInstance &db,
 	                           IcebergCommitState &commit_state) const;
 	void CreateUpdate(DatabaseInstance &db, ClientContext &context, IcebergCommitState &commit_state) const override;

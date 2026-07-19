@@ -1,0 +1,185 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/insert/test_manifest_compression.test
+# description: write.manifest.compression-codec - manifests are written with the configured Avro
+# group: [insert]
+
+#              codec (default deflate, matching Java), applied natively by the Avro COPY writer.
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+set ignore_error_messages
+
+# --- Default codec (deflate): data round-trips correctly --------------------------------------
+statement ok
+drop table if exists my_datalake.default.compress_default;
+
+statement ok
+create table my_datalake.default.compress_default (id INTEGER, data VARCHAR);
+
+statement ok
+insert into my_datalake.default.compress_default select i, 'row_' || (i % 8)::VARCHAR from range(500) t(i);
+
+query II
+select count(*), sum(id) from my_datalake.default.compress_default;
+----
+500	124750
+
+# More inserts (more manifests) still read back correctly under the default compressing codec.
+statement ok
+insert into my_datalake.default.compress_default select i, 'x' from range(500, 1000) t(i);
+
+query II
+select count(*), sum(id) from my_datalake.default.compress_default;
+----
+1000	499500
+
+# Prove the manifest is actually deflate-compressed AND valid:
+#  - the Avro object-container header records avro.codec -> deflate (in the first bytes; the
+#    compressed data blocks that follow are not valid UTF-8, so we slice the header first), and
+#  - read_avro can decompress and read it back (it would fail if the codec were written wrong).
+statement ok
+SET VARIABLE manifest_default = (
+	SELECT manifest_path FROM iceberg_metadata(my_datalake.default.compress_default)
+	ORDER BY manifest_sequence_number DESC LIMIT 1
+);
+
+query II
+SELECT position('deflate' IN (content[1:60]::VARCHAR)) > 0, position('null' IN (content[1:60]::VARCHAR)) = 0
+FROM read_blob(getvariable('manifest_default'));
+----
+true	true
+
+query I
+SELECT count(*) > 0 FROM read_avro(getvariable('manifest_default'));
+----
+true
+
+statement ok
+drop table my_datalake.default.compress_default;
+
+# --- Explicit deflate -------------------------------------------------------------------------
+statement ok
+drop table if exists my_datalake.default.compress_deflate;
+
+statement ok
+create table my_datalake.default.compress_deflate (id INTEGER, data VARCHAR) WITH ('write.manifest.compression-codec' = 'deflate');
+
+statement ok
+insert into my_datalake.default.compress_deflate select i, 'v' from range(300) t(i);
+
+query I
+select count(*) from my_datalake.default.compress_deflate;
+----
+300
+
+statement ok
+drop table my_datalake.default.compress_deflate;
+
+# --- Uncompressed (none) ----------------------------------------------------------------------
+statement ok
+drop table if exists my_datalake.default.compress_none;
+
+statement ok
+create table my_datalake.default.compress_none (id INTEGER, data VARCHAR) WITH ('write.manifest.compression-codec' = 'none');
+
+statement ok
+insert into my_datalake.default.compress_none select i, 'v' from range(300) t(i);
+
+query I
+select count(*) from my_datalake.default.compress_none;
+----
+300
+
+# With 'none', the manifest is written uncompressed: the Avro header records avro.codec -> null and
+# there is no 'deflate' marker.
+statement ok
+SET VARIABLE manifest_none = (
+	SELECT manifest_path FROM iceberg_metadata(my_datalake.default.compress_none)
+	ORDER BY manifest_sequence_number DESC LIMIT 1
+);
+
+query II
+SELECT position('deflate' IN (content[1:60]::VARCHAR)) = 0, position('null' IN (content[1:60]::VARCHAR)) > 0
+FROM read_blob(getvariable('manifest_none'));
+----
+true	true
+
+statement ok
+drop table my_datalake.default.compress_none;
+
+# --- gzip alias resolves to the deflate Avro codec --------------------------------------------
+statement ok
+drop table if exists my_datalake.default.compress_gzip;
+
+statement ok
+create table my_datalake.default.compress_gzip (id INTEGER) WITH ('write.manifest.compression-codec' = 'gzip');
+
+statement ok
+insert into my_datalake.default.compress_gzip select i from range(300) t(i);
+
+query I
+select count(*) from my_datalake.default.compress_gzip;
+----
+300
+
+statement ok
+drop table my_datalake.default.compress_gzip;
+
+# --- Unsupported codec errors out -------------------------------------------------------------
+statement ok
+drop table if exists my_datalake.default.compress_bad;
+
+statement ok
+create table my_datalake.default.compress_bad (id INTEGER) WITH ('write.manifest.compression-codec' = 'bogus');
+
+statement error
+insert into my_datalake.default.compress_bad select i from range(10) t(i);
+----
+Unsupported value 'bogus' for 'write.manifest.compression-codec'
+
+statement ok
+drop table my_datalake.default.compress_bad;
+
+# --- Compression does not corrupt manifest statistics -----------------------------------------
+# The per-data-file statistics (lower/upper bounds, value/null counts) live inside the manifest.
+# Reading them back from a deflate-compressed manifest must yield the same complete, correct
+# values; i.e. decompression is transparent to the statistics readers.
+statement ok
+drop table if exists my_datalake.default.compress_bounds;
+
+statement ok
+create table my_datalake.default.compress_bounds (id INTEGER, val INTEGER) WITH ('write.manifest.compression-codec' = 'deflate');
+
+statement ok
+insert into my_datalake.default.compress_bounds select i, i * 10 from range(200) t(i);
+
+statement ok
+SET VARIABLE manifest_bounds = (
+	SELECT manifest_path FROM iceberg_metadata(my_datalake.default.compress_bounds)
+	ORDER BY manifest_sequence_number DESC LIMIT 1
+);
+
+# Both columns have lower- and upper-bound statistics recorded and readable from the compressed
+# manifest (two columns -> two bound entries each).
+query II
+SELECT
+  (SELECT count(*) FROM (SELECT unnest(map_keys(lower_bounds)) FROM (SELECT unnest(data_file) FROM read_avro(getvariable('manifest_bounds'))))),
+  (SELECT count(*) FROM (SELECT unnest(map_keys(upper_bounds)) FROM (SELECT unnest(data_file) FROM read_avro(getvariable('manifest_bounds')))));
+----
+2	2
+
+# Record counts survive too.
+query I
+SELECT record_count FROM (SELECT unnest(data_file) FROM read_avro(getvariable('manifest_bounds')));
+----
+200
+
+statement ok
+drop table my_datalake.default.compress_bounds;

@@ -21,7 +21,8 @@ INSERT_TEST_SEED = SparkSeedTable(
     )
     TBLPROPERTIES (
         'format-version'='2',
-        'write.update.mode'='merge-on-read'
+        'write.update.mode'='merge-on-read',
+        'commit.retry.num-retries'='0'
     );
     """,
 )
@@ -187,6 +188,8 @@ class TestInsertEndToEnd:
                         'insert 4'
                     """
                 )
+
+            with test.with_transaction():
                 test.statement_ok(
                     """
                     INSERT INTO my_datalake.default.insert_all_types
@@ -223,7 +226,7 @@ class TestInsertEndToEnd:
                 "I", "SELECT distinct status FROM iceberg_metadata('my_datalake.default.insert_test')", [("ADDED",)]
             )
             test.query(
-                "I", "SELECT distinct content FROM iceberg_metadata('my_datalake.default.insert_test')", [("EXISTING",)]
+                "I", "SELECT distinct content FROM iceberg_metadata('my_datalake.default.insert_test')", [("DATA",)]
             )
             test.query(
                 "I",

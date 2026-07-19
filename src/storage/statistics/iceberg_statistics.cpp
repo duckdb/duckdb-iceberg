@@ -11,26 +11,22 @@ IcebergColumnStats IcebergColumnStats::ParseColumnStats(const LogicalType &type,
 		auto &stats_children = StructValue::GetChildren(col_stats[stats_idx]);
 		auto &stats_name = StringValue::Get(stats_children[0]);
 		if (stats_name == "min") {
-			D_ASSERT(!column_stats.has_min);
+			D_ASSERT(!column_stats.min);
 			column_stats.min = StringValue::Get(stats_children[1]);
-			column_stats.has_min = true;
 		} else if (stats_name == "max") {
-			D_ASSERT(!column_stats.has_max);
+			D_ASSERT(!column_stats.max);
 			column_stats.max = StringValue::Get(stats_children[1]);
-			column_stats.has_max = true;
 		} else if (stats_name == "null_count") {
-			D_ASSERT(!column_stats.has_null_count);
-			column_stats.has_null_count = true;
+			D_ASSERT(!column_stats.null_count);
 			column_stats.null_count = StringUtil::ToUnsigned(StringValue::Get(stats_children[1]));
 		} else if (stats_name == "num_values") {
-			D_ASSERT(!column_stats.has_num_values);
-			column_stats.has_num_values = true;
+			D_ASSERT(!column_stats.num_values);
 			column_stats.num_values = StringUtil::ToUnsigned(StringValue::Get(stats_children[1]));
 		} else if (stats_name == "column_size_bytes") {
-			column_stats.has_column_size_bytes = true;
+			D_ASSERT(!column_stats.column_size_bytes);
 			column_stats.column_size_bytes = StringUtil::ToUnsigned(StringValue::Get(stats_children[1]));
 		} else if (stats_name == "has_nan") {
-			column_stats.has_contains_nan = true;
+			D_ASSERT(!column_stats.contains_nan);
 			column_stats.contains_nan = StringValue::Get(stats_children[1]) == "true";
 		} else if (stats_name == "variant_type") {
 			//! Should be handled elsewhere

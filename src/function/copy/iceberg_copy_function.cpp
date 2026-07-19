@@ -67,6 +67,7 @@ CopyIcebergBindData::CopyIcebergBindData(const CopyInfo &info, vector<string> &&
 	//! FIXME: adapt when we have partitioning support
 	table_metadata->partition_specs.emplace(0, IcebergPartitionSpec(0));
 	table_metadata->default_spec_id = 0;
+	table_metadata->sort_specs.emplace(0, IcebergSortOrder(0));
 	table_metadata->last_column_id = last_column_id;
 	table_metadata->last_partition_field_id = 0;
 	table_metadata->default_sort_order_id = 0;

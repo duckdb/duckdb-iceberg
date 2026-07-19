@@ -50,9 +50,8 @@ public:
 	//! State shared between Filter calls
 	roaring::BulkContext bulk_context;
 	optional_ptr<const roaring::Roaring> current_bitmap = nullptr;
-	bool has_current_high = false;
 	//! High bits of the current bitmap (the key in the map)
-	int32_t current_high;
+	optional<int32_t> current_high;
 };
 
 } // namespace duckdb

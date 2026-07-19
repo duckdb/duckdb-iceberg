@@ -38,6 +38,7 @@ public:
 	static int32_t HashDecimalHugeInt(hugeint_t unscaled);
 	static int32_t HashTime(dtime_t t);
 	static int32_t HashTimestampNs(timestamp_ns_t t);
+	static int32_t HashTimestampTzNs(timestamp_tz_ns_t t);
 	static int32_t HashUUID(hugeint_t uuid);
 
 	//! Hash a DuckDB Value based on its type

@@ -25,8 +25,7 @@ public:
 
 private:
 	//! The materialized first row id of the data file
-	bool has_first_row_id = false;
-	int64_t first_row_id;
+	optional<int64_t> first_row_id;
 };
 
 } // namespace duckdb

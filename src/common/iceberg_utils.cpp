@@ -2,10 +2,12 @@
 
 #include "duckdb.hpp"
 #include "duckdb/common/gzip_file_system.hpp"
+#include "duckdb/main/database_manager.hpp"
 #include "duckdb/catalog/catalog_entry/table_catalog_entry.hpp"
 #include "duckdb/catalog/catalog_entry/view_catalog_entry.hpp"
 #include "duckdb/catalog/catalog_entry/copy_function_catalog_entry.hpp"
 #include "duckdb/main/extension_helper.hpp"
+#include "duckdb/transaction/meta_transaction.hpp"
 
 #include "catalog/rest/catalog_entry/table/iceberg_table_entry.hpp"
 #include "catalog/rest/catalog_entry/table/iceberg_table_information.hpp"
@@ -13,6 +15,28 @@
 #include "duckdb/catalog/catalog_entry_retriever.hpp"
 
 namespace duckdb {
+
+timestamp_ms_t IcebergUtils::GetTransactionStartTimeMS(ClientContext &context) {
+	auto &meta_transaction = MetaTransaction::Get(context);
+	auto transaction_start = meta_transaction.GetCurrentTransactionStartTimestamp();
+	return timestamp_ms_t(Timestamp::GetEpochMs(transaction_start));
+}
+
+idx_t IcebergUtils::ParseByteSizeOptionallyFormatted(const string &input) {
+	idx_t result;
+	auto error = StringUtil::TryParseFormattedBytes(input, result);
+	if (error.empty()) {
+		return result;
+	}
+
+	try {
+		auto parsed = std::stoll(input);
+		return parsed;
+	} catch (...) {
+		throw InvalidConfigurationException("Invalid format for 'write.target-file-size-bytes' (%s), error: %s", input,
+		                                    error);
+	}
+}
 
 CopyFunctionCatalogEntry &IcebergUtils::GetCopyFunction(ClientContext &context, const string &name) {
 	// Logic is partially duplicated from Catalog::AutoLoadExtensionByCatalogEntry(db, CatalogType::COPY_FUNCTION_ENTRY,
@@ -174,13 +198,42 @@ string IcebergUtils::GetStorageLocation(ClientContext &context, const string &in
 				throw InvalidInputException("Table %s is not an Iceberg table", input);
 			}
 			auto &table_entry = catalog_entry->Cast<IcebergTableEntry>();
-			storage_location = table_entry.table_info.latest_metadata_json;
+			storage_location = table_entry.table_info.table_metadata.GetLocation();
 			// Prepare Iceberg Scan from entry will create the secret needed to access the table
 			table_entry.PrepareIcebergScanFromEntry(context);
 			break;
 		}
 	} while (false);
 	return storage_location;
+}
+
+IcebergResolvedMetadata IcebergUtils::ResolveTableMetadata(ClientContext &context, const string &input,
+                                                           const IcebergOptions &options) {
+	auto qualified_name = QualifiedName::ParseComponents(input);
+	if (qualified_name.size() == 3) {
+		auto table_name =
+		    QualifiedName(Identifier(qualified_name[0]), Identifier(qualified_name[1]), Identifier(qualified_name[2]));
+		EntryLookupInfo table_info(CatalogType::TABLE_ENTRY, std::move(table_name));
+		auto catalog_entry = Catalog::GetEntry(context, table_info, OnEntryNotFound::RETURN_NULL);
+		if (catalog_entry && catalog_entry->type == CatalogType::TABLE_ENTRY) {
+			auto &table = catalog_entry->Cast<TableCatalogEntry>();
+			if (table.catalog.GetCatalogType() != "iceberg") {
+				throw InvalidInputException("Table %s is not an Iceberg table", input);
+			}
+
+			auto &iceberg_table = catalog_entry->Cast<IcebergTableEntry>();
+			iceberg_table.PrepareIcebergScanFromEntry(context);
+			auto &metadata = iceberg_table.table_info.table_metadata;
+			return IcebergResolvedMetadata(metadata.GetLocation(), metadata.Copy());
+		}
+	}
+
+	auto table_location = GetStorageLocation(context, input);
+	auto &fs = FileSystem::GetFileSystem(context);
+	auto caching_fs = make_shared_ptr<CachingFileSystemWrapper>(fs, *context.db);
+	auto metadata_path = IcebergTableMetadata::GetMetaDataPath(context, table_location, fs, options);
+	auto table_metadata = IcebergTableMetadata::Parse(metadata_path, *caching_fs, options.metadata_compression_codec);
+	return IcebergResolvedMetadata(std::move(table_location), IcebergTableMetadata::FromTableMetadata(table_metadata));
 }
 
 // Function to decompress a gz file content string

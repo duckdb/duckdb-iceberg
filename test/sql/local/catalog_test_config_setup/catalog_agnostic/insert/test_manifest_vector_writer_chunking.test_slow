@@ -1,0 +1,84 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/insert/test_manifest_vector_writer_chunking.test_slow
+# description: Regression for chunked VectorWriter output when writing large manifest and manifest-list Avro files
+# group: [insert]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.manifest_chunked_files;
+
+statement ok
+CREATE TABLE my_datalake.default.manifest_chunked_files (id INT, part INT)
+PARTITIONED BY (part)
+WITH (
+	'format-version' = 3
+);
+
+statement ok
+INSERT INTO my_datalake.default.manifest_chunked_files
+SELECT i, i FROM range(2050) t(i);
+
+statement ok
+SET VARIABLE large_manifest_path = (
+	SELECT manifest_path
+	FROM iceberg_metadata(my_datalake.default.manifest_chunked_files)
+	ORDER BY manifest_sequence_number DESC
+	LIMIT 1
+);
+
+query I
+SELECT count(*) FROM read_avro(getvariable('large_manifest_path'));
+----
+2050
+
+# Row ids don't get written to freshly inserted data
+query I
+SELECT count(data_file.first_row_id IS NULL)
+FROM read_avro(getvariable('large_manifest_path'));
+----
+2050
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.manifest_list_chunked_files;
+
+statement ok
+CREATE TABLE my_datalake.default.manifest_list_chunked_files (id INT)
+WITH (
+	'format-version' = 3,
+	'commit.manifest-merge.enabled' = 'false'
+);
+
+loop i 0 2050
+
+statement ok
+INSERT INTO my_datalake.default.manifest_list_chunked_files VALUES ({i});
+
+endloop
+
+statement ok
+SET VARIABLE large_manifest_list_path = (
+	SELECT manifest_list
+	FROM iceberg_snapshots(my_datalake.default.manifest_list_chunked_files)
+	ORDER BY sequence_number DESC
+	LIMIT 1
+);
+
+query I
+SELECT count(*) FROM read_avro(getvariable('large_manifest_list_path'));
+----
+2050
+
+query III
+SELECT count(first_row_id), min(first_row_id), max(first_row_id)
+FROM read_avro(getvariable('large_manifest_list_path'))
+WHERE content = 0;
+----
+2050	0	2049

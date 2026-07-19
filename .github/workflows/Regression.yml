@@ -1,0 +1,145 @@
+name: Regression
+on:
+  workflow_call:
+    inputs:
+      git_ref:
+        type: string
+      base_hash:
+        type: string
+  workflow_dispatch:
+    inputs:
+      git_ref:
+        description: 'Git ref to test for current release'
+        type: string
+      base_hash:
+        description: 'Base hash'
+        type: string
+  repository_dispatch:
+  push:
+    branches-ignore:
+      - 'main'
+  pull_request:
+    types: [opened, reopened, ready_for_review, converted_to_draft, synchronize]
+
+concurrency:
+  group: regression-${{ github.workflow }}-${{ github.ref }}-${{ github.head_ref || '' }}-${{ github.base_ref || '' }}-${{ github.ref != 'refs/heads/main' || github.sha }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  GIT_REF: ${{ inputs.git_ref != '' && inputs.git_ref || github.sha }}
+  BASE_BRANCH: ${{ github.base_ref || 'main' }}
+  BASE_HASH: ${{ inputs.base_hash }}
+
+jobs:
+  check-draft:
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Preliminary checks on CI 
+        run: echo "Event name is ${{ github.event_name }}"
+      
+  regression-test-benchmark-runner:
+    name: Regression Tests
+    needs: check-draft
+    runs-on: ${{ github.repository_owner == 'duckdb' && 'namespace-profile-linux-x64' || 'ubuntu-latest' }}
+    env:
+      GEN: ninja
+      CC: clang-20
+      CXX: clang++-20
+      HTTP_PROXY_PUBLIC: http://localhost:8878
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ env.GIT_REF }}
+          submodules: 'true'
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+
+      - name: Install tools
+        run: python3 duckdb/scripts/ci/retry.py -- make -C duckdb toolsci
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Setup Ccache
+        uses: hendrikmuhs/ccache-action@main
+        with:
+          key: ${{ github.job }}
+          save: ${{ github.ref == 'refs/heads/main' || github.repository != 'duckdb/duckdb' }}
+
+      - name: Build Benchmark (release)
+        uses: duckdb/duckdb-ci/build-duckdb@main
+        env:
+          STATIC_LIBCPP: 1
+          ENABLE_EXTENSION_AUTOLOADING: 1
+          ENABLE_EXTENSION_AUTOINSTALL: 1
+          BUILD_BENCHMARK: 1
+        with:
+          build-type: release
+          build: python3 duckdb/scripts/ci/retry.py -- make release
+          vcpkg-commit: 84bab45d415d22042bd0b9081aea57f362da3f35
+
+      - name: Set up Docker Compose
+        uses: docker/setup-compose-action@v1
+
+      - name: Install fixture catalog dependencies
+        run: |
+          sudo apt update -y -qq
+          sudo apt install -y -qq python3-venv tar pkg-config
+
+      - name: Select base ref
+        run: |
+          git fetch origin "${BASE_BRANCH}:refs/remotes/origin/${BASE_BRANCH}"
+          if [[ -n "${BASE_HASH}" ]]; then
+            BASE_REF="${BASE_HASH}"
+          elif [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            BASE_REF="$(git merge-base "${GIT_REF}" "origin/${BASE_BRANCH}")"
+            if [[ -z "${BASE_REF}" ]]; then
+              echo "Failed to compute merge base between ${GIT_REF} and origin/${BASE_BRANCH}"
+              exit 1
+            fi
+          else
+            BASE_REF="$(git rev-parse "origin/${BASE_BRANCH}")"
+          fi
+          echo "Selected base ref: ${BASE_REF}"
+          echo "BASE_REF=${BASE_REF}" >> "$GITHUB_ENV"
+
+      - name: Setup fixture
+        run: |
+          make fixture-data TEST=tpch
+
+      - name: Checkout Base Branch
+        run: |
+          rm -rf base
+          git clone . base
+          cd base
+          git checkout "${BASE_REF}"
+          git submodule update --init --recursive
+
+      - name: Build Base Benchmark (release)
+        uses: duckdb/duckdb-ci/build-duckdb@main
+        env:
+          STATIC_LIBCPP: 1
+          ENABLE_EXTENSION_AUTOLOADING: 1
+          ENABLE_EXTENSION_AUTOINSTALL: 1
+          BUILD_BENCHMARK: 1
+        with:
+          build-type: release
+          build: python3 duckdb/scripts/ci/retry.py -- make -C base release
+          vcpkg-commit: 84bab45d415d22042bd0b9081aea57f362da3f35
+
+      - name: Regression Test TPCH
+        run: |
+          python duckdb/scripts/regression/test_runner.py --old base/build/release/benchmark/benchmark_runner --new build/release/benchmark/benchmark_runner --benchmarks .github/regression/tpch.csv --root-dir "$GITHUB_WORKSPACE" --verbose --threads 2 --clear-benchmark-cache

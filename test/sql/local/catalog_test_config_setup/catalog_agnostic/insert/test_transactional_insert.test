@@ -1,0 +1,138 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/insert/test_transactional_insert.test
+# group: [insert]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+statement ok
+CALL enable_logging(level='warning');
+
+statement ok
+SET warnings_as_errors = True;
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+set iceberg_use_metadata_log = true;
+
+statement ok
+set enable_logging=true
+
+statement ok
+set logging_level='debug'
+
+statement ok
+drop table if exists my_datalake.default.multi_transaction_insert;
+
+# Retries disabled, the commit should fail because of stale data
+statement ok
+create table my_datalake.default.multi_transaction_insert (
+	a int,
+	b int
+) WITH (
+	'commit.retry.num-retries' = 0
+)
+
+# Insert 0,0
+statement ok
+insert into my_datalake.default.multi_transaction_insert VALUES
+	(0, 0);
+
+statement ok con1
+begin
+
+statement ok con2
+begin
+
+# Insert 2,2
+statement ok con2
+insert into my_datalake.default.multi_transaction_insert VALUES
+	(2, 2);
+
+statement ok con2
+commit
+
+# con1 doesn't see 2,2 yet
+query II con1
+select * from my_datalake.default.multi_transaction_insert;
+----
+0	0
+
+# con1 updates 0 to 50 for column a (doesn't affect row inserted by con2)
+statement ok con1
+INSERT into my_datalake.default.multi_transaction_insert VALUES
+	(3, 3)
+
+statement error con1
+commit;
+----
+<REGEX>:.*Failed to commit.*
+
+query II
+select * from my_datalake.default.multi_transaction_insert order by all
+----
+0	0
+2	2
+
+# ---- INSERT into "stale" table state, with retries enabled ----
+
+statement ok
+drop table if exists my_datalake.default.multi_transaction_insert;
+
+# Now retries are enabled, and the INSERT can go through
+statement ok
+create table my_datalake.default.multi_transaction_insert (
+	a int,
+	b int
+) WITH (
+	'commit.retry.num-retries' = 1
+)
+
+# Insert 0,0
+statement ok
+insert into my_datalake.default.multi_transaction_insert VALUES
+	(0, 0);
+
+statement ok con1
+begin
+
+statement ok con2
+begin
+
+# Insert 2,2
+statement ok con2
+insert into my_datalake.default.multi_transaction_insert VALUES
+	(2, 2);
+
+statement ok con2
+commit
+
+# con1 doesn't see 2,2 yet
+query II con1
+select * from my_datalake.default.multi_transaction_insert;
+----
+0	0
+
+# con1 updates 0 to 50 for column a (doesn't affect row inserted by con2)
+statement ok con1
+INSERT into my_datalake.default.multi_transaction_insert VALUES
+	(3, 3)
+
+statement ok con1
+commit;
+
+# con1 UPDATE didn't go through
+query II
+select * from my_datalake.default.multi_transaction_insert order by all
+----
+0	0
+2	2
+3	3

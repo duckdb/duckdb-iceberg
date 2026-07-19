@@ -1,0 +1,76 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/partitioning/hour/hour_struct_timestamp.test
+# group: [hour]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+set ignore_error_messages
+
+statement ok
+set threads=1;
+
+statement ok
+CREATE SCHEMA IF NOT EXISTS my_datalake.default;
+
+statement ok
+drop table if exists my_datalake.default.partition_hour_timestamp_struct_field;
+
+statement ok
+create table my_datalake.default.partition_hour_timestamp_struct_field (
+	id int,
+	nested STRUCT(
+		filler VARCHAR,
+		partition_col timestamp
+	)
+);
+
+statement ok
+alter table my_datalake.default.partition_hour_timestamp_struct_field set partitioned by (
+	nested.partition_col
+);
+
+statement ok
+insert into my_datalake.default.partition_hour_timestamp_struct_field values
+	(4, {'partition_col': '2020-02-02 10:45:00'}),
+	(2, {'partition_col': '2020-02-02 09:30:00'}),
+	(3, {'partition_col': '2020-02-02 10:15:00'}),
+	(1, {'partition_col': '2020-02-02 08:00:00'});
+
+statement ok
+set variable latest_manifest_sequence = (select max(manifest_sequence_number) from iceberg_metadata(my_datalake.default.partition_hour_timestamp_struct_field));
+
+statement ok
+set variable table_data_glob = (
+	select metadata.location || '/data/*/*.parquet'
+	from iceberg_load_table_response(my_datalake.default.partition_hour_timestamp_struct_field)
+);
+
+# Verify that each written file contains only 1 distinct value
+query I
+with latest_files as (
+	select file_path
+	from iceberg_metadata(my_datalake.default.partition_hour_timestamp_struct_field)
+	where manifest_sequence_number = cast(getvariable('latest_manifest_sequence') as bigint)
+	and manifest_content = 'DATA'
+	and status = 'ADDED'
+),
+file_partition_counts as (
+	select filename, count(distinct nested.partition_col) as partition_count
+	from read_parquet(getvariable('table_data_glob'), filename=true)
+	where filename in (select file_path from latest_files)
+	group by filename
+),
+select
+	(select count(*) from file_partition_counts where partition_count != 1) = 0
+----
+1
+
+statement ok
+drop table my_datalake.default.partition_hour_timestamp_struct_field;

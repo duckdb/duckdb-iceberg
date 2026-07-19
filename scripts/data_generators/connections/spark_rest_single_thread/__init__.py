@@ -48,7 +48,7 @@ class IcebergSparkRestSingleThreaded(IcebergConnection):
         if SparkContext._active_spark_context is not None:
             SparkContext._active_spark_context.stop()
 
-        spark = (
+        builder = (
             SparkSession.builder.appName("DuckDB REST Integration test")
             .master("local[1]")
             .config(
@@ -60,7 +60,6 @@ class IcebergSparkRestSingleThreaded(IcebergConnection):
             .config("spark.sql.catalog.demo", "org.apache.iceberg.spark.SparkCatalog")
             .config("spark.sql.catalog.demo.type", "rest")
             .config("spark.sql.catalog.demo.uri", os.getenv("ICEBERG_ENDPOINT", "http://127.0.0.1:8181"))
-            .config("spark.sql.catalog.demo.warehouse", os.getenv("WAREHOUSE", "s3://warehouse/wh/"))
             .config("spark.sql.catalog.demo.s3.endpoint", os.getenv("S3_ENDPOINT", "http://127.0.0.1:9000"))
             .config("spark.sql.catalog.demo.s3.path-style-access", "true")
             .config("spark.driver.memory", "10g")
@@ -68,8 +67,11 @@ class IcebergSparkRestSingleThreaded(IcebergConnection):
             .config("spark.sql.catalogImplementation", "in-memory")
             .config("spark.sql.catalog.demo.io-impl", "org.apache.iceberg.aws.s3.S3FileIO")
             .config("spark.jars", self.runtime.jar_path.as_posix())
-            .getOrCreate()
         )
+        warehouse = os.getenv("WAREHOUSE", "s3://warehouse/wh/")
+        if warehouse:
+            builder = builder.config("spark.sql.catalog.demo.warehouse", warehouse)
+        spark = builder.getOrCreate()
         spark.sql("USE demo")
         spark.sql("CREATE NAMESPACE IF NOT EXISTS default")
         return spark

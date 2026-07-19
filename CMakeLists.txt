@@ -27,6 +27,8 @@ set(EXTENSION_SOURCES
 	src/catalog/rest/api/catalog_utils.cpp
 	src/catalog/rest/api/iceberg_add_snapshot.cpp
 	src/catalog/rest/api/iceberg_create_table_request.cpp
+	src/catalog/rest/api/iceberg_manifest_merge.cpp
+	src/catalog/rest/api/iceberg_retry.cpp
 	src/catalog/rest/api/iceberg_table_update.cpp
 	src/catalog/rest/api/iceberg_type.cpp
 	src/catalog/rest/api/table_update.cpp
@@ -52,11 +54,13 @@ set(EXTENSION_SOURCES
 	src/core/deletes/iceberg_equality_delete.cpp
 	src/core/deletes/iceberg_positional_delete.cpp
 	src/core/expression/iceberg_hash.cpp
+	src/core/expression/iceberg_metrics.cpp
 	src/core/expression/iceberg_transform.cpp
 	src/core/expression/iceberg_value.cpp
 	src/core/metadata/iceberg_table_metadata.cpp
 	src/core/metadata/manifest/iceberg_manifest_list.cpp
 	src/core/metadata/manifest/iceberg_manifest.cpp
+	src/core/metadata/manifest/iceberg_avro_codec.cpp
 	src/core/metadata/partition/iceberg_partition_spec.cpp
 	src/core/metadata/schema/iceberg_column_definition.cpp
 	src/core/metadata/schema/iceberg_field_mapping.cpp
@@ -89,6 +93,7 @@ set(EXTENSION_SOURCES
 	src/function/metadata/iceberg_load_table_response.cpp
 	src/function/metadata/iceberg_metadata.cpp
 	src/function/metadata/iceberg_partition_stats.cpp
+	src/function/metadata/iceberg_rewrite_data_files.cpp
 	src/function/metadata/iceberg_snapshots.cpp
 	src/function/metadata/iceberg_table_properties_functions.cpp
 	src/function/metadata/iceberg_verify_equality_deletes.cpp
@@ -96,6 +101,12 @@ set(EXTENSION_SOURCES
 	src/function/scan/iceberg_scan.cpp
 	src/iceberg_extension.cpp
 	src/iceberg_logging.cpp
+	src/iceberg_options.cpp
+	src/iceberg_attach.cpp
+	src/maintenance/maintenance_table_loader.cpp
+	src/maintenance/rewrite_data_files_executor.cpp
+	src/maintenance/rewrite_data_files_operator.cpp
+	src/maintenance/rewrite_data_files_planner.cpp
 	src/planning/iceberg_multi_file_list.cpp
 	src/planning/iceberg_multi_file_reader.cpp
 	src/planning/iceberg_optimizer.cpp
@@ -112,6 +123,7 @@ set(EXTENSION_SOURCES
 	src/planning/snapshot/iceberg_snapshot_lookup.cpp
 	src/storage/statistics/iceberg_variant_statistics.cpp
 	src/storage/statistics/iceberg_statistics.cpp
+	src/storage/statistics/iceberg_data_file_stats.cpp
 )
 
 add_subdirectory(src/rest_catalog/objects)

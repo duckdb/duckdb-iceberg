@@ -11,6 +11,11 @@ jobs:
   test-spark:
     name: Test against local catalog
     runs-on: ubuntu-latest
+    env:
+      ASAN_SYMBOLIZER_PATH: "/usr/bin/llvm-symbolizer"
+      ASAN_OPTIONS: "detect_leaks=1:halt_on_error=1:abort_on_error=0:external_symbolizer_path=/usr/bin/llvm-symbolizer"
+      LSAN_OPTIONS: "suppressions=${{ github.workspace }}/.combined-sanitizer-leak-suppressions.txt"
+      UBSAN_OPTIONS: "halt_on_error=1:print_stacktrace=1"
 
     steps:
       - name: Checkout repository
@@ -23,12 +28,19 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: ${{ inputs.artifact-name }}
-          path: build/release
+          path: build
 
-      - name: Restore permissions
+      - name: Extract relassert build artifact
         run: |
-          find ./build/release -type f -name 'duckdb*' -exec chmod +x {} \;
-          find ./build/release -type f -name 'unittest*' -exec chmod +x {} \;
+          rm -rf build/relassert
+          tar -xzf build/relassert-artifact.tar.gz -C build
+          ls -lh build/relassert/test/unittest
+
+      - name: Prepare leak suppressions
+        run: |
+          cp duckdb/.sanitizer-leak-suppressions.txt .combined-sanitizer-leak-suppressions.txt
+          printf '\n' >> .combined-sanitizer-leak-suppressions.txt
+          cat .sanitizer-leak-suppressions.txt >> .combined-sanitizer-leak-suppressions.txt
 
       - name: Set up Java
         uses: actions/setup-java@v4
@@ -39,7 +51,7 @@ jobs:
       - name: Install fixture catalog dependencies
         run: |
           sudo apt update -y -qq
-          sudo apt install -y -qq python3-venv tar pkg-config
+          sudo apt install -y -qq python3-venv tar pkg-config llvm
 
       - name: Install CMake 3.x
         run: |
@@ -64,5 +76,4 @@ jobs:
         env:
           DUCKDB_ICEBERG_HAVE_GENERATED_DATA: 1
         run: |
-          ./build/release/test/unittest --order lex "$PWD/test/*" --list-test-names-only || true ./build/release/test/unittest --order lex "$PWD/test/*"
-
+          ./build/relassert/test/unittest --order lex "$PWD/test/*" --list-test-names-only || true ./build/relassert/test/unittest --order lex "$PWD/test/*"

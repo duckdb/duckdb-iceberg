@@ -1,0 +1,61 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/insert/test_write_non_ascii_string_lower_bound.test
+# description: A long non-ASCII string (multi-byte UTF-8) must produce a valid-UTF-8 lower bound; the min truncation backs off to a code point boundary instead of splitting a multi-byte character, so strict readers don't fail with "Failed to decode value as UTF-8".
+# group: [insert]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+drop table if exists my_datalake.default.non_ascii_lower_bound_test;
+
+statement ok
+create table my_datalake.default.non_ascii_lower_bound_test (
+    id int,
+    title varchar
+);
+
+# "El cliente quer" is 15 ASCII bytes, then 'í' (0xC3 0xAD): a byte-exact 16-byte
+# lower bound keeps the leading 0xC3 and drops the 0xAD, producing invalid UTF-8.
+statement ok
+insert into my_datalake.default.non_ascii_lower_bound_test values
+    (1, 'El cliente querído resolver el problema'),
+    (2, 'zzzz ascii tail that is comfortably long');
+
+# Data round-trips intact.
+query IT
+select id, title from my_datalake.default.non_ascii_lower_bound_test order by id;
+----
+1	El cliente querído resolver el problema
+2	zzzz ascii tail that is comfortably long
+
+statement ok
+set variable mp = (select manifest_path from iceberg_metadata(my_datalake.default.non_ascii_lower_bound_test) order by manifest_sequence_number desc limit 1);
+
+# The varchar column (field id 2) gets a lower bound.
+query I
+select count(*) from (
+    select unnest(map_keys(lower_bounds)) k
+    from (select unnest(data_file) from read_avro(getvariable('mp')))
+) where k = 2;
+----
+1
+
+# And it is a valid lower bound: decoded (valid UTF-8), it is <= the column's min value.
+query I
+select decode(lb) <= (select min(title) from my_datalake.default.non_ascii_lower_bound_test)
+from (
+    select unnest(map_keys(lower_bounds)) k, unnest(map_values(lower_bounds)) lb
+    from (select unnest(data_file) from read_avro(getvariable('mp')))
+) where k = 2;
+----
+true

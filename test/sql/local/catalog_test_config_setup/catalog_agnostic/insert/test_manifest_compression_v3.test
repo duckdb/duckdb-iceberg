@@ -1,0 +1,50 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/insert/test_manifest_compression_v3.test
+# description: write.manifest.compression-codec on a format-version 3 table (split out; not every catalog supports v3)
+# group: [insert]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+set ignore_error_messages
+
+statement ok
+drop table if exists my_datalake.default.compress_v3;
+
+statement ok
+create table my_datalake.default.compress_v3 (id INTEGER, data VARCHAR) WITH ('format-version' = 3, 'write.manifest.compression-codec' = 'deflate');
+
+statement ok
+insert into my_datalake.default.compress_v3 select i, 'v' from range(300) t(i);
+
+query I
+select count(*) from my_datalake.default.compress_v3;
+----
+300
+
+# The v3 manifest is deflate-compressed: its Avro header records avro.codec -> deflate.
+statement ok
+SET VARIABLE manifest_v3 = (
+	SELECT manifest_path FROM iceberg_metadata(my_datalake.default.compress_v3)
+	ORDER BY manifest_sequence_number DESC LIMIT 1
+);
+
+query I
+SELECT position('deflate' IN (content[1:60]::VARCHAR)) > 0 FROM read_blob(getvariable('manifest_v3'));
+----
+true
+
+# And read_avro can decompress and read the v3 manifest back.
+query I
+SELECT count(*) > 0 FROM read_avro(getvariable('manifest_v3'));
+----
+true
+
+statement ok
+drop table my_datalake.default.compress_v3;

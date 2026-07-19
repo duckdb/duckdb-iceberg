@@ -1,0 +1,45 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/alter/sorted_by/test_set_sorted_by_errors.test
+# description: Test invalid ALTER TABLE SET SORTED BY inputs
+# group: [sorted_by]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+CREATE SCHEMA IF NOT EXISTS my_datalake.default;
+
+statement ok
+drop table if exists my_datalake.default.test_set_sorted_by_errors;
+
+statement ok
+CREATE TABLE my_datalake.default.test_set_sorted_by_errors (
+	a INTEGER,
+	b INTEGER,
+	ts TIMESTAMP,
+	val VARCHAR
+);
+
+statement error
+ALTER TABLE my_datalake.default.test_set_sorted_by_errors SET SORTED BY (upper(val));
+----
+<REGEX>:.*Unrecognized transform \(\'upper\'\).*
+
+statement error
+ALTER TABLE my_datalake.default.test_set_sorted_by_errors SET SORTED BY (missing_col);
+----
+<REGEX>:.*No column by the name \'missing_col\' exists in the current schema.*
+
+statement error
+ALTER TABLE my_datalake.default.test_set_sorted_by_errors SET SORTED BY (truncate(2, a, b));
+----
+Multi-argument transforms are not supported yet!

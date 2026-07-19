@@ -58,59 +58,16 @@ static unique_ptr<FunctionData> IcebergPartitionStatsBind(ClientContext &context
 	// return a TableRef that contains the scans for the
 	auto ret = make_uniq<IcebergPartitionStatsBindData>();
 
-	auto &fs = FileSystem::GetFileSystem(context);
-	auto caching_fs = make_shared_ptr<CachingFileSystemWrapper>(fs, *context.db);
 	auto input_string = input.inputs[0].ToString();
-	auto filename = IcebergUtils::GetStorageLocation(context, input_string);
+	IcebergOptions options(input.named_parameters);
+	auto resolved_metadata = IcebergUtils::ResolveTableMetadata(context, input_string, options);
+	ret->metadata = std::move(resolved_metadata.metadata);
 
-	IcebergOptions options;
-	auto &snapshot_lookup = options.snapshot_lookup;
-
-	for (auto &kv : input.named_parameters) {
-		auto loption = StringUtil::Lower(kv.first.GetIdentifierName());
-		auto &val = kv.second;
-		if (loption == "allow_moved_paths") {
-			options.allow_moved_paths = BooleanValue::Get(val);
-		} else if (loption == "metadata_compression_codec") {
-			options.metadata_compression_codec = StringValue::Get(val);
-		} else if (loption == "version") {
-			options.table_version = StringValue::Get(val);
-		} else if (loption == "version_name_format") {
-			auto value = StringValue::Get(kv.second);
-			auto string_substitutions = IcebergUtils::CountOccurrences(value, "%s");
-			if (string_substitutions != 2) {
-				throw InvalidInputException(
-				    "'version_name_format' has to contain two occurrences of '%s' in it, found %d",
-				    string_substitutions);
-			}
-			options.version_name_format = value;
-		} else if (loption == "snapshot_from_id") {
-			if (snapshot_lookup.GetSource() != SnapshotSource::LATEST) {
-				throw InvalidInputException(
-				    "Can't use 'snapshot_from_id' in combination with 'snapshot_from_timestamp'");
-			}
-			snapshot_lookup.SetSource(SnapshotSource::FROM_ID);
-			snapshot_lookup.snapshot_id = val.GetValue<uint64_t>();
-		} else if (loption == "snapshot_from_timestamp") {
-			if (snapshot_lookup.GetSource() != SnapshotSource::LATEST) {
-				throw InvalidInputException(
-				    "Can't use 'snapshot_from_id' in combination with 'snapshot_from_timestamp'");
-			}
-			snapshot_lookup.SetSource(SnapshotSource::FROM_TIMESTAMP);
-			snapshot_lookup.snapshot_timestamp = val.GetValue<timestamp_t>();
-		}
-	}
-
-	auto iceberg_meta_path = IcebergTableMetadata::GetMetaDataPath(context, filename, fs, options);
-	auto table_metadata =
-	    IcebergTableMetadata::Parse(iceberg_meta_path, *caching_fs, options.metadata_compression_codec);
-	ret->metadata = IcebergTableMetadata::FromTableMetadata(table_metadata);
-
-	ret->snapshot_to_scan = ret->metadata.GetSnapshot(options.snapshot_lookup);
+	ret->snapshot_to_scan = ret->metadata.GetSnapshot(*options.snapshot_lookup);
 
 	if (ret->snapshot_to_scan.snapshot) {
-		ret->iceberg_table =
-		    IcebergManifestList::Load(filename, ret->metadata, ret->snapshot_to_scan, context, options);
+		ret->iceberg_table = IcebergManifestList::Load(resolved_metadata.table_location, ret->metadata,
+		                                               ret->snapshot_to_scan, context, options);
 		ret->schema = ret->metadata.GetSchemaFromId(ret->snapshot_to_scan.schema_id);
 
 		auto &schema = ret->schema->columns;
@@ -202,7 +159,8 @@ static void IcebergPartitionStatsFunction(ClientContext &context, TableFunctionI
 			//! manifest_path
 			AddString(output.data[col++], out, string_t(manifest.manifest_path));
 			//! added_snapshot_id
-			FlatVector::GetDataMutable<int64_t>(output.data[col++])[out] = manifest.added_snapshot_id;
+			D_ASSERT(manifest.added_snapshot_id);
+			FlatVector::GetDataMutable<int64_t>(output.data[col++])[out] = *manifest.added_snapshot_id;
 			//! partition_spec_id
 			FlatVector::GetDataMutable<int32_t>(output.data[col++])[out] = manifest.partition_spec_id;
 			//! partition_field_id
@@ -220,9 +178,9 @@ static void IcebergPartitionStatsFunction(ClientContext &context, TableFunctionI
 			AddString(output.data[col++], out, string_t(result_type.ToString()));
 
 			//! lower_bound
-			AddString(output.data[col++], out, string_t(stats.lower_bound.ToString()));
+			AddString(output.data[col++], out, string_t(stats.lower_bound->ToString()));
 			//! upper_bound
-			AddString(output.data[col++], out, string_t(stats.upper_bound.ToString()));
+			AddString(output.data[col++], out, string_t(stats.upper_bound->ToString()));
 
 			//! contains_null
 			FlatVector::GetDataMutable<bool>(output.data[col++])[out] = field_summary.contains_null;
@@ -245,7 +203,7 @@ TableFunctionSet IcebergFunctions::GetIcebergPartitionStatsFunction() {
 	fun.named_parameters["metadata_compression_codec"] = LogicalType::VARCHAR;
 	fun.named_parameters["version"] = LogicalType::VARCHAR;
 	fun.named_parameters["version_name_format"] = LogicalType::VARCHAR;
-	fun.named_parameters["snapshot_from_timestamp"] = LogicalType::TIMESTAMP;
+	fun.named_parameters["snapshot_from_timestamp"] = LogicalType::TIMESTAMP_MS;
 	fun.named_parameters["snapshot_from_id"] = LogicalType::UBIGINT;
 	function_set.AddFunction(fun);
 	return function_set;

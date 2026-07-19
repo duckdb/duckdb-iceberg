@@ -1,0 +1,74 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/sorting/day/day_timestamptz.test
+# group: [day]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+require icu
+
+statement ok
+SET Calendar='gregorian';
+
+statement ok
+SET TimeZone='Europe/Amsterdam';
+
+set ignore_error_messages
+
+statement ok
+set threads=1;
+
+statement ok
+CREATE SCHEMA IF NOT EXISTS my_datalake.default;
+
+statement ok
+drop table if exists my_datalake.default.sort_day_timestamptz;
+
+statement ok
+create table my_datalake.default.sort_day_timestamptz (id int, ts timestamptz);
+
+statement ok
+alter table my_datalake.default.sort_day_timestamptz set sorted by (day(ts) asc nulls last, id asc nulls last);
+
+query T
+SELECT sort_order.fields[1].transform
+FROM iceberg_load_table_response(my_datalake.default.sort_day_timestamptz),
+unnest(metadata."sort-orders"::VARIANT[]) AS t(sort_order)
+WHERE try_cast(sort_order."order-id" AS INTEGER) = metadata."default-sort-order-id";
+----
+day
+
+statement ok
+insert into my_datalake.default.sort_day_timestamptz values
+	(4, '2020-02-02 10:00:00+00'), (2, '2020-01-31 05:00:00+00'),
+	(3, '2020-02-02 09:00:00+00'), (1, '2020-01-04 03:00:00+00');
+
+statement ok
+set variable latest_manifest_sequence = (select max(manifest_sequence_number) from iceberg_metadata(my_datalake.default.sort_day_timestamptz));
+
+statement ok
+set variable file_path = (
+	select file_path from iceberg_metadata(my_datalake.default.sort_day_timestamptz)
+	where manifest_sequence_number = cast(getvariable('latest_manifest_sequence') as bigint)
+	and manifest_content = 'DATA' and status = 'ADDED' limit 1
+);
+
+query IT
+select id, ts
+from my_datalake.default.sort_day_timestamptz
+where filename = getvariable('file_path')
+order by file_row_number;
+----
+1	2020-01-04 04:00:00+01
+2	2020-01-31 06:00:00+01
+3	2020-02-02 10:00:00+01
+4	2020-02-02 11:00:00+01
+
+statement ok
+drop table my_datalake.default.sort_day_timestamptz;

@@ -15,6 +15,9 @@ require httpfs
 set ignore_error_messages
 
 statement ok
+set iceberg_use_metadata_log = true;
+
+statement ok
 CALL enable_logging(level='warning');
 
 statement ok
@@ -35,7 +38,7 @@ BEGIN;
 statement ok con1
 ALTER TABLE my_datalake.default.my_table ALTER COLUMN a DROP NOT NULL;
 
-# schema changed, ACID is violated for con2
+# con2 continues to use the NOT NULL constraint from its transaction-start schema
 statement ok con1
 COMMIT;
 
@@ -51,4 +54,3 @@ Constraint Error: NOT NULL constraint failed: my_table.a
 query II
 SELECT log_level, message FROM duckdb_logs
 ----
-WARNING	Detected schema change during transaction (schema_id mismatch); ACID guarantees may not hold.

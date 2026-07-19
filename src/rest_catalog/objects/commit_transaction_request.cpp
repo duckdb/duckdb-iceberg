@@ -40,15 +40,15 @@ string CommitTransactionRequest::TryFromJSON(yyjson_val *obj) {
 		return "CommitTransactionRequest required property 'table-changes' is missing";
 	} else {
 		if (yyjson_is_arr(table_changes_val)) {
-			size_t idx, max;
-			yyjson_val *val;
-			yyjson_arr_foreach(table_changes_val, idx, max, val) {
-				CommitTableRequest tmp;
-				error = tmp.TryFromJSON(val);
+			size_t table_changes_idx, table_changes_max;
+			yyjson_val *table_changes_item_val;
+			yyjson_arr_foreach(table_changes_val, table_changes_idx, table_changes_max, table_changes_item_val) {
+				CommitTableRequest table_changes_item;
+				error = table_changes_item.TryFromJSON(table_changes_item_val);
 				if (!error.empty()) {
 					return error;
 				}
-				table_changes.emplace_back(std::move(tmp));
+				table_changes.emplace_back(std::move(table_changes_item));
 			}
 		} else {
 			return StringUtil::Format(

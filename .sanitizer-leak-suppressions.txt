@@ -1,0 +1,8 @@
+# Temporary suppressions for duckdb-aws leak:
+# https://github.com/duckdb/duckdb-aws/issues/146
+#
+# This file is additive on top of duckdb/.sanitizer-leak-suppressions.txt.
+leak:duckdb::AWSInput::ExecuteRequestLegacy
+leak:duckdb::InitAWSAPI
+leak:Aws::InitAPI
+leak:CRYPTO_zalloc

@@ -56,10 +56,15 @@ statement ok
 CALL truncate_duckdb_logs();
 
 statement ok
-create table my_datalake.default.test_horizon_compatible_writes (id int, label varchar);
+create table my_datalake.default.test_horizon_compatible_writes (
+	id int,
+	label varchar
+);
 
 statement ok
-insert into my_datalake.default.test_horizon_compatible_writes values (1, 'created'), (2, 'inserted');
+insert into my_datalake.default.test_horizon_compatible_writes values
+	(1, 'created'),
+	(2, 'inserted');
 
 query II
 select * from my_datalake.default.test_horizon_compatible_writes order by all;
@@ -82,6 +87,18 @@ statement ok
 drop table if exists my_datalake.default.test_horizon_mixed_empty_create;
 
 statement ok
+drop table if exists my_datalake.default.test_horizon_guard_a;
+
+statement ok
+drop table if exists my_datalake.default.test_horizon_guard_b;
+
+statement ok
+drop table if exists my_datalake.default.test_horizon_guard_c;
+
+statement ok
+drop table if exists my_datalake.default.test_horizon_guard_d;
+
+statement ok
 create table my_datalake.default.test_horizon_mixed_existing (id int, label varchar);
 
 statement ok
@@ -93,8 +110,11 @@ begin transaction;
 statement ok
 create table my_datalake.default.test_horizon_mixed_empty_create (id int, label varchar);
 
-statement ok
+# Can't insert into another table, multi-table commits are disabled
+statement error
 insert into my_datalake.default.test_horizon_mixed_existing values (3, 'mixed');
+----
+TransactionContext Error: Iceberg REST Catalog cannot commit this transaction atomically because it would require multiple table commit requests without atomic multi-table commit support
 
 statement ok
 commit;
@@ -102,7 +122,6 @@ commit;
 query II
 select * from my_datalake.default.test_horizon_mixed_existing order by all;
 ----
-3	mixed
 
 query I
 select count(*) from my_datalake.default.test_horizon_mixed_empty_create;
@@ -124,3 +143,138 @@ drop table if exists my_datalake.default.test_horizon_mixed_empty_create;
 
 statement ok
 drop table if exists my_datalake.default.test_horizon_mixed_existing;
+
+statement ok
+create table my_datalake.default.test_horizon_guard_a (id int, label varchar);
+
+statement ok
+create table my_datalake.default.test_horizon_guard_b (id int, label varchar);
+
+statement ok
+create table my_datalake.default.test_horizon_guard_c (id int, label varchar);
+
+statement ok
+insert into my_datalake.default.test_horizon_guard_a values (1, 'seed');
+
+statement ok
+insert into my_datalake.default.test_horizon_guard_b values (2, 'seed');
+
+statement ok
+insert into my_datalake.default.test_horizon_guard_c values (3, 'seed');
+
+statement ok
+begin transaction;
+
+statement ok
+insert into my_datalake.default.test_horizon_guard_a values (11, 'tx');
+
+statement error
+insert into my_datalake.default.test_horizon_guard_b values (22, 'tx');
+----
+<REGEX>:.*TransactionContext Error: Iceberg REST Catalog cannot commit this transaction atomically.*
+
+statement ok
+rollback;
+
+query I
+select count(*) from my_datalake.default.test_horizon_guard_a where id = 11;
+----
+0
+
+statement ok
+begin transaction;
+
+statement ok
+insert into my_datalake.default.test_horizon_guard_a values (11, 'tx');
+
+statement error
+alter table my_datalake.default.test_horizon_guard_a rename to test_horizon_guard_d;
+----
+<REGEX>:.*TransactionContext Error: Iceberg REST Catalog cannot commit this transaction atomically.*
+
+statement ok
+rollback;
+
+statement ok
+drop table if exists my_datalake.default.test_horizon_guard_d;
+
+statement ok
+begin transaction;
+
+statement ok
+insert into my_datalake.default.test_horizon_guard_a values (11, 'tx');
+
+statement error
+drop table my_datalake.default.test_horizon_guard_a;
+----
+<REGEX>:.*TransactionContext Error: Iceberg REST Catalog cannot commit this transaction atomically.*
+
+statement ok
+rollback;
+
+statement ok
+drop table if exists my_datalake.default.test_horizon_guard_d;
+
+statement ok
+begin transaction;
+
+statement ok
+alter table my_datalake.default.test_horizon_guard_a rename to test_horizon_guard_d;
+
+statement error
+insert into my_datalake.default.test_horizon_guard_d values (44, 'tx');
+----
+TransactionContext Error: Iceberg REST Catalog cannot commit this transaction atomically because it mixes table updates with rename/drop requests
+
+statement ok
+rollback;
+
+statement ok
+drop table if exists my_datalake.default.test_horizon_guard_d;
+
+statement ok
+begin transaction;
+
+statement ok
+drop table my_datalake.default.test_horizon_guard_c;
+
+statement error
+insert into my_datalake.default.test_horizon_guard_b values (33, 'tx');
+----
+TransactionContext Error: Iceberg REST Catalog cannot commit this transaction atomically because it mixes table updates with rename/drop requests
+
+statement ok
+rollback;
+
+statement ok
+drop table if exists my_datalake.default.test_horizon_guard_d;
+
+statement ok
+begin transaction;
+
+statement ok
+create table my_datalake.default.test_horizon_guard_d as
+select 4 as id, 'new' as label;
+
+statement error
+alter table my_datalake.default.test_horizon_guard_d rename to test_horizon_guard_d_renamed;
+----
+<REGEX>:.*TransactionContext Error: Iceberg REST Catalog cannot commit this transaction atomically.*
+
+statement ok
+rollback;
+
+statement ok
+drop table if exists my_datalake.default.test_horizon_guard_a;
+
+statement ok
+drop table if exists my_datalake.default.test_horizon_guard_b;
+
+statement ok
+drop table if exists my_datalake.default.test_horizon_guard_c;
+
+statement ok
+drop table if exists my_datalake.default.test_horizon_guard_d;
+
+statement ok
+drop table if exists my_datalake.default.test_horizon_guard_d_renamed;

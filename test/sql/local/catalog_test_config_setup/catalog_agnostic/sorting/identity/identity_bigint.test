@@ -1,0 +1,64 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/sorting/identity/identity_bigint.test
+# group: [identity]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+set ignore_error_messages
+
+statement ok
+set threads=1;
+
+statement ok
+CREATE SCHEMA IF NOT EXISTS my_datalake.default;
+
+statement ok
+drop table if exists my_datalake.default.sort_identity_bigint;
+
+statement ok
+create table my_datalake.default.sort_identity_bigint (id int, sort_col bigint);
+
+statement ok
+alter table my_datalake.default.sort_identity_bigint set sorted by (sort_col asc nulls last, id asc nulls last);
+
+query T
+SELECT sort_order.fields[1].transform
+FROM iceberg_load_table_response(my_datalake.default.sort_identity_bigint),
+unnest(metadata."sort-orders"::VARIANT[]) AS t(sort_order)
+WHERE try_cast(sort_order."order-id" AS INTEGER) = metadata."default-sort-order-id";
+----
+identity
+
+statement ok
+insert into my_datalake.default.sort_identity_bigint values (4, 20), (2, 10), (3, 30), (1, 10);
+
+statement ok
+set variable latest_manifest_sequence = (select max(manifest_sequence_number) from iceberg_metadata(my_datalake.default.sort_identity_bigint));
+
+statement ok
+set variable file_path = (
+	select file_path from iceberg_metadata(my_datalake.default.sort_identity_bigint)
+	where manifest_sequence_number = cast(getvariable('latest_manifest_sequence') as bigint)
+	and manifest_content = 'DATA' and status = 'ADDED' limit 1
+);
+
+query II
+select id, sort_col
+from my_datalake.default.sort_identity_bigint
+where filename = getvariable('file_path')
+order by file_row_number;
+----
+1	10
+2	10
+4	20
+3	30
+
+statement ok
+drop table my_datalake.default.sort_identity_bigint;

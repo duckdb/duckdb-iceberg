@@ -1,6 +1,7 @@
 #include "iceberg_extension.hpp"
 
 #include "duckdb/main/secret/secret_manager.hpp"
+#include "duckdb/logging/log_manager.hpp"
 #include "duckdb/common/exception.hpp"
 #include "duckdb/common/exception/http_exception.hpp"
 #include "duckdb/common/string_util.hpp"
@@ -21,6 +22,7 @@
 #include "catalog/rest/storage/authorization/sigv4.hpp"
 #include "common/iceberg_utils.hpp"
 #include "iceberg_logging.hpp"
+#include "iceberg_attach.hpp"
 #include "iceberg_options.hpp"
 #include "function/copy/iceberg_copy_function.hpp"
 #include "duckdb/optimizer/optimizer_extension.hpp"
@@ -37,7 +39,7 @@ static unique_ptr<TransactionManager> CreateTransactionManager(optional_ptr<Stor
 class IRCStorageExtension : public StorageExtension {
 public:
 	IRCStorageExtension() {
-		attach = IcebergCatalog::Attach;
+		attach = IcebergAttach::Attach;
 		create_transaction_manager = CreateTransactionManager;
 	}
 };
@@ -70,26 +72,12 @@ static void LoadInternal(ExtensionLoader &loader) {
 	    "iceberg_use_metadata_log",
 	    "Whether or not to make use of the (optional) 'metadata-log' of a table to ensure atomicity guarantees hold, "
 	    "at the cost of making another GET for json metadata in rare circumstances",
-	    LogicalType::BOOLEAN, Value::BOOLEAN(true));
-	config.AddExtensionOption("ignore_target_file_size_for_partitioned_tables",
-	                          "Ignore unsupported write.target-file-size-bytes table property for partitioned tables",
-	                          LogicalType::BOOLEAN, Value::BOOLEAN(false));
-	config.AddExtensionOption(
-	    "ignore_row_group_size_for_partitioned_tables",
-	    "Ignore unsupported write.parquet.row-group-size-bytes table property for partitioned tables",
-	    LogicalType::BOOLEAN, Value::BOOLEAN(false));
+	    LogicalType::BOOLEAN, Value::BOOLEAN(false), nullptr, SetScope::GLOBAL);
 	config.AddExtensionOption(
 	    "iceberg_logging_post_body_truncate_limit",
 	    "Maximum number of characters of a REST catalog POST body to include in Iceberg log messages. "
 	    "Bodies longer than this are truncated with a trailing '... (truncated)' marker. Set to 0 to omit the body.",
 	    LogicalType::UBIGINT, Value::UBIGINT(10000));
-	config.AddExtensionOption(
-	    "unsafe_iceberg_ignore_sort_order",
-	    "Allow INSERT/UPDATE on iceberg tables that declare a sort order, without applying that sort order to "
-	    "the written data. The Iceberg spec permits this (writers are not required to honour a declared sort "
-	    "order, and readers do not assume files are sorted), but skipping the sort may reduce later file-pruning "
-	    "effectiveness and compression.",
-	    LogicalType::BOOLEAN, Value::BOOLEAN(false));
 #ifdef ICEBERG_ENABLE_EQUALITY_DELETE_WRITES
 	config.AddExtensionOption(
 	    ENABLE_EQUALITY_DELETES_CONFIG_VARIABLE,

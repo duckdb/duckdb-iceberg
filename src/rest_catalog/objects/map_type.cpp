@@ -47,6 +47,9 @@ string MapType::TryFromJSON(yyjson_val *obj) {
 			return StringUtil::Format("MapType property 'type' is not of type 'string', found '%s' instead",
 			                          yyjson_get_type_desc(type_val));
 		}
+		if (!yyjson_is_null(type_val) && type != "map") {
+			return "MapType property 'type' does not match its required const value";
+		}
 	}
 	auto key_id_val = yyjson_obj_get(obj, "key-id");
 	if (!key_id_val) {

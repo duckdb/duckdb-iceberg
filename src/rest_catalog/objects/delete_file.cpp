@@ -39,23 +39,26 @@ DeleteFile DeleteFile::Copy() const {
 
 string DeleteFile::TryFromJSON(yyjson_val *obj) {
 	string error;
-	do {
+	auto discriminator_val = yyjson_obj_get(obj, "content");
+	if (!discriminator_val || !yyjson_is_str(discriminator_val)) {
+		return "DeleteFile discriminator 'content' is missing or is not a string";
+	}
+	string discriminator = yyjson_get_str(discriminator_val);
+	if (discriminator == "position-deletes") {
 		position_delete_file.emplace();
 		error = position_delete_file->TryFromJSON(obj);
-		if (error.empty()) {
-			break;
-		} else {
-			position_delete_file = nullopt;
+		if (!error.empty()) {
+			return error;
 		}
+	} else if (discriminator == "equality-deletes") {
 		equality_delete_file.emplace();
 		error = equality_delete_file->TryFromJSON(obj);
-		if (error.empty()) {
-			break;
-		} else {
-			equality_delete_file = nullopt;
+		if (!error.empty()) {
+			return error;
 		}
-		return "DeleteFile failed to parse, none of the oneOf candidates matched";
-	} while (false);
+	} else {
+		return StringUtil::Format("DeleteFile has unknown discriminator value '%s'", discriminator.c_str());
+	}
 	return "";
 }
 

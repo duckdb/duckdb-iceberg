@@ -1,6 +1,7 @@
 #include "catalog/rest/storage/aws.hpp"
 
 #include "duckdb/common/http_util.hpp"
+#include "duckdb/logging/logger.hpp"
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/common/exception/http_exception.hpp"
 #include "duckdb/main/database.hpp"

@@ -179,7 +179,7 @@ public:
 
 private:
 	//! Walk `plan` for the PhysicalTableScan that emits the row-id virtual columns the delete needs.
-	static optional_ptr<PhysicalTableScan> FindDeleteSource(PhysicalOperator &plan);
+	static optional_ptr<PhysicalTableScan> FindIcebergScan(PhysicalOperator &plan);
 	void WritePositionalDeleteFile(ClientContext &context, IcebergDeleteGlobalState &global_state,
 	                               const string &filename, IcebergDeleteFileInfo delete_file,
 	                               set<idx_t> sorted_deletes) const;

@@ -12,6 +12,11 @@ require httpfs
 
 require core_functions
 
+require icu
+
+statement ok
+set timezone='UTC';
+
 # Do not ignore 'HTTP' error messages!
 set ignore_error_messages
 

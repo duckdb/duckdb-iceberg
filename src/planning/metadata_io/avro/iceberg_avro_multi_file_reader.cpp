@@ -1,5 +1,6 @@
 #include "planning/metadata_io/avro/iceberg_avro_multi_file_reader.hpp"
 
+#include "duckdb/catalog/catalog_entry/table_function_catalog_entry.hpp"
 #include "duckdb/common/exception.hpp"
 #include "duckdb/planner/expression/bound_constant_expression.hpp"
 #include "duckdb/planner/expression/bound_cast_expression.hpp"
@@ -7,18 +8,124 @@
 #include "duckdb/function/cast/bound_cast_data.hpp"
 #include "duckdb/common/vector/map_vector.hpp"
 #include "duckdb/common/vector/struct_vector.hpp"
+#include "duckdb/main/database.hpp"
+#include "duckdb/parser/tableref/table_function_ref.hpp"
 
 #include "planning/metadata_io/avro/iceberg_avro_multi_file_list.hpp"
 #include "core/metadata/manifest/iceberg_manifest_list.hpp"
 #include "core/metadata/manifest/iceberg_manifest.hpp"
+#include "core/metadata/schema/iceberg_table_schema.hpp"
 #include "common/iceberg_utils.hpp"
 #include "planning/metadata_io/manifest/iceberg_manifest_reader.hpp"
 #include "planning/metadata_io/manifest_list/iceberg_manifest_list_reader.hpp"
+#include "rest_catalog/objects/schema.hpp"
+#include "yyjson.hpp"
 
 namespace duckdb {
 
 unique_ptr<MultiFileReader> IcebergAvroMultiFileReader::CreateInstance(const TableFunction &table) {
 	return make_uniq<IcebergAvroMultiFileReader>(table.function_info);
+}
+
+static optional<int32_t> TryGetMetadataInt(const InsertionOrderPreservingMap<Value> &metadata, const string &key) {
+	auto entry = metadata.find(key);
+	if (entry == metadata.end()) {
+		return nullopt;
+	}
+	try {
+		return std::stoi(entry->second.GetValue<string>());
+	} catch (...) {
+		return nullopt;
+	}
+}
+
+static optional<string> TryGetMetadataString(const InsertionOrderPreservingMap<Value> &metadata, const string &key) {
+	auto entry = metadata.find(key);
+	if (entry == metadata.end()) {
+		return nullopt;
+	}
+	return entry->second.GetValue<string>();
+}
+
+static string ManifestMetadataErrorPrefix(const string &path) {
+	if (path.empty()) {
+		return "Manifest";
+	}
+	return StringUtil::Format("Manifest '%s'", path);
+}
+
+static int32_t GetRequiredMetadataInt(const InsertionOrderPreservingMap<Value> &metadata, const string &key,
+                                      const string &path) {
+	auto value = TryGetMetadataInt(metadata, key);
+	if (!value) {
+		throw InvalidConfigurationException("%s is missing required Avro key-value metadata field '%s'",
+		                                    ManifestMetadataErrorPrefix(path), key);
+	}
+	return *value;
+}
+
+static string GetRequiredMetadataString(const InsertionOrderPreservingMap<Value> &metadata, const string &key,
+                                        const string &path) {
+	auto value = TryGetMetadataString(metadata, key);
+	if (!value) {
+		throw InvalidConfigurationException("%s is missing required Avro key-value metadata field '%s'",
+		                                    ManifestMetadataErrorPrefix(path), key);
+	}
+	return *value;
+}
+
+static optional<int32_t> TryParseSchemaIdFromSchemaJson(const string &schema_json) {
+	using namespace duckdb_yyjson;
+
+	auto doc = std::unique_ptr<yyjson_doc, void (*)(yyjson_doc *)>(
+	    yyjson_read(schema_json.c_str(), schema_json.size(), 0), yyjson_doc_free);
+	if (!doc) {
+		return nullopt;
+	}
+	auto root = yyjson_doc_get_root(doc.get());
+	if (!root) {
+		return nullopt;
+	}
+	auto schema_id_val = yyjson_obj_get(root, "schema-id");
+	if (!schema_id_val || !yyjson_is_int(schema_id_val)) {
+		return nullopt;
+	}
+	return static_cast<int32_t>(yyjson_get_int(schema_id_val));
+}
+
+static IcebergManifestMetadata ParseManifestMetadata(const InsertionOrderPreservingMap<Value> &metadata,
+                                                     const string &path) {
+	auto schema_id = TryGetMetadataInt(metadata, "schema-id");
+	if (!schema_id) {
+		auto schema_json = GetRequiredMetadataString(metadata, "schema", path);
+		schema_id = TryParseSchemaIdFromSchemaJson(schema_json);
+		if (!schema_id) {
+			throw InvalidConfigurationException(
+			    "%s is missing required Avro key-value metadata field 'schema-id' and its 'schema' JSON does not "
+			    "contain one",
+			    ManifestMetadataErrorPrefix(path));
+		}
+	}
+
+	auto partition_spec_id = GetRequiredMetadataInt(metadata, "partition-spec-id", path);
+	auto format_version = GetRequiredMetadataInt(metadata, "format-version", path);
+
+	IcebergManifestContentType content = IcebergManifestContentType::DATA;
+	auto content_str = TryGetMetadataString(metadata, "content");
+	if (content_str) {
+		if (*content_str == "data") {
+			content = IcebergManifestContentType::DATA;
+		} else if (*content_str == "deletes") {
+			content = IcebergManifestContentType::DELETE;
+		} else {
+			throw InvalidConfigurationException("%s has invalid Avro key-value metadata content '%s'",
+			                                    ManifestMetadataErrorPrefix(path), content);
+		}
+	} else if (format_version > 1) {
+		throw InvalidConfigurationException("%s has invalid Avro key-value metadata, content is missing",
+		                                    ManifestMetadataErrorPrefix(path));
+	}
+	return IcebergManifestMetadata(*schema_id, partition_spec_id, format_version, content);
 }
 
 namespace manifest_list {
@@ -73,30 +180,6 @@ static vector<MultiFileColumnDefinition> BuildManifestListSchema(const IcebergTa
 	partition_spec_id.identifier = Value::INTEGER(PARTITION_SPEC_ID);
 	schema.push_back(partition_spec_id);
 
-	// content (v2+, default 0)
-	if (iceberg_version >= 2) {
-		MultiFileColumnDefinition content("content", LogicalType::INTEGER);
-		content.identifier = Value::INTEGER(CONTENT);
-		content.default_expression = make_uniq<ConstantExpression>(Value::INTEGER(0));
-		schema.push_back(content);
-	}
-
-	// sequence_number (v2+)
-	if (iceberg_version >= 2) {
-		MultiFileColumnDefinition sequence_number("sequence_number", LogicalType::BIGINT);
-		sequence_number.identifier = Value::INTEGER(SEQUENCE_NUMBER);
-		sequence_number.default_expression = make_uniq<ConstantExpression>(Value(sequence_number.type));
-		schema.push_back(sequence_number);
-	}
-
-	// min_sequence_number (v2+, default 0)
-	if (iceberg_version >= 2) {
-		MultiFileColumnDefinition min_sequence_number("min_sequence_number", LogicalType::BIGINT);
-		min_sequence_number.identifier = Value::INTEGER(MIN_SEQUENCE_NUMBER);
-		min_sequence_number.default_expression = make_uniq<ConstantExpression>(Value::BIGINT(0));
-		schema.push_back(min_sequence_number);
-	}
-
 	// added_snapshot_id
 	MultiFileColumnDefinition added_snapshot_id("added_snapshot_id", LogicalType::BIGINT);
 	added_snapshot_id.identifier = Value::INTEGER(ADDED_SNAPSHOT_ID);
@@ -134,6 +217,30 @@ static vector<MultiFileColumnDefinition> BuildManifestListSchema(const IcebergTa
 
 	// partitions (v2+)
 	schema.push_back(CreateManifestFilePartitionsColumn());
+
+	// content (v2+, default 0)
+	if (iceberg_version >= 2) {
+		MultiFileColumnDefinition content("content", LogicalType::INTEGER);
+		content.identifier = Value::INTEGER(CONTENT);
+		content.default_expression = make_uniq<ConstantExpression>(Value::INTEGER(0));
+		schema.push_back(content);
+	}
+
+	// sequence_number (v2+)
+	if (iceberg_version >= 2) {
+		MultiFileColumnDefinition sequence_number("sequence_number", LogicalType::BIGINT);
+		sequence_number.identifier = Value::INTEGER(SEQUENCE_NUMBER);
+		sequence_number.default_expression = make_uniq<ConstantExpression>(Value(sequence_number.type));
+		schema.push_back(sequence_number);
+	}
+
+	// min_sequence_number (v2+, default 0)
+	if (iceberg_version >= 2) {
+		MultiFileColumnDefinition min_sequence_number("min_sequence_number", LogicalType::BIGINT);
+		min_sequence_number.identifier = Value::INTEGER(MIN_SEQUENCE_NUMBER);
+		min_sequence_number.default_expression = make_uniq<ConstantExpression>(Value::BIGINT(0));
+		schema.push_back(min_sequence_number);
+	}
 
 	// first_row_id (v3+, default 0)
 	if (iceberg_version >= 3) {
@@ -483,6 +590,16 @@ ReaderInitializeType IcebergAvroMultiFileReader::InitializeReader(
 	auto get_function_info = function_info.get();
 	if (get_function_info) {
 		auto &avro_scan_info = get_function_info->Cast<IcebergAvroScanInfo>();
+		if (avro_scan_info.type == AvroScanInfoType::MANIFEST_FILE) {
+			auto &manifest_scan_info = avro_scan_info.Cast<IcebergManifestFileScanInfo>();
+			auto file_idx = reader_data.reader->file_list_idx.GetIndex();
+			auto &manifest_list_entry = manifest_scan_info.manifest_files[file_idx];
+			auto manifest_path = manifest_list_entry.file.manifest_path.empty()
+			                         ? reader_data.reader->GetFileName()
+			                         : manifest_list_entry.file.manifest_path;
+			manifest_list_entry.manifest_metadata.emplace(
+			    ParseManifestMetadata(reader_data.reader->GetMetadata(), manifest_path));
+		}
 		for (auto &partition_spec : avro_scan_info.metadata.partition_specs) {
 			for (auto &spec_field : partition_spec.second.fields) {
 				if (StringUtil::CIEquals(spec_field.transform.RawType(), "day")) {
@@ -523,13 +640,13 @@ void IcebergAvroMultiFileReader::FinalizeChunk(ClientContext &context, const Mul
 		auto manifest_file_idx = reader.file_list_idx.GetIndex();
 		auto &manifest_file = manifest_scan_info.manifest_files[manifest_file_idx];
 
-		idx_t start_index = manifest_file.manifest_entries.size();
+		auto &manifest_entries = manifest_file.GetOrCreateManifestEntries();
+		idx_t start_index = manifest_entries.size();
 		manifest_file::ManifestReader::ReadChunk(output_chunk, manifest_scan_info.partition_field_id_to_type, metadata,
-		                                         manifest_file.manifest_entries);
+		                                         manifest_entries);
 		if (manifest_scan_info.read_state) {
 			auto &read_state = *manifest_scan_info.read_state;
-			read_state.PushBatch(
-			    ManifestReadBatch(manifest_file_idx, start_index, manifest_file.manifest_entries.size()));
+			read_state.PushBatch(ManifestReadBatch(manifest_file_idx, start_index, manifest_entries.size()));
 		}
 		break;
 	}
@@ -579,7 +696,10 @@ shared_ptr<MultiFileList> IcebergAvroMultiFileReader::CreateFileList(ClientConte
 			file_info.extended_info->options["etag"] = Value("");
 			file_info.extended_info->options["last_modified"] = Value::TIMESTAMP(timestamp_t(0));
 			file_info.extended_info->options["partition_spec_id"] = Value::INTEGER(manifest.file.partition_spec_id);
-			file_info.extended_info->options["sequence_number"] = Value::BIGINT(manifest.file.sequence_number);
+			if (!manifest.file.sequence_number) {
+				throw InvalidConfigurationException("manifest_file.sequence_number is not set");
+			}
+			file_info.extended_info->options["sequence_number"] = Value::BIGINT(*manifest.file.sequence_number);
 			file_info.extended_info->options["manifest_file_path"] = Value(manifest.file.manifest_path);
 		}
 	}

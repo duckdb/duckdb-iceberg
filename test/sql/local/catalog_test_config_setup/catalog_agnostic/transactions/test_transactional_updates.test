@@ -21,6 +21,9 @@ SET warnings_as_errors = True;
 set ignore_error_messages
 
 statement ok
+set iceberg_use_metadata_log = true;
+
+statement ok
 set enable_logging=true
 
 statement ok
@@ -31,11 +34,15 @@ statement ok
 drop table if exists my_datalake.default.multi_transaction_update;
 
 statement ok
-create table my_datalake.default.multi_transaction_update (a int, b int);
+create table my_datalake.default.multi_transaction_update (
+	a int,
+	b int
+);
 
 # Insert 0,0
 statement ok
-insert into my_datalake.default.multi_transaction_update select 0, 0;
+insert into my_datalake.default.multi_transaction_update VALUES
+	(0, 0);
 
 statement ok con1
 begin
@@ -45,7 +52,8 @@ begin
 
 # Insert 2,2
 statement ok con2
-insert into my_datalake.default.multi_transaction_update select 2, 2;
+insert into my_datalake.default.multi_transaction_update VALUES
+	(2, 2);
 
 statement ok con2
 commit
@@ -60,6 +68,7 @@ select * from my_datalake.default.multi_transaction_update;
 statement ok con1
 update my_datalake.default.multi_transaction_update set a = 50;
 
+# con1 doesn't see 2,2 yet
 query II con1
 select * from my_datalake.default.multi_transaction_update;
 ----
@@ -68,7 +77,7 @@ select * from my_datalake.default.multi_transaction_update;
 statement error con1
 commit;
 ----
-<REGEX>:.*TransactionContext Error: Failed to commit:.*
+<REGEX>:.*Failed to commit.*
 
 # con1 UPDATE didn't go through
 query II

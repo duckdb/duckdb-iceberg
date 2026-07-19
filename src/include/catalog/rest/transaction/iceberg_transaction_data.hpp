@@ -1,5 +1,6 @@
 #pragma once
 
+#include "duckdb/common/optional.hpp"
 #include "duckdb/main/client_context.hpp"
 #include "duckdb/function/copy_function.hpp"
 
@@ -21,16 +22,21 @@ struct IcebergCreateTableRequest;
 
 struct IcebergTransactionData {
 public:
-	IcebergTransactionData(ClientContext &context, const IcebergTableInformation &table_info);
+	IcebergTransactionData(ClientContext &context, IcebergTransaction &transaction,
+	                       const IcebergTableInformation &table_info);
 
 public:
+	int64_t GetCommitRetryCount() const;
+	bool SupportsAppendRetry() const;
+	bool RetryStateMatches(const IcebergTableInformation &table_info) const;
+
 	void AddSnapshot(IcebergSnapshotOperationType operation, vector<IcebergManifestEntry> &&data_files,
 	                 IcebergManifestDeletes &&altered_manifests);
 	void AddUpdateSnapshot(vector<IcebergManifestEntry> &&delete_files, vector<IcebergManifestEntry> &&data_files,
 	                       IcebergManifestDeletes &&altered_manifests);
 	// add a schema update for a table
 	void TableAddSchema(int32_t schema_id);
-	void TableSetCurrentSchema();
+	void TableSetCurrentSchema(int32_t schema_id);
 	void TableAddAssertCreate();
 	void TableAddAssertUUID();
 	void TableAddAssertCurrentSchemaId();
@@ -51,9 +57,13 @@ private:
 	void CacheExistingManifestList(lock_guard<mutex> &guard, const IcebergTableMetadata &metadata);
 
 public:
+	string initial_table_uuid;
 	int32_t initial_schema_id;
+	int32_t initial_default_spec_id = 0;
+	optional_idx initial_default_sort_order_id;
 
 	ClientContext &context;
+	IcebergTransaction &transaction;
 	const IcebergTableInformation &table_info;
 	//! schema updates etc.
 	vector<unique_ptr<IcebergTableUpdate>> updates;
@@ -70,8 +80,10 @@ public:
 
 	//! If we perform an update that relies on the current schema id staying unchanged
 	bool assert_schema_id = false;
-	//! Whether the current schema of the table should be updated
-	bool set_schema_id = false;
+	//! Whether this transaction explicitly requires the table to be newly created.
+	bool has_assert_create = false;
+	//! The schema id that should become current when the commit is staged.
+	optional<int32_t> pending_current_schema_id;
 	mutex lock;
 };
 

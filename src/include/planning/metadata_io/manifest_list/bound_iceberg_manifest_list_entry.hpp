@@ -18,8 +18,7 @@ public:
 
 private:
 	const idx_t index;
-	bool has_next_row_id = false;
-	mutable idx_t next_row_id;
+	mutable optional<idx_t> next_row_id;
 };
 
 } // namespace duckdb

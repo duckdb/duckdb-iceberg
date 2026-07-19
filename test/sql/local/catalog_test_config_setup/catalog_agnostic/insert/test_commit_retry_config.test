@@ -1,0 +1,69 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/insert/test_commit_retry_config.test
+# description: commit.retry.* table properties are accepted and a normal commit still succeeds
+# group: [insert]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+set ignore_error_messages
+
+statement ok
+drop table if exists my_datalake.default.retry_tbl;
+
+# Set the full commit.retry.* family. These must be accepted and a non-conflicting commit must still
+# succeed normally (the retry loop runs the first attempt and breaks on success).
+statement ok
+create table my_datalake.default.retry_tbl (
+	id INTEGER,
+	data VARCHAR
+) WITH (
+	'commit.retry.num-retries' = '5',
+	'commit.retry.min-wait-ms' = '50',
+	'commit.retry.max-wait-ms' = '5000',
+	'commit.retry.total-timeout-ms' = '60000'
+);
+
+statement ok
+insert into my_datalake.default.retry_tbl values (1, 'a'), (2, 'b');
+
+statement ok
+insert into my_datalake.default.retry_tbl values (3, 'c');
+
+query II
+select id, data from my_datalake.default.retry_tbl order by id;
+----
+1	a
+2	b
+3	c
+
+# num-retries = 0 means "single attempt, no retries"; a normal commit must still succeed.
+statement ok
+drop table if exists my_datalake.default.retry_zero;
+
+statement ok
+create table my_datalake.default.retry_zero (
+	id INTEGER
+) WITH (
+	'commit.retry.num-retries' = '0'
+);
+
+statement ok
+insert into my_datalake.default.retry_zero values (1), (2), (3);
+
+query I
+select count(*) from my_datalake.default.retry_zero;
+----
+3
+
+statement ok
+drop table my_datalake.default.retry_tbl;
+
+statement ok
+drop table my_datalake.default.retry_zero;

@@ -6,10 +6,11 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "duckdb/common/types.hpp"
-#include "duckdb/storage/statistics/base_statistics.hpp"
-
 #pragma once
+
+#include "duckdb/common/types.hpp"
+#include "duckdb/common/optional.hpp"
+#include "duckdb/storage/statistics/base_statistics.hpp"
 
 namespace duckdb {
 
@@ -24,19 +25,13 @@ struct IcebergColumnStats {
 	IcebergColumnStats &operator=(IcebergColumnStats &&other) noexcept = default;
 
 	LogicalType type;
-	string min;
-	string max;
-	idx_t null_count = 0;
-	idx_t num_values = 0;
-	idx_t column_size_bytes = 0;
-	bool contains_nan = false;
-	bool has_null_count = false;
-	bool has_num_values = false;
-	bool has_min = false;
-	bool has_max = false;
+	optional<string> min;
+	optional<string> max;
+	optional<idx_t> null_count;
+	optional<idx_t> num_values;
+	optional<idx_t> column_size_bytes;
+	optional<bool> contains_nan;
 	bool any_valid = true;
-	bool has_contains_nan = false;
-	bool has_column_size_bytes = false;
 
 	// Geometry bounding-box stats produced by the parquet writer's RETURN_STATS.
 	// Z/M halves are only set when the parquet writer emitted them, which it does

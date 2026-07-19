@@ -1,0 +1,56 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/insert/test_insert_multiple_transactions_retry_disabled.test
+# group: [insert]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+set ignore_error_messages
+
+statement ok
+drop table if exists my_datalake.default.multi_transaction_insert_retry_disabled;
+
+statement ok
+create table my_datalake.default.multi_transaction_insert_retry_disabled (a int, b int);
+
+statement ok
+insert into my_datalake.default.multi_transaction_insert_retry_disabled values (0, 0);
+
+statement ok
+CALL set_iceberg_table_properties(my_datalake.default.multi_transaction_insert_retry_disabled,
+    {
+    'commit.retry.num-retries' : '0'
+    }
+);
+
+statement ok con1
+begin
+
+statement ok con2
+begin
+
+statement ok con1
+insert into my_datalake.default.multi_transaction_insert_retry_disabled values (1, 1);
+
+statement ok con2
+insert into my_datalake.default.multi_transaction_insert_retry_disabled values (2, 2);
+
+statement ok con1
+commit
+
+statement error con2
+commit
+----
+<REGEX>:.*TransactionContext Error.*Conflict_409.*
+
+query II
+select * from my_datalake.default.multi_transaction_insert_retry_disabled order by all;
+----
+0	0
+1	1

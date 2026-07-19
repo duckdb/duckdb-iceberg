@@ -1,0 +1,57 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/sorting/identity/identity_binary.test
+# group: [identity]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+set ignore_error_messages
+
+statement ok
+set threads=1;
+
+statement ok
+CREATE SCHEMA IF NOT EXISTS my_datalake.default;
+
+statement ok
+drop table if exists my_datalake.default.sort_identity_binary;
+
+statement ok
+create table my_datalake.default.sort_identity_binary (id int, sort_col blob);
+
+statement ok
+alter table my_datalake.default.sort_identity_binary set sorted by (sort_col asc nulls last, id asc nulls last);
+
+statement ok
+insert into my_datalake.default.sort_identity_binary values
+	(4, '\x02'::blob), (2, '\x01'::blob), (3, '\x03'::blob), (1, '\x01'::blob);
+
+statement ok
+set variable latest_manifest_sequence = (select max(manifest_sequence_number) from iceberg_metadata(my_datalake.default.sort_identity_binary));
+
+statement ok
+set variable file_path = (
+	select file_path from iceberg_metadata(my_datalake.default.sort_identity_binary)
+	where manifest_sequence_number = cast(getvariable('latest_manifest_sequence') as bigint)
+	and manifest_content = 'DATA' and status = 'ADDED' limit 1
+);
+
+query II
+select id, sort_col
+from my_datalake.default.sort_identity_binary
+where filename = getvariable('file_path')
+order by file_row_number;
+----
+1	\x01
+2	\x01
+4	\x02
+3	\x03
+
+statement ok
+drop table my_datalake.default.sort_identity_binary;

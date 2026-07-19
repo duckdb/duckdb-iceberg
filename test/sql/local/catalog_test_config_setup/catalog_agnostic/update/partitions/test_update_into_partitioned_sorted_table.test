@@ -1,0 +1,173 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/update/partitions/test_update_into_partitioned_sorted_table.test
+# group: [partitions]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+set threads=1;
+
+statement ok
+CREATE SCHEMA IF NOT EXISTS my_datalake.default;
+
+statement ok
+drop table if exists my_datalake.default.partitioned_sorted_update_write_test;
+
+statement ok
+create table my_datalake.default.partitioned_sorted_update_write_test (
+	p int,
+	a int,
+	b int
+)
+partitioned by (p);
+
+statement ok
+alter table my_datalake.default.partitioned_sorted_update_write_test set sorted by (
+	a asc nulls last,
+	b asc nulls last
+);
+
+statement ok
+set variable table_sort_order_id = (
+	select metadata."default-sort-order-id"
+	from iceberg_load_table_response(my_datalake.default.partitioned_sorted_update_write_test)
+);
+
+statement ok
+insert into my_datalake.default.partitioned_sorted_update_write_test
+values
+	(1, 2, 20),
+	(2, 2, 200),
+	(1, 1, 30),
+	(2, 1, 300),
+	(1, 2, 10),
+	(2, 1, 100),
+	(1, 1, 40),
+	(2, 3, 5);
+
+query I
+select count(*) from iceberg_snapshots(my_datalake.default.partitioned_sorted_update_write_test);
+----
+1
+
+statement ok
+update my_datalake.default.partitioned_sorted_update_write_test set b = b + 100;
+
+query III
+select * from my_datalake.default.partitioned_sorted_update_write_test order by p, a, b;
+----
+1	1	130
+1	1	140
+1	2	110
+1	2	120
+2	1	200
+2	1	400
+2	2	300
+2	3	105
+
+query I
+select count(*) from iceberg_snapshots(my_datalake.default.partitioned_sorted_update_write_test);
+----
+2
+
+statement ok
+set variable latest_manifest_sequence = (
+	select max(manifest_sequence_number)
+	from iceberg_metadata(my_datalake.default.partitioned_sorted_update_write_test)
+);
+
+query I
+select count(*)
+from iceberg_metadata(my_datalake.default.partitioned_sorted_update_write_test)
+where manifest_sequence_number = cast(getvariable('latest_manifest_sequence') as bigint)
+and manifest_content = 'DATA'
+and status = 'ADDED';
+----
+2
+
+statement ok
+set variable manifest_path = (
+	select manifest_path
+	from iceberg_metadata(my_datalake.default.partitioned_sorted_update_write_test)
+	where manifest_sequence_number = cast(getvariable('latest_manifest_sequence') as bigint)
+	and manifest_content = 'DATA'
+	and status = 'ADDED'
+	limit 1
+);
+
+query I
+with latest_files as (
+	select file_path
+	from iceberg_metadata(my_datalake.default.partitioned_sorted_update_write_test)
+	where manifest_sequence_number = cast(getvariable('latest_manifest_sequence') as bigint)
+	and manifest_content = 'DATA'
+	and status = 'ADDED'
+),
+file_partition_counts as (
+	select filename, count(distinct p) as partition_count
+	from my_datalake.default.partitioned_sorted_update_write_test
+	where filename in (select file_path from latest_files)
+	group by filename
+)
+select count(*)
+from file_partition_counts
+where partition_count != 1;
+----
+0
+
+# Use the latest added file handles from the Iceberg scan itself, then use
+# file_row_number to verify that rows are physically written in table sort-key
+# order within each file.
+query I
+with latest_files as (
+	select file_path
+	from iceberg_metadata(my_datalake.default.partitioned_sorted_update_write_test)
+	where manifest_sequence_number = cast(getvariable('latest_manifest_sequence') as bigint)
+	and manifest_content = 'DATA'
+	and status = 'ADDED'
+),
+ordered_rows as (
+	select
+		filename,
+		file_row_number,
+		a,
+		b,
+		lag(a) over(partition by filename order by file_row_number) prev_a,
+		lag(b) over(partition by filename order by file_row_number) prev_b
+	from my_datalake.default.partitioned_sorted_update_write_test
+	where filename in (select file_path from latest_files)
+)
+select count(*)
+from ordered_rows
+where prev_a is not null
+and (a < prev_a or (a = prev_a and b < prev_b));
+----
+0
+
+query I
+select min(sort_order_id) = cast(getvariable('table_sort_order_id') as integer)
+and max(sort_order_id) = cast(getvariable('table_sort_order_id') as integer)
+from (select unnest(data_file) from read_avro(getvariable('manifest_path')))
+where file_path in (
+	select file_path
+	from iceberg_metadata(my_datalake.default.partitioned_sorted_update_write_test)
+	where manifest_sequence_number = cast(getvariable('latest_manifest_sequence') as bigint)
+	and manifest_content = 'DATA'
+	and status = 'ADDED'
+)
+and sort_order_id is not null;
+----
+1
+
+statement ok
+drop table my_datalake.default.partitioned_sorted_update_write_test;

@@ -1,6 +1,8 @@
 #include "execution/operator/iceberg_delete.hpp"
 
 #include "duckdb/catalog/catalog_entry/copy_function_catalog_entry.hpp"
+#include "duckdb/planner/filter/expression_filter.hpp"
+#include "duckdb/planner/expression/bound_comparison_expression.hpp"
 #include "duckdb/common/types/uuid.hpp"
 #include "duckdb/execution/execution_context.hpp"
 #include "duckdb/execution/operator/scan/physical_table_scan.hpp"
@@ -72,7 +74,7 @@ bool IcebergDelete::TryGetEqualityDeletePredicates(ClientContext &context, Icebe
 		return false;
 	}
 
-	auto table_scan = FindDeleteSource(child_plan);
+	auto table_scan = FindIcebergScan(child_plan);
 	if (!table_scan) {
 		return false;
 	}

@@ -18,6 +18,9 @@ require core_functions
 set ignore_error_messages
 
 statement ok
+CREATE SCHEMA IF NOT EXISTS my_datalake.default;
+
+statement ok
 DROP TABLE IF EXISTS my_datalake.default.v2_to_v3_upgrade;
 
 # Create table explicitly as V2
