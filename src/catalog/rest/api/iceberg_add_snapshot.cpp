@@ -66,6 +66,11 @@ static optional<IcebergManifestListEntry> RewriteManifestFile(const IcebergManif
 		if (manifest_entry.status != IcebergManifestEntryStatusType::DELETED &&
 		    deletes.IsInvalidated(manifest_entry.data_file.file_path)) {
 			snapshot_metrics.RemoveFileSize(manifest_entry.data_file.file_size_in_bytes);
+			if (list_entry.file.content == IcebergManifestContentType::DELETE) {
+				snapshot_metrics.RemoveDeleteFile(manifest_entry.data_file.record_count);
+			} else {
+				snapshot_metrics.RemoveDataFile(manifest_entry.data_file.record_count);
+			}
 			manifest_entry.status = IcebergManifestEntryStatusType::DELETED;
 			removed_any_entries = true;
 		}
