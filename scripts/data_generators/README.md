@@ -3,8 +3,6 @@ Script used to generate test data for this repo.
 Run it with pytest, one catalog per invocation:
 `python3 -m pytest scripts/data_generators/test_generate_data.py`
 
-Prefer `make data` or the catalog-specific make targets.
-
 The generator uses PySpark with the Iceberg extension to populate the active catalog for every registered `IcebergTest`.
 Intermediates for each step are saved to `data/generated/intermediates/{connection_key}/{table}/{step}`.
 

@@ -169,10 +169,9 @@ static void ParseConfigOptions(const case_insensitive_map_t<string> &config, cas
 
 IRCAPITableCredentials IcebergTableInformation::GetVendedCredentials(ClientContext &context) const {
 	IRCAPITableCredentials result;
-	auto transaction_id = MetaTransaction::Get(context).global_transaction_id;
-
-	auto secret_base_name =
-	    StringUtil::Format("__internal_ic_%s__%s__%s__%s", table_id, schema.name, name, to_string(transaction_id));
+	auto schema_component = IRCPathComponent::NamespaceComponent(schema.namespace_items);
+	auto secret_base_name = StringUtil::Format("__internal_ic_%s__%s__%s", catalog.GetName().GetIdentifierName(),
+	                                           schema_component.encoded, name);
 	case_insensitive_map_t<Value> user_defaults;
 	if (catalog.auth_handler->type == IcebergAuthorizationType::SIGV4) {
 		auto &sigv4_auth = catalog.auth_handler->Cast<SIGV4Authorization>();
@@ -208,9 +207,6 @@ IRCAPITableCredentials IcebergTableInformation::GetVendedCredentials(ClientConte
 	case_insensitive_map_t<Value> config_options;
 	//! TODO: apply the 'defaults' retrieved from the /v1/config endpoint
 	config_options.insert(user_defaults.begin(), user_defaults.end());
-	auto schema_component = IRCPathComponent::NamespaceComponent(schema.namespace_items);
-	auto key = schema_component.encoded + "." + name;
-
 	ParseConfigOptions(config, config_options, context, storage_type);
 
 	//! If there is only one credential listed, we don't really care about the prefix,
@@ -227,7 +223,7 @@ IRCAPITableCredentials IcebergTableInformation::GetVendedCredentials(ClientConte
 
 		CreateSecretInput create_secret_input;
 		create_secret_input.on_conflict = OnCreateConflict::REPLACE_ON_CONFLICT;
-		create_secret_input.persist_type = SecretPersistType::TEMPORARY;
+		create_secret_input.persist_type = SecretPersistType::TRANSACTION;
 
 		if (ignore_credential_prefix) {
 			create_secret_input.scope.push_back(table_location);
@@ -240,12 +236,10 @@ IRCAPITableCredentials IcebergTableInformation::GetVendedCredentials(ClientConte
 				create_secret_input.scope.push_back(table_location);
 			}
 		}
-		create_secret_input.name =
-		    Identifier(StringUtil::Format("%s_%d_%s", secret_base_name, index, credential.prefix));
+		create_secret_input.name = Identifier(StringUtil::Format("%s__%d", secret_base_name, index));
 
 		create_secret_input.type = Identifier(storage_type);
 		create_secret_input.provider = "config";
-		create_secret_input.storage_type = "memory";
 		create_secret_input.options = config_options;
 
 		if (IcebergTableSecretProvider::SupportsStorageType(storage_type)) {
@@ -264,7 +258,7 @@ IRCAPITableCredentials IcebergTableInformation::GetVendedCredentials(ClientConte
 		result.config = make_uniq<CreateSecretInput>();
 		auto &config = *result.config;
 		config.on_conflict = OnCreateConflict::REPLACE_ON_CONFLICT;
-		config.persist_type = SecretPersistType::TEMPORARY;
+		config.persist_type = SecretPersistType::TRANSACTION;
 
 		//! TODO: apply the 'overrides' retrieved from the /v1/config endpoint
 		config.options = config_options;
@@ -658,13 +652,11 @@ IcebergTableInformation IcebergTableInformation::Copy() const {
 	clone.table_metadata = table_metadata.Copy();
 	clone.config = config;
 	clone.storage_credentials = storage_credentials;
-	clone.latest_metadata_json = latest_metadata_json;
 	return clone;
 }
 
 IcebergTableMetadata IcebergTableInformation::CreateMetadataFromLog(ClientContext &context,
-                                                                    timestamp_ms_t transaction_start_ms,
-                                                                    string &metadata_path) const {
+                                                                    timestamp_ms_t transaction_start_ms) const {
 	auto &log = table_metadata.metadata_log;
 
 	optional_idx log_item_index;
@@ -687,7 +679,6 @@ IcebergTableMetadata IcebergTableInformation::CreateMetadataFromLog(ClientContex
 	auto &path = log[log_item_index.GetIndex()].metadata_file;
 	auto parsed_metadata = IcebergTableMetadata::Parse(path, *fs, "");
 
-	metadata_path = path;
 	return IcebergTableMetadata::FromTableMetadata(parsed_metadata);
 }
 
@@ -721,7 +712,7 @@ IcebergTableInformation IcebergTableInformation::Copy(IcebergTransaction &iceber
 	}
 
 	LoadCredentials(context);
-	ret.table_metadata = ret.CreateMetadataFromLog(context, transaction_start_ms, ret.latest_metadata_json);
+	ret.table_metadata = ret.CreateMetadataFromLog(context, transaction_start_ms);
 	return ret;
 }
 
@@ -760,8 +751,6 @@ void IcebergTableInformation::InitializeFromLoadTableResult(const rest_api_objec
 			storage_credentials.push_back(credential);
 		}
 	}
-	latest_metadata_json = load_table_result.metadata_location.value_or("");
-
 	if (initialize_schemas) {
 		auto &schemas = table_metadata.GetSchemas();
 		D_ASSERT(!schemas.empty());

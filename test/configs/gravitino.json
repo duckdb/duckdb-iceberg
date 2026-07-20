@@ -1,0 +1,59 @@
+{
+	"description": "Use Apache Gravitino as Iceberg Rest Catalog.",
+	"on_init": "CREATE SECRET gravitino_storage (TYPE S3, KEY_ID 'admin', SECRET 'password', ENDPOINT '127.0.0.1:9000', URL_STYLE 'path', USE_SSL 0); ATTACH '' AS my_datalake (TYPE ICEBERG, ENDPOINT 'http://127.0.0.1:9001/iceberg', AUTHORIZATION_TYPE 'none', ACCESS_DELEGATION_MODE 'vended_credentials'); CREATE SCHEMA IF NOT EXISTS my_datalake.default;",
+	"statically_loaded_extensions": [
+		"core_functions",
+		"parquet",
+		"avro",
+		"iceberg",
+		"httpfs",
+		"icu"
+	],
+	"test_env": [
+		{
+			"env_name": "CATALOG_TEST_CONFIG_SETUP",
+			"env_value": "gravitino"
+		}
+	],
+	"skip_tests": [
+		{
+			"reason": "Gravitino doesn't provide credentials to read metadata.json paths",
+			"paths": [
+				"test/sql/local/catalog_test_config_setup/catalog_agnostic/alter/alter_rename_column.test",
+				"test/sql/local/catalog_test_config_setup/catalog_agnostic/alter/add_column/alter_add_column_warn_schema_mismatch.test",
+				"test/sql/local/catalog_test_config_setup/catalog_agnostic/alter/not_null/alter_drop_not_null_warn_schema_mismatch.test",
+				"test/sql/local/catalog_test_config_setup/catalog_agnostic/delete/test_transactional_delete.test",
+				"test/sql/local/catalog_test_config_setup/catalog_agnostic/insert/test_transactional_insert.test",
+				"test/sql/local/catalog_test_config_setup/catalog_agnostic/transactions/test_transaction_metadata_log_layout.test",
+				"test/sql/local/catalog_test_config_setup/catalog_agnostic/transactions/test_transaction_metadata_log_missing.test",
+				"test/sql/local/catalog_test_config_setup/catalog_agnostic/transactions/test_transaction_metadata_log_properties.test",
+				"test/sql/local/catalog_test_config_setup/catalog_agnostic/transactions/test_transaction_metadata_log_schema.test",
+				"test/sql/local/catalog_test_config_setup/catalog_agnostic/transactions/test_transactional_deletes_not_retried.test",
+				"test/sql/local/catalog_test_config_setup/catalog_agnostic/transactions/test_transactional_merge_into.test",
+				"test/sql/local/catalog_test_config_setup/catalog_agnostic/transactions/test_transactional_updates_error_omits_stacktrace.test",
+				"test/sql/local/catalog_test_config_setup/catalog_agnostic/transactions/test_transactional_updates.test",
+				"test/sql/local/catalog_test_config_setup/catalog_agnostic/transactions/test_transactions_reading_empty_tables.test"
+			]
+		},
+		{
+			"reason": "Test is hardcoded for 'fixture' intermediates",
+			"paths": [
+				"test/sql/local/catalog_test_config_setup/catalog_agnostic/irc_catalog_read_deletes.test"
+			]
+		},
+		{
+			"reason": "Gravitino doesn't support multi-table requests ('.../transactions/commit' endpoint)",
+			"paths": [
+				"test/sql/local/catalog_test_config_setup/catalog_agnostic/transactions/test_multi_table_commit_integrity.test"
+			]
+		},
+		{
+			"reason": "Gravitino schemas don't carry a 'namespace_id'",
+			"paths": [
+				"test/sql/local/catalog_test_config_setup/catalog_agnostic/schema_properties/schema_properties_update.test",
+				"test/sql/local/catalog_test_config_setup/catalog_agnostic/schema_properties/schema_properties_update_transaction.test",
+				"test/sql/local/catalog_test_config_setup/catalog_agnostic/schema_properties/schema_properties_update_concurrent_transactions.test"
+			]
+		}
+	]
+}

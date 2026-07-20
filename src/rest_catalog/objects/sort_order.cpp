@@ -52,15 +52,15 @@ string SortOrder::TryFromJSON(yyjson_val *obj) {
 		return "SortOrder required property 'fields' is missing";
 	} else {
 		if (yyjson_is_arr(fields_val)) {
-			size_t idx, max;
-			yyjson_val *val;
-			yyjson_arr_foreach(fields_val, idx, max, val) {
-				SortField tmp;
-				error = tmp.TryFromJSON(val);
+			size_t fields_idx, fields_max;
+			yyjson_val *fields_item_val;
+			yyjson_arr_foreach(fields_val, fields_idx, fields_max, fields_item_val) {
+				SortField fields_item;
+				error = fields_item.TryFromJSON(fields_item_val);
 				if (!error.empty()) {
 					return error;
 				}
-				fields.emplace_back(std::move(tmp));
+				fields.emplace_back(std::move(fields_item));
 			}
 		} else {
 			return StringUtil::Format("SortOrder property 'fields' is not of type 'array', found '%s' instead",

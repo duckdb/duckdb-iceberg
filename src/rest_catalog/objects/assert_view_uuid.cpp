@@ -43,6 +43,9 @@ string AssertViewUUID::TryFromJSON(yyjson_val *obj) {
 			return StringUtil::Format("AssertViewUUID property 'type' is not of type 'string', found '%s' instead",
 			                          yyjson_get_type_desc(type_val));
 		}
+		if (!yyjson_is_null(type_val) && type != "assert-view-uuid") {
+			return "AssertViewUUID property 'type' does not match its required const value";
+		}
 	}
 	auto uuid_val = yyjson_obj_get(obj, "uuid");
 	if (!uuid_val) {

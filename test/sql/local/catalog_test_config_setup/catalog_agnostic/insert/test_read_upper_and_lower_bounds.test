@@ -30,6 +30,9 @@ SET TimeZone = 'UTC';
 statement ok
 pragma threads=1;
 
+# Start transaction to keep necessary credentials in scope
+statement ok
+begin
 
 statement ok
 set variable manifest_path_spark = (select manifest_path from iceberg_metadata(my_datalake.default.spark_written_upper_lower_bounds) order by manifest_sequence_number desc limit 1);
@@ -46,3 +49,6 @@ from (select unnest(map_keys(lower_bounds)) lower_keys, unnest(map_values(lower_
 7	\xDCy\x0D\x90?\x00\x01	7	#\x86\xF2o\xC0\xFF\xFF
 8	\xC6\x06\xF5\xFF	8	\xA0\xC0,\x00
 9	\x00@\xD4\x00\x01@#\xFF	9	\xFF_s\xCC\x0CD\x84\x03
+
+statement ok
+commit

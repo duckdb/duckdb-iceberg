@@ -65,8 +65,7 @@ public:
 
 	static string GetTableKey(const vector<string> &namespace_items, const string &table_name);
 	string GetTableKey() const;
-	IcebergTableMetadata CreateMetadataFromLog(ClientContext &context, timestamp_ms_t transaction_start_ms,
-	                                           string &metadata_path) const;
+	IcebergTableMetadata CreateMetadataFromLog(ClientContext &context, timestamp_ms_t transaction_start_ms) const;
 	// With metadata-log enabled, reconstruct the complete table state at transaction start. Otherwise pin and copy
 	// the complete catalog state that was resolved for this transaction.
 	IcebergTableInformation Copy(IcebergTransaction &iceberg_transaction) const;
@@ -87,9 +86,6 @@ public:
 	IcebergTableMetadata table_metadata;
 	case_insensitive_map_t<string> config;
 	vector<IcebergTableStorageCredential> storage_credentials;
-	// when loading table metadata, store the path to the metadata.json for extension functions like iceberg_metadata()
-	string latest_metadata_json;
-
 	unordered_map<int32_t, unique_ptr<IcebergTableEntry>> schema_versions;
 	// dummy entry to hold existence of a table, but no schema versions
 	unique_ptr<IcebergTableEntry> dummy_entry;

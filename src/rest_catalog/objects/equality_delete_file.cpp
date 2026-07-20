@@ -43,22 +43,39 @@ string EqualityDeleteFile::TryFromJSON(yyjson_val *obj) {
 	if (!error.empty()) {
 		return error;
 	}
+	auto content_refinement_val = yyjson_obj_get(obj, "content");
+	if (content_refinement_val) {
+		string content_refinement;
+		if (yyjson_is_str(content_refinement_val)) {
+			content_refinement = yyjson_get_str(content_refinement_val);
+		} else {
+			return StringUtil::Format(
+			    "EqualityDeleteFile property 'content_refinement' is not of type 'string', found '%s' instead",
+			    yyjson_get_type_desc(content_refinement_val));
+		}
+		if (!yyjson_is_null(content_refinement_val) && content_refinement != "equality-deletes") {
+			return "EqualityDeleteFile property 'content_refinement' does not match its required const value";
+		}
+	} else {
+		return "EqualityDeleteFile required property 'content' is missing";
+	}
 	auto equality_ids_val = yyjson_obj_get(obj, "equality-ids");
 	if (equality_ids_val) {
 		vector<int32_t> equality_ids_tmp;
 		if (yyjson_is_arr(equality_ids_val)) {
-			size_t idx, max;
-			yyjson_val *val;
-			yyjson_arr_foreach(equality_ids_val, idx, max, val) {
-				int32_t tmp;
-				if (yyjson_is_int(val)) {
-					tmp = yyjson_get_int(val);
+			size_t equality_ids_tmp_idx, equality_ids_tmp_max;
+			yyjson_val *equality_ids_tmp_item_val;
+			yyjson_arr_foreach(equality_ids_val, equality_ids_tmp_idx, equality_ids_tmp_max,
+			                   equality_ids_tmp_item_val) {
+				int32_t equality_ids_tmp_item;
+				if (yyjson_is_int(equality_ids_tmp_item_val)) {
+					equality_ids_tmp_item = yyjson_get_int(equality_ids_tmp_item_val);
 				} else {
-					return StringUtil::Format(
-					    "EqualityDeleteFile property 'tmp' is not of type 'integer', found '%s' instead",
-					    yyjson_get_type_desc(val));
+					return StringUtil::Format("EqualityDeleteFile property 'equality_ids_tmp_item' is not of type "
+					                          "'integer', found '%s' instead",
+					                          yyjson_get_type_desc(equality_ids_tmp_item_val));
 				}
-				equality_ids_tmp.emplace_back(std::move(tmp));
+				equality_ids_tmp.emplace_back(std::move(equality_ids_tmp_item));
 			}
 		} else {
 			return StringUtil::Format(

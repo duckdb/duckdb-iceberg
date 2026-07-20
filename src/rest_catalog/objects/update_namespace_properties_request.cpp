@@ -48,18 +48,18 @@ string UpdateNamespacePropertiesRequest::TryFromJSON(yyjson_val *obj) {
 	if (removals_val) {
 		vector<string> removals_tmp;
 		if (yyjson_is_arr(removals_val)) {
-			size_t idx, max;
-			yyjson_val *val;
-			yyjson_arr_foreach(removals_val, idx, max, val) {
-				string tmp;
-				if (yyjson_is_str(val)) {
-					tmp = yyjson_get_str(val);
+			size_t removals_tmp_idx, removals_tmp_max;
+			yyjson_val *removals_tmp_item_val;
+			yyjson_arr_foreach(removals_val, removals_tmp_idx, removals_tmp_max, removals_tmp_item_val) {
+				string removals_tmp_item;
+				if (yyjson_is_str(removals_tmp_item_val)) {
+					removals_tmp_item = yyjson_get_str(removals_tmp_item_val);
 				} else {
-					return StringUtil::Format(
-					    "UpdateNamespacePropertiesRequest property 'tmp' is not of type 'string', found '%s' instead",
-					    yyjson_get_type_desc(val));
+					return StringUtil::Format("UpdateNamespacePropertiesRequest property 'removals_tmp_item' is not of "
+					                          "type 'string', found '%s' instead",
+					                          yyjson_get_type_desc(removals_tmp_item_val));
 				}
-				removals_tmp.emplace_back(std::move(tmp));
+				removals_tmp.emplace_back(std::move(removals_tmp_item));
 			}
 		} else {
 			return StringUtil::Format(

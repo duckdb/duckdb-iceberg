@@ -56,15 +56,16 @@ string ScanTasks::TryFromJSON(yyjson_val *obj) {
 	if (delete_files_val) {
 		vector<DeleteFile> delete_files_tmp;
 		if (yyjson_is_arr(delete_files_val)) {
-			size_t idx, max;
-			yyjson_val *val;
-			yyjson_arr_foreach(delete_files_val, idx, max, val) {
-				DeleteFile tmp;
-				error = tmp.TryFromJSON(val);
+			size_t delete_files_tmp_idx, delete_files_tmp_max;
+			yyjson_val *delete_files_tmp_item_val;
+			yyjson_arr_foreach(delete_files_val, delete_files_tmp_idx, delete_files_tmp_max,
+			                   delete_files_tmp_item_val) {
+				DeleteFile delete_files_tmp_item;
+				error = delete_files_tmp_item.TryFromJSON(delete_files_tmp_item_val);
 				if (!error.empty()) {
 					return error;
 				}
-				delete_files_tmp.emplace_back(std::move(tmp));
+				delete_files_tmp.emplace_back(std::move(delete_files_tmp_item));
 			}
 		} else {
 			return StringUtil::Format(
@@ -77,15 +78,16 @@ string ScanTasks::TryFromJSON(yyjson_val *obj) {
 	if (file_scan_tasks_val) {
 		vector<FileScanTask> file_scan_tasks_tmp;
 		if (yyjson_is_arr(file_scan_tasks_val)) {
-			size_t idx, max;
-			yyjson_val *val;
-			yyjson_arr_foreach(file_scan_tasks_val, idx, max, val) {
-				FileScanTask tmp;
-				error = tmp.TryFromJSON(val);
+			size_t file_scan_tasks_tmp_idx, file_scan_tasks_tmp_max;
+			yyjson_val *file_scan_tasks_tmp_item_val;
+			yyjson_arr_foreach(file_scan_tasks_val, file_scan_tasks_tmp_idx, file_scan_tasks_tmp_max,
+			                   file_scan_tasks_tmp_item_val) {
+				FileScanTask file_scan_tasks_tmp_item;
+				error = file_scan_tasks_tmp_item.TryFromJSON(file_scan_tasks_tmp_item_val);
 				if (!error.empty()) {
 					return error;
 				}
-				file_scan_tasks_tmp.emplace_back(std::move(tmp));
+				file_scan_tasks_tmp.emplace_back(std::move(file_scan_tasks_tmp_item));
 			}
 		} else {
 			return StringUtil::Format(
@@ -98,15 +100,15 @@ string ScanTasks::TryFromJSON(yyjson_val *obj) {
 	if (plan_tasks_val) {
 		vector<PlanTask> plan_tasks_tmp;
 		if (yyjson_is_arr(plan_tasks_val)) {
-			size_t idx, max;
-			yyjson_val *val;
-			yyjson_arr_foreach(plan_tasks_val, idx, max, val) {
-				PlanTask tmp;
-				error = tmp.TryFromJSON(val);
+			size_t plan_tasks_tmp_idx, plan_tasks_tmp_max;
+			yyjson_val *plan_tasks_tmp_item_val;
+			yyjson_arr_foreach(plan_tasks_val, plan_tasks_tmp_idx, plan_tasks_tmp_max, plan_tasks_tmp_item_val) {
+				PlanTask plan_tasks_tmp_item;
+				error = plan_tasks_tmp_item.TryFromJSON(plan_tasks_tmp_item_val);
 				if (!error.empty()) {
 					return error;
 				}
-				plan_tasks_tmp.emplace_back(std::move(tmp));
+				plan_tasks_tmp.emplace_back(std::move(plan_tasks_tmp_item));
 			}
 		} else {
 			return StringUtil::Format("ScanTasks property 'plan_tasks_tmp' is not of type 'array', found '%s' instead",

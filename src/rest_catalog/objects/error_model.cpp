@@ -78,17 +78,18 @@ string ErrorModel::TryFromJSON(yyjson_val *obj) {
 	if (stack_val) {
 		vector<string> stack_tmp;
 		if (yyjson_is_arr(stack_val)) {
-			size_t idx, max;
-			yyjson_val *val;
-			yyjson_arr_foreach(stack_val, idx, max, val) {
-				string tmp;
-				if (yyjson_is_str(val)) {
-					tmp = yyjson_get_str(val);
+			size_t stack_tmp_idx, stack_tmp_max;
+			yyjson_val *stack_tmp_item_val;
+			yyjson_arr_foreach(stack_val, stack_tmp_idx, stack_tmp_max, stack_tmp_item_val) {
+				string stack_tmp_item;
+				if (yyjson_is_str(stack_tmp_item_val)) {
+					stack_tmp_item = yyjson_get_str(stack_tmp_item_val);
 				} else {
-					return StringUtil::Format("ErrorModel property 'tmp' is not of type 'string', found '%s' instead",
-					                          yyjson_get_type_desc(val));
+					return StringUtil::Format(
+					    "ErrorModel property 'stack_tmp_item' is not of type 'string', found '%s' instead",
+					    yyjson_get_type_desc(stack_tmp_item_val));
 				}
-				stack_tmp.emplace_back(std::move(tmp));
+				stack_tmp.emplace_back(std::move(stack_tmp_item));
 			}
 		} else {
 			return StringUtil::Format("ErrorModel property 'stack_tmp' is not of type 'array', found '%s' instead",

@@ -90,15 +90,15 @@ string PlanTableScanRequest::TryFromJSON(yyjson_val *obj) {
 	if (select_val) {
 		vector<FieldName> select_tmp;
 		if (yyjson_is_arr(select_val)) {
-			size_t idx, max;
-			yyjson_val *val;
-			yyjson_arr_foreach(select_val, idx, max, val) {
-				FieldName tmp;
-				error = tmp.TryFromJSON(val);
+			size_t select_tmp_idx, select_tmp_max;
+			yyjson_val *select_tmp_item_val;
+			yyjson_arr_foreach(select_val, select_tmp_idx, select_tmp_max, select_tmp_item_val) {
+				FieldName select_tmp_item;
+				error = select_tmp_item.TryFromJSON(select_tmp_item_val);
 				if (!error.empty()) {
 					return error;
 				}
-				select_tmp.emplace_back(std::move(tmp));
+				select_tmp.emplace_back(std::move(select_tmp_item));
 			}
 		} else {
 			return StringUtil::Format(
@@ -185,15 +185,16 @@ string PlanTableScanRequest::TryFromJSON(yyjson_val *obj) {
 	if (stats_fields_val) {
 		vector<FieldName> stats_fields_tmp;
 		if (yyjson_is_arr(stats_fields_val)) {
-			size_t idx, max;
-			yyjson_val *val;
-			yyjson_arr_foreach(stats_fields_val, idx, max, val) {
-				FieldName tmp;
-				error = tmp.TryFromJSON(val);
+			size_t stats_fields_tmp_idx, stats_fields_tmp_max;
+			yyjson_val *stats_fields_tmp_item_val;
+			yyjson_arr_foreach(stats_fields_val, stats_fields_tmp_idx, stats_fields_tmp_max,
+			                   stats_fields_tmp_item_val) {
+				FieldName stats_fields_tmp_item;
+				error = stats_fields_tmp_item.TryFromJSON(stats_fields_tmp_item_val);
 				if (!error.empty()) {
 					return error;
 				}
-				stats_fields_tmp.emplace_back(std::move(tmp));
+				stats_fields_tmp.emplace_back(std::move(stats_fields_tmp_item));
 			}
 		} else {
 			return StringUtil::Format(

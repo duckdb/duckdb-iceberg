@@ -157,6 +157,9 @@ def pytest_ignore_collect(collection_path, config):
     explicit_cloud_run = any("cloud" in path.parts for path in requested_paths)
     if not explicit_cloud_run and "cloud" in Path(str(collection_path)).parts:
         return True
+    explicit_benchmark_run = any("benchmark" in path.parts for path in requested_paths)
+    if not explicit_benchmark_run and "benchmark" in Path(str(collection_path)).parts:
+        return True
     return False
 
 

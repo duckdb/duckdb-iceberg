@@ -19,14 +19,17 @@ enum class IcebergSnapshotMetricType : uint8_t {
 	ADDED_POSITION_DELETES,
 	REMOVED_DELETE_FILES,
 	REMOVED_POSITION_DELETE_FILES,
+	ADDED_FILES_SIZE,
+	REMOVED_FILES_SIZE,
 	TOTAL_DATA_FILES,
 	TOTAL_RECORDS,
 	TOTAL_DELETE_FILES,
-	TOTAL_POSITION_DELETES
+	TOTAL_POSITION_DELETES,
+	TOTAL_FILES_SIZE
 };
 
 class IcebergSnapshot;
-struct IcebergManifestFile;
+struct IcebergManifestListEntry;
 
 struct IcebergSnapshotMetrics {
 public:
@@ -34,7 +37,14 @@ public:
 	IcebergSnapshotMetrics(const IcebergSnapshot &parent_snapshot);
 
 public:
-	void AddManifestFile(const IcebergManifestFile &manifest_file);
+	void AddManifestListEntry(const IcebergManifestListEntry &manifest_list_entry);
+	void RemoveFileSize(int64_t file_size_in_bytes);
+	bool HasTotalFilesSize() const;
+	void SetTotalFilesSize(int64_t total_files_size);
+
+private:
+	void AddSizeMetric(IcebergSnapshotMetricType type, int64_t value);
+	void UpdateTotalFilesSize(int64_t added, int64_t removed);
 
 public:
 	map<IcebergSnapshotMetricType, int64_t> metrics;

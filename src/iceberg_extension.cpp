@@ -23,6 +23,7 @@
 #include "catalog/rest/storage/iceberg_table_secret_provider.hpp"
 #include "common/iceberg_utils.hpp"
 #include "iceberg_logging.hpp"
+#include "iceberg_attach.hpp"
 #include "iceberg_options.hpp"
 #include "function/copy/iceberg_copy_function.hpp"
 #include "duckdb/optimizer/optimizer_extension.hpp"
@@ -39,7 +40,7 @@ static unique_ptr<TransactionManager> CreateTransactionManager(optional_ptr<Stor
 class IRCStorageExtension : public StorageExtension {
 public:
 	IRCStorageExtension() {
-		attach = IcebergCatalog::Attach;
+		attach = IcebergAttach::Attach;
 		create_transaction_manager = CreateTransactionManager;
 	}
 };

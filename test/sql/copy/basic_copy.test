@@ -7,6 +7,8 @@ require parquet
 
 require iceberg
 
+require json
+
 statement ok
 COPY (
 	select 42::BIGINT a,
@@ -39,3 +41,40 @@ query I
 select typeof(b) from iceberg_scan('__TEST_DIR__/iceberg_table')
 ----
 VARCHAR
+
+# Snapshot file-size metrics are derived from the content-file size stored in the manifest.
+statement ok
+set variable metadata_file = (
+	select file from glob('__TEST_DIR__/iceberg_table/metadata/*.metadata.json') limit 1
+)
+
+statement ok
+set variable metadata_json = (
+	select content::JSON from read_text(getvariable('metadata_file'))
+)
+
+statement ok
+set variable manifest_list = json_extract_string(
+	getvariable('metadata_json'), '$.snapshots[0]."manifest-list"'
+)
+
+statement ok
+set variable manifest_file = (
+	select manifest_path from read_avro(getvariable('manifest_list')) limit 1
+)
+
+statement ok
+set variable content_file_size = (
+	select file_size_in_bytes
+	from (select unnest(data_file) from read_avro(getvariable('manifest_file')))
+	limit 1
+)
+
+query II
+select
+	json_extract_string(getvariable('metadata_json'), '$.snapshots[0].summary."added-files-size"')::BIGINT =
+		getvariable('content_file_size'),
+	json_extract_string(getvariable('metadata_json'), '$.snapshots[0].summary."total-files-size"')::BIGINT =
+		getvariable('content_file_size')
+----
+true	true

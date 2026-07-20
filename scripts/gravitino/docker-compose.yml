@@ -1,0 +1,47 @@
+services:
+  gravitino:
+    image: apache/gravitino-iceberg-rest:1.2.0
+    ports:
+      - "9001:9001"
+    environment:
+      GRAVITINO_MEM: -Xms1g -Xmx4g -XX:MaxMetaspaceSize=1g
+      GRAVITINO_CATALOG_BACKEND: memory
+      GRAVITINO_IO_IMPL: org.apache.iceberg.aws.s3.S3FileIO
+      GRAVITINO_WAREHOUSE: s3://warehouse/
+      GRAVITINO_CREDENTIAL_PROVIDERS: s3-secret-key
+      GRAVITINO_S3_ACCESS_KEY: admin
+      GRAVITINO_S3_SECRET_KEY: password
+      GRAVITINO_S3_ENDPOINT: http://minio:9000
+      GRAVITINO_S3_REGION: us-east-1
+      GRAVITINO_S3_PATH_STYLE_ACCESS: "true"
+    depends_on:
+      minio:
+        condition: service_started
+
+  minio:
+    image: minio/minio
+    ports:
+      - "9000:9000"
+      - "9002:9001"
+    environment:
+      MINIO_ROOT_USER: admin
+      MINIO_ROOT_PASSWORD: password
+    volumes:
+      - type: bind
+        source: ../../data/generated/iceberg/gravitino
+        target: /data
+    command: ["server", "/data", "--console-address", ":9001"]
+
+  mc:
+    image: minio/mc
+    depends_on:
+      - minio
+    entrypoint: |
+      /bin/sh -c "
+      until /usr/bin/mc alias set minio http://minio:9000 admin password; do
+        echo 'Waiting for MinIO...';
+        sleep 2;
+      done;
+      /usr/bin/mc mb --ignore-existing minio/warehouse;
+      tail -f /dev/null
+      "

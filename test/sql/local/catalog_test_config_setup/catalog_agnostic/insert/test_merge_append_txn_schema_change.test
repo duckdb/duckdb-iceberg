@@ -90,6 +90,10 @@ select count(*) from (
 ----
 3
 
+# Start transaction to keep necessary credentials in scope
+statement ok
+begin
+
 statement ok
 set variable latest_txn_manifest_list = (
 	select manifest_list
@@ -136,6 +140,9 @@ from (
 ----
 2	1
 
+statement ok
+commit
+
 # A further insert + read still returns everything intact after the mixed-schema transaction.
 statement ok
 insert into my_datalake.default.merge_txn_schema values
@@ -157,6 +164,10 @@ select count(*) from (
 );
 ----
 3
+
+# Start transaction to keep necessary credentials in scope
+statement ok
+begin
 
 statement ok
 set variable latest_txn_manifest_list = (
@@ -206,3 +217,6 @@ from (
 
 statement ok
 drop table my_datalake.default.merge_txn_schema;
+
+statement ok
+commit

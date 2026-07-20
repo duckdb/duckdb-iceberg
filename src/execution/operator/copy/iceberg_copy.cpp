@@ -110,7 +110,7 @@ static void WriteIcebergMetadata(ClientContext &context, CopyIcebergBindData &bi
 		snapshot.manifest_list = manifest_list_path;
 		snapshot.timestamp_ms = last_updated_ms;
 
-		snapshot.metrics.AddManifestFile(manifest_file.file);
+		snapshot.metrics.AddManifestListEntry(manifest_file);
 
 		if (table_metadata.iceberg_version >= 3) {
 			snapshot.first_row_id = first_row_id;

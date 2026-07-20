@@ -72,15 +72,15 @@ string ContentFile::TryFromJSON(yyjson_val *obj) {
 		return "ContentFile required property 'partition' is missing";
 	} else {
 		if (yyjson_is_arr(partition_val)) {
-			size_t idx, max;
-			yyjson_val *val;
-			yyjson_arr_foreach(partition_val, idx, max, val) {
-				PrimitiveTypeValue tmp;
-				error = tmp.TryFromJSON(val);
+			size_t partition_idx, partition_max;
+			yyjson_val *partition_item_val;
+			yyjson_arr_foreach(partition_val, partition_idx, partition_max, partition_item_val) {
+				PrimitiveTypeValue partition_item;
+				error = partition_item.TryFromJSON(partition_item_val);
 				if (!error.empty()) {
 					return error;
 				}
-				partition.emplace_back(std::move(tmp));
+				partition.emplace_back(std::move(partition_item));
 			}
 		} else {
 			return StringUtil::Format("ContentFile property 'partition' is not of type 'array', found '%s' instead",
@@ -159,19 +159,21 @@ string ContentFile::TryFromJSON(yyjson_val *obj) {
 	if (split_offsets_val) {
 		vector<int64_t> split_offsets_tmp;
 		if (yyjson_is_arr(split_offsets_val)) {
-			size_t idx, max;
-			yyjson_val *val;
-			yyjson_arr_foreach(split_offsets_val, idx, max, val) {
-				int64_t tmp;
-				if (yyjson_is_sint(val)) {
-					tmp = yyjson_get_sint(val);
-				} else if (yyjson_is_uint(val)) {
-					tmp = yyjson_get_uint(val);
+			size_t split_offsets_tmp_idx, split_offsets_tmp_max;
+			yyjson_val *split_offsets_tmp_item_val;
+			yyjson_arr_foreach(split_offsets_val, split_offsets_tmp_idx, split_offsets_tmp_max,
+			                   split_offsets_tmp_item_val) {
+				int64_t split_offsets_tmp_item;
+				if (yyjson_is_sint(split_offsets_tmp_item_val)) {
+					split_offsets_tmp_item = yyjson_get_sint(split_offsets_tmp_item_val);
+				} else if (yyjson_is_uint(split_offsets_tmp_item_val)) {
+					split_offsets_tmp_item = yyjson_get_uint(split_offsets_tmp_item_val);
 				} else {
-					return StringUtil::Format("ContentFile property 'tmp' is not of type 'integer', found '%s' instead",
-					                          yyjson_get_type_desc(val));
+					return StringUtil::Format(
+					    "ContentFile property 'split_offsets_tmp_item' is not of type 'integer', found '%s' instead",
+					    yyjson_get_type_desc(split_offsets_tmp_item_val));
 				}
-				split_offsets_tmp.emplace_back(std::move(tmp));
+				split_offsets_tmp.emplace_back(std::move(split_offsets_tmp_item));
 			}
 		} else {
 			return StringUtil::Format(

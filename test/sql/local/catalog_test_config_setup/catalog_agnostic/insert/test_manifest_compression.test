@@ -21,10 +21,16 @@ statement ok
 drop table if exists my_datalake.default.compress_default;
 
 statement ok
-create table my_datalake.default.compress_default (id INTEGER, data VARCHAR);
+create table my_datalake.default.compress_default (
+	id INTEGER,
+	data VARCHAR
+);
 
 statement ok
-insert into my_datalake.default.compress_default select i, 'row_' || (i % 8)::VARCHAR from range(500) t(i);
+insert into my_datalake.default.compress_default select
+	i,
+	'row_' || (i % 8)::VARCHAR
+from range(500) t(i);
 
 query II
 select count(*), sum(id) from my_datalake.default.compress_default;
@@ -33,12 +39,19 @@ select count(*), sum(id) from my_datalake.default.compress_default;
 
 # More inserts (more manifests) still read back correctly under the default compressing codec.
 statement ok
-insert into my_datalake.default.compress_default select i, 'x' from range(500, 1000) t(i);
+insert into my_datalake.default.compress_default select
+	i,
+	'x'
+from range(500, 1000) t(i);
 
 query II
 select count(*), sum(id) from my_datalake.default.compress_default;
 ----
 1000	499500
+
+# Start transaction to keep necessary credentials in scope
+statement ok
+begin
 
 # Prove the manifest is actually deflate-compressed AND valid:
 #  - the Avro object-container header records avro.codec -> deflate (in the first bytes; the
@@ -62,6 +75,9 @@ SELECT count(*) > 0 FROM read_avro(getvariable('manifest_default'));
 true
 
 statement ok
+commit
+
+statement ok
 drop table my_datalake.default.compress_default;
 
 # --- Explicit deflate -------------------------------------------------------------------------
@@ -69,10 +85,18 @@ statement ok
 drop table if exists my_datalake.default.compress_deflate;
 
 statement ok
-create table my_datalake.default.compress_deflate (id INTEGER, data VARCHAR) WITH ('write.manifest.compression-codec' = 'deflate');
+create table my_datalake.default.compress_deflate (
+	id INTEGER,
+	data VARCHAR
+) WITH (
+	'write.manifest.compression-codec' = 'deflate'
+);
 
 statement ok
-insert into my_datalake.default.compress_deflate select i, 'v' from range(300) t(i);
+insert into my_datalake.default.compress_deflate select
+	i,
+	'v'
+from range(300) t(i);
 
 query I
 select count(*) from my_datalake.default.compress_deflate;
@@ -87,15 +111,27 @@ statement ok
 drop table if exists my_datalake.default.compress_none;
 
 statement ok
-create table my_datalake.default.compress_none (id INTEGER, data VARCHAR) WITH ('write.manifest.compression-codec' = 'none');
+create table my_datalake.default.compress_none (
+	id INTEGER,
+	data VARCHAR
+) WITH (
+	'write.manifest.compression-codec' = 'none'
+);
 
 statement ok
-insert into my_datalake.default.compress_none select i, 'v' from range(300) t(i);
+insert into my_datalake.default.compress_none select
+	i,
+	'v'
+from range(300) t(i);
 
 query I
 select count(*) from my_datalake.default.compress_none;
 ----
 300
+
+# Start transaction to keep necessary credentials in scope
+statement ok
+begin
 
 # With 'none', the manifest is written uncompressed: the Avro header records avro.codec -> null and
 # there is no 'deflate' marker.
@@ -112,6 +148,9 @@ FROM read_blob(getvariable('manifest_none'));
 true	true
 
 statement ok
+commit
+
+statement ok
 drop table my_datalake.default.compress_none;
 
 # --- gzip alias resolves to the deflate Avro codec --------------------------------------------
@@ -119,10 +158,16 @@ statement ok
 drop table if exists my_datalake.default.compress_gzip;
 
 statement ok
-create table my_datalake.default.compress_gzip (id INTEGER) WITH ('write.manifest.compression-codec' = 'gzip');
+create table my_datalake.default.compress_gzip (
+	id INTEGER
+) WITH (
+	'write.manifest.compression-codec' = 'gzip'
+);
 
 statement ok
-insert into my_datalake.default.compress_gzip select i from range(300) t(i);
+insert into my_datalake.default.compress_gzip select
+	i
+from range(300) t(i);
 
 query I
 select count(*) from my_datalake.default.compress_gzip;
@@ -137,10 +182,16 @@ statement ok
 drop table if exists my_datalake.default.compress_bad;
 
 statement ok
-create table my_datalake.default.compress_bad (id INTEGER) WITH ('write.manifest.compression-codec' = 'bogus');
+create table my_datalake.default.compress_bad (
+	id INTEGER
+) WITH (
+	'write.manifest.compression-codec' = 'bogus'
+);
 
 statement error
-insert into my_datalake.default.compress_bad select i from range(10) t(i);
+insert into my_datalake.default.compress_bad select
+	i
+from range(10) t(i);
 ----
 Unsupported value 'bogus' for 'write.manifest.compression-codec'
 
@@ -155,10 +206,22 @@ statement ok
 drop table if exists my_datalake.default.compress_bounds;
 
 statement ok
-create table my_datalake.default.compress_bounds (id INTEGER, val INTEGER) WITH ('write.manifest.compression-codec' = 'deflate');
+create table my_datalake.default.compress_bounds (
+	id INTEGER,
+	val INTEGER
+) WITH (
+	'write.manifest.compression-codec' = 'deflate'
+);
 
 statement ok
-insert into my_datalake.default.compress_bounds select i, i * 10 from range(200) t(i);
+insert into my_datalake.default.compress_bounds select
+	i,
+	i * 10
+from range(200) t(i);
+
+# Start transaction to keep necessary credentials in scope
+statement ok
+begin
 
 statement ok
 SET VARIABLE manifest_bounds = (
@@ -183,3 +246,6 @@ SELECT record_count FROM (SELECT unnest(data_file) FROM read_avro(getvariable('m
 
 statement ok
 drop table my_datalake.default.compress_bounds;
+
+statement ok
+commit

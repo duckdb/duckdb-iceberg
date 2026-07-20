@@ -68,11 +68,15 @@ public:
 	IcebergManifestFileScanInfo(const IcebergTableMetadata &metadata, const IcebergSnapshotScanInfo &snapshot_info,
 	                            vector<IcebergManifestListEntry> &manifest_files, const IcebergOptions &options,
 	                            FileSystem &fs, const string &iceberg_pat,
-	                            optional_ptr<ManifestEntryReadState> read_state);
+	                            optional_ptr<ManifestEntryReadState> read_state, vector<idx_t> manifest_indexes);
 	virtual ~IcebergManifestFileScanInfo();
+
+	idx_t GetManifestIndex(idx_t scan_index) const;
 
 public:
 	vector<IcebergManifestListEntry> &manifest_files;
+	//! Maps the compact multi-file scan index to the owning manifest-list entry.
+	vector<idx_t> manifest_indexes;
 	const IcebergOptions &options;
 	FileSystem &fs;
 	string iceberg_path;

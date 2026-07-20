@@ -46,22 +46,25 @@ string StructType::TryFromJSON(yyjson_val *obj) {
 			return StringUtil::Format("StructType property 'type' is not of type 'string', found '%s' instead",
 			                          yyjson_get_type_desc(type_val));
 		}
+		if (!yyjson_is_null(type_val) && type != "struct") {
+			return "StructType property 'type' does not match its required const value";
+		}
 	}
 	auto fields_val = yyjson_obj_get(obj, "fields");
 	if (!fields_val) {
 		return "StructType required property 'fields' is missing";
 	} else {
 		if (yyjson_is_arr(fields_val)) {
-			size_t idx, max;
-			yyjson_val *val;
-			yyjson_arr_foreach(fields_val, idx, max, val) {
-				auto tmp_p = make_uniq<StructField>();
-				auto &tmp = *tmp_p;
-				error = tmp.TryFromJSON(val);
+			size_t fields_idx, fields_max;
+			yyjson_val *fields_item_val;
+			yyjson_arr_foreach(fields_val, fields_idx, fields_max, fields_item_val) {
+				auto fields_item_p = make_uniq<StructField>();
+				auto &fields_item = *fields_item_p;
+				error = fields_item.TryFromJSON(fields_item_val);
 				if (!error.empty()) {
 					return error;
 				}
-				fields.emplace_back(std::move(tmp_p));
+				fields.emplace_back(std::move(fields_item_p));
 			}
 		} else {
 			return StringUtil::Format("StructType property 'fields' is not of type 'array', found '%s' instead",

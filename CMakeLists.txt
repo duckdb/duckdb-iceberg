@@ -103,6 +103,7 @@ set(EXTENSION_SOURCES
 	src/iceberg_extension.cpp
 	src/iceberg_logging.cpp
 	src/iceberg_options.cpp
+	src/iceberg_attach.cpp
 	src/maintenance/maintenance_table_loader.cpp
 	src/maintenance/rewrite_data_files_executor.cpp
 	src/maintenance/rewrite_data_files_operator.cpp

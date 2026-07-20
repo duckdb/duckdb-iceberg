@@ -40,7 +40,11 @@ public:
 	bool HasFilters() const {
 		return !table_filters.empty();
 	}
+	idx_t FilterCount() const {
+		return table_filters.size();
+	}
 	void PushFilter(column_t column_idx, unique_ptr<ExpressionFilter> table_filter) {
+		D_ASSERT(table_filters.find(column_idx) == table_filters.end());
 		table_filters[column_idx] = std::move(table_filter);
 	}
 	optional_ptr<const ExpressionFilter> TryGetFilterByColumnIndex(column_t column_idx) const {
@@ -107,7 +111,8 @@ private:
 	mutable mutex delete_lock;
 	mutable ManifestEntryReadState read_state;
 
-	mutable bool initialized = false;
+	mutable bool manifest_list_loaded = false;
+	mutable bool data_manifest_scan_started = false;
 
 	//! Scanned delete manifests and their owners.
 	mutable vector<IcebergManifestListEntry> committed_delete_manifests;
@@ -122,7 +127,6 @@ private:
 	mutable vector<IcebergManifestListEntry> committed_data_manifests;
 	mutable vector<reference<const IcebergManifestListEntry>> transaction_data_manifests;
 	mutable unique_ptr<IcebergManifestScanningState> data_manifest_read_state;
-	mutable unique_ptr<manifest_file::ManifestReader> data_manifest_reader;
 
 	//! Declared after the manifest owners so references in parsed delete data are destroyed first.
 	mutable case_insensitive_map_t<shared_ptr<IcebergDeleteData>> positional_delete_data;
@@ -200,8 +204,7 @@ protected:
 	                                const IcebergTableMetadata &metadata, const IcebergTableSchema &schema) const;
 	bool FileMatchesFilter(const IcebergManifestFile &manifest_file, const IcebergManifestEntry &manifest_entry,
 	                       IcebergManifestContentType file_type) const;
-	// TODO: How to guarantee we only call this after the filter pushdown?
-	void InitializeFiles(lock_guard<mutex> &guard) const;
+	void InitializeView(lock_guard<mutex> &guard) const;
 
 	//! Reorder (and prune, when a LIMIT is present) the materialized data files by the
 	//! ORDER BY column's per-file min/max bounds, mirroring the native RowGroupReorderer.
@@ -217,7 +220,9 @@ private:
 	IcebergMultiFileList(shared_ptr<IcebergMultiFileListSharedState> shared_state);
 	bool TryGetNextBatch(lock_guard<mutex> &guard) const;
 	void FinishScanTasks(lock_guard<mutex> &guard) const;
-	void InitializeSharedState(lock_guard<mutex> &guard) const;
+	void LoadManifestList(lock_guard<mutex> &guard) const;
+	void StartDeleteManifestScan() const;
+	void StartDataManifestScan(lock_guard<mutex> &guard) const;
 	bool FinishedScanningDeletes() const;
 	void EnumerateDeleteManifestEntriesInternal() const;
 	void ProcessDeletesInternal(const vector<MultiFileColumnDefinition> &global_columns,

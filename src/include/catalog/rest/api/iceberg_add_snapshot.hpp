@@ -26,7 +26,7 @@ public:
 public:
 	bool IsRetryable() const override;
 	void ConstructManifestList(IcebergManifestList &manifest_list, CopyFunction &avro_copy, DatabaseInstance &db,
-	                           IcebergCommitState &commit_state) const;
+	                           IcebergCommitState &commit_state, IcebergSnapshotMetrics &snapshot_metrics) const;
 	void CreateUpdate(DatabaseInstance &db, ClientContext &context, IcebergCommitState &commit_state) const override;
 	const vector<IcebergManifestListEntry> &GetManifestFiles() const;
 	void AddManifestFile(IcebergManifestListEntry &&manifest_file);

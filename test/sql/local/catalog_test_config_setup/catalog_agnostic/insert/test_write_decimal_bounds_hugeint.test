@@ -66,6 +66,10 @@ insert into my_datalake.default.duckdb_written_upper_lower_hugeint_bounds values
 (18, '-99999999999999999999999999999999999999'::HUGEINT),
 (19, NULL);
 
+# Start transaction to keep necessary credentials in scope
+statement ok
+begin
+
 statement ok
 set variable manifest_path_duckdb = (select manifest_path from iceberg_metadata(my_datalake.default.duckdb_written_upper_lower_hugeint_bounds) order by manifest_sequence_number desc limit 1);
 
@@ -84,3 +88,6 @@ select unnest(map_keys(null_value_counts)), unnest(map_values(null_value_counts)
 
 query II nosort duckdb_hugeint_null_counts
 select unnest(map_keys(null_value_counts)), unnest(map_values(null_value_counts)) from (select unnest(data_file) from read_avro(getvariable('manifest_path_spark'))) order by all;
+
+statement ok
+commit

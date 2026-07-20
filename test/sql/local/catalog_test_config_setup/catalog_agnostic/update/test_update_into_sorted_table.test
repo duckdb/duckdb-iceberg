@@ -83,6 +83,10 @@ and status = 'ADDED';
 ----
 1
 
+# Start transaction to keep necessary credentials in scope
+statement ok
+begin
+
 statement ok
 set variable file_path = (
 	select file_path
@@ -133,3 +137,6 @@ where sort_order_id is not null;
 
 statement ok
 drop table my_datalake.default.sorted_update_write_test;
+
+statement ok
+commit

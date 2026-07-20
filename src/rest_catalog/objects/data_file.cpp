@@ -64,6 +64,22 @@ string DataFile::TryFromJSON(yyjson_val *obj) {
 	if (!error.empty()) {
 		return error;
 	}
+	auto content_refinement_val = yyjson_obj_get(obj, "content");
+	if (content_refinement_val) {
+		string content_refinement;
+		if (yyjson_is_str(content_refinement_val)) {
+			content_refinement = yyjson_get_str(content_refinement_val);
+		} else {
+			return StringUtil::Format(
+			    "DataFile property 'content_refinement' is not of type 'string', found '%s' instead",
+			    yyjson_get_type_desc(content_refinement_val));
+		}
+		if (!yyjson_is_null(content_refinement_val) && content_refinement != "data") {
+			return "DataFile property 'content_refinement' does not match its required const value";
+		}
+	} else {
+		return "DataFile required property 'content' is missing";
+	}
 	auto first_row_id_val = yyjson_obj_get(obj, "first-row-id");
 	if (first_row_id_val) {
 		int64_t first_row_id_tmp;

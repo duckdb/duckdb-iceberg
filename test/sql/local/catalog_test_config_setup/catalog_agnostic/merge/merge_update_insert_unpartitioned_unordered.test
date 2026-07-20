@@ -63,6 +63,10 @@ select * from my_datalake.default.merge_update_insert_unpartitioned_unordered or
 4	2	1	40
 5	1	1	10
 
+# Start transaction to keep necessary credentials in scope
+statement ok
+begin
+
 statement ok
 set variable latest_manifest_sequence = (
 	select max(manifest_sequence_number)
@@ -95,3 +99,6 @@ and sort_order_id is not null;
 
 statement ok
 drop table my_datalake.default.merge_update_insert_unpartitioned_unordered;
+
+statement ok
+commit

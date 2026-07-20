@@ -131,8 +131,6 @@ public:
 	string GetWarehouse() const {
 		return warehouse;
 	}
-	static void SetAWSCatalogOptions(IcebergAttachOptions &attach_options,
-	                                 case_insensitive_set_t &set_by_attach_options);
 	//! Whether or not this catalog should search a specific type with the standard priority
 	CatalogLookupBehavior CatalogTypeLookupRule(CatalogType type) const override {
 		switch (type) {
@@ -151,11 +149,6 @@ public:
 		return default_schema;
 	}
 	ErrorData SupportsCreateTable(BoundCreateTableInfo &info) override;
-
-public:
-	static unique_ptr<Catalog> Attach(optional_ptr<StorageExtensionInfo> storage_info, ClientContext &context,
-	                                  AttachedDatabase &db, const string &name, AttachInfo &info,
-	                                  AttachOptions &options);
 
 public:
 	void Initialize(bool load_builtin) override;
@@ -192,6 +185,7 @@ public:
 	string GetDBPath() override;
 	//! Allow ATTACH OR REPLACE to actually re-attach when iceberg-specific options change
 	bool HasConflictingAttachOptions(const string &path, const AttachOptions &options) override;
+	void SetAttachOptions(const unordered_map<string, Value> &options);
 	static string GetOnlyMergeOnReadSupportedErrorMessage(const string &table_name, const string &property,
 	                                                      const string &property_value);
 
@@ -216,7 +210,7 @@ private:
 	case_insensitive_map_t<string> defaults;
 	case_insensitive_map_t<string> overrides;
 	//! raw attach options (after core stripping) used to detect a conflicting ATTACH OR REPLACE
-	case_insensitive_map_t<Value> raw_attach_options;
+	unordered_map<string, Value> raw_attach_options;
 
 public:
 	unordered_set<string> supported_urls;

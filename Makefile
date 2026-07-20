@@ -1,4 +1,4 @@
-.PHONY: fixture lakekeeper polaris nessie
+.PHONY: fixture fixture-latest gravitino lakekeeper polaris nessie
 
 PROJ_DIR := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
 
@@ -14,25 +14,10 @@ include extension-ci-tools/makefiles/duckdb_extension.Makefile
 
 include make/util.mk
 include make/catalogs/fixture.mk
+include make/catalogs/gravitino.mk
 include make/catalogs/lakekeeper.mk
 include make/catalogs/nessie.mk
 include make/catalogs/polaris.mk
 
 install_requirements:
 	python3 -m pip install -r scripts/requirements.txt
-
-# Custom makefile targets
-data: data_clean fixture_start
-	python3 -m pytest scripts/data_generators/test_generate_data.py
-	$(call set_active_catalog,local)
-	python3 -m pytest scripts/data_generators/test_generate_data.py
-	$(call set_active_catalog,fixture)
-
-data_large: data data_clean
-	python3 -m pytest scripts/data_generators/test_generate_data.py
-	$(call set_active_catalog,local)
-	python3 -m pytest scripts/data_generators/test_generate_data.py
-	$(call set_active_catalog,fixture)
-
-data_clean:
-	rm -rf data/generated

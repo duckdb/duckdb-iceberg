@@ -1,0 +1,193 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/insert/test_snapshot_summary_file_size_metrics.test
+# description: Verify snapshot file-size metrics against the sizes stored in data and delete manifests
+# group: [insert]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+require json
+
+statement ok
+drop table if exists my_datalake.default.snapshot_file_size_metrics;
+
+statement ok
+create table my_datalake.default.snapshot_file_size_metrics (id INTEGER, payload VARCHAR);
+
+# Initial append: added-files-size and total-files-size both equal the added data file size.
+statement ok
+insert into my_datalake.default.snapshot_file_size_metrics values (1, 'a'), (2, 'b');
+
+statement ok
+set variable latest_snapshot_id = (
+	select snapshot_id::BIGINT
+	from iceberg_snapshots(my_datalake.default.snapshot_file_size_metrics)
+	order by sequence_number desc limit 1
+);
+
+statement ok
+set variable latest_manifest_list = (
+	select manifest_list
+	from iceberg_snapshots(my_datalake.default.snapshot_file_size_metrics)
+	order by sequence_number desc limit 1
+);
+
+statement ok
+set variable latest_manifest = (
+	select manifest_path
+	from read_avro(getvariable('latest_manifest_list'))
+	where added_snapshot_id = getvariable('latest_snapshot_id')
+	limit 1
+);
+
+statement ok
+set variable added_file_size = (
+	select sum(file_size_in_bytes)::BIGINT
+	from (select status, unnest(data_file) from read_avro(getvariable('latest_manifest')))
+	where status = 1
+);
+
+statement ok
+set variable latest_summary = (
+	select snap
+	from (
+		select unnest(json_extract(metadata::JSON, '$.snapshots[*]')) as snap
+		from iceberg_load_table_response(my_datalake.default.snapshot_file_size_metrics)
+	)
+	where json_extract_string(snap, '$."snapshot-id"')::BIGINT = getvariable('latest_snapshot_id')
+);
+
+query III
+select
+	json_extract_string(getvariable('latest_summary'), '$.summary."added-files-size"')::BIGINT =
+		getvariable('added_file_size'),
+	json_extract_string(getvariable('latest_summary'), '$.summary."total-files-size"')::BIGINT =
+		getvariable('added_file_size'),
+	json_extract_string(getvariable('latest_summary'), '$.summary."removed-files-size"') is null
+----
+true	true	true
+
+# A second append carries the parent total forward and adds only the new data file size.
+statement ok
+set variable parent_total_file_size = json_extract_string(
+	getvariable('latest_summary'), '$.summary."total-files-size"'
+)::BIGINT;
+
+statement ok
+insert into my_datalake.default.snapshot_file_size_metrics values (3, 'c'), (4, 'd');
+
+statement ok
+set variable latest_snapshot_id = (
+	select snapshot_id::BIGINT
+	from iceberg_snapshots(my_datalake.default.snapshot_file_size_metrics)
+	order by sequence_number desc limit 1
+);
+
+statement ok
+set variable latest_manifest_list = (
+	select manifest_list
+	from iceberg_snapshots(my_datalake.default.snapshot_file_size_metrics)
+	order by sequence_number desc limit 1
+);
+
+statement ok
+set variable latest_manifest = (
+	select manifest_path
+	from read_avro(getvariable('latest_manifest_list'))
+	where added_snapshot_id = getvariable('latest_snapshot_id')
+	limit 1
+);
+
+statement ok
+set variable added_file_size = (
+	select sum(file_size_in_bytes)::BIGINT
+	from (select status, unnest(data_file) from read_avro(getvariable('latest_manifest')))
+	where status = 1
+);
+
+statement ok
+set variable latest_summary = (
+	select snap
+	from (
+		select unnest(json_extract(metadata::JSON, '$.snapshots[*]')) as snap
+		from iceberg_load_table_response(my_datalake.default.snapshot_file_size_metrics)
+	)
+	where json_extract_string(snap, '$."snapshot-id"')::BIGINT = getvariable('latest_snapshot_id')
+);
+
+query III
+select
+	json_extract_string(getvariable('latest_summary'), '$.summary."added-files-size"')::BIGINT =
+		getvariable('added_file_size'),
+	json_extract_string(getvariable('latest_summary'), '$.summary."total-files-size"')::BIGINT =
+		getvariable('parent_total_file_size') + getvariable('added_file_size'),
+	json_extract_string(getvariable('latest_summary'), '$.summary."removed-files-size"') is null
+----
+true	true	true
+
+# A V2 positional delete adds a delete file but does not remove its referenced data file.
+statement ok
+set variable parent_total_file_size = json_extract_string(
+	getvariable('latest_summary'), '$.summary."total-files-size"'
+)::BIGINT;
+
+statement ok
+delete from my_datalake.default.snapshot_file_size_metrics where id = 2;
+
+statement ok
+set variable latest_snapshot_id = (
+	select snapshot_id::BIGINT
+	from iceberg_snapshots(my_datalake.default.snapshot_file_size_metrics)
+	order by sequence_number desc limit 1
+);
+
+statement ok
+set variable latest_manifest_list = (
+	select manifest_list
+	from iceberg_snapshots(my_datalake.default.snapshot_file_size_metrics)
+	order by sequence_number desc limit 1
+);
+
+statement ok
+set variable latest_manifest = (
+	select manifest_path
+	from read_avro(getvariable('latest_manifest_list'))
+	where added_snapshot_id = getvariable('latest_snapshot_id') and content = 1
+	limit 1
+);
+
+statement ok
+set variable added_file_size = (
+	select sum(file_size_in_bytes)::BIGINT
+	from (select status, unnest(data_file) from read_avro(getvariable('latest_manifest')))
+	where status = 1
+);
+
+statement ok
+set variable latest_summary = (
+	select snap
+	from (
+		select unnest(json_extract(metadata::JSON, '$.snapshots[*]')) as snap
+		from iceberg_load_table_response(my_datalake.default.snapshot_file_size_metrics)
+	)
+	where json_extract_string(snap, '$."snapshot-id"')::BIGINT = getvariable('latest_snapshot_id')
+);
+
+query III
+select
+	json_extract_string(getvariable('latest_summary'), '$.summary."added-files-size"')::BIGINT =
+		getvariable('added_file_size'),
+	json_extract_string(getvariable('latest_summary'), '$.summary."total-files-size"')::BIGINT =
+		getvariable('parent_total_file_size') + getvariable('added_file_size'),
+	json_extract_string(getvariable('latest_summary'), '$.summary."removed-files-size"') is null
+----
+true	true	true
+
+statement ok
+drop table my_datalake.default.snapshot_file_size_metrics;

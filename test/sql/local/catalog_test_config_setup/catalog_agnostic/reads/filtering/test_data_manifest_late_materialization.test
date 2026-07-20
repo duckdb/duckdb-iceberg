@@ -1,0 +1,184 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/reads/filtering/test_data_manifest_late_materialization.test
+# description: Data manifests are scanned only after filters are pushed into the Iceberg file list
+# group: [filtering]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+set ignore_error_messages
+
+statement ok
+set threads=1;
+
+statement ok
+set enable_external_file_cache=false;
+
+statement ok
+drop table if exists my_datalake.default.data_manifest_late_materialization;
+
+statement ok
+create table my_datalake.default.data_manifest_late_materialization (
+	part integer,
+	payload integer
+) partitioned by (part) with (
+	'commit.manifest-merge.enabled' = 'false'
+);
+
+statement ok
+insert into my_datalake.default.data_manifest_late_materialization select 1, range from range(10, 14);
+
+statement ok
+insert into my_datalake.default.data_manifest_late_materialization select 2, range from range(20, 24);
+
+statement ok
+insert into my_datalake.default.data_manifest_late_materialization select 3, range from range(30, 34);
+
+query IIIIIII
+select
+	count(*),
+	count(distinct manifest_path),
+	count(distinct manifest_sequence_number),
+	count(distinct file_path),
+	min(record_count),
+	max(record_count),
+	sum(record_count)
+from iceberg_metadata(my_datalake.default.data_manifest_late_materialization)
+where manifest_content = 'DATA' and content = 'DATA' and status <> 'DELETED';
+----
+3	3	3	3	4	4	12
+
+query I
+select count(*)
+from (
+	select manifest_path
+	from iceberg_metadata(my_datalake.default.data_manifest_late_materialization)
+	where manifest_content = 'DATA' and content = 'DATA' and status <> 'DELETED'
+	group by manifest_path
+	having count(*) <> 1 or min(record_count) <> 4 or max(record_count) <> 4
+);
+----
+0
+
+statement ok
+call enable_logging(['Iceberg', 'HTTP'], storage='memory');
+
+statement ok
+set logging_level='debug';
+
+# Planning reads the manifest list for delete discovery and cardinality, but not data manifests.
+statement ok
+call truncate_duckdb_logs();
+
+statement ok
+explain select sum(payload) from my_datalake.default.data_manifest_late_materialization where part = 2;
+
+query I
+select count(*) from duckdb_logs()
+where type = 'Iceberg' and message.contains('phase=data_manifest_scan_started');
+----
+0
+
+# Execution starts a scan containing only the matching data manifest.
+statement ok
+call truncate_duckdb_logs();
+
+query I
+select sum(payload) from my_datalake.default.data_manifest_late_materialization where part = 2;
+----
+86
+
+query I
+select count(*) from duckdb_logs()
+where type = 'Iceberg'
+  and message.contains('phase=data_manifest_scan_started selected_data_manifests=1 total_data_manifests=3 filters=1');
+----
+1
+
+query I
+select count(distinct request.url) from duckdb_logs_parsed('HTTP') where request.url like '%.avro';
+----
+2
+
+# A runtime filter on the same column contains the existing static predicate. The filtered
+# list must copy that complete effective filter instead of adding it to the static predicate.
+statement ok
+call truncate_duckdb_logs();
+
+statement ok
+set disabled_optimizers='join_order,build_side_probe_side';
+
+query I
+select sum(data.payload)
+from my_datalake.default.data_manifest_late_materialization data
+join (values (1), (2)) runtime_parts(part) using (part)
+where data.part >= 2;
+----
+86
+
+query I
+select count(*) from duckdb_logs()
+where type = 'Iceberg'
+  and message.contains('phase=data_manifest_scan_started selected_data_manifests=1 total_data_manifests=3 filters=1');
+----
+1
+
+statement ok
+set disabled_optimizers='';
+
+# An impossible partition predicate does not open any data manifest.
+statement ok
+call truncate_duckdb_logs();
+
+query I
+select count(*) from my_datalake.default.data_manifest_late_materialization where part = 99;
+----
+0
+
+query I
+select count(*) from duckdb_logs()
+where type = 'Iceberg'
+  and message.contains('phase=data_manifest_scan_started selected_data_manifests=0 total_data_manifests=3 filters=1');
+----
+1
+
+query I
+select count(distinct request.url) from duckdb_logs_parsed('HTTP') where request.url like '%.avro';
+----
+1
+
+# Without filter pushdown, execution falls back to scanning every manifest and the logical filter remains correct.
+statement ok
+set disabled_optimizers='filter_pushdown';
+
+statement ok
+call truncate_duckdb_logs();
+
+query I
+select sum(payload) from my_datalake.default.data_manifest_late_materialization where part = 2;
+----
+86
+
+query I
+select count(*) from duckdb_logs()
+where type = 'Iceberg'
+  and message.contains('phase=data_manifest_scan_started selected_data_manifests=3 total_data_manifests=3 filters=0');
+----
+1
+
+query I
+select count(distinct request.url) from duckdb_logs_parsed('HTTP') where request.url like '%.avro';
+----
+4
+
+statement ok
+set disabled_optimizers='';
+
+statement ok
+drop table my_datalake.default.data_manifest_late_materialization;

@@ -37,6 +37,22 @@ string AddSnapshotUpdate::TryFromJSON(yyjson_val *obj) {
 	if (!error.empty()) {
 		return error;
 	}
+	auto action_refinement_val = yyjson_obj_get(obj, "action");
+	if (action_refinement_val) {
+		string action_refinement;
+		if (yyjson_is_str(action_refinement_val)) {
+			action_refinement = yyjson_get_str(action_refinement_val);
+		} else {
+			return StringUtil::Format(
+			    "AddSnapshotUpdate property 'action_refinement' is not of type 'string', found '%s' instead",
+			    yyjson_get_type_desc(action_refinement_val));
+		}
+		if (!yyjson_is_null(action_refinement_val) && action_refinement != "add-snapshot") {
+			return "AddSnapshotUpdate property 'action_refinement' does not match its required const value";
+		}
+	} else {
+		return "AddSnapshotUpdate required property 'action' is missing";
+	}
 	auto snapshot_val = yyjson_obj_get(obj, "snapshot");
 	if (!snapshot_val) {
 		return "AddSnapshotUpdate required property 'snapshot' is missing";

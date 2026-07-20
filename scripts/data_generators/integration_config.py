@@ -16,8 +16,8 @@ TEST_CONFIG_DIR = REPO_ROOT / "test" / "configs"
 DATA_GENERATORS_DIR = REPO_ROOT / "scripts" / "data_generators"
 ACTIVE_CATALOG_FILE = REPO_ROOT / ".catalogs" / ".active_catalog"
 
-REST_CATALOG_NAMES = ("fixture", "lakekeeper", "polaris", "nessie")
-GENERATOR_CATALOG_NAMES = ("fixture", "lakekeeper", "local", "polaris", "nessie")
+REST_CATALOG_NAMES = ("fixture", "fixture-latest", "gravitino", "lakekeeper", "polaris", "nessie")
+GENERATOR_CATALOG_NAMES = ("fixture", "fixture-latest", "gravitino", "lakekeeper", "local", "polaris", "nessie")
 
 
 @dataclass(frozen=True)
@@ -67,10 +67,10 @@ class CatalogProfile:
     connection_key: str
     unittest_config: Path
     pyiceberg_uri: str
-    pyiceberg_warehouse: str
-    pyiceberg_oauth_token_url: str
-    pyiceberg_oauth_payload: dict[str, str]
-    pyiceberg_options: dict[str, str]
+    pyiceberg_warehouse: str | None
+    pyiceberg_options: dict[str, object]
+    pyiceberg_oauth_token_url: str | None = None
+    pyiceberg_oauth_payload: dict[str, str] | None = None
     supports_v3_tables: bool = True
     supports_row_lineage: bool = True
 
@@ -78,19 +78,24 @@ class CatalogProfile:
     def duckdb_catalog_init_sql(self) -> str:
         return load_test_config(self.unittest_config)["on_init"]
 
-    def build_pyiceberg_config(self) -> dict[str, str]:
-        credential = self.pyiceberg_oauth_payload["client_secret"]
-        if client_id := self.pyiceberg_oauth_payload.get("client_id"):
-            credential = f"{client_id}:{credential}"
-
-        return {
+    def build_pyiceberg_config(self) -> dict[str, object]:
+        config: dict[str, object] = {
             "uri": self.pyiceberg_uri,
-            "warehouse": self.pyiceberg_warehouse,
-            "credential": credential,
-            "oauth2-server-uri": self.pyiceberg_oauth_token_url,
-            "scope": self.pyiceberg_oauth_payload.get("scope", "catalog"),
             **self.pyiceberg_options,
         }
+        if self.pyiceberg_warehouse:
+            config["warehouse"] = self.pyiceberg_warehouse
+
+        if self.pyiceberg_oauth_payload is not None:
+            credential = self.pyiceberg_oauth_payload["client_secret"]
+            if client_id := self.pyiceberg_oauth_payload.get("client_id"):
+                credential = f"{client_id}:{credential}"
+            config["credential"] = credential
+            config["scope"] = self.pyiceberg_oauth_payload.get("scope", "catalog")
+            if self.pyiceberg_oauth_token_url:
+                config["oauth2-server-uri"] = self.pyiceberg_oauth_token_url
+
+        return config
 
     @property
     def capabilities(self) -> frozenset[str]:
@@ -117,8 +122,14 @@ SPARK_RUNTIMES = {
         iceberg_library_version="1.10.0",
         supports_v3=True,
     ),
+    "4.1": SparkRuntime(
+        name="4.1",
+        spark_version=Version("4.1"),
+        scala_binary_version="2.13",
+        iceberg_library_version="1.11.0",
+        supports_v3=True,
+    ),
 }
-
 
 REST_CATALOG_PROFILES = {
     "fixture": CatalogProfile(
@@ -140,6 +151,42 @@ REST_CATALOG_PROFILES = {
             "s3.secret-access-key": os.getenv("S3_SECRET", "password"),
             "s3.path-style-access": "true",
             "s3.ssl.enabled": "false",
+        },
+    ),
+    "fixture-latest": CatalogProfile(
+        name="fixture-latest",
+        connection_key="fixture",
+        unittest_config=TEST_CONFIG_DIR / "fixture-latest.json",
+        pyiceberg_uri=os.getenv("ICEBERG_ENDPOINT", "http://127.0.0.1:8181"),
+        pyiceberg_warehouse=os.getenv("WAREHOUSE", ""),
+        pyiceberg_oauth_token_url=f"{os.getenv('ICEBERG_ENDPOINT', 'http://127.0.0.1:8181')}/v1/oauth/tokens",
+        pyiceberg_oauth_payload={
+            "grant_type": "client_credentials",
+            "client_id": os.getenv("ICEBERG_CLIENT_ID", "admin"),
+            "client_secret": os.getenv("ICEBERG_CLIENT_SECRET", "password"),
+            "scope": "PRINCIPAL_ROLE:ALL",
+        },
+        pyiceberg_options={
+            "s3.endpoint": os.getenv("S3_ENDPOINT", "http://127.0.0.1:9000"),
+            "s3.access-key-id": os.getenv("S3_KEY_ID", "admin"),
+            "s3.secret-access-key": os.getenv("S3_SECRET", "password"),
+            "s3.path-style-access": "true",
+            "s3.ssl.enabled": "false",
+        },
+    ),
+    "gravitino": CatalogProfile(
+        name="gravitino",
+        connection_key="gravitino",
+        unittest_config=TEST_CONFIG_DIR / "gravitino.json",
+        pyiceberg_uri=os.getenv("ICEBERG_ENDPOINT", "http://127.0.0.1:9001/iceberg"),
+        pyiceberg_warehouse=None,
+        pyiceberg_options={
+            "auth": {"type": "noop"},
+            "s3.endpoint": os.getenv("S3_ENDPOINT", "http://127.0.0.1:9000"),
+            "s3.access-key-id": os.getenv("S3_KEY_ID", "admin"),
+            "s3.secret-access-key": os.getenv("S3_SECRET", "password"),
+            "s3.region": "us-east-1",
+            "s3.path-style-access": "true",
         },
     ),
     "lakekeeper": CatalogProfile(

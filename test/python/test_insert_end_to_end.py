@@ -188,6 +188,8 @@ class TestInsertEndToEnd:
                         'insert 4'
                     """
                 )
+
+            with test.with_transaction():
                 test.statement_ok(
                     """
                     INSERT INTO my_datalake.default.insert_all_types

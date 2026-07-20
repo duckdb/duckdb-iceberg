@@ -120,6 +120,13 @@ jobs:
         run: |
           make fixture-data TEST=tpch
 
+      - name: Setup metadata late materialization benchmark
+        run: |
+          .venv-spark4/bin/python -m pytest -vv \
+            test/python/benchmark/test_metadata_late_materialization.py \
+            --unittest-binary build/release/test/unittest \
+            --test-python-verbosity verbose
+
       - name: Checkout Base Branch
         run: |
           rm -rf base
@@ -143,3 +150,7 @@ jobs:
       - name: Regression Test TPCH
         run: |
           python duckdb/scripts/regression/test_runner.py --old base/build/release/benchmark/benchmark_runner --new build/release/benchmark/benchmark_runner --benchmarks .github/regression/tpch.csv --root-dir "$GITHUB_WORKSPACE" --verbose --threads 2 --clear-benchmark-cache
+
+      - name: Regression Test Metadata Late Materialization
+        run: |
+          python duckdb/scripts/regression/test_runner.py --old base/build/release/benchmark/benchmark_runner --new build/release/benchmark/benchmark_runner --benchmarks .github/regression/metadata_late_materialization.csv --root-dir "$GITHUB_WORKSPACE" --verbose --threads 2 --clear-benchmark-cache

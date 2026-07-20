@@ -49,15 +49,15 @@ string ValueMap::TryFromJSON(yyjson_val *obj) {
 	if (keys_val) {
 		vector<IntegerTypeValue> keys_tmp;
 		if (yyjson_is_arr(keys_val)) {
-			size_t idx, max;
-			yyjson_val *val;
-			yyjson_arr_foreach(keys_val, idx, max, val) {
-				IntegerTypeValue tmp;
-				error = tmp.TryFromJSON(val);
+			size_t keys_tmp_idx, keys_tmp_max;
+			yyjson_val *keys_tmp_item_val;
+			yyjson_arr_foreach(keys_val, keys_tmp_idx, keys_tmp_max, keys_tmp_item_val) {
+				IntegerTypeValue keys_tmp_item;
+				error = keys_tmp_item.TryFromJSON(keys_tmp_item_val);
 				if (!error.empty()) {
 					return error;
 				}
-				keys_tmp.emplace_back(std::move(tmp));
+				keys_tmp.emplace_back(std::move(keys_tmp_item));
 			}
 		} else {
 			return StringUtil::Format("ValueMap property 'keys_tmp' is not of type 'array', found '%s' instead",
@@ -69,15 +69,15 @@ string ValueMap::TryFromJSON(yyjson_val *obj) {
 	if (values_val) {
 		vector<PrimitiveTypeValue> values_tmp;
 		if (yyjson_is_arr(values_val)) {
-			size_t idx, max;
-			yyjson_val *val;
-			yyjson_arr_foreach(values_val, idx, max, val) {
-				PrimitiveTypeValue tmp;
-				error = tmp.TryFromJSON(val);
+			size_t values_tmp_idx, values_tmp_max;
+			yyjson_val *values_tmp_item_val;
+			yyjson_arr_foreach(values_val, values_tmp_idx, values_tmp_max, values_tmp_item_val) {
+				PrimitiveTypeValue values_tmp_item;
+				error = values_tmp_item.TryFromJSON(values_tmp_item_val);
 				if (!error.empty()) {
 					return error;
 				}
-				values_tmp.emplace_back(std::move(tmp));
+				values_tmp.emplace_back(std::move(values_tmp_item));
 			}
 		} else {
 			return StringUtil::Format("ValueMap property 'values_tmp' is not of type 'array', found '%s' instead",

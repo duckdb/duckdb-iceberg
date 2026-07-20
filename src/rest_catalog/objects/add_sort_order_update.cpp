@@ -37,6 +37,22 @@ string AddSortOrderUpdate::TryFromJSON(yyjson_val *obj) {
 	if (!error.empty()) {
 		return error;
 	}
+	auto action_refinement_val = yyjson_obj_get(obj, "action");
+	if (action_refinement_val) {
+		string action_refinement;
+		if (yyjson_is_str(action_refinement_val)) {
+			action_refinement = yyjson_get_str(action_refinement_val);
+		} else {
+			return StringUtil::Format(
+			    "AddSortOrderUpdate property 'action_refinement' is not of type 'string', found '%s' instead",
+			    yyjson_get_type_desc(action_refinement_val));
+		}
+		if (!yyjson_is_null(action_refinement_val) && action_refinement != "add-sort-order") {
+			return "AddSortOrderUpdate property 'action_refinement' does not match its required const value";
+		}
+	} else {
+		return "AddSortOrderUpdate required property 'action' is missing";
+	}
 	auto sort_order_val = yyjson_obj_get(obj, "sort-order");
 	if (!sort_order_val) {
 		return "AddSortOrderUpdate required property 'sort-order' is missing";
