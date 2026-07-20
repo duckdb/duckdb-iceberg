@@ -41,6 +41,10 @@ select id, title from my_datalake.default.non_ascii_upper_bound_test order by id
 2	Ünïcödé strïng wïth ëxtra bytës
 3	short ascii
 
+# Start transaction to keep necessary credentials in scope
+statement ok
+begin
+
 statement ok
 set variable mp = (select manifest_path from iceberg_metadata(my_datalake.default.non_ascii_upper_bound_test) order by manifest_sequence_number desc limit 1);
 
@@ -73,3 +77,6 @@ select count(*) from (
 ) where k = 2;
 ----
 1
+
+statement ok
+commit

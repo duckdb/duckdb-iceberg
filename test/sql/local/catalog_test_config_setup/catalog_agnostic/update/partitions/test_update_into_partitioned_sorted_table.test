@@ -80,6 +80,10 @@ select count(*) from iceberg_snapshots(my_datalake.default.partitioned_sorted_up
 ----
 2
 
+# Start transaction to keep necessary credentials in scope
+statement ok
+begin
+
 statement ok
 set variable latest_manifest_sequence = (
 	select max(manifest_sequence_number)
@@ -171,3 +175,6 @@ and sort_order_id is not null;
 
 statement ok
 drop table my_datalake.default.partitioned_sorted_update_write_test;
+
+statement ok
+commit

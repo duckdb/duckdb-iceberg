@@ -83,6 +83,10 @@ insert into my_datalake.default.lower_upper_bounds_test values
     NULL
 );
 
+# Start transaction to keep necessary credentials in scope
+statement ok
+begin
+
 statement ok
 set variable manifest_path_duckdb = (select manifest_path from iceberg_metadata(my_datalake.default.lower_upper_bounds_test) order by manifest_sequence_number desc limit 1);
 
@@ -104,9 +108,9 @@ select unnest(map_keys(null_value_counts)), unnest(map_values(null_value_counts)
 query II nosort duckdb_null_value_counts
 select unnest(map_keys(null_value_counts)), unnest(map_values(null_value_counts)) from (select unnest(data_file) from read_avro(getvariable('manifest_path_spark'))) order by all;
 
-# FIXME :
+# FIXME:
 # bool values need to be fixed (field id 4)
 # BLOB/BIT does not match spark because they max out blob upper/lower bounds at 4 bytes.
 
-
-
+statement ok
+commit

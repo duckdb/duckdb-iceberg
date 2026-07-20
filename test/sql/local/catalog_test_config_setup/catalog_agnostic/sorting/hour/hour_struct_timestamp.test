@@ -54,6 +54,10 @@ values
 	(3, {'ts': '2020-02-02 10:15:00'}),
 	(1, {'ts': '2020-02-02 08:00:00'});
 
+# Start transaction to keep necessary credentials in scope
+statement ok
+begin
+
 statement ok
 set variable latest_manifest_sequence = (
 	select max(manifest_sequence_number)
@@ -84,3 +88,6 @@ order by file_row_number;
 
 statement ok
 drop table my_datalake.default.sort_hour_timestamp_struct_field;
+
+statement ok
+commit

@@ -41,6 +41,10 @@ INSERT INTO my_datalake.default.my_table
 SELECT i, i % 10
 FROM range(100_000) t(i);
 
+# Start transaction to keep necessary credentials in scope
+statement ok
+begin
+
 statement ok
 SET VARIABLE parquet_filepath = (
   SELECT file_path
@@ -53,6 +57,9 @@ SELECT count(row_group_bytes)
 FROM parquet_metadata(getvariable('parquet_filepath'));
 ----
 10
+
+statement ok
+commit
 
 # Now test with human-readable format
 statement ok
@@ -78,6 +85,10 @@ INSERT INTO my_datalake.default.my_table
 SELECT i, i % 10
 FROM range(100_000) t(i);
 
+# Start transaction to keep necessary credentials in scope
+statement ok
+begin
+
 statement ok
 SET VARIABLE parquet_filepath = (
   SELECT file_path
@@ -90,3 +101,6 @@ SELECT count(row_group_bytes)
 FROM parquet_metadata(getvariable('parquet_filepath'));
 ----
 10
+
+statement ok
+commit

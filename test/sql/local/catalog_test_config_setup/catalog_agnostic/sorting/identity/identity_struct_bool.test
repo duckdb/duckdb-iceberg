@@ -44,6 +44,10 @@ insert into my_datalake.default.sort_identity_bool_struct_field values
 	(3, {'sort_col': true}),
 	(1, {'sort_col': false});
 
+# Start transaction to keep necessary credentials in scope
+statement ok
+begin
+
 statement ok
 set variable latest_manifest_sequence = (select max(manifest_sequence_number) from iceberg_metadata(my_datalake.default.sort_identity_bool_struct_field));
 
@@ -64,3 +68,6 @@ select id, nested.sort_col from read_parquet(getvariable('file_path'), file_row_
 
 statement ok
 drop table my_datalake.default.sort_identity_bool_struct_field;
+
+statement ok
+commit

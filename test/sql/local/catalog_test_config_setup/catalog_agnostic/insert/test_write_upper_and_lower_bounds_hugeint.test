@@ -48,6 +48,10 @@ select hugeint_type from my_datalake.default.hugeint_bounds_test where hugeint_t
 42
 17014118346046923173168730371588410572
 
+# Start transaction to keep necessary credentials in scope
+statement ok
+begin
+
 statement ok
 set variable manifest_path = (select manifest_path from iceberg_metadata(my_datalake.default.hugeint_bounds_test) order by manifest_sequence_number desc limit 1);
 
@@ -66,6 +70,8 @@ select unnest(map_values(null_value_counts)) from (select unnest(data_file) from
 ----
 1
 
+statement ok
+commit
 
 # filter pushdown works correctly with bounds
 query I
@@ -130,6 +136,10 @@ select hugeint_type from my_datalake.default.hugeint_bounds_single_value limit 1
 ----
 12345678901234567890
 
+# Start transaction to keep necessary credentials in scope
+statement ok
+begin
+
 statement ok
 set variable manifest_path_single = (select manifest_path from iceberg_metadata(my_datalake.default.hugeint_bounds_single_value) order by manifest_sequence_number desc limit 1);
 
@@ -137,6 +147,9 @@ query I
 select unnest(map_values(null_value_counts)) from (select unnest(data_file) from read_avro(getvariable('manifest_path_single')));
 ----
 0
+
+statement ok
+commit
 
 query I
 select count(*) from my_datalake.default.hugeint_bounds_single_value where hugeint_type = 12345678901234567890;
@@ -188,6 +201,10 @@ select val from my_datalake.default.hugeint_edge_small_values order by val;
 128
 255
 
+# Start transaction to keep necessary credentials in scope
+statement ok
+begin
+
 # check also that bounds are written
 statement ok
 set variable manifest_path_small = (select manifest_path from iceberg_metadata(my_datalake.default.hugeint_edge_small_values) order by manifest_sequence_number desc limit 1);
@@ -201,6 +218,9 @@ query I
 select octet_length(unnest(map_values(upper_bounds))) > 0 from (select unnest(data_file) from read_avro(getvariable('manifest_path_small')));
 ----
 true
+
+statement ok
+commit
 
 # filter pushdown on small values
 query I
@@ -435,17 +455,18 @@ select id, val from my_datalake.default.hugeint_edge_mixed order by id;
 15	-99999999999999999999999999999999999999
 16	NULL
 
+# Start transaction to keep necessary credentials in scope
+statement ok
+begin
 
 statement ok
 set variable manifest_path_mixed = (select manifest_path from iceberg_metadata(my_datalake.default.hugeint_edge_mixed) order by manifest_sequence_number desc limit 1);
-
 
 query II
 select unnest(map_keys(null_value_counts)) as field_id, unnest(map_values(null_value_counts)) as null_count from (select unnest(data_file) from read_avro(getvariable('manifest_path_mixed'))) order by field_id;
 ----
 1	0
 2	1
-
 
 query I
 select count(*) from (select unnest(map_values(lower_bounds)) as lb from (select unnest(data_file) from read_avro(getvariable('manifest_path_mixed')))) where octet_length(lb) > 0;
@@ -456,3 +477,6 @@ query I
 select count(*) from (select unnest(map_values(upper_bounds)) as ub from (select unnest(data_file) from read_avro(getvariable('manifest_path_mixed')))) where octet_length(ub) > 0;
 ----
 2
+
+statement ok
+commit

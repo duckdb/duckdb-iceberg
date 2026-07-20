@@ -53,6 +53,10 @@ insert into my_datalake.default.test values (4294967295::UINT32, null, null);
 statement ok
 insert into my_datalake.default.test values (8::TINYINT, null, null);
 
+# Start transaction to keep necessary credentials in scope
+statement ok
+begin
+
 # there is only 1 datafile right now, set it as a variable.
 statement ok
 set variable data_file = (select file_path  from iceberg_metadata(my_datalake.default.test) limit 1);
@@ -69,9 +73,16 @@ select column_type from (describe (from read_parquet(getvariable('data_file'))))
 ----
 INTEGER
 
+statement ok
+commit
+
 # add another line where 343 is auto cast to varchar
 statement ok
 insert into my_datalake.default.test values (null, null, 343);
+
+# Start transaction to keep necessary credentials in scope
+statement ok
+begin
 
 # get the second data file
 statement ok
@@ -83,9 +94,16 @@ select column_type from (describe (from read_parquet(getvariable('data_file_2'))
 ----
 VARCHAR
 
+statement ok
+commit
+
 # add another line where 4294967295 is auto cast to BIGINT
 statement ok
 insert into my_datalake.default.test values (null, 4294967295::UINT32, null);
+
+# Start transaction to keep necessary credentials in scope
+statement ok
+begin
 
 # get the third data file
 statement ok
@@ -96,6 +114,9 @@ query I
 select column_type from (describe (from read_parquet(getvariable('data_file_3')))) where column_name = 'long_col';
 ----
 BIGINT
+
+statement ok
+commit
 
 query III
 select * from my_datalake.default.test order by all;

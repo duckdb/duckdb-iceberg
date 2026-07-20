@@ -61,6 +61,9 @@ select
     '\xFF\xFF\xFF\xFF'::BLOB
 from range(1000);
 
+# Start transaction to keep necessary credentials in scope
+statement ok
+begin
 
 statement ok
 set variable manifest_path_duckdb = (select manifest_path from iceberg_metadata(my_datalake.default.duckdb_written_upper_lower_bounds_single_value) order by manifest_sequence_number desc limit 1);
@@ -107,3 +110,6 @@ select count(*) from (
 ) where null_count != 0;
 ----
 0
+
+statement ok
+commit

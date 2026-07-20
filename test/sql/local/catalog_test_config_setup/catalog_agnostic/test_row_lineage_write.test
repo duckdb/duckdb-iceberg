@@ -40,6 +40,10 @@ insert into my_datalake.default.duckdb_row_lineage values
 	(4, 'd'),
 	(5, 'e');
 
+# Start transaction to keep necessary credentials in scope
+statement ok
+begin
+
 statement ok
 SET VARIABLE row_lineage_manifest = (
 	SELECT manifest_path FROM iceberg_metadata(my_datalake.default.duckdb_row_lineage)
@@ -55,6 +59,9 @@ SELECT
 FROM (SELECT unnest(data_file) FROM read_avro(getvariable('row_lineage_manifest')));
 ----
 true	true	true	true
+
+statement ok
+commit
 
 query IIII
 select _last_updated_sequence_number, _row_id, id, data from my_datalake.default.duckdb_row_lineage order by _row_id;
@@ -143,6 +150,10 @@ select _last_updated_sequence_number, _row_id, id, data from my_datalake.default
 5	7	6	replaced
 7	11	7	g_new
 
+# Start transaction to keep necessary credentials in scope
+statement ok
+begin
+
 # The manifest list only assigns 'first_row_id' to data manifests, deletes manifests leave it null
 statement ok
 SET VARIABLE row_lineage_manifest_list = (
@@ -158,3 +169,6 @@ SELECT
 FROM read_avro(getvariable('row_lineage_manifest_list'));
 ----
 true	0	0
+
+statement ok
+commit

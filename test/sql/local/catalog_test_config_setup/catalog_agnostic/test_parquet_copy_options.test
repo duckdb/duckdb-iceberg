@@ -34,6 +34,10 @@ create table properties_table (my_col int);
 statement ok
 insert into my_datalake.default.properties_table SELECT * FROM range(100000) my_col;
 
+# Start transaction to keep necessary credentials in scope
+statement ok
+begin
+
 statement ok
 set variable parquet_filepath = (select file_path from iceberg_metadata(my_datalake.default.properties_table) limit 1);
 
@@ -41,6 +45,9 @@ query I
 select count(row_group_bytes) from parquet_metadata(getvariable('parquet_filepath'));
 ----
 49
+
+statement ok
+commit
 
 statement ok
 drop table if exists properties_table;
@@ -64,6 +71,10 @@ write.parquet.row-group-size-bytes	200KB
 statement ok
 insert into my_datalake.default.properties_table SELECT * FROM range(100000) my_col;
 
+# Start transaction to keep necessary credentials in scope
+statement ok
+begin
+
 statement ok
 set variable parquet_filepath = (select file_path from iceberg_metadata(my_datalake.default.properties_table) limit 1);
 
@@ -71,6 +82,9 @@ query I
 select count(row_group_bytes) from parquet_metadata(getvariable('parquet_filepath'));
 ----
 49
+
+statement ok
+commit
 
 statement ok
 drop table properties_table;
@@ -90,6 +104,10 @@ write.parquet.row-group-size-bytes	200000
 statement ok
 insert into my_datalake.default.properties_table SELECT * FROM range(100000) my_col;
 
+# Start transaction to keep necessary credentials in scope
+statement ok
+begin
+
 statement ok
 set variable parquet_filepath = (select file_path from iceberg_metadata(my_datalake.default.properties_table) limit 1);
 
@@ -97,3 +115,6 @@ query I
 select count(row_group_bytes) from parquet_metadata(getvariable('parquet_filepath'));
 ----
 49
+
+statement ok
+commit

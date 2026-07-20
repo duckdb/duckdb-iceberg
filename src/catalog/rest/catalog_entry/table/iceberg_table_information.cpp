@@ -167,12 +167,9 @@ static void ParseConfigOptions(const case_insensitive_map_t<string> &config, cas
 
 IRCAPITableCredentials IcebergTableInformation::GetVendedCredentials(ClientContext &context) const {
 	IRCAPITableCredentials result;
-	auto transaction_id = MetaTransaction::Get(context).global_transaction_id;
-	auto &transaction = IcebergTransaction::Get(context, catalog);
-
-	auto secret_base_name =
-	    StringUtil::Format("__internal_ic_%s__%s__%s__%s", table_id, schema.name, name, to_string(transaction_id));
-	transaction.created_secrets.insert(secret_base_name);
+	auto schema_component = IRCPathComponent::NamespaceComponent(schema.namespace_items);
+	auto secret_base_name = StringUtil::Format("__internal_ic_%s__%s__%s", catalog.GetName().GetIdentifierName(),
+	                                           schema_component.encoded, name);
 	case_insensitive_map_t<Value> user_defaults;
 	if (catalog.auth_handler->type == IcebergAuthorizationType::SIGV4) {
 		auto &sigv4_auth = catalog.auth_handler->Cast<SIGV4Authorization>();
@@ -208,9 +205,6 @@ IRCAPITableCredentials IcebergTableInformation::GetVendedCredentials(ClientConte
 	case_insensitive_map_t<Value> config_options;
 	//! TODO: apply the 'defaults' retrieved from the /v1/config endpoint
 	config_options.insert(user_defaults.begin(), user_defaults.end());
-	auto schema_component = IRCPathComponent::NamespaceComponent(schema.namespace_items);
-	auto key = schema_component.encoded + "." + name;
-
 	ParseConfigOptions(config, config_options, context, storage_type);
 
 	//! If there is only one credential listed, we don't really care about the prefix,
@@ -227,7 +221,7 @@ IRCAPITableCredentials IcebergTableInformation::GetVendedCredentials(ClientConte
 
 		CreateSecretInput create_secret_input;
 		create_secret_input.on_conflict = OnCreateConflict::REPLACE_ON_CONFLICT;
-		create_secret_input.persist_type = SecretPersistType::TEMPORARY;
+		create_secret_input.persist_type = SecretPersistType::TRANSACTION;
 
 		if (ignore_credential_prefix) {
 			create_secret_input.scope.push_back(table_location);
@@ -240,12 +234,10 @@ IRCAPITableCredentials IcebergTableInformation::GetVendedCredentials(ClientConte
 				create_secret_input.scope.push_back(table_location);
 			}
 		}
-		create_secret_input.name =
-		    Identifier(StringUtil::Format("%s_%d_%s", secret_base_name, index, credential.prefix));
+		create_secret_input.name = Identifier(StringUtil::Format("%s__%d", secret_base_name, index));
 
 		create_secret_input.type = Identifier(storage_type);
 		create_secret_input.provider = "config";
-		create_secret_input.storage_type = "memory";
 		create_secret_input.options = config_options;
 
 		ParseConfigOptions(credential.config, create_secret_input.options, context, storage_type);
@@ -258,14 +250,13 @@ IRCAPITableCredentials IcebergTableInformation::GetVendedCredentials(ClientConte
 		result.config = make_uniq<CreateSecretInput>();
 		auto &config = *result.config;
 		config.on_conflict = OnCreateConflict::REPLACE_ON_CONFLICT;
-		config.persist_type = SecretPersistType::TEMPORARY;
+		config.persist_type = SecretPersistType::TRANSACTION;
 
 		//! TODO: apply the 'overrides' retrieved from the /v1/config endpoint
 		config.options = config_options;
 		config.name = Identifier(secret_base_name);
 		config.type = Identifier(storage_type);
 		config.provider = "config";
-		config.storage_type = "memory";
 	}
 
 	return result;

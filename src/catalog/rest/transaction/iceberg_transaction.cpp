@@ -130,13 +130,6 @@ static rest_api_objects::TableRequirement CreateAssertNoSnapshotRequirement() {
 	return req;
 }
 
-void IcebergTransaction::DropSecrets(ClientContext &context) {
-	auto &secret_manager = SecretManager::Get(context);
-	for (auto &secret_name : created_secrets) {
-		(void)secret_manager.DropSecretByName(context, Identifier(secret_name), OnEntryNotFound::RETURN_NULL);
-	}
-}
-
 static rest_api_objects::TableUpdate CreateSetSnapshotRefUpdate(int64_t snapshot_id) {
 	rest_api_objects::TableUpdate table_update;
 
@@ -246,15 +239,12 @@ static SingleTableStagedCommit StageSingleTableCommit(DatabaseInstance &db, Iceb
 	info.retryable = transaction_data.SupportsAppendRetry();
 	info.retry_config = IcebergRetryConfig::FromTableMetadata(metadata);
 	if (!transaction_data.alters.empty()) {
+		table_info.LoadCredentials(context);
 		commit_state.LoadExistingManifests(db, std::move(transaction_data.existing_manifest_list));
 	}
 	commit_state.latest_snapshot = current_snapshot;
 
 	for (auto &update : transaction_data.updates) {
-		if (update->type == IcebergTableUpdateType::ADD_SNAPSHOT) {
-			auto &ic_table_entry = table_info.GetLatestSchema()->Cast<IcebergTableEntry>();
-			ic_table_entry.PrepareIcebergScanFromEntry(context);
-		}
 		update->CreateUpdate(db, context, commit_state);
 	}
 
@@ -482,7 +472,6 @@ void IcebergTransaction::Commit() {
 		ErrorData error(ex);
 		commit_state_unknown = CommitStateUnknown(error);
 		CleanupFiles();
-		DropSecrets(*temp_con_context);
 		temp_con.Rollback();
 		EvictCachedTables();
 		error.Throw("Failed to commit Iceberg transaction: ");
@@ -507,7 +496,6 @@ void IcebergTransaction::DoTableUpdates(IcebergTransactionAlterUpdate &alter_upd
 			ic_catalog.table_request_cache.Expire(context, entry.first);
 		}
 	}
-	DropSecrets(context);
 }
 
 void IcebergTransaction::DoTableRename(IcebergTransactionRenameUpdate &rename_update, ClientContext &context) {

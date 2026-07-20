@@ -38,6 +38,10 @@ insert into my_datalake.default.variant_bounds_tbl VALUES
 	({'age': 30, 'city': 'berlin'}),
 	({'age': 40, 'city': 'cairo'});
 
+# Start transaction to keep necessary credentials in scope
+statement ok
+begin
+
 # grab the manifest written by the insert
 statement ok
 set variable manifest_path = (select manifest_path from iceberg_metadata(my_datalake.default.variant_bounds_tbl) order by manifest_sequence_number desc limit 1);
@@ -55,6 +59,9 @@ select lk, octet_length(lv) > 0, octet_length(uv) > 0 from (
 ) where lk = 1;
 ----
 1	true	true
+
+statement ok
+commit
 
 statement ok
 drop table if exists my_datalake.default.variant_bounds_tbl;
@@ -75,6 +82,10 @@ insert into my_datalake.default.mm_variant_full VALUES
     ({'age': 30, 'city': 'berlin'}),
     ({'age': 40, 'city': 'cairo'});
 
+# Start transaction to keep necessary credentials in scope
+statement ok
+begin
+
 statement ok
 set variable variant_full_mp = (select manifest_path from iceberg_metadata(my_datalake.default.mm_variant_full) order by manifest_sequence_number desc limit 1);
 
@@ -85,6 +96,9 @@ select count(*) from (
 ) where lk = 1;
 ----
 1
+
+statement ok
+commit
 
 # truncate(16): variant bounds are still written (truncation only affects string/binary)
 statement ok
@@ -100,6 +114,10 @@ insert into my_datalake.default.mm_variant_trunc VALUES
     ({'age': 30, 'city': 'berlin'}),
     ({'age': 40, 'city': 'cairo'});
 
+# Start transaction to keep necessary credentials in scope
+statement ok
+begin
+
 statement ok
 set variable variant_trunc_mp = (select manifest_path from iceberg_metadata(my_datalake.default.mm_variant_trunc) order by manifest_sequence_number desc limit 1);
 
@@ -110,6 +128,9 @@ select count(*) from (
 ) where lk = 1;
 ----
 1
+
+statement ok
+commit
 
 # counts: no variant bounds
 statement ok
@@ -125,6 +146,10 @@ insert into my_datalake.default.mm_variant_counts VALUES
     ({'age': 30, 'city': 'berlin'}),
     ({'age': 40, 'city': 'cairo'});
 
+# Start transaction to keep necessary credentials in scope
+statement ok
+begin
+
 statement ok
 set variable variant_counts_mp = (select manifest_path from iceberg_metadata(my_datalake.default.mm_variant_counts) order by manifest_sequence_number desc limit 1);
 
@@ -135,3 +160,6 @@ select count(*) from (
 ) where lk = 1;
 ----
 0
+
+statement ok
+commit

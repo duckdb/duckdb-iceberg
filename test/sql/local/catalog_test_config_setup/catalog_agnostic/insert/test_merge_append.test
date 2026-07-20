@@ -75,6 +75,10 @@ set variable latest_merge_snapshot_id = (
 	limit 1
 );
 
+# Start transaction to keep necessary credentials in scope
+statement ok
+begin
+
 statement ok
 set variable latest_merge_manifest_list = (
 	select manifest_list
@@ -93,6 +97,9 @@ select
 from read_avro(getvariable('latest_merge_manifest_list'));
 ----
 2	0
+
+statement ok
+commit
 
 # Merge correctness: entries pulled in from already-committed manifests are written with status
 # EXISTING (Java's ManifestWriter.existing), while genuinely-new entries stay ADDED. After the merge

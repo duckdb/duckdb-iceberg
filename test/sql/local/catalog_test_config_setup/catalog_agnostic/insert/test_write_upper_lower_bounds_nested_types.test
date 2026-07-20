@@ -196,6 +196,10 @@ insert into my_datalake.default.mm_nested_none VALUES (
     MAP(['abcdefghijklmnop'], ['abcdefghijklmnop'])
 );
 
+# Start transaction to keep necessary credentials in scope
+statement ok
+begin
+
 statement ok
 set variable nested_none_mp = (select manifest_path from iceberg_metadata(my_datalake.default.mm_nested_none) order by manifest_sequence_number desc limit 1);
 
@@ -205,6 +209,9 @@ select
     (select count(*) from (select unnest(map_keys(value_counts)) k from (select unnest(data_file) from read_avro(getvariable('nested_none_mp')))));
 ----
 0	0
+
+statement ok
+commit
 
 # --- per-column overrides on nested leaves via the Iceberg dotted field name -----
 # Iceberg names the synthetic nested fields 'element' (list), 'key'/'value' (map),

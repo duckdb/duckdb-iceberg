@@ -38,6 +38,10 @@ statement ok
 INSERT INTO my_datalake.default.value_counts_all_null
 SELECT NULL, NULL, NULL, NULL FROM range(100);
 
+# Start transaction to keep necessary credentials in scope
+statement ok
+begin
+
 statement ok
 SET VARIABLE manifest_all_null = (
 	SELECT manifest_path FROM iceberg_metadata(my_datalake.default.value_counts_all_null)
@@ -75,6 +79,9 @@ FROM (SELECT unnest(data_file) FROM read_avro(getvariable('manifest_all_null')))
 ----
 true	true	true	true	true
 
+statement ok
+commit
+
 # --- All NaN floats: value_counts = 100, null_value_counts = 0 ---
 statement ok
 DROP TABLE IF EXISTS my_datalake.default.value_counts_all_nan;
@@ -88,6 +95,10 @@ CREATE TABLE my_datalake.default.value_counts_all_nan (
 statement ok
 INSERT INTO my_datalake.default.value_counts_all_nan
 SELECT 'NaN'::FLOAT, 'NaN'::DOUBLE FROM range(100);
+
+# Start transaction to keep necessary credentials in scope
+statement ok
+begin
 
 statement ok
 SET VARIABLE manifest_all_nan = (
@@ -111,6 +122,9 @@ ORDER BY ALL;
 1	0
 2	0
 
+statement ok
+commit
+
 # nan_value_counts not yet written by DuckDB parquet writer (see iceberg_insert.cpp TODO)
 query I
 SELECT count(*) FROM iceberg_column_stats(my_datalake.default.value_counts_all_nan)
@@ -130,6 +144,10 @@ SELECT
 	map,
 	varchar_array
 FROM test_all_types();
+
+# Start transaction to keep necessary credentials in scope
+statement ok
+begin
 
 statement ok
 SET VARIABLE manifest_nested = (
@@ -172,6 +190,9 @@ SELECT list_sort(list(value_count::BIGINT)) = [3, 3, 4, 4, 6, 7]::BIGINT[] FROM 
 ----
 true
 
+statement ok
+commit
+
 # --- struct_of_arrays from test_all_types (struct containing lists) ---
 statement ok
 DROP TABLE IF EXISTS my_datalake.default.value_counts_struct_of_arrays;
@@ -179,6 +200,10 @@ DROP TABLE IF EXISTS my_datalake.default.value_counts_struct_of_arrays;
 statement ok
 CREATE TABLE my_datalake.default.value_counts_struct_of_arrays AS
 SELECT struct_of_arrays FROM test_all_types();
+
+# Start transaction to keep necessary credentials in scope
+statement ok
+begin
 
 statement ok
 SET VARIABLE manifest_struct_of_arrays = (
@@ -203,6 +228,9 @@ SELECT list_sort(list(value_count::BIGINT)) = [6, 7]::BIGINT[] FROM (
 ----
 true
 
+statement ok
+commit
+
 # --- nested_int_array from test_all_types (list of lists) ---
 statement ok
 DROP TABLE IF EXISTS my_datalake.default.value_counts_nested_int_array;
@@ -210,6 +238,10 @@ DROP TABLE IF EXISTS my_datalake.default.value_counts_nested_int_array;
 statement ok
 CREATE TABLE my_datalake.default.value_counts_nested_int_array AS
 SELECT nested_int_array FROM test_all_types();
+
+# Start transaction to keep necessary credentials in scope
+statement ok
+begin
 
 statement ok
 SET VARIABLE manifest_nested_int_array = (
@@ -233,6 +265,9 @@ SELECT list_sort(list(value_count::BIGINT)) = [15]::BIGINT[] FROM (
 ----
 true
 
+statement ok
+commit
+
 # --- array_of_structs from test_all_types (list of structs) ---
 statement ok
 DROP TABLE IF EXISTS my_datalake.default.value_counts_array_of_structs;
@@ -240,6 +275,10 @@ DROP TABLE IF EXISTS my_datalake.default.value_counts_array_of_structs;
 statement ok
 CREATE TABLE my_datalake.default.value_counts_array_of_structs AS
 SELECT array_of_structs FROM test_all_types();
+
+# Start transaction to keep necessary credentials in scope
+statement ok
+begin
 
 statement ok
 SET VARIABLE manifest_array_of_structs = (
@@ -264,6 +303,9 @@ SELECT list_sort(list(value_count::BIGINT)) = [5, 5]::BIGINT[] FROM (
 ----
 true
 
+statement ok
+commit
+
 # --- double_array from test_all_types (list with NaN/infinity) ---
 statement ok
 DROP TABLE IF EXISTS my_datalake.default.value_counts_double_array;
@@ -271,6 +313,10 @@ DROP TABLE IF EXISTS my_datalake.default.value_counts_double_array;
 statement ok
 CREATE TABLE my_datalake.default.value_counts_double_array AS
 SELECT double_array FROM test_all_types();
+
+# Start transaction to keep necessary credentials in scope
+statement ok
+begin
 
 statement ok
 SET VARIABLE manifest_double_array = (
@@ -294,6 +340,9 @@ SELECT list_sort(list(value_count::BIGINT)) = [8]::BIGINT[] FROM (
 ----
 true
 
+statement ok
+commit
+
 # --- fixed_struct_array from test_all_types (ARRAY cast to LIST) ---
 statement ok
 DROP TABLE IF EXISTS my_datalake.default.value_counts_fixed_struct_array;
@@ -302,6 +351,10 @@ statement ok
 CREATE TABLE my_datalake.default.value_counts_fixed_struct_array AS
 SELECT fixed_struct_array::STRUCT(a INTEGER, b VARCHAR)[] AS fixed_struct_array
 FROM test_all_types();
+
+# Start transaction to keep necessary credentials in scope
+statement ok
+begin
 
 statement ok
 SET VARIABLE manifest_fixed_struct_array = (
@@ -326,6 +379,9 @@ SELECT list_sort(list(value_count::BIGINT)) = [7, 7]::BIGINT[] FROM (
 ----
 true
 
+statement ok
+commit
+
 # --- struct_of_fixed_array from test_all_types (fixed arrays inside struct, cast to LIST) ---
 statement ok
 DROP TABLE IF EXISTS my_datalake.default.value_counts_struct_of_fixed_array;
@@ -334,6 +390,10 @@ statement ok
 CREATE TABLE my_datalake.default.value_counts_struct_of_fixed_array AS
 SELECT struct_of_fixed_array::STRUCT(a INTEGER[], b VARCHAR[]) AS struct_of_fixed_array
 FROM test_all_types();
+
+# Start transaction to keep necessary credentials in scope
+statement ok
+begin
 
 statement ok
 SET VARIABLE manifest_struct_of_fixed_array = (
@@ -358,6 +418,9 @@ SELECT list_sort(list(value_count::BIGINT)) = [7, 7]::BIGINT[] FROM (
 ----
 true
 
+statement ok
+commit
+
 # --- fixed_array_of_int_list from test_all_types (fixed array of lists, cast to LIST) ---
 statement ok
 DROP TABLE IF EXISTS my_datalake.default.value_counts_fixed_array_of_int_list;
@@ -366,6 +429,10 @@ statement ok
 CREATE TABLE my_datalake.default.value_counts_fixed_array_of_int_list AS
 SELECT fixed_array_of_int_list::INTEGER[][] AS fixed_array_of_int_list
 FROM test_all_types();
+
+# Start transaction to keep necessary credentials in scope
+statement ok
+begin
 
 statement ok
 SET VARIABLE manifest_fixed_array_of_int_list = (
@@ -389,6 +456,9 @@ SELECT list_sort(list(value_count::BIGINT)) = [19]::BIGINT[] FROM (
 ----
 true
 
+statement ok
+commit
+
 # --- list_of_fixed_int_array from test_all_types (list of fixed arrays, cast to LIST) ---
 statement ok
 DROP TABLE IF EXISTS my_datalake.default.value_counts_list_of_fixed_int_array;
@@ -397,6 +467,10 @@ statement ok
 CREATE TABLE my_datalake.default.value_counts_list_of_fixed_int_array AS
 SELECT list_of_fixed_int_array::INTEGER[][] AS list_of_fixed_int_array
 FROM test_all_types();
+
+# Start transaction to keep necessary credentials in scope
+statement ok
+begin
 
 statement ok
 SET VARIABLE manifest_list_of_fixed_int_array = (
@@ -420,6 +494,9 @@ SELECT list_sort(list(value_count::BIGINT)) = [19]::BIGINT[] FROM (
 ----
 true
 
+statement ok
+commit
+
 # --- fixed_int_array from test_all_types (fixed-length int array, cast to LIST) ---
 statement ok
 DROP TABLE IF EXISTS my_datalake.default.value_counts_fixed_int_array;
@@ -428,6 +505,10 @@ statement ok
 CREATE TABLE my_datalake.default.value_counts_fixed_int_array AS
 SELECT fixed_int_array::INTEGER[] AS fixed_int_array
 FROM test_all_types();
+
+# Start transaction to keep necessary credentials in scope
+statement ok
+begin
 
 statement ok
 SET VARIABLE manifest_fixed_int_array = (
@@ -451,6 +532,9 @@ SELECT list_sort(list(value_count::BIGINT)) = [7]::BIGINT[] FROM (
 ----
 true
 
+statement ok
+commit
+
 # --- Very long strings (50 rows, 10k chars each) ---
 statement ok
 DROP TABLE IF EXISTS my_datalake.default.value_counts_long_string;
@@ -461,6 +545,10 @@ CREATE TABLE my_datalake.default.value_counts_long_string (long_varchar VARCHAR)
 statement ok
 INSERT INTO my_datalake.default.value_counts_long_string
 SELECT repeat('Z', 10000) FROM range(50);
+
+# Start transaction to keep necessary credentials in scope
+statement ok
+begin
 
 statement ok
 SET VARIABLE manifest_long = (
@@ -481,6 +569,9 @@ FROM (SELECT unnest(data_file) FROM read_avro(getvariable('manifest_long')))
 ORDER BY ALL;
 ----
 1	0
+
+statement ok
+commit
 
 # --- Struct/List/Map table with manifest avro verification ---
 statement ok
@@ -519,6 +610,10 @@ street	1
 value	2
 zip	1
 
+# Start transaction to keep necessary credentials in scope
+statement ok
+begin
+
 statement ok
 SET VARIABLE avro_file = (
 	SELECT manifest_path FROM iceberg_metadata(my_datalake.default.duckdb_nested_types)
@@ -542,6 +637,9 @@ SELECT list_sort(list(value_count::BIGINT)) = [1, 1, 1, 1, 1, 2, 2, 2]::BIGINT[]
 );
 ----
 true
+
+statement ok
+commit
 
 # --- Multi-row duckdb_nested_types (NULL struct, empty list, varying map sizes) ---
 statement ok
@@ -577,6 +675,10 @@ street	VARCHAR	3	1
 value	VARCHAR	4	0
 zip	VARCHAR	3	1
 
+# Start transaction to keep necessary credentials in scope
+statement ok
+begin
+
 statement ok
 SET VARIABLE manifest_nested_multi = (
 	SELECT manifest_path FROM iceberg_metadata(my_datalake.default.duckdb_nested_types_multi)
@@ -598,3 +700,6 @@ SELECT list_sort(list(value_count::BIGINT)) = [3, 3, 3, 3, 3, 4, 4, 4]::BIGINT[]
 );
 ----
 true
+
+statement ok
+commit
