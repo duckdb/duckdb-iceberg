@@ -6,6 +6,8 @@ import pathlib
 class Test(IcebergTest):
     catalog_mapping = {
         "fixture": "fixture-single-thread",
+        "fixture-latest": "fixture-single-thread",
+        "gravitino": "fixture-single-thread",
         "nessie": "fixture-single-thread"
     }
 

@@ -107,6 +107,8 @@ The catalog targets start local services, generate compatible Iceberg test data,
 | Catalog | Start services | Start and generate data | Notes |
 | --- | --- | --- | --- |
 | Apache Iceberg REST fixture | `make fixture` | `make fixture-data` | Uses the Compose setup in `scripts/` |
+| Apache Iceberg REST fixture (latest) | `make fixture-latest` | `make fixture-latest-data` | Tracks `apache/iceberg-rest-fixture:latest` in a separate compatibility lane |
+| Apache Gravitino | `make gravitino` | `make gravitino-data` | Uses the standalone Gravitino REST server and MinIO Compose setup in `scripts/gravitino/` |
 | Lakekeeper | `make lakekeeper` | `make lakekeeper-data` | Clones a pinned revision, applies the repository patch, and may add `minio` to `/etc/hosts` with `sudo` |
 | Nessie | `make nessie` | `make nessie-data` | Uses Nessie's `catalog-auth-s3` Compose setup |
 | Apache Polaris | `make polaris` | `make polaris-data` | Clones the `release/1.4.x` branch and uses its MinIO quickstart |
@@ -149,7 +151,7 @@ TEST_CONFIG="$(bash -c 'source scripts/catalog_test_config.sh && active_catalog_
   test/sql/local/catalog_test_config_setup/catalog_agnostic/create/test_create_table.test
 ```
 
-`active_catalog_test_config` accepts `fixture`, `lakekeeper`, `nessie`, or `polaris`. It reports an error for a missing, empty, local-only, or unknown active-catalog marker.
+`active_catalog_test_config` accepts `fixture`, `fixture-latest`, `gravitino`, `lakekeeper`, `nessie`, or `polaris`. It reports an error for a missing, empty, local-only, or unknown active-catalog marker.
 
 ### Catalog-backed Python tests
 

@@ -1,0 +1,2 @@
+benchmark/metadata_late_materialization/one_partition.benchmark
+benchmark/metadata_late_materialization/four_partitions.benchmark

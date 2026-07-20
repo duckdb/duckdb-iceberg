@@ -666,13 +666,11 @@ IcebergTableInformation IcebergTableInformation::Copy() const {
 	clone.table_metadata = table_metadata.Copy();
 	clone.config = config;
 	clone.storage_credentials = storage_credentials;
-	clone.latest_metadata_json = latest_metadata_json;
 	return clone;
 }
 
 IcebergTableMetadata IcebergTableInformation::CreateMetadataFromLog(ClientContext &context,
-                                                                    timestamp_ms_t transaction_start_ms,
-                                                                    string &metadata_path) const {
+                                                                    timestamp_ms_t transaction_start_ms) const {
 	auto &log = table_metadata.metadata_log;
 
 	optional_idx log_item_index;
@@ -695,7 +693,6 @@ IcebergTableMetadata IcebergTableInformation::CreateMetadataFromLog(ClientContex
 	auto &path = log[log_item_index.GetIndex()].metadata_file;
 	auto parsed_metadata = IcebergTableMetadata::Parse(path, *fs, "");
 
-	metadata_path = path;
 	return IcebergTableMetadata::FromTableMetadata(parsed_metadata);
 }
 
@@ -729,7 +726,7 @@ IcebergTableInformation IcebergTableInformation::Copy(IcebergTransaction &iceber
 	}
 
 	LoadCredentials(context);
-	ret.table_metadata = ret.CreateMetadataFromLog(context, transaction_start_ms, ret.latest_metadata_json);
+	ret.table_metadata = ret.CreateMetadataFromLog(context, transaction_start_ms);
 	return ret;
 }
 
@@ -768,8 +765,6 @@ void IcebergTableInformation::InitializeFromLoadTableResult(const rest_api_objec
 			storage_credentials.push_back(credential);
 		}
 	}
-	latest_metadata_json = load_table_result.metadata_location.value_or("");
-
 	if (initialize_schemas) {
 		auto &schemas = table_metadata.GetSchemas();
 		D_ASSERT(!schemas.empty());

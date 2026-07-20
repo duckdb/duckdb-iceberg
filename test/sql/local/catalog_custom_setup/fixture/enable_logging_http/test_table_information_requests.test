@@ -78,8 +78,6 @@ with cte as (
 )
 select CASE WHEN contains(val, '.') THEN (split(val, '.')[2]) ELSE NULL END FROM CTE ORDER BY ALL
 ----
-avro
-avro
 NULL
 
 statement ok
@@ -126,6 +124,8 @@ with cte as (
 )
 select CASE WHEN contains(val, '.') THEN (split(val, '.')[2]) ELSE NULL END FROM CTE ORDER BY ALL
 ----
+avro
+avro
 parquet
 NULL
 

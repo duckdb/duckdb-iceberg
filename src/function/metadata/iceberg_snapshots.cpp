@@ -30,24 +30,16 @@ static string SnapshotOperationToString(IcebergSnapshotOperationType type) {
 
 struct IcebergSnaphotsBindData : public TableFunctionData {
 	IcebergSnaphotsBindData() {};
-	string filename;
-	IcebergOptions options;
+	IcebergTableMetadata metadata;
 };
 
 struct IcebergSnapshotGlobalTableFunctionState : public GlobalTableFunctionState {
 public:
 	static unique_ptr<GlobalTableFunctionState> Init(ClientContext &context, TableFunctionInitInput &input) {
-		auto bind_data = input.bind_data->Cast<IcebergSnaphotsBindData>();
+		auto &bind_data = input.bind_data->Cast<IcebergSnaphotsBindData>();
 		auto global_state = make_uniq<IcebergSnapshotGlobalTableFunctionState>();
 
-		auto &fs = FileSystem::GetFileSystem(context);
-		auto caching_fs = make_shared_ptr<CachingFileSystemWrapper>(fs, *context.db);
-
-		auto iceberg_meta_path =
-		    IcebergTableMetadata::GetMetaDataPath(context, bind_data.filename, fs, bind_data.options);
-		auto table_metadata =
-		    IcebergTableMetadata::Parse(iceberg_meta_path, *caching_fs, bind_data.options.metadata_compression_codec);
-		global_state->metadata = IcebergTableMetadata::FromTableMetadata(table_metadata);
+		global_state->metadata = bind_data.metadata.Copy();
 
 		auto &info = global_state->metadata;
 		global_state->snapshot_it = info.snapshots.begin();
@@ -61,12 +53,13 @@ public:
 static unique_ptr<FunctionData> IcebergSnapshotsBind(ClientContext &context, TableFunctionBindInput &input,
                                                      vector<LogicalType> &return_types, vector<string> &names) {
 	auto bind_data = make_uniq<IcebergSnaphotsBindData>();
+	IcebergOptions options;
 	for (auto &kv : input.named_parameters) {
 		auto loption = StringUtil::Lower(kv.first.GetIdentifierName());
 		if (loption == "metadata_compression_codec") {
-			bind_data->options.metadata_compression_codec = StringValue::Get(kv.second);
+			options.metadata_compression_codec = StringValue::Get(kv.second);
 		} else if (loption == "version") {
-			bind_data->options.table_version = StringValue::Get(kv.second);
+			options.table_version = StringValue::Get(kv.second);
 		} else if (loption == "version_name_format") {
 			auto value = StringValue::Get(kv.second);
 			auto string_substitutions = IcebergUtils::CountOccurrences(value, "%s");
@@ -75,11 +68,11 @@ static unique_ptr<FunctionData> IcebergSnapshotsBind(ClientContext &context, Tab
 				    "'version_name_format' has to contain two occurrences of '%%s' in it, found %d",
 				    string_substitutions);
 			}
-			bind_data->options.version_name_format = value;
+			options.version_name_format = value;
 		}
 	}
 	auto input_string = input.inputs[0].ToString();
-	bind_data->filename = IcebergUtils::GetStorageLocation(context, input_string);
+	bind_data->metadata = std::move(IcebergUtils::ResolveTableMetadata(context, input_string, options).metadata);
 
 	names.emplace_back("sequence_number");
 	return_types.emplace_back(LogicalType::UBIGINT);

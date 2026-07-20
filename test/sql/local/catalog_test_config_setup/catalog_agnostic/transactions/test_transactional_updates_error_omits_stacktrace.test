@@ -72,7 +72,7 @@ commit;
 <REGEX>:.*Failed to commit.*
 
 query II
-select * from my_datalake.default.multi_transaction_update;
+select * from my_datalake.default.multi_transaction_update order by all;
 ----
 0	0
 2	2

@@ -98,21 +98,15 @@ static unique_ptr<FunctionData> IcebergMetaDataBind(ClientContext &context, Tabl
 	// return a TableRef that contains the scans for the
 	auto ret = make_uniq<IcebergMetaDataBindData>();
 
-	auto &fs = FileSystem::GetFileSystem(context);
-	auto caching_fs = make_shared_ptr<CachingFileSystemWrapper>(fs, *context.db);
-	auto input_string = input.inputs[0].ToString();
-	auto filename = IcebergUtils::GetStorageLocation(context, input_string);
-
 	IcebergOptions options(input.named_parameters);
-	auto iceberg_meta_path = IcebergTableMetadata::GetMetaDataPath(context, filename, fs, options);
-	auto table_metadata =
-	    IcebergTableMetadata::Parse(iceberg_meta_path, *caching_fs, options.metadata_compression_codec);
-	auto metadata = IcebergTableMetadata::FromTableMetadata(table_metadata);
+	auto input_string = input.inputs[0].ToString();
+	auto resolved_metadata = IcebergUtils::ResolveTableMetadata(context, input_string, options);
 
-	auto snapshot_to_scan = metadata.GetSnapshot(*options.snapshot_lookup);
+	auto snapshot_to_scan = resolved_metadata.metadata.GetSnapshot(*options.snapshot_lookup);
 
 	if (snapshot_to_scan.snapshot) {
-		ret->iceberg_table = IcebergManifestList::Load(filename, metadata, snapshot_to_scan, context, options);
+		ret->iceberg_table = IcebergManifestList::Load(resolved_metadata.table_location, resolved_metadata.metadata,
+		                                               snapshot_to_scan, context, options);
 	}
 
 	auto manifest_types = IcebergManifestTypes();

@@ -56,12 +56,18 @@ WITH (
 	'commit.manifest-merge.enabled' = 'false'
 );
 
+statement ok
+begin
+
 loop i 0 2050
 
 statement ok
 INSERT INTO my_datalake.default.manifest_list_chunked_files VALUES ({i});
 
 endloop
+
+statement ok
+commit
 
 statement ok
 SET VARIABLE large_manifest_list_path = (

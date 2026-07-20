@@ -12,6 +12,8 @@ require iceberg
 
 require httpfs
 
+require json
+
 set ignore_error_messages
 
 statement ok
@@ -48,10 +50,39 @@ explain analyze select * from my_datalake.default.rewrite_commit_basic;
 ----
 analyzed_plan	<REGEX>:.*Total Files Read: 6.*
 
+statement ok
+set variable pre_rewrite_total_file_size = (
+	select json_extract_string(snap, '$.summary."total-files-size"')::BIGINT
+	from (
+		select unnest(json_extract(metadata::JSON, '$.snapshots[*]')) as snap
+		from iceberg_load_table_response(my_datalake.default.rewrite_commit_basic)
+	)
+	order by json_extract_string(snap, '$."sequence-number"')::BIGINT desc
+	limit 1
+);
+
 query III
 call iceberg_rewrite_data_files('my_datalake.default.rewrite_commit_basic');
 ----
 6	1	<REGEX>:[1-9][0-9]*
+
+query III
+select
+	json_extract_string(snap, '$.summary."added-files-size"')::BIGINT > 0,
+	json_extract_string(snap, '$.summary."removed-files-size"')::BIGINT > 0,
+	json_extract_string(snap, '$.summary."total-files-size"')::BIGINT =
+		getvariable('pre_rewrite_total_file_size') +
+		json_extract_string(snap, '$.summary."added-files-size"')::BIGINT -
+		json_extract_string(snap, '$.summary."removed-files-size"')::BIGINT
+from (
+	select unnest(json_extract(metadata::JSON, '$.snapshots[*]')) as snap
+	from iceberg_load_table_response(my_datalake.default.rewrite_commit_basic)
+)
+where json_extract_string(snap, '$.summary.operation') = 'replace'
+order by json_extract_string(snap, '$."sequence-number"')::BIGINT desc
+limit 1;
+----
+true	true	true
 
 query I
 select count(*) from my_datalake.default.rewrite_commit_basic;

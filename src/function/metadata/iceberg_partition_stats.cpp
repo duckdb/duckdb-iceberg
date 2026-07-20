@@ -58,22 +58,16 @@ static unique_ptr<FunctionData> IcebergPartitionStatsBind(ClientContext &context
 	// return a TableRef that contains the scans for the
 	auto ret = make_uniq<IcebergPartitionStatsBindData>();
 
-	auto &fs = FileSystem::GetFileSystem(context);
-	auto caching_fs = make_shared_ptr<CachingFileSystemWrapper>(fs, *context.db);
 	auto input_string = input.inputs[0].ToString();
-	auto filename = IcebergUtils::GetStorageLocation(context, input_string);
-
 	IcebergOptions options(input.named_parameters);
-	auto iceberg_meta_path = IcebergTableMetadata::GetMetaDataPath(context, filename, fs, options);
-	auto table_metadata =
-	    IcebergTableMetadata::Parse(iceberg_meta_path, *caching_fs, options.metadata_compression_codec);
-	ret->metadata = IcebergTableMetadata::FromTableMetadata(table_metadata);
+	auto resolved_metadata = IcebergUtils::ResolveTableMetadata(context, input_string, options);
+	ret->metadata = std::move(resolved_metadata.metadata);
 
 	ret->snapshot_to_scan = ret->metadata.GetSnapshot(*options.snapshot_lookup);
 
 	if (ret->snapshot_to_scan.snapshot) {
-		ret->iceberg_table =
-		    IcebergManifestList::Load(filename, ret->metadata, ret->snapshot_to_scan, context, options);
+		ret->iceberg_table = IcebergManifestList::Load(resolved_metadata.table_location, ret->metadata,
+		                                               ret->snapshot_to_scan, context, options);
 		ret->schema = ret->metadata.GetSchemaFromId(ret->snapshot_to_scan.schema_id);
 
 		auto &schema = ret->schema->columns;

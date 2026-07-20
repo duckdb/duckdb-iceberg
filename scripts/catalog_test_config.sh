@@ -22,7 +22,7 @@ active_catalog_test_config() {
 	fi
 
 	case "$active_catalog" in
-		fixture|lakekeeper|polaris|nessie)
+		fixture|fixture-latest|gravitino|lakekeeper|polaris|nessie)
 			config_path="$repo_root/test/configs/${active_catalog}.json"
 			;;
 		*)

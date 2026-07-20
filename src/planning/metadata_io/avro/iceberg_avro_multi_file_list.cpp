@@ -18,16 +18,25 @@ IcebergManifestListScanInfo::IcebergManifestListScanInfo(const IcebergTableMetad
 IcebergManifestListScanInfo::~IcebergManifestListScanInfo() {
 }
 
-IcebergManifestFileScanInfo::IcebergManifestFileScanInfo(const IcebergTableMetadata &metadata,
-                                                         const IcebergSnapshotScanInfo &snapshot_info,
-                                                         vector<IcebergManifestListEntry> &manifest_files,
-                                                         const IcebergOptions &options, FileSystem &fs,
-                                                         const string &iceberg_path,
-                                                         optional_ptr<ManifestEntryReadState> read_state)
+IcebergManifestFileScanInfo::IcebergManifestFileScanInfo(
+    const IcebergTableMetadata &metadata, const IcebergSnapshotScanInfo &snapshot_info,
+    vector<IcebergManifestListEntry> &manifest_files, const IcebergOptions &options, FileSystem &fs,
+    const string &iceberg_path, optional_ptr<ManifestEntryReadState> read_state, vector<idx_t> manifest_indexes_p)
     : IcebergAvroScanInfo(TYPE, metadata, snapshot_info), manifest_files(manifest_files), options(options), fs(fs),
       iceberg_path(iceberg_path), read_state(read_state) {
+	if (manifest_indexes_p.empty()) {
+		manifest_indexes_p.reserve(manifest_files.size());
+		for (idx_t manifest_idx = 0; manifest_idx < manifest_files.size(); manifest_idx++) {
+			manifest_indexes_p.push_back(manifest_idx);
+		}
+	}
+	manifest_indexes = std::move(manifest_indexes_p);
 	unordered_set<int32_t> partition_spec_ids;
-	for (auto &manifest_list_entry : manifest_files) {
+	for (auto manifest_idx : manifest_indexes) {
+		if (manifest_idx >= manifest_files.size()) {
+			throw InternalException("Manifest selection index %llu is out of bounds", manifest_idx);
+		}
+		auto &manifest_list_entry = manifest_files[manifest_idx];
 		auto &manifest = manifest_list_entry.file;
 		partition_spec_ids.insert(manifest.partition_spec_id);
 	}
@@ -40,6 +49,13 @@ IcebergManifestFileScanInfo::IcebergManifestFileScanInfo(const IcebergTableMetad
 }
 
 IcebergManifestFileScanInfo::~IcebergManifestFileScanInfo() {
+}
+
+idx_t IcebergManifestFileScanInfo::GetManifestIndex(idx_t scan_index) const {
+	if (scan_index >= manifest_indexes.size()) {
+		throw InternalException("Manifest scan index %llu is out of bounds", scan_index);
+	}
+	return manifest_indexes[scan_index];
 }
 
 IcebergAvroMultiFileList::IcebergAvroMultiFileList(shared_ptr<IcebergAvroScanInfo> info, vector<OpenFileInfo> paths)

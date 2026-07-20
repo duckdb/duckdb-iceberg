@@ -122,6 +122,13 @@ jobs:
       artifact-name: duckdb-iceberg
       build-path: build/relassert
 
+  test-fixture-latest:
+    name: Test against latest fixture catalog
+    needs: build_iceberg
+    uses: ./.github/workflows/test-fixture-latest-catalog.yml
+    with:
+      artifact-name: duckdb-iceberg
+
   #test-fixture-no-link:
   #  name: Test against fixture catalog no link
   #  needs: build_iceberg
@@ -143,6 +150,13 @@ jobs:
     name: Test against Nessie Catalog
     needs: build_iceberg
     uses: ./.github/workflows/test-nessie-catalog.yml
+    with:
+      artifact-name: duckdb-iceberg
+
+  test-gravitino:
+    name: Test against Gravitino Catalog
+    needs: build_iceberg
+    uses: ./.github/workflows/test-gravitino-catalog.yml
     with:
       artifact-name: duckdb-iceberg
 
