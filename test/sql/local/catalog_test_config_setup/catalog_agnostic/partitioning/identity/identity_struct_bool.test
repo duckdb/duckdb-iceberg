@@ -43,6 +43,10 @@ insert into my_datalake.default.partition_identity_bool_struct_field values
 	(3, {'partition_col': true}),
 	(1, {'partition_col': false});
 
+# Start transaction to keep necessary credentials in scope
+statement ok
+begin
+
 statement ok
 set variable latest_manifest_sequence = (select max(manifest_sequence_number) from iceberg_metadata(my_datalake.default.partition_identity_bool_struct_field));
 
@@ -74,3 +78,6 @@ select
 
 statement ok
 drop table my_datalake.default.partition_identity_bool_struct_field;
+
+statement ok
+commit

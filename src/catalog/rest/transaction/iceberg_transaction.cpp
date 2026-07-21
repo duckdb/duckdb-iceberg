@@ -130,13 +130,6 @@ static rest_api_objects::TableRequirement CreateAssertNoSnapshotRequirement() {
 	return req;
 }
 
-void IcebergTransaction::DropSecrets(ClientContext &context) {
-	auto &secret_manager = SecretManager::Get(context);
-	for (auto &secret_name : created_secrets) {
-		(void)secret_manager.DropSecretByName(context, Identifier(secret_name), OnEntryNotFound::RETURN_NULL);
-	}
-}
-
 static rest_api_objects::TableUpdate CreateSetSnapshotRefUpdate(int64_t snapshot_id) {
 	rest_api_objects::TableUpdate table_update;
 
@@ -230,6 +223,74 @@ static void CreateTableRequirements(DatabaseInstance &db, ClientContext &context
 	}
 }
 
+//! Safe to re-apply a DELETE on retry only if every commit in (base, tip] was a
+//! pure append; anything else may have removed/rewritten the target data. Ranges
+//! over sequence numbers (parent links aren't populated on read snapshots). A
+//! scan/tip snapshot the catalog doesn't expose (e.g. no history) can't be
+//! proven safe, so it counts as not reappliable.
+static bool DeleteCanReapply(const IcebergTableMetadata &metadata, int64_t base_snapshot_id, int64_t tip_snapshot_id) {
+	if (base_snapshot_id == tip_snapshot_id) {
+		return true;
+	}
+	auto base = metadata.FindSnapshotByIdInternal(base_snapshot_id);
+	auto tip = metadata.FindSnapshotByIdInternal(tip_snapshot_id);
+	if (!base || !tip) {
+		return false;
+	}
+	if (!base->sequence_number || !tip->sequence_number) {
+		throw InvalidConfigurationException("Committed snapshot is missing a sequence number");
+	}
+	int64_t base_sequence = *base->sequence_number;
+	int64_t tip_sequence = *tip->sequence_number;
+	for (auto &entry : metadata.snapshots) {
+		auto &snapshot = entry.second;
+		if (!snapshot.sequence_number) {
+			throw InvalidConfigurationException("Committed snapshot is missing a sequence number");
+		}
+		int64_t sequence = *snapshot.sequence_number;
+		if (sequence <= base_sequence || sequence > tip_sequence) {
+			continue;
+		}
+		if (snapshot.operation != IcebergSnapshotOperationType::APPEND) {
+			return false;
+		}
+	}
+	return true;
+}
+
+//! Throw if a retried DELETE can't be safely re-applied. No-op on the first
+//! attempt (tip == scan) and for non-delete transactions.
+static void VerifyDeleteRetryability(const IcebergTableInformation &table_info,
+                                     optional_ptr<const IcebergSnapshot> current_snapshot) {
+	if (!table_info.transaction_data) {
+		return;
+	}
+	auto &transaction_data = *table_info.transaction_data;
+	if (!transaction_data.ContainsDelete()) {
+		return;
+	}
+	//! No base snapshot: the delete targets data created in this transaction, so there is no
+	//! committed base to rebase against and nothing to verify.
+	if (!transaction_data.base_snapshot_id) {
+		return;
+	}
+	if (!current_snapshot) {
+		return;
+	}
+	if (!current_snapshot->snapshot_id) {
+		throw InvalidConfigurationException("Committed snapshot is missing a snapshot_id");
+	}
+	auto scan_snapshot_id = *transaction_data.base_snapshot_id;
+	auto tip_snapshot_id = *current_snapshot->snapshot_id;
+	if (DeleteCanReapply(table_info.table_metadata, scan_snapshot_id, tip_snapshot_id)) {
+		return;
+	}
+	throw TransactionException(
+	    "DELETE on \"%s\" conflicts with a concurrent commit that removed or rewrote data (scanned snapshot "
+	    "%s, now at %s); re-run the DELETE.",
+	    table_info.name, std::to_string(scan_snapshot_id), std::to_string(tip_snapshot_id));
+}
+
 static SingleTableStagedCommit StageSingleTableCommit(DatabaseInstance &db, IcebergTableInformation &table_info,
                                                       ClientContext &context) {
 	SingleTableStagedCommit info;
@@ -246,15 +307,14 @@ static SingleTableStagedCommit StageSingleTableCommit(DatabaseInstance &db, Iceb
 	info.retryable = transaction_data.SupportsAppendRetry();
 	info.retry_config = IcebergRetryConfig::FromTableMetadata(metadata);
 	if (!transaction_data.alters.empty()) {
+		table_info.LoadCredentials(context);
 		commit_state.LoadExistingManifests(db, std::move(transaction_data.existing_manifest_list));
 	}
 	commit_state.latest_snapshot = current_snapshot;
 
+	VerifyDeleteRetryability(commit_state.table_info, current_snapshot);
+
 	for (auto &update : transaction_data.updates) {
-		if (update->type == IcebergTableUpdateType::ADD_SNAPSHOT) {
-			auto &ic_table_entry = table_info.GetLatestSchema()->Cast<IcebergTableEntry>();
-			ic_table_entry.PrepareIcebergScanFromEntry(context);
-		}
 		update->CreateUpdate(db, context, commit_state);
 	}
 
@@ -482,7 +542,6 @@ void IcebergTransaction::Commit() {
 		ErrorData error(ex);
 		commit_state_unknown = CommitStateUnknown(error);
 		CleanupFiles();
-		DropSecrets(*temp_con_context);
 		temp_con.Rollback();
 		EvictCachedTables();
 		error.Throw("Failed to commit Iceberg transaction: ");
@@ -507,7 +566,6 @@ void IcebergTransaction::DoTableUpdates(IcebergTransactionAlterUpdate &alter_upd
 			ic_catalog.table_request_cache.Expire(context, entry.first);
 		}
 	}
-	DropSecrets(context);
 }
 
 void IcebergTransaction::DoTableRename(IcebergTransactionRenameUpdate &rename_update, ClientContext &context) {

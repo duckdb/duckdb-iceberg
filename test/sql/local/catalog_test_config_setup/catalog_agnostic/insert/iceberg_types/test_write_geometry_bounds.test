@@ -38,6 +38,10 @@ insert into my_datalake.default.geom_bounds_xy VALUES
     ('POINT(5 7)'::GEOMETRY),
     ('LINESTRING(-3 -4, 10 10)'::GEOMETRY);
 
+# Start transaction to keep necessary credentials in scope
+statement ok
+begin
+
 statement ok
 set variable manifest_path_xy = (select manifest_path from iceberg_metadata(my_datalake.default.geom_bounds_xy) order by manifest_sequence_number desc limit 1);
 
@@ -60,6 +64,9 @@ from (select unnest(data_file) from read_avro(getvariable('manifest_path_xy')));
 ----
 true	true
 
+statement ok
+commit
+
 # --- XYZ -----------------------------------------------------------------
 
 statement ok
@@ -74,6 +81,10 @@ insert into my_datalake.default.geom_bounds_xyz VALUES
     ('POINT Z (5 7 9)'::GEOMETRY),
     ('LINESTRING Z (5 5 5, 10 10 10)'::GEOMETRY);
 
+# Start transaction to keep necessary credentials in scope
+statement ok
+begin
+
 statement ok
 set variable manifest_path_xyz = (select manifest_path from iceberg_metadata(my_datalake.default.geom_bounds_xyz) order by manifest_sequence_number desc limit 1);
 
@@ -83,6 +94,9 @@ select octet_length(map_extract(lower_bounds, 1)[1]), octet_length(map_extract(u
 from (select unnest(data_file) from read_avro(getvariable('manifest_path_xyz')));
 ----
 24	24
+
+statement ok
+commit
 
 # --- XYM -----------------------------------------------------------------
 #
@@ -99,6 +113,10 @@ statement ok
 insert into my_datalake.default.geom_bounds_xym VALUES
     ('POINT M (1 2 3)'::GEOMETRY),
     ('POINT M (5 7 9)'::GEOMETRY);
+
+# Start transaction to keep necessary credentials in scope
+statement ok
+begin
 
 statement ok
 set variable manifest_path_xym = (select manifest_path from iceberg_metadata(my_datalake.default.geom_bounds_xym) order by manifest_sequence_number desc limit 1);
@@ -119,6 +137,9 @@ from (select unnest(data_file) from read_avro(getvariable('manifest_path_xym')))
 ----
 true	true
 
+statement ok
+commit
+
 # --- XYZM ----------------------------------------------------------------
 
 statement ok
@@ -132,6 +153,10 @@ insert into my_datalake.default.geom_bounds_xyzm VALUES
     ('POINT ZM (1 2 3 4)'::GEOMETRY),
     ('POINT ZM (5 7 9 11)'::GEOMETRY);
 
+# Start transaction to keep necessary credentials in scope
+statement ok
+begin
+
 statement ok
 set variable manifest_path_xyzm = (select manifest_path from iceberg_metadata(my_datalake.default.geom_bounds_xyzm) order by manifest_sequence_number desc limit 1);
 
@@ -141,6 +166,9 @@ select octet_length(map_extract(lower_bounds, 1)[1]), octet_length(map_extract(u
 from (select unnest(data_file) from read_avro(getvariable('manifest_path_xyzm')));
 ----
 32	32
+
+statement ok
+commit
 
 # --- All-NULL ------------------------------------------------------------
 #
@@ -155,6 +183,10 @@ create table my_datalake.default.geom_bounds_null (g GEOMETRY) with ('format-ver
 
 statement ok
 insert into my_datalake.default.geom_bounds_null VALUES (NULL), (NULL), (NULL);
+
+# Start transaction to keep necessary credentials in scope
+statement ok
+begin
 
 statement ok
 set variable manifest_path_null = (select manifest_path from iceberg_metadata(my_datalake.default.geom_bounds_null) order by manifest_sequence_number desc limit 1);
@@ -171,6 +203,9 @@ select map_extract(null_value_counts, 1)[1]
 from (select unnest(data_file) from read_avro(getvariable('manifest_path_null')));
 ----
 3
+
+statement ok
+commit
 
 # --- Read with a predicate on the geometry column -----------------------
 #
@@ -202,6 +237,10 @@ with ('format-version'='3', 'write.metadata.metrics.default'='full');
 statement ok
 insert into my_datalake.default.mm_geom_full VALUES ('POINT(1 2)'::GEOMETRY), ('POINT(5 7)'::GEOMETRY);
 
+# Start transaction to keep necessary credentials in scope
+statement ok
+begin
+
 statement ok
 set variable geom_full_mp = (select manifest_path from iceberg_metadata(my_datalake.default.mm_geom_full) order by manifest_sequence_number desc limit 1);
 
@@ -210,6 +249,9 @@ select octet_length(map_extract(lower_bounds, 1)[1]), octet_length(map_extract(u
 from (select unnest(data_file) from read_avro(getvariable('geom_full_mp')));
 ----
 16	16
+
+statement ok
+commit
 
 # truncate(16): bbox bounds are still written (truncation only affects string/binary)
 statement ok
@@ -222,6 +264,10 @@ with ('format-version'='3', 'write.metadata.metrics.default'='truncate(16)');
 statement ok
 insert into my_datalake.default.mm_geom_trunc VALUES ('POINT(1 2)'::GEOMETRY), ('POINT(5 7)'::GEOMETRY);
 
+# Start transaction to keep necessary credentials in scope
+statement ok
+begin
+
 statement ok
 set variable geom_trunc_mp = (select manifest_path from iceberg_metadata(my_datalake.default.mm_geom_trunc) order by manifest_sequence_number desc limit 1);
 
@@ -230,6 +276,9 @@ select octet_length(map_extract(lower_bounds, 1)[1]), octet_length(map_extract(u
 from (select unnest(data_file) from read_avro(getvariable('geom_trunc_mp')));
 ----
 16	16
+
+statement ok
+commit
 
 # counts: no bbox bounds, but null_value_counts still written
 statement ok
@@ -242,6 +291,10 @@ with ('format-version'='3', 'write.metadata.metrics.default'='counts');
 statement ok
 insert into my_datalake.default.mm_geom_counts VALUES ('POINT(1 2)'::GEOMETRY), ('POINT(5 7)'::GEOMETRY);
 
+# Start transaction to keep necessary credentials in scope
+statement ok
+begin
+
 statement ok
 set variable geom_counts_mp = (select manifest_path from iceberg_metadata(my_datalake.default.mm_geom_counts) order by manifest_sequence_number desc limit 1);
 
@@ -250,6 +303,9 @@ select len(map_extract(lower_bounds, 1)), len(map_extract(upper_bounds, 1)), map
 from (select unnest(data_file) from read_avro(getvariable('geom_counts_mp')));
 ----
 0	0	0
+
+statement ok
+commit
 
 # none: no bbox bounds and no counts
 statement ok
@@ -262,6 +318,10 @@ with ('format-version'='3', 'write.metadata.metrics.default'='none');
 statement ok
 insert into my_datalake.default.mm_geom_none VALUES ('POINT(1 2)'::GEOMETRY), ('POINT(5 7)'::GEOMETRY);
 
+# Start transaction to keep necessary credentials in scope
+statement ok
+begin
+
 statement ok
 set variable geom_none_mp = (select manifest_path from iceberg_metadata(my_datalake.default.mm_geom_none) order by manifest_sequence_number desc limit 1);
 
@@ -270,3 +330,6 @@ select len(map_extract(lower_bounds, 1)), len(map_extract(upper_bounds, 1)), len
 from (select unnest(data_file) from read_avro(getvariable('geom_none_mp')));
 ----
 0	0	0
+
+statement ok
+commit

@@ -63,6 +63,10 @@ SELECT id, category FROM my_datalake.default.test_delete_manifest_partitions ORD
 3	C
 5	E
 
+# Start transaction to keep necessary credentials in scope
+statement ok
+begin
+
 statement ok
 set variable man_list_path = (select manifest_list from iceberg_snapshots(my_datalake.default.test_delete_manifest_partitions) order by timestamp_ms desc limit 1);
 
@@ -84,3 +88,6 @@ select partition.identity_category_2 from (select unnest(data_file) from read_av
 A
 D
 NULL
+
+statement ok
+abort;

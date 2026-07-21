@@ -84,7 +84,6 @@ public:
 	void DoSchemaDeletes(ClientContext &context);
 	void DoSchemaPropertyUpdates(ClientContext &context);
 	IcebergCatalog &GetCatalog();
-	void DropSecrets(ClientContext &context);
 	void DoMultiTableCommitUpdates(IcebergTransactionAlterUpdate &alter_update, ClientContext &context);
 	void DoSingleTableCommitUpdates(IcebergTransactionAlterUpdate &alter_update, ClientContext &context);
 	optional_ptr<IcebergTransactionTableState> GetLatestTableState(const string &table_key);
@@ -135,7 +134,6 @@ public:
 	//! Set of schemas that this transaction has listed tables for
 	case_insensitive_set_t listed_schemas;
 
-	case_insensitive_set_t created_secrets;
 	case_insensitive_set_t looked_up_entries;
 	mutex lock;
 

@@ -26,8 +26,8 @@ IcebergAddSnapshot::IcebergAddSnapshot(const IcebergTableInformation &table_info
 }
 
 bool IcebergAddSnapshot::IsRetryable() const {
-	//! Only retry INSERT for now
-	return operation == IcebergSnapshotOperationType::APPEND;
+	//! DELETE-retry safety is enforced in StageSingleTableCommit.
+	return operation == IcebergSnapshotOperationType::APPEND || operation == IcebergSnapshotOperationType::DELETE;
 }
 
 static rest_api_objects::TableUpdate CreateAddSnapshotUpdate(const IcebergTableInformation &table_info,

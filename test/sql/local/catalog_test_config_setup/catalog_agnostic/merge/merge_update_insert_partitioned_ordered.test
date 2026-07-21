@@ -82,6 +82,10 @@ set variable latest_manifest_sequence = (
 	from iceberg_metadata(my_datalake.default.merge_update_insert_partitioned_ordered)
 );
 
+# Start transaction to keep necessary credentials in scope
+statement ok
+begin
+
 statement ok
 set variable manifest_path = (
 	select manifest_path
@@ -144,3 +148,6 @@ and sort_order_id is not null;
 
 statement ok
 drop table my_datalake.default.merge_update_insert_partitioned_ordered;
+
+statement ok
+commit

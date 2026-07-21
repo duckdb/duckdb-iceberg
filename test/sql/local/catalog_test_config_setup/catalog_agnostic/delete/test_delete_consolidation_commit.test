@@ -95,6 +95,10 @@ select _last_updated_sequence_number, _row_id, id, data from my_datalake.default
 ----
 1	0	1	a
 
+# Start transaction to keep necessary credentials in scope
+statement ok
+begin
+
 statement ok
 set variable last_manifest_list = (
 	select manifest_list from iceberg_snapshots(
@@ -136,3 +140,6 @@ query I
 select count(*) from read_avro(getvariable('delete_manifest2')) where status != 2;
 ----
 1
+
+statement ok
+abort

@@ -26,6 +26,10 @@ statement ok
 INSERT INTO my_datalake.default.manifest_chunked_files
 SELECT i, i FROM range(2050) t(i);
 
+# Start transaction to keep necessary credentials in scope
+statement ok
+begin
+
 statement ok
 SET VARIABLE large_manifest_path = (
 	SELECT manifest_path
@@ -45,6 +49,9 @@ SELECT count(data_file.first_row_id IS NULL)
 FROM read_avro(getvariable('large_manifest_path'));
 ----
 2050
+
+statement ok
+commit
 
 statement ok
 DROP TABLE IF EXISTS my_datalake.default.manifest_list_chunked_files;
@@ -69,6 +76,10 @@ endloop
 statement ok
 commit
 
+# Start transaction to keep necessary credentials in scope
+statement ok
+begin
+
 statement ok
 SET VARIABLE large_manifest_list_path = (
 	SELECT manifest_list
@@ -88,3 +99,6 @@ FROM read_avro(getvariable('large_manifest_list_path'))
 WHERE content = 0;
 ----
 2050	0	2049
+
+statement ok
+commit

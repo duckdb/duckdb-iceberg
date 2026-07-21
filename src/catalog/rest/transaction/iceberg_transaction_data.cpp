@@ -17,14 +17,16 @@
 
 namespace duckdb {
 
-static void LoadExistingManifestList(ClientContext &context, const IcebergTableMetadata &metadata,
-                                     vector<IcebergManifestListEntry> &existing_manifest_list, int64_t &next_row_id) {
+static optional<int64_t> LoadExistingManifestList(ClientContext &context, const IcebergTableMetadata &metadata,
+                                                  vector<IcebergManifestListEntry> &existing_manifest_list,
+                                                  int64_t &next_row_id) {
 	existing_manifest_list.clear();
 
 	auto current_snapshot = metadata.GetLatestSnapshot();
 	if (!current_snapshot) {
-		return;
+		return {};
 	}
+	optional<int64_t> base_snapshot_id = current_snapshot->snapshot_id;
 
 	IcebergSnapshotScanInfo snapshot_info;
 	snapshot_info.snapshot = current_snapshot;
@@ -39,7 +41,7 @@ static void LoadExistingManifestList(ClientContext &context, const IcebergTableM
 	}
 
 	if (metadata.iceberg_version < 3) {
-		return;
+		return base_snapshot_id;
 	}
 
 	//! Deal with upgraded tables, if the snapshot originated from V2
@@ -60,6 +62,7 @@ static void LoadExistingManifestList(ClientContext &context, const IcebergTableM
 		next_row_id += manifest_file.added_rows_count;
 		next_row_id += manifest_file.existing_rows_count;
 	}
+	return base_snapshot_id;
 }
 
 IcebergTransactionData::IcebergTransactionData(ClientContext &context, IcebergTransaction &transaction,
@@ -100,6 +103,18 @@ int64_t IcebergTransactionData::GetCommitRetryCount() const {
 		    it->second);
 	}
 	return result;
+}
+
+bool IcebergTransactionData::ContainsDelete() const {
+	for (auto &update : updates) {
+		if (update->type != IcebergTableUpdateType::ADD_SNAPSHOT) {
+			continue;
+		}
+		if (update->Cast<IcebergAddSnapshot>().GetOperation() == IcebergSnapshotOperationType::DELETE) {
+			return true;
+		}
+	}
+	return false;
 }
 
 bool IcebergTransactionData::SupportsAppendRetry() const {
@@ -145,7 +160,7 @@ void IcebergTransactionData::CacheExistingManifestList(lock_guard<mutex> &guard,
 	if (metadata.next_row_id) {
 		loaded_next_row_id = *metadata.next_row_id;
 	}
-	LoadExistingManifestList(context, metadata, existing_manifest_list, loaded_next_row_id);
+	base_snapshot_id = LoadExistingManifestList(context, metadata, existing_manifest_list, loaded_next_row_id);
 	next_row_id = loaded_next_row_id;
 }
 

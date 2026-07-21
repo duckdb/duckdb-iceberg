@@ -30,6 +30,9 @@ public:
 	void CreateUpdate(DatabaseInstance &db, ClientContext &context, IcebergCommitState &commit_state) const override;
 	const vector<IcebergManifestListEntry> &GetManifestFiles() const;
 	void AddManifestFile(IcebergManifestListEntry &&manifest_file);
+	IcebergSnapshotOperationType GetOperation() const {
+		return operation;
+	}
 
 public:
 	IcebergManifestDeletes altered_manifests;

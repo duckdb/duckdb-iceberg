@@ -35,6 +35,10 @@ statement ok
 insert into my_datalake.default.metrics_mode_test values
     ('abcdefghijklmnop', 'abcdefghijklmnop', 'abcdefghijklmnop', 'abcdefghijklmnop', 'abcdefghijklmnop');
 
+# Start transaction to keep necessary credentials in scope
+statement ok
+begin
+
 statement ok
 set variable mp = (select manifest_path from iceberg_metadata(my_datalake.default.metrics_mode_test) order by manifest_sequence_number desc limit 1);
 
@@ -116,6 +120,9 @@ select octet_length(lb) from (
 ----
 4
 
+statement ok
+commit
+
 # --- Default when the property is unset: Iceberg's truncate(16) ---
 
 statement ok
@@ -128,6 +135,10 @@ create table my_datalake.default.metrics_default_test (s varchar);
 statement ok
 insert into my_datalake.default.metrics_default_test values ('abcdefghijklmnopqrst');
 
+# Start transaction to keep necessary credentials in scope
+statement ok
+begin
+
 statement ok
 set variable mp2 = (select manifest_path from iceberg_metadata(my_datalake.default.metrics_default_test) order by manifest_sequence_number desc limit 1);
 
@@ -138,6 +149,9 @@ select octet_length(lb) from (
 ) where k = 1;
 ----
 16
+
+statement ok
+commit
 
 # --- Invalid metrics modes are rejected at write time ---
 

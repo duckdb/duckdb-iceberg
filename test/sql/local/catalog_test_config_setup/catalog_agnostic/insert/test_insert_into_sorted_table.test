@@ -90,6 +90,10 @@ set variable manifest_path = (
 	limit 1
 );
 
+# Start transaction to keep necessary credentials in scope
+statement ok
+begin
+
 # Use the Iceberg scan handle and file_row_number to compare each row against
 # the previous one in physical write order.
 query I
@@ -120,3 +124,6 @@ where sort_order_id is not null;
 
 statement ok
 drop table my_datalake.default.sorted_insert_write_test;
+
+statement ok
+commit

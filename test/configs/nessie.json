@@ -120,7 +120,8 @@
       "paths": [
         "test/sql/local/catalog_test_config_setup/catalog_agnostic/transactions/test_get_transaction_snapshot.test",
         "test/sql/local/catalog_test_config_setup/catalog_agnostic/update/test_one_update_one_snapshot.test",
-        "test/sql/local/catalog_test_config_setup/catalog_agnostic/transactions/test_transactional_deletes_not_retried.test",
+        "test/sql/local/catalog_test_config_setup/catalog_agnostic/transactions/test_transactional_deletes_retried.test",
+        "test/sql/local/catalog_test_config_setup/catalog_agnostic/delete/test_delete_commit_retry.test",
         "test/sql/local/catalog_test_config_setup/catalog_agnostic/transactions/test_transaction_get_from_transaction_start.test",
         "test/sql/local/catalog_test_config_setup/catalog_agnostic/transactions/test_transactional_updates.test",
         "test/sql/local/catalog_test_config_setup/catalog_agnostic/delete/test_transactional_delete.test",

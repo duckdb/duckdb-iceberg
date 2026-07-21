@@ -29,6 +29,8 @@ public:
 	int64_t GetCommitRetryCount() const;
 	bool SupportsAppendRetry() const;
 	bool RetryStateMatches(const IcebergTableInformation &table_info) const;
+	//! Whether this transaction stages a DELETE snapshot; gates the commit-retry safety check.
+	bool ContainsDelete() const;
 
 	void AddSnapshot(IcebergSnapshotOperationType operation, vector<IcebergManifestEntry> &&data_files,
 	                 IcebergManifestDeletes &&altered_manifests);
@@ -73,6 +75,9 @@ public:
 
 	//! Every insert/update/delete creates an alter of the table data
 	vector<reference<IcebergAddSnapshot>> alters;
+	//! Snapshot this transaction is based on (the tip when the manifest list was first cached).
+	//! Drives the delete commit-retry safety check.
+	optional<int64_t> base_snapshot_id;
 	//! The 'referenced_data_file' -> 'data_file.file_path' of the currently active transaction-local deletes
 	case_insensitive_map_t<string> transactional_delete_files;
 	//! Track the current row id for this transaction

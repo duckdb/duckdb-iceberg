@@ -49,6 +49,10 @@ select count(*), sum(id) from my_datalake.default.compress_default;
 ----
 1000	499500
 
+# Start transaction to keep necessary credentials in scope
+statement ok
+begin
+
 # Prove the manifest is actually deflate-compressed AND valid:
 #  - the Avro object-container header records avro.codec -> deflate (in the first bytes; the
 #    compressed data blocks that follow are not valid UTF-8, so we slice the header first), and
@@ -69,6 +73,9 @@ query I
 SELECT count(*) > 0 FROM read_avro(getvariable('manifest_default'));
 ----
 true
+
+statement ok
+commit
 
 statement ok
 drop table my_datalake.default.compress_default;
@@ -122,6 +129,10 @@ select count(*) from my_datalake.default.compress_none;
 ----
 300
 
+# Start transaction to keep necessary credentials in scope
+statement ok
+begin
+
 # With 'none', the manifest is written uncompressed: the Avro header records avro.codec -> null and
 # there is no 'deflate' marker.
 statement ok
@@ -135,6 +146,9 @@ SELECT position('deflate' IN (content[1:60]::VARCHAR)) = 0, position('null' IN (
 FROM read_blob(getvariable('manifest_none'));
 ----
 true	true
+
+statement ok
+commit
 
 statement ok
 drop table my_datalake.default.compress_none;
@@ -205,6 +219,10 @@ insert into my_datalake.default.compress_bounds select
 	i * 10
 from range(200) t(i);
 
+# Start transaction to keep necessary credentials in scope
+statement ok
+begin
+
 statement ok
 SET VARIABLE manifest_bounds = (
 	SELECT manifest_path FROM iceberg_metadata(my_datalake.default.compress_bounds)
@@ -228,3 +246,6 @@ SELECT record_count FROM (SELECT unnest(data_file) FROM read_avro(getvariable('m
 
 statement ok
 drop table my_datalake.default.compress_bounds;
+
+statement ok
+commit

@@ -20,6 +20,7 @@
 			"reason": "Gravitino doesn't provide credentials to read metadata.json paths",
 			"paths": [
 				"test/sql/local/catalog_test_config_setup/catalog_agnostic/alter/alter_rename_column.test",
+				"test/sql/local/catalog_test_config_setup/catalog_agnostic/transactions/test_transactional_deletes_retried.test",
 				"test/sql/local/catalog_test_config_setup/catalog_agnostic/alter/add_column/alter_add_column_warn_schema_mismatch.test",
 				"test/sql/local/catalog_test_config_setup/catalog_agnostic/alter/not_null/alter_drop_not_null_warn_schema_mismatch.test",
 				"test/sql/local/catalog_test_config_setup/catalog_agnostic/delete/test_transactional_delete.test",

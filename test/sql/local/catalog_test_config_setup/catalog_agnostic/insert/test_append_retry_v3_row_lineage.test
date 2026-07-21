@@ -51,6 +51,10 @@ commit
 statement ok con2
 commit
 
+# Start transaction to keep necessary credentials in scope
+statement ok
+begin
+
 statement ok
 SET VARIABLE append_retry_manifest = (
 	SELECT manifest_path FROM iceberg_metadata(my_datalake.default.append_retry_v3_row_lineage)
@@ -75,3 +79,6 @@ order by _row_id;
 1	0	0	base
 2	1	1	one
 3	2	2	two
+
+statement ok
+commit

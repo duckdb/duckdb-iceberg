@@ -1591,9 +1591,12 @@ void IcebergMultiFileList::LoadManifestList(lock_guard<mutex> &guard) const {
 }
 
 void IcebergMultiFileList::StartDeleteManifestScan() const {
+<<<<<<< HEAD
 	if (shared_state->rest_planned) {
 		return;
 	}
+=======
+>>>>>>> upstream/main
 	if (shared_state->delete_manifest_scan || shared_state->committed_delete_manifests.empty()) {
 		return;
 	}

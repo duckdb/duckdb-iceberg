@@ -75,6 +75,13 @@ public:
 		}
 		return reinterpret_cast<TARGET &>(*this);
 	}
+	template <class TARGET>
+	const TARGET &Cast() const {
+		if (type != TARGET::TYPE) {
+			throw InternalException("Failed to cast IcebergTableUpdate to type - type mismatch");
+		}
+		return reinterpret_cast<const TARGET &>(*this);
+	}
 
 public:
 	IcebergTableUpdateType type;

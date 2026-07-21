@@ -28,6 +28,10 @@ select count(*) from my_datalake.default.compress_v3;
 ----
 300
 
+# Start transaction to keep necessary credentials in scope
+statement ok
+begin
+
 # The v3 manifest is deflate-compressed: its Avro header records avro.codec -> deflate.
 statement ok
 SET VARIABLE manifest_v3 = (
@@ -48,3 +52,6 @@ true
 
 statement ok
 drop table my_datalake.default.compress_v3;
+
+statement ok
+commit

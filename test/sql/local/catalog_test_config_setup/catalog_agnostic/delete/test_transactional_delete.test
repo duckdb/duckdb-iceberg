@@ -130,14 +130,16 @@ select * from my_datalake.default.multi_transaction_insert order by all;
 2	0
 2	2
 
-# FIXME: In the future, retries should alleviate this error
-# Commit fails because the snapshot changed
-statement error con1
+# con2's concurrent commit was an append that did not touch the data con1's
+# delete targets, so con1's commit is retried against the refreshed tip and
+# succeeds (previously the snapshot change failed the commit outright).
+statement ok con1
 commit;
-----
-<REGEX>:.*Failed to commit.*
 
-# con1's DELETE was a no-op; con2's committed row remains.
+# con1's DELETE removed the (3,0) row it saw. con2's appended rows remain,
+# including its own (3,3): a concurrently-appended matching row is not removed
+# under the default (that is the job of serializable isolation-level detection,
+# a follow-up); the delete only applies to the data it scanned.
 query II
 select * from my_datalake.default.multi_transaction_insert order by all
 ----
@@ -145,6 +147,5 @@ select * from my_datalake.default.multi_transaction_insert order by all
 1	0
 2	0
 2	2
-3	0
 3	3
 4	1

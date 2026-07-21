@@ -82,6 +82,10 @@ and status = 'ADDED';
 ----
 2
 
+# Start transaction to keep necessary credentials in scope
+statement ok
+begin
+
 statement ok
 set variable manifest_path = (
 	select manifest_path
@@ -158,3 +162,6 @@ and sort_order_id is not null;
 
 statement ok
 drop table my_datalake.default.partitioned_sorted_insert_write_test;
+
+statement ok
+commit
