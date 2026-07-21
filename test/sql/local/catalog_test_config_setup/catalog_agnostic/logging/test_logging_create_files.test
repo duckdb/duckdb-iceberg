@@ -36,7 +36,7 @@ create table my_datalake.default.test_logging_create_table WITH
 	('write.target-file-size-bytes'='sdfvs', 'write.parquet.compression-codec'='zstd')
 as select range a from range(10000);
 ----
-<REGEX>:.*write.target-file-size-bytes is not a valid number.*
+Invalid Configuration Error: Invalid format for 'write.target-file-size-bytes' (sdfvs), error: Memory must have a number (e.g. 1GB)
 
 statement error
 select * from my_datalake.default.test_logging_create_table;

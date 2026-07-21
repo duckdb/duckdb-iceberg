@@ -22,7 +22,7 @@ Value IcebergDefaultBinder::Evaluate(optional_ptr<const ParsedExpression> expr, 
 	if (!bound_expr->IsFoldable()) {
 		throw NotImplementedException("Only foldable expressions are allowed as DEFAULT values");
 	}
-	auto val = ExpressionExecutor::EvaluateScalar(context, *bound_expr, false).DefaultCastAs(type);
+	auto val = ExpressionExecutor::EvaluateScalar(context, *bound_expr, false);
 
 	auto type_id = type.id();
 	switch (type_id) {
@@ -41,7 +41,7 @@ Value IcebergDefaultBinder::Evaluate(optional_ptr<const ParsedExpression> expr, 
 	default:
 		break;
 	};
-	return val;
+	return val.DefaultCastAs(type);
 }
 
 namespace {

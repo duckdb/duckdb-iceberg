@@ -92,7 +92,7 @@ commit
 statement error con1
 alter table my_datalake.default.metadata_log_format_version alter column a set default 42;
 ----
-Not implemented Error: SET DEFAULT is not supported on tables < V3
+Invalid Input Error: non-null DEFAULT values are not supported for <V3 tables
 
 statement ok con1
 rollback
