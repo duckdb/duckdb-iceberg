@@ -1492,8 +1492,8 @@ void IcebergMultiFileList::LoadManifestList(lock_guard<mutex> &guard) const {
 	}
 
 	auto &snapshot_info = shared_state->scan_info->snapshot_info;
+	auto table_entry = GetTable();
 	if (snapshot_info.snapshot) {
-		auto table_entry = GetTable();
 		auto scan_planning_mode = GetScanPlanningMode(table_entry);
 		bool server_side_planning_enabled = true;
 		server_side_planning_enabled = shared_state->rest_planning_enabled;
@@ -1521,7 +1521,6 @@ void IcebergMultiFileList::LoadManifestList(lock_guard<mutex> &guard) const {
 		if (server_side_planning_enabled) {
 			auto &table_info = table_entry->table_info;
 			auto &catalog = table_info.catalog;
-			bool successfully_planned = false;
 			if (catalog.supported_urls.count(IcebergScanPlanning::PLAN_ENDPOINT)) {
 				rest_api_objects::PlanTableScanRequest request;
 				request.snapshot_id = snapshot_info.snapshot->snapshot_id;
@@ -1560,14 +1559,15 @@ void IcebergMultiFileList::LoadManifestList(lock_guard<mutex> &guard) const {
 						table_info.LoadCredentials(context,
 						                           table_info.GetVendedCredentials(context, plan.storage_credentials));
 					}
-					successfully_planned = true;
 				}
 			}
-			if (!successfully_planned && scan_planning_mode == ScanPlanningMode::SERVER_SIDE_ONLY) {
-				throw BinderException(
-				    "Unable to plan scan for table %s, but table's config disabled non-server-side scan planning",
-				    table_info.name);
-			}
+		}
+		if (!shared_state->rest_planned && scan_planning_mode == ScanPlanningMode::SERVER_SIDE_ONLY) {
+			D_ASSERT(table_entry);
+			auto table_name = table_entry->table_info.name;
+			throw BinderException(
+			    "Unable to plan scan for table %s, but table's config disabled non-server-side scan planning",
+			    table_name);
 		}
 
 		//! Load the snapshot

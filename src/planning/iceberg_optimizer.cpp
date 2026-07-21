@@ -172,7 +172,7 @@ void IcebergOptimizer::PreOptimize(OptimizerExtensionInput &input, unique_ptr<Lo
 
 OptimizerExtension IcebergOptimizer::Create() {
 	OptimizerExtension ext;
-	ext.optimize_function = IcebergOptimizer::PreOptimize;
+	ext.pre_optimize_function = IcebergOptimizer::PreOptimize;
 	return ext;
 }
 
