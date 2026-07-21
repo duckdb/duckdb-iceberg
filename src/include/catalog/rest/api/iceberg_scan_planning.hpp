@@ -13,7 +13,7 @@ class ClientContext;
 class IcebergCatalog;
 struct IcebergTableInformation;
 
-struct IcebergRESTScanPlan {
+struct IcebergServerSideScanPlan {
 	vector<IcebergManifestListEntry> data_manifests;
 	vector<IcebergManifestListEntry> delete_manifests;
 	//! data-file path -> delete-file paths explicitly referenced by its FileScanTask.
@@ -22,7 +22,7 @@ struct IcebergRESTScanPlan {
 	optional<string> plan_id;
 };
 
-class IcebergScanPlanning {
+class IcebergServerSideScanPlanning {
 public:
 	static constexpr const char *PLAN_ENDPOINT = "POST /v1/{prefix}/namespaces/{namespace}/tables/{table}/plan";
 	static constexpr const char *FETCH_ENDPOINT =
@@ -35,7 +35,7 @@ public:
 
 	//! Returns false only when the server explicitly declines planning with HTTP 406.
 	static bool Plan(ClientContext &context, IcebergTableInformation &table_info,
-	                 rest_api_objects::PlanTableScanRequest request, IcebergRESTScanPlan &result);
+	                 rest_api_objects::PlanTableScanRequest request, IcebergServerSideScanPlan &result);
 };
 
 } // namespace duckdb

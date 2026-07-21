@@ -73,6 +73,8 @@ private:
 };
 
 class IcebergTableEntry;
+class IcebergScanPlanProvider;
+class ClientSideScanPlanProvider;
 struct IcebergMultiFileList;
 struct RowGroupOrderOptions;
 
@@ -99,6 +101,7 @@ public:
 
 private:
 	friend struct IcebergMultiFileList;
+	friend class ClientSideScanPlanProvider;
 
 	ClientContext &context;
 	FileSystem &fs;
@@ -111,11 +114,7 @@ private:
 	mutable mutex delete_lock;
 	mutable ManifestEntryReadState read_state;
 
-	mutable bool rest_planning_enabled = true;
-	//! True when committed manifests were synthesized from REST file scan tasks.
-	mutable bool rest_planned = false;
-	//! In REST plans, delete applicability is explicit rather than sequence/partition inferred.
-	mutable case_insensitive_map_t<unordered_set<string>> rest_delete_files_by_data_file;
+	mutable bool server_side_planning_enabled = true;
 
 	mutable bool manifest_list_loaded = false;
 	mutable bool data_manifest_scan_started = false;
@@ -168,7 +167,7 @@ public:
 	void SetTable(IcebergTableEntry *table);
 	void SetOptions(const IcebergOptions &options);
 	void SetScanOrder(unique_ptr<RowGroupOrderOptions> options);
-	void DisableRESTPlanning();
+	void DisableServerSidePlanning();
 
 	void Bind(vector<LogicalType> &return_types, vector<Identifier> &names);
 	unique_ptr<IcebergMultiFileList> PushdownInternal(ClientContext &context, TableFilterSet &new_filters,
@@ -228,6 +227,7 @@ private:
 	bool TryGetNextBatch(lock_guard<mutex> &guard) const;
 	void FinishScanTasks(lock_guard<mutex> &guard) const;
 	void LoadManifestList(lock_guard<mutex> &guard) const;
+	void InitializeScanPlanProvider() const;
 	void StartDeleteManifestScan() const;
 	void StartDataManifestScan(lock_guard<mutex> &guard) const;
 	bool FinishedScanningDeletes() const;
@@ -246,6 +246,10 @@ private:
 	                            const vector<ColumnIndex> &global_column_ids,
 	                            const vector<idx_t> &projection_ids) const;
 	void ScanPuffinFile(const BoundIcebergManifestEntry &entry) const;
+	case_insensitive_map_t<shared_ptr<IcebergDeleteData>> &GetPositionalDeleteData() const;
+	map<sequence_number_t, unique_ptr<IcebergEqualityDeleteData>> &GetEqualityDeleteData() const;
+	IcebergScanPlanProvider &GetScanPlanProvider() const;
+	bool IsServerSidePlanning() const;
 
 private:
 	shared_ptr<IcebergMultiFileListSharedState> shared_state;
@@ -257,6 +261,10 @@ private:
 	vector<string> names;
 	vector<LogicalType> types;
 	IcebergTableFilters table_filters;
+
+	//! The provider is per-view. The server-side implementation owns its filter-derived plan, while the client-side
+	//! implementation delegates to the shared manifest state above.
+	mutable unique_ptr<IcebergScanPlanProvider> scan_plan_provider;
 
 	mutable bool view_initialized = false;
 	mutable IcebergDataViewCursor data_view_cursor;

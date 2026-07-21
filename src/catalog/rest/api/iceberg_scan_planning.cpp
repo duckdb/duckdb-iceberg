@@ -63,14 +63,15 @@ static HTTPHeaders PlanningHeaders(ClientContext &context) {
 }
 
 static void ThrowResponseError(const IRCEndpointBuilder &endpoint, const HTTPResponse &response) {
-	throw HTTPException(response, "Iceberg REST scan-planning request to '%s' failed (HTTP %n). Reason: %s, body: %s",
+	throw HTTPException(response,
+	                    "Iceberg server-side scan-planning request to '%s' failed (HTTP %n). Reason: %s, body: %s",
 	                    endpoint.GetURLEncoded(), int(response.status), response.reason, response.body);
 }
 
 static string GetRequiredString(yyjson_val *obj, const char *key) {
 	auto value = yyjson_obj_get(obj, key);
 	if (!value || !yyjson_is_str(value)) {
-		throw InvalidInputException("Invalid Iceberg REST scan-planning response: '%s' must be a string", key);
+		throw InvalidInputException("Invalid Iceberg server-side scan-planning response: '%s' must be a string", key);
 	}
 	return yyjson_get_str(value);
 }
@@ -80,7 +81,7 @@ static void CopyCountMap(const optional<rest_api_objects::CountMap> &source, uno
 		return;
 	}
 	if (source->keys->size() != source->values->size()) {
-		throw InvalidInputException("Iceberg REST scan-planning returned a malformed CountMap");
+		throw InvalidInputException("Iceberg server-side scan-planning returned a malformed CountMap");
 	}
 	for (idx_t i = 0; i < source->keys->size(); i++) {
 		target[(*source->keys)[i].value] = (*source->values)[i].value;
@@ -93,7 +94,7 @@ static void CopyValueMap(const optional<rest_api_objects::ValueMap> &source, con
 		return;
 	}
 	if (source->keys->size() != source->values->size()) {
-		throw InvalidInputException("Iceberg REST scan-planning returned a malformed ValueMap");
+		throw InvalidInputException("Iceberg server-side scan-planning returned a malformed ValueMap");
 	}
 	for (idx_t i = 0; i < source->keys->size(); i++) {
 		auto field_id = (*source->keys)[i].value;
@@ -118,7 +119,7 @@ static void CopyValueMap(const optional<rest_api_objects::ValueMap> &source, con
 		metrics.truncate_length = DConstants::INVALID_INDEX;
 		auto serialized = IcebergValue::SerializeValue(std::move(value), column->type, bound, metrics);
 		if (serialized.HasError()) {
-			throw InvalidInputException("Could not encode Iceberg REST scan-planning bound for field id %d: %s",
+			throw InvalidInputException("Could not encode Iceberg server-side scan-planning bound for field id %d: %s",
 			                            field_id, serialized.GetError());
 		}
 		if (serialized.HasValue()) {
@@ -143,18 +144,20 @@ static IcebergDataFile ConvertContentFile(const rest_api_objects::ContentFile &s
 
 	auto spec_it = metadata.partition_specs.find(source.spec_id);
 	if (spec_it == metadata.partition_specs.end()) {
-		throw InvalidInputException("Iceberg REST scan-planning returned unknown partition spec id %d", source.spec_id);
+		throw InvalidInputException("Iceberg server-side scan-planning returned unknown partition spec id %d",
+		                            source.spec_id);
 	}
 	auto &fields = spec_it->second.fields;
 	if (fields.size() != source.partition.size()) {
-		throw InvalidInputException("Iceberg REST scan-planning returned %d partition values for spec %d, expected %d",
-		                            source.partition.size(), source.spec_id, fields.size());
+		throw InvalidInputException(
+		    "Iceberg server-side scan-planning returned %d partition values for spec %d, expected %d",
+		    source.partition.size(), source.spec_id, fields.size());
 	}
 	for (idx_t i = 0; i < fields.size(); i++) {
 		auto column = metadata.FindColumnByFieldId(NumericCast<int32_t>(fields[i].source_id));
 		if (!column) {
-			throw InvalidInputException("Iceberg REST scan-planning returned a partition for unknown field id %d",
-			                            fields[i].source_id);
+			throw InvalidInputException(
+			    "Iceberg server-side scan-planning returned a partition for unknown field id %d", fields[i].source_id);
 		}
 		auto partition_type = fields[i].transform.GetSerializedType(column->type);
 		result.partition_info.push_back(
@@ -196,7 +199,7 @@ static PlannedContentFile ConvertDeleteFile(rest_api_objects::DeleteFile &source
 		}
 		return PlannedContentFile {std::move(result), equality_delete.content_file.spec_id};
 	}
-	throw InvalidInputException("Iceberg REST scan-planning returned an invalid delete file");
+	throw InvalidInputException("Iceberg server-side scan-planning returned an invalid delete file");
 }
 
 static void AppendTasks(rest_api_objects::ScanTasks tasks, const IcebergTableMetadata &metadata,
@@ -271,9 +274,9 @@ static void FetchPlanTasks(ClientContext &context, IcebergTableInformation &tabl
 }
 
 static void FetchCredentials(ClientContext &context, IcebergTableInformation &table_info,
-                             const optional<string> &plan_id, IcebergRESTScanPlan &result) {
+                             const optional<string> &plan_id, IcebergServerSideScanPlan &result) {
 	if (!result.storage_credentials.empty() ||
-	    table_info.catalog.supported_urls.find(IcebergScanPlanning::CREDENTIALS_ENDPOINT) ==
+	    table_info.catalog.supported_urls.find(IcebergServerSideScanPlanning::CREDENTIALS_ENDPOINT) ==
 	        table_info.catalog.supported_urls.end()) {
 		return;
 	}
@@ -346,8 +349,9 @@ static vector<IcebergManifestListEntry> MakeManifests(FileSystem &fs, const Iceb
 
 } // namespace
 
-bool IcebergScanPlanning::Plan(ClientContext &context, IcebergTableInformation &table_info,
-                               rest_api_objects::PlanTableScanRequest request, IcebergRESTScanPlan &result) {
+bool IcebergServerSideScanPlanning::Plan(ClientContext &context, IcebergTableInformation &table_info,
+                                         rest_api_objects::PlanTableScanRequest request,
+                                         IcebergServerSideScanPlan &result) {
 	auto endpoint = TableEndpoint(table_info);
 	endpoint.AddPathComponent(IRCPathComponent::RegularComponent("plan"));
 	auto headers = PlanningHeaders(context);
@@ -385,14 +389,14 @@ bool IcebergScanPlanning::Plan(ClientContext &context, IcebergTableInformation &
 			}
 			if (status == "failed") {
 				active_plan_id.reset();
-				throw InvalidInputException("Iceberg REST scan planning failed: %s", response->body);
+				throw InvalidInputException("Iceberg server-side scan planning failed: %s", response->body);
 			}
 			if (status == "cancelled") {
 				active_plan_id.reset();
-				throw InterruptException("Iceberg REST scan planning was cancelled by the server");
+				throw InterruptException("Iceberg server-side scan planning was cancelled by the server");
 			}
 			if (status != "submitted") {
-				throw InvalidInputException("Unknown Iceberg REST scan-planning status '%s'", status);
+				throw InvalidInputException("Unknown Iceberg server-side scan-planning status '%s'", status);
 			}
 			active_plan_id = GetRequiredString(root, "plan-id");
 			result.plan_id = active_plan_id;

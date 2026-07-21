@@ -62,7 +62,7 @@ void GuaranteeEqualityDeleteColumnsOptimizer::VisitOperator(unique_ptr<LogicalOp
 			}
 		}
 		if (requires_local_planning) {
-			iceberg_list.DisableRESTPlanning();
+			iceberg_list.DisableServerSidePlanning();
 		}
 		auto delete_manifest_entries = iceberg_list.GetDeleteManifestEntries();
 
