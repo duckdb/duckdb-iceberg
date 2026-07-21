@@ -69,7 +69,7 @@ public:
 	//! Internal JSON parsing functions
 	optional_ptr<const IcebergSnapshot> FindSnapshotByIdInternal(int64_t target_id) const;
 	shared_ptr<IcebergTableSchema> GetSchemaFromId(int32_t schema_id) const;
-	//! Searches every schema (current and historical) for a top-level column with the given field-id.
+	//! Searches every schema (current and historical) for a column with the given field-id.
 	//! Used to resolve equality-delete columns that have since been dropped from the table.
 	optional_ptr<const IcebergColumnDefinition> FindColumnByFieldId(int32_t field_id) const;
 	optional_ptr<const IcebergPartitionSpec> FindPartitionSpecById(int32_t spec_id) const;

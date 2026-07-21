@@ -1,6 +1,7 @@
 #pragma once
 
 #include "duckdb/common/column_index.hpp"
+#include "duckdb/common/mutex.hpp"
 #include "duckdb/common/optional.hpp"
 #include "duckdb/common/types/value.hpp"
 
@@ -21,7 +22,9 @@ public:
 	                                optional_ptr<ColumnIndex> parent);
 	static const IcebergColumnDefinition &GetFromColumnIndex(const vector<unique_ptr<IcebergColumnDefinition>> &columns,
 	                                                         const ColumnIndex &column_index, idx_t depth);
+	const unordered_map<uint64_t, ColumnIndex> &GetSourceIdMap() const;
 	optional<ColumnIndex> TryGetColumnIndexByFieldId(idx_t field_id) const;
+	optional_ptr<const IcebergColumnDefinition> TryGetColumnByFieldId(idx_t field_id) const;
 	const IcebergColumnDefinition &GetColumnByFieldId(idx_t field_id) const;
 	optional_ptr<const IcebergColumnDefinition> GetFromPath(const vector<Identifier> &path,
 	                                                        optional_ptr<optional_idx> names_offset) const;
@@ -36,6 +39,14 @@ public:
 	void GetColumnNamesAndTypes(vector<string> &names, vector<LogicalType> &types) const;
 	void GetFieldIdValues(child_list_t<Value> &values) const;
 	Value GetFieldIds() const;
+
+private:
+	void InvalidateSourceIdMap();
+
+private:
+	mutable mutex source_id_map_lock;
+	mutable bool source_id_map_populated = false;
+	mutable unordered_map<uint64_t, ColumnIndex> source_to_column_id;
 
 public:
 	int32_t schema_id;

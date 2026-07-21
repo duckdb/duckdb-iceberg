@@ -780,8 +780,7 @@ bool IcebergMultiFileList::FilePartitionMatchesFilter(const IcebergDataFile &dat
 		    data_file.file_path, manifest_file.partition_spec_id);
 	}
 	auto &partition_spec = partition_spec_it->second;
-	unordered_map<uint64_t, ColumnIndex> source_to_column_id;
-	IcebergTableSchema::PopulateSourceIdMap(source_to_column_id, schema.columns, nullptr);
+	auto &source_to_column_id = schema.GetSourceIdMap();
 
 	//! Map from partition_field_id -> data_file.partition_info[i]
 	unordered_map<uint64_t, idx_t> partition_info_map;
@@ -1256,9 +1255,8 @@ bool IcebergMultiFileList::ManifestMatchesFilter(const IcebergManifestFile &mani
 		return true;
 	}
 
-	auto &schema = GetSchema().columns;
-	unordered_map<uint64_t, ColumnIndex> source_to_column_id;
-	IcebergTableSchema::PopulateSourceIdMap(source_to_column_id, schema, nullptr);
+	auto &schema = GetSchema();
+	auto &source_to_column_id = schema.GetSourceIdMap();
 
 	for (idx_t i = 0; i < field_summaries.size(); i++) {
 		auto &field_summary = field_summaries[i];
@@ -1272,7 +1270,7 @@ bool IcebergMultiFileList::ManifestMatchesFilter(const IcebergManifestFile &mani
 			continue;
 		}
 
-		auto &column = IcebergTableSchema::GetFromColumnIndex(schema, column_id, 0);
+		auto &column = IcebergTableSchema::GetFromColumnIndex(schema.columns, column_id, 0);
 		auto result_type = field.transform.GetSerializedType(column.type);
 		auto stats = IcebergPredicateStats::DeserializeBounds(field_summary.lower_bound, field_summary.upper_bound,
 		                                                      column.name, result_type);

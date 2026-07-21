@@ -73,8 +73,7 @@ static unique_ptr<FunctionData> IcebergColumnStatsBind(ClientContext &context, T
 		                                               ret->snapshot_to_scan, context, options);
 		ret->schema = ret->metadata.GetSchemaFromId(ret->snapshot_to_scan.schema_id);
 
-		auto &schema = ret->schema->columns;
-		IcebergTableSchema::PopulateSourceIdMap(ret->source_to_column_id, schema, nullptr);
+		ret->source_to_column_id = ret->schema->GetSourceIdMap();
 	}
 
 	names.emplace_back("status");
