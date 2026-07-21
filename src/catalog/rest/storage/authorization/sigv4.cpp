@@ -116,6 +116,28 @@ AWSInput SIGV4Authorization::CreateAWSInput(ClientContext &context, const IRCEnd
 	return aws_input;
 }
 
+case_insensitive_map_t<Value> SIGV4Authorization::CreateConfigurationMapDefaults(ClientContext &context) const {
+	case_insensitive_map_t<Value> result;
+	auto catalog_credentials = IcebergCatalog::GetStorageSecret(context, secret);
+	// start with the credentials needed for the catalog and overwrite information contained
+	// in the vended credentials. We do it this way to maintain the region info from the catalog credentials
+	if (catalog_credentials) {
+		auto kv_secret = dynamic_cast<const KeyValueSecret &>(*catalog_credentials->secret);
+		for (auto &option : kv_secret.secret_map) {
+			// Ignore refresh info.
+			// if the credentials are the same as for the catalog, then refreshing the catalog secret is enough
+			// otherwise the vended credentials contain their own information for refreshing.
+			if (option.first != "refresh_info" && option.first != "refresh" && option.first != "expiration_epoch") {
+				result.emplace(option);
+			}
+		}
+	}
+	if (!sigv4_region.empty()) {
+		result.emplace("region", Value(sigv4_region));
+	}
+	return result;
+}
+
 unique_ptr<HTTPResponse> SIGV4Authorization::Request(RequestType request_type, ClientContext &context,
                                                      const IRCEndpointBuilder &endpoint_builder, HTTPHeaders &headers,
                                                      const string &data) {

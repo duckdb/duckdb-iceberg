@@ -445,7 +445,7 @@ void IcebergMultiFileList::SetScanOrder(unique_ptr<RowGroupOrderOptions> options
 
 void IcebergMultiFileList::DisableRESTPlanning() {
 	lock_guard<mutex> guard(shared_state->lock);
-	if (!shared_state->initialized) {
+	if (!shared_state->manifest_list_loaded) {
 		shared_state->rest_planning_enabled = false;
 	}
 }
@@ -1591,12 +1591,9 @@ void IcebergMultiFileList::LoadManifestList(lock_guard<mutex> &guard) const {
 }
 
 void IcebergMultiFileList::StartDeleteManifestScan() const {
-<<<<<<< HEAD
 	if (shared_state->rest_planned) {
 		return;
 	}
-=======
->>>>>>> upstream/main
 	if (shared_state->delete_manifest_scan || shared_state->committed_delete_manifests.empty()) {
 		return;
 	}

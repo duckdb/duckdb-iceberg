@@ -15,11 +15,14 @@ public:
 	                    const string &client_secret, const string &scope);
 
 public:
-	static unique_ptr<OAuth2Authorization> FromAttachOptions(AttachedDatabase &db, ClientContext &context,
-	                                                         IcebergAttachOptions &input);
 	unique_ptr<HTTPResponse> Request(RequestType request_type, ClientContext &context,
 	                                 const IRCEndpointBuilder &endpoint_builder, HTTPHeaders &headers,
 	                                 const string &data = "") override;
+	case_insensitive_map_t<Value> CreateConfigurationMapDefaults(ClientContext &context) const override;
+
+public:
+	static unique_ptr<OAuth2Authorization> FromAttachOptions(AttachedDatabase &db, ClientContext &context,
+	                                                         IcebergAttachOptions &input);
 	static string GetToken(ClientContext &context, const string &grant_type, const string &uri, const string &client_id,
 	                       const string &client_secret, const string &scope);
 	static void SetCatalogSecretParameters(CreateSecretFunction &function);

@@ -491,6 +491,14 @@ unique_ptr<BaseSecret> OAuth2Authorization::CreateCatalogSecretFunction(ClientCo
 	return std::move(result);
 }
 
+case_insensitive_map_t<Value> OAuth2Authorization::CreateConfigurationMapDefaults(ClientContext &context) const {
+	case_insensitive_map_t<Value> result;
+	if (!default_region.empty()) {
+		result["region"] = default_region;
+	}
+	return result;
+}
+
 unique_ptr<HTTPResponse> OAuth2Authorization::Request(RequestType request_type, ClientContext &context,
                                                       const IRCEndpointBuilder &endpoint_builder, HTTPHeaders &headers,
                                                       const string &data) {

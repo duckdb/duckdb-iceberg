@@ -14,10 +14,13 @@ public:
 	SIGV4Authorization(AttachedDatabase &db, const string &secret);
 
 public:
-	static unique_ptr<IcebergAuthorization> FromAttachOptions(AttachedDatabase &db, IcebergAttachOptions &input);
 	unique_ptr<HTTPResponse> Request(RequestType request_type, ClientContext &context,
 	                                 const IRCEndpointBuilder &endpoint_builder, HTTPHeaders &headers,
 	                                 const string &data = "") override;
+	case_insensitive_map_t<Value> CreateConfigurationMapDefaults(ClientContext &context) const override;
+
+public:
+	static unique_ptr<IcebergAuthorization> FromAttachOptions(AttachedDatabase &db, IcebergAttachOptions &input);
 
 private:
 	AWSInput CreateAWSInput(ClientContext &context, const IRCEndpointBuilder &endpoint_builder);
