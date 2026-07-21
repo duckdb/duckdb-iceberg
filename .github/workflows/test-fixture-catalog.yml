@@ -135,7 +135,7 @@ jobs:
 
           for i in {1..30}; do
             if curl -fsS --proxy "${VENDED_CREDENTIAL_REFRESH_PROXY}" http://127.0.0.1:8181/v1/config > /dev/null; then
-              ./build/release/test/unittest --order lex "$PWD/test/sql/local/catalog_custom_setup/fixture/vended_credentials_refresh.test"
+              ${{ inputs.build-path }}/test/unittest --order lex "$PWD/test/sql/local/catalog_custom_setup/fixture/vended_credentials_refresh.test"
               exit 0
             fi
             sleep 1
