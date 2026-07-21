@@ -35,6 +35,10 @@ const string &IcebergTableInformation::BaseFilePath() const {
 	return table_metadata.location;
 }
 
+bool IcebergTableInformation::IsRenamed() const {
+	return original_name != name;
+}
+
 IRCAPITableCredentials IcebergTableInformation::GetVendedCredentials(ClientContext &context) const {
 	return GetVendedCredentials(context, storage_credentials);
 }
@@ -590,7 +594,7 @@ void IcebergTableInformation::InitSchemaVersions() {
 
 IcebergTableInformation::IcebergTableInformation(IcebergCatalog &catalog, IcebergSchemaEntry &schema,
                                                  const string &name)
-    : catalog(catalog), schema(schema), name(name) {
+    : catalog(catalog), schema(schema), name(name), original_name(name) {
 	table_id = "uuid-" + schema.name + "-" + name;
 }
 

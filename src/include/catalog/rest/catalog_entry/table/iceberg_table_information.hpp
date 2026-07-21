@@ -52,6 +52,7 @@ public:
 	GetVendedCredentials(ClientContext &context,
 	                     const vector<rest_api_objects::StorageCredential> &storage_credentials) const;
 	const string &BaseFilePath() const;
+	bool IsRenamed() const;
 
 	IcebergTransactionData &GetOrCreateTransactionData(IcebergTransaction &transaction);
 
@@ -82,6 +83,10 @@ public:
 	// dummy entry to hold existence of a table, but no schema versions
 	unique_ptr<IcebergTableEntry> dummy_entry;
 	unique_ptr<IcebergTransactionData> transaction_data;
+
+private:
+	//! Unchanged by rename, used to check for a rename
+	const string original_name;
 };
 
 } // namespace duckdb

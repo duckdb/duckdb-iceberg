@@ -1493,7 +1493,8 @@ void IcebergMultiFileList::LoadManifestList(lock_guard<mutex> &guard) const {
 
 	auto &snapshot_info = shared_state->scan_info->snapshot_info;
 	if (snapshot_info.snapshot) {
-		auto scan_planning_mode = GetScanPlanningMode(GetTable());
+		auto table_entry = GetTable();
+		auto scan_planning_mode = GetScanPlanningMode(table_entry);
 		bool server_side_planning_enabled = true;
 		server_side_planning_enabled = shared_state->rest_planning_enabled;
 		if (scan_planning_mode == ScanPlanningMode::UNSPECIFIED) {
@@ -1507,7 +1508,10 @@ void IcebergMultiFileList::LoadManifestList(lock_guard<mutex> &guard) const {
 				}
 			}
 		}
-		if (!shared_state->table && !HasTransactionData()) {
+		if (!table_entry || HasTransactionData()) {
+			server_side_planning_enabled = false;
+		}
+		if (table_entry && table_entry->table_info.IsRenamed()) {
 			server_side_planning_enabled = false;
 		}
 		if (scan_planning_mode == ScanPlanningMode::CLIENT_SIDE_ONLY) {
@@ -1515,7 +1519,7 @@ void IcebergMultiFileList::LoadManifestList(lock_guard<mutex> &guard) const {
 		}
 
 		if (server_side_planning_enabled) {
-			auto &table_info = shared_state->table->table_info;
+			auto &table_info = table_entry->table_info;
 			auto &catalog = table_info.catalog;
 			bool successfully_planned = false;
 			if (catalog.supported_urls.count(IcebergScanPlanning::PLAN_ENDPOINT)) {
