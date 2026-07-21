@@ -4,6 +4,7 @@
 #include "duckdb/common/exception/http_exception.hpp"
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/common/types/uuid.hpp"
+#include "duckdb/common/types/blob.hpp"
 #include "duckdb/main/client_context.hpp"
 #include "yyjson.hpp"
 
@@ -88,8 +89,27 @@ static void CopyCountMap(const optional<rest_api_objects::CountMap> &source, uno
 	}
 }
 
+static string DecodeHexValue(const string &value, int32_t field_id) {
+	if (value.size() % 2 != 0) {
+		throw InvalidInputException(
+		    "Iceberg server-side scan-planning returned an invalid hexadecimal bound for field id %d", field_id);
+	}
+
+	string result(value.size() / 2, '\0');
+	for (idx_t i = 0; i < value.size(); i += 2) {
+		auto high = Blob::HEX_MAP[static_cast<uint8_t>(value[i])];
+		auto low = Blob::HEX_MAP[static_cast<uint8_t>(value[i + 1])];
+		if (high < 0 || low < 0) {
+			throw InvalidInputException(
+			    "Iceberg server-side scan-planning returned an invalid hexadecimal bound for field id %d", field_id);
+		}
+		result[i / 2] = static_cast<char>((high << 4) | low);
+	}
+	return result;
+}
+
 static void CopyValueMap(const optional<rest_api_objects::ValueMap> &source, const IcebergTableMetadata &metadata,
-                         unordered_map<int32_t, Value> &target, SerializeBound bound) {
+                         unordered_map<int32_t, Value> &target) {
 	if (!source || !source->keys || !source->values) {
 		return;
 	}
@@ -102,29 +122,18 @@ static void CopyValueMap(const optional<rest_api_objects::ValueMap> &source, con
 		if (!column) {
 			continue;
 		}
-		auto value = IcebergColumnDefinition::ParsePrimitiveValue(column->type, (*source->values)[i]);
-		if (value.IsNull()) {
+		auto &serialized_value = (*source->values)[i];
+		if (serialized_value.null_type_value) {
 			continue;
 		}
-		if (column->type.id() == LogicalTypeId::TIME || column->type.id() == LogicalTypeId::UUID) {
-			// IcebergValue does not currently serialize bounds for these types. Omitting the
-			// optional bound is conservative and leaves the remaining metrics usable.
-			continue;
+		if (!serialized_value.binary_type_value) {
+			throw InvalidInputException("Iceberg server-side scan-planning returned a non-binary bound for field id %d",
+			                            field_id);
 		}
-		if (column->type.id() == LogicalTypeId::DECIMAL) {
-			value = value.DefaultCastAs(LogicalType::VARCHAR);
-		}
-		IcebergMetricsConfig metrics;
-		metrics.mode = IcebergMetricsMode::FULL;
-		metrics.truncate_length = DConstants::INVALID_INDEX;
-		auto serialized = IcebergValue::SerializeValue(std::move(value), column->type, bound, metrics);
-		if (serialized.HasError()) {
-			throw InvalidInputException("Could not encode Iceberg server-side scan-planning bound for field id %d: %s",
-			                            field_id, serialized.GetError());
-		}
-		if (serialized.HasValue()) {
-			target[field_id] = serialized.GetValue();
-		}
+
+		// The REST API represents the Iceberg bound bytes as a hexadecimal string. Preserve the decoded bytes here;
+		// consumers deserialize the BLOB using the column's Iceberg type.
+		target[field_id] = Value::BLOB_RAW(DecodeHexValue(serialized_value.binary_type_value->value, field_id));
 	}
 }
 
@@ -185,8 +194,8 @@ static PlannedContentFile ConvertDataFile(const rest_api_objects::DataFile &sour
 	CopyCountMap(source.value_counts, result.value_counts);
 	CopyCountMap(source.null_value_counts, result.null_value_counts);
 	CopyCountMap(source.nan_value_counts, result.nan_value_counts);
-	CopyValueMap(source.lower_bounds, metadata, result.lower_bounds, SerializeBound::LOWER_BOUND);
-	CopyValueMap(source.upper_bounds, metadata, result.upper_bounds, SerializeBound::UPPER_BOUND);
+	CopyValueMap(source.lower_bounds, metadata, result.lower_bounds);
+	CopyValueMap(source.upper_bounds, metadata, result.upper_bounds);
 	return PlannedContentFile {std::move(result), source.content_file.spec_id};
 }
 

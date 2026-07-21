@@ -28,7 +28,7 @@ query I nosort results_1
 select sum(l_suppkey), min(l_suppkey), max(l_suppkey) from my_datalake.default.lineitem_001_deletes;
 
 query I nosort results_1
-select sum(l_suppkey), min(l_suppkey), max(l_suppkey) from read_parquet('{WORKING_DIRECTORY}/data/generated/intermediates/fixture/default/lineitem_001_deletes/last/data.parquet/*.parquet');
+select sum(l_suppkey), min(l_suppkey), max(l_suppkey) from read_parquet('{WORKING_DIRECTORY}/data/generated/intermediates/{CATALOG_TEST_CONFIG_SETUP}/default/lineitem_001_deletes/last/data.parquet/*.parquet');
 
 # Verify Deletes
 # joins with a table that has deletes.
