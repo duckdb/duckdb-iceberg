@@ -1458,6 +1458,34 @@ void IcebergMultiFileList::InitializeView(lock_guard<mutex> &guard) const {
 	view_initialized = true;
 }
 
+namespace {
+
+enum class ScanPlanningMode : uint8_t { UNSPECIFIED, SERVER_SIDE_ONLY, CLIENT_SIDE_ONLY };
+
+static ScanPlanningMode GetScanPlanningMode(IcebergTableEntry *table) {
+	if (!table) {
+		return ScanPlanningMode::CLIENT_SIDE_ONLY;
+	}
+
+	auto &table_info = table->table_info;
+	auto &config = table_info.config;
+
+	auto it = config.find("scan-planning-mode");
+	if (it == config.end()) {
+		return ScanPlanningMode::UNSPECIFIED;
+	}
+	auto &mode = it->second;
+	if (StringUtil::CIEquals(mode, "client")) {
+		return ScanPlanningMode::CLIENT_SIDE_ONLY;
+	}
+	if (StringUtil::CIEquals(mode, "server")) {
+		return ScanPlanningMode::SERVER_SIDE_ONLY;
+	}
+	throw InvalidConfigurationException("Table's config 'scan-planning-mode' has unrecognized option: %s", mode);
+}
+
+} // namespace
+
 void IcebergMultiFileList::LoadManifestList(lock_guard<mutex> &guard) const {
 	if (shared_state->manifest_list_loaded) {
 		return;
@@ -1465,9 +1493,31 @@ void IcebergMultiFileList::LoadManifestList(lock_guard<mutex> &guard) const {
 
 	auto &snapshot_info = shared_state->scan_info->snapshot_info;
 	if (snapshot_info.snapshot) {
-		if (shared_state->rest_planning_enabled && shared_state->table && !HasTransactionData()) {
+		auto scan_planning_mode = GetScanPlanningMode(GetTable());
+		bool server_side_planning_enabled = true;
+		server_side_planning_enabled = shared_state->rest_planning_enabled;
+		if (scan_planning_mode == ScanPlanningMode::UNSPECIFIED) {
+			Value val;
+			if (context.TryGetCurrentSetting("iceberg_use_server_side_scan_planning", val)) {
+				if (!val.IsNull() && val.type().id() == LogicalTypeId::BOOLEAN) {
+					if (!val.GetValue<bool>()) {
+						//! Without 'iceberg_use_server_side_scan_planning', only use client-side planning
+						scan_planning_mode = ScanPlanningMode::CLIENT_SIDE_ONLY;
+					}
+				}
+			}
+		}
+		if (!shared_state->table && !HasTransactionData()) {
+			server_side_planning_enabled = false;
+		}
+		if (scan_planning_mode == ScanPlanningMode::CLIENT_SIDE_ONLY) {
+			server_side_planning_enabled = false;
+		}
+
+		if (server_side_planning_enabled) {
 			auto &table_info = shared_state->table->table_info;
 			auto &catalog = table_info.catalog;
+			bool successfully_planned = false;
 			if (catalog.supported_urls.count(IcebergScanPlanning::PLAN_ENDPOINT)) {
 				rest_api_objects::PlanTableScanRequest request;
 				request.snapshot_id = snapshot_info.snapshot->snapshot_id;
@@ -1506,7 +1556,13 @@ void IcebergMultiFileList::LoadManifestList(lock_guard<mutex> &guard) const {
 						table_info.LoadCredentials(context,
 						                           table_info.GetVendedCredentials(context, plan.storage_credentials));
 					}
+					successfully_planned = true;
 				}
+			}
+			if (!successfully_planned && scan_planning_mode == ScanPlanningMode::SERVER_SIDE_ONLY) {
+				throw BinderException(
+				    "Unable to plan scan for table %s, but table's config disabled non-server-side scan planning",
+				    table_info.name);
 			}
 		}
 
