@@ -155,13 +155,24 @@ static IcebergDataFile ConvertContentFile(const rest_api_objects::ContentFile &s
 	}
 	for (idx_t i = 0; i < fields.size(); i++) {
 		auto column = metadata.FindColumnByFieldId(NumericCast<int32_t>(fields[i].source_id));
+		auto &field = fields[i];
+		auto &transform = field.transform;
+		auto &partition = source.partition[i];
 		if (!column) {
 			throw InvalidInputException(
-			    "Iceberg server-side scan-planning returned a partition for unknown field id %d", fields[i].source_id);
+			    "Iceberg server-side scan-planning returned a partition for unknown field id %d", field.source_id);
 		}
-		auto partition_value = IcebergColumnDefinition::ParsePrimitiveValue(column->type, source.partition[i]);
-		result.partition_info.push_back(
-		    IcebergPartitionInfo {fields[i].partition_field_id, fields[i].transform.ApplyTransform(partition_value)});
+		Value partition_value;
+		if (transform.Type() == IcebergTransformType::DAY && partition.date_type_value) {
+			//! NOTE: this is the same fix as FixSamePhysicalTypeCasts in 'iceberg_avro_multi_file_reader.cpp' is doing
+			//! Compensating for Spark's DAY transform bug
+			partition_value = Value::INTEGER(
+			    IcebergColumnDefinition::ParsePrimitiveValue(LogicalType::DATE, partition).GetValue<date_t>().days);
+		} else {
+			auto serialized_type = transform.GetSerializedType(column->type);
+			partition_value = IcebergColumnDefinition::ParsePrimitiveValue(serialized_type, partition);
+		}
+		result.partition_info.push_back(IcebergPartitionInfo {field.partition_field_id, partition_value});
 	}
 	return result;
 }
@@ -356,8 +367,9 @@ bool IcebergServerSideScanPlanning::Plan(ClientContext &context, IcebergTableInf
 	auto headers = PlanningHeaders(context);
 	// A fresh key makes retries of each logical planning operation idempotent on servers that support it.
 	headers.Insert("Idempotency-Key", UUID::ToString(UUID::GenerateRandomUUID()));
-	auto response = table_info.catalog.auth_handler->Request(RequestType::POST_REQUEST, context, endpoint, headers,
-	                                                         SerializePlanRequest(request));
+	auto body = SerializePlanRequest(request);
+	auto response =
+	    table_info.catalog.auth_handler->Request(RequestType::POST_REQUEST, context, endpoint, headers, body);
 	if (response->status == HTTPStatusCode::NotAcceptable_406) {
 		return false;
 	}

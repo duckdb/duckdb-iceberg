@@ -3,12 +3,6 @@
 
 require-env CATALOG_TEST_CONFIG_SETUP
 
-statement ok
-set variable catalog_type = (select '{CATALOG_TEST_CONFIG_SETUP}');
-
-onlyif catalog_type=fixture-latest
-require-env CATALOG_TEST_CONFIG_SETUP not_fixture
-
 require avro
 
 require parquet
