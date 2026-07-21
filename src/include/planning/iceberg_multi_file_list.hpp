@@ -228,9 +228,7 @@ private:
 	void FinishScanTasks(lock_guard<mutex> &guard) const;
 	void LoadManifestList(lock_guard<mutex> &guard) const;
 	void InitializeScanPlanProvider() const;
-	void StartDeleteManifestScan() const;
 	void StartDataManifestScan(lock_guard<mutex> &guard) const;
-	bool FinishedScanningDeletes() const;
 	void EnumerateDeleteManifestEntriesInternal() const;
 	void ProcessDeletesInternal(const vector<MultiFileColumnDefinition> &global_columns,
 	                            const vector<ColumnIndex> &global_column_ids,
@@ -249,9 +247,11 @@ private:
 	case_insensitive_map_t<shared_ptr<IcebergDeleteData>> &GetPositionalDeleteData() const;
 	map<sequence_number_t, unique_ptr<IcebergEqualityDeleteData>> &GetEqualityDeleteData() const;
 	IcebergScanPlanProvider &GetScanPlanProvider() const;
-	bool IsServerSidePlanning() const;
 
 private:
+	friend class ClientSideScanPlanProvider;
+	friend class ServerSideScanPlanProvider;
+
 	shared_ptr<IcebergMultiFileListSharedState> shared_state;
 	ClientContext &context;
 	FileSystem &fs;

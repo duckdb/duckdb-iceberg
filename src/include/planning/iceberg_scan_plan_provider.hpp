@@ -9,55 +9,63 @@ class IcebergScanPlanProvider {
 public:
 	virtual ~IcebergScanPlanProvider() = default;
 
-	virtual bool IsServerSide() const = 0;
+	virtual void LoadManifestList(const IcebergMultiFileList &file_list) = 0;
+	virtual void StartDeleteManifestScan(const IcebergMultiFileList &file_list) = 0;
+	virtual void StartDataManifestScan(const IcebergMultiFileList &file_list) = 0;
+	virtual void EnumerateDeleteManifestEntries(const IcebergMultiFileList &file_list) = 0;
+	virtual bool TryGetNextBatch(IcebergDataViewCursor &cursor) = 0;
+	virtual void FinishScanTasks() = 0;
+	virtual bool FinishedScanningDeletes() const = 0;
+	virtual bool DeleteFileAppliesToDataFile(const string &data_file_path, const string &delete_file_path) const = 0;
 	virtual vector<IcebergManifestListEntry> &DataManifests() = 0;
 	virtual vector<IcebergManifestListEntry> &DeleteManifests() = 0;
-	virtual ManifestEntryReadState &ReadState() = 0;
-	virtual bool &DataManifestScanStarted() = 0;
-	virtual bool &DeleteEntriesEnumerated() = 0;
 	virtual idx_t &NextDeleteEntryToProcess() = 0;
 	virtual vector<BoundIcebergManifestEntry> &DeleteManifestEntries() = 0;
 	virtual case_insensitive_map_t<shared_ptr<IcebergDeleteData>> &PositionalDeleteData() = 0;
 	virtual map<sequence_number_t, unique_ptr<IcebergEqualityDeleteData>> &EqualityDeleteData() = 0;
-	virtual const case_insensitive_map_t<unordered_set<string>> &DeleteFilesByDataFile() const = 0;
 };
 
 class ClientSideScanPlanProvider final : public IcebergScanPlanProvider {
 public:
 	explicit ClientSideScanPlanProvider(IcebergMultiFileListSharedState &shared_state);
 
-	bool IsServerSide() const override;
+	void LoadManifestList(const IcebergMultiFileList &file_list) override;
+	void StartDeleteManifestScan(const IcebergMultiFileList &file_list) override;
+	void StartDataManifestScan(const IcebergMultiFileList &file_list) override;
+	void EnumerateDeleteManifestEntries(const IcebergMultiFileList &file_list) override;
+	bool TryGetNextBatch(IcebergDataViewCursor &cursor) override;
+	void FinishScanTasks() override;
+	bool FinishedScanningDeletes() const override;
+	bool DeleteFileAppliesToDataFile(const string &data_file_path, const string &delete_file_path) const override;
 	vector<IcebergManifestListEntry> &DataManifests() override;
 	vector<IcebergManifestListEntry> &DeleteManifests() override;
-	ManifestEntryReadState &ReadState() override;
-	bool &DataManifestScanStarted() override;
-	bool &DeleteEntriesEnumerated() override;
 	idx_t &NextDeleteEntryToProcess() override;
 	vector<BoundIcebergManifestEntry> &DeleteManifestEntries() override;
 	case_insensitive_map_t<shared_ptr<IcebergDeleteData>> &PositionalDeleteData() override;
 	map<sequence_number_t, unique_ptr<IcebergEqualityDeleteData>> &EqualityDeleteData() override;
-	const case_insensitive_map_t<unordered_set<string>> &DeleteFilesByDataFile() const override;
 
 private:
 	IcebergMultiFileListSharedState &shared_state;
-	case_insensitive_map_t<unordered_set<string>> empty_delete_files_by_data_file;
 };
 
 class ServerSideScanPlanProvider final : public IcebergScanPlanProvider {
 public:
 	explicit ServerSideScanPlanProvider(IcebergServerSideScanPlan plan);
 
-	bool IsServerSide() const override;
+	void LoadManifestList(const IcebergMultiFileList &file_list) override;
+	void StartDeleteManifestScan(const IcebergMultiFileList &file_list) override;
+	void StartDataManifestScan(const IcebergMultiFileList &file_list) override;
+	void EnumerateDeleteManifestEntries(const IcebergMultiFileList &file_list) override;
+	bool TryGetNextBatch(IcebergDataViewCursor &cursor) override;
+	void FinishScanTasks() override;
+	bool FinishedScanningDeletes() const override;
+	bool DeleteFileAppliesToDataFile(const string &data_file_path, const string &delete_file_path) const override;
 	vector<IcebergManifestListEntry> &DataManifests() override;
 	vector<IcebergManifestListEntry> &DeleteManifests() override;
-	ManifestEntryReadState &ReadState() override;
-	bool &DataManifestScanStarted() override;
-	bool &DeleteEntriesEnumerated() override;
 	idx_t &NextDeleteEntryToProcess() override;
 	vector<BoundIcebergManifestEntry> &DeleteManifestEntries() override;
 	case_insensitive_map_t<shared_ptr<IcebergDeleteData>> &PositionalDeleteData() override;
 	map<sequence_number_t, unique_ptr<IcebergEqualityDeleteData>> &EqualityDeleteData() override;
-	const case_insensitive_map_t<unordered_set<string>> &DeleteFilesByDataFile() const override;
 
 private:
 	//! Declared before bound entries and parsed delete data so their references are destroyed first.
