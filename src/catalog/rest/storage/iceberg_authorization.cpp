@@ -106,8 +106,9 @@ static string RetrieveRegion(DBConfig &db_config) {
 	return "";
 }
 
-void IcebergAuthorization::ParseConfigOptions(const case_insensitive_map_t<string> &config, ClientContext &context,
-                                              const string &storage_type, case_insensitive_map_t<Value> &options_out) {
+optional<string> IcebergAuthorization::ParseConfigOptions(const case_insensitive_map_t<string> &config,
+                                                          ClientContext &context, const string &storage_type,
+                                                          case_insensitive_map_t<Value> &options_out) {
 	// Parse storage-specific config options
 	if (storage_type == "gcs") {
 		ParseGCSConfigOptions(config, options_out);
@@ -121,7 +122,7 @@ void IcebergAuthorization::ParseConfigOptions(const case_insensitive_map_t<strin
 			const string region = RetrieveRegion(DBConfig::GetConfig(context));
 
 			if (region.empty()) {
-				throw InvalidConfigurationException(
+				return StringUtil::Format(
 				    "No region was provided via the vended credentials, and no region could be found via "
 				    "environment variables. Please provide a default_region for the Iceberg Catalog when attaching");
 			}
@@ -137,8 +138,8 @@ void IcebergAuthorization::ParseConfigOptions(const case_insensitive_map_t<strin
 		} else if (it->second == "false") {
 			path_style = false;
 		} else {
-			throw InvalidInputException("Unexpected value ('%s') for 's3.path-style-access' in 'config' property",
-			                            it->second);
+			return StringUtil::Format("Unexpected value ('%s') for 's3.path-style-access' in 'config' property",
+			                          it->second);
 		}
 
 		options_out["use_ssl"] = Value(!path_style);
@@ -149,7 +150,7 @@ void IcebergAuthorization::ParseConfigOptions(const case_insensitive_map_t<strin
 
 	auto endpoint_it = options_out.find("endpoint");
 	if (endpoint_it == options_out.end()) {
-		return;
+		return std::nullopt;
 	}
 
 	//! Adjust the 'endpoint' if necessary
@@ -164,7 +165,7 @@ void IcebergAuthorization::ParseConfigOptions(const case_insensitive_map_t<strin
 		endpoint = endpoint.substr(0, endpoint.size() - 1);
 	}
 	endpoint_it->second = endpoint;
-	return;
+	return std::nullopt;
 }
 
 void IcebergAuthorization::ParseExtraHttpHeaders(const Value &headers_value,

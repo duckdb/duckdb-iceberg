@@ -1502,11 +1502,9 @@ void IcebergMultiFileList::LoadManifestList(lock_guard<mutex> &guard) const {
 					shared_state->rest_delete_files_by_data_file = std::move(plan.delete_files_by_data_file);
 					shared_state->committed_data_manifests = std::move(plan.data_manifests);
 					shared_state->committed_delete_manifests = std::move(plan.delete_manifests);
-					for (auto &credential : plan.storage_credentials) {
-						table_info.storage_credentials.emplace_back(credential);
-					}
 					if (!plan.storage_credentials.empty()) {
-						table_info.LoadCredentials(context);
+						table_info.LoadCredentials(context,
+						                           table_info.GetVendedCredentials(context, plan.storage_credentials));
 					}
 				}
 			}

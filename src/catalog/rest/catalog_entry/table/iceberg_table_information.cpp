@@ -12,6 +12,7 @@
 #include "duckdb/common/operator/cast_operators.hpp"
 #include "duckdb/parser/column_definition.hpp"
 #include "duckdb/logging/logger.hpp"
+#include "duckdb/common/types/uuid.hpp"
 
 #include "catalog/rest/api/catalog_api.hpp"
 #include "catalog/rest/transaction/iceberg_transaction.hpp"
@@ -35,16 +36,20 @@ const string &IcebergTableInformation::BaseFilePath() const {
 }
 
 IRCAPITableCredentials IcebergTableInformation::GetVendedCredentials(ClientContext &context) const {
+	return GetVendedCredentials(context, storage_credentials);
+}
+
+IRCAPITableCredentials IcebergTableInformation::GetVendedCredentials(
+    ClientContext &context, const vector<rest_api_objects::StorageCredential> &storage_credentials) const {
 	IRCAPITableCredentials result;
 	auto schema_component = IRCPathComponent::NamespaceComponent(schema.namespace_items);
-	auto secret_base_name = StringUtil::Format("__internal_ic_%s__%s__%s", catalog.GetName().GetIdentifierName(),
-	                                           schema_component.encoded, name);
+	auto secret_base_name = UUID::ToString(UUID::GenerateRandomUUID());
 
 	// Detect storage type from metadata location
 	const auto &table_location = table_metadata.GetLocation();
 	string storage_type = DetectStorageType(table_location);
 	auto config_options = catalog.auth_handler->CreateConfigurationMapDefaults(context);
-	IcebergAuthorization::ParseConfigOptions(config, context, storage_type, config_options);
+	auto error = IcebergAuthorization::ParseConfigOptions(config, context, storage_type, config_options);
 
 	//! If there is only one credential listed, we don't really care about the prefix,
 	//! we can use the table_location instead.
@@ -79,7 +84,11 @@ IRCAPITableCredentials IcebergTableInformation::GetVendedCredentials(ClientConte
 		create_secret_input.provider = "config";
 		create_secret_input.options = config_options;
 
-		IcebergAuthorization::ParseConfigOptions(credential.config, context, storage_type, create_secret_input.options);
+		auto credential_config_error = IcebergAuthorization::ParseConfigOptions(
+		    credential.config, context, storage_type, create_secret_input.options);
+		if (credential_config_error) {
+			throw InvalidConfigurationException(*credential_config_error);
+		}
 		//! TODO: apply the 'overrides' retrieved from the /v1/config endpoint
 		result.storage_credentials.push_back(create_secret_input);
 	}
@@ -90,6 +99,10 @@ IRCAPITableCredentials IcebergTableInformation::GetVendedCredentials(ClientConte
 		auto &config = *result.config;
 		config.on_conflict = OnCreateConflict::REPLACE_ON_CONFLICT;
 		config.persist_type = SecretPersistType::TRANSACTION;
+
+		if (error) {
+			throw InvalidConfigurationException(*error);
+		}
 
 		//! TODO: apply the 'overrides' retrieved from the /v1/config endpoint
 		config.options = config_options;
@@ -316,15 +329,21 @@ static void AddHTTPSecretsToOptions(SecretEntry &http_secret_entry, case_insensi
 }
 
 void IcebergTableInformation::LoadCredentials(ClientContext &context) const {
-	auto &secret_manager = SecretManager::Get(context);
-
 	if (catalog.attach_options.access_mode != IRCAccessDelegationMode::VENDED_CREDENTIALS) {
 		// assume secret already exists
 		return;
 	}
-	// Get Credentials from IRC API
+	LoadCredentials(context, GetVendedCredentials(context));
+}
+
+void IcebergTableInformation::LoadCredentials(ClientContext &context, IRCAPITableCredentials table_credentials) const {
+	if (catalog.attach_options.access_mode != IRCAccessDelegationMode::VENDED_CREDENTIALS) {
+		// assume secret already exists
+		return;
+	}
+	auto &secret_manager = SecretManager::Get(context);
+
 	auto &fs = FileSystem::GetFileSystem(context);
-	auto table_credentials = GetVendedCredentials(context);
 	auto metadata_path = table_metadata.GetMetadataPath(fs);
 
 	unique_ptr<SecretEntry> http_secret_entry;
@@ -495,7 +514,9 @@ IcebergTableInformation IcebergTableInformation::Copy() const {
 	clone.table_id = table_id;
 	clone.table_metadata = table_metadata.Copy();
 	clone.config = config;
-	clone.storage_credentials = storage_credentials;
+	for (auto &credential : storage_credentials) {
+		clone.storage_credentials.push_back(credential.Copy());
+	}
 	return clone;
 }
 
@@ -592,7 +613,7 @@ void IcebergTableInformation::InitializeFromLoadTableResult(const rest_api_objec
 
 	if (auto &credentials = load_table_result.storage_credentials) {
 		for (auto &credential : *credentials) {
-			storage_credentials.push_back(credential);
+			storage_credentials.push_back(credential.Copy());
 		}
 	}
 	if (initialize_schemas) {
