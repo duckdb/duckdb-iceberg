@@ -205,6 +205,33 @@ LogicalType IcebergTransform::GetSerializedType(const LogicalType &input) const 
 	}
 }
 
+Value IcebergTransform::ApplyTransform(const Value &value) const {
+	if (value.IsNull()) {
+		return Value(GetSerializedType(value.type()));
+	}
+
+	switch (type) {
+	case IcebergTransformType::IDENTITY:
+		return IdentityTransform::ApplyTransform(value, *this);
+	case IcebergTransformType::BUCKET:
+		return BucketTransform::ApplyTransform(value, *this);
+	case IcebergTransformType::TRUNCATE:
+		return TruncateTransform::ApplyTransform(value, *this);
+	case IcebergTransformType::YEAR:
+		return YearTransform::ApplyTransform(value, *this);
+	case IcebergTransformType::MONTH:
+		return MonthTransform::ApplyTransform(value, *this);
+	case IcebergTransformType::DAY:
+		return DayTransform::ApplyTransform(value, *this);
+	case IcebergTransformType::HOUR:
+		return HourTransform::ApplyTransform(value, *this);
+	case IcebergTransformType::VOID:
+		return Value(GetSerializedType(value.type()));
+	default:
+		throw InvalidConfigurationException("Transform '%s' not implemented", RawType());
+	}
+}
+
 string IcebergTransform::PartitionValueToString(const Value &partition_value) const {
 	if (partition_value.IsNull()) {
 		return "NULL";

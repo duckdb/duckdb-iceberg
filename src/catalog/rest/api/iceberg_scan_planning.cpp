@@ -159,10 +159,9 @@ static IcebergDataFile ConvertContentFile(const rest_api_objects::ContentFile &s
 			throw InvalidInputException(
 			    "Iceberg server-side scan-planning returned a partition for unknown field id %d", fields[i].source_id);
 		}
-		auto partition_type = fields[i].transform.GetSerializedType(column->type);
+		auto partition_value = IcebergColumnDefinition::ParsePrimitiveValue(column->type, source.partition[i]);
 		result.partition_info.push_back(
-		    IcebergPartitionInfo {fields[i].partition_field_id,
-		                          IcebergColumnDefinition::ParsePrimitiveValue(partition_type, source.partition[i])});
+		    IcebergPartitionInfo {fields[i].partition_field_id, fields[i].transform.ApplyTransform(partition_value)});
 	}
 	return result;
 }

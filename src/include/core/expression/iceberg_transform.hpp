@@ -49,6 +49,7 @@ public:
 	static bool TransformFunctionSupported(const string &transform_name);
 	LogicalType GetSerializedType(const LogicalType &input) const;
 	LogicalType GetBoundsType(const LogicalType &input) const;
+	Value ApplyTransform(const Value &value) const;
 	string PartitionValueToString(const Value &partition_value) const;
 	void SetBucketOrTruncateValue(idx_t value);
 

@@ -14,5 +14,11 @@
 			"env_name": "CATALOG_TEST_CONFIG_SETUP",
 			"env_value": "fixture"
 		}
+	],
+	"skip_tests": [
+		{
+			"reason": "Server-side planning doesn't provide us with pruning-related logs",
+			"paths": []
+		}
 	]
 }
