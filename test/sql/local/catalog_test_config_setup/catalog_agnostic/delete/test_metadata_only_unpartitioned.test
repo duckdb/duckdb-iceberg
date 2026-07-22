@@ -1,0 +1,261 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/delete/test_metadata_only_unpartitioned.test
+# description: Metadata-only whole-file delete on unpartitioned tables: single/multiple data files, whole vs partial, and a file emptied across two deletes (existing positional deletes + new deletes == record_count) which also drops the now-dangling file-scoped delete file.
+# group: [delete]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+# ------------------------------------------------------------------
+# v2, multiple data files (one INSERT == one data file)
+# ------------------------------------------------------------------
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.metadata_only_unpart_v2;
+
+statement ok
+CREATE TABLE my_datalake.default.metadata_only_unpart_v2 (a INTEGER) WITH ('format-version'=2);
+
+statement ok
+INSERT INTO my_datalake.default.metadata_only_unpart_v2 SELECT i FROM range(0, 5) t(i);
+
+statement ok
+INSERT INTO my_datalake.default.metadata_only_unpart_v2 SELECT i FROM range(5, 10) t(i);
+
+# two live data files
+query I
+SELECT count(*) FROM iceberg_metadata(my_datalake.default.metadata_only_unpart_v2) WHERE content = 'DATA' AND status != 'DELETED';
+----
+2
+
+# whole-file delete: the predicate covers exactly the first file's rows
+query I
+DELETE FROM my_datalake.default.metadata_only_unpart_v2 WHERE a < 5;
+----
+5
+
+query I
+SELECT a FROM my_datalake.default.metadata_only_unpart_v2 ORDER BY a;
+----
+5
+6
+7
+8
+9
+
+# metadata-only: no delete file, and one fewer live data file
+query I
+SELECT count(*) FROM iceberg_metadata(my_datalake.default.metadata_only_unpart_v2) WHERE content = 'POSITION_DELETES' AND status != 'DELETED';
+----
+0
+
+query I
+SELECT count(*) FROM iceberg_metadata(my_datalake.default.metadata_only_unpart_v2) WHERE content = 'DATA' AND status != 'DELETED';
+----
+1
+
+# partial delete of the surviving file -> merge-on-read delete file
+query I
+DELETE FROM my_datalake.default.metadata_only_unpart_v2 WHERE a = 5;
+----
+1
+
+query I
+SELECT count(*) FROM iceberg_metadata(my_datalake.default.metadata_only_unpart_v2) WHERE content = 'POSITION_DELETES' AND status != 'DELETED';
+----
+1
+
+# now delete the file's remaining rows. Together with the existing positional delete this covers
+# every row of the file, so it becomes a metadata-only drop that also invalidates the now-dangling
+# file-scoped delete file.
+query I
+DELETE FROM my_datalake.default.metadata_only_unpart_v2 WHERE a >= 6;
+----
+4
+
+query I
+SELECT count(*) FROM my_datalake.default.metadata_only_unpart_v2;
+----
+0
+
+# both data files dropped, and the file-scoped delete file was invalidated too
+query I
+SELECT count(*) FROM iceberg_metadata(my_datalake.default.metadata_only_unpart_v2) WHERE content = 'DATA' AND status != 'DELETED';
+----
+0
+
+query I
+SELECT count(*) FROM iceberg_metadata(my_datalake.default.metadata_only_unpart_v2) WHERE content = 'POSITION_DELETES' AND status != 'DELETED';
+----
+0
+
+statement ok
+DROP TABLE my_datalake.default.metadata_only_unpart_v2;
+
+# ------------------------------------------------------------------
+# v2, single data file fully deleted
+# ------------------------------------------------------------------
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.metadata_only_single_v2;
+
+statement ok
+CREATE TABLE my_datalake.default.metadata_only_single_v2 (a INTEGER) WITH ('format-version'=2);
+
+statement ok
+INSERT INTO my_datalake.default.metadata_only_single_v2 SELECT i FROM range(0, 5) t(i);
+
+query I
+DELETE FROM my_datalake.default.metadata_only_single_v2 WHERE a >= 0;
+----
+5
+
+query I
+SELECT count(*) FROM my_datalake.default.metadata_only_single_v2;
+----
+0
+
+query I
+SELECT count(*) FROM iceberg_metadata(my_datalake.default.metadata_only_single_v2) WHERE content = 'POSITION_DELETES' AND status != 'DELETED';
+----
+0
+
+query I
+SELECT count(*) FROM iceberg_metadata(my_datalake.default.metadata_only_single_v2) WHERE content = 'DATA' AND status != 'DELETED';
+----
+0
+
+statement ok
+DROP TABLE my_datalake.default.metadata_only_single_v2;
+
+# ------------------------------------------------------------------
+# v3 (deletion vectors), multiple data files, same whole vs partial behaviour
+# ------------------------------------------------------------------
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.metadata_only_unpart_v3;
+
+statement ok
+CREATE TABLE my_datalake.default.metadata_only_unpart_v3 (a INTEGER) WITH ('format-version'=3);
+
+statement ok
+INSERT INTO my_datalake.default.metadata_only_unpart_v3 SELECT i FROM range(0, 5) t(i);
+
+statement ok
+INSERT INTO my_datalake.default.metadata_only_unpart_v3 SELECT i FROM range(5, 10) t(i);
+
+query I
+DELETE FROM my_datalake.default.metadata_only_unpart_v3 WHERE a < 5;
+----
+5
+
+query I
+SELECT a FROM my_datalake.default.metadata_only_unpart_v3 ORDER BY a;
+----
+5
+6
+7
+8
+9
+
+query I
+SELECT count(*) FROM iceberg_metadata(my_datalake.default.metadata_only_unpart_v3) WHERE content = 'POSITION_DELETES' AND status != 'DELETED';
+----
+0
+
+# partial -> deletion vector, then empty the file (existing DV + new deletes == record_count) -> drop
+query I
+DELETE FROM my_datalake.default.metadata_only_unpart_v3 WHERE a = 5;
+----
+1
+
+query I
+SELECT count(*) FROM iceberg_metadata(my_datalake.default.metadata_only_unpart_v3) WHERE content = 'POSITION_DELETES' AND status != 'DELETED';
+----
+1
+
+query I
+DELETE FROM my_datalake.default.metadata_only_unpart_v3 WHERE a >= 6;
+----
+4
+
+query I
+SELECT count(*) FROM my_datalake.default.metadata_only_unpart_v3;
+----
+0
+
+query I
+SELECT count(*) FROM iceberg_metadata(my_datalake.default.metadata_only_unpart_v3) WHERE content = 'DATA' AND status != 'DELETED';
+----
+0
+
+query I
+SELECT count(*) FROM iceberg_metadata(my_datalake.default.metadata_only_unpart_v3) WHERE content = 'POSITION_DELETES' AND status != 'DELETED';
+----
+0
+
+statement ok
+DROP TABLE my_datalake.default.metadata_only_unpart_v3;
+
+# ------------------------------------------------------------------
+# Transaction-local cardinality: a metadata-only drop of a file that already had a positional delete
+# must discount only the file's LIVE rows, not its full record count. The delete-manifest totals
+# already account for the pre-existing delete, so subtracting the whole record count double-counts
+# the already-deleted rows. A second live file keeps the zero-floor clamp from masking it.
+# ------------------------------------------------------------------
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.metadata_only_card_v2;
+
+statement ok
+CREATE TABLE my_datalake.default.metadata_only_card_v2 (a INTEGER) WITH ('format-version'=2);
+
+# File A: 2 rows.
+statement ok
+INSERT INTO my_datalake.default.metadata_only_card_v2 SELECT i FROM range(0, 2) t(i);
+
+# File B: 3 rows (separate data file).
+statement ok
+INSERT INTO my_datalake.default.metadata_only_card_v2 SELECT i FROM range(10, 13) t(i);
+
+# Partial delete of A -> positional delete file (1 of A's 2 rows).
+statement ok
+DELETE FROM my_datalake.default.metadata_only_card_v2 WHERE a = 0;
+
+# 4 live rows (A: 1, B: 3); the estimate discounts the positional delete.
+query II
+EXPLAIN SELECT * FROM my_datalake.default.metadata_only_card_v2;
+----
+physical_plan	<REGEX>:.*ICEBERG_SCAN.*~4 rows.*
+
+statement ok
+BEGIN;
+
+# Delete A's remaining live row: existing positional delete + this delete cover all of A, so A becomes
+# a metadata-only drop. B is untouched.
+statement ok
+DELETE FROM my_datalake.default.metadata_only_card_v2 WHERE a = 1;
+
+# Transaction-local estimate must be 3 (A gone, B=3). The double-count bug produced ~2.
+query II
+EXPLAIN SELECT * FROM my_datalake.default.metadata_only_card_v2;
+----
+physical_plan	<REGEX>:.*ICEBERG_SCAN.*~3 rows.*
+
+query I
+SELECT count(*) FROM my_datalake.default.metadata_only_card_v2;
+----
+3
+
+statement ok
+COMMIT;
+
+query I
+SELECT count(*) FROM my_datalake.default.metadata_only_card_v2;
+----
+3
+
+statement ok
+DROP TABLE my_datalake.default.metadata_only_card_v2;

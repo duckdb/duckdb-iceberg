@@ -39,12 +39,15 @@ public:
 public:
 	void AddManifestListEntry(const IcebergManifestListEntry &manifest_list_entry);
 	void RemoveFileSize(int64_t file_size_in_bytes);
+	void RemoveDataFile(int64_t record_count);
+	void RemoveDeleteFile(int64_t record_count);
 	bool HasTotalFilesSize() const;
 	void SetTotalFilesSize(int64_t total_files_size);
 
 private:
 	void AddSizeMetric(IcebergSnapshotMetricType type, int64_t value);
 	void UpdateTotalFilesSize(int64_t added, int64_t removed);
+	void DecrementTotal(IcebergSnapshotMetricType type, int64_t value);
 
 public:
 	map<IcebergSnapshotMetricType, int64_t> metrics;

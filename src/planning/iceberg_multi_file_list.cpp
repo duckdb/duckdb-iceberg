@@ -505,7 +505,30 @@ unique_ptr<NodeStatistics> IcebergMultiFileList::GetCardinality(ClientContext &c
 		}
 		cardinality -= manifest.added_rows_count;
 	}
+	//! Subtract pending metadata-only deletes, still included in the manifest totals until commit.
+	auto invalidated_rows = GetTransactionInvalidatedRowCount();
+	cardinality -= invalidated_rows <= cardinality ? invalidated_rows : cardinality;
 	return make_uniq<NodeStatistics>(cardinality, cardinality);
+}
+
+idx_t IcebergMultiFileList::GetTransactionInvalidatedRowCount() const {
+	idx_t invalidated_rows = 0;
+	for (auto &invalidated : shared_state->transaction_invalidated_files) {
+		//! A metadata-only DELETE records its live-row count; rows already covered by delete files
+		//! are discounted by the delete-manifest totals, so only the live rows are subtracted here.
+		auto live_entry = shared_state->transaction_invalidated_live_rows.find(invalidated);
+		if (live_entry != shared_state->transaction_invalidated_live_rows.end()) {
+			invalidated_rows += live_entry->second;
+			continue;
+		}
+		//! Wholesale invalidations (e.g. compaction) carry no live-row count; the file is replaced
+		//! entirely, so subtract its full record count.
+		auto entry = shared_state->data_file_record_count.find(invalidated);
+		if (entry != shared_state->data_file_record_count.end()) {
+			invalidated_rows += static_cast<idx_t>(entry->second);
+		}
+	}
+	return invalidated_rows;
 }
 
 BoundIcebergManifestEntry IcebergMultiFileList::GetManifestEntry(idx_t file_id) const {
@@ -517,6 +540,15 @@ vector<IcebergPartitionInfo> IcebergMultiFileList::GetPartitionInfoForDataFile(c
 	lock_guard<mutex> guard(shared_state->lock);
 	auto entry = shared_state->data_file_partition_info.find(file_path);
 	if (entry != shared_state->data_file_partition_info.end()) {
+		return entry->second;
+	}
+	throw InternalException("Could not find data file '%s' in manifest entries", file_path);
+}
+
+int64_t IcebergMultiFileList::GetRecordCountForDataFile(const string &file_path) const {
+	lock_guard<mutex> guard(shared_state->lock);
+	auto entry = shared_state->data_file_record_count.find(file_path);
+	if (entry != shared_state->data_file_record_count.end()) {
 		return entry->second;
 	}
 	throw InternalException("Could not find data file '%s' in manifest entries", file_path);
@@ -546,6 +578,15 @@ void IcebergMultiFileList::GetStatistics(vector<PartitionStatistics> &result) co
 		}
 	}
 
+	//! Enumerate files to populate per-file record counts before discounting pending metadata-only
+	//! deletes. Use the guard we already hold; GetTotalFileCount() re-locks and would self-deadlock.
+	if (!shared_state->transaction_invalidated_files.empty()) {
+		idx_t enumerated = data_manifest_entries.size();
+		while (!GetFileInternal(enumerated, guard).path.empty()) {
+			enumerated++;
+		}
+	}
+
 	idx_t count = 0;
 	for (idx_t i = 0; i < data_manifests.size(); i++) {
 		auto &manifest = data_manifests[i].entry.file;
@@ -555,6 +596,9 @@ void IcebergMultiFileList::GetStatistics(vector<PartitionStatistics> &result) co
 		count += manifest.existing_rows_count;
 		count += manifest.added_rows_count;
 	}
+	//! Subtract pending metadata-only deletes, still included in the manifest totals until commit.
+	auto invalidated_rows = GetTransactionInvalidatedRowCount();
+	count -= invalidated_rows <= count ? invalidated_rows : count;
 
 	PartitionStatistics partition_stats;
 	partition_stats.count = count;
@@ -960,8 +1004,19 @@ optional_ptr<const BoundIcebergManifestEntry> IcebergMultiFileList::GetDataFile(
 			}
 			shared_state->data_file_partition_info[entry_path] = data_file.partition_info;
 			shared_state->data_file_partition_info[data_file.file_path] = data_file.partition_info;
+			shared_state->data_file_record_count[entry_path] = data_file.record_count;
+			shared_state->data_file_record_count[data_file.file_path] = data_file.record_count;
 
 			if (manifest_entry.status == IcebergManifestEntryStatusType::DELETED) {
+				continue;
+			}
+
+			//! Skip committed data files dropped by a metadata-only delete earlier in this
+			//! transaction (the manifest rewrite only lands at commit).
+			if (shared_state->transaction_invalidated_files.count(entry_path)) {
+				continue;
+			}
+			if (shared_state->transaction_invalidated_files.count(data_file.file_path)) {
 				continue;
 			}
 
@@ -1360,6 +1415,14 @@ void IcebergMultiFileList::LoadManifestList(lock_guard<mutex> &guard) const {
 		auto &transaction_data = GetTransactionData();
 		for (auto &alter_p : transaction_data.alters) {
 			auto &alter = alter_p.get();
+			//! Data files dropped by a metadata-only delete earlier in this transaction are only
+			//! removed from the manifests at commit, so hide them from transaction-local reads.
+			for (auto &invalidated : alter.altered_manifests.InvalidatedFiles()) {
+				shared_state->transaction_invalidated_files.insert(invalidated);
+			}
+			for (auto &live_rows : alter.altered_manifests.InvalidatedDataFileLiveRows()) {
+				shared_state->transaction_invalidated_live_rows[live_rows.first] = live_rows.second;
+			}
 			const auto &manifest_list_entries = alter.GetManifestFiles();
 			for (auto &manifest_list_entry : manifest_list_entries) {
 				auto &manifest = manifest_list_entry.file;

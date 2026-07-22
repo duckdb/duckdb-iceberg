@@ -174,29 +174,37 @@ void IcebergTransactionData::AddSnapshot(IcebergSnapshotOperationType operation,
 	auto &table_metadata = table_info.table_metadata;
 	CacheExistingManifestList(guard, table_metadata);
 
-	IcebergManifestContentType manifest_content_type;
-	switch (operation) {
-	case IcebergSnapshotOperationType::DELETE:
-		manifest_content_type = IcebergManifestContentType::DELETE;
-		break;
-	case IcebergSnapshotOperationType::APPEND:
-	case IcebergSnapshotOperationType::REPLACE:
-		//! This helper currently writes DATA manifest entries; REPLACE itself is not limited to data files.
-		manifest_content_type = IcebergManifestContentType::DATA;
-		break;
-	default:
-		throw NotImplementedException("Cannot have use snapshot operation type OVERWRITE here");
-	};
-
-	auto temp_sequence_number = table_metadata.last_sequence_number + alters.size() + 1;
-
-	auto &fs = FileSystem::GetFileSystem(context);
-	auto manifest_metadata = IcebergManifestMetadata::FromTableMetadata(table_metadata, manifest_content_type);
-	auto manifest_file = IcebergManifestListEntry::CreateFromEntries(
-	    fs, temp_sequence_number, table_metadata, manifest_metadata, std::move(data_files), next_row_id);
-
 	auto add_snapshot = make_uniq<IcebergAddSnapshot>(table_info, operation);
-	add_snapshot->AddManifestFile(std::move(manifest_file));
+
+	//! A metadata-only delete has no new entries (only altered_manifests); add no manifest file
+	//! rather than an empty one.
+	if (!data_files.empty()) {
+		IcebergManifestContentType manifest_content_type;
+		switch (operation) {
+		case IcebergSnapshotOperationType::DELETE:
+			manifest_content_type = IcebergManifestContentType::DELETE;
+			break;
+		case IcebergSnapshotOperationType::APPEND:
+		case IcebergSnapshotOperationType::REPLACE:
+			//! This helper currently writes DATA manifest entries; REPLACE itself is not limited to data files.
+			manifest_content_type = IcebergManifestContentType::DATA;
+			break;
+		default:
+			throw NotImplementedException("Cannot have use snapshot operation type OVERWRITE here");
+		};
+
+		auto temp_sequence_number = table_metadata.last_sequence_number + alters.size() + 1;
+
+		auto &fs = FileSystem::GetFileSystem(context);
+		auto manifest_metadata = IcebergManifestMetadata::FromTableMetadata(table_metadata, manifest_content_type);
+		auto manifest_file = IcebergManifestListEntry::CreateFromEntries(
+		    fs, temp_sequence_number, table_metadata, manifest_metadata, std::move(data_files), next_row_id);
+		add_snapshot->AddManifestFile(std::move(manifest_file));
+	} else if (operation != IcebergSnapshotOperationType::DELETE) {
+		//! A snapshot with no new manifest entries is only valid for a metadata-only delete.
+		throw InternalException("AddSnapshot: empty data_files is only valid for a metadata-only DELETE");
+	}
+
 	// make sure we are still inserting into the current schema
 	if (table_metadata.current_snapshot_id) {
 		TableAddAssertCurrentSchemaId();
@@ -222,19 +230,28 @@ void IcebergTransactionData::AddUpdateSnapshot(vector<IcebergManifestEntry> &&de
 	const auto sequence_number = last_sequence_number + alters.size() + 1;
 
 	auto &fs = FileSystem::GetFileSystem(context);
-	auto delete_manifest_metadata =
-	    IcebergManifestMetadata::FromTableMetadata(table_metadata, IcebergManifestContentType::DELETE);
-	auto data_manifest_metadata =
-	    IcebergManifestMetadata::FromTableMetadata(table_metadata, IcebergManifestContentType::DATA);
-
-	auto delete_manifest_file = IcebergManifestListEntry::CreateFromEntries(
-	    fs, sequence_number, table_metadata, delete_manifest_metadata, std::move(delete_files), next_row_id);
-	// Add a manifest_file for the new insert data
-	auto data_manifest_file = IcebergManifestListEntry::CreateFromEntries(
-	    fs, sequence_number, table_metadata, data_manifest_metadata, std::move(data_files), next_row_id);
 
 	auto add_snapshot = make_uniq<IcebergAddSnapshot>(table_info);
-	add_snapshot->AddManifestFile(std::move(delete_manifest_file));
+
+	//! The delete side of an UPDATE can be a metadata-only whole-file delete, which produces no
+	//! delete-file entries (only altered_manifests). Only add a manifest file when it has entries;
+	//! an empty manifest is invalid.
+	if (!delete_files.empty()) {
+		auto delete_manifest_metadata =
+		    IcebergManifestMetadata::FromTableMetadata(table_metadata, IcebergManifestContentType::DELETE);
+		auto delete_manifest_file = IcebergManifestListEntry::CreateFromEntries(
+		    fs, sequence_number, table_metadata, delete_manifest_metadata, std::move(delete_files), next_row_id);
+		add_snapshot->AddManifestFile(std::move(delete_manifest_file));
+	}
+	// Add a manifest_file for the new insert data. An UPDATE always re-inserts the updated rows, so
+	// (unlike the delete side) the data side must never be empty.
+	if (data_files.empty()) {
+		throw InternalException("AddUpdateSnapshot: an UPDATE must produce new data files");
+	}
+	auto data_manifest_metadata =
+	    IcebergManifestMetadata::FromTableMetadata(table_metadata, IcebergManifestContentType::DATA);
+	auto data_manifest_file = IcebergManifestListEntry::CreateFromEntries(
+	    fs, sequence_number, table_metadata, data_manifest_metadata, std::move(data_files), next_row_id);
 	add_snapshot->AddManifestFile(std::move(data_manifest_file));
 	add_snapshot->altered_manifests = std::move(altered_manifests);
 

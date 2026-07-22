@@ -307,9 +307,35 @@ void IcebergDelete::FlushDeletes(IcebergTransaction &transaction, ClientContext 
 			throw NotImplementedException("The same row was updated multiple times - this is not (yet) supported in "
 			                              "Iceberg. Eliminate duplicate matches prior to running the UPDATE");
 		}
+
+		auto existing_delete = multi_file_list->GetExistingPositionalDeleteData(filename);
+
+		//! When the pre-existing and new deletes together cover every row of the file, drop the whole
+		//! data file with a metadata-only manifest edit instead of writing a delete file. Positions are
+		//! 0-based ordinals, so the union equals record_count exactly when no live row survives.
+		set<idx_t> all_deletes = sorted_deletes;
+		if (existing_delete) {
+			existing_delete->ToSet(all_deletes);
+		}
+		auto record_count = multi_file_list->GetRecordCountForDataFile(filename);
+		if (record_count >= 0 && all_deletes.size() == static_cast<idx_t>(record_count)) {
+			global_state.altered_manifests.InvalidateFile(filename, sorted_deletes.size());
+			//! Drop delete files scoped to only this data file (referenced_data_file set): v3 deletion
+			//! vectors and DuckDB's file-scoped positional deletes. Multi-file deletes from other
+			//! engines still apply elsewhere, so leave them.
+			if (existing_delete) {
+				for (auto &bound_entry : existing_delete->entries) {
+					auto &delete_data_file = bound_entry.entry.data_file;
+					if (delete_data_file.referenced_data_file && *delete_data_file.referenced_data_file == filename) {
+						global_state.altered_manifests.InvalidateFile(delete_data_file.file_path);
+					}
+				}
+			}
+			continue;
+		}
+
 		if (write_deletion_vector) {
 			//! Addd the existing delete we're replacing
-			auto existing_delete = multi_file_list->GetExistingPositionalDeleteData(filename);
 			if (existing_delete) {
 				auto &delete_data = *existing_delete;
 				PopulateAlteredManifests(*multi_file_list, global_state.altered_manifests, delete_data);
@@ -436,7 +462,8 @@ SinkFinalizeType IcebergDelete::Finalize(Pipeline &pipeline, Event &event, Clien
 	auto &table_info = irc_table.table_info;
 	auto iceberg_delete_files = GenerateDeleteManifestEntries(global_state);
 
-	if (!global_state.written_files.empty()) {
+	//! Also commit when the delete only dropped whole files (no written_files, but altered_manifests).
+	if (!global_state.written_files.empty() || !global_state.altered_manifests.IsEmpty()) {
 		ApplyTableUpdate(table_info, iceberg_transaction, [&](IcebergTableInformation &tbl) {
 			auto &transaction_data = tbl.GetOrCreateTransactionData(iceberg_transaction);
 			transaction_data.AddSnapshot(IcebergSnapshotOperationType::DELETE, std::move(iceberg_delete_files),

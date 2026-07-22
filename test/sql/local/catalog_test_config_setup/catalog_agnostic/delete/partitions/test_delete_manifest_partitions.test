@@ -32,36 +32,48 @@ CREATE TABLE my_datalake.default.test_delete_manifest_partitions (id INT, catego
 statement ok
 INSERT INTO my_datalake.default.test_delete_manifest_partitions VALUES
     (1, 'A'),
-    (2, 'B'),
-    (3, 'C'),
-    (4, 'D'),
-    (5, 'E'),
-    (6, NULL);
+    (2, 'A'),
+    (3, 'B'),
+    (4, 'C'),
+    (5, 'D'),
+    (6, 'D'),
+    (7, 'E'),
+    (8, NULL),
+    (9, NULL);
 
 query II
 SELECT id, category FROM my_datalake.default.test_delete_manifest_partitions ORDER BY id;
 ----
 1	A
-2	B
-3	C
-4	D
-5	E
-6	NULL
+2	A
+3	B
+4	C
+5	D
+6	D
+7	E
+8	NULL
+9	NULL
 
 query I
 SELECT COUNT(*) FROM my_datalake.default.test_delete_manifest_partitions WHERE category IN ('A', 'D') or category is null;
 ----
-3
+6
 
+# Delete one row from each of partitions A, D and NULL, leaving each partition non-empty. That keeps
+# the delete a per-file positional delete (not a metadata-only whole-file drop) so it still produces
+# the partition-tagged delete manifest entries this test asserts on.
 statement ok
-DELETE FROM my_datalake.default.test_delete_manifest_partitions WHERE category IN ('A', 'D') or category is NULL;
+DELETE FROM my_datalake.default.test_delete_manifest_partitions WHERE id IN (1, 5, 8);
 
 query II
 SELECT id, category FROM my_datalake.default.test_delete_manifest_partitions ORDER BY id;
 ----
-2	B
-3	C
-5	E
+2	A
+3	B
+4	C
+6	D
+7	E
+9	NULL
 
 # Start transaction to keep necessary credentials in scope
 statement ok
@@ -76,7 +88,7 @@ set variable manifest_path = (select manifest_path from read_avro(getvariable('m
 statement ok
 select * from read_avro(getvariable('manifest_path'));
 
-# manifest path should have 2 entries since entries in 2 partitions were deleted
+# the delete manifest should have 3 entries: one positional delete per touched partition (A, D, NULL)
 query I
 select count(*) from read_avro(getvariable('manifest_path'));
 ----

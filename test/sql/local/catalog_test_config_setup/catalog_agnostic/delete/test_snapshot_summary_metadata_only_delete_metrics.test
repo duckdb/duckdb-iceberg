@@ -1,0 +1,127 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/delete/test_snapshot_summary_metadata_only_delete_metrics.test
+# description: A metadata-only whole-file delete (no delete file written) must still populate the snapshot-summary deleted-data-files / deleted-records metrics and decrement the totals, even though the drop happens via a manifest rewrite rather than a newly added manifest.
+# group: [delete]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+require json
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.test_snapshot_summary_metadata_only;
+
+statement ok
+CREATE TABLE my_datalake.default.test_snapshot_summary_metadata_only (id INTEGER, data VARCHAR);
+
+# Single INSERT -> one data file -> one 'append' snapshot (5 records).
+statement ok
+INSERT INTO my_datalake.default.test_snapshot_summary_metadata_only VALUES (1, 'a'), (2, 'b'), (3, 'c'), (4, 'd'), (5, 'e');
+
+# Delete every row of the single data file -> metadata-only drop (no delete file written).
+statement ok
+DELETE FROM my_datalake.default.test_snapshot_summary_metadata_only WHERE id >= 1;
+
+query I
+SELECT count(*) FROM my_datalake.default.test_snapshot_summary_metadata_only;
+----
+0
+
+# No delete file was written (the drop is a metadata-only manifest edit).
+query I
+SELECT count(*) FROM iceberg_metadata(my_datalake.default.test_snapshot_summary_metadata_only) WHERE content = 'POSITION_DELETES' AND status != 'DELETED';
+----
+0
+
+# The append snapshot seeds the totals.
+query III
+WITH snaps AS (
+    SELECT unnest(json_extract(metadata::JSON, '$.snapshots[*]')) AS snap
+    FROM iceberg_load_table_response(my_datalake.default.test_snapshot_summary_metadata_only)
+)
+SELECT json_extract_string(snap, '$.summary.operation'),
+       json_extract_string(snap, '$.summary."total-data-files"'),
+       json_extract_string(snap, '$.summary."total-records"')
+FROM snaps
+WHERE json_extract_string(snap, '$.summary.operation') = 'append';
+----
+append	1	5
+
+# The metadata-only delete snapshot records the dropped data file and its records, and
+# decrements the running totals to zero. Before the rewrite path fed these metrics, the
+# delete snapshot reported deleted-data-files/deleted-records of 0 and left total-data-files
+# at 1.
+query IIIII
+WITH snaps AS (
+    SELECT unnest(json_extract(metadata::JSON, '$.snapshots[*]')) AS snap
+    FROM iceberg_load_table_response(my_datalake.default.test_snapshot_summary_metadata_only)
+)
+SELECT json_extract_string(snap, '$.summary.operation'),
+       json_extract_string(snap, '$.summary."deleted-data-files"'),
+       json_extract_string(snap, '$.summary."deleted-records"'),
+       json_extract_string(snap, '$.summary."total-data-files"'),
+       json_extract_string(snap, '$.summary."total-records"')
+FROM snaps
+WHERE json_extract_string(snap, '$.summary.operation') = 'delete';
+----
+delete	1	5	0	0
+
+statement ok
+DROP TABLE my_datalake.default.test_snapshot_summary_metadata_only;
+
+# ------------------------------------------------------------------
+# Contrast: a PARTIAL delete is a merge-on-read that writes a positional delete file rather than
+# dropping the data file. It must keep reporting the delete-file metrics and leave total-data-files
+# intact — the whole-file-drop metrics from the rewrite path must NOT fire (no manifest is
+# invalidated, so RewriteManifestFile is never entered).
+# ------------------------------------------------------------------
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.test_snapshot_summary_partial;
+
+statement ok
+CREATE TABLE my_datalake.default.test_snapshot_summary_partial (id INTEGER, data VARCHAR);
+
+statement ok
+INSERT INTO my_datalake.default.test_snapshot_summary_partial VALUES (1, 'a'), (2, 'b'), (3, 'c'), (4, 'd'), (5, 'e');
+
+# Delete a strict subset of the file's rows -> positional delete file, not a metadata-only drop.
+statement ok
+DELETE FROM my_datalake.default.test_snapshot_summary_partial WHERE id IN (2, 4);
+
+query I
+SELECT count(*) FROM my_datalake.default.test_snapshot_summary_partial;
+----
+3
+
+# A positional delete file was written.
+query I
+SELECT count(*) FROM iceberg_metadata(my_datalake.default.test_snapshot_summary_partial) WHERE content = 'POSITION_DELETES' AND status != 'DELETED';
+----
+1
+
+# The delete snapshot reports the delete-file metrics and leaves total-data-files at 1. The
+# whole-file-drop metric (deleted-data-files) is never emitted for a merge-on-read delete, so it is
+# absent from the summary (NULL).
+query IIIII
+WITH snaps AS (
+    SELECT unnest(json_extract(metadata::JSON, '$.snapshots[*]')) AS snap
+    FROM iceberg_load_table_response(my_datalake.default.test_snapshot_summary_partial)
+)
+SELECT json_extract_string(snap, '$.summary.operation'),
+       json_extract_string(snap, '$.summary."added-delete-files"'),
+       json_extract_string(snap, '$.summary."total-delete-files"'),
+       json_extract_string(snap, '$.summary."total-data-files"'),
+       json_extract_string(snap, '$.summary."deleted-data-files"')
+FROM snaps
+WHERE json_extract_string(snap, '$.summary.operation') = 'delete';
+----
+delete	1	1	1	NULL
+
+statement ok
+DROP TABLE my_datalake.default.test_snapshot_summary_partial;

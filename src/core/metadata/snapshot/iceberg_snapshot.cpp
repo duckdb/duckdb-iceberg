@@ -177,6 +177,35 @@ void IcebergSnapshotMetrics::RemoveFileSize(int64_t file_size_in_bytes) {
 	UpdateTotalFilesSize(0, file_size_in_bytes);
 }
 
+void IcebergSnapshotMetrics::DecrementTotal(IcebergSnapshotMetricType type, int64_t value) {
+	auto it = metrics.find(type);
+	if (it == metrics.end()) {
+		return;
+	}
+	int64_t updated = it->second - value;
+	if (updated >= 0) {
+		it->second = updated;
+	}
+}
+
+void IcebergSnapshotMetrics::RemoveDataFile(int64_t record_count) {
+	metrics.emplace(IcebergSnapshotMetricType::DELETED_DATA_FILES, 0).first->second += 1;
+	metrics.emplace(IcebergSnapshotMetricType::DELETED_RECORDS, 0).first->second += record_count;
+	DecrementTotal(IcebergSnapshotMetricType::TOTAL_DATA_FILES, 1);
+	DecrementTotal(IcebergSnapshotMetricType::TOTAL_RECORDS, record_count);
+}
+
+void IcebergSnapshotMetrics::RemoveDeleteFile(int64_t record_count) {
+	metrics.emplace(IcebergSnapshotMetricType::REMOVED_DELETE_FILES, 0).first->second += 1;
+	DecrementTotal(IcebergSnapshotMetricType::TOTAL_DELETE_FILES, 1);
+#ifndef ICEBERG_ENABLE_EQUALITY_DELETE_WRITES
+	//! Without equality-delete writes every delete file is a positional delete file (mirrors
+	//! AddManifestListEntry's guarded accounting).
+	metrics.emplace(IcebergSnapshotMetricType::REMOVED_POSITION_DELETE_FILES, 0).first->second += 1;
+	DecrementTotal(IcebergSnapshotMetricType::TOTAL_POSITION_DELETES, record_count);
+#endif
+}
+
 bool IcebergSnapshotMetrics::HasTotalFilesSize() const {
 	return metrics.count(IcebergSnapshotMetricType::TOTAL_FILES_SIZE) != 0;
 }

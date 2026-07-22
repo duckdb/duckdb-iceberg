@@ -66,6 +66,11 @@ static optional<IcebergManifestListEntry> RewriteManifestFile(const IcebergManif
 		if (manifest_entry.status != IcebergManifestEntryStatusType::DELETED &&
 		    deletes.IsInvalidated(manifest_entry.data_file.file_path)) {
 			snapshot_metrics.RemoveFileSize(manifest_entry.data_file.file_size_in_bytes);
+			if (list_entry.file.content == IcebergManifestContentType::DELETE) {
+				snapshot_metrics.RemoveDeleteFile(manifest_entry.data_file.record_count);
+			} else {
+				snapshot_metrics.RemoveDataFile(manifest_entry.data_file.record_count);
+			}
 			manifest_entry.status = IcebergManifestEntryStatusType::DELETED;
 			removed_any_entries = true;
 		}
@@ -174,7 +179,8 @@ void IcebergAddSnapshot::CreateUpdate(DatabaseInstance &db, ClientContext &conte
 	const auto sequence_number = commit_state.next_sequence_number++;
 	auto uncommitted_manifest_files =
 	    CreateCommitManifestFiles(manifest_files, commit_state.table_info, commit_state, sequence_number);
-	D_ASSERT(!uncommitted_manifest_files.empty());
+	//! manifest_files is empty for a metadata-only delete (only altered_manifests is set).
+	D_ASSERT(!uncommitted_manifest_files.empty() || !altered_manifests.IsEmpty());
 
 	auto &fs = FileSystem::GetFileSystem(context);
 	auto manifest_list_uuid = UUID::ToString(UUID::GenerateRandomUUID());

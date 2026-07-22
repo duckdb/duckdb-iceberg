@@ -13,6 +13,7 @@
 #include "duckdb/common/multi_file/multi_file_data.hpp"
 #include "duckdb/common/list.hpp"
 #include "duckdb/common/unordered_map.hpp"
+#include "duckdb/common/unordered_set.hpp"
 #include "duckdb/planner/filter/expression_filter.hpp"
 #include "duckdb/planner/filter/null_filter.hpp"
 #include "duckdb/planner/table_filter.hpp"
@@ -134,6 +135,15 @@ private:
 
 	//! Populated as parsed data-file entries become visible to any filtered view.
 	mutable case_insensitive_map_t<vector<IcebergPartitionInfo>> data_file_partition_info;
+	//! Physical row count per data file (file_path -> record_count), used by DELETE to detect
+	//! whole-file deletes.
+	mutable case_insensitive_map_t<int64_t> data_file_record_count;
+	//! Committed data files dropped by a metadata-only delete earlier in this transaction. Their
+	//! manifest rewrite only lands at commit, so transaction-local reads must hide them here.
+	mutable unordered_set<string> transaction_invalidated_files;
+	//! Live rows removed per data file dropped by a metadata-only DELETE (keyed by file_path). Absent
+	//! for wholesale invalidations (e.g. compaction), which fall back to the full record count.
+	mutable case_insensitive_map_t<idx_t> transaction_invalidated_live_rows;
 };
 
 struct IcebergDataViewCursor {
@@ -174,6 +184,7 @@ public:
 	void GetStatistics(vector<PartitionStatistics> &result) const;
 	BoundIcebergManifestEntry GetManifestEntry(idx_t file_id) const;
 	vector<IcebergPartitionInfo> GetPartitionInfoForDataFile(const string &file_path) const;
+	int64_t GetRecordCountForDataFile(const string &file_path) const;
 	const IcebergManifestFile &GetManifestFileForEntry(const BoundIcebergManifestEntry &entry,
 	                                                   IcebergManifestContentType type) const;
 	vector<BoundIcebergManifestEntry> GetDeleteManifestEntries() const;
@@ -212,6 +223,9 @@ protected:
 
 	//! NOTE: this requires the lock because it modifies the 'data_files' vector, potentially invalidating references
 	optional_ptr<const BoundIcebergManifestEntry> GetDataFile(idx_t file_id, lock_guard<mutex> &guard) const;
+
+	//! Total rows in data files dropped by an in-transaction metadata-only delete.
+	idx_t GetTransactionInvalidatedRowCount() const;
 
 	unique_ptr<ExpressionFilter> GetFilterForColumnIndex(const IcebergTableFilters &filter_set,
 	                                                     const ColumnIndex &column_index) const;
