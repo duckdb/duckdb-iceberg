@@ -8,10 +8,9 @@
 
 namespace duckdb {
 
-unique_ptr<HTTPClient> &IcebergAuthorizationContextState::GetHTTPClient(AttachedDatabase &db, ClientContext &context) {
+IcebergHTTPClientLock IcebergAuthorizationContextState::GetHTTPClient(AttachedDatabase &db, ClientContext &context) {
 	auto instance = context.registered_state->GetOrCreate<IcebergAuthorizationContextState>("iceberg_authorization");
-	auto res = instance->client_map.emplace(reinterpret_cast<uintptr_t>(&db), nullptr);
-	return res.first->second;
+	return IcebergHTTPClientLock(instance->client_lock, instance->client_map, reinterpret_cast<uintptr_t>(&db));
 }
 
 IcebergAuthorizationType IcebergAuthorization::TypeFromString(const string &type) {

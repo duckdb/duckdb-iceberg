@@ -4,6 +4,7 @@
 #include "duckdb/common/http_util.hpp"
 #include "duckdb/main/extension_helper.hpp"
 #include "duckdb/common/exception/http_exception.hpp"
+#include "duckdb/common/optional.hpp"
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/main/client_data.hpp"
 #include "duckdb/main/database.hpp"
@@ -48,8 +49,11 @@ unique_ptr<HTTPResponse> APIUtils::Request(RequestType request_type, optional_pt
 	params = http_util.InitializeParameters(context, request_url);
 
 	unique_ptr<HTTPClient> placeholder_client;
-	auto &client =
-	    attached_db ? IcebergAuthorizationContextState::GetHTTPClient(*attached_db, context) : placeholder_client;
+	optional<IcebergHTTPClientLock> locked_client;
+	if (attached_db) {
+		locked_client.emplace(IcebergAuthorizationContextState::GetHTTPClient(*attached_db, context));
+	}
+	auto &client = locked_client ? locked_client->GetClient() : placeholder_client;
 	if (client) {
 		client->Initialize(*params);
 	}
