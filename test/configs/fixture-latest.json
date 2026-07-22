@@ -32,7 +32,8 @@
 		{
 			"reason": "Disabled due to bugs in the iceberg-rest-fixture scan-planning implementation",
 			"paths": [
-				"test/sql/local/catalog_test_config_setup/catalog_agnostic/insert/test_insert_to_v3_tables.test"
+				"test/sql/local/catalog_test_config_setup/catalog_agnostic/insert/test_insert_to_v3_tables.test",
+				"test/sql/local/catalog_test_config_setup/catalog_agnostic/alter/drop_column/alter_drop_column_partition.test"
 			]
 		}
 	]
