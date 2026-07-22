@@ -578,10 +578,13 @@ void IcebergMultiFileList::GetStatistics(vector<PartitionStatistics> &result) co
 		}
 	}
 
-	//! Pending metadata-only deletes are still in the manifest totals until commit. Their per-file
-	//! record counts only exist once files are enumerated, so force that before discounting them.
+	//! Enumerate files to populate per-file record counts before discounting pending metadata-only
+	//! deletes. Use the guard we already hold; GetTotalFileCount() re-locks and would self-deadlock.
 	if (!shared_state->transaction_invalidated_files.empty()) {
-		(void)GetTotalFileCount();
+		idx_t enumerated = data_manifest_entries.size();
+		while (!GetFileInternal(enumerated, guard).path.empty()) {
+			enumerated++;
+		}
 	}
 
 	idx_t count = 0;
