@@ -1,0 +1,147 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/insert/test_metrics_mode_configuration.test
+# description: write.metadata.metrics.default / .column.<name> control the bound truncation length and which metrics are written.
+# group: [insert]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+drop table if exists my_datalake.default.metrics_mode_test;
+
+# a: inherits the default truncate(8); b: full (no truncation); c: counts only
+# (no bounds); d: none (no metrics); e: per-column truncate(4) override.
+statement ok
+create table my_datalake.default.metrics_mode_test (a varchar, b varchar, c varchar, d varchar, e varchar)
+WITH (
+    'write.metadata.metrics.default'='truncate(8)',
+    'write.metadata.metrics.column.b'='full',
+    'write.metadata.metrics.column.c'='counts',
+    'write.metadata.metrics.column.d'='none',
+    'write.metadata.metrics.column.e'='truncate(4)'
+);
+
+# 16-byte ASCII value in every column.
+statement ok
+insert into my_datalake.default.metrics_mode_test values
+    ('abcdefghijklmnop', 'abcdefghijklmnop', 'abcdefghijklmnop', 'abcdefghijklmnop', 'abcdefghijklmnop');
+
+statement ok
+set variable mp = (select manifest_path from iceberg_metadata(my_datalake.default.metrics_mode_test) order by manifest_sequence_number desc limit 1);
+
+# a (field 1): lower + upper bound truncated to the configured 8 bytes.
+query I
+select octet_length(lb) from (
+    select unnest(map_keys(lower_bounds)) k, unnest(map_values(lower_bounds)) lb
+    from (select unnest(data_file) from read_avro(getvariable('mp')))
+) where k = 1;
+----
+8
+
+query I
+select octet_length(ub) from (
+    select unnest(map_keys(upper_bounds)) k, unnest(map_values(upper_bounds)) ub
+    from (select unnest(data_file) from read_avro(getvariable('mp')))
+) where k = 1;
+----
+8
+
+# b (field 2): full mode keeps the whole 16-byte value for both bounds.
+query I
+select octet_length(lb) from (
+    select unnest(map_keys(lower_bounds)) k, unnest(map_values(lower_bounds)) lb
+    from (select unnest(data_file) from read_avro(getvariable('mp')))
+) where k = 2;
+----
+16
+
+query I
+select octet_length(ub) from (
+    select unnest(map_keys(upper_bounds)) k, unnest(map_values(upper_bounds)) ub
+    from (select unnest(data_file) from read_avro(getvariable('mp')))
+) where k = 2;
+----
+16
+
+# c (field 3): counts mode writes no bounds.
+query I
+select count(*) from (
+    select unnest(map_keys(lower_bounds)) k
+    from (select unnest(data_file) from read_avro(getvariable('mp')))
+) where k = 3;
+----
+0
+
+# d (field 4): none mode writes no bounds.
+query I
+select count(*) from (
+    select unnest(map_keys(lower_bounds)) k
+    from (select unnest(data_file) from read_avro(getvariable('mp')))
+) where k = 4;
+----
+0
+
+# e (field 5): per-column truncate(4) overrides the truncate(8) default.
+query I
+select octet_length(lb) from (
+    select unnest(map_keys(lower_bounds)) k, unnest(map_values(lower_bounds)) lb
+    from (select unnest(data_file) from read_avro(getvariable('mp')))
+) where k = 5;
+----
+4
+
+# --- Default when the property is unset: Iceberg's truncate(16) ---
+
+statement ok
+drop table if exists my_datalake.default.metrics_default_test;
+
+statement ok
+create table my_datalake.default.metrics_default_test (s varchar);
+
+# 20-byte value; the built-in default truncates the bound to 16.
+statement ok
+insert into my_datalake.default.metrics_default_test values ('abcdefghijklmnopqrst');
+
+statement ok
+set variable mp2 = (select manifest_path from iceberg_metadata(my_datalake.default.metrics_default_test) order by manifest_sequence_number desc limit 1);
+
+query I
+select octet_length(lb) from (
+    select unnest(map_keys(lower_bounds)) k, unnest(map_values(lower_bounds)) lb
+    from (select unnest(data_file) from read_avro(getvariable('mp2')))
+) where k = 1;
+----
+16
+
+# --- Invalid metrics modes are rejected at write time ---
+
+statement ok
+drop table if exists my_datalake.default.metrics_invalid_test;
+
+statement ok
+create table my_datalake.default.metrics_invalid_test (a varchar) WITH ('write.metadata.metrics.default'='banana');
+
+statement error
+insert into my_datalake.default.metrics_invalid_test values ('x');
+----
+Invalid write.metadata.metrics mode
+
+statement ok
+drop table if exists my_datalake.default.metrics_invalid_test;
+
+statement ok
+create table my_datalake.default.metrics_invalid_test (a varchar) WITH ('write.metadata.metrics.column.a'='truncate(0)');
+
+statement error
+insert into my_datalake.default.metrics_invalid_test values ('x');
+----
+truncate length must be a positive integer

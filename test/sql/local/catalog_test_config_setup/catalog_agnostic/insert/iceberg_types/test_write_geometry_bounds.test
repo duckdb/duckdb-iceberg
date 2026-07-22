@@ -188,3 +188,85 @@ query I
 select count(*) from my_datalake.default.geom_bounds_null where g is null;
 ----
 3
+
+# --- write.metadata.metrics.* gates the geometry bbox bounds -----------------
+
+# full: bbox lower/upper bounds are written (16 bytes for XY)
+statement ok
+drop table if exists my_datalake.default.mm_geom_full;
+
+statement ok
+create table my_datalake.default.mm_geom_full (g GEOMETRY)
+with ('format-version'='3', 'write.metadata.metrics.default'='full');
+
+statement ok
+insert into my_datalake.default.mm_geom_full VALUES ('POINT(1 2)'::GEOMETRY), ('POINT(5 7)'::GEOMETRY);
+
+statement ok
+set variable geom_full_mp = (select manifest_path from iceberg_metadata(my_datalake.default.mm_geom_full) order by manifest_sequence_number desc limit 1);
+
+query II
+select octet_length(map_extract(lower_bounds, 1)[1]), octet_length(map_extract(upper_bounds, 1)[1])
+from (select unnest(data_file) from read_avro(getvariable('geom_full_mp')));
+----
+16	16
+
+# truncate(16): bbox bounds are still written (truncation only affects string/binary)
+statement ok
+drop table if exists my_datalake.default.mm_geom_trunc;
+
+statement ok
+create table my_datalake.default.mm_geom_trunc (g GEOMETRY)
+with ('format-version'='3', 'write.metadata.metrics.default'='truncate(16)');
+
+statement ok
+insert into my_datalake.default.mm_geom_trunc VALUES ('POINT(1 2)'::GEOMETRY), ('POINT(5 7)'::GEOMETRY);
+
+statement ok
+set variable geom_trunc_mp = (select manifest_path from iceberg_metadata(my_datalake.default.mm_geom_trunc) order by manifest_sequence_number desc limit 1);
+
+query II
+select octet_length(map_extract(lower_bounds, 1)[1]), octet_length(map_extract(upper_bounds, 1)[1])
+from (select unnest(data_file) from read_avro(getvariable('geom_trunc_mp')));
+----
+16	16
+
+# counts: no bbox bounds, but null_value_counts still written
+statement ok
+drop table if exists my_datalake.default.mm_geom_counts;
+
+statement ok
+create table my_datalake.default.mm_geom_counts (g GEOMETRY)
+with ('format-version'='3', 'write.metadata.metrics.default'='counts');
+
+statement ok
+insert into my_datalake.default.mm_geom_counts VALUES ('POINT(1 2)'::GEOMETRY), ('POINT(5 7)'::GEOMETRY);
+
+statement ok
+set variable geom_counts_mp = (select manifest_path from iceberg_metadata(my_datalake.default.mm_geom_counts) order by manifest_sequence_number desc limit 1);
+
+query III
+select len(map_extract(lower_bounds, 1)), len(map_extract(upper_bounds, 1)), map_extract(null_value_counts, 1)[1]
+from (select unnest(data_file) from read_avro(getvariable('geom_counts_mp')));
+----
+0	0	0
+
+# none: no bbox bounds
+statement ok
+drop table if exists my_datalake.default.mm_geom_none;
+
+statement ok
+create table my_datalake.default.mm_geom_none (g GEOMETRY)
+with ('format-version'='3', 'write.metadata.metrics.default'='none');
+
+statement ok
+insert into my_datalake.default.mm_geom_none VALUES ('POINT(1 2)'::GEOMETRY), ('POINT(5 7)'::GEOMETRY);
+
+statement ok
+set variable geom_none_mp = (select manifest_path from iceberg_metadata(my_datalake.default.mm_geom_none) order by manifest_sequence_number desc limit 1);
+
+query II
+select len(map_extract(lower_bounds, 1)), len(map_extract(upper_bounds, 1))
+from (select unnest(data_file) from read_avro(getvariable('geom_none_mp')));
+----
+0	0
