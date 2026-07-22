@@ -20,8 +20,7 @@ struct IcebergMetricsConfig {
 	idx_t truncate_length = DEFAULT_METRICS_TRUNCATE_LENGTH;
 
 	IcebergMetricsConfig() = default;
-	// Explicit ctor needed under C++14: brace-init of a type with default member
-	// initializers is rejected by some compilers used on v1.5-variegata.
+	// C++14: brace-init of a type with default member initializers fails on CI compilers.
 	IcebergMetricsConfig(IcebergMetricsMode mode_p, idx_t truncate_length_p)
 	    : mode(mode_p), truncate_length(truncate_length_p) {
 	}
