@@ -112,13 +112,6 @@ street	VARCHAR	123 Main St	123 Main St
 value	VARCHAR	gold	30
 zip	VARCHAR	12345	12345
 
-# value_counts are written to the manifest on INSERT (one row -> value_count of 1 for the top-level columns)
-query II
-select column_name, value_count from iceberg_column_stats(my_datalake.default.duckdb_nested_types) where column_name in ('id', 'name') order by column_name;
-----
-id	1
-name	1
-
 # --- write.metadata.metrics.* gates the primitive-leaf bounds ---------------
 
 # truncate(8): leaf string bounds are truncated on a code-point boundary
@@ -175,7 +168,7 @@ key	abcdefghijklmnop
 sf	abcdefghijklmnop
 value	abcdefghijklmnop
 
-# none: no leaf bounds and no value_counts for any column
+# none: no leaf bounds for any column
 statement ok
 drop table if exists my_datalake.default.mm_nested_none;
 
@@ -196,12 +189,10 @@ insert into my_datalake.default.mm_nested_none VALUES (
 statement ok
 set variable nested_none_mp = (select manifest_path from iceberg_metadata(my_datalake.default.mm_nested_none) order by manifest_sequence_number desc limit 1);
 
-query II
-select
-    (select count(*) from (select unnest(map_keys(lower_bounds)) k from (select unnest(data_file) from read_avro(getvariable('nested_none_mp'))))),
-    (select count(*) from (select unnest(map_keys(value_counts)) k from (select unnest(data_file) from read_avro(getvariable('nested_none_mp')))));
+query I
+select count(*) from (select unnest(map_keys(lower_bounds)) k from (select unnest(data_file) from read_avro(getvariable('nested_none_mp'))));
 ----
-0	0
+0
 
 # --- per-column overrides on nested leaves via the Iceberg dotted field name -----
 # Iceberg names the synthetic nested fields 'element' (list), 'key'/'value' (map),

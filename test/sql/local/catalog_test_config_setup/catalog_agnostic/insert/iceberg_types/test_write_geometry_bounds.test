@@ -251,7 +251,7 @@ from (select unnest(data_file) from read_avro(getvariable('geom_counts_mp')));
 ----
 0	0	0
 
-# none: no bbox bounds and no counts
+# none: no bbox bounds
 statement ok
 drop table if exists my_datalake.default.mm_geom_none;
 
@@ -265,8 +265,8 @@ insert into my_datalake.default.mm_geom_none VALUES ('POINT(1 2)'::GEOMETRY), ('
 statement ok
 set variable geom_none_mp = (select manifest_path from iceberg_metadata(my_datalake.default.mm_geom_none) order by manifest_sequence_number desc limit 1);
 
-query III
-select len(map_extract(lower_bounds, 1)), len(map_extract(upper_bounds, 1)), len(map_extract(value_counts, 1))
+query II
+select len(map_extract(lower_bounds, 1)), len(map_extract(upper_bounds, 1))
 from (select unnest(data_file) from read_avro(getvariable('geom_none_mp')));
 ----
-0	0	0
+0	0

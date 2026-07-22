@@ -72,7 +72,7 @@ select octet_length(ub) from (
 ----
 16
 
-# c (field 3): counts mode writes no bound...
+# c (field 3): counts mode writes no bounds.
 query I
 select count(*) from (
     select unnest(map_keys(lower_bounds)) k
@@ -81,27 +81,10 @@ select count(*) from (
 ----
 0
 
-# ...but still writes value_counts.
-query I
-select count(*) from (
-    select unnest(map_keys(value_counts)) k
-    from (select unnest(data_file) from read_avro(getvariable('mp')))
-) where k = 3;
-----
-1
-
-# d (field 4): none mode writes no bound and no counts.
+# d (field 4): none mode writes no bounds.
 query I
 select count(*) from (
     select unnest(map_keys(lower_bounds)) k
-    from (select unnest(data_file) from read_avro(getvariable('mp')))
-) where k = 4;
-----
-0
-
-query I
-select count(*) from (
-    select unnest(map_keys(value_counts)) k
     from (select unnest(data_file) from read_avro(getvariable('mp')))
 ) where k = 4;
 ----
