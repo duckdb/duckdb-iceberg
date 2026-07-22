@@ -18,6 +18,13 @@ struct IcebergMetricsConfig {
 	IcebergMetricsMode mode = IcebergMetricsMode::TRUNCATE;
 	// Byte length for TRUNCATE; DConstants::INVALID_INDEX for FULL (no truncation).
 	idx_t truncate_length = DEFAULT_METRICS_TRUNCATE_LENGTH;
+
+	IcebergMetricsConfig() = default;
+	// Explicit ctor needed under C++14: brace-init of a type with default member
+	// initializers is rejected by some compilers used on v1.5-variegata.
+	IcebergMetricsConfig(IcebergMetricsMode mode_p, idx_t truncate_length_p)
+	    : mode(mode_p), truncate_length(truncate_length_p) {
+	}
 };
 
 // Parse a metrics mode value: none, counts, truncate(<n>), or full.

@@ -9,20 +9,20 @@ namespace duckdb {
 IcebergMetricsConfig ParseMetricsMode(const string &raw) {
 	auto value = StringUtil::Lower(raw);
 	if (value == "none") {
-		return {IcebergMetricsMode::NONE, 0};
+		return IcebergMetricsConfig(IcebergMetricsMode::NONE, 0);
 	}
 	if (value == "counts") {
-		return {IcebergMetricsMode::COUNTS, 0};
+		return IcebergMetricsConfig(IcebergMetricsMode::COUNTS, 0);
 	}
 	if (value == "full") {
-		return {IcebergMetricsMode::FULL, DConstants::INVALID_INDEX};
+		return IcebergMetricsConfig(IcebergMetricsMode::FULL, DConstants::INVALID_INDEX);
 	}
 	if (StringUtil::StartsWith(value, "truncate(") && StringUtil::EndsWith(value, ")")) {
 		auto inner = value.substr(9, value.size() - 10);
 		try {
 			auto length = std::stoull(inner);
 			if (length > 0) {
-				return {IcebergMetricsMode::TRUNCATE, static_cast<idx_t>(length)};
+				return IcebergMetricsConfig(IcebergMetricsMode::TRUNCATE, static_cast<idx_t>(length));
 			}
 		} catch (...) {
 			// fall through to the error below
