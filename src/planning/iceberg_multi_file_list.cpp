@@ -67,6 +67,103 @@ bool ManifestEntryReadState::GetBatch(idx_t batch_idx, ManifestReadBatch &result
 	return true;
 }
 
+IcebergMultiFileList::IcebergMultiFileList(ClientContext &context_p, shared_ptr<IcebergScanInfo> scan_info,
+                                           const string &path, const IcebergOptions &options)
+    : shared_state(make_shared_ptr<IcebergMultiFileListSharedState>(context_p, std::move(scan_info), path, options)),
+      context(shared_state->context), fs(shared_state->fs), options(shared_state->options) {
+}
+
+IcebergMultiFileList::IcebergMultiFileList(shared_ptr<IcebergMultiFileListSharedState> shared_state_p)
+    : shared_state(std::move(shared_state_p)), context(shared_state->context), fs(shared_state->fs),
+      options(shared_state->options) {
+}
+
+IcebergMultiFileList::~IcebergMultiFileList() {
+}
+
+IcebergMultiFileListSharedState::IcebergMultiFileListSharedState(ClientContext &context_p,
+                                                                 shared_ptr<IcebergScanInfo> scan_info_p, string path_p,
+                                                                 const IcebergOptions &options_p)
+    : context(context_p), fs(FileSystem::GetFileSystem(context)), scan_info(std::move(scan_info_p)),
+      path(std::move(path_p)), options(options_p) {
+}
+
+IcebergMultiFileListSharedState::~IcebergMultiFileListSharedState() {
+	if (data_manifest_read_state) {
+		//! FIXME: this could throw, if the tasks encountered an error
+		data_manifest_read_state->executor.WorkOnTasks();
+	}
+}
+
+string IcebergMultiFileList::ToDuckDBPath(const string &raw_path) {
+	return raw_path;
+}
+
+string IcebergMultiFileList::GetPath() const {
+	return shared_state->path;
+}
+
+const IcebergTableMetadata &IcebergMultiFileList::GetMetadata() const {
+	return shared_state->scan_info->metadata;
+}
+
+bool IcebergMultiFileList::HasTransactionData() const {
+	return shared_state->scan_info->transaction_data;
+}
+
+const IcebergTransactionData &IcebergMultiFileList::GetTransactionData() const {
+	D_ASSERT(HasTransactionData());
+	return *shared_state->scan_info->transaction_data;
+}
+
+const IcebergSnapshotScanInfo &IcebergMultiFileList::GetSnapshot() const {
+	return shared_state->scan_info->snapshot_info;
+}
+
+const IcebergTableSchema &IcebergMultiFileList::GetSchema() const {
+	return shared_state->scan_info->schema;
+}
+
+IcebergScanPlanProvider &IcebergMultiFileList::GetScanPlanProvider() const {
+	D_ASSERT(scan_plan_provider);
+	return *scan_plan_provider;
+}
+
+case_insensitive_map_t<shared_ptr<IcebergDeleteData>> &IcebergMultiFileList::GetPositionalDeleteData() const {
+	return GetScanPlanProvider().PositionalDeleteData();
+}
+
+map<sequence_number_t, unique_ptr<IcebergEqualityDeleteData>> &IcebergMultiFileList::GetEqualityDeleteData() const {
+	return GetScanPlanProvider().EqualityDeleteData();
+}
+
+IcebergTableEntry *IcebergMultiFileList::GetTable() const {
+	return shared_state->table;
+}
+
+void IcebergMultiFileList::SetTable(IcebergTableEntry *table) {
+	shared_state->table = table;
+}
+
+void IcebergMultiFileList::SetOptions(const IcebergOptions &options) {
+	shared_state->options = options;
+}
+
+void IcebergMultiFileList::SetScanOrder(unique_ptr<RowGroupOrderOptions> options) {
+	scan_order_options = std::move(options);
+	scan_order_applied = false;
+}
+
+void IcebergMultiFileList::DisableServerSidePlanning() {
+	lock_guard<mutex> guard(shared_state->lock);
+	if (!shared_state->manifest_list_loaded) {
+		shared_state->server_side_planning_enabled = false;
+	}
+	if (!view_initialized) {
+		scan_plan_provider = make_uniq<ClientSideScanPlanProvider>(*shared_state);
+	}
+}
+
 namespace {
 
 static unique_ptr<Expression> CreateReferenceExpression(const LogicalType &type) {
@@ -313,103 +410,6 @@ static unique_ptr<Expression> ExtractFilterExpressionForPath(const Expression &e
 }
 
 } // namespace
-
-IcebergMultiFileList::IcebergMultiFileList(ClientContext &context_p, shared_ptr<IcebergScanInfo> scan_info,
-                                           const string &path, const IcebergOptions &options)
-    : shared_state(make_shared_ptr<IcebergMultiFileListSharedState>(context_p, std::move(scan_info), path, options)),
-      context(shared_state->context), fs(shared_state->fs), options(shared_state->options) {
-}
-
-IcebergMultiFileList::IcebergMultiFileList(shared_ptr<IcebergMultiFileListSharedState> shared_state_p)
-    : shared_state(std::move(shared_state_p)), context(shared_state->context), fs(shared_state->fs),
-      options(shared_state->options) {
-}
-
-IcebergMultiFileList::~IcebergMultiFileList() {
-}
-
-IcebergMultiFileListSharedState::IcebergMultiFileListSharedState(ClientContext &context_p,
-                                                                 shared_ptr<IcebergScanInfo> scan_info_p, string path_p,
-                                                                 const IcebergOptions &options_p)
-    : context(context_p), fs(FileSystem::GetFileSystem(context)), scan_info(std::move(scan_info_p)),
-      path(std::move(path_p)), options(options_p) {
-}
-
-IcebergMultiFileListSharedState::~IcebergMultiFileListSharedState() {
-	if (data_manifest_read_state) {
-		//! FIXME: this could throw, if the tasks encountered an error
-		data_manifest_read_state->executor.WorkOnTasks();
-	}
-}
-
-string IcebergMultiFileList::ToDuckDBPath(const string &raw_path) {
-	return raw_path;
-}
-
-string IcebergMultiFileList::GetPath() const {
-	return shared_state->path;
-}
-
-const IcebergTableMetadata &IcebergMultiFileList::GetMetadata() const {
-	return shared_state->scan_info->metadata;
-}
-
-bool IcebergMultiFileList::HasTransactionData() const {
-	return shared_state->scan_info->transaction_data;
-}
-
-const IcebergTransactionData &IcebergMultiFileList::GetTransactionData() const {
-	D_ASSERT(HasTransactionData());
-	return *shared_state->scan_info->transaction_data;
-}
-
-const IcebergSnapshotScanInfo &IcebergMultiFileList::GetSnapshot() const {
-	return shared_state->scan_info->snapshot_info;
-}
-
-const IcebergTableSchema &IcebergMultiFileList::GetSchema() const {
-	return shared_state->scan_info->schema;
-}
-
-IcebergScanPlanProvider &IcebergMultiFileList::GetScanPlanProvider() const {
-	D_ASSERT(scan_plan_provider);
-	return *scan_plan_provider;
-}
-
-case_insensitive_map_t<shared_ptr<IcebergDeleteData>> &IcebergMultiFileList::GetPositionalDeleteData() const {
-	return GetScanPlanProvider().PositionalDeleteData();
-}
-
-map<sequence_number_t, unique_ptr<IcebergEqualityDeleteData>> &IcebergMultiFileList::GetEqualityDeleteData() const {
-	return GetScanPlanProvider().EqualityDeleteData();
-}
-
-IcebergTableEntry *IcebergMultiFileList::GetTable() const {
-	return shared_state->table;
-}
-
-void IcebergMultiFileList::SetTable(IcebergTableEntry *table) {
-	shared_state->table = table;
-}
-
-void IcebergMultiFileList::SetOptions(const IcebergOptions &options) {
-	shared_state->options = options;
-}
-
-void IcebergMultiFileList::SetScanOrder(unique_ptr<RowGroupOrderOptions> options) {
-	scan_order_options = std::move(options);
-	scan_order_applied = false;
-}
-
-void IcebergMultiFileList::DisableServerSidePlanning() {
-	lock_guard<mutex> guard(shared_state->lock);
-	if (!shared_state->manifest_list_loaded) {
-		shared_state->server_side_planning_enabled = false;
-	}
-	if (!view_initialized) {
-		scan_plan_provider = make_uniq<ClientSideScanPlanProvider>(*shared_state);
-	}
-}
 
 unique_ptr<ExpressionFilter> IcebergMultiFileList::GetFilterForColumnIndex(const IcebergTableFilters &filter_set,
                                                                            const ColumnIndex &column_index) const {

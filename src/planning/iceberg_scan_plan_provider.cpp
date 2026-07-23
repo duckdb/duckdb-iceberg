@@ -279,7 +279,8 @@ bool ClientSideScanPlanProvider::TryGetNextBatch(IcebergDataViewCursor &cursor) 
 		if (executor.GetTask(task_to_execute)) {
 			auto res = task_to_execute->Execute(TaskExecutionMode::PROCESS_PARTIAL);
 			if (res == TaskExecutionResult::TASK_NOT_FINISHED) {
-				scheduler.ScheduleTask(*task_to_execute->token, std::move(task_to_execute));
+				auto &token = *task_to_execute->token;
+				scheduler.ScheduleTask(token, std::move(task_to_execute));
 			}
 			if (TryReadBatch(shared_state.read_state, cursor)) {
 				return true;
