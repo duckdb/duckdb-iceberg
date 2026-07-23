@@ -20,15 +20,26 @@ static void InitializeFromOtherChunk(DataChunk &target, DataChunk &other, const 
 
 static void ColumnsReferencedByEqualityIds(DataChunk &source, DataChunk &result,
                                            const vector<MultiFileColumnDefinition> &local_columns,
+                                           const vector<string> &source_names,
                                            const vector<int32_t> &equality_ids) {
-	//! Map from column_id to 'local_columns' index, to figure out which columns from the 'source' are relevant here
-	// 'local_columns' are columns from the equality delete file.
-	// id_to_column -> equality_delete_column_field_id_to_output_column_id
+	// The equality-delete file can physically contain more columns than the reader models for it - e.g. Spark
+	// embeds the partition columns next to the equality-key columns - and not necessarily in the same order. So
+	// resolve each equality field-id to its physical position in 'source' by name rather than by its position in
+	// 'local_columns', which only covers the modeled subset.
+	unordered_map<string, column_t> name_to_source_index;
+	for (column_t i = 0; i < source_names.size(); i++) {
+		name_to_source_index[source_names[i]] = i;
+	}
+
+	//! Map from equality field-id to the physical column index in 'source'.
 	unordered_map<int32_t, column_t> id_to_column;
-	for (column_t i = 0; i < local_columns.size(); i++) {
-		auto &col = local_columns[i];
+	for (auto &col : local_columns) {
 		D_ASSERT(!col.identifier.IsNull());
-		id_to_column[col.identifier.GetValue<int32_t>()] = i;
+		auto entry = name_to_source_index.find(col.name);
+		if (entry == name_to_source_index.end()) {
+			continue;
+		}
+		id_to_column[col.identifier.GetValue<int32_t>()] = entry->second;
 	}
 
 	// column_ids we want to slice.
@@ -44,6 +55,7 @@ static void ColumnsReferencedByEqualityIds(DataChunk &source, DataChunk &result,
 
 void IcebergMultiFileList::ScanEqualityDeleteFile(const BoundIcebergManifestEntry &bound_manifest_entry,
                                                   DataChunk &source, vector<MultiFileColumnDefinition> &local_columns,
+                                                  const vector<string> &source_names,
                                                   const vector<MultiFileColumnDefinition> &global_columns,
                                                   const vector<ColumnIndex> &global_column_ids,
                                                   const vector<idx_t> &projection_ids) const {
@@ -51,7 +63,7 @@ void IcebergMultiFileList::ScanEqualityDeleteFile(const BoundIcebergManifestEntr
 	auto &data_file = manifest_entry.data_file;
 	auto &manifest_file = GetManifestFileForEntry(bound_manifest_entry, IcebergManifestContentType::DELETE);
 	D_ASSERT(!data_file.equality_ids.empty());
-	D_ASSERT(source.ColumnCount() == local_columns.size());
+	D_ASSERT(source.ColumnCount() == source_names.size());
 
 	auto count = source.size();
 	if (count == 0) {
@@ -61,7 +73,7 @@ void IcebergMultiFileList::ScanEqualityDeleteFile(const BoundIcebergManifestEntr
 	// make result only reference the columns from source (equality delete file) that have equality_ids
 	// mentioned in the manifest file
 	DataChunk result;
-	ColumnsReferencedByEqualityIds(source, result, local_columns, data_file.equality_ids);
+	ColumnsReferencedByEqualityIds(source, result, local_columns, source_names, data_file.equality_ids);
 
 	const auto sequence_number = manifest_entry.GetSequenceNumber(manifest_file);
 	//! Get or create the equality delete data for this sequence number

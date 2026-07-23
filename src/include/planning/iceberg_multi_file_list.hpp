@@ -183,7 +183,7 @@ private:
 	                    const vector<ColumnIndex> &global_column_ids, const vector<idx_t> &projection_ids) const;
 	void ScanPositionalDeleteFile(const BoundIcebergManifestEntry &manifest_entry, DataChunk &result) const;
 	void ScanEqualityDeleteFile(const BoundIcebergManifestEntry &manifest_entry, DataChunk &result,
-	                            vector<MultiFileColumnDefinition> &columns,
+	                            vector<MultiFileColumnDefinition> &columns, const vector<string> &source_names,
 	                            const vector<MultiFileColumnDefinition> &global_columns,
 	                            const vector<ColumnIndex> &global_column_ids,
 	                            const vector<idx_t> &projection_ids) const;

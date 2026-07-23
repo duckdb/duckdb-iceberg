@@ -1,0 +1,33 @@
+# name: test/sql/local/equality_delete_extra_column.test
+# description: Equality-delete on a transform-partitioned table. The delete file lives in a hive
+#              partition dir, so the reader adds the partition column (absent from the table schema)
+#              to the delete scan. Regression for a crash in ScanEqualityDeleteFile when the scanned
+#              delete chunk is wider than the columns the reader models for it (DAT-2274).
+# group: [local]
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+# id=2 is removed by an equality delete; the table is partitioned by bucket(val).
+query IT
+SELECT id, val FROM ICEBERG_SCAN('__WORKING_DIRECTORY__/data/persistent/equality_delete_extra_column/warehouse/ns/t/metadata/vfinal.metadata.json') ORDER BY id;
+----
+1	a
+3	c
+
+query I
+SELECT count(*) FROM ICEBERG_SCAN('__WORKING_DIRECTORY__/data/persistent/equality_delete_extra_column/warehouse/ns/t/metadata/vfinal.metadata.json');
+----
+2
+
+# projecting only a non-key column must still apply the delete
+query T
+SELECT val FROM ICEBERG_SCAN('__WORKING_DIRECTORY__/data/persistent/equality_delete_extra_column/warehouse/ns/t/metadata/vfinal.metadata.json') ORDER BY val;
+----
+a
+c
