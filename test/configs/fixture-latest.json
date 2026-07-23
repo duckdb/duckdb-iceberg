@@ -26,6 +26,22 @@
 				"test/sql/local/catalog_test_config_setup/catalog_agnostic/insert/partitions/multi_insert/test_manifest_skip_year_transform.test",
 				"test/sql/local/catalog_test_config_setup/catalog_agnostic/insert/partitions/multi_insert/test_multiple_inserts_manifest_list_skip.test",
 				"test/sql/local/catalog_test_config_setup/catalog_agnostic/insert/partitions/test_insert_into_partitioned_table_month.test",
+				"test/sql/local/catalog_test_config_setup/catalog_agnostic/reads/test_requests_to_partitioned_table.test",
+				"test/sql/local/catalog_test_config_setup/catalog_agnostic/reads/partitioned_reads_v3/test_partitioned_reads_v3.test",
+				"test/sql/local/catalog_test_config_setup/catalog_agnostic/reads/partitioned_reads/test_in_filter_partition_pruning.test",
+				"test/sql/local/catalog_test_config_setup/catalog_agnostic/reads/filtering/variant/types.test",
+				"test/sql/local/catalog_test_config_setup/catalog_agnostic/reads/filtering/variant/test_partial_paths.test",
+				"test/sql/local/catalog_test_config_setup/catalog_agnostic/reads/filtering/variant/partial_shredding.test",
+				"test/sql/local/catalog_test_config_setup/catalog_agnostic/reads/filtering/variant/nested.test",
+				"test/sql/local/catalog_test_config_setup/catalog_agnostic/reads/filtering/variant/edge_cases.test",
+				"test/sql/local/catalog_test_config_setup/catalog_agnostic/reads/filtering/variant/comparisons.test",
+				"test/sql/local/catalog_test_config_setup/catalog_agnostic/reads/filtering/variant/combinations.test",
+				"test/sql/local/catalog_test_config_setup/catalog_agnostic/reads/filtering/variant/arrays.test",
+				"test/sql/local/catalog_test_config_setup/catalog_agnostic/reads/filtering/test_pruning_on_variant_col.test",
+				"test/sql/local/catalog_test_config_setup/catalog_agnostic/reads/filtering/test_filtering_geometry_predicates.test",
+				"test/sql/local/catalog_test_config_setup/catalog_agnostic/reads/filtering/test_data_manifest_late_materialization.test",
+				"test/sql/local/catalog_test_config_setup/catalog_agnostic/reads/filtering/should_do_filter_pruning_on_expressionless_string_filters.test",
+				"test/sql/local/catalog_test_config_setup/catalog_agnostic/partitioning/struct_filter_issue.test",
 				"test/sql/local/catalog_test_config_setup/catalog_agnostic/logging/test_reads_on_bounds.test"
 			]
 		},
@@ -33,6 +49,7 @@
 			"reason": "Disabled due to bugs in the iceberg-rest-fixture scan-planning implementation",
 			"paths": [
 				"test/sql/local/catalog_test_config_setup/catalog_agnostic/insert/test_insert_to_v3_tables.test",
+				"test/sql/local/catalog_test_config_setup/catalog_agnostic/test_row_lineage_read_from_upgraded.test",
 				"test/sql/local/catalog_test_config_setup/catalog_agnostic/alter/drop_column/alter_drop_column_partition.test"
 			]
 		}
