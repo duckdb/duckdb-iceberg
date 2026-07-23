@@ -54,8 +54,15 @@ public:
 	string file_extension;
 	CopyOverwriteMode overwrite_mode;
 	bool per_thread_output;
-	//! default target file size: 8.4MB
-	idx_t file_size_bytes = 1 << 23;
+	//! default target file size: 512MB, per the Iceberg spec default for write.target-file-size-bytes
+	idx_t file_size_bytes = 512ULL * 1024 * 1024;
+	//! Row group sizing. DuckDB's parquet copy function ignores the row_group_size(_bytes) copy options;
+	//! they are resolved by the COPY binder into these fields on the LogicalCopyToFile instead.
+	//! Row groups are flushed when either threshold is hit. Iceberg only defines a byte default
+	//! (write.parquet.row-group-size-bytes = 128MB), so we leave batch_size unset unless the table
+	//! sets write.parquet.row-group-size - otherwise DuckDB's 122880 row default would always win.
+	optional_idx batch_size;
+	optional_idx batch_size_bytes = 128ULL * 1024 * 1024;
 	CopyFunctionReturnType return_type;
 
 	//! Partitioning

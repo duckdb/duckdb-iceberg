@@ -33,8 +33,8 @@ CREATE TABLE my_datalake.default.insert_test_big (
     'write.parquet.compression-codec'='snappy'
 );
 
-# Default TARGET_FILE_SIZE = 8.4MB
-# We create ~18MB of data, which spreads out over 3 files
+# Default TARGET_FILE_SIZE = 500MB
+# We create ~18MB of data
 query I
 INSERT INTO my_datalake.default.insert_test_big SELECT i, concat('thisisalongstring', i) FROM range(2000000) t(i)
 ----
@@ -43,4 +43,4 @@ INSERT INTO my_datalake.default.insert_test_big SELECT i, concat('thisisalongstr
 query II
 explain analyze select * from my_datalake.default.insert_test_big
 ----
-analyzed_plan	<REGEX>:.*Total Files Read: 3.*
+analyzed_plan	<REGEX>:.*Total Files Read: 1.*

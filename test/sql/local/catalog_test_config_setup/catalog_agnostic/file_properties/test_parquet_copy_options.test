@@ -1,6 +1,6 @@
-# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/test_parquet_copy_options.test
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/file_properties/test_parquet_copy_options.test
 # description: test integration with iceberg catalog read
-# group: [catalog_agnostic]
+# group: [file_properties]
 
 require-env CATALOG_TEST_CONFIG_SETUP
 
@@ -44,7 +44,7 @@ set variable parquet_filepath = (select file_path from iceberg_metadata(my_datal
 query I
 select count(row_group_bytes) from parquet_metadata(getvariable('parquet_filepath'));
 ----
-49
+1
 
 statement ok
 commit
@@ -78,10 +78,16 @@ begin
 statement ok
 set variable parquet_filepath = (select file_path from iceberg_metadata(my_datalake.default.properties_table) limit 1);
 
+# 3 row groups for 100000 rows. Each row group is around 
 query I
 select count(row_group_bytes) from parquet_metadata(getvariable('parquet_filepath'));
 ----
-49
+3
+
+query I
+select max(row_group_bytes) < 230000 from parquet_metadata(getvariable('parquet_filepath'));
+----
+1
 
 statement ok
 commit
@@ -111,10 +117,16 @@ begin
 statement ok
 set variable parquet_filepath = (select file_path from iceberg_metadata(my_datalake.default.properties_table) limit 1);
 
+# 3 row groups for 100000 rows. Each row group is around 
 query I
 select count(row_group_bytes) from parquet_metadata(getvariable('parquet_filepath'));
 ----
-49
+3
+
+query I
+select max(row_group_bytes) < 230000 from parquet_metadata(getvariable('parquet_filepath'));
+----
+1
 
 statement ok
 commit

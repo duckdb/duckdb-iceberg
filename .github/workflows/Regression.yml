@@ -51,7 +51,6 @@ jobs:
       GEN: ninja
       CC: clang-20
       CXX: clang++-20
-      HTTP_PROXY_PUBLIC: http://localhost:8878
 
     steps:
       - uses: actions/checkout@v4
@@ -118,7 +117,7 @@ jobs:
 
       - name: Setup fixture
         run: |
-          make fixture-data TEST=tpch
+          make fixture-data
 
       - name: Setup metadata late materialization benchmark
         run: |

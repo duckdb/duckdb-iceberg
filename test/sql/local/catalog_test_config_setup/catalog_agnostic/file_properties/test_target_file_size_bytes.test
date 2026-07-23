@@ -1,5 +1,5 @@
-# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/partitioning/partitioned_write_target-file-size-bytes.test
-# group: [partitioning]
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/file_properties/test_target_file_size_bytes.test
+# group: [file_properties]
 
 require-env CATALOG_TEST_CONFIG_SETUP
 

@@ -75,7 +75,7 @@ true
 # top-N, so every file must still be scanned and the result must stay correct.
 # hash() is deterministic, so the data (and the overlap) is reproducible.
 statement ok
-COPY (select (hash(range) % 1000000)::BIGINT a from range(3000000)) TO '{TEST_DIR}/scan_order_overlap' (FORMAT ICEBERG);
+COPY (select (hash(range) % 1000000)::BIGINT a from range(250000000)) TO '{TEST_DIR}/scan_order_overlap' (FORMAT ICEBERG);
 
 # Sanity: the insert spread across more than one data file.
 query I
@@ -130,7 +130,7 @@ WHERE type = 'Iceberg' AND message LIKE '%Scan Order Pushdown, kept%';
 # files overlap slightly while distant files stay disjoint. Pruning must back
 # off only near the frontier, not give up entirely.
 statement ok
-COPY (select (range + (hash(range) % 1000))::BIGINT a from range(8000000)) TO '{TEST_DIR}/scan_order_jitter' (FORMAT ICEBERG);
+COPY (select (range + (hash(range) % 1000))::BIGINT a from range(250000000)) TO '{TEST_DIR}/scan_order_jitter' (FORMAT ICEBERG, "write.target-file-size-bytes" '8MB', "write.parquet.row-group-size" 100000);
 
 query I
 SELECT count(*) > 1 FROM iceberg_metadata('{TEST_DIR}/scan_order_jitter');

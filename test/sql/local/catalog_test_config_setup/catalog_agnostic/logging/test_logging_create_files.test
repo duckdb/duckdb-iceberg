@@ -70,4 +70,4 @@ as select range a from range(100000000);
 query I
 select count(*) from duckdb_logs() where type = 'Iceberg' and regexp_matches(message, 'Iceberg INSERT, wrote data_file.*record_count=.*');
 ----
-105
+101

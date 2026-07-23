@@ -30,6 +30,17 @@
 
 namespace duckdb {
 
+static void SetDefaultFormatVersion(ClientContext &context, SetScope scope, Value &parameter) {
+	auto version = parameter.GetValue<uint64_t>();
+	if (version == 1) {
+		throw NotImplementedException("Writing Iceberg tables with format-version 1 is not supported, use 2 or 3");
+	}
+	if (version < 2 || version > 3) {
+		throw InvalidConfigurationException("'%s' must be 2 or 3, got %llu", DEFAULT_FORMAT_VERSION_CONFIG_VARIABLE,
+		                                    version);
+	}
+}
+
 static unique_ptr<TransactionManager> CreateTransactionManager(optional_ptr<StorageExtensionInfo> storage_info,
                                                                AttachedDatabase &db, Catalog &catalog) {
 	auto &ic_catalog = catalog.Cast<IcebergCatalog>();
@@ -68,6 +79,11 @@ static void LoadInternal(ExtensionLoader &loader) {
 	config.AddExtensionOption("iceberg_test_force_token_expiry",
 	                          "DEBUG SETTING: force OAuth2 token expiry for testing automatic refresh",
 	                          LogicalType::BOOLEAN, Value::BOOLEAN(false));
+	config.AddExtensionOption(
+	    DEFAULT_FORMAT_VERSION_CONFIG_VARIABLE,
+	    "The Iceberg format version used when creating a new table without an explicit 'format-version' property. "
+	    "Valid values are 2 and 3.",
+	    LogicalType::UBIGINT, Value::UBIGINT(DEFAULT_ICEBERG_FORMAT_VERSION), SetDefaultFormatVersion);
 	config.AddExtensionOption(
 	    "iceberg_use_metadata_log",
 	    "Whether or not to make use of the (optional) 'metadata-log' of a table to ensure atomicity guarantees hold, "

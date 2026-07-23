@@ -22,6 +22,7 @@
 #include "catalog/rest/catalog_entry/schema/iceberg_schema_entry.hpp"
 #include "core/metadata/partition/iceberg_partition_spec.hpp"
 #include "catalog/rest/transaction/iceberg_transaction_update.hpp"
+#include "iceberg_options.hpp"
 
 namespace duckdb {
 
@@ -210,7 +211,12 @@ IcebergTableInformation &IcebergTableSet::CreateNewEntry(ClientContext &context,
 			throw InvalidInputException("The lowest supported iceberg version is 1!");
 		}
 	} else {
-		iceberg_version = 2;
+		Value default_version_value;
+		if (context.TryGetCurrentSetting(DEFAULT_FORMAT_VERSION_CONFIG_VARIABLE, default_version_value)) {
+			iceberg_version = default_version_value.GetValue<uint64_t>();
+		} else {
+			iceberg_version = DEFAULT_ICEBERG_FORMAT_VERSION;
+		}
 	}
 
 	string location;

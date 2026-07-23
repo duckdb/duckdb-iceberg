@@ -9,6 +9,13 @@ namespace duckdb {
 
 static string VERSION_GUESSING_CONFIG_VARIABLE = "unsafe_enable_version_guessing";
 
+// The Iceberg format version used when creating a new table without an explicit
+// 'format-version' property. Valid values are 2 and 3. Version 1 is not supported
+// for writing (NotImplementedException); anything outside [2, 3] is rejected
+// (InvalidConfigurationException).
+static string DEFAULT_FORMAT_VERSION_CONFIG_VARIABLE = "iceberg_default_format_version";
+static constexpr uint64_t DEFAULT_ICEBERG_FORMAT_VERSION = 2;
+
 // When this is true, a DELETE on a v2 Iceberg table whose WHERE clause is a pure
 // conjunction of equality predicates writes an Iceberg equality-delete file instead
 // of a positional delete. This exists only to exercise the equality-delete read path.

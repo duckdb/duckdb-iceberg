@@ -63,6 +63,8 @@ COPY FROM DATABASE mem TO my_datalake;
 USE my_datalake;
 DETACH mem;
 
-run duckdb/extension/tpch/dbgen/queries/q${QUERY_NUMBER_PADDED}.sql
+run 
+set enable_external_file_cache=false;
+pragma tpch(${QUERY_NUMBER_PADDED});
 
 result duckdb/extension/tpch/dbgen/answers/sf${sf}/q${QUERY_NUMBER_PADDED}.csv sf=${sf}

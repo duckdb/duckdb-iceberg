@@ -628,6 +628,8 @@ IcebergCopyOptions IcebergInsert::GetCopyOptions(ClientContext &context, const I
 
 	const auto &table_properties = copy_input.table_metadata.GetTableProperties();
 	// Map Iceberg write properties to DuckDB parquet copy options
+	optional_idx batch_size;
+	optional_idx batch_size_bytes;
 	// TODO: Iceberg properties for bloom filter are per column, duckdb's seems to be per table.
 	// write.parquet.bloom-filter-fpp.column.<col> -> bloom_filter_false_positive_ratio
 	// write.parquet.bloom-filter-enabled.column.<col> -> write_bloom_filter
@@ -637,11 +639,15 @@ IcebergCopyOptions IcebergInsert::GetCopyOptions(ClientContext &context, const I
 		if (it == table_properties.end()) {
 			continue;
 		}
+		// DuckDB's parquet copy_to_bind ignores row_group_size(_bytes); the COPY binder resolves them into
+		// batch_size(_bytes) on the copy operator instead. Do the same here, since we bypass that binder.
 		if (StringUtil::CIEquals(mapping.parquet_option, "row_group_size_bytes")) {
-			if (StringUtil::CharacterIsDigit(it->second.back())) {
-				info->options[mapping.parquet_option].emplace_back(Value::UBIGINT(StringUtil::ToUnsigned(it->second)));
-				continue;
-			}
+			batch_size_bytes = IcebergUtils::ParseByteSizeOptionallyFormatted(it->second);
+			continue;
+		}
+		if (StringUtil::CIEquals(mapping.parquet_option, "row_group_size")) {
+			batch_size = StringUtil::ToUnsigned(it->second);
+			continue;
 		}
 		info->options[mapping.parquet_option].emplace_back(it->second);
 	}
@@ -712,6 +718,25 @@ IcebergCopyOptions IcebergInsert::GetCopyOptions(ClientContext &context, const I
 	auto function_data =
 	    copy_fun.function.copy_to_bind(context, bind_input, StringsToIdentifiers(names_to_write), types_to_write);
 	result.bind_data = std::move(function_data);
+
+	// Mirrors Binder::BindCopyTo: without any batch size the copy operator flushes every chunk, producing
+	// one row group per vector (2048 rows). Table properties override the Iceberg defaults.
+	if (batch_size.IsValid()) {
+		result.batch_size = batch_size;
+	}
+	if (batch_size_bytes.IsValid()) {
+		result.batch_size_bytes = batch_size_bytes;
+	}
+	if (!result.batch_size.IsValid() && !result.batch_size_bytes.IsValid() && copy_fun.function.desired_batch_size) {
+		result.batch_size = copy_fun.function.desired_batch_size(context, *result.bind_data);
+	}
+
+	// A file can never be smaller than a single row group, and rotation to honor
+	// write.target-file-size-bytes only happens at row-group boundaries. If the row-group size exceeds the
+	// target file size, rotation can never split the output, so cap it to the target file size.
+	if (result.batch_size_bytes.IsValid() && result.batch_size_bytes.GetIndex() > result.file_size_bytes) {
+		result.batch_size_bytes = result.file_size_bytes;
+	}
 
 	result.names = StringsToIdentifiers(names_to_write);
 	result.expected_types = types_to_write;
@@ -786,6 +811,8 @@ PhysicalOperator &IcebergInsert::PlanCopyForInsert(ClientContext &context, Physi
 	physical_copy.overwrite_mode = copy_options.overwrite_mode;
 	physical_copy.per_thread_output = copy_options.per_thread_output;
 	physical_copy.file_size_bytes = copy_options.file_size_bytes;
+	physical_copy.batch_size = copy_options.batch_size;
+	physical_copy.batch_size_bytes = copy_options.batch_size_bytes;
 	physical_copy.return_type = copy_options.return_type;
 
 	physical_copy.partition_output = copy_options.partition_output;
