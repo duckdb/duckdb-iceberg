@@ -57,9 +57,6 @@ public:
 	virtual unique_ptr<HTTPResponse> Request(RequestType request_type, ClientContext &context,
 	                                         const IRCEndpointBuilder &endpoint_builder, HTTPHeaders &headers,
 	                                         const string &data = "") = 0;
-	virtual case_insensitive_map_t<Value> CreateConfigurationMapDefaults(ClientContext &context) const;
-	static optional<string> ParseConfigOptions(const case_insensitive_map_t<string> &config, ClientContext &context,
-	                                           const string &storage_type, case_insensitive_map_t<Value> &options_out);
 
 public:
 	template <class TARGET>

@@ -35,8 +35,135 @@ const string &IcebergTableInformation::BaseFilePath() const {
 	return table_metadata.location;
 }
 
-bool IcebergTableInformation::IsRenamed() const {
-	return original_name != name;
+static void ParseGCSConfigOptions(const case_insensitive_map_t<string> &config,
+                                  case_insensitive_map_t<Value> &options) {
+	// Parse GCS-specific configuration.
+	auto token_it = config.find("gcs.oauth2.token");
+	if (token_it != config.end()) {
+		options["bearer_token"] = token_it->second;
+	}
+}
+
+static void ParseAzureConfigOptions(const case_insensitive_map_t<string> &config,
+                                    case_insensitive_map_t<Value> &options) {
+	static const string ADLS_SAS_TOKEN_PREFIX = "adls.sas-token.";
+
+	for (auto &entry : config) {
+		// SAS token config format is e.g. {adls.sas-token.<account-name>.dfs.core.windows.net, <token>}
+		if (StringUtil::StartsWith(entry.first, ADLS_SAS_TOKEN_PREFIX)) {
+			string host = entry.first.substr(ADLS_SAS_TOKEN_PREFIX.length());
+			// Extract account name
+			auto dot_pos = StringUtil::Find(host, ".");
+			string account_name = dot_pos.IsValid() ? host.substr(0, dot_pos.GetIndex()) : host;
+
+			if (!account_name.empty() && !entry.second.empty()) {
+				options["account_name"] = account_name;
+				options["connection_string"] =
+				    StringUtil::Format("AccountName=%s;SharedAccessSignature=%s", account_name, entry.second);
+
+				// For now, only process the first {storage account, token} pair we find in the config
+				return;
+			}
+		}
+	}
+}
+
+static void ParseS3ConfigOptions(const case_insensitive_map_t<string> &config, case_insensitive_map_t<Value> &options) {
+	// Set of recognized S3 config parameters and the duckdb secret option that matches it.
+	static const case_insensitive_map_t<string> config_to_option = {{"s3.access-key-id", "key_id"},
+	                                                                {"s3.secret-access-key", "secret"},
+	                                                                {"s3.session-token", "session_token"},
+	                                                                {"s3.region", "region"},
+	                                                                {"region", "region"},
+	                                                                {"client.region", "region"},
+	                                                                {"s3.endpoint", "endpoint"}};
+
+	for (auto &entry : config) {
+		auto it = config_to_option.find(entry.first);
+		if (it != config_to_option.end()) {
+			options[it->second] = entry.second;
+		}
+	}
+}
+string RetrieveRegion(DBConfig &db_config) {
+	char *retrieved_region = std::getenv("AWS_REGION");
+	if (retrieved_region) {
+		return string(retrieved_region);
+	}
+	retrieved_region = std::getenv("AWS_DEFAULT_REGION");
+	if (retrieved_region) {
+		return string(retrieved_region);
+	}
+
+	Value region_value;
+	if (db_config.TryGetCurrentSetting("s3_region", region_value)) {
+		return region_value.ToString();
+	}
+
+	return "";
+}
+static void ParseConfigOptions(const case_insensitive_map_t<string> &config, case_insensitive_map_t<Value> &options,
+                               ClientContext &context, const string &storage_type = "s3") {
+	if (config.empty()) {
+		return;
+	}
+
+	// Parse storage-specific config options
+	if (storage_type == "gcs") {
+		ParseGCSConfigOptions(config, options);
+	} else if (storage_type == "azure") {
+		ParseAzureConfigOptions(config, options);
+	} else {
+		// Default to S3 parsing for backward compatibility
+		ParseS3ConfigOptions(config, options);
+
+		if (options.find("region") == options.end()) {
+			const string region = RetrieveRegion(DBConfig::GetConfig(context));
+
+			if (region.empty()) {
+				throw InvalidConfigurationException(
+				    "No region was provided via the vended credentials, and no region could be found via "
+				    "environment variables. Please provide a default_region for the Iceberg Catalog when attaching");
+			}
+			options["region"] = Value(region);
+		}
+	}
+
+	auto it = config.find("s3.path-style-access");
+	if (it != config.end()) {
+		bool path_style;
+		if (it->second == "true") {
+			path_style = true;
+		} else if (it->second == "false") {
+			path_style = false;
+		} else {
+			throw InvalidInputException("Unexpected value ('%s') for 's3.path-style-access' in 'config' property",
+			                            it->second);
+		}
+
+		options["use_ssl"] = Value(!path_style);
+		if (path_style) {
+			options["url_style"] = "path";
+		}
+	}
+
+	auto endpoint_it = options.find("endpoint");
+	if (endpoint_it == options.end()) {
+		return;
+	}
+	auto endpoint = endpoint_it->second.ToString();
+	if (StringUtil::StartsWith(endpoint, "http://")) {
+		endpoint = endpoint.substr(7, string::npos);
+	}
+	if (StringUtil::StartsWith(endpoint, "https://")) {
+		endpoint = endpoint.substr(8, string::npos);
+		// if there is an endpoint and the endpoiont has https, use ssl.
+		options["use_ssl"] = Value(true);
+	}
+	if (StringUtil::EndsWith(endpoint, "/")) {
+		endpoint = endpoint.substr(0, endpoint.size() - 1);
+	}
+	endpoint_it->second = endpoint;
 }
 
 IRCAPITableCredentials IcebergTableInformation::GetVendedCredentials(ClientContext &context) const {
@@ -48,12 +175,42 @@ IRCAPITableCredentials IcebergTableInformation::GetVendedCredentials(
 	IRCAPITableCredentials result;
 	auto schema_component = IRCPathComponent::NamespaceComponent(schema.namespace_items);
 	auto secret_base_name = UUID::ToString(UUID::GenerateRandomUUID());
+	case_insensitive_map_t<Value> user_defaults;
+	if (catalog.auth_handler->type == IcebergAuthorizationType::SIGV4) {
+		auto &sigv4_auth = catalog.auth_handler->Cast<SIGV4Authorization>();
+		auto catalog_credentials = IcebergCatalog::GetStorageSecret(context, sigv4_auth.secret);
+		// start with the credentials needed for the catalog and overwrite information contained
+		// in the vended credentials. We do it this way to maintain the region info from the catalog credentials
+		if (catalog_credentials) {
+			auto kv_secret = dynamic_cast<const KeyValueSecret &>(*catalog_credentials->secret);
+			for (auto &option : kv_secret.secret_map) {
+				// Ignore refresh info.
+				// if the credentials are the same as for the catalog, then refreshing the catalog secret is enough
+				// otherwise the vended credentials contain their own information for refreshing.
+				if (option.first != "refresh_info" && option.first != "refresh" && option.first != "expiration_epoch") {
+					user_defaults.emplace(option);
+				}
+			}
+		}
+		if (!sigv4_auth.sigv4_region.empty()) {
+			user_defaults.emplace("region", Value(sigv4_auth.sigv4_region));
+		}
+	} else if (catalog.auth_handler->type == IcebergAuthorizationType::OAUTH2) {
+		auto &oauth2_auth = catalog.auth_handler->Cast<OAuth2Authorization>();
+		if (!oauth2_auth.default_region.empty()) {
+			user_defaults["region"] = oauth2_auth.default_region;
+		}
+	}
 
 	// Detect storage type from metadata location
 	const auto &table_location = table_metadata.GetLocation();
 	string storage_type = DetectStorageType(table_location);
-	auto config_options = catalog.auth_handler->CreateConfigurationMapDefaults(context);
-	auto error = IcebergAuthorization::ParseConfigOptions(config, context, storage_type, config_options);
+
+	// Mapping from config key to a duckdb secret option
+	case_insensitive_map_t<Value> config_options;
+	//! TODO: apply the 'defaults' retrieved from the /v1/config endpoint
+	config_options.insert(user_defaults.begin(), user_defaults.end());
+	ParseConfigOptions(config, config_options, context, storage_type);
 
 	//! If there is only one credential listed, we don't really care about the prefix,
 	//! we can use the table_location instead.
@@ -88,11 +245,7 @@ IRCAPITableCredentials IcebergTableInformation::GetVendedCredentials(
 		create_secret_input.provider = "config";
 		create_secret_input.options = config_options;
 
-		auto credential_config_error = IcebergAuthorization::ParseConfigOptions(
-		    credential.config, context, storage_type, create_secret_input.options);
-		if (credential_config_error) {
-			throw InvalidConfigurationException(*credential_config_error);
-		}
+		ParseConfigOptions(credential.config, create_secret_input.options, context, storage_type);
 		//! TODO: apply the 'overrides' retrieved from the /v1/config endpoint
 		result.storage_credentials.push_back(create_secret_input);
 	}
@@ -104,10 +257,6 @@ IRCAPITableCredentials IcebergTableInformation::GetVendedCredentials(
 		config.on_conflict = OnCreateConflict::REPLACE_ON_CONFLICT;
 		config.persist_type = SecretPersistType::TRANSACTION;
 
-		if (error) {
-			throw InvalidConfigurationException(*error);
-		}
-
 		//! TODO: apply the 'overrides' retrieved from the /v1/config endpoint
 		config.options = config_options;
 		config.name = Identifier(secret_base_name);
@@ -116,6 +265,10 @@ IRCAPITableCredentials IcebergTableInformation::GetVendedCredentials(
 	}
 
 	return result;
+}
+
+bool IcebergTableInformation::IsRenamed() const {
+	return original_name != name;
 }
 
 optional_ptr<CatalogEntry> IcebergTableInformation::CreateSchemaVersion(const IcebergTableSchema &table_schema) {
@@ -341,12 +494,13 @@ void IcebergTableInformation::LoadCredentials(ClientContext &context) const {
 }
 
 void IcebergTableInformation::LoadCredentials(ClientContext &context, IRCAPITableCredentials table_credentials) const {
+	auto &secret_manager = SecretManager::Get(context);
+
 	if (catalog.attach_options.access_mode != IRCAccessDelegationMode::VENDED_CREDENTIALS) {
 		// assume secret already exists
 		return;
 	}
-	auto &secret_manager = SecretManager::Get(context);
-
+	// Get Credentials from IRC API
 	auto &fs = FileSystem::GetFileSystem(context);
 	auto metadata_path = table_metadata.GetMetadataPath(fs);
 
