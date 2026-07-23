@@ -148,8 +148,5 @@ jobs:
           python3 -m pip install pyspark==3.5.2 pytest pyiceberg==0.9.1 pyarrow pydantic==2.9.0
           python3 -m pytest -vv test/python --unittest-binary ${{ inputs.build-path }}/test/unittest --test-python-verbosity verbose
 
-      - name: Run all duckdb/duckdb tests
-        if: inputs.local-extension-repo == ''
-        run: |
-          ${{ inputs.build-path }}/test/unittest --order lex --test-dir duckdb "test/sql/*" --list-test-names-only || true
-          ${{ inputs.build-path }}/test/unittest --order lex --test-dir duckdb "test/sql/*" --test-config test/configs/fixture_duckdb_tests.json
+      # The full duckdb/duckdb suite runs in test-fixture-catalog-duckdb-tests.yml
+      # so that it can run in parallel with this workflow.
