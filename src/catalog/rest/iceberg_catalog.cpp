@@ -247,7 +247,6 @@ unique_ptr<SecretEntry> IcebergCatalog::GetHTTPSecret(ClientContext &context, co
 	secret_entry = std::move(secret_match.secret_entry);
 	return secret_entry;
 }
-
 void IcebergCatalog::AddDefaultSupportedEndpoints() {
 	// insert namespaces based on REST API spec.
 	// List namespaces
