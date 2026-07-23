@@ -17,9 +17,6 @@ public:
 	rest_api_objects::Schema ToRESTObject() const;
 
 public:
-	static void PopulateSourceIdMap(unordered_map<uint64_t, ColumnIndex> &source_to_column_id,
-	                                const vector<unique_ptr<IcebergColumnDefinition>> &columns,
-	                                optional_ptr<ColumnIndex> parent);
 	static const IcebergColumnDefinition &GetFromColumnIndex(const vector<unique_ptr<IcebergColumnDefinition>> &columns,
 	                                                         const ColumnIndex &column_index, idx_t depth);
 	const unordered_map<uint64_t, ColumnIndex> &GetSourceIdMap() const;
@@ -42,6 +39,9 @@ public:
 
 private:
 	void InvalidateSourceIdMap();
+	static void PopulateSourceIdMap(unordered_map<uint64_t, ColumnIndex> &source_to_column_id,
+	                                const vector<unique_ptr<IcebergColumnDefinition>> &columns,
+	                                optional_ptr<ColumnIndex> parent);
 
 private:
 	mutable mutex source_id_map_lock;
