@@ -1,0 +1,155 @@
+# name: test/sql/local/iceberg_scans/aggregate_min_max_metadata.test
+# description: Metadata-only MIN/MAX via manifest lower_bounds/upper_bounds (not Iceberg partition-statistics files)
+# group: [iceberg_scans]
+
+statement ok
+SET profiling_renderer_settings = MAP {'operator_casing': 'upper'};
+
+require avro
+
+require parquet
+
+require iceberg
+
+# is_null_is_not_null has 3 data files with non-overlapping id bounds covering [1,8].
+
+# Ground truth with statistics propagation disabled (no metadata aggregate fold).
+statement ok
+PRAGMA disabled_optimizers='statistics_propagation';
+
+statement ok
+create table oracle_id as
+select min(id) as min_id, max(id) as max_id
+from iceberg_scan('{WORKING_DIRECTORY}/data/persistent/is_null_is_not_null');
+
+statement ok
+PRAGMA disabled_optimizers='';
+
+query II
+select min(id), max(id) from iceberg_scan('{WORKING_DIRECTORY}/data/persistent/is_null_is_not_null');
+----
+1	8
+
+query I
+select count(*) from (
+  (select min(id) as min_id, max(id) as max_id
+   from iceberg_scan('{WORKING_DIRECTORY}/data/persistent/is_null_is_not_null'))
+  except
+  (select * from oracle_id)
+);
+----
+0
+
+# Folded from manifest column bounds — no Iceberg scan / aggregate over data files.
+query II
+EXPLAIN SELECT min(id), max(id) FROM iceberg_scan('{WORKING_DIRECTORY}/data/persistent/is_null_is_not_null');
+----
+physical_plan	<REGEX>:.*COLUMN_DATA_SCAN.*
+
+# COUNT(*) folds from manifest row counts alone (no data-file bound materialization).
+query II
+EXPLAIN SELECT count(*) FROM iceberg_scan('{WORKING_DIRECTORY}/data/persistent/is_null_is_not_null');
+----
+physical_plan	<REGEX>:.*COLUMN_DATA_SCAN.*
+
+# Multi-file timestamp table: insert enough rows for multiple data files.
+statement ok
+COPY (
+  select TIMESTAMP '2020-01-01' + INTERVAL (range) HOUR as ts
+  from range(3000000)
+) TO '{TEST_DIR}/agg_minmax_ts' (FORMAT ICEBERG);
+
+query I
+SELECT count(*) > 1 FROM iceberg_metadata('{TEST_DIR}/agg_minmax_ts');
+----
+true
+
+statement ok
+PRAGMA disabled_optimizers='statistics_propagation';
+
+statement ok
+create table oracle_ts as
+select min(ts) as min_ts, max(ts) as max_ts
+from iceberg_scan('{TEST_DIR}/agg_minmax_ts');
+
+statement ok
+PRAGMA disabled_optimizers='';
+
+query I
+select count(*) from (
+  (select min(ts) as min_ts, max(ts) as max_ts from iceberg_scan('{TEST_DIR}/agg_minmax_ts'))
+  except
+  (select * from oracle_ts)
+);
+----
+0
+
+query II
+EXPLAIN SELECT min(ts), max(ts) FROM iceberg_scan('{TEST_DIR}/agg_minmax_ts');
+----
+physical_plan	<REGEX>:.*COLUMN_DATA_SCAN.*
+
+# VARCHAR bounds may be truncated — do not fold MIN/MAX from metadata.
+query II
+EXPLAIN SELECT min(value), max(value) FROM iceberg_scan('{WORKING_DIRECTORY}/data/persistent/is_null_is_not_null');
+----
+physical_plan	<REGEX>:.*(ICEBERG_SCAN|AGGREGATE).*
+
+# FLOAT is excluded (NaN semantics) — fall back to a scan.
+statement ok
+COPY (select range::FLOAT as f from range(1000)) TO '{TEST_DIR}/agg_minmax_float' (FORMAT ICEBERG);
+
+query II
+EXPLAIN SELECT min(f), max(f) FROM iceberg_scan('{TEST_DIR}/agg_minmax_float');
+----
+physical_plan	<REGEX>:.*(ICEBERG_SCAN|AGGREGATE).*
+
+query II
+SELECT min(f), max(f) FROM iceberg_scan('{TEST_DIR}/agg_minmax_float');
+----
+0.0	999.0
+
+# Nested types have no single composite bound in the manifest (bounds are keyed per
+# primitive field id), so MIN/MAX must fall back to a scan even when the leaves would
+# otherwise be exact. A STRUCT wrapping a FLOAT also guards against a nested float leaf.
+statement ok
+COPY (select {'f': range::FLOAT} as s from range(1000)) TO '{TEST_DIR}/agg_minmax_struct_float' (FORMAT ICEBERG);
+
+query II
+EXPLAIN SELECT min(s), max(s) FROM iceberg_scan('{TEST_DIR}/agg_minmax_struct_float');
+----
+physical_plan	<REGEX>:.*(ICEBERG_SCAN|AGGREGATE).*
+
+query II
+SELECT min(s), max(s) FROM iceberg_scan('{TEST_DIR}/agg_minmax_struct_float');
+----
+{'f': 0.0}	{'f': 999.0}
+
+# A LIST of an otherwise-exact type is still nested — no composite bound to fold.
+statement ok
+COPY (select [range] as l from range(1000)) TO '{TEST_DIR}/agg_minmax_list_int' (FORMAT ICEBERG);
+
+query II
+EXPLAIN SELECT min(l), max(l) FROM iceberg_scan('{TEST_DIR}/agg_minmax_list_int');
+----
+physical_plan	<REGEX>:.*(ICEBERG_SCAN|AGGREGATE).*
+
+query II
+SELECT min(l), max(l) FROM iceberg_scan('{TEST_DIR}/agg_minmax_list_int');
+----
+[0]	[999]
+
+# Filtered MIN/MAX is not fully answered from whole-table metadata alone.
+query II
+EXPLAIN SELECT min(id), max(id)
+FROM iceberg_scan('{WORKING_DIRECTORY}/data/persistent/is_null_is_not_null')
+WHERE id > 3;
+----
+physical_plan	<REGEX>:.*(ICEBERG_SCAN|AGGREGATE).*
+
+query II
+SELECT min(id), max(id)
+FROM iceberg_scan('{WORKING_DIRECTORY}/data/persistent/is_null_is_not_null')
+WHERE id > 3;
+----
+4	8

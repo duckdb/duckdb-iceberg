@@ -13,6 +13,7 @@
 #include "duckdb/common/multi_file/multi_file_data.hpp"
 #include "duckdb/common/list.hpp"
 #include "duckdb/common/unordered_map.hpp"
+#include "duckdb/function/partition_stats.hpp"
 #include "duckdb/planner/filter/expression_filter.hpp"
 #include "duckdb/planner/filter/null_filter.hpp"
 #include "duckdb/planner/table_filter.hpp"
@@ -31,6 +32,37 @@
 #include "planning/metadata_io/manifest/bound_iceberg_manifest_entry.hpp"
 
 namespace duckdb {
+
+struct IcebergMultiFileList;
+
+//! Exposes per-column min/max from Iceberg manifest data_file.lower_bounds /
+//! upper_bounds to DuckDB's PartitionStatistics API. Used by
+//! StatisticsPropagator::TryExecuteAggregates for metadata-only MIN/MAX.
+//!
+//! Intentionally reads manifest column bounds — not Iceberg partition-statistics
+//! files (https://iceberg.apache.org/spec/#partition-statistics), which carry
+//! only counts/sizes and have no per-column min/max.
+//!
+//! Data-file entries are materialized lazily on first GetColumnStatistics call so
+//! COUNT(*)-only partition-stats requests avoid draining every matching file.
+struct IcebergPartitionRowGroup : public PartitionRowGroup {
+public:
+	explicit IcebergPartitionRowGroup(const IcebergMultiFileList &file_list);
+
+public:
+	unique_ptr<BaseStatistics> GetColumnStatistics(const StorageIndex &storage_index) override;
+	bool MinMaxIsExact(const BaseStatistics &stats, const StorageIndex &storage_index) override;
+
+private:
+	void EnsureDataFilesMaterialized();
+	//! Numeric/temporal types whose Iceberg bounds are stored without truncation.
+	//! FLOAT/DOUBLE are excluded (NaN semantics). VARCHAR/BLOB bounds may be truncated.
+	static bool SupportsExactMinMaxBounds(const LogicalType &type);
+
+	const IcebergMultiFileList &file_list;
+	vector<reference<const IcebergDataFile>> data_files;
+	bool data_files_materialized = false;
+};
 
 struct IcebergTableFilters {
 	using filter_set_t = unordered_map<idx_t, unique_ptr<ExpressionFilter>>;
@@ -74,7 +106,6 @@ private:
 };
 
 class IcebergTableEntry;
-struct IcebergMultiFileList;
 struct RowGroupOrderOptions;
 
 struct IcebergManifestScanningState {
@@ -146,6 +177,8 @@ public:
 };
 
 struct IcebergMultiFileList : public MultiFileList {
+	friend struct IcebergPartitionRowGroup;
+
 public:
 	IcebergMultiFileList(ClientContext &context, shared_ptr<IcebergScanInfo> scan_info, const string &path,
 	                     const IcebergOptions &options);
@@ -210,6 +243,10 @@ protected:
 	//! Reorder (and prune, when a LIMIT is present) the materialized data files by the
 	//! ORDER BY column's per-file min/max bounds, mirroring the native RowGroupReorderer.
 	void EnsureScanOrderApplied(lock_guard<mutex> &guard) const;
+
+	//! Drain matching data-file entries so column bounds are available for MIN/MAX.
+	//! Called lazily from IcebergPartitionRowGroup — not from GetStatistics (COUNT(*)).
+	void EnsureDataFilesMaterialized(vector<reference<const IcebergDataFile>> &result) const;
 
 	//! NOTE: this requires the lock because it modifies the 'data_files' vector, potentially invalidating references
 	optional_ptr<const BoundIcebergManifestEntry> GetDataFile(idx_t file_id, lock_guard<mutex> &guard) const;
