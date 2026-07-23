@@ -70,8 +70,11 @@ jobs:
         run: |
           make fixture
 
+      # `exclude:*.test_slow` drops the .test_slow files. They are tagged `[.]`
+      # (hidden) by the sqllogictest runner, but an explicit name filter such as
+      # "test/sql/*" pulls them back in, so they have to be excluded by name.
       - name: Run all duckdb/duckdb tests
         if: inputs.local-extension-repo == ''
         run: |
-          ${{ inputs.build-path }}/test/unittest --order lex --test-dir duckdb "test/sql/*" --list-test-names-only || true
-          ${{ inputs.build-path }}/test/unittest --order lex --test-dir duckdb "test/sql/*" --test-config test/configs/fixture_duckdb_tests.json
+          ${{ inputs.build-path }}/test/unittest --order lex --test-dir duckdb "test/sql/*" "exclude:*.test_slow" --list-test-names-only || true
+          ${{ inputs.build-path }}/test/unittest --order lex --test-dir duckdb "test/sql/*" "exclude:*.test_slow" --test-config test/configs/fixture_duckdb_tests.json
