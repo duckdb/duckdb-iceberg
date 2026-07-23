@@ -1,9 +1,7 @@
 # name: test/sql/local/equality_delete_extra_column.test
-# description: Equality-delete on a transform-partitioned table. The delete file lives in a hive
-#              partition dir, so the reader adds the partition column (absent from the table schema)
-#              to the delete scan. Regression for a crash in ScanEqualityDeleteFile when the scanned
-#              delete chunk is wider than the columns the reader models for it (DAT-2274).
+# description: Equality-delete on a transform-partitioned table
 # group: [local]
+
 
 require avro
 

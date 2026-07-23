@@ -20,8 +20,7 @@ static void InitializeFromOtherChunk(DataChunk &target, DataChunk &other, const 
 
 static void ColumnsReferencedByEqualityIds(DataChunk &source, DataChunk &result,
                                            const vector<MultiFileColumnDefinition> &local_columns,
-                                           const vector<string> &source_names,
-                                           const vector<int32_t> &equality_ids) {
+                                           const vector<string> &source_names, const vector<int32_t> &equality_ids) {
 	// The equality-delete file can physically contain more columns than the reader models for it - e.g. Spark
 	// embeds the partition columns next to the equality-key columns - and not necessarily in the same order. So
 	// resolve each equality field-id to its physical position in 'source' by name rather than by its position in
