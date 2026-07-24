@@ -473,6 +473,8 @@ bool IcebergServerSideScanPlanning::Plan(ClientContext &context, IcebergTableInf
 		FetchCredentials(context, table_info, active_plan_id, result);
 		FetchPlanTasks(context, table_info, accumulator);
 
+		vector<PlannedContentFile> data_files;
+		data_files.reserve(accumulator.file_tasks.size());
 		for (auto &task : accumulator.file_tasks) {
 			auto &refs = result.delete_files_by_data_file[task.data_file.file.file_path];
 			for (auto delete_idx : task.delete_file_references) {
@@ -487,13 +489,9 @@ bool IcebergServerSideScanPlanning::Plan(ClientContext &context, IcebergTableInf
 					delete_file.referenced_data_file = task.data_file.file.file_path;
 				}
 			}
-		}
-
-		vector<PlannedContentFile> data_files;
-		data_files.reserve(accumulator.file_tasks.size());
-		for (auto &task : accumulator.file_tasks) {
 			data_files.push_back(std::move(task.data_file));
 		}
+
 		auto &fs = FileSystem::GetFileSystem(context);
 		result.data_manifests =
 		    MakeManifests(fs, table_info.table_metadata, std::move(data_files), IcebergManifestContentType::DATA, 0);
