@@ -115,6 +115,8 @@ private:
 	mutable mutex delete_lock;
 	mutable ManifestEntryReadState read_state;
 
+	mutable bool server_side_planning_enabled = true;
+
 	mutable bool manifest_list_loaded = false;
 	mutable bool data_manifest_scan_started = false;
 
@@ -166,6 +168,7 @@ public:
 	void SetTable(IcebergTableEntry *table);
 	void SetOptions(const IcebergOptions &options);
 	void SetScanOrder(unique_ptr<RowGroupOrderOptions> options);
+	void DisableServerSidePlanning();
 
 	void Bind(vector<LogicalType> &return_types, vector<Identifier> &names);
 	unique_ptr<IcebergMultiFileList> PushdownInternal(ClientContext &context, TableFilterSet &new_filters,
@@ -252,6 +255,7 @@ private:
 
 private:
 	friend class ClientSideScanPlanProvider;
+	friend class ServerSideScanPlanProvider;
 
 	shared_ptr<IcebergMultiFileListSharedState> shared_state;
 	ClientContext &context;
@@ -263,6 +267,8 @@ private:
 	vector<LogicalType> types;
 	IcebergTableFilters table_filters;
 
+	//! The provider is per-view. The server-side implementation owns its filter-derived plan, while the client-side
+	//! implementation delegates to the shared manifest state above.
 	mutable unique_ptr<IcebergScanPlanProvider> scan_plan_provider;
 
 	mutable bool view_initialized = false;

@@ -267,6 +267,10 @@ IRCAPITableCredentials IcebergTableInformation::GetVendedCredentials(
 	return result;
 }
 
+bool IcebergTableInformation::IsRenamed() const {
+	return original_name != name;
+}
+
 optional_ptr<CatalogEntry> IcebergTableInformation::CreateSchemaVersion(const IcebergTableSchema &table_schema) {
 	CreateTableInfo info;
 	info.SetTableName(Identifier(name));
@@ -744,7 +748,7 @@ void IcebergTableInformation::InitSchemaVersions() {
 
 IcebergTableInformation::IcebergTableInformation(IcebergCatalog &catalog, IcebergSchemaEntry &schema,
                                                  const string &name)
-    : catalog(catalog), schema(schema), name(name) {
+    : catalog(catalog), schema(schema), name(name), original_name(name) {
 	table_id = "uuid-" + schema.name + "-" + name;
 }
 

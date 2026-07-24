@@ -38,7 +38,9 @@
 #include "duckdb/common/types/geometry.hpp"
 #include "core/metadata/manifest/iceberg_manifest.hpp"
 #include "catalog/rest/transaction/iceberg_transaction.hpp"
+#include "catalog/rest/api/iceberg_scan_planning.hpp"
 #include "catalog/rest/api/iceberg_type.hpp"
+#include "catalog/rest/api/iceberg_expression.hpp"
 #include "catalog/rest/catalog_entry/table/iceberg_table_entry.hpp"
 #include "catalog/rest/iceberg_catalog.hpp"
 #include "core/expression/iceberg_predicate_stats.hpp"
@@ -151,6 +153,16 @@ void IcebergMultiFileList::SetOptions(const IcebergOptions &options) {
 void IcebergMultiFileList::SetScanOrder(unique_ptr<RowGroupOrderOptions> options) {
 	scan_order_options = std::move(options);
 	scan_order_applied = false;
+}
+
+void IcebergMultiFileList::DisableServerSidePlanning() {
+	lock_guard<mutex> guard(shared_state->lock);
+	if (!shared_state->manifest_list_loaded) {
+		shared_state->server_side_planning_enabled = false;
+	}
+	if (!view_initialized) {
+		scan_plan_provider = make_uniq<ClientSideScanPlanProvider>(*shared_state);
+	}
 }
 
 namespace {
@@ -1166,6 +1178,9 @@ IcebergMultiFileList::GetEqualityDeletesForFile(const BoundIcebergManifestEntry 
 	for (; it != equality_delete_data.end(); it++) {
 		auto &delete_files = it->second->delete_files;
 		for (auto &delete_file : delete_files) {
+			if (!GetScanPlanProvider().DeleteFileAppliesToDataFile(data_file.file_path, delete_file.source_file_path)) {
+				continue;
+			}
 			auto &partition_spec = metadata.partition_specs.at(delete_file.partition_spec_id);
 			if (partition_spec.IsPartitioned()) {
 				if (delete_file.partition_spec_id != manifest_file.partition_spec_id) {
@@ -1222,11 +1237,111 @@ void IcebergMultiFileList::InitializeView(lock_guard<mutex> &guard) const {
 	view_initialized = true;
 }
 
+namespace {
+
+enum class ScanPlanningMode : uint8_t { UNSPECIFIED, SERVER_SIDE_ONLY, CLIENT_SIDE_ONLY };
+
+static ScanPlanningMode GetScanPlanningMode(IcebergTableEntry *table) {
+	if (!table) {
+		return ScanPlanningMode::CLIENT_SIDE_ONLY;
+	}
+
+	auto &table_info = table->table_info;
+	auto &config = table_info.config;
+
+	auto it = config.find("scan-planning-mode");
+	if (it == config.end()) {
+		return ScanPlanningMode::UNSPECIFIED;
+	}
+	auto &mode = it->second;
+	if (StringUtil::CIEquals(mode, "client")) {
+		return ScanPlanningMode::CLIENT_SIDE_ONLY;
+	}
+	if (StringUtil::CIEquals(mode, "server")) {
+		return ScanPlanningMode::SERVER_SIDE_ONLY;
+	}
+	throw InvalidConfigurationException("Table's config 'scan-planning-mode' has unrecognized option: %s", mode);
+}
+
+} // namespace
+
 void IcebergMultiFileList::InitializeScanPlanProvider() const {
 	if (scan_plan_provider) {
 		return;
 	}
-	scan_plan_provider = make_uniq<ClientSideScanPlanProvider>(*shared_state);
+	auto &snapshot_info = shared_state->scan_info->snapshot_info;
+	auto table_entry = GetTable();
+	if (!snapshot_info.snapshot) {
+		scan_plan_provider = make_uniq<ClientSideScanPlanProvider>(*shared_state);
+		return;
+	}
+
+	auto scan_planning_mode = GetScanPlanningMode(table_entry);
+	bool server_side_planning_enabled = shared_state->server_side_planning_enabled;
+	if (scan_planning_mode == ScanPlanningMode::UNSPECIFIED) {
+		Value val;
+		if (context.TryGetCurrentSetting("iceberg_use_server_side_scan_planning", val) && !val.IsNull() &&
+		    val.type().id() == LogicalTypeId::BOOLEAN && !val.GetValue<bool>()) {
+			//! Without 'iceberg_use_server_side_scan_planning', only use client-side planning
+			scan_planning_mode = ScanPlanningMode::CLIENT_SIDE_ONLY;
+		}
+	}
+	if (!table_entry || HasTransactionData() || table_entry->table_info.IsRenamed() ||
+	    scan_planning_mode == ScanPlanningMode::CLIENT_SIDE_ONLY) {
+		server_side_planning_enabled = false;
+	}
+
+	if (server_side_planning_enabled) {
+		auto &table_info = table_entry->table_info;
+		auto &catalog = table_info.catalog;
+		if (catalog.supported_urls.count(IcebergServerSideScanPlanning::PLAN_ENDPOINT)) {
+			rest_api_objects::PlanTableScanRequest request;
+			request.snapshot_id = snapshot_info.snapshot->snapshot_id;
+			request.case_sensitive = true;
+			request.use_snapshot_schema = snapshot_info.snapshot->snapshot_id != GetMetadata().current_snapshot_id;
+			unique_ptr<rest_api_objects::Expression> server_side_filter;
+			for (auto &filter : table_filters) {
+				if (filter.first >= GetSchema().columns.size()) {
+					continue;
+				}
+				auto converted =
+				    IcebergExpression::TryConvertFilter(*filter.second->expr, GetSchema().columns[filter.first]->name);
+				server_side_filter =
+				    IcebergExpression::AndExpression(std::move(server_side_filter), std::move(converted));
+			}
+			request.filter = std::move(server_side_filter);
+			if (scan_order_options) {
+				if (scan_order_options->row_limit.IsValid()) {
+					request.min_rows_requested = NumericCast<int64_t>(scan_order_options->row_limit.GetIndex() +
+					                                                  scan_order_options->row_group_offset);
+				}
+				if (scan_order_options->column_idx.HasPrimaryIndex() &&
+				    scan_order_options->column_idx.GetPrimaryIndex() < GetSchema().columns.size()) {
+					rest_api_objects::FieldName stats_field;
+					stats_field.value = GetSchema().columns[scan_order_options->column_idx.GetPrimaryIndex()]->name;
+					request.stats_fields.emplace();
+					request.stats_fields->push_back(std::move(stats_field));
+				}
+			}
+			IcebergServerSideScanPlan plan;
+			if (IcebergServerSideScanPlanning::Plan(context, table_info, std::move(request), plan)) {
+				if (!plan.storage_credentials.empty()) {
+					table_info.LoadCredentials(context,
+					                           table_info.GetVendedCredentials(context, plan.storage_credentials));
+				}
+				scan_plan_provider = make_uniq<ServerSideScanPlanProvider>(std::move(plan));
+			}
+		}
+	}
+	if (!scan_plan_provider && scan_planning_mode == ScanPlanningMode::SERVER_SIDE_ONLY) {
+		D_ASSERT(table_entry);
+		throw BinderException(
+		    "Unable to plan scan for table %s, but table's config disabled non-server-side scan planning",
+		    table_entry->table_info.name);
+	}
+	if (!scan_plan_provider) {
+		scan_plan_provider = make_uniq<ClientSideScanPlanProvider>(*shared_state);
+	}
 }
 
 void IcebergMultiFileList::LoadManifestList(lock_guard<mutex> &guard) const {

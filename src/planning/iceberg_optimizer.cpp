@@ -22,10 +22,17 @@ GuaranteeEqualityDeleteColumnsOptimizer::GuaranteeEqualityDeleteColumnsOptimizer
 }
 
 void GuaranteeEqualityDeleteColumnsOptimizer::VisitOperator(unique_ptr<LogicalOperator> &op) {
+	VisitOperator(op, false);
+}
+
+void GuaranteeEqualityDeleteColumnsOptimizer::VisitOperator(unique_ptr<LogicalOperator> &op, bool below_write) {
+	below_write = below_write || op->type == LogicalOperatorType::LOGICAL_INSERT ||
+	              op->type == LogicalOperatorType::LOGICAL_DELETE || op->type == LogicalOperatorType::LOGICAL_UPDATE ||
+	              op->type == LogicalOperatorType::LOGICAL_MERGE_INTO;
 	for (idx_t child_index = 0; child_index < op->children.size(); child_index++) {
 		auto &child = op->children[child_index];
 		if (child->type != LogicalOperatorType::LOGICAL_GET) {
-			VisitOperator(child);
+			VisitOperator(child, below_write);
 			continue;
 		}
 		auto &get = child->Cast<LogicalGet>();
@@ -38,7 +45,7 @@ void GuaranteeEqualityDeleteColumnsOptimizer::VisitOperator(unique_ptr<LogicalOp
 		// and file list are the iceberg types we expect.
 		if (get.function.name != "iceberg_scan" ||
 		    get.function.get_multi_file_reader != IcebergMultiFileReader::CreateInstance || !get.bind_data) {
-			VisitOperator(child);
+			VisitOperator(child, below_write);
 			continue;
 		}
 		auto &mfbd = get.bind_data->Cast<MultiFileBindData>();
@@ -46,6 +53,17 @@ void GuaranteeEqualityDeleteColumnsOptimizer::VisitOperator(unique_ptr<LogicalOp
 			continue;
 		}
 		auto &iceberg_list = mfbd.file_list->Cast<IcebergMultiFileList>();
+		bool requires_local_planning = below_write;
+		for (auto &column_id : get.GetColumnIds()) {
+			if (column_id.IsVirtualColumn() &&
+			    column_id.GetPrimaryIndex() == IcebergMultiFileReader::COLUMN_IDENTIFIER_LAST_SEQUENCE_NUMBER) {
+				requires_local_planning = true;
+				break;
+			}
+		}
+		if (requires_local_planning) {
+			iceberg_list.DisableServerSidePlanning();
+		}
 		auto delete_manifest_entries = iceberg_list.GetDeleteManifestEntries();
 
 		unordered_set<int32_t> required_field_ids;

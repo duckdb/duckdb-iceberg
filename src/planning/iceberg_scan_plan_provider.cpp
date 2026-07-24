@@ -302,6 +302,11 @@ bool ClientSideScanPlanProvider::FinishedScanningDeletes() const {
 	return !shared_state.delete_manifest_reader || shared_state.delete_manifest_reader->Finished();
 }
 
+bool ClientSideScanPlanProvider::DeleteFileAppliesToDataFile(const string &data_file_path,
+                                                             const string &delete_file_path) const {
+	return true;
+}
+
 vector<IcebergManifestListEntry> &ClientSideScanPlanProvider::DataManifests() {
 	return shared_state.committed_data_manifests;
 }
@@ -324,6 +329,82 @@ case_insensitive_map_t<shared_ptr<IcebergDeleteData>> &ClientSideScanPlanProvide
 
 map<sequence_number_t, unique_ptr<IcebergEqualityDeleteData>> &ClientSideScanPlanProvider::EqualityDeleteData() {
 	return shared_state.equality_delete_data;
+}
+
+ServerSideScanPlanProvider::ServerSideScanPlanProvider(IcebergServerSideScanPlan plan_p) : plan(std::move(plan_p)) {
+}
+
+void ServerSideScanPlanProvider::LoadManifestList(const IcebergMultiFileList &file_list) {
+}
+
+void ServerSideScanPlanProvider::StartDeleteManifestScan(const IcebergMultiFileList &file_list) {
+}
+
+void ServerSideScanPlanProvider::StartDataManifestScan(const IcebergMultiFileList &file_list) {
+	if (data_manifest_scan_started) {
+		return;
+	}
+	data_manifest_scan_started = true;
+	for (idx_t i = 0; i < plan.data_manifests.size(); i++) {
+		read_state.PushBatch(ManifestReadBatch {i, 0, plan.data_manifests[i].GetManifestEntries().size()});
+	}
+}
+
+void ServerSideScanPlanProvider::EnumerateDeleteManifestEntries(const IcebergMultiFileList &file_list) {
+	if (delete_entries_enumerated) {
+		return;
+	}
+	for (idx_t i = 0; i < plan.delete_manifests.size(); i++) {
+		auto &manifest_list_entry = plan.delete_manifests[i];
+		auto manifest = BoundIcebergManifestListEntry(i, manifest_list_entry);
+		for (auto &manifest_entry : manifest_list_entry.GetManifestEntries()) {
+			if (manifest_entry.status != IcebergManifestEntryStatusType::DELETED) {
+				delete_manifest_entries.push_back(manifest.BindEntry(manifest_entry));
+			}
+		}
+	}
+	delete_entries_enumerated = true;
+}
+
+bool ServerSideScanPlanProvider::TryGetNextBatch(IcebergDataViewCursor &cursor) {
+	return cursor.has_current_batch || TryReadBatch(read_state, cursor);
+}
+
+void ServerSideScanPlanProvider::FinishScanTasks() {
+}
+
+bool ServerSideScanPlanProvider::FinishedScanningDeletes() const {
+	return true;
+}
+
+bool ServerSideScanPlanProvider::DeleteFileAppliesToDataFile(const string &data_file_path,
+                                                             const string &delete_file_path) const {
+	auto refs = plan.delete_files_by_data_file.find(data_file_path);
+	return refs != plan.delete_files_by_data_file.end() && refs->second.count(delete_file_path);
+}
+
+vector<IcebergManifestListEntry> &ServerSideScanPlanProvider::DataManifests() {
+	return plan.data_manifests;
+}
+
+vector<IcebergManifestListEntry> &ServerSideScanPlanProvider::DeleteManifests() {
+	return plan.delete_manifests;
+}
+
+idx_t &ServerSideScanPlanProvider::NextDeleteEntryToProcess() {
+	return next_delete_entry_to_process;
+}
+
+vector<BoundIcebergManifestEntry> &ServerSideScanPlanProvider::DeleteManifestEntries() {
+	return delete_manifest_entries;
+}
+
+case_insensitive_map_t<shared_ptr<IcebergDeleteData>> &ServerSideScanPlanProvider::PositionalDeleteData() {
+	return positional_delete_data;
+}
+
+map<sequence_number_t, unique_ptr<IcebergEqualityDeleteData>> &ServerSideScanPlanProvider::EqualityDeleteData() {
+	return equality_delete_data;
 }
 
 } // namespace duckdb

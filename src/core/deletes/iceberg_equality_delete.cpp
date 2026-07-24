@@ -110,7 +110,7 @@ void IcebergMultiFileList::ScanEqualityDeleteFile(const BoundIcebergManifestEntr
 		field_id_to_global_column[global_col.GetIdentifierFieldId()] = i;
 	}
 
-	deletes.delete_files.emplace_back(data_file.partition_info, manifest_file.partition_spec_id);
+	deletes.delete_files.emplace_back(data_file.partition_info, manifest_file.partition_spec_id, data_file.file_path);
 	auto &rows = deletes.delete_files.back().rows;
 	rows.resize(count);
 	D_ASSERT(result.ColumnCount() == data_file.equality_ids.size());
