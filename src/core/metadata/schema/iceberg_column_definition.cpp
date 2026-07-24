@@ -5,6 +5,7 @@
 #include "duckdb/parser/column_definition.hpp"
 #include "duckdb/common/multi_file/multi_file_data.hpp"
 #include "duckdb/parser/expression/function_expression.hpp"
+#include "duckdb/function/scalar/generic_functions.hpp"
 #include "common/iceberg_default.hpp"
 
 namespace duckdb {
@@ -333,6 +334,11 @@ Value IcebergColumnDefinition::GetWriteDefault() const {
 
 Value IcebergColumnDefinition::GetWriteDefaultDescriptor() const {
 	D_ASSERT(type.id() == LogicalTypeId::STRUCT);
+
+	// Keep the default for every direct child. For nested STRUCT children, keep another descriptor instead of
+	// eagerly materializing their children. The projection resolver can then distinguish:
+	//   * an omitted nested STRUCT, which uses that child's `struct_default`; and
+	//   * a supplied, non-NULL nested STRUCT, which recursively uses that child's `field_defaults`.
 	child_list_t<Value> field_defaults;
 	for (auto &child : children) {
 		if (child->type.id() == LogicalTypeId::STRUCT) {
@@ -352,10 +358,24 @@ ColumnDefinition IcebergColumnDefinition::GetColumnDefinition() const {
 
 	auto write_default = GetWriteDefault();
 	if (type.id() == LogicalTypeId::STRUCT) {
+		// DuckDB's default projection hook receives the bound default expression, but not the Iceberg column
+		// metadata from which it originated. Carry the recursive field defaults through that existing interface in
+		// a real `constant_or_null` expression:
+		//
+		//   constant_or_null(<whole-STRUCT default>, <non-NULL recursive descriptor>)
+		//
+		// The second argument is deliberately non-NULL, so ordinary evaluation of the expression returns the first
+		// argument unchanged. Consequently an omitted/DEFAULT whole STRUCT still observes `write_default`: normally
+		// typed NULL, or a materialized STRUCT under the test-only compatibility setting.
+		//
+		// The expression is parsed here, where no ClientContext is available. DuckDB binds the registered scalar
+		// function later. The Iceberg projection resolver recognizes that bound function through
+		// ConstantOrNull::IsConstantOrNull and extracts the second argument only when it needs to remap a supplied
+		// non-NULL STRUCT. This envelope is internal and is not serialized into Iceberg metadata.
 		vector<unique_ptr<ParsedExpression>> arguments;
 		arguments.push_back(make_uniq<ConstantExpression>(std::move(write_default)));
 		arguments.push_back(make_uniq<ConstantExpression>(GetWriteDefaultDescriptor()));
-		res.SetDefaultValue(make_uniq<FunctionExpression>(Identifier("constant_or_null"), std::move(arguments)));
+		res.SetDefaultValue(make_uniq<FunctionExpression>(Identifier(ConstantOrNullFun::Name), std::move(arguments)));
 	} else if (!write_default.IsNull()) {
 		if (type.IsNested()) {
 			throw NotImplementedException("DEFAULT values for nested types are not supported yet");
