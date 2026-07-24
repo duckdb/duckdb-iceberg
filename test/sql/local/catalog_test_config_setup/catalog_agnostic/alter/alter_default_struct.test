@@ -201,3 +201,7 @@ order by all;
 
 statement ok
 drop table my_datalake.default.alter_default_struct;
+
+# Reset the value, since it's a global static
+statement ok
+SET GLOBAL __iceberg_unsafe_struct_null_default_interpretation = NULL;
