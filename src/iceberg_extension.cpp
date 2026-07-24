@@ -41,6 +41,19 @@ static void SetDefaultFormatVersion(ClientContext &context, SetScope scope, Valu
 	}
 }
 
+static void SetUnsafeStructNullDefaultInterpretation(ClientContext &context, SetScope scope, Value &parameter) {
+	if (parameter.IsNull()) {
+		SetIcebergUnsafeStructNullDefaultInterpretation(false);
+		return;
+	}
+	auto interpretation = parameter.GetValue<string>();
+	if (interpretation != "{}") {
+		throw InvalidConfigurationException("'%s' must be NULL or '{}', got '%s'",
+		                                    UNSAFE_STRUCT_NULL_DEFAULT_INTERPRETATION_CONFIG_VARIABLE, interpretation);
+	}
+	SetIcebergUnsafeStructNullDefaultInterpretation(true);
+}
+
 static unique_ptr<TransactionManager> CreateTransactionManager(optional_ptr<StorageExtensionInfo> storage_info,
                                                                AttachedDatabase &db, Catalog &catalog) {
 	auto &ic_catalog = catalog.Cast<IcebergCatalog>();
@@ -94,6 +107,11 @@ static void LoadInternal(ExtensionLoader &loader) {
 	    "Maximum number of characters of a REST catalog POST body to include in Iceberg log messages. "
 	    "Bodies longer than this are truncated with a trailing '... (truncated)' marker. Set to 0 to omit the body.",
 	    LogicalType::UBIGINT, Value::UBIGINT(10000));
+	config.AddExtensionOption(
+	    UNSAFE_STRUCT_NULL_DEFAULT_INTERPRETATION_CONFIG_VARIABLE,
+	    "DANGEROUS TESTING-ONLY SETTING: interpret a null Iceberg STRUCT default as an empty struct whose fields "
+	    "use their own defaults. The only non-null value accepted is '{}'.",
+	    LogicalType::VARCHAR, Value(LogicalType::VARCHAR), SetUnsafeStructNullDefaultInterpretation, SetScope::GLOBAL);
 #ifdef ICEBERG_ENABLE_EQUALITY_DELETE_WRITES
 	config.AddExtensionOption(
 	    ENABLE_EQUALITY_DELETES_CONFIG_VARIABLE,

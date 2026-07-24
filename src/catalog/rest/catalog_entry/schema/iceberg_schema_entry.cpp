@@ -664,7 +664,7 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 
 		IcebergDefaultBinder binder(context);
 		auto default_constant_value = binder.Evaluate(expression.get(), column.type);
-		column.write_default = make_uniq<Value>(default_constant_value);
+		column.SetWriteDefault(default_constant_value);
 
 		auto new_schema_id = new_schema->schema_id;
 

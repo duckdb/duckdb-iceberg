@@ -94,12 +94,10 @@ insert into my_datalake.default.drop_struct_field VALUES (
 	{'a': 'hello world', 'nested': {'d': '1982/2/12'::DATE}}, true
 )
 
-# FIXME: 'also_nested' should be NULL (in row 1), as it gets backfilled without a DEFAULT
-# but NULL is treated differently for now (hopefully we can fix this behavior later)
 query II
 select * from my_datalake.default.drop_struct_field order by all;
 ----
-{'a': hello world, 'nested': {'d': 1982-02-12}, 'also_nested': {'e': NULL, 'f': NULL}}	true
+{'a': hello world, 'nested': {'d': 1982-02-12}, 'also_nested': NULL}	true
 {'a': test, 'nested': {'d': 2012-08-19}, 'also_nested': {'e': test, 'f': 42}}	false
 
 # ---------- Drop field from nested struct ----------
@@ -129,13 +127,11 @@ insert into my_datalake.default.drop_struct_field VALUES (
 	true
 );
 
-# FIXME: 'also_nested' should be NULL, as it gets backfilled without a DEFAULT
-# but NULL is treated differently for now (hopefully we can fix this behavior later)
 query II
 select * from my_datalake.default.drop_struct_field order by all;
 ----
-{'a': hello world, 'nested': {'d': 1982-02-12}, 'also_nested': {'f': NULL}}	true
-{'a': hello world, 'nested': {'d': 1982-02-12}, 'also_nested': {'f': NULL}}	true
+{'a': hello world, 'nested': {'d': 1982-02-12}, 'also_nested': NULL}	true
+{'a': hello world, 'nested': {'d': 1982-02-12}, 'also_nested': NULL}	true
 {'a': test, 'nested': {'d': 2012-08-19}, 'also_nested': {'f': 42}}	false
 
 statement ok
@@ -154,12 +150,10 @@ insert into my_datalake.default.drop_struct_field VALUES (
 	true
 );
 
-# FIXME: 'also_nested' should be NULL, as it gets backfilled without a DEFAULT
-# but NULL is treated differently for now (hopefully we can fix this behavior later)
 query II
 select * from my_datalake.default.drop_struct_field order by all;
 ----
-{'a': hello world, 'also_nested': {'f': NULL}}	true
-{'a': hello world, 'also_nested': {'f': NULL}}	true
-{'a': hello world, 'also_nested': {'f': NULL}}	true
+{'a': hello world, 'also_nested': NULL}	true
+{'a': hello world, 'also_nested': NULL}	true
+{'a': hello world, 'also_nested': NULL}	true
 {'a': test, 'also_nested': {'f': 42}}	false
