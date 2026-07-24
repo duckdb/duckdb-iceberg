@@ -208,6 +208,10 @@ protected:
 	                                const IcebergTableMetadata &metadata, const IcebergTableSchema &schema) const;
 	bool FileMatchesFilter(const IcebergManifestFile &manifest_file, const IcebergManifestEntry &manifest_entry,
 	                       IcebergManifestContentType file_type) const;
+	//! Whether a delete file's manifest entry can apply to any file selected by the current scan filter.
+	//! Delete files are pruned on partition only: one whose partition is excluded by the filter cannot
+	//! delete a row from any surviving data file, so it does not need to be read.
+	bool DeleteEntryMatchesFilters(const BoundIcebergManifestEntry &bound_manifest_entry) const;
 	void InitializeView(lock_guard<mutex> &guard) const;
 
 	//! Reorder (and prune, when a LIMIT is present) the materialized data files by the

@@ -1,5 +1,7 @@
 #include "core/deletes/iceberg_positional_delete.hpp"
 #include "planning/iceberg_multi_file_list.hpp"
+#include "iceberg_logging.hpp"
+#include "duckdb/logging/logger.hpp"
 
 namespace duckdb {
 
@@ -40,6 +42,9 @@ void IcebergMultiFileList::ScanPositionalDeleteFile(const BoundIcebergManifestEn
 	auto initial_key = current_file_path.get().GetString();
 	auto &positional_delete_data = GetPositionalDeleteData();
 	auto deletes = TryGetOrCreate(positional_delete_data, bound_entry, initial_key);
+	DUCKDB_LOG(context, IcebergLogType,
+	           "Iceberg Delete Scan, read 'positional_delete_file': '%s', referencing 'data_file': '%s'",
+	           bound_entry.entry.data_file.file_path, initial_key);
 
 	for (idx_t i = 0; i < count; i++) {
 		auto &name = names[i];
@@ -48,6 +53,9 @@ void IcebergMultiFileList::ScanPositionalDeleteFile(const BoundIcebergManifestEn
 		if (name != current_file_path.get()) {
 			current_file_path = name;
 			auto key = current_file_path.get().GetString();
+			DUCKDB_LOG(context, IcebergLogType,
+			           "Iceberg Delete Scan, read 'positional_delete_file': '%s', referencing 'data_file': '%s'",
+			           bound_entry.entry.data_file.file_path, key);
 			deletes = TryGetOrCreate(positional_delete_data, bound_entry, key);
 		}
 		if (!deletes) {

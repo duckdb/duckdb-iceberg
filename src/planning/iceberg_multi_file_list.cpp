@@ -1243,6 +1243,19 @@ void IcebergMultiFileList::EnumerateDeleteManifestEntriesInternal() const {
 	GetScanPlanProvider().EnumerateDeleteManifestEntries(*this);
 }
 
+bool IcebergMultiFileList::DeleteEntryMatchesFilters(const BoundIcebergManifestEntry &bound_manifest_entry) const {
+	auto manifest_idx = bound_manifest_entry.manifest_file_idx;
+	if (!delete_manifest_matches[manifest_idx]) {
+		return false;
+	}
+	if (table_filters.HasFilters() &&
+	    !FileMatchesFilter(delete_manifests[manifest_idx].entry.file, bound_manifest_entry.entry,
+	                       IcebergManifestContentType::DELETE)) {
+		return false;
+	}
+	return true;
+}
+
 void IcebergMultiFileList::ScanDeleteFiles(const vector<MultiFileColumnDefinition> &global_columns,
                                            const vector<ColumnIndex> &global_column_ids,
                                            const vector<idx_t> &projection_ids) const {
@@ -1251,6 +1264,9 @@ void IcebergMultiFileList::ScanDeleteFiles(const vector<MultiFileColumnDefinitio
 	auto &delete_entries = provider.DeleteManifestEntries();
 	for (; next_entry < delete_entries.size(); next_entry++) {
 		auto &bound_manifest_entry = delete_entries[next_entry];
+		if (!DeleteEntryMatchesFilters(bound_manifest_entry)) {
+			continue;
+		}
 		auto &manifest_entry = bound_manifest_entry.entry;
 		auto &data_file = manifest_entry.data_file;
 		if (StringUtil::CIEquals(data_file.file_format, "parquet")) {
@@ -1292,6 +1308,9 @@ vector<BoundIcebergManifestEntry> IcebergMultiFileList::GetDeleteManifestEntries
 	vector<BoundIcebergManifestEntry> result;
 	auto &delete_entries = GetScanPlanProvider().DeleteManifestEntries();
 	for (auto &entry : delete_entries) {
+		if (!DeleteEntryMatchesFilters(entry)) {
+			continue;
+		}
 		auto manifest_idx = entry.manifest_file_idx;
 		auto &manifest = delete_manifests[manifest_idx];
 		auto &manifest_file = manifest.entry.file;
