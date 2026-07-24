@@ -1,0 +1,134 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/reads/positional_delete_partition_pruning.test
+# description: A single-partition scan materializes positional delete files that provably cannot apply (issue #341)
+# group: [reads]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+create schema if not exists my_datalake.default;
+
+statement ok
+drop table if exists my_datalake.default.positional_delete_partition_pruning;
+
+# Reproduces the table shape from https://github.com/duckdb/duckdb-iceberg/issues/341:
+# format-version 2 (merge-on-read), partitioned by day(event_date).
+statement ok
+CREATE TABLE my_datalake.default.positional_delete_partition_pruning (
+    id BIGINT, event VARCHAR, event_date DATE
+) PARTITIONED BY (day(event_date)) WITH ('format-version' = 2);
+
+# One INSERT per day => one data file per day-partition (7 data files total), each landing in its own
+# .../event_date_day=YYYY-MM-DD/ directory.
+statement ok
+INSERT INTO my_datalake.default.positional_delete_partition_pruning SELECT range, 'e' || range::VARCHAR, DATE '2026-07-13' FROM range(0, 100);
+
+statement ok
+INSERT INTO my_datalake.default.positional_delete_partition_pruning SELECT range, 'e' || range::VARCHAR, DATE '2026-07-14' FROM range(0, 100);
+
+statement ok
+INSERT INTO my_datalake.default.positional_delete_partition_pruning SELECT range, 'e' || range::VARCHAR, DATE '2026-07-15' FROM range(0, 100);
+
+statement ok
+INSERT INTO my_datalake.default.positional_delete_partition_pruning SELECT range, 'e' || range::VARCHAR, DATE '2026-07-16' FROM range(0, 100);
+
+statement ok
+INSERT INTO my_datalake.default.positional_delete_partition_pruning SELECT range, 'e' || range::VARCHAR, DATE '2026-07-17' FROM range(0, 100);
+
+statement ok
+INSERT INTO my_datalake.default.positional_delete_partition_pruning SELECT range, 'e' || range::VARCHAR, DATE '2026-07-18' FROM range(0, 100);
+
+statement ok
+INSERT INTO my_datalake.default.positional_delete_partition_pruning SELECT range, 'e' || range::VARCHAR, DATE '2026-07-19' FROM range(0, 100);
+
+# One merge-on-read DELETE per day => one positional delete file per day-partition (7 delete files total).
+statement ok
+DELETE FROM my_datalake.default.positional_delete_partition_pruning WHERE event_date = DATE '2026-07-13' AND id = 0;
+
+statement ok
+DELETE FROM my_datalake.default.positional_delete_partition_pruning WHERE event_date = DATE '2026-07-14' AND id = 0;
+
+statement ok
+DELETE FROM my_datalake.default.positional_delete_partition_pruning WHERE event_date = DATE '2026-07-15' AND id = 0;
+
+statement ok
+DELETE FROM my_datalake.default.positional_delete_partition_pruning WHERE event_date = DATE '2026-07-16' AND id = 0;
+
+statement ok
+DELETE FROM my_datalake.default.positional_delete_partition_pruning WHERE event_date = DATE '2026-07-17' AND id = 0;
+
+statement ok
+DELETE FROM my_datalake.default.positional_delete_partition_pruning WHERE event_date = DATE '2026-07-18' AND id = 0;
+
+statement ok
+DELETE FROM my_datalake.default.positional_delete_partition_pruning WHERE event_date = DATE '2026-07-19' AND id = 0;
+
+# 7 day-partitions, 100 rows each, one row deleted per day => 7 * 100 - 7 = 693 live rows.
+query I
+select count(*) from my_datalake.default.positional_delete_partition_pruning;
+----
+693
+
+# The snapshot contains exactly 7 positional delete files (one merge-on-read DELETE per day-partition).
+query I
+SELECT count(DISTINCT file_path)
+FROM iceberg_metadata(my_datalake.default.positional_delete_partition_pruning)
+WHERE content = 'POSITION_DELETES' AND status != 'DELETED';
+----
+7
+
+statement ok
+CALL enable_logging('Iceberg');
+
+statement ok
+CALL truncate_duckdb_logs();
+
+# Scan a single day-partition. Only 2026-07-19's positional delete file can possibly affect this
+# result; the other 6 delete files reference data files in partitions that this filter excludes.
+query I
+select count(*) from my_datalake.default.positional_delete_partition_pruning where event_date = DATE '2026-07-19';
+----
+99
+
+# Every positional delete file that was opened and materialized during the single-day scan, together
+# with the data file it references. A v2 positional delete file records the full referenced data-file
+# path, which for a day-partitioned table contains .../event_date_day=YYYY-MM-DD/...
+statement ok
+CREATE TEMP TABLE single_day_reads AS
+SELECT DISTINCT
+    regexp_extract(message, 'read ''positional_delete_file'': ''([^'']*)''', 1) AS delete_file,
+    regexp_extract(message, 'referencing ''data_file'': ''([^'']*)''', 1) AS referenced_data_file
+FROM duckdb_logs
+WHERE type = 'Iceberg' AND message LIKE 'Iceberg Delete Scan, read ''positional_delete_file''%';
+
+# All 7 positional delete files are read even though the query only touches one of the 7 partitions.
+query I
+SELECT count(*) FROM single_day_reads;
+----
+1
+
+
+# if the file is not in the partition we are not reading it
+query I
+SELECT count(*) FROM single_day_reads WHERE not contains(referenced_data_file, 'day_event_date_3='||date_diff('day', '1970-01-01'::DATE, '2026-07-19'::DATE)::VARCHAR);
+----
+0
+
+# Exactly one read delete file references 2026-07-19's data file -- that is the only one worth reading.
+query I
+SELECT count(*) FROM single_day_reads WHERE contains(referenced_data_file, 'day_event_date_3='||date_diff('day', '1970-01-01'::DATE, '2026-07-19'::DATE)::VARCHAR);
+----
+1
+
+statement ok
+drop table my_datalake.default.positional_delete_partition_pruning;

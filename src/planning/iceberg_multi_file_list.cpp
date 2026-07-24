@@ -1529,12 +1529,30 @@ void IcebergMultiFileList::EnumerateDeleteManifestEntriesInternal() const {
 	D_ASSERT(FinishedScanningDeletes());
 }
 
+bool IcebergMultiFileList::DeleteEntryMatchesFilters(const BoundIcebergManifestEntry &bound_manifest_entry) const {
+	auto manifest_idx = bound_manifest_entry.manifest_file_idx;
+	if (!delete_manifest_matches[manifest_idx]) {
+		return false;
+	}
+	if (table_filters.HasFilters() &&
+	    !FileMatchesFilter(delete_manifests[manifest_idx].entry.file, bound_manifest_entry.entry,
+	                       IcebergManifestContentType::DELETE)) {
+		return false;
+	}
+	return true;
+}
+
 void IcebergMultiFileList::ScanDeleteFiles(const vector<MultiFileColumnDefinition> &global_columns,
                                            const vector<ColumnIndex> &global_column_ids,
                                            const vector<idx_t> &projection_ids) const {
 	for (; shared_state->next_delete_entry_to_process < shared_state->delete_manifest_entries.size();
 	     shared_state->next_delete_entry_to_process++) {
 		auto &bound_manifest_entry = shared_state->delete_manifest_entries[shared_state->next_delete_entry_to_process];
+		//! Skip delete files whose partition is excluded by the scan filter: they cannot delete a row from
+		//! any surviving data file, so reading and materializing them is wasted work.
+		if (!DeleteEntryMatchesFilters(bound_manifest_entry)) {
+			continue;
+		}
 		auto &manifest_entry = bound_manifest_entry.entry;
 		auto &data_file = manifest_entry.data_file;
 		if (StringUtil::CIEquals(data_file.file_format, "parquet")) {
@@ -1575,14 +1593,7 @@ vector<BoundIcebergManifestEntry> IcebergMultiFileList::GetDeleteManifestEntries
 	EnumerateDeleteManifestEntriesInternal();
 	vector<BoundIcebergManifestEntry> result;
 	for (auto &entry : shared_state->delete_manifest_entries) {
-		auto manifest_idx = entry.manifest_file_idx;
-		auto &manifest = delete_manifests[manifest_idx];
-		auto &manifest_file = manifest.entry.file;
-		if (!delete_manifest_matches[manifest_idx]) {
-			continue;
-		}
-		if (table_filters.HasFilters() &&
-		    !FileMatchesFilter(manifest_file, entry.entry, IcebergManifestContentType::DELETE)) {
+		if (!DeleteEntryMatchesFilters(entry)) {
 			continue;
 		}
 		result.push_back(entry);
