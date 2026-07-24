@@ -28,6 +28,7 @@
 using namespace duckdb_yyjson;
 
 namespace duckdb {
+
 namespace {
 
 struct PlannedContentFile {
@@ -40,10 +41,29 @@ struct PlannedFileTask {
 	vector<idx_t> delete_file_references;
 };
 
+struct PlanTasksContainer {
+public:
+	void AddTask(string &&val) {
+		auto res = distinct_values.emplace(val);
+		if (!res.second) {
+			throw InvalidConfigurationException("Server-side scan planning produced duplicate task identifier '%s'",
+			                                    val);
+		}
+		values.emplace_back(std::move(val));
+	}
+	const vector<string> &Tasks() const {
+		return values;
+	}
+
+private:
+	unordered_set<string> distinct_values;
+	vector<string> values;
+};
+
 struct PlanningAccumulator {
 	vector<PlannedContentFile> delete_files;
 	vector<PlannedFileTask> file_tasks;
-	vector<string> plan_tasks;
+	PlanTasksContainer plan_tasks;
 };
 
 static IRCEndpointBuilder TableEndpoint(IcebergTableInformation &table_info) {
@@ -254,7 +274,7 @@ static void AppendTasks(rest_api_objects::ScanTasks tasks, const IcebergTableMet
 
 	if (tasks.plan_tasks) {
 		for (auto &plan_task : *tasks.plan_tasks) {
-			result.plan_tasks.push_back(std::move(plan_task.value));
+			result.plan_tasks.AddTask(std::move(plan_task.value));
 		}
 	}
 }
@@ -267,14 +287,14 @@ static string SerializePlanRequest(const rest_api_objects::PlanTableScanRequest 
 
 static void FetchPlanTasks(ClientContext &context, IcebergTableInformation &table_info,
                            PlanningAccumulator &accumulator) {
-	for (idx_t task_idx = 0; task_idx < accumulator.plan_tasks.size(); task_idx++) {
+	for (auto &task_identifier : accumulator.plan_tasks.Tasks()) {
 		if (context.IsInterrupted()) {
 			throw InterruptException();
 		}
 		auto endpoint = TableEndpoint(table_info);
 		endpoint.AddPathComponent(IRCPathComponent::RegularComponent("tasks"));
 		rest_api_objects::FetchScanTasksRequest request;
-		request.plan_task.value = accumulator.plan_tasks[task_idx];
+		request.plan_task.value = task_identifier;
 		unique_ptr<yyjson_mut_doc, YyjsonDocDeleter> doc(yyjson_mut_doc_new(nullptr));
 		yyjson_mut_doc_set_root(doc.get(), request.ToJSON(doc.get()));
 		auto body = ICUtils::JsonToString(std::move(doc));
