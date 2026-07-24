@@ -2530,6 +2530,9 @@ components:
 
     Expression:
       oneOf:
+        # Iceberg's canonical JSON representation encodes alwaysTrue and
+        # alwaysFalse expressions as the JSON booleans true and false.
+        - $ref: '#/components/schemas/BooleanExpression'
         - $ref: '#/components/schemas/TrueExpression'
         - $ref: '#/components/schemas/FalseExpression'
         - $ref: '#/components/schemas/AndOrExpression'
@@ -2537,6 +2540,9 @@ components:
         - $ref: '#/components/schemas/SetExpression'
         - $ref: '#/components/schemas/LiteralExpression'
         - $ref: '#/components/schemas/UnaryExpression'
+
+    BooleanExpression:
+      type: boolean
 
     ExpressionType:
       type: string
@@ -4819,6 +4825,11 @@ components:
           type: integer
           format: int64
 
+    NullTypeValue:
+      type: null
+      nullable: true
+      example: null
+
     BooleanTypeValue:
       type: boolean
       example: true
@@ -4958,6 +4969,7 @@ components:
 
     PrimitiveTypeValue:
       oneOf:
+        - $ref: '#/components/schemas/NullTypeValue'
         - $ref: '#/components/schemas/BooleanTypeValue'
         - $ref: '#/components/schemas/IntegerTypeValue'
         - $ref: '#/components/schemas/LongTypeValue'

@@ -12,6 +12,7 @@
 #include "duckdb/common/operator/cast_operators.hpp"
 #include "duckdb/parser/column_definition.hpp"
 #include "duckdb/logging/logger.hpp"
+#include "duckdb/common/types/uuid.hpp"
 
 #include "catalog/rest/api/catalog_api.hpp"
 #include "catalog/rest/transaction/iceberg_transaction.hpp"
@@ -166,10 +167,14 @@ static void ParseConfigOptions(const case_insensitive_map_t<string> &config, cas
 }
 
 IRCAPITableCredentials IcebergTableInformation::GetVendedCredentials(ClientContext &context) const {
+	return GetVendedCredentials(context, storage_credentials);
+}
+
+IRCAPITableCredentials IcebergTableInformation::GetVendedCredentials(
+    ClientContext &context, const vector<rest_api_objects::StorageCredential> &storage_credentials) const {
 	IRCAPITableCredentials result;
 	auto schema_component = IRCPathComponent::NamespaceComponent(schema.namespace_items);
-	auto secret_base_name = StringUtil::Format("__internal_ic_%s__%s__%s", catalog.GetName().GetIdentifierName(),
-	                                           schema_component.encoded, name);
+	auto secret_base_name = UUID::ToString(UUID::GenerateRandomUUID());
 	case_insensitive_map_t<Value> user_defaults;
 	if (catalog.auth_handler->type == IcebergAuthorizationType::SIGV4) {
 		auto &sigv4_auth = catalog.auth_handler->Cast<SIGV4Authorization>();
@@ -477,6 +482,14 @@ static void AddHTTPSecretsToOptions(SecretEntry &http_secret_entry, case_insensi
 }
 
 void IcebergTableInformation::LoadCredentials(ClientContext &context) const {
+	if (catalog.attach_options.access_mode != IRCAccessDelegationMode::VENDED_CREDENTIALS) {
+		// assume secret already exists
+		return;
+	}
+	LoadCredentials(context, GetVendedCredentials(context));
+}
+
+void IcebergTableInformation::LoadCredentials(ClientContext &context, IRCAPITableCredentials table_credentials) const {
 	auto &secret_manager = SecretManager::Get(context);
 
 	if (catalog.attach_options.access_mode != IRCAccessDelegationMode::VENDED_CREDENTIALS) {
@@ -485,7 +498,6 @@ void IcebergTableInformation::LoadCredentials(ClientContext &context) const {
 	}
 	// Get Credentials from IRC API
 	auto &fs = FileSystem::GetFileSystem(context);
-	auto table_credentials = GetVendedCredentials(context);
 	auto metadata_path = table_metadata.GetMetadataPath(fs);
 
 	unique_ptr<SecretEntry> http_secret_entry;
@@ -656,7 +668,9 @@ IcebergTableInformation IcebergTableInformation::Copy() const {
 	clone.table_id = table_id;
 	clone.table_metadata = table_metadata.Copy();
 	clone.config = config;
-	clone.storage_credentials = storage_credentials;
+	for (auto &credential : storage_credentials) {
+		clone.storage_credentials.push_back(credential.Copy());
+	}
 	return clone;
 }
 
@@ -753,7 +767,7 @@ void IcebergTableInformation::InitializeFromLoadTableResult(const rest_api_objec
 
 	if (auto &credentials = load_table_result.storage_credentials) {
 		for (auto &credential : *credentials) {
-			storage_credentials.push_back(credential);
+			storage_credentials.push_back(credential.Copy());
 		}
 	}
 	if (initialize_schemas) {

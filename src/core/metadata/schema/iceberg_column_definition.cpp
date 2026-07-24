@@ -20,7 +20,11 @@ static string AddEscapesToBlob(const string &hexadecimal_string) {
 	return result;
 }
 
-static Value ParseDefaultForType(const LogicalType &type, const rest_api_objects::PrimitiveTypeValue &default_value) {
+Value IcebergColumnDefinition::ParsePrimitiveValue(const LogicalType &type,
+                                                   const rest_api_objects::PrimitiveTypeValue &default_value) {
+	if (default_value.null_type_value) {
+		return Value(type);
+	}
 	if (type.IsNested() && type.id() != LogicalTypeId::STRUCT) {
 		throw InvalidConfigurationException("Can't parse default value for nested type (%s)", type.ToString());
 	}
@@ -63,7 +67,7 @@ static Value ParseDefaultForType(const LogicalType &type, const rest_api_objects
 		return Value::BLOB(AddEscapesToBlob(default_value.binary_type_value->value));
 	}
 	default:
-		throw NotImplementedException("ParseDefaultForType not implemented for type: %s", type.ToString());
+		throw NotImplementedException("ParsePrimitiveValue not implemented for type: %s", type.ToString());
 	}
 }
 
@@ -224,10 +228,10 @@ IcebergColumnDefinition::ParseStructField(const rest_api_objects::StructField &f
 	}
 
 	if (field.initial_default) {
-		res->initial_default = make_uniq<Value>(ParseDefaultForType(res->type, *field.initial_default));
+		res->initial_default = make_uniq<Value>(ParsePrimitiveValue(res->type, *field.initial_default));
 	}
 	if (field.write_default) {
-		res->write_default = make_uniq<Value>(ParseDefaultForType(res->type, *field.write_default));
+		res->write_default = make_uniq<Value>(ParsePrimitiveValue(res->type, *field.write_default));
 	}
 
 	return res;

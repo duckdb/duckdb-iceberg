@@ -98,9 +98,17 @@ IcebergTableSchema::GetFromColumnIndex(const vector<unique_ptr<IcebergColumnDefi
 	return GetFromColumnIndex(column->GetChildren(), column_index, depth + 1);
 }
 
+const unordered_map<uint64_t, ColumnIndex> &IcebergTableSchema::GetSourceIdMap() const {
+	lock_guard<mutex> guard(source_id_map_lock);
+	if (!source_id_map_populated) {
+		PopulateSourceIdMap(source_to_column_id, columns, nullptr);
+		source_id_map_populated = true;
+	}
+	return source_to_column_id;
+}
+
 optional<ColumnIndex> IcebergTableSchema::TryGetColumnIndexByFieldId(idx_t field_id) const {
-	unordered_map<uint64_t, ColumnIndex> source_to_column_id;
-	PopulateSourceIdMap(source_to_column_id, columns, nullptr);
+	auto &source_to_column_id = GetSourceIdMap();
 	auto it = source_to_column_id.find(field_id);
 	if (it == source_to_column_id.end()) {
 		return std::nullopt;
@@ -108,12 +116,20 @@ optional<ColumnIndex> IcebergTableSchema::TryGetColumnIndexByFieldId(idx_t field
 	return it->second;
 }
 
-const IcebergColumnDefinition &IcebergTableSchema::GetColumnByFieldId(idx_t field_id) const {
+optional_ptr<const IcebergColumnDefinition> IcebergTableSchema::TryGetColumnByFieldId(idx_t field_id) const {
 	auto column_index = TryGetColumnIndexByFieldId(field_id);
 	if (!column_index) {
-		throw InvalidInputException("Field id %d does not exist in schema with id %d", field_id, schema_id);
+		return nullptr;
 	}
 	return GetFromColumnIndex(columns, *column_index, 0);
+}
+
+const IcebergColumnDefinition &IcebergTableSchema::GetColumnByFieldId(idx_t field_id) const {
+	auto column = TryGetColumnByFieldId(field_id);
+	if (!column) {
+		throw InvalidInputException("Field id %d does not exist in schema with id %d", field_id, schema_id);
+	}
+	return *column;
 }
 
 optional_ptr<const IcebergColumnDefinition>
@@ -158,8 +174,15 @@ optional_ptr<IcebergColumnDefinition> IcebergTableSchema::GetMutableFromPath(con
 	if (!res) {
 		return nullptr;
 	}
+	InvalidateSourceIdMap();
 	auto &col = *res;
 	return const_cast<IcebergColumnDefinition &>(col);
+}
+
+void IcebergTableSchema::InvalidateSourceIdMap() {
+	lock_guard<mutex> guard(source_id_map_lock);
+	source_to_column_id.clear();
+	source_id_map_populated = false;
 }
 
 shared_ptr<IcebergTableSchema> IcebergTableSchema::Copy() const {

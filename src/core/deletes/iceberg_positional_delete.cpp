@@ -40,7 +40,8 @@ void IcebergMultiFileList::ScanPositionalDeleteFile(const BoundIcebergManifestEn
 	}
 	reference<const string_t> current_file_path = names[0];
 	auto initial_key = current_file_path.get().GetString();
-	auto deletes = TryGetOrCreate(shared_state->positional_delete_data, bound_entry, initial_key);
+	auto &positional_delete_data = GetPositionalDeleteData();
+	auto deletes = TryGetOrCreate(positional_delete_data, bound_entry, initial_key);
 	DUCKDB_LOG(context, IcebergLogType,
 	           "Iceberg Delete Scan, read 'positional_delete_file': '%s', referencing 'data_file': '%s'",
 	           bound_entry.entry.data_file.file_path, initial_key);
@@ -55,7 +56,7 @@ void IcebergMultiFileList::ScanPositionalDeleteFile(const BoundIcebergManifestEn
 			DUCKDB_LOG(context, IcebergLogType,
 			           "Iceberg Delete Scan, read 'positional_delete_file': '%s', referencing 'data_file': '%s'",
 			           bound_entry.entry.data_file.file_path, key);
-			deletes = TryGetOrCreate(shared_state->positional_delete_data, bound_entry, key);
+			deletes = TryGetOrCreate(positional_delete_data, bound_entry, key);
 		}
 		if (!deletes) {
 			continue;

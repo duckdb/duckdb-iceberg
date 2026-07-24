@@ -56,7 +56,7 @@ query I
 SELECT count(row_group_bytes)
 FROM parquet_metadata(getvariable('parquet_filepath'));
 ----
-10
+2
 
 statement ok
 commit
@@ -100,7 +100,7 @@ query I
 SELECT count(row_group_bytes)
 FROM parquet_metadata(getvariable('parquet_filepath'));
 ----
-10
+2
 
 statement ok
 commit

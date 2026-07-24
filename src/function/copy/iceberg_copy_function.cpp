@@ -72,7 +72,15 @@ CopyIcebergBindData::CopyIcebergBindData(const CopyInfo &info, vector<string> &&
 	table_metadata->last_partition_field_id = 0;
 	table_metadata->default_sort_order_id = 0;
 
-	//! TODO: Parse any iceberg-specific options from info.options if needed
+	// Thread COPY options (e.g. "write.target-file-size-bytes", "write.parquet.row-group-size") into the
+	// table properties so IcebergInsert::GetCopyOptions applies them to the parquet writer. The parser has
+	// already extracted FORMAT into info.format, so everything left here is an Iceberg write property.
+	for (auto &option : info.options) {
+		if (option.second.empty()) {
+			continue;
+		}
+		table_metadata->table_properties[option.first] = option.second[0].ToString();
+	}
 }
 
 unique_ptr<FunctionData> CopyIcebergBindData::Copy() const {

@@ -1,0 +1,89 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/table_properties/test_default_format_version.test
+# description: test the iceberg_default_format_version setting used when creating a table without an explicit format-version
+# group: [table_properties]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+require core_functions
+
+# default value is 2
+query I
+SELECT current_setting('iceberg_default_format_version');
+----
+2
+
+# setting it to 1 is not implemented
+statement error
+set iceberg_default_format_version=1;
+----
+<REGEX>:.*Not implemented Error.*format-version 1.*
+
+# setting it to 4+ is an invalid configuration
+statement error
+set iceberg_default_format_version=4;
+----
+<REGEX>:.*Invalid Configuration Error.*iceberg_default_format_version.*
+
+# negative values are rejected by the UBIGINT type coercion
+statement error
+set iceberg_default_format_version=-1;
+----
+<REGEX>:.*
+
+statement ok
+CREATE SCHEMA IF NOT EXISTS my_datalake.default;
+
+statement ok
+use my_datalake.default;
+
+# with the default (2), a table created without a format-version property is v2
+statement ok
+drop table if exists default_format_version_tbl;
+
+statement ok
+create table default_format_version_tbl (a int);
+
+query I
+SELECT metadata."format-version"::INT FROM iceberg_load_table_response(my_datalake.default.default_format_version_tbl);
+----
+2
+
+# set the default to 3 and confirm a new table without an explicit format-version is v3
+statement ok
+set iceberg_default_format_version=3;
+
+query I
+SELECT current_setting('iceberg_default_format_version');
+----
+3
+
+statement ok
+drop table if exists default_format_version_tbl;
+
+statement ok
+create table default_format_version_tbl (a int);
+
+query I
+SELECT metadata."format-version"::INT FROM iceberg_load_table_response(my_datalake.default.default_format_version_tbl);
+----
+3
+
+# an explicit format-version property still overrides the default
+statement ok
+drop table if exists explicit_format_version_tbl;
+
+statement ok
+create table explicit_format_version_tbl (a int) WITH ('format-version'='2');
+
+query I
+SELECT metadata."format-version"::INT FROM iceberg_load_table_response(my_datalake.default.explicit_format_version_tbl);
+----
+2

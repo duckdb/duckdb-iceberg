@@ -15,6 +15,9 @@
 #include "duckdb/planner/expression/bound_conjunction_expression.hpp"
 #include "duckdb/planner/expression/bound_function_expression.hpp"
 #include "duckdb/planner/expression/bound_reference_expression.hpp"
+#include "duckdb/planner/expression/bound_constant_expression.hpp"
+#include "duckdb/planner/expression/bound_comparison_expression.hpp"
+#include "duckdb/planner/expression/bound_operator_expression.hpp"
 #include "duckdb/planner/expression_iterator.hpp"
 #include "duckdb/planner/filter/expression_filter.hpp"
 #include "duckdb/planner/filter/table_filter_functions.hpp"
@@ -24,6 +27,7 @@
 #include "duckdb/storage/table/row_group_reorderer.hpp"
 
 #include "planning/iceberg_multi_file_reader.hpp"
+#include "planning/iceberg_scan_plan_provider.hpp"
 #include "function/iceberg_functions.hpp"
 #include "planning/metadata_io/deletes/iceberg_deletes_file_reader.hpp"
 #include "common/iceberg_utils.hpp"
@@ -34,6 +38,9 @@
 #include "duckdb/common/types/geometry.hpp"
 #include "core/metadata/manifest/iceberg_manifest.hpp"
 #include "catalog/rest/transaction/iceberg_transaction.hpp"
+#include "catalog/rest/api/iceberg_type.hpp"
+#include "catalog/rest/catalog_entry/table/iceberg_table_entry.hpp"
+#include "catalog/rest/iceberg_catalog.hpp"
 #include "core/expression/iceberg_predicate_stats.hpp"
 #include "core/metadata/iceberg_table_metadata.hpp"
 #include "storage/statistics/iceberg_variant_statistics.hpp"
@@ -57,6 +64,93 @@ bool ManifestEntryReadState::GetBatch(idx_t batch_idx, ManifestReadBatch &result
 	}
 	result = batches[batch_idx];
 	return true;
+}
+
+IcebergMultiFileList::IcebergMultiFileList(ClientContext &context_p, shared_ptr<IcebergScanInfo> scan_info,
+                                           const string &path, const IcebergOptions &options)
+    : shared_state(make_shared_ptr<IcebergMultiFileListSharedState>(context_p, std::move(scan_info), path, options)),
+      context(shared_state->context), fs(shared_state->fs), options(shared_state->options) {
+}
+
+IcebergMultiFileList::IcebergMultiFileList(shared_ptr<IcebergMultiFileListSharedState> shared_state_p)
+    : shared_state(std::move(shared_state_p)), context(shared_state->context), fs(shared_state->fs),
+      options(shared_state->options) {
+}
+
+IcebergMultiFileList::~IcebergMultiFileList() {
+}
+
+IcebergMultiFileListSharedState::IcebergMultiFileListSharedState(ClientContext &context_p,
+                                                                 shared_ptr<IcebergScanInfo> scan_info_p, string path_p,
+                                                                 const IcebergOptions &options_p)
+    : context(context_p), fs(FileSystem::GetFileSystem(context)), scan_info(std::move(scan_info_p)),
+      path(std::move(path_p)), options(options_p) {
+}
+
+IcebergMultiFileListSharedState::~IcebergMultiFileListSharedState() {
+	if (data_manifest_read_state) {
+		//! FIXME: this could throw, if the tasks encountered an error
+		data_manifest_read_state->executor.WorkOnTasks();
+	}
+}
+
+string IcebergMultiFileList::ToDuckDBPath(const string &raw_path) {
+	return raw_path;
+}
+
+string IcebergMultiFileList::GetPath() const {
+	return shared_state->path;
+}
+
+const IcebergTableMetadata &IcebergMultiFileList::GetMetadata() const {
+	return shared_state->scan_info->metadata;
+}
+
+bool IcebergMultiFileList::HasTransactionData() const {
+	return shared_state->scan_info->transaction_data;
+}
+
+const IcebergTransactionData &IcebergMultiFileList::GetTransactionData() const {
+	D_ASSERT(HasTransactionData());
+	return *shared_state->scan_info->transaction_data;
+}
+
+const IcebergSnapshotScanInfo &IcebergMultiFileList::GetSnapshot() const {
+	return shared_state->scan_info->snapshot_info;
+}
+
+const IcebergTableSchema &IcebergMultiFileList::GetSchema() const {
+	return shared_state->scan_info->schema;
+}
+
+IcebergScanPlanProvider &IcebergMultiFileList::GetScanPlanProvider() const {
+	D_ASSERT(scan_plan_provider);
+	return *scan_plan_provider;
+}
+
+case_insensitive_map_t<shared_ptr<IcebergDeleteData>> &IcebergMultiFileList::GetPositionalDeleteData() const {
+	return GetScanPlanProvider().PositionalDeleteData();
+}
+
+map<sequence_number_t, unique_ptr<IcebergEqualityDeleteData>> &IcebergMultiFileList::GetEqualityDeleteData() const {
+	return GetScanPlanProvider().EqualityDeleteData();
+}
+
+IcebergTableEntry *IcebergMultiFileList::GetTable() const {
+	return shared_state->table;
+}
+
+void IcebergMultiFileList::SetTable(IcebergTableEntry *table) {
+	shared_state->table = table;
+}
+
+void IcebergMultiFileList::SetOptions(const IcebergOptions &options) {
+	shared_state->options = options;
+}
+
+void IcebergMultiFileList::SetScanOrder(unique_ptr<RowGroupOrderOptions> options) {
+	scan_order_options = std::move(options);
+	scan_order_applied = false;
 }
 
 namespace {
@@ -175,137 +269,7 @@ static unique_ptr<Expression> ExtractFilterExpressionForPath(const Expression &e
 	return result;
 }
 
-class ManifestReadTask : public BaseExecutorTask {
-public:
-	ManifestReadTask(IcebergManifestScanningState &state)
-	    : BaseExecutorTask(state.executor), state(state), reader(*state.scan) {
-	}
-
-	void ExecuteTask() override {
-		throw InternalException("Simple ExecuteTask should never be called!");
-	}
-
-	TaskExecutionResult ExecuteTaskIncremental() {
-		while (!reader.Finished()) {
-			reader.Read();
-			return TaskExecutionResult::TASK_NOT_FINISHED;
-		}
-		--state.in_progress_tasks;
-		return TaskExecutionResult::TASK_FINISHED;
-	}
-
-	TaskExecutionResult Execute(TaskExecutionMode mode) override {
-		if (executor.HasError()) {
-			// another task encountered an error - bailout
-			executor.FinishTask();
-			return TaskExecutionResult::TASK_FINISHED;
-		}
-		try {
-			{
-				TaskNotifier task_notifier {state.context};
-				auto res = TaskExecutionResult::TASK_NOT_FINISHED;
-				while (res == TaskExecutionResult::TASK_NOT_FINISHED) {
-					res = ExecuteTaskIncremental();
-					if (res == TaskExecutionResult::TASK_NOT_FINISHED && mode == TaskExecutionMode::PROCESS_PARTIAL) {
-						return res;
-					}
-				}
-			}
-			executor.FinishTask();
-			return TaskExecutionResult::TASK_FINISHED;
-		} catch (std::exception &ex) {
-			executor.PushError(ErrorData(ex));
-		} catch (...) { // LCOV_EXCL_START
-			executor.PushError(ErrorData("Unknown exception during Checkpoint!"));
-		} // LCOV_EXCL_STOP
-		executor.FinishTask();
-		return TaskExecutionResult::TASK_ERROR;
-	}
-
-private:
-	IcebergManifestScanningState &state;
-	manifest_file::ManifestReader reader;
-};
-
 } // namespace
-
-IcebergMultiFileList::IcebergMultiFileList(ClientContext &context_p, shared_ptr<IcebergScanInfo> scan_info,
-                                           const string &path, const IcebergOptions &options)
-    : shared_state(make_shared_ptr<IcebergMultiFileListSharedState>(context_p, std::move(scan_info), path, options)),
-      context(shared_state->context), fs(shared_state->fs), options(shared_state->options) {
-}
-
-IcebergMultiFileList::IcebergMultiFileList(shared_ptr<IcebergMultiFileListSharedState> shared_state_p)
-    : shared_state(std::move(shared_state_p)), context(shared_state->context), fs(shared_state->fs),
-      options(shared_state->options) {
-}
-
-IcebergMultiFileList::~IcebergMultiFileList() {
-}
-
-IcebergMultiFileListSharedState::IcebergMultiFileListSharedState(ClientContext &context_p,
-                                                                 shared_ptr<IcebergScanInfo> scan_info_p, string path_p,
-                                                                 const IcebergOptions &options_p)
-    : context(context_p), fs(FileSystem::GetFileSystem(context)), scan_info(std::move(scan_info_p)),
-      path(std::move(path_p)), options(options_p) {
-}
-
-IcebergMultiFileListSharedState::~IcebergMultiFileListSharedState() {
-	if (data_manifest_read_state) {
-		//! FIXME: this could throw, if the tasks encountered an error
-		data_manifest_read_state->executor.WorkOnTasks();
-	}
-}
-
-string IcebergMultiFileList::ToDuckDBPath(const string &raw_path) {
-	return raw_path;
-}
-
-string IcebergMultiFileList::GetPath() const {
-	return shared_state->path;
-}
-
-const IcebergTableMetadata &IcebergMultiFileList::GetMetadata() const {
-	return shared_state->scan_info->metadata;
-}
-
-bool IcebergMultiFileList::HasTransactionData() const {
-	return shared_state->scan_info->transaction_data;
-}
-
-const IcebergTransactionData &IcebergMultiFileList::GetTransactionData() const {
-	D_ASSERT(HasTransactionData());
-	return *shared_state->scan_info->transaction_data;
-}
-
-const IcebergSnapshotScanInfo &IcebergMultiFileList::GetSnapshot() const {
-	return shared_state->scan_info->snapshot_info;
-}
-
-const IcebergTableSchema &IcebergMultiFileList::GetSchema() const {
-	return shared_state->scan_info->schema;
-}
-
-bool IcebergMultiFileList::FinishedScanningDeletes() const {
-	return !shared_state->delete_manifest_reader || shared_state->delete_manifest_reader->Finished();
-}
-
-IcebergTableEntry *IcebergMultiFileList::GetTable() const {
-	return shared_state->table;
-}
-
-void IcebergMultiFileList::SetTable(IcebergTableEntry *table) {
-	shared_state->table = table;
-}
-
-void IcebergMultiFileList::SetOptions(const IcebergOptions &options) {
-	shared_state->options = options;
-}
-
-void IcebergMultiFileList::SetScanOrder(unique_ptr<RowGroupOrderOptions> options) {
-	scan_order_options = std::move(options);
-	scan_order_applied = false;
-}
 
 unique_ptr<ExpressionFilter> IcebergMultiFileList::GetFilterForColumnIndex(const IcebergTableFilters &filter_set,
                                                                            const ColumnIndex &column_index) const {
@@ -452,8 +416,12 @@ vector<OpenFileInfo> IcebergMultiFileList::GetAllFiles() const {
 	vector<OpenFileInfo> file_list;
 	//! Lock is required because it reads the 'manifest_entries' vector
 	lock_guard<mutex> guard(shared_state->lock);
-	for (idx_t i = 0; i < data_manifest_entries.size(); i++) {
-		file_list.push_back(GetFileInternal(i, guard));
+	for (idx_t i = 0;; i++) {
+		auto file = GetFileInternal(i, guard);
+		if (file.path.empty()) {
+			break;
+		}
+		file_list.push_back(std::move(file));
 	}
 	return file_list;
 }
@@ -672,8 +640,7 @@ bool IcebergMultiFileList::FilePartitionMatchesFilter(const IcebergDataFile &dat
 		    data_file.file_path, manifest_file.partition_spec_id);
 	}
 	auto &partition_spec = partition_spec_it->second;
-	unordered_map<uint64_t, ColumnIndex> source_to_column_id;
-	IcebergTableSchema::PopulateSourceIdMap(source_to_column_id, schema.columns, nullptr);
+	auto &source_to_column_id = schema.GetSourceIdMap();
 
 	//! Map from partition_field_id -> data_file.partition_info[i]
 	unordered_map<uint64_t, idx_t> partition_info_map;
@@ -871,60 +838,11 @@ bool IcebergMultiFileList::FileMatchesFilter(const IcebergManifestFile &manifest
 }
 
 bool IcebergMultiFileList::TryGetNextBatch(lock_guard<mutex> &guard) const {
-	auto &view_cursor = data_view_cursor;
-	if (view_cursor.has_current_batch) {
-		return true;
-	}
-	if (shared_state->read_state.GetBatch(view_cursor.next_batch_idx, view_cursor.current_batch)) {
-		view_cursor.next_batch_idx++;
-		view_cursor.current_batch_offset = view_cursor.current_batch.start_index;
-		view_cursor.has_current_batch = true;
-		return true;
-	}
-	if (!shared_state->data_manifest_read_state) {
-		return false;
-	}
-	auto &scheduler = TaskScheduler::GetScheduler(context);
-	auto &scan_state = *shared_state->data_manifest_read_state;
-	auto &executor = scan_state.executor;
-	shared_ptr<Task> task_to_execute;
-	while (scan_state.in_progress_tasks) {
-		if (executor.GetTask(task_to_execute)) {
-			auto res = task_to_execute->Execute(TaskExecutionMode::PROCESS_PARTIAL);
-			if (res == TaskExecutionResult::TASK_NOT_FINISHED) {
-				auto &token = *task_to_execute->token;
-				scheduler.ScheduleTask(token, std::move(task_to_execute));
-			}
-			if (shared_state->read_state.GetBatch(view_cursor.next_batch_idx, view_cursor.current_batch)) {
-				view_cursor.next_batch_idx++;
-				view_cursor.current_batch_offset = view_cursor.current_batch.start_index;
-				view_cursor.has_current_batch = true;
-				return true;
-			}
-			//! We didn't manage to populate the buffer with our scan
-			//! But another task might be in the process of scanning
-			//! Have to wait for everything to finish to conclusively say we're done
-		}
-		executor.WorkOnTasks();
-		break;
-	}
-	if (!shared_state->read_state.GetBatch(view_cursor.next_batch_idx, view_cursor.current_batch)) {
-		return false;
-	}
-	view_cursor.next_batch_idx++;
-	view_cursor.current_batch_offset = view_cursor.current_batch.start_index;
-	view_cursor.has_current_batch = true;
-	return true;
+	return GetScanPlanProvider().TryGetNextBatch(data_view_cursor);
 }
 
 void IcebergMultiFileList::FinishScanTasks(lock_guard<mutex> &guard) const {
-	if (!shared_state->data_manifest_read_state) {
-		return;
-	}
-	auto &read_state = *shared_state->data_manifest_read_state;
-	auto &executor = read_state.executor;
-	//! Make sure all tasks are done before shutting down
-	executor.WorkOnTasks();
+	GetScanPlanProvider().FinishScanTasks();
 };
 
 optional_ptr<const BoundIcebergManifestEntry> IcebergMultiFileList::GetDataFile(idx_t file_id,
@@ -1197,9 +1115,8 @@ bool IcebergMultiFileList::ManifestMatchesFilter(const IcebergManifestFile &mani
 		return true;
 	}
 
-	auto &schema = GetSchema().columns;
-	unordered_map<uint64_t, ColumnIndex> source_to_column_id;
-	IcebergTableSchema::PopulateSourceIdMap(source_to_column_id, schema, nullptr);
+	auto &schema = GetSchema();
+	auto &source_to_column_id = schema.GetSourceIdMap();
 
 	for (idx_t i = 0; i < field_summaries.size(); i++) {
 		auto &field_summary = field_summaries[i];
@@ -1213,7 +1130,7 @@ bool IcebergMultiFileList::ManifestMatchesFilter(const IcebergManifestFile &mani
 			continue;
 		}
 
-		auto &column = IcebergTableSchema::GetFromColumnIndex(schema, column_id, 0);
+		auto &column = IcebergTableSchema::GetFromColumnIndex(schema.columns, column_id, 0);
 		auto result_type = field.transform.GetSerializedType(column.type);
 		auto stats = IcebergPredicateStats::DeserializeBounds(field_summary.lower_bound, field_summary.upper_bound,
 		                                                      column.name, result_type);
@@ -1244,27 +1161,28 @@ IcebergMultiFileList::GetEqualityDeletesForFile(const BoundIcebergManifestEntry 
 	auto &manifest_file = data_manifests[bound_manifest_entry.manifest_file_idx].entry.file;
 	auto &data_file = manifest_entry.data_file;
 	auto &metadata = GetMetadata();
-	auto it = shared_state->equality_delete_data.upper_bound(manifest_entry.GetSequenceNumber(manifest_file));
-	for (; it != shared_state->equality_delete_data.end(); it++) {
-		auto &files = it->second->files;
-		for (auto &file : files) {
-			auto &partition_spec = metadata.partition_specs.at(file.partition_spec_id);
+	auto &equality_delete_data = GetEqualityDeleteData();
+	auto it = equality_delete_data.upper_bound(manifest_entry.GetSequenceNumber(manifest_file));
+	for (; it != equality_delete_data.end(); it++) {
+		auto &delete_files = it->second->delete_files;
+		for (auto &delete_file : delete_files) {
+			auto &partition_spec = metadata.partition_specs.at(delete_file.partition_spec_id);
 			if (partition_spec.IsPartitioned()) {
-				if (file.partition_spec_id != manifest_file.partition_spec_id) {
+				if (delete_file.partition_spec_id != manifest_file.partition_spec_id) {
 					//! Not unpartitioned and the data does not share the same partition spec as the delete, skip the
 					//! delete file.
 					continue;
 				}
-				D_ASSERT(file.partition_info.size() == data_file.partition_info.size());
-				for (idx_t i = 0; i < file.partition_info.size(); i++) {
-					if (file.partition_info[i] != data_file.partition_info[i]) {
+				D_ASSERT(delete_file.partition_info.size() == data_file.partition_info.size());
+				for (idx_t i = 0; i < delete_file.partition_info.size(); i++) {
+					if (delete_file.partition_info[i] != data_file.partition_info[i]) {
 						//! Same partition spec id, but the partitioning information doesn't match, delete file doesn't
 						//! apply.
 						continue;
 					}
 				}
 			}
-			result.emplace_back(file);
+			result.emplace_back(delete_file);
 		}
 	}
 	return result;
@@ -1276,7 +1194,7 @@ void IcebergMultiFileList::InitializeView(lock_guard<mutex> &guard) const {
 	}
 	LoadManifestList(guard);
 
-	auto &committed_data_manifests = shared_state->committed_data_manifests;
+	auto &committed_data_manifests = GetScanPlanProvider().DataManifests();
 	auto &transaction_data_manifests = shared_state->transaction_data_manifests;
 	data_manifests.reserve(committed_data_manifests.size() + transaction_data_manifests.size());
 	data_manifest_matches.reserve(committed_data_manifests.size() + transaction_data_manifests.size());
@@ -1289,7 +1207,7 @@ void IcebergMultiFileList::InitializeView(lock_guard<mutex> &guard) const {
 		data_manifest_matches.push_back(ManifestMatchesFilter(manifest.get().file));
 	}
 
-	auto &committed_delete_manifests = shared_state->committed_delete_manifests;
+	auto &committed_delete_manifests = GetScanPlanProvider().DeleteManifests();
 	auto &transaction_delete_manifests = shared_state->transaction_delete_manifests;
 	delete_manifests.reserve(committed_delete_manifests.size() + transaction_delete_manifests.size());
 	delete_manifest_matches.reserve(committed_delete_manifests.size() + transaction_delete_manifests.size());
@@ -1304,229 +1222,25 @@ void IcebergMultiFileList::InitializeView(lock_guard<mutex> &guard) const {
 	view_initialized = true;
 }
 
-void IcebergMultiFileList::LoadManifestList(lock_guard<mutex> &guard) const {
-	if (shared_state->manifest_list_loaded) {
+void IcebergMultiFileList::InitializeScanPlanProvider() const {
+	if (scan_plan_provider) {
 		return;
 	}
-
-	auto &snapshot_info = shared_state->scan_info->snapshot_info;
-	if (snapshot_info.snapshot) {
-		//! Load the snapshot
-		auto iceberg_path = GetPath();
-		auto &snapshot_info = GetSnapshot();
-		auto &snapshot = *snapshot_info.snapshot;
-		auto &metadata = GetMetadata();
-		auto &fs = FileSystem::GetFileSystem(context);
-
-		vector<IcebergManifestListEntry> manifest_list_entries;
-		if (HasTransactionData() && !GetTransactionData().alters.empty()) {
-			auto &transaction_data = GetTransactionData();
-			manifest_list_entries = transaction_data.existing_manifest_list;
-		} else {
-			// Read the manifest list, we need all the manifests to determine if we've seen all deletes
-			auto manifest_list_full_path = options.allow_moved_paths
-			                                   ? IcebergUtils::GetFullPath(iceberg_path, snapshot.manifest_list, fs)
-			                                   : snapshot.manifest_list;
-			//! Read the manifest list
-			auto scan = AvroScan::ScanManifestList(snapshot_info, metadata, context, manifest_list_full_path,
-			                                       manifest_list_entries);
-			auto manifest_list_reader = make_uniq<manifest_list::ManifestListReader>(*scan);
-			while (!manifest_list_reader->Finished()) {
-				manifest_list_reader->Read();
-			}
-		}
-
-		for (auto &manifest_list_entry : manifest_list_entries) {
-			auto &manifest_file = manifest_list_entry.file;
-			if (manifest_file.content == IcebergManifestContentType::DATA) {
-				shared_state->committed_data_manifests.push_back(std::move(manifest_list_entry));
-			} else {
-				D_ASSERT(manifest_file.content == IcebergManifestContentType::DELETE);
-				shared_state->committed_delete_manifests.push_back(std::move(manifest_list_entry));
-			}
-		}
-
-		for (auto &manifest : shared_state->committed_data_manifests) {
-			if (!manifest.HasManifestEntries()) {
-				continue;
-			}
-			auto &file = manifest.file;
-			idx_t reserve_size = file.existing_files_count + file.added_files_count + file.deleted_files_count;
-			manifest.GetManifestEntries().reserve(reserve_size);
-		}
-	}
-
-	if (HasTransactionData()) {
-		auto &transaction_data = GetTransactionData();
-		for (auto &alter_p : transaction_data.alters) {
-			auto &alter = alter_p.get();
-			const auto &manifest_list_entries = alter.GetManifestFiles();
-			for (auto &manifest_list_entry : manifest_list_entries) {
-				auto &manifest = manifest_list_entry.file;
-				switch (manifest.content) {
-				case IcebergManifestContentType::DATA: {
-					shared_state->transaction_data_manifests.push_back(manifest_list_entry);
-					break;
-				}
-				case IcebergManifestContentType::DELETE: {
-					shared_state->transaction_delete_manifests.push_back(manifest_list_entry);
-					break;
-				}
-				default:
-					throw NotImplementedException("IcebergManifestContentType: %d",
-					                              static_cast<uint8_t>(manifest.content));
-				}
-			}
-		}
-	}
-
-	shared_state->manifest_list_loaded = true;
-	DUCKDB_LOG(context, IcebergLogType,
-	           "Iceberg metadata phase=manifest_list_loaded data_manifests=%llu delete_manifests=%llu",
-	           shared_state->committed_data_manifests.size() + shared_state->transaction_data_manifests.size(),
-	           shared_state->committed_delete_manifests.size() + shared_state->transaction_delete_manifests.size());
+	scan_plan_provider = make_uniq<ClientSideScanPlanProvider>(*shared_state);
 }
 
-void IcebergMultiFileList::StartDeleteManifestScan() const {
-	if (shared_state->delete_manifest_scan || shared_state->committed_delete_manifests.empty()) {
-		return;
-	}
-
-	auto &snapshot_info = GetSnapshot();
-	auto &metadata = GetMetadata();
-	auto iceberg_path = GetPath();
-	auto &fs = FileSystem::GetFileSystem(context);
-	shared_state->delete_manifest_scan = AvroScan::ScanManifest(snapshot_info, shared_state->committed_delete_manifests,
-	                                                            options, fs, iceberg_path, metadata, context);
-	shared_state->delete_manifest_reader =
-	    make_uniq<manifest_file::ManifestReader>(*shared_state->delete_manifest_scan);
+void IcebergMultiFileList::LoadManifestList(lock_guard<mutex> &guard) const {
+	InitializeScanPlanProvider();
+	GetScanPlanProvider().LoadManifestList(*this);
 }
 
 void IcebergMultiFileList::StartDataManifestScan(lock_guard<mutex> &guard) const {
 	D_ASSERT(view_initialized);
-	if (shared_state->data_manifest_scan_started) {
-		//! Filter pushdown creates multiple list views that share this state. Execution can still call into an older,
-		//! less-filtered view after the filtered view selected and started the manifest scan. The first execution view
-		//! owns the selection: later views consume the same batches instead of broadening the scan again.
-		return;
-	}
-
-	shared_state->data_manifest_scan_started = true;
-
-	const auto committed_manifest_count = shared_state->committed_data_manifests.size();
-	vector<idx_t> selected_committed_manifests;
-	for (idx_t manifest_idx = 0; manifest_idx < committed_manifest_count; manifest_idx++) {
-		if (data_manifest_matches[manifest_idx]) {
-			selected_committed_manifests.push_back(manifest_idx);
-		}
-	}
-
-	for (idx_t transaction_idx = 0; transaction_idx < shared_state->transaction_data_manifests.size();
-	     transaction_idx++) {
-		auto manifest_idx = committed_manifest_count + transaction_idx;
-		if (!data_manifest_matches[manifest_idx]) {
-			continue;
-		}
-		auto &manifest = shared_state->transaction_data_manifests[transaction_idx].get();
-		shared_state->read_state.PushBatch(ManifestReadBatch {manifest_idx, 0, manifest.GetManifestEntries().size()});
-	}
-
-	if (!selected_committed_manifests.empty()) {
-		auto &metadata = GetMetadata();
-		auto &snapshot_info = GetSnapshot();
-		auto iceberg_path = GetPath();
-		auto &fs = FileSystem::GetFileSystem(context);
-
-		auto data_scan =
-		    AvroScan::ScanManifest(snapshot_info, shared_state->committed_data_manifests, options, fs, iceberg_path,
-		                           metadata, context, &shared_state->read_state, selected_committed_manifests);
-		shared_state->data_manifest_read_state = make_uniq<IcebergManifestScanningState>(
-		    context, std::move(data_scan), shared_state->committed_data_manifests);
-
-		auto &executor = shared_state->data_manifest_read_state->executor;
-		auto &scheduler = TaskScheduler::GetScheduler(context);
-		auto worker_thread_count = scheduler.NumberOfThreads();
-
-		auto num_threads = MinValue<idx_t>(worker_thread_count, selected_committed_manifests.size());
-		shared_state->data_manifest_read_state->in_progress_tasks = num_threads;
-		for (idx_t i = 0; i < num_threads; i++) {
-			executor.ScheduleTask(make_uniq<ManifestReadTask>(*shared_state->data_manifest_read_state));
-		}
-	}
-
-	idx_t selected_manifest_count = 0;
-	for (auto matches : data_manifest_matches) {
-		selected_manifest_count += matches;
-	}
-	DUCKDB_LOG(context, IcebergLogType,
-	           "Iceberg metadata phase=data_manifest_scan_started selected_data_manifests=%llu "
-	           "total_data_manifests=%llu filters=%llu",
-	           selected_manifest_count, data_manifest_matches.size(), table_filters.FilterCount());
+	GetScanPlanProvider().StartDataManifestScan(*this);
 }
 
 void IcebergMultiFileList::EnumerateDeleteManifestEntriesInternal() const {
-	if (shared_state->delete_entries_enumerated) {
-		return;
-	}
-	StartDeleteManifestScan();
-
-	// In <=v2 we now have to process *all* delete manifests
-	// before we can be certain that we have all the delete data for the current file.
-
-	// v3 solves this, `referenced_data_file` will tell us which file the `data_file`
-	// is targeting before we open it, and there can only be one deletion vector per data file.
-
-	// From the spec: "At most one deletion vector is allowed per data file in a snapshot"
-	optional_ptr<const case_insensitive_map_t<string>> transactional_delete_files;
-	if (HasTransactionData()) {
-		transactional_delete_files = GetTransactionData().transactional_delete_files;
-	}
-	while (!FinishedScanningDeletes()) {
-		shared_state->delete_manifest_reader->Read();
-	}
-
-	for (idx_t i = 0; i < shared_state->committed_delete_manifests.size(); i++) {
-		auto &manifest_list_entry = shared_state->committed_delete_manifests[i];
-		auto manifest = BoundIcebergManifestListEntry(i, manifest_list_entry);
-		for (auto &manifest_entry : manifest_list_entry.GetManifestEntries()) {
-			if (manifest_entry.status == IcebergManifestEntryStatusType::DELETED) {
-				continue;
-			}
-			auto &data_file = manifest_entry.data_file;
-			auto &referenced_data_file = data_file.referenced_data_file;
-			if (referenced_data_file && transactional_delete_files &&
-			    transactional_delete_files->count(*referenced_data_file)) {
-				//! Skip this delete file, there's a transaction-local delete that makes it obsolete
-				continue;
-			}
-			auto bound_entry = manifest.BindEntry(manifest_entry);
-			shared_state->delete_manifest_entries.push_back(std::move(bound_entry));
-		}
-	}
-
-	auto offset = shared_state->committed_delete_manifests.size();
-	for (idx_t transaction_delete_idx = 0; transaction_delete_idx < shared_state->transaction_delete_manifests.size();
-	     transaction_delete_idx++) {
-		auto &manifest_list_entry = shared_state->transaction_delete_manifests[transaction_delete_idx].get();
-		auto delete_manifest = BoundIcebergManifestListEntry(offset + transaction_delete_idx, manifest_list_entry);
-		for (auto &manifest_entry : manifest_list_entry.GetManifestEntries()) {
-			auto &data_file = manifest_entry.data_file;
-			auto &referenced_data_file = data_file.referenced_data_file;
-			if (referenced_data_file && transactional_delete_files) {
-				auto it = transactional_delete_files->find(*referenced_data_file);
-				//! Check if this is the currently active (last) delete file for this referenced_data_file
-				if (it != transactional_delete_files->end() && it->second != data_file.file_path) {
-					continue;
-				}
-			}
-			//! FIXME: no file pruning for uncommitted data?
-			auto bound_manifest_entry = delete_manifest.BindEntry(manifest_entry);
-			shared_state->delete_manifest_entries.push_back(std::move(bound_manifest_entry));
-		}
-	}
-
-	shared_state->delete_entries_enumerated = true;
-	D_ASSERT(FinishedScanningDeletes());
+	GetScanPlanProvider().EnumerateDeleteManifestEntries(*this);
 }
 
 bool IcebergMultiFileList::DeleteEntryMatchesFilters(const BoundIcebergManifestEntry &bound_manifest_entry) const {
@@ -1545,11 +1259,11 @@ bool IcebergMultiFileList::DeleteEntryMatchesFilters(const BoundIcebergManifestE
 void IcebergMultiFileList::ScanDeleteFiles(const vector<MultiFileColumnDefinition> &global_columns,
                                            const vector<ColumnIndex> &global_column_ids,
                                            const vector<idx_t> &projection_ids) const {
-	for (; shared_state->next_delete_entry_to_process < shared_state->delete_manifest_entries.size();
-	     shared_state->next_delete_entry_to_process++) {
-		auto &bound_manifest_entry = shared_state->delete_manifest_entries[shared_state->next_delete_entry_to_process];
-		//! Skip delete files whose partition is excluded by the scan filter: they cannot delete a row from
-		//! any surviving data file, so reading and materializing them is wasted work.
+	auto &provider = GetScanPlanProvider();
+	auto &next_entry = provider.NextDeleteEntryToProcess();
+	auto &delete_entries = provider.DeleteManifestEntries();
+	for (; next_entry < delete_entries.size(); next_entry++) {
+		auto &bound_manifest_entry = delete_entries[next_entry];
 		if (!DeleteEntryMatchesFilters(bound_manifest_entry)) {
 			continue;
 		}
@@ -1592,8 +1306,19 @@ vector<BoundIcebergManifestEntry> IcebergMultiFileList::GetDeleteManifestEntries
 	lock_guard<mutex> delete_guard(shared_state->delete_lock);
 	EnumerateDeleteManifestEntriesInternal();
 	vector<BoundIcebergManifestEntry> result;
-	for (auto &entry : shared_state->delete_manifest_entries) {
+	auto &delete_entries = GetScanPlanProvider().DeleteManifestEntries();
+	for (auto &entry : delete_entries) {
 		if (!DeleteEntryMatchesFilters(entry)) {
+			continue;
+		}
+		auto manifest_idx = entry.manifest_file_idx;
+		auto &manifest = delete_manifests[manifest_idx];
+		auto &manifest_file = manifest.entry.file;
+		if (!delete_manifest_matches[manifest_idx]) {
+			continue;
+		}
+		if (table_filters.HasFilters() &&
+		    !FileMatchesFilter(manifest_file, entry.entry, IcebergManifestContentType::DELETE)) {
 			continue;
 		}
 		result.push_back(entry);
@@ -1683,8 +1408,9 @@ void IcebergMultiFileList::ScanDeleteFile(const BoundIcebergManifestEntry &bound
 
 unique_ptr<DeleteFilter> IcebergMultiFileList::GetPositionalDeletesForFile(const string &file_path) const {
 	lock_guard<mutex> guard(shared_state->delete_lock);
-	auto it = shared_state->positional_delete_data.find(file_path);
-	if (it != shared_state->positional_delete_data.end()) {
+	auto &positional_delete_data = GetPositionalDeleteData();
+	auto it = positional_delete_data.find(file_path);
+	if (it != positional_delete_data.end()) {
 		// There is delete data for this file, return it
 		return it->second->ToFilter();
 	}
@@ -1693,8 +1419,9 @@ unique_ptr<DeleteFilter> IcebergMultiFileList::GetPositionalDeletesForFile(const
 
 shared_ptr<IcebergDeleteData> IcebergMultiFileList::GetExistingPositionalDeleteData(const string &file_path) const {
 	lock_guard<mutex> guard(shared_state->delete_lock);
-	auto it = shared_state->positional_delete_data.find(file_path);
-	if (it == shared_state->positional_delete_data.end()) {
+	auto &positional_delete_data = GetPositionalDeleteData();
+	auto it = positional_delete_data.find(file_path);
+	if (it == positional_delete_data.end()) {
 		return nullptr;
 	}
 	return it->second;

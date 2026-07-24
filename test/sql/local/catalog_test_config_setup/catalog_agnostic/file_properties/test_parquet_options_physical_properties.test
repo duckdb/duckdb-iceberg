@@ -1,0 +1,52 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/file_properties/test_parquet_options_physical_properties.test
+# group: [file_properties]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+set ignore_error_messages
+
+# With 'target-file-size-bytes' set, 500_000 rows -> 4-6 files
+statement ok
+drop table if exists my_datalake.default.my_table;
+
+statement ok
+CREATE TABLE my_datalake.default.my_table (
+	user_id INT,
+	data VARCHAR,
+	partition_id INT
+) WITH (
+	'write.target-file-size-bytes' = '250000000',
+	'write.parquet.row-group-size-bytes' = '134217728'
+);
+
+statement ok
+INSERT INTO my_datalake.default.my_table
+  SELECT i, concat('thisisalongstring', i), 1
+  FROM range(80000000) t(i);
+
+
+statement ok
+set variable data_file = (select file_path from iceberg_metadata(my_datalake.default.my_table) limit 1);
+
+
+query I
+select size > 200000000 from read_blob(getvariable('data_file'));
+----
+1
+
+query I
+select avg(row_group_num_rows) > 10000 from parquet_metadata(getvariable('data_file'));
+----
+1
+
+
+statement ok
+drop table if exists my_datalake.default.my_table;

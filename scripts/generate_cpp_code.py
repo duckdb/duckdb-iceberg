@@ -34,11 +34,6 @@ CPP_KEYWORDS = {
     'doc',  # add 'doc' to avoid conflicts with the 'doc' variable in StructField
 }
 
-SERIALIZATION_EXCLUDED = [
-    'LiteralExpression',
-    'UnaryExpression'
-]
-
 def to_snake_case(name: str):
     res = ''
     prev_was_lower = False
@@ -104,8 +99,8 @@ namespace rest_api_objects {{
 
 CMAKE_LISTS_FORMAT = """
 add_library(
-	rest_catalog_objects
-	OBJECT
+    rest_catalog_objects
+    OBJECT
 {ALL_SOURCE_FILES}
 )
 
@@ -210,6 +205,7 @@ class PrimitiveTypeMapping:
 
 
 PRIMITIVE_TYPE_MAPPING = {
+    None: PrimitiveTypeMapping(type_check='yyjson_is_null', conversion='(void *)', cpp_type='void*'),
     'string': PrimitiveTypeMapping(type_check='yyjson_is_str', conversion='yyjson_get_str', cpp_type='string'),
     'integer': PrimitiveTypeMapping(
         type_check='yyjson_is_int',
@@ -806,23 +802,17 @@ class CPPClass:
             ]
         )
 
-        if self.name not in SERIALIZATION_EXCLUDED:
-            # Serialization methods
-            if supports_population:
-                res.extend([''])
-                res.extend(self.generate_populate_json_method(qualified_name))
-                res.extend([''])
-            res.extend(self.generate_to_json_method(qualified_name))
-        else:
-            res.extend([
-                f"yyjson_mut_val* {qualified_name}::ToJSON(yyjson_mut_doc *doc) const {{",
-                f'''\tthrow InternalException("Can't serialize this class ({self.name})"); }}''',
-            ])
+        # Serialization methods
+        if supports_population:
+            res.extend([''])
+            res.extend(self.generate_populate_json_method(qualified_name))
+            res.extend([''])
+        res.extend(self.generate_to_json_method(qualified_name))
         return res
 
     def write_header(self) -> List[str]:
         res = []
-        supports_population = self.supports_json_object_population() and self.name not in SERIALIZATION_EXCLUDED
+        supports_population = self.supports_json_object_population()
         res.extend(
             [
                 f'class {self.name} {{',
@@ -1386,7 +1376,7 @@ class CPPClass:
         return self.schema_supports_json_object_population(self.parse_info.parsed_schemas.get(self.name))
 
     def class_supports_json_object_population(self, class_name: str) -> bool:
-        return class_name not in SERIALIZATION_EXCLUDED and self.schema_supports_json_object_population(
+        return self.schema_supports_json_object_population(
             self.parse_info.parsed_schemas[class_name]
         )
 

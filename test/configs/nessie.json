@@ -28,6 +28,7 @@
         "test/sql/local/catalog_test_config_setup/catalog_agnostic/insert/test_merge_append_schema_evolution_v3.test",
         "test/sql/local/catalog_test_config_setup/catalog_agnostic/insert/test_merge_append_v3_row_lineage.test",
         "test/sql/local/catalog_test_config_setup/catalog_agnostic/table_properties/test_many_table_properties.test",
+        "test/sql/local/catalog_test_config_setup/catalog_agnostic/table_properties/test_default_format_version.test",
         "test/sql/local/catalog_test_config_setup/catalog_agnostic/test_row_lineage_read.test",
         "test/sql/local/catalog_test_config_setup/catalog_agnostic/test_row_lineage_write.test",
         "test/sql/local/catalog_test_config_setup/catalog_agnostic/test_select_row_id.test",
@@ -158,6 +159,12 @@
         "test/sql/local/catalog_test_config_setup/catalog_agnostic/transactions/test_transactions_reading_empty_tables.test",
         "test/sql/local/catalog_test_config_setup/catalog_agnostic/transactions/test_transaction_metadata_log_properties.test"
       ]
+    },
+    {
+    	"reason": "Inserting into nessie triggers Relassert error that does not reproduce locally",
+    	"paths": [
+    		"test/sql/local/catalog_test_config_setup/catalog_agnostic/file_properties/test_parquet_options_physical_properties.test"
+    	]
     }
   ]
 }

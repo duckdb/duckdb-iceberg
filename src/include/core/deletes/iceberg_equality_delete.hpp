@@ -56,7 +56,7 @@ public:
 
 public:
 	sequence_number_t sequence_number;
-	vector<IcebergEqualityDeleteFile> files;
+	vector<IcebergEqualityDeleteFile> delete_files;
 };
 
 } // namespace duckdb

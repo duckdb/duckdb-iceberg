@@ -109,6 +109,7 @@ set(EXTENSION_SOURCES
 	src/maintenance/rewrite_data_files_operator.cpp
 	src/maintenance/rewrite_data_files_planner.cpp
 	src/planning/iceberg_multi_file_list.cpp
+	src/planning/iceberg_scan_plan_provider.cpp
 	src/planning/iceberg_multi_file_reader.cpp
 	src/planning/iceberg_optimizer.cpp
 	src/planning/metadata_io/avro/avro_scan.cpp

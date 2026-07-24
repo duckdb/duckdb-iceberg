@@ -21,24 +21,13 @@ struct IRCAPITableCredentials {
 	vector<CreateSecretInput> storage_credentials;
 };
 
-struct IcebergTableStorageCredential {
-public:
-	IcebergTableStorageCredential(const rest_api_objects::StorageCredential &storage_credential) {
-		prefix = storage_credential.prefix;
-		config = storage_credential.config;
-	}
-
-public:
-	string prefix;
-	case_insensitive_map_t<string> config;
-};
-
 struct IcebergTableInformation {
 public:
 	IcebergTableInformation(IcebergCatalog &catalog, IcebergSchemaEntry &schema, const string &name);
 
 public:
 	void LoadCredentials(ClientContext &context) const;
+	void LoadCredentials(ClientContext &context, IRCAPITableCredentials table_credentials) const;
 	optional_ptr<CatalogEntry> GetLatestSchema();
 	idx_t GetIcebergVersion() const;
 	optional_ptr<CatalogEntry> GetSchemaVersion(optional_ptr<BoundAtClause> at);
@@ -59,6 +48,9 @@ public:
 	static IcebergSortOrder BuildSortOrder(const vector<OrderByNode> &orders, const IcebergTableSchema &schema,
 	                                       int32_t sort_order_id);
 	IRCAPITableCredentials GetVendedCredentials(ClientContext &context) const;
+	IRCAPITableCredentials
+	GetVendedCredentials(ClientContext &context,
+	                     const vector<rest_api_objects::StorageCredential> &storage_credentials) const;
 	const string &BaseFilePath() const;
 
 	IcebergTransactionData &GetOrCreateTransactionData(IcebergTransaction &transaction);
@@ -85,7 +77,7 @@ public:
 	string table_id;
 	IcebergTableMetadata table_metadata;
 	case_insensitive_map_t<string> config;
-	vector<IcebergTableStorageCredential> storage_credentials;
+	vector<rest_api_objects::StorageCredential> storage_credentials;
 	unordered_map<int32_t, unique_ptr<IcebergTableEntry>> schema_versions;
 	// dummy entry to hold existence of a table, but no schema versions
 	unique_ptr<IcebergTableEntry> dummy_entry;

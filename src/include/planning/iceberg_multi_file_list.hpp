@@ -16,6 +16,7 @@
 #include "duckdb/planner/filter/expression_filter.hpp"
 #include "duckdb/planner/filter/null_filter.hpp"
 #include "duckdb/planner/table_filter.hpp"
+#include "duckdb/planner/expression/bound_conjunction_expression.hpp"
 #include "duckdb/parallel/task_executor.hpp"
 
 #include "common/iceberg_utils.hpp"
@@ -73,6 +74,8 @@ private:
 };
 
 class IcebergTableEntry;
+class IcebergScanPlanProvider;
+class ClientSideScanPlanProvider;
 struct IcebergMultiFileList;
 struct RowGroupOrderOptions;
 
@@ -99,6 +102,7 @@ public:
 
 private:
 	friend struct IcebergMultiFileList;
+	friend class ClientSideScanPlanProvider;
 
 	ClientContext &context;
 	FileSystem &fs;
@@ -225,9 +229,8 @@ private:
 	bool TryGetNextBatch(lock_guard<mutex> &guard) const;
 	void FinishScanTasks(lock_guard<mutex> &guard) const;
 	void LoadManifestList(lock_guard<mutex> &guard) const;
-	void StartDeleteManifestScan() const;
+	void InitializeScanPlanProvider() const;
 	void StartDataManifestScan(lock_guard<mutex> &guard) const;
-	bool FinishedScanningDeletes() const;
 	void EnumerateDeleteManifestEntriesInternal() const;
 	void ProcessDeletesInternal(const vector<MultiFileColumnDefinition> &global_columns,
 	                            const vector<ColumnIndex> &global_column_ids,
@@ -243,8 +246,13 @@ private:
 	                            const vector<ColumnIndex> &global_column_ids,
 	                            const vector<idx_t> &projection_ids) const;
 	void ScanPuffinFile(const BoundIcebergManifestEntry &entry) const;
+	case_insensitive_map_t<shared_ptr<IcebergDeleteData>> &GetPositionalDeleteData() const;
+	map<sequence_number_t, unique_ptr<IcebergEqualityDeleteData>> &GetEqualityDeleteData() const;
+	IcebergScanPlanProvider &GetScanPlanProvider() const;
 
 private:
+	friend class ClientSideScanPlanProvider;
+
 	shared_ptr<IcebergMultiFileListSharedState> shared_state;
 	ClientContext &context;
 	FileSystem &fs;
@@ -254,6 +262,8 @@ private:
 	vector<string> names;
 	vector<LogicalType> types;
 	IcebergTableFilters table_filters;
+
+	mutable unique_ptr<IcebergScanPlanProvider> scan_plan_provider;
 
 	mutable bool view_initialized = false;
 	mutable IcebergDataViewCursor data_view_cursor;

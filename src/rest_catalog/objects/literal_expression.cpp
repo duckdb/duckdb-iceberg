@@ -64,8 +64,28 @@ string LiteralExpression::TryFromJSON(yyjson_val *obj) {
 	return "";
 }
 
+void LiteralExpression::PopulateJSON(yyjson_mut_doc *doc, yyjson_mut_val *obj) const {
+	if (!yyjson_mut_is_obj(obj)) {
+		throw InternalException("PopulateJSON requires obj to be a JSON object");
+	}
+
+	// Serialize: type
+	yyjson_mut_val *type_val = type.ToJSON(doc);
+	yyjson_mut_obj_add_val(doc, obj, "type", type_val);
+
+	// Serialize: term
+	yyjson_mut_val *term_val = term.ToJSON(doc);
+	yyjson_mut_obj_add_val(doc, obj, "term", term_val);
+
+	// Serialize: value
+	yyjson_mut_val *value_val = value.ToJSON(doc);
+	yyjson_mut_obj_add_val(doc, obj, "value", value_val);
+}
+
 yyjson_mut_val *LiteralExpression::ToJSON(yyjson_mut_doc *doc) const {
-	throw InternalException("Can't serialize this class (LiteralExpression)");
+	yyjson_mut_val *obj = yyjson_mut_obj(doc);
+	PopulateJSON(doc, obj);
+	return obj;
 }
 
 } // namespace rest_api_objects
