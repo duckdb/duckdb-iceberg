@@ -32,6 +32,7 @@ set(EXTENSION_SOURCES
 	src/catalog/rest/api/iceberg_retry.cpp
 	src/catalog/rest/api/iceberg_table_update.cpp
 	src/catalog/rest/api/iceberg_type.cpp
+	src/catalog/rest/api/iceberg_expression.cpp
 	src/catalog/rest/api/table_update.cpp
 	src/catalog/rest/api/url_utils.cpp
 	src/catalog/rest/catalog_entry/schema/iceberg_schema_entry.cpp
