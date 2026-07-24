@@ -30,9 +30,25 @@ drop table if exists my_datalake.default.test_logging_create_table;
 statement ok
 drop table if exists my_datalake.default.test_logging_create_table_large;
 
+# invalid write.target-file-size-bytes
+statement error
+create table my_datalake.default.test_logging_create_table WITH
+	('write.target-file-size-bytes'='sdfvs', 'write.parquet.compression-codec'='zstd')
+as select range a from range(10000);
+----
+Invalid Configuration Error: Invalid format for 'write.target-file-size-bytes' (sdfvs), error: Memory must have a number (e.g. 1GB)
+
+statement error
+select * from my_datalake.default.test_logging_create_table;
+----
+<REGEX>:.*does not exist.*
+
 statement ok
-create table my_datalake.default.test_logging_create_table WITH 
-	('write.target-file-size-bytes'='1000000', 'write.parquet.compression-codec'='zstd') 
+call truncate_duckdb_logs();
+
+statement ok
+create table my_datalake.default.test_logging_create_table WITH
+	('write.target-file-size-bytes'='1000000', 'write.parquet.compression-codec'='zstd')
 as select range a from range(10000);
 
 

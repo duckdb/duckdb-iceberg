@@ -20,6 +20,7 @@
 #include "catalog/rest/api/catalog_api.hpp"
 #include "catalog/rest/storage/authorization/oauth2.hpp"
 #include "catalog/rest/storage/authorization/sigv4.hpp"
+#include "catalog/rest/storage/iceberg_table_secret_provider.hpp"
 #include "common/iceberg_utils.hpp"
 #include "iceberg_logging.hpp"
 #include "iceberg_attach.hpp"
@@ -125,6 +126,7 @@ static void LoadInternal(ExtensionLoader &loader) {
 	CreateSecretFunction secret_function = {"iceberg", "config", OAuth2Authorization::CreateCatalogSecretFunction};
 	OAuth2Authorization::SetCatalogSecretParameters(secret_function);
 	loader.RegisterFunction(secret_function);
+	IcebergTableSecretProvider::Register(loader);
 
 	auto &log_manager = instance.GetLogManager();
 	log_manager.RegisterLogType(make_uniq<IcebergLogType>());

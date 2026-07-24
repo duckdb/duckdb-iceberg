@@ -4,6 +4,7 @@
 #include "duckdb/logging/logger.hpp"
 #include "duckdb/main/client_data.hpp"
 #include "duckdb/execution/physical_operator_states.hpp"
+#include "duckdb/planner/expression_binder/table_function_binder.hpp"
 #include "duckdb/planner/operator/logical_copy_to_file.hpp"
 #include "duckdb/planner/operator/logical_insert.hpp"
 #include "duckdb/planner/operator/logical_create_table.hpp"
@@ -873,7 +874,7 @@ PhysicalOperator &IcebergCatalog::PlanInsert(ClientContext &context, PhysicalPla
 	return insert;
 }
 
-static unique_ptr<IcebergTableMetadata> BuildPlaceholderMetadata(BoundCreateTableInfo &info) {
+static unique_ptr<IcebergTableMetadata> BuildPlaceholderMetadata(ClientContext &context, BoundCreateTableInfo &info) {
 	auto metadata = make_uniq<IcebergTableMetadata>();
 	metadata->iceberg_version = 2;
 	metadata->default_spec_id = 0;
@@ -893,6 +894,18 @@ static unique_ptr<IcebergTableMetadata> BuildPlaceholderMetadata(BoundCreateTabl
 	schema->last_column_id = static_cast<idx_t>(next_field_id - 1);
 	metadata->AddSchemaOrGetExisting(schema);
 	metadata->SetCurrentSchemaId(0);
+
+	auto binder = Binder::CreateBinder(context);
+	TableFunctionBinder property_binder(*binder, context, "format-version");
+	for (auto &option : create_info.options) {
+		auto expr_copy = option.second->Copy();
+		auto bound_expr = property_binder.Bind(expr_copy);
+		if (bound_expr->HasParameter()) {
+			throw ParameterNotResolvedException();
+		}
+		auto val = ExpressionExecutor::EvaluateScalar(context, *bound_expr, true);
+		metadata->table_properties[option.first] = val.GetValue<string>();
+	}
 
 	// Build a placeholder partition spec from the parsed PARTITIONED BY clause so that
 	// PlanCopyForInsert appends the partition projection at plan time. The real spec is
@@ -951,7 +964,7 @@ PhysicalOperator &IcebergCatalog::PlanCreateTableAs(ClientContext &context, Phys
 	auto &ic_schema_entry = schema.Cast<IcebergSchemaEntry>();
 
 	// create a fake local iceberg table with desired columns
-	auto placeholder_metadata = BuildPlaceholderMetadata(*op.info);
+	auto placeholder_metadata = BuildPlaceholderMetadata(context, *op.info);
 	auto &placeholder_schema = placeholder_metadata->GetLatestSchema();
 	auto &plan = CastCtasToIcebergStorageTypes(context, planner, plan_p, *op.info, *placeholder_metadata);
 	IcebergCopyInput copy_input(context, *placeholder_metadata, placeholder_schema);

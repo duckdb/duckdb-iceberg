@@ -1,0 +1,49 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/create/test_create_geo.test
+# group: [create]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+set enable_logging=true
+
+statement ok
+set logging_level='debug'
+
+statement ok
+CREATE SCHEMA IF NOT EXISTS my_datalake.default;
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.tbl;
+
+# Iceberg spec: geometry columns must default to null
+statement error
+CREATE TABLE my_datalake.default.tbl(
+	item_id int,
+	g GEOMETRY DEFAULT 'POINT(0 0)'::GEOMETRY
+) WITH ('format-version'='3');
+----
+Invalid Input Error: Non-null DEFAULT values are not accepted for columns of type geometry(ogc:crs84)
+
+# GEOMETRY DEFAULT NULL is allowed
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.tbl_geo_null;
+
+statement ok
+CREATE TABLE my_datalake.default.tbl_geo_null(
+	item_id int,
+	g GEOMETRY DEFAULT NULL
+) WITH ('format-version'='3');
+
+statement ok
+DROP TABLE my_datalake.default.tbl_geo_null;

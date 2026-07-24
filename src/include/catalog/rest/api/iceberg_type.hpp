@@ -10,10 +10,9 @@ namespace duckdb {
 
 class IcebergTypeHelper {
 public:
-	static rest_api_objects::StructField CreateIcebergRestType(const string &name, const LogicalType &type,
-	                                                           bool required, const string &doc,
-	                                                           const Value &default_value,
-	                                                           const std::function<idx_t()> &get_next_id);
+	static rest_api_objects::StructField
+	CreateIcebergRestType(const string &name, const LogicalType &type, bool required, const string &doc,
+	                      const Value &default_value, const std::function<idx_t()> &get_next_id, idx_t iceberg_version);
 	static string LogicalTypeToIcebergType(const LogicalType &type);
 	static rest_api_objects::PrimitiveTypeValue PrimitiveTypeFromValue(const Value &val);
 	static yyjson_mut_val *PrimitiveTypeValueToJSON(yyjson_mut_doc *doc,

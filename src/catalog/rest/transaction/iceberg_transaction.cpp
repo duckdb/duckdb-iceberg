@@ -508,6 +508,8 @@ static bool CommitStateUnknown(const ErrorData &error) {
 
 void IcebergTransaction::Commit() {
 	if (!HasTableUpdate() && created_schemas.empty() && deleted_schemas.empty() && schema_property_updates.empty()) {
+		// Read-only transactions have no catalog commit work; temporary vended storage secrets
+		// are left to transaction/session cleanup.
 		return;
 	}
 

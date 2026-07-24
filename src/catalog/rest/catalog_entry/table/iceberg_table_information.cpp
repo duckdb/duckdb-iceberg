@@ -24,6 +24,7 @@
 #include "catalog/rest/storage/authorization/sigv4.hpp"
 #include "catalog/rest/storage/authorization/none.hpp"
 #include "catalog/rest/storage/authorization/sigv4_utils.hpp"
+#include "catalog/rest/storage/iceberg_table_secret_provider.hpp"
 #include "core/expression/iceberg_transform.hpp"
 #include "common/iceberg_utils.hpp"
 
@@ -73,6 +74,7 @@ static void ParseS3ConfigOptions(const case_insensitive_map_t<string> &config, c
 	static const case_insensitive_map_t<string> config_to_option = {{"s3.access-key-id", "key_id"},
 	                                                                {"s3.secret-access-key", "secret"},
 	                                                                {"s3.session-token", "session_token"},
+	                                                                {"s3.session-token-expires-at-ms", "expires_at"},
 	                                                                {"s3.region", "region"},
 	                                                                {"region", "region"},
 	                                                                {"client.region", "region"},
@@ -245,6 +247,12 @@ IRCAPITableCredentials IcebergTableInformation::GetVendedCredentials(
 		create_secret_input.provider = "config";
 		create_secret_input.options = config_options;
 
+		if (IcebergTableSecretProvider::SupportsStorageType(storage_type)) {
+			create_secret_input.provider = IcebergTableSecretProvider::Provider();
+			create_secret_input.options["refresh_info"] = IcebergTableSecretProvider::MakeRefreshInfo(
+			    catalog.GetName().GetIdentifierName(), schema.name.GetIdentifierName(), name);
+		}
+
 		ParseConfigOptions(credential.config, create_secret_input.options, context, storage_type);
 		//! TODO: apply the 'overrides' retrieved from the /v1/config endpoint
 		result.storage_credentials.push_back(create_secret_input);
@@ -262,6 +270,12 @@ IRCAPITableCredentials IcebergTableInformation::GetVendedCredentials(
 		config.name = Identifier(secret_base_name);
 		config.type = Identifier(storage_type);
 		config.provider = "config";
+		if (IcebergTableSecretProvider::SupportsStorageType(storage_type)) {
+			config.provider = IcebergTableSecretProvider::Provider();
+			config.options["refresh_info"] = IcebergTableSecretProvider::MakeRefreshInfo(
+			    catalog.GetName().GetIdentifierName(), schema.name.GetIdentifierName(), name);
+		}
+		config.storage_type = "memory";
 	}
 
 	return result;
@@ -492,6 +506,7 @@ void IcebergTableInformation::LoadCredentials(ClientContext &context) const {
 void IcebergTableInformation::LoadCredentials(ClientContext &context, IRCAPITableCredentials table_credentials) const {
 	auto &secret_manager = SecretManager::Get(context);
 
+	auto &transaction = IcebergTransaction::Get(context, catalog);
 	if (catalog.attach_options.access_mode != IRCAccessDelegationMode::VENDED_CREDENTIALS) {
 		// assume secret already exists
 		return;
@@ -500,34 +515,12 @@ void IcebergTableInformation::LoadCredentials(ClientContext &context, IRCAPITabl
 	auto &fs = FileSystem::GetFileSystem(context);
 	auto metadata_path = table_metadata.GetMetadataPath(fs);
 
-	unique_ptr<SecretEntry> http_secret_entry;
-
-	switch (catalog.auth_handler->type) {
-	case IcebergAuthorizationType::SIGV4: {
-		auto &sigv4 = catalog.auth_handler->Cast<SIGV4Authorization>();
-		http_secret_entry = IcebergCatalog::GetHTTPSecret(context, sigv4.secret);
-		break;
-	}
-	case IcebergAuthorizationType::OAUTH2: {
-		http_secret_entry = IcebergCatalog::GetHTTPSecret(context, "");
-
-		if (!http_secret_entry || http_secret_entry->secret->GetScope().size() == 0) {
-			break;
-		}
-		for (auto scope : http_secret_entry->secret->GetScope()) {
-			if (scope.find(catalog.GetBaseUrl().GetHost()) != string::npos) {
-				break;
-			}
-		}
-	}
-	default:
-		break;
-	}
+	auto http_secret_entry = IcebergTableSecretProvider::GetHTTPSecretForCatalog(context, catalog);
 
 	if (!table_credentials.config) {
 		for (auto &info : table_credentials.storage_credentials) {
 			if (http_secret_entry) {
-				AddHTTPSecretsToOptions(*http_secret_entry, info.options);
+				IcebergTableSecretProvider::AddHTTPSecretsToOptions(*http_secret_entry, info.options);
 			}
 			(void)secret_manager.CreateSecret(context, info);
 		}
@@ -589,7 +582,7 @@ void IcebergTableInformation::LoadCredentials(ClientContext &context, IRCAPITabl
 	}
 
 	if (http_secret_entry) {
-		AddHTTPSecretsToOptions(*http_secret_entry, info.options);
+		IcebergTableSecretProvider::AddHTTPSecretsToOptions(*http_secret_entry, info.options);
 	}
 
 	(void)secret_manager.CreateSecret(context, info);

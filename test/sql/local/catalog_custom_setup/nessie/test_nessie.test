@@ -108,6 +108,9 @@ drop secret storage_secret;
 # test with nessie vending credentials
 # vending credentials is default
 statement ok
+SET httpfs_enable_credential_refresh=false;
+
+statement ok
 attach '' as my_datalake (
     type ICEBERG,
     ENDPOINT 'http://127.0.0.1:19120/iceberg/',
@@ -132,6 +135,9 @@ query I
 select message from duckdb_logs() where message like '%Failed%';
 ----
 Failed to create valid secret from Vended Credentials for table 'table_1'
+
+statement ok
+SET httpfs_enable_credential_refresh=true;
 
 statement ok
 drop schema my_datalake.new_schema;

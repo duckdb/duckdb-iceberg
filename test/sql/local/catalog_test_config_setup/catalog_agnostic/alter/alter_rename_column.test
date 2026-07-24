@@ -42,7 +42,7 @@ insert into my_datalake.default.tbl VALUES ('hello world', true);
 statement error
 ALTER TABLE my_datalake.default.tbl RENAME a TO b;
 ----
-Catalog Error: Column with name 'b' already exists on the table 'tbl', RENAME COLUMN failed
+Binder Error: Column with name 'b' already exists on the table 'tbl', RENAME COLUMN failed
 
 # Rename to same name (second alter before commit)
 
