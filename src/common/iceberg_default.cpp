@@ -8,6 +8,12 @@
 
 namespace duckdb {
 
+// This compatibility switch only exists to exercise empty STRUCT defaults in tests.
+bool &IcebergDefault::InterpretStructNullAsEmpty() {
+	static bool value = false;
+	return value;
+}
+
 IcebergDefaultBinder::IcebergDefaultBinder(ClientContext &context)
     : context(context), binder(Binder::CreateBinder(context)), constant_binder(*binder, context, "DEFAULT") {
 }

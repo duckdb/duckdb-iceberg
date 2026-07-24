@@ -7,6 +7,10 @@
 
 namespace duckdb {
 
+struct IcebergDefault {
+	static bool &InterpretStructNullAsEmpty();
+};
+
 class IcebergDefaultBinder {
 public:
 	IcebergDefaultBinder(ClientContext &context);

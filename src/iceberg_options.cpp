@@ -4,17 +4,6 @@
 
 namespace duckdb {
 
-// This compatibility switch only exists to exercise empty STRUCT defaults in tests.
-static atomic<bool> unsafe_struct_null_default_interpretation(false);
-
-bool IcebergUnsafeStructNullDefaultInterpretationEnabled() {
-	return unsafe_struct_null_default_interpretation.load();
-}
-
-void SetIcebergUnsafeStructNullDefaultInterpretation(bool enabled) {
-	unsafe_struct_null_default_interpretation.store(enabled);
-}
-
 IcebergOptions::IcebergOptions() : snapshot_lookup(IcebergSnapshotLookup::FromLatest()) {
 }
 

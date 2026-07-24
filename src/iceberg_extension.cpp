@@ -24,6 +24,7 @@
 #include "iceberg_logging.hpp"
 #include "iceberg_attach.hpp"
 #include "iceberg_options.hpp"
+#include "common/iceberg_default.hpp"
 #include "function/copy/iceberg_copy_function.hpp"
 #include "duckdb/optimizer/optimizer_extension.hpp"
 #include "planning/iceberg_optimizer.hpp"
@@ -42,8 +43,9 @@ static void SetDefaultFormatVersion(ClientContext &context, SetScope scope, Valu
 }
 
 static void SetUnsafeStructNullDefaultInterpretation(ClientContext &context, SetScope scope, Value &parameter) {
+	auto &value = IcebergDefault::InterpretStructNullAsEmpty();
 	if (parameter.IsNull()) {
-		SetIcebergUnsafeStructNullDefaultInterpretation(false);
+		value = false;
 		return;
 	}
 	auto interpretation = parameter.GetValue<string>();
@@ -51,7 +53,7 @@ static void SetUnsafeStructNullDefaultInterpretation(ClientContext &context, Set
 		throw InvalidConfigurationException("'%s' must be NULL or '{}', got '%s'",
 		                                    UNSAFE_STRUCT_NULL_DEFAULT_INTERPRETATION_CONFIG_VARIABLE, interpretation);
 	}
-	SetIcebergUnsafeStructNullDefaultInterpretation(true);
+	value = true;
 }
 
 static unique_ptr<TransactionManager> CreateTransactionManager(optional_ptr<StorageExtensionInfo> storage_info,

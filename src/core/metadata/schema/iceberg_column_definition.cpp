@@ -5,7 +5,7 @@
 #include "duckdb/parser/column_definition.hpp"
 #include "duckdb/common/multi_file/multi_file_data.hpp"
 #include "duckdb/parser/expression/function_expression.hpp"
-#include "iceberg_options.hpp"
+#include "common/iceberg_default.hpp"
 
 namespace duckdb {
 
@@ -299,8 +299,7 @@ MultiFileColumnDefinition IcebergColumnDefinition::GetMultiFileColumnDefinition(
 
 Value IcebergColumnDefinition::GetInitialDefault() const {
 	Value result = initial_default ? *initial_default : Value(type);
-	if (type.id() != LogicalTypeId::STRUCT || !result.IsNull() ||
-	    !IcebergUnsafeStructNullDefaultInterpretationEnabled()) {
+	if (type.id() != LogicalTypeId::STRUCT || !result.IsNull() || !IcebergDefault::InterpretStructNullAsEmpty()) {
 		return result;
 	}
 	vector<Value> child_defaults;
@@ -321,8 +320,7 @@ Value IcebergColumnDefinition::GetWriteDefault() const {
 		default_to_use = initial_default.get();
 	}
 	Value result = default_to_use ? *default_to_use : Value(type);
-	if (type.id() != LogicalTypeId::STRUCT || !result.IsNull() ||
-	    !IcebergUnsafeStructNullDefaultInterpretationEnabled()) {
+	if (type.id() != LogicalTypeId::STRUCT || !result.IsNull() || !IcebergDefault::InterpretStructNullAsEmpty()) {
 		return result;
 	}
 	vector<Value> child_defaults;
