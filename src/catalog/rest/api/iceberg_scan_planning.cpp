@@ -1,13 +1,16 @@
 #include "catalog/rest/api/iceberg_scan_planning.hpp"
 
 #include "duckdb/common/exception.hpp"
+#include "duckdb/common/error_data.hpp"
 #include "duckdb/common/exception/http_exception.hpp"
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/common/types/uuid.hpp"
 #include "duckdb/common/types/blob.hpp"
+#include "duckdb/logging/logger.hpp"
 #include "duckdb/main/client_context.hpp"
 #include "yyjson.hpp"
 
+#include "iceberg_logging.hpp"
 #include "catalog/rest/api/catalog_utils.hpp"
 #include "catalog/rest/catalog_entry/schema/iceberg_schema_entry.hpp"
 #include "catalog/rest/catalog_entry/table/iceberg_table_information.hpp"
@@ -338,17 +341,27 @@ static void FetchCredentials(ClientContext &context, IcebergTableInformation &ta
 	result.storage_credentials = std::move(credentials.storage_credentials);
 }
 
-static idx_t GetPollDelay(const HTTPResponse &response, idx_t fallback_ms) {
+static idx_t GetPollDelay(ClientContext &context, const HTTPResponse &response, idx_t fallback_ms) {
 	if (!response.HasHeader("Retry-After")) {
 		return fallback_ms;
 	}
+	auto retry_after = response.GetHeaderValue("Retry-After");
 	try {
-		auto seconds = std::stoull(response.GetHeaderValue("Retry-After"));
+		auto seconds = std::stoull(retry_after);
 		return NumericCast<idx_t>(MinValue<uint64_t>(seconds * 1000, 60000));
-	} catch (...) {
+	} catch (std::exception &e) {
+		auto error = ErrorData(e);
+		DUCKDB_LOG(context, IcebergLogType,
+		           "Iceberg server-side scan planning ignored invalid Retry-After header '%s': %s", retry_after,
+		           error.Message());
 		// HTTP-date Retry-After values are uncommon here; retain exponential polling for values we cannot parse.
 		return fallback_ms;
-	}
+	} catch (...) { // LCOV_EXCL_START
+		DUCKDB_LOG(context, IcebergLogType,
+		           "Iceberg server-side scan planning ignored invalid Retry-After header '%s': unknown exception",
+		           retry_after);
+		return fallback_ms;
+	} // LCOV_EXCL_STOP
 }
 
 static void WaitForPoll(ClientContext &context, idx_t delay_ms) {
@@ -443,7 +456,7 @@ bool IcebergServerSideScanPlanning::Plan(ClientContext &context, IcebergTableInf
 			if (context.IsInterrupted()) {
 				throw InterruptException();
 			}
-			WaitForPoll(context, GetPollDelay(*response, poll_delay_ms));
+			WaitForPoll(context, GetPollDelay(context, *response, poll_delay_ms));
 			poll_delay_ms = MinValue<idx_t>(poll_delay_ms * 2, 1000);
 
 			endpoint = TableEndpoint(table_info);
@@ -497,9 +510,18 @@ bool IcebergServerSideScanPlanning::Plan(ClientContext &context, IcebergTableInf
 				cancel_headers.Insert("Idempotency-Key", UUID::ToString(UUID::GenerateRandomUUID()));
 				table_info.catalog.auth_handler->Request(RequestType::DELETE_REQUEST, context, cancel_endpoint,
 				                                         cancel_headers);
-			} catch (...) {
+			} catch (std::exception &e) {
+				auto error = ErrorData(e);
+				DUCKDB_LOG(context, IcebergLogType,
+				           "Iceberg server-side scan planning failed to cancel plan '%s' during cleanup: %s",
+				           *active_plan_id, error.Message());
 				// Best-effort cleanup must not mask the planning failure or interrupt.
-			}
+			} catch (...) { // LCOV_EXCL_START
+				DUCKDB_LOG(
+				    context, IcebergLogType,
+				    "Iceberg server-side scan planning failed to cancel plan '%s' during cleanup: unknown exception",
+				    *active_plan_id);
+			} // LCOV_EXCL_STOP
 		}
 		throw;
 	}
