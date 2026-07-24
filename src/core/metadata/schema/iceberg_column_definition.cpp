@@ -4,6 +4,9 @@
 #include "duckdb/common/value_operations/value_operations.hpp"
 #include "duckdb/parser/column_definition.hpp"
 #include "duckdb/common/multi_file/multi_file_data.hpp"
+#include "duckdb/parser/expression/function_expression.hpp"
+#include "duckdb/function/scalar/generic_functions.hpp"
+#include "common/iceberg_default.hpp"
 
 namespace duckdb {
 
@@ -287,28 +290,25 @@ unique_ptr<IcebergColumnDefinition> IcebergColumnDefinition::Copy() const {
 
 MultiFileColumnDefinition IcebergColumnDefinition::GetMultiFileColumnDefinition() const {
 	MultiFileColumnDefinition column(name, type);
-	if (!initial_default || initial_default->IsNull()) {
-		if (type.id() == LogicalTypeId::STRUCT) {
-			//! NOTE: spec defines {} as default value, but in practice no engine/catalog supports this
-			vector<Value> child_values;
-			for (auto &child : children) {
-				auto child_column = child->GetMultiFileColumnDefinition();
-				auto &child_default = child_column.default_expression->Cast<ConstantExpression>().GetValue();
-				child_values.emplace_back(child_default);
-			}
-			auto default_value = Value::STRUCT(type, child_values);
-			column.default_expression = make_uniq<ConstantExpression>(default_value);
-		} else {
-			column.default_expression = make_uniq<ConstantExpression>(Value(type));
-		}
-	} else {
-		column.default_expression = make_uniq<ConstantExpression>(*initial_default);
-	}
+	column.default_expression = make_uniq<ConstantExpression>(GetInitialDefault());
 	column.identifier = Value::INTEGER(id);
 	for (auto &child : children) {
 		column.children.push_back(child->GetMultiFileColumnDefinition());
 	}
 	return column;
+}
+
+Value IcebergColumnDefinition::GetInitialDefault() const {
+	Value result = initial_default ? *initial_default : Value(type);
+	if (type.id() != LogicalTypeId::STRUCT || !result.IsNull() || !IcebergDefault::InterpretStructNullAsEmpty()) {
+		return result;
+	}
+	vector<Value> child_defaults;
+	child_defaults.reserve(children.size());
+	for (auto &child : children) {
+		child_defaults.push_back(child->GetInitialDefault());
+	}
+	return Value::STRUCT(type, std::move(child_defaults));
 }
 
 Value IcebergColumnDefinition::GetWriteDefault() const {
@@ -320,35 +320,67 @@ Value IcebergColumnDefinition::GetWriteDefault() const {
 		//! If it's not set, use the initial-default (if that *is* set)
 		default_to_use = initial_default.get();
 	}
-	auto res = ColumnDefinition(Identifier(name), type);
-	if (default_to_use) {
-		return *default_to_use;
+	Value result = default_to_use ? *default_to_use : Value(type);
+	if (type.id() != LogicalTypeId::STRUCT || !result.IsNull() || !IcebergDefault::InterpretStructNullAsEmpty()) {
+		return result;
 	}
-	return Value(type);
+	vector<Value> child_defaults;
+	child_defaults.reserve(children.size());
+	for (auto &child : children) {
+		child_defaults.push_back(child->GetWriteDefault());
+	}
+	return Value::STRUCT(type, std::move(child_defaults));
+}
+
+Value IcebergColumnDefinition::GetWriteDefaultDescriptor() const {
+	D_ASSERT(type.id() == LogicalTypeId::STRUCT);
+
+	// Keep the default for every direct child. For nested STRUCT children, keep another descriptor instead of
+	// eagerly materializing their children. The projection resolver can then distinguish:
+	//   * an omitted nested STRUCT, which uses that child's `struct_default`; and
+	//   * a supplied, non-NULL nested STRUCT, which recursively uses that child's `field_defaults`.
+	child_list_t<Value> field_defaults;
+	for (auto &child : children) {
+		if (child->type.id() == LogicalTypeId::STRUCT) {
+			field_defaults.emplace_back(child->name, child->GetWriteDefaultDescriptor());
+		} else {
+			field_defaults.emplace_back(child->name, child->GetWriteDefault());
+		}
+	}
+	child_list_t<Value> descriptor;
+	descriptor.emplace_back("struct_default", GetWriteDefault());
+	descriptor.emplace_back("field_defaults", Value::STRUCT(std::move(field_defaults)));
+	return Value::STRUCT(std::move(descriptor));
 }
 
 ColumnDefinition IcebergColumnDefinition::GetColumnDefinition() const {
 	auto res = ColumnDefinition(Identifier(name), type);
 
 	auto write_default = GetWriteDefault();
-	if (!write_default.IsNull()) {
+	if (type.id() == LogicalTypeId::STRUCT) {
+		// DuckDB's default projection hook receives the bound default expression, but not the Iceberg column
+		// metadata from which it originated. Carry the recursive field defaults through that existing interface in
+		// a real `constant_or_null` expression:
+		//
+		//   constant_or_null(<whole-STRUCT default>, <non-NULL recursive descriptor>)
+		//
+		// The second argument is deliberately non-NULL, so ordinary evaluation of the expression returns the first
+		// argument unchanged. Consequently an omitted/DEFAULT whole STRUCT still observes `write_default`: normally
+		// typed NULL, or a materialized STRUCT under the test-only compatibility setting.
+		//
+		// The expression is parsed here, where no ClientContext is available. DuckDB binds the registered scalar
+		// function later. The Iceberg projection resolver recognizes that bound function through
+		// ConstantOrNull::IsConstantOrNull and extracts the second argument only when it needs to remap a supplied
+		// non-NULL STRUCT. This envelope is internal and is not serialized into Iceberg metadata.
+		vector<unique_ptr<ParsedExpression>> arguments;
+		arguments.push_back(make_uniq<ConstantExpression>(std::move(write_default)));
+		arguments.push_back(make_uniq<ConstantExpression>(GetWriteDefaultDescriptor()));
+		res.SetDefaultValue(make_uniq<FunctionExpression>(Identifier(ConstantOrNullFun::Name), std::move(arguments)));
+	} else if (!write_default.IsNull()) {
 		if (type.IsNested()) {
-			throw NotImplementedException("{} DEFAULT not supported for STRUCT yet");
+			throw NotImplementedException("DEFAULT values for nested types are not supported yet");
 		}
 		res.SetDefaultValue(make_uniq<ConstantExpression>(write_default));
-	} else if (type.id() == LogicalTypeId::STRUCT) {
-		vector<Value> child_values;
-		for (auto &child : children) {
-			auto child_column = child->GetColumnDefinition();
-			if (child_column.HasDefaultValue()) {
-				auto &child_default = child_column.DefaultValue().Cast<ConstantExpression>();
-				child_values.emplace_back(child_default.GetValue());
-			} else {
-				child_values.emplace_back(Value(child->type));
-			}
-		}
-		auto default_value = Value::STRUCT(type, child_values);
-		res.SetDefaultValue(make_uniq<ConstantExpression>(default_value));
 	}
 
 	if (doc) {
@@ -356,6 +388,19 @@ ColumnDefinition IcebergColumnDefinition::GetColumnDefinition() const {
 		res.SetComment(Value(*doc));
 	}
 	return res;
+}
+
+void IcebergColumnDefinition::SetWriteDefault(const Value &default_value) {
+	if (type.id() != LogicalTypeId::STRUCT || default_value.IsNull()) {
+		write_default = make_uniq<Value>(default_value);
+		return;
+	}
+	auto &default_children = StructValue::GetChildren(default_value);
+	D_ASSERT(default_children.size() == children.size());
+	write_default = make_uniq<Value>(Value(type));
+	for (idx_t child_idx = 0; child_idx < children.size(); child_idx++) {
+		children[child_idx]->SetWriteDefault(default_children[child_idx]);
+	}
 }
 
 static bool DefaultsAreEqual(const unique_ptr<Value> &a, const unique_ptr<Value> &b) {

@@ -70,6 +70,7 @@
         "test/sql/local/catalog_test_config_setup/catalog_agnostic/insert/iceberg_types/test_geometry_type_nested.test",
         "test/sql/local/catalog_test_config_setup/catalog_agnostic/alter/alter_type_v3.test",
         "test/sql/local/catalog_test_config_setup/catalog_agnostic/alter/alter_type_timestamptz_ns_v3.test",
+        "test/sql/local/catalog_test_config_setup/catalog_agnostic/alter/alter_default_struct.test",
         "test/sql/local/catalog_test_config_setup/catalog_agnostic/create/default/test_create_default_struct.test",
         "test/sql/local/catalog_test_config_setup/catalog_agnostic/create/default/test_create_default_struct_nested.test",
         "test/sql/local/catalog_test_config_setup/catalog_agnostic/create/default/test_create_default_timestamptz_ns.test",

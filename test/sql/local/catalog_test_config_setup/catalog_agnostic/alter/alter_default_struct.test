@@ -1,0 +1,207 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/alter/alter_default_struct.test
+# description: ALTER SET DEFAULT recursively lowers STRUCT defaults
+# group: [alter]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+set ignore_error_messages
+
+# Default value of the setting
+statement ok
+SET GLOBAL __iceberg_unsafe_struct_null_default_interpretation = NULL;
+
+statement ok
+drop table if exists my_datalake.default.alter_default_struct;
+
+statement ok
+create table my_datalake.default.alter_default_struct (
+	id INTEGER,
+	payload STRUCT(
+		a VARCHAR,
+		nested STRUCT(x INTEGER)
+	) DEFAULT NULL
+) WITH ('format-version' = 3);
+
+statement ok
+insert into my_datalake.default.alter_default_struct
+	values (
+		1,
+		{
+			'a': 'seed',
+			'nested': {
+				'x': 1
+			}
+		}
+	);
+
+# Partial struct, missing 'nested'
+statement ok
+insert into my_datalake.default.alter_default_struct
+	values (
+		10,
+		{
+			'a': 'seed2'
+		}
+	);
+
+# Entirely missing struct
+statement ok
+insert into my_datalake.default.alter_default_struct(id)
+	values (
+		11
+	);
+
+statement ok
+alter table my_datalake.default.alter_default_struct
+	alter column payload set default {
+		'a': 'altered',
+		'nested': {'x': 42}
+	};
+
+statement ok
+insert into my_datalake.default.alter_default_struct values
+	(2, DEFAULT),
+	(3, {
+		'nested': {
+			'x': 7
+		}
+	});
+
+query II
+select id, payload
+from my_datalake.default.alter_default_struct
+order by all;
+----
+1	{'a': seed, 'nested': {'x': 1}}
+2	NULL
+3	{'a': NULL, 'nested': {'x': 7}}
+10	{'a': seed2, 'nested': NULL}
+11	NULL
+
+statement ok
+alter table my_datalake.default.alter_default_struct
+	alter column payload set default NULL;
+
+statement ok
+insert into my_datalake.default.alter_default_struct values
+	(4, DEFAULT),
+	(5, NULL);
+
+query II
+select id, payload
+from my_datalake.default.alter_default_struct
+where id >= 4
+order by all;
+----
+4	NULL
+5	NULL
+10	{'a': seed2, 'nested': NULL}
+11	NULL
+
+statement ok
+drop table my_datalake.default.alter_default_struct;
+
+# Now test with reinterpreting struct default 'null' as {}
+
+statement ok
+SET GLOBAL __iceberg_unsafe_struct_null_default_interpretation = '{}';
+
+statement ok
+create table my_datalake.default.alter_default_struct (
+	id INTEGER,
+	payload STRUCT(
+		a VARCHAR,
+		nested STRUCT(x INTEGER)
+	) DEFAULT NULL
+) WITH ('format-version' = 3);
+
+statement ok
+insert into my_datalake.default.alter_default_struct
+	values (
+		1,
+		{
+			'a': 'seed',
+			'nested': {
+				'x': 1
+			}
+		}
+	);
+
+# Partial struct, missing 'nested'
+statement ok
+insert into my_datalake.default.alter_default_struct
+	values (
+		10,
+		{
+			'a': 'seed2'
+		}
+	);
+
+# Entirely missing struct
+statement ok
+insert into my_datalake.default.alter_default_struct(id)
+	values (
+		11
+	);
+
+statement ok
+alter table my_datalake.default.alter_default_struct
+	alter column payload set default {
+		'a': 'altered',
+		'nested': {'x': 42}
+	};
+
+statement ok
+insert into my_datalake.default.alter_default_struct values
+	(2, DEFAULT),
+	(3, {
+		'nested': {
+			'x': 7
+		}
+	});
+
+query II
+select id, payload
+from my_datalake.default.alter_default_struct
+order by all;
+----
+1	{'a': seed, 'nested': {'x': 1}}
+2	{'a': altered, 'nested': {'x': 42}}
+3	{'a': NULL, 'nested': {'x': 7}}
+10	{'a': seed2, 'nested': {'x': NULL}}
+11	{'a': NULL, 'nested': {'x': NULL}}
+
+statement ok
+alter table my_datalake.default.alter_default_struct
+	alter column payload set default NULL;
+
+statement ok
+insert into my_datalake.default.alter_default_struct values
+	(4, DEFAULT),
+	(5, NULL);
+
+query II
+select id, payload
+from my_datalake.default.alter_default_struct
+where id >= 4
+order by all;
+----
+4	{'a': altered, 'nested': {'x': 42}}
+5	NULL
+10	{'a': seed2, 'nested': {'x': NULL}}
+11	{'a': NULL, 'nested': {'x': NULL}}
+
+statement ok
+drop table my_datalake.default.alter_default_struct;
+
+# Reset the value, since it's a global static
+statement ok
+SET GLOBAL __iceberg_unsafe_struct_null_default_interpretation = NULL;

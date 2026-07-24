@@ -30,8 +30,9 @@ set prefetch_all_parquet_files = false;
 statement ok
 DROP TABLE IF EXISTS my_datalake.default.tbl;
 
-# NOTE: Since no engine/catalog supports the {} default for STRUCT, we write NULL (omit the initial-default) for STRUCT instead
-# This changes the behavior matrix, and will need to be updated when support for {} is added
+statement ok
+SET GLOBAL __iceberg_unsafe_struct_null_default_interpretation = '{}';
+
 statement ok
 CREATE TABLE my_datalake.default.tbl(
 	id INTEGER,
@@ -117,7 +118,10 @@ select * from my_datalake.default.tbl where id = 6;
 ----
 6	{'a': hello, 'b': 42, 'c': \xAA\xFF\xAA}	NULL
 
-# DEFAULT NULL on a STRUCT currently materializes a struct whose fields are all NULL.
+statement ok
+RESET __iceberg_unsafe_struct_null_default_interpretation;
+
+# In the default safe mode, DEFAULT NULL on a STRUCT remains NULL.
 
 statement ok
 drop table if exists my_datalake.default.tbl_default_null_struct;
@@ -153,14 +157,12 @@ WHEN NOT MATCHED THEN INSERT VALUES (s.id, DEFAULT, s.col2)
 ----
 2
 
-# FIXME: 'c' should be NULL, but this needs support for {} first
 query III
 select * from my_datalake.default.tbl_default_null_struct where id = 1;
 ----
-1	{'a': NULL, 'b': NULL, 'c': {'x': NULL}}	100
+1	NULL	100
 
-# FIXME: 'c' should be NULL, but this needs support for {} first
 query III
 select * from my_datalake.default.tbl_default_null_struct where id = 3;
 ----
-3	{'a': NULL, 'b': NULL, 'c': {'x': NULL}}	300
+3	NULL	300

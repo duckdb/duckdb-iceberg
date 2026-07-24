@@ -1,5 +1,6 @@
 #include "iceberg_options.hpp"
 #include "common/iceberg_utils.hpp"
+#include "duckdb/common/atomic.hpp"
 
 namespace duckdb {
 

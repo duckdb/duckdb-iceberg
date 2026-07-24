@@ -155,12 +155,10 @@ insert into my_datalake.default.add_struct_field VALUES (
 	true
 );
 
-# FIXME: 'another_struct' should be NULL, as it gets backfilled without a DEFAULT
-# but NULL is treated differently for now (hopefully we can fix this behavior later)
 query II
 select * from my_datalake.default.add_struct_field order by all;
 ----
 {'a': hello world, 'b': NULL, 'nested': {'d': 1982-02-12, 'prim': test test test}, 'c': 1934-05-21, 'another_struct': {'col': {'inception': true}}}	true
-{'a': hello world, 'b': NULL, 'nested': {'d': 1982-02-12, 'prim': this is a long string}, 'c': 1934-05-21, 'another_struct': {'col': {'inception': NULL}}}	true
-{'a': hello world, 'b': NULL, 'nested': {'d': 1982-02-12, 'prim': NULL}, 'c': 1934-05-21, 'another_struct': {'col': {'inception': NULL}}}	true
-{'a': test, 'b': false, 'nested': {'d': 2012-08-19, 'prim': NULL}, 'c': NULL, 'another_struct': {'col': {'inception': NULL}}}	false
+{'a': hello world, 'b': NULL, 'nested': {'d': 1982-02-12, 'prim': this is a long string}, 'c': 1934-05-21, 'another_struct': NULL}	true
+{'a': hello world, 'b': NULL, 'nested': {'d': 1982-02-12, 'prim': NULL}, 'c': 1934-05-21, 'another_struct': NULL}	true
+{'a': test, 'b': false, 'nested': {'d': 2012-08-19, 'prim': NULL}, 'c': NULL, 'another_struct': NULL}	false

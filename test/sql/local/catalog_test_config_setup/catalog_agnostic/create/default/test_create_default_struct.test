@@ -18,8 +18,9 @@ set ignore_error_messages
 statement ok
 drop table if exists my_datalake.default.tbl;
 
-# NOTE: Since no engine/catalog supports the {} default for STRUCT, we write NULL (omit the initial-default) for STRUCT instead
-# This changes the behavior matrix, and will need to be updated when support for {} is added
+statement ok
+SET GLOBAL __iceberg_unsafe_struct_null_default_interpretation = '{}';
+
 statement ok
 create table my_datalake.default.tbl(
 	col STRUCT(
@@ -87,8 +88,6 @@ select * from my_datalake.default.tbl order by all;
 statement ok
 drop table if exists my_datalake.default.nested_tbl;
 
-# NOTE: Since no engine/catalog supports the {} default for STRUCT, we write NULL (omit the initial-default) for STRUCT instead
-# This changes the behavior matrix, and will need to be updated when support for {} is added
 statement ok
 create table my_datalake.default.nested_tbl(
 	col STRUCT(
@@ -177,7 +176,10 @@ select * from my_datalake.default.nested_tbl order by all;
 {'a': test, 'b': {'v1': 1000, 'v2': NULL, 'v3': -500}, 'e': NULL}	12
 {'a': test, 'b': {'v1': 1000, 'v2': NULL, 'v3': NULL}, 'e': NULL}	24
 
-# DEFAULT NULL on a STRUCT currently materializes a struct whose fields are all NULL.
+statement ok
+RESET __iceberg_unsafe_struct_null_default_interpretation;
+
+# In the default safe mode, DEFAULT NULL on a STRUCT remains NULL.
 
 statement ok
 drop table if exists my_datalake.default.tbl_default_null_struct;
@@ -199,11 +201,12 @@ create table my_datalake.default.tbl_default_null_struct(
 statement ok
 insert into my_datalake.default.tbl_default_null_struct values
 	(1, DEFAULT),
-	(2, DEFAULT);
+	(2, DEFAULT),
+	(3, NULL);
 
-# FIXME: 'c' should be NULL, but this needs support for {} first
 query II
 select * from my_datalake.default.tbl_default_null_struct order by id;
 ----
-1	{'a': NULL, 'b': NULL, 'c': {'x': NULL}}
-2	{'a': NULL, 'b': NULL, 'c': {'x': NULL}}
+1	NULL
+2	NULL
+3	NULL

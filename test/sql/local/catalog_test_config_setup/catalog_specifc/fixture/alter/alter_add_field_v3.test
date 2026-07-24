@@ -141,6 +141,9 @@ INSERT INTO my_datalake.default.alter_add_field_struct VALUES
 	(2, {'a': 'beta', 'nested': {'x': 'two'}});
 
 statement ok
+SET GLOBAL __iceberg_unsafe_struct_null_default_interpretation = '{}';
+
+statement ok
 ALTER TABLE my_datalake.default.alter_add_field_struct ADD COLUMN payload.extra STRUCT(
 	flag BOOLEAN,
 	"inner" STRUCT(
@@ -180,8 +183,10 @@ select id, payload from my_datalake.default.alter_add_field_struct order by id;
 1	{'a': alpha, 'nested': {'x': one}, 'extra': {'flag': true, 'inner': {'renamed_z': alpha-default}, 'flag2': NULL}}
 2	{'a': beta, 'nested': {'x': two}, 'extra': {'flag': true, 'inner': {'renamed_z': alpha-default}, 'flag2': NULL}}
 
-# Add a field of type STRUCT with DEFAULT NULL. Existing rows currently read it back
-# as a struct whose fields are all NULL rather than NULL.
+statement ok
+RESET __iceberg_unsafe_struct_null_default_interpretation;
+
+# Add a field of type STRUCT with DEFAULT NULL. Existing rows read it back as NULL.
 
 statement ok
 drop table if exists my_datalake.default.alter_add_field_struct_default_null;
@@ -213,15 +218,13 @@ ALTER TABLE my_datalake.default.alter_add_field_struct_default_null ADD COLUMN p
 	flag2 BOOLEAN
 ) DEFAULT NULL;
 
-# FIXME: 'inner' should be NULL, but this needs support for {} first
 query II
 select id, payload from my_datalake.default.alter_add_field_struct_default_null order by id;
 ----
-1	{'a': alpha, 'nested': {'x': one}, 'extra': {'flag': NULL, 'inner': {'z': NULL}, 'flag2': NULL}}
-2	{'a': beta, 'nested': {'x': two}, 'extra': {'flag': NULL, 'inner': {'z': NULL}, 'flag2': NULL}}
+1	{'a': alpha, 'nested': {'x': one}, 'extra': NULL}
+2	{'a': beta, 'nested': {'x': two}, 'extra': NULL}
 
-# Add a nested field of type STRUCT with DEFAULT NULL. Existing rows currently read it
-# back as a struct whose fields are all NULL rather than NULL.
+# Add a nested field of type STRUCT with DEFAULT NULL. Existing rows read it back as NULL.
 
 statement ok
 drop table if exists my_datalake.default.alter_add_field_nested_struct_default_null;
@@ -253,5 +256,5 @@ ALTER TABLE my_datalake.default.alter_add_field_nested_struct_default_null ADD C
 query II
 select id, payload from my_datalake.default.alter_add_field_nested_struct_default_null order by id;
 ----
-1	{'a': alpha, 'nested': {'x': one, 'extra': {'y': NULL, 'z': NULL}}}
-2	{'a': beta, 'nested': {'x': two, 'extra': {'y': NULL, 'z': NULL}}}
+1	{'a': alpha, 'nested': {'x': one, 'extra': NULL}}
+2	{'a': beta, 'nested': {'x': two, 'extra': NULL}}

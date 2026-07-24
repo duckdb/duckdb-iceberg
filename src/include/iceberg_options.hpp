@@ -21,6 +21,9 @@ static constexpr uint64_t DEFAULT_ICEBERG_FORMAT_VERSION = 2;
 // of a positional delete. This exists only to exercise the equality-delete read path.
 static string ENABLE_EQUALITY_DELETES_CONFIG_VARIABLE = "unsafe_and_disabled_for_iceberg_v3_enable_equality_deletes";
 
+static constexpr const char *UNSAFE_STRUCT_NULL_DEFAULT_INTERPRETATION_CONFIG_VARIABLE =
+    "__iceberg_unsafe_struct_null_default_interpretation";
+
 // When this is provided (and unsafe_enable_version_guessing is true)
 // we first look for DEFAULT_VERSION_HINT_FILE, if it doesn't exist we
 // then search for versions matching the DEFAULT_TABLE_VERSION_FORMAT
