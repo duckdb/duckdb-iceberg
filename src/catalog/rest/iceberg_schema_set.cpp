@@ -10,7 +10,32 @@
 
 namespace duckdb {
 
-IcebergSchemaSet::IcebergSchemaSet(Catalog &catalog) : catalog(catalog) {
+static string GetSchemaName(const vector<string> &items) {
+	return StringUtil::Join(items, ".");
+}
+
+IcebergSchemaSet::IcebergSchemaSet(Catalog &catalog, CaseSensitivityMode mode)
+    : catalog(catalog), mode(mode), entries(mode) {
+}
+
+string IcebergSchemaSet::ResolveCanonicalNameViaList(ClientContext &context, const string &name) {
+	auto &ic_catalog = catalog.Cast<IcebergCatalog>();
+	auto schemas = IRCAPI::GetSchemas(context, ic_catalog, {});
+	string canonical_match;
+	for (const auto &schema : schemas) {
+		auto candidate = GetSchemaName(schema.items);
+		if (!StringUtil::CIEquals(candidate, name)) {
+			continue;
+		}
+		if (!canonical_match.empty() && canonical_match != candidate) {
+			throw CatalogException(
+			    "Ambiguous case-insensitive namespace reference '%s': matches both '%s' and '%s'. Use "
+			    "case_sensitive=true or an exact-case reference to disambiguate.",
+			    name, canonical_match, candidate);
+		}
+		canonical_match = candidate;
+	}
+	return canonical_match;
 }
 
 optional_ptr<CatalogEntry> IcebergSchemaSet::GetEntry(ClientContext &context, const string &name,
@@ -42,10 +67,10 @@ optional_ptr<CatalogEntry> IcebergSchemaSet::GetEntry(ClientContext &context, co
 		return nullptr;
 	}
 
-	auto verify_existence = iceberg_transaction.looked_up_entries.insert(name).second;
+	auto verify_existence = iceberg_transaction.looked_up_entries.insert_permissive(name);
 	auto entry = entries.find(name);
 	if (entry != entries.end()) {
-		iceberg_transaction.schemas.emplace(name, entry->second);
+		iceberg_transaction.schemas.emplace(entry->first, entry->second);
 		if (entry->second->DoesExist()) {
 			return entry->second.get();
 		}
@@ -59,25 +84,40 @@ optional_ptr<CatalogEntry> IcebergSchemaSet::GetEntry(ClientContext &context, co
 	}
 	if (entry == entries.end()) {
 		CreateSchemaInfo info;
-		// Look up existence of default schema to avoid lookup of `duckdb_*` tables
-		if (name == DEFAULT_SCHEMA) {
-			if (!IRCAPI::VerifySchemaExistence(context, ic_catalog, name)) {
+		string resolved_name = name;
+		if (mode == CaseSensitivityMode::INSENSITIVE) {
+			resolved_name = ResolveCanonicalNameViaList(context, name);
+			if (resolved_name.empty()) {
 				if (if_not_found == OnEntryNotFound::RETURN_NULL) {
 					return nullptr;
 				}
-				throw CatalogException("default schema '%s' does not exist", name);
+				throw CatalogException("Iceberg namespace by the name of '%s' does not exist", name);
+			}
+			entry = entries.find(resolved_name);
+			if (entry != entries.end()) {
+				iceberg_transaction.schemas.emplace(entry->first, entry->second);
+				return entry->second->DoesExist() ? entry->second.get() : nullptr;
 			}
 		}
-		info.SetQualifiedName(
-		    QualifiedName(info.GetQualifiedName().Catalog(), Identifier(name), info.GetQualifiedName().Name()));
+		// Look up existence of default schema to avoid lookup of `duckdb_*` tables
+		if (resolved_name == DEFAULT_SCHEMA) {
+			if (!IRCAPI::VerifySchemaExistence(context, ic_catalog, resolved_name)) {
+				if (if_not_found == OnEntryNotFound::RETURN_NULL) {
+					return nullptr;
+				}
+				throw CatalogException("default schema '%s' does not exist", resolved_name);
+			}
+		}
+		info.SetQualifiedName(QualifiedName(info.GetQualifiedName().Catalog(), Identifier(resolved_name),
+		                                    info.GetQualifiedName().Name()));
 		info.internal = false;
 		auto schema_entry = make_shared_ptr<IcebergSchemaEntry>(catalog, info);
 		// we will not create entries with empty names
-		if (name.empty()) {
+		if (resolved_name.empty()) {
 			return nullptr;
 		}
 		auto inserted_entry = CreateEntryInternal(std::move(schema_entry));
-		iceberg_transaction.schemas.emplace(name, inserted_entry);
+		iceberg_transaction.schemas.emplace(resolved_name, inserted_entry);
 		return inserted_entry.get();
 	}
 	iceberg_transaction.schemas.emplace(name, entry->second);
@@ -119,16 +159,15 @@ vector<shared_ptr<IcebergSchemaEntry>> IcebergSchemaSet::GetEntries(ClientContex
 void IcebergSchemaSet::AddEntry(const string &name, shared_ptr<IcebergSchemaEntry> entry) {
 	D_ASSERT(entry);
 	annotated_lock_guard<annotated_mutex> l(entry_lock);
-	entries[name] = std::move(entry);
+	auto insert_result = entries.insert(name, entry);
+	if (!insert_result.second) {
+		insert_result.first->second = std::move(entry);
+	}
 }
 
 void IcebergSchemaSet::RemoveEntry(const string &name) {
 	annotated_lock_guard<annotated_mutex> l(entry_lock);
 	entries.erase(name);
-}
-
-static string GetSchemaName(const vector<string> &items) {
-	return StringUtil::Join(items, ".");
 }
 
 void IcebergSchemaSet::LoadEntries(ClientContext &context) {
@@ -161,10 +200,11 @@ shared_ptr<IcebergSchemaEntry> IcebergSchemaSet::CreateEntryInternal(shared_ptr<
 	if (name.empty()) {
 		throw InternalException("IcebergSchemaSet::CreateEntry called with empty name");
 	}
-	auto existing_entry = entries.find(name);
-	if (existing_entry == entries.end()) {
-		return entries.emplace(name, std::move(entry)).first->second;
+	auto insert_result = entries.insert(name, entry);
+	if (insert_result.second) {
+		return insert_result.first->second;
 	}
+	auto existing_entry = insert_result.first;
 	if (!existing_entry->second->DoesExist()) {
 		existing_entry->second = std::move(entry);
 	}

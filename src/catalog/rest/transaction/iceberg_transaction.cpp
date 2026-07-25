@@ -67,7 +67,10 @@ IcebergTable &IcebergTransactionTableState::GetOrCreateTransactionInfo(IcebergTr
 }
 
 IcebergTransaction::IcebergTransaction(IcebergCatalog &ic_catalog, TransactionManager &manager, ClientContext &context)
-    : Transaction(manager, context), db(*context.db), catalog(ic_catalog), access_mode(ic_catalog.access_mode) {
+    : Transaction(manager, context), db(*context.db), catalog(ic_catalog), access_mode(ic_catalog.access_mode),
+      mode(ic_catalog.attach_options.case_sensitivity_mode), schemas(mode), created_schemas(mode), tables(mode),
+      current_table_data(mode), deleted_schemas(mode), listed_schemas(mode), looked_up_entries(mode),
+      schema_property_updates(mode) {
 }
 
 IcebergTransaction::~IcebergTransaction() = default;
@@ -126,9 +129,12 @@ struct SingleTableStagedCommit {
 };
 
 struct MultiTableStagedCommit {
+	explicit MultiTableStagedCommit(CaseSensitivityMode mode) : table_keys(mode) {
+	}
+
 	rest_api_objects::CommitTransactionRequest request;
 	vector<string> created_metadata_files;
-	case_insensitive_set_t table_keys;
+	CaseAwareIdentifierSet table_keys;
 	bool retryable = false;
 	IcebergRetryConfig retry_config;
 };
@@ -308,7 +314,7 @@ static SingleTableStagedCommit StageSingleTableCommit(DatabaseInstance &db, Iceb
 
 static MultiTableStagedCommit StageMultiTableCommit(DatabaseInstance &db, IcebergTransactionAlterUpdate &alter_update,
                                                     ClientContext &context) {
-	MultiTableStagedCommit info;
+	MultiTableStagedCommit info(alter_update.transaction.GetCatalog().attach_options.case_sensitivity_mode);
 	auto &transaction = info.request;
 	bool all_retryable = true;
 	bool saw_table = false;
@@ -417,7 +423,7 @@ void IcebergTransaction::CleanupMetadataFiles(ClientContext &context, const vect
 }
 
 void IcebergTransaction::RefreshRetryTables(IcebergTransactionAlterUpdate &alter_update,
-                                            const case_insensitive_set_t &table_keys, ClientContext &context) {
+                                            CaseAwareIdentifierSet &table_keys, ClientContext &context) {
 	for (const auto &table_key : table_keys) {
 		auto it = alter_update.updated_tables.find(table_key);
 		if (it == alter_update.updated_tables.end()) {
@@ -627,7 +633,7 @@ void IcebergTransaction::DoSingleTableCommitUpdates(IcebergTransactionAlterUpdat
 			result.Throw(catalog.GetBaseUrl().GetURLEncoded());
 		}
 		CleanupMetadataFiles(context, table_transaction_info.created_metadata_files);
-		case_insensitive_set_t retry_tables;
+		CaseAwareIdentifierSet retry_tables(catalog.attach_options.case_sensitivity_mode);
 		retry_tables.insert(table_key);
 		RefreshRetryTables(alter_update, retry_tables, context);
 		//! Back off before the next attempt; stop if the retry budget would be exceeded.

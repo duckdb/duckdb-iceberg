@@ -1,10 +1,11 @@
 #include "catalog/rest/transaction/iceberg_transaction_update.hpp"
 #include "catalog/rest/transaction/iceberg_transaction.hpp"
+#include "catalog/rest/iceberg_catalog.hpp"
 
 namespace duckdb {
 
 IcebergTransactionAlterUpdate::IcebergTransactionAlterUpdate(IcebergTransaction &transaction)
-    : transaction(transaction) {
+    : transaction(transaction), updated_tables(transaction.GetCatalog().attach_options.case_sensitivity_mode) {
 }
 IcebergTransactionAlterUpdate::~IcebergTransactionAlterUpdate() {
 }

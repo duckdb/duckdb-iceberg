@@ -1,0 +1,145 @@
+# name: test/sql/local/catalog_custom_setup/fixture/case_sensitivity/case_sensitive_tables.test
+# description: test the case_sensitive ATTACH option for table identifier lookups
+# group: [case_sensitivity]
+
+require-env FIXTURE_SERVER_AVAILABLE
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+CREATE SECRET (
+    TYPE S3,
+    KEY_ID 'admin',
+    SECRET 'password',
+    ENDPOINT '127.0.0.1:9000',
+    URL_STYLE 'path',
+    USE_SSL 0
+);
+
+statement ok
+ATTACH '' AS cs_sensitive (
+    TYPE ICEBERG,
+    CLIENT_ID 'admin',
+    CLIENT_SECRET 'password',
+    ENDPOINT 'http://127.0.0.1:8181',
+    case_sensitive true
+);
+
+statement ok
+ATTACH '' AS cs_insensitive (
+    TYPE ICEBERG,
+    CLIENT_ID 'admin',
+    CLIENT_SECRET 'password',
+    ENDPOINT 'http://127.0.0.1:8181',
+    case_sensitive false
+);
+
+statement ok
+ATTACH '' AS cs_unset (
+    TYPE ICEBERG,
+    CLIENT_ID 'admin',
+    CLIENT_SECRET 'password',
+    ENDPOINT 'http://127.0.0.1:8181'
+);
+
+# All three aliases point at the same underlying REST catalog/warehouse, so a table
+# created through one is visible (subject to case-sensitivity rules) through the others.
+statement ok
+create schema if not exists cs_unset.default;
+
+statement ok
+drop table if exists cs_unset.default.MixedCaseTable;
+
+statement ok
+create table cs_unset.default.MixedCaseTable as select range::int a from range(3);
+
+# --- case_sensitive=true: cold lookup with wrong case must fail (no change from today) ---
+statement error
+select * from cs_sensitive.default.mixedcasetable order by a;
+----
+does not exist
+
+# correct-case cold lookup must still succeed
+query I
+select * from cs_sensitive.default.MixedCaseTable order by a;
+----
+0
+1
+2
+
+# --- case_sensitive=false: cold lookup with wrong case must resolve via list-then-canonical-match ---
+query I
+select * from cs_insensitive.default.mixedcasetable order by a;
+----
+0
+1
+2
+
+# the canonical (correct) case must also still work
+query I
+select * from cs_insensitive.default.MixedCaseTable order by a;
+----
+0
+1
+2
+
+# --- unset/default: wrong-case cold lookup still fails - "unset changes nothing" ---
+statement error
+select * from cs_unset.default.mixedcasetable order by a;
+----
+does not exist
+
+# --- warm lookup after a listing (SHOW TABLES) ---
+statement ok
+use cs_sensitive.default;
+
+statement ok
+show tables;
+
+# case_sensitive=true: still requires exact case even though the name was just listed
+statement error
+select * from cs_sensitive.default.mixedcasetable order by a;
+----
+does not exist
+
+statement ok
+use cs_insensitive.default;
+
+statement ok
+show tables;
+
+# case_sensitive=false: matches regardless of casing once listed
+query I
+select * from cs_insensitive.default.mixedcasetable order by a;
+----
+0
+1
+2
+
+statement ok
+use cs_unset.default;
+
+statement ok
+show tables;
+
+# unset: a prior listing does NOT make table lookups insensitive - this is the asymmetry
+# with schemas documented in the design doc, and is the regression guard for it.
+statement error
+select * from cs_unset.default.mixedcasetable order by a;
+----
+does not exist
+
+statement ok
+use memory;
+
+statement ok
+drop table if exists cs_unset.default.MixedCaseTable;

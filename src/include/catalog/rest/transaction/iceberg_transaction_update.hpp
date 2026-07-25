@@ -6,6 +6,7 @@
 #include "duckdb/common/string.hpp"
 #include "duckdb/common/case_insensitive_map.hpp"
 #include "catalog/rest/catalog_entry/table/iceberg_table.hpp"
+#include "catalog/rest/case_aware_identifier_container.hpp"
 
 namespace duckdb {
 
@@ -25,7 +26,7 @@ public:
 public:
 	IcebergTransaction &transaction;
 	//! All the tables touched in this atomic block
-	case_insensitive_map_t<reference<IcebergTable>> updated_tables;
+	CaseAwareIdentifierMap<reference<IcebergTable>> updated_tables;
 };
 
 //! Drop a table

@@ -26,7 +26,27 @@
 
 namespace duckdb {
 
-IcebergTableSet::IcebergTableSet(IcebergSchemaEntry &schema) : schema(schema), catalog(schema.ParentCatalog()) {
+IcebergTableSet::IcebergTableSet(IcebergSchemaEntry &schema)
+    : schema(schema), catalog(schema.ParentCatalog()),
+      mode(catalog.Cast<IcebergCatalog>().attach_options.case_sensitivity_mode), entries(mode) {
+}
+
+string IcebergTableSet::ResolveCanonicalNameViaList(ClientContext &context, const string &name) {
+	auto &ic_catalog = catalog.Cast<IcebergCatalog>();
+	auto tables = IRCAPI::GetTables(context, ic_catalog, schema);
+	string canonical_match;
+	for (const auto &table : tables) {
+		if (!StringUtil::CIEquals(table.name, name)) {
+			continue;
+		}
+		if (!canonical_match.empty() && canonical_match != table.name) {
+			throw CatalogException("Ambiguous case-insensitive table reference '%s': matches both '%s' and '%s'. Use "
+			                       "case_sensitive=true or an exact-case reference to disambiguate.",
+			                       name, canonical_match, table.name);
+		}
+		canonical_match = table.name;
+	}
+	return canonical_match;
 }
 
 bool IcebergTableSet::FillEntry(ClientContext &context, IcebergTable &table) {
@@ -171,8 +191,7 @@ void IcebergTableSet::RenameEntry(const string &name, const string &new_name, Ic
 
 void IcebergTableSet::LoadEntriesInternal(ClientContext &context) {
 	auto &iceberg_transaction = IcebergTransaction::Get(context, catalog);
-	bool schema_listed = iceberg_transaction.listed_schemas.find(schema.name.GetIdentifierName()) !=
-	                     iceberg_transaction.listed_schemas.end();
+	bool schema_listed = iceberg_transaction.listed_schemas.count(schema.name.GetIdentifierName());
 	if (schema_listed) {
 		return;
 	}
@@ -335,7 +354,27 @@ optional_ptr<CatalogEntry> IcebergTableSet::GetEntry(ClientContext &context, con
 		return table_info.GetSchemaVersion(at);
 	}
 
-	auto new_version = make_shared_ptr<IcebergTable>(ic_catalog, schema, table_name);
+	string resolved_name = table_name;
+	if (mode == CaseSensitivityMode::INSENSITIVE) {
+		bool found_cached_entry = false;
+		{
+			annotated_lock_guard<annotated_mutex> l(entry_lock);
+			auto cached = entries.find(table_name);
+			if (cached != entries.end()) {
+				resolved_name = cached->first;
+				found_cached_entry = true;
+			}
+		}
+		if (!found_cached_entry) {
+			resolved_name = ResolveCanonicalNameViaList(context, table_name);
+			if (resolved_name.empty()) {
+				iceberg_transaction.SetLatestTableState(table_key, IcebergTableStatus::MISSING);
+				return nullptr;
+			}
+		}
+	}
+
+	auto new_version = make_shared_ptr<IcebergTable>(ic_catalog, schema, resolved_name);
 	auto &table_info = *new_version;
 	if (!FillEntry(context, table_info)) {
 		//! The table doesn't exist in the catalog
@@ -345,9 +384,9 @@ optional_ptr<CatalogEntry> IcebergTableSet::GetEntry(ClientContext &context, con
 
 	{
 		annotated_lock_guard<annotated_mutex> l(entry_lock);
-		entries[table_name] = new_version;
+		entries[resolved_name] = new_version;
 	}
-	iceberg_transaction.tables[table_key] = new_version;
+	iceberg_transaction.tables[new_version->GetTableKey()] = new_version;
 	auto &state = iceberg_transaction.SetCatalogTableState(new_version);
 	if (iceberg_transaction.StartedBefore(table_info.table_metadata.last_updated_ms)) {
 		state.GetOrCreateTransactionInfo(iceberg_transaction);

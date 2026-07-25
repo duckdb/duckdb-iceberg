@@ -6,6 +6,7 @@
 #include "duckdb/storage/storage_extension.hpp"
 #include "duckdb/main/attached_database.hpp"
 #include "duckdb/main/client_context.hpp"
+#include "catalog/rest/case_aware_identifier_container.hpp"
 
 namespace duckdb {
 
@@ -37,6 +38,9 @@ struct IcebergAttachOptions {
 	unordered_map<string, Value> options;
 	// max staleness for cached table metadata in minutes (optional - if not set, always request fresh metadata)
 	optional_idx max_table_staleness_micros;
+	// controls case-sensitivity of catalog/schema/table identifier lookups against this catalog.
+	// UNSET preserves today's (per-field) default behavior for backwards compatibility.
+	CaseSensitivityMode case_sensitivity_mode = CaseSensitivityMode::UNSET;
 };
 
 unordered_map<string, Value> NormalizeIcebergAttachOptions(const unordered_map<string, Value> &options);
