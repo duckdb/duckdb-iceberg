@@ -6,6 +6,7 @@
 #include "planning/iceberg_multi_file_list.hpp"
 #include "catalog/rest/catalog_entry/table/iceberg_table_information.hpp"
 #include "catalog/rest/api/catalog_utils.hpp"
+#include "iceberg_options.hpp"
 
 namespace duckdb {
 
@@ -146,20 +147,28 @@ static void VerifyPuffinDeletionVector(CachingFileHandle &handle, int64_t conten
 
 	auto file_size = handle.GetFileSize();
 	if (file_size < 2 * sizeof(PUFFIN_MAGIC) + FOOTER_TRAILER_SIZE) {
-		throw InvalidConfigurationException("Deletion vector file is too small to be a valid Puffin file");
+		throw InvalidConfigurationException(
+		    "Deletion vector file is too small to be a valid Puffin file. Older versions of DuckDB wrote deletion "
+		    "vector files as bare blobs. To read those files, run \"SET %s = true\"",
+		    SKIP_PUFFIN_VERIFICATION_CONFIG_VARIABLE);
 	}
 
 	//! Read the footer trailer: validate the trailing magic and that the footer payload is uncompressed.
 	data_ptr_t trailer_ptr = nullptr;
 	auto trailer_buffer = handle.Read(trailer_ptr, FOOTER_TRAILER_SIZE, file_size - FOOTER_TRAILER_SIZE);
 	if (memcmp(trailer_ptr + sizeof(int32_t) + sizeof(uint32_t), PUFFIN_MAGIC, sizeof(PUFFIN_MAGIC)) != 0) {
-		throw InvalidConfigurationException("Deletion vector file is not a valid Puffin file (bad trailing magic)");
+		throw InvalidConfigurationException(
+		    "Deletion vector file is not a valid Puffin file (bad trailing magic). Older versions of DuckDB wrote "
+		    "deletion vector files as bare blobs. To read those files, run \"SET %s = true\"",
+		    SKIP_PUFFIN_VERIFICATION_CONFIG_VARIABLE);
 	}
 	//! Flags: bit 0 of the first byte set => FooterPayload is compressed (per the Puffin spec).
 	auto flags = Load<uint32_t>(trailer_ptr + sizeof(int32_t));
 	if (flags & 0x1) {
 		throw InvalidConfigurationException(
-		    "Deletion vector Puffin footer payload is compressed; only uncompressed footers are supported");
+		    "Deletion vector Puffin footer payload is compressed; only uncompressed footers are supported. "
+		    "Verification can be disabled by running \"SET %s = true\"",
+		    SKIP_PUFFIN_VERIFICATION_CONFIG_VARIABLE);
 	}
 
 #ifdef DEBUG
@@ -209,7 +218,11 @@ void IcebergMultiFileList::ScanPuffinFile(const BoundIcebergManifestEntry &bound
 	auto offset = data_file.content_offset.GetValue<int64_t>();
 	auto length = data_file.content_size_in_bytes.GetValue<int64_t>();
 
-	VerifyPuffinDeletionVector(*caching_file_handle, offset, length);
+	Value skip_verification;
+	if (!context.TryGetCurrentSetting(SKIP_PUFFIN_VERIFICATION_CONFIG_VARIABLE, skip_verification) ||
+	    !skip_verification.GetValue<bool>()) {
+		VerifyPuffinDeletionVector(*caching_file_handle, offset, length);
+	}
 
 	auto buf_handle = caching_file_handle->Read(data, length, offset);
 

@@ -61,6 +61,11 @@ static void LoadInternal(ExtensionLoader &loader) {
 	                          "Enable globbing the filesystem (if possible) to find the latest version metadata. This "
 	                          "could result in reading an uncommitted version.",
 	                          LogicalType::BOOLEAN, Value::BOOLEAN(false));
+	config.AddExtensionOption(
+	    SKIP_PUFFIN_VERIFICATION_CONFIG_VARIABLE,
+	    "Skip structural Puffin verification for deletion-vector files. This unsafe compatibility option permits "
+	    "reading invalid bare-blob files written by DuckDB Iceberg 1.5.3.",
+	    LogicalType::BOOLEAN, Value::BOOLEAN(false), nullptr, SetScope::GLOBAL);
 	config.AddExtensionOption("iceberg_via_aws_sdk_for_catalog_interactions",
 	                          "Use legacy code to interact with AWS-based catalogs, via AWS's SDK",
 	                          LogicalType::BOOLEAN, Value::BOOLEAN(false));

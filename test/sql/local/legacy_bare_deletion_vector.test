@@ -1,0 +1,36 @@
+# name: test/sql/local/legacy_bare_deletion_vector.test
+# description: Read a legacy deletion-vector file containing only the DV blob
+# group: [local]
+
+require avro
+
+require parquet
+
+require iceberg
+
+# Puffin verification remains enabled by default, and the error explains the compatibility setting.
+statement error
+SELECT id, source
+FROM iceberg_scan(
+    '__WORKING_DIRECTORY__/data/persistent/legacy_bare_deletion_vector/warehouse/default/legacy_bare_deletion_vector'
+)
+ORDER BY id;
+----
+<REGEX>:.*Older versions of DuckDB wrote deletion vector files as bare blobs.*SET iceberg_unsafe_skip_puffin_verification = true.*
+
+# Skipping only the Puffin container verification permits the valid DV blob to be read.
+statement ok
+SET iceberg_unsafe_skip_puffin_verification = true;
+
+query II
+SELECT id, source
+FROM iceberg_scan(
+    '__WORKING_DIRECTORY__/data/persistent/legacy_bare_deletion_vector/warehouse/default/legacy_bare_deletion_vector'
+)
+ORDER BY id;
+----
+1	legacy
+3	legacy
+
+statement ok
+RESET iceberg_unsafe_skip_puffin_verification;
