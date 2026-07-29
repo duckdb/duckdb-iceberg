@@ -7,6 +7,10 @@ namespace duckdb {
 
 static string VERSION_GUESSING_CONFIG_VARIABLE = "unsafe_enable_version_guessing";
 
+// Compatibility escape hatch for deletion-vector files written by DuckDB Iceberg 1.5.3,
+// which contain only the deletion-vector blob rather than a valid Puffin container.
+static string SKIP_PUFFIN_VERIFICATION_CONFIG_VARIABLE = "iceberg_unsafe_skip_puffin_verification";
+
 // When this is true, a DELETE on a v2 Iceberg table whose WHERE clause is a pure
 // conjunction of equality predicates writes an Iceberg equality-delete file instead
 // of a positional delete. This exists only to exercise the equality-delete read path.

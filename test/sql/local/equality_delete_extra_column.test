@@ -2,7 +2,6 @@
 # description: Equality-delete on a transform-partitioned table
 # group: [local]
 
-
 require avro
 
 require parquet
