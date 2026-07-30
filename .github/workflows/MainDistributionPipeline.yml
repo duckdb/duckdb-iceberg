@@ -17,8 +17,8 @@ jobs:
     uses: duckdb/extension-ci-tools/.github/workflows/_extension_distribution.yml@v1.5-variegata
     with:
       extension_name: iceberg
-      duckdb_version: b155d6f63cea14e0dfacb1cb795d5266024303e6
-      ci_tools_version: v1.5-variegata
+      duckdb_version: v1.5.5
+      ci_tools_version: v1.5.5
       exclude_archs: 'windows_amd64_mingw'
       extra_toolchains: 'python3'
 
@@ -29,8 +29,8 @@ jobs:
     secrets: inherit
     with:
       extension_name: iceberg
-      duckdb_version: b155d6f63cea14e0dfacb1cb795d5266024303e6
-      ci_tools_version: v1.5-variegata
+      duckdb_version: v1.5.5
+      ci_tools_version: v1.5.5
       exclude_archs: 'windows_amd64_mingw'
       deploy_latest: ${{ startsWith(github.ref, 'refs/heads/v') || github.ref == 'refs/heads/main' }}
       deploy_versioned: ${{ startsWith(github.ref, 'refs/heads/v') || github.ref == 'refs/heads/main' }}
