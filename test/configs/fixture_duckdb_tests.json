@@ -62,6 +62,34 @@
       ]
     },
     {
+      "reason": "Added in bump to v1.5.5",
+      "paths": [
+        "test/sql/aggregate/external/external_repartition_radix_grow.test_slow",
+	"test/sql/attach/searchpath_fallback.test",
+	"test/sql/catalog/dependencies/test_drop_default_referencing_sequence.test",
+	"test/sql/copy/parquet/writer/parquet_timetz_roundtrip.test",
+	"test/sql/index/art/test_art_empty_close_range.test",
+	"test/sql/storage/alter/alter_based_on_unfinished_insert_fails.test",
+	"test/sql/storage/compression/alp/alp_corrupted_exception_position.test",
+	"test/sql/storage/compression/alprd/alprd_corrupted_exception_position.test",
+	"test/sql/storage/compression/dict_fsst/dict_fsst_expression_filter.test",
+	"test/sql/storage/corrupt/corrupt_catalog_entry.test",
+	"test/sql/storage/metadata/partial_column_metadata_reuse_drop_column.test",
+	"test/sql/table_function/range_timestamp_lateral_empty.test",
+	"test/sql/transactions/concurrent_drop_index.test",
+	"test/sql/transactions/concurrent_drop_table.test",
+	"test/sql/transactions/revert_commit_index_corruption_drop_table.test",
+	"test/sql/transactions/rollback_drop_column.test",
+	"test/sql/transactions/rollback_drop_index.test",
+	"test/sql/transactions/rollback_drop_table.test",
+	"test/sql/transactions/rollback_drop_table_with_delete.test",
+	"test/sql/transactions/rollback_drop_table_with_delete_concurrent.test",
+	"test/sql/transactions/rollback_drop_table_with_pk.test",
+	"test/sql/types/bignum/test_bignum_try_cast.test",
+	"test/sql/types/geo/geometry_shred_pk_append.test"
+      ]
+    },
+    {
       "reason": "Original test does not define ordering",
       "paths": [
         "test/sql/join/inner/test_range_join.test",
