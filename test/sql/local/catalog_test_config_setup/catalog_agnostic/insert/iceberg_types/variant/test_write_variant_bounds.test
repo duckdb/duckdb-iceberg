@@ -58,3 +58,80 @@ select lk, octet_length(lv) > 0, octet_length(uv) > 0 from (
 
 statement ok
 drop table if exists my_datalake.default.variant_bounds_tbl;
+
+# --- write.metadata.metrics.* gates the variant bounds -----------------------
+
+# full: the variant column (field id 1) gets lower/upper bounds
+statement ok
+drop table if exists my_datalake.default.mm_variant_full;
+
+statement ok
+create table my_datalake.default.mm_variant_full (v VARIANT)
+with ('format-version'='3', 'write.metadata.metrics.default'='full');
+
+statement ok
+insert into my_datalake.default.mm_variant_full VALUES
+    ({'age': 25, 'city': 'amsterdam'}),
+    ({'age': 30, 'city': 'berlin'}),
+    ({'age': 40, 'city': 'cairo'});
+
+statement ok
+set variable variant_full_mp = (select manifest_path from iceberg_metadata(my_datalake.default.mm_variant_full) order by manifest_sequence_number desc limit 1);
+
+query I
+select count(*) from (
+    select unnest(map_keys(lower_bounds)) lk
+    from (select unnest(data_file) from read_avro(getvariable('variant_full_mp')))
+) where lk = 1;
+----
+1
+
+# truncate(16): variant bounds are still written (truncation only affects string/binary)
+statement ok
+drop table if exists my_datalake.default.mm_variant_trunc;
+
+statement ok
+create table my_datalake.default.mm_variant_trunc (v VARIANT)
+with ('format-version'='3', 'write.metadata.metrics.default'='truncate(16)');
+
+statement ok
+insert into my_datalake.default.mm_variant_trunc VALUES
+    ({'age': 25, 'city': 'amsterdam'}),
+    ({'age': 30, 'city': 'berlin'}),
+    ({'age': 40, 'city': 'cairo'});
+
+statement ok
+set variable variant_trunc_mp = (select manifest_path from iceberg_metadata(my_datalake.default.mm_variant_trunc) order by manifest_sequence_number desc limit 1);
+
+query I
+select count(*) from (
+    select unnest(map_keys(lower_bounds)) lk
+    from (select unnest(data_file) from read_avro(getvariable('variant_trunc_mp')))
+) where lk = 1;
+----
+1
+
+# counts: no variant bounds
+statement ok
+drop table if exists my_datalake.default.mm_variant_counts;
+
+statement ok
+create table my_datalake.default.mm_variant_counts (v VARIANT)
+with ('format-version'='3', 'write.metadata.metrics.default'='counts');
+
+statement ok
+insert into my_datalake.default.mm_variant_counts VALUES
+    ({'age': 25, 'city': 'amsterdam'}),
+    ({'age': 30, 'city': 'berlin'}),
+    ({'age': 40, 'city': 'cairo'});
+
+statement ok
+set variable variant_counts_mp = (select manifest_path from iceberg_metadata(my_datalake.default.mm_variant_counts) order by manifest_sequence_number desc limit 1);
+
+query I
+select count(*) from (
+    select unnest(map_keys(lower_bounds)) lk
+    from (select unnest(data_file) from read_avro(getvariable('variant_counts_mp')))
+) where lk = 1;
+----
+0
