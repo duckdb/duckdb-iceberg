@@ -28,11 +28,9 @@ static string ENABLE_EQUALITY_DELETES_CONFIG_VARIABLE = "unsafe_and_disabled_for
 static constexpr const char *UNSAFE_STRUCT_NULL_DEFAULT_INTERP_CONFIG_VARIABLE =
     "__iceberg_unsafe_struct_null_default_interp";
 
-// When this is provided (and unsafe_enable_version_guessing is true)
-// we first look for DEFAULT_VERSION_HINT_FILE, if it doesn't exist we
-// then search for versions matching the DEFAULT_TABLE_VERSION_FORMAT
-// We take the lexographically "greatest" one as the latest version
-// Note that this will voliate ACID constraints in some situations.
+// Explicit '?' opts into version guessing for one call. Omitted versions require
+// unsafe_enable_version_guessing before globbing. The lexicographically greatest
+// metadata filename is selected, which may violate ACID constraints.
 static string UNKNOWN_TABLE_VERSION = "?";
 
 // First arg is version string, arg is either empty or ".gz" if gzip
@@ -57,6 +55,7 @@ public:
 	string metadata_compression_codec = "none";
 	bool infer_schema = true;
 	string table_version = DEFAULT_TABLE_VERSION;
+	bool version_explicitly_set = false;
 	string version_name_format = DEFAULT_TABLE_VERSION_FORMAT;
 
 	optional<IcebergSnapshotLookup> snapshot_lookup;

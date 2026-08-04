@@ -572,6 +572,7 @@ bool IcebergMultiFileReader::ParseOption(const string &key, const Value &val, Mu
 	}
 	if (loption == "version") {
 		this->options.table_version = StringValue::Get(val);
+		this->options.version_explicitly_set = true;
 		return true;
 	}
 	if (loption == "version_name_format") {

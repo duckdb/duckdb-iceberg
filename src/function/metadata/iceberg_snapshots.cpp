@@ -60,6 +60,7 @@ static unique_ptr<FunctionData> IcebergSnapshotsBind(ClientContext &context, Tab
 			options.metadata_compression_codec = StringValue::Get(kv.second);
 		} else if (loption == "version") {
 			options.table_version = StringValue::Get(kv.second);
+			options.version_explicitly_set = true;
 		} else if (loption == "version_name_format") {
 			auto value = StringValue::Get(kv.second);
 			auto string_substitutions = IcebergUtils::CountOccurrences(value, "%s");
