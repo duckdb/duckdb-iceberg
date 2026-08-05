@@ -60,3 +60,106 @@ query II
 SELECT COUNT(*), COUNT(*) FILTER(WHERE id%2=0) FROM my_datalake.default.test
 ----
 375	0
+
+# A partition dropped at the manifest level must read as gone for the rest of the transaction,
+# the same as a row-level delete does. The manifests the scan walks still list the file until
+# the commit rewrites them, so this only holds if the scan applies the staged invalidation.
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.test_partitioned;
+
+statement ok
+CREATE TABLE my_datalake.default.test_partitioned (id INT, val VARCHAR) PARTITIONED BY (id);
+
+statement ok
+INSERT INTO my_datalake.default.test_partitioned VALUES (1, 'a'), (1, 'b'), (2, 'c');
+
+statement ok
+BEGIN
+
+query I
+DELETE FROM my_datalake.default.test_partitioned WHERE id = 1
+----
+2
+
+query II
+SELECT id, val FROM my_datalake.default.test_partitioned ORDER BY id
+----
+2	c
+
+# Repeating the delete has nothing left to drop, so it must report zero rather than counting the
+# already-dropped file a second time.
+query I
+DELETE FROM my_datalake.default.test_partitioned WHERE id = 1
+----
+0
+
+query II
+SELECT id, val FROM my_datalake.default.test_partitioned ORDER BY id
+----
+2	c
+
+statement ok
+COMMIT
+
+query II
+SELECT id, val FROM my_datalake.default.test_partitioned ORDER BY id
+----
+2	c
+
+query I
+SELECT count(*) FROM iceberg_metadata(my_datalake.default.test_partitioned)
+WHERE content = 'POSITION_DELETES'
+----
+0
+
+statement ok
+DROP TABLE my_datalake.default.test_partitioned
+
+# Dropping a partition whose delete file was written earlier in the same transaction: the drop
+# invalidates a transaction-local delete file rather than a committed one.
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.test_partitioned;
+
+statement ok
+CREATE TABLE my_datalake.default.test_partitioned (id INT, val VARCHAR) PARTITIONED BY (id);
+
+statement ok
+INSERT INTO my_datalake.default.test_partitioned VALUES (1, 'a'), (1, 'b'), (2, 'c');
+
+statement ok
+BEGIN
+
+query I
+DELETE FROM my_datalake.default.test_partitioned WHERE id = 1 AND val = 'a'
+----
+1
+
+query II
+SELECT id, val FROM my_datalake.default.test_partitioned ORDER BY id
+----
+1	b
+2	c
+
+# Only 'b' is still live in the partition, so that is what the drop reports.
+query I
+DELETE FROM my_datalake.default.test_partitioned WHERE id = 1
+----
+1
+
+query II
+SELECT id, val FROM my_datalake.default.test_partitioned ORDER BY id
+----
+2	c
+
+statement ok
+COMMIT
+
+query II
+SELECT id, val FROM my_datalake.default.test_partitioned ORDER BY id
+----
+2	c
+
+statement ok
+DROP TABLE my_datalake.default.test_partitioned

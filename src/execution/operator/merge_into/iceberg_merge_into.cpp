@@ -213,7 +213,7 @@ static unique_ptr<MergeIntoOperator> IcebergPlanMergeIntoAction(IcebergCatalog &
 			delete_op.expressions.push_back(std::move(ref));
 		}
 		delete_op.bound_constraints = std::move(bound_constraints);
-		result->op = catalog.PlanDelete(context, planner, delete_op, child_plan);
+		result->op = catalog.PlanDeleteInternal(context, planner, delete_op, child_plan);
 		break;
 	}
 	case MergeActionType::MERGE_INSERT: {

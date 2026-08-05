@@ -59,6 +59,7 @@
 				"test/sql/local/catalog_test_config_setup/catalog_agnostic/insert/partitions/bucket/test_bucket_timestamp_ns.test",
 				"test/sql/local/catalog_test_config_setup/catalog_agnostic/delete/partitions/delete_truncate_partitions_v3.test",
 				"test/sql/local/catalog_test_config_setup/catalog_agnostic/delete/partitions/delete_bucket_partitions_v3.test",
+				"test/sql/local/catalog_test_config_setup/catalog_agnostic/delete/delete_metadata_only_with_delete_files_v3.test",
 				"test/sql/local/catalog_test_config_setup/catalog_agnostic/update/partitions/update_bucket_tables_v3.test",
 				"test/sql/local/catalog_test_config_setup/catalog_agnostic/update/partitions/update_truncate_tables_v3.test",
 				"test/sql/local/catalog_test_config_setup/catalog_agnostic/create/test_create_default.test",
@@ -138,7 +139,8 @@
 				"test/sql/local/catalog_test_config_setup/catalog_agnostic/update/test_update_into_sorted_table.test",
 				"test/sql/local/catalog_test_config_setup/catalog_agnostic/update/partitions/test_update_into_partitioned_sorted_table.test",
 				"test/sql/local/catalog_test_config_setup/catalog_agnostic/transactions/test_snapshot_operation_in_transaction.test",
-				"test/sql/local/catalog_test_config_setup/catalog_agnostic/delete/test_snapshot_summary_delete_metrics.test"
+				"test/sql/local/catalog_test_config_setup/catalog_agnostic/delete/test_snapshot_summary_delete_metrics.test",
+				"test/sql/local/catalog_test_config_setup/catalog_agnostic/delete/delete_metadata_only_snapshot_metrics.test"
 			]
 		},
 		{

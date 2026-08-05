@@ -186,19 +186,23 @@ void IcebergTransactionData::AddSnapshot(IcebergSnapshotOperationType operation,
 		                              static_cast<uint8_t>(operation));
 	};
 
-	auto temp_sequence_number = table_metadata.last_sequence_number + alters.size() + 1;
-
-	auto &fs = FileSystem::GetFileSystem(context);
-	auto manifest_metadata = IcebergManifestMetadata::FromTableMetadata(table_metadata, manifest_content_type);
-	auto manifest_file = IcebergManifestListEntry::CreateFromEntries(
-	    fs, temp_sequence_number, table_metadata, manifest_metadata, std::move(data_files), next_row_id);
-
 	auto add_snapshot = make_uniq<IcebergAddSnapshot>(table_info, operation);
-	add_snapshot->AddManifestFile(std::move(manifest_file));
+
+	//! Skip the empty DELETE manifest that a metadata-only delete would otherwise write.
+	if (!data_files.empty()) {
+		auto temp_sequence_number = table_metadata.last_sequence_number + alters.size() + 1;
+
+		auto &fs = FileSystem::GetFileSystem(context);
+		auto manifest_metadata = IcebergManifestMetadata::FromTableMetadata(table_metadata, manifest_content_type);
+		auto manifest_file = IcebergManifestListEntry::CreateFromEntries(
+		    fs, temp_sequence_number, table_metadata, manifest_metadata, std::move(data_files), next_row_id);
+		add_snapshot->AddManifestFile(std::move(manifest_file));
+	}
 	// make sure we are still inserting into the current schema
 	if (table_metadata.current_snapshot_id) {
 		TableAddAssertCurrentSchemaId();
 	}
+	invalidated_files.Merge(altered_manifests);
 	add_snapshot->altered_manifests = std::move(altered_manifests);
 
 	alters.push_back(*add_snapshot);
@@ -236,6 +240,7 @@ void IcebergTransactionData::AddDeleteSnapshot(partitioned_manifest_entry_map_t 
 	if (table_metadata.current_snapshot_id) {
 		TableAddAssertCurrentSchemaId();
 	}
+	invalidated_files.Merge(altered_manifests);
 	add_snapshot->altered_manifests = std::move(altered_manifests);
 
 	alters.push_back(*add_snapshot);
@@ -265,6 +270,7 @@ void IcebergTransactionData::AddUpdateSnapshot(partitioned_manifest_entry_map_t 
 	// Add a manifest_file for the new insert data
 	add_snapshot->AddManifestFile(IcebergManifestListEntry::CreateFromEntries(
 	    fs, sequence_number, table_metadata, data_manifest_metadata, std::move(data_files), next_row_id));
+	invalidated_files.Merge(altered_manifests);
 	add_snapshot->altered_manifests = std::move(altered_manifests);
 
 	alters.push_back(*add_snapshot);

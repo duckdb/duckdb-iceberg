@@ -41,3 +41,42 @@ SELECT COUNT(*) FROM my_datalake.default.test
 ----
 1000
 
+# A partition dropped at the manifest level is only an in-memory invalidation until commit, so a
+# rollback must leave the data file in place.
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.test_partitioned;
+
+statement ok
+CREATE TABLE my_datalake.default.test_partitioned (id INT, val VARCHAR) PARTITIONED BY (id);
+
+statement ok
+INSERT INTO my_datalake.default.test_partitioned VALUES (1, 'a'), (1, 'b'), (2, 'c');
+
+statement ok
+BEGIN
+
+query I
+DELETE FROM my_datalake.default.test_partitioned WHERE id = 1
+----
+2
+
+statement ok
+ROLLBACK
+
+query II
+SELECT id, val FROM my_datalake.default.test_partitioned ORDER BY id, val
+----
+1	a
+1	b
+2	c
+
+query I
+SELECT count(*) FROM iceberg_metadata(my_datalake.default.test_partitioned)
+WHERE content = 'DATA' AND status != 'DELETED'
+----
+2
+
+statement ok
+DROP TABLE my_datalake.default.test_partitioned
+

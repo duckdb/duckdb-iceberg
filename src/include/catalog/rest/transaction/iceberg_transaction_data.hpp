@@ -84,6 +84,9 @@ public:
 	optional<int64_t> base_snapshot_id;
 	//! The 'referenced_data_file' -> 'data_file.file_path' of the currently active transaction-local deletes
 	case_insensitive_map_t<string> transactional_delete_files;
+	//! Union of the files invalidated by the alters staged so far. The commit materializes these as DELETED
+	//! manifest entries, but reads have to treat them as gone from the moment they are staged.
+	IcebergManifestDeletes invalidated_files;
 	//! Track the current row id for this transaction
 	int64_t next_row_id = 0;
 
