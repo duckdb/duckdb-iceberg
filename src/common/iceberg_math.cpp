@@ -8,10 +8,10 @@ namespace duckdb {
 
 namespace {
 
-template <class T>
-bool TryStepInteger(const Value &value, bool increment, Value &result) {
+template <class T, bool INCREMENT>
+bool TryStepInteger(const Value &value, Value &result) {
 	auto raw = value.GetValue<T>();
-	if (increment) {
+	if (INCREMENT) {
 		if (raw == NumericLimits<T>::Maximum()) {
 			return false;
 		}
@@ -26,16 +26,16 @@ bool TryStepInteger(const Value &value, bool increment, Value &result) {
 	return true;
 }
 
-template <class T>
-bool TryStepTimestamp(const Value &value, bool increment, Value &result) {
+template <class T, bool INCREMENT>
+bool TryStepTimestamp(const Value &value, Value &result) {
 	auto raw = value.GetValue<T>();
 	if (!raw.IsFinite()) {
 		return false;
 	}
-	if (increment ? raw.value == NumericLimits<int64_t>::Maximum() : raw.value == NumericLimits<int64_t>::Minimum()) {
+	if (INCREMENT ? raw.value == NumericLimits<int64_t>::Maximum() : raw.value == NumericLimits<int64_t>::Minimum()) {
 		return false;
 	}
-	T stepped(raw.value + (increment ? 1 : -1));
+	T stepped(raw.value + (INCREMENT ? 1 : -1));
 	if (!stepped.IsFinite()) {
 		return false;
 	}
@@ -43,12 +43,13 @@ bool TryStepTimestamp(const Value &value, bool increment, Value &result) {
 	return true;
 }
 
-bool TryStepDate(const Value &value, bool increment, Value &result) {
+template <bool INCREMENT>
+bool TryStepDate(const Value &value, Value &result) {
 	auto raw = value.GetValue<date_t>();
 	if (!Value::IsFinite(raw)) {
 		return false;
 	}
-	auto days = static_cast<int64_t>(raw.days) + (increment ? 1 : -1);
+	auto days = static_cast<int64_t>(raw.days) + (INCREMENT ? 1 : -1);
 	date_t stepped(static_cast<int32_t>(days));
 	if (static_cast<int64_t>(stepped.days) != days || !Value::IsFinite(stepped)) {
 		return false;
@@ -57,41 +58,42 @@ bool TryStepDate(const Value &value, bool increment, Value &result) {
 	return true;
 }
 
-bool TryStep(const Value &value, bool increment, Value &result) {
+template <bool INCREMENT>
+bool TryStep(const Value &value, Value &result) {
 	if (value.IsNull()) {
 		return false;
 	}
 	switch (value.type().id()) {
 	case LogicalTypeId::TINYINT:
-		return TryStepInteger<int8_t>(value, increment, result);
+		return TryStepInteger<int8_t, INCREMENT>(value, result);
 	case LogicalTypeId::SMALLINT:
-		return TryStepInteger<int16_t>(value, increment, result);
+		return TryStepInteger<int16_t, INCREMENT>(value, result);
 	case LogicalTypeId::INTEGER:
-		return TryStepInteger<int32_t>(value, increment, result);
+		return TryStepInteger<int32_t, INCREMENT>(value, result);
 	case LogicalTypeId::BIGINT:
-		return TryStepInteger<int64_t>(value, increment, result);
+		return TryStepInteger<int64_t, INCREMENT>(value, result);
 	case LogicalTypeId::HUGEINT:
-		return TryStepInteger<hugeint_t>(value, increment, result);
+		return TryStepInteger<hugeint_t, INCREMENT>(value, result);
 	case LogicalTypeId::UTINYINT:
-		return TryStepInteger<uint8_t>(value, increment, result);
+		return TryStepInteger<uint8_t, INCREMENT>(value, result);
 	case LogicalTypeId::USMALLINT:
-		return TryStepInteger<uint16_t>(value, increment, result);
+		return TryStepInteger<uint16_t, INCREMENT>(value, result);
 	case LogicalTypeId::UINTEGER:
-		return TryStepInteger<uint32_t>(value, increment, result);
+		return TryStepInteger<uint32_t, INCREMENT>(value, result);
 	case LogicalTypeId::UBIGINT:
-		return TryStepInteger<uint64_t>(value, increment, result);
+		return TryStepInteger<uint64_t, INCREMENT>(value, result);
 	case LogicalTypeId::UHUGEINT:
-		return TryStepInteger<uhugeint_t>(value, increment, result);
+		return TryStepInteger<uhugeint_t, INCREMENT>(value, result);
 	case LogicalTypeId::DATE:
-		return TryStepDate(value, increment, result);
+		return TryStepDate<INCREMENT>(value, result);
 	case LogicalTypeId::TIMESTAMP:
-		return TryStepTimestamp<timestamp_t>(value, increment, result);
+		return TryStepTimestamp<timestamp_t, INCREMENT>(value, result);
 	case LogicalTypeId::TIMESTAMP_TZ:
-		return TryStepTimestamp<timestamp_tz_t>(value, increment, result);
+		return TryStepTimestamp<timestamp_tz_t, INCREMENT>(value, result);
 	case LogicalTypeId::TIMESTAMP_NS:
-		return TryStepTimestamp<timestamp_ns_t>(value, increment, result);
+		return TryStepTimestamp<timestamp_ns_t, INCREMENT>(value, result);
 	case LogicalTypeId::TIMESTAMP_TZ_NS:
-		return TryStepTimestamp<timestamp_tz_ns_t>(value, increment, result);
+		return TryStepTimestamp<timestamp_tz_ns_t, INCREMENT>(value, result);
 	default:
 		return false;
 	}
@@ -100,11 +102,11 @@ bool TryStep(const Value &value, bool increment, Value &result) {
 } // namespace
 
 bool IcebergTryIncrement(const Value &value, Value &result) {
-	return TryStep(value, true, result);
+	return TryStep<true>(value, result);
 }
 
 bool IcebergTryDecrement(const Value &value, Value &result) {
-	return TryStep(value, false, result);
+	return TryStep<false>(value, result);
 }
 
 } // namespace duckdb

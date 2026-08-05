@@ -48,29 +48,30 @@ bool MappingCoversFieldId(const IcebergTableMetadata &metadata, int32_t field_id
 	return false;
 }
 
-//! The bounds and null counts a data file records for one column. False when the manifest carries nothing
+//! The bounds and null counts a data file records for one column. Empty when the manifest carries nothing
 //! usable, in which case no bound-based reasoning is possible for that column.
-bool TryGetColumnBoundStats(const IcebergTableMetadata &metadata, const IcebergDataFile &data_file,
-                            const IcebergColumnDefinition &column, IcebergPredicateStats &result) {
+optional<IcebergPredicateStats> TryGetColumnBoundStats(const IcebergTableMetadata &metadata,
+                                                       const IcebergDataFile &data_file,
+                                                       const IcebergColumnDefinition &column) {
 	if (data_file.content == IcebergManifestEntryContentType::POSITION_DELETES) {
-		return false;
+		return {};
 	}
 	if (column.type.id() == LogicalTypeId::VARIANT) {
 		//! Variant bounds are encoded blobs needing their own decoding, which only the inclusive path does.
-		return false;
+		return {};
 	}
 	if (!MappingCoversFieldId(metadata, column.id)) {
-		return false;
+		return {};
 	}
 	auto lower_bound_it = data_file.lower_bounds.find(column.id);
 	auto upper_bound_it = data_file.upper_bounds.find(column.id);
 	if (lower_bound_it == data_file.lower_bounds.end() || upper_bound_it == data_file.upper_bounds.end()) {
-		return false;
+		return {};
 	}
-	result = IcebergPredicateStats::DeserializeBounds(lower_bound_it->second, upper_bound_it->second, column.name,
-	                                                  column.type);
+	auto result = IcebergPredicateStats::DeserializeBounds(lower_bound_it->second, upper_bound_it->second, column.name,
+	                                                       column.type);
 	ApplyNullCounts(data_file, column.id, result);
-	return true;
+	return result;
 }
 
 } // namespace
@@ -278,53 +279,57 @@ bool IcebergFilePruner::FileFullyCoveredByFilter(const IcebergManifestFile &mani
 		partition_info_map.emplace(data_file.partition_info[i].field_id, i);
 	}
 
-	//! Every pushed-down filter must be provably satisfied by every row of the file, either by the partition
-	//! value or by the file's own bounds for that column; otherwise fall back to the row-level path.
+	//! Pass 1, over the partition fields: what the file's single partition value proves. One column can hold
+	//! several fields (e.g. bucket and truncate), so every field is tried and any one proving coverage settles it.
+	column_index_set covered;
+	for (auto &field : partition_spec.fields) {
+		auto source_it = source_to_column_id.find(field.source_id);
+		if (source_it == source_to_column_id.end()) {
+			continue;
+		}
+		auto &column_id = source_it->second;
+		if (covered.count(column_id)) {
+			continue;
+		}
+		auto filter = table_filters.TryGetFilterByColumnIndex(column_id);
+		if (!filter) {
+			continue;
+		}
+		auto partition_it = partition_info_map.find(field.partition_field_id);
+		if (partition_it == partition_info_map.end()) {
+			continue;
+		}
+		auto &partition_val = data_file.partition_info[partition_it->second];
+		if (partition_val.value.IsNull()) {
+			continue;
+		}
+
+		IcebergPredicateStats stats;
+		stats.lower_bound = partition_val.value;
+		stats.upper_bound = partition_val.value;
+		stats.has_null = false;
+		stats.has_not_null = true;
+
+		if (IcebergPredicate::AllRowsMatchBounds(context, *filter, stats, field.transform)) {
+			covered.insert(column_id);
+		}
+	}
+
+	//! Pass 2, over the filters: any filter the partition value could not settle falls back to the file's own
+	//! bounds, exact for that file. Driven by the filters, so a filter neither pass proves leaves the file behind.
 	for (auto &entry : table_filters) {
 		auto &filter_column_index = entry.first;
+		if (covered.count(filter_column_index)) {
+			continue;
+		}
 		auto &filter = *entry.second;
-
-		bool covered = false;
-		for (auto &field : partition_spec.fields) {
-			auto source_it = source_to_column_id.find(field.source_id);
-			if (source_it == source_to_column_id.end()) {
+		auto &source_column = IcebergTableSchema::GetFromColumnIndex(schema.columns, filter_column_index, 0);
+		if (auto stats = TryGetColumnBoundStats(metadata, data_file, source_column)) {
+			if (IcebergPredicate::AllRowsMatchBounds(context, filter, *stats, IcebergTransform::Identity())) {
 				continue;
-			}
-			if (source_it->second != filter_column_index) {
-				continue;
-			}
-			auto partition_it = partition_info_map.find(field.partition_field_id);
-			if (partition_it == partition_info_map.end()) {
-				continue;
-			}
-			auto &partition_val = data_file.partition_info[partition_it->second];
-			if (partition_val.value.IsNull()) {
-				continue;
-			}
-
-			IcebergPredicateStats stats;
-			stats.lower_bound = partition_val.value;
-			stats.upper_bound = partition_val.value;
-			stats.has_null = false;
-			stats.has_not_null = true;
-
-			if (IcebergPredicate::AllRowsMatchBounds(context, filter, stats, field.transform)) {
-				covered = true;
-				break;
 			}
 		}
-		if (!covered) {
-			//! Many files can share one partition value, so it cannot tell them apart. A file's own bounds can:
-			//! they are exact for that file, so one whose whole range sits inside the predicate is covered.
-			auto &source_column = IcebergTableSchema::GetFromColumnIndex(schema.columns, filter_column_index, 0);
-			IcebergPredicateStats stats;
-			if (TryGetColumnBoundStats(metadata, data_file, source_column, stats)) {
-				covered = IcebergPredicate::AllRowsMatchBounds(context, filter, stats, IcebergTransform::Identity());
-			}
-		}
-		if (!covered) {
-			return false;
-		}
+		return false;
 	}
 
 	DUCKDB_LOG(context, IcebergLogType,
