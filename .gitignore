@@ -24,3 +24,5 @@ __pycache__/
 
 tmp/
 .catalogs/
+.venv-spark4/
+.cache/
