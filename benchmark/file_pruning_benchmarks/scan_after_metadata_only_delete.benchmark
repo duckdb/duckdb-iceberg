@@ -1,0 +1,63 @@
+# name: benchmark/file_pruning_benchmarks/scan_after_metadata_only_delete.benchmark
+# description: Full scan of a table whose deleted partitions were dropped at the manifest level, so no delete file is left to apply
+# group: [file_pruning_benchmarks]
+
+name Scan after a metadata-only DELETE
+group file_pruning_benchmarks
+subgroup metadata_only_delete
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+# The read-side counterpart of the DELETE benchmarks. The load builds a 128-partition, format-version
+# 2 table and deletes the first 64 partitions with a predicate the plan proves fully covered, so those
+# data files are dropped from the manifest and no delete file is written for them. The timed scan then
+# reads 64 data files and applies nothing. Without the optimization the same DELETE leaves all 128 data
+# files in place, each of the first 64 carrying a positional delete file the scan has to open and
+# materialize before it can discard every row of that file.
+#
+# The DELETE lives in the load, so the timed query is a read and is idempotent: no require_reinit, and
+# this is the cheapest and most stable benchmark of the four.
+load
+SET enable_external_file_cache=false;
+CREATE SECRET (
+    TYPE S3,
+    KEY_ID 'admin',
+    SECRET 'password',
+    ENDPOINT '127.0.0.1:9000',
+    URL_STYLE 'path',
+    USE_SSL 0
+);
+ATTACH '' AS my_datalake (
+    TYPE ICEBERG,
+    CLIENT_ID 'admin',
+    CLIENT_SECRET 'password',
+    ENDPOINT 'http://127.0.0.1:8181',
+);
+CREATE SCHEMA if not exists my_datalake.default;
+DROP TABLE IF EXISTS my_datalake.default.scan_after_metadata_only_delete;
+CREATE TABLE my_datalake.default.scan_after_metadata_only_delete (
+    id BIGINT,
+    event VARCHAR,
+    event_date DATE
+) PARTITIONED BY (day(event_date)) WITH ('format-version' = '2');
+INSERT INTO my_datalake.default.scan_after_metadata_only_delete
+SELECT
+    range % 1000,
+    'e' || range::VARCHAR,
+    DATE '2024-01-01' + (range // 1000)::INTEGER
+FROM range(128000);
+DELETE FROM my_datalake.default.scan_after_metadata_only_delete
+WHERE event_date < DATE '2024-03-05';
+
+run
+SELECT count(*)
+FROM my_datalake.default.scan_after_metadata_only_delete;
+
+result I
+64000
