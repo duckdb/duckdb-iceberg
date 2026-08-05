@@ -394,7 +394,6 @@ IcebergSortOrder IcebergTableInformation::BuildSortOrder(const vector<OrderByNod
 		field.transform = transform;
 		field.direction = ascending ? "asc" : "desc";
 		if (order.null_order == OrderByNullType::ORDER_DEFAULT) {
-			//! Iceberg ties the default null order to the direction
 			field.null_order = ascending ? "nulls-first" : "nulls-last";
 		} else {
 			field.null_order = order.null_order == OrderByNullType::NULLS_FIRST ? "nulls-first" : "nulls-last";
