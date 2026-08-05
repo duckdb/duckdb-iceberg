@@ -386,14 +386,32 @@ IcebergSortOrder IcebergTableInformation::BuildSortOrder(const vector<OrderByNod
 		}
 		auto source_id = source_columns[0].get().id;
 
+		//! An unqualified sort key (no ASC/DESC) sorts ascending
+		auto ascending = order.type != OrderType::DESCENDING;
+
 		IcebergSortOrderField field;
 		field.source_id = source_id;
 		field.transform = transform;
-		field.direction = order.type == OrderType::ASCENDING ? "asc" : "desc";
-		field.null_order = order.null_order == OrderByNullType::NULLS_FIRST ? "nulls-first" : "nulls-last";
+		field.direction = ascending ? "asc" : "desc";
+		if (order.null_order == OrderByNullType::ORDER_DEFAULT) {
+			//! Iceberg ties the default null order to the direction
+			field.null_order = ascending ? "nulls-first" : "nulls-last";
+		} else {
+			field.null_order = order.null_order == OrderByNullType::NULLS_FIRST ? "nulls-first" : "nulls-last";
+		}
 		new_sort_order.fields.push_back(std::move(field));
 	}
 	return new_sort_order;
+}
+
+IcebergSortOrder IcebergTableInformation::BuildSortOrder(const vector<unique_ptr<ParsedExpression>> &sort_keys,
+                                                         const IcebergTableSchema &schema, int32_t sort_order_id) {
+	vector<OrderByNode> orders;
+	orders.reserve(sort_keys.size());
+	for (auto &key : sort_keys) {
+		orders.emplace_back(OrderType::ORDER_DEFAULT, OrderByNullType::ORDER_DEFAULT, key->Copy());
+	}
+	return BuildSortOrder(orders, schema, sort_order_id);
 }
 
 void IcebergTableInformation::SetPartitionedBy(IcebergTransaction &transaction,

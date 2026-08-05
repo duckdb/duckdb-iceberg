@@ -1,0 +1,241 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/alter/sorted_by/test_create_table_sorted_by.test
+# description: Test CREATE TABLE ... SORTED BY
+# group: [sorted_by]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+CREATE SCHEMA IF NOT EXISTS my_datalake.default;
+
+statement ok
+drop table if exists my_datalake.default.test_create_table_sorted_by;
+
+statement ok
+CREATE TABLE my_datalake.default.test_create_table_sorted_by (a int, b int)
+SORTED BY (a);
+
+# Sort order id 0 is reserved for the unsorted order, so a table created sorted starts at 1.
+# A bare sort key has no direction of its own and picks up the Iceberg defaults.
+query ITTT
+SELECT
+	metadata."default-sort-order-id",
+	sort_order.fields[1].transform,
+	sort_order.fields[1].direction,
+	sort_order.fields[1]."null-order"
+FROM iceberg_load_table_response(my_datalake.default.test_create_table_sorted_by),
+unnest(metadata."sort-orders"::VARIANT[]) AS t(sort_order)
+WHERE try_cast(sort_order."order-id" AS INTEGER) = metadata."default-sort-order-id";
+----
+1	identity	asc	nulls-first
+
+statement ok
+insert into my_datalake.default.test_create_table_sorted_by values (4, 40), (2, 20), (3, 30), (1, 10);
+
+statement ok
+set variable file_path = (
+	select file_path
+	from iceberg_metadata(my_datalake.default.test_create_table_sorted_by)
+	limit 1
+);
+
+# Rows are written in sort order
+query II
+select a, b
+from my_datalake.default.test_create_table_sorted_by
+where filename = getvariable('file_path')
+order by file_row_number;
+----
+1	10
+2	20
+3	30
+4	40
+
+query II
+select * from my_datalake.default.test_create_table_sorted_by order by all;
+----
+1	10
+2	20
+3	30
+4	40
+
+# The sort order can still be replaced afterwards, which starts a new sort order id
+statement ok
+ALTER TABLE my_datalake.default.test_create_table_sorted_by SET SORTED BY (b DESC NULLS LAST);
+
+query ITTT
+SELECT
+	metadata."default-sort-order-id",
+	sort_order.fields[1].transform,
+	sort_order.fields[1].direction,
+	sort_order.fields[1]."null-order"
+FROM iceberg_load_table_response(my_datalake.default.test_create_table_sorted_by),
+unnest(metadata."sort-orders"::VARIANT[]) AS t(sort_order)
+WHERE try_cast(sort_order."order-id" AS INTEGER) = metadata."default-sort-order-id";
+----
+2	identity	desc	nulls-last
+
+statement ok
+drop table if exists my_datalake.default.test_create_table_sorted_by;
+
+# Multiple sort keys, one of them behind a transform
+
+statement ok
+drop table if exists my_datalake.default.test_create_table_sorted_by_multi;
+
+statement ok
+CREATE TABLE my_datalake.default.test_create_table_sorted_by_multi (id int, ts TIMESTAMP)
+SORTED BY (year(ts), id);
+
+query TT
+SELECT
+	sort_order.fields[1].transform,
+	sort_order.fields[2].transform
+FROM iceberg_load_table_response(my_datalake.default.test_create_table_sorted_by_multi),
+unnest(metadata."sort-orders"::VARIANT[]) AS t(sort_order)
+WHERE try_cast(sort_order."order-id" AS INTEGER) = metadata."default-sort-order-id";
+----
+year	identity
+
+statement ok
+insert into my_datalake.default.test_create_table_sorted_by_multi values
+	(2, '2022-01-01'::TIMESTAMP),
+	(1, '2022-06-06'::TIMESTAMP),
+	(3, '2020-03-03'::TIMESTAMP);
+
+statement ok
+set variable file_path = (
+	select file_path
+	from iceberg_metadata(my_datalake.default.test_create_table_sorted_by_multi)
+	limit 1
+);
+
+query IT
+select id, ts
+from my_datalake.default.test_create_table_sorted_by_multi
+where filename = getvariable('file_path')
+order by file_row_number;
+----
+3	2020-03-03 00:00:00
+1	2022-06-06 00:00:00
+2	2022-01-01 00:00:00
+
+statement ok
+drop table if exists my_datalake.default.test_create_table_sorted_by_multi;
+
+# CREATE TABLE AS ... SORTED BY
+
+statement ok
+drop table if exists my_datalake.default.test_ctas_sorted_by;
+
+statement ok
+CREATE TABLE my_datalake.default.test_ctas_sorted_by SORTED BY (a) AS (FROM values
+(3, 30),
+(1, 10),
+(2, 20) t(a, b));
+
+query ITTT
+SELECT
+	metadata."default-sort-order-id",
+	sort_order.fields[1].transform,
+	sort_order.fields[1].direction,
+	sort_order.fields[1]."null-order"
+FROM iceberg_load_table_response(my_datalake.default.test_ctas_sorted_by),
+unnest(metadata."sort-orders"::VARIANT[]) AS t(sort_order)
+WHERE try_cast(sort_order."order-id" AS INTEGER) = metadata."default-sort-order-id";
+----
+1	identity	asc	nulls-first
+
+statement ok
+set variable file_path = (
+	select file_path
+	from iceberg_metadata(my_datalake.default.test_ctas_sorted_by)
+	where manifest_content = 'DATA'
+	and status = 'ADDED'
+	limit 1
+);
+
+query II
+select a, b
+from my_datalake.default.test_ctas_sorted_by
+where filename = getvariable('file_path')
+order by file_row_number;
+----
+1	10
+2	20
+3	30
+
+statement ok
+drop table if exists my_datalake.default.test_ctas_sorted_by;
+
+# PARTITIONED BY and SORTED BY combined
+
+statement ok
+drop table if exists my_datalake.default.test_create_table_partitioned_and_sorted;
+
+statement ok
+CREATE TABLE my_datalake.default.test_create_table_partitioned_and_sorted (part int, a int)
+PARTITIONED BY (part) SORTED BY (a);
+
+query II
+SELECT
+	metadata."default-spec-id",
+	metadata."default-sort-order-id"
+FROM iceberg_load_table_response(my_datalake.default.test_create_table_partitioned_and_sorted);
+----
+0	1
+
+statement ok
+insert into my_datalake.default.test_create_table_partitioned_and_sorted values
+	(1, 30), (1, 10), (1, 20), (2, 5), (2, 1);
+
+statement ok
+set variable file_path = (
+	select file_path
+	from iceberg_metadata(my_datalake.default.test_create_table_partitioned_and_sorted)
+	where manifest_content = 'DATA'
+	and status = 'ADDED'
+	and file_path like '%part=1%'
+	limit 1
+);
+
+# Rows are sorted within each partition file
+query II
+select part, a
+from my_datalake.default.test_create_table_partitioned_and_sorted
+where filename = getvariable('file_path')
+order by file_row_number;
+----
+1	10
+1	20
+1	30
+
+statement ok
+drop table if exists my_datalake.default.test_create_table_partitioned_and_sorted;
+
+# Errors
+
+statement ok
+drop table if exists my_datalake.default.test_create_table_sorted_by_errors;
+
+statement error
+CREATE TABLE my_datalake.default.test_create_table_sorted_by_errors (a int, b int)
+SORTED BY (missing_col);
+----
+<REGEX>:.*No column by the name \'missing_col\' exists in the current schema.*
+
+statement error
+CREATE TABLE my_datalake.default.test_create_table_sorted_by_errors (a int, b int)
+SORTED BY (invalid(a));
+----
+<REGEX>:.*Unrecognized transform.*

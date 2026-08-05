@@ -240,9 +240,14 @@ IcebergTableInformation &IcebergTableSet::CreateNewEntry(ClientContext &context,
 
 	auto initial_partition_spec =
 	    IcebergTableInformation::BuildPartitionSpec(info.partition_keys, *new_schema, 0, 1000);
+	//! Sort order id 0 is reserved for the unsorted order, so a table created with SORTED BY starts at 1
+	auto initial_sort_order_id = info.sort_keys.empty() ? UNSORTED_SORT_ORDER_ID : INITIAL_SORT_ORDER_ID;
+	auto initial_sort_order =
+	    IcebergTableInformation::BuildSortOrder(info.sort_keys, *new_schema, initial_sort_order_id);
 	IcebergCreateTableRequest create_table_request(info.GetTableName().GetIdentifierName(), new_schema,
-	                                               std::move(initial_partition_spec), iceberg_version.GetIndex(),
-	                                               bootstrap_metadata.table_properties, bootstrap_metadata.location);
+	                                               std::move(initial_partition_spec), std::move(initial_sort_order),
+	                                               iceberg_version.GetIndex(), bootstrap_metadata.table_properties,
+	                                               bootstrap_metadata.location);
 
 	// Immediately create the table with stage_create = true to get metadata & data location(s)
 	// transaction commit will either commit with data (OR) create the table with stage_create = false
