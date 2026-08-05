@@ -9,6 +9,72 @@
 
 namespace duckdb {
 
+namespace {
+
+//! How many of a column's values in a data file are NULL, from the counts its manifest entry carries. An absent
+//! null count tells us nothing, so assume both kinds of row are present.
+void ApplyNullCounts(const IcebergDataFile &data_file, int32_t column_id, IcebergPredicateStats &stats) {
+	optional<int64_t> value_count;
+	optional<int64_t> null_count;
+	auto value_counts_it = data_file.value_counts.find(column_id);
+	if (value_counts_it != data_file.value_counts.end()) {
+		value_count = value_counts_it->second;
+	}
+	auto null_counts_it = data_file.null_value_counts.find(column_id);
+	if (null_counts_it != data_file.null_value_counts.end()) {
+		null_count = null_counts_it->second;
+	}
+
+	if (null_count) {
+		stats.has_null = *null_count > 0;
+		stats.has_not_null = value_count ? *value_count - *null_count > 0 : true;
+	} else {
+		stats.has_null = true;
+		stats.has_not_null = value_count ? *value_count > 0 : true;
+	}
+}
+
+//! Whether a name-mapped table records this field id at all. Without it the id in a data file cannot be trusted
+//! to mean this column.
+bool MappingCoversFieldId(const IcebergTableMetadata &metadata, int32_t field_id) {
+	if (metadata.mappings.empty()) {
+		return true;
+	}
+	for (auto &mapping : metadata.mappings) {
+		if (mapping.field_id == field_id) {
+			return true;
+		}
+	}
+	return false;
+}
+
+//! The bounds and null counts a data file records for one column. False when the manifest carries nothing
+//! usable, in which case no bound-based reasoning is possible for that column.
+bool TryGetColumnBoundStats(const IcebergTableMetadata &metadata, const IcebergDataFile &data_file,
+                            const IcebergColumnDefinition &column, IcebergPredicateStats &result) {
+	if (data_file.content == IcebergManifestEntryContentType::POSITION_DELETES) {
+		return false;
+	}
+	if (column.type.id() == LogicalTypeId::VARIANT) {
+		//! Variant bounds are encoded blobs needing their own decoding, which only the inclusive path does.
+		return false;
+	}
+	if (!MappingCoversFieldId(metadata, column.id)) {
+		return false;
+	}
+	auto lower_bound_it = data_file.lower_bounds.find(column.id);
+	auto upper_bound_it = data_file.upper_bounds.find(column.id);
+	if (lower_bound_it == data_file.lower_bounds.end() || upper_bound_it == data_file.upper_bounds.end()) {
+		return false;
+	}
+	result = IcebergPredicateStats::DeserializeBounds(lower_bound_it->second, upper_bound_it->second, column.name,
+	                                                  column.type);
+	ApplyNullCounts(data_file, column.id, result);
+	return true;
+}
+
+} // namespace
+
 bool IcebergFilePruner::FilePartitionMatchesFilter(const IcebergDataFile &data_file,
                                                    const IcebergManifestFile &manifest_file) const {
 	if (data_file.partition_info.empty()) {
@@ -136,24 +202,7 @@ bool IcebergFilePruner::FileMatchesFilter(const IcebergManifestFile &manifest_fi
 			stats = IcebergPredicateStats::DeserializeBounds(lower_bound, upper_bound, column.name, column.type);
 		}
 
-		optional<int64_t> value_count;
-		optional<int64_t> null_count;
-		auto value_counts_it = data_file.value_counts.find(column_id);
-		if (value_counts_it != data_file.value_counts.end()) {
-			value_count = value_counts_it->second;
-		}
-		auto null_counts_it = data_file.null_value_counts.find(column_id);
-		if (null_counts_it != data_file.null_value_counts.end()) {
-			null_count = null_counts_it->second;
-		}
-
-		if (null_count) {
-			stats.has_null = *null_count > 0;
-			stats.has_not_null = value_count ? *value_count - *null_count > 0 : true;
-		} else {
-			stats.has_null = true;
-			stats.has_not_null = value_count ? *value_count > 0 : true;
-		}
+		ApplyNullCounts(data_file, column_id, stats);
 
 		auto nan_counts_it = data_file.nan_value_counts.find(column_id);
 		stats.has_nan = nan_counts_it == data_file.nan_value_counts.end() || nan_counts_it->second > 0;
@@ -168,6 +217,120 @@ bool IcebergFilePruner::FileMatchesFilter(const IcebergManifestFile &manifest_fi
 			return false;
 		}
 	}
+	return true;
+}
+
+bool IcebergFilePruner::PartitionSpecHasFieldForEveryFilterColumn(int32_t partition_spec_id) const {
+	if (!table_filters.HasFilters()) {
+		return false;
+	}
+	auto partition_spec_it = metadata.partition_specs.find(partition_spec_id);
+	if (partition_spec_it == metadata.partition_specs.end()) {
+		return false;
+	}
+	auto &partition_spec = partition_spec_it->second;
+	if (partition_spec.IsUnpartitioned()) {
+		return false;
+	}
+
+	auto &source_to_column_id = schema.GetSourceIdMap();
+	for (auto &entry : table_filters) {
+		auto &filter_column_index = entry.first;
+
+		bool has_partition_field = false;
+		for (auto &field : partition_spec.fields) {
+			auto source_it = source_to_column_id.find(field.source_id);
+			if (source_it == source_to_column_id.end()) {
+				continue;
+			}
+			if (source_it->second == filter_column_index) {
+				has_partition_field = true;
+				break;
+			}
+		}
+		if (!has_partition_field) {
+			return false;
+		}
+	}
+	return true;
+}
+
+bool IcebergFilePruner::FileFullyCoveredByFilter(const IcebergManifestFile &manifest_file,
+                                                 const IcebergManifestEntry &manifest_entry) const {
+	if (!table_filters.HasFilters()) {
+		return false;
+	}
+	auto &data_file = manifest_entry.data_file;
+
+	auto partition_spec_it = metadata.partition_specs.find(manifest_file.partition_spec_id);
+	if (partition_spec_it == metadata.partition_specs.end()) {
+		return false;
+	}
+	auto &partition_spec = partition_spec_it->second;
+	if (partition_spec.IsUnpartitioned()) {
+		return false;
+	}
+
+	auto &source_to_column_id = schema.GetSourceIdMap();
+
+	unordered_map<uint64_t, idx_t> partition_info_map;
+	for (idx_t i = 0; i < data_file.partition_info.size(); i++) {
+		partition_info_map.emplace(data_file.partition_info[i].field_id, i);
+	}
+
+	//! Every pushed-down filter must be provably satisfied by every row of the file, either by the partition
+	//! value or by the file's own bounds for that column; otherwise fall back to the row-level path.
+	for (auto &entry : table_filters) {
+		auto &filter_column_index = entry.first;
+		auto &filter = *entry.second;
+
+		bool covered = false;
+		for (auto &field : partition_spec.fields) {
+			auto source_it = source_to_column_id.find(field.source_id);
+			if (source_it == source_to_column_id.end()) {
+				continue;
+			}
+			if (source_it->second != filter_column_index) {
+				continue;
+			}
+			auto partition_it = partition_info_map.find(field.partition_field_id);
+			if (partition_it == partition_info_map.end()) {
+				continue;
+			}
+			auto &partition_val = data_file.partition_info[partition_it->second];
+			if (partition_val.value.IsNull()) {
+				continue;
+			}
+
+			IcebergPredicateStats stats;
+			stats.lower_bound = partition_val.value;
+			stats.upper_bound = partition_val.value;
+			stats.has_null = false;
+			stats.has_not_null = true;
+
+			if (IcebergPredicate::AllRowsMatchBounds(context, filter, stats, field.transform)) {
+				covered = true;
+				break;
+			}
+		}
+		if (!covered) {
+			//! Many files can share one partition value, so it cannot tell them apart. A file's own bounds can:
+			//! they are exact for that file, so one whose whole range sits inside the predicate is covered.
+			auto &source_column = IcebergTableSchema::GetFromColumnIndex(schema.columns, filter_column_index, 0);
+			IcebergPredicateStats stats;
+			if (TryGetColumnBoundStats(metadata, data_file, source_column, stats)) {
+				covered = IcebergPredicate::AllRowsMatchBounds(context, filter, stats, IcebergTransform::Identity());
+			}
+		}
+		if (!covered) {
+			return false;
+		}
+	}
+
+	DUCKDB_LOG(context, IcebergLogType,
+	           "Iceberg metadata-only DELETE, dropping 'data_file': '%s' with %lld records, every row matches the "
+	           "filters",
+	           data_file.file_path, data_file.record_count);
 	return true;
 }
 
