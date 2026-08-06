@@ -499,6 +499,11 @@ static void AddHTTPSecretsToOptions(SecretEntry &http_secret_entry, case_insensi
 }
 
 bool IcebergTable::RegisterRemoteSigning() const {
+	//! Catalogs advertise remote signing whenever their storage profile supports it, so honoring it has to
+	//! stay opt-in: an attach that manages its own credentials must keep reaching storage directly
+	if (catalog.attach_options.access_mode != IRCAccessDelegationMode::REMOTE_SIGNING) {
+		return false;
+	}
 	if (!catalog.remote_signing) {
 		return false;
 	}
@@ -520,16 +525,15 @@ bool IcebergTable::RegisterRemoteSigning() const {
 }
 
 void IcebergTable::LoadCredentials(ClientContext &context) const {
-	if (RegisterRemoteSigning()) {
+	if (catalog.attach_options.access_mode == IRCAccessDelegationMode::REMOTE_SIGNING) {
+		if (!RegisterRemoteSigning() && IcebergRemoteSigningConfig::IsSupportedLocation(table_metadata.GetLocation())) {
+			throw InvalidConfigurationException(
+			    "'%s' is attached with access_delegation_mode 'remote_signing', but the catalog returned no remote "
+			    "signing information for table '%s'. Remote signing has to be enabled for the storage profile the "
+			    "table lives in.",
+			    catalog.GetName().GetIdentifierName(), name);
+		}
 		return;
-	}
-	if (catalog.attach_options.access_mode == IRCAccessDelegationMode::REMOTE_SIGNING &&
-	    IcebergRemoteSigningConfig::IsSupportedLocation(table_metadata.GetLocation())) {
-		throw InvalidConfigurationException(
-		    "'%s' is attached with access_delegation_mode 'remote_signing', but the catalog returned no remote "
-		    "signing information for table '%s'. Remote signing has to be enabled for the storage profile the "
-		    "table lives in.",
-		    catalog.GetName().GetIdentifierName(), name);
 	}
 	if (catalog.attach_options.access_mode != IRCAccessDelegationMode::VENDED_CREDENTIALS) {
 		// assume secret already exists
