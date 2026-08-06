@@ -47,6 +47,10 @@ public:
 	                                               idx_t base_partition_field_id);
 	static IcebergSortOrder BuildSortOrder(const vector<OrderByNode> &orders, const IcebergTableSchema &schema,
 	                                       int32_t sort_order_id);
+	//! Build an IcebergSortOrder from bare CREATE TABLE ... SORTED BY expressions, which carry no
+	//! direction/null-order of their own and so use the Iceberg defaults (ascending, nulls first).
+	static IcebergSortOrder BuildSortOrder(const vector<unique_ptr<ParsedExpression>> &sort_keys,
+	                                       const IcebergTableSchema &schema, int32_t sort_order_id);
 	IRCAPITableCredentials GetVendedCredentials(ClientContext &context) const;
 	IRCAPITableCredentials
 	GetVendedCredentials(ClientContext &context,
