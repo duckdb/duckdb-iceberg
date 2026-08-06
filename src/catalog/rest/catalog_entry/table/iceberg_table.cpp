@@ -498,7 +498,29 @@ static void AddHTTPSecretsToOptions(SecretEntry &http_secret_entry, case_insensi
 	                            : http_kv_secret.TryGetValue("verify_ssl").DefaultCastAs(LogicalType::BOOLEAN);
 }
 
+bool IcebergTable::RegisterRemoteSigning() const {
+	if (!catalog.remote_signing) {
+		return false;
+	}
+	IcebergRemoteSigningTarget target;
+	if (!IcebergRemoteSigningConfig::TryParse(config, catalog.uri, catalog.GetName().GetIdentifierName(), target)) {
+		return false;
+	}
+	auto location = table_metadata.GetLocation();
+	if (!location.empty()) {
+		catalog.remote_signing->RegisterTarget(location, target);
+	}
+	auto data_path = table_metadata.table_properties.find("write.data.path");
+	if (data_path != table_metadata.table_properties.end() && !data_path->second.empty()) {
+		catalog.remote_signing->RegisterTarget(data_path->second, target);
+	}
+	return true;
+}
+
 void IcebergTable::LoadCredentials(ClientContext &context) const {
+	if (RegisterRemoteSigning()) {
+		return;
+	}
 	if (catalog.attach_options.access_mode != IRCAccessDelegationMode::VENDED_CREDENTIALS) {
 		// assume secret already exists
 		return;
@@ -507,6 +529,9 @@ void IcebergTable::LoadCredentials(ClientContext &context) const {
 }
 
 void IcebergTable::LoadCredentials(ClientContext &context, IRCAPITableCredentials table_credentials) const {
+	if (RegisterRemoteSigning()) {
+		return;
+	}
 	auto &secret_manager = SecretManager::Get(context);
 
 	auto &transaction = IcebergTransaction::Get(context, catalog);

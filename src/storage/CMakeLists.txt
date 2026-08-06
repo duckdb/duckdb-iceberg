@@ -1,3 +1,4 @@
+add_subdirectory(remote_signing)
 add_subdirectory(statistics)
 
 set(ALL_OBJECT_FILES

@@ -1,0 +1,55 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_specifc/lakekeeper/test_remote_signing.test
+# group: [lakekeeper]
+
+require httpfs
+
+require avro
+
+require parquet
+
+require iceberg
+
+require-env CATALOG_TEST_CONFIG_SETUP lakekeeper
+
+# 'demo_remote_signing' is created with sts-enabled = false, so the catalog can only delegate
+# access through remote request signing. No S3 credentials exist in this process.
+statement ok
+attach 'demo_remote_signing' as remote_signing_catalog (
+	type ICEBERG,
+	ENDPOINT 'http://localhost:8181/catalog',
+	SECRET 'my_secret',
+	ACCESS_DELEGATION_MODE 'remote_signing'
+);
+
+query III
+select * from remote_signing_catalog.remote_signing.remote_signing_table order by id;
+----
+1	a-string	2.2
+2	another-string	3.3
+3	a-third-string	4.4
+
+query II
+select count(*), sum(id) from remote_signing_catalog.remote_signing.remote_signing_table;
+----
+3	6
+
+query I
+select strings from remote_signing_catalog.remote_signing.remote_signing_table where id = 2;
+----
+another-string
+
+query I
+select count(*) from duckdb_secrets() where type = 's3';
+----
+0
+
+# The metadata of the table lives on the same storage and is read through the signer as well
+query I
+select count(*) > 0 from iceberg_metadata(remote_signing_catalog.remote_signing.remote_signing_table);
+----
+true
+
+statement error
+insert into remote_signing_catalog.remote_signing.remote_signing_table values (4, 'a-fourth-string', 5.5);
+----
+<REGEX>:.*remote request signing.*

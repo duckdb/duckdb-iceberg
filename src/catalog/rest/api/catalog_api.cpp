@@ -197,9 +197,7 @@ static unique_ptr<HTTPResponse> GetTableMetadata(ClientContext &context, Iceberg
 	url_builder.AddPathComponent(IRCPathComponent::RegularComponent(table));
 
 	HTTPHeaders headers(*context.db);
-	if (catalog.attach_options.access_mode == IRCAccessDelegationMode::VENDED_CREDENTIALS) {
-		headers.Insert("X-Iceberg-Access-Delegation", "vended-credentials");
-	}
+	ICUtils::AddAccessDelegationHeader(headers, catalog.attach_options.access_mode);
 	return catalog.auth_handler->Request(RequestType::GET_REQUEST, context, url_builder, headers);
 }
 
@@ -215,9 +213,7 @@ static unique_ptr<HTTPResponse> LoadCredentials(ClientContext &context, IcebergC
 	url_builder.AddPathComponent(IRCPathComponent::RegularComponent("credentials"));
 
 	HTTPHeaders headers(*context.db);
-	if (catalog.attach_options.access_mode == IRCAccessDelegationMode::VENDED_CREDENTIALS) {
-		headers.Insert("X-Iceberg-Access-Delegation", "vended-credentials");
-	}
+	ICUtils::AddAccessDelegationHeader(headers, catalog.attach_options.access_mode);
 	return catalog.auth_handler->Request(RequestType::GET_REQUEST, context, url_builder, headers);
 }
 
@@ -281,9 +277,7 @@ IRCAPI::GetNamespace(ClientContext &context, IcebergCatalog &catalog, const Iceb
 	    IRCPathComponent::NamespaceComponent(schema.namespace_items, catalog.namespace_separator));
 
 	HTTPHeaders headers(*context.db);
-	if (catalog.attach_options.access_mode == IRCAccessDelegationMode::VENDED_CREDENTIALS) {
-		headers.Insert("X-Iceberg-Access-Delegation", "vended-credentials");
-	}
+	ICUtils::AddAccessDelegationHeader(headers, catalog.attach_options.access_mode);
 	auto result = catalog.auth_handler->Request(RequestType::GET_REQUEST, context, url_builder, headers);
 
 	if (result->status != HTTPStatusCode::OK_200) {
@@ -320,9 +314,7 @@ vector<rest_api_objects::TableIdentifier> IRCAPI::GetTables(ClientContext &conte
 		}
 
 		HTTPHeaders headers(*context.db);
-		if (catalog.attach_options.access_mode == IRCAccessDelegationMode::VENDED_CREDENTIALS) {
-			headers.Insert("X-Iceberg-Access-Delegation", "vended-credentials");
-		}
+		ICUtils::AddAccessDelegationHeader(headers, catalog.attach_options.access_mode);
 		auto response = catalog.auth_handler->Request(RequestType::GET_REQUEST, context, url_builder, headers);
 		if (!response->Success()) {
 			if (response->status == HTTPStatusCode::Forbidden_403 ||
@@ -591,9 +583,7 @@ rest_api_objects::LoadTableResult IRCAPI::CommitNewTable(ClientContext &context,
 		HTTPHeaders headers(*context.db);
 		headers.Insert("Content-Type", "application/json");
 		// if you are creating a table with stage create, you need vended credentials
-		if (catalog.attach_options.access_mode == IRCAccessDelegationMode::VENDED_CREDENTIALS) {
-			headers.Insert("X-Iceberg-Access-Delegation", "vended-credentials");
-		}
+		ICUtils::AddAccessDelegationHeader(headers, catalog.attach_options.access_mode);
 		LogPostBody(context, url_builder, create_table_json);
 		auto response =
 		    catalog.auth_handler->Request(RequestType::POST_REQUEST, context, url_builder, headers, create_table_json);
