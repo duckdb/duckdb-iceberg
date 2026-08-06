@@ -35,6 +35,10 @@ public:
 	idx_t file_offset = 0;
 	timestamp_t last_modified;
 	string etag;
+	//! Set for the files Iceberg asks to be downloaded in full (manifests and manifest lists), which are
+	//! read in many small sequential chunks that would otherwise each become a range request
+	bool fully_downloaded = false;
+	string body;
 };
 
 //! Reads Iceberg data below a table location whose REST catalog delegates storage access through
@@ -69,6 +73,11 @@ public:
 	bool FileExists(const string &filename, optional_ptr<FileOpener> opener) override;
 	bool DirectoryExists(const string &directory, optional_ptr<FileOpener> opener) override;
 	void CreateDirectory(const string &directory, optional_ptr<FileOpener> opener) override;
+	//! Nothing can be written through this file system, so there is never anything to clean up. Cleanup
+	//! runs while an error is already in flight, where throwing would hide the error that caused it.
+	void RemoveFile(const string &filename, optional_ptr<FileOpener> opener) override;
+	bool TryRemoveFile(const string &filename, optional_ptr<FileOpener> opener) override;
+	void RemoveFiles(const vector<string> &filenames, optional_ptr<FileOpener> opener) override;
 	void Seek(FileHandle &handle, idx_t location) override;
 	idx_t SeekPosition(FileHandle &handle) override;
 	bool CanSeek() override {
@@ -88,6 +97,9 @@ protected:
 	bool SupportsOpenFileExtended() const override {
 		return true;
 	}
+
+private:
+	void DownloadFully(IcebergRemoteSignedFileHandle &handle);
 
 private:
 	shared_ptr<IcebergRemoteSigningRegistry> registry;

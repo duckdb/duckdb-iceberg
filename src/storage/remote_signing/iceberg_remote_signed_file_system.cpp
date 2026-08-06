@@ -81,6 +81,20 @@ static void CheckResponse(optional_ptr<HTTPResponse> response, const string &pat
 	}
 }
 
+void IcebergRemoteSignedFileSystem::DownloadFully(IcebergRemoteSignedFileHandle &handle) {
+	auto response =
+	    RunSignedRequest(*registry, handle, RequestType::GET_REQUEST, HTTPHeaders(),
+	                     [](HTTPUtil &http_util, const string &url, HTTPHeaders &headers, HTTPParams &params) {
+		                     GetRequestInfo get_request(url, headers, params, nullptr, nullptr);
+		                     unique_ptr<HTTPClient> client;
+		                     return http_util.Request(get_request, client);
+	                     });
+	CheckResponse(response.get(), handle.path, "downloading");
+	handle.body = std::move(response->body);
+	handle.length = handle.body.size();
+	handle.fully_downloaded = true;
+}
+
 unique_ptr<FileHandle> IcebergRemoteSignedFileSystem::OpenFileExtended(const OpenFileInfo &file, FileOpenFlags flags,
                                                                        optional_ptr<FileOpener> opener) {
 	if (flags.OpenForWriting()) {
@@ -103,16 +117,21 @@ unique_ptr<FileHandle> IcebergRemoteSignedFileSystem::OpenFileExtended(const Ope
 	auto handle = make_uniq<IcebergRemoteSignedFileHandle>(*this, file, flags, std::move(target), std::move(http_url),
 	                                                       std::move(host), context->shared_from_this());
 
-	//! Iceberg records the size of the files it points at, which lets the HEAD request be skipped entirely
 	if (file.extended_info) {
 		auto &options = file.extended_info->options;
+		auto etag = options.find("etag");
+		if (etag != options.end()) {
+			handle->etag = StringValue::Get(etag->second);
+		}
+		auto force_full_download = options.find("force_full_download");
+		if (force_full_download != options.end() && force_full_download->second.GetValue<bool>()) {
+			DownloadFully(*handle);
+			return std::move(handle);
+		}
+		//! Iceberg records the size of the files it points at, which lets the HEAD request be skipped
 		auto file_size = options.find("file_size");
 		if (file_size != options.end()) {
 			handle->length = NumericCast<idx_t>(file_size->second.GetValue<uint64_t>());
-			auto etag = options.find("etag");
-			if (etag != options.end()) {
-				handle->etag = StringValue::Get(etag->second);
-			}
 			return std::move(handle);
 		}
 	}
@@ -157,6 +176,15 @@ void IcebergRemoteSignedFileSystem::Read(FileHandle &handle, void *buffer, int64
 	auto &signed_handle = handle.Cast<IcebergRemoteSignedFileHandle>();
 	auto buffer_out = static_cast<data_ptr_t>(buffer);
 	auto buffer_out_len = NumericCast<idx_t>(nr_bytes);
+
+	if (signed_handle.fully_downloaded) {
+		if (location > signed_handle.length || buffer_out_len > signed_handle.length - location) {
+			throw IOException("Cannot read %llu bytes at offset %llu from '%s', which is %llu bytes", buffer_out_len,
+			                  location, signed_handle.path, signed_handle.length);
+		}
+		memcpy(buffer_out, signed_handle.body.data() + location, buffer_out_len);
+		return;
+	}
 
 	HTTPHeaders range_header;
 	range_header.Insert("Range", StringUtil::Format("bytes=%llu-%llu", location, location + buffer_out_len - 1));
@@ -248,6 +276,16 @@ bool IcebergRemoteSignedFileSystem::DirectoryExists(const string &directory, opt
 }
 
 void IcebergRemoteSignedFileSystem::CreateDirectory(const string &directory, optional_ptr<FileOpener> opener) {
+}
+
+void IcebergRemoteSignedFileSystem::RemoveFile(const string &filename, optional_ptr<FileOpener> opener) {
+}
+
+bool IcebergRemoteSignedFileSystem::TryRemoveFile(const string &filename, optional_ptr<FileOpener> opener) {
+	return false;
+}
+
+void IcebergRemoteSignedFileSystem::RemoveFiles(const vector<string> &filenames, optional_ptr<FileOpener> opener) {
 }
 
 void IcebergRemoteSignedFileSystem::Seek(FileHandle &handle, idx_t location) {

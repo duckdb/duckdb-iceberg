@@ -57,10 +57,10 @@ string IcebergRemoteSigner::ToHttpUrl(const IcebergRemoteSigningTarget &target, 
 	const char *scheme = target.use_ssl ? "https://" : "http://";
 	if (target.path_style_access) {
 		host = target.host;
-		return StringUtil::Format("%s%s/%s/%s", scheme, host, bucket, encoded_key);
+		return StringUtil::Format("%s%s%s/%s/%s", scheme, host, target.path_prefix, bucket, encoded_key);
 	}
 	host = bucket + "." + target.host;
-	return StringUtil::Format("%s%s/%s", scheme, host, encoded_key);
+	return StringUtil::Format("%s%s%s/%s", scheme, host, target.path_prefix, encoded_key);
 }
 
 static string BuildSignRequestBody(const IcebergRemoteSigningTarget &target, const char *method, const string &url,
@@ -123,7 +123,7 @@ IcebergSignedRequest IcebergRemoteSigner::Sign(ClientContext &context, IcebergRe
                                                const IcebergRemoteSigningTarget &target, RequestType request_type,
                                                const string &http_url, const string &host) {
 	auto method = ToMethodString(request_type);
-	auto cache_key = StringUtil::Format("%s %s", method, http_url);
+	auto cache_key = StringUtil::Format("%s %s %s", target.signer_url, method, http_url);
 
 	IcebergSignedRequest cached;
 	if (registry.TryGetSignature(cache_key, cached)) {

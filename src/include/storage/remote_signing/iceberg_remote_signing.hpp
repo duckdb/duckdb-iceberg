@@ -8,6 +8,7 @@
 
 #pragma once
 
+#include "duckdb/common/atomic.hpp"
 #include "duckdb/common/case_insensitive_map.hpp"
 #include "duckdb/common/http_util.hpp"
 #include "duckdb/common/mutex.hpp"
@@ -25,6 +26,8 @@ struct IcebergRemoteSigningTarget {
 	string region;
 	//! Host (and optional port) of the S3 endpoint, without a scheme
 	string host;
+	//! Path the S3 endpoint is served under, empty for the common case of a bare host
+	string path_prefix;
 	bool use_ssl = true;
 	bool path_style_access = false;
 };
@@ -33,6 +36,8 @@ struct IcebergRemoteSigningConfig {
 	//! The endpoint used when the catalog does not report one, as defined by the Iceberg REST spec
 	static constexpr const char *DEFAULT_SIGNER_ENDPOINT = "v1/aws/s3/sign";
 
+	//! Whether remote signing can be used for this storage location
+	static bool IsSupportedLocation(const string &location);
 	//! Read the remote signing properties out of the 'config' of a LoadTableResult
 	static bool TryParse(const case_insensitive_map_t<string> &config, const string &catalog_uri,
 	                     const string &catalog_name, IcebergRemoteSigningTarget &result);
@@ -48,10 +53,16 @@ class IcebergRemoteSigningRegistry {
 public:
 	//! Signatures are reused for this long, matching the Iceberg S3V4RestSignerClient cache
 	static constexpr int64_t SIGNATURE_CACHE_MS = 30000;
+	//! Expired signatures are swept once the cache grows past this many entries
+	static constexpr idx_t SIGNATURE_CACHE_SWEEP_SIZE = 1024;
 
 public:
 	void RegisterTarget(const string &location, IcebergRemoteSigningTarget target);
 	bool TryGetTarget(const string &path, IcebergRemoteSigningTarget &result);
+	//! Lock-free pre-check, so file systems that are never used stay off the file-open hot path
+	bool Empty() const {
+		return !has_targets;
+	}
 
 	bool TryGetSignature(const string &cache_key, IcebergSignedRequest &result);
 	void PutSignature(const string &cache_key, const IcebergSignedRequest &signature);
@@ -63,6 +74,7 @@ private:
 	};
 
 private:
+	atomic<bool> has_targets {false};
 	mutex lock;
 	unordered_map<string, IcebergRemoteSigningTarget> targets;
 	unordered_map<string, CachedSignature> signatures;

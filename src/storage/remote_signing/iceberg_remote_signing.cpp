@@ -17,14 +17,28 @@ static string GetConfigValue(const case_insensitive_map_t<string> &config, const
 	return string();
 }
 
+//! Mirrors RESTUtil.resolveEndpoint: an absolute endpoint replaces the signer uri instead of extending it
 static string ResolveSignerUrl(const string &uri, const string &endpoint) {
+	auto lower_endpoint = StringUtil::Lower(endpoint);
+	if (StringUtil::StartsWith(lower_endpoint, "http://") || StringUtil::StartsWith(lower_endpoint, "https://")) {
+		return endpoint;
+	}
 	auto base = uri;
 	StringUtil::RTrim(base, "/");
+	if (base.empty()) {
+		throw InvalidConfigurationException(
+		    "Iceberg remote signing is enabled for this table, but no signer uri could be resolved");
+	}
 	idx_t path_start = 0;
 	while (path_start < endpoint.size() && endpoint[path_start] == '/') {
 		path_start++;
 	}
 	return AddHttpHostIfMissing(base + "/" + endpoint.substr(path_start));
+}
+
+bool IcebergRemoteSigningConfig::IsSupportedLocation(const string &location) {
+	return StringUtil::StartsWith(location, "s3://") || StringUtil::StartsWith(location, "s3a://") ||
+	       StringUtil::StartsWith(location, "s3n://");
 }
 
 bool IcebergRemoteSigningConfig::TryParse(const case_insensitive_map_t<string> &config, const string &catalog_uri,
@@ -46,25 +60,29 @@ bool IcebergRemoteSigningConfig::TryParse(const case_insensitive_map_t<string> &
 	result.catalog_name = catalog_name;
 	result.signer_url = ResolveSignerUrl(signer_uri, signer_endpoint);
 	result.region = GetConfigValue(config, {"s3.region", "client.region", "region"});
+	if (result.region.empty()) {
+		throw InvalidConfigurationException("Iceberg remote signing is enabled for this table, but the catalog did "
+		                                    "not report the 's3.region' that requests have to be signed for");
+	}
 	result.path_style_access = StringUtil::CIEquals(GetConfigValue(config, {"s3.path-style-access"}), "true");
 
 	auto endpoint = GetConfigValue(config, {"s3.endpoint"});
 	if (endpoint.empty()) {
-		if (result.region.empty()) {
-			throw InvalidConfigurationException(
-			    "Iceberg remote signing is enabled for this table, but the catalog reported neither an "
-			    "'s3.endpoint' nor an 's3.region' to derive the S3 host from");
-		}
 		result.host = StringUtil::Format("s3.%s.amazonaws.com", result.region);
-		result.use_ssl = true;
-	} else {
-		auto lower_endpoint = StringUtil::Lower(endpoint);
-		if (StringUtil::StartsWith(lower_endpoint, "http://")) {
-			result.use_ssl = false;
-		}
-		result.host = StripScheme(endpoint);
-		StringUtil::RTrim(result.host, "/");
+		return true;
 	}
+
+	if (StringUtil::StartsWith(StringUtil::Lower(endpoint), "http://")) {
+		result.use_ssl = false;
+	}
+	auto authority = StripScheme(endpoint);
+	StringUtil::RTrim(authority, "/");
+	auto path_start = authority.find('/');
+	if (path_start != string::npos) {
+		result.path_prefix = authority.substr(path_start);
+		authority = authority.substr(0, path_start);
+	}
+	result.host = authority;
 	return true;
 }
 
@@ -75,9 +93,13 @@ void IcebergRemoteSigningRegistry::RegisterTarget(const string &location, Iceber
 	}
 	lock_guard<mutex> guard(lock);
 	targets[prefix] = std::move(target);
+	has_targets = true;
 }
 
 bool IcebergRemoteSigningRegistry::TryGetTarget(const string &path, IcebergRemoteSigningTarget &result) {
+	if (Empty()) {
+		return false;
+	}
 	lock_guard<mutex> guard(lock);
 	idx_t longest_match = 0;
 	bool found = false;
@@ -107,11 +129,19 @@ bool IcebergRemoteSigningRegistry::TryGetSignature(const string &cache_key, Iceb
 }
 
 void IcebergRemoteSigningRegistry::PutSignature(const string &cache_key, const IcebergSignedRequest &signature) {
+	auto now = Timestamp::GetCurrentTimestamp();
 	CachedSignature cached;
-	cached.expires_at =
-	    Timestamp::FromEpochMs(Timestamp::GetEpochMs(Timestamp::GetCurrentTimestamp()) + SIGNATURE_CACHE_MS);
+	cached.expires_at = Timestamp::FromEpochMs(Timestamp::GetEpochMs(now) + SIGNATURE_CACHE_MS);
 	cached.signature = signature;
+
 	lock_guard<mutex> guard(lock);
+	//! Every file gets its own entry and is rarely signed twice, so expired entries have to be swept
+	//! instead of being evicted on lookup
+	if (signatures.size() >= SIGNATURE_CACHE_SWEEP_SIZE) {
+		for (auto it = signatures.begin(); it != signatures.end();) {
+			it = now >= it->second.expires_at ? signatures.erase(it) : std::next(it);
+		}
+	}
 	signatures[cache_key] = std::move(cached);
 }
 
