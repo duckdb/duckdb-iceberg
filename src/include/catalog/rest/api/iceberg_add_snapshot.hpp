@@ -34,9 +34,6 @@ public:
 		return operation;
 	}
 
-public:
-	IcebergManifestDeletes altered_manifests;
-
 private:
 	vector<IcebergManifestListEntry> manifest_files;
 	int32_t schema_id;

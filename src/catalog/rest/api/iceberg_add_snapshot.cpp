@@ -91,6 +91,7 @@ void IcebergAddSnapshot::ConstructManifestList(IcebergManifestList &new_manifest
                                                IcebergSnapshotMetrics &snapshot_metrics) const {
 	//! Construct the manifest list
 	//! FIXME: RETRY_BLOCKER: no guarantee that no new deletes are introduced
+	auto &altered_manifests = commit_state.table_info.transaction_data->GetPendingDeletes(*this);
 	if (altered_manifests.IsEmpty()) {
 		for (auto &manifest_list_entry : commit_state.manifests) {
 			AddManifestListEntry(new_manifest_list, std::move(manifest_list_entry));

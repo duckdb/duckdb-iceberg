@@ -1,6 +1,7 @@
 #pragma once
 
 #include "duckdb/common/optional.hpp"
+#include "duckdb/common/reference_map.hpp"
 #include "duckdb/main/client_context.hpp"
 #include "duckdb/function/copy_function.hpp"
 
@@ -30,6 +31,8 @@ public:
 	bool RetryStateMatches(const IcebergTable &table_info) const;
 	//! Whether this transaction stages a DELETE snapshot; gates the commit-retry safety check.
 	bool ContainsDelete() const;
+	//! The manifest deletes staged by the statement this snapshot belongs to.
+	const IcebergManifestDeletes &GetPendingDeletes(const IcebergAddSnapshot &snapshot) const;
 
 	void AddSnapshot(IcebergSnapshotOperationType operation, vector<IcebergManifestEntry> &&data_files,
 	                 IcebergManifestDeletes &&altered_manifests);
@@ -78,6 +81,9 @@ public:
 
 	//! Every insert/update/delete creates an alter of the table data
 	vector<reference<IcebergAddSnapshot>> alters;
+	//! Manifest deletes staged by each alter, attributed to the snapshot of the statement that produced them.
+	//! Kept here rather than on the snapshot so every pending change of the transaction lives in one place.
+	reference_map_t<const IcebergAddSnapshot, IcebergManifestDeletes> pending_deletes;
 	//! Snapshot this transaction is based on (the tip when the manifest list was first cached).
 	//! Drives the delete commit-retry safety check.
 	optional<int64_t> base_snapshot_id;

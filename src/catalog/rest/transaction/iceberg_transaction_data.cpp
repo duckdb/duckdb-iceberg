@@ -138,6 +138,14 @@ bool IcebergTransactionData::ContainsDelete() const {
 	return false;
 }
 
+const IcebergManifestDeletes &IcebergTransactionData::GetPendingDeletes(const IcebergAddSnapshot &snapshot) const {
+	auto entry = pending_deletes.find(snapshot);
+	if (entry == pending_deletes.end()) {
+		throw InternalException("No pending deletes were staged for this snapshot");
+	}
+	return entry->second;
+}
+
 bool IcebergTransactionData::SupportsAppendRetry() const {
 	if (!requirements.empty() || pending_current_schema_id.has_value()) {
 		return false;
@@ -220,7 +228,7 @@ void IcebergTransactionData::AddSnapshot(IcebergSnapshotOperationType operation,
 	if (table_metadata.current_snapshot_id) {
 		TableAddAssertCurrentSchemaId();
 	}
-	add_snapshot->altered_manifests = std::move(altered_manifests);
+	pending_deletes.emplace(*add_snapshot, std::move(altered_manifests));
 
 	alters.push_back(*add_snapshot);
 	updates.push_back(std::move(add_snapshot));
@@ -257,7 +265,7 @@ void IcebergTransactionData::AddDeleteSnapshot(partitioned_manifest_entry_map_t 
 	if (table_metadata.current_snapshot_id) {
 		TableAddAssertCurrentSchemaId();
 	}
-	add_snapshot->altered_manifests = std::move(altered_manifests);
+	pending_deletes.emplace(*add_snapshot, std::move(altered_manifests));
 
 	alters.push_back(*add_snapshot);
 	updates.push_back(std::move(add_snapshot));
@@ -286,7 +294,7 @@ void IcebergTransactionData::AddUpdateSnapshot(partitioned_manifest_entry_map_t 
 	// Add a manifest_file for the new insert data
 	add_snapshot->AddManifestFile(IcebergManifestListEntry::CreateFromEntries(
 	    fs, sequence_number, table_metadata, data_manifest_metadata, std::move(data_files), next_row_id));
-	add_snapshot->altered_manifests = std::move(altered_manifests);
+	pending_deletes.emplace(*add_snapshot, std::move(altered_manifests));
 
 	alters.push_back(*add_snapshot);
 	updates.push_back(std::move(add_snapshot));
