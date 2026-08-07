@@ -365,6 +365,12 @@ IcebergTableMetadata IcebergTableMetadata::FromTableMetadata(const rest_api_obje
 			D_ASSERT(schema.object_1.schema_id);
 			res.schemas.emplace(*schema.object_1.schema_id, IcebergTableSchema::ParseSchema(schema));
 		}
+	} else if (res.iceberg_version == 1 && table_metadata.schema) {
+		auto schema = table_metadata.schema->Copy();
+		if (!schema.object_1.schema_id) {
+			schema.object_1.schema_id = 0;
+		}
+		res.schemas.emplace(*schema.object_1.schema_id, IcebergTableSchema::ParseSchema(schema));
 	}
 	if (table_metadata.snapshots) {
 		for (auto &snapshot : *table_metadata.snapshots) {
@@ -386,6 +392,13 @@ IcebergTableMetadata IcebergTableMetadata::FromTableMetadata(const rest_api_obje
 			D_ASSERT(spec.spec_id);
 			res.partition_specs.emplace(*spec.spec_id, IcebergPartitionSpec::ParseFromJson(spec));
 		}
+	} else if (res.iceberg_version == 1 && table_metadata.partition_spec) {
+		rest_api_objects::PartitionSpec spec;
+		spec.spec_id = 0;
+		for (auto &field : *table_metadata.partition_spec) {
+			spec.fields.emplace_back(field.Copy());
+		}
+		res.partition_specs.emplace(0, IcebergPartitionSpec::ParseFromJson(spec));
 	}
 	if (table_metadata.sort_orders) {
 		for (auto &sort_order : *table_metadata.sort_orders) {
@@ -393,12 +406,14 @@ IcebergTableMetadata IcebergTableMetadata::FromTableMetadata(const rest_api_obje
 		}
 	}
 	if (!table_metadata.current_schema_id) {
-		if (res.iceberg_version == 1) {
-			throw NotImplementedException("Reading of the V1 'schema' field is not currently supported");
+		if (res.iceberg_version == 1 && table_metadata.schema) {
+			res.current_schema_id = table_metadata.schema->object_1.schema_id.value_or(0);
+		} else {
+			throw InvalidConfigurationException("'current_schema_id' field is missing from the metadata.json file");
 		}
-		throw InvalidConfigurationException("'current_schema_id' field is missing from the metadata.json file");
+	} else {
+		res.current_schema_id = *table_metadata.current_schema_id;
 	}
-	res.current_schema_id = *table_metadata.current_schema_id;
 	if (table_metadata.next_row_id) {
 		res.next_row_id = *table_metadata.next_row_id;
 	}
@@ -414,8 +429,13 @@ IcebergTableMetadata IcebergTableMetadata::FromTableMetadata(const rest_api_obje
 		res.last_sequence_number = 0;
 	}
 
-	D_ASSERT(table_metadata.default_spec_id);
-	res.default_spec_id = *table_metadata.default_spec_id;
+	if (table_metadata.default_spec_id) {
+		res.default_spec_id = *table_metadata.default_spec_id;
+	} else if (res.iceberg_version == 1 && table_metadata.partition_spec) {
+		res.default_spec_id = 0;
+	} else {
+		throw InvalidConfigurationException("'default-spec-id' field is missing from the metadata.json file");
+	}
 	if (table_metadata.default_sort_order_id) {
 		res.default_sort_order_id = *table_metadata.default_sort_order_id;
 	}

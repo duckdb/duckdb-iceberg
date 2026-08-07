@@ -10,8 +10,8 @@
 #include "duckdb/common/exception/conversion_exception.hpp"
 
 #include "catalog/rest/catalog_entry/schema/iceberg_schema_entry.hpp"
-#include "catalog/rest/catalog_entry/table/iceberg_table_entry.hpp"
-#include "catalog/rest/catalog_entry/table/iceberg_table_information.hpp"
+#include "catalog/rest/catalog_entry/table/iceberg_table_schema_version.hpp"
+#include "catalog/rest/catalog_entry/table/iceberg_table.hpp"
 #include "catalog/rest/transaction/iceberg_transaction.hpp"
 #include "catalog/rest/api/catalog_api.hpp"
 #include "catalog/rest/api/catalog_utils.hpp"
@@ -22,8 +22,8 @@
 
 namespace duckdb {
 
-void LoadTableResultCache::EvictIfCurrent(const IcebergTableInformation &table) {
-	lock_guard<mutex> guard(lock);
+void LoadTableResultCache::EvictIfCurrent(const IcebergTable &table) {
+	annotated_lock_guard<annotated_mutex> guard(lock);
 	auto it = tables.find(table.GetTableKey());
 	if (it == tables.end()) {
 		return;
@@ -36,7 +36,7 @@ void LoadTableResultCache::EvictIfCurrent(const IcebergTableInformation &table) 
 
 IcebergCatalog::IcebergCatalog(AttachedDatabase &db_p, AccessMode access_mode,
                                unique_ptr<IcebergAuthorization> auth_handler, IcebergAttachOptions &attach_options_p,
-                               const string &default_schema)
+                               const Identifier &default_schema)
     : Catalog(db_p), access_mode(access_mode), auth_handler(std::move(auth_handler)), uri(attach_options_p.endpoint),
       version("v1"), attach_options(attach_options_p), default_schema(default_schema),
       warehouse(attach_options.warehouse), schemas(*this), table_request_cache(attach_options) {
@@ -63,7 +63,7 @@ optional_ptr<SchemaCatalogEntry> IcebergCatalog::LookupSchema(CatalogTransaction
 		if (default_schema.empty() && if_not_found == OnEntryNotFound::RETURN_NULL) {
 			return nullptr;
 		}
-		return GetSchema(transaction, Identifier(default_schema), if_not_found);
+		return GetSchema(transaction, default_schema, if_not_found);
 	}
 
 	auto &schema_name = schema_lookup.GetEntryName();

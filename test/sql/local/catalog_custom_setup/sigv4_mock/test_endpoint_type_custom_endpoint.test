@@ -1,0 +1,74 @@
+# name: test/sql/local/catalog_custom_setup/sigv4_mock/test_endpoint_type_custom_endpoint.test
+# description: test custom endpoints for known AWS catalog types
+# group: [sigv4_mock]
+
+# Requires: python3 scripts/sigv4_mock_server.py 19130
+require-env SIGV4_MOCK_SERVER_AVAILABLE
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+require aws
+
+set ignore_error_messages
+
+statement ok
+SET http_timeout=1;
+
+statement ok
+CREATE SECRET sigv4_secret (
+    TYPE S3,
+    KEY_ID 'test_key_id',
+    SECRET 'test_secret_key',
+    REGION 'us-east-1'
+);
+
+statement ok
+CALL enable_logging(level='debug');
+
+statement ok
+ATTACH ':' AS glue_catalog (
+    TYPE ICEBERG,
+    ENDPOINT_TYPE 'GLUE',
+    ENDPOINT 'http://127.0.0.1:19130',
+    SECRET 'sigv4_secret'
+);
+
+statement ok
+ATTACH 'arn:aws:s3tables:us-east-1:123456789012:bucket/test-bucket' AS s3tables_catalog (
+    TYPE ICEBERG,
+    ENDPOINT_TYPE 'S3_TABLES',
+    ENDPOINT 'http://127.0.0.1:19130',
+    SECRET 'sigv4_secret'
+);
+
+query I
+SELECT count(*) >= 2
+FROM duckdb_logs_parsed('HTTP')
+WHERE starts_with(request.url, 'http://127.0.0.1:19130/v1/config');
+----
+true
+
+query I
+SELECT bool_and(starts_with(request.headers['Authorization'], 'AWS4-HMAC-SHA256'))
+FROM duckdb_logs_parsed('HTTP')
+WHERE starts_with(request.url, 'http://127.0.0.1:19130/v1/config');
+----
+true
+
+statement ok
+DETACH glue_catalog;
+
+statement ok
+DETACH s3tables_catalog;
+
+statement ok
+CALL disable_logging();
+
+statement ok
+DROP SECRET sigv4_secret;

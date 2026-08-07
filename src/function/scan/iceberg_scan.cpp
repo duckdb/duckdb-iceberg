@@ -25,7 +25,7 @@
 #include "common/iceberg_utils.hpp"
 #include "planning/iceberg_multi_file_reader.hpp"
 #include "function/iceberg_functions.hpp"
-#include "catalog/rest/catalog_entry/table/iceberg_table_entry.hpp"
+#include "catalog/rest/catalog_entry/table/iceberg_table_schema_version.hpp"
 
 #include "duckdb/common/multi_file/multi_file_states.hpp"
 #include "duckdb/function/partition_stats.hpp"
@@ -49,7 +49,7 @@ static void AddNamedParameters(TableFunction &fun) {
 
 virtual_column_map_t IcebergVirtualColumns(ClientContext &context, optional_ptr<FunctionData> bind_data_p) {
 	auto &bind_data = bind_data_p->Cast<MultiFileBindData>();
-	auto result = IcebergTableEntry::VirtualColumns();
+	auto result = IcebergTableSchemaVersion::VirtualColumns();
 	bind_data.virtual_columns = result;
 	return result;
 }

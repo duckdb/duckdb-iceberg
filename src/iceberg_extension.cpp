@@ -85,7 +85,7 @@ static void LoadInternal(ExtensionLoader &loader) {
 
 	auto &config = DBConfig::GetConfig(instance);
 
-	config.AddExtensionOption("unsafe_enable_version_guessing",
+	config.AddExtensionOption(VERSION_GUESSING_CONFIG_VARIABLE,
 	                          "Enable globbing the filesystem (if possible) to find the latest version metadata. This "
 	                          "could result in reading an uncommitted version.",
 	                          LogicalType::BOOLEAN, Value::BOOLEAN(false));

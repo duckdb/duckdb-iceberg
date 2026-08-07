@@ -9,7 +9,7 @@
 
 namespace duckdb {
 
-struct IcebergTableInformation;
+struct IcebergTable;
 struct RewriteExecutionResult {
 	int64_t rewritten_data_files = 0;
 	int64_t added_data_files = 0;
@@ -33,11 +33,10 @@ IcebergManifestEntry BuildRewriteManifestEntry(ClientContext &context, const vec
 void CommitRewrite(ClientContext &context, const RewritePlan &plan, RewriteExecutionResult &result);
 
 //! Best-effort cleanup for files produced before a rewrite failure.
-void CleanupRewriteFiles(ClientContext &context, const IcebergTableInformation &table_info,
-                         const vector<string> &produced_paths);
+void CleanupRewriteFiles(ClientContext &context, const IcebergTable &table_info, const vector<string> &produced_paths);
 
 //! Validate that the currently loaded table snapshot still matches the frozen
 //! rewrite plan. Empty-table plans require the table to remain snapshot-less.
-void ValidateRewriteSnapshot(const RewritePlan &plan, const IcebergTableInformation &table_info, const string &phase);
+void ValidateRewriteSnapshot(const RewritePlan &plan, const IcebergTable &table_info, const string &phase);
 
 } // namespace duckdb

@@ -3,6 +3,8 @@
 
 #include "duckdb/common/shared_ptr.hpp"
 #include "duckdb/common/string.hpp"
+#include "duckdb/common/mutex.hpp"
+#include "duckdb/common/thread_annotation.hpp"
 #include "duckdb/common/vector.hpp"
 
 #include "catalog_entry/schema/iceberg_schema_entry.hpp"
@@ -23,15 +25,16 @@ public:
 	void RemoveEntry(const string &name);
 
 protected:
-	void LoadEntriesInternal(ClientContext &context);
-	shared_ptr<IcebergSchemaEntry> CreateEntryInternal(shared_ptr<IcebergSchemaEntry> entry);
+	void LoadEntriesInternal(ClientContext &context) DUCKDB_REQUIRES(entry_lock);
+	shared_ptr<IcebergSchemaEntry> CreateEntryInternal(shared_ptr<IcebergSchemaEntry> entry)
+	    DUCKDB_REQUIRES(entry_lock);
 
 public:
 	Catalog &catalog;
 
 private:
-	case_insensitive_map_t<shared_ptr<IcebergSchemaEntry>> entries;
-	mutex entry_lock;
+	annotated_mutex entry_lock;
+	case_insensitive_map_t<shared_ptr<IcebergSchemaEntry>> entries DUCKDB_GUARDED_BY(entry_lock);
 };
 
 } // namespace duckdb

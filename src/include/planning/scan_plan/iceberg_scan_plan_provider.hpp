@@ -10,7 +10,7 @@ namespace duckdb {
 
 class ClientContext;
 class FileSystem;
-class IcebergTableEntry;
+class IcebergTableSchemaVersion;
 class IcebergScanOrder;
 struct IcebergTableFilters;
 struct IcebergTransactionData;
@@ -37,7 +37,7 @@ public:
 
 	static unique_ptr<IcebergScanPlanProvider>
 	Create(IcebergScanPlanState &shared_state, IcebergScanPlanContext context,
-	       optional_ptr<IcebergTableEntry> table_entry, const IcebergTableFilters &table_filters,
+	       optional_ptr<IcebergTableSchemaVersion> table_entry, const IcebergTableFilters &table_filters,
 	       const IcebergScanOrder &scan_order, bool server_side_planning_enabled);
 
 	virtual void LoadManifestList() = 0;

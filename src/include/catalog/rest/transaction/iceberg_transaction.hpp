@@ -9,18 +9,18 @@
 namespace duckdb {
 class IcebergCatalog;
 class IcebergSchemaEntry;
-class IcebergTableEntry;
+class IcebergTableSchemaVersion;
 
 enum class IcebergTableStatus : uint8_t { ALIVE, DROPPED, RENAMED, MISSING };
 
 struct IcebergTransactionTableState {
 public:
 	IcebergTransactionTableState();
-	explicit IcebergTransactionTableState(shared_ptr<IcebergTableInformation> catalog_table);
-	explicit IcebergTransactionTableState(IcebergTableInformation &&transaction_table);
+	explicit IcebergTransactionTableState(shared_ptr<IcebergTable> catalog_table);
+	explicit IcebergTransactionTableState(IcebergTable &&transaction_table);
 
 public:
-	IcebergTableInformation &GetInfo() {
+	IcebergTable &GetInfo() {
 		if (transaction_table) {
 			return *transaction_table;
 		}
@@ -30,8 +30,8 @@ public:
 		}
 		return *catalog_table;
 	}
-	const IcebergTableInformation &GetInfo() const;
-	IcebergTableInformation &GetOrCreateTransactionInfo(IcebergTransaction &transaction);
+	const IcebergTable &GetInfo() const;
+	IcebergTable &GetOrCreateTransactionInfo(IcebergTransaction &transaction);
 
 public:
 	bool IsDroppedOrRenamed() const {
@@ -49,10 +49,10 @@ public:
 
 private:
 	//! The catalog state is retained as the source for lazily materializing transaction-local state.
-	shared_ptr<IcebergTableInformation> catalog_table;
+	shared_ptr<IcebergTable> catalog_table;
 	//! Lazily materialized transaction-local state. Its stable address is referenced by table updates and schema
 	//! entries.
-	unique_ptr<IcebergTableInformation> transaction_table;
+	unique_ptr<IcebergTable> transaction_table;
 	IcebergTableStatus status;
 };
 
@@ -87,15 +87,15 @@ public:
 	void DoMultiTableCommitUpdates(IcebergTransactionAlterUpdate &alter_update, ClientContext &context);
 	void DoSingleTableCommitUpdates(IcebergTransactionAlterUpdate &alter_update, ClientContext &context);
 	optional_ptr<IcebergTransactionTableState> GetLatestTableState(const string &table_key);
-	IcebergTransactionTableState &SetCatalogTableState(shared_ptr<IcebergTableInformation> table);
-	IcebergTransactionTableState &SetTransactionTableState(const string &table_key, IcebergTableInformation &&table,
+	IcebergTransactionTableState &SetCatalogTableState(shared_ptr<IcebergTable> table);
+	IcebergTransactionTableState &SetTransactionTableState(const string &table_key, IcebergTable &&table,
 	                                                       IcebergTableStatus status);
-	IcebergTransactionTableState &GetOrCreateTransactionTableState(const IcebergTableInformation &table);
+	IcebergTransactionTableState &GetOrCreateTransactionTableState(const IcebergTable &table);
 	IcebergTransactionTableState &SetLatestTableState(const string &table_key, IcebergTableStatus status);
 	bool StartedBefore(timestamp_ms_t timestamp_ms) const;
 	IcebergTransactionAlterUpdate &GetOrCreateAlter();
-	IcebergTableInformation &DeleteTable(IcebergTableInformation &table);
-	IcebergTableInformation &RenameTable(IcebergTableInformation &table, const string &new_name);
+	IcebergTable &DeleteTable(IcebergTable &table);
+	IcebergTable &RenameTable(IcebergTable &table, const string &new_name);
 	bool MultiTableCommitAvailable() const;
 
 private:
@@ -126,7 +126,7 @@ public:
 	//! alive when a transaction creates a schema after referencing a stale entry with the same name.
 	case_insensitive_map_t<shared_ptr<IcebergSchemaEntry>> created_schemas;
 	//! Tables referenced by this transaction that have to stay alive for the duration of the transaction.
-	case_insensitive_map_t<shared_ptr<IcebergTableInformation>> tables;
+	case_insensitive_map_t<shared_ptr<IcebergTable>> tables;
 	//! The visible state of every resolved table in this transaction.
 	case_insensitive_map_t<IcebergTransactionTableState> current_table_data;
 	//! Declared after the schema and table states so update references are destroyed before the referenced states.
@@ -144,7 +144,7 @@ public:
 	case_insensitive_map_t<SchemaPropertyUpdates> schema_property_updates;
 };
 
-void ApplyTableUpdate(IcebergTableInformation &table_info, IcebergTransaction &iceberg_transaction,
-                      const std::function<void(IcebergTableInformation &)> &callback);
+void ApplyTableUpdate(IcebergTable &table_info, IcebergTransaction &iceberg_transaction,
+                      const std::function<void(IcebergTable &)> &callback);
 
 } // namespace duckdb

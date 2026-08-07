@@ -7,7 +7,7 @@
 
 #include "core/metadata/iceberg_table_metadata.hpp"
 #include "core/metadata/manifest/iceberg_manifest_list.hpp"
-#include "catalog/rest/catalog_entry/table/iceberg_table_information.hpp"
+#include "catalog/rest/catalog_entry/table/iceberg_table.hpp"
 #include "common/iceberg_utils.hpp"
 
 namespace duckdb {

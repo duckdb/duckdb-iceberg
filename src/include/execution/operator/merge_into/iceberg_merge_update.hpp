@@ -6,7 +6,7 @@
 #include "duckdb/common/index_vector.hpp"
 
 #include "execution/operator/iceberg_update.hpp"
-#include "catalog/rest/catalog_entry/table/iceberg_table_entry.hpp"
+#include "catalog/rest/catalog_entry/table/iceberg_table_schema_version.hpp"
 #include "catalog/rest/catalog_entry/schema/iceberg_schema_entry.hpp"
 
 namespace duckdb {

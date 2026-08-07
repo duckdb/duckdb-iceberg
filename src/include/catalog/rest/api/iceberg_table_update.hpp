@@ -7,7 +7,7 @@
 
 namespace duckdb {
 
-struct IcebergTableInformation;
+struct IcebergTable;
 struct IcebergTransactionData;
 
 enum class IcebergTableUpdateType : uint8_t {
@@ -35,12 +35,12 @@ enum class IcebergTableUpdateType : uint8_t {
 
 struct IcebergCommitState {
 public:
-	IcebergCommitState(const IcebergTableInformation &table_info, ClientContext &context);
+	IcebergCommitState(const IcebergTable &table_info, ClientContext &context);
 	void RefreshFromTable();
 	void LoadExistingManifests(DatabaseInstance &db, vector<IcebergManifestListEntry> &&existing_manifests);
 
 public:
-	const IcebergTableInformation &table_info;
+	const IcebergTable &table_info;
 	optional_ptr<const IcebergSnapshot> latest_snapshot;
 	//! Snapshot(s) created in this commit
 	vector<IcebergSnapshot> created_snapshots;

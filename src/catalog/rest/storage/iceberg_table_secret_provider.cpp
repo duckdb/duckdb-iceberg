@@ -11,7 +11,7 @@
 
 #include "catalog/rest/api/catalog_api.hpp"
 #include "catalog/rest/catalog_entry/schema/iceberg_schema_entry.hpp"
-#include "catalog/rest/catalog_entry/table/iceberg_table_information.hpp"
+#include "catalog/rest/catalog_entry/table/iceberg_table.hpp"
 #include "catalog/rest/iceberg_catalog.hpp"
 #include "catalog/rest/transaction/iceberg_transaction.hpp"
 #include "catalog/rest/storage/authorization/oauth2.hpp"
@@ -174,7 +174,7 @@ static CreateSecretInput ReVendVendedCredentials(ClientContext &context, CreateS
 	if (!table_entry_p) {
 		throw CatalogException("Table by name %s could not be located in secret refresh", table_name);
 	}
-	auto &table_entry = table_entry_p->Cast<IcebergTableEntry>();
+	auto &table_entry = table_entry_p->Cast<IcebergTableSchemaVersion>();
 	auto &table_info = table_entry.table_info;
 
 	auto refreshed_credentials =

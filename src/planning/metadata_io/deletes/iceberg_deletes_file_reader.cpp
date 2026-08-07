@@ -6,14 +6,14 @@
 #include "duckdb/main/database.hpp"
 
 #include "function/iceberg_functions.hpp"
-#include "catalog/rest/catalog_entry/table/iceberg_table_entry.hpp"
+#include "catalog/rest/catalog_entry/table/iceberg_table_schema_version.hpp"
 
 namespace duckdb {
 
 static virtual_column_map_t IcebergDeleteVirtualColumns(ClientContext &context,
                                                         optional_ptr<FunctionData> bind_data_p) {
 	auto &bind_data = bind_data_p->Cast<MultiFileBindData>();
-	auto result = IcebergTableEntry::VirtualColumns();
+	auto result = IcebergTableSchemaVersion::VirtualColumns();
 	bind_data.virtual_columns = result;
 	return result;
 }

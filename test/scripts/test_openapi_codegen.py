@@ -133,6 +133,19 @@ def test_table_metadata_accepts_null_current_snapshot_without_patching_spec():
     assert "property is explicitly nullable" in source
 
 
+def test_deprecated_v1_table_metadata_fields_are_generated():
+    parser, parse_info = parse_spec()
+
+    _, table_header, _ = render_class(parser, parse_info, "TableMetadata")
+    assert "optional<Schema> schema" in table_header
+    assert "optional<vector<PartitionField>> partition_spec" in table_header
+
+    _, snapshot_header, snapshot_source = render_class(parser, parse_info, "Snapshot")
+    assert "optional<string> manifest_list" in snapshot_header
+    assert "optional<vector<string>> manifests" in snapshot_header
+    assert "required property 'manifest-list' is missing" not in snapshot_source
+
+
 def test_openapi_31_null_syntax_and_nullable_references(tmp_path):
     spec_path = tmp_path / "nullable.yaml"
     spec_path.write_text(

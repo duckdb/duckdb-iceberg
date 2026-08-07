@@ -12,7 +12,7 @@
 #include "duckdb/planner/operator/logical_delete.hpp"
 #include "duckdb/common/multi_file/multi_file_reader.hpp"
 
-#include "catalog/rest/catalog_entry/table/iceberg_table_entry.hpp"
+#include "catalog/rest/catalog_entry/table/iceberg_table_schema_version.hpp"
 #include "catalog/rest/catalog_entry/schema/iceberg_schema_entry.hpp"
 #include "core/metadata/manifest/iceberg_manifest.hpp"
 
@@ -70,6 +70,9 @@ struct IcebergDeleteFileInfo {
 	//! Per-field serialized lower/upper bounds of the equality-delete values (field-id -> bound blob).
 	unordered_map<int32_t, Value> lower_bounds;
 	unordered_map<int32_t, Value> upper_bounds;
+	//! Per-field null/NaN counts used to decide whether bounds can safely prune an equality delete.
+	unordered_map<int32_t, int64_t> null_value_counts;
+	unordered_map<int32_t, int64_t> nan_value_counts;
 };
 
 class IcebergDeleteGlobalState : public GlobalSinkState {
@@ -110,7 +113,7 @@ public:
 class IcebergDelete : public PhysicalOperator {
 public:
 #ifdef ICEBERG_ENABLE_EQUALITY_DELETE_WRITES
-	IcebergDelete(PhysicalPlan &physical_plan, IcebergTableEntry &table,
+	IcebergDelete(PhysicalPlan &physical_plan, IcebergTableSchemaVersion &table,
 	              optional_ptr<IcebergMultiFileList> multi_file_list, PhysicalOperator &child,
 	              vector<idx_t> row_id_indexes, bool is_equality_delete,
 	              vector<IcebergEqualityDeletePredicate> equality_predicates)
@@ -127,12 +130,12 @@ public:
 	static constexpr bool is_equality_delete = false;
 #endif
 
-	IcebergDelete(PhysicalPlan &physical_plan, IcebergTableEntry &table,
+	IcebergDelete(PhysicalPlan &physical_plan, IcebergTableSchemaVersion &table,
 	              optional_ptr<IcebergMultiFileList> multi_file_list, PhysicalOperator &child,
 	              vector<idx_t> row_id_indexes);
 
 	//! The table to delete from
-	IcebergTableEntry &table;
+	IcebergTableSchemaVersion &table;
 	//! MultiFile list of the Iceberg Scan of the table we are deleting from.
 	//! May be null when the planner has optimized the
 	//! source scan away (e.g. an always-false WHERE clause like `id = NULL`).
@@ -152,12 +155,12 @@ public:
 	}
 
 	static PhysicalOperator &PlanDelete(ClientContext &context, PhysicalPlanGenerator &planner,
-	                                    IcebergTableEntry &table, PhysicalOperator &child_plan,
+	                                    IcebergTableSchemaVersion &table, PhysicalOperator &child_plan,
 	                                    vector<idx_t> &&row_id_indexes);
 
 	//! Detects whether `child_plan`'s pushed-down filters describe a pure conjunction of equality
 	//! predicates, and if so extracts them into `equality_predicates`. Returns false otherwise.
-	static bool TryGetEqualityDeletePredicates(ClientContext &context, IcebergTableEntry &table,
+	static bool TryGetEqualityDeletePredicates(ClientContext &context, IcebergTableSchemaVersion &table,
 	                                           PhysicalOperator &child_plan,
 	                                           vector<IcebergEqualityDeletePredicate> &equality_predicates);
 

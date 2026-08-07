@@ -20,7 +20,7 @@
 #include "catalog/rest/api/iceberg_retry.hpp"
 #include "catalog/rest/iceberg_catalog.hpp"
 #include "catalog/rest/storage/iceberg_authorization.hpp"
-#include "catalog/rest/catalog_entry/table/iceberg_table_information.hpp"
+#include "catalog/rest/catalog_entry/table/iceberg_table.hpp"
 #include "catalog/rest/api/iceberg_add_snapshot.hpp"
 #include "catalog/rest/api/iceberg_create_table_request.hpp"
 #include "catalog/rest/api/catalog_api.hpp"
@@ -39,30 +39,29 @@ namespace duckdb {
 IcebergTransactionTableState::IcebergTransactionTableState() : status(IcebergTableStatus::MISSING) {
 }
 
-IcebergTransactionTableState::IcebergTransactionTableState(shared_ptr<IcebergTableInformation> catalog_table)
+IcebergTransactionTableState::IcebergTransactionTableState(shared_ptr<IcebergTable> catalog_table)
     : catalog_table(std::move(catalog_table)), status(IcebergTableStatus::ALIVE) {
 }
 
-IcebergTransactionTableState::IcebergTransactionTableState(IcebergTableInformation &&transaction_table_p)
-    : transaction_table(make_uniq<IcebergTableInformation>(std::move(transaction_table_p))),
-      status(IcebergTableStatus::ALIVE) {
+IcebergTransactionTableState::IcebergTransactionTableState(IcebergTable &&transaction_table_p)
+    : transaction_table(make_uniq<IcebergTable>(std::move(transaction_table_p))), status(IcebergTableStatus::ALIVE) {
 	if (!transaction_table->table_metadata.GetSchemas().empty()) {
 		transaction_table->InitSchemaVersions();
 	}
 }
 
-const IcebergTableInformation &IcebergTransactionTableState::GetInfo() const {
+const IcebergTable &IcebergTransactionTableState::GetInfo() const {
 	return const_cast<IcebergTransactionTableState &>(*this).GetInfo();
 }
 
-IcebergTableInformation &IcebergTransactionTableState::GetOrCreateTransactionInfo(IcebergTransaction &transaction) {
+IcebergTable &IcebergTransactionTableState::GetOrCreateTransactionInfo(IcebergTransaction &transaction) {
 	if (transaction_table) {
 		return *transaction_table;
 	}
 	if (!catalog_table) {
 		throw InternalException("Cannot materialize transaction table state without table information");
 	}
-	transaction_table = make_uniq<IcebergTableInformation>(catalog_table->Copy(transaction));
+	transaction_table = make_uniq<IcebergTable>(catalog_table->Copy(transaction));
 	transaction_table->InitSchemaVersions();
 	return *transaction_table;
 }
@@ -125,8 +124,7 @@ static rest_api_objects::TableUpdate CreateSetSnapshotRefUpdate(int64_t snapshot
 	return table_update;
 }
 
-static bool NeedsAssertSchemaId(const IcebergTransactionData &transaction_data,
-                                const IcebergTableInformation &table_info) {
+static bool NeedsAssertSchemaId(const IcebergTransactionData &transaction_data, const IcebergTable &table_info) {
 	(void)table_info;
 	return transaction_data.assert_schema_id;
 }
@@ -242,7 +240,7 @@ static bool DeleteCanReapply(const IcebergTableMetadata &metadata, int64_t base_
 
 //! Throw if a retried DELETE can't be safely re-applied. No-op on the first
 //! attempt (tip == scan) and for non-delete transactions.
-static void VerifyDeleteRetryability(const IcebergTableInformation &table_info,
+static void VerifyDeleteRetryability(const IcebergTable &table_info,
                                      optional_ptr<const IcebergSnapshot> current_snapshot) {
 	if (!table_info.transaction_data) {
 		return;
@@ -273,7 +271,7 @@ static void VerifyDeleteRetryability(const IcebergTableInformation &table_info,
 	    table_info.name, std::to_string(scan_snapshot_id), std::to_string(tip_snapshot_id));
 }
 
-static SingleTableStagedCommit StageSingleTableCommit(DatabaseInstance &db, IcebergTableInformation &table_info,
+static SingleTableStagedCommit StageSingleTableCommit(DatabaseInstance &db, IcebergTable &table_info,
                                                       ClientContext &context) {
 	SingleTableStagedCommit info;
 	IcebergCommitState commit_state(table_info, context);
@@ -351,8 +349,8 @@ static MultiTableStagedCommit StageMultiTableCommit(DatabaseInstance &db, Iceber
 	return info;
 }
 
-static optional_ptr<IcebergTableInformation> GetSingleUpdatedTable(IcebergTransactionAlterUpdate &alter_update) {
-	optional_ptr<IcebergTableInformation> result;
+static optional_ptr<IcebergTable> GetSingleUpdatedTable(IcebergTransactionAlterUpdate &alter_update) {
+	optional_ptr<IcebergTable> result;
 	for (auto &entry : alter_update.updated_tables) {
 		auto &table_info = entry.second.get();
 		if (!table_info.HasTransactionUpdates()) {
@@ -573,17 +571,7 @@ void IcebergTransaction::DoTableRename(IcebergTransactionRenameUpdate &rename_up
 		catalog.table_request_cache.EvictIfCurrent(new_table);
 	}
 
-	DropInfo drop_info;
-	drop_info.GetQualifiedNameMutable() = Identifier(table_name);
-	drop_info.if_not_found = OnEntryNotFound::THROW_EXCEPTION;
-	schema.DropEntry(context, drop_info, true);
-
-	lock_guard<mutex> guard(schema.tables.GetEntryLock());
-	shared_ptr<IcebergTableInformation> old_version;
-	schema.tables.CreateEntryInternal(guard, new_name, std::move(new_table), old_version);
-	if (old_version) {
-		throw TransactionException("Table %s was already created by a different transaction!", new_name);
-	}
+	schema.tables.RenameEntry(table_name, new_name, std::move(new_table));
 }
 
 void IcebergTransaction::DoMultiTableCommitUpdates(IcebergTransactionAlterUpdate &alter_update,
@@ -781,7 +769,7 @@ void IcebergTransaction::CleanupFiles() {
 					continue;
 				}
 				// we need to recreate the keys in the current context.
-				auto &ic_table_entry = table.GetLatestSchema()->Cast<IcebergTableEntry>();
+				auto &ic_table_entry = table.GetLatestSchema()->Cast<IcebergTableSchemaVersion>();
 				ic_table_entry.PrepareIcebergScanFromEntry(temp_context);
 
 				auto &add_snapshot = update->Cast<IcebergAddSnapshot>();
@@ -851,15 +839,14 @@ IcebergTransactionTableState &IcebergTransaction::SetLatestTableState(const stri
 	return it->second;
 }
 
-IcebergTransactionTableState &IcebergTransaction::SetCatalogTableState(shared_ptr<IcebergTableInformation> table) {
+IcebergTransactionTableState &IcebergTransaction::SetCatalogTableState(shared_ptr<IcebergTable> table) {
 	auto table_key = table->GetTableKey();
 	auto result = current_table_data.emplace(table_key, IcebergTransactionTableState(std::move(table)));
 	return result.first->second;
 }
 
-IcebergTransactionTableState &IcebergTransaction::SetTransactionTableState(const string &table_key,
-                                                                           IcebergTableInformation &&table,
-                                                                           IcebergTableStatus status) {
+IcebergTransactionTableState &
+IcebergTransaction::SetTransactionTableState(const string &table_key, IcebergTable &&table, IcebergTableStatus status) {
 	auto it = current_table_data.find(table_key);
 	if (it == current_table_data.end()) {
 		it = current_table_data.emplace(table_key, IcebergTransactionTableState(std::move(table))).first;
@@ -873,8 +860,7 @@ IcebergTransactionTableState &IcebergTransaction::SetTransactionTableState(const
 	return it->second;
 }
 
-IcebergTransactionTableState &
-IcebergTransaction::GetOrCreateTransactionTableState(const IcebergTableInformation &table) {
+IcebergTransactionTableState &IcebergTransaction::GetOrCreateTransactionTableState(const IcebergTable &table) {
 	auto table_key = table.GetTableKey();
 	auto state = GetLatestTableState(table_key);
 	if (state) {
@@ -896,7 +882,7 @@ IcebergTransactionAlterUpdate &IcebergTransaction::GetOrCreateAlter() {
 	return *alter_update;
 }
 
-IcebergTableInformation &IcebergTransaction::DeleteTable(IcebergTableInformation &table) {
+IcebergTable &IcebergTransaction::DeleteTable(IcebergTable &table) {
 	auto table_key = table.GetTableKey();
 	auto state = GetLatestTableState(table_key);
 	if (HasTableUpdate()) {
@@ -913,7 +899,7 @@ IcebergTableInformation &IcebergTransaction::DeleteTable(IcebergTableInformation
 	return state->GetInfo();
 }
 
-IcebergTableInformation &IcebergTransaction::RenameTable(IcebergTableInformation &table, const string &new_name) {
+IcebergTable &IcebergTransaction::RenameTable(IcebergTable &table, const string &new_name) {
 	auto table_key = table.GetTableKey();
 	auto state = GetLatestTableState(table_key);
 	if (HasTableUpdate()) {
@@ -931,13 +917,13 @@ IcebergTableInformation &IcebergTransaction::RenameTable(IcebergTableInformation
 	auto new_table_key = new_table.GetTableKey();
 	auto &new_state = SetTransactionTableState(new_table_key, std::move(new_table), IcebergTableStatus::ALIVE);
 
-	//! Create the rename update, creating the new IcebergTableInformation in the process
+	//! Create the rename update, creating the new IcebergTable in the process
 	transaction_update.emplace<IcebergTransactionRenameUpdate>(*this, source_table, new_state.GetInfo(), new_name);
 	return state->GetInfo();
 }
 
-void ApplyTableUpdate(IcebergTableInformation &table_info, IcebergTransaction &iceberg_transaction,
-                      const std::function<void(IcebergTableInformation &)> &callback) {
+void ApplyTableUpdate(IcebergTable &table_info, IcebergTransaction &iceberg_transaction,
+                      const std::function<void(IcebergTable &)> &callback) {
 	auto &alter = iceberg_transaction.GetOrCreateAlter();
 	auto &updated_table = alter.GetOrInitializeTable(table_info);
 	callback(updated_table);

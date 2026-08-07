@@ -57,7 +57,7 @@ static string GeometryBoundJson(const GeometryExtent &extent, bool lower_corner)
 }
 
 static unique_ptr<FunctionData> IcebergColumnStatsBind(ClientContext &context, TableFunctionBindInput &input,
-                                                       vector<LogicalType> &return_types, vector<string> &names) {
+                                                       vector<LogicalType> &return_types, vector<Identifier> &names) {
 	// return a TableRef that contains the scans for the
 	auto ret = make_uniq<IcebergColumnStatsBindData>();
 
@@ -110,6 +110,9 @@ static unique_ptr<FunctionData> IcebergColumnStatsBind(ClientContext &context, T
 	return_types.emplace_back(LogicalType::BIGINT);
 
 	names.emplace_back("nan_value_count");
+	return_types.emplace_back(LogicalType::BIGINT);
+
+	names.emplace_back("file_sequence_number");
 	return_types.emplace_back(LogicalType::BIGINT);
 
 	return std::move(ret);
@@ -262,6 +265,8 @@ static void IcebergColumnStatsFunction(ClientContext &context, TableFunctionInpu
 				output.data[col++].SetValue(out, null_value_count);
 				// nan_value_count
 				output.data[col++].SetValue(out, nan_value_count);
+				// file_sequence_number
+				output.data[col++].SetValue(out, manifest_entry.GetFileSequenceNumber(table_entry.file));
 				out++;
 			}
 			global_state.column_it = bind_data.source_to_column_id.begin();

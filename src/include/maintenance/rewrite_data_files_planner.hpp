@@ -12,7 +12,7 @@
 
 namespace duckdb {
 
-struct IcebergTableInformation;
+struct IcebergTable;
 
 struct RewriteCandidate {
 	string file_path;
@@ -27,7 +27,7 @@ struct RewritePlan {
 	int64_t starting_sequence_number = 0;
 	int64_t target_file_size_bytes = 134217728;
 	//! Keep the loaded metadata alive until commit.
-	shared_ptr<IcebergTableInformation> table_info;
+	shared_ptr<IcebergTable> table_info;
 	vector<RewriteCandidate> candidates;
 	//! Partition-local rewrite groups.
 	vector<vector<RewriteCandidate>> file_groups;

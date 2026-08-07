@@ -3,7 +3,7 @@
 #include "duckdb/common/exception.hpp"
 #include "duckdb/logging/logger.hpp"
 #include "iceberg_logging.hpp"
-#include "catalog/rest/catalog_entry/table/iceberg_table_information.hpp"
+#include "catalog/rest/catalog_entry/table/iceberg_table.hpp"
 #include "catalog/rest/iceberg_catalog.hpp"
 #include "catalog/rest/transaction/iceberg_transaction.hpp"
 #include "catalog/rest/transaction/iceberg_transaction_data.hpp"
@@ -45,7 +45,7 @@ IcebergManifestEntry BuildRewriteManifestEntry(ClientContext &context, const vec
 	return entry;
 }
 
-void ValidateRewriteSnapshot(const RewritePlan &plan, const IcebergTableInformation &table_info, const string &phase) {
+void ValidateRewriteSnapshot(const RewritePlan &plan, const IcebergTable &table_info, const string &phase) {
 	auto snapshot = table_info.table_metadata.GetLatestSnapshot();
 	if (plan.starting_snapshot_id < 0) {
 		if (snapshot) {
@@ -61,8 +61,7 @@ void ValidateRewriteSnapshot(const RewritePlan &plan, const IcebergTableInformat
 	}
 }
 
-void CleanupRewriteFiles(ClientContext &context, const IcebergTableInformation &table_info,
-                         const vector<string> &produced_paths) {
+void CleanupRewriteFiles(ClientContext &context, const IcebergTable &table_info, const vector<string> &produced_paths) {
 	auto &fs = FileSystem::GetFileSystem(context);
 	for (auto &path : produced_paths) {
 		try {
@@ -89,7 +88,7 @@ void CommitRewrite(ClientContext &context, const RewritePlan &plan, RewriteExecu
 		deletes.InvalidateFile(cand.file_path);
 	}
 
-	ApplyTableUpdate(table_info, iceberg_transaction, [&](IcebergTableInformation &tbl) {
+	ApplyTableUpdate(table_info, iceberg_transaction, [&](IcebergTable &tbl) {
 		ValidateRewriteSnapshot(plan, tbl, "transaction commit");
 		auto &transaction_data = tbl.GetOrCreateTransactionData(iceberg_transaction);
 		transaction_data.AddSnapshot(IcebergSnapshotOperationType::REPLACE, std::move(result.new_entries),

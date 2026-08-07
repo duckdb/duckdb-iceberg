@@ -57,10 +57,11 @@ public:
 public:
 	int64_t snapshot_id;
 	int64_t timestamp_ms;
-	string manifest_list;
 	Object2 summary;
 	optional<int64_t> parent_snapshot_id;
 	optional<int64_t> sequence_number;
+	optional<string> manifest_list;
+	optional<vector<string>> manifests;
 	optional<int64_t> first_row_id;
 	optional<int64_t> added_rows;
 	optional<int32_t> schema_id;

@@ -36,6 +36,7 @@ public:
 
 private:
 	bool FilePartitionMatchesFilter(const IcebergDataFile &data_file, const IcebergManifestFile &manifest_file) const;
+	bool EqualityDeleteMatchesDataFile(const IcebergDataFile &delete_file, const IcebergDataFile &data_file) const;
 
 private:
 	ClientContext &context;

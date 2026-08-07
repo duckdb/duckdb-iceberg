@@ -21,10 +21,10 @@
 #include "duckdb/common/string_util.hpp"
 
 #include "catalog/rest/iceberg_catalog.hpp"
-#include "catalog/rest/catalog_entry/table/iceberg_table_entry.hpp"
+#include "catalog/rest/catalog_entry/table/iceberg_table_schema_version.hpp"
 #include "execution/operator/iceberg_delete.hpp"
 #include "execution/operator/physical_iceberg_create_table.hpp"
-#include "catalog/rest/catalog_entry/table/iceberg_table_information.hpp"
+#include "catalog/rest/catalog_entry/table/iceberg_table.hpp"
 #include "core/metadata/schema/iceberg_column_definition.hpp"
 #include "core/metadata/schema/iceberg_table_schema.hpp"
 #include "core/metadata/iceberg_table_metadata.hpp"
@@ -239,7 +239,7 @@ void IcebergInsertGlobalState::AddFiles(DataChunk &chunk, const string &table_na
 void IcebergInsert::AddWrittenFiles(IcebergInsertGlobalState &global_state, DataChunk &chunk,
                                     optional_ptr<TableCatalogEntry> table) {
 	D_ASSERT(table);
-	auto &ic_table = table->Cast<IcebergTableEntry>();
+	auto &ic_table = table->Cast<IcebergTableSchemaVersion>();
 	auto &table_metadata = ic_table.table_info.table_metadata;
 	global_state.AddFiles(chunk, ic_table.name.GetIdentifierName(), table_metadata);
 }
@@ -292,7 +292,7 @@ SinkFinalizeType IcebergInsert::Finalize(Pipeline &pipeline, Event &event, Clien
 		// Table does not exist (INSERT INTO) or was not created in Physical Create Iceberg table (CTAS). Throw Error
 		throw InternalException("Table to insert into does not exist.");
 	}
-	auto &irc_table = effective_table->Cast<IcebergTableEntry>();
+	auto &irc_table = effective_table->Cast<IcebergTableSchemaVersion>();
 	auto &table_info = irc_table.table_info;
 	auto &transaction = IcebergTransaction::Get(context, effective_table->catalog);
 	auto &iceberg_transaction = transaction.Cast<IcebergTransaction>();
@@ -308,22 +308,16 @@ SinkFinalizeType IcebergInsert::Finalize(Pipeline &pipeline, Event &event, Clien
 		auto &delete_global_state = update_delete_op->sink_state->Cast<IcebergDeleteGlobalState>();
 		auto delete_manifest_entries = IcebergDelete::GenerateDeleteManifestEntries(delete_global_state);
 		if (!written_files.empty()) {
-			ApplyTableUpdate(table_info, iceberg_transaction, [&](IcebergTableInformation &tbl) {
+			ApplyTableUpdate(table_info, iceberg_transaction, [&](IcebergTable &tbl) {
 				auto &transaction_data = tbl.GetOrCreateTransactionData(iceberg_transaction);
 				transaction_data.AddUpdateSnapshot(std::move(delete_manifest_entries), std::move(written_files),
 				                                   std::move(delete_global_state.altered_manifests));
-				for (auto &entry : delete_global_state.written_files) {
-					auto &delete_file = entry.second;
-					if (table_info.table_metadata.iceberg_version >= 3) {
-						transaction_data.transactional_delete_files[delete_file.data_file_path] = delete_file.file_name;
-					}
-				}
 			});
 		}
 	} else {
 		// Regular insert: commit an append snapshot.
 		if (!written_files.empty()) {
-			ApplyTableUpdate(table_info, iceberg_transaction, [&](IcebergTableInformation &tbl) {
+			ApplyTableUpdate(table_info, iceberg_transaction, [&](IcebergTable &tbl) {
 				auto &transaction_data = tbl.GetOrCreateTransactionData(iceberg_transaction);
 				IcebergManifestDeletes empty_deletes;
 				transaction_data.AddSnapshot(IcebergSnapshotOperationType::APPEND, std::move(written_files),
@@ -833,7 +827,7 @@ PhysicalOperator &IcebergInsert::PlanCopyForInsert(ClientContext &context, Physi
 }
 
 PhysicalOperator &IcebergInsert::PlanInsert(ClientContext &context, PhysicalPlanGenerator &planner,
-                                            IcebergTableEntry &table) {
+                                            IcebergTableSchemaVersion &table) {
 	optional_idx partition_id;
 	vector<LogicalType> return_types;
 	// the one return value is how many rows we are inserting
@@ -854,7 +848,7 @@ PhysicalOperator &IcebergCatalog::PlanInsert(ClientContext &context, PhysicalPla
 	if (!op.column_index_map.empty()) {
 		plan = planner.ResolveDefaultsProjection(op, *plan);
 	}
-	auto &table_entry = op.table.Cast<IcebergTableEntry>();
+	auto &table_entry = op.table.Cast<IcebergTableSchemaVersion>();
 	table_entry.PrepareIcebergScanFromEntry(context);
 
 	auto &irc_transaction = IcebergTransaction::Get(context, *this);
@@ -911,7 +905,7 @@ static unique_ptr<IcebergTableMetadata> BuildPlaceholderMetadata(ClientContext &
 	// PlanCopyForInsert appends the partition projection at plan time. The real spec is
 	// applied during PhysicalIcebergCreateTable::MakeCreateTableRequest, but the projection
 	// indices are derived from the same partition_keys/schema and so remain consistent.
-	auto placeholder_spec = IcebergTableInformation::BuildPartitionSpec(create_info.partition_keys, *schema, 0, 1000);
+	auto placeholder_spec = IcebergTable::BuildPartitionSpec(create_info.partition_keys, *schema, 0, 1000);
 	metadata->partition_specs.emplace(0, std::move(placeholder_spec));
 	return metadata;
 }

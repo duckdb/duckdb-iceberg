@@ -242,11 +242,10 @@ void ManifestReader::ReadChunk(DataChunk &chunk, const map<idx_t, LogicalType> &
 		data_file.split_offsets = GetSplitOffsets(split_offsets_entries[i]);
 		data_file.sort_order_id = ReadOptionalField<int32_t>(sort_order_id_entries[i]);
 
-		if (manifest_format_version >= 2) {
-			entry.SetSnapshotId(ReadOptionalField<int64_t>(snapshot_id_entries[i]));
-		} else {
-			entry.SetSnapshotId(ReadRequiredField<int64_t>("snapshot_id", snapshot_id_entries[i]));
-		}
+		// The field is required in V1, but its value may still be NULL so the snapshot ID can be inherited.
+		// At this point a missing field and a present NULL field are indistinguishable, so do not use
+		// ReadRequiredField here.
+		entry.SetSnapshotId(ReadOptionalField<int64_t>(snapshot_id_entries[i]));
 
 		//! >= V2
 		if (manifest_format_version >= 2) {

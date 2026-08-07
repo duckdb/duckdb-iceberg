@@ -1,5 +1,5 @@
 # name: test/sql/local/test_v1_manifest_entry.test
-# description: Test ducklake updates
+# description: Read a V1 manifest entry with a NULL snapshot_id
 # group: [local]
 
 require avro
@@ -13,7 +13,6 @@ require httpfs
 require core_functions
 
 require-env DUCKDB_ICEBERG_HAVE_GENERATED_DATA
-
 
 statement ok
 CALL enable_logging('HTTP');

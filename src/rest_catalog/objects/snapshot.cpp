@@ -101,7 +101,6 @@ Snapshot Snapshot::Copy() const {
 	Snapshot res;
 	res.snapshot_id = snapshot_id;
 	res.timestamp_ms = timestamp_ms;
-	res.manifest_list = manifest_list;
 	res.summary = summary.Copy();
 	if (parent_snapshot_id.has_value()) {
 		res.parent_snapshot_id.emplace();
@@ -110,6 +109,17 @@ Snapshot Snapshot::Copy() const {
 	if (sequence_number.has_value()) {
 		res.sequence_number.emplace();
 		(*res.sequence_number) = (*sequence_number);
+	}
+	if (manifest_list.has_value()) {
+		res.manifest_list.emplace();
+		(*res.manifest_list) = (*manifest_list);
+	}
+	if (manifests.has_value()) {
+		res.manifests.emplace();
+		(*res.manifests).reserve((*manifests).size());
+		for (auto &item : (*manifests)) {
+			(*res.manifests).emplace_back(item);
+		}
 	}
 	if (first_row_id.has_value()) {
 		res.first_row_id.emplace();
@@ -154,17 +164,6 @@ string Snapshot::TryFromJSON(JSONValue obj) {
 			                          json_utils::GetTypeDescription(timestamp_ms_val).c_str());
 		}
 	}
-	auto manifest_list_val = obj.GetMember("manifest-list");
-	if (!manifest_list_val.IsValid()) {
-		return "Snapshot required property 'manifest-list' is missing";
-	} else {
-		if (json_utils::IsString(manifest_list_val)) {
-			manifest_list = json_utils::GetString(manifest_list_val);
-		} else {
-			return StringUtil::Format("Snapshot property 'manifest_list' is not of type 'string', found %s instead",
-			                          json_utils::GetTypeDescription(manifest_list_val).c_str());
-		}
-	}
 	auto summary_val = obj.GetMember("summary");
 	if (!summary_val.IsValid()) {
 		return "Snapshot required property 'summary' is missing";
@@ -201,6 +200,45 @@ string Snapshot::TryFromJSON(JSONValue obj) {
 			    json_utils::GetTypeDescription(sequence_number_val).c_str());
 		}
 		sequence_number = std::move(sequence_number_tmp);
+	}
+	auto manifest_list_val = obj.GetMember("manifest-list");
+	if (manifest_list_val.IsValid()) {
+		string manifest_list_tmp;
+		if (json_utils::IsString(manifest_list_val)) {
+			manifest_list_tmp = json_utils::GetString(manifest_list_val);
+		} else {
+			return StringUtil::Format("Snapshot property 'manifest_list_tmp' is not of type 'string', found %s instead",
+			                          json_utils::GetTypeDescription(manifest_list_val).c_str());
+		}
+		manifest_list = std::move(manifest_list_tmp);
+	}
+	auto manifests_val = obj.GetMember("manifests");
+	if (manifests_val.IsValid()) {
+		vector<string> manifests_tmp;
+		if (manifests_val.IsArray()) {
+			manifests_val.IterateArray([&](JSONValue manifests_tmp_item_val) {
+				if (!error.empty()) {
+					return;
+				}
+				string manifests_tmp_item;
+				if (json_utils::IsString(manifests_tmp_item_val)) {
+					manifests_tmp_item = json_utils::GetString(manifests_tmp_item_val);
+				} else {
+					error = StringUtil::Format(
+					    "Snapshot property 'manifests_tmp_item' is not of type 'string', found %s instead",
+					    json_utils::GetTypeDescription(manifests_tmp_item_val).c_str());
+					return;
+				}
+				manifests_tmp.emplace_back(std::move(manifests_tmp_item));
+			});
+			if (!error.empty()) {
+				return error;
+			}
+		} else {
+			return StringUtil::Format("Snapshot property 'manifests_tmp' is not of type 'array', found %s instead",
+			                          json_utils::GetTypeDescription(manifests_val).c_str());
+		}
+		manifests = std::move(manifests_tmp);
 	}
 	auto first_row_id_val = obj.GetMember("first-row-id");
 	if (first_row_id_val.IsValid()) {
@@ -251,10 +289,6 @@ void Snapshot::PopulateJSON(JSONWriter &writer, JSONMutableValue obj) const {
 	auto timestamp_ms_json = writer.CreateSignedInteger(timestamp_ms);
 	obj.Add("timestamp-ms", timestamp_ms_json);
 
-	// Serialize: manifest-list
-	auto manifest_list_json = writer.CreateString(manifest_list);
-	obj.Add("manifest-list", manifest_list_json);
-
 	// Serialize: summary
 	auto summary_json = summary.ToJSON(writer);
 	obj.Add("summary", summary_json);
@@ -271,6 +305,24 @@ void Snapshot::PopulateJSON(JSONWriter &writer, JSONMutableValue obj) const {
 		auto &sequence_number_value = *sequence_number;
 		auto sequence_number_json = writer.CreateSignedInteger(sequence_number_value);
 		obj.Add("sequence-number", sequence_number_json);
+	}
+
+	// Serialize: manifest-list
+	if (manifest_list.has_value()) {
+		auto &manifest_list_value = *manifest_list;
+		auto manifest_list_json = writer.CreateString(manifest_list_value);
+		obj.Add("manifest-list", manifest_list_json);
+	}
+
+	// Serialize: manifests
+	if (manifests.has_value()) {
+		auto &manifests_value = *manifests;
+		auto manifests_json = writer.CreateArray();
+		for (const auto &manifests_json_item : manifests_value) {
+			auto manifests_json_item_json = writer.CreateString(manifests_json_item);
+			manifests_json.Append(manifests_json_item_json);
+		}
+		obj.Add("manifests", manifests_json);
 	}
 
 	// Serialize: first-row-id

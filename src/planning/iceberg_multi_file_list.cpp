@@ -8,7 +8,7 @@
 #include "duckdb/planner/filter/expression_filter.hpp"
 #include "duckdb/storage/table/row_group_reorderer.hpp"
 
-#include "catalog/rest/catalog_entry/table/iceberg_table_entry.hpp"
+#include "catalog/rest/catalog_entry/table/iceberg_table_schema_version.hpp"
 #include "catalog/rest/transaction/iceberg_transaction.hpp"
 #include "common/iceberg_utils.hpp"
 #include "core/metadata/iceberg_table_metadata.hpp"
@@ -111,7 +111,7 @@ bool IcebergMultiFileList::IsInvalidatedInTransaction(const string &file_path) c
 	if (!HasTransactionData()) {
 		return false;
 	}
-	return GetTransactionData().invalidated_files.IsInvalidated(file_path);
+	return GetTransactionData().IsFileInvalidated(file_path);
 }
 
 const IcebergSnapshotScanInfo &IcebergMultiFileList::GetSnapshot() const {
@@ -149,11 +149,11 @@ IcebergDeletePlanningContext IcebergMultiFileList::GetDeletePlanningContext() co
 	        GetScanPlanProvider()};
 }
 
-optional_ptr<IcebergTableEntry> IcebergMultiFileList::GetTable() const {
+optional_ptr<IcebergTableSchemaVersion> IcebergMultiFileList::GetTable() const {
 	return shared_state->table;
 }
 
-void IcebergMultiFileList::SetTable(IcebergTableEntry &table) {
+void IcebergMultiFileList::SetTable(IcebergTableSchemaVersion &table) {
 	shared_state->table = table;
 }
 
@@ -383,15 +383,21 @@ unique_ptr<NodeStatistics> IcebergMultiFileList::GetCardinality(ClientContext &c
 		if (!data_manifest_matches[i]) {
 			continue;
 		}
-		cardinality += manifest.added_rows_count;
-		cardinality += manifest.existing_rows_count;
+		if (!manifest.counts || !manifest.counts->added_rows_count || !manifest.counts->existing_rows_count) {
+			return nullptr;
+		}
+		cardinality += *manifest.counts->added_rows_count;
+		cardinality += *manifest.counts->existing_rows_count;
 	}
 	for (idx_t i = 0; i < delete_manifests.size(); i++) {
 		auto &manifest = delete_manifests[i].entry.file;
 		if (!delete_manifest_matches[i]) {
 			continue;
 		}
-		cardinality -= manifest.added_rows_count;
+		if (!manifest.counts || !manifest.counts->added_rows_count) {
+			return nullptr;
+		}
+		cardinality -= *manifest.counts->added_rows_count;
 	}
 	return make_uniq<NodeStatistics>(cardinality, cardinality);
 }
@@ -446,8 +452,11 @@ void IcebergMultiFileList::GetStatistics(vector<PartitionStatistics> &result) co
 		if (!data_manifest_matches[i]) {
 			continue;
 		}
-		count += manifest.existing_rows_count;
-		count += manifest.added_rows_count;
+		if (!manifest.counts || !manifest.counts->added_rows_count || !manifest.counts->existing_rows_count) {
+			return;
+		}
+		count += *manifest.counts->existing_rows_count;
+		count += *manifest.counts->added_rows_count;
 	}
 
 	PartitionStatistics partition_stats;

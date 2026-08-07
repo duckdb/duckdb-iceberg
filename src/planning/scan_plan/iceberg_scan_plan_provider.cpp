@@ -2,7 +2,7 @@
 
 #include "catalog/rest/api/iceberg_expression.hpp"
 #include "catalog/rest/api/iceberg_type.hpp"
-#include "catalog/rest/catalog_entry/table/iceberg_table_entry.hpp"
+#include "catalog/rest/catalog_entry/table/iceberg_table_schema_version.hpp"
 #include "catalog/rest/iceberg_catalog.hpp"
 #include "duckdb/common/numeric_utils.hpp"
 #include "duckdb/storage/table/row_group_reorderer.hpp"
@@ -15,7 +15,7 @@ namespace {
 
 enum class ScanPlanningMode : uint8_t { UNSPECIFIED, SERVER_SIDE_ONLY, CLIENT_SIDE_ONLY };
 
-static ScanPlanningMode GetScanPlanningMode(optional_ptr<IcebergTableEntry> table) {
+static ScanPlanningMode GetScanPlanningMode(optional_ptr<IcebergTableSchemaVersion> table) {
 	if (!table) {
 		return ScanPlanningMode::CLIENT_SIDE_ONLY;
 	}
@@ -37,10 +37,12 @@ static ScanPlanningMode GetScanPlanningMode(optional_ptr<IcebergTableEntry> tabl
 
 } // namespace
 
-unique_ptr<IcebergScanPlanProvider>
-IcebergScanPlanProvider::Create(IcebergScanPlanState &shared_state, IcebergScanPlanContext context,
-                                optional_ptr<IcebergTableEntry> table_entry, const IcebergTableFilters &table_filters,
-                                const IcebergScanOrder &scan_order, bool server_side_planning_enabled) {
+unique_ptr<IcebergScanPlanProvider> IcebergScanPlanProvider::Create(IcebergScanPlanState &shared_state,
+                                                                    IcebergScanPlanContext context,
+                                                                    optional_ptr<IcebergTableSchemaVersion> table_entry,
+                                                                    const IcebergTableFilters &table_filters,
+                                                                    const IcebergScanOrder &scan_order,
+                                                                    bool server_side_planning_enabled) {
 	if (!context.snapshot.snapshot) {
 		return make_uniq<ClientSideScanPlanProvider>(shared_state, context);
 	}

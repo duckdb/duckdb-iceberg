@@ -13,7 +13,7 @@
 #include "iceberg_logging.hpp"
 #include "catalog/rest/api/catalog_utils.hpp"
 #include "catalog/rest/catalog_entry/schema/iceberg_schema_entry.hpp"
-#include "catalog/rest/catalog_entry/table/iceberg_table_information.hpp"
+#include "catalog/rest/catalog_entry/table/iceberg_table.hpp"
 #include "catalog/rest/iceberg_catalog.hpp"
 #include "catalog/rest/storage/iceberg_authorization.hpp"
 #include "core/expression/iceberg_value.hpp"
@@ -67,7 +67,7 @@ struct PlanningAccumulator {
 	PlanTasksContainer plan_tasks;
 };
 
-static IRCEndpointBuilder TableEndpoint(IcebergTableInformation &table_info) {
+static IRCEndpointBuilder TableEndpoint(IcebergTable &table_info) {
 	auto &catalog = table_info.catalog;
 	auto result = catalog.GetBaseUrl();
 	result.AddPrefixComponents(catalog.prefix);
@@ -287,8 +287,7 @@ static string SerializePlanRequest(const rest_api_objects::PlanTableScanRequest 
 	return writer.ToString(JSONWriteFlags::ALLOW_INF_AND_NAN);
 }
 
-static void FetchPlanTasks(ClientContext &context, IcebergTableInformation &table_info,
-                           PlanningAccumulator &accumulator) {
+static void FetchPlanTasks(ClientContext &context, IcebergTable &table_info, PlanningAccumulator &accumulator) {
 	for (auto &task_identifier : accumulator.plan_tasks.Tasks()) {
 		if (context.IsInterrupted()) {
 			throw InterruptException();
@@ -313,8 +312,8 @@ static void FetchPlanTasks(ClientContext &context, IcebergTableInformation &tabl
 	}
 }
 
-static void FetchCredentials(ClientContext &context, IcebergTableInformation &table_info,
-                             const optional<string> &plan_id, IcebergServerSideScanPlan &result) {
+static void FetchCredentials(ClientContext &context, IcebergTable &table_info, const optional<string> &plan_id,
+                             IcebergServerSideScanPlan &result) {
 	if (!result.storage_credentials.empty() ||
 	    table_info.catalog.supported_urls.find(IcebergServerSideScanPlanning::CREDENTIALS_ENDPOINT) ==
 	        table_info.catalog.supported_urls.end()) {
@@ -399,7 +398,7 @@ static vector<IcebergManifestListEntry> MakeManifests(FileSystem &fs, const Iceb
 
 } // namespace
 
-bool IcebergServerSideScanPlanning::Plan(ClientContext &context, IcebergTableInformation &table_info,
+bool IcebergServerSideScanPlanning::Plan(ClientContext &context, IcebergTable &table_info,
                                          rest_api_objects::PlanTableScanRequest request,
                                          IcebergServerSideScanPlan &result) {
 	auto endpoint = TableEndpoint(table_info);

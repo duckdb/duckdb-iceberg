@@ -15,7 +15,7 @@ IcebergSchemaSet::IcebergSchemaSet(Catalog &catalog) : catalog(catalog) {
 
 optional_ptr<CatalogEntry> IcebergSchemaSet::GetEntry(ClientContext &context, const string &name,
                                                       OnEntryNotFound if_not_found) {
-	lock_guard<mutex> l(entry_lock);
+	annotated_lock_guard<annotated_mutex> l(entry_lock);
 	auto &ic_catalog = catalog.Cast<IcebergCatalog>();
 	auto &iceberg_transaction = IcebergTransaction::Get(context, catalog);
 
@@ -92,7 +92,7 @@ void IcebergSchemaSet::Scan(ClientContext &context, const std::function<void(Cat
 }
 
 vector<shared_ptr<IcebergSchemaEntry>> IcebergSchemaSet::GetEntries(ClientContext &context) {
-	lock_guard<mutex> l(entry_lock);
+	annotated_lock_guard<annotated_mutex> l(entry_lock);
 	auto &iceberg_transaction = IcebergTransaction::Get(context, catalog);
 	LoadEntriesInternal(context);
 	vector<shared_ptr<IcebergSchemaEntry>> result;
@@ -118,12 +118,12 @@ vector<shared_ptr<IcebergSchemaEntry>> IcebergSchemaSet::GetEntries(ClientContex
 
 void IcebergSchemaSet::AddEntry(const string &name, shared_ptr<IcebergSchemaEntry> entry) {
 	D_ASSERT(entry);
-	lock_guard<mutex> l(entry_lock);
+	annotated_lock_guard<annotated_mutex> l(entry_lock);
 	entries[name] = std::move(entry);
 }
 
 void IcebergSchemaSet::RemoveEntry(const string &name) {
-	lock_guard<mutex> l(entry_lock);
+	annotated_lock_guard<annotated_mutex> l(entry_lock);
 	entries.erase(name);
 }
 
@@ -132,7 +132,7 @@ static string GetSchemaName(const vector<string> &items) {
 }
 
 void IcebergSchemaSet::LoadEntries(ClientContext &context) {
-	lock_guard<mutex> l(entry_lock);
+	annotated_lock_guard<annotated_mutex> l(entry_lock);
 	LoadEntriesInternal(context);
 }
 

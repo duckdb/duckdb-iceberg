@@ -15,8 +15,8 @@
 
 #include "catalog/rest/iceberg_catalog.hpp"
 #include "catalog/rest/transaction/iceberg_transaction.hpp"
-#include "catalog/rest/catalog_entry/table/iceberg_table_entry.hpp"
-#include "catalog/rest/catalog_entry/table/iceberg_table_information.hpp"
+#include "catalog/rest/catalog_entry/table/iceberg_table_schema_version.hpp"
+#include "catalog/rest/catalog_entry/table/iceberg_table.hpp"
 #include "planning/iceberg_multi_file_reader.hpp"
 #include "planning/iceberg_multi_file_list.hpp"
 #include "core/metadata/snapshot/iceberg_snapshot.hpp"
@@ -29,7 +29,7 @@
 namespace duckdb {
 class IcebergDeleteLocalState;
 class IcebergDeleteGlobalState;
-class IcebergTableEntry;
+class IcebergTableSchemaVersion;
 
 static bool IsScanCreatedByDelete(const PhysicalTableScan &scan) {
 	if (scan.function.GetName() != "iceberg_scan") {
@@ -78,7 +78,7 @@ optional_ptr<PhysicalTableScan> IcebergDelete::FindIcebergScan(PhysicalOperator 
 	return nullptr;
 }
 
-IcebergDelete::IcebergDelete(PhysicalPlan &physical_plan, IcebergTableEntry &table,
+IcebergDelete::IcebergDelete(PhysicalPlan &physical_plan, IcebergTableSchemaVersion &table,
                              optional_ptr<IcebergMultiFileList> multi_file_list, PhysicalOperator &child,
                              vector<idx_t> row_id_indexes)
     : PhysicalOperator(physical_plan, PhysicalOperatorType::EXTENSION, {LogicalType::BIGINT}, 1), table(table),
@@ -426,9 +426,11 @@ partitioned_manifest_entry_map_t IcebergDelete::GenerateDeleteManifestEntries(Ic
 			data_file.record_count = delete_file.delete_count;
 			data_file.file_size_in_bytes = delete_file.file_size_bytes;
 			data_file.equality_ids = delete_file.equality_ids;
-			//! Record the equality-delete value bounds so the file can be pruned on metrics.
+			//! Record the equality-delete metrics so the file can be pruned safely.
 			data_file.lower_bounds = delete_file.lower_bounds;
 			data_file.upper_bounds = delete_file.upper_bounds;
+			data_file.null_value_counts = delete_file.null_value_counts;
+			data_file.nan_value_counts = delete_file.nan_value_counts;
 			iceberg_delete_files[delete_file.partition_info.partition_spec_id].push_back(manifest_entry);
 			continue;
 		}
@@ -496,24 +498,16 @@ SinkFinalizeType IcebergDelete::Finalize(Pipeline &pipeline, Event &event, Clien
 	}
 
 	// write out the new manifest file
-	auto &irc_table = table.Cast<IcebergTableEntry>();
+	auto &irc_table = table.Cast<IcebergTableSchemaVersion>();
 
 	auto &table_info = irc_table.table_info;
 	auto iceberg_delete_files = GenerateDeleteManifestEntries(global_state);
 
 	if (!global_state.written_files.empty() || !global_state.altered_manifests.IsEmpty()) {
-		ApplyTableUpdate(table_info, iceberg_transaction, [&](IcebergTableInformation &tbl) {
+		ApplyTableUpdate(table_info, iceberg_transaction, [&](IcebergTable &tbl) {
 			auto &transaction_data = tbl.GetOrCreateTransactionData(iceberg_transaction);
 			transaction_data.AddDeleteSnapshot(std::move(iceberg_delete_files),
 			                                   std::move(global_state.altered_manifests));
-
-			//! Add or overwrite the currently active transaction-local delete files
-			for (auto &entry : global_state.written_files) {
-				auto &delete_file = entry.second;
-				if (table_info.table_metadata.iceberg_version >= 3) {
-					transaction_data.transactional_delete_files[delete_file.data_file_path] = delete_file.file_name;
-				}
-			}
 		});
 	}
 	return SinkFinalizeType::READY;
@@ -550,7 +544,7 @@ InsertionOrderPreservingMap<string> IcebergDelete::ParamsToString() const {
 }
 
 PhysicalOperator &IcebergDelete::PlanDelete(ClientContext &context, PhysicalPlanGenerator &planner,
-                                            IcebergTableEntry &table, PhysicalOperator &child_plan,
+                                            IcebergTableSchemaVersion &table, PhysicalOperator &child_plan,
                                             vector<idx_t> &&row_id_indexes) {
 	auto scan = FindIcebergScan(child_plan);
 
@@ -588,7 +582,7 @@ PhysicalOperator &IcebergCatalog::PlanDeleteInternal(ClientContext &context, Phy
 	if (op.return_chunk) {
 		throw BinderException("RETURNING clause not yet supported for deletion from Iceberg table");
 	}
-	auto &table_entry = op.table.Cast<IcebergTableEntry>();
+	auto &table_entry = op.table.Cast<IcebergTableSchemaVersion>();
 	table_entry.PrepareIcebergScanFromEntry(context);
 
 	auto &irc_transaction = IcebergTransaction::Get(context, *this);

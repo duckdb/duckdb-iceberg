@@ -11,8 +11,8 @@
 
 #include "function/iceberg_functions.hpp"
 #include "common/iceberg_utils.hpp"
-#include "catalog/rest/catalog_entry/table/iceberg_table_entry.hpp"
-#include "catalog/rest/catalog_entry/table/iceberg_table_information.hpp"
+#include "catalog/rest/catalog_entry/table/iceberg_table_schema_version.hpp"
+#include "catalog/rest/catalog_entry/table/iceberg_table.hpp"
 #include "catalog/rest/iceberg_catalog.hpp"
 #include "catalog/rest/transaction/iceberg_transaction_data.hpp"
 #include "catalog/rest/transaction/iceberg_transaction.hpp"
@@ -61,7 +61,7 @@ static bool CheckEntryIsIcebergSchema(optional_ptr<SchemaCatalogEntry> entry) {
 
 static unique_ptr<FunctionData> SetIcebergSchemaPropertiesBind(ClientContext &context, TableFunctionBindInput &input,
                                                                vector<LogicalType> &return_types,
-                                                               vector<string> &names) {
+                                                               vector<Identifier> &names) {
 	auto ret = make_uniq<IcebergSchemaPropertiesBindData>();
 
 	auto input_string = input.inputs[0].ToString();
@@ -88,13 +88,13 @@ static unique_ptr<FunctionData> SetIcebergSchemaPropertiesBind(ClientContext &co
 	}
 
 	return_types.insert(return_types.end(), LogicalType::BIGINT);
-	names.insert(names.end(), string("Success"));
+	names.emplace_back("Success");
 	return std::move(ret);
 }
 
 static unique_ptr<FunctionData> RemoveIcebergSchemaPropertiesBind(ClientContext &context, TableFunctionBindInput &input,
                                                                   vector<LogicalType> &return_types,
-                                                                  vector<string> &names) {
+                                                                  vector<Identifier> &names) {
 	auto ret = make_uniq<IcebergSchemaPropertiesBindData>();
 	auto input_string = input.inputs[0].ToString();
 	auto iceberg_schema = IcebergUtils::GetSchemaEntry(context, input_string);
@@ -118,13 +118,13 @@ static unique_ptr<FunctionData> RemoveIcebergSchemaPropertiesBind(ClientContext 
 	}
 
 	return_types.insert(return_types.end(), LogicalType::BIGINT);
-	names.insert(names.end(), string("Success"));
+	names.emplace_back("Success");
 	return std::move(ret);
 }
 
 static unique_ptr<FunctionData> GetIcebergSchemaPropertiesBind(ClientContext &context, TableFunctionBindInput &input,
                                                                vector<LogicalType> &return_types,
-                                                               vector<string> &names) {
+                                                               vector<Identifier> &names) {
 	auto ret = make_uniq<IcebergSchemaPropertiesBindData>();
 	auto input_string = input.inputs[0].ToString();
 	auto iceberg_schema = IcebergUtils::GetSchemaEntry(context, input_string);
@@ -135,8 +135,8 @@ static unique_ptr<FunctionData> GetIcebergSchemaPropertiesBind(ClientContext &co
 
 	return_types.insert(return_types.end(), LogicalType::VARCHAR);
 	return_types.insert(return_types.end(), LogicalType::VARCHAR);
-	names.insert(names.end(), string("key"));
-	names.insert(names.end(), string("value"));
+	names.emplace_back("key");
+	names.emplace_back("value");
 	return std::move(ret);
 }
 
@@ -152,7 +152,7 @@ static void SetIcebergSchemaPropertiesFunction(ClientContext &context, TableFunc
 		return;
 	}
 	if (global_state.properties_set) {
-		output.SetCardinality(0);
+		output.SetChildCardinality(0);
 		return;
 	}
 
@@ -199,7 +199,7 @@ static void RemoveIcebergSchemaPropertiesFunction(ClientContext &context, TableF
 		return;
 	}
 	if (global_state.properties_removed) {
-		output.SetCardinality(0);
+		output.SetChildCardinality(0);
 		return;
 	}
 
@@ -257,7 +257,7 @@ static void GetIcebergSchemaPropertiesFunction(ClientContext &context, TableFunc
 	auto &schema_properties = iceberg_schema->schema_info.properties;
 
 	if (schema_properties.empty()) {
-		output.SetCardinality(0);
+		output.SetChildCardinality(0);
 		return;
 	}
 	if (!global_state.all_properties_initialized) {
@@ -268,7 +268,7 @@ static void GetIcebergSchemaPropertiesFunction(ClientContext &context, TableFunc
 	}
 	// if we have already returned all properties.
 	if (global_state.property_count >= global_state.all_properties.size()) {
-		output.SetCardinality(0);
+		output.SetChildCardinality(0);
 		return;
 	}
 

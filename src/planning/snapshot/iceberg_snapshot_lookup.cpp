@@ -19,7 +19,8 @@ IcebergSnapshotLookup IcebergSnapshotLookup::FromAtClause(optional_ptr<BoundAtCl
 		return FromTimestamp(value.DefaultCastAs(LogicalType::TIMESTAMP_MS).GetValue<timestamp_ms_t>());
 	} else {
 		throw InvalidInputException(
-		    "Unit '%s' for time travel is not valid, supported options are 'version' and 'timestamp'", unit);
+		    "Unit '%s' for time travel is not valid, supported options are 'version' and 'timestamp'",
+		    unit.GetIdentifierName());
 	}
 }
 

@@ -5,7 +5,7 @@ import duckdb
 import os
 
 SCRIPT_DIR = os.path.dirname(__file__)
-FILES_DIR = os.path.join(SCRIPT_DIR, '..', '..', '..', 'data', 'generated', 'files')
+FILES_DIR = os.path.join(SCRIPT_DIR, '..', '..', '..', '..', '..', 'data', 'generated', 'files')
 
 def generate_files():
     n_rows = 100_000

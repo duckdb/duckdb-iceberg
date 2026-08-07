@@ -36,7 +36,12 @@ static void S3OrGlueAttachInternal(IcebergAttachOptions &input, const string &se
 	}
 
 	input.authorization_type = IcebergAuthorizationType::SIGV4;
-	input.endpoint = StringUtil::Format("%s.%s.amazonaws.com/iceberg", service, region);
+	if (input.endpoint.empty()) {
+		input.endpoint = StringUtil::Format("%s.%s.amazonaws.com/iceberg", service, region);
+	} else {
+		input.options.emplace("sigv4_service", Value(service));
+		input.options.emplace("sigv4_region", Value(region));
+	}
 }
 
 namespace {
@@ -177,7 +182,7 @@ unique_ptr<Catalog> IcebergAttach::Attach(optional_ptr<StorageExtensionInfo> sto
 	attach_options.name = name;
 
 	// check if we have a secret provided
-	string default_schema;
+	Identifier default_schema;
 	string endpoint_type_string;
 	string authorization_type_string;
 	string access_mode_string;
@@ -219,7 +224,7 @@ unique_ptr<Catalog> IcebergAttach::Attach(optional_ptr<StorageExtensionInfo> sto
 			attach_options.purge_requested = entry.second.DefaultCastAs(LogicalType::BOOLEAN).GetValue<bool>();
 			set_by_attach_options.insert("purge_requested");
 		} else if (lower_name == "default_schema") {
-			default_schema = entry.second.ToString();
+			default_schema = Identifier(entry.second.ToString());
 		} else if (lower_name == "encode_entire_prefix") {
 			attach_options.encode_entire_prefix = true;
 		} else if (lower_name == "max_table_staleness") {
@@ -317,7 +322,8 @@ unique_ptr<Catalog> IcebergAttach::Attach(optional_ptr<StorageExtensionInfo> sto
 	//! Remember the raw attach options so that a later ATTACH OR REPLACE can detect when they change.
 	catalog->SetAttachOptions(options.options);
 	catalog->GetConfig(context, endpoint_type);
-	if (!default_schema.empty() && !IRCAPI::VerifySchemaExistence(context, *catalog, default_schema)) {
+	if (!default_schema.empty() &&
+	    !IRCAPI::VerifySchemaExistence(context, *catalog, default_schema.GetIdentifierName())) {
 		throw InvalidConfigurationException("default_schema '%s' does not exist", default_schema);
 	}
 	return std::move(catalog);

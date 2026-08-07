@@ -1,4 +1,4 @@
-#include "catalog/rest/catalog_entry/table/iceberg_table_information.hpp"
+#include "catalog/rest/catalog_entry/table/iceberg_table.hpp"
 
 #include "duckdb/common/case_insensitive_map.hpp"
 #include "duckdb/common/exception.hpp"
@@ -32,7 +32,7 @@
 
 namespace duckdb {
 
-const string &IcebergTableInformation::BaseFilePath() const {
+const string &IcebergTable::BaseFilePath() const {
 	return table_metadata.location;
 }
 
@@ -168,12 +168,13 @@ static void ParseConfigOptions(const case_insensitive_map_t<string> &config, cas
 	endpoint_it->second = endpoint;
 }
 
-IRCAPITableCredentials IcebergTableInformation::GetVendedCredentials(ClientContext &context) const {
+IRCAPITableCredentials IcebergTable::GetVendedCredentials(ClientContext &context) const {
 	return GetVendedCredentials(context, storage_credentials);
 }
 
-IRCAPITableCredentials IcebergTableInformation::GetVendedCredentials(
-    ClientContext &context, const vector<rest_api_objects::StorageCredential> &storage_credentials) const {
+IRCAPITableCredentials
+IcebergTable::GetVendedCredentials(ClientContext &context,
+                                   const vector<rest_api_objects::StorageCredential> &storage_credentials) const {
 	IRCAPITableCredentials result;
 	auto schema_component = IRCPathComponent::NamespaceComponent(schema.namespace_items, catalog.namespace_separator);
 	auto secret_base_name = UUID::ToString(UUID::GenerateRandomUUID());
@@ -280,18 +281,18 @@ IRCAPITableCredentials IcebergTableInformation::GetVendedCredentials(
 	return result;
 }
 
-bool IcebergTableInformation::IsRenamed() const {
+bool IcebergTable::IsRenamed() const {
 	return original_name != name;
 }
 
-optional_ptr<CatalogEntry> IcebergTableInformation::CreateSchemaVersion(const IcebergTableSchema &table_schema) {
+optional_ptr<CatalogEntry> IcebergTable::CreateSchemaVersion(const IcebergTableSchema &table_schema) {
 	CreateTableInfo info;
 	info.SetTableName(Identifier(name));
 	for (auto &col : table_schema.columns) {
 		info.columns.AddColumn(col->GetColumnDefinition());
 	}
 
-	auto table_entry = make_uniq<IcebergTableEntry>(*this, catalog, schema, info, table_schema.schema_id);
+	auto table_entry = make_uniq<IcebergTableSchemaVersion>(*this, catalog, schema, info, table_schema.schema_id);
 	if (!table_entry->internal) {
 		table_entry->internal = schema.internal;
 	}
@@ -304,7 +305,7 @@ optional_ptr<CatalogEntry> IcebergTableInformation::CreateSchemaVersion(const Ic
 	return result;
 }
 
-idx_t IcebergTableInformation::GetMaxSchemaId() {
+idx_t IcebergTable::GetMaxSchemaId() {
 	idx_t max_schema_id = 0;
 	if (schema_versions.empty()) {
 		throw CatalogException("No schema versions found for table '%s.%s'", schema.name, name);
@@ -317,7 +318,7 @@ idx_t IcebergTableInformation::GetMaxSchemaId() {
 	return max_schema_id;
 }
 
-idx_t IcebergTableInformation::GetNextPartitionSpecId() {
+idx_t IcebergTable::GetNextPartitionSpecId() {
 	idx_t max_partition_spec_id = table_metadata.default_spec_id;
 	for (auto &partition_spec : table_metadata.GetPartitionSpecs()) {
 		auto &partition_spec_id = partition_spec.first;
@@ -328,7 +329,7 @@ idx_t IcebergTableInformation::GetNextPartitionSpecId() {
 	return max_partition_spec_id + 1;
 }
 
-idx_t IcebergTableInformation::GetNextSortOrderId() {
+idx_t IcebergTable::GetNextSortOrderId() {
 	idx_t max_sort_order_id = 0;
 	if (table_metadata.default_sort_order_id.IsValid()) {
 		max_sort_order_id = table_metadata.default_sort_order_id.GetIndex();
@@ -342,7 +343,7 @@ idx_t IcebergTableInformation::GetNextSortOrderId() {
 	return max_sort_order_id + 1;
 }
 
-optional<int64_t> IcebergTableInformation::GetExistingSpecId(IcebergPartitionSpec &spec) {
+optional<int64_t> IcebergTable::GetExistingSpecId(IcebergPartitionSpec &spec) {
 	for (auto &existing_spec : table_metadata.GetPartitionSpecs()) {
 		if (spec.Equals(existing_spec.second)) {
 			return existing_spec.first;
@@ -351,7 +352,7 @@ optional<int64_t> IcebergTableInformation::GetExistingSpecId(IcebergPartitionSpe
 	return std::nullopt;
 }
 
-optional<int64_t> IcebergTableInformation::GetExistingSortOrderId(IcebergSortOrder &spec) {
+optional<int64_t> IcebergTable::GetExistingSortOrderId(IcebergSortOrder &spec) {
 	for (auto &existing_sort_order : table_metadata.GetSortOrderSpecs()) {
 		if (spec.Equals(existing_sort_order.second)) {
 			return existing_sort_order.first;
@@ -360,10 +361,9 @@ optional<int64_t> IcebergTableInformation::GetExistingSortOrderId(IcebergSortOrd
 	return std::nullopt;
 }
 
-IcebergPartitionSpec
-IcebergTableInformation::BuildPartitionSpec(const vector<unique_ptr<ParsedExpression>> &partition_keys,
-                                            const IcebergTableSchema &schema, int32_t spec_id,
-                                            idx_t base_partition_field_id) {
+IcebergPartitionSpec IcebergTable::BuildPartitionSpec(const vector<unique_ptr<ParsedExpression>> &partition_keys,
+                                                      const IcebergTableSchema &schema, int32_t spec_id,
+                                                      idx_t base_partition_field_id) {
 	IcebergPartitionSpec new_spec(spec_id);
 
 	for (auto &key : partition_keys) {
@@ -387,8 +387,8 @@ IcebergTableInformation::BuildPartitionSpec(const vector<unique_ptr<ParsedExpres
 	return new_spec;
 }
 
-IcebergSortOrder IcebergTableInformation::BuildSortOrder(const vector<OrderByNode> &orders,
-                                                         const IcebergTableSchema &schema, int32_t sort_order_id) {
+IcebergSortOrder IcebergTable::BuildSortOrder(const vector<OrderByNode> &orders, const IcebergTableSchema &schema,
+                                              int32_t sort_order_id) {
 	IcebergSortOrder new_sort_order(sort_order_id);
 
 	for (auto &order : orders) {
@@ -409,9 +409,9 @@ IcebergSortOrder IcebergTableInformation::BuildSortOrder(const vector<OrderByNod
 	return new_sort_order;
 }
 
-void IcebergTableInformation::SetPartitionedBy(IcebergTransaction &transaction,
-                                               const vector<unique_ptr<ParsedExpression>> &partition_keys,
-                                               const IcebergTableSchema &schema) {
+void IcebergTable::SetPartitionedBy(IcebergTransaction &transaction,
+                                    const vector<unique_ptr<ParsedExpression>> &partition_keys,
+                                    const IcebergTableSchema &schema) {
 	idx_t base_partition_field_id = 1000;
 	if (table_metadata.HasLastPartitionId()) {
 		base_partition_field_id = table_metadata.GetLastPartitionFieldId() + 1;
@@ -436,8 +436,8 @@ void IcebergTableInformation::SetPartitionedBy(IcebergTransaction &transaction,
 	transaction_data.TableSetDefaultSpec();
 }
 
-void IcebergTableInformation::SetSortedBy(IcebergTransaction &transaction, const vector<OrderByNode> &orders,
-                                          const IcebergTableSchema &schema, bool first_sort_spec) {
+void IcebergTable::SetSortedBy(IcebergTransaction &transaction, const vector<OrderByNode> &orders,
+                               const IcebergTableSchema &schema, bool first_sort_spec) {
 	idx_t new_sort_order_id = 0;
 	if (!first_sort_spec) {
 		new_sort_order_id = GetNextSortOrderId();
@@ -466,7 +466,7 @@ void IcebergTableInformation::SetSortedBy(IcebergTransaction &transaction, const
 	}
 }
 
-optional_ptr<CatalogEntry> IcebergTableInformation::GetSchemaVersion(optional_ptr<BoundAtClause> at) {
+optional_ptr<CatalogEntry> IcebergTable::GetSchemaVersion(optional_ptr<BoundAtClause> at) {
 	if (table_metadata.snapshots.empty()) {
 		return schema_versions[table_metadata.GetCurrentSchemaId()].get();
 	}
@@ -484,7 +484,7 @@ optional_ptr<CatalogEntry> IcebergTableInformation::GetSchemaVersion(optional_pt
 	return schema_versions[schema_id].get();
 }
 
-idx_t IcebergTableInformation::GetIcebergVersion() const {
+idx_t IcebergTable::GetIcebergVersion() const {
 	return table_metadata.iceberg_version;
 }
 
@@ -498,7 +498,7 @@ static void AddHTTPSecretsToOptions(SecretEntry &http_secret_entry, case_insensi
 	                            : http_kv_secret.TryGetValue("verify_ssl").DefaultCastAs(LogicalType::BOOLEAN);
 }
 
-void IcebergTableInformation::LoadCredentials(ClientContext &context) const {
+void IcebergTable::LoadCredentials(ClientContext &context) const {
 	if (catalog.attach_options.access_mode != IRCAccessDelegationMode::VENDED_CREDENTIALS) {
 		// assume secret already exists
 		return;
@@ -506,7 +506,7 @@ void IcebergTableInformation::LoadCredentials(ClientContext &context) const {
 	LoadCredentials(context, GetVendedCredentials(context));
 }
 
-void IcebergTableInformation::LoadCredentials(ClientContext &context, IRCAPITableCredentials table_credentials) const {
+void IcebergTable::LoadCredentials(ClientContext &context, IRCAPITableCredentials table_credentials) const {
 	auto &secret_manager = SecretManager::Get(context);
 
 	auto &transaction = IcebergTransaction::Get(context, catalog);
@@ -602,12 +602,12 @@ void IcebergTableInformation::LoadCredentials(ClientContext &context, IRCAPITabl
 	}
 }
 
-optional_ptr<CatalogEntry> IcebergTableInformation::GetLatestSchema() {
+optional_ptr<CatalogEntry> IcebergTable::GetLatestSchema() {
 	return GetSchemaVersion(nullptr);
 }
 
-string IcebergTableInformation::GetTableKey(const IcebergCatalog &catalog, const vector<string> &namespace_items,
-                                            const string &table_name) {
+string IcebergTable::GetTableKey(const IcebergCatalog &catalog, const vector<string> &namespace_items,
+                                 const string &table_name) {
 	if (namespace_items.empty()) {
 		return table_name;
 	}
@@ -615,11 +615,11 @@ string IcebergTableInformation::GetTableKey(const IcebergCatalog &catalog, const
 	return schema_component.encoded + "." + table_name;
 }
 
-string IcebergTableInformation::GetTableKey() const {
+string IcebergTable::GetTableKey() const {
 	return GetTableKey(catalog, schema.namespace_items, name);
 }
 
-bool IcebergTableInformation::HasTransactionUpdates() const {
+bool IcebergTable::HasTransactionUpdates() const {
 	if (!transaction_data) {
 		return false;
 	}
@@ -639,7 +639,7 @@ bool IcebergTableInformation::HasTransactionUpdates() const {
 	return false;
 }
 
-void IcebergTableInformation::RefreshFromCatalog(ClientContext &context) {
+void IcebergTable::RefreshFromCatalog(ClientContext &context) {
 	auto &ic_catalog = catalog.Cast<IcebergCatalog>();
 	auto table_key = GetTableKey();
 	auto get_table_result = IRCAPI::GetTable(context, ic_catalog, schema, name);
@@ -655,8 +655,8 @@ void IcebergTableInformation::RefreshFromCatalog(ClientContext &context) {
 	ic_catalog.table_request_cache.SetOrOverwrite(table_key, std::move(get_table_result.result_));
 }
 
-IcebergTableInformation IcebergTableInformation::Copy() const {
-	auto clone = IcebergTableInformation(catalog, schema, name);
+IcebergTable IcebergTable::Copy() const {
+	auto clone = IcebergTable(catalog, schema, name);
 	clone.table_metadata = table_metadata.Copy();
 	clone.config = config;
 	clone.initialization_source = initialization_source;
@@ -666,8 +666,8 @@ IcebergTableInformation IcebergTableInformation::Copy() const {
 	return clone;
 }
 
-IcebergTableMetadata IcebergTableInformation::CreateMetadataFromLog(ClientContext &context,
-                                                                    timestamp_ms_t transaction_start_ms) const {
+IcebergTableMetadata IcebergTable::CreateMetadataFromLog(ClientContext &context,
+                                                         timestamp_ms_t transaction_start_ms) const {
 	auto &log = table_metadata.metadata_log;
 
 	optional_idx log_item_index;
@@ -693,7 +693,7 @@ IcebergTableMetadata IcebergTableInformation::CreateMetadataFromLog(ClientContex
 	return IcebergTableMetadata::FromTableMetadata(parsed_metadata);
 }
 
-IcebergTableInformation IcebergTableInformation::Copy(IcebergTransaction &iceberg_transaction) const {
+IcebergTable IcebergTable::Copy(IcebergTransaction &iceberg_transaction) const {
 	auto locked_context = iceberg_transaction.context.lock();
 	auto &context = *locked_context;
 
@@ -727,19 +727,18 @@ IcebergTableInformation IcebergTableInformation::Copy(IcebergTransaction &iceber
 	return ret;
 }
 
-void IcebergTableInformation::InitSchemaVersions() {
+void IcebergTable::InitSchemaVersions() {
 	schema_versions.clear();
 	for (auto &table_schema : table_metadata.GetSchemas()) {
 		CreateSchemaVersion(*table_schema.second);
 	}
 }
 
-IcebergTableInformation::IcebergTableInformation(IcebergCatalog &catalog, IcebergSchemaEntry &schema,
-                                                 const string &name)
+IcebergTable::IcebergTable(IcebergCatalog &catalog, IcebergSchemaEntry &schema, const string &name)
     : catalog(catalog), schema(schema), name(name), original_name(name) {
 }
 
-IcebergTransactionData &IcebergTableInformation::GetOrCreateTransactionData(IcebergTransaction &transaction) {
+IcebergTransactionData &IcebergTable::GetOrCreateTransactionData(IcebergTransaction &transaction) {
 	lock_guard<mutex> guard(transaction.lock);
 	if (!transaction_data) {
 		auto context = transaction.context.lock();
@@ -748,8 +747,7 @@ IcebergTransactionData &IcebergTableInformation::GetOrCreateTransactionData(Iceb
 	return *transaction_data;
 }
 
-void IcebergTableInformation::InitializeFromLoadTableResult(
-    const rest_api_objects::LoadTableResult &load_table_result) {
+void IcebergTable::InitializeFromLoadTableResult(const rest_api_objects::LoadTableResult &load_table_result) {
 	initialization_source = load_table_result;
 	table_metadata = IcebergTableMetadata::FromTableMetadata(load_table_result.metadata);
 	if (auto &val = load_table_result.config) {

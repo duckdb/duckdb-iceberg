@@ -1,0 +1,42 @@
+# name: test/sql/local/iceberg_scans/iceberg_v1_deprecated_metadata.test
+# description: Read V1 metadata using deprecated schema, partition-spec, and snapshot.manifests fields
+# group: [iceberg_scans]
+
+require avro
+
+require parquet
+
+require iceberg
+
+query III
+select *
+from iceberg_scan('{WORKING_DIRECTORY}/data/persistent/iceberg_v1_deprecated/default/legacy_v1')
+order by id
+----
+1	alpha	10
+2	beta	20
+3	alpha	NULL
+
+# The legacy partition-spec is a bare field list. It must still supply the partition
+# shape needed to read the V1 manifest and apply a partition predicate correctly.
+query II
+select id, amount
+from iceberg_scan('{WORKING_DIRECTORY}/data/persistent/iceberg_v1_deprecated/default/legacy_v1')
+where category = 'beta'
+----
+2	20
+
+# Embedded V1 manifests have the V1 defaults normally supplied by a manifest list.
+query III
+select distinct content, data_sequence_number, file_sequence_number
+from iceberg_metadata('{WORKING_DIRECTORY}/data/persistent/iceberg_v1_deprecated/default/legacy_v1')
+order by all
+----
+DATA	0	0
+
+# There is no manifest list path when the snapshot embeds manifests directly.
+query I
+select manifest_list is null
+from iceberg_snapshots('{WORKING_DIRECTORY}/data/persistent/iceberg_v1_deprecated/default/legacy_v1')
+----
+true

@@ -413,6 +413,76 @@ bool IcebergFilePruner::DeleteManifestMatchesDataFile(const IcebergManifestFile 
 	return true;
 }
 
+bool IcebergFilePruner::EqualityDeleteMatchesDataFile(const IcebergDataFile &delete_file,
+                                                      const IcebergDataFile &data_file) const {
+	auto &equality_ids = delete_file.equality_ids;
+
+	for (auto field_id : equality_ids) {
+		auto delete_null_count = delete_file.null_value_counts.find(field_id);
+		if (delete_null_count == delete_file.null_value_counts.end() || delete_null_count->second != 0) {
+			//! A NULL delete key can match NULL data values - require a known zero null count
+			continue;
+		}
+
+		auto delete_lower = delete_file.lower_bounds.find(field_id);
+		auto delete_upper = delete_file.upper_bounds.find(field_id);
+		auto data_lower = data_file.lower_bounds.find(field_id);
+		auto data_upper = data_file.upper_bounds.find(field_id);
+		if (delete_lower == delete_file.lower_bounds.end() || delete_upper == delete_file.upper_bounds.end() ||
+		    data_lower == data_file.lower_bounds.end() || data_upper == data_file.upper_bounds.end()) {
+			continue;
+		}
+
+		auto column_p = metadata.FindColumnByFieldId(field_id);
+		if (!column_p) {
+			//! Could not locate the column in the current or any historical schema
+			continue;
+		}
+		auto &column = *column_p;
+		if (column.type.id() == LogicalTypeId::FLOAT || column.type.id() == LogicalTypeId::DOUBLE) {
+			auto delete_nan_count = delete_file.nan_value_counts.find(field_id);
+			if (delete_nan_count == delete_file.nan_value_counts.end() || delete_nan_count->second != 0) {
+				//! Manifest bounds exclude NaNs - require a known zero NaN count
+				continue;
+			}
+		}
+
+		try {
+			auto delete_stats = IcebergPredicateStats::DeserializeBounds(delete_lower->second, delete_upper->second,
+			                                                             column.name, column.type);
+			auto data_stats = IcebergPredicateStats::DeserializeBounds(data_lower->second, data_upper->second,
+			                                                           column.name, column.type);
+			if (!delete_stats.lower_bound || !delete_stats.upper_bound || !data_stats.lower_bound ||
+			    !data_stats.upper_bound || delete_stats.lower_bound->IsNull() || delete_stats.upper_bound->IsNull() ||
+			    data_stats.lower_bound->IsNull() || data_stats.upper_bound->IsNull()) {
+				continue;
+			}
+			//! Test for either of these conditions:
+			//! data:                   L --------- U
+			//! delete:                               L --------- U
+			//! delete:   L --------- U
+			if (*delete_stats.upper_bound < *data_stats.lower_bound ||
+			    *delete_stats.lower_bound > *data_stats.upper_bound) {
+				DUCKDB_LOG(context, IcebergLogType,
+				           "Iceberg Equality Delete Pruning, skipped 'equality_delete_file': '%s' for 'data_file': "
+				           "'%s', equality field '%s' (field id %d) has bounds [%s, %s] outside data bounds [%s, %s]",
+				           delete_file.file_path, data_file.file_path, column.name, field_id,
+				           delete_stats.lower_bound->ToString(), delete_stats.upper_bound->ToString(),
+				           data_stats.lower_bound->ToString(), data_stats.upper_bound->ToString());
+				return false;
+			}
+		} catch (std::exception &e) {
+			ErrorData error(e);
+			DUCKDB_LOG_DEBUG(context,
+			                 "Bounds for data file / equality delete file failed to deserialize in "
+			                 "EqualityDeleteMatchesDataFile, ignoring error: %s",
+			                 error.Message());
+			continue;
+		}
+	}
+	return true;
+}
+
 partition_value_map_t IcebergFilePruner::PartitionValueMap(const IcebergDataFile &data_file) {
 	partition_value_map_t result;
 	for (auto &partition : data_file.partition_info) {
@@ -458,37 +528,35 @@ bool IcebergFilePruner::DeleteFileMatchesDataFile(const IcebergManifestFile &del
 		throw InvalidInputException("Delete manifest %s references partition_spec_id %d which doesn't exist",
 		                            delete_manifest.manifest_path, delete_manifest.partition_spec_id);
 	}
-	if (partition_spec_it->second.IsUnpartitioned()) {
-		return true;
-	}
-	if (delete_manifest.partition_spec_id != data_manifest.partition_spec_id) {
-		return false;
-	}
-
-	//! Both files are under this spec, so its fields are the partition. Each side is projected over the union of
-	//! the specs its own manifest covers, so a field can be absent on one side; absent means NULL.
-	for (auto &field : partition_spec_it->second.fields) {
-		const Value *delete_value = nullptr;
-		for (auto &delete_partition : delete_file.partition_info) {
-			if (delete_partition.field_id == field.partition_field_id) {
-				delete_value = &delete_partition.value;
-				break;
-			}
-		}
-		const Value *data_value = nullptr;
-		auto data_it = data_partition_values.find(field.partition_field_id);
-		if (data_it != data_partition_values.end()) {
-			data_value = &data_it->second.get();
-		}
-		if (!delete_value || !data_value) {
-			if ((delete_value && !delete_value->IsNull()) || (data_value && !data_value->IsNull())) {
-				return false;
-			}
-			continue;
-		}
-		if (!Value::NotDistinctFrom(*delete_value, *data_value)) {
+	if (!partition_spec_it->second.IsUnpartitioned()) {
+		if (delete_manifest.partition_spec_id != data_manifest.partition_spec_id) {
 			return false;
 		}
+
+		//! Both files are under this spec, so its fields are the partition.
+		for (auto &field : partition_spec_it->second.fields) {
+			const Value *delete_value = nullptr;
+			for (auto &delete_partition : delete_file.partition_info) {
+				if (delete_partition.field_id == field.partition_field_id) {
+					delete_value = &delete_partition.value;
+					break;
+				}
+			}
+			const Value *data_value = nullptr;
+			auto data_it = data_partition_values.find(field.partition_field_id);
+			if (data_it != data_partition_values.end()) {
+				data_value = &data_it->second.get();
+			}
+			if (!delete_value || !data_value) {
+				return false;
+			}
+			if (!Value::NotDistinctFrom(*delete_value, *data_value)) {
+				return false;
+			}
+		}
+	}
+	if (delete_file.content == IcebergManifestEntryContentType::EQUALITY_DELETES) {
+		return EqualityDeleteMatchesDataFile(delete_file, data_file);
 	}
 	return true;
 }

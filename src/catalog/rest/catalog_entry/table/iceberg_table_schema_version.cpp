@@ -1,4 +1,4 @@
-#include "catalog/rest/catalog_entry/table/iceberg_table_entry.hpp"
+#include "catalog/rest/catalog_entry/table/iceberg_table_schema_version.hpp"
 
 #include "duckdb/storage/statistics/base_statistics.hpp"
 #include "duckdb/logging/logger.hpp"
@@ -21,7 +21,7 @@
 #include "planning/iceberg_multi_file_reader.hpp"
 #include "catalog/rest/storage/authorization/sigv4.hpp"
 #include "rest_catalog/objects/list.hpp"
-#include "catalog/rest/catalog_entry/table/iceberg_table_information.hpp"
+#include "catalog/rest/catalog_entry/table/iceberg_table.hpp"
 #include "common/iceberg_default.hpp"
 #include "catalog/rest/transaction/iceberg_transaction.hpp"
 
@@ -29,22 +29,23 @@ namespace duckdb {
 class OAuth2Authorization;
 constexpr column_t IcebergMultiFileReader::COLUMN_IDENTIFIER_LAST_SEQUENCE_NUMBER;
 
-IcebergTableEntry::IcebergTableEntry(IcebergTableInformation &table_info, Catalog &catalog, SchemaCatalogEntry &schema,
-                                     CreateTableInfo &info, optional_idx schema_id)
+IcebergTableSchemaVersion::IcebergTableSchemaVersion(IcebergTable &table_info, Catalog &catalog,
+                                                     SchemaCatalogEntry &schema, CreateTableInfo &info,
+                                                     optional_idx schema_id)
     : TableCatalogEntry(catalog, schema, info), table_info(table_info), schema_id(schema_id) {
 	this->internal = false;
 }
 
-unique_ptr<BaseStatistics> IcebergTableEntry::GetStatistics(ClientContext &context, column_t column_id) {
+unique_ptr<BaseStatistics> IcebergTableSchemaVersion::GetStatistics(ClientContext &context, column_t column_id) {
 	return nullptr;
 }
 
-void IcebergTableEntry::PrepareIcebergScanFromEntry(ClientContext &context) const {
+void IcebergTableSchemaVersion::PrepareIcebergScanFromEntry(ClientContext &context) const {
 	table_info.LoadCredentials(context);
 }
 
-TableFunction IcebergTableEntry::GetScanFunction(ClientContext &context, unique_ptr<FunctionData> &bind_data,
-                                                 const EntryLookupInfo &lookup) {
+TableFunction IcebergTableSchemaVersion::GetScanFunction(ClientContext &context, unique_ptr<FunctionData> &bind_data,
+                                                         const EntryLookupInfo &lookup) {
 	auto &db = DatabaseInstance::GetDatabase(context);
 	auto &system_catalog = Catalog::GetSystemCatalog(db);
 	auto data = CatalogTransaction::GetSystemTransaction(db);
@@ -59,7 +60,8 @@ TableFunction IcebergTableEntry::GetScanFunction(ClientContext &context, unique_
 	PrepareIcebergScanFromEntry(context);
 
 	if (!schema_id.IsValid()) {
-		throw InternalException("GetScanFunction was called with a dummy IcebergTableEntry, this should never happen");
+		throw InternalException(
+		    "GetScanFunction was called with a dummy IcebergTableSchemaVersion, this should never happen");
 	}
 	const auto schema_id = this->schema_id.GetIndex();
 	const auto &metadata = table_info.table_metadata;
@@ -93,9 +95,7 @@ TableFunction IcebergTableEntry::GetScanFunction(ClientContext &context, unique_
 	vector<Value> inputs = {storage_location};
 	TableFunctionBindInput bind_input(inputs, param_map, return_types, names, nullptr, nullptr, iceberg_scan_function,
 	                                  empty_ref);
-	vector<string> bind_names;
-	auto result = iceberg_scan_function.bind(context, bind_input, return_types, bind_names);
-	names = StringsToIdentifiers(bind_names);
+	auto result = iceberg_scan_function.bind(context, bind_input, return_types, names);
 	bind_data = std::move(result);
 	auto &file_bind_data = bind_data->Cast<MultiFileBindData>();
 	file_bind_data.virtual_columns = GetVirtualColumns();
@@ -105,15 +105,15 @@ TableFunction IcebergTableEntry::GetScanFunction(ClientContext &context, unique_
 	return iceberg_scan_function;
 }
 
-TableFunction IcebergTableEntry::GetScanFunction(ClientContext &context, unique_ptr<FunctionData> &bind_data) {
-	throw InternalException("IcebergTableEntry::GetScanFunction called without entry lookup info");
+TableFunction IcebergTableSchemaVersion::GetScanFunction(ClientContext &context, unique_ptr<FunctionData> &bind_data) {
+	throw InternalException("IcebergTableSchemaVersion::GetScanFunction called without entry lookup info");
 }
 
-virtual_column_map_t IcebergTableEntry::GetVirtualColumns() const {
+virtual_column_map_t IcebergTableSchemaVersion::GetVirtualColumns() const {
 	return VirtualColumns();
 }
 
-virtual_column_map_t IcebergTableEntry::VirtualColumns() {
+virtual_column_map_t IcebergTableSchemaVersion::VirtualColumns() {
 	virtual_column_map_t result;
 	result.emplace(MultiFileReader::COLUMN_IDENTIFIER_FILENAME, TableColumn("filename", LogicalType::VARCHAR));
 	result.emplace(COLUMN_IDENTIFIER_ROW_ID, TableColumn("_row_id", LogicalType::BIGINT));
@@ -125,7 +125,7 @@ virtual_column_map_t IcebergTableEntry::VirtualColumns() {
 }
 
 //! NOTE: IcebergDelete::FindIcebergScan needs to change in tandem with this method
-vector<column_t> IcebergTableEntry::GetRowIdColumns() const {
+vector<column_t> IcebergTableSchemaVersion::GetRowIdColumns() const {
 	vector<column_t> result;
 	auto &table_metadata = table_info.table_metadata;
 	if (table_metadata.iceberg_version >= 3) {
@@ -138,7 +138,7 @@ vector<column_t> IcebergTableEntry::GetRowIdColumns() const {
 	return result;
 }
 
-LogicalType IcebergTableEntry::GetExpectedTypeForInsert(const ColumnDefinition &column) const {
+LogicalType IcebergTableSchemaVersion::GetExpectedTypeForInsert(const ColumnDefinition &column) const {
 	auto type = column.Type();
 	if (type.id() == LogicalTypeId::STRUCT) {
 		return LogicalType::INVALID;
@@ -146,15 +146,14 @@ LogicalType IcebergTableEntry::GetExpectedTypeForInsert(const ColumnDefinition &
 	return type;
 }
 
-unique_ptr<Expression> IcebergTableEntry::GetDefaultExpressionForColumn(ClientContext &context,
-                                                                        const LogicalType &input_type,
-                                                                        const LogicalType &result_type,
-                                                                        ColumnBinding binding,
-                                                                        const Expression &constant_value) const {
+unique_ptr<Expression>
+IcebergTableSchemaVersion::GetDefaultExpressionForColumn(ClientContext &context, const LogicalType &input_type,
+                                                         const LogicalType &result_type, ColumnBinding binding,
+                                                         const Expression &constant_value) const {
 	return IcebergDefaultProjectionResolver::ResolveDefault(context, input_type, result_type, binding, constant_value);
 }
 
-TableStorageInfo IcebergTableEntry::GetStorageInfo(ClientContext &context) {
+TableStorageInfo IcebergTableSchemaVersion::GetStorageInfo(ClientContext &context) {
 	TableStorageInfo result;
 	// TODO fill info
 	return result;

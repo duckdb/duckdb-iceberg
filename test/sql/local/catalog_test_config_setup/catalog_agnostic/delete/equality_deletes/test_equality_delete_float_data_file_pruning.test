@@ -1,0 +1,192 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/delete/equality_deletes/test_equality_delete_float_data_file_pruning.test
+# description: FLOAT and DOUBLE equality-delete bounds prune safely without ignoring NaN delete keys
+# group: [equality_deletes]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require-env EQUALITY_DELETE_WRITES_ENABLED 1
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+statement ok
+set unsafe_and_disabled_for_iceberg_v3_enable_equality_deletes=true;
+
+statement ok
+set iceberg_use_server_side_scan_planning=false;
+
+statement ok
+set threads=1;
+
+statement ok
+set disabled_optimizers='column_lifetime,statistics_propagation,join_order';
+
+statement ok
+set enable_external_file_cache=false;
+
+statement ok
+call enable_logging('Iceberg');
+
+# --- A non-NaN FLOAT equality delete can be pruned on disjoint bounds. ---
+statement ok
+drop table if exists my_datalake.default.equality_delete_float_pruning;
+
+statement ok
+create table my_datalake.default.equality_delete_float_pruning (value float);
+
+statement ok
+insert into my_datalake.default.equality_delete_float_pruning select range::float from range(0, 10);
+
+statement ok
+delete from my_datalake.default.equality_delete_float_pruning where value = 50::float;
+
+query III
+select lower_bound is not null, upper_bound is not null, nan_value_count
+from iceberg_column_stats(my_datalake.default.equality_delete_float_pruning)
+where file_path like '%equality-deletes.parquet' and column_name = 'value';
+----
+true	true	0
+
+statement ok
+call truncate_duckdb_logs();
+
+query I
+select count(*) from my_datalake.default.equality_delete_float_pruning;
+----
+10
+
+query II
+select
+	count(*),
+	count(*) filter (message.contains($$equality field 'value'$$))
+from duckdb_logs()
+where type = 'Iceberg' and message.starts_with('Iceberg Equality Delete Pruning');
+----
+1	1
+
+# --- A non-NaN DOUBLE equality delete can be pruned on disjoint bounds. ---
+statement ok
+drop table if exists my_datalake.default.equality_delete_double_pruning;
+
+statement ok
+create table my_datalake.default.equality_delete_double_pruning (value double);
+
+statement ok
+insert into my_datalake.default.equality_delete_double_pruning select range::double from range(0, 10);
+
+statement ok
+delete from my_datalake.default.equality_delete_double_pruning where value = 50::double;
+
+query III
+select lower_bound is not null, upper_bound is not null, nan_value_count
+from iceberg_column_stats(my_datalake.default.equality_delete_double_pruning)
+where file_path like '%equality-deletes.parquet' and column_name = 'value';
+----
+true	true	0
+
+statement ok
+call truncate_duckdb_logs();
+
+query I
+select count(*) from my_datalake.default.equality_delete_double_pruning;
+----
+10
+
+query II
+select
+	count(*),
+	count(*) filter (message.contains($$equality field 'value'$$))
+from duckdb_logs()
+where type = 'Iceberg' and message.starts_with('Iceberg Equality Delete Pruning');
+----
+1	1
+
+# --- FLOAT NaN keys are outside Iceberg bounds and must prevent bounds pruning. ---
+statement ok
+drop table if exists my_datalake.default.equality_delete_float_nan;
+
+statement ok
+create table my_datalake.default.equality_delete_float_nan (value float);
+
+statement ok
+insert into my_datalake.default.equality_delete_float_nan values (0), (1), ('NaN'::float);
+
+statement ok
+delete from my_datalake.default.equality_delete_float_nan where value in (50::float, 'NaN'::float);
+
+# The non-NaN key still supplies bounds, while nan_value_count makes those bounds unsafe for pruning.
+query III
+select lower_bound is not null, upper_bound is not null, nan_value_count is null
+from iceberg_column_stats(my_datalake.default.equality_delete_float_nan)
+where file_path like '%equality-deletes.parquet' and column_name = 'value';
+----
+true	true	true
+
+statement ok
+call truncate_duckdb_logs();
+
+query II
+select count(*), sum(case when isnan(value) then 1 else 0 end)
+from my_datalake.default.equality_delete_float_nan;
+----
+2	0
+
+query I
+select count(*)
+from duckdb_logs()
+where type = 'Iceberg' and message.starts_with('Iceberg Equality Delete Pruning');
+----
+0
+
+# --- DOUBLE NaN keys have the same conservative behavior. ---
+statement ok
+drop table if exists my_datalake.default.equality_delete_double_nan;
+
+statement ok
+create table my_datalake.default.equality_delete_double_nan (value double);
+
+statement ok
+insert into my_datalake.default.equality_delete_double_nan values (0), (1), ('NaN'::double);
+
+statement ok
+delete from my_datalake.default.equality_delete_double_nan where value in (50::double, 'NaN'::double);
+
+query III
+select lower_bound is not null, upper_bound is not null, nan_value_count is null
+from iceberg_column_stats(my_datalake.default.equality_delete_double_nan)
+where file_path like '%equality-deletes.parquet' and column_name = 'value';
+----
+true	true	true
+
+statement ok
+call truncate_duckdb_logs();
+
+query II
+select count(*), sum(case when isnan(value) then 1 else 0 end)
+from my_datalake.default.equality_delete_double_nan;
+----
+2	0
+
+query I
+select count(*)
+from duckdb_logs()
+where type = 'Iceberg' and message.starts_with('Iceberg Equality Delete Pruning');
+----
+0
+
+statement ok
+drop table my_datalake.default.equality_delete_float_pruning;
+
+statement ok
+drop table my_datalake.default.equality_delete_double_pruning;
+
+statement ok
+drop table my_datalake.default.equality_delete_float_nan;
+
+statement ok
+drop table my_datalake.default.equality_delete_double_nan;

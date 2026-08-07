@@ -13,7 +13,7 @@
 #include "duckdb/catalog/catalog_entry/copy_function_catalog_entry.hpp"
 #include "duckdb/storage/external_file_cache/caching_file_system.hpp"
 
-#include "catalog/rest/catalog_entry/table/iceberg_table_entry.hpp"
+#include "catalog/rest/catalog_entry/table/iceberg_table_schema_version.hpp"
 #include "core/metadata/iceberg_table_metadata.hpp"
 
 namespace duckdb {

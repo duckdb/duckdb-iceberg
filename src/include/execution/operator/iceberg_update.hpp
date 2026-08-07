@@ -13,19 +13,19 @@
 #include "duckdb/common/multi_file/multi_file_reader.hpp"
 
 #include "execution/operator/iceberg_insert.hpp"
-#include "catalog/rest/catalog_entry/table/iceberg_table_entry.hpp"
+#include "catalog/rest/catalog_entry/table/iceberg_table_schema_version.hpp"
 #include "catalog/rest/catalog_entry/schema/iceberg_schema_entry.hpp"
 
 namespace duckdb {
 
 class IcebergUpdate : public PhysicalOperator {
 public:
-	IcebergUpdate(PhysicalPlan &physical_plan, IcebergTableEntry &table, vector<PhysicalIndex> columns,
+	IcebergUpdate(PhysicalPlan &physical_plan, IcebergTableSchemaVersion &table, vector<PhysicalIndex> columns,
 	              PhysicalOperator &child, PhysicalOperator &delete_op, vector<unique_ptr<Expression>> expressions,
 	              vector<unique_ptr<Expression>> bound_defaults);
 
 	//! The table to update
-	IcebergTableEntry &table;
+	IcebergTableSchemaVersion &table;
 	//! The order of to-be-inserted columns
 	vector<PhysicalIndex> columns;
 	//! The delete operator for deleting the old data
@@ -36,8 +36,8 @@ public:
 
 public:
 	static IcebergUpdate &PlanUpdateOperator(ClientContext &context, PhysicalPlanGenerator &planner,
-	                                         IcebergTableEntry &table, LogicalUpdate &op, PhysicalOperator &child_plan,
-	                                         IcebergCopyInput &copy_input);
+	                                         IcebergTableSchemaVersion &table, LogicalUpdate &op,
+	                                         PhysicalOperator &child_plan, IcebergCopyInput &copy_input);
 
 public:
 	// Operator interface

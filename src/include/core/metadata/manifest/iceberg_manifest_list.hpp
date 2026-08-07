@@ -38,6 +38,29 @@ public:
 	vector<FieldSummary> field_summary;
 };
 
+struct IcebergManifestCounts {
+public:
+	static IcebergManifestCounts Zero();
+
+	bool FilesComplete() const {
+		return added_files_count && existing_files_count && deleted_files_count;
+	}
+	bool RowsComplete() const {
+		return added_rows_count && existing_rows_count && deleted_rows_count;
+	}
+	bool Complete() const {
+		return FilesComplete() && RowsComplete();
+	}
+
+public:
+	optional<idx_t> added_files_count;
+	optional<idx_t> existing_files_count;
+	optional<idx_t> deleted_files_count;
+	optional<idx_t> added_rows_count;
+	optional<idx_t> existing_rows_count;
+	optional<idx_t> deleted_rows_count;
+};
+
 enum class IcebergManifestContentType : uint8_t {
 	DATA = 0,
 	DELETE = 1,
@@ -81,24 +104,16 @@ public:
 	optional<sequence_number_t> sequence_number;
 	optional<sequence_number_t> min_sequence_number;
 	optional<int64_t> added_snapshot_id;
-	//! added files count
-	idx_t added_files_count = 0;
-	//! existing files count
-	idx_t existing_files_count = 0;
-	//! deleted files count
-	idx_t deleted_files_count = 0;
-	//! added rows in the manifest
-	idx_t added_rows_count = 0;
-	//! existing rows in the manifest
-	idx_t existing_rows_count = 0;
-	//! deleted rows in the manifest
-	idx_t deleted_rows_count = 0;
+	//! The count fields were optional in V1 manifest lists. A missing count means unknown/non-zero, not zero.
+	optional<IcebergManifestCounts> counts;
 	//! The field summaries of the partition (if present)
 	ManifestPartitions partitions;
 
 public:
 	IcebergManifestFile(const string &manifest_path) : manifest_path(manifest_path) {
 	}
+
+	void SetCountsFromEntries(const vector<IcebergManifestEntry> &entries);
 };
 
 //! Snapshot metrics gathered for a manifest
@@ -242,6 +257,8 @@ public:
 public:
 	static LogicalType FieldSummaryType();
 	static Value FieldSummaryFieldIds();
+	static void LoadManifestFiles(const IcebergSnapshotScanInfo &snapshot_info, const IcebergTableMetadata &metadata,
+	                              ClientContext &context, vector<IcebergManifestListEntry> &result);
 	static unique_ptr<IcebergManifestList> Load(const string &iceberg_path, const IcebergTableMetadata &metadata,
 	                                            const IcebergSnapshotScanInfo &snapshot_info, ClientContext &context,
 	                                            const IcebergOptions &options);

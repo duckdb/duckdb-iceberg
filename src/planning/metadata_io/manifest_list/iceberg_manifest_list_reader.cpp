@@ -39,13 +39,28 @@ static optional<T> ReadOptionalField(const typename VectorIterator<T>::ValueEntr
 	return std::nullopt;
 }
 
-void ManifestListReader::ReadChunk(DataChunk &chunk, idx_t iceberg_version, vector<IcebergManifestListEntry> &result) {
+template <class T>
+static optional<idx_t> ReadOptionalCount(const char *name, const typename VectorIterator<T>::ValueEntry &entry) {
+	if (!entry.IsValid()) {
+		return nullopt;
+	}
+	auto value = entry.GetValueUnsafe();
+	if (value < 0) {
+		throw InvalidConfigurationException("manifest_file field '%s' cannot be negative", name);
+	}
+	return NumericCast<idx_t>(value);
+}
+
+void ManifestListReader::ReadChunk(DataChunk &chunk, idx_t table_format_version,
+                                   vector<IcebergManifestListEntry> &result) {
 	auto count = chunk.size();
 
 	//! Setup logic
 
 	//! NOTE: the order of these columns is defined by the order that they are produced in BuildManifestListSchema
 	//! see `iceberg_avro_multi_file_reader.cpp`
+	//! The manifest list has no format-version metadata, so table_format_version is used only to traverse this layout.
+	//! Fields that may originate from a V1 list are decoded using their backward-compatible defaults below.
 	idx_t vector_index = 0;
 
 	auto &manifest_path = chunk.data[vector_index++];
@@ -90,7 +105,7 @@ void ManifestListReader::ReadChunk(DataChunk &chunk, idx_t iceberg_version, vect
 
 	optional_ptr<Vector> min_sequence_number;
 	optional<VectorIterator<int64_t>> min_sequence_number_entries;
-	if (iceberg_version >= 2) {
+	if (table_format_version >= 2) {
 		content = chunk.data[vector_index++];
 		sequence_number = chunk.data[vector_index++];
 		min_sequence_number = chunk.data[vector_index++];
@@ -101,7 +116,7 @@ void ManifestListReader::ReadChunk(DataChunk &chunk, idx_t iceberg_version, vect
 
 	optional_ptr<Vector> first_row_id;
 	optional<VectorIterator<int64_t>> first_row_id_entries;
-	if (iceberg_version >= 3) {
+	if (table_format_version >= 3) {
 		first_row_id = chunk.data[vector_index++];
 		first_row_id_entries.emplace(first_row_id->Values<int64_t>());
 	}
@@ -113,17 +128,25 @@ void ManifestListReader::ReadChunk(DataChunk &chunk, idx_t iceberg_version, vect
 		manifest.manifest_length = ReadRequiredField<int64_t>("manifest_length", manifest_length_entries[i]);
 		manifest.added_snapshot_id = ReadRequiredField<int64_t>("added_snapshot_id", added_snapshot_id_entries[i]);
 		manifest.partition_spec_id = ReadRequiredField<int32_t>("partition_spec_id", partition_spec_id_entries[i]);
-		manifest.added_files_count = ReadRequiredField<int32_t>("added_files_count", added_files_count_entries[i]);
-		manifest.existing_files_count =
-		    ReadRequiredField<int32_t>("existing_files_count", existing_files_count_entries[i]);
-		manifest.deleted_files_count =
-		    ReadRequiredField<int32_t>("deleted_files_count", deleted_files_count_entries[i]);
-		manifest.added_rows_count = ReadRequiredField<int64_t>("added_rows_count", added_rows_count_entries[i]);
-		manifest.existing_rows_count =
-		    ReadRequiredField<int64_t>("existing_rows_count", existing_rows_count_entries[i]);
-		manifest.deleted_rows_count = ReadRequiredField<int64_t>("deleted_rows_count", deleted_rows_count_entries[i]);
+		IcebergManifestCounts manifest_counts;
+		manifest_counts.added_files_count =
+		    ReadOptionalCount<int32_t>("added_files_count", added_files_count_entries[i]);
+		manifest_counts.existing_files_count =
+		    ReadOptionalCount<int32_t>("existing_files_count", existing_files_count_entries[i]);
+		manifest_counts.deleted_files_count =
+		    ReadOptionalCount<int32_t>("deleted_files_count", deleted_files_count_entries[i]);
+		manifest_counts.added_rows_count = ReadOptionalCount<int64_t>("added_rows_count", added_rows_count_entries[i]);
+		manifest_counts.existing_rows_count =
+		    ReadOptionalCount<int64_t>("existing_rows_count", existing_rows_count_entries[i]);
+		manifest_counts.deleted_rows_count =
+		    ReadOptionalCount<int64_t>("deleted_rows_count", deleted_rows_count_entries[i]);
+		if (manifest_counts.added_files_count || manifest_counts.existing_files_count ||
+		    manifest_counts.deleted_files_count || manifest_counts.added_rows_count ||
+		    manifest_counts.existing_rows_count || manifest_counts.deleted_rows_count) {
+			manifest.counts = std::move(manifest_counts);
+		}
 
-		if (iceberg_version >= 2) {
+		if (table_format_version >= 2) {
 			manifest.content = IcebergManifestContentType(ReadRequiredField<int32_t>("content", (*content_entries)[i]));
 			manifest.sequence_number = ReadRequiredField<int64_t>("sequence_number", (*sequence_number_entries)[i]);
 			manifest.min_sequence_number =
@@ -137,7 +160,7 @@ void ManifestListReader::ReadChunk(DataChunk &chunk, idx_t iceberg_version, vect
 			manifest.content = IcebergManifestContentType::DATA;
 		}
 
-		if (iceberg_version >= 3) {
+		if (table_format_version >= 3) {
 			manifest.first_row_id = ReadOptionalField<int64_t>((*first_row_id_entries)[i]);
 		}
 
@@ -148,9 +171,7 @@ void ManifestListReader::ReadChunk(DataChunk &chunk, idx_t iceberg_version, vect
 			for (const auto summary_entry : partition_entry.GetChildValues()) {
 				FieldSummary summary;
 				auto contains_null_entry = summary_entry.template GetChildValue<0>();
-				if (contains_null_entry.IsValid()) {
-					summary.contains_null = contains_null_entry.GetValueUnsafe();
-				}
+				summary.contains_null = ReadRequiredField<bool>("contains_null", contains_null_entry);
 				auto contains_nan_entry = summary_entry.template GetChildValue<1>();
 				if (contains_nan_entry.IsValid()) {
 					summary.contains_nan = contains_nan_entry.GetValueUnsafe();

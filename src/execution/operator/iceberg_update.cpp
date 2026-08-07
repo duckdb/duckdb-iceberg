@@ -11,15 +11,15 @@
 #include "execution/operator/iceberg_insert.hpp"
 #include "catalog/rest/transaction/iceberg_transaction.hpp"
 #include "catalog/rest/iceberg_catalog.hpp"
-#include "catalog/rest/catalog_entry/table/iceberg_table_entry.hpp"
-#include "catalog/rest/catalog_entry/table/iceberg_table_information.hpp"
+#include "catalog/rest/catalog_entry/table/iceberg_table_schema_version.hpp"
+#include "catalog/rest/catalog_entry/table/iceberg_table.hpp"
 #include "catalog/rest/transaction/iceberg_transaction_update.hpp"
 #include "planning/iceberg_multi_file_list.hpp"
 
 namespace duckdb {
 
-IcebergUpdate::IcebergUpdate(PhysicalPlan &physical_plan, IcebergTableEntry &table, vector<PhysicalIndex> columns_p,
-                             PhysicalOperator &child, PhysicalOperator &delete_op_p,
+IcebergUpdate::IcebergUpdate(PhysicalPlan &physical_plan, IcebergTableSchemaVersion &table,
+                             vector<PhysicalIndex> columns_p, PhysicalOperator &child, PhysicalOperator &delete_op_p,
                              vector<unique_ptr<Expression>> expressions_p,
                              vector<unique_ptr<Expression>> bound_defaults)
     : PhysicalOperator(physical_plan, PhysicalOperatorType::EXTENSION, {}, 1), table(table),
@@ -44,7 +44,7 @@ IcebergUpdate::IcebergUpdate(PhysicalPlan &physical_plan, IcebergTableEntry &tab
 }
 
 IcebergUpdate &IcebergUpdate::PlanUpdateOperator(ClientContext &context, PhysicalPlanGenerator &planner,
-                                                 IcebergTableEntry &table, LogicalUpdate &op,
+                                                 IcebergTableSchemaVersion &table, LogicalUpdate &op,
                                                  PhysicalOperator &child_plan, IcebergCopyInput &copy_input) {
 	auto &table_metadata = table.table_info.table_metadata;
 	if (table_metadata.iceberg_version < 2) {
@@ -225,7 +225,7 @@ PhysicalOperator &IcebergCatalog::PlanUpdate(ClientContext &context, PhysicalPla
 		throw BinderException("RETURNING clause not yet supported for updates of a Iceberg table");
 	}
 
-	auto &table_entry = op.table.Cast<IcebergTableEntry>();
+	auto &table_entry = op.table.Cast<IcebergTableSchemaVersion>();
 	table_entry.PrepareIcebergScanFromEntry(context);
 
 	auto &irc_transaction = IcebergTransaction::Get(context, *this);
@@ -254,8 +254,8 @@ PhysicalOperator &IcebergCatalog::PlanUpdate(ClientContext &context, PhysicalPla
 	return insert_op;
 }
 
-void IcebergTableEntry::BindUpdateConstraints(Binder &binder, LogicalGet &get, LogicalProjection &proj,
-                                              LogicalUpdate &update, ClientContext &context) {
+void IcebergTableSchemaVersion::BindUpdateConstraints(Binder &binder, LogicalGet &get, LogicalProjection &proj,
+                                                      LogicalUpdate &update, ClientContext &context) {
 	// all updates in DuckDB-Iceberg are deletes + inserts
 	update.update_is_del_and_insert = true;
 

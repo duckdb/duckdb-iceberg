@@ -13,7 +13,7 @@
 #include "duckdb/execution/physical_operator.hpp"
 #include "duckdb/common/index_vector.hpp"
 
-#include "catalog/rest/catalog_entry/table/iceberg_table_entry.hpp"
+#include "catalog/rest/catalog_entry/table/iceberg_table_schema_version.hpp"
 #include "catalog/rest/catalog_entry/schema/iceberg_schema_entry.hpp"
 #include "core/metadata/partition/iceberg_partition_spec.hpp"
 #include "core/metadata/schema/iceberg_table_schema.hpp"
@@ -32,7 +32,7 @@ public:
 	const IcebergTableSchema &schema;
 	string data_path;
 	//! Set of (key, value) options
-	case_insensitive_map_t<vector<Value>> options;
+	identifier_map_t<vector<Value>> options;
 	//! Partition specification for the table (if partitioned)
 	optional_ptr<const IcebergPartitionSpec> partition_spec;
 	//! Table index for logical plan generation (used when generating partition expressions)
@@ -142,7 +142,7 @@ public:
 	static IcebergCopyOptions GetCopyOptions(ClientContext &context, const IcebergCopyInput &copy_input);
 
 	static PhysicalOperator &PlanInsert(ClientContext &context, PhysicalPlanGenerator &planner,
-	                                    IcebergTableEntry &table);
+	                                    IcebergTableSchemaVersion &table);
 	static vector<IcebergManifestEntry> GetInsertManifestEntries(IcebergInsertGlobalState &global_state);
 	static void AddWrittenFiles(IcebergInsertGlobalState &global_state, DataChunk &chunk,
 	                            optional_ptr<TableCatalogEntry> table);

@@ -17,7 +17,7 @@
 namespace duckdb {
 
 class IcebergSchemaEntry;
-class IcebergTableEntry;
+class IcebergTableSchemaVersion;
 class PhysicalCopyToFile;
 
 //! Shared mutable state populated at execution time by PhysicalIcebergCreateTable.
@@ -28,7 +28,7 @@ struct IcebergCTASCreateState {
 	//! Set to true once the CreateTable REST call has completed successfully.
 	bool created = false;
 	//! Populated after CreateTable returns.
-	optional_ptr<IcebergTableEntry> table_entry;
+	optional_ptr<IcebergTableSchemaVersion> table_entry;
 };
 
 class IcebergCreateTableGlobalState : public GlobalOperatorState {

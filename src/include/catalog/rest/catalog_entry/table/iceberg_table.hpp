@@ -3,7 +3,7 @@
 #include "duckdb/catalog/catalog_entry.hpp"
 #include "duckdb/storage/external_file_cache/caching_file_system_wrapper.hpp"
 
-#include "catalog/rest/catalog_entry/table/iceberg_table_entry.hpp"
+#include "catalog/rest/catalog_entry/table/iceberg_table_schema_version.hpp"
 #include "core/metadata/manifest/iceberg_manifest.hpp"
 #include "core/metadata/iceberg_table_metadata.hpp"
 #include "catalog/rest/transaction/iceberg_transaction_data.hpp"
@@ -21,9 +21,9 @@ struct IRCAPITableCredentials {
 	vector<CreateSecretInput> storage_credentials;
 };
 
-struct IcebergTableInformation {
+struct IcebergTable {
 public:
-	IcebergTableInformation(IcebergCatalog &catalog, IcebergSchemaEntry &schema, const string &name);
+	IcebergTable(IcebergCatalog &catalog, IcebergSchemaEntry &schema, const string &name);
 
 public:
 	void LoadCredentials(ClientContext &context) const;
@@ -62,9 +62,9 @@ public:
 	IcebergTableMetadata CreateMetadataFromLog(ClientContext &context, timestamp_ms_t transaction_start_ms) const;
 	// With metadata-log enabled, reconstruct the complete table state at transaction start. Otherwise pin and copy
 	// the complete catalog state that was resolved for this transaction.
-	IcebergTableInformation Copy(IcebergTransaction &iceberg_transaction) const;
+	IcebergTable Copy(IcebergTransaction &iceberg_transaction) const;
 	// This copy is used for deletes, where we don't care about valid table state
-	IcebergTableInformation Copy() const;
+	IcebergTable Copy() const;
 	void InitSchemaVersions();
 
 	bool HasTransactionUpdates() const;
@@ -78,9 +78,9 @@ public:
 	IcebergTableMetadata table_metadata;
 	case_insensitive_map_t<string> config;
 	vector<rest_api_objects::StorageCredential> storage_credentials;
-	unordered_map<int32_t, unique_ptr<IcebergTableEntry>> schema_versions;
+	unordered_map<int32_t, unique_ptr<IcebergTableSchemaVersion>> schema_versions;
 	// dummy entry to hold existence of a table, but no schema versions
-	unique_ptr<IcebergTableEntry> dummy_entry;
+	unique_ptr<IcebergTableSchemaVersion> dummy_entry;
 	unique_ptr<IcebergTransactionData> transaction_data;
 	//! The cached response this table was initialized from, used as an identity and never dereferenced.
 	optional_ptr<const rest_api_objects::LoadTableResult> initialization_source;

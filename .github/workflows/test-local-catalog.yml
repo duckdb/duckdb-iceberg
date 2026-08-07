@@ -76,4 +76,5 @@ jobs:
         env:
           DUCKDB_ICEBERG_HAVE_GENERATED_DATA: 1
         run: |
-          ./build/relassert/test/unittest --order lex "$PWD/test/*" --list-test-names-only || true ./build/relassert/test/unittest --order lex "$PWD/test/*"
+          ./build/relassert/test/unittest --order lex "$PWD/test/*" --list-test-names-only || true
+          ./build/relassert/test/unittest --order lex "$PWD/test/*"

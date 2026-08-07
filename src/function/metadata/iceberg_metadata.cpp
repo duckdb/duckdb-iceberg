@@ -94,7 +94,7 @@ public:
 };
 
 static unique_ptr<FunctionData> IcebergMetaDataBind(ClientContext &context, TableFunctionBindInput &input,
-                                                    vector<LogicalType> &return_types, vector<string> &names) {
+                                                    vector<LogicalType> &return_types, vector<Identifier> &names) {
 	// return a TableRef that contains the scans for the
 	auto ret = make_uniq<IcebergMetaDataBindData>();
 
@@ -115,9 +115,13 @@ static unique_ptr<FunctionData> IcebergMetaDataBind(ClientContext &context, Tabl
 	return_types.insert(return_types.end(), manifest_entry_types.begin(), manifest_entry_types.end());
 
 	auto manifest_names = IcebergManifestNames();
-	names.insert(names.end(), manifest_names.begin(), manifest_names.end());
+	for (auto &manifest_name : manifest_names) {
+		names.emplace_back(manifest_name);
+	}
 	auto manifest_entry_names = IcebergManifestEntryNames();
-	names.insert(names.end(), manifest_entry_names.begin(), manifest_entry_names.end());
+	for (auto &manifest_entry_name : manifest_entry_names) {
+		names.emplace_back(manifest_entry_name);
+	}
 
 	D_ASSERT(manifest_types.size() == manifest_names.size());
 

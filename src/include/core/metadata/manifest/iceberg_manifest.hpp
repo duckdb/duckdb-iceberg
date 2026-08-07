@@ -16,7 +16,7 @@
 
 namespace duckdb {
 
-struct IcebergTableInformation;
+struct IcebergTable;
 struct IcebergManifestFile;
 
 using sequence_number_t = int64_t;

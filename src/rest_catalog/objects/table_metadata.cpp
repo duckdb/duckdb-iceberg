@@ -51,6 +51,10 @@ TableMetadata TableMetadata::Copy() const {
 			(*res.schemas).emplace_back(item.Copy());
 		}
 	}
+	if (schema.has_value()) {
+		res.schema.emplace();
+		(*res.schema) = (*schema).Copy();
+	}
 	if (current_schema_id.has_value()) {
 		res.current_schema_id.emplace();
 		(*res.current_schema_id) = (*current_schema_id);
@@ -64,6 +68,13 @@ TableMetadata TableMetadata::Copy() const {
 		(*res.partition_specs).reserve((*partition_specs).size());
 		for (auto &item : (*partition_specs)) {
 			(*res.partition_specs).emplace_back(item.Copy());
+		}
+	}
+	if (partition_spec.has_value()) {
+		res.partition_spec.emplace();
+		(*res.partition_spec).reserve((*partition_spec).size());
+		for (auto &item : (*partition_spec)) {
+			(*res.partition_spec).emplace_back(item.Copy());
 		}
 	}
 	if (default_spec_id.has_value()) {
@@ -250,6 +261,15 @@ string TableMetadata::TryFromJSON(JSONValue obj) {
 		}
 		schemas = std::move(schemas_tmp);
 	}
+	auto schema_val = obj.GetMember("schema");
+	if (schema_val.IsValid()) {
+		Schema schema_tmp;
+		error = schema_tmp.TryFromJSON(schema_val);
+		if (!error.empty()) {
+			return error;
+		}
+		schema = std::move(schema_tmp);
+	}
 	auto current_schema_id_val = obj.GetMember("current-schema-id");
 	if (current_schema_id_val.IsValid()) {
 		int32_t current_schema_id_tmp;
@@ -298,6 +318,31 @@ string TableMetadata::TryFromJSON(JSONValue obj) {
 			    json_utils::GetTypeDescription(partition_specs_val).c_str());
 		}
 		partition_specs = std::move(partition_specs_tmp);
+	}
+	auto partition_spec_val = obj.GetMember("partition-spec");
+	if (partition_spec_val.IsValid()) {
+		vector<PartitionField> partition_spec_tmp;
+		if (partition_spec_val.IsArray()) {
+			partition_spec_val.IterateArray([&](JSONValue partition_spec_tmp_item_val) {
+				if (!error.empty()) {
+					return;
+				}
+				PartitionField partition_spec_tmp_item;
+				error = partition_spec_tmp_item.TryFromJSON(partition_spec_tmp_item_val);
+				if (!error.empty()) {
+					return;
+				}
+				partition_spec_tmp.emplace_back(std::move(partition_spec_tmp_item));
+			});
+			if (!error.empty()) {
+				return error;
+			}
+		} else {
+			return StringUtil::Format(
+			    "TableMetadata property 'partition_spec_tmp' is not of type 'array', found %s instead",
+			    json_utils::GetTypeDescription(partition_spec_val).c_str());
+		}
+		partition_spec = std::move(partition_spec_tmp);
 	}
 	auto default_spec_id_val = obj.GetMember("default-spec-id");
 	if (default_spec_id_val.IsValid()) {
@@ -573,6 +618,13 @@ void TableMetadata::PopulateJSON(JSONWriter &writer, JSONMutableValue obj) const
 		obj.Add("schemas", schemas_json);
 	}
 
+	// Serialize: schema
+	if (schema.has_value()) {
+		auto &schema_value = *schema;
+		auto schema_json = schema_value.ToJSON(writer);
+		obj.Add("schema", schema_json);
+	}
+
 	// Serialize: current-schema-id
 	if (current_schema_id.has_value()) {
 		auto &current_schema_id_value = *current_schema_id;
@@ -596,6 +648,17 @@ void TableMetadata::PopulateJSON(JSONWriter &writer, JSONMutableValue obj) const
 			partition_specs_json.Append(partition_specs_json_item_json);
 		}
 		obj.Add("partition-specs", partition_specs_json);
+	}
+
+	// Serialize: partition-spec
+	if (partition_spec.has_value()) {
+		auto &partition_spec_value = *partition_spec;
+		auto partition_spec_json = writer.CreateArray();
+		for (const auto &partition_spec_json_item : partition_spec_value) {
+			auto partition_spec_json_item_json = partition_spec_json_item.ToJSON(writer);
+			partition_spec_json.Append(partition_spec_json_item_json);
+		}
+		obj.Add("partition-spec", partition_spec_json);
 	}
 
 	// Serialize: default-spec-id

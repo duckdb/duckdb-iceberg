@@ -11,7 +11,7 @@ namespace duckdb {
 
 class ClientContext;
 class IcebergCatalog;
-struct IcebergTableInformation;
+struct IcebergTable;
 
 struct IcebergServerSideScanPlan {
 	vector<IcebergManifestListEntry> data_manifests;
@@ -34,8 +34,8 @@ public:
 	    "GET /v1/{prefix}/namespaces/{namespace}/tables/{table}/credentials";
 
 	//! Returns false only when the server explicitly declines planning with HTTP 406.
-	static bool Plan(ClientContext &context, IcebergTableInformation &table_info,
-	                 rest_api_objects::PlanTableScanRequest request, IcebergServerSideScanPlan &result);
+	static bool Plan(ClientContext &context, IcebergTable &table_info, rest_api_objects::PlanTableScanRequest request,
+	                 IcebergServerSideScanPlan &result);
 };
 
 } // namespace duckdb

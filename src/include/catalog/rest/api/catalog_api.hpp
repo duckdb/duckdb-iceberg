@@ -16,7 +16,7 @@ namespace duckdb {
 class IcebergCatalog;
 struct IcebergCreateTableRequest;
 class IcebergSchemaEntry;
-class IcebergTableEntry;
+class IcebergTableSchemaVersion;
 
 struct IRCAPISchema {
 	//! The (potentially multiple) levels that the namespace is made up of

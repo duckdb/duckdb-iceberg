@@ -32,8 +32,8 @@
 #include "catalog/rest/catalog_entry/schema/iceberg_schema_entry.hpp"
 #include "catalog/rest/iceberg_schema_set.hpp"
 #include "catalog/rest/iceberg_table_set.hpp"
-#include "catalog/rest/catalog_entry/table/iceberg_table_entry.hpp"
-#include "catalog/rest/catalog_entry/table/iceberg_table_information.hpp"
+#include "catalog/rest/catalog_entry/table/iceberg_table_schema_version.hpp"
+#include "catalog/rest/catalog_entry/table/iceberg_table.hpp"
 
 #include "core/metadata/iceberg_table_metadata.hpp"
 
@@ -98,7 +98,7 @@ public:
 	}
 
 public:
-	void AddTable(IcebergTableInformation &table_info, ClientContext &context, const IcebergOptions &options) {
+	void AddTable(IcebergTable &table_info, ClientContext &context, const IcebergOptions &options) {
 		auto &metadata = table_info.table_metadata;
 		if (table_names_to_skip.count(table_info.name)) {
 			//! FIXME: perhaps log that the table was skipped
@@ -757,7 +757,7 @@ private:
 		return res.first->second;
 	}
 
-	DuckLakeTable &GetTable(const IcebergTableInformation &table_info) {
+	DuckLakeTable &GetTable(const IcebergTable &table_info) {
 		auto &metadata = table_info.table_metadata;
 		auto table_uuid = metadata.table_uuid;
 		auto it = tables.find(table_uuid);
@@ -796,7 +796,7 @@ public:
 };
 
 static unique_ptr<FunctionData> IcebergToDuckLakeBind(ClientContext &context, TableFunctionBindInput &input,
-                                                      vector<LogicalType> &return_types, vector<string> &names) {
+                                                      vector<LogicalType> &return_types, vector<Identifier> &names) {
 	auto ret = make_uniq<IcebergToDuckLakeBindData>();
 	auto input_string = input.inputs[0].ToString();
 	ret->ducklake_catalog = input.inputs[1].ToString();
@@ -833,12 +833,10 @@ static unique_ptr<FunctionData> IcebergToDuckLakeBind(ClientContext &context, Ta
 	for (auto &schema_entry_ptr : schema_entries) {
 		auto &schema_entry = *schema_entry_ptr;
 		auto &tables = schema_entry.tables;
-		tables.LoadEntries(context);
-		for (auto &it : tables.GetEntriesMutable()) {
-			auto &table = it.second;
-			tables.FillEntry(context, *table);
-			ret->AddTable(*table, context, options);
-		}
+		tables.ScanTables(context, [&](IcebergTable &table) {
+			tables.FillEntry(context, table);
+			ret->AddTable(table, context, options);
+		});
 	}
 
 	ret->AssignSchemaBeginSnapshots();

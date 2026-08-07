@@ -9,7 +9,7 @@ IcebergTransactionAlterUpdate::IcebergTransactionAlterUpdate(IcebergTransaction 
 IcebergTransactionAlterUpdate::~IcebergTransactionAlterUpdate() {
 }
 
-IcebergTableInformation &IcebergTransactionAlterUpdate::GetOrInitializeTable(const IcebergTableInformation &table) {
+IcebergTable &IcebergTransactionAlterUpdate::GetOrInitializeTable(const IcebergTable &table) {
 	auto table_key = table.GetTableKey();
 	auto it = updated_tables.find(table_key);
 	if (it == updated_tables.end()) {
@@ -34,8 +34,7 @@ bool IcebergTransactionAlterUpdate::HasUpdates() const {
 	return false;
 }
 
-IcebergTableInformation &IcebergTransactionAlterUpdate::CreateTable(const string &table_key,
-                                                                    IcebergTableInformation &&table) {
+IcebergTable &IcebergTransactionAlterUpdate::CreateTable(const string &table_key, IcebergTable &&table) {
 	auto &state = transaction.SetTransactionTableState(table_key, std::move(table), IcebergTableStatus::ALIVE);
 	auto &created_table = state.GetInfo();
 	auto emplace_res = updated_tables.emplace(table_key, created_table);
@@ -46,17 +45,14 @@ IcebergTableInformation &IcebergTransactionAlterUpdate::CreateTable(const string
 	return created_table;
 }
 
-IcebergTransactionDeleteUpdate::IcebergTransactionDeleteUpdate(IcebergTransaction &transaction,
-                                                               IcebergTableInformation &table)
+IcebergTransactionDeleteUpdate::IcebergTransactionDeleteUpdate(IcebergTransaction &transaction, IcebergTable &table)
     : transaction(transaction), deleted_table(table) {
 }
 IcebergTransactionDeleteUpdate::~IcebergTransactionDeleteUpdate() {
 }
 
-IcebergTransactionRenameUpdate::IcebergTransactionRenameUpdate(IcebergTransaction &transaction,
-                                                               IcebergTableInformation &table,
-                                                               IcebergTableInformation &new_table,
-                                                               const string &new_name)
+IcebergTransactionRenameUpdate::IcebergTransactionRenameUpdate(IcebergTransaction &transaction, IcebergTable &table,
+                                                               IcebergTable &new_table, const string &new_name)
     : transaction(transaction), table(table), new_table(new_table), new_name(new_name) {
 }
 IcebergTransactionRenameUpdate::~IcebergTransactionRenameUpdate() {

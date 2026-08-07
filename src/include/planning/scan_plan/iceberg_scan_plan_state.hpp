@@ -14,7 +14,7 @@
 
 namespace duckdb {
 
-class IcebergTableEntry;
+class IcebergTableSchemaVersion;
 struct IcebergDeleteManifestLoadState;
 
 struct IcebergDeleteFileLoadState {
@@ -56,7 +56,7 @@ struct IcebergScanPlanState {
 	FileSystem &fs;
 	shared_ptr<IcebergScanInfo> scan_info;
 	string path;
-	optional_ptr<IcebergTableEntry> table;
+	optional_ptr<IcebergTableSchemaVersion> table;
 	IcebergOptions options;
 
 	mutable annotated_mutex lock;
@@ -74,6 +74,9 @@ struct IcebergScanPlanState {
 	    delete_file_loads DUCKDB_GUARDED_BY(delete_lock);
 
 	mutable vector<IcebergManifestListEntry> committed_data_manifests DUCKDB_GUARDED_BY(lock);
+	//! Keep track of which manifests we had to eagerly load, so we can emit batches for them once the data scan is
+	//! started
+	mutable vector<bool> eagerly_loaded_data_manifests DUCKDB_GUARDED_BY(lock);
 	mutable vector<reference<const IcebergManifestListEntry>> transaction_data_manifests DUCKDB_GUARDED_BY(lock);
 	mutable unique_ptr<IcebergManifestScanningState> data_manifest_read_state DUCKDB_GUARDED_BY(lock);
 

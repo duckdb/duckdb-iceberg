@@ -1,0 +1,162 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/delete/equality_deletes/test_equality_delete_data_file_pruning.test
+# description: Equality delete bounds prune disjoint data files, including for unpartitioned tables
+# group: [equality_deletes]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require-env EQUALITY_DELETE_WRITES_ENABLED 1
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+statement ok
+set unsafe_and_disabled_for_iceberg_v3_enable_equality_deletes=true;
+
+# Keep planning local so equality-delete/data-file pruning and its logs are deterministic.
+statement ok
+set iceberg_use_server_side_scan_planning=false;
+
+statement ok
+set threads=1;
+
+statement ok
+set disabled_optimizers='column_lifetime,statistics_propagation,join_order';
+
+statement ok
+set enable_external_file_cache=false;
+
+statement ok
+call enable_logging('Iceberg');
+
+# --- Both data files are disjoint from the equality-delete range. ---
+statement ok
+drop table if exists my_datalake.default.equality_delete_data_file_pruning;
+
+statement ok
+create table my_datalake.default.equality_delete_data_file_pruning (id integer, payload varchar);
+
+statement ok
+insert into my_datalake.default.equality_delete_data_file_pruning
+select range, 'low' from range(0, 10);
+
+statement ok
+insert into my_datalake.default.equality_delete_data_file_pruning
+select range, 'high' from range(100, 110);
+
+statement ok
+delete from my_datalake.default.equality_delete_data_file_pruning where id in (40, 60);
+
+# Bounds pruning is only safe when the equality delete's null count is known to be zero.
+query III
+select lower_bound, upper_bound, null_value_count
+from iceberg_column_stats(my_datalake.default.equality_delete_data_file_pruning)
+where file_path like '%equality-deletes.parquet' and column_name = 'id';
+----
+40	60	0
+
+statement ok
+call truncate_duckdb_logs();
+
+query I
+select count(*) from my_datalake.default.equality_delete_data_file_pruning;
+----
+20
+
+# The unpartitioned table has two data files, and both are rejected by equality-delete bounds.
+query IIII
+select
+	count(*),
+	count(*) filter (message.contains($$equality field 'id'$$)),
+	count(*) filter (message.contains('bounds [40, 60] outside data bounds [0, 9]')),
+	count(*) filter (message.contains('bounds [40, 60] outside data bounds [100, 109]'))
+from duckdb_logs()
+where type = 'Iceberg' and message.starts_with('Iceberg Equality Delete Pruning');
+----
+2	2	1	1
+
+# --- Touching bounds overlap: id=9 must still be deleted from [0, 9]. ---
+statement ok
+drop table if exists my_datalake.default.equality_delete_data_file_pruning_boundary;
+
+statement ok
+create table my_datalake.default.equality_delete_data_file_pruning_boundary (id integer);
+
+statement ok
+insert into my_datalake.default.equality_delete_data_file_pruning_boundary select range from range(0, 10);
+
+statement ok
+insert into my_datalake.default.equality_delete_data_file_pruning_boundary select range from range(100, 110);
+
+statement ok
+delete from my_datalake.default.equality_delete_data_file_pruning_boundary where id = 9;
+
+statement ok
+call truncate_duckdb_logs();
+
+query II
+select count(*), count(*) filter (where id = 9)
+from my_datalake.default.equality_delete_data_file_pruning_boundary;
+----
+19	0
+
+# Only [100, 109] is pruned. Equality at the [0, 9] boundary is an overlap, not a rejection.
+query III
+select
+	count(*),
+	count(*) filter (message.contains('bounds [9, 9] outside data bounds [100, 109]')),
+	count(*) filter (message.contains('bounds [9, 9] outside data bounds [0, 9]'))
+from duckdb_logs()
+where type = 'Iceberg' and message.starts_with('Iceberg Equality Delete Pruning');
+----
+1	1	0
+
+# --- A disjoint bound on any equality field is sufficient for a multi-column delete. ---
+statement ok
+drop table if exists my_datalake.default.equality_delete_data_file_pruning_multi;
+
+statement ok
+create table my_datalake.default.equality_delete_data_file_pruning_multi (a integer, b integer);
+
+statement ok
+insert into my_datalake.default.equality_delete_data_file_pruning_multi
+select range, range + 100 from range(0, 10);
+
+statement ok
+insert into my_datalake.default.equality_delete_data_file_pruning_multi
+select range + 100, range from range(0, 10);
+
+statement ok
+delete from my_datalake.default.equality_delete_data_file_pruning_multi where a = 5 and b = 5;
+
+statement ok
+call truncate_duckdb_logs();
+
+query I
+select count(*) from my_datalake.default.equality_delete_data_file_pruning_multi;
+----
+20
+
+# One file is disjoint on a and the other on b, so neither needs the equality delete.
+query III
+select
+	count(*),
+	count(*) filter (message.contains($$equality field 'a'$$)),
+	count(*) filter (message.contains($$equality field 'b'$$))
+from duckdb_logs()
+where type = 'Iceberg' and message.starts_with('Iceberg Equality Delete Pruning');
+----
+2	1	1
+
+statement ok
+drop table my_datalake.default.equality_delete_data_file_pruning;
+
+statement ok
+drop table my_datalake.default.equality_delete_data_file_pruning_boundary;
+
+statement ok
+drop table my_datalake.default.equality_delete_data_file_pruning_multi;

@@ -6,7 +6,7 @@
 #include "duckdb/logging/logger.hpp"
 
 #include "catalog/rest/api/iceberg_table_update.hpp"
-#include "catalog/rest/catalog_entry/table/iceberg_table_information.hpp"
+#include "catalog/rest/catalog_entry/table/iceberg_table.hpp"
 #include "catalog/rest/api/catalog_utils.hpp"
 #include "core/metadata/iceberg_table_metadata.hpp"
 #include "planning/metadata_io/avro/avro_scan.hpp"
@@ -191,7 +191,9 @@ IcebergManifestListEntry IcebergManifestMerge::ScanManifestEntries(const Iceberg
 	while (!reader->Finished()) {
 		reader->Read();
 	}
-	return std::move(manifest_files[0]);
+	auto result = std::move(manifest_files[0]);
+	result.file.SetCountsFromEntries(result.GetManifestEntries());
+	return result;
 }
 
 IcebergManifestListEntry IcebergManifestMerge::WriteReplacementManifest(

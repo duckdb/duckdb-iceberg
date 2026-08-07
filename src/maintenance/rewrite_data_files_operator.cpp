@@ -5,7 +5,7 @@
 #include "duckdb/parallel/meta_pipeline.hpp"
 #include "duckdb/parallel/pipeline.hpp"
 
-#include "catalog/rest/catalog_entry/table/iceberg_table_information.hpp"
+#include "catalog/rest/catalog_entry/table/iceberg_table.hpp"
 #include "maintenance/maintenance_table_loader.hpp"
 #include "maintenance/rewrite_data_files_executor.hpp"
 #include "duckdb/planner/expression/bound_reference_expression.hpp"
@@ -237,10 +237,9 @@ SourceResultType PhysicalRewriteDataFiles::GetDataInternal(ExecutionContext &con
 		added_data_files = gstate.result.added_data_files;
 		rewritten_bytes = gstate.result.rewritten_bytes;
 	}
-	chunk.SetValue(0, 0, Value::BIGINT(rewritten_data_files));
-	chunk.SetValue(1, 0, Value::BIGINT(added_data_files));
-	chunk.SetValue(2, 0, Value::BIGINT(rewritten_bytes));
-	chunk.SetChildCardinality(1);
+	chunk.data[0].Append(Value::BIGINT(rewritten_data_files));
+	chunk.data[1].Append(Value::BIGINT(added_data_files));
+	chunk.data[2].Append(Value::BIGINT(rewritten_bytes));
 	return SourceResultType::FINISHED;
 }
 

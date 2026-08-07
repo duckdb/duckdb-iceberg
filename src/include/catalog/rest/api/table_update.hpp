@@ -16,7 +16,7 @@
 
 namespace duckdb {
 
-struct IcebergTableInformation;
+struct IcebergTable;
 
 struct AddSchemaUpdate : public IcebergTableUpdate {
 public:

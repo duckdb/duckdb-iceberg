@@ -162,6 +162,13 @@ jobs:
     with:
       artifact-name: duckdb-iceberg
 
+  test-sigv4-mock:
+    name: Test against SigV4 mock catalog
+    needs: test-fixture
+    uses: ./.github/workflows/test-sigv4-mock-catalog.yml
+    with:
+      artifact-name: duckdb-iceberg
+
   test-gravitino:
     name: Test against Gravitino Catalog
     needs: test-fixture

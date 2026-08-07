@@ -112,7 +112,8 @@ public:
 	void FinalizeChunk(ClientContext &context, const MultiFileBindData &bind_data, BaseFileReader &reader,
 	                   const MultiFileReaderData &reader_data, DataChunk &input_chunk, DataChunk &output_chunk,
 	                   ExpressionExecutor &executor, optional_ptr<MultiFileReaderGlobalState> global_state) override;
-	bool ParseOption(const string &key, const Value &val, MultiFileOptions &options, ClientContext &context) override;
+	bool ParseOption(const Identifier &key, const Value &val, MultiFileOptions &options,
+	                 ClientContext &context) override;
 
 	MultiFileReaderVirtualColumnBinding
 	GetVirtualColumnExpression(ClientContext &context, MultiFileReaderData &reader_data,

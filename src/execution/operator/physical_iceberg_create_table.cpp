@@ -5,7 +5,7 @@
 #include "duckdb/main/database.hpp"
 
 #include "catalog/rest/catalog_entry/schema/iceberg_schema_entry.hpp"
-#include "catalog/rest/catalog_entry/table/iceberg_table_entry.hpp"
+#include "catalog/rest/catalog_entry/table/iceberg_table_schema_version.hpp"
 #include "catalog/rest/iceberg_catalog.hpp"
 #include "execution/operator/iceberg_insert.hpp"
 
@@ -37,7 +37,7 @@ void PhysicalIcebergCreateTable::MakeCreateTableRequest(ClientContext &client_co
 		if (!table) {
 			throw InternalException("Iceberg CTAS: CreateTable request failed");
 		}
-		auto &ic_table = table->Cast<IcebergTableEntry>();
+		auto &ic_table = table->Cast<IcebergTableSchemaVersion>();
 		// Load any per-table credentials (e.g. SigV4 for the data location).
 		ic_table.PrepareIcebergScanFromEntry(client_context);
 

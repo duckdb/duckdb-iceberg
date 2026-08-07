@@ -8,6 +8,7 @@
 #include "duckdb/common/case_insensitive_map.hpp"
 #include "rest_catalog/objects/encrypted_key.hpp"
 #include "rest_catalog/objects/metadata_log.hpp"
+#include "rest_catalog/objects/partition_field.hpp"
 #include "rest_catalog/objects/partition_spec.hpp"
 #include "rest_catalog/objects/partition_statistics_file.hpp"
 #include "rest_catalog/objects/schema.hpp"
@@ -48,9 +49,11 @@ public:
 	optional<int64_t> next_row_id;
 	optional<case_insensitive_map_t<string>> properties;
 	optional<vector<Schema>> schemas;
+	optional<Schema> schema;
 	optional<int32_t> current_schema_id;
 	optional<int32_t> last_column_id;
 	optional<vector<PartitionSpec>> partition_specs;
+	optional<vector<PartitionField>> partition_spec;
 	optional<int32_t> default_spec_id;
 	optional<int32_t> last_partition_id;
 	optional<vector<SortOrder>> sort_orders;

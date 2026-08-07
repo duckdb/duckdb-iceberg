@@ -6,11 +6,11 @@
 
 namespace duckdb {
 
-struct IcebergTableInformation;
+struct IcebergTable;
 
 //! Load metadata into a new table-information instance instead of reusing an
 //! already-filled catalog entry.
-shared_ptr<IcebergTableInformation> ReloadIcebergTableShared(ClientContext &context, const QualifiedName &table_name,
-                                                             const string &function_name);
+shared_ptr<IcebergTable> ReloadIcebergTableShared(ClientContext &context, const QualifiedName &table_name,
+                                                  const string &function_name);
 
 } // namespace duckdb

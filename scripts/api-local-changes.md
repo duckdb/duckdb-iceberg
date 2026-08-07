@@ -47,6 +47,14 @@ well, so the generated parser remains compatible with both representations.
 This correction is required for scan responses such as
 `"residual-filter": true`.
 
+## Deprecated V1 table metadata
+
+The REST OpenAPI models only the current table metadata representation, but
+the same generated objects also parse metadata JSON files. Keep the deprecated
+V1 `schema`, `partition-spec`, and `snapshot.manifests` fields in the vendored
+schema, and do not require `snapshot.manifest-list`, so standalone V1 metadata
+files can be read.
+
 ## Regeneration
 
 After refreshing and correcting `api.yaml`, regenerate and format the REST

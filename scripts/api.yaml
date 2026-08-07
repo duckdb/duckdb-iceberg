@@ -2784,7 +2784,6 @@ components:
       required:
         - snapshot-id
         - timestamp-ms
-        - manifest-list
         - summary
       properties:
         snapshot-id:
@@ -2802,6 +2801,12 @@ components:
         manifest-list:
           type: string
           description: Location of the snapshot's manifest list file
+        manifests:
+          type: array
+          deprecated: true
+          description: V1 locations of manifest files embedded directly in the snapshot
+          items:
+            type: string
         first-row-id:
           type: integer
           format: int64
@@ -2908,6 +2913,10 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/Schema'
+        schema:
+          deprecated: true
+          description: V1 current schema
+          $ref: '#/components/schemas/Schema'
         current-schema-id:
           type: integer
         last-column-id:
@@ -2917,6 +2926,12 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/PartitionSpec'
+        partition-spec:
+          type: array
+          deprecated: true
+          description: V1 default partition spec fields
+          items:
+            $ref: '#/components/schemas/PartitionField'
         default-spec-id:
           type: integer
         last-partition-id:

@@ -21,8 +21,8 @@
 #include "duckdb/planner/filter/constant_filter.hpp"
 #include "duckdb/planner/filter/table_filter_functions.hpp"
 
-#include "catalog/rest/catalog_entry/table/iceberg_table_entry.hpp"
-#include "catalog/rest/catalog_entry/table/iceberg_table_information.hpp"
+#include "catalog/rest/catalog_entry/table/iceberg_table_schema_version.hpp"
+#include "catalog/rest/catalog_entry/table/iceberg_table.hpp"
 #include "common/iceberg_utils.hpp"
 #include "core/expression/iceberg_value.hpp"
 #include "core/metadata/iceberg_table_metadata.hpp"
@@ -35,8 +35,8 @@ namespace duckdb {
 //! (in iceberg_delete.cpp) are #ifdef'd out, so this code is dead.
 
 //! Whether a physical-filter expression is built purely from equality-delete forms, i.e. `col = const`,
-//! `col IN (const, ...)`, and AND/OR of those. `col IN (...)` and `col = c1 OR ...` can leave such a physical
-//! filter behind even though they also push down as a scan filter; recognizing it here keeps that delete on
+//! `col IN (const, ...)`, `col IS NULL`, and AND/OR of those. `col IN (...)` and `col = c1 OR ...` can leave such a
+//! physical filter behind even though they also push down as a scan filter; recognizing it here keeps that delete on
 //! the equality-delete path. Anything else (ranges, functions, arbitrary expressions) disqualifies.
 static bool ExpressionIsEqualityDeleteForm(const Expression &expr) {
 	if (expr.GetExpressionClass() == ExpressionClass::BOUND_FUNCTION &&
@@ -61,6 +61,11 @@ static bool ExpressionIsEqualityDeleteForm(const Expression &expr) {
 			}
 		}
 		return true;
+	}
+	if (expr.GetExpressionClass() == ExpressionClass::BOUND_OPERATOR &&
+	    expr.GetExpressionType() == ExpressionType::OPERATOR_IS_NULL) {
+		auto &children = expr.Cast<BoundOperatorExpression>().GetChildren();
+		return children.size() == 1 && children[0]->GetExpressionClass() != ExpressionClass::BOUND_CONSTANT;
 	}
 	if (expr.GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
 		auto &conjunction = expr.Cast<BoundConjunctionExpression>();
@@ -160,8 +165,9 @@ static bool SetOrMatchColumnExpression(optional_ptr<const Expression> &column_ex
 }
 
 //! Extract the (single) column expression a filter targets and the set of values it deletes, for the
-//! supported forms: `col = c`, `col IN (c1, ...)`, and `col = c1 OR col = c2 OR ...` (which may nest IN).
-//! NULL constants are dropped - they can never match an equality. Returns false for any other shape.
+//! supported forms: `col = c`, `col IN (c1, ...)`, `col IS NULL`, and `col = c1 OR col = c2 OR ...` (which may
+//! nest IN / IS NULL). NULL constants in equality and IN expressions are dropped because those predicates do
+//! not match NULL; only IS NULL contributes a NULL equality-delete key. Returns false for any other shape.
 static bool TryGetEqualityDeleteValuesFromExpression(const Expression &expr,
                                                      optional_ptr<const Expression> &column_expression,
                                                      vector<Value> &values) {
@@ -222,6 +228,15 @@ static bool TryGetEqualityDeleteValuesFromExpression(const Expression &expr,
 		}
 		return true;
 	}
+	if (expr.GetExpressionClass() == ExpressionClass::BOUND_OPERATOR &&
+	    expr.GetExpressionType() == ExpressionType::OPERATOR_IS_NULL) {
+		auto &children = expr.Cast<BoundOperatorExpression>().GetChildren();
+		if (children.size() != 1 || !SetOrMatchColumnExpression(column_expression, *children[0])) {
+			return false;
+		}
+		values.emplace_back(children[0]->GetReturnType());
+		return true;
+	}
 	if (expr.GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION &&
 	    expr.GetExpressionType() == ExpressionType::CONJUNCTION_OR) {
 		auto &conjunction = expr.Cast<BoundConjunctionExpression>();
@@ -237,7 +252,7 @@ static bool TryGetEqualityDeleteValuesFromExpression(const Expression &expr,
 
 } // namespace
 
-bool IcebergDelete::TryGetEqualityDeletePredicates(ClientContext &context, IcebergTableEntry &table,
+bool IcebergDelete::TryGetEqualityDeletePredicates(ClientContext &context, IcebergTableSchemaVersion &table,
                                                    PhysicalOperator &child_plan,
                                                    vector<IcebergEqualityDeletePredicate> &equality_predicates) {
 	//! Gated behind an explicit testing-only setting.
@@ -277,7 +292,7 @@ bool IcebergDelete::TryGetEqualityDeletePredicates(ClientContext &context, Icebe
 		auto &table_filter = filter_entry.Filter().Cast<ExpressionFilter>();
 		auto &expr = *table_filter.expr;
 
-		//! Accept `col = c`, `col IN (...)`, or `col = c1 OR col = c2 OR ...`; reject anything else.
+		//! Accept equality predicates, IN lists, and IS NULL (including OR combinations); reject anything else.
 		optional_ptr<const Expression> column_expression;
 		vector<Value> raw_values;
 		if (!TryGetEqualityDeleteValuesFromExpression(expr, column_expression, raw_values)) {
@@ -322,9 +337,13 @@ bool IcebergDelete::TryGetEqualityDeletePredicates(ClientContext &context, Icebe
 		predicate.type = column_definition->type;
 		for (auto &raw_value : raw_values) {
 			Value delete_value;
-			string error_message;
-			if (!raw_value.DefaultTryCastAs(column_definition->type, delete_value, &error_message, true)) {
-				return false;
+			if (raw_value.IsNull()) {
+				delete_value = Value(column_definition->type);
+			} else {
+				string error_message;
+				if (!raw_value.DefaultTryCastAs(column_definition->type, delete_value, &error_message, true)) {
+					return false;
+				}
 			}
 			predicate.values.push_back(std::move(delete_value));
 		}
@@ -459,26 +478,53 @@ void IcebergDelete::WriteEqualityDeleteFile(ClientContext &context, IcebergDelet
 	delete_file.partition_info.partition_spec_id = GlobalEqualityDeleteSpecId(table.table_info.table_metadata);
 
 	// Record per-field metrics for the equality-delete values so scans can prune this delete file when its
-	// equality-field range is disjoint from the scan predicate / a data file's bounds. Each field's bound
-	// spans the min/max of its value set.
+	// equality-field range is disjoint from the scan predicate / a data file's bounds. Bounds span the min/max
+	// of the non-null, non-NaN values because Iceberg bounds exclude nulls and NaNs.
 	for (auto &predicate : equality_predicates) {
-		Value min_value = predicate.values[0];
-		Value max_value = predicate.values[0];
+		optional<Value> min_value;
+		optional<Value> max_value;
+		bool has_null = false;
+		bool has_nan = false;
 		for (auto &value : predicate.values) {
-			if (value < min_value) {
+			if (value.IsNull()) {
+				has_null = true;
+				continue;
+			}
+			bool is_nan = false;
+			if (predicate.type.id() == LogicalTypeId::FLOAT) {
+				is_nan = Value::IsNan(value.GetValue<float>());
+			} else if (predicate.type.id() == LogicalTypeId::DOUBLE) {
+				is_nan = Value::IsNan(value.GetValue<double>());
+			}
+			if (is_nan) {
+				has_nan = true;
+				continue;
+			}
+			if (!min_value || value < *min_value) {
 				min_value = value;
 			}
-			if (value > max_value) {
+			if (!max_value || value > *max_value) {
 				max_value = value;
 			}
 		}
-		auto lower = IcebergValue::SerializeValue(min_value, predicate.type, SerializeBound::LOWER_BOUND);
+		if (!has_null) {
+			delete_file.null_value_counts[predicate.field_id] = 0;
+		}
+		if (predicate.type.id() == LogicalTypeId::FLOAT || predicate.type.id() == LogicalTypeId::DOUBLE) {
+			if (!has_nan) {
+				delete_file.nan_value_counts[predicate.field_id] = 0;
+			}
+		}
+		if (!min_value || !max_value) {
+			continue;
+		}
+		auto lower = IcebergValue::SerializeValue(*min_value, predicate.type, SerializeBound::LOWER_BOUND);
 		if (lower.HasError()) {
 			throw InvalidConfigurationException(lower.GetError());
 		} else if (lower.HasValue()) {
 			delete_file.lower_bounds[predicate.field_id] = lower.GetValue();
 		}
-		auto upper = IcebergValue::SerializeValue(max_value, predicate.type, SerializeBound::UPPER_BOUND);
+		auto upper = IcebergValue::SerializeValue(*max_value, predicate.type, SerializeBound::UPPER_BOUND);
 		if (upper.HasError()) {
 			throw InvalidConfigurationException(upper.GetError());
 		} else if (upper.HasValue()) {
