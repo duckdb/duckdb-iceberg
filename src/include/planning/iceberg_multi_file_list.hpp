@@ -127,6 +127,10 @@ private:
 
 	void InitializeView(annotated_lock_guard<annotated_mutex> &guard) const DUCKDB_REQUIRES(shared_state->lock);
 
+	//! Binds the manifest entry a covered data file was recorded from. Takes the shared lock itself, so the
+	//! entry outlives it and can be handed to ResolveApplicableDeleteFiles, which must not be called under it.
+	BoundIcebergManifestEntry BindCoveredDataFile(const CoveredDataFile &covered) const;
+
 	//! The delete-manifest entries that apply to a data file, after manifest pruning and the per-entry
 	//! filter and data-file checks. Must be called without holding the shared lock - reading the delete
 	//! manifests takes it.

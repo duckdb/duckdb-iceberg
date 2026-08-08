@@ -794,6 +794,13 @@ IcebergDeletePlan IcebergMultiFileList::ProcessDeletes(const BoundIcebergManifes
 	return result;
 }
 
+BoundIcebergManifestEntry IcebergMultiFileList::BindCoveredDataFile(const CoveredDataFile &covered) const {
+	annotated_lock_guard<annotated_mutex> guard(shared_state->lock);
+	auto &manifest_list_entry = data_manifests[covered.manifest_file_idx];
+	auto &entries = manifest_list_entry.entry.GetManifestEntries();
+	return manifest_list_entry.BindEntry(entries[covered.manifest_entry_idx]);
+}
+
 vector<IcebergMultiFileList::DroppedDataFile> IcebergMultiFileList::ResolveDroppedDataFiles() const {
 	vector<CoveredDataFile> covered_files;
 	{
@@ -808,16 +815,9 @@ vector<IcebergMultiFileList::DroppedDataFile> IcebergMultiFileList::ResolveDropp
 		dropped.file_path = covered.file_path;
 		dropped.live_record_count = covered.record_count;
 
-		unique_ptr<BoundIcebergManifestEntry> data_manifest_entry;
-		{
-			annotated_lock_guard<annotated_mutex> guard(shared_state->lock);
-			auto &manifest_list_entry = data_manifests[covered.manifest_file_idx];
-			auto &entries = manifest_list_entry.entry.GetManifestEntries();
-			data_manifest_entry = make_uniq<BoundIcebergManifestEntry>(
-			    manifest_list_entry.BindEntry(entries[covered.manifest_entry_idx]));
-		}
+		auto data_manifest_entry = BindCoveredDataFile(covered);
 
-		for (auto delete_file : ResolveApplicableDeleteFiles(*data_manifest_entry)) {
+		for (auto delete_file : ResolveApplicableDeleteFiles(data_manifest_entry)) {
 			annotated_lock_guard<annotated_mutex> guard(shared_state->lock);
 			annotated_lock_guard<annotated_mutex> delete_guard(shared_state->delete_lock);
 			auto &delete_entry =
