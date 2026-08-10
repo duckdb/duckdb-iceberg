@@ -79,7 +79,7 @@ CopyIcebergBindData::CopyIcebergBindData(const CopyInfo &info, vector<string> &&
 		if (option.second.empty()) {
 			continue;
 		}
-		table_metadata->table_properties[option.first] = option.second[0].ToString();
+		table_metadata->table_properties[option.first.GetIdentifierName()] = option.second[0].ToString();
 	}
 }
 

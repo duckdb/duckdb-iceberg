@@ -312,12 +312,6 @@ SinkFinalizeType IcebergInsert::Finalize(Pipeline &pipeline, Event &event, Clien
 				auto &transaction_data = tbl.GetOrCreateTransactionData(iceberg_transaction);
 				transaction_data.AddUpdateSnapshot(std::move(delete_manifest_entries), std::move(written_files),
 				                                   std::move(delete_global_state.altered_manifests));
-				for (auto &entry : delete_global_state.written_files) {
-					auto &delete_file = entry.second;
-					if (table_info.table_metadata.iceberg_version >= 3) {
-						transaction_data.transactional_delete_files[delete_file.data_file_path] = delete_file.file_name;
-					}
-				}
 			});
 		}
 	} else {

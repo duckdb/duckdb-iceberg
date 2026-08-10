@@ -92,7 +92,7 @@ class IcebergCatalog : public Catalog {
 public:
 	explicit IcebergCatalog(AttachedDatabase &db_p, AccessMode access_mode,
 	                        unique_ptr<IcebergAuthorization> auth_handler, IcebergAttachOptions &attach_options,
-	                        const string &default_schema);
+	                        const Identifier &default_schema);
 	~IcebergCatalog() override;
 
 public:
@@ -120,7 +120,7 @@ public:
 	bool CheckAmbiguousCatalogOrSchema(ClientContext &context, const Identifier &schema) override {
 		return false;
 	}
-	string GetDefaultSchema() const override {
+	Identifier GetDefaultSchema() const override {
 		return default_schema;
 	}
 	ErrorData SupportsCreateTable(BoundCreateTableInfo &info) override;
@@ -176,7 +176,7 @@ public:
 	string namespace_separator = "\x1f";
 	//! attach options
 	IcebergAttachOptions attach_options;
-	string default_schema;
+	Identifier default_schema;
 	//! Storage locations this catalog signs requests for, shared with the file system that reads them
 	shared_ptr<IcebergRemoteSigningRegistry> remote_signing;
 

@@ -61,7 +61,7 @@ static bool CheckEntryIsIcebergSchema(optional_ptr<SchemaCatalogEntry> entry) {
 
 static unique_ptr<FunctionData> SetIcebergSchemaPropertiesBind(ClientContext &context, TableFunctionBindInput &input,
                                                                vector<LogicalType> &return_types,
-                                                               vector<string> &names) {
+                                                               vector<Identifier> &names) {
 	auto ret = make_uniq<IcebergSchemaPropertiesBindData>();
 
 	auto input_string = input.inputs[0].ToString();
@@ -88,13 +88,13 @@ static unique_ptr<FunctionData> SetIcebergSchemaPropertiesBind(ClientContext &co
 	}
 
 	return_types.insert(return_types.end(), LogicalType::BIGINT);
-	names.insert(names.end(), string("Success"));
+	names.emplace_back("Success");
 	return std::move(ret);
 }
 
 static unique_ptr<FunctionData> RemoveIcebergSchemaPropertiesBind(ClientContext &context, TableFunctionBindInput &input,
                                                                   vector<LogicalType> &return_types,
-                                                                  vector<string> &names) {
+                                                                  vector<Identifier> &names) {
 	auto ret = make_uniq<IcebergSchemaPropertiesBindData>();
 	auto input_string = input.inputs[0].ToString();
 	auto iceberg_schema = IcebergUtils::GetSchemaEntry(context, input_string);
@@ -118,13 +118,13 @@ static unique_ptr<FunctionData> RemoveIcebergSchemaPropertiesBind(ClientContext 
 	}
 
 	return_types.insert(return_types.end(), LogicalType::BIGINT);
-	names.insert(names.end(), string("Success"));
+	names.emplace_back("Success");
 	return std::move(ret);
 }
 
 static unique_ptr<FunctionData> GetIcebergSchemaPropertiesBind(ClientContext &context, TableFunctionBindInput &input,
                                                                vector<LogicalType> &return_types,
-                                                               vector<string> &names) {
+                                                               vector<Identifier> &names) {
 	auto ret = make_uniq<IcebergSchemaPropertiesBindData>();
 	auto input_string = input.inputs[0].ToString();
 	auto iceberg_schema = IcebergUtils::GetSchemaEntry(context, input_string);
@@ -135,8 +135,8 @@ static unique_ptr<FunctionData> GetIcebergSchemaPropertiesBind(ClientContext &co
 
 	return_types.insert(return_types.end(), LogicalType::VARCHAR);
 	return_types.insert(return_types.end(), LogicalType::VARCHAR);
-	names.insert(names.end(), string("key"));
-	names.insert(names.end(), string("value"));
+	names.emplace_back("key");
+	names.emplace_back("value");
 	return std::move(ret);
 }
 

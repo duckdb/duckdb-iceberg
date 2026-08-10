@@ -368,10 +368,6 @@ void ClientSideScanPlanProvider::ReadDeleteManifests(const vector<idx_t> &manife
 
 vector<IcebergDeleteFileReference> ClientSideScanPlanProvider::GetDeleteFiles(const vector<idx_t> &manifest_indexes) {
 	vector<IcebergDeleteFileReference> result;
-	optional_ptr<const case_insensitive_map_t<string>> transactional_delete_files;
-	if (context.transaction_data) {
-		transactional_delete_files = context.transaction_data->transactional_delete_files;
-	}
 	auto committed_manifest_count = DeleteManifests().size();
 	auto total_manifest_count = committed_manifest_count + shared_state.transaction_delete_manifests.size();
 	for (auto manifest_idx : manifest_indexes) {
@@ -390,9 +386,8 @@ vector<IcebergDeleteFileReference> ClientSideScanPlanProvider::GetDeleteFiles(co
 				if (manifest_entry.status == IcebergManifestEntryStatusType::DELETED) {
 					continue;
 				}
-				auto &referenced_data_file = manifest_entry.data_file.referenced_data_file;
-				if (referenced_data_file && transactional_delete_files &&
-				    transactional_delete_files->count(*referenced_data_file)) {
+				if (context.transaction_data &&
+				    context.transaction_data->IsFileInvalidated(manifest_entry.data_file.file_path)) {
 					continue;
 				}
 				result.push_back({manifest_idx, entry_idx});
@@ -403,13 +398,12 @@ vector<IcebergDeleteFileReference> ClientSideScanPlanProvider::GetDeleteFiles(co
 			auto &manifest_entries = manifest_list_entry.GetManifestEntries();
 			for (idx_t entry_idx = 0; entry_idx < manifest_entries.size(); entry_idx++) {
 				auto &manifest_entry = manifest_entries[entry_idx];
-				auto &data_file = manifest_entry.data_file;
-				auto &referenced_data_file = data_file.referenced_data_file;
-				if (referenced_data_file && transactional_delete_files) {
-					auto it = transactional_delete_files->find(*referenced_data_file);
-					if (it != transactional_delete_files->end() && it->second != data_file.file_path) {
-						continue;
-					}
+				if (manifest_entry.status == IcebergManifestEntryStatusType::DELETED) {
+					continue;
+				}
+				if (context.transaction_data &&
+				    context.transaction_data->IsFileInvalidated(manifest_entry.data_file.file_path)) {
+					continue;
 				}
 				result.push_back({manifest_idx, entry_idx});
 			}

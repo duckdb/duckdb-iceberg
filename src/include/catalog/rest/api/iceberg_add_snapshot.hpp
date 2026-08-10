@@ -4,6 +4,7 @@
 #include "duckdb/common/string.hpp"
 #include "duckdb/common/types.hpp"
 #include "duckdb/common/types/value.hpp"
+#include "duckdb/common/optional.hpp"
 
 #include "catalog/rest/api/iceberg_table_update.hpp"
 #include "core/metadata/manifest/iceberg_manifest.hpp"
@@ -30,15 +31,14 @@ public:
 	void CreateUpdate(DatabaseInstance &db, ClientContext &context, IcebergCommitState &commit_state) const override;
 	const vector<IcebergManifestListEntry> &GetManifestFiles() const;
 	void AddManifestFile(IcebergManifestListEntry &&manifest_file);
+	void SetManifestDeletes(VersionedIcebergManifestDeletes manifest_deletes);
 	IcebergSnapshotOperationType GetOperation() const {
 		return operation;
 	}
 
-public:
-	IcebergManifestDeletes altered_manifests;
-
 private:
 	vector<IcebergManifestListEntry> manifest_files;
+	optional<VersionedIcebergManifestDeletes> manifest_deletes;
 	int32_t schema_id;
 	IcebergSnapshotOperationType operation;
 };

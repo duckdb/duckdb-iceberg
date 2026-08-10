@@ -30,6 +30,7 @@ public:
 	bool RetryStateMatches(const IcebergTable &table_info) const;
 	//! Whether this transaction stages a DELETE snapshot; gates the commit-retry safety check.
 	bool ContainsDelete() const;
+	bool IsFileInvalidated(const string &file_path) const;
 
 	void AddSnapshot(IcebergSnapshotOperationType operation, vector<IcebergManifestEntry> &&data_files,
 	                 IcebergManifestDeletes &&altered_manifests);
@@ -60,6 +61,7 @@ private:
 	//! Writes one delete manifest per partition spec present in 'delete_files'.
 	void AddDeleteManifestFiles(IcebergAddSnapshot &add_snapshot, partitioned_manifest_entry_map_t &&delete_files,
 	                            sequence_number_t sequence_number);
+	void AddSnapshotUpdate(unique_ptr<IcebergAddSnapshot> add_snapshot, IcebergManifestDeletes &&altered_manifests);
 
 public:
 	string initial_table_uuid;
@@ -70,6 +72,8 @@ public:
 	ClientContext &context;
 	IcebergTransaction &transaction;
 	const IcebergTable &table_info;
+	//! Transaction-wide invalidated file paths, tagged with the alter that first invalidated them
+	IcebergManifestDeletes manifest_deletes;
 	//! schema updates etc.
 	vector<unique_ptr<IcebergTableUpdate>> updates;
 	vector<unique_ptr<IcebergTableRequirement>> requirements;
@@ -81,8 +85,6 @@ public:
 	//! Snapshot this transaction is based on (the tip when the manifest list was first cached).
 	//! Drives the delete commit-retry safety check.
 	optional<int64_t> base_snapshot_id;
-	//! The 'referenced_data_file' -> 'data_file.file_path' of the currently active transaction-local deletes
-	case_insensitive_map_t<string> transactional_delete_files;
 	//! Track the current row id for this transaction
 	int64_t next_row_id = 0;
 

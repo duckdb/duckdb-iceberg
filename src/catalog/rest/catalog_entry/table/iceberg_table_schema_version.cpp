@@ -95,9 +95,7 @@ TableFunction IcebergTableSchemaVersion::GetScanFunction(ClientContext &context,
 	vector<Value> inputs = {storage_location};
 	TableFunctionBindInput bind_input(inputs, param_map, return_types, names, nullptr, nullptr, iceberg_scan_function,
 	                                  empty_ref);
-	vector<string> bind_names;
-	auto result = iceberg_scan_function.bind(context, bind_input, return_types, bind_names);
-	names = StringsToIdentifiers(bind_names);
+	auto result = iceberg_scan_function.bind(context, bind_input, return_types, names);
 	bind_data = std::move(result);
 	auto &file_bind_data = bind_data->Cast<MultiFileBindData>();
 	file_bind_data.virtual_columns = GetVirtualColumns();

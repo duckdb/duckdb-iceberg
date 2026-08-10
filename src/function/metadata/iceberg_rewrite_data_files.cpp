@@ -148,7 +148,8 @@ static unique_ptr<LogicalOperator> BindGroupCopy(Binder &binder, const RewritePl
 }
 
 static unique_ptr<LogicalOperator> RewriteDataFilesBindOperator(ClientContext &context, TableFunctionBindInput &input,
-                                                                TableIndex bind_index, vector<string> &return_names) {
+                                                                TableIndex bind_index,
+                                                                vector<Identifier> &return_names) {
 	if (!input.binder) {
 		throw InternalException("iceberg_rewrite_data_files: bind_operator called without a binder");
 	}

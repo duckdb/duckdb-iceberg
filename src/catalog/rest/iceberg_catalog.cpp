@@ -36,7 +36,7 @@ void LoadTableResultCache::EvictIfCurrent(const IcebergTable &table) {
 
 IcebergCatalog::IcebergCatalog(AttachedDatabase &db_p, AccessMode access_mode,
                                unique_ptr<IcebergAuthorization> auth_handler, IcebergAttachOptions &attach_options_p,
-                               const string &default_schema)
+                               const Identifier &default_schema)
     : Catalog(db_p), access_mode(access_mode), auth_handler(std::move(auth_handler)), uri(attach_options_p.endpoint),
       version("v1"), attach_options(attach_options_p), default_schema(default_schema),
       warehouse(attach_options.warehouse), schemas(*this), table_request_cache(attach_options) {
@@ -63,7 +63,7 @@ optional_ptr<SchemaCatalogEntry> IcebergCatalog::LookupSchema(CatalogTransaction
 		if (default_schema.empty() && if_not_found == OnEntryNotFound::RETURN_NULL) {
 			return nullptr;
 		}
-		return GetSchema(transaction, Identifier(default_schema), if_not_found);
+		return GetSchema(transaction, default_schema, if_not_found);
 	}
 
 	auto &schema_name = schema_lookup.GetEntryName();

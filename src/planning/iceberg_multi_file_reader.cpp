@@ -557,24 +557,23 @@ void IcebergMultiFileReader::FinalizeChunk(ClientContext &context, const MultiFi
 	output_chunk.Flatten();
 }
 
-bool IcebergMultiFileReader::ParseOption(const string &key, const Value &val, MultiFileOptions &options,
+bool IcebergMultiFileReader::ParseOption(const Identifier &key, const Value &val, MultiFileOptions &options,
                                          ClientContext &context) {
-	auto loption = StringUtil::Lower(key);
 	auto &snapshot_lookup = this->options.snapshot_lookup;
 
-	if (loption == "allow_moved_paths") {
+	if (key == "allow_moved_paths") {
 		this->options.allow_moved_paths = BooleanValue::Get(val);
 		return true;
 	}
-	if (loption == "metadata_compression_codec") {
+	if (key == "metadata_compression_codec") {
 		this->options.metadata_compression_codec = StringValue::Get(val);
 		return true;
 	}
-	if (loption == "version") {
+	if (key == "version") {
 		this->options.table_version = StringValue::Get(val);
 		return true;
 	}
-	if (loption == "version_name_format") {
+	if (key == "version_name_format") {
 		auto value = StringValue::Get(val);
 		auto string_substitutions = IcebergUtils::CountOccurrences(value, "%s");
 		if (string_substitutions != 2) {
@@ -584,14 +583,14 @@ bool IcebergMultiFileReader::ParseOption(const string &key, const Value &val, Mu
 		this->options.version_name_format = value;
 		return true;
 	}
-	if (loption == "snapshot_from_id") {
+	if (key == "snapshot_from_id") {
 		if (snapshot_lookup->GetSource() != SnapshotSource::LATEST) {
 			throw InvalidInputException("Can't use 'snapshot_from_id' in combination with 'snapshot_from_timestamp'");
 		}
 		snapshot_lookup.emplace(IcebergSnapshotLookup::FromSnapshotId(val.GetValue<uint64_t>()));
 		return true;
 	}
-	if (loption == "snapshot_from_timestamp") {
+	if (key == "snapshot_from_timestamp") {
 		if (snapshot_lookup->GetSource() != SnapshotSource::LATEST) {
 			throw InvalidInputException("Can't use 'snapshot_from_id' in combination with 'snapshot_from_timestamp'");
 		}

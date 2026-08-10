@@ -51,7 +51,7 @@ public:
 };
 
 static unique_ptr<FunctionData> IcebergSnapshotsBind(ClientContext &context, TableFunctionBindInput &input,
-                                                     vector<LogicalType> &return_types, vector<string> &names) {
+                                                     vector<LogicalType> &return_types, vector<Identifier> &names) {
 	auto bind_data = make_uniq<IcebergSnaphotsBindData>();
 	IcebergOptions options;
 	for (auto &kv : input.named_parameters) {

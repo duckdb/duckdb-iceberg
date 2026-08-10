@@ -70,7 +70,7 @@ static void VerifyInputIsNotAFile(ClientContext &context, string &input_string, 
 
 static unique_ptr<FunctionData> SetIcebergTablePropertiesBind(ClientContext &context, TableFunctionBindInput &input,
                                                               vector<LogicalType> &return_types,
-                                                              vector<string> &names) {
+                                                              vector<Identifier> &names) {
 	// return a TableRef that contains the scans for the
 	auto ret = make_uniq<SetIcebergTablePropertiesBindData>();
 
@@ -99,13 +99,13 @@ static unique_ptr<FunctionData> SetIcebergTablePropertiesBind(ClientContext &con
 	}
 
 	return_types.insert(return_types.end(), LogicalType::BIGINT);
-	names.insert(names.end(), string("Success"));
+	names.emplace_back("Success");
 	return std::move(ret);
 }
 
 static unique_ptr<FunctionData> RemoveIcebergTablePropertiesBind(ClientContext &context, TableFunctionBindInput &input,
                                                                  vector<LogicalType> &return_types,
-                                                                 vector<string> &names) {
+                                                                 vector<Identifier> &names) {
 	// return a TableRef that contains the scans for the
 	auto ret = make_uniq<SetIcebergTablePropertiesBindData>();
 	auto input_string = input.inputs[0].ToString();
@@ -131,13 +131,13 @@ static unique_ptr<FunctionData> RemoveIcebergTablePropertiesBind(ClientContext &
 	}
 
 	return_types.insert(return_types.end(), LogicalType::BIGINT);
-	names.insert(names.end(), string("Success"));
+	names.emplace_back("Success");
 	return std::move(ret);
 }
 
 static unique_ptr<FunctionData> GetIcebergTablePropertiesBind(ClientContext &context, TableFunctionBindInput &input,
                                                               vector<LogicalType> &return_types,
-                                                              vector<string> &names) {
+                                                              vector<Identifier> &names) {
 	// return a TableRef that contains the scans for the
 	auto ret = make_uniq<SetIcebergTablePropertiesBindData>();
 	auto input_string = input.inputs[0].ToString();
@@ -150,8 +150,8 @@ static unique_ptr<FunctionData> GetIcebergTablePropertiesBind(ClientContext &con
 
 	return_types.insert(return_types.end(), LogicalType::VARCHAR);
 	return_types.insert(return_types.end(), LogicalType::VARCHAR);
-	names.insert(names.end(), string("key"));
-	names.insert(names.end(), string("value"));
+	names.emplace_back("key");
+	names.emplace_back("value");
 	return std::move(ret);
 }
 

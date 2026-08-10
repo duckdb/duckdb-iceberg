@@ -316,7 +316,7 @@ static void ScanParquetDeleteFiles(const IcebergDeletePlanningContext &context,
 	TableFunctionBindInput bind_input(children, named_params, input_types, input_names, nullptr, nullptr,
 	                                  delete_scan_function, empty);
 	vector<LogicalType> return_types;
-	vector<string> return_names;
+	vector<Identifier> return_names;
 	auto bind_data = delete_scan_function.bind(context.context, bind_input, return_types, return_names);
 	auto &multi_file_bind_data = bind_data->Cast<MultiFileBindData>();
 

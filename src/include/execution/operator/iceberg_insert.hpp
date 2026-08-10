@@ -32,7 +32,7 @@ public:
 	const IcebergTableSchema &schema;
 	string data_path;
 	//! Set of (key, value) options
-	case_insensitive_map_t<vector<Value>> options;
+	identifier_map_t<vector<Value>> options;
 	//! Partition specification for the table (if partitioned)
 	optional_ptr<const IcebergPartitionSpec> partition_spec;
 	//! Table index for logical plan generation (used when generating partition expressions)

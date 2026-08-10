@@ -796,7 +796,7 @@ public:
 };
 
 static unique_ptr<FunctionData> IcebergToDuckLakeBind(ClientContext &context, TableFunctionBindInput &input,
-                                                      vector<LogicalType> &return_types, vector<string> &names) {
+                                                      vector<LogicalType> &return_types, vector<Identifier> &names) {
 	auto ret = make_uniq<IcebergToDuckLakeBindData>();
 	auto input_string = input.inputs[0].ToString();
 	ret->ducklake_catalog = input.inputs[1].ToString();

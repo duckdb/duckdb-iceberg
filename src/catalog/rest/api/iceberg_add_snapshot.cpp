@@ -43,7 +43,7 @@ static rest_api_objects::TableUpdate CreateAddSnapshotUpdate(const IcebergTable 
 static optional<IcebergManifestListEntry> RewriteManifestFile(const IcebergManifestListEntry &list_entry,
                                                               CopyFunction &avro_copy, DatabaseInstance &db,
                                                               IcebergCommitState &commit_state, int32_t schema_id,
-                                                              const IcebergManifestDeletes &deletes,
+                                                              const VersionedIcebergManifestDeletes &deletes,
                                                               IcebergSnapshotMetrics &snapshot_metrics) {
 	auto loaded_manifest = list_entry.HasManifestEntries()
 	                           ? list_entry
@@ -91,7 +91,7 @@ void IcebergAddSnapshot::ConstructManifestList(IcebergManifestList &new_manifest
                                                IcebergSnapshotMetrics &snapshot_metrics) const {
 	//! Construct the manifest list
 	//! FIXME: RETRY_BLOCKER: no guarantee that no new deletes are introduced
-	if (altered_manifests.IsEmpty()) {
+	if (!manifest_deletes) {
 		for (auto &manifest_list_entry : commit_state.manifests) {
 			AddManifestListEntry(new_manifest_list, std::move(manifest_list_entry));
 		}
@@ -101,7 +101,7 @@ void IcebergAddSnapshot::ConstructManifestList(IcebergManifestList &new_manifest
 
 	for (auto &manifest_list_entry : commit_state.manifests) {
 		auto rewritten_manifest = RewriteManifestFile(manifest_list_entry, avro_copy, db, commit_state, schema_id,
-		                                              altered_manifests, snapshot_metrics);
+		                                              *manifest_deletes, snapshot_metrics);
 		if (!rewritten_manifest) {
 			AddManifestListEntry(new_manifest_list, std::move(manifest_list_entry));
 			continue;
@@ -241,6 +241,10 @@ void IcebergAddSnapshot::CreateUpdate(DatabaseInstance &db, ClientContext &conte
 
 void IcebergAddSnapshot::AddManifestFile(IcebergManifestListEntry &&manifest_file) {
 	manifest_files.push_back(std::move(manifest_file));
+}
+
+void IcebergAddSnapshot::SetManifestDeletes(VersionedIcebergManifestDeletes manifest_deletes_p) {
+	manifest_deletes.emplace(std::move(manifest_deletes_p));
 }
 
 const vector<IcebergManifestListEntry> &IcebergAddSnapshot::GetManifestFiles() const {

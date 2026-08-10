@@ -138,6 +138,10 @@ bool IcebergTransactionData::ContainsDelete() const {
 	return false;
 }
 
+bool IcebergTransactionData::IsFileInvalidated(const string &file_path) const {
+	return manifest_deletes.IsInvalidated(file_path);
+}
+
 bool IcebergTransactionData::SupportsAppendRetry() const {
 	if (!requirements.empty() || pending_current_schema_id.has_value()) {
 		return false;
@@ -220,10 +224,7 @@ void IcebergTransactionData::AddSnapshot(IcebergSnapshotOperationType operation,
 	if (table_metadata.current_snapshot_id) {
 		TableAddAssertCurrentSchemaId();
 	}
-	add_snapshot->altered_manifests = std::move(altered_manifests);
-
-	alters.push_back(*add_snapshot);
-	updates.push_back(std::move(add_snapshot));
+	AddSnapshotUpdate(std::move(add_snapshot), std::move(altered_manifests));
 }
 
 void IcebergTransactionData::AddDeleteManifestFiles(IcebergAddSnapshot &add_snapshot,
@@ -239,6 +240,16 @@ void IcebergTransactionData::AddDeleteManifestFiles(IcebergAddSnapshot &add_snap
 		add_snapshot.AddManifestFile(IcebergManifestListEntry::CreateFromEntries(
 		    fs, sequence_number, table_metadata, manifest_metadata, std::move(entry.second), next_row_id));
 	}
+}
+
+void IcebergTransactionData::AddSnapshotUpdate(unique_ptr<IcebergAddSnapshot> add_snapshot,
+                                               IcebergManifestDeletes &&altered_manifests) {
+	auto versioned_deletes = manifest_deletes.AtVersion(alters.size());
+	if (versioned_deletes.Merge(std::move(altered_manifests))) {
+		add_snapshot->SetManifestDeletes(std::move(versioned_deletes));
+	}
+	alters.push_back(*add_snapshot);
+	updates.push_back(std::move(add_snapshot));
 }
 
 void IcebergTransactionData::AddDeleteSnapshot(partitioned_manifest_entry_map_t &&delete_files,
@@ -257,10 +268,7 @@ void IcebergTransactionData::AddDeleteSnapshot(partitioned_manifest_entry_map_t 
 	if (table_metadata.current_snapshot_id) {
 		TableAddAssertCurrentSchemaId();
 	}
-	add_snapshot->altered_manifests = std::move(altered_manifests);
-
-	alters.push_back(*add_snapshot);
-	updates.push_back(std::move(add_snapshot));
+	AddSnapshotUpdate(std::move(add_snapshot), std::move(altered_manifests));
 }
 
 void IcebergTransactionData::AddUpdateSnapshot(partitioned_manifest_entry_map_t &&delete_files,
@@ -286,10 +294,7 @@ void IcebergTransactionData::AddUpdateSnapshot(partitioned_manifest_entry_map_t 
 	// Add a manifest_file for the new insert data
 	add_snapshot->AddManifestFile(IcebergManifestListEntry::CreateFromEntries(
 	    fs, sequence_number, table_metadata, data_manifest_metadata, std::move(data_files), next_row_id));
-	add_snapshot->altered_manifests = std::move(altered_manifests);
-
-	alters.push_back(*add_snapshot);
-	updates.push_back(std::move(add_snapshot));
+	AddSnapshotUpdate(std::move(add_snapshot), std::move(altered_manifests));
 }
 
 void IcebergTransactionData::TableAddSchema(int32_t schema_id) {

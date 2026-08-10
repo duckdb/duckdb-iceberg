@@ -64,7 +64,8 @@ static unique_ptr<HTTPResponse> MakeRequest(ClientContext &context, const Iceber
 }
 
 static unique_ptr<FunctionData> IcebergLoadTableResponseBind(ClientContext &context, TableFunctionBindInput &input,
-                                                             vector<LogicalType> &return_types, vector<string> &names) {
+                                                             vector<LogicalType> &return_types,
+                                                             vector<Identifier> &names) {
 	auto input_string = input.inputs[0].ToString();
 	auto qualified_name = QualifiedName::ParseComponents(input_string);
 
