@@ -29,6 +29,7 @@
 #include "function/copy/iceberg_copy_function.hpp"
 #include "duckdb/optimizer/optimizer_extension.hpp"
 #include "planning/iceberg_optimizer.hpp"
+#include "storage/remote_signing/iceberg_remote_signed_file_system.hpp"
 
 namespace duckdb {
 
@@ -65,9 +66,10 @@ static unique_ptr<TransactionManager> CreateTransactionManager(optional_ptr<Stor
 
 class IRCStorageExtension : public StorageExtension {
 public:
-	IRCStorageExtension() {
+	explicit IRCStorageExtension(shared_ptr<IcebergRemoteSigningRegistry> remote_signing) {
 		attach = IcebergAttach::Attach;
 		create_transaction_manager = CreateTransactionManager;
+		storage_info = make_shared_ptr<IcebergStorageExtensionInfo>(std::move(remote_signing));
 	}
 };
 
@@ -158,7 +160,9 @@ static void LoadInternal(ExtensionLoader &loader) {
 
 	auto &log_manager = instance.GetLogManager();
 	log_manager.RegisterLogType(make_uniq<IcebergLogType>());
-	StorageExtension::Register(config, "iceberg", make_shared_ptr<IRCStorageExtension>());
+	auto remote_signing = make_shared_ptr<IcebergRemoteSigningRegistry>();
+	instance.GetFileSystem().RegisterSubSystem(make_uniq<IcebergRemoteSignedFileSystem>(remote_signing));
+	StorageExtension::Register(config, "iceberg", make_shared_ptr<IRCStorageExtension>(std::move(remote_signing)));
 	OptimizerExtension::Register(config, IcebergOptimizer::Create());
 }
 
