@@ -508,6 +508,8 @@ IcebergMultiFileList::GetDataFile(idx_t file_id, annotated_lock_guard<annotated_
 			shared_state->data_file_partitions[entry_path] = partition;
 			shared_state->data_file_partitions[data_file.file_path] = std::move(partition);
 
+			//! Bind the entry in order for the manifest list entry to record its row count
+			auto bound_entry = bound_manifest_list_entry.BindEntry(manifest_entry);
 			if (manifest_entry.status == IcebergManifestEntryStatusType::DELETED) {
 				continue;
 			}
@@ -544,7 +546,6 @@ IcebergMultiFileList::GetDataFile(idx_t file_id, annotated_lock_guard<annotated_
 				continue;
 			}
 
-			auto bound_entry = bound_manifest_list_entry.BindEntry(manifest_entry);
 			data_manifest_entries.push_back(bound_entry);
 		}
 		if (view_cursor.current_batch_offset >= current_batch.end_index) {
@@ -740,7 +741,9 @@ IcebergDeletePlan IcebergMultiFileList::ProcessDeletes(const BoundIcebergManifes
 		annotated_lock_guard<annotated_mutex> delete_guard(shared_state->delete_lock);
 		provider = scan_plan_provider.get();
 		if (!provider) {
-			return result;
+			//! ResolveApplicableDeleteFiles ran InitializeView, which creates the provider, so it is always
+			//! set here - a null is a broken invariant, not a "nothing to do".
+			throw InternalException("scan_plan_provider is not initialized in ProcessDeletes");
 		}
 		delete_context = make_uniq<IcebergDeletePlanningContext>(GetDeletePlanningContext());
 		unordered_set<IcebergDeleteFileLoadState *> seen_loads;

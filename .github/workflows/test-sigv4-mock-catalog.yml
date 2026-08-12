@@ -19,7 +19,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           fetch-depth: 0
           submodules: 'true'
@@ -51,6 +51,15 @@ jobs:
       - name: Run sigv4_mock tests
         env:
           SIGV4_MOCK_SERVER_AVAILABLE: 1
+          # test_credential_refresh.test uses a credential_chain secret with CHAIN 'config'
+          # and rotates the credential by rewriting this file, so the refresh needs no
+          # network. Both AWS_* file vars point at it because the aws extension resolves
+          # the profile through the config file and the credentials through the shared
+          # credentials file.
+          AWS_CREDENTIALS_REFRESH_FILE: ${{ github.workspace }}/build/aws_credentials_refresh.ini
+          AWS_CONFIG_FILE: ${{ github.workspace }}/build/aws_credentials_refresh.ini
+          AWS_SHARED_CREDENTIALS_FILE: ${{ github.workspace }}/build/aws_credentials_refresh.ini
+          AWS_REGION: us-east-1
         run: |
           python3 scripts/sigv4_mock_server.py 19130 &
           server_pid=$!

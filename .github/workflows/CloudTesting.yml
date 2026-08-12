@@ -1,7 +1,7 @@
 name: Cloud functional tests
 on:
   schedule:
-    - cron:  '0 3 * * 1,3,5' # runs at 3am monday wednesday and friday
+    - cron:  '0 3 * * *' # runs at 3am every night
   workflow_dispatch:
     inputs:
       duckdb_ref:
@@ -45,6 +45,15 @@ defaults:
     shell: bash
 
 jobs:
+  s3tables:
+    name: Test against a throwaway S3 Tables catalog
+    uses: ./.github/workflows/test-s3tables-catalog.yml
+    with:
+      duckdb_ref: ${{ inputs.duckdb_ref || '' }}
+      httpfs_fork: ${{ inputs.httpfs_fork || 'https://github.com/duckdb/duckdb-httpfs' }}
+      httpfs_ref: ${{ inputs.httpfs_ref || '' }}
+    secrets: inherit
+
   rest:
     name: Test against remote cloud catalogs
     runs-on: ubuntu-latest
@@ -66,7 +75,7 @@ jobs:
         run: |
           sudo apt-get update -y -qq && sudo apt-get install -y -qq ninja-build
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           ref: ${{ github.ref }}
           fetch-depth: 0

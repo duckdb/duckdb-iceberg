@@ -552,9 +552,6 @@ void IcebergMultiFileReader::FinalizeChunk(ClientContext &context, const MultiFi
 		idx_t count = filter_executor.SelectExpression(equality_delete_chunk, sel_vec);
 		output_chunk.Slice(sel_vec, count);
 	}
-	//! FIXME: dictionary vectors cause problems in 'GroupedAggregateHashTable::TryAddDictionaryGroups'
-	//! side-step the issue by flattening for now
-	output_chunk.Flatten();
 }
 
 bool IcebergMultiFileReader::ParseOption(const Identifier &key, const Value &val, MultiFileOptions &options,

@@ -98,6 +98,10 @@ IcebergSnapshot IcebergSnapshot::ParseSnapshot(const rest_api_objects::Snapshot 
 	}
 	ret.metrics = IcebergSnapshotMetrics(snapshot.summary.additional_properties);
 
+	if (snapshot.parent_snapshot_id) {
+		ret.parent_snapshot_id = *snapshot.parent_snapshot_id;
+	}
+
 	auto &op = snapshot.summary.operation;
 	if (op == "append") {
 		ret.operation = IcebergSnapshotOperationType::APPEND;

@@ -1,0 +1,25 @@
+{
+	"description": "Use an AWS S3 Tables table bucket as Iceberg Rest Catalog.",
+	"comment": "S3TABLES_TABLE_BUCKET_ARN is a placeholder: the Test S3 Tables Catalog workflow fills it in with the ARN of the throwaway table bucket it created for the run. To use this config locally, point it at a table bucket of your own and make sure AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY / AWS_DEFAULT_REGION are exported for the credential chain to pick up.",
+	"on_init": "CREATE SECRET IF NOT EXISTS s3tables_secret (TYPE S3, PROVIDER credential_chain); ATTACH IF NOT EXISTS '{S3TABLES_TABLE_BUCKET_ARN}' AS my_datalake (TYPE ICEBERG, ENDPOINT_TYPE S3_TABLES); Create schema if not exists my_datalake.default;",
+	"skip_error_messages": [],
+	"statically_loaded_extensions": [
+		"core_functions",
+		"parquet",
+		"avro",
+		"iceberg",
+		"httpfs",
+		"aws"
+	],
+	"test_env": [
+		{
+			"env_name": "CATALOG_TEST_CONFIG_SETUP",
+			"env_value": "s3tables"
+		},
+		{
+			"env_name": "S3TABLES_TABLE_BUCKET_ARN",
+			"env_value": ""
+		}
+	],
+	"skip_tests": []
+}

@@ -1,0 +1,191 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/maintenance/rollback_to_snapshot_partition_transforms.test
+# description: rollback_to_snapshot restores tables partitioned by bucket/day/hour transforms
+# group: [maintenance]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+require json
+
+# ---- BUCKET transform ----
+
+statement ok
+drop table if exists my_datalake.default.rollback_bucket;
+
+statement ok
+create table my_datalake.default.rollback_bucket (id INTEGER, payload VARCHAR)
+partitioned by (bucket(4, id));
+
+statement ok
+insert into my_datalake.default.rollback_bucket values (1, 'a'), (2, 'b');
+
+statement ok
+set variable snap_bucket = (
+	select {
+		snapshot_id: snapshot_id
+	} from iceberg_snapshots(my_datalake.default.rollback_bucket)
+	order by sequence_number
+	limit 1
+);
+
+statement ok
+insert into my_datalake.default.rollback_bucket values (3, 'c'), (4, 'd');
+
+query I
+select count(*) from my_datalake.default.rollback_bucket;
+----
+4
+
+statement ok
+call iceberg_rollback_to_snapshot(
+	'my_datalake.default.rollback_bucket',
+	getvariable('snap_bucket').snapshot_id
+);
+
+query I
+select count(*) from my_datalake.default.rollback_bucket;
+----
+2
+
+query II
+select id, payload from my_datalake.default.rollback_bucket order by id;
+----
+1	a
+2	b
+
+query I
+select json_extract_string(metadata::JSON, '$."current-snapshot-id"')::BIGINT
+	= getvariable('snap_bucket').snapshot_id
+from iceberg_load_table_response(my_datalake.default.rollback_bucket);
+----
+true
+
+statement ok
+drop table if exists my_datalake.default.rollback_bucket;
+
+# ---- DAY transform ----
+
+statement ok
+drop table if exists my_datalake.default.rollback_day;
+
+statement ok
+create table my_datalake.default.rollback_day (id INTEGER, dt DATE, payload VARCHAR)
+partitioned by (day(dt));
+
+statement ok
+insert into my_datalake.default.rollback_day values
+	(1, '2021-06-15'::DATE, 'a'),
+	(2, '2021-06-16'::DATE, 'b');
+
+statement ok
+set variable snap_day = (
+	select {
+		snapshot_id: snapshot_id
+	} from iceberg_snapshots(my_datalake.default.rollback_day)
+	order by sequence_number
+	limit 1
+);
+
+statement ok
+insert into my_datalake.default.rollback_day values
+	(3, '2021-06-17'::DATE, 'c'),
+	(4, '2021-06-15'::DATE, 'd');
+
+query I
+select count(*) from my_datalake.default.rollback_day;
+----
+4
+
+statement ok
+call iceberg_rollback_to_snapshot(
+	'my_datalake.default.rollback_day',
+	getvariable('snap_day').snapshot_id
+);
+
+query I
+select count(*) from my_datalake.default.rollback_day;
+----
+2
+
+query III
+select id, dt, payload from my_datalake.default.rollback_day order by id;
+----
+1	2021-06-15	a
+2	2021-06-16	b
+
+query I
+select json_extract_string(metadata::JSON, '$."current-snapshot-id"')::BIGINT
+	= getvariable('snap_day').snapshot_id
+from iceberg_load_table_response(my_datalake.default.rollback_day);
+----
+true
+
+statement ok
+drop table if exists my_datalake.default.rollback_day;
+
+# ---- HOUR transform ----
+
+statement ok
+drop table if exists my_datalake.default.rollback_hour;
+
+statement ok
+create table my_datalake.default.rollback_hour (id INTEGER, ts TIMESTAMP, payload VARCHAR)
+partitioned by (hour(ts));
+
+statement ok
+insert into my_datalake.default.rollback_hour values
+	(1, '2021-06-15 10:00:00'::TIMESTAMP, 'a'),
+	(2, '2021-06-15 11:30:00'::TIMESTAMP, 'b');
+
+statement ok
+set variable snap_hour = (
+	select {
+		snapshot_id: snapshot_id
+	} from iceberg_snapshots(my_datalake.default.rollback_hour)
+	order by sequence_number
+	limit 1
+);
+
+statement ok
+insert into my_datalake.default.rollback_hour values
+	(3, '2021-06-15 14:00:00'::TIMESTAMP, 'c'),
+	(4, '2021-06-15 10:45:00'::TIMESTAMP, 'd');
+
+query I
+select count(*) from my_datalake.default.rollback_hour;
+----
+4
+
+statement ok
+call iceberg_rollback_to_snapshot(
+	'my_datalake.default.rollback_hour',
+	getvariable('snap_hour').snapshot_id
+);
+
+query I
+select count(*) from my_datalake.default.rollback_hour;
+----
+2
+
+query III
+select id, ts, payload from my_datalake.default.rollback_hour order by id;
+----
+1	2021-06-15 10:00:00	a
+2	2021-06-15 11:30:00	b
+
+query I
+select json_extract_string(metadata::JSON, '$."current-snapshot-id"')::BIGINT
+	= getvariable('snap_hour').snapshot_id
+from iceberg_load_table_response(my_datalake.default.rollback_hour);
+----
+true
+
+statement ok
+drop table if exists my_datalake.default.rollback_hour;

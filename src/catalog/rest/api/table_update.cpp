@@ -266,4 +266,22 @@ void SetLocation::CreateUpdate(DatabaseInstance &db, ClientContext &context, Ice
 	req.set_location_update->location = location;
 }
 
+SetSnapshotRef::SetSnapshotRef(int64_t snapshot_id_p, string ref_name_p)
+    : IcebergTableUpdate(IcebergTableUpdateType::SET_SNAPSHOT_REF), snapshot_id(snapshot_id_p),
+      ref_name(std::move(ref_name_p)) {
+}
+
+void SetSnapshotRef::CreateUpdate(DatabaseInstance &db, ClientContext &context,
+                                  IcebergCommitState &commit_state) const {
+	(void)db;
+	(void)context;
+	commit_state.table_change.updates.push_back(rest_api_objects::TableUpdate());
+	auto &req = commit_state.table_change.updates.back();
+	req.set_snapshot_ref_update = rest_api_objects::SetSnapshotRefUpdate();
+	req.set_snapshot_ref_update->base_update.action = "set-snapshot-ref";
+	req.set_snapshot_ref_update->ref_name = ref_name;
+	req.set_snapshot_ref_update->snapshot_reference.type = "branch";
+	req.set_snapshot_ref_update->snapshot_reference.snapshot_id = snapshot_id;
+}
+
 } // namespace duckdb

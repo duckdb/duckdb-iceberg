@@ -1,0 +1,39 @@
+# name: test/sql/local/maintenance/rollback_to_snapshot_validation.test
+# description: bind-time validation for iceberg_rollback_to_snapshot parameters
+# group: [maintenance]
+
+require avro
+
+require parquet
+
+require iceberg
+
+statement error
+SELECT * FROM iceberg_rollback_to_snapshot('bad', 1);
+----
+table identifier must be 'catalog.schema.table'
+
+statement error
+SELECT * FROM iceberg_rollback_to_snapshot('a.b', 1);
+----
+table identifier must be 'catalog.schema.table'
+
+statement error
+SELECT * FROM iceberg_rollback_to_snapshot('a.b.c.d', 1);
+----
+table identifier must be 'catalog.schema.table'
+
+statement error
+SELECT * FROM iceberg_rollback_to_snapshot('.b.c', 1);
+----
+has an empty component
+
+statement error
+SELECT * FROM iceberg_rollback_to_snapshot('a..c', 1);
+----
+has an empty component
+
+statement error
+SELECT * FROM iceberg_rollback_to_snapshot('cat.sch.tbl', 1);
+----
+Catalog "cat" does not exist

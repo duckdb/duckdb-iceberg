@@ -1,0 +1,104 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/maintenance/rollback_to_snapshot_schema_retained.test
+# description: rollback_to_snapshot keeps current schema after rolling past ADD COLUMN (Iceberg #5591)
+# group: [maintenance]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+require json
+
+statement ok
+drop table if exists my_datalake.default.rollback_schema;
+
+statement ok
+create table my_datalake.default.rollback_schema (id INTEGER);
+
+statement ok
+insert into my_datalake.default.rollback_schema values (1), (2);
+
+statement ok
+set variable snap1 = (
+	select {
+		snapshot_id: snapshot_id
+	} from iceberg_snapshots(my_datalake.default.rollback_schema)
+	order by sequence_number
+	limit 1
+);
+
+statement ok
+set variable schema_before_alter = (
+	select metadata."current-schema-id"
+	from iceberg_load_table_response(my_datalake.default.rollback_schema)
+);
+
+statement ok
+alter table my_datalake.default.rollback_schema add column payload varchar;
+
+statement ok
+set variable schema_after_alter = (
+	select metadata."current-schema-id"
+	from iceberg_load_table_response(my_datalake.default.rollback_schema)
+);
+
+query I
+select getvariable('schema_after_alter') != getvariable('schema_before_alter');
+----
+true
+
+statement ok
+insert into my_datalake.default.rollback_schema values (3, 'c'), (4, 'd');
+
+query I
+select count(*) from my_datalake.default.rollback_schema;
+----
+4
+
+statement ok
+call iceberg_rollback_to_snapshot(
+	'my_datalake.default.rollback_schema',
+	getvariable('snap1').snapshot_id
+);
+
+# Data is restored to snap1.
+query I
+select count(*) from my_datalake.default.rollback_schema;
+----
+2
+
+query II
+select id, payload from my_datalake.default.rollback_schema order by id;
+----
+1	NULL
+2	NULL
+
+# Live schema still includes the added column (schema evolution stays forward-only).
+query II
+select column_name, column_type
+from (describe my_datalake.default.rollback_schema)
+order by column_name;
+----
+id	INTEGER
+payload	VARCHAR
+
+query I
+select json_extract_string(metadata::JSON, '$."current-snapshot-id"')::BIGINT
+	= getvariable('snap1').snapshot_id
+from iceberg_load_table_response(my_datalake.default.rollback_schema);
+----
+true
+
+query I
+select metadata."current-schema-id" = getvariable('schema_after_alter')
+from iceberg_load_table_response(my_datalake.default.rollback_schema);
+----
+true
+
+statement ok
+drop table if exists my_datalake.default.rollback_schema;

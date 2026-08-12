@@ -386,4 +386,48 @@ void IcebergTransactionData::TableSetLocation() {
 	updates.push_back(make_uniq<SetLocation>(table_info.table_metadata.location));
 }
 
+static bool IsAncestorOfCurrentSnapshot(const IcebergTableMetadata &metadata, int64_t target_snapshot_id,
+                                        int64_t current_snapshot_id) {
+	if (target_snapshot_id == current_snapshot_id) {
+		return true;
+	}
+	optional_ptr<const IcebergSnapshot> cursor = metadata.FindSnapshotByIdInternal(current_snapshot_id);
+	while (cursor) {
+		if (!cursor->parent_snapshot_id) {
+			return false;
+		}
+		auto parent_id = *cursor->parent_snapshot_id;
+		if (parent_id == target_snapshot_id) {
+			return true;
+		}
+		cursor = metadata.FindSnapshotByIdInternal(parent_id);
+	}
+	return false;
+}
+
+void IcebergTransactionData::TableRollbackToSnapshot(int64_t snapshot_id) {
+	auto &metadata = table_info.table_metadata;
+	auto target = metadata.FindSnapshotByIdInternal(snapshot_id);
+	if (!target) {
+		throw InvalidInputException("Cannot roll back to unknown snapshot id: %lld", snapshot_id);
+	}
+
+	auto current = metadata.GetLatestSnapshot();
+	if (!current || !current->snapshot_id) {
+		throw InvalidInputException("Cannot roll back table with no current snapshot");
+	}
+	auto current_snapshot_id = *current->snapshot_id;
+	if (!IsAncestorOfCurrentSnapshot(metadata, snapshot_id, current_snapshot_id)) {
+		throw InvalidInputException("Cannot roll back to snapshot, not an ancestor of the current state: %lld",
+		                            snapshot_id);
+	}
+
+	// Optimistic concurrency: require main still points at the snapshot we observed.
+	requirements.push_back(make_uniq<AssertRefSnapshotId>(current_snapshot_id));
+	updates.push_back(make_uniq<SetSnapshotRef>(snapshot_id));
+
+	// Iceberg intentionally does not roll current-schema-id back with the snapshot;
+	// schema evolution stays forward-only. See https://github.com/apache/iceberg/issues/5591
+}
+
 } // namespace duckdb

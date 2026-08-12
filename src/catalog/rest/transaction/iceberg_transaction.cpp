@@ -111,19 +111,6 @@ static rest_api_objects::TableRequirement CreateAssertNoSnapshotRequirement() {
 	return req;
 }
 
-static rest_api_objects::TableUpdate CreateSetSnapshotRefUpdate(int64_t snapshot_id) {
-	rest_api_objects::TableUpdate table_update;
-
-	table_update.set_snapshot_ref_update = rest_api_objects::SetSnapshotRefUpdate();
-	auto &update = *table_update.set_snapshot_ref_update;
-	update.base_update.action = "set-snapshot-ref";
-
-	update.ref_name = "main";
-	update.snapshot_reference.type = "branch";
-	update.snapshot_reference.snapshot_id = snapshot_id;
-	return table_update;
-}
-
 static bool NeedsAssertSchemaId(const IcebergTransactionData &transaction_data, const IcebergTable &table_info) {
 	(void)table_info;
 	return transaction_data.assert_schema_id;
@@ -305,8 +292,8 @@ static SingleTableStagedCommit StageSingleTableCommit(DatabaseInstance &db, Iceb
 		if (!snapshot.snapshot_id) {
 			throw InvalidConfigurationException("snapshot.snapshot_id is not set");
 		}
-		auto set_snapshot_ref_update = CreateSetSnapshotRefUpdate(*snapshot.snapshot_id);
-		commit_state.table_change.updates.push_back(std::move(set_snapshot_ref_update));
+		SetSnapshotRef set_snapshot_ref(*snapshot.snapshot_id);
+		set_snapshot_ref.CreateUpdate(db, context, commit_state);
 	}
 
 	if (transaction_data.pending_current_schema_id.has_value()) {

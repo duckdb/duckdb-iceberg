@@ -1,0 +1,85 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/test_row_lineage_with_filtering.test
+# group: [catalog_agnostic]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.tbl;
+
+statement ok
+CREATE TABLE my_datalake.default.tbl (
+	part INTEGER,
+	k VARCHAR,
+	v INTEGER
+) PARTITIONED BY (
+	part
+) WITH (
+	'format-version' = 3
+);
+
+statement ok
+INSERT INTO my_datalake.default.tbl VALUES
+	(0, 'a', 10),
+	(1, 'x', 1000);
+
+statement ok
+INSERT INTO my_datalake.default.tbl VALUES
+	(0, 'b', 20),
+	(1, 'y', 2000);
+
+statement ok
+INSERT INTO my_datalake.default.tbl VALUES
+	(0, 'c', 30);
+
+query II
+select v, _row_id from my_datalake.default.tbl order by v;
+----
+10	0
+20	2
+30	4
+1000	1
+2000	3
+
+query II
+SELECT k, _row_id FROM my_datalake.default.tbl ORDER BY k;
+----
+a	0
+b	2
+c	4
+x	1
+y	3
+
+query II
+SELECT k, _row_id FROM my_datalake.default.tbl WHERE part = 1 ORDER BY k;
+----
+x	1
+y	3
+
+query II
+SELECT k, _row_id FROM my_datalake.default.tbl WHERE part >= 1 ORDER BY k;
+----
+x	1
+y	3
+
+query II
+SELECT k, _row_id FROM my_datalake.default.tbl WHERE k >= 'x' ORDER BY k;
+----
+x	1
+y	3
+
+query II
+SELECT k, _row_id FROM my_datalake.default.tbl WHERE v IS NOT NULL ORDER BY k;
+----
+a	0
+b	2
+c	4
+x	1
+y	3

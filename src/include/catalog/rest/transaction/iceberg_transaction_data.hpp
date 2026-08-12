@@ -55,6 +55,8 @@ public:
 	void TableSetProperties(const case_insensitive_map_t<string> &properties);
 	void TableRemoveProperties(const vector<string> &properties);
 	void TableSetLocation();
+	//! Roll main back to an ancestor snapshot (Spark rollback_to_snapshot semantics).
+	void TableRollbackToSnapshot(int64_t snapshot_id);
 
 private:
 	void CacheExistingManifestList(lock_guard<mutex> &guard, const IcebergTableMetadata &metadata);

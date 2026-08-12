@@ -34,8 +34,14 @@ IcebergScanPlanState::IcebergScanPlanState(ClientContext &context_p, shared_ptr<
 
 IcebergScanPlanState::~IcebergScanPlanState() {
 	if (data_manifest_read_state) {
-		//! FIXME: this could throw if the tasks encountered an error.
-		data_manifest_read_state->executor.WorkOnTasks();
+		try {
+			data_manifest_read_state->executor.WorkOnTasks();
+		} catch (...) {
+			//! WorkOnTasks rethrows errors pushed by the manifest-read tasks. Destructors are implicitly
+			//! noexcept (and this one can run while another exception is already unwinding), so letting the
+			//! error escape calls std::terminate and aborts the whole process. Errors are still surfaced on
+			//! the regular scan path (TryGetNextBatch/FinishScanTasks); here they can only be swallowed.
+		}
 	}
 }
 

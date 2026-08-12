@@ -144,10 +144,10 @@ public:
 	                                    PhysicalOperator &plan) override;
 	PhysicalOperator &PlanDelete(ClientContext &context, PhysicalPlanGenerator &planner, LogicalDelete &op,
 	                             PhysicalOperator &plan) override;
-	//! Plans the delete without enabling any optimization that assumes the delete owns its scan. MERGE comes
-	//! through here instead of through the PlanDelete override that a standalone DELETE goes through.
-	PhysicalOperator &PlanDeleteInternal(ClientContext &context, PhysicalPlanGenerator &planner, LogicalDelete &op,
-	                                     PhysicalOperator &plan);
+	//! Shared delete-planning body both PlanDelete and MERGE build on; only PlanDelete additionally opts the
+	//! standalone DELETE into metadata-only deletes, so MERGE must plan its delete action through here directly.
+	PhysicalOperator &PlanDeleteOperation(ClientContext &context, PhysicalPlanGenerator &planner, LogicalDelete &op,
+	                                      PhysicalOperator &plan);
 	PhysicalOperator &PlanUpdate(ClientContext &context, PhysicalPlanGenerator &planner, LogicalUpdate &op,
 	                             PhysicalOperator &plan) override;
 	PhysicalOperator &PlanMergeInto(ClientContext &context, PhysicalPlanGenerator &planner, LogicalMergeInto &op,

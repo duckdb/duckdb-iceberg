@@ -568,7 +568,7 @@ PhysicalOperator &IcebergDelete::PlanDelete(ClientContext &context, PhysicalPlan
 
 PhysicalOperator &IcebergCatalog::PlanDelete(ClientContext &context, PhysicalPlanGenerator &planner, LogicalDelete &op,
                                              PhysicalOperator &plan) {
-	auto &iceberg_delete = PlanDeleteInternal(context, planner, op, plan).Cast<IcebergDelete>();
+	auto &iceberg_delete = PlanDeleteOperation(context, planner, op, plan).Cast<IcebergDelete>();
 	//! A standalone DELETE is the only consumer of its scan, so a file the predicate fully covers can be
 	//! dropped at the manifest level instead of scanned and rewritten as row-level deletes.
 	if (iceberg_delete.multi_file_list) {
@@ -577,8 +577,8 @@ PhysicalOperator &IcebergCatalog::PlanDelete(ClientContext &context, PhysicalPla
 	return iceberg_delete;
 }
 
-PhysicalOperator &IcebergCatalog::PlanDeleteInternal(ClientContext &context, PhysicalPlanGenerator &planner,
-                                                     LogicalDelete &op, PhysicalOperator &plan) {
+PhysicalOperator &IcebergCatalog::PlanDeleteOperation(ClientContext &context, PhysicalPlanGenerator &planner,
+                                                      LogicalDelete &op, PhysicalOperator &plan) {
 	if (op.return_chunk) {
 		throw BinderException("RETURNING clause not yet supported for deletion from Iceberg table");
 	}

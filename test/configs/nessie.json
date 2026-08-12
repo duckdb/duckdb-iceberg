@@ -32,6 +32,7 @@
 				"test/sql/local/catalog_test_config_setup/catalog_agnostic/table_properties/test_default_format_version.test",
 				"test/sql/local/catalog_test_config_setup/catalog_agnostic/test_row_lineage_read.test",
 				"test/sql/local/catalog_test_config_setup/catalog_agnostic/test_row_lineage_write.test",
+				"test/sql/local/catalog_test_config_setup/catalog_agnostic/test_row_lineage_with_filtering.test",
 				"test/sql/local/catalog_test_config_setup/catalog_agnostic/test_select_row_id.test",
 				"test/sql/local/catalog_test_config_setup/catalog_agnostic/update/test_update_v3_table.test",
 				"test/sql/local/catalog_test_config_setup/catalog_agnostic/delete/test_delete_consolidation_transactional.test",
@@ -140,7 +141,10 @@
 				"test/sql/local/catalog_test_config_setup/catalog_agnostic/update/partitions/test_update_into_partitioned_sorted_table.test",
 				"test/sql/local/catalog_test_config_setup/catalog_agnostic/transactions/test_snapshot_operation_in_transaction.test",
 				"test/sql/local/catalog_test_config_setup/catalog_agnostic/delete/test_snapshot_summary_delete_metrics.test",
-				"test/sql/local/catalog_test_config_setup/catalog_agnostic/delete/delete_metadata_only_snapshot_metrics.test"
+				"test/sql/local/catalog_test_config_setup/catalog_agnostic/delete/delete_metadata_only_snapshot_metrics.test",
+				"test/sql/local/catalog_test_config_setup/catalog_agnostic/maintenance/rollback_to_snapshot.test",
+				"test/sql/local/catalog_test_config_setup/catalog_agnostic/maintenance/rollback_to_snapshot_partition_transforms.test",
+				"test/sql/local/catalog_test_config_setup/catalog_agnostic/maintenance/rollback_to_snapshot_schema_retained.test"
 			]
 		},
 		{
