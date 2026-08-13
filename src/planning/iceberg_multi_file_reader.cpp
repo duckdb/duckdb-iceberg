@@ -24,7 +24,60 @@
 #include "core/metadata/iceberg_table_metadata.hpp"
 #include "duckdb/common/multi_file/multi_file_states.hpp"
 
+#include <algorithm>
+#include <cstdint>
+#include <cstring>
+
 namespace duckdb {
+
+IcebergEqualityDeleteFastFilter::BuildResult IcebergMultiFileReaderGlobalState::GetOrCreateEqualityDeleteFastFilter(
+    const vector<reference<const IcebergEqualityDeleteFile>> &delete_files,
+    const IcebergEqualityDeleteReadState &read_state, const set<int32_t> &local_field_ids) {
+	string key;
+	key.resize(delete_files.size() * sizeof(uintptr_t));
+	for (idx_t i = 0; i < delete_files.size(); i++) {
+		auto address = reinterpret_cast<uintptr_t>(&delete_files[i].get());
+		memcpy(&key[i * sizeof(uintptr_t)], &address, sizeof(uintptr_t));
+	}
+	//! A field can have a different physical type in an older data file. Include the
+	//! probe schema so one file's compiled filter is never reused across an evolution
+	//! boundary with a different canonical byte representation.
+	for (auto &column : read_state.columns) {
+		key += StringUtil::Format("|%d:%s:%d", column.field_id, column.type.ToString(),
+		                          local_field_ids.count(column.field_id));
+	}
+	vector<reference<const IcebergEqualityDeleteFile>> eligible_files;
+	vector<idx_t> eligible_file_indexes;
+	for (idx_t file_idx = 0; file_idx < delete_files.size(); file_idx++) {
+		auto &delete_file = delete_files[file_idx].get();
+		bool eligible = true;
+		for (auto field_id : delete_file.equality_ids) {
+			if (!local_field_ids.count(field_id)) {
+				eligible = false;
+				break;
+			}
+		}
+		if (eligible) {
+			eligible_files.push_back(delete_file);
+			eligible_file_indexes.push_back(file_idx);
+		}
+	}
+	lock_guard<mutex> guard(equality_delete_fast_filter_lock);
+	auto entry = equality_delete_fast_filters.find(key);
+	if (entry != equality_delete_fast_filters.end()) {
+		return entry->second;
+	}
+	auto eligible_result =
+	    IcebergEqualityDeleteFastFilter::Build(eligible_files, read_state.field_indexes, read_state.types);
+	IcebergEqualityDeleteFastFilter::BuildResult built;
+	built.filter = std::move(eligible_result.filter);
+	built.accelerated_files.resize(delete_files.size(), false);
+	for (idx_t eligible_idx = 0; eligible_idx < eligible_file_indexes.size(); eligible_idx++) {
+		built.accelerated_files[eligible_file_indexes[eligible_idx]] = eligible_result.accelerated_files[eligible_idx];
+	}
+	equality_delete_fast_filters.emplace(std::move(key), built);
+	return built;
+}
 
 using MultiFileColumnPath = vector<idx_t>;
 
@@ -417,8 +470,21 @@ ReaderInitializeType IcebergMultiFileReader::InitializeReader(MultiFileReaderDat
 	ApplyPartitionConstants(manifest_file, bound_manifest_entry, metadata, reader_data, scan_columns, scan_column_ids,
 	                        context);
 
-	equality_delete_state->expression =
-	    CreateEqualityDeleteExpression(delete_plan.equality_deletes, local_columns, *equality_delete_state);
+	vector<bool> accelerated_files;
+	Value fast_filter_setting;
+	if (context.TryGetCurrentSetting("iceberg_equality_delete_fast_filter", fast_filter_setting) &&
+	    fast_filter_setting.GetValue<bool>()) {
+		set<int32_t> local_field_ids;
+		for (auto &entry : CreateFieldIdMap(local_columns)) {
+			local_field_ids.insert(entry.first);
+		}
+		auto built = iceberg_state.GetOrCreateEqualityDeleteFastFilter(delete_plan.equality_deletes,
+		                                                               *equality_delete_state, local_field_ids);
+		equality_delete_state->fast_filter = std::move(built.filter);
+		accelerated_files = std::move(built.accelerated_files);
+	}
+	equality_delete_state->expression = CreateEqualityDeleteExpression(delete_plan.equality_deletes, local_columns,
+	                                                                   *equality_delete_state, accelerated_files);
 	iceberg_state.CacheEqualityDeleteReadState(file_id, std::move(equality_delete_state));
 
 	return CreateMapping(context, reader_data, scan_columns, scan_column_ids, table_filters, gstate.file_list,
@@ -435,7 +501,8 @@ void IcebergMultiFileReader::FinalizeBind(MultiFileReaderData &reader_data, cons
 
 unique_ptr<Expression> IcebergMultiFileReader::CreateEqualityDeleteExpression(
     const vector<reference<const IcebergEqualityDeleteFile>> &delete_files,
-    const vector<MultiFileColumnDefinition> &local_columns, const IcebergEqualityDeleteReadState &read_state) {
+    const vector<MultiFileColumnDefinition> &local_columns, const IcebergEqualityDeleteReadState &read_state,
+    const vector<bool> &accelerated_files) {
 	if (delete_files.empty()) {
 		return nullptr;
 	}
@@ -451,7 +518,11 @@ unique_ptr<Expression> IcebergMultiFileReader::CreateEqualityDeleteExpression(
 	//!	(col1 != 'Z' OR col2 != 'W')
 
 	vector<unique_ptr<Expression>> rows;
-	for (auto &delete_file_ref : delete_files) {
+	for (idx_t delete_file_idx = 0; delete_file_idx < delete_files.size(); delete_file_idx++) {
+		if (delete_file_idx < accelerated_files.size() && accelerated_files[delete_file_idx]) {
+			continue;
+		}
+		auto &delete_file_ref = delete_files[delete_file_idx];
 		auto &delete_file = delete_file_ref.get();
 		auto &equality_values = delete_file.equality_values;
 		if (equality_values.size() == 0) {
@@ -537,7 +608,7 @@ void IcebergMultiFileReader::FinalizeChunk(ClientContext &context, const MultiFi
 	auto file_id = reader.file_list_idx.GetIndex();
 	auto &equality_delete_state = iceberg_state.GetEqualityDeleteReadState(file_id);
 	auto equality_delete_expression = equality_delete_state.expression.get();
-	if (equality_delete_expression) {
+	if (equality_delete_expression || equality_delete_state.fast_filter) {
 		ExpressionExecutor equality_delete_executor(context);
 		for (auto &column : equality_delete_state.columns) {
 			D_ASSERT(column.expression_index < reader_data.expressions.size());
@@ -547,10 +618,29 @@ void IcebergMultiFileReader::FinalizeChunk(ClientContext &context, const MultiFi
 		equality_delete_chunk.Initialize(context, equality_delete_state.types);
 		equality_delete_executor.Execute(input_chunk, equality_delete_chunk);
 
-		ExpressionExecutor filter_executor(context, *equality_delete_expression);
-		SelectionVector sel_vec(STANDARD_VECTOR_SIZE);
-		idx_t count = filter_executor.SelectExpression(equality_delete_chunk, sel_vec);
-		output_chunk.Slice(sel_vec, count);
+		auto input_count = equality_delete_chunk.size();
+		vector<bool> keep(input_count, true);
+		if (equality_delete_expression) {
+			ExpressionExecutor filter_executor(context, *equality_delete_expression);
+			SelectionVector expression_sel(input_count);
+			auto expression_count = filter_executor.SelectExpression(equality_delete_chunk, expression_sel);
+			std::fill(keep.begin(), keep.end(), false);
+			for (idx_t i = 0; i < expression_count; i++) {
+				keep[expression_sel.get_index(i)] = true;
+			}
+		}
+		vector<bool> deleted(input_count, false);
+		if (equality_delete_state.fast_filter) {
+			equality_delete_state.fast_filter->MarkDeleted(equality_delete_chunk, deleted);
+		}
+		SelectionVector sel_vec(input_count);
+		idx_t result_count = 0;
+		for (idx_t i = 0; i < input_count; i++) {
+			if (keep[i] && !deleted[i]) {
+				sel_vec.set_index(result_count++, i);
+			}
+		}
+		output_chunk.Slice(sel_vec, result_count);
 	}
 }
 
