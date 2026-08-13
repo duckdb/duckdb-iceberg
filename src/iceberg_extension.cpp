@@ -121,8 +121,8 @@ static void LoadInternal(ExtensionLoader &loader) {
 	config.AddExtensionOption(
 	    "iceberg_equality_delete_fast_filter",
 	    "Apply byte-comparable equality deletes through a shared columnar flat hash filter instead of a bound "
-	    "expression per delete row. Unsupported types retain the upstream expression path. Off by default for A/B.",
-	    LogicalType::BOOLEAN, Value::BOOLEAN(false), nullptr, SetScope::GLOBAL);
+	    "expression per delete row. Unsupported types retain the upstream expression path.",
+	    LogicalType::BOOLEAN, Value::BOOLEAN(true), nullptr, SetScope::GLOBAL);
 	config.AddExtensionOption(
 	    UNSAFE_STRUCT_NULL_DEFAULT_INTERP_CONFIG_VARIABLE,
 	    "DANGEROUS TESTING-ONLY SETTING: interpret a null Iceberg STRUCT default as an empty struct whose fields "

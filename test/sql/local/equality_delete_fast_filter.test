@@ -10,17 +10,11 @@ require iceberg
 
 require httpfs
 
-# Default-off remains exact upstream behavior.
-query III
-SELECT *
-FROM ICEBERG_SCAN('{WORKING_DIRECTORY}/data/persistent/equality_deletes/warehouse/mydb/mytable')
-ORDER BY ALL;
+# The hash filter is enabled by default.
+query I
+SELECT current_setting('iceberg_equality_delete_fast_filter');
 ----
-4	d	2025-01-04
-5	e	2025-01-05
-
-statement ok
-SET iceberg_equality_delete_fast_filter = true;
+true
 
 # This fixture combines integral, VARCHAR and multi-column delete layouts.
 query III

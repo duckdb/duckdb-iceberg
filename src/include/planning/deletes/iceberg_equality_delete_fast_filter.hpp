@@ -17,9 +17,9 @@
 
 namespace duckdb {
 
-//! A default-off fast path for equality deletes whose fields have byte-comparable
+//! A fast path for equality deletes whose fields have byte-comparable
 //! physical representations. Unsupported layouts remain on the upstream bound-
-//! expression path, so enabling this never broadens the supported type surface.
+//! expression path, so this never broadens the supported type surface.
 class IcebergEqualityDeleteFastFilter {
 public:
 	static constexpr idx_t SHARD_COUNT = 64;
