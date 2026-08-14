@@ -9,6 +9,7 @@
 
 #include "core/deletes/iceberg_equality_delete.hpp"
 #include "duckdb/common/constants.hpp"
+#include "duckdb/common/allocator.hpp"
 #include "duckdb/common/types/data_chunk.hpp"
 #include "duckdb/common/types/hash.hpp"
 #include "duckdb/common/types/string_type.hpp"
@@ -31,11 +32,19 @@ public:
 			bool occupied = false;
 		};
 
-		void Initialize(idx_t expected_count);
+		void Initialize(Allocator &allocator, idx_t expected_count);
 		void Insert(hash_t hash, string_t key);
 		bool Contains(hash_t hash, string_t key) const;
 
-		vector<Entry> entries;
+		Entry *GetEntries() {
+			return reinterpret_cast<Entry *>(entries.get());
+		}
+		const Entry *GetEntries() const {
+			return reinterpret_cast<const Entry *>(entries.get());
+		}
+
+		AllocatedData entries;
+		idx_t capacity = 0;
 		idx_t capacity_mask = 0;
 	};
 
@@ -57,7 +66,7 @@ public:
 
 	static BuildResult Build(const vector<reference<const IcebergEqualityDeleteFile>> &delete_files,
 	                         const unordered_map<int32_t, idx_t> &field_indexes,
-	                         const vector<LogicalType> &target_types);
+	                         const vector<LogicalType> &target_types, Allocator &allocator);
 
 	//! Marks matching rows in `deleted`; it never clears an existing mark.
 	void MarkDeleted(DataChunk &keys, vector<bool> &deleted) const;

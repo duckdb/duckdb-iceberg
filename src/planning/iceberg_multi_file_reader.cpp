@@ -32,7 +32,7 @@ namespace duckdb {
 
 IcebergEqualityDeleteFastFilter::BuildResult IcebergMultiFileReaderGlobalState::GetOrCreateEqualityDeleteFastFilter(
     const vector<reference<const IcebergEqualityDeleteFile>> &delete_files,
-    const IcebergEqualityDeleteReadState &read_state, const set<int32_t> &local_field_ids) {
+    const IcebergEqualityDeleteReadState &read_state, const set<int32_t> &local_field_ids, Allocator &allocator) {
 	string key;
 	key.resize(delete_files.size() * sizeof(uintptr_t));
 	for (idx_t i = 0; i < delete_files.size(); i++) {
@@ -68,7 +68,7 @@ IcebergEqualityDeleteFastFilter::BuildResult IcebergMultiFileReaderGlobalState::
 		return entry->second;
 	}
 	auto eligible_result =
-	    IcebergEqualityDeleteFastFilter::Build(eligible_files, read_state.field_indexes, read_state.types);
+	    IcebergEqualityDeleteFastFilter::Build(eligible_files, read_state.field_indexes, read_state.types, allocator);
 	IcebergEqualityDeleteFastFilter::BuildResult built;
 	built.filter = std::move(eligible_result.filter);
 	built.accelerated_files.resize(delete_files.size(), false);
@@ -478,8 +478,8 @@ ReaderInitializeType IcebergMultiFileReader::InitializeReader(MultiFileReaderDat
 		for (auto &entry : CreateFieldIdMap(local_columns)) {
 			local_field_ids.insert(entry.first);
 		}
-		auto built = iceberg_state.GetOrCreateEqualityDeleteFastFilter(delete_plan.equality_deletes,
-		                                                               *equality_delete_state, local_field_ids);
+		auto built = iceberg_state.GetOrCreateEqualityDeleteFastFilter(
+		    delete_plan.equality_deletes, *equality_delete_state, local_field_ids, BufferAllocator::Get(context));
 		equality_delete_state->fast_filter = std::move(built.filter);
 		accelerated_files = std::move(built.accelerated_files);
 	}

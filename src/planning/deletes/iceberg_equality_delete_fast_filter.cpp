@@ -2,32 +2,71 @@
 
 #include "duckdb/common/limits.hpp"
 #include "duckdb/common/numeric_utils.hpp"
+#include "duckdb/common/arena_containers/arena_vector.hpp"
 #include "duckdb/common/vector_operations/vector_operations.hpp"
 
 #include <algorithm>
 #include <cstring>
+#include <type_traits>
 
 namespace duckdb {
 
-void IcebergEqualityDeleteFastFilter::FlatShard::Initialize(idx_t expected_count) {
+namespace {
+
+constexpr idx_t MAXIMUM_POWER_OF_TWO = NumericLimits<idx_t>::Maximum() / 2 + 1;
+
+constexpr bool CanRoundHashTableCapacity(idx_t expected_count) {
+	return expected_count <= MAXIMUM_POWER_OF_TWO / 2;
+}
+
+constexpr bool CanAllocateHashTableEntries(idx_t capacity) {
+	return capacity <= NumericLimits<idx_t>::Maximum() / sizeof(IcebergEqualityDeleteFastFilter::FlatShard::Entry);
+}
+
+//! Boundary checks for the two size calculations in FlatShard::Initialize.
+static_assert(CanRoundHashTableCapacity(MAXIMUM_POWER_OF_TWO / 2), "Maximum supported key count must fit");
+static_assert(!CanRoundHashTableCapacity(MAXIMUM_POWER_OF_TWO / 2 + 1),
+              "Key counts whose rounded capacity overflows must be rejected");
+static_assert(CanAllocateHashTableEntries(NumericLimits<idx_t>::Maximum() /
+                                          sizeof(IcebergEqualityDeleteFastFilter::FlatShard::Entry)),
+              "Maximum supported entry allocation must fit");
+static_assert(!CanAllocateHashTableEntries(
+                  NumericLimits<idx_t>::Maximum() / sizeof(IcebergEqualityDeleteFastFilter::FlatShard::Entry) + 1),
+              "Overflowing entry allocations must be rejected");
+static_assert(std::is_trivially_destructible<IcebergEqualityDeleteFastFilter::FlatShard::Entry>::value,
+              "FlatShard entries must not require per-entry destruction");
+
+} // namespace
+
+void IcebergEqualityDeleteFastFilter::FlatShard::Initialize(Allocator &allocator, idx_t expected_count) {
 	if (expected_count == 0) {
 		return;
 	}
-	if (expected_count > NumericLimits<idx_t>::Maximum() / 2) {
+	//! NextPowerOfTwo cannot represent a power larger than the highest bit in idx_t.
+	//! Check that rounding expected_count * 2 can succeed before calling it.
+	if (!CanRoundHashTableCapacity(expected_count)) {
 		throw OutOfMemoryException("Too many Iceberg equality-delete keys");
 	}
-	auto capacity = NumericCast<idx_t>(NextPowerOfTwo(MaxValue<idx_t>(expected_count * 2, 16)));
-	entries.resize(capacity);
+	capacity = NumericCast<idx_t>(NextPowerOfTwo(MaxValue<idx_t>(expected_count * 2, 16)));
+	if (!CanAllocateHashTableEntries(capacity)) {
+		throw OutOfMemoryException("Iceberg equality-delete hash table is too large");
+	}
+	auto allocation_size = capacity * sizeof(Entry);
+	entries = allocator.Allocate(allocation_size);
+	auto entry_data = GetEntries();
+	for (idx_t entry_idx = 0; entry_idx < capacity; entry_idx++) {
+		new (&entry_data[entry_idx]) Entry();
+	}
 	capacity_mask = capacity - 1;
 }
 
 void IcebergEqualityDeleteFastFilter::FlatShard::Insert(hash_t hash, string_t key) {
-	D_ASSERT(!entries.empty());
+	D_ASSERT(capacity > 0);
 	//! The low bits already select the outer shard. Use independent bits for
 	//! the per-shard table so every key in a shard does not start in one slot.
 	auto slot = (hash >> 6) & capacity_mask;
 	while (true) {
-		auto &entry = entries[slot];
+		auto &entry = GetEntries()[slot];
 		if (!entry.occupied) {
 			entry.hash = hash;
 			entry.key = key;
@@ -42,12 +81,12 @@ void IcebergEqualityDeleteFastFilter::FlatShard::Insert(hash_t hash, string_t ke
 }
 
 bool IcebergEqualityDeleteFastFilter::FlatShard::Contains(hash_t hash, string_t key) const {
-	if (entries.empty()) {
+	if (capacity == 0) {
 		return false;
 	}
 	auto slot = (hash >> 6) & capacity_mask;
 	while (true) {
-		auto &entry = entries[slot];
+		auto &entry = GetEntries()[slot];
 		if (!entry.occupied) {
 			return false;
 		}
@@ -117,9 +156,9 @@ static string LayoutKey(const vector<idx_t> &column_indices) {
 IcebergEqualityDeleteFastFilter::BuildResult
 IcebergEqualityDeleteFastFilter::Build(const vector<reference<const IcebergEqualityDeleteFile>> &delete_files,
                                        const unordered_map<int32_t, idx_t> &field_indexes,
-                                       const vector<LogicalType> &target_types) {
+                                       const vector<LogicalType> &target_types, Allocator &allocator) {
 	BuildResult result;
-	result.filter = make_shared_ptr<IcebergEqualityDeleteFastFilter>(Allocator::DefaultAllocator());
+	result.filter = make_shared_ptr<IcebergEqualityDeleteFastFilter>(allocator);
 	result.accelerated_files.resize(delete_files.size(), false);
 	auto &filter = *result.filter;
 
@@ -179,9 +218,16 @@ IcebergEqualityDeleteFastFilter::Build(const vector<reference<const IcebergEqual
 		file_layouts.push_back({file_idx, layout_idx, std::move(sources)});
 	}
 
-	vector<vector<vector<StagedKey>>> staged(filter.layouts.size());
+	//! Staging can be comparable in size to the finished table. Allocate it through
+	//! the buffer manager as well, and release it as a group when Build returns.
+	ArenaAllocator staging_arena(allocator);
+	using StagedKeyVector = unsafe_arena_vector<StagedKey>;
+	vector<vector<StagedKeyVector>> staged(filter.layouts.size());
 	for (auto &layout_staged : staged) {
-		layout_staged.resize(SHARD_COUNT);
+		layout_staged.reserve(SHARD_COUNT);
+		for (idx_t shard_idx = 0; shard_idx < SHARD_COUNT; shard_idx++) {
+			layout_staged.emplace_back(staging_arena);
+		}
 	}
 	for (auto &descriptor : file_layouts) {
 		auto &file = delete_files[descriptor.file_index].get();
@@ -268,7 +314,7 @@ IcebergEqualityDeleteFastFilter::Build(const vector<reference<const IcebergEqual
 		auto &layout = filter.layouts[layout_idx];
 		for (idx_t shard_idx = 0; shard_idx < SHARD_COUNT; shard_idx++) {
 			auto &records = staged[layout_idx][shard_idx];
-			layout.shards[shard_idx].Initialize(records.size());
+			layout.shards[shard_idx].Initialize(allocator, records.size());
 			for (auto &record : records) {
 				layout.shards[shard_idx].Insert(record.hash, record.key);
 			}

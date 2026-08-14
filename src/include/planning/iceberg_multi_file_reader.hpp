@@ -76,7 +76,7 @@ public:
 	IcebergEqualityDeleteFastFilter::BuildResult
 	GetOrCreateEqualityDeleteFastFilter(const vector<reference<const IcebergEqualityDeleteFile>> &delete_files,
 	                                    const IcebergEqualityDeleteReadState &read_state,
-	                                    const set<int32_t> &local_field_ids);
+	                                    const set<int32_t> &local_field_ids, Allocator &allocator);
 
 private:
 	mutable mutex equality_delete_read_state_lock;
