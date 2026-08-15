@@ -70,12 +70,13 @@ static bool AddDeleteFile(IcebergEqualityDeleteFastFilter::Layout &layout, const
 
 	//! GroupedAggregateHashTable's probe state is vector-sized. Delete-file
 	//! state can contain many vectors, so add it in standard-sized slices.
+	DataChunk slice;
+	slice.InitializeEmpty(layout.types);
+	Vector addresses(LogicalType::POINTER);
 	for (idx_t offset = 0; offset < count; offset += STANDARD_VECTOR_SIZE) {
 		auto end = MinValue<idx_t>(offset + STANDARD_VECTOR_SIZE, count);
-		DataChunk slice;
-		slice.InitializeEmpty(layout.types);
+		slice.Reset();
 		slice.Slice(groups, offset, end);
-		Vector addresses(LogicalType::POINTER);
 		layout.hash_table->FindOrCreateGroups(slice, addresses);
 	}
 	return true;
