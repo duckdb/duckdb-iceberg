@@ -155,32 +155,58 @@ IcebergEqualityDeleteFastFilter::BuildResult IcebergEqualityDeleteFastFilterCach
 			key.columns.push_back({group.field_ids[column_idx], group.types[column_idx], true});
 		}
 
-		IcebergEqualityDeleteFastFilter::LayoutBuildResult cached;
+		shared_ptr<LayoutLoadState> load;
+		bool build = false;
 		{
-			lock_guard<mutex> guard(lock);
+			annotated_lock_guard<annotated_mutex> guard(lock);
 			auto entry = layouts.find(key);
-			if (entry != layouts.end()) {
-				cached = entry->second;
+			if (entry == layouts.end()) {
+				load = make_shared_ptr<LayoutLoadState>();
+				layouts.emplace(std::move(key), load);
+				build = true;
+			} else {
+				load = entry->second;
 			}
 		}
-		if (!cached.layout) {
-			auto layout = make_shared_ptr<IcebergEqualityDeleteFastFilter::Layout>();
-			layout->types = group.types;
-			layout->hash_table = make_uniq<GroupedAggregateHashTable>(context, allocator, layout->types,
-			                                                          TupleDataValidityType::CAN_HAVE_NULL_VALUES);
+		if (build) {
 			IcebergEqualityDeleteFastFilter::LayoutBuildResult built;
-			built.layout = layout;
-			built.accelerated_files.resize(group.files.size(), false);
-			for (idx_t file_idx = 0; file_idx < group.files.size(); file_idx++) {
-				auto &descriptor = group.files[file_idx];
-				auto &file = delete_files[descriptor.file_index].get();
-				built.accelerated_files[file_idx] =
-				    AddDeleteFile(*layout->hash_table, layout->types, file, descriptor.source_indices);
-			}
+			ErrorData error;
+			try {
+				auto layout = make_shared_ptr<IcebergEqualityDeleteFastFilter::Layout>();
+				layout->types = group.types;
+				layout->hash_table = make_uniq<GroupedAggregateHashTable>(context, allocator, layout->types,
+				                                                          TupleDataValidityType::CAN_HAVE_NULL_VALUES);
+				built.layout = layout;
+				built.accelerated_files.resize(group.files.size(), false);
+				for (idx_t file_idx = 0; file_idx < group.files.size(); file_idx++) {
+					auto &descriptor = group.files[file_idx];
+					auto &file = delete_files[descriptor.file_index].get();
+					built.accelerated_files[file_idx] =
+					    AddDeleteFile(*layout->hash_table, layout->types, file, descriptor.source_indices);
+				}
+			} catch (std::exception &ex) {
+				error = ErrorData(ex);
+			} catch (...) { // LCOV_EXCL_START
+				error = ErrorData("Unknown exception while building an Iceberg equality-delete hash filter");
+			} // LCOV_EXCL_STOP
 
-			lock_guard<mutex> guard(lock);
-			auto entry = layouts.emplace(std::move(key), std::move(built));
-			cached = entry.first->second;
+			{
+				lock_guard<mutex> guard(load->lock);
+				load->result = std::move(built);
+				load->error = std::move(error);
+				load->complete = true;
+			}
+			load->cv.notify_all();
+		}
+
+		IcebergEqualityDeleteFastFilter::LayoutBuildResult cached;
+		{
+			unique_lock<mutex> guard(load->lock);
+			load->cv.wait(guard, [&load] { return load->complete; });
+			if (load->error.HasError()) {
+				load->error.Throw();
+			}
+			cached = load->result;
 		}
 
 		for (idx_t file_idx = 0; file_idx < group.files.size(); file_idx++) {

@@ -9,12 +9,15 @@
 
 #include "core/deletes/iceberg_equality_delete.hpp"
 #include "duckdb/common/allocator.hpp"
+#include "duckdb/common/error_data.hpp"
 #include "duckdb/common/mutex.hpp"
 #include "duckdb/common/set.hpp"
 #include "duckdb/common/types/data_chunk.hpp"
 #include "duckdb/common/types/hash.hpp"
 #include "duckdb/common/unordered_map.hpp"
 #include "duckdb/execution/aggregate_hashtable.hpp"
+
+#include <condition_variable>
 
 namespace duckdb {
 
@@ -106,8 +109,17 @@ public:
 	            const set<int32_t> &local_field_ids, ClientContext &context, Allocator &allocator);
 
 private:
-	mutex lock;
-	unordered_map<EqualityDeleteFastFilterKey, IcebergEqualityDeleteFastFilter::LayoutBuildResult> layouts;
+	//! One builder publishes each layout key; waiters share its result while unrelated layouts build concurrently.
+	struct LayoutLoadState {
+		mutex lock;
+		std::condition_variable cv;
+		bool complete = false;
+		ErrorData error;
+		IcebergEqualityDeleteFastFilter::LayoutBuildResult result;
+	};
+
+	annotated_mutex lock;
+	unordered_map<EqualityDeleteFastFilterKey, shared_ptr<LayoutLoadState>> layouts DUCKDB_GUARDED_BY(lock);
 };
 
 } // namespace duckdb
