@@ -10,14 +10,9 @@
 
 namespace duckdb {
 
-IcebergCTASInfo::IcebergCTASInfo(IcebergSchemaEntry &schema_entry_p, unique_ptr<BoundCreateTableInfo> info_p,
-                                 shared_ptr<IcebergCTASCreateState> create_state_p)
-    : schema_entry(schema_entry_p), info(std::move(info_p)), create_state(std::move(create_state_p)) {
-}
-
 IcebergCopyToFile::IcebergCopyToFile(PhysicalPlan &physical_plan, vector<LogicalType> types, CopyFunction function,
                                      unique_ptr<FunctionData> bind_data, idx_t estimated_cardinality,
-                                     unique_ptr<IcebergCTASInfo> ctas_info_p)
+                                     unique_ptr<BoundCreateTableInfo> ctas_info_p)
     : PhysicalCopyToFile(physical_plan, std::move(types), std::move(function), std::move(bind_data),
                          estimated_cardinality),
       ctas_info(std::move(ctas_info_p)) {
@@ -55,17 +50,19 @@ void IcebergCopyToFile::EnsureTableCreated(ClientContext &context) const {
 		// every other write path targets a table that already exists, so the plan-time options are final
 		return;
 	}
-	auto &create_state = *ctas_info->create_state;
-	lock_guard<mutex> guard(create_state.lock);
-	if (create_state.created) {
+	lock_guard<mutex> guard(create_lock);
+	if (created_table) {
 		return;
 	}
 
-	auto &schema_entry = ctas_info->schema_entry;
+	// GetGlobalSinkState is const, but the physical plan owns this operator mutably - creating the table
+	// and rebinding the copy options is the same work the planner does, only postponed until now.
+	auto &op = const_cast<IcebergCopyToFile &>(*this);
+	auto &schema_entry = op.ctas_info->schema.Cast<IcebergSchemaEntry>();
 	auto &catalog = schema_entry.catalog;
 	auto transaction = catalog.GetCatalogTransaction(context);
 
-	auto table = schema_entry.CreateTable(transaction, context, *ctas_info->info);
+	auto table = schema_entry.CreateTable(transaction, context, *op.ctas_info);
 	if (!table) {
 		throw InternalException("Iceberg CTAS: CreateTable request failed");
 	}
@@ -79,16 +76,18 @@ void IcebergCopyToFile::EnsureTableCreated(ClientContext &context) const {
 	// Replace the plan-time options, which were derived from placeholder metadata without a location.
 	IcebergCopyInput copy_input(context, table_metadata, table_schema);
 	auto copy_options = IcebergInsert::GetCopyOptions(context, copy_input);
-	// GetGlobalSinkState is const, but the physical plan owns this operator mutably - this is the same
-	// rebinding the planner does, only postponed until the table exists.
-	const_cast<IcebergCopyToFile &>(*this).ApplyCopyOptions(copy_options);
+	op.ApplyCopyOptions(copy_options);
 
-	create_state.table_entry = &ic_table;
-	create_state.created = true;
+	created_table = &ic_table;
+}
+
+optional_ptr<IcebergTableSchemaVersion> IcebergCopyToFile::GetCreatedTable() const {
+	lock_guard<mutex> guard(create_lock);
+	return created_table;
 }
 
 string IcebergCopyToFile::GetName() const {
-	if (ctas_info) {
+	if (IsCTAS()) {
 		return "ICEBERG_CREATE_TABLE_AS";
 	}
 	return PhysicalCopyToFile::GetName();
@@ -96,8 +95,8 @@ string IcebergCopyToFile::GetName() const {
 
 InsertionOrderPreservingMap<string> IcebergCopyToFile::ParamsToString() const {
 	auto result = PhysicalCopyToFile::ParamsToString();
-	if (ctas_info && ctas_info->info) {
-		result["Table Name"] = ctas_info->info->Base().GetTableName().GetIdentifierName();
+	if (ctas_info) {
+		result["Table Name"] = ctas_info->Base().GetTableName().GetIdentifierName();
 	}
 	return result;
 }

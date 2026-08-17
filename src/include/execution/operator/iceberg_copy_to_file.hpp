@@ -13,30 +13,8 @@
 
 namespace duckdb {
 
-class IcebergSchemaEntry;
 class IcebergTableSchemaVersion;
 struct IcebergCopyOptions;
-
-//! Shared mutable state populated at execution time by IcebergCopyToFile.
-//! Read by IcebergInsert during Sink/Finalize so it can resolve the catalog
-//! TableCatalogEntry that was created lazily.
-struct IcebergCTASCreateState {
-	mutex lock;
-	//! Set to true once the CreateTable REST call has completed successfully.
-	bool created = false;
-	//! Populated after CreateTable returns.
-	optional_ptr<IcebergTableSchemaVersion> table_entry;
-};
-
-//! Everything IcebergCopyToFile needs to issue the CreateTable request for a CREATE TABLE AS.
-struct IcebergCTASInfo {
-	IcebergCTASInfo(IcebergSchemaEntry &schema_entry, unique_ptr<BoundCreateTableInfo> info,
-	                shared_ptr<IcebergCTASCreateState> create_state);
-
-	IcebergSchemaEntry &schema_entry;
-	unique_ptr<BoundCreateTableInfo> info;
-	shared_ptr<IcebergCTASCreateState> create_state;
-};
 
 //! The copy operator that writes Iceberg data files, for every write path (INSERT, UPDATE, MERGE INTO
 //! and CREATE TABLE AS).
@@ -49,7 +27,7 @@ class IcebergCopyToFile : public PhysicalCopyToFile {
 public:
 	IcebergCopyToFile(PhysicalPlan &physical_plan, vector<LogicalType> types, CopyFunction function,
 	                  unique_ptr<FunctionData> bind_data, idx_t estimated_cardinality,
-	                  unique_ptr<IcebergCTASInfo> ctas_info);
+	                  unique_ptr<BoundCreateTableInfo> ctas_info);
 
 public:
 	//! For CTAS: creates the table (once) and installs the resulting copy options. Then defers to
@@ -60,15 +38,27 @@ public:
 	//! GetGlobalSinkState for a CTAS, once the table it writes to actually exists.
 	void ApplyCopyOptions(IcebergCopyOptions &copy_options);
 
+	//! The table this copy created, for a CTAS. Null until GetGlobalSinkState has run; read by the
+	//! IcebergInsert above this operator, which has no table entry of its own.
+	optional_ptr<IcebergTableSchemaVersion> GetCreatedTable() const;
+
+	bool IsCTAS() const {
+		return ctas_info != nullptr;
+	}
+
 	string GetName() const override;
 	InsertionOrderPreservingMap<string> ParamsToString() const override;
 
 private:
 	void EnsureTableCreated(ClientContext &context) const;
 
-public:
+private:
 	//! Only set for CREATE TABLE AS; the other write paths target a table that already exists.
-	unique_ptr<IcebergCTASInfo> ctas_info;
+	//! Carries both what to create and, via its `schema`, the namespace to create it in.
+	unique_ptr<BoundCreateTableInfo> ctas_info;
+	//! Guards the CreateTable request and the entry it produces if the copy is part of a CTAS
+	mutable mutex create_lock;
+	mutable optional_ptr<IcebergTableSchemaVersion> created_table;
 };
 
 } // namespace duckdb

@@ -38,6 +38,10 @@ public:
 	//! Table index for logical plan generation (used when generating partition expressions)
 	optional_idx get_table_index;
 	IcebergInsertVirtualColumns virtual_columns = IcebergInsertVirtualColumns::NONE;
+	//! For CREATE TABLE AS: what to create, and (via its `schema`) where. The table does not exist
+	//! yet, so `table_metadata` above is a placeholder without a location and the copy has to
+	//! re-resolve its options once it has issued the CreateTable request.
+	unique_ptr<BoundCreateTableInfo> ctas_info;
 };
 
 struct IcebergCopyOptions {
@@ -117,10 +121,9 @@ public:
 	//! When set, this insert is part of an UPDATE: points to the delete operator so Finalize
 	//! can call AddUpdateSnapshot instead of AddSnapshot.
 	optional_ptr<PhysicalOperator> update_delete_op;
-	//! When set, this insert is a CTAS whose table is created lazily by the
-	//! IcebergCopyToFile below it. Sink/Finalize resolve the
-	//! TableCatalogEntry through this shared state instead of `table`.
-	shared_ptr<IcebergCTASCreateState> create_state;
+	//! When set, this insert is a CTAS whose table is created lazily by this copy operator (its child).
+	//! Sink/Finalize resolve the TableCatalogEntry through it instead of through `table`.
+	optional_ptr<IcebergCopyToFile> ctas_copy_op;
 
 public:
 	// Source interface
@@ -137,11 +140,10 @@ public:
 	SinkFinalizeType Finalize(Pipeline &pipeline, Event &event, ClientContext &context,
 	                          OperatorSinkFinalizeInput &input) const override;
 	unique_ptr<GlobalSinkState> GetGlobalSinkState(ClientContext &context) const override;
-	//! Plans the copy that writes the data files. When `ctas_info` is set the copy creates the table
-	//! before it resolves the options that depend on its location.
-	static PhysicalOperator &PlanCopyForInsert(ClientContext &context, PhysicalPlanGenerator &planner,
-	                                           const IcebergCopyInput &copy_input, optional_ptr<PhysicalOperator> plan,
-	                                           unique_ptr<IcebergCTASInfo> ctas_info = nullptr);
+	//! Plans the copy that writes the data files. When `copy_input` carries CTAS info the copy creates
+	//! the table before it resolves the options that depend on its location.
+	static IcebergCopyToFile &PlanCopyForInsert(ClientContext &context, PhysicalPlanGenerator &planner,
+	                                            IcebergCopyInput &copy_input, optional_ptr<PhysicalOperator> plan);
 	static IcebergCopyOptions GetCopyOptions(ClientContext &context, const IcebergCopyInput &copy_input);
 
 	static PhysicalOperator &PlanInsert(ClientContext &context, PhysicalPlanGenerator &planner,
@@ -152,7 +154,7 @@ public:
 
 	//! Resolve the catalog entry this insert is targeting. For INSERT INTO this
 	//! is just `this->table`; for CTAS the table is created lazily by the
-	//! IcebergCopyToFile below it, so we read it from `create_state`.
+	//! IcebergCopyToFile below it, so we read it from `ctas_copy_op`.
 	optional_ptr<TableCatalogEntry> GetEffectiveTable() const;
 
 	bool IsSink() const override {
