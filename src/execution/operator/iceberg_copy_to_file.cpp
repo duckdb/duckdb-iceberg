@@ -1,0 +1,105 @@
+#include "execution/operator/iceberg_copy_to_file.hpp"
+
+#include "duckdb/main/client_context.hpp"
+#include "duckdb/main/database.hpp"
+
+#include "catalog/rest/catalog_entry/schema/iceberg_schema_entry.hpp"
+#include "catalog/rest/catalog_entry/table/iceberg_table_schema_version.hpp"
+#include "catalog/rest/iceberg_catalog.hpp"
+#include "execution/operator/iceberg_insert.hpp"
+
+namespace duckdb {
+
+IcebergCTASInfo::IcebergCTASInfo(IcebergSchemaEntry &schema_entry_p, unique_ptr<BoundCreateTableInfo> info_p,
+                                 shared_ptr<IcebergCTASCreateState> create_state_p)
+    : schema_entry(schema_entry_p), info(std::move(info_p)), create_state(std::move(create_state_p)) {
+}
+
+IcebergCopyToFile::IcebergCopyToFile(PhysicalPlan &physical_plan, vector<LogicalType> types, CopyFunction function,
+                                     unique_ptr<FunctionData> bind_data, idx_t estimated_cardinality,
+                                     unique_ptr<IcebergCTASInfo> ctas_info_p)
+    : PhysicalCopyToFile(physical_plan, std::move(types), std::move(function), std::move(bind_data),
+                         estimated_cardinality),
+      ctas_info(std::move(ctas_info_p)) {
+}
+
+void IcebergCopyToFile::ApplyCopyOptions(IcebergCopyOptions &copy_options) {
+	bind_data = std::move(copy_options.bind_data);
+	file_path = std::move(copy_options.file_path);
+	filename_pattern = std::move(copy_options.filename_pattern);
+	file_extension = std::move(copy_options.file_extension);
+	overwrite_mode = copy_options.overwrite_mode;
+	per_thread_output = copy_options.per_thread_output;
+	file_size_bytes = copy_options.file_size_bytes;
+	batch_size = copy_options.batch_size;
+	batch_size_bytes = copy_options.batch_size_bytes;
+	return_type = copy_options.return_type;
+
+	partition_output = copy_options.partition_output;
+	write_partition_columns = copy_options.write_partition_columns;
+	write_empty_file = copy_options.write_empty_file;
+	partition_columns = std::move(copy_options.partition_columns);
+	names = std::move(copy_options.names);
+	expected_types = std::move(copy_options.expected_types);
+}
+
+unique_ptr<GlobalSinkState> IcebergCopyToFile::GetGlobalSinkState(ClientContext &context) const {
+	// PhysicalCopyToFile reads file_path here to schedule the output directory setup, so for a CTAS the
+	// table has to exist - and its copy options have to be installed - before we hand over to the base class.
+	EnsureTableCreated(context);
+	return PhysicalCopyToFile::GetGlobalSinkState(context);
+}
+
+void IcebergCopyToFile::EnsureTableCreated(ClientContext &context) const {
+	if (!ctas_info) {
+		// every other write path targets a table that already exists, so the plan-time options are final
+		return;
+	}
+	auto &create_state = *ctas_info->create_state;
+	lock_guard<mutex> guard(create_state.lock);
+	if (create_state.created) {
+		return;
+	}
+
+	auto &schema_entry = ctas_info->schema_entry;
+	auto &catalog = schema_entry.catalog;
+	auto transaction = catalog.GetCatalogTransaction(context);
+
+	auto table = schema_entry.CreateTable(transaction, context, *ctas_info->info);
+	if (!table) {
+		throw InternalException("Iceberg CTAS: CreateTable request failed");
+	}
+	auto &ic_table = table->Cast<IcebergTableSchemaVersion>();
+	// Load any per-table credentials (e.g. SigV4 for the data location).
+	ic_table.PrepareIcebergScanFromEntry(context);
+
+	auto &table_metadata = ic_table.table_info.table_metadata;
+	auto &table_schema = table_metadata.GetLatestSchema();
+
+	// Replace the plan-time options, which were derived from placeholder metadata without a location.
+	IcebergCopyInput copy_input(context, table_metadata, table_schema);
+	auto copy_options = IcebergInsert::GetCopyOptions(context, copy_input);
+	// GetGlobalSinkState is const, but the physical plan owns this operator mutably - this is the same
+	// rebinding the planner does, only postponed until the table exists.
+	const_cast<IcebergCopyToFile &>(*this).ApplyCopyOptions(copy_options);
+
+	create_state.table_entry = &ic_table;
+	create_state.created = true;
+}
+
+string IcebergCopyToFile::GetName() const {
+	if (ctas_info) {
+		return "ICEBERG_CREATE_TABLE_AS";
+	}
+	return PhysicalCopyToFile::GetName();
+}
+
+InsertionOrderPreservingMap<string> IcebergCopyToFile::ParamsToString() const {
+	auto result = PhysicalCopyToFile::ParamsToString();
+	if (ctas_info && ctas_info->info) {
+		result["Table Name"] = ctas_info->info->Base().GetTableName().GetIdentifierName();
+	}
+	return result;
+}
+
+} // namespace duckdb

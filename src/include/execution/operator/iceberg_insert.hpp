@@ -17,7 +17,7 @@
 #include "catalog/rest/catalog_entry/schema/iceberg_schema_entry.hpp"
 #include "core/metadata/partition/iceberg_partition_spec.hpp"
 #include "core/metadata/schema/iceberg_table_schema.hpp"
-#include "execution/operator/physical_iceberg_create_table.hpp"
+#include "execution/operator/iceberg_copy_to_file.hpp"
 
 namespace duckdb {
 
@@ -117,8 +117,8 @@ public:
 	//! When set, this insert is part of an UPDATE: points to the delete operator so Finalize
 	//! can call AddUpdateSnapshot instead of AddSnapshot.
 	optional_ptr<PhysicalOperator> update_delete_op;
-	//! When set, this insert is a CTAS whose table is created lazily by an
-	//! upstream PhysicalIcebergCreateTable. Sink/Finalize resolve the
+	//! When set, this insert is a CTAS whose table is created lazily by the
+	//! IcebergCopyToFile below it. Sink/Finalize resolve the
 	//! TableCatalogEntry through this shared state instead of `table`.
 	shared_ptr<IcebergCTASCreateState> create_state;
 
@@ -137,8 +137,11 @@ public:
 	SinkFinalizeType Finalize(Pipeline &pipeline, Event &event, ClientContext &context,
 	                          OperatorSinkFinalizeInput &input) const override;
 	unique_ptr<GlobalSinkState> GetGlobalSinkState(ClientContext &context) const override;
+	//! Plans the copy that writes the data files. When `ctas_info` is set the copy creates the table
+	//! before it resolves the options that depend on its location.
 	static PhysicalOperator &PlanCopyForInsert(ClientContext &context, PhysicalPlanGenerator &planner,
-	                                           const IcebergCopyInput &copy_input, optional_ptr<PhysicalOperator> plan);
+	                                           const IcebergCopyInput &copy_input, optional_ptr<PhysicalOperator> plan,
+	                                           unique_ptr<IcebergCTASInfo> ctas_info = nullptr);
 	static IcebergCopyOptions GetCopyOptions(ClientContext &context, const IcebergCopyInput &copy_input);
 
 	static PhysicalOperator &PlanInsert(ClientContext &context, PhysicalPlanGenerator &planner,
@@ -148,8 +151,8 @@ public:
 	                            optional_ptr<TableCatalogEntry> table);
 
 	//! Resolve the catalog entry this insert is targeting. For INSERT INTO this
-	//! is just `this->table`; for CTAS the table is created lazily by an
-	//! upstream PhysicalIcebergCreateTable, so we read it from `create_state`.
+	//! is just `this->table`; for CTAS the table is created lazily by the
+	//! IcebergCopyToFile below it, so we read it from `create_state`.
 	optional_ptr<TableCatalogEntry> GetEffectiveTable() const;
 
 	bool IsSink() const override {

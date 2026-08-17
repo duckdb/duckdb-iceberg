@@ -17,6 +17,13 @@ scripts/data_generators/__pycache__/
 scripts/data_generators/*/__pycache__/
 scripts/data_generators/*/*/*.parquet
 data/generated/*
+.cache
+.clangd
+.claude
+.java-version
+.python-version
+
+duckdb_benchmark_data
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
@@ -24,3 +31,9 @@ __pycache__/
 
 tmp/
 .catalogs/
+
+# python virtual env
+bin
+lib
+pyvenv.cfg
+
