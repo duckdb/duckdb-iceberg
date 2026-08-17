@@ -9,6 +9,33 @@
 
 namespace duckdb {
 
+namespace {
+
+//! How many of a column's values in a data file are NULL, from the counts its manifest entry carries. An absent
+//! null count tells us nothing, so assume both kinds of row are present.
+void ApplyNullCounts(const IcebergDataFile &data_file, int32_t column_id, IcebergPredicateStats &stats) {
+	optional<int64_t> value_count;
+	optional<int64_t> null_count;
+	auto value_counts_it = data_file.value_counts.find(column_id);
+	if (value_counts_it != data_file.value_counts.end()) {
+		value_count = value_counts_it->second;
+	}
+	auto null_counts_it = data_file.null_value_counts.find(column_id);
+	if (null_counts_it != data_file.null_value_counts.end()) {
+		null_count = null_counts_it->second;
+	}
+
+	if (null_count) {
+		stats.has_null = *null_count > 0;
+		stats.has_not_null = value_count ? *value_count - *null_count > 0 : true;
+	} else {
+		stats.has_null = true;
+		stats.has_not_null = value_count ? *value_count > 0 : true;
+	}
+}
+
+} // namespace
+
 bool IcebergFilePruner::FilePartitionMatchesFilter(const IcebergDataFile &data_file,
                                                    const IcebergManifestFile &manifest_file) const {
 	if (data_file.partition_info.empty()) {
@@ -136,24 +163,7 @@ bool IcebergFilePruner::FileMatchesFilter(const IcebergManifestFile &manifest_fi
 			stats = IcebergPredicateStats::DeserializeBounds(lower_bound, upper_bound, column.name, column.type);
 		}
 
-		optional<int64_t> value_count;
-		optional<int64_t> null_count;
-		auto value_counts_it = data_file.value_counts.find(column_id);
-		if (value_counts_it != data_file.value_counts.end()) {
-			value_count = value_counts_it->second;
-		}
-		auto null_counts_it = data_file.null_value_counts.find(column_id);
-		if (null_counts_it != data_file.null_value_counts.end()) {
-			null_count = null_counts_it->second;
-		}
-
-		if (null_count) {
-			stats.has_null = *null_count > 0;
-			stats.has_not_null = value_count ? *value_count - *null_count > 0 : true;
-		} else {
-			stats.has_null = true;
-			stats.has_not_null = value_count ? *value_count > 0 : true;
-		}
+		ApplyNullCounts(data_file, column_id, stats);
 
 		auto nan_counts_it = data_file.nan_value_counts.find(column_id);
 		stats.has_nan = nan_counts_it == data_file.nan_value_counts.end() || nan_counts_it->second > 0;

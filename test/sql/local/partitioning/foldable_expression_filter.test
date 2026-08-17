@@ -39,7 +39,7 @@ ATTACH '' AS my_datalake (
     TYPE ICEBERG,
     CLIENT_ID 'admin',
     CLIENT_SECRET 'password',
-    ENDPOINT 'http://127.0.0.1:8181'
+    URI 'http://127.0.0.1:8181'
 );
 
 # Foldable expression is on the left side

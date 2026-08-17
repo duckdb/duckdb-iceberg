@@ -38,7 +38,7 @@ create secret my_secret (
 statement error
 attach '' as my_datalake (
     type ICEBERG,
-    ENDPOINT 'http://127.0.0.1:19120/iceberg/',
+    URI 'http://127.0.0.1:19120/iceberg/',
     ACCESS_DELEGATION_MODE 'blah',
     SECRET 'my_secret'
 );
@@ -51,7 +51,7 @@ call enable_logging(level='debug');
 statement ok
 attach 'warehouse' as my_datalake (
     type ICEBERG,
-    ENDPOINT 'http://127.0.0.1:19120/iceberg/main',
+    URI 'http://127.0.0.1:19120/iceberg/main',
     ACCESS_DELEGATION_MODE 'none',
     SECRET 'my_secret'
 );
@@ -122,7 +122,7 @@ SET httpfs_enable_credential_refresh=false;
 statement ok
 attach '' as my_datalake (
     type ICEBERG,
-    ENDPOINT 'http://127.0.0.1:19120/iceberg/',
+    URI 'http://127.0.0.1:19120/iceberg/',
     SECRET 'my_secret'
 );
 

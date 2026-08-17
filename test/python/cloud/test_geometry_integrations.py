@@ -246,7 +246,7 @@ def duckdb_con():
             "  TYPE ICEBERG,"
             f"  CLIENT_ID '{os.getenv('ICEBERG_CATALOG_CLIENT_ID')}',"
             f"  CLIENT_SECRET '{os.getenv('ICEBERG_CATALOG_CLIENT_SECRET')}',"
-            f"  ENDPOINT '{os.getenv('ICEBERG_CATALOG_ENDPOINT')}'"
+            f"  URI '{os.getenv('ICEBERG_CATALOG_ENDPOINT')}'"
             ");"
         )
 
@@ -256,7 +256,7 @@ def duckdb_con():
             f"ATTACH '{CATALOG_NAME}' AS my_datalake ("
             "  TYPE ICEBERG,"
             f"{region_clause}"
-            f"  ENDPOINT '{os.getenv('ICEBERG_CATALOG_ENDPOINT')}'"
+            f"  URI '{os.getenv('ICEBERG_CATALOG_ENDPOINT')}'"
             ");"
         )
         db.query(f"CREATE SCHEMA IF NOT EXISTS my_datalake.{NAMESPACE};")

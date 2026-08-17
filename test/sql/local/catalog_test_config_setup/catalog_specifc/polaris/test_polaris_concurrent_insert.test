@@ -66,7 +66,7 @@ DROP TABLE my_datalake.default.concurrent_new_table_test;
 statement ok
 attach or replace 'quickstart_catalog' as my_datalake (
 	type ICEBERG,
-	ENDPOINT 'http://0.0.0.0:8181/api/catalog',
+	URI 'http://0.0.0.0:8181/api/catalog',
 	SUPPORT_NESTED_NAMESPACES true,
 	stage_create_tables false,
 	DEFAULT_REGION 'us-west-2'

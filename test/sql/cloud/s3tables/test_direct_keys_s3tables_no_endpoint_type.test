@@ -36,7 +36,7 @@ statement ok
 attach or replace 'arn:aws:s3tables:us-east-2:840140254803:bucket/iceberg-testing' as my_datalake (
 	TYPE ICEBERG,
 	AUTHORIZATION_TYPE 'sigv4',
-	ENDPOINT 's3tables.us-east-2.amazonaws.com/iceberg'
+	URI 's3tables.us-east-2.amazonaws.com/iceberg'
 );
 
 set ignore_error_messages
@@ -68,7 +68,7 @@ statement ok
 attach 'arn:aws:s3tables:us-east-2:840140254803:bucket/iceberg-testing' as my_datalake (
 	TYPE ICEBERG,
 	AUTHORIZATION_TYPE 'sigv4',
-	ENDPOINT 's3tables.us-east-2.amazonaws.com/iceberg'
+	URI 's3tables.us-east-2.amazonaws.com/iceberg'
 );
 
 query T nosort tables_1
@@ -95,7 +95,7 @@ statement ok
 attach 'arn:aws:s3tables:us-east-2:840140254803:bucket/iceberg-testing' as my_datalake (
 	TYPE ICEBERG,
 	AUTHORIZATION_TYPE 'sigv4',
-	ENDPOINT 's3tables.us-east-2.amazonaws.com/iceberg'
+	URI 's3tables.us-east-2.amazonaws.com/iceberg'
 );
 
 query T nosort tables_1

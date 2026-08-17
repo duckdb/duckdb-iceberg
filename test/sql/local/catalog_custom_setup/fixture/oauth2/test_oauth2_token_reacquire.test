@@ -38,7 +38,7 @@ ATTACH '' AS reacquire_lake (
     CLIENT_ID 'admin',
     CLIENT_SECRET 'password',
     OAUTH2_SERVER_URI 'http://127.0.0.1:8181/v1/oauth/tokens',
-    ENDPOINT 'http://127.0.0.1:8181'
+    URI 'http://127.0.0.1:8181'
 );
 
 # Initial token fetch happened
@@ -71,7 +71,7 @@ statement ok
 ATTACH '' AS reacquire_lake2 (
     TYPE ICEBERG,
     SECRET refresh_test_secret,
-    ENDPOINT 'http://127.0.0.1:8181'
+    URI 'http://127.0.0.1:8181'
 );
 
 query I

@@ -46,7 +46,7 @@ statement ok
 ATTACH '' AS static_lake (
     TYPE ICEBERG,
     SECRET temp_get_token,
-    ENDPOINT 'http://127.0.0.1:8181'
+    URI 'http://127.0.0.1:8181'
 );
 
 # Verify NO new POST requests to OAuth (token was already in the secret)

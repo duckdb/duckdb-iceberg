@@ -46,7 +46,7 @@ ATTACH '' AS error_lake (
     CLIENT_SECRET 's3cr3t',
     OAUTH2_SCOPE 'catalog sign',
     OAUTH2_SERVER_URI 'http://127.0.0.1:8080/realms/iceberg/protocol/openid-connect/token',
-    ENDPOINT 'http://127.0.0.1:19120/iceberg/',
+    URI 'http://127.0.0.1:19120/iceberg/',
     ACCESS_DELEGATION_MODE 'none'
 );
 
@@ -92,7 +92,7 @@ statement ok
 ATTACH '' AS fallback_lake (
     TYPE ICEBERG,
     SECRET fallback_secret,
-    ENDPOINT 'http://127.0.0.1:19120/iceberg/',
+    URI 'http://127.0.0.1:19120/iceberg/',
     ACCESS_DELEGATION_MODE 'none'
 );
 

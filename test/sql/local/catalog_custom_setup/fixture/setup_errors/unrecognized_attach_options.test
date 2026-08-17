@@ -14,7 +14,7 @@ require httpfs
 statement error
 attach '' as my_datalake (
 	TYPE ICEBERG,
-	ENDPOINT 'http://127.0.0.1:8181',
+	URI 'http://127.0.0.1:8181',
 	SIGNER 'test'
 )
 ----

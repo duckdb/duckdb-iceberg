@@ -34,7 +34,7 @@ call enable_logging('http');
 statement ok
 ATTACH '' AS my_datalake_both (
     TYPE ICEBERG,
-    ENDPOINT 'http://127.0.0.1:8181',
+    URI 'http://127.0.0.1:8181',
     AUTHORIZATION_TYPE 'sigv4',
     SIGV4_SERVICE 'MyCustomService',
     SIGV4_REGION 'us-west-2'
@@ -59,7 +59,7 @@ CALL truncate_duckdb_logs();
 statement ok
 ATTACH '' AS my_datalake_name_only (
     TYPE ICEBERG,
-    ENDPOINT 'http://127.0.0.1:8181',
+    URI 'http://127.0.0.1:8181',
     AUTHORIZATION_TYPE 'sigv4',
     SIGV4_SERVICE 'CustomService',
     SIGV4_REGION 'us-east-1'
@@ -83,7 +83,7 @@ CALL truncate_duckdb_logs();
 statement error
 ATTACH '' AS my_datalake_no_override (
     TYPE ICEBERG,
-    ENDPOINT 'http://127.0.0.1:8181',
+    URI 'http://127.0.0.1:8181',
     AUTHORIZATION_TYPE 'sigv4'
 );
 ----

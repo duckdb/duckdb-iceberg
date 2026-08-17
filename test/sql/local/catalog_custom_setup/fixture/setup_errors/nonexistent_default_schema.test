@@ -16,7 +16,7 @@ CREATE SECRET iceberg_secret (
 	TYPE ICEBERG,
 	CLIENT_ID 'admin',
 	CLIENT_SECRET 'password',
-	ENDPOINT 'http://127.0.0.1:8181'
+	URI 'http://127.0.0.1:8181'
 );
 
 statement error

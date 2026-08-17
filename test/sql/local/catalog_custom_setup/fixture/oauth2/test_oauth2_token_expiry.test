@@ -38,7 +38,7 @@ ATTACH '' AS expiry_lake (
     CLIENT_ID 'admin',
     CLIENT_SECRET 'password',
     OAUTH2_SERVER_URI 'http://127.0.0.1:8181/v1/oauth/tokens',
-    ENDPOINT 'http://127.0.0.1:8181'
+    URI 'http://127.0.0.1:8181'
 );
 
 # Verify the initial token fetch happened

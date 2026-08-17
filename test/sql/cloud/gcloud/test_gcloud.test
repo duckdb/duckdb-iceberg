@@ -22,7 +22,7 @@ mode skip
 statement ok
 CREATE SECRET biglake_secret (
              TYPE iceberg,
-             endpoint 'https://biglake.googleapis.com/iceberg/v1/restcatalog',
+             URI 'https://biglake.googleapis.com/iceberg/v1/restcatalog',
              token '...',
              extra_http_headers MAP {'x-goog-user-project': '...'}
          );

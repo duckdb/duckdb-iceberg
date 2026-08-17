@@ -30,7 +30,7 @@ statement ok
 ATTACH 'gs://biglake-public-nyc-taxi-iceberg' AS biglake_public (
     TYPE ICEBERG,
     SECRET biglake_auto_refresh,
-    ENDPOINT 'https://biglake.googleapis.com/iceberg/v1/restcatalog'
+    URI 'https://biglake.googleapis.com/iceberg/v1/restcatalog'
 );
 
 statement ok

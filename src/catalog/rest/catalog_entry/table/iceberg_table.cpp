@@ -555,7 +555,7 @@ void IcebergTable::LoadCredentials(ClientContext &context, IRCAPITableCredential
 		}
 	}
 
-	if (StringUtil::StartsWith(catalog.uri, "glue")) {
+	if (StringUtil::StartsWith(catalog.base_uri, "glue")) {
 		auto &sigv4 = catalog.auth_handler->Cast<SIGV4Authorization>();
 		auto secret_entry = IcebergCatalog::GetStorageSecret(context, sigv4.secret);
 		auto kv_secret = dynamic_cast<const KeyValueSecret &>(*secret_entry->secret);
@@ -564,7 +564,7 @@ void IcebergTable::LoadCredentials(ClientContext &context, IRCAPITableCredential
 		auto region = kv_secret.TryGetValue("region").ToString();
 		auto endpoint = "s3." + region + ".amazonaws.com";
 		info.options["endpoint"] = endpoint;
-	} else if (StringUtil::StartsWith(catalog.uri, "s3tables")) {
+	} else if (StringUtil::StartsWith(catalog.base_uri, "s3tables")) {
 		auto &sigv4 = catalog.auth_handler->Cast<SIGV4Authorization>();
 		auto secret_entry = IcebergCatalog::GetStorageSecret(context, sigv4.secret);
 		auto kv_secret = dynamic_cast<const KeyValueSecret &>(*secret_entry->secret);

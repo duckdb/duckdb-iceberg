@@ -20,49 +20,49 @@ statement ok
 set logging_level='debug'
 
 statement ok
-DROP TABLE IF EXISTS my_datalake.default.Stock;
+DROP TABLE IF EXISTS my_datalake.default.stock;
 
 statement ok
-DROP TABLE IF EXISTS my_datalake.default.Buy;
+DROP TABLE IF EXISTS my_datalake.default.buy;
 
 statement ok
-CREATE TABLE my_datalake.default.Stock(
+CREATE TABLE my_datalake.default.stock (
 	item_id int,
 	balance int
 );
 
 statement ok
-insert into my_datalake.default.Stock values
+insert into my_datalake.default.stock values
 	(10, 2200),
 	(20, 1900)
 
 statement ok
-CREATE TABLE my_datalake.default.Buy(
+CREATE TABLE my_datalake.default.buy (
 	item_id int,
 	volume int
 );
 
 statement ok
-INSERT INTO my_datalake.default.Buy values
+INSERT INTO my_datalake.default.buy values
 	(10, 1000),
 	(30, 300);
 
 query II
-FROM my_datalake.default.Stock ORDER BY item_id
+FROM my_datalake.default.stock ORDER BY item_id
 ----
 10	2200
 20	1900
 
 # update and insert
 query I
-MERGE INTO my_datalake.default.Stock AS s USING my_datalake.default.Buy AS b ON s.item_id = b.item_id
+MERGE INTO my_datalake.default.stock AS s USING my_datalake.default.buy AS b ON s.item_id = b.item_id
 WHEN MATCHED THEN UPDATE SET balance = balance + b.volume
 WHEN NOT MATCHED THEN INSERT VALUES (b.item_id, b.volume)
 ----
 2
 
 query II
-FROM my_datalake.default.Stock ORDER BY item_id
+FROM my_datalake.default.stock ORDER BY item_id
 ----
 10	3200
 20	1900

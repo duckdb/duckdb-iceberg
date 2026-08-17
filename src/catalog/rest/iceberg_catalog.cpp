@@ -37,9 +37,10 @@ void LoadTableResultCache::EvictIfCurrent(const IcebergTable &table) {
 IcebergCatalog::IcebergCatalog(AttachedDatabase &db_p, AccessMode access_mode,
                                unique_ptr<IcebergAuthorization> auth_handler, IcebergAttachOptions &attach_options_p,
                                const Identifier &default_schema)
-    : Catalog(db_p), access_mode(access_mode), auth_handler(std::move(auth_handler)), uri(attach_options_p.endpoint),
-      version("v1"), attach_options(attach_options_p), default_schema(default_schema),
-      warehouse(attach_options.warehouse), schemas(*this), table_request_cache(attach_options) {
+    : Catalog(db_p), access_mode(access_mode), auth_handler(std::move(auth_handler)),
+      base_uri(attach_options_p.catalog_uri), version("v1"), attach_options(attach_options_p),
+      default_schema(default_schema), warehouse(attach_options.warehouse), schemas(*this),
+      table_request_cache(attach_options) {
 }
 
 IcebergCatalog::~IcebergCatalog() = default;
@@ -177,7 +178,7 @@ ErrorData IcebergCatalog::SupportsCreateTable(BoundCreateTableInfo &info) {
 
 IRCEndpointBuilder IcebergCatalog::GetBaseUrl() const {
 	auto url_builder = IRCEndpointBuilder();
-	url_builder.SetHost(uri);
+	url_builder.SetHost(base_uri);
 	url_builder.AddPathComponent(IRCPathComponent::RegularComponent(version));
 
 	return url_builder;
@@ -407,8 +408,8 @@ void IcebergCatalog::GetConfig(ClientContext &context, IcebergEndpointType &endp
 	defaults = catalog_config.defaults;
 	auto uri_override_it = overrides.find("uri");
 	if (uri_override_it != overrides.end()) {
-		uri = uri_override_it->second;
-		StringUtil::RTrim(uri, "/");
+		base_uri = uri_override_it->second;
+		StringUtil::RTrim(base_uri, "/");
 	}
 	ParsePrefix();
 	ParseNamespaceSeparator();
@@ -441,7 +442,7 @@ void IcebergCatalog::GetConfig(ClientContext &context, IcebergEndpointType &endp
 //! Streamlined initialization for recognized catalog types
 
 void IcebergCatalog::SetAttachOptions(const unordered_map<string, Value> &options) {
-	raw_attach_options.insert(options.begin(), options.end());
+	normalized_attach_options = NormalizeIcebergAttachOptions(options);
 }
 
 bool IcebergCatalog::HasConflictingAttachOptions(const string &path, const AttachOptions &options) {
@@ -449,14 +450,15 @@ bool IcebergCatalog::HasConflictingAttachOptions(const string &path, const Attac
 	if (Catalog::HasConflictingAttachOptions(path, options)) {
 		return true;
 	}
-	//! Otherwise compare the iceberg-specific attach options (endpoint, credentials, MAX_TABLE_STALENESS, ...)
+	//! Otherwise compare the iceberg-specific attach options (URI, credentials, MAX_TABLE_STALENESS, ...)
 	//! so that ATTACH OR REPLACE re-runs Attach when any of them changes.
-	if (options.options.size() != raw_attach_options.size()) {
+	auto normalized_options = NormalizeIcebergAttachOptions(options.options);
+	if (normalized_options.size() != normalized_attach_options.size()) {
 		return true;
 	}
-	for (auto &entry : options.options) {
-		auto it = raw_attach_options.find(entry.first);
-		if (it == raw_attach_options.end()) {
+	for (auto &entry : normalized_options) {
+		auto it = normalized_attach_options.find(entry.first);
+		if (it == normalized_attach_options.end()) {
 			return true;
 		}
 		if (it->second.type() != entry.second.type() || it->second.ToString() != entry.second.ToString()) {

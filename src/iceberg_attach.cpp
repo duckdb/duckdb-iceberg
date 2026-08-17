@@ -5,6 +5,7 @@
 #include "catalog/rest/storage/authorization/oauth2.hpp"
 #include "catalog/rest/storage/authorization/sigv4.hpp"
 #include "catalog/rest/storage/authorization/none.hpp"
+#include "duckdb/logging/logger.hpp"
 #include "regex"
 
 namespace duckdb {
@@ -36,8 +37,8 @@ static void S3OrGlueAttachInternal(IcebergAttachOptions &input, const string &se
 	}
 
 	input.authorization_type = IcebergAuthorizationType::SIGV4;
-	if (input.endpoint.empty()) {
-		input.endpoint = StringUtil::Format("%s.%s.amazonaws.com/iceberg", service, region);
+	if (input.catalog_uri.empty()) {
+		input.catalog_uri = StringUtil::Format("%s.%s.amazonaws.com/iceberg", service, region);
 	} else {
 		input.options.emplace("sigv4_service", Value(service));
 		input.options.emplace("sigv4_region", Value(region));
@@ -174,6 +175,24 @@ static void SetAWSCatalogOptions(IcebergAttachOptions &attach_options, case_inse
 
 } // namespace
 
+unordered_map<string, Value> NormalizeIcebergAttachOptions(const unordered_map<string, Value> &options) {
+	unordered_map<string, Value> result;
+	for (const auto &entry : options) {
+		auto name = StringUtil::Lower(entry.first);
+		if (name == "endpoint") {
+			name = "uri";
+		}
+		if (!result.emplace(name, entry.second).second) {
+			if (name == "uri") {
+				throw InvalidConfigurationException(
+				    "Both 'uri' and deprecated 'endpoint' were provided for Iceberg attach; use only 'uri'");
+			}
+			throw InvalidConfigurationException("Duplicate Iceberg attach option '%s'", name);
+		}
+	}
+	return result;
+}
+
 unique_ptr<Catalog> IcebergAttach::Attach(optional_ptr<StorageExtensionInfo> storage_info, ClientContext &context,
                                           AttachedDatabase &db, const string &name, AttachInfo &info,
                                           AttachOptions &options) {
@@ -187,9 +206,14 @@ unique_ptr<Catalog> IcebergAttach::Attach(optional_ptr<StorageExtensionInfo> sto
 	string authorization_type_string;
 	string access_mode_string;
 	case_insensitive_set_t set_by_attach_options;
+	bool used_legacy_endpoint = false;
+	for (const auto &entry : info.options) {
+		used_legacy_endpoint |= StringUtil::CIEquals(entry.first, "endpoint");
+	}
+	auto normalized_options = NormalizeIcebergAttachOptions(info.options);
 	//! First handle generic attach options
-	for (auto &entry : info.options) {
-		auto lower_name = StringUtil::Lower(entry.first);
+	for (auto &entry : normalized_options) {
+		auto &lower_name = entry.first;
 		if (lower_name == "type" || lower_name == "read_only") {
 			continue;
 		}
@@ -200,9 +224,8 @@ unique_ptr<Catalog> IcebergAttach::Attach(optional_ptr<StorageExtensionInfo> sto
 			authorization_type_string = StringUtil::Lower(entry.second.ToString());
 		} else if (lower_name == "access_delegation_mode") {
 			access_mode_string = StringUtil::Lower(entry.second.ToString());
-		} else if (lower_name == "endpoint") {
-			attach_options.endpoint = entry.second.ToString();
-			StringUtil::RTrim(attach_options.endpoint, "/");
+		} else if (lower_name == "uri") {
+			attach_options.catalog_uri = entry.second.ToString();
 		} else if (lower_name == "stage_create_tables") {
 			auto result = entry.second.DefaultCastAs(LogicalType::BOOLEAN).GetValue<bool>();
 			attach_options.stage_create_tables = result;
@@ -239,6 +262,10 @@ unique_ptr<Catalog> IcebergAttach::Attach(optional_ptr<StorageExtensionInfo> sto
 			attach_options.options.emplace(std::move(entry));
 		}
 	}
+	if (used_legacy_endpoint) {
+		DUCKDB_LOG_WARNING(context, "The Iceberg attach option 'endpoint' is deprecated; use 'uri' instead");
+	}
+	StringUtil::RTrim(attach_options.catalog_uri, "/");
 	IcebergEndpointType endpoint_type = IcebergEndpointType::INVALID;
 	//! Then check any if the 'endpoint_type' is set, for any well known catalogs
 	if (!endpoint_type_string.empty()) {
@@ -312,14 +339,16 @@ unique_ptr<Catalog> IcebergAttach::Attach(optional_ptr<StorageExtensionInfo> sto
 		                                    StringUtil::Join(unrecognized_options, ", "));
 	}
 
-	if (attach_options.endpoint.empty()) {
-		throw InvalidConfigurationException("Missing 'endpoint' option for Iceberg attach");
+	// The URI can be supplied by an ICEBERG secret during authorization setup.
+	StringUtil::RTrim(attach_options.catalog_uri, "/");
+	if (attach_options.catalog_uri.empty()) {
+		throw InvalidConfigurationException("Missing 'uri' option for Iceberg attach");
 	}
 
 	D_ASSERT(auth_handler);
 	auto catalog =
 	    make_uniq<IcebergCatalog>(db, options.access_mode, std::move(auth_handler), attach_options, default_schema);
-	//! Remember the raw attach options so that a later ATTACH OR REPLACE can detect when they change.
+	//! Remember the normalized attach options so that a later ATTACH OR REPLACE can detect when they change.
 	catalog->SetAttachOptions(options.options);
 	catalog->GetConfig(context, endpoint_type);
 	if (!default_schema.empty() &&

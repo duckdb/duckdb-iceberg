@@ -615,8 +615,9 @@ void IcebergMultiFileList::StartDataManifestScan(annotated_lock_guard<annotated_
 	GetScanPlanProvider().StartDataManifestScan(data_manifest_matches, table_filters.FilterCount());
 }
 
-IcebergDeletePlan IcebergMultiFileList::ProcessDeletes(const BoundIcebergManifestEntry &data_manifest_entry) const {
-	IcebergDeletePlan result;
+vector<IcebergDeleteFileReference>
+IcebergMultiFileList::ResolveApplicableDeleteFiles(const BoundIcebergManifestEntry &data_manifest_entry) const {
+	vector<IcebergDeleteFileReference> result;
 	if (!has_matching_delete_manifests.load()) {
 		return result;
 	}
@@ -637,6 +638,42 @@ IcebergDeletePlan IcebergMultiFileList::ProcessDeletes(const BoundIcebergManifes
 	D_ASSERT(provider);
 	provider->ReadDeleteManifests(manifest_indexes, table_filters.FilterCount());
 
+	annotated_lock_guard<annotated_mutex> guard(shared_state->lock);
+	annotated_lock_guard<annotated_mutex> delete_guard(shared_state->delete_lock);
+	auto delete_context = GetDeletePlanningContext();
+	auto data_partition_values = IcebergFilePruner::PartitionValueMap(data_manifest_entry.entry.data_file);
+	for (auto delete_file : provider->GetDeleteFiles(manifest_indexes)) {
+		if (delete_file.manifest_idx >= delete_manifests.size()) {
+			throw InternalException("Delete manifest index %llu is out of bounds for %llu manifests",
+			                        delete_file.manifest_idx, delete_manifests.size());
+		}
+		auto &manifest_entries = delete_manifests[delete_file.manifest_idx].entry.GetManifestEntries();
+		if (delete_file.entry_idx >= manifest_entries.size()) {
+			throw InternalException("Delete manifest entry index %llu is out of bounds for manifest %llu",
+			                        delete_file.entry_idx, delete_file.manifest_idx);
+		}
+		auto &delete_entry = manifest_entries[delete_file.entry_idx];
+		if (!IcebergDeletePlanner::DeleteEntryMatchesFilters(delete_context, delete_file.manifest_idx, delete_entry)) {
+			continue;
+		}
+		if (!IcebergDeletePlanner::DeleteEntryAppliesToDataFile(delete_context, delete_file.manifest_idx, delete_entry,
+		                                                        data_manifest_entry, data_partition_values)) {
+			continue;
+		}
+		result.push_back(delete_file);
+	}
+	return result;
+}
+
+IcebergDeletePlan IcebergMultiFileList::ProcessDeletes(const BoundIcebergManifestEntry &data_manifest_entry) const {
+	IcebergDeletePlan result;
+	if (!has_matching_delete_manifests.load()) {
+		return result;
+	}
+
+	auto applicable_delete_files = ResolveApplicableDeleteFiles(data_manifest_entry);
+
+	optional_ptr<IcebergScanPlanProvider> provider;
 	vector<IcebergDeleteScanEntry> scan_entries;
 	vector<shared_ptr<IcebergDeleteFileLoadState>> required_loads;
 	vector<shared_ptr<IcebergDeleteFileLoadState>> new_loads;
@@ -644,32 +681,16 @@ IcebergDeletePlan IcebergMultiFileList::ProcessDeletes(const BoundIcebergManifes
 	{
 		annotated_lock_guard<annotated_mutex> guard(shared_state->lock);
 		annotated_lock_guard<annotated_mutex> delete_guard(shared_state->delete_lock);
-		auto delete_files = provider->GetDeleteFiles(manifest_indexes);
+		provider = scan_plan_provider.get();
+		if (!provider) {
+			//! ResolveApplicableDeleteFiles ran InitializeView, which creates the provider, so it is always
+			//! set here - a null is a broken invariant, not a "nothing to do".
+			throw InternalException("scan_plan_provider is not initialized in ProcessDeletes");
+		}
 		delete_context = make_uniq<IcebergDeletePlanningContext>(GetDeletePlanningContext());
-		auto data_partition_values = IcebergFilePruner::PartitionValueMap(data_manifest_entry.entry.data_file);
 		unordered_set<IcebergDeleteFileLoadState *> seen_loads;
-		for (auto delete_file : delete_files) {
-			if (delete_file.manifest_idx >= delete_manifests.size()) {
-				throw InternalException("Delete manifest index %llu is out of bounds for %llu manifests",
-				                        delete_file.manifest_idx, delete_manifests.size());
-			}
+		for (auto delete_file : applicable_delete_files) {
 			auto &delete_manifest = delete_manifests[delete_file.manifest_idx].entry;
-			auto &manifest_entries = delete_manifest.GetManifestEntries();
-			if (delete_file.entry_idx >= manifest_entries.size()) {
-				throw InternalException("Delete manifest entry index %llu is out of bounds for manifest %llu",
-				                        delete_file.entry_idx, delete_file.manifest_idx);
-			}
-			auto &delete_entry = manifest_entries[delete_file.entry_idx];
-			if (!IcebergDeletePlanner::DeleteEntryMatchesFilters(*delete_context, delete_file.manifest_idx,
-			                                                     delete_entry)) {
-				continue;
-			}
-			if (!IcebergDeletePlanner::DeleteEntryAppliesToDataFile(*delete_context, delete_file.manifest_idx,
-			                                                        delete_entry, data_manifest_entry,
-			                                                        data_partition_values)) {
-				continue;
-			}
-
 			auto &load = provider->GetDeleteFileLoad(delete_file);
 			if (!load) {
 				load = make_shared_ptr<IcebergDeleteFileLoadState>();

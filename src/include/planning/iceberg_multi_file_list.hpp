@@ -34,6 +34,7 @@ class IcebergScanPlanProvider;
 struct IcebergScanPlanContext;
 struct IcebergMultiFileList;
 struct IcebergMultiFileReader;
+struct IcebergDeleteFileReference;
 
 struct IcebergMultiFileList : public MultiFileList {
 public:
@@ -81,6 +82,12 @@ private:
 	IcebergMultiFileList(shared_ptr<IcebergScanPlanState> shared_state);
 
 	void InitializeView(annotated_lock_guard<annotated_mutex> &guard) const DUCKDB_REQUIRES(shared_state->lock);
+
+	//! The delete-manifest entries that apply to a data file, after manifest pruning and the per-entry
+	//! filter and data-file checks. Must be called without holding the shared lock - reading the delete
+	//! manifests takes it.
+	vector<IcebergDeleteFileReference>
+	ResolveApplicableDeleteFiles(const BoundIcebergManifestEntry &data_manifest_entry) const;
 
 	bool HasTransactionData() const;
 	//! Reorder (and prune, when a LIMIT is present) the materialized data files by the

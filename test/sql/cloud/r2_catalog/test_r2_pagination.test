@@ -27,7 +27,7 @@ CREATE SECRET r2_secret (
 statement ok
 attach '6b17833f308abc1e1cc343c552b51f51_iceberg-catalog-test' AS my_datalake (
     TYPE ICEBERG,
-    ENDPOINT 'https://catalog.cloudflarestorage.com/6b17833f308abc1e1cc343c552b51f51/iceberg-catalog-test',
+    URI 'https://catalog.cloudflarestorage.com/6b17833f308abc1e1cc343c552b51f51/iceberg-catalog-test',
     support_nested_namespaces true
 );
 

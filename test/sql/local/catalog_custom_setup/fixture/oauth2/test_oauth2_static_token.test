@@ -39,7 +39,7 @@ statement ok
 ATTACH '' AS static_lake (
     TYPE ICEBERG,
     SECRET iceberg_with_token,
-    ENDPOINT 'http://127.0.0.1:8181'
+    URI 'http://127.0.0.1:8181'
 );
 
 query I

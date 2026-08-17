@@ -37,3 +37,8 @@ statement error
 SELECT * FROM iceberg_rollback_to_snapshot('cat.sch.tbl', 1);
 ----
 Catalog "cat" does not exist
+
+statement error
+SELECT * FROM iceberg_rollback_to_snapshot('cat.sch.tbl', NULL);
+----
+snapshot_id cannot be NULL

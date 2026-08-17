@@ -1,4 +1,4 @@
-# name: test/sql/local/catalog_custom_setup/fixture/setup_errors/cant_infer_endpoint.test
+# name: test/sql/local/catalog_custom_setup/fixture/setup_errors/cant_infer_uri.test
 # description: test combinations of create secret and attah
 # group: [setup_errors]
 
@@ -32,7 +32,7 @@ CREATE SECRET storage_secret(
 	USE_SSL 0
 );
 
-# Secret is created with a direct OAUTH2_SERVER_URI, has no 'endpoint'
+# Secret is created with a direct OAUTH2_SERVER_URI, but has no catalog 'uri'
 statement ok
 CREATE SECRET iceberg_secret (
 	TYPE ICEBERG,
@@ -41,11 +41,11 @@ CREATE SECRET iceberg_secret (
 	OAUTH2_SERVER_URI 'http://127.0.0.1:8181/v1/oauth/tokens'
 );
 
-# Attach without an 'endpoint', will try to infer it from the secret
+# Attach without a catalog 'uri' will try to infer it from the secret
 statement error
 ATTACH '' AS my_datalake (
 	TYPE ICEBERG,
 	SECRET iceberg_secret
 );
 ----
-Invalid Configuration Error: No 'endpoint' was given to attach, and no 'endpoint' could be retrieved from the ICEBERG secret!
+Invalid Configuration Error: No 'uri' was given to attach, and no 'uri' could be retrieved from the ICEBERG secret!

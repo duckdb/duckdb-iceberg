@@ -1,0 +1,24 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/test_case_sensitive_name.test
+# description: test integration with iceberg catalog read
+# group: [catalog_agnostic]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+require tpch
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.Buy;
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.buy;
+
+statement ok
+create table my_datalake.default.Buy (price float, name varchar);

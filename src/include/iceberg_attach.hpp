@@ -16,7 +16,7 @@ enum class IcebergAuthorizationType : uint8_t { OAUTH2, SIGV4, NONE, INVALID };
 enum class IRCAccessDelegationMode : uint8_t { NONE, VENDED_CREDENTIALS };
 
 struct IcebergAttachOptions {
-	string endpoint;
+	string catalog_uri;
 	string warehouse;
 	string secret;
 	string name;
@@ -38,6 +38,8 @@ struct IcebergAttachOptions {
 	// max staleness for cached table metadata in minutes (optional - if not set, always request fresh metadata)
 	optional_idx max_table_staleness_micros;
 };
+
+unordered_map<string, Value> NormalizeIcebergAttachOptions(const unordered_map<string, Value> &options);
 
 struct IcebergAttach {
 	static unique_ptr<Catalog> Attach(optional_ptr<StorageExtensionInfo> storage_info, ClientContext &context,

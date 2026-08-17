@@ -1,6 +1,7 @@
 #include "catalog/rest/transaction/iceberg_transaction.hpp"
 
 #include "duckdb/common/assert.hpp"
+#include "duckdb/common/string_util.hpp"
 #include "duckdb/logging/logger.hpp"
 #include "duckdb/parser/parsed_data/create_view_info.hpp"
 #include "duckdb/catalog/catalog_entry/index_catalog_entry.hpp"
@@ -249,12 +250,25 @@ static void VerifyDeleteRetryability(const IcebergTable &table_info,
 	}
 	auto scan_snapshot_id = *transaction_data.base_snapshot_id;
 	auto tip_snapshot_id = *current_snapshot->snapshot_id;
-	if (DeleteCanReapply(table_info.table_metadata, scan_snapshot_id, tip_snapshot_id)) {
+
+	//! Nothing to reconcile if the tip hasn't moved since we scanned (e.g. the first attempt).
+	if (scan_snapshot_id == tip_snapshot_id) {
+		return;
+	}
+
+	//! Re-applying a DELETE over concurrent commits is opt-in: the table must explicitly request
+	//! 'snapshot' isolation, and even then only a pure-append history is safe (DeleteCanReapply). Any
+	//! other isolation - unset (Iceberg's default is 'serializable') or an explicit 'serializable' - must
+	//! abort, since a concurrent append can add rows matching the delete predicate that a silent re-apply
+	//! would leave behind.
+	auto isolation_level = table_info.table_metadata.GetTableProperty(WRITE_DELETE_ISOLATION_LEVEL);
+	if (StringUtil::CIEquals(isolation_level, "snapshot") &&
+	    DeleteCanReapply(table_info.table_metadata, scan_snapshot_id, tip_snapshot_id)) {
 		return;
 	}
 	throw TransactionException(
-	    "DELETE on \"%s\" conflicts with a concurrent commit that removed or rewrote data (scanned snapshot "
-	    "%s, now at %s); re-run the DELETE.",
+	    "DELETE on \"%s\" conflicts with a concurrent commit (scanned snapshot %s, now at %s); re-run the DELETE. "
+	    "Set 'write.delete.isolation-level'='snapshot' to allow re-applying deletes over concurrent appends.",
 	    table_info.name, std::to_string(scan_snapshot_id), std::to_string(tip_snapshot_id));
 }
 

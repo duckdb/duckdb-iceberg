@@ -39,7 +39,7 @@ ATTACH '' AS my_datalake (
     TYPE ICEBERG,
     CLIENT_ID 'admin',
     CLIENT_SECRET 'password',
-    ENDPOINT 'http://127.0.0.1:8181',
+    URI 'http://127.0.0.1:8181',
     stage_create_tables false,
     disable_multi_table_commit true,
     skip_create_table_metadata_updates true,

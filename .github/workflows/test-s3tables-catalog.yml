@@ -1,0 +1,168 @@
+name: Test S3 Tables Catalog
+on:
+  # Manual runs, plus one leg of the nightly Cloud functional tests. Not on
+  # push: every run creates and destroys a real AWS S3 Tables table bucket.
+  workflow_dispatch:
+    inputs:
+      duckdb_ref:
+        description: 'DuckDB submodule branch name or commit hash. Leave empty to use submodule in the branch'
+        required: false
+        default: ''
+      httpfs_fork:
+        description: 'URL of a duckdb-httpfs fork. Leave empty to use default duckdb/duckdb-httpfs.'
+        required: false
+        default: 'https://github.com/duckdb/duckdb-httpfs'
+      httpfs_ref:
+        description: 'Commit hash or branch of the httpfs fork. Leave empty to use default.'
+        required: false
+        default: ''
+  workflow_call:
+    # Callers must use `secrets: inherit`; no secrets are declared here so the
+    # list can't drift out of sync with the ones the steps below actually read.
+    inputs:
+      duckdb_ref:
+        description: 'DuckDB submodule branch name or commit hash. Leave empty to use submodule in the branch'
+        required: false
+        default: ''
+        type: string
+      httpfs_fork:
+        description: 'URL of a duckdb-httpfs fork. Leave empty to use default duckdb/duckdb-httpfs.'
+        required: false
+        default: 'https://github.com/duckdb/duckdb-httpfs'
+        type: string
+      httpfs_ref:
+        description: 'Commit hash or branch of the httpfs fork. Leave empty to use default.'
+        required: false
+        default: ''
+        type: string
+
+# cancel-in-progress = false to avoid skipping teardown step and leaking table buckets
+concurrency:
+  group: s3tables-catalog-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  test-s3tables:
+    name: Test against S3 Tables catalog
+    runs-on: ubuntu-latest
+    # Bound the run so a hung cloud test can't keep the table bucket alive for
+    # the default six hours.
+    timeout-minutes: 120
+    env:
+      GEN: ninja
+      CC: clang-20
+      CXX: clang++-20
+      # bucket name unique to the run
+      S3TABLES_BUCKET_NAME: duckdb-iceberg-ci-${{ github.run_id }}-${{ github.run_attempt }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.S3_ICEBERG_TEST_USER_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.S3_ICEBERG_TEST_USER_SECRET }}
+      AWS_DEFAULT_REGION: ${{ secrets.S3_ICEBERG_TEST_USER_REGION }}
+      # Empty on a scheduled run, where the inputs context is unset.
+      DUCKDB_REF: ${{ inputs.duckdb_ref || '' }}
+      HTTPFS_FORK: ${{ inputs.httpfs_fork || 'https://github.com/duckdb/duckdb-httpfs' }}
+      HTTPFS_REF: ${{ inputs.httpfs_ref || '' }}
+
+    steps:
+      # v5 runs on Node 24; v4 still ships a Node 20 entrypoint and warns.
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          submodules: 'true'
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+
+      - name: Checkout DuckDB
+        if: ${{ env.DUCKDB_REF != '' }}
+        run: |
+          cd duckdb
+          git fetch
+          git checkout "$DUCKDB_REF"
+
+      # After the DuckDB checkout above, which would otherwise clobber this file.
+      - name: Checkout selected httpfs
+        if: ${{ env.HTTPFS_REF != '' }}
+        run: |
+          cat > duckdb/.github/config/extensions/httpfs.cmake << EOF
+          duckdb_extension_load(httpfs
+            LOAD_TESTS
+            GIT_URL ${HTTPFS_FORK}
+            GIT_TAG ${HTTPFS_REF}
+          )
+          EOF
+
+      - name: Install tools
+        run: python3 duckdb/scripts/ci/retry.py -- make -C duckdb toolsci
+
+      - name: Setup Ccache
+        uses: hendrikmuhs/ccache-action@main
+        with:
+          key: ${{ github.job }}
+          save: ${{ github.ref == 'refs/heads/main' }}
+          max-size: 5GB
+          evict-old-files: job
+
+      - name: Build (release)
+        uses: duckdb/duckdb-ci/build-duckdb@main
+        env:
+          STATIC_LIBCPP: 1
+          ENABLE_EXTENSION_AUTOLOADING: 1
+          ENABLE_EXTENSION_AUTOINSTALL: 1
+        with:
+          build-type: release
+          build: python3 duckdb/scripts/ci/retry.py -- make release
+          vcpkg-commit: 84bab45d415d22042bd0b9081aea57f362da3f35
+
+      - name: Create S3 Tables table bucket
+        run: |
+          arn="$(scripts/s3tables_table_bucket.sh create "$S3TABLES_BUCKET_NAME")"
+          if [[ -z $arn ]]; then
+            echo "create-table-bucket returned no ARN" >&2
+            exit 1
+          fi
+          echo "Created table bucket $arn"
+          echo "S3TABLES_TABLE_BUCKET_ARN=$arn" >> "$GITHUB_ENV"
+
+      - name: Point the test config at the new table bucket
+        run: |
+          config=test/configs/cloud_s3tables.json
+          jq --arg arn "$S3TABLES_TABLE_BUCKET_ARN" \
+            '(.test_env[] | select(.env_name == "S3TABLES_TABLE_BUCKET_ARN") | .env_value) = $arn' \
+            "$config" > "$config.patched"
+          mv "$config.patched" "$config"
+
+          # Confirm the substitution landed without echoing the ARN itself.
+          patched="$(jq -r '.test_env[] | select(.env_name == "S3TABLES_TABLE_BUCKET_ARN") | .env_value' "$config")"
+          if [[ $patched != "$S3TABLES_TABLE_BUCKET_ARN" ]]; then
+            echo "Failed to write the table bucket ARN into $config" >&2
+            exit 1
+          fi
+          echo "$config now points at the table bucket created for this run"
+
+      - name: Smoke test the attached catalog
+        # Fail in seconds with a readable error if the bucket isn't reachable,
+        # rather than after the whole suite dies in on_init.
+        run: |
+          ./build/release/duckdb -unsigned -c "
+            CREATE SECRET s3tables_secret (TYPE S3, PROVIDER credential_chain);
+            ATTACH '${S3TABLES_TABLE_BUCKET_ARN}' AS my_datalake (TYPE ICEBERG, ENDPOINT_TYPE S3_TABLES);
+            CREATE SCHEMA IF NOT EXISTS my_datalake.default;
+            SELECT count(*) AS visible_tables FROM (SHOW ALL TABLES);
+          "
+
+      - name: Run Generic IRC tests
+        run: |
+          ./build/release/test/unittest --order lex "$PWD/test/sql/local/catalog_test_config_setup/*" --list-test-names-only || true
+          ./build/release/test/unittest --order lex "$PWD/test/sql/local/catalog_test_config_setup/*" --test-config test/configs/cloud_s3tables.json
+
+      - name: Tear down S3 Tables table bucket
+        # Must run even when the build, the smoke test or the suite failed, so a
+        # run never leaves a table bucket (and its storage bill) behind.
+        if: always()
+        run: |
+          scripts/s3tables_table_bucket.sh destroy "$S3TABLES_BUCKET_NAME"

@@ -20,7 +20,7 @@ set ignore_error_messages
 statement ok
 attach 'demo' as my_datalake (
 	type ICEBERG,
-	ENDPOINT 'http://localhost:8181/catalog',
+	URI 'http://localhost:8181/catalog',
 	AUTHORIZATION_TYPE 'none'
 );
 

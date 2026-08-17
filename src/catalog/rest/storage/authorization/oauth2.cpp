@@ -29,6 +29,7 @@ static const case_insensitive_map_t<LogicalType> &IcebergSecretOptions() {
 	static const case_insensitive_map_t<LogicalType> options {
 	    {"client_id", LogicalType::VARCHAR},
 	    {"client_secret", LogicalType::VARCHAR},
+	    {"uri", LogicalType::VARCHAR},
 	    {"endpoint", LogicalType::VARCHAR},
 	    {"token", LogicalType::VARCHAR},
 	    {"refresh_token", LogicalType::VARCHAR},
@@ -282,15 +283,25 @@ unique_ptr<OAuth2Authorization> OAuth2Authorization::FromAttachOptions(AttachedD
 			}
 		}
 		auto &kv_iceberg_secret = dynamic_cast<const KeyValueSecret &>(*iceberg_secret->secret);
-		auto endpoint_from_secret = kv_iceberg_secret.TryGetValue("endpoint");
-		if (input.endpoint.empty()) {
-			if (endpoint_from_secret.IsNull()) {
+		auto uri_from_secret = kv_iceberg_secret.TryGetValue("uri");
+		auto legacy_endpoint_from_secret = kv_iceberg_secret.TryGetValue("endpoint");
+		if (!uri_from_secret.IsNull() && !legacy_endpoint_from_secret.IsNull()) {
+			throw InvalidConfigurationException(
+			    "ICEBERG secret '%s' contains both 'uri' and deprecated 'endpoint'; use only 'uri'",
+			    iceberg_secret->secret->GetName());
+		}
+		if (input.catalog_uri.empty()) {
+			if (uri_from_secret.IsNull() && legacy_endpoint_from_secret.IsNull()) {
 				throw InvalidConfigurationException(
-				    "No 'endpoint' was given to attach, and no 'endpoint' could be retrieved from the ICEBERG secret!");
+				    "No 'uri' was given to attach, and no 'uri' could be retrieved from the ICEBERG secret!");
 			}
-			DUCKDB_LOG(context, IcebergLogType, "'endpoint' is inferred from the ICEBERG secret '%s'",
+			if (!legacy_endpoint_from_secret.IsNull()) {
+				DUCKDB_LOG_WARNING(context, "The ICEBERG secret option 'endpoint' is deprecated; use 'uri' instead");
+				uri_from_secret = legacy_endpoint_from_secret;
+			}
+			DUCKDB_LOG(context, IcebergLogType, "'uri' is inferred from the ICEBERG secret '%s'",
 			           iceberg_secret->secret->GetName());
-			input.endpoint = endpoint_from_secret.ToString();
+			input.catalog_uri = uri_from_secret.ToString();
 		}
 		token = kv_iceberg_secret.TryGetValue("token");
 
@@ -335,8 +346,8 @@ unique_ptr<OAuth2Authorization> OAuth2Authorization::FromAttachOptions(AttachedD
 		ExtractOAuth2CredentialsFromOptions(create_secret_options, *result);
 
 		CreateSecretInput create_secret_input;
-		if (!input.endpoint.empty()) {
-			create_secret_options["endpoint"] = input.endpoint;
+		if (!input.catalog_uri.empty()) {
+			create_secret_options["uri"] = input.catalog_uri;
 		}
 		create_secret_input.options = std::move(create_secret_options);
 		auto new_secret = OAuth2Authorization::CreateCatalogSecretFunction(context, create_secret_input);
@@ -381,20 +392,39 @@ unique_ptr<BaseSecret> OAuth2Authorization::CreateCatalogSecretFunction(ClientCo
 	result->redact_keys = {"token", "client_id", "client_secret", "refresh_token"};
 
 	auto &accepted_parameters = IcebergSecretOptions();
+	bool uri_option_set = false;
+	bool legacy_endpoint_option_set = false;
+	for (const auto &named_param : input.options) {
+		auto lower_name = StringUtil::Lower(named_param.first);
+		uri_option_set |= lower_name == "uri";
+		legacy_endpoint_option_set |= lower_name == "endpoint";
+	}
+	if (uri_option_set && legacy_endpoint_option_set) {
+		throw InvalidConfigurationException(
+		    "Both 'uri' and deprecated 'endpoint' were provided for an ICEBERG secret; use only 'uri'");
+	}
+	if (legacy_endpoint_option_set) {
+		DUCKDB_LOG_WARNING(context, "The ICEBERG secret option 'endpoint' is deprecated; use 'uri' instead");
+	}
 
 	for (const auto &named_param : input.options) {
 		auto &param_name = named_param.first;
 		auto it = accepted_parameters.find(param_name);
 		if (it != accepted_parameters.end()) {
+			auto normalized_param_name = StringUtil::Lower(param_name) == "endpoint" ? "uri" : param_name;
 			// Special handling for extra_http_headers (MAP type)
 			if (StringUtil::Lower(param_name) == "extra_http_headers") {
 				// Store the MAP value directly, will be parsed later when creating authorization
-				result->secret_map[Identifier(param_name)] = named_param.second;
+				result->secret_map[Identifier(normalized_param_name)] = named_param.second;
 			} else if (StringUtil::Lower(param_name) == "expires_in") {
 				// Store expires_in as INTEGER (not string)
-				result->secret_map[Identifier(param_name)] = named_param.second;
+				result->secret_map[Identifier(normalized_param_name)] = named_param.second;
 			} else {
-				result->secret_map[Identifier(param_name)] = named_param.second.ToString();
+				auto value = named_param.second.ToString();
+				if (normalized_param_name == "uri") {
+					StringUtil::RTrim(value, "/");
+				}
+				result->secret_map[Identifier(normalized_param_name)] = std::move(value);
 			}
 		} else {
 			throw InvalidInputException("Unknown named parameter passed to CreateIRCSecretFunction: %s", param_name);
@@ -407,20 +437,20 @@ unique_ptr<BaseSecret> OAuth2Authorization::CreateCatalogSecretFunction(ClientCo
 		return std::move(result);
 	}
 
-	//! ---- Server URI (and Endpoint) ----
+	//! ---- OAuth2 Server URI (with deprecated catalog-relative fallback) ----
 	string server_uri;
 	auto oauth2_server_uri_it = result->secret_map.find("oauth2_server_uri");
-	auto endpoint_it = result->secret_map.find("endpoint");
+	auto catalog_uri_it = result->secret_map.find("uri");
 	if (oauth2_server_uri_it != result->secret_map.end()) {
 		server_uri = oauth2_server_uri_it->second.ToString();
-	} else if (endpoint_it != result->secret_map.end()) {
+	} else if (catalog_uri_it != result->secret_map.end()) {
 		DUCKDB_LOG(
 		    context, IcebergLogType,
-		    "'oauth2_server_uri' is not set, defaulting to deprecated '{endpoint}/v1/oauth/tokens' oauth2_server_uri");
-		server_uri = StringUtil::Format("%s/v1/oauth/tokens", endpoint_it->second.ToString());
+		    "'oauth2_server_uri' is not set, defaulting to deprecated '{uri}/v1/oauth/tokens' oauth2_server_uri");
+		server_uri = StringUtil::Format("%s/v1/oauth/tokens", catalog_uri_it->second.ToString());
 	} else {
 		throw InvalidConfigurationException(
-		    "AUTHORIZATION_TYPE is 'oauth2', yet no 'oauth2_server_uri' was provided, and no 'endpoint' was provided "
+		    "AUTHORIZATION_TYPE is 'oauth2', yet no 'oauth2_server_uri' was provided, and no 'uri' was provided "
 		    "to fall back on. Please provide one or change the 'authorization_type'.");
 	}
 

@@ -35,7 +35,7 @@ statement ok
 ATTACH ':' AS glue_catalog (
     TYPE ICEBERG,
     ENDPOINT_TYPE 'GLUE',
-    ENDPOINT 'http://127.0.0.1:19130',
+    URI 'http://127.0.0.1:19130',
     SECRET 'sigv4_secret'
 );
 
@@ -43,7 +43,7 @@ statement ok
 ATTACH 'arn:aws:s3tables:us-east-1:123456789012:bucket/test-bucket' AS s3tables_catalog (
     TYPE ICEBERG,
     ENDPOINT_TYPE 'S3_TABLES',
-    ENDPOINT 'http://127.0.0.1:19130',
+    URI 'http://127.0.0.1:19130',
     SECRET 'sigv4_secret'
 );
 

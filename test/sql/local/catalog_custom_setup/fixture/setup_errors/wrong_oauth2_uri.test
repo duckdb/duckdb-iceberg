@@ -26,7 +26,7 @@ attach '' as my_datalake (
 	CLIENT_ID 'root'
 )
 ----
-Invalid Configuration Error: AUTHORIZATION_TYPE is 'oauth2', yet no 'oauth2_server_uri' was provided, and no 'endpoint' was provided to fall back on. Please provide one or change the 'authorization_type'.
+Invalid Configuration Error: AUTHORIZATION_TYPE is 'oauth2', yet no 'oauth2_server_uri' was provided, and no 'uri' was provided to fall back on. Please provide one or change the 'authorization_type'.
 
 statement error
 attach '' as my_datalake (

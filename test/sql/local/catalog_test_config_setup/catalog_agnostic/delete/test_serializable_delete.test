@@ -1,0 +1,58 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/delete/test_serializable_delete.test
+# description: With write.delete.isolation-level = serializable, a DELETE aborts when a concurrent commit appends rows matching its predicate
+# group: [delete]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+# Do not ignore 'HTTP' / conflict error messages!
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.del_serializable;
+
+statement ok
+CREATE TABLE my_datalake.default.del_serializable (id INTEGER, name VARCHAR) WITH ('write.delete.isolation-level' = 'serializable');
+
+statement ok
+INSERT INTO my_datalake.default.del_serializable VALUES (1, 'a'), (2, 'b');
+
+statement ok con1
+begin
+
+statement ok con1
+DELETE FROM my_datalake.default.del_serializable WHERE id = 1;
+
+statement ok con2
+begin
+
+# Concurrent append of a row that MATCHES con1's delete predicate.
+statement ok con2
+INSERT INTO my_datalake.default.del_serializable VALUES (1, 'a2');
+
+statement ok con2
+commit
+
+# Re-applying con1 would leave (1, 'a2') behind — a row its predicate covers —
+# so under serializable it must abort rather than retry.
+statement error con1
+commit
+----
+conflicts with a concurrent commit
+
+# Nothing from con1 landed; con2's append is intact.
+query II
+SELECT * FROM my_datalake.default.del_serializable ORDER BY id, name;
+----
+1	a
+1	a2
+2	b
+
+statement ok
+DROP TABLE my_datalake.default.del_serializable;
