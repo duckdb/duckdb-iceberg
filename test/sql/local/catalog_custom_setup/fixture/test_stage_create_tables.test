@@ -1,6 +1,6 @@
-# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/create/test_create_table_as_requests.test
+# name: test/sql/local/catalog_custom_setup/fixture/test_stage_create_tables.test
 # description: test create table as
-# group: [create]
+# group: [fixture]
 
 require-env FIXTURE_SERVER_AVAILABLE
 
@@ -30,14 +30,16 @@ ATTACH '' AS my_datalake (
     CLIENT_ID 'admin',
     CLIENT_SECRET 'password',
     ENDPOINT 'http://127.0.0.1:8181',
-    STAGE_CREATE_TABLES false,
-    disable_multi_table_commit true,
-    skip_create_table_metadata_updates true,
-    remove_files_on_delete false
+    STAGE_CREATE_TABLES false
 );
 
 statement ok
 CALL enable_logging('HTTP');
+
+# also disable local file system. 
+# See https://github.com/duckdb/duckdb-iceberg/issues/1294
+statement ok
+SET disabled_filesystems = 'LocalFileSystem';
 
 statement ok
 set logging_level='debug'
