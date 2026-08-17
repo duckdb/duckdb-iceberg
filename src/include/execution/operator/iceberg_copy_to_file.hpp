@@ -8,6 +8,7 @@
 
 #pragma once
 
+#include "duckdb/common/thread_annotation.hpp"
 #include "duckdb/execution/operator/persistent/physical_copy_to_file.hpp"
 #include "duckdb/planner/parsed_data/bound_create_table_info.hpp"
 
@@ -58,7 +59,7 @@ private:
 	unique_ptr<BoundCreateTableInfo> ctas_info;
 	//! Guards the CreateTable request and the entry it produces if the copy is part of a CTAS
 	mutable mutex create_lock;
-	mutable optional_ptr<IcebergTableSchemaVersion> created_table;
+	mutable optional_ptr<IcebergTableSchemaVersion> created_table DUCKDB_GUARDED_BY(create_lock);
 };
 
 } // namespace duckdb
