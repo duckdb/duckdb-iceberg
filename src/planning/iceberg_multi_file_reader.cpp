@@ -32,53 +32,8 @@ IcebergEqualityDeleteFastFilter::BuildResult IcebergMultiFileReaderGlobalState::
     const vector<reference<const IcebergEqualityDeleteFile>> &delete_files,
     const IcebergEqualityDeleteReadState &read_state, const set<int32_t> &local_field_ids, ClientContext &context,
     Allocator &allocator) {
-	EqualityDeleteFastFilterKey key;
-	key.delete_files.reserve(delete_files.size());
-	for (auto &delete_file : delete_files) {
-		key.delete_files.push_back(&delete_file.get());
-	}
-	//! A field can have a different physical type in an older data file. Include the
-	//! probe schema so one file's compiled filter is never reused across an evolution
-	//! boundary with a different canonical byte representation.
-	key.columns.reserve(read_state.columns.size());
-	for (auto &column : read_state.columns) {
-		key.columns.push_back({column.field_id, column.type, local_field_ids.count(column.field_id) != 0});
-	}
-	{
-		lock_guard<mutex> guard(equality_delete_fast_filter_lock);
-		auto entry = equality_delete_fast_filters.find(key);
-		if (entry != equality_delete_fast_filters.end()) {
-			return entry->second;
-		}
-	}
-
-	vector<reference<const IcebergEqualityDeleteFile>> eligible_files;
-	vector<idx_t> eligible_file_indexes;
-	for (idx_t file_idx = 0; file_idx < delete_files.size(); file_idx++) {
-		auto &delete_file = delete_files[file_idx].get();
-		bool eligible = true;
-		for (auto field_id : delete_file.equality_ids) {
-			if (!local_field_ids.count(field_id)) {
-				eligible = false;
-				break;
-			}
-		}
-		if (eligible) {
-			eligible_files.push_back(delete_file);
-			eligible_file_indexes.push_back(file_idx);
-		}
-	}
-	auto eligible_result = IcebergEqualityDeleteFastFilter::Build(eligible_files, read_state.field_indexes,
-	                                                              read_state.types, context, allocator);
-	IcebergEqualityDeleteFastFilter::BuildResult built;
-	built.filter = std::move(eligible_result.filter);
-	built.accelerated_files.resize(delete_files.size(), false);
-	for (idx_t eligible_idx = 0; eligible_idx < eligible_file_indexes.size(); eligible_idx++) {
-		built.accelerated_files[eligible_file_indexes[eligible_idx]] = eligible_result.accelerated_files[eligible_idx];
-	}
-	lock_guard<mutex> guard(equality_delete_fast_filter_lock);
-	auto entry = equality_delete_fast_filters.emplace(std::move(key), std::move(built));
-	return entry.first->second;
+	return equality_delete_fast_filter_cache.GetOrCreate(delete_files, read_state.field_indexes, read_state.types,
+	                                                     local_field_ids, context, allocator);
 }
 
 using MultiFileColumnPath = vector<idx_t>;

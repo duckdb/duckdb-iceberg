@@ -1,10 +1,10 @@
 #include "planning/deletes/iceberg_equality_delete_fast_filter.hpp"
 
+#include "duckdb/common/map.hpp"
 #include "duckdb/common/vector_operations/vector_operations.hpp"
 #include "duckdb/main/client_context.hpp"
 
 #include <algorithm>
-#include <cstring>
 
 namespace duckdb {
 
@@ -12,8 +12,14 @@ namespace {
 
 struct FileLayout {
 	idx_t file_index;
-	idx_t layout_index;
 	vector<idx_t> source_indices;
+};
+
+struct LayoutGroup {
+	vector<idx_t> column_indices;
+	vector<int32_t> field_ids;
+	vector<LogicalType> types;
+	vector<FileLayout> files;
 };
 
 static bool TypeIsSupported(const LogicalType &type) {
@@ -36,30 +42,21 @@ static bool TypeIsSupported(const LogicalType &type) {
 	}
 }
 
-static string LayoutKey(const vector<idx_t> &column_indices) {
-	string result;
-	result.resize(column_indices.size() * sizeof(idx_t));
-	if (!result.empty()) {
-		memcpy(&result[0], column_indices.data(), result.size());
-	}
-	return result;
-}
-
-static bool AddDeleteFile(IcebergEqualityDeleteFastFilter::Layout &layout, const IcebergEqualityDeleteFile &delete_file,
-                          const vector<idx_t> &source_indices) {
+static bool AddDeleteFile(GroupedAggregateHashTable &hash_table, const vector<LogicalType> &types,
+                          const IcebergEqualityDeleteFile &delete_file, const vector<idx_t> &source_indices) {
 	auto count = delete_file.equality_values.size();
 	vector<Vector> cast_columns;
-	cast_columns.reserve(layout.types.size());
+	cast_columns.reserve(types.size());
 	DataChunk groups;
-	groups.InitializeEmpty(layout.types);
+	groups.InitializeEmpty(types);
 
-	for (idx_t column_idx = 0; column_idx < layout.types.size(); column_idx++) {
+	for (idx_t column_idx = 0; column_idx < types.size(); column_idx++) {
 		auto source = Vector::Ref(delete_file.equality_values.data[source_indices[column_idx]]);
-		if (source.GetType() == layout.types[column_idx]) {
+		if (source.GetType() == types[column_idx]) {
 			groups.data[column_idx].Reference(source);
 			continue;
 		}
-		cast_columns.emplace_back(layout.types[column_idx], count);
+		cast_columns.emplace_back(types[column_idx], count);
 		string error;
 		if (!VectorOperations::DefaultTryCast(source, cast_columns.back(), count, &error)) {
 			return false;
@@ -71,31 +68,28 @@ static bool AddDeleteFile(IcebergEqualityDeleteFastFilter::Layout &layout, const
 	//! GroupedAggregateHashTable's probe state is vector-sized. Delete-file
 	//! state can contain many vectors, so add it in standard-sized slices.
 	DataChunk slice;
-	slice.InitializeEmpty(layout.types);
+	slice.InitializeEmpty(types);
 	Vector addresses(LogicalType::POINTER);
 	for (idx_t offset = 0; offset < count; offset += STANDARD_VECTOR_SIZE) {
 		auto end = MinValue<idx_t>(offset + STANDARD_VECTOR_SIZE, count);
 		slice.Reset();
 		slice.Slice(groups, offset, end);
-		layout.hash_table->FindOrCreateGroups(slice, addresses);
+		hash_table.FindOrCreateGroups(slice, addresses);
 	}
 	return true;
 }
 
 } // namespace
 
-IcebergEqualityDeleteFastFilter::BuildResult
-IcebergEqualityDeleteFastFilter::Build(const vector<reference<const IcebergEqualityDeleteFile>> &delete_files,
-                                       const unordered_map<int32_t, idx_t> &field_indexes,
-                                       const vector<LogicalType> &target_types, ClientContext &context,
-                                       Allocator &allocator) {
-	BuildResult result;
-	result.filter = make_shared_ptr<IcebergEqualityDeleteFastFilter>();
+IcebergEqualityDeleteFastFilter::BuildResult IcebergEqualityDeleteFastFilterCache::GetOrCreate(
+    const vector<reference<const IcebergEqualityDeleteFile>> &delete_files,
+    const unordered_map<int32_t, idx_t> &field_indexes, const vector<LogicalType> &target_types,
+    const set<int32_t> &local_field_ids, ClientContext &context, Allocator &allocator) {
+	IcebergEqualityDeleteFastFilter::BuildResult result;
 	result.accelerated_files.resize(delete_files.size(), false);
-	auto &filter = *result.filter;
 
-	unordered_map<string, idx_t> layout_indexes;
-	vector<FileLayout> file_layouts;
+	map<vector<idx_t>, idx_t> layout_indexes;
+	vector<LayoutGroup> layout_groups;
 	for (idx_t file_idx = 0; file_idx < delete_files.size(); file_idx++) {
 		auto &file = delete_files[file_idx].get();
 		if (file.equality_values.size() == 0) {
@@ -114,13 +108,14 @@ IcebergEqualityDeleteFastFilter::Build(const vector<reference<const IcebergEqual
 		vector<Field> fields;
 		bool supported = !file.equality_ids.empty();
 		for (idx_t source_idx = 0; source_idx < file.equality_ids.size(); source_idx++) {
-			auto entry = field_indexes.find(file.equality_ids[source_idx]);
+			auto field_id = file.equality_ids[source_idx];
+			auto entry = field_indexes.find(field_id);
 			if (entry == field_indexes.end() || entry->second >= target_types.size() ||
-			    !TypeIsSupported(target_types[entry->second])) {
+			    !local_field_ids.count(field_id) || !TypeIsSupported(target_types[entry->second])) {
 				supported = false;
 				break;
 			}
-			fields.push_back({file.equality_ids[source_idx], source_idx, entry->second});
+			fields.push_back({field_id, source_idx, entry->second});
 		}
 		if (!supported) {
 			continue;
@@ -129,46 +124,74 @@ IcebergEqualityDeleteFastFilter::Build(const vector<reference<const IcebergEqual
 
 		vector<idx_t> columns;
 		vector<idx_t> sources;
+		vector<int32_t> field_ids;
 		vector<LogicalType> types;
 		for (auto &field : fields) {
 			columns.push_back(field.target_index);
 			sources.push_back(field.source_index);
+			field_ids.push_back(field.field_id);
 			types.push_back(target_types[field.target_index]);
 		}
-		auto key = LayoutKey(columns);
-		auto layout_entry = layout_indexes.find(key);
+		auto layout_entry = layout_indexes.find(columns);
 		idx_t layout_idx;
 		if (layout_entry == layout_indexes.end()) {
-			layout_idx = filter.layouts.size();
-			layout_indexes.emplace(std::move(key), layout_idx);
-			Layout layout;
-			layout.column_indices = std::move(columns);
-			layout.types = std::move(types);
-			layout.hash_table = make_uniq<GroupedAggregateHashTable>(context, allocator, layout.types,
-			                                                         TupleDataValidityType::CAN_HAVE_NULL_VALUES);
-			filter.layouts.push_back(std::move(layout));
+			layout_idx = layout_groups.size();
+			layout_indexes.emplace(columns, layout_idx);
+			layout_groups.push_back({std::move(columns), std::move(field_ids), std::move(types), {}});
 		} else {
 			layout_idx = layout_entry->second;
 		}
-		file_layouts.push_back({file_idx, layout_idx, std::move(sources)});
+		layout_groups[layout_idx].files.push_back({file_idx, std::move(sources)});
 	}
 
-	for (auto &descriptor : file_layouts) {
-		auto &file = delete_files[descriptor.file_index].get();
-		auto &layout = filter.layouts[descriptor.layout_index];
-		if (AddDeleteFile(layout, file, descriptor.source_indices)) {
-			result.accelerated_files[descriptor.file_index] = true;
+	for (auto &group : layout_groups) {
+		EqualityDeleteFastFilterKey key;
+		key.delete_files.reserve(group.files.size());
+		for (auto &descriptor : group.files) {
+			key.delete_files.push_back(&delete_files[descriptor.file_index].get());
 		}
-	}
+		key.columns.reserve(group.field_ids.size());
+		for (idx_t column_idx = 0; column_idx < group.field_ids.size(); column_idx++) {
+			key.columns.push_back({group.field_ids[column_idx], group.types[column_idx], true});
+		}
 
-	bool has_filter_keys = false;
-	for (auto &layout : filter.layouts) {
-		has_filter_keys |= layout.hash_table->Count() > 0;
-	}
-	if (!has_filter_keys) {
-		//! In particular, do not install an empty filter on ordinary data files
-		//! with no equality deletes: a zero-expression key chunk has no cardinality.
-		result.filter.reset();
+		IcebergEqualityDeleteFastFilter::LayoutBuildResult cached;
+		{
+			lock_guard<mutex> guard(lock);
+			auto entry = layouts.find(key);
+			if (entry != layouts.end()) {
+				cached = entry->second;
+			}
+		}
+		if (!cached.layout) {
+			auto layout = make_shared_ptr<IcebergEqualityDeleteFastFilter::Layout>();
+			layout->types = group.types;
+			layout->hash_table = make_uniq<GroupedAggregateHashTable>(context, allocator, layout->types,
+			                                                          TupleDataValidityType::CAN_HAVE_NULL_VALUES);
+			IcebergEqualityDeleteFastFilter::LayoutBuildResult built;
+			built.layout = layout;
+			built.accelerated_files.resize(group.files.size(), false);
+			for (idx_t file_idx = 0; file_idx < group.files.size(); file_idx++) {
+				auto &descriptor = group.files[file_idx];
+				auto &file = delete_files[descriptor.file_index].get();
+				built.accelerated_files[file_idx] =
+				    AddDeleteFile(*layout->hash_table, layout->types, file, descriptor.source_indices);
+			}
+
+			lock_guard<mutex> guard(lock);
+			auto entry = layouts.emplace(std::move(key), std::move(built));
+			cached = entry.first->second;
+		}
+
+		for (idx_t file_idx = 0; file_idx < group.files.size(); file_idx++) {
+			result.accelerated_files[group.files[file_idx].file_index] = cached.accelerated_files[file_idx];
+		}
+		if (cached.layout->hash_table->Count() > 0) {
+			if (!result.filter) {
+				result.filter = make_shared_ptr<IcebergEqualityDeleteFastFilter>();
+			}
+			result.filter->layouts.push_back({group.column_indices, cached.layout});
+		}
 	}
 	return result;
 }
@@ -178,11 +201,11 @@ idx_t IcebergEqualityDeleteFastFilter::Filter(DataChunk &keys, SelectionVector &
 		if (count == 0) {
 			break;
 		}
-		if (layout.hash_table->Count() == 0) {
+		if (layout.layout->hash_table->Count() == 0) {
 			continue;
 		}
 		DataChunk groups;
-		groups.InitializeEmpty(layout.types);
+		groups.InitializeEmpty(layout.layout->types);
 		for (idx_t column_idx = 0; column_idx < layout.column_indices.size(); column_idx++) {
 			groups.data[column_idx].Reference(keys.data[layout.column_indices[column_idx]]);
 		}
@@ -191,7 +214,7 @@ idx_t IcebergEqualityDeleteFastFilter::Filter(DataChunk &keys, SelectionVector &
 
 		AggregateHTLookupState lookup_state;
 		SelectionVector found_groups(count);
-		auto found_count = layout.hash_table->LookupGroups(groups, lookup_state, found_groups);
+		auto found_count = layout.layout->hash_table->LookupGroups(groups, lookup_state, found_groups);
 		if (found_count == 0) {
 			continue;
 		}
