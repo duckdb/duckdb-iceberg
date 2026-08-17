@@ -35,8 +35,8 @@ public:
 	                         const unordered_map<int32_t, idx_t> &field_indexes,
 	                         const vector<LogicalType> &target_types, ClientContext &context, Allocator &allocator);
 
-	//! Marks matching rows in `deleted`; it never clears an existing mark.
-	void MarkDeleted(DataChunk &keys, vector<bool> &deleted) const;
+	//! Removes matching rows from `sel` and returns the number of remaining rows.
+	idx_t Filter(DataChunk &keys, SelectionVector &sel, idx_t count) const;
 
 private:
 	vector<Layout> layouts;

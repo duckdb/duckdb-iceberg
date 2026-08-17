@@ -173,10 +173,11 @@ IcebergEqualityDeleteFastFilter::Build(const vector<reference<const IcebergEqual
 	return result;
 }
 
-void IcebergEqualityDeleteFastFilter::MarkDeleted(DataChunk &keys, vector<bool> &deleted) const {
-	auto count = keys.size();
-	D_ASSERT(deleted.size() == count);
+idx_t IcebergEqualityDeleteFastFilter::Filter(DataChunk &keys, SelectionVector &sel, idx_t count) const {
 	for (auto &layout : layouts) {
+		if (count == 0) {
+			break;
+		}
 		if (layout.hash_table->Count() == 0) {
 			continue;
 		}
@@ -185,15 +186,24 @@ void IcebergEqualityDeleteFastFilter::MarkDeleted(DataChunk &keys, vector<bool> 
 		for (idx_t column_idx = 0; column_idx < layout.column_indices.size(); column_idx++) {
 			groups.data[column_idx].Reference(keys.data[layout.column_indices[column_idx]]);
 		}
-		groups.SetCardinalityUnsafe(count);
+		groups.SetCardinalityUnsafe(keys.size());
+		groups.Slice(sel, count);
 
 		AggregateHTLookupState lookup_state;
 		SelectionVector found_groups(count);
 		auto found_count = layout.hash_table->LookupGroups(groups, lookup_state, found_groups);
-		for (idx_t found_idx = 0; found_idx < found_count; found_idx++) {
-			deleted[found_groups.get_index(found_idx)] = true;
+		if (found_count == 0) {
+			continue;
 		}
+
+		//! LookupGroups returns matching positions in sorted order. Invert those
+		//! positions, then compose the survivors with the existing selection.
+		SelectionVector survivors(count);
+		auto survivor_count = SelectionVector::Inverted(found_groups, survivors, found_count, count);
+		sel.SliceInPlace(survivors, survivor_count);
+		count = survivor_count;
 	}
+	return count;
 }
 
 } // namespace duckdb

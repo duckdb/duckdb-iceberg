@@ -13,6 +13,7 @@
 #include "duckdb/common/multi_file/multi_file_data.hpp"
 #include "duckdb/common/list.hpp"
 #include "duckdb/common/mutex.hpp"
+#include "duckdb/common/types/hash.hpp"
 #include "duckdb/common/unordered_map.hpp"
 #include "duckdb/planner/filter/constant_filter.hpp"
 #include "duckdb/planner/filter/null_filter.hpp"
@@ -22,6 +23,50 @@
 #include "planning/deletes/iceberg_equality_delete_fast_filter.hpp"
 #include "common/iceberg_utils.hpp"
 #include "planning/metadata_io/manifest/iceberg_manifest_reader.hpp"
+
+namespace duckdb {
+
+struct ProbeColumn {
+	int32_t field_id;
+	LogicalType type;
+	bool locally_present;
+
+	bool operator==(const ProbeColumn &other) const {
+		return field_id == other.field_id && type == other.type && locally_present == other.locally_present;
+	}
+};
+
+struct EqualityDeleteFastFilterKey {
+	vector<const IcebergEqualityDeleteFile *> delete_files;
+	vector<ProbeColumn> columns;
+
+	bool operator==(const EqualityDeleteFastFilterKey &other) const {
+		return delete_files == other.delete_files && columns == other.columns;
+	}
+};
+
+} // namespace duckdb
+
+namespace std {
+
+template <>
+struct hash<duckdb::EqualityDeleteFastFilterKey> {
+	size_t operator()(const duckdb::EqualityDeleteFastFilterKey &key) const {
+		duckdb::hash_t result = hash<size_t>()(key.delete_files.size());
+		for (auto delete_file : key.delete_files) {
+			result = duckdb::CombineHash(result, duckdb::Hash<uint64_t>(reinterpret_cast<uintptr_t>(delete_file)));
+		}
+		result = duckdb::CombineHash(result, hash<size_t>()(key.columns.size()));
+		for (auto &column : key.columns) {
+			result = duckdb::CombineHash(result, duckdb::Hash<int32_t>(column.field_id));
+			result = duckdb::CombineHash(result, column.type.Hash());
+			result = duckdb::CombineHash(result, duckdb::Hash<bool>(column.locally_present));
+		}
+		return result;
+	}
+};
+
+} // namespace std
 
 namespace duckdb {
 
@@ -84,7 +129,8 @@ private:
 	//! The values are heap allocated so references remain stable while other files are initialized in parallel.
 	unordered_map<idx_t, unique_ptr<IcebergEqualityDeleteReadState>> equality_delete_read_states;
 	mutex equality_delete_fast_filter_lock;
-	unordered_map<string, IcebergEqualityDeleteFastFilter::BuildResult> equality_delete_fast_filters;
+	unordered_map<EqualityDeleteFastFilterKey, IcebergEqualityDeleteFastFilter::BuildResult>
+	    equality_delete_fast_filters;
 };
 
 struct IcebergMultiFileReader : public MultiFileReader {

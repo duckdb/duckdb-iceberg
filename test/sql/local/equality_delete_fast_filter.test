@@ -16,6 +16,12 @@ SELECT current_setting('iceberg_equality_delete_fast_filter');
 ----
 true
 
+statement ok
+CALL enable_logging('Iceberg');
+
+statement ok
+CALL truncate_duckdb_logs();
+
 # This fixture combines integral, VARCHAR and multi-column delete layouts.
 query III
 SELECT *
@@ -24,6 +30,15 @@ ORDER BY ALL;
 ----
 4	d	2025-01-04
 5	e	2025-01-05
+
+query I
+SELECT count(*) > 0
+FROM duckdb_logs()
+WHERE type = 'Iceberg'
+  AND message LIKE 'Accelerated % equality-delete files using a hash filter'
+  AND message NOT LIKE 'Accelerated 0 of %';
+----
+true
 
 # Private equality columns remain available when the query does not project them.
 query I

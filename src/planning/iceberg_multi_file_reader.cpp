@@ -24,9 +24,7 @@
 #include "core/metadata/iceberg_table_metadata.hpp"
 #include "duckdb/common/multi_file/multi_file_states.hpp"
 
-#include <algorithm>
 #include <cstdint>
-#include <cstring>
 
 namespace duckdb {
 
@@ -34,19 +32,26 @@ IcebergEqualityDeleteFastFilter::BuildResult IcebergMultiFileReaderGlobalState::
     const vector<reference<const IcebergEqualityDeleteFile>> &delete_files,
     const IcebergEqualityDeleteReadState &read_state, const set<int32_t> &local_field_ids, ClientContext &context,
     Allocator &allocator) {
-	string key;
-	key.resize(delete_files.size() * sizeof(uintptr_t));
-	for (idx_t i = 0; i < delete_files.size(); i++) {
-		auto address = reinterpret_cast<uintptr_t>(&delete_files[i].get());
-		memcpy(&key[i * sizeof(uintptr_t)], &address, sizeof(uintptr_t));
+	EqualityDeleteFastFilterKey key;
+	key.delete_files.reserve(delete_files.size());
+	for (auto &delete_file : delete_files) {
+		key.delete_files.push_back(&delete_file.get());
 	}
 	//! A field can have a different physical type in an older data file. Include the
 	//! probe schema so one file's compiled filter is never reused across an evolution
 	//! boundary with a different canonical byte representation.
+	key.columns.reserve(read_state.columns.size());
 	for (auto &column : read_state.columns) {
-		key += StringUtil::Format("|%d:%s:%d", column.field_id, column.type.ToString(),
-		                          local_field_ids.count(column.field_id));
+		key.columns.push_back({column.field_id, column.type, local_field_ids.count(column.field_id) != 0});
 	}
+	{
+		lock_guard<mutex> guard(equality_delete_fast_filter_lock);
+		auto entry = equality_delete_fast_filters.find(key);
+		if (entry != equality_delete_fast_filters.end()) {
+			return entry->second;
+		}
+	}
+
 	vector<reference<const IcebergEqualityDeleteFile>> eligible_files;
 	vector<idx_t> eligible_file_indexes;
 	for (idx_t file_idx = 0; file_idx < delete_files.size(); file_idx++) {
@@ -63,11 +68,6 @@ IcebergEqualityDeleteFastFilter::BuildResult IcebergMultiFileReaderGlobalState::
 			eligible_file_indexes.push_back(file_idx);
 		}
 	}
-	lock_guard<mutex> guard(equality_delete_fast_filter_lock);
-	auto entry = equality_delete_fast_filters.find(key);
-	if (entry != equality_delete_fast_filters.end()) {
-		return entry->second;
-	}
 	auto eligible_result = IcebergEqualityDeleteFastFilter::Build(eligible_files, read_state.field_indexes,
 	                                                              read_state.types, context, allocator);
 	IcebergEqualityDeleteFastFilter::BuildResult built;
@@ -76,8 +76,9 @@ IcebergEqualityDeleteFastFilter::BuildResult IcebergMultiFileReaderGlobalState::
 	for (idx_t eligible_idx = 0; eligible_idx < eligible_file_indexes.size(); eligible_idx++) {
 		built.accelerated_files[eligible_file_indexes[eligible_idx]] = eligible_result.accelerated_files[eligible_idx];
 	}
-	equality_delete_fast_filters.emplace(std::move(key), built);
-	return built;
+	lock_guard<mutex> guard(equality_delete_fast_filter_lock);
+	auto entry = equality_delete_fast_filters.emplace(std::move(key), std::move(built));
+	return entry.first->second;
 }
 
 using MultiFileColumnPath = vector<idx_t>;
@@ -482,6 +483,14 @@ ReaderInitializeType IcebergMultiFileReader::InitializeReader(MultiFileReaderDat
 		auto built =
 		    iceberg_state.GetOrCreateEqualityDeleteFastFilter(delete_plan.equality_deletes, *equality_delete_state,
 		                                                      local_field_ids, context, BufferAllocator::Get(context));
+		if (!delete_plan.equality_deletes.empty()) {
+			idx_t accelerated_count = 0;
+			for (auto accelerated : built.accelerated_files) {
+				accelerated_count += accelerated;
+			}
+			DUCKDB_LOG(context, IcebergLogType, "Accelerated %llu of %llu equality-delete files using a hash filter",
+			           accelerated_count, delete_plan.equality_deletes.size());
+		}
 		equality_delete_state->fast_filter = std::move(built.filter);
 		accelerated_files = std::move(built.accelerated_files);
 	}
@@ -621,26 +630,14 @@ void IcebergMultiFileReader::FinalizeChunk(ClientContext &context, const MultiFi
 		equality_delete_executor.Execute(input_chunk, equality_delete_chunk);
 
 		auto input_count = equality_delete_chunk.size();
-		vector<bool> keep(input_count, true);
+		auto sel_vec = SelectionVector::Incremental(input_count);
+		idx_t result_count = input_count;
 		if (equality_delete_expression) {
 			ExpressionExecutor filter_executor(context, *equality_delete_expression);
-			SelectionVector expression_sel(input_count);
-			auto expression_count = filter_executor.SelectExpression(equality_delete_chunk, expression_sel);
-			std::fill(keep.begin(), keep.end(), false);
-			for (idx_t i = 0; i < expression_count; i++) {
-				keep[expression_sel.get_index(i)] = true;
-			}
+			result_count = filter_executor.SelectExpression(equality_delete_chunk, sel_vec);
 		}
-		vector<bool> deleted(input_count, false);
 		if (equality_delete_state.fast_filter) {
-			equality_delete_state.fast_filter->MarkDeleted(equality_delete_chunk, deleted);
-		}
-		SelectionVector sel_vec(input_count);
-		idx_t result_count = 0;
-		for (idx_t i = 0; i < input_count; i++) {
-			if (keep[i] && !deleted[i]) {
-				sel_vec.set_index(result_count++, i);
-			}
+			result_count = equality_delete_state.fast_filter->Filter(equality_delete_chunk, sel_vec, result_count);
 		}
 		output_chunk.Slice(sel_vec, result_count);
 	}
