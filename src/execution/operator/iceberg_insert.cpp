@@ -77,7 +77,14 @@ IcebergCopyInput::IcebergCopyInput(ClientContext &context, const IcebergTableMet
                                    const IcebergTableSchema &schema)
     : table_metadata(table_metadata), schema(schema) {
 	auto &fs = FileSystem::GetFileSystem(context);
-	data_path = table_metadata.GetDataPath(fs);
+	// CTAS plans the copy from placeholder metadata that has no location yet - the table only gets created
+	// (and its location assigned) once PhysicalIcebergCreateTable runs. Leave the data path empty in that
+	// case; GetDataPath would otherwise hand back the relative path "data", which resolves against the local
+	// filesystem instead of the table's storage.
+	auto &table_properties = table_metadata.GetTableProperties();
+	if (!table_metadata.GetLocation().empty() || table_properties.find("write.data.path") != table_properties.end()) {
+		data_path = table_metadata.GetDataPath(fs);
+	}
 
 	// Get partition spec if the table is partitioned
 	auto &metadata = table_metadata;
@@ -651,7 +658,7 @@ IcebergCopyOptions IcebergInsert::GetCopyOptions(ClientContext &context, const I
 	info->options["geoparquet_version"].emplace_back("NONE");
 
 	auto &fs = FileSystem::GetFileSystem(context);
-	if (!fs.IsRemoteFile(copy_input.data_path)) {
+	if (!copy_input.data_path.empty() && !fs.IsRemoteFile(copy_input.data_path)) {
 		// create data path if it does not yet exist
 		try {
 			fs.CreateDirectoriesRecursive(copy_input.data_path);
@@ -685,7 +692,11 @@ IcebergCopyOptions IcebergInsert::GetCopyOptions(ClientContext &context, const I
 	}
 
 	result.file_path = copy_input.data_path;
-	StripTrailingSeparator(fs, result.file_path);
+	if (!result.file_path.empty()) {
+		// PathSeparator resolves the file system for the path; on an empty path that is the local one,
+		// which may be disabled by configuration.
+		StripTrailingSeparator(fs, result.file_path);
+	}
 	result.file_extension = file_format;
 	result.overwrite_mode = CopyOverwriteMode::COPY_OVERWRITE_OR_IGNORE;
 	result.per_thread_output = false;

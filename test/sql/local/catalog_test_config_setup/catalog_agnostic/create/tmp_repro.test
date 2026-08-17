@@ -1,0 +1,33 @@
+# name: repro.test
+# description: repro disabled local filesystem
+# group: [create]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+require core_functions
+
+statement ok
+use my_datalake.default;
+
+statement ok
+drop table if exists create_table_test;
+
+statement ok
+drop table if exists create_table_test_2;
+
+statement ok
+create table create_table_test as select range a from range(10);
+
+statement ok
+SET disabled_filesystems = 'LocalFileSystem';
+
+statement ok
+create table create_table_test_2 as select range a from range(10);
