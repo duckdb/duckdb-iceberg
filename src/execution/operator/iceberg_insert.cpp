@@ -76,18 +76,20 @@ IcebergCopyInput::IcebergCopyInput(ClientContext &context, const IcebergTableMet
                                    const IcebergTableSchema &schema)
     : table_metadata(table_metadata), schema(schema) {
 	auto &fs = FileSystem::GetFileSystem(context);
-	// CTAS plans the copy from placeholder metadata that has no location yet - the table only gets created
-	// (and its location assigned) once IcebergCopyToFile builds its sink state. Leave the data path empty
-	// in that case; GetDataPath would otherwise hand back the relative path "data", which resolves against
-	// the local filesystem instead of the table's storage.
-	auto &table_properties = table_metadata.GetTableProperties();
-	if (!table_metadata.GetLocation().empty() || table_properties.find("write.data.path") != table_properties.end()) {
-		data_path = table_metadata.GetDataPath(fs);
-	}
+	data_path = table_metadata.GetDataPath(fs);
+	InitializePartitionSpec();
+}
 
-	// Get partition spec if the table is partitioned
-	auto &metadata = table_metadata;
-	if (metadata.GetLatestPartitionSpec().IsPartitioned()) {
+IcebergCopyInput::IcebergCopyInput(const IcebergTableMetadata &placeholder_metadata, const IcebergTableSchema &schema,
+                                   unique_ptr<BoundCreateTableInfo> ctas_info_p)
+    : table_metadata(placeholder_metadata), schema(schema), ctas_info(std::move(ctas_info_p)) {
+	// No data path: the table has no location until it is created, and GetDataPath would hand back the
+	// relative path "data", which resolves against the local filesystem instead of the table's storage.
+	InitializePartitionSpec();
+}
+
+void IcebergCopyInput::InitializePartitionSpec() {
+	if (table_metadata.GetLatestPartitionSpec().IsPartitioned()) {
 		partition_spec = table_metadata.FindPartitionSpecById(table_metadata.default_spec_id);
 	}
 }
@@ -265,9 +267,9 @@ SinkResultType IcebergInsert::Sink(ExecutionContext &context, DataChunk &chunk, 
 	auto &global_state = input.global_state.Cast<IcebergInsertGlobalState>();
 
 	// For CTAS, `table` is null at planning time and the catalog entry is
-	// produced by the IcebergCopyToFile below this insert. By the time Sink
-	// runs that operator has already created the table, so resolve the
-	// effective table here.
+	// produced by the IcebergCopyToFile below this insert. GetGlobalSinkState in
+	// IcebergCopyToFile will create the table, so we can resolve the effective
+	// table from there
 	auto effective_table = GetEffectiveTable();
 	AddWrittenFiles(global_state, chunk, effective_table);
 
@@ -657,6 +659,7 @@ IcebergCopyOptions IcebergInsert::GetCopyOptions(ClientContext &context, const I
 	info->options["geoparquet_version"].emplace_back("NONE");
 
 	auto &fs = FileSystem::GetFileSystem(context);
+	// data_path is empty while a CTAS is being planned, because its table does not have a location yet
 	if (!copy_input.data_path.empty() && !fs.IsRemoteFile(copy_input.data_path)) {
 		// create data path if it does not yet exist
 		try {
@@ -692,8 +695,8 @@ IcebergCopyOptions IcebergInsert::GetCopyOptions(ClientContext &context, const I
 
 	result.file_path = copy_input.data_path;
 	if (!result.file_path.empty()) {
-		// PathSeparator resolves the file system for the path; on an empty path that is the local one,
-		// which may be disabled by configuration.
+		// PathSeparator resolves the file system for the path; for the empty path of a CTAS that is the
+		// local one, which may be disabled by configuration.
 		StripTrailingSeparator(fs, result.file_path);
 	}
 	result.file_extension = file_format;
@@ -956,8 +959,7 @@ PhysicalOperator &IcebergCatalog::PlanCreateTableAs(ClientContext &context, Phys
 	auto placeholder_metadata = BuildPlaceholderMetadata(context, *op.info);
 	auto &placeholder_schema = placeholder_metadata->GetLatestSchema();
 	auto &plan = CastCtasToIcebergStorageTypes(context, planner, plan_p, *op.info, *placeholder_metadata);
-	IcebergCopyInput copy_input(context, *placeholder_metadata, placeholder_schema);
-	copy_input.ctas_info = std::move(op.info);
+	IcebergCopyInput copy_input(*placeholder_metadata, placeholder_schema, std::move(op.info));
 	auto &physical_copy = IcebergInsert::PlanCopyForInsert(context, planner, copy_input, &plan);
 
 	auto &insert = planner.Make<IcebergInsert>(op, schema, unique_ptr<BoundCreateTableInfo>()).Cast<IcebergInsert>();

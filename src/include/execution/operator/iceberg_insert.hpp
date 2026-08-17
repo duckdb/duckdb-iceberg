@@ -24,8 +24,17 @@ namespace duckdb {
 enum class IcebergInsertVirtualColumns { NONE, WRITE_ROW_ID, WRITE_SEQUENCE_NUMBER, WRITE_ROW_ID_AND_SEQUENCE_NUMBER };
 
 struct IcebergCopyInput {
+	//! Writing to a table that exists: the data path follows from its location.
 	explicit IcebergCopyInput(ClientContext &context, const IcebergTableMetadata &table_metadata,
 	                          const IcebergTableSchema &schema);
+	//! CREATE TABLE AS: `placeholder_metadata` describes a table that does not exist yet, so it has no
+	//! location and there is no data path to resolve. IcebergCopyToFile issues `ctas_info`'s CreateTable
+	//! request and re-resolves the copy options from the real metadata before it writes anything.
+	IcebergCopyInput(const IcebergTableMetadata &placeholder_metadata, const IcebergTableSchema &schema,
+	                 unique_ptr<BoundCreateTableInfo> ctas_info);
+
+private:
+	void InitializePartitionSpec();
 
 public:
 	const IcebergTableMetadata &table_metadata;
@@ -38,9 +47,7 @@ public:
 	//! Table index for logical plan generation (used when generating partition expressions)
 	optional_idx get_table_index;
 	IcebergInsertVirtualColumns virtual_columns = IcebergInsertVirtualColumns::NONE;
-	//! For CREATE TABLE AS: what to create, and (via its `schema`) where. The table does not exist
-	//! yet, so `table_metadata` above is a placeholder without a location and the copy has to
-	//! re-resolve its options once it has issued the CreateTable request.
+	//! For CREATE TABLE AS: what to create, and (via its `schema`) where.
 	unique_ptr<BoundCreateTableInfo> ctas_info;
 };
 
