@@ -83,8 +83,6 @@ IcebergCopyInput::IcebergCopyInput(ClientContext &context, const IcebergTableMet
 IcebergCopyInput::IcebergCopyInput(const IcebergTableMetadata &placeholder_metadata, const IcebergTableSchema &schema,
                                    unique_ptr<BoundCreateTableInfo> ctas_info_p)
     : table_metadata(placeholder_metadata), schema(schema), ctas_info(std::move(ctas_info_p)) {
-	// No data path: the table has no location until it is created, and GetDataPath would hand back the
-	// relative path "data", which resolves against the local filesystem instead of the table's storage.
 	InitializePartitionSpec();
 }
 
@@ -694,9 +692,8 @@ IcebergCopyOptions IcebergInsert::GetCopyOptions(ClientContext &context, const I
 	}
 
 	result.file_path = copy_input.data_path;
+	// A filesystem can throw if it has been disabled, so skip if the path is empty (namely for CTAS)
 	if (!result.file_path.empty()) {
-		// PathSeparator resolves the file system for the path; for the empty path of a CTAS that is the
-		// local one, which may be disabled by configuration.
 		StripTrailingSeparator(fs, result.file_path);
 	}
 	result.file_extension = file_format;

@@ -88,7 +88,7 @@ optional_ptr<IcebergTableSchemaVersion> IcebergCopyToFile::GetCreatedTable() con
 
 string IcebergCopyToFile::GetName() const {
 	if (IsCTAS()) {
-		return "ICEBERG_CREATE_TABLE_AS";
+		return "CREATE TABLE & COPY TO FILE";
 	}
 	return PhysicalCopyToFile::GetName();
 }

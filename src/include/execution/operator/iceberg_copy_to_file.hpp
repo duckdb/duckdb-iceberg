@@ -17,13 +17,6 @@ namespace duckdb {
 class IcebergTableSchemaVersion;
 struct IcebergCopyOptions;
 
-//! The copy operator that writes Iceberg data files, for every write path (INSERT, UPDATE, MERGE INTO
-//! and CREATE TABLE AS).
-//!
-//! For CREATE TABLE AS the table does not exist while the plan is built, so the output path - and with
-//! it the partitioning and file rotation options - is unknown until the catalog has created it.
-//! PhysicalCopyToFile resolves all of those while building its sink state (and starts preparing the
-//! output directory from the path), so the CreateTable request has to happen first.
 class IcebergCopyToFile : public PhysicalCopyToFile {
 public:
 	IcebergCopyToFile(PhysicalPlan &physical_plan, vector<LogicalType> types, CopyFunction function,
@@ -31,16 +24,15 @@ public:
 	                  unique_ptr<BoundCreateTableInfo> ctas_info);
 
 public:
-	//! For CTAS: creates the table (once) and installs the resulting copy options. Then defers to
-	//! PhysicalCopyToFile, which is the first thing to read the output path.
+	//! For CTAS: creates the table (once) and applies the resulting copy options (field ids & location)
 	unique_ptr<GlobalSinkState> GetGlobalSinkState(ClientContext &context) const override;
 
-	//! Installs the options that depend on the table's location. Called by the planner, and again from
+	//! Apply CopyOptions for Iceberg Tables. Called by the planner, and again from
 	//! GetGlobalSinkState for a CTAS, once the table it writes to actually exists.
 	void ApplyCopyOptions(IcebergCopyOptions &copy_options);
 
-	//! The table this copy created, for a CTAS. Null until GetGlobalSinkState has run; read by the
-	//! IcebergInsert above this operator, which has no table entry of its own.
+	//! The table this copy created, for a CTAS. Until GetGlobalSinkState has run this is NULL
+	//! Read by the IcebergInsert above this operator, which has no table entry of its own.
 	optional_ptr<IcebergTableSchemaVersion> GetCreatedTable() const;
 
 	bool IsCTAS() const {

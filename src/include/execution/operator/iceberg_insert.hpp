@@ -27,7 +27,8 @@ struct IcebergCopyInput {
 	//! Writing to a table that exists: the data path follows from its location.
 	explicit IcebergCopyInput(ClientContext &context, const IcebergTableMetadata &table_metadata,
 	                          const IcebergTableSchema &schema);
-	//! CREATE TABLE AS: `placeholder_metadata` describes a table that does not exist yet, so it has no
+	//! Writing to a table that does not exist using CTAS:
+	//! `placeholder_metadata` describes a table that does not exist yet, so it has no
 	//! location and there is no data path to resolve. IcebergCopyToFile issues `ctas_info`'s CreateTable
 	//! request and re-resolves the copy options from the real metadata before it writes anything.
 	IcebergCopyInput(const IcebergTableMetadata &placeholder_metadata, const IcebergTableSchema &schema,
@@ -147,8 +148,6 @@ public:
 	SinkFinalizeType Finalize(Pipeline &pipeline, Event &event, ClientContext &context,
 	                          OperatorSinkFinalizeInput &input) const override;
 	unique_ptr<GlobalSinkState> GetGlobalSinkState(ClientContext &context) const override;
-	//! Plans the copy that writes the data files. When `copy_input` carries CTAS info the copy creates
-	//! the table before it resolves the options that depend on its location.
 	static IcebergCopyToFile &PlanCopyForInsert(ClientContext &context, PhysicalPlanGenerator &planner,
 	                                            IcebergCopyInput &copy_input, optional_ptr<PhysicalOperator> plan);
 	static IcebergCopyOptions GetCopyOptions(ClientContext &context, const IcebergCopyInput &copy_input);
