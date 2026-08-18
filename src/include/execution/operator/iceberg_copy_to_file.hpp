@@ -50,7 +50,7 @@ private:
 	//! Carries both what to create and, via its `schema`, the namespace to create it in.
 	unique_ptr<BoundCreateTableInfo> ctas_info;
 	//! Guards the CreateTable request and the entry it produces if the copy is part of a CTAS
-	mutable mutex create_lock;
+	mutable annotated_mutex create_lock;
 	mutable optional_ptr<IcebergTableSchemaVersion> created_table DUCKDB_GUARDED_BY(create_lock);
 };
 

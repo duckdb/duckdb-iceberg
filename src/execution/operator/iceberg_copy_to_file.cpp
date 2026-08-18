@@ -1,5 +1,6 @@
 #include "execution/operator/iceberg_copy_to_file.hpp"
 
+#include "duckdb/common/mutex.hpp"
 #include "duckdb/main/client_context.hpp"
 #include "duckdb/main/database.hpp"
 
@@ -50,7 +51,8 @@ void IcebergCopyToFile::EnsureTableCreated(ClientContext &context) const {
 		// every other write path targets a table that already exists, so the plan-time options are final
 		return;
 	}
-	lock_guard<mutex> guard(create_lock);
+
+	annotated_lock_guard<annotated_mutex> guard(create_lock);
 	if (created_table) {
 		return;
 	}
@@ -82,7 +84,7 @@ void IcebergCopyToFile::EnsureTableCreated(ClientContext &context) const {
 }
 
 optional_ptr<IcebergTableSchemaVersion> IcebergCopyToFile::GetCreatedTable() const {
-	lock_guard<mutex> guard(create_lock);
+	annotated_lock_guard<annotated_mutex> guard(create_lock);
 	return created_table;
 }
 

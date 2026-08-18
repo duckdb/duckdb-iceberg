@@ -73,20 +73,15 @@ IcebergCopyOptions::IcebergCopyOptions(unique_ptr<CopyInfo> info_p, CopyFunction
 }
 
 IcebergCopyInput::IcebergCopyInput(ClientContext &context, const IcebergTableMetadata &table_metadata,
-                                   const IcebergTableSchema &schema)
-    : table_metadata(table_metadata), schema(schema) {
-	auto &fs = FileSystem::GetFileSystem(context);
-	data_path = table_metadata.GetDataPath(fs);
-	InitializePartitionSpec();
-}
+                                   const IcebergTableSchema &schema, unique_ptr<BoundCreateTableInfo> ctas_info_p)
+    : table_metadata(table_metadata), schema(schema), ctas_info(std::move(ctas_info_p)) {
+	if (!ctas_info) {
+		// table exists, we can already initialize the data path here
+		auto &fs = FileSystem::GetFileSystem(context);
+		data_path = table_metadata.GetDataPath(fs);
+	}
 
-IcebergCopyInput::IcebergCopyInput(const IcebergTableMetadata &placeholder_metadata, const IcebergTableSchema &schema,
-                                   unique_ptr<BoundCreateTableInfo> ctas_info_p)
-    : table_metadata(placeholder_metadata), schema(schema), ctas_info(std::move(ctas_info_p)) {
-	InitializePartitionSpec();
-}
-
-void IcebergCopyInput::InitializePartitionSpec() {
+	// Get partition spec if the table is partitioned
 	if (table_metadata.GetLatestPartitionSpec().IsPartitioned()) {
 		partition_spec = table_metadata.FindPartitionSpecById(table_metadata.default_spec_id);
 	}
@@ -856,9 +851,9 @@ PhysicalOperator &IcebergCatalog::PlanInsert(ClientContext &context, PhysicalPla
 	auto &updated_table_entry = *updated_table.schema_versions[schema.schema_id];
 
 	// Create Copy Info
-	IcebergCopyInput info(context, table_metadata, schema);
+	IcebergCopyInput copy_input(context, table_metadata, schema);
 	auto &insert = planner.Make<IcebergInsert>(op, updated_table_entry, op.column_index_map);
-	auto &physical_copy = IcebergInsert::PlanCopyForInsert(context, planner, info, plan);
+	auto &physical_copy = IcebergInsert::PlanCopyForInsert(context, planner, copy_input, plan);
 	insert.children.push_back(physical_copy);
 
 	return insert;
@@ -956,7 +951,7 @@ PhysicalOperator &IcebergCatalog::PlanCreateTableAs(ClientContext &context, Phys
 	auto placeholder_metadata = BuildPlaceholderMetadata(context, *op.info);
 	auto &placeholder_schema = placeholder_metadata->GetLatestSchema();
 	auto &plan = CastCtasToIcebergStorageTypes(context, planner, plan_p, *op.info, *placeholder_metadata);
-	IcebergCopyInput copy_input(*placeholder_metadata, placeholder_schema, std::move(op.info));
+	IcebergCopyInput copy_input(context, *placeholder_metadata, placeholder_schema, std::move(op.info));
 	auto &physical_copy = IcebergInsert::PlanCopyForInsert(context, planner, copy_input, &plan);
 
 	auto &insert = planner.Make<IcebergInsert>(op, schema, unique_ptr<BoundCreateTableInfo>()).Cast<IcebergInsert>();

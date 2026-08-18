@@ -24,18 +24,10 @@ namespace duckdb {
 enum class IcebergInsertVirtualColumns { NONE, WRITE_ROW_ID, WRITE_SEQUENCE_NUMBER, WRITE_ROW_ID_AND_SEQUENCE_NUMBER };
 
 struct IcebergCopyInput {
-	//! Writing to a table that exists: the data path follows from its location.
+	//! For a CTAS, IcebergCopyToFile will send the create table request during Pipeline setup and then
+	//! Initialize copy options when field id and table location information is known.
 	explicit IcebergCopyInput(ClientContext &context, const IcebergTableMetadata &table_metadata,
-	                          const IcebergTableSchema &schema);
-	//! Writing to a table that does not exist using CTAS:
-	//! `placeholder_metadata` describes a table that does not exist yet, so it has no
-	//! location and there is no data path to resolve. IcebergCopyToFile issues `ctas_info`'s CreateTable
-	//! request and re-resolves the copy options from the real metadata before it writes anything.
-	IcebergCopyInput(const IcebergTableMetadata &placeholder_metadata, const IcebergTableSchema &schema,
-	                 unique_ptr<BoundCreateTableInfo> ctas_info);
-
-private:
-	void InitializePartitionSpec();
+	                          const IcebergTableSchema &schema, unique_ptr<BoundCreateTableInfo> ctas_info = nullptr);
 
 public:
 	const IcebergTableMetadata &table_metadata;
