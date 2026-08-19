@@ -71,8 +71,18 @@ void GroupCandidates(RewritePlan &plan, int64_t target_file_size_bytes, int64_t 
 	}
 
 	for (auto &kv : per_partition) {
-		if (!rewrite_all && static_cast<int64_t>(kv.second.size()) < min_input_files) {
-			continue;
+		if (!rewrite_all) {
+			int64_t total_bytes = 0;
+			for (auto &cand : kv.second) {
+				total_bytes += cand.file_size_in_bytes;
+			}
+			//! Spark SizeBasedFileRewriter: rewrite when the group has enough files,
+			//! or at least two files whose total size already meets the target.
+			const bool enough_files = static_cast<int64_t>(kv.second.size()) >= min_input_files;
+			const bool enough_bytes = kv.second.size() >= 2 && total_bytes >= target_file_size_bytes;
+			if (!enough_files && !enough_bytes) {
+				continue;
+			}
 		}
 		for (auto &cand : kv.second) {
 			plan.selected_candidates.push_back(std::move(cand));

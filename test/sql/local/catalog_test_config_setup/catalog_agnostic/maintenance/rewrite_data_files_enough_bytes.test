@@ -1,0 +1,70 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/maintenance/rewrite_data_files_enough_bytes.test
+# description: rewrite when fewer than min_input_files but total bytes meet the target
+# group: [maintenance]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+require core_functions
+
+statement ok
+drop table if exists my_datalake.default.rewrite_enough_bytes;
+
+statement ok
+create table my_datalake.default.rewrite_enough_bytes (id INTEGER, payload VARCHAR);
+
+# Three modest files: each under the rewrite target, but combined size exceeds it.
+statement ok
+insert into my_datalake.default.rewrite_enough_bytes
+select i, repeat('x', 5000)
+from range(20) t(i);
+
+statement ok
+insert into my_datalake.default.rewrite_enough_bytes
+select i, repeat('y', 5000)
+from range(20, 40) t(i);
+
+statement ok
+insert into my_datalake.default.rewrite_enough_bytes
+select i, repeat('z', 5000)
+from range(40, 60) t(i);
+
+query I
+select count(*)
+from iceberg_metadata('my_datalake.default.rewrite_enough_bytes')
+where content = 'DATA' and status <> 'DELETED';
+----
+3
+
+# Files are ~1.5KiB each (under target 2000), so they pass the undersized gate.
+# Three files is below min_input_files=5, but combined size (~4.4KiB) meets the target.
+query III
+call iceberg_rewrite_data_files(
+	'my_datalake.default.rewrite_enough_bytes',
+	target_file_size_bytes => 2000,
+	min_input_files => 5
+);
+----
+3	<REGEX>:[1-9][0-9]*	<REGEX>:[1-9][0-9]*
+
+query I
+select count(*) from my_datalake.default.rewrite_enough_bytes;
+----
+60
+
+query I
+select count(*) > 0
+from iceberg_metadata('my_datalake.default.rewrite_enough_bytes')
+where content = 'DATA' and status <> 'DELETED';
+----
+true
+
+statement ok
+drop table if exists my_datalake.default.rewrite_enough_bytes;
