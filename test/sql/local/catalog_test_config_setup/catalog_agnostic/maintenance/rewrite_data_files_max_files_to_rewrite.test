@@ -1,0 +1,70 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/maintenance/rewrite_data_files_max_files_to_rewrite.test
+# description: max_files_to_rewrite caps how many eligible files are compacted
+# group: [maintenance]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+statement ok
+drop table if exists my_datalake.default.rewrite_max_files;
+
+statement ok
+create table my_datalake.default.rewrite_max_files (id INTEGER, payload VARCHAR);
+
+statement ok
+insert into my_datalake.default.rewrite_max_files values (1, 'a1'), (2, 'b1');
+
+statement ok
+insert into my_datalake.default.rewrite_max_files values (3, 'a2'), (4, 'b2');
+
+statement ok
+insert into my_datalake.default.rewrite_max_files values (5, 'a3'), (6, 'b3');
+
+statement ok
+insert into my_datalake.default.rewrite_max_files values (7, 'a4'), (8, 'b4');
+
+statement ok
+insert into my_datalake.default.rewrite_max_files values (9, 'a5'), (10, 'b5');
+
+statement ok
+insert into my_datalake.default.rewrite_max_files values (11, 'a6'), (12, 'b6');
+
+query I
+select count(*)
+from iceberg_metadata('my_datalake.default.rewrite_max_files')
+where content = 'DATA' and status <> 'DELETED';
+----
+6
+
+# Six eligible files, but only rewrite three of them.
+query III
+call iceberg_rewrite_data_files(
+	'my_datalake.default.rewrite_max_files',
+	min_input_files => 5,
+	max_files_to_rewrite => 3
+);
+----
+3	1	<REGEX>:[1-9][0-9]*
+
+# One new file plus the three untouched originals.
+query I
+select count(*)
+from iceberg_metadata('my_datalake.default.rewrite_max_files')
+where content = 'DATA' and status <> 'DELETED';
+----
+4
+
+query I
+select count(*) from my_datalake.default.rewrite_max_files;
+----
+12
+
+statement ok
+drop table if exists my_datalake.default.rewrite_max_files;

@@ -83,6 +83,13 @@ static RewriteDataFilesPlanInput ParseRewritePlanInput(TableFunctionBindInput &i
 				                            value);
 			}
 			result.min_input_files = value;
+		} else if (opt == "max_files_to_rewrite") {
+			auto value = val.GetValue<int64_t>();
+			if (value < 1) {
+				throw InvalidInputException("iceberg_rewrite_data_files: 'max_files_to_rewrite' must be >= 1, got %lld",
+				                            value);
+			}
+			result.max_files_to_rewrite = value;
 		} else if (opt == "rewrite_all") {
 			result.rewrite_all = BooleanValue::Get(val);
 		}
@@ -173,6 +180,7 @@ TableFunctionSet IcebergFunctions::GetIcebergRewriteDataFilesFunction() {
 	function.bind_operator = RewriteDataFilesBindOperator;
 	function.named_parameters["target_file_size_bytes"] = LogicalType::ANY;
 	function.named_parameters["min_input_files"] = LogicalType::BIGINT;
+	function.named_parameters["max_files_to_rewrite"] = LogicalType::BIGINT;
 	function.named_parameters["rewrite_all"] = LogicalType::BOOLEAN;
 	function_set.AddFunction(function);
 	return function_set;

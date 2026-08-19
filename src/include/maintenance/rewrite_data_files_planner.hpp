@@ -38,6 +38,8 @@ struct RewriteDataFilesPlanInput {
 	QualifiedName table_name;
 	optional<int64_t> target_file_size_bytes;
 	int64_t min_input_files = 5;
+	//! Optional upper bound on how many eligible files will be rewritten.
+	optional<int64_t> max_files_to_rewrite;
 	bool rewrite_all = false;
 };
 

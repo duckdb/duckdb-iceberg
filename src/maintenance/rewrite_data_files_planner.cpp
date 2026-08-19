@@ -80,6 +80,24 @@ void GroupCandidates(RewritePlan &plan, int64_t target_file_size_bytes, int64_t 
 	}
 }
 
+void LimitSelectedCandidates(RewritePlan &plan, const RewriteDataFilesPlanInput &input) {
+	if (!input.max_files_to_rewrite ||
+	    plan.selected_candidates.size() <= static_cast<idx_t>(input.max_files_to_rewrite.value())) {
+		return;
+	}
+	//! Deterministic truncation: partition key, then file path.
+	std::sort(plan.selected_candidates.begin(), plan.selected_candidates.end(),
+	          [](const RewriteCandidate &left, const RewriteCandidate &right) {
+		          auto left_key = rewrite_planner_internal::PartitionBucketKey(left.partition_info);
+		          auto right_key = rewrite_planner_internal::PartitionBucketKey(right.partition_info);
+		          if (left_key != right_key) {
+			          return left_key < right_key;
+		          }
+		          return left.file_path < right.file_path;
+	          });
+	plan.selected_candidates.resize(NumericCast<idx_t>(input.max_files_to_rewrite.value()));
+}
+
 } // namespace
 
 namespace rewrite_planner_internal {
@@ -198,6 +216,7 @@ RewritePlan PlanRewrite(ClientContext &context, const RewriteDataFilesPlanInput 
 	}
 
 	GroupCandidates(plan, plan.target_file_size_bytes, input.min_input_files, input.rewrite_all);
+	LimitSelectedCandidates(plan, input);
 
 	return plan;
 }
