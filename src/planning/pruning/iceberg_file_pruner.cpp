@@ -116,8 +116,7 @@ bool IcebergFilePruner::FileMatchesFilter(const IcebergManifestFile &manifest_fi
 
 	for (auto &entry : table_filters) {
 		auto &column_index = entry.first;
-		auto primary_index = column_index.GetPrimaryIndex();
-		auto &column = *schema.columns[primary_index];
+		auto &column = IcebergTableSchema::GetFromColumnIndex(schema.columns, column_index, 0);
 
 		if (data_file.lower_bounds.empty() || data_file.upper_bounds.empty() ||
 		    data_file.content == IcebergManifestEntryContentType::POSITION_DELETES) {
