@@ -51,7 +51,7 @@ idx_t IcebergUtils::ParseByteSizeOptionallyFormatted(const string &input) {
 	}
 }
 
-CopyFunctionCatalogEntry &IcebergUtils::GetCopyFunction(ClientContext &context, const string &name) {
+CopyFunctionCatalogEntry &IcebergUtils::GetCopyFunction(ClientContext &context, const Identifier &name) {
 	// Logic is partially duplicated from Catalog::AutoLoadExtensionByCatalogEntry(db, CatalogType::COPY_FUNCTION_ENTRY,
 	// name), but that do not offer enough control
 	auto &db = *context.db;
@@ -65,7 +65,7 @@ CopyFunctionCatalogEntry &IcebergUtils::GetCopyFunction(ClientContext &context, 
 	auto &system_catalog = Catalog::GetSystemCatalog(db);
 
 	auto entry = system_catalog.GetEntry<CopyFunctionCatalogEntry>(
-	    context, QualifiedName(system_catalog.GetName(), Identifier::DefaultSchema(), Identifier(name)),
+	    context, QualifiedName(system_catalog.GetName(), Identifier::DefaultSchema(), name),
 	    OnEntryNotFound::RETURN_NULL);
 	if (!entry) {
 		throw MissingExtensionException(

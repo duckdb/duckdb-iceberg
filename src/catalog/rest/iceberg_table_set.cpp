@@ -210,11 +210,12 @@ static Value ParseTableProperty(TableFunctionBinder &binder, ClientContext &cont
 	if (val.IsNull()) {
 		throw BinderException("NULL is not supported as a valid option for '%s'", property_name);
 	}
-	if (!val.DefaultTryCastAs(type, true)) {
+	auto casted_val = val.DefaultTryCastAs(type, nullptr, true);
+	if (!casted_val) {
 		throw InvalidInputException("Can't cast '%s' property (%s) to %s", property_name, val.ToString(),
 		                            type.ToString());
 	}
-	return val;
+	return std::move(*casted_val);
 }
 
 shared_ptr<IcebergTable> IcebergTableSet::CreateEntryInternal(const string &name, IcebergTable &&table,

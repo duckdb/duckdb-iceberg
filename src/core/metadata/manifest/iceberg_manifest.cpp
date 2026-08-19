@@ -525,13 +525,13 @@ static void WritePartitionValue(Vector &vector, idx_t row_idx, const Value &valu
 		FlatVector::SetNull(vector, row_idx, true);
 		return;
 	}
-	Value cast_value;
 	string error_message;
-	if (!value.DefaultTryCastAs(vector.GetType(), cast_value, &error_message, true)) {
+	auto cast_value = value.DefaultTryCastAs(vector.GetType(), &error_message, true);
+	if (!cast_value) {
 		throw InvalidInputException("Could not cast partition value %s to %s", value.type().ToString(),
 		                            vector.GetType().ToString());
 	}
-	vector.SetValue(row_idx, cast_value);
+	vector.SetValue(row_idx, *cast_value);
 }
 
 static void WritePartitionStructRow(Vector &partition_vector, idx_t row_idx, const IcebergDataFile &data_file,

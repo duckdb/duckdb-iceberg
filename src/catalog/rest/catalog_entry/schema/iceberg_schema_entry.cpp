@@ -576,15 +576,17 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 			}
 
 			if (StringUtil::CIEquals(key, "format-version")) {
-				if (!val.DefaultTryCastAs(LogicalType::INTEGER, true)) {
+				auto casted_val = val.DefaultTryCastAs(LogicalType::INTEGER, nullptr, true);
+				if (!casted_val) {
 					throw InvalidInputException("Can't cast 'format-version' property (%s) to INTEGER", val.ToString());
 				}
-				new_format_version = val.GetValue<int32_t>();
+				new_format_version = casted_val->GetValue<int32_t>();
 			} else {
-				if (!val.DefaultTryCastAs(LogicalType::VARCHAR, true)) {
+				auto casted_val = val.DefaultTryCastAs(LogicalType::VARCHAR, nullptr, true);
+				if (!casted_val) {
 					throw InvalidInputException("Can't cast '%s' property (%s) to VARCHAR", key, val.ToString());
 				}
-				new_properties[key] = val.GetValue<string>();
+				new_properties[key] = casted_val->GetValue<string>();
 			}
 		}
 

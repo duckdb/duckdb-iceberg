@@ -174,21 +174,7 @@ void IcebergMultiFileList::Bind(vector<LogicalType> &return_types, vector<Identi
 		return_types = this->types;
 		return;
 	}
-	if (!shared_state->scan_info) {
-		D_ASSERT(!shared_state->path.empty());
-		auto input_string = shared_state->path;
-		auto resolved_metadata = IcebergUtils::ResolveTableMetadata(context, input_string, options);
-
-		auto temp_data = make_uniq<IcebergScanTemporaryData>();
-		temp_data->metadata = std::move(resolved_metadata.metadata);
-		auto &metadata = temp_data->metadata;
-
-		IcebergSnapshotScanInfo snapshot_info;
-		snapshot_info = metadata.GetSnapshot(*options.snapshot_lookup);
-		auto schema = metadata.GetSchemaFromId(snapshot_info.schema_id);
-		shared_state->scan_info = make_shared_ptr<IcebergScanInfo>(resolved_metadata.table_location,
-		                                                           std::move(temp_data), snapshot_info, *schema);
-	}
+	EnsureScanInfo();
 
 	auto &schema = GetSchema().columns;
 	for (auto &schema_entry : schema) {
@@ -308,9 +294,16 @@ vector<OpenFileInfo> IcebergMultiFileList::GetAllFiles() const {
 }
 
 FileExpandResult IcebergMultiFileList::GetExpandResult() const {
-	// GetFileInternal(1) will ensure files with index 0 and index 1 are expanded if they are available
 	annotated_lock_guard<annotated_mutex> guard(shared_state->lock);
-	GetFileInternal(1, guard);
+	// DuckDB calls MultiFileList::IsEmpty() during MultiFileBindInternal, before the reader's Bind() has
+	// applied the parsed named parameters (SetOptions) or resolved the metadata for a path-based scan.
+	// Expanding here would resolve the table against default options - picking the wrong snapshot for
+	// 'version' / 'snapshot_from_id' - and the result below does not depend on it, so only warm up the
+	// expansion once we are bound.
+	if (have_bound) {
+		// GetFileInternal(1) will ensure files with index 0 and index 1 are expanded if they are available
+		GetFileInternal(1, guard);
+	}
 
 	// always return multiple files, In the case there is only 1 data file,
 	// we only lose performance if it is small
@@ -595,6 +588,25 @@ void IcebergMultiFileList::InitializeView(annotated_lock_guard<annotated_mutex> 
 		view_has_matching_delete_manifests |= matches;
 	}
 	has_matching_delete_manifests.store(view_has_matching_delete_manifests);
+}
+
+void IcebergMultiFileList::EnsureScanInfo() const {
+	if (shared_state->scan_info) {
+		return;
+	}
+	D_ASSERT(!shared_state->path.empty());
+	auto input_string = shared_state->path;
+	auto resolved_metadata = IcebergUtils::ResolveTableMetadata(context, input_string, options);
+
+	auto temp_data = make_uniq<IcebergScanTemporaryData>();
+	temp_data->metadata = std::move(resolved_metadata.metadata);
+	auto &metadata = temp_data->metadata;
+
+	IcebergSnapshotScanInfo snapshot_info;
+	snapshot_info = metadata.GetSnapshot(*options.snapshot_lookup);
+	auto schema = metadata.GetSchemaFromId(snapshot_info.schema_id);
+	shared_state->scan_info = make_shared_ptr<IcebergScanInfo>(resolved_metadata.table_location, std::move(temp_data),
+	                                                           snapshot_info, *schema);
 }
 
 void IcebergMultiFileList::InitializeScanPlanProvider() const {
