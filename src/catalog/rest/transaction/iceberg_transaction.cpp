@@ -411,23 +411,41 @@ const IcebergTransactionAlterUpdate *IcebergTransaction::GetAlterUpdate() const 
 	return std::get_if<IcebergTransactionAlterUpdate>(&transaction_update);
 }
 
+namespace {
+
+void RemoveFilesBestEffort(ClientContext &context, FileSystem &fs, const vector<string> &paths,
+                           const char *description) {
+	if (paths.empty()) {
+		return;
+	}
+	try {
+		fs.RemoveFiles(paths);
+		DUCKDB_LOG(context, IcebergLogType, "Iceberg Transaction Cleanup, deleted %llu %s(s)",
+		           static_cast<uint64_t>(paths.size()), description);
+	} catch (std::exception &ex) {
+		//! A bulk delete reports one error for the whole batch, so some of these files may well have been removed.
+		DUCKDB_LOG(context, IcebergLogType,
+		           "Iceberg Transaction Cleanup, failed to delete one or more of %llu %s(s): %s",
+		           static_cast<uint64_t>(paths.size()), description, ex.what());
+	}
+}
+
+} // namespace
+
 void IcebergTransaction::CleanupMetadataFiles(ClientContext &context, const vector<string> &paths) {
 	if (!catalog.attach_options.remove_files_on_delete || paths.empty()) {
 		return;
 	}
 	auto &fs = FileSystem::GetFileSystem(context);
-	unordered_set<string> deleted;
+	unordered_set<string> seen;
+	vector<string> unique_paths;
+	unique_paths.reserve(paths.size());
 	for (const auto &path : paths) {
-		if (!deleted.insert(path).second) {
-			continue;
-		}
-		if (fs.TryRemoveFile(path)) {
-			DUCKDB_LOG(context, IcebergLogType, "Iceberg Transaction Cleanup, deleted retry metadata file: '%s'", path);
-		} else {
-			DUCKDB_LOG(context, IcebergLogType,
-			           "Iceberg Transaction Cleanup, failed to delete retry metadata file: '%s'", path);
+		if (seen.insert(path).second) {
+			unique_paths.push_back(path);
 		}
 	}
+	RemoveFilesBestEffort(context, fs, unique_paths, "retry metadata file");
 }
 
 void IcebergTransaction::RefreshRetryTables(IcebergTransactionAlterUpdate &alter_update,
@@ -765,6 +783,9 @@ void IcebergTransaction::CleanupFiles() {
 				continue;
 			}
 			auto &transaction_data = table.transaction_data;
+			//! Batched per table: the keys PrepareIcebergScanFromEntry registers below belong to this table, so
+			//! the files have to be deleted before moving on to the next one.
+			vector<string> data_files;
 			for (auto &update : transaction_data->updates) {
 				if (update->type != IcebergTableUpdateType::ADD_SNAPSHOT) {
 					continue;
@@ -777,14 +798,11 @@ void IcebergTransaction::CleanupFiles() {
 				const auto manifest_list_entries = add_snapshot.GetManifestFiles();
 				for (const auto &manifest : manifest_list_entries) {
 					for (auto &manifest_entry : manifest.GetManifestEntries()) {
-						auto &data_file = manifest_entry.data_file;
-						if (fs.TryRemoveFile(data_file.file_path)) {
-							DUCKDB_LOG(temp_context, IcebergLogType,
-							           "Iceberg Transaction Cleanup, deleted 'data_file': '%s'", data_file.file_path);
-						}
+						data_files.push_back(manifest_entry.data_file.file_path);
 					}
 				}
 			}
+			RemoveFilesBestEffort(temp_context, fs, data_files, "data_file");
 		}
 	}
 }
