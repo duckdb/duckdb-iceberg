@@ -35,7 +35,11 @@ string IcebergTableSet::ResolveCanonicalNameViaList(ClientContext &context, cons
 	auto &ic_catalog = catalog.Cast<IcebergCatalog>();
 	auto tables = IRCAPI::GetTables(context, ic_catalog, schema);
 	string canonical_match;
-	for (const auto &table : tables) {
+	if (!tables) {
+		// A refused listing can't resolve a canonical name; treat it the same as "no match".
+		return canonical_match;
+	}
+	for (const auto &table : *tables) {
 		if (!StringUtil::CIEquals(table.name, name)) {
 			continue;
 		}

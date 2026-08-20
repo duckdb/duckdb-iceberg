@@ -201,8 +201,14 @@ public:
 			insensitive_map.erase(key);
 		}
 	}
-	void erase(iterator it) { // NOLINT: match STL container naming
+	//! Returns the iterator following the erased element, matching STL's erase(iterator) convention.
+	//! Erasing by key first (rather than reaching into 'it's private members) is safe here: erasing
+	//! one key from an unordered_map never invalidates iterators to any other element.
+	iterator erase(iterator it) { // NOLINT: match STL container naming
+		auto next = it;
+		++next;
 		erase(it->first);
+		return next;
 	}
 
 	void clear() { // NOLINT: match STL container naming
