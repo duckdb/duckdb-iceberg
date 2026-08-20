@@ -20,16 +20,7 @@ struct RewriteExecutionResult {
 	vector<RewriteCandidate> rewritten_candidates;
 };
 
-//! Convert one COPY RETURN_STATS row into an ADDED manifest entry. Partition
-//! values and sequence-number semantics come from the frozen rewrite plan.
-//! Column stats / bounds are populated from the RETURN_STATS map.
-IcebergManifestEntry BuildRewriteManifestEntry(ClientContext &context, const vector<RewriteCandidate> &group,
-                                               int64_t starting_sequence_number, int64_t record_count,
-                                               const string &produced_file, int64_t file_size_in_bytes,
-                                               const Value &column_stats, const IcebergTableMetadata &table_metadata,
-                                               const string &table_name);
-
-//! Commit all completed rewrite groups as one Iceberg REPLACE snapshot.
+//! Commit all completed rewrite output as one Iceberg REPLACE snapshot.
 void CommitRewrite(ClientContext &context, const RewritePlan &plan, RewriteExecutionResult &result);
 
 //! Best-effort cleanup for files produced before a rewrite failure.
@@ -38,5 +29,11 @@ void CleanupRewriteFiles(ClientContext &context, const IcebergTable &table_info,
 //! Validate that the currently loaded table snapshot still matches the frozen
 //! rewrite plan. Empty-table plans require the table to remain snapshot-less.
 void ValidateRewriteSnapshot(const RewritePlan &plan, const IcebergTable &table_info, const string &phase);
+
+//! Account selected input files once into the rewrite execution result.
+void AccountSelectedCandidates(const RewritePlan &plan, RewriteExecutionResult &result);
+
+//! Pin rewrite sequence numbers on entries produced via IcebergInsert::AddFiles.
+void PinRewriteSequenceNumbers(vector<IcebergManifestEntry> &entries, int64_t starting_sequence_number);
 
 } // namespace duckdb

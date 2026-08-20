@@ -59,8 +59,18 @@ static void ParseAzureConfigOptions(const case_insensitive_map_t<string> &config
 
 			if (!account_name.empty() && !entry.second.empty()) {
 				options["account_name"] = account_name;
-				options["connection_string"] =
+				string connection_string =
 				    StringUtil::Format("AccountName=%s;SharedAccessSignature=%s", account_name, entry.second);
+				// The host is <account-name>.<service>.<endpoint-suffix>, and the suffix is not always
+				// core.windows.net (e.g. OneLake vends adls.sas-token.onelake.dfs.fabric.microsoft.com).
+				// The Azure SDK defaults to core.windows.net unless EndpointSuffix is set explicitly.
+				if (dot_pos.IsValid()) {
+					auto suffix_pos = host.find('.', dot_pos.GetIndex() + 1);
+					if (suffix_pos != string::npos && suffix_pos + 1 < host.size()) {
+						connection_string += ";EndpointSuffix=" + host.substr(suffix_pos + 1);
+					}
+				}
+				options["connection_string"] = connection_string;
 
 				// For now, only process the first {storage account, token} pair we find in the config
 				return;

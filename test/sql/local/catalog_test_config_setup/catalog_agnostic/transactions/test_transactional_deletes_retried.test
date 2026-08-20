@@ -21,11 +21,13 @@ create schema if not exists my_datalake.default;
 statement ok
 drop table if exists my_datalake.default.multi_transaction_delete;
 
+# 'snapshot' isolation opts this table into re-applying a DELETE over concurrent appends;
+# the Iceberg default ('serializable') aborts such a commit instead.
 statement ok
 create table my_datalake.default.multi_transaction_delete (
 	a int,
 	b int
-);
+) WITH ('write.delete.isolation-level' = 'snapshot');
 
 # Insert 0,0
 statement ok

@@ -1,0 +1,46 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/maintenance/rewrite_data_files_select.test
+# description: SELECT FROM iceberg_rewrite_data_files on a partitioned table
+# group: [maintenance]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+statement ok
+drop table if exists my_datalake.default.rewrite_select_probe;
+
+statement ok
+create table my_datalake.default.rewrite_select_probe (id INTEGER, category VARCHAR, payload VARCHAR)
+partitioned by (category);
+
+statement ok
+insert into my_datalake.default.rewrite_select_probe values (1, 'a', 'a1'), (2, 'b', 'b1');
+
+statement ok
+insert into my_datalake.default.rewrite_select_probe values (3, 'a', 'a2'), (4, 'b', 'b2');
+
+statement ok
+insert into my_datalake.default.rewrite_select_probe values (5, 'a', 'a3'), (6, 'b', 'b3');
+
+statement ok
+insert into my_datalake.default.rewrite_select_probe values (7, 'a', 'a4'), (8, 'b', 'b4');
+
+statement ok
+insert into my_datalake.default.rewrite_select_probe values (9, 'a', 'a5'), (10, 'b', 'b5');
+
+statement ok
+insert into my_datalake.default.rewrite_select_probe values (11, 'a', 'a6'), (12, 'b', 'b6');
+
+query III
+select * from iceberg_rewrite_data_files('my_datalake.default.rewrite_select_probe');
+----
+12	2	<REGEX>:[1-9][0-9]*
+
+statement ok
+drop table if exists my_datalake.default.rewrite_select_probe;

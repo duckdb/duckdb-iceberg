@@ -66,8 +66,9 @@ public:
 class IRCAPI {
 public:
 	static const string API_VERSION_1;
-	static vector<rest_api_objects::TableIdentifier> GetTables(ClientContext &context, IcebergCatalog &catalog,
-	                                                           const IcebergSchemaEntry &schema);
+	//! Returns 'nullopt' if the catalog refused the listing, which must not be read as "the schema is empty".
+	static optional<vector<rest_api_objects::TableIdentifier>>
+	GetTables(ClientContext &context, IcebergCatalog &catalog, const IcebergSchemaEntry &schema);
 	static bool VerifyResponse(ClientContext &context, IcebergCatalog &catalog, IRCEndpointBuilder &url_builder,
 	                           bool execute_head);
 	static bool VerifySchemaExistence(ClientContext &context, IcebergCatalog &catalog, const string &schema);

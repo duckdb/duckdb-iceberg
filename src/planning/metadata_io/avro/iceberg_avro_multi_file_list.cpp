@@ -31,6 +31,10 @@ IcebergManifestFileScanInfo::IcebergManifestFileScanInfo(
 		}
 	}
 	manifest_indexes = std::move(manifest_indexes_p);
+	manifest_locks.reserve(manifest_files.size());
+	for (idx_t manifest_idx = 0; manifest_idx < manifest_files.size(); manifest_idx++) {
+		manifest_locks.push_back(make_uniq<mutex>());
+	}
 	unordered_set<int32_t> partition_spec_ids;
 	for (auto manifest_idx : manifest_indexes) {
 		if (manifest_idx >= manifest_files.size()) {
@@ -56,6 +60,13 @@ idx_t IcebergManifestFileScanInfo::GetManifestIndex(idx_t scan_index) const {
 		throw InternalException("Manifest scan index %llu is out of bounds", scan_index);
 	}
 	return manifest_indexes[scan_index];
+}
+
+mutex &IcebergManifestFileScanInfo::GetManifestLock(idx_t manifest_index) {
+	if (manifest_index >= manifest_locks.size()) {
+		throw InternalException("Manifest lock index %llu is out of bounds", manifest_index);
+	}
+	return *manifest_locks[manifest_index];
 }
 
 IcebergAvroMultiFileList::IcebergAvroMultiFileList(shared_ptr<IcebergAvroScanInfo> info, vector<OpenFileInfo> paths)

@@ -18,6 +18,7 @@ namespace duckdb {
 // common Iceberg table property keys
 const string WRITE_UPDATE_MODE = "write.update.mode";
 const string WRITE_DELETE_MODE = "write.delete.mode";
+const string WRITE_DELETE_ISOLATION_LEVEL = "write.delete.isolation-level";
 
 struct IcebergMetadataLogItem {
 public:

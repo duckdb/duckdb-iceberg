@@ -1,0 +1,69 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/maintenance/rewrite_data_files_plan_shape.test
+# description: partitioned rewrite uses one Iceberg scan and one Copy To File
+# group: [maintenance]
+
+statement ok
+SET profiling_renderer_settings = MAP {'operator_casing': 'upper'};
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+set ignore_error_messages
+
+statement ok
+drop table if exists my_datalake.default.rewrite_plan_shape;
+
+statement ok
+create table my_datalake.default.rewrite_plan_shape (id INTEGER, category VARCHAR, payload VARCHAR)
+partitioned by (category);
+
+statement ok
+insert into my_datalake.default.rewrite_plan_shape values (1, 'a', 'a1'), (2, 'b', 'b1');
+
+statement ok
+insert into my_datalake.default.rewrite_plan_shape values (3, 'a', 'a2'), (4, 'b', 'b2');
+
+statement ok
+insert into my_datalake.default.rewrite_plan_shape values (5, 'a', 'a3'), (6, 'b', 'b3');
+
+statement ok
+insert into my_datalake.default.rewrite_plan_shape values (7, 'a', 'a4'), (8, 'b', 'b4');
+
+statement ok
+insert into my_datalake.default.rewrite_plan_shape values (9, 'a', 'a5'), (10, 'b', 'b5');
+
+statement ok
+insert into my_datalake.default.rewrite_plan_shape values (11, 'a', 'a6'), (12, 'b', 'b6');
+
+# One partitioned COPY over a single Iceberg scan — no UNION of per-partition copies.
+query II
+explain select * from iceberg_rewrite_data_files('my_datalake.default.rewrite_plan_shape');
+----
+physical_plan	<REGEX>:.*ICEBERG_REWRITE_DATA_FILES.*COPY_TO_FILE.*ICEBERG_SCAN.*
+
+query II
+explain select * from iceberg_rewrite_data_files('my_datalake.default.rewrite_plan_shape');
+----
+physical_plan	<!REGEX>:.*UNION.*
+
+query III
+call iceberg_rewrite_data_files('my_datalake.default.rewrite_plan_shape');
+----
+12	2	<REGEX>:[1-9][0-9]*
+
+query I
+select count(*)
+from iceberg_metadata('my_datalake.default.rewrite_plan_shape')
+where content = 'DATA' and status <> 'DELETED';
+----
+2
+
+statement ok
+drop table if exists my_datalake.default.rewrite_plan_shape;

@@ -39,6 +39,6 @@ endloop
 # the iceberg-rest-fixture adds 2 properties on table creation
 # created-at and write.parquet.compression-codec
 query I
-select count(*) from iceberg_table_properties(my_datalake.default.many_properties) group by all;
+select count(*) from iceberg_table_properties(my_datalake.default.many_properties) where key like 'new_property%';
 ----
-2052
+2050

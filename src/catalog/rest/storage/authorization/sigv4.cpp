@@ -2,6 +2,7 @@
 
 #include "duckdb/main/client_context.hpp"
 #include "duckdb/common/file_system.hpp"
+#include "duckdb/logging/logger.hpp"
 #include "duckdb/main/secret/secret_manager.hpp"
 #include "duckdb/main/setting_info.hpp"
 #include "duckdb/common/types/value.hpp"
@@ -181,8 +182,10 @@ void SIGV4Authorization::MaybeRefreshSecret(ClientContext &context) {
 		auto &secret_manager = context.db->GetSecretManager();
 		(void)secret_manager.CreateSecret(context, refresh_input);
 		last_refresh_time = std::chrono::steady_clock::now();
-	} catch (std::exception &) {
-		// Leave last_refresh_time alone so the next call retries
+	} catch (std::exception &ex) {
+		// Leave last_refresh_time alone so the next call retries with the same credentials.
+		DUCKDB_LOG_DEBUG(context, "Iceberg SigV4 secret '%s' was not updated, refresh failed: %s", refresh_input.name,
+		                 ex.what());
 	}
 }
 

@@ -31,11 +31,13 @@ set logging_level='debug'
 statement ok
 drop table if exists my_datalake.default.multi_transaction_insert;
 
+# 'snapshot' isolation opts this table into re-applying a DELETE over concurrent appends;
+# the Iceberg default ('serializable') aborts such a commit instead.
 statement ok
 create table my_datalake.default.multi_transaction_insert (
 	a int,
 	b int
-);
+) WITH ('write.delete.isolation-level' = 'snapshot');
 
 # Insert base values
 statement ok
@@ -136,8 +138,8 @@ commit;
 
 # con1's DELETE removed the (3,0) row it saw. con2's appended rows remain,
 # including its own (3,3): a concurrently-appended matching row is not removed
-# under the default (that is the job of serializable isolation-level detection,
-# a follow-up); the delete only applies to the data it scanned.
+# under 'snapshot' isolation; the delete only applies to the data it scanned.
+# (Under 'serializable' the commit would abort instead — see test_serializable_delete.test.)
 query II
 select * from my_datalake.default.multi_transaction_insert order by all
 ----

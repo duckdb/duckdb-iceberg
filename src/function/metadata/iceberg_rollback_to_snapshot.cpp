@@ -58,6 +58,10 @@ static unique_ptr<FunctionData> IcebergRollbackToSnapshotBind(ClientContext &con
                                                               vector<Identifier> &names) {
 	auto ret = make_uniq<IcebergRollbackToSnapshotBindData>();
 
+	if (input.inputs[1].IsNull()) {
+		throw InvalidInputException("iceberg_rollback_to_snapshot: snapshot_id cannot be NULL");
+	}
+
 	auto input_string = input.inputs[0].ToString();
 	VerifyInputIsNotAFile(context, input_string);
 	auto parts = QualifiedName::ParseComponents(input_string);

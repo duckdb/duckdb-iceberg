@@ -167,10 +167,42 @@ jobs:
         run: |
           ./build/release/test/unittest --order lex test/sql/cloud/snowflake/no_vended_credentials_region.test
 
-      - name: File issue if error
-        if: ${{ contains(github.ref_name, 'main') && failure() }}
+  file-issue:
+    name: File an issue on failure
+    runs-on: ubuntu-latest
+    needs: [rest, s3tables]
+    # always() so the job still runs after a needed job failed; the rest of the
+    # condition keeps it to genuine failures on main (not cancelled or skipped).
+    if: ${{ always() && contains(github.ref_name, 'main') && (needs.rest.result == 'failure' || needs.s3tables.result == 'failure') }}
+    permissions:
+      issues: write
+    steps:
+      - name: File issue
         env:
           GH_TOKEN: ${{ github.token }}
+          REST_RESULT: ${{ needs.rest.result }}
+          S3TABLES_RESULT: ${{ needs.s3tables.result }}
+          RUN_URL: https://github.com/duckdb/duckdb-iceberg/actions/runs/${{ github.run_id }}
+          ISSUE_REPO: duckdb/duckdb-iceberg
+          ISSUE_TITLE: Cloud Test Failures
         run: |
-          echo "Cloud tests failed. see [Run Link](https://github.com/duckdb/duckdb-iceberg/actions/runs/${{ github.run_id }})" > report.txt
-          gh issue create --repo duckdb/duckdb-iceberg --title "Cloud Test Failures" --body-file report.txt
+          {
+            echo "Cloud tests failed. see [Run Link](${RUN_URL})"
+            echo
+            echo "- Remote cloud catalogs: ${REST_RESULT}"
+            echo "- S3 Tables catalog: ${S3TABLES_RESULT}"
+          } > report.txt
+
+          # Narrow with --search, then match the title exactly: search is fuzzy
+          # and would also return issues that merely mention these words.
+          existing="$(gh issue list --repo "$ISSUE_REPO" --state open --limit 100 \
+            --search "\"${ISSUE_TITLE}\" in:title" --json number,title \
+            --jq "map(select(.title == \"${ISSUE_TITLE}\")) | first | .number // empty")"
+
+          if [[ -n $existing ]]; then
+            echo "Commenting on existing issue #${existing}"
+            gh issue comment "$existing" --repo "$ISSUE_REPO" --body-file report.txt
+          else
+            echo "No open '${ISSUE_TITLE}' issue, creating one"
+            gh issue create --repo "$ISSUE_REPO" --title "$ISSUE_TITLE" --body-file report.txt
+          fi
