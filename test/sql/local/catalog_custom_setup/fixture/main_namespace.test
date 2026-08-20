@@ -1,6 +1,5 @@
 # name: test/sql/local/catalog_custom_setup/fixture/main_namespace.test
-# description: namespaces are resolved verbatim - 'main' is an ordinary namespace and is never
-#              an alias for the catalog's default namespace
+# description: namespaces are resolved verbatim - 'main' is an ordinary namespace and is never an alias for the catalog's default namespace
 # group: [fixture]
 
 require-env FIXTURE_SERVER_AVAILABLE
