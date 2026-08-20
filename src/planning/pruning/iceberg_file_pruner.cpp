@@ -424,32 +424,33 @@ bool IcebergFilePruner::ManifestMatchesFilter(const IcebergManifestFile &manifes
 		return true;
 	}
 
-	auto &source_to_column_id = schema.GetSourceIdMap();
-	for (idx_t i = 0; i < field_summaries.size(); i++) {
-		auto &field_summary = field_summaries[i];
-		auto &field = partition_spec.fields[i];
-		const auto &column_id = source_to_column_id.at(field.source_id);
-		auto table_filter = table_filters.GetFilterForColumnIndex(column_id);
-		if (!table_filter) {
-			continue;
-		}
+	for (const auto &entry : table_filters) {
+		auto &column_index = entry.first;
+		auto &column = IcebergTableSchema::GetFromColumnIndex(schema.columns, column_index, 0);
+		for (idx_t i = 0; i < field_summaries.size(); i++) {
+			auto &field_summary = field_summaries[i];
+			auto &field = partition_spec.fields[i];
+			if (field.source_id == column.id) {
+				auto result_type = field.transform.GetSerializedType(column.type);
+				auto stats = IcebergPredicateStats::DeserializeBounds(
+				    field_summary.lower_bound, field_summary.upper_bound, column.name, result_type);
+				stats.has_nan = field_summary.contains_nan;
+				stats.has_null = field_summary.contains_null;
+				stats.has_not_null = true;
 
-		auto &column = IcebergTableSchema::GetFromColumnIndex(schema.columns, column_id, 0);
-		auto result_type = field.transform.GetSerializedType(column.type);
-		auto stats = IcebergPredicateStats::DeserializeBounds(field_summary.lower_bound, field_summary.upper_bound,
-		                                                      column.name, result_type);
-		stats.has_nan = field_summary.contains_nan;
-		stats.has_null = field_summary.contains_null;
-		stats.has_not_null = true;
-
-		if (!IcebergPredicate::MatchBounds(context, *table_filter, stats, field.transform)) {
-			DUCKDB_LOG(context, IcebergLogType,
-			           "Iceberg Filter Pushdown, skipped 'manifest_file': '%s', column '%s' with "
-			           "transform '%s', bounds [%s, %s] did not match filter: %s",
-			           manifest.manifest_path, column.name, field.transform.RawType(),
-			           stats.lower_bound ? stats.lower_bound->ToString() : "N/A",
-			           stats.upper_bound ? stats.upper_bound->ToString() : "N/A", table_filter->ToString(column.name));
-			return false;
+				const auto &table_filter = entry.second;
+				if (!IcebergPredicate::MatchBounds(context, *table_filter, stats, field.transform)) {
+					DUCKDB_LOG(context, IcebergLogType,
+					           "Iceberg Filter Pushdown, skipped 'manifest_file': '%s', column '%s' with "
+					           "transform '%s', bounds [%s, %s] did not match filter: %s",
+					           manifest.manifest_path, column.name, field.transform.RawType(),
+					           stats.lower_bound ? stats.lower_bound->ToString() : "N/A",
+					           stats.upper_bound ? stats.upper_bound->ToString() : "N/A",
+					           table_filter->ToString(column.name));
+					return false;
+				}
+				break;
+			}
 		}
 	}
 	return true;
