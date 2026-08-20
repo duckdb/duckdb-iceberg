@@ -84,6 +84,9 @@ static RewriteDataFilesPlanInput ParseRewritePlanInput(TableFunctionBindInput &i
 			}
 			result.min_input_files = value;
 		} else if (opt == "max_files_to_rewrite") {
+			if (val.IsNull()) {
+				continue;
+			}
 			auto value = val.GetValue<int64_t>();
 			if (value < 1) {
 				throw InvalidInputException("iceberg_rewrite_data_files: 'max_files_to_rewrite' must be >= 1, got %lld",
