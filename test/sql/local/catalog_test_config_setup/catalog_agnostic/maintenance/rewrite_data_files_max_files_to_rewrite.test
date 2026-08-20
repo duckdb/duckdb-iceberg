@@ -62,9 +62,106 @@ where content = 'DATA' and status <> 'DELETED';
 4
 
 query I
+select count(*)
+from iceberg_metadata('my_datalake.default.rewrite_max_files')
+where content = 'DATA' and status = 'DELETED';
+----
+3
+
+query I
 select count(*) from my_datalake.default.rewrite_max_files;
 ----
 12
 
 statement ok
 drop table if exists my_datalake.default.rewrite_max_files;
+
+statement ok
+drop table if exists my_datalake.default.rewrite_max_files_part;
+
+statement ok
+create table my_datalake.default.rewrite_max_files_part (id INTEGER, category VARCHAR, payload VARCHAR)
+partitioned by (category);
+
+statement ok
+insert into my_datalake.default.rewrite_max_files_part values (1, 'a', 'a1'), (2, 'b', 'b1');
+
+statement ok
+insert into my_datalake.default.rewrite_max_files_part values (3, 'a', 'a2'), (4, 'b', 'b2');
+
+statement ok
+insert into my_datalake.default.rewrite_max_files_part values (5, 'a', 'a3'), (6, 'b', 'b3');
+
+statement ok
+insert into my_datalake.default.rewrite_max_files_part values (7, 'a', 'a4'), (8, 'b', 'b4');
+
+statement ok
+insert into my_datalake.default.rewrite_max_files_part values (9, 'a', 'a5'), (10, 'b', 'b5');
+
+statement ok
+insert into my_datalake.default.rewrite_max_files_part values (11, 'a', 'a6'), (12, 'b', 'b6');
+
+query I
+select count(*)
+from iceberg_metadata('my_datalake.default.rewrite_max_files_part')
+where content = 'DATA' and status <> 'DELETED';
+----
+12
+
+# Both partitions qualify (6 >= min_input_files). The global cap of 3 is filled
+# from the first partition key (category=a), leaving category=b untouched.
+query III
+call iceberg_rewrite_data_files(
+	'my_datalake.default.rewrite_max_files_part',
+	min_input_files => 5,
+	max_files_to_rewrite => 3
+);
+----
+3	1	<REGEX>:[1-9][0-9]*
+
+query I
+select count(*)
+from iceberg_metadata('my_datalake.default.rewrite_max_files_part')
+where content = 'DATA' and status <> 'DELETED';
+----
+10
+
+query I
+select count(*)
+from iceberg_metadata('my_datalake.default.rewrite_max_files_part')
+where content = 'DATA' and status <> 'DELETED'
+  and file_path like '%/category=a/%';
+----
+4
+
+query I
+select count(*)
+from iceberg_metadata('my_datalake.default.rewrite_max_files_part')
+where content = 'DATA' and status <> 'DELETED'
+  and file_path like '%/category=b/%';
+----
+6
+
+query I
+select count(*) from my_datalake.default.rewrite_max_files_part;
+----
+12
+
+query III
+select id, category, payload from my_datalake.default.rewrite_max_files_part order by id;
+----
+1	a	a1
+2	b	b1
+3	a	a2
+4	b	b2
+5	a	a3
+6	b	b3
+7	a	a4
+8	b	b4
+9	a	a5
+10	b	b5
+11	a	a6
+12	b	b6
+
+statement ok
+drop table if exists my_datalake.default.rewrite_max_files_part;
