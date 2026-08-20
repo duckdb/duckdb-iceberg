@@ -22,6 +22,12 @@ statement ok
 set unsafe_and_disabled_for_iceberg_v3_enable_equality_deletes=true;
 
 statement ok
+set iceberg_equality_delete_fast_filter=true;
+
+statement ok
+call enable_logging('Iceberg');
+
+statement ok
 drop table if exists my_datalake.default.equality_delete_evolve_then_drop_columns;
 
 statement ok
@@ -52,12 +58,18 @@ alter table my_datalake.default.equality_delete_evolve_then_drop_columns alter c
 statement ok
 alter table my_datalake.default.equality_delete_evolve_then_drop_columns alter column number_key set type bigint;
 
+# An equality field introduced after the first data file exercises field-id mapping
+# independently of physical column position.
+statement ok
+alter table my_datalake.default.equality_delete_evolve_then_drop_columns add column added_key varchar;
+
 statement ok
 insert into my_datalake.default.equality_delete_evolve_then_drop_columns values
-	(6, timestamp '2000-01-01 00:00:00', 10, 'old-delete-does-not-apply-to-new-file'),
-	(7, timestamp '2000-01-02 00:00:00', 20, 'delete-after-evolution-new-file'),
-	(8, timestamp '2000-01-04 12:34:56.123456', 5000000000, 'delete-promoted-values'),
-	(9, timestamp '2000-01-05 01:02:03', 6000000000, 'keep-new');
+	(6, timestamp '2000-01-01 00:00:00', 10, 'old-delete-does-not-apply-to-new-file', NULL),
+	(7, timestamp '2000-01-02 00:00:00', 20, 'delete-after-evolution-new-file', NULL),
+	(8, timestamp '2000-01-04 12:34:56.123456', 5000000000, 'delete-promoted-values', NULL),
+	(9, timestamp '2000-01-05 01:02:03', 6000000000, 'keep-new', 'keep-added-key'),
+	(10, timestamp '2000-01-06 04:05:06', 7000000000, 'delete-added-column', 'delete-added-key');
 
 # This promoted-type delete applies to a matching tuple in both old and new data files.
 statement ok
@@ -68,12 +80,36 @@ statement ok
 delete from my_datalake.default.equality_delete_evolve_then_drop_columns
 where date_key = timestamp '2000-01-04 12:34:56.123456' and number_key = 5000000000;
 
+statement ok
+delete from my_datalake.default.equality_delete_evolve_then_drop_columns
+where added_key = 'delete-added-key';
+
 query II
 select count(*), sum(record_count)
 from iceberg_metadata(my_datalake.default.equality_delete_evolve_then_drop_columns)
 where content = 'EQUALITY_DELETES' and status != 'DELETED';
 ----
-3	3
+4	4
+
+statement ok
+call truncate_duckdb_logs();
+
+query I
+select count(*)
+from my_datalake.default.equality_delete_evolve_then_drop_columns;
+----
+5
+
+# At least one evolved primitive layout must use the hash path rather than merely
+# obtaining the right answer through the expression fallback.
+query I
+select count(*) > 0
+from duckdb_logs()
+where type = 'Iceberg'
+  and message like 'Accelerated % equality-delete files using a hash filter'
+  and message not like 'Accelerated 0 of %';
+----
+true
 
 # One equality field is now historical while the other remains in the current schema.
 statement ok
@@ -94,6 +130,11 @@ order by id;
 statement ok
 alter table my_datalake.default.equality_delete_evolve_then_drop_columns drop column number_key;
 
+# The newly added equality field is historical as well; dropping it exercises
+# private field-id projection without changing the visible result schema below.
+statement ok
+alter table my_datalake.default.equality_delete_evolve_then_drop_columns drop column added_key;
+
 query II
 select *
 from my_datalake.default.equality_delete_evolve_then_drop_columns
@@ -107,7 +148,7 @@ order by id;
 
 statement ok
 insert into my_datalake.default.equality_delete_evolve_then_drop_columns values
-	(10, 'keep-after-both-drops');
+	(11, 'keep-after-all-drops');
 
 query II
 select *
@@ -119,7 +160,7 @@ order by id;
 5	keep-old
 6	old-delete-does-not-apply-to-new-file
 9	keep-new
-10	keep-after-both-drops
+11	keep-after-all-drops
 
 statement ok
 drop table my_datalake.default.equality_delete_evolve_then_drop_columns;

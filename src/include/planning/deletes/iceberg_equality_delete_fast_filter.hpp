@@ -21,16 +21,17 @@
 
 namespace duckdb {
 
+//! Stable Iceberg identity and physical probe type; reader-local column positions are deliberately excluded.
 struct ProbeColumn {
 	int32_t field_id;
 	LogicalType type;
-	bool locally_present;
 
 	bool operator==(const ProbeColumn &other) const {
-		return field_id == other.field_id && type == other.type && locally_present == other.locally_present;
+		return field_id == other.field_id && type == other.type;
 	}
 };
 
+//! Identifies one reusable hash table by its exact delete-file set and canonical key layout.
 struct EqualityDeleteFastFilterKey {
 	vector<const IcebergEqualityDeleteFile *> delete_files;
 	vector<ProbeColumn> columns;
@@ -55,7 +56,6 @@ struct hash<duckdb::EqualityDeleteFastFilterKey> {
 		for (auto &column : key.columns) {
 			result = duckdb::CombineHash(result, duckdb::Hash<int32_t>(column.field_id));
 			result = duckdb::CombineHash(result, column.type.Hash());
-			result = duckdb::CombineHash(result, duckdb::Hash<bool>(column.locally_present));
 		}
 		return result;
 	}
@@ -72,6 +72,7 @@ class IcebergEqualityDeleteFastFilterCache;
 //! type surface.
 class IcebergEqualityDeleteFastFilter {
 public:
+	//! Per-reader probe mappings plus a mask identifying delete files removed from the expression fallback.
 	struct BuildResult {
 		shared_ptr<IcebergEqualityDeleteFastFilter> filter;
 		vector<bool> accelerated_files;
@@ -83,24 +84,29 @@ public:
 private:
 	friend class IcebergEqualityDeleteFastFilterCache;
 
+	//! Immutable, shareable hash table for one canonical equality-field layout.
 	struct Layout {
 		vector<LogicalType> types;
 		unique_ptr<GroupedAggregateHashTable> hash_table;
 	};
 
+	//! Reader-local column positions paired with a shared immutable layout.
 	struct ProbeLayout {
 		vector<idx_t> column_indices;
 		shared_ptr<const Layout> layout;
 	};
 
+	//! Cached layout and a per-delete-file mask for files successfully inserted into it.
 	struct LayoutBuildResult {
 		shared_ptr<const Layout> layout;
 		vector<bool> accelerated_files;
 	};
 
+	//! A reader may probe several layouts when applicable delete files use different equality fields.
 	vector<ProbeLayout> layouts;
 };
 
+//! Query-local cache of reusable layout hash tables. Reader-specific mappings are never cached here.
 class IcebergEqualityDeleteFastFilterCache {
 public:
 	IcebergEqualityDeleteFastFilter::BuildResult
@@ -115,6 +121,7 @@ private:
 		std::condition_variable cv;
 		bool complete = false;
 		ErrorData error;
+		string error_context;
 		IcebergEqualityDeleteFastFilter::LayoutBuildResult result;
 	};
 

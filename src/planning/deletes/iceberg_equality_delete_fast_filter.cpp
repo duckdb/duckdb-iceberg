@@ -1,6 +1,7 @@
 #include "planning/deletes/iceberg_equality_delete_fast_filter.hpp"
 
 #include "duckdb/common/map.hpp"
+#include "duckdb/common/string_util.hpp"
 #include "duckdb/common/vector_operations/vector_operations.hpp"
 #include "duckdb/main/client_context.hpp"
 
@@ -20,6 +21,12 @@ struct LayoutGroup {
 	vector<int32_t> field_ids;
 	vector<LogicalType> types;
 	vector<FileLayout> files;
+};
+
+struct EqualityDeleteField {
+	int32_t field_id;
+	idx_t source_index;
+	idx_t target_index;
 };
 
 static bool TypeIsSupported(const LogicalType &type) {
@@ -88,6 +95,9 @@ IcebergEqualityDeleteFastFilter::BuildResult IcebergEqualityDeleteFastFilterCach
 	IcebergEqualityDeleteFastFilter::BuildResult result;
 	result.accelerated_files.resize(delete_files.size(), false);
 
+	//! This lightweight mapping is reader-specific: applicability, physical field presence,
+	//! evolved target types and reader column indexes can all differ between data files. Only
+	//! the expensive immutable hash tables below are shared through the layout cache.
 	map<vector<idx_t>, idx_t> layout_indexes;
 	vector<LayoutGroup> layout_groups;
 	for (idx_t file_idx = 0; file_idx < delete_files.size(); file_idx++) {
@@ -97,15 +107,11 @@ IcebergEqualityDeleteFastFilter::BuildResult IcebergEqualityDeleteFastFilterCach
 			continue;
 		}
 		if (file.equality_values.ColumnCount() != file.equality_ids.size()) {
-			throw InvalidConfigurationException("Equality delete file contains an unexpected number of columns");
+			throw InvalidConfigurationException("Equality delete file '%s' contains an unexpected number of columns",
+			                                    file.file_path);
 		}
 
-		struct Field {
-			int32_t field_id;
-			idx_t source_index;
-			idx_t target_index;
-		};
-		vector<Field> fields;
+		vector<EqualityDeleteField> fields;
 		bool supported = !file.equality_ids.empty();
 		for (idx_t source_idx = 0; source_idx < file.equality_ids.size(); source_idx++) {
 			auto field_id = file.equality_ids[source_idx];
@@ -120,7 +126,8 @@ IcebergEqualityDeleteFastFilter::BuildResult IcebergEqualityDeleteFastFilterCach
 		if (!supported) {
 			continue;
 		}
-		std::sort(fields.begin(), fields.end(), [](const Field &a, const Field &b) { return a.field_id < b.field_id; });
+		std::sort(fields.begin(), fields.end(),
+		          [](const EqualityDeleteField &a, const EqualityDeleteField &b) { return a.field_id < b.field_id; });
 
 		vector<idx_t> columns;
 		vector<idx_t> sources;
@@ -152,7 +159,7 @@ IcebergEqualityDeleteFastFilter::BuildResult IcebergEqualityDeleteFastFilterCach
 		}
 		key.columns.reserve(group.field_ids.size());
 		for (idx_t column_idx = 0; column_idx < group.field_ids.size(); column_idx++) {
-			key.columns.push_back({group.field_ids[column_idx], group.types[column_idx], true});
+			key.columns.push_back({group.field_ids[column_idx], group.types[column_idx]});
 		}
 
 		shared_ptr<LayoutLoadState> load;
@@ -171,6 +178,8 @@ IcebergEqualityDeleteFastFilter::BuildResult IcebergEqualityDeleteFastFilterCach
 		if (build) {
 			IcebergEqualityDeleteFastFilter::LayoutBuildResult built;
 			ErrorData error;
+			D_ASSERT(!group.files.empty());
+			string error_file_path = delete_files[group.files[0].file_index].get().file_path;
 			try {
 				auto layout = make_shared_ptr<IcebergEqualityDeleteFastFilter::Layout>();
 				layout->types = group.types;
@@ -181,6 +190,7 @@ IcebergEqualityDeleteFastFilter::BuildResult IcebergEqualityDeleteFastFilterCach
 				for (idx_t file_idx = 0; file_idx < group.files.size(); file_idx++) {
 					auto &descriptor = group.files[file_idx];
 					auto &file = delete_files[descriptor.file_index].get();
+					error_file_path = file.file_path;
 					built.accelerated_files[file_idx] =
 					    AddDeleteFile(*layout->hash_table, layout->types, file, descriptor.source_indices);
 				}
@@ -194,6 +204,10 @@ IcebergEqualityDeleteFastFilter::BuildResult IcebergEqualityDeleteFastFilterCach
 				lock_guard<mutex> guard(load->lock);
 				load->result = std::move(built);
 				load->error = std::move(error);
+				if (load->error.HasError() && !error_file_path.empty()) {
+					load->error_context = StringUtil::Format(
+					    "Failed to build an equality-delete hash filter for file '%s': ", error_file_path);
+				}
 				load->complete = true;
 			}
 			load->cv.notify_all();
@@ -204,7 +218,7 @@ IcebergEqualityDeleteFastFilter::BuildResult IcebergEqualityDeleteFastFilterCach
 			unique_lock<mutex> guard(load->lock);
 			load->cv.wait(guard, [&load] { return load->complete; });
 			if (load->error.HasError()) {
-				load->error.Throw();
+				load->error.Throw(load->error_context);
 			}
 			cached = load->result;
 		}
