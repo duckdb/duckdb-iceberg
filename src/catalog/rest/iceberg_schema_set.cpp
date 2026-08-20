@@ -58,24 +58,34 @@ optional_ptr<CatalogEntry> IcebergSchemaSet::GetEntry(ClientContext &context, co
 		throw CatalogException("Iceberg namespace by the name of '%s' does not exist", name);
 	}
 	if (entry == entries.end()) {
+		// we will not create entries with empty names - and an empty name is never worth a round trip
+		if (name.empty()) {
+			return nullptr;
+		}
 		CreateSchemaInfo info;
-		// Look up existence of default schema to avoid lookup of `duckdb_*` tables
-		if (name == DEFAULT_SCHEMA) {
+		// A name duckdb probes on its own - the catalog's default namespace, and the 'main' it falls back to
+		// in a search path - is verified rather than materialized optimistically: it is not necessarily a
+		// namespace the user asked for, and a phantom entry would send `duckdb_*` lookups to the server.
+		auto default_schema = ic_catalog.GetDefaultSchema();
+		auto lookup_name = Identifier(name);
+		if (lookup_name == default_schema || lookup_name == Identifier(DEFAULT_SCHEMA)) {
 			if (!IRCAPI::VerifySchemaExistence(context, ic_catalog, name)) {
 				if (if_not_found == OnEntryNotFound::RETURN_NULL) {
 					return nullptr;
 				}
-				throw CatalogException("default schema '%s' does not exist", name);
+				if (lookup_name == default_schema) {
+					throw CatalogException(
+					    "default namespace '%s' does not exist in this Iceberg catalog - create it, or attach "
+					    "with DEFAULT_SCHEMA '<namespace>'",
+					    name);
+				}
+				throw CatalogException("Iceberg namespace by the name of '%s' does not exist", name);
 			}
 		}
 		info.SetQualifiedName(
 		    QualifiedName(info.GetQualifiedName().Catalog(), Identifier(name), info.GetQualifiedName().Name()));
 		info.internal = false;
 		auto schema_entry = make_shared_ptr<IcebergSchemaEntry>(catalog, info);
-		// we will not create entries with empty names
-		if (name.empty()) {
-			return nullptr;
-		}
 		auto inserted_entry = CreateEntryInternal(std::move(schema_entry));
 		iceberg_transaction.schemas.emplace(name, inserted_entry);
 		return inserted_entry.get();
