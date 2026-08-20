@@ -16,6 +16,10 @@ JAVA_FIXTURE_ONLY = pytest.mark.skipif(
     not is_active_catalog("fixture"),
     reason="Requires Apache Iceberg Java REST fixture metadata registration/update behavior",
 )
+NESSIE_UNSUPPORTED = pytest.mark.skipif(
+    is_active_catalog("nessie"),
+    reason="Nessie sets gc.enabled=false and rejects external snapshot management through remove-snapshots",
+)
 
 
 @pytest.fixture
@@ -154,6 +158,7 @@ def registered_metadata_table(rest_catalog, seeded_table):
         _drop_table_if_exists(rest_catalog, identifier)
 
 
+@NESSIE_UNSUPPORTED
 class TestExpireSnapshots:
     def test_cutoff_precision(self, seeded_table, duckdb_runner):
         table, table_name = seeded_table("default.expire_snapshots_main_only", 5)
