@@ -178,6 +178,7 @@ IcebergEqualityDeleteFastFilter::BuildResult IcebergEqualityDeleteFastFilterCach
 		if (build) {
 			IcebergEqualityDeleteFastFilter::LayoutBuildResult built;
 			ErrorData error;
+			string error_context;
 			D_ASSERT(!group.files.empty());
 			string error_file_path = delete_files[group.files[0].file_index].get().file_path;
 			try {
@@ -196,18 +197,19 @@ IcebergEqualityDeleteFastFilter::BuildResult IcebergEqualityDeleteFastFilterCach
 				}
 			} catch (std::exception &ex) {
 				error = ErrorData(ex);
+				error_context = StringUtil::Format("Failed to build an equality-delete hash filter for file '%s': ",
+				                                   error_file_path);
 			} catch (...) { // LCOV_EXCL_START
-				error = ErrorData("Unknown exception while building an Iceberg equality-delete hash filter");
+				error = ErrorData(StringUtil::Format(
+				    "Unknown exception while building an Iceberg equality-delete hash filter for file '%s'",
+				    error_file_path));
 			} // LCOV_EXCL_STOP
 
 			{
 				lock_guard<mutex> guard(load->lock);
 				load->result = std::move(built);
 				load->error = std::move(error);
-				if (load->error.HasError() && !error_file_path.empty()) {
-					load->error_context = StringUtil::Format(
-					    "Failed to build an equality-delete hash filter for file '%s': ", error_file_path);
-				}
+				load->error_context = std::move(error_context);
 				load->complete = true;
 			}
 			load->cv.notify_all();
