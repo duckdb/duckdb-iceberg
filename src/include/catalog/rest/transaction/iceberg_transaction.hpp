@@ -46,6 +46,12 @@ public:
 	void SetStatus(IcebergTableStatus value) {
 		status = value;
 	}
+	bool IsExpirationMetadataInitialized() const {
+		return expiration_metadata_initialized;
+	}
+	void MarkExpirationMetadataInitialized() {
+		expiration_metadata_initialized = true;
+	}
 
 private:
 	//! The catalog state is retained as the source for lazily materializing transaction-local state.
@@ -54,6 +60,8 @@ private:
 	//! entries.
 	unique_ptr<IcebergTable> transaction_table;
 	IcebergTableStatus status;
+	//! True only when snapshot expiration force-refreshed and pinned this state.
+	bool expiration_metadata_initialized = false;
 };
 
 struct SchemaPropertyUpdates {

@@ -456,12 +456,16 @@ string TableMetadata::TryFromJSON(JSONValue obj) {
 	}
 	auto refs_val = obj.GetMember("refs");
 	if (refs_val.IsValid()) {
-		SnapshotReferences refs_tmp;
-		error = refs_tmp.TryFromJSON(refs_val);
-		if (!error.empty()) {
-			return error;
+		if (refs_val.IsNull()) {
+			//! do nothing, property is explicitly nullable
+		} else {
+			SnapshotReferences refs_tmp;
+			error = refs_tmp.TryFromJSON(refs_val);
+			if (!error.empty()) {
+				return error;
+			}
+			refs = std::move(refs_tmp);
 		}
-		refs = std::move(refs_tmp);
 	}
 	auto current_snapshot_id_val = obj.GetMember("current-snapshot-id");
 	if (current_snapshot_id_val.IsValid()) {
