@@ -174,7 +174,21 @@ void IcebergMultiFileList::Bind(vector<LogicalType> &return_types, vector<Identi
 		return_types = this->types;
 		return;
 	}
-	EnsureScanInfo();
+	if (!shared_state->scan_info) {
+		D_ASSERT(!shared_state->path.empty());
+		auto input_string = shared_state->path;
+		auto resolved_metadata = IcebergUtils::ResolveTableMetadata(context, input_string, options);
+
+		auto temp_data = make_uniq<IcebergScanTemporaryData>();
+		temp_data->metadata = std::move(resolved_metadata.metadata);
+		auto &metadata = temp_data->metadata;
+
+		IcebergSnapshotScanInfo snapshot_info;
+		snapshot_info = metadata.GetSnapshot(*options.snapshot_lookup);
+		auto schema = metadata.GetSchemaFromId(snapshot_info.schema_id);
+		shared_state->scan_info = make_shared_ptr<IcebergScanInfo>(resolved_metadata.table_location,
+		                                                           std::move(temp_data), snapshot_info, *schema);
+	}
 
 	auto &schema = GetSchema().columns;
 	for (auto &schema_entry : schema) {
@@ -588,25 +602,6 @@ void IcebergMultiFileList::InitializeView(annotated_lock_guard<annotated_mutex> 
 		view_has_matching_delete_manifests |= matches;
 	}
 	has_matching_delete_manifests.store(view_has_matching_delete_manifests);
-}
-
-void IcebergMultiFileList::EnsureScanInfo() const {
-	if (shared_state->scan_info) {
-		return;
-	}
-	D_ASSERT(!shared_state->path.empty());
-	auto input_string = shared_state->path;
-	auto resolved_metadata = IcebergUtils::ResolveTableMetadata(context, input_string, options);
-
-	auto temp_data = make_uniq<IcebergScanTemporaryData>();
-	temp_data->metadata = std::move(resolved_metadata.metadata);
-	auto &metadata = temp_data->metadata;
-
-	IcebergSnapshotScanInfo snapshot_info;
-	snapshot_info = metadata.GetSnapshot(*options.snapshot_lookup);
-	auto schema = metadata.GetSchemaFromId(snapshot_info.schema_id);
-	shared_state->scan_info = make_shared_ptr<IcebergScanInfo>(resolved_metadata.table_location, std::move(temp_data),
-	                                                           snapshot_info, *schema);
 }
 
 void IcebergMultiFileList::InitializeScanPlanProvider() const {

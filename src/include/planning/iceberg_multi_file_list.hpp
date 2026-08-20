@@ -110,10 +110,6 @@ private:
 	bool TryGetNextBatch(annotated_lock_guard<annotated_mutex> &guard) const DUCKDB_REQUIRES(shared_state->lock);
 	void FinishScanTasks(annotated_lock_guard<annotated_mutex> &guard) const DUCKDB_REQUIRES(shared_state->lock);
 	void LoadManifestList(annotated_lock_guard<annotated_mutex> &guard) const DUCKDB_REQUIRES(shared_state->lock);
-	//! Resolve the table metadata for a path-based scan. The catalog path hands us 'scan_info' up front;
-	//! iceberg_scan('path') does not, and DuckDB can expand the file list (MultiFileList::IsEmpty) before
-	//! Bind() runs, so every entry point that needs the metadata resolves it lazily through here.
-	void EnsureScanInfo() const DUCKDB_REQUIRES(shared_state->lock);
 	void InitializeScanPlanProvider() const DUCKDB_REQUIRES(shared_state->lock);
 	void StartDataManifestScan(annotated_lock_guard<annotated_mutex> &guard) const DUCKDB_REQUIRES(shared_state->lock);
 	IcebergScanPlanProvider &GetScanPlanProvider() const DUCKDB_REQUIRES(shared_state->lock);
