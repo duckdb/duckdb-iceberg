@@ -80,9 +80,8 @@ static void CompleteDeleteFileLoads(const vector<shared_ptr<IcebergDeleteFileLoa
 	}
 }
 
-static bool TryGetStructExtractPath(unique_ptr<Expression> &expr_p,
-	                                optional_ptr<BoundColumnRefExpression> &column_ref,
-	                                vector<idx_t> &path_components) {
+static bool TryGetStructExtractPath(unique_ptr<Expression> &expr_p, optional_ptr<BoundColumnRefExpression> &column_ref,
+                                    vector<idx_t> &path_components) {
 	auto &expr = *expr_p;
 	if (expr.GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF) {
 		auto &ref = expr.Cast<BoundColumnRefExpression>();
@@ -128,7 +127,7 @@ static ColumnIndex &GetColumnIndexLeaf(ColumnIndex &column_index) {
 }
 
 static ColumnIndex CreatePushdownExtractColumnIndex(const ColumnIndex &base_index, const LogicalType &base_type,
-	                                                const ColumnIndex &extract_path) {
+                                                    const ColumnIndex &extract_path) {
 	ColumnIndex result = base_index;
 	if (result.IsPushdownExtract()) {
 		auto &leaf = GetColumnIndexLeaf(result.GetChildIndex(0));
@@ -143,8 +142,8 @@ static ColumnIndex CreatePushdownExtractColumnIndex(const ColumnIndex &base_inde
 }
 
 static bool RewriteFilterPushdownExtracts(unique_ptr<Expression> &expr, TableIndex table_index,
-	                                     vector<ColumnIndex> &column_indexes,
-	                                     column_index_map<ProjectionIndex> &projection_map) {
+                                          vector<ColumnIndex> &column_indexes,
+                                          column_index_map<ProjectionIndex> &projection_map) {
 	optional_ptr<BoundColumnRefExpression> column_ref;
 	vector<idx_t> path_components;
 	if (TryGetStructExtractPath(expr, column_ref, path_components)) {
@@ -156,8 +155,8 @@ static bool RewriteFilterPushdownExtracts(unique_ptr<Expression> &expr, TableInd
 		if (binding.table_index != table_index || binding.column_index.GetIndex() >= column_indexes.size()) {
 			return false;
 		}
-		auto projected_column_index = CreatePushdownExtractColumnIndex(
-		    column_indexes[binding.column_index.GetIndex()], column_ref->GetReturnType(), extract_path);
+		auto projected_column_index = CreatePushdownExtractColumnIndex(column_indexes[binding.column_index.GetIndex()],
+		                                                               column_ref->GetReturnType(), extract_path);
 		auto entry = projection_map.find(projected_column_index);
 		ProjectionIndex projection_index;
 		if (entry == projection_map.end()) {
@@ -168,7 +167,7 @@ static bool RewriteFilterPushdownExtracts(unique_ptr<Expression> &expr, TableInd
 			projection_index = entry->second;
 		}
 		expr = make_uniq<BoundColumnRefExpression>(expr->GetReturnType(), ColumnBinding(table_index, projection_index),
-		                                          column_ref->Depth());
+		                                           column_ref->Depth());
 		return true;
 	}
 
@@ -180,8 +179,7 @@ static bool RewriteFilterPushdownExtracts(unique_ptr<Expression> &expr, TableInd
 }
 
 static TableFilterSet GenerateTableScanFilters(ClientContext &context, vector<ColumnIndex> &column_indexes,
-	                                      const vector<unique_ptr<Expression>> &filters)
-{
+                                               const vector<unique_ptr<Expression>> &filters) {
 	column_index_map<ProjectionIndex> projection_map;
 	projection_map.reserve(column_indexes.size());
 	for (idx_t i = 0; i < column_indexes.size(); i++) {
