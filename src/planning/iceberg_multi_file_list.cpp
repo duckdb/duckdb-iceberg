@@ -291,6 +291,11 @@ static TableFilterSet GenerateDynamicTableScanFilters(vector<ColumnIndex> &colum
 			auto projection_index = base_projection_index;
 			RewriteDynamicFilterPushdownExtracts(split_expr, base_column_index, column_indexes, projection_map,
 			                                     projection_index);
+			if (!column_indexes[projection_index.GetIndex()].HasPrimaryIndex()) {
+				//! Field-identifier column indexes (e.g. variant subfields) aren't supported by the pruner/schema
+				//! lookup; leave the predicate as a residual filter instead of pushing it down.
+				continue;
+			}
 			result.PushFilter(projection_index, make_uniq<ExpressionFilter>(std::move(split_expr)));
 		}
 	}
@@ -481,7 +486,6 @@ IcebergMultiFileList::DynamicFilterPushdown(MultiFileDynamicPushdownInfo &pushdo
 		auto &filter =
 		    ExpressionFilter::GetExpressionFilter(entry.Filter(), "IcebergMultiFileList::DynamicFilterPushdown");
 		auto column_id = column_indexes[entry.GetIndex().GetIndex()];
-		auto &column = IcebergTableSchema::GetFromColumnIndex(GetSchema().columns, column_id, 0);
 		auto previously_pushed_down_filter = table_filters.TryGetFilterByColumnIndex(column_id);
 		if (!previously_pushed_down_filter || !filter.Equals(*previously_pushed_down_filter)) {
 			filters_changed = true;

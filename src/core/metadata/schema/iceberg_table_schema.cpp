@@ -90,10 +90,20 @@ IcebergTableSchema::GetFromColumnIndex(const vector<unique_ptr<IcebergColumnDefi
 
 		D_ASSERT(child_indexes.size() == 1);
 		auto &child = child_indexes[0];
+		if (!child.HasPrimaryIndex()) {
+			//! Field-identifier path components (e.g. VARIANT subfields) have no Iceberg schema entry of their
+			//! own; the enclosing column is the most specific match.
+			return *column;
+		}
 		return GetFromColumnIndex(column->GetChildren(), child, 0);
 
 	} else {
 		if (depth == child_indexes.size()) {
+			return *column;
+		}
+		if (!child_indexes[depth].HasPrimaryIndex()) {
+			//! Field-identifier path components (e.g. VARIANT subfields) have no Iceberg schema entry of their
+			//! own; the enclosing column is the most specific match.
 			return *column;
 		}
 		if (!column->GetChildCount()) {
