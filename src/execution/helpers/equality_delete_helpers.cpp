@@ -336,16 +336,16 @@ bool IcebergDelete::TryGetEqualityDeletePredicates(ClientContext &context, Icebe
 		predicate.column_name = column_definition->name;
 		predicate.type = column_definition->type;
 		for (auto &raw_value : raw_values) {
-			Value delete_value;
 			if (raw_value.IsNull()) {
-				delete_value = Value(column_definition->type);
-			} else {
-				string error_message;
-				if (!raw_value.DefaultTryCastAs(column_definition->type, delete_value, &error_message, true)) {
-					return false;
-				}
+				predicate.values.push_back(Value(column_definition->type));
+				continue;
 			}
-			predicate.values.push_back(std::move(delete_value));
+			string error_message;
+			auto delete_value = raw_value.DefaultTryCastAs(column_definition->type, &error_message, true);
+			if (!delete_value) {
+				return false;
+			}
+			predicate.values.push_back(std::move(*delete_value));
 		}
 		equality_predicates.push_back(std::move(predicate));
 	}

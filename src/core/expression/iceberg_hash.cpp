@@ -324,8 +324,7 @@ Value IcebergHash::TruncateValue(const Value &v, idx_t width) {
 	}
 	case LogicalTypeId::DECIMAL: {
 		// Truncate the unscaled integer value, preserving type (scale/precision)
-		auto scaled = v.Copy();
-		scaled.Reinterpret(LogicalType::BIGINT);
+		auto scaled = v.WithType(LogicalType::BIGINT);
 		auto val = scaled.GetValue<int64_t>();
 		auto result = val - (((val % W) + W) % W);
 		return Value::DECIMAL(result, DecimalType::GetWidth(v.type()), DecimalType::GetScale(v.type()));
