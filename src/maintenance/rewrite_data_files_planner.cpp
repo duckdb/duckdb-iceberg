@@ -97,7 +97,7 @@ void GroupCandidates(RewritePlan &plan, const RewriteDataFilesPlanInput &input) 
 	}
 
 	for (auto &kv : per_partition) {
-		if (!rewrite_all) {
+		if (!plan.rewrite_all) {
 			int64_t total_bytes = 0;
 			for (auto &cand : kv.second) {
 				total_bytes += cand.file_size_in_bytes;
