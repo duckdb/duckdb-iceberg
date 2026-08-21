@@ -29,8 +29,8 @@ namespace duckdb {
 IcebergTableSet::IcebergTableSet(IcebergSchemaEntry &schema)
     : schema(schema), catalog(schema.ParentCatalog()),
       mode(catalog.Cast<IcebergCatalog>().attach_options.case_sensitivity_mode), entries(mode) {
-	fprintf(stderr, "DEBUGDEBUG IcebergTableSet ctor catalog='%s' mode=%d\n", catalog.GetName().GetIdentifierName().c_str(),
-	        static_cast<int>(mode));
+	fprintf(stderr, "DEBUGDEBUG IcebergTableSet ctor catalog='%s' mode=%d\n",
+	        catalog.GetName().GetIdentifierName().c_str(), static_cast<int>(mode));
 	fflush(stderr);
 }
 
