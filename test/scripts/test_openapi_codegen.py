@@ -122,14 +122,17 @@ def test_inherited_const_and_array_valued_map_are_generated():
     assert "AddExplicitNullSnapshotIds" not in transaction_source
 
 
-def test_table_metadata_accepts_null_current_snapshot_without_patching_spec():
+def test_table_metadata_accepts_null_snapshot_state_without_patching_spec():
     parser, parse_info = parse_spec()
     schema = parser.parsed_schemas["TableMetadata"]
 
     assert schema.properties["current-snapshot-id"].nullable is True
+    assert schema.properties["refs"].nullable is True
 
     _, _, source = render_class(parser, parse_info, "TableMetadata")
     assert "if (current_snapshot_id_val.IsNull())" in source
+    assert "if (refs_val.IsNull())" in source
+    assert "refs = std::move(refs_tmp)" in source
     assert "property is explicitly nullable" in source
 
 

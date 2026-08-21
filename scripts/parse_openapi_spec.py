@@ -345,10 +345,12 @@ class ResponseObjectsGenerator:
             if reference == 'LoadTableResult':
                 result.properties['metadata-location'].nullable = True
             # A table without snapshots has a null current-snapshot-id in the
-            # Iceberg metadata model and in REST catalog responses. The vendored
-            # OpenAPI schema currently omits the nullable marker.
+            # Iceberg metadata model and in REST catalog responses. Legacy
+            # metadata may likewise encode an absent refs map as null. The
+            # vendored OpenAPI schema currently omits both nullable markers.
             if reference == 'TableMetadata':
                 result.properties['current-snapshot-id'].nullable = True
+                result.properties['refs'].nullable = True
         elif property_type == 'array' or property_type == 'list':
             result = ArrayProperty()
             self.parse_array_property(spec, result)
