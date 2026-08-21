@@ -25,7 +25,8 @@ struct RewritePlan {
 	QualifiedName table_name;
 	int64_t starting_snapshot_id = -1;
 	int64_t starting_sequence_number = 0;
-	int64_t target_file_size_bytes = 134217728;
+	//! Iceberg spec default for write.target-file-size-bytes (same as IcebergCopyOptions::file_size_bytes).
+	int64_t target_file_size_bytes = 512LL * 1024 * 1024;
 	//! Keep the loaded metadata alive until commit.
 	shared_ptr<IcebergTable> table_info;
 	//! All live DATA files considered during planning.
@@ -37,6 +38,10 @@ struct RewritePlan {
 struct RewriteDataFilesPlanInput {
 	QualifiedName table_name;
 	optional<int64_t> target_file_size_bytes;
+	//! Optional override; defaults to 75% of the resolved target file size.
+	optional<int64_t> min_file_size_bytes;
+	//! Optional override; defaults to 180% of the resolved target file size.
+	optional<int64_t> max_file_size_bytes;
 	int64_t min_input_files = 5;
 	bool rewrite_all = false;
 };

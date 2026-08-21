@@ -40,29 +40,27 @@ static QualifiedName ParseRewriteTableName(const string &identifier) {
 	return QualifiedName {parts[0], parts[1], parts[2]};
 }
 
-static int64_t ParseTargetFileSizeBytes(const Value &value) {
+static int64_t ParseByteSizeNamedParameter(const Value &value, const char *parameter_name) {
 	idx_t parsed_value;
 	if (value.type().id() == LogicalTypeId::VARCHAR) {
 		auto error = StringUtil::TryParseFormattedBytes(StringValue::Get(value), parsed_value);
 		if (!error.empty()) {
-			throw InvalidInputException("iceberg_rewrite_data_files: invalid 'target_file_size_bytes': %s", error);
+			throw InvalidInputException("iceberg_rewrite_data_files: invalid '%s': %s", parameter_name, error);
 		}
 	} else {
 		auto numeric_value = value.DefaultCastAs(LogicalType::BIGINT).GetValue<int64_t>();
 		if (numeric_value < MIN_TARGET_FILE_SIZE_BYTES) {
-			throw InvalidInputException(
-			    "iceberg_rewrite_data_files: 'target_file_size_bytes' must be >= %lld bytes, got %lld",
-			    MIN_TARGET_FILE_SIZE_BYTES, numeric_value);
+			throw InvalidInputException("iceberg_rewrite_data_files: '%s' must be >= %lld bytes, got %lld",
+			                            parameter_name, MIN_TARGET_FILE_SIZE_BYTES, numeric_value);
 		}
 		return numeric_value;
 	}
 	if (parsed_value < static_cast<idx_t>(MIN_TARGET_FILE_SIZE_BYTES)) {
-		throw InvalidInputException(
-		    "iceberg_rewrite_data_files: 'target_file_size_bytes' must be >= %lld bytes, got %llu",
-		    MIN_TARGET_FILE_SIZE_BYTES, static_cast<unsigned long long>(parsed_value));
+		throw InvalidInputException("iceberg_rewrite_data_files: '%s' must be >= %lld bytes, got %llu", parameter_name,
+		                            MIN_TARGET_FILE_SIZE_BYTES, static_cast<unsigned long long>(parsed_value));
 	}
 	if (parsed_value > static_cast<idx_t>(NumericLimits<int64_t>::Maximum())) {
-		throw InvalidInputException("iceberg_rewrite_data_files: 'target_file_size_bytes' is too large");
+		throw InvalidInputException("iceberg_rewrite_data_files: '%s' is too large", parameter_name);
 	}
 	return static_cast<int64_t>(parsed_value);
 }
@@ -75,7 +73,11 @@ static RewriteDataFilesPlanInput ParseRewritePlanInput(TableFunctionBindInput &i
 		auto opt = StringUtil::Lower(kv.first.GetIdentifierName());
 		auto &val = kv.second;
 		if (opt == "target_file_size_bytes") {
-			result.target_file_size_bytes = ParseTargetFileSizeBytes(val);
+			result.target_file_size_bytes = ParseByteSizeNamedParameter(val, "target_file_size_bytes");
+		} else if (opt == "min_file_size_bytes") {
+			result.min_file_size_bytes = ParseByteSizeNamedParameter(val, "min_file_size_bytes");
+		} else if (opt == "max_file_size_bytes") {
+			result.max_file_size_bytes = ParseByteSizeNamedParameter(val, "max_file_size_bytes");
 		} else if (opt == "min_input_files") {
 			auto value = val.GetValue<int64_t>();
 			if (value < 1) {
@@ -86,6 +88,12 @@ static RewriteDataFilesPlanInput ParseRewritePlanInput(TableFunctionBindInput &i
 		} else if (opt == "rewrite_all") {
 			result.rewrite_all = BooleanValue::Get(val);
 		}
+	}
+	if (result.min_file_size_bytes && result.max_file_size_bytes &&
+	    result.min_file_size_bytes.value() > result.max_file_size_bytes.value()) {
+		throw InvalidInputException(
+		    "iceberg_rewrite_data_files: 'min_file_size_bytes' (%lld) must be <= 'max_file_size_bytes' (%lld)",
+		    result.min_file_size_bytes.value(), result.max_file_size_bytes.value());
 	}
 	return result;
 }
@@ -172,6 +180,8 @@ TableFunctionSet IcebergFunctions::GetIcebergRewriteDataFilesFunction() {
 	TableFunction function("iceberg_rewrite_data_files", {LogicalType::VARCHAR}, nullptr);
 	function.bind_operator = RewriteDataFilesBindOperator;
 	function.named_parameters["target_file_size_bytes"] = LogicalType::ANY;
+	function.named_parameters["min_file_size_bytes"] = LogicalType::ANY;
+	function.named_parameters["max_file_size_bytes"] = LogicalType::ANY;
 	function.named_parameters["min_input_files"] = LogicalType::BIGINT;
 	function.named_parameters["rewrite_all"] = LogicalType::BOOLEAN;
 	function_set.AddFunction(function);

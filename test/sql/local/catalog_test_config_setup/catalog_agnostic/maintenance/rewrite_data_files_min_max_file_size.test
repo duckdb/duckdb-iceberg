@@ -1,0 +1,117 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/maintenance/rewrite_data_files_min_max_file_size.test
+# description: rewrite_data_files selects undersized or oversized files via min/max file size
+# group: [maintenance]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+statement ok
+drop table if exists my_datalake.default.rewrite_min_max_size;
+
+statement ok
+create table my_datalake.default.rewrite_min_max_size (id INTEGER, payload VARCHAR);
+
+statement ok
+insert into my_datalake.default.rewrite_min_max_size values (1, 'a1'), (2, 'b1');
+
+statement ok
+insert into my_datalake.default.rewrite_min_max_size values (3, 'a2'), (4, 'b2');
+
+statement ok
+insert into my_datalake.default.rewrite_min_max_size values (5, 'a3'), (6, 'b3');
+
+statement ok
+insert into my_datalake.default.rewrite_min_max_size values (7, 'a4'), (8, 'b4');
+
+statement ok
+insert into my_datalake.default.rewrite_min_max_size values (9, 'a5'), (10, 'b5');
+
+query I
+select count(*)
+from iceberg_metadata('my_datalake.default.rewrite_min_max_size')
+where content = 'DATA' and status <> 'DELETED';
+----
+5
+
+# Band that contains every live file: nothing is undersized or oversized.
+query III
+call iceberg_rewrite_data_files(
+	'my_datalake.default.rewrite_min_max_size',
+	min_file_size_bytes => 100,
+	max_file_size_bytes => 1000000000,
+	min_input_files => 1
+);
+----
+0	0	0
+
+# Files are larger than a tiny max, so they are oversized candidates.
+query III
+call iceberg_rewrite_data_files(
+	'my_datalake.default.rewrite_min_max_size',
+	min_file_size_bytes => 100,
+	max_file_size_bytes => 100,
+	min_input_files => 5
+);
+----
+5	1	<REGEX>:[1-9][0-9]*
+
+query I
+select count(*)
+from iceberg_metadata('my_datalake.default.rewrite_min_max_size')
+where content = 'DATA' and status <> 'DELETED';
+----
+1
+
+statement ok
+drop table if exists my_datalake.default.rewrite_min_max_size;
+
+statement ok
+create table my_datalake.default.rewrite_min_max_size (id INTEGER, payload VARCHAR);
+
+statement ok
+insert into my_datalake.default.rewrite_min_max_size values (1, 'a1'), (2, 'b1');
+
+statement ok
+insert into my_datalake.default.rewrite_min_max_size values (3, 'a2'), (4, 'b2');
+
+statement ok
+insert into my_datalake.default.rewrite_min_max_size values (5, 'a3'), (6, 'b3');
+
+statement ok
+insert into my_datalake.default.rewrite_min_max_size values (7, 'a4'), (8, 'b4');
+
+statement ok
+insert into my_datalake.default.rewrite_min_max_size values (9, 'a5'), (10, 'b5');
+
+# Files are smaller than a large min, so they are undersized candidates.
+query III
+call iceberg_rewrite_data_files(
+	'my_datalake.default.rewrite_min_max_size',
+	min_file_size_bytes => 1000000,
+	max_file_size_bytes => 1000000000,
+	min_input_files => 5
+);
+----
+5	1	<REGEX>:[1-9][0-9]*
+
+query I
+select count(*)
+from iceberg_metadata('my_datalake.default.rewrite_min_max_size')
+where content = 'DATA' and status <> 'DELETED';
+----
+1
+
+query I
+select count(*) from my_datalake.default.rewrite_min_max_size;
+----
+10
+
+statement ok
+drop table if exists my_datalake.default.rewrite_min_max_size;

@@ -19,7 +19,8 @@ namespace duckdb {
 
 namespace {
 
-constexpr int64_t DEFAULT_TARGET_FILE_SIZE_BYTES = 134217728;
+//! Iceberg spec default for write.target-file-size-bytes (same as IcebergCopyOptions::file_size_bytes).
+constexpr int64_t DEFAULT_TARGET_FILE_SIZE_BYTES = 512LL * 1024 * 1024;
 constexpr int64_t MIN_TARGET_FILE_SIZE_BYTES = 100;
 
 static int64_t ParseTargetFileSizeProperty(const string &value, const string &property) {
@@ -57,14 +58,39 @@ static int64_t ResolveTargetFileSizeBytes(const RewriteDataFilesPlanInput &input
 	return DEFAULT_TARGET_FILE_SIZE_BYTES;
 }
 
-void GroupCandidates(RewritePlan &plan, int64_t target_file_size_bytes, int64_t min_input_files, bool rewrite_all) {
+//! Spark SizeBasedFileRewriter defaults: min = 75% of target, max = 180% of target.
+static int64_t ResolveMinFileSizeBytes(const RewriteDataFilesPlanInput &input, int64_t target_file_size_bytes) {
+	if (input.min_file_size_bytes) {
+		return input.min_file_size_bytes.value();
+	}
+	return (target_file_size_bytes * 3) / 4;
+}
+
+static int64_t ResolveMaxFileSizeBytes(const RewriteDataFilesPlanInput &input, int64_t target_file_size_bytes) {
+	if (input.max_file_size_bytes) {
+		return input.max_file_size_bytes.value();
+	}
+	return (target_file_size_bytes * 9) / 5;
+}
+
+void GroupCandidates(RewritePlan &plan, const RewriteDataFilesPlanInput &input) {
 	if (plan.candidates.empty()) {
 		return;
 	}
 
+	const auto min_file_size_bytes = ResolveMinFileSizeBytes(input, plan.target_file_size_bytes);
+	const auto max_file_size_bytes = ResolveMaxFileSizeBytes(input, plan.target_file_size_bytes);
+	if (min_file_size_bytes > max_file_size_bytes) {
+		throw InvalidInputException("iceberg_rewrite_data_files: resolved 'min_file_size_bytes' (%lld) must be <= "
+		                            "'max_file_size_bytes' (%lld)",
+		                            min_file_size_bytes, max_file_size_bytes);
+	}
+
 	std::map<string, vector<RewriteCandidate>> per_partition;
 	for (auto &cand : plan.candidates) {
-		if (!rewrite_all && cand.file_size_in_bytes >= target_file_size_bytes) {
+		//! Match Spark: rewrite undersized or oversized files; leave the band alone.
+		if (!input.rewrite_all && cand.file_size_in_bytes >= min_file_size_bytes &&
+		    cand.file_size_in_bytes <= max_file_size_bytes) {
 			continue;
 		}
 		per_partition[rewrite_planner_internal::PartitionBucketKey(cand.partition_info)].push_back(cand);
@@ -78,8 +104,8 @@ void GroupCandidates(RewritePlan &plan, int64_t target_file_size_bytes, int64_t 
 			}
 			//! Spark SizeBasedFileRewriter: rewrite when the group has enough files,
 			//! or at least two files whose total size already meets the target.
-			const bool enough_files = static_cast<int64_t>(kv.second.size()) >= min_input_files;
-			const bool enough_bytes = kv.second.size() >= 2 && total_bytes >= target_file_size_bytes;
+			const bool enough_files = static_cast<int64_t>(kv.second.size()) >= input.min_input_files;
+			const bool enough_bytes = kv.second.size() >= 2 && total_bytes >= plan.target_file_size_bytes;
 			if (!enough_files && !enough_bytes) {
 				continue;
 			}
@@ -207,7 +233,7 @@ RewritePlan PlanRewrite(ClientContext &context, const RewriteDataFilesPlanInput 
 		return plan;
 	}
 
-	GroupCandidates(plan, plan.target_file_size_bytes, input.min_input_files, input.rewrite_all);
+	GroupCandidates(plan, input);
 
 	return plan;
 }
