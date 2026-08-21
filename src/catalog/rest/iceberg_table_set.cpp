@@ -29,9 +29,6 @@ namespace duckdb {
 IcebergTableSet::IcebergTableSet(IcebergSchemaEntry &schema)
     : schema(schema), catalog(schema.ParentCatalog()),
       mode(catalog.Cast<IcebergCatalog>().attach_options.case_sensitivity_mode), entries(mode) {
-	fprintf(stderr, "DEBUGDEBUG IcebergTableSet ctor catalog='%s' mode=%d\n",
-	        catalog.GetName().GetIdentifierName().c_str(), static_cast<int>(mode));
-	fflush(stderr);
 }
 
 string IcebergTableSet::ResolveCanonicalNameViaList(ClientContext &context, const string &name) {
@@ -209,9 +206,6 @@ void IcebergTableSet::LoadEntriesInternal(ClientContext &context) {
 		case_insensitive_set_t listed;
 		for (auto &table : *tables) {
 			listed.insert(table.name);
-			fprintf(stderr, "DEBUGDEBUG LoadEntriesInternal catalog='%s' mode=%d table='%s'\n",
-			        catalog.GetName().GetIdentifierName().c_str(), static_cast<int>(mode), table.name.c_str());
-			fflush(stderr);
 			entries.emplace(table.name, make_shared_ptr<IcebergTable>(ic_catalog, schema, table.name));
 		}
 		// 'entries' outlives the transaction, so drop the names the listing no longer reports.

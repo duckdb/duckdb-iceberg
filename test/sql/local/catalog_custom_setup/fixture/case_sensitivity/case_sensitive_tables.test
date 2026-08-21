@@ -53,24 +53,28 @@ ATTACH '' AS cs_unset (
 
 # All three aliases point at the same underlying REST catalog/warehouse, so a table
 # created through one is visible (subject to case-sensitivity rules) through the others.
+# Use a dedicated namespace rather than 'default': other tests in this suite leave
+# case-colliding tables behind in 'default' (e.g. Stock/stock), and cs_insensitive's
+# listing there can legitimately throw its own ambiguity error as a side effect of
+# resolving an unrelated failed lookup, masking the assertion this test is making.
 statement ok
-create schema if not exists cs_unset.default;
+create schema if not exists cs_unset.case_sensitive_test_ns;
 
 statement ok
-drop table if exists cs_unset.default.MixedCaseTable;
+drop table if exists cs_unset.case_sensitive_test_ns.MixedCaseTable;
 
 statement ok
-create table cs_unset.default.MixedCaseTable as select range::int a from range(3);
+create table cs_unset.case_sensitive_test_ns.MixedCaseTable as select range::int a from range(3);
 
 # --- case_sensitive=true: cold lookup with wrong case must fail (no change from today) ---
 statement error
-select * from cs_sensitive.default.mixedcasetable order by a;
+select * from cs_sensitive.case_sensitive_test_ns.mixedcasetable order by a;
 ----
 does not exist
 
 # correct-case cold lookup must still succeed
 query I
-select * from cs_sensitive.default.MixedCaseTable order by a;
+select * from cs_sensitive.case_sensitive_test_ns.MixedCaseTable order by a;
 ----
 0
 1
@@ -78,7 +82,7 @@ select * from cs_sensitive.default.MixedCaseTable order by a;
 
 # --- case_sensitive=false: cold lookup with wrong case must resolve via list-then-canonical-match ---
 query I
-select * from cs_insensitive.default.mixedcasetable order by a;
+select * from cs_insensitive.case_sensitive_test_ns.mixedcasetable order by a;
 ----
 0
 1
@@ -86,7 +90,7 @@ select * from cs_insensitive.default.mixedcasetable order by a;
 
 # the canonical (correct) case must also still work
 query I
-select * from cs_insensitive.default.MixedCaseTable order by a;
+select * from cs_insensitive.case_sensitive_test_ns.MixedCaseTable order by a;
 ----
 0
 1
@@ -94,39 +98,39 @@ select * from cs_insensitive.default.MixedCaseTable order by a;
 
 # --- unset/default: wrong-case cold lookup still fails - "unset changes nothing" ---
 statement error
-select * from cs_unset.default.mixedcasetable order by a;
+select * from cs_unset.case_sensitive_test_ns.mixedcasetable order by a;
 ----
 does not exist
 
 # --- warm lookup after a listing (SHOW TABLES) ---
 statement ok
-use cs_sensitive.default;
+use cs_sensitive.case_sensitive_test_ns;
 
 statement ok
 show tables;
 
 # case_sensitive=true: still requires exact case even though the name was just listed
 statement error
-select * from cs_sensitive.default.mixedcasetable order by a;
+select * from cs_sensitive.case_sensitive_test_ns.mixedcasetable order by a;
 ----
 does not exist
 
 statement ok
-use cs_insensitive.default;
+use cs_insensitive.case_sensitive_test_ns;
 
 statement ok
 show tables;
 
 # case_sensitive=false: matches regardless of casing once listed
 query I
-select * from cs_insensitive.default.mixedcasetable order by a;
+select * from cs_insensitive.case_sensitive_test_ns.mixedcasetable order by a;
 ----
 0
 1
 2
 
 statement ok
-use cs_unset.default;
+use cs_unset.case_sensitive_test_ns;
 
 statement ok
 show tables;
@@ -134,7 +138,7 @@ show tables;
 # unset: a prior listing does NOT make table lookups insensitive - this is the asymmetry
 # with schemas documented in the design doc, and is the regression guard for it.
 statement error
-select * from cs_unset.default.mixedcasetable order by a;
+select * from cs_unset.case_sensitive_test_ns.mixedcasetable order by a;
 ----
 does not exist
 
@@ -142,4 +146,4 @@ statement ok
 use memory;
 
 statement ok
-drop table if exists cs_unset.default.MixedCaseTable;
+drop table if exists cs_unset.case_sensitive_test_ns.MixedCaseTable;

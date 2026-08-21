@@ -16,9 +16,6 @@ static string GetSchemaName(const vector<string> &items) {
 
 IcebergSchemaSet::IcebergSchemaSet(Catalog &catalog, CaseSensitivityMode mode)
     : catalog(catalog), mode(mode), entries(mode) {
-	fprintf(stderr, "DEBUGDEBUG IcebergSchemaSet ctor catalog='%s' mode=%d\n",
-	        catalog.GetName().GetIdentifierName().c_str(), static_cast<int>(mode));
-	fflush(stderr);
 }
 
 string IcebergSchemaSet::ResolveCanonicalNameViaList(ClientContext &context, const string &name) {
@@ -187,10 +184,6 @@ void IcebergSchemaSet::LoadEntriesInternal(ClientContext &context) {
 	}
 	auto schemas = IRCAPI::GetSchemas(context, ic_catalog, {});
 	for (const auto &schema : schemas) {
-		fprintf(stderr, "DEBUGDEBUG SchemaSet::LoadEntriesInternal catalog='%s' mode=%d namespace='%s'\n",
-		        catalog.GetName().GetIdentifierName().c_str(), static_cast<int>(mode),
-		        GetSchemaName(schema.items).c_str());
-		fflush(stderr);
 		CreateSchemaInfo info;
 		info.SetQualifiedName(QualifiedName(info.GetQualifiedName().Catalog(), Identifier(GetSchemaName(schema.items)),
 		                                    info.GetQualifiedName().Name()));
