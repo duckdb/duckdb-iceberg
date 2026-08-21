@@ -231,6 +231,9 @@ private:
 		//! an error rather than a silent first-wins insert.
 		auto existing = insensitive_map.find(key);
 		if (mode == CaseSensitivityMode::INSENSITIVE && existing != insensitive_map.end() && existing->first != key) {
+			fprintf(stderr, "DEBUGDEBUG Map::EmplaceInternal ambiguity mode=%d key='%s' existing='%s'\n",
+			        static_cast<int>(mode), key.c_str(), existing->first.c_str());
+			fflush(stderr);
 			throw CatalogException("Ambiguous case-insensitive identifier '%s': matches existing identifier '%s'. Use "
 			                       "case_sensitive=true or an exact-case reference to disambiguate.",
 			                       key, existing->first);
@@ -335,6 +338,9 @@ public:
 		}
 		auto existing = insensitive_set.find(key);
 		if (mode == CaseSensitivityMode::INSENSITIVE && existing != insensitive_set.end() && *existing != key) {
+			fprintf(stderr, "DEBUGDEBUG Set::insert ambiguity mode=%d key='%s' existing='%s'\n",
+			        static_cast<int>(mode), key.c_str(), existing->c_str());
+			fflush(stderr);
 			throw CatalogException("Ambiguous case-insensitive identifier '%s': matches existing identifier '%s'. Use "
 			                       "case_sensitive=true or an exact-case reference to disambiguate.",
 			                       key, *existing);
