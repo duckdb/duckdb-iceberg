@@ -1,6 +1,11 @@
 build
 .vscode
 .idea
+.cache/
+.ignore
+.clangd
+.java-version
+.python-version
 cmake-build-debug
 duckdb_unittest_tempdir/
 .DS_Store

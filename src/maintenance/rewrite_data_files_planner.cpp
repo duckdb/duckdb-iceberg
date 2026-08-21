@@ -19,7 +19,8 @@ namespace duckdb {
 
 namespace {
 
-constexpr int64_t DEFAULT_TARGET_FILE_SIZE_BYTES = 134217728;
+//! Iceberg spec default for write.target-file-size-bytes (same as IcebergCopyOptions::file_size_bytes).
+constexpr int64_t DEFAULT_TARGET_FILE_SIZE_BYTES = 512LL * 1024 * 1024;
 constexpr int64_t MIN_TARGET_FILE_SIZE_BYTES = 100;
 
 static int64_t ParseTargetFileSizeProperty(const string &value, const string &property) {
@@ -57,14 +58,31 @@ static int64_t ResolveTargetFileSizeBytes(const RewriteDataFilesPlanInput &input
 	return DEFAULT_TARGET_FILE_SIZE_BYTES;
 }
 
+//! Spark SizeBasedFileRewriter defaults: min = 75% of target, max = 180% of target.
+static int64_t ResolveMinFileSizeBytes(const RewriteDataFilesPlanInput &input, int64_t target_file_size_bytes) {
+	if (input.min_file_size_bytes) {
+		return input.min_file_size_bytes.value();
+	}
+	return (target_file_size_bytes * 3) / 4;
+}
+
+static int64_t ResolveMaxFileSizeBytes(const RewriteDataFilesPlanInput &input, int64_t target_file_size_bytes) {
+	if (input.max_file_size_bytes) {
+		return input.max_file_size_bytes.value();
+	}
+	return (target_file_size_bytes * 9) / 5;
+}
+
 struct PartitionRewriteBucket {
 	vector<RewriteCandidate> retained;
 	int64_t eligible_count = 0;
 };
 
 void ConsiderCandidate(PartitionRewriteBucket &bucket, RewriteCandidate cand, const RewriteDataFilesPlanInput &input,
-                       int64_t target_file_size_bytes) {
-	if (!input.rewrite_all && cand.file_size_in_bytes >= target_file_size_bytes) {
+                       int64_t min_file_size_bytes, int64_t max_file_size_bytes) {
+	//! Match Spark: rewrite undersized or oversized files; leave the band alone.
+	if (!input.rewrite_all && cand.file_size_in_bytes >= min_file_size_bytes &&
+	    cand.file_size_in_bytes <= max_file_size_bytes) {
 		return;
 	}
 	bucket.eligible_count++;
@@ -197,6 +215,14 @@ RewritePlan PlanRewrite(ClientContext &context, const RewriteDataFilesPlanInput 
 		return plan;
 	}
 
+	const auto min_file_size_bytes = ResolveMinFileSizeBytes(input, plan.target_file_size_bytes);
+	const auto max_file_size_bytes = ResolveMaxFileSizeBytes(input, plan.target_file_size_bytes);
+	if (min_file_size_bytes > max_file_size_bytes) {
+		throw InvalidInputException("iceberg_rewrite_data_files: resolved 'min_file_size_bytes' (%lld) must be <= "
+		                            "'max_file_size_bytes' (%lld)",
+		                            min_file_size_bytes, max_file_size_bytes);
+	}
+
 	auto default_spec_id = table_metadata.default_spec_id;
 	const bool unpartitioned = !table_metadata.HasPartitionSpec();
 	std::map<string, PartitionRewriteBucket> per_partition;
@@ -237,7 +263,7 @@ RewritePlan PlanRewrite(ClientContext &context, const RewriteDataFilesPlanInput 
 			cand.record_count = entry.data_file.record_count;
 			cand.partition_info = entry.data_file.partition_info;
 			auto &bucket = per_partition[rewrite_planner_internal::PartitionBucketKey(cand.partition_info)];
-			ConsiderCandidate(bucket, std::move(cand), input, plan.target_file_size_bytes);
+			ConsiderCandidate(bucket, std::move(cand), input, min_file_size_bytes, max_file_size_bytes);
 			if (unpartitioned && UnpartitionedCollectionComplete(per_partition, input)) {
 				break;
 			}
