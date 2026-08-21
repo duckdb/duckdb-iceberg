@@ -84,11 +84,11 @@ select count(*) from iceberg where deepstruct.struct.int is not null
 ----
 4
 
-# IS NOT NULL remains an ExpressionFilter; reads all files
+# IS NOT NULL is now pushed down via dynamic filter pushdown; the all-NULL file is pruned
 query I
 select count_files_read();
 ----
-5
+4
 
 statement ok
 CALL truncate_duckdb_logs();

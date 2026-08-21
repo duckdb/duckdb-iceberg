@@ -8,6 +8,7 @@
 #include "duckdb/optimizer/filter_combiner.hpp"
 #include "duckdb/planner/expression/bound_columnref_expression.hpp"
 #include "duckdb/planner/expression/bound_function_expression.hpp"
+#include "duckdb/planner/expression/bound_reference_expression.hpp"
 #include "duckdb/planner/expression_iterator.hpp"
 #include "duckdb/planner/operator/logical_filter.hpp"
 #include "duckdb/planner/filter/expression_filter.hpp"
@@ -204,6 +205,98 @@ static TableFilterSet GenerateTableScanFilters(ClientContext &context, vector<Co
 	return combiner.GenerateTableScanFilters(column_indexes, unused);
 }
 
+//! Like TryGetStructExtractPath, but for filter expressions from a TableFilterSet, whose subject is a
+//! BoundReferenceExpression(0) placeholder rather than a BoundColumnRefExpression.
+static bool TryGetStructExtractPathFromRef(unique_ptr<Expression> &expr_p, optional_ptr<BoundReferenceExpression> &ref,
+                                           vector<idx_t> &path_components) {
+	auto &expr = *expr_p;
+	if (expr.GetExpressionClass() == ExpressionClass::BOUND_REF) {
+		ref = expr.Cast<BoundReferenceExpression>();
+		return true;
+	}
+	if (expr.GetExpressionClass() != ExpressionClass::BOUND_FUNCTION) {
+		return false;
+	}
+	auto &func = expr.Cast<BoundFunctionExpression>();
+	idx_t child_idx;
+	if (!TryGetStructExtractChildIndex(func, child_idx) || func.GetChildren().empty()) {
+		return false;
+	}
+	if (!TryGetStructExtractPathFromRef(func.GetChildrenMutable()[0], ref, path_components)) {
+		return false;
+	}
+	path_components.push_back(child_idx);
+	return true;
+}
+
+//! Rewrites struct_extract chains rooted in a BoundReferenceExpression(0) into a pushdown-extract column index,
+//! updating 'projection_index' to point at the (possibly newly created) projected column when a rewrite happens.
+static bool RewriteDynamicFilterPushdownExtracts(unique_ptr<Expression> &expr, const ColumnIndex &base_column_index,
+                                                 vector<ColumnIndex> &column_indexes,
+                                                 column_index_map<ProjectionIndex> &projection_map,
+                                                 ProjectionIndex &projection_index) {
+	optional_ptr<BoundReferenceExpression> ref;
+	vector<idx_t> path_components;
+	if (TryGetStructExtractPathFromRef(expr, ref, path_components)) {
+		if (path_components.empty()) {
+			return false;
+		}
+		auto extract_path = CreateColumnIndexPath(path_components);
+		auto projected_column_index =
+		    CreatePushdownExtractColumnIndex(base_column_index, ref->GetReturnType(), extract_path);
+		auto entry = projection_map.find(projected_column_index);
+		if (entry == projection_map.end()) {
+			projection_index = ProjectionIndex(column_indexes.size());
+			projection_map.emplace(projected_column_index, projection_index);
+			column_indexes.push_back(projected_column_index);
+		} else {
+			projection_index = entry->second;
+		}
+		expr = make_uniq<BoundReferenceExpression>(expr->GetReturnType(), 0);
+		return true;
+	}
+
+	bool rewritten = false;
+	ExpressionIterator::EnumerateChildren(*expr, [&](unique_ptr<Expression> &child) {
+		rewritten |= RewriteDynamicFilterPushdownExtracts(child, base_column_index, column_indexes, projection_map,
+		                                                  projection_index);
+	});
+	return rewritten;
+}
+
+//! Generates a TableFilterSet from an existing TableFilterSet whose filter subjects are BoundReferenceExpression(0)
+//! placeholders (as produced by MultiFileDynamicPushdownInfo), rewriting struct_extract chains into pushdown-extract
+//! column indexes, potentially adding new entries to 'column_indexes'.
+static TableFilterSet GenerateDynamicTableScanFilters(vector<ColumnIndex> &column_indexes, TableFilterSet &filters) {
+	column_index_map<ProjectionIndex> projection_map;
+	projection_map.reserve(column_indexes.size());
+	for (idx_t i = 0; i < column_indexes.size(); i++) {
+		projection_map.emplace(column_indexes[i], ProjectionIndex(i));
+	}
+
+	TableFilterSet result;
+	for (auto &entry : filters) {
+		auto base_projection_index = entry.GetIndex();
+		//! Copy, not reference: 'column_indexes' may be reallocated by a rewrite below, across split predicates
+		auto base_column_index = column_indexes[base_projection_index.GetIndex()];
+		auto &filter =
+		    ExpressionFilter::GetExpressionFilter(entry.Filter(), "IcebergMultiFileList::DynamicFilterPushdown");
+
+		vector<unique_ptr<Expression>> split_expressions;
+		split_expressions.push_back(filter.expr->Copy());
+		// Split AND predicates into separate filters so that we can push down each filter individually
+		LogicalFilter::SplitPredicates(split_expressions);
+
+		for (auto &split_expr : split_expressions) {
+			auto projection_index = base_projection_index;
+			RewriteDynamicFilterPushdownExtracts(split_expr, base_column_index, column_indexes, projection_map,
+			                                     projection_index);
+			result.PushFilter(projection_index, make_uniq<ExpressionFilter>(std::move(split_expr)));
+		}
+	}
+	return result;
+}
+
 } // namespace
 
 IcebergMultiFileList::IcebergMultiFileList(ClientContext &context_p, shared_ptr<IcebergScanInfo> scan_info,
@@ -380,15 +473,8 @@ IcebergMultiFileList::DynamicFilterPushdown(MultiFileDynamicPushdownInfo &pushdo
 		return nullptr;
 	}
 
-	// Convert any struct_extract expressions in the filters to column references with pushdown-extract column indexes
-	vector<unique_ptr<Expression>> expressions;
-	expressions.reserve(filters.FilterCount());
-	for (auto &entry : filters) {
-		auto &filter =
-		    ExpressionFilter::GetExpressionFilter(entry.Filter(), "IcebergMultiFileList::DynamicFilterPushdown");
-		expressions.push_back(filter.expr->Copy());
-	}
-	auto rewritten_filters = GenerateTableScanFilters(pushdown_info.context, column_indexes, expressions);
+	// Convert any struct_extract expressions in the filters to references with pushdown-extract column indexes
+	auto rewritten_filters = GenerateDynamicTableScanFilters(column_indexes, filters);
 
 	bool filters_changed = false;
 	for (auto &entry : rewritten_filters) {
