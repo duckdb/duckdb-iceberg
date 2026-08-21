@@ -445,7 +445,7 @@ void IcebergTransaction::CleanupMetadataFiles(ClientContext &context, const vect
 			unique_paths.push_back(path);
 		}
 	}
-	RemoveFilesBestEffort(context, fs, unique_paths, "retry metadata file");
+	RemoveFilesBestEffort(context, fs, unique_paths, "metadata file");
 }
 
 void IcebergTransaction::RefreshRetryTables(IcebergTransactionAlterUpdate &alter_update,
