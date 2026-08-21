@@ -59,15 +59,21 @@ void IcebergCatalog::ScanSchemas(ClientContext &context, std::function<void(Sche
 optional_ptr<SchemaCatalogEntry> IcebergCatalog::LookupSchema(CatalogTransaction transaction,
                                                               const EntryLookupInfo &schema_lookup,
                                                               OnEntryNotFound if_not_found) {
-	if (schema_lookup.GetEntryName() == DEFAULT_SCHEMA && default_schema != DEFAULT_SCHEMA) {
-		// throws error if default schema is empty
-		if (default_schema.empty() && if_not_found == OnEntryNotFound::RETURN_NULL) {
+	// Namespaces are looked up verbatim. The default namespace is not aliased to any other name: duckdb
+	// resolves an unqualified reference through GetDefaultSchema() before it gets here, so rewriting names
+	// would only make a namespace that is genuinely called 'main' unreachable.
+	auto &schema_name = schema_lookup.GetEntryName();
+	if (schema_name.empty()) {
+		// an empty name reaches us only because this catalog has no default namespace: duckdb asked
+		// GetDefaultSchema() for one and got nothing back
+		if (if_not_found == OnEntryNotFound::RETURN_NULL) {
 			return nullptr;
 		}
-		return GetSchema(transaction, default_schema, if_not_found);
+		throw CatalogException(schema_lookup.GetErrorContext(),
+		                       "No default namespace for catalog \"%s\" - fully qualify the name, or re-attach "
+		                       "with DEFAULT_SCHEMA '<namespace>'",
+		                       GetName());
 	}
-
-	auto &schema_name = schema_lookup.GetEntryName();
 	auto entry = schemas.GetEntry(transaction.GetContext(), schema_name, if_not_found);
 	if (!entry && if_not_found != OnEntryNotFound::RETURN_NULL) {
 		throw CatalogException(schema_lookup.GetErrorContext(), "Schema with name \"%s\" not found", schema_name);

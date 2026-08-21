@@ -1,0 +1,73 @@
+# name: test/sql/local/catalog_custom_setup/fixture/no_default_namespace.test
+# description: a catalog attached without DEFAULT_SCHEMA has no default namespace - qualified names still work, and an unqualified one says so
+# group: [fixture]
+
+require-env FIXTURE_SERVER_AVAILABLE
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+CREATE SECRET storage_secret(
+	TYPE S3,
+	KEY_ID 'admin',
+	SECRET 'password',
+	ENDPOINT '127.0.0.1:9000',
+	URL_STYLE 'path',
+	USE_SSL 0
+);
+
+statement ok
+CREATE SECRET iceberg_secret (
+	TYPE ICEBERG,
+	CLIENT_ID 'admin',
+	CLIENT_SECRET 'password',
+	URI 'http://127.0.0.1:8181'
+);
+
+statement ok
+ATTACH '' AS my_datalake (
+	TYPE ICEBERG,
+	SECRET iceberg_secret
+);
+
+statement ok
+CREATE SCHEMA IF NOT EXISTS my_datalake.bronze;
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.bronze.T;
+
+# qualified names are unaffected
+statement ok
+CREATE TABLE my_datalake.bronze.T AS SELECT 42;
+
+query I
+SELECT * FROM my_datalake.bronze.T;
+----
+42
+
+# an unqualified name has no namespace to resolve to, and says which knob to reach for
+statement error
+CREATE TABLE my_datalake.T2 AS SELECT 43;
+----
+<REGEX>:.*No default namespace for catalog.*
+
+statement ok
+DROP TABLE my_datalake.bronze.T;
+
+statement ok
+DETACH my_datalake;
+
+statement ok
+DROP SECRET iceberg_secret;
+
+statement ok
+DROP SECRET storage_secret;
