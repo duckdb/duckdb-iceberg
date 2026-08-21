@@ -1,0 +1,126 @@
+# name: test/sql/local/catalog_custom_setup/fixture/test_stage_create_tables.test
+# description: test create table as
+# group: [fixture]
+
+require-env FIXTURE_SERVER_AVAILABLE
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+require core_functions
+
+statement ok
+CREATE SECRET (
+    TYPE S3,
+    KEY_ID 'admin',
+    SECRET 'password',
+    ENDPOINT '127.0.0.1:9000',
+    URL_STYLE 'path',
+    USE_SSL 0
+);
+
+statement ok
+ATTACH '' AS my_datalake (
+    TYPE ICEBERG,
+    CLIENT_ID 'admin',
+    CLIENT_SECRET 'password',
+    ENDPOINT 'http://127.0.0.1:8181',
+    STAGE_CREATE_TABLES false
+);
+
+statement ok
+CALL enable_logging('HTTP');
+
+# also disable local file system. 
+# See https://github.com/duckdb/duckdb-iceberg/issues/1294
+statement ok
+SET disabled_filesystems = 'LocalFileSystem';
+
+statement ok
+set logging_level='debug'
+
+statement ok
+use my_datalake.default;
+
+statement ok
+drop table if exists should_not_exist;
+
+# explain create table as works
+statement ok
+EXPLAIN create table should_not_exist as select range a from range(100);
+
+# table was not created during explain call
+query I
+select count(*) from duckdb_logs_parsed('HTTP') where request.type = 'POST';
+----
+0
+
+# table does not exist
+statement error
+select * from should_not_exist;
+----
+<REGEX>:.*does not exist.*
+
+statement ok
+drop table if exists should_exist;
+
+# table with no rows should still create
+statement ok
+create table should_exist as select range a from range(100) limit 0;
+
+query I
+select count(*) from should_exist;
+----
+0
+
+statement error
+create table should_exist as select range a from range(100) limit 0;
+----
+<REGEX>:.*already exists.*
+
+# explain create table should_exist still works
+statement ok
+EXPLAIN create table should_exist as select range a from range(100);
+
+statement ok
+drop table if exists ctas_partitioned_with_options;
+
+# partitioned CTAS with a non-identity transform should create the table
+# at execution time, then rebind COPY options using the real table metadata.
+statement ok
+create table ctas_partitioned_with_options
+PARTITIONED BY (category, year(ts))
+WITH (
+    'foo'='buzz'
+) AS
+select range as id,
+       case range % 2 when 0 then 'even' else 'odd' end as category,
+       make_timestamp(2020 + (range % 4), 6, 15, 12, 0, 0) as ts
+from range(40);
+
+query I
+select count(*) from ctas_partitioned_with_options;
+----
+40
+
+query II
+select * from iceberg_table_properties(my_datalake.default.ctas_partitioned_with_options)
+where key = 'foo';
+----
+foo	buzz
+
+statement ok
+SET debug_verification_mode='verify_vectors';
+
+query I
+select count(*) from iceberg_metadata(my_datalake.default.ctas_partitioned_with_options)
+where file_path like '%identity_category_2=%'
+  and file_path like '%year_ts_3=%';
+----
+4
+
