@@ -1,0 +1,90 @@
+# name: test/sql/local/equality_delete_fast_filter.test
+# description: Equality-delete hash-filter parity with the expression fallback
+# group: [local]
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+# The hash filter is enabled by default.
+query I
+SELECT current_setting('iceberg_equality_delete_fast_filter');
+----
+true
+
+statement ok
+CALL enable_logging('Iceberg');
+
+statement ok
+CALL truncate_duckdb_logs();
+
+# This fixture combines integral, VARCHAR and multi-column delete layouts.
+query III
+SELECT *
+FROM ICEBERG_SCAN('{WORKING_DIRECTORY}/data/persistent/equality_deletes/warehouse/mydb/mytable')
+ORDER BY ALL;
+----
+4	d	2025-01-04
+5	e	2025-01-05
+
+query I
+SELECT count(*) > 0
+FROM duckdb_logs()
+WHERE type = 'Iceberg'
+  AND message LIKE 'Accelerated % equality-delete files using a hash filter'
+  AND message NOT LIKE 'Accelerated 0 of %';
+----
+true
+
+# Private equality columns remain available when the query does not project them.
+query I
+SELECT bir
+FROM ICEBERG_SCAN('{WORKING_DIRECTORY}/data/persistent/equality_deletes/warehouse/mydb/mytable')
+ORDER BY ALL;
+----
+2025-01-04
+2025-01-05
+
+# Correctness remains optimizer-independent (#1226).
+statement ok
+PRAGMA disable_optimizer;
+
+query I
+SELECT count(*)
+FROM ICEBERG_SCAN('{WORKING_DIRECTORY}/data/persistent/equality_deletes/warehouse/mydb/mytable');
+----
+2
+
+query I
+SELECT bir
+FROM ICEBERG_SCAN('{WORKING_DIRECTORY}/data/persistent/equality_deletes/warehouse/mydb/mytable')
+WHERE id = 4;
+----
+2025-01-04
+
+statement ok
+PRAGMA enable_optimizer;
+
+# Partition/spec and sequence applicability remain with the upstream planner (#1255/#1269).
+query III
+SELECT *
+FROM ICEBERG_SCAN('{WORKING_DIRECTORY}/data/persistent/equality_deletes/warehouse/mydb/mytable_partitioned')
+ORDER BY ALL;
+----
+1	a	2025-01-01
+4	d	2025-01-04
+5	e	2025-01-05
+
+# Switching off in-process immediately returns to the stock expression path.
+statement ok
+SET iceberg_equality_delete_fast_filter = false;
+
+query I
+SELECT count(*)
+FROM ICEBERG_SCAN('{WORKING_DIRECTORY}/data/persistent/equality_deletes/warehouse/mydb/mytable');
+----
+2
