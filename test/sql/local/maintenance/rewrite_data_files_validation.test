@@ -71,7 +71,7 @@ SELECT * FROM iceberg_rewrite_data_files('a.b.c', max_files_to_rewrite => 0);
 statement error
 SELECT * FROM iceberg_rewrite_data_files('cat.sch.tbl', max_files_to_rewrite => NULL);
 ----
-Catalog "cat" does not exist
+'max_files_to_rewrite' cannot be NULL
 
 statement error
 SELECT * FROM iceberg_rewrite_data_files('a.b.c', min_file_size_bytes => 99);
