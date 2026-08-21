@@ -1,0 +1,107 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/maintenance/rewrite_data_files_enough_bytes.test
+# description: rewrite when fewer than min_input_files but total bytes meet the target
+# group: [maintenance]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+require core_functions
+
+statement ok
+drop table if exists my_datalake.default.rewrite_enough_bytes;
+
+statement ok
+create table my_datalake.default.rewrite_enough_bytes (id INTEGER, payload VARCHAR);
+
+# Three modest files: each under the rewrite target, but combined size exceeds it.
+statement ok
+insert into my_datalake.default.rewrite_enough_bytes
+select i, repeat('x', 5000)
+from range(20) t(i);
+
+statement ok
+insert into my_datalake.default.rewrite_enough_bytes
+select i, repeat('y', 5000)
+from range(20, 40) t(i);
+
+statement ok
+insert into my_datalake.default.rewrite_enough_bytes
+select i, repeat('z', 5000)
+from range(40, 60) t(i);
+
+query I
+select count(*)
+from iceberg_metadata('my_datalake.default.rewrite_enough_bytes')
+where content = 'DATA' and status <> 'DELETED';
+----
+3
+
+# Spark's default min is 75% of target (1500 here). Catalogs write slightly
+# different parquet sizes for the same rows (Nessie ~1.7KiB, fixture ~1.5KiB),
+# so files can land in the "leave-alone" category. Pin min_file_size_bytes above
+# actual file size so this test hits enough_bytes, not catalog writer variation.
+# Also pin max_file_size_bytes: Spark's default max is 180% of target (3600),
+# which would reject min 10000.
+# Three files is below min_input_files=5, but combined size meets the 2KiB target.
+query III
+call iceberg_rewrite_data_files(
+	'my_datalake.default.rewrite_enough_bytes',
+	target_file_size_bytes => 2000,
+	min_file_size_bytes => 10000,
+	max_file_size_bytes => 1000000000,
+	min_input_files => 5
+);
+----
+3	1	<REGEX>:[1-9][0-9]*
+
+query I
+select count(*) from my_datalake.default.rewrite_enough_bytes;
+----
+60
+
+query I
+select count(*)
+from iceberg_metadata('my_datalake.default.rewrite_enough_bytes')
+where content = 'DATA' and status <> 'DELETED';
+----
+1
+
+# The rewrite commit writes a new manifest; do not hard-code sequence 3 (last insert).
+statement ok
+begin
+
+statement ok
+set variable latest_manifest_sequence = (
+	select max(manifest_sequence_number)
+	from iceberg_metadata('my_datalake.default.rewrite_enough_bytes')
+);
+
+statement ok
+set variable file_path = (
+	select file_path
+	from iceberg_metadata('my_datalake.default.rewrite_enough_bytes')
+	where manifest_sequence_number = $latest_manifest_sequence
+	and manifest_content = 'DATA'
+	and status = 'ADDED'
+	limit 1
+);
+
+# Combined input is ~4.4KiB of highly compressible parquet. One rewrite output
+# file should land at or above the 2KiB target without rotating into many files.
+query I
+select size >= 2000 and size < 20000 from read_blob($file_path);
+----
+true
+
+statement ok
+commit
+
+statement ok
+drop table if exists my_datalake.default.rewrite_enough_bytes;
