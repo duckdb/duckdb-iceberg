@@ -73,29 +73,8 @@ static int64_t ResolveMaxFileSizeBytes(const RewriteDataFilesPlanInput &input, i
 	return (target_file_size_bytes * 9) / 5;
 }
 
-void GroupCandidates(RewritePlan &plan, const RewriteDataFilesPlanInput &input) {
-	if (plan.candidates.empty()) {
-		return;
-	}
-
-	const auto min_file_size_bytes = ResolveMinFileSizeBytes(input, plan.target_file_size_bytes);
-	const auto max_file_size_bytes = ResolveMaxFileSizeBytes(input, plan.target_file_size_bytes);
-	if (min_file_size_bytes > max_file_size_bytes) {
-		throw InvalidInputException("iceberg_rewrite_data_files: resolved 'min_file_size_bytes' (%lld) must be <= "
-		                            "'max_file_size_bytes' (%lld)",
-		                            min_file_size_bytes, max_file_size_bytes);
-	}
-
-	std::map<string, vector<RewriteCandidate>> per_partition;
-	for (auto &cand : plan.candidates) {
-		//! Match Spark: rewrite undersized or oversized files; leave the band alone.
-		if (!input.rewrite_all && cand.file_size_in_bytes >= min_file_size_bytes &&
-		    cand.file_size_in_bytes <= max_file_size_bytes) {
-			continue;
-		}
-		per_partition[rewrite_planner_internal::PartitionBucketKey(cand.partition_info)].push_back(cand);
-	}
-
+void SelectRewriteGroups(RewritePlan &plan, const RewriteDataFilesPlanInput &input,
+                         std::map<string, vector<RewriteCandidate>> &per_partition) {
 	for (auto &kv : per_partition) {
 		if (!input.rewrite_all && static_cast<int64_t>(kv.second.size()) < input.min_input_files) {
 			continue;
@@ -184,7 +163,16 @@ RewritePlan PlanRewrite(ClientContext &context, const RewriteDataFilesPlanInput 
 		return plan;
 	}
 
+	const auto min_file_size_bytes = ResolveMinFileSizeBytes(input, plan.target_file_size_bytes);
+	const auto max_file_size_bytes = ResolveMaxFileSizeBytes(input, plan.target_file_size_bytes);
+	if (min_file_size_bytes > max_file_size_bytes) {
+		throw InvalidInputException("iceberg_rewrite_data_files: resolved 'min_file_size_bytes' (%lld) must be <= "
+		                            "'max_file_size_bytes' (%lld)",
+		                            min_file_size_bytes, max_file_size_bytes);
+	}
+
 	auto default_spec_id = table_metadata.default_spec_id;
+	std::map<string, vector<RewriteCandidate>> per_partition;
 
 	for (const auto &list_entry : manifest_files) {
 		if (list_entry.file.content != IcebergManifestContentType::DATA) {
@@ -209,21 +197,22 @@ RewritePlan PlanRewrite(ClientContext &context, const RewriteDataFilesPlanInput 
 			if (entry.data_file.content != IcebergManifestEntryContentType::DATA) {
 				continue;
 			}
+			//! Match Spark: rewrite undersized or oversized files; leave the band alone.
+			if (!input.rewrite_all && entry.data_file.file_size_in_bytes >= min_file_size_bytes &&
+			    entry.data_file.file_size_in_bytes <= max_file_size_bytes) {
+				continue;
+			}
 
 			RewriteCandidate cand;
 			cand.file_path = entry.data_file.file_path;
 			cand.file_size_in_bytes = entry.data_file.file_size_in_bytes;
 			cand.record_count = entry.data_file.record_count;
 			cand.partition_info = entry.data_file.partition_info;
-			plan.candidates.push_back(std::move(cand));
+			per_partition[rewrite_planner_internal::PartitionBucketKey(cand.partition_info)].push_back(std::move(cand));
 		}
 	}
 
-	if (plan.candidates.empty()) {
-		return plan;
-	}
-
-	GroupCandidates(plan, input);
+	SelectRewriteGroups(plan, input, per_partition);
 
 	return plan;
 }

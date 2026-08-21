@@ -29,8 +29,6 @@ struct RewritePlan {
 	int64_t target_file_size_bytes = 512LL * 1024 * 1024;
 	//! Keep the loaded metadata alive until commit.
 	shared_ptr<IcebergTable> table_info;
-	//! All live DATA files considered during planning.
-	vector<RewriteCandidate> candidates;
 	//! Files selected for rewrite after per-partition size / min_input_files gating.
 	vector<RewriteCandidate> selected_candidates;
 };
