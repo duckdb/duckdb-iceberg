@@ -43,12 +43,19 @@ where content = 'DATA' and status <> 'DELETED';
 ----
 3
 
-# Files are ~1.5KiB each (under target 2000), so they pass the undersized gate.
-# Three files is below min_input_files=5, but combined size (~4.4KiB) meets the target.
+# Spark's default min is 75% of target (1500 here). Catalogs write slightly
+# different parquet sizes for the same rows (Nessie ~1.7KiB, fixture ~1.5KiB),
+# so files can land in the "leave-alone" category. Pin min_file_size_bytes above
+# actual file size so this test hits enough_bytes, not catalog writer variation.
+# Also pin max_file_size_bytes: Spark's default max is 180% of target (3600),
+# which would reject min 10000.
+# Three files is below min_input_files=5, but combined size meets the 2KiB target.
 query III
 call iceberg_rewrite_data_files(
 	'my_datalake.default.rewrite_enough_bytes',
 	target_file_size_bytes => 2000,
+	min_file_size_bytes => 10000,
+	max_file_size_bytes => 1000000000,
 	min_input_files => 5
 );
 ----
