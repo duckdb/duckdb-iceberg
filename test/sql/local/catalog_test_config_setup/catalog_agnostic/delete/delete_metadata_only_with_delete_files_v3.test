@@ -1,0 +1,100 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/delete/delete_metadata_only_with_delete_files_v3.test
+# description: A metadata-only DELETE over a v3 partition that already carries a deletion vector must invalidate the DV alongside its data file and count only the rows still live
+# group: [delete]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+
+statement ok
+CALL enable_logging('HTTP');
+
+statement ok
+set logging_level='debug'
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.test_metadata_only_dv;
+
+statement ok
+CREATE TABLE my_datalake.default.test_metadata_only_dv (id INT, val VARCHAR)
+PARTITIONED BY (id) WITH ('format-version'=3);
+
+# Two inserts into partition 1 give it two data files; partition 2 is the untouched control.
+statement ok
+INSERT INTO my_datalake.default.test_metadata_only_dv VALUES (1, 'a'), (1, 'b'), (1, 'c');
+
+statement ok
+INSERT INTO my_datalake.default.test_metadata_only_dv VALUES (1, 'd'), (1, 'e');
+
+statement ok
+INSERT INTO my_datalake.default.test_metadata_only_dv VALUES (2, 'z');
+
+query I
+SELECT count(*) FROM iceberg_metadata(my_datalake.default.test_metadata_only_dv)
+WHERE content = 'DATA' AND status != 'DELETED';
+----
+3
+
+# Row-level delete of a subset of the first partition-1 file: writes a deletion vector.
+query I
+DELETE FROM my_datalake.default.test_metadata_only_dv WHERE id = 1 AND val = 'a';
+----
+1
+
+query I
+SELECT count(*) FROM iceberg_metadata(my_datalake.default.test_metadata_only_dv)
+WHERE content = 'POSITION_DELETES' AND status != 'DELETED';
+----
+1
+
+query II
+SELECT id, val FROM my_datalake.default.test_metadata_only_dv ORDER BY id, val;
+----
+1	b
+1	c
+1	d
+1	e
+2	z
+
+# Now drop the whole partition. Both data files are fully covered, so neither is scanned; the
+# reported count must be the four rows still live, not the five rows physically present.
+query I
+DELETE FROM my_datalake.default.test_metadata_only_dv WHERE id = 1;
+----
+4
+
+query II
+SELECT id, val FROM my_datalake.default.test_metadata_only_dv ORDER BY id, val;
+----
+2	z
+
+# Both partition-1 data files are marked DELETED; only the partition-2 file survives.
+query I
+SELECT count(*) FROM iceberg_metadata(my_datalake.default.test_metadata_only_dv)
+WHERE content = 'DATA' AND status != 'DELETED';
+----
+1
+
+# The deletion vector was invalidated along with the data file it referenced, and no new delete
+# file was written to replace it.
+query I
+SELECT count(*) FROM iceberg_metadata(my_datalake.default.test_metadata_only_dv)
+WHERE content = 'POSITION_DELETES' AND status != 'DELETED';
+----
+0
+
+query I
+SELECT count(*) FROM iceberg_metadata(my_datalake.default.test_metadata_only_dv)
+WHERE content = 'POSITION_DELETES';
+----
+1
+
+statement ok
+DROP TABLE my_datalake.default.test_metadata_only_dv;

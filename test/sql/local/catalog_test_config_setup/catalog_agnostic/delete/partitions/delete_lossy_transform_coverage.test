@@ -1,0 +1,487 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/delete/partitions/delete_lossy_transform_coverage.test
+# description: A predicate that lands inside one partition of a lossy transform must never drop the whole data file - the partition value is shared by source values that do not match. Covers both equality and ranges; delete_metadata_only_coverage.test holds the partition-aligned ranges that do drop
+# group: [partitions]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+
+statement ok
+CALL enable_logging('HTTP');
+
+statement ok
+set logging_level='debug'
+
+# Every table below puts all its rows in one partition and deletes only some of them: dropping the file
+# on the strength of its partition value would take the siblings with it.
+
+# ---- Equality ----
+
+# ---- day(ts) on TIMESTAMP: one day holds many instants ----
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.test_lossy_day_ts;
+
+statement ok
+CREATE TABLE my_datalake.default.test_lossy_day_ts (id INT, ts TIMESTAMP, val VARCHAR)
+PARTITIONED BY (day(ts));
+
+statement ok
+INSERT INTO my_datalake.default.test_lossy_day_ts VALUES
+    (1, '2021-05-01 00:00:00'::TIMESTAMP, 'a'),
+    (2, '2021-05-01 12:00:00'::TIMESTAMP, 'b'),
+    (3, '2021-05-01 23:59:59'::TIMESTAMP, 'c');
+
+query I
+DELETE FROM my_datalake.default.test_lossy_day_ts WHERE ts = '2021-05-01 12:00:00'::TIMESTAMP;
+----
+1
+
+query III
+SELECT id, ts, val FROM my_datalake.default.test_lossy_day_ts ORDER BY id;
+----
+1	2021-05-01 00:00:00	a
+3	2021-05-01 23:59:59	c
+
+# The row-level path ran, so a delete file was written.
+query I
+SELECT count(*) FROM iceberg_metadata(my_datalake.default.test_lossy_day_ts)
+WHERE content = 'POSITION_DELETES';
+----
+1
+
+statement ok
+DROP TABLE my_datalake.default.test_lossy_day_ts;
+
+# ---- hour(ts) ----
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.test_lossy_hour;
+
+statement ok
+CREATE TABLE my_datalake.default.test_lossy_hour (id INT, ts TIMESTAMP, val VARCHAR)
+PARTITIONED BY (hour(ts));
+
+statement ok
+INSERT INTO my_datalake.default.test_lossy_hour VALUES
+    (1, '2021-05-01 10:00:00'::TIMESTAMP, 'a'),
+    (2, '2021-05-01 10:30:00'::TIMESTAMP, 'b');
+
+query I
+DELETE FROM my_datalake.default.test_lossy_hour WHERE ts = '2021-05-01 10:30:00'::TIMESTAMP;
+----
+1
+
+query III
+SELECT id, ts, val FROM my_datalake.default.test_lossy_hour ORDER BY id;
+----
+1	2021-05-01 10:00:00	a
+
+query I
+SELECT count(*) FROM iceberg_metadata(my_datalake.default.test_lossy_hour)
+WHERE content = 'POSITION_DELETES';
+----
+1
+
+statement ok
+DROP TABLE my_datalake.default.test_lossy_hour;
+
+# ---- month(ts) ----
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.test_lossy_month;
+
+statement ok
+CREATE TABLE my_datalake.default.test_lossy_month (id INT, ts TIMESTAMP, val VARCHAR)
+PARTITIONED BY (month(ts));
+
+statement ok
+INSERT INTO my_datalake.default.test_lossy_month VALUES
+    (1, '2021-01-05 00:00:00'::TIMESTAMP, 'a'),
+    (2, '2021-01-25 00:00:00'::TIMESTAMP, 'b');
+
+query I
+DELETE FROM my_datalake.default.test_lossy_month WHERE ts = '2021-01-25 00:00:00'::TIMESTAMP;
+----
+1
+
+query III
+SELECT id, ts, val FROM my_datalake.default.test_lossy_month ORDER BY id;
+----
+1	2021-01-05 00:00:00	a
+
+query I
+SELECT count(*) FROM iceberg_metadata(my_datalake.default.test_lossy_month)
+WHERE content = 'POSITION_DELETES';
+----
+1
+
+statement ok
+DROP TABLE my_datalake.default.test_lossy_month;
+
+# ---- year(ts) ----
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.test_lossy_year;
+
+statement ok
+CREATE TABLE my_datalake.default.test_lossy_year (id INT, ts TIMESTAMP, val VARCHAR)
+PARTITIONED BY (year(ts));
+
+statement ok
+INSERT INTO my_datalake.default.test_lossy_year VALUES
+    (1, '2020-02-01 00:00:00'::TIMESTAMP, 'a'),
+    (2, '2020-11-01 00:00:00'::TIMESTAMP, 'b');
+
+query I
+DELETE FROM my_datalake.default.test_lossy_year WHERE ts = '2020-11-01 00:00:00'::TIMESTAMP;
+----
+1
+
+query III
+SELECT id, ts, val FROM my_datalake.default.test_lossy_year ORDER BY id;
+----
+1	2020-02-01 00:00:00	a
+
+query I
+SELECT count(*) FROM iceberg_metadata(my_datalake.default.test_lossy_year)
+WHERE content = 'POSITION_DELETES';
+----
+1
+
+statement ok
+DROP TABLE my_datalake.default.test_lossy_year;
+
+# ---- truncate(10, id) on INT ----
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.test_lossy_truncate_int;
+
+statement ok
+CREATE TABLE my_datalake.default.test_lossy_truncate_int (id INT, val VARCHAR)
+PARTITIONED BY (truncate(10, id));
+
+statement ok
+INSERT INTO my_datalake.default.test_lossy_truncate_int VALUES
+    (11, 'a'), (12, 'b'), (13, 'c');
+
+query I
+DELETE FROM my_datalake.default.test_lossy_truncate_int WHERE id = 12;
+----
+1
+
+query II
+SELECT id, val FROM my_datalake.default.test_lossy_truncate_int ORDER BY id;
+----
+11	a
+13	c
+
+query I
+SELECT count(*) FROM iceberg_metadata(my_datalake.default.test_lossy_truncate_int)
+WHERE content = 'POSITION_DELETES';
+----
+1
+
+statement ok
+DROP TABLE my_datalake.default.test_lossy_truncate_int;
+
+# ---- truncate(3, category) on VARCHAR ----
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.test_lossy_truncate_varchar;
+
+statement ok
+CREATE TABLE my_datalake.default.test_lossy_truncate_varchar (id INT, category VARCHAR, val VARCHAR)
+PARTITIONED BY (truncate(3, category));
+
+statement ok
+INSERT INTO my_datalake.default.test_lossy_truncate_varchar VALUES
+    (1, 'catalog',  'a'),
+    (2, 'catapult', 'b'),
+    (3, 'category', 'c');
+
+query I
+DELETE FROM my_datalake.default.test_lossy_truncate_varchar WHERE category = 'catapult';
+----
+1
+
+query III
+SELECT id, category, val FROM my_datalake.default.test_lossy_truncate_varchar ORDER BY id;
+----
+1	catalog	a
+3	category	c
+
+query I
+SELECT count(*) FROM iceberg_metadata(my_datalake.default.test_lossy_truncate_varchar)
+WHERE content = 'POSITION_DELETES';
+----
+1
+
+statement ok
+DROP TABLE my_datalake.default.test_lossy_truncate_varchar;
+
+# ---- bucket(1, id): hashing is not order-preserving, and one bucket holds every id ----
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.test_lossy_bucket;
+
+statement ok
+CREATE TABLE my_datalake.default.test_lossy_bucket (id INT, val VARCHAR)
+PARTITIONED BY (bucket(1, id));
+
+statement ok
+INSERT INTO my_datalake.default.test_lossy_bucket VALUES
+    (1, 'a'), (2, 'b'), (3, 'c');
+
+query I
+DELETE FROM my_datalake.default.test_lossy_bucket WHERE id = 2;
+----
+1
+
+query II
+SELECT id, val FROM my_datalake.default.test_lossy_bucket ORDER BY id;
+----
+1	a
+3	c
+
+query I
+SELECT count(*) FROM iceberg_metadata(my_datalake.default.test_lossy_bucket)
+WHERE content = 'POSITION_DELETES';
+----
+1
+
+# A range is no safer than equality on a bucket partition: the bucket value says nothing about
+# the ordering of the ids inside it.
+query I
+DELETE FROM my_datalake.default.test_lossy_bucket WHERE id >= 3;
+----
+1
+
+query II
+SELECT id, val FROM my_datalake.default.test_lossy_bucket ORDER BY id;
+----
+1	a
+
+statement ok
+DROP TABLE my_datalake.default.test_lossy_bucket;
+
+# ---- Ranges that stay inside one partition ----
+# An endpoint inside the file's own partition transforms to that same partition value, so a non-strict
+# comparison against it holds trivially. Only a strict test keeps these files.
+
+# ---- day(ts): a range inside a single day ----
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.test_lossy_range_day;
+
+statement ok
+CREATE TABLE my_datalake.default.test_lossy_range_day (id INT, ts TIMESTAMP, val VARCHAR)
+PARTITIONED BY (day(ts));
+
+statement ok
+INSERT INTO my_datalake.default.test_lossy_range_day VALUES
+    (1, '2021-05-01 00:00:00'::TIMESTAMP, 'a'),
+    (2, '2021-05-01 10:30:00'::TIMESTAMP, 'b'),
+    (3, '2021-05-01 23:59:59'::TIMESTAMP, 'c');
+
+query I
+DELETE FROM my_datalake.default.test_lossy_range_day
+WHERE ts >= '2021-05-01 10:00:00'::TIMESTAMP AND ts <= '2021-05-01 11:00:00'::TIMESTAMP;
+----
+1
+
+query III
+SELECT id, ts, val FROM my_datalake.default.test_lossy_range_day ORDER BY id;
+----
+1	2021-05-01 00:00:00	a
+3	2021-05-01 23:59:59	c
+
+query I
+SELECT count(*) FROM iceberg_metadata(my_datalake.default.test_lossy_range_day)
+WHERE content = 'POSITION_DELETES';
+----
+1
+
+statement ok
+DROP TABLE my_datalake.default.test_lossy_range_day;
+
+# ---- hour(ts): a range inside a single hour ----
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.test_lossy_range_hour;
+
+statement ok
+CREATE TABLE my_datalake.default.test_lossy_range_hour (id INT, ts TIMESTAMP, val VARCHAR)
+PARTITIONED BY (hour(ts));
+
+statement ok
+INSERT INTO my_datalake.default.test_lossy_range_hour VALUES
+    (1, '2021-05-01 10:00:00'::TIMESTAMP, 'a'),
+    (2, '2021-05-01 10:30:00'::TIMESTAMP, 'b'),
+    (3, '2021-05-01 10:59:59'::TIMESTAMP, 'c');
+
+query I
+DELETE FROM my_datalake.default.test_lossy_range_hour
+WHERE ts >= '2021-05-01 10:15:00'::TIMESTAMP AND ts <= '2021-05-01 10:45:00'::TIMESTAMP;
+----
+1
+
+query III
+SELECT id, ts, val FROM my_datalake.default.test_lossy_range_hour ORDER BY id;
+----
+1	2021-05-01 10:00:00	a
+3	2021-05-01 10:59:59	c
+
+query I
+SELECT count(*) FROM iceberg_metadata(my_datalake.default.test_lossy_range_hour)
+WHERE content = 'POSITION_DELETES';
+----
+1
+
+statement ok
+DROP TABLE my_datalake.default.test_lossy_range_hour;
+
+# ---- month(ts): a range inside a single month ----
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.test_lossy_range_month;
+
+statement ok
+CREATE TABLE my_datalake.default.test_lossy_range_month (id INT, ts TIMESTAMP, val VARCHAR)
+PARTITIONED BY (month(ts));
+
+statement ok
+INSERT INTO my_datalake.default.test_lossy_range_month VALUES
+    (1, '2021-01-05 00:00:00'::TIMESTAMP, 'a'),
+    (2, '2021-01-15 00:00:00'::TIMESTAMP, 'b'),
+    (3, '2021-01-25 00:00:00'::TIMESTAMP, 'c');
+
+query I
+DELETE FROM my_datalake.default.test_lossy_range_month
+WHERE ts >= '2021-01-10 00:00:00'::TIMESTAMP AND ts <= '2021-01-20 00:00:00'::TIMESTAMP;
+----
+1
+
+query III
+SELECT id, ts, val FROM my_datalake.default.test_lossy_range_month ORDER BY id;
+----
+1	2021-01-05 00:00:00	a
+3	2021-01-25 00:00:00	c
+
+query I
+SELECT count(*) FROM iceberg_metadata(my_datalake.default.test_lossy_range_month)
+WHERE content = 'POSITION_DELETES';
+----
+1
+
+statement ok
+DROP TABLE my_datalake.default.test_lossy_range_month;
+
+# ---- year(ts): a range inside a single year ----
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.test_lossy_range_year;
+
+statement ok
+CREATE TABLE my_datalake.default.test_lossy_range_year (id INT, ts TIMESTAMP, val VARCHAR)
+PARTITIONED BY (year(ts));
+
+statement ok
+INSERT INTO my_datalake.default.test_lossy_range_year VALUES
+    (1, '2020-02-01 00:00:00'::TIMESTAMP, 'a'),
+    (2, '2020-06-01 00:00:00'::TIMESTAMP, 'b'),
+    (3, '2020-11-01 00:00:00'::TIMESTAMP, 'c');
+
+query I
+DELETE FROM my_datalake.default.test_lossy_range_year
+WHERE ts >= '2020-03-01 00:00:00'::TIMESTAMP AND ts <= '2020-09-01 00:00:00'::TIMESTAMP;
+----
+1
+
+query III
+SELECT id, ts, val FROM my_datalake.default.test_lossy_range_year ORDER BY id;
+----
+1	2020-02-01 00:00:00	a
+3	2020-11-01 00:00:00	c
+
+query I
+SELECT count(*) FROM iceberg_metadata(my_datalake.default.test_lossy_range_year)
+WHERE content = 'POSITION_DELETES';
+----
+1
+
+statement ok
+DROP TABLE my_datalake.default.test_lossy_range_year;
+
+# ---- truncate(10, id): an inequality inside a single bucket ----
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.test_lossy_range_truncate_int;
+
+statement ok
+CREATE TABLE my_datalake.default.test_lossy_range_truncate_int (id INT, val VARCHAR)
+PARTITIONED BY (truncate(10, id));
+
+statement ok
+INSERT INTO my_datalake.default.test_lossy_range_truncate_int VALUES
+    (11, 'a'), (15, 'b'), (19, 'c');
+
+query I
+DELETE FROM my_datalake.default.test_lossy_range_truncate_int WHERE id >= 15;
+----
+2
+
+query II
+SELECT id, val FROM my_datalake.default.test_lossy_range_truncate_int ORDER BY id;
+----
+11	a
+
+query I
+SELECT count(*) FROM iceberg_metadata(my_datalake.default.test_lossy_range_truncate_int)
+WHERE content = 'POSITION_DELETES';
+----
+1
+
+statement ok
+DROP TABLE my_datalake.default.test_lossy_range_truncate_int;
+
+# ---- truncate(3, category): a string has no successor, so both bounds fall back to the strict test ----
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.test_lossy_range_truncate_varchar;
+
+statement ok
+CREATE TABLE my_datalake.default.test_lossy_range_truncate_varchar (id INT, category VARCHAR, val VARCHAR)
+PARTITIONED BY (truncate(3, category));
+
+statement ok
+INSERT INTO my_datalake.default.test_lossy_range_truncate_varchar VALUES
+    (1, 'catalog',  'a'),
+    (2, 'catapult', 'b'),
+    (3, 'category', 'c');
+
+query I
+DELETE FROM my_datalake.default.test_lossy_range_truncate_varchar WHERE category >= 'catapult';
+----
+2
+
+query III
+SELECT id, category, val FROM my_datalake.default.test_lossy_range_truncate_varchar ORDER BY id;
+----
+1	catalog	a
+
+query I
+SELECT count(*) FROM iceberg_metadata(my_datalake.default.test_lossy_range_truncate_varchar)
+WHERE content = 'POSITION_DELETES';
+----
+1
+
+statement ok
+DROP TABLE my_datalake.default.test_lossy_range_truncate_varchar;

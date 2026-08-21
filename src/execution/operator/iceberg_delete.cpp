@@ -308,6 +308,35 @@ static void PopulateAlteredManifests(const IcebergMultiFileList &multi_file_list
 	}
 }
 
+//! Drop the data files the scan proved fully covered at the manifest level, along with the delete files
+//! that apply only to them, and count the rows they still held.
+static void DropFullyCoveredDataFiles(ClientContext &context, const IcebergMultiFileList &multi_file_list,
+                                      IcebergDeleteGlobalState &global_state) {
+	idx_t dropped_data_files = 0;
+	idx_t dropped_delete_files = 0;
+	int64_t dropped_records = 0;
+	for (auto &dropped : multi_file_list.ResolveDroppedDataFiles()) {
+		if (global_state.altered_manifests.IsInvalidated(dropped.file_path)) {
+			continue;
+		}
+		for (auto &delete_file : dropped.superseded_delete_files) {
+			global_state.altered_manifests.InvalidateFile(delete_file);
+			dropped_delete_files++;
+		}
+		global_state.altered_manifests.InvalidateFile(dropped.file_path);
+		global_state.total_deleted_count += NumericCast<idx_t>(dropped.live_record_count);
+		dropped_data_files++;
+		dropped_records += dropped.live_record_count;
+	}
+
+	if (dropped_data_files) {
+		DUCKDB_LOG(context, IcebergLogType,
+		           "Iceberg metadata-only DELETE, dropped %llu data file(s) holding %lld record(s) and %llu delete "
+		           "file(s) that applied only to them, without scanning any of them",
+		           dropped_data_files, dropped_records, dropped_delete_files);
+	}
+}
+
 void IcebergDelete::FlushDeletes(IcebergTransaction &transaction, ClientContext &context,
                                  IcebergDeleteGlobalState &global_state) const {
 	bool write_deletion_vector = table.table_info.table_metadata.iceberg_version >= 3;
@@ -450,9 +479,16 @@ SinkFinalizeType IcebergDelete::Finalize(Pipeline &pipeline, Event &event, Clien
 		if (should_write) {
 			WriteEqualityDeleteFile(context, global_state);
 		}
-	} else if (global_state.deleted_rows.empty()) {
-		// FIXME: replace with get deleted rows
-		return SinkFinalizeType::READY;
+	} else {
+		//! The scan skipped the files it proved fully covered, so their rows never reached Sink: drop them
+		//! at the manifest level via altered_manifests, and count them as deleted here instead.
+		if (multi_file_list) {
+			DropFullyCoveredDataFiles(context, *multi_file_list, global_state);
+		}
+		if (global_state.deleted_rows.empty() && global_state.altered_manifests.IsEmpty()) {
+			// FIXME: replace with get deleted rows
+			return SinkFinalizeType::READY;
+		}
 	}
 
 	auto &iceberg_transaction = IcebergTransaction::Get(context, table.catalog);
@@ -467,7 +503,7 @@ SinkFinalizeType IcebergDelete::Finalize(Pipeline &pipeline, Event &event, Clien
 	auto &table_info = irc_table.table_info;
 	auto iceberg_delete_files = GenerateDeleteManifestEntries(global_state);
 
-	if (!global_state.written_files.empty()) {
+	if (!global_state.written_files.empty() || !global_state.altered_manifests.IsEmpty()) {
 		ApplyTableUpdate(table_info, iceberg_transaction, [&](IcebergTable &tbl) {
 			auto &transaction_data = tbl.GetOrCreateTransactionData(iceberg_transaction);
 			transaction_data.AddDeleteSnapshot(std::move(iceberg_delete_files),
@@ -499,6 +535,11 @@ string IcebergDelete::GetName() const {
 InsertionOrderPreservingMap<string> IcebergDelete::ParamsToString() const {
 	InsertionOrderPreservingMap<string> result;
 	result["Table Name"] = table.name.GetIdentifierName();
+	if (multi_file_list && multi_file_list->IsMetadataOnlyDeleteEnabled()) {
+		//! Whether a file is actually dropped is only known once the scan has run, so this reports that the
+		//! delete is allowed to drop them, not that it did.
+		result["Metadata-Only Delete"] = "enabled";
+	}
 	return result;
 }
 
@@ -527,7 +568,13 @@ PhysicalOperator &IcebergDelete::PlanDelete(ClientContext &context, PhysicalPlan
 
 PhysicalOperator &IcebergCatalog::PlanDelete(ClientContext &context, PhysicalPlanGenerator &planner, LogicalDelete &op,
                                              PhysicalOperator &plan) {
-	return PlanDeleteOperation(context, planner, op, plan);
+	auto &iceberg_delete = PlanDeleteOperation(context, planner, op, plan).Cast<IcebergDelete>();
+	//! A standalone DELETE is the only consumer of its scan, so a file the predicate fully covers can be
+	//! dropped at the manifest level instead of scanned and rewritten as row-level deletes.
+	if (iceberg_delete.multi_file_list) {
+		iceberg_delete.multi_file_list->EnableMetadataOnlyDelete();
+	}
+	return iceberg_delete;
 }
 
 PhysicalOperator &IcebergCatalog::PlanDeleteOperation(ClientContext &context, PhysicalPlanGenerator &planner,
