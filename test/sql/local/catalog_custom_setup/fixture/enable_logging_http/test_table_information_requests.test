@@ -24,6 +24,12 @@ set logging_level='debug';
 statement ok
 CALL enable_logging('HTTP');
 
+# duckdb_logs_parsed('HTTP') accumulates for the whole process, not just this test file - clear
+# it so the first assertion below isn't polluted by HTTP requests earlier tests made before this
+# file even enabled logging.
+statement ok
+call truncate_duckdb_logs();
+
 statement ok
 CREATE SECRET (
     TYPE S3,

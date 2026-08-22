@@ -808,6 +808,23 @@ void IcebergSchemaEntry::Scan(CatalogType type, const std::function<void(Catalog
 	throw NotImplementedException("Scan without context not supported");
 }
 
+SimilarCatalogEntry IcebergSchemaEntry::GetSimilarEntry(CatalogTransaction transaction,
+                                                        const EntryLookupInfo &lookup_info) {
+	SimilarCatalogEntry result;
+	try {
+		Scan(transaction.GetContext(), lookup_info.GetCatalogType(), [&](CatalogEntry &entry) {
+			auto entry_score = StringUtil::SimilarityRating(entry.name.GetIdentifierName(), lookup_info.GetEntryName());
+			if (entry_score > result.score) {
+				result.score = entry_score;
+				result.name = Identifier(entry.name.GetIdentifierName());
+			}
+		});
+	} catch (...) {
+		return SimilarCatalogEntry();
+	}
+	return result;
+}
+
 optional_ptr<CatalogEntry> IcebergSchemaEntry::LookupEntry(CatalogTransaction transaction,
                                                            const EntryLookupInfo &lookup_info) {
 	auto type = lookup_info.GetCatalogType();
