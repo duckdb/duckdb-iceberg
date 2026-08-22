@@ -70,8 +70,13 @@ IcebergTable &IcebergTransactionTableState::GetOrCreateTransactionInfo(IcebergTr
 IcebergTransaction::IcebergTransaction(IcebergCatalog &ic_catalog, TransactionManager &manager, ClientContext &context)
     : Transaction(manager, context), db(*context.db), catalog(ic_catalog), access_mode(ic_catalog.access_mode),
       mode(ic_catalog.attach_options.case_sensitivity_mode), schemas(mode), created_schemas(mode), tables(mode),
-      current_table_data(mode), deleted_schemas(mode), listed_schemas(mode), looked_up_entries(mode),
-      schema_property_updates(mode) {
+      current_table_data(mode),
+      // Unlike its siblings above/below, deleted_schemas was case-SENSITIVE (unordered_set<string>)
+      // before this option existed - dropping "Foo" must not also hide a distinct "foo". Preserve
+      // that for UNSET (today's default for every existing attach), while still honoring an
+      // explicit case_sensitive=false the same way the other fields do.
+      deleted_schemas(mode == CaseSensitivityMode::UNSET ? CaseSensitivityMode::SENSITIVE : mode), listed_schemas(mode),
+      looked_up_entries(mode), schema_property_updates(mode) {
 }
 
 IcebergTransaction::~IcebergTransaction() = default;

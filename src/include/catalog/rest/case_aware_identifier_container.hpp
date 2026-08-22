@@ -195,6 +195,18 @@ public:
 		return EmplaceInternal(key, std::move(value));
 	}
 
+	//! Like insert/emplace, but never raises the ambiguity error - for callers that already
+	//! handle a same-fold collision themselves (e.g. AddEntry's overwrite-on-conflict via the
+	//! returned iterator/bool), where throwing here would make that handling unreachable.
+	std::pair<iterator, bool> emplace_permissive(const string &key, T value) { // NOLINT: match STL container naming
+		if (mode == CaseSensitivityMode::SENSITIVE) {
+			auto res = sensitive_map.emplace(key, std::move(value));
+			return {iterator::MakeSensitive(res.first), res.second};
+		}
+		auto res = insensitive_map.emplace(key, std::move(value));
+		return {iterator::MakeInsensitive(res.first), res.second};
+	}
+
 	void erase(const string &key) { // NOLINT: match STL container naming
 		if (mode == CaseSensitivityMode::SENSITIVE) {
 			sensitive_map.erase(key);

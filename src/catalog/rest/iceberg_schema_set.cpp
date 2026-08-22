@@ -159,7 +159,10 @@ vector<shared_ptr<IcebergSchemaEntry>> IcebergSchemaSet::GetEntries(ClientContex
 void IcebergSchemaSet::AddEntry(const string &name, shared_ptr<IcebergSchemaEntry> entry) {
 	D_ASSERT(entry);
 	annotated_lock_guard<annotated_mutex> l(entry_lock);
-	auto insert_result = entries.insert(name, entry);
+	// Permissive: this is called after the namespace was already created/verified server-side
+	// (see DoSchemaCreates), so a same-fold collision here must overwrite the stale entry below,
+	// not throw - the ambiguity check belongs on the reference path, not this bookkeeping step.
+	auto insert_result = entries.emplace_permissive(name, entry);
 	if (!insert_result.second) {
 		insert_result.first->second = std::move(entry);
 	}
@@ -183,6 +186,20 @@ void IcebergSchemaSet::LoadEntriesInternal(ClientContext &context) {
 		return;
 	}
 	auto schemas = IRCAPI::GetSchemas(context, ic_catalog, {});
+	case_insensitive_set_t listed;
+	for (const auto &schema : schemas) {
+		listed.insert(GetSchemaName(schema.items));
+	}
+	// 'entries' outlives the transaction - drop namespaces the listing no longer reports before
+	// inserting the fresh listing below, so a namespace renamed only by case doesn't spuriously
+	// collide with its own stale, differently-cased key under INSENSITIVE mode.
+	for (auto it = entries.begin(); it != entries.end();) {
+		if (listed.find(it->first) == listed.end()) {
+			it = entries.erase(it);
+		} else {
+			++it;
+		}
+	}
 	for (const auto &schema : schemas) {
 		CreateSchemaInfo info;
 		info.SetQualifiedName(QualifiedName(info.GetQualifiedName().Catalog(), Identifier(GetSchemaName(schema.items)),
@@ -190,17 +207,18 @@ void IcebergSchemaSet::LoadEntriesInternal(ClientContext &context) {
 		info.internal = false;
 		auto schema_entry = make_shared_ptr<IcebergSchemaEntry>(catalog, info);
 		schema_entry->namespace_items = std::move(schema.items);
-		CreateEntryInternal(std::move(schema_entry));
+		CreateEntryInternal(std::move(schema_entry), /*permissive=*/true);
 	}
 	iceberg_transaction.called_list_schemas = true;
 }
 
-shared_ptr<IcebergSchemaEntry> IcebergSchemaSet::CreateEntryInternal(shared_ptr<IcebergSchemaEntry> entry) {
+shared_ptr<IcebergSchemaEntry> IcebergSchemaSet::CreateEntryInternal(shared_ptr<IcebergSchemaEntry> entry,
+                                                                     bool permissive) {
 	auto &name = entry->name.GetIdentifierName();
 	if (name.empty()) {
 		throw InternalException("IcebergSchemaSet::CreateEntry called with empty name");
 	}
-	auto insert_result = entries.insert(name, entry);
+	auto insert_result = permissive ? entries.emplace_permissive(name, entry) : entries.insert(name, entry);
 	if (insert_result.second) {
 		return insert_result.first->second;
 	}

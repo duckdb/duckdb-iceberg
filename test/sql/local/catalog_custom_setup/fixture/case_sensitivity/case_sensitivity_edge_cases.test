@@ -73,15 +73,18 @@ select * from ce_insensitive.default."AMBIGCASE";
 ----
 Ambiguous
 
-# --- bulk-listing ambiguity, case_sensitive=false: SHOW TABLES must fail loudly rather
-# than silently dropping one of the two case-colliding entries via a plain map insert ---
+# --- bulk-listing ambiguity, case_sensitive=false: SHOW TABLES/duckdb_tables() scan every
+# attached catalog's every schema unconditionally (no pushdown), so throwing here would let
+# one unrelated catalog's collision anywhere break introspection everywhere. Bulk listing
+# therefore stays silent on a collision (first-listed of the two wins) - unlike a direct
+# reference to the ambiguous name, which still throws loudly (tested above).
 statement ok
 use ce_insensitive.default;
 
-statement error
-show tables;
+query I
+select count(*) from (show tables) where lower(name) = 'ambigcase';
 ----
-Ambiguous
+1
 
 statement ok
 use memory;

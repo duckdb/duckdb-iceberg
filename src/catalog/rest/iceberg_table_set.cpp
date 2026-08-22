@@ -206,9 +206,12 @@ void IcebergTableSet::LoadEntriesInternal(ClientContext &context) {
 		case_insensitive_set_t listed;
 		for (auto &table : *tables) {
 			listed.insert(table.name);
-			entries.emplace(table.name, make_shared_ptr<IcebergTable>(ic_catalog, schema, table.name));
 		}
-		// 'entries' outlives the transaction, so drop the names the listing no longer reports.
+		// 'entries' outlives the transaction, so drop the names the listing no longer reports -
+		// before inserting the fresh listing below. Otherwise a table renamed only by case (e.g.
+		// 'Stock' -> 'stock' between two listings) would still have its old-cased key sitting in
+		// 'entries', and inserting the new-cased key would spuriously report an ambiguity against
+		// itself under INSENSITIVE mode, even though only one table actually exists.
 		// Tables created in this transaction live on the transaction, not here, so they are safe.
 		for (auto it = entries.begin(); it != entries.end();) {
 			if (listed.find(it->first) == listed.end()) {
@@ -216,6 +219,13 @@ void IcebergTableSet::LoadEntriesInternal(ClientContext &context) {
 			} else {
 				++it;
 			}
+		}
+		// Permissive: SHOW TABLES/duckdb_tables() etc. scan every attached catalog's every schema
+		// unconditionally (no pushdown), so throwing here would let one unrelated catalog's
+		// collision break introspection everywhere. A direct reference to an ambiguous name still
+		// throws loudly via ResolveCanonicalNameViaList, unaffected by this.
+		for (auto &table : *tables) {
+			entries.emplace_permissive(table.name, make_shared_ptr<IcebergTable>(ic_catalog, schema, table.name));
 		}
 	}
 	iceberg_transaction.listed_schemas.insert(schema.name.GetIdentifierName());

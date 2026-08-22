@@ -31,7 +31,12 @@ public:
 
 protected:
 	void LoadEntriesInternal(ClientContext &context) DUCKDB_REQUIRES(entry_lock);
-	shared_ptr<IcebergSchemaEntry> CreateEntryInternal(shared_ptr<IcebergSchemaEntry> entry)
+	//! 'permissive': when true (bulk listing), a same-fold collision silently keeps the first
+	//! entry rather than throwing - SHOW TABLES/duckdb_tables() etc. scan every attached
+	//! catalog's every schema unconditionally (no pushdown), so throwing here would let one
+	//! unrelated catalog's collision break introspection everywhere. A direct reference to an
+	//! ambiguous name still throws loudly via ResolveCanonicalNameViaList, unaffected by this.
+	shared_ptr<IcebergSchemaEntry> CreateEntryInternal(shared_ptr<IcebergSchemaEntry> entry, bool permissive = false)
 	    DUCKDB_REQUIRES(entry_lock);
 
 public:
