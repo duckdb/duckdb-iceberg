@@ -87,7 +87,7 @@ select count(*) from (show tables) where lower(name) = 'ambigcase';
 1
 
 statement ok
-use memory;
+use memory.main;
 
 # case_sensitive=true must not be affected by the ambiguity at all - both tables resolve
 # independently since the sensitive backend keeps them physically distinct.
