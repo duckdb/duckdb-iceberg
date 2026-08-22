@@ -8,13 +8,14 @@
 #include "duckdb/common/vector.hpp"
 
 #include "catalog_entry/schema/iceberg_schema_entry.hpp"
+#include "catalog/rest/case_aware_identifier_container.hpp"
 
 namespace duckdb {
 struct CreateSchemaInfo;
 
 class IcebergSchemaSet {
 public:
-	explicit IcebergSchemaSet(Catalog &catalog);
+	IcebergSchemaSet(Catalog &catalog, CaseSensitivityMode mode);
 
 public:
 	void LoadEntries(ClientContext &context);
@@ -23,18 +24,28 @@ public:
 	vector<shared_ptr<IcebergSchemaEntry>> GetEntries(ClientContext &context);
 	void AddEntry(const string &name, shared_ptr<IcebergSchemaEntry> entry);
 	void RemoveEntry(const string &name);
+	//! Resolves the canonical (server-cased) name for a case-insensitive lookup by listing
+	//! namespaces and matching case-insensitively. Returns the canonical name, or an empty string
+	//! if no namespace matches. Throws on an ambiguous (multiple case-fold) match.
+	string ResolveCanonicalNameViaList(ClientContext &context, const string &name);
 
 protected:
 	void LoadEntriesInternal(ClientContext &context) DUCKDB_REQUIRES(entry_lock);
-	shared_ptr<IcebergSchemaEntry> CreateEntryInternal(shared_ptr<IcebergSchemaEntry> entry)
+	//! 'permissive': when true (bulk listing), a same-fold collision silently keeps the first
+	//! entry rather than throwing - SHOW TABLES/duckdb_tables() etc. scan every attached
+	//! catalog's every schema unconditionally (no pushdown), so throwing here would let one
+	//! unrelated catalog's collision break introspection everywhere. A direct reference to an
+	//! ambiguous name still throws loudly via ResolveCanonicalNameViaList, unaffected by this.
+	shared_ptr<IcebergSchemaEntry> CreateEntryInternal(shared_ptr<IcebergSchemaEntry> entry, bool permissive = false)
 	    DUCKDB_REQUIRES(entry_lock);
 
 public:
 	Catalog &catalog;
+	const CaseSensitivityMode mode;
 
 private:
 	annotated_mutex entry_lock;
-	case_insensitive_map_t<shared_ptr<IcebergSchemaEntry>> entries DUCKDB_GUARDED_BY(entry_lock);
+	CaseAwareIdentifierMap<shared_ptr<IcebergSchemaEntry>> entries DUCKDB_GUARDED_BY(entry_lock);
 };
 
 } // namespace duckdb

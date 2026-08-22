@@ -1,0 +1,177 @@
+# name: test/sql/local/catalog_custom_setup/fixture/case_sensitivity/case_sensitive_schemas.test
+# description: test the case_sensitive ATTACH option for schema/namespace identifier lookups
+# group: [case_sensitivity]
+
+require-env FIXTURE_SERVER_AVAILABLE
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+set ignore_error_messages
+
+statement ok
+CREATE SECRET (
+    TYPE S3,
+    KEY_ID 'admin',
+    SECRET 'password',
+    ENDPOINT '127.0.0.1:9000',
+    URL_STYLE 'path',
+    USE_SSL 0
+);
+
+statement ok
+ATTACH '' AS css_sensitive (
+    TYPE ICEBERG,
+    CLIENT_ID 'admin',
+    CLIENT_SECRET 'password',
+    ENDPOINT 'http://127.0.0.1:8181',
+    case_sensitive true
+);
+
+statement ok
+ATTACH '' AS css_insensitive (
+    TYPE ICEBERG,
+    CLIENT_ID 'admin',
+    CLIENT_SECRET 'password',
+    ENDPOINT 'http://127.0.0.1:8181',
+    case_sensitive false
+);
+
+statement ok
+ATTACH '' AS css_unset (
+    TYPE ICEBERG,
+    CLIENT_ID 'admin',
+    CLIENT_SECRET 'password',
+    ENDPOINT 'http://127.0.0.1:8181'
+);
+
+statement ok
+drop table if exists css_unset."MixedCaseSchema".test_table;
+
+statement ok
+drop schema if exists css_unset."MixedCaseSchema";
+
+statement ok
+create schema css_unset."MixedCaseSchema";
+
+statement ok
+create table css_unset."MixedCaseSchema".test_table as select range::int a from range(3);
+
+# --- case_sensitive=true: cold lookup of the namespace with wrong case must fail ---
+statement error
+select * from css_sensitive."mixedcaseschema".test_table order by a;
+----
+does not exist
+
+query I
+select * from css_sensitive."MixedCaseSchema".test_table order by a;
+----
+0
+1
+2
+
+# --- case_sensitive=false: cold lookup of the namespace with wrong case must resolve
+# via list-then-canonical-match, made deliberate and correct (rather than an accident of
+# whichever schema happened to be cached already) ---
+query I
+select * from css_insensitive."mixedcaseschema".test_table order by a;
+----
+0
+1
+2
+
+# --- unset/default: schemas are incidentally insensitive once warm/cached even without an
+# explicit request for that - this is today's existing (unchanged) behavior, unlike tables ---
+query I
+select * from css_unset."mixedcaseschema".test_table order by a;
+----
+0
+1
+2
+
+# --- case_sensitive=false: repeat lookups of the SAME schema under different casing within
+# one transaction must not be treated as ambiguous. looked_up_entries is a memoization set
+# ("have we already tried resolving this spelling"), not an identity store - two spellings of
+# the one real schema are not two schemas.
+statement ok
+BEGIN;
+
+query I
+select * from css_insensitive."MixedCaseSchema".test_table order by a;
+----
+0
+1
+2
+
+query I
+select * from css_insensitive."mixedcaseschema".test_table order by a;
+----
+0
+1
+2
+
+query I
+select * from css_insensitive."MIXEDCASESCHEMA".test_table order by a;
+----
+0
+1
+2
+
+statement ok
+COMMIT;
+
+# --- schema DDL must use the same canonical spelling as schema lookups ---
+statement ok
+drop schema if exists css_sensitive."DdlMixedCaseSchema";
+
+statement ok
+drop schema if exists css_sensitive."ddlmixedcaseschema";
+
+statement ok
+create schema css_sensitive."DdlMixedCaseSchema";
+
+# This must resolve to the existing canonical namespace rather than creating a second,
+# case-distinct namespace in the exact-string REST catalog.
+statement ok
+create schema if not exists css_insensitive."ddlmixedcaseschema";
+
+query I
+select count(*)
+from information_schema.schemata
+where catalog_name = 'css_insensitive'
+  and lower(schema_name) = 'ddlmixedcaseschema';
+----
+1
+
+# DROP must likewise commit against the canonical server-side spelling.
+statement ok
+drop schema css_insensitive."ddlmixedcaseschema";
+
+query I
+select count(*)
+from information_schema.schemata
+where catalog_name = 'css_insensitive'
+  and lower(schema_name) = 'ddlmixedcaseschema';
+----
+0
+
+statement ok
+drop table if exists css_unset."MixedCaseSchema".test_table;
+
+statement ok
+drop schema if exists css_unset."MixedCaseSchema";
+
+# Detach so these aliases don't leak into later tests in the same process.
+statement ok
+DETACH css_sensitive;
+
+statement ok
+DETACH css_insensitive;
+
+statement ok
+DETACH css_unset;

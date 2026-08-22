@@ -1,0 +1,212 @@
+# name: test/sql/local/catalog_custom_setup/fixture/case_sensitivity/case_sensitivity_edge_cases.test
+# description: test ambiguous case-fold matches and transaction-bookkeeping edge cases for case_sensitive
+# group: [case_sensitivity]
+
+require-env FIXTURE_SERVER_AVAILABLE
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+set ignore_error_messages
+
+statement ok
+CREATE SECRET (
+    TYPE S3,
+    KEY_ID 'admin',
+    SECRET 'password',
+    ENDPOINT '127.0.0.1:9000',
+    URL_STYLE 'path',
+    USE_SSL 0
+);
+
+statement ok
+ATTACH '' AS ce_sensitive (
+    TYPE ICEBERG,
+    CLIENT_ID 'admin',
+    CLIENT_SECRET 'password',
+    ENDPOINT 'http://127.0.0.1:8181',
+    case_sensitive true
+);
+
+statement ok
+ATTACH '' AS ce_insensitive (
+    TYPE ICEBERG,
+    CLIENT_ID 'admin',
+    CLIENT_SECRET 'password',
+    ENDPOINT 'http://127.0.0.1:8181',
+    case_sensitive false
+);
+
+statement ok
+ATTACH '' AS ce_sensitive_cached (
+    TYPE ICEBERG,
+    CLIENT_ID 'admin',
+    CLIENT_SECRET 'password',
+    ENDPOINT 'http://127.0.0.1:8181',
+    case_sensitive true,
+    max_table_staleness '5 minutes'
+);
+
+statement ok
+drop table if exists ce_sensitive.default."AmbigCase";
+
+statement ok
+drop table if exists ce_sensitive.default."ambigcase";
+
+# Two case-distinct tables coexisting is legal per the Iceberg spec (server-side identifiers
+# are exact strings) - this is why the sensitive backend must be a genuinely separate
+# container rather than an insensitive one with a check layered on top.
+statement ok
+create table ce_sensitive.default."AmbigCase" as select 1 a;
+
+statement ok
+create table ce_sensitive.default."ambigcase" as select 2 a;
+
+# --- single-name cold lookup ambiguity, case_sensitive=false ---
+statement error
+select * from ce_insensitive.default."AMBIGCASE";
+----
+Ambiguous
+
+# --- bulk-listing ambiguity, case_sensitive=false: SHOW TABLES/duckdb_tables() scan every
+# attached catalog's every schema unconditionally (no pushdown), so throwing here would let
+# one unrelated catalog's collision anywhere break introspection everywhere. Bulk listing
+# therefore stays silent on a collision (first-listed of the two wins) - unlike a direct
+# reference to the ambiguous name, which still throws loudly (tested above).
+statement ok
+use ce_insensitive.default;
+
+query I
+select count(*) from (show tables) where lower(name) = 'ambigcase';
+----
+1
+
+statement ok
+use memory.main;
+
+# case_sensitive=true must not be affected by the ambiguity at all - both tables resolve
+# independently since the sensitive backend keeps them physically distinct.
+query I
+select * from ce_sensitive.default."AmbigCase";
+----
+1
+
+query I
+select * from ce_sensitive.default."ambigcase";
+----
+2
+
+# The metadata cache must preserve the same case-sensitive identity semantics. Otherwise
+# the second lookup reuses AmbigCase's cached LoadTableResult and returns the wrong table.
+query I
+select * from ce_sensitive_cached.default."AmbigCase";
+----
+1
+
+query I
+select * from ce_sensitive_cached.default."ambigcase";
+----
+2
+
+statement ok
+drop table if exists ce_sensitive.default."AmbigCase";
+
+statement ok
+drop table if exists ce_sensitive.default."ambigcase";
+
+# --- cross-case drop-then-query within one transaction, case_sensitive=true ---
+# Regression guard for the bug where deleted_tables (a case_insensitive_map_t regardless of
+# mode, before this change) would incorrectly report a distinct, differently-cased table as
+# deleted too.
+statement ok
+drop table if exists ce_sensitive.default."DropCaseFoo";
+
+statement ok
+drop table if exists ce_sensitive.default."dropcasefoo";
+
+statement ok
+create table ce_sensitive.default."DropCaseFoo" as select 1 a;
+
+statement ok
+create table ce_sensitive.default."dropcasefoo" as select 2 a;
+
+statement ok
+BEGIN;
+
+statement ok
+drop table ce_sensitive.default."DropCaseFoo";
+
+# the distinct, differently-cased table must still be queryable in the same transaction
+query I
+select * from ce_sensitive.default."dropcasefoo";
+----
+2
+
+statement ok
+COMMIT;
+
+statement ok
+drop table if exists ce_sensitive.default."dropcasefoo";
+
+# --- SET/REMOVE table properties under case_sensitive=true with a cross-case table name ---
+statement ok
+drop table if exists ce_sensitive.default."PropsCaseFoo";
+
+statement ok
+drop table if exists ce_sensitive.default."propscasefoo";
+
+statement ok
+create table ce_sensitive.default."PropsCaseFoo" as select 1 a;
+
+statement ok
+create table ce_sensitive.default."propscasefoo" as select 2 a;
+
+statement ok
+CALL set_iceberg_table_properties(ce_sensitive.default."PropsCaseFoo", {'foo': 'bar'});
+
+statement ok
+CALL set_iceberg_table_properties(ce_sensitive.default."propscasefoo", {'foo': 'baz'});
+
+query II
+select * from iceberg_table_properties(ce_sensitive.default."PropsCaseFoo") where key = 'foo';
+----
+foo	bar
+
+query II
+select * from iceberg_table_properties(ce_sensitive.default."propscasefoo") where key = 'foo';
+----
+foo	baz
+
+statement ok
+CALL remove_iceberg_table_properties(ce_sensitive.default."PropsCaseFoo", ['foo']);
+
+query I
+select count(*) from iceberg_table_properties(ce_sensitive.default."PropsCaseFoo") where key = 'foo';
+----
+0
+
+query II
+select * from iceberg_table_properties(ce_sensitive.default."propscasefoo") where key = 'foo';
+----
+foo	baz
+
+statement ok
+drop table if exists ce_sensitive.default."PropsCaseFoo";
+
+statement ok
+drop table if exists ce_sensitive.default."propscasefoo";
+
+# Detach so these aliases don't leak into later tests in the same process.
+statement ok
+DETACH ce_sensitive;
+
+statement ok
+DETACH ce_insensitive;
+
+statement ok
+DETACH ce_sensitive_cached;
