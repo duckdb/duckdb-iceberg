@@ -147,3 +147,16 @@ use memory;
 
 statement ok
 drop table if exists cs_unset.case_sensitive_test_ns.MixedCaseTable;
+
+# Detach so these aliases (and their cached catalog/schema listings) don't leak into later
+# tests in the same process - a leaked cs_insensitive would resurface the real, unrelated
+# Stock/stock case collision in the fixture catalog's 'default' namespace against any later
+# test that lists tables broadly (e.g. SHOW ALL TABLES).
+statement ok
+DETACH cs_sensitive;
+
+statement ok
+DETACH cs_insensitive;
+
+statement ok
+DETACH cs_unset;

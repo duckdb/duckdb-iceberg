@@ -197,3 +197,13 @@ drop table if exists ce_sensitive.default."PropsCaseFoo";
 
 statement ok
 drop table if exists ce_sensitive.default."propscasefoo";
+
+# Detach so these aliases don't leak into later tests in the same process.
+statement ok
+DETACH ce_sensitive;
+
+statement ok
+DETACH ce_insensitive;
+
+statement ok
+DETACH ce_sensitive_cached;

@@ -165,3 +165,13 @@ drop table if exists css_unset."MixedCaseSchema".test_table;
 
 statement ok
 drop schema if exists css_unset."MixedCaseSchema";
+
+# Detach so these aliases don't leak into later tests in the same process.
+statement ok
+DETACH css_sensitive;
+
+statement ok
+DETACH css_insensitive;
+
+statement ok
+DETACH css_unset;
