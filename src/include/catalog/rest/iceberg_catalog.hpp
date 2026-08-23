@@ -19,6 +19,7 @@ namespace duckdb {
 
 class IcebergSchemaEntry;
 struct IcebergTable;
+struct IcebergVendedCredentialState;
 
 class MetadataCacheValue {
 public:
@@ -59,24 +60,7 @@ public:
 		callback(*entry.load_table_result);
 		return true;
 	}
-	void SetOrOverwrite(const string &table_key,
-	                    unique_ptr<const rest_api_objects::LoadTableResult> load_table_result) {
-		annotated_lock_guard<annotated_mutex> guard(lock);
-		// If max_table_staleness_minutes is not set, use a time in the past so cache is always expired
-		system_clock::time_point expires_at;
-		if (attach_options.max_table_staleness_micros.IsValid()) {
-			expires_at =
-			    system_clock::now() + std::chrono::microseconds(attach_options.max_table_staleness_micros.GetIndex());
-		} else {
-			expires_at = system_clock::time_point::min();
-		}
-		auto epoch_micros = timestamp_t(duration_cast<microseconds>(expires_at.time_since_epoch()).count());
-		auto expire_timestamp_ms = timestamp_ms_t(Timestamp::GetEpochMs(epoch_micros));
-
-		// erase load table result if it exists.
-		tables.erase(table_key);
-		tables.emplace(table_key, MetadataCacheValue(expire_timestamp_ms, std::move(load_table_result)));
-	}
+	void SetOrOverwrite(const string &table_key, unique_ptr<const rest_api_objects::LoadTableResult> load_table_result);
 
 	//! Evict only if the table was initialized from the result that is still cached for its key.
 	void EvictIfCurrent(const IcebergTable &table);
@@ -158,6 +142,7 @@ public:
 	void AddDefaultSupportedEndpoints();
 	void AddS3TablesEndpoints();
 	void AddGlueEndpoints();
+	shared_ptr<IcebergVendedCredentialState> GetVendedCredentialState(const string &table_key);
 	//! Whether or not this is an in-memory Iceberg database
 	bool InMemory() override;
 	string GetDBPath() override;
@@ -189,6 +174,8 @@ private:
 	case_insensitive_map_t<string> overrides;
 	//! Normalized attach options (after core stripping) used to detect a conflicting ATTACH OR REPLACE
 	unordered_map<string, Value> normalized_attach_options;
+	mutex credential_states_lock;
+	case_insensitive_map_t<shared_ptr<IcebergVendedCredentialState>> credential_states;
 
 public:
 	unordered_set<string> supported_urls;

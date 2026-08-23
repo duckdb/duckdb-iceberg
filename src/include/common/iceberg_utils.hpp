@@ -9,7 +9,9 @@
 #pragma once
 
 #include "duckdb/common/printer.hpp"
+#include "duckdb/common/case_insensitive_map.hpp"
 #include "duckdb/common/file_system.hpp"
+#include "duckdb/common/optional.hpp"
 #include "duckdb/catalog/catalog_entry/copy_function_catalog_entry.hpp"
 #include "duckdb/storage/external_file_cache/caching_file_system.hpp"
 
@@ -29,6 +31,9 @@ struct IcebergResolvedMetadata {
 
 class IcebergUtils {
 public:
+	static constexpr int64_t VENDED_CREDENTIAL_EXPIRY_MARGIN_MS = 60000;
+
+public:
 	//! Downloads a file fully into a string
 	static string FileToString(const string &path, FileSystem &fs);
 	//! Downloads a gz file fully into a string
@@ -47,6 +52,7 @@ public:
 	static idx_t ParseByteSizeOptionallyFormatted(const string &input);
 	static int64_t AddFileSizeChecked(int64_t total, int64_t file_size_in_bytes);
 	static timestamp_ms_t GetTransactionStartTimeMS(ClientContext &context);
+	static void NarrowVendedCredentialExpiryMs(const case_insensitive_map_t<string> &config, optional<int64_t> &result);
 };
 
 } // namespace duckdb
