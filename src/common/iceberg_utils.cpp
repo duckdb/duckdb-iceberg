@@ -29,6 +29,41 @@ int64_t IcebergUtils::AddFileSizeChecked(int64_t total, int64_t file_size_in_byt
 	return updated;
 }
 
+static constexpr const char *S3_SESSION_TOKEN_EXPIRES_AT_MS = "s3.session-token-expires-at-ms";
+static constexpr const char *GCS_TOKEN_EXPIRES_AT_MS = "gcs.oauth2.token-expires-at";
+static constexpr const char *ADLS_SAS_TOKEN_EXPIRES_AT_MS_PREFIX = "adls.sas-token-expires-at-ms.";
+
+static void ConsiderCredentialExpiry(const string &raw_value, optional<int64_t> &result) {
+	int64_t parsed;
+	try {
+		size_t processed = 0;
+		parsed = std::stoll(raw_value, &processed);
+		if (processed != raw_value.size()) {
+			return;
+		}
+	} catch (std::exception &) {
+		return;
+	}
+	if (!result || parsed < *result) {
+		result = parsed;
+	}
+}
+
+void IcebergUtils::NarrowVendedCredentialExpiryMs(const case_insensitive_map_t<string> &config,
+                                                  optional<int64_t> &result) {
+	for (auto &key : {S3_SESSION_TOKEN_EXPIRES_AT_MS, GCS_TOKEN_EXPIRES_AT_MS}) {
+		auto it = config.find(key);
+		if (it != config.end()) {
+			ConsiderCredentialExpiry(it->second, result);
+		}
+	}
+	for (auto &entry : config) {
+		if (StringUtil::StartsWith(StringUtil::Lower(entry.first), ADLS_SAS_TOKEN_EXPIRES_AT_MS_PREFIX)) {
+			ConsiderCredentialExpiry(entry.second, result);
+		}
+	}
+}
+
 timestamp_ms_t IcebergUtils::GetTransactionStartTimeMS(ClientContext &context) {
 	auto &meta_transaction = MetaTransaction::Get(context);
 	auto transaction_start = meta_transaction.GetCurrentTransactionStartTimestamp();

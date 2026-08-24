@@ -22,6 +22,45 @@
 
 namespace duckdb {
 
+static optional<int64_t> GetVendedCredentialExpiryMs(const rest_api_objects::LoadTableResult &load_table_result) {
+	optional<int64_t> result;
+	if (load_table_result.config) {
+		IcebergUtils::NarrowVendedCredentialExpiryMs(*load_table_result.config, result);
+	}
+	if (load_table_result.storage_credentials) {
+		for (auto &credential : *load_table_result.storage_credentials) {
+			IcebergUtils::NarrowVendedCredentialExpiryMs(credential.config, result);
+		}
+	}
+	return result;
+}
+
+void LoadTableResultCache::SetOrOverwrite(const string &table_key,
+                                          unique_ptr<const rest_api_objects::LoadTableResult> load_table_result) {
+	annotated_lock_guard<annotated_mutex> guard(lock);
+	system_clock::time_point expires_at;
+	if (attach_options.max_table_staleness_micros.IsValid()) {
+		expires_at =
+		    system_clock::now() + std::chrono::microseconds(attach_options.max_table_staleness_micros.GetIndex());
+	} else {
+		expires_at = system_clock::time_point::min();
+	}
+	auto epoch_micros = timestamp_t(duration_cast<microseconds>(expires_at.time_since_epoch()).count());
+	auto expire_timestamp_ms = timestamp_ms_t(Timestamp::GetEpochMs(epoch_micros));
+
+	auto credential_expiry = GetVendedCredentialExpiryMs(*load_table_result);
+	if (credential_expiry) {
+		auto credential_expire_timestamp_ms =
+		    timestamp_ms_t(*credential_expiry - IcebergUtils::VENDED_CREDENTIAL_EXPIRY_MARGIN_MS);
+		if (credential_expire_timestamp_ms < expire_timestamp_ms) {
+			expire_timestamp_ms = credential_expire_timestamp_ms;
+		}
+	}
+
+	tables.erase(table_key);
+	tables.emplace(table_key, MetadataCacheValue(expire_timestamp_ms, std::move(load_table_result)));
+}
+
 void LoadTableResultCache::EvictIfCurrent(const IcebergTable &table) {
 	annotated_lock_guard<annotated_mutex> guard(lock);
 	auto it = tables.find(table.GetTableKey());
@@ -44,6 +83,17 @@ IcebergCatalog::IcebergCatalog(AttachedDatabase &db_p, AccessMode access_mode,
 }
 
 IcebergCatalog::~IcebergCatalog() = default;
+
+shared_ptr<IcebergVendedCredentialState> IcebergCatalog::GetVendedCredentialState(const string &table_key) {
+	lock_guard<mutex> guard(credential_states_lock);
+	auto entry = credential_states.find(table_key);
+	if (entry != credential_states.end()) {
+		return entry->second;
+	}
+	auto state = make_shared_ptr<IcebergVendedCredentialState>();
+	credential_states[table_key] = state;
+	return state;
+}
 
 //===--------------------------------------------------------------------===//
 // Catalog API

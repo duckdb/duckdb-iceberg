@@ -46,6 +46,7 @@ MIXED_REFRESH_A_TABLE = "vended_mixed_delete_refresh_a"
 MIXED_REFRESH_B_TABLE = "vended_mixed_delete_refresh_b"
 SAME_BAD_TABLE = "vended_same_bad_refresh"
 RANGE_FAIL_TABLE = "vended_range_fail_refresh"
+EXPIRY_TABLE = "vended_expiry_refresh"
 
 OLD_SCAN_KEY = "OLD_SCAN_KEY"
 NEW_SCAN_KEY = "NEW_SCAN_KEY"
@@ -78,6 +79,11 @@ NEW_MIXED_REFRESH_B_KEY = "NEW_MIXED_REFRESH_B_KEY"
 OLD_SAME_BAD_KEY = "OLD_SAME_BAD_KEY"
 OLD_RANGE_FAIL_KEY = "OLD_RANGE_FAIL_KEY"
 NEW_RANGE_FAIL_KEY = "NEW_RANGE_FAIL_KEY"
+EXPIRED_EXPIRY_KEY = "EXPIRED_EXPIRY_KEY"
+NEW_EXPIRY_KEY = "NEW_EXPIRY_KEY"
+
+EXPIRED_AT_MS = 1000
+UNEXPIRED_FOR_MS = 3600 * 1000
 
 UPSTREAM_S3_KEY = "admin"
 UPSTREAM_S3_SECRET = "password"
@@ -120,6 +126,7 @@ class VendedCredentialRefreshAddon:
             MIXED_REFRESH_B_TABLE: False,
             SAME_BAD_TABLE: False,
             RANGE_FAIL_TABLE: False,
+            EXPIRY_TABLE: False,
         }
         self.table_scan_refresh_path = None
         # Force a rollback if this branch reaches the catalog commit after writing the
@@ -155,28 +162,57 @@ class VendedCredentialRefreshAddon:
         path = parsed_path.path
 
         table_match = re.fullmatch(r"/v1/namespaces/default/tables/([^/]+)", path)
-        credentials_match = re.fullmatch(r"/v1/namespaces/default/tables/([^/]+)/credentials", path)
+        credentials_match = re.fullmatch(
+            r"/v1/namespaces/default/tables/([^/]+)/credentials", path
+        )
 
         if self._is_direct_delete_commit_request(flow, path):
             self._forced_catalog_commit_failure(flow)
             return
 
-        if flow.request.method == "GET" and table_match and table_match.group(1) in self.refresh_unlocked:
+        if (
+            flow.request.method == "GET"
+            and table_match
+            and table_match.group(1) in self.refresh_unlocked
+        ):
             table = table_match.group(1)
             flow.metadata["vended_table"] = table
             return
 
+        if credentials_match and credentials_match.group(1) == EXPIRY_TABLE:
+            self.refresh_unlocked[EXPIRY_TABLE] = True
+            body = json.dumps(
+                {
+                    "error": {
+                        "message": "forced credential endpoint failure",
+                        "type": "TestFailure",
+                        "code": 500,
+                    }
+                }
+            ).encode()
+            flow.response = http.Response.make(
+                500, body, {"Content-Type": "application/json"}
+            )
+            return
+
         if credentials_match and credentials_match.group(1) in self.refresh_unlocked:
             table = credentials_match.group(1)
-            body = json.dumps({"storage-credentials": [self._credentials_for_table(table)]}).encode()
-            flow.response = http.Response.make(200, body, {"Content-Type": "application/json"})
+            body = json.dumps(
+                {"storage-credentials": [self._credentials_for_table(table)]}
+            ).encode()
+            flow.response = http.Response.make(
+                200, body, {"Content-Type": "application/json"}
+            )
 
     def _is_direct_delete_commit_request(self, flow: http.HTTPFlow, path):
         if flow.request.method != "POST":
             return False
         if not self.direct_delete_data_written:
             return False
-        if path != f"/v1/namespaces/default/tables/{DIRECT_DELETE_TABLE}" and path != "/v1/transactions/commit":
+        if (
+            path != f"/v1/namespaces/default/tables/{DIRECT_DELETE_TABLE}"
+            and path != "/v1/transactions/commit"
+        ):
             return False
         if path == f"/v1/namespaces/default/tables/{DIRECT_DELETE_TABLE}":
             return True
@@ -194,7 +230,9 @@ class VendedCredentialRefreshAddon:
                 }
             }
         ).encode()
-        flow.response = http.Response.make(500, body, {"Content-Type": "application/json"})
+        flow.response = http.Response.make(
+            500, body, {"Content-Type": "application/json"}
+        )
 
     def _handle_s3_request(self, flow: http.HTTPFlow):
         if self._is_direct_delete_data_write(flow):
@@ -202,10 +240,18 @@ class VendedCredentialRefreshAddon:
 
         key_id = self._extract_access_key(flow.request.headers)
         has_range = flow.request.headers.get("Range") is not None
-        is_full_get = flow.request.method == "GET" and not has_range and not self._is_list_request(flow)
+        is_full_get = (
+            flow.request.method == "GET"
+            and not has_range
+            and not self._is_list_request(flow)
+        )
         is_put = flow.request.method == "PUT"
-        is_multipart_post = flow.request.method == "POST" and self._has_query_key(flow, "uploads")
-        is_delete_post = flow.request.method == "POST" and self._has_query_key(flow, "delete")
+        is_multipart_post = flow.request.method == "POST" and self._has_query_key(
+            flow, "uploads"
+        )
+        is_delete_post = flow.request.method == "POST" and self._has_query_key(
+            flow, "delete"
+        )
 
         if key_id == OLD_SCAN_KEY:
             self.refresh_unlocked[SCAN_TABLE] = True
@@ -257,7 +303,11 @@ class VendedCredentialRefreshAddon:
             self.refresh_unlocked[DIRECT_DELETE_TABLE] = True
             self._forbidden(flow, "stale direct delete credentials")
             return
-        if key_id == OLD_MIXED_REFRESH_KEY and is_delete_post and self._is_mixed_refresh_delete_request(flow):
+        if (
+            key_id == OLD_MIXED_REFRESH_KEY
+            and is_delete_post
+            and self._is_mixed_refresh_delete_request(flow)
+        ):
             has_a, has_b = self._mixed_refresh_delete_parts(flow)
             if has_a and not has_b:
                 self.refresh_unlocked[MIXED_REFRESH_A_TABLE] = True
@@ -279,6 +329,9 @@ class VendedCredentialRefreshAddon:
             return
         if key_id == NEW_RANGE_FAIL_KEY:
             self._forbidden(flow, "refreshed range-fail credentials")
+            return
+        if key_id == EXPIRED_EXPIRY_KEY:
+            self._forbidden(flow, "expired credentials were signed with")
             return
         if is_delete_post and self._is_mixed_delete_request(flow):
             if not self._validate_mixed_delete_request(flow, key_id):
@@ -314,11 +367,14 @@ class VendedCredentialRefreshAddon:
             NEW_MIXED_REFRESH_A_KEY,
             NEW_MIXED_REFRESH_B_KEY,
             OLD_RANGE_FAIL_KEY,
+            NEW_EXPIRY_KEY,
         }:
             self._forbidden(flow, "unknown test credentials")
             return
 
-        local_object = LOCAL_PARQUET_OBJECTS.get(urllib.parse.urlparse(flow.request.path).path)
+        local_object = LOCAL_PARQUET_OBJECTS.get(
+            urllib.parse.urlparse(flow.request.path).path
+        )
         if local_object:
             self._serve_local_object(flow, local_object)
             return
@@ -327,14 +383,17 @@ class VendedCredentialRefreshAddon:
 
     @staticmethod
     def _is_direct_delete_data_write(flow: http.HTTPFlow):
-        return flow.request.method == "PUT" and urllib.parse.urlparse(flow.request.path).path.startswith(
-            "/warehouse/default/vended_direct_delete_refresh/data/"
-        )
+        return flow.request.method == "PUT" and urllib.parse.urlparse(
+            flow.request.path
+        ).path.startswith("/warehouse/default/vended_direct_delete_refresh/data/")
 
     @staticmethod
     def _query_keys(flow: http.HTTPFlow):
         parsed = urllib.parse.urlparse(flow.request.path)
-        return {key for key, _ in urllib.parse.parse_qsl(parsed.query, keep_blank_values=True)}
+        return {
+            key
+            for key, _ in urllib.parse.parse_qsl(parsed.query, keep_blank_values=True)
+        }
 
     @staticmethod
     def _has_query_key(flow: http.HTTPFlow, key):
@@ -342,7 +401,10 @@ class VendedCredentialRefreshAddon:
 
     @staticmethod
     def _is_list_request(flow: http.HTTPFlow):
-        return flow.request.method == "GET" and VendedCredentialRefreshAddon._has_query_key(flow, "list-type")
+        return (
+            flow.request.method == "GET"
+            and VendedCredentialRefreshAddon._has_query_key(flow, "list-type")
+        )
 
     @staticmethod
     def _is_data_file_request(flow: http.HTTPFlow):
@@ -361,7 +423,8 @@ class VendedCredentialRefreshAddon:
         return (
             flow.request.method == "POST"
             and VendedCredentialRefreshAddon._has_query_key(flow, "delete")
-            and b"vended_credentials_refresh/mixed_delete_refresh/" in flow.request.content
+            and b"vended_credentials_refresh/mixed_delete_refresh/"
+            in flow.request.content
         )
 
     @staticmethod
@@ -403,22 +466,36 @@ class VendedCredentialRefreshAddon:
 
     def _credentials_for_table(self, table):
         key_id = self._key_for_table(table)
+        config = {
+            "s3.access-key-id": key_id,
+            "s3.secret-access-key": f"{key_id}_SECRET",
+            "s3.region": "us-east-1",
+            "s3.endpoint": f"http://{S3_HOST}:{S3_PORT}",
+            "s3.path-style-access": "true",
+        }
+        if table == EXPIRY_TABLE:
+            if self.refresh_unlocked[table]:
+                expires_at_ms = (
+                    int(datetime.datetime.now().timestamp() * 1000) + UNEXPIRED_FOR_MS
+                )
+            else:
+                expires_at_ms = EXPIRED_AT_MS
+            config["s3.session-token"] = f"{key_id}_SESSION_TOKEN"
+            config["s3.session-token-expires-at-ms"] = str(expires_at_ms)
         return {
             "prefix": self._credentials_prefix(table),
-            "config": {
-                "s3.access-key-id": key_id,
-                "s3.secret-access-key": f"{key_id}_SECRET",
-                "s3.region": "us-east-1",
-                "s3.endpoint": f"http://{S3_HOST}:{S3_PORT}",
-                "s3.path-style-access": "true",
-            },
+            "config": config,
         }
 
     def _key_for_table(self, table):
         if table == SCAN_TABLE:
             return NEW_SCAN_KEY if self.refresh_unlocked[table] else OLD_SCAN_KEY
         if table == TABLE_SCAN_TABLE:
-            return REFRESHED_TABLE_SCAN_KEY if self.refresh_unlocked[table] else INITIAL_TABLE_SCAN_KEY
+            return (
+                REFRESHED_TABLE_SCAN_KEY
+                if self.refresh_unlocked[table]
+                else INITIAL_TABLE_SCAN_KEY
+            )
         if table == INIT_TABLE:
             return NEW_INIT_KEY if self.refresh_unlocked[table] else OLD_INIT_KEY
         if table == RANGE_TABLE:
@@ -436,15 +513,35 @@ class VendedCredentialRefreshAddon:
         if table == DELETE_TABLE:
             return NEW_DELETE_KEY if self.refresh_unlocked[table] else OLD_DELETE_KEY
         if table == DIRECT_DELETE_TABLE:
-            return NEW_DIRECT_DELETE_KEY if self.refresh_unlocked[table] else OLD_DIRECT_DELETE_KEY
+            return (
+                NEW_DIRECT_DELETE_KEY
+                if self.refresh_unlocked[table]
+                else OLD_DIRECT_DELETE_KEY
+            )
         if table == MIXED_REFRESH_A_TABLE:
-            return NEW_MIXED_REFRESH_A_KEY if self.refresh_unlocked[table] else OLD_MIXED_REFRESH_KEY
+            return (
+                NEW_MIXED_REFRESH_A_KEY
+                if self.refresh_unlocked[table]
+                else OLD_MIXED_REFRESH_KEY
+            )
         if table == MIXED_REFRESH_B_TABLE:
-            return NEW_MIXED_REFRESH_B_KEY if self.refresh_unlocked[table] else OLD_MIXED_REFRESH_KEY
+            return (
+                NEW_MIXED_REFRESH_B_KEY
+                if self.refresh_unlocked[table]
+                else OLD_MIXED_REFRESH_KEY
+            )
         if table == SAME_BAD_TABLE:
             return OLD_SAME_BAD_KEY
         if table == RANGE_FAIL_TABLE:
-            return NEW_RANGE_FAIL_KEY if self.refresh_unlocked[table] else OLD_RANGE_FAIL_KEY
+            return (
+                NEW_RANGE_FAIL_KEY
+                if self.refresh_unlocked[table]
+                else OLD_RANGE_FAIL_KEY
+            )
+        if table == EXPIRY_TABLE:
+            return (
+                NEW_EXPIRY_KEY if self.refresh_unlocked[table] else EXPIRED_EXPIRY_KEY
+            )
         raise ValueError(f"unexpected table: {table}")
 
     @staticmethod
@@ -479,6 +576,8 @@ class VendedCredentialRefreshAddon:
             return "s3://warehouse/vended_credentials_refresh/same_bad"
         if table == RANGE_FAIL_TABLE:
             return "s3://warehouse/vended_credentials_refresh/range_fail"
+        if table == EXPIRY_TABLE:
+            return "s3://warehouse/"
         raise ValueError(f"unexpected table: {table}")
 
     @staticmethod
@@ -490,7 +589,7 @@ class VendedCredentialRefreshAddon:
     @staticmethod
     def _forbidden(flow: http.HTTPFlow, message):
         body = (
-            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>"
+            '<?xml version="1.0" encoding="UTF-8"?>'
             "<Error><Code>AccessDenied</Code>"
             f"<Message>{message}</Message></Error>"
         ).encode()
@@ -512,7 +611,9 @@ class VendedCredentialRefreshAddon:
 
         file_size = file_path.stat().st_size
         try:
-            byte_range = self._parse_range_header(flow.request.headers.get("Range"), file_size)
+            byte_range = self._parse_range_header(
+                flow.request.headers.get("Range"), file_size
+            )
         except ValueError:
             flow.response = http.Response.make(
                 416,
@@ -574,7 +675,9 @@ class VendedCredentialRefreshAddon:
             if value is not None:
                 preserved_headers[header] = value
         flow.request.headers.clear()
-        flow.request.headers.update(self._signed_s3_headers(flow.request.method, flow.request.path))
+        flow.request.headers.update(
+            self._signed_s3_headers(flow.request.method, flow.request.path)
+        )
         flow.request.headers.update(preserved_headers)
         flow.request.headers["Host"] = f"{S3_HOST}:{S3_PORT}"
 
@@ -587,7 +690,9 @@ class VendedCredentialRefreshAddon:
         host_header = f"{S3_HOST}:{S3_PORT}"
         parsed_path = urllib.parse.urlparse(path)
         canonical_uri = urllib.parse.quote(parsed_path.path or "/", safe="/-_.~%")
-        canonical_query = VendedCredentialRefreshAddon._canonical_query_string(parsed_path.query)
+        canonical_query = VendedCredentialRefreshAddon._canonical_query_string(
+            parsed_path.query
+        )
         signed_headers = "host;x-amz-content-sha256;x-amz-date"
         canonical_headers = (
             "\n".join(
@@ -619,7 +724,9 @@ class VendedCredentialRefreshAddon:
             ]
         )
         signature = hmac.new(
-            VendedCredentialRefreshAddon._signing_key(UPSTREAM_S3_SECRET, date_stamp, UPSTREAM_S3_REGION),
+            VendedCredentialRefreshAddon._signing_key(
+                UPSTREAM_S3_SECRET, date_stamp, UPSTREAM_S3_REGION
+            ),
             string_to_sign.encode(),
             hashlib.sha256,
         ).hexdigest()
@@ -653,7 +760,9 @@ class VendedCredentialRefreshAddon:
 
     @staticmethod
     def _signing_key(secret, date_stamp, region):
-        date_key = VendedCredentialRefreshAddon._hmac_sha256(("AWS4" + secret).encode(), date_stamp)
+        date_key = VendedCredentialRefreshAddon._hmac_sha256(
+            ("AWS4" + secret).encode(), date_stamp
+        )
         region_key = VendedCredentialRefreshAddon._hmac_sha256(date_key, region)
         service_key = VendedCredentialRefreshAddon._hmac_sha256(region_key, "s3")
         return VendedCredentialRefreshAddon._hmac_sha256(service_key, "aws4_request")

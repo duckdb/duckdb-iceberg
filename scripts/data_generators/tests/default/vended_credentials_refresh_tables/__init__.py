@@ -54,6 +54,20 @@ class Test(IcebergTest):
             """
         )
 
+        con.con.sql(
+            """
+            CREATE OR REPLACE TABLE default.vended_expiry_refresh (
+                id integer
+            )
+            USING iceberg
+            """
+        )
+        con.con.sql(
+            """
+            INSERT INTO default.vended_expiry_refresh VALUES (1), (2), (3)
+            """
+        )
+
         for table in REFRESH_METADATA_TABLES:
             con.con.sql(
                 f"""

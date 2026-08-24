@@ -1,6 +1,7 @@
 #pragma once
 
 #include "duckdb/catalog/catalog_entry.hpp"
+#include "duckdb/common/mutex.hpp"
 #include "duckdb/storage/external_file_cache/caching_file_system_wrapper.hpp"
 
 #include "catalog/rest/catalog_entry/table/iceberg_table_schema_version.hpp"
@@ -19,6 +20,13 @@ struct IcebergManifestEntry;
 struct IRCAPITableCredentials {
 	unique_ptr<CreateSecretInput> config;
 	vector<CreateSecretInput> storage_credentials;
+};
+
+struct IcebergVendedCredentialState {
+	mutex lock;
+	bool initialized = false;
+	case_insensitive_map_t<string> config;
+	vector<rest_api_objects::StorageCredential> storage_credentials;
 };
 
 struct IcebergTable {
@@ -51,6 +59,11 @@ public:
 	IRCAPITableCredentials
 	GetVendedCredentials(ClientContext &context,
 	                     const vector<rest_api_objects::StorageCredential> &storage_credentials) const;
+	IRCAPITableCredentials
+	GetVendedCredentials(ClientContext &context, const case_insensitive_map_t<string> &table_config,
+	                     const vector<rest_api_objects::StorageCredential> &storage_credentials) const;
+	bool VendedCredentialsExpired() const;
+	IRCAPITableCredentials RefreshVendedCredentials(ClientContext &context) const;
 	const string &BaseFilePath() const;
 	bool IsRenamed() const;
 
@@ -84,8 +97,11 @@ public:
 	unique_ptr<IcebergTransactionData> transaction_data;
 	//! The cached response this table was initialized from, used as an identity and never dereferenced.
 	optional_ptr<const rest_api_objects::LoadTableResult> initialization_source;
+	shared_ptr<IcebergVendedCredentialState> credential_state;
 
 private:
+	IRCAPITableCredentials GetCurrentVendedCredentials(ClientContext &context) const;
+	IRCAPITableCredentials RefreshVendedCredentialsInternal(ClientContext &context) const;
 	//! Unchanged by rename, used to check for a rename
 	const string original_name;
 };

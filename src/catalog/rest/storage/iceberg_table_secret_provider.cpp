@@ -177,15 +177,7 @@ static CreateSecretInput ReVendVendedCredentials(ClientContext &context, CreateS
 	auto &table_entry = table_entry_p->Cast<IcebergTableSchemaVersion>();
 	auto &table_info = table_entry.table_info;
 
-	auto refreshed_credentials =
-	    IRCAPI::GetTableCredentials(context, ic_catalog, iceberg_schema, table_name.GetIdentifierName());
-	if (refreshed_credentials.error_) {
-		throw HTTPException(StringUtil::Format("Could not refresh Iceberg vended credentials for table '%s': "
-		                                       "GetTableInformation returned response code %s with message \"%s\"",
-		                                       table_name, EnumUtil::ToString(refreshed_credentials.status_),
-		                                       refreshed_credentials.error_->_error.message));
-	}
-	auto credentials = table_info.GetVendedCredentials(context, refreshed_credentials.result_->storage_credentials);
+	auto credentials = table_info.RefreshVendedCredentials(context);
 
 	optional_ptr<CreateSecretInput> match;
 	if (credentials.config) {
