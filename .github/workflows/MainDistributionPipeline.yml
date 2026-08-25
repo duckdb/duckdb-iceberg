@@ -17,7 +17,7 @@ jobs:
     uses: duckdb/extension-ci-tools/.github/workflows/_extension_distribution.yml@main
     with:
       extension_name: iceberg
-      duckdb_version: 3be83b480fe0c05b35ddf3a5458ba50ce3f2b389 
+      duckdb_version: 169987abf3fcf2d4726af3784968e96c0cc84182
       ci_tools_version: main
       exclude_archs: 'windows_amd64_mingw'
       extra_toolchains: 'python3'
