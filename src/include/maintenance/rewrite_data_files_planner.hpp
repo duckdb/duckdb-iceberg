@@ -21,7 +21,7 @@ struct RewriteCandidate {
 	vector<IcebergPartitionInfo> partition_info;
 };
 
-struct PartitionRewriteBucket {
+struct RewriteBucket {
 	vector<RewriteCandidate> retained;
 	//! Counted over every eligible file, so max_files_to_rewrite cannot change the gating decision below.
 	int64_t eligible_count = 0;
