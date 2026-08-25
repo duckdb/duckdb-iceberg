@@ -1,5 +1,6 @@
 #include "maintenance/rewrite_data_files_planner.hpp"
 
+#include "duckdb/common/assert.hpp"
 #include "duckdb/common/exception.hpp"
 #include "duckdb/common/numeric_utils.hpp"
 #include "duckdb/common/operator/cast_operators.hpp"
@@ -108,11 +109,12 @@ bool UnpartitionedCollectionComplete(const std::map<string, PartitionRewriteBuck
 	if (!input.max_files_to_rewrite) {
 		return false;
 	}
-	auto it = per_partition.find("");
-	if (it == per_partition.end()) {
+	if (per_partition.empty()) {
 		return false;
 	}
-	auto &bucket = it->second;
+	//! Unpartitioned tables have a single rewrite bucket; do not look up partition value "".
+	D_ASSERT(per_partition.size() == 1);
+	auto &bucket = per_partition.begin()->second;
 	if (bucket.retained.size() < static_cast<idx_t>(input.max_files_to_rewrite.value())) {
 		return false;
 	}
