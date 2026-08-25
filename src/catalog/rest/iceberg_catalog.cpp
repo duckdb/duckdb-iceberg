@@ -76,6 +76,41 @@ optional_ptr<SchemaCatalogEntry> IcebergCatalog::LookupSchema(CatalogTransaction
 	return reinterpret_cast<SchemaCatalogEntry *>(entry.get());
 }
 
+CatalogEntryLookup IcebergCatalog::TryLookupEntryInternal(CatalogTransaction transaction,
+                                                          const EntryLookupInfo &lookup_info) {
+	switch (lookup_info.GetCatalogType()) {
+	case CatalogType::TABLE_ENTRY:
+	case CatalogType::VIEW_ENTRY:
+	case CatalogType::SCHEMA_ENTRY:
+		break;
+	default:
+		// an Iceberg catalog only holds namespaces, tables and views - resolving the namespace for any other entry
+		// type can issue a request to the REST catalog for a lookup that can never succeed
+		return {nullptr, nullptr, ErrorData()};
+	}
+
+	// the (possibly nested) namespace qualification is everything up to the entry name
+	auto &full_path = lookup_info.GetQualifiedName().Path();
+	vector<Identifier> schema_path(full_path.begin(), full_path.end() - 1);
+	auto schema_lookup = EntryLookupInfo::SchemaLookup(lookup_info, std::move(schema_path));
+	auto schema_entry = LookupSchema(transaction, schema_lookup, OnEntryNotFound::RETURN_NULL);
+	if (!schema_entry) {
+		return {nullptr, nullptr, ErrorData()};
+	}
+	auto entry = schema_entry->LookupEntry(transaction, lookup_info);
+	if (entry) {
+		return {schema_entry, entry, ErrorData()};
+	}
+	// the namespace is resolved before the table, so a namespace we have not seen yet is optimistically materialized
+	// as a schema entry - the failed table lookup is what establishes whether it exists at all. If it does not, do not
+	// report the schema back: the core catalog would otherwise search it for similarly named entries to suggest, which
+	// means listing the tables of a namespace that is not there
+	if (!schema_entry->Cast<IcebergSchemaEntry>().DoesExist()) {
+		return {nullptr, nullptr, ErrorData()};
+	}
+	return {schema_entry, nullptr, ErrorData()};
+}
+
 optional_ptr<CatalogEntry> IcebergCatalog::CreateSchema(CatalogTransaction transaction, CreateSchemaInfo &info) {
 	optional_ptr<ClientContext> context = transaction.GetContext();
 	if (info.on_conflict == OnCreateConflict::REPLACE_ON_CONFLICT) {

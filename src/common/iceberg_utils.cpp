@@ -1,6 +1,7 @@
 #include "common/iceberg_utils.hpp"
 
 #include "duckdb.hpp"
+#include "duckdb/common/exception.hpp"
 #include "duckdb/common/gzip_file_system.hpp"
 #include "duckdb/main/database_manager.hpp"
 #include "duckdb/catalog/catalog_entry/table_catalog_entry.hpp"
@@ -151,7 +152,12 @@ optional_ptr<CatalogEntry> IcebergUtils::GetTableEntry(ClientContext &context, s
 	}
 	case 1: {
 		auto schema = catalog.GetDefaultSchema();
-		auto table_entry = catalog.GetEntry(context, CatalogType::TABLE_ENTRY, schema, Identifier(qualified_name[0]),
+		if (!schema) {
+			throw InvalidInputException(
+			    "Cannot resolve table name %s - catalog %s has no default schema, qualify the name with a schema",
+			    input_string, catalog.GetName());
+		}
+		auto table_entry = catalog.GetEntry(context, CatalogType::TABLE_ENTRY, *schema, Identifier(qualified_name[0]),
 		                                    OnEntryNotFound::THROW_EXCEPTION);
 		return table_entry;
 	}

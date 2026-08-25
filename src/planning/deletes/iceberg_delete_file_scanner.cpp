@@ -298,8 +298,9 @@ static void ScanParquetDeleteFiles(const IcebergDeletePlanningContext &context,
 	}
 
 	auto iceberg_deletes_scan = IcebergFunctions::GetIcebergDeletesScanFunction(context.context);
+	// copied out of the local set: the bind mutates function_info and needs a mutable function
 	auto delete_scan_function =
-	    iceberg_deletes_scan.GetFunctionByArguments(context.context, {LogicalType::LIST(LogicalType::VARCHAR)});
+	    *iceberg_deletes_scan.GetFunctionByArguments(context.context, {LogicalType::LIST(LogicalType::VARCHAR)});
 	vector<MultiFileColumnDefinition> delete_schema = content == IcebergManifestEntryContentType::POSITION_DELETES
 	                                                      ? BuildPositionalDeleteSchema()
 	                                                      : BuildEqualityDeleteSchema(context.metadata, scan_entries);
@@ -352,7 +353,7 @@ static void ScanParquetDeleteFiles(const IcebergDeletePlanningContext &context,
 			break;
 		}
 		result.Flatten();
-		auto file_idx = multi_file_local_state.job.reader->file_list_idx.GetIndex();
+		auto file_idx = multi_file_local_state.job->reader->file_list_idx.GetIndex();
 		if (file_idx >= scan_entries.size()) {
 			throw InternalException("Delete batch reader index %llu is out of bounds for %llu files", file_idx,
 			                        scan_entries.size());

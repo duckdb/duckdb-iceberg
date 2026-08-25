@@ -1,6 +1,7 @@
 #pragma once
 
 #include "duckdb/catalog/catalog.hpp"
+#include "duckdb/common/optional.hpp"
 #include "duckdb/function/table_function.hpp"
 #include "duckdb/common/enums/access_mode.hpp"
 #include "duckdb/common/mutex.hpp"
@@ -119,7 +120,10 @@ public:
 	bool CheckAmbiguousCatalogOrSchema(ClientContext &context, const Identifier &schema) override {
 		return false;
 	}
-	Identifier GetDefaultSchema() const override {
+	optional<Identifier> GetDefaultSchema() const override {
+		if (default_schema.empty()) {
+			return nullopt;
+		}
 		return default_schema;
 	}
 	ErrorData SupportsCreateTable(BoundCreateTableInfo &info) override;
@@ -138,6 +142,8 @@ public:
 	IcebergSchemaSet &GetSchemas();
 	optional_ptr<SchemaCatalogEntry> LookupSchema(CatalogTransaction transaction, const EntryLookupInfo &schema_lookup,
 	                                              OnEntryNotFound if_not_found) override;
+	CatalogEntryLookup TryLookupEntryInternal(CatalogTransaction transaction,
+	                                          const EntryLookupInfo &lookup_info) override;
 	PhysicalOperator &PlanInsert(ClientContext &context, PhysicalPlanGenerator &planner, LogicalInsert &op,
 	                             optional_ptr<PhysicalOperator> plan) override;
 	PhysicalOperator &PlanCreateTableAs(ClientContext &context, PhysicalPlanGenerator &planner, LogicalCreateTable &op,

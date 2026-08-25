@@ -42,7 +42,7 @@ TableFunctionSet IcebergFunctions::GetIcebergDeletesScanFunction(ClientContext &
 	auto &parquet_scan = catalog_entry->Cast<TableFunctionCatalogEntry>();
 	auto parquet_scan_copy = parquet_scan.functions;
 
-	for (auto &function : parquet_scan_copy.functions) {
+	parquet_scan_copy.ApplyToFunctions([](TableFunction &function) {
 		// Register the MultiFileReader as the driver for reads
 		function.get_multi_file_reader = IcebergDeleteFileReader::CreateInstance;
 		function.late_materialization = false;
@@ -60,7 +60,7 @@ TableFunctionSet IcebergFunctions::GetIcebergDeletesScanFunction(ClientContext &
 		// Schema param is just confusing here
 		function.named_parameters.erase("schema");
 		function.SetName("iceberg_deletes_scan");
-	}
+	});
 
 	parquet_scan_copy.SetName("iceberg_deletes_scan");
 	return parquet_scan_copy;
