@@ -142,8 +142,6 @@ public:
 	IcebergSchemaSet &GetSchemas();
 	optional_ptr<SchemaCatalogEntry> LookupSchema(CatalogTransaction transaction, const EntryLookupInfo &schema_lookup,
 	                                              OnEntryNotFound if_not_found) override;
-	CatalogEntryLookup TryLookupEntryInternal(CatalogTransaction transaction,
-	                                          const EntryLookupInfo &lookup_info) override;
 	PhysicalOperator &PlanInsert(ClientContext &context, PhysicalPlanGenerator &planner, LogicalInsert &op,
 	                             optional_ptr<PhysicalOperator> plan) override;
 	PhysicalOperator &PlanCreateTableAs(ClientContext &context, PhysicalPlanGenerator &planner, LogicalCreateTable &op,
