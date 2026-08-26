@@ -28,6 +28,9 @@ public:
 public:
 	void LoadCredentials(ClientContext &context) const;
 	void LoadCredentials(ClientContext &context, IRCAPITableCredentials table_credentials) const;
+	//! Make the storage locations of this table reachable through the catalog's remote signing endpoint,
+	//! returns false when the catalog did not vend remote signing information for it
+	bool RegisterRemoteSigning() const;
 	optional_ptr<CatalogEntry> GetLatestSchema();
 	idx_t GetIcebergVersion() const;
 	optional_ptr<CatalogEntry> GetSchemaVersion(optional_ptr<BoundAtClause> at);

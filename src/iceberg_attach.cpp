@@ -298,12 +298,14 @@ unique_ptr<Catalog> IcebergAttach::Attach(optional_ptr<StorageExtensionInfo> sto
 	if (!access_mode_string.empty()) {
 		if (access_mode_string == "vended_credentials") {
 			attach_options.access_mode = IRCAccessDelegationMode::VENDED_CREDENTIALS;
+		} else if (access_mode_string == "remote_signing") {
+			attach_options.access_mode = IRCAccessDelegationMode::REMOTE_SIGNING;
 		} else if (access_mode_string == "none") {
 			attach_options.access_mode = IRCAccessDelegationMode::NONE;
 		} else {
-			throw InvalidInputException(
-			    "Unrecognized access mode '%s'. Supported options are 'vended_credentials' and 'none'",
-			    access_mode_string);
+			throw InvalidInputException("Unrecognized access mode '%s'. Supported options are 'vended_credentials', "
+			                            "'remote_signing' and 'none'",
+			                            access_mode_string);
 		}
 	}
 	if (attach_options.authorization_type == IcebergAuthorizationType::INVALID) {
@@ -348,6 +350,9 @@ unique_ptr<Catalog> IcebergAttach::Attach(optional_ptr<StorageExtensionInfo> sto
 	D_ASSERT(auth_handler);
 	auto catalog =
 	    make_uniq<IcebergCatalog>(db, options.access_mode, std::move(auth_handler), attach_options, default_schema);
+	if (storage_info) {
+		catalog->remote_signing = dynamic_cast<IcebergStorageExtensionInfo &>(*storage_info).remote_signing;
+	}
 	//! Remember the normalized attach options so that a later ATTACH OR REPLACE can detect when they change.
 	catalog->SetAttachOptions(options.options);
 	catalog->GetConfig(context, endpoint_type);

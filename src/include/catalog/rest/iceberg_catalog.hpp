@@ -15,6 +15,7 @@
 #include "rest_catalog/objects/load_table_result.hpp"
 #include "catalog/rest/storage/iceberg_authorization.hpp"
 #include "common/iceberg_utils.hpp"
+#include "storage/remote_signing/iceberg_remote_signing.hpp"
 
 namespace duckdb {
 
@@ -184,6 +185,8 @@ public:
 	//! attach options
 	IcebergAttachOptions attach_options;
 	Identifier default_schema;
+	//! Storage locations this catalog signs requests for, shared with the file system that reads them
+	shared_ptr<IcebergRemoteSigningRegistry> remote_signing;
 
 private:
 	//! warehouse

@@ -508,7 +508,44 @@ static void AddHTTPSecretsToOptions(SecretEntry &http_secret_entry, case_insensi
 	                            : http_kv_secret.TryGetValue("verify_ssl").DefaultCastAs(LogicalType::BOOLEAN);
 }
 
+bool IcebergTable::RegisterRemoteSigning() const {
+	//! Catalogs advertise remote signing whenever their storage profile supports it, so honoring it has to
+	//! stay opt-in: an attach that manages its own credentials must keep reaching storage directly
+	if (catalog.attach_options.access_mode != IRCAccessDelegationMode::REMOTE_SIGNING) {
+		return false;
+	}
+	if (!catalog.remote_signing) {
+		return false;
+	}
+	auto location = table_metadata.GetLocation();
+	if (!IcebergRemoteSigningConfig::IsSupportedLocation(location)) {
+		return false;
+	}
+	IcebergRemoteSigningTarget target;
+	if (!IcebergRemoteSigningConfig::TryParse(config, catalog.base_uri, catalog.GetName().GetIdentifierName(),
+	                                          target)) {
+		return false;
+	}
+	catalog.remote_signing->RegisterTarget(location, target);
+	auto data_path = table_metadata.table_properties.find("write.data.path");
+	if (data_path != table_metadata.table_properties.end() &&
+	    IcebergRemoteSigningConfig::IsSupportedLocation(data_path->second)) {
+		catalog.remote_signing->RegisterTarget(data_path->second, target);
+	}
+	return true;
+}
+
 void IcebergTable::LoadCredentials(ClientContext &context) const {
+	if (catalog.attach_options.access_mode == IRCAccessDelegationMode::REMOTE_SIGNING) {
+		if (!RegisterRemoteSigning() && IcebergRemoteSigningConfig::IsSupportedLocation(table_metadata.GetLocation())) {
+			throw InvalidConfigurationException(
+			    "'%s' is attached with access_delegation_mode 'remote_signing', but the catalog returned no remote "
+			    "signing information for table '%s'. Remote signing has to be enabled for the storage profile the "
+			    "table lives in.",
+			    catalog.GetName().GetIdentifierName(), name);
+		}
+		return;
+	}
 	if (catalog.attach_options.access_mode != IRCAccessDelegationMode::VENDED_CREDENTIALS) {
 		// assume secret already exists
 		return;
@@ -517,6 +554,9 @@ void IcebergTable::LoadCredentials(ClientContext &context) const {
 }
 
 void IcebergTable::LoadCredentials(ClientContext &context, IRCAPITableCredentials table_credentials) const {
+	if (RegisterRemoteSigning()) {
+		return;
+	}
 	auto &secret_manager = SecretManager::Get(context);
 
 	auto &transaction = IcebergTransaction::Get(context, catalog);
