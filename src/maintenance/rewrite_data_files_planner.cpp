@@ -86,11 +86,10 @@ bool BucketQualifies(const RewriteBucket &bucket, const RewriteDataFilesPlanInpu
 	return bucket.eligible_count >= 2 && bucket.eligible_bytes >= target_file_size_bytes;
 }
 
-void ConsiderCandidate(RewriteBucket &bucket, RewriteCandidate cand, const RewriteDataFilesPlanInput &input,
-                       int64_t min_file_size_bytes, int64_t max_file_size_bytes) {
+void ConsiderCandidate(RewriteBucket &bucket, RewriteCandidate cand, const RewriteDataFilesPlanInput &input) {
 	//! Match Spark: rewrite undersized or oversized files; leave the band alone.
-	if (!input.rewrite_all && cand.file_size_in_bytes >= min_file_size_bytes &&
-	    cand.file_size_in_bytes <= max_file_size_bytes) {
+	if (!input.rewrite_all && cand.file_size_in_bytes >= input.min_file_size_bytes.value() &&
+	    cand.file_size_in_bytes <= input.max_file_size_bytes.value()) {
 		return;
 	}
 	bucket.eligible_count++;
@@ -187,7 +186,6 @@ optional<RewriteCandidate> TryMakeRewriteCandidate(const IcebergManifestEntry &e
 
 void CollectUnpartitionedCandidates(RewriteBucket &bucket, const vector<IcebergManifestListEntry> &manifest_files,
                                     const RewriteDataFilesPlanInput &input, int32_t default_spec_id,
-                                    int64_t min_file_size_bytes, int64_t max_file_size_bytes,
                                     int64_t target_file_size_bytes) {
 	for (const auto &list_entry : manifest_files) {
 		if (list_entry.file.content != IcebergManifestContentType::DATA) {
@@ -204,7 +202,7 @@ void CollectUnpartitionedCandidates(RewriteBucket &bucket, const vector<IcebergM
 			if (!cand) {
 				continue;
 			}
-			ConsiderCandidate(bucket, std::move(*cand), input, min_file_size_bytes, max_file_size_bytes);
+			ConsiderCandidate(bucket, std::move(*cand), input);
 			if (UnpartitionedCollectionComplete(bucket, input, target_file_size_bytes)) {
 				break;
 			}
@@ -214,8 +212,7 @@ void CollectUnpartitionedCandidates(RewriteBucket &bucket, const vector<IcebergM
 
 void CollectPartitionedCandidates(std::map<string, RewriteBucket> &per_partition,
                                   const vector<IcebergManifestListEntry> &manifest_files,
-                                  const RewriteDataFilesPlanInput &input, int32_t default_spec_id,
-                                  int64_t min_file_size_bytes, int64_t max_file_size_bytes) {
+                                  const RewriteDataFilesPlanInput &input, int32_t default_spec_id) {
 	for (const auto &list_entry : manifest_files) {
 		if (list_entry.file.content != IcebergManifestContentType::DATA) {
 			continue;
@@ -227,7 +224,7 @@ void CollectPartitionedCandidates(std::map<string, RewriteBucket> &per_partition
 				continue;
 			}
 			auto &bucket = per_partition[rewrite_planner_internal::PartitionBucketKey(cand->partition_info)];
-			ConsiderCandidate(bucket, std::move(*cand), input, min_file_size_bytes, max_file_size_bytes);
+			ConsiderCandidate(bucket, std::move(*cand), input);
 		}
 	}
 }
@@ -263,7 +260,7 @@ string PartitionBucketKey(const vector<IcebergPartitionInfo> &partition_info) {
 
 } // namespace rewrite_planner_internal
 
-RewritePlan PlanRewrite(ClientContext &context, const RewriteDataFilesPlanInput &input) {
+RewritePlan PlanRewrite(ClientContext &context, RewriteDataFilesPlanInput input) {
 	RewritePlan plan;
 	plan.table_name = input.table_name;
 
@@ -271,6 +268,13 @@ RewritePlan PlanRewrite(ClientContext &context, const RewriteDataFilesPlanInput 
 	auto &table_info = *table_info_ptr;
 	auto &table_metadata = table_info.table_metadata;
 	plan.target_file_size_bytes = ResolveTargetFileSizeBytes(input, table_metadata);
+	input.min_file_size_bytes = ResolveMinFileSizeBytes(input, plan.target_file_size_bytes);
+	input.max_file_size_bytes = ResolveMaxFileSizeBytes(input, plan.target_file_size_bytes);
+	if (input.min_file_size_bytes.value() > input.max_file_size_bytes.value()) {
+		throw InvalidInputException("iceberg_rewrite_data_files: resolved 'min_file_size_bytes' (%lld) must be <= "
+		                            "'max_file_size_bytes' (%lld)",
+		                            input.min_file_size_bytes.value(), input.max_file_size_bytes.value());
+	}
 	plan.table_info = std::move(table_info_ptr);
 
 	if (table_metadata.iceberg_version >= 3) {
@@ -310,25 +314,15 @@ RewritePlan PlanRewrite(ClientContext &context, const RewriteDataFilesPlanInput 
 		return plan;
 	}
 
-	const auto min_file_size_bytes = ResolveMinFileSizeBytes(input, plan.target_file_size_bytes);
-	const auto max_file_size_bytes = ResolveMaxFileSizeBytes(input, plan.target_file_size_bytes);
-	if (min_file_size_bytes > max_file_size_bytes) {
-		throw InvalidInputException("iceberg_rewrite_data_files: resolved 'min_file_size_bytes' (%lld) must be <= "
-		                            "'max_file_size_bytes' (%lld)",
-		                            min_file_size_bytes, max_file_size_bytes);
-	}
-
 	auto default_spec_id = table_metadata.default_spec_id;
 	const bool unpartitioned = !table_metadata.HasPartitionSpec();
 	if (unpartitioned) {
 		RewriteBucket bucket;
-		CollectUnpartitionedCandidates(bucket, manifest_files, input, default_spec_id, min_file_size_bytes,
-		                               max_file_size_bytes, plan.target_file_size_bytes);
+		CollectUnpartitionedCandidates(bucket, manifest_files, input, default_spec_id, plan.target_file_size_bytes);
 		SelectCandidates(plan, input, bucket);
 	} else {
 		std::map<string, RewriteBucket> per_partition;
-		CollectPartitionedCandidates(per_partition, manifest_files, input, default_spec_id, min_file_size_bytes,
-		                             max_file_size_bytes);
+		CollectPartitionedCandidates(per_partition, manifest_files, input, default_spec_id);
 		SelectCandidates(plan, input, per_partition);
 	}
 

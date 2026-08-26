@@ -53,7 +53,7 @@ struct RewriteDataFilesPlanInput {
 	bool rewrite_all = false;
 };
 
-RewritePlan PlanRewrite(ClientContext &context, const RewriteDataFilesPlanInput &input);
+RewritePlan PlanRewrite(ClientContext &context, RewriteDataFilesPlanInput input);
 
 namespace rewrite_planner_internal {
 
