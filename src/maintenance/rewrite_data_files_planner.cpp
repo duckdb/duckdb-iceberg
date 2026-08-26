@@ -170,18 +170,19 @@ void AssertCurrentPartitionSpec(const IcebergManifestListEntry &list_entry, int3
 	}
 }
 
-bool TryMakeRewriteCandidate(const IcebergManifestEntry &entry, RewriteCandidate &cand) {
+optional<RewriteCandidate> TryMakeRewriteCandidate(const IcebergManifestEntry &entry) {
 	if (entry.status == IcebergManifestEntryStatusType::DELETED) {
-		return false;
+		return nullopt;
 	}
 	if (entry.data_file.content != IcebergManifestEntryContentType::DATA) {
-		return false;
+		return nullopt;
 	}
+	RewriteCandidate cand;
 	cand.file_path = entry.data_file.file_path;
 	cand.file_size_in_bytes = entry.data_file.file_size_in_bytes;
 	cand.record_count = entry.data_file.record_count;
 	cand.partition_info = entry.data_file.partition_info;
-	return true;
+	return cand;
 }
 
 void CollectUnpartitionedCandidates(RewriteBucket &bucket, const vector<IcebergManifestListEntry> &manifest_files,
@@ -199,11 +200,11 @@ void CollectUnpartitionedCandidates(RewriteBucket &bucket, const vector<IcebergM
 			continue;
 		}
 		for (const auto &entry : list_entry.GetManifestEntries()) {
-			RewriteCandidate cand;
-			if (!TryMakeRewriteCandidate(entry, cand)) {
+			auto cand = TryMakeRewriteCandidate(entry);
+			if (!cand) {
 				continue;
 			}
-			ConsiderCandidate(bucket, std::move(cand), input, min_file_size_bytes, max_file_size_bytes);
+			ConsiderCandidate(bucket, std::move(*cand), input, min_file_size_bytes, max_file_size_bytes);
 			if (UnpartitionedCollectionComplete(bucket, input, target_file_size_bytes)) {
 				break;
 			}
@@ -221,12 +222,12 @@ void CollectPartitionedCandidates(std::map<string, RewriteBucket> &per_partition
 		}
 		AssertCurrentPartitionSpec(list_entry, default_spec_id);
 		for (const auto &entry : list_entry.GetManifestEntries()) {
-			RewriteCandidate cand;
-			if (!TryMakeRewriteCandidate(entry, cand)) {
+			auto cand = TryMakeRewriteCandidate(entry);
+			if (!cand) {
 				continue;
 			}
-			auto &bucket = per_partition[rewrite_planner_internal::PartitionBucketKey(cand.partition_info)];
-			ConsiderCandidate(bucket, std::move(cand), input, min_file_size_bytes, max_file_size_bytes);
+			auto &bucket = per_partition[rewrite_planner_internal::PartitionBucketKey(cand->partition_info)];
+			ConsiderCandidate(bucket, std::move(*cand), input, min_file_size_bytes, max_file_size_bytes);
 		}
 	}
 }
