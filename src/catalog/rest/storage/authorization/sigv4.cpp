@@ -184,8 +184,8 @@ void SIGV4Authorization::MaybeRefreshSecret(ClientContext &context) {
 		last_refresh_time = std::chrono::steady_clock::now();
 	} catch (std::exception &ex) {
 		// Leave last_refresh_time alone so the next call retries with the same credentials.
-		DUCKDB_LOG_DEBUG(context, "Iceberg SigV4 secret '%s' was not updated, refresh failed: %s", refresh_input.name,
-		                 ex.what());
+		DUCKDB_LOG_DEBUG(context, "Iceberg SigV4 secret '%s' was not updated, refresh failed: %s",
+		                 refresh_input.name.GetIdentifierName(), ex.what());
 	}
 }
 

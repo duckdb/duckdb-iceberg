@@ -7,23 +7,24 @@
 
 namespace duckdb {
 
-static string VERSION_GUESSING_CONFIG_VARIABLE = "unsafe_enable_version_guessing";
+static constexpr const char *VERSION_GUESSING_CONFIG_VARIABLE = "unsafe_enable_version_guessing";
 
 // The Iceberg format version used when creating a new table without an explicit
 // 'format-version' property. Valid values are 2 and 3. Version 1 is not supported
 // for writing (NotImplementedException); anything outside [2, 3] is rejected
 // (InvalidConfigurationException).
-static string DEFAULT_FORMAT_VERSION_CONFIG_VARIABLE = "iceberg_default_format_version";
+static constexpr const char *DEFAULT_FORMAT_VERSION_CONFIG_VARIABLE = "iceberg_default_format_version";
 static constexpr uint64_t DEFAULT_ICEBERG_FORMAT_VERSION = 2;
 
 // Compatibility escape hatch for deletion-vector files written by DuckDB Iceberg 1.5.3,
 // which contain only the deletion-vector blob rather than a valid Puffin container.
-static string SKIP_PUFFIN_VERIFICATION_CONFIG_VARIABLE = "iceberg_unsafe_skip_puffin_verification";
+static constexpr const char *SKIP_PUFFIN_VERIFICATION_CONFIG_VARIABLE = "iceberg_unsafe_skip_puffin_verification";
 
 // When this is true, a DELETE on a v2 Iceberg table whose WHERE clause is a pure
 // conjunction of equality predicates writes an Iceberg equality-delete file instead
 // of a positional delete. This exists only to exercise the equality-delete read path.
-static string ENABLE_EQUALITY_DELETES_CONFIG_VARIABLE = "unsafe_and_disabled_for_iceberg_v3_enable_equality_deletes";
+static constexpr const char *ENABLE_EQUALITY_DELETES_CONFIG_VARIABLE =
+    "unsafe_and_disabled_for_iceberg_v3_enable_equality_deletes";
 
 static constexpr const char *UNSAFE_STRUCT_NULL_DEFAULT_INTERP_CONFIG_VARIABLE =
     "__iceberg_unsafe_struct_null_default_interp";

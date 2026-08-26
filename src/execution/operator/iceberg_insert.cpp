@@ -667,7 +667,7 @@ IcebergCopyOptions IcebergInsert::GetCopyOptions(ClientContext &context, const I
 	copy_input.schema.GetColumnNamesAndTypes(names_to_write, types_to_write);
 
 	// Get Parquet Copy function
-	auto &copy_fun = IcebergUtils::GetCopyFunction(context, file_format);
+	auto &copy_fun = IcebergUtils::GetCopyFunction(context, Identifier(file_format));
 	IcebergCopyOptions result(std::move(info), copy_fun.function);
 	GenerateSortOrderExpressions(context, copy_input, result);
 
