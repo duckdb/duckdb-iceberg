@@ -74,7 +74,7 @@ static int64_t ResolveMaxFileSizeBytes(const RewriteDataFilesPlanInput &input, i
 }
 
 bool BucketQualifies(const RewriteBucket &bucket, const RewriteDataFilesPlanInput &input,
-                        int64_t target_file_size_bytes) {
+                     int64_t target_file_size_bytes) {
 	if (input.rewrite_all) {
 		return true;
 	}
