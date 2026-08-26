@@ -84,7 +84,8 @@
         "test/sql/insert/test_big_insert.test",
         "test/sql/optimizer/test_in_rewrite_rule.test",
         "test/sql/upsert/postgres/planner_preprocessing.test",
-        "test/sql/update/string_update_transaction_local_7348.test"
+        "test/sql/update/string_update_transaction_local_7348.test",
+        "test/sql/function/variant/variant_extract_string_shredded.test"
       ]
     },
     {
@@ -482,7 +483,8 @@
         "test/sql/merge/merge_into_explain_analyze.test",
         "test/sql/cte/materialized/materialized_cte_order_preservation.test",
         "test/sql/optimizer/multiple_column_stats_pruning.test",
-        "test/sql/optimizer/test_negated_filter_cardinality.test"
+        "test/sql/optimizer/test_negated_filter_cardinality.test",
+        "test/sql/cte/materialized/materialized_cte_parallel_buffered.test"
       ]
     },
     {
@@ -1336,7 +1338,8 @@
         "test/sql/index/art/types/test_art_union.test",
         "test/sql/index/art/types/test_art_varchar.test",
         "test/sql/index/art/vacuum/test_art_vacuum.test_slow",
-        "test/sql/index/art/vacuum/test_art_vacuum_rollback.test"
+        "test/sql/index/art/vacuum/test_art_vacuum_rollback.test",
+        "test/sql/index/art/scan/test_art_node256_byte_edges.test"
       ]
     },
     {
@@ -1669,7 +1672,8 @@
         "test/sql/catalog/nested_schema/nested_table_dml.test",
         "test/sql/catalog/nested_schema/nested_table.test",
         "test/sql/catalog/nested_schema/nested_table_columnref.test",
-        "test/sql/storage/wal/wal_null_update_row_group_pruning.test"
+        "test/sql/storage/wal/wal_null_update_row_group_pruning.test",
+        "test/sql/catalog/nested_schema/nested_wal_replay_index.test"
       ]
     },
     {
@@ -1752,6 +1756,12 @@
       "reason": "Broken parquet pre-fetching, needs investigation",
       "paths": [
         "test/sql/optimizer/pushdown_extract_reapplied.test"
+      ]
+    },
+    {
+      "reason": "Case sensitive/insensitive column names",
+      "paths": [
+        "test/sql/binder/test_case_insensitive_binding.test"
       ]
     }
   ]

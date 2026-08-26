@@ -308,7 +308,7 @@ optional_ptr<CatalogEntry> IcebergTable::CreateSchemaVersion(const IcebergTableS
 idx_t IcebergTable::GetMaxSchemaId() {
 	idx_t max_schema_id = 0;
 	if (schema_versions.empty()) {
-		throw CatalogException("No schema versions found for table '%s.%s'", schema.name, name);
+		throw CatalogException("No schema versions found for table '%s.%s'", schema.name.GetIdentifierName(), name);
 	}
 	for (auto &schema : schema_versions) {
 		if (schema.first > max_schema_id) {
