@@ -73,7 +73,7 @@ static int64_t ResolveMaxFileSizeBytes(const RewriteDataFilesPlanInput &input, i
 	return (target_file_size_bytes * 9) / 5;
 }
 
-bool PartitionQualifies(const RewriteBucket &bucket, const RewriteDataFilesPlanInput &input,
+bool BucketQualifies(const RewriteBucket &bucket, const RewriteDataFilesPlanInput &input,
                         int64_t target_file_size_bytes) {
 	if (input.rewrite_all) {
 		return true;
@@ -111,12 +111,12 @@ bool UnpartitionedCollectionComplete(const RewriteBucket &bucket, const RewriteD
 	if (bucket.retained.size() < static_cast<idx_t>(input.max_files_to_rewrite.value())) {
 		return false;
 	}
-	return PartitionQualifies(bucket, input, target_file_size_bytes);
+	return BucketQualifies(bucket, input, target_file_size_bytes);
 }
 
 void SelectFromBucket(RewritePlan &plan, RewriteBucket &bucket, const RewriteDataFilesPlanInput &input,
                       idx_t &remaining, bool capped) {
-	if (!PartitionQualifies(bucket, input, plan.target_file_size_bytes)) {
+	if (!BucketQualifies(bucket, input, plan.target_file_size_bytes)) {
 		return;
 	}
 	for (auto &cand : bucket.retained) {
