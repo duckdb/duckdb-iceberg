@@ -426,7 +426,18 @@ static unique_ptr<Expression> GetDateDiffFunction(ClientContext &context, const 
 	} else {
 		children.push_back(make_uniq<BoundConstantExpression>(Value::DATE(Date::FromDate(1970, 1, 1))));
 	}
-	children.push_back(CreateSourceColumnReference(context, copy_input, source_id));
+
+	auto source = CreateSourceColumnReference(context, copy_input, source_id);
+	auto source_type = source->GetReturnType().id();
+	auto target_type = source->GetReturnType();
+	if (source_type == LogicalTypeId::TIMESTAMP_TZ) {
+		target_type = LogicalType::TIMESTAMP;
+	}
+	if (source_type == LogicalTypeId::TIMESTAMP_TZ_NS) {
+		target_type = LogicalType::TIMESTAMP_NS;
+	}
+	source = BoundCastExpression::AddDefaultCastToType(std::move(source), target_type);
+	children.push_back(std::move(source));
 	return BindTransformFunction(context, "date_diff", std::move(children));
 }
 
