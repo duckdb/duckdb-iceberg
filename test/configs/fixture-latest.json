@@ -22,6 +22,9 @@
 			"paths": [
 				"test/sql/local/catalog_test_config_setup/catalog_agnostic/delete/test_no_head_request_for_deletes.test",
 				"test/sql/local/catalog_test_config_setup/catalog_agnostic/insert/partitions/combined/test_identity_and_year.test",
+				"test/sql/local/catalog_test_config_setup/catalog_agnostic/reads/filtering/test_is_null_partition_pruning.test",
+				"test/sql/local/catalog_test_config_setup/catalog_agnostic/reads/partitioned_reads/test_multi_field_partition_pruning.test",
+				"test/sql/local/catalog_test_config_setup/catalog_agnostic/reads/partitioned_reads/test_nested_partition_reads.test",
 				"test/sql/local/catalog_test_config_setup/catalog_agnostic/insert/partitions/large/test_large_multiple_inserts.test",
 				"test/sql/local/catalog_test_config_setup/catalog_agnostic/insert/partitions/multi_insert/test_manifest_skip_combined_transforms.test",
 				"test/sql/local/catalog_test_config_setup/catalog_agnostic/insert/partitions/multi_insert/test_manifest_skip_year_transform.test",
