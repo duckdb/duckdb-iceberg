@@ -156,11 +156,7 @@ void SelectCandidates(RewritePlan &plan, const RewriteDataFilesPlanInput &input,
 }
 
 void AssertCurrentPartitionSpec(const IcebergManifestListEntry &list_entry, int32_t default_spec_id) {
-	//! Guard against partition spec evolution: if a manifest was written
-	//! under a different partition spec, its partition tuples may not match
-	//! the current default spec. Mixing specs in one rewrite group would
-	//! produce incorrect manifest metadata. Reject until multi-spec support
-	//! is implemented.
+	//! Guard against partition spec evolution: reject until multi-spec support is implemented.
 	if (list_entry.file.partition_spec_id != default_spec_id) {
 		throw NotImplementedException(
 		    "iceberg_rewrite_data_files: table has data files written under partition spec %d "
