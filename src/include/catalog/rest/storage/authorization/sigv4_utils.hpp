@@ -77,21 +77,27 @@ inline string DetectStorageType(const string &location) {
 	return "s3";
 }
 
+//! The scheme a credential prefix refers to. A prefix is a plain string matched against file paths,
+//! so catalogs write it either as a url ("s3://bucket/path") or as a bare scheme ("s3").
+inline string CredentialPrefixScheme(const string &credential_prefix) {
+	auto scheme_end = credential_prefix.find("://");
+	if (scheme_end == string::npos) {
+		return StringUtil::Lower(credential_prefix);
+	}
+	return StringUtil::Lower(credential_prefix.substr(0, scheme_end));
+}
+
 //! Check whether a credential prefix belongs to the given storage type.
 //! This handles the mismatch between friendly storage type names (e.g. "azure", "gcs")
 //! and actual URI scheme prefixes used in vended credentials (e.g. "abfs://", "gs://").
 inline bool CredentialMatchesStorageType(const string &credential_prefix, const string &storage_type) {
+	auto scheme = CredentialPrefixScheme(credential_prefix);
 	if (storage_type == "s3") {
-		return StringUtil::StartsWith(credential_prefix, "s3://") ||
-		       StringUtil::StartsWith(credential_prefix, "s3a://") ||
-		       StringUtil::StartsWith(credential_prefix, "s3n://");
+		return scheme == "s3" || scheme == "s3a" || scheme == "s3n";
 	} else if (storage_type == "gcs") {
-		return StringUtil::StartsWith(credential_prefix, "gs://") ||
-		       StringUtil::StartsWith(credential_prefix, "gcs://");
+		return scheme == "gs" || scheme == "gcs";
 	} else if (storage_type == "azure") {
-		return StringUtil::StartsWith(credential_prefix, "abfs://") ||
-		       StringUtil::StartsWith(credential_prefix, "abfss://") ||
-		       StringUtil::StartsWith(credential_prefix, "az://");
+		return scheme == "abfs" || scheme == "abfss" || scheme == "az";
 	}
 	// Unknown storage type — accept the credential to be safe
 	return StringUtil::StartsWith(credential_prefix, storage_type);
