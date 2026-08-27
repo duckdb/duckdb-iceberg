@@ -160,25 +160,25 @@ struct MonthTransform {
 		switch (constant.type().id()) {
 		case LogicalTypeId::TIMESTAMP: {
 			auto val = constant.GetValue<timestamp_t>();
-			auto diff = Interval::GetAge(val, timestamp_t::epoch());
-			return Value::INTEGER(diff.months);
+			auto components = Timestamp::GetComponents(val);
+			return Value::INTEGER((components.year - 1970) * 12 + (components.month - 1));
 		}
 		case LogicalTypeId::TIMESTAMP_TZ: {
 			timestamp_t val(constant.GetValue<timestamp_tz_t>());
-			auto diff = Interval::GetAge(val, timestamp_t::epoch());
-			return Value::INTEGER(diff.months);
+			auto components = Timestamp::GetComponents(val);
+			return Value::INTEGER((components.year - 1970) * 12 + (components.month - 1));
 		}
 		case LogicalTypeId::TIMESTAMP_NS: {
 			auto val = constant.GetValue<timestamp_ns_t>();
-			auto ts = timestamp_t(IcebergNanosToMicrosFloor(val.value));
-			auto diff = Interval::GetAge(ts, timestamp_t::epoch());
-			return Value::INTEGER(diff.months);
+			auto micros = IcebergNanosToMicrosFloor(val.value);
+			auto components = Timestamp::GetComponents(timestamp_t(micros));
+			return Value::INTEGER((components.year - 1970) * 12 + (components.month - 1));
 		}
 		case LogicalTypeId::TIMESTAMP_TZ_NS: {
 			auto val = constant.GetValue<timestamp_tz_ns_t>();
-			auto ts = timestamp_t(IcebergNanosToMicrosFloor(val.value));
-			auto diff = Interval::GetAge(ts, timestamp_t::epoch());
-			return Value::INTEGER(diff.months);
+			auto micros = IcebergNanosToMicrosFloor(val.value);
+			auto components = Timestamp::GetComponents(timestamp_t(micros));
+			return Value::INTEGER((components.year - 1970) * 12 + (components.month - 1));
 		}
 		case LogicalTypeId::DATE: {
 			int32_t year, month, day;
@@ -212,25 +212,19 @@ struct DayTransform {
 		switch (constant.type().id()) {
 		case LogicalTypeId::TIMESTAMP: {
 			auto val = constant.GetValue<timestamp_t>();
-			auto diff = Interval::GetDifference(val, timestamp_t::epoch());
-			return Value::INTEGER(diff.days);
+			return Value::INTEGER(static_cast<int32_t>(IcebergFloorDiv(val.value, Interval::MICROS_PER_DAY)));
 		}
 		case LogicalTypeId::TIMESTAMP_TZ: {
-			timestamp_t val(constant.GetValue<timestamp_tz_t>());
-			auto diff = Interval::GetDifference(val, timestamp_t::epoch());
-			return Value::INTEGER(diff.days);
+			auto val = constant.GetValue<timestamp_tz_t>();
+			return Value::INTEGER(static_cast<int32_t>(IcebergFloorDiv(val.value, Interval::MICROS_PER_DAY)));
 		}
 		case LogicalTypeId::TIMESTAMP_NS: {
 			auto val = constant.GetValue<timestamp_ns_t>();
-			auto ts = timestamp_t(IcebergNanosToMicrosFloor(val.value));
-			auto diff = Interval::GetDifference(ts, timestamp_t::epoch());
-			return Value::INTEGER(diff.days);
+			return Value::INTEGER(static_cast<int32_t>(IcebergFloorDiv(val.value, Interval::NANOS_PER_DAY)));
 		}
 		case LogicalTypeId::TIMESTAMP_TZ_NS: {
 			auto val = constant.GetValue<timestamp_tz_ns_t>();
-			auto ts = timestamp_t(IcebergNanosToMicrosFloor(val.value));
-			auto diff = Interval::GetDifference(ts, timestamp_t::epoch());
-			return Value::INTEGER(diff.days);
+			return Value::INTEGER(static_cast<int32_t>(IcebergFloorDiv(val.value, Interval::NANOS_PER_DAY)));
 		}
 		case LogicalTypeId::DATE: {
 			auto val = constant.GetValue<date_t>();
