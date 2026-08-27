@@ -1,0 +1,75 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/reads/partitioned_reads/test_nested_partition_reads.test
+# description: Test reads and pruning when the partition source is a nested (struct) field
+# group: [partitioned_reads]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+
+statement ok
+pragma enable_external_file_cache=false;
+
+statement ok
+create schema if not exists my_datalake.default;
+
+statement ok
+drop table if exists my_datalake.default.nested_partition_reads;
+
+statement ok
+CREATE TABLE my_datalake.default.nested_partition_reads (id int, payload struct(category varchar, n int));
+
+statement ok
+ALTER TABLE my_datalake.default.nested_partition_reads SET PARTITIONED BY (payload.category);
+
+# One insert spanning three partition values writes three data files into a single manifest, so the manifest
+# is never pruned and every data file is examined.
+statement ok
+insert into my_datalake.default.nested_partition_reads values
+    (1, {'category': 'alpha', 'n': 10}),
+    (2, {'category': 'beta',  'n': 20}),
+    (3, {'category': 'gamma', 'n': 30});
+
+query I
+select count(*) from my_datalake.default.nested_partition_reads;
+----
+3
+
+statement ok
+CALL enable_logging(level=debug);
+
+# --- Control: a filter on the top-level column, pruned by that column's own bounds ---
+
+statement ok
+CALL truncate_duckdb_logs();
+
+query I
+select id from my_datalake.default.nested_partition_reads where id = 2;
+----
+2
+
+query I
+select count(*) from duckdb_logs() where type = 'Iceberg' and message like '%skipped%data_file%' group by all;
+----
+2
+
+# --- Nested source column ---
+#
+# A nested source prunes nothing today, so no skip count is asserted. These two guard the one failure mode
+# the path-extracted predicate can cause: over-pruning, which loses rows rather than merely reading extra.
+
+query II
+select id, payload.n from my_datalake.default.nested_partition_reads where payload.category = 'alpha';
+----
+1	10
+
+query I
+select count(*) from my_datalake.default.nested_partition_reads where payload.category >= 'alpha';
+----
+3

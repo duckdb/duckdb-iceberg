@@ -32,10 +32,12 @@ public:
 	static partition_value_map_t PartitionValueMap(const IcebergDataFile &data_file);
 
 private:
-	//! A partition field of the file's spec paired with the value this file records for it.
+	//! A partition field of the file's spec paired with the value this file records for it. `source_column`
+	//! is the field's own column, which for a nested source is not the one the filter is registered against.
 	struct PartitionFieldValue {
 		reference<const IcebergPartitionSpecField> field;
 		reference<const Value> value;
+		reference<const ColumnIndex> source_column;
 	};
 
 	//! Only filtered columns are indexed; a column can source several fields, hence a vector per column.

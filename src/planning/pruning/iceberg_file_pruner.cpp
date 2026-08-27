@@ -178,14 +178,21 @@ IcebergFilePruner::PartitionValuesByFilterColumn(const IcebergDataFile &data_fil
 			continue;
 		}
 		auto &column_index = source_it->second;
-		if (!table_filters.TryGetFilterByColumnIndex(column_index)) {
+
+		//! A filter on a nested field is registered against its top-level column, so index the evidence
+		//! under the key the caller's filter loop will iterate rather than the field's own column.
+		auto owner_key = column_index;
+		if (!table_filters.TryGetFilterByColumnIndex(owner_key) && owner_key.HasChildren()) {
+			owner_key = ColumnIndex(owner_key.GetPrimaryIndex());
+		}
+		if (!table_filters.TryGetFilterByColumnIndex(owner_key)) {
 			continue;
 		}
 		auto value_it = partition_info_map.find(field.partition_field_id);
 		if (value_it == partition_info_map.end()) {
 			continue;
 		}
-		result[column_index].push_back({field, data_file.partition_info[value_it->second].value});
+		result[owner_key].push_back({field, data_file.partition_info[value_it->second].value, column_index});
 	}
 	return result;
 }
@@ -223,10 +230,16 @@ METADATA_STATS_PUSHDOWN IcebergFilePruner::FileMatchesFilter(const IcebergManife
 		if (partition_it != partition_values.end()) {
 			for (auto &partition : partition_it->second) {
 				auto &field = partition.field.get();
+				//! Resolved from the field's own column, so a nested source yields only the part of the
+				//! parent filter targeting its path rather than the parent's whole predicate.
+				auto partition_filter = table_filters.GetFilterForColumnIndex(partition.source_column);
+				if (!partition_filter) {
+					continue;
+				}
 				auto stats = PartitionValueStats(data_file, column_index, partition.value.get());
-				switch (IcebergPredicate::MatchBounds(context, filter, stats, field.transform)) {
+				switch (IcebergPredicate::MatchBounds(context, *partition_filter, stats, field.transform)) {
 				case METADATA_STATS_PUSHDOWN::NO_ROWS_MATCH:
-					LogPartitionPruned(context, schema, data_file, column_index, field, stats, filter);
+					LogPartitionPruned(context, schema, data_file, column_index, field, stats, *partition_filter);
 					return METADATA_STATS_PUSHDOWN::NO_ROWS_MATCH;
 				case METADATA_STATS_PUSHDOWN::ALL_ROWS_MATCH:
 					filter_covered = true;
