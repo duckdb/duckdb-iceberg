@@ -1,5 +1,6 @@
 #include "planning/pruning/iceberg_predicate.hpp"
 
+#include "common/iceberg_math.hpp"
 #include "duckdb/planner/expression/bound_comparison_expression.hpp"
 #include "duckdb/planner/expression/bound_constant_expression.hpp"
 #include "duckdb/planner/expression/bound_reference_expression.hpp"
@@ -85,6 +86,110 @@ static bool MatchBoundsConstantTemplated(const Value &constant, ExpressionType c
 		//! Conservative approach: we don't know, so we just say it's not filtered out
 		return true;
 	}
+}
+
+//! Identity keeps the source value, so the predicate applies to the bounds unchanged - no projection.
+static bool AllRowsMatchIdentityBounds(const Value &constant, ExpressionType comparison_type,
+                                       const IcebergPredicateStats &stats) {
+	switch (comparison_type) {
+	case ExpressionType::COMPARE_EQUAL:
+		return *stats.lower_bound == constant && *stats.upper_bound == constant;
+	case ExpressionType::COMPARE_GREATERTHAN:
+		return *stats.lower_bound > constant;
+	case ExpressionType::COMPARE_GREATERTHANOREQUALTO:
+		return *stats.lower_bound >= constant;
+	case ExpressionType::COMPARE_LESSTHAN:
+		return *stats.upper_bound < constant;
+	case ExpressionType::COMPARE_LESSTHANOREQUALTO:
+		return *stats.upper_bound <= constant;
+	default:
+		return false;
+	}
+}
+
+//! Strict projection: an always-strict test on the transformed value, with the constant nudged one unit in
+//! the source domain first - `c <= T` becomes `t(c) < t(T + 1)`. Mirrors pyiceberg `_truncate_number_strict`.
+static bool AllRowsMatchProjectedBounds(const Value &constant, ExpressionType comparison_type,
+                                        const IcebergPredicateStats &stats, const IcebergTransform &transform) {
+	Value literal = constant;
+	bool test_upper_bound;
+	Value stepped;
+	switch (comparison_type) {
+	case ExpressionType::COMPARE_LESSTHAN:
+		test_upper_bound = true;
+		break;
+	case ExpressionType::COMPARE_LESSTHANOREQUALTO:
+		test_upper_bound = true;
+		//! A type with no successor (a truncated string, say) keeps the constant, which tests `t(c) < t(T)`.
+		//! That is stricter than the rule asks for, so it stays sound - see `_truncate_array_strict`.
+		if (IcebergTryIncrement(constant, stepped)) {
+			literal = std::move(stepped);
+		}
+		break;
+	case ExpressionType::COMPARE_GREATERTHAN:
+		test_upper_bound = false;
+		break;
+	case ExpressionType::COMPARE_GREATERTHANOREQUALTO:
+		test_upper_bound = false;
+		if (IcebergTryDecrement(constant, stepped)) {
+			literal = std::move(stepped);
+		}
+		break;
+	default:
+		return false;
+	}
+
+	auto projected = transform.ApplyTransform(literal);
+	if (projected.IsNull()) {
+		return false;
+	}
+	return test_upper_bound ? *stats.upper_bound < projected : *stats.lower_bound > projected;
+}
+
+//! Strict counterpart to MatchBoundsConstant: true only when *every* value in [lower_bound, upper_bound]
+//! satisfies the comparison.
+static bool AllRowsMatchBoundsConstant(const Value &constant, ExpressionType comparison_type,
+                                       const IcebergPredicateStats &stats, const IcebergTransform &transform) {
+	if (constant.IsNull()) {
+		//! No ordinary comparison against NULL provably matches all rows.
+		return false;
+	}
+	if (stats.BoundsAreNull() || !stats.lower_bound || !stats.upper_bound) {
+		//! Without concrete bounds we cannot prove every row matches.
+		return false;
+	}
+	if (stats.has_null) {
+		//! A NULL row never satisfies an ordinary comparison, so not all rows match.
+		return false;
+	}
+	if (stats.has_nan && stats.lower_bound->type().IsFloating()) {
+		//! NaN satisfies no comparison and sorts outside the bounds rather than between them, so a
+		//! floating-point column that may hold one is never provably covered.
+		return false;
+	}
+
+	switch (transform.Type()) {
+	case IcebergTransformType::IDENTITY:
+		return AllRowsMatchIdentityBounds(constant, comparison_type, stats);
+	case IcebergTransformType::TRUNCATE:
+	case IcebergTransformType::YEAR:
+	case IcebergTransformType::MONTH:
+	case IcebergTransformType::DAY:
+	case IcebergTransformType::HOUR:
+		break;
+	default:
+		//! Bucket/void (and any transform added later) are not order-preserving, so a partition value tells
+		//! us nothing about how its source values compare - never claim full coverage.
+		return false;
+	}
+
+	if (comparison_type == ExpressionType::COMPARE_EQUAL) {
+		//! Equality is the conjunction of the two inequalities: proving both is exactly where the transform
+		//! separates the constant from its neighbours, which is what makes it one-to-one there.
+		return AllRowsMatchProjectedBounds(constant, ExpressionType::COMPARE_GREATERTHANOREQUALTO, stats, transform) &&
+		       AllRowsMatchProjectedBounds(constant, ExpressionType::COMPARE_LESSTHANOREQUALTO, stats, transform);
+	}
+	return AllRowsMatchProjectedBounds(constant, comparison_type, stats, transform);
 }
 
 static bool MatchBoundsConstant(const Value &constant, ExpressionType comparison_type,
@@ -194,8 +299,22 @@ static bool IsVariantReference(const Expression &expr) {
 	return IsDirectReference(current_expr);
 }
 
-static bool MatchBoundsExpression(ClientContext &context, const unique_ptr<Expression> &expr_p,
-                                  const IcebergPredicateStats &stats, const IcebergTransform &transform) {
+//! For an expression the inclusive evaluator can rule out but the strict one can never cover.
+static METADATA_STATS_PUSHDOWN InclusiveOnly(bool any_row_could_match) {
+	return any_row_could_match ? METADATA_STATS_PUSHDOWN::SOME_ROWS_MATCH : METADATA_STATS_PUSHDOWN::NO_ROWS_MATCH;
+}
+
+//! For a filter looser than the one the query actually applies: matching nothing still rules the file out,
+//! but matching every row proves nothing about the tighter filter above the scan.
+static METADATA_STATS_PUSHDOWN WithoutStrictMatch(METADATA_STATS_PUSHDOWN pushdown) {
+	return pushdown == METADATA_STATS_PUSHDOWN::ALL_ROWS_MATCH ? METADATA_STATS_PUSHDOWN::SOME_ROWS_MATCH : pushdown;
+}
+
+//! Asks both the inclusive and the strict question of every node it recognises, in a single walk. Any shape
+//! it does not recognise falls back to SOME, which neither rules rows out nor claims a match.
+static METADATA_STATS_PUSHDOWN MatchBoundsExpression(ClientContext &context, const unique_ptr<Expression> &expr_p,
+                                                     const IcebergPredicateStats &stats,
+                                                     const IcebergTransform &transform) {
 	auto &expr = *expr_p;
 	if (BoundComparisonExpression::IsComparison(expr)) {
 		auto &compare_expr = expr.Cast<BoundFunctionExpression>();
@@ -211,37 +330,63 @@ static bool MatchBoundsExpression(ClientContext &context, const unique_ptr<Expre
 		const bool is_identity = transform.Type() == IcebergTransformType::IDENTITY;
 
 		if (right_is_const && left_is_const) {
-			return true;
+			return METADATA_STATS_PUSHDOWN::SOME_ROWS_MATCH;
 		} else if (right_is_const) {
 			if (left_is_ref) {
-				return MatchBoundsConstant(right.Cast<BoundConstantExpression>().GetValue(), comparison_type, stats,
-				                           transform);
+				auto &constant = right.Cast<BoundConstantExpression>().GetValue();
+				//! Only ask the strict question of rows the inclusive one did not already rule out.
+				if (!MatchBoundsConstant(constant, comparison_type, stats, transform)) {
+					return METADATA_STATS_PUSHDOWN::NO_ROWS_MATCH;
+				}
+				return AllRowsMatchBoundsConstant(constant, comparison_type, stats, transform)
+				           ? METADATA_STATS_PUSHDOWN::ALL_ROWS_MATCH
+				           : METADATA_STATS_PUSHDOWN::SOME_ROWS_MATCH;
 			} else if (is_identity && IsVariantReference(left)) {
-				return MatchTransformedBounds(context, comparison_type, left, right, stats, transform);
+				//! A variant extract is not a plain column reference, so a strict match is never provable.
+				auto any_row_could_match =
+				    MatchTransformedBounds(context, comparison_type, left, right, stats, transform);
+				return InclusiveOnly(any_row_could_match);
 			}
 		} else if (left_is_const) {
 			if (right_is_ref) {
-				return MatchBoundsConstant(left.Cast<BoundConstantExpression>().GetValue(),
-				                           FlipComparisonExpression(comparison_type), stats, transform);
+				auto &constant = left.Cast<BoundConstantExpression>().GetValue();
+				auto flipped = FlipComparisonExpression(comparison_type);
+				if (!MatchBoundsConstant(constant, flipped, stats, transform)) {
+					return METADATA_STATS_PUSHDOWN::NO_ROWS_MATCH;
+				}
+				return AllRowsMatchBoundsConstant(constant, flipped, stats, transform)
+				           ? METADATA_STATS_PUSHDOWN::ALL_ROWS_MATCH
+				           : METADATA_STATS_PUSHDOWN::SOME_ROWS_MATCH;
 			} else if (is_identity && IsVariantReference(right)) {
-				return MatchTransformedBounds(context, comparison_type, right, left, stats, transform);
+				auto any_row_could_match =
+				    MatchTransformedBounds(context, comparison_type, right, left, stats, transform);
+				return InclusiveOnly(any_row_could_match);
 			}
 		}
-		return true;
+		//! Anything more complex than `column <cmp> constant` filters nothing and covers nothing.
+		return METADATA_STATS_PUSHDOWN::SOME_ROWS_MATCH;
 	}
 
 	switch (expr.GetExpressionClass()) {
 	case ExpressionClass::BOUND_CONJUNCTION: {
 		auto &conjunction = expr.Cast<BoundConjunctionExpression>();
 		if (conjunction.GetExpressionType() != ExpressionType::CONJUNCTION_AND) {
-			return true;
+			//! A disjunction is only ever pushed into the scan as an optional filter, with the real predicate
+			//! enforced above it, so a delete may not drop files on one - see the BOUND_FUNCTION case.
+			return METADATA_STATS_PUSHDOWN::SOME_ROWS_MATCH;
 		}
+		//! One child excluding rules out the conjunction; covering it takes every child.
+		auto result = METADATA_STATS_PUSHDOWN::ALL_ROWS_MATCH;
 		for (auto &child : conjunction.GetChildren()) {
-			if (!MatchBoundsExpression(context, child, stats, transform)) {
-				return false;
+			auto child_result = MatchBoundsExpression(context, child, stats, transform);
+			if (child_result == METADATA_STATS_PUSHDOWN::NO_ROWS_MATCH) {
+				return METADATA_STATS_PUSHDOWN::NO_ROWS_MATCH;
+			}
+			if (child_result == METADATA_STATS_PUSHDOWN::SOME_ROWS_MATCH) {
+				result = METADATA_STATS_PUSHDOWN::SOME_ROWS_MATCH;
 			}
 		}
-		return true;
+		return result;
 	}
 	case ExpressionClass::BOUND_OPERATOR: {
 		auto &bound_operator_expr = expr.Cast<BoundOperatorExpression>();
@@ -256,67 +401,72 @@ static bool MatchBoundsExpression(ClientContext &context, const unique_ptr<Expre
 			if (bound_operator_expr.GetChildren().size() != 1 ||
 			    !IsDirectReference(*bound_operator_expr.GetChildren()[0])) {
 				//! We can't evaluate expressions that aren't direct column references
-				return true;
+				return METADATA_STATS_PUSHDOWN::SOME_ROWS_MATCH;
 			}
+			//! `has_null` says some row is NULL, never that every row is, so coverage stays unproven.
 			if (expr.GetExpressionType() == ExpressionType::OPERATOR_IS_NULL) {
-				return MatchBoundsIsNullFilter(stats);
+				return InclusiveOnly(MatchBoundsIsNullFilter(stats));
 			}
 			D_ASSERT(expr.GetExpressionType() == ExpressionType::OPERATOR_IS_NOT_NULL);
-			return MatchBoundsIsNotNullFilter(stats);
+			return InclusiveOnly(MatchBoundsIsNotNullFilter(stats));
 		}
 		case ExpressionType::COMPARE_IN: {
 			if (bound_operator_expr.GetChildren().empty() ||
 			    !IsDirectReference(*bound_operator_expr.GetChildren()[0])) {
-				return true;
+				return METADATA_STATS_PUSHDOWN::SOME_ROWS_MATCH;
 			}
 			for (idx_t i = 1; i < bound_operator_expr.GetChildren().size(); i++) {
 				if (bound_operator_expr.GetChildren()[i]->GetExpressionClass() != ExpressionClass::BOUND_CONSTANT) {
-					return true;
+					return METADATA_STATS_PUSHDOWN::SOME_ROWS_MATCH;
 				}
 				auto &value = bound_operator_expr.GetChildren()[i]->Cast<BoundConstantExpression>().GetValue();
 				if (MatchBoundsConstant(value, ExpressionType::COMPARE_EQUAL, stats, transform)) {
-					return true;
+					return METADATA_STATS_PUSHDOWN::SOME_ROWS_MATCH;
 				}
 			}
-			return false;
+			return METADATA_STATS_PUSHDOWN::NO_ROWS_MATCH;
 		}
 		default:
-			return true;
+			return METADATA_STATS_PUSHDOWN::SOME_ROWS_MATCH;
 		}
 	}
 	case ExpressionClass::BOUND_FUNCTION: {
 		if (stats.geometry_stats) {
 			auto result = ExpressionFilter::CheckExpressionStatistics(expr, *stats.geometry_stats);
-			return result != FilterPropagateResult::FILTER_ALWAYS_FALSE;
+			auto any_row_could_match = result != FilterPropagateResult::FILTER_ALWAYS_FALSE;
+			return InclusiveOnly(any_row_could_match);
 		}
 
 		auto &func = expr.Cast<BoundFunctionExpression>();
 		if (func.Function().GetName() == OptionalFilterScalarFun::NAME && func.BindInfo()) {
 			auto &data = func.BindInfo()->Cast<OptionalFilterFunctionData>();
 			if (data.child_filter_expr) {
-				return MatchBoundsExpression(context, data.child_filter_expr, stats, transform);
+				auto child_pushdown = MatchBoundsExpression(context, data.child_filter_expr, stats, transform);
+				return WithoutStrictMatch(child_pushdown);
 			}
 			//! child filter wasn't populated (yet?) for some reason, just be conservative
-			return true;
+			return METADATA_STATS_PUSHDOWN::SOME_ROWS_MATCH;
 		}
 		if (func.Function().GetName() == SelectivityOptionalFilterScalarFun::NAME && func.BindInfo()) {
 			auto &data = func.BindInfo()->Cast<SelectivityOptionalFilterFunctionData>();
 			if (data.child_filter_expr) {
-				return MatchBoundsExpression(context, data.child_filter_expr, stats, transform);
+				auto child_pushdown = MatchBoundsExpression(context, data.child_filter_expr, stats, transform);
+				return WithoutStrictMatch(child_pushdown);
 			}
 			//! child filter wasn't populated (yet?) for some reason, just be conservative
-			return true;
+			return METADATA_STATS_PUSHDOWN::SOME_ROWS_MATCH;
 		}
-		return true;
+		return METADATA_STATS_PUSHDOWN::SOME_ROWS_MATCH;
 	}
 	default:
-		//! Conservative approach: we don't know what this is, just say it doesn't filter anything
-		return true;
+		//! Conservative approach: we don't know what this is, so it neither filters nor covers anything
+		return METADATA_STATS_PUSHDOWN::SOME_ROWS_MATCH;
 	}
 }
 
-bool IcebergPredicate::MatchBounds(ClientContext &context, const ExpressionFilter &filter,
-                                   const IcebergPredicateStats &stats, const IcebergTransform &transform) {
+METADATA_STATS_PUSHDOWN IcebergPredicate::MatchBounds(ClientContext &context, const ExpressionFilter &filter,
+                                                      const IcebergPredicateStats &stats,
+                                                      const IcebergTransform &transform) {
 	return MatchBoundsExpression(context, filter.expr, stats, transform);
 }
 

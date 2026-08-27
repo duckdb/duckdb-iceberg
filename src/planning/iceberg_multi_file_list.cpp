@@ -482,8 +482,9 @@ IcebergMultiFileList::GetDataFile(idx_t file_id, annotated_lock_guard<annotated_
 			}
 
 			// Check whether current data file is filtered out.
-			if (table_filters.HasFilters() && !IcebergFilePruner(context, GetMetadata(), GetSchema(), table_filters)
-			                                       .FileMatchesFilter(manifest_file, manifest_entry)) {
+			if (table_filters.HasFilters() &&
+			    IcebergFilePruner(context, GetMetadata(), GetSchema(), table_filters)
+			            .FileMatchesFilter(manifest_file, manifest_entry) == METADATA_STATS_PUSHDOWN::NO_ROWS_MATCH) {
 				// Note: FileMatches filter will log a message if the file is pruned
 				//! Skip this file
 				continue;

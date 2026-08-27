@@ -3,6 +3,8 @@
 #include "core/metadata/manifest/iceberg_manifest.hpp"
 #include "core/metadata/manifest/iceberg_manifest_list.hpp"
 #include "core/metadata/iceberg_table_metadata.hpp"
+#include "core/metadata/partition/iceberg_partition_spec.hpp"
+#include "planning/pruning/iceberg_predicate.hpp"
 #include "planning/pruning/iceberg_table_filter.hpp"
 
 namespace duckdb {
@@ -15,7 +17,9 @@ public:
 	}
 
 	bool ManifestMatchesFilter(const IcebergManifestFile &manifest) const;
-	bool FileMatchesFilter(const IcebergManifestFile &manifest_file, const IcebergManifestEntry &manifest_entry) const;
+	//! Weighs both kinds of evidence per filter: the file's partition values and its own column bounds.
+	METADATA_STATS_PUSHDOWN FileMatchesFilter(const IcebergManifestFile &manifest_file,
+	                                          const IcebergManifestEntry &manifest_entry) const;
 	bool DeleteManifestMatchesDataFile(const IcebergManifestFile &delete_manifest,
 	                                   const IcebergManifestFile &data_manifest,
 	                                   const IcebergManifestEntry &data_manifest_entry) const;
@@ -28,7 +32,15 @@ public:
 	static partition_value_map_t PartitionValueMap(const IcebergDataFile &data_file);
 
 private:
-	bool FilePartitionMatchesFilter(const IcebergDataFile &data_file, const IcebergManifestFile &manifest_file) const;
+	//! A partition field of the file's spec paired with the value this file records for it.
+	struct PartitionFieldValue {
+		reference<const IcebergPartitionSpecField> field;
+		reference<const Value> value;
+	};
+
+	//! Only filtered columns are indexed; a column can source several fields, hence a vector per column.
+	column_index_map<vector<PartitionFieldValue>>
+	PartitionValuesByFilterColumn(const IcebergDataFile &data_file, const IcebergManifestFile &manifest_file) const;
 	bool EqualityDeleteMatchesDataFile(const IcebergDataFile &delete_file, const IcebergDataFile &data_file) const;
 
 private:
