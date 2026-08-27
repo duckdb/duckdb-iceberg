@@ -28,13 +28,16 @@ CREATE TABLE my_datalake.default.nested_partition_reads (id int, payload struct(
 statement ok
 ALTER TABLE my_datalake.default.nested_partition_reads SET PARTITIONED BY (payload.category);
 
-# One insert spanning three partition values writes three data files into a single manifest, so the manifest
-# is never pruned and every data file is examined.
+# One insert per partition value: some catalogs write a single parquet file per insert regardless of
+# partitioning, so a single multi-partition insert would leave nothing to prune.
 statement ok
-insert into my_datalake.default.nested_partition_reads values
-    (1, {'category': 'alpha', 'n': 10}),
-    (2, {'category': 'beta',  'n': 20}),
-    (3, {'category': 'gamma', 'n': 30});
+insert into my_datalake.default.nested_partition_reads values (1, {'category': 'alpha', 'n': 10});
+
+statement ok
+insert into my_datalake.default.nested_partition_reads values (2, {'category': 'beta', 'n': 20});
+
+statement ok
+insert into my_datalake.default.nested_partition_reads values (3, {'category': 'gamma', 'n': 30});
 
 query I
 select count(*) from my_datalake.default.nested_partition_reads;
@@ -44,7 +47,8 @@ select count(*) from my_datalake.default.nested_partition_reads;
 statement ok
 CALL enable_logging(level=debug);
 
-# --- Control: a filter on the top-level column, pruned by that column's own bounds ---
+# --- Control: a filter on the top-level column. `id` has no partition field, so no manifest summary can
+# rule a manifest out and the decision falls to each file's own bounds. ---
 
 statement ok
 CALL truncate_duckdb_logs();

@@ -28,9 +28,19 @@ statement ok
 CREATE TABLE my_datalake.default.test_multi_field_partition (id int, payload varchar)
 PARTITIONED BY (bucket(4, id), truncate(100, id));
 
+# One insert per truncation bucket: some catalogs write a single parquet file per insert regardless of
+# partitioning, so a single insert spanning all of them would leave nothing to prune.
 statement ok
 insert into my_datalake.default.test_multi_field_partition
-select range, 'row_' || range from range(300);
+select range, 'row_' || range from range(100);
+
+statement ok
+insert into my_datalake.default.test_multi_field_partition
+select 100 + range, 'row_' || (100 + range) from range(100);
+
+statement ok
+insert into my_datalake.default.test_multi_field_partition
+select 200 + range, 'row_' || (200 + range) from range(100);
 
 statement ok
 create table local_multi_field as select range as id, 'row_' || range as payload from range(300);
