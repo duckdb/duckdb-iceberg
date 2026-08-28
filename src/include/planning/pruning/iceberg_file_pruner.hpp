@@ -32,17 +32,18 @@ public:
 	static partition_value_map_t PartitionValueMap(const IcebergDataFile &data_file);
 
 private:
-	//! A partition field of the file's spec paired with the value this file records for it. `source_column`
-	//! is the field's own column, which for a nested source is not the one the filter is registered against.
+	//! A partition field paired with this file's value for it. `owner_key` is the column the filter is
+	//! registered against, which for a nested source differs from the field's own `source_column`.
 	struct PartitionFieldValue {
+		ColumnIndex owner_key;
 		reference<const IcebergPartitionSpecField> field;
 		reference<const Value> value;
 		reference<const ColumnIndex> source_column;
 	};
 
-	//! Only filtered columns are indexed; a column can source several fields, hence a vector per column.
-	column_index_map<vector<PartitionFieldValue>>
-	PartitionValuesByFilterColumn(const IcebergDataFile &data_file, const IcebergManifestFile &manifest_file) const;
+	//! Only fields on a filtered column are included; a column can source several fields.
+	vector<PartitionFieldValue> PartitionValuesForFilteredColumns(const IcebergDataFile &data_file,
+	                                                              const IcebergManifestFile &manifest_file) const;
 	bool EqualityDeleteMatchesDataFile(const IcebergDataFile &delete_file, const IcebergDataFile &data_file) const;
 
 private:

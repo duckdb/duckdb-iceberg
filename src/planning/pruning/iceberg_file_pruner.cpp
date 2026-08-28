@@ -148,12 +148,29 @@ void LogBoundsPruned(ClientContext &context, const IcebergDataFile &data_file, c
 
 } // namespace
 
-//! The spec lists fields and the file lists values, neither keyed by column, so pair them up once here
-//! instead of rescanning both for every filter.
-column_index_map<vector<IcebergFilePruner::PartitionFieldValue>>
-IcebergFilePruner::PartitionValuesByFilterColumn(const IcebergDataFile &data_file,
-                                                 const IcebergManifestFile &manifest_file) const {
-	column_index_map<vector<PartitionFieldValue>> result;
+//! Partition values a data file carries are few (rarely more than a handful of fields), so a linear scan
+//! to find one by field id is cheaper than hashing it.
+const Value *TryGetPartitionValue(const IcebergDataFile &data_file, uint64_t partition_field_id) {
+	for (auto &partition : data_file.partition_info) {
+		if (partition.field_id == partition_field_id) {
+			return &partition.value;
+		}
+	}
+	return nullptr;
+}
+
+//! Whether a ColumnIndex owns a filter, without hashing it: `TryGetFilterByColumnIndex` hashes internally,
+//! so this only exists to make the no-hash intent visible at the call site below.
+bool HasFilterOn(const IcebergTableFilters &table_filters, const ColumnIndex &column_index) {
+	return table_filters.TryGetFilterByColumnIndex(column_index) != nullptr;
+}
+
+//! The spec lists fields and the file lists values, neither keyed by column, so pair them up once here.
+//! A flat list, not a column_index_map: a linear scan beats hashing a ColumnIndex for this few fields.
+vector<IcebergFilePruner::PartitionFieldValue>
+IcebergFilePruner::PartitionValuesForFilteredColumns(const IcebergDataFile &data_file,
+                                                     const IcebergManifestFile &manifest_file) const {
+	vector<PartitionFieldValue> result;
 	if (data_file.partition_info.empty()) {
 		return result;
 	}
@@ -167,11 +184,6 @@ IcebergFilePruner::PartitionValuesByFilterColumn(const IcebergDataFile &data_fil
 	auto &partition_spec = partition_spec_it->second;
 	auto &source_to_column_id = schema.GetSourceIdMap();
 
-	unordered_map<uint64_t, idx_t> partition_info_map;
-	for (idx_t i = 0; i < data_file.partition_info.size(); i++) {
-		partition_info_map.emplace(data_file.partition_info[i].field_id, i);
-	}
-
 	for (auto &field : partition_spec.fields) {
 		auto source_it = source_to_column_id.find(field.source_id);
 		if (source_it == source_to_column_id.end()) {
@@ -179,20 +191,20 @@ IcebergFilePruner::PartitionValuesByFilterColumn(const IcebergDataFile &data_fil
 		}
 		auto &column_index = source_it->second;
 
-		//! A filter on a nested field is registered against its top-level column, so index the evidence
-		//! under the key the caller's filter loop will iterate rather than the field's own column.
-		auto owner_key = column_index;
-		if (!table_filters.TryGetFilterByColumnIndex(owner_key) && owner_key.HasChildren()) {
+		//! A filter on a nested field is registered against its top-level column, so what the caller's
+		//! filter loop needs here is that column, not the field's own.
+		ColumnIndex owner_key = column_index;
+		if (!HasFilterOn(table_filters, owner_key) && owner_key.HasChildren()) {
 			owner_key = ColumnIndex(owner_key.GetPrimaryIndex());
 		}
-		if (!table_filters.TryGetFilterByColumnIndex(owner_key)) {
+		if (!HasFilterOn(table_filters, owner_key)) {
 			continue;
 		}
-		auto value_it = partition_info_map.find(field.partition_field_id);
-		if (value_it == partition_info_map.end()) {
+		auto partition_value = TryGetPartitionValue(data_file, field.partition_field_id);
+		if (!partition_value) {
 			continue;
 		}
-		result[owner_key].push_back({field, data_file.partition_info[value_it->second].value, column_index});
+		result.push_back({std::move(owner_key), field, *partition_value, column_index});
 	}
 	return result;
 }
@@ -215,7 +227,7 @@ METADATA_STATS_PUSHDOWN IcebergFilePruner::FileMatchesFilter(const IcebergManife
 		}
 	}
 
-	auto partition_values = PartitionValuesByFilterColumn(data_file, manifest_file);
+	auto partition_values = PartitionValuesForFilteredColumns(data_file, manifest_file);
 	//! The file is covered only if every filter is. A filter no evidence settles leaves it at SOME.
 	bool all_filters_covered = true;
 
@@ -226,27 +238,27 @@ METADATA_STATS_PUSHDOWN IcebergFilePruner::FileMatchesFilter(const IcebergManife
 		bool filter_covered = false;
 
 		//! Evidence from the partition values: any one field proving the filter is enough, so all are tried.
-		auto partition_it = partition_values.find(column_index);
-		if (partition_it != partition_values.end()) {
-			for (auto &partition : partition_it->second) {
-				auto &field = partition.field.get();
-				//! Resolved from the field's own column, so a nested source yields only the part of the
-				//! parent filter targeting its path rather than the parent's whole predicate.
-				auto partition_filter = table_filters.GetFilterForColumnIndex(partition.source_column);
-				if (!partition_filter) {
-					continue;
-				}
-				auto stats = PartitionValueStats(data_file, column_index, partition.value.get());
-				switch (IcebergPredicate::MatchBounds(context, *partition_filter, stats, field.transform)) {
-				case METADATA_STATS_PUSHDOWN::NO_ROWS_MATCH:
-					LogPartitionPruned(context, schema, data_file, column_index, field, stats, *partition_filter);
-					return METADATA_STATS_PUSHDOWN::NO_ROWS_MATCH;
-				case METADATA_STATS_PUSHDOWN::ALL_ROWS_MATCH:
-					filter_covered = true;
-					break;
-				case METADATA_STATS_PUSHDOWN::SOME_ROWS_MATCH:
-					break;
-				}
+		for (auto &partition : partition_values) {
+			if (partition.owner_key != column_index) {
+				continue;
+			}
+			auto &field = partition.field.get();
+			//! Resolved from the field's own column, so a nested source yields only the part of the
+			//! parent filter targeting its path rather than the parent's whole predicate.
+			auto partition_filter = table_filters.GetFilterForColumnIndex(partition.source_column);
+			if (!partition_filter) {
+				continue;
+			}
+			auto stats = PartitionValueStats(data_file, column_index, partition.value.get());
+			switch (IcebergPredicate::MatchBounds(context, *partition_filter, stats, field.transform)) {
+			case METADATA_STATS_PUSHDOWN::NO_ROWS_MATCH:
+				LogPartitionPruned(context, schema, data_file, column_index, field, stats, *partition_filter);
+				return METADATA_STATS_PUSHDOWN::NO_ROWS_MATCH;
+			case METADATA_STATS_PUSHDOWN::ALL_ROWS_MATCH:
+				filter_covered = true;
+				break;
+			case METADATA_STATS_PUSHDOWN::SOME_ROWS_MATCH:
+				break;
 			}
 		}
 

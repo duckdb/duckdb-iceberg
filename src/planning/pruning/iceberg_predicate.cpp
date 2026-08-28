@@ -111,7 +111,9 @@ static bool AllRowsMatchIdentityBounds(const Value &constant, ExpressionType com
 //! the source domain first - `c <= T` becomes `t(c) < t(T + 1)`. Mirrors pyiceberg `_truncate_number_strict`.
 static bool AllRowsMatchProjectedBounds(const Value &constant, ExpressionType comparison_type,
                                         const IcebergPredicateStats &stats, const IcebergTransform &transform) {
-	Value literal = constant;
+	//! Points at `constant` until a step below actually produces a value, so the common case - a type with
+	//! no successor, or a comparison that never steps at all - copies nothing.
+	const Value *literal = &constant;
 	bool test_upper_bound;
 	Value stepped;
 	switch (comparison_type) {
@@ -123,7 +125,7 @@ static bool AllRowsMatchProjectedBounds(const Value &constant, ExpressionType co
 		//! A type with no successor (a truncated string, say) keeps the constant, which tests `t(c) < t(T)`.
 		//! That is stricter than the rule asks for, so it stays sound - see `_truncate_array_strict`.
 		if (IcebergTryIncrement(constant, stepped)) {
-			literal = std::move(stepped);
+			literal = &stepped;
 		}
 		break;
 	case ExpressionType::COMPARE_GREATERTHAN:
@@ -132,14 +134,14 @@ static bool AllRowsMatchProjectedBounds(const Value &constant, ExpressionType co
 	case ExpressionType::COMPARE_GREATERTHANOREQUALTO:
 		test_upper_bound = false;
 		if (IcebergTryDecrement(constant, stepped)) {
-			literal = std::move(stepped);
+			literal = &stepped;
 		}
 		break;
 	default:
 		return false;
 	}
 
-	auto projected = transform.ApplyTransform(literal);
+	auto projected = transform.ApplyTransform(*literal);
 	if (projected.IsNull()) {
 		return false;
 	}
