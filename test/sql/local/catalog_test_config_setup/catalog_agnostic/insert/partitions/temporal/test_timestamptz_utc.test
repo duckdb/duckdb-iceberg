@@ -1,0 +1,78 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/insert/partitions/temporal/test_timestamptz_utc.test
+# description: TIMESTAMPTZ temporal partitions are derived from UTC instants, not the session time zone
+# group: [temporal]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+require icu
+
+statement ok
+create schema if not exists my_datalake.default;
+
+statement ok
+drop table if exists my_datalake.default.test_timestamptz_utc;
+
+statement ok
+CREATE TABLE my_datalake.default.test_timestamptz_utc (
+	id INT,
+	year_ts TIMESTAMPTZ,
+	month_ts TIMESTAMPTZ,
+	day_ts TIMESTAMPTZ,
+	hour_ts TIMESTAMPTZ
+)
+PARTITIONED BY (year(year_ts), month(month_ts), day(day_ts), hour(hour_ts));
+
+statement ok
+SET TimeZone = 'America/Los_Angeles';
+
+statement ok
+INSERT INTO my_datalake.default.test_timestamptz_utc
+SELECT id, ts, ts, ts, ts
+FROM (VALUES
+	(1, TIMESTAMPTZ '2024-12-31 23:30:00+00'),
+	(2, TIMESTAMPTZ '2025-01-01 00:30:00+00')
+) source(id, ts);
+
+query III
+SELECT partition_field_transform, lower_bound, upper_bound
+FROM iceberg_partition_stats('my_datalake.default.test_timestamptz_utc')
+ORDER BY partition_field_transform, partition_field_name;
+----
+day	20088	20089
+hour	482135	482136
+month	659	660
+year	54	55
+
+query I
+SELECT id
+FROM my_datalake.default.test_timestamptz_utc
+WHERE year_ts = TIMESTAMPTZ '2024-12-31 23:30:00+00'
+	AND month_ts = TIMESTAMPTZ '2024-12-31 23:30:00+00'
+	AND day_ts = TIMESTAMPTZ '2024-12-31 23:30:00+00'
+	AND hour_ts = TIMESTAMPTZ '2024-12-31 23:30:00+00';
+----
+1
+
+query I
+SELECT id
+FROM my_datalake.default.test_timestamptz_utc
+WHERE year_ts = TIMESTAMPTZ '2025-01-01 00:30:00+00'
+	AND month_ts = TIMESTAMPTZ '2025-01-01 00:30:00+00'
+	AND day_ts = TIMESTAMPTZ '2025-01-01 00:30:00+00'
+	AND hour_ts = TIMESTAMPTZ '2025-01-01 00:30:00+00';
+----
+2
+
+statement ok
+SET TimeZone = 'UTC';
+
+statement ok
+drop table my_datalake.default.test_timestamptz_utc;
