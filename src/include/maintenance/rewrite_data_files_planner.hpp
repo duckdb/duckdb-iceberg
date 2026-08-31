@@ -55,11 +55,4 @@ struct RewriteDataFilesPlanInput {
 
 RewritePlan PlanRewrite(ClientContext &context, RewriteDataFilesPlanInput input);
 
-namespace rewrite_planner_internal {
-
-//! Canonical partition key used by the bin-packer.
-string PartitionBucketKey(const vector<IcebergPartitionInfo> &partition_info);
-
-} // namespace rewrite_planner_internal
-
 } // namespace duckdb

@@ -23,7 +23,7 @@ namespace {
 constexpr int64_t DEFAULT_TARGET_FILE_SIZE_BYTES = 512LL * 1024 * 1024;
 constexpr int64_t MIN_TARGET_FILE_SIZE_BYTES = 100;
 
-static int64_t ParseTargetFileSizeProperty(const string &value, const string &property) {
+int64_t ParseTargetFileSizeProperty(const string &value, const string &property) {
 	idx_t parsed_value;
 	if (!TryCast::Operation<string_t, idx_t>(string_t(value), parsed_value)) {
 		auto error = StringUtil::TryParseFormattedBytes(value, parsed_value);
@@ -41,8 +41,7 @@ static int64_t ParseTargetFileSizeProperty(const string &value, const string &pr
 	return static_cast<int64_t>(parsed_value);
 }
 
-static int64_t ResolveTargetFileSizeBytes(const RewriteDataFilesPlanInput &input,
-                                          const IcebergTableMetadata &metadata) {
+int64_t ResolveTargetFileSizeBytes(const RewriteDataFilesPlanInput &input, const IcebergTableMetadata &metadata) {
 	if (input.target_file_size_bytes) {
 		return input.target_file_size_bytes.value();
 	}
@@ -59,14 +58,14 @@ static int64_t ResolveTargetFileSizeBytes(const RewriteDataFilesPlanInput &input
 }
 
 //! Spark SizeBasedFileRewriter defaults: min = 75% of target, max = 180% of target.
-static int64_t ResolveMinFileSizeBytes(const RewriteDataFilesPlanInput &input, int64_t target_file_size_bytes) {
+int64_t ResolveMinFileSizeBytes(const RewriteDataFilesPlanInput &input, int64_t target_file_size_bytes) {
 	if (input.min_file_size_bytes) {
 		return input.min_file_size_bytes.value();
 	}
 	return (target_file_size_bytes * 3) / 4;
 }
 
-static int64_t ResolveMaxFileSizeBytes(const RewriteDataFilesPlanInput &input, int64_t target_file_size_bytes) {
+int64_t ResolveMaxFileSizeBytes(const RewriteDataFilesPlanInput &input, int64_t target_file_size_bytes) {
 	if (input.max_file_size_bytes) {
 		return input.max_file_size_bytes.value();
 	}
@@ -206,29 +205,7 @@ void CollectUnpartitionedCandidates(RewriteBucket &bucket, const vector<IcebergM
 	}
 }
 
-void CollectPartitionedCandidates(std::map<string, RewriteBucket> &per_partition,
-                                  const vector<IcebergManifestListEntry> &manifest_files,
-                                  const RewriteDataFilesPlanInput &input, int32_t default_spec_id) {
-	for (const auto &list_entry : manifest_files) {
-		if (list_entry.file.content != IcebergManifestContentType::DATA) {
-			continue;
-		}
-		AssertCurrentPartitionSpec(list_entry, default_spec_id);
-		for (const auto &entry : list_entry.GetManifestEntries()) {
-			auto cand = TryMakeRewriteCandidate(entry);
-			if (!cand) {
-				continue;
-			}
-			auto &bucket = per_partition[rewrite_planner_internal::PartitionBucketKey(cand->partition_info)];
-			ConsiderCandidate(bucket, std::move(*cand), input);
-		}
-	}
-}
-
-} // namespace
-
-namespace rewrite_planner_internal {
-
+//! Canonical partition key used by the bin-packer.
 string PartitionBucketKey(const vector<IcebergPartitionInfo> &partition_info) {
 	if (partition_info.empty()) {
 		return "";
@@ -254,7 +231,26 @@ string PartitionBucketKey(const vector<IcebergPartitionInfo> &partition_info) {
 	return out;
 }
 
-} // namespace rewrite_planner_internal
+void CollectPartitionedCandidates(std::map<string, RewriteBucket> &per_partition,
+                                  const vector<IcebergManifestListEntry> &manifest_files,
+                                  const RewriteDataFilesPlanInput &input, int32_t default_spec_id) {
+	for (const auto &list_entry : manifest_files) {
+		if (list_entry.file.content != IcebergManifestContentType::DATA) {
+			continue;
+		}
+		AssertCurrentPartitionSpec(list_entry, default_spec_id);
+		for (const auto &entry : list_entry.GetManifestEntries()) {
+			auto cand = TryMakeRewriteCandidate(entry);
+			if (!cand) {
+				continue;
+			}
+			auto &bucket = per_partition[PartitionBucketKey(cand->partition_info)];
+			ConsiderCandidate(bucket, std::move(*cand), input);
+		}
+	}
+}
+
+} // namespace
 
 RewritePlan PlanRewrite(ClientContext &context, RewriteDataFilesPlanInput input) {
 	RewritePlan plan;
