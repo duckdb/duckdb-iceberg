@@ -424,7 +424,7 @@ static unique_ptr<Expression> GetDateDiffFunction(ClientContext &context, const 
 	if (date_part == "hour") {
 		children.push_back(make_uniq<BoundConstantExpression>(Value::TIMESTAMP(Timestamp::FromEpochSeconds(0))));
 	} else {
-		children.push_back(make_uniq<BoundConstantExpression>(Value::DATE(Date::FromDate(1970, 1, 1))));
+		children.push_back(make_uniq<BoundConstantExpression>(Value::DATE(Date::FromDate(Date::EPOCH_YEAR, 1, 1))));
 	}
 
 	auto source = CreateSourceColumnReference(context, copy_input, source_id);
