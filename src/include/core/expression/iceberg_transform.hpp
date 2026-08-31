@@ -2,6 +2,7 @@
 
 #include "common/iceberg_math.hpp"
 #include "core/expression/iceberg_predicate_stats.hpp"
+#include "duckdb/common/types/date.hpp"
 #include "duckdb/common/types/interval.hpp"
 
 namespace duckdb {
@@ -107,31 +108,31 @@ struct YearTransform {
 		case LogicalTypeId::TIMESTAMP: {
 			auto val = constant.GetValue<timestamp_t>();
 			auto components = Timestamp::GetComponents(val);
-			return Value::INTEGER(components.year - 1970);
+			return Value::INTEGER(components.year - Date::EPOCH_YEAR);
 		}
 		case LogicalTypeId::TIMESTAMP_TZ: {
 			timestamp_t val(constant.GetValue<timestamp_tz_t>());
 			auto components = Timestamp::GetComponents(val);
-			return Value::INTEGER(components.year - 1970);
+			return Value::INTEGER(components.year - Date::EPOCH_YEAR);
 		}
 		case LogicalTypeId::TIMESTAMP_NS: {
 			auto val = constant.GetValue<timestamp_ns_t>();
 			auto micros = IcebergNanosToMicrosFloor(val.value);
 			auto components = Timestamp::GetComponents(timestamp_t(micros));
-			return Value::INTEGER(components.year - 1970);
+			return Value::INTEGER(components.year - Date::EPOCH_YEAR);
 		}
 		case LogicalTypeId::TIMESTAMP_TZ_NS: {
 			auto val = constant.GetValue<timestamp_tz_ns_t>();
 			auto micros = IcebergNanosToMicrosFloor(val.value);
 			auto components = Timestamp::GetComponents(timestamp_t(micros));
-			return Value::INTEGER(components.year - 1970);
+			return Value::INTEGER(components.year - Date::EPOCH_YEAR);
 		}
 		case LogicalTypeId::DATE: {
 			int32_t year;
 			int32_t month;
 			int32_t day;
 			Date::Convert(constant.GetValue<date_t>(), year, month, day);
-			return Value::INTEGER(year - 1970);
+			return Value::INTEGER(year - Date::EPOCH_YEAR);
 		}
 		default:
 			throw NotImplementedException("'year' transform for type %s", constant.type().ToString());
@@ -161,29 +162,29 @@ struct MonthTransform {
 		case LogicalTypeId::TIMESTAMP: {
 			auto val = constant.GetValue<timestamp_t>();
 			auto components = Timestamp::GetComponents(val);
-			return Value::INTEGER((components.year - 1970) * 12 + (components.month - 1));
+			return Value::INTEGER((components.year - Date::EPOCH_YEAR) * 12 + (components.month - 1));
 		}
 		case LogicalTypeId::TIMESTAMP_TZ: {
 			timestamp_t val(constant.GetValue<timestamp_tz_t>());
 			auto components = Timestamp::GetComponents(val);
-			return Value::INTEGER((components.year - 1970) * 12 + (components.month - 1));
+			return Value::INTEGER((components.year - Date::EPOCH_YEAR) * 12 + (components.month - 1));
 		}
 		case LogicalTypeId::TIMESTAMP_NS: {
 			auto val = constant.GetValue<timestamp_ns_t>();
 			auto micros = IcebergNanosToMicrosFloor(val.value);
 			auto components = Timestamp::GetComponents(timestamp_t(micros));
-			return Value::INTEGER((components.year - 1970) * 12 + (components.month - 1));
+			return Value::INTEGER((components.year - Date::EPOCH_YEAR) * 12 + (components.month - 1));
 		}
 		case LogicalTypeId::TIMESTAMP_TZ_NS: {
 			auto val = constant.GetValue<timestamp_tz_ns_t>();
 			auto micros = IcebergNanosToMicrosFloor(val.value);
 			auto components = Timestamp::GetComponents(timestamp_t(micros));
-			return Value::INTEGER((components.year - 1970) * 12 + (components.month - 1));
+			return Value::INTEGER((components.year - Date::EPOCH_YEAR) * 12 + (components.month - 1));
 		}
 		case LogicalTypeId::DATE: {
 			int32_t year, month, day;
 			Date::Convert(constant.GetValue<date_t>(), year, month, day);
-			return Value::INTEGER((year - 1970) * 12 + (month - 1));
+			return Value::INTEGER((year - Date::EPOCH_YEAR) * 12 + (month - 1));
 		}
 		default:
 			throw NotImplementedException("'month' transform for type %s", constant.type().ToString());
