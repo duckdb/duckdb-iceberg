@@ -263,6 +263,15 @@ IcebergTable &IcebergTableSet::CreateNewEntry(ClientContext &context, IcebergCat
 		location = ParseTableProperty(property_binder, context, *location_it->second, "location", LogicalType::VARCHAR)
 		               .GetValue<string>();
 	}
+	if (location.empty() && catalog.attach_options.default_table_location_from_namespace) {
+		schema.LoadProperties(context);
+		auto ns_location_it = schema.schema_info.properties.find("location");
+		if (ns_location_it != schema.schema_info.properties.end() && !ns_location_it->second.empty()) {
+			location = ns_location_it->second;
+			StringUtil::RTrim(location, "/");
+			location += "/" + info.GetTableName().GetIdentifierName();
+		}
+	}
 
 	IcebergTableMetadata bootstrap_metadata;
 	bootstrap_metadata.iceberg_version = iceberg_version.GetIndex();

@@ -1,0 +1,96 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_specifc/fixture/create/create_table_default_location_from_namespace.test
+# description: derive a default table location from the namespace's 'location' property (issue #1299)
+# group: [create]
+
+require-env CATALOG_TEST_CONFIG_SETUP fixture
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+# attach a second catalog with the option enabled; my_datalake (attached without it) keeps the default behavior
+statement ok
+ATTACH '' AS loc_datalake (
+    TYPE ICEBERG,
+    CLIENT_ID 'admin',
+    CLIENT_SECRET 'password',
+    URI 'http://127.0.0.1:8181',
+    default_table_location_from_namespace true
+);
+
+statement ok
+DROP TABLE IF EXISTS loc_datalake.loc_ns.tbl_derived;
+
+statement ok
+DROP TABLE IF EXISTS loc_datalake.loc_ns.tbl_explicit;
+
+statement ok
+DROP TABLE IF EXISTS loc_datalake.loc_ns.tbl_server_assigned;
+
+statement ok
+DROP SCHEMA IF EXISTS loc_datalake.loc_ns;
+
+statement ok
+CREATE SCHEMA loc_datalake.loc_ns;
+
+# point the namespace at a custom location (trailing slash on purpose: it must be trimmed before appending)
+statement ok
+CALL set_iceberg_schema_properties(loc_datalake.loc_ns, {'location': 's3://warehouse/custom_ns_location/'});
+
+query II
+FROM iceberg_schema_properties(loc_datalake.loc_ns) WHERE key = 'location';
+----
+location	s3://warehouse/custom_ns_location/
+
+# no explicit 'location': it must be derived as '<namespace location>/<table name>'
+statement ok
+CREATE TABLE loc_datalake.loc_ns.tbl_derived (a INTEGER);
+
+query I
+SELECT metadata."location" FROM iceberg_load_table_response(loc_datalake.loc_ns.tbl_derived);
+----
+s3://warehouse/custom_ns_location/tbl_derived
+
+# the derived location is usable for reads and writes
+statement ok
+INSERT INTO loc_datalake.loc_ns.tbl_derived VALUES (42);
+
+query I
+SELECT a FROM loc_datalake.loc_ns.tbl_derived;
+----
+42
+
+# an explicit 'location' still wins over the derived one
+statement ok
+CREATE TABLE loc_datalake.loc_ns.tbl_explicit (a INTEGER)
+WITH ('location' = 's3://warehouse/explicit_location/tbl_explicit');
+
+query I
+SELECT metadata."location" FROM iceberg_load_table_response(loc_datalake.loc_ns.tbl_explicit);
+----
+s3://warehouse/explicit_location/tbl_explicit
+
+# without the attach option the server keeps assigning the location, even when the namespace has a custom one
+statement ok
+CREATE TABLE my_datalake.loc_ns.tbl_server_assigned (a INTEGER);
+
+query I
+SELECT metadata."location" NOT LIKE 's3://warehouse/custom_ns_location/%' FROM iceberg_load_table_response(my_datalake.loc_ns.tbl_server_assigned);
+----
+true
+
+statement ok
+DROP TABLE loc_datalake.loc_ns.tbl_server_assigned;
+
+statement ok
+DROP TABLE loc_datalake.loc_ns.tbl_explicit;
+
+statement ok
+DROP TABLE loc_datalake.loc_ns.tbl_derived;
+
+statement ok
+DROP SCHEMA loc_datalake.loc_ns;
