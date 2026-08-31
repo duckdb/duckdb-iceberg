@@ -66,7 +66,9 @@
         "test/sql/local/catalog_test_config_setup/catalog_agnostic/sorting/day/day_timestamptz_ns.test",
         "test/sql/local/catalog_test_config_setup/catalog_agnostic/sorting/hour/hour_timestamptz_ns.test",
         "test/sql/local/catalog_test_config_setup/catalog_agnostic/sorting/month/month_timestamptz_ns.test",
-        "test/sql/local/catalog_test_config_setup/catalog_agnostic/sorting/year/year_timestamptz_ns.test"
+        "test/sql/local/catalog_test_config_setup/catalog_agnostic/sorting/year/year_timestamptz_ns.test",
+        "test/sql/local/catalog_test_config_setup/catalog_agnostic/create/test_create_geo.test",
+        "test/sql/local/catalog_test_config_setup/catalog_agnostic/functions/iceberg_column_stats/geometry/test_geometry_column_stats.test"
       ]
     },
     {
@@ -143,7 +145,8 @@
         "test/sql/local/catalog_test_config_setup/catalog_agnostic/update/test_update_v3_table.test",
         "test/sql/local/catalog_test_config_setup/catalog_agnostic/irc_nested_types.test",
         "test/sql/local/catalog_test_config_setup/catalog_agnostic/logging/test_partition_read_logging.test",
-        "test/sql/local/catalog_test_config_setup/catalog_agnostic/logging/test_partition_read_logic_month.test"
+        "test/sql/local/catalog_test_config_setup/catalog_agnostic/logging/test_partition_read_logic_month.test",
+        "test/sql/local/catalog_test_config_setup/catalog_agnostic/other_engines/test_spark_can_read_duckdb_timestamptz_ns.test"
       ]
     },
     {

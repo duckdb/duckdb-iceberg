@@ -1,16 +1,18 @@
 #include "maintenance/rewrite_data_files_operator.hpp"
 
 #include "duckdb/common/exception.hpp"
-#include "duckdb/execution/operator/set/physical_union.hpp"
+#include "duckdb/common/numeric_utils.hpp"
+#include "duckdb/execution/operator/persistent/physical_copy_to_file.hpp"
 #include "duckdb/parallel/meta_pipeline.hpp"
 #include "duckdb/parallel/pipeline.hpp"
+#include "duckdb/planner/operator/logical_copy_to_file.hpp"
 
 #include "catalog/rest/catalog_entry/table/iceberg_table.hpp"
+#include "core/metadata/iceberg_table_metadata.hpp"
+#include "core/metadata/schema/iceberg_table_schema.hpp"
+#include "execution/operator/iceberg_insert.hpp"
 #include "maintenance/maintenance_table_loader.hpp"
 #include "maintenance/rewrite_data_files_executor.hpp"
-#include "duckdb/planner/expression/bound_reference_expression.hpp"
-#include "duckdb/planner/expression/bound_constant_expression.hpp"
-#include "duckdb/execution/operator/projection/physical_projection.hpp"
 
 namespace duckdb {
 
@@ -22,8 +24,7 @@ static vector<LogicalType> RewriteResultTypes() {
 
 struct RewriteDataFilesGlobalState : public GlobalSinkState {
 	RewriteDataFilesGlobalState(ClientContext &context_p, const RewritePlan &source_plan)
-	    : context(context_p), plan(source_plan), group_seen(source_plan.file_groups.size(), false),
-	      group_accounted(source_plan.file_groups.size(), false) {
+	    : context(context_p), plan(source_plan), insert_state(context_p) {
 		plan.table_info = ReloadIcebergTableShared(context, plan.table_name, "iceberg_rewrite_data_files");
 		ValidateRewriteSnapshot(plan, *plan.table_info, "execution");
 	}
@@ -37,8 +38,7 @@ struct RewriteDataFilesGlobalState : public GlobalSinkState {
 	ClientContext &context;
 	RewritePlan plan;
 	mutex lock;
-	vector<bool> group_seen;
-	vector<bool> group_accounted;
+	IcebergInsertGlobalState insert_state;
 	vector<string> produced_paths;
 	RewriteExecutionResult result;
 	bool committed = false;
@@ -80,37 +80,43 @@ string LogicalRewriteDataFiles::GetName() const {
 }
 
 PhysicalOperator &LogicalRewriteDataFiles::CreatePlan(ClientContext &context, PhysicalPlanGenerator &planner) {
-	auto &rewrite = planner.Make<PhysicalRewriteDataFiles>(std::move(plan), estimated_cardinality);
+	auto &rewrite =
+	    planner.Make<PhysicalRewriteDataFiles>(std::move(plan), estimated_cardinality).Cast<PhysicalRewriteDataFiles>();
 	if (children.empty()) {
 		return rewrite;
 	}
 
-	ArenaLinkedList<reference<PhysicalOperator>> physical_children(planner.ArenaRef());
-	for (idx_t group_idx = 0; group_idx < children.size(); group_idx++) {
-		auto &child = children[group_idx];
-		auto &child_plan = planner.CreatePlan(*child);
-		auto child_types = child_plan.GetTypes();
-
-		vector<unique_ptr<Expression>> projection_expressions;
-		//! Prefix COPY RETURN_STATS rows so the Sink can map each output file back to its rewrite group.
-		projection_expressions.push_back(make_uniq<BoundConstantExpression>(Value::UBIGINT(group_idx)));
-		for (idx_t i = 0; i < child_types.size(); i++) {
-			auto &child_type = child_types[i];
-			projection_expressions.push_back(make_uniq<BoundReferenceExpression>(child_type, i));
-		}
-		child_types.insert(child_types.begin(), LogicalType::UBIGINT);
-		auto &physical_projection = planner.Make<PhysicalProjection>(child_types, std::move(projection_expressions), 1);
-		physical_projection.children.push_back(child_plan);
-		physical_children.push_back(physical_projection);
-	}
-	if (physical_children.size() == 1) {
-		rewrite.children.push_back(physical_children[0]);
-		return rewrite;
+	D_ASSERT(children.size() == 1);
+	D_ASSERT(rewrite.plan.table_info);
+	auto &metadata = rewrite.plan.table_info->table_metadata;
+	auto schema_id = metadata.GetCurrentSchemaId();
+	auto schema_it = metadata.GetSchemas().find(schema_id);
+	if (schema_it == metadata.GetSchemas().end()) {
+		throw InternalException("iceberg_rewrite_data_files: current schema id %d not found in metadata", schema_id);
 	}
 
-	auto &union_op = planner.Make<PhysicalUnion>(physical_children[0].get().GetTypes(), physical_children,
-	                                             estimated_cardinality, true);
-	rewrite.children.push_back(union_op);
+	//! Bind attached a LogicalCopyToFile so RemoveUnusedColumns keeps all table
+	//! columns. Peel that logical COPY away and rebuild the physical copy with
+	//! IcebergInsert::PlanCopyForInsert (partitioned IcebergCopyOptions).
+	auto &logical_child = *children[0];
+	if (logical_child.type != LogicalOperatorType::LOGICAL_COPY_TO_FILE || logical_child.children.size() != 1) {
+		throw InternalException(
+		    "iceberg_rewrite_data_files: expected a single LogicalCopyToFile child with one scan child");
+	}
+	auto &scan = planner.CreatePlan(*logical_child.children[0]);
+	//! Vended credentials are already installed: PlanRewrite loads them for the manifests,
+	//! and BindCandidateCopy's table scan bind calls PrepareIcebergScanFromEntry.
+	IcebergCopyInput copy_input(context, metadata, *schema_it->second);
+	auto &copy = IcebergInsert::PlanCopyForInsert(context, planner, copy_input, &scan).Cast<PhysicalCopyToFile>();
+	copy.file_size_bytes = NumericCast<idx_t>(rewrite.plan.target_file_size_bytes);
+	//! A file can never be smaller than a single row group; rotation only happens at row-group
+	//! boundaries. Cap batch_size_bytes to the rewrite target so FILE_SIZE_BYTES rotation remains
+	//! effective (mirrors IcebergInsert::GetCopyOptions).
+	if (copy.batch_size_bytes.IsValid() && copy.file_size_bytes.IsValid() &&
+	    copy.batch_size_bytes.GetIndex() > copy.file_size_bytes.GetIndex()) {
+		copy.batch_size_bytes = copy.file_size_bytes;
+	}
+	rewrite.children.push_back(copy);
 	return rewrite;
 }
 
@@ -146,51 +152,18 @@ unique_ptr<LocalSinkState> PhysicalRewriteDataFiles::GetLocalSinkState(Execution
 SinkResultType PhysicalRewriteDataFiles::Sink(ExecutionContext &context, DataChunk &chunk,
                                               OperatorSinkInput &input) const {
 	auto &gstate = input.global_state.Cast<RewriteDataFilesGlobalState>();
-	for (idx_t row = 0; row < chunk.size(); row++) {
-		//! COPY RETURN_STATS emits one row per produced file (prefixed with group_idx):
-		//!   0 group_idx
-		//!   1 filename
-		//!   2 count
-		//!   3 file_size_bytes
-		//!   4 footer_size_bytes
-		//!   5 column_statistics
-		//!   6 partition_keys
-		if (chunk.ColumnCount() < 6) {
-			throw InternalException(
-			    "iceberg_rewrite_data_files: expected COPY RETURN_STATS result with at least five columns");
-		}
-		auto group_idx = chunk.GetValue(0, row).GetValue<uint64_t>();
-		if (static_cast<idx_t>(group_idx) >= gstate.plan.file_groups.size()) {
-			throw InternalException("iceberg_rewrite_data_files: COPY returned unknown group index %lld", group_idx);
-		}
-		auto produced_file = chunk.GetValue(1, row).GetValue<string>();
-		if (produced_file.empty()) {
-			throw InternalException("iceberg_rewrite_data_files: COPY for group %lld returned an empty file path",
-			                        group_idx);
-		}
-		auto count = NumericCast<int64_t>(chunk.GetValue(2, row).GetValue<uint64_t>());
-		auto file_size_in_bytes = NumericCast<int64_t>(chunk.GetValue(3, row).GetValue<uint64_t>());
-		auto column_stats = chunk.GetValue(5, row);
-		auto &group = gstate.plan.file_groups[group_idx];
-		auto &table_info = *gstate.plan.table_info;
-		auto entry = BuildRewriteManifestEntry(
-		    gstate.context, group, gstate.plan.starting_sequence_number, count, produced_file, file_size_in_bytes,
-		    column_stats, table_info.table_metadata, gstate.plan.table_name.Name().GetIdentifierName());
+	auto &table_info = *gstate.plan.table_info;
+	auto table_name = gstate.plan.table_name.Name().GetIdentifierName();
 
-		{
-			lock_guard<mutex> guard(gstate.lock);
-			gstate.group_seen[group_idx] = true;
-			gstate.produced_paths.push_back(produced_file);
-			gstate.result.new_entries.push_back(std::move(entry));
-			gstate.result.added_data_files++;
-			if (!gstate.group_accounted[group_idx]) {
-				gstate.group_accounted[group_idx] = true;
-				gstate.result.rewritten_data_files += static_cast<int64_t>(group.size());
-				for (auto &candidate : group) {
-					gstate.result.rewritten_bytes += candidate.file_size_in_bytes;
-					gstate.result.rewritten_candidates.push_back(candidate);
-				}
+	{
+		lock_guard<mutex> guard(gstate.lock);
+		gstate.insert_state.AddFiles(chunk, table_name, table_info.table_metadata);
+		for (idx_t row = 0; row < chunk.size(); row++) {
+			auto produced_file = chunk.GetValue(0, row).GetValue<string>();
+			if (produced_file.empty()) {
+				throw InternalException("iceberg_rewrite_data_files: COPY returned an empty file path");
 			}
+			gstate.produced_paths.push_back(produced_file);
 		}
 	}
 	return SinkResultType::NEED_MORE_INPUT;
@@ -201,12 +174,14 @@ SinkFinalizeType PhysicalRewriteDataFiles::Finalize(Pipeline &pipeline, Event &e
 	auto &gstate = input.global_state.Cast<RewriteDataFilesGlobalState>();
 	{
 		lock_guard<mutex> guard(gstate.lock);
-		for (idx_t group_idx = 0; group_idx < gstate.group_seen.size(); group_idx++) {
-			if (!gstate.group_seen[group_idx]) {
-				throw InternalException("iceberg_rewrite_data_files: COPY returned no result for group %llu",
-				                        static_cast<unsigned long long>(group_idx));
-			}
+		if (gstate.insert_state.written_files.empty()) {
+			throw InternalException(
+			    "iceberg_rewrite_data_files: COPY returned no written files for selected candidates");
 		}
+		gstate.result.new_entries = IcebergInsert::GetInsertManifestEntries(gstate.insert_state);
+		PinRewriteSequenceNumbers(gstate.result.new_entries, gstate.plan.starting_sequence_number);
+		gstate.result.added_data_files = static_cast<int64_t>(gstate.result.new_entries.size());
+		AccountSelectedCandidates(gstate.plan, gstate.result);
 	}
 	CommitRewrite(context, gstate.plan, gstate.result);
 	gstate.committed = true;
@@ -249,7 +224,7 @@ string PhysicalRewriteDataFiles::GetName() const {
 
 InsertionOrderPreservingMap<string> PhysicalRewriteDataFiles::ParamsToString() const {
 	InsertionOrderPreservingMap<string> result;
-	result["Groups"] = std::to_string(plan.file_groups.size());
+	result["Selected Files"] = std::to_string(plan.selected_candidates.size());
 	return result;
 }
 

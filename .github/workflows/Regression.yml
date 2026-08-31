@@ -160,3 +160,8 @@ jobs:
         run: |
           ls benchmark/file_pruning_benchmarks/*.benchmark > .github/regression/file_pruning_benchmarks.csv
           python duckdb/scripts/regression/test_runner.py --old base/build/release/benchmark/benchmark_runner --new build/release/benchmark/benchmark_runner --benchmarks .github/regression/file_pruning_benchmarks.csv --verbose --threads 2 --benchmark-cache=clear
+
+      - name: Regression Test Rewrite Data Files Benchmarks
+        run: |
+          ls benchmark/rewrite_data_files/*.benchmark > .github/regression/rewrite_data_files.csv
+          python duckdb/scripts/regression/test_runner.py --old base/build/release/benchmark/benchmark_runner --new build/release/benchmark/benchmark_runner --benchmarks .github/regression/rewrite_data_files.csv --verbose --threads 2 --benchmark-cache=clear

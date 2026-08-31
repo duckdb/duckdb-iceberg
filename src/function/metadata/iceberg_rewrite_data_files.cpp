@@ -16,7 +16,6 @@
 #include "catalog/rest/catalog_entry/table/iceberg_table.hpp"
 #include "core/metadata/iceberg_table_metadata.hpp"
 #include "function/iceberg_functions.hpp"
-#include "maintenance/rewrite_data_files_executor.hpp"
 #include "maintenance/rewrite_data_files_operator.hpp"
 #include "maintenance/rewrite_data_files_planner.hpp"
 
@@ -91,7 +90,8 @@ static RewriteDataFilesPlanInput ParseRewritePlanInput(TableFunctionBindInput &i
 	return result;
 }
 
-static unique_ptr<QueryNode> BuildGroupSelect(const QualifiedName &table_name, const vector<RewriteCandidate> &group) {
+static unique_ptr<QueryNode> BuildCandidateSelect(const QualifiedName &table_name,
+                                                  const vector<RewriteCandidate> &candidates) {
 	auto select = make_uniq<SelectNode>();
 	select->select_list.push_back(make_uniq<StarExpression>());
 
@@ -102,18 +102,23 @@ static unique_ptr<QueryNode> BuildGroupSelect(const QualifiedName &table_name, c
 
 	vector<unique_ptr<ParsedExpression>> in_children;
 	in_children.push_back(make_uniq<ColumnRefExpression>("filename"));
-	for (auto &candidate : group) {
+	for (auto &candidate : candidates) {
 		in_children.push_back(make_uniq<ConstantExpression>(Value(candidate.file_path)));
 	}
 	//! Read through the attached Iceberg table so the scan layer applies MoR
-	//! position/equality deletes, then scope the scan to this rewrite group's
+	//! position/equality deletes, then scope the scan to the selected rewrite
 	//! source files using the `filename` virtual column.
 	select->where_clause = make_uniq<OperatorExpression>(ExpressionType::COMPARE_IN, std::move(in_children));
 	return std::move(select);
 }
 
-static unique_ptr<LogicalOperator> BindGroupCopy(Binder &binder, const RewritePlan &plan,
-                                                 const vector<RewriteCandidate> &group) {
+//! Bind a LogicalCopyToFile over the candidate scan. The logical COPY is not
+//! executed as-is: CreatePlan peels it off and rebuilds a PhysicalCopyToFile via
+//! IcebergInsert::PlanCopyForInsert (partitioned IcebergCopyOptions). Binding
+//! COPY still matters because RemoveUnusedColumns treats LOGICAL_COPY_TO_FILE as
+//! "everything referenced", preserving all table columns for the later physical
+//! rewrite copy.
+static unique_ptr<LogicalOperator> BindCandidateCopy(Binder &binder, const RewritePlan &plan) {
 	auto &metadata = plan.table_info->table_metadata;
 	auto schema_id = metadata.GetCurrentSchemaId();
 	auto schema_it = metadata.GetSchemas().find(schema_id);
@@ -123,7 +128,7 @@ static unique_ptr<LogicalOperator> BindGroupCopy(Binder &binder, const RewritePl
 
 	auto &fs = FileSystem::GetFileSystem(binder.context);
 	CopyStatement copy_statement;
-	copy_statement.info->select_statement = BuildGroupSelect(plan.table_name, group);
+	copy_statement.info->select_statement = BuildCandidateSelect(plan.table_name, plan.selected_candidates);
 	copy_statement.info->file_path = metadata.GetDataPath(fs);
 	copy_statement.info->format = "parquet";
 	copy_statement.info->is_from = false;
@@ -132,18 +137,12 @@ static unique_ptr<LogicalOperator> BindGroupCopy(Binder &binder, const RewritePl
 	copy_statement.info->options["filename_pattern"].push_back(Value("{uuidv7}"));
 	copy_statement.info->options["file_size_bytes"].push_back(
 	    Value::UBIGINT(static_cast<uint64_t>(plan.target_file_size_bytes)));
-	//! FILE_SIZE_BYTES forces COPY through DuckDB's rotated-file path creation so
-	//! RETURN_STATS reports concrete parquet paths instead of the directory root.
 	copy_statement.info->options["return_stats"].push_back(Value::BOOLEAN(true));
 	copy_statement.info->options["per_thread_output"].push_back(Value::BOOLEAN(false));
 	copy_statement.info->options["append"].push_back(Value::BOOLEAN(true));
 
 	auto copy_binder = Binder::CreateBinder(binder.context, &binder);
 	auto bound_copy = copy_binder->Bind(copy_statement);
-	if (bound_copy.types.size() < 4) {
-		throw InternalException(
-		    "iceberg_rewrite_data_files: expected COPY RETURN_STATS to return at least four columns");
-	}
 	return std::move(bound_copy.plan);
 }
 
@@ -158,8 +157,8 @@ static unique_ptr<LogicalOperator> RewriteDataFilesBindOperator(ClientContext &c
 	auto plan = PlanRewrite(context, plan_input);
 
 	auto result = make_uniq<LogicalRewriteDataFiles>(bind_index.index, std::move(plan));
-	for (idx_t group_idx = 0; group_idx < result->plan.file_groups.size(); group_idx++) {
-		result->children.push_back(BindGroupCopy(*input.binder, result->plan, result->plan.file_groups[group_idx]));
+	if (!result->plan.selected_candidates.empty()) {
+		result->children.push_back(BindCandidateCopy(*input.binder, result->plan));
 	}
 
 	return_names = {"rewritten_data_files", "added_data_files", "rewritten_bytes"};

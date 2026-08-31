@@ -9,40 +9,25 @@
 #include "catalog/rest/transaction/iceberg_transaction_data.hpp"
 #include "catalog/rest/transaction/iceberg_transaction_metadata.hpp"
 #include "core/metadata/iceberg_table_metadata.hpp"
-#include "core/metadata/schema/iceberg_table_schema.hpp"
-#include "storage/statistics/iceberg_data_file_stats.hpp"
 
 namespace duckdb {
 
-IcebergManifestEntry BuildRewriteManifestEntry(ClientContext &context, const vector<RewriteCandidate> &group,
-                                               int64_t starting_sequence_number, int64_t record_count,
-                                               const string &produced_file, int64_t file_size_in_bytes,
-                                               const Value &column_stats, const IcebergTableMetadata &table_metadata,
-                                               const string &table_name) {
-	if (group.empty()) {
-		throw InternalException("iceberg_rewrite_data_files: cannot build a manifest entry for an empty group");
+void AccountSelectedCandidates(const RewritePlan &plan, RewriteExecutionResult &result) {
+	result.rewritten_data_files = static_cast<int64_t>(plan.selected_candidates.size());
+	result.rewritten_bytes = 0;
+	result.rewritten_candidates.clear();
+	result.rewritten_candidates.reserve(plan.selected_candidates.size());
+	for (auto &candidate : plan.selected_candidates) {
+		result.rewritten_bytes += candidate.file_size_in_bytes;
+		result.rewritten_candidates.push_back(candidate);
 	}
+}
 
-	IcebergManifestEntry entry;
-	entry.status = IcebergManifestEntryStatusType::ADDED;
-	//! Preserve equality-delete applicability after compaction.
-	entry.SetSequenceNumber(starting_sequence_number);
-	entry.data_file.content = IcebergManifestEntryContentType::DATA;
-	entry.data_file.file_format = "parquet";
-	entry.data_file.file_path = produced_file;
-	entry.data_file.record_count = record_count;
-	entry.data_file.file_size_in_bytes = file_size_in_bytes;
-	//! The planner buckets candidates so every file in one group shares the same
-	//! partition tuple. Reuse candidate 0 instead of re-deriving it.
-	entry.data_file.partition_info = group.front().partition_info;
-	if (table_metadata.HasSortOrder()) {
-		auto &sort_order = table_metadata.GetLatestSortOrder();
-		if (sort_order.IsSorted()) {
-			entry.data_file.sort_order_id = sort_order.sort_order_id;
-		}
+void PinRewriteSequenceNumbers(vector<IcebergManifestEntry> &entries, int64_t starting_sequence_number) {
+	for (auto &entry : entries) {
+		//! Preserve equality-delete applicability after compaction.
+		entry.SetSequenceNumber(starting_sequence_number);
 	}
-	IcebergDataFileStats::PopulateFromReturnStats(context, entry.data_file, column_stats, table_metadata, table_name);
-	return entry;
 }
 
 void ValidateRewriteSnapshot(const RewritePlan &plan, const IcebergTable &table_info, const string &phase) {

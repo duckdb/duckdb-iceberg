@@ -97,7 +97,7 @@ query I
 select count(*)
 from iceberg_metadata('my_datalake.default.spark_rewrite_mor_residual_deletes')
 where content = 'DATA' and status = 'ADDED'
-  and file_path not like '%/category=%';
+  and file_path like '%/category=compact/%';
 ----
 1
 
