@@ -74,7 +74,9 @@ void GroupCandidates(RewritePlan &plan, int64_t target_file_size_bytes, int64_t 
 		if (!rewrite_all && static_cast<int64_t>(kv.second.size()) < min_input_files) {
 			continue;
 		}
-		plan.file_groups.push_back(std::move(kv.second));
+		for (auto &cand : kv.second) {
+			plan.selected_candidates.push_back(std::move(cand));
+		}
 	}
 }
 
@@ -143,6 +145,9 @@ RewritePlan PlanRewrite(ClientContext &context, const RewriteDataFilesPlanInput 
 	IcebergSnapshotScanInfo snapshot_info;
 	snapshot_info.snapshot = latest_snapshot;
 	snapshot_info.schema_id = table_metadata.GetCurrentSchemaId();
+
+	//! Install vended storage secrets before reading manifest lists from object storage.
+	table_info.LoadCredentials(context);
 
 	IcebergOptions options;
 	auto manifest_list =
