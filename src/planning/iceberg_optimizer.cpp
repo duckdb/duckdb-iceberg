@@ -14,6 +14,9 @@
 #include "planning/iceberg_multi_file_reader.hpp"
 #include "duckdb/parser/expression/constant_expression.hpp"
 #include "duckdb/planner/operator/logical_get.hpp"
+#include "duckdb/optimizer/topn_optimizer.hpp"
+#include "duckdb/planner/expression/bound_columnref_expression.hpp"
+#include "duckdb/planner/expression_iterator.hpp"
 
 namespace duckdb {
 
@@ -66,12 +69,83 @@ void IcebergOptimizerRoutine::VisitOperator(unique_ptr<LogicalOperator> &op, boo
 	}
 }
 
+static optional_ptr<LogicalGet> TryGetTopNTableScan(ClientContext &context, LogicalOperator &op) {
+	if (!TopN::CanOptimize(op, &context)) {
+		return nullptr;
+	}
+	auto current = op.children[0].get();
+	while (current->type == LogicalOperatorType::LOGICAL_PROJECTION) {
+		current = current->children[0].get();
+	}
+	D_ASSERT(current->type == LogicalOperatorType::LOGICAL_ORDER_BY);
+	current = current->children[0].get();
+	while (current->type == LogicalOperatorType::LOGICAL_PROJECTION ||
+	       current->type == LogicalOperatorType::LOGICAL_FILTER) {
+		current = current->children[0].get();
+	}
+	if (current->type != LogicalOperatorType::LOGICAL_GET) {
+		return nullptr;
+	}
+	return current->Cast<LogicalGet>();
+}
+
+static optional_ptr<IcebergMultiFileList> TryGetIcebergFileList(LogicalGet &get) {
+	if (get.function.get_multi_file_reader != IcebergMultiFileReader::CreateInstance) {
+		return nullptr;
+	}
+	D_ASSERT(get.bind_data);
+	auto &multi_file_data = get.bind_data->Cast<MultiFileBindData>();
+	D_ASSERT(multi_file_data.file_list);
+	return multi_file_data.file_list->Cast<IcebergMultiFileList>();
+}
+
+static void IcebergLateMaterializationFilterPushdown(ClientContext &context, LogicalGet &get, FunctionData *bind_data,
+                                                     vector<unique_ptr<Expression>> &filters) {
+	auto &data = bind_data->Cast<MultiFileBindData>();
+	MultiFilePushdownInfo info(get);
+	auto new_list =
+	    data.multi_file_reader->ComplexFilterPushdown(context, *data.file_list, data.file_options, info, filters);
+	if (new_list) {
+		data.file_list = std::move(new_list);
+		MultiFileReader::PruneReaders(data, *data.file_list);
+	}
+
+	// Filters have been pushed through projections, so aliases now refer to the scan's columns. The core's
+	// CreateLHSGet cannot copy a table filter on a virtual column; projection/order-only references are safe.
+	for (auto &filter : filters) {
+		ExpressionIterator::VisitExpression<BoundColumnRefExpression>(
+		    *filter, [&](const BoundColumnRefExpression &ref) {
+			    auto &binding = ref.Binding();
+			    if (binding.table_index == get.table_index &&
+			        get.GetColumnIds()[binding.column_index].IsVirtualColumn()) {
+				    get.function.late_materialization = false;
+			    }
+		    });
+	}
+}
+
+static void EnableIcebergTopNLateMaterialization(OptimizerExtensionInput &input, unique_ptr<LogicalOperator> &plan) {
+	auto get = TryGetTopNTableScan(input.context, *plan);
+	if (get) {
+		auto file_list = TryGetIcebergFileList(*get);
+		if (file_list && file_list->SupportsLateMaterialization()) {
+			get->function.late_materialization = true;
+			get->function.pushdown_complex_filter = IcebergLateMaterializationFilterPushdown;
+		}
+	}
+	for (auto &child : plan->children) {
+		EnableIcebergTopNLateMaterialization(input, child);
+	}
+}
+
 void IcebergOptimizer::PreOptimize(OptimizerExtensionInput &input, unique_ptr<LogicalOperator> &plan) {
 	IcebergOptimizerRoutine iceberg_optimizer_routine(input.context);
 	if (plan->children.size() == 0) {
 		return;
 	}
 	iceberg_optimizer_routine.VisitOperator(plan);
+	// Keep local-planning restrictions ahead of TopN cardinality estimation, which may initialize scan planning.
+	EnableIcebergTopNLateMaterialization(input, plan);
 }
 
 OptimizerExtension IcebergOptimizer::Create() {

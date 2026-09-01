@@ -86,6 +86,13 @@ unique_ptr<MultiFileReader> IcebergMultiFileReader::CreateInstance(const TableFu
 	return make_uniq<IcebergMultiFileReader>(table.function_info);
 }
 
+unique_ptr<MultiFileReader> IcebergMultiFileReader::Copy() const {
+	auto result = make_uniq<IcebergMultiFileReader>(function_info);
+	result->function_name = function_name;
+	result->options = options;
+	return std::move(result);
+}
+
 shared_ptr<MultiFileList> IcebergMultiFileReader::CreateFileList(ClientContext &context, const vector<string> &paths,
                                                                  const FileGlobInput &glob_input) {
 	if (paths.size() != 1) {

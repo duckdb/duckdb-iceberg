@@ -114,6 +114,7 @@ public:
 	                   ExpressionExecutor &executor, optional_ptr<MultiFileReaderGlobalState> global_state) override;
 	bool ParseOption(const Identifier &key, const Value &val, MultiFileOptions &options,
 	                 ClientContext &context) override;
+	unique_ptr<MultiFileReader> Copy() const override;
 
 	MultiFileReaderVirtualColumnBinding
 	GetVirtualColumnExpression(ClientContext &context, MultiFileReaderData &reader_data,
