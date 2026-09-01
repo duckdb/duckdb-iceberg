@@ -1,0 +1,50 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/insert/partitions/temporal/test_timestamp_pre_epoch.test
+# description: Month and day pruning use floor semantics for timestamps before the Unix epoch
+# group: [temporal]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+statement ok
+create schema if not exists my_datalake.default;
+
+statement ok
+drop table if exists my_datalake.default.test_timestamp_pre_epoch;
+
+statement ok
+CREATE TABLE my_datalake.default.test_timestamp_pre_epoch (id INT, month_ts TIMESTAMP, day_ts TIMESTAMP)
+PARTITIONED BY (month(month_ts), day(day_ts));
+
+statement ok
+INSERT INTO my_datalake.default.test_timestamp_pre_epoch
+SELECT id, ts, ts
+FROM (VALUES
+	(1, TIMESTAMP '1969-12-31 23:59:59.999999'),
+	(2, TIMESTAMP '1970-01-01 00:00:00')
+) source(id, ts);
+
+query III
+SELECT partition_field_transform, lower_bound, upper_bound
+FROM iceberg_partition_stats('my_datalake.default.test_timestamp_pre_epoch')
+ORDER BY partition_field_transform;
+----
+day	-1	0
+month	-1	0
+
+query I
+SELECT id
+FROM my_datalake.default.test_timestamp_pre_epoch
+WHERE month_ts = TIMESTAMP '1969-12-31 23:59:59.999999'
+	AND day_ts = TIMESTAMP '1969-12-31 23:59:59.999999';
+----
+1
+
+statement ok
+drop table my_datalake.default.test_timestamp_pre_epoch;

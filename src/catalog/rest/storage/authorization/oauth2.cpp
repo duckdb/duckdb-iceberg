@@ -288,7 +288,7 @@ unique_ptr<OAuth2Authorization> OAuth2Authorization::FromAttachOptions(AttachedD
 		if (!uri_from_secret.IsNull() && !legacy_endpoint_from_secret.IsNull()) {
 			throw InvalidConfigurationException(
 			    "ICEBERG secret '%s' contains both 'uri' and deprecated 'endpoint'; use only 'uri'",
-			    iceberg_secret->secret->GetName());
+			    iceberg_secret->secret->GetName().GetIdentifierName());
 		}
 		if (input.catalog_uri.empty()) {
 			if (uri_from_secret.IsNull() && legacy_endpoint_from_secret.IsNull()) {
@@ -300,7 +300,7 @@ unique_ptr<OAuth2Authorization> OAuth2Authorization::FromAttachOptions(AttachedD
 				uri_from_secret = legacy_endpoint_from_secret;
 			}
 			DUCKDB_LOG(context, IcebergLogType, "'uri' is inferred from the ICEBERG secret '%s'",
-			           iceberg_secret->secret->GetName());
+			           iceberg_secret->secret->GetName().GetIdentifierName());
 			input.catalog_uri = uri_from_secret.ToString();
 		}
 		token = kv_iceberg_secret.TryGetValue("token");
