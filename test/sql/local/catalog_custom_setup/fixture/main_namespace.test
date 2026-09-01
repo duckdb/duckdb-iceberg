@@ -131,9 +131,9 @@ DROP TABLE my_datalake.main.T;
 statement ok
 DROP TABLE my_datalake.bronze.T2;
 
-statement ok
-DROP SCHEMA my_datalake.main;
-
+# 'main' is deliberately left behind: DROP SCHEMA on a namespace named 'main' trips a duckdb assertion
+# (physical_drop.cpp, D_ASSERT(name != DEFAULT_SCHEMA)) - in a duckdb catalog 'main' is an undroppable
+# internal entry, which does not hold for an Iceberg namespace. The test re-creates it with IF NOT EXISTS.
 statement ok
 DROP SCHEMA my_datalake.bronze;
 

@@ -63,12 +63,9 @@ optional_ptr<CatalogEntry> IcebergSchemaSet::GetEntry(ClientContext &context, co
 	}
 	if (entry == entries.end()) {
 		CreateSchemaInfo info;
-		// A name duckdb probes on its own - the catalog's default namespace, and the 'main' it falls back to
-		// in a search path - is verified rather than materialized optimistically: it is not necessarily a
-		// namespace the user asked for, and a phantom entry would send `duckdb_*` lookups to the server.
 		auto default_schema = ic_catalog.GetDefaultSchema();
 		auto lookup_name = Identifier(name);
-		if (lookup_name == default_schema || lookup_name == Identifier(DEFAULT_SCHEMA)) {
+		if (lookup_name == default_schema) {
 			if (!IRCAPI::VerifySchemaExistence(context, ic_catalog, name)) {
 				if (if_not_found == OnEntryNotFound::RETURN_NULL) {
 					return nullptr;

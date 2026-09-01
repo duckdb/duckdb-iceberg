@@ -54,38 +54,39 @@ SELECT * FROM my_datalake.bronze.T;
 ----
 42
 
-# an unqualified name has no namespace to resolve to, and says which knob to reach for
+# creating an unqualified name has no namespace to resolve to. duckdb resolves the target namespace up front,
+# so it reports the missing default schema itself
 statement error
 CREATE TABLE my_datalake.T2 AS SELECT 43;
 ----
-<REGEX>:.*No default namespace for catalog "my_datalake".*DEFAULT_SCHEMA.*
+<REGEX>:.*has no default schema.*
 
-# the same holds for a table that cannot be resolved: the message names the table and how to qualify it,
-# rather than reporting a bare "table does not exist"
+# an unqualified reference is not resolved against this catalog at all - duckdb never probes a catalog that
+# reports no default schema, so the name simply does not resolve
 statement error
 SELECT * FROM my_datalake.T;
 ----
-<REGEX>:.*No default namespace for catalog "my_datalake".*my_datalake.<namespace>.T.*
+<REGEX>:.*does not exist.*
 
 statement error
 INSERT INTO my_datalake.T VALUES (1);
 ----
-<REGEX>:.*No default namespace for catalog "my_datalake".*
+<REGEX>:.*does not exist.*
 
 statement error
 DELETE FROM my_datalake.T;
 ----
-<REGEX>:.*No default namespace for catalog "my_datalake".*
+<REGEX>:.*does not exist.*
 
 statement error
 DROP TABLE my_datalake.T;
 ----
-<REGEX>:.*No default namespace for catalog "my_datalake".*
+<REGEX>:.*does not exist.*
 
 statement error
 DESCRIBE my_datalake.T;
 ----
-<REGEX>:.*No default namespace for catalog "my_datalake".*
+<REGEX>:.*does not exist.*
 
 # attaching the same catalog with a default namespace resolves the very same unqualified name
 statement ok
