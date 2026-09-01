@@ -1,0 +1,135 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/reads/filtering/late_materialization_topn_v2_concurrent.test
+# description: Deterministic multi-connection snapshot isolation for V2 TopN late materialization
+# group: [filtering]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+set ignore_error_messages
+
+statement ok
+SET threads = 1;
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.late_materialization_topn_v2_concurrent;
+
+statement ok
+CREATE TABLE my_datalake.default.late_materialization_topn_v2_concurrent (
+	id BIGINT,
+	sort_key BIGINT,
+	payload VARCHAR
+) WITH ('format-version' = 2);
+
+# Two committed files give the candidate and payload scans independent file-row
+# positions to join. The named connections below are deliberately sequenced by
+# transaction boundaries, so the snapshot transition is deterministic.
+statement ok
+INSERT INTO my_datalake.default.late_materialization_topn_v2_concurrent VALUES
+	(1, 10, 'base_1'),
+	(2, 9, 'base_2'),
+	(3, 8, 'base_3');
+
+statement ok
+INSERT INTO my_datalake.default.late_materialization_topn_v2_concurrent VALUES
+	(4, 7, 'base_4'),
+	(5, 6, 'base_5');
+
+# con1 binds and executes the optimized read before the concurrent writer
+# commits. Its transaction must retain this fixed snapshot.
+statement ok con1
+BEGIN;
+
+statement ok con1
+SET late_materialization_max_rows = 2;
+
+statement ok con1
+SET explain_output = 'optimized_only';
+
+query II con1 lm_concurrent_plan
+EXPLAIN (FORMAT JSON)
+SELECT id, sort_key, payload
+FROM my_datalake.default.late_materialization_topn_v2_concurrent
+ORDER BY sort_key DESC, id DESC
+LIMIT 2;
+----
+logical_opt	<REGEX>:(?s).*COMPARISON_JOIN.*TOP_N.*
+
+query IIT con1 lm_concurrent_before
+SELECT id, sort_key, payload
+FROM my_datalake.default.late_materialization_topn_v2_concurrent
+ORDER BY sort_key DESC, id DESC
+LIMIT 2;
+----
+1	10	base_1
+2	9	base_2
+
+# con2 commits a newer snapshot while con1 remains open.
+statement ok con2
+INSERT INTO my_datalake.default.late_materialization_topn_v2_concurrent VALUES (99, 100, 'external');
+
+query IIT con2 lm_concurrent_writer
+SELECT id, sort_key, payload
+FROM my_datalake.default.late_materialization_topn_v2_concurrent
+ORDER BY sort_key DESC, id DESC
+LIMIT 1;
+----
+99	100	external
+
+# Repeating the same TopN in con1 must not observe con2's committed row or mix
+# the two snapshots between the candidate and payload scans.
+query IIT con1 lm_concurrent_during
+SELECT id, sort_key, payload
+FROM my_datalake.default.late_materialization_topn_v2_concurrent
+ORDER BY sort_key DESC, id DESC
+LIMIT 2;
+----
+1	10	base_1
+2	9	base_2
+
+statement ok con1
+ROLLBACK;
+
+# Once con1 leaves its transaction, the newer snapshot is visible normally.
+query IIT lm_concurrent_after
+SELECT id, sort_key, payload
+FROM my_datalake.default.late_materialization_topn_v2_concurrent
+ORDER BY sort_key DESC, id DESC
+LIMIT 2;
+----
+99	100	external
+1	10	base_1
+
+# A prepared statement bound on con1 must be rebound after con2 commits a
+# schema change. The execution still returns the current rows and must not
+# retain a stale late-materialization plan or column binding.
+statement ok con1
+PREPARE lm_concurrent_rebind AS
+SELECT *
+FROM my_datalake.default.late_materialization_topn_v2_concurrent
+ORDER BY sort_key DESC, id DESC
+LIMIT 2;
+
+statement ok con2
+ALTER TABLE my_datalake.default.late_materialization_topn_v2_concurrent ADD COLUMN rebound_column VARCHAR;
+
+query IITT con1 lm_concurrent_rebound
+EXECUTE lm_concurrent_rebind;
+----
+99	100	external	NULL
+1	10	base_1	NULL
+
+statement ok con1
+DEALLOCATE lm_concurrent_rebind;
+
+statement ok con1
+RESET explain_output;
+
+statement ok
+DROP TABLE my_datalake.default.late_materialization_topn_v2_concurrent;

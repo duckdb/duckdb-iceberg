@@ -1,0 +1,249 @@
+# name: test/sql/local/late_materialization_filters.test
+# description: TopN virtual projections remain eligible while virtual filters fall back
+# group: [local]
+
+require avro
+
+require parquet
+
+require iceberg
+
+statement ok
+CREATE VIEW lm_filter_input AS
+SELECT *
+FROM iceberg_scan('{WORKING_DIRECTORY}/data/persistent/null_stats/default/test_nulls',
+                  version='00003-9d6a621e-8a72-4190-a880-f6ca02e32b86');
+
+statement ok
+CREATE VIEW lm_virtual_filter_input AS
+SELECT *, filename, file_row_number
+FROM iceberg_scan('{WORKING_DIRECTORY}/data/persistent/null_stats/default/test_nulls',
+                  version='00003-9d6a621e-8a72-4190-a880-f6ca02e32b86');
+
+statement ok
+SET late_materialization_max_rows = 10;
+
+statement ok
+SET explain_output = 'optimized_only';
+
+foreach threads 1 4
+
+statement ok
+SET threads = {threads};
+
+foreach mode off on
+
+onlyif mode==off
+statement ok
+SET disabled_optimizers = 'late_materialization';
+
+onlyif mode==on
+statement ok
+SET disabled_optimizers = '';
+
+onlyif mode==on
+query II
+EXPLAIN (FORMAT JSON)
+SELECT name FROM lm_filter_input
+WHERE id + CASE WHEN flag THEN 1 ELSE 0 END > 5
+ORDER BY id DESC LIMIT 2;
+----
+logical_opt	<REGEX>:(?s).*COMPARISON_JOIN.*TOP_N.*FILTER.*
+
+# The filter needs two columns, one of which can be discarded above it.
+query T
+SELECT name FROM lm_filter_input
+WHERE id + CASE WHEN flag THEN 1 ELSE 0 END > 5
+ORDER BY id DESC LIMIT 2;
+----
+i
+h
+
+query T
+SELECT name FROM lm_virtual_filter_input
+WHERE file_row_number = 0
+ORDER BY id DESC LIMIT 2;
+----
+g
+d
+
+query T
+SELECT name FROM lm_virtual_filter_input
+WHERE filename LIKE '%null_stats%'
+ORDER BY id DESC LIMIT 2;
+----
+i
+h
+
+# Virtual-column filters must not reach the core late-materialization rewrite.
+query II
+EXPLAIN (FORMAT JSON)
+SELECT name FROM lm_virtual_filter_input
+WHERE file_row_number = 0
+ORDER BY id DESC LIMIT 2;
+----
+logical_opt	<!REGEX>:(?s).*COMPARISON_JOIN.*
+
+query II
+EXPLAIN (FORMAT JSON)
+SELECT name FROM lm_virtual_filter_input
+WHERE filename LIKE '%null_stats%'
+ORDER BY id DESC LIMIT 2;
+----
+logical_opt	<!REGEX>:(?s).*COMPARISON_JOIN.*
+
+# A physical-column filter remains eligible even when both virtual keys are projected.
+onlyif mode==on
+query II
+EXPLAIN (FORMAT JSON)
+SELECT file_row_number, name, filename FROM lm_virtual_filter_input
+WHERE id > 5 ORDER BY id DESC LIMIT 2;
+----
+logical_opt	<REGEX>:(?s).*COMPARISON_JOIN.*TOP_N.*
+
+query ITI
+SELECT file_row_number, name, CAST(filename IS NOT NULL AS INTEGER) FROM lm_virtual_filter_input
+WHERE id > 5 ORDER BY id DESC LIMIT 2;
+----
+2	i	1
+1	h	1
+
+# Compare the complete virtual values against the LM-disabled execution.
+query ITT nosort lm_virtual_keys
+SELECT file_row_number, name, filename FROM lm_virtual_filter_input
+WHERE id > 5 ORDER BY id DESC LIMIT 2;
+
+# Reuse an existing filename binding while the rewrite adds file_row_number.
+onlyif mode==on
+query II
+EXPLAIN (FORMAT JSON)
+SELECT filename, name FROM lm_virtual_filter_input WHERE id > 5 ORDER BY id DESC LIMIT 2;
+----
+logical_opt	<REGEX>:(?s).*COMPARISON_JOIN.*TOP_N.*
+
+query TT nosort lm_filename
+SELECT filename, name FROM lm_virtual_filter_input WHERE id > 5 ORDER BY id DESC LIMIT 2;
+
+# An unused virtual column in a view must not block the rewrite either.
+onlyif mode==on
+query II
+EXPLAIN (FORMAT JSON)
+SELECT name FROM lm_virtual_filter_input WHERE id > 5 ORDER BY id DESC LIMIT 2;
+----
+logical_opt	<REGEX>:(?s).*COMPARISON_JOIN.*TOP_N.*
+
+# Ordering on a virtual column does not create the unsafe static table filter.
+onlyif mode==on
+query II
+EXPLAIN (FORMAT JSON)
+SELECT file_row_number, name FROM lm_virtual_filter_input
+ORDER BY file_row_number DESC, id DESC LIMIT 2;
+----
+logical_opt	<REGEX>:(?s).*COMPARISON_JOIN.*TOP_N.*
+
+query IT
+SELECT file_row_number, name FROM lm_virtual_filter_input
+ORDER BY file_row_number DESC, id DESC LIMIT 2;
+----
+2	i
+2	f
+
+# This virtual filter stays above LIMIT, so it does not affect the scan's eligibility.
+onlyif mode==on
+query II
+EXPLAIN (FORMAT JSON)
+SELECT name FROM (
+    SELECT id, name, file_row_number FROM lm_virtual_filter_input ORDER BY id DESC LIMIT 3
+) limited WHERE file_row_number = 0;
+----
+logical_opt	<REGEX>:(?s).*FILTER.*COMPARISON_JOIN.*TOP_N.*
+
+query T
+SELECT name FROM (
+    SELECT id, name, file_row_number FROM lm_virtual_filter_input ORDER BY id DESC LIMIT 3
+) limited WHERE file_row_number = 0;
+----
+g
+
+# A virtual filter pushed through an alias must still disable the rewrite.
+query II
+EXPLAIN (FORMAT JSON)
+SELECT name FROM (
+    SELECT id, name, file_row_number AS pos FROM lm_virtual_filter_input
+) aliased WHERE pos + 1 = 1 ORDER BY id DESC LIMIT 2;
+----
+logical_opt	<!REGEX>:(?s).*COMPARISON_JOIN.*
+
+query T
+SELECT name FROM (
+    SELECT id, name, file_row_number AS pos FROM lm_virtual_filter_input
+) aliased WHERE pos + 1 = 1 ORDER BY id DESC LIMIT 2;
+----
+g
+d
+
+statement ok
+PREPARE lm_position_filter AS
+SELECT name FROM lm_virtual_filter_input WHERE file_row_number = $1 ORDER BY id DESC LIMIT 2;
+
+query T
+EXECUTE lm_position_filter(0);
+----
+g
+d
+
+query T
+EXECUTE lm_position_filter(2);
+----
+i
+f
+
+query II
+EXPLAIN (FORMAT JSON) EXECUTE lm_position_filter(2);
+----
+logical_opt	<!REGEX>:(?s).*COMPARISON_JOIN.*
+
+statement ok
+DEALLOCATE lm_position_filter;
+
+endloop
+
+reset label lm_virtual_keys
+
+reset label lm_filename
+
+endloop
+
+# Without table-filter pushdown, even a virtual predicate is a safe residual filter.
+statement ok
+SET disabled_optimizers = 'filter_pushdown';
+
+query II
+EXPLAIN (FORMAT JSON)
+SELECT name FROM lm_virtual_filter_input WHERE file_row_number = 0 ORDER BY id DESC LIMIT 2;
+----
+logical_opt	<REGEX>:(?s).*COMPARISON_JOIN.*TOP_N.*FILTER.*
+
+query T
+SELECT name FROM lm_virtual_filter_input WHERE file_row_number = 0 ORDER BY id DESC LIMIT 2;
+----
+g
+d
+
+statement ok
+RESET disabled_optimizers;
+
+statement ok
+RESET late_materialization_max_rows;
+
+statement ok
+RESET explain_output;
+
+statement ok
+RESET threads;
+
+statement ok
+DROP VIEW lm_filter_input;
+
+statement ok
+DROP VIEW lm_virtual_filter_input;

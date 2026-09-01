@@ -19,6 +19,7 @@
 		{
 			"reason": "V3 tests, not yet supported with Nessie",
 			"paths": [
+				"test/sql/local/catalog_test_config_setup/catalog_agnostic/reads/partitioned_reads_v3/test_partitioned_reads_v3.test",
 				"test/sql/local/catalog_test_config_setup/catalog_agnostic/insert/test_manifest_vector_writer_chunking.test_slow",
 				"test/sql/local/catalog_test_config_setup/catalog_agnostic/delete/test_delete_from_v3_table.test",
 				"test/sql/local/catalog_test_config_setup/catalog_agnostic/delete/test_deletion_vector_is_valid_puffin.test",
@@ -126,6 +127,7 @@
 		{
 			"reason": "Requires supporting time travel for nessie",
 			"paths": [
+				"test/sql/local/catalog_test_config_setup/catalog_agnostic/reads/filtering/late_materialization_prepared_transactions.test",
 				"test/sql/local/catalog_test_config_setup/catalog_agnostic/transactions/test_get_transaction_snapshot.test",
 				"test/sql/local/catalog_test_config_setup/catalog_agnostic/update/test_one_update_one_snapshot.test",
 				"test/sql/local/catalog_test_config_setup/catalog_agnostic/transactions/test_transactional_deletes_retried.test",
