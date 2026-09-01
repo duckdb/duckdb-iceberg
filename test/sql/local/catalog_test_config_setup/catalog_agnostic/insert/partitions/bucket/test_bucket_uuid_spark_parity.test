@@ -1,0 +1,167 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/insert/partitions/bucket/test_bucket_uuid_spark_parity.test
+# description: Verify DuckDB and Spark hash UUIDs into the same buckets (bucket(32, val))
+# group: [bucket]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+# 'bucket_partitioned_uuid' is written by Spark (scripts/data_generators/tests/default/bucket_partitioned_uuid).
+# This test writes the exact same UUID values with DuckDB and compares the bucket that each UUID
+# ended up in, as recorded in the partition column of the avro manifest files.
+
+statement ok
+create schema if not exists my_datalake.default;
+
+statement ok
+drop table if exists my_datalake.default.test_bucket_uuid_spark_parity;
+
+statement ok
+CREATE TABLE my_datalake.default.test_bucket_uuid_spark_parity (id int, val uuid)
+PARTITIONED BY (bucket(32, val));
+
+statement ok
+insert into my_datalake.default.test_bucket_uuid_spark_parity values
+    (1,  'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11'),
+    (2,  'b1eebc99-9c0b-4ef8-bb6d-6bb9bd380a22'),
+    (3,  'c2eebc99-9c0b-4ef8-bb6d-6bb9bd380a33'),
+    (4,  'd3eebc99-9c0b-4ef8-bb6d-6bb9bd380a44'),
+    (5,  'e4eebc99-9c0b-4ef8-bb6d-6bb9bd380a55'),
+    (6,  'f5eebc99-9c0b-4ef8-bb6d-6bb9bd380a66'),
+    (7,  'a6eebc99-9c0b-4ef8-bb6d-6bb9bd380a77'),
+    (8,  'b7eebc99-9c0b-4ef8-bb6d-6bb9bd380a88'),
+    (9,  'c8eebc99-9c0b-4ef8-bb6d-6bb9bd380a99'),
+    (10, 'd9eebc99-9c0b-4ef8-bb6d-6bb9bd380aaa'),
+    (11, 'f79c3e09-677c-4bbd-a479-3f349cb785e7'),
+    (12, '00000000-0000-0000-0000-000000000000'),
+    (13, 'ffffffff-ffff-ffff-ffff-ffffffffffff'),
+    (14, NULL);
+
+# Both tables contain the same values
+query II nosort uuid_values
+select id, val from my_datalake.default.bucket_partitioned_uuid order by id;
+----
+
+query II nosort uuid_values
+select id, val from my_datalake.default.test_bucket_uuid_spark_parity order by id;
+----
+
+# Start transaction to keep necessary credentials in scope
+statement ok
+begin
+
+statement ok
+set variable spark_manifest = (select manifest_path from iceberg_metadata(my_datalake.default.bucket_partitioned_uuid) order by manifest_sequence_number desc limit 1);
+
+statement ok
+set variable duckdb_manifest = (select manifest_path from iceberg_metadata(my_datalake.default.test_bucket_uuid_spark_parity) order by manifest_sequence_number desc limit 1);
+
+# The partition column of the manifest entries holds the bucket that Iceberg assigned to each file.
+# The partition field is accessed by position because Spark names it 'val_bucket' while DuckDB
+# names it 'bucket_32__val_2'.
+statement ok
+create table spark_file_partitions as
+select file_path, struct_extract_at(partition, 1) as bucket_id
+from (select unnest(data_file) from read_avro(getvariable('spark_manifest')));
+
+statement ok
+create table duckdb_file_partitions as
+select file_path, struct_extract_at(partition, 1) as bucket_id
+from (select unnest(data_file) from read_avro(getvariable('duckdb_manifest')));
+
+# Map every UUID to the bucket of the file it was written to
+statement ok
+create table spark_uuid_buckets as
+select t.id, t.val, p.bucket_id
+from my_datalake.default.bucket_partitioned_uuid t
+join spark_file_partitions p on t.filename = p.file_path;
+
+statement ok
+create table duckdb_uuid_buckets as
+select t.id, t.val, p.bucket_id
+from my_datalake.default.test_bucket_uuid_spark_parity t
+join duckdb_file_partitions p on t.filename = p.file_path;
+
+statement ok
+commit
+
+# Every row was matched to a manifest entry
+query I
+select count(*) from spark_uuid_buckets;
+----
+14
+
+query I
+select count(*) from duckdb_uuid_buckets;
+----
+14
+
+# The partition values written by Spark
+query III
+select id, val, bucket_id from spark_uuid_buckets order by id;
+----
+1	a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11	26
+2	b1eebc99-9c0b-4ef8-bb6d-6bb9bd380a22	15
+3	c2eebc99-9c0b-4ef8-bb6d-6bb9bd380a33	26
+4	d3eebc99-9c0b-4ef8-bb6d-6bb9bd380a44	5
+5	e4eebc99-9c0b-4ef8-bb6d-6bb9bd380a55	28
+6	f5eebc99-9c0b-4ef8-bb6d-6bb9bd380a66	2
+7	a6eebc99-9c0b-4ef8-bb6d-6bb9bd380a77	17
+8	b7eebc99-9c0b-4ef8-bb6d-6bb9bd380a88	14
+9	c8eebc99-9c0b-4ef8-bb6d-6bb9bd380a99	16
+10	d9eebc99-9c0b-4ef8-bb6d-6bb9bd380aaa	22
+11	f79c3e09-677c-4bbd-a479-3f349cb785e7	12
+12	00000000-0000-0000-0000-000000000000	24
+13	ffffffff-ffff-ffff-ffff-ffffffffffff	14
+14	NULL	NULL
+
+# The partition values written by DuckDB have to be identical
+query III
+select id, val, bucket_id from duckdb_uuid_buckets order by id;
+----
+1	a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11	26
+2	b1eebc99-9c0b-4ef8-bb6d-6bb9bd380a22	15
+3	c2eebc99-9c0b-4ef8-bb6d-6bb9bd380a33	26
+4	d3eebc99-9c0b-4ef8-bb6d-6bb9bd380a44	5
+5	e4eebc99-9c0b-4ef8-bb6d-6bb9bd380a55	28
+6	f5eebc99-9c0b-4ef8-bb6d-6bb9bd380a66	2
+7	a6eebc99-9c0b-4ef8-bb6d-6bb9bd380a77	17
+8	b7eebc99-9c0b-4ef8-bb6d-6bb9bd380a88	14
+9	c8eebc99-9c0b-4ef8-bb6d-6bb9bd380a99	16
+10	d9eebc99-9c0b-4ef8-bb6d-6bb9bd380aaa	22
+11	f79c3e09-677c-4bbd-a479-3f349cb785e7	12
+12	00000000-0000-0000-0000-000000000000	24
+13	ffffffff-ffff-ffff-ffff-ffffffffffff	14
+14	NULL	NULL
+
+# Symmetric difference between the two mappings has to be empty
+query I
+select count(*) from (
+    (select val, bucket_id from spark_uuid_buckets except select val, bucket_id from duckdb_uuid_buckets)
+    union all
+    (select val, bucket_id from duckdb_uuid_buckets except select val, bucket_id from spark_uuid_buckets)
+);
+----
+0
+
+# The iceberg_bucket function agrees with the buckets Spark wrote
+query I
+select count(*) from spark_uuid_buckets where bucket_id is distinct from iceberg_bucket(32, val);
+----
+0
+
+# Both writers produced the same set of occupied buckets
+query I
+select count(*) from (
+    (select distinct bucket_id from spark_file_partitions except select distinct bucket_id from duckdb_file_partitions)
+    union all
+    (select distinct bucket_id from duckdb_file_partitions except select distinct bucket_id from spark_file_partitions)
+);
+----
+0

@@ -36,6 +36,11 @@ SELECT iceberg_bucket(16, NULL);
 ----
 NULL
 
+query I
+SELECT iceberg_bucket(16, NULL::UUID);
+----
+NULL
+
 # ---- Return type is always INTEGER ----
 
 query I
@@ -80,6 +85,11 @@ INTEGER
 
 query I
 SELECT typeof(iceberg_bucket(16, '\x01\x02'::BLOB));
+----
+INTEGER
+
+query I
+SELECT typeof(iceberg_bucket(16, 'f79c3e09-677c-4bbd-a479-3f349cb785e7'::UUID));
 ----
 INTEGER
 
@@ -130,6 +140,25 @@ SELECT
 	iceberg_bucket(16, '2017-11-16T14:31:08.000001001-08:00'::TIMESTAMPTZ_NS);
 ----
 7	6
+
+# Spec Appendix B test vector: hash(uuid("f79c3e09-677c-4bbd-a479-3f349cb785e7")) = 1488055340
+# hash = 1488055340  =>  (& 0x7FFFFFFF) % 16 = 12
+query I
+SELECT iceberg_bucket(16, 'f79c3e09-677c-4bbd-a479-3f349cb785e7'::UUID);
+----
+12
+
+# hash = 1488055340  =>  (& 0x7FFFFFFF) % 100 = 40
+query I
+SELECT iceberg_bucket(100, 'f79c3e09-677c-4bbd-a479-3f349cb785e7'::UUID);
+----
+40
+
+# N = INT32 max exposes the (sign-discarded) hash value itself
+query I
+SELECT iceberg_bucket(2147483647, 'f79c3e09-677c-4bbd-a479-3f349cb785e7'::UUID);
+----
+1488055340
 
 # ---- Result is always in range [0, num_buckets) ----
 
