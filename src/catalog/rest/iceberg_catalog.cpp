@@ -8,6 +8,7 @@
 #include "duckdb/main/attached_database.hpp"
 #include "duckdb/planner/operator/logical_create_table.hpp"
 #include "duckdb/common/exception/conversion_exception.hpp"
+#include "duckdb/common/string_util.hpp"
 
 #include "catalog/rest/catalog_entry/schema/iceberg_schema_entry.hpp"
 #include "catalog/rest/catalog_entry/table/iceberg_table_schema_version.hpp"
@@ -56,6 +57,20 @@ void IcebergCatalog::ScanSchemas(ClientContext &context, std::function<void(Sche
 	schemas.Scan(context, [&](CatalogEntry &schema) { callback(schema.Cast<IcebergSchemaEntry>()); });
 }
 
+//! An unqualified name in a catalog without a default namespace can never resolve. Say that - and how to fix it -
+//! rather than letting duckdb report a bare "does not exist".
+string IcebergCatalog::NoDefaultNamespaceMessage(const string &entry_name) const {
+	auto &catalog_name = GetName().GetIdentifierName();
+	string message = StringUtil::Format("No default namespace for catalog \"%s\"", catalog_name);
+	if (entry_name.empty()) {
+		message += " - qualify the name with a namespace";
+	} else {
+		message += StringUtil::Format(" - cannot resolve \"%s\", qualify it as \"%s.<namespace>.%s\"", entry_name,
+		                              catalog_name, entry_name);
+	}
+	return message + ", or re-attach the catalog with DEFAULT_SCHEMA '<namespace>'";
+}
+
 optional_ptr<SchemaCatalogEntry> IcebergCatalog::LookupSchema(CatalogTransaction transaction,
                                                               const EntryLookupInfo &schema_lookup,
                                                               OnEntryNotFound if_not_found) {
@@ -69,10 +84,7 @@ optional_ptr<SchemaCatalogEntry> IcebergCatalog::LookupSchema(CatalogTransaction
 		if (if_not_found == OnEntryNotFound::RETURN_NULL) {
 			return nullptr;
 		}
-		throw CatalogException(schema_lookup.GetErrorContext(),
-		                       "No default namespace for catalog \"%s\" - fully qualify the name, or re-attach "
-		                       "with DEFAULT_SCHEMA '<namespace>'",
-		                       GetName());
+		throw CatalogException(schema_lookup.GetErrorContext(), "%s", NoDefaultNamespaceMessage(string()));
 	}
 	auto entry = schemas.GetEntry(transaction.GetContext(), schema_name, if_not_found);
 	if (!entry && if_not_found != OnEntryNotFound::RETURN_NULL) {
@@ -80,6 +92,32 @@ optional_ptr<SchemaCatalogEntry> IcebergCatalog::LookupSchema(CatalogTransaction
 	}
 
 	return reinterpret_cast<SchemaCatalogEntry *>(entry.get());
+}
+
+CatalogEntryLookup IcebergCatalog::TryLookupEntryInternal(CatalogTransaction transaction,
+                                                          const EntryLookupInfo &lookup_info) {
+	// mirrors Catalog::TryLookupEntryInternal (which is private, so it cannot be delegated to): the schema
+	// qualification is everything up to the entry name, and LookupSchema resolves it
+	auto &full_path = lookup_info.GetQualifiedName().Path();
+	vector<Identifier> schema_path(full_path.begin(), full_path.end() - 1);
+	auto schema_lookup = EntryLookupInfo::SchemaLookup(lookup_info, std::move(schema_path));
+	auto schema_entry = LookupSchema(transaction, schema_lookup, OnEntryNotFound::RETURN_NULL);
+	if (!schema_entry) {
+		if (schema_lookup.GetEntryName().empty() && lookup_info.GetCatalogType() == CatalogType::TABLE_ENTRY) {
+			// no namespace was given and this catalog has no default schema. Report that as an error the caller can
+			// surface: duckdb throws it only if every catalog it tried failed for a reason of its own, so a name
+			// that another catalog in the search path does resolve is unaffected.
+			return {nullptr, nullptr,
+			        ErrorData(CatalogException(lookup_info.GetErrorContext(), "%s",
+			                                   NoDefaultNamespaceMessage(lookup_info.GetEntryName())))};
+		}
+		return {nullptr, nullptr, ErrorData()};
+	}
+	auto entry = schema_entry->LookupEntry(transaction, lookup_info);
+	if (!entry) {
+		return {schema_entry, nullptr, ErrorData()};
+	}
+	return {schema_entry, entry, ErrorData()};
 }
 
 optional_ptr<CatalogEntry> IcebergCatalog::CreateSchema(CatalogTransaction transaction, CreateSchemaInfo &info) {

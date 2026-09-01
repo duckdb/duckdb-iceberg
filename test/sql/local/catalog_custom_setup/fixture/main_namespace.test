@@ -132,6 +132,12 @@ statement ok
 DROP TABLE my_datalake.bronze.T2;
 
 statement ok
+DROP SCHEMA my_datalake.main;
+
+statement ok
+DROP SCHEMA my_datalake.bronze;
+
+statement ok
 DETACH my_datalake;
 
 statement ok

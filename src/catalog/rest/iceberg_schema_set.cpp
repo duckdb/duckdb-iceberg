@@ -19,6 +19,10 @@ optional_ptr<CatalogEntry> IcebergSchemaSet::GetEntry(ClientContext &context, co
 	auto &ic_catalog = catalog.Cast<IcebergCatalog>();
 	auto &iceberg_transaction = IcebergTransaction::Get(context, catalog);
 
+	if (name.empty()) {
+		return nullptr;
+	}
+
 	// If the schema was deleted in this transaction, treat it as non-existent
 	if (iceberg_transaction.deleted_schemas.count(name)) {
 		if (if_not_found == OnEntryNotFound::RETURN_NULL) {
@@ -58,10 +62,6 @@ optional_ptr<CatalogEntry> IcebergSchemaSet::GetEntry(ClientContext &context, co
 		throw CatalogException("Iceberg namespace by the name of '%s' does not exist", name);
 	}
 	if (entry == entries.end()) {
-		// we will not create entries with empty names - and an empty name is never worth a round trip
-		if (name.empty()) {
-			return nullptr;
-		}
 		CreateSchemaInfo info;
 		// A name duckdb probes on its own - the catalog's default namespace, and the 'main' it falls back to
 		// in a search path - is verified rather than materialized optimistically: it is not necessarily a
