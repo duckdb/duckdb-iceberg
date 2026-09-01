@@ -19,6 +19,7 @@ IcebergOptions::IcebergOptions(named_parameter_map_t &named_parameters) : Iceber
 			metadata_compression_codec = StringValue::Get(val);
 		} else if (loption == "version") {
 			table_version = StringValue::Get(val);
+			version_explicitly_set = true;
 		} else if (loption == "version_name_format") {
 			auto value = StringValue::Get(kv.second);
 			auto string_substitutions = IcebergUtils::CountOccurrences(value, "%s");
@@ -56,6 +57,7 @@ IcebergOptions &IcebergOptions::operator=(const IcebergOptions &other) {
 	metadata_compression_codec = other.metadata_compression_codec;
 	infer_schema = other.infer_schema;
 	table_version = other.table_version;
+	version_explicitly_set = other.version_explicitly_set;
 	version_name_format = other.version_name_format;
 	snapshot_lookup.reset();
 	if (other.snapshot_lookup) {
