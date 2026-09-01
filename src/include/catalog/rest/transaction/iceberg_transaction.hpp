@@ -5,6 +5,7 @@
 #include "catalog/rest/iceberg_schema_set.hpp"
 #include "catalog/rest/api/iceberg_retry.hpp"
 #include "catalog/rest/transaction/iceberg_transaction_update.hpp"
+#include "catalog/rest/case_aware_identifier_container.hpp"
 
 namespace duckdb {
 class IcebergCatalog;
@@ -105,7 +106,7 @@ private:
 	bool CanUseMultiTableCommit(const IcebergTransactionAlterUpdate &alter_update) const;
 	void VerifyAlterUpdateAtomicity(const IcebergTransactionAlterUpdate &alter_update) const;
 	void CleanupMetadataFiles(ClientContext &context, const vector<string> &paths);
-	void RefreshRetryTables(IcebergTransactionAlterUpdate &alter_update, const case_insensitive_set_t &table_keys,
+	void RefreshRetryTables(IcebergTransactionAlterUpdate &alter_update, CaseAwareIdentifierSet &table_keys,
 	                        ClientContext &context);
 	void CleanupFiles();
 	//! Evict the touched tables' cached LoadTableResult so a retry after a failed commit (e.g. a 409
@@ -118,30 +119,31 @@ private:
 	DatabaseInstance &db;
 	IcebergCatalog &catalog;
 	AccessMode access_mode;
+	CaseSensitivityMode mode;
 
 public:
 	//! Schemas referenced by this transaction that have to stay alive for the duration of the transaction.
-	case_insensitive_map_t<shared_ptr<IcebergSchemaEntry>> schemas;
+	CaseAwareIdentifierMap<shared_ptr<IcebergSchemaEntry>> schemas;
 	//! Schemas staged by this transaction. These are separate from catalog-referenced schemas so both generations stay
 	//! alive when a transaction creates a schema after referencing a stale entry with the same name.
-	case_insensitive_map_t<shared_ptr<IcebergSchemaEntry>> created_schemas;
+	CaseAwareIdentifierMap<shared_ptr<IcebergSchemaEntry>> created_schemas;
 	//! Tables referenced by this transaction that have to stay alive for the duration of the transaction.
-	case_insensitive_map_t<shared_ptr<IcebergTable>> tables;
+	CaseAwareIdentifierMap<shared_ptr<IcebergTable>> tables;
 	//! The visible state of every resolved table in this transaction.
-	case_insensitive_map_t<IcebergTransactionTableState> current_table_data;
+	CaseAwareIdentifierMap<IcebergTransactionTableState> current_table_data;
 	//! Declared after the schema and table states so update references are destroyed before the referenced states.
 	IcebergTransactionUpdate transaction_update;
 
-	unordered_set<string> deleted_schemas;
+	CaseAwareIdentifierSet deleted_schemas;
 
 	bool called_list_schemas = false;
 	//! Set of schemas that this transaction has listed tables for
-	case_insensitive_set_t listed_schemas;
+	CaseAwareIdentifierSet listed_schemas;
 
-	case_insensitive_set_t looked_up_entries;
+	CaseAwareIdentifierSet looked_up_entries;
 	mutex lock;
 
-	case_insensitive_map_t<SchemaPropertyUpdates> schema_property_updates;
+	CaseAwareIdentifierMap<SchemaPropertyUpdates> schema_property_updates;
 };
 
 void ApplyTableUpdate(IcebergTable &table_info, IcebergTransaction &iceberg_transaction,

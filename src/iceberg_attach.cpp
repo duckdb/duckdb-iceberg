@@ -254,6 +254,10 @@ unique_ptr<Catalog> IcebergAttach::Attach(optional_ptr<StorageExtensionInfo> sto
 			default_schema = Identifier(entry.second.ToString());
 		} else if (lower_name == "encode_entire_prefix") {
 			attach_options.encode_entire_prefix = true;
+		} else if (lower_name == "case_sensitive") {
+			auto result = entry.second.DefaultCastAs(LogicalType::BOOLEAN).GetValue<bool>();
+			attach_options.case_sensitivity_mode =
+			    result ? CaseSensitivityMode::SENSITIVE : CaseSensitivityMode::INSENSITIVE;
 		} else if (lower_name == "max_table_staleness") {
 			auto interval_option = entry.second.DefaultCastAs(LogicalType::INTERVAL);
 			auto interval_value = interval_option.GetValue<interval_t>();

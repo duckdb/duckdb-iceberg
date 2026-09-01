@@ -37,7 +37,8 @@ public:
 
 class LoadTableResultCache {
 public:
-	LoadTableResultCache(IcebergAttachOptions &attach_options) : attach_options(attach_options) {
+	LoadTableResultCache(IcebergAttachOptions &attach_options)
+	    : attach_options(attach_options), tables(attach_options.case_sensitivity_mode) {
 	}
 
 public:
@@ -85,7 +86,7 @@ public:
 private:
 	IcebergAttachOptions &attach_options;
 	annotated_mutex lock;
-	case_insensitive_map_t<MetadataCacheValue> tables DUCKDB_GUARDED_BY(lock);
+	CaseAwareIdentifierMap<MetadataCacheValue> tables DUCKDB_GUARDED_BY(lock);
 };
 
 class IcebergCatalog : public Catalog {

@@ -40,6 +40,14 @@ public:
 	void Alter(CatalogTransaction transaction, AlterInfo &info) override;
 	void Scan(ClientContext &context, CatalogType type, const std::function<void(CatalogEntry &)> &callback) override;
 	void Scan(CatalogType type, const std::function<void(CatalogEntry &)> &callback) override;
+	//! DuckDB calls this from Catalog::CreateMissingEntryException to build a "did you mean...?"
+	//! hint for an unrelated failed lookup, scanning every attached database's schemas - including
+	//! ones under a different catalog attachment entirely. A same-fold collision under an explicit
+	//! case_sensitive=false attachment is a real, correct error for a direct listing (e.g. SHOW
+	//! TABLES), but here it's an incidental side effect of suggestion-building for a different
+	//! catalog's query; it must not override that query's real error. Best-effort: swallow and
+	//! report no suggestion instead.
+	SimilarCatalogEntry GetSimilarEntry(CatalogTransaction transaction, const EntryLookupInfo &lookup_info) override;
 	void DropEntry(ClientContext &context, DropInfo &info) override;
 	void DropEntry(ClientContext &context, DropInfo &info, bool delete_entry = false);
 	optional_ptr<CatalogEntry> LookupEntry(CatalogTransaction transaction, const EntryLookupInfo &lookup_info) override;
