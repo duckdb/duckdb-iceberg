@@ -1,0 +1,137 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/maintenance/expire_snapshots_properties.test
+# description: expire_snapshots table-property defaults and validation
+# group: [maintenance]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+set ignore_error_messages
+
+statement ok
+drop table if exists my_datalake.default.expire_snapshots_properties;
+
+statement ok
+create table my_datalake.default.expire_snapshots_properties (id INTEGER);
+
+foreach value 1 2 3 4
+
+statement ok
+insert into my_datalake.default.expire_snapshots_properties values ({value});
+
+endloop
+
+# Omitted arguments use table properties; explicit arguments take precedence.
+statement ok
+call set_iceberg_table_properties(my_datalake.default.expire_snapshots_properties, {'history.expire.max-snapshot-age-ms': '9223372036854775807', 'history.expire.min-snapshots-to-keep': '2'});
+
+query II
+select * from iceberg_expire_snapshots('my_datalake.default.expire_snapshots_properties', retain_last => 1);
+----
+0	4
+
+statement ok
+begin;
+
+query II
+select * from iceberg_expire_snapshots('my_datalake.default.expire_snapshots_properties', older_than => timestamp '2999-01-01');
+----
+2	2
+
+statement ok
+rollback;
+
+statement ok
+call set_iceberg_table_properties(my_datalake.default.expire_snapshots_properties, {'history.expire.max-snapshot-age-ms': '1ms', 'history.expire.min-snapshots-to-keep': 'not-an-integer'});
+
+statement ok
+begin;
+
+query II
+select * from iceberg_expire_snapshots('my_datalake.default.expire_snapshots_properties', older_than => timestamp '2999-01-01', retain_last => 1);
+----
+3	1
+
+statement ok
+rollback;
+
+statement error
+select * from iceberg_expire_snapshots('my_datalake.default.expire_snapshots_properties', retain_last => 1);
+----
+history.expire.max-snapshot-age-ms
+
+statement error
+select * from iceberg_expire_snapshots('my_datalake.default.expire_snapshots_properties', older_than => timestamp '2999-01-01');
+----
+history.expire.min-snapshots-to-keep
+
+# Representative lower bounds cover strict integer and range parsing.
+statement ok
+call set_iceberg_table_properties(my_datalake.default.expire_snapshots_properties, {'history.expire.max-snapshot-age-ms': '-1', 'history.expire.min-snapshots-to-keep': '1'});
+
+statement error
+select * from iceberg_expire_snapshots('my_datalake.default.expire_snapshots_properties', retain_last => 1);
+----
+expected a value >= 0
+
+statement ok
+call set_iceberg_table_properties(my_datalake.default.expire_snapshots_properties, {'history.expire.max-snapshot-age-ms': '1', 'history.expire.min-snapshots-to-keep': '0'});
+
+statement error
+select * from iceberg_expire_snapshots('my_datalake.default.expire_snapshots_properties', older_than => timestamp '2999-01-01');
+----
+expected a value >= 1
+
+# Overflow and the INT32-backed retain-count upper bound are rejected.
+statement ok
+call set_iceberg_table_properties(my_datalake.default.expire_snapshots_properties, {'history.expire.max-snapshot-age-ms': '9223372036854775808', 'history.expire.min-snapshots-to-keep': '2147483648'});
+
+statement error
+select * from iceberg_expire_snapshots('my_datalake.default.expire_snapshots_properties', retain_last => 1);
+----
+expected an integer
+
+statement error
+select * from iceberg_expire_snapshots('my_datalake.default.expire_snapshots_properties', older_than => timestamp '2999-01-01');
+----
+expected a value <= 2147483647
+
+# gc.enabled is case-insensitive and validated strictly.
+statement ok
+call set_iceberg_table_properties(my_datalake.default.expire_snapshots_properties, {'history.expire.max-snapshot-age-ms': '1', 'history.expire.min-snapshots-to-keep': '1', 'gc.enabled': 'TRUE'});
+
+statement ok
+begin;
+
+query II
+select * from iceberg_expire_snapshots('my_datalake.default.expire_snapshots_properties', older_than => timestamp '2999-01-01', retain_last => 1);
+----
+3	1
+
+statement ok
+rollback;
+
+statement ok
+call set_iceberg_table_properties(my_datalake.default.expire_snapshots_properties, {'gc.enabled': 'not-a-boolean'});
+
+statement error
+select * from iceberg_expire_snapshots('my_datalake.default.expire_snapshots_properties');
+----
+expected 'true' or 'false'
+
+statement ok
+call set_iceberg_table_properties(my_datalake.default.expire_snapshots_properties, {'gc.enabled': 'false'});
+
+statement error
+select * from iceberg_expire_snapshots('my_datalake.default.expire_snapshots_properties');
+----
+table property 'gc.enabled' is false
+
+statement ok
+drop table my_datalake.default.expire_snapshots_properties;

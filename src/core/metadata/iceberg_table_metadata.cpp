@@ -377,6 +377,18 @@ IcebergTableMetadata IcebergTableMetadata::FromTableMetadata(const rest_api_obje
 			res.snapshots.emplace(snapshot.snapshot_id, IcebergSnapshot::ParseSnapshot(snapshot, res));
 		}
 	}
+	if (table_metadata.refs) {
+		res.snapshot_refs_present = true;
+		for (auto &entry : table_metadata.refs->additional_properties) {
+			const auto &ref = entry.second;
+			if (entry.first == "main") {
+				res.main_snapshot_ref = IcebergMainSnapshotReference {
+				    ref.type, ref.snapshot_id, ref.max_snapshot_age_ms, ref.min_snapshots_to_keep};
+			} else if (!res.unsupported_snapshot_ref || entry.first < *res.unsupported_snapshot_ref) {
+				res.unsupported_snapshot_ref = entry.first;
+			}
+		}
+	}
 	if (table_metadata.snapshot_log) {
 		res.snapshot_log.reserve(table_metadata.snapshot_log->value.size());
 		for (auto &entry : table_metadata.snapshot_log->value) {
@@ -490,6 +502,9 @@ IcebergTableMetadata IcebergTableMetadata::Copy() const {
 	res.partition_specs = partition_specs;
 	res.sort_specs = sort_specs;
 	res.snapshots = snapshots;
+	res.snapshot_refs_present = snapshot_refs_present;
+	res.main_snapshot_ref = main_snapshot_ref;
+	res.unsupported_snapshot_ref = unsupported_snapshot_ref;
 	res.snapshot_log = snapshot_log;
 	res.mappings = mappings;
 	res.write_data_path = write_data_path;
