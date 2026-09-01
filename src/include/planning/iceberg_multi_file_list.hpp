@@ -68,9 +68,11 @@ public:
 	void GetStatistics(vector<PartitionStatistics> &result) const;
 	const IcebergTableMetadata &GetMetadata() const;
 	const IcebergTableSchema &GetSchema() const;
+	bool SupportsLateMaterialization() const;
 	BoundIcebergManifestEntry GetManifestEntry(idx_t file_id) const;
 	IcebergManifestFile GetManifestFileForDataFile(idx_t file_id) const;
 	IcebergDeletePlan ProcessDeletes(const BoundIcebergManifestEntry &data_manifest_entry) const;
+	unique_ptr<MultiFileList> Copy() const override;
 
 private:
 	const string &GetPath() const;
@@ -90,6 +92,7 @@ private:
 	ResolveApplicableDeleteFiles(const BoundIcebergManifestEntry &data_manifest_entry) const;
 
 	bool HasTransactionData() const;
+	bool HasLiveEqualityDeletes() const;
 	//! Reorder (and prune, when a LIMIT is present) the materialized data files by the
 	//! ORDER BY column's per-file min/max bounds, mirroring the native RowGroupReorderer.
 	void EnsureScanOrderApplied(annotated_lock_guard<annotated_mutex> &guard) const DUCKDB_REQUIRES(shared_state->lock);

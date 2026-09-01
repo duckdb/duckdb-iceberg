@@ -1,0 +1,220 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/reads/filtering/late_materialization_topn_v2.test
+# description: Iceberg V2 TopN late materialization
+# group: [filtering]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+CREATE SCHEMA IF NOT EXISTS my_datalake.default;
+
+statement ok
+DROP VIEW IF EXISTS late_materialization_topn;
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.late_materialization_topn_v2;
+
+statement ok
+SET threads = 1;
+
+statement ok
+CREATE TABLE my_datalake.default.late_materialization_topn_v2 (
+	record_id BIGINT,
+	sort_key BIGINT,
+	filter_key VARCHAR,
+	payload_a VARCHAR,
+	payload_b VARCHAR,
+	payload_c VARCHAR
+) WITH ('format-version' = 2);
+
+# Each INSERT creates one data file, so equal offsets have overlapping
+# file_row_number values. Position 6 is filtered out, and the fifth TopN row
+# comes from only one file at position 7. Joining on file_row_number alone
+# would therefore return an extra row.
+statement ok
+INSERT INTO my_datalake.default.late_materialization_topn_v2
+SELECT
+	2 * i AS record_id,
+	CASE WHEN i < 2 THEN 100 - i ELSE NULL END AS sort_key,
+	CASE WHEN i = 6 THEN 'excluded' ELSE 'selected' END AS filter_key,
+	concat(repeat('a', 256), '_', CAST(2 * i AS VARCHAR)) AS payload_a,
+	concat(repeat('b', 256), '_', CAST(2 * i AS VARCHAR)) AS payload_b,
+	concat(repeat('c', 256), '_', CAST(2 * i AS VARCHAR)) AS payload_c
+FROM range(8) t(i);
+
+statement ok
+INSERT INTO my_datalake.default.late_materialization_topn_v2
+SELECT
+	2 * i + 1 AS record_id,
+	CASE WHEN i < 2 THEN 100 - i ELSE NULL END AS sort_key,
+	CASE WHEN i = 6 THEN 'excluded' ELSE 'selected' END AS filter_key,
+	concat(repeat('a', 256), '_', CAST(2 * i + 1 AS VARCHAR)) AS payload_a,
+	concat(repeat('b', 256), '_', CAST(2 * i + 1 AS VARCHAR)) AS payload_b,
+	concat(repeat('c', 256), '_', CAST(2 * i + 1 AS VARCHAR)) AS payload_c
+FROM range(8) t(i);
+
+query I
+SELECT count(*)
+FROM iceberg_metadata(my_datalake.default.late_materialization_topn_v2)
+WHERE manifest_content = 'DATA';
+----
+2
+
+statement ok
+SET threads = 4;
+
+statement ok
+CREATE VIEW late_materialization_topn AS
+SELECT
+	record_id,
+	sort_key,
+	payload_a,
+	payload_b,
+	payload_c
+FROM my_datalake.default.late_materialization_topn_v2
+WHERE filter_key = 'selected'
+ORDER BY sort_key DESC NULLS LAST, record_id DESC
+LIMIT 5;
+
+statement ok
+SET late_materialization_max_rows = 5;
+
+# The optimized scan must return the same ordered rows and payload as the
+# original plan.
+statement ok
+SET disabled_optimizers = 'late_materialization';
+
+query IITTT nosort late_materialization_result
+SELECT * FROM late_materialization_topn;
+
+statement ok
+SET disabled_optimizers = '';
+
+query IITTT nosort late_materialization_result
+SELECT * FROM late_materialization_topn;
+
+statement ok
+SET explain_output = 'optimized_only';
+
+query II
+EXPLAIN (FORMAT JSON) SELECT * FROM late_materialization_topn;
+----
+logical_opt	<REGEX>:(?s).*ORDER_BY.*COMPARISON_JOIN.*ICEBERG_SCAN.*TOP_N.*ICEBERG_SCAN.*filename.*file_row_number.*
+
+# Iceberg only enables late materialization for LogicalTopN.
+query II
+EXPLAIN (FORMAT JSON) SELECT payload_a
+FROM my_datalake.default.late_materialization_topn_v2
+LIMIT 5 OFFSET 1;
+----
+logical_opt	<!REGEX>:(?s).*COMPARISON_JOIN.*
+
+query II
+EXPLAIN (FORMAT JSON) SELECT payload_a
+FROM my_datalake.default.late_materialization_topn_v2
+USING SAMPLE 5 ROWS;
+----
+logical_opt	<!REGEX>:(?s).*COMPARISON_JOIN.*
+
+query II
+EXPLAIN (FORMAT JSON) SELECT
+	record_id,
+	payload_a,
+	row_number() OVER (ORDER BY record_id DESC) AS row_number
+FROM my_datalake.default.late_materialization_topn_v2
+QUALIFY row_number <= 5;
+----
+logical_opt	<!REGEX>:(?s).*COMPARISON_JOIN.*
+
+query II
+EXPLAIN (FORMAT JSON) SELECT record_id, payload_a
+FROM my_datalake.default.late_materialization_topn_v2
+ORDER BY sort_key DESC NULLS LAST, record_id DESC
+LIMIT 6;
+----
+logical_opt	<!REGEX>:(?s).*COMPARISON_JOIN.*
+
+# Create position-delete files for the same physical position in both data
+# files. Late materialization remains enabled, and both scans must apply both
+# delete files.
+statement ok
+DELETE FROM my_datalake.default.late_materialization_topn_v2
+WHERE record_id = 15;
+
+statement ok
+DELETE FROM my_datalake.default.late_materialization_topn_v2
+WHERE record_id = 14;
+
+query I
+SELECT count(*)
+FROM iceberg_metadata(my_datalake.default.late_materialization_topn_v2)
+WHERE manifest_content = 'DELETE';
+----
+2
+
+statement ok
+SET disabled_optimizers = 'late_materialization';
+
+query IITTT nosort late_materialization_delete_result
+SELECT * FROM late_materialization_topn;
+
+statement ok
+SET disabled_optimizers = '';
+
+query IITTT nosort late_materialization_delete_result
+SELECT * FROM late_materialization_topn;
+
+query II
+EXPLAIN (FORMAT JSON) SELECT * FROM late_materialization_topn;
+----
+logical_opt	<REGEX>:(?s).*ORDER_BY.*COMPARISON_JOIN.*ICEBERG_SCAN.*TOP_N.*ICEBERG_SCAN.*filename.*file_row_number.*
+
+# Committed manifest inspection does not include transaction-local alters.
+# Disable late materialization conservatively until the transaction finishes.
+statement ok
+BEGIN;
+
+statement ok
+DELETE FROM my_datalake.default.late_materialization_topn_v2
+WHERE record_id = 11;
+
+query II
+EXPLAIN (FORMAT JSON) SELECT * FROM late_materialization_topn;
+----
+logical_opt	<!REGEX>:(?s).*COMPARISON_JOIN.*
+
+statement ok
+ROLLBACK;
+
+query II
+EXPLAIN (FORMAT JSON) SELECT * FROM late_materialization_topn;
+----
+logical_opt	<REGEX>:(?s).*ORDER_BY.*COMPARISON_JOIN.*ICEBERG_SCAN.*TOP_N.*ICEBERG_SCAN.*filename.*file_row_number.*
+
+statement ok
+RESET explain_output;
+
+statement ok
+RESET late_materialization_max_rows;
+
+statement ok
+SET disabled_optimizers = '';
+
+statement ok
+RESET threads;
+
+statement ok
+DROP VIEW late_materialization_topn;
+
+statement ok
+DROP TABLE my_datalake.default.late_materialization_topn_v2;

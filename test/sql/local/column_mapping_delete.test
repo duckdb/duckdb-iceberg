@@ -50,3 +50,25 @@ query I
 SELECT count(*) FROM ICEBERG_SCAN('{WORKING_DIRECTORY}/data/persistent/name_mapping/warehouse_1/mydb/t1', version=7, snapshot_from_id=2651609110244230974) where b is null;
 ----
 10000
+
+# Iceberg V1 late materialization is not enabled or validated yet. Column b is
+# a delayable payload, so this specifically exercises the format-version gate.
+statement ok
+SET late_materialization_max_rows = 100;
+
+statement ok
+SET explain_output = 'optimized_only';
+
+query II
+EXPLAIN (FORMAT JSON) SELECT *
+FROM ICEBERG_SCAN('{WORKING_DIRECTORY}/data/persistent/name_mapping/warehouse_1/mydb/t1', version=3, snapshot_from_id=6597550917742534971)
+ORDER BY a
+LIMIT 10;
+----
+logical_opt	<!REGEX>:(?s).*COMPARISON_JOIN.*
+
+statement ok
+RESET explain_output;
+
+statement ok
+RESET late_materialization_max_rows;

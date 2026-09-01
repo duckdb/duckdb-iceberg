@@ -85,6 +85,27 @@ SELECT count(*) FROM ICEBERG_SCAN('{WORKING_DIRECTORY}/data/persistent/equality_
 ----
 2
 
+# Live equality deletes disable late materialization.
+statement ok
+SET late_materialization_max_rows = 1;
+
+statement ok
+SET explain_output = 'optimized_only';
+
+query II
+EXPLAIN (FORMAT JSON) SELECT *
+FROM ICEBERG_SCAN('{WORKING_DIRECTORY}/data/persistent/equality_deletes/warehouse/mydb/mytable')
+ORDER BY id
+LIMIT 1;
+----
+logical_opt	<!REGEX>:(?s).*COMPARISON_JOIN.*
+
+statement ok
+RESET explain_output;
+
+statement ok
+RESET late_materialization_max_rows;
+
 # Equality deletes are a scan correctness requirement and must not depend on an optimizer extension.
 statement ok
 PRAGMA disable_optimizer;
