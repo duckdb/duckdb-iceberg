@@ -1,0 +1,112 @@
+# name: test/sql/local/late_materialization_equality_snapshots.test
+# description: Prepared TopN scans preserve equality deletes across historical snapshots
+# group: [local]
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+# Independent visible-row oracle for the existing equality-delete fixture.
+statement ok
+CREATE TABLE expected_ids(snapshot BIGINT, id INTEGER);
+
+statement ok
+INSERT INTO expected_ids VALUES
+	(853766660775201079, 1), (853766660775201079, 2), (853766660775201079, 3), (853766660775201079, 4),
+	(1584331123492059582, 3), (1584331123492059582, 4),
+	(842401149381792626, 4),
+	(3340507003387467420, 4), (3340507003387467420, 5), (3340507003387467420, 6),
+	(1916084761853986166, 4), (1916084761853986166, 5);
+
+statement ok
+SET late_materialization_max_rows = 2;
+
+statement ok
+SET explain_output = 'optimized_only';
+
+foreach threads 1 4
+
+statement ok
+SET threads = {threads};
+
+foreach mode on off
+
+onlyif mode==on
+statement ok
+SET disabled_optimizers = '';
+
+onlyif mode==off
+statement ok
+SET disabled_optimizers = 'late_materialization';
+
+foreach direction ASC DESC
+
+# Snapshot 2 names a manifest list absent from this fixture.
+foreach snapshot 853766660775201079 1584331123492059582 842401149381792626 3340507003387467420 1916084761853986166
+
+# Covers single and compound equality keys, deleted TopN candidates, a result
+# smaller than LIMIT, and newly appended files after the equality deletes.
+statement ok
+PREPARE equality_history AS
+SELECT bir
+FROM iceberg_scan('{WORKING_DIRECTORY}/data/persistent/equality_deletes/warehouse/mydb/mytable', snapshot_from_id = {snapshot})
+ORDER BY id {direction}
+LIMIT 2;
+
+query I nosort eq_snapshot
+SELECT DATE '2025-01-01' + id - 1 AS bir
+FROM expected_ids
+WHERE snapshot = {snapshot}
+ORDER BY id {direction}
+LIMIT 2;
+
+query I nosort eq_snapshot
+EXECUTE equality_history;
+
+# Re-execution exercises independent runtime scan state with the same binding.
+query I nosort eq_snapshot
+EXECUTE equality_history;
+
+onlyif mode==on
+query II
+EXPLAIN (FORMAT JSON) EXECUTE equality_history;
+----
+logical_opt	<REGEX>:(?s).*COMPARISON_JOIN.*
+
+onlyif mode==off
+query II
+EXPLAIN (FORMAT JSON) EXECUTE equality_history;
+----
+logical_opt	<!REGEX>:(?s).*COMPARISON_JOIN.*
+
+statement ok
+DEALLOCATE equality_history;
+
+reset label eq_snapshot
+
+endloop
+
+endloop
+
+endloop
+
+endloop
+
+statement ok
+DROP TABLE expected_ids;
+
+statement ok
+RESET disabled_optimizers;
+
+statement ok
+RESET late_materialization_max_rows;
+
+statement ok
+RESET explain_output;
+
+statement ok
+RESET threads;
