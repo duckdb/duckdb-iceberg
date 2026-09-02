@@ -59,14 +59,6 @@ void IcebergCatalog::ScanSchemas(ClientContext &context, std::function<void(Sche
 optional_ptr<SchemaCatalogEntry> IcebergCatalog::LookupSchema(CatalogTransaction transaction,
                                                               const EntryLookupInfo &schema_lookup,
                                                               OnEntryNotFound if_not_found) {
-	if (schema_lookup.GetEntryName() == DEFAULT_SCHEMA && default_schema != DEFAULT_SCHEMA) {
-		// throws error if default schema is empty
-		if (default_schema.empty() && if_not_found == OnEntryNotFound::RETURN_NULL) {
-			return nullptr;
-		}
-		return GetSchema(transaction, default_schema, if_not_found);
-	}
-
 	auto &schema_name = schema_lookup.GetEntryName();
 	auto entry = schemas.GetEntry(transaction.GetContext(), schema_name, if_not_found);
 	if (!entry && if_not_found != OnEntryNotFound::RETURN_NULL) {
@@ -74,6 +66,13 @@ optional_ptr<SchemaCatalogEntry> IcebergCatalog::LookupSchema(CatalogTransaction
 	}
 
 	return reinterpret_cast<SchemaCatalogEntry *>(entry.get());
+}
+
+optional<Identifier> IcebergCatalog::GetDefaultSchema() const {
+	if (default_schema.empty()) {
+		return nullopt;
+	}
+	return default_schema;
 }
 
 optional_ptr<CatalogEntry> IcebergCatalog::CreateSchema(CatalogTransaction transaction, CreateSchemaInfo &info) {

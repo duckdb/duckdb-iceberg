@@ -357,7 +357,9 @@ unique_ptr<Catalog> IcebergAttach::Attach(optional_ptr<StorageExtensionInfo> sto
 	catalog->GetConfig(context, endpoint_type);
 	if (!default_schema.empty() &&
 	    !IRCAPI::VerifySchemaExistence(context, *catalog, default_schema.GetIdentifierName())) {
-		throw InvalidConfigurationException("default_schema '%s' does not exist", default_schema.GetIdentifierName());
+		throw InvalidConfigurationException(
+		    "default_schema '%s' does not exist. ATTACH with no DEFAULT_SCHEMA to successfully attach",
+		    default_schema.GetIdentifierName());
 	}
 	return std::move(catalog);
 }
