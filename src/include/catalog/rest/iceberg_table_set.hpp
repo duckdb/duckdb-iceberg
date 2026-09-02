@@ -36,8 +36,9 @@ private:
 
 public:
 	//! return true if request to LoadTableInformation was successful and entry has been filled
-	//! or if entry is already filled. Returns False otherwise
-	bool FillEntry(ClientContext &context, IcebergTable &table);
+	//! or if entry is already filled to at least 'load_level'. Returns False otherwise
+	bool FillEntry(ClientContext &context, IcebergTable &table,
+	               IcebergTableLoadLevel load_level = IcebergTableLoadLevel::FULL);
 
 public:
 	IcebergSchemaEntry &schema;

@@ -1,0 +1,187 @@
+# name: test/sql/local/catalog_custom_setup/fixture/attach_options/table_resolution.test
+# description: test the TABLE_RESOLUTION attach option
+# group: [attach_options]
+
+require-env FIXTURE_SERVER_AVAILABLE
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+set enable_logging=true
+
+statement ok
+set logging_level='debug';
+
+statement ok
+CREATE SECRET (
+    TYPE S3,
+    KEY_ID 'admin',
+    SECRET 'password',
+    ENDPOINT '127.0.0.1:9000',
+    URL_STYLE 'path',
+    USE_SSL 0
+);
+
+statement error
+ATTACH '' AS bad_resolution (
+    TYPE ICEBERG,
+    CLIENT_ID 'admin',
+    CLIENT_SECRET 'password',
+    URI 'http://127.0.0.1:8181',
+    TABLE_RESOLUTION 'sometimes'
+);
+----
+<REGEX>:.*Unrecognized 'table_resolution' \(sometimes\), accepted options are: lazy, eager.*
+
+# ---------------------------------------------------------------------------
+# lazy (the default): listing a schema never loads its tables
+# ---------------------------------------------------------------------------
+
+statement ok
+ATTACH '' AS my_datalake (
+    TYPE ICEBERG,
+    CLIENT_ID 'admin',
+    CLIENT_SECRET 'password',
+    URI 'http://127.0.0.1:8181'
+);
+
+statement ok
+CALL enable_logging('HTTP');
+
+statement ok
+SELECT * FROM information_schema.columns WHERE table_catalog = 'my_datalake';
+
+# the namespaces were listed, but no table metadata was requested
+query I
+SELECT count(*) FROM duckdb_logs_parsed('HTTP') WHERE request.url LIKE '%/tables/%';
+----
+0
+
+query I
+SELECT count(*) > 0 FROM duckdb_logs_parsed('HTTP') WHERE request.url LIKE '%/namespaces/default/tables';
+----
+1
+
+statement ok
+DETACH my_datalake;
+
+statement ok
+CALL truncate_duckdb_logs();
+
+# ---------------------------------------------------------------------------
+# eager: listing a schema resolves the columns of every table it lists
+# ---------------------------------------------------------------------------
+
+statement ok
+ATTACH '' AS my_datalake (
+    TYPE ICEBERG,
+    CLIENT_ID 'admin',
+    CLIENT_SECRET 'password',
+    URI 'http://127.0.0.1:8181',
+    TABLE_RESOLUTION 'eager'
+);
+
+statement ok
+CALL enable_logging('HTTP');
+
+# the real columns are reported, not the '__' placeholder
+query II
+SELECT column_name, data_type FROM information_schema.columns
+WHERE table_catalog = 'my_datalake' AND table_schema = 'default' AND table_name = 'supplier'
+ORDER BY ordinal_position;
+----
+s_suppkey	BIGINT
+s_name	VARCHAR
+s_address	VARCHAR
+s_nationkey	INTEGER
+s_phone	VARCHAR
+s_acctbal	DECIMAL(15,2)
+s_comment	VARCHAR
+
+# every listed table was loaded, and every load asked for only the referenced snapshots
+query I
+SELECT count(*) > 10 FROM duckdb_logs_parsed('HTTP')
+WHERE request.url LIKE '%/tables/%' AND request.url LIKE '%snapshots=refs';
+----
+1
+
+query I
+SELECT count(*) FROM duckdb_logs_parsed('HTTP')
+WHERE request.url LIKE '%/tables/%' AND request.url NOT LIKE '%snapshots=refs';
+----
+0
+
+# resolving a listing never vends storage credentials
+query I
+SELECT count(*) FROM duckdb_logs_parsed('HTTP')
+WHERE contains(map_keys(request.headers), 'X-Iceberg-Access-Delegation');
+----
+0
+
+statement ok
+CALL truncate_duckdb_logs();
+
+# a listing load is not cached as if it were a complete one: actually reading the table still
+# issues a full LoadTable request, with credential vending and the complete snapshot log
+query I
+SELECT count(*) FROM my_datalake.default.supplier;
+----
+10000
+
+query I
+SELECT count(*) FROM duckdb_logs_parsed('HTTP')
+WHERE request.url LIKE '%/namespaces/default/tables/supplier'
+  AND contains(map_keys(request.headers), 'X-Iceberg-Access-Delegation');
+----
+1
+
+# ---------------------------------------------------------------------------
+# eager: a table is resolved once per transaction, however many listings run
+# ---------------------------------------------------------------------------
+
+# re-attach so that nothing has been resolved yet
+statement ok
+DETACH my_datalake;
+
+statement ok
+ATTACH '' AS my_datalake (
+    TYPE ICEBERG,
+    CLIENT_ID 'admin',
+    CLIENT_SECRET 'password',
+    URI 'http://127.0.0.1:8181',
+    TABLE_RESOLUTION 'eager'
+);
+
+statement ok
+CALL truncate_duckdb_logs();
+
+statement ok
+BEGIN;
+
+statement ok
+SELECT * FROM information_schema.columns WHERE table_catalog = 'my_datalake';
+
+# SHOW ALL TABLES scans the schema twice more (duckdb_tables joined with duckdb_columns)
+statement ok
+SELECT count(*) > 10 FROM (SHOW ALL TABLES);
+
+statement ok
+COMMIT;
+
+query I
+SELECT count(*) FROM duckdb_logs_parsed('HTTP')
+WHERE request.url LIKE '%/namespaces/default/tables/supplier%';
+----
+1
+
+statement ok
+DETACH my_datalake;

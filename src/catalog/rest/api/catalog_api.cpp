@@ -187,7 +187,9 @@ bool IRCAPI::VerifyTableExistence(ClientContext &context, IcebergCatalog &catalo
 }
 
 static unique_ptr<HTTPResponse> GetTableMetadata(ClientContext &context, IcebergCatalog &catalog,
-                                                 const IcebergSchemaEntry &schema, const string &table) {
+                                                 const IcebergSchemaEntry &schema, const string &table,
+                                                 IcebergTableLoadLevel load_level) {
+	D_ASSERT(load_level != IcebergTableLoadLevel::NONE);
 	auto url_builder = catalog.GetBaseUrl();
 	url_builder.AddPrefixComponents(catalog.prefix);
 	url_builder.AddPathComponent(IRCPathComponent::RegularComponent("namespaces"));
@@ -197,7 +199,11 @@ static unique_ptr<HTTPResponse> GetTableMetadata(ClientContext &context, Iceberg
 	url_builder.AddPathComponent(IRCPathComponent::RegularComponent(table));
 
 	HTTPHeaders headers(*context.db);
-	if (catalog.attach_options.access_mode == IRCAccessDelegationMode::VENDED_CREDENTIALS) {
+	if (load_level == IcebergTableLoadLevel::LISTING) {
+		//! A listing only needs the schema of the table.
+		//! We request just the refs so avoid a large snapshots array so we can get schema info.
+		url_builder.SetParam("snapshots", IRCPathComponent::RegularComponent("refs"));
+	} else if (catalog.attach_options.access_mode == IRCAccessDelegationMode::VENDED_CREDENTIALS) {
 		headers.Insert("X-Iceberg-Access-Delegation", "vended-credentials");
 	}
 	return catalog.auth_handler->Request(RequestType::GET_REQUEST, context, url_builder, headers);
@@ -221,12 +227,11 @@ static unique_ptr<HTTPResponse> LoadCredentials(ClientContext &context, IcebergC
 	return catalog.auth_handler->Request(RequestType::GET_REQUEST, context, url_builder, headers);
 }
 
-APIResult<unique_ptr<const rest_api_objects::LoadTableResult>> IRCAPI::GetTable(ClientContext &context,
-                                                                                IcebergCatalog &catalog,
-                                                                                const IcebergSchemaEntry &schema,
-                                                                                const string &table_name) {
+APIResult<unique_ptr<const rest_api_objects::LoadTableResult>>
+IRCAPI::GetTable(ClientContext &context, IcebergCatalog &catalog, const IcebergSchemaEntry &schema,
+                 const string &table_name, IcebergTableLoadLevel load_level) {
 	auto ret = APIResult<unique_ptr<const rest_api_objects::LoadTableResult>>();
-	auto result = GetTableMetadata(context, catalog, schema, table_name);
+	auto result = GetTableMetadata(context, catalog, schema, table_name, load_level);
 	if (result->status != HTTPStatusCode::OK_200) {
 		unique_ptr<JSONDocument> out_doc;
 		auto error_obj = ICUtils::GetErrorMessage(result->body, out_doc);

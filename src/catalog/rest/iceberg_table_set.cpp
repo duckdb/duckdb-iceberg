@@ -10,6 +10,7 @@
 #include "duckdb/planner/tableref/bound_at_clause.hpp"
 #include "duckdb/planner/expression_binder/table_function_binder.hpp"
 #include "duckdb/execution/expression_executor.hpp"
+#include "duckdb/logging/logger.hpp"
 
 #include "catalog/rest/api/catalog_api.hpp"
 #include "catalog/rest/api/catalog_utils.hpp"
@@ -29,8 +30,9 @@ namespace duckdb {
 IcebergTableSet::IcebergTableSet(IcebergSchemaEntry &schema) : schema(schema), catalog(schema.ParentCatalog()) {
 }
 
-bool IcebergTableSet::FillEntry(ClientContext &context, IcebergTable &table) {
-	if (!table.schema_versions.empty()) {
+bool IcebergTableSet::FillEntry(ClientContext &context, IcebergTable &table, IcebergTableLoadLevel load_level) {
+	D_ASSERT(load_level != IcebergTableLoadLevel::NONE);
+	if (IcebergLoadLevelSatisfies(table.load_level, load_level)) {
 		return true;
 	}
 
@@ -41,8 +43,9 @@ bool IcebergTableSet::FillEntry(ClientContext &context, IcebergTable &table) {
 	if (ic_catalog.attach_options.max_table_staleness_micros.IsValid()) {
 		auto cache_hit = ic_catalog.table_request_cache.Get(
 		    context, table_key, [&](const rest_api_objects::LoadTableResult &cached_result) {
-			    // Use the cached result instead of making a new request
-			    table.InitializeFromLoadTableResult(cached_result);
+			    // Use the cached result instead of making a new request. Only FULL responses are ever
+			    // cached, so a hit satisfies a listing load as well.
+			    table.InitializeFromLoadTableResult(cached_result, IcebergTableLoadLevel::FULL);
 		    });
 		if (cache_hit) {
 			return true;
@@ -50,7 +53,7 @@ bool IcebergTableSet::FillEntry(ClientContext &context, IcebergTable &table) {
 	}
 
 	// No valid cached result or caching disabled, make a new request
-	auto get_table_result = IRCAPI::GetTable(context, ic_catalog, schema, table.name);
+	auto get_table_result = IRCAPI::GetTable(context, ic_catalog, schema, table.name, load_level);
 	if (get_table_result.error_) {
 		if (get_table_result.status_ == HTTPStatusCode::NotFound_404) {
 			// Glue returns 404 when a table is not an Iceberg Table with the error message
@@ -69,8 +72,12 @@ bool IcebergTableSet::FillEntry(ClientContext &context, IcebergTable &table) {
 		                       EnumUtil::ToString(get_table_result.status_), get_table_result.error_->_error.message));
 	}
 	auto &load_table_result = *get_table_result.result_;
-	table.InitializeFromLoadTableResult(load_table_result);
-	ic_catalog.table_request_cache.SetOrOverwrite(table_key, std::move(get_table_result.result_));
+	table.InitializeFromLoadTableResult(load_table_result, load_level);
+	if (load_level == IcebergTableLoadLevel::FULL) {
+		// A listing response carries neither the full snapshot log nor storage credentials, so caching it
+		// would hand an incomplete table to a later reader that asked for a complete one.
+		ic_catalog.table_request_cache.SetOrOverwrite(table_key, std::move(get_table_result.result_));
+	}
 	return true;
 }
 
@@ -100,16 +107,28 @@ IcebergTableSchemaVersion &IcebergTableSet::GetOrCreateDummy(IcebergTable &table
 void IcebergTableSet::Scan(ClientContext &context, const std::function<void(CatalogEntry &)> &callback) {
 	annotated_lock_guard<annotated_mutex> lock(entry_lock);
 	auto &iceberg_transaction = IcebergTransaction::Get(context, catalog);
+	auto &ic_catalog = catalog.Cast<IcebergCatalog>();
 	LoadEntriesInternal(context);
+	const bool eager = ic_catalog.attach_options.table_resolution == IcebergTableResolution::EAGER;
 	for (auto &entry : entries) {
 		auto &table_info = *entry.second;
 		auto table_key = table_info.GetTableKey();
 		iceberg_transaction.tables[table_key] = entry.second;
 
-		if (!table_info.schema_versions.empty()) {
-			// The table has already been resolved (e.g. via DESCRIBE or a scan), so its full schema -
-			// including column comments mapped from the Iceberg field 'doc' - is available. Surface the
-			// resolved entry instead of the placeholder so listings reflect the real columns.
+		if (eager && table_info.load_level == IcebergTableLoadLevel::NONE) {
+			try {
+				FillEntry(context, table_info, IcebergTableLoadLevel::LISTING);
+			} catch (std::exception &ex) {
+				ErrorData error(ex);
+				DUCKDB_LOG_WARNING(context, "Could not resolve the columns of Iceberg table '%s' while listing: %s",
+				                   table_key, error.RawMessage());
+			}
+		}
+
+		if (table_info.load_level != IcebergTableLoadLevel::NONE) {
+			// The table has been resolved (eagerly above, or earlier via DESCRIBE or a scan), so its full
+			// schema - including column comments mapped from the Iceberg field 'doc' - is available.
+			// Surface the resolved entry instead of the placeholder so listings reflect the real columns.
 			auto resolved = table_info.GetLatestSchema();
 			if (resolved) {
 				callback(*resolved);

@@ -15,6 +15,23 @@ enum class IcebergAuthorizationType : uint8_t { OAUTH2, SIGV4, NONE, INVALID };
 
 enum class IRCAccessDelegationMode : uint8_t { NONE, VENDED_CREDENTIALS };
 
+//! Whether listing the tables of a schema also resolves their columns.
+//! LAZY surfaces a placeholder entry per table and only loads a table when it is actually referenced.
+//! EAGER issues a LoadTable request for every listed table, so 'SHOW ALL TABLES' and
+//! 'information_schema.columns' report real columns, at the cost of one request per table.
+enum class IcebergTableResolution : uint8_t { LAZY, EAGER };
+
+//! How completely a table's metadata has been resolved. The order is significant: a load satisfies
+//! every level at or below it. A LISTING load is requested with '?snapshots=refs' and without
+//! credential vending, so it carries the schemas needed to list columns but neither the full snapshot
+//! log nor storage credentials, and can never stand in for a FULL load.
+enum class IcebergTableLoadLevel : uint8_t { NONE = 0, LISTING = 1, FULL = 2 };
+
+//! Whether a table loaded at 'current' also satisfies a request for 'required'.
+inline bool IcebergLoadLevelSatisfies(IcebergTableLoadLevel current, IcebergTableLoadLevel required) {
+	return static_cast<uint8_t>(current) >= static_cast<uint8_t>(required);
+}
+
 struct IcebergAttachOptions {
 	string catalog_uri;
 	string warehouse;
@@ -35,6 +52,8 @@ struct IcebergAttachOptions {
 	// some catalogs (e.g. AWS Glue) do not assign a table location server-side; derive one from the namespace's
 	// 'location' property
 	bool default_table_location_from_namespace = false;
+	// whether listing tables resolves their columns up front, at one LoadTable request per table
+	IcebergTableResolution table_resolution = IcebergTableResolution::LAZY;
 	IRCAccessDelegationMode access_mode = IRCAccessDelegationMode::VENDED_CREDENTIALS;
 	IcebergAuthorizationType authorization_type = IcebergAuthorizationType::INVALID;
 	unordered_map<string, Value> options;

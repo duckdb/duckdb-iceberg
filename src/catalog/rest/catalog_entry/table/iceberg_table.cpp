@@ -674,6 +674,7 @@ IcebergTable IcebergTable::Copy() const {
 	clone.table_metadata = table_metadata.Copy();
 	clone.config = config;
 	clone.initialization_source = initialization_source;
+	clone.load_level = load_level;
 	for (auto &credential : storage_credentials) {
 		clone.storage_credentials.push_back(credential.Copy());
 	}
@@ -761,8 +762,22 @@ IcebergTransactionData &IcebergTable::GetOrCreateTransactionData(IcebergTransact
 	return *transaction_data;
 }
 
-void IcebergTable::InitializeFromLoadTableResult(const rest_api_objects::LoadTableResult &load_table_result) {
-	initialization_source = load_table_result;
+void IcebergTable::InitializeFromLoadTableResult(const rest_api_objects::LoadTableResult &load_table_result,
+                                                 IcebergTableLoadLevel level) {
+	D_ASSERT(level != IcebergTableLoadLevel::NONE);
+	if (level == IcebergTableLoadLevel::FULL) {
+		initialization_source = load_table_result;
+		//! The placeholder is only ever handed out while nothing is loaded, so a full load makes it
+		//! dead weight. It is dropped only here and not on a listing load: a listing load happens
+		//! inside IcebergTableSet::Scan, which hands the placeholder out as a 'CatalogEntry &' that
+		//! the caller keeps for the rest of the query, so freeing it from that path could leave a
+		//! listing holding a dangling reference.
+		dummy_entry.reset();
+	} else {
+		initialization_source = nullptr;
+	}
+	load_level = level;
+	schema_versions.clear();
 	table_metadata = IcebergTableMetadata::FromTableMetadata(load_table_result.metadata);
 	if (auto &val = load_table_result.config) {
 		config = *val;
