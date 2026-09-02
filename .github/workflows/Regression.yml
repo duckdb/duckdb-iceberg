@@ -99,17 +99,6 @@ jobs:
           sudo apt update -y -qq
           sudo apt install -y -qq python3-venv tar pkg-config
 
-      # Required by the table_resolution benchmarks: the fixture catalog runs on localhost, where a
-      # round trip is sub-millisecond scheduling noise, so toxiproxy fronts it with a fixed,
-      # repeatable per-response latency.
-      - name: Install toxiproxy
-        run: |
-          curl -sSLf -o /tmp/toxiproxy.deb \
-            https://github.com/Shopify/toxiproxy/releases/download/v2.12.0/toxiproxy_2.12.0_linux_amd64.deb
-          sudo dpkg -i /tmp/toxiproxy.deb
-          command -v toxiproxy-server
-          command -v toxiproxy-cli
-
       - name: Select base ref
         run: |
           git fetch origin "${BASE_BRANCH}:refs/remotes/origin/${BASE_BRANCH}"
@@ -180,15 +169,15 @@ jobs:
       # Runs last on purpose. These benchmarks create 119 tables in the fixture's 'default'
       # namespace, which would grow every ListTables response the steps above make and add noise to
       # timings that are compared against the base build.
-      #
       # toxiproxy fronts the fixture catalog on 8182 with a fixed per-response latency. The catalog
-      # runs on localhost, where a round trip is sub-millisecond scheduling noise, so without it the
-      # listing cost does not scale with the number of LoadTable requests the way it would against a
-      # remote catalog.
       - name: Regression Test Table Resolution Benchmarks
         run: |
           set -euo pipefail
           trap 'pkill -f toxiproxy-server || true' EXIT
+
+          curl -sSLf -o /tmp/toxiproxy.deb \
+            https://github.com/Shopify/toxiproxy/releases/download/v2.12.0/toxiproxy_2.12.0_linux_amd64.deb
+          sudo dpkg -i /tmp/toxiproxy.deb
 
           toxiproxy-server > /tmp/toxiproxy.log 2>&1 &
           ready=

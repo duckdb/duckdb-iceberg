@@ -767,11 +767,6 @@ void IcebergTable::InitializeFromLoadTableResult(const rest_api_objects::LoadTab
 	D_ASSERT(level != IcebergTableLoadLevel::NONE);
 	if (level == IcebergTableLoadLevel::FULL) {
 		initialization_source = load_table_result;
-		//! The placeholder is only ever handed out while nothing is loaded, so a full load makes it
-		//! dead weight. It is dropped only here and not on a listing load: a listing load happens
-		//! inside IcebergTableSet::Scan, which hands the placeholder out as a 'CatalogEntry &' that
-		//! the caller keeps for the rest of the query, so freeing it from that path could leave a
-		//! listing holding a dangling reference.
 		dummy_entry.reset();
 	} else {
 		initialization_source = nullptr;
