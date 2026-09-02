@@ -68,6 +68,13 @@ optional_ptr<SchemaCatalogEntry> IcebergCatalog::LookupSchema(CatalogTransaction
 	return reinterpret_cast<SchemaCatalogEntry *>(entry.get());
 }
 
+optional<Identifier> IcebergCatalog::GetDefaultSchema() const {
+	if (default_schema.empty()) {
+		return nullopt;
+	}
+	return default_schema;
+}
+
 optional_ptr<CatalogEntry> IcebergCatalog::CreateSchema(CatalogTransaction transaction, CreateSchemaInfo &info) {
 	optional_ptr<ClientContext> context = transaction.GetContext();
 	if (info.on_conflict == OnCreateConflict::REPLACE_ON_CONFLICT) {
