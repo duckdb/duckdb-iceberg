@@ -178,8 +178,22 @@ void IcebergTableSet::LoadEntriesInternal(ClientContext &context) {
 	}
 	auto &ic_catalog = catalog.Cast<IcebergCatalog>();
 	auto tables = IRCAPI::GetTables(context, ic_catalog, schema);
-	for (auto &table : tables) {
-		entries.emplace(table.name, make_shared_ptr<IcebergTable>(ic_catalog, schema, table.name));
+	// A refused listing says nothing about which tables exist, so the cache is left untouched.
+	if (tables) {
+		case_insensitive_set_t listed;
+		for (auto &table : *tables) {
+			listed.insert(table.name);
+			entries.emplace(table.name, make_shared_ptr<IcebergTable>(ic_catalog, schema, table.name));
+		}
+		// 'entries' outlives the transaction, so drop the names the listing no longer reports.
+		// Tables created in this transaction live on the transaction, not here, so they are safe.
+		for (auto it = entries.begin(); it != entries.end();) {
+			if (listed.find(it->first) == listed.end()) {
+				it = entries.erase(it);
+			} else {
+				++it;
+			}
+		}
 	}
 	iceberg_transaction.listed_schemas.insert(schema.name.GetIdentifierName());
 }
@@ -196,11 +210,12 @@ static Value ParseTableProperty(TableFunctionBinder &binder, ClientContext &cont
 	if (val.IsNull()) {
 		throw BinderException("NULL is not supported as a valid option for '%s'", property_name);
 	}
-	if (!val.DefaultTryCastAs(type, true)) {
+	auto casted_val = val.DefaultTryCastAs(type, nullptr, true);
+	if (!casted_val) {
 		throw InvalidInputException("Can't cast '%s' property (%s) to %s", property_name, val.ToString(),
 		                            type.ToString());
 	}
-	return val;
+	return std::move(*casted_val);
 }
 
 shared_ptr<IcebergTable> IcebergTableSet::CreateEntryInternal(const string &name, IcebergTable &&table,
@@ -247,6 +262,15 @@ IcebergTable &IcebergTableSet::CreateNewEntry(ClientContext &context, IcebergCat
 	if (location_it != info.options.end()) {
 		location = ParseTableProperty(property_binder, context, *location_it->second, "location", LogicalType::VARCHAR)
 		               .GetValue<string>();
+	}
+	if (location.empty() && catalog.attach_options.default_table_location_from_namespace) {
+		schema.LoadProperties(context);
+		auto ns_location_it = schema.schema_info.properties.find("location");
+		if (ns_location_it != schema.schema_info.properties.end() && !ns_location_it->second.empty()) {
+			location = ns_location_it->second;
+			StringUtil::RTrim(location, "/");
+			location += "/" + info.GetTableName().GetIdentifierName();
+		}
 	}
 
 	IcebergTableMetadata bootstrap_metadata;

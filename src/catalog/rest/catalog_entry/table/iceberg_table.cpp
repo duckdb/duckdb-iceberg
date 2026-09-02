@@ -59,8 +59,18 @@ static void ParseAzureConfigOptions(const case_insensitive_map_t<string> &config
 
 			if (!account_name.empty() && !entry.second.empty()) {
 				options["account_name"] = account_name;
-				options["connection_string"] =
+				string connection_string =
 				    StringUtil::Format("AccountName=%s;SharedAccessSignature=%s", account_name, entry.second);
+				// The host is <account-name>.<service>.<endpoint-suffix>, and the suffix is not always
+				// core.windows.net (e.g. OneLake vends adls.sas-token.onelake.dfs.fabric.microsoft.com).
+				// The Azure SDK defaults to core.windows.net unless EndpointSuffix is set explicitly.
+				if (dot_pos.IsValid()) {
+					auto suffix_pos = host.find('.', dot_pos.GetIndex() + 1);
+					if (suffix_pos != string::npos && suffix_pos + 1 < host.size()) {
+						connection_string += ";EndpointSuffix=" + host.substr(suffix_pos + 1);
+					}
+				}
+				options["connection_string"] = connection_string;
 
 				// For now, only process the first {storage account, token} pair we find in the config
 				return;
@@ -231,14 +241,18 @@ IcebergTable::GetVendedCredentials(ClientContext &context,
 		create_secret_input.on_conflict = OnCreateConflict::REPLACE_ON_CONFLICT;
 		create_secret_input.persist_type = SecretPersistType::TRANSACTION;
 
+		//! A bare scheme name would score below any secret scoped to the full "scheme://" prefix, so
+		//! widen it to that prefix: it stays the least specific credential, as in Java's S3FileIO
+		const string scope_prefix =
+		    StringUtil::Contains(credential.prefix, "://") ? credential.prefix : credential.prefix + "://";
 		if (ignore_credential_prefix) {
 			create_secret_input.scope.push_back(table_location);
 		} else {
-			create_secret_input.scope.push_back(credential.prefix);
+			create_secret_input.scope.push_back(scope_prefix);
 			//! Also match paths whose scheme differs from the credential prefix
 			//! (e.g. oss:// files with s3 credentials), equivalent to Java S3FileIO's
 			//! ROOT_PREFIX fallback in clientForStoragePath()
-			if (!StringUtil::StartsWith(table_location, credential.prefix)) {
+			if (!StringUtil::StartsWith(table_location, scope_prefix)) {
 				create_secret_input.scope.push_back(table_location);
 			}
 		}
@@ -308,7 +322,7 @@ optional_ptr<CatalogEntry> IcebergTable::CreateSchemaVersion(const IcebergTableS
 idx_t IcebergTable::GetMaxSchemaId() {
 	idx_t max_schema_id = 0;
 	if (schema_versions.empty()) {
-		throw CatalogException("No schema versions found for table '%s.%s'", schema.name, name);
+		throw CatalogException("No schema versions found for table '%s.%s'", schema.name.GetIdentifierName(), name);
 	}
 	for (auto &schema : schema_versions) {
 		if (schema.first > max_schema_id) {

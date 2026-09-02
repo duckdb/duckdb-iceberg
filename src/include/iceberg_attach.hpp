@@ -32,6 +32,9 @@ struct IcebergAttachOptions {
 	bool encode_entire_prefix = false;
 	// in rest api spec, purge requested defaults to false.
 	bool purge_requested = false;
+	// some catalogs (e.g. AWS Glue) do not assign a table location server-side; derive one from the namespace's
+	// 'location' property
+	bool default_table_location_from_namespace = false;
 	IRCAccessDelegationMode access_mode = IRCAccessDelegationMode::VENDED_CREDENTIALS;
 	IcebergAuthorizationType authorization_type = IcebergAuthorizationType::INVALID;
 	unordered_map<string, Value> options;

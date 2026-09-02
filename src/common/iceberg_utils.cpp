@@ -1,6 +1,7 @@
 #include "common/iceberg_utils.hpp"
 
 #include "duckdb.hpp"
+#include "duckdb/common/exception.hpp"
 #include "duckdb/common/gzip_file_system.hpp"
 #include "duckdb/main/database_manager.hpp"
 #include "duckdb/catalog/catalog_entry/table_catalog_entry.hpp"
@@ -51,7 +52,7 @@ idx_t IcebergUtils::ParseByteSizeOptionallyFormatted(const string &input) {
 	}
 }
 
-CopyFunctionCatalogEntry &IcebergUtils::GetCopyFunction(ClientContext &context, const string &name) {
+CopyFunctionCatalogEntry &IcebergUtils::GetCopyFunction(ClientContext &context, const Identifier &name) {
 	// Logic is partially duplicated from Catalog::AutoLoadExtensionByCatalogEntry(db, CatalogType::COPY_FUNCTION_ENTRY,
 	// name), but that do not offer enough control
 	auto &db = *context.db;
@@ -65,11 +66,12 @@ CopyFunctionCatalogEntry &IcebergUtils::GetCopyFunction(ClientContext &context, 
 	auto &system_catalog = Catalog::GetSystemCatalog(db);
 
 	auto entry = system_catalog.GetEntry<CopyFunctionCatalogEntry>(
-	    context, QualifiedName(system_catalog.GetName(), Identifier::DefaultSchema(), Identifier(name)),
+	    context, QualifiedName(system_catalog.GetName(), Identifier::DefaultSchema(), name),
 	    OnEntryNotFound::RETURN_NULL);
 	if (!entry) {
 		throw MissingExtensionException(
-		    "Could not load the copy function for \"%s\". Try explicitly loading the \"%s\" extension", name, name);
+		    "Could not load the copy function for \"%s\". Try explicitly loading the \"%s\" extension",
+		    name.GetIdentifierName(), name.GetIdentifierName());
 	}
 	return *entry;
 }
@@ -151,7 +153,12 @@ optional_ptr<CatalogEntry> IcebergUtils::GetTableEntry(ClientContext &context, s
 	}
 	case 1: {
 		auto schema = catalog.GetDefaultSchema();
-		auto table_entry = catalog.GetEntry(context, CatalogType::TABLE_ENTRY, schema, Identifier(qualified_name[0]),
+		if (!schema) {
+			throw InvalidInputException(
+			    "Cannot resolve table name %s - catalog %s has no default schema, qualify the name with a schema",
+			    input_string, catalog.GetName());
+		}
+		auto table_entry = catalog.GetEntry(context, CatalogType::TABLE_ENTRY, *schema, Identifier(qualified_name[0]),
 		                                    OnEntryNotFound::THROW_EXCEPTION);
 		return table_entry;
 	}

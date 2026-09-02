@@ -303,8 +303,8 @@ IRCAPI::GetNamespace(ClientContext &context, IcebergCatalog &catalog, const Iceb
 	return ret;
 }
 
-vector<rest_api_objects::TableIdentifier> IRCAPI::GetTables(ClientContext &context, IcebergCatalog &catalog,
-                                                            const IcebergSchemaEntry &schema) {
+optional<vector<rest_api_objects::TableIdentifier>> IRCAPI::GetTables(ClientContext &context, IcebergCatalog &catalog,
+                                                                      const IcebergSchemaEntry &schema) {
 	vector<rest_api_objects::TableIdentifier> all_identifiers;
 	string page_token;
 
@@ -333,9 +333,8 @@ vector<rest_api_objects::TableIdentifier> IRCAPI::GetTables(ClientContext &conte
 				// results.
 				DUCKDB_LOG_WARNING(context, "GET %s returned status code %s", url_builder.GetURLEncoded(),
 				                   EnumUtil::ToString(response->status));
-				// return empty result if user cannot list tables for a schema.
-				vector<rest_api_objects::TableIdentifier> ret;
-				return ret;
+				// no listing if the user cannot list tables for a schema.
+				return nullopt;
 			}
 			auto url = url_builder.GetURLEncoded();
 			ThrowException(url, *response, "GET");

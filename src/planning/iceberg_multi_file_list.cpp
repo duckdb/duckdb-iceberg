@@ -308,9 +308,15 @@ vector<OpenFileInfo> IcebergMultiFileList::GetAllFiles() const {
 }
 
 FileExpandResult IcebergMultiFileList::GetExpandResult() const {
-	// GetFileInternal(1) will ensure files with index 0 and index 1 are expanded if they are available
 	annotated_lock_guard<annotated_mutex> guard(shared_state->lock);
-	GetFileInternal(1, guard);
+	// DuckDB calls MultiFileList::IsEmpty() during MultiFileBindInternal, before the reader's Bind() has
+	// applied named parameters (SetOptions) or resolved metadata for a path-based scan.
+	// do not call GetFileInternal before binding, otherwise we loose arguemnts from ICEBERG_SCAN like 'version' or
+	// 'snapshot_from_id'
+	if (have_bound) {
+		// GetFileInternal(1) will ensure files with index 0 and index 1 are expanded if they are available
+		GetFileInternal(1, guard);
+	}
 
 	// always return multiple files, In the case there is only 1 data file,
 	// we only lose performance if it is small

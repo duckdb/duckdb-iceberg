@@ -6,6 +6,7 @@
 #include "duckdb/common/exception.hpp"
 #include "duckdb/common/types/hugeint.hpp"
 #include "duckdb/common/types/timestamp.hpp"
+#include "duckdb/common/types/uuid.hpp"
 
 namespace duckdb {
 
@@ -220,15 +221,11 @@ int32_t IcebergHash::HashTimestampTzNs(timestamp_tz_ns_t t) {
 }
 
 //! Hash UUID value (Iceberg spec: 16 big-endian bytes, MSB first)
-//! DuckDB stores UUID as hugeint_t: upper (int64, most-significant) + lower (uint64, least-significant)
 int32_t IcebergHash::HashUUID(hugeint_t uuid) {
 	uint8_t bytes[16];
-	for (int i = 0; i < 8; i++) {
-		bytes[i] = static_cast<uint8_t>(uuid.upper >> (56 - i * 8));
-	}
-	for (int i = 0; i < 8; i++) {
-		bytes[8 + i] = static_cast<uint8_t>(uuid.lower >> (56 - i * 8));
-	}
+	// BaseUUID::ToBlob converts DuckDB's internal representation (MSB flipped for hugeint_t ordering) back to the RFC
+	// 4122 big-endian byte layout required by the Iceberg spec.
+	BaseUUID::ToBlob(uuid, bytes);
 	return Murmur3Hash32(bytes, 16, SEED);
 }
 
@@ -324,8 +321,7 @@ Value IcebergHash::TruncateValue(const Value &v, idx_t width) {
 	}
 	case LogicalTypeId::DECIMAL: {
 		// Truncate the unscaled integer value, preserving type (scale/precision)
-		auto scaled = v.Copy();
-		scaled.Reinterpret(LogicalType::BIGINT);
+		auto scaled = v.WithType(LogicalType::BIGINT);
 		auto val = scaled.GetValue<int64_t>();
 		auto result = val - (((val % W) + W) % W);
 		return Value::DECIMAL(result, DecimalType::GetWidth(v.type()), DecimalType::GetScale(v.type()));

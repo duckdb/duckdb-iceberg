@@ -425,9 +425,20 @@ static unique_ptr<Expression> GetDateDiffFunction(ClientContext &context, const 
 	if (date_part == "hour") {
 		children.push_back(make_uniq<BoundConstantExpression>(Value::TIMESTAMP(Timestamp::FromEpochSeconds(0))));
 	} else {
-		children.push_back(make_uniq<BoundConstantExpression>(Value::DATE(Date::FromDate(1970, 1, 1))));
+		children.push_back(make_uniq<BoundConstantExpression>(Value::DATE(Date::FromDate(Date::EPOCH_YEAR, 1, 1))));
 	}
-	children.push_back(CreateSourceColumnReference(context, copy_input, source_id));
+
+	auto source = CreateSourceColumnReference(context, copy_input, source_id);
+	auto source_type = source->GetReturnType().id();
+	auto target_type = source->GetReturnType();
+	if (source_type == LogicalTypeId::TIMESTAMP_TZ) {
+		target_type = LogicalType::TIMESTAMP;
+	}
+	if (source_type == LogicalTypeId::TIMESTAMP_TZ_NS) {
+		target_type = LogicalType::TIMESTAMP_NS;
+	}
+	source = BoundCastExpression::AddDefaultCastToType(std::move(source), target_type);
+	children.push_back(std::move(source));
 	return BindTransformFunction(context, "date_diff", std::move(children));
 }
 
@@ -669,7 +680,7 @@ IcebergCopyOptions IcebergInsert::GetCopyOptions(ClientContext &context, const I
 	copy_input.schema.GetColumnNamesAndTypes(names_to_write, types_to_write);
 
 	// Get Parquet Copy function
-	auto &copy_fun = IcebergUtils::GetCopyFunction(context, file_format);
+	auto &copy_fun = IcebergUtils::GetCopyFunction(context, Identifier(file_format));
 	IcebergCopyOptions result(std::move(info), copy_fun.function);
 	GenerateSortOrderExpressions(context, copy_input, result);
 

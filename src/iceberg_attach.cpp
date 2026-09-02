@@ -156,7 +156,7 @@ static void GlueAttach(ClientContext &context, IcebergAttachOptions &input) {
 
 	if (region.IsNull()) {
 		throw InvalidConfigurationException("Assumed catalog secret '%s' for catalog '%s' does not have a region",
-		                                    secret_entry->secret->GetName(), input.name);
+		                                    secret_entry->secret->GetName().GetIdentifierName(), input.name);
 	}
 	S3OrGlueAttachInternal(input, "glue", region.ToString());
 }
@@ -246,6 +246,10 @@ unique_ptr<Catalog> IcebergAttach::Attach(optional_ptr<StorageExtensionInfo> sto
 		} else if (lower_name == "purge_requested") {
 			attach_options.purge_requested = entry.second.DefaultCastAs(LogicalType::BOOLEAN).GetValue<bool>();
 			set_by_attach_options.insert("purge_requested");
+		} else if (lower_name == "default_table_location_from_namespace") {
+			attach_options.default_table_location_from_namespace =
+			    entry.second.DefaultCastAs(LogicalType::BOOLEAN).GetValue<bool>();
+			set_by_attach_options.insert("default_table_location_from_namespace");
 		} else if (lower_name == "default_schema") {
 			default_schema = Identifier(entry.second.ToString());
 		} else if (lower_name == "encode_entire_prefix") {
@@ -353,7 +357,7 @@ unique_ptr<Catalog> IcebergAttach::Attach(optional_ptr<StorageExtensionInfo> sto
 	catalog->GetConfig(context, endpoint_type);
 	if (!default_schema.empty() &&
 	    !IRCAPI::VerifySchemaExistence(context, *catalog, default_schema.GetIdentifierName())) {
-		throw InvalidConfigurationException("default_schema '%s' does not exist", default_schema);
+		throw InvalidConfigurationException("default_schema '%s' does not exist", default_schema.GetIdentifierName());
 	}
 	return std::move(catalog);
 }
