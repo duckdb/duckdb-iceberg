@@ -66,6 +66,7 @@ optional_ptr<CatalogEntry> IcebergSchemaSet::GetEntry(ClientContext &context, co
 		auto default_schema = ic_catalog.GetDefaultSchema();
 		auto lookup_name = Identifier(name);
 		if (lookup_name == default_schema) {
+			// Verify the default schema does exist
 			if (!IRCAPI::VerifySchemaExistence(context, ic_catalog, name)) {
 				if (if_not_found == OnEntryNotFound::RETURN_NULL) {
 					return nullptr;
@@ -82,6 +83,7 @@ optional_ptr<CatalogEntry> IcebergSchemaSet::GetEntry(ClientContext &context, co
 		info.SetQualifiedName(
 		    QualifiedName(info.GetQualifiedName().Catalog(), Identifier(name), info.GetQualifiedName().Name()));
 		info.internal = false;
+		// assume schema exists to avoid extra roundtrip
 		auto schema_entry = make_shared_ptr<IcebergSchemaEntry>(catalog, info);
 		auto inserted_entry = CreateEntryInternal(std::move(schema_entry));
 		iceberg_transaction.schemas.emplace(name, inserted_entry);
