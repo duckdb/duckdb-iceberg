@@ -54,18 +54,16 @@ static bool WriteSequenceNumber(IcebergInsertVirtualColumns virtual_columns) {
 
 IcebergInsert::IcebergInsert(PhysicalPlan &physical_plan, LogicalOperator &op, TableCatalogEntry &table,
                              physical_index_vector_t<idx_t> column_index_map_p)
-    : PhysicalOperator(physical_plan, PhysicalOperatorType::EXTENSION, op.types, 1), table(&table), schema(nullptr),
+    : PhysicalOperator(physical_plan, PhysicalOperatorType::EXTENSION, op.types, 1), table(&table),
       column_index_map(std::move(column_index_map_p)) {
 }
 
-IcebergInsert::IcebergInsert(PhysicalPlan &physical_plan, LogicalOperator &op, SchemaCatalogEntry &schema,
-                             unique_ptr<BoundCreateTableInfo> info)
-    : PhysicalOperator(physical_plan, PhysicalOperatorType::EXTENSION, op.types, 1), table(nullptr), schema(&schema),
-      info(std::move(info)) {
+IcebergInsert::IcebergInsert(PhysicalPlan &physical_plan, LogicalOperator &op)
+    : PhysicalOperator(physical_plan, PhysicalOperatorType::EXTENSION, op.types, 1), table(nullptr) {
 }
 
 IcebergInsert::IcebergInsert(PhysicalPlan &physical_plan, const vector<LogicalType> &types, TableCatalogEntry &table)
-    : PhysicalOperator(physical_plan, PhysicalOperatorType::EXTENSION, types, 1), table(&table), schema(nullptr) {
+    : PhysicalOperator(physical_plan, PhysicalOperatorType::EXTENSION, types, 1), table(&table) {
 }
 
 IcebergCopyOptions::IcebergCopyOptions(unique_ptr<CopyInfo> info_p, CopyFunction copy_function_p)
@@ -340,8 +338,6 @@ InsertionOrderPreservingMap<string> IcebergInsert::ParamsToString() const {
 	InsertionOrderPreservingMap<string> result;
 	if (table) {
 		result["Table Name"] = table->name.GetIdentifierName();
-	} else if (info) {
-		result["Table Name"] = info->Base().GetTableName().GetIdentifierName();
 	} else if (ctas_copy_op) {
 		auto created_table = ctas_copy_op->GetCreatedTable();
 		if (created_table) {
@@ -817,10 +813,6 @@ IcebergCopyToFile &IcebergInsert::PlanCopyForInsert(ClientContext &context, Phys
 	                          .Cast<IcebergCopyToFile>();
 
 	physical_copy.ApplyCopyOptions(copy_options);
-	physical_copy.use_tmp_file = false;
-	physical_copy.order_columns = std::move(copy_options.order_columns);
-	physical_copy.parallel = true;
-	physical_copy.hive_file_pattern = copy_options.partitioned_paths;
 	if (plan) {
 		physical_copy.children.push_back(*plan);
 	}
@@ -956,8 +948,6 @@ static PhysicalOperator &CastCtasToIcebergStorageTypes(ClientContext &context, P
 
 PhysicalOperator &IcebergCatalog::PlanCreateTableAs(ClientContext &context, PhysicalPlanGenerator &planner,
                                                     LogicalCreateTable &op, PhysicalOperator &plan_p) {
-	auto &schema = op.schema;
-
 	// create a fake local iceberg table with desired columns
 	auto placeholder_metadata = BuildPlaceholderMetadata(context, *op.info);
 	auto &placeholder_schema = placeholder_metadata->GetLatestSchema();
@@ -965,7 +955,7 @@ PhysicalOperator &IcebergCatalog::PlanCreateTableAs(ClientContext &context, Phys
 	IcebergCopyInput copy_input(context, *placeholder_metadata, placeholder_schema, std::move(op.info));
 	auto &physical_copy = IcebergInsert::PlanCopyForInsert(context, planner, copy_input, &plan);
 
-	auto &insert = planner.Make<IcebergInsert>(op, schema, unique_ptr<BoundCreateTableInfo>()).Cast<IcebergInsert>();
+	auto &insert = planner.Make<IcebergInsert>(op).Cast<IcebergInsert>();
 	// the copy creates the table; the insert reads the resulting entry back out of it
 	insert.ctas_copy_op = physical_copy;
 	insert.children.push_back(physical_copy);

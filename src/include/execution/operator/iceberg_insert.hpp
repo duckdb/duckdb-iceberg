@@ -104,20 +104,14 @@ public:
 	              physical_index_vector_t<idx_t> column_index_map);
 	IcebergInsert(PhysicalPlan &physical_plan, const vector<LogicalType> &types, TableCatalogEntry &table);
 
-	//! CREATE TABLE AS
-	IcebergInsert(PhysicalPlan &physical_plan, LogicalOperator &op, SchemaCatalogEntry &schema,
-	              unique_ptr<BoundCreateTableInfo> info);
+	//! CREATE TABLE AS. The table itself is created by the IcebergCopyToFile below this insert,
+	//! which owns the BoundCreateTableInfo; see `ctas_copy_op`.
+	IcebergInsert(PhysicalPlan &physical_plan, LogicalOperator &op);
 
 	//! The table to insert into
 	optional_ptr<TableCatalogEntry> table;
-	//! Table schema, in case of CREATE TABLE AS
-	optional_ptr<SchemaCatalogEntry> schema;
-	//! Create table info, in case of CREATE TABLE AS
-	unique_ptr<BoundCreateTableInfo> info;
 	//! column_index_map
 	physical_index_vector_t<idx_t> column_index_map;
-	//! The physical copy used internally by this insert
-	unique_ptr<PhysicalOperator> physical_copy_to_file;
 	//! When set, this insert is part of an UPDATE: points to the delete operator so Finalize
 	//! can call AddUpdateSnapshot instead of AddSnapshot.
 	optional_ptr<PhysicalOperator> update_delete_op;

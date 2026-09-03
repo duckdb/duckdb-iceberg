@@ -17,6 +17,9 @@ IcebergCopyToFile::IcebergCopyToFile(PhysicalPlan &physical_plan, vector<Logical
     : PhysicalCopyToFile(physical_plan, std::move(types), std::move(function), std::move(bind_data),
                          estimated_cardinality),
       ctas_info(std::move(ctas_info_p)) {
+	// constant for every Iceberg write path; not derived from IcebergCopyOptions
+	use_tmp_file = false;
+	parallel = true;
 }
 
 void IcebergCopyToFile::ApplyCopyOptions(IcebergCopyOptions &copy_options) {
@@ -37,6 +40,10 @@ void IcebergCopyToFile::ApplyCopyOptions(IcebergCopyOptions &copy_options) {
 	partition_columns = std::move(copy_options.partition_columns);
 	names = std::move(copy_options.names);
 	expected_types = std::move(copy_options.expected_types);
+	hive_file_pattern = copy_options.partitioned_paths;
+	// PlanCopyForInsert moves these out into a PhysicalOrder when the write is not partitioned, leaving an
+	// empty vector here; for a partitioned write the copy operator sorts within each partition itself.
+	order_columns = std::move(copy_options.order_columns);
 }
 
 unique_ptr<GlobalSinkState> IcebergCopyToFile::GetGlobalSinkState(ClientContext &context) const {
