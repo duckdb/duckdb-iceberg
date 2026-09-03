@@ -165,3 +165,8 @@ jobs:
         run: |
           ls benchmark/rewrite_data_files/*.benchmark > .github/regression/rewrite_data_files.csv
           python duckdb/scripts/regression/test_runner.py --old base/build/release/benchmark/benchmark_runner --new build/release/benchmark/benchmark_runner --benchmarks .github/regression/rewrite_data_files.csv --verbose --threads 2 --benchmark-cache=clear
+
+      - name: Regression Test General Performance Benchmarks
+        run: |
+          ls benchmark/performance/*.benchmark > .github/regression/performance.csv
+          python duckdb/scripts/regression/test_runner.py --old base/build/release/benchmark/benchmark_runner --new build/release/benchmark/benchmark_runner --benchmarks .github/regression/performance.csv --verbose --threads 2 --benchmark-cache=clear

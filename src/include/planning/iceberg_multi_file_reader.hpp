@@ -19,6 +19,7 @@
 #include "duckdb/planner/table_filter.hpp"
 
 #include "planning/iceberg_multi_file_list.hpp"
+#include "planning/deletes/iceberg_equality_delete_fast_filter.hpp"
 #include "common/iceberg_utils.hpp"
 #include "planning/metadata_io/manifest/iceberg_manifest_reader.hpp"
 
@@ -43,6 +44,7 @@ struct IcebergEqualityDeleteReadState {
 	vector<LogicalType> types;
 	unordered_map<int32_t, idx_t> field_indexes;
 	unique_ptr<Expression> expression;
+	shared_ptr<const IcebergEqualityDeleteFastFilter> fast_filter;
 };
 
 struct IcebergMultiFileReaderGlobalState : public MultiFileReaderGlobalState {
@@ -71,10 +73,17 @@ public:
 		return *entry->second;
 	}
 
+	IcebergEqualityDeleteFastFilter::BuildResult
+	GetOrCreateEqualityDeleteFastFilter(const vector<reference<const IcebergEqualityDeleteFile>> &delete_files,
+	                                    const IcebergEqualityDeleteReadState &read_state,
+	                                    const set<int32_t> &local_field_ids, ClientContext &context,
+	                                    Allocator &allocator);
+
 private:
 	mutable mutex equality_delete_read_state_lock;
 	//! The values are heap allocated so references remain stable while other files are initialized in parallel.
 	unordered_map<idx_t, unique_ptr<IcebergEqualityDeleteReadState>> equality_delete_read_states;
+	IcebergEqualityDeleteFastFilterCache equality_delete_fast_filter_cache;
 };
 
 struct IcebergMultiFileReader : public MultiFileReader {
@@ -124,7 +133,8 @@ private:
 	static unique_ptr<Expression>
 	CreateEqualityDeleteExpression(const vector<reference<const IcebergEqualityDeleteFile>> &delete_files,
 	                               const vector<MultiFileColumnDefinition> &local_columns,
-	                               const IcebergEqualityDeleteReadState &read_state);
+	                               const IcebergEqualityDeleteReadState &read_state,
+	                               const vector<bool> &accelerated_files);
 	static vector<IcebergEqualityDeleteReadColumn>
 	AddEqualityDeleteColumns(const IcebergTableMetadata &metadata,
 	                         const vector<reference<const IcebergEqualityDeleteFile>> &delete_files,
