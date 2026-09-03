@@ -232,7 +232,7 @@ statement ok
 COMMIT;
 
 query I
-SELECT count(*) FROM duckdb_logs_parsed('HTTP') WHERE request.url LIKE '%/tables/tr_%';
+SELECT count(*) FROM duckdb_logs_parsed('HTTP') WHERE request.url LIKE '%table_resolution/tables/tr_%';
 ----
 3
 

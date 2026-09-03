@@ -55,7 +55,6 @@ select split(request.url, 'v1')[2] from duckdb_logs_parsed('HTTP') order by all;
 /namespaces
 /namespaces/default/tables
 /namespaces/level1/tables
-/namespaces/table_resolution/tables
 /oauth/tokens
 
 statement ok
