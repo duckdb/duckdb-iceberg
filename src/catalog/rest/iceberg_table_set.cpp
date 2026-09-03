@@ -32,7 +32,8 @@ IcebergTableSet::IcebergTableSet(IcebergSchemaEntry &schema) : schema(schema), c
 
 bool IcebergTableSet::FillEntry(ClientContext &context, IcebergTable &table, IcebergTableLoadLevel load_level) {
 	D_ASSERT(load_level != IcebergTableLoadLevel::NONE);
-	if (IcebergLoadLevelSatisfies(table.load_level, load_level)) {
+	// If the table is already fully loaded, no need to fill again
+	if (table.load_level == IcebergTableLoadLevel::FULL) {
 		return true;
 	}
 
@@ -126,9 +127,7 @@ void IcebergTableSet::Scan(ClientContext &context, const std::function<void(Cata
 		}
 
 		if (table_info.load_level != IcebergTableLoadLevel::NONE) {
-			// The table has been resolved (eagerly above, or earlier via DESCRIBE or a scan), so its full
-			// schema - including column comments mapped from the Iceberg field 'doc' - is available.
-			// Surface the resolved entry instead of the placeholder so listings reflect the real columns.
+			// table has been loaded already
 			auto resolved = table_info.GetLatestSchema();
 			if (resolved) {
 				callback(*resolved);

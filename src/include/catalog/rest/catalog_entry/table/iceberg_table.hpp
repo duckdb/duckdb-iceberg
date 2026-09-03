@@ -69,7 +69,6 @@ public:
 	void InitSchemaVersions();
 
 	bool HasTransactionUpdates() const;
-	//! 'level' records how complete 'load_table_result' is; see IcebergTableLoadLevel.
 	void InitializeFromLoadTableResult(const rest_api_objects::LoadTableResult &load_table_result,
 	                                   IcebergTableLoadLevel level = IcebergTableLoadLevel::FULL);
 	void RefreshFromCatalog(ClientContext &context);

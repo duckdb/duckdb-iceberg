@@ -1,0 +1,269 @@
+# name: test/sql/local/catalog_custom_setup/nessie/table_resolution.test
+# description: test the TABLE_RESOLUTION attach option against Nessie
+# group: [nessie]
+
+require-env NESSIE_SERVER_AVAILABLE
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+require aws
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+set enable_logging=true
+
+statement ok
+set logging_level='debug';
+
+statement ok
+CREATE SECRET storage_secret (
+    TYPE S3,
+    KEY_ID 'minioadmin',
+    SECRET 'minioadmin',
+    ENDPOINT '127.0.0.1:9002',
+    URL_STYLE 'path',
+    USE_SSL 0
+);
+
+statement ok
+CREATE SECRET my_secret (
+    TYPE ICEBERG,
+    CLIENT_ID 'client1',
+    CLIENT_SECRET 's3cr3t',
+    OAUTH2_SCOPE 'catalog sign',
+    OAUTH2_SERVER_URI 'http://127.0.0.1:8080/realms/iceberg/protocol/openid-connect/token'
+);
+
+statement error
+ATTACH 'warehouse' AS bad_resolution (
+    TYPE ICEBERG,
+    URI 'http://127.0.0.1:19120/iceberg/',
+    ACCESS_DELEGATION_MODE 'none',
+    SECRET 'my_secret',
+    TABLE_RESOLUTION 'sometimes'
+);
+----
+<REGEX>:.*Unrecognized 'table_resolution' \(sometimes\), accepted options are: lazy, eager.*
+
+# ---------------------------------------------------------------------------
+# setup: this test creates the tables it needs, so it does not depend on
+# generated data. They live in their own namespace and are named with a 'tr_'
+# prefix, so every request assertion below can be scoped to them and stays
+# independent of whatever else the catalog holds.
+# ---------------------------------------------------------------------------
+
+statement ok
+ATTACH 'warehouse' AS my_datalake (
+    TYPE ICEBERG,
+    URI 'http://127.0.0.1:19120/iceberg/',
+    ACCESS_DELEGATION_MODE 'none',
+    SECRET 'my_secret'
+);
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.table_resolution.tr_alpha;
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.table_resolution.tr_beta;
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.table_resolution.tr_gamma;
+
+statement ok
+DROP SCHEMA IF EXISTS my_datalake.table_resolution;
+
+statement ok
+CREATE SCHEMA my_datalake.table_resolution;
+
+statement ok
+CREATE TABLE my_datalake.table_resolution.tr_alpha (id BIGINT, name VARCHAR);
+
+statement ok
+CREATE TABLE my_datalake.table_resolution.tr_beta (a INTEGER, b DOUBLE, c BOOLEAN);
+
+statement ok
+CREATE TABLE my_datalake.table_resolution.tr_gamma (x VARCHAR);
+
+statement ok
+INSERT INTO my_datalake.table_resolution.tr_alpha SELECT range, 'v' || range::VARCHAR FROM range(10);
+
+statement ok
+DETACH my_datalake;
+
+# ---------------------------------------------------------------------------
+# lazy (the default): listing a schema never loads its tables
+# ---------------------------------------------------------------------------
+
+statement ok
+ATTACH 'warehouse' AS my_datalake (
+    TYPE ICEBERG,
+    URI 'http://127.0.0.1:19120/iceberg/',
+    ACCESS_DELEGATION_MODE 'none',
+    SECRET 'my_secret'
+);
+
+statement ok
+CALL enable_logging('HTTP');
+
+# drop the requests the setup above made, so the counts below only cover the listing
+statement ok
+CALL truncate_duckdb_logs();
+
+# the tables are listed, but with no columns resolved they only carry the placeholder
+query II
+SELECT table_name, column_name FROM information_schema.columns
+WHERE table_catalog = 'my_datalake' AND table_schema = 'table_resolution'
+ORDER BY table_name;
+----
+tr_alpha	__
+tr_beta	__
+tr_gamma	__
+
+# the namespaces were listed, but no table metadata was requested at all
+query I
+SELECT count(*) FROM duckdb_logs_parsed('HTTP') WHERE request.url LIKE '%/tables/%';
+----
+0
+
+query I
+SELECT count(*) > 0 FROM duckdb_logs_parsed('HTTP')
+WHERE request.url LIKE '%/namespaces/table_resolution/tables';
+----
+1
+
+statement ok
+DETACH my_datalake;
+
+statement ok
+CALL truncate_duckdb_logs();
+
+# ---------------------------------------------------------------------------
+# eager: listing a schema resolves the columns of every table it lists
+# ---------------------------------------------------------------------------
+
+statement ok
+ATTACH 'warehouse' AS my_datalake (
+    TYPE ICEBERG,
+    URI 'http://127.0.0.1:19120/iceberg/',
+    ACCESS_DELEGATION_MODE 'none',
+    SECRET 'my_secret',
+    TABLE_RESOLUTION 'eager'
+);
+
+statement ok
+CALL enable_logging('HTTP');
+
+# the real columns are reported, not the '__' placeholder
+query III
+SELECT table_name, column_name, data_type FROM information_schema.columns
+WHERE table_catalog = 'my_datalake' AND table_schema = 'table_resolution'
+ORDER BY table_name, ordinal_position;
+----
+tr_alpha	id	BIGINT
+tr_alpha	name	VARCHAR
+tr_beta	a	INTEGER
+tr_beta	b	DOUBLE
+tr_beta	c	BOOLEAN
+tr_gamma	x	VARCHAR
+
+# each of the three tables was loaded exactly once
+query I
+SELECT count(*) FROM duckdb_logs_parsed('HTTP') WHERE request.url LIKE '%/tables/tr_%';
+----
+3
+
+# and every one of those loads asked for only the referenced snapshots
+query I
+SELECT count(*) FROM duckdb_logs_parsed('HTTP')
+WHERE request.url LIKE '%/tables/tr_%' AND request.url NOT LIKE '%snapshots=refs';
+----
+0
+
+statement ok
+CALL truncate_duckdb_logs();
+
+# a listing load is not cached as if it were a complete one: actually reading the table still
+# issues a full LoadTable request, without the snapshots filter. Credential vending is not
+# asserted here the way it is for the fixture: this catalog is attached with
+# ACCESS_DELEGATION_MODE 'none', so that header is never sent on any request.
+query I
+SELECT count(*) FROM my_datalake.table_resolution.tr_alpha;
+----
+10
+
+query I
+SELECT count(*) FROM duckdb_logs_parsed('HTTP')
+WHERE request.url LIKE '%/namespaces/table_resolution/tables/tr_alpha';
+----
+1
+
+# ---------------------------------------------------------------------------
+# eager: a table is resolved once per transaction, however many listings run
+# ---------------------------------------------------------------------------
+
+# re-attach so that nothing has been resolved yet
+statement ok
+DETACH my_datalake;
+
+statement ok
+ATTACH 'warehouse' AS my_datalake (
+    TYPE ICEBERG,
+    URI 'http://127.0.0.1:19120/iceberg/',
+    ACCESS_DELEGATION_MODE 'none',
+    SECRET 'my_secret',
+    TABLE_RESOLUTION 'eager'
+);
+
+statement ok
+CALL truncate_duckdb_logs();
+
+statement ok
+BEGIN;
+
+statement ok
+SELECT * FROM information_schema.columns WHERE table_catalog = 'my_datalake';
+
+# SHOW ALL TABLES scans every schema twice more (duckdb_tables joined with duckdb_columns)
+statement ok
+SELECT count(*) FROM (SHOW ALL TABLES);
+
+statement ok
+COMMIT;
+
+query I
+SELECT count(*) FROM duckdb_logs_parsed('HTTP') WHERE request.url LIKE '%/tables/tr_%';
+----
+3
+
+# ---------------------------------------------------------------------------
+# cleanup
+# ---------------------------------------------------------------------------
+
+statement ok
+DROP TABLE my_datalake.table_resolution.tr_alpha;
+
+statement ok
+DROP TABLE my_datalake.table_resolution.tr_beta;
+
+statement ok
+DROP TABLE my_datalake.table_resolution.tr_gamma;
+
+statement ok
+DROP SCHEMA my_datalake.table_resolution;
+
+statement ok
+DETACH my_datalake;
+
+statement ok
+DROP SECRET my_secret;
+
+statement ok
+DROP SECRET storage_secret;

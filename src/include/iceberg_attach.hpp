@@ -22,9 +22,10 @@ enum class IRCAccessDelegationMode : uint8_t { NONE, VENDED_CREDENTIALS };
 enum class IcebergTableResolution : uint8_t { LAZY, EAGER };
 
 //! How completely a table's metadata has been resolved. The order is significant: a load satisfies
-//! every level at or below it. A LISTING load is requested with '?snapshots=refs' and without
-//! credential vending, so it carries the schemas needed to list columns but neither the full snapshot
-//! log nor storage credentials, and can never stand in for a FULL load.
+//! every level at or below it.
+//! LISTING requests with '?snapshots=refs' and no credential vending.
+//!    this is to get table schema information.
+//! FULL requests all snapshot information and vended credentials.
 enum class IcebergTableLoadLevel : uint8_t { NONE = 0, LISTING = 1, FULL = 2 };
 
 //! Whether a table loaded at 'current' also satisfies a request for 'required'.
