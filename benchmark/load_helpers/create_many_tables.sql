@@ -1,0 +1,132 @@
+-- Load helper for the benchmark/table_resolution benchmarks.
+--
+-- Creates enough tables in the fixture's 'default' namespace that a listing has to resolve a
+-- meaningful number of them, then attaches the catalog that the benchmark actually measures.
+--
+-- The S3 secret is created by the benchmark's own init step, not here: the benchmark runner reads
+-- this whole file as the load query and would discard anything written alongside it.
+--
+-- Two attaches on purpose. The DDL runs against the catalog directly on 8181, because the
+-- benchmarks re-run this load before every timed run and there is no reason to pay the injected
+-- latency 119 times for setup. Only 'my_datalake' goes through toxiproxy on 8182, so the latency
+-- lands exactly on the listing being measured.
+--
+-- That proxy is required, not optional. The fixture is on localhost, where a catalog round trip
+-- is sub-millisecond scheduling noise, so an unproxied measurement is both meaninglessly small
+-- and inconsistent between iterations. toxiproxy injects a fixed, repeatable per-response
+-- latency that stands in for a catalog actually reached over a network:
+--
+--   toxiproxy-server > /dev/null 2>&1 &
+--   toxiproxy-cli create --listen 127.0.0.1:8182 --upstream 127.0.0.1:8181 iceberg-catalog
+--   toxiproxy-cli toxic add --type latency --attribute latency=50 --attribute jitter=5 iceberg-catalog
+--
+-- Without it, nothing listens on 8182 and the second ATTACH below fails with a connection error.
+
+ATTACH IF NOT EXISTS '' AS setup_catalog (
+    TYPE ICEBERG,
+    CLIENT_ID 'admin',
+    CLIENT_SECRET 'password',
+    URI 'http://127.0.0.1:8181'
+);
+CREATE SCHEMA IF NOT EXISTS setup_catalog.default;
+create table if not exists setup_catalog.default.t00 (a int);
+create table if not exists setup_catalog.default.t01 (a int);
+create table if not exists setup_catalog.default.t02 (a int);
+create table if not exists setup_catalog.default.t03 (a int);
+create table if not exists setup_catalog.default.t04 (a int);
+create table if not exists setup_catalog.default.t05 (a int);
+create table if not exists setup_catalog.default.t06 (a int);
+create table if not exists setup_catalog.default.t07 (a int);
+create table if not exists setup_catalog.default.t08 (a int);
+create table if not exists setup_catalog.default.t09 (a int);
+create table if not exists setup_catalog.default.t10 (a int);
+create table if not exists setup_catalog.default.t11 (a int);
+create table if not exists setup_catalog.default.t12 (a int);
+create table if not exists setup_catalog.default.t13 (a int);
+create table if not exists setup_catalog.default.t14 (a int);
+create table if not exists setup_catalog.default.t15 (a int);
+create table if not exists setup_catalog.default.t16 (a int);
+create table if not exists setup_catalog.default.t17 (a int);
+create table if not exists setup_catalog.default.t18 (a int);
+create table if not exists setup_catalog.default.t19 (a int);
+create table if not exists setup_catalog.default.t20 (a int);
+create table if not exists setup_catalog.default.t21 (a int);
+create table if not exists setup_catalog.default.t22 (a int);
+create table if not exists setup_catalog.default.t23 (a int);
+create table if not exists setup_catalog.default.t24 (a int);
+create table if not exists setup_catalog.default.t25 (a int);
+create table if not exists setup_catalog.default.t26 (a int);
+create table if not exists setup_catalog.default.t27 (a int);
+create table if not exists setup_catalog.default.t28 (a int);
+create table if not exists setup_catalog.default.t29 (a int);
+create table if not exists setup_catalog.default.t30 (a int);
+create table if not exists setup_catalog.default.t31 (a int);
+create table if not exists setup_catalog.default.t32 (a int);
+create table if not exists setup_catalog.default.t33 (a int);
+create table if not exists setup_catalog.default.t34 (a int);
+create table if not exists setup_catalog.default.t35 (a int);
+create table if not exists setup_catalog.default.t36 (a int);
+create table if not exists setup_catalog.default.t37 (a int);
+create table if not exists setup_catalog.default.t38 (a int);
+create table if not exists setup_catalog.default.t39 (a int);
+create table if not exists setup_catalog.default.t40 (a int);
+create table if not exists setup_catalog.default.t41 (a int);
+create table if not exists setup_catalog.default.t42 (a int);
+create table if not exists setup_catalog.default.t43 (a int);
+create table if not exists setup_catalog.default.t44 (a int);
+create table if not exists setup_catalog.default.t45 (a int);
+create table if not exists setup_catalog.default.t46 (a int);
+create table if not exists setup_catalog.default.t47 (a int);
+create table if not exists setup_catalog.default.t48 (a int);
+create table if not exists setup_catalog.default.t49 (a int);
+create table if not exists setup_catalog.default.t50 (a int);
+create table if not exists setup_catalog.default.t51 (a int);
+create table if not exists setup_catalog.default.t52 (a int);
+create table if not exists setup_catalog.default.t53 (a int);
+create table if not exists setup_catalog.default.t54 (a int);
+create table if not exists setup_catalog.default.t55 (a int);
+create table if not exists setup_catalog.default.t56 (a int);
+create table if not exists setup_catalog.default.t57 (a int);
+create table if not exists setup_catalog.default.t58 (a int);
+create table if not exists setup_catalog.default.t59 (a int);
+create table if not exists setup_catalog.default.t60 (a int);
+create table if not exists setup_catalog.default.t61 (a int);
+create table if not exists setup_catalog.default.t62 (a int);
+create table if not exists setup_catalog.default.t63 (a int);
+create table if not exists setup_catalog.default.t64 (a int);
+create table if not exists setup_catalog.default.t65 (a int);
+create table if not exists setup_catalog.default.t66 (a int);
+create table if not exists setup_catalog.default.t67 (a int);
+create table if not exists setup_catalog.default.t68 (a int);
+create table if not exists setup_catalog.default.t69 (a int);
+create table if not exists setup_catalog.default.t70 (a int);
+create table if not exists setup_catalog.default.t71 (a int);
+create table if not exists setup_catalog.default.t72 (a int);
+create table if not exists setup_catalog.default.t73 (a int);
+create table if not exists setup_catalog.default.t74 (a int);
+create table if not exists setup_catalog.default.t75 (a int);
+create table if not exists setup_catalog.default.t76 (a int);
+create table if not exists setup_catalog.default.t77 (a int);
+create table if not exists setup_catalog.default.t78 (a int);
+create table if not exists setup_catalog.default.t79 (a int);
+create table if not exists setup_catalog.default.t80 (a int);
+create table if not exists setup_catalog.default.t81 (a int);
+create table if not exists setup_catalog.default.t82 (a int);
+create table if not exists setup_catalog.default.t83 (a int);
+create table if not exists setup_catalog.default.t84 (a int);
+create table if not exists setup_catalog.default.t85 (a int);
+create table if not exists setup_catalog.default.t86 (a int);
+create table if not exists setup_catalog.default.t87 (a int);
+create table if not exists setup_catalog.default.t88 (a int);
+create table if not exists setup_catalog.default.t89 (a int);
+create table if not exists setup_catalog.default.t90 (a int);
+create table if not exists setup_catalog.default.t91 (a int);
+create table if not exists setup_catalog.default.t92 (a int);
+create table if not exists setup_catalog.default.t93 (a int);
+create table if not exists setup_catalog.default.t94 (a int);
+create table if not exists setup_catalog.default.t95 (a int);
+create table if not exists setup_catalog.default.t96 (a int);
+create table if not exists setup_catalog.default.t97 (a int);
+create table if not exists setup_catalog.default.t98 (a int);
+create table if not exists setup_catalog.default.t99 (a int);
+create table if not exists setup_catalog.default.t100 (a int);
