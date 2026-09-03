@@ -28,11 +28,6 @@ enum class IcebergTableResolution : uint8_t { LAZY, EAGER };
 //! FULL requests all snapshot information and vended credentials.
 enum class IcebergTableLoadLevel : uint8_t { NONE = 0, LISTING = 1, FULL = 2 };
 
-//! Whether a table loaded at 'current' also satisfies a request for 'required'.
-inline bool IcebergLoadLevelSatisfies(IcebergTableLoadLevel current, IcebergTableLoadLevel required) {
-	return static_cast<uint8_t>(current) >= static_cast<uint8_t>(required);
-}
-
 struct IcebergAttachOptions {
 	string catalog_uri;
 	string warehouse;
