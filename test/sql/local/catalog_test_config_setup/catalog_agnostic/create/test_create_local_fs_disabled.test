@@ -1,0 +1,89 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/create/test_create_local_fs_disabled.test
+# description: writing to a catalog on remote storage must not touch the local filesystem
+# group: [create]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+require core_functions
+
+statement ok
+use my_datalake.default;
+
+statement ok
+drop table if exists local_fs_disabled_ctas;
+
+statement ok
+drop table if exists local_fs_disabled_ctas_partitioned;
+
+statement ok
+drop table if exists local_fs_disabled_insert;
+
+# CREATE TABLE AS resolves the output path from the table's location, which only exists after the
+# CreateTable request. Planning it against a table-less placeholder used to fall back to the relative
+# path "data", which resolves against the local filesystem.
+statement ok
+SET disabled_filesystems = 'LocalFileSystem';
+
+statement ok
+create table local_fs_disabled_ctas as select range a, range::VARCHAR b from range(10);
+
+query II
+select a, b from local_fs_disabled_ctas order by a;
+----
+0	0
+1	1
+2	2
+3	3
+4	4
+5	5
+6	6
+7	7
+8	8
+9	9
+
+# partitioned output takes a different sink-state path in the copy operator, and the partition spec is
+# only known once the table has been created
+statement ok
+create table local_fs_disabled_ctas_partitioned PARTITIONED BY (val) as select i id, i % 3 val from range(9) t(i);
+
+query II
+select id, val from local_fs_disabled_ctas_partitioned order by id;
+----
+0	0
+1	1
+2	2
+3	0
+4	1
+5	2
+6	0
+7	1
+8	2
+
+# plain INSERT INTO, where the location is known at plan time
+statement ok
+create table local_fs_disabled_insert (a INTEGER);
+
+statement ok
+insert into local_fs_disabled_insert select range from range(5);
+
+query I
+select sum(a) from local_fs_disabled_insert;
+----
+10
+
+statement ok
+drop table local_fs_disabled_ctas;
+
+statement ok
+drop table local_fs_disabled_ctas_partitioned;
+
+statement ok
+drop table local_fs_disabled_insert;
