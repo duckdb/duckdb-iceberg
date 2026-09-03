@@ -1,0 +1,92 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/file_properties/test_parquet_page_size_bytes.test
+# description: test that write.parquet.page-size-bytes reaches the parquet writer
+# group: [file_properties]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+statement ok
+drop table if exists my_datalake.default.page_size_small;
+
+statement ok
+drop table if exists my_datalake.default.page_size_big;
+
+# A small page limit forces many data pages per column chunk
+statement ok
+CREATE TABLE my_datalake.default.page_size_small (
+  i BIGINT,
+  s VARCHAR
+) WITH (
+  'write.parquet.page-size-bytes' = '4096',
+  'write.parquet.compression-codec' = 'uncompressed'
+);
+
+query II
+SELECT * FROM iceberg_table_properties(my_datalake.default.page_size_small)
+WHERE key = 'write.parquet.page-size-bytes';
+----
+write.parquet.page-size-bytes	4096
+
+statement ok
+INSERT INTO my_datalake.default.page_size_small
+SELECT i, concat('val_', i % 400)
+FROM range(100_000) t(i);
+
+# Same data and codec, but the default page limit, i.e. one data page per column chunk
+statement ok
+CREATE TABLE my_datalake.default.page_size_big (
+  i BIGINT,
+  s VARCHAR
+) WITH (
+  'write.parquet.compression-codec' = 'uncompressed'
+);
+
+statement ok
+INSERT INTO my_datalake.default.page_size_big
+SELECT i, concat('val_', i % 400)
+FROM range(100_000) t(i);
+
+# Start transaction to keep necessary credentials in scope
+statement ok
+begin
+
+statement ok
+set variable small_pages_file = (select file_path from iceberg_metadata(my_datalake.default.page_size_small) limit 1);
+
+statement ok
+set variable big_pages_file = (select file_path from iceberg_metadata(my_datalake.default.page_size_big) limit 1);
+
+# More pages means more page headers, so the same uncompressed data must occupy more bytes
+query I
+SELECT
+  (select sum(total_compressed_size) from parquet_metadata(getvariable('small_pages_file'))) >
+  (select sum(total_compressed_size) from parquet_metadata(getvariable('big_pages_file')));
+----
+1
+
+statement ok
+commit
+
+# The data itself must be unaffected by the page size
+query II
+SELECT count(*), sum(i) FROM my_datalake.default.page_size_small;
+----
+100000	4999950000
+
+query I
+SELECT count(*) FROM my_datalake.default.page_size_small WHERE s <> concat('val_', i % 400);
+----
+0
+
+statement ok
+drop table if exists my_datalake.default.page_size_small;
+
+statement ok
+drop table if exists my_datalake.default.page_size_big;

@@ -604,6 +604,7 @@ static const IcebergParquetOptionMapping ICEBERG_TABLE_PROPERTY_MAPPING[] = {
     {"write.parquet.compression-codec", "codec"},
     {"write.parquet.compression-level", "compression_level"},
     {"write.parquet.dict-size-bytes", "string_dictionary_page_size_limit"},
+    {"write.parquet.page-size-bytes", "data_page_size_limit"},
     {"write.parquet.row-group-size-bytes", "row_group_size_bytes"},
     {"write.parquet.row-group-size", "row_group_size"},
     {"write.parquet.row-groups-per-file", "row_groups_per_file"}};
