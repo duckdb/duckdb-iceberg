@@ -107,6 +107,13 @@ const IcebergTransactionData &IcebergMultiFileList::GetTransactionData() const {
 	return *shared_state->scan_info->transaction_data;
 }
 
+bool IcebergMultiFileList::IsInvalidatedInTransaction(const string &file_path) const {
+	if (!HasTransactionData()) {
+		return false;
+	}
+	return GetTransactionData().IsFileInvalidated(file_path);
+}
+
 const IcebergSnapshotScanInfo &IcebergMultiFileList::GetSnapshot() const {
 	return shared_state->scan_info->snapshot_info;
 }
@@ -166,6 +173,26 @@ void IcebergMultiFileList::DisableServerSidePlanning() {
 	}
 }
 
+void IcebergMultiFileList::EnableMetadataOnlyDelete() {
+	metadata_only_delete_enabled = true;
+}
+
+bool IcebergMultiFileList::IsMetadataOnlyDeleteEnabled() const {
+	return metadata_only_delete_enabled;
+}
+
+bool IcebergMultiFileList::PartitionSpecHasFieldForEveryFilterColumn(
+    int32_t partition_spec_id, annotated_lock_guard<annotated_mutex> &guard) const {
+	auto it = spec_has_fields_for_filters.find(partition_spec_id);
+	if (it != spec_has_fields_for_filters.end()) {
+		return it->second;
+	}
+	auto can_cover = IcebergFilePruner(context, GetMetadata(), GetSchema(), table_filters)
+	                     .PartitionSpecHasFieldForEveryFilterColumn(partition_spec_id);
+	spec_has_fields_for_filters[partition_spec_id] = can_cover;
+	return can_cover;
+}
+
 void IcebergMultiFileList::Bind(vector<LogicalType> &return_types, vector<Identifier> &names) {
 	annotated_lock_guard<annotated_mutex> guard(shared_state->lock);
 
@@ -206,9 +233,10 @@ void IcebergMultiFileList::Bind(vector<LogicalType> &return_types, vector<Identi
 	this->types = return_types;
 }
 
-unique_ptr<IcebergMultiFileList>
-IcebergMultiFileList::PushdownInternal(ClientContext &context, TableFilterSet &new_filters,
-                                       const vector<ColumnIndex> &column_indexes) const {
+unique_ptr<IcebergMultiFileList> IcebergMultiFileList::PushdownInternal(ClientContext &context,
+                                                                        TableFilterSet &new_filters,
+                                                                        const vector<ColumnIndex> &column_indexes,
+                                                                        bool filters_fully_pushed) const {
 	unique_ptr<RowGroupOrderOptions> filtered_scan_order;
 	{
 		annotated_lock_guard<annotated_mutex> guard(shared_state->lock);
@@ -234,6 +262,7 @@ IcebergMultiFileList::PushdownInternal(ClientContext &context, TableFilterSet &n
 	filtered_list->names = names;
 	filtered_list->types = types;
 	filtered_list->have_bound = true;
+	filtered_list->filters_fully_pushed = filters_fully_pushed;
 	if (filtered_scan_order) {
 		filtered_list->SetScanOrder(std::move(filtered_scan_order));
 	}
@@ -284,13 +313,23 @@ unique_ptr<MultiFileList> IcebergMultiFileList::ComplexFilterPushdown(ClientCont
 		combiner.AddFilter(filter->Copy());
 	}
 
-	vector<FilterPushdownResult> unused;
-	auto filter_set = combiner.GenerateTableScanFilters(info.column_indexes, unused);
+	vector<FilterPushdownResult> pushdown_results;
+	auto filter_set = combiner.GenerateTableScanFilters(info.column_indexes, pushdown_results);
 	if (!filter_set.HasFilters()) {
 		return nullptr;
 	}
 
-	return PushdownInternal(context, filter_set, info.column_indexes);
+	//! GenerateTableScanFilters only records a result for filters it could NOT fully push down, so anything
+	//! recorded here means a residual filter remains above the scan and a delete must not drop files on it.
+	bool filters_fully_pushed = true;
+	for (auto &result : pushdown_results) {
+		if (result != FilterPushdownResult::PUSHED_DOWN_FULLY) {
+			filters_fully_pushed = false;
+			break;
+		}
+	}
+
+	return PushdownInternal(context, filter_set, info.column_indexes, filters_fully_pushed);
 }
 
 vector<OpenFileInfo> IcebergMultiFileList::GetAllFiles() const {
@@ -481,6 +520,12 @@ IcebergMultiFileList::GetDataFile(idx_t file_id, annotated_lock_guard<annotated_
 				continue;
 			}
 
+			//! An earlier statement in this transaction dropped the file at the manifest level. The manifest
+			//! still lists it until the commit rewrites it, so the invalidation has to be applied here.
+			if (IsInvalidatedInTransaction(data_file.file_path)) {
+				continue;
+			}
+
 			// Check whether current data file is filtered out.
 			if (table_filters.HasFilters() && !IcebergFilePruner(context, GetMetadata(), GetSchema(), table_filters)
 			                                       .FileMatchesFilter(manifest_file, manifest_entry)) {
@@ -494,6 +539,19 @@ IcebergMultiFileList::GetDataFile(idx_t file_id, annotated_lock_guard<annotated_
 				//! Skip this file
 				continue;
 			}
+
+			// Metadata-only DELETE: record a fully-covered file for a manifest-level drop instead of scanning
+			// it. Existing delete files are resolved later: rows they removed are gone either way.
+			if (metadata_only_delete_enabled && filters_fully_pushed && table_filters.HasFilters() &&
+			    PartitionSpecHasFieldForEveryFilterColumn(manifest_file.partition_spec_id, guard) &&
+			    IcebergFilePruner(context, GetMetadata(), GetSchema(), table_filters)
+			        .FileFullyCoveredByFilter(manifest_file, manifest_entry)) {
+				fully_covered_data_files.push_back({current_batch.manifest_list_entry_idx,
+				                                    view_cursor.current_batch_offset, data_file.file_path,
+				                                    data_file.record_count});
+				continue;
+			}
+
 			data_manifest_entries.push_back(bound_entry);
 		}
 		if (view_cursor.current_batch_offset >= current_batch.end_index) {
@@ -741,6 +799,56 @@ IcebergDeletePlan IcebergMultiFileList::ProcessDeletes(const BoundIcebergManifes
 		if (entry != positional_delete_data.end()) {
 			result.positional_deletes = entry->second->ToFilter();
 		}
+	}
+	return result;
+}
+
+BoundIcebergManifestEntry IcebergMultiFileList::BindCoveredDataFile(const CoveredDataFile &covered) const {
+	annotated_lock_guard<annotated_mutex> guard(shared_state->lock);
+	auto &manifest_list_entry = data_manifests[covered.manifest_file_idx];
+	auto &entries = manifest_list_entry.entry.GetManifestEntries();
+	return manifest_list_entry.BindEntry(entries[covered.manifest_entry_idx]);
+}
+
+vector<IcebergMultiFileList::DroppedDataFile> IcebergMultiFileList::ResolveDroppedDataFiles() const {
+	vector<CoveredDataFile> covered_files;
+	{
+		annotated_lock_guard<annotated_mutex> guard(shared_state->lock);
+		covered_files = fully_covered_data_files;
+	}
+
+	vector<DroppedDataFile> result;
+	result.reserve(covered_files.size());
+	for (auto &covered : covered_files) {
+		DroppedDataFile dropped;
+		dropped.file_path = covered.file_path;
+		dropped.live_record_count = covered.record_count;
+
+		auto data_manifest_entry = BindCoveredDataFile(covered);
+
+		for (auto delete_file : ResolveApplicableDeleteFiles(data_manifest_entry)) {
+			annotated_lock_guard<annotated_mutex> guard(shared_state->lock);
+			annotated_lock_guard<annotated_mutex> delete_guard(shared_state->delete_lock);
+			auto &delete_entry =
+			    delete_manifests[delete_file.manifest_idx].entry.GetManifestEntries()[delete_file.entry_idx];
+			auto &delete_data_file = delete_entry.data_file;
+			//! An equality delete is table-wide, and a positional delete that does not name this data file
+			//! may cover others too: neither can be dropped with it, and neither one's record count can be
+			//! attributed to it.
+			if (delete_data_file.content == IcebergManifestEntryContentType::EQUALITY_DELETES) {
+				continue;
+			}
+			if (!delete_data_file.referenced_data_file || *delete_data_file.referenced_data_file != covered.file_path) {
+				continue;
+			}
+			dropped.superseded_delete_files.push_back(delete_data_file.file_path);
+			dropped.live_record_count -= delete_data_file.record_count;
+		}
+
+		if (dropped.live_record_count < 0) {
+			dropped.live_record_count = 0;
+		}
+		result.push_back(std::move(dropped));
 	}
 	return result;
 }
