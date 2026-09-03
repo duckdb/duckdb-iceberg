@@ -160,14 +160,14 @@ tr_gamma	x	VARCHAR
 
 # each of the three tables was loaded exactly once
 query I
-SELECT count(*) FROM duckdb_logs_parsed('HTTP') WHERE request.url LIKE '%/tables/tr_%';
+SELECT count(*) FROM duckdb_logs_parsed('HTTP') WHERE request.url LIKE '%table_resolution/tables/tr_%';
 ----
 3
 
 # and every one of those loads asked for only the referenced snapshots
 query I
 SELECT count(*) FROM duckdb_logs_parsed('HTTP')
-WHERE request.url LIKE '%/tables/tr_%' AND request.url NOT LIKE '%snapshots=refs';
+WHERE request.url LIKE '%table_resolution/tables/tr_%' AND request.url NOT LIKE '%snapshots=refs';
 ----
 0
 
