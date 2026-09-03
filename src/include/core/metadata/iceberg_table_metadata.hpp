@@ -31,6 +31,14 @@ public:
 	timestamp_ms_t timestamp_ms;
 };
 
+//! Copyable subset of the generated REST reference needed by main-only expiration.
+struct IcebergMainSnapshotReference {
+	string type;
+	int64_t snapshot_id;
+	optional<int64_t> max_snapshot_age_ms;
+	optional<int32_t> min_snapshots_to_keep;
+};
+
 //! A structure to store "LoadTableResult" information that changes as a transaction goes on
 //! Everything is parsed from a load table result, but if a transaction changes a schema, those schema
 //! updates are reflected here and never within the catalog that lives beyond transactions
@@ -131,6 +139,12 @@ public:
 	unordered_map<int32_t, IcebergSortOrder> sort_specs;
 	//! snapshot_id -> snapshot
 	unordered_map<int64_t, IcebergSnapshot> snapshots;
+	//! Distinguishes an absent refs field (legacy implicit main) from an explicit empty map.
+	bool snapshot_refs_present = false;
+	//! The main branch policy used by main-only snapshot expiration.
+	optional<IcebergMainSnapshotReference> main_snapshot_ref;
+	//! Lexicographically first non-main name, retained for deterministic fail-closed validation.
+	optional<string> unsupported_snapshot_ref;
 	//! History of refs.main per Iceberg spec "snapshot-log": (snapshot_id, raw millis)
 	//! pairs recording each change to current-snapshot-id, sorted ascending by ms.
 	//! Used for spec-compliant point-in-time resolution; side-branch commits are absent.
