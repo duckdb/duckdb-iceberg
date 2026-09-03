@@ -66,6 +66,8 @@ public:
 class IRCAPI {
 public:
 	static const string API_VERSION_1;
+	static constexpr const char *CREDENTIALS_ENDPOINT =
+	    "GET /v1/{prefix}/namespaces/{namespace}/tables/{table}/credentials";
 	//! Returns 'nullopt' if the catalog refused the listing, which must not be read as "the schema is empty".
 	static optional<vector<rest_api_objects::TableIdentifier>>
 	GetTables(ClientContext &context, IcebergCatalog &catalog, const IcebergSchemaEntry &schema);

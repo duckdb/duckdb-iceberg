@@ -122,23 +122,17 @@ attach '' as my_datalake (
 );
 
 statement ok
-call enable_logging();
-
-statement ok
 create schema if not exists my_datalake.new_schema;
 
 statement ok
 drop table if exists my_datalake.new_schema.table_1;
 
+# Nessie LoadTable omits usable storage keys, so credentials are fetched from
+# GET .../tables/{table}/credentials. The table does not exist yet during CREATE.
 statement error
 create table my_datalake.new_schema.table_1 as select range a from range(100);
 ----
-<REGEX>:.*HTTP Error:.*uploading to.*403 Forbidden.*
-
-query I
-select message from duckdb_logs() where message like '%Failed%';
-----
-Failed to create valid secret from Vended Credentials for table 'table_1'
+<REGEX>:.*HTTP Error:.*Could not load Iceberg vended credentials for table 'table_1': GetTableCredentials returned response code NotFound_404 with message "Table does not exist: new_schema.table_1".*
 
 statement ok
 SET httpfs_enable_credential_refresh=true;

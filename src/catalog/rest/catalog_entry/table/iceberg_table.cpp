@@ -1,6 +1,7 @@
 #include "catalog/rest/catalog_entry/table/iceberg_table.hpp"
 
 #include "duckdb/common/case_insensitive_map.hpp"
+#include "duckdb/common/enum_util.hpp"
 #include "duckdb/common/exception.hpp"
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/common/exception/http_exception.hpp"
@@ -512,12 +513,43 @@ static void AddHTTPSecretsToOptions(SecretEntry &http_secret_entry, case_insensi
 	                            : http_kv_secret.TryGetValue("verify_ssl").DefaultCastAs(LogicalType::BOOLEAN);
 }
 
+static bool CreateSecretInputHasStorageAuth(const CreateSecretInput &info) {
+	auto has_option = [&](const char *key) {
+		return info.options.find(key) != info.options.end();
+	};
+	return has_option("key_id") || has_option("secret") || has_option("token") || has_option("account_name") ||
+	       has_option("connection_string") || has_option("bearer_token");
+}
+
+static bool HasUsableStorageAuthentication(const IRCAPITableCredentials &table_credentials) {
+	//! LoadTable storage-credentials take precedence even when individual entries lack keys.
+	if (!table_credentials.storage_credentials.empty()) {
+		return true;
+	}
+	if (table_credentials.config) {
+		return CreateSecretInputHasStorageAuth(*table_credentials.config);
+	}
+	return false;
+}
+
 void IcebergTable::LoadCredentials(ClientContext &context) const {
 	if (catalog.attach_options.access_mode != IRCAccessDelegationMode::VENDED_CREDENTIALS) {
 		// assume secret already exists
 		return;
 	}
-	LoadCredentials(context, GetVendedCredentials(context));
+	auto table_credentials = GetVendedCredentials(context);
+	if (!HasUsableStorageAuthentication(table_credentials) &&
+	    catalog.supported_urls.count(IRCAPI::CREDENTIALS_ENDPOINT)) {
+		auto api_result = IRCAPI::GetTableCredentials(context, catalog, schema, name);
+		if (api_result.error_) {
+			throw HTTPException(StringUtil::Format(
+			    "Could not load Iceberg vended credentials for table '%s': GetTableCredentials returned "
+			    "response code %s with message \"%s\"",
+			    name, EnumUtil::ToString(api_result.status_), api_result.error_->_error.message));
+		}
+		table_credentials = GetVendedCredentials(context, api_result.result_->storage_credentials);
+	}
+	LoadCredentials(context, std::move(table_credentials));
 }
 
 void IcebergTable::LoadCredentials(ClientContext &context, IRCAPITableCredentials table_credentials) const {
