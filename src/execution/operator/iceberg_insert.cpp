@@ -74,7 +74,6 @@ IcebergCopyInput::IcebergCopyInput(ClientContext &context, const IcebergTableMet
                                    const IcebergTableSchema &schema, unique_ptr<BoundCreateTableInfo> ctas_info_p)
     : table_metadata(table_metadata), schema(schema), ctas_info(std::move(ctas_info_p)) {
 	if (!ctas_info) {
-		// table exists, we can already initialize the data path here
 		auto &fs = FileSystem::GetFileSystem(context);
 		data_path = table_metadata.GetDataPath(fs);
 	}

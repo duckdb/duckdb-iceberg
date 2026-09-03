@@ -55,7 +55,7 @@ unique_ptr<GlobalSinkState> IcebergCopyToFile::GetGlobalSinkState(ClientContext 
 
 void IcebergCopyToFile::EnsureTableCreated(ClientContext &context) const {
 	if (!ctas_info) {
-		// every other write path targets a table that already exists, so the plan-time options are final
+		// If there is no ctas_info, the table already exists.
 		return;
 	}
 
