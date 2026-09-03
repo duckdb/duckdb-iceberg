@@ -3,6 +3,8 @@
 #include "core/metadata/manifest/iceberg_manifest.hpp"
 #include "core/metadata/manifest/iceberg_manifest_list.hpp"
 #include "core/metadata/iceberg_table_metadata.hpp"
+#include "core/metadata/partition/iceberg_partition_spec.hpp"
+#include "planning/pruning/iceberg_predicate.hpp"
 #include "planning/pruning/iceberg_table_filter.hpp"
 
 namespace duckdb {
@@ -15,7 +17,9 @@ public:
 	}
 
 	bool ManifestMatchesFilter(const IcebergManifestFile &manifest) const;
-	bool FileMatchesFilter(const IcebergManifestFile &manifest_file, const IcebergManifestEntry &manifest_entry) const;
+	//! Weighs both kinds of evidence per filter: the file's partition values and its own column bounds.
+	METADATA_STATS_PUSHDOWN FileMatchesFilter(const IcebergManifestFile &manifest_file,
+	                                          const IcebergManifestEntry &manifest_entry) const;
 	bool DeleteManifestMatchesDataFile(const IcebergManifestFile &delete_manifest,
 	                                   const IcebergManifestFile &data_manifest,
 	                                   const IcebergManifestEntry &data_manifest_entry) const;
@@ -28,7 +32,18 @@ public:
 	static partition_value_map_t PartitionValueMap(const IcebergDataFile &data_file);
 
 private:
-	bool FilePartitionMatchesFilter(const IcebergDataFile &data_file, const IcebergManifestFile &manifest_file) const;
+	//! A partition field paired with this file's value for it. `owner_key` is the column the filter is
+	//! registered against, which for a nested source differs from the field's own `source_column`.
+	struct PartitionFieldValue {
+		ColumnIndex owner_key;
+		reference<const IcebergPartitionSpecField> field;
+		reference<const Value> value;
+		reference<const ColumnIndex> source_column;
+	};
+
+	//! Only fields on a filtered column are included; a column can source several fields.
+	vector<PartitionFieldValue> PartitionValuesForFilteredColumns(const IcebergDataFile &data_file,
+	                                                              const IcebergManifestFile &manifest_file) const;
 	bool EqualityDeleteMatchesDataFile(const IcebergDataFile &delete_file, const IcebergDataFile &data_file) const;
 
 private:
