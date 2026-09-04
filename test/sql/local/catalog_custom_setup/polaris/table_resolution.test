@@ -113,7 +113,7 @@ tr_gamma	__
 
 # the namespaces were listed, but no table metadata was requested at all
 query I
-SELECT count(*) FROM duckdb_logs_parsed('HTTP') WHERE request.url LIKE '%/tables/%';
+SELECT count(*) FROM duckdb_logs_parsed('HTTP') WHERE request.url LIKE '%table_resolution/tables/%';
 ----
 0
 
@@ -159,7 +159,7 @@ tr_gamma	x	VARCHAR
 
 # each of the three tables was loaded exactly once
 query I
-SELECT count(*) FROM duckdb_logs_parsed('HTTP') WHERE request.url LIKE '%/tables/tr_%';
+SELECT count(*) FROM duckdb_logs_parsed('HTTP') WHERE request.url LIKE '%table_resolution/tables/tr_%';
 ----
 3
 
@@ -213,7 +213,7 @@ statement ok
 COMMIT;
 
 query I
-SELECT count(*) FROM duckdb_logs_parsed('HTTP') WHERE request.url LIKE '%/tables/tr_%';
+SELECT count(*) FROM duckdb_logs_parsed('HTTP') WHERE request.url LIKE '%table_resolution/tables/tr_%';
 ----
 3
 
