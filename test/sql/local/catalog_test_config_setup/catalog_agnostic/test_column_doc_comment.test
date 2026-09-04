@@ -14,7 +14,6 @@ require iceberg
 
 require httpfs
 
-
 statement ok
 CALL enable_logging(['HTTP', 'Iceberg']);
 

@@ -1,0 +1,42 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/test_column_doc_lazy_loaded.test
+# description: Iceberg table schema lazily loaded
+# group: [catalog_agnostic]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require-env DUCKDB_ICEBERG_HAVE_GENERATED_DATA
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+statement ok
+CALL enable_logging(['HTTP', 'Iceberg']);
+
+statement ok
+CALL truncate_duckdb_logs();
+
+query II
+SELECT table_name, column_name FROM information_schema.columns where table_catalog = 'my_datalake' and table_name = 'column_doc_comment' order by column_name
+----
+column_doc_comment	id
+column_doc_comment	name
+column_doc_comment	population
+
+query I
+select count(*) from duckdb_logs()
+where type = 'Iceberg'
+  and message = 'Lazily loading columns for Iceberg table ''default.column_doc_comment''';
+----
+1
+
+query I
+select count(*) from duckdb_logs_parsed('HTTP')
+where request.type = 'GET'
+  and request.url like '%/namespaces/default/tables/column_doc_comment';
+----
+1
