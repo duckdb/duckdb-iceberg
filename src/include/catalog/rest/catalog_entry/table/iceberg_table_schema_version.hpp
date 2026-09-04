@@ -39,8 +39,7 @@ public:
 	                           ClientContext &context) override;
 
 protected:
-	mutable ColumnList columns;
-	mutable bool columns_loaded;
+	mutable optional<ColumnList> columns;
 	optional_ptr<ClientContext> context;
 
 public:
