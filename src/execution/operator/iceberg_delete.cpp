@@ -1,3 +1,4 @@
+#include "duckdb/execution/operator/persistent/physical_merge_into.hpp"
 #include "execution/operator/iceberg_delete.hpp"
 
 #include "iceberg_logging.hpp"
@@ -59,6 +60,12 @@ static bool IsScanCreatedByDelete(const PhysicalTableScan &scan) {
 }
 
 optional_ptr<PhysicalTableScan> IcebergDelete::FindIcebergScan(PhysicalOperator &plan) {
+	if (plan.type == PhysicalOperatorType::MERGE_ACTION_SOURCE) {
+		// the rows of a merge action are pushed into the source by the merge into - look for the scan in the plan
+		// that the merge into reads from
+		auto &merge_input = plan.Cast<PhysicalMergeActionSource>().merge_input;
+		return merge_input ? FindIcebergScan(*merge_input) : nullptr;
+	}
 	if (plan.type == PhysicalOperatorType::TABLE_SCAN) {
 		// does this emit the virtual columns?
 		auto &scan = plan.Cast<PhysicalTableScan>();

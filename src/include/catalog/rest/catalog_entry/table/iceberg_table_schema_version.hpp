@@ -19,6 +19,8 @@ public:
 	vector<column_t> GetRowIdColumns() const override;
 
 public:
+	const ColumnList &GetColumns() const override;
+
 	unique_ptr<BaseStatistics> GetStatistics(ClientContext &context, column_t column_id) override;
 	void PrepareIcebergScanFromEntry(ClientContext &context) const;
 	TableFunction GetScanFunction(ClientContext &context, unique_ptr<FunctionData> &bind_data) override;
@@ -33,6 +35,9 @@ public:
 
 	void BindUpdateConstraints(Binder &binder, LogicalGet &get, LogicalProjection &proj, LogicalUpdate &update,
 	                           ClientContext &context) override;
+
+protected:
+	ColumnList columns;
 
 public:
 	IcebergTable &table_info;
