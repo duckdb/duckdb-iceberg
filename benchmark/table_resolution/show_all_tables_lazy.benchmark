@@ -36,6 +36,7 @@ CREATE SECRET (
 load benchmark/load_helpers/create_many_tables.sql
 
 run
+DETACH IF EXISTS my_datalake;
 ATTACH OR REPLACE '' AS my_datalake (
     TYPE ICEBERG,
     CLIENT_ID 'admin',
@@ -43,4 +44,4 @@ ATTACH OR REPLACE '' AS my_datalake (
     URI 'http://127.0.0.1:8182',
     TABLE_RESOLUTION 'lazy'
 );
-SHOW ALL TABLES;
+SELECT * FROM information_schema.columns;

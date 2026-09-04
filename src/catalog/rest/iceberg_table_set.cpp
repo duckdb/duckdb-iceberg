@@ -121,7 +121,9 @@ void IcebergTableSet::Scan(ClientContext &context, const std::function<void(Cata
 		}
 
 		if (!table_info.schema_versions.empty()) {
-			// table has been loaded already
+			// The table has already been resolved (e.g. via DESCRIBE or a scan), so its full schema -
+			// including column comments mapped from the Iceberg field 'doc' - is available. Surface the
+			// resolved entry instead of the placeholder so listings reflect the real columns.
 			auto resolved = table_info.GetLatestSchema();
 			if (resolved) {
 				callback(*resolved);
