@@ -8,6 +8,7 @@
 #include "core/metadata/iceberg_table_metadata.hpp"
 #include "catalog/rest/transaction/iceberg_transaction_data.hpp"
 #include "rest_catalog/objects/storage_credential.hpp"
+#include "iceberg_attach.hpp"
 
 namespace duckdb {
 class IcebergTableSchema;
