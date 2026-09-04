@@ -14,8 +14,56 @@
 #include "planning/iceberg_multi_file_reader.hpp"
 #include "duckdb/parser/expression/constant_expression.hpp"
 #include "duckdb/planner/operator/logical_get.hpp"
+#include "duckdb/optimizer/topn_optimizer.hpp"
 
 namespace duckdb {
+
+static optional_ptr<LogicalGet> GetTopNSource(ClientContext &context, LogicalOperator &op) {
+	if (!TopN::CanOptimize(op, &context)) {
+		return nullptr;
+	}
+	auto current = op.children[0].get();
+	while (current->type == LogicalOperatorType::LOGICAL_PROJECTION) {
+		current = current->children[0].get();
+	}
+	if (current->type != LogicalOperatorType::LOGICAL_ORDER_BY) {
+		return nullptr;
+	}
+	current = current->children[0].get();
+	while (current->type == LogicalOperatorType::LOGICAL_PROJECTION ||
+	       current->type == LogicalOperatorType::LOGICAL_FILTER) {
+		current = current->children[0].get();
+	}
+	if (current->type != LogicalOperatorType::LOGICAL_GET) {
+		return nullptr;
+	}
+	return current->Cast<LogicalGet>();
+}
+
+static bool IsIcebergScan(const LogicalGet &get) {
+	return get.function.name == "iceberg_scan" &&
+	       get.function.get_multi_file_reader == IcebergMultiFileReader::CreateInstance && get.bind_data &&
+	       get.function.get_row_id_columns;
+}
+
+static bool SupportsLateMaterialization(const LogicalGet &get) {
+	auto &multi_file_data = get.bind_data->Cast<MultiFileBindData>();
+	if (!multi_file_data.file_list) {
+		return false;
+	}
+	auto &file_list = multi_file_data.file_list->Cast<IcebergMultiFileList>();
+	return file_list.SupportsLateMaterialization();
+}
+
+static void EnableTopNLateMaterialization(ClientContext &context, unique_ptr<LogicalOperator> &plan) {
+	auto get = GetTopNSource(context, *plan);
+	if (get && IsIcebergScan(*get) && SupportsLateMaterialization(*get)) {
+		get->function.late_materialization = true;
+	}
+	for (auto &child : plan->children) {
+		EnableTopNLateMaterialization(context, child);
+	}
+}
 
 IcebergOptimizerRoutine::IcebergOptimizerRoutine(ClientContext &context) : context(context) {
 }
@@ -72,6 +120,7 @@ void IcebergOptimizer::PreOptimize(OptimizerExtensionInput &input, unique_ptr<Lo
 		return;
 	}
 	iceberg_optimizer_routine.VisitOperator(plan);
+	EnableTopNLateMaterialization(input.context, plan);
 }
 
 OptimizerExtension IcebergOptimizer::Create() {

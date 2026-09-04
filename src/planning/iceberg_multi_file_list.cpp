@@ -90,6 +90,25 @@ IcebergMultiFileList::IcebergMultiFileList(shared_ptr<IcebergScanPlanState> shar
 IcebergMultiFileList::~IcebergMultiFileList() {
 }
 
+unique_ptr<MultiFileList> IcebergMultiFileList::Copy() const {
+	auto result = unique_ptr<IcebergMultiFileList>(new IcebergMultiFileList(shared_state));
+	result->have_bound = have_bound;
+	result->names = names;
+	result->types = types;
+	for (auto &entry : table_filters) {
+		result->table_filters.PushFilter(entry.first, entry.second->Copy());
+	}
+	{
+		annotated_lock_guard<annotated_mutex> guard(shared_state->lock);
+		auto order_options = scan_order.CopyOptions();
+		if (order_options) {
+			result->scan_order.Set(std::move(order_options));
+		}
+	}
+	// Per-view providers, cursors, manifest selections, and delete state start uninitialized.
+	return std::move(result);
+}
+
 const string &IcebergMultiFileList::GetPath() const {
 	return shared_state->path;
 }
@@ -113,6 +132,49 @@ const IcebergSnapshotScanInfo &IcebergMultiFileList::GetSnapshot() const {
 
 const IcebergTableSchema &IcebergMultiFileList::GetSchema() const {
 	return shared_state->scan_info->schema;
+}
+
+bool IcebergMultiFileList::SupportsLateMaterialization() const {
+	if (GetMetadata().iceberg_version != 2) {
+		return false;
+	}
+	if (HasTransactionData() && !GetTransactionData().alters.empty()) {
+		return false;
+	}
+	return !HasLiveEqualityDeletes();
+}
+
+bool IcebergMultiFileList::HasLiveEqualityDeletes() const {
+	vector<idx_t> manifest_indexes;
+	optional_ptr<IcebergScanPlanProvider> provider;
+	idx_t filter_count;
+	{
+		annotated_lock_guard<annotated_mutex> guard(shared_state->lock);
+		InitializeView(guard);
+		provider = scan_plan_provider.get();
+		manifest_indexes.reserve(delete_manifests.size());
+		for (idx_t manifest_idx = 0; manifest_idx < delete_manifests.size(); manifest_idx++) {
+			manifest_indexes.push_back(manifest_idx);
+		}
+		filter_count = table_filters.FilterCount();
+	}
+	if (manifest_indexes.empty()) {
+		return false;
+	}
+
+	provider->ReadDeleteManifests(manifest_indexes, filter_count);
+
+	annotated_lock_guard<annotated_mutex> guard(shared_state->lock);
+	annotated_lock_guard<annotated_mutex> delete_guard(shared_state->delete_lock);
+	for (auto manifest_idx : manifest_indexes) {
+		for (auto &manifest_entry : delete_manifests[manifest_idx].entry.GetManifestEntries()) {
+			if (manifest_entry.status != IcebergManifestEntryStatusType::DELETED &&
+			    manifest_entry.data_file.content == IcebergManifestEntryContentType::EQUALITY_DELETES) {
+				return true;
+			}
+		}
+	}
+	return false;
 }
 
 IcebergScanPlanProvider &IcebergMultiFileList::GetScanPlanProvider() const {
