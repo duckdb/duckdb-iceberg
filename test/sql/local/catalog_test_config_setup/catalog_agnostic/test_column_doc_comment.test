@@ -16,19 +16,14 @@ require httpfs
 
 
 statement ok
-set enable_logging=true
+CALL enable_logging(['HTTP', 'Iceberg']);
 
 statement ok
-set logging_level='debug'
-
-# Resolve the table so its full schema is loaded. Until a table is resolved the
-# catalog only exposes a lazy placeholder column (see #515), so column comments
-# are not available in a bare listing.
-statement ok
-describe my_datalake.default.column_doc_comment;
+CALL truncate_duckdb_logs();
 
 # The Iceberg field 'doc' is mapped to the DuckDB column comment. Fields without
-# a 'doc' (e.g. 'name') have a NULL comment.
+# a 'doc' (e.g. 'name') have a NULL comment. Reading the catalog's column list
+# lazily loads the table metadata instead of exposing a placeholder column.
 query II
 select column_name, comment from duckdb_columns()
 where database_name = 'my_datalake' and table_name = 'column_doc_comment'
@@ -37,3 +32,17 @@ order by column_index;
 id	Primary identifier
 population	Resident count, 2024 census
 name	NULL
+
+query I
+select count(*) from duckdb_logs()
+where type = 'Iceberg'
+  and message = 'Lazily loading columns for Iceberg table ''default.column_doc_comment''';
+----
+1
+
+query I
+select count(*) from duckdb_logs_parsed('HTTP')
+where request.type = 'GET'
+  and request.url like '%/namespaces/default/tables/column_doc_comment';
+----
+1

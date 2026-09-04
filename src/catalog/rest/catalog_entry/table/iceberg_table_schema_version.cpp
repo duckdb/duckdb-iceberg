@@ -13,6 +13,7 @@
 #include "duckdb/planner/operator/logical_get.hpp"
 #include "duckdb/common/multi_file/multi_file_reader.hpp"
 #include "duckdb/planner/tableref/bound_at_clause.hpp"
+#include "duckdb/catalog/entry_lookup_info.hpp"
 
 #include "catalog/rest/iceberg_catalog.hpp"
 #include "catalog/rest/catalog_entry/schema/iceberg_schema_entry.hpp"
@@ -24,6 +25,7 @@
 #include "catalog/rest/catalog_entry/table/iceberg_table.hpp"
 #include "common/iceberg_default.hpp"
 #include "catalog/rest/transaction/iceberg_transaction.hpp"
+#include "iceberg_logging.hpp"
 
 namespace duckdb {
 class OAuth2Authorization;
@@ -32,12 +34,35 @@ constexpr column_t IcebergMultiFileReader::COLUMN_IDENTIFIER_LAST_SEQUENCE_NUMBE
 IcebergTableSchemaVersion::IcebergTableSchemaVersion(IcebergTable &table_info, Catalog &catalog,
                                                      SchemaCatalogEntry &schema, CreateTableInfo &info,
                                                      optional_idx schema_id)
-    : TableCatalogEntry(catalog, schema, info), columns(std::move(info.columns)), table_info(table_info),
-      schema_id(schema_id) {
+    : TableCatalogEntry(catalog, schema, info), columns(std::move(info.columns)), columns_loaded(true),
+      table_info(table_info), schema_id(schema_id) {
+	this->internal = false;
+}
+
+IcebergTableSchemaVersion::IcebergTableSchemaVersion(IcebergTable &table_info, Catalog &catalog,
+                                                     SchemaCatalogEntry &schema, CreateTableInfo &info,
+                                                     ClientContext &context)
+    : TableCatalogEntry(catalog, schema, info), columns_loaded(false), context(context), table_info(table_info),
+      schema_id() {
 	this->internal = false;
 }
 
 const ColumnList &IcebergTableSchemaVersion::GetColumns() const {
+	if (!columns_loaded) {
+		if (!context) {
+			throw InternalException("Lazy Iceberg table entry does not have a client context");
+		}
+		auto &mutable_context = *context.get_mutable();
+		DUCKDB_LOG(mutable_context, IcebergLogType, "Lazily loading columns for Iceberg table '%s'",
+		           table_info.GetTableKey());
+		auto lookup = EntryLookupInfo(CatalogType::TABLE_ENTRY, QualifiedName(Identifier(table_info.name)));
+		auto resolved_entry = table_info.schema.tables.GetEntry(mutable_context, lookup);
+		if (!resolved_entry) {
+			throw CatalogException("Table %s does not exist", table_info.GetTableKey());
+		}
+		columns = resolved_entry->Cast<IcebergTableSchemaVersion>().GetColumns().Copy();
+		columns_loaded = true;
+	}
 	return columns;
 }
 
