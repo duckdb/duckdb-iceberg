@@ -30,10 +30,9 @@ namespace duckdb {
 IcebergTableSet::IcebergTableSet(IcebergSchemaEntry &schema) : schema(schema), catalog(schema.ParentCatalog()) {
 }
 
-bool IcebergTableSet::FillEntry(ClientContext &context, IcebergTable &table, IcebergTableLoadLevel load_level) {
-	D_ASSERT(load_level != IcebergTableLoadLevel::NONE);
-	// If the table is already fully loaded, no need to fill again
-	if (table.load_level == IcebergTableLoadLevel::FULL) {
+bool IcebergTableSet::FillEntry(ClientContext &context, IcebergTable &table) {
+	// If the table is already loaded, no need to fill again
+	if (!table.schema_versions.empty()) {
 		return true;
 	}
 
@@ -44,9 +43,8 @@ bool IcebergTableSet::FillEntry(ClientContext &context, IcebergTable &table, Ice
 	if (ic_catalog.attach_options.max_table_staleness_micros.IsValid()) {
 		auto cache_hit = ic_catalog.table_request_cache.Get(
 		    context, table_key, [&](const rest_api_objects::LoadTableResult &cached_result) {
-			    // Use the cached result instead of making a new request. Only FULL responses are ever
-			    // cached, so a hit satisfies a listing load as well.
-			    table.InitializeFromLoadTableResult(cached_result, IcebergTableLoadLevel::FULL);
+			    // Use the cached result instead of making a new request
+			    table.InitializeFromLoadTableResult(cached_result);
 		    });
 		if (cache_hit) {
 			return true;
@@ -54,7 +52,7 @@ bool IcebergTableSet::FillEntry(ClientContext &context, IcebergTable &table, Ice
 	}
 
 	// No valid cached result or caching disabled, make a new request
-	auto get_table_result = IRCAPI::GetTable(context, ic_catalog, schema, table.name, load_level);
+	auto get_table_result = IRCAPI::GetTable(context, ic_catalog, schema, table.name);
 	if (get_table_result.error_) {
 		if (get_table_result.status_ == HTTPStatusCode::NotFound_404) {
 			// Glue returns 404 when a table is not an Iceberg Table with the error message
@@ -73,12 +71,8 @@ bool IcebergTableSet::FillEntry(ClientContext &context, IcebergTable &table, Ice
 		                       EnumUtil::ToString(get_table_result.status_), get_table_result.error_->_error.message));
 	}
 	auto &load_table_result = *get_table_result.result_;
-	table.InitializeFromLoadTableResult(load_table_result, load_level);
-	if (load_level == IcebergTableLoadLevel::FULL) {
-		// A listing response carries neither the full snapshot log nor storage credentials, so caching it
-		// would hand an incomplete table to a later reader that asked for a complete one.
-		ic_catalog.table_request_cache.SetOrOverwrite(table_key, std::move(get_table_result.result_));
-	}
+	table.InitializeFromLoadTableResult(load_table_result);
+	ic_catalog.table_request_cache.SetOrOverwrite(table_key, std::move(get_table_result.result_));
 	return true;
 }
 
@@ -116,9 +110,9 @@ void IcebergTableSet::Scan(ClientContext &context, const std::function<void(Cata
 		auto table_key = table_info.GetTableKey();
 		iceberg_transaction.tables[table_key] = entry.second;
 
-		if (eager && table_info.load_level == IcebergTableLoadLevel::NONE) {
+		if (eager && table_info.schema_versions.empty()) {
 			try {
-				FillEntry(context, table_info, IcebergTableLoadLevel::LISTING);
+				FillEntry(context, table_info);
 			} catch (std::exception &ex) {
 				ErrorData error(ex);
 				DUCKDB_LOG_WARNING(context, "Could not resolve the columns of Iceberg table '%s' while listing: %s",
@@ -126,7 +120,7 @@ void IcebergTableSet::Scan(ClientContext &context, const std::function<void(Cata
 			}
 		}
 
-		if (table_info.load_level != IcebergTableLoadLevel::NONE) {
+		if (!table_info.schema_versions.empty()) {
 			// table has been loaded already
 			auto resolved = table_info.GetLatestSchema();
 			if (resolved) {

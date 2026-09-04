@@ -164,23 +164,6 @@ SELECT count(*) FROM duckdb_logs_parsed('HTTP') WHERE request.url LIKE '%table_r
 ----
 3
 
-# and every one of those loads asked for only the referenced snapshots
-query I
-SELECT count(*) FROM duckdb_logs_parsed('HTTP')
-WHERE request.url LIKE '%table_resolution/tables/tr_%' AND request.url NOT LIKE '%snapshots=refs';
-----
-0
-
-# resolving a listing never vends storage credentials.
-# Scoped to the LoadTable requests on purpose: the ListTables call itself still carries the
-# access-delegation header, which is pre-existing behaviour and unrelated to table resolution.
-query I
-SELECT count(*) FROM duckdb_logs_parsed('HTTP')
-WHERE request.url LIKE '%/tables/tr_%'
-  AND contains(map_keys(request.headers), 'X-Iceberg-Access-Delegation');
-----
-0
-
 statement ok
 CALL truncate_duckdb_logs();
 

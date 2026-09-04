@@ -1,27 +1,4 @@
 -- Load helper for the benchmark/table_resolution benchmarks.
---
--- Creates enough tables in the fixture's 'default' namespace that a listing has to resolve a
--- meaningful number of them, then attaches the catalog that the benchmark actually measures.
---
--- The S3 secret is created by the benchmark's own init step, not here: the benchmark runner reads
--- this whole file as the load query and would discard anything written alongside it.
---
--- Two attaches on purpose. The DDL runs against the catalog directly on 8181, because the
--- benchmarks re-run this load before every timed run and there is no reason to pay the injected
--- latency 119 times for setup. Only 'my_datalake' goes through toxiproxy on 8182, so the latency
--- lands exactly on the listing being measured.
---
--- That proxy is required, not optional. The fixture is on localhost, where a catalog round trip
--- is sub-millisecond scheduling noise, so an unproxied measurement is both meaninglessly small
--- and inconsistent between iterations. toxiproxy injects a fixed, repeatable per-response
--- latency that stands in for a catalog actually reached over a network:
---
---   toxiproxy-server > /dev/null 2>&1 &
---   toxiproxy-cli create --listen 127.0.0.1:8182 --upstream 127.0.0.1:8181 iceberg-catalog
---   toxiproxy-cli toxic add --type latency --attribute latency=50 --attribute jitter=5 iceberg-catalog
---
--- Without it, nothing listens on 8182 and the second ATTACH below fails with a connection error.
-
 ATTACH IF NOT EXISTS '' AS setup_catalog (
     TYPE ICEBERG,
     CLIENT_ID 'admin',
@@ -130,3 +107,4 @@ create table if not exists setup_catalog.default.t97 (a int);
 create table if not exists setup_catalog.default.t98 (a int);
 create table if not exists setup_catalog.default.t99 (a int);
 create table if not exists setup_catalog.default.t100 (a int);
+create table if not exists setup_catalog.default.t101 (a int);

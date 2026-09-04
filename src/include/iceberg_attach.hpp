@@ -21,13 +21,6 @@ enum class IRCAccessDelegationMode : uint8_t { NONE, VENDED_CREDENTIALS };
 //! 'information_schema.columns' report real columns, at the cost of one request per table.
 enum class IcebergTableResolution : uint8_t { LAZY, EAGER };
 
-//! How completely a table's metadata has been resolved. The order is significant: a load satisfies
-//! every level at or below it.
-//! LISTING requests with '?snapshots=refs' and no credential vending.
-//!    this is to get table schema information.
-//! FULL requests all snapshot information and vended credentials.
-enum class IcebergTableLoadLevel : uint8_t { NONE = 0, LISTING = 1, FULL = 2 };
-
 struct IcebergAttachOptions {
 	string catalog_uri;
 	string warehouse;

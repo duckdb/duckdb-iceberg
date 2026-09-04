@@ -69,8 +69,7 @@ public:
 	void InitSchemaVersions();
 
 	bool HasTransactionUpdates() const;
-	void InitializeFromLoadTableResult(const rest_api_objects::LoadTableResult &load_table_result,
-	                                   IcebergTableLoadLevel level = IcebergTableLoadLevel::FULL);
+	void InitializeFromLoadTableResult(const rest_api_objects::LoadTableResult &load_table_result);
 	void RefreshFromCatalog(ClientContext &context);
 
 public:
@@ -85,10 +84,7 @@ public:
 	unique_ptr<IcebergTableSchemaVersion> dummy_entry;
 	unique_ptr<IcebergTransactionData> transaction_data;
 	//! The cached response this table was initialized from, used as an identity and never dereferenced.
-	//! Only set for FULL loads, whose response outlives this table in the catalog's cache.
 	optional_ptr<const rest_api_objects::LoadTableResult> initialization_source;
-	//! How completely this table's metadata has been resolved.
-	IcebergTableLoadLevel load_level = IcebergTableLoadLevel::NONE;
 
 private:
 	//! Unchanged by rename, used to check for a rename

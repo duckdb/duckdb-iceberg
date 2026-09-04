@@ -15,6 +15,7 @@ require iceberg
 require httpfs
 
 # REQUIRES toxiproxy on 127.0.0.1:8182, in front of the fixture catalog on 8181.
+# cannot inject a delay via debug_fs since the http calls are not filesystem calls
 #
 # The fixture runs on localhost, and toxiproxy adds a jitter delay so we can consistently test this
 # The commands below run the toxiproxy server 

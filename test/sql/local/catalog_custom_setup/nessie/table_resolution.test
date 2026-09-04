@@ -180,13 +180,6 @@ SELECT count(*) FROM duckdb_logs_parsed('HTTP') WHERE request.url LIKE '%/tables
 ----
 3
 
-# and every one of those loads asked for only the referenced snapshots
-query I
-SELECT count(*) FROM duckdb_logs_parsed('HTTP')
-WHERE request.url LIKE '%/tables/tr_%' AND request.url NOT LIKE '%snapshots=refs';
-----
-0
-
 statement ok
 CALL truncate_duckdb_logs();
 
