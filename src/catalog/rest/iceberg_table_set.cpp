@@ -74,18 +74,17 @@ bool IcebergTableSet::FillEntry(ClientContext &context, IcebergTable &table) {
 	return true;
 }
 
-IcebergTableSchemaVersion &IcebergTableSet::GetOrCreateDummy(IcebergTable &table_info) const {
-	if (table_info.dummy_entry) {
-		return *table_info.dummy_entry;
+IcebergTableSchemaVersion &IcebergTableSet::GetOrCreateLazyEntry(ClientContext &context,
+                                                                 IcebergTransaction &transaction,
+                                                                 IcebergTable &table_info) const {
+	auto table_key = table_info.GetTableKey();
+	auto existing_entry = transaction.lazy_table_entries.find(table_key);
+	if (existing_entry != transaction.lazy_table_entries.end()) {
+		return *existing_entry->second;
 	}
-	// create a table entry with fake schema data to avoid calling the LoadTableInformation endpoint for every
-	// table while listing schemas
+
 	CreateTableInfo info(schema, Identifier(table_info.name));
-	vector<ColumnDefinition> columns;
-	auto col = ColumnDefinition(Identifier("__"), LogicalType::UNKNOWN);
-	columns.push_back(std::move(col));
-	info.columns = ColumnList(std::move(columns));
-	auto table_entry = make_uniq<IcebergTableSchemaVersion>(table_info, catalog, schema, info, optional_idx());
+	auto table_entry = make_uniq<IcebergTableSchemaVersion>(table_info, catalog, schema, info, context);
 	if (!table_entry->internal) {
 		table_entry->internal = schema.internal;
 	}
@@ -93,32 +92,38 @@ IcebergTableSchemaVersion &IcebergTableSet::GetOrCreateDummy(IcebergTable &table
 	if (result->name.empty()) {
 		throw InternalException("IcebergTableSet::CreateEntry called with empty name");
 	}
-	table_info.dummy_entry = std::move(table_entry);
-	return *table_info.dummy_entry;
+	transaction.lazy_table_entries.emplace(table_key, std::move(table_entry));
+	return *result;
 }
 
 void IcebergTableSet::Scan(ClientContext &context, const std::function<void(CatalogEntry &)> &callback) {
-	annotated_lock_guard<annotated_mutex> lock(entry_lock);
 	auto &iceberg_transaction = IcebergTransaction::Get(context, catalog);
-	LoadEntriesInternal(context);
-	for (auto &entry : entries) {
-		auto &table_info = *entry.second;
-		auto table_key = table_info.GetTableKey();
-		iceberg_transaction.tables[table_key] = entry.second;
+	vector<reference<CatalogEntry>> scan_entries;
+	{
+		annotated_lock_guard<annotated_mutex> lock(entry_lock);
+		LoadEntriesInternal(context);
+		for (auto &entry : entries) {
+			auto &table_info = *entry.second;
+			auto table_key = table_info.GetTableKey();
+			iceberg_transaction.tables[table_key] = entry.second;
 
-		if (!table_info.schema_versions.empty()) {
-			// The table has already been resolved (e.g. via DESCRIBE or a scan), so its full schema -
-			// including column comments mapped from the Iceberg field 'doc' - is available. Surface the
-			// resolved entry instead of the placeholder so listings reflect the real columns.
-			auto resolved = table_info.GetLatestSchema();
-			if (resolved) {
-				callback(*resolved);
-				continue;
+			if (!table_info.schema_versions.empty()) {
+				// The table has already been resolved (e.g. via DESCRIBE or a scan), so its full schema -
+				// including column comments mapped from the Iceberg field 'doc' - is available. Surface the
+				// resolved entry instead of the placeholder so listings reflect the real columns.
+				auto resolved = table_info.GetLatestSchema();
+				if (resolved) {
+					scan_entries.emplace_back(*resolved);
+					continue;
+				}
 			}
-		}
 
-		auto &dummy = GetOrCreateDummy(table_info);
-		callback(dummy);
+			auto &lazy_entry = GetOrCreateLazyEntry(context, iceberg_transaction, table_info);
+			scan_entries.emplace_back(lazy_entry);
+		}
+	}
+	for (auto &entry : scan_entries) {
+		callback(entry.get());
 	}
 }
 
