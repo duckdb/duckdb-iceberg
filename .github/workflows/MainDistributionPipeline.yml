@@ -17,7 +17,7 @@ jobs:
     uses: duckdb/extension-ci-tools/.github/workflows/_extension_distribution.yml@main
     with:
       extension_name: iceberg
-      duckdb_version: 31151d40e6906f2056db8a2c45b336b153c9f871
+      duckdb_version: c25018968c2ed82ae3a8b3eda4c6e6291c9782ce
       ci_tools_version: main
       exclude_archs: 'windows_amd64_mingw'
       extra_toolchains: 'python3'
@@ -29,7 +29,7 @@ jobs:
     secrets: inherit
     with:
       extension_name: iceberg
-      duckdb_version: 31151d40e6906f2056db8a2c45b336b153c9f871
+      duckdb_version: c25018968c2ed82ae3a8b3eda4c6e6291c9782ce
       ci_tools_version: main
       exclude_archs: 'windows_amd64_mingw'
       deploy_latest: ${{ startsWith(github.ref, 'refs/heads/v') || github.ref == 'refs/heads/main' }}
@@ -40,6 +40,6 @@ jobs:
     uses: duckdb/extension-ci-tools/.github/workflows/_extension_code_quality.yml@main
     with:
       extension_name: iceberg
-      duckdb_version: 31151d40e6906f2056db8a2c45b336b153c9f871
+      duckdb_version: c25018968c2ed82ae3a8b3eda4c6e6291c9782ce
       ci_tools_version: main
       format_checks: 'format'
