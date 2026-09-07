@@ -62,6 +62,8 @@ call truncate_duckdb_logs();
 statement ok
 select * from my_datalake.default.test;
 
+mode skip Needs https://github.com/duckdblabs/duckdb-internal/issues/10671 to re-enable
+
 # no extra calls at all on second request
 query I
 select count(*) from duckdb_logs_parsed('HTTP');
@@ -74,4 +76,4 @@ abort;
 statement ok
 drop table my_datalake.default.test;
 
-
+mode unskip
