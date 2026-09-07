@@ -10,6 +10,7 @@
 #include "duckdb/planner/tableref/bound_at_clause.hpp"
 #include "duckdb/planner/expression_binder/table_function_binder.hpp"
 #include "duckdb/execution/expression_executor.hpp"
+#include "duckdb/logging/logger.hpp"
 
 #include "catalog/rest/api/catalog_api.hpp"
 #include "catalog/rest/api/catalog_utils.hpp"
@@ -30,6 +31,7 @@ IcebergTableSet::IcebergTableSet(IcebergSchemaEntry &schema) : schema(schema), c
 }
 
 bool IcebergTableSet::FillEntry(ClientContext &context, IcebergTable &table) {
+	// If the table is already loaded, no need to fill again
 	if (!table.schema_versions.empty()) {
 		return true;
 	}
