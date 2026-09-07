@@ -466,6 +466,18 @@ int64_t IcebergManifestEntry::GetSnapshotId() const {
 	return *snapshot_id;
 }
 
+int64_t IcebergManifestEntry::GetSnapshotId(const IcebergManifestFile &manifest_file) const {
+	if (!snapshot_id) {
+		if (!manifest_file.added_snapshot_id) {
+			throw InvalidConfigurationException(
+			    "'manifest_entry.snapshot_id' is NULL and 'manifest_file.added_snapshot_id' is not set, so the "
+			    "snapshot id can not be inherited");
+		}
+		return *manifest_file.added_snapshot_id;
+	}
+	return *snapshot_id;
+}
+
 static Value CreateFieldID(int32_t field_id, bool nullable) {
 	child_list_t<Value> fields;
 	fields.emplace_back("__duckdb_field_id", Value::INTEGER(field_id));

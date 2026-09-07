@@ -554,6 +554,12 @@ void IcebergMultiFileReader::FinalizeChunk(ClientContext &context, const MultiFi
 	}
 }
 
+static void RejectIncrementalRangeCombination(const IcebergOptions &options, const char *key) {
+	if (options.incremental_range.IsSet()) {
+		throw InvalidInputException("Can't use '%s' in combination with 'start_snapshot_id' or 'end_snapshot_id'", key);
+	}
+}
+
 bool IcebergMultiFileReader::ParseOption(const Identifier &key, const Value &val, MultiFileOptions &options,
                                          ClientContext &context) {
 	auto &snapshot_lookup = this->options.snapshot_lookup;
@@ -584,6 +590,7 @@ bool IcebergMultiFileReader::ParseOption(const Identifier &key, const Value &val
 		if (snapshot_lookup->GetSource() != SnapshotSource::LATEST) {
 			throw InvalidInputException("Can't use 'snapshot_from_id' in combination with 'snapshot_from_timestamp'");
 		}
+		RejectIncrementalRangeCombination(this->options, "snapshot_from_id");
 		snapshot_lookup.emplace(IcebergSnapshotLookup::FromSnapshotId(val.GetValue<uint64_t>()));
 		return true;
 	}
@@ -591,8 +598,24 @@ bool IcebergMultiFileReader::ParseOption(const Identifier &key, const Value &val
 		if (snapshot_lookup->GetSource() != SnapshotSource::LATEST) {
 			throw InvalidInputException("Can't use 'snapshot_from_id' in combination with 'snapshot_from_timestamp'");
 		}
+		RejectIncrementalRangeCombination(this->options, "snapshot_from_timestamp");
 		snapshot_lookup.emplace(IcebergSnapshotLookup::FromTimestamp(
 		    val.DefaultCastAs(LogicalType::TIMESTAMP_MS).GetValue<timestamp_ms_t>()));
+		return true;
+	}
+	if (key == "start_snapshot_id" || key == "end_snapshot_id") {
+		//! 'named_parameter_map_t' has no defined iteration order, so both directions are checked.
+		if (snapshot_lookup->GetSource() != SnapshotSource::LATEST) {
+			throw InvalidInputException("Can't use '%s' in combination with 'snapshot_from_id' or "
+			                            "'snapshot_from_timestamp'",
+			                            key.GetIdentifierName());
+		}
+		auto snapshot_id = val.DefaultCastAs(LogicalType::BIGINT).GetValue<int64_t>();
+		if (key == "start_snapshot_id") {
+			this->options.incremental_range.start_snapshot_id = snapshot_id;
+		} else {
+			this->options.incremental_range.end_snapshot_id = snapshot_id;
+		}
 		return true;
 	}
 	return MultiFileReader::ParseOption(key, val, options, context);

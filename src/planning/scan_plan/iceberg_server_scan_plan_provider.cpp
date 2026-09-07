@@ -53,6 +53,16 @@ bool ServerSideScanPlanProvider::DeleteFileAppliesToDataFile(const string &data_
 	return refs != plan.delete_files_by_data_file.end() && refs->second.count(delete_file_path);
 }
 
+bool ServerSideScanPlanProvider::ManifestIsVisible(const IcebergManifestFile &manifest_file) const {
+	//! The plan returned by the server is already exactly the set of files to read
+	return true;
+}
+
+bool ServerSideScanPlanProvider::EntryIsVisible(const IcebergManifestEntry &entry,
+                                                const IcebergManifestFile &manifest_file) const {
+	return true;
+}
+
 vector<IcebergManifestListEntry> &ServerSideScanPlanProvider::DataManifests() {
 	return plan.data_manifests;
 }

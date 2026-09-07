@@ -47,6 +47,10 @@ public:
 	virtual bool TryGetNextBatch(IcebergDataViewCursor &cursor) = 0;
 	virtual void FinishScanTasks() = 0;
 	virtual bool DeleteFileAppliesToDataFile(const string &data_file_path, const string &delete_file_path) const = 0;
+	//! Only an incremental client-side scan narrows this, a server-side plan is already the file set.
+	virtual bool ManifestIsVisible(const IcebergManifestFile &manifest_file) const = 0;
+	//! Whether a manifest entry can contribute a file to this scan.
+	virtual bool EntryIsVisible(const IcebergManifestEntry &entry, const IcebergManifestFile &manifest_file) const = 0;
 	virtual vector<IcebergManifestListEntry> &DataManifests() = 0;
 	virtual vector<IcebergManifestListEntry> &DeleteManifests() = 0;
 	virtual shared_ptr<IcebergDeleteFileLoadState> &GetDeleteFileLoad(IcebergDeleteFileReference delete_file) = 0;
@@ -66,6 +70,8 @@ public:
 	bool TryGetNextBatch(IcebergDataViewCursor &cursor) override DUCKDB_REQUIRES(shared_state.lock);
 	void FinishScanTasks() override DUCKDB_REQUIRES(shared_state.lock);
 	bool DeleteFileAppliesToDataFile(const string &data_file_path, const string &delete_file_path) const override;
+	bool ManifestIsVisible(const IcebergManifestFile &manifest_file) const override;
+	bool EntryIsVisible(const IcebergManifestEntry &entry, const IcebergManifestFile &manifest_file) const override;
 	vector<IcebergManifestListEntry> &DataManifests() override DUCKDB_REQUIRES(shared_state.lock);
 	vector<IcebergManifestListEntry> &DeleteManifests() override DUCKDB_REQUIRES(shared_state.lock);
 	shared_ptr<IcebergDeleteFileLoadState> &GetDeleteFileLoad(IcebergDeleteFileReference delete_file) override
@@ -88,6 +94,8 @@ public:
 	bool TryGetNextBatch(IcebergDataViewCursor &cursor) override;
 	void FinishScanTasks() override;
 	bool DeleteFileAppliesToDataFile(const string &data_file_path, const string &delete_file_path) const override;
+	bool ManifestIsVisible(const IcebergManifestFile &manifest_file) const override;
+	bool EntryIsVisible(const IcebergManifestEntry &entry, const IcebergManifestFile &manifest_file) const override;
 	vector<IcebergManifestListEntry> &DataManifests() override;
 	vector<IcebergManifestListEntry> &DeleteManifests() override;
 	shared_ptr<IcebergDeleteFileLoadState> &GetDeleteFileLoad(IcebergDeleteFileReference delete_file) override;

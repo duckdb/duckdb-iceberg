@@ -132,6 +132,9 @@ public:
 	void SetSnapshotId(optional<int64_t> snapshot_id);
 	bool HasSnapshotId() const;
 	int64_t GetSnapshotId() const;
+	//! Inherits from the manifest file's 'added_snapshot_id' when the field is NULL. Writers may omit
+	//! it precisely so it can be inherited, so read paths must use this overload.
+	int64_t GetSnapshotId(const IcebergManifestFile &manifest_file) const;
 	void SetSequenceNumber(optional<sequence_number_t> value);
 	void SetFileSequenceNumber(optional<sequence_number_t> value);
 	sequence_number_t GetSequenceNumber(const IcebergManifestFile &manifest_file) const;
