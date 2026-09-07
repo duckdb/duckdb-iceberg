@@ -165,3 +165,33 @@ jobs:
         run: |
           ls benchmark/rewrite_data_files/*.benchmark > .github/regression/rewrite_data_files.csv
           python duckdb/scripts/regression/test_runner.py --old base/build/release/benchmark/benchmark_runner --new build/release/benchmark/benchmark_runner --benchmarks .github/regression/rewrite_data_files.csv --verbose --threads 2 --benchmark-cache=clear
+
+      # Runs last on purpose. These benchmarks create 119 tables in the fixture's 'default'
+      # namespace, which would grow every ListTables response the steps above make and add noise to
+      # timings that are compared against the base build.
+      # toxiproxy fronts the fixture catalog on 8182 with a fixed per-response latency. The catalog
+      - name: Regression Test Table Resolution Benchmarks
+        run: |
+          set -euo pipefail
+          trap 'pkill -f toxiproxy-server || true' EXIT
+
+          curl -sSLf -o /tmp/toxiproxy.deb \
+            https://github.com/Shopify/toxiproxy/releases/download/v2.12.0/toxiproxy_2.12.0_linux_amd64.deb
+          sudo dpkg -i /tmp/toxiproxy.deb
+
+          toxiproxy-server > /tmp/toxiproxy.log 2>&1 &
+          ready=
+          for _ in $(seq 1 30); do
+            if curl -sSf -o /dev/null http://127.0.0.1:8474/version; then ready=1; break; fi
+            sleep 1
+          done
+          if [[ -z "${ready}" ]]; then
+            echo "::error::toxiproxy did not come up"
+            cat /tmp/toxiproxy.log
+            exit 1
+          fi
+          toxiproxy-cli create --listen 127.0.0.1:8182 --upstream 127.0.0.1:8181 iceberg-catalog
+          toxiproxy-cli toxic add --type latency --attribute latency=50 --attribute jitter=5 iceberg-catalog
+
+          ls benchmark/table_resolution/*.benchmark > .github/regression/table_resolution.csv
+          python duckdb/scripts/regression/test_runner.py --old base/build/release/benchmark/benchmark_runner --new build/release/benchmark/benchmark_runner --benchmarks .github/regression/table_resolution.csv --verbose --threads 2 --benchmark-cache=clear

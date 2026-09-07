@@ -9,6 +9,7 @@
 #include "duckdb/parser/parsed_data/create_secret_info.hpp"
 
 #include "catalog/rest/api/url_utils.hpp"
+#include "iceberg_attach.hpp"
 #include "rest_catalog/objects/list.hpp"
 
 namespace duckdb {
