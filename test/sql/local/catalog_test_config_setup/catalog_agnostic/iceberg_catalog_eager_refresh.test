@@ -45,8 +45,6 @@ CALL truncate_duckdb_logs();
 statement ok
 select * from my_datalake.default.table_more_deletes order by all;
 
-mode skip Needs https://github.com/duckdblabs/duckdb-internal/issues/10671 to re-enable
-
 # No extra logs are created because all the metadata was already cached
 query II
 SELECT request.url, response.reason FROM duckdb_logs_parsed('HTTP') WHERE request.type='GET' AND (request.url).starts_with('http://127.0.0.1') order by timestamp
@@ -70,5 +68,3 @@ SELECT request.url, response.reason FROM duckdb_logs_parsed('HTTP') WHERE reques
 ----
 <REGEX>:.*v1/namespaces/default/tables/table_more_deletes	OK
 <REGEX>:.*v1/namespaces/default/tables/table_more_deletes	OK
-
-mode unskip

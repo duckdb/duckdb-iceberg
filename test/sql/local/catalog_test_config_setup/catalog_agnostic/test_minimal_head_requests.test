@@ -50,8 +50,6 @@ query I
 select request.url from duckdb_logs_parsed('HTTP') where request.type = 'HEAD';
 ----
 
-mode skip Needs https://github.com/duckdblabs/duckdb-internal/issues/10671 to re-enable
-
 # No additional GET requests should be made
 query I
 SELECT
@@ -60,5 +58,3 @@ FROM duckdb_logs_parsed('HTTP')
 WHERE request.type = 'GET' AND (request.url LIKE '%.avro' OR request.url LIKE '%.parquet')
 ----
 0
-
-mode unskip
