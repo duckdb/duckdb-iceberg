@@ -3,6 +3,8 @@
 
 #include "catalog/rest/api/catalog_api.hpp"
 #include "duckdb/catalog/catalog_entry/table_catalog_entry.hpp"
+#include "duckdb/common/atomic.hpp"
+#include "duckdb/common/mutex.hpp"
 #include "duckdb/parser/parsed_data/create_table_info.hpp"
 
 namespace duckdb {
@@ -39,7 +41,9 @@ public:
 	                           ClientContext &context) override;
 
 protected:
+	mutable mutex columns_lock;
 	mutable optional<ColumnList> columns;
+	mutable atomic<bool> columns_initialized {false};
 	optional_ptr<ClientContext> context;
 
 public:

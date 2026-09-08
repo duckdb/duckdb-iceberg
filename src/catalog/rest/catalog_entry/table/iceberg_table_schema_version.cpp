@@ -34,8 +34,8 @@ constexpr column_t IcebergMultiFileReader::COLUMN_IDENTIFIER_LAST_SEQUENCE_NUMBE
 IcebergTableSchemaVersion::IcebergTableSchemaVersion(IcebergTable &table_info, Catalog &catalog,
                                                      SchemaCatalogEntry &schema, CreateTableInfo &info,
                                                      optional_idx schema_id)
-    : TableCatalogEntry(catalog, schema, info), columns(std::move(info.columns)), table_info(table_info),
-      schema_id(schema_id) {
+    : TableCatalogEntry(catalog, schema, info), columns(std::move(info.columns)), columns_initialized(true),
+      table_info(table_info), schema_id(schema_id) {
 	this->internal = false;
 }
 
@@ -48,6 +48,11 @@ IcebergTableSchemaVersion::IcebergTableSchemaVersion(IcebergTable &table_info, C
 }
 
 const ColumnList &IcebergTableSchemaVersion::GetColumns() const {
+	if (columns_initialized.load(std::memory_order_acquire)) {
+		return *columns;
+	}
+	// Concurrent scans share this entry. Never replace columns once readers can reference them.
+	lock_guard<mutex> guard(columns_lock);
 	if (!columns) {
 		if (!context) {
 			throw InternalException("Lazy Iceberg table entry does not have a client context");
@@ -61,6 +66,7 @@ const ColumnList &IcebergTableSchemaVersion::GetColumns() const {
 			throw CatalogException("Table %s does not exist", table_info.GetTableKey());
 		}
 		columns = resolved_entry->Cast<IcebergTableSchemaVersion>().GetColumns().Copy();
+		columns_initialized.store(true, std::memory_order_release);
 	}
 	return *columns;
 }
