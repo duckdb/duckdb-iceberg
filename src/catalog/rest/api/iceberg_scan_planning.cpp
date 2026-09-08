@@ -307,6 +307,7 @@ static void FetchPlanTasks(ClientContext &context, IcebergTable &table_info, Pla
 		JSONWriter writer;
 		writer.SetRoot(request.ToJSON(writer));
 		auto body = writer.ToString(JSONWriteFlags::ALLOW_INF_AND_NAN);
+		ICUtils::LogPostBody(context, endpoint, body);
 		auto headers = PlanningHeaders(context);
 		headers.Insert("Idempotency-Key", UUID::ToString(UUID::GenerateRandomUUID()));
 		auto response =
@@ -415,6 +416,7 @@ bool IcebergServerSideScanPlanning::Plan(ClientContext &context, IcebergTable &t
 	// A fresh key makes retries of each logical planning operation idempotent on servers that support it.
 	headers.Insert("Idempotency-Key", UUID::ToString(UUID::GenerateRandomUUID()));
 	auto body = SerializePlanRequest(request);
+	ICUtils::LogPostBody(context, endpoint, body);
 	auto response =
 	    table_info.catalog.auth_handler->Request(RequestType::POST_REQUEST, context, endpoint, headers, body);
 	if (response->status == HTTPStatusCode::NotAcceptable_406) {

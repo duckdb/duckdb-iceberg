@@ -74,26 +74,6 @@ vector<string> IRCAPI::ParseSchemaName(const string &namespace_name) {
 	                    int(response.status));
 }
 
-static void LogPostBody(ClientContext &context, const IRCEndpointBuilder &url_builder, const string &body) {
-	if (!Logger::Get(context).ShouldLog(IcebergLogType::NAME, IcebergLogType::LEVEL)) {
-		return;
-	}
-	idx_t truncate_limit = 10000;
-	Value limit_value;
-	if (context.TryGetCurrentSetting("iceberg_logging_post_body_truncate_limit", limit_value)) {
-		truncate_limit = limit_value.GetValue<idx_t>();
-	}
-	string body_to_log;
-	if (truncate_limit == 0) {
-		body_to_log = "<body omitted>";
-	} else if (body.size() > truncate_limit) {
-		body_to_log = body.substr(0, truncate_limit) + "... (truncated)";
-	} else {
-		body_to_log = body;
-	}
-	DUCKDB_LOG(context, IcebergLogType, "POST %s body=%s", url_builder.GetURLEncoded(), body_to_log);
-}
-
 static IRCEntryLookupStatus CheckVerificationResponse(ClientContext &context, HTTPStatusCode &status) {
 	// The following response codes return "schema does not exist"
 	// This list can change, some error codes we want to surface to the user (i.e PaymentRequired_402)
@@ -459,7 +439,7 @@ CommitResult IRCAPI::CommitMultiTableUpdate(ClientContext &context, IcebergCatal
 	url_builder.AddPathComponent(IRCPathComponent::RegularComponent("commit"));
 	HTTPHeaders headers(*context.db);
 	headers.Insert("Content-Type", "application/json");
-	LogPostBody(context, url_builder, body);
+	ICUtils::LogPostBody(context, url_builder, body);
 	auto response = catalog.auth_handler->Request(RequestType::POST_REQUEST, context, url_builder, headers, body);
 	return BuildCommitResult(context, response);
 }
@@ -474,7 +454,7 @@ CommitResult IRCAPI::CommitTableUpdate(ClientContext &context, IcebergCatalog &c
 	url_builder.AddPathComponent(IRCPathComponent::RegularComponent(table));
 	HTTPHeaders headers(*context.db);
 	headers.Insert("Content-Type", "application/json");
-	LogPostBody(context, url_builder, body);
+	ICUtils::LogPostBody(context, url_builder, body);
 	auto response = catalog.auth_handler->Request(RequestType::POST_REQUEST, context, url_builder, headers, body);
 	return BuildCommitResult(context, response);
 }
@@ -509,7 +489,7 @@ void IRCAPI::CommitTableRename(ClientContext &context, IcebergCatalog &catalog, 
 
 	HTTPHeaders headers(*context.db);
 	headers.Insert("Content-Type", "application/json");
-	LogPostBody(context, url_builder, body);
+	ICUtils::LogPostBody(context, url_builder, body);
 	auto response = catalog.auth_handler->Request(RequestType::POST_REQUEST, context, url_builder, headers, body);
 	// Glue/S3Tables follow spec and return 204, apache/iceberg-rest-fixture docker image returns 200
 	if (response->status != HTTPStatusCode::NoContent_204 && response->status != HTTPStatusCode::OK_200) {
@@ -525,7 +505,7 @@ void IRCAPI::CommitNamespaceCreate(ClientContext &context, IcebergCatalog &catal
 	url_builder.AddPathComponent(IRCPathComponent::RegularComponent("namespaces"));
 	HTTPHeaders headers(*context.db);
 	headers.Insert("Content-Type", "application/json");
-	LogPostBody(context, url_builder, body);
+	ICUtils::LogPostBody(context, url_builder, body);
 	auto response = catalog.auth_handler->Request(RequestType::POST_REQUEST, context, url_builder, headers, body);
 	if (response->status != HTTPStatusCode::OK_200) {
 		throw HTTPException(*response, "Request to '%s' returned a non-200 status code (%s), with reason: %s, body: %s",
@@ -593,7 +573,7 @@ rest_api_objects::LoadTableResult IRCAPI::CommitNewTable(ClientContext &context,
 		if (catalog.attach_options.access_mode == IRCAccessDelegationMode::VENDED_CREDENTIALS) {
 			headers.Insert("X-Iceberg-Access-Delegation", "vended-credentials");
 		}
-		LogPostBody(context, url_builder, create_table_json);
+		ICUtils::LogPostBody(context, url_builder, create_table_json);
 		auto response =
 		    catalog.auth_handler->Request(RequestType::POST_REQUEST, context, url_builder, headers, create_table_json);
 		if (response->status != HTTPStatusCode::OK_200) {
