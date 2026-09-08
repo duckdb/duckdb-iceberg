@@ -109,6 +109,15 @@ void IcebergTableSet::Scan(ClientContext &context, const std::function<void(Cata
 			auto table_key = table_info.GetTableKey();
 			iceberg_transaction.tables[table_key] = entry.second;
 
+			auto lazy_entry = iceberg_transaction.lazy_table_entries.find(table_key);
+			if (lazy_entry != iceberg_transaction.lazy_table_entries.end()) {
+				// Keep returning the same entry within the transaction, even after its columns have been resolved.
+				// SHOW ALL TABLES joins duckdb_tables and duckdb_columns on table_oid; switching to the resolved
+				// schema entry between scans would change the OID and cause the table to disappear from the join.
+				scan_entries.emplace_back(*lazy_entry->second);
+				continue;
+			}
+
 			if (!table_info.schema_versions.empty()) {
 				// The table has already been resolved (e.g. via DESCRIBE or a scan), so its full schema -
 				// including column comments mapped from the Iceberg field 'doc' - is available. Surface the
@@ -120,8 +129,8 @@ void IcebergTableSet::Scan(ClientContext &context, const std::function<void(Cata
 				}
 			}
 
-			auto &lazy_entry = GetOrCreateLazyEntry(context, iceberg_transaction, table_info);
-			scan_entries.emplace_back(lazy_entry);
+			auto &new_lazy_entry = GetOrCreateLazyEntry(context, iceberg_transaction, table_info);
+			scan_entries.emplace_back(new_lazy_entry);
 		}
 	}
 	for (auto &entry : scan_entries) {
