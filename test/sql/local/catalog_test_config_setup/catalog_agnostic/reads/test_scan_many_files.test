@@ -1,0 +1,40 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/reads/test_scan_many_files.test
+# description: Test scanning many files with both client/server-side scan planning
+# group: [reads]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require iceberg
+
+require parquet
+
+require avro
+
+require httpfs
+
+require json
+
+statement ok
+drop table if exists my_datalake.default.scan_many_files;
+
+statement ok
+create table my_datalake.default.scan_many_files(
+	id integer
+) partitioned by (id);
+
+statement ok
+insert into my_datalake.default.scan_many_files select range from range(2050);
+
+foreach server_side_scan true false
+
+# Compare all returned file paths with client planning, including tasks discovered
+# in subsequent responses. fixture-latest exercises the server's continuation tasks.
+statement ok
+set iceberg_use_server_side_scan_planning={server_side_scan};
+
+query I nosort expected_res
+select * from my_datalake.default.scan_many_files;
+----
+
+#server_side_scan
+endloop
