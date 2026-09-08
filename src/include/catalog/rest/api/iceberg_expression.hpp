@@ -12,6 +12,8 @@ public:
 	static unique_ptr<rest_api_objects::Expression> LiteralExpression(const string &type, const string &column_name,
 	                                                                  const Value &value);
 	static unique_ptr<rest_api_objects::Expression> UnaryExpression(const string &type, const string &column_name);
+	static unique_ptr<rest_api_objects::Expression> SetExpression(const string &type, const string &column_name,
+	                                                              const vector<reference<const Value>> &values);
 	static unique_ptr<rest_api_objects::Expression> AndExpression(unique_ptr<rest_api_objects::Expression> left,
 	                                                              unique_ptr<rest_api_objects::Expression> right);
 	static optional<string> GetComparisonType(ExpressionType type, bool flip);
