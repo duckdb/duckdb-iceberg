@@ -52,13 +52,19 @@ public:
 		}
 		values.emplace_back(std::move(val));
 	}
-	const vector<string> &Tasks() const {
-		return values;
+	bool TryGetNextTask(string &task_identifier) {
+		if (next_task == values.size()) {
+			return false;
+		}
+		// Copy before fetching: the response can append tasks and reallocate values.
+		task_identifier = values[next_task++];
+		return true;
 	}
 
 private:
 	unordered_set<string> distinct_values;
 	vector<string> values;
+	idx_t next_task = 0;
 };
 
 struct PlanningAccumulator {
@@ -288,7 +294,9 @@ static string SerializePlanRequest(const rest_api_objects::PlanTableScanRequest 
 }
 
 static void FetchPlanTasks(ClientContext &context, IcebergTable &table_info, PlanningAccumulator &accumulator) {
-	for (auto &task_identifier : accumulator.plan_tasks.Tasks()) {
+	string task_identifier;
+	// Task responses may contain further plan tasks. Drain the growing queue completely.
+	while (accumulator.plan_tasks.TryGetNextTask(task_identifier)) {
 		if (context.IsInterrupted()) {
 			throw InterruptException();
 		}
