@@ -241,14 +241,18 @@ IcebergTable::GetVendedCredentials(ClientContext &context,
 		create_secret_input.on_conflict = OnCreateConflict::REPLACE_ON_CONFLICT;
 		create_secret_input.persist_type = SecretPersistType::TRANSACTION;
 
+		//! A bare scheme name would score below any secret scoped to the full "scheme://" prefix, so
+		//! widen it to that prefix: it stays the least specific credential, as in Java's S3FileIO
+		const string scope_prefix =
+		    StringUtil::Contains(credential.prefix, "://") ? credential.prefix : credential.prefix + "://";
 		if (ignore_credential_prefix) {
 			create_secret_input.scope.push_back(table_location);
 		} else {
-			create_secret_input.scope.push_back(credential.prefix);
+			create_secret_input.scope.push_back(scope_prefix);
 			//! Also match paths whose scheme differs from the credential prefix
 			//! (e.g. oss:// files with s3 credentials), equivalent to Java S3FileIO's
 			//! ROOT_PREFIX fallback in clientForStoragePath()
-			if (!StringUtil::StartsWith(table_location, credential.prefix)) {
+			if (!StringUtil::StartsWith(table_location, scope_prefix)) {
 				create_secret_input.scope.push_back(table_location);
 			}
 		}
@@ -318,7 +322,7 @@ optional_ptr<CatalogEntry> IcebergTable::CreateSchemaVersion(const IcebergTableS
 idx_t IcebergTable::GetMaxSchemaId() {
 	idx_t max_schema_id = 0;
 	if (schema_versions.empty()) {
-		throw CatalogException("No schema versions found for table '%s.%s'", schema.name, name);
+		throw CatalogException("No schema versions found for table '%s.%s'", schema.name.GetIdentifierName(), name);
 	}
 	for (auto &schema : schema_versions) {
 		if (schema.first > max_schema_id) {

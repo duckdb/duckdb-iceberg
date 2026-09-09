@@ -88,7 +88,7 @@ SELECT count(*), max(a) FROM my_datalake.default.alter_add_column_explicit_txn;
 statement error con3
 INSERT INTO my_datalake.default.alter_add_column_explicit_txn VALUES (43, 43);
 ----
-Binder Error: table alter_add_column_explicit_txn has 1 columns but 2 values were supplied
+Binder Error: table "alter_add_column_explicit_txn" has 1 columns but 2 values were supplied
 
 statement ok con2
 INSERT INTO my_datalake.default.alter_add_column_explicit_txn VALUES (43);

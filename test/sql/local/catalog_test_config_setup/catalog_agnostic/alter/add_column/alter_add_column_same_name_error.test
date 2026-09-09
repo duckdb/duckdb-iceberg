@@ -30,7 +30,7 @@ CREATE TABLE my_datalake.default.alter_add_column_same_txn_table AS (select rang
 statement error
 ALTER TABLE my_datalake.default.alter_add_column_same_txn_table ADD COLUMN a int;
 ----
-Catalog Error: Column with name a already exists!
+Catalog Error: Column with name "a" already exists!
 
 query I
 FROM my_datalake.default.alter_add_column_same_txn_table;

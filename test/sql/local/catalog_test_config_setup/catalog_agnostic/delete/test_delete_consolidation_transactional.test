@@ -95,6 +95,6 @@ statement ok
 abort
 
 query I
-select count(*) from duckdb_logs() where type = 'Iceberg' and message.starts_with('Iceberg Transaction Cleanup') and message.ends_with('.puffin''');
+select count(*) from duckdb_logs() where type = 'Iceberg' and message like 'Iceberg Transaction Cleanup%deleted 2 data_file%';
 ----
-2
+1

@@ -33,7 +33,7 @@ AvroScan::AvroScan(const string &path, ClientContext &context, shared_ptr<Iceber
 		throw InvalidInputException("Function with name \"read_avro\" not found!");
 	}
 	auto &avro_scan_entry = catalog_entry->Cast<TableFunctionCatalogEntry>();
-	avro_scan = avro_scan_entry.functions.functions[0];
+	avro_scan = *avro_scan_entry.functions.functions[0];
 
 	vector<Value> children;
 	children.reserve(1);

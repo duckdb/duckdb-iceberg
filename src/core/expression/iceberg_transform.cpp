@@ -245,12 +245,12 @@ string IcebergTransform::PartitionValueToString(const Value &partition_value) co
 	case IcebergTransformType::MONTH: {
 		int32_t m = partition_value.GetValue<int32_t>();
 		// Floor-divide to correctly handle months before 1970
-		int32_t year = 1970 + (m >= 0 ? m : m - 11) / 12;
+		int32_t year = Date::EPOCH_YEAR + (m >= 0 ? m : m - 11) / 12;
 		int32_t month = ((m % 12) + 12) % 12 + 1;
 		return StringUtil::Format("%04d-%02d", year, month);
 	}
 	case IcebergTransformType::YEAR: {
-		return std::to_string(1970 + partition_value.GetValue<int32_t>());
+		return std::to_string(Date::EPOCH_YEAR + partition_value.GetValue<int32_t>());
 	}
 	case IcebergTransformType::HOUR: {
 		int64_t hours = partition_value.GetValue<int32_t>();

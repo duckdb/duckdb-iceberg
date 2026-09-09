@@ -56,7 +56,7 @@ TableFunction IcebergTableSchemaVersion::GetScanFunction(ClientContext &context,
 	}
 	auto &iceberg_scan_function_set = catalog_entry->Cast<TableFunctionCatalogEntry>();
 	auto iceberg_scan_function =
-	    iceberg_scan_function_set.functions.GetFunctionByArguments(context, {LogicalType::VARCHAR});
+	    *iceberg_scan_function_set.functions.GetFunctionByArguments(context, {LogicalType::VARCHAR});
 	PrepareIcebergScanFromEntry(context);
 
 	if (!schema_id.IsValid()) {

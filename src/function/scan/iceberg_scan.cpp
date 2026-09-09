@@ -96,7 +96,7 @@ TableFunctionSet IcebergFunctions::GetIcebergScanFunction(ExtensionLoader &loade
 	auto &parquet_scan = loader.GetTableFunction("parquet_scan");
 	auto parquet_scan_copy = parquet_scan.functions;
 
-	for (auto &function : parquet_scan_copy.functions) {
+	parquet_scan_copy.ApplyToFunctions([](TableFunction &function) {
 		// Register the MultiFileReader as the driver for reads
 		function.get_multi_file_reader = IcebergMultiFileReader::CreateInstance;
 		function.late_materialization = false;
@@ -119,7 +119,7 @@ TableFunctionSet IcebergFunctions::GetIcebergScanFunction(ExtensionLoader &loade
 		AddNamedParameters(function);
 
 		function.SetName("iceberg_scan");
-	}
+	});
 
 	parquet_scan_copy.SetName("iceberg_scan");
 	return parquet_scan_copy;

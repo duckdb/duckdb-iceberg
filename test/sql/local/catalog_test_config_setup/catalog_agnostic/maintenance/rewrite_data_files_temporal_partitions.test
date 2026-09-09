@@ -1,0 +1,334 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/maintenance/rewrite_data_files_temporal_partitions.test
+# description: rewrite_data_files compaction for day() and month() partition transforms
+# group: [maintenance]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+# ---- DAY transform: full compact ----
+
+statement ok
+drop table if exists my_datalake.default.rewrite_day;
+
+statement ok
+create table my_datalake.default.rewrite_day (id INTEGER, ts TIMESTAMP, payload VARCHAR)
+partitioned by (day(ts));
+
+statement ok
+insert into my_datalake.default.rewrite_day values
+	(1, '2021-06-15 10:00:00'::TIMESTAMP, 'a1'),
+	(2, '2021-06-16 10:00:00'::TIMESTAMP, 'b1');
+
+statement ok
+insert into my_datalake.default.rewrite_day values
+	(3, '2021-06-15 11:00:00'::TIMESTAMP, 'a2'),
+	(4, '2021-06-16 11:00:00'::TIMESTAMP, 'b2');
+
+statement ok
+insert into my_datalake.default.rewrite_day values
+	(5, '2021-06-15 12:00:00'::TIMESTAMP, 'a3'),
+	(6, '2021-06-16 12:00:00'::TIMESTAMP, 'b3');
+
+statement ok
+insert into my_datalake.default.rewrite_day values
+	(7, '2021-06-15 13:00:00'::TIMESTAMP, 'a4'),
+	(8, '2021-06-16 13:00:00'::TIMESTAMP, 'b4');
+
+statement ok
+insert into my_datalake.default.rewrite_day values
+	(9, '2021-06-15 14:00:00'::TIMESTAMP, 'a5'),
+	(10, '2021-06-16 14:00:00'::TIMESTAMP, 'b5');
+
+statement ok
+insert into my_datalake.default.rewrite_day values
+	(11, '2021-06-15 15:00:00'::TIMESTAMP, 'a6'),
+	(12, '2021-06-16 15:00:00'::TIMESTAMP, 'b6');
+
+query I
+select count(*) from my_datalake.default.rewrite_day;
+----
+12
+
+query I
+select count(*)
+from iceberg_metadata('my_datalake.default.rewrite_day')
+where content = 'DATA' and status <> 'DELETED';
+----
+12
+
+query I
+select count(*)
+from iceberg_metadata('my_datalake.default.rewrite_day')
+where content = 'DATA' and status <> 'DELETED'
+  and file_path like '%/day_ts_2=%';
+----
+12
+
+query III
+call iceberg_rewrite_data_files('my_datalake.default.rewrite_day');
+----
+12	2	<REGEX>:[1-9][0-9]*
+
+query I
+select count(*) from my_datalake.default.rewrite_day;
+----
+12
+
+query III
+select id, ts, payload from my_datalake.default.rewrite_day order by id;
+----
+1	2021-06-15 10:00:00	a1
+2	2021-06-16 10:00:00	b1
+3	2021-06-15 11:00:00	a2
+4	2021-06-16 11:00:00	b2
+5	2021-06-15 12:00:00	a3
+6	2021-06-16 12:00:00	b3
+7	2021-06-15 13:00:00	a4
+8	2021-06-16 13:00:00	b4
+9	2021-06-15 14:00:00	a5
+10	2021-06-16 14:00:00	b5
+11	2021-06-15 15:00:00	a6
+12	2021-06-16 15:00:00	b6
+
+query I
+select count(*)
+from iceberg_metadata('my_datalake.default.rewrite_day')
+where content = 'DATA' and status <> 'DELETED';
+----
+2
+
+query I
+select count(*)
+from iceberg_metadata('my_datalake.default.rewrite_day')
+where content = 'DATA' and status <> 'DELETED'
+  and file_path like '%/day_ts_2=%';
+----
+2
+
+query III
+call iceberg_rewrite_data_files('my_datalake.default.rewrite_day');
+----
+0	0	0
+
+statement ok
+drop table if exists my_datalake.default.rewrite_day;
+
+# ---- MONTH transform: full compact ----
+
+statement ok
+drop table if exists my_datalake.default.rewrite_month;
+
+statement ok
+create table my_datalake.default.rewrite_month (id INTEGER, ts TIMESTAMP, payload VARCHAR)
+partitioned by (month(ts));
+
+statement ok
+insert into my_datalake.default.rewrite_month values
+	(1, '2021-01-15 10:00:00'::TIMESTAMP, 'a1'),
+	(2, '2021-02-15 10:00:00'::TIMESTAMP, 'b1');
+
+statement ok
+insert into my_datalake.default.rewrite_month values
+	(3, '2021-01-16 11:00:00'::TIMESTAMP, 'a2'),
+	(4, '2021-02-16 11:00:00'::TIMESTAMP, 'b2');
+
+statement ok
+insert into my_datalake.default.rewrite_month values
+	(5, '2021-01-17 12:00:00'::TIMESTAMP, 'a3'),
+	(6, '2021-02-17 12:00:00'::TIMESTAMP, 'b3');
+
+statement ok
+insert into my_datalake.default.rewrite_month values
+	(7, '2021-01-18 13:00:00'::TIMESTAMP, 'a4'),
+	(8, '2021-02-18 13:00:00'::TIMESTAMP, 'b4');
+
+statement ok
+insert into my_datalake.default.rewrite_month values
+	(9, '2021-01-19 14:00:00'::TIMESTAMP, 'a5'),
+	(10, '2021-02-19 14:00:00'::TIMESTAMP, 'b5');
+
+statement ok
+insert into my_datalake.default.rewrite_month values
+	(11, '2021-01-20 15:00:00'::TIMESTAMP, 'a6'),
+	(12, '2021-02-20 15:00:00'::TIMESTAMP, 'b6');
+
+query I
+select count(*)
+from iceberg_metadata('my_datalake.default.rewrite_month')
+where content = 'DATA' and status <> 'DELETED';
+----
+12
+
+query I
+select count(*)
+from iceberg_metadata('my_datalake.default.rewrite_month')
+where content = 'DATA' and status <> 'DELETED'
+  and file_path like '%/month_ts_2=%';
+----
+12
+
+query III
+call iceberg_rewrite_data_files('my_datalake.default.rewrite_month');
+----
+12	2	<REGEX>:[1-9][0-9]*
+
+query I
+select count(*) from my_datalake.default.rewrite_month;
+----
+12
+
+query III
+select id, ts, payload from my_datalake.default.rewrite_month order by id;
+----
+1	2021-01-15 10:00:00	a1
+2	2021-02-15 10:00:00	b1
+3	2021-01-16 11:00:00	a2
+4	2021-02-16 11:00:00	b2
+5	2021-01-17 12:00:00	a3
+6	2021-02-17 12:00:00	b3
+7	2021-01-18 13:00:00	a4
+8	2021-02-18 13:00:00	b4
+9	2021-01-19 14:00:00	a5
+10	2021-02-19 14:00:00	b5
+11	2021-01-20 15:00:00	a6
+12	2021-02-20 15:00:00	b6
+
+query I
+select count(*)
+from iceberg_metadata('my_datalake.default.rewrite_month')
+where content = 'DATA' and status <> 'DELETED';
+----
+2
+
+query I
+select count(*)
+from iceberg_metadata('my_datalake.default.rewrite_month')
+where content = 'DATA' and status <> 'DELETED'
+  and file_path like '%/month_ts_2=%';
+----
+2
+
+query III
+call iceberg_rewrite_data_files('my_datalake.default.rewrite_month');
+----
+0	0	0
+
+statement ok
+drop table if exists my_datalake.default.rewrite_month;
+
+# ---- DAY transform: max_files_to_rewrite fills the first day key ----
+
+statement ok
+drop table if exists my_datalake.default.rewrite_max_files_day;
+
+statement ok
+create table my_datalake.default.rewrite_max_files_day (id INTEGER, ts TIMESTAMP, payload VARCHAR)
+partitioned by (day(ts));
+
+statement ok
+insert into my_datalake.default.rewrite_max_files_day values
+	(1, '2021-06-15 10:00:00'::TIMESTAMP, 'a1'),
+	(2, '2021-06-16 10:00:00'::TIMESTAMP, 'b1');
+
+statement ok
+insert into my_datalake.default.rewrite_max_files_day values
+	(3, '2021-06-15 11:00:00'::TIMESTAMP, 'a2'),
+	(4, '2021-06-16 11:00:00'::TIMESTAMP, 'b2');
+
+statement ok
+insert into my_datalake.default.rewrite_max_files_day values
+	(5, '2021-06-15 12:00:00'::TIMESTAMP, 'a3'),
+	(6, '2021-06-16 12:00:00'::TIMESTAMP, 'b3');
+
+statement ok
+insert into my_datalake.default.rewrite_max_files_day values
+	(7, '2021-06-15 13:00:00'::TIMESTAMP, 'a4'),
+	(8, '2021-06-16 13:00:00'::TIMESTAMP, 'b4');
+
+statement ok
+insert into my_datalake.default.rewrite_max_files_day values
+	(9, '2021-06-15 14:00:00'::TIMESTAMP, 'a5'),
+	(10, '2021-06-16 14:00:00'::TIMESTAMP, 'b5');
+
+statement ok
+insert into my_datalake.default.rewrite_max_files_day values
+	(11, '2021-06-15 15:00:00'::TIMESTAMP, 'a6'),
+	(12, '2021-06-16 15:00:00'::TIMESTAMP, 'b6');
+
+query I
+select count(*)
+from iceberg_metadata('my_datalake.default.rewrite_max_files_day')
+where content = 'DATA' and status <> 'DELETED';
+----
+12
+
+# Both day partitions qualify (6 >= min_input_files). The global cap of 3 is filled
+# from the lexicographically first day key (2021-06-15), leaving 2021-06-16 untouched.
+query III
+call iceberg_rewrite_data_files(
+	'my_datalake.default.rewrite_max_files_day',
+	min_input_files => 5,
+	max_files_to_rewrite => 3
+);
+----
+3	1	<REGEX>:[1-9][0-9]*
+
+query I
+select count(*)
+from iceberg_metadata('my_datalake.default.rewrite_max_files_day')
+where content = 'DATA' and status <> 'DELETED';
+----
+10
+
+query I
+select count(*)
+from iceberg_metadata('my_datalake.default.rewrite_max_files_day')
+where content = 'DATA' and status <> 'DELETED'
+  and (
+	file_path like '%/day_ts_2=' || date_diff('day', DATE '1970-01-01', DATE '2021-06-15')::VARCHAR || '/%'
+	or file_path like '%/day_ts_2=2021-06-15/%'
+  );
+----
+4
+
+query I
+select count(*)
+from iceberg_metadata('my_datalake.default.rewrite_max_files_day')
+where content = 'DATA' and status <> 'DELETED'
+  and (
+	file_path like '%/day_ts_2=' || date_diff('day', DATE '1970-01-01', DATE '2021-06-16')::VARCHAR || '/%'
+	or file_path like '%/day_ts_2=2021-06-16/%'
+  );
+----
+6
+
+query I
+select count(*) from my_datalake.default.rewrite_max_files_day;
+----
+12
+
+query III
+select id, ts, payload from my_datalake.default.rewrite_max_files_day order by id;
+----
+1	2021-06-15 10:00:00	a1
+2	2021-06-16 10:00:00	b1
+3	2021-06-15 11:00:00	a2
+4	2021-06-16 11:00:00	b2
+5	2021-06-15 12:00:00	a3
+6	2021-06-16 12:00:00	b3
+7	2021-06-15 13:00:00	a4
+8	2021-06-16 13:00:00	b4
+9	2021-06-15 14:00:00	a5
+10	2021-06-16 14:00:00	b5
+11	2021-06-15 15:00:00	a6
+12	2021-06-16 15:00:00	b6
+
+statement ok
+drop table if exists my_datalake.default.rewrite_max_files_day;

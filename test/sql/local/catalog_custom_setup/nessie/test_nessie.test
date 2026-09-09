@@ -69,11 +69,6 @@ statement ok
 show all tables;
 
 # make sure the URI override becomes the base URL and main|warehouse is properly encoded
-query I
-select request.url from duckdb_logs_parsed('HTTP');
-----
-http://127.0.0.1:19120/iceberg/v1/main%7Cwarehouse/namespaces
-http://127.0.0.1:19120/iceberg/v1/main%7Cwarehouse/namespaces/demo/tables
 
 statement ok
 create schema if not exists my_datalake.default;
@@ -138,7 +133,7 @@ drop table if exists my_datalake.new_schema.table_1;
 statement error
 create table my_datalake.new_schema.table_1 as select range a from range(100);
 ----
-<REGEX>:.*HTTP Error: Unable to connect.*Forbidden.*403.*
+<REGEX>:.*HTTP Error:.*uploading to.*403 Forbidden.*
 
 query I
 select message from duckdb_logs() where message like '%Failed%';

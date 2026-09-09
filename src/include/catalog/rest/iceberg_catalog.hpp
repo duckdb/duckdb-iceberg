@@ -1,6 +1,7 @@
 #pragma once
 
 #include "duckdb/catalog/catalog.hpp"
+#include "duckdb/common/optional.hpp"
 #include "duckdb/function/table_function.hpp"
 #include "duckdb/common/enums/access_mode.hpp"
 #include "duckdb/common/mutex.hpp"
@@ -119,9 +120,7 @@ public:
 	bool CheckAmbiguousCatalogOrSchema(ClientContext &context, const Identifier &schema) override {
 		return false;
 	}
-	Identifier GetDefaultSchema() const override {
-		return default_schema;
-	}
+	optional<Identifier> GetDefaultSchema() const override;
 	ErrorData SupportsCreateTable(BoundCreateTableInfo &info) override;
 
 public:

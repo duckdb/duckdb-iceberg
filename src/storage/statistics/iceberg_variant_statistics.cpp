@@ -96,13 +96,13 @@ static string BuildJsonPath(const vector<string> &field_names) {
 //! Serialize a bounds object (a struct keyed by JSON path) to the parquet-variant encoding by casting
 //! it to VARIANT and calling variant_to_parquet_variant, then concatenating the metadata and value blobs.
 static optional<string> SerializeBoundsVariant(ClientContext &context, Value bounds_struct) {
-	Value variant_value;
-	if (!bounds_struct.DefaultTryCastAs(LogicalType::VARIANT(), variant_value, nullptr)) {
+	auto variant_value = bounds_struct.DefaultTryCastAs(LogicalType::VARIANT());
+	if (!variant_value) {
 		return std::nullopt;
 	}
 
 	vector<unique_ptr<Expression>> children;
-	children.push_back(make_uniq<BoundConstantExpression>(std::move(variant_value)));
+	children.push_back(make_uniq<BoundConstantExpression>(std::move(*variant_value)));
 
 	ErrorData error;
 	FunctionBinder binder(context);
@@ -232,15 +232,15 @@ bool IcebergVariantBounds::Finalize(ClientContext &context, optional<string> &lo
 			continue;
 		}
 		if (field.min_value) {
-			Value typed;
-			if (Value(*field.min_value).DefaultTryCastAs(leaf_type, typed, nullptr)) {
-				lower_children.emplace_back(json_path, std::move(typed));
+			auto typed = Value(*field.min_value).DefaultTryCastAs(leaf_type);
+			if (typed) {
+				lower_children.emplace_back(json_path, std::move(*typed));
 			}
 		}
 		if (field.max_value) {
-			Value typed;
-			if (Value(*field.max_value).DefaultTryCastAs(leaf_type, typed, nullptr)) {
-				upper_children.emplace_back(json_path, std::move(typed));
+			auto typed = Value(*field.max_value).DefaultTryCastAs(leaf_type);
+			if (typed) {
+				upper_children.emplace_back(json_path, std::move(*typed));
 			}
 		}
 	}
@@ -381,11 +381,11 @@ bool IcebergVariantBoundsReader::RekeyBoundsVariant(const Value &bounds_variant,
 	}
 
 	Value nested_struct = NodeToValue(root);
-	Value variant_result;
-	if (!nested_struct.DefaultTryCastAs(LogicalType::VARIANT(), variant_result, nullptr)) {
+	auto variant_result = nested_struct.DefaultTryCastAs(LogicalType::VARIANT());
+	if (!variant_result) {
 		return false;
 	}
-	result = std::move(variant_result);
+	result = std::move(*variant_result);
 	return true;
 }
 
