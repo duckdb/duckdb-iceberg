@@ -3,6 +3,8 @@
 
 #include "catalog/rest/api/catalog_api.hpp"
 #include "duckdb/catalog/catalog_entry/table_catalog_entry.hpp"
+#include "duckdb/common/atomic.hpp"
+#include "duckdb/common/mutex.hpp"
 #include "duckdb/parser/parsed_data/create_table_info.hpp"
 
 namespace duckdb {
@@ -13,6 +15,8 @@ class IcebergTableSchemaVersion : public TableCatalogEntry {
 public:
 	IcebergTableSchemaVersion(IcebergTable &table_info, Catalog &catalog, SchemaCatalogEntry &schema,
 	                          CreateTableInfo &info, optional_idx schema_id);
+	IcebergTableSchemaVersion(IcebergTable &table_info, Catalog &catalog, SchemaCatalogEntry &schema,
+	                          CreateTableInfo &info, ClientContext &context);
 
 	static virtual_column_map_t VirtualColumns();
 	virtual_column_map_t GetVirtualColumns() const override;
@@ -37,7 +41,10 @@ public:
 	                           ClientContext &context) override;
 
 protected:
-	ColumnList columns;
+	mutable mutex columns_lock;
+	mutable optional<ColumnList> columns;
+	mutable atomic<bool> columns_initialized {false};
+	optional_ptr<ClientContext> context;
 
 public:
 	IcebergTable &table_info;

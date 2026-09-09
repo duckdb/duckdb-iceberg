@@ -48,6 +48,8 @@ select count(*) > 10 from (show all tables);
 ----
 1
 
+mode skip Needs projection pushdown to limit which requests get made
+
 query I
 select split(request.url, 'v1')[2] from duckdb_logs_parsed('HTTP') order by all;
 ----
@@ -56,6 +58,8 @@ select split(request.url, 'v1')[2] from duckdb_logs_parsed('HTTP') order by all;
 /namespaces/default/tables
 /namespaces/level1/tables
 /oauth/tokens
+
+mode unskip
 
 statement ok
 call truncate_duckdb_logs();

@@ -127,6 +127,8 @@ public:
 	case_insensitive_map_t<shared_ptr<IcebergSchemaEntry>> created_schemas;
 	//! Tables referenced by this transaction that have to stay alive for the duration of the transaction.
 	case_insensitive_map_t<shared_ptr<IcebergTable>> tables;
+	//! Table entries created while listing tables. Their columns are resolved on first access.
+	case_insensitive_map_t<unique_ptr<IcebergTableSchemaVersion>> lazy_table_entries;
 	//! The visible state of every resolved table in this transaction.
 	case_insensitive_map_t<IcebergTransactionTableState> current_table_data;
 	//! Declared after the schema and table states so update references are destroyed before the referenced states.

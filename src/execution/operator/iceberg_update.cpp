@@ -259,10 +259,12 @@ void IcebergTableSchemaVersion::BindUpdateConstraints(Binder &binder, LogicalGet
 	// all updates in DuckDB-Iceberg are deletes + inserts
 	update.update_is_del_and_insert = true;
 
+	auto &column_list = GetColumns();
+
 	// FIXME: this is almost a copy of LogicalUpdate::BindExtraColumns aside from the duplicate elimination
 	// add that to main DuckDB
 	auto &column_ids = get.GetColumnIds();
-	for (auto &column : columns.Physical()) {
+	for (auto &column : column_list.Physical()) {
 		auto physical_index = column.Physical();
 		bool found = false;
 		for (auto &col : update.columns) {
