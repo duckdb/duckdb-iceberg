@@ -44,13 +44,14 @@ static const case_insensitive_map_t<LogicalType> &IcebergSecretOptions() {
 } // namespace
 
 OAuth2Authorization::OAuth2Authorization(AttachedDatabase &db)
-    : IcebergAuthorization(db, IcebergAuthorizationType::OAUTH2) {
+    : IcebergAuthorization(db, IcebergAuthorizationType::OAUTH2), credentials(make_uniq<ClientCredentials>("", "")) {
 }
 
-OAuth2Authorization::OAuth2Authorization(AttachedDatabase &db, const string &grant_type, const string &uri,
-                                         const string &client_id, const string &client_secret, const string &scope)
-    : IcebergAuthorization(db, IcebergAuthorizationType::OAUTH2), grant_type(grant_type), uri(uri),
-      client_id(client_id), client_secret(client_secret), scope(scope) {
+OAuth2Authorization::OAuth2Authorization(AttachedDatabase &db, unique_ptr<const OAuth2Credentials> credentials,
+                                         const string &uri, const string &scope, const string &default_region)
+    : IcebergAuthorization(db, IcebergAuthorizationType::OAUTH2), uri(uri), scope(scope),
+      default_region(default_region), credentials(std::move(credentials)) {
+	D_ASSERT(this->credentials);
 }
 
 //! NOTE: this doesnt use StringUtil::URLEncode(..., escape_slash=true) because of how ' ' (space) is encoded
@@ -73,101 +74,70 @@ static string XWWWFormUrlEncode(const string &input) {
 	return result;
 }
 
-static void ExtractOAuth2CredentialsFromSecret(const KeyValueSecret &kv_secret, OAuth2Authorization &result) {
-	auto client_id_val = kv_secret.TryGetValue("client_id");
-	if (!client_id_val.IsNull()) {
-		result.client_id = client_id_val.ToString();
+static unique_ptr<OAuth2Credentials> ExtractOAuth2CredentialsFromSecret(const KeyValueSecret &secret) {
+	auto client_id = secret.TryGetValue("client_id");
+	auto client_secret = secret.TryGetValue("client_secret");
+	auto client = make_uniq<ClientCredentials>(client_id.IsNull() ? "" : client_id.ToString(),
+	                                           client_secret.IsNull() ? "" : client_secret.ToString());
+	auto refresh_token = secret.TryGetValue("refresh_token");
+	if (!refresh_token.IsNull() && !refresh_token.ToString().empty()) {
+		return make_uniq<RefreshTokenCredentials>(*client, refresh_token.ToString());
 	}
-
-	auto client_secret_val = kv_secret.TryGetValue("client_secret");
-	if (!client_secret_val.IsNull()) {
-		result.client_secret = client_secret_val.ToString();
+	auto grant_type = secret.TryGetValue("oauth2_grant_type");
+	if (!grant_type.IsNull() && !grant_type.ToString().empty() &&
+	    !StringUtil::CIEquals(grant_type.ToString(), "client_credentials")) {
+		throw InvalidInputException("Unsupported OAuth2 grant type '%s'", grant_type.ToString());
 	}
-
-	auto oauth2_server_uri_val = kv_secret.TryGetValue("oauth2_server_uri");
-	if (!oauth2_server_uri_val.IsNull()) {
-		result.uri = oauth2_server_uri_val.ToString();
-	}
-
-	auto oauth2_grant_type_val = kv_secret.TryGetValue("oauth2_grant_type");
-	if (!oauth2_grant_type_val.IsNull()) {
-		result.grant_type = oauth2_grant_type_val.ToString();
-	}
-
-	auto oauth2_scope_val = kv_secret.TryGetValue("oauth2_scope");
-	if (!oauth2_scope_val.IsNull()) {
-		result.scope = oauth2_scope_val.ToString();
-	}
+	return std::move(client);
 }
 
-static void ExtractOAuth2CredentialsFromOptions(const case_insensitive_map_t<Value> &options,
-                                                OAuth2Authorization &result) {
-	auto client_id_it = options.find("client_id");
-	if (client_id_it != options.end()) {
-		result.client_id = client_id_it->second.ToString();
-	}
-
-	auto client_secret_it = options.find("client_secret");
-	if (client_secret_it != options.end()) {
-		result.client_secret = client_secret_it->second.ToString();
-	}
-
-	auto oauth2_server_uri_it = options.find("oauth2_server_uri");
-	if (oauth2_server_uri_it != options.end()) {
-		result.uri = oauth2_server_uri_it->second.ToString();
-	}
-
-	auto oauth2_grant_type_it = options.find("oauth2_grant_type");
-	if (oauth2_grant_type_it != options.end()) {
-		result.grant_type = oauth2_grant_type_it->second.ToString();
-	}
-
-	auto oauth2_scope_it = options.find("oauth2_scope");
-	if (oauth2_scope_it != options.end()) {
-		result.scope = oauth2_scope_it->second.ToString();
+static const ClientCredentials &GetClientCredentials(const OAuth2Credentials &credentials) {
+	switch (credentials.grant_type) {
+	case OAuth2GrantType::CLIENT_CREDENTIALS:
+		return credentials.Cast<ClientCredentials>();
+	case OAuth2GrantType::REFRESH_TOKEN:
+		return credentials.Cast<RefreshTokenCredentials>().client_credentials;
+	default:
+		throw InternalException("Unsupported OAuth2 credentials grant type");
 	}
 }
 
 //! Helper function to fetch OAuth2 token and parse full response (RFC 6749).
 //! Relies on DuckDB's built-in HTTP retry infrastructure (RunRequestWithRetry) for transient errors.
-static rest_api_objects::OAuthTokenResponse FetchOAuth2TokenResponse(ClientContext &context, const string &grant_type,
-                                                                     const string &uri, const string &client_id,
-                                                                     const string &client_secret, const string &scope,
-                                                                     const string &refresh_token_param = "") {
+static rest_api_objects::OAuthTokenResponse FetchOAuth2TokenResponse(ClientContext &context,
+                                                                     const OAuth2Credentials &credentials,
+                                                                     const string &uri, const string &scope) {
 	vector<string> parameters;
-	parameters.push_back(StringUtil::Format("%s=%s", XWWWFormUrlEncode("grant_type"), XWWWFormUrlEncode(grant_type)));
-
-	// Google requires client credentials in POST body for refresh_token grant (not Basic Auth)
-	// RFC 6749 Section 2.3.1 allows either method; we use POST body for refresh_token (Google),
-	// Basic Auth for client_credentials (Keycloak/Polaris standard)
-	bool use_body_auth = (grant_type == "refresh_token");
-
-	if (grant_type == "refresh_token") {
-		// RFC 6749 Section 6: Refreshing an Access Token
-		// Google requires client credentials in POST body (not Basic Auth) for this grant
-		parameters.push_back(
-		    StringUtil::Format("%s=%s", XWWWFormUrlEncode("refresh_token"), XWWWFormUrlEncode(refresh_token_param)));
-		parameters.push_back(StringUtil::Format("%s=%s", XWWWFormUrlEncode("client_id"), XWWWFormUrlEncode(client_id)));
-		parameters.push_back(
-		    StringUtil::Format("%s=%s", XWWWFormUrlEncode("client_secret"), XWWWFormUrlEncode(client_secret)));
-		// Scope is optional for refresh_token grant. Only include if non-empty.
-		// Omitting scope uses the original grant's scopes (Google requires this for user OAuth refresh_tokens).
-		if (!scope.empty()) {
-			parameters.push_back(StringUtil::Format("%s=%s", XWWWFormUrlEncode("scope"), XWWWFormUrlEncode(scope)));
-		}
-	} else {
-		// client_credentials or other grant types - scope is required (always provided by caller)
-		parameters.push_back(StringUtil::Format("%s=%s", XWWWFormUrlEncode("scope"), XWWWFormUrlEncode(scope)));
-	}
-
 	HTTPHeaders headers(*context.db);
 	headers.Insert("Content-Type", "application/x-www-form-urlencoded");
 
-	// Use Basic Auth for client_credentials, POST body credentials for refresh_token
-	if (!use_body_auth) {
-		string credentials = StringUtil::Format("%s:%s", client_id, client_secret);
-		string_t credentials_blob(credentials.data(), credentials.size());
+	switch (credentials.grant_type) {
+	case OAuth2GrantType::CLIENT_CREDENTIALS: {
+		auto &client = credentials.Cast<ClientCredentials>();
+		parameters.push_back("grant_type=client_credentials");
+		parameters.push_back(StringUtil::Format("scope=%s", XWWWFormUrlEncode(scope)));
+		auto basic_auth = StringUtil::Format("%s:%s", client.client_id, client.client_secret);
+		string_t credentials_blob(basic_auth.data(), basic_auth.size());
 		headers.Insert("Authorization", StringUtil::Format("Basic %s", Blob::ToBase64(credentials_blob)));
+		break;
+	}
+	case OAuth2GrantType::REFRESH_TOKEN: {
+		auto &refresh = credentials.Cast<RefreshTokenCredentials>();
+		// Google requires client authentication in the POST body for refresh-token grants.
+		parameters.push_back("grant_type=refresh_token");
+		parameters.push_back(StringUtil::Format("refresh_token=%s", XWWWFormUrlEncode(refresh.refresh_token)));
+		parameters.push_back(
+		    StringUtil::Format("client_id=%s", XWWWFormUrlEncode(refresh.client_credentials.client_id)));
+		parameters.push_back(
+		    StringUtil::Format("client_secret=%s", XWWWFormUrlEncode(refresh.client_credentials.client_secret)));
+		// Omitting scope preserves the original grant's scopes.
+		if (!scope.empty()) {
+			parameters.push_back(StringUtil::Format("scope=%s", XWWWFormUrlEncode(scope)));
+		}
+		break;
+	}
+	default:
+		throw InternalException("Unsupported OAuth2 credentials grant type");
 	}
 
 	string post_data = StringUtil::Join(parameters, "&");
@@ -235,21 +205,18 @@ static rest_api_objects::OAuthTokenResponse FetchOAuth2TokenResponse(ClientConte
 
 } // namespace
 
-string OAuth2Authorization::GetToken(ClientContext &context, const string &grant_type, const string &uri,
-                                     const string &client_id, const string &client_secret, const string &scope) {
-	// Wrapper for backward compatibility - just returns the access_token
-	auto token_response = FetchOAuth2TokenResponse(context, grant_type, uri, client_id, client_secret, scope);
+string OAuth2Authorization::GetToken(ClientContext &context, const OAuth2Credentials &credentials, const string &uri,
+                                     const string &scope) {
+	auto token_response = FetchOAuth2TokenResponse(context, credentials, uri, scope);
 	return token_response.access_token;
 }
 
 unique_ptr<OAuth2Authorization> OAuth2Authorization::FromAttachOptions(AttachedDatabase &db, ClientContext &context,
                                                                        IcebergAttachOptions &input) {
-	auto result = make_uniq<OAuth2Authorization>(db);
-
 	unordered_map<string, Value> remaining_options;
 	case_insensitive_map_t<Value> create_secret_options;
 	string secret;
-	Value token;
+	string default_region;
 
 	static const unordered_set<string> recognized_create_secret_options {
 	    "oauth2_scope", "oauth2_server_uri", "oauth2_grant_type",      "token",
@@ -260,7 +227,7 @@ unique_ptr<OAuth2Authorization> OAuth2Authorization::FromAttachOptions(AttachedD
 		if (lower_name == "secret") {
 			secret = entry.second.ToString();
 		} else if (lower_name == "default_region") {
-			result->default_region = entry.second.ToString();
+			default_region = entry.second.ToString();
 		} else if (recognized_create_secret_options.count(lower_name)) {
 			create_secret_options.emplace(std::move(entry));
 		} else {
@@ -269,6 +236,7 @@ unique_ptr<OAuth2Authorization> OAuth2Authorization::FromAttachOptions(AttachedD
 	}
 
 	unique_ptr<SecretEntry> iceberg_secret;
+	unique_ptr<BaseSecret> new_secret;
 
 	if (create_secret_options.empty()) {
 		//! Look up an ICEBERG secret
@@ -303,33 +271,6 @@ unique_ptr<OAuth2Authorization> OAuth2Authorization::FromAttachOptions(AttachedD
 			           iceberg_secret->secret->GetName().GetIdentifierName());
 			input.catalog_uri = uri_from_secret.ToString();
 		}
-		token = kv_iceberg_secret.TryGetValue("token");
-
-		// Parse extra_http_headers from secret if present
-		IcebergAuthorization::ParseExtraHttpHeaders(kv_iceberg_secret.TryGetValue("extra_http_headers"),
-		                                            result->extra_http_headers);
-
-		// Extract credentials for token refresh from existing secret
-		ExtractOAuth2CredentialsFromSecret(kv_iceberg_secret, *result);
-
-		// Extract refresh_token if present
-		auto refresh_token_val = kv_iceberg_secret.TryGetValue("refresh_token");
-		if (!refresh_token_val.IsNull()) {
-			result->refresh_token = refresh_token_val.ToString();
-		}
-
-		// Extract expires_in for expiry calculation
-		Value expires_in_val = kv_iceberg_secret.TryGetValue("expires_in");
-		int32_t expires_in_seconds = 0;
-		if (!expires_in_val.IsNull() && expires_in_val.type().id() == LogicalTypeId::INTEGER) {
-			expires_in_seconds = expires_in_val.GetValue<int32_t>();
-		}
-
-		// Compute expiry time if we have both token and expires_in
-		if (!token.IsNull() && expires_in_seconds > 0) {
-			// Pass empty string for refresh_token to preserve the one we just set
-			result->UpdateTokenState(token.ToString(), expires_in_seconds, "");
-		}
 	} else {
 		if (!secret.empty()) {
 			set<string> option_names;
@@ -341,44 +282,34 @@ unique_ptr<OAuth2Authorization> OAuth2Authorization::FromAttachOptions(AttachedD
 			    StringUtil::Join(option_names, ", "));
 		}
 
-		// Extract credentials from options BEFORE creating the secret
-		// These will be needed for token refresh
-		ExtractOAuth2CredentialsFromOptions(create_secret_options, *result);
-
 		CreateSecretInput create_secret_input;
 		if (!input.catalog_uri.empty()) {
 			create_secret_options["uri"] = input.catalog_uri;
 		}
 		create_secret_input.options = std::move(create_secret_options);
-		auto new_secret = OAuth2Authorization::CreateCatalogSecretFunction(context, create_secret_input);
-		auto &kv_iceberg_secret = dynamic_cast<KeyValueSecret &>(*new_secret);
-		token = kv_iceberg_secret.TryGetValue("token");
-
-		// Extract refresh_token and expires_in from the newly created secret
-		auto refresh_token_val = kv_iceberg_secret.TryGetValue("refresh_token");
-		if (!refresh_token_val.IsNull()) {
-			result->refresh_token = refresh_token_val.ToString();
-		}
-
-		auto expires_in_val = kv_iceberg_secret.TryGetValue("expires_in");
-		if (!expires_in_val.IsNull() && expires_in_val.type().id() == LogicalTypeId::INTEGER) {
-			int32_t expires_in = expires_in_val.GetValue<int32_t>();
-			// Compute expiry time when we have the token
-			if (!token.IsNull()) {
-				// Pass empty string for refresh_token to preserve the one we just set
-				result->UpdateTokenState(token.ToString(), expires_in, "");
-			}
-		}
-
-		// Parse extra_http_headers from inline options if present
-		IcebergAuthorization::ParseExtraHttpHeaders(kv_iceberg_secret.TryGetValue("extra_http_headers"),
-		                                            result->extra_http_headers);
+		new_secret = OAuth2Authorization::CreateCatalogSecretFunction(context, create_secret_input);
 	}
 
+	const auto &kv_secret = dynamic_cast<const KeyValueSecret &>(new_secret ? *new_secret : *iceberg_secret->secret);
+	const auto server_uri = kv_secret.TryGetValue("oauth2_server_uri");
+	const auto scope = kv_secret.TryGetValue("oauth2_scope");
+	auto result = make_uniq<OAuth2Authorization>(db, ExtractOAuth2CredentialsFromSecret(kv_secret),
+	                                             server_uri.IsNull() ? "" : server_uri.ToString(),
+	                                             scope.IsNull() ? "" : scope.ToString(), default_region);
+	const auto token = kv_secret.TryGetValue("token");
 	if (token.IsNull()) {
 		throw HTTPException(StringUtil::Format("Failed to retrieve OAuth2 token from %s", result->uri));
 	}
 	result->token = token.ToString();
+
+	const auto expires_in = kv_secret.TryGetValue("expires_in");
+	if (!expires_in.IsNull() && expires_in.type().id() == LogicalTypeId::INTEGER &&
+	    (new_secret || expires_in.GetValue<int32_t>() > 0)) {
+		// Preserve the refresh credentials extracted above.
+		result->UpdateTokenState(result->token, expires_in.GetValue<int32_t>(), "");
+	}
+	IcebergAuthorization::ParseExtraHttpHeaders(kv_secret.TryGetValue("extra_http_headers"),
+	                                            result->extra_http_headers);
 
 	input.options = std::move(remaining_options);
 	return result;
@@ -464,16 +395,12 @@ unique_ptr<BaseSecret> OAuth2Authorization::CreateCatalogSecretFunction(ClientCo
 
 	//! ---- Grant Type and Token Acquisition ----
 	// Determine which grant type to use for initial token acquisition
-	string grant_type_to_use;
-	string refresh_token_param;
 	string scope_to_use;
 
 	// Check if refresh_token was provided
 	auto refresh_token_it = result->secret_map.find("refresh_token");
 	if (refresh_token_it != result->secret_map.end()) {
 		// User provided a refresh_token - use refresh_token grant
-		grant_type_to_use = "refresh_token";
-		refresh_token_param = refresh_token_it->second.ToString();
 		// Don't send scope in refresh_token grant (use original token scopes)
 		// Per RFC 6749 Section 6, scope is optional and if omitted, is treated as equal to original scope
 		auto scope_it = result->secret_map.find("oauth2_scope");
@@ -482,14 +409,12 @@ unique_ptr<BaseSecret> OAuth2Authorization::CreateCatalogSecretFunction(ClientCo
 		// No refresh_token - use client_credentials grant
 		auto grant_type_it = result->secret_map.find("oauth2_grant_type");
 		if (grant_type_it != result->secret_map.end()) {
-			grant_type_to_use = grant_type_it->second.ToString();
+			auto grant_type_to_use = grant_type_it->second.ToString();
 			if (!StringUtil::CIEquals(grant_type_to_use, "client_credentials")) {
 				throw InvalidInputException(
 				    "Unsupported option ('%s') for 'oauth2_grant_type', only supports 'client_credentials' currently",
 				    grant_type_to_use);
 			}
-		} else {
-			grant_type_to_use = "client_credentials";
 		}
 		// Default scope for client_credentials grant
 		if (!result->secret_map.count("oauth2_scope")) {
@@ -500,9 +425,13 @@ unique_ptr<BaseSecret> OAuth2Authorization::CreateCatalogSecretFunction(ClientCo
 
 	// Make a request to the oauth2 server uri to get the (bearer) token
 	// Store the full response to capture expires_in and refresh_token
-	auto token_response =
-	    FetchOAuth2TokenResponse(context, grant_type_to_use, server_uri, result->secret_map["client_id"].ToString(),
-	                             result->secret_map["client_secret"].ToString(), scope_to_use, refresh_token_param);
+	auto credentials = ExtractOAuth2CredentialsFromSecret(*result);
+	if (refresh_token_it != result->secret_map.end() &&
+	    credentials->grant_type == OAuth2GrantType::CLIENT_CREDENTIALS) {
+		credentials = make_uniq<RefreshTokenCredentials>(credentials->Cast<ClientCredentials>(),
+		                                                 refresh_token_it->second.ToString());
+	}
+	auto token_response = FetchOAuth2TokenResponse(context, *credentials, server_uri, scope_to_use);
 
 	result->secret_map["token"] = token_response.access_token;
 
@@ -593,7 +522,7 @@ void OAuth2Authorization::UpdateTokenState(const string &new_token, int32_t expi
 	// After DETACH + re-ATTACH, the rotated refresh_token is lost and the client falls back
 	// to client_credentials if available. This is a known limitation.
 	if (!new_refresh_token.empty()) {
-		refresh_token = new_refresh_token;
+		credentials = make_uniq<RefreshTokenCredentials>(GetClientCredentials(*credentials), new_refresh_token);
 	}
 
 	// Determine which expires_in to use
@@ -625,7 +554,8 @@ void OAuth2Authorization::UpdateTokenState(const string &new_token, int32_t expi
 	}
 }
 
-bool OAuth2Authorization::IsTokenExpiredUnlocked(ClientContext &context, std::lock_guard<std::mutex> &lock) const {
+bool OAuth2Authorization::IsTokenExpiredUnlocked(ClientContext &context,
+                                                 const std::lock_guard<std::mutex> &lock) const {
 	// Internal method - caller must hold token_mutex
 	(void)lock;
 
@@ -649,46 +579,33 @@ bool OAuth2Authorization::IsTokenExpiredUnlocked(ClientContext &context, std::lo
 	return now_seconds >= token_expires_at;
 }
 
-bool OAuth2Authorization::CanRefreshUnlocked(std::lock_guard<std::mutex> &lock) const {
+bool OAuth2Authorization::CanRefreshUnlocked(const std::lock_guard<std::mutex> &lock) const {
 	// Internal method - caller must hold token_mutex
 	(void)lock;
-	// Can refresh if we have a refresh_token or if we have client credentials
-	return !refresh_token.empty() || (!client_id.empty() && !client_secret.empty() && !uri.empty());
+	return credentials->grant_type == OAuth2GrantType::REFRESH_TOKEN ||
+	       (GetClientCredentials(*credentials).IsComplete() && !uri.empty());
 }
 
-void OAuth2Authorization::RefreshAccessTokenUnlocked(ClientContext &context, std::lock_guard<std::mutex> &lock) {
-	// Internal method - caller must hold token_mutex
-	(void)lock;
+void OAuth2Authorization::RefreshAccessTokenUnlocked(ClientContext &context, const std::lock_guard<std::mutex> &lock) {
 	if (!CanRefreshUnlocked(lock)) {
 		throw HTTPException("Cannot refresh access token: no refresh_token and no client credentials available");
 	}
 
 	rest_api_objects::OAuthTokenResponse token_response;
-
-	if (!refresh_token.empty()) {
-		// RFC 6749 Section 6: Use refresh_token grant
-		// Try refresh_token first, fall back to client_credentials if it fails
+	if (credentials->grant_type == OAuth2GrantType::REFRESH_TOKEN) {
 		try {
-			token_response =
-			    FetchOAuth2TokenResponse(context, "refresh_token", uri, client_id, client_secret, scope, refresh_token);
-		} catch (std::exception &ex) {
-			// Refresh token grant failed (e.g., token revoked, invalid_grant error)
-			// Fall back to client_credentials if available
-			if (!client_id.empty() && !client_secret.empty() && !uri.empty()) {
-				// Clear the stale refresh_token to avoid repeated failures
-				refresh_token.clear();
-				string effective_grant_type = grant_type.empty() ? "client_credentials" : grant_type;
-				token_response =
-				    FetchOAuth2TokenResponse(context, effective_grant_type, uri, client_id, client_secret, scope);
-			} else {
-				// No fallback available, re-throw the original error
+			token_response = FetchOAuth2TokenResponse(context, *credentials, uri, scope);
+		} catch (std::exception &) {
+			// A failed refresh-token grant can fall back to client credentials.
+			auto &client = GetClientCredentials(*credentials);
+			if (!client.IsComplete() || uri.empty()) {
 				throw;
 			}
+			credentials = make_uniq<ClientCredentials>(client.client_id, client.client_secret);
+			token_response = FetchOAuth2TokenResponse(context, *credentials, uri, scope);
 		}
 	} else {
-		// No refresh_token: Re-acquire token using client_credentials grant
-		string effective_grant_type = grant_type.empty() ? "client_credentials" : grant_type;
-		token_response = FetchOAuth2TokenResponse(context, effective_grant_type, uri, client_id, client_secret, scope);
+		token_response = FetchOAuth2TokenResponse(context, *credentials, uri, scope);
 	}
 
 	// Update our token state with the new token (UpdateTokenState assumes lock is held)
