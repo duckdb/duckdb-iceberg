@@ -30,10 +30,6 @@ struct ClientCredentials : public OAuth2Credentials {
 	    : OAuth2Credentials(GRANT_TYPE), client_id(client_id), client_secret(client_secret) {
 	}
 
-	bool IsComplete() const {
-		return !client_id.empty() && !client_secret.empty();
-	}
-
 	const string client_id;
 	const string client_secret;
 };
@@ -45,6 +41,7 @@ struct RefreshTokenCredentials : public OAuth2Credentials {
 	    : OAuth2Credentials(GRANT_TYPE), client_credentials(client_credentials), refresh_token(refresh_token) {
 	}
 
+	//! Required client authentication for the supported refresh-token flow.
 	const ClientCredentials client_credentials;
 	const string refresh_token;
 };
@@ -78,6 +75,7 @@ public:
 private:
 	//! Token state and grant credentials (protected by token_mutex)
 	string token;
+	//! Null for a token-only configuration; credential values may be empty.
 	unique_ptr<const OAuth2Credentials> credentials;
 	int64_t token_expires_at = 0;
 	int32_t last_expires_in = 0;

@@ -44,14 +44,13 @@ static const case_insensitive_map_t<LogicalType> &IcebergSecretOptions() {
 } // namespace
 
 OAuth2Authorization::OAuth2Authorization(AttachedDatabase &db)
-    : IcebergAuthorization(db, IcebergAuthorizationType::OAUTH2), credentials(make_uniq<ClientCredentials>("", "")) {
+    : IcebergAuthorization(db, IcebergAuthorizationType::OAUTH2) {
 }
 
 OAuth2Authorization::OAuth2Authorization(AttachedDatabase &db, unique_ptr<const OAuth2Credentials> credentials,
                                          const string &uri, const string &scope, const string &default_region)
     : IcebergAuthorization(db, IcebergAuthorizationType::OAUTH2), uri(uri), scope(scope),
       default_region(default_region), credentials(std::move(credentials)) {
-	D_ASSERT(this->credentials);
 }
 
 //! NOTE: this doesnt use StringUtil::URLEncode(..., escape_slash=true) because of how ' ' (space) is encoded
@@ -77,10 +76,15 @@ static string XWWWFormUrlEncode(const string &input) {
 static unique_ptr<OAuth2Credentials> ExtractOAuth2CredentialsFromSecret(const KeyValueSecret &secret) {
 	auto client_id = secret.TryGetValue("client_id");
 	auto client_secret = secret.TryGetValue("client_secret");
-	auto client = make_uniq<ClientCredentials>(client_id.IsNull() ? "" : client_id.ToString(),
-	                                           client_secret.IsNull() ? "" : client_secret.ToString());
+	unique_ptr<ClientCredentials> client;
+	if (!client_id.IsNull() && !client_secret.IsNull()) {
+		client = make_uniq<ClientCredentials>(client_id.ToString(), client_secret.ToString());
+	}
 	auto refresh_token = secret.TryGetValue("refresh_token");
-	if (!refresh_token.IsNull() && !refresh_token.ToString().empty()) {
+	if (!refresh_token.IsNull()) {
+		if (!client) {
+			throw InvalidInputException("Refresh-token credentials require both 'client_id' and 'client_secret'");
+		}
 		return make_uniq<RefreshTokenCredentials>(*client, refresh_token.ToString());
 	}
 	auto grant_type = secret.TryGetValue("oauth2_grant_type");
@@ -426,11 +430,6 @@ unique_ptr<BaseSecret> OAuth2Authorization::CreateCatalogSecretFunction(ClientCo
 	// Make a request to the oauth2 server uri to get the (bearer) token
 	// Store the full response to capture expires_in and refresh_token
 	auto credentials = ExtractOAuth2CredentialsFromSecret(*result);
-	if (refresh_token_it != result->secret_map.end() &&
-	    credentials->grant_type == OAuth2GrantType::CLIENT_CREDENTIALS) {
-		credentials = make_uniq<RefreshTokenCredentials>(credentials->Cast<ClientCredentials>(),
-		                                                 refresh_token_it->second.ToString());
-	}
 	auto token_response = FetchOAuth2TokenResponse(context, *credentials, server_uri, scope_to_use);
 
 	result->secret_map["token"] = token_response.access_token;
@@ -522,6 +521,7 @@ void OAuth2Authorization::UpdateTokenState(const string &new_token, int32_t expi
 	// After DETACH + re-ATTACH, the rotated refresh_token is lost and the client falls back
 	// to client_credentials if available. This is a known limitation.
 	if (!new_refresh_token.empty()) {
+		D_ASSERT(credentials);
 		credentials = make_uniq<RefreshTokenCredentials>(GetClientCredentials(*credentials), new_refresh_token);
 	}
 
@@ -582,8 +582,8 @@ bool OAuth2Authorization::IsTokenExpiredUnlocked(ClientContext &context,
 bool OAuth2Authorization::CanRefreshUnlocked(const std::lock_guard<std::mutex> &lock) const {
 	// Internal method - caller must hold token_mutex
 	(void)lock;
-	return credentials->grant_type == OAuth2GrantType::REFRESH_TOKEN ||
-	       (GetClientCredentials(*credentials).IsComplete() && !uri.empty());
+	// Token-only configurations have no credentials with which to acquire a new token.
+	return credentials && !uri.empty();
 }
 
 void OAuth2Authorization::RefreshAccessTokenUnlocked(ClientContext &context, const std::lock_guard<std::mutex> &lock) {
@@ -597,10 +597,7 @@ void OAuth2Authorization::RefreshAccessTokenUnlocked(ClientContext &context, con
 			token_response = FetchOAuth2TokenResponse(context, *credentials, uri, scope);
 		} catch (std::exception &) {
 			// A failed refresh-token grant can fall back to client credentials.
-			auto &client = GetClientCredentials(*credentials);
-			if (!client.IsComplete() || uri.empty()) {
-				throw;
-			}
+			const auto &client = GetClientCredentials(*credentials);
 			credentials = make_uniq<ClientCredentials>(client.client_id, client.client_secret);
 			token_response = FetchOAuth2TokenResponse(context, *credentials, uri, scope);
 		}
