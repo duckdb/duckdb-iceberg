@@ -1,0 +1,66 @@
+# name: benchmark/performance/equality_delete_fast_filter.benchmark
+# description: apply a large composite equality-delete set while scanning an Iceberg table
+# group: [performance]
+
+name Equality delete hash filter
+group performance
+subgroup equality_deletes
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+# Three eight-value predicates write their 8^3 cross product as one 512-row
+# equality-delete file, reproducing the expression-tree scaling issue from
+# duckdb-iceberg#626 without triggering DuckDB's large-IN rewrite.
+load
+SET enable_external_file_cache=false;
+SET unsafe_and_disabled_for_iceberg_v3_enable_equality_deletes=true;
+CREATE SECRET (
+    TYPE S3,
+    KEY_ID 'admin',
+    SECRET 'password',
+    ENDPOINT '127.0.0.1:9000',
+    URL_STYLE 'path',
+    USE_SSL 0
+);
+ATTACH '' AS my_datalake (
+    TYPE ICEBERG,
+    CLIENT_ID 'admin',
+    CLIENT_SECRET 'password',
+    URI 'http://127.0.0.1:8181'
+);
+CREATE SCHEMA IF NOT EXISTS my_datalake.default;
+DROP TABLE IF EXISTS my_datalake.default.equality_delete_fast_filter_benchmark;
+CREATE TABLE my_datalake.default.equality_delete_fast_filter_benchmark (
+    id BIGINT,
+    key_a INTEGER,
+    key_b INTEGER,
+    key_c INTEGER,
+    payload VARCHAR
+);
+INSERT INTO my_datalake.default.equality_delete_fast_filter_benchmark
+SELECT range,
+       range % 16,
+       (range // 16) % 16,
+       (range // 256) % 16,
+       'payload-' || range::VARCHAR
+FROM range(262144);
+DELETE FROM my_datalake.default.equality_delete_fast_filter_benchmark
+WHERE (key_a = 0 OR key_a = 1 OR key_a = 2 OR key_a = 3 OR key_a = 4 OR key_a = 5 OR key_a = 6 OR
+       key_a = 7)
+  AND (key_b = 0 OR key_b = 1 OR key_b = 2 OR key_b = 3 OR key_b = 4 OR key_b = 5 OR key_b = 6 OR
+       key_b = 7)
+  AND (key_c = 0 OR key_c = 1 OR key_c = 2 OR key_c = 3 OR key_c = 4 OR key_c = 5 OR key_c = 6 OR
+       key_c = 7);
+
+run
+SELECT count(*)
+FROM my_datalake.default.equality_delete_fast_filter_benchmark;
+
+result I
+229376

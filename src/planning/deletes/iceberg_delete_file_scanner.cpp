@@ -338,8 +338,9 @@ static void ScanParquetDeleteFiles(const IcebergDeletePlanningContext &context,
 	if (content == IcebergManifestEntryContentType::EQUALITY_DELETES) {
 		for (auto &scan_entry_ref : scan_entries) {
 			auto &scan_entry = scan_entry_ref.get();
+			auto &data_file = scan_entry.GetEntry().data_file;
 			auto equality_delete =
-			    make_shared_ptr<IcebergEqualityDeleteFile>(scan_entry.GetEntry().data_file.equality_ids);
+			    make_shared_ptr<IcebergEqualityDeleteFile>(data_file.file_path, data_file.equality_ids);
 			equality_delete_files.emplace_back(*equality_delete);
 			scan_result.equality_delete_data.push_back({scan_entry.load, std::move(equality_delete)});
 		}

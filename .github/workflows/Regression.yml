@@ -166,6 +166,11 @@ jobs:
           ls benchmark/rewrite_data_files/*.benchmark > .github/regression/rewrite_data_files.csv
           python duckdb/scripts/regression/test_runner.py --old base/build/release/benchmark/benchmark_runner --new build/release/benchmark/benchmark_runner --benchmarks .github/regression/rewrite_data_files.csv --verbose --threads 2 --benchmark-cache=clear
 
+      - name: Regression Test General Performance Benchmarks
+        run: |
+          ls benchmark/performance/*.benchmark > .github/regression/performance.csv
+          python duckdb/scripts/regression/test_runner.py --old base/build/release/benchmark/benchmark_runner --new build/release/benchmark/benchmark_runner --benchmarks .github/regression/performance.csv --verbose --threads 2 --benchmark-cache=clear
+
       # Runs last on purpose. These benchmarks create 119 tables in the fixture's 'default'
       # namespace, which would grow every ListTables response the steps above make and add noise to
       # timings that are compared against the base build.

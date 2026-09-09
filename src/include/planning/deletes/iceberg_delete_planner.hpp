@@ -17,6 +17,7 @@ struct IcebergOptions;
 using position_delete_map_t = unordered_map<string, shared_ptr<IcebergDeleteData>>;
 
 struct IcebergDeletePlan {
+	//! Equality-delete values are materialized separately from positional deletes, which become a DeleteFilter.
 	vector<reference<const IcebergEqualityDeleteFile>> equality_deletes;
 	unique_ptr<DeleteFilter> positional_deletes;
 };
