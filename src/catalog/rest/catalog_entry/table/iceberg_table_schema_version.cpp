@@ -32,8 +32,13 @@ constexpr column_t IcebergMultiFileReader::COLUMN_IDENTIFIER_LAST_SEQUENCE_NUMBE
 IcebergTableSchemaVersion::IcebergTableSchemaVersion(IcebergTable &table_info, Catalog &catalog,
                                                      SchemaCatalogEntry &schema, CreateTableInfo &info,
                                                      optional_idx schema_id)
-    : TableCatalogEntry(catalog, schema, info), table_info(table_info), schema_id(schema_id) {
+    : TableCatalogEntry(catalog, schema, info), columns(std::move(info.columns)), table_info(table_info),
+      schema_id(schema_id) {
 	this->internal = false;
+}
+
+const ColumnList &IcebergTableSchemaVersion::GetColumns() const {
+	return columns;
 }
 
 unique_ptr<BaseStatistics> IcebergTableSchemaVersion::GetStatistics(ClientContext &context, column_t column_id) {
