@@ -1,7 +1,8 @@
 #pragma once
 
 #include "catalog/rest/storage/iceberg_authorization.hpp"
-#include <mutex>
+#include "duckdb/common/mutex.hpp"
+#include "duckdb/common/thread_annotation.hpp"
 
 namespace duckdb {
 
@@ -60,7 +61,7 @@ public:
 	                                                         IcebergAttachOptions &input);
 	unique_ptr<HTTPResponse> Request(RequestType request_type, ClientContext &context,
 	                                 const IRCEndpointBuilder &endpoint_builder, HTTPHeaders &headers,
-	                                 const string &data = "") override;
+	                                 const string &data = "") override DUCKDB_EXCLUDES(token_mutex);
 	static string GetToken(ClientContext &context, const OAuth2Credentials &credentials, const string &uri,
 	                       const string &scope);
 	static void SetCatalogSecretParameters(CreateSecretFunction &function);
@@ -74,24 +75,25 @@ public:
 
 private:
 	//! Token state and grant credentials (protected by token_mutex)
-	string token;
+	string token DUCKDB_GUARDED_BY(token_mutex);
 	//! Null for a token-only configuration; credential values may be empty.
-	unique_ptr<const OAuth2Credentials> credentials;
-	int64_t token_expires_at = 0;
-	int32_t last_expires_in = 0;
+	unique_ptr<const OAuth2Credentials> credentials DUCKDB_GUARDED_BY(token_mutex);
+	int64_t token_expires_at DUCKDB_GUARDED_BY(token_mutex) = 0;
+	int32_t last_expires_in DUCKDB_GUARDED_BY(token_mutex) = 0;
 
 	//! Helper to update token state from OAuth2 response.
-	//! Safe to call during construction (before sharing) and under token_mutex afterwards.
-	void UpdateTokenState(const string &new_token, int32_t expires_in, const string &new_refresh_token);
+	//! Caller must hold token_mutex, including during initialization.
+	void UpdateTokenState(const string &new_token, int32_t expires_in, const string &new_refresh_token)
+	    DUCKDB_REQUIRES(token_mutex);
 
 	//! Internal methods -- caller must hold token_mutex
-	bool IsTokenExpiredUnlocked(ClientContext &context, const std::lock_guard<std::mutex> &lock) const;
-	bool CanRefreshUnlocked(const std::lock_guard<std::mutex> &lock) const;
-	void RefreshAccessTokenUnlocked(ClientContext &context, const std::lock_guard<std::mutex> &lock);
+	bool IsTokenExpiredUnlocked(ClientContext &context) const DUCKDB_REQUIRES(token_mutex);
+	bool CanRefreshUnlocked() const DUCKDB_REQUIRES(token_mutex);
+	void RefreshAccessTokenUnlocked(ClientContext &context) DUCKDB_REQUIRES(token_mutex);
 
 	//! Mutex to serialize token refresh. Held during check+refresh+copy, released before catalog I/O.
 	//! At most one thread refreshes at a time; others queue and re-check expiry after acquiring.
-	std::mutex token_mutex;
+	annotated_mutex token_mutex;
 };
 
 } // namespace duckdb

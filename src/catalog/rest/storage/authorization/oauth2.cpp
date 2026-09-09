@@ -304,14 +304,18 @@ unique_ptr<OAuth2Authorization> OAuth2Authorization::FromAttachOptions(AttachedD
 	if (token.IsNull()) {
 		throw HTTPException(StringUtil::Format("Failed to retrieve OAuth2 token from %s", result->uri));
 	}
-	result->token = token.ToString();
+	{
+		annotated_lock_guard<annotated_mutex> lock(result->token_mutex);
+		result->token = token.ToString();
 
-	const auto expires_in = kv_secret.TryGetValue("expires_in");
-	if (!expires_in.IsNull() && expires_in.type().id() == LogicalTypeId::INTEGER &&
-	    (new_secret || expires_in.GetValue<int32_t>() > 0)) {
-		// Preserve the refresh credentials extracted above.
-		result->UpdateTokenState(result->token, expires_in.GetValue<int32_t>(), "");
+		const auto expires_in = kv_secret.TryGetValue("expires_in");
+		if (!expires_in.IsNull() && expires_in.type().id() == LogicalTypeId::INTEGER &&
+		    (new_secret || expires_in.GetValue<int32_t>() > 0)) {
+			// Preserve the refresh credentials extracted above.
+			result->UpdateTokenState(result->token, expires_in.GetValue<int32_t>(), "");
+		}
 	}
+
 	IcebergAuthorization::ParseExtraHttpHeaders(kv_secret.TryGetValue("extra_http_headers"),
 	                                            result->extra_http_headers);
 
@@ -460,9 +464,9 @@ unique_ptr<HTTPResponse> OAuth2Authorization::Request(RequestType request_type, 
 	// fresh token, and skip refresh.
 	string bearer_token;
 	{
-		std::lock_guard<std::mutex> lock(token_mutex);
-		if (IsTokenExpiredUnlocked(context, lock) && CanRefreshUnlocked(lock)) {
-			RefreshAccessTokenUnlocked(context, lock);
+		annotated_lock_guard<annotated_mutex> lock(token_mutex);
+		if (IsTokenExpiredUnlocked(context) && CanRefreshUnlocked()) {
+			RefreshAccessTokenUnlocked(context);
 		}
 		bearer_token = token;
 	}
@@ -484,9 +488,9 @@ unique_ptr<HTTPResponse> OAuth2Authorization::Request(RequestType request_type, 
 	if (response->status == HTTPStatusCode::Unauthorized_401) {
 		bool should_retry = false;
 		{
-			std::lock_guard<std::mutex> lock(token_mutex);
-			if (CanRefreshUnlocked(lock)) {
-				RefreshAccessTokenUnlocked(context, lock);
+			annotated_lock_guard<annotated_mutex> lock(token_mutex);
+			if (CanRefreshUnlocked()) {
+				RefreshAccessTokenUnlocked(context);
 				bearer_token = token;
 				should_retry = true;
 			}
@@ -554,11 +558,7 @@ void OAuth2Authorization::UpdateTokenState(const string &new_token, int32_t expi
 	}
 }
 
-bool OAuth2Authorization::IsTokenExpiredUnlocked(ClientContext &context,
-                                                 const std::lock_guard<std::mutex> &lock) const {
-	// Internal method - caller must hold token_mutex
-	(void)lock;
-
+bool OAuth2Authorization::IsTokenExpiredUnlocked(ClientContext &context) const {
 	// Test hook to force token expiry (for test infrastructure)
 	Value force_expiry_val;
 	if (context.TryGetCurrentSetting("iceberg_test_force_token_expiry", force_expiry_val)) {
@@ -579,15 +579,13 @@ bool OAuth2Authorization::IsTokenExpiredUnlocked(ClientContext &context,
 	return now_seconds >= token_expires_at;
 }
 
-bool OAuth2Authorization::CanRefreshUnlocked(const std::lock_guard<std::mutex> &lock) const {
-	// Internal method - caller must hold token_mutex
-	(void)lock;
+bool OAuth2Authorization::CanRefreshUnlocked() const {
 	// Token-only configurations have no credentials with which to acquire a new token.
 	return credentials && !uri.empty();
 }
 
-void OAuth2Authorization::RefreshAccessTokenUnlocked(ClientContext &context, const std::lock_guard<std::mutex> &lock) {
-	if (!CanRefreshUnlocked(lock)) {
+void OAuth2Authorization::RefreshAccessTokenUnlocked(ClientContext &context) {
+	if (!CanRefreshUnlocked()) {
 		throw HTTPException("Cannot refresh access token: no refresh_token and no client credentials available");
 	}
 
