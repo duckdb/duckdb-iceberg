@@ -5,6 +5,7 @@
 #include "duckdb/planner/expression/bound_constant_expression.hpp"
 #include "duckdb/planner/expression/bound_function_expression.hpp"
 #include "duckdb/planner/expression/bound_operator_expression.hpp"
+#include "duckdb/planner/filter/table_filter_functions.hpp"
 #include "catalog/rest/api/iceberg_type.hpp"
 
 namespace duckdb {
@@ -39,6 +40,24 @@ unique_ptr<rest_api_objects::Expression> IcebergExpression::UnaryExpression(cons
 	result->unary_expression.emplace();
 	result->unary_expression->type.value = type;
 	result->unary_expression->term = ReferenceExpression(column_name);
+	return result;
+}
+
+unique_ptr<rest_api_objects::Expression>
+IcebergExpression::SetExpression(const string &type, const string &column_name,
+                                 const vector<reference<const Value>> &values) {
+	auto result = make_uniq<rest_api_objects::Expression>();
+	result->set_expression.emplace();
+	result->set_expression->type.value = type;
+	result->set_expression->term = ReferenceExpression(column_name);
+	result->set_expression->values.reserve(values.size());
+	for (auto &value : values) {
+		try {
+			result->set_expression->values.push_back(IcebergTypeHelper::PrimitiveTypeFromValue(value.get()));
+		} catch (...) {
+			return nullptr;
+		}
+	}
 	return result;
 }
 
@@ -80,6 +99,20 @@ optional<string> IcebergExpression::GetComparisonType(ExpressionType type, bool 
 
 unique_ptr<rest_api_objects::Expression> IcebergExpression::TryConvertFilter(const Expression &expr,
                                                                              const string &column_name) {
+	if (expr.GetExpressionClass() == ExpressionClass::BOUND_FUNCTION) {
+		//! An optional filter wraps a predicate the scan may skip for performance but that the query
+		//! still implies, so the wrapped predicate is safe to send. IN lists arrive in this shape.
+		auto &func = expr.Cast<BoundFunctionExpression>();
+		auto &function_name = func.Function().GetName();
+		if (function_name == OptionalFilterScalarFun::NAME && func.BindInfo()) {
+			auto &data = func.BindInfo()->Cast<OptionalFilterFunctionData>();
+			return data.child_filter_expr ? TryConvertFilter(*data.child_filter_expr, column_name) : nullptr;
+		}
+		if (function_name == SelectivityOptionalFilterScalarFun::NAME && func.BindInfo()) {
+			auto &data = func.BindInfo()->Cast<SelectivityOptionalFilterFunctionData>();
+			return data.child_filter_expr ? TryConvertFilter(*data.child_filter_expr, column_name) : nullptr;
+		}
+	}
 	if (expr.GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
 		auto &conjunction = expr.Cast<BoundConjunctionExpression>();
 		const bool is_and = expr.GetExpressionType() == ExpressionType::CONJUNCTION_AND;
@@ -127,13 +160,35 @@ unique_ptr<rest_api_objects::Expression> IcebergExpression::TryConvertFilter(con
 	}
 	if (expr.GetExpressionClass() == ExpressionClass::BOUND_OPERATOR) {
 		auto &op = expr.Cast<BoundOperatorExpression>();
+		auto expression_type = expr.GetExpressionType();
+		if (expression_type == ExpressionType::COMPARE_IN) {
+			//! IN has the column as its first child, followed by one child per value in the set.
+			auto &children = op.GetChildren();
+			if (children.size() < 2 || children[0]->GetExpressionClass() != ExpressionClass::BOUND_REF) {
+				return nullptr;
+			}
+			vector<reference<const Value>> values;
+			values.reserve(children.size() - 1);
+			for (idx_t i = 1; i < children.size(); i++) {
+				if (children[i]->GetExpressionClass() != ExpressionClass::BOUND_CONSTANT) {
+					return nullptr;
+				}
+				auto &constant = children[i]->Cast<BoundConstantExpression>();
+				if (constant.GetValue().IsNull()) {
+					//! A NULL in the set makes the comparison unknown rather than false; leave the set alone.
+					return nullptr;
+				}
+				values.emplace_back(constant.GetValue());
+			}
+			return SetExpression("in", column_name, values);
+		}
 		if (op.GetChildren().size() != 1 || op.GetChildren()[0]->GetExpressionClass() != ExpressionClass::BOUND_REF) {
 			return nullptr;
 		}
-		if (expr.GetExpressionType() == ExpressionType::OPERATOR_IS_NULL) {
+		if (expression_type == ExpressionType::OPERATOR_IS_NULL) {
 			return UnaryExpression("is-null", column_name);
 		}
-		if (expr.GetExpressionType() == ExpressionType::OPERATOR_IS_NOT_NULL) {
+		if (expression_type == ExpressionType::OPERATOR_IS_NOT_NULL) {
 			return UnaryExpression("not-null", column_name);
 		}
 	}

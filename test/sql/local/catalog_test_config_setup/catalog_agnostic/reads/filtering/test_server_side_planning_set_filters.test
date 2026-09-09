@@ -1,0 +1,126 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/reads/filtering/test_server_side_planning_set_filters.test
+# description: IN lists and OR-of-equalities reach the server-side scan-planning request
+# group: [filtering]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+statement ok
+pragma enable_external_file_cache=false;
+
+statement ok
+create schema if not exists my_datalake.default;
+
+statement ok
+drop table if exists my_datalake.default.test_server_side_set_filters;
+
+statement ok
+CREATE TABLE my_datalake.default.test_server_side_set_filters (id int, bucket int)
+PARTITIONED BY (bucket);
+
+# One insert per partition, so each partition is its own data file.
+statement ok
+insert into my_datalake.default.test_server_side_set_filters select range, 0 from range(1000);
+
+statement ok
+insert into my_datalake.default.test_server_side_set_filters select 1000 + range, 1 from range(1000);
+
+statement ok
+insert into my_datalake.default.test_server_side_set_filters select 2000 + range, 2 from range(1000);
+
+statement ok
+insert into my_datalake.default.test_server_side_set_filters select 3000 + range, 3 from range(1000);
+
+query I
+select count(*) from my_datalake.default.test_server_side_set_filters;
+----
+4000
+
+statement ok
+CALL enable_logging(level=debug);
+
+# ------------------------------------------------------------------
+# An IN list is pushed down wrapped in an optional filter. The wrapped
+# predicate is implied by the query, so it must reach the plan request.
+# ------------------------------------------------------------------
+
+statement ok
+CALL truncate_duckdb_logs();
+
+query I
+select count(*) from my_datalake.default.test_server_side_set_filters where bucket IN (0, 3);
+----
+2000
+
+# Catalogs that do not do server-side planning log no plan request at all, so the
+# check passes trivially for them; where a plan request is made it must carry the set.
+query I
+WITH plans AS (
+    SELECT message FROM duckdb_logs()
+    WHERE type = 'Iceberg' AND message.contains('/plan body=')
+)
+SELECT (SELECT count(*) FROM plans) = 0
+    OR (SELECT count(*) FROM plans WHERE message.contains('"type":"in"')) > 0;
+----
+true
+
+# ------------------------------------------------------------------
+# DuckDB canonicalises OR-of-equalities on one column the same way.
+# ------------------------------------------------------------------
+
+statement ok
+CALL truncate_duckdb_logs();
+
+query I
+select count(*) from my_datalake.default.test_server_side_set_filters
+where bucket = 0 OR bucket = 3;
+----
+2000
+
+query I
+WITH plans AS (
+    SELECT message FROM duckdb_logs()
+    WHERE type = 'Iceberg' AND message.contains('/plan body=')
+)
+SELECT (SELECT count(*) FROM plans) = 0
+    OR (SELECT count(*) FROM plans
+        WHERE message.contains('"type":"in"') OR message.contains('"type":"or"')) > 0;
+----
+true
+
+statement ok
+CALL disable_logging();
+
+# ------------------------------------------------------------------
+# The rows are the same under both planning modes: the filter the server
+# receives only removes files that cannot match.
+# ------------------------------------------------------------------
+
+foreach server_side_scan true false
+
+statement ok
+set iceberg_use_server_side_scan_planning={server_side_scan};
+
+query II nosort in_filter_rows
+select id, bucket from my_datalake.default.test_server_side_set_filters
+where bucket IN (0, 3) order by id;
+----
+
+query II nosort or_filter_rows
+select id, bucket from my_datalake.default.test_server_side_set_filters
+where bucket = 0 OR bucket = 3 order by id;
+----
+
+query II nosort not_in_filter_rows
+select id, bucket from my_datalake.default.test_server_side_set_filters
+where bucket NOT IN (0, 3) order by id;
+----
+
+endloop

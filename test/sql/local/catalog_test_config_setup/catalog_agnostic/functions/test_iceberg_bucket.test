@@ -17,27 +17,80 @@ require httpfs
 # Iceberg spec: all transforms return null for null input
 
 query I
-SELECT iceberg_bucket(16, NULL);
+SELECT iceberg_bucket(16, NULL::INTEGER);
 ----
 NULL
 
 query I
-SELECT iceberg_bucket(16, NULL);
+SELECT iceberg_bucket(16, NULL::BIGINT);
 ----
 NULL
 
 query I
-SELECT iceberg_bucket(16, NULL);
+SELECT iceberg_bucket(16, NULL::VARCHAR);
 ----
 NULL
 
 query I
-SELECT iceberg_bucket(16, NULL);
+SELECT iceberg_bucket(16, NULL::BLOB);
+----
+NULL
+
+query I
+SELECT iceberg_bucket(16, NULL::DATE);
+----
+NULL
+
+query I
+SELECT iceberg_bucket(16, NULL::TIME);
+----
+NULL
+
+query I
+SELECT iceberg_bucket(16, NULL::TIMESTAMP);
+----
+NULL
+
+query I
+SELECT iceberg_bucket(16, NULL::TIMESTAMPTZ);
+----
+NULL
+
+query I
+SELECT iceberg_bucket(16, NULL::TIMESTAMP_NS);
+----
+NULL
+
+query I
+SELECT iceberg_bucket(16, NULL::TIMESTAMPTZ_NS);
 ----
 NULL
 
 query I
 SELECT iceberg_bucket(16, NULL::UUID);
+----
+NULL
+
+# DECIMAL dispatches to a separate kernel per physical width, so each width
+# needs its own null coverage: (4,2) is INT16, (9,2) INT32, (18,2) INT64, (38,2) INT128.
+
+query I
+SELECT iceberg_bucket(16, NULL::DECIMAL(4,2));
+----
+NULL
+
+query I
+SELECT iceberg_bucket(16, NULL::DECIMAL(9,2));
+----
+NULL
+
+query I
+SELECT iceberg_bucket(16, NULL::DECIMAL(18,2));
+----
+NULL
+
+query I
+SELECT iceberg_bucket(16, NULL::DECIMAL(38,2));
 ----
 NULL
 
@@ -59,7 +112,17 @@ SELECT typeof(iceberg_bucket(16, 'hello'));
 INTEGER
 
 query I
+SELECT typeof(iceberg_bucket(16, '\x01\x02'::BLOB));
+----
+INTEGER
+
+query I
 SELECT typeof(iceberg_bucket(16, '2023-01-01'::DATE));
+----
+INTEGER
+
+query I
+SELECT typeof(iceberg_bucket(16, '22:31:08'::TIME));
 ----
 INTEGER
 
@@ -84,81 +147,151 @@ SELECT typeof(iceberg_bucket(16, '2023-01-01 00:00:00.123456789+00'::TIMESTAMPTZ
 INTEGER
 
 query I
-SELECT typeof(iceberg_bucket(16, '\x01\x02'::BLOB));
-----
-INTEGER
-
-query I
 SELECT typeof(iceberg_bucket(16, 'f79c3e09-677c-4bbd-a479-3f349cb785e7'::UUID));
 ----
 INTEGER
 
+query I
+SELECT typeof(iceberg_bucket(16, 14.20::DECIMAL(9,2)));
+----
+INTEGER
+
 # ---- Spec test vectors ----
-# hash(0L) = 1669671676  =>  (& 0x7FFFFFFF) % 16 = 12
-query I
-SELECT iceberg_bucket(16, 0);
-----
-12
+# Every value tabulated in the spec appendix linked above. num_buckets = INT32 max
+# exposes the sign-discarded hash itself, since the masked hash cannot exceed it.
 
-# hash(0L) = 1669671676  =>  (& 0x7FFFFFFF) % 100 = 76
+# int: hash(34) = 2017239379
 query I
-SELECT iceberg_bucket(100, 0);
+SELECT iceberg_bucket(2147483647, 34::INTEGER);
 ----
-76
+2017239379
 
-# INTEGER is sign-extended to BIGINT before hashing, so same result
+# long: hash(34L) = 2017239379. Spec note 1 requires int and long hash results to
+# be identical for all integer values.
 query I
-SELECT iceberg_bucket(100, 0);
+SELECT iceberg_bucket(2147483647, 34::BIGINT);
 ----
-76
+2017239379
 
-# hash("iceberg") = 1210000089  =>  (& 0x7FFFFFFF) % 100 = 89
+# decimal: hash(14.20) = -500754589  =>  1646729059
+# The hash covers the unscaled value only, so every physical width must agree.
+query IIII
+SELECT
+	iceberg_bucket(2147483647, 14.20::DECIMAL(4,2)),
+	iceberg_bucket(2147483647, 14.20::DECIMAL(9,2)),
+	iceberg_bucket(2147483647, 14.20::DECIMAL(18,2)),
+	iceberg_bucket(2147483647, 14.20::DECIMAL(38,2));
+----
+1646729059	1646729059	1646729059	1646729059
+
+# date: hash(2017-11-16) = hash(17486L) = -653330422  =>  1494153226
 query I
-SELECT iceberg_bucket(100, 'iceberg');
+SELECT iceberg_bucket(2147483647, '2017-11-16'::DATE);
 ----
-89
+1494153226
 
-# hash(date("2017-11-16")) = hash(17486L) = -653330422
-# (-653330422 & 0x7FFFFFFF) % 100 = 1494153226 % 100 = 26
+# time: hash(22:31:08) = hash(81068000000L) = -662762989  =>  1484720659
 query I
-SELECT iceberg_bucket(100, '2017-11-16'::DATE);
+SELECT iceberg_bucket(2147483647, '22:31:08'::TIME);
 ----
-26
+1484720659
 
-# TIMESTAMP_NS follows the Iceberg timestamp_ns hash vectors, which floor nanos to micros before hashing.
+# timestamp: hash(2017-11-16T22:31:08) = -2047944441  =>  99539207
+# timestamp: hash(2017-11-16T22:31:08.000001) = -1207196810  =>  940286838
 query II
 SELECT
-	iceberg_bucket(16, '2017-11-16T22:31:08.000000001'::TIMESTAMP_NS),
-	iceberg_bucket(16, '2017-11-16T22:31:08.000001001'::TIMESTAMP_NS);
+	iceberg_bucket(2147483647, '2017-11-16T22:31:08'::TIMESTAMP),
+	iceberg_bucket(2147483647, '2017-11-16T22:31:08.000001'::TIMESTAMP);
 ----
-7	6
+99539207	940286838
 
-# TIMESTAMPTZ_NS follows the same instant-based hash vectors.
+# timestamptz: the same instants as the two timestamp vectors above
 query II
 SELECT
-	iceberg_bucket(16, '2017-11-16T14:31:08.000000001-08:00'::TIMESTAMPTZ_NS),
-	iceberg_bucket(16, '2017-11-16T14:31:08.000001001-08:00'::TIMESTAMPTZ_NS);
+	iceberg_bucket(2147483647, '2017-11-16T14:31:08-08:00'::TIMESTAMPTZ),
+	iceberg_bucket(2147483647, '2017-11-16T14:31:08.000001-08:00'::TIMESTAMPTZ);
 ----
-7	6
+99539207	940286838
 
-# Spec Appendix B test vector: hash(uuid("f79c3e09-677c-4bbd-a479-3f349cb785e7")) = 1488055340
-# hash = 1488055340  =>  (& 0x7FFFFFFF) % 16 = 12
+# timestamp_ns: hash(2017-11-16T22:31:08) = -2047944441  =>  99539207
+# timestamp_ns: hash(2017-11-16T22:31:08.000001001) = -1207196810  =>  940286838
+query II
+SELECT
+	iceberg_bucket(2147483647, '2017-11-16T22:31:08'::TIMESTAMP_NS),
+	iceberg_bucket(2147483647, '2017-11-16T22:31:08.000001001'::TIMESTAMP_NS);
+----
+99539207	940286838
+
+# timestamptz_ns: the same instants as the two timestamp_ns vectors above
+query II
+SELECT
+	iceberg_bucket(2147483647, '2017-11-16T14:31:08-08:00'::TIMESTAMPTZ_NS),
+	iceberg_bucket(2147483647, '2017-11-16T14:31:08.000001001-08:00'::TIMESTAMPTZ_NS);
+----
+99539207	940286838
+
+# string: hash("iceberg") = 1210000089
 query I
-SELECT iceberg_bucket(16, 'f79c3e09-677c-4bbd-a479-3f349cb785e7'::UUID);
+SELECT iceberg_bucket(2147483647, 'iceberg');
 ----
-12
+1210000089
 
-# hash = 1488055340  =>  (& 0x7FFFFFFF) % 100 = 40
-query I
-SELECT iceberg_bucket(100, 'f79c3e09-677c-4bbd-a479-3f349cb785e7'::UUID);
-----
-40
-
-# N = INT32 max exposes the (sign-discarded) hash value itself
+# uuid: hash(f79c3e09-677c-4bbd-a479-3f349cb785e7) = 1488055340
 query I
 SELECT iceberg_bucket(2147483647, 'f79c3e09-677c-4bbd-a479-3f349cb785e7'::UUID);
 ----
 1488055340
+
+# binary: hash(00 01 02 03) = -188683207  =>  1958800441
+# The spec lists the same vector for fixed(L), which also maps to BLOB here.
+query I
+SELECT iceberg_bucket(2147483647, '\x00\x01\x02\x03'::BLOB);
+----
+1958800441
+
+# ---- Nanosecond conversion floors toward negative infinity ----
+# Spec note 3 gives no rounding direction and the tabulated vectors cannot show one:
+# 1001ns is 1us under floor, truncation and rounding alike. A pre-epoch value separates
+# them, and Iceberg's DateTimeUtil.nanosToMicros uses Math.floorDiv:
+#   floor -> -2us => 709407621, truncation or rounding -> -1us => 1651860712
+
+query II
+SELECT
+	iceberg_bucket(2147483647, '1969-12-31T23:59:59.999998999'::TIMESTAMP_NS),
+	iceberg_bucket(2147483647, '1969-12-31T15:59:59.999998999-08:00'::TIMESTAMPTZ_NS);
+----
+709407621	709407621
+
+# ---- DECIMAL: negative unscaled values ----
+# The minimum big-endian form strips leading 0xFF for negatives and 0x00 for positives,
+# so 14.20 above does not exercise this path. -1420 becomes fa 74. hash = 667775751
+
+query IIII
+SELECT
+	iceberg_bucket(2147483647, -14.20::DECIMAL(4,2)),
+	iceberg_bucket(2147483647, -14.20::DECIMAL(9,2)),
+	iceberg_bucket(2147483647, -14.20::DECIMAL(18,2)),
+	iceberg_bucket(2147483647, -14.20::DECIMAL(38,2));
+----
+667775751	667775751	667775751	667775751
+
+# ---- Non-bucketable types are rejected ----
+# The spec does not define bucketing for boolean, float, or double.
+
+statement error
+SELECT iceberg_bucket(16, true);
+----
+<REGEX>:.*No function matches.*
+
+statement error
+SELECT iceberg_bucket(16, 1.0::FLOAT);
+----
+<REGEX>:.*No function matches.*
+
+statement error
+SELECT iceberg_bucket(16, 1.0::DOUBLE);
+----
+<REGEX>:.*No function matches.*
 
 # ---- Result is always in range [0, num_buckets) ----
 
@@ -180,14 +313,7 @@ FROM range(1000);
 ----
 true
 
-# ---- Deterministic: same input always yields same bucket ----
-
-query I
-SELECT count(DISTINCT iceberg_bucket(8, v)) = count(DISTINCT iceberg_bucket(8, v))
-FROM (SELECT range AS v FROM range(100)) t;
-----
-true
-
+# ---- num_buckets must be a positive integer ----
 
 statement error
 SELECT iceberg_bucket(0, 1000);
