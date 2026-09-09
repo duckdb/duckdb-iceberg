@@ -16,6 +16,11 @@ SELECT current_setting('iceberg_equality_delete_fast_filter');
 ----
 true
 
+foreach fast_filter true false
+
+statement ok
+SET iceberg_equality_delete_fast_filter = {fast_filter};
+
 statement ok
 CALL enable_logging('Iceberg');
 
@@ -32,7 +37,7 @@ ORDER BY ALL;
 5	e	2025-01-05
 
 query I
-SELECT count(*) > 0
+SELECT (count(*) > 0) = {fast_filter}
 FROM duckdb_logs()
 WHERE type = 'Iceberg'
   AND message LIKE 'Accelerated % equality-delete files using a hash filter'
@@ -79,12 +84,16 @@ ORDER BY ALL;
 4	d	2025-01-04
 5	e	2025-01-05
 
-# Switching off in-process immediately returns to the stock expression path.
-statement ok
-SET iceberg_equality_delete_fast_filter = false;
+endloop
 
-query I
-SELECT count(*)
-FROM ICEBERG_SCAN('{WORKING_DIRECTORY}/data/persistent/equality_deletes/warehouse/mydb/mytable');
+# Switching back on in-process must also work after using the expression path.
+statement ok
+SET iceberg_equality_delete_fast_filter = true;
+
+query III
+SELECT *
+FROM ICEBERG_SCAN('{WORKING_DIRECTORY}/data/persistent/equality_deletes/warehouse/mydb/mytable')
+ORDER BY ALL;
 ----
-2
+4	d	2025-01-04
+5	e	2025-01-05

@@ -1,0 +1,101 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/delete/equality_deletes/test_equality_delete_fast_filter_missing_field.test
+# description: Missing equality fields use NULL fallback without sharing the newer file's accelerated layout
+# group: [equality_deletes]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require-env EQUALITY_DELETE_WRITES_ENABLED 1
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+statement ok
+set iceberg_use_server_side_scan_planning=false;
+
+statement ok
+set unsafe_and_disabled_for_iceberg_v3_enable_equality_deletes=true;
+
+statement ok
+drop table if exists my_datalake.default.eq_fast_missing;
+
+statement ok
+create table my_datalake.default.eq_fast_missing (id integer, k integer);
+
+statement ok
+insert into my_datalake.default.eq_fast_missing values (1, 1), (2, 2), (3, 3);
+
+statement ok
+alter table my_datalake.default.eq_fast_missing add column added_key varchar;
+
+statement ok
+insert into my_datalake.default.eq_fast_missing values
+	(4, 1, NULL), (5, 1, 'present'), (6, 2, NULL),
+	(7, 2, 'present'), (8, 3, NULL), (9, 3, 'present');
+
+# The composite file falls back for the old data file, where added_key is
+# physically absent, but accelerates for the new file. Both must delete k=1
+# with a NULL added_key, without deleting the non-NULL near miss.
+statement ok
+delete from my_datalake.default.eq_fast_missing where k = 1 and added_key is null;
+
+statement ok
+delete from my_datalake.default.eq_fast_missing where k = 2;
+
+statement ok
+call enable_logging('Iceberg');
+
+foreach threads 1 4
+
+statement ok
+set threads={threads};
+
+foreach fast_filter true false
+
+statement ok
+set iceberg_equality_delete_fast_filter={fast_filter};
+
+statement ok
+call truncate_duckdb_logs();
+
+query I
+select id from my_datalake.default.eq_fast_missing order by id;
+----
+3
+5
+8
+9
+
+query II
+select
+	(count(*) filter (where message = 'Accelerated 1 of 2 equality-delete files using a hash filter') > 0) = {fast_filter},
+	(count(*) filter (where message = 'Accelerated 2 of 2 equality-delete files using a hash filter') > 0) = {fast_filter}
+from duckdb_logs() where type = 'Iceberg';
+----
+true	true
+
+endloop
+
+endloop
+
+# Dropping the field keeps the same NULL matching semantics for historical keys.
+statement ok
+alter table my_datalake.default.eq_fast_missing drop column added_key;
+
+statement ok
+set iceberg_equality_delete_fast_filter=true;
+
+query I
+select id from my_datalake.default.eq_fast_missing order by id;
+----
+3
+5
+8
+9
+
+statement ok
+drop table my_datalake.default.eq_fast_missing;
