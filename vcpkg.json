@@ -40,10 +40,6 @@
 		{
 			"name": "openssl",
 			"version": "3.6.0"
-		},
-		{
-			"name": "aws-c-http",
-			"version": "0.10.2"
 		}
 	]
 }
