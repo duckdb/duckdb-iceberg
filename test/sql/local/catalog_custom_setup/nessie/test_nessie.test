@@ -43,7 +43,7 @@ attach '' as my_datalake (
     SECRET 'my_secret'
 );
 ----
-<REGEX>:.*Unrecognized access mode.*Supported options are 'vended_credentials' and 'none'.*
+<REGEX>:.*Unrecognized access mode.*Supported options are 'vended_credentials', 'remote_signing' and 'none'.*
 
 statement ok
 call enable_logging(level='debug');

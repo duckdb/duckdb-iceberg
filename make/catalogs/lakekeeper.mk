@@ -25,6 +25,17 @@ lakekeeper-configure-auth:
 	docker compose exec -T keycloak /opt/keycloak/bin/kcadm.sh update realms/iceberg \
 		-s sslRequired=NONE)
 
+lakekeeper-remote-signing:
+	@echo "Creating the Lakekeeper warehouse used by the remote signing tests..."
+	cp scripts/lakekeeper/remote_signing_setup.py .catalogs/lakekeeper/examples/access-control-simple/notebooks/
+	(cd .catalogs/lakekeeper/examples/access-control-simple && \
+	docker compose run --rm --no-deps \
+		-e SPARK_LOCAL_DIRS='$(LAKEKEEPER_SPARK_LOCAL_DIR)' \
+		jupyter bash -lc '\
+			rm -rf "$$SPARK_LOCAL_DIRS" /tmp/blockmgr-* /tmp/spark-* && \
+			mkdir -p "$$SPARK_LOCAL_DIRS" && \
+			python /home/jovyan/examples/remote_signing_setup.py')
+
 lakekeeper: lakekeeper-clone lakekeeper-stop
 	$(call stop_active_catalog)
 	@echo "Starting Lakekeeper catalog..."
@@ -41,6 +52,7 @@ lakekeeper: lakekeeper-clone lakekeeper-stop
 			jupyter nbconvert --to notebook --execute --output-dir=/tmp /home/jovyan/examples/01-Bootstrap.ipynb && \
 			jupyter nbconvert --to notebook --execute --output-dir=/tmp /home/jovyan/examples/02-Create-Warehouse.ipynb && \
 			jupyter nbconvert --to notebook --execute --output-dir=/tmp /home/jovyan/examples/03-01-Spark.ipynb'
+	$(MAKE) lakekeeper-remote-signing
 	$(call set_active_catalog,lakekeeper)
 
 lakekeeper-data: lakekeeper

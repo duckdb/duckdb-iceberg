@@ -4,6 +4,19 @@
 
 namespace duckdb {
 
+void ICUtils::AddAccessDelegationHeader(HTTPHeaders &headers, IRCAccessDelegationMode access_mode) {
+	switch (access_mode) {
+	case IRCAccessDelegationMode::VENDED_CREDENTIALS:
+		headers.Insert("X-Iceberg-Access-Delegation", "vended-credentials");
+		break;
+	case IRCAccessDelegationMode::REMOTE_SIGNING:
+		headers.Insert("X-Iceberg-Access-Delegation", "remote-signing");
+		break;
+	default:
+		break;
+	}
+}
+
 JSONValue ICUtils::GetErrorMessage(const string &api_result, unique_ptr<JSONDocument> &out_doc) {
 	JSONParseError parse_error;
 	out_doc = JSONDocument::TryParse(api_result.c_str(), api_result.size(), parse_error);
