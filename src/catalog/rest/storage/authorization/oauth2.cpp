@@ -130,10 +130,10 @@ static void ExtractOAuth2CredentialsFromOptions(const case_insensitive_map_t<Val
 
 //! Helper function to fetch OAuth2 token and parse full response (RFC 6749).
 //! Relies on DuckDB's built-in HTTP retry infrastructure (RunRequestWithRetry) for transient errors.
-static rest_api_objects::OAuthTokenResponse FetchOAuth2TokenResponse(ClientContext &context, const string &grant_type,
-                                                                     const string &uri, const string &client_id,
-                                                                     const string &client_secret, const string &scope,
-                                                                     const string &refresh_token_param = "") {
+static rest_api_objects::OAuthTokenResponse
+FetchOAuth2TokenResponse(ClientContext &context, const string &grant_type, const string &uri, const string &client_id,
+                         const string &client_secret, const string &scope, const string &refresh_token_param = "",
+                         const unordered_map<string, string> &extra_http_headers = {}) {
 	vector<string> parameters;
 	parameters.push_back(StringUtil::Format("%s=%s", XWWWFormUrlEncode("grant_type"), XWWWFormUrlEncode(grant_type)));
 
@@ -161,6 +161,12 @@ static rest_api_objects::OAuthTokenResponse FetchOAuth2TokenResponse(ClientConte
 	}
 
 	HTTPHeaders headers(*context.db);
+	// User-supplied headers are inserted first (e.g. `Polaris-Realm` for multi-tenant Polaris
+	// deployments, see issue #978). Service headers (Content-Type, Authorization) are inserted
+	// afterwards so they always take precedence and cannot be overridden by a user-provided header.
+	for (auto &entry : extra_http_headers) {
+		headers.Insert(entry.first, entry.second);
+	}
 	headers.Insert("Content-Type", "application/x-www-form-urlencoded");
 
 	// Use Basic Auth for client_credentials, POST body credentials for refresh_token
@@ -498,11 +504,19 @@ unique_ptr<BaseSecret> OAuth2Authorization::CreateCatalogSecretFunction(ClientCo
 		scope_to_use = result->secret_map["oauth2_scope"].ToString();
 	}
 
+	// Parse extra_http_headers from the secret so they are forwarded to the OAuth2 token endpoint
+	// as well (e.g. Polaris-Realm for multi-tenant Polaris deployments, see issue #978).
+	unordered_map<string, string> token_request_headers;
+	auto extra_headers_it = result->secret_map.find("extra_http_headers");
+	if (extra_headers_it != result->secret_map.end()) {
+		IcebergAuthorization::ParseExtraHttpHeaders(extra_headers_it->second, token_request_headers);
+	}
+
 	// Make a request to the oauth2 server uri to get the (bearer) token
 	// Store the full response to capture expires_in and refresh_token
-	auto token_response =
-	    FetchOAuth2TokenResponse(context, grant_type_to_use, server_uri, result->secret_map["client_id"].ToString(),
-	                             result->secret_map["client_secret"].ToString(), scope_to_use, refresh_token_param);
+	auto token_response = FetchOAuth2TokenResponse(
+	    context, grant_type_to_use, server_uri, result->secret_map["client_id"].ToString(),
+	    result->secret_map["client_secret"].ToString(), scope_to_use, refresh_token_param, token_request_headers);
 
 	result->secret_map["token"] = token_response.access_token;
 
@@ -669,8 +683,8 @@ void OAuth2Authorization::RefreshAccessTokenUnlocked(ClientContext &context, std
 		// RFC 6749 Section 6: Use refresh_token grant
 		// Try refresh_token first, fall back to client_credentials if it fails
 		try {
-			token_response =
-			    FetchOAuth2TokenResponse(context, "refresh_token", uri, client_id, client_secret, scope, refresh_token);
+			token_response = FetchOAuth2TokenResponse(context, "refresh_token", uri, client_id, client_secret, scope,
+			                                          refresh_token, extra_http_headers);
 		} catch (std::exception &ex) {
 			// Refresh token grant failed (e.g., token revoked, invalid_grant error)
 			// Fall back to client_credentials if available
@@ -678,8 +692,8 @@ void OAuth2Authorization::RefreshAccessTokenUnlocked(ClientContext &context, std
 				// Clear the stale refresh_token to avoid repeated failures
 				refresh_token.clear();
 				string effective_grant_type = grant_type.empty() ? "client_credentials" : grant_type;
-				token_response =
-				    FetchOAuth2TokenResponse(context, effective_grant_type, uri, client_id, client_secret, scope);
+				token_response = FetchOAuth2TokenResponse(context, effective_grant_type, uri, client_id, client_secret,
+				                                          scope, "", extra_http_headers);
 			} else {
 				// No fallback available, re-throw the original error
 				throw;
@@ -688,7 +702,8 @@ void OAuth2Authorization::RefreshAccessTokenUnlocked(ClientContext &context, std
 	} else {
 		// No refresh_token: Re-acquire token using client_credentials grant
 		string effective_grant_type = grant_type.empty() ? "client_credentials" : grant_type;
-		token_response = FetchOAuth2TokenResponse(context, effective_grant_type, uri, client_id, client_secret, scope);
+		token_response = FetchOAuth2TokenResponse(context, effective_grant_type, uri, client_id, client_secret, scope,
+		                                          "", extra_http_headers);
 	}
 
 	// Update our token state with the new token (UpdateTokenState assumes lock is held)
