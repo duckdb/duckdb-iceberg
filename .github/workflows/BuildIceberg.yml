@@ -85,7 +85,7 @@ jobs:
         with:
           build-type: relassert
           build: python3 duckdb/scripts/ci/retry.py -- make relassert
-          vcpkg-commit: 84bab45d415d22042bd0b9081aea57f362da3f35
+          vcpkg-commit: cd61e1e26a038e82d6550a3ebbe0fbbfe7da78e3 # Release 2026.06.24
           bundle: bash duckdb/scripts/prepare_build_artifact.sh relassert
           upload-name: duckdb-iceberg
           upload-path: build/relassert-artifact.tar.gz
@@ -110,7 +110,7 @@ jobs:
         with:
           build-type: release
           build: python3 duckdb/scripts/ci/retry.py -- make release
-          vcpkg-commit: 84bab45d415d22042bd0b9081aea57f362da3f35
+          vcpkg-commit: cd61e1e26a038e82d6550a3ebbe0fbbfe7da78e3 # Release 2026.06.24
           bundle: bash duckdb/scripts/prepare_build_artifact.sh release
           upload-name: duckdb-iceberg-equality-delete-support
 
