@@ -16,6 +16,7 @@
 #include "planning/iceberg_multi_file_reader.hpp"
 #include "planning/pruning/iceberg_file_pruner.hpp"
 #include "planning/scan_plan/iceberg_scan_plan_provider.hpp"
+#include "planning/snapshot/iceberg_incremental_scan.hpp"
 
 namespace duckdb {
 
@@ -174,6 +175,11 @@ void IcebergMultiFileList::Bind(vector<LogicalType> &return_types, vector<Identi
 		return_types = this->types;
 		return;
 	}
+	auto &incremental_range = options.incremental_range;
+	if (incremental_range.end_snapshot_id && !incremental_range.start_snapshot_id) {
+		throw InvalidInputException("'end_snapshot_id' can only be used together with 'start_snapshot_id'");
+	}
+
 	if (!shared_state->scan_info) {
 		D_ASSERT(!shared_state->path.empty());
 		auto input_string = shared_state->path;
@@ -184,10 +190,23 @@ void IcebergMultiFileList::Bind(vector<LogicalType> &return_types, vector<Identi
 		auto &metadata = temp_data->metadata;
 
 		IcebergSnapshotScanInfo snapshot_info;
-		snapshot_info = metadata.GetSnapshot(*options.snapshot_lookup);
+		if (incremental_range.IsIncremental()) {
+			//! Validates the bounds before any manifest is read. The scan then reads the end snapshot
+			//! like a normal time travel read, and the range narrows which of its files are visible.
+			shared_state->incremental = IcebergIncrementalSnapshots::Resolve(metadata, incremental_range);
+			snapshot_info =
+			    metadata.GetSnapshot(IcebergSnapshotLookup::FromSnapshotId(shared_state->incremental->end_snapshot_id));
+		} else {
+			snapshot_info = metadata.GetSnapshot(*options.snapshot_lookup);
+		}
 		auto schema = metadata.GetSchemaFromId(snapshot_info.schema_id);
 		shared_state->scan_info = make_shared_ptr<IcebergScanInfo>(resolved_metadata.table_location,
 		                                                           std::move(temp_data), snapshot_info, *schema);
+	} else if (incremental_range.IsIncremental()) {
+		//! A table reference already chose the snapshot and can not carry named parameters, so this is
+		//! unreachable through SQL. Fail loudly rather than ignoring the range.
+		throw InvalidInputException("'start_snapshot_id' is only supported when scanning through "
+		                            "'iceberg_scan', not through a table reference");
 	}
 
 	auto &schema = GetSchema().columns;
@@ -480,6 +499,10 @@ IcebergMultiFileList::GetDataFile(idx_t file_id, annotated_lock_guard<annotated_
 			if (manifest_entry.status == IcebergManifestEntryStatusType::DELETED) {
 				continue;
 			}
+			if (!GetScanPlanProvider().EntryIsVisible(manifest_entry, manifest_file)) {
+				//! Not added by a snapshot in the requested incremental range
+				continue;
+			}
 
 			// Check whether current data file is filtered out.
 			if (table_filters.HasFilters() && !IcebergFilePruner(context, GetMetadata(), GetSchema(), table_filters)
@@ -574,13 +597,16 @@ void IcebergMultiFileList::InitializeView(annotated_lock_guard<annotated_mutex> 
 	IcebergFilePruner pruner(context, GetMetadata(), GetSchema(), table_filters);
 	data_manifests.reserve(committed_data_manifests.size() + transaction_data_manifests.size());
 	data_manifest_matches.reserve(committed_data_manifests.size() + transaction_data_manifests.size());
+	auto &provider = GetScanPlanProvider();
 	for (auto &manifest : committed_data_manifests) {
 		data_manifests.emplace_back(data_manifests.size(), manifest);
-		data_manifest_matches.push_back(pruner.ManifestMatchesFilter(manifest.file));
+		data_manifest_matches.push_back(pruner.ManifestMatchesFilter(manifest.file) &&
+		                                provider.ManifestIsVisible(manifest.file));
 	}
 	for (auto &manifest : transaction_data_manifests) {
 		data_manifests.emplace_back(data_manifests.size(), manifest);
-		data_manifest_matches.push_back(pruner.ManifestMatchesFilter(manifest.get().file));
+		data_manifest_matches.push_back(pruner.ManifestMatchesFilter(manifest.get().file) &&
+		                                provider.ManifestIsVisible(manifest.get().file));
 	}
 
 	auto &committed_delete_manifests = GetScanPlanProvider().DeleteManifests();

@@ -3,6 +3,7 @@
 #include "duckdb/common/string.hpp"
 #include "duckdb/common/optional.hpp"
 #include "duckdb/common/named_parameter_map.hpp"
+#include "planning/snapshot/iceberg_incremental_scan.hpp"
 #include "planning/snapshot/iceberg_snapshot_lookup.hpp"
 
 namespace duckdb {
@@ -60,6 +61,9 @@ public:
 	string version_name_format = DEFAULT_TABLE_VERSION_FORMAT;
 
 	optional<IcebergSnapshotLookup> snapshot_lookup;
+
+	//! Mutually exclusive with 'snapshot_lookup' being anything other than 'latest'.
+	IcebergIncrementalScanRange incremental_range;
 };
 
 } // namespace duckdb

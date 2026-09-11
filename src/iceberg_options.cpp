@@ -59,6 +59,7 @@ IcebergOptions &IcebergOptions::operator=(const IcebergOptions &other) {
 	table_version = other.table_version;
 	version_explicitly_set = other.version_explicitly_set;
 	version_name_format = other.version_name_format;
+	incremental_range = other.incremental_range;
 	snapshot_lookup.reset();
 	if (other.snapshot_lookup) {
 		snapshot_lookup.emplace(*other.snapshot_lookup);

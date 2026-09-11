@@ -1,0 +1,150 @@
+# name: test/sql/local/iceberg_scans/iceberg_scan_incremental.test
+# description: incremental reads between two snapshots of an append only table
+# group: [iceberg_scans]
+
+require avro
+
+require parquet
+
+require iceberg
+
+# 'data/persistent/is_null_is_not_null' has a linear chain of three append snapshots:
+#   6009550004485738065 adds id 1, 2, 3
+#   2353095958979530531 adds id 4, 5, 6
+#   1222714758486840798 adds id 7, 8   (the current snapshot)
+
+# 'start_snapshot_id' is exclusive, so the first snapshot's own rows are not returned
+query II
+SELECT * FROM ICEBERG_SCAN('{WORKING_DIRECTORY}/data/persistent/is_null_is_not_null', start_snapshot_id=6009550004485738065, end_snapshot_id=2353095958979530531) ORDER BY id;
+----
+4	foo
+5	bar
+6	baz
+
+# spanning two snapshots returns the union of what both appended
+query II
+SELECT * FROM ICEBERG_SCAN('{WORKING_DIRECTORY}/data/persistent/is_null_is_not_null', start_snapshot_id=6009550004485738065, end_snapshot_id=1222714758486840798) ORDER BY id;
+----
+4	foo
+5	bar
+6	baz
+7	NULL
+8	blah
+
+# 'end_snapshot_id' is optional and defaults to the current snapshot
+query II
+SELECT * FROM ICEBERG_SCAN('{WORKING_DIRECTORY}/data/persistent/is_null_is_not_null', start_snapshot_id=6009550004485738065) ORDER BY id;
+----
+4	foo
+5	bar
+6	baz
+7	NULL
+8	blah
+
+# the last increment only
+query II
+SELECT * FROM ICEBERG_SCAN('{WORKING_DIRECTORY}/data/persistent/is_null_is_not_null', start_snapshot_id=2353095958979530531, end_snapshot_id=1222714758486840798) ORDER BY id;
+----
+7	NULL
+8	blah
+
+# an empty range: the bounds are the same snapshot
+query I
+SELECT count(*) FROM ICEBERG_SCAN('{WORKING_DIRECTORY}/data/persistent/is_null_is_not_null', start_snapshot_id=6009550004485738065, end_snapshot_id=6009550004485738065);
+----
+0
+
+# starting from the current snapshot means there is nothing new to read
+query I
+SELECT count(*) FROM ICEBERG_SCAN('{WORKING_DIRECTORY}/data/persistent/is_null_is_not_null', start_snapshot_id=1222714758486840798);
+----
+0
+
+# consecutive increments plus the base snapshot reconstruct the table exactly, with no duplicates
+query II
+SELECT * FROM (
+	SELECT * FROM ICEBERG_SCAN('{WORKING_DIRECTORY}/data/persistent/is_null_is_not_null', snapshot_from_id=6009550004485738065)
+	UNION ALL
+	SELECT * FROM ICEBERG_SCAN('{WORKING_DIRECTORY}/data/persistent/is_null_is_not_null', start_snapshot_id=6009550004485738065, end_snapshot_id=2353095958979530531)
+	UNION ALL
+	SELECT * FROM ICEBERG_SCAN('{WORKING_DIRECTORY}/data/persistent/is_null_is_not_null', start_snapshot_id=2353095958979530531, end_snapshot_id=1222714758486840798)
+) ORDER BY id;
+----
+1	NULL
+2	NULL
+3	NULL
+4	foo
+5	bar
+6	baz
+7	NULL
+8	blah
+
+# a filter still applies on top of the range
+query II
+SELECT * FROM ICEBERG_SCAN('{WORKING_DIRECTORY}/data/persistent/is_null_is_not_null', start_snapshot_id=6009550004485738065) WHERE value IS NOT NULL ORDER BY id;
+----
+4	foo
+5	bar
+6	baz
+8	blah
+
+# the start snapshot has to be an ancestor of the end snapshot, here the two are swapped
+statement error
+SELECT * FROM ICEBERG_SCAN('{WORKING_DIRECTORY}/data/persistent/is_null_is_not_null', start_snapshot_id=1222714758486840798, end_snapshot_id=2353095958979530531);
+----
+is not an ancestor of
+
+# 'data/persistent/name_mapping/warehouse_1/mydb/t1' is append then replace. A range covering the
+# replace is rejected rather than silently returning only the part of it that was appended.
+statement error
+SELECT * FROM ICEBERG_SCAN('{WORKING_DIRECTORY}/data/persistent/name_mapping/warehouse_1/mydb/t1', start_snapshot_id=6597550917742534971, end_snapshot_id=2651609110244230974);
+----
+incremental reads only support 'append' snapshots
+
+# 'data/persistent/iceberg/lineitem_iceberg' is append then overwrite, same rejection
+statement error
+SELECT count(*) FROM ICEBERG_SCAN('{WORKING_DIRECTORY}/data/persistent/iceberg/lineitem_iceberg', start_snapshot_id=7817332053627255703, end_snapshot_id=2354745328521181395);
+----
+incremental reads only support 'append' snapshots
+
+# an unknown bound is reported, not silently ignored
+statement error
+SELECT * FROM ICEBERG_SCAN('{WORKING_DIRECTORY}/data/persistent/is_null_is_not_null', start_snapshot_id=1);
+----
+Could not find snapshot with id 1
+
+statement error
+SELECT * FROM ICEBERG_SCAN('{WORKING_DIRECTORY}/data/persistent/is_null_is_not_null', start_snapshot_id=6009550004485738065, end_snapshot_id=2);
+----
+Could not find snapshot with id 2
+
+# Manifest level pruning: the range is applied to the same 'data_manifest_matches' vector that
+# partition pruning fills, so manifests outside the range are never read. Without this the entry
+# level check alone would still return the right rows, but every manifest would be opened.
+statement ok
+set threads=1;
+
+statement ok
+set enable_logging=true;
+
+statement ok
+call enable_logging('Iceberg');
+
+statement ok
+select id, value from ICEBERG_SCAN('{WORKING_DIRECTORY}/data/persistent/is_null_is_not_null');
+
+query I
+select message from duckdb_logs() where type = 'Iceberg' and message like '%data_manifest_scan_started%';
+----
+Iceberg metadata phase=data_manifest_scan_started selected_data_manifests=3 total_data_manifests=3 filters=0
+
+statement ok
+call truncate_duckdb_logs();
+
+statement ok
+select id, value from ICEBERG_SCAN('{WORKING_DIRECTORY}/data/persistent/is_null_is_not_null', start_snapshot_id=2353095958979530531, end_snapshot_id=1222714758486840798);
+
+query I
+select message from duckdb_logs() where type = 'Iceberg' and message like '%data_manifest_scan_started%';
+----
+Iceberg metadata phase=data_manifest_scan_started selected_data_manifests=1 total_data_manifests=3 filters=0
