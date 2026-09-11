@@ -1,11 +1,18 @@
 #include "planning/iceberg_multi_file_list.hpp"
 
 #include "core/metadata/manifest/iceberg_manifest_list.hpp"
+#include "duckdb/common/column_index_map.hpp"
 #include "duckdb/common/exception.hpp"
 #include "duckdb/common/file_system.hpp"
 #include "duckdb/function/partition_stats.hpp"
 #include "duckdb/optimizer/filter_combiner.hpp"
+#include "duckdb/planner/expression/bound_columnref_expression.hpp"
+#include "duckdb/planner/expression/bound_function_expression.hpp"
+#include "duckdb/planner/expression/bound_reference_expression.hpp"
+#include "duckdb/planner/expression_iterator.hpp"
+#include "duckdb/planner/operator/logical_filter.hpp"
 #include "duckdb/planner/filter/expression_filter.hpp"
+#include "duckdb/function/scalar/struct_utils.hpp"
 #include "duckdb/storage/table/row_group_reorderer.hpp"
 
 #include "catalog/rest/catalog_entry/table/iceberg_table_schema_version.hpp"
@@ -72,6 +79,227 @@ static void CompleteDeleteFileLoads(const vector<shared_ptr<IcebergDeleteFileLoa
 		}
 		load->cv.notify_all();
 	}
+}
+
+static bool TryGetStructExtractPath(unique_ptr<Expression> &expr_p, optional_ptr<BoundColumnRefExpression> &column_ref,
+                                    vector<idx_t> &path_components) {
+	auto &expr = *expr_p;
+	if (expr.GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF) {
+		auto &ref = expr.Cast<BoundColumnRefExpression>();
+		if (ref.GetReturnType().id() != LogicalTypeId::STRUCT) {
+			return false;
+		}
+		column_ref = ref;
+		return true;
+	}
+	if (expr.GetExpressionClass() != ExpressionClass::BOUND_FUNCTION) {
+		return false;
+	}
+	auto &func = expr.Cast<BoundFunctionExpression>();
+	idx_t child_idx;
+	if (!TryGetStructExtractChildIndex(func, child_idx) || func.GetChildren().empty()) {
+		return false;
+	}
+	if (!TryGetStructExtractPath(func.GetChildrenMutable()[0], column_ref, path_components)) {
+		return false;
+	}
+	path_components.push_back(child_idx);
+	return true;
+}
+
+static ColumnIndex CreateColumnIndexPath(const vector<idx_t> &path_components) {
+	D_ASSERT(!path_components.empty());
+	ColumnIndex path(path_components[0]);
+	auto *current = &path;
+	for (idx_t i = 1; i < path_components.size(); i++) {
+		current->AddChildIndex(ColumnIndex(path_components[i]));
+		current = &current->GetChildIndex(0);
+	}
+	return path;
+}
+
+static ColumnIndex &GetColumnIndexLeaf(ColumnIndex &column_index) {
+	auto *current = &column_index;
+	while (current->HasChildren()) {
+		D_ASSERT(current->ChildIndexCount() == 1);
+		current = &current->GetChildIndex(0);
+	}
+	return *current;
+}
+
+static ColumnIndex CreatePushdownExtractColumnIndex(const ColumnIndex &base_index, const LogicalType &base_type,
+                                                    const ColumnIndex &extract_path) {
+	ColumnIndex result = base_index;
+	if (result.IsPushdownExtract()) {
+		auto &leaf = GetColumnIndexLeaf(result.GetChildIndex(0));
+		leaf.AddChildIndex(extract_path);
+		result.SetPushdownExtractType(result.GetType());
+	} else {
+		result.GetChildIndexesMutable().clear();
+		result.AddChildIndex(extract_path);
+		result.SetPushdownExtractType(base_type);
+	}
+	return result;
+}
+
+static bool RewriteFilterPushdownExtracts(unique_ptr<Expression> &expr, TableIndex table_index,
+                                          vector<ColumnIndex> &column_indexes,
+                                          column_index_map<ProjectionIndex> &projection_map) {
+	optional_ptr<BoundColumnRefExpression> column_ref;
+	vector<idx_t> path_components;
+	if (TryGetStructExtractPath(expr, column_ref, path_components)) {
+		if (path_components.empty()) {
+			return false;
+		}
+		auto extract_path = CreateColumnIndexPath(path_components);
+		auto &binding = column_ref->Binding();
+		if (binding.table_index != table_index || binding.column_index.GetIndex() >= column_indexes.size()) {
+			return false;
+		}
+		auto projected_column_index = CreatePushdownExtractColumnIndex(column_indexes[binding.column_index.GetIndex()],
+		                                                               column_ref->GetReturnType(), extract_path);
+		auto entry = projection_map.find(projected_column_index);
+		ProjectionIndex projection_index;
+		if (entry == projection_map.end()) {
+			projection_index = ProjectionIndex(column_indexes.size());
+			projection_map.emplace(projected_column_index, projection_index);
+			column_indexes.push_back(projected_column_index);
+		} else {
+			projection_index = entry->second;
+		}
+		expr = make_uniq<BoundColumnRefExpression>(expr->GetReturnType(), ColumnBinding(table_index, projection_index),
+		                                           column_ref->Depth());
+		return true;
+	}
+
+	bool rewritten = false;
+	ExpressionIterator::EnumerateChildren(*expr, [&](unique_ptr<Expression> &child) {
+		rewritten |= RewriteFilterPushdownExtracts(child, table_index, column_indexes, projection_map);
+	});
+	return rewritten;
+}
+
+static TableFilterSet GenerateTableScanFilters(ClientContext &context, vector<ColumnIndex> &column_indexes,
+                                               const vector<unique_ptr<Expression>> &filters) {
+	column_index_map<ProjectionIndex> projection_map;
+	projection_map.reserve(column_indexes.size());
+	for (idx_t i = 0; i < column_indexes.size(); i++) {
+		projection_map.emplace(column_indexes[i], ProjectionIndex(i));
+	}
+
+	vector<unique_ptr<Expression>> rewritten_filters;
+	rewritten_filters.reserve(filters.size());
+	for (const auto &filter : filters) {
+		rewritten_filters.push_back(filter->Copy());
+	}
+	// Split AND predicates into separate filters so that we can push down each filter individually
+	LogicalFilter::SplitPredicates(rewritten_filters);
+
+	FilterCombiner combiner(context);
+	for (auto &filter : rewritten_filters) {
+		RewriteFilterPushdownExtracts(filter, TableIndex(0) /* FIXME */, column_indexes, projection_map);
+		combiner.AddFilter(std::move(filter));
+	}
+
+	vector<FilterPushdownResult> unused;
+	return combiner.GenerateTableScanFilters(column_indexes, unused);
+}
+
+//! Like TryGetStructExtractPath, but for filter expressions from a TableFilterSet, whose subject is a
+//! BoundReferenceExpression(0) placeholder rather than a BoundColumnRefExpression.
+static bool TryGetStructExtractPathFromRef(unique_ptr<Expression> &expr_p, optional_ptr<BoundReferenceExpression> &ref,
+                                           vector<idx_t> &path_components) {
+	auto &expr = *expr_p;
+	if (expr.GetExpressionClass() == ExpressionClass::BOUND_REF) {
+		ref = expr.Cast<BoundReferenceExpression>();
+		return true;
+	}
+	if (expr.GetExpressionClass() != ExpressionClass::BOUND_FUNCTION) {
+		return false;
+	}
+	auto &func = expr.Cast<BoundFunctionExpression>();
+	idx_t child_idx;
+	if (!TryGetStructExtractChildIndex(func, child_idx) || func.GetChildren().empty()) {
+		return false;
+	}
+	if (!TryGetStructExtractPathFromRef(func.GetChildrenMutable()[0], ref, path_components)) {
+		return false;
+	}
+	path_components.push_back(child_idx);
+	return true;
+}
+
+//! Rewrites struct_extract chains rooted in a BoundReferenceExpression(0) into a pushdown-extract column index,
+//! updating 'projection_index' to point at the (possibly newly created) projected column when a rewrite happens.
+static bool RewriteDynamicFilterPushdownExtracts(unique_ptr<Expression> &expr, const ColumnIndex &base_column_index,
+                                                 vector<ColumnIndex> &column_indexes,
+                                                 column_index_map<ProjectionIndex> &projection_map,
+                                                 ProjectionIndex &projection_index) {
+	optional_ptr<BoundReferenceExpression> ref;
+	vector<idx_t> path_components;
+	if (TryGetStructExtractPathFromRef(expr, ref, path_components)) {
+		if (path_components.empty()) {
+			return false;
+		}
+		auto extract_path = CreateColumnIndexPath(path_components);
+		auto projected_column_index =
+		    CreatePushdownExtractColumnIndex(base_column_index, ref->GetReturnType(), extract_path);
+		auto entry = projection_map.find(projected_column_index);
+		if (entry == projection_map.end()) {
+			projection_index = ProjectionIndex(column_indexes.size());
+			projection_map.emplace(projected_column_index, projection_index);
+			column_indexes.push_back(projected_column_index);
+		} else {
+			projection_index = entry->second;
+		}
+		expr = make_uniq<BoundReferenceExpression>(expr->GetReturnType(), 0);
+		return true;
+	}
+
+	bool rewritten = false;
+	ExpressionIterator::EnumerateChildren(*expr, [&](unique_ptr<Expression> &child) {
+		rewritten |= RewriteDynamicFilterPushdownExtracts(child, base_column_index, column_indexes, projection_map,
+		                                                  projection_index);
+	});
+	return rewritten;
+}
+
+//! Generates a TableFilterSet from an existing TableFilterSet whose filter subjects are BoundReferenceExpression(0)
+//! placeholders (as produced by MultiFileDynamicPushdownInfo), rewriting struct_extract chains into pushdown-extract
+//! column indexes, potentially adding new entries to 'column_indexes'.
+static TableFilterSet GenerateDynamicTableScanFilters(vector<ColumnIndex> &column_indexes, TableFilterSet &filters) {
+	column_index_map<ProjectionIndex> projection_map;
+	projection_map.reserve(column_indexes.size());
+	for (idx_t i = 0; i < column_indexes.size(); i++) {
+		projection_map.emplace(column_indexes[i], ProjectionIndex(i));
+	}
+
+	TableFilterSet result;
+	for (auto &entry : filters) {
+		auto base_projection_index = entry.GetIndex();
+		//! Copy, not reference: 'column_indexes' may be reallocated by a rewrite below, across split predicates
+		auto base_column_index = column_indexes[base_projection_index.GetIndex()];
+		auto &filter =
+		    ExpressionFilter::GetExpressionFilter(entry.Filter(), "IcebergMultiFileList::DynamicFilterPushdown");
+
+		vector<unique_ptr<Expression>> split_expressions;
+		split_expressions.push_back(filter.expr->Copy());
+		// Split AND predicates into separate filters so that we can push down each filter individually
+		LogicalFilter::SplitPredicates(split_expressions);
+
+		for (auto &split_expr : split_expressions) {
+			auto projection_index = base_projection_index;
+			RewriteDynamicFilterPushdownExtracts(split_expr, base_column_index, column_indexes, projection_map,
+			                                     projection_index);
+			if (!column_indexes[projection_index.GetIndex()].HasPrimaryIndex()) {
+				//! Field-identifier column indexes (e.g. variant subfields) aren't supported by the pruner/schema
+				//! lookup; leave the predicate as a residual filter instead of pushing it down.
+				continue;
+			}
+			result.PushFilter(projection_index, make_uniq<ExpressionFilter>(std::move(split_expr)));
+		}
+	}
+	return result;
 }
 
 } // namespace
@@ -242,7 +470,7 @@ IcebergMultiFileList::PushdownInternal(ClientContext &context, TableFilterSet &n
 
 unique_ptr<MultiFileList>
 IcebergMultiFileList::DynamicFilterPushdown(MultiFileDynamicPushdownInfo &pushdown_info) const {
-	auto &column_indexes = pushdown_info.column_indexes;
+	auto column_indexes = pushdown_info.column_indexes;
 	auto &context = pushdown_info.context;
 	auto &filters = pushdown_info.filters;
 
@@ -250,10 +478,11 @@ IcebergMultiFileList::DynamicFilterPushdown(MultiFileDynamicPushdownInfo &pushdo
 		return nullptr;
 	}
 
-	auto filters_copy = filters.Copy();
-	D_ASSERT(filters_copy->FilterCount() >= table_filters.FilterCount());
+	// Convert any struct_extract expressions in the filters to references with pushdown-extract column indexes
+	auto rewritten_filters = GenerateDynamicTableScanFilters(column_indexes, filters);
+
 	bool filters_changed = false;
-	for (auto &entry : filters) {
+	for (auto &entry : rewritten_filters) {
 		auto &filter =
 		    ExpressionFilter::GetExpressionFilter(entry.Filter(), "IcebergMultiFileList::DynamicFilterPushdown");
 		auto column_id = column_indexes[entry.GetIndex().GetIndex()];
@@ -266,7 +495,7 @@ IcebergMultiFileList::DynamicFilterPushdown(MultiFileDynamicPushdownInfo &pushdo
 	if (filters_changed) {
 		// Dynamic filter pushdown supplies the complete effective filter for every column. This includes filters
 		// already pushed down by ComplexFilterPushdown, potentially combined with a new runtime filter.
-		auto new_snap = PushdownInternal(context, *filters_copy, column_indexes);
+		auto new_snap = PushdownInternal(context, rewritten_filters, column_indexes);
 		return std::move(new_snap);
 	}
 	return nullptr;
@@ -279,18 +508,20 @@ unique_ptr<MultiFileList> IcebergMultiFileList::ComplexFilterPushdown(ClientCont
 		return nullptr;
 	}
 
-	FilterCombiner combiner(context);
+	// Convert any struct_extract expressions in the filters to column references with pushdown-extract column indexes
+	vector<unique_ptr<Expression>> rewritten_filters;
+	rewritten_filters.reserve(filters.size());
 	for (const auto &filter : filters) {
-		combiner.AddFilter(filter->Copy());
+		rewritten_filters.push_back(filter->Copy());
 	}
 
-	vector<FilterPushdownResult> unused;
-	auto filter_set = combiner.GenerateTableScanFilters(info.column_indexes, unused);
+	auto column_indexes = info.column_indexes;
+	auto filter_set = GenerateTableScanFilters(context, column_indexes, filters);
 	if (!filter_set.HasFilters()) {
 		return nullptr;
 	}
 
-	return PushdownInternal(context, filter_set, info.column_indexes);
+	return PushdownInternal(context, filter_set, column_indexes);
 }
 
 vector<OpenFileInfo> IcebergMultiFileList::GetAllFiles() const {
