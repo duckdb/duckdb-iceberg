@@ -54,6 +54,23 @@ class Test(IcebergTest):
             """
         )
 
+        con.con.sql(
+            """
+            CREATE OR REPLACE TABLE default.vended_rewrite_table (
+                id integer,
+                payload string
+            )
+            USING iceberg
+            """
+        )
+        for i in range(1, 7):
+            con.con.sql(
+                f"""
+                INSERT INTO default.vended_rewrite_table
+                VALUES ({i}, 'p{i}')
+                """
+            )
+
         for table in REFRESH_METADATA_TABLES:
             con.con.sql(
                 f"""

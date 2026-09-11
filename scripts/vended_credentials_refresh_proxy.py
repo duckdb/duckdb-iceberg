@@ -46,6 +46,7 @@ MIXED_REFRESH_A_TABLE = "vended_mixed_delete_refresh_a"
 MIXED_REFRESH_B_TABLE = "vended_mixed_delete_refresh_b"
 SAME_BAD_TABLE = "vended_same_bad_refresh"
 RANGE_FAIL_TABLE = "vended_range_fail_refresh"
+REWRITE_TABLE = "vended_rewrite_table"
 
 OLD_SCAN_KEY = "OLD_SCAN_KEY"
 NEW_SCAN_KEY = "NEW_SCAN_KEY"
@@ -78,6 +79,7 @@ NEW_MIXED_REFRESH_B_KEY = "NEW_MIXED_REFRESH_B_KEY"
 OLD_SAME_BAD_KEY = "OLD_SAME_BAD_KEY"
 OLD_RANGE_FAIL_KEY = "OLD_RANGE_FAIL_KEY"
 NEW_RANGE_FAIL_KEY = "NEW_RANGE_FAIL_KEY"
+REWRITE_TABLE_KEY = "REWRITE_TABLE_KEY"
 
 UPSTREAM_S3_KEY = "admin"
 UPSTREAM_S3_SECRET = "password"
@@ -120,6 +122,7 @@ class VendedCredentialRefreshAddon:
             MIXED_REFRESH_B_TABLE: False,
             SAME_BAD_TABLE: False,
             RANGE_FAIL_TABLE: False,
+            REWRITE_TABLE: False,
         }
         self.table_scan_refresh_path = None
         # Force a rollback if this branch reaches the catalog commit after writing the
@@ -134,11 +137,42 @@ class VendedCredentialRefreshAddon:
             self._handle_s3_request(flow)
 
     def response(self, flow: http.HTTPFlow):
+        if not flow.response or flow.response.status_code >= 300:
+            return
+
+        if self._is_catalog_request(flow):
+            path = urllib.parse.urlparse(flow.request.path).path
+            if path == "/v1/config" or path.startswith("/v1/config"):
+                payload = json.loads(flow.response.content.decode())
+                endpoints = payload.setdefault("endpoints", [])
+                credentials_endpoint = (
+                    "GET /v1/{prefix}/namespaces/{namespace}/tables/{table}/credentials"
+                )
+                if credentials_endpoint not in endpoints:
+                    endpoints.append(credentials_endpoint)
+                flow.response.text = json.dumps(payload)
+                return
+
         table = flow.metadata.get("vended_table")
-        if not table or not flow.response or flow.response.status_code >= 300:
+        if not table:
             return
 
         response = json.loads(flow.response.content.decode())
+        if table == REWRITE_TABLE:
+            # Model R2-style catalogs: LoadTable omits usable storage credentials;
+            # the client must fetch GET .../credentials before touching object storage.
+            response.pop("storage-credentials", None)
+            config = response.get("config")
+            if isinstance(config, dict):
+                for key in list(config):
+                    lowered = key.lower()
+                    if lowered.startswith("s3.access-key") or lowered.startswith("s3.secret") or lowered.startswith(
+                        "s3.session-token"
+                    ):
+                        del config[key]
+            flow.response.text = json.dumps(response)
+            return
+
         response["storage-credentials"] = [self._credentials_for_table(table)]
         flow.response.text = json.dumps(response)
 
@@ -314,6 +348,7 @@ class VendedCredentialRefreshAddon:
             NEW_MIXED_REFRESH_A_KEY,
             NEW_MIXED_REFRESH_B_KEY,
             OLD_RANGE_FAIL_KEY,
+            REWRITE_TABLE_KEY,
         }:
             self._forbidden(flow, "unknown test credentials")
             return
@@ -445,6 +480,8 @@ class VendedCredentialRefreshAddon:
             return OLD_SAME_BAD_KEY
         if table == RANGE_FAIL_TABLE:
             return NEW_RANGE_FAIL_KEY if self.refresh_unlocked[table] else OLD_RANGE_FAIL_KEY
+        if table == REWRITE_TABLE:
+            return REWRITE_TABLE_KEY
         raise ValueError(f"unexpected table: {table}")
 
     @staticmethod
@@ -479,6 +516,8 @@ class VendedCredentialRefreshAddon:
             return "s3://warehouse/vended_credentials_refresh/same_bad"
         if table == RANGE_FAIL_TABLE:
             return "s3://warehouse/vended_credentials_refresh/range_fail"
+        if table == REWRITE_TABLE:
+            return "s3://warehouse/"
         raise ValueError(f"unexpected table: {table}")
 
     @staticmethod
