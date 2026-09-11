@@ -52,6 +52,14 @@ SELECT id, ts, val FROM my_datalake.default.test_delete_year ORDER BY id;
 3	2021-03-10 08:00:00	c
 4	2022-11-20 15:30:00	d
 
+# The bound falls on a year boundary, so the 2020 file is entirely below it and is dropped at
+# the manifest level instead of being shadowed by a delete file.
+query I
+SELECT count(*) FROM iceberg_metadata(my_datalake.default.test_delete_year)
+WHERE content = 'POSITION_DELETES';
+----
+0
+
 statement ok
 DROP TABLE my_datalake.default.test_delete_year;
 
@@ -80,6 +88,13 @@ SELECT id, ts, val FROM my_datalake.default.test_delete_month ORDER BY id;
 ----
 3	2021-03-05 09:00:00	c
 4	2022-01-10 18:00:00	d
+
+# Both bounds fall on month boundaries, so the 2021-01 file is fully covered and dropped.
+query I
+SELECT count(*) FROM iceberg_metadata(my_datalake.default.test_delete_month)
+WHERE content = 'POSITION_DELETES';
+----
+0
 
 statement ok
 DROP TABLE my_datalake.default.test_delete_month;
@@ -118,6 +133,14 @@ SELECT COUNT(*) FROM my_datalake.default.test_delete_day;
 ----
 0
 
+# day() on a DATE column is one-to-one, so both the equality and the range above cover whole
+# files; neither delete wrote a delete file.
+query I
+SELECT count(*) FROM iceberg_metadata(my_datalake.default.test_delete_day)
+WHERE content = 'POSITION_DELETES';
+----
+0
+
 statement ok
 DROP TABLE my_datalake.default.test_delete_day;
 
@@ -146,6 +169,13 @@ SELECT id, ts, val FROM my_datalake.default.test_delete_hour ORDER BY id;
 ----
 3	2021-05-01 11:00:00	c
 4	2021-05-01 12:00:00	d
+
+# Both bounds fall on hour boundaries, so the 10:00 file is fully covered and dropped.
+query I
+SELECT count(*) FROM iceberg_metadata(my_datalake.default.test_delete_hour)
+WHERE content = 'POSITION_DELETES';
+----
+0
 
 statement ok
 DROP TABLE my_datalake.default.test_delete_hour;

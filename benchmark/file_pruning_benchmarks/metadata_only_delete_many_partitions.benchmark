@@ -1,0 +1,59 @@
+# name: benchmark/file_pruning_benchmarks/metadata_only_delete_many_partitions.benchmark
+# description: DELETE of a date range covering 127 of 128 day-partitions, dropping every matched data file at the manifest level
+# group: [file_pruning_benchmarks]
+
+name Metadata-only DELETE across many partitions
+group file_pruning_benchmarks
+subgroup metadata_only_delete
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+# A day(event_date)-partitioned, format-version 2 table of 128 partitions holding 1000 rows each. The
+# timed DELETE spans 127 of them, so the coverage proof runs against every manifest entry rather than
+# a single one, and 127 data files are dropped without being read. Without the optimization the same
+# DELETE scans all 127 files and writes a positional delete file per file, so this carries the
+# clearest signal of the four: the per-file work it avoids scales with the number of matched files.
+require_reinit
+
+load
+SET enable_external_file_cache=false;
+CREATE SECRET (
+    TYPE S3,
+    KEY_ID 'admin',
+    SECRET 'password',
+    ENDPOINT '127.0.0.1:9000',
+    URL_STYLE 'path',
+    USE_SSL 0
+);
+ATTACH '' AS my_datalake (
+    TYPE ICEBERG,
+    CLIENT_ID 'admin',
+    CLIENT_SECRET 'password',
+    ENDPOINT 'http://127.0.0.1:8181',
+);
+CREATE SCHEMA if not exists my_datalake.default;
+DROP TABLE IF EXISTS my_datalake.default.metadata_only_delete_many_partitions;
+CREATE TABLE my_datalake.default.metadata_only_delete_many_partitions (
+    id BIGINT,
+    event VARCHAR,
+    event_date DATE
+) PARTITIONED BY (day(event_date)) WITH ('format-version' = '2');
+INSERT INTO my_datalake.default.metadata_only_delete_many_partitions
+SELECT
+    range % 1000,
+    'e' || range::VARCHAR,
+    DATE '2024-01-01' + (range // 1000)::INTEGER
+FROM range(128000);
+
+run
+DELETE FROM my_datalake.default.metadata_only_delete_many_partitions
+WHERE event_date >= DATE '2024-01-01' AND event_date < DATE '2024-05-07';
+
+result I
+127000

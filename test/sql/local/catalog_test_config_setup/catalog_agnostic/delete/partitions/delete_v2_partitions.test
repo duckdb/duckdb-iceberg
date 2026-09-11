@@ -47,6 +47,14 @@ SELECT * FROM my_datalake.default.test_delete_partitioned_v2 ORDER BY id, val;
 2	d
 3	e
 
+# Equality on an identity partition column covers the whole file, so it is dropped at the
+# manifest level rather than shadowed by a delete file.
+query I
+SELECT count(*) FROM iceberg_metadata(my_datalake.default.test_delete_partitioned_v2)
+WHERE content = 'POSITION_DELETES';
+----
+0
+
 statement ok
 DELETE FROM my_datalake.default.test_delete_partitioned_v2 WHERE val = 'd';
 

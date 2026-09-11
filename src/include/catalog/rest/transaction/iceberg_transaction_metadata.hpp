@@ -20,6 +20,9 @@ public:
 	bool IsEmpty() const {
 		return data_files.empty();
 	}
+	void Merge(const IcebergManifestDeletes &other) {
+		data_files.insert(other.data_files.begin(), other.data_files.end());
+	}
 
 private:
 	idx_t Merge(IcebergManifestDeletes &&other, idx_t alter_version) {

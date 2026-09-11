@@ -171,9 +171,9 @@ void IcebergAddSnapshot::CreateUpdate(DatabaseInstance &db, ClientContext &conte
 	auto &table_metadata = commit_state.table_info.table_metadata;
 	const auto snapshot_id = IcebergSnapshot::NewSnapshotId();
 	const auto sequence_number = commit_state.next_sequence_number++;
+	//! Empty for metadata-only deletes (no new files; existing manifests are rewritten below).
 	auto uncommitted_manifest_files =
 	    CreateCommitManifestFiles(manifest_files, commit_state.table_info, commit_state, sequence_number);
-	D_ASSERT(!uncommitted_manifest_files.empty());
 
 	auto &fs = FileSystem::GetFileSystem(context);
 	auto manifest_list_uuid = UUID::ToString(UUID::GenerateRandomUUID());

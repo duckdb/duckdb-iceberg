@@ -1,0 +1,381 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/delete/partitions/delete_metadata_only_coverage.test
+# description: A DELETE whose predicate provably covers every row of a partition drops the data file at the manifest level instead of writing a delete file
+# group: [partitions]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+
+statement ok
+CALL enable_logging('HTTP');
+
+statement ok
+set logging_level='debug'
+
+# ---- Identity transform ----
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.test_metadata_only_identity;
+
+statement ok
+CREATE TABLE my_datalake.default.test_metadata_only_identity (id INT, val VARCHAR)
+PARTITIONED BY (id);
+
+statement ok
+INSERT INTO my_datalake.default.test_metadata_only_identity VALUES
+    (1, 'a'), (1, 'b'), (2, 'c'), (3, 'd'), (4, 'e');
+
+# Equality on an identity partition column: the partition value is the source value, so every
+# row of the id=1 file matches.
+query I
+DELETE FROM my_datalake.default.test_metadata_only_identity WHERE id = 1;
+----
+2
+
+query II
+SELECT id, val FROM my_datalake.default.test_metadata_only_identity ORDER BY id;
+----
+2	c
+3	d
+4	e
+
+query I
+SELECT count(*) FROM iceberg_metadata(my_datalake.default.test_metadata_only_identity)
+WHERE content = 'POSITION_DELETES';
+----
+0
+
+# A range covering several whole partitions drops each of their files.
+query I
+DELETE FROM my_datalake.default.test_metadata_only_identity WHERE id >= 3;
+----
+2
+
+query II
+SELECT id, val FROM my_datalake.default.test_metadata_only_identity ORDER BY id;
+----
+2	c
+
+query I
+SELECT count(*) FROM iceberg_metadata(my_datalake.default.test_metadata_only_identity)
+WHERE content = 'POSITION_DELETES';
+----
+0
+
+statement ok
+DROP TABLE my_datalake.default.test_metadata_only_identity;
+
+# ---- Two partition columns, both covered by the same conjunction ----
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.test_metadata_only_two_fields;
+
+statement ok
+CREATE TABLE my_datalake.default.test_metadata_only_two_fields (region VARCHAR, id INT, val VARCHAR)
+PARTITIONED BY (region, id);
+
+statement ok
+INSERT INTO my_datalake.default.test_metadata_only_two_fields VALUES
+    ('eu', 1, 'a'), ('eu', 1, 'b'), ('eu', 2, 'c'), ('us', 1, 'd');
+
+query I
+DELETE FROM my_datalake.default.test_metadata_only_two_fields WHERE region = 'eu' AND id = 1;
+----
+2
+
+query III
+SELECT region, id, val FROM my_datalake.default.test_metadata_only_two_fields ORDER BY region, id;
+----
+eu	2	c
+us	1	d
+
+query I
+SELECT count(*) FROM iceberg_metadata(my_datalake.default.test_metadata_only_two_fields)
+WHERE content = 'POSITION_DELETES';
+----
+0
+
+statement ok
+DROP TABLE my_datalake.default.test_metadata_only_two_fields;
+
+# ---- day(dt) on a DATE column: equality is safe because the day number *is* the value ----
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.test_metadata_only_day_date;
+
+statement ok
+CREATE TABLE my_datalake.default.test_metadata_only_day_date (id INT, dt DATE, val VARCHAR)
+PARTITIONED BY (day(dt));
+
+statement ok
+INSERT INTO my_datalake.default.test_metadata_only_day_date VALUES
+    (1, '2021-05-01'::DATE, 'a'),
+    (2, '2021-05-01'::DATE, 'b'),
+    (3, '2021-05-02'::DATE, 'c');
+
+query I
+DELETE FROM my_datalake.default.test_metadata_only_day_date WHERE dt = '2021-05-01'::DATE;
+----
+2
+
+query III
+SELECT id, dt, val FROM my_datalake.default.test_metadata_only_day_date ORDER BY id;
+----
+3	2021-05-02	c
+
+query I
+SELECT count(*) FROM iceberg_metadata(my_datalake.default.test_metadata_only_day_date)
+WHERE content = 'POSITION_DELETES';
+----
+0
+
+statement ok
+DROP TABLE my_datalake.default.test_metadata_only_day_date;
+
+# ---- day(ts) on a TIMESTAMP column: a range spanning the whole day ----
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.test_metadata_only_day_ts;
+
+statement ok
+CREATE TABLE my_datalake.default.test_metadata_only_day_ts (id INT, ts TIMESTAMP, val VARCHAR)
+PARTITIONED BY (day(ts));
+
+statement ok
+INSERT INTO my_datalake.default.test_metadata_only_day_ts VALUES
+    (1, '2021-05-01 00:00:00'::TIMESTAMP, 'a'),
+    (2, '2021-05-01 23:59:59'::TIMESTAMP, 'b'),
+    (3, '2021-05-02 12:00:00'::TIMESTAMP, 'c');
+
+query I
+DELETE FROM my_datalake.default.test_metadata_only_day_ts
+WHERE ts >= '2021-05-01 00:00:00'::TIMESTAMP AND ts < '2021-05-02 00:00:00'::TIMESTAMP;
+----
+2
+
+query III
+SELECT id, ts, val FROM my_datalake.default.test_metadata_only_day_ts ORDER BY id;
+----
+3	2021-05-02 12:00:00	c
+
+query I
+SELECT count(*) FROM iceberg_metadata(my_datalake.default.test_metadata_only_day_ts)
+WHERE content = 'POSITION_DELETES';
+----
+0
+
+statement ok
+DROP TABLE my_datalake.default.test_metadata_only_day_ts;
+
+# ---- Equality on a cast of the partition source column ----
+# cast(ts AS DATE) = <date> is rewritten into the exact timestamp range that day covers and is
+# pushed down in full, so the file is provably covered even though the predicate is not written
+# against the source column directly.
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.test_metadata_only_cast;
+
+statement ok
+CREATE TABLE my_datalake.default.test_metadata_only_cast (id INT, ts TIMESTAMP, val VARCHAR)
+PARTITIONED BY (day(ts));
+
+statement ok
+INSERT INTO my_datalake.default.test_metadata_only_cast VALUES
+    (1, '2021-05-01 00:00:00'::TIMESTAMP, 'a'),
+    (2, '2021-05-01 12:00:00'::TIMESTAMP, 'b'),
+    (3, '2021-05-02 00:00:00'::TIMESTAMP, 'c');
+
+query I
+DELETE FROM my_datalake.default.test_metadata_only_cast WHERE cast(ts AS DATE) = '2021-05-01'::DATE;
+----
+2
+
+query III
+SELECT id, ts, val FROM my_datalake.default.test_metadata_only_cast ORDER BY id;
+----
+3	2021-05-02 00:00:00	c
+
+query I
+SELECT count(*) FROM iceberg_metadata(my_datalake.default.test_metadata_only_cast)
+WHERE content = 'POSITION_DELETES';
+----
+0
+
+statement ok
+DROP TABLE my_datalake.default.test_metadata_only_cast;
+
+# ---- hour(ts): a range spanning the whole hour ----
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.test_metadata_only_hour;
+
+statement ok
+CREATE TABLE my_datalake.default.test_metadata_only_hour (id INT, ts TIMESTAMP, val VARCHAR)
+PARTITIONED BY (hour(ts));
+
+statement ok
+INSERT INTO my_datalake.default.test_metadata_only_hour VALUES
+    (1, '2021-05-01 10:00:00'::TIMESTAMP, 'a'),
+    (2, '2021-05-01 10:59:59'::TIMESTAMP, 'b'),
+    (3, '2021-05-01 11:00:00'::TIMESTAMP, 'c');
+
+query I
+DELETE FROM my_datalake.default.test_metadata_only_hour
+WHERE ts >= '2021-05-01 10:00:00'::TIMESTAMP AND ts < '2021-05-01 11:00:00'::TIMESTAMP;
+----
+2
+
+query III
+SELECT id, ts, val FROM my_datalake.default.test_metadata_only_hour ORDER BY id;
+----
+3	2021-05-01 11:00:00	c
+
+query I
+SELECT count(*) FROM iceberg_metadata(my_datalake.default.test_metadata_only_hour)
+WHERE content = 'POSITION_DELETES';
+----
+0
+
+statement ok
+DROP TABLE my_datalake.default.test_metadata_only_hour;
+
+# ---- month(ts): a range spanning the whole month ----
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.test_metadata_only_month;
+
+statement ok
+CREATE TABLE my_datalake.default.test_metadata_only_month (id INT, ts TIMESTAMP, val VARCHAR)
+PARTITIONED BY (month(ts));
+
+statement ok
+INSERT INTO my_datalake.default.test_metadata_only_month VALUES
+    (1, '2021-01-01 00:00:00'::TIMESTAMP, 'a'),
+    (2, '2021-01-31 23:59:59'::TIMESTAMP, 'b'),
+    (3, '2021-02-05 09:00:00'::TIMESTAMP, 'c');
+
+query I
+DELETE FROM my_datalake.default.test_metadata_only_month
+WHERE ts >= '2021-01-01 00:00:00'::TIMESTAMP AND ts < '2021-02-01 00:00:00'::TIMESTAMP;
+----
+2
+
+query III
+SELECT id, ts, val FROM my_datalake.default.test_metadata_only_month ORDER BY id;
+----
+3	2021-02-05 09:00:00	c
+
+query I
+SELECT count(*) FROM iceberg_metadata(my_datalake.default.test_metadata_only_month)
+WHERE content = 'POSITION_DELETES';
+----
+0
+
+statement ok
+DROP TABLE my_datalake.default.test_metadata_only_month;
+
+# ---- year(ts): a range spanning the whole year ----
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.test_metadata_only_year;
+
+statement ok
+CREATE TABLE my_datalake.default.test_metadata_only_year (id INT, ts TIMESTAMP, val VARCHAR)
+PARTITIONED BY (year(ts));
+
+statement ok
+INSERT INTO my_datalake.default.test_metadata_only_year VALUES
+    (1, '2020-01-01 00:00:00'::TIMESTAMP, 'a'),
+    (2, '2020-12-31 23:59:59'::TIMESTAMP, 'b'),
+    (3, '2021-03-10 08:00:00'::TIMESTAMP, 'c');
+
+query I
+DELETE FROM my_datalake.default.test_metadata_only_year
+WHERE ts >= '2020-01-01 00:00:00'::TIMESTAMP AND ts < '2021-01-01 00:00:00'::TIMESTAMP;
+----
+2
+
+query III
+SELECT id, ts, val FROM my_datalake.default.test_metadata_only_year ORDER BY id;
+----
+3	2021-03-10 08:00:00	c
+
+query I
+SELECT count(*) FROM iceberg_metadata(my_datalake.default.test_metadata_only_year)
+WHERE content = 'POSITION_DELETES';
+----
+0
+
+statement ok
+DROP TABLE my_datalake.default.test_metadata_only_year;
+
+# ---- Several files in one partition ----
+# The partition value is the same for all three files, so it cannot tell them apart. Each file's own bounds
+# can: one sits entirely inside the predicate, one straddles it, one sits entirely outside.
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.test_metadata_only_many_files;
+
+statement ok
+CREATE TABLE my_datalake.default.test_metadata_only_many_files (id INT, ts TIMESTAMP, val VARCHAR)
+PARTITIONED BY (day(ts));
+
+# One file per INSERT, all landing in the 2021-05-01 partition.
+
+statement ok
+INSERT INTO my_datalake.default.test_metadata_only_many_files VALUES
+    (1, '2021-05-01 00:05:00'::TIMESTAMP, 'inside-a'),
+    (2, '2021-05-01 10:30:00'::TIMESTAMP, 'inside-b');
+
+statement ok
+INSERT INTO my_datalake.default.test_metadata_only_many_files VALUES
+    (3, '2021-05-01 09:00:00'::TIMESTAMP, 'straddle-in'),
+    (4, '2021-05-01 14:00:00'::TIMESTAMP, 'straddle-out');
+
+statement ok
+INSERT INTO my_datalake.default.test_metadata_only_many_files VALUES
+    (5, '2021-05-01 12:00:00'::TIMESTAMP, 'outside-a'),
+    (6, '2021-05-01 23:50:00'::TIMESTAMP, 'outside-b');
+
+query I
+SELECT count(*) FROM iceberg_metadata(my_datalake.default.test_metadata_only_many_files)
+WHERE content = 'DATA' AND status != 'DELETED';
+----
+3
+
+query I
+DELETE FROM my_datalake.default.test_metadata_only_many_files WHERE ts <= '2021-05-01 11:00:00'::TIMESTAMP;
+----
+3
+
+query III
+SELECT id, ts, val FROM my_datalake.default.test_metadata_only_many_files ORDER BY id;
+----
+4	2021-05-01 14:00:00	straddle-out
+5	2021-05-01 12:00:00	outside-a
+6	2021-05-01 23:50:00	outside-b
+
+# The file whose whole range is inside the predicate is dropped, leaving two data files. Only the straddling
+# file needed a delete file; the file entirely outside the predicate was never opened.
+
+query I
+SELECT count(*) FROM iceberg_metadata(my_datalake.default.test_metadata_only_many_files)
+WHERE content = 'DATA' AND status != 'DELETED';
+----
+2
+
+query I
+SELECT count(*) FROM iceberg_metadata(my_datalake.default.test_metadata_only_many_files)
+WHERE content = 'POSITION_DELETES';
+----
+1
+
+statement ok
+DROP TABLE my_datalake.default.test_metadata_only_many_files;

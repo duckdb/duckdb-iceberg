@@ -14,6 +14,9 @@ public:
 public:
 	static bool MatchBounds(ClientContext &context, const ExpressionFilter &filter, const IcebergPredicateStats &stats,
 	                        const IcebergTransform &transform);
+	//! True only when *every* row described by `stats` provably satisfies `filter`.
+	static bool AllRowsMatchBounds(ClientContext &context, const ExpressionFilter &filter,
+	                               const IcebergPredicateStats &stats, const IcebergTransform &transform);
 };
 
 } // namespace duckdb

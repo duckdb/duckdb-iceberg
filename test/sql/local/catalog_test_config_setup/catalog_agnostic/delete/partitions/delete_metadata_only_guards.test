@@ -1,0 +1,283 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/delete/partitions/delete_metadata_only_guards.test
+# description: Predicates that do not provably cover a whole data file must fall back to the row-level delete path
+# group: [partitions]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+
+statement ok
+CALL enable_logging('HTTP');
+
+statement ok
+set logging_level='debug'
+
+# Each case asserts the surviving rows and that a delete file was written - the latter is what
+# distinguishes "fell back to the row-level path" from "dropped the file and happened to be right".
+
+# ---- Filter on a non-partition column only ----
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.test_guard_non_partition;
+
+statement ok
+CREATE TABLE my_datalake.default.test_guard_non_partition (id INT, val VARCHAR)
+PARTITIONED BY (id);
+
+statement ok
+INSERT INTO my_datalake.default.test_guard_non_partition VALUES (1, 'a'), (1, 'b'), (2, 'c');
+
+query I
+DELETE FROM my_datalake.default.test_guard_non_partition WHERE val = 'a';
+----
+1
+
+query II
+SELECT id, val FROM my_datalake.default.test_guard_non_partition ORDER BY id, val;
+----
+1	b
+2	c
+
+query I
+SELECT count(*) > 0 FROM iceberg_metadata(my_datalake.default.test_guard_non_partition)
+WHERE content = 'POSITION_DELETES';
+----
+true
+
+statement ok
+DROP TABLE my_datalake.default.test_guard_non_partition;
+
+# ---- Partition column AND non-partition column: only part of the predicate is covered ----
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.test_guard_partial_and;
+
+statement ok
+CREATE TABLE my_datalake.default.test_guard_partial_and (id INT, val VARCHAR)
+PARTITIONED BY (id);
+
+statement ok
+INSERT INTO my_datalake.default.test_guard_partial_and VALUES (1, 'a'), (1, 'b'), (2, 'c');
+
+query I
+DELETE FROM my_datalake.default.test_guard_partial_and WHERE id = 1 AND val = 'a';
+----
+1
+
+query II
+SELECT id, val FROM my_datalake.default.test_guard_partial_and ORDER BY id, val;
+----
+1	b
+2	c
+
+query I
+SELECT count(*) > 0 FROM iceberg_metadata(my_datalake.default.test_guard_partial_and)
+WHERE content = 'POSITION_DELETES';
+----
+true
+
+statement ok
+DROP TABLE my_datalake.default.test_guard_partial_and;
+
+# ---- Disjunction across partition values ----
+# A disjunction reaches the scan only as an optional filter, with the real predicate kept above it,
+# so a delete never drops files on one - not even when a branch covers a whole partition.
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.test_guard_or;
+
+statement ok
+CREATE TABLE my_datalake.default.test_guard_or (id INT, val VARCHAR)
+PARTITIONED BY (id);
+
+statement ok
+INSERT INTO my_datalake.default.test_guard_or VALUES (1, 'a'), (2, 'b'), (3, 'c');
+
+query I
+DELETE FROM my_datalake.default.test_guard_or WHERE id = 1 OR val = 'b';
+----
+2
+
+query II
+SELECT id, val FROM my_datalake.default.test_guard_or ORDER BY id;
+----
+3	c
+
+query I
+SELECT count(*) > 0 FROM iceberg_metadata(my_datalake.default.test_guard_or)
+WHERE content = 'POSITION_DELETES';
+----
+true
+
+statement ok
+DROP TABLE my_datalake.default.test_guard_or;
+
+# ---- IN list on the partition column ----
+# A contiguous integer IN list is rewritten into a range, which the coverage check can prove. This one
+# is non-contiguous, so it reaches the scan only as an optional filter.
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.test_guard_in;
+
+statement ok
+CREATE TABLE my_datalake.default.test_guard_in (id INT, val VARCHAR)
+PARTITIONED BY (id);
+
+statement ok
+INSERT INTO my_datalake.default.test_guard_in VALUES (1, 'a'), (2, 'b'), (3, 'c');
+
+query I
+DELETE FROM my_datalake.default.test_guard_in WHERE id IN (1, 3);
+----
+2
+
+query II
+SELECT id, val FROM my_datalake.default.test_guard_in ORDER BY id;
+----
+2	b
+
+query I
+SELECT count(*) > 0 FROM iceberg_metadata(my_datalake.default.test_guard_in)
+WHERE content = 'POSITION_DELETES';
+----
+true
+
+statement ok
+DROP TABLE my_datalake.default.test_guard_in;
+
+# ---- A predicate that is only partially pushed down ----
+# A prefix LIKE pushes down the range it implies ('a' <= category < 'b') and keeps the LIKE above the
+# scan. That range covers the 'abd' file, which does not match the LIKE - so the file must not drop.
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.test_guard_partial_pushdown;
+
+statement ok
+CREATE TABLE my_datalake.default.test_guard_partial_pushdown (id INT, category VARCHAR)
+PARTITIONED BY (category);
+
+statement ok
+INSERT INTO my_datalake.default.test_guard_partial_pushdown VALUES
+    (1, 'abc'), (2, 'abd'), (3, 'zzz');
+
+query I
+DELETE FROM my_datalake.default.test_guard_partial_pushdown WHERE category LIKE 'a%c';
+----
+1
+
+query II
+SELECT id, category FROM my_datalake.default.test_guard_partial_pushdown ORDER BY id;
+----
+2	abd
+3	zzz
+
+query I
+SELECT count(*) > 0 FROM iceberg_metadata(my_datalake.default.test_guard_partial_pushdown)
+WHERE content = 'POSITION_DELETES';
+----
+true
+
+statement ok
+DROP TABLE my_datalake.default.test_guard_partial_pushdown;
+
+# ---- Unpartitioned table: there is no partition value to reason about ----
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.test_guard_unpartitioned;
+
+statement ok
+CREATE TABLE my_datalake.default.test_guard_unpartitioned (id INT, val VARCHAR);
+
+statement ok
+INSERT INTO my_datalake.default.test_guard_unpartitioned VALUES (1, 'a'), (2, 'b');
+
+query I
+DELETE FROM my_datalake.default.test_guard_unpartitioned WHERE id = 1;
+----
+1
+
+query II
+SELECT id, val FROM my_datalake.default.test_guard_unpartitioned ORDER BY id;
+----
+2	b
+
+query I
+SELECT count(*) > 0 FROM iceberg_metadata(my_datalake.default.test_guard_unpartitioned)
+WHERE content = 'POSITION_DELETES';
+----
+true
+
+statement ok
+DROP TABLE my_datalake.default.test_guard_unpartitioned;
+
+# ---- NULL partition value ----
+# A file whose partition value is NULL carries no usable bounds, and a null check never reaches the scan's
+# Iceberg filter set anyway - DuckDB pushes it in after the complex-filter pushdown has run.
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.test_guard_null_partition;
+
+statement ok
+CREATE TABLE my_datalake.default.test_guard_null_partition (id INT, category VARCHAR)
+PARTITIONED BY (category);
+
+statement ok
+INSERT INTO my_datalake.default.test_guard_null_partition VALUES
+    (1, 'A'), (2, NULL), (3, NULL), (4, 'B');
+
+query I
+DELETE FROM my_datalake.default.test_guard_null_partition WHERE category IS NULL;
+----
+2
+
+query II
+SELECT id, category FROM my_datalake.default.test_guard_null_partition ORDER BY id;
+----
+1	A
+4	B
+
+query I
+SELECT count(*) > 0 FROM iceberg_metadata(my_datalake.default.test_guard_null_partition)
+WHERE content = 'POSITION_DELETES';
+----
+true
+
+statement ok
+DROP TABLE my_datalake.default.test_guard_null_partition;
+
+# ---- A MERGE's delete action ----
+# MERGE plans its delete over the scan that feeds its other actions, and a single-table conjunct in
+# the ON condition is pushed into that scan. The pushed-down filter covers the whole p=5 file, but
+# only the joined row is deleted - dropping the file would take its sibling with it.
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.test_guard_merge;
+
+statement ok
+CREATE TABLE my_datalake.default.test_guard_merge (id INT, p INT, val VARCHAR)
+PARTITIONED BY (p);
+
+statement ok
+INSERT INTO my_datalake.default.test_guard_merge VALUES (1, 5, 'a'), (2, 5, 'b'), (3, 9, 'c');
+
+statement ok
+MERGE INTO my_datalake.default.test_guard_merge t
+USING (SELECT 1 AS id) s
+ON t.id = s.id AND t.p = 5
+WHEN MATCHED THEN DELETE;
+
+query III
+SELECT id, p, val FROM my_datalake.default.test_guard_merge ORDER BY id;
+----
+2	5	b
+3	9	c
+
+statement ok
+DROP TABLE my_datalake.default.test_guard_merge;

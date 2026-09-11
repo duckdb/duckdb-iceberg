@@ -1,0 +1,62 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/delete/delete_metadata_only_logging.test
+# description: A metadata-only DELETE reports itself - a per-file entry and a summary in the Iceberg log, and a marker in EXPLAIN - since dropping a file instead of scanning it is otherwise invisible
+# group: [delete]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+statement ok
+set enable_logging=true
+
+statement ok
+call enable_logging('Iceberg');
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.test_metadata_only_logging;
+
+statement ok
+CREATE TABLE my_datalake.default.test_metadata_only_logging (id INT, val VARCHAR)
+PARTITIONED BY (id);
+
+statement ok
+INSERT INTO my_datalake.default.test_metadata_only_logging VALUES (1, 'a'), (1, 'b'), (2, 'c');
+
+# The plan reports that the delete is allowed to drop covered files, before it is known whether any were.
+query II
+EXPLAIN DELETE FROM my_datalake.default.test_metadata_only_logging WHERE id = 1;
+----
+physical_plan	<REGEX>:.*Metadata-Only Delete.*
+
+query I
+DELETE FROM my_datalake.default.test_metadata_only_logging WHERE id = 1;
+----
+2
+
+query II
+SELECT id, val FROM my_datalake.default.test_metadata_only_logging ORDER BY id;
+----
+2	c
+
+# One entry naming the dropped file and its record count.
+query I
+SELECT count(*) FROM duckdb_logs()
+WHERE type = 'Iceberg' AND regexp_matches(message, 'metadata-only DELETE, dropping .data_file.*2 records');
+----
+1
+
+# And one summary for the statement as a whole.
+query I
+SELECT count(*) FROM duckdb_logs()
+WHERE type = 'Iceberg' AND regexp_matches(message, 'metadata-only DELETE, dropped 1 data file\(s\) holding 2 record\(s\)');
+----
+1
+
+statement ok
+DROP TABLE my_datalake.default.test_metadata_only_logging;
