@@ -30,6 +30,7 @@ public:
 	bool RetryStateMatches(const IcebergTable &table_info) const;
 	//! Whether this transaction stages a DELETE snapshot; gates the commit-retry safety check.
 	bool ContainsDelete() const;
+	void VerifySnapshotExpirationAllowed() const;
 	bool IsFileInvalidated(const string &file_path) const;
 
 	void AddSnapshot(IcebergSnapshotOperationType operation, vector<IcebergManifestEntry> &&data_files,
@@ -54,6 +55,7 @@ public:
 	void TableSetDefaultSpec();
 	void TableSetProperties(const case_insensitive_map_t<string> &properties);
 	void TableRemoveProperties(const vector<string> &properties);
+	void TableRemoveSnapshots(const vector<int64_t> &snapshot_ids);
 	void TableSetLocation();
 	//! Roll main back to an ancestor snapshot (Spark rollback_to_snapshot semantics).
 	void TableRollbackToSnapshot(int64_t snapshot_id);

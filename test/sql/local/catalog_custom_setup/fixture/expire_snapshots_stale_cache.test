@@ -1,0 +1,268 @@
+# name: test/sql/local/catalog_custom_setup/fixture/expire_snapshots_stale_cache.test
+# description: expire_snapshots refreshes metadata instead of planning from a valid stale cache entry
+# group: [fixture]
+
+require-env FIXTURE_SERVER_AVAILABLE
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+set ignore_error_messages
+
+statement ok
+CREATE SECRET (
+    TYPE S3,
+    KEY_ID 'admin',
+    SECRET 'password',
+    ENDPOINT '127.0.0.1:9000',
+    URL_STYLE 'path',
+    USE_SSL 0
+);
+
+statement ok
+ATTACH OR REPLACE '' AS my_datalake (
+    TYPE ICEBERG,
+    CLIENT_ID 'admin',
+    CLIENT_SECRET 'password',
+    URI 'http://127.0.0.1:8181',
+    MAX_TABLE_STALENESS '10 minutes'
+);
+
+statement ok
+CREATE SCHEMA IF NOT EXISTS my_datalake.default;
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.expire_snapshots_stale_cache;
+
+statement ok
+CREATE TABLE my_datalake.default.expire_snapshots_stale_cache (id INTEGER);
+
+statement ok
+INSERT INTO my_datalake.default.expire_snapshots_stale_cache VALUES (1);
+
+statement ok
+INSERT INTO my_datalake.default.expire_snapshots_stale_cache VALUES (2);
+
+# Populate the default connection's staleness cache at S2.
+query I
+SELECT count(*) FROM iceberg_snapshots(my_datalake.default.expire_snapshots_stale_cache);
+----
+2
+
+# A separate attached catalog advances the REST table to S3 without evicting
+# the default connection's cache.
+statement ok con2
+ATTACH '' AS external_datalake (
+    TYPE ICEBERG,
+    CLIENT_ID 'admin',
+    CLIENT_SECRET 'password',
+    URI 'http://127.0.0.1:8181'
+);
+
+statement ok con2
+INSERT INTO external_datalake.default.expire_snapshots_stale_cache VALUES (3);
+
+# A planner using cached S2 would select only one ID and then conflict on main.
+# The destructive operator force-refreshes S3 and expires both older snapshots.
+query II
+SELECT * FROM iceberg_expire_snapshots(
+    'my_datalake.default.expire_snapshots_stale_cache',
+    retain_last => 1,
+    older_than => TIMESTAMP '2999-01-01'
+);
+----
+2	1
+
+query I
+SELECT count(*) FROM iceberg_snapshots(my_datalake.default.expire_snapshots_stale_cache);
+----
+1
+
+query II
+SELECT count(*), sum(id) FROM my_datalake.default.expire_snapshots_stale_cache;
+----
+3	6
+
+# Once the first expiration call pins fresh metadata in a transaction, a later
+# no-op uses that state and does not issue another table GET.
+statement ok
+CALL enable_logging('HTTP');
+
+statement ok
+CALL truncate_duckdb_logs();
+
+statement ok
+BEGIN;
+
+query II
+SELECT * FROM iceberg_expire_snapshots(
+    'my_datalake.default.expire_snapshots_stale_cache',
+    retain_last => 1,
+    older_than => TIMESTAMP '2999-01-01'
+);
+----
+0	1
+
+query II
+SELECT * FROM iceberg_expire_snapshots(
+    'my_datalake.default.expire_snapshots_stale_cache',
+    retain_last => 1,
+    older_than => TIMESTAMP '2999-01-01'
+);
+----
+0	1
+
+query I
+SELECT count(*)
+FROM duckdb_logs_parsed('HTTP')
+WHERE request.type = 'GET'
+  AND request.url LIKE '%/v1/namespaces/default/tables/expire_snapshots_stale_cache%';
+----
+1
+
+statement ok
+ROLLBACK;
+
+# A normal read can pin a cached table state before expiration sees the table.
+# Expiration fails closed instead of replacing that transaction view or planning
+# from metadata whose freshness it cannot establish.
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.expire_snapshots_preexisting_state;
+
+statement ok
+CREATE TABLE my_datalake.default.expire_snapshots_preexisting_state (id INTEGER);
+
+statement ok
+INSERT INTO my_datalake.default.expire_snapshots_preexisting_state VALUES (1);
+
+statement ok
+INSERT INTO my_datalake.default.expire_snapshots_preexisting_state VALUES (2);
+
+# Populate the default catalog cache at S2.
+query I
+SELECT count(*) FROM iceberg_snapshots(my_datalake.default.expire_snapshots_preexisting_state);
+----
+2
+
+# Advance the REST table to S3 without evicting the default catalog cache.
+statement ok con2
+INSERT INTO external_datalake.default.expire_snapshots_preexisting_state VALUES (3);
+
+statement ok
+CALL truncate_duckdb_logs();
+
+statement ok
+BEGIN;
+
+# This ordinary table scan both observes cached S2 and establishes transaction-local state.
+query I
+SELECT count(*) FROM my_datalake.default.expire_snapshots_preexisting_state;
+----
+2
+
+statement error
+SELECT * FROM iceberg_expire_snapshots(
+    'my_datalake.default.expire_snapshots_preexisting_state',
+    retain_last => 1,
+    older_than => TIMESTAMP '2999-01-01'
+);
+----
+<REGEX>:.*already accessed in this transaction.*new transaction.*
+
+# Committing an aborted transaction performs an implicit rollback.
+statement ok
+COMMIT;
+
+# No expiration commit reached the server.
+query I
+SELECT count(*)
+FROM duckdb_logs_parsed('HTTP')
+WHERE request.type = 'POST'
+  AND request.url LIKE '%/v1/namespaces/default/tables/expire_snapshots_preexisting_state%';
+----
+0
+
+query I
+SELECT count(*) FROM iceberg_snapshots(external_datalake.default.expire_snapshots_preexisting_state);
+----
+3
+
+# A new transaction has no pinned table state, so expiration force-refreshes S3.
+query II
+SELECT * FROM iceberg_expire_snapshots(
+    'my_datalake.default.expire_snapshots_preexisting_state',
+    retain_last => 1,
+    older_than => TIMESTAMP '2999-01-01'
+);
+----
+2	1
+
+query I
+SELECT count(*) FROM iceberg_snapshots(external_datalake.default.expire_snapshots_preexisting_state);
+----
+1
+
+# A force refresh may discover metadata committed after this transaction began.
+# With metadata-log isolation enabled, planning and staging must both use the
+# transaction-start copy derived from that refreshed metadata.
+statement ok
+SET iceberg_use_metadata_log = true;
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.expire_snapshots_metadata_log;
+
+statement ok
+CREATE TABLE my_datalake.default.expire_snapshots_metadata_log (id INTEGER);
+
+statement ok
+INSERT INTO my_datalake.default.expire_snapshots_metadata_log VALUES (1);
+
+statement ok
+INSERT INTO my_datalake.default.expire_snapshots_metadata_log VALUES (2);
+
+statement ok
+BEGIN;
+
+statement ok con2
+INSERT INTO external_datalake.default.expire_snapshots_metadata_log VALUES (3);
+
+# The refresh sees S3, but the transaction-visible copy is S2. Both the plan
+# and local mirror therefore expire only S1.
+query II
+SELECT * FROM iceberg_expire_snapshots(
+    'my_datalake.default.expire_snapshots_metadata_log',
+    retain_last => 1,
+    older_than => TIMESTAMP '2999-01-01'
+);
+----
+1	1
+
+query I
+SELECT count(*) FROM iceberg_snapshots(my_datalake.default.expire_snapshots_metadata_log);
+----
+1
+
+statement ok
+ROLLBACK;
+
+query I
+SELECT count(*) FROM iceberg_snapshots(external_datalake.default.expire_snapshots_metadata_log);
+----
+3
+
+statement ok
+SET iceberg_use_metadata_log = false;
+
+statement ok
+DROP TABLE my_datalake.default.expire_snapshots_metadata_log;
+
+statement ok
+DROP TABLE my_datalake.default.expire_snapshots_preexisting_state;
+
+statement ok
+DROP TABLE my_datalake.default.expire_snapshots_stale_cache;

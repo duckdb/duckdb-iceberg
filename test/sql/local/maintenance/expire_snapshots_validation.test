@@ -1,0 +1,79 @@
+# name: test/sql/local/maintenance/expire_snapshots_validation.test
+# description: bind-time validation for iceberg_expire_snapshots
+# group: [maintenance]
+
+require avro
+
+require parquet
+
+require iceberg
+
+statement error
+select * from iceberg_expire_snapshots(NULL);
+----
+table identifier cannot be NULL
+
+statement error
+select * from iceberg_expire_snapshots('');
+----
+has an empty component
+
+foreach table_name bad a.b a.b.c.d .b.c a..c a.b.c.
+
+statement error
+select * from iceberg_expire_snapshots('{table_name}');
+----
+table identifier
+
+endloop
+
+statement error
+select * from iceberg_expire_snapshots('a.b.c', retain_last => 0);
+----
+'retain_last' must be >= 1
+
+statement error
+select * from iceberg_expire_snapshots('a.b.c', snapshot_ids => 1);
+----
+'snapshot_ids' must be a list of integers
+
+statement error
+select * from iceberg_expire_snapshots('a.b.c', snapshot_ids => [1.5]);
+----
+'snapshot_ids' entries must be integers
+
+statement error
+select * from iceberg_expire_snapshots('a.b.c', snapshot_ids => [1, NULL]);
+----
+'snapshot_ids' entries cannot be NULL
+
+statement error
+select * from iceberg_expire_snapshots('a.b.c', snapshot_ids => NULL);
+----
+'snapshot_ids' cannot be NULL
+
+foreach timestamp infinity -infinity
+
+statement error
+select * from iceberg_expire_snapshots('a.b.c', older_than => timestamp '{timestamp}');
+----
+'older_than' must be a finite timestamp
+
+endloop
+
+# Optional NULLs are omitted and quoted identifier components remain valid.
+statement error
+select * from iceberg_expire_snapshots('"missing-catalog"."missing-schema"."missing-table"', older_than => NULL, retain_last => NULL);
+----
+Catalog "missing-catalog" does not exist
+
+statement ok
+create table expire_snapshots_not_iceberg (id INTEGER);
+
+statement error
+select * from iceberg_expire_snapshots('memory.main.expire_snapshots_not_iceberg');
+----
+not an Iceberg catalog
+
+statement ok
+drop table expire_snapshots_not_iceberg;
