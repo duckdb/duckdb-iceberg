@@ -268,7 +268,7 @@ string IcebergTableMetadata::GetMetaDataPath(ClientContext &context, const strin
 		version_hint = GetTableVersionFromHint(meta_path, fs, DEFAULT_VERSION_HINT_FILE);
 		return GenerateMetaDataUrl(fs, meta_path, version_hint, options);
 	}
-	if (!UnsafeVersionGuessingEnabled(context)) {
+	if (!options.version_explicitly_set && !UnsafeVersionGuessingEnabled(context)) {
 		// Make sure we're allowed to guess versions
 		throw InvalidConfigurationException(
 		    "Failed to read iceberg table. No version was provided and no version-hint could be found, globbing the "

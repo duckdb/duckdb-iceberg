@@ -120,12 +120,7 @@ public:
 	bool CheckAmbiguousCatalogOrSchema(ClientContext &context, const Identifier &schema) override {
 		return false;
 	}
-	optional<Identifier> GetDefaultSchema() const override {
-		if (default_schema.empty()) {
-			return nullopt;
-		}
-		return default_schema;
-	}
+	optional<Identifier> GetDefaultSchema() const override;
 	ErrorData SupportsCreateTable(BoundCreateTableInfo &info) override;
 
 public:

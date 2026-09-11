@@ -1,4 +1,5 @@
 # name: test/sql/local/catalog_test_config_setup/catalog_agnostic/create/test_create_empty_table.test
+# description: a CTAS whose SELECT yields no rows must still create a usable table
 # group: [create]
 
 require-env CATALOG_TEST_CONFIG_SETUP
@@ -16,3 +17,59 @@ drop table if exists my_datalake.default.range_0_table;
 
 statement ok
 CREATE TABLE my_datalake.default.range_0_table AS FROM range(0);
+
+# the CreateTable request is made when the copy operator builds its sink state, which happens when the
+# pipeline is scheduled rather than when the first chunk arrives, so a CTAS that never produces a chunk
+# still creates the table. No files are written, so no snapshot is committed.
+query I
+select count(*) from my_datalake.default.range_0_table;
+----
+0
+
+query I
+select * from my_datalake.default.range_0_table;
+----
+
+# appending to a table that has no snapshot yet has to create its first one
+statement ok
+insert into my_datalake.default.range_0_table select range from range(3);
+
+query I
+select * from my_datalake.default.range_0_table order by 1;
+----
+0
+1
+2
+
+statement ok
+drop table if exists my_datalake.default.empty_partitioned_ctas;
+
+# a partitioned write takes the other branch in the copy operator's sink state (partition_output),
+# which is reached before any row arrives - so the empty case has to work there too
+statement ok
+CREATE TABLE my_datalake.default.empty_partitioned_ctas PARTITIONED BY (val) AS
+    select i id, i % 3 val from range(9) t(i) limit 0;
+
+query I
+select count(*) from my_datalake.default.empty_partitioned_ctas;
+----
+0
+
+statement ok
+insert into my_datalake.default.empty_partitioned_ctas select i, i % 3 from range(6) t(i);
+
+query II
+select id, val from my_datalake.default.empty_partitioned_ctas order by id;
+----
+0	0
+1	1
+2	2
+3	0
+4	1
+5	2
+
+statement ok
+drop table my_datalake.default.range_0_table;
+
+statement ok
+drop table my_datalake.default.empty_partitioned_ctas;

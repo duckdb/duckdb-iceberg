@@ -64,6 +64,16 @@ SELECT * FROM iceberg_rewrite_data_files('a.b.c', min_input_files => 0);
 'min_input_files' must be >= 1
 
 statement error
+SELECT * FROM iceberg_rewrite_data_files('a.b.c', max_files_to_rewrite => 0);
+----
+'max_files_to_rewrite' must be >= 1
+
+statement error
+SELECT * FROM iceberg_rewrite_data_files('cat.sch.tbl', max_files_to_rewrite => NULL);
+----
+'max_files_to_rewrite' cannot be NULL
+
+statement error
 SELECT * FROM iceberg_rewrite_data_files('a.b.c', min_file_size_bytes => 99);
 ----
 'min_file_size_bytes' must be >= 100 bytes

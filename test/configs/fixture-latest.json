@@ -63,6 +63,12 @@
 			"paths": [
 				"test/sql/local/catalog_test_config_setup/catalog_agnostic/delete/equality_deletes/test_equality_delete_struct_field.test"
 			]
+		},
+		{
+			"reason": "apache/iceberg-rest-fixture:latest is built from apache/iceberg b0df3ca (2026-04-29) and so predates apache/iceberg#17014 'API: Guard against null in IN/NOT_IN predicates to avoid NPE' (merged 2026-07-12). Without that guard, Evaluator.in calls CharSequenceSet.contains(null) for a data file whose string partition value is NULL, WrapperSet.contains rejects null, and the NullPointerException surfaces as HTTP 500 from the plan endpoint. This test filters a string partition column with IN and has a NULL partition. Docker Hub has published no fixture tag newer than that image, so the lane cannot pick the fix up yet; remove this skip once it can.",
+			"paths": [
+				"test/sql/local/catalog_test_config_setup/catalog_agnostic/delete/partitions/test_delete_manifest_partitions.test"
+			]
 		}
 	]
 }
