@@ -17,12 +17,8 @@ namespace duckdb {
 namespace {
 
 //! Detect the scheme from a host string, defaulting to HTTPS
-Aws::Http::Scheme DetectScheme(const string &host) {
-	auto lower = StringUtil::Lower(host);
-	if (StringUtil::StartsWith(lower, "http://")) {
-		return Aws::Http::Scheme::HTTP;
-	}
-	return Aws::Http::Scheme::HTTPS;
+bool DetectHttps(const string &host) {
+	return !StringUtil::StartsWith(StringUtil::Lower(host), "http://");
 }
 
 } // namespace
@@ -64,21 +60,9 @@ unique_ptr<IcebergAuthorization> SIGV4Authorization::FromAttachOptions(AttachedD
 
 AWSInput SIGV4Authorization::CreateAWSInput(ClientContext &context, const IRCEndpointBuilder &endpoint_builder) {
 	AWSInput aws_input(db);
-	aws_input.cert_path = APIUtils::GetCURLCertPath();
-
-	// Set the user Agent
-	auto &config = DBConfig::GetConfig(context);
-	aws_input.user_agent = config.UserAgent();
-	Value val;
-	auto lookup_result = context.TryGetCurrentSetting("http_timeout", val);
-	if (lookup_result.GetScope() != SettingScope::INVALID) {
-		aws_input.use_httpfs_timeout = true;
-		// http timeout is in seconds, multiply by 1000 to get ms
-		aws_input.request_timeout_in_ms = val.GetValue<idx_t>() * 1000;
-	}
 
 	auto host = endpoint_builder.GetHost();
-	aws_input.scheme = DetectScheme(host);
+	aws_input.use_https = DetectHttps(host);
 	auto stripped_host = StripScheme(host);
 
 	// AWS service and region: use explicit overrides if provided, otherwise parse from host
