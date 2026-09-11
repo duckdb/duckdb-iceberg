@@ -1,0 +1,134 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/maintenance/rewrite_data_files_sort_order.test
+# description: rewrite_data_files writes physical row order from the current table sort order
+# group: [maintenance]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+
+statement ok
+set threads=1;
+
+statement ok
+CREATE SCHEMA IF NOT EXISTS my_datalake.default;
+
+statement ok
+drop table if exists my_datalake.default.rewrite_sort_order;
+
+# Insert six unordered files before the table has a sort order so rewrite, not
+# INSERT, is what must establish physical ordering.
+statement ok
+create table my_datalake.default.rewrite_sort_order (a INTEGER, b INTEGER);
+
+statement ok
+insert into my_datalake.default.rewrite_sort_order values (2, 20);
+
+statement ok
+insert into my_datalake.default.rewrite_sort_order values (1, 30);
+
+statement ok
+insert into my_datalake.default.rewrite_sort_order values (NULL, 5);
+
+statement ok
+insert into my_datalake.default.rewrite_sort_order values (2, 10);
+
+statement ok
+insert into my_datalake.default.rewrite_sort_order values (1, 40);
+
+statement ok
+insert into my_datalake.default.rewrite_sort_order values (3, 5);
+
+query I
+select count(*)
+from iceberg_metadata('my_datalake.default.rewrite_sort_order')
+where content = 'DATA' and status <> 'DELETED';
+----
+6
+
+statement ok
+alter table my_datalake.default.rewrite_sort_order set sorted by (
+	a desc nulls first,
+	b asc nulls last
+);
+
+statement ok
+set variable table_sort_order_id = (
+	select metadata."default-sort-order-id"
+	from iceberg_load_table_response(my_datalake.default.rewrite_sort_order)
+);
+
+query III
+call iceberg_rewrite_data_files('my_datalake.default.rewrite_sort_order');
+----
+6	1	<REGEX>:[1-9][0-9]*
+
+query I
+select count(*)
+from iceberg_metadata('my_datalake.default.rewrite_sort_order')
+where content = 'DATA' and status <> 'DELETED';
+----
+1
+
+statement ok
+set variable latest_manifest_sequence = (
+	select max(manifest_sequence_number)
+	from iceberg_metadata(my_datalake.default.rewrite_sort_order)
+);
+
+# Start transaction to keep necessary credentials in scope
+statement ok
+begin
+
+statement ok
+set variable file_path = (
+	select file_path
+	from iceberg_metadata(my_datalake.default.rewrite_sort_order)
+	where manifest_sequence_number = cast(getvariable('latest_manifest_sequence') as bigint)
+	and manifest_content = 'DATA'
+	and status = 'ADDED'
+	limit 1
+);
+
+statement ok
+set variable manifest_path = (
+	select manifest_path
+	from iceberg_metadata(my_datalake.default.rewrite_sort_order)
+	where manifest_sequence_number = cast(getvariable('latest_manifest_sequence') as bigint)
+	and manifest_content = 'DATA'
+	and status = 'ADDED'
+	limit 1
+);
+
+# Physical write order in the rewritten file must match a DESC NULLS FIRST, b ASC.
+query II
+select a, b
+from my_datalake.default.rewrite_sort_order
+where filename = getvariable('file_path')
+order by file_row_number;
+----
+NULL	5
+3	5
+2	10
+2	20
+1	30
+1	40
+
+query I
+select min(sort_order_id) = cast(getvariable('table_sort_order_id') as integer)
+from (select unnest(data_file) from read_avro(getvariable('manifest_path')))
+where sort_order_id is not null;
+----
+1
+
+statement ok
+drop table my_datalake.default.rewrite_sort_order;
+
+statement ok
+commit
