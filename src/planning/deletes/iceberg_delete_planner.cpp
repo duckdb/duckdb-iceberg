@@ -37,7 +37,7 @@ bool IcebergDeletePlanner::DeleteEntryMatchesFilters(const IcebergDeletePlanning
 	auto pushdown =
 	    IcebergFilePruner(context.context, context.metadata, context.schema, context.table_filters)
 	        .FileMatchesFilter(context.delete_manifests[delete_manifest_idx].entry.file, delete_manifest_entry);
-	return pushdown != METADATA_STATS_PUSHDOWN::NO_ROWS_MATCH;
+	return pushdown != MetadataStatsPushdown::NO_ROWS_MATCH;
 }
 
 bool IcebergDeletePlanner::DeleteEntryAppliesToDataFile(const IcebergDeletePlanningContext &context,

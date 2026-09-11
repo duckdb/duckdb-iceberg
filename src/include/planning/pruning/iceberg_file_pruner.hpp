@@ -18,8 +18,8 @@ public:
 
 	bool ManifestMatchesFilter(const IcebergManifestFile &manifest) const;
 	//! Weighs both kinds of evidence per filter: the file's partition values and its own column bounds.
-	METADATA_STATS_PUSHDOWN FileMatchesFilter(const IcebergManifestFile &manifest_file,
-	                                          const IcebergManifestEntry &manifest_entry) const;
+	MetadataStatsPushdown FileMatchesFilter(const IcebergManifestFile &manifest_file,
+	                                        const IcebergManifestEntry &manifest_entry) const;
 	bool DeleteManifestMatchesDataFile(const IcebergManifestFile &delete_manifest,
 	                                   const IcebergManifestFile &data_manifest,
 	                                   const IcebergManifestEntry &data_manifest_entry) const;

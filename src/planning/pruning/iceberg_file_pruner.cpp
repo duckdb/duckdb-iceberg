@@ -150,7 +150,7 @@ void LogBoundsPruned(ClientContext &context, const IcebergDataFile &data_file, c
 
 //! Partition values a data file carries are few (rarely more than a handful of fields), so a linear scan
 //! to find one by field id is cheaper than hashing it.
-const Value *TryGetPartitionValue(const IcebergDataFile &data_file, uint64_t partition_field_id) {
+optional_ptr<const Value> TryGetPartitionValue(const IcebergDataFile &data_file, uint64_t partition_field_id) {
 	for (auto &partition : data_file.partition_info) {
 		if (partition.field_id == partition_field_id) {
 			return &partition.value;
@@ -211,12 +211,12 @@ IcebergFilePruner::PartitionValuesForFilteredColumns(const IcebergDataFile &data
 
 //! Decides whether a data file has to be read at all: one filter ruling it out settles that on its own,
 //! while proving every row matches takes all of them.
-METADATA_STATS_PUSHDOWN IcebergFilePruner::FileMatchesFilter(const IcebergManifestFile &manifest_file,
-                                                             const IcebergManifestEntry &manifest_entry) const {
+MetadataStatsPushdown IcebergFilePruner::FileMatchesFilter(const IcebergManifestFile &manifest_file,
+                                                           const IcebergManifestEntry &manifest_entry) const {
 	D_ASSERT(table_filters.HasFilters());
 	if (!table_filters.HasFilters()) {
 		//! Nothing pushed down proves nothing; reporting coverage would drop an unselected file.
-		return METADATA_STATS_PUSHDOWN::SOME_ROWS_MATCH;
+		return MetadataStatsPushdown::SOME_ROWS_MATCH;
 	}
 
 	auto &data_file = manifest_entry.data_file;
@@ -251,13 +251,13 @@ METADATA_STATS_PUSHDOWN IcebergFilePruner::FileMatchesFilter(const IcebergManife
 			}
 			auto stats = PartitionValueStats(data_file, column_index, partition.value.get());
 			switch (IcebergPredicate::MatchBounds(context, *partition_filter, stats, field.transform)) {
-			case METADATA_STATS_PUSHDOWN::NO_ROWS_MATCH:
+			case MetadataStatsPushdown::NO_ROWS_MATCH:
 				LogPartitionPruned(context, schema, data_file, column_index, field, stats, *partition_filter);
-				return METADATA_STATS_PUSHDOWN::NO_ROWS_MATCH;
-			case METADATA_STATS_PUSHDOWN::ALL_ROWS_MATCH:
+				return MetadataStatsPushdown::NO_ROWS_MATCH;
+			case MetadataStatsPushdown::ALL_ROWS_MATCH:
 				filter_covered = true;
 				break;
-			case METADATA_STATS_PUSHDOWN::SOME_ROWS_MATCH:
+			case MetadataStatsPushdown::SOME_ROWS_MATCH:
 				break;
 			}
 		}
@@ -265,13 +265,13 @@ METADATA_STATS_PUSHDOWN IcebergFilePruner::FileMatchesFilter(const IcebergManife
 		//! Evidence from the file's own column bounds, exact for this file where the partition value is not.
 		if (auto bound_stats = TryGetColumnBoundStats(context, metadata, mapping_field_ids, data_file, column)) {
 			switch (IcebergPredicate::MatchBounds(context, filter, *bound_stats, IcebergTransform::Identity())) {
-			case METADATA_STATS_PUSHDOWN::NO_ROWS_MATCH:
+			case MetadataStatsPushdown::NO_ROWS_MATCH:
 				LogBoundsPruned(context, data_file, column, *bound_stats, filter);
-				return METADATA_STATS_PUSHDOWN::NO_ROWS_MATCH;
-			case METADATA_STATS_PUSHDOWN::ALL_ROWS_MATCH:
+				return MetadataStatsPushdown::NO_ROWS_MATCH;
+			case MetadataStatsPushdown::ALL_ROWS_MATCH:
 				filter_covered = true;
 				break;
-			case METADATA_STATS_PUSHDOWN::SOME_ROWS_MATCH:
+			case MetadataStatsPushdown::SOME_ROWS_MATCH:
 				break;
 			}
 		}
@@ -281,7 +281,7 @@ METADATA_STATS_PUSHDOWN IcebergFilePruner::FileMatchesFilter(const IcebergManife
 		}
 	}
 
-	return all_filters_covered ? METADATA_STATS_PUSHDOWN::ALL_ROWS_MATCH : METADATA_STATS_PUSHDOWN::SOME_ROWS_MATCH;
+	return all_filters_covered ? MetadataStatsPushdown::ALL_ROWS_MATCH : MetadataStatsPushdown::SOME_ROWS_MATCH;
 }
 
 bool IcebergFilePruner::DeleteManifestMatchesDataFile(const IcebergManifestFile &delete_manifest,
@@ -547,7 +547,7 @@ bool IcebergFilePruner::ManifestMatchesFilter(const IcebergManifestFile &manifes
 		stats.has_not_null = true;
 
 		if (IcebergPredicate::MatchBounds(context, *table_filter, stats, field.transform) ==
-		    METADATA_STATS_PUSHDOWN::NO_ROWS_MATCH) {
+		    MetadataStatsPushdown::NO_ROWS_MATCH) {
 			DUCKDB_LOG(context, IcebergLogType,
 			           "Iceberg Filter Pushdown, skipped 'manifest_file': '%s', column '%s' with "
 			           "transform '%s', bounds [%s, %s] did not match filter: %s",
