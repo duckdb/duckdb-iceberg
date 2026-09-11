@@ -1,0 +1,116 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/reads/partitioned_reads/test_multi_field_partition_pruning.test
+# description: Test reads and pruning when two partition fields share one source column
+# group: [partitioned_reads]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+
+statement ok
+pragma enable_external_file_cache=false;
+
+statement ok
+create schema if not exists my_datalake.default;
+
+statement ok
+drop table if exists my_datalake.default.test_multi_field_partition;
+
+# Both fields are sourced from `id`, so the spec carries two independent facts about the same column: a
+# bucket, which no range filter can reason about, and a truncation, which is order-preserving.
+statement ok
+CREATE TABLE my_datalake.default.test_multi_field_partition (id int, payload varchar)
+PARTITIONED BY (bucket(4, id), truncate(100, id));
+
+# One insert per truncation bucket: some catalogs write a single parquet file per insert regardless of
+# partitioning, so a single insert spanning all of them would leave nothing to prune.
+statement ok
+insert into my_datalake.default.test_multi_field_partition
+select range, 'row_' || range from range(100);
+
+statement ok
+insert into my_datalake.default.test_multi_field_partition
+select 100 + range, 'row_' || (100 + range) from range(100);
+
+statement ok
+insert into my_datalake.default.test_multi_field_partition
+select 200 + range, 'row_' || (200 + range) from range(100);
+
+statement ok
+create table local_multi_field as select range as id, 'row_' || range as payload from range(300);
+
+query I
+select count(*) from my_datalake.default.test_multi_field_partition;
+----
+300
+
+# Every row survives a round trip through a spec with two fields on one column
+query I
+select count(*) from (
+    select * from my_datalake.default.test_multi_field_partition
+    except
+    select * from local_multi_field
+);
+----
+0
+
+statement ok
+CALL enable_logging(level=debug);
+
+statement ok
+CALL truncate_duckdb_logs();
+
+# The truncation is order-preserving, so it rules out the id < 200 partitions; the bucket rules out nothing.
+query I
+select count(*) from my_datalake.default.test_multi_field_partition where id >= 200;
+----
+100
+
+query I
+select count(*) > 0 from duckdb_logs() where type = 'Iceberg' and message like '%skipped%';
+----
+true
+
+# --- Equality on the source column: both fields can rule a partition out ---
+
+statement ok
+CALL truncate_duckdb_logs();
+
+query II
+select id, payload from my_datalake.default.test_multi_field_partition where id = 250;
+----
+250	row_250
+
+query I
+select count(*) > 0 from duckdb_logs() where type = 'Iceberg' and message like '%skipped%';
+----
+true
+
+# --- A filter spanning every partition prunes nothing and still returns everything ---
+
+statement ok
+CALL truncate_duckdb_logs();
+
+query I
+select count(*) from my_datalake.default.test_multi_field_partition where id >= 0;
+----
+300
+
+# --- A filter on the non-partitioned column is answered by its own bounds ---
+
+statement ok
+CALL truncate_duckdb_logs();
+
+query I
+select count(*) from my_datalake.default.test_multi_field_partition where payload = 'row_17';
+----
+1
+
+statement ok
+drop table local_multi_field;
