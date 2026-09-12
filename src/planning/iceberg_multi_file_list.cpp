@@ -90,6 +90,29 @@ IcebergMultiFileList::IcebergMultiFileList(shared_ptr<IcebergScanPlanState> shar
 IcebergMultiFileList::~IcebergMultiFileList() {
 }
 
+unique_ptr<MultiFileList> IcebergMultiFileList::Copy() const {
+	auto result = make_uniq<IcebergMultiFileList>(context, shared_state->scan_info, GetPath(), options);
+	if (GetTable()) {
+		result->SetTable(*GetTable());
+	}
+	result->have_bound = have_bound;
+	result->names = names;
+	result->types = types;
+	for (auto &entry : table_filters) {
+		result->table_filters.PushFilter(entry.first, entry.second->Copy());
+	}
+	{
+		annotated_lock_guard<annotated_mutex> guard(shared_state->lock);
+		result->shared_state->server_side_planning_enabled = shared_state->server_side_planning_enabled;
+		auto order_options = scan_order.CopyOptions();
+		if (order_options) {
+			result->scan_order.Set(std::move(order_options));
+		}
+	}
+	// Per-view providers, cursors, manifest selections, and delete state start uninitialized.
+	return std::move(result);
+}
+
 const string &IcebergMultiFileList::GetPath() const {
 	return shared_state->path;
 }
@@ -113,6 +136,11 @@ const IcebergSnapshotScanInfo &IcebergMultiFileList::GetSnapshot() const {
 
 const IcebergTableSchema &IcebergMultiFileList::GetSchema() const {
 	return shared_state->scan_info->schema;
+}
+
+bool IcebergMultiFileList::SupportsLateMaterialization() const {
+	// Both scans share the bound snapshot, schema, and transaction state.
+	return GetMetadata().iceberg_version == 2;
 }
 
 IcebergScanPlanProvider &IcebergMultiFileList::GetScanPlanProvider() const {

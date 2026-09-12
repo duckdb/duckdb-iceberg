@@ -85,6 +85,37 @@ SELECT count(*) FROM ICEBERG_SCAN('{WORKING_DIRECTORY}/data/persistent/equality_
 ----
 2
 
+# Both scans must apply equality deletes before late materialization joins them.
+statement ok
+SET late_materialization_max_rows = 1;
+
+statement ok
+SET explain_output = 'optimized_only';
+
+query II
+EXPLAIN (FORMAT JSON) SELECT bir
+FROM ICEBERG_SCAN('{WORKING_DIRECTORY}/data/persistent/equality_deletes/warehouse/mydb/mytable')
+ORDER BY id
+LIMIT 1;
+----
+logical_opt	<REGEX>:(?s).*COMPARISON_JOIN.*ICEBERG_SCAN.*TOP_N.*ICEBERG_SCAN.*filename.*file_row_number.*
+
+# Deleted ids 1, 2, and 3 must not consume the TopN slot even though the
+# equality-delete columns are not projected in the final result.
+query I
+SELECT bir
+FROM ICEBERG_SCAN('{WORKING_DIRECTORY}/data/persistent/equality_deletes/warehouse/mydb/mytable')
+ORDER BY id
+LIMIT 1;
+----
+2025-01-04
+
+statement ok
+RESET explain_output;
+
+statement ok
+RESET late_materialization_max_rows;
+
 # Equality deletes are a scan correctness requirement and must not depend on an optimizer extension.
 statement ok
 PRAGMA disable_optimizer;

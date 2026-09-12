@@ -1,0 +1,387 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/reads/filtering/late_materialization_mixed_transactions.test
+# description: TopN results and admission across mixed metadata and data changes
+# group: [filtering]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+set ignore_error_messages
+
+foreach threads 1 4
+
+foreach finish COMMIT ROLLBACK
+
+foreach ddl schema property format
+
+statement ok
+SET threads = 1;
+
+statement ok
+SET late_materialization_max_rows = 5;
+
+statement ok
+SET explain_output = 'optimized_only';
+
+statement ok
+SET disabled_optimizers = '';
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.late_materialization_mixed_transactions;
+
+# Native reference tables are built before BEGIN, independently of Iceberg reads.
+statement ok
+CREATE OR REPLACE TEMP TABLE e0 AS
+SELECT i::INTEGER AS id,
+	CASE WHEN i % 9 = 0 THEN NULL ELSE (i % 7)::INTEGER END AS k,
+	CASE WHEN i = 5 THEN NULL ELSE concat(repeat('x', 256), '_', i) END AS p,
+	(i % 3)::INTEGER AS g
+FROM range(32) r(i);
+
+statement ok
+CREATE OR REPLACE TEMP TABLE e1 AS
+SELECT id,
+	CASE WHEN id=2 THEN 100 ELSE k END AS k,
+	CASE WHEN id=2 THEN 'u2' ELSE p END AS p, g
+FROM e0 WHERE id < 28
+UNION ALL SELECT 100, 110, 'i100', 1;
+
+statement ok
+CREATE OR REPLACE TEMP TABLE e2 AS
+SELECT id,
+	CASE WHEN id=3 THEN 120 ELSE k END AS k,
+	CASE WHEN id=3 THEN 'u3' ELSE p END AS p, g
+FROM e1 WHERE id <> 100
+UNION ALL SELECT 101, 130, 'i101', 1;
+
+statement ok
+CREATE TABLE my_datalake.default.late_materialization_mixed_transactions (id INTEGER,k INTEGER,p VARCHAR,g INTEGER) WITH ('format-version' = 2);
+
+statement ok
+INSERT INTO my_datalake.default.late_materialization_mixed_transactions SELECT * FROM e0 WHERE id%2=0;
+
+statement ok
+INSERT INTO my_datalake.default.late_materialization_mixed_transactions SELECT * FROM e0 WHERE id%2=1;
+
+statement ok
+SET threads = {threads};
+
+statement ok
+BEGIN;
+
+statement ok
+DELETE FROM my_datalake.default.late_materialization_mixed_transactions WHERE id >= 28;
+
+statement ok
+UPDATE my_datalake.default.late_materialization_mixed_transactions SET k = 100, p = 'u2' WHERE id = 2;
+
+statement ok
+INSERT INTO my_datalake.default.late_materialization_mixed_transactions (id,k,p,g) VALUES (100,110,'i100',1);
+
+# mixed_{ddl}_dml: independent reference, optimized result, and plan.
+query I
+WITH actual AS (
+	SELECT id, k, p, g
+FROM my_datalake.default.late_materialization_mixed_transactions
+ORDER BY k DESC NULLS LAST, id DESC
+LIMIT 5
+), expected AS (
+	SELECT id, k, p, g
+FROM e1
+ORDER BY k DESC NULLS LAST, id DESC
+LIMIT 5
+)
+SELECT count(*) FROM (
+	(FROM actual EXCEPT ALL FROM expected)
+	UNION ALL
+	(FROM expected EXCEPT ALL FROM actual)
+);
+----
+0
+
+query I
+WITH actual AS (
+	SELECT id,k,p,g FROM my_datalake.default.late_materialization_mixed_transactions
+), expected AS (
+	SELECT id,k,p,g FROM e1
+)
+SELECT count(*) FROM (
+	(FROM actual EXCEPT ALL FROM expected)
+	UNION ALL
+	(FROM expected EXCEPT ALL FROM actual)
+);
+----
+0
+
+statement ok
+SET disabled_optimizers = 'late_materialization';
+
+query IITI nosort mixed_{ddl}_dml_{threads}_{finish}
+SELECT id, k, p, g
+FROM my_datalake.default.late_materialization_mixed_transactions
+ORDER BY k DESC NULLS LAST, id DESC
+LIMIT 5;
+
+statement ok
+SET disabled_optimizers = '';
+
+query IITI nosort mixed_{ddl}_dml_{threads}_{finish}
+SELECT id, k, p, g
+FROM my_datalake.default.late_materialization_mixed_transactions
+ORDER BY k DESC NULLS LAST, id DESC
+LIMIT 5;
+
+query II
+EXPLAIN (FORMAT JSON) SELECT id, k, p, g
+FROM my_datalake.default.late_materialization_mixed_transactions
+ORDER BY k DESC NULLS LAST, id DESC
+LIMIT 5;
+----
+logical_opt	<REGEX>:(?s).*COMPARISON_JOIN.*
+
+# Pending schema/property/format updates keep V2 late materialization enabled.
+onlyif ddl==schema
+statement ok
+ALTER TABLE my_datalake.default.late_materialization_mixed_transactions ADD COLUMN extra VARCHAR;
+
+onlyif ddl==property
+statement ok
+ALTER TABLE my_datalake.default.late_materialization_mixed_transactions SET ('lm-mixed' = 'pending');
+
+onlyif ddl==format
+statement ok
+ALTER TABLE my_datalake.default.late_materialization_mixed_transactions SET ('format-version' = 2);
+
+# The newly added payload is absent from all existing files and must read as NULL.
+onlyif ddl==schema
+query IT
+SELECT id, extra
+FROM my_datalake.default.late_materialization_mixed_transactions
+ORDER BY k DESC NULLS LAST, id DESC LIMIT 2;
+----
+100	NULL
+2	NULL
+
+# mixed_{ddl}_metadata: independent reference, optimized result, and plan.
+query I
+WITH actual AS (
+	SELECT id, k, p, g
+FROM my_datalake.default.late_materialization_mixed_transactions
+ORDER BY k DESC NULLS LAST, id DESC
+LIMIT 5
+), expected AS (
+	SELECT id, k, p, g
+FROM e1
+ORDER BY k DESC NULLS LAST, id DESC
+LIMIT 5
+)
+SELECT count(*) FROM (
+	(FROM actual EXCEPT ALL FROM expected)
+	UNION ALL
+	(FROM expected EXCEPT ALL FROM actual)
+);
+----
+0
+
+query I
+WITH actual AS (
+	SELECT id,k,p,g FROM my_datalake.default.late_materialization_mixed_transactions
+), expected AS (
+	SELECT id,k,p,g FROM e1
+)
+SELECT count(*) FROM (
+	(FROM actual EXCEPT ALL FROM expected)
+	UNION ALL
+	(FROM expected EXCEPT ALL FROM actual)
+);
+----
+0
+
+statement ok
+SET disabled_optimizers = 'late_materialization';
+
+query IITI nosort mixed_{ddl}_metadata_{threads}_{finish}
+SELECT id, k, p, g
+FROM my_datalake.default.late_materialization_mixed_transactions
+ORDER BY k DESC NULLS LAST, id DESC
+LIMIT 5;
+
+statement ok
+SET disabled_optimizers = '';
+
+query IITI nosort mixed_{ddl}_metadata_{threads}_{finish}
+SELECT id, k, p, g
+FROM my_datalake.default.late_materialization_mixed_transactions
+ORDER BY k DESC NULLS LAST, id DESC
+LIMIT 5;
+
+query II
+EXPLAIN (FORMAT JSON) SELECT id, k, p, g
+FROM my_datalake.default.late_materialization_mixed_transactions
+ORDER BY k DESC NULLS LAST, id DESC
+LIMIT 5;
+----
+logical_opt	<REGEX>:(?s).*COMPARISON_JOIN.*
+
+statement ok
+DELETE FROM my_datalake.default.late_materialization_mixed_transactions WHERE id = 100;
+
+statement ok
+UPDATE my_datalake.default.late_materialization_mixed_transactions SET k = 120, p = 'u3' WHERE id = 3;
+
+statement ok
+INSERT INTO my_datalake.default.late_materialization_mixed_transactions (id,k,p,g) VALUES (101,130,'i101',1);
+
+# mixed_{ddl}_second_dml: independent reference, optimized result, and plan.
+query I
+WITH actual AS (
+	SELECT id, k, p, g
+FROM my_datalake.default.late_materialization_mixed_transactions
+ORDER BY k DESC NULLS LAST, id DESC
+LIMIT 5
+), expected AS (
+	SELECT id, k, p, g
+FROM e2
+ORDER BY k DESC NULLS LAST, id DESC
+LIMIT 5
+)
+SELECT count(*) FROM (
+	(FROM actual EXCEPT ALL FROM expected)
+	UNION ALL
+	(FROM expected EXCEPT ALL FROM actual)
+);
+----
+0
+
+query I
+WITH actual AS (
+	SELECT id,k,p,g FROM my_datalake.default.late_materialization_mixed_transactions
+), expected AS (
+	SELECT id,k,p,g FROM e2
+)
+SELECT count(*) FROM (
+	(FROM actual EXCEPT ALL FROM expected)
+	UNION ALL
+	(FROM expected EXCEPT ALL FROM actual)
+);
+----
+0
+
+statement ok
+SET disabled_optimizers = 'late_materialization';
+
+query IITI nosort mixed_{ddl}_second_dml_{threads}_{finish}
+SELECT id, k, p, g
+FROM my_datalake.default.late_materialization_mixed_transactions
+ORDER BY k DESC NULLS LAST, id DESC
+LIMIT 5;
+
+statement ok
+SET disabled_optimizers = '';
+
+query IITI nosort mixed_{ddl}_second_dml_{threads}_{finish}
+SELECT id, k, p, g
+FROM my_datalake.default.late_materialization_mixed_transactions
+ORDER BY k DESC NULLS LAST, id DESC
+LIMIT 5;
+
+query II
+EXPLAIN (FORMAT JSON) SELECT id, k, p, g
+FROM my_datalake.default.late_materialization_mixed_transactions
+ORDER BY k DESC NULLS LAST, id DESC
+LIMIT 5;
+----
+logical_opt	<REGEX>:(?s).*COMPARISON_JOIN.*
+
+# A new value in the added payload must also be visible to the delayed scan.
+onlyif ddl==schema
+statement ok
+UPDATE my_datalake.default.late_materialization_mixed_transactions
+SET extra = 'transaction_payload' WHERE id = 101;
+
+onlyif ddl==schema
+query II
+EXPLAIN (FORMAT JSON) SELECT id, extra
+FROM my_datalake.default.late_materialization_mixed_transactions
+ORDER BY k DESC NULLS LAST, id DESC LIMIT 2;
+----
+logical_opt	<REGEX>:(?s).*COMPARISON_JOIN.*
+
+onlyif ddl==schema
+query IT
+SELECT id, extra
+FROM my_datalake.default.late_materialization_mixed_transactions
+ORDER BY k DESC NULLS LAST, id DESC LIMIT 2;
+----
+101	transaction_payload
+3	NULL
+
+# A later metadata update must preserve LM after the intervening DML.
+statement ok
+ALTER TABLE my_datalake.default.late_materialization_mixed_transactions SET ('lm-mixed-last' = 'pending');
+
+query II
+EXPLAIN (FORMAT JSON) SELECT id, k, p, g
+FROM my_datalake.default.late_materialization_mixed_transactions
+ORDER BY k DESC NULLS LAST, id DESC
+LIMIT 5;
+----
+logical_opt	<REGEX>:(?s).*COMPARISON_JOIN.*
+
+statement ok
+{finish};
+
+query I
+WITH actual AS (
+	SELECT id,k,p,g FROM my_datalake.default.late_materialization_mixed_transactions
+), expected AS (
+	SELECT * FROM e2 WHERE '{finish}'='COMMIT' UNION ALL SELECT * FROM e0 WHERE '{finish}'='ROLLBACK'
+)
+SELECT count(*) FROM (
+	(FROM actual EXCEPT ALL FROM expected)
+	UNION ALL
+	(FROM expected EXCEPT ALL FROM actual)
+);
+----
+0
+
+query II
+EXPLAIN (FORMAT JSON) SELECT id, k, p, g
+FROM my_datalake.default.late_materialization_mixed_transactions
+ORDER BY k DESC NULLS LAST, id DESC
+LIMIT 5;
+----
+logical_opt	<REGEX>:(?s).*COMPARISON_JOIN.*
+
+statement ok
+DROP TABLE my_datalake.default.late_materialization_mixed_transactions;
+
+statement ok
+DROP TABLE e0;
+
+statement ok
+DROP TABLE e1;
+
+statement ok
+DROP TABLE e2;
+
+endloop
+
+endloop
+
+endloop
+
+statement ok
+RESET threads;
+
+statement ok
+RESET explain_output;
+
+statement ok
+RESET late_materialization_max_rows;
