@@ -19,6 +19,8 @@ jobs:
       extension_name: iceberg
       duckdb_version: 99063af2bd7092aff02e14184a20e24699d34d71
       ci_tools_version: main
+      # Temporary override; remove when extension-ci-tools updates its default.
+      vcpkg_commit: cd61e1e26a038e82d6550a3ebbe0fbbfe7da78e3 # Release 2026.06.24
       exclude_archs: 'windows_amd64_mingw'
       extra_toolchains: 'python3'
 
