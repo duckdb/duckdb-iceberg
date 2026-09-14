@@ -1,0 +1,217 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/reads/filtering/late_materialization_prepared_transactions.test
+# description: Rebind prepared TopN scans across metadata updates and transaction boundaries
+# group: [filtering]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+set ignore_error_messages
+
+foreach threads 1 4
+
+foreach finish COMMIT ROLLBACK
+
+foreach mode on off
+
+statement ok
+SET threads = 1;
+
+statement ok
+SET late_materialization_max_rows = 3;
+
+statement ok
+SET explain_output = 'optimized_only';
+
+onlyif mode==on
+statement ok
+SET disabled_optimizers = '';
+
+onlyif mode==off
+statement ok
+SET disabled_optimizers = 'late_materialization';
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.lm_prepared_transactions;
+
+statement ok
+CREATE TABLE my_datalake.default.lm_prepared_transactions (id INTEGER, k INTEGER, p VARCHAR, spare VARCHAR) WITH ('format-version' = 2);
+
+statement ok
+INSERT INTO my_datalake.default.lm_prepared_transactions SELECT i, i, concat('p', i), repeat('x', 256) FROM range(32) r(i);
+
+statement ok
+INSERT INTO my_datalake.default.lm_prepared_transactions SELECT i, i, concat('p', i), repeat('x', 256) FROM range(32, 64) r(i);
+
+statement ok
+SET threads = {threads};
+
+statement ok
+SET VARIABLE prepared_snapshot = (SELECT snapshot_id FROM iceberg_snapshots(my_datalake.default.lm_prepared_transactions) ORDER BY sequence_number DESC LIMIT 1);
+
+# Bind once before BEGIN. Re-execution must observe the correct local changes.
+statement ok
+PREPARE live_topn AS SELECT id, p FROM my_datalake.default.lm_prepared_transactions WHERE id >= $1 ORDER BY k DESC, id DESC LIMIT 3;
+
+statement ok
+PREPARE historical_topn AS SELECT id, p FROM my_datalake.default.lm_prepared_transactions AT (VERSION => getvariable('prepared_snapshot')) ORDER BY k DESC, id DESC LIMIT 3;
+
+query IT
+EXECUTE live_topn(0);
+----
+63	p63
+62	p62
+61	p61
+
+statement ok
+BEGIN;
+
+statement ok
+ALTER TABLE my_datalake.default.lm_prepared_transactions ADD COLUMN extra VARCHAR;
+
+statement ok
+DELETE FROM my_datalake.default.lm_prepared_transactions WHERE id = 63;
+
+statement ok
+UPDATE my_datalake.default.lm_prepared_transactions SET k = 100, p = 'updated', extra = 'u' WHERE id = 60;
+
+statement ok
+INSERT INTO my_datalake.default.lm_prepared_transactions (id, k, p, extra) VALUES (100, 200, 'inserted', 'new');
+
+query IT
+EXECUTE live_topn(0);
+----
+100	inserted
+60	updated
+62	p62
+
+onlyif mode==on
+query II
+EXPLAIN (FORMAT JSON) EXECUTE live_topn(0);
+----
+logical_opt	<REGEX>:(?s).*COMPARISON_JOIN.*
+
+onlyif mode==off
+query II
+EXPLAIN (FORMAT JSON) EXECUTE live_topn(0);
+----
+logical_opt	<!REGEX>:(?s).*COMPARISON_JOIN.*
+
+statement ok
+PREPARE pending_topn AS SELECT id, p, extra FROM my_datalake.default.lm_prepared_transactions ORDER BY k DESC, id DESC LIMIT 3;
+
+# The new payload column is present only in the newly written files.
+query ITT
+EXECUTE pending_topn;
+----
+100	inserted	new
+60	updated	u
+62	p62	NULL
+
+onlyif mode==on
+query II
+EXPLAIN (FORMAT JSON) EXECUTE pending_topn;
+----
+logical_opt	<REGEX>:(?s).*COMPARISON_JOIN.*
+
+onlyif mode==off
+query II
+EXPLAIN (FORMAT JSON) EXECUTE pending_topn;
+----
+logical_opt	<!REGEX>:(?s).*COMPARISON_JOIN.*
+
+# Explicit time travel must exclude uncommitted data and metadata changes.
+query IT
+EXECUTE historical_topn;
+----
+63	p63
+62	p62
+61	p61
+
+onlyif mode==on
+query II
+EXPLAIN (FORMAT JSON) EXECUTE historical_topn;
+----
+logical_opt	<REGEX>:(?s).*COMPARISON_JOIN.*
+
+onlyif mode==off
+query II
+EXPLAIN (FORMAT JSON) EXECUTE historical_topn;
+----
+logical_opt	<!REGEX>:(?s).*COMPARISON_JOIN.*
+
+statement ok
+{finish};
+
+onlyif finish==COMMIT
+query IT
+EXECUTE live_topn(0);
+----
+100	inserted
+60	updated
+62	p62
+
+onlyif finish==COMMIT
+query ITT
+EXECUTE pending_topn;
+----
+100	inserted	new
+60	updated	u
+62	p62	NULL
+
+onlyif finish==ROLLBACK
+query IT
+EXECUTE live_topn(0);
+----
+63	p63
+62	p62
+61	p61
+
+onlyif finish==ROLLBACK
+statement error
+EXECUTE pending_topn;
+----
+extra
+
+query IT
+EXECUTE historical_topn;
+----
+63	p63
+62	p62
+61	p61
+
+statement ok
+DEALLOCATE live_topn;
+
+statement ok
+DEALLOCATE pending_topn;
+
+statement ok
+DEALLOCATE historical_topn;
+
+statement ok
+DROP TABLE my_datalake.default.lm_prepared_transactions;
+
+endloop
+
+endloop
+
+endloop
+
+statement ok
+RESET disabled_optimizers;
+
+statement ok
+RESET late_materialization_max_rows;
+
+statement ok
+RESET explain_output;
+
+statement ok
+RESET threads;

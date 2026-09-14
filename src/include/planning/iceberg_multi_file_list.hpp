@@ -68,9 +68,11 @@ public:
 	void GetStatistics(vector<PartitionStatistics> &result) const;
 	const IcebergTableMetadata &GetMetadata() const;
 	const IcebergTableSchema &GetSchema() const;
+	bool SupportsLateMaterialization() const;
 	BoundIcebergManifestEntry GetManifestEntry(idx_t file_id) const;
 	IcebergManifestFile GetManifestFileForDataFile(idx_t file_id) const;
 	IcebergDeletePlan ProcessDeletes(const BoundIcebergManifestEntry &data_manifest_entry) const;
+	unique_ptr<MultiFileList> Copy() const override;
 
 private:
 	const string &GetPath() const;
