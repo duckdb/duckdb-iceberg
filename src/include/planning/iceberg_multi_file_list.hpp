@@ -13,6 +13,7 @@
 #include "duckdb/common/multi_file/multi_file_data.hpp"
 #include "duckdb/common/list.hpp"
 #include "duckdb/common/unordered_map.hpp"
+#include "duckdb/function/partition_stats.hpp"
 #include "duckdb/planner/filter/expression_filter.hpp"
 #include "duckdb/planner/filter/null_filter.hpp"
 #include "duckdb/planner/table_filter.hpp"
@@ -29,14 +30,48 @@
 
 namespace duckdb {
 
+struct IcebergMultiFileList;
+
 class IcebergTableSchemaVersion;
 class IcebergScanPlanProvider;
 struct IcebergScanPlanContext;
-struct IcebergMultiFileList;
+
+//! Exposes per-column min/max from Iceberg manifest data_file.lower_bounds /
+//! upper_bounds to DuckDB's PartitionStatistics API. Used by
+//! StatisticsPropagator::TryExecuteAggregates for metadata-only MIN/MAX.
+//!
+//! Intentionally reads manifest column bounds — not Iceberg partition-statistics
+//! files (https://iceberg.apache.org/spec/#partition-statistics), which carry
+//! only counts/sizes and have no per-column min/max.
+//!
+//! Data-file entries are materialized lazily on first GetColumnStatistics call so
+//! COUNT(*)-only partition-stats requests avoid draining every matching file.
+struct IcebergPartitionRowGroup : public PartitionRowGroup {
+public:
+	explicit IcebergPartitionRowGroup(const IcebergMultiFileList &file_list);
+
+public:
+	unique_ptr<BaseStatistics> GetColumnStatistics(const StorageIndex &storage_index) override;
+	bool MinMaxIsExact(const StorageIndex &storage_index) override;
+	bool HasPendingWrites() override;
+
+private:
+	void EnsureDataFilesMaterialized();
+	//! Numeric/temporal types whose Iceberg bounds are stored without truncation.
+	//! FLOAT/DOUBLE are excluded (NaN semantics). VARCHAR/BLOB bounds may be truncated.
+	static bool SupportsExactMinMaxBounds(const LogicalType &type);
+
+	const IcebergMultiFileList &file_list;
+	vector<reference<const IcebergDataFile>> data_files;
+	bool data_files_materialized = false;
+};
+
 struct IcebergMultiFileReader;
 struct IcebergDeleteFileReference;
 
 struct IcebergMultiFileList : public MultiFileList {
+	friend struct IcebergPartitionRowGroup;
+
 public:
 	IcebergMultiFileList(ClientContext &context, shared_ptr<IcebergScanInfo> scan_info, const string &path,
 	                     const IcebergOptions &options);
@@ -98,6 +133,10 @@ private:
 	const IcebergManifestFile &GetManifestFileForEntry(const BoundIcebergManifestEntry &entry,
 	                                                   IcebergManifestContentType type) const
 	    DUCKDB_REQUIRES(shared_state->lock);
+
+	//! Drain matching data-file entries so column bounds are available for MIN/MAX.
+	//! Called lazily from IcebergPartitionRowGroup — not from GetStatistics (COUNT(*)).
+	void EnsureDataFilesMaterialized(vector<reference<const IcebergDataFile>> &result) const;
 
 	//! Whether a delete file's manifest entry can apply to any file selected by the current scan filter.
 	//! Delete files are pruned on partition only: one whose partition is excluded by the filter cannot
