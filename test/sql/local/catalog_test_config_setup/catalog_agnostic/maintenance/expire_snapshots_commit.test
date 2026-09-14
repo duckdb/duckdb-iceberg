@@ -1,0 +1,271 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/maintenance/expire_snapshots_commit.test
+# description: expire_snapshots selection, transaction visibility, and REST metadata commit
+# group: [maintenance]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+set ignore_error_messages
+
+statement ok
+drop table if exists my_datalake.default.expire_snapshots_commit;
+
+statement ok
+create table my_datalake.default.expire_snapshots_commit (id INTEGER);
+
+query II
+select * from iceberg_expire_snapshots('my_datalake.default.expire_snapshots_commit');
+----
+0	0
+
+statement ok
+insert into my_datalake.default.expire_snapshots_commit values (1);
+
+query II
+select * from iceberg_expire_snapshots('my_datalake.default.expire_snapshots_commit', retain_last => 1, older_than => timestamp '2999-01-01');
+----
+0	1
+
+foreach value 2 3 4
+
+statement ok
+insert into my_datalake.default.expire_snapshots_commit values ({value});
+
+endloop
+
+statement ok
+prepare expire_snapshots_prepared as
+select * from iceberg_expire_snapshots('my_datalake.default.expire_snapshots_commit', retain_last => 1, older_than => timestamp '2999-01-01');
+
+statement ok
+begin;
+
+query II
+execute expire_snapshots_prepared;
+----
+3	1
+
+statement ok
+rollback;
+
+statement ok
+insert into my_datalake.default.expire_snapshots_commit values (5);
+
+# Execution resolves the current catalog entry instead of retaining a bind-time pointer.
+statement ok
+begin;
+
+query II
+execute expire_snapshots_prepared;
+----
+4	1
+
+statement ok
+rollback;
+
+statement ok
+set variable current_snapshot = (select arg_max(snapshot_id, sequence_number) from iceberg_snapshots(my_datalake.default.expire_snapshots_commit));
+
+statement error
+select * from iceberg_expire_snapshots('my_datalake.default.expire_snapshots_commit', snapshot_ids => [getvariable('current_snapshot')]);
+----
+still referenced
+
+statement ok
+set variable oldest_snapshot = (select arg_min(snapshot_id, sequence_number) from iceberg_snapshots(my_datalake.default.expire_snapshots_commit));
+
+# Explicit IDs override age and retain_last, are de-duplicated, and must exist.
+statement ok
+begin;
+
+query II
+select * from iceberg_expire_snapshots('my_datalake.default.expire_snapshots_commit', snapshot_ids => [getvariable('oldest_snapshot'), getvariable('oldest_snapshot')], retain_last => 10);
+----
+1	4
+
+statement ok
+rollback;
+
+statement error
+select * from iceberg_expire_snapshots('my_datalake.default.expire_snapshots_commit', snapshot_ids => [-1]);
+----
+snapshot -1 does not exist
+
+# Expiration and rollback both change the snapshot graph or its main ref, so a
+# transaction cannot combine them in either order.
+statement ok
+set variable rollback_snapshot = (
+    select snapshot_id
+    from iceberg_snapshots(my_datalake.default.expire_snapshots_commit)
+    order by sequence_number desc
+    offset 1 limit 1
+);
+
+statement ok
+begin;
+
+query II
+select * from iceberg_expire_snapshots('my_datalake.default.expire_snapshots_commit', snapshot_ids => [getvariable('oldest_snapshot')], retain_last => 10);
+----
+1	4
+
+statement error
+call iceberg_rollback_to_snapshot('my_datalake.default.expire_snapshots_commit', getvariable('rollback_snapshot'));
+----
+cannot be combined with snapshot expiration
+
+statement ok
+rollback;
+
+statement ok
+begin;
+
+statement ok
+call iceberg_rollback_to_snapshot('my_datalake.default.expire_snapshots_commit', getvariable('rollback_snapshot'));
+
+statement error
+select * from iceberg_expire_snapshots('my_datalake.default.expire_snapshots_commit', snapshot_ids => [getvariable('oldest_snapshot')], retain_last => 10);
+----
+cannot be combined with snapshot rollback
+
+statement ok
+rollback;
+
+query I
+select count(*) from iceberg_snapshots(my_datalake.default.expire_snapshots_commit);
+----
+5
+
+# Transaction-visible metadata must not expose a locally dropped table.
+statement ok
+begin;
+
+statement ok
+drop table my_datalake.default.expire_snapshots_commit;
+
+statement error
+select * from iceberg_expire_snapshots('my_datalake.default.expire_snapshots_commit');
+----
+dropped or renamed in this transaction
+
+statement ok
+rollback;
+
+# A pending data snapshot is not materialized in transaction-local metadata, so
+# expiration cannot plan after a data change.
+statement ok
+begin;
+
+statement ok
+insert into my_datalake.default.expire_snapshots_commit values (6);
+
+statement error
+select * from iceberg_expire_snapshots('my_datalake.default.expire_snapshots_commit', retain_last => 1, older_than => timestamp '2999-01-01');
+----
+cannot follow data changes
+
+statement ok
+rollback;
+
+# Once expiration is staged, later data changes are rejected as well so the
+# transaction has one consistent snapshot-graph operation model.
+statement ok
+begin;
+
+query II
+select * from iceberg_expire_snapshots('my_datalake.default.expire_snapshots_commit', snapshot_ids => [getvariable('oldest_snapshot')], retain_last => 10);
+----
+1	4
+
+statement error
+insert into my_datalake.default.expire_snapshots_commit values (6);
+----
+cannot be combined with snapshot expiration
+
+statement ok
+rollback;
+
+# Property updates can change the retention plan, so they cannot share a transaction with expiration.
+statement ok
+begin;
+
+statement ok
+call set_iceberg_table_properties(my_datalake.default.expire_snapshots_commit, {'gc.enabled': 'false'});
+
+statement error
+select * from iceberg_expire_snapshots('my_datalake.default.expire_snapshots_commit');
+----
+cannot follow table property changes
+
+statement ok
+rollback;
+
+statement ok
+begin;
+
+query II
+select * from iceberg_expire_snapshots('my_datalake.default.expire_snapshots_commit', snapshot_ids => [getvariable('oldest_snapshot')], retain_last => 10);
+----
+1	4
+
+statement error
+call set_iceberg_table_properties(my_datalake.default.expire_snapshots_commit, {'gc.enabled': 'false'});
+----
+Table property changes cannot be combined with snapshot expiration
+
+statement ok
+rollback;
+
+query II
+select count(*), sum(id) from my_datalake.default.expire_snapshots_commit;
+----
+5	15
+
+# Consecutive calls plan against transaction-visible metadata produced by the
+# previous call. Committing the transaction removes all four selected snapshots.
+statement ok
+begin;
+
+query II
+select * from iceberg_expire_snapshots('my_datalake.default.expire_snapshots_commit', snapshot_ids => [getvariable('oldest_snapshot')], retain_last => 10);
+----
+1	4
+
+query II
+select * from iceberg_expire_snapshots('my_datalake.default.expire_snapshots_commit', retain_last => 1, older_than => timestamp '2999-01-01');
+----
+3	1
+
+statement ok
+commit;
+
+query I
+select count(*) from iceberg_snapshots(my_datalake.default.expire_snapshots_commit);
+----
+1
+
+query II
+select count(*), sum(id) from my_datalake.default.expire_snapshots_commit AT (VERSION => getvariable('current_snapshot'));
+----
+5	15
+
+statement error
+select * from my_datalake.default.expire_snapshots_commit AT (VERSION => getvariable('oldest_snapshot'));
+----
+snapshot
+
+# Expiration removes metadata, never data files.
+query II
+select count(*), sum(id) from my_datalake.default.expire_snapshots_commit;
+----
+5	15
+
+statement ok
+drop table my_datalake.default.expire_snapshots_commit;

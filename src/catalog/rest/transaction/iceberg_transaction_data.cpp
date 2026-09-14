@@ -17,6 +17,21 @@
 
 namespace duckdb {
 
+static bool HasTableUpdate(const vector<unique_ptr<IcebergTableUpdate>> &updates, IcebergTableUpdateType type) {
+	for (const auto &update : updates) {
+		if (update->type == type) {
+			return true;
+		}
+	}
+	return false;
+}
+
+static void VerifyNoSnapshotExpiration(const vector<unique_ptr<IcebergTableUpdate>> &updates, const char *operation) {
+	if (HasTableUpdate(updates, IcebergTableUpdateType::REMOVE_SNAPSHOTS)) {
+		throw TransactionException("%s cannot be combined with snapshot expiration in the same transaction", operation);
+	}
+}
+
 static void LoadMissingManifestCounts(ClientContext &context, const IcebergTableMetadata &metadata,
                                       const IcebergSnapshotScanInfo &snapshot_info,
                                       IcebergManifestListEntry &manifest_list_entry) {
@@ -138,6 +153,21 @@ bool IcebergTransactionData::ContainsDelete() const {
 	return false;
 }
 
+void IcebergTransactionData::VerifySnapshotExpirationAllowed() const {
+	//! These updates are not all materialized in the metadata used by the expiration planner.
+	if (HasTableUpdate(updates, IcebergTableUpdateType::ADD_SNAPSHOT)) {
+		throw TransactionException("Snapshot expiration cannot follow data changes in the same transaction");
+	}
+	if (HasTableUpdate(updates, IcebergTableUpdateType::SET_SNAPSHOT_REF)) {
+		throw TransactionException(
+		    "Snapshot expiration cannot be combined with snapshot rollback in the same transaction");
+	}
+	if (HasTableUpdate(updates, IcebergTableUpdateType::SET_PROPERTIES) ||
+	    HasTableUpdate(updates, IcebergTableUpdateType::REMOVE_PROPERTIES)) {
+		throw TransactionException("Snapshot expiration cannot follow table property changes in the same transaction");
+	}
+}
+
 bool IcebergTransactionData::IsFileInvalidated(const string &file_path) const {
 	return manifest_deletes.IsInvalidated(file_path);
 }
@@ -194,6 +224,7 @@ void IcebergTransactionData::AddSnapshot(IcebergSnapshotOperationType operation,
                                          IcebergManifestDeletes &&altered_manifests) {
 	//! NOTE: Lock has to be held to make sure the rows are assigned the correct row ids
 	lock_guard<mutex> guard(lock);
+	VerifyNoSnapshotExpiration(updates, "Data changes");
 
 	//! Generate a new snapshot id
 	auto &table_metadata = table_info.table_metadata;
@@ -256,6 +287,7 @@ void IcebergTransactionData::AddDeleteSnapshot(partitioned_manifest_entry_map_t 
                                                IcebergManifestDeletes &&altered_manifests) {
 	//! NOTE: Lock has to be held to make sure the rows are assigned the correct row ids
 	lock_guard<mutex> guard(lock);
+	VerifyNoSnapshotExpiration(updates, "Data changes");
 
 	auto &table_metadata = table_info.table_metadata;
 	CacheExistingManifestList(guard, table_metadata);
@@ -276,6 +308,7 @@ void IcebergTransactionData::AddUpdateSnapshot(partitioned_manifest_entry_map_t 
                                                IcebergManifestDeletes &&altered_manifests) {
 	//! NOTE: Lock has to be held to make sure the rows are assigned the correct row ids
 	lock_guard<mutex> guard(lock);
+	VerifyNoSnapshotExpiration(updates, "Data changes");
 
 	//! Generate a new snapshot id
 	auto &table_metadata = table_info.table_metadata;
@@ -372,11 +405,27 @@ void IcebergTransactionData::TableSetDefaultSpec() {
 }
 
 void IcebergTransactionData::TableSetProperties(const case_insensitive_map_t<string> &properties) {
+	VerifyNoSnapshotExpiration(updates, "Table property changes");
 	updates.push_back(make_uniq<SetProperties>(properties));
 }
 
 void IcebergTransactionData::TableRemoveProperties(const vector<string> &properties) {
+	VerifyNoSnapshotExpiration(updates, "Table property changes");
 	updates.push_back(make_uniq<RemoveProperties>(properties));
+}
+
+void IcebergTransactionData::TableRemoveSnapshots(const vector<int64_t> &snapshot_ids) {
+	for (auto &update : updates) {
+		if (update->type == IcebergTableUpdateType::REMOVE_SNAPSHOTS) {
+			update->Cast<RemoveSnapshots>().AddSnapshotIds(snapshot_ids);
+			return;
+		}
+	}
+	updates.push_back(make_uniq<RemoveSnapshots>(snapshot_ids));
+	//! The standard requirement detects changes to main, but cannot detect a
+	//! concurrently created ref or retention-only policy changes.
+	auto &metadata = table_info.table_metadata;
+	requirements.push_back(make_uniq<AssertRefSnapshotId>(metadata.current_snapshot_id));
 }
 
 void IcebergTransactionData::TableSetLocation() {
@@ -403,6 +452,7 @@ static bool IsAncestorOfCurrentSnapshot(const IcebergTableMetadata &metadata, in
 }
 
 void IcebergTransactionData::TableRollbackToSnapshot(int64_t snapshot_id) {
+	VerifyNoSnapshotExpiration(updates, "Snapshot rollback");
 	auto &metadata = table_info.table_metadata;
 	auto target = metadata.FindSnapshotByIdInternal(snapshot_id);
 	if (!target) {

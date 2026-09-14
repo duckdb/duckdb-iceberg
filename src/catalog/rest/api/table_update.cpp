@@ -2,6 +2,8 @@
 #include "duckdb/common/exception.hpp"
 #include "catalog/rest/iceberg_table_set.hpp"
 
+#include <algorithm>
+
 namespace duckdb {
 
 AddSchemaUpdate::AddSchemaUpdate(shared_ptr<IcebergTableSchema> schema_p, optional_idx last_column_id_p)
@@ -80,7 +82,7 @@ void AssertCurrentSchemaIdRequirement::CreateRequirement(DatabaseInstance &db, C
 	req.assert_current_schema_id->current_schema_id = current_schema_id;
 }
 
-AssertRefSnapshotId::AssertRefSnapshotId(int64_t snapshot_id)
+AssertRefSnapshotId::AssertRefSnapshotId(optional<int64_t> snapshot_id)
     : IcebergTableRequirement(IcebergTableRequirementType::ASSERT_REF_SNAPSHOT_ID), snapshot_id(snapshot_id) {
 }
 
@@ -252,6 +254,30 @@ void RemoveProperties::CreateUpdate(DatabaseInstance &db, ClientContext &context
 	req.remove_properties_update = rest_api_objects::RemovePropertiesUpdate();
 	req.remove_properties_update->base_update.action = "remove-properties";
 	req.remove_properties_update->removals = properties;
+}
+
+static void SortAndRemoveDuplicates(vector<int64_t> &values) {
+	std::sort(values.begin(), values.end());
+	values.erase(std::unique(values.begin(), values.end()), values.end());
+}
+
+RemoveSnapshots::RemoveSnapshots(vector<int64_t> snapshot_ids_p)
+    : IcebergTableUpdate(IcebergTableUpdateType::REMOVE_SNAPSHOTS), snapshot_ids(std::move(snapshot_ids_p)) {
+	SortAndRemoveDuplicates(snapshot_ids);
+}
+
+void RemoveSnapshots::AddSnapshotIds(const vector<int64_t> &snapshot_ids_p) {
+	snapshot_ids.insert(snapshot_ids.end(), snapshot_ids_p.begin(), snapshot_ids_p.end());
+	SortAndRemoveDuplicates(snapshot_ids);
+}
+
+void RemoveSnapshots::CreateUpdate(DatabaseInstance &db, ClientContext &context,
+                                   IcebergCommitState &commit_state) const {
+	commit_state.table_change.updates.push_back(rest_api_objects::TableUpdate());
+	auto &update = commit_state.table_change.updates.back();
+	update.remove_snapshots_update = rest_api_objects::RemoveSnapshotsUpdate();
+	update.remove_snapshots_update->base_update.action = "remove-snapshots";
+	update.remove_snapshots_update->snapshot_ids = snapshot_ids;
 }
 
 SetLocation::SetLocation(string location)
