@@ -25,10 +25,6 @@ services:
       - AWS_SECRET_ACCESS_KEY=password
     networks:
       iceberg_net:
-    volumes:
-      - type: bind
-        source: ../data/generated/iceberg/spark-rest/
-        target: /data
     ports:
       - 9000:9000
     command: ["server", "-dir=/data", "-ip=seaweedfs", "-s3", "-s3.port=9000"]
