@@ -45,8 +45,6 @@ struct IcebergDeletePlanner {
 	                                         const IcebergManifestEntry &delete_manifest_entry,
 	                                         const BoundIcebergManifestEntry &data_manifest_entry,
 	                                         const partition_value_map_t &data_partition_values);
-	static shared_ptr<IcebergDeleteData> GetExistingPositionalDeleteData(const IcebergDeletePlanningContext &context,
-	                                                                     const string &file_path);
 };
 
 } // namespace duckdb

@@ -349,7 +349,7 @@ void IcebergDelete::FlushDeletes(IcebergTransaction &transaction, ClientContext 
 
 		IcebergDeleteFileInfo delete_file;
 		delete_file.data_file_path = filename;
-		delete_file.partition_info = multi_file_list->GetPartitionForDataFile(filename);
+		delete_file.partition_info = multi_file_list->GetScanPlanner().GetPartitionForDataFile(filename);
 
 		auto &fs = FileSystem::GetFileSystem(context);
 

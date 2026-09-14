@@ -144,7 +144,7 @@ private:
 	AddEqualityDeleteColumn(const IcebergTableMetadata &metadata, int32_t field_id,
 	                        vector<MultiFileColumnDefinition> &scan_columns, vector<ColumnIndex> &scan_column_ids,
 	                        MultiFileReaderData &reader_data, ClientContext &context);
-	static void ApplyPartitionConstants(const IcebergManifestFile &manifest_file,
+	static void ApplyPartitionConstants(int32_t partition_spec_id,
 	                                    const BoundIcebergManifestEntry &bound_manifest_entry,
 	                                    const IcebergTableMetadata &metadata, MultiFileReaderData &reader_data,
 	                                    const vector<MultiFileColumnDefinition> &global_columns,

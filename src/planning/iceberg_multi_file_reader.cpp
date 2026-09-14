@@ -111,10 +111,10 @@ bool IcebergMultiFileReader::Bind(MultiFileOptions &options, MultiFileList &file
                                   vector<Identifier> &names, MultiFileReaderBindData &bind_data) {
 	auto &iceberg_multi_file_list = dynamic_cast<IcebergMultiFileList &>(files);
 
-	iceberg_multi_file_list.SetOptions(this->options);
+	iceberg_multi_file_list.GetScanPlanner().SetOptions(this->options);
 	iceberg_multi_file_list.Bind(return_types, names);
 	// FIXME: apply final transformation for 'file_row_number' ???
-	auto &schema = iceberg_multi_file_list.GetSchema().columns;
+	auto &schema = iceberg_multi_file_list.GetScanPlanner().GetSchema().columns;
 	auto &columns = bind_data.schema;
 	for (auto &item : schema) {
 		columns.push_back(item->GetMultiFileColumnDefinition());
@@ -299,7 +299,7 @@ static Value TransformPartitionValue(const Value &value, const LogicalType &type
 	}
 }
 
-void IcebergMultiFileReader::ApplyPartitionConstants(const IcebergManifestFile &manifest_file,
+void IcebergMultiFileReader::ApplyPartitionConstants(int32_t partition_spec_id,
                                                      const BoundIcebergManifestEntry &bound_manifest_entry,
                                                      const IcebergTableMetadata &metadata,
                                                      MultiFileReaderData &reader_data,
@@ -313,10 +313,9 @@ void IcebergMultiFileReader::ApplyPartitionConstants(const IcebergManifestFile &
 
 	// Get the partition spec for this file
 	auto &partition_specs = metadata.partition_specs;
-	auto spec_id = manifest_file.partition_spec_id;
-	auto partition_spec_it = partition_specs.find(spec_id);
+	auto partition_spec_it = partition_specs.find(partition_spec_id);
 	if (partition_spec_it == partition_specs.end()) {
-		throw InvalidConfigurationException("'partition_spec_id' %d doesn't exist in the metadata", spec_id);
+		throw InvalidConfigurationException("'partition_spec_id' %d doesn't exist in the metadata", partition_spec_id);
 	}
 
 	auto &partition_spec = partition_spec_it->second;
@@ -395,11 +394,14 @@ ReaderInitializeType IcebergMultiFileReader::InitializeReader(MultiFileReaderDat
                                                               ClientContext &context, MultiFileGlobalState &gstate) {
 	auto &iceberg_state = gstate.multi_file_reader_state->Cast<IcebergMultiFileReaderGlobalState>();
 	const auto &multi_file_list = dynamic_cast<const IcebergMultiFileList &>(*iceberg_state.file_list);
-	auto &metadata = multi_file_list.GetMetadata();
+	auto &planner = multi_file_list.GetScanPlanner();
+	auto &metadata = planner.GetMetadata();
 	auto file_id = reader_data.reader->file_list_idx.GetIndex();
-	auto bound_manifest_entry = multi_file_list.GetManifestEntry(file_id);
-	auto manifest_file = multi_file_list.GetManifestFileForDataFile(file_id);
-	auto delete_plan = multi_file_list.ProcessDeletes(bound_manifest_entry);
+	auto task = planner.GetScanTask(file_id);
+	if (!task) {
+		throw InternalException("Unable to find Iceberg scan task for file index %llu", file_id);
+	}
+	auto delete_plan = multi_file_list.ProcessDeletes(*task);
 
 	//! Make a copy of the global columns+column_ids, if we have equality deletes we will add columns to this
 	//! This is done so CreateMapping treats these columns as required for the current file,
@@ -424,8 +426,12 @@ ReaderInitializeType IcebergMultiFileReader::InitializeReader(MultiFileReaderDat
 			ApplyFieldMapping(local_column, mappings, root.field_mapping_indexes, context);
 		}
 	}
-	ApplyPartitionConstants(manifest_file, bound_manifest_entry, metadata, reader_data, scan_columns, scan_column_ids,
-	                        context);
+	int32_t partition_spec_id;
+	planner.WithManifestFile(
+	    task->manifest_entry, IcebergManifestContentType::DATA,
+	    [&partition_spec_id](const IcebergManifestFile &manifest) { partition_spec_id = manifest.partition_spec_id; });
+	ApplyPartitionConstants(partition_spec_id, task->manifest_entry, metadata, reader_data, scan_columns,
+	                        scan_column_ids, context);
 
 	vector<bool> accelerated_files;
 	Value fast_filter_setting;
@@ -759,7 +765,8 @@ vector<PartitionStatistics> IcebergMultiFileReader::IcebergGetPartitionStats(Cli
 	auto &bind_data = input.bind_data->Cast<MultiFileBindData>();
 	vector<PartitionStatistics> result;
 	auto &multi_file_list = bind_data.file_list->Cast<IcebergMultiFileList>();
-	multi_file_list.GetStatistics(result);
+	auto &scan_planner = multi_file_list.GetScanPlanner();
+	scan_planner.GetStatistics(result);
 	return result;
 }
 

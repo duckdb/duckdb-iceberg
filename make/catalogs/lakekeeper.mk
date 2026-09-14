@@ -5,7 +5,7 @@ lakekeeper-clone:
 	@if [ ! -d ".catalogs/lakekeeper" ]; then \
 		echo "Cloning Lakekeeper repository..."; \
 		mkdir -p .catalogs && git clone https://github.com/lakekeeper/lakekeeper.git .catalogs/lakekeeper; \
-		cd .catalogs/lakekeeper && git checkout f6aaa4570cf62d54943581e7a00b9f882d9c992d && git apply ../../.github/patches/lakekeeper_docker_compose.patch; \
+		cd .catalogs/lakekeeper && git checkout a4ea43a754cfd031f32c9278d07f20062f2eb82b && git apply ../../.github/patches/lakekeeper_docker_compose.patch; \
 	else \
 		echo "Lakekeeper repository exists."; \
 	fi

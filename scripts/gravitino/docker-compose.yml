@@ -19,7 +19,7 @@ services:
         condition: service_started
 
   minio:
-    image: minio/minio
+    image: quay.io/minio/minio
     ports:
       - "9000:9000"
       - "9002:9001"
@@ -33,7 +33,7 @@ services:
     command: ["server", "/data", "--console-address", ":9001"]
 
   mc:
-    image: minio/mc
+    image: quay.io/minio/mc
     depends_on:
       - minio
     entrypoint: |
