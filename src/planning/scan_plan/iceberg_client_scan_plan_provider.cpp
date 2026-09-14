@@ -451,6 +451,21 @@ bool ClientSideScanPlanProvider::DeleteFileAppliesToDataFile(const string &data_
 	return true;
 }
 
+bool ClientSideScanPlanProvider::ManifestIsVisible(const IcebergManifestFile &manifest_file) const {
+	if (!shared_state.incremental) {
+		return true;
+	}
+	return shared_state.incremental->ManifestInRange(manifest_file);
+}
+
+bool ClientSideScanPlanProvider::EntryIsVisible(const IcebergManifestEntry &entry,
+                                                const IcebergManifestFile &manifest_file) const {
+	if (!shared_state.incremental) {
+		return true;
+	}
+	return shared_state.incremental->EntryInRange(entry, manifest_file);
+}
+
 vector<IcebergManifestListEntry> &ClientSideScanPlanProvider::DataManifests() {
 	return shared_state.committed_data_manifests;
 }

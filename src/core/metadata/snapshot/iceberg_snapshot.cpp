@@ -20,7 +20,7 @@ int64_t IcebergSnapshot::NewSnapshotId() {
 	return random_number;
 }
 
-static string OperationTypeToString(IcebergSnapshotOperationType type) {
+string IcebergSnapshotOperationTypeToString(IcebergSnapshotOperationType type) {
 	switch (type) {
 	case IcebergSnapshotOperationType::APPEND:
 		return "append";
@@ -48,7 +48,7 @@ rest_api_objects::Snapshot IcebergSnapshot::ToRESTObject(const IcebergTableMetad
 	}
 	res.manifest_list = manifest_list;
 
-	res.summary.operation = OperationTypeToString(operation);
+	res.summary.operation = IcebergSnapshotOperationTypeToString(operation);
 	res.summary.additional_properties = metrics.ToString();
 
 	if (parent_snapshot_id) {

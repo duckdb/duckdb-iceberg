@@ -45,6 +45,8 @@ static void AddNamedParameters(TableFunction &fun) {
 	fun.named_parameters["version_name_format"] = LogicalType::VARCHAR;
 	fun.named_parameters["snapshot_from_timestamp"] = LogicalType::TIMESTAMP_MS;
 	fun.named_parameters["snapshot_from_id"] = LogicalType::UBIGINT;
+	fun.named_parameters["start_snapshot_id"] = LogicalType::BIGINT;
+	fun.named_parameters["end_snapshot_id"] = LogicalType::BIGINT;
 }
 
 virtual_column_map_t IcebergVirtualColumns(ClientContext &context, optional_ptr<FunctionData> bind_data_p) {

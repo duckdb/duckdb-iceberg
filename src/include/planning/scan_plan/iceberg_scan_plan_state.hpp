@@ -8,6 +8,7 @@
 #include "planning/iceberg_manifest_read_state.hpp"
 #include "planning/metadata_io/avro/avro_scan.hpp"
 #include "planning/metadata_io/manifest/bound_iceberg_manifest_entry.hpp"
+#include "planning/snapshot/iceberg_incremental_scan.hpp"
 #include "planning/snapshot/iceberg_scan_info.hpp"
 
 #include <condition_variable>
@@ -58,6 +59,8 @@ struct IcebergScanPlanState {
 	string path;
 	optional_ptr<IcebergTableSchemaVersion> table;
 	IcebergOptions options;
+	//! The resolved range of an incremental scan, unset otherwise. Written in Bind, read-only after.
+	optional<IcebergIncrementalSnapshots> incremental;
 
 	mutable annotated_mutex lock;
 	mutable annotated_mutex delete_lock DUCKDB_ACQUIRED_AFTER(lock);
