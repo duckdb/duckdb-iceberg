@@ -3,6 +3,7 @@
 #include "duckdb/common/types.hpp"
 #include "duckdb/common/unordered_map.hpp"
 
+#include "catalog/rest/api/catalog_api.hpp"
 #include "core/metadata/manifest/iceberg_manifest_list.hpp"
 #include "rest_catalog/objects/plan_table_scan_request.hpp"
 #include "rest_catalog/objects/storage_credential.hpp"
@@ -30,8 +31,7 @@ public:
 	static constexpr const char *CANCEL_ENDPOINT =
 	    "DELETE /v1/{prefix}/namespaces/{namespace}/tables/{table}/plan/{plan-id}";
 	static constexpr const char *TASKS_ENDPOINT = "POST /v1/{prefix}/namespaces/{namespace}/tables/{table}/tasks";
-	static constexpr const char *CREDENTIALS_ENDPOINT =
-	    "GET /v1/{prefix}/namespaces/{namespace}/tables/{table}/credentials";
+	static constexpr const char *CREDENTIALS_ENDPOINT = IRCAPI::CREDENTIALS_ENDPOINT;
 
 	//! Returns false only when the server explicitly declines planning with HTTP 406.
 	static bool Plan(ClientContext &context, IcebergTable &table_info, rest_api_objects::PlanTableScanRequest request,
