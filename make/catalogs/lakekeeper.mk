@@ -28,7 +28,7 @@ lakekeeper-configure-auth:
 lakekeeper: lakekeeper-clone lakekeeper-stop
 	$(call stop_active_catalog)
 	@echo "Starting Lakekeeper catalog..."
-	@grep -q '127.0.0.1 minio' /etc/hosts || (echo "Adding minio host entry..." && echo "127.0.0.1 minio" | sudo tee -a /etc/hosts)
+	@grep -q '127.0.0.1 seaweedfs' /etc/hosts || (echo "Adding seaweedfs host entry..." && echo "127.0.0.1 seaweedfs" | sudo tee -a /etc/hosts)
 	(cd .catalogs/lakekeeper/examples/access-control-simple && docker compose up -d)
 	$(MAKE) lakekeeper-configure-auth
 	@echo "Bootstrapping Lakekeeper..."

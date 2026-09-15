@@ -103,7 +103,7 @@ Important lifecycle details:
 
 - A start target stops the catalog recorded in `.catalogs/.active_catalog`, starts the requested service, and updates the marker.
 - `scripts/catalog_test_config.sh` uses `BASH_SOURCE`; resolve configs through Bash rather than sourcing it directly from zsh.
-- All four local catalog targets require Docker Compose. Lakekeeper may use `sudo` to add `127.0.0.1 minio` to `/etc/hosts`.
+- All four local catalog targets require Docker Compose. Lakekeeper and Gravitino may use `sudo` to add `127.0.0.1 seaweedfs` to `/etc/hosts`.
 - Lakekeeper is cloned at a pinned commit and patched. Polaris uses `release/1.4.x`. Preserve these choices unless the task is an intentional version update.
 - Catalog start and data targets mutate local services and generated data. Do not run them merely to validate documentation or inspect Make behavior.
 
