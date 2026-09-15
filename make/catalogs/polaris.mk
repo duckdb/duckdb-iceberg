@@ -11,16 +11,16 @@ polaris-clone:
 
 polaris-stop:
 	@echo "Stopping Polaris catalog..."
-	@if [ -d ".catalogs/polaris/site/content/guides/minio" ]; then \
-		(cd .catalogs/polaris/site/content/guides/minio && docker compose down -v); \
+	@if [ -d ".catalogs/polaris/site/content/guides/rustfs" ]; then \
+		(cd .catalogs/polaris/site/content/guides/rustfs && docker compose down -v); \
 	else \
-		echo "Polaris minio directory not found, skipping stop."; \
+		echo "Polaris rustfs directory not found, skipping stop."; \
 	fi
 
 polaris: polaris-clone polaris-stop
 	$(call stop_active_catalog)
 	@echo "Starting Polaris catalog..."
-	(cd .catalogs/polaris/site/content/guides/minio && docker compose up -d)
+	(cd .catalogs/polaris/site/content/guides/rustfs && docker compose up -d)
 	$(call set_active_catalog,polaris)
 
 polaris-data: polaris
