@@ -1,4 +1,5 @@
 #include "planning/deletes/iceberg_delete_file_scanner.hpp"
+#include "planning/scan_plan/iceberg_scan_task.hpp"
 
 #include "catalog/rest/catalog_entry/table/iceberg_table.hpp"
 #include "common/iceberg_utils.hpp"
@@ -552,6 +553,94 @@ IcebergDeleteExecutionState::GetExistingPositionalDeleteData(const string &file_
 	lock_guard<mutex> guard(lock);
 	auto entry = positional_delete_data.find(file_path);
 	return entry == positional_delete_data.end() ? nullptr : entry->second;
+}
+
+IcebergDeletePlan IcebergDeleteExecutionState::ProcessDeletes(const IcebergDeleteExecutionContext &context,
+                                                              const string &data_file_path,
+                                                              const vector<Value> &descriptors) {
+	IcebergDeletePlan result;
+	vector<shared_ptr<IcebergDeleteData>> positions;
+	unordered_set<IcebergDeleteFileLoadState *> seen;
+	for (auto &descriptor : descriptors) {
+		shared_ptr<IcebergDeleteFileLoadState> load;
+		bool needs_load = false;
+		{
+			lock_guard<mutex> guard(lock);
+			auto &bucket = descriptor_loads[descriptor.Hash()];
+			for (auto &entry : bucket) {
+				if (Value::NotDistinctFrom(entry.first, descriptor)) {
+					load = entry.second;
+					break;
+				}
+			}
+			if (!load) {
+				auto entry = IcebergScanTaskFormat::ReadDeleteFile(descriptor);
+				load = make_shared_ptr<IcebergDeleteFileLoadState>();
+				// The existing delete data retains bound-entry provenance. This is owned
+				// descriptor storage only; it never discovers or reads a manifest.
+				IcebergManifestFile file("");
+				file.content = IcebergManifestContentType::DELETE;
+				file.partition_spec_id = 0;
+				file.manifest_length = 0;
+				load->descriptor_owner = make_shared_ptr<IcebergManifestListEntry>(std::move(file));
+				load->descriptor_owner->GetOrCreateManifestEntries().push_back(std::move(entry));
+				bucket.emplace_back(descriptor, load);
+				needs_load = true;
+			}
+		}
+		if (!seen.insert(load.get()).second) {
+			continue;
+		}
+		if (needs_load) {
+			ErrorData error;
+			try {
+				vector<IcebergDeleteScanEntry> entries;
+				entries.emplace_back(0, 0, *load->descriptor_owner, load);
+				auto scanned = IcebergDeleteFileScanner::ScanFiles(context, entries);
+				MergeDeleteScanResult(load->positional_deletes, std::move(scanned));
+			} catch (std::exception &ex) {
+				error = ErrorData(ex);
+			} catch (...) { // LCOV_EXCL_START
+				error = ErrorData("Unknown exception while reading Iceberg delete files");
+			} // LCOV_EXCL_STOP
+			CompleteDeleteFileLoads({load}, error);
+		}
+		unique_lock<mutex> guard(load->lock);
+		load->cv.wait(guard, [&load] { return load->complete; });
+		if (load->error.HasError()) {
+			load->error.Throw();
+		}
+		if (load->equality_delete) {
+			result.equality_deletes.emplace_back(*load->equality_delete);
+		}
+		auto entry = load->positional_deletes.find(data_file_path);
+		if (entry != load->positional_deletes.end()) {
+			positions.push_back(entry->second);
+		}
+	}
+	// A v3 deletion vector supersedes positional delete files for this task.
+	optional_ptr<IcebergDeleteData> deletion_vector;
+	for (auto &position : positions) {
+		if (position->type == IcebergDeleteType::DELETION_VECTOR) {
+			if (deletion_vector) {
+				throw InvalidConfigurationException("Two deletion vectors reference the same data file in a scan task");
+			}
+			deletion_vector = position.get();
+		}
+	}
+	if (deletion_vector) {
+		result.positional_deletes = deletion_vector->ToFilter();
+	} else if (positions.size() == 1) {
+		result.positional_deletes = positions[0]->ToFilter();
+	} else if (!positions.empty()) {
+		auto combined = make_shared_ptr<IcebergPositionalDeleteData>(positions[0]->entries[0]);
+		for (auto &position : positions) {
+			auto &source = static_cast<const IcebergPositionalDeleteData &>(*position);
+			combined->invalid_rows.insert(source.invalid_rows.begin(), source.invalid_rows.end());
+		}
+		result.positional_deletes = combined->ToFilter();
+	}
+	return result;
 }
 
 } // namespace duckdb

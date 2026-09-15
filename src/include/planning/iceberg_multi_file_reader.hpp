@@ -129,6 +129,16 @@ public:
 	                           const vector<MultiFileColumnDefinition> &local_columns, const idx_t column_id,
 	                           const LogicalType &type, MultiFileLocalIndex local_idx) override;
 
+protected:
+	ReaderInitializeType InitializeTaskReader(MultiFileReaderData &reader_data, const MultiFileBindData &bind_data,
+	                                          const vector<MultiFileColumnDefinition> &global_columns,
+	                                          const vector<ColumnIndex> &global_column_ids,
+	                                          optional_ptr<TableFilterSet> table_filters, ClientContext &context,
+	                                          MultiFileGlobalState &gstate, const IcebergTableMetadataSchemas &schemas,
+	                                          const vector<IcebergFieldMapping> &mappings,
+	                                          IcebergDeletePlan delete_plan,
+	                                          const unordered_map<int32_t, Value> &partition_constants);
+
 private:
 	static unique_ptr<Expression>
 	CreateEqualityDeleteExpression(const vector<reference<const IcebergEqualityDeleteFile>> &delete_files,
@@ -144,12 +154,15 @@ private:
 	AddEqualityDeleteColumn(const IcebergTableMetadataSchemas &schemas, int32_t field_id,
 	                        vector<MultiFileColumnDefinition> &scan_columns, vector<ColumnIndex> &scan_column_ids,
 	                        MultiFileReaderData &reader_data, ClientContext &context);
-	static void ApplyPartitionConstants(int32_t partition_spec_id,
-	                                    const BoundIcebergManifestEntry &bound_manifest_entry,
-	                                    const unordered_map<int32_t, IcebergPartitionSpec> &partition_specs,
+	static unordered_map<int32_t, Value>
+	PartitionConstants(int32_t partition_spec_id, const BoundIcebergManifestEntry &bound_manifest_entry,
+	                   const unordered_map<int32_t, IcebergPartitionSpec> &partition_specs,
+	                   const IcebergTableMetadataSchemas &schemas,
+	                   const vector<MultiFileColumnDefinition> &global_columns, ClientContext &context);
+	static void ApplyPartitionConstants(const unordered_map<int32_t, Value> &constants,
 	                                    MultiFileReaderData &reader_data,
 	                                    const vector<MultiFileColumnDefinition> &global_columns,
-	                                    const vector<ColumnIndex> &global_column_ids, ClientContext &context);
+	                                    const vector<ColumnIndex> &global_column_ids);
 
 public:
 	shared_ptr<TableFunctionInfo> function_info;

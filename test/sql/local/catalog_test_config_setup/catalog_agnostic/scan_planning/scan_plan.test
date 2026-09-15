@@ -1,0 +1,245 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/scan_planning/scan_plan.test
+# description: Materialized scan tasks, snapshots, partition constants and delete descriptors
+# group: [scan_planning]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require iceberg
+
+require parquet
+
+require avro
+
+require httpfs
+
+require json
+
+statement error
+select * from iceberg_scan_plan('not_qualified');
+----
+Expected fully qualified table name
+
+statement ok
+create table scan_plan_local(i integer);
+
+statement error
+select * from iceberg_scan_plan('memory.main.scan_plan_local');
+----
+not an Iceberg REST catalog table
+
+statement ok
+drop table scan_plan_local;
+
+statement ok
+drop table if exists my_datalake.default.scan_plan_test;
+
+statement ok
+create table my_datalake.default.scan_plan_test(id integer, part date, amount decimal(9,2))
+partitioned by (part, amount) with ('format-version' = 2);
+
+query I
+select count(*) from iceberg_scan_plan('my_datalake.default.scan_plan_test');
+----
+0
+
+statement error
+select * from iceberg_scan_plan('my_datalake.default.scan_plan_test', snapshot_from_id=1, snapshot_from_timestamp=timestamp '2020-01-01');
+----
+Can't use 'snapshot_from_id' in combination with 'snapshot_from_timestamp'
+
+statement error
+select * from iceberg_scan_plan('my_datalake.default.scan_plan_test', snapshot_from_id=NULL);
+----
+snapshot arguments cannot be NULL
+
+statement error
+select * from iceberg_scan_plan('my_datalake.default.scan_plan_test', produce_sequence_number=NULL);
+----
+produce_sequence_number cannot be NULL
+
+statement error
+select * from iceberg_scan_plan('my_datalake.default.scan_plan_test', snapshot_from_id=0);
+----
+Could not find snapshot with id
+
+statement ok
+insert into my_datalake.default.scan_plan_test values (1, '2024-01-01', 12.34), (2, '2024-01-01', 12.34), (3, NULL, NULL);
+
+query IIII
+select sum(record_count), bool_and(sequence_number is null), bool_and(first_row_id is null), bool_and(len(delete_files) = 0)
+from iceberg_scan_plan('my_datalake.default.scan_plan_test');
+----
+3	true	true	true
+
+query TT
+select distinct partition_constants."2", partition_constants."3"
+from iceberg_scan_plan('my_datalake.default.scan_plan_test') order by all;
+----
+2024-01-01	12.34
+NULL	NULL
+
+query III
+select bool_and(upper(file_format) = 'PARQUET'), bool_and(file_size_in_bytes > 0),
+       bool_and(metadata."current-schema-id"::integer = schema_id)
+from iceberg_scan_plan('my_datalake.default.scan_plan_test');
+----
+true	true	true
+
+query TT
+select distinct typeof(partition_constants), typeof(metadata)
+from iceberg_scan_plan('my_datalake.default.scan_plan_test');
+----
+STRUCT("2" DATE, "3" DECIMAL(9,2))	VARIANT
+
+# Enabling server planning uses the server when advertised, otherwise the planner falls back.
+statement ok
+set iceberg_use_server_side_scan_planning=false;
+
+statement ok
+create temp table scan_plan_client as select * from iceberg_scan_plan('my_datalake.default.scan_plan_test');
+
+query I
+select bool_and(sequence_number is null) from scan_plan_client;
+----
+true
+
+statement ok
+set iceberg_use_server_side_scan_planning=true;
+
+query I
+select count(*) from (
+    (select * from scan_plan_client except all select * from iceberg_scan_plan('my_datalake.default.scan_plan_test'))
+    union all
+    (select * from iceberg_scan_plan('my_datalake.default.scan_plan_test') except all select * from scan_plan_client)
+);
+----
+0
+
+query I
+select bool_and(sequence_number is null)
+from iceberg_scan_plan('my_datalake.default.scan_plan_test', produce_sequence_number=false);
+----
+true
+
+statement ok
+reset iceberg_use_server_side_scan_planning;
+
+statement ok
+drop table scan_plan_client;
+
+statement ok
+set variable scan_plan_snapshot = (select snapshot_id from iceberg_snapshots('my_datalake.default.scan_plan_test') order by sequence_number limit 1);
+
+statement ok
+set variable scan_plan_timestamp = (select timestamp_ms from iceberg_snapshots('my_datalake.default.scan_plan_test') order by sequence_number limit 1);
+
+statement ok
+set variable scan_plan_schema = (select schema_id from iceberg_scan_plan('my_datalake.default.scan_plan_test') limit 1);
+
+statement ok
+alter table my_datalake.default.scan_plan_test add column extra varchar;
+
+statement ok
+alter table my_datalake.default.scan_plan_test set partitioned by (id);
+
+statement ok
+insert into my_datalake.default.scan_plan_test values (4, '2024-02-01', 56.78, 'new');
+
+query III
+select sum(record_count), bool_and(schema_id = getvariable('scan_plan_schema')), bool_and(snapshot_id = getvariable('scan_plan_snapshot'))
+from iceberg_scan_plan('my_datalake.default.scan_plan_test', snapshot_from_id=getvariable('scan_plan_snapshot'));
+----
+3	true	true
+
+query I
+select sum(record_count) from iceberg_scan_plan('my_datalake.default.scan_plan_test', snapshot_from_timestamp=getvariable('scan_plan_timestamp'));
+----
+3
+
+query III
+select partition_constants."1", partition_constants."2", partition_constants."3"
+from iceberg_scan_plan('my_datalake.default.scan_plan_test') where partition_constants."1" = 4;
+----
+4	NULL	NULL
+
+statement ok
+begin;
+
+statement ok
+insert into my_datalake.default.scan_plan_test values (5, '2024-03-01', 90.12, 'pending');
+
+query I
+select sum(record_count) from iceberg_scan_plan('my_datalake.default.scan_plan_test');
+----
+5
+
+query I
+select sum(record_count) from iceberg_scan_plan('my_datalake.default.scan_plan_test', snapshot_from_id=getvariable('scan_plan_snapshot'));
+----
+3
+
+statement ok
+rollback;
+
+query I
+select sum(record_count) from iceberg_scan_plan('my_datalake.default.scan_plan_test');
+----
+4
+
+statement ok
+delete from my_datalake.default.scan_plan_test where id = 1;
+
+query IIIIII
+select d.content, upper(d.file_format), len(d.equality_ids), d.content_offset is null,
+       d.content_size_in_bytes is null, d.file_size_in_bytes > 0
+from (select unnest(delete_files) d from iceberg_scan_plan('my_datalake.default.scan_plan_test'));
+----
+1	PARQUET	0	true	true	true
+
+# Ordinary filters on task output must not become data-row predicates.
+query I
+select count(*) from iceberg_scan_plan('my_datalake.default.scan_plan_test') where record_count < 0;
+----
+0
+
+statement ok
+drop table my_datalake.default.scan_plan_test;
+
+statement ok
+create table my_datalake.default.scan_plan_test(id integer) with ('format-version' = 3);
+
+statement ok
+insert into my_datalake.default.scan_plan_test values (1), (2), (3);
+
+query III
+select first_row_id, sequence_number, typeof(partition_constants) from iceberg_scan_plan('my_datalake.default.scan_plan_test');
+----
+0	NULL	STRUCT
+
+statement ok
+alter table my_datalake.default.scan_plan_test add column extra varchar default 'initial';
+
+query I
+select json_extract_string(s.value, '$.fields[1]."initial-default"')
+from iceberg_scan_plan('my_datalake.default.scan_plan_test') p, json_each(p.metadata::json, '$.schemas') s
+where json_extract(s.value, '$."schema-id"')::integer = p.schema_id;
+----
+initial
+
+statement ok
+delete from my_datalake.default.scan_plan_test where id=2;
+
+query IIIIII
+select d.content, upper(d.file_format), d.referenced_data_file = file_path, d.content_offset >= 0,
+       d.content_size_in_bytes > 0, len(d.equality_ids)
+from (select file_path, unnest(delete_files) d from iceberg_scan_plan('my_datalake.default.scan_plan_test'));
+----
+1	PUFFIN	true	true	true	0
+
+query I
+select sum(record_count) from iceberg_scan_plan('my_datalake.default.scan_plan_test');
+----
+3
+
+statement ok
+drop table my_datalake.default.scan_plan_test;

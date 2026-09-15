@@ -27,6 +27,9 @@ struct IcebergDeleteFileLoadState {
 	bool complete = false;
 	ErrorData error;
 	shared_ptr<IcebergEqualityDeleteFile> equality_delete;
+	//! Owned descriptor storage keeps BoundIcebergManifestEntry references alive.
+	shared_ptr<IcebergManifestListEntry> descriptor_owner;
+	position_delete_map_t positional_deletes;
 };
 
 //! Input to ScanFiles, so it can run without holding the (delete_)lock
@@ -70,6 +73,8 @@ struct IcebergDeleteFileScanner {
 class IcebergDeleteExecutionState {
 public:
 	IcebergDeletePlan ProcessDeletes(const IcebergScanPlanner &planner, const IcebergScanTask &task);
+	IcebergDeletePlan ProcessDeletes(const IcebergDeleteExecutionContext &context, const string &data_file_path,
+	                                 const vector<Value> &descriptors);
 	shared_ptr<IcebergDeleteData> GetExistingPositionalDeleteData(const string &file_path) const;
 
 private:
@@ -80,6 +85,8 @@ private:
 	mutable mutex lock;
 	vector<unordered_map<idx_t, shared_ptr<IcebergDeleteFileLoadState>>> delete_file_loads;
 	position_delete_map_t positional_delete_data;
+	//! Hash collisions are resolved by comparing the complete descriptor value.
+	unordered_map<hash_t, vector<pair<Value, shared_ptr<IcebergDeleteFileLoadState>>>> descriptor_loads;
 };
 
 } // namespace duckdb

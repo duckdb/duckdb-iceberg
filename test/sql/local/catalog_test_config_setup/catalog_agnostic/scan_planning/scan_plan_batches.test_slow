@@ -1,0 +1,47 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/scan_planning/scan_plan_batches.test_slow
+# description: Scan-plan chunk boundaries and fresh execution state
+# group: [scan_planning]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require iceberg
+
+require parquet
+
+require avro
+
+require httpfs
+
+require json
+
+statement ok
+drop table if exists my_datalake.default.scan_plan_batches;
+
+statement ok
+create table my_datalake.default.scan_plan_batches(id integer) partitioned by (id);
+
+statement ok
+insert into my_datalake.default.scan_plan_batches select range from range(2050);
+
+statement ok
+prepare scan_plan_batches_query as select count(*), count(distinct file_path), sum(record_count),
+    count(distinct partition_constants."1"), bool_and(metadata."current-schema-id"::integer = schema_id)
+from iceberg_scan_plan('my_datalake.default.scan_plan_batches');
+
+query IIIII
+execute scan_plan_batches_query;
+----
+2050	2050	2050	2050	true
+
+query IIIII
+execute scan_plan_batches_query;
+----
+2050	2050	2050	2050	true
+
+query II
+select count(*), sum(id) from iceberg_scan_tasks((select * from iceberg_scan_plan('my_datalake.default.scan_plan_batches')));
+----
+2050	2100225
+
+statement ok
+drop table my_datalake.default.scan_plan_batches;

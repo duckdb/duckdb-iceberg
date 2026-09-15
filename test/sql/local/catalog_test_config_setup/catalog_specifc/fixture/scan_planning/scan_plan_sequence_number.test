@@ -1,0 +1,93 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_specifc/fixture/scan_planning/scan_plan_sequence_number.test
+# description: Opt-in scan-plan sequence numbers are resolved by client-side planning
+# group: [scan_planning]
+
+require-env CATALOG_TEST_CONFIG_SETUP fixture
+
+require iceberg
+
+require parquet
+
+require avro
+
+require httpfs
+
+require json
+
+statement ok
+drop table if exists my_datalake.default.scan_plan_sequence_number;
+
+statement ok
+create table my_datalake.default.scan_plan_sequence_number(id integer) with ('format-version'=3);
+
+# The function's opt-in must override the session's preference for server planning.
+statement ok
+set iceberg_use_server_side_scan_planning=true;
+
+query I
+select count(*) from iceberg_scan_plan('my_datalake.default.scan_plan_sequence_number', produce_sequence_number=true);
+----
+0
+
+statement ok
+insert into my_datalake.default.scan_plan_sequence_number values (1), (2);
+
+statement ok
+set variable scan_plan_sequence_snapshot = (select snapshot_id from iceberg_scan_plan('my_datalake.default.scan_plan_sequence_number') limit 1);
+
+statement ok
+insert into my_datalake.default.scan_plan_sequence_number values (3);
+
+query III
+select sequence_number, first_row_id, record_count
+from iceberg_scan_plan('my_datalake.default.scan_plan_sequence_number', produce_sequence_number=true)
+order by sequence_number;
+----
+1	0	2
+2	2	1
+
+query II
+select sequence_number, record_count
+from iceberg_scan_plan('my_datalake.default.scan_plan_sequence_number', produce_sequence_number=true,
+                      snapshot_from_id=getvariable('scan_plan_sequence_snapshot'));
+----
+1	2
+
+statement ok
+prepare scan_plan_sequence_query as select sequence_number, record_count
+from iceberg_scan_plan('my_datalake.default.scan_plan_sequence_number', produce_sequence_number=true)
+order by sequence_number;
+
+query II
+execute scan_plan_sequence_query;
+----
+1	2
+2	1
+
+query II
+execute scan_plan_sequence_query;
+----
+1	2
+2	1
+
+# Opting in on one call must not affect subsequent calls or client-side default output.
+statement ok
+set iceberg_use_server_side_scan_planning=false;
+
+query I
+select bool_and(sequence_number is null)
+from iceberg_scan_plan('my_datalake.default.scan_plan_sequence_number');
+----
+true
+
+query I
+select bool_and(sequence_number is null)
+from iceberg_scan_plan('my_datalake.default.scan_plan_sequence_number', produce_sequence_number=false);
+----
+true
+
+statement ok
+reset iceberg_use_server_side_scan_planning;
+
+statement ok
+drop table my_datalake.default.scan_plan_sequence_number;

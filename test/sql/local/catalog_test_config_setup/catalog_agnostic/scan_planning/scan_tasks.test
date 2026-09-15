@@ -1,0 +1,295 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/scan_planning/scan_tasks.test
+# description: Execute streamed and stored scan tasks with partition constants and deletes
+# group: [scan_planning]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require iceberg
+
+require parquet
+
+require avro
+
+require httpfs
+
+require json
+
+statement ok
+drop table if exists my_datalake.default.scan_tasks_test;
+
+statement ok
+create table my_datalake.default.scan_tasks_test(id integer, category integer, payload struct(n integer, tags varchar[]))
+partitioned by (category) with ('format-version'=2);
+
+# Binding succeeds without receiving a single metadata value.
+query I
+select count(*) from iceberg_scan_tasks((select * from iceberg_scan_plan('my_datalake.default.scan_tasks_test')));
+----
+0
+
+statement ok
+insert into my_datalake.default.scan_tasks_test
+select i, i % 3, {'n': i, 'tags': [i::varchar]} from range(9000) t(i);
+
+statement ok
+set iceberg_use_server_side_scan_planning=false;
+
+statement ok
+create temp table saved_tasks as select * from iceberg_scan_plan('my_datalake.default.scan_tasks_test');
+
+query II
+select bool_and(schema is null), count(*) from saved_tasks;
+----
+true	3
+
+statement ok
+set variable saved_snapshot = (select snapshot_id from saved_tasks limit 1);
+
+statement ok
+create temp table expected_scan as select * from my_datalake.default.scan_tasks_test;
+
+# Both directions preserve types, nested values, and multiplicity.
+query I
+select count(*) from (
+  (select * from iceberg_scan_tasks((select * from saved_tasks)) except all select * from expected_scan)
+  union all
+  (select * from expected_scan except all select * from iceberg_scan_tasks((select * from saved_tasks)))
+);
+----
+0
+
+statement ok
+set iceberg_use_server_side_scan_planning=true;
+
+query II
+select count(*), sum(id) from iceberg_scan_tasks((select * from iceberg_scan_plan('my_datalake.default.scan_tasks_test')));
+----
+9000	40495500
+
+query II
+select count(*), min(category) from iceberg_scan_tasks((select * from saved_tasks where partition_constants."2"=1));
+----
+3000	1
+
+# Extra/reordered input columns and dictionary vectors are accepted.
+query I
+select count(*) from iceberg_scan_tasks((select schema, 42 as extra, * exclude(schema) from saved_tasks where record_count>0));
+----
+9000
+
+query I
+select count(*) from iceberg_scan_tasks((select * from saved_tasks union all select * from saved_tasks));
+----
+18000
+
+statement ok
+prepare replay_scan_tasks as select count(*), sum(id) from iceberg_scan_tasks((select * from saved_tasks));
+
+loop threads 1 5
+
+statement ok
+set threads={threads};
+
+query II
+execute replay_scan_tasks;
+----
+9000	40495500
+
+endloop
+
+statement error
+select * from iceberg_scan_tasks((select * exclude(metadata) from saved_tasks));
+----
+missing required input column 'metadata'
+
+statement error
+select * from iceberg_scan_tasks((select * replace(42::integer as file_path) from saved_tasks));
+----
+input column 'file_path' has unexpected type
+
+statement error
+select * from iceberg_scan_tasks((select * replace(NULL::variant as metadata) from saved_tasks));
+----
+metadata and schema_id cannot be NULL
+
+statement error
+select * from iceberg_scan_tasks((select * replace(NULL::struct(wrong integer) as schema) from saved_tasks));
+----
+schema column does not match
+
+statement error
+select * from iceberg_scan_tasks((select * from saved_tasks union all select * replace(snapshot_id+1 as snapshot_id) from saved_tasks));
+----
+requires one metadata document
+
+statement error
+select * from iceberg_scan_tasks((select * replace(-1::bigint as file_size_in_bytes) from saved_tasks));
+----
+nonnegative size
+
+statement error
+select * from iceberg_scan_tasks((select * replace('orc' as file_format) from saved_tasks));
+----
+only supports 'parquet'
+
+statement error
+select * from iceberg_scan_tasks((select * replace(-1::integer as schema_id) from saved_tasks));
+----
+schema_id is absent
+
+statement error
+select * from iceberg_scan_tasks((select * replace(-1::integer as partition_spec_id) from saved_tasks));
+----
+partition_spec_id is absent
+
+statement ok
+delete from my_datalake.default.scan_tasks_test where id<3;
+
+statement ok
+create temp table deleted_tasks as select * from iceberg_scan_plan('my_datalake.default.scan_tasks_test');
+
+query II
+select count(*), min(id) from iceberg_scan_tasks((select * from deleted_tasks));
+----
+8997	3
+
+# Loading a delete for one occurrence must not affect a task without that descriptor.
+query I
+select count(*) from iceberg_scan_tasks((select * from deleted_tasks union all select * replace([] as delete_files) from deleted_tasks));
+----
+17997
+
+statement error
+select * from iceberg_scan_tasks((select * replace(list_transform(delete_files, lambda d: struct_update(d, content := 0)) as delete_files) from deleted_tasks));
+----
+invalid delete content
+
+# Stored plans do not consult the newly altered table schema.
+statement ok
+alter table my_datalake.default.scan_tasks_test add column added varchar;
+
+query II
+select count(*), sum(id) from iceberg_scan_tasks((select * from saved_tasks));
+----
+9000	40495500
+
+statement ok
+alter table my_datalake.default.scan_tasks_test set partitioned by (id);
+
+statement ok
+insert into my_datalake.default.scan_tasks_test values (9000, 42, {'n':9000, 'tags':['new']}, 'new');
+
+query III
+select count(*), max(id), max(category) from iceberg_scan_tasks((select * from iceberg_scan_plan('my_datalake.default.scan_tasks_test')));
+----
+8998	9000	42
+
+query II
+select count(*), sum(id) from iceberg_scan_tasks((select * from iceberg_scan_plan('my_datalake.default.scan_tasks_test', snapshot_from_id=getvariable('saved_snapshot'))));
+----
+9000	40495500
+
+statement ok
+drop table my_datalake.default.scan_tasks_test;
+
+# No table exists now, but the referenced files and credentials remain available.
+query II
+select count(*), sum(id) from iceberg_scan_tasks((select * from saved_tasks));
+----
+9000	40495500
+
+statement ok
+create table my_datalake.default.scan_tasks_test(id integer) with ('format-version'=3);
+
+statement ok
+insert into my_datalake.default.scan_tasks_test values (1), (2), (3);
+
+statement ok
+alter table my_datalake.default.scan_tasks_test add column extra varchar default 'initial';
+
+statement ok
+delete from my_datalake.default.scan_tasks_test where id=2;
+
+query IT
+select * from iceberg_scan_tasks((select * from iceberg_scan_plan('my_datalake.default.scan_tasks_test'))) order by id;
+----
+1	initial
+3	initial
+
+# Cache identity includes the blob range, even when two tasks reference one Puffin file.
+statement ok
+set variable dv_a = (select delete_files[1] from iceberg_scan_plan('my_datalake.default.scan_tasks_test'));
+
+statement ok
+delete from my_datalake.default.scan_tasks_test where id=1;
+
+statement ok
+create temp table dv_task as select * from iceberg_scan_plan('my_datalake.default.scan_tasks_test');
+
+statement ok
+set variable dv_b = (select delete_files[1] from dv_task);
+
+# Pack the two valid deletion-vector blobs into a single container with two footer entries.
+statement ok
+copy (
+ with blobs as (
+   select a.content[5:4+getvariable('dv_a').content_size_in_bytes] a,
+          b.content[5:4+getvariable('dv_b').content_size_in_bytes] b
+   from read_blob(getvariable('dv_a').file_path) a, read_blob(getvariable('dv_b').file_path) b
+ ), footer as (
+   select a, b, encode(to_json({'blobs':[
+     {'type':'deletion-vector-v1', 'fields':[]::integer[], 'snapshot-id':-1, 'sequence-number':-1,
+      'offset':4, 'length':octet_length(a),
+      'properties':{'referenced-data-file':getvariable('dv_a').referenced_data_file, 'cardinality':'1'}},
+     {'type':'deletion-vector-v1', 'fields':[]::integer[], 'snapshot-id':-1, 'sequence-number':-1,
+      'offset':4+octet_length(a), 'length':octet_length(b),
+      'properties':{'referenced-data-file':getvariable('dv_b').referenced_data_file, 'cardinality':'2'}}
+   ]})::varchar) f from blobs
+ ), payload as (
+   select *, lpad(hex(octet_length(f)::uinteger), 8, '0') n from footer
+ )
+ select 'PFA1'::blob || a || b || 'PFA1'::blob || f ||
+        unhex(n[7:8] || n[5:6] || n[3:4] || n[1:2]) || '\x00\x00\x00\x00'::blob || 'PFA1'::blob
+ from payload
+) to '{TEST_DIR}/scan_tasks_vectors.puffin' (format blob);
+
+statement ok
+set variable dv_container_size = (select size from read_blob('{TEST_DIR}/scan_tasks_vectors.puffin'));
+
+statement ok
+create temp table dv_ranges as
+ select * replace([struct_update(getvariable('dv_a'), file_path := '{TEST_DIR}/scan_tasks_vectors.puffin',
+   file_size_in_bytes := getvariable('dv_container_size'), content_offset := 4::bigint)] as delete_files) from dv_task
+ union all
+ select * replace([struct_update(getvariable('dv_b'), file_path := '{TEST_DIR}/scan_tasks_vectors.puffin',
+   file_size_in_bytes := getvariable('dv_container_size'),
+   content_offset := 4::bigint+getvariable('dv_a').content_size_in_bytes)] as delete_files) from dv_task;
+
+query II
+select count(*), sum(id) from iceberg_scan_tasks((select * from dv_ranges));
+----
+3	7
+
+# Repeated identical vectors are idempotent.
+query I
+select count(*) from iceberg_scan_tasks((select * replace(list_concat(delete_files, delete_files) as delete_files) from dv_ranges));
+----
+3
+
+statement error
+select * from iceberg_scan_tasks((select * replace(list_transform(delete_files,
+ lambda d: struct_update(d, content_size_in_bytes := 1::bigint)) as delete_files) from dv_ranges));
+----
+invalid Puffin deletion-vector descriptor
+
+statement ok
+drop table my_datalake.default.scan_tasks_test;
+
+# Execution needs only the task payload, files, and existing storage credentials.
+statement ok
+detach my_datalake;
+
+query II
+select count(*), sum(id) from iceberg_scan_tasks((select * from saved_tasks));
+----
+9000	40495500
