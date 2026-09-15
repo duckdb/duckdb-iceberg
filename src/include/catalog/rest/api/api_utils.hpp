@@ -18,29 +18,11 @@
 
 namespace duckdb {
 
-// we statically compile in libcurl, which means the cert file location of the build machine is the
-// place curl will look. But not every distro has this file in the same location, so we search a
-// number of common locations and use the first one we find.
-static string certFileLocations[] = {
-    // Arch, Debian-based, Gentoo
-    "/etc/ssl/certs/ca-certificates.crt",
-    // RedHat 7 based
-    "/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem",
-    // Redhat 6 based
-    "/etc/pki/tls/certs/ca-bundle.crt",
-    // OpenSUSE
-    "/etc/ssl/ca-bundle.pem",
-    // Alpine
-    "/etc/ssl/cert.pem"};
-
 class APIUtils {
 public:
 	static unique_ptr<HTTPResponse> Request(RequestType request_type, optional_ptr<AttachedDatabase> db,
 	                                        ClientContext &context, const IRCEndpointBuilder &endpoint_builder,
 	                                        HTTPHeaders &headers, const string &data);
-
-	//! We use a singleton here to store the path, set by SelectCurlCertPath
-	static const string &GetCURLCertPath();
 };
 
 } // namespace duckdb

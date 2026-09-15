@@ -10,24 +10,7 @@
 #include "duckdb/main/database.hpp"
 #include "duckdb/main/extension/extension_loader.hpp"
 
-#include <sys/stat.h>
-
 namespace duckdb {
-//! Grab the first path that exists, from a list of well-known locations
-static string SelectCURLCertPath() {
-	for (string &caFile : certFileLocations) {
-		struct stat buf;
-		if (stat(caFile.c_str(), &buf) == 0) {
-			return caFile;
-		}
-	}
-	return string();
-}
-
-const string &APIUtils::GetCURLCertPath() {
-	static string cert_path = SelectCURLCertPath();
-	return cert_path;
-}
 
 unique_ptr<HTTPResponse> APIUtils::Request(RequestType request_type, optional_ptr<AttachedDatabase> attached_db,
                                            ClientContext &context, const IRCEndpointBuilder &endpoint_builder,

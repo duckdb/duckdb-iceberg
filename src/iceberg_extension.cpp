@@ -94,9 +94,6 @@ static void LoadInternal(ExtensionLoader &loader) {
 	    "Skip structural Puffin verification for deletion-vector files. This unsafe compatibility option permits "
 	    "reading invalid bare-blob files written by DuckDB Iceberg 1.5.3.",
 	    LogicalType::BOOLEAN, Value::BOOLEAN(false), nullptr, SetScope::GLOBAL);
-	config.AddExtensionOption("iceberg_via_aws_sdk_for_catalog_interactions",
-	                          "Use legacy code to interact with AWS-based catalogs, via AWS's SDK",
-	                          LogicalType::BOOLEAN, Value::BOOLEAN(false));
 	config.AddExtensionOption("iceberg_test_force_token_expiry",
 	                          "DEBUG SETTING: force OAuth2 token expiry for testing automatic refresh",
 	                          LogicalType::BOOLEAN, Value::BOOLEAN(false));
