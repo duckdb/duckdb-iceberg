@@ -76,9 +76,14 @@ static void ScanPuffinFile(const IcebergDeleteExecutionContext &context, const I
 		throw InvalidConfigurationException("Puffin delete file is missing 'referenced_data_file'");
 	}
 
+	auto puffin_path = data_file.file_path;
+	if (context.options.allow_moved_paths) {
+		puffin_path = IcebergUtils::GetFullPath(context.table_path, puffin_path, context.fs);
+	}
+
 	FileOpenFlags flags = FileFlags::FILE_FLAGS_READ;
 	flags.SetCachingMode(CachingMode::CACHE_REMOTE_ONLY);
-	auto file_handle = context.fs.OpenFile(data_file.file_path, flags);
+	auto file_handle = context.fs.OpenFile(puffin_path, flags);
 	if (!data_file.content_offset) {
 		throw InvalidConfigurationException("Puffin delete file is missing 'content_offset");
 	}
