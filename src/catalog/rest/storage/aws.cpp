@@ -289,6 +289,14 @@ unique_ptr<HTTPResponse> AWSInput::ExecuteRequest(ClientContext &context, Aws::H
 	if (session_token.length() > 0) {
 		signed_headers += ";x-amz-security-token";
 	}
+	string access_delegation;
+	if (headers.HasHeader("X-Iceberg-Access-Delegation")) {
+		access_delegation = headers.GetHeaderValue("X-Iceberg-Access-Delegation");
+	}
+	if (!access_delegation.empty()) {
+		signed_headers += ";x-iceberg-access-delegation";
+		res["X-Iceberg-Access-Delegation"] = access_delegation;
+	}
 
 	string url_encoded_path = uri.GetURLEncodedPath();
 
@@ -310,6 +318,9 @@ unique_ptr<HTTPResponse> AWSInput::ExecuteRequest(ClientContext &context, Aws::H
 	canonical_request += "\nhost:" + host + "\nx-amz-content-sha256:" + payload_hash + "\nx-amz-date:" + datetime_now;
 	if (session_token.length() > 0) {
 		canonical_request += "\nx-amz-security-token:" + session_token;
+	}
+	if (!access_delegation.empty()) {
+		canonical_request += "\nx-iceberg-access-delegation:" + access_delegation;
 	}
 	canonical_request += "\n\n" + signed_headers + "\n" + payload_hash;
 	sha256(canonical_request.c_str(), canonical_request.length(), canonical_request_hash);
