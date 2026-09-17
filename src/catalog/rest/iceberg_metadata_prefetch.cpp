@@ -52,9 +52,10 @@ void IcebergMetadataPrefetch::Prefetch(ClientContext &context, const string &tab
 		return;
 	}
 
-	// Use the query's scheduler, including its caller thread, and cap speculative work at eight tables.
+	// Use async workers for blocking HTTP requests, plus the caller that drains the batch.
+	// With no async workers this falls back to one request at a time.
 	auto &scheduler = TaskScheduler::GetScheduler(context);
-	const auto batch_size = MaxValue<idx_t>(1, MinValue<idx_t>(8, scheduler.NumberOfThreads()));
+	const auto batch_size = MinValue<idx_t>(7, scheduler.NumberOfAsyncThreads()) + 1;
 	vector<reference<Entry>> batch;
 	batch.emplace_back(*it->second);
 	it->second->requested = true;
@@ -66,7 +67,7 @@ void IcebergMetadataPrefetch::Prefetch(ClientContext &context, const string &tab
 		}
 	}
 
-	TaskExecutor executor(context);
+	TaskExecutor executor(context, TaskSchedulerType::ASYNC);
 	try {
 		for (auto &ref : batch) {
 			auto &entry = ref.get();

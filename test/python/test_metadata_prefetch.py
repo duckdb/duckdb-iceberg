@@ -167,27 +167,28 @@ def metadata_shell(unittest_binary, tmp_path):
     return command, "\n".join(setup)
 
 
-def shell_command(metadata_shell, server, sql, threads=4, attach_options=""):
+def shell_command(metadata_shell, server, sql, threads=1, attach_options="", async_threads=3):
     command, setup = metadata_shell
     attach = f"""
         SET threads={threads};
+        SET async_threads={async_threads};
         ATTACH '' AS prefetch (TYPE ICEBERG, AUTHORIZATION_TYPE 'none',
             URI 'http://127.0.0.1:{server.server_port}' {attach_options});
     """
     return command + ["-c", setup + attach + sql]
 
 
-def run_sql(metadata_shell, server, sql, threads=4, attach_options=""):
+def run_sql(metadata_shell, server, sql, threads=1, attach_options="", async_threads=3):
     return subprocess.run(
-        shell_command(metadata_shell, server, sql, threads, attach_options),
+        shell_command(metadata_shell, server, sql, threads, attach_options, async_threads),
         capture_output=True,
         text=True,
         timeout=60,
     )
 
 
-@pytest.mark.parametrize("threads", [1, 4, 16])
-def test_parallel_metadata_loads_keep_columns_and_oids_stable(metadata_shell, threads):
+@pytest.mark.parametrize("threads,async_threads", [(1, 0), (4, 0), (1, 1), (1, 3), (1, 16)])
+def test_parallel_metadata_loads_keep_columns_and_oids_stable(metadata_shell, threads, async_threads):
     with catalog_server() as server:
         result = run_sql(
             metadata_shell,
@@ -204,12 +205,13 @@ def test_parallel_metadata_loads_keep_columns_and_oids_stable(metadata_shell, th
             COMMIT;
         """,
             threads=threads,
+            async_threads=async_threads,
         )
         assert result.returncode == 0, result.stderr
         assert result.stdout.splitlines() == ["12", "12", "24", "12", "0"]
         assert server.requests == Counter({name: 1 for name in TABLES})
-        assert 1 <= server.max_active <= min(threads, 8)
-        if threads > 1:
+        assert 1 <= server.max_active <= min(async_threads + 1, 8)
+        if async_threads > 0:
             assert server.max_active > 1
         assert server.active == 0
 
