@@ -10,23 +10,27 @@
 
 namespace duckdb {
 
+struct IcebergHTTPClientSlot {
+	mutex lock;
+	unique_ptr<HTTPClient> client;
+};
+
 class IcebergHTTPClientLock {
 public:
-	IcebergHTTPClientLock(mutex &client_lock, unordered_map<uintptr_t, unique_ptr<HTTPClient>> &client_map,
-	                      uintptr_t database_id)
-	    : guard(client_lock), client(client_map.emplace(database_id, nullptr).first->second) {
+	IcebergHTTPClientLock(shared_ptr<IcebergHTTPClientSlot> slot, unique_lock<mutex> guard)
+	    : slot(std::move(slot)), guard(std::move(guard)) {
 	}
 
 	unique_ptr<HTTPClient> &GetClient() {
-		return client;
+		return slot->client;
 	}
 
 private:
+	shared_ptr<IcebergHTTPClientSlot> slot;
 	unique_lock<mutex> guard;
-	unique_ptr<HTTPClient> &client;
 };
 
-//! Hold the pre-initialized HTTPClient for a given connection
+//! Reuse HTTP clients without sharing an in-flight client between requests.
 struct IcebergAuthorizationContextState : public ClientContextState {
 public:
 	IcebergAuthorizationContextState() {
@@ -36,9 +40,9 @@ public:
 	static IcebergHTTPClientLock GetHTTPClient(AttachedDatabase &db, ClientContext &context);
 
 public:
-	//! For this connection, a map of attached database -> http-client
+	//! The pool lock only protects checkout. A slot's lock is held for the duration of the request.
 	mutex client_lock;
-	unordered_map<uintptr_t, unique_ptr<HTTPClient>> client_map;
+	unordered_map<uintptr_t, vector<shared_ptr<IcebergHTTPClientSlot>>> client_map;
 };
 
 struct IcebergAuthorization {

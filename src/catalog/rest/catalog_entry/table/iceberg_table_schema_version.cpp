@@ -61,7 +61,7 @@ const ColumnList &IcebergTableSchemaVersion::GetColumns() const {
 		DUCKDB_LOG(mutable_context, IcebergLogType, "Lazily loading columns for Iceberg table '%s'",
 		           table_info.GetTableKey());
 		auto lookup = EntryLookupInfo(CatalogType::TABLE_ENTRY, QualifiedName(Identifier(table_info.name)));
-		auto resolved_entry = table_info.schema.tables.GetEntry(mutable_context, lookup);
+		auto resolved_entry = table_info.schema.tables.GetEntry(mutable_context, lookup, true);
 		if (!resolved_entry) {
 			throw CatalogException("Table %s does not exist", table_info.GetTableKey());
 		}

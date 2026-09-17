@@ -51,8 +51,10 @@ bool IcebergTableSet::FillEntry(ClientContext &context, IcebergTable &table) {
 		}
 	}
 
-	// No valid cached result or caching disabled, make a new request
-	auto get_table_result = IRCAPI::GetTable(context, ic_catalog, schema, table.name);
+	// Consume a prefetched response when available; otherwise load this table directly.
+	auto prefetched = IcebergTransaction::Get(context, catalog).metadata_prefetch.Take(table_key);
+	auto get_table_result =
+	    prefetched ? std::move(*prefetched) : IRCAPI::GetTable(context, ic_catalog, schema, table.name);
 	if (get_table_result.error_) {
 		if (get_table_result.status_ == HTTPStatusCode::NotFound_404) {
 			// Glue returns 404 when a table is not an Iceberg Table with the error message
@@ -102,6 +104,7 @@ void IcebergTableSet::Scan(ClientContext &context, const std::function<void(Cata
 	auto &iceberg_transaction = IcebergTransaction::Get(context, catalog);
 	vector<reference<CatalogEntry>> scan_entries;
 	{
+		lock_guard<mutex> transaction_guard(iceberg_transaction.catalog_entry_lock);
 		annotated_lock_guard<annotated_mutex> lock(entry_lock);
 		LoadEntriesInternal(context);
 		for (auto &entry : entries) {
@@ -130,6 +133,7 @@ void IcebergTableSet::Scan(ClientContext &context, const std::function<void(Cata
 			}
 
 			auto &new_lazy_entry = GetOrCreateLazyEntry(context, iceberg_transaction, table_info);
+			iceberg_transaction.metadata_prefetch.Register(entry.second);
 			scan_entries.emplace_back(new_lazy_entry);
 		}
 	}
@@ -354,9 +358,11 @@ IcebergTable &IcebergTableSet::CreateNewEntry(ClientContext &context, IcebergCat
 	return table_info;
 }
 
-optional_ptr<CatalogEntry> IcebergTableSet::GetEntry(ClientContext &context, const EntryLookupInfo &lookup) {
+optional_ptr<CatalogEntry> IcebergTableSet::GetEntry(ClientContext &context, const EntryLookupInfo &lookup,
+                                                     bool prefetch) {
 	auto &ic_catalog = catalog.Cast<IcebergCatalog>();
 	auto &iceberg_transaction = IcebergTransaction::Get(context, catalog);
+	lock_guard<mutex> transaction_guard(iceberg_transaction.catalog_entry_lock);
 	const auto &table_name = lookup.GetEntryName();
 	// first check transaction entries
 	const auto table_key = IcebergTable::GetTableKey(ic_catalog, schema.namespace_items, table_name);
@@ -375,6 +381,9 @@ optional_ptr<CatalogEntry> IcebergTableSet::GetEntry(ClientContext &context, con
 		return table_info.GetSchemaVersion(at);
 	}
 
+	if (prefetch) {
+		iceberg_transaction.metadata_prefetch.Prefetch(context, table_key);
+	}
 	auto new_version = make_shared_ptr<IcebergTable>(ic_catalog, schema, table_name);
 	auto &table_info = *new_version;
 	if (!FillEntry(context, table_info)) {
