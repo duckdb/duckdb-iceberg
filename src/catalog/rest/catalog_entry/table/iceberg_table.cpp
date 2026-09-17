@@ -14,6 +14,9 @@
 #include "duckdb/logging/logger.hpp"
 #include "duckdb/main/config.hpp"
 #include "duckdb/common/types/uuid.hpp"
+#include "duckdb/common/file_system.hpp"
+
+#include "iceberg_logging.hpp"
 
 #include "catalog/rest/api/catalog_api.hpp"
 #include "catalog/rest/transaction/iceberg_transaction.hpp"
@@ -671,10 +674,10 @@ bool IcebergTable::HasTransactionUpdates() const {
 }
 
 void IcebergTable::RefreshFromCatalog(ClientContext &context) {
-	ApplyRefreshResult(IRCAPI::GetTable(context, catalog, schema, name));
+	ApplyRefreshResult(context, IRCAPI::GetTable(context, catalog, schema, name));
 }
 
-void IcebergTable::ApplyRefreshResult(IcebergLoadTableResult get_table_result) {
+void IcebergTable::ApplyRefreshResult(ClientContext &context, IcebergLoadTableResult get_table_result) {
 	if (get_table_result.error_) {
 		throw HTTPException(
 		    StringUtil::Format("GetTableInformation endpoint returned response code %s with message \"%s\"",
@@ -683,7 +686,7 @@ void IcebergTable::ApplyRefreshResult(IcebergLoadTableResult get_table_result) {
 	auto &load_table_result = *get_table_result.result_;
 	schema_versions.clear();
 	dummy_entry.reset();
-	InitializeFromLoadTableResult(load_table_result);
+	InitializeFromCatalogResponse(context, load_table_result);
 	catalog.table_request_cache.SetOrOverwrite(GetTableKey(), std::move(get_table_result.result_));
 }
 
@@ -789,11 +792,52 @@ IcebergTransactionData &IcebergTable::GetOrCreateTransactionData(IcebergTransact
 	return *transaction_data;
 }
 
-void IcebergTable::InitializeFromLoadTableResult(const rest_api_objects::LoadTableResult &load_table_result) {
-	table_metadata = IcebergTableMetadata::FromTableMetadata(load_table_result.metadata);
+void IcebergTable::InitializeFromLoadTableResult(
+    const rest_api_objects::LoadTableResult &load_table_result,
+    optional_ptr<const rest_api_objects::TableMetadata> metadata_override) {
+	table_metadata =
+	    IcebergTableMetadata::FromTableMetadata(metadata_override ? *metadata_override : load_table_result.metadata);
 	SetLoadTableResult(load_table_result);
 	D_ASSERT(!table_metadata.GetSchemas().IsEmpty());
 	InitSchemaVersions();
+}
+
+void IcebergTable::InitializeFromCatalogResponse(ClientContext &context,
+                                                 const rest_api_objects::LoadTableResult &load_table_result) {
+	//! Some catalogs (e.g. AWS Glue's Iceberg REST endpoint) reconstruct the response metadata from their own
+	//! catalog state instead of returning the metadata file contents, which can lose nested field ids or
+	//! properties such as 'schema.name-mapping.default'. The file at 'metadata-location' is authoritative.
+	if (load_table_result.metadata_location.has_value()) {
+		auto &metadata_location = *load_table_result.metadata_location;
+		shared_ptr<const rest_api_objects::TableMetadata> file_metadata;
+		{
+			annotated_lock_guard<annotated_mutex> guard(catalog.metadata_file_cache_lock);
+			auto entry = catalog.metadata_file_cache.find(metadata_location);
+			if (entry != catalog.metadata_file_cache.end()) {
+				file_metadata = entry->second;
+			}
+		}
+		if (!file_metadata) {
+			try {
+				auto &fs = FileSystem::GetFileSystem(context);
+				auto caching_fs = make_shared_ptr<CachingFileSystemWrapper>(fs, *context.db);
+				file_metadata = make_shared_ptr<const rest_api_objects::TableMetadata>(
+				    IcebergTableMetadata::Parse(metadata_location, *caching_fs, "none"));
+				annotated_lock_guard<annotated_mutex> guard(catalog.metadata_file_cache_lock);
+				catalog.metadata_file_cache.emplace(metadata_location, file_metadata);
+			} catch (std::exception &ex) {
+				DUCKDB_LOG(context, IcebergLogType,
+				           "Could not load table metadata from metadata-location '%s': %s - falling back to the "
+				           "metadata embedded in the catalog response",
+				           metadata_location, ex.what());
+			}
+		}
+		if (file_metadata) {
+			InitializeFromLoadTableResult(load_table_result, file_metadata.get());
+			return;
+		}
+	}
+	InitializeFromLoadTableResult(load_table_result);
 }
 
 void IcebergTable::SetLoadTableResult(const rest_api_objects::LoadTableResult &load_table_result) {

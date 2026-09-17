@@ -1,0 +1,46 @@
+# name: test/sql/local/catalog_custom_setup/reconstructed_metadata_mock/attach_uses_metadata_location.test
+# description: ATTACH should read the authoritative metadata file at 'metadata-location' when the catalog response contains reconstructed metadata (duckdb-iceberg#1359)
+# group: [reconstructed_metadata_mock]
+
+# Requires: python3 scripts/reconstructed_metadata_mock_server.py 19131 (run from the repository root)
+require-env RECONSTRUCTED_METADATA_MOCK_SERVER_AVAILABLE
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+# The mock catalog serves a LoadTable response whose embedded metadata has
+# reconstructed (wrong) nested field ids, mimicking AWS Glue's Iceberg REST
+# endpoint for tables registered through Hive-style APIs (e.g. Spark's
+# GlueCatalog). 'metadata-location' points at the authoritative metadata file.
+
+statement ok
+ATTACH '' AS reconstructed_catalog (TYPE ICEBERG, URI 'http://127.0.0.1:19131', AUTHORIZATION_TYPE 'none');
+
+# Struct children must read back their values, not NULL
+query III
+SELECT id, s.a, s.b FROM reconstructed_catalog.db.t ORDER BY id;
+----
+1	10	x
+2	20	y
+3	30	z
+
+# The whole struct reads correctly as well
+query II
+SELECT id, s FROM reconstructed_catalog.db.t ORDER BY id;
+----
+1	{'a': 10, 'b': x}
+2	{'a': 20, 'b': y}
+3	{'a': 30, 'b': z}
+
+# Sanity check: iceberg_scan on the metadata file agrees with the catalog read
+query III
+SELECT id, s.a, s.b FROM iceberg_scan('{WORKING_DIRECTORY}/data/persistent/reconstructed_metadata_response/warehouse/db/t/metadata/00001-cf9a460b-ae4d-411c-84bb-cc342e6ae3f9.metadata.json') ORDER BY id;
+----
+1	10	x
+2	20	y
+3	30	z

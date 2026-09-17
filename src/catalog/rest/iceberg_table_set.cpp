@@ -39,7 +39,8 @@ bool IcebergTableSet::FillEntry(ClientContext &context, IcebergTable &table) {
 	if (TryFillEntryFromCache(context, table)) {
 		return true;
 	}
-	return ApplyLoadResult(table, IRCAPI::GetTable(context, catalog.Cast<IcebergCatalog>(), schema, table.name));
+	return ApplyLoadResult(context, table,
+	                       IRCAPI::GetTable(context, catalog.Cast<IcebergCatalog>(), schema, table.name));
 }
 
 bool IcebergTableSet::TryFillEntryFromCache(ClientContext &context, IcebergTable &table) {
@@ -56,7 +57,7 @@ bool IcebergTableSet::TryFillEntryFromCache(ClientContext &context, IcebergTable
 		auto cache_hit = ic_catalog.table_request_cache.Get(
 		    context, table_key, [&](const rest_api_objects::LoadTableResult &cached_result) {
 			    // Use the cached result instead of making a new request
-			    table.InitializeFromLoadTableResult(cached_result);
+			    table.InitializeFromCatalogResponse(context, cached_result);
 		    });
 		if (cache_hit) {
 			return true;
@@ -66,7 +67,8 @@ bool IcebergTableSet::TryFillEntryFromCache(ClientContext &context, IcebergTable
 	return false;
 }
 
-bool IcebergTableSet::ApplyLoadResult(IcebergTable &table, IcebergLoadTableResult get_table_result) {
+bool IcebergTableSet::ApplyLoadResult(ClientContext &context, IcebergTable &table,
+                                      IcebergLoadTableResult get_table_result) {
 	if (get_table_result.error_) {
 		if (get_table_result.status_ == HTTPStatusCode::NotFound_404) {
 			// Glue returns 404 when a table is not an Iceberg Table with the error message
@@ -85,7 +87,7 @@ bool IcebergTableSet::ApplyLoadResult(IcebergTable &table, IcebergLoadTableResul
 		                       EnumUtil::ToString(get_table_result.status_), get_table_result.error_->_error.message));
 	}
 	auto &load_table_result = *get_table_result.result_;
-	table.InitializeFromLoadTableResult(load_table_result);
+	table.InitializeFromCatalogResponse(context, load_table_result);
 	catalog.Cast<IcebergCatalog>().table_request_cache.SetOrOverwrite(table.GetTableKey(),
 	                                                                  std::move(get_table_result.result_));
 	return true;
@@ -133,7 +135,7 @@ void IcebergTableSet::FillEntries(ClientContext &context, const vector<reference
 	}
 	for (auto &load : pending) {
 		try {
-			ApplyLoadResult(load->table, load->result.TakeResult());
+			ApplyLoadResult(context, load->table, load->result.TakeResult());
 		} catch (std::exception &ex) {
 			WarnTableLoadFailure(context, load->table, ErrorData(ex));
 		}

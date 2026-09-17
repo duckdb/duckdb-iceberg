@@ -26,9 +26,10 @@ select * from my_datalake.default.table_unpartitioned order by all;
 2023-03-11	11	k
 2023-03-12	12	l
 
-# 0 head requests to scan all files
+# Resolving the table loads the authoritative metadata file from 'metadata-location' (one HEAD for
+# the metadata.json is expected on catalogs that return it); the scan itself issues no HEAD requests
 query I
-select count(*) from duckdb_logs_parsed('HTTP') where request.type = 'HEAD';
+select count(*) from duckdb_logs_parsed('HTTP') where request.type = 'HEAD' and request.url not like '%.metadata.json%';
 ----
 0
 
