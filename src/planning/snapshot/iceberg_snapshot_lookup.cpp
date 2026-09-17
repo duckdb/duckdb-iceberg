@@ -2,6 +2,19 @@
 
 namespace duckdb {
 
+IcebergSnapshotLookup IcebergSnapshotLookup::FromTimestamp(timestamp_ms_t snapshot_timestamp) {
+	//! Throw if the timestamp is in the future.
+	auto now = Value::TIMESTAMP(Timestamp::GetCurrentTimestamp())
+	               .DefaultCastAs(LogicalType::TIMESTAMP_MS)
+	               .GetValue<timestamp_ms_t>();
+	if (snapshot_timestamp > now) {
+		throw InvalidInputException(
+		    "Can not time travel to '%s', it lies in the future (the current timestamp is '%s')",
+		    Value::TIMESTAMPMS(snapshot_timestamp).ToString(), Value::TIMESTAMPMS(now).ToString());
+	}
+	return IcebergSnapshotLookup(SnapshotFromTimestamp(snapshot_timestamp));
+}
+
 IcebergSnapshotLookup IcebergSnapshotLookup::FromAtClause(optional_ptr<BoundAtClause> at) {
 	if (!at) {
 		return FromLatest();

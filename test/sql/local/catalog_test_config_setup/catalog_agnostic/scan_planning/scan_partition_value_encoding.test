@@ -1,0 +1,72 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/scan_planning/scan_partition_value_encoding.test
+# description: Textual pending partition values and persisted physical values use the same reader conversion
+# group: [scan_planning]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require iceberg
+
+require parquet
+
+require avro
+
+require httpfs
+
+require json
+
+statement ok
+drop table if exists my_datalake.default.scan_partition_value_encoding;
+
+statement ok
+create table my_datalake.default.scan_partition_value_encoding(i integer, d date, ts timestamp, n decimal(9,2), s varchar)
+partitioned by (i, d, ts, n, s);
+
+statement ok
+begin;
+
+statement ok
+insert into my_datalake.default.scan_partition_value_encoding values
+(1234, '2024-03-01', '2024-03-01 12:34:56.123456', 90.12, '1234');
+
+# Four-character integers must not be reinterpreted as four binary bytes.
+query ITTTT
+select * from my_datalake.default.scan_partition_value_encoding;
+----
+1234	2024-03-01	2024-03-01 12:34:56.123456	90.12	1234
+
+query ITTTT
+select partition_constants."1", partition_constants."2", partition_constants."3", partition_constants."4", partition_constants."5"
+from iceberg_scan_plan('my_datalake.default.scan_partition_value_encoding');
+----
+1234	2024-03-01	2024-03-01 12:34:56.123456	90.12	1234
+
+query ITTTT
+select * from iceberg_scan_tasks((select * from iceberg_scan_plan('my_datalake.default.scan_partition_value_encoding')));
+----
+1234	2024-03-01	2024-03-01 12:34:56.123456	90.12	1234
+
+statement ok
+commit;
+
+# Persisted manifest values still require physical-value decoding.
+statement ok
+set iceberg_use_server_side_scan_planning=false;
+
+query ITTTT
+select * from my_datalake.default.scan_partition_value_encoding;
+----
+1234	2024-03-01	2024-03-01 12:34:56.123456	90.12	1234
+
+query ITTTT
+select partition_constants."1", partition_constants."2", partition_constants."3", partition_constants."4", partition_constants."5"
+from iceberg_scan_plan('my_datalake.default.scan_partition_value_encoding');
+----
+1234	2024-03-01	2024-03-01 12:34:56.123456	90.12	1234
+
+query ITTTT
+select * from iceberg_scan_tasks((select * from iceberg_scan_plan('my_datalake.default.scan_partition_value_encoding')));
+----
+1234	2024-03-01	2024-03-01 12:34:56.123456	90.12	1234
+
+statement ok
+drop table my_datalake.default.scan_partition_value_encoding;

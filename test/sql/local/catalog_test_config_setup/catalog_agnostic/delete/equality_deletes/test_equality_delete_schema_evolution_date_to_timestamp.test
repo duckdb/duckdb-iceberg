@@ -18,6 +18,10 @@ require httpfs
 statement ok
 use my_datalake.default;
 
+# server-side scan planning has a bug on the server side currently
+statement ok
+set iceberg_use_server_side_scan_planning=false;
+
 statement ok
 set unsafe_and_disabled_for_iceberg_v3_enable_equality_deletes=true;
 

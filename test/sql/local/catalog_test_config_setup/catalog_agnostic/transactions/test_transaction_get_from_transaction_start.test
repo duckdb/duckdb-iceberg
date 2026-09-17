@@ -41,10 +41,12 @@ insert into my_datalake.default.multi_transaction_read select 2, 2;
 statement ok con2
 commit
 
-# Without metadata-log reconstruction, con1 accepts and pins the latest complete
-# metadata state available when it first resolves the table.
+# Snapshot isolation defaults to reconstructing the metadata at transaction start,
+# even when the table is first resolved after another transaction commits.
 query II con1
 select * from my_datalake.default.multi_transaction_read order by all;
 ----
 0	0
-2	2
+
+statement ok con1
+rollback

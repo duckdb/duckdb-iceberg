@@ -72,6 +72,7 @@
         "test/sql/types/nested/map/map_from_entries/column_null_entry.test",
         "test/sql/types/nested/map/test_map_nested_keys.test",
         "test/sql/types/struct/nested_structs.test",
+        "test/sql/types/struct/struct_updates.test",
         "test/sql/function/list/aggregates/entropy.test",
         "test/sql/function/list/list_unique.test",
         "test/sql/function/timestamp/test_icu_datediff.test",
@@ -248,14 +249,11 @@
     {
       "reason": "SIGSEGV / crash / incorrect result - needs manual investigation",
       "paths": [
-        "test/sql/alter/map/rename_column_in_struct.test",
         "test/sql/copy/csv/test_skip.test_slow",
         "test/sql/merge/merge_into_subquery_action.test",
         "test/sql/alter/struct/rename_col_struct.test",
         "test/sql/alter/alter_col/test_drop_not_null.test",
-        "test/sql/alter/map/drop_column_in_struct.test",
         "test/sql/alter/rename_table/test_rename_table_collision.test",
-        "test/sql/alter/list/rename_column_in_struct.test",
         "test/sql/alter/drop_col/test_drop_col_concurrent_dml_conflict.test",
         "test/sql/alter/rename_table/test_rename_table_many_transactions.test",
         "test/sql/alter/rename_view/test_rename_view_many_transactions.test",
@@ -270,7 +268,6 @@
         "test/sql/index/art/constraints/test_art_concurrent_loop.test_slow",
         "test/sql/index/art/constraints/test_art_eager_constraint_checking.test",
         "test/sql/index/art/create_drop/test_art_create_if_exists.test",
-        "test/sql/insert/unaligned_interleaved_appends.test",
         "test/sql/join/iejoin/iejoin_issue_6314.test_slow",
         "test/sql/join/iejoin/iejoin_projection_maps.test_slow",
         "test/sql/parallelism/interquery/concurrent_append_index_join.test_slow",
@@ -286,9 +283,7 @@
         "test/sql/update/test_update_mix.test",
         "test/sql/storage/compression/roaring/roaring_bool_appends.test_slow",
         "test/sql/aggregate/aggregates/test_arg_min_max_null_nested.test_slow",
-        "test/sql/projection/test_complex_expressions.test",
         "test/sql/types/list/unnest_expand.test",
-        "test/sql/optimizer/struct_segment_pruning.test",
         "test/sql/types/geo/geometry_stats_prune_null.test",
         "test/sql/window/test_duplicate_partition.test",
         "test/sql/storage/overflow_strings/null_overflow_string_memory.test",
@@ -1049,7 +1044,6 @@
         "test/sql/types/struct/struct_different_names.test",
         "test/sql/types/struct/struct_projection_pushdown_in_storage.test",
         "test/sql/types/struct/struct_stats.test",
-        "test/sql/types/struct/struct_updates.test",
         "test/sql/types/test_all_types.test_slow",
         "test/sql/types/timestamp/test_timestamp_tz.test"
       ]

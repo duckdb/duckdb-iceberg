@@ -26,8 +26,8 @@ class IcebergSparkLocal(IcebergConnection):
         client_id = "root"
         client_secret = "s3cr3t"
         os.environ["AWS_REGION"] = "us-west-2"
-        os.environ["AWS_ACCESS_KEY_ID"] = "minio_root"
-        os.environ["AWS_SECRET_ACCESS_KEY"] = "m1n1opwd"
+        os.environ["AWS_ACCESS_KEY_ID"] = "rustfsadmin"
+        os.environ["AWS_SECRET_ACCESS_KEY"] = "rustfsadmin"
         if SparkContext._active_spark_context is not None:
             SparkContext._active_spark_context.stop()
 

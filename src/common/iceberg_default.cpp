@@ -3,6 +3,7 @@
 #include "duckdb/function/scalar/generic_common.hpp"
 #include "duckdb/function/scalar/struct_functions.hpp"
 #include "duckdb/planner/expression/bound_constant_expression.hpp"
+#include "duckdb/planner/expression/bound_cast_expression.hpp"
 #include "duckdb/planner/expression/bound_columnref_expression.hpp"
 #include "duckdb/planner/expression/bound_function_expression.hpp"
 #include "catalog/rest/api/iceberg_type.hpp"
@@ -198,9 +199,9 @@ unique_ptr<Expression> IcebergDefaultProjectionResolver::ResolveDefault(ClientCo
 	auto default_descriptor = EvaluateStructDefault(context, default_expr);
 	if (default_descriptor.IsNull() || input_type.id() != LogicalTypeId::STRUCT ||
 	    result_type.id() != LogicalTypeId::STRUCT) {
-		// Explicit input NULL is preserved by the input reference itself. Whole-column DEFAULT values never reach
-		// this remapping path: DuckDB projects the already-bound default expression directly for omitted columns.
-		return make_uniq<BoundColumnRefExpression>(input_type, binding);
+		// STRUCT inputs are bound without a target type, so an explicit NULL still needs the column's type.
+		return BoundCastExpression::AddCastToType(context, make_uniq<BoundColumnRefExpression>(input_type, binding),
+		                                          result_type);
 	}
 
 	// A non-NULL STRUCT was supplied. Build a remap that preserves mapped fields and fills only omitted fields from

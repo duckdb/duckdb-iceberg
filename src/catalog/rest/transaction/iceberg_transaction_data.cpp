@@ -298,11 +298,8 @@ void IcebergTransactionData::AddUpdateSnapshot(partitioned_manifest_entry_map_t 
 }
 
 void IcebergTransactionData::TableAddSchema(int32_t schema_id) {
-	auto schema = table_info.table_metadata.GetSchemaFromId(schema_id);
-	if (!schema) {
-		throw InternalException("(TableAddSchema) Couldn't find schema with id: %d", schema_id);
-	}
-	auto add_schema_update = make_uniq<AddSchemaUpdate>(schema->Copy(), table_info.table_metadata.last_column_id);
+	auto &schema = table_info.table_metadata.GetSchemaFromId(schema_id);
+	auto add_schema_update = make_uniq<AddSchemaUpdate>(schema.Copy(), table_info.table_metadata.last_column_id);
 	updates.push_back(std::move(add_schema_update));
 	assert_schema_id = true;
 	pending_current_schema_id = schema_id;

@@ -1,0 +1,96 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/delete/equality_deletes/test_equality_delete_fast_filter_large.test
+# description: Hash insertion spans multiple vectors, including a partial final vector
+# group: [equality_deletes]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require-env EQUALITY_DELETE_WRITES_ENABLED 1
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+statement ok
+set iceberg_use_server_side_scan_planning=false;
+
+statement ok
+set unsafe_and_disabled_for_iceberg_v3_enable_equality_deletes=true;
+
+statement ok
+drop table if exists my_datalake.default.eq_fast_large;
+
+statement ok
+create table eq_fast_large_input as
+select i as id, i % 8 as a, (i // 8) % 8 as b, (i // 64) % 8 as c, (i // 512) % 8 as d
+from range(4105) t(i);
+
+statement ok
+create table my_datalake.default.eq_fast_large as select * from eq_fast_large_input;
+
+# 7 * 8 * 8 * 8 = 3584 delete tuples: exceeds STANDARD_VECTOR_SIZE (2048)
+# and leaves a partial final insertion slice. Use OR predicates to avoid IN
+# being rewritten to a range or join, which would write positional deletes.
+statement ok
+delete from my_datalake.default.eq_fast_large
+where (a = 0 or a = 1 or a = 2 or a = 3 or a = 4 or a = 5 or a = 6)
+  and (b = 0 or b = 1 or b = 2 or b = 3 or b = 4 or b = 5 or b = 6 or b = 7)
+  and (c = 0 or c = 1 or c = 2 or c = 3 or c = 4 or c = 5 or c = 6 or c = 7)
+  and (d = 0 or d = 1 or d = 2 or d = 3 or d = 4 or d = 5 or d = 6 or d = 7);
+
+query II
+select count(*), sum(record_count)
+from iceberg_metadata(my_datalake.default.eq_fast_large)
+where content = 'EQUALITY_DELETES' and status != 'DELETED';
+----
+1	3584
+
+# Compute the oracle without Iceberg or the new filter. Include duplicate key
+# tuples at the end of the data file, beyond multiple full probe vectors.
+statement ok
+create table eq_fast_large_expected as
+select id from eq_fast_large_input where not (a < 7 and b < 8 and c < 8 and d < 8);
+
+query I
+select count(*) from eq_fast_large_expected;
+----
+513
+
+statement ok
+call enable_logging('Iceberg');
+
+foreach fast_filter true false
+
+statement ok
+set iceberg_equality_delete_fast_filter={fast_filter};
+
+statement ok
+call truncate_duckdb_logs();
+
+statement ok
+create or replace table eq_fast_large_actual as select id from my_datalake.default.eq_fast_large;
+
+# EXCEPT ALL checks exact row identities and multiplicities in both directions.
+query I
+select count(*) from (
+	(select * from eq_fast_large_actual except all select * from eq_fast_large_expected)
+	union all
+	(select * from eq_fast_large_expected except all select * from eq_fast_large_actual)
+);
+----
+0
+
+query I
+select (count(*) > 0) = {fast_filter}
+from duckdb_logs()
+where type = 'Iceberg' and message = 'Accelerated 1 of 1 equality-delete files using a hash filter';
+----
+true
+
+endloop
+
+statement ok
+drop table my_datalake.default.eq_fast_large;

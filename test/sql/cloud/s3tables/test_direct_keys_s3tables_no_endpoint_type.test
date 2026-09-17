@@ -18,11 +18,6 @@ require httpfs
 
 require aws
 
-foreach aws_sdk_val true false
-
-statement ok
-SET iceberg_via_aws_sdk_for_catalog_interactions={aws_sdk_val};
-
 # test using keys directly
 statement ok
 CREATE OR REPLACE SECRET s1 (
@@ -102,4 +97,3 @@ query T nosort tables_1
 show all tables;
 ----
 
-endloop

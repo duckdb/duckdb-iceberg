@@ -88,9 +88,13 @@ def _requirement_failure_message(requirement: str, catalog_profile, spark_runtim
         if "row_lineage" not in catalog_profile.capabilities:
             return [f"Catalog '{catalog_profile.name}' does not support row-lineage coverage in this suite"]
         return []
+    if requirement == "allows_cleanup":
+        if "allows_cleanup" not in catalog_profile.capabilities:
+            return [f"Catalog '{catalog_profile.name}' does not allow data cleanup"]
+        return []
     raise pytest.UsageError(
         f"Unknown test/python capability requirement '{requirement}'. "
-        "Supported requirements: format_v3, row_lineage."
+        "Supported requirements: format_v3, row_lineage, allows_cleanup."
     )
 
 
@@ -126,7 +130,7 @@ def pytest_configure(config):
     config.addinivalue_line(
         "markers",
         "requires_capabilities(*requirements): require named catalog/runtime capabilities before test setup "
-        "(currently: 'format_v3', 'row_lineage')",
+        "(currently: 'format_v3', 'row_lineage', 'allows_cleanup')",
     )
 
 

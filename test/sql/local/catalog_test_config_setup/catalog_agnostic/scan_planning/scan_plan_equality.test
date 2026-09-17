@@ -1,0 +1,56 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/scan_planning/scan_plan_equality.test
+# description: Scan tasks materialize only applicable equality delete descriptors
+# group: [scan_planning]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require-env EQUALITY_DELETE_WRITES_ENABLED 1
+
+require iceberg
+
+require parquet
+
+require avro
+
+require httpfs
+
+require json
+
+statement ok
+set unsafe_and_disabled_for_iceberg_v3_enable_equality_deletes=true;
+
+statement ok
+drop table if exists my_datalake.default.scan_plan_equality;
+
+statement ok
+create table my_datalake.default.scan_plan_equality(id integer, category integer) with ('format-version'=2);
+
+statement ok
+insert into my_datalake.default.scan_plan_equality values (1, 10), (2, 20);
+
+statement ok
+delete from my_datalake.default.scan_plan_equality where category=10;
+
+# The delete must not apply to this later data file.
+statement ok
+insert into my_datalake.default.scan_plan_equality values (3, 10);
+
+query III
+select sequence_number is null, record_count, len(delete_files)
+from iceberg_scan_plan('my_datalake.default.scan_plan_equality') order by record_count desc;
+----
+true	2	1
+true	1	0
+
+query IIIIII
+select d.content, upper(d.file_format), d.equality_ids, d.referenced_data_file is null,
+       d.content_offset is null, d.content_size_in_bytes is null
+from (select unnest(delete_files) d from iceberg_scan_plan('my_datalake.default.scan_plan_equality'));
+----
+2	PARQUET	[2]	true	true	true
+
+statement ok
+set unsafe_and_disabled_for_iceberg_v3_enable_equality_deletes=false;
+
+statement ok
+drop table my_datalake.default.scan_plan_equality;

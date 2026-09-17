@@ -57,7 +57,7 @@ unordered_map<string, string> GetManifestMetadataMap(const IcebergTableMetadata 
 	JSONWriter writer;
 	auto schema_root_obj = writer.CreateObject();
 	writer.SetRoot(schema_root_obj);
-	IcebergCreateTableRequest::PopulateSchema(writer, schema_root_obj, *table_metadata.GetSchemaFromId(schema_id));
+	IcebergCreateTableRequest::PopulateSchema(writer, schema_root_obj, table_metadata.GetSchemaFromId(schema_id));
 	result.emplace("schema", writer.ToString(JSONWriteFlags::ALLOW_INF_AND_NAN));
 	result.emplace("schema-id", std::to_string(schema_id));
 

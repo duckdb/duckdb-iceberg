@@ -1,0 +1,46 @@
+# name: test/sql/local/time_travel_after_last_snapshot.test
+# description: A timestamp after the last snapshot is valid, only timestamps beyond the current time are rejected
+# group: [local]
+
+require avro
+
+require parquet
+
+require iceberg
+
+require icu
+
+statement ok
+set timezone='UTC';
+
+# The snapshots of this table are from 2025-05-02, so any 'now()' is far beyond
+# the last snapshot of the table.
+query I
+SELECT max(timestamp_ms) FROM iceberg_snapshots('{WORKING_DIRECTORY}/data/persistent/iceberg/lineitem_iceberg');
+----
+2025-05-02 12:21:20.005
+
+query I
+SELECT count(*) FROM iceberg_scan('{WORKING_DIRECTORY}/data/persistent/iceberg/lineitem_iceberg', ALLOW_MOVED_PATHS=TRUE);
+----
+51793
+
+# Being far beyond the last snapshot is not the same as lying in the future.
+# 'now()' has to resolve to the latest snapshot, not throw.
+query I
+SELECT count(*) FROM iceberg_scan('{WORKING_DIRECTORY}/data/persistent/iceberg/lineitem_iceberg', ALLOW_MOVED_PATHS=TRUE, snapshot_from_timestamp => now());
+----
+51793
+
+# The same holds for an explicit timestamp that sits between the last snapshot
+# and the current time.
+query I
+SELECT count(*) FROM iceberg_scan('{WORKING_DIRECTORY}/data/persistent/iceberg/lineitem_iceberg', ALLOW_MOVED_PATHS=TRUE, snapshot_from_timestamp => TIMESTAMP '2025-06-01 00:00:00');
+----
+51793
+
+# Only a timestamp beyond the current time is rejected.
+statement error
+SELECT count(*) FROM iceberg_scan('{WORKING_DIRECTORY}/data/persistent/iceberg/lineitem_iceberg', ALLOW_MOVED_PATHS=TRUE, snapshot_from_timestamp => TIMESTAMP '2027-01-01 00:00:00');
+----
+<REGEX>:.*Can not time travel to '2027-01-01 00:00:00', it lies in the future.*

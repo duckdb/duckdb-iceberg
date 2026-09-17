@@ -1,6 +1,7 @@
 #include "catalog/rest/catalog_entry/schema/iceberg_schema_entry.hpp"
 
 #include "duckdb/parser/column_list.hpp"
+#include "duckdb/common/type_visitor.hpp"
 #include "duckdb/parser/constraints/list.hpp"
 #include "duckdb/parser/parsed_data/alter_info.hpp"
 #include "duckdb/parser/parsed_data/alter_table_info.hpp"
@@ -81,12 +82,31 @@ bool IcebergSchemaEntry::HandleCreateConflict(CatalogTransaction &transaction, C
 
 optional_ptr<CatalogEntry> IcebergSchemaEntry::CreateTable(CatalogTransaction &transaction, ClientContext &context,
                                                            BoundCreateTableInfo &info) {
+	auto &base_info = info.Base();
+	for (auto &constraint : base_info.constraints) {
+		if (constraint->type != ConstraintType::NOT_NULL) {
+			throw NotImplementedException("Only NOT NULL constraints are supported for Iceberg tables");
+		}
+	}
+	for (auto &column : base_info.columns.Logical()) {
+		if (column.Generated()) {
+			throw NotImplementedException("Generated columns are not supported for Iceberg tables");
+		}
+		if (column.CompressionType() != CompressionType::COMPRESSION_AUTO) {
+			throw NotImplementedException("Column compression is not supported for Iceberg tables");
+		}
+		if (TypeVisitor::Contains(column.Type(), [](const LogicalType &type) {
+			    return type.id() == LogicalTypeId::VARCHAR && !StringType::GetCollation(type).empty();
+		    })) {
+			throw NotImplementedException("Column collations are not supported for Iceberg tables");
+		}
+	}
+
 	auto &iceberg_transaction = IcebergTransaction::Get(context, catalog);
 	if (!exists && iceberg_transaction.created_schemas.find(name.GetIdentifierName()) ==
 	                   iceberg_transaction.created_schemas.end()) {
 		throw InvalidInputException("Schema with name \"%s\" does not exist", name.GetIdentifierName());
 	}
-	auto &base_info = info.Base();
 	auto &ir_catalog = catalog.Cast<IcebergCatalog>();
 	// check if we have an existing entry with this name
 	if (!HandleCreateConflict(transaction, CatalogType::TABLE_ENTRY, base_info.GetTableName().GetIdentifierName(),
@@ -292,7 +312,8 @@ void IntroduceNewSchema(IcebergTable &updated_table, IcebergTransactionData &tra
                         shared_ptr<IcebergTableSchema> new_schema) {
 	auto new_schema_id = new_schema->schema_id;
 
-	auto &result_schema = updated_table.table_metadata.AddSchemaOrGetExisting(std::move(new_schema));
+	auto &schemas = updated_table.table_metadata.GetSchemasMutable();
+	auto &result_schema = schemas.AddSchemaOrGetExisting(std::move(new_schema));
 	if (result_schema.schema_id == new_schema_id) {
 		// Update the Table Metadata to have our new schema
 		updated_table.CreateSchemaVersion(result_schema);
@@ -546,7 +567,8 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 
 		auto new_schema_id = new_schema->schema_id;
 
-		auto &result_schema = updated_table.table_metadata.AddSchemaOrGetExisting(std::move(new_schema));
+		auto &result_schema =
+		    updated_table.table_metadata.GetSchemasMutable().AddSchemaOrGetExisting(std::move(new_schema));
 		if (result_schema.schema_id == new_schema_id) {
 			// Update the Table Metadata to have our new schema
 			updated_table.CreateSchemaVersion(result_schema);
@@ -646,7 +668,8 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 
 		auto new_schema_id = new_schema->schema_id;
 
-		auto &result_schema = updated_table.table_metadata.AddSchemaOrGetExisting(std::move(new_schema));
+		auto &result_schema =
+		    updated_table.table_metadata.GetSchemasMutable().AddSchemaOrGetExisting(std::move(new_schema));
 		if (result_schema.schema_id == new_schema_id) {
 			// Update the Table Metadata to have our new schema
 			updated_table.CreateSchemaVersion(result_schema);
@@ -727,6 +750,14 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 			                       table_entry.name.GetIdentifierName());
 		}
 
+		auto parent_path = column_path;
+		parent_path.pop_back();
+		auto parent = new_schema->GetMutableFromPath(parent_path, nullptr);
+		if (parent->type.id() != LogicalTypeId::STRUCT) {
+			throw CatalogException("Cannot rename field %s from column %s - can only rename fields inside a struct",
+			                       column_path.back(), column_path.front());
+		}
+
 		auto new_path = column_path;
 		new_path.pop_back();
 		new_path.emplace_back(new_name.GetIdentifierName());
@@ -778,6 +809,11 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 			    "The column ('%s') doesnt exist on the table '%s', DROP COLUMN failed to remove the field",
 			    StringUtil::Join(IdentifiersToStrings(column_path), "."), table_entry.name.GetIdentifierName());
 		}
+		if (parent.type.id() != LogicalTypeId::STRUCT) {
+			throw CatalogException("Cannot drop field %s from column %s - it's not a struct", column_path.back(),
+			                       column_path.front());
+		}
+
 		if (parent.GetChildCount() == 1) {
 			throw CatalogException("Can't drop field '%s' because it's the last field of the STRUCT!",
 			                       StringUtil::Join(IdentifiersToStrings(column_path), "."));

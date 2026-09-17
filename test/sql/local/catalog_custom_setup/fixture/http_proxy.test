@@ -27,7 +27,7 @@ set logging_level='debug';
 statement ok
 CREATE TABLE logs_tracker AS SELECT len(content) AS log_length FROM read_text('mitmproxy.log');
 
-# Extra proxy parameters neded here because of local MinIO testing
+# Extra proxy parameters needed here because of the local SeaweedFS object store
 statement ok
 CREATE SECRET (
     TYPE S3,

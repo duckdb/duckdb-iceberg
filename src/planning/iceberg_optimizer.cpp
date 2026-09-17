@@ -61,7 +61,7 @@ void IcebergOptimizerRoutine::VisitOperator(unique_ptr<LogicalOperator> &op, boo
 			}
 		}
 		if (requires_local_planning) {
-			iceberg_list.DisableServerSidePlanning();
+			iceberg_list.GetScanPlanner().DisableServerSidePlanning();
 		}
 	}
 }

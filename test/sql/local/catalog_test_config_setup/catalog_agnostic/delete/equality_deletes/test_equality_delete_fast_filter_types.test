@@ -1,0 +1,93 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/delete/equality_deletes/test_equality_delete_fast_filter_types.test
+# description: Composite hash keys support BOOLEAN, binary strings, UUID and 128-bit DECIMAL
+# group: [equality_deletes]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require-env EQUALITY_DELETE_WRITES_ENABLED 1
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+statement ok
+set iceberg_use_server_side_scan_planning=false;
+
+statement ok
+set unsafe_and_disabled_for_iceberg_v3_enable_equality_deletes=true;
+
+statement ok
+drop table if exists my_datalake.default.eq_fast_types;
+
+statement ok
+create table my_datalake.default.eq_fast_types (id integer, b boolean, bytes blob, u uuid, d decimal(38, 4));
+
+# Rows 1 and 2 match the entire delete tuple. Every other row differs in just
+# one field, including NULL versus non-NULL and a difference in the last byte.
+statement ok
+insert into my_datalake.default.eq_fast_types
+select i,
+	case when i = 7 then NULL else i = 3 end,
+	case when i = 8 then NULL
+	     when i = 4 then '\x00abcdefghijklmno\xFE'::blob
+	     else '\x00abcdefghijklmno\xFF'::blob end,
+	case when i = 9 then NULL
+	     when i = 5 then 'ffffffff-ffff-ffff-ffff-fffffffffffe'::uuid
+	     else 'ffffffff-ffff-ffff-ffff-ffffffffffff'::uuid end,
+	case when i = 10 then NULL
+	     when i = 6 then -123456789012345678901234567890.1233::decimal(38, 4)
+	     else -123456789012345678901234567890.1234::decimal(38, 4) end
+from range(1, 11) t(i);
+
+statement ok
+delete from my_datalake.default.eq_fast_types
+where b = false
+  and bytes = '\x00abcdefghijklmno\xFF'::blob
+  and u = 'ffffffff-ffff-ffff-ffff-ffffffffffff'::uuid
+  and d = -123456789012345678901234567890.1234::decimal(38, 4);
+
+query II
+select count(*), sum(record_count)
+from iceberg_metadata(my_datalake.default.eq_fast_types)
+where content = 'EQUALITY_DELETES' and status != 'DELETED';
+----
+1	1
+
+statement ok
+call enable_logging('Iceberg');
+
+foreach fast_filter true false
+
+statement ok
+set iceberg_equality_delete_fast_filter={fast_filter};
+
+statement ok
+call truncate_duckdb_logs();
+
+query I
+select id from my_datalake.default.eq_fast_types order by id;
+----
+3
+4
+5
+6
+7
+8
+9
+10
+
+query I
+select (count(*) > 0) = {fast_filter}
+from duckdb_logs()
+where type = 'Iceberg' and message = 'Accelerated 1 of 1 equality-delete files using a hash filter';
+----
+true
+
+endloop
+
+statement ok
+drop table my_datalake.default.eq_fast_types;

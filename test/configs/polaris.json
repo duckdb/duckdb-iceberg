@@ -17,6 +17,12 @@
 	],
 	"skip_tests": [
 		{
+			"reason": "Polaris denies removal of uncommitted files with vended credentials; cleanup failure logging and rollback are covered by catalog_specifc/polaris/test_delete_consolidation_cleanup_failure.test",
+			"paths": [
+				"test/sql/local/catalog_test_config_setup/catalog_agnostic/delete/test_delete_consolidation_transactional.test"
+			]
+		},
+		{
 			"reason": "Not yet supported with Polaris",
 			"paths": [
 				"test/sql/local/catalog_test_config_setup/catalog_agnostic/delete/test_no_head_request_for_deletes.test",

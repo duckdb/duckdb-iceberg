@@ -5,7 +5,7 @@ Run with:
     mitmdump --mode regular@19133 -s scripts/vended_credentials_refresh_proxy.py
 
 The addon rewrites selected real fixture catalog table responses to vend
-controlled S3 credentials, then intercepts MinIO requests to reject stale
+controlled S3 credentials, then intercepts object store requests to reject stale
 credentials and serve deterministic local Parquet objects.
 
 For refresh tests, the proxy returns initial credentials on the first table load,

@@ -17,6 +17,7 @@ struct IcebergOptions;
 using position_delete_map_t = unordered_map<string, shared_ptr<IcebergDeleteData>>;
 
 struct IcebergDeletePlan {
+	//! Equality-delete values are materialized separately from positional deletes, which become a DeleteFilter.
 	vector<reference<const IcebergEqualityDeleteFile>> equality_deletes;
 	unique_ptr<DeleteFilter> positional_deletes;
 };
@@ -44,8 +45,6 @@ struct IcebergDeletePlanner {
 	                                         const IcebergManifestEntry &delete_manifest_entry,
 	                                         const BoundIcebergManifestEntry &data_manifest_entry,
 	                                         const partition_value_map_t &data_partition_values);
-	static shared_ptr<IcebergDeleteData> GetExistingPositionalDeleteData(const IcebergDeletePlanningContext &context,
-	                                                                     const string &file_path);
 };
 
 } // namespace duckdb

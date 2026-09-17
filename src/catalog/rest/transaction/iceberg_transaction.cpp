@@ -46,7 +46,7 @@ IcebergTransactionTableState::IcebergTransactionTableState(shared_ptr<IcebergTab
 
 IcebergTransactionTableState::IcebergTransactionTableState(IcebergTable &&transaction_table_p)
     : transaction_table(make_uniq<IcebergTable>(std::move(transaction_table_p))), status(IcebergTableStatus::ALIVE) {
-	if (!transaction_table->table_metadata.GetSchemas().empty()) {
+	if (!transaction_table->table_metadata.GetSchemas().IsEmpty()) {
 		transaction_table->InitSchemaVersions();
 	}
 }

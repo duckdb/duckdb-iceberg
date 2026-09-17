@@ -24,7 +24,13 @@ struct IRCAPITableCredentials {
 
 struct IcebergTable {
 public:
-	IcebergTable(IcebergCatalog &catalog, IcebergSchemaEntry &schema, const string &name);
+	IcebergTable(IcebergCatalog &catalog, IcebergSchemaEntry &schema, const string &name,
+	             IcebergTableMetadata metadata);
+	IcebergTable(IcebergCatalog &catalog, IcebergSchemaEntry &schema, const string &name,
+	             const rest_api_objects::LoadTableResult &load_table_result);
+	//! A listing placeholder has no schemas until FillEntry resolves it.
+	static shared_ptr<IcebergTable> CreatePlaceholder(IcebergCatalog &catalog, IcebergSchemaEntry &schema,
+	                                                  const string &name);
 
 public:
 	void LoadCredentials(ClientContext &context) const;
@@ -85,6 +91,8 @@ public:
 	optional_ptr<const rest_api_objects::LoadTableResult> initialization_source;
 
 private:
+	void SetLoadTableResult(const rest_api_objects::LoadTableResult &load_table_result);
+
 	//! Unchanged by rename, used to check for a rename
 	const string original_name;
 };

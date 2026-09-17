@@ -1,0 +1,212 @@
+# name: test/sql/local/scan_tasks_execution.test
+# description: Catalog-independent task execution, equality deletes and task-local positional filtering
+# group: [local]
+
+require iceberg
+
+require parquet
+
+require json
+
+statement ok
+copy (select i::integer id, case when i=0 then NULL else i::integer*10 end value,
+             {'key': case when i=1 then NULL else i::integer end} nested, i::integer dropped
+      from range(4) t(i)) to '{TEST_DIR}/task_data.parquet'
+(format parquet, field_ids {id:1, value:2, nested:{__duckdb_field_id:3, key:4}, dropped:5});
+
+statement ok
+create temp table tasks as select
+    '{TEST_DIR}/task_data.parquet'::varchar file_path,
+    'PARQUET'::varchar file_format,
+    (select size from read_blob('{TEST_DIR}/task_data.parquet'))::bigint file_size_in_bytes,
+    4::bigint record_count, NULL::bigint sequence_number, NULL::bigint first_row_id,
+    0::integer partition_spec_id, {'6':'P'::varchar} partition_constants,
+    []::struct(file_path varchar, file_format varchar, content integer, file_size_in_bytes bigint,
+              record_count bigint, equality_ids integer[], referenced_data_file varchar,
+              content_offset bigint, content_size_in_bytes bigint)[] delete_files,
+    NULL::bigint snapshot_id, 1::integer schema_id,
+    '{"format-version": 3, "table-uuid": "00000000-0000-0000-0000-000000000001", "location": "{TEST_DIR}", "last-updated-ms": 0, "last-column-id": 7, "last-sequence-number": 0, "current-schema-id": 1, "schemas": [{"schema-id": 0, "type": "struct", "fields": [{"id": 1, "name": "id", "required": false, "type": "int"}, {"id": 2, "name": "value", "required": false, "type": "int"}, {"id": 3, "name": "nested", "required": false, "type": {"type": "struct", "fields": [{"id": 4, "name": "key", "required": false, "type": "int"}]}}, {"id": 6, "name": "part", "required": false, "type": "string", "initial-default": "fallback"}, {"id": 7, "name": "added", "required": false, "type": "int", "initial-default": 99}, {"id": 5, "name": "dropped", "required": false, "type": "int"}]}, {"schema-id": 1, "type": "struct", "fields": [{"id": 1, "name": "id", "required": false, "type": "int"}, {"id": 2, "name": "value", "required": false, "type": "int"}, {"id": 3, "name": "nested", "required": false, "type": {"type": "struct", "fields": [{"id": 4, "name": "key", "required": false, "type": "int"}]}}, {"id": 6, "name": "part", "required": false, "type": "string", "initial-default": "fallback"}, {"id": 7, "name": "added", "required": false, "type": "int", "initial-default": 99}]}], "partition-specs": [{"spec-id": 0, "fields": [{"name": "part", "transform": "identity", "source-id": 6, "field-id": 1000}]}], "default-spec-id": 0, "sort-orders": [{"order-id": 0, "fields": []}], "default-sort-order-id": 0, "properties": {"schema.name-mapping.default": "[{\"field-id\": 1, \"names\": [\"id\", \"old_id\"]}, {\"field-id\": 2, \"names\": [\"value\"]}, {\"field-id\": 3, \"names\": [\"nested\"], \"fields\": [{\"field-id\": 4, \"names\": [\"key\"]}]}, {\"field-id\": 5, \"names\": [\"dropped\"]}, {\"field-id\": 6, \"names\": [\"part\"]}, {\"field-id\": 7, \"names\": [\"added\"]}]"}}'::json::variant metadata,
+    NULL::struct(id integer, value integer, nested struct(key integer), part varchar, added integer) schema;
+
+query IIITI
+select id, value, nested.key, part, added from iceberg_scan_tasks((select * from tasks)) order by id;
+----
+0	NULL	0	P	99
+1	10	NULL	P	99
+2	20	2	P	99
+3	30	3	P	99
+
+# A physically empty file must also advance to the next task.
+statement ok
+copy (select 0::integer id where false) to '{TEST_DIR}/task_empty.parquet' (format parquet, field_ids {id:1});
+
+query I
+select count(*) from iceberg_scan_tasks((select * replace('{TEST_DIR}/task_empty.parquet' as file_path,
+ (select size from read_blob('{TEST_DIR}/task_empty.parquet'))::bigint as file_size_in_bytes,
+ 0::bigint as record_count) from tasks union all select * from tasks));
+----
+4
+
+# Early termination releases the active task; a later invocation starts afresh.
+query I
+select id from iceberg_scan_tasks((select * from tasks)) limit 1;
+----
+0
+
+query I
+select count(*) from iceberg_scan_tasks((select * from tasks));
+----
+4
+
+# Non-NULL partition constants are only fallbacks. A real column wins.
+statement ok
+copy (select 8::integer id, 'physical'::varchar part) to '{TEST_DIR}/task_physical.parquet'
+(format parquet, field_ids {id:1, part:6});
+
+query IT
+select id, part from iceberg_scan_tasks((select * replace('{TEST_DIR}/task_physical.parquet' as file_path,
+ (select size from read_blob('{TEST_DIR}/task_physical.parquet'))::bigint as file_size_in_bytes) from tasks));
+----
+8	physical
+
+# Null partition constants preserve normal missing-column defaults.
+query T
+select distinct part from iceberg_scan_tasks((select * replace({'6':NULL::varchar} as partition_constants) from tasks));
+----
+fallback
+
+# Files without field IDs use historical names from the mapping tree.
+statement ok
+copy (select 5::integer old_id) to '{TEST_DIR}/task_names.parquet' (format parquet);
+
+query I
+select id from iceberg_scan_tasks((select * replace('{TEST_DIR}/task_names.parquet' as file_path,
+ (select size from read_blob('{TEST_DIR}/task_names.parquet'))::bigint as file_size_in_bytes) from tasks));
+----
+5
+
+statement ok
+create macro delete_descriptor(path, kind, ids, rows) as
+ {'file_path':path::varchar, 'file_format':'PARQUET'::varchar, 'content':kind::integer,
+  'file_size_in_bytes':(select size::bigint from read_blob(path)), 'record_count':rows::bigint,
+  'equality_ids':ids::integer[], 'referenced_data_file':NULL::varchar,
+  'content_offset':NULL::bigint, 'content_size_in_bytes':NULL::bigint};
+
+statement ok
+copy (select 1::integer dropped) to '{TEST_DIR}/task_eq_dropped.parquet' (format parquet, field_ids {dropped:5});
+
+statement ok
+copy (select NULL::integer key union all select 2) to '{TEST_DIR}/task_eq_nested.parquet' (format parquet, field_ids {key:4});
+
+statement ok
+copy (select NULL::integer value) to '{TEST_DIR}/task_eq_null.parquet' (format parquet, field_ids {value:2});
+
+statement ok
+create temp table equality_tasks as select * replace([
+ delete_descriptor('{TEST_DIR}/task_eq_dropped.parquet', 2, [5], 1),
+ delete_descriptor('{TEST_DIR}/task_eq_nested.parquet', 2, [4], 2),
+ delete_descriptor('{TEST_DIR}/task_eq_null.parquet', 2, [2], 1)] as delete_files) from tasks;
+
+# All three forms of equality matching apply even when output projects only id.
+query I
+select id from iceberg_scan_tasks((select * from equality_tasks));
+----
+3
+
+query I
+select count(*) from iceberg_scan_tasks((select * from equality_tasks union all select * from tasks));
+----
+5
+
+# Missing equality fields are NULL, independent of their initial default.
+statement ok
+copy (select 99::integer added) to '{TEST_DIR}/task_eq_default.parquet' (format parquet, field_ids {added:7});
+
+query I
+select count(*) from iceberg_scan_tasks((select * replace([
+ delete_descriptor('{TEST_DIR}/task_eq_default.parquet', 2, [7], 1)] as delete_files) from tasks));
+----
+4
+
+statement ok
+copy (select NULL::integer added) to '{TEST_DIR}/task_eq_missing.parquet' (format parquet, field_ids {added:7});
+
+# A fully deleted task must advance to subsequent input tasks.
+query I
+select count(*) from iceberg_scan_tasks((select * replace([
+ delete_descriptor('{TEST_DIR}/task_eq_missing.parquet', 2, [7], 1)] as delete_files) from tasks
+ union all select * from tasks));
+----
+4
+
+statement ok
+copy (select '{TEST_DIR}/task_data.parquet'::varchar file_path, 0::bigint pos)
+to '{TEST_DIR}/task_pos1.parquet' (format parquet, field_ids {file_path:2147483546, pos:2147483545});
+
+statement ok
+copy (select '{TEST_DIR}/task_data.parquet'::varchar file_path, 2::bigint pos)
+to '{TEST_DIR}/task_pos2.parquet' (format parquet, field_ids {file_path:2147483546, pos:2147483545});
+
+statement ok
+create temp table position_tasks as select * replace([
+ delete_descriptor('{TEST_DIR}/task_pos1.parquet', 1, [], 1),
+ delete_descriptor('{TEST_DIR}/task_pos2.parquet', 1, [], 1)] as delete_files) from tasks;
+
+query I
+select id from iceberg_scan_tasks((select * from position_tasks)) order by id;
+----
+1
+3
+
+# Cached position deletes cannot leak into another task for the same data path.
+query I
+select count(*) from iceberg_scan_tasks((select * from position_tasks
+ union all select * replace([delete_files[1]] as delete_files) from position_tasks
+ union all select * from tasks));
+----
+9
+
+# Duplicate descriptors are idempotent; duplicate tasks retain multiplicity.
+query I
+select count(*) from iceberg_scan_tasks((select * replace(list_concat(delete_files, delete_files) as delete_files) from position_tasks));
+----
+2
+
+# Materialized input spanning chunks; multiple workers share delete loads.
+statement ok
+create temp table many_tasks as select t.* from range(2050), equality_tasks t;
+
+statement ok
+pragma verify_parallelism;
+
+loop threads 1 5
+
+statement ok
+set threads={threads};
+
+query II
+select count(*), sum(id) from iceberg_scan_tasks((select * from many_tasks));
+----
+2050	6150
+
+endloop
+
+statement error
+select * from iceberg_scan_tasks((select * replace(list_transform(delete_files, lambda d: CASE WHEN true THEN NULL ELSE d END) as delete_files) from position_tasks));
+----
+non-NULL delete descriptors
+
+statement error
+select * from iceberg_scan_tasks((select * replace(list_transform(delete_files, lambda d: struct_update(d, file_size_in_bytes := -1::bigint)) as delete_files) from position_tasks));
+----
+nonnegative size
+
+statement error
+select * from iceberg_scan_tasks((select * replace({'bogus':0} as partition_constants) from tasks));
+----
+partition constant names
+
+statement error
+select * from iceberg_scan_tasks((select * replace({'6':0} as partition_constants) from tasks));
+----
+partition constant 6 does not match

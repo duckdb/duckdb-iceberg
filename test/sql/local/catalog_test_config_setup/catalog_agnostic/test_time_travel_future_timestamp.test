@@ -1,0 +1,166 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/test_time_travel_future_timestamp.test
+# description: Time traveling to a timestamp that lies in the future is rejected during bind
+# group: [catalog_agnostic]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+
+statement ok
+CREATE SCHEMA IF NOT EXISTS my_datalake.default;
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.time_travel_future_timestamp;
+
+statement ok
+CREATE TABLE my_datalake.default.time_travel_future_timestamp (i INTEGER) WITH ('format-version' = 2);
+
+statement ok
+INSERT INTO my_datalake.default.time_travel_future_timestamp VALUES (1), (2), (3);
+
+query I
+SELECT i FROM my_datalake.default.time_travel_future_timestamp ORDER BY i;
+----
+1
+2
+3
+
+# Time traveling to a timestamp that predates every snapshot is still allowed,
+# it produces an empty scan.
+query I
+SELECT i FROM my_datalake.default.time_travel_future_timestamp AT (TIMESTAMP => TIMESTAMP '1990-01-01 00:00:00') ORDER BY i;
+----
+
+# A snapshot can only be created in the past, so a timestamp in the future can
+# not identify a point in the history of the table.
+statement error
+SELECT i FROM my_datalake.default.time_travel_future_timestamp AT (TIMESTAMP => TIMESTAMP '2027-01-01 00:00:00') ORDER BY i;
+----
+<REGEX>:.*Can not time travel to '2027-01-01 00:00:00', it lies in the future.*
+
+statement error
+SELECT i FROM my_datalake.default.time_travel_future_timestamp AT (TIMESTAMP => TIMESTAMP '2099-12-31 23:59:59') ORDER BY i;
+----
+<REGEX>:.*Can not time travel to '2099-12-31 23:59:59', it lies in the future.*
+
+# The check happens during bind, so it fires even when the table is never read.
+statement error
+SELECT count(*) FROM my_datalake.default.time_travel_future_timestamp AT (TIMESTAMP => TIMESTAMP '2027-01-01 00:00:00') WHERE false;
+----
+<REGEX>:.*Can not time travel to '2027-01-01 00:00:00', it lies in the future.*
+
+
+# A table with new data in the current transaction.
+
+statement ok
+BEGIN TRANSACTION;
+
+statement ok
+INSERT INTO my_datalake.default.time_travel_future_timestamp VALUES (4);
+
+# The uncommitted row is visible to a regular scan.
+query I
+SELECT i FROM my_datalake.default.time_travel_future_timestamp ORDER BY i;
+----
+1
+2
+3
+4
+
+# The uncommitted row does not make a future timestamp valid.
+statement error
+SELECT i FROM my_datalake.default.time_travel_future_timestamp AT (TIMESTAMP => TIMESTAMP '2027-01-01 00:00:00') ORDER BY i;
+----
+<REGEX>:.*Can not time travel to '2027-01-01 00:00:00', it lies in the future.*
+
+statement ok
+ROLLBACK;
+
+query I
+SELECT i FROM my_datalake.default.time_travel_future_timestamp ORDER BY i;
+----
+1
+2
+3
+
+
+# The same holds once the new data is committed.
+
+statement ok
+INSERT INTO my_datalake.default.time_travel_future_timestamp VALUES (4);
+
+query I
+SELECT i FROM my_datalake.default.time_travel_future_timestamp ORDER BY i;
+----
+1
+2
+3
+4
+
+statement error
+SELECT i FROM my_datalake.default.time_travel_future_timestamp AT (TIMESTAMP => TIMESTAMP '2027-01-01 00:00:00') ORDER BY i;
+----
+<REGEX>:.*Can not time travel to '2027-01-01 00:00:00', it lies in the future.*
+
+# Time traveling by snapshot id is unaffected.
+statement ok
+set variable first_snapshot = (
+	select snapshot_id::BIGINT from iceberg_snapshots(
+		'my_datalake.default.time_travel_future_timestamp'
+	) order by timestamp_ms
+	offset 0 limit 1
+);
+
+query I
+SELECT i FROM my_datalake.default.time_travel_future_timestamp AT (VERSION => getvariable('first_snapshot')) ORDER BY i;
+----
+1
+2
+3
+
+# 'now()' lies after the last snapshot of the table, but it is not in the
+# future, so it resolves to the latest snapshot instead of throwing.
+query I
+SELECT i FROM my_datalake.default.time_travel_future_timestamp AT (TIMESTAMP => now()) ORDER BY i;
+----
+1
+2
+3
+4
+
+# Time traveling to the timestamp of a snapshot that actually exists is still
+# allowed - only timestamps beyond the current time are rejected.
+statement ok
+set variable first_timestamp = (
+	select timestamp_ms from iceberg_snapshots(
+		'my_datalake.default.time_travel_future_timestamp'
+	) order by timestamp_ms
+	offset 0 limit 1
+);
+
+# `AT (TIMESTAMP => ...)` does not accept a getvariable() expression, so the
+# query text is built up and run through the `query` table function.
+statement ok
+set variable time_travel_query = $$
+	SELECT i FROM my_datalake.default.time_travel_future_timestamp
+		AT (TIMESTAMP => TIMESTAMP 'COMPONENT') ORDER BY i
+$$
+
+query I
+select * from query(
+	getvariable('time_travel_query').replace(
+		'COMPONENT'::VARCHAR,
+		getvariable('first_timestamp')::VARCHAR
+	)
+)
+----
+1
+2
+3

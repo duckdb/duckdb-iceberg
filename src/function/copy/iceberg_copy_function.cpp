@@ -43,7 +43,7 @@ CopyIcebergBindData::CopyIcebergBindData(const CopyInfo &info, vector<string> &&
 	file_path = info.file_path;
 
 	// Create IcebergTableMetadata
-	table_metadata = make_uniq<IcebergTableMetadata>();
+	table_metadata = make_uniq<IcebergTableMetadata>(IcebergTableMetadataSchemas {});
 	table_metadata->table_uuid = UUID::ToString(UUID::GenerateRandomUUID());
 	table_metadata->location = file_path;
 	table_metadata->iceberg_version = 2;
@@ -59,7 +59,7 @@ CopyIcebergBindData::CopyIcebergBindData(const CopyInfo &info, vector<string> &&
 	table_schema =
 	    IcebergCreateTableRequest::CreateIcebergSchema(context, *table_metadata, columns, nullptr, last_column_id);
 	table_schema->schema_id = 0;
-	auto &result_schema = table_metadata->AddSchemaOrGetExisting(table_schema);
+	auto &result_schema = table_metadata->GetSchemasMutable().AddSchemaOrGetExisting(table_schema);
 	if (result_schema.schema_id != 0) {
 		throw InternalException("Iceberg COPY created non-0 schema id (%d)", result_schema.schema_id);
 	}

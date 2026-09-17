@@ -49,8 +49,6 @@ public:
 	virtual bool DeleteFileAppliesToDataFile(const string &data_file_path, const string &delete_file_path) const = 0;
 	virtual vector<IcebergManifestListEntry> &DataManifests() = 0;
 	virtual vector<IcebergManifestListEntry> &DeleteManifests() = 0;
-	virtual shared_ptr<IcebergDeleteFileLoadState> &GetDeleteFileLoad(IcebergDeleteFileReference delete_file) = 0;
-	virtual position_delete_map_t &PositionalDeleteData() = 0;
 };
 
 class ClientSideScanPlanProvider final : public IcebergScanPlanProvider {
@@ -62,15 +60,12 @@ public:
 	    DUCKDB_REQUIRES(shared_state.lock);
 	void ReadDeleteManifests(const vector<idx_t> &manifest_indexes, idx_t filter_count) override;
 	vector<IcebergDeleteFileReference> GetDeleteFiles(const vector<idx_t> &manifest_indexes) override
-	    DUCKDB_REQUIRES(shared_state.lock, shared_state.delete_lock);
+	    DUCKDB_REQUIRES(shared_state.lock);
 	bool TryGetNextBatch(IcebergDataViewCursor &cursor) override DUCKDB_REQUIRES(shared_state.lock);
 	void FinishScanTasks() override DUCKDB_REQUIRES(shared_state.lock);
 	bool DeleteFileAppliesToDataFile(const string &data_file_path, const string &delete_file_path) const override;
 	vector<IcebergManifestListEntry> &DataManifests() override DUCKDB_REQUIRES(shared_state.lock);
 	vector<IcebergManifestListEntry> &DeleteManifests() override DUCKDB_REQUIRES(shared_state.lock);
-	shared_ptr<IcebergDeleteFileLoadState> &GetDeleteFileLoad(IcebergDeleteFileReference delete_file) override
-	    DUCKDB_REQUIRES(shared_state.lock, shared_state.delete_lock);
-	position_delete_map_t &PositionalDeleteData() override DUCKDB_REQUIRES(shared_state.delete_lock);
 
 private:
 	IcebergScanPlanState &shared_state;
@@ -90,16 +85,12 @@ public:
 	bool DeleteFileAppliesToDataFile(const string &data_file_path, const string &delete_file_path) const override;
 	vector<IcebergManifestListEntry> &DataManifests() override;
 	vector<IcebergManifestListEntry> &DeleteManifests() override;
-	shared_ptr<IcebergDeleteFileLoadState> &GetDeleteFileLoad(IcebergDeleteFileReference delete_file) override;
-	position_delete_map_t &PositionalDeleteData() override;
 
 private:
 	//! Declared before parsed delete data so its manifest-entry references are destroyed first.
 	IcebergServerSideScanPlan plan;
 	ManifestEntryReadState read_state;
 	bool data_manifest_scan_started = false;
-	vector<unordered_map<idx_t, shared_ptr<IcebergDeleteFileLoadState>>> delete_file_loads;
-	position_delete_map_t positional_delete_data;
 };
 
 } // namespace duckdb

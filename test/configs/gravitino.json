@@ -34,6 +34,7 @@
 				"test/sql/local/catalog_test_config_setup/catalog_agnostic/transactions/test_transactional_merge_into.test",
 				"test/sql/local/catalog_test_config_setup/catalog_agnostic/transactions/test_transactional_updates_error_omits_stacktrace.test",
 				"test/sql/local/catalog_test_config_setup/catalog_agnostic/transactions/test_transactional_updates.test",
+				"test/sql/local/catalog_test_config_setup/catalog_agnostic/transactions/test_transaction_get_from_transaction_start.test",
 				"test/sql/local/catalog_test_config_setup/catalog_agnostic/transactions/test_transactions_reading_empty_tables.test"
 			]
 		},

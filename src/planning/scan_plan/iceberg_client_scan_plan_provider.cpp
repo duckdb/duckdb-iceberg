@@ -191,10 +191,8 @@ void ClientSideScanPlanProvider::LoadManifestList() {
 	}
 
 	{
-		annotated_lock_guard<annotated_mutex> delete_guard(shared_state.delete_lock);
+		annotated_lock_guard<annotated_mutex> delete_guard(shared_state.delete_manifest_lock);
 		shared_state.delete_manifest_loads.resize(DeleteManifests().size());
-		shared_state.delete_file_loads.resize(DeleteManifests().size() +
-		                                      shared_state.transaction_delete_manifests.size());
 	}
 
 	shared_state.manifest_list_loaded = true;
@@ -267,7 +265,7 @@ void ClientSideScanPlanProvider::ReadDeleteManifests(const vector<idx_t> &manife
 	idx_t committed_manifest_count;
 	{
 		annotated_lock_guard<annotated_mutex> guard(shared_state.lock);
-		annotated_lock_guard<annotated_mutex> delete_guard(shared_state.delete_lock);
+		annotated_lock_guard<annotated_mutex> delete_guard(shared_state.delete_manifest_lock);
 		committed_manifest_count = shared_state.committed_delete_manifests.size();
 		auto total_manifest_count = committed_manifest_count + shared_state.transaction_delete_manifests.size();
 		for (auto manifest_idx : manifest_indexes) {
@@ -457,30 +455,6 @@ vector<IcebergManifestListEntry> &ClientSideScanPlanProvider::DataManifests() {
 
 vector<IcebergManifestListEntry> &ClientSideScanPlanProvider::DeleteManifests() {
 	return shared_state.committed_delete_manifests;
-}
-
-shared_ptr<IcebergDeleteFileLoadState> &
-ClientSideScanPlanProvider::GetDeleteFileLoad(IcebergDeleteFileReference delete_file) {
-	auto committed_manifest_count = DeleteManifests().size();
-	auto total_manifest_count = committed_manifest_count + shared_state.transaction_delete_manifests.size();
-	if (delete_file.manifest_idx >= total_manifest_count) {
-		throw InternalException("Delete manifest index %llu is out of bounds", delete_file.manifest_idx);
-	}
-	auto &manifest =
-	    delete_file.manifest_idx < committed_manifest_count
-	        ? DeleteManifests()[delete_file.manifest_idx]
-	        : shared_state.transaction_delete_manifests[delete_file.manifest_idx - committed_manifest_count].get();
-	auto &manifest_entries = manifest.GetManifestEntries();
-	if (delete_file.entry_idx >= manifest_entries.size()) {
-		throw InternalException("Delete manifest entry index %llu is out of bounds for manifest %llu",
-		                        delete_file.entry_idx, delete_file.manifest_idx);
-	}
-	auto &loads = shared_state.delete_file_loads[delete_file.manifest_idx];
-	return loads[delete_file.entry_idx];
-}
-
-position_delete_map_t &ClientSideScanPlanProvider::PositionalDeleteData() {
-	return shared_state.positional_delete_data;
 }
 
 } // namespace duckdb

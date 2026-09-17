@@ -30,7 +30,7 @@ static string SnapshotOperationToString(IcebergSnapshotOperationType type) {
 
 struct IcebergSnaphotsBindData : public TableFunctionData {
 	IcebergSnaphotsBindData() {};
-	IcebergTableMetadata metadata;
+	IcebergTableMetadata metadata {IcebergTableMetadataSchemas {}};
 };
 
 struct IcebergSnapshotGlobalTableFunctionState : public GlobalTableFunctionState {
@@ -46,7 +46,7 @@ public:
 		return std::move(global_state);
 	}
 
-	IcebergTableMetadata metadata;
+	IcebergTableMetadata metadata {IcebergTableMetadataSchemas {}};
 	unordered_map<int64_t, IcebergSnapshot>::iterator snapshot_it;
 };
 

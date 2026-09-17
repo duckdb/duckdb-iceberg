@@ -89,7 +89,7 @@ jobs:
         with:
           build-type: release
           build: python3 duckdb/scripts/ci/retry.py -- make release
-          vcpkg-commit: 84bab45d415d22042bd0b9081aea57f362da3f35
+          vcpkg-commit: cd61e1e26a038e82d6550a3ebbe0fbbfe7da78e3 # Release 2026.06.24
 
       - name: Set up Docker Compose
         uses: docker/setup-compose-action@v1
@@ -146,7 +146,7 @@ jobs:
         with:
           build-type: release
           build: python3 duckdb/scripts/ci/retry.py -- make -C base release
-          vcpkg-commit: 84bab45d415d22042bd0b9081aea57f362da3f35
+          vcpkg-commit: cd61e1e26a038e82d6550a3ebbe0fbbfe7da78e3 # Release 2026.06.24
 
       - name: Regression Test TPCH
         run: |
@@ -165,6 +165,11 @@ jobs:
         run: |
           ls benchmark/rewrite_data_files/*.benchmark > .github/regression/rewrite_data_files.csv
           python duckdb/scripts/regression/test_runner.py --old base/build/release/benchmark/benchmark_runner --new build/release/benchmark/benchmark_runner --benchmarks .github/regression/rewrite_data_files.csv --verbose --threads 2 --benchmark-cache=clear
+
+      - name: Regression Test General Performance Benchmarks
+        run: |
+          ls benchmark/performance/*.benchmark > .github/regression/performance.csv
+          python duckdb/scripts/regression/test_runner.py --old base/build/release/benchmark/benchmark_runner --new build/release/benchmark/benchmark_runner --benchmarks .github/regression/performance.csv --verbose --threads 2 --benchmark-cache=clear
 
       # Runs last on purpose. These benchmarks create 102 tables in the fixture's 'default'
       # namespace, which would grow every ListTables response the steps above make and add noise to

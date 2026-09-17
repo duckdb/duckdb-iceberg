@@ -1,0 +1,139 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/delete/equality_deletes/test_equality_delete_fast_filter_cache.test
+# description: Shared filters retain reader-local mappings and sequence applicability across parallel scans
+# group: [equality_deletes]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require-env EQUALITY_DELETE_WRITES_ENABLED 1
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+statement ok
+set iceberg_use_server_side_scan_planning=false;
+
+statement ok
+set unsafe_and_disabled_for_iceberg_v3_enable_equality_deletes=true;
+
+# Writes are serial and produce one file per batch. Only reads use multiple
+# threads: they share immutable files and never mutate catalog state.
+statement ok
+set threads=1;
+
+statement ok
+drop table if exists my_datalake.default.eq_fast_cache;
+
+statement ok
+create table my_datalake.default.eq_fast_cache (id integer, early_key integer, shared_key integer);
+
+statement ok
+create table eq_fast_cache_input as
+select batch, batch * 4097 + i as id, i % 8 as early_key, (i // 8) % 8 as shared_key
+from range(9) batches(batch), range(4097) rows(i);
+
+loop batch 0 4
+
+statement ok
+insert into my_datalake.default.eq_fast_cache
+select id, early_key, shared_key from eq_fast_cache_input where batch = {batch} order by id;
+
+endloop
+
+statement ok
+delete from my_datalake.default.eq_fast_cache where early_key = 1;
+
+# The old delete file now requires an INTEGER -> BIGINT cast before hashing.
+statement ok
+alter table my_datalake.default.eq_fast_cache alter column early_key set type bigint;
+
+statement ok
+alter table my_datalake.default.eq_fast_cache rename column shared_key to renamed_key;
+
+loop batch 4 8
+
+statement ok
+insert into my_datalake.default.eq_fast_cache
+select id, early_key, shared_key from eq_fast_cache_input where batch = {batch} order by id;
+
+endloop
+
+# Both files have the same key layout and apply to all eight data files. In
+# readers for batches 0..3 the private keys are [early_key, renamed_key]; in
+# readers for batches 4..7 they are [renamed_key]. Cached probe positions would
+# therefore be incorrect even though the shared hash table itself is identical.
+statement ok
+delete from my_datalake.default.eq_fast_cache where renamed_key = 2;
+
+statement ok
+delete from my_datalake.default.eq_fast_cache where renamed_key = 3;
+
+# A ninth file has matching key values but is newer than every delete.
+statement ok
+insert into my_datalake.default.eq_fast_cache
+select id, early_key, shared_key from eq_fast_cache_input where batch = 8 order by id;
+
+query II rowsort
+select content, count(*) from iceberg_metadata(my_datalake.default.eq_fast_cache)
+where status != 'DELETED' group by content;
+----
+DATA	9
+EQUALITY_DELETES	3
+
+statement ok
+create table eq_fast_cache_expected as
+select id from eq_fast_cache_input
+where batch = 8 or ((batch >= 4 or early_key != 1) and shared_key not in (2, 3));
+
+statement ok
+call enable_logging('Iceberg');
+
+foreach threads 1 4
+
+statement ok
+set threads={threads};
+
+foreach fast_filter true false
+
+statement ok
+set iceberg_equality_delete_fast_filter={fast_filter};
+
+# Repeated queries create new query-local caches, exercising both cold builds
+# and readers sharing a layout within each scan.
+loop repetition 0 2
+
+statement ok
+call truncate_duckdb_logs();
+
+statement ok
+create or replace table eq_fast_cache_actual as select id from my_datalake.default.eq_fast_cache;
+
+query I
+select count(*) from (
+	(select * from eq_fast_cache_actual except all select * from eq_fast_cache_expected)
+	union all
+	(select * from eq_fast_cache_expected except all select * from eq_fast_cache_actual)
+);
+----
+0
+
+query II
+select
+	(count(*) filter (where message = 'Accelerated 3 of 3 equality-delete files using a hash filter') > 0) = {fast_filter},
+	(count(*) filter (where message = 'Accelerated 2 of 2 equality-delete files using a hash filter') > 0) = {fast_filter}
+from duckdb_logs() where type = 'Iceberg';
+----
+true	true
+
+endloop
+
+endloop
+
+endloop
+
+statement ok
+drop table my_datalake.default.eq_fast_cache;

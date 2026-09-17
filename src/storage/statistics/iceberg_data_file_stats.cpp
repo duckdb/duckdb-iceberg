@@ -15,7 +15,7 @@ namespace duckdb {
 
 namespace {
 
-static bool IsMapType(const string &col_name, IcebergTableSchema &table_schema) {
+static bool IsMapType(const string &col_name, const IcebergTableSchema &table_schema) {
 	for (auto &col : table_schema.columns) {
 		if (col->name == col_name) {
 			if (col->type.id() == LogicalTypeId::MAP) {
@@ -80,7 +80,7 @@ void IcebergDataFileStats::PopulateFromReturnStats(ClientContext &context, Icebe
 	}
 
 	auto table_current_schema_id = table_metadata.GetCurrentSchemaId();
-	auto &ic_schema = table_metadata.GetSchemas().at(table_current_schema_id);
+	auto &ic_schema = table_metadata.GetSchemaFromId(table_current_schema_id);
 	auto &map_children = MapValue::GetChildren(column_stats);
 
 	//! Variant columns emit one stats entry per shredded leaf — accumulate them
@@ -98,7 +98,7 @@ void IcebergDataFileStats::PopulateFromReturnStats(ClientContext &context, Icebe
 		}
 
 		optional_idx name_offset;
-		auto column_info_p = ic_schema->GetFromPath(StringsToIdentifiers(column_names), &name_offset);
+		auto column_info_p = ic_schema.GetFromPath(StringsToIdentifiers(column_names), &name_offset);
 		if (!column_info_p) {
 			auto normalized_col_name = StringUtil::Join(column_names, ".");
 			throw InternalException("Column '%s' can not be found in the schema, but returned by RETURN_STATS",
@@ -112,7 +112,7 @@ void IcebergDataFileStats::PopulateFromReturnStats(ClientContext &context, Icebe
 		auto stats = IcebergColumnStats::ParseColumnStats(column_info.type, col_stats, context);
 
 		//! Map types cannot violate NOT NULL; empty maps look like null maps.
-		bool is_map = IsMapType(column_names[0], *ic_schema);
+		bool is_map = IsMapType(column_names[0], ic_schema);
 		if (!is_map && column_info.required && stats.null_count && *stats.null_count > 0) {
 			auto normalized_col_name = StringUtil::Join(column_names, ".");
 			throw ConstraintException("NOT NULL constraint failed: %s.%s", table_name, normalized_col_name);
@@ -180,7 +180,7 @@ void IcebergDataFileStats::PopulateFromReturnStats(ClientContext &context, Icebe
 
 	for (auto &entry : variant_bounds) {
 		auto variant_metrics =
-		    GetColumnMetricsConfig(table_metadata, default_metrics, GetColumnNameBySourceId(*ic_schema, entry.first));
+		    GetColumnMetricsConfig(table_metadata, default_metrics, GetColumnNameBySourceId(ic_schema, entry.first));
 		if (variant_metrics.mode != IcebergMetricsMode::TRUNCATE && variant_metrics.mode != IcebergMetricsMode::FULL) {
 			continue;
 		}

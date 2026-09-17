@@ -252,8 +252,6 @@ static void GetIcebergSchemaPropertiesFunction(ClientContext &context, TableFunc
 	iceberg_schema->LoadProperties(context);
 
 	auto schema_key = iceberg_schema->GetSchemaKey();
-
-	auto &iceberg_transaction = IcebergTransaction::Get(context, iceberg_schema->catalog);
 	auto &schema_properties = iceberg_schema->schema_info.properties;
 
 	if (schema_properties.empty()) {

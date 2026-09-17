@@ -186,7 +186,7 @@ class TestSparkRead:
         ]
 
     @pytest.mark.requires_spark(">=4.0")
-    @pytest.mark.requires_capabilities("format_v3")
+    @pytest.mark.requires_capabilities("format_v3", "allows_cleanup")
     def test_duckdb_written_deletion_vectors(self, spark_con):
         # requires test_delete_consolidation_transactional.test to run
         res = spark_con.sql(

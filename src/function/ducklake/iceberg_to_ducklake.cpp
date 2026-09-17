@@ -123,7 +123,7 @@ public:
 		table.schema_name = schema.schema_name;
 
 		//! Current schema state
-		optional_ptr<IcebergTableSchema> last_schema;
+		optional_ptr<const IcebergTableSchema> last_schema;
 
 		//! Current partition state
 		optional_idx current_partition_spec_id;
@@ -144,7 +144,7 @@ public:
 			}
 
 			//! Process the schema changes
-			auto &current_schema = *metadata.GetSchemaFromId(snapshot.GetSchemaId());
+			auto &current_schema = metadata.GetSchemaFromId(snapshot.GetSchemaId());
 			auto current_columns = SchemaToColumns(current_schema);
 			vector<DuckLakeColumn> added_columns;
 			vector<int64_t> dropped_columns;

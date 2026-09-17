@@ -100,7 +100,7 @@ TableFunction IcebergTableSchemaVersion::GetScanFunction(ClientContext &context,
 	}
 	const auto schema_id = this->schema_id.GetIndex();
 	const auto &metadata = table_info.table_metadata;
-	const auto &iceberg_schema = *metadata.GetSchemaFromId(schema_id);
+	const auto &iceberg_schema = metadata.GetSchemaFromId(schema_id);
 
 	// The pinned metadata object's current snapshot is the transaction-visible head. Only an explicit AT clause
 	// selects a different snapshot.

@@ -45,6 +45,10 @@ template <class TRANSFORM>
 static bool MatchBoundsConstantTemplated(const Value &constant, ExpressionType comparison_type,
                                          const IcebergPredicateStats &stats, const IcebergTransform &transform) {
 	auto constant_value = TRANSFORM::ApplyTransform(constant, transform);
+	if (constant_value.IsNull()) {
+		//! Comparison with NULL is never true here
+		return false;
+	}
 
 	if (stats.BoundsAreNull()) {
 		// bounds are actually null, expression is not a null comparison expression

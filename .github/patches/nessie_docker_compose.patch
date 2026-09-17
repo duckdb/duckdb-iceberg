@@ -1,0 +1,96 @@
+diff --git a/docker/catalog-auth-s3/docker-compose.yml b/docker/catalog-auth-s3/docker-compose.yml
+index ce84b7aef..f9cbf9080 100644
+--- a/docker/catalog-auth-s3/docker-compose.yml
++++ b/docker/catalog-auth-s3/docker-compose.yml
+@@ -68,7 +68,7 @@ services:
+       # Management port (metrics and health checks)
+       - "9000:9000"
+     depends_on:
+-      minio:
++      seaweedfs:
+         condition: service_healthy
+       keycloak:
+         condition: service_healthy
+@@ -83,7 +83,7 @@ services:
+       - quarkus.oidc.client-id=client1
+       - quarkus.oidc.token.issuer=http://127.0.0.1:8080/realms/iceberg
+       # Object store settings.
+-      # This example uses MinIO as the object store.
++      # This example uses SeaweedFS as the object store.
+       - nessie.catalog.default-warehouse=warehouse
+       - nessie.catalog.warehouses.warehouse.location=s3://demobucket/
+       - nessie.catalog.service.s3.default-options.region=us-east-1
+@@ -91,9 +91,9 @@ services:
+       - nessie.catalog.service.s3.default-options.access-key=urn:nessie-secret:quarkus:nessie.catalog.secrets.access-key
+       - nessie.catalog.secrets.access-key.name=minioadmin
+       - nessie.catalog.secrets.access-key.secret=minioadmin
+-      # MinIO endpoint for Nessie server
+-      - nessie.catalog.service.s3.default-options.endpoint=http://minio:9000/
+-      # MinIO endpoint for clients (on the Podman/Docker host)
++      # SeaweedFS endpoint for Nessie server
++      - nessie.catalog.service.s3.default-options.endpoint=http://seaweedfs:9000/
++      # SeaweedFS endpoint for clients (on the Podman/Docker host)
+       - nessie.catalog.service.s3.default-options.external-endpoint=http://127.0.0.1:9002/
+       # Authorization settings.
+       # In this example, Nessie is configured with 3 clients and 3 rules:
+@@ -110,38 +110,40 @@ services:
+       timeout: 2s
+       retries: 15
+ 
+-  # MinIO
+-  minio:
+-    image: quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z
++  # SeaweedFS
++  seaweedfs:
++    image: chrislusf/seaweedfs:4.47
+     ports:
+       # API port
+       - "9002:9000"
+-      # MinIO UI, browse to http://localhost:9092 to view the MinIO Object Browser
+-      - "9092:9090"
+     environment:
+-      - MINIO_ROOT_USER=minioadmin
+-      - MINIO_ROOT_PASSWORD=minioadmin
+-      - MINIO_ADDRESS=:9000
+-      - MINIO_CONSOLE_ADDRESS=:9090
+-    command: server /data
++      - AWS_ACCESS_KEY_ID=minioadmin
++      - AWS_SECRET_ACCESS_KEY=minioadmin
++    command: ["server", "-dir=/data", "-ip=seaweedfs", "-s3", "-s3.port=9000"]
+     healthcheck:
+-      test: "bash -c '[[ \"$(exec 3<>/dev/tcp/localhost/9000 && echo -e '\"'\"'GET /minio/health/live HTTP/1.1\\r\\nHost: localhost\\r\\nConnection: close\\r\\n\\r\\n'\"'\"' >&3 && cat <&3 | head -n 1)\" == *\"200 OK\"* ]] || exit 1'"
++      test: ["CMD", "curl", "-f", "http://localhost:9000/status"]
+       interval: 5s
+       timeout: 2s
+       retries: 15
+ 
+-  # Create MinIO bucket
+-  minio-setup:
+-    image: quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z
++  # Create the warehouse bucket
++  s3-init:
++    image: amazon/aws-cli:2.36.44
+     depends_on:
+-      minio:
++      seaweedfs:
+         condition: service_healthy
+-    entrypoint: /bin/bash
+     restart: "no"
+-    command: [
+-      "-c",
+-      "mc alias set myminio http://minio:9000/ minioadmin minioadmin ; mc admin info myminio ; mc mb myminio/demobucket --ignore-existing"
+-      ]
++    environment:
++      - AWS_ACCESS_KEY_ID=minioadmin
++      - AWS_SECRET_ACCESS_KEY=minioadmin
++      - AWS_REGION=us-east-1
++    entrypoint: ["/bin/sh", "-c"]
++    command:
++      - |
++        until aws --endpoint-url http://seaweedfs:9000 s3 mb s3://demobucket; do
++          echo 'Waiting for SeaweedFS...'
++          sleep 2
++        done
+ 
+   # Keycloak with the "iceberg" realm
+   # This example uses Keycloak as the identity provider for Nessie.

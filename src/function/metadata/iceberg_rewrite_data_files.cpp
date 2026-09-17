@@ -138,11 +138,7 @@ static unique_ptr<QueryNode> BuildCandidateSelect(const QualifiedName &table_nam
 //! rewrite copy.
 static unique_ptr<LogicalOperator> BindCandidateCopy(Binder &binder, const RewritePlan &plan) {
 	auto &metadata = plan.table_info->table_metadata;
-	auto schema_id = metadata.GetCurrentSchemaId();
-	auto schema_it = metadata.GetSchemas().find(schema_id);
-	if (schema_it == metadata.GetSchemas().end()) {
-		throw InternalException("iceberg_rewrite_data_files: current schema id %d not found in metadata", schema_id);
-	}
+	auto &current_schema = metadata.GetLatestSchema();
 
 	auto &fs = FileSystem::GetFileSystem(binder.context);
 	CopyStatement copy_statement;
@@ -151,7 +147,7 @@ static unique_ptr<LogicalOperator> BindCandidateCopy(Binder &binder, const Rewri
 	copy_statement.info->format = "parquet";
 	copy_statement.info->is_from = false;
 	copy_statement.info->is_format_auto_detected = false;
-	copy_statement.info->options["field_ids"].push_back(schema_it->second->GetFieldIds());
+	copy_statement.info->options["field_ids"].push_back(current_schema.GetFieldIds());
 	copy_statement.info->options["filename_pattern"].push_back(Value("{uuidv7}"));
 	copy_statement.info->options["file_size_bytes"].push_back(
 	    Value::UBIGINT(static_cast<uint64_t>(plan.target_file_size_bytes)));

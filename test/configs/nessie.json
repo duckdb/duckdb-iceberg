@@ -142,7 +142,10 @@
 				"test/sql/local/catalog_test_config_setup/catalog_agnostic/delete/test_snapshot_summary_delete_metrics.test",
 				"test/sql/local/catalog_test_config_setup/catalog_agnostic/maintenance/rollback_to_snapshot.test",
 				"test/sql/local/catalog_test_config_setup/catalog_agnostic/maintenance/rollback_to_snapshot_partition_transforms.test",
-				"test/sql/local/catalog_test_config_setup/catalog_agnostic/maintenance/rollback_to_snapshot_schema_retained.test"
+				"test/sql/local/catalog_test_config_setup/catalog_agnostic/maintenance/rollback_to_snapshot_schema_retained.test",
+				"test/sql/local/catalog_test_config_setup/catalog_agnostic/test_time_travel_future_timestamp.test",
+				"test/sql/local/catalog_test_config_setup/catalog_agnostic/scan_planning/scan_tasks.test",
+				"test/sql/local/catalog_test_config_setup/catalog_agnostic/scan_planning/scan_plan.test"
 			]
 		},
 		{

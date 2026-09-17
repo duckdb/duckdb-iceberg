@@ -56,12 +56,4 @@ bool IcebergDeletePlanner::DeleteEntryAppliesToDataFile(const IcebergDeletePlann
 	                               data_partition_values);
 }
 
-shared_ptr<IcebergDeleteData>
-IcebergDeletePlanner::GetExistingPositionalDeleteData(const IcebergDeletePlanningContext &context,
-                                                      const string &file_path) {
-	auto &positional_delete_data = context.provider.PositionalDeleteData();
-	auto it = positional_delete_data.find(file_path);
-	return it == positional_delete_data.end() ? nullptr : it->second;
-}
-
 } // namespace duckdb

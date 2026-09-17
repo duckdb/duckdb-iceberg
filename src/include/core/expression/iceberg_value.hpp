@@ -82,6 +82,8 @@ public:
 	IcebergValue() = delete;
 
 public:
+	//! Convert a decoded manifest partition value to its source column type.
+	static Value TransformPartitionValue(const Value &value, const LogicalType &type);
 	static DeserializeResult DeserializeValue(const string_t &blob, const LogicalType &target);
 	static SerializeResult SerializeValue(IcebergColumnStats &stats, const LogicalType &column_type,
 	                                      SerializeBound bound_type);
