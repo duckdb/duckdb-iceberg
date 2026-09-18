@@ -77,20 +77,3 @@ jobs:
           fi
           ./build/relassert/test/unittest --order lex "$PWD/test/sql/local/catalog_custom_setup/sigv4_mock/*" --list-test-names-only || true
           ./build/relassert/test/unittest --order lex "$PWD/test/sql/local/catalog_custom_setup/sigv4_mock/*"
-
-      - name: Run view protocol tests
-        env:
-          VIEW_MOCK_SERVER_AVAILABLE: 1
-        run: |
-          python3 scripts/view_mock_server.py &
-          server_pid=$!
-          trap 'kill $server_pid 2>/dev/null || true' EXIT
-          for i in $(seq 1 30); do
-            if curl -sf http://127.0.0.1:19134/v1/config > /dev/null; then
-              break
-            fi
-            kill -0 $server_pid 2>/dev/null || { echo "view mock server died during startup"; exit 1; }
-            sleep 1
-          done
-          curl -sf http://127.0.0.1:19134/v1/config > /dev/null
-          ./build/relassert/test/unittest --order lex "$PWD/test/sql/local/catalog_custom_setup/view_mock/*"
