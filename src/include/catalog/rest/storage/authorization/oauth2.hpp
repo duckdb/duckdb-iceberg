@@ -22,6 +22,10 @@ struct OAuth2Credentials {
 	}
 
 	const OAuth2GrantType grant_type;
+
+	//! Optional user-supplied headers to forward to the OAuth2 token endpoint
+	//! (e.g. `Polaris-Realm` for multi-tenant Polaris catalogs, see issue #978).
+	unordered_map<string, string> extra_http_headers;
 };
 
 struct ClientCredentials : public OAuth2Credentials {

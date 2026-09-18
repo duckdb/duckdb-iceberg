@@ -1,0 +1,75 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_specifc/polaris/test_issue_978_oauth2_extra_headers.test
+# description: extra_http_headers are forwarded to the OAuth2 token request, not only to catalog requests (issue #978)
+# group: [polaris]
+
+require-env CATALOG_TEST_CONFIG_SETUP polaris
+
+require avro
+
+require parquet
+
+require httpfs
+
+require iceberg
+
+require aws
+
+statement ok
+set enable_logging=true
+
+statement ok
+set logging_level='debug'
+
+statement ok
+call enable_logging('HTTP')
+
+statement ok
+call truncate_duckdb_logs()
+
+# The token is fetched when the secret is created, so logging is enabled before this.
+statement ok
+create secret polaris_secret_extra_headers (
+    type ICEBERG,
+    client_id 'root',
+    client_secret 's3cr3t',
+    uri 'http://0.0.0.0:8181/api/catalog',
+    extra_http_headers MAP {'X-Test-Header': 'test-value'}
+)
+
+statement ok
+attach 'quickstart_catalog' as my_datalake_extra_headers (
+    type ICEBERG,
+    secret polaris_secret_extra_headers,
+    uri 'http://0.0.0.0:8181/api/catalog',
+    default_region 'us-west-2'
+)
+
+# Reading works, so the token request authenticated with the extra header present.
+query I
+select count(*) from my_datalake_extra_headers.default.quickstart_table
+----
+3
+
+# The custom header must reach the OAuth2 token request itself (the fix for #978).
+query I
+select request.headers['X-Test-Header']
+from duckdb_logs_parsed('HTTP')
+where request.url like '%oauth/tokens%'
+limit 1
+----
+test-value
+
+# Service headers are still present, i.e. the user header did not clobber them.
+query I
+select count(*) > 0
+from duckdb_logs_parsed('HTTP')
+where request.url like '%oauth/tokens%'
+  and contains(map_keys(request.headers), 'Authorization')
+----
+true
+
+statement ok
+detach my_datalake_extra_headers
+
+statement ok
+drop secret polaris_secret_extra_headers
