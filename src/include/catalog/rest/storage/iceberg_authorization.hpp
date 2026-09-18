@@ -2,48 +2,12 @@
 
 #include "duckdb/main/secret/secret.hpp"
 #include "duckdb/common/http_util.hpp"
-#include "duckdb/main/client_context_state.hpp"
 
 #include "iceberg_attach.hpp"
 #include "catalog/rest/api/catalog_utils.hpp"
 #include "catalog/rest/api/url_utils.hpp"
 
 namespace duckdb {
-
-struct IcebergHTTPClientSlot {
-	mutex lock;
-	unique_ptr<HTTPClient> client;
-};
-
-class IcebergHTTPClientLock {
-public:
-	IcebergHTTPClientLock(shared_ptr<IcebergHTTPClientSlot> slot, unique_lock<mutex> guard)
-	    : slot(std::move(slot)), guard(std::move(guard)) {
-	}
-
-	unique_ptr<HTTPClient> &GetClient() {
-		return slot->client;
-	}
-
-private:
-	shared_ptr<IcebergHTTPClientSlot> slot;
-	unique_lock<mutex> guard;
-};
-
-//! Reuse HTTP clients without sharing an in-flight client between requests.
-struct IcebergAuthorizationContextState : public ClientContextState {
-public:
-	IcebergAuthorizationContextState() {
-	}
-
-public:
-	static IcebergHTTPClientLock GetHTTPClient(AttachedDatabase &db, ClientContext &context);
-
-public:
-	//! The pool lock only protects checkout. A slot's lock is held for the duration of the request.
-	mutex client_lock;
-	unordered_map<uintptr_t, vector<shared_ptr<IcebergHTTPClientSlot>>> client_map;
-};
 
 struct IcebergAuthorization {
 public:

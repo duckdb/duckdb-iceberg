@@ -2,9 +2,9 @@
 
 #include "duckdb/common/exception.hpp"
 #include "duckdb/common/http_util.hpp"
+#include "duckdb/common/http_transport_manager.hpp"
 #include "duckdb/main/extension_helper.hpp"
 #include "duckdb/common/exception/http_exception.hpp"
-#include "duckdb/common/optional.hpp"
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/main/client_data.hpp"
 #include "duckdb/main/database.hpp"
@@ -12,9 +12,9 @@
 
 namespace duckdb {
 
-unique_ptr<HTTPResponse> APIUtils::Request(RequestType request_type, optional_ptr<AttachedDatabase> attached_db,
-                                           ClientContext &context, const IRCEndpointBuilder &endpoint_builder,
-                                           HTTPHeaders &headers, const string &data) {
+unique_ptr<HTTPResponse> APIUtils::Request(RequestType request_type, ClientContext &context,
+                                           const IRCEndpointBuilder &endpoint_builder, HTTPHeaders &headers,
+                                           const string &data) {
 	// load httpfs since iceberg requests do not go through the file system api
 	if (!context.db.get()) {
 		throw InvalidConfigurationException("Context does not have database instance when loading Httpfs in Iceberg");
@@ -27,39 +27,28 @@ unique_ptr<HTTPResponse> APIUtils::Request(RequestType request_type, optional_pt
 	auto &db = DatabaseInstance::GetDatabase(context);
 	string request_url = AddHttpHostIfMissing(endpoint_builder.GetURLEncoded());
 
-	auto &http_util = HTTPUtil::Get(db);
-	unique_ptr<HTTPParams> params;
-	params = http_util.InitializeParameters(context, request_url);
-
-	unique_ptr<HTTPClient> placeholder_client;
-	optional<IcebergHTTPClientLock> locked_client;
-	if (attached_db) {
-		locked_client.emplace(IcebergAuthorizationContextState::GetHTTPClient(*attached_db, context));
-	}
-	auto &client = locked_client ? locked_client->GetClient() : placeholder_client;
-	if (client) {
-		client->Initialize(*params);
-	}
+	auto session = db.config.GetHTTPTransportManager().CreateSession(context, request_url);
+	auto &params = session.Parameters();
 
 	switch (request_type) {
 	case RequestType::GET_REQUEST: {
-		GetRequestInfo get_request(request_url, headers, *params, nullptr, nullptr);
-		return http_util.Request(get_request, client);
+		GetRequestInfo get_request(request_url, headers, params, nullptr, nullptr);
+		return session.Request(get_request);
 	}
 	case RequestType::DELETE_REQUEST: {
-		DeleteRequestInfo delete_request(request_url, headers, *params);
-		return http_util.Request(delete_request, client);
+		DeleteRequestInfo delete_request(request_url, headers, params);
+		return session.Request(delete_request);
 	}
 	case RequestType::POST_REQUEST: {
-		PostRequestInfo post_request(request_url, headers, *params, reinterpret_cast<const_data_ptr_t>(data.data()),
+		PostRequestInfo post_request(request_url, headers, params, reinterpret_cast<const_data_ptr_t>(data.data()),
 		                             data.size());
-		auto response = http_util.Request(post_request, client);
+		auto response = session.Request(post_request);
 		response->body = post_request.buffer_out;
 		return response;
 	}
 	case RequestType::HEAD_REQUEST: {
-		HeadRequestInfo head_request(request_url, headers, *params);
-		return http_util.Request(head_request, client);
+		HeadRequestInfo head_request(request_url, headers, params);
+		return session.Request(head_request);
 	}
 	default:
 		throw NotImplementedException("Cannot make request of type %s", EnumUtil::ToString(request_type));

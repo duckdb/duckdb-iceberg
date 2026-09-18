@@ -8,22 +8,6 @@
 
 namespace duckdb {
 
-IcebergHTTPClientLock IcebergAuthorizationContextState::GetHTTPClient(AttachedDatabase &db, ClientContext &context) {
-	auto instance = context.registered_state->GetOrCreate<IcebergAuthorizationContextState>("iceberg_authorization");
-	lock_guard<mutex> pool_guard(instance->client_lock);
-	auto &clients = instance->client_map[reinterpret_cast<uintptr_t>(&db)];
-	for (auto &slot : clients) {
-		unique_lock<mutex> guard(slot->lock, std::try_to_lock);
-		if (guard.owns_lock()) {
-			return IcebergHTTPClientLock(slot, std::move(guard));
-		}
-	}
-	auto slot = make_shared_ptr<IcebergHTTPClientSlot>();
-	clients.push_back(slot);
-	unique_lock<mutex> guard(slot->lock);
-	return IcebergHTTPClientLock(std::move(slot), std::move(guard));
-}
-
 IcebergAuthorizationType IcebergAuthorization::TypeFromString(const string &type) {
 	static const case_insensitive_map_t<IcebergAuthorizationType> mapping {{"oauth2", IcebergAuthorizationType::OAUTH2},
 	                                                                       {"sigv4", IcebergAuthorizationType::SIGV4},
