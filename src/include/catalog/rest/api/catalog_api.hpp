@@ -108,8 +108,8 @@ public:
 	                                                        const string &warehouse);
 
 	//! View operations
-	static vector<rest_api_objects::TableIdentifier> GetViews(ClientContext &context, IcebergCatalog &catalog,
-	                                                          const IcebergSchemaEntry &schema);
+	static optional<vector<rest_api_objects::TableIdentifier>> GetViews(ClientContext &context, IcebergCatalog &catalog,
+	                                                                    const IcebergSchemaEntry &schema);
 	static APIResult<unique_ptr<const rest_api_objects::LoadViewResult>>
 	GetView(ClientContext &context, IcebergCatalog &catalog, const IcebergSchemaEntry &schema, const string &view_name);
 	static void CommitNewView(ClientContext &context, IcebergCatalog &catalog, const IcebergSchemaEntry &schema,

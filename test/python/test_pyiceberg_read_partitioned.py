@@ -4,7 +4,7 @@ import datetime
 import uuid
 from decimal import Decimal
 
-from conftest import *
+from conftest import capability_param
 
 pyice = pytest.importorskip("pyiceberg")
 pa = pytest.importorskip("pyarrow")

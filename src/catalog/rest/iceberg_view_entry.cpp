@@ -1,5 +1,8 @@
 #include "catalog/rest/iceberg_view_entry.hpp"
 #include "duckdb/common/exception/binder_exception.hpp"
+#include "duckdb/catalog/catalog.hpp"
+#include "duckdb/main/client_context.hpp"
+#include "duckdb/main/config.hpp"
 
 #include "duckdb/parser/parsed_data/create_view_info.hpp"
 #include "duckdb/parser/parsed_expression_iterator.hpp"
@@ -47,7 +50,8 @@ unique_ptr<CatalogEntry> UnsupportedIcebergViewEntry::Copy(ClientContext &contex
 
 class ViewReferenceQualifier {
 public:
-	ViewReferenceQualifier(const Identifier &catalog, const Identifier &schema) : catalog(catalog), schema(schema) {
+	ViewReferenceQualifier(ClientContext &context, const Identifier &catalog, const Identifier &schema)
+	    : context(context), catalog(catalog), schema(schema) {
 	}
 
 	void Query(QueryNode &node, identifier_set_t ctes) {
@@ -86,7 +90,7 @@ public:
 			Expression(select.where_clause, ctes);
 			Expression(select.having, ctes);
 			Expression(select.qualify, ctes);
-			Table(*select.from_table, ctes);
+			Table(select.from_table, ctes);
 			break;
 		}
 		case QueryNodeType::SET_OPERATION_NODE:
@@ -123,12 +127,37 @@ private:
 		    *expr, [&](unique_ptr<ParsedExpression> &child) { Expression(child, ctes); });
 	}
 
-	void Table(TableRef &ref, const identifier_set_t &ctes) {
+	void Table(unique_ptr<TableRef> &reference, const identifier_set_t &ctes) {
+		auto &ref = *reference;
 		switch (ref.type) {
 		case TableReferenceType::BASE_TABLE: {
 			auto &table = ref.Cast<BaseTableRef>();
 			auto &name = table.GetQualifiedName();
 			if (name.Path().size() == 1 && !ctes.count(name.Name())) {
+				// Resolve file shorthand before qualification would turn a file path into
+				// "catalog.schema.path". An actual catalog table still takes precedence.
+				ReplacementScanInput input(name);
+				if (context.config.use_replacement_scans) {
+					for (auto &scan : DBConfig::GetConfig(context).replacement_scans) {
+						auto replacement = scan.function(context, input, scan.data.get());
+						if (!replacement || replacement->type != TableReferenceType::TABLE_FUNCTION) {
+							continue;
+						}
+						EntryLookupInfo lookup(CatalogType::TABLE_ENTRY, QualifiedName(catalog, schema, name.Name()));
+						if (Catalog::GetEntry(context, lookup, OnEntryNotFound::RETURN_NULL)) {
+							break;
+						}
+						if (!ref.alias.empty()) {
+							replacement->alias = ref.alias;
+						} else if (replacement->alias.empty()) {
+							replacement->alias = name.Name();
+						}
+						replacement->column_name_alias = ref.column_name_alias;
+						replacement->sample = ref.sample ? ref.sample->Copy() : nullptr;
+						reference = std::move(replacement);
+						return;
+					}
+				}
 				if (schema.empty()) {
 					throw NotImplementedException("Unqualified table references with an empty Iceberg view namespace "
 					                              "are not supported");
@@ -144,8 +173,8 @@ private:
 			break;
 		case TableReferenceType::JOIN: {
 			auto &join = ref.Cast<JoinRef>();
-			Table(*join.left, ctes);
-			Table(*join.right, ctes);
+			Table(join.left, ctes);
+			Table(join.right, ctes);
 			Expression(join.condition, ctes);
 			break;
 		}
@@ -166,7 +195,7 @@ private:
 		}
 		case TableReferenceType::PIVOT: {
 			auto &pivot = ref.Cast<PivotRef>();
-			Table(*pivot.source, ctes);
+			Table(pivot.source, ctes);
 			for (auto &expr : pivot.aggregates) {
 				Expression(expr, ctes);
 			}
@@ -190,15 +219,16 @@ private:
 		}
 	}
 
+	ClientContext &context;
 	Identifier catalog;
 	Identifier schema;
 };
 
-void QualifyIcebergView(SelectStatement &query, const rest_api_objects::ViewVersion &version,
+void QualifyIcebergView(ClientContext &context, SelectStatement &query, const rest_api_objects::ViewVersion &version,
                         const Identifier &owning_catalog) {
 	auto catalog = version.default_catalog ? Identifier(*version.default_catalog) : owning_catalog;
 	auto schema = Identifier(StringUtil::Join(version.default_namespace.value, "."));
-	ViewReferenceQualifier(catalog, schema).Query(*query.node, {});
+	ViewReferenceQualifier(context, catalog, schema).Query(*query.node, {});
 }
 
 } // namespace duckdb

@@ -356,6 +356,20 @@ IcebergTable &IcebergTableSet::CreateNewEntry(ClientContext &context, IcebergCat
 	return table_info;
 }
 
+static bool EntryMissingFromListing(const optional<vector<rest_api_objects::TableIdentifier>> &listing,
+                                    const string &name) {
+	// A refused listing is not evidence that an entry is absent: retain the direct lookup.
+	if (!listing) {
+		return false;
+	}
+	for (auto &entry : *listing) {
+		if (StringUtil::CIEquals(entry.name, name)) {
+			return false;
+		}
+	}
+	return true;
+}
+
 optional_ptr<CatalogEntry> IcebergTableSet::GetEntry(ClientContext &context, const EntryLookupInfo &lookup) {
 	auto &ic_catalog = catalog.Cast<IcebergCatalog>();
 	auto &iceberg_transaction = IcebergTransaction::Get(context, catalog);
@@ -377,6 +391,13 @@ optional_ptr<CatalogEntry> IcebergTableSet::GetEntry(ClientContext &context, con
 		return table_info.GetSchemaVersion(at);
 	}
 
+	// File replacement scans first probe the catalog. Some REST servers reject encoded
+	// path separators before routing, so use the listing to rule out absent path names.
+	// Listed entries and transaction-local tables still take precedence over files.
+	if (table_name.find_first_of("/\\") != string::npos &&
+	    EntryMissingFromListing(IRCAPI::GetTables(context, ic_catalog, schema), table_name)) {
+		return nullptr;
+	}
 	auto new_version = IcebergTable::CreatePlaceholder(ic_catalog, schema, table_name);
 	auto &table_info = *new_version;
 	if (!FillEntry(context, table_info)) {
@@ -409,8 +430,11 @@ const case_insensitive_set_t &IcebergTableSet::LoadViewEntries(ClientContext &co
 	auto &ic_catalog = catalog.Cast<IcebergCatalog>();
 	case_insensitive_set_t names;
 	if (ic_catalog.supported_urls.count("GET /v1/{prefix}/namespaces/{namespace}/views")) {
-		for (auto &view : IRCAPI::GetViews(context, ic_catalog, schema)) {
-			names.insert(view.name);
+		auto views = IRCAPI::GetViews(context, ic_catalog, schema);
+		if (views) {
+			for (auto &view : *views) {
+				names.insert(view.name);
+			}
 		}
 	}
 	return transaction.listed_views.emplace(schema_name, std::move(names)).first->second;
@@ -441,6 +465,13 @@ optional_ptr<CatalogEntry> IcebergTableSet::GetViewEntry(ClientContext &context,
 	// Check if the view endpoint is supported
 	if (ic_catalog.supported_urls.find("GET /v1/{prefix}/namespaces/{namespace}/views/{view}") ==
 	    ic_catalog.supported_urls.end()) {
+		return nullptr;
+	}
+
+	// Apply the same file-path probe handling as table lookup, after local view resolution.
+	if (view_name.find_first_of("/\\") != string::npos &&
+	    ic_catalog.supported_urls.count("GET /v1/{prefix}/namespaces/{namespace}/views") &&
+	    EntryMissingFromListing(IRCAPI::GetViews(context, ic_catalog, schema), view_name)) {
 		return nullptr;
 	}
 
@@ -517,7 +548,7 @@ optional_ptr<CatalogEntry> IcebergTableSet::GetViewEntry(ClientContext &context,
 	}
 	if (view_query && current_version) {
 		try {
-			QualifyIcebergView(*view_query, *current_version, catalog.GetName());
+			QualifyIcebergView(context, *view_query, *current_version, catalog.GetName());
 		} catch (const NotImplementedException &ex) {
 			unsupported_reason = ex.what();
 			view_query.reset();

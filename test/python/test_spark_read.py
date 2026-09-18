@@ -4,7 +4,7 @@ import datetime
 from decimal import Decimal
 from math import inf
 
-from conftest import *
+from conftest import is_active_catalog
 
 from pprint import pprint
 

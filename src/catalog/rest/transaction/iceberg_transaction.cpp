@@ -10,6 +10,7 @@
 #include "duckdb/storage/table/update_state.hpp"
 #include "duckdb/parser/parsed_data/drop_info.hpp"
 #include "duckdb/main/client_data.hpp"
+#include "duckdb/main/query_result.hpp"
 #include "duckdb/common/json_document.hpp"
 
 #include <chrono>
@@ -813,10 +814,16 @@ void IcebergTransaction::DoViewCreates(ClientContext &context) {
 		auto fields_arr = writer.CreateArray();
 		schema_obj.Add("fields", fields_arr);
 		idx_t next_field_id = 1;
+		auto column_names = view_info->names;
+		for (idx_t i = 0; i < view_info->aliases.size(); i++) {
+			if (!view_info->aliases[i].empty()) {
+				column_names[i] = view_info->aliases[i];
+			}
+		}
+		// Iceberg schemas require unique field names, just like a bound DuckDB view.
+		QueryResult::DeduplicateColumns(column_names);
 		for (idx_t i = 0; i < view_info->types.size(); i++) {
-			auto &col_name = i < view_info->aliases.size() && !view_info->aliases[i].GetIdentifierName().empty()
-			                     ? view_info->aliases[i]
-			                     : view_info->names[i];
+			auto &col_name = column_names[i];
 			auto field = IcebergTypeHelper::CreateIcebergRestType(
 			    col_name.GetIdentifierName(), view_info->types[i], false, "", Value(),
 			    [&next_field_id]() { return next_field_id++; }, 2);

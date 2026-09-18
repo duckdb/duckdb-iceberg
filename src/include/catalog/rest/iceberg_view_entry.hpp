@@ -20,7 +20,7 @@ private:
 };
 
 //! Resolve omitted table qualifications using the persisted view version, without changing CTE references.
-void QualifyIcebergView(SelectStatement &query, const rest_api_objects::ViewVersion &version,
+void QualifyIcebergView(ClientContext &context, SelectStatement &query, const rest_api_objects::ViewVersion &version,
                         const Identifier &owning_catalog);
 
 } // namespace duckdb

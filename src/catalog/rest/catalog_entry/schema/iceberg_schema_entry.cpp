@@ -71,7 +71,7 @@ bool IcebergSchemaEntry::HandleCreateConflict(CatalogTransaction &transaction, C
 	}
 	switch (on_conflict) {
 	case OnCreateConflict::ERROR_ON_CONFLICT:
-		throw CatalogException("%s with name \"%s\" already exists", CatalogTypeToString(existing_entry->type),
+		throw CatalogException("%s with name \"%s\" already exists!", CatalogTypeToString(existing_entry->type),
 		                       entry_name);
 	case OnCreateConflict::IGNORE_ON_CONFLICT: {
 		// ignore - skip without throwing an error
@@ -161,6 +161,10 @@ void IcebergSchemaEntry::DropEntry(ClientContext &context, DropInfo &info, bool 
 
 		// Dropping a known view does not require permission to list the namespace.
 		if (!tables.GetViewEntry(context, entry_name)) {
+			EntryLookupInfo lookup(CatalogType::TABLE_ENTRY, QualifiedName(Identifier(entry_name)));
+			if (tables.GetEntry(context, lookup)) {
+				throw CatalogException("Existing object \"%s\" is of type Table, trying to drop type View", entry_name);
+			}
 			if (info.if_not_found == OnEntryNotFound::RETURN_NULL) {
 				return;
 			}
@@ -177,9 +181,14 @@ void IcebergSchemaEntry::DropEntry(ClientContext &context, DropInfo &info, bool 
 		}
 		return;
 	}
-	case CatalogType::TABLE_ENTRY:
+	case CatalogType::TABLE_ENTRY: {
+		EntryLookupInfo lookup(CatalogType::TABLE_ENTRY, QualifiedName(Identifier(entry_name)));
+		if (!tables.GetEntry(context, lookup) && tables.GetViewEntry(context, entry_name)) {
+			throw CatalogException("Existing object \"%s\" is of type View, trying to drop type Table", entry_name);
+		}
 		tables.DropEntry(context, info, delete_entry);
 		return;
+	}
 	default:
 		throw NotImplementedException("DropEntry not implemented for CatalogType '%s'", CatalogTypeToString(info.type));
 	}
@@ -219,14 +228,15 @@ optional_ptr<CatalogEntry> IcebergSchemaEntry::CreateView(CatalogTransaction tra
 		    "CREATE OR REPLACE not supported in DuckDB-Iceberg. Please use separate Drop and Create Statements");
 	}
 
-	auto existing_entry = GetEntry(transaction, CatalogType::VIEW_ENTRY, info.GetViewName());
+	auto existing_entry = GetEntry(transaction, CatalogType::TABLE_ENTRY, info.GetViewName());
 	if (existing_entry) {
 		if (info.on_conflict == OnCreateConflict::IGNORE_ON_CONFLICT) {
-			// CREATE VIEW IF NOT EXISTS — view already exists, nothing to do.
+			// CREATE VIEW IF NOT EXISTS also ignores a table with the same name.
 			return existing_entry;
 		}
 		// ERROR_ON_CONFLICT
-		throw CatalogException("View with name \"%s\" already exists", info.GetViewName().GetIdentifierName());
+		throw CatalogException("%s with name \"%s\" already exists!", CatalogTypeToString(existing_entry->type),
+		                       info.GetViewName().GetIdentifierName());
 	}
 
 	// Generate default column names if the caller gave us types but no names.
@@ -444,12 +454,18 @@ IcebergColumnDefinition &ResolveColumn(T &alter_table_info, const shared_ptr<Ice
 }
 
 void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) {
+	if (info.type == AlterType::ALTER_VIEW) {
+		throw NotImplementedException("ALTER VIEW is not supported in Iceberg catalogs");
+	}
 	auto &irc_transaction = GetICTransaction(transaction);
 	auto &context = transaction.GetContext();
 
 	EntryLookupInfo lookup(CatalogType::TABLE_ENTRY, QualifiedName(info.GetQualifiedName().Name()));
 	auto catalog_entry = tables.GetEntry(context, lookup);
 	if (!catalog_entry) {
+		if (tables.GetViewEntry(context, info.GetQualifiedName().Name().GetIdentifierName())) {
+			throw NotImplementedException("ALTER VIEW is not supported in Iceberg catalogs");
+		}
 		throw CatalogException("Table with name \"%s\" does not exist!", info.GetQualifiedName().Name());
 	}
 	auto &table_entry = catalog_entry->Cast<IcebergTableSchemaVersion>();
@@ -975,7 +991,9 @@ optional_ptr<CatalogEntry> IcebergSchemaEntry::LookupEntry(CatalogTransaction tr
 		if (view_entry) {
 			return view_entry;
 		}
-		return nullptr;
+		// Tables and views share a namespace; DROP must distinguish a wrong type
+		// from a missing entry, including when IF EXISTS was specified.
+		return GetCatalogSet(type).GetEntry(context, lookup_info);
 	}
 
 	// For TABLE_ENTRY, use the existing table lookup

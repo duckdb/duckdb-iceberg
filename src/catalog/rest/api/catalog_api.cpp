@@ -595,8 +595,8 @@ rest_api_objects::LoadTableResult IRCAPI::CommitNewTable(ClientContext &context,
 
 // ─── View operations ─────────────────────────────────────────────────────────
 
-vector<rest_api_objects::TableIdentifier> IRCAPI::GetViews(ClientContext &context, IcebergCatalog &catalog,
-                                                           const IcebergSchemaEntry &schema) {
+optional<vector<rest_api_objects::TableIdentifier>> IRCAPI::GetViews(ClientContext &context, IcebergCatalog &catalog,
+                                                                     const IcebergSchemaEntry &schema) {
 	vector<rest_api_objects::TableIdentifier> all_identifiers;
 	string page_token;
 
@@ -619,7 +619,7 @@ vector<rest_api_objects::TableIdentifier> IRCAPI::GetViews(ClientContext &contex
 			    response->status == HTTPStatusCode::NotFound_404) {
 				DUCKDB_LOG_WARNING(context, "GET %s returned status code %s", url_builder.GetURLEncoded(),
 				                   EnumUtil::ToString(response->status));
-				return all_identifiers;
+				return nullopt;
 			}
 			auto url = url_builder.GetURLEncoded();
 			ThrowException(url, *response, "GET");
