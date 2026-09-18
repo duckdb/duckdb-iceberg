@@ -132,7 +132,7 @@ void IcebergSchemaEntry::DropEntry(ClientContext &context, DropInfo &info) {
 }
 
 void IcebergSchemaEntry::DropEntry(ClientContext &context, DropInfo &info, bool delete_entry) {
-	auto entry_name = info.name;
+	auto entry_name = info.GetQualifiedName().Name().GetIdentifierName();
 
 	// CASCADE is not part of the Iceberg REST spec — reject before any type-specific handling.
 	if (info.cascade) {
@@ -151,18 +151,16 @@ void IcebergSchemaEntry::DropEntry(ClientContext &context, DropInfo &info, bool 
 	switch (info.type) {
 	case CatalogType::VIEW_ENTRY: {
 		auto &transaction = IcebergTransaction::Get(context, catalog).Cast<IcebergTransaction>();
-		auto view_key = IcebergTableInformation::GetTableKey(namespace_items, entry_name);
+		auto view_key = IcebergTable::GetTableKey(catalog.Cast<IcebergCatalog>(), namespace_items, entry_name);
 
 		// Check if view was created in this transaction — just remove from created_views
 		if (transaction.created_views.erase(view_key) > 0) {
-			tables.InvalidateViewCache(entry_name);
+			transaction.InvalidateViewEntry(view_key);
 			return;
 		}
 
-		// Load view entries if not yet loaded, then check if view exists
-		tables.LoadViewEntries(context);
-		auto view_it = tables.GetViewEntries().find(entry_name);
-		if (view_it == tables.GetViewEntries().end()) {
+		// Dropping a known view does not require permission to list the namespace.
+		if (!tables.GetViewEntry(context, entry_name)) {
 			if (info.if_not_found == OnEntryNotFound::RETURN_NULL) {
 				return;
 			}
@@ -170,11 +168,10 @@ void IcebergSchemaEntry::DropEntry(ClientContext &context, DropInfo &info, bool 
 		}
 
 		if (delete_entry) {
-			tables.InvalidateViewCache(entry_name);
+			transaction.InvalidateViewEntry(view_key);
 		} else {
 			IcebergTransaction::DeletedViewInfo info;
 			info.namespace_items = namespace_items;
-			info.schema_name = name;
 			info.view_name = entry_name;
 			transaction.deleted_views.emplace(view_key, std::move(info));
 		}
@@ -209,6 +206,9 @@ optional_ptr<CatalogEntry> IcebergSchemaEntry::CreateIndex(CatalogTransaction tr
 }
 
 optional_ptr<CatalogEntry> IcebergSchemaEntry::CreateView(CatalogTransaction transaction, CreateViewInfo &info) {
+	if (info.security_type != ViewSecurityType::REGULAR_VIEW) {
+		throw NotImplementedException("Secure views are not supported in Iceberg catalogs");
+	}
 	if (info.sql.empty() && !info.query) {
 		throw BinderException("Cannot create view in Iceberg without a query");
 	}
@@ -219,30 +219,31 @@ optional_ptr<CatalogEntry> IcebergSchemaEntry::CreateView(CatalogTransaction tra
 		    "CREATE OR REPLACE not supported in DuckDB-Iceberg. Please use separate Drop and Create Statements");
 	}
 
-	auto existing_entry = GetEntry(transaction, CatalogType::VIEW_ENTRY, info.view_name);
+	auto existing_entry = GetEntry(transaction, CatalogType::VIEW_ENTRY, info.GetViewName());
 	if (existing_entry) {
 		if (info.on_conflict == OnCreateConflict::IGNORE_ON_CONFLICT) {
 			// CREATE VIEW IF NOT EXISTS — view already exists, nothing to do.
 			return existing_entry;
 		}
 		// ERROR_ON_CONFLICT
-		throw CatalogException("View with name \"%s\" already exists", info.view_name);
+		throw CatalogException("View with name \"%s\" already exists", info.GetViewName().GetIdentifierName());
 	}
 
 	// Generate default column names if the caller gave us types but no names.
 	if (info.names.empty() && !info.types.empty()) {
 		for (idx_t i = 0; i < info.types.size(); i++) {
-			if (i < info.aliases.size() && !info.aliases[i].empty()) {
+			if (i < info.aliases.size() && !info.aliases[i].GetIdentifierName().empty()) {
 				info.names.push_back(info.aliases[i]);
 			} else {
-				info.names.push_back("col" + to_string(i));
+				info.names.emplace_back("col" + to_string(i));
 			}
 		}
 	}
 
 	// Track the view in the transaction
 	auto &iceberg_transaction = GetICTransaction(transaction);
-	auto view_key = IcebergTableInformation::GetTableKey(namespace_items, info.view_name);
+	auto view_key = IcebergTable::GetTableKey(catalog.Cast<IcebergCatalog>(), namespace_items,
+	                                          info.GetViewName().GetIdentifierName());
 
 	auto view_info = unique_ptr_cast<CreateInfo, CreateViewInfo>(info.Copy());
 	// Preserve the SELECT SQL — ViewCatalogEntry::Initialize() will move the query out,
@@ -254,11 +255,11 @@ optional_ptr<CatalogEntry> IcebergSchemaEntry::CreateView(CatalogTransaction tra
 	iceberg_transaction.created_views.erase(view_key);
 	iceberg_transaction.created_views.emplace(view_key, std::move(view_info));
 
-	// Invalidate stale caches
-	tables.InvalidateViewCache(info.view_name);
+	// A DROP followed by CREATE can replace an entry already bound in this transaction.
+	iceberg_transaction.InvalidateViewEntry(view_key);
 
 	// Return a pointer to an owned entry (avoid dangling pointer)
-	return tables.GetViewEntry(transaction.GetContext(), info.view_name);
+	return tables.GetViewEntry(transaction.GetContext(), info.GetViewName().GetIdentifierName());
 }
 
 optional_ptr<CatalogEntry> IcebergSchemaEntry::CreateType(CatalogTransaction transaction, CreateTypeInfo &info) {

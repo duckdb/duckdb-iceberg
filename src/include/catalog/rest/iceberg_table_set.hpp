@@ -43,26 +43,17 @@ public:
 
 	//! View operations
 	optional_ptr<CatalogEntry> GetViewEntry(ClientContext &context, const string &view_name);
-	void LoadViewEntries(ClientContext &context);
 	void ScanViews(ClientContext &context, const std::function<void(CatalogEntry &)> &callback);
-
-	const case_insensitive_map_t<unique_ptr<CreateViewInfo>> &GetViewEntries() const;
-	case_insensitive_map_t<unique_ptr<CreateViewInfo>> &GetViewEntriesMutable();
-	void InvalidateViewCache(const string &view_name);
 
 public:
 	IcebergSchemaEntry &schema;
 	Catalog &catalog;
 
 private:
-	//! Internal view lookup — caller must hold entry_lock
-	optional_ptr<CatalogEntry> GetViewEntryInternal(ClientContext &context, const string &view_name);
+	const case_insensitive_set_t &LoadViewEntries(ClientContext &context);
 
 	annotated_mutex entry_lock;
 	case_insensitive_map_t<shared_ptr<IcebergTable>> entries DUCKDB_GUARDED_BY(entry_lock);
-	case_insensitive_map_t<unique_ptr<CreateViewInfo>> view_entries;
-	//! Cached ViewCatalogEntry instances for Scan
-	case_insensitive_map_t<unique_ptr<ViewCatalogEntry>> view_catalog_entries;
 };
 
 } // namespace duckdb

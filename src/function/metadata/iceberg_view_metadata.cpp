@@ -12,9 +12,10 @@
 #include "catalog/rest/catalog_entry/schema/iceberg_schema_entry.hpp"
 #include "rest_catalog/objects/list.hpp"
 #include "rest_catalog/objects/load_view_result.hpp"
-#include "yyjson.hpp"
-
-using namespace duckdb_yyjson;
+#include "duckdb/common/json_document.hpp"
+#include "duckdb/common/vector/string_vector.hpp"
+#include "duckdb/common/vector/list_vector.hpp"
+#include "duckdb/common/vector/map_vector.hpp"
 
 namespace duckdb {
 
@@ -44,9 +45,10 @@ static unique_ptr<HTTPResponse> MakeRequest(ClientContext &context, const Iceber
 	auto &ic_schema = bind_data.ic_schema;
 
 	auto url_builder = ic_catalog.GetBaseUrl();
-	url_builder.AddPrefixComponent(ic_catalog.prefix, ic_catalog.prefix_is_one_component);
+	url_builder.AddPrefixComponents(ic_catalog.prefix);
 	url_builder.AddPathComponent(IRCPathComponent::RegularComponent("namespaces"));
-	url_builder.AddPathComponent(IRCPathComponent::NamespaceComponent(ic_schema.namespace_items));
+	url_builder.AddPathComponent(
+	    IRCPathComponent::NamespaceComponent(ic_schema.namespace_items, ic_catalog.namespace_separator));
 	url_builder.AddPathComponent(IRCPathComponent::RegularComponent("views"));
 	url_builder.AddPathComponent(IRCPathComponent::RegularComponent(bind_data.view_name));
 
@@ -61,7 +63,7 @@ static unique_ptr<HTTPResponse> MakeRequest(ClientContext &context, const Iceber
 }
 
 static unique_ptr<FunctionData> IcebergViewMetadataBind(ClientContext &context, TableFunctionBindInput &input,
-                                                        vector<LogicalType> &return_types, vector<string> &names) {
+                                                        vector<LogicalType> &return_types, vector<Identifier> &names) {
 	auto input_string = input.inputs[0].ToString();
 	auto qualified_name = QualifiedName::ParseComponents(input_string);
 
@@ -69,9 +71,9 @@ static unique_ptr<FunctionData> IcebergViewMetadataBind(ClientContext &context, 
 		throw InvalidInputException("Expected fully qualified view name (catalog.schema.view), got: %s", input_string);
 	}
 
-	EntryLookupInfo view_lookup(CatalogType::VIEW_ENTRY, qualified_name[2]);
-	auto catalog_entry =
-	    Catalog::GetEntry(context, qualified_name[0], qualified_name[1], view_lookup, OnEntryNotFound::THROW_EXCEPTION);
+	EntryLookupInfo view_lookup(CatalogType::VIEW_ENTRY,
+	                            QualifiedName(qualified_name[0], qualified_name[1], qualified_name[2]));
+	auto catalog_entry = Catalog::GetEntry(context, view_lookup, OnEntryNotFound::THROW_EXCEPTION);
 
 	if (catalog_entry->type != CatalogType::VIEW_ENTRY) {
 		throw InvalidInputException("'%s' is not a view", input_string);
@@ -85,7 +87,7 @@ static unique_ptr<FunctionData> IcebergViewMetadataBind(ClientContext &context, 
 	auto &ic_catalog = view_catalog.Cast<IcebergCatalog>();
 	auto &ic_schema = view_entry.schema.Cast<IcebergSchemaEntry>();
 
-	auto ret = make_uniq<IcebergViewMetadataBindData>(ic_catalog, ic_schema, qualified_name[2]);
+	auto ret = make_uniq<IcebergViewMetadataBindData>(ic_catalog, ic_schema, qualified_name[2].GetIdentifierName());
 
 	// metadata_location
 	names.push_back("metadata_location");
@@ -113,12 +115,14 @@ static void OutputMap(const case_insensitive_map_t<string> &config, Vector &conf
 	auto &config_val_vec = MapVector::GetValues(config_vec);
 	idx_t config_idx = 0;
 	for (auto &kv : config) {
-		FlatVector::GetData<string_t>(config_key_vec)[config_idx] = StringVector::AddString(config_key_vec, kv.first);
-		FlatVector::GetData<string_t>(config_val_vec)[config_idx] = StringVector::AddString(config_val_vec, kv.second);
+		FlatVector::GetDataMutable<string_t>(config_key_vec)[config_idx] =
+		    StringVector::AddString(config_key_vec, kv.first);
+		FlatVector::GetDataMutable<string_t>(config_val_vec)[config_idx] =
+		    StringVector::AddString(config_val_vec, kv.second);
 		config_idx++;
 	}
 	ListVector::SetListSize(config_vec, config_count);
-	auto &config_list_data = FlatVector::GetData<list_entry_t>(config_vec)[0];
+	auto &config_list_data = FlatVector::GetDataMutable<list_entry_t>(config_vec)[0];
 	config_list_data.offset = 0;
 	config_list_data.length = config_count;
 }
@@ -134,41 +138,42 @@ static void IcebergViewMetadataFunction(ClientContext &context, TableFunctionInp
 
 	auto response = MakeRequest(context, bind_data);
 
-	// Parse the response using yyjson
+	// Parse the response as JSON
 	auto doc = ICUtils::APIResultToDoc(response->body);
-	auto *root = yyjson_doc_get_root(doc.get());
+	auto root = doc->GetRoot();
 
 	auto load_result = rest_api_objects::LoadViewResult::FromJSON(root);
 
-	output.SetCardinality(1);
+	output.SetChildCardinality(1);
 
 	// metadata_location
 	auto &metadata_location_vector = output.data[0];
-	FlatVector::GetData<string_t>(metadata_location_vector)[0] =
+	FlatVector::GetDataMutable<string_t>(metadata_location_vector)[0] =
 	    StringVector::AddString(metadata_location_vector, load_result.metadata_location);
 
 	// metadata (VARIANT)
 	auto &metadata_vector = output.data[1];
 	{
-		auto *metadata_val = yyjson_obj_get(root, "metadata");
-		if (metadata_val) {
-			auto *json_str = yyjson_val_write(metadata_val, 0, nullptr);
-			if (json_str) {
-				Vector json_vec(LogicalType::JSON(), 1);
-				FlatVector::GetData<string_t>(json_vec)[0] = StringVector::AddString(json_vec, string(json_str));
-				free(json_str);
-				VectorOperations::Cast(context, json_vec, metadata_vector, 1);
-			}
+		auto metadata_val = root.GetMember("metadata");
+		if (metadata_val.IsValid()) {
+			Vector json_vec(LogicalType::JSON(), 1);
+			FlatVector::GetDataMutable<string_t>(json_vec)[0] =
+			    StringVector::AddString(json_vec, metadata_val.ToString());
+			VectorOperations::Cast(context, json_vec, metadata_vector, 1);
 		}
 	}
 
 	// config MAP(VARCHAR, VARCHAR)
 	auto &config_vector = output.data[2];
-	OutputMap(load_result.config, config_vector);
+	if (load_result.config) {
+		OutputMap(*load_result.config, config_vector);
+	} else {
+		FlatVector::ValidityMutable(config_vector).SetInvalid(0);
+	}
 
 	// request_url
 	auto &request_endpoint_vector = output.data[3];
-	FlatVector::GetData<string_t>(request_endpoint_vector)[0] =
+	FlatVector::GetDataMutable<string_t>(request_endpoint_vector)[0] =
 	    StringVector::AddString(request_endpoint_vector, response->url);
 }
 

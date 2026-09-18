@@ -2,9 +2,7 @@
 # description: test that SHOW ALL TABLES does not deadlock when views exist in the catalog
 # group: [create]
 
-require-env ICEBERG_SERVER_AVAILABLE
-
-require-env SECRETS_CREATED_AND_CATALOG_ATTACHED
+require-env CATALOG_TEST_CONFIG_SETUP
 
 require avro
 
@@ -39,15 +37,12 @@ insert into deadlock_test_table values (1, 'alice'), (2, 'bob');
 statement ok
 create view deadlock_test_view as select id, name from deadlock_test_table where id > 0;
 
-# Now reconnect — this forces a fresh session where view_catalog_entries cache is empty.
-# The view exists in the REST catalog but has never been loaded in this new session.
-# SHOW ALL TABLES will call ScanViews which must load the view without deadlocking.
+# Restarting reruns the selected catalog's on_init and clears the view cache.
+# Views remain in the REST catalog, so scanning must load them again.
+restart
 
 statement ok
-ATTACH '' AS my_datalake2 (TYPE ICEBERG,CLIENT_ID 'admin',CLIENT_SECRET 'password',ENDPOINT 'http://127.0.0.1:8181');
-
-statement ok
-use my_datalake2.default;
+use my_datalake.default;
 
 # This is the critical test: triggers ScanViews on a fresh catalog attachment
 # where views exist but are not cached — hits the GetViewEntry path inside ScanViews
@@ -60,15 +55,9 @@ select count(*) from deadlock_test_view;
 ----
 2
 
-# Clean up through original attachment
-statement ok
-use my_datalake.default;
-
+# Clean up
 statement ok
 drop view deadlock_test_view;
 
 statement ok
 drop table deadlock_test_table;
-
-statement ok
-DETACH my_datalake2;

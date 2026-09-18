@@ -509,10 +509,20 @@ static bool CommitStateUnknown(const ErrorData &error) {
 }
 
 void IcebergTransaction::Commit() {
-	if (!HasTableUpdate() && created_schemas.empty() && deleted_schemas.empty() && schema_property_updates.empty() && created_views.empty() && deleted_views.empty()) {
+	if (!HasTableUpdate() && created_schemas.empty() && deleted_schemas.empty() && schema_property_updates.empty() &&
+	    created_views.empty() && deleted_views.empty()) {
 		// Read-only transactions have no catalog commit work; temporary vended storage secrets
 		// are left to transaction/session cleanup.
 		return;
+	}
+	// Views use individual REST endpoints, not the atomic table commit endpoint. Validate
+	// the entire write set before any schema, table, or view request can reach the catalog.
+	auto view_operations = created_views.size() + deleted_views.size();
+	if (view_operations && (view_operations > 1 || HasTableUpdate() || !created_schemas.empty() ||
+	                        !deleted_schemas.empty() || !schema_property_updates.empty())) {
+		CleanupFiles();
+		throw TransactionException("Iceberg REST Catalog cannot commit view changes atomically with other catalog "
+		                           "changes; commit each view create or drop separately");
 	}
 
 	Connection temp_con(db);
@@ -770,9 +780,12 @@ void IcebergTransaction::DoViewCreates(ClientContext &context) {
 	auto &ic_catalog = catalog.Cast<IcebergCatalog>();
 	for (auto &view_entry : created_views) {
 		auto &view_info = view_entry.second;
-		auto &view_name = view_info->view_name;
+		auto &view_name = view_info->GetViewName().GetIdentifierName();
 		// Look up the schema entry from the catalog by name
-		auto &schema_entry = ic_catalog.schemas.GetEntry(view_info->schema).Cast<IcebergSchemaEntry>();
+		auto &schema_entry = ic_catalog.schemas
+		                         .GetEntry(context, view_info->GetQualifiedName().Schema().GetIdentifierName(),
+		                                   OnEntryNotFound::THROW_EXCEPTION)
+		                         ->Cast<IcebergSchemaEntry>();
 
 		// query may have been moved by ViewCatalogEntry::Initialize(), so use sql field or reconstruct
 		string view_sql;
@@ -785,81 +798,89 @@ void IcebergTransaction::DoViewCreates(ClientContext &context) {
 		}
 
 		// Build the CreateViewRequest JSON body
-		std::unique_ptr<yyjson_mut_doc, YyjsonDocDeleter> doc_p(yyjson_mut_doc_new(nullptr));
-		auto doc = doc_p.get();
-		auto root_object = yyjson_mut_obj(doc);
-		yyjson_mut_doc_set_root(doc, root_object);
+		JSONWriter writer;
+		auto root_object = writer.CreateObject();
+		writer.SetRoot(root_object);
 
 		// name
-		yyjson_mut_obj_add_strcpy(doc, root_object, "name", view_name.c_str());
+		root_object.AddString("name", view_name.c_str());
 
 		// schema — the view's output column types
-		auto schema_obj = yyjson_mut_obj_add_obj(doc, root_object, "schema");
-		yyjson_mut_obj_add_strcpy(doc, schema_obj, "type", "struct");
-		yyjson_mut_obj_add_int(doc, schema_obj, "schema-id", 0);
-		auto fields_arr = yyjson_mut_obj_add_arr(doc, schema_obj, "fields");
+		auto schema_obj = writer.CreateObject();
+		root_object.Add("schema", schema_obj);
+		schema_obj.AddString("type", "struct");
+		schema_obj.Add("schema-id", writer.CreateSignedInteger(0));
+		auto fields_arr = writer.CreateArray();
+		schema_obj.Add("fields", fields_arr);
+		idx_t next_field_id = 1;
 		for (idx_t i = 0; i < view_info->types.size(); i++) {
-			auto field_obj = yyjson_mut_arr_add_obj(doc, fields_arr);
-			auto &col_name = i < view_info->aliases.size() && !view_info->aliases[i].empty() ? view_info->aliases[i]
-			                                                                                 : view_info->names[i];
-			yyjson_mut_obj_add_int(doc, field_obj, "id", i + 1);
-			yyjson_mut_obj_add_strcpy(doc, field_obj, "name", col_name.c_str());
-			yyjson_mut_obj_add_bool(doc, field_obj, "required", false);
-			yyjson_mut_obj_add_strcpy(doc, field_obj, "type",
-			                          IcebergTypeHelper::LogicalTypeToIcebergType(view_info->types[i]).c_str());
+			auto &col_name = i < view_info->aliases.size() && !view_info->aliases[i].GetIdentifierName().empty()
+			                     ? view_info->aliases[i]
+			                     : view_info->names[i];
+			auto field = IcebergTypeHelper::CreateIcebergRestType(
+			    col_name.GetIdentifierName(), view_info->types[i], false, "", Value(),
+			    [&next_field_id]() { return next_field_id++; }, 2);
+			fields_arr.Append(field.ToJSON(writer));
 		}
-		auto identifier_field_ids = yyjson_mut_obj_add_arr(doc, schema_obj, "identifier-field-ids");
+		auto identifier_field_ids = writer.CreateArray();
+		schema_obj.Add("identifier-field-ids", identifier_field_ids);
 		(void)identifier_field_ids;
 
 		// view-version
-		auto version_obj = yyjson_mut_obj_add_obj(doc, root_object, "view-version");
-		yyjson_mut_obj_add_int(doc, version_obj, "version-id", 1);
-		yyjson_mut_obj_add_uint(doc, version_obj, "timestamp-ms",
-		                        Timestamp::GetEpochMs(Timestamp::GetCurrentTimestamp()));
-		yyjson_mut_obj_add_int(doc, version_obj, "schema-id", 0);
+		auto version_obj = writer.CreateObject();
+		root_object.Add("view-version", version_obj);
+		version_obj.Add("version-id", writer.CreateSignedInteger(1));
+		version_obj.Add("timestamp-ms",
+		                writer.CreateUnsignedInteger(Timestamp::GetEpochMs(Timestamp::GetCurrentTimestamp())));
+		version_obj.Add("schema-id", writer.CreateSignedInteger(0));
 
 		// summary
-		auto summary_obj = yyjson_mut_obj_add_obj(doc, version_obj, "summary");
-		yyjson_mut_obj_add_strcpy(doc, summary_obj, "engine-name", "DuckDB");
+		auto summary_obj = writer.CreateObject();
+		version_obj.Add("summary", summary_obj);
+		summary_obj.AddString("engine-name", "DuckDB");
 
 		// default-namespace
-		auto ns_arr = yyjson_mut_obj_add_arr(doc, version_obj, "default-namespace");
+		auto ns_arr = writer.CreateArray();
+		version_obj.Add("default-namespace", ns_arr);
 		for (auto &ns_item : schema_entry.namespace_items) {
-			yyjson_mut_arr_add_strcpy(doc, ns_arr, ns_item.c_str());
+			ns_arr.AppendString(ns_item);
 		}
 
-		// default-catalog
-		yyjson_mut_obj_add_strcpy(doc, version_obj, "default-catalog", catalog.GetName().c_str());
+		// Omit default-catalog: unqualified references belong to this REST catalog,
+		// even when another session attaches it using a different local name.
 
 		// representations
-		auto repr_arr = yyjson_mut_obj_add_arr(doc, version_obj, "representations");
-		auto repr_obj = yyjson_mut_arr_add_obj(doc, repr_arr);
-		yyjson_mut_obj_add_strcpy(doc, repr_obj, "type", IcebergConstants::ViewSQLRepresentationType);
-		yyjson_mut_obj_add_strcpy(doc, repr_obj, "sql", view_sql.c_str());
-		yyjson_mut_obj_add_strcpy(doc, repr_obj, "dialect", IcebergConstants::ViewDuckDBDialect);
+		auto repr_arr = writer.CreateArray();
+		version_obj.Add("representations", repr_arr);
+		auto repr_obj = writer.CreateObject();
+		repr_arr.Append(repr_obj);
+		repr_obj.AddString("type", IcebergConstants::ViewSQLRepresentationType);
+		repr_obj.AddString("sql", view_sql.c_str());
+		repr_obj.AddString("dialect", IcebergConstants::ViewDuckDBDialect);
 
 		// properties (empty)
-		yyjson_mut_obj_add_obj(doc, root_object, "properties");
+		root_object.Add("properties", writer.CreateObject());
 
-		auto json_body = JsonDocToString(std::move(doc_p));
+		auto json_body = writer.ToString();
 		IRCAPI::CommitNewView(context, catalog, schema_entry, json_body);
-
-		// Add a placeholder to the schema's view_entries so subsequent operations can find it
-		auto placeholder = make_uniq<CreateViewInfo>(schema_entry, view_name);
-		schema_entry.tables.GetViewEntriesMutable().emplace(view_name, std::move(placeholder));
 	}
 	created_views.clear();
 }
 
 void IcebergTransaction::DoViewDeletes(ClientContext &context) {
-	auto &ic_catalog = catalog.Cast<IcebergCatalog>();
 	for (auto &deleted_view : deleted_views) {
 		auto &info = deleted_view.second;
 		IRCAPI::CommitViewDelete(context, catalog, info.namespace_items, info.view_name);
-		auto &schema_entry = ic_catalog.schemas.GetEntry(info.schema_name).Cast<IcebergSchemaEntry>();
-		schema_entry.tables.InvalidateViewCache(info.view_name);
 	}
 	deleted_views.clear();
+}
+
+void IcebergTransaction::InvalidateViewEntry(const string &view_key) {
+	auto entry = views.find(view_key);
+	if (entry != views.end()) {
+		retired_views.push_back(std::move(entry->second));
+		views.erase(entry);
+	}
 }
 
 void IcebergTransaction::CleanupFiles() {

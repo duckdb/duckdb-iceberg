@@ -86,6 +86,7 @@ public:
 	void DoSchemaPropertyUpdates(ClientContext &context);
 	void DoViewCreates(ClientContext &context);
 	void DoViewDeletes(ClientContext &context);
+	void InvalidateViewEntry(const string &view_key);
 	IcebergCatalog &GetCatalog();
 	void DoMultiTableCommitUpdates(IcebergTransactionAlterUpdate &alter_update, ClientContext &context);
 	void DoSingleTableCommitUpdates(IcebergTransactionAlterUpdate &alter_update, ClientContext &context);
@@ -138,10 +139,15 @@ public:
 	//! views that have been created in this transaction, to be committed on commit.
 	//! keyed by view_key (schema_namespace + view_name)
 	case_insensitive_map_t<unique_ptr<CreateViewInfo>> created_views;
+	//! Resolved views belong to this transaction, never to the shared schema cache.
+	case_insensitive_map_t<unique_ptr<ViewCatalogEntry>> views;
+	//! Keep replaced entries alive for statements already bound in this transaction.
+	vector<unique_ptr<ViewCatalogEntry>> retired_views;
+	//! Catalog view listings, keyed by schema name, with transaction-local lifetime.
+	case_insensitive_map_t<case_insensitive_set_t> listed_views;
 	//! views that have been deleted in this transaction, to be deleted on commit.
 	struct DeletedViewInfo {
 		vector<string> namespace_items;
-		string schema_name;
 		string view_name;
 	};
 	case_insensitive_map_t<DeletedViewInfo> deleted_views;
@@ -151,7 +157,6 @@ public:
 	bool called_list_schemas = false;
 	//! Set of schemas that this transaction has listed tables for
 	case_insensitive_set_t listed_schemas;
-	case_insensitive_set_t listed_view_schemas;
 
 	case_insensitive_set_t looked_up_entries;
 	mutex lock;

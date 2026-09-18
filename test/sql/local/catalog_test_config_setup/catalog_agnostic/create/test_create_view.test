@@ -2,9 +2,7 @@
 # description: test create view, drop view, and querying views in iceberg catalog
 # group: [create]
 
-require-env ICEBERG_SERVER_AVAILABLE
-
-require-env SECRETS_CREATED_AND_CATALOG_ATTACHED
+require-env CATALOG_TEST_CONFIG_SETUP
 
 require avro
 
@@ -111,28 +109,39 @@ select col_a, col_b from test_view_v2 order by col_a;
 2	world
 3	foo
 
-# ─── REST 404 path with no cache ──────────────────────────────────────────────
-# Cross-attachment query of a view that has never been created.
-# Forces IRCAPI::GetView to hit the REST catalog and receive a 404
-# (no transaction or cache state can short-circuit the lookup).
+# A fresh database reruns the selected catalog's on_init setup and clears caches.
+# This must not hard-code the fixture endpoint or credentials.
+restart
 
 statement ok
-ATTACH '' AS my_datalake_404 (TYPE ICEBERG, CLIENT_ID 'admin', CLIENT_SECRET 'password', ENDPOINT 'http://127.0.0.1:8181');
-
-statement ok
-use my_datalake_404.default;
+use my_datalake.default;
 
 statement error
 select * from never_created_view_for_404_test;
 ----
 <REGEX>:.*does not exist.*
 
-# Switch back to the primary attachment before cleanup
+# Column aliases must survive loading the view from REST metadata.
+query II
+select col_a, col_b from test_view_v2 order by col_a;
+----
+1	hello
+2	world
+3	foo
+
+# Renaming the local attachment must not strand the persisted view's references.
 statement ok
-use my_datalake.default;
+alter database my_datalake set alias to renamed_datalake;
+
+query II
+select col_a, col_b from renamed_datalake.default.test_view_v2 order by col_a;
+----
+1	hello
+2	world
+3	foo
 
 statement ok
-DETACH my_datalake_404;
+alter database renamed_datalake set alias to my_datalake;
 
 # Clean up
 statement ok

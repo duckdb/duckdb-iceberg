@@ -272,6 +272,7 @@ rest_api_objects::StructField IcebergTypeHelper::CreateIcebergRestType(const str
 	switch (type.id()) {
 	case LogicalTypeId::MAP: {
 		rest_type.map_type = rest_api_objects::MapType();
+		rest_type.map_type->type = "map";
 
 		//! Key
 		auto key_type = MapType::KeyType(type);
@@ -293,6 +294,7 @@ rest_api_objects::StructField IcebergTypeHelper::CreateIcebergRestType(const str
 	}
 	case LogicalTypeId::STRUCT: {
 		rest_type.struct_type = rest_api_objects::StructType();
+		rest_type.struct_type->type = "struct";
 		auto &children = StructType::GetChildTypes(type);
 
 		for (idx_t i = 0; i < children.size(); i++) {

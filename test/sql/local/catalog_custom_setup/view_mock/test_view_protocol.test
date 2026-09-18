@@ -1,0 +1,205 @@
+# name: test/sql/local/catalog_custom_setup/view_mock/test_view_protocol.test
+# description: Foreign dialects, paginated discovery, and REST failures for Iceberg views
+# group: [view_mock]
+
+require-env VIEW_MOCK_SERVER_AVAILABLE
+
+require iceberg
+
+require httpfs
+
+require json
+
+set ignore_error_messages
+
+statement ok
+attach '' as views (type iceberg, uri 'http://127.0.0.1:19134', authorization_type 'none');
+
+query I
+select value from views.default.preferred;
+----
+42
+
+query I
+select value from views.default.compatible;
+----
+17
+
+query T rowsort
+select view_name from duckdb_views() where database_name = 'views' and view_name in ('preferred', 'compatible', 'foreign');
+----
+compatible
+foreign
+preferred
+
+statement error
+select * from views.default.foreign;
+----
+its SQL dialect cannot be parsed by DuckDB
+
+query I
+select count(*) from iceberg_view_metadata('views.default.foreign');
+----
+1
+
+statement error
+select * from views.default.error_401;
+----
+view fixture error 401
+
+statement error
+select * from views.default.error_403;
+----
+view fixture error 403
+
+statement error
+select * from views.default.error_500;
+----
+HTTP 500
+
+statement error
+select * from views.default.missing;
+----
+does not exist
+
+# Reject two independent REST mutations before either request reaches the server.
+statement ok
+begin;
+
+statement ok
+drop view views.default.preferred;
+
+statement ok
+drop view views.default.compatible;
+
+statement error
+commit;
+----
+cannot commit view changes atomically
+
+query I
+select mutations from read_json('http://127.0.0.1:19134/mutations');
+----
+0
+
+query II
+select (select value from views.default.preferred), (select value from views.default.compatible);
+----
+42	17
+
+# Unsupported SQL stays discoverable without interpolating identifiers into SQL.
+statement error
+select * from views.default."foreign'quote";
+----
+its SQL dialect cannot be parsed by DuckDB
+
+query TI
+select sql, is_bound from duckdb_views() where database_name = 'views' and view_name = 'foreign''quote';
+----
+select `spark column` from `spark table`	false
+
+query I
+select count(*) from iceberg_view_metadata('views.default."foreign''quote"');
+----
+1
+
+statement error
+select * from views.default.no_sql;
+----
+no SQL representation that DuckDB can use
+
+statement ok
+drop view views.default."foreign'quote";
+
+statement ok
+drop view views.default.no_sql;
+
+statement error
+select * from views.default.not_select;
+----
+must contain a single SELECT statement
+
+statement error
+select * from views.default.many_statements;
+----
+must contain a single SELECT statement
+
+# The persisted default catalog and namespace differ from the view's container.
+statement ok
+attach ':memory:' as source_catalog;
+
+statement ok
+create schema source_catalog.source_ns;
+
+statement ok
+create table source_catalog.source_ns.source as select 71 as value;
+
+statement ok
+create schema source_catalog.other;
+
+statement ok
+create table source_catalog.other.source as select 81 as value;
+
+statement ok
+attach ':memory:' as explicit_catalog;
+
+statement ok
+create schema explicit_catalog.other;
+
+statement ok
+create table explicit_catalog.other.source as select 91 as value;
+
+query IIIIII
+select (select value from views.default.namespace), (select value from views.default.qualified), (select value from views.default.explicit), (select value from views.default.cte), (select value from views.default.subquery), (select value from views.default.recursive);
+----
+71	81	91	61	71	3
+
+query I rowsort
+select value from views.default.scopes;
+----
+61
+71
+
+query I
+select value from views.default.shadow;
+----
+72
+
+statement ok
+detach source_catalog;
+
+# An unavailable default catalog is an error, never a fallback to another table.
+statement error
+select * from views.default.namespace;
+----
+source_catalog
+
+statement ok
+detach explicit_catalog;
+
+statement ok
+drop view views.default.foreign;
+
+query I
+select count(*) from duckdb_views() where database_name = 'views' and view_name = 'foreign';
+----
+0
+
+statement ok
+detach views;
+
+statement ok
+attach 'no_views' as no_views (type iceberg, uri 'http://127.0.0.1:19134', authorization_type 'none');
+
+query I
+select count(*) from duckdb_views() where database_name = 'no_views';
+----
+0
+
+statement error
+select * from no_views.default.preferred;
+----
+does not exist
+
+statement ok
+detach no_views;

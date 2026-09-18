@@ -38,6 +38,25 @@
   ],
   "skip_tests": [
     {
+      "reason": "Iceberg views do not enforce DuckDB table/view dependency tracking",
+      "paths": [
+        "test/sql/catalog/view/test_view_schema_change_with_dependencies.test"
+      ]
+    },
+    {
+      "reason": "Iceberg view schemas persist all output names; duckdb_views reconstructs a full alias list rather than the original partial alias list",
+      "paths": [
+        "test/sql/catalog/view/test_view_sql.test"
+      ]
+    },
+    {
+      "reason": "Iceberg view metadata does not preserve DuckDB secure-view optimizer barriers; secure view creation is rejected",
+      "paths": [
+        "test/sql/catalog/view/secure_view.test",
+        "test/sql/catalog/view/secure_view_persistence.test"
+      ]
+    },
+    {
       "reason": "Checks available databases/schemas",
       "paths": [
         "test/sql/attach/attach_did_you_mean.test",
@@ -340,8 +359,7 @@
     {
       "reason": "Schema visibility / concurrent schema creation in Iceberg differs from DuckDB",
       "paths": [
-        "test/sql/catalog/dependencies/test_concurrent_schema_creation.test",
-        "test/sql/select/test_select_qualified_view.test"
+        "test/sql/catalog/dependencies/test_concurrent_schema_creation.test"
       ]
     },
     {

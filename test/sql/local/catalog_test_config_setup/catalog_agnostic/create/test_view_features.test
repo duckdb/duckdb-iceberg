@@ -2,9 +2,7 @@
 # description: iceberg view edge cases — creation-time validation, select *, select * exclude, joins, catalog functions
 # group: [create]
 
-require-env ICEBERG_SERVER_AVAILABLE
-
-require-env SECRETS_CREATED_AND_CATALOG_ATTACHED
+require-env CATALOG_TEST_CONFIG_SETUP
 
 require avro
 
@@ -19,6 +17,17 @@ create schema if not exists my_datalake.default;
 
 statement ok
 use my_datalake.default;
+
+# Iceberg view metadata cannot preserve DuckDB's optimizer security barrier.
+statement error
+create secure view v_secure as select 42;
+----
+Secure views are not supported in Iceberg catalogs
+
+query I
+select count(*) from duckdb_views() where database_name = 'my_datalake' and view_name = 'v_secure';
+----
+0
 
 # Clean up from previous runs
 statement ok
@@ -139,3 +148,28 @@ drop table vf_orders;
 
 statement ok
 drop table vf_customers;
+
+# Nested view columns use the same recursive Iceberg schema conversion as tables.
+require json
+
+statement ok
+drop view if exists my_datalake.default.v_nested;
+
+statement ok
+create view my_datalake.default.v_nested as select {'items': [{'n': 42}]} as s, [{'label': 'x'}] as l, map(['k'], [[1, 2]]) as m;
+
+restart
+
+query ITI
+select s.items[1].n, l[1].label, m['k'][2] from my_datalake.default.v_nested;
+----
+42	x	2
+
+# Every nested field, list element, and map key/value has a distinct field ID.
+query IIII
+select count(*), count(distinct value::int), min(value::int), max(value::int) from iceberg_view_metadata('my_datalake.default.v_nested'), lateral json_tree(metadata::json, '$.schemas[0]') where key in ('id', 'element-id', 'key-id', 'value-id');
+----
+11	11	1	11
+
+statement ok
+drop view my_datalake.default.v_nested;
