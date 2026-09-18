@@ -4,16 +4,9 @@
 
 require-env CATALOG_TEST_CONFIG_SETUP polaris
 
-require avro
-
-require parquet
-
-require httpfs
-
-require iceberg
+include test/sql/init_requires
 
 require aws
-
 
 # The secret and the `my_datalake` attach are created by polaris.json's on_init.
 # Setup produces: main tip with 5 rows, side_branch tip after DELETE-all with a

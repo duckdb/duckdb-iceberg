@@ -2,13 +2,7 @@
 # description: Equality-delete hash-filter parity with the expression fallback
 # group: [local]
 
-require avro
-
-require parquet
-
-require iceberg
-
-require httpfs
+include test/sql/init_requires
 
 # The hash filter is enabled by default.
 query I

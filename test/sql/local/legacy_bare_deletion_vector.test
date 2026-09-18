@@ -2,11 +2,7 @@
 # description: Read a legacy deletion-vector file containing only the DV blob
 # group: [local]
 
-require avro
-
-require parquet
-
-require iceberg
+include test/sql/init_requires
 
 # The V3 table's current manifest list contains both a carried-forward V2 data manifest and a V3 delete manifest.
 query III

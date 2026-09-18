@@ -4,13 +4,7 @@
 
 require-env CATALOG_TEST_CONFIG_SETUP
 
-require avro
-
-require parquet
-
-require iceberg
-
-require httpfs
+include test/sql/init_requires
 
 # 'bucket_partitioned_uuid' is written by Spark (scripts/data_generators/tests/default/bucket_partitioned_uuid).
 # This test writes the exact same UUID values with DuckDB and compares the bucket that each UUID

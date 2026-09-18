@@ -7,13 +7,7 @@ SET profiling_renderer_settings = MAP {'operator_casing': 'upper'};
 
 require-env CATALOG_TEST_CONFIG_SETUP
 
-require avro
-
-require parquet
-
-require iceberg
-
-require httpfs
+include test/sql/init_requires
 
 
 statement ok

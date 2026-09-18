@@ -10,13 +10,7 @@ require-env SNOWFLAKE_SECRET_KEY_S3_PERMISSION_TEST
 
 require-env SNOWFLAKE_KEY_ID_S3_PERMISSION_TEST
 
-require avro
-
-require parquet
-
-require iceberg
-
-require httpfs
+include test/sql/init_requires
 
 require aws
 

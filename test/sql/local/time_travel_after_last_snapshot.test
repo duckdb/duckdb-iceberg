@@ -2,11 +2,7 @@
 # description: A timestamp after the last snapshot is valid, only timestamps beyond the current time are rejected
 # group: [local]
 
-require avro
-
-require parquet
-
-require iceberg
+include test/sql/init_requires
 
 require icu
 

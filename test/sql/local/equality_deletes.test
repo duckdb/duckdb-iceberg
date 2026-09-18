@@ -2,13 +2,7 @@
 # description: Test equaltiy deletes in an iceberg scan
 # group: [local]
 
-require avro
-
-require parquet
-
-require iceberg
-
-require httpfs
+include test/sql/init_requires
 
 # for unpartitioned table:
 # create table by spark sql: create table mytable_partitioned(id int,name string,bir date );

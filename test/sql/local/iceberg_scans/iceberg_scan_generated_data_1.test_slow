@@ -2,11 +2,7 @@
 # description: test iceberg extension with the sf1 generated test set
 # group: [iceberg_scans]
 
-require avro
-
-require parquet
-
-require iceberg
+include test/sql/init_requires
 
 require-env DUCKDB_ICEBERG_HAVE_GENERATED_DATA
 

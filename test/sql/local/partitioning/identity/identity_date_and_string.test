@@ -1,13 +1,7 @@
 # name: test/sql/local/partitioning/identity/identity_date_and_string.test
 # group: [identity]
 
-require avro
-
-require parquet
-
-require iceberg
-
-require httpfs
+include test/sql/init_requires
 
 # This partition spec has evolved over time to add a second partition field
 # First partitioned on 'event_date', adding:

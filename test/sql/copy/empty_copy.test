@@ -1,11 +1,7 @@
 # name: test/sql/copy/empty_copy.test
 # group: [copy]
 
-require avro
-
-require parquet
-
-require iceberg
+include test/sql/init_requires
 
 # COPY with 0 rows should also produce a readable empty table
 statement ok

@@ -3,13 +3,7 @@
 
 require-env CATALOG_TEST_CONFIG_SETUP
 
-require avro
-
-require parquet
-
-require iceberg
-
-require httpfs
+include test/sql/init_requires
 
 
 statement ok
@@ -18,11 +12,7 @@ CALL enable_logging('HTTP');
 statement ok
 set logging_level='debug'
 
-require avro
-
-require parquet
-
-require iceberg
+include test/sql/init_requires
 
 concurrentloop i 1 10
 

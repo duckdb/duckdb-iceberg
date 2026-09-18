@@ -8,11 +8,7 @@ SELECT * FROM ICEBERG_METADATA('{WORKING_DIRECTORY}/data/persistent/iceberg/line
 ----
 Error
 
-require avro
-
-require parquet
-
-require iceberg
+include test/sql/init_requires
 
 query IIIIIIIIII
 SELECT * FROM ICEBERG_METADATA('{WORKING_DIRECTORY}/data/persistent/iceberg/lineitem_iceberg', ALLOW_MOVED_PATHS=TRUE);

@@ -4,13 +4,7 @@
 
 # Spec: https://iceberg.apache.org/spec/#appendix-b-32-bit-hash-requirements
 
-require avro
-
-require parquet
-
-require iceberg
-
-require httpfs
+include test/sql/init_requires
 
 
 # ---- NULL handling ----

@@ -2,9 +2,7 @@
 # description: Catalog-independent task execution, equality deletes and task-local positional filtering
 # group: [local]
 
-require iceberg
-
-require parquet
+include test/sql/init_requires
 
 require json
 

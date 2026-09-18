@@ -1,13 +1,7 @@
 # name: test/sql/local/partitioning/identity/identity_fixed_length_binary.test
 # group: [identity]
 
-require avro
-
-require parquet
-
-require iceberg
-
-require httpfs
+include test/sql/init_requires
 
 query III
 select * from ICEBERG_SCAN('{WORKING_DIRECTORY}/data/persistent/partition_fixed_length_binary/default.db/partition_fixed_length_binary/metadata/00001-b4b3d6d2-cac2-4480-952e-0e4b3b88b5d7.metadata.json');

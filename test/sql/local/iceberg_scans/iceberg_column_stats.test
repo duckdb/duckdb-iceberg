@@ -8,11 +8,7 @@ SELECT * FROM ICEBERG_COLUMN_STATS('{WORKING_DIRECTORY}/data/persistent/hive_par
 ----
 Error
 
-require avro
-
-require parquet
-
-require iceberg
+include test/sql/init_requires
 
 query IIIIIIIIIIIII
 SELECT * FROM ICEBERG_COLUMN_STATS('{WORKING_DIRECTORY}/data/persistent/hive_partitioned_table', ALLOW_MOVED_PATHS=TRUE) order by all;

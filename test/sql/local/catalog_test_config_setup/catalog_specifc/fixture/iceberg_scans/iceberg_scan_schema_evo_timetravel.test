@@ -1,13 +1,7 @@
 # name: test/sql/local/catalog_test_config_setup/catalog_specifc/fixture/iceberg_scans/iceberg_scan_schema_evo_timetravel.test
 # group: [iceberg_scans]
 
-require avro
-
-require parquet
-
-require iceberg
-
-require httpfs
+include test/sql/init_requires
 
 require-env CATALOG_TEST_CONFIG_SETUP fixture
 

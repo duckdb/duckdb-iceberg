@@ -4,13 +4,7 @@
 
 require-env POLARIS_SERVER_AVAILABLE
 
-require avro
-
-require parquet
-
-require iceberg
-
-require httpfs
+include test/sql/init_requires
 
 # Do not ignore 'HTTP' error messages!
 set ignore_error_messages

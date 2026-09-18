@@ -5,13 +5,7 @@
 # Requires: python3 scripts/sigv4_mock_server.py 19130
 require-env SIGV4_MOCK_SERVER_AVAILABLE
 
-require avro
-
-require parquet
-
-require iceberg
-
-require httpfs
+include test/sql/init_requires
 
 require aws
 

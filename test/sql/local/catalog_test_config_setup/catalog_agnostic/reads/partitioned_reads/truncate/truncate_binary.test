@@ -1,11 +1,7 @@
 # name: test/sql/local/catalog_test_config_setup/catalog_agnostic/reads/partitioned_reads/truncate/truncate_binary.test
 # group: [truncate]
 
-require avro
-
-require parquet
-
-require iceberg
+include test/sql/init_requires
 
 require-env DUCKDB_ICEBERG_HAVE_GENERATED_DATA
 

@@ -2,11 +2,7 @@
 # description: Read V1 metadata using deprecated schema, partition-spec, and snapshot.manifests fields
 # group: [iceberg_scans]
 
-require avro
-
-require parquet
-
-require iceberg
+include test/sql/init_requires
 
 query III
 select *

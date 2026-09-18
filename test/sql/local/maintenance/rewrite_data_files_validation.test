@@ -2,11 +2,7 @@
 # description: bind-time validation for iceberg_rewrite_data_files parameters
 # group: [maintenance]
 
-require avro
-
-require parquet
-
-require iceberg
+include test/sql/init_requires
 
 statement error
 SELECT * FROM iceberg_rewrite_data_files('bad');

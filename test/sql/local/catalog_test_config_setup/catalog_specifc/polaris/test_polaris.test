@@ -8,16 +8,9 @@
 
 require-env CATALOG_TEST_CONFIG_SETUP polaris
 
-require avro
-
-require parquet
-
-require httpfs
-
-require iceberg
+include test/sql/init_requires
 
 require aws
-
 
 statement ok
 show all tables;

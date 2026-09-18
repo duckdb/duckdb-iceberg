@@ -2,13 +2,7 @@
 # description: Equality delete must not apply across partitions of the same spec
 # group: [local]
 
-require avro
-
-require parquet
-
-require iceberg
-
-require httpfs
+include test/sql/init_requires
 
 # Table before the equality delete (identity-partitioned on `part`):
 #   part | key | val

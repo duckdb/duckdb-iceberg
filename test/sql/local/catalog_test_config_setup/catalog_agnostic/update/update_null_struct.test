@@ -4,7 +4,7 @@
 
 require-env CATALOG_TEST_CONFIG_SETUP
 
-require iceberg
+include test/sql/init_requires
 
 foreach version 2 3
 

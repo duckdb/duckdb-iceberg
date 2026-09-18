@@ -15,13 +15,7 @@
 # a production catalog (also verified manually against AWS S3 Tables). Skips cleanly elsewhere.
 require-env CATALOG_TEST_CONFIG_SETUP lakekeeper
 
-require avro
-
-require parquet
-
-require iceberg
-
-require httpfs
+include test/sql/init_requires
 
 statement ok
 drop table if exists my_datalake.default.retry_concurrent;

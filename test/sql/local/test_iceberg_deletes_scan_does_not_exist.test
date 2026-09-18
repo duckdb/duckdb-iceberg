@@ -2,11 +2,7 @@
 # description: test that write.data.path and write.metadata.path properties are properly parsed
 # group: [local]
 
-require avro
-
-require parquet
-
-require iceberg
+include test/sql/init_requires
 
 # iceberg deletes scan is specific to iceberg_scan. It can utilize informaiton
 # from manifest files to skip performing a head request. It should not be available in the catalog

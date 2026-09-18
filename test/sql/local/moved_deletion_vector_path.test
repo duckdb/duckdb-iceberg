@@ -2,11 +2,7 @@
 # description: allow_moved_paths relocates the Puffin deletion-vector file (v3)
 # group: [local]
 
-require avro
-
-require parquet
-
-require iceberg
+include test/sql/init_requires
 
 query I
 SELECT count(*) FROM iceberg_scan('{WORKING_DIRECTORY}/data/persistent/moved_deletion_vector_path', allow_moved_paths=true);

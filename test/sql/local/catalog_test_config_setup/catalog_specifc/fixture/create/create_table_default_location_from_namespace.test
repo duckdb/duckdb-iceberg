@@ -4,13 +4,7 @@
 
 require-env CATALOG_TEST_CONFIG_SETUP fixture
 
-require avro
-
-require parquet
-
-require iceberg
-
-require httpfs
+include test/sql/init_requires
 
 # attach a second catalog with the option enabled; my_datalake (attached without it) keeps the default behavior
 statement ok

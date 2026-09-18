@@ -2,11 +2,7 @@
 # description: bind-time validation for iceberg_rollback_to_snapshot parameters
 # group: [maintenance]
 
-require avro
-
-require parquet
-
-require iceberg
+include test/sql/init_requires
 
 statement error
 SELECT * FROM iceberg_rollback_to_snapshot('bad', 1);

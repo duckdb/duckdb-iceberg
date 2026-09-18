@@ -2,13 +2,7 @@
 # description: test delete and add of a column with name-mapping
 # group: [local]
 
-require avro
-
-require parquet
-
-require iceberg
-
-require httpfs
+include test/sql/init_requires
 
 # No 'b' fields are NULL at this point
 query I
