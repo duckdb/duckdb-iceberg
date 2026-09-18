@@ -2,6 +2,7 @@ add_library(
   iceberg_function_metadata OBJECT
   iceberg_column_stats.cpp
   iceberg_load_table_response.cpp
+  iceberg_view_metadata.cpp
   iceberg_metadata.cpp
   iceberg_partition_stats.cpp
   iceberg_rewrite_data_files.cpp

@@ -23,6 +23,17 @@
   ],
   "skip_tests": [
     {
+      "reason": "The S3 Tables endpoint capability set has no Iceberg REST view endpoints",
+      "paths": [
+        "test/sql/local/catalog_test_config_setup/catalog_agnostic/create/test_create_view.test",
+        "test/sql/local/catalog_test_config_setup/catalog_agnostic/create/test_view_features.test",
+        "test/sql/local/catalog_test_config_setup/catalog_agnostic/create/test_view_metadata.test",
+        "test/sql/local/catalog_test_config_setup/catalog_agnostic/create/test_view_regressions.test",
+        "test/sql/local/catalog_test_config_setup/catalog_agnostic/create/test_view_scan_no_deadlock.test",
+        "test/sql/local/catalog_test_config_setup/catalog_agnostic/transactions/test_view_transactions.test"
+      ]
+    },
+    {
       "reason": "s3tables does not support column defaults",
       "paths": [
         "test/sql/local/catalog_test_config_setup/catalog_agnostic/create/default/test_create_default_bigint.test",

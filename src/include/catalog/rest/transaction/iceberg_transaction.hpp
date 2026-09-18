@@ -2,6 +2,7 @@
 #pragma once
 
 #include "duckdb/transaction/transaction.hpp"
+#include "duckdb/parser/parsed_data/create_view_info.hpp"
 #include "catalog/rest/iceberg_schema_set.hpp"
 #include "catalog/rest/api/iceberg_retry.hpp"
 #include "catalog/rest/transaction/iceberg_transaction_update.hpp"
@@ -83,6 +84,9 @@ public:
 	void DoSchemaCreates(ClientContext &context);
 	void DoSchemaDeletes(ClientContext &context);
 	void DoSchemaPropertyUpdates(ClientContext &context);
+	void DoViewCreates(ClientContext &context);
+	void DoViewDeletes(ClientContext &context);
+	void InvalidateViewEntry(const string &view_key);
 	IcebergCatalog &GetCatalog();
 	void DoMultiTableCommitUpdates(IcebergTransactionAlterUpdate &alter_update, ClientContext &context);
 	void DoSingleTableCommitUpdates(IcebergTransactionAlterUpdate &alter_update, ClientContext &context);
@@ -131,6 +135,22 @@ public:
 	case_insensitive_map_t<IcebergTransactionTableState> current_table_data;
 	//! Declared after the schema and table states so update references are destroyed before the referenced states.
 	IcebergTransactionUpdate transaction_update;
+
+	//! views that have been created in this transaction, to be committed on commit.
+	//! keyed by view_key (schema_namespace + view_name)
+	case_insensitive_map_t<unique_ptr<CreateViewInfo>> created_views;
+	//! Resolved views belong to this transaction, never to the shared schema cache.
+	case_insensitive_map_t<unique_ptr<ViewCatalogEntry>> views;
+	//! Keep replaced entries alive for statements already bound in this transaction.
+	vector<unique_ptr<ViewCatalogEntry>> retired_views;
+	//! Catalog view listings, keyed by schema name, with transaction-local lifetime.
+	case_insensitive_map_t<case_insensitive_set_t> listed_views;
+	//! views that have been deleted in this transaction, to be deleted on commit.
+	struct DeletedViewInfo {
+		vector<string> namespace_items;
+		string view_name;
+	};
+	case_insensitive_map_t<DeletedViewInfo> deleted_views;
 
 	unordered_set<string> deleted_schemas;
 

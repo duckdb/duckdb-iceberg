@@ -3,7 +3,7 @@ import os
 import time
 import datetime
 from decimal import Decimal
-from conftest import *
+from conftest import capability_param
 
 from pprint import pprint
 

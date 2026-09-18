@@ -1,0 +1,132 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/create/test_view_regressions.test
+# description: View namespace collisions, duplicate output names, and file shorthand survive reload
+# group: [create]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+statement ok
+create schema if not exists my_datalake.view_regressions;
+
+statement ok
+use my_datalake.view_regressions;
+
+statement ok
+drop view if exists duplicate_names;
+
+statement ok
+drop view if exists file_view;
+
+statement ok
+drop view if exists dotted_table_view;
+
+statement ok
+drop table if exists "table.parquet";
+
+statement ok
+drop table if exists base;
+
+statement ok
+create table base (i integer);
+
+statement ok
+insert into base values (42);
+
+# IF NOT EXISTS also ignores an existing table, without replacing it.
+statement ok
+create view if not exists base as select 99 as i;
+
+query I
+select * from base;
+----
+42
+
+statement error
+create view base as select 99 as i;
+----
+<REGEX>:.*Table with name "base" already exists.*
+
+statement error
+drop view if exists base;
+----
+<REGEX>:.*trying to drop type View.*
+
+statement ok
+create view duplicate_names as select i as a, i + 1 as a from base;
+
+statement error
+drop table if exists duplicate_names;
+----
+<REGEX>:.*trying to drop type Table.*
+
+statement ok
+copy (select 7 as i) to '{TEST_DIR}/view_input.parquet' (format parquet);
+
+# Ordinary file reads also probe the active catalog before replacement scans.
+query I
+select * from '{TEST_DIR}/view_input.parquet';
+----
+7
+
+statement ok
+create view file_view as select f.i from '{TEST_DIR}/view_input.parquet' as f;
+
+# A real table with a file-like name must still win over replacement scans.
+statement ok
+create table "table.parquet" (i integer);
+
+statement ok
+insert into "table.parquet" values (88);
+
+statement ok
+create view dotted_table_view as select * from "table.parquet";
+
+restart
+
+statement ok
+use my_datalake.view_regressions;
+
+query II
+select a, a_1 from duplicate_names;
+----
+42	43
+
+query I
+select * from file_view;
+----
+7
+
+query I
+select * from dotted_table_view;
+----
+88
+
+statement error
+alter view dotted_table_view rename to renamed_view;
+----
+<REGEX>:.*ALTER VIEW is not supported.*
+
+statement ok
+drop view duplicate_names;
+
+statement ok
+drop view file_view;
+
+statement ok
+drop view dotted_table_view;
+
+statement ok
+drop table "table.parquet";
+
+statement ok
+drop table base;
+
+statement ok
+drop schema my_datalake.view_regressions;
