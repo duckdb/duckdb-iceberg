@@ -39,6 +39,7 @@ call truncate_duckdb_logs();
 statement ok
 ATTACH '' AS static_lake (
     TYPE ICEBERG,
+    CREATE_DEFAULT_SCHEMA true,
     SECRET temp_get_token,
     URI 'http://127.0.0.1:8181'
 );

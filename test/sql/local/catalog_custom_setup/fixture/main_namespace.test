@@ -27,11 +27,12 @@ CREATE SECRET iceberg_secret (
 	URI 'http://127.0.0.1:8181'
 );
 
-# setup - fully qualified throughout, so no default namespace is needed yet
+# Set up the default namespace on a fresh catalog.
 statement ok
 ATTACH '' AS my_datalake (
 	TYPE ICEBERG,
-	SECRET iceberg_secret
+	SECRET iceberg_secret,
+	CREATE_DEFAULT_SCHEMA true
 );
 
 statement ok

@@ -23,6 +23,7 @@ CREATE SECRET (
 statement ok
 ATTACH OR REPLACE '' AS writer_catalog (
     TYPE ICEBERG,
+    CREATE_DEFAULT_SCHEMA true,
     CLIENT_ID 'admin',
     CLIENT_SECRET 'password',
     URI 'http://127.0.0.1:8181'
@@ -31,6 +32,7 @@ ATTACH OR REPLACE '' AS writer_catalog (
 statement ok
 ATTACH OR REPLACE '' AS reader_catalog (
     TYPE ICEBERG,
+    CREATE_DEFAULT_SCHEMA true,
     CLIENT_ID 'admin',
     CLIENT_SECRET 'password',
     URI 'http://127.0.0.1:8181'

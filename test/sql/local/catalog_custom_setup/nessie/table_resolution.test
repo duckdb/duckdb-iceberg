@@ -57,6 +57,7 @@ ATTACH 'warehouse' AS bad_resolution (
 statement ok
 ATTACH 'warehouse' AS my_datalake (
     TYPE ICEBERG,
+    CREATE_DEFAULT_SCHEMA true,
     URI 'http://127.0.0.1:19120/iceberg/',
     ACCESS_DELEGATION_MODE 'none',
     SECRET 'my_secret'
@@ -99,6 +100,7 @@ DETACH my_datalake;
 statement ok
 ATTACH 'warehouse' AS my_datalake (
     TYPE ICEBERG,
+    CREATE_DEFAULT_SCHEMA true,
     URI 'http://127.0.0.1:19120/iceberg/',
     ACCESS_DELEGATION_MODE 'none',
     SECRET 'my_secret'
@@ -146,6 +148,7 @@ CALL truncate_duckdb_logs();
 statement ok
 ATTACH 'warehouse' AS my_datalake (
     TYPE ICEBERG,
+    CREATE_DEFAULT_SCHEMA true,
     URI 'http://127.0.0.1:19120/iceberg/',
     ACCESS_DELEGATION_MODE 'none',
     SECRET 'my_secret',
@@ -203,6 +206,7 @@ DETACH my_datalake;
 statement ok
 ATTACH 'warehouse' AS my_datalake (
     TYPE ICEBERG,
+    CREATE_DEFAULT_SCHEMA true,
     URI 'http://127.0.0.1:19120/iceberg/',
     ACCESS_DELEGATION_MODE 'none',
     SECRET 'my_secret',

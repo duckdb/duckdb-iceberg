@@ -22,6 +22,7 @@ CREATE SECRET (
 statement ok
 ATTACH '' AS my_datalake (
     TYPE ICEBERG,
+    CREATE_DEFAULT_SCHEMA true,
     CLIENT_ID 'admin',
     CLIENT_SECRET 'password',
     URI 'http://127.0.0.1:8181',
@@ -53,6 +54,7 @@ DETACH my_datalake;
 statement ok
 ATTACH '' AS my_datalake (
     TYPE ICEBERG,
+    CREATE_DEFAULT_SCHEMA true,
     CLIENT_ID 'admin',
     CLIENT_SECRET 'password',
     URI 'http://127.0.0.1:8181',

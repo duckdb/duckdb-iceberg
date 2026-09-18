@@ -34,6 +34,7 @@ CREATE SECRET iceberg_secret (
 statement ok
 ATTACH '' AS my_datalake (
 	TYPE ICEBERG,
+	CREATE_DEFAULT_SCHEMA true,
 	SECRET iceberg_secret
 );
 

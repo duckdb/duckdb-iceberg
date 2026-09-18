@@ -29,6 +29,7 @@ CREATE SECRET (
 statement ok
 ATTACH '' AS my_datalake (
     TYPE ICEBERG,
+    CREATE_DEFAULT_SCHEMA true,
     CLIENT_ID 'admin',
     CLIENT_SECRET 'password',
     URI 'http://127.0.0.1:8181'
@@ -45,7 +46,7 @@ select * from table_unpartitioned;
 <REGEX>:.*Did you mean.*my_datalake.default.table_unpartitioned.*
 
 query II
-SELECT request.url, response.reason FROM duckdb_logs_parsed('HTTP') WHERE request.type='POST' AND (request.url).starts_with('http://127.0.0.1:8181/v1/') order by timestamp
+SELECT request.url, response.reason FROM duckdb_logs_parsed('HTTP') WHERE request.type='POST' AND request.url='http://127.0.0.1:8181/v1/oauth/tokens' order by timestamp
 ----
 http://127.0.0.1:8181/v1/oauth/tokens	OK
 

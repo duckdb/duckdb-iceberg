@@ -43,6 +43,7 @@ ATTACH 'quickstart_catalog' AS bad_resolution (
 statement ok
 ATTACH 'quickstart_catalog' AS my_datalake (
     TYPE ICEBERG,
+    CREATE_DEFAULT_SCHEMA true,
     URI 'http://0.0.0.0:8181/api/catalog',
     DEFAULT_REGION 'us-west-2'
 );
@@ -84,6 +85,7 @@ DETACH my_datalake;
 statement ok
 ATTACH 'quickstart_catalog' AS my_datalake (
     TYPE ICEBERG,
+    CREATE_DEFAULT_SCHEMA true,
     URI 'http://0.0.0.0:8181/api/catalog',
     DEFAULT_REGION 'us-west-2'
 );
@@ -130,6 +132,7 @@ CALL truncate_duckdb_logs();
 statement ok
 ATTACH 'quickstart_catalog' AS my_datalake (
     TYPE ICEBERG,
+    CREATE_DEFAULT_SCHEMA true,
     URI 'http://0.0.0.0:8181/api/catalog',
     DEFAULT_REGION 'us-west-2',
     TABLE_RESOLUTION 'eager'
@@ -185,6 +188,7 @@ DETACH my_datalake;
 statement ok
 ATTACH 'quickstart_catalog' AS my_datalake (
     TYPE ICEBERG,
+    CREATE_DEFAULT_SCHEMA true,
     URI 'http://0.0.0.0:8181/api/catalog',
     DEFAULT_REGION 'us-west-2',
     TABLE_RESOLUTION 'eager'
