@@ -250,6 +250,9 @@ unique_ptr<Catalog> IcebergAttach::Attach(optional_ptr<StorageExtensionInfo> sto
 			attach_options.default_table_location_from_namespace =
 			    entry.second.DefaultCastAs(LogicalType::BOOLEAN).GetValue<bool>();
 			set_by_attach_options.insert("default_table_location_from_namespace");
+		} else if (lower_name == "table_resolution") {
+			// Accepted for compatibility with existing ATTACH statements; metadata is always loaded lazily.
+			continue;
 		} else if (lower_name == "default_schema") {
 			default_schema = Identifier(entry.second.ToString());
 		} else if (lower_name == "encode_entire_prefix") {

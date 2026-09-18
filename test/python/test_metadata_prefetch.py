@@ -216,9 +216,10 @@ def test_parallel_metadata_loads_keep_columns_and_oids_stable(metadata_shell, th
         assert server.active == 0
 
 
-def test_attach_does_not_load_table_metadata(metadata_shell):
+@pytest.mark.parametrize("attach_options", ["", ", TABLE_RESOLUTION 'lazy'", ", TABLE_RESOLUTION 'eager'"])
+def test_attach_does_not_load_table_metadata(metadata_shell, attach_options):
     with catalog_server() as server:
-        result = run_sql(metadata_shell, server, "SELECT 42;")
+        result = run_sql(metadata_shell, server, "SELECT 42;", attach_options=attach_options)
         assert result.returncode == 0, result.stderr
         assert not server.requests
 
