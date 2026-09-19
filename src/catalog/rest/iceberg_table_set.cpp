@@ -44,7 +44,7 @@ bool IcebergTableSet::FillEntry(ClientContext &context, IcebergTable &table) {
 		auto cache_hit = ic_catalog.table_request_cache.Get(
 		    context, table_key, [&](const rest_api_objects::LoadTableResult &cached_result) {
 			    // Use the cached result instead of making a new request
-			    table.InitializeFromLoadTableResult(cached_result);
+			    table.InitializeFromCatalogResponse(context, cached_result);
 		    });
 		if (cache_hit) {
 			return true;
@@ -71,7 +71,7 @@ bool IcebergTableSet::FillEntry(ClientContext &context, IcebergTable &table) {
 		                       EnumUtil::ToString(get_table_result.status_), get_table_result.error_->_error.message));
 	}
 	auto &load_table_result = *get_table_result.result_;
-	table.InitializeFromLoadTableResult(load_table_result);
+	table.InitializeFromCatalogResponse(context, load_table_result);
 	ic_catalog.table_request_cache.SetOrOverwrite(table_key, std::move(get_table_result.result_));
 	return true;
 }
