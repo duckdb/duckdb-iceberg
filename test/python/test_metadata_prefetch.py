@@ -113,21 +113,23 @@ class Handler(BaseHTTPRequestHandler):
                 # Make overlap observable without asserting wall-clock performance.
                 time.sleep(self.server.delay)
                 if self.server.failure == "forbidden":
-                    return self.respond(
-                        403, {"error": {"message": "prefetch denied", "type": "ForbiddenException", "code": 403}}
-                    )
-                if self.server.failure == "malformed":
-                    return self.respond(200, {})
-                metadata = table_metadata(name)
-                if self.server.wide_tables:
-                    metadata["metadata"]["last-column-id"] = 3000
-                    metadata["metadata"]["schemas"][0]["fields"] = [
-                        {"id": i + 1, "name": f"col_{i}", "required": False, "type": "long"} for i in range(3000)
-                    ]
-                return self.respond(200, metadata)
+                    status = 403
+                    metadata = {"error": {"message": "prefetch denied", "type": "ForbiddenException", "code": 403}}
+                elif self.server.failure == "malformed":
+                    status, metadata = 200, {}
+                else:
+                    status, metadata = 200, table_metadata(name)
+                    if self.server.wide_tables:
+                        metadata["metadata"]["last-column-id"] = 3000
+                        metadata["metadata"]["schemas"][0]["fields"] = [
+                            {"id": i + 1, "name": f"col_{i}", "required": False, "type": "long"} for i in range(3000)
+                        ]
             finally:
+                # Retire the work before sending the response: the client can issue
+                # its next request as soon as it receives the final response byte.
                 with self.server.lock:
                     self.server.active -= 1
+            return self.respond(status, metadata)
         return self.respond(404, {"error": {"message": path, "type": "NoSuchTableException", "code": 404}})
 
 
@@ -183,7 +185,7 @@ def metadata_shell(unittest_binary, tmp_path):
     return command, "\n".join(setup)
 
 
-def shell_command(metadata_shell, server, sql, threads=1, attach_options="", async_threads=3):
+def shell_command(metadata_shell, server, sql, threads=1, attach_options="", async_threads=3, materialize=False):
     command, setup = metadata_shell
     attach = f"""
         SET threads={threads};
@@ -191,12 +193,14 @@ def shell_command(metadata_shell, server, sql, threads=1, attach_options="", asy
         ATTACH '' AS prefetch (TYPE ICEBERG, AUTHORIZATION_TYPE 'none',
             URI 'http://127.0.0.1:{server.server_port}' {attach_options});
     """
-    return command + ["-c", setup + attach + sql]
+    # CSV streams results, and the shell can miss errors raised during Fetch().
+    # The box renderer forces materialization, making error/interrupt checks reliable.
+    return command + (["-box"] if materialize else []) + ["-c", setup + attach + sql]
 
 
-def run_sql(metadata_shell, server, sql, threads=1, attach_options="", async_threads=3):
+def run_sql(metadata_shell, server, sql, threads=1, attach_options="", async_threads=3, materialize=False):
     return subprocess.run(
-        shell_command(metadata_shell, server, sql, threads, attach_options, async_threads),
+        shell_command(metadata_shell, server, sql, threads, attach_options, async_threads, materialize),
         capture_output=True,
         text=True,
         timeout=60,
@@ -226,7 +230,9 @@ def test_parallel_metadata_loads_keep_columns_and_oids_stable(metadata_shell, th
         assert result.returncode == 0, result.stderr
         assert result.stdout.splitlines() == ["12", "12", "24", "12", "0"]
         assert server.requests == Counter({name: 1 for name in TABLES})
-        assert 1 <= server.max_active <= min(async_threads + 1, len(TABLES))
+        # Regular workers may also pick up tasks from the async queue; threads
+        # includes the caller, which can claim a queued fetch directly.
+        assert 1 <= server.max_active <= min(async_threads + threads, len(TABLES))
         # With one worker the caller may always need the table already in flight.
         if async_threads > 1:
             assert server.max_active > 1
@@ -281,7 +287,7 @@ def test_attach_does_not_load_table_metadata(metadata_shell, attach_options):
 )
 def test_prefetch_propagates_errors_and_drains_requests(metadata_shell, failure, message):
     with catalog_server(failure) as server:
-        result = run_sql(metadata_shell, server, "SHOW ALL TABLES;")
+        result = run_sql(metadata_shell, server, "SHOW ALL TABLES;", materialize=True)
         assert result.returncode != 0
         assert message in result.stderr
         assert 1 < server.max_active <= 4
@@ -310,7 +316,7 @@ def test_interrupt_drains_prefetch_requests(metadata_shell):
     with catalog_server() as server:
         server.delay = 0.5
         process = subprocess.Popen(
-            shell_command(metadata_shell, server, "SHOW ALL TABLES;"),
+            shell_command(metadata_shell, server, "SHOW ALL TABLES;", materialize=True),
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
