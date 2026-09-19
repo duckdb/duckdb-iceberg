@@ -158,7 +158,7 @@ IcebergEqualityDeleteReadColumn IcebergMultiFileReader::AddEqualityDeleteColumn(
 		auto new_column = column->GetMultiFileColumnDefinition();
 		// Equality-delete matching treats a field that is absent from a data file as NULL,
 		// independently of any historical initial default.
-		new_column.default_expression = make_uniq<ConstantExpression>(Value(new_column.type));
+		new_column.default_expression = ConstantExpression::FromValue(Value(new_column.type));
 		scan_columns.push_back(std::move(new_column));
 		column_path.push_back(scan_columns.size() - 1);
 		DUCKDB_LOG(context, IcebergLogType, "Reading dropped column '%s' privately for equality deletes", column->name);

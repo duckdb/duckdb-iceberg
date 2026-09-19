@@ -15,12 +15,13 @@ namespace duckdb {
 
 namespace {
 
-static bool IsMapType(const string &col_name, const IcebergTableSchema &table_schema) {
-	for (auto &col : table_schema.columns) {
-		if (col->name == col_name) {
-			if (col->type.id() == LogicalTypeId::MAP) {
-				return true;
-			}
+static bool HasMapParent(const vector<string> &column_names, const IcebergTableSchema &table_schema) {
+	vector<Identifier> path;
+	for (auto &name : column_names) {
+		path.emplace_back(name);
+		auto column = table_schema.GetFromPath(path, nullptr);
+		if (column && column->type.id() == LogicalTypeId::MAP) {
+			return true;
 		}
 	}
 	return false;
@@ -112,7 +113,7 @@ void IcebergDataFileStats::PopulateFromReturnStats(ClientContext &context, Icebe
 		auto stats = IcebergColumnStats::ParseColumnStats(column_info.type, col_stats, context);
 
 		//! Map types cannot violate NOT NULL; empty maps look like null maps.
-		bool is_map = IsMapType(column_names[0], ic_schema);
+		bool is_map = HasMapParent(column_names, ic_schema);
 		if (!is_map && column_info.required && stats.null_count && *stats.null_count > 0) {
 			auto normalized_col_name = StringUtil::Join(column_names, ".");
 			throw ConstraintException("NOT NULL constraint failed: %s.%s", table_name, normalized_col_name);

@@ -27,7 +27,9 @@
 		{
 			"reason": "UNKNOWN type is not supported yet",
 			"paths": [
-				"test/sql/local/catalog_test_config_setup/catalog_agnostic/create/test_create_unknown_type.test"
+				"test/sql/local/catalog_test_config_setup/catalog_agnostic/create/test_create_unknown_type.test",
+				"test/sql/local/catalog_test_config_setup/catalog_agnostic/alter/alter_unknown_type.test",
+				"test/sql/local/catalog_test_config_setup/catalog_agnostic/alter/alter_unknown_type_variant.test"
 			]
 		},
 		{

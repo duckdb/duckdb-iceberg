@@ -121,7 +121,7 @@ static unique_ptr<QueryNode> BuildCandidateSelect(const QualifiedName &table_nam
 	vector<unique_ptr<ParsedExpression>> in_children;
 	in_children.push_back(make_uniq<ColumnRefExpression>("filename"));
 	for (auto &candidate : candidates) {
-		in_children.push_back(make_uniq<ConstantExpression>(Value(candidate.file_path)));
+		in_children.push_back(ConstantExpression::FromValue(Value(candidate.file_path)));
 	}
 	//! Read through the attached Iceberg table so the scan layer applies MoR
 	//! position/equality deletes, then scope the scan to the selected rewrite

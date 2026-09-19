@@ -259,7 +259,7 @@ BuildEqualityDeleteSchema(const IcebergTableMetadataSchemas &schemas,
 			}
 			auto schema_column = column->GetMultiFileColumnDefinition();
 			schema_column.name = Identifier(StringUtil::Format("r%d", field_id));
-			schema_column.default_expression = make_uniq<ConstantExpression>(Value(schema_column.type));
+			schema_column.default_expression = ConstantExpression::FromValue(Value(schema_column.type));
 			schema.push_back(std::move(schema_column));
 		}
 	}

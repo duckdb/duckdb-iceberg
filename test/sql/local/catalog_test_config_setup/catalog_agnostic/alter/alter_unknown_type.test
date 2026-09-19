@@ -1,0 +1,185 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/alter/alter_unknown_type.test
+# description: UNKNOWN can evolve to every Iceberg type at the root and inside containers
+# group: [alter]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+require core_functions
+
+# Surface catalog errors instead of treating them as ignored test failures.
+set ignore_error_messages
+
+# Use an alias so the struct type is a single foreach token.
+statement ok
+CREATE TYPE unknown_target_struct AS STRUCT(n INTEGER, s VARCHAR);
+
+# Non-NULL values with exact representations, including all decimal storage widths.
+# VARIANT has separate coverage because nested VARIANT writing is not supported.
+statement ok
+CREATE TEMP TABLE unknown_type_values AS SELECT
+    true AS "BOOLEAN",
+    42::INTEGER AS "INTEGER",
+    9223372036854775807::BIGINT AS "BIGINT",
+    1.5::FLOAT AS "FLOAT",
+    2.25::DOUBLE AS "DOUBLE",
+    12.3::DECIMAL(4,1) AS "DECIMAL(4,1)",
+    12345.6789::DECIMAL(9,4) AS "DECIMAL(9,4)",
+    123456789012.345678::DECIMAL(18,6) AS "DECIMAL(18,6)",
+    12345678901234567890.1234567890::DECIMAL(38,10) AS "DECIMAL(38,10)",
+    DATE '2024-02-29' AS "DATE",
+    TIME '12:34:56.123456' AS "TIME",
+    TIMESTAMP '2024-02-29 12:34:56.123456' AS "TIMESTAMP",
+    TIMESTAMPTZ '2024-02-29 12:34:56.123456+00' AS "TIMESTAMPTZ",
+    TIMESTAMP_NS '2024-02-29 12:34:56.123456789' AS "TIMESTAMP_NS",
+    TIMESTAMPTZ_NS '2024-02-29 12:34:56.123456789+00' AS "TIMESTAMPTZ_NS",
+    UUID '12345678-1234-5678-9abc-123456789abc' AS "UUID",
+    'unknown becomes a string'::VARCHAR AS "VARCHAR",
+    '\x00\x01\xFF'::BLOB AS "BLOB",
+    {'n': 42, 's': 'hello'}::unknown_target_struct AS "unknown_target_struct",
+    [42, NULL, 7]::INTEGER[] AS "INTEGER[]",
+    MAP {1: 'hello', 2: NULL} AS "MAP(INTEGER,VARCHAR)",
+    'POINT (1 2)'::GEOMETRY AS "GEOMETRY";
+
+foreach type BOOLEAN INTEGER BIGINT FLOAT DOUBLE DECIMAL(4,1) DECIMAL(9,4) DECIMAL(18,6) DECIMAL(38,10) DATE TIME TIMESTAMP TIMESTAMPTZ TIMESTAMP_NS TIMESTAMPTZ_NS UUID VARCHAR BLOB unknown_target_struct INTEGER[] MAP(INTEGER,VARCHAR) GEOMETRY
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.alter_unknown_type;
+
+statement ok
+CREATE TABLE my_datalake.default.alter_unknown_type (
+    id INTEGER,
+    r "NULL" DEFAULT NULL,
+    s STRUCT(v "NULL"),
+    m MAP(VARCHAR, "NULL"),
+    l "NULL"[]
+) WITH ('format-version' = '3');
+
+# Commit old data before evolution: a NULL container, an empty collection, and
+# populated containers whose child values are UNKNOWN. Map keys cannot be NULL.
+statement ok
+INSERT INTO my_datalake.default.alter_unknown_type VALUES
+    (1, NULL, NULL, NULL, NULL),
+    (2, NULL, {'v': NULL}, MAP {}, []),
+    (3, NULL, {'v': NULL}, MAP {'old': NULL}, [NULL, NULL]);
+
+statement ok
+ALTER TABLE my_datalake.default.alter_unknown_type ALTER COLUMN r TYPE {type};
+
+statement ok
+ALTER TABLE my_datalake.default.alter_unknown_type ALTER COLUMN s.v TYPE {type};
+
+statement ok
+ALTER TABLE my_datalake.default.alter_unknown_type ALTER COLUMN m.value TYPE {type};
+
+statement ok
+ALTER TABLE my_datalake.default.alter_unknown_type ALTER COLUMN l.element TYPE {type};
+
+# Check actual bound field types, including children of newly introduced containers.
+query IIII
+SELECT typeof(r) = typeof(v), typeof(s.v) = typeof(v),
+       typeof(map_extract_value(m, 'old')) = typeof(v), typeof(l[1]) = typeof(v)
+FROM my_datalake.default.alter_unknown_type,
+     (SELECT "{type}" AS v FROM unknown_type_values) expected
+WHERE id = 3;
+----
+true	true	true	true
+
+statement ok
+INSERT INTO my_datalake.default.alter_unknown_type
+SELECT 4, v, {'v': v}, MAP {'new': v}, [v, NULL]
+FROM (SELECT "{type}" AS v FROM unknown_type_values);
+
+# Old values remain NULL after the new typed data has been committed. Preserve
+# the distinction between NULL containers, empty collections, and NULL children.
+query IIIII
+SELECT id, r IS NULL, s IS NULL, m IS NULL, l IS NULL
+FROM my_datalake.default.alter_unknown_type WHERE id < 4 ORDER BY id;
+----
+1	true	true	true	true
+2	true	false	false	false
+3	true	false	false	false
+
+query IIIIIII
+SELECT id, s.v IS NULL, cardinality(m), len(l),
+       map_extract_value(m, 'old') IS NULL, l[1] IS NULL, l[2] IS NULL
+FROM my_datalake.default.alter_unknown_type WHERE id IN (2, 3) ORDER BY id;
+----
+2	true	0	0	true	true	true
+3	true	1	2	true	true	true
+
+# Verify values, not only successful insertion or the new schema.
+query IIIIIIII
+SELECT r IS NOT DISTINCT FROM v, s.v IS NOT DISTINCT FROM v,
+       map_extract_value(m, 'new') IS NOT DISTINCT FROM v, l[1] IS NOT DISTINCT FROM v,
+       map_keys(m) = ['new'], cardinality(m), len(l), l[2] IS NULL
+FROM my_datalake.default.alter_unknown_type,
+     (SELECT "{type}" AS v FROM unknown_type_values) expected
+WHERE id = 4;
+----
+true	true	true	true	true	1	2	true
+
+statement ok
+DROP TABLE my_datalake.default.alter_unknown_type;
+
+endloop
+
+# Multiple nested evolutions in one transaction allocate disjoint child field IDs.
+# Explicit NULL defaults must also acquire the new type.
+statement ok
+CREATE TABLE my_datalake.default.alter_unknown_type (
+    id INTEGER, a "NULL" DEFAULT NULL, b "NULL" DEFAULT NULL
+) WITH ('format-version' = '3');
+
+statement ok
+INSERT INTO my_datalake.default.alter_unknown_type(id) VALUES (1);
+
+statement ok
+BEGIN;
+
+statement ok
+ALTER TABLE my_datalake.default.alter_unknown_type ALTER COLUMN a TYPE STRUCT(x INTEGER, y INTEGER[]);
+
+statement ok
+ALTER TABLE my_datalake.default.alter_unknown_type ALTER COLUMN b TYPE MAP(INTEGER, STRUCT(v VARCHAR));
+
+statement ok
+ALTER TABLE my_datalake.default.alter_unknown_type ADD COLUMN c BOOLEAN;
+
+statement ok
+INSERT INTO my_datalake.default.alter_unknown_type VALUES
+    (2, {'x': 42, 'y': [7, NULL]}, MAP {9: {'v': 'hello'}}, true);
+
+statement ok
+COMMIT;
+
+statement ok
+INSERT INTO my_datalake.default.alter_unknown_type(id) VALUES (3);
+
+query IIII
+SELECT id, a IS NULL, b IS NULL, c FROM my_datalake.default.alter_unknown_type ORDER BY id;
+----
+1	true	true	NULL
+2	false	false	true
+3	true	true	NULL
+
+query III
+SELECT a.x, a.y, map_extract_value(b, 9).v FROM my_datalake.default.alter_unknown_type WHERE id = 2;
+----
+42	[7, NULL]	hello
+
+statement ok
+DROP TABLE my_datalake.default.alter_unknown_type;
+
+statement ok
+DROP TABLE unknown_type_values;
+
+statement ok
+DROP TYPE unknown_target_struct;

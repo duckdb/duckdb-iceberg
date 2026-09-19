@@ -40,44 +40,15 @@ public:
 	    : BaseExecutorTask(state.executor), state(state), reader(*state.scan) {
 	}
 
-	void ExecuteTask() override {
-		throw InternalException("Simple ExecuteTask should never be called!");
-	}
-
-	TaskExecutionResult ExecuteTaskIncremental() {
+	//! One manifest read per step: the TaskExecutor wrapper loops this to completion when draining and yields
+	//! between steps on a background thread. Cancellation, error capture and task accounting live in the wrapper.
+	TaskExecutionResult ExecuteTaskStep() override {
 		while (!reader.Finished()) {
 			reader.Read();
 			return TaskExecutionResult::TASK_NOT_FINISHED;
 		}
 		--state.in_progress_tasks;
 		return TaskExecutionResult::TASK_FINISHED;
-	}
-
-	TaskExecutionResult Execute(TaskExecutionMode mode) override {
-		if (executor.HasError()) {
-			executor.FinishTask();
-			return TaskExecutionResult::TASK_FINISHED;
-		}
-		try {
-			{
-				TaskNotifier task_notifier {state.context};
-				auto res = TaskExecutionResult::TASK_NOT_FINISHED;
-				while (res == TaskExecutionResult::TASK_NOT_FINISHED) {
-					res = ExecuteTaskIncremental();
-					if (res == TaskExecutionResult::TASK_NOT_FINISHED && mode == TaskExecutionMode::PROCESS_PARTIAL) {
-						return res;
-					}
-				}
-			}
-			executor.FinishTask();
-			return TaskExecutionResult::TASK_FINISHED;
-		} catch (std::exception &ex) {
-			executor.PushError(ErrorData(ex));
-		} catch (...) { // LCOV_EXCL_START
-			executor.PushError(ErrorData("Unknown exception during Checkpoint!"));
-		} // LCOV_EXCL_STOP
-		executor.FinishTask();
-		return TaskExecutionResult::TASK_ERROR;
 	}
 
 private:

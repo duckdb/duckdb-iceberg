@@ -262,6 +262,7 @@ bool IcebergColumnDefinition::IsIcebergPrimitiveType() const {
 	case LogicalTypeId::TIMESTAMP_TZ_NS:
 	case LogicalTypeId::VARIANT:
 	case LogicalTypeId::GEOMETRY:
+	case LogicalTypeId::SQLNULL:
 		return true;
 	default:
 		return false;
@@ -290,7 +291,7 @@ unique_ptr<IcebergColumnDefinition> IcebergColumnDefinition::Copy() const {
 
 MultiFileColumnDefinition IcebergColumnDefinition::GetMultiFileColumnDefinition() const {
 	MultiFileColumnDefinition column(name, type);
-	column.default_expression = make_uniq<ConstantExpression>(GetInitialDefault());
+	column.default_expression = ConstantExpression::FromValue(GetInitialDefault());
 	column.identifier = Value::INTEGER(id);
 	for (auto &child : children) {
 		column.children.push_back(child->GetMultiFileColumnDefinition());
@@ -373,14 +374,14 @@ ColumnDefinition IcebergColumnDefinition::GetColumnDefinition() const {
 		// ConstantOrNull::IsConstantOrNull and extracts the second argument only when it needs to remap a supplied
 		// non-NULL STRUCT. This envelope is internal and is not serialized into Iceberg metadata.
 		vector<unique_ptr<ParsedExpression>> arguments;
-		arguments.push_back(make_uniq<ConstantExpression>(std::move(write_default)));
-		arguments.push_back(make_uniq<ConstantExpression>(GetWriteDefaultDescriptor()));
+		arguments.push_back(ConstantExpression::FromValue(write_default));
+		arguments.push_back(ConstantExpression::FromValue(GetWriteDefaultDescriptor()));
 		res.SetDefaultValue(make_uniq<FunctionExpression>(Identifier(ConstantOrNullFun::Name), std::move(arguments)));
 	} else if (!write_default.IsNull()) {
 		if (type.IsNested()) {
 			throw NotImplementedException("DEFAULT values for nested types are not supported yet");
 		}
-		res.SetDefaultValue(make_uniq<ConstantExpression>(write_default));
+		res.SetDefaultValue(ConstantExpression::FromValue(write_default));
 	}
 
 	if (doc) {

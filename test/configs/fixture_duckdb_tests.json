@@ -1792,6 +1792,25 @@
       ]
     },
     {
+      "reason": "New bump (99063af2bd7092aff02e14184a20e24699d34d71 -> 4e106d6883ab27b4db6469a760d76c0533bb5bb8)",
+      "paths": [
+        "test/sql/alter/add_col/test_add_col_compression.test",
+        "test/sql/filter/test_throwing_filter_pushdown.test",
+        "test/sql/function/generic/test_barrier.test",
+        "test/sql/join/mark/test_null_safe_semi_uncommitted_stats.test",
+        "test/sql/optimizer/barrier_row_group_pruning.test",
+        "test/sql/optimizer/cross_column_expression_stats_pruning.test",
+        "test/sql/optimizer/secure_view_pushdown_compression.test",
+        "test/sql/storage/optimistic_write/optimistic_write_batch_insert_sub_rowgroup.test",
+        "test/sql/storage/optimistic_write/optimistic_write_commit_failure.test",
+        "test/sql/storage/reclaim_space/reclaim_space_drop_table_optimistic.test",
+        "test/sql/types/numeric/float_precision.test",
+        "test/sql/storage/compression/chimp/chimp_fetch_row.test",
+        "test/sql/alter/rename_table/test_rename_table_conflict_storage_name.test",
+        "test/sql/storage/temp_directory/offload_failure_accounting.test"
+      ]
+    },
+    {
       "reason": "Test takes too long and fills up backend storage for tests",
       "paths": [
         "test/sql/aggregate/aggregates/bitstring_agg_memory_limit.test",
