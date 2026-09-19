@@ -52,6 +52,7 @@
 			"paths": [
 				"test/sql/local/catalog_test_config_setup/catalog_agnostic/insert/test_insert_to_v3_tables.test",
 				"test/sql/local/catalog_test_config_setup/catalog_agnostic/test_row_lineage_read_from_upgraded.test",
+				"test/sql/local/catalog_test_config_setup/catalog_agnostic/insert/test_unknown_type_omitted_from_data_files.test",
 				"test/sql/local/catalog_test_config_setup/catalog_agnostic/alter/drop_column/alter_drop_column_partition.test"
 			]
 		},
