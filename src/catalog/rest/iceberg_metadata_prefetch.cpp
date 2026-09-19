@@ -3,115 +3,179 @@
 #include "catalog/rest/catalog_entry/table/iceberg_table.hpp"
 #include "catalog/rest/iceberg_catalog.hpp"
 #include "duckdb/main/client_context.hpp"
+#include "duckdb/main/client_context_state.hpp"
 #include "duckdb/parallel/task_executor.hpp"
+#include <condition_variable>
+#include <chrono>
 
 namespace duckdb {
 
-class IcebergMetadataPrefetch::FetchTask : public BaseExecutorTask {
+class IcebergMetadataPrefetch::State {
 public:
-	FetchTask(TaskExecutor &executor, ClientContext &context, Entry &entry)
-	    : BaseExecutorTask(executor), context(context), entry(entry) {
-	}
+	enum class Status { QUEUED, RUNNING, READY };
+	struct Entry {
+		explicit Entry(shared_ptr<IcebergTable> table) : table(std::move(table)) {
+		}
+		shared_ptr<IcebergTable> table;
+		mutex lock;
+		std::condition_variable ready;
+		Status status = Status::QUEUED;
+		unique_ptr<IcebergLoadTableResult> result;
+		ErrorData error;
+	};
 
-	void ExecuteTask() override {
+	class FetchTask : public BaseExecutorTask {
+	public:
+		FetchTask(TaskExecutor &executor, ClientContext &context, Entry &entry)
+		    : BaseExecutorTask(executor), context(context), entry(entry) {
+		}
+		void ExecuteTask() override {
+			Fetch(context, entry);
+		}
+
+	private:
+		ClientContext &context;
+		Entry &entry;
+	};
+
+	static void Fetch(ClientContext &context, Entry &entry) {
+		{
+			lock_guard<mutex> guard(entry.lock);
+			if (entry.status != Status::QUEUED) {
+				return;
+			}
+			entry.status = Status::RUNNING;
+		}
+		unique_ptr<IcebergLoadTableResult> result;
+		ErrorData error;
 		try {
 			if (context.IsInterrupted()) {
 				throw InterruptException();
 			}
 			auto &table = *entry.table;
-			entry.result =
+			result =
 			    make_uniq<IcebergLoadTableResult>(IRCAPI::GetTable(context, table.catalog, table.schema, table.name));
 		} catch (std::exception &ex) {
-			// A speculative failure must not fail a query that never consumes this table.
-			entry.error = ErrorData(ex);
+			// Speculative failures are only reported if this table is consumed.
+			error = ErrorData(ex);
 		} catch (...) {
-			entry.error = ErrorData("Unknown error while prefetching Iceberg table metadata");
+			error = ErrorData("Unknown error while prefetching Iceberg table metadata");
+		}
+		{
+			lock_guard<mutex> guard(entry.lock);
+			entry.result = std::move(result);
+			entry.error = std::move(error);
+			entry.status = Status::READY;
+		}
+		entry.ready.notify_all();
+	}
+
+	void Stop() {
+		lock_guard<mutex> guard(lock);
+		// Cancel unclaimed work and wait for running HTTP requests before releasing the
+		// query context or table/schema owners. Never hold an entry lock while draining.
+		if (executor) {
+			executor->CancelAndDrain();
+			executor.reset();
+		}
+		for (auto &item : entries) {
+			auto &entry = *item.second;
+			lock_guard<mutex> guard(entry.lock);
+			if (entry.error.HasError() && entry.error.Type() == ExceptionType::INTERRUPT) {
+				entry.error = ErrorData();
+				entry.status = Status::QUEUED;
+			}
 		}
 	}
 
-private:
-	ClientContext &context;
-	Entry &entry;
+	mutex lock;
+	case_insensitive_map_t<unique_ptr<Entry>> entries;
+	unique_ptr<TaskExecutor> executor;
 };
 
-void IcebergMetadataPrefetch::Register(shared_ptr<IcebergTable> table) {
-	lock_guard<mutex> guard(lock);
+class IcebergMetadataPrefetch::QueryState : public ClientContextState {
+public:
+	void Register(shared_ptr<State> state) {
+		lock_guard<mutex> guard(lock);
+		states.emplace_back(std::move(state));
+	}
+	void QueryEnd() override {
+		vector<weak_ptr<State>> pending;
+		{
+			lock_guard<mutex> guard(lock);
+			pending.swap(states);
+		}
+		for (auto &ref : pending) {
+			auto state = ref.lock();
+			if (state) {
+				state->Stop();
+			}
+		}
+	}
+	mutex lock;
+	vector<weak_ptr<State>> states;
+};
+
+IcebergMetadataPrefetch::IcebergMetadataPrefetch() : state(make_shared_ptr<State>()) {
+}
+
+IcebergMetadataPrefetch::~IcebergMetadataPrefetch() {
+	CancelAndDrain();
+}
+
+void IcebergMetadataPrefetch::CancelAndDrain() {
+	state->Stop();
+}
+
+void IcebergMetadataPrefetch::Register(ClientContext &context, shared_ptr<IcebergTable> table) {
+	lock_guard<mutex> guard(state->lock);
 	auto key = table->GetTableKey();
-	if (entries.find(key) != entries.end()) {
+	if (state->entries.find(key) != state->entries.end()) {
 		return;
 	}
-	auto entry = make_uniq<Entry>(std::move(table));
-	auto inserted = entries.emplace(std::move(key), std::move(entry));
-	pending.emplace_back(*inserted.first->second);
-}
-
-void IcebergMetadataPrefetch::Prefetch(ClientContext &context, const string &table_key) {
-	lock_guard<mutex> guard(lock);
-	auto it = entries.find(table_key);
-	if (it == entries.end() || it->second->requested) {
+	// Check the cache on the caller; workers do not publish catalog state.
+	auto &catalog = table->catalog;
+	if (catalog.attach_options.max_table_staleness_micros.IsValid() &&
+	    catalog.table_request_cache.Get(context, key, [](const rest_api_objects::LoadTableResult &) {})) {
 		return;
 	}
-
-	// Use async workers for blocking HTTP requests, plus the caller that drains the batch.
-	// With no async workers this falls back to one request at a time.
-	auto &scheduler = TaskScheduler::GetScheduler(context);
-	const auto batch_size = MinValue<idx_t>(7, scheduler.NumberOfAsyncThreads()) + 1;
-	vector<reference<Entry>> batch;
-	batch.emplace_back(*it->second);
-	it->second->requested = true;
-	while (batch.size() < batch_size && next_pending < pending.size()) {
-		auto &entry = pending[next_pending++].get();
-		if (!entry.requested) {
-			entry.requested = true;
-			batch.emplace_back(entry);
-		}
+	if (!state->executor) {
+		auto query_state = context.registered_state->GetOrCreate<QueryState>("iceberg_metadata_prefetch");
+		query_state->Register(state);
+		state->executor = make_uniq<TaskExecutor>(context, TaskSchedulerType::ASYNC);
 	}
-
-	TaskExecutor executor(context, TaskSchedulerType::ASYNC);
-	try {
-		for (auto &ref : batch) {
-			auto &entry = ref.get();
-			auto &catalog = entry.table->catalog;
-			// Check cache validity on the consuming thread. FillEntry will use the cache directly;
-			// there is no need to copy cached metadata into the prefetch buffer.
-			if (catalog.attach_options.max_table_staleness_micros.IsValid() &&
-			    catalog.table_request_cache.Get(context, entry.table->GetTableKey(),
-			                                    [](const rest_api_objects::LoadTableResult &) {})) {
-				continue;
-			}
-			executor.ScheduleTask(make_uniq<FetchTask>(executor, context, entry));
-		}
-		executor.WorkOnTasks();
-	} catch (...) {
-		executor.CancelAndDrain();
-		// Allow a later statement in the transaction to retry work that never completed.
-		for (auto &ref : batch) {
-			auto &entry = ref.get();
-			if (!entry.result && !entry.error.HasError()) {
-				entry.requested = false;
-			}
-		}
-		throw;
-	}
-	if (context.IsInterrupted()) {
-		throw InterruptException();
-	}
+	auto entry = make_uniq<State::Entry>(std::move(table));
+	auto &ref = *entry;
+	state->entries.emplace(std::move(key), std::move(entry));
+	state->executor->ScheduleTask(make_uniq<State::FetchTask>(*state->executor, context, ref));
 }
 
-unique_ptr<IcebergLoadTableResult> IcebergMetadataPrefetch::Take(const string &table_key) {
-	lock_guard<mutex> guard(lock);
-	auto it = entries.find(table_key);
-	if (it == entries.end()) {
-		return nullptr;
+unique_ptr<IcebergLoadTableResult> IcebergMetadataPrefetch::Take(ClientContext &context, const string &table_key) {
+	optional_ptr<State::Entry> entry_ptr;
+	{
+		lock_guard<mutex> guard(state->lock);
+		auto it = state->entries.find(table_key);
+		if (it == state->entries.end()) {
+			return nullptr;
+		}
+		entry_ptr = it->second.get();
 	}
-	auto &entry = *it->second;
-	entry.requested = true;
+	auto &entry = *entry_ptr;
+	// Claim queued work ourselves. Its scheduler task will see RUNNING/READY and do nothing.
+	// This also provides progress when there are no async workers.
+	State::Fetch(context, entry);
+	std::unique_lock<mutex> guard(entry.lock);
+	while (entry.status == State::Status::RUNNING) {
+		if (context.IsInterrupted()) {
+			throw InterruptException();
+		}
+		entry.ready.wait_for(guard, std::chrono::milliseconds(10));
+	}
 	if (entry.error.HasError()) {
 		entry.error.Throw();
 	}
 	if (entry.result && entry.result->error_) {
-		// Multiple system-table scans may consume the same failing entry. Preserve the response
-		// so a second consumer does not issue another request after the first one throws.
+		// Keep failed responses for repeated consumers in the same transaction.
 		auto result = make_uniq<IcebergLoadTableResult>();
 		result->status_ = entry.result->status_;
 		result->error_ = entry.result->error_->Copy();

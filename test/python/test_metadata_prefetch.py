@@ -65,6 +65,10 @@ class Catalog(ThreadingHTTPServer):
         self.failure = failure
         self.delay = 0.05
         self.started = threading.Event()
+        self.schemas = ["default"]
+        self.listings = 0
+        self.prefetched_during_listing = False
+        self.wide_tables = False
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -86,12 +90,18 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/v1/config":
             return self.respond(200, {"defaults": {}, "overrides": {}})
         if path == "/v1/namespaces":
-            return self.respond(200, {"namespaces": [["default"]]})
-        if path == "/v1/namespaces/default":
-            return self.respond(200, {"namespace": ["default"], "properties": {}})
-        if path == "/v1/namespaces/default/tables":
-            return self.respond(200, {"identifiers": [{"namespace": ["default"], "name": n} for n in TABLES]})
-        prefix = "/v1/namespaces/default/tables/"
+            return self.respond(200, {"namespaces": [[s] for s in self.server.schemas]})
+        namespace = path.split("/")[3] if path.startswith("/v1/namespaces/") else ""
+        if path == f"/v1/namespaces/{namespace}":
+            return self.respond(200, {"namespace": [namespace], "properties": {}})
+        if path == f"/v1/namespaces/{namespace}/tables":
+            self.server.listings += 1
+            if len(self.server.schemas) > 1 and self.server.listings == 2:
+                # No table columns can be consumed until the system-table scan has
+                # finished collecting entries from both schemas.
+                self.server.prefetched_during_listing = self.server.started.wait(5)
+            return self.respond(200, {"identifiers": [{"namespace": [namespace], "name": n} for n in TABLES]})
+        prefix = f"/v1/namespaces/{namespace}/tables/"
         if path.startswith(prefix) and path[len(prefix) :] in TABLES:
             name = path[len(prefix) :]
             with self.server.lock:
@@ -108,7 +118,13 @@ class Handler(BaseHTTPRequestHandler):
                     )
                 if self.server.failure == "malformed":
                     return self.respond(200, {})
-                return self.respond(200, table_metadata(name))
+                metadata = table_metadata(name)
+                if self.server.wide_tables:
+                    metadata["metadata"]["last-column-id"] = 3000
+                    metadata["metadata"]["schemas"][0]["fields"] = [
+                        {"id": i + 1, "name": f"col_{i}", "required": False, "type": "long"} for i in range(3000)
+                    ]
+                return self.respond(200, metadata)
             finally:
                 with self.server.lock:
                     self.server.active -= 1
@@ -210,9 +226,45 @@ def test_parallel_metadata_loads_keep_columns_and_oids_stable(metadata_shell, th
         assert result.returncode == 0, result.stderr
         assert result.stdout.splitlines() == ["12", "12", "24", "12", "0"]
         assert server.requests == Counter({name: 1 for name in TABLES})
-        assert 1 <= server.max_active <= min(async_threads + 1, 8)
-        if async_threads > 0:
+        assert 1 <= server.max_active <= min(async_threads + 1, len(TABLES))
+        # With one worker the caller may always need the table already in flight.
+        if async_threads > 1:
             assert server.max_active > 1
+        assert server.active == 0
+
+
+def test_prefetch_starts_before_schema_scan_finishes(metadata_shell):
+    with catalog_server() as server:
+        server.schemas = ["default", "other"]
+        result = run_sql(metadata_shell, server, "SELECT count(*) FROM (SHOW ALL TABLES);")
+        assert result.returncode == 0, result.stderr
+        assert result.stdout.splitlines() == ["24"]
+        assert server.prefetched_during_listing
+        assert server.requests == Counter({name: 2 for name in TABLES})
+        assert server.active == 0
+
+
+@pytest.mark.parametrize("async_threads", [0, 3])
+def test_partial_scan_can_resume_in_same_transaction(metadata_shell, async_threads):
+    with catalog_server() as server:
+        # One table fills a whole output chunk, so LIMIT stops before all columns
+        # have been consumed. Query-end cleanup must leave queued work claimable.
+        server.wide_tables = True
+        result = run_sql(
+            metadata_shell,
+            server,
+            """
+            BEGIN;
+            SELECT count(*) FROM (SELECT * FROM duckdb_columns() LIMIT 1);
+            SELECT count(*) FROM (SHOW ALL TABLES);
+            ROLLBACK;
+            DETACH prefetch;
+            """,
+            async_threads=async_threads,
+        )
+        assert result.returncode == 0, result.stderr
+        assert result.stdout.splitlines() == ["1", "12"]
+        assert server.requests == Counter({name: 1 for name in TABLES})
         assert server.active == 0
 
 
@@ -234,7 +286,7 @@ def test_prefetch_propagates_errors_and_drains_requests(metadata_shell, failure,
         assert message in result.stderr
         assert 1 < server.max_active <= 4
         assert server.active == 0
-        assert sum(server.requests.values()) <= 4
+        assert all(count == 1 for count in server.requests.values())
 
 
 def test_prefetch_respects_metadata_cache(metadata_shell):

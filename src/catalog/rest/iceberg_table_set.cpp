@@ -52,7 +52,7 @@ bool IcebergTableSet::FillEntry(ClientContext &context, IcebergTable &table) {
 	}
 
 	// Consume a prefetched response when available; otherwise load this table directly.
-	auto prefetched = IcebergTransaction::Get(context, catalog).metadata_prefetch.Take(table_key);
+	auto prefetched = IcebergTransaction::Get(context, catalog).metadata_prefetch.Take(context, table_key);
 	auto get_table_result =
 	    prefetched ? std::move(*prefetched) : IRCAPI::GetTable(context, ic_catalog, schema, table.name);
 	if (get_table_result.error_) {
@@ -133,7 +133,6 @@ void IcebergTableSet::Scan(ClientContext &context, const std::function<void(Cata
 			}
 
 			auto &new_lazy_entry = GetOrCreateLazyEntry(context, iceberg_transaction, table_info);
-			iceberg_transaction.metadata_prefetch.Register(entry.second);
 			scan_entries.emplace_back(new_lazy_entry);
 		}
 	}
@@ -213,6 +212,11 @@ void IcebergTableSet::LoadEntriesInternal(ClientContext &context) {
 			} else {
 				++it;
 			}
+		}
+	}
+	for (auto &entry : entries) {
+		if (entry.second->schema_versions.empty()) {
+			iceberg_transaction.metadata_prefetch.Register(context, entry.second);
 		}
 	}
 	iceberg_transaction.listed_schemas.insert(schema.name.GetIdentifierName());
@@ -358,8 +362,7 @@ IcebergTable &IcebergTableSet::CreateNewEntry(ClientContext &context, IcebergCat
 	return table_info;
 }
 
-optional_ptr<CatalogEntry> IcebergTableSet::GetEntry(ClientContext &context, const EntryLookupInfo &lookup,
-                                                     bool prefetch) {
+optional_ptr<CatalogEntry> IcebergTableSet::GetEntry(ClientContext &context, const EntryLookupInfo &lookup) {
 	auto &ic_catalog = catalog.Cast<IcebergCatalog>();
 	auto &iceberg_transaction = IcebergTransaction::Get(context, catalog);
 	lock_guard<mutex> transaction_guard(iceberg_transaction.catalog_entry_lock);
@@ -381,9 +384,6 @@ optional_ptr<CatalogEntry> IcebergTableSet::GetEntry(ClientContext &context, con
 		return table_info.GetSchemaVersion(at);
 	}
 
-	if (prefetch) {
-		iceberg_transaction.metadata_prefetch.Prefetch(context, table_key);
-	}
 	auto new_version = IcebergTable::CreatePlaceholder(ic_catalog, schema, table_name);
 	auto &table_info = *new_version;
 	if (!FillEntry(context, table_info)) {
