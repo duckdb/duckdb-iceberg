@@ -163,11 +163,6 @@ DatabaseSize IcebergCatalog::GetDatabaseSize(ClientContext &context) {
 }
 
 ErrorData IcebergCatalog::SupportsCreateTable(BoundCreateTableInfo &info) {
-	auto &base = info.Base().Cast<CreateTableInfo>();
-	if (!base.sort_keys.empty()) {
-		return ErrorData(ExceptionType::CATALOG,
-		                 StringUtil::Format("SORTED BY is not supported for tables in a %s catalog", GetCatalogType()));
-	}
 	return ErrorData();
 }
 

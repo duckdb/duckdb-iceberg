@@ -52,8 +52,13 @@ public:
 	static IcebergPartitionSpec BuildPartitionSpec(const vector<unique_ptr<ParsedExpression>> &partition_keys,
 	                                               const IcebergTableSchema &schema, int32_t spec_id,
 	                                               idx_t base_partition_field_id);
-	static IcebergSortOrder BuildSortOrder(const vector<OrderByNode> &orders, const IcebergTableSchema &schema,
-	                                       int32_t sort_order_id);
+	static IcebergSortOrder BuildSortOrder(ClientContext &context, const vector<OrderByNode> &orders,
+	                                       const IcebergTableSchema &schema, int32_t sort_order_id);
+	//! Build a sort order from CreateTableInfo::sort_keys (expressions in the current DuckDB parser),
+	//! resolving direction and null ordering from the client settings.
+	static IcebergSortOrder BuildSortOrder(ClientContext &context,
+	                                       const vector<unique_ptr<ParsedExpression>> &sort_keys,
+	                                       const IcebergTableSchema &schema, int32_t sort_order_id);
 	IRCAPITableCredentials GetVendedCredentials(ClientContext &context) const;
 	IRCAPITableCredentials
 	GetVendedCredentials(ClientContext &context,

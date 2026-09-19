@@ -8,6 +8,11 @@
 
 namespace duckdb {
 
+//! The Iceberg spec reserves sort order id 0 for the unsorted order
+static constexpr int32_t UNSORTED_SORT_ORDER_ID = 0;
+//! The first sort order id assigned to a table that is created sorted
+static constexpr int32_t INITIAL_SORT_ORDER_ID = 1;
+
 struct IcebergSortOrderField {
 public:
 	static IcebergSortOrderField ParseFromJson(const rest_api_objects::SortField &field);

@@ -22,12 +22,13 @@
 namespace duckdb {
 
 IcebergCreateTableRequest::IcebergCreateTableRequest(string name_p, shared_ptr<IcebergTableSchema> schema_p,
-                                                     IcebergPartitionSpec partition_spec_p, idx_t iceberg_version_p,
+                                                     IcebergPartitionSpec partition_spec_p,
+                                                     IcebergSortOrder sort_order_p, idx_t iceberg_version_p,
                                                      case_insensitive_map_t<string> table_properties_p,
                                                      string location_p)
     : name(std::move(name_p)), schema(std::move(schema_p)), partition_spec(std::move(partition_spec_p)),
-      iceberg_version(iceberg_version_p), table_properties(std::move(table_properties_p)),
-      location(std::move(location_p)) {
+      sort_order(std::move(sort_order_p)), iceberg_version(iceberg_version_p),
+      table_properties(std::move(table_properties_p)), location(std::move(location_p)) {
 }
 
 static void AddUnnamedField(JSONWriter &writer, JSONMutableValue field_obj, const IcebergColumnDefinition &column);
@@ -246,10 +247,7 @@ string IcebergCreateTableRequest::CreateTableToJSON(bool stage_create) const {
 		field_obj.Add("field-id", writer.CreateSignedInteger(field.partition_field_id));
 	}
 
-	auto write_order = writer.CreateObject();
-	root_object.Add("write-order", write_order);
-	write_order.Add("order-id", writer.CreateUnsignedInteger(0));
-	write_order.Add("fields", writer.CreateArray());
+	root_object.Add("write-order", sort_order.ToJSON(writer));
 
 	auto properties = writer.CreateObject();
 	root_object.Add("properties", properties);

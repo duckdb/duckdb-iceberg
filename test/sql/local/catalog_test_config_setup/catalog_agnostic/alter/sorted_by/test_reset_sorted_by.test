@@ -1,0 +1,211 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/alter/sorted_by/test_reset_sorted_by.test
+# description: Test ALTER TABLE ... RESET SORTED BY
+# group: [sorted_by]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+CREATE SCHEMA IF NOT EXISTS my_datalake.default;
+
+# --- Writes stop being ordered once the sort order is reset ---
+
+statement ok
+drop table if exists my_datalake.default.test_reset_sorted_by_writes;
+
+statement ok
+CREATE TABLE my_datalake.default.test_reset_sorted_by_writes (a int, b int);
+
+statement ok
+ALTER TABLE my_datalake.default.test_reset_sorted_by_writes SET SORTED BY (a ASC NULLS LAST);
+
+statement ok
+insert into my_datalake.default.test_reset_sorted_by_writes values (4, 40), (2, 20), (3, 30), (1, 10);
+
+statement ok
+set variable sorted_file = (
+	select distinct filename from my_datalake.default.test_reset_sorted_by_writes where a = 1
+);
+
+# While the sort order is active the file is written in sort order, not insertion order
+query II
+select a, b
+from my_datalake.default.test_reset_sorted_by_writes
+where filename = getvariable('sorted_file')
+order by file_row_number;
+----
+1	10
+2	20
+3	30
+4	40
+
+statement ok
+ALTER TABLE my_datalake.default.test_reset_sorted_by_writes RESET SORTED BY;
+
+query I
+SELECT metadata."default-sort-order-id"
+FROM iceberg_load_table_response(my_datalake.default.test_reset_sorted_by_writes);
+----
+0
+
+statement ok
+insert into my_datalake.default.test_reset_sorted_by_writes values (8, 80), (6, 60), (7, 70), (5, 50);
+
+statement ok
+set variable unsorted_file = (
+	select distinct filename from my_datalake.default.test_reset_sorted_by_writes where a = 5
+);
+
+# The reset is honoured by the write path: no ordering is applied, so the rows land in insertion order
+query II
+select a, b
+from my_datalake.default.test_reset_sorted_by_writes
+where filename = getvariable('unsorted_file')
+order by file_row_number;
+----
+8	80
+6	60
+7	70
+5	50
+
+query II
+select * from my_datalake.default.test_reset_sorted_by_writes order by all;
+----
+1	10
+2	20
+3	30
+4	40
+5	50
+6	60
+7	70
+8	80
+
+statement ok
+drop table if exists my_datalake.default.test_reset_sorted_by_writes;
+
+# --- Resetting an already-unsorted table is a no-op ---
+
+statement ok
+drop table if exists my_datalake.default.test_reset_sorted_by_noop;
+
+statement ok
+CREATE TABLE my_datalake.default.test_reset_sorted_by_noop (a int, b int);
+
+query II
+SELECT
+	metadata."default-sort-order-id",
+	len(metadata."sort-orders"::VARIANT[])
+FROM iceberg_load_table_response(my_datalake.default.test_reset_sorted_by_noop);
+----
+0	1
+
+statement ok
+ALTER TABLE my_datalake.default.test_reset_sorted_by_noop RESET SORTED BY;
+
+# Still the unsorted order, and no extra sort order was appended
+query II
+SELECT
+	metadata."default-sort-order-id",
+	len(metadata."sort-orders"::VARIANT[])
+FROM iceberg_load_table_response(my_datalake.default.test_reset_sorted_by_noop);
+----
+0	1
+
+# Resetting twice in a row is also a no-op
+statement ok
+ALTER TABLE my_datalake.default.test_reset_sorted_by_noop RESET SORTED BY;
+
+query II
+SELECT
+	metadata."default-sort-order-id",
+	len(metadata."sort-orders"::VARIANT[])
+FROM iceberg_load_table_response(my_datalake.default.test_reset_sorted_by_noop);
+----
+0	1
+
+statement ok
+insert into my_datalake.default.test_reset_sorted_by_noop values (1, 10);
+
+query II
+select * from my_datalake.default.test_reset_sorted_by_noop order by all;
+----
+1	10
+
+statement ok
+drop table if exists my_datalake.default.test_reset_sorted_by_noop;
+
+# --- Schema changes blocked by an active sort order are allowed again after a reset ---
+# (the inverse of test_set_sorted_by_schema_changes.test, which covers the still-active case)
+
+statement ok
+drop table if exists my_datalake.default.test_reset_sorted_by_drop_column;
+
+statement ok
+CREATE TABLE my_datalake.default.test_reset_sorted_by_drop_column (a int, b int);
+
+statement ok
+insert into my_datalake.default.test_reset_sorted_by_drop_column values (1, 10);
+
+statement ok
+ALTER TABLE my_datalake.default.test_reset_sorted_by_drop_column SET SORTED BY (a DESC NULLS FIRST);
+
+statement error
+ALTER TABLE my_datalake.default.test_reset_sorted_by_drop_column DROP COLUMN a;
+----
+<REGEX>:.*sort order.*a.*
+
+statement ok
+ALTER TABLE my_datalake.default.test_reset_sorted_by_drop_column RESET SORTED BY;
+
+# The sort order that referenced 'a' is no longer the active one, so the column can be dropped
+statement ok
+ALTER TABLE my_datalake.default.test_reset_sorted_by_drop_column DROP COLUMN a;
+
+query I
+select alias(COLUMNS(*)) from my_datalake.default.test_reset_sorted_by_drop_column limit 1;
+----
+b
+
+statement ok
+drop table if exists my_datalake.default.test_reset_sorted_by_drop_column;
+
+statement ok
+drop table if exists my_datalake.default.test_reset_sorted_by_alter_type;
+
+statement ok
+CREATE TABLE my_datalake.default.test_reset_sorted_by_alter_type (a int, b int);
+
+statement ok
+insert into my_datalake.default.test_reset_sorted_by_alter_type values (1, 10);
+
+statement ok
+ALTER TABLE my_datalake.default.test_reset_sorted_by_alter_type SET SORTED BY (a DESC NULLS FIRST);
+
+statement error
+ALTER TABLE my_datalake.default.test_reset_sorted_by_alter_type ALTER a TYPE BIGINT;
+----
+<REGEX>:.*sort order.*a.*
+
+statement ok
+ALTER TABLE my_datalake.default.test_reset_sorted_by_alter_type RESET SORTED BY;
+
+statement ok
+ALTER TABLE my_datalake.default.test_reset_sorted_by_alter_type ALTER a TYPE BIGINT;
+
+query I
+select typeof(a) from my_datalake.default.test_reset_sorted_by_alter_type limit 1;
+----
+BIGINT
+
+statement ok
+drop table if exists my_datalake.default.test_reset_sorted_by_alter_type;

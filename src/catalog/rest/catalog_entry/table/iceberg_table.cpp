@@ -12,6 +12,7 @@
 #include "duckdb/common/operator/cast_operators.hpp"
 #include "duckdb/parser/column_definition.hpp"
 #include "duckdb/logging/logger.hpp"
+#include "duckdb/main/config.hpp"
 #include "duckdb/common/types/uuid.hpp"
 
 #include "catalog/rest/api/catalog_api.hpp"
@@ -401,9 +402,10 @@ IcebergPartitionSpec IcebergTable::BuildPartitionSpec(const vector<unique_ptr<Pa
 	return new_spec;
 }
 
-IcebergSortOrder IcebergTable::BuildSortOrder(const vector<OrderByNode> &orders, const IcebergTableSchema &schema,
-                                              int32_t sort_order_id) {
+IcebergSortOrder IcebergTable::BuildSortOrder(ClientContext &context, const vector<OrderByNode> &orders,
+                                              const IcebergTableSchema &schema, int32_t sort_order_id) {
 	IcebergSortOrder new_sort_order(sort_order_id);
+	auto &config = DBConfig::GetConfig(context);
 
 	for (auto &order : orders) {
 		vector<reference<const IcebergColumnDefinition>> source_columns;
@@ -413,14 +415,28 @@ IcebergSortOrder IcebergTable::BuildSortOrder(const vector<OrderByNode> &orders,
 		}
 		auto source_id = source_columns[0].get().id;
 
+		auto direction = config.ResolveOrder(context, order.type);
+		auto null_order = config.ResolveNullOrder(context, direction, order.null_order);
+
 		IcebergSortOrderField field;
 		field.source_id = source_id;
 		field.transform = transform;
-		field.direction = order.type == OrderType::ASCENDING ? "asc" : "desc";
-		field.null_order = order.null_order == OrderByNullType::NULLS_FIRST ? "nulls-first" : "nulls-last";
+		field.direction = direction == OrderType::ASCENDING ? "asc" : "desc";
+		field.null_order = null_order == OrderByNullType::NULLS_FIRST ? "nulls-first" : "nulls-last";
 		new_sort_order.fields.push_back(std::move(field));
 	}
 	return new_sort_order;
+}
+
+IcebergSortOrder IcebergTable::BuildSortOrder(ClientContext &context,
+                                              const vector<unique_ptr<ParsedExpression>> &sort_keys,
+                                              const IcebergTableSchema &schema, int32_t sort_order_id) {
+	vector<OrderByNode> orders;
+	orders.reserve(sort_keys.size());
+	for (auto &key : sort_keys) {
+		orders.emplace_back(OrderType::ORDER_DEFAULT, OrderByNullType::ORDER_DEFAULT, key->Copy());
+	}
+	return BuildSortOrder(context, orders, schema, sort_order_id);
 }
 
 void IcebergTable::SetPartitionedBy(IcebergTransaction &transaction,
@@ -457,7 +473,8 @@ void IcebergTable::SetSortedBy(IcebergTransaction &transaction, const vector<Ord
 		new_sort_order_id = GetNextSortOrderId();
 	}
 
-	auto new_sort_order = BuildSortOrder(orders, schema, static_cast<int32_t>(new_sort_order_id));
+	auto context = transaction.context.lock();
+	auto new_sort_order = BuildSortOrder(*context, orders, schema, static_cast<int32_t>(new_sort_order_id));
 
 	// if spec definition already exists in a previous spec definition, set it to that spec id
 	// (some catalog may allow duplicate definitions, others not)
