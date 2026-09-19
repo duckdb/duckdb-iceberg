@@ -24,6 +24,7 @@ CREATE SECRET (
 statement ok
 ATTACH OR REPLACE '' AS my_datalake (
     TYPE ICEBERG,
+    CREATE_DEFAULT_SCHEMA true,
     CLIENT_ID 'admin',
     CLIENT_SECRET 'password',
     URI 'http://127.0.0.1:8181',
@@ -57,6 +58,7 @@ SELECT * FROM my_datalake.default.conflict_cache_test;
 statement ok con2
 ATTACH '' AS con2_datalake (
     TYPE ICEBERG,
+    CREATE_DEFAULT_SCHEMA true,
     CLIENT_ID 'admin',
     CLIENT_SECRET 'password',
     URI 'http://127.0.0.1:8181'

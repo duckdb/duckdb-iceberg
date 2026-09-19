@@ -1,0 +1,120 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/default_schema.test
+# description: Attaching requires an existing default schema, or explicit opt-in to create it
+# group: [catalog_agnostic]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+include test/sql/init_requires
+
+set ignore_error_messages
+
+# Reuse the configured catalog connection without duplicating its credentials or endpoint.
+statement ok
+SET VARIABLE attach_base = (
+    SELECT 'ATTACH $path$' || path || '$path$ AS default_schema_test (TYPE ICEBERG, ' ||
+           (SELECT string_agg('"' || entry.key || '" $option$' || entry.value || '$option$', ', ')
+            FROM unnest(map_entries(options)) AS opts(entry)
+            WHERE lower(entry.key) NOT IN ('type', 'default_schema', 'create_default_schema'))
+    FROM duckdb_databases() WHERE database_name = 'my_datalake'
+);
+
+set variable attach_base <variable:attach_base>
+
+statement ok
+DROP SCHEMA IF EXISTS my_datalake.attach_default_schema_test;
+
+# Omitting DEFAULT_SCHEMA selects main, which the test config creates.
+statement ok
+{attach_base});
+
+statement ok
+USE default_schema_test;
+
+query T
+SELECT current_schema();
+----
+main
+
+statement ok
+USE memory.main;
+
+statement ok
+DETACH default_schema_test;
+
+statement error
+{attach_base}, DEFAULT_SCHEMA 'attach_default_schema_test');
+----
+default_schema 'attach_default_schema_test' does not exist. Use CREATE_DEFAULT_SCHEMA true
+
+statement error
+{attach_base}, DEFAULT_SCHEMA 'attach_default_schema_test', CREATE_DEFAULT_SCHEMA false);
+----
+default_schema 'attach_default_schema_test' does not exist. Use CREATE_DEFAULT_SCHEMA true
+
+statement error
+{attach_base}, DEFAULT_SCHEMA '');
+----
+default_schema must not be NULL or empty
+
+statement error
+{attach_base}, DEFAULT_SCHEMA NULL);
+----
+NULL is not supported as a valid option for ATTACH
+
+statement error
+{attach_base}, CREATE_DEFAULT_SCHEMA 'not_a_boolean');
+----
+Could not convert string 'not_a_boolean' to BOOL
+
+# The bare boolean option also means true.
+statement ok
+{attach_base}, DEFAULT_SCHEMA 'attach_default_schema_test', CREATE_DEFAULT_SCHEMA);
+
+statement ok
+CREATE TABLE default_schema_test.t AS SELECT 42 AS i;
+
+query I
+SELECT * FROM default_schema_test.attach_default_schema_test.t;
+----
+42
+
+statement ok
+USE default_schema_test;
+
+query T
+SELECT current_schema();
+----
+attach_default_schema_test
+
+query I
+SELECT * FROM t;
+----
+42
+
+statement ok
+USE memory.main;
+
+statement ok
+DETACH default_schema_test;
+
+# Both settings succeed when the schema already exists; true must not recreate it.
+foreach create false true
+
+statement ok
+{attach_base}, DEFAULT_SCHEMA 'attach_default_schema_test', CREATE_DEFAULT_SCHEMA {create});
+
+query I
+SELECT * FROM default_schema_test.t;
+----
+42
+
+statement ok
+DETACH default_schema_test;
+
+endloop
+
+statement ok
+DROP TABLE my_datalake.attach_default_schema_test.t;
+
+statement ok
+DROP SCHEMA my_datalake.attach_default_schema_test;

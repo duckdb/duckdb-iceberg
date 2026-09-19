@@ -201,7 +201,8 @@ unique_ptr<Catalog> IcebergAttach::Attach(optional_ptr<StorageExtensionInfo> sto
 	attach_options.name = name;
 
 	// check if we have a secret provided
-	Identifier default_schema;
+	Identifier default_schema = Identifier::DefaultSchema();
+	bool create_default_schema = false;
 	string endpoint_type_string;
 	string authorization_type_string;
 	string access_mode_string;
@@ -261,7 +262,12 @@ unique_ptr<Catalog> IcebergAttach::Attach(optional_ptr<StorageExtensionInfo> sto
 				    "Unrecognized 'table_resolution' (%s), accepted options are: lazy, eager", value);
 			}
 		} else if (lower_name == "default_schema") {
+			if (entry.second.IsNull() || entry.second.ToString().empty()) {
+				throw InvalidConfigurationException("default_schema must not be NULL or empty");
+			}
 			default_schema = Identifier(entry.second.ToString());
+		} else if (lower_name == "create_default_schema") {
+			create_default_schema = entry.second.DefaultCastAs(LogicalType::BOOLEAN).GetValue<bool>();
 		} else if (lower_name == "encode_entire_prefix") {
 			attach_options.encode_entire_prefix = true;
 		} else if (lower_name == "max_table_staleness") {
@@ -365,11 +371,19 @@ unique_ptr<Catalog> IcebergAttach::Attach(optional_ptr<StorageExtensionInfo> sto
 	//! Remember the normalized attach options so that a later ATTACH OR REPLACE can detect when they change.
 	catalog->SetAttachOptions(options.options);
 	catalog->GetConfig(context, endpoint_type);
-	if (!default_schema.empty() &&
-	    !IRCAPI::VerifySchemaExistence(context, *catalog, default_schema.GetIdentifierName())) {
-		throw InvalidConfigurationException(
-		    "default_schema '%s' does not exist. ATTACH with no DEFAULT_SCHEMA to successfully attach",
-		    default_schema.GetIdentifierName());
+	if (!IRCAPI::VerifySchemaExistence(context, *catalog, default_schema.GetIdentifierName())) {
+		if (!create_default_schema) {
+			throw InvalidConfigurationException(
+			    "default_schema '%s' does not exist. Use CREATE_DEFAULT_SCHEMA true to create it, or set "
+			    "DEFAULT_SCHEMA to an existing schema",
+			    default_schema.GetIdentifierName());
+		}
+		rest_api_objects::CreateNamespaceRequest request;
+		request._namespace.value = IRCAPI::ParseSchemaName(default_schema.GetIdentifierName());
+		request.properties = case_insensitive_map_t<string>();
+		JSONWriter writer;
+		writer.SetRoot(request.ToJSON(writer));
+		IRCAPI::CommitNamespaceCreate(context, *catalog, writer.ToString(JSONWriteFlags::ALLOW_INF_AND_NAN));
 	}
 	return std::move(catalog);
 }

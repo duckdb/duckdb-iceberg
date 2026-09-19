@@ -29,6 +29,7 @@ CREATE SECRET (
 statement ok
 ATTACH '' AS reacquire_lake (
     TYPE ICEBERG,
+    CREATE_DEFAULT_SCHEMA true,
     CLIENT_ID 'admin',
     CLIENT_SECRET 'password',
     OAUTH2_SERVER_URI 'http://127.0.0.1:8181/v1/oauth/tokens',
@@ -56,6 +57,7 @@ DETACH reacquire_lake;
 statement ok
 CREATE SECRET refresh_test_secret (
     TYPE ICEBERG,
+    CREATE_DEFAULT_SCHEMA true,
     CLIENT_ID 'admin',
     CLIENT_SECRET 'password',
     OAUTH2_SERVER_URI 'http://127.0.0.1:8181/v1/oauth/tokens'
@@ -64,6 +66,7 @@ CREATE SECRET refresh_test_secret (
 statement ok
 ATTACH '' AS reacquire_lake2 (
     TYPE ICEBERG,
+    CREATE_DEFAULT_SCHEMA true,
     SECRET refresh_test_secret,
     URI 'http://127.0.0.1:8181'
 );

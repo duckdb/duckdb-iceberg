@@ -1,5 +1,5 @@
 # name: test/sql/local/catalog_custom_setup/fixture/no_default_namespace.test
-# description: a catalog attached without DEFAULT_SCHEMA has no default namespace - qualified names still work, and an unqualified one says so
+# description: omitting DEFAULT_SCHEMA selects main while explicitly qualified namespaces remain independent
 # group: [fixture]
 
 require-env FIXTURE_SERVER_AVAILABLE
@@ -30,6 +30,7 @@ CREATE SECRET iceberg_secret (
 statement ok
 ATTACH '' AS my_datalake (
 	TYPE ICEBERG,
+	CREATE_DEFAULT_SCHEMA true,
 	SECRET iceberg_secret
 );
 
@@ -48,15 +49,19 @@ SELECT * FROM my_datalake.bronze.T;
 ----
 42
 
-# creating an unqualified name has no namespace to resolve to. duckdb resolves the target namespace up front,
-# so it reports the missing default schema itself
-statement error
+# Omitting the schema resolves to main.
+statement ok
 CREATE TABLE my_datalake.T2 AS SELECT 43;
-----
-<REGEX>:.*has no default schema.*
 
-# an unqualified reference is not resolved against this catalog at all - duckdb never probes a catalog that
-# reports no default schema, so the name simply does not resolve
+query I
+SELECT * FROM my_datalake.main.T2;
+----
+43
+
+statement ok
+DROP TABLE my_datalake.T2;
+
+# An unqualified reference searches main, where T does not exist.
 statement error
 SELECT * FROM my_datalake.T;
 ----

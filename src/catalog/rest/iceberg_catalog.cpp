@@ -69,9 +69,6 @@ optional_ptr<SchemaCatalogEntry> IcebergCatalog::LookupSchema(CatalogTransaction
 }
 
 optional<Identifier> IcebergCatalog::GetDefaultSchema() const {
-	if (default_schema.empty()) {
-		return nullopt;
-	}
 	return default_schema;
 }
 

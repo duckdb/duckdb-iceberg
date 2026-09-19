@@ -44,6 +44,7 @@ ATTACH 'demo' AS bad_resolution (
 statement ok
 ATTACH 'demo' AS my_datalake (
     TYPE ICEBERG,
+    CREATE_DEFAULT_SCHEMA true,
     URI 'http://localhost:8181/catalog',
     SECRET 'my_secret'
 );
@@ -85,6 +86,7 @@ DETACH my_datalake;
 statement ok
 ATTACH 'demo' AS my_datalake (
     TYPE ICEBERG,
+    CREATE_DEFAULT_SCHEMA true,
     URI 'http://localhost:8181/catalog',
     SECRET 'my_secret'
 );
@@ -131,6 +133,7 @@ CALL truncate_duckdb_logs();
 statement ok
 ATTACH 'demo' AS my_datalake (
     TYPE ICEBERG,
+    CREATE_DEFAULT_SCHEMA true,
     URI 'http://localhost:8181/catalog',
     SECRET 'my_secret',
     TABLE_RESOLUTION 'eager'
@@ -186,6 +189,7 @@ DETACH my_datalake;
 statement ok
 ATTACH 'demo' AS my_datalake (
     TYPE ICEBERG,
+    CREATE_DEFAULT_SCHEMA true,
     URI 'http://localhost:8181/catalog',
     SECRET 'my_secret',
     TABLE_RESOLUTION 'eager'

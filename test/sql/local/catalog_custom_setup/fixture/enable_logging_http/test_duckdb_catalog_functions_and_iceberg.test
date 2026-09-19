@@ -26,26 +26,30 @@ CREATE SECRET (
 statement ok
 ATTACH '' AS my_datalake (
     TYPE ICEBERG,
+    CREATE_DEFAULT_SCHEMA true,
     CLIENT_ID 'admin',
     CLIENT_SECRET 'password',
     URI 'http://127.0.0.1:8181'
 );
 
+# Exclude attach-time default-schema validation and optional creation.
+statement ok
+CALL truncate_duckdb_logs();
+
 statement ok
 use my_datalake.default;
 
-# one for the token, one for config endpoint, one for use call
+# Using a non-default namespace does not issue an existence request.
 query I
 select count(*) from duckdb_logs_parsed('HTTP');
 ----
-2
+0
 
-# three previous
-# one to lookup schema main, and one to lookup schema 'default' again.
+# Inspecting the logs does not issue catalog requests.
 query I
 select count(*) from duckdb_logs_parsed('HTTP');
 ----
-2
+0
 
 statement ok
 use memory;
@@ -54,9 +58,9 @@ use memory;
 query I
 select count(*) from duckdb_logs_parsed('HTTP');
 ----
-2
+0
 
 query I
 select count(*) from duckdb_logs_parsed('HTTP');
 ----
-2
+0

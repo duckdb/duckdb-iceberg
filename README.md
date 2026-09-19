@@ -7,6 +7,8 @@ This repository contains DuckDB's Apache Iceberg extension. It adds support for 
 
 User-facing documentation is available on the [Iceberg extension page](https://duckdb.org/docs/extensions/iceberg).
 
+Iceberg REST catalog attachments use `main` as their default schema. `ATTACH` fails if that schema does not exist. Set `DEFAULT_SCHEMA '<existing namespace>'` to select another schema, or add `CREATE_DEFAULT_SCHEMA true` to create the selected default schema if it is missing. The creation option defaults to `false`.
+
 ## Development setup
 
 Clone the repository with its DuckDB and extension tooling submodules:

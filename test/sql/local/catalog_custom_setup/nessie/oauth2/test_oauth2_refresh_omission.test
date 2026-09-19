@@ -36,6 +36,7 @@ CREATE SECRET storage_secret (
 statement ok
 ATTACH '' AS omit_lake (
     TYPE ICEBERG,
+    CREATE_DEFAULT_SCHEMA true,
     CLIENT_ID 'client1',
     CLIENT_SECRET 's3cr3t',
     OAUTH2_SCOPE 'catalog sign',

@@ -45,6 +45,7 @@ call enable_logging(level='debug');
 statement ok
 attach 'warehouse' as my_datalake (
     type ICEBERG,
+    CREATE_DEFAULT_SCHEMA true,
     URI 'http://127.0.0.1:19120/iceberg/main',
     ACCESS_DELEGATION_MODE 'none',
     SECRET 'my_secret'
@@ -111,6 +112,7 @@ SET httpfs_enable_credential_refresh=false;
 statement ok
 attach '' as my_datalake (
     type ICEBERG,
+    CREATE_DEFAULT_SCHEMA true,
     URI 'http://127.0.0.1:19120/iceberg/',
     SECRET 'my_secret'
 );

@@ -32,10 +32,15 @@ CREATE SECRET (
 statement ok
 ATTACH '' AS my_datalake (
     TYPE ICEBERG,
+    CREATE_DEFAULT_SCHEMA true,
     CLIENT_ID 'admin',
     CLIENT_SECRET 'password',
     URI 'http://127.0.0.1:8181'
 );
+
+# Exclude attach-time default-schema validation and optional creation.
+statement ok
+call truncate_duckdb_logs();
 
 query I
 select count(*) > 10 from (show all tables);
@@ -45,11 +50,10 @@ select count(*) > 10 from (show all tables);
 query I
 select split(request.url, 'v1')[2] from duckdb_logs_parsed('HTTP') order by all;
 ----
-/config
 /namespaces
 /namespaces/default/tables
 /namespaces/level1/tables
-/oauth/tokens
+/namespaces/main/tables
 
 statement ok
 call truncate_duckdb_logs();
@@ -91,7 +95,7 @@ commit;
 query I
 select count(*) from duckdb_logs_parsed('HTTP');
 ----
-3
+4
 
 statement ok
 call truncate_duckdb_logs();
@@ -142,6 +146,7 @@ CREATE SECRET iceberg_secret_empty_headers (
 statement ok
 ATTACH '' AS my_datalake_empty (
     TYPE ICEBERG,
+    CREATE_DEFAULT_SCHEMA true,
     SECRET iceberg_secret_empty_headers,
     URI 'http://127.0.0.1:8181'
 );
@@ -180,6 +185,7 @@ CREATE SECRET iceberg_secret_with_header (
 statement ok
 ATTACH '' AS my_datalake_header (
     TYPE ICEBERG,
+    CREATE_DEFAULT_SCHEMA true,
     SECRET iceberg_secret_with_header,
     URI 'http://127.0.0.1:8181'
 );
@@ -220,6 +226,7 @@ call truncate_duckdb_logs();
 statement ok
 ATTACH '' AS my_datalake_none (
     TYPE ICEBERG,
+    CREATE_DEFAULT_SCHEMA true,
     URI 'http://127.0.0.1:8181',
     AUTHORIZATION_TYPE 'none',
     EXTRA_HTTP_HEADERS MAP {'X-None-Header': 'none-value'}
@@ -261,6 +268,7 @@ CREATE SECRET iceberg_secret_multiple_headers (
 statement ok
 ATTACH '' AS my_datalake_multi (
     TYPE ICEBERG,
+    CREATE_DEFAULT_SCHEMA true,
     SECRET iceberg_secret_multiple_headers,
     URI 'http://127.0.0.1:8181'
 );
@@ -304,6 +312,7 @@ CREATE SECRET iceberg_secret_standard_check (
 statement ok
 ATTACH '' AS my_datalake_standard (
     TYPE ICEBERG,
+    CREATE_DEFAULT_SCHEMA true,
     SECRET iceberg_secret_standard_check,
     URI 'http://127.0.0.1:8181'
 );
@@ -346,6 +355,7 @@ CREATE SECRET iceberg_secret_auth_override (
 statement ok
 ATTACH '' AS my_datalake_override (
     TYPE ICEBERG,
+    CREATE_DEFAULT_SCHEMA true,
     SECRET iceberg_secret_auth_override,
     URI 'http://127.0.0.1:8181'
 );

@@ -36,6 +36,7 @@ CREATE SECRET storage_secret (
 statement ok
 ATTACH '' AS error_lake (
     TYPE ICEBERG,
+    CREATE_DEFAULT_SCHEMA true,
     CLIENT_ID 'client1',
     CLIENT_SECRET 's3cr3t',
     OAUTH2_SCOPE 'catalog sign',
@@ -85,6 +86,7 @@ CREATE SECRET fallback_secret (
 statement ok
 ATTACH '' AS fallback_lake (
     TYPE ICEBERG,
+    CREATE_DEFAULT_SCHEMA true,
     SECRET fallback_secret,
     URI 'http://127.0.0.1:19120/iceberg/',
     ACCESS_DELEGATION_MODE 'none'
