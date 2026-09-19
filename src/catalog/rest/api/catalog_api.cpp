@@ -207,6 +207,7 @@ APIResult<unique_ptr<const rest_api_objects::LoadTableResult>> IRCAPI::GetTable(
                                                                                 const string &table_name) {
 	auto ret = APIResult<unique_ptr<const rest_api_objects::LoadTableResult>>();
 	auto result = GetTableMetadata(context, catalog, schema, table_name);
+	ret.status_ = result->status;
 	if (result->status != HTTPStatusCode::OK_200) {
 		unique_ptr<JSONDocument> out_doc;
 		auto error_obj = ICUtils::GetErrorMessage(result->body, out_doc);

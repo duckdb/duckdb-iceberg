@@ -18,7 +18,7 @@ require httpfs
 # cannot inject a delay via debug_fs since the http calls are not filesystem calls
 #
 # The fixture runs on localhost, and toxiproxy adds a jitter delay so we can consistently test this
-# The commands below run the toxiproxy server 
+# The commands below run the toxiproxy server
 #
 #   toxiproxy-server > /dev/null 2>&1 &
 #   toxiproxy-cli create --listen 127.0.0.1:8182 --upstream 127.0.0.1:8181 iceberg-catalog
@@ -36,6 +36,7 @@ CREATE SECRET (
 
 load benchmark/load_helpers/create_many_tables.sql
 
+# Reattach on every iteration so previously resolved schemas cannot hide metadata-load costs.
 run
 DETACH IF EXISTS my_datalake;
 ATTACH OR REPLACE '' AS my_datalake (

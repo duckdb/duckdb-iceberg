@@ -664,7 +664,6 @@ void IcebergTable::RefreshFromCatalog(ClientContext &context) {
 	}
 	auto &load_table_result = *get_table_result.result_;
 	schema_versions.clear();
-	dummy_entry.reset();
 	InitializeFromLoadTableResult(load_table_result);
 	ic_catalog.table_request_cache.SetOrOverwrite(table_key, std::move(get_table_result.result_));
 }
