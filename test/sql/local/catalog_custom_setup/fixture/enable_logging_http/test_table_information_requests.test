@@ -67,10 +67,12 @@ s_phone	VARCHAR
 s_acctbal	DECIMAL(15,2)
 s_comment	VARCHAR
 
+# only the catalog request: no data files are read for a DESCRIBE (metadata file load excluded)
 query I
 with cte as (
 	select split(request.url, '/')[-1] val
 	from duckdb_logs_parsed('HTTP')
+	where request.url not like '%.metadata.json'
 )
 select CASE WHEN contains(val, '.') THEN (split(val, '.')[2]) ELSE NULL END FROM CTE ORDER BY ALL
 ----
@@ -117,6 +119,7 @@ query I
 with cte as (
 	select split(request.url, '/')[-1] val
 	from duckdb_logs_parsed('HTTP')
+	where request.url not like '%.metadata.json'
 )
 select CASE WHEN contains(val, '.') THEN (split(val, '.')[2]) ELSE NULL END FROM CTE ORDER BY ALL
 ----
