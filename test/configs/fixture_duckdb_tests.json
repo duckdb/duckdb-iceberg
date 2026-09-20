@@ -1,7 +1,8 @@
 {
-  "description": "Use apache/iceberg-rest-fixture as Iceberg Rest Catalog",
-  "on_init": "CREATE SECRET (TYPE S3,KEY_ID 'admin',SECRET 'password',ENDPOINT '127.0.0.1:9000',URL_STYLE 'path',USE_SSL 0); ATTACH '' AS my_datalake (TYPE ICEBERG,CLIENT_ID 'admin',CLIENT_SECRET 'password',URI 'http://127.0.0.1:8181'); Create schema if not exists my_datalake.\"{BASE_TEST_NAME}\"; Set timezone = 'UTC'; set iceberg_default_format_version=3;",
-  "on_new_connection": "use my_datalake.\"{BASE_TEST_NAME}\";",
+  "description": "Upstream DuckDB tests on a dedicated fixture: deletes all catalog tables and non-main schemas before each test. Run serially.",
+  "init_script": "test/configs/fixture_duckdb_attach.sql",
+  "init_sqllogic": "test/configs/fixture_duckdb_reset.inc",
+  "on_new_connection": "USE my_datalake.main;",
   "statically_loaded_extensions": [
     "core_functions",
     "parquet",
@@ -14,6 +15,18 @@
     {
       "env_name": "CATALOG_TEST_CONFIG_SETUP",
       "env_value": "fixture"
+    },
+    {
+      "env_name": "FIXTURE_DUCKDB_TESTS",
+      "env_value": "1"
+    },
+    {
+      "env_name": "ICEBERG_ENDPOINT",
+      "env_value": "http://127.0.0.1:8181"
+    },
+    {
+      "env_name": "S3_ENDPOINT",
+      "env_value": "127.0.0.1:9000"
     }
   ],
   "skip_error_messages": [
@@ -1353,24 +1366,14 @@
     {
       "reason": "Schema conflict from on_init / cross-test schema collision",
       "paths": [
-        "test/sql/aggregate/qualify/test_qualify_view_no_view_dependencies.test",
-        "test/sql/binder/similar_to.test",
-        "test/sql/binder/table_view_alias.test",
         "test/sql/catalog/test_schema_conflict.test",
         "test/sql/catalog/test_set_schema.test",
         "test/sql/catalog/test_set_search_path.test",
         "test/sql/catalog/test_standard_schema.test",
         "test/sql/catalog/view/test_view_sql_with_dependencies.test",
         "test/sql/constraints/foreignkey/test_fk_cross_schema.test",
-        "test/sql/create/create_table_empty_name.test",
-        "test/sql/cte/cte_schema.test",
         "test/sql/pg_catalog/pg_namespace.test",
-        "test/sql/select/test_multi_column_reference.test",
-        "test/sql/select/test_projection_names.test",
-        "test/sql/select/test_schema_reference.test",
         "test/sql/settings/drop_set_schema.test",
-        "test/sql/settings/lock_configuration_schema.test",
-        "test/sql/show_select/test_summarize_quoted.test",
         "test/sql/storage/catalog/test_drop_table.test",
         "test/sql/storage/catalog/test_view_explicit_aliases.test",
         "test/sql/storage/catalog/test_view_storage.test",
@@ -1378,7 +1381,6 @@
         "test/sql/types/alias/type_with_schema.test",
         "test/sql/types/enum/test_enum_schema.test",
         "test/sql/catalog/dependencies/test_schema_dependency.test",
-        "test/sql/catalog/did_you_mean.test",
         "test/sql/storage/optimistic_write/optimistic_write_custom_row_group_size.test_slow"
       ]
     },
@@ -1844,6 +1846,19 @@
       "reason": "Case sensitive/insensitive column names",
       "paths": [
         "test/sql/binder/test_case_insensitive_binding.test"
+      ]
+    },
+    {
+      "reason": "Iceberg does not support CREATE VIEW",
+      "paths": [
+        "test/sql/binder/table_view_alias.test",
+        "test/sql/aggregate/qualify/test_qualify_view_no_view_dependencies.test"
+      ]
+    },
+    {
+      "reason": "Iceberg does not support DROP SCHEMA CASCADE",
+      "paths": [
+        "test/sql/select/test_multi_column_reference.test"
       ]
     }
   ]

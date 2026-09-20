@@ -66,6 +66,8 @@ jobs:
       # The duckdb/duckdb tests create all the tables they need themselves, so
       # only the catalog + storage have to be up. No generated fixture data is
       # read, which is why this uses `make fixture` instead of `make fixture-data`.
+      # The upstream config clears remote objects before every test; this fixture
+      # must remain dedicated to this serial test run.
       - name: Setup fixture
         run: |
           make fixture
@@ -77,4 +79,5 @@ jobs:
         if: inputs.local-extension-repo == ''
         run: |
           ${{ inputs.build-path }}/test/unittest --order lex --test-dir duckdb "test/sql/*" "exclude:*.test_slow" --list-test-names-only || true
-          ${{ inputs.build-path }}/test/unittest --order lex --test-dir duckdb "test/sql/*" "exclude:*.test_slow" --test-config test/configs/fixture_duckdb_tests.json
+          ${{ inputs.build-path }}/test/unittest --test-config test/configs/fixture_duckdb_tests.json test/sql/local/catalog_custom_setup/fixture/upstream_test_isolation.test
+          ${{ inputs.build-path }}/test/unittest --order lex --test-dir duckdb "test/sql/*" "exclude:*.test_slow" --test-config test/configs/fixture_duckdb_tests.json --init-sqllogic "$PWD/test/configs/fixture_duckdb_reset.inc"
