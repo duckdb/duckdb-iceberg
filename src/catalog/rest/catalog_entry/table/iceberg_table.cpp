@@ -806,8 +806,10 @@ void IcebergTable::InitializeFromCatalogResponse(ClientContext &context,
                                                  const rest_api_objects::LoadTableResult &load_table_result) {
 	//! Some catalogs (e.g. AWS Glue's Iceberg REST endpoint) reconstruct the response metadata from their own
 	//! catalog state instead of returning the metadata file contents, which can lose nested field ids or
-	//! properties such as 'schema.name-mapping.default'. The file at 'metadata-location' is authoritative.
-	if (load_table_result.metadata_location.has_value()) {
+	//! properties such as 'schema.name-mapping.default'. With 'use_metadata_location', the file at
+	//! 'metadata-location' is treated as authoritative instead. The IRC spec requires the embedded metadata to
+	//! match the metadata file, so this deviates from the spec and only happens when the option is set.
+	if (catalog.attach_options.use_metadata_location && load_table_result.metadata_location.has_value()) {
 		auto &metadata_location = *load_table_result.metadata_location;
 		shared_ptr<const rest_api_objects::TableMetadata> file_metadata;
 		{

@@ -1,5 +1,5 @@
 # name: test/sql/local/catalog_custom_setup/reconstructed_metadata_mock/attach_uses_metadata_location.test
-# description: ATTACH should read the authoritative metadata file at 'metadata-location' when the catalog response contains reconstructed metadata (duckdb-iceberg#1359)
+# description: ATTACH with 'use_metadata_location' reads the authoritative metadata file at 'metadata-location' when the catalog response contains reconstructed metadata (duckdb-iceberg#1359)
 # group: [reconstructed_metadata_mock]
 
 # Requires: python3 scripts/reconstructed_metadata_mock_server.py 19131 (run from the repository root)
@@ -18,8 +18,25 @@ require httpfs
 # endpoint for tables registered through Hive-style APIs (e.g. Spark's
 # GlueCatalog). 'metadata-location' points at the authoritative metadata file.
 
+# Default (spec-compliant) behavior: the embedded metadata is trusted, the
+# struct children miss by field id and fall back to their (NULL) default
 statement ok
-ATTACH '' AS reconstructed_catalog (TYPE ICEBERG, URI 'http://127.0.0.1:19131', AUTHORIZATION_TYPE 'none');
+ATTACH '' AS reconstructed_embedded (TYPE ICEBERG, URI 'http://127.0.0.1:19131', AUTHORIZATION_TYPE 'none');
+
+query III
+SELECT id, s.a, s.b FROM reconstructed_embedded.db.t ORDER BY id;
+----
+1	NULL	NULL
+2	NULL	NULL
+3	NULL	NULL
+
+statement ok
+DETACH reconstructed_embedded;
+
+# With 'use_metadata_location', the authoritative metadata file at
+# 'metadata-location' is loaded instead
+statement ok
+ATTACH '' AS reconstructed_catalog (TYPE ICEBERG, URI 'http://127.0.0.1:19131', AUTHORIZATION_TYPE 'none', USE_METADATA_LOCATION true);
 
 # Struct children must read back their values, not NULL
 query III

@@ -195,8 +195,9 @@ public:
 	IcebergSchemaSet schemas;
 	LoadTableResultCache table_request_cache;
 
-	//! Cache for metadata files loaded from a LoadTableResult's 'metadata-location'. Metadata files are
-	//! immutable (a commit writes a new file), so entries stay valid for the lifetime of the catalog.
+	//! Cache for metadata files loaded from a LoadTableResult's 'metadata-location' (only used when the
+	//! 'use_metadata_location' attach option is set). Metadata files are immutable (a commit writes a new
+	//! file), so entries stay valid for the lifetime of the catalog.
 	annotated_mutex metadata_file_cache_lock;
 	unordered_map<string, shared_ptr<const rest_api_objects::TableMetadata>>
 	    metadata_file_cache DUCKDB_GUARDED_BY(metadata_file_cache_lock);

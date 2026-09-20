@@ -38,9 +38,9 @@ CALL enable_logging('HTTP');
 statement ok
 FROM my_datalake.default.spark_written_upper_lower_bounds;
 
-# request to table (the metadata file load triggered by resolving the table is excluded)
+# request to table
 query I
-select request.url[26:] from duckdb_logs_parsed('http') where request.url not like '%.avro' and request.url not like '%.parquet' and request.url not like '%.metadata.json';
+select request.url[26:] from duckdb_logs_parsed('http') where request.url not like '%.avro' and request.url not like '%.parquet';
 ----
 namespaces/default/tables/spark_written_upper_lower_bounds
 
@@ -49,7 +49,7 @@ FROM my_datalake.default.spark_written_upper_lower_bounds;
 
 # no new requests to the catalog
 query I
-select request.url[26:] from duckdb_logs_parsed('http') where request.url not like '%.avro' and request.url not like '%.parquet' and request.url not like '%.metadata.json';
+select request.url[26:] from duckdb_logs_parsed('http') where request.url not like '%.avro' and request.url not like '%.parquet';
 ----
 namespaces/default/tables/spark_written_upper_lower_bounds
 
@@ -70,7 +70,7 @@ FROM my_datalake.default.spark_written_upper_lower_bounds;
 
 # just 1 catalog request to the table
 query I
-select request.url[26:] from duckdb_logs_parsed('http') where request.url not like '%.avro' and request.url not like '%.parquet' and request.url not like '%.metadata.json';
+select request.url[26:] from duckdb_logs_parsed('http') where request.url not like '%.avro' and request.url not like '%.parquet';
 ----
 namespaces/default/tables/spark_written_upper_lower_bounds
 
@@ -79,7 +79,7 @@ FROM my_datalake.default.spark_written_upper_lower_bounds;
 
 # no new requests to the table
 query I
-select request.url[26:] from duckdb_logs_parsed('http') where request.url not like '%.avro' and request.url not like '%.parquet' and request.url not like '%.metadata.json';
+select request.url[26:] from duckdb_logs_parsed('http') where request.url not like '%.avro' and request.url not like '%.parquet';
 ----
 namespaces/default/tables/spark_written_upper_lower_bounds
 
@@ -100,7 +100,7 @@ FROM my_datalake.default.spark_written_upper_lower_bounds;
 
 # just 1 catalog request to the table
 query I
-select request.url[26:] from duckdb_logs_parsed('http') where request.url not like '%.avro' and request.url not like '%.parquet' and request.url not like '%.metadata.json';
+select request.url[26:] from duckdb_logs_parsed('http') where request.url not like '%.avro' and request.url not like '%.parquet';
 ----
 namespaces/default/tables/spark_written_upper_lower_bounds
 
@@ -109,7 +109,7 @@ FROM my_datalake.default.spark_written_upper_lower_bounds;
 
 # no new requests to the table
 query I
-select request.url[26:] from duckdb_logs_parsed('http') where request.url not like '%.avro' and request.url not like '%.parquet' and request.url not like '%.metadata.json';
+select request.url[26:] from duckdb_logs_parsed('http') where request.url not like '%.avro' and request.url not like '%.parquet';
 ----
 namespaces/default/tables/spark_written_upper_lower_bounds
 
@@ -130,7 +130,7 @@ FROM my_datalake.default.spark_written_upper_lower_bounds;
 
 # request to table
 query I
-select request.url[26:] from duckdb_logs_parsed('http') where request.url not like '%.avro' and request.url not like '%.parquet' and request.url not like '%.metadata.json';
+select request.url[26:] from duckdb_logs_parsed('http') where request.url not like '%.avro' and request.url not like '%.parquet';
 ----
 namespaces/default/tables/spark_written_upper_lower_bounds
 
@@ -141,7 +141,7 @@ FROM my_datalake.default.spark_written_upper_lower_bounds;
 
 # table staleness has passed, so another request is made to the table metadata endpoint
 query I
-select request.url[26:] from duckdb_logs_parsed('http') where request.url not like '%.avro' and request.url not like '%.parquet' and request.url not like '%.metadata.json';
+select request.url[26:] from duckdb_logs_parsed('http') where request.url not like '%.avro' and request.url not like '%.parquet';
 ----
 namespaces/default/tables/spark_written_upper_lower_bounds
 namespaces/default/tables/spark_written_upper_lower_bounds

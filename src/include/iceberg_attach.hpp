@@ -41,6 +41,11 @@ struct IcebergAttachOptions {
 	// some catalogs (e.g. AWS Glue) do not assign a table location server-side; derive one from the namespace's
 	// 'location' property
 	bool default_table_location_from_namespace = false;
+	// load the authoritative table metadata from the LoadTableResult's 'metadata-location' instead of trusting the
+	// metadata embedded in the response. Needed for catalogs (e.g. AWS Glue's Iceberg REST endpoint) that
+	// reconstruct the response metadata from their own catalog state, which can lose nested field ids. The IRC
+	// spec requires the embedded metadata to match the metadata file, so this deviates from the spec and is opt-in.
+	bool use_metadata_location = false;
 	IcebergTableResolution table_resolution = IcebergTableResolution::LAZY;
 	IRCAccessDelegationMode access_mode = IRCAccessDelegationMode::VENDED_CREDENTIALS;
 	IcebergAuthorizationType authorization_type = IcebergAuthorizationType::INVALID;
