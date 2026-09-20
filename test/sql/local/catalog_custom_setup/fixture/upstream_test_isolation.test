@@ -1,0 +1,92 @@
+# name: test/sql/local/catalog_custom_setup/fixture/upstream_test_isolation.test
+# description: Upstream config resets remote objects once per test, not on load/restart
+# group: [fixture]
+
+require-env FIXTURE_DUCKDB_TESTS
+
+set ignore_error_messages
+
+# The startup hook must have removed leftovers from the previous test/run.
+query I
+SELECT count(*) FROM duckdb_tables() WHERE database_name = 'my_datalake';
+----
+0
+
+query T
+SELECT schema_name FROM duckdb_schemas() WHERE database_name = 'my_datalake';
+----
+main
+
+# Cleanup must handle an empty catalog and quoted identifiers, including commas.
+statement ok
+CREATE SCHEMA "old, ""schema";
+
+statement ok
+CREATE TABLE "old, ""schema"."old, ""table" (i INTEGER);
+
+statement ok
+INSERT INTO "old, ""schema"."old, ""table" VALUES (42);
+
+# Dotted names are nested Iceberg namespaces; parent namespaces may be implicit.
+statement ok
+CREATE SCHEMA "old.nested.schema";
+
+statement ok
+CREATE TABLE "old.nested.schema".nested_table (i INTEGER);
+
+statement ok
+CREATE SCHEMA old_empty_schema;
+
+statement ok
+CREATE TABLE main.old_main_table (i INTEGER);
+
+include test/configs/fixture_duckdb_reset.inc
+
+query T
+SELECT schema_name FROM duckdb_schemas() WHERE database_name = 'my_datalake';
+----
+main
+
+query I
+SELECT count(*) FROM duckdb_tables() WHERE database_name = 'my_datalake';
+----
+0
+
+# A second reset must also succeed with no remote tables or views.
+include test/configs/fixture_duckdb_reset.inc
+
+query T
+SELECT current_schema();
+----
+main
+
+statement ok
+CREATE TABLE survives_reload (i INTEGER);
+
+statement ok
+INSERT INTO survives_reload VALUES (42);
+
+query I con1
+SELECT * FROM survives_reload;
+----
+42
+
+# Recreating the local database must only reattach, not clear remote data.
+load {TEST_DIR}/upstream_test_isolation.db
+
+query I
+SELECT * FROM survives_reload;
+----
+42
+
+restart
+
+query I
+SELECT * FROM survives_reload;
+----
+42
+
+query I con2
+SELECT * FROM survives_reload;
+----
+42
