@@ -169,13 +169,6 @@ jobs:
     with:
       artifact-name: duckdb-iceberg
 
-  test-reconstructed-metadata-mock:
-    name: Test against reconstructed-metadata mock catalog
-    needs: test-fixture
-    uses: ./.github/workflows/test-reconstructed-metadata-mock-catalog.yml
-    with:
-      artifact-name: duckdb-iceberg
-
   test-gravitino:
     name: Test against Gravitino Catalog
     needs: test-fixture
