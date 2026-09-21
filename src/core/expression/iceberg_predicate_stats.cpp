@@ -1,8 +1,10 @@
 #include "core/expression/iceberg_predicate_stats.hpp"
 
 #include "core/expression/iceberg_value.hpp"
+#include "duckdb/common/exception.hpp"
 #include "duckdb/common/types/geometry.hpp"
 #include "duckdb/storage/statistics/geometry_stats.hpp"
+#include "utf8proc_wrapper.hpp"
 
 namespace duckdb {
 
@@ -64,21 +66,33 @@ IcebergPredicateStats IcebergPredicateStats::DeserializeBounds(const Value &lowe
 
 	if (!lower_bound.IsNull()) {
 		D_ASSERT(lower_bound.type().id() == LogicalTypeId::BLOB);
-		auto deserialized = IcebergValue::DeserializeValue(lower_bound.GetValueUnsafe<string_t>(), type);
-		if (deserialized.HasError()) {
-			throw InvalidConfigurationException("Column %s lower bound deserialization failed: %s", name,
-			                                    deserialized.GetError());
+		auto blob = lower_bound.GetValueUnsafe<string_t>();
+		// Truncated UTF-8 string metrics are not a safe zonemap bound (especially
+		// upper bounds). Omit them rather than failing the whole scan / stats table.
+		if (type.id() == LogicalTypeId::VARCHAR && !Utf8Proc::IsValid(blob.GetData(), blob.GetSize())) {
+			// skip
+		} else {
+			auto deserialized = IcebergValue::DeserializeValue(blob, type);
+			if (deserialized.HasError()) {
+				throw InvalidConfigurationException("Column %s lower bound deserialization failed: %s", name,
+				                                    deserialized.GetError());
+			}
+			result.SetLowerBound(deserialized.GetValue());
 		}
-		result.SetLowerBound(deserialized.GetValue());
 	}
 	if (!upper_bound.IsNull()) {
 		D_ASSERT(upper_bound.type().id() == LogicalTypeId::BLOB);
-		auto deserialized = IcebergValue::DeserializeValue(upper_bound.GetValueUnsafe<string_t>(), type);
-		if (deserialized.HasError()) {
-			throw InvalidConfigurationException("Column %s upper bound deserialization failed: %s", name,
-			                                    deserialized.GetError());
+		auto blob = upper_bound.GetValueUnsafe<string_t>();
+		if (type.id() == LogicalTypeId::VARCHAR && !Utf8Proc::IsValid(blob.GetData(), blob.GetSize())) {
+			// skip
+		} else {
+			auto deserialized = IcebergValue::DeserializeValue(blob, type);
+			if (deserialized.HasError()) {
+				throw InvalidConfigurationException("Column %s upper bound deserialization failed: %s", name,
+				                                    deserialized.GetError());
+			}
+			result.SetUpperBound(deserialized.GetValue());
 		}
-		result.SetUpperBound(deserialized.GetValue());
 	}
 	return result;
 }
