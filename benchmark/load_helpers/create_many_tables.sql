@@ -108,3 +108,6 @@ create table if not exists setup_catalog.default.t98 (a int);
 create table if not exists setup_catalog.default.t99 (a int);
 create table if not exists setup_catalog.default.t100 (a int);
 create table if not exists setup_catalog.default.t101 (a int);
+
+-- Only the freshly attached catalog should participate in the timed metadata listings.
+DETACH setup_catalog;

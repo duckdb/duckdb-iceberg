@@ -67,5 +67,3 @@ abort;
 
 statement ok
 drop table my_datalake.default.test;
-
-

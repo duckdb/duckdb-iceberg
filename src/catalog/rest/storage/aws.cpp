@@ -1,6 +1,7 @@
 #include "catalog/rest/storage/aws.hpp"
 
 #include "duckdb/common/http_util.hpp"
+#include "duckdb/common/http_transport_manager.hpp"
 #include "duckdb/logging/logger.hpp"
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/common/exception/http_exception.hpp"
@@ -258,36 +259,27 @@ unique_ptr<HTTPResponse> AWSInput::Request(RequestType request_type, ClientConte
 	                       "/aws4_request, SignedHeaders=" + signed_headers +
 	                       ", Signature=" + string((char *)signature_str, sizeof(hash_str));
 
-	auto &http_util = HTTPUtil::Get(db);
-	unique_ptr<HTTPParams> params;
-
 	string request_url = URL();
-
-	params = http_util.InitializeParameters(context, request_url);
-
-	auto locked_client = IcebergAuthorizationContextState::GetHTTPClient(attached_db, context);
-	auto &client = locked_client.GetClient();
-	if (client) {
-		client->Initialize(*params);
-	}
+	auto session = db.config.GetHTTPTransportManager().CreateSession(context, request_url);
+	auto &params = session.Parameters();
 
 	switch (request_type) {
 	case RequestType::HEAD_REQUEST: {
-		HeadRequestInfo head_request(request_url, res, *params);
-		return http_util.Request(head_request, client);
+		HeadRequestInfo head_request(request_url, res, params);
+		return session.Request(head_request);
 	}
 	case RequestType::DELETE_REQUEST: {
-		DeleteRequestInfo delete_request(request_url, res, *params);
-		return http_util.Request(delete_request, client);
+		DeleteRequestInfo delete_request(request_url, res, params);
+		return session.Request(delete_request);
 	}
 	case RequestType::GET_REQUEST: {
-		GetRequestInfo get_request(request_url, res, *params, nullptr, nullptr);
-		return http_util.Request(get_request, client);
+		GetRequestInfo get_request(request_url, res, params, nullptr, nullptr);
+		return session.Request(get_request);
 	}
 	case RequestType::POST_REQUEST: {
-		PostRequestInfo post_request(request_url, res, *params, reinterpret_cast<const_data_ptr_t>(data.c_str()),
+		PostRequestInfo post_request(request_url, res, params, reinterpret_cast<const_data_ptr_t>(data.c_str()),
 		                             data.size());
-		auto x = http_util.Request(post_request, client);
+		auto x = session.Request(post_request);
 		if (x) {
 			x->body = post_request.buffer_out;
 		}

@@ -2,44 +2,12 @@
 
 #include "duckdb/main/secret/secret.hpp"
 #include "duckdb/common/http_util.hpp"
-#include "duckdb/main/client_context_state.hpp"
 
 #include "iceberg_attach.hpp"
 #include "catalog/rest/api/catalog_utils.hpp"
 #include "catalog/rest/api/url_utils.hpp"
 
 namespace duckdb {
-
-class IcebergHTTPClientLock {
-public:
-	IcebergHTTPClientLock(mutex &client_lock, unordered_map<uintptr_t, unique_ptr<HTTPClient>> &client_map,
-	                      uintptr_t database_id)
-	    : guard(client_lock), client(client_map.emplace(database_id, nullptr).first->second) {
-	}
-
-	unique_ptr<HTTPClient> &GetClient() {
-		return client;
-	}
-
-private:
-	unique_lock<mutex> guard;
-	unique_ptr<HTTPClient> &client;
-};
-
-//! Hold the pre-initialized HTTPClient for a given connection
-struct IcebergAuthorizationContextState : public ClientContextState {
-public:
-	IcebergAuthorizationContextState() {
-	}
-
-public:
-	static IcebergHTTPClientLock GetHTTPClient(AttachedDatabase &db, ClientContext &context);
-
-public:
-	//! For this connection, a map of attached database -> http-client
-	mutex client_lock;
-	unordered_map<uintptr_t, unique_ptr<HTTPClient>> client_map;
-};
 
 struct IcebergAuthorization {
 public:

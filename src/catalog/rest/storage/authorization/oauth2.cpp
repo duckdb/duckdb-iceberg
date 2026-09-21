@@ -163,7 +163,7 @@ static rest_api_objects::OAuthTokenResponse FetchOAuth2TokenResponse(ClientConte
 	unique_ptr<HTTPResponse> response;
 	try {
 		auto endpoint_builder = IRCEndpointBuilder::FromURL(uri);
-		response = APIUtils::Request(RequestType::POST_REQUEST, nullptr, context, endpoint_builder, headers, post_data);
+		response = APIUtils::Request(RequestType::POST_REQUEST, context, endpoint_builder, headers, post_data);
 	} catch (std::exception &ex) {
 		// Only catch actual transport/network errors (not HTTP errors)
 		ErrorData error(ex);
@@ -494,7 +494,7 @@ unique_ptr<HTTPResponse> OAuth2Authorization::Request(RequestType request_type, 
 		headers["Authorization"] = StringUtil::Format("Bearer %s", bearer_token);
 	}
 
-	auto response = APIUtils::Request(request_type, db, context, endpoint_builder, headers, data);
+	auto response = APIUtils::Request(request_type, context, endpoint_builder, headers, data);
 
 	// --- Step 3: Reactive 401 refresh (exactly once) ---
 	// If the server rejected our token (e.g., revoked before expiry, clock skew,
@@ -512,7 +512,7 @@ unique_ptr<HTTPResponse> OAuth2Authorization::Request(RequestType request_type, 
 		// Lock released before retry -- avoid serializing catalog requests
 		if (should_retry) {
 			headers["Authorization"] = StringUtil::Format("Bearer %s", bearer_token);
-			response = APIUtils::Request(request_type, db, context, endpoint_builder, headers, data);
+			response = APIUtils::Request(request_type, context, endpoint_builder, headers, data);
 		}
 	}
 

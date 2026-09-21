@@ -12,10 +12,6 @@ namespace duckdb {
 //! aws-sdk-cpp.
 class AWSInput {
 public:
-	AWSInput(AttachedDatabase &db) : attached_db(db) {
-	}
-
-public:
 	unique_ptr<HTTPResponse> Request(RequestType request_type, ClientContext &context, HTTPHeaders &headers,
 	                                 const string &data);
 
@@ -39,7 +35,6 @@ public:
 	string URL() const;
 
 public:
-	AttachedDatabase &attached_db;
 	//! The scheme to use for this request, defaults to HTTPS
 	bool use_https = true;
 	string authority;

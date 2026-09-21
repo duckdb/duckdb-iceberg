@@ -59,7 +59,7 @@ unique_ptr<IcebergAuthorization> SIGV4Authorization::FromAttachOptions(AttachedD
 }
 
 AWSInput SIGV4Authorization::CreateAWSInput(ClientContext &context, const IRCEndpointBuilder &endpoint_builder) {
-	AWSInput aws_input(db);
+	AWSInput aws_input;
 
 	auto host = endpoint_builder.GetHost();
 	aws_input.use_https = DetectHttps(host);
