@@ -1,0 +1,44 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/insert/test_iceberg_column_stats_truncated_utf8.test
+# description: iceberg_column_stats must not fail when a varchar column's min value has a multi-byte UTF-8 character at the default 16-byte metrics truncation boundary (legacy writers stored an invalid-UTF-8 lower bound). The table function materializes every column bound, so a throw on `content`/`title` would skip watermark reads of last_updated as well.
+# group: [insert]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+
+statement ok
+drop table if exists my_datalake.default.column_stats_truncated_utf8;
+
+statement ok
+create table my_datalake.default.column_stats_truncated_utf8 (
+    last_updated timestamptz,
+    title varchar
+);
+
+# 15 ASCII bytes then U+00ED (C3 AD). A byte-exact 16-byte lower bound is invalid UTF-8.
+statement ok
+insert into my_datalake.default.column_stats_truncated_utf8 values
+    (TIMESTAMPTZ '2024-06-01 12:00:00+00', 'El cliente querído resolver el problema'),
+    (TIMESTAMPTZ '2024-07-01 00:00:00+00', 'zzzz ascii tail that is comfortably long');
+
+# Must return a row for last_updated even if title bounds are truncated UTF-8.
+query I
+select count(*) > 0
+from iceberg_column_stats(my_datalake.default.column_stats_truncated_utf8)
+where column_name = 'last_updated';
+----
+true
+
+query I
+select count(*) > 0
+from iceberg_column_stats(my_datalake.default.column_stats_truncated_utf8)
+where column_name = 'title';
+----
+true

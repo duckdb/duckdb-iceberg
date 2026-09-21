@@ -21,6 +21,7 @@
 #include "core/expression/iceberg_value.hpp"
 #include "duckdb/storage/statistics/geometry_stats.hpp"
 #include "duckdb/common/types/geometry.hpp"
+#include "utf8proc_wrapper.hpp"
 #include "core/metadata/manifest/iceberg_manifest.hpp"
 #include "catalog/rest/transaction/iceberg_transaction.hpp"
 #include "core/expression/iceberg_predicate_stats.hpp"
@@ -513,23 +514,35 @@ IcebergPredicateStats IcebergPredicateStats::DeserializeBounds(const Value &lowe
 	if (!lower_bound.IsNull()) {
 		D_ASSERT(lower_bound.type().id() == LogicalTypeId::BLOB);
 		auto lower_bound_blob = lower_bound.GetValueUnsafe<string_t>();
-		auto deserialized_lower_bound = IcebergValue::DeserializeValue(lower_bound_blob, type);
-		if (deserialized_lower_bound.HasError()) {
-			throw InvalidConfigurationException("Column %s lower bound deserialization failed: %s", name,
-			                                    deserialized_lower_bound.GetError());
+		// Truncated UTF-8 string metrics are not a safe zonemap bound (especially
+		// upper bounds). Omit them rather than failing the whole scan / stats table.
+		if (type.id() == LogicalTypeId::VARCHAR &&
+		    !Utf8Proc::IsValid(lower_bound_blob.GetData(), lower_bound_blob.GetSize())) {
+			// skip
+		} else {
+			auto deserialized_lower_bound = IcebergValue::DeserializeValue(lower_bound_blob, type);
+			if (deserialized_lower_bound.HasError()) {
+				throw InvalidConfigurationException("Column %s lower bound deserialization failed: %s", name,
+				                                    deserialized_lower_bound.GetError());
+			}
+			res.SetLowerBound(deserialized_lower_bound.GetValue());
 		}
-		res.SetLowerBound(deserialized_lower_bound.GetValue());
 	}
 
 	if (!upper_bound.IsNull()) {
 		D_ASSERT(upper_bound.type().id() == LogicalTypeId::BLOB);
 		auto upper_bound_blob = upper_bound.GetValueUnsafe<string_t>();
-		auto deserialized_upper_bound = IcebergValue::DeserializeValue(upper_bound_blob, type);
-		if (deserialized_upper_bound.HasError()) {
-			throw InvalidConfigurationException("Column %s upper bound deserialization failed: %s", name,
-			                                    deserialized_upper_bound.GetError());
+		if (type.id() == LogicalTypeId::VARCHAR &&
+		    !Utf8Proc::IsValid(upper_bound_blob.GetData(), upper_bound_blob.GetSize())) {
+			// skip
+		} else {
+			auto deserialized_upper_bound = IcebergValue::DeserializeValue(upper_bound_blob, type);
+			if (deserialized_upper_bound.HasError()) {
+				throw InvalidConfigurationException("Column %s upper bound deserialization failed: %s", name,
+				                                    deserialized_upper_bound.GetError());
+			}
+			res.SetUpperBound(deserialized_upper_bound.GetValue());
 		}
-		res.SetUpperBound(deserialized_upper_bound.GetValue());
 	}
 	return res;
 }
