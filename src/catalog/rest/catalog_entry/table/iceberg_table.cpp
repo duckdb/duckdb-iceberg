@@ -38,6 +38,45 @@
 
 namespace duckdb {
 
+static optional<int64_t> GetCredentialExpiry(const case_insensitive_map_t<string> &config) {
+	optional<int64_t> result;
+	for (auto &entry : config) {
+		auto key = StringUtil::Lower(entry.first);
+		if (key != "s3.session-token-expires-at-ms" && key != "gcs.oauth2.token-expires-at" &&
+		    !StringUtil::StartsWith(key, "adls.sas-token-expires-at-ms.")) {
+			continue;
+		}
+		int64_t expiry;
+		if (TryCast::Operation<string_t, int64_t>(string_t(entry.second), expiry) && (!result || expiry < *result)) {
+			result = expiry;
+		}
+	}
+	return result;
+}
+
+struct IcebergVendedCredentialState {
+	static constexpr int64_t EXPIRY_MARGIN_MS = 60000;
+
+	mutex lock;
+	case_insensitive_map_t<string> config;
+	vector<rest_api_objects::StorageCredential> storage_credentials;
+
+	bool Expired() const {
+		auto now_ms = Timestamp::GetEpochMs(Timestamp::GetCurrentTimestamp());
+		if (storage_credentials.empty()) {
+			auto expiry = GetCredentialExpiry(config);
+			return expiry && *expiry <= now_ms + EXPIRY_MARGIN_MS;
+		}
+		for (auto &credential : storage_credentials) {
+			auto expiry = GetCredentialExpiry(credential.config);
+			if (expiry && *expiry <= now_ms + EXPIRY_MARGIN_MS) {
+				return true;
+			}
+		}
+		return false;
+	}
+};
+
 const string &IcebergTable::BaseFilePath() const {
 	return table_metadata.location;
 }
@@ -185,13 +224,22 @@ static void ParseConfigOptions(const case_insensitive_map_t<string> &config, cas
 }
 
 IRCAPITableCredentials IcebergTable::GetVendedCredentials(ClientContext &context) const {
-	return GetVendedCredentials(context, storage_credentials);
+	lock_guard<mutex> guard(credential_state->lock);
+	return GetVendedCredentials(context, credential_state->config, credential_state->storage_credentials);
 }
 
 IRCAPITableCredentials
 IcebergTable::GetVendedCredentials(ClientContext &context,
                                    const vector<rest_api_objects::StorageCredential> &storage_credentials,
                                    optional_ptr<const case_insensitive_map_t<string>> config_override) const {
+	lock_guard<mutex> guard(credential_state->lock);
+	return GetVendedCredentials(context, config_override ? *config_override : credential_state->config,
+	                            storage_credentials);
+}
+
+IRCAPITableCredentials
+IcebergTable::GetVendedCredentials(ClientContext &context, const case_insensitive_map_t<string> &config,
+                                   const vector<rest_api_objects::StorageCredential> &storage_credentials) const {
 	IRCAPITableCredentials result;
 	auto schema_component = IRCPathComponent::NamespaceComponent(schema.namespace_items, catalog.namespace_separator);
 	auto secret_base_name = UUID::ToString(UUID::GenerateRandomUUID());
@@ -235,7 +283,7 @@ IcebergTable::GetVendedCredentials(ClientContext &context,
 	case_insensitive_map_t<Value> config_options;
 	//! TODO: apply the 'defaults' retrieved from the /v1/config endpoint
 	config_options.insert(user_defaults.begin(), user_defaults.end());
-	ParseConfigOptions(config_override ? *config_override : config, config_options, context, storage_type);
+	ParseConfigOptions(config, config_options, context, storage_type);
 
 	for (idx_t index = 0; index < storage_credentials.size(); index++) {
 		auto &credential = storage_credentials[index];
@@ -616,12 +664,47 @@ static void AddHTTPSecretsToOptions(SecretEntry &http_secret_entry, case_insensi
 	                            : http_kv_secret.TryGetValue("verify_ssl").DefaultCastAs(LogicalType::BOOLEAN);
 }
 
+IRCAPITableCredentials IcebergTable::RefreshVendedCredentialsInternal(ClientContext &context) const {
+	auto refreshed = IRCAPI::GetTableCredentials(context, catalog, schema, name);
+	if (refreshed.error_) {
+		throw HTTPException(StringUtil::Format("Could not refresh Iceberg vended credentials for table '%s': "
+		                                       "GetTableCredentials returned response code %s with message \"%s\"",
+		                                       name, EnumUtil::ToString(refreshed.status_),
+		                                       refreshed.error_->_error.message));
+	}
+	auto &response = refreshed.result_;
+	auto &refreshed_config = response.config ? *response.config : credential_state->config;
+	auto result = GetVendedCredentials(context, refreshed_config, response.storage_credentials);
+	if (!result.config && result.storage_credentials.empty()) {
+		throw InvalidConfigurationException("Could not refresh Iceberg vended credentials for table '%s': "
+		                                    "no matching credential was re-vended",
+		                                    name);
+	}
+	if (response.config) {
+		credential_state->config = std::move(*response.config);
+	}
+	credential_state->storage_credentials = std::move(response.storage_credentials);
+	catalog.table_request_cache.EvictIfCurrent(*this);
+	return result;
+}
+
+IRCAPITableCredentials IcebergTable::RefreshVendedCredentials(ClientContext &context) const {
+	lock_guard<mutex> guard(credential_state->lock);
+	return RefreshVendedCredentialsInternal(context);
+}
+
 void IcebergTable::LoadCredentials(ClientContext &context) const {
 	if (catalog.attach_options.access_mode != IRCAccessDelegationMode::VENDED_CREDENTIALS) {
 		// assume secret already exists
 		return;
 	}
-	LoadCredentials(context, GetVendedCredentials(context));
+	lock_guard<mutex> guard(credential_state->lock);
+	if (credential_state->Expired()) {
+		LoadCredentials(context, RefreshVendedCredentialsInternal(context));
+	} else {
+		LoadCredentials(context,
+		                GetVendedCredentials(context, credential_state->config, credential_state->storage_credentials));
+	}
 }
 
 void IcebergTable::LoadCredentials(ClientContext &context, IRCAPITableCredentials table_credentials) const {
@@ -792,10 +875,8 @@ void IcebergTable::ApplyRefreshResult(ClientContext &context, IcebergLoadTableRe
 IcebergTable IcebergTable::Copy() const {
 	auto clone = IcebergTable(catalog, schema, name, table_metadata.Copy());
 	clone.config = config;
+	clone.credential_state = credential_state;
 	clone.initialization_source = initialization_source;
-	for (auto &credential : storage_credentials) {
-		clone.storage_credentials.push_back(credential.Copy());
-	}
 	return clone;
 }
 
@@ -876,7 +957,8 @@ void IcebergTable::InitSchemaVersions() {
 
 IcebergTable::IcebergTable(IcebergCatalog &catalog, IcebergSchemaEntry &schema, const string &name,
                            IcebergTableMetadata metadata)
-    : catalog(catalog), schema(schema), name(name), table_metadata(std::move(metadata)), original_name(name) {
+    : catalog(catalog), schema(schema), name(name), table_metadata(std::move(metadata)),
+      credential_state(make_shared_ptr<IcebergVendedCredentialState>()), original_name(name) {
 }
 
 IcebergTable::IcebergTable(IcebergCatalog &catalog, IcebergSchemaEntry &schema, const string &name,
@@ -940,14 +1022,16 @@ void IcebergTable::InitializeFromCatalogResponse(ClientContext &context,
 
 void IcebergTable::SetLoadTableResult(const rest_api_objects::LoadTableResult &load_table_result) {
 	initialization_source = load_table_result;
+	credential_state = make_shared_ptr<IcebergVendedCredentialState>();
+	config.clear();
 	if (auto &val = load_table_result.config) {
 		config = *val;
 	}
-	storage_credentials.clear();
+	credential_state->config = config;
 
 	if (auto &credentials = load_table_result.storage_credentials) {
 		for (auto &credential : *credentials) {
-			storage_credentials.push_back(credential.Copy());
+			credential_state->storage_credentials.push_back(credential.Copy());
 		}
 	}
 }
