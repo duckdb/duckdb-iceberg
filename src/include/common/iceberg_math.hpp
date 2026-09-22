@@ -2,6 +2,7 @@
 
 #include "duckdb/common/assert.hpp"
 #include "duckdb/common/types/interval.hpp"
+#include "duckdb/common/types/value.hpp"
 
 #include <cstdint>
 
@@ -23,5 +24,10 @@ inline int64_t IcebergFloorDiv(int64_t a, int64_t b) {
 inline int64_t IcebergNanosToMicrosFloor(int64_t nanos) {
 	return IcebergFloorDiv(nanos, Interval::NANOS_PER_MICRO);
 }
+
+//! Steps a value by one unit of its type: 1 for integers, a day for DATE, a microsecond for TIMESTAMP,
+//! a nanosecond for the _NS variants. False when the type has no successor or the step leaves its range.
+bool IcebergTryIncrement(const Value &value, Value &result);
+bool IcebergTryDecrement(const Value &value, Value &result);
 
 } // namespace duckdb

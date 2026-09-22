@@ -1,0 +1,93 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/reads/filtering/test_is_null_partition_pruning.test
+# description: Test that IS NULL prunes data files whose partition value is not NULL
+# group: [filtering]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+
+statement ok
+pragma enable_external_file_cache=false;
+
+statement ok
+create schema if not exists my_datalake.default;
+
+statement ok
+drop table if exists my_datalake.default.test_is_null_pruning;
+
+statement ok
+CREATE TABLE my_datalake.default.test_is_null_pruning (id int, category varchar)
+PARTITIONED BY (category);
+
+# A single insert spanning three partition values writes three data files into one manifest. The manifest
+# summary reports contains_null, so the manifest itself is never pruned and every data file is examined.
+statement ok
+insert into my_datalake.default.test_is_null_pruning
+select range, case
+    when range % 3 = 0 then NULL
+    when range % 3 = 1 then 'alpha'
+    else 'beta'
+end
+from range(30);
+
+query I
+select count(*) from my_datalake.default.test_is_null_pruning;
+----
+30
+
+statement ok
+CALL enable_logging(level=debug);
+
+statement ok
+CALL truncate_duckdb_logs();
+
+# Every transform carries NULL through to NULL, so a file whose partition value is 'alpha' or 'beta' holds
+# no NULL categories and cannot satisfy IS NULL.
+query I
+select count(*) from my_datalake.default.test_is_null_pruning where category is null;
+----
+10
+
+query I
+select count(*) from duckdb_logs() where type = 'Iceberg' and message like '%skipped%data_file%' group by all;
+----
+2
+
+# --- IS NOT NULL rules out the NULL partition, but on its null counts rather than its partition value ---
+
+statement ok
+CALL truncate_duckdb_logs();
+
+query I
+select count(*) from my_datalake.default.test_is_null_pruning where category is not null;
+----
+20
+
+# Every row in that file is NULL, so its null counts give has_not_null = false. The partition value alone
+# proves nothing here: `void` yields NULL whatever the rows hold.
+query I
+select count(*) from duckdb_logs() where type = 'Iceberg' and message like '%skipped%data_file%' group by all;
+----
+1
+
+# --- An equality filter still prunes the other two partitions ---
+
+statement ok
+CALL truncate_duckdb_logs();
+
+query I
+select count(*) from my_datalake.default.test_is_null_pruning where category = 'alpha';
+----
+10
+
+query I
+select count(*) from duckdb_logs() where type = 'Iceberg' and message like '%skipped%data_file%' group by all;
+----
+2

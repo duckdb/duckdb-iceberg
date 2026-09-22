@@ -229,8 +229,9 @@ IcebergScanPlanner::GetDataFile(idx_t file_id, annotated_lock_guard<annotated_mu
 			if (manifest_entry.status == IcebergManifestEntryStatusType::DELETED) {
 				continue;
 			}
-			if (table_filters.HasFilters() && !IcebergFilePruner(context, GetMetadata(), GetSchema(), table_filters)
-			                                       .FileMatchesFilter(manifest_file, manifest_entry)) {
+			if (table_filters.HasFilters() &&
+			    IcebergFilePruner(context, GetMetadata(), GetSchema(), table_filters)
+			            .FileMatchesFilter(manifest_file, manifest_entry) == MetadataStatsPushdown::NO_ROWS_MATCH) {
 				continue;
 			}
 			if (StringUtil::CIEquals(data_file.file_format, "puffin")) {
