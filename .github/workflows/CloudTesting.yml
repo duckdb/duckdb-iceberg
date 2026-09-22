@@ -139,7 +139,9 @@ jobs:
           ICEBERG_AWS_REMOTE_AVAILABLE: 1
           ICEBERG_SNOWFLAKE_REMOTE_AVAILABLE: 1
         run: |
-          make test_release
+          ./build/release/test/unittest --order lex "test/sql/cloud/gcloud/*"
+          ./build/release/test/unittest --order lex "test/sql/cloud/r2_catalog/*"
+          ./build/release/test/unittest --order lex "test/sql/cloud/snowflake/*"
 
       - name: Test python cloud tests
         env:
