@@ -44,7 +44,11 @@
 				"test/sql/local/catalog_test_config_setup/catalog_agnostic/reads/filtering/should_do_filter_pruning_on_expressionless_string_filters.test",
 				"test/sql/local/catalog_test_config_setup/catalog_agnostic/reads/filtering/test_delete_manifest_filter_pushdown.test",
 				"test/sql/local/catalog_test_config_setup/catalog_agnostic/partitioning/struct_filter_issue.test",
-				"test/sql/local/catalog_test_config_setup/catalog_agnostic/logging/test_reads_on_bounds.test"
+				"test/sql/local/catalog_test_config_setup/catalog_agnostic/logging/test_reads_on_bounds.test",
+				"test/sql/local/catalog_test_config_setup/catalog_agnostic/reads/filtering/late_materialization_topn_v2.test",
+				"test/sql/local/catalog_test_config_setup/catalog_agnostic/reads/filtering/late_materialization_topn_v2_concurrent.test",
+				"test/sql/local/catalog_test_config_setup/catalog_agnostic/reads/filtering/late_materialization_mixed_transactions.test",
+				"test/sql/local/catalog_test_config_setup/catalog_agnostic/reads/filtering/late_materialization_prepared_transactions.test"
 			]
 		},
 		{
