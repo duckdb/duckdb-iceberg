@@ -1,0 +1,69 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/capabilities/no_multi_table_commit.test
+# description: Reject a second table update without atomic multi-table commit support
+# group: [capabilities]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require-env-not MULTI_TABLE_COMMIT_SUPPORT
+
+include test/sql/init_requires
+
+require core_functions
+
+# Expected HTTP errors must be checked, not ignored.
+set ignore_error_messages
+
+# A successful ordinary write separates capability rejection from connectivity failures.
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.cap_multi_table_commit;
+
+statement ok
+CREATE TABLE my_datalake.default.cap_multi_table_commit (id INTEGER);
+
+statement ok
+INSERT INTO my_datalake.default.cap_multi_table_commit VALUES (1);
+
+query I
+SELECT id FROM my_datalake.default.cap_multi_table_commit;
+----
+1
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.cap_multi_table_commit_other;
+
+statement ok
+CREATE TABLE my_datalake.default.cap_multi_table_commit_other (id INTEGER);
+
+statement ok
+INSERT INTO my_datalake.default.cap_multi_table_commit_other VALUES (2);
+
+statement ok
+BEGIN;
+
+statement ok
+INSERT INTO my_datalake.default.cap_multi_table_commit VALUES (3);
+
+statement error
+INSERT INTO my_datalake.default.cap_multi_table_commit_other VALUES (4);
+----
+cannot commit this transaction atomically
+
+statement ok
+ROLLBACK;
+
+# The rejected transaction must leave both existing tables unchanged.
+query I
+SELECT id FROM my_datalake.default.cap_multi_table_commit;
+----
+1
+
+query I
+SELECT id FROM my_datalake.default.cap_multi_table_commit_other;
+----
+2
+
+statement ok
+DROP TABLE my_datalake.default.cap_multi_table_commit_other;
+
+statement ok
+DROP TABLE my_datalake.default.cap_multi_table_commit;

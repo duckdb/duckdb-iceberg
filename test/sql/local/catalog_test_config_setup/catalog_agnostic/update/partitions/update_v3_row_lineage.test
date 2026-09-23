@@ -6,6 +6,8 @@
 
 require-env CATALOG_TEST_CONFIG_SETUP
 
+require-env FORMAT_V3_SUPPORT
+
 include test/sql/init_requires
 
 

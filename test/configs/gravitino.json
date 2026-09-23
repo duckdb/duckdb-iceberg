@@ -14,40 +14,77 @@
 		{
 			"env_name": "CATALOG_TEST_CONFIG_SETUP",
 			"env_value": "gravitino"
+		},
+		{
+			"env_name": "FORMAT_V3_SUPPORT",
+			"env_value": "true"
+		},
+		{
+			"env_name": "UNKNOWN_SUPPORT",
+			"env_value": "true"
+		},
+		{
+			"env_name": "VARIANT_SUPPORT",
+			"env_value": "true"
+		},
+		{
+			"env_name": "GEOMETRY_SUPPORT",
+			"env_value": "true"
+		},
+		{
+			"env_name": "TIMESTAMP_NS_SUPPORT",
+			"env_value": "true"
+		},
+		{
+			"env_name": "COLUMN_DEFAULT_SUPPORT",
+			"env_value": "true"
+		},
+		{
+			"env_name": "TIMESTAMP_NS_DEFAULT_SUPPORT",
+			"env_value": "true"
+		},
+		{
+			"env_name": "TIMESTAMPTZ_NS_DEFAULT_SUPPORT",
+			"env_value": "true"
+		},
+		{
+			"env_name": "TIMETRAVEL_SUPPORT",
+			"env_value": "true"
+		},
+		{
+			"env_name": "SNAPSHOT_HISTORY_SUPPORT",
+			"env_value": "true"
+		},
+		{
+			"env_name": "METADATA_LOG_SUPPORT",
+			"env_value": "true"
+		},
+		{
+			"env_name": "STAGED_CREATE_SUPPORT",
+			"env_value": "true"
+		},
+		{
+			"env_name": "FILE_CLEANUP_SUPPORT",
+			"env_value": "true"
+		},
+		{
+			"env_name": "NAMESPACE_PROPERTIES_SUPPORT",
+			"env_value": "true"
+		},
+		{
+			"env_name": "CASE_SENSITIVE_TABLE_NAMES_SUPPORT",
+			"env_value": "true"
+		},
+		{
+			"env_name": "SCAN_PLANNING_MODE",
+			"env_value": "client"
 		}
 	],
 	"skip_tests": [
 		{
-			"reason": "Gravitino doesn't provide credentials to read metadata.json paths",
-			"paths": [
-				"test/sql/local/catalog_test_config_setup/catalog_agnostic/alter/alter_rename_column.test",
-				"test/sql/local/catalog_test_config_setup/catalog_agnostic/transactions/test_transactional_deletes_retried.test",
-				"test/sql/local/catalog_test_config_setup/catalog_agnostic/alter/add_column/alter_add_column_warn_schema_mismatch.test",
-				"test/sql/local/catalog_test_config_setup/catalog_agnostic/alter/not_null/alter_drop_not_null_warn_schema_mismatch.test",
-				"test/sql/local/catalog_test_config_setup/catalog_agnostic/delete/test_transactional_delete.test",
-				"test/sql/local/catalog_test_config_setup/catalog_agnostic/insert/test_transactional_insert.test",
-				"test/sql/local/catalog_test_config_setup/catalog_agnostic/transactions/test_transaction_metadata_log_layout.test",
-				"test/sql/local/catalog_test_config_setup/catalog_agnostic/transactions/test_transaction_metadata_log_missing.test",
-				"test/sql/local/catalog_test_config_setup/catalog_agnostic/transactions/test_transaction_metadata_log_properties.test",
-				"test/sql/local/catalog_test_config_setup/catalog_agnostic/transactions/test_transaction_metadata_log_schema.test",
-				"test/sql/local/catalog_test_config_setup/catalog_agnostic/transactions/test_transactional_deletes_not_retried.test",
-				"test/sql/local/catalog_test_config_setup/catalog_agnostic/transactions/test_transactional_merge_into.test",
-				"test/sql/local/catalog_test_config_setup/catalog_agnostic/transactions/test_transactional_updates_error_omits_stacktrace.test",
-				"test/sql/local/catalog_test_config_setup/catalog_agnostic/transactions/test_transactional_updates.test",
-				"test/sql/local/catalog_test_config_setup/catalog_agnostic/transactions/test_transaction_get_from_transaction_start.test",
-				"test/sql/local/catalog_test_config_setup/catalog_agnostic/transactions/test_transactions_reading_empty_tables.test"
-			]
-		},
-		{
 			"reason": "Test is hardcoded for 'fixture' intermediates",
 			"paths": [
 				"test/sql/local/catalog_test_config_setup/catalog_agnostic/irc_catalog_read_deletes.test"
-			]
-		},
-		{
-			"reason": "Gravitino doesn't support multi-table requests ('.../transactions/commit' endpoint)",
-			"paths": [
-				"test/sql/local/catalog_test_config_setup/catalog_agnostic/transactions/test_multi_table_commit_integrity.test"
 			]
 		},
 		{

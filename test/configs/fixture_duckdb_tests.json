@@ -14,6 +14,78 @@
     {
       "env_name": "CATALOG_TEST_CONFIG_SETUP",
       "env_value": "fixture"
+    },
+    {
+      "env_name": "FORMAT_V3_SUPPORT",
+      "env_value": "true"
+    },
+    {
+      "env_name": "UNKNOWN_SUPPORT",
+      "env_value": "true"
+    },
+    {
+      "env_name": "VARIANT_SUPPORT",
+      "env_value": "true"
+    },
+    {
+      "env_name": "GEOMETRY_SUPPORT",
+      "env_value": "true"
+    },
+    {
+      "env_name": "TIMESTAMP_NS_SUPPORT",
+      "env_value": "true"
+    },
+    {
+      "env_name": "COLUMN_DEFAULT_SUPPORT",
+      "env_value": "true"
+    },
+    {
+      "env_name": "TIMESTAMP_NS_DEFAULT_SUPPORT",
+      "env_value": "true"
+    },
+    {
+      "env_name": "TIMESTAMPTZ_NS_DEFAULT_SUPPORT",
+      "env_value": "true"
+    },
+    {
+      "env_name": "TIMETRAVEL_SUPPORT",
+      "env_value": "true"
+    },
+    {
+      "env_name": "SNAPSHOT_HISTORY_SUPPORT",
+      "env_value": "true"
+    },
+    {
+      "env_name": "METADATA_LOG_SUPPORT",
+      "env_value": "true"
+    },
+    {
+      "env_name": "METADATA_FILE_READ_SUPPORT",
+      "env_value": "true"
+    },
+    {
+      "env_name": "STAGED_CREATE_SUPPORT",
+      "env_value": "true"
+    },
+    {
+      "env_name": "MULTI_TABLE_COMMIT_SUPPORT",
+      "env_value": "true"
+    },
+    {
+      "env_name": "FILE_CLEANUP_SUPPORT",
+      "env_value": "true"
+    },
+    {
+      "env_name": "NAMESPACE_PROPERTIES_SUPPORT",
+      "env_value": "true"
+    },
+    {
+      "env_name": "CASE_SENSITIVE_TABLE_NAMES_SUPPORT",
+      "env_value": "true"
+    },
+    {
+      "env_name": "SCAN_PLANNING_MODE",
+      "env_value": "client"
     }
   ],
   "skip_error_messages": [

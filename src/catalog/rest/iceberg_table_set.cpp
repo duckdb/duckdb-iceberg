@@ -11,11 +11,11 @@
 #include "duckdb/planner/expression_binder/table_function_binder.hpp"
 #include "duckdb/execution/expression_executor.hpp"
 #include "duckdb/logging/logger.hpp"
-#include "duckdb/parallel/task_executor.hpp"
 
 #include "catalog/rest/api/catalog_api.hpp"
 #include "catalog/rest/api/catalog_utils.hpp"
 #include "catalog/rest/iceberg_catalog.hpp"
+#include "catalog/rest/iceberg_request_task.hpp"
 #include "catalog/rest/catalog_entry/table/iceberg_table_schema_version.hpp"
 #include "catalog/rest/transaction/iceberg_transaction.hpp"
 #include "catalog/rest/storage/authorization/sigv4.hpp"
@@ -90,37 +90,11 @@ bool IcebergTableSet::ApplyLoadResult(IcebergTable &table, IcebergLoadTableResul
 namespace {
 
 struct PendingTableLoad {
-	explicit PendingTableLoad(IcebergTable &table) : table(table), request(table.schema.namespace_items, table.name) {
+	explicit PendingTableLoad(IcebergTable &table) : table(table) {
 	}
 
 	IcebergTable &table;
-	IcebergLoadTableRequest request;
-	IcebergLoadTableResult result;
-	ErrorData error;
-};
-
-class LoadTableTask : public BaseExecutorTask {
-public:
-	LoadTableTask(TaskExecutor &executor, ClientContext &context, IcebergCatalog &catalog, PendingTableLoad &load)
-	    : BaseExecutorTask(executor), context(context), catalog(catalog), load(load) {
-	}
-
-	void ExecuteTask() override {
-		if (context.IsInterrupted()) {
-			throw InterruptException();
-		}
-		try {
-			// Workers only fetch owned responses. The caller initializes tables and updates the cache after draining.
-			load.result = load.request.Execute(context, catalog);
-		} catch (std::exception &ex) {
-			load.error = ErrorData(ex);
-		}
-	}
-
-private:
-	ClientContext &context;
-	IcebergCatalog &catalog;
-	PendingTableLoad &load;
+	IcebergRequestResult<IcebergLoadTableResult> result;
 };
 
 void WarnTableLoadFailure(ClientContext &context, IcebergTable &table, const ErrorData &error) {
@@ -145,7 +119,9 @@ void IcebergTableSet::FillEntries(ClientContext &context, const vector<reference
 	// Declared after pending so even an exception during scheduling drains tasks before destroying their results.
 	TaskExecutor executor(context, TaskSchedulerType::ASYNC);
 	for (auto &load : pending) {
-		executor.ScheduleTask(make_uniq<LoadTableTask>(executor, context, catalog.Cast<IcebergCatalog>(), *load));
+		IcebergLoadTableRequest request(load->table.schema.namespace_items, load->table.name);
+		executor.ScheduleTask(make_uniq<IcebergRequestTask<IcebergLoadTableRequest>>(
+		    executor, context, catalog.Cast<IcebergCatalog>(), std::move(request), load->result));
 	}
 	executor.WorkOnTasks();
 	if (context.IsInterrupted()) {
@@ -153,10 +129,7 @@ void IcebergTableSet::FillEntries(ClientContext &context, const vector<reference
 	}
 	for (auto &load : pending) {
 		try {
-			if (load->error.HasError()) {
-				load->error.Throw();
-			}
-			ApplyLoadResult(load->table, std::move(load->result));
+			ApplyLoadResult(load->table, load->result.TakeResult());
 		} catch (std::exception &ex) {
 			WarnTableLoadFailure(context, load->table, ErrorData(ex));
 		}
@@ -282,7 +255,17 @@ void IcebergTableSet::LoadEntriesInternal(ClientContext &context) {
 		return;
 	}
 	auto &ic_catalog = catalog.Cast<IcebergCatalog>();
-	ApplyListResult(IRCAPI::GetTables(context, ic_catalog, schema));
+	// The request owns its namespace; workers never access or mutate this table set.
+	IcebergRequestResult<IcebergListTablesResult> result;
+	TaskExecutor executor(context, TaskSchedulerType::ASYNC);
+	executor.ScheduleTask(make_uniq<IcebergRequestTask<IcebergListTablesRequest>>(
+	    executor, context, ic_catalog, IcebergListTablesRequest(schema.namespace_items), result));
+	auto tables = result.WaitAndTakeResult(context, executor);
+	executor.WorkOnTasks();
+	if (context.IsInterrupted()) {
+		throw InterruptException();
+	}
+	ApplyListResult(std::move(tables));
 	iceberg_transaction.listed_schemas.insert(schema.name.GetIdentifierName());
 }
 

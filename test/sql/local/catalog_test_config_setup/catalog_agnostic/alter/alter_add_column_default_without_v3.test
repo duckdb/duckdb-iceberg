@@ -1,7 +1,10 @@
-# name: test/sql/local/catalog_test_config_setup/catalog_specifc/nessie/alter/faulty_alter_add_column_v3.test
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/alter/alter_add_column_default_without_v3.test
+# description: Reject non-null column defaults when the catalog cannot persist V3 tables
 # group: [alter]
 
-require-env CATALOG_TEST_CONFIG_SETUP nessie
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require-env-not FORMAT_V3_SUPPORT
 
 include test/sql/init_requires
 

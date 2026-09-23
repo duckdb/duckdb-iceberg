@@ -4,6 +4,10 @@
 
 require-env CATALOG_TEST_CONFIG_SETUP
 
+require-env FILE_CLEANUP_SUPPORT
+
+require-env FORMAT_V3_SUPPORT
+
 include test/sql/init_requires
 
 require core_functions

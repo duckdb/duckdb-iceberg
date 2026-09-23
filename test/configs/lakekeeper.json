@@ -13,25 +13,77 @@
 		{
 			"env_name": "CATALOG_TEST_CONFIG_SETUP",
 			"env_value": "lakekeeper"
+		},
+		{
+			"env_name": "FORMAT_V3_SUPPORT",
+			"env_value": "true"
+		},
+		{
+			"env_name": "VARIANT_SUPPORT",
+			"env_value": "true"
+		},
+		{
+			"env_name": "TIMESTAMP_NS_SUPPORT",
+			"env_value": "true"
+		},
+		{
+			"env_name": "COLUMN_DEFAULT_SUPPORT",
+			"env_value": "true"
+		},
+		{
+			"env_name": "TIMESTAMPTZ_NS_DEFAULT_SUPPORT",
+			"env_value": "true"
+		},
+		{
+			"env_name": "TIMESTAMP_NS_DEFAULT_SUPPORT",
+			"env_value": "true"
+		},
+		{
+			"env_name": "TIMETRAVEL_SUPPORT",
+			"env_value": "true"
+		},
+		{
+			"env_name": "SNAPSHOT_HISTORY_SUPPORT",
+			"env_value": "true"
+		},
+		{
+			"env_name": "METADATA_LOG_SUPPORT",
+			"env_value": "true"
+		},
+		{
+			"env_name": "METADATA_FILE_READ_SUPPORT",
+			"env_value": "true"
+		},
+		{
+			"env_name": "STAGED_CREATE_SUPPORT",
+			"env_value": "true"
+		},
+		{
+			"env_name": "MULTI_TABLE_COMMIT_SUPPORT",
+			"env_value": "true"
+		},
+		{
+			"env_name": "FILE_CLEANUP_SUPPORT",
+			"env_value": "true"
+		},
+		{
+			"env_name": "NAMESPACE_PROPERTIES_SUPPORT",
+			"env_value": "true"
+		},
+		{
+			"env_name": "CASE_SENSITIVE_TABLE_NAMES_SUPPORT",
+			"env_value": "true"
+		},
+		{
+			"env_name": "SCAN_PLANNING_MODE",
+			"env_value": "client"
+		},
+		{
+			"env_name": "ATOMIC_COMMIT_CONFLICT_SUPPORT",
+			"env_value": "true"
 		}
 	],
 	"skip_tests": [
-		{
-			"reason": "TIMESTAMP_NS CREATE DEFAULT: catalog does not handle default correctly, instead responds with NULL",
-			"paths": [
-				"test/sql/local/catalog_test_config_setup/catalog_agnostic/create/default/test_create_default_timestamp_ns.test",
-				"test/sql/local/catalog_test_config_setup/catalog_agnostic/create/default/test_create_default_timestamptz_ns.test",
-				"test/sql/local/catalog_test_config_setup/catalog_agnostic/alter/add_column/alter_add_column_timestamptz_ns_initial_default.test"
-			]
-		},
-		{
-			"reason": "UNKNOWN type is not supported yet",
-			"paths": [
-				"test/sql/local/catalog_test_config_setup/catalog_agnostic/create/test_create_unknown_type.test",
-				"test/sql/local/catalog_test_config_setup/catalog_agnostic/alter/alter_unknown_type.test",
-				"test/sql/local/catalog_test_config_setup/catalog_agnostic/alter/alter_unknown_type_variant.test"
-			]
-		},
 		{
 			"reason": "Not yet supported with Lakekeeper",
 			"paths": [
@@ -47,15 +99,7 @@
 				"test/sql/local/catalog_test_config_setup/catalog_agnostic/delete/delete_table.test",
 				"test/sql/local/catalog_test_config_setup/catalog_agnostic/reads/test_read_partitioned_table_type_promotion.test",
 				"test/sql/local/catalog_test_config_setup/catalog_agnostic/merge/merge_multi_partition_timestamp.test",
-				"test/sql/local/catalog_test_config_setup/catalog_agnostic/create/default/test_create_default_blob.test",
-				"test/sql/local/catalog_test_config_setup/catalog_agnostic/create/test_create_geo.test",
-				"test/sql/local/catalog_test_config_setup/catalog_agnostic/insert/iceberg_types/test_geometry_type.test",
-				"test/sql/local/catalog_test_config_setup/catalog_agnostic/insert/iceberg_types/test_geometry_type_nested.test",
-				"test/sql/local/catalog_test_config_setup/catalog_agnostic/insert/iceberg_types/test_write_geometry_bounds.test",
-				"test/sql/local/catalog_test_config_setup/catalog_agnostic/reads/filtering/test_filtering_geometry_predicates.test",
-				"test/sql/local/catalog_test_config_setup/catalog_agnostic/reads/types/test_read_geometry_type.test",
-				"test/sql/local/catalog_test_config_setup/catalog_agnostic/insert/iceberg_types/test_create_geometry_type.test",
-				"test/sql/local/catalog_test_config_setup/catalog_agnostic/functions/iceberg_column_stats/geometry/test_geometry_column_stats.test"
+				"test/sql/local/catalog_test_config_setup/catalog_agnostic/create/default/test_create_default_blob.test"
 			]
 		},
 		{

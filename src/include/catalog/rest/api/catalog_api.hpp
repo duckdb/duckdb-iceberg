@@ -47,6 +47,8 @@ using IcebergLoadTableResult = APIResult<unique_ptr<const rest_api_objects::Load
 //! The caller supplies a live context and catalog and owns cache lookup and result publication.
 class IcebergLoadTableRequest {
 public:
+	using Result = IcebergLoadTableResult;
+
 	IcebergLoadTableRequest(vector<string> namespace_items, string table_name);
 	IcebergLoadTableResult Execute(ClientContext &context, IcebergCatalog &catalog) const;
 
@@ -63,6 +65,8 @@ using IcebergListSchemasResult = vector<IRCAPISchema>;
 //! Owns the namespace; execution fetches all pages without publishing catalog entries.
 class IcebergListTablesRequest {
 public:
+	using Result = IcebergListTablesResult;
+
 	explicit IcebergListTablesRequest(vector<string> namespace_items);
 	IcebergListTablesResult Execute(ClientContext &context, IcebergCatalog &catalog) const;
 
@@ -73,6 +77,8 @@ private:
 //! Owns the parent namespace; execution includes pagination and configured nested-namespace traversal.
 class IcebergListSchemasRequest {
 public:
+	using Result = IcebergListSchemasResult;
+
 	explicit IcebergListSchemasRequest(vector<string> parent);
 	IcebergListSchemasResult Execute(ClientContext &context, IcebergCatalog &catalog) const;
 

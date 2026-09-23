@@ -19,70 +19,45 @@
     {
       "env_name": "S3TABLES_TABLE_BUCKET_ARN",
       "env_value": ""
+    },
+    {
+      "env_name": "FORMAT_V3_SUPPORT",
+      "env_value": "true"
+    },
+    {
+      "env_name": "UNKNOWN_SUPPORT",
+      "env_value": "true"
+    },
+    {
+      "env_name": "TIMETRAVEL_SUPPORT",
+      "env_value": "true"
+    },
+    {
+      "env_name": "SNAPSHOT_HISTORY_SUPPORT",
+      "env_value": "true"
+    },
+    {
+      "env_name": "METADATA_LOG_SUPPORT",
+      "env_value": "true"
+    },
+    {
+      "env_name": "METADATA_FILE_READ_SUPPORT",
+      "env_value": "true"
+    },
+    {
+      "env_name": "MULTI_TABLE_COMMIT_SUPPORT",
+      "env_value": "true"
+    },
+    {
+      "env_name": "SCAN_PLANNING_MODE",
+      "env_value": "client"
+    },
+    {
+      "env_name": "ATOMIC_COMMIT_CONFLICT_SUPPORT",
+      "env_value": "true"
     }
   ],
   "skip_tests": [
-    {
-      "reason": "s3tables does not support column defaults",
-      "paths": [
-        "test/sql/local/catalog_test_config_setup/catalog_agnostic/create/default/test_create_default_bigint.test",
-        "test/sql/local/catalog_test_config_setup/catalog_agnostic/create/default/test_create_default_blob.test",
-        "test/sql/local/catalog_test_config_setup/catalog_agnostic/create/default/test_create_default_bool.test",
-        "test/sql/local/catalog_test_config_setup/catalog_agnostic/create/default/test_create_default_date.test",
-        "test/sql/local/catalog_test_config_setup/catalog_agnostic/create/default/test_create_default_decimal.test",
-        "test/sql/local/catalog_test_config_setup/catalog_agnostic/create/default/test_create_default_double.test",
-        "test/sql/local/catalog_test_config_setup/catalog_agnostic/create/default/test_create_default_float.test",
-        "test/sql/local/catalog_test_config_setup/catalog_agnostic/create/default/test_create_default_integer.test",
-        "test/sql/local/catalog_test_config_setup/catalog_agnostic/create/default/test_create_default_time.test",
-        "test/sql/local/catalog_test_config_setup/catalog_agnostic/create/default/test_create_default_timestamp.test",
-        "test/sql/local/catalog_test_config_setup/catalog_agnostic/create/default/test_create_default_timestamp_ns.test",
-        "test/sql/local/catalog_test_config_setup/catalog_agnostic/create/default/test_create_default_timestamp_tz.test",
-        "test/sql/local/catalog_test_config_setup/catalog_agnostic/create/default/test_create_default_timestamptz_ns.test",
-        "test/sql/local/catalog_test_config_setup/catalog_agnostic/create/default/test_create_default_uuid.test",
-        "test/sql/local/catalog_test_config_setup/catalog_agnostic/create/default/test_create_default_varchar.test",
-        "test/sql/local/catalog_test_config_setup/catalog_agnostic/create/test_create_default.test",
-        "test/sql/local/catalog_test_config_setup/catalog_agnostic/alter/add_column/alter_add_column_twice_in_same_transaction_with_default.test",
-        "test/sql/local/catalog_test_config_setup/catalog_agnostic/alter/add_column/alter_add_column_default_null.test",
-        "test/sql/local/catalog_test_config_setup/catalog_agnostic/merge/merge_into_default.test",
-        "test/sql/local/catalog_test_config_setup/catalog_agnostic/update/update_with_default.test"
-      ]
-    },
-    {
-      "reason": "v3 types still unsupported in s3tables",
-      "paths": [
-        "test/sql/local/catalog_test_config_setup/catalog_agnostic/alter/add_column/alter_add_column_timestamptz_ns_initial_default.test",
-        "test/sql/local/catalog_test_config_setup/catalog_agnostic/alter/alter_type_v3.test",
-        "test/sql/local/catalog_test_config_setup/catalog_agnostic/reads/filtering/test_filtering_geometry_predicates.test",
-        "test/sql/local/catalog_test_config_setup/catalog_agnostic/reads/types/test_read_geometry_type.test",
-        "test/sql/local/catalog_test_config_setup/catalog_agnostic/insert/iceberg_types/test_create_geometry_type.test",
-        "test/sql/local/catalog_test_config_setup/catalog_agnostic/insert/iceberg_types/test_geometry_type.test",
-        "test/sql/local/catalog_test_config_setup/catalog_agnostic/insert/iceberg_types/test_geometry_type_nested.test",
-        "test/sql/local/catalog_test_config_setup/catalog_agnostic/insert/iceberg_types/test_write_geometry_bounds.test",
-        "test/sql/local/catalog_test_config_setup/catalog_agnostic/insert/partitions/bucket/test_bucket_timestamp_ns.test",
-        "test/sql/local/catalog_test_config_setup/catalog_agnostic/insert/partitions/bucket/test_bucket_timestamptz_ns.test",
-        "test/sql/local/catalog_test_config_setup/catalog_agnostic/insert/partitions/timestamptz_ns/test_partition_timestamptz_ns_temporal.test",
-        "test/sql/local/catalog_test_config_setup/catalog_agnostic/test_basic_variant.test",
-        "test/sql/local/catalog_test_config_setup/catalog_agnostic/sorting/bucket/bucket_timestamptz_ns.test",
-        "test/sql/local/catalog_test_config_setup/catalog_agnostic/sorting/day/day_timestamptz_ns.test",
-        "test/sql/local/catalog_test_config_setup/catalog_agnostic/sorting/hour/hour_timestamptz_ns.test",
-        "test/sql/local/catalog_test_config_setup/catalog_agnostic/sorting/month/month_timestamptz_ns.test",
-        "test/sql/local/catalog_test_config_setup/catalog_agnostic/sorting/year/year_timestamptz_ns.test",
-        "test/sql/local/catalog_test_config_setup/catalog_agnostic/create/test_create_geo.test",
-        "test/sql/local/catalog_test_config_setup/catalog_agnostic/functions/iceberg_column_stats/geometry/test_geometry_column_stats.test"
-      ]
-    },
-    {
-      "reason": "requires stage create capabilities",
-      "paths": [
-        "test/sql/local/catalog_test_config_setup/catalog_agnostic/create/test_create_table.test",
-        "test/sql/local/catalog_test_config_setup/catalog_agnostic/alter/rename_table/rename_table_after_modifications.test",
-        "test/sql/local/catalog_test_config_setup/catalog_agnostic/alter/rename_table/create_and_rename.test",
-        "test/sql/local/catalog_test_config_setup/catalog_agnostic/alter/alter_default.test",
-        "test/sql/local/catalog_test_config_setup/catalog_agnostic/transactions/test_multi_table_commit_integrity.test",
-        "test/sql/local/catalog_test_config_setup/catalog_agnostic/transactions/test_transaction_metadata_log_missing.test",
-        "test/sql/local/catalog_test_config_setup/catalog_agnostic/transactions/test_transaction_metadata_log_schema.test"
-      ]
-    },
     {
       "reason": "s3tables allows NULL as unknown",
       "paths": [
@@ -97,13 +72,6 @@
         "test/sql/local/catalog_test_config_setup/catalog_agnostic/alter/add_column/alter_add_column_transaction_with_select.test",
         "test/sql/local/catalog_test_config_setup/catalog_agnostic/create/default/test_create_default_struct_nested.test",
         "test/sql/local/catalog_test_config_setup/catalog_agnostic/transactions/test_transaction_metadata_log_properties.test"
-      ]
-    },
-    {
-      "reason": "s3tables does not allow us to clean up",
-      "paths": [
-        "test/sql/local/catalog_test_config_setup/catalog_agnostic/delete/test_delete_consolidation_transactional.test",
-        "test/sql/local/catalog_test_config_setup/catalog_agnostic/delete/delete_table.test"
       ]
     },
     {
@@ -187,20 +155,6 @@
         "test/sql/local/catalog_test_config_setup/catalog_agnostic/delete/test_no_head_request_for_deletes.test",
         "test/sql/local/catalog_test_config_setup/catalog_agnostic/delete/test_snapshot_summary_delete_metrics.test",
         "test/sql/local/catalog_test_config_setup/catalog_agnostic/insert/test_snapshot_summary_file_size_metrics.test"
-      ]
-    },
-    {
-      "reason": "S3 tables does not support case sensitive table names",
-      "paths": [
-        "test/sql/local/catalog_test_config_setup/catalog_agnostic/test_case_sensitive_name.test"
-      ]
-    },
-    {
-      "reason": "s3tables does not support the operation",
-      "paths": [
-        "test/sql/local/catalog_test_config_setup/catalog_agnostic/schema_properties/schema_properties_update.test",
-        "test/sql/local/catalog_test_config_setup/catalog_agnostic/schema_properties/schema_properties_update_concurrent_transactions.test",
-        "test/sql/local/catalog_test_config_setup/catalog_agnostic/schema_properties/schema_properties_update_transaction.test"
       ]
     }
   ]

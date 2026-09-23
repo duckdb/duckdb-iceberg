@@ -5,6 +5,8 @@ include test/sql/init_requires
 
 require-env CATALOG_TEST_CONFIG_SETUP
 
+require-env SCAN_PLANNING_MODE client
+
 statement ok
 create schema if not exists my_datalake.default;
 
