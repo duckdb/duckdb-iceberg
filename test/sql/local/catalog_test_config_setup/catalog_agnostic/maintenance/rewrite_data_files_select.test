@@ -11,7 +11,7 @@ drop table if exists my_datalake.default.rewrite_select_probe;
 
 statement ok
 create table my_datalake.default.rewrite_select_probe (id INTEGER, category VARCHAR, payload VARCHAR)
-partitioned by (category);
+partitioned by (category) WITH ('format-version'=2);
 
 statement ok
 insert into my_datalake.default.rewrite_select_probe values (1, 'a', 'a1'), (2, 'b', 'b1');

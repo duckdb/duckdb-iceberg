@@ -12,6 +12,7 @@ drop table if exists my_datalake.default.rewrite_file_size_rotation;
 statement ok
 create table my_datalake.default.rewrite_file_size_rotation (id INTEGER, payload VARCHAR)
 with (
+    'format-version'=2,
     'write.target-file-size-bytes'='20971520',
     'write.parquet.compression-codec'='snappy'
 );

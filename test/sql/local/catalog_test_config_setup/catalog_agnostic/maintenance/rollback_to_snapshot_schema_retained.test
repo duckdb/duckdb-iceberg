@@ -14,7 +14,7 @@ statement ok
 drop table if exists my_datalake.default.rollback_schema;
 
 statement ok
-create table my_datalake.default.rollback_schema (id INTEGER);
+create table my_datalake.default.rollback_schema (id INTEGER) WITH ('format-version'=2);
 
 statement ok
 insert into my_datalake.default.rollback_schema values (1), (2);

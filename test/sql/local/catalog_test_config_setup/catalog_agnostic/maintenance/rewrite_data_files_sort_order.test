@@ -19,7 +19,7 @@ drop table if exists my_datalake.default.rewrite_sort_order;
 # Insert six unordered files before the table has a sort order so rewrite, not
 # INSERT, is what must establish physical ordering.
 statement ok
-create table my_datalake.default.rewrite_sort_order (a INTEGER, b INTEGER);
+create table my_datalake.default.rewrite_sort_order (a INTEGER, b INTEGER) WITH ('format-version'=2);
 
 statement ok
 insert into my_datalake.default.rewrite_sort_order values (2, 20);

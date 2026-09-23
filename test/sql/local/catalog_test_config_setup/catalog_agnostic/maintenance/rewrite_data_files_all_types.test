@@ -12,7 +12,7 @@ statement ok
 drop table if exists my_datalake.default.rewrite_all_types;
 
 statement ok
-create table my_datalake.default.rewrite_all_types as select
+create table my_datalake.default.rewrite_all_types WITH ('format-version'=2) as select
     row_number() over () as row_id,
     bool,
     int,

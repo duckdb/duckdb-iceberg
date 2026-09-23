@@ -16,7 +16,7 @@ drop table if exists my_datalake.default.rewrite_plan_shape;
 
 statement ok
 create table my_datalake.default.rewrite_plan_shape (id INTEGER, category VARCHAR, payload VARCHAR)
-partitioned by (category);
+partitioned by (category) WITH ('format-version'=2);
 
 statement ok
 insert into my_datalake.default.rewrite_plan_shape values (1, 'a', 'a1'), (2, 'b', 'b1');

@@ -213,16 +213,6 @@ select first_row_id, sequence_number, typeof(partition_constants) from iceberg_s
 0	NULL	STRUCT
 
 statement ok
-alter table my_datalake.default.scan_plan_test add column extra varchar default 'initial';
-
-query I
-select json_extract_string(s.value, '$.fields[1]."initial-default"')
-from iceberg_scan_plan('my_datalake.default.scan_plan_test') p, json_each(p.metadata::json, '$.schemas') s
-where json_extract(s.value, '$."schema-id"')::integer = p.schema_id;
-----
-initial
-
-statement ok
 delete from my_datalake.default.scan_plan_test where id=2;
 
 query IIIIII

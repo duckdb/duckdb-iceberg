@@ -10,7 +10,7 @@ statement ok
 drop table if exists my_datalake.default.rewrite_max_files;
 
 statement ok
-create table my_datalake.default.rewrite_max_files (id INTEGER, payload VARCHAR);
+create table my_datalake.default.rewrite_max_files (id INTEGER, payload VARCHAR) WITH ('format-version'=2);
 
 statement ok
 insert into my_datalake.default.rewrite_max_files values (1, 'a1'), (2, 'b1');
@@ -75,7 +75,7 @@ drop table if exists my_datalake.default.rewrite_max_files_part;
 
 statement ok
 create table my_datalake.default.rewrite_max_files_part (id INTEGER, category VARCHAR, payload VARCHAR)
-partitioned by (category);
+partitioned by (category) WITH ('format-version'=2);
 
 statement ok
 insert into my_datalake.default.rewrite_max_files_part values (1, 'a', 'a1'), (2, 'b', 'b1');

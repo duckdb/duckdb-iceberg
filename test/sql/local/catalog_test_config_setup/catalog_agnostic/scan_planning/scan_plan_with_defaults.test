@@ -1,0 +1,33 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/scan_planning/scan_plan_with_defaults.test
+# description: Scan tasks carry the schema that defines a added column's initial-default
+# group: [scan_planning]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+include test/sql/init_requires
+
+require json
+
+statement ok
+drop table if exists my_datalake.default.scan_plan_defaults;
+
+statement ok
+create table my_datalake.default.scan_plan_defaults(id integer) with ('format-version' = 3);
+
+statement ok
+insert into my_datalake.default.scan_plan_defaults values (1), (2), (3);
+
+statement ok
+alter table my_datalake.default.scan_plan_defaults add column extra varchar default 'initial';
+
+# The data files predate 'extra', so the task must reference the current schema,
+# which is the only one carrying the initial-default a reader needs.
+query I
+select json_extract_string(s.value, '$.fields[1]."initial-default"')
+from iceberg_scan_plan('my_datalake.default.scan_plan_defaults') p, json_each(p.metadata::json, '$.schemas') s
+where json_extract(s.value, '$."schema-id"')::integer = p.schema_id;
+----
+initial
+
+statement ok
+drop table my_datalake.default.scan_plan_defaults;

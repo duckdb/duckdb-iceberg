@@ -43,6 +43,9 @@ select * from test_basic_create;
 ----
 
 statement ok
+drop table if exists test_basic_create_as;
+
+statement ok
 create table test_basic_create_as as select range a, range::VARCHAR from range(10);
 
 query II

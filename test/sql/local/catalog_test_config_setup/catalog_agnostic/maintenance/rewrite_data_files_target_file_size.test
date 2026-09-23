@@ -14,6 +14,7 @@ drop table if exists my_datalake.default.rewrite_target_file_size;
 statement ok
 create table my_datalake.default.rewrite_target_file_size (id INTEGER, payload VARCHAR)
 with (
+    'format-version'=2,
     'write.target-file-size-bytes'='20971520',
     'write.parquet.target-file-size-bytes'='20971520',
     'write.parquet.compression-codec'='snappy'

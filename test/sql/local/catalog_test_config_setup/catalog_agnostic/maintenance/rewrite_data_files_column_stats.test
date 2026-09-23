@@ -10,7 +10,7 @@ statement ok
 drop table if exists my_datalake.default.rewrite_column_stats;
 
 statement ok
-create table my_datalake.default.rewrite_column_stats (id INTEGER, payload VARCHAR);
+create table my_datalake.default.rewrite_column_stats (id INTEGER, payload VARCHAR) WITH ('format-version'=2);
 
 statement ok
 insert into my_datalake.default.rewrite_column_stats values (1, 'a'), (2, 'b');

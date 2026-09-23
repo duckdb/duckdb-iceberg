@@ -13,7 +13,7 @@ drop table if exists my_datalake.default.rewrite_day;
 
 statement ok
 create table my_datalake.default.rewrite_day (id INTEGER, ts TIMESTAMP, payload VARCHAR)
-partitioned by (day(ts));
+partitioned by (day(ts)) with ('format-version'=2);
 
 statement ok
 insert into my_datalake.default.rewrite_day values
@@ -121,7 +121,7 @@ drop table if exists my_datalake.default.rewrite_month;
 
 statement ok
 create table my_datalake.default.rewrite_month (id INTEGER, ts TIMESTAMP, payload VARCHAR)
-partitioned by (month(ts));
+partitioned by (month(ts)) with ('format-version'=2);
 
 statement ok
 insert into my_datalake.default.rewrite_month values
@@ -224,7 +224,7 @@ drop table if exists my_datalake.default.rewrite_max_files_day;
 
 statement ok
 create table my_datalake.default.rewrite_max_files_day (id INTEGER, ts TIMESTAMP, payload VARCHAR)
-partitioned by (day(ts));
+partitioned by (day(ts)) with ('format-version'=2);
 
 statement ok
 insert into my_datalake.default.rewrite_max_files_day values

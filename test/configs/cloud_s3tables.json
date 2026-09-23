@@ -116,7 +116,8 @@
         "test/sql/local/catalog_test_config_setup/catalog_agnostic/irc_nested_types.test",
         "test/sql/local/catalog_test_config_setup/catalog_agnostic/logging/test_partition_read_logging.test",
         "test/sql/local/catalog_test_config_setup/catalog_agnostic/logging/test_partition_read_logic_month.test",
-        "test/sql/local/catalog_test_config_setup/catalog_agnostic/other_engines/test_spark_can_read_duckdb_timestamptz_ns.test"
+        "test/sql/local/catalog_test_config_setup/catalog_agnostic/other_engines/test_spark_can_read_duckdb_timestamptz_ns.test",
+        "test/sql/local/catalog_test_config_setup/catalog_agnostic/insert/partitions/bucket/test_bucket_uuid_spark_parity.test"
       ]
     },
     {
@@ -125,19 +126,6 @@
         "test/sql/local/catalog_test_config_setup/catalog_agnostic/alter/alter_type.test",
         "test/sql/local/catalog_test_config_setup/catalog_agnostic/delete/test_delete_rowid.test",
         "test/sql/local/catalog_test_config_setup/catalog_agnostic/table_properties/test_default_format_version.test"
-      ]
-    },
-    {
-      "reason": "not supporting maintenance on v3 tables. format_version=v3 is default",
-      "paths": [
-        "test/sql/local/catalog_test_config_setup/catalog_agnostic/maintenance/rewrite_data_files_all_types.test",
-        "test/sql/local/catalog_test_config_setup/catalog_agnostic/maintenance/rewrite_data_files_commit.test",
-        "test/sql/local/catalog_test_config_setup/catalog_agnostic/maintenance/rewrite_data_files_file_size_rotation.test",
-        "test/sql/local/catalog_test_config_setup/catalog_agnostic/maintenance/rewrite_data_files_partitioned.test",
-        "test/sql/local/catalog_test_config_setup/catalog_agnostic/maintenance/rewrite_data_files_sequence_pin.test",
-        "test/sql/local/catalog_test_config_setup/catalog_agnostic/maintenance/rewrite_data_files_spark_mor_residual_deletes.test",
-        "test/sql/local/catalog_test_config_setup/catalog_agnostic/maintenance/rewrite_data_files_target_file_size.test",
-        "test/sql/local/catalog_test_config_setup/catalog_agnostic/maintenance/rewrite_data_files_column_stats.test"
       ]
     },
     {

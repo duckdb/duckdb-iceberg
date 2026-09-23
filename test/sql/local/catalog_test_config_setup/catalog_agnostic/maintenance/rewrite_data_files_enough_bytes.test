@@ -12,7 +12,7 @@ statement ok
 drop table if exists my_datalake.default.rewrite_enough_bytes;
 
 statement ok
-create table my_datalake.default.rewrite_enough_bytes (id INTEGER, payload VARCHAR);
+create table my_datalake.default.rewrite_enough_bytes (id INTEGER, payload VARCHAR) WITH ('format-version'=2);
 
 # Three modest files: each under the rewrite target, but combined size exceeds it.
 statement ok

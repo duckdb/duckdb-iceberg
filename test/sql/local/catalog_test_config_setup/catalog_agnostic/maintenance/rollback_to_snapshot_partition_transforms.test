@@ -17,7 +17,7 @@ drop table if exists my_datalake.default.rollback_bucket;
 
 statement ok
 create table my_datalake.default.rollback_bucket (id INTEGER, payload VARCHAR)
-partitioned by (bucket(4, id));
+partitioned by (bucket(4, id)) WITH ('format-version'=2);
 
 statement ok
 insert into my_datalake.default.rollback_bucket values (1, 'a'), (2, 'b');
@@ -73,7 +73,7 @@ drop table if exists my_datalake.default.rollback_day;
 
 statement ok
 create table my_datalake.default.rollback_day (id INTEGER, dt DATE, payload VARCHAR)
-partitioned by (day(dt));
+partitioned by (day(dt)) WITH ('format-version'=2);
 
 statement ok
 insert into my_datalake.default.rollback_day values
@@ -133,7 +133,7 @@ drop table if exists my_datalake.default.rollback_hour;
 
 statement ok
 create table my_datalake.default.rollback_hour (id INTEGER, ts TIMESTAMP, payload VARCHAR)
-partitioned by (hour(ts));
+partitioned by (hour(ts)) WITH ('format-version'=2);
 
 statement ok
 insert into my_datalake.default.rollback_hour values

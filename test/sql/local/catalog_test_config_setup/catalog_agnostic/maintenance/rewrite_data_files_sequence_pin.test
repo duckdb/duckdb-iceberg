@@ -10,7 +10,7 @@ statement ok
 drop table if exists my_datalake.default.rewrite_seq_pin;
 
 statement ok
-create table my_datalake.default.rewrite_seq_pin (id INTEGER, payload VARCHAR);
+create table my_datalake.default.rewrite_seq_pin (id INTEGER, payload VARCHAR) WITH ('format-version'=2);
 
 statement ok
 insert into my_datalake.default.rewrite_seq_pin values (1, 'a'), (2, 'b');
