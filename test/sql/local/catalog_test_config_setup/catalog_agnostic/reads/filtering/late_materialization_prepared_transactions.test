@@ -6,6 +6,8 @@ require-env CATALOG_TEST_CONFIG_SETUP
 
 require-env TIMETRAVEL_SUPPORT
 
+require-env SCAN_PLANNING_MODE client
+
 require avro
 
 require parquet

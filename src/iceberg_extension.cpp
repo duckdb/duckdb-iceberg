@@ -29,9 +29,7 @@
 #include "common/iceberg_default.hpp"
 #include "common/iceberg_fixed_type.hpp"
 #include "function/copy/iceberg_copy_function.hpp"
-#include "duckdb/optimizer/optimizer_extension.hpp"
 #include "duckdb/planner/planner_extension.hpp"
-#include "planning/iceberg_optimizer.hpp"
 #include "planning/iceberg_planner.hpp"
 
 namespace duckdb {
@@ -194,7 +192,6 @@ static void LoadInternal(ExtensionLoader &loader) {
 	auto &log_manager = instance.GetLogManager();
 	log_manager.RegisterLogType(make_uniq<IcebergLogType>());
 	StorageExtension::Register(config, "iceberg", make_shared_ptr<IRCStorageExtension>());
-	OptimizerExtension::Register(config, IcebergOptimizer::Create());
 	PlannerExtension::Register(config, IcebergPlanner::Create());
 }
 

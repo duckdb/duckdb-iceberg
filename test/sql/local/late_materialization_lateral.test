@@ -1,0 +1,128 @@
+# name: test/sql/local/late_materialization_lateral.test
+# description: Iceberg TopN setup preserves lateral filter dependencies and visits subqueries
+# group: [local]
+
+require avro
+
+require parquet
+
+require iceberg
+
+statement ok
+SET debug_verify_serializer = false;
+
+foreach storage native iceberg
+
+onlyif storage==native
+statement ok
+CREATE TABLE vertices AS SELECT i::INTEGER AS id FROM range(100) t(i);
+
+onlyif storage==iceberg
+statement ok
+CREATE VIEW vertices AS
+SELECT id
+FROM iceberg_scan('{WORKING_DIRECTORY}/data/persistent/null_stats/default/test_nulls',
+                  version='00003-9d6a621e-8a72-4190-a880-f6ca02e32b86');
+
+statement ok
+CREATE VIEW joined_walk AS
+SELECT input.id, expanded.depth
+FROM vertices input
+CROSS JOIN LATERAL (
+    WITH RECURSIVE walk(depth) AS (
+        SELECT 0 + input.id * 0
+        UNION ALL
+        SELECT depth + 1 FROM walk WHERE depth < 7
+    )
+    SELECT depth FROM walk
+) expanded
+JOIN vertices target ON target.id = expanded.depth + 1;
+
+query II
+SELECT count(*), sum(depth) FROM joined_walk WHERE id = 3;
+----
+8	28
+
+# Loading Iceberg must not clear the generated correlation-domain dependencies.
+query II
+EXPLAIN SELECT count(*) FROM joined_walk WHERE id = 3;
+----
+physical_plan	<REGEX>:[\s\S]*Filters: id = 3[\s\S]*
+
+statement ok
+DROP VIEW joined_walk;
+
+onlyif storage==native
+statement ok
+DROP TABLE vertices;
+
+onlyif storage==iceberg
+statement ok
+DROP VIEW vertices;
+
+endloop
+
+statement ok
+CREATE VIEW lm_nested_input AS
+SELECT *
+FROM iceberg_scan('{WORKING_DIRECTORY}/data/persistent/null_stats/default/test_nulls',
+                  version='00003-9d6a621e-8a72-4190-a880-f6ca02e32b86');
+
+statement ok
+SET late_materialization_max_rows = 10;
+
+statement ok
+SET iceberg_use_server_side_scan_planning = false;
+
+statement ok
+SET explain_output = 'optimized_only';
+
+foreach mode off on
+
+onlyif mode==off
+statement ok
+SET disabled_optimizers = 'late_materialization';
+
+onlyif mode==on
+statement ok
+SET disabled_optimizers = '';
+
+# Post-bind must also visit plans still stored in bound subquery expressions.
+onlyif mode==on
+query II
+EXPLAIN (FORMAT JSON)
+SELECT (SELECT name FROM lm_nested_input ORDER BY id DESC LIMIT 1);
+----
+logical_opt	<REGEX>:(?s).*COMPARISON_JOIN.*TOP_N.*
+
+onlyif mode==off
+query II
+EXPLAIN (FORMAT JSON)
+SELECT (SELECT name FROM lm_nested_input ORDER BY id DESC LIMIT 1);
+----
+logical_opt	<!REGEX>:(?s).*COMPARISON_JOIN.*
+
+query T
+SELECT (SELECT name FROM lm_nested_input ORDER BY id DESC LIMIT 1);
+----
+i
+
+endloop
+
+statement ok
+RESET disabled_optimizers;
+
+statement ok
+RESET explain_output;
+
+statement ok
+RESET late_materialization_max_rows;
+
+statement ok
+RESET iceberg_use_server_side_scan_planning;
+
+statement ok
+RESET debug_verify_serializer;
+
+statement ok
+DROP VIEW lm_nested_input;

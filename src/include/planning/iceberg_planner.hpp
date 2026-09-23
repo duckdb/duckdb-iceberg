@@ -14,7 +14,7 @@ namespace duckdb {
 
 class IcebergPlannerRoutine {
 public:
-	void VisitOperator(LogicalOperator &op);
+	void VisitOperator(ClientContext &context, LogicalOperator &op);
 
 private:
 	void VisitScan(LogicalOperator &op);

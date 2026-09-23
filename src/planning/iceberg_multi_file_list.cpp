@@ -40,14 +40,12 @@ bool IcebergMultiFileList::SupportsLateMaterialization() const {
 }
 
 unique_ptr<MultiFileList> IcebergMultiFileList::Copy() const {
+	// The view already shares the table and snapshot in its immutable configuration.
 	auto result = unique_ptr<IcebergMultiFileList>(
 	    new IcebergMultiFileList(planner->CreateView(IcebergTableFilters()), delete_execution));
 	result->have_bound = have_bound;
 	result->names = names;
 	result->types = types;
-	if (planner->GetTable()) {
-		result->SetTable(*planner->GetTable());
-	}
 	return std::move(result);
 }
 

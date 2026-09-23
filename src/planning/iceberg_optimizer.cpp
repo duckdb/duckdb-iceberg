@@ -2,6 +2,7 @@
 
 #include "duckdb/common/multi_file/multi_file_data.hpp"
 #include "duckdb/common/multi_file/multi_file_states.hpp"
+#include "duckdb/main/client_context.hpp"
 #include "duckdb/optimizer/topn_optimizer.hpp"
 #include "duckdb/planner/expression/bound_columnref_expression.hpp"
 #include "duckdb/planner/expression_iterator.hpp"
@@ -67,8 +68,8 @@ static void IcebergLateMaterializationFilterPushdown(ClientContext &context, Log
 	}
 }
 
-static void EnableIcebergTopNLateMaterialization(OptimizerExtensionInput &input, unique_ptr<LogicalOperator> &plan) {
-	auto get = TryGetTopNTableScan(input.context, *plan);
+void IcebergOptimizer::TryEnableLateMaterialization(ClientContext &context, LogicalOperator &op) {
+	auto get = TryGetTopNTableScan(context, op);
 	if (get) {
 		auto file_list = TryGetIcebergFileList(*get);
 		if (file_list && file_list->SupportsLateMaterialization()) {
@@ -78,7 +79,7 @@ static void EnableIcebergTopNLateMaterialization(OptimizerExtensionInput &input,
 			// would complicate the server-side plan.
 			Value value;
 			bool server_side_enabled = false;
-			if (input.context.TryGetCurrentSetting("iceberg_use_server_side_scan_planning", value) && !value.IsNull() &&
+			if (context.TryGetCurrentSetting("iceberg_use_server_side_scan_planning", value) && !value.IsNull() &&
 			    value.type().id() == LogicalTypeId::BOOLEAN) {
 				server_side_enabled = value.GetValue<bool>();
 			}
@@ -88,21 +89,6 @@ static void EnableIcebergTopNLateMaterialization(OptimizerExtensionInput &input,
 			}
 		}
 	}
-	for (auto &child : plan->children) {
-		EnableIcebergTopNLateMaterialization(input, child);
-	}
-}
-
-void IcebergOptimizer::PreOptimize(OptimizerExtensionInput &input, unique_ptr<LogicalOperator> &plan) {
-	// IcebergPlanner::PostBind applies local-planning restrictions before DuckDB's
-	// correlation and lateral planning. Only TopN late-materialization setup belongs here.
-	EnableIcebergTopNLateMaterialization(input, plan);
-}
-
-OptimizerExtension IcebergOptimizer::Create() {
-	OptimizerExtension ext;
-	ext.pre_optimize_function = IcebergOptimizer::PreOptimize;
-	return ext;
 }
 
 } // namespace duckdb

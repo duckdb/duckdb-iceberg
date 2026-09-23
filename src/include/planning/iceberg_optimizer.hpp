@@ -7,14 +7,14 @@
 
 #pragma once
 
-#include "duckdb/optimizer/optimizer_extension.hpp"
-
 namespace duckdb {
+
+class ClientContext;
+class LogicalOperator;
 
 class IcebergOptimizer {
 public:
-	static OptimizerExtension Create();
-	static void PreOptimize(OptimizerExtensionInput &input, unique_ptr<LogicalOperator> &plan);
+	static void TryEnableLateMaterialization(ClientContext &context, LogicalOperator &op);
 };
 
 } // namespace duckdb
