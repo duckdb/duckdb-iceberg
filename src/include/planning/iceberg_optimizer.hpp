@@ -12,18 +12,6 @@
 
 namespace duckdb {
 
-class IcebergOptimizerRoutine {
-public:
-	ClientContext &context;
-
-public:
-	IcebergOptimizerRoutine(ClientContext &context);
-	void VisitOperator(unique_ptr<LogicalOperator> &op);
-
-private:
-	void VisitOperator(unique_ptr<LogicalOperator> &op, bool below_write);
-};
-
 class IcebergOptimizer {
 public:
 	static OptimizerExtension Create();

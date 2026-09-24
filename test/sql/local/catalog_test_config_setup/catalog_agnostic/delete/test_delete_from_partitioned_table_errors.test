@@ -6,6 +6,7 @@ require-env CATALOG_TEST_CONFIG_SETUP
 
 include test/sql/init_requires
 
+include test/sql/local/catalog_test_config_setup/catalog_agnostic/setup/partitioned_smoke.test_setup
 
 statement ok
 CALL enable_logging('HTTP');
@@ -14,5 +15,5 @@ statement ok
 set logging_level='debug'
 
 statement ok
-select * from my_datalake.default.lineitem_partitioned_l_shipmode limit 1;
+select * from my_datalake.default.partitioned_smoke limit 1;
 

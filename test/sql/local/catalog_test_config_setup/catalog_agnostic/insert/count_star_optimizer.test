@@ -9,6 +9,19 @@ require-env CATALOG_TEST_CONFIG_SETUP
 
 include test/sql/init_requires
 
+# Reset this small fixture for each test.
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.count_star_optimizer;
+
+statement ok
+CREATE TABLE my_datalake.default.count_star_optimizer (
+    id INT,
+    name VARCHAR
+) WITH ('format-version' = '2');
+
+statement ok
+INSERT INTO my_datalake.default.count_star_optimizer VALUES  (1,'aaa'), (2,'bbb');
 
 statement ok
 set enable_logging=true

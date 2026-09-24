@@ -3,9 +3,33 @@
 
 include test/sql/init_requires
 
-require-env DUCKDB_ICEBERG_HAVE_GENERATED_DATA
-
 require-env CATALOG_TEST_CONFIG_SETUP
+
+# Reset this small fixture for each test.
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.truncate_partitioned_bigint;
+
+statement ok
+CREATE TABLE my_datalake.default.truncate_partitioned_bigint (
+    id BIGINT,
+    nested STRUCT(value BIGINT),
+    name VARCHAR
+)
+PARTITIONED BY (truncate(100000, nested.value)) WITH ('format-version' = '2');
+
+statement ok
+INSERT INTO my_datalake.default.truncate_partitioned_bigint
+VALUES
+    (1,  {'value': 10000000000001}, 'row_1'),
+    (2,  {'value': 10000000000002}, 'row_2'),
+    (3,  {'value': 10000000000003}, 'row_3'),
+    (4,  {'value': 10001000000000}, 'row_4'),
+    (5,  {'value': 10001000001000}, 'row_5'),
+    (6,  {'value': 10001000002000}, 'row_6'),
+    (7,  {'value': 10001000003000}, 'row_7'),
+    (8,  {'value': 10002000000000}, 'row_8'),
+    (9,  {'value': 10002000001000}, 'row_9');
 
 statement ok
 create view scan as select * from my_datalake.default.truncate_partitioned_bigint;

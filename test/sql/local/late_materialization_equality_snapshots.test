@@ -10,6 +10,8 @@ require iceberg
 
 require httpfs
 
+require-env SCAN_PLANNING_MODE client
+
 # Independent visible-row oracle for the existing equality-delete fixture.
 statement ok
 CREATE TABLE expected_ids(snapshot BIGINT, id INTEGER);

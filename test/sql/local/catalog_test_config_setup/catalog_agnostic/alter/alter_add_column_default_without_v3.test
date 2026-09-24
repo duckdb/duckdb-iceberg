@@ -1,0 +1,38 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/alter/alter_add_column_default_without_v3.test
+# description: Reject non-null column defaults when the catalog cannot persist V3 tables
+# group: [alter]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require-env-not FORMAT_V3_SUPPORT
+
+include test/sql/init_requires
+
+
+statement ok
+CREATE SCHEMA IF NOT EXISTS my_datalake.default;
+
+statement ok
+drop table if exists my_datalake.default.alter_add_column_table;
+
+statement ok
+CREATE TABLE my_datalake.default.alter_add_column_table WITH ('format-version' = 3) AS (select range a FROM range(10));
+
+statement error
+ALTER TABLE my_datalake.default.alter_add_column_table ADD COLUMN b int DEFAULT 42;
+----
+Invalid Input Error: non-null DEFAULT values are not supported for <V3 tables
+
+query I
+FROM my_datalake.default.alter_add_column_table;
+----
+0
+1
+2
+3
+4
+5
+6
+7
+8
+9

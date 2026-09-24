@@ -8,6 +8,8 @@
 #include "duckdb/storage/table/row_group_reorderer.hpp"
 #include "planning/pruning/iceberg_table_filter.hpp"
 #include "planning/scan_order/iceberg_scan_order.hpp"
+#include "duckdb/logging/logger.hpp"
+#include "iceberg_logging.hpp"
 
 namespace duckdb {
 
@@ -98,12 +100,19 @@ unique_ptr<IcebergScanPlanProvider> IcebergScanPlanProvider::Create(IcebergScanP
 			}
 
 			IcebergServerSideScanPlan plan;
-			if (IcebergServerSideScanPlanning::Plan(context.context, table_info, std::move(request), plan)) {
-				if (!plan.storage_credentials.empty()) {
-					table_info.LoadCredentials(
-					    context.context, table_info.GetVendedCredentials(context.context, plan.storage_credentials));
+			try {
+				if (IcebergServerSideScanPlanning::Plan(context.context, table_info, std::move(request), plan)) {
+					if (!plan.storage_credentials.empty()) {
+						table_info.LoadCredentials(context.context, table_info.GetVendedCredentials(
+						                                                context.context, plan.storage_credentials));
+					}
+					provider = make_uniq<ServerSideScanPlanProvider>(std::move(plan));
 				}
-				provider = make_uniq<ServerSideScanPlanProvider>(std::move(plan));
+			} catch (std::exception &ex) {
+				ErrorData error(ex);
+				DUCKDB_LOG_INFO(context.context, "Scan planning failed, Plan resulted in error: %s", error.Message());
+			} catch (...) {
+				DUCKDB_LOG_INFO(context.context, "Scan planning failed, Plan resulted in unknown error");
 			}
 		}
 	}

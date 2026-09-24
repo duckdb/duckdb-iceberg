@@ -4,6 +4,8 @@
 #include "duckdb/catalog/catalog_entry.hpp"
 #include "duckdb/common/mutex.hpp"
 #include "duckdb/common/thread_annotation.hpp"
+#include "duckdb/catalog/catalog_entry/view_catalog_entry.hpp"
+#include "duckdb/parser/parsed_data/create_view_info.hpp"
 
 #include "catalog/rest/catalog_entry/table/iceberg_table_schema_version.hpp"
 #include "catalog/rest/catalog_entry/table/iceberg_table.hpp"
@@ -43,11 +45,17 @@ public:
 	//! or if entry is already filled. Returns False otherwise
 	bool FillEntry(ClientContext &context, IcebergTable &table);
 
+	//! View operations
+	optional_ptr<CatalogEntry> GetViewEntry(ClientContext &context, const string &view_name);
+	void ScanViews(ClientContext &context, const std::function<void(CatalogEntry &)> &callback);
+
 public:
 	IcebergSchemaEntry &schema;
 	Catalog &catalog;
 
 private:
+	const case_insensitive_set_t &LoadViewEntries(ClientContext &context);
+
 	annotated_mutex entry_lock;
 	case_insensitive_map_t<shared_ptr<IcebergTable>> entries DUCKDB_GUARDED_BY(entry_lock);
 };

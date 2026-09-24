@@ -7,6 +7,23 @@ include test/sql/init_requires
 
 require core_functions
 
+# Reset this small fixture for each test.
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.table_properties;
+
+statement ok
+CREATE TABLE my_datalake.default.table_properties (a INTEGER) WITH ('format-version'='2', 'write.delete.mode'='merge-on-read');
+
+statement ok
+CALL set_iceberg_table_properties(my_datalake.default.table_properties, {'read.split.target-size': '268435456', 'foo': 'baz'});
+
+statement ok
+CALL remove_iceberg_table_properties(my_datalake.default.table_properties, ['foo']);
+
+statement ok
+CALL set_iceberg_table_properties(my_datalake.default.table_properties, {'duckdb_man': 'superman', 'another1': 'neato'});
+
 statement ok
 CALL enable_logging('HTTP');
 
@@ -74,7 +91,7 @@ select count(*) from my_datalake.default.test;
 50
 
 query II
-select * from iceberg_table_properties(my_datalake.default.test_table_properties) where key in ('write.update.mode', 'write.delete.mode', 'page-write-size', 'another1', 'duckdb_man') order by all;
+select * from iceberg_table_properties(my_datalake.default.table_properties) where key in ('write.update.mode', 'write.delete.mode', 'page-write-size', 'another1', 'duckdb_man') order by all;
 ----
 another1	neato
 duckdb_man	superman

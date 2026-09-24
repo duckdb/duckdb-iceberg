@@ -6,6 +6,7 @@ require-env CATALOG_TEST_CONFIG_SETUP
 
 include test/sql/init_requires
 
+include test/sql/local/catalog_test_config_setup/catalog_agnostic/setup/table_unpartitioned.test_setup
 
 statement ok
 CALL enable_logging('HTTP');

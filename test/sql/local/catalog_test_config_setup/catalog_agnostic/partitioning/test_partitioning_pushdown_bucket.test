@@ -10,6 +10,245 @@ require core_functions
 
 require icu
 
+# Reset this small fixture for each test.
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.bucket_partitioned_integer;
+
+statement ok
+CREATE TABLE my_datalake.default.bucket_partitioned_integer (
+    id INTEGER,
+    value INTEGER,
+    name VARCHAR
+)
+PARTITIONED BY (bucket(4, value)) WITH ('format-version' = '2');
+
+statement ok
+INSERT INTO my_datalake.default.bucket_partitioned_integer
+VALUES
+    (1, 10, 'row_1'),
+    (2, 20, 'row_2'),
+    (3, 30, 'row_3'),
+    (4, 40, 'row_4'),
+    (5, 50, 'row_5'),
+    (6, 60, 'row_6'),
+    (7, 70, 'row_7'),
+    (8, 80, 'row_8'),
+    (9, 90, 'row_9'),
+    (10, 100, 'row_10'),
+    (11, 10, 'row_11'),
+    (12, 20, 'row_12'),
+    (13, 30, 'row_13'),
+    (14, 40, 'row_14'),
+    (15, 50, 'row_15'),
+    (16, 60, 'row_16'),
+    (17, 70, 'row_17'),
+    (18, 80, 'row_18'),
+    (19, 90, 'row_19'),
+    (20, 100, 'row_20');
+
+# Reset this small fixture for each test.
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.bucket_partitioned_bigint;
+
+statement ok
+CREATE TABLE my_datalake.default.bucket_partitioned_bigint (
+    id BIGINT,
+    value BIGINT,
+    name VARCHAR
+)
+PARTITIONED BY (bucket(8, value)) WITH ('format-version' = '2');
+
+statement ok
+INSERT INTO my_datalake.default.bucket_partitioned_bigint
+VALUES
+    (1, 1000000000000, 'row_1'),
+    (2, 2000000000000, 'row_2'),
+    (3, 3000000000000, 'row_3'),
+    (4, 4000000000000, 'row_4'),
+    (5, 5000000000000, 'row_5'),
+    (6, 6000000000000, 'row_6'),
+    (7, 7000000000000, 'row_7'),
+    (8, 8000000000000, 'row_8'),
+    (9, 9000000000000, 'row_9'),
+    (10, 10000000000000, 'row_10'),
+    (11, 1000000000000, 'row_11'),
+    (12, 2000000000000, 'row_12'),
+    (13, 3000000000000, 'row_13'),
+    (14, 4000000000000, 'row_14'),
+    (15, 5000000000000, 'row_15');
+
+# Reset this small fixture for each test.
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.bucket_partitioned_string;
+
+statement ok
+CREATE TABLE my_datalake.default.bucket_partitioned_string (
+    id INTEGER,
+    category VARCHAR,
+    description VARCHAR
+)
+PARTITIONED BY (bucket(4, category)) WITH ('format-version' = '2');
+
+statement ok
+INSERT INTO my_datalake.default.bucket_partitioned_string
+VALUES
+    (1, 'electronics', 'laptop'),
+    (2, 'books', 'novel'),
+    (3, 'clothing', 'shirt'),
+    (4, 'food', 'apple'),
+    (5, 'electronics', 'phone'),
+    (6, 'books', 'textbook'),
+    (7, 'clothing', 'pants'),
+    (8, 'food', 'banana'),
+    (9, 'electronics', 'tablet'),
+    (10, 'books', 'magazine'),
+    (11, 'clothing', 'jacket'),
+    (12, 'food', 'orange'),
+    (13, 'electronics', 'monitor'),
+    (14, 'books', 'comic'),
+    (15, 'clothing', 'shoes');
+
+# Reset this small fixture for each test.
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.bucket_partitioned_date;
+
+statement ok
+CREATE TABLE my_datalake.default.bucket_partitioned_date (
+    id INTEGER,
+    event_date DATE,
+    event_name VARCHAR
+)
+PARTITIONED BY (bucket(4, event_date)) WITH ('format-version' = '2');
+
+statement ok
+INSERT INTO my_datalake.default.bucket_partitioned_date
+VALUES
+    (1, CAST('2023-01-01' AS DATE), 'event_1'),
+    (2, CAST('2023-02-15' AS DATE), 'event_2'),
+    (3, CAST('2023-03-20' AS DATE), 'event_3'),
+    (4, CAST('2023-04-10' AS DATE), 'event_4'),
+    (5, CAST('2023-05-05' AS DATE), 'event_5'),
+    (6, CAST('2023-06-12' AS DATE), 'event_6'),
+    (7, CAST('2023-07-22' AS DATE), 'event_7'),
+    (8, CAST('2023-08-30' AS DATE), 'event_8'),
+    (9, CAST('2023-01-01' AS DATE), 'event_9'),
+    (10, CAST('2023-02-15' AS DATE), 'event_10'),
+    (11, CAST('2023-03-20' AS DATE), 'event_11'),
+    (12, CAST('2023-04-10' AS DATE), 'event_12');
+
+# Reset this small fixture for each test.
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.bucket_partitioned_decimal;
+
+statement ok
+CREATE TABLE my_datalake.default.bucket_partitioned_decimal (
+    id INTEGER,
+    amount DECIMAL(10, 2),
+    label VARCHAR
+)
+PARTITIONED BY (bucket(4, amount)) WITH ('format-version' = '2');
+
+statement ok
+INSERT INTO my_datalake.default.bucket_partitioned_decimal
+VALUES
+    (1,  10.00, 'ten'),
+    (2,  20.00, 'twenty'),
+    (3,  30.00, 'thirty'),
+    (4,  40.00, 'forty'),
+    (5,  50.00, 'fifty'),
+    (6,  60.00, 'sixty'),
+    (7,  70.00, 'seventy'),
+    (8,  80.00, 'eighty'),
+    (9,  90.00, 'ninety'),
+    (10, 10.00, 'ten_dup'),
+    (11, 20.00, 'twenty_dup'),
+    (12, NULL,  'null_row');
+
+# Reset this small fixture for each test.
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.bucket_partitioned_binary;
+
+statement ok
+CREATE TABLE my_datalake.default.bucket_partitioned_binary (
+    id INTEGER,
+    data BINARY,
+    label VARCHAR
+)
+PARTITIONED BY (bucket(4, data)) WITH ('format-version' = '2');
+
+statement ok
+INSERT INTO my_datalake.default.bucket_partitioned_binary
+VALUES
+    (1,  from_hex('01'), 'one'),
+    (2,  from_hex('02'), 'two'),
+    (3,  from_hex('03'), 'three'),
+    (4,  from_hex('04'), 'four'),
+    (5,  from_hex('05'), 'five'),
+    (6,  from_hex('06'), 'six'),
+    (7,  from_hex('07'), 'seven'),
+    (8,  from_hex('08'), 'eight'),
+    (9,  from_hex('09'), 'nine'),
+    (10, from_hex('01'), 'one_dup'),
+    (11, from_hex('02'), 'two_dup'),
+    (12, NULL,  'null_row');
+
+# Reset this small fixture for each test.
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.bucket_partitioned_timestamp;
+
+statement ok
+CREATE TABLE my_datalake.default.bucket_partitioned_timestamp (
+    id INTEGER,
+    ts_val TIMESTAMPTZ,
+    label VARCHAR
+)
+PARTITIONED BY (bucket(4, ts_val)) WITH ('format-version' = '2');
+
+statement ok
+INSERT INTO my_datalake.default.bucket_partitioned_timestamp
+VALUES
+    (1,  TIMESTAMPTZ '2023-01-01 00:00:00+00', 'jan'),
+    (2,  TIMESTAMPTZ '2023-02-01 00:00:00+00', 'feb'),
+    (3,  TIMESTAMPTZ '2023-03-01 00:00:00+00', 'mar'),
+    (4,  TIMESTAMPTZ '2023-04-01 00:00:00+00', 'apr'),
+    (5,  TIMESTAMPTZ '2023-05-01 00:00:00+00', 'may'),
+    (6,  TIMESTAMPTZ '2023-06-01 00:00:00+00', 'jun'),
+    (7,  TIMESTAMPTZ '2023-07-01 00:00:00+00', 'jul'),
+    (8,  TIMESTAMPTZ '2023-08-01 00:00:00+00', 'aug'),
+    (9,  TIMESTAMPTZ '2023-09-01 00:00:00+00', 'sep'),
+    (10, TIMESTAMPTZ '2023-10-01 00:00:00+00', 'oct'),
+    (11, TIMESTAMPTZ '2023-01-01 00:00:00+00', 'jan_dup'),
+    (12, NULL,                             'null_row');
+
+# Reset this small fixture for each test.
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.bucket_partitioned_sparse_integer;
+
+statement ok
+CREATE TABLE my_datalake.default.bucket_partitioned_sparse_integer (
+    id INTEGER,
+    value INTEGER,
+    name VARCHAR
+)
+PARTITIONED BY (bucket(16, value)) WITH ('format-version' = '2');
+
+statement ok
+INSERT INTO my_datalake.default.bucket_partitioned_sparse_integer
+VALUES
+    (1,  1,  'alpha'),
+    (2,  2,  'beta'),
+    (3,  42, 'gamma'),
+    (4,  1,  'alpha_dup'),
+    (5,  42, 'gamma_dup');
+
 statement ok
 set timezone='UTC';
 

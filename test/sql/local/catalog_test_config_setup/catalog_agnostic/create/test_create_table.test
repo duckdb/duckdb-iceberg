@@ -4,6 +4,8 @@
 
 require-env CATALOG_TEST_CONFIG_SETUP
 
+require-env STAGED_CREATE_SUPPORT
+
 include test/sql/init_requires
 
 

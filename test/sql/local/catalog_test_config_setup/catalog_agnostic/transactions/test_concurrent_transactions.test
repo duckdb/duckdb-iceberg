@@ -14,6 +14,22 @@ set logging_level='debug'
 
 include test/sql/init_requires
 
+# Reset this small fixture for each test.
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.quickstart_table;
+
+statement ok
+CREATE TABLE my_datalake.default.quickstart_table (
+     id BIGINT, data VARCHAR
+) WITH ('format-version' = '2');
+
+statement ok
+INSERT INTO my_datalake.default.quickstart_table VALUES
+	(1, 'some data'),
+	(2, 'more data'),
+	(3, 'yet more data');
+
 concurrentloop i 1 10
 
 statement ok

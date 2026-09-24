@@ -8,6 +8,12 @@ include test/sql/init_requires
 
 
 statement ok
+DROP TABLE IF EXISTS my_datalake.default.show_table_duplicates;
+
+statement ok
+CREATE TABLE my_datalake.default.show_table_duplicates (id INTEGER, nested STRUCT(value INTEGER));
+
+statement ok
 set enable_logging=true
 
 statement ok
@@ -15,6 +21,6 @@ set logging_level='debug'
 
 query I
 SELECT table_name,
-FROM information_schema.tables where table_name == 'schema_evolve_struct' and table_schema == 'default';
+FROM information_schema.tables where table_name == 'show_table_duplicates' and table_schema == 'default';
 ----
-schema_evolve_struct
+show_table_duplicates

@@ -3,6 +3,14 @@
 
 require-env CATALOG_TEST_CONFIG_SETUP
 
+require-env COLUMN_DEFAULT_SUPPORT
+
+require-env FORMAT_V3_SUPPORT
+
+require-env TIMESTAMPTZ_NS_DEFAULT_SUPPORT
+
+require-env TIMESTAMP_NS_SUPPORT
+
 include test/sql/init_requires
 
 require icu

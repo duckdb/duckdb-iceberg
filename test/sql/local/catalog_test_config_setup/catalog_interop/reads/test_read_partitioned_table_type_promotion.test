@@ -1,0 +1,37 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_interop/reads/test_read_partitioned_table_type_promotion.test
+# group: [reads]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+include test/sql/init_requires
+
+require icu
+
+require core_functions
+
+statement ok
+SET default_transaction_invalidation_policy='SYNTACTIC_ERRORS_DO_NOT_INVALIDATE';
+
+
+statement ok
+SET TimeZone = 'UTC';
+
+statement ok
+call enable_logging(level='debug');
+
+query II
+select id, count(*) from my_datalake.default.type_promotion_partitioned_table where id >= 3 and id <=6 group by all order by id;
+----
+3	6
+4	8
+5	7
+6	8
+
+# reading from files where id was integer and where id was long
+query II
+select regexp_extract(request.url, '.*/data/(.*)/.*', 1) partitioned_url, count(*) from duckdb_logs_parsed('HTTP') where request.url like '%.parquet' group by all order by partitioned_url;
+----
+id%3D3	2
+id%3D4	2
+id%3D5	2
+id%3D6	1

@@ -1,4 +1,5 @@
 #include "catalog/rest/iceberg_table_set.hpp"
+#include "catalog/rest/iceberg_view_entry.hpp"
 
 #include "duckdb/parser/expression/constant_expression.hpp"
 #include "duckdb/planner/parsed_data/bound_create_table_info.hpp"
@@ -6,6 +7,8 @@
 #include "duckdb/common/enums/http_status_code.hpp"
 #include "duckdb/common/exception/http_exception.hpp"
 #include "duckdb/parser/parsed_data/create_table_info.hpp"
+#include "duckdb/parser/parsed_data/create_view_info.hpp"
+#include "duckdb/catalog/catalog_entry/view_catalog_entry.hpp"
 #include "duckdb/parser/parser.hpp"
 #include "duckdb/planner/tableref/bound_at_clause.hpp"
 #include "duckdb/planner/expression_binder/table_function_binder.hpp"
@@ -14,6 +17,7 @@
 
 #include "catalog/rest/api/catalog_api.hpp"
 #include "catalog/rest/api/catalog_utils.hpp"
+#include "common/iceberg_constants.hpp"
 #include "catalog/rest/iceberg_catalog.hpp"
 #include "catalog/rest/iceberg_request_task.hpp"
 #include "catalog/rest/catalog_entry/table/iceberg_table_schema_version.hpp"
@@ -434,6 +438,20 @@ IcebergTable &IcebergTableSet::CreateNewEntry(ClientContext &context, IcebergCat
 	return table_info;
 }
 
+static bool EntryMissingFromListing(const optional<vector<rest_api_objects::TableIdentifier>> &listing,
+                                    const string &name) {
+	// A refused listing is not evidence that an entry is absent: retain the direct lookup.
+	if (!listing) {
+		return false;
+	}
+	for (auto &entry : *listing) {
+		if (StringUtil::CIEquals(entry.name, name)) {
+			return false;
+		}
+	}
+	return true;
+}
+
 optional_ptr<CatalogEntry> IcebergTableSet::GetEntry(ClientContext &context, const EntryLookupInfo &lookup) {
 	auto &ic_catalog = catalog.Cast<IcebergCatalog>();
 	auto &iceberg_transaction = IcebergTransaction::Get(context, catalog);
@@ -455,6 +473,13 @@ optional_ptr<CatalogEntry> IcebergTableSet::GetEntry(ClientContext &context, con
 		return table_info.GetSchemaVersion(at);
 	}
 
+	// File replacement scans first probe the catalog. Some REST servers reject encoded
+	// path separators before routing, so use the listing to rule out absent path names.
+	// Listed entries and transaction-local tables still take precedence over files.
+	if (table_name.find_first_of("/\\") != string::npos &&
+	    EntryMissingFromListing(IRCAPI::GetTables(context, ic_catalog, schema), table_name)) {
+		return nullptr;
+	}
 	auto new_version = IcebergTable::CreatePlaceholder(ic_catalog, schema, table_name);
 	auto &table_info = *new_version;
 	if (!FillEntry(context, table_info)) {
@@ -473,6 +498,169 @@ optional_ptr<CatalogEntry> IcebergTableSet::GetEntry(ClientContext &context, con
 		state.GetOrCreateTransactionInfo(iceberg_transaction);
 	}
 	return state.GetInfo().GetSchemaVersion(at);
+}
+
+// ─── View operations ─────────────────────────────────────────────────────────
+
+const case_insensitive_set_t &IcebergTableSet::LoadViewEntries(ClientContext &context) {
+	auto &transaction = IcebergTransaction::Get(context, catalog);
+	auto &schema_name = schema.name.GetIdentifierName();
+	auto existing = transaction.listed_views.find(schema_name);
+	if (existing != transaction.listed_views.end()) {
+		return existing->second;
+	}
+	auto &ic_catalog = catalog.Cast<IcebergCatalog>();
+	case_insensitive_set_t names;
+	if (ic_catalog.supported_urls.count("GET /v1/{prefix}/namespaces/{namespace}/views")) {
+		auto views = IRCAPI::GetViews(context, ic_catalog, schema);
+		if (views) {
+			for (auto &view : *views) {
+				names.insert(view.name);
+			}
+		}
+	}
+	return transaction.listed_views.emplace(schema_name, std::move(names)).first->second;
+}
+
+optional_ptr<CatalogEntry> IcebergTableSet::GetViewEntry(ClientContext &context, const string &view_name) {
+	auto &ic_catalog = catalog.Cast<IcebergCatalog>();
+	auto &iceberg_transaction = IcebergTransaction::Get(context, catalog);
+	auto view_key = IcebergTable::GetTableKey(ic_catalog, schema.namespace_items, view_name);
+	auto created_it = iceberg_transaction.created_views.find(view_key);
+	// A staged replacement is visible after DROP/CREATE in the same transaction.
+	if (created_it == iceberg_transaction.created_views.end() && iceberg_transaction.deleted_views.count(view_key)) {
+		return nullptr;
+	}
+
+	auto cached_it = iceberg_transaction.views.find(view_key);
+	if (cached_it != iceberg_transaction.views.end()) {
+		return cached_it->second.get();
+	}
+
+	if (created_it != iceberg_transaction.created_views.end()) {
+		auto view_entry = make_uniq<ViewCatalogEntry>(catalog, schema, *created_it->second);
+		auto result = view_entry.get();
+		iceberg_transaction.views.emplace(view_key, std::move(view_entry));
+		return result;
+	}
+
+	// Check if the view endpoint is supported
+	if (ic_catalog.supported_urls.find("GET /v1/{prefix}/namespaces/{namespace}/views/{view}") ==
+	    ic_catalog.supported_urls.end()) {
+		return nullptr;
+	}
+
+	// Apply the same file-path probe handling as table lookup, after local view resolution.
+	if (view_name.find_first_of("/\\") != string::npos &&
+	    ic_catalog.supported_urls.count("GET /v1/{prefix}/namespaces/{namespace}/views") &&
+	    EntryMissingFromListing(IRCAPI::GetViews(context, ic_catalog, schema), view_name)) {
+		return nullptr;
+	}
+
+	// Load the view from the REST catalog
+	auto get_view_result = IRCAPI::GetView(context, ic_catalog, schema, view_name);
+	if (get_view_result.error_) {
+		if (get_view_result.status_ == HTTPStatusCode::NotFound_404) {
+			// View legitimately does not exist in the catalog — let DuckDB report "View ... does not exist".
+			return nullptr;
+		}
+		// 401 / 403 / 500 / etc. — surface the real error rather than silently masking it as "not found".
+		throw HTTPException(StringUtil::Format("GetView endpoint returned response code %s with message \"%s\"",
+		                                       EnumUtil::ToString(get_view_result.status_),
+		                                       get_view_result.error_->_error.message));
+	}
+	auto &load_result = *get_view_result.result_;
+
+	// Only DuckDB SQL representations are executable.
+	string view_sql;
+	optional_ptr<const rest_api_objects::ViewVersion> current_version;
+	auto &metadata = load_result.metadata;
+	// Find the current version
+	for (auto &version : metadata.versions) {
+		if (version.version_id != metadata.current_version_id) {
+			continue;
+		}
+		current_version = &version;
+		// Select the DuckDB representation from the current version.
+		for (auto &repr : version.representations) {
+			if (!repr.sqlview_representation) {
+				continue;
+			}
+			if (repr.sqlview_representation->dialect == IcebergConstants::ViewDuckDBDialect) {
+				view_sql = repr.sqlview_representation->sql;
+				break;
+			}
+		}
+		break;
+	}
+
+	unique_ptr<SelectStatement> view_query;
+	string unsupported_reason;
+	if (view_sql.empty()) {
+		unsupported_reason = "no SQL representation with dialect 'duckdb'";
+	} else if (current_version->default_catalog && Identifier(*current_version->default_catalog) != catalog.GetName()) {
+		unsupported_reason = "a different default catalog is not supported";
+	} else if (current_version->default_namespace.value != schema.namespace_items) {
+		unsupported_reason = "a different default namespace is not supported";
+	} else {
+		Parser parser;
+		try {
+			parser.ParseQuery(view_sql);
+		} catch (const ParserException &ex) {
+			unsupported_reason = "its SQL dialect cannot be parsed by DuckDB";
+			DUCKDB_LOG_WARNING(context, "View '%s' SQL could not be parsed by DuckDB: %s", view_name, ex.what());
+		}
+		if (unsupported_reason.empty()) {
+			if (parser.statements.size() != 1 || parser.statements[0]->type != StatementType::SELECT_STATEMENT) {
+				unsupported_reason = "its SQL representation must contain a single SELECT statement";
+			} else {
+				view_query = unique_ptr_cast<SQLStatement, SelectStatement>(std::move(parser.statements[0]));
+			}
+		}
+	}
+
+	auto view_info = make_uniq<CreateViewInfo>(schema, Identifier(view_name));
+	view_info->query = std::move(view_query);
+	view_info->sql = view_sql;
+	// The persisted schema owns the output names, including explicit CREATE VIEW aliases.
+	if (current_version) {
+		for (auto &view_schema : metadata.schemas) {
+			if (view_schema.object_1.schema_id && *view_schema.object_1.schema_id == current_version->schema_id) {
+				for (auto &field : view_schema.struct_type.fields) {
+					view_info->aliases.emplace_back(field->name);
+				}
+				break;
+			}
+		}
+	}
+
+	unique_ptr<ViewCatalogEntry> view_entry;
+	if (unsupported_reason.empty()) {
+		view_entry = make_uniq<ViewCatalogEntry>(catalog, schema, *view_info);
+	} else {
+		view_entry = make_uniq<UnsupportedIcebergViewEntry>(catalog, schema, *view_info, unsupported_reason);
+	}
+	auto result = view_entry.get();
+	iceberg_transaction.views.emplace(view_key, std::move(view_entry));
+	return result;
+}
+
+void IcebergTableSet::ScanViews(ClientContext &context, const std::function<void(CatalogEntry &)> &callback) {
+	// Copy the listing before invoking callbacks: binding a view may resolve other schemas.
+	auto names = LoadViewEntries(context);
+	auto &transaction = IcebergTransaction::Get(context, catalog);
+	for (auto &created : transaction.created_views) {
+		auto &info = *created.second;
+		if (info.GetQualifiedName().Schema() == schema.name) {
+			names.insert(info.GetViewName().GetIdentifierName());
+		}
+	}
+	for (auto &view_name : names) {
+		auto entry = GetViewEntry(context, view_name);
+		if (entry) {
+			callback(*entry);
+		}
+	}
 }
 
 } // namespace duckdb

@@ -4,6 +4,10 @@
 
 require-env CATALOG_TEST_CONFIG_SETUP
 
+require-env METADATA_FILE_READ_SUPPORT
+
+require-env METADATA_LOG_SUPPORT
+
 include test/sql/init_requires
 
 require core_functions

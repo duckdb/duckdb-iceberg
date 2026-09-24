@@ -2,11 +2,9 @@
 # description: TopN virtual projections remain eligible while virtual filters fall back
 # group: [local]
 
-require avro
+require-env SCAN_PLANNING_MODE client
 
-require parquet
-
-require iceberg
+include test/sql/init_requires
 
 statement ok
 CREATE VIEW lm_filter_input AS

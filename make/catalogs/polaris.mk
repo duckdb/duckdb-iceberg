@@ -20,7 +20,7 @@ polaris-stop:
 polaris: polaris-clone polaris-stop
 	$(call stop_active_catalog)
 	@echo "Starting Polaris catalog..."
-	(cd .catalogs/polaris/site/content/guides/rustfs && docker compose up -d)
+	(cd .catalogs/polaris/site/content/guides/rustfs && docker compose -f docker-compose.yml -f "$(CURDIR)/scripts/polaris-compose.override.yml" up -d)
 	$(call set_active_catalog,polaris)
 
 polaris-data: polaris

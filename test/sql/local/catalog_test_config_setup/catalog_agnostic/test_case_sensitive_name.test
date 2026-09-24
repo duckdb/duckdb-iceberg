@@ -4,6 +4,8 @@
 
 require-env CATALOG_TEST_CONFIG_SETUP
 
+require-env CASE_SENSITIVE_TABLE_NAMES_SUPPORT
+
 include test/sql/init_requires
 
 require tpch

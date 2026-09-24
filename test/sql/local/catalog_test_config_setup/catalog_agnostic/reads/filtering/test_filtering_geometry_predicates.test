@@ -3,6 +3,12 @@
 
 require-env CATALOG_TEST_CONFIG_SETUP
 
+require-env FORMAT_V3_SUPPORT
+
+require-env GEOMETRY_SUPPORT
+
+require-env SCAN_PLANNING_MODE client
+
 include test/sql/init_requires
 
 

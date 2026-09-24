@@ -4,8 +4,11 @@
 
 require-env CATALOG_TEST_CONFIG_SETUP
 
-include test/sql/init_requires
+require-env FORMAT_V3_SUPPORT
 
+require-env SCAN_PLANNING_MODE client
+
+include test/sql/init_requires
 
 statement ok
 set enable_external_file_cache=false;
