@@ -7,6 +7,7 @@ include test/sql/init_requires
 
 require aws
 
+include test/sql/local/catalog_test_config_setup/catalog_agnostic/setup/empty_table.test_setup
 
 statement error
 DROP SCHEMA my_datalake.default CASCADE;

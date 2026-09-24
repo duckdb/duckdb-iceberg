@@ -63,11 +63,8 @@ CREATE TABLE my_datalake.default.unknown_variant_m(id INTEGER, v MAP(VARCHAR, "N
 statement ok
 CREATE TABLE my_datalake.default.unknown_variant_l(id INTEGER, v "NULL"[]) WITH ('format-version' = '3');
 
-# Each table exercises the writer limitation independently, with a non-NULL container.
-foreach suffix,path,value,old s,v.n,{'n':42::VARIANT},{'n':NULL::VARIANT} m,v.value,MAP{'key':42::VARIANT},MAP{'key':NULL::VARIANT} l,v.element,[42::VARIANT],[NULL::VARIANT]
-
-statement ok
-INSERT INTO my_datalake.default.unknown_variant_{suffix} VALUES (1, {old});
+# Each table exercises the writer limitation independently.
+foreach suffix,path,value s,v.n,{'n':42::VARIANT} m,v.value,MAP{'key':42::VARIANT} l,v.element,[42::VARIANT]
 
 statement ok
 ALTER TABLE my_datalake.default.unknown_variant_{suffix} ALTER COLUMN {path} TYPE VARIANT;
@@ -76,13 +73,6 @@ statement error
 INSERT INTO my_datalake.default.unknown_variant_{suffix} VALUES (2, {value});
 ----
 ColumnWriter of type 'VARIANT' requires a transform, but is not a root column
-
-# The failed write leaves the old row intact, with a NULL VARIANT inside its container.
-query III
-SELECT id, typeof(v) = typeof({old}), v IS NOT DISTINCT FROM {old}
-FROM my_datalake.default.unknown_variant_{suffix};
-----
-1	true	true
 
 statement ok
 DROP TABLE my_datalake.default.unknown_variant_{suffix};

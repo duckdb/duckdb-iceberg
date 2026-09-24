@@ -7,6 +7,8 @@ require-env CATALOG_TEST_CONFIG_SETUP
 
 require-env SCAN_PLANNING_MODE client
 
+include test/sql/local/catalog_test_config_setup/catalog_agnostic/setup/issue_791.test_setup
+
 statement ok
 create schema if not exists my_datalake.default;
 

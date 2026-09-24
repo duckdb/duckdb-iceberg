@@ -1,0 +1,25 @@
+# Small fixture: reset on every include.
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.issue_791;
+
+statement ok
+CREATE TABLE my_datalake.default.issue_791(
+  item_id VARCHAR
+) WITH ('format-version' = '2');
+
+statement ok
+INSERT INTO my_datalake.default.issue_791 VALUES
+('10000000-0000-0000-0000-000000000001');
+
+statement ok
+INSERT INTO my_datalake.default.issue_791 VALUES
+('20000000-0000-0000-0000-000000000002');
+
+statement ok
+INSERT INTO my_datalake.default.issue_791 VALUES
+('30000000-0000-0000-0000-0000000000033');
+
+statement ok
+INSERT INTO my_datalake.default.issue_791 VALUES
+('40000000-0000-0000-0000-00000000004');

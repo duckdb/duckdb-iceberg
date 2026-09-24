@@ -19,11 +19,12 @@ Row = pyspark_sql.Row
 requires_equality_deletes_available = pytest.mark.skipif(
     (os.getenv("EQUALITY_DELETE_WRITES_ENABLED", None) is None)
     or (os.getenv("EQUALITY_DELETE_WRITES_ENABLED", '0') == '0'),
-    reason="Test data wasn't generated, run tests in test/sql/local/irc first (and set 'export EQUALITY_DELETE_WRITES_ENABLED=1')",
+    reason="Requires an equality-delete-enabled build and EQUALITY_DELETE_WRITES_ENABLED=1",
 )
 
 
 class TestSparkRead:
+    @pytest.mark.duckdb_setup_tests("catalog_interop/other_engines/test_create_table_then_read_with_other_engine.test")
     def test_spark_read_duckdb_table(self, spark_con):
         df = spark_con.sql(
             """
@@ -44,6 +45,7 @@ class TestSparkRead:
             Row(a=9),
         ]
 
+    @pytest.mark.duckdb_setup_tests("catalog_interop/delete/test_spark_can_read_duckdb_table.test")
     def test_spark_read_table_with_deletes(self, spark_con):
         df = spark_con.sql(
             """
@@ -64,8 +66,9 @@ class TestSparkRead:
             Row(a=59),
         ]
 
+    @pytest.mark.duckdb_setup_tests("catalog_interop/maintenance/rewrite_data_files_spark_mor_residual_deletes.test")
+    @pytest.mark.spark_seed_tables("spark_rewrite_mor_residual_deletes")
     def test_spark_read_duckdb_compacted_spark_rewrite_mor_residual_deletes(self, spark_con):
-        # requires rewrite_data_files_spark_mor_residual_deletes.test to run
         df = spark_con.sql(
             """
             select * from default.spark_rewrite_mor_residual_deletes order by id
@@ -89,6 +92,7 @@ class TestSparkRead:
         reason="Cannot convert unsupported type to Spark: timestamptz_ns",
         strict=True,
     )
+    @pytest.mark.duckdb_setup_tests("catalog_interop/other_engines/test_spark_can_read_duckdb_timestamptz_ns.test")
     def test_spark_read_duckdb_timestamptz_ns(self, spark_con):
         df = spark_con.sql(
             """
@@ -107,6 +111,7 @@ class TestSparkRead:
         is_active_catalog('polaris'), reason="Polaris does not currently support this Spark bounds read test"
     )
     @pytest.mark.skipif(is_active_catalog('lakekeeper'), reason="Lakekeeper writes bounds differently for some reason")
+    @pytest.mark.duckdb_setup_tests("catalog_interop/other_engines/test_create_bounds.test")
     def test_spark_read_upper_and_lower_bounds(self, spark_con):
         df = spark_con.sql(
             """
@@ -154,6 +159,7 @@ class TestSparkRead:
             ),
         ]
 
+    @pytest.mark.duckdb_setup_tests("catalog_agnostic/insert/test_write_infinity_timestamp.test")
     def test_spark_read_infinities(self, spark_con):
         df = spark_con.sql(
             """
@@ -167,6 +173,7 @@ class TestSparkRead:
             Row(float_type=-inf, double_type=-inf),
         ]
 
+    @pytest.mark.duckdb_setup_tests("catalog_agnostic/insert/test_write_upper_lower_bounds_nested_types.test")
     def test_duckdb_written_nested_types(self, spark_con):
         df = spark_con.sql(
             """
@@ -187,8 +194,8 @@ class TestSparkRead:
 
     @pytest.mark.requires_spark(">=4.0")
     @pytest.mark.requires_capabilities("format_v3", "allows_cleanup")
+    @pytest.mark.duckdb_setup_tests("catalog_agnostic/delete/test_delete_consolidation_transactional.test")
     def test_duckdb_written_deletion_vectors(self, spark_con):
-        # requires test_delete_consolidation_transactional.test to run
         res = spark_con.sql(
             """
             select * from default.write_v3_update_and_delete order by all
@@ -201,6 +208,7 @@ class TestSparkRead:
 
     @pytest.mark.requires_spark(">=4.0")
     @pytest.mark.requires_capabilities("format_v3")
+    @pytest.mark.duckdb_setup_tests("catalog_interop/other_engines/test_create_variant.test")
     def test_spark_read_duckdb_created_variant(self, spark_con):
         VariantVal = pyspark.sql.VariantVal
 
@@ -231,6 +239,7 @@ class TestSparkRead:
 
     @pytest.mark.requires_spark(">=4.0")
     @pytest.mark.requires_capabilities("row_lineage", "format_v3")
+    @pytest.mark.duckdb_setup_tests("catalog_agnostic/test_row_lineage_write.test")
     def test_duckdb_written_row_lineage(self, spark_con):
         df = spark_con.sql(
             """
@@ -287,6 +296,7 @@ class TestSparkReadEqualityDeletes:
     @pytest.mark.skip(
         reason="Spark errors when reading tables with a column that has an equality delete applied and the column has been dropped"
     )
+    @pytest.mark.duckdb_setup_tests("catalog_agnostic/delete/equality_deletes/test_equality_delete_reads.test")
     def test_spark_read_equality_deletes_with_dropped_column(self, spark_con):
         df = spark_con.sql(
             """
@@ -320,6 +330,9 @@ class TestSparkReadEqualityDeletes:
             Row(a=105, c=105),
         ]
 
+    @pytest.mark.duckdb_setup_tests(
+        "catalog_agnostic/delete/equality_deletes/test_equality_deletes_apply_only_to_prev_sequence_numbers.test"
+    )
     def test_spark_read_equality_deletes(self, spark_con):
         df = spark_con.sql(
             """

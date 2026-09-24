@@ -3,9 +3,29 @@
 
 include test/sql/init_requires
 
-require-env DUCKDB_ICEBERG_HAVE_GENERATED_DATA
-
 require-env CATALOG_TEST_CONFIG_SETUP
+
+# Reset this small fixture for each test.
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.truncate_partitioned_binary;
+
+statement ok
+CREATE TABLE my_datalake.default.truncate_partitioned_binary (
+    id INTEGER,
+    nested STRUCT(data BINARY),
+    label VARCHAR
+)
+PARTITIONED BY (truncate(2, nested.data)) WITH ('format-version' = '2');
+
+statement ok
+INSERT INTO my_datalake.default.truncate_partitioned_binary
+VALUES
+    (1,  {'data': from_hex('F09F90AFF09FA689F09F90B4')}, 'tiger_owl_horse'),
+    (2,  {'data': from_hex('F09F90AFF09FA689F09F90B8')}, 'tiger_owl_frog'),
+    (3,  {'data': from_hex('F09F90AFF09FA689F09FAABF')}, 'tiger_owl_goose'),
+    (4,  {'data': from_hex('E298ADE298ABE298A6EFB88E')}, 'happy_fun_times'),
+    (5, NULL,  'null_row');
 
 statement ok
 create view scan as select * from my_datalake.default.truncate_partitioned_binary;

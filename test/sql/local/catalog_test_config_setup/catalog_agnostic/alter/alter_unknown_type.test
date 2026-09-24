@@ -61,18 +61,13 @@ statement ok
 CREATE TABLE my_datalake.default.alter_unknown_type (
     id INTEGER,
     r "NULL" DEFAULT NULL,
-    s STRUCT(v "NULL"),
-    m MAP(VARCHAR, "NULL"),
-    l "NULL"[]
+    s STRUCT(kept INTEGER, v "NULL")
 ) WITH ('format-version' = '3');
 
-# Commit old data before evolution: a NULL container, an empty collection, and
-# populated containers whose child values are UNKNOWN. Map keys cannot be NULL.
+# Commit old data before the promotion. The root column is omitted from the data file, and the struct keeps a
+# field to write, so both can be written.
 statement ok
-INSERT INTO my_datalake.default.alter_unknown_type VALUES
-    (1, NULL, NULL, NULL, NULL),
-    (2, NULL, {'v': NULL}, MAP {}, []),
-    (3, NULL, {'v': NULL}, MAP {'old': NULL}, [NULL, NULL]);
+INSERT INTO my_datalake.default.alter_unknown_type VALUES (1, NULL, {'kept': 42, 'v': NULL});
 
 statement ok
 ALTER TABLE my_datalake.default.alter_unknown_type ALTER COLUMN r TYPE {type};
@@ -80,14 +75,8 @@ ALTER TABLE my_datalake.default.alter_unknown_type ALTER COLUMN r TYPE {type};
 statement ok
 ALTER TABLE my_datalake.default.alter_unknown_type ALTER COLUMN s.v TYPE {type};
 
-statement ok
-ALTER TABLE my_datalake.default.alter_unknown_type ALTER COLUMN m.value TYPE {type};
-
-statement ok
-ALTER TABLE my_datalake.default.alter_unknown_type ALTER COLUMN l.element TYPE {type};
-
-# Check actual bound field types, including children of newly introduced containers.
-query IIII
+# Check the actual bound field types on the row committed before the promotion.
+query II
 SELECT
 	CASE WHEN typeof(r) = typeof(v) THEN true::VARIANT ELSE {
 		'actual': typeof(r),
@@ -96,57 +85,87 @@ SELECT
 	CASE WHEN typeof(s.v) = typeof(v) THEN true::VARIANT ELSE {
 		'actual': typeof(s.v),
 		'expected': typeof(v)
+	}::VARIANT END
+FROM my_datalake.default.alter_unknown_type,
+     (SELECT "{type}" AS v FROM unknown_type_values) expected
+WHERE id = 1;
+----
+true	true
+
+statement ok
+INSERT INTO my_datalake.default.alter_unknown_type
+SELECT 2, v, {'kept': 7, 'v': v} FROM (SELECT "{type}" AS v FROM unknown_type_values);
+
+# The old row keeps its NULLs and the field written next to them, and the new row keeps its values.
+query IIIIII
+SELECT id, r IS NULL, s.v IS NULL, s.kept, r IS NOT DISTINCT FROM v, s.v IS NOT DISTINCT FROM v
+FROM my_datalake.default.alter_unknown_type,
+     (SELECT "{type}" AS v FROM unknown_type_values) expected
+ORDER BY id;
+----
+1	true	true	42	false	false
+2	false	false	7	true	true
+
+statement ok
+DROP TABLE my_datalake.default.alter_unknown_type;
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.alter_unknown_type_containers;
+
+statement ok
+CREATE TABLE my_datalake.default.alter_unknown_type_containers (
+    id INTEGER,
+    s STRUCT(v "NULL"),
+    m MAP(VARCHAR, "NULL"),
+    l "NULL"[]
+) WITH ('format-version' = '3');
+
+# These containers hold nothing but UNKNOWN, so they have no data file representation and carry no old rows.
+statement ok
+ALTER TABLE my_datalake.default.alter_unknown_type_containers ALTER COLUMN s.v TYPE {type};
+
+statement ok
+ALTER TABLE my_datalake.default.alter_unknown_type_containers ALTER COLUMN m.value TYPE {type};
+
+statement ok
+ALTER TABLE my_datalake.default.alter_unknown_type_containers ALTER COLUMN l.element TYPE {type};
+
+statement ok
+INSERT INTO my_datalake.default.alter_unknown_type_containers
+SELECT 1, {'v': v}, MAP {'new': v}, [v, NULL]
+FROM (SELECT "{type}" AS v FROM unknown_type_values);
+
+# Check actual bound field types, including children of newly introduced containers.
+query III
+SELECT
+	CASE WHEN typeof(s.v) = typeof(v) THEN true::VARIANT ELSE {
+		'actual': typeof(s.v),
+		'expected': typeof(v)
 	}::VARIANT END,
-	CASE WHEN typeof(map_extract_value(m, 'old')) = typeof(v) THEN true::VARIANT ELSE {
-		'actual': typeof(map_extract_value(m, 'old')),
+	CASE WHEN typeof(map_extract_value(m, 'new')) = typeof(v) THEN true::VARIANT ELSE {
+		'actual': typeof(map_extract_value(m, 'new')),
 		'expected': typeof(v)
 	}::VARIANT END,
 	CASE WHEN typeof(l[1]) = typeof(v) THEN true::VARIANT ELSE {
 		'actual': typeof(l[1]),
 		'expected': typeof(v)
 	}::VARIANT END
-FROM my_datalake.default.alter_unknown_type,
-     (SELECT "{type}" AS v FROM unknown_type_values) expected
-WHERE id = 3;
+FROM my_datalake.default.alter_unknown_type_containers,
+     (SELECT "{type}" AS v FROM unknown_type_values) expected;
 ----
-true	true	true	true
-
-statement ok
-INSERT INTO my_datalake.default.alter_unknown_type
-SELECT 4, v, {'v': v}, MAP {'new': v}, [v, NULL]
-FROM (SELECT "{type}" AS v FROM unknown_type_values);
-
-# Old values remain NULL after the new typed data has been committed. Preserve
-# the distinction between NULL containers, empty collections, and NULL children.
-query IIIII
-SELECT id, r IS NULL, s IS NULL, m IS NULL, l IS NULL
-FROM my_datalake.default.alter_unknown_type WHERE id < 4 ORDER BY id;
-----
-1	true	true	true	true
-2	true	false	false	false
-3	true	false	false	false
-
-query IIIIIII
-SELECT id, s.v IS NULL, cardinality(m), len(l),
-       map_extract_value(m, 'old') IS NULL, l[1] IS NULL, l[2] IS NULL
-FROM my_datalake.default.alter_unknown_type WHERE id IN (2, 3) ORDER BY id;
-----
-2	true	0	0	true	true	true
-3	true	1	2	true	true	true
+true	true	true
 
 # Verify values, not only successful insertion or the new schema.
-query IIIIIIII
-SELECT r IS NOT DISTINCT FROM v, s.v IS NOT DISTINCT FROM v,
-       map_extract_value(m, 'new') IS NOT DISTINCT FROM v, l[1] IS NOT DISTINCT FROM v,
-       map_keys(m) = ['new'], cardinality(m), len(l), l[2] IS NULL
-FROM my_datalake.default.alter_unknown_type,
-     (SELECT "{type}" AS v FROM unknown_type_values) expected
-WHERE id = 4;
+query IIIIIII
+SELECT s.v IS NOT DISTINCT FROM v, map_extract_value(m, 'new') IS NOT DISTINCT FROM v,
+       l[1] IS NOT DISTINCT FROM v, map_keys(m) = ['new'], cardinality(m), len(l), l[2] IS NULL
+FROM my_datalake.default.alter_unknown_type_containers,
+     (SELECT "{type}" AS v FROM unknown_type_values) expected;
 ----
-true	true	true	true	true	1	2	true
+true	true	true	true	1	2	true
 
 statement ok
-DROP TABLE my_datalake.default.alter_unknown_type;
+DROP TABLE my_datalake.default.alter_unknown_type_containers;
 
 endloop
 

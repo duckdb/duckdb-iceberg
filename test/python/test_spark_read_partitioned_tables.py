@@ -133,6 +133,7 @@ TIMESTAMPNS_ROWS = TIMESTAMP_ROWS
 
 # All of these tables are generated together, so all of them need V3 as a result
 @pytest.mark.requires_capabilities("format_v3")
+@pytest.mark.duckdb_setup_tests("catalog_interop/other_engines/test_create_partitioned_tables.test", once=True)
 class TestSparkReadPartitionedTables:
     # ------------------------------------------------------------------ INT
     @pytest.mark.parametrize(
@@ -183,6 +184,7 @@ class TestSparkReadPartitionedTables:
         assert res == DECIMAL_ROWS
 
     # -------------------------------- DECIMAL / BUCKET (DuckDB-created table)
+    @pytest.mark.duckdb_setup_tests("catalog_agnostic/insert/partitions/bucket/test_bucket_decimal.test")
     def test_bucket_decimal_duckdb_created(self, spark_con):
         _BUCKET_DECIMAL_LABELS = [
             "ten",
@@ -205,6 +207,7 @@ class TestSparkReadPartitionedTables:
         assert res == TEST_BUCKET_DECIMAL_ROWS
 
     # ------------------------------- DECIMAL / TRUNCATE (DuckDB-created table)
+    @pytest.mark.duckdb_setup_tests("catalog_agnostic/insert/partitions/truncate/test_truncate_decimal.test")
     def test_truncate_decimal_duckdb_created(self, spark_con):
         _TRUNCATE_DECIMAL_LABELS = ["one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten"]
         _TRUNCATE_DECIMAL_AMOUNTS = [Decimal(f"{v}.00") for v in range(1, 11)]

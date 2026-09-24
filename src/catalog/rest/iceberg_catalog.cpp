@@ -22,8 +22,83 @@
 
 namespace duckdb {
 
+LoadTableCachePublication::~LoadTableCachePublication() {
+	if (cache) {
+		cache->Release(*this);
+	}
+}
+
+bool LoadTableCachePublication::TryPublish(unique_ptr<const rest_api_objects::LoadTableResult> result) {
+	return cache->TryPublish(*this, std::move(result));
+}
+
+unique_ptr<LoadTableCachePublication> LoadTableResultCache::BeginLoad(const string &table_key) {
+	auto publication = unique_ptr<LoadTableCachePublication>(new LoadTableCachePublication(table_key));
+	annotated_lock_guard<annotated_mutex> guard(lock);
+	auto &pending = pending_loads[table_key];
+	pending.latest = publication.get();
+	pending.count++;
+	publication->cache = this;
+	return publication;
+}
+
+void LoadTableResultCache::Release(LoadTableCachePublication &publication) {
+	annotated_lock_guard<annotated_mutex> guard(lock);
+	auto it = pending_loads.find(publication.table_key);
+	D_ASSERT(it != pending_loads.end() && it->second.count > 0);
+	it->second.count--;
+	if (it->second.count == 0) {
+		pending_loads.erase(it);
+	} else if (it->second.latest.get() == &publication) {
+		it->second.latest = nullptr;
+	}
+}
+
+void LoadTableResultCache::InvalidateLoads(const string &table_key) {
+	auto it = pending_loads.find(table_key);
+	if (it != pending_loads.end()) {
+		it->second.latest = nullptr;
+	}
+}
+
+bool LoadTableResultCache::TryPublish(LoadTableCachePublication &publication,
+                                      unique_ptr<const rest_api_objects::LoadTableResult> result) {
+	annotated_lock_guard<annotated_mutex> guard(lock);
+	auto it = pending_loads.find(publication.table_key);
+	if (it == pending_loads.end() || it->second.latest.get() != &publication) {
+		return false;
+	}
+	Store(publication.table_key, std::move(result));
+	it->second.latest = nullptr;
+	return true;
+}
+
+void LoadTableResultCache::SetOrOverwrite(const string &table_key,
+                                          unique_ptr<const rest_api_objects::LoadTableResult> result) {
+	annotated_lock_guard<annotated_mutex> guard(lock);
+	InvalidateLoads(table_key);
+	Store(table_key, std::move(result));
+}
+
+void LoadTableResultCache::Store(const string &table_key, unique_ptr<const rest_api_objects::LoadTableResult> result) {
+	// With staleness disabled, retain the payload for identity-based invalidation but expire it immediately.
+	system_clock::time_point expires_at;
+	if (attach_options.max_table_staleness_micros.IsValid()) {
+		expires_at =
+		    system_clock::now() + std::chrono::microseconds(attach_options.max_table_staleness_micros.GetIndex());
+	} else {
+		expires_at = system_clock::time_point::min();
+	}
+	auto epoch_micros = timestamp_t(duration_cast<microseconds>(expires_at.time_since_epoch()).count());
+	auto expire_timestamp_ms = timestamp_ms_t(Timestamp::GetEpochMs(epoch_micros));
+	tables.erase(table_key);
+	tables.emplace(table_key, MetadataCacheValue(expire_timestamp_ms, std::move(result)));
+}
+
 void LoadTableResultCache::EvictIfCurrent(const IcebergTable &table) {
 	annotated_lock_guard<annotated_mutex> guard(lock);
+	// Even without a matching cached payload, a pre-write fetch must not repopulate the cache.
+	InvalidateLoads(table.GetTableKey());
 	auto it = tables.find(table.GetTableKey());
 	if (it == tables.end()) {
 		return;

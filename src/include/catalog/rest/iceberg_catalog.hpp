@@ -35,6 +35,26 @@ public:
 	unique_ptr<const rest_api_objects::LoadTableResult> load_table_result;
 };
 
+class LoadTableResultCache;
+
+//! Caller-owned state controlling whether a fetched result can enter the cache.
+//! The cache must outlive this state, which is kept separate from worker requests.
+class LoadTableCachePublication {
+public:
+	~LoadTableCachePublication();
+	bool TryPublish(unique_ptr<const rest_api_objects::LoadTableResult> result);
+
+private:
+	friend class LoadTableResultCache;
+	explicit LoadTableCachePublication(string table_key) : table_key(std::move(table_key)) {
+	}
+	LoadTableCachePublication(const LoadTableCachePublication &) = delete;
+	LoadTableCachePublication &operator=(const LoadTableCachePublication &) = delete;
+
+	optional_ptr<LoadTableResultCache> cache;
+	string table_key;
+};
+
 class LoadTableResultCache {
 public:
 	LoadTableResultCache(IcebergAttachOptions &attach_options) : attach_options(attach_options) {
@@ -60,32 +80,30 @@ public:
 		callback(*entry.load_table_result);
 		return true;
 	}
-	void SetOrOverwrite(const string &table_key,
-	                    unique_ptr<const rest_api_objects::LoadTableResult> load_table_result) {
-		annotated_lock_guard<annotated_mutex> guard(lock);
-		// If max_table_staleness_minutes is not set, use a time in the past so cache is always expired
-		system_clock::time_point expires_at;
-		if (attach_options.max_table_staleness_micros.IsValid()) {
-			expires_at =
-			    system_clock::now() + std::chrono::microseconds(attach_options.max_table_staleness_micros.GetIndex());
-		} else {
-			expires_at = system_clock::time_point::min();
-		}
-		auto epoch_micros = timestamp_t(duration_cast<microseconds>(expires_at.time_since_epoch()).count());
-		auto expire_timestamp_ms = timestamp_ms_t(Timestamp::GetEpochMs(epoch_micros));
-
-		// erase load table result if it exists.
-		tables.erase(table_key);
-		tables.emplace(table_key, MetadataCacheValue(expire_timestamp_ms, std::move(load_table_result)));
-	}
+	//! Create publication state before fetching. A later fetch supersedes earlier loads for the same key.
+	unique_ptr<LoadTableCachePublication> BeginLoad(const string &table_key);
+	//! Authoritative publication (e.g. staged creation) also invalidates outstanding fetches.
+	void SetOrOverwrite(const string &table_key, unique_ptr<const rest_api_objects::LoadTableResult> load_table_result);
 
 	//! Evict only if the table was initialized from the result that is still cached for its key.
 	void EvictIfCurrent(const IcebergTable &table);
 
 private:
+	friend class LoadTableCachePublication;
+	struct PendingLoads {
+		optional_ptr<LoadTableCachePublication> latest;
+		idx_t count = 0;
+	};
+	bool TryPublish(LoadTableCachePublication &publication, unique_ptr<const rest_api_objects::LoadTableResult> result);
+	void Release(LoadTableCachePublication &publication);
+	void InvalidateLoads(const string &table_key) DUCKDB_REQUIRES(lock);
+	void Store(const string &table_key, unique_ptr<const rest_api_objects::LoadTableResult> result)
+	    DUCKDB_REQUIRES(lock);
+
 	IcebergAttachOptions &attach_options;
 	annotated_mutex lock;
 	case_insensitive_map_t<MetadataCacheValue> tables DUCKDB_GUARDED_BY(lock);
+	case_insensitive_map_t<PendingLoads> pending_loads DUCKDB_GUARDED_BY(lock);
 };
 
 class IcebergCatalog : public Catalog {

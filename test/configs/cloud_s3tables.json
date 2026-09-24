@@ -73,6 +73,7 @@
       "reason": "s3tables allows NULL as unknown",
       "paths": [
         "test/sql/local/catalog_test_config_setup/catalog_agnostic/create/test_create_unknown_type.test",
+        "test/sql/local/catalog_test_config_setup/catalog_agnostic/insert/test_unknown_type_omitted_from_data_files.test",
         "test/sql/local/catalog_test_config_setup/catalog_agnostic/alter/alter_unknown_type.test",
         "test/sql/local/catalog_test_config_setup/catalog_agnostic/alter/alter_unknown_type_variant.test"
       ]
@@ -89,45 +90,45 @@
       "reason": "requires table created in fixture setups",
       "paths": [
         "test/sql/local/catalog_test_config_setup/catalog_agnostic/delete/test_delete_from_partitioned_table_errors.test",
-        "test/sql/local/catalog_test_config_setup/catalog_agnostic/delete/test_delete_from_v3_table.test",
+        "test/sql/local/catalog_test_config_setup/catalog_interop/delete/test_delete_from_v3_table.test",
         "test/sql/local/catalog_test_config_setup/catalog_agnostic/iceberg_catalog_eager_refresh.test",
         "test/sql/local/catalog_test_config_setup/catalog_agnostic/insert/count_star_optimizer.test",
         "test/sql/local/catalog_test_config_setup/catalog_agnostic/reads/filtering/should_do_filter_pruning_on_expressionless_string_filters.test",
         "test/sql/local/catalog_test_config_setup/catalog_agnostic/reads/filtering/should_not_do_filter_pruning_on_expression_string_filters.test",
         "test/sql/local/catalog_test_config_setup/catalog_agnostic/reads/partitioned_reads/test_read_from_month_partitioned_date.test",
-        "test/sql/local/catalog_test_config_setup/catalog_agnostic/reads/partitioned_reads/test_read_spark_days_partition.test",
-        "test/sql/local/catalog_test_config_setup/catalog_agnostic/reads/read_mor_delete_partition_evolution.test",
+        "test/sql/local/catalog_test_config_setup/catalog_interop/reads/partitioned_reads/test_read_spark_days_partition.test",
+        "test/sql/local/catalog_test_config_setup/catalog_interop/reads/read_mor_delete_partition_evolution.test",
         "test/sql/local/catalog_test_config_setup/catalog_agnostic/reads/test_read_from_partitioned_table.test",
         "test/sql/local/catalog_test_config_setup/catalog_agnostic/reads/test_read_nulls.test",
-        "test/sql/local/catalog_test_config_setup/catalog_agnostic/reads/test_read_partitioned_table_type_promotion.test",
+        "test/sql/local/catalog_test_config_setup/catalog_interop/reads/test_read_partitioned_table_type_promotion.test",
         "test/sql/local/catalog_test_config_setup/catalog_agnostic/reads/test_requests_to_partitioned_table.test",
-        "test/sql/local/catalog_test_config_setup/catalog_agnostic/insert/test_insert_into_null_columns.test",
-        "test/sql/local/catalog_test_config_setup/catalog_agnostic/insert/test_insert_to_v3_tables.test",
-        "test/sql/local/catalog_test_config_setup/catalog_agnostic/insert/test_read_upper_and_lower_bounds.test",
-        "test/sql/local/catalog_test_config_setup/catalog_agnostic/insert/test_write_decimal_bounds.test",
-        "test/sql/local/catalog_test_config_setup/catalog_agnostic/insert/test_write_decimal_bounds_hugeint.test",
-        "test/sql/local/catalog_test_config_setup/catalog_agnostic/insert/test_write_upper_and_lower_bounds.test",
-        "test/sql/local/catalog_test_config_setup/catalog_agnostic/insert/test_write_upper_and_lower_bounds_all_null.test",
-        "test/sql/local/catalog_test_config_setup/catalog_agnostic/insert/test_write_upper_and_lower_bounds_single_values.test",
-        "test/sql/local/catalog_test_config_setup/catalog_agnostic/irc_catalog_read_deletes.test",
+        "test/sql/local/catalog_test_config_setup/catalog_interop/insert/test_insert_into_null_columns.test",
+        "test/sql/local/catalog_test_config_setup/catalog_interop/insert/test_insert_to_v3_tables.test",
+        "test/sql/local/catalog_test_config_setup/catalog_interop/insert/test_read_upper_and_lower_bounds.test",
+        "test/sql/local/catalog_test_config_setup/catalog_interop/insert/test_write_decimal_bounds.test",
+        "test/sql/local/catalog_test_config_setup/catalog_interop/insert/test_write_decimal_bounds_hugeint.test",
+        "test/sql/local/catalog_test_config_setup/catalog_interop/insert/test_write_upper_and_lower_bounds.test",
+        "test/sql/local/catalog_test_config_setup/catalog_interop/insert/test_write_upper_and_lower_bounds_all_null.test",
+        "test/sql/local/catalog_test_config_setup/catalog_interop/insert/test_write_upper_and_lower_bounds_single_values.test",
+        "test/sql/local/catalog_test_config_setup/catalog_interop/irc_catalog_read_deletes.test",
         "test/sql/local/catalog_test_config_setup/catalog_agnostic/partitioning/test_partitioning_pushdown_bucket.test",
         "test/sql/local/catalog_test_config_setup/catalog_agnostic/table_properties/test_set_table_properties.test",
         "test/sql/local/catalog_test_config_setup/catalog_agnostic/test_cascade.test",
         "test/sql/local/catalog_test_config_setup/catalog_agnostic/test_minimal_head_requests.test",
         "test/sql/local/catalog_test_config_setup/catalog_agnostic/test_read_empty_table.test",
-        "test/sql/local/catalog_test_config_setup/catalog_agnostic/test_row_lineage_read.test",
-        "test/sql/local/catalog_test_config_setup/catalog_agnostic/test_row_lineage_read_from_upgraded.test",
+        "test/sql/local/catalog_test_config_setup/catalog_interop/test_row_lineage_read.test",
+        "test/sql/local/catalog_test_config_setup/catalog_interop/test_row_lineage_read_from_upgraded.test",
         "test/sql/local/catalog_test_config_setup/catalog_agnostic/test_select_row_id.test",
         "test/sql/local/catalog_test_config_setup/catalog_agnostic/test_show_table_duplicates.test",
         "test/sql/local/catalog_test_config_setup/catalog_agnostic/test_tpch.test",
         "test/sql/local/catalog_test_config_setup/catalog_agnostic/test_use.test",
         "test/sql/local/catalog_test_config_setup/catalog_agnostic/transactions/test_concurrent_transactions.test",
         "test/sql/local/catalog_test_config_setup/catalog_agnostic/update/test_update_partitioned_table_failure.test",
-        "test/sql/local/catalog_test_config_setup/catalog_agnostic/update/test_update_v3_table.test",
+        "test/sql/local/catalog_test_config_setup/catalog_interop/update/test_update_v3_table.test",
         "test/sql/local/catalog_test_config_setup/catalog_agnostic/irc_nested_types.test",
         "test/sql/local/catalog_test_config_setup/catalog_agnostic/logging/test_partition_read_logging.test",
         "test/sql/local/catalog_test_config_setup/catalog_agnostic/logging/test_partition_read_logic_month.test",
-        "test/sql/local/catalog_test_config_setup/catalog_agnostic/other_engines/test_spark_can_read_duckdb_timestamptz_ns.test"
+        "test/sql/local/catalog_test_config_setup/catalog_interop/other_engines/test_spark_can_read_duckdb_timestamptz_ns.test"
       ]
     },
     {
@@ -146,7 +147,7 @@
         "test/sql/local/catalog_test_config_setup/catalog_agnostic/maintenance/rewrite_data_files_file_size_rotation.test",
         "test/sql/local/catalog_test_config_setup/catalog_agnostic/maintenance/rewrite_data_files_partitioned.test",
         "test/sql/local/catalog_test_config_setup/catalog_agnostic/maintenance/rewrite_data_files_sequence_pin.test",
-        "test/sql/local/catalog_test_config_setup/catalog_agnostic/maintenance/rewrite_data_files_spark_mor_residual_deletes.test",
+        "test/sql/local/catalog_test_config_setup/catalog_interop/maintenance/rewrite_data_files_spark_mor_residual_deletes.test",
         "test/sql/local/catalog_test_config_setup/catalog_agnostic/maintenance/rewrite_data_files_target_file_size.test",
         "test/sql/local/catalog_test_config_setup/catalog_agnostic/maintenance/rewrite_data_files_column_stats.test"
       ]
@@ -162,7 +163,7 @@
     {
       "reason": "unsure - needs investigation",
       "paths": [
-        "test/sql/local/catalog_test_config_setup/catalog_agnostic/other_engines/test_create_partitioned_tables.test",
+        "test/sql/local/catalog_test_config_setup/catalog_interop/other_engines/test_create_partitioned_tables.test",
         "test/sql/local/catalog_test_config_setup/catalog_agnostic/delete/test_no_head_request_for_deletes.test",
         "test/sql/local/catalog_test_config_setup/catalog_agnostic/delete/test_snapshot_summary_delete_metrics.test",
         "test/sql/local/catalog_test_config_setup/catalog_agnostic/insert/test_snapshot_summary_file_size_metrics.test"

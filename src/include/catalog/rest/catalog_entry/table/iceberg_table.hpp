@@ -12,6 +12,7 @@
 #include "iceberg_attach.hpp"
 
 namespace duckdb {
+class LoadTableCachePublication;
 class IcebergTableSchema;
 class ParsedExpression;
 struct CreateTableInfo;
@@ -104,7 +105,8 @@ public:
 	optional_ptr<const rest_api_objects::LoadTableResult> initialization_source;
 
 private:
-	void ApplyRefreshResult(ClientContext &context, IcebergLoadTableResult result);
+	void ApplyRefreshResult(ClientContext &context, IcebergLoadTableResult result,
+	                        LoadTableCachePublication &publication);
 	void SetLoadTableResult(const rest_api_objects::LoadTableResult &load_table_result);
 
 	//! Unchanged by rename, used to check for a rename

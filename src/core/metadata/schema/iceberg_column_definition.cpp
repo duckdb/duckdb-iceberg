@@ -298,6 +298,9 @@ MultiFileColumnDefinition IcebergColumnDefinition::GetMultiFileColumnDefinition(
 	for (auto &child : children) {
 		column.children.push_back(child->GetMultiFileColumnDefinition());
 	}
+	if (type.id() == LogicalTypeId::MAP) {
+		column.children[0].default_expression.reset();
+	}
 	return column;
 }
 

@@ -48,8 +48,8 @@
 			"reason": "Requires reparsing url paths in logs or paths in data files",
 			"paths": [
 				"test/sql/local/catalog_test_config_setup/catalog_agnostic/iceberg_catalog_eager_refresh.test",
-				"test/sql/local/catalog_test_config_setup/catalog_agnostic/reads/test_read_partitioned_table_type_promotion.test",
-				"test/sql/local/catalog_test_config_setup/catalog_agnostic/irc_catalog_read_deletes.test"
+				"test/sql/local/catalog_test_config_setup/catalog_interop/reads/test_read_partitioned_table_type_promotion.test",
+				"test/sql/local/catalog_test_config_setup/catalog_interop/irc_catalog_read_deletes.test"
 			]
 		},
 		{

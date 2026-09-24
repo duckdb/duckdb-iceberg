@@ -801,6 +801,7 @@ idx_t WriteToFile(const IcebergTableMetadata &table_metadata, const IcebergManif
 	copy_info.options["root_name"].push_back(Value("manifest_entry"));
 	copy_info.options["field_ids"].push_back(Value::STRUCT(field_ids));
 	copy_info.options["metadata"].push_back(metadata_map);
+	copy_info.options["SANITIZE_FIELD_NAMES"].push_back(Value::BOOLEAN(true));
 
 	//! write.manifest.compression-codec: let the Avro COPY writer emit the codec natively.
 	//! "null" is the COPY default (uncompressed), so only set the option for a compressing codec.

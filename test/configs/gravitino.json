@@ -84,7 +84,7 @@
 		{
 			"reason": "Test is hardcoded for 'fixture' intermediates",
 			"paths": [
-				"test/sql/local/catalog_test_config_setup/catalog_agnostic/irc_catalog_read_deletes.test"
+				"test/sql/local/catalog_test_config_setup/catalog_interop/irc_catalog_read_deletes.test"
 			]
 		},
 		{

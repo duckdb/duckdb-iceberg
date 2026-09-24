@@ -9,6 +9,64 @@ include test/sql/init_requires
 
 require icu
 
+# Preserve both partition specs and their data files.
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.complicated_partitioned_table;
+
+statement ok
+CREATE TABLE my_datalake.default.complicated_partitioned_table (
+	id int,
+	ts TIMESTAMPTZ,
+	customer varchar(20),
+    amount long
+)
+PARTITIONED BY (year(ts))
+WITH ('format-version' = '2', 'write.object-storage.enabled' = 'false');
+
+statement ok
+insert into my_datalake.default.complicated_partitioned_table values
+(1000,TIMESTAMPTZ '2020-01-01 00:00:00+00','C01-00',16),
+(1001,TIMESTAMPTZ '2020-01-01 00:00:00+00','C01-01',80),
+(1002,TIMESTAMPTZ '2020-01-01 00:00:00+00','C01-02',49),
+(1003,TIMESTAMPTZ '2020-01-01 00:00:00+00','C01-03',75),
+(1004,TIMESTAMPTZ '2021-01-02 00:00:00+00','C01-04',98),
+(2000,TIMESTAMPTZ '2021-01-02 00:00:00+00','C02-00',58),
+(2001,TIMESTAMPTZ '2021-01-02 00:00:00+00','C02-01',55),
+(2002,TIMESTAMPTZ '2021-01-02 00:00:00+00','C02-02',16),
+(2003,TIMESTAMPTZ '2021-01-02 00:00:00+00','C02-03',34),
+(2004,TIMESTAMPTZ '2022-01-03 00:00:00+00','C02-04',54),
+(3000,TIMESTAMPTZ '2022-01-03 00:00:00+00','C03-00',71),
+(3001,TIMESTAMPTZ '2022-01-03 00:00:00+00','C03-01',82),
+(3002,TIMESTAMPTZ '2022-01-04 00:00:00+00','C03-02',44),
+(3003,TIMESTAMPTZ '2022-01-04 00:00:00+00','C03-03',15),
+(3004,TIMESTAMPTZ '2023-01-04 00:00:00+00','C03-04',35);
+
+statement ok
+ALTER TABLE my_datalake.default.complicated_partitioned_table
+SET PARTITIONED BY (month(ts));
+
+statement ok
+insert into my_datalake.default.complicated_partitioned_table values
+(4000,TIMESTAMPTZ '2020-01-10 00:00:00+00','C01-00',16),
+(4001,TIMESTAMPTZ '2020-01-10 00:00:00+00','C01-01',80),
+(4002,TIMESTAMPTZ '2020-01-10 00:00:00+00','C01-02',49),
+(4003,TIMESTAMPTZ '2020-01-10 00:00:00+00','C01-03',75),
+(4004,TIMESTAMPTZ '2021-01-11 00:00:00+00','C01-04',98),
+(5000,TIMESTAMPTZ '2021-01-11 00:00:00+00','C02-00',58),
+(5001,TIMESTAMPTZ '2021-01-11 00:00:00+00','C02-01',55),
+(5002,TIMESTAMPTZ '2021-01-11 00:00:00+00','C02-02',16),
+(5003,TIMESTAMPTZ '2021-01-11 00:00:00+00','C02-03',34),
+(5004,TIMESTAMPTZ '2022-01-12 00:00:00+00','C02-04',54),
+(6000,TIMESTAMPTZ '2022-01-12 00:00:00+00','C03-00',71),
+(6001,TIMESTAMPTZ '2022-01-12 00:00:00+00','C03-01',82),
+(6002,TIMESTAMPTZ '2022-01-12 00:00:00+00','C03-02',44),
+(6003,TIMESTAMPTZ '2022-01-12 00:00:00+00','C03-03',15),
+(6004,TIMESTAMPTZ '2023-01-13 00:00:00+00','C03-04',35),
+(6005,NULL,'C06-04',40),
+(6006,NULL,'C06-04',41),
+(6007,NULL,'C06-04',42);
+
 statement ok
 SET default_transaction_invalidation_policy='SYNTACTIC_ERRORS_DO_NOT_INVALIDATE';
 
@@ -70,11 +128,7 @@ select id from my_datalake.default.complicated_partitioned_table where ts >= '20
 
 # skips the partitions/data files that match the partiition (2021 & 2021-01) but do not match on upper/lower bounds
 query I
-select count(*) from duckdb_logs where type like 'Iceberg' and
-(message like '%skipped%data_file%ts_year=2021%'
- or
- message like '%skipped%data_file%ts_month=2021-01%'
-);
+select count(*) from duckdb_logs where type = 'Iceberg'
+and message like '%skipped%data_file%column ''ts'' with bounds%2021-01%';
 ----
 2
-

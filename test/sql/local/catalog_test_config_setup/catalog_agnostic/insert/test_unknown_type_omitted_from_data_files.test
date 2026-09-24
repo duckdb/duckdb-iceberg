@@ -1,0 +1,553 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/insert/test_unknown_type_omitted_from_data_files.test
+# description: Columns of type unknown must not be written to data files (Iceberg spec, Appendix A).
+# group: [insert]
+
+# SPEC (Appendix A): `unknown` has no physical Parquet type and must be omitted from data files, and a
+# reader must ignore any corresponding column and replace it with NULL. Primitive types: an unknown column
+# is "not stored in data files".
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require-env FORMAT_V3_SUPPORT
+
+require-env UNKNOWN_SUPPORT
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+statement ok
+create schema if not exists my_datalake.default;
+
+#===--------------------------------------------------------------------===#
+# Unpartitioned table
+#===--------------------------------------------------------------------===#
+
+statement ok
+drop table if exists my_datalake.default.unknown_omitted;
+
+statement ok
+create table my_datalake.default.unknown_omitted (
+	a INT,
+	b "NULL",
+	c VARCHAR
+) WITH (
+	'format-version'='3'
+);
+
+statement ok
+insert into my_datalake.default.unknown_omitted select range, NULL, 'val_' || range from range(5);
+
+statement ok
+begin transaction
+
+statement ok
+set variable unknown_omitted_files = (select list(file_path) from iceberg_metadata('my_datalake.default.unknown_omitted') where manifest_content = 'DATA' and status <> 'DELETED');
+
+# The data file only contains the written columns, with their original field ids
+query II
+select name, field_id
+from parquet_schema(getvariable('unknown_omitted_files'))
+where num_children is null
+order by field_id;
+----
+a	1
+c	3
+
+statement ok
+commit
+
+# The omitted column is read back as NULL
+query III
+select * from my_datalake.default.unknown_omitted order by a;
+----
+0	NULL	val_0
+1	NULL	val_1
+2	NULL	val_2
+3	NULL	val_3
+4	NULL	val_4
+
+query I
+select typeof(b) from my_datalake.default.unknown_omitted limit 1;
+----
+"NULL"
+
+#===--------------------------------------------------------------------===#
+# Identity partition on a column after the unknown column
+#===--------------------------------------------------------------------===#
+
+statement ok
+drop table if exists my_datalake.default.unknown_omitted_identity;
+
+statement ok
+create table my_datalake.default.unknown_omitted_identity (
+	a INT,
+	b "NULL",
+	c VARCHAR
+) PARTITIONED BY (c) WITH (
+	'format-version'='3'
+);
+
+statement ok
+insert into my_datalake.default.unknown_omitted_identity
+select range, NULL, 'part_' || (range % 3) from range(9);
+
+# One data file per partition value, none of them containing 'b'
+query I
+select count(*) from iceberg_metadata('my_datalake.default.unknown_omitted_identity') where manifest_content = 'DATA' and status <> 'DELETED';
+----
+3
+
+statement ok
+begin transaction
+
+statement ok
+set variable unknown_omitted_identity_files = (select list(file_path) from iceberg_metadata('my_datalake.default.unknown_omitted_identity') where manifest_content = 'DATA' and status <> 'DELETED');
+
+query II
+select distinct name, field_id
+from parquet_schema(getvariable('unknown_omitted_identity_files'))
+where num_children is null
+order by field_id;
+----
+a	1
+c	3
+
+statement ok
+commit
+
+query III
+select * from my_datalake.default.unknown_omitted_identity order by a;
+----
+0	NULL	part_0
+1	NULL	part_1
+2	NULL	part_2
+3	NULL	part_0
+4	NULL	part_1
+5	NULL	part_2
+6	NULL	part_0
+7	NULL	part_1
+8	NULL	part_2
+
+# Filtering on the partition column returns the right rows
+query I
+select count(*) from my_datalake.default.unknown_omitted_identity where c = 'part_1';
+----
+3
+
+#===--------------------------------------------------------------------===#
+# Transformed partition on a column after the unknown column
+#===--------------------------------------------------------------------===#
+
+statement ok
+drop table if exists my_datalake.default.unknown_omitted_bucket;
+
+statement ok
+create table my_datalake.default.unknown_omitted_bucket (
+	a INT,
+	b "NULL",
+	c VARCHAR
+) PARTITIONED BY (bucket(2, c)) WITH (
+	'format-version'='3'
+);
+
+statement ok
+insert into my_datalake.default.unknown_omitted_bucket
+select range, NULL, 'val_' || range from range(10);
+
+statement ok
+begin transaction
+
+statement ok
+set variable unknown_omitted_bucket_files = (select list(file_path) from iceberg_metadata('my_datalake.default.unknown_omitted_bucket') where manifest_content = 'DATA' and status <> 'DELETED');
+
+# Neither the unknown column nor the computed partition value end up in the file
+query II
+select distinct name, field_id
+from parquet_schema(getvariable('unknown_omitted_bucket_files'))
+where num_children is null
+order by field_id;
+----
+a	1
+c	3
+
+statement ok
+commit
+
+query III
+select a, b, c from my_datalake.default.unknown_omitted_bucket order by a;
+----
+0	NULL	val_0
+1	NULL	val_1
+2	NULL	val_2
+3	NULL	val_3
+4	NULL	val_4
+5	NULL	val_5
+6	NULL	val_6
+7	NULL	val_7
+8	NULL	val_8
+9	NULL	val_9
+
+#===--------------------------------------------------------------------===#
+# Identity partition on the unknown column itself (allowed by the spec; the value is always null)
+#===--------------------------------------------------------------------===#
+
+statement ok
+drop table if exists my_datalake.default.unknown_partition_source;
+
+statement ok
+create table my_datalake.default.unknown_partition_source (
+	a INT,
+	b "NULL"
+) PARTITIONED BY (b) WITH (
+	'format-version'='3'
+);
+
+statement ok
+insert into my_datalake.default.unknown_partition_source select range, NULL from range(4);
+
+statement ok
+begin transaction
+
+statement ok
+set variable unknown_partition_source_files = (select list(file_path) from iceberg_metadata('my_datalake.default.unknown_partition_source') where manifest_content = 'DATA' and status <> 'DELETED');
+
+# A single (null) partition, and the file only contains 'a'
+query I
+select len(getvariable('unknown_partition_source_files'));
+----
+1
+
+query II
+select name, field_id
+from parquet_schema(getvariable('unknown_partition_source_files'))
+where num_children is null
+order by field_id;
+----
+a	1
+
+statement ok
+commit
+
+query II
+select * from my_datalake.default.unknown_partition_source order by a;
+----
+0	NULL
+1	NULL
+2	NULL
+3	NULL
+
+#===--------------------------------------------------------------------===#
+# UPDATE rewrites data files with the _row_id virtual column and without the unknown column
+#===--------------------------------------------------------------------===#
+
+statement ok
+update my_datalake.default.unknown_omitted set c = 'updated' where a = 2;
+
+query III
+select * from my_datalake.default.unknown_omitted order by a;
+----
+0	NULL	val_0
+1	NULL	val_1
+2	NULL	updated
+3	NULL	val_3
+4	NULL	val_4
+
+statement ok
+begin transaction
+
+statement ok
+set variable unknown_omitted_files = (select list(file_path) from iceberg_metadata('my_datalake.default.unknown_omitted') where manifest_content = 'DATA' and status <> 'DELETED');
+
+query II
+select distinct name, field_id
+from parquet_schema(getvariable('unknown_omitted_files'))
+where num_children is null
+order by field_id;
+----
+a	1
+c	3
+_row_id	2147483540
+
+statement ok
+commit
+
+#===--------------------------------------------------------------------===#
+# Sort order combined with an omitted column
+#===--------------------------------------------------------------------===#
+
+statement ok
+drop table if exists my_datalake.default.unknown_omitted_sorted;
+
+statement ok
+create table my_datalake.default.unknown_omitted_sorted (
+	a INT,
+	b "NULL",
+	c INT
+) WITH (
+	'format-version'='3'
+);
+
+statement ok
+alter table my_datalake.default.unknown_omitted_sorted set sorted by (c desc);
+
+statement ok
+insert into my_datalake.default.unknown_omitted_sorted values (1, NULL, 10), (2, NULL, 30), (3, NULL, 20);
+
+statement ok
+begin transaction
+
+statement ok
+set variable unknown_omitted_sorted_files = (select list(file_path) from iceberg_metadata('my_datalake.default.unknown_omitted_sorted') where manifest_content = 'DATA' and status <> 'DELETED');
+
+query II
+select name, field_id
+from parquet_schema(getvariable('unknown_omitted_sorted_files'))
+where num_children is null
+order by field_id;
+----
+a	1
+c	3
+
+statement ok
+set variable unknown_omitted_sorted_files = (select list(file_path) from iceberg_metadata('my_datalake.default.unknown_omitted_sorted') where manifest_content = 'DATA' and status <> 'DELETED');
+
+# Rows are stored in the table's sort order
+query II
+select a, c from parquet_scan(getvariable('unknown_omitted_sorted_files'));
+----
+2	30
+3	20
+1	10
+
+statement ok
+commit
+
+# The unknown column comes first, so every written column shifts down by one
+statement ok
+drop table if exists my_datalake.default.unknown_omitted_first;
+
+statement ok
+create table my_datalake.default.unknown_omitted_first (b "NULL", a int, c varchar)
+partitioned by (c)
+with ('format-version'='3');
+
+statement ok
+insert into my_datalake.default.unknown_omitted_first select NULL, range, 'p' || (range % 2)::varchar from range(4);
+
+query III
+select b, a, c from my_datalake.default.unknown_omitted_first order by a;
+----
+NULL	0	p0
+NULL	1	p1
+NULL	2	p0
+NULL	3	p1
+
+statement ok
+begin transaction
+
+statement ok
+set variable unknown_omitted_first_files = (select list(file_path) from iceberg_metadata('my_datalake.default.unknown_omitted_first') where manifest_content = 'DATA' and status <> 'DELETED');
+
+query II
+select distinct name, field_id
+from parquet_schema(getvariable('unknown_omitted_first_files'))
+where num_children is null
+order by field_id;
+----
+a	2
+c	3
+
+statement ok
+commit
+
+# CREATE TABLE AS SELECT resolves the copy options from placeholder metadata
+statement ok
+drop table if exists my_datalake.default.unknown_omitted_ctas;
+
+statement ok
+create table my_datalake.default.unknown_omitted_ctas with ('format-version'='3') as select 1 as a, NULL as b;
+
+query II
+select a, typeof(b) from my_datalake.default.unknown_omitted_ctas;
+----
+1	"NULL"
+
+statement ok
+begin transaction
+
+statement ok
+set variable unknown_omitted_ctas_files = (select list(file_path) from iceberg_metadata('my_datalake.default.unknown_omitted_ctas') where manifest_content = 'DATA' and status <> 'DELETED');
+
+query II
+select name, field_id
+from parquet_schema(getvariable('unknown_omitted_ctas_files'))
+where num_children is null
+order by field_id;
+----
+a	1
+
+statement ok
+commit
+
+# A table of only unknown columns has no columns left to write
+statement ok
+drop table if exists my_datalake.default.unknown_omitted_only;
+
+statement ok
+create table my_datalake.default.unknown_omitted_only (b "NULL") with ('format-version'='3');
+
+statement error
+insert into my_datalake.default.unknown_omitted_only select NULL from range(3);
+----
+Not implemented Error: Cannot write to a table where every column is of type unknown
+
+# Unknown fields are dropped from nested structs too
+statement ok
+drop table if exists my_datalake.default.unknown_omitted_nested;
+
+statement ok
+create table my_datalake.default.unknown_omitted_nested (
+	a int,
+	s struct(x int, y "NULL", z varchar),
+	deep struct(mid struct(p int, q "NULL")),
+	l struct(x int, y "NULL")[],
+	m map(int, struct(x int, y "NULL"))
+) with ('format-version'='3');
+
+statement ok
+insert into my_datalake.default.unknown_omitted_nested values (
+	1,
+	{'x': 2, 'y': NULL, 'z': 'kept'},
+	{'mid': {'p': 3, 'q': NULL}},
+	[{'x': 4, 'y': NULL}],
+	map([5], [{'x': 6, 'y': NULL}])
+);
+
+statement ok
+begin transaction
+
+statement ok
+set variable unknown_omitted_nested_files = (select list(file_path) from iceberg_metadata('my_datalake.default.unknown_omitted_nested') where manifest_content = 'DATA' and status <> 'DELETED');
+
+# Only the unknown fields are missing
+query IIII
+select name, num_children, field_id, type
+from parquet_schema(getvariable('unknown_omitted_nested_files'));
+----
+duckdb_schema	5	NULL	NULL
+a	NULL	1	INT32
+s	2	2	NULL
+x	NULL	6	INT32
+z	NULL	8	BYTE_ARRAY
+deep	1	3	NULL
+mid	1	9	NULL
+p	NULL	10	INT32
+l	1	4	NULL
+list	1	NULL	NULL
+element	1	12	NULL
+x	NULL	13	INT32
+m	1	5	NULL
+key_value	2	NULL	NULL
+key	NULL	15	INT32
+value	1	16	NULL
+x	NULL	17	INT32
+
+statement ok
+commit
+
+# The omitted fields read back as NULL
+query IIIII
+select a, s, deep, l, m from my_datalake.default.unknown_omitted_nested;
+----
+1	{'x': 2, 'y': NULL, 'z': kept}	{'mid': {'p': 3, 'q': NULL}}	[{'x': 4, 'y': NULL}]	{5={'x': 6, 'y': NULL}}
+
+#===--------------------------------------------------------------------===#
+# Writes rejected when omitting the unknown fields leaves a container empty
+#===--------------------------------------------------------------------===#
+
+# Parquet keeps a value's nullness in the definition levels of the leaf columns below it, so a container left
+# without any leaf cannot be written
+
+# A struct whose only field is unknown; the int column keeps the table itself writable
+statement ok
+drop table if exists my_datalake.default.unknown_omitted_all_fields;
+
+statement ok
+create table my_datalake.default.unknown_omitted_all_fields (a int, s struct(only_unknown "NULL")) with ('format-version'='3');
+
+statement error
+insert into my_datalake.default.unknown_omitted_all_fields values (1, {'only_unknown': NULL});
+----
+Not implemented Error: Cannot write "s": a struct whose fields are all of type unknown has no data file representation
+
+# The same applies to a nested struct, even when its parent has fields left to write
+statement ok
+drop table if exists my_datalake.default.unknown_omitted_nested_all_fields;
+
+statement ok
+create table my_datalake.default.unknown_omitted_nested_all_fields (a int, s struct(kept int, nested struct(only_unknown "NULL"))) with ('format-version'='3');
+
+statement error
+insert into my_datalake.default.unknown_omitted_nested_all_fields values (1, {'kept': 2, 'nested': {'only_unknown': NULL}});
+----
+Not implemented Error: Cannot write "s.nested": a struct whose fields are all of type unknown has no data file representation
+
+# A list whose element is unknown
+statement ok
+drop table if exists my_datalake.default.unknown_omitted_list_element;
+
+statement ok
+create table my_datalake.default.unknown_omitted_list_element (a int, l "NULL"[]) with ('format-version'='3');
+
+statement error
+insert into my_datalake.default.unknown_omitted_list_element values (1, [NULL, NULL]);
+----
+Not implemented Error: Cannot write "l": a list element of type unknown has no data file representation
+
+# A map whose value is unknown
+statement ok
+drop table if exists my_datalake.default.unknown_omitted_map_value;
+
+statement ok
+create table my_datalake.default.unknown_omitted_map_value (a int, m map(varchar, "NULL")) with ('format-version'='3');
+
+statement error
+insert into my_datalake.default.unknown_omitted_map_value values (1, MAP {'key': NULL});
+----
+Not implemented Error: Cannot write "m": a map key or value of type unknown has no data file representation
+
+# CREATE TABLE AS resolves the layout from placeholder metadata, which only carries the column types
+statement ok
+drop table if exists my_datalake.default.unknown_omitted_ctas_nested;
+
+statement ok
+create table my_datalake.default.unknown_omitted_ctas_nested with ('format-version'='3') as
+select 1 as a, {'x': 2, 'y': NULL} as s;
+
+query II
+select a, s from my_datalake.default.unknown_omitted_ctas_nested;
+----
+1	{'x': 2, 'y': NULL}
+
+statement ok
+begin transaction
+
+statement ok
+set variable unknown_omitted_ctas_nested_files = (select list(file_path) from iceberg_metadata('my_datalake.default.unknown_omitted_ctas_nested') where manifest_content = 'DATA' and status <> 'DELETED');
+
+query III
+select name, num_children, type
+from parquet_schema(getvariable('unknown_omitted_ctas_nested_files'));
+----
+duckdb_schema	2	NULL
+a	NULL	INT32
+s	1	NULL
+x	NULL	INT32
+
+statement ok
+commit

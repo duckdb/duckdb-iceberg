@@ -432,9 +432,9 @@ static void ThrowIfColumnReferencedBySortOrder(const IcebergTableMetadata &table
 
 void IntroduceNewSchema(IcebergTable &updated_table, IcebergTransactionData &transaction_data,
                         shared_ptr<IcebergTableSchema> new_schema) {
-	auto new_schema_id = new_schema->schema_id;
-
 	auto &schemas = updated_table.table_metadata.GetSchemasMutable();
+	auto new_schema_id = static_cast<int32_t>(updated_table.GetMaxSchemaId() + 1);
+	new_schema->schema_id = new_schema_id;
 	auto &result_schema = schemas.AddSchemaOrGetExisting(std::move(new_schema));
 	if (result_schema.schema_id == new_schema_id) {
 		// Update the Table Metadata to have our new schema
@@ -510,7 +510,6 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 		auto &comment_info = info.Cast<SetColumnCommentInfo>();
 
 		auto new_schema = current_schema.Copy();
-		new_schema->schema_id++;
 
 		auto column_p = new_schema->GetMutableFromPath({comment_info.column_name}, nullptr);
 		if (!column_p) {
@@ -587,7 +586,6 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 		last_column_id = field_id - 1;
 
 		auto new_schema = current_schema.Copy();
-		new_schema->schema_id++;
 		new_schema->columns.push_back(std::move(new_iceberg_column));
 
 		IntroduceNewSchema(updated_table, transaction_data, new_schema);
@@ -641,7 +639,6 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 		auto &change_type_info = alter_table_info.Cast<ChangeColumnTypeInfo>();
 
 		auto new_schema = current_schema.Copy();
-		new_schema->schema_id++;
 
 		if (change_type_info.expression->GetExpressionType() != ExpressionType::OPERATOR_CAST) {
 			throw NotImplementedException("ALTER TYPE with a USING expression is not supported for Iceberg tables");
@@ -707,7 +704,6 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 		auto &drop_not_null_info = alter_table_info.Cast<DropNotNullInfo>();
 
 		auto new_schema = current_schema.Copy();
-		new_schema->schema_id++;
 
 		auto &column = ResolveColumn<DropNotNullInfo>(drop_not_null_info, new_schema);
 
@@ -722,7 +718,6 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 		auto &new_name = rename_info.new_name;
 
 		auto new_schema = current_schema.Copy();
-		new_schema->schema_id++;
 
 		auto column_p = new_schema->GetMutableFromPath({column_name}, nullptr);
 		if (!column_p) {
@@ -738,18 +733,7 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 		column.name = new_name.GetIdentifierName();
 		column.RewriteType();
 
-		auto new_schema_id = new_schema->schema_id;
-
-		auto &result_schema =
-		    updated_table.table_metadata.GetSchemasMutable().AddSchemaOrGetExisting(std::move(new_schema));
-		if (result_schema.schema_id == new_schema_id) {
-			// Update the Table Metadata to have our new schema
-			updated_table.CreateSchemaVersion(result_schema);
-			transaction_data.TableAddSchema(new_schema_id);
-		} else {
-			transaction_data.TableSetCurrentSchema(result_schema.schema_id);
-		}
-		updated_table.table_metadata.SetCurrentSchemaId(result_schema.schema_id);
+		IntroduceNewSchema(updated_table, transaction_data, new_schema);
 		return;
 	}
 	case AlterTableType::SET_TABLE_OPTIONS: {
@@ -826,7 +810,6 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 		auto &expression = set_default_info.expression;
 
 		auto new_schema = current_schema.Copy();
-		new_schema->schema_id++;
 
 		auto column_p = new_schema->GetMutableFromPath({column_name}, nullptr);
 		if (!column_p) {
@@ -839,18 +822,7 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 		auto default_constant_value = binder.Evaluate(expression.get(), column.type);
 		column.SetWriteDefault(default_constant_value, updated_table.table_metadata.iceberg_version);
 
-		auto new_schema_id = new_schema->schema_id;
-
-		auto &result_schema =
-		    updated_table.table_metadata.GetSchemasMutable().AddSchemaOrGetExisting(std::move(new_schema));
-		if (result_schema.schema_id == new_schema_id) {
-			// Update the Table Metadata to have our new schema
-			updated_table.CreateSchemaVersion(result_schema);
-			transaction_data.TableAddSchema(new_schema_id);
-		} else {
-			transaction_data.TableSetCurrentSchema(result_schema.schema_id);
-		}
-		updated_table.table_metadata.SetCurrentSchemaId(result_schema.schema_id);
+		IntroduceNewSchema(updated_table, transaction_data, new_schema);
 		return;
 	}
 	case AlterTableType::ADD_FIELD: {
@@ -860,7 +832,6 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 		auto &if_field_not_exists = add_field_info.if_field_not_exists;
 
 		auto new_schema = current_schema.Copy();
-		new_schema->schema_id++;
 
 		auto parent_path = column_path;
 		column_path.emplace_back(new_field.GetName());
@@ -914,7 +885,6 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 		auto &new_name = rename_field_info.new_name;
 
 		auto new_schema = current_schema.Copy();
-		new_schema->schema_id++;
 
 		auto column_p = new_schema->GetMutableFromPath(column_path, nullptr);
 		if (!column_p) {
@@ -953,7 +923,6 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 		auto &if_column_exists = remove_field_info.if_column_exists;
 
 		auto new_schema = current_schema.Copy();
-		new_schema->schema_id++;
 
 		D_ASSERT(column_path.size() > 1);
 		auto parent_path = column_path;
