@@ -3,10 +3,27 @@
 #include "core/expression/iceberg_value.hpp"
 #include "duckdb/common/exception.hpp"
 #include "duckdb/common/types/geometry.hpp"
+#include "duckdb/logging/logger.hpp"
+#include "duckdb/main/client_context.hpp"
 #include "duckdb/storage/statistics/geometry_stats.hpp"
+#include "iceberg_logging.hpp"
 #include "utf8proc_wrapper.hpp"
 
 namespace duckdb {
+
+namespace {
+
+bool OmitInvalidUtf8VarcharBound(ClientContext &context, const string_t &blob, const LogicalType &type,
+                                 const string &name, const char *bound_kind) {
+	if (type.id() != LogicalTypeId::VARCHAR || Utf8Proc::IsValid(blob.GetData(), blob.GetSize())) {
+		return false;
+	}
+	// Truncated UTF-8 string metrics are not a safe zonemap bound. Omit them rather than failing the scan.
+	DUCKDB_LOG(context, IcebergLogType, "Omitting invalid UTF-8 %s bound for column '%s'", bound_kind, name);
+	return true;
+}
+
+} // namespace
 
 void IcebergPredicateStats::SetLowerBound(const Value &new_lower_bound) {
 	lower_bound = new_lower_bound;
@@ -52,8 +69,9 @@ static shared_ptr<BaseStatistics> BuildGeometryStats(const Value &lower_bound, c
 	return stats;
 }
 
-IcebergPredicateStats IcebergPredicateStats::DeserializeBounds(const Value &lower_bound, const Value &upper_bound,
-                                                               const string &name, const LogicalType &type) {
+IcebergPredicateStats IcebergPredicateStats::DeserializeBounds(ClientContext &context, const Value &lower_bound,
+                                                               const Value &upper_bound, const string &name,
+                                                               const LogicalType &type) {
 	IcebergPredicateStats result;
 	if (type.id() == LogicalTypeId::GEOMETRY) {
 		result.geometry_stats = BuildGeometryStats(lower_bound, upper_bound, type);
@@ -67,11 +85,7 @@ IcebergPredicateStats IcebergPredicateStats::DeserializeBounds(const Value &lowe
 	if (!lower_bound.IsNull()) {
 		D_ASSERT(lower_bound.type().id() == LogicalTypeId::BLOB);
 		auto blob = lower_bound.GetValueUnsafe<string_t>();
-		// Truncated UTF-8 string metrics are not a safe zonemap bound (especially
-		// upper bounds). Omit them rather than failing the whole scan / stats table.
-		if (type.id() == LogicalTypeId::VARCHAR && !Utf8Proc::IsValid(blob.GetData(), blob.GetSize())) {
-			// skip
-		} else {
+		if (!OmitInvalidUtf8VarcharBound(context, blob, type, name, "lower")) {
 			auto deserialized = IcebergValue::DeserializeValue(blob, type);
 			if (deserialized.HasError()) {
 				throw InvalidConfigurationException("Column %s lower bound deserialization failed: %s", name,
@@ -83,9 +97,7 @@ IcebergPredicateStats IcebergPredicateStats::DeserializeBounds(const Value &lowe
 	if (!upper_bound.IsNull()) {
 		D_ASSERT(upper_bound.type().id() == LogicalTypeId::BLOB);
 		auto blob = upper_bound.GetValueUnsafe<string_t>();
-		if (type.id() == LogicalTypeId::VARCHAR && !Utf8Proc::IsValid(blob.GetData(), blob.GetSize())) {
-			// skip
-		} else {
+		if (!OmitInvalidUtf8VarcharBound(context, blob, type, name, "upper")) {
 			auto deserialized = IcebergValue::DeserializeValue(blob, type);
 			if (deserialized.HasError()) {
 				throw InvalidConfigurationException("Column %s upper bound deserialization failed: %s", name,

@@ -225,8 +225,8 @@ static void IcebergColumnStatsFunction(ClientContext &context, TableFunctionInpu
 						upper_bound_str = Value().ToString();
 					}
 				} else {
-					auto stats =
-					    IcebergPredicateStats::DeserializeBounds(lower_bound, upper_bound, column.name, column.type);
+					auto stats = IcebergPredicateStats::DeserializeBounds(context, lower_bound, upper_bound,
+					                                                      column.name, column.type);
 					//! GEOMETRY bounds are a bounding box (no scalar min/max), so lower_bound /
 					//! upper_bound carry the box serialized as a JSON object instead of a scalar.
 					bool is_geometry = column.type.id() == LogicalTypeId::GEOMETRY && stats.geometry_stats;

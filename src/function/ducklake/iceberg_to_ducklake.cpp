@@ -301,7 +301,7 @@ public:
 	}
 
 public:
-	vector<string> CreateSQLStatements() {
+	vector<string> CreateSQLStatements(ClientContext &context) {
 		//! Order to process in:
 		// - snapshot + schema_versions
 		// - schema
@@ -491,8 +491,8 @@ public:
 					}
 
 					//! Transform the stats stored in the iceberg metadata
-					auto stats = IcebergPredicateStats::DeserializeBounds(lower_bound, upper_bound, column.column_name,
-					                                                      logical_type);
+					auto stats = IcebergPredicateStats::DeserializeBounds(context, lower_bound, upper_bound,
+					                                                      column.column_name, logical_type);
 					auto null_counts_it = iceberg_data_file.null_value_counts.find(column.column_id);
 					if (null_counts_it != iceberg_data_file.null_value_counts.end()) {
 						null_count = null_counts_it->second;
@@ -505,8 +505,12 @@ public:
 					}
 
 					auto contains_nan = stats.has_nan ? "true" : "false";
-					auto min_value = stats.lower_bound->IsNull() ? "NULL" : "'" + stats.lower_bound->ToString() + "'";
-					auto max_value = stats.upper_bound->IsNull() ? "NULL" : "'" + stats.upper_bound->ToString() + "'";
+					auto min_value = !stats.lower_bound || stats.lower_bound->IsNull()
+					                     ? "NULL"
+					                     : "'" + stats.lower_bound->ToString() + "'";
+					auto max_value = !stats.upper_bound || stats.upper_bound->IsNull()
+					                     ? "NULL"
+					                     : "'" + stats.upper_bound->ToString() + "'";
 
 					auto insert_statement = StringUtil::Format(FILE_COLUMN_STATS_SQL,
 					                                           // data_file_id
@@ -841,7 +845,7 @@ static unique_ptr<FunctionData> IcebergToDuckLakeBind(ClientContext &context, Ta
 
 	ret->AssignSchemaBeginSnapshots();
 
-	ret->sql_statements = ret->CreateSQLStatements();
+	ret->sql_statements = ret->CreateSQLStatements(context);
 
 	return_types.emplace_back(LogicalType::BIGINT);
 	names.emplace_back("count");
