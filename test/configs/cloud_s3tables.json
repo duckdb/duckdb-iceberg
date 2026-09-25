@@ -144,6 +144,30 @@
         "test/sql/local/catalog_test_config_setup/catalog_agnostic/delete/test_snapshot_summary_delete_metrics.test",
         "test/sql/local/catalog_test_config_setup/catalog_agnostic/insert/test_snapshot_summary_file_size_metrics.test"
       ]
+    },
+    {
+      "reason": "maintenance procedures (rewrite_data_files, rollback_to_snapshot) are not tested against S3 Tables",
+      "paths": [
+        "test/sql/local/catalog_test_config_setup/catalog_agnostic/maintenance/rewrite_data_files_all_types.test",
+        "test/sql/local/catalog_test_config_setup/catalog_agnostic/maintenance/rewrite_data_files_column_stats.test",
+        "test/sql/local/catalog_test_config_setup/catalog_agnostic/maintenance/rewrite_data_files_commit.test",
+        "test/sql/local/catalog_test_config_setup/catalog_agnostic/maintenance/rewrite_data_files_enough_bytes.test",
+        "test/sql/local/catalog_test_config_setup/catalog_agnostic/maintenance/rewrite_data_files_file_size_rotation.test",
+        "test/sql/local/catalog_test_config_setup/catalog_agnostic/maintenance/rewrite_data_files_max_files_to_rewrite.test",
+        "test/sql/local/catalog_test_config_setup/catalog_agnostic/maintenance/rewrite_data_files_min_max_file_size.test",
+        "test/sql/local/catalog_test_config_setup/catalog_agnostic/maintenance/rewrite_data_files_mor_position.test",
+        "test/sql/local/catalog_test_config_setup/catalog_agnostic/maintenance/rewrite_data_files_partitioned.test",
+        "test/sql/local/catalog_test_config_setup/catalog_agnostic/maintenance/rewrite_data_files_plan_shape.test",
+        "test/sql/local/catalog_test_config_setup/catalog_agnostic/maintenance/rewrite_data_files_select.test",
+        "test/sql/local/catalog_test_config_setup/catalog_agnostic/maintenance/rewrite_data_files_sequence_pin.test",
+        "test/sql/local/catalog_test_config_setup/catalog_agnostic/maintenance/rewrite_data_files_sort_order.test",
+        "test/sql/local/catalog_test_config_setup/catalog_agnostic/maintenance/rewrite_data_files_spark_mor_residual_deletes.test",
+        "test/sql/local/catalog_test_config_setup/catalog_agnostic/maintenance/rewrite_data_files_target_file_size.test",
+        "test/sql/local/catalog_test_config_setup/catalog_agnostic/maintenance/rewrite_data_files_temporal_partitions.test",
+        "test/sql/local/catalog_test_config_setup/catalog_agnostic/maintenance/rollback_to_snapshot.test",
+        "test/sql/local/catalog_test_config_setup/catalog_agnostic/maintenance/rollback_to_snapshot_partition_transforms.test",
+        "test/sql/local/catalog_test_config_setup/catalog_agnostic/maintenance/rollback_to_snapshot_schema_retained.test"
+      ]
     }
   ]
 }
