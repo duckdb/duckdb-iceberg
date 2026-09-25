@@ -4,10 +4,24 @@
 
 require-env CATALOG_TEST_CONFIG_SETUP
 
-require-env DUCKDB_ICEBERG_HAVE_GENERATED_DATA
-
 include test/sql/init_requires
 
+# Reset this small fixture for each test.
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.column_doc_comment;
+
+statement ok
+CREATE TABLE my_datalake.default.column_doc_comment (id BIGINT, population BIGINT, name VARCHAR);
+
+statement ok
+COMMENT ON COLUMN my_datalake.default.column_doc_comment.id IS 'Primary identifier';
+
+statement ok
+COMMENT ON COLUMN my_datalake.default.column_doc_comment.population IS 'Resident count, 2024 census';
+
+statement ok
+INSERT INTO my_datalake.default.column_doc_comment VALUES (1, 1000, 'alpha'), (2, 2000, 'beta');
 
 statement ok
 set enable_logging=true

@@ -1,0 +1,10 @@
+# Reset this small fixture for each test.
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.partitioned_smoke;
+
+statement ok
+CREATE TABLE my_datalake.default.partitioned_smoke (l_shipmode VARCHAR, l_orderkey BIGINT) PARTITIONED BY (l_shipmode);
+
+statement ok
+INSERT INTO my_datalake.default.partitioned_smoke VALUES ('AIR', 1), ('SHIP', 2);

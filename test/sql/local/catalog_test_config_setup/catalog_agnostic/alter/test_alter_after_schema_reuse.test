@@ -1,0 +1,119 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/alter/test_alter_after_schema_reuse.test
+# group: [alter]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+include test/sql/init_requires
+
+statement ok
+CREATE SCHEMA IF NOT EXISTS my_datalake.default;
+
+statement ok
+drop table if exists my_datalake.default.alter_after_schema_reuse;
+
+# schema 0: (id, label)
+statement ok
+CREATE TABLE my_datalake.default.alter_after_schema_reuse(id INTEGER, label VARCHAR);
+
+# schema 1: (id, label, id2)
+statement ok
+ALTER TABLE my_datalake.default.alter_after_schema_reuse ADD COLUMN id2 INTEGER;
+
+query III
+select * from my_datalake.default.alter_after_schema_reuse;
+----
+
+# Reuses schema 0, the current schema id is now 0
+statement ok
+ALTER TABLE my_datalake.default.alter_after_schema_reuse DROP COLUMN id2;
+
+query II
+select * from my_datalake.default.alter_after_schema_reuse;
+----
+
+query II
+SELECT metadata."current-schema-id"::INTEGER, len(metadata.schemas::VARIANT[])
+FROM iceberg_load_table_response(my_datalake.default.alter_after_schema_reuse);
+----
+0	2
+
+# Must allocate schema id 2, 'current + 1' would collide with schema 1
+statement ok
+ALTER TABLE my_datalake.default.alter_after_schema_reuse ADD COLUMN id2 INTEGER;
+
+query III
+select * from my_datalake.default.alter_after_schema_reuse;
+----
+
+query II
+SELECT metadata."current-schema-id"::INTEGER, len(metadata.schemas::VARIANT[])
+FROM iceberg_load_table_response(my_datalake.default.alter_after_schema_reuse);
+----
+2	3
+
+statement ok
+insert into my_datalake.default.alter_after_schema_reuse VALUES (1, 'a', 10);
+
+query III
+select * from my_datalake.default.alter_after_schema_reuse;
+----
+1	a	10
+
+# Renaming back reuses the earlier schema
+statement ok
+ALTER TABLE my_datalake.default.alter_after_schema_reuse RENAME COLUMN id2 TO id3;
+
+statement ok
+ALTER TABLE my_datalake.default.alter_after_schema_reuse RENAME COLUMN id3 TO id2;
+
+statement ok
+ALTER TABLE my_datalake.default.alter_after_schema_reuse ADD COLUMN id4 INTEGER;
+
+query IIII
+select * from my_datalake.default.alter_after_schema_reuse;
+----
+1	a	10	NULL
+
+# Same within a single transaction
+statement ok
+begin transaction;
+
+statement ok
+ALTER TABLE my_datalake.default.alter_after_schema_reuse DROP COLUMN id4;
+
+query III
+select * from my_datalake.default.alter_after_schema_reuse;
+----
+1	a	10
+
+statement ok
+ALTER TABLE my_datalake.default.alter_after_schema_reuse ADD COLUMN id4 INTEGER;
+
+query IIII
+select * from my_datalake.default.alter_after_schema_reuse;
+----
+1	a	10	NULL
+
+statement ok
+commit;
+
+query IIII
+select * from my_datalake.default.alter_after_schema_reuse;
+----
+1	a	10	NULL
+
+# Schemas so far: 0 (id, label), 1 (+id2), 2 (+id2 re-added), 3 (id2 renamed), 4 (+id4), 5 (+id4 re-added)
+query II
+SELECT metadata."current-schema-id"::INTEGER, len(metadata.schemas::VARIANT[])
+FROM iceberg_load_table_response(my_datalake.default.alter_after_schema_reuse);
+----
+5	6
+
+statement ok
+insert into my_datalake.default.alter_after_schema_reuse VALUES (2, 'b', 20, 30);
+
+query IIII
+select * from my_datalake.default.alter_after_schema_reuse order by id;
+----
+1	a	10	NULL
+2	b	20	30

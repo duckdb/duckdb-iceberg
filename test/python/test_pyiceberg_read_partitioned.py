@@ -4,7 +4,7 @@ import datetime
 import uuid
 from decimal import Decimal
 
-from conftest import *
+from conftest import capability_param
 
 pyice = pytest.importorskip("pyiceberg")
 pa = pytest.importorskip("pyarrow")
@@ -152,6 +152,7 @@ TIMESTAMPTZ_ROWS = [
 
 # All of these tables are generated together, so all of them need V3 as a result
 @pytest.mark.requires_capabilities("format_v3")
+@pytest.mark.duckdb_setup_tests("catalog_interop/other_engines/test_create_partitioned_tables.test", once=True)
 class TestPyIcebergReadPartitioned:
     # ------------------------------------------------------------------ INT
     @pytest.mark.parametrize(

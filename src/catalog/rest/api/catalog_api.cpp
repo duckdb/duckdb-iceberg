@@ -313,9 +313,13 @@ IcebergListTablesResult IcebergListTablesRequest::Execute(ClientContext &context
 		}
 		auto response = catalog.auth_handler->Request(RequestType::GET_REQUEST, context, url_builder, headers);
 		if (!response->Success()) {
+			if (response->status == HTTPStatusCode::NotFound_404) {
+				// A missing namespace has no entries. Native view binding may probe
+				// the catalog's default namespace before trying replacement scans.
+				return vector<rest_api_objects::TableIdentifier>();
+			}
 			if (response->status == HTTPStatusCode::Forbidden_403 ||
-			    response->status == HTTPStatusCode::Unauthorized_401 ||
-			    response->status == HTTPStatusCode::NotFound_404) {
+			    response->status == HTTPStatusCode::Unauthorized_401) {
 				// when listing tables, if a user is not allowed to list a schema for one of the error reasons above
 				// we log a warning to notify the user. We do not error, otherwise the user won't be able to see any
 				// results.
@@ -606,6 +610,143 @@ rest_api_objects::LoadTableResult IRCAPI::CommitNewTable(ClientContext &context,
 		throw;
 	} catch (const std::exception &e) {
 		throw InvalidConfigurationException("Request to '%s' failed: %s", url_builder.GetURLEncoded(), e.what());
+	}
+}
+
+// ─── View operations ─────────────────────────────────────────────────────────
+
+IcebergListViewsResult IRCAPI::GetViews(ClientContext &context, IcebergCatalog &catalog,
+                                        const IcebergSchemaEntry &schema) {
+	return IcebergListViewsRequest(schema.namespace_items).Execute(context, catalog);
+}
+
+IcebergListViewsRequest::IcebergListViewsRequest(vector<string> namespace_items)
+    : namespace_items(std::move(namespace_items)) {
+}
+
+IcebergListViewsResult IcebergListViewsRequest::Execute(ClientContext &context, IcebergCatalog &catalog) const {
+	vector<rest_api_objects::TableIdentifier> all_identifiers;
+	string page_token;
+
+	do {
+		auto url_builder = catalog.GetBaseUrl();
+		url_builder.AddPrefixComponents(catalog.prefix);
+		url_builder.AddPathComponent(IRCPathComponent::RegularComponent("namespaces"));
+		url_builder.AddPathComponent(
+		    IRCPathComponent::NamespaceComponent(namespace_items, catalog.namespace_separator));
+		url_builder.AddPathComponent(IRCPathComponent::RegularComponent("views"));
+		if (!page_token.empty()) {
+			url_builder.SetParam("pageToken", IRCPathComponent::RegularComponent(page_token));
+		}
+
+		HTTPHeaders headers(*context.db);
+		auto response = catalog.auth_handler->Request(RequestType::GET_REQUEST, context, url_builder, headers);
+		if (!response->Success()) {
+			if (response->status == HTTPStatusCode::NotFound_404) {
+				// A missing namespace has no entries. Native view binding may probe
+				// the catalog's default namespace before trying replacement scans.
+				return vector<rest_api_objects::TableIdentifier>();
+			}
+			if (response->status == HTTPStatusCode::Forbidden_403 ||
+			    response->status == HTTPStatusCode::Unauthorized_401) {
+				DUCKDB_LOG_WARNING(context, "GET %s returned status code %s", url_builder.GetURLEncoded(),
+				                   EnumUtil::ToString(response->status));
+				return nullopt;
+			}
+			auto url = url_builder.GetURLEncoded();
+			ThrowException(url, *response, "GET");
+		}
+
+		auto doc = ICUtils::APIResultToDoc(response->body);
+		auto root = doc->GetRoot();
+		auto list_response = rest_api_objects::ListTablesResponse::FromJSON(root);
+
+		if (list_response.identifiers) {
+			all_identifiers.insert(all_identifiers.end(), std::make_move_iterator(list_response.identifiers->begin()),
+			                       std::make_move_iterator(list_response.identifiers->end()));
+		}
+
+		if (list_response.next_page_token) {
+			page_token = list_response.next_page_token->value;
+		} else {
+			page_token.clear();
+		}
+	} while (!page_token.empty());
+
+	return all_identifiers;
+}
+
+IcebergLoadViewResult IRCAPI::GetView(ClientContext &context, IcebergCatalog &catalog, const IcebergSchemaEntry &schema,
+                                      const string &view_name) {
+	return IcebergLoadViewRequest(schema.namespace_items, view_name).Execute(context, catalog);
+}
+
+IcebergLoadViewRequest::IcebergLoadViewRequest(vector<string> namespace_items, string view_name)
+    : namespace_items(std::move(namespace_items)), view_name(std::move(view_name)) {
+}
+
+IcebergLoadViewResult IcebergLoadViewRequest::Execute(ClientContext &context, IcebergCatalog &catalog) const {
+	auto ret = IcebergLoadViewResult();
+
+	auto url_builder = catalog.GetBaseUrl();
+	url_builder.AddPrefixComponents(catalog.prefix);
+	url_builder.AddPathComponent(IRCPathComponent::RegularComponent("namespaces"));
+	url_builder.AddPathComponent(IRCPathComponent::NamespaceComponent(namespace_items, catalog.namespace_separator));
+	url_builder.AddPathComponent(IRCPathComponent::RegularComponent("views"));
+	url_builder.AddPathComponent(IRCPathComponent::RegularComponent(view_name));
+
+	HTTPHeaders headers(*context.db);
+	auto response = catalog.auth_handler->Request(RequestType::GET_REQUEST, context, url_builder, headers);
+	ret.status_ = response->status;
+	if (response->status != HTTPStatusCode::OK_200) {
+		unique_ptr<JSONDocument> out_doc;
+		auto error_obj = ICUtils::GetErrorMessage(response->body, out_doc);
+		if (!error_obj.IsValid()) {
+			throw InvalidConfigurationException(response->body);
+		}
+		ret.error_ = rest_api_objects::IcebergErrorResponse::FromJSON(error_obj);
+		return ret;
+	}
+	auto doc = ICUtils::APIResultToDoc(response->body);
+	auto root = doc->GetRoot();
+	ret.result_ = make_uniq<const rest_api_objects::LoadViewResult>(rest_api_objects::LoadViewResult::FromJSON(root));
+	return ret;
+}
+
+void IRCAPI::CommitNewView(ClientContext &context, IcebergCatalog &catalog, const IcebergSchemaEntry &schema,
+                           const string &json_body) {
+	auto url_builder = catalog.GetBaseUrl();
+	url_builder.AddPrefixComponents(catalog.prefix);
+	url_builder.AddPathComponent(IRCPathComponent::RegularComponent("namespaces"));
+	url_builder.AddPathComponent(
+	    IRCPathComponent::NamespaceComponent(schema.namespace_items, catalog.namespace_separator));
+	url_builder.AddPathComponent(IRCPathComponent::RegularComponent("views"));
+
+	HTTPHeaders headers(*context.db);
+	headers.Insert("Content-Type", "application/json");
+	auto response = catalog.auth_handler->Request(RequestType::POST_REQUEST, context, url_builder, headers, json_body);
+	if (response->status != HTTPStatusCode::OK_200) {
+		throw InvalidConfigurationException(
+		    "Request to '%s' returned a non-200 status code (%s), with reason: %s, body: %s",
+		    url_builder.GetURLEncoded(), EnumUtil::ToString(response->status), response->reason, response->body);
+	}
+}
+
+void IRCAPI::CommitViewDelete(ClientContext &context, IcebergCatalog &catalog, const vector<string> &schema,
+                              const string &view_name) {
+	auto url_builder = catalog.GetBaseUrl();
+	url_builder.AddPrefixComponents(catalog.prefix);
+	url_builder.AddPathComponent(IRCPathComponent::RegularComponent("namespaces"));
+	url_builder.AddPathComponent(IRCPathComponent::NamespaceComponent(schema, catalog.namespace_separator));
+	url_builder.AddPathComponent(IRCPathComponent::RegularComponent("views"));
+	url_builder.AddPathComponent(IRCPathComponent::RegularComponent(view_name));
+
+	HTTPHeaders headers(*context.db);
+	auto response = catalog.auth_handler->Request(RequestType::DELETE_REQUEST, context, url_builder, headers);
+	if (response->status != HTTPStatusCode::NoContent_204 && response->status != HTTPStatusCode::OK_200) {
+		throw InvalidConfigurationException(
+		    "Request to '%s' returned a non-200 status code (%s), with reason: %s, body: %s",
+		    url_builder.GetURLEncoded(), EnumUtil::ToString(response->status), response->reason, response->body);
 	}
 }
 

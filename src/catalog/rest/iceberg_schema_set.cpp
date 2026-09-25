@@ -6,7 +6,7 @@
 
 #include "catalog/rest/api/catalog_api.hpp"
 #include "catalog/rest/iceberg_catalog.hpp"
-#include "catalog/rest/iceberg_request_task.hpp"
+#include "catalog/rest/iceberg_request_executor.hpp"
 #include "catalog/rest/transaction/iceberg_transaction.hpp"
 
 namespace duckdb {
@@ -153,13 +153,10 @@ void IcebergSchemaSet::LoadEntriesInternal(ClientContext &context) {
 	if (schema_listed) {
 		return;
 	}
-	// Drain before publishing entries or marking the transaction's listing complete.
-	IcebergRequestResult<IcebergListSchemasResult> result;
-	TaskExecutor executor(context, TaskSchedulerType::ASYNC);
-	executor.ScheduleTask(make_uniq<IcebergRequestTask<IcebergListSchemasRequest>>(
-	    executor, context, ic_catalog, IcebergListSchemasRequest({}), result));
-	auto schemas = result.WaitAndTakeResult(context, executor);
-	executor.WorkOnTasks();
+	// The local executor drains on scope exit; the task retains its result storage until it finishes.
+	IcebergRequestExecutor executor(context, ic_catalog);
+	auto result = executor.Schedule(IcebergListSchemasRequest({}));
+	auto schemas = executor.WaitAndTakeResult(*result);
 	if (context.IsInterrupted()) {
 		throw InterruptException();
 	}

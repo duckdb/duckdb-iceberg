@@ -1,0 +1,281 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/transactions/test_view_transactions.test
+# description: view DDL visibility, rollback, replacement, and schema isolation
+# group: [transactions]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require iceberg
+
+require httpfs
+
+set ignore_error_messages
+
+statement ok
+create schema if not exists my_datalake.view_txn_a;
+
+statement ok
+create schema if not exists my_datalake.view_txn_b;
+
+statement ok
+drop view if exists my_datalake.view_txn_a.v;
+
+statement ok
+drop view if exists my_datalake.view_txn_b.v;
+
+# A staged view is visible only to its creating transaction.
+statement ok writer
+begin;
+
+statement ok writer
+create view my_datalake.view_txn_a.v as select 11 as n;
+
+query I writer
+select n from my_datalake.view_txn_a.v;
+----
+11
+
+query I writer
+select count(*) from duckdb_views() where database_name = 'my_datalake' and schema_name = 'view_txn_a' and view_name = 'v';
+----
+1
+
+statement error reader
+select * from my_datalake.view_txn_a.v;
+----
+<REGEX>:.*does not exist.*
+
+query I reader
+select count(*) from duckdb_views() where database_name = 'my_datalake' and schema_name = 'view_txn_a' and view_name = 'v';
+----
+0
+
+statement ok writer
+rollback;
+
+# Rollback must discard both the staged create and its cached catalog entry.
+statement error writer
+select * from my_datalake.view_txn_a.v;
+----
+<REGEX>:.*does not exist.*
+
+query I
+select count(*) from duckdb_views() where database_name = 'my_datalake' and schema_name = 'view_txn_a' and view_name = 'v';
+----
+0
+
+statement ok
+create view my_datalake.view_txn_a.v as select 22 as n;
+
+# An uncommitted drop must not hide the committed view from another connection.
+statement ok writer
+begin;
+
+statement ok writer
+drop view my_datalake.view_txn_a.v;
+
+statement error writer
+select * from my_datalake.view_txn_a.v;
+----
+<REGEX>:.*does not exist.*
+
+query I reader
+select n from my_datalake.view_txn_a.v;
+----
+22
+
+statement ok writer
+rollback;
+
+query I writer
+select n from my_datalake.view_txn_a.v;
+----
+22
+
+# Explicit drop/create must resolve the new entry inside the same transaction.
+statement ok writer
+begin;
+
+statement ok writer
+drop view my_datalake.view_txn_a.v;
+
+statement ok writer
+create view my_datalake.view_txn_a.v as select 33 as n;
+
+query I writer
+select n from my_datalake.view_txn_a.v;
+----
+33
+
+query I reader
+select n from my_datalake.view_txn_a.v;
+----
+22
+
+# A replacement requires two REST requests: reject it before deleting the original.
+statement error writer
+commit;
+----
+cannot commit view changes atomically
+
+query I reader
+select n from my_datalake.view_txn_a.v;
+----
+22
+
+# Creating and dropping a new view in one transaction must leave no cached entry.
+statement ok writer
+begin;
+
+statement ok writer
+create view my_datalake.view_txn_b.v as select 44 as n;
+
+statement ok writer
+drop view my_datalake.view_txn_b.v;
+
+statement error writer
+select * from my_datalake.view_txn_b.v;
+----
+<REGEX>:.*does not exist.*
+
+statement ok writer
+commit;
+
+statement error reader
+select * from my_datalake.view_txn_b.v;
+----
+<REGEX>:.*does not exist.*
+
+# Staged views with identical names in different schemas must not share entries.
+statement ok
+drop view my_datalake.view_txn_a.v;
+
+statement ok writer
+begin;
+
+statement ok writer
+create view my_datalake.view_txn_a.v as select 55 as n;
+
+statement ok writer
+create view my_datalake.view_txn_b.v as select 66 as n;
+
+query II writer
+select schema_name, count(*) from duckdb_views() where database_name = 'my_datalake' and schema_name in ('view_txn_a', 'view_txn_b') and view_name = 'v' group by schema_name order by schema_name;
+----
+view_txn_a	1
+view_txn_b	1
+
+query I writer
+select n from my_datalake.view_txn_a.v union all select n from my_datalake.view_txn_b.v order by n;
+----
+55
+66
+
+statement error writer
+commit;
+----
+cannot commit view changes atomically
+
+query I reader
+select count(*) from duckdb_views() where database_name = 'my_datalake' and schema_name in ('view_txn_a', 'view_txn_b') and view_name = 'v';
+----
+0
+
+statement ok
+create view my_datalake.view_txn_a.v as select 55 as n;
+
+statement ok
+create view my_datalake.view_txn_b.v as select 66 as n;
+
+# Table writes must not commit before a mixed view operation fails.
+statement ok
+create table my_datalake.view_txn_a.t (n int);
+
+statement ok writer
+begin;
+
+statement ok writer
+insert into my_datalake.view_txn_a.t values (7);
+
+statement ok writer
+drop view my_datalake.view_txn_a.v;
+
+statement error writer
+commit;
+----
+cannot commit view changes atomically
+
+query I reader
+select count(*) from my_datalake.view_txn_a.t;
+----
+0
+
+query I reader
+select n from my_datalake.view_txn_a.v;
+----
+55
+
+# The guard applies regardless of statement order, including staged table creates.
+statement ok writer
+begin;
+
+statement ok writer
+create view my_datalake.view_txn_a.new_v as select 8;
+
+statement ok writer
+create table my_datalake.view_txn_a.new_t (n int);
+
+statement error writer
+commit;
+----
+cannot commit view changes atomically
+
+statement error reader
+select * from my_datalake.view_txn_a.new_t;
+----
+does not exist
+
+statement error reader
+select * from my_datalake.view_txn_a.new_v;
+----
+does not exist
+
+statement ok
+drop table my_datalake.view_txn_a.t;
+
+# A committed drop must also be visible through a connection that cached the view.
+statement ok writer
+drop view my_datalake.view_txn_a.v;
+
+statement error reader
+select * from my_datalake.view_txn_a.v;
+----
+<REGEX>:.*does not exist.*
+
+statement ok
+drop view my_datalake.view_txn_b.v;
+
+statement ok
+drop schema my_datalake.view_txn_a;
+
+statement ok
+drop schema my_datalake.view_txn_b;
+
+# A staged namespace must not be created before a rejected view commit.
+statement ok writer
+begin;
+
+statement ok writer
+create schema my_datalake.view_txn_uncommitted;
+
+statement ok writer
+create view my_datalake.view_txn_uncommitted.v as select 1;
+
+statement error writer
+commit;
+----
+cannot commit view changes atomically
+
+query I reader
+select count(*) from duckdb_schemas() where database_name = 'my_datalake' and schema_name = 'view_txn_uncommitted';
+----
+0

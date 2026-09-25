@@ -6,6 +6,15 @@ require-env CATALOG_TEST_CONFIG_SETUP
 
 include test/sql/init_requires
 
+# Reset this small fixture for each test.
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.refresh_second;
+
+statement ok
+CREATE TABLE my_datalake.default.refresh_second AS SELECT 42 AS id;
+
+include test/sql/local/catalog_test_config_setup/catalog_agnostic/setup/table_unpartitioned.test_setup
 
 statement ok
 CALL enable_logging('HTTP');
@@ -25,19 +34,19 @@ statement ok
 select * from my_datalake.default.table_unpartitioned order by all;
 
 statement ok
-select * from my_datalake.default.table_more_deletes order by all;
+select * from my_datalake.default.refresh_second order by all;
 
 query II
 SELECT request.url, response.reason FROM duckdb_logs_parsed('HTTP') WHERE request.type='GET' AND (request.url).contains('/v1') order by timestamp
 ----
 <REGEX>:.*v1/namespaces/default/tables/table_unpartitioned	OK
-<REGEX>:.*v1/namespaces/default/tables/table_more_deletes	OK
+<REGEX>:.*v1/namespaces/default/tables/refresh_second	OK
 
 statement ok
 CALL truncate_duckdb_logs();
 
 statement ok
-select * from my_datalake.default.table_more_deletes order by all;
+select * from my_datalake.default.refresh_second order by all;
 
 # No extra logs are created because all the metadata was already cached
 query II
@@ -50,15 +59,15 @@ commit
 # Now query the same table twice outside of a transaction
 
 statement ok
-select * from my_datalake.default.table_more_deletes order by all;
+select * from my_datalake.default.refresh_second order by all;
 
 statement ok
-select * from my_datalake.default.table_more_deletes order by all;
+select * from my_datalake.default.refresh_second order by all;
 
 # The catalog is hit every time, to get a potential refresh of the state of the schemas/tables in it
 
 query II
 SELECT request.url, response.reason FROM duckdb_logs_parsed('HTTP') WHERE request.type='GET' AND (request.url).starts_with('http://127.0.0.1') order by timestamp
 ----
-<REGEX>:.*v1/namespaces/default/tables/table_more_deletes	OK
-<REGEX>:.*v1/namespaces/default/tables/table_more_deletes	OK
+<REGEX>:.*v1/namespaces/default/tables/refresh_second	OK
+<REGEX>:.*v1/namespaces/default/tables/refresh_second	OK

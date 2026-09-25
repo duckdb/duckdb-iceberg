@@ -6,32 +6,85 @@ require-env CATALOG_TEST_CONFIG_SETUP
 
 include test/sql/init_requires
 
+# Immutable SF1 fixture. Suffixed table names keep this independent of other
+# tables in default. Change the suffix when the fixture definition changes.
 require tpch
 
+# foreach needs a nonempty list; continue skips the expensive block when all
+# tables exist. Missing tables are created with CTAS so ordinary successful
+# setup never leaves an empty table awaiting a separate INSERT.
+statement ok
+SET VARIABLE tpch_missing = (
+    SELECT [count(*) > 0]
+    FROM (VALUES ('customer'), ('lineitem'), ('nation'), ('orders'),
+                 ('part'), ('partsupp'), ('region'), ('supplier')) AS expected(name)
+    WHERE NOT EXISTS (
+        SELECT 1 FROM information_schema.tables
+        WHERE table_catalog = 'my_datalake' AND table_schema = 'default'
+          AND table_name = expected.name || '_tpch_sf1'
+    )
+);
+
+foreach missing <variable:tpch_missing>
+
+onlyif missing=false
+continue
 
 statement ok
-create view customer as select * from my_datalake.default.customer;
+CALL dbgen(sf=1, suffix='_tpch_sf1');
+
+foreach table customer lineitem nation orders part partsupp region supplier
 
 statement ok
-create view lineitem as select * from my_datalake.default.lineitem;
+SET VARIABLE tpch_exists = (
+    SELECT [count(*) > 0] FROM information_schema.tables
+    WHERE table_catalog = 'my_datalake' AND table_schema = 'default' AND table_name = '{table}_tpch_sf1'
+);
+
+foreach exists <variable:tpch_exists>
+
+onlyif exists=true
+continue
 
 statement ok
-create view nation as select * from my_datalake.default.nation;
+CREATE TABLE my_datalake.default.{table}_tpch_sf1 AS SELECT * FROM {table}_tpch_sf1;
+
+endloop
+
+endloop
+
+foreach table customer lineitem nation orders part partsupp region supplier
 
 statement ok
-create view orders as select * from my_datalake.default.orders;
+DROP TABLE {table}_tpch_sf1;
+
+endloop
+
+endloop
 
 statement ok
-create view part as select * from my_datalake.default.part;
+create view customer as select * from my_datalake.default.customer_tpch_sf1;
 
 statement ok
-create view partsupp as select * from my_datalake.default.partsupp;
+create view lineitem as select * from my_datalake.default.lineitem_tpch_sf1;
 
 statement ok
-create view region as select * from my_datalake.default.region;
+create view nation as select * from my_datalake.default.nation_tpch_sf1;
 
 statement ok
-create view supplier as select * from my_datalake.default.supplier;
+create view orders as select * from my_datalake.default.orders_tpch_sf1;
+
+statement ok
+create view part as select * from my_datalake.default.part_tpch_sf1;
+
+statement ok
+create view partsupp as select * from my_datalake.default.partsupp_tpch_sf1;
+
+statement ok
+create view region as select * from my_datalake.default.region_tpch_sf1;
+
+statement ok
+create view supplier as select * from my_datalake.default.supplier_tpch_sf1;
 
 loop i 1 9
 

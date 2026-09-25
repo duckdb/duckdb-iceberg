@@ -166,3 +166,40 @@ true	0	0
 
 statement ok
 commit
+
+# Scalar subqueries are still separate bound plans when scan restrictions are applied.
+# Keep this regression separate from duckdb_row_lineage, which Spark reads afterward.
+statement ok
+drop table if exists my_datalake.default.row_lineage_scalar_subquery;
+
+statement ok
+create table my_datalake.default.row_lineage_scalar_subquery (
+	id INTEGER,
+	data VARCHAR
+) WITH (
+	'format-version' = 3
+);
+
+statement ok
+insert into my_datalake.default.row_lineage_scalar_subquery values (1, 'source'), (2, 'target');
+
+statement ok
+UPDATE my_datalake.default.row_lineage_scalar_subquery
+SET data = (SELECT data FROM my_datalake.default.row_lineage_scalar_subquery WHERE id = 1)
+WHERE id = 2;
+
+query ITII
+SELECT id, data, _row_id, _last_updated_sequence_number
+FROM my_datalake.default.row_lineage_scalar_subquery ORDER BY id;
+----
+1	source	0	1
+2	source	1	2
+
+query I
+SELECT (SELECT _last_updated_sequence_number
+        FROM my_datalake.default.row_lineage_scalar_subquery WHERE id = 2);
+----
+2
+
+statement ok
+drop table my_datalake.default.row_lineage_scalar_subquery;

@@ -1,0 +1,63 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/create/test_view_scan_no_deadlock.test
+# description: test that SHOW ALL TABLES does not deadlock when views exist in the catalog
+# group: [create]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+set ignore_error_messages
+
+statement ok
+create schema if not exists my_datalake.default;
+
+statement ok
+use my_datalake.default;
+
+# Clean up from previous runs
+statement ok
+drop view if exists deadlock_test_view;
+
+statement ok
+drop table if exists deadlock_test_table;
+
+# Create a table with data and a view
+statement ok
+create table deadlock_test_table (id int, name varchar);
+
+statement ok
+insert into deadlock_test_table values (1, 'alice'), (2, 'bob');
+
+statement ok
+create view deadlock_test_view as select id, name from deadlock_test_table where id > 0;
+
+# Restarting reruns the selected catalog's on_init and clears the view cache.
+# Views remain in the REST catalog, so scanning must load them again.
+restart
+
+statement ok
+use my_datalake.default;
+
+# This is the critical test: triggers ScanViews on a fresh catalog attachment
+# where views exist but are not cached — hits the GetViewEntry path inside ScanViews
+statement ok
+SHOW ALL TABLES;
+
+# Direct query on the view through the fresh attachment should also work
+query I
+select count(*) from deadlock_test_view;
+----
+2
+
+# Clean up
+statement ok
+drop view deadlock_test_view;
+
+statement ok
+drop table deadlock_test_table;

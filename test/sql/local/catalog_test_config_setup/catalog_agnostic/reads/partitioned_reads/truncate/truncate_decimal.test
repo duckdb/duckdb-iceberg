@@ -3,9 +3,29 @@
 
 include test/sql/init_requires
 
-require-env DUCKDB_ICEBERG_HAVE_GENERATED_DATA
-
 require-env CATALOG_TEST_CONFIG_SETUP
+
+# Reset this small fixture for each test.
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.truncate_partitioned_decimal;
+
+statement ok
+CREATE TABLE my_datalake.default.truncate_partitioned_decimal (
+    id INTEGER,
+    nested STRUCT(data decimal(10,2)),
+    label VARCHAR
+)
+PARTITIONED BY (truncate(50, nested.data)) WITH ('format-version' = '2');
+
+statement ok
+INSERT INTO my_datalake.default.truncate_partitioned_decimal
+VALUES
+    (1,  {'data': '10.65'::DECIMAL(10,2)}, 'tiger_owl_horse'),
+    (2,  {'data': '10.49'::DECIMAL(10,2)}, 'tiger_owl_frog'),
+    (3,  {'data': '10.75'::DECIMAL(10,2)}, 'tiger_owl_goose'),
+    (4,  {'data': '10.1'::DECIMAL(10,2)}, 'happy_fun_times'),
+    (5, NULL,  'null_row');
 
 statement ok
 create view scan as select * from my_datalake.default.truncate_partitioned_decimal;

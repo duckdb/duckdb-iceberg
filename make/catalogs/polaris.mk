@@ -4,7 +4,7 @@ polaris-clone:
 	@if [ ! -d ".catalogs/polaris" ]; then \
 		echo "Cloning Polaris repository..."; \
 		mkdir -p .catalogs && git clone https://github.com/apache/polaris.git .catalogs/polaris; \
-		cd .catalogs/polaris && git checkout release/1.4.x; \
+		cd .catalogs/polaris && git checkout c6a42c47007f1515308ff63cc3c4da392a2c7c7d; \
 	else \
 		echo "Polaris repository exists."; \
 	fi
@@ -20,7 +20,7 @@ polaris-stop:
 polaris: polaris-clone polaris-stop
 	$(call stop_active_catalog)
 	@echo "Starting Polaris catalog..."
-	(cd .catalogs/polaris/site/content/guides/rustfs && docker compose up -d)
+	(cd .catalogs/polaris/site/content/guides/rustfs && docker compose -f docker-compose.yml -f "$(CURDIR)/scripts/polaris-compose.override.yml" up -d)
 	$(call set_active_catalog,polaris)
 
 polaris-data: polaris

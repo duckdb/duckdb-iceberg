@@ -1,0 +1,11 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_interop/other_engines/test_create_bounds.test
+# description: DuckDB bounds fixture for Spark and PyIceberg readers
+# group: [other_engines]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+include test/sql/init_requires
+
+require icu
+
+include test/sql/local/catalog_test_config_setup/catalog_interop/setup/lower_upper_bounds_test.test_setup

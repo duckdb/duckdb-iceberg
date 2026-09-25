@@ -110,6 +110,26 @@
   ],
   "skip_tests": [
     {
+      "reason": "Iceberg views do not enforce DuckDB table/view dependency tracking",
+      "paths": [
+        "test/sql/catalog/view/test_view_schema_change_with_dependencies.test",
+        "test/sql/aggregate/qualify/test_qualify_view.test"
+      ]
+    },
+    {
+      "reason": "Iceberg view schemas persist all output names; duckdb_views reconstructs a full alias list rather than the original partial alias list",
+      "paths": [
+        "test/sql/catalog/view/test_view_sql.test"
+      ]
+    },
+    {
+      "reason": "Iceberg view metadata does not preserve DuckDB secure-view optimizer barriers; secure view creation is rejected",
+      "paths": [
+        "test/sql/catalog/view/secure_view.test",
+        "test/sql/catalog/view/secure_view_persistence.test"
+      ]
+    },
+    {
       "reason": "Checks available databases/schemas",
       "paths": [
         "test/sql/attach/attach_did_you_mean.test",
@@ -266,7 +286,9 @@
         "test/sql/transactions/concurrent_drop_table.test",
         "test/sql/types/bignum/test_bignum_sum.test_slow",
         "test/sql/storage/extensions/extension_default.test",
-        "test/sql/function/string/regex_operators_v1_5_view.test"
+        "test/sql/function/string/regex_operators_v1_5_view.test",
+        "test/sql/pg_catalog/pg_views.test",
+        "test/sql/table_function/duckdb_views.test"
       ]
     },
     {
@@ -392,8 +414,7 @@
     {
       "reason": "Schema visibility / concurrent schema creation in Iceberg differs from DuckDB",
       "paths": [
-        "test/sql/catalog/dependencies/test_concurrent_schema_creation.test",
-        "test/sql/select/test_select_qualified_view.test"
+        "test/sql/catalog/dependencies/test_concurrent_schema_creation.test"
       ]
     },
     {
@@ -534,6 +555,7 @@
       "reason": "Stats / memory_usage / transitive filter output reflects iceberg storage",
       "paths": [
         "test/sql/delete/in_memory_bulk_delete.test_slow",
+        "test/sql/transactions/test_commit_cleanup_oom.test",
         "test/sql/function/date/date_part_stats.test",
         "test/sql/function/time/test_extract_stats.test",
         "test/sql/function/generic/test_stats.test",
@@ -1815,6 +1837,37 @@
         "test/sql/types/struct/struct_updates.test",
         "test/sql/update/test_string_update_null.test",
         "test/sql/update/test_update_mix.test"
+      ]
+    },
+    {
+      "reason": "ALTER VIEW is not supported in Iceberg catalogs",
+      "paths": [
+        "test/sql/alter/rename_view/test_rename_view_incorrect.test"
+      ]
+    },
+    {
+      "reason": "Native DuckDB storage versions and reopening a different database do not reset the remote Iceberg catalog",
+      "paths": [
+        "test/sql/pivot/pivot_star.test"
+      ]
+    },
+    {
+      "reason": "EXPLAIN and profiling assert native DuckDB row IDs and row group counts, not Iceberg scan behavior",
+      "paths": [
+        "test/sql/optimizer/topn_window_elimination_late_materialization.test",
+        "test/sql/pragma/profiling/test_custom_profiling_row_group_metrics_local_storage.test"
+      ]
+    },
+    {
+      "reason": "Test requires native table constraints and a fresh global test schema",
+      "paths": [
+        "test/sql/pragma/test_table_info.test"
+      ]
+    },
+    {
+      "reason": "Test expects current_schema() to be main rather than the configured per-test Iceberg namespace",
+      "paths": [
+        "test/sql/storage/extensions/extension_views.test"
       ]
     }
   ]

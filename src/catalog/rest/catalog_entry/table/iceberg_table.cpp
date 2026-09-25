@@ -671,10 +671,11 @@ bool IcebergTable::HasTransactionUpdates() const {
 }
 
 void IcebergTable::RefreshFromCatalog(ClientContext &context) {
-	ApplyRefreshResult(IRCAPI::GetTable(context, catalog, schema, name));
+	auto publication = catalog.table_request_cache.BeginLoad(GetTableKey());
+	ApplyRefreshResult(IRCAPI::GetTable(context, catalog, schema, name), *publication);
 }
 
-void IcebergTable::ApplyRefreshResult(IcebergLoadTableResult get_table_result) {
+void IcebergTable::ApplyRefreshResult(IcebergLoadTableResult get_table_result, LoadTableCachePublication &publication) {
 	if (get_table_result.error_) {
 		throw HTTPException(
 		    StringUtil::Format("GetTableInformation endpoint returned response code %s with message \"%s\"",
@@ -684,7 +685,10 @@ void IcebergTable::ApplyRefreshResult(IcebergLoadTableResult get_table_result) {
 	schema_versions.clear();
 	dummy_entry.reset();
 	InitializeFromLoadTableResult(load_table_result);
-	catalog.table_request_cache.SetOrOverwrite(GetTableKey(), std::move(get_table_result.result_));
+	initialization_source = nullptr;
+	if (publication.TryPublish(std::move(get_table_result.result_))) {
+		initialization_source = load_table_result;
+	}
 }
 
 IcebergTable IcebergTable::Copy() const {

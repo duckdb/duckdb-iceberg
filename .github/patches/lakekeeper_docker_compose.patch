@@ -1,5 +1,5 @@
 diff --git a/examples/access-control-simple/docker-compose.yaml b/examples/access-control-simple/docker-compose.yaml
-index 33ced8e8..08da0da8 100644
+index ff22576dc..bc17268e8 100644
 --- a/examples/access-control-simple/docker-compose.yaml
 +++ b/examples/access-control-simple/docker-compose.yaml
 @@ -4,10 +4,6 @@ services:
@@ -13,7 +13,7 @@ index 33ced8e8..08da0da8 100644
      command: start-notebook.sh --NotebookApp.token=''
      volumes:
        - ./notebooks:/home/jovyan/examples/
-@@ -86,21 +82,6 @@ services:
+@@ -88,21 +84,6 @@ services:
      networks:
        iceberg_net:
  
@@ -35,16 +35,16 @@ index 33ced8e8..08da0da8 100644
    migrate:
      image: ${LAKEKEEPER_TEST__SERVER_IMAGE:-quay.io/lakekeeper/catalog:latest-main}
      pull_policy: always
-@@ -172,6 +153,8 @@ services:
+@@ -170,6 +151,8 @@ services:
+       timeout: 10s
+       retries: 2
        start_period: 15s
-     volumes:
-       - ./seaweedfs-iam.json:/etc/seaweedfs/iam.json:ro
 +    ports:
-+      - "8333:8333"
++      - "9000:9000"
      networks:
        iceberg_net:
  
-@@ -219,19 +202,5 @@ services:
+@@ -232,19 +215,5 @@ services:
        timeout: 30s
        retries: 3
  

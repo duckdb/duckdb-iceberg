@@ -1,19 +1,19 @@
 services:
   gravitino:
-    image: apache/gravitino-iceberg-rest:1.2.0
+    image: apache/gravitino-iceberg-rest:1.3.1-rc3
     ports:
       - "9001:9001"
     environment:
       GRAVITINO_MEM: -Xms1g -Xmx4g -XX:MaxMetaspaceSize=1g
-      GRAVITINO_CATALOG_BACKEND: memory
-      GRAVITINO_IO_IMPL: org.apache.iceberg.aws.s3.S3FileIO
-      GRAVITINO_WAREHOUSE: s3://warehouse/
-      GRAVITINO_CREDENTIAL_PROVIDERS: s3-secret-key
-      GRAVITINO_S3_ACCESS_KEY: admin
-      GRAVITINO_S3_SECRET_KEY: password
-      GRAVITINO_S3_ENDPOINT: http://seaweedfs:9000
-      GRAVITINO_S3_REGION: us-east-1
-      GRAVITINO_S3_PATH_STYLE_ACCESS: "true"
+      GRAVITINO_ICEBERG_REST_CATALOG_BACKEND: memory
+      GRAVITINO_ICEBERG_REST_IO_IMPL: org.apache.iceberg.aws.s3.S3FileIO
+      GRAVITINO_ICEBERG_REST_WAREHOUSE: s3://warehouse/
+      GRAVITINO_ICEBERG_REST_CREDENTIAL_PROVIDERS: s3-secret-key
+      GRAVITINO_ICEBERG_REST_S3_ACCESS_KEY: admin
+      GRAVITINO_ICEBERG_REST_S3_SECRET_KEY: password
+      GRAVITINO_ICEBERG_REST_S3_ENDPOINT: http://seaweedfs:9000
+      GRAVITINO_ICEBERG_REST_S3_REGION: us-east-1
+      GRAVITINO_ICEBERG_REST_S3_PATH_STYLE_ACCESS: "true"
     depends_on:
       s3-init:
         condition: service_completed_successfully
