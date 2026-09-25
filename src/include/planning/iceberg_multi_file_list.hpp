@@ -39,6 +39,8 @@ public:
 	IcebergDeletePlan ProcessDeletes(const IcebergScanTask &task) const;
 	IcebergScanPlanner &GetScanPlanner();
 	const IcebergScanPlanner &GetScanPlanner() const;
+	bool SupportsLateMaterialization() const;
+	unique_ptr<MultiFileList> Copy() const override;
 
 	IcebergDeleteExecutionState &GetDeleteReader() const;
 

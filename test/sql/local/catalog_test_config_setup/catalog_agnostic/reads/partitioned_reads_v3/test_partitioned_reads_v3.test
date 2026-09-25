@@ -4,10 +4,11 @@
 
 require-env CATALOG_TEST_CONFIG_SETUP
 
+require-env FORMAT_V3_SUPPORT
+
 require-env SCAN_PLANNING_MODE client
 
 include test/sql/init_requires
-
 
 statement ok
 set enable_external_file_cache=false;
@@ -51,6 +52,28 @@ query I
 select count(*) from my_datalake.default.test_v3_partitioned_reads where category IN ('A', 'B');
 ----
 1000
+
+# Iceberg V3 late materialization is not enabled or validated yet. The selected
+# category is a delayable payload while id is only needed by TopN.
+statement ok
+SET late_materialization_max_rows = 100;
+
+statement ok
+SET explain_output = 'optimized_only';
+
+query II
+EXPLAIN (FORMAT JSON) SELECT category
+FROM my_datalake.default.test_v3_partitioned_reads
+ORDER BY id
+LIMIT 10;
+----
+logical_opt	<!REGEX>:(?s).*COMPARISON_JOIN.*
+
+statement ok
+RESET explain_output;
+
+statement ok
+RESET late_materialization_max_rows;
 
 statement ok
 CALL enable_logging();

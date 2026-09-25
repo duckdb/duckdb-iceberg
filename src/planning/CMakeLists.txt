@@ -6,8 +6,9 @@ add_subdirectory(scan_plan)
 add_subdirectory(snapshot)
 
 add_library(
-  iceberg_planning OBJECT iceberg_multi_file_list.cpp
-                          iceberg_multi_file_reader.cpp iceberg_planner.cpp)
+  iceberg_planning OBJECT
+  iceberg_multi_file_list.cpp iceberg_multi_file_reader.cpp iceberg_planner.cpp
+  iceberg_optimizer.cpp)
 set(ALL_OBJECT_FILES
     ${ALL_OBJECT_FILES} $<TARGET_OBJECTS:iceberg_planning>
     PARENT_SCOPE)

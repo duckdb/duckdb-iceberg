@@ -1,0 +1,46 @@
+# name: test/sql/local/null_stats_late_materialization.test
+# description: Test version and snapshot preservation with late materialization
+# group: [local]
+
+include test/sql/init_requires
+
+require-env SCAN_PLANNING_MODE client
+
+require icu;
+
+statement ok
+set timezone='UTC';
+
+# Both late-materialized scans must retain the finalized version and snapshot.
+# The selected snapshot contains ids 1-3, while the latest contains ids 1-9.
+statement ok
+SET late_materialization_max_rows = 100;
+
+statement ok
+SET explain_output = 'optimized_only';
+
+query II
+EXPLAIN (FORMAT JSON) SELECT *
+FROM iceberg_scan('{WORKING_DIRECTORY}/data/persistent/null_stats/default/test_nulls',
+                  version='00003-9d6a621e-8a72-4190-a880-f6ca02e32b86',
+                  snapshot_from_id=250057325269371674)
+ORDER BY id DESC
+LIMIT 1;
+----
+logical_opt	<REGEX>:(?s).*COMPARISON_JOIN.*ICEBERG_SCAN.*TOP_N.*ICEBERG_SCAN.*filename.*file_row_number.*
+
+query IIII
+SELECT *
+FROM iceberg_scan('{WORKING_DIRECTORY}/data/persistent/null_stats/default/test_nulls',
+                  version='00003-9d6a621e-8a72-4190-a880-f6ca02e32b86',
+                  snapshot_from_id=250057325269371674)
+ORDER BY id DESC
+LIMIT 1;
+----
+3	c	2024-03-03 21:06:40+00	true
+
+statement ok
+RESET explain_output;
+
+statement ok
+RESET late_materialization_max_rows;
