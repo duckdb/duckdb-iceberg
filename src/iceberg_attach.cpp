@@ -5,6 +5,7 @@
 #include "catalog/rest/storage/authorization/oauth2.hpp"
 #include "catalog/rest/storage/authorization/sigv4.hpp"
 #include "catalog/rest/storage/authorization/none.hpp"
+#include "catalog/rest/storage/authorization/azure.hpp"
 #include "duckdb/logging/logger.hpp"
 #include "regex"
 
@@ -345,6 +346,10 @@ unique_ptr<Catalog> IcebergAttach::Attach(optional_ptr<StorageExtensionInfo> sto
 	}
 	case IcebergAuthorizationType::NONE: {
 		auth_handler = NoneAuthorization::FromAttachOptions(db, attach_options);
+		break;
+	}
+	case IcebergAuthorizationType::AZURE: {
+		auth_handler = AzureAuthorization::FromAttachOptions(db, context, attach_options);
 		break;
 	}
 	default:
