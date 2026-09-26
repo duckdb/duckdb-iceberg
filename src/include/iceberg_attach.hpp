@@ -41,6 +41,9 @@ struct IcebergAttachOptions {
 	// some catalogs (e.g. AWS Glue) do not assign a table location server-side; derive one from the namespace's
 	// 'location' property
 	bool default_table_location_from_namespace = false;
+	// load the authoritative table metadata from the LoadTableResult's 'metadata-location' instead of
+	// the embedded response metadata, see duckdb-iceberg#1403
+	bool use_metadata_location = false;
 	IcebergTableResolution table_resolution = IcebergTableResolution::LAZY;
 	IRCAccessDelegationMode access_mode = IRCAccessDelegationMode::VENDED_CREDENTIALS;
 	IcebergAuthorizationType authorization_type = IcebergAuthorizationType::INVALID;

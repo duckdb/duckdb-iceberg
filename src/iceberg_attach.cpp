@@ -249,6 +249,8 @@ unique_ptr<Catalog> IcebergAttach::Attach(optional_ptr<StorageExtensionInfo> sto
 			attach_options.default_table_location_from_namespace =
 			    argument.DefaultCastAs(LogicalType::BOOLEAN).GetValue<bool>();
 			set_by_attach_options.insert("default_table_location_from_namespace");
+		} else if (lower_name == "use_metadata_location") {
+			attach_options.use_metadata_location = entry.second.DefaultCastAs(LogicalType::BOOLEAN).GetValue<bool>();
 		} else if (lower_name == "table_resolution") {
 			auto value = StringUtil::Lower(argument.ToString());
 			if (value == "lazy") {
