@@ -20,6 +20,11 @@ CREATE TABLE my_datalake.default.count_star_optimizer (
     name VARCHAR
 ) WITH ('format-version' = '2');
 
+query I
+SELECT count(*) FROM my_datalake.default.count_star_optimizer;
+----
+0
+
 statement ok
 INSERT INTO my_datalake.default.count_star_optimizer VALUES  (1,'aaa'), (2,'bbb');
 
@@ -28,6 +33,12 @@ set enable_logging=true
 
 statement ok
 set logging_level='debug'
+
+# Cardinality estimates and exact COUNT(*) statistics use the same data counts.
+query II
+explain SELECT * FROM my_datalake.default.count_star_optimizer;
+----
+physical_plan	<REGEX>:.*~2 rows.*
 
 # use statistics information.
 query II
@@ -52,6 +63,11 @@ select count(*) from my_datalake.default.count_star_optimizer;
 ----
 3
 
+query II
+explain SELECT * FROM my_datalake.default.count_star_optimizer;
+----
+physical_plan	<REGEX>:.*~3 rows.*
+
 statement ok
 ABORT;
 
@@ -63,11 +79,16 @@ select count(*) from my_datalake.default.count_star_optimizer;
 ----
 1
 
+# Deletes still contribute to the estimate even when an exact count is unavailable.
+query II
+explain SELECT * FROM my_datalake.default.count_star_optimizer;
+----
+physical_plan	<REGEX>:.*~1 row.*
+
 # contain delete file, do not use the statistics information.
 query II
 explain SELECT count(*) FROM  my_datalake.default.count_star_optimizer;
 ----
 physical_plan	<REGEX>:.*ICEBERG_SCAN.*row.*
-
 
 

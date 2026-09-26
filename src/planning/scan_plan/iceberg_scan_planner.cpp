@@ -6,6 +6,7 @@
 #include "core/metadata/partition/iceberg_partition_constants.hpp"
 #include "planning/pruning/iceberg_file_pruner.hpp"
 #include "planning/scan_plan/iceberg_scan_plan_provider.hpp"
+#include "planning/scan_plan/iceberg_scan_statistics.hpp"
 #include "duckdb/storage/table/row_group_reorderer.hpp"
 
 namespace duckdb {
@@ -315,28 +316,13 @@ unique_ptr<NodeStatistics> IcebergScanPlanner::GetCardinality() const {
 	}
 	annotated_lock_guard<annotated_mutex> guard(shared_state->lock);
 	InitializeView(guard);
-	idx_t cardinality = 0;
-	for (idx_t i = 0; i < data_manifests.size(); i++) {
-		auto &manifest = data_manifests[i].entry.file;
-		if (!data_manifest_matches[i]) {
-			continue;
-		}
-		if (!manifest.counts || !manifest.counts->added_rows_count || !manifest.counts->existing_rows_count) {
-			return nullptr;
-		}
-		cardinality += *manifest.counts->added_rows_count + *manifest.counts->existing_rows_count;
+	auto cardinality =
+	    IcebergScanStatistics(data_manifests, data_manifest_matches, delete_manifests, delete_manifest_matches)
+	        .EstimateCardinality();
+	if (!cardinality) {
+		return nullptr;
 	}
-	for (idx_t i = 0; i < delete_manifests.size(); i++) {
-		auto &manifest = delete_manifests[i].entry.file;
-		if (!delete_manifest_matches[i]) {
-			continue;
-		}
-		if (!manifest.counts || !manifest.counts->added_rows_count) {
-			return nullptr;
-		}
-		cardinality -= *manifest.counts->added_rows_count;
-	}
-	return make_uniq<NodeStatistics>(cardinality, cardinality);
+	return make_uniq<NodeStatistics>(*cardinality, *cardinality);
 }
 
 void IcebergScanPlanner::GetStatistics(vector<PartitionStatistics> &result) const {
@@ -345,24 +331,13 @@ void IcebergScanPlanner::GetStatistics(vector<PartitionStatistics> &result) cons
 	}
 	annotated_lock_guard<annotated_mutex> guard(shared_state->lock);
 	InitializeView(guard);
-	for (idx_t i = 0; i < delete_manifests.size(); i++) {
-		if (delete_manifest_matches[i]) {
-			return;
-		}
-	}
-	idx_t count = 0;
-	for (idx_t i = 0; i < data_manifests.size(); i++) {
-		auto &manifest = data_manifests[i].entry.file;
-		if (!data_manifest_matches[i]) {
-			continue;
-		}
-		if (!manifest.counts || !manifest.counts->added_rows_count || !manifest.counts->existing_rows_count) {
-			return;
-		}
-		count += *manifest.counts->existing_rows_count + *manifest.counts->added_rows_count;
+	auto count = IcebergScanStatistics(data_manifests, data_manifest_matches, delete_manifests, delete_manifest_matches)
+	                 .ExactRowCount();
+	if (!count) {
+		return;
 	}
 	PartitionStatistics stats;
-	stats.count = count;
+	stats.count = *count;
 	stats.count_type = CountType::COUNT_EXACT;
 	result.push_back(stats);
 }
