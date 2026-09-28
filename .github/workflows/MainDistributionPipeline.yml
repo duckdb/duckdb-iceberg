@@ -14,32 +14,32 @@ concurrency:
 jobs:
   duckdb-stable-build:
     name: Build extension binaries
-    uses: duckdb/extension-ci-tools/.github/workflows/_extension_distribution.yml@main
+    uses: duckdb/extension-ci-tools/.github/workflows/_extension_distribution.yml@v1.5.6
     with:
       extension_name: iceberg
-      duckdb_version: 3f59160bb2d74e22ea53b346afbf204ec1b3de4f
-      ci_tools_version: main
+      duckdb_version: v1.5.6
+      ci_tools_version: v1.5.6
       exclude_archs: 'windows_amd64_mingw'
       extra_toolchains: 'python3'
 
   duckdb-stable-deploy:
     name: Deploy extension binaries
     needs: duckdb-stable-build
-    uses: duckdb/extension-ci-tools/.github/workflows/_extension_deploy.yml@main
+    uses: duckdb/extension-ci-tools/.github/workflows/_extension_deploy.yml@v1.5.6
     secrets: inherit
     with:
       extension_name: iceberg
-      duckdb_version: 3f59160bb2d74e22ea53b346afbf204ec1b3de4f
-      ci_tools_version: main
+      duckdb_version: v1.5.6
+      ci_tools_version: v1.5.6
       exclude_archs: 'windows_amd64_mingw'
       deploy_latest: ${{ startsWith(github.ref, 'refs/heads/v') || github.ref == 'refs/heads/main' }}
       deploy_versioned: ${{ startsWith(github.ref, 'refs/heads/v') || github.ref == 'refs/heads/main' }}
 
   code-quality-check:
     name: Code Quality Check
-    uses: duckdb/extension-ci-tools/.github/workflows/_extension_code_quality.yml@main
+    uses: duckdb/extension-ci-tools/.github/workflows/_extension_code_quality.yml@v1.5.6
     with:
       extension_name: iceberg
-      duckdb_version: 3f59160bb2d74e22ea53b346afbf204ec1b3de4f
-      ci_tools_version: main
+      duckdb_version: v1.5.6
+      ci_tools_version: v1.5.6
       format_checks: 'format'
