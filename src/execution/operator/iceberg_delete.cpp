@@ -476,7 +476,7 @@ SinkFinalizeType IcebergDelete::Finalize(Pipeline &pipeline, Event &event, Clien
 		ApplyTableUpdate(table_info, iceberg_transaction, [&](IcebergTable &tbl) {
 			auto &transaction_data = tbl.GetOrCreateTransactionData(iceberg_transaction);
 			transaction_data.AddDeleteSnapshot(std::move(iceberg_delete_files),
-			                                   std::move(global_state.altered_manifests));
+			                                   std::move(global_state.altered_manifests), is_merge);
 		});
 	}
 	return SinkFinalizeType::READY;
