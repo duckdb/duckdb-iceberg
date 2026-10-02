@@ -299,7 +299,7 @@ public:
 	}
 
 public:
-	vector<string> CreateSQLStatements() {
+	vector<string> CreateSQLStatements(ClientContext &context) {
 		//! Order to process in:
 		// - snapshot + schema_versions
 		// - schema
@@ -489,7 +489,7 @@ public:
 					}
 
 					//! Transform the stats stored in the iceberg metadata
-					auto stats = IcebergPredicateStats::DeserializeBounds(lower_bound, upper_bound, column.column_name,
+					auto stats = IcebergPredicateStats::DeserializeBounds(context, lower_bound, upper_bound, column.column_name,
 					                                                      logical_type);
 					auto null_counts_it = iceberg_data_file.null_value_counts.find(column.column_id);
 					if (null_counts_it != iceberg_data_file.null_value_counts.end()) {
@@ -856,7 +856,7 @@ static unique_ptr<FunctionData> IcebergToDuckLakeBind(ClientContext &context, Ta
 
 	ret->AssignSchemaBeginSnapshots();
 
-	ret->sql_statements = ret->CreateSQLStatements();
+	ret->sql_statements = ret->CreateSQLStatements(context);
 
 	return_types.emplace_back(LogicalType::BIGINT);
 	names.emplace_back("count");

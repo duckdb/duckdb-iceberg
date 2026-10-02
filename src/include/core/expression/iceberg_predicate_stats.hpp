@@ -6,6 +6,7 @@
 namespace duckdb {
 
 class BaseStatistics;
+class ClientContext;
 
 struct IcebergPredicateStats {
 public:
@@ -14,8 +15,9 @@ public:
 	IcebergPredicateStats(const IcebergPredicateStats &other) = default;
 
 public:
-	static IcebergPredicateStats DeserializeBounds(const Value &lower_bound, const Value &upper_bound,
-	                                               const string &name, const LogicalType &type);
+	static IcebergPredicateStats DeserializeBounds(ClientContext &context, const Value &lower_bound,
+	                                               const Value &upper_bound, const string &name,
+	                                               const LogicalType &type);
 	void SetLowerBound(const Value &new_lower_bound);
 	void SetUpperBound(const Value &new_upper_bound);
 	bool BoundsAreNull() const;

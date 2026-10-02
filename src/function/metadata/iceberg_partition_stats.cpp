@@ -214,8 +214,8 @@ static void IcebergPartitionStatsFunction(ClientContext &context, TableFunctionI
 			//! partition_field_transform
 			AddString(output.data[col++], out, string_t(field.transform.RawType()));
 
-			auto stats = IcebergPredicateStats::DeserializeBounds(field_summary.lower_bound, field_summary.upper_bound,
-			                                                      column.name, result_type);
+			auto stats = IcebergPredicateStats::DeserializeBounds(context, field_summary.lower_bound,
+			                                                      field_summary.upper_bound, column.name, result_type);
 			//! partition_field_type
 			AddString(output.data[col++], out, string_t(result_type.ToString()));
 
