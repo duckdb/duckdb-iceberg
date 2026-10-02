@@ -36,3 +36,47 @@ select manifest_list is null
 from iceberg_snapshots('{WORKING_DIRECTORY}/data/persistent/iceberg_v1_deprecated/default/legacy_v1')
 ----
 true
+
+# V1 partition fields don't need a field-id: readers assign 1000, 1001, ... by position in each spec.
+# The manifest stores the partition values under those ids, so a partition predicate must still find them.
+query III
+select *
+from iceberg_scan('{WORKING_DIRECTORY}/data/persistent/iceberg_v1_deprecated/default/legacy_v1/metadata/no-partition-field-ids.metadata.json')
+order by id
+----
+1	alpha	10
+2	beta	20
+3	alpha	NULL
+
+query II
+select id, amount
+from iceberg_scan('{WORKING_DIRECTORY}/data/persistent/iceberg_v1_deprecated/default/legacy_v1/metadata/no-partition-field-ids.metadata.json')
+where category = 'alpha'
+order by id
+----
+1	10
+3	NULL
+
+query II
+select id, amount
+from iceberg_scan('{WORKING_DIRECTORY}/data/persistent/iceberg_v1_deprecated/default/legacy_v1/metadata/no-partition-field-ids.metadata.json')
+where category = 'beta'
+----
+2	20
+
+# The same when the partition field is in the partition-specs list
+query II
+select id, amount
+from iceberg_scan('{WORKING_DIRECTORY}/data/persistent/iceberg_v1_deprecated/default/legacy_v1/metadata/no-partition-field-ids-in-specs.metadata.json')
+where category = 'alpha'
+order by id
+----
+1	10
+3	NULL
+
+# When only some fields of a spec have a field-id, the missing ones can't be assigned by position
+statement error
+select *
+from iceberg_scan('{WORKING_DIRECTORY}/data/persistent/iceberg_v1_deprecated/default/legacy_v1/metadata/some-partition-field-ids.metadata.json')
+----
+Cannot parse partition spec 0 with missing field IDs: 1 missing of 2 fields

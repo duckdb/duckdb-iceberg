@@ -425,7 +425,7 @@ IcebergTableMetadata IcebergTableMetadata::FromTableMetadata(const rest_api_obje
 	if (table_metadata.partition_specs) {
 		for (auto &spec : *table_metadata.partition_specs) {
 			D_ASSERT(spec.spec_id);
-			res.partition_specs.emplace(*spec.spec_id, IcebergPartitionSpec::ParseFromJson(spec));
+			res.partition_specs.emplace(*spec.spec_id, IcebergPartitionSpec::ParseFromJson(spec, res.iceberg_version));
 		}
 	} else if (res.iceberg_version == 1 && table_metadata.partition_spec) {
 		rest_api_objects::PartitionSpec spec;
@@ -433,7 +433,7 @@ IcebergTableMetadata IcebergTableMetadata::FromTableMetadata(const rest_api_obje
 		for (auto &field : *table_metadata.partition_spec) {
 			spec.fields.emplace_back(field.Copy());
 		}
-		res.partition_specs.emplace(0, IcebergPartitionSpec::ParseFromJson(spec));
+		res.partition_specs.emplace(0, IcebergPartitionSpec::ParseFromJson(spec, res.iceberg_version));
 	}
 	if (table_metadata.sort_orders) {
 		for (auto &sort_order : *table_metadata.sort_orders) {

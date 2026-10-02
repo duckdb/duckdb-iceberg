@@ -1,5 +1,6 @@
 #pragma once
 
+#include "duckdb/common/optional_idx.hpp"
 #include "duckdb/common/types/vector.hpp"
 
 #include "core/expression/iceberg_transform.hpp"
@@ -12,7 +13,10 @@ namespace duckdb {
 
 struct IcebergPartitionSpecField {
 public:
-	static IcebergPartitionSpecField ParseFromJson(const rest_api_objects::PartitionField &field);
+	//! 'assigned_field_id' replaces the field-id that V1 partition fields don't have to store (see
+	//! IcebergPartitionSpec::ParseFromJson)
+	static IcebergPartitionSpecField ParseFromJson(const rest_api_objects::PartitionField &field,
+	                                               optional_idx assigned_field_id);
 
 public:
 	//! "Applied to the source column(s) to produce a partition value"
@@ -45,7 +49,7 @@ public:
 	}
 
 public:
-	static IcebergPartitionSpec ParseFromJson(const rest_api_objects::PartitionSpec &spec);
+	static IcebergPartitionSpec ParseFromJson(const rest_api_objects::PartitionSpec &spec, int32_t iceberg_version);
 
 public:
 	bool IsUnpartitioned() const;
