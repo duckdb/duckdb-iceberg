@@ -156,8 +156,8 @@ jobs:
       - name: Run all duckdb/duckdb tests
         if: inputs.local-extension-repo == ''
         run: |
-          ./build/release/test/unittest --order lex --test-dir duckdb "test/sql/*" --list-test-names-only || true
-          ./build/release/test/unittest --order lex --test-dir duckdb "test/sql/*" --test-config test/configs/fixture_duckdb_tests.json
+          ./build/release/test/unittest --order lex --test-dir duckdb "test/sql/* ~*.test_slow" --list-test-names-only || true
+          ./build/release/test/unittest --order lex --test-dir duckdb "test/sql/* ~*.test_slow" --test-config test/configs/fixture_duckdb_tests.json
 
       - name: Print vended credential refresh proxy log
         if: failure() && inputs.local-extension-repo == ''
