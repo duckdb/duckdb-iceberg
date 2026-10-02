@@ -383,7 +383,8 @@
         "test/sql/collate/test_collate_accent_insensitive.test",
         "test/sql/collate/test_collate_case_insensitive.test",
         "test/sql/collate/test_combined_collation.test",
-        "test/sql/storage/catalog/store_collate.test"
+        "test/sql/storage/catalog/store_collate.test",
+        "test/sql/setops/union_single_dedup.test"
       ]
     },
     {
@@ -469,7 +470,8 @@
       "reason": "EXPLAIN output differs because storage backend is Iceberg",
       "paths": [
         "test/sql/explain/explain_execute.test",
-        "test/sql/explain/test_explain_table_scan.test"
+        "test/sql/explain/test_explain_table_scan.test",
+        "test/sql/optimizer/topn_window_elimination_multiplicity.test"
       ]
     },
     {
@@ -479,7 +481,9 @@
         "test/sql/function/date/date_part_stats.test",
         "test/sql/function/time/test_extract_stats.test",
         "test/sql/function/generic/test_stats.test",
-        "test/sql/filter/test_transitive_filters.test"
+        "test/sql/filter/test_transitive_filters.test",
+        "test/sql/delete/delete_compression_blocked_by_old_snapshot.test",
+        "test/sql/delete/piecemeal_delete_checkpoint_compress.test_slow"
       ]
     },
     {
@@ -779,7 +783,9 @@
         "test/sql/storage/optimistic_write/optimistic_write_add_column.test_slow",
         "test/sql/storage/optimistic_write/optimistic_write_large_strings.test",
         "test/sql/storage/optimistic_write/optimistic_write_nulls.test",
-        "test/sql/storage/optimistic_write/optimistic_write_primary_key.test_slow"
+        "test/sql/storage/optimistic_write/optimistic_write_primary_key.test_slow",
+        "test/sql/storage/optimistic_write/optimistic_write_large_strings_deletes.test_slow",
+        "test/sql/storage/optimistic_write/optimistic_write_unique_index_wal_replay.test"
       ]
     },
     {
@@ -885,7 +891,9 @@
         "test/sql/transactions/test_transaction_local_add.test",
         "test/sql/transactions/test_transaction_local_unique.test",
         "test/sql/transactions/test_transaction_local_unique_ops.test",
-        "test/sql/alter/rename_table/test_rename_table_with_insert_transaction.test"
+        "test/sql/alter/rename_table/test_rename_table_with_insert_transaction.test",
+        "test/sql/delete/full_vector_delete_conflict.test",
+        "test/sql/delete/full_vector_delete_rollback.test"
       ]
     },
     {
@@ -969,7 +977,8 @@
         "test/sql/types/geo/geometry_shred.test",
         "test/sql/types/geo/geometry_shred_deletes.test",
         "test/sql/types/geo/geometry_shred_more.test",
-        "test/sql/types/geo/geometry_wkb.test"
+        "test/sql/types/geo/geometry_wkb.test",
+        "test/sql/types/geo/geometry_stats_prune_null.test"
       ]
     },
     {
@@ -1282,7 +1291,8 @@
         "test/sql/index/art/types/test_art_union.test",
         "test/sql/index/art/types/test_art_varchar.test",
         "test/sql/index/art/vacuum/test_art_vacuum.test_slow",
-        "test/sql/index/art/vacuum/test_art_vacuum_rollback.test"
+        "test/sql/index/art/vacuum/test_art_vacuum_rollback.test",
+        "test/sql/index/art/issues/test_art_issue_24246.test"
       ]
     },
     {

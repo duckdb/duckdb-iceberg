@@ -288,14 +288,14 @@ class TestSparkRead:
         assert_variant_equal(
             row.a,
             b"\x11test",
-            b"\x11\x00\x00",
+            b"\x01\x00\x00",
         )
         row = res[1]
         assert row.b == 43
         assert_variant_equal(
             row.a,
             b"\x02\x02\x00\x01\x00\x05&\x149\x05\x00\x00\x03\x03\x00\x05\x11\x1b\x14\x01\x00\x00\x00-hello world\x02\x01\x02\x00\x05\x14)\x00\x00\x00",
-            b"\x11\x03\x00\x01\x02\x03abd",
+            b"\x01\x03\x00\x01\x02\x03abd",
         )
 
     @pytest.mark.requires_spark(">=4.0")

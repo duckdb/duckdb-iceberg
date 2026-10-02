@@ -36,8 +36,8 @@ class IcebergSparkLocal(IcebergConnection):
         client_id = os.getenv('POLARIS_CLIENT_ID', 'root')
         client_secret = os.getenv('POLARIS_CLIENT_SECRET', 's3cr3t')
         os.environ["AWS_REGION"] = "us-west-2"
-        os.environ["AWS_ACCESS_KEY_ID"] = "minio_root"
-        os.environ["AWS_SECRET_ACCESS_KEY"] = "m1n1opwd"
+        os.environ["AWS_ACCESS_KEY_ID"] = "rustfsadmin"
+        os.environ["AWS_SECRET_ACCESS_KEY"] = "rustfsadmin"
 
         config = SparkConf()
         config.set(
