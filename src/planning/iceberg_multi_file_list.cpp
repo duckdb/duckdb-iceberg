@@ -21,7 +21,6 @@
 #include "core/expression/iceberg_value.hpp"
 #include "duckdb/storage/statistics/geometry_stats.hpp"
 #include "duckdb/common/types/geometry.hpp"
-#include "utf8proc_wrapper.hpp"
 #include "core/metadata/manifest/iceberg_manifest.hpp"
 #include "catalog/rest/transaction/iceberg_transaction.hpp"
 #include "core/expression/iceberg_predicate_stats.hpp"
@@ -498,8 +497,9 @@ static shared_ptr<BaseStatistics> BuildGeometryStats(const Value &lower_bound, c
 	return stats;
 }
 
-IcebergPredicateStats IcebergPredicateStats::DeserializeBounds(const Value &lower_bound, const Value &upper_bound,
-                                                               const string &name, const LogicalType &type) {
+IcebergPredicateStats IcebergPredicateStats::DeserializeBounds(ClientContext &context, const Value &lower_bound,
+                                                               const Value &upper_bound, const string &name,
+                                                               const LogicalType &type) {
 	IcebergPredicateStats res;
 
 	if (type.id() == LogicalTypeId::GEOMETRY) {
@@ -513,35 +513,27 @@ IcebergPredicateStats IcebergPredicateStats::DeserializeBounds(const Value &lowe
 
 	if (!lower_bound.IsNull()) {
 		D_ASSERT(lower_bound.type().id() == LogicalTypeId::BLOB);
-		auto lower_bound_blob = lower_bound.GetValueUnsafe<string_t>();
-		// Truncated UTF-8 string metrics are not a safe zonemap bound (especially
-		// upper bounds). Omit them rather than failing the whole scan / stats table.
-		if (type.id() == LogicalTypeId::VARCHAR &&
-		    !Utf8Proc::IsValid(lower_bound_blob.GetData(), lower_bound_blob.GetSize())) {
-			// skip
+		auto deserialized =
+		    IcebergValue::DeserializeValue(lower_bound.GetValueUnsafe<string_t>(), type, SerializeBound::LOWER_BOUND);
+		if (deserialized.HasError()) {
+			// Bounds are optional, so omit one that cannot be deserialized rather than failing the scan.
+			DUCKDB_LOG(context, IcebergLogType, "Omitting invalid lower bound for column '%s' of type %s", name,
+			           type.ToString());
 		} else {
-			auto deserialized_lower_bound = IcebergValue::DeserializeValue(lower_bound_blob, type);
-			if (deserialized_lower_bound.HasError()) {
-				throw InvalidConfigurationException("Column %s lower bound deserialization failed: %s", name,
-				                                    deserialized_lower_bound.GetError());
-			}
-			res.SetLowerBound(deserialized_lower_bound.GetValue());
+			res.SetLowerBound(deserialized.GetValue());
 		}
 	}
 
 	if (!upper_bound.IsNull()) {
 		D_ASSERT(upper_bound.type().id() == LogicalTypeId::BLOB);
-		auto upper_bound_blob = upper_bound.GetValueUnsafe<string_t>();
-		if (type.id() == LogicalTypeId::VARCHAR &&
-		    !Utf8Proc::IsValid(upper_bound_blob.GetData(), upper_bound_blob.GetSize())) {
-			// skip
+		auto deserialized =
+		    IcebergValue::DeserializeValue(upper_bound.GetValueUnsafe<string_t>(), type, SerializeBound::UPPER_BOUND);
+		if (deserialized.HasError()) {
+			// Bounds are optional, so omit one that cannot be deserialized rather than failing the scan.
+			DUCKDB_LOG(context, IcebergLogType, "Omitting invalid upper bound for column '%s' of type %s", name,
+			           type.ToString());
 		} else {
-			auto deserialized_upper_bound = IcebergValue::DeserializeValue(upper_bound_blob, type);
-			if (deserialized_upper_bound.HasError()) {
-				throw InvalidConfigurationException("Column %s upper bound deserialization failed: %s", name,
-				                                    deserialized_upper_bound.GetError());
-			}
-			res.SetUpperBound(deserialized_upper_bound.GetValue());
+			res.SetUpperBound(deserialized.GetValue());
 		}
 	}
 	return res;
@@ -694,7 +686,7 @@ bool IcebergMultiFileList::FileMatchesFilter(const IcebergManifestFile &manifest
 				stats.SetUpperBound(upper_variant);
 			}
 		} else {
-			stats = IcebergPredicateStats::DeserializeBounds(lower_bound, upper_bound, column.name, column.type);
+			stats = IcebergPredicateStats::DeserializeBounds(context, lower_bound, upper_bound, column.name, column.type);
 		}
 
 		int64_t value_count = 0;
@@ -957,8 +949,8 @@ bool IcebergMultiFileList::ManifestMatchesFilter(const IcebergManifestFile &mani
 
 		auto &column = IcebergTableSchema::GetFromColumnIndex(schema, column_id, 0);
 		auto result_type = field.transform.GetSerializedType(column.type);
-		auto stats = IcebergPredicateStats::DeserializeBounds(field_summary.lower_bound, field_summary.upper_bound,
-		                                                      column.name, result_type);
+		auto stats = IcebergPredicateStats::DeserializeBounds(context, field_summary.lower_bound,
+		                                                      field_summary.upper_bound, column.name, result_type);
 		stats.has_nan = field_summary.contains_nan;
 		stats.has_null = field_summary.contains_null;
 		stats.has_not_null = true; // Not enough information in field_summary to determine if this should be false
