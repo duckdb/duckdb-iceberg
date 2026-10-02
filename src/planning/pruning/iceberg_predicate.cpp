@@ -155,9 +155,22 @@ static bool MatchBoundsIsNotNullFilter(const IcebergPredicateStats &stats) {
 	return stats.has_not_null == true;
 }
 
+//! variant_comparator keys start with a byte that ranks the value's type (all numbers share one rank)
+static bool SameVariantTypeRank(const Value &key, const Value &other_key) {
+	if (key.type().id() != LogicalTypeId::BLOB || other_key.type().id() != LogicalTypeId::BLOB) {
+		return true;
+	}
+	auto &a = StringValue::Get(key);
+	auto &b = StringValue::Get(other_key);
+	return !a.empty() && !b.empty() && a[0] == b[0];
+}
+
 bool MatchTransformedBounds(ClientContext &context, ExpressionType comparison_type, const Expression &left,
                             const Expression &right, const IcebergPredicateStats &stats,
                             const IcebergTransform &transform) {
+	if (!stats.lower_bound || !stats.upper_bound) {
+		return true;
+	}
 	BoundExpressionReplacer lower_replacer(*stats.lower_bound);
 	BoundExpressionReplacer upper_replacer(*stats.upper_bound);
 	auto lower_copy = left.Copy();
@@ -176,6 +189,15 @@ bool MatchTransformedBounds(ClientContext &context, ExpressionType comparison_ty
 		return true;
 	}
 	if (!ExpressionExecutor::TryEvaluateScalar(context, *upper_copy, transformed_upper_bound)) {
+		return true;
+	}
+	if (transformed_lower_bound.IsNull() || transformed_upper_bound.IsNull()) {
+		//! The bounds have no entry for this path, so nothing is known about its values
+		return true;
+	}
+	if (!SameVariantTypeRank(transformed_lower_bound, right_constant) ||
+	    !SameVariantTypeRank(transformed_upper_bound, right_constant)) {
+		//! Bounds of another type say nothing about values of the filtered type
 		return true;
 	}
 	IcebergPredicateStats transformed_stats(stats);

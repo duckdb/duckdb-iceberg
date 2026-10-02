@@ -59,7 +59,7 @@ struct IcebergVariantBoundsReader {
 
 	//! Re-key a decoded bounds VARIANT (whose object keys are JSON paths like "$['age']") to the plain field
 	//! names used at the call site ("age", "person.age"), returning a VARIANT Value with the renamed keys.
-	static bool RekeyBoundsVariant(const Value &bounds_variant, Value &result);
+	static bool RekeyBoundsVariant(const Value &bounds_variant, const vector<string> &path, Value &result);
 };
 
 } // namespace duckdb

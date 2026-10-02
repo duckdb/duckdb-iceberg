@@ -156,6 +156,21 @@ bool IcebergFilePruner::FileMatchesFilter(const IcebergManifestFile &manifest_fi
 			if (lower_bound.IsNull() || upper_bound.IsNull()) {
 				return true;
 			}
+			//! A filter on an extracted field refers to that field, so compare against the field's bounds
+			vector<string> path;
+			bool path_supported = true;
+			reference<const ColumnIndex> path_index(column_index);
+			while (path_index.get().HasChildren()) {
+				if (path_index.get().ChildIndexCount() != 1 || path_index.get().GetChildIndex(0).HasPrimaryIndex()) {
+					path_supported = false;
+					break;
+				}
+				path_index = path_index.get().GetChildIndex(0);
+				path.push_back(path_index.get().GetFieldName());
+			}
+			if (!path_supported) {
+				continue;
+			}
 			Value lower_decoded;
 			Value upper_decoded;
 			Value lower_variant;
@@ -163,11 +178,11 @@ bool IcebergFilePruner::FileMatchesFilter(const IcebergManifestFile &manifest_fi
 			auto lower_blob = lower_bound.GetValueUnsafe<string_t>();
 			auto upper_blob = upper_bound.GetValueUnsafe<string_t>();
 			if (IcebergVariantBoundsReader::Deserialize(context, lower_blob, lower_decoded) &&
-			    IcebergVariantBoundsReader::RekeyBoundsVariant(lower_decoded, lower_variant)) {
+			    IcebergVariantBoundsReader::RekeyBoundsVariant(lower_decoded, path, lower_variant)) {
 				stats.SetLowerBound(lower_variant);
 			}
 			if (IcebergVariantBoundsReader::Deserialize(context, upper_blob, upper_decoded) &&
-			    IcebergVariantBoundsReader::RekeyBoundsVariant(upper_decoded, upper_variant)) {
+			    IcebergVariantBoundsReader::RekeyBoundsVariant(upper_decoded, path, upper_variant)) {
 				stats.SetUpperBound(upper_variant);
 			}
 		} else {

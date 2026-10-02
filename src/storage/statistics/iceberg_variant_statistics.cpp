@@ -345,7 +345,8 @@ Value NodeToValue(const BoundNode &node) {
 
 } // namespace
 
-bool IcebergVariantBoundsReader::RekeyBoundsVariant(const Value &bounds_variant, Value &result) {
+bool IcebergVariantBoundsReader::RekeyBoundsVariant(const Value &bounds_variant, const vector<string> &path,
+                                                    Value &result) {
 	if (bounds_variant.IsNull() || bounds_variant.type().id() != LogicalTypeId::VARIANT) {
 		return false;
 	}
@@ -379,8 +380,23 @@ bool IcebergVariantBoundsReader::RekeyBoundsVariant(const Value &bounds_variant,
 	if (root.children.empty()) {
 		return false;
 	}
+	//! The bounds of the requested path; a path without bounds means nothing is known about it
+	const BoundNode *node = &root;
+	for (auto &segment : path) {
+		const BoundNode *child = nullptr;
+		for (auto &entry : node->children) {
+			if (entry.first == segment) {
+				child = entry.second.get();
+				break;
+			}
+		}
+		if (!child) {
+			return false;
+		}
+		node = child;
+	}
 
-	Value nested_struct = NodeToValue(root);
+	Value nested_struct = NodeToValue(*node);
 	auto variant_result = nested_struct.DefaultTryCastAs(LogicalType::VARIANT());
 	if (!variant_result) {
 		return false;
