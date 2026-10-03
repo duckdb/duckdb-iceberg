@@ -93,10 +93,38 @@ select count(distinct request.url) from duckdb_logs_parsed('HTTP') where request
 ----
 2
 
+query T
+select regexp_extract(message, 'bounds \[([^]]*)\]', 1)
+from duckdb_logs() where type = 'Iceberg' and message like '%skipped%manifest_file%';
+----
+C, C
+
+# The same optional filter is pushed down during planning and execution, but must prune only once.
 query I
 select count(*) from duckdb_logs() where type = 'Iceberg' and message like '%skipped%manifest_file%';
 ----
 1
+
+# --- Optional filter inside a conjunction: read B, skip A and C once each ---
+
+statement ok
+CALL truncate_duckdb_logs();
+
+query I
+select count(*) from my_datalake.default.test_v3_partitioned_reads
+where category IN ('A', 'B') and category >= 'B';
+----
+500
+
+query I
+select count(distinct request.url) from duckdb_logs_parsed('HTTP') where request.url like '%.parquet';
+----
+1
+
+query I
+select count(*) from duckdb_logs() where type = 'Iceberg' and message like '%skipped%manifest_file%';
+----
+2
 
 # --- No filter: read all partitions, skip none ---
 

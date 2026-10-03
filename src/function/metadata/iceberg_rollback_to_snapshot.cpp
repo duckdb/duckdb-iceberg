@@ -131,12 +131,18 @@ static void IcebergRollbackToSnapshotFunction(ClientContext &context, TableFunct
 
 TableFunctionSet IcebergFunctions::GetIcebergRollbackToSnapshotFunction() {
 	TableFunctionSet function_set("iceberg_rollback_to_snapshot");
-	auto fun = TableFunction({LogicalType::VARCHAR, LogicalType::BIGINT}, IcebergRollbackToSnapshotFunction,
-	                         IcebergRollbackToSnapshotBind, IcebergRollbackToSnapshotGlobalState::Init);
+	auto fun = TableFunction(FunctionSignature()
+	                             .AddPositionalOnly("table_name", LogicalType::VARCHAR)
+	                             .AddPositionalOnly("snapshot_id", LogicalType::BIGINT),
+	                         IcebergRollbackToSnapshotFunction, IcebergRollbackToSnapshotBind,
+	                         IcebergRollbackToSnapshotGlobalState::Init);
 	function_set.AddFunction(fun);
 	// iceberg_snapshots exposes snapshot_id as UBIGINT; accept that without requiring a cast.
-	fun = TableFunction({LogicalType::VARCHAR, LogicalType::UBIGINT}, IcebergRollbackToSnapshotFunction,
-	                    IcebergRollbackToSnapshotBind, IcebergRollbackToSnapshotGlobalState::Init);
+	fun = TableFunction(FunctionSignature()
+	                        .AddPositionalOnly("table_name", LogicalType::VARCHAR)
+	                        .AddPositionalOnly("snapshot_id", LogicalType::UBIGINT),
+	                    IcebergRollbackToSnapshotFunction, IcebergRollbackToSnapshotBind,
+	                    IcebergRollbackToSnapshotGlobalState::Init);
 	function_set.AddFunction(fun);
 	return function_set;
 }

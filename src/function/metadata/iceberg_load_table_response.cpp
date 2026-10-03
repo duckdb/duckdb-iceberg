@@ -244,7 +244,8 @@ static void IcebergLoadTableResponseFunction(ClientContext &context, TableFuncti
 TableFunctionSet IcebergFunctions::GetIcebergLoadTableResponseFunction() {
 	TableFunctionSet function_set("iceberg_load_table_response");
 
-	auto fun = TableFunction({LogicalType::VARCHAR}, IcebergLoadTableResponseFunction, IcebergLoadTableResponseBind,
+	auto fun = TableFunction(FunctionSignature().AddPositionalOnly("path", LogicalType::VARCHAR),
+	                         IcebergLoadTableResponseFunction, IcebergLoadTableResponseBind,
 	                         IcebergLoadTableResponseGlobalState::Init);
 	function_set.AddFunction(fun);
 

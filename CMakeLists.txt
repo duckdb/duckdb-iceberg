@@ -51,6 +51,9 @@ endif()
 
 build_loadable_extension(${TARGET_NAME} ${PARAMETERS} ${ALL_OBJECT_FILES})
 
+# AWS request signing uses mbedTLS symbols that DuckDB does not export.
+target_link_libraries(${TARGET_NAME}_loadable_extension duckdb_mbedtls)
+
 # Link Roaring library
 target_link_libraries(
   ${EXTENSION_NAME} PUBLIC roaring::roaring roaring::roaring-headers

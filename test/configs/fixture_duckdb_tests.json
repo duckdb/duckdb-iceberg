@@ -1741,6 +1741,22 @@
       ]
     },
     {
+      "reason": "New bump (3f59160bb2d74e22ea53b346afbf204ec1b3de4f -> 04de8943f0d1f9e079fb004bcb05ef729e2d5694)",
+      "paths": [
+        "test/sql/catalog/dependencies/alter_table_keeps_schema_dependency.test",
+        "test/sql/catalog/nested_schema/nested_view_attached.test",
+        "test/sql/create/create_schema_options.test",
+        "test/sql/select/test_select_qualified_view.test",
+        "test/sql/sql_export/aggregate_results.test",
+        "test/sql/sql_export/pushed_column_paths.test",
+        "test/sql/sql_export/source_names.test",
+        "test/sql/sql_export/statement_verification.test",
+        "test/sql/sql_export/table_row_number_sql_export.test",
+        "test/sql/storage/checkpoint/test_checkpoint_abort_truncate.test",
+        "test/sql/storage/wal/wal_torn_uncommitted_row_group.test"
+      ]
+    },
+    {
       "reason": "Uses duckdb database in test_dir",
       "paths": [
         "test/sql/optimizer/in_list_row_group_pruning.test",

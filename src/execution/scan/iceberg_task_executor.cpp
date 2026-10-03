@@ -40,7 +40,7 @@ struct IcebergTaskReader : public IcebergMultiFileReader {
 	explicit IcebergTaskReader(shared_ptr<TableFunctionInfo> info) : IcebergMultiFileReader(std::move(info)) {
 	}
 
-	static unique_ptr<MultiFileReader> CreateInstance(const TableFunction &function) {
+	static unique_ptr<MultiFileReader> CreateInstance(const BoundTableFunction &function) {
 		return make_uniq<IcebergTaskReader>(function.function_info);
 	}
 
@@ -100,11 +100,13 @@ IcebergTaskExecutor::IcebergTaskExecutor(ClientContext &context, shared_ptr<Iceb
 	function.get_multi_file_reader = IcebergTaskReader::CreateInstance;
 	function.late_materialization = false;
 	vector<Value> arguments {Value(info->file.path)};
-	named_parameter_map_t parameters;
+	named_argument_map_t parameters;
 	vector<LogicalType> input_types;
 	vector<Identifier> input_names;
 	TableFunctionRef ref;
-	TableFunctionBindInput bind_input(arguments, parameters, input_types, input_names, nullptr, nullptr, function, ref);
+	BoundTableFunction bound_table_function(function);
+	TableFunctionBindInput bind_input(arguments, parameters, input_types, input_names, nullptr, nullptr,
+	                                  bound_table_function, ref);
 	vector<LogicalType> types;
 	vector<Identifier> names;
 	bind = function.bind(context, bind_input, types, names);

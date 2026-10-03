@@ -175,10 +175,13 @@ TableFunctionSet IcebergFunctions::GetIcebergScanPlanFunction() {
 	TableFunctionSet function_set("iceberg_scan_plan");
 	auto fun = TableFunction({LogicalType::VARCHAR}, IcebergScanPlanFunction, IcebergScanPlanBind,
 	                         IcebergScanPlanGlobalState::Init);
-	fun.named_parameters["row_filter"] = LogicalType::VARCHAR;
-	fun.named_parameters["produce_sequence_number"] = LogicalType::BOOLEAN;
-	fun.named_parameters["snapshot_from_id"] = LogicalType::UBIGINT;
-	fun.named_parameters["snapshot_from_timestamp"] = LogicalType::TIMESTAMP_MS;
+
+	fun.GetSignature().WithTypedKwargs("options", [&](TypedKwargs &options) {
+		options.Add("row_filter", LogicalType::VARCHAR)
+		    .Add("produce_sequence_number", LogicalType::BOOLEAN)
+		    .Add("snapshot_from_id", LogicalType::UBIGINT)
+		    .Add("snapshot_from_timestamp", LogicalType::TIMESTAMP_MS);
+	});
 	function_set.AddFunction(fun);
 	return function_set;
 }

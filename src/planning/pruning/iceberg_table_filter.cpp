@@ -11,6 +11,28 @@ namespace duckdb {
 
 namespace {
 
+static void NormalizeOptionalFilterCallbacks(Expression &expr) {
+	if (expr.GetExpressionClass() == ExpressionClass::BOUND_FUNCTION) {
+		auto &func = expr.Cast<BoundFunctionExpression>();
+		optional_ptr<Expression> child_filter;
+		if (func.GetChildren().size() == 1 && func.BindInfo()) {
+			auto &type = func.GetChildren()[0]->GetReturnType();
+			if (func.Function().GetName() == OptionalFilterScalarFun::NAME) {
+				func.FunctionMutable().SetCallbacks(OptionalFilterScalarFun::GetFunction(type).GetCallbacks());
+				child_filter = func.BindInfo()->Cast<OptionalFilterFunctionData>().child_filter_expr.get();
+			} else if (func.Function().GetName() == SelectivityOptionalFilterScalarFun::NAME) {
+				func.FunctionMutable().SetCallbacks(
+				    SelectivityOptionalFilterScalarFun::GetFunction(type).GetCallbacks());
+				child_filter = func.BindInfo()->Cast<SelectivityOptionalFilterFunctionData>().child_filter_expr.get();
+			}
+		}
+		if (child_filter) {
+			NormalizeOptionalFilterCallbacks(*child_filter);
+		}
+	}
+	ExpressionIterator::EnumerateChildren(expr, [&](Expression &child) { NormalizeOptionalFilterCallbacks(child); });
+}
+
 static unique_ptr<Expression> CreateReferenceExpression(const LogicalType &type) {
 	return make_uniq<BoundReferenceExpression>(type, 0ULL);
 }
@@ -126,6 +148,22 @@ static unique_ptr<Expression> ExtractFilterExpressionForPath(const Expression &e
 }
 
 } // namespace
+
+bool IcebergTableFilters::FiltersEqual(const ExpressionFilter &left, const ExpressionFilter &right) {
+	if (left.Equals(right)) {
+		return true;
+	}
+	if (left.column_indexes != right.column_indexes) {
+		return false;
+	}
+	// Loadable extensions can have their own copies of DuckDB's optional-filter callbacks.
+	// Normalize only those callbacks, preserving all predicate, type, and bind-data comparisons.
+	auto left_copy = left.Copy();
+	auto right_copy = right.Copy();
+	NormalizeOptionalFilterCallbacks(*left_copy->expr);
+	NormalizeOptionalFilterCallbacks(*right_copy->expr);
+	return left_copy->Equals(*right_copy);
+}
 
 unique_ptr<ExpressionFilter> IcebergTableFilters::GetFilterForColumnIndex(const ColumnIndex &column_index) const {
 	auto filter = TryGetFilterByColumnIndex(column_index);

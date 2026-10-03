@@ -59,7 +59,7 @@ static unique_ptr<FunctionData> IcebergSnapshotsBind(ClientContext &context, Tab
 		if (loption == "metadata_compression_codec") {
 			options.metadata_compression_codec = StringValue::Get(kv.second);
 		} else if (loption == "version") {
-			options.table_version = StringValue::Get(kv.second);
+			options.table_version = StringValue::Get(kv.second.DefaultCastAs(LogicalType::VARCHAR));
 			options.version_explicitly_set = true;
 		} else if (loption == "version_name_format") {
 			auto value = StringValue::Get(kv.second);
@@ -131,11 +131,14 @@ static void IcebergSnapshotsFunction(ClientContext &context, TableFunctionInput 
 
 TableFunctionSet IcebergFunctions::GetIcebergSnapshotsFunction() {
 	TableFunctionSet function_set("iceberg_snapshots");
-	TableFunction table_function({LogicalType::VARCHAR}, IcebergSnapshotsFunction, IcebergSnapshotsBind,
+	TableFunction table_function(FunctionSignature().AddPositionalOnly("path", LogicalType::VARCHAR),
+	                             IcebergSnapshotsFunction, IcebergSnapshotsBind,
 	                             IcebergSnapshotGlobalTableFunctionState::Init);
-	table_function.named_parameters["metadata_compression_codec"] = LogicalType::VARCHAR;
-	table_function.named_parameters["version"] = LogicalType::VARCHAR;
-	table_function.named_parameters["version_name_format"] = LogicalType::VARCHAR;
+	table_function.GetSignature().WithTypedKwargs("options", [&](TypedKwargs &options) {
+		options.Add("metadata_compression_codec", LogicalType::VARCHAR)
+		    .Add("version", LogicalType::ANY)
+		    .Add("version_name_format", LogicalType::VARCHAR);
+	});
 	function_set.AddFunction(table_function);
 	return function_set;
 }

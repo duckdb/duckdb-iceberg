@@ -972,9 +972,14 @@ static void IcebergToDuckLakeFunction(ClientContext &context, TableFunctionInput
 TableFunctionSet IcebergFunctions::GetIcebergToDuckLakeFunction() {
 	TableFunctionSet function_set("iceberg_to_ducklake");
 
-	auto fun = TableFunction({LogicalType::VARCHAR, LogicalType::VARCHAR}, IcebergToDuckLakeFunction,
-	                         iceberg::ducklake::IcebergToDuckLakeBind, IcebergToDuckLakeGlobalTableFunctionState::Init);
-	fun.named_parameters.emplace("skip_tables", LogicalType::LIST(LogicalTypeId::VARCHAR));
+	auto fun = TableFunction(FunctionSignature()
+	                             .AddPositionalOnly("iceberg_catalog", LogicalType::VARCHAR)
+	                             .AddPositionalOnly("ducklake_catalog", LogicalType::VARCHAR),
+	                         IcebergToDuckLakeFunction, iceberg::ducklake::IcebergToDuckLakeBind,
+	                         IcebergToDuckLakeGlobalTableFunctionState::Init);
+	fun.GetSignature().WithTypedKwargs("options", [&](TypedKwargs &options) {
+		options.Add("skip_tables", LogicalType::LIST(LogicalTypeId::VARCHAR));
+	});
 	function_set.AddFunction(fun);
 
 	return function_set;

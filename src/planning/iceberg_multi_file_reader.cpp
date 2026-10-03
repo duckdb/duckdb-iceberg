@@ -115,7 +115,7 @@ IcebergMultiFileReader::IcebergMultiFileReader(shared_ptr<TableFunctionInfo> fun
 	last_updated_sequence_number_column->identifier = Value::INTEGER(MultiFileReader::LAST_UPDATED_SEQUENCE_NUMBER_ID);
 }
 
-unique_ptr<MultiFileReader> IcebergMultiFileReader::CreateInstance(const TableFunction &table) {
+unique_ptr<MultiFileReader> IcebergMultiFileReader::CreateInstance(const BoundTableFunction &table) {
 	return make_uniq<IcebergMultiFileReader>(table.function_info);
 }
 
@@ -536,7 +536,7 @@ bool IcebergMultiFileReader::ParseOption(const Identifier &key, const Value &val
 		return true;
 	}
 	if (key == "version") {
-		this->options.table_version = StringValue::Get(val);
+		this->options.table_version = StringValue::Get(val.DefaultCastAs(LogicalType::VARCHAR));
 		this->options.version_explicitly_set = true;
 		return true;
 	}

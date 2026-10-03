@@ -183,14 +183,17 @@ static unique_ptr<LogicalOperator> RewriteDataFilesBindOperator(ClientContext &c
 
 TableFunctionSet IcebergFunctions::GetIcebergRewriteDataFilesFunction() {
 	TableFunctionSet function_set("iceberg_rewrite_data_files");
-	TableFunction function("iceberg_rewrite_data_files", {LogicalType::VARCHAR}, nullptr);
+	TableFunction function("iceberg_rewrite_data_files",
+	                       FunctionSignature().AddPositionalOnly("table_name", LogicalType::VARCHAR), nullptr);
 	function.bind_operator = RewriteDataFilesBindOperator;
-	function.named_parameters["target_file_size_bytes"] = LogicalType::ANY;
-	function.named_parameters["min_file_size_bytes"] = LogicalType::ANY;
-	function.named_parameters["max_file_size_bytes"] = LogicalType::ANY;
-	function.named_parameters["min_input_files"] = LogicalType::BIGINT;
-	function.named_parameters["max_files_to_rewrite"] = LogicalType::BIGINT;
-	function.named_parameters["rewrite_all"] = LogicalType::BOOLEAN;
+	function.GetSignature().WithTypedKwargs("options", [&](TypedKwargs &options) {
+		options.Add("target_file_size_bytes", LogicalType::ANY)
+		    .Add("min_file_size_bytes", LogicalType::ANY)
+		    .Add("max_file_size_bytes", LogicalType::ANY)
+		    .Add("min_input_files", LogicalType::BIGINT)
+		    .Add("max_files_to_rewrite", LogicalType::BIGINT)
+		    .Add("rewrite_all", LogicalType::BOOLEAN);
+	});
 	function_set.AddFunction(function);
 	return function_set;
 }

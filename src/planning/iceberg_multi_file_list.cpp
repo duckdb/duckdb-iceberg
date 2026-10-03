@@ -124,7 +124,7 @@ IcebergMultiFileList::DynamicFilterPushdown(MultiFileDynamicPushdownInfo &pushdo
 		    ExpressionFilter::GetExpressionFilter(entry.Filter(), "IcebergMultiFileList::DynamicFilterPushdown");
 		auto column_id = column_indexes[entry.GetIndex().GetIndex()];
 		auto previous = planner->Filters().TryGetFilterByColumnIndex(column_id);
-		if (!previous || !filter.Equals(*previous)) {
+		if (!previous || !IcebergTableFilters::FiltersEqual(filter, *previous)) {
 			filters_changed = true;
 		}
 	}
