@@ -1,0 +1,113 @@
+# name: test/sql/copy/copy_nan_value_counts.test
+# description: nan_value_counts are written to the manifest like Iceberg Java does: every float/double column gets
+#              a count (0 included), except fields nested in a list or map and columns with metrics mode 'none'
+# group: [copy]
+
+include test/sql/init_requires
+
+# --- basic: NaNs next to finite values and NULLs ---
+statement ok
+COPY (
+	SELECT * FROM (VALUES
+		(1, 1.0::FLOAT, 1.0::DOUBLE),
+		(2, 'NaN'::FLOAT, 'NaN'::DOUBLE),
+		(3, NULL::FLOAT, NULL::DOUBLE),
+		(4, 'NaN'::FLOAT, 2.0::DOUBLE)
+	) v(id, f, d)
+) TO '{TEST_DIR}/nan_basic' (FORMAT ICEBERG);
+
+query II
+SELECT column_name, nan_value_count FROM iceberg_column_stats('{TEST_DIR}/nan_basic') ORDER BY ALL;
+----
+d	1
+f	2
+id	NULL
+
+# --- no NaNs and all NULLs still get an explicit 0; nested fields; metrics modes ---
+statement ok
+COPY (
+	SELECT * FROM (VALUES
+		(1, 1.0::FLOAT, NULL::DOUBLE, {'x': 'NaN'::FLOAT}, ['NaN'::FLOAT, 1.0::FLOAT], MAP {'a': 'NaN'::DOUBLE},
+			1.00::DECIMAL(10,2), 'NaN'::FLOAT, 'NaN'::FLOAT),
+		(2, 2.0::FLOAT, NULL::DOUBLE, {'x': 1.0::FLOAT}, [2.0::FLOAT], MAP {'b': 2.0::DOUBLE},
+			2.00::DECIMAL(10,2), 1.0::FLOAT, 1.0::FLOAT),
+		(3, NULL::FLOAT, NULL::DOUBLE, NULL, NULL, NULL, NULL, 'NaN'::FLOAT, NULL::FLOAT)
+	) v(id, f_nonan, d_allnull, s, l, m, dec, f_counts, f_none)
+) TO '{TEST_DIR}/nan_edge' (
+	FORMAT ICEBERG,
+	"write.metadata.metrics.column.f_counts" 'counts',
+	"write.metadata.metrics.column.f_none" 'none'
+);
+
+# struct child x gets a count; list element and map key/value do not (Java writes no metrics for them)
+query II
+SELECT column_name, nan_value_count FROM iceberg_column_stats('{TEST_DIR}/nan_edge') ORDER BY ALL;
+----
+d_allnull	0
+dec	NULL
+element	NULL
+f_counts	2
+f_nonan	0
+f_none	NULL
+id	NULL
+key	NULL
+l	NULL
+m	NULL
+s	NULL
+value	NULL
+x	1
+
+# 'counts' mode keeps the NaN count but writes no bounds
+query II
+SELECT lower_bound IS NULL, upper_bound IS NULL FROM iceberg_column_stats('{TEST_DIR}/nan_edge') WHERE column_name = 'f_counts';
+----
+true	true
+
+# --- NaN counts are added up over row groups, including a NaN that is only in the first one ---
+statement ok
+SET threads=1;
+
+statement ok
+COPY (
+	SELECT
+		CASE WHEN i = 0 THEN 'NaN'::DOUBLE ELSE i::DOUBLE END AS d,
+		CASE WHEN i % 1000 = 0 THEN 'NaN'::FLOAT ELSE i::FLOAT END AS f
+	FROM range(4096) t(i)
+) TO '{TEST_DIR}/nan_row_groups' (FORMAT ICEBERG, "write.parquet.row-group-size" '2048');
+
+query I
+SELECT count(DISTINCT row_group_id) FROM parquet_metadata('{TEST_DIR}/nan_row_groups/data/*.parquet');
+----
+2
+
+query II
+SELECT column_name, nan_value_count FROM iceberg_column_stats('{TEST_DIR}/nan_row_groups') ORDER BY ALL;
+----
+d	1
+f	5
+
+statement ok
+RESET threads;
+
+# --- only NaN values: every value is counted and there are no bounds ---
+statement ok
+COPY (SELECT 'NaN'::FLOAT AS f, 'NaN'::DOUBLE AS d FROM range(100)) TO '{TEST_DIR}/nan_all' (FORMAT ICEBERG);
+
+query IIII
+SELECT column_name, value_count, nan_value_count, lower_bound IS NULL AND upper_bound IS NULL
+FROM iceberg_column_stats('{TEST_DIR}/nan_all') ORDER BY ALL;
+----
+d	100	100	true
+f	100	100	true
+
+# --- several data files: each manifest entry has its own file's count ---
+statement ok
+COPY (
+	SELECT CASE WHEN i < 3 THEN 'NaN'::DOUBLE ELSE i::DOUBLE END AS d FROM range(200000) t(i)
+) TO '{TEST_DIR}/nan_files' (FORMAT ICEBERG, "write.target-file-size-bytes" '100000');
+
+query III
+SELECT count(*) > 1, sum(nan_value_count), bool_and(nan_value_count IS NOT NULL)
+FROM iceberg_column_stats('{TEST_DIR}/nan_files') WHERE column_name = 'd';
+----
+true	3	true

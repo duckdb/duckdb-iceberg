@@ -27,6 +27,23 @@ static bool HasMapParent(const vector<string> &column_names, const IcebergTableS
 	return false;
 }
 
+//! True if the column is nested somewhere inside a list or a map
+static bool HasListOrMapParent(const vector<string> &column_names, const IcebergTableSchema &table_schema) {
+	vector<Identifier> path;
+	for (idx_t i = 0; i + 1 < column_names.size(); i++) {
+		path.emplace_back(column_names[i]);
+		auto column = table_schema.GetFromPath(path, nullptr);
+		if (!column) {
+			continue;
+		}
+		auto type_id = column->type.id();
+		if (type_id == LogicalTypeId::LIST || type_id == LogicalTypeId::ARRAY || type_id == LogicalTypeId::MAP) {
+			return true;
+		}
+	}
+	return false;
+}
+
 static string GetColumnNameBySourceId(const IcebergTableSchema &schema, idx_t source_id) {
 	return schema.GetColumnByFieldId(source_id).name;
 }
@@ -172,6 +189,13 @@ void IcebergDataFileStats::PopulateFromReturnStats(ClientContext &context, Icebe
 		}
 		if (stats.null_count) {
 			data_file.null_value_counts[column_info.id] = *stats.null_count;
+		}
+		//! Match Iceberg Java: every float/double column gets a NaN count (0 included), except fields inside a
+		//! list or map, which Java writes no metrics for. Never derive a count from has_nan alone.
+		const bool is_floating_point =
+		    column_info.type.id() == LogicalTypeId::FLOAT || column_info.type.id() == LogicalTypeId::DOUBLE;
+		if (stats.nan_count && is_floating_point && !HasListOrMapParent(column_names, ic_schema)) {
+			data_file.nan_value_counts[column_info.id] = *stats.nan_count;
 		}
 		if (stats.num_values) {
 			//! Iceberg value_counts includes nulls; Parquet num_values matches.
