@@ -129,6 +129,7 @@ jobs:
           VENDED_CREDENTIAL_REFRESH_PROXY: http://127.0.0.1:19133
         run: |
           source .venv-spark4/bin/activate
+          python -m unittest discover -s scripts/tests -p test_vended_credentials_refresh_proxy.py -v
           mitmdump --mode regular@19133 -s scripts/vended_credentials_refresh_proxy.py --flow-detail 2 > vended_credentials_refresh_proxy.log 2>&1 &
           proxy_pid=$!
           trap 'kill "$proxy_pid" || true; wait "$proxy_pid" 2>/dev/null || true' EXIT

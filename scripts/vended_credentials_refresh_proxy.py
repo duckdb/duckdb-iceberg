@@ -31,6 +31,8 @@ CATALOG_PORT = 8181
 S3_HOST = "127.0.0.1"
 S3_PORT = 9000
 
+CREDENTIALS_ENDPOINT = "GET /v1/{prefix}/namespaces/{namespace}/tables/{table}/credentials"
+
 SCAN_TABLE = "empty_table"
 TABLE_SCAN_TABLE = "vended_refresh_table"
 INIT_TABLE = "vended_init_refresh"
@@ -134,6 +136,18 @@ class VendedCredentialRefreshAddon:
             self._handle_s3_request(flow)
 
     def response(self, flow: http.HTTPFlow):
+        if flow.metadata.get("vended_config") and flow.response and flow.response.status_code == 200:
+            response = json.loads(flow.response.content.decode())
+            mode = self._credential_endpoint_mode(flow)
+            if mode == "omitted":
+                response.pop("endpoints", None)
+            else:
+                endpoints = response.setdefault("endpoints", ["GET /v1/{prefix}/namespaces/{namespace}"])
+                response["endpoints"] = [endpoint for endpoint in endpoints if endpoint != CREDENTIALS_ENDPOINT]
+                if mode in ("supported", "error"):
+                    response["endpoints"].append(CREDENTIALS_ENDPOINT)
+            flow.response.text = json.dumps(response)
+            return
         table = flow.metadata.get("vended_table")
         if not table or not flow.response or flow.response.status_code >= 300:
             return
@@ -141,6 +155,13 @@ class VendedCredentialRefreshAddon:
         response = json.loads(flow.response.content.decode())
         response["storage-credentials"] = [self._credentials_for_table(table)]
         flow.response.text = json.dumps(response)
+
+    @staticmethod
+    def _credential_endpoint_mode(flow: http.HTTPFlow):
+        # Catalog auth and HTTP transport can both add the same header. Avoid
+        # Headers.get(), which joins repeated values into e.g. "error, error".
+        values = flow.request.headers.get_all("x-credential-endpoint")
+        return values[0] if values else "supported"
 
     @staticmethod
     def _is_catalog_request(flow: http.HTTPFlow):
@@ -153,6 +174,12 @@ class VendedCredentialRefreshAddon:
     def _handle_catalog_request(self, flow: http.HTTPFlow):
         parsed_path = urllib.parse.urlparse(flow.request.path)
         path = parsed_path.path
+
+        if flow.request.method == "GET" and path == "/v1/config":
+            flow.metadata["vended_config"] = True
+            if "x-credential-endpoint" in flow.request.headers:
+                self.refresh_unlocked[INIT_TABLE] = False
+            return
 
         table_match = re.fullmatch(r"/v1/namespaces/default/tables/([^/]+)", path)
         credentials_match = re.fullmatch(r"/v1/namespaces/default/tables/([^/]+)/credentials", path)
@@ -167,6 +194,12 @@ class VendedCredentialRefreshAddon:
             return
 
         if credentials_match and credentials_match.group(1) in self.refresh_unlocked:
+            if self._credential_endpoint_mode(flow) == "error":
+                body = json.dumps(
+                    {"error": {"message": "credential endpoint denied", "type": "ForbiddenException", "code": 403}}
+                ).encode()
+                flow.response = http.Response.make(403, body, {"Content-Type": "application/json"})
+                return
             table = credentials_match.group(1)
             body = json.dumps({"storage-credentials": [self._credentials_for_table(table)]}).encode()
             flow.response = http.Response.make(200, body, {"Content-Type": "application/json"})
