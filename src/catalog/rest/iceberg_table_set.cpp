@@ -42,7 +42,7 @@ bool IcebergTableSet::FillEntry(ClientContext &context, IcebergTable &table) {
 	}
 	auto &ic_catalog = catalog.Cast<IcebergCatalog>();
 	auto publication = ic_catalog.table_request_cache.BeginLoad(table.GetTableKey());
-	return ApplyLoadResult(table, IRCAPI::GetTable(context, ic_catalog, schema, table.name), *publication);
+	return ApplyLoadResult(context, table, IRCAPI::GetTable(context, ic_catalog, schema, table.name), *publication);
 }
 
 bool IcebergTableSet::TryFillEntryFromCache(ClientContext &context, IcebergTable &table) {
@@ -59,7 +59,7 @@ bool IcebergTableSet::TryFillEntryFromCache(ClientContext &context, IcebergTable
 		auto cache_hit = ic_catalog.table_request_cache.Get(
 		    context, table_key, [&](const rest_api_objects::LoadTableResult &cached_result) {
 			    // Use the cached result instead of making a new request
-			    table.InitializeFromLoadTableResult(cached_result);
+			    table.InitializeFromCatalogResponse(context, cached_result);
 		    });
 		if (cache_hit) {
 			return true;
@@ -69,8 +69,8 @@ bool IcebergTableSet::TryFillEntryFromCache(ClientContext &context, IcebergTable
 	return false;
 }
 
-bool IcebergTableSet::ApplyLoadResult(IcebergTable &table, IcebergLoadTableResult get_table_result,
-                                      LoadTableCachePublication &publication) {
+bool IcebergTableSet::ApplyLoadResult(ClientContext &context, IcebergTable &table,
+                                      IcebergLoadTableResult get_table_result, LoadTableCachePublication &publication) {
 	if (get_table_result.error_) {
 		if (get_table_result.status_ == HTTPStatusCode::NotFound_404) {
 			// Glue returns 404 when a table is not an Iceberg Table with the error message
@@ -89,7 +89,7 @@ bool IcebergTableSet::ApplyLoadResult(IcebergTable &table, IcebergLoadTableResul
 		                       EnumUtil::ToString(get_table_result.status_), get_table_result.error_->_error.message));
 	}
 	auto &load_table_result = *get_table_result.result_;
-	table.InitializeFromLoadTableResult(load_table_result);
+	table.InitializeFromCatalogResponse(context, load_table_result);
 	// Rejected payloads are destroyed; they must not remain as cache identities on the local table.
 	table.initialization_source = nullptr;
 	if (publication.TryPublish(std::move(get_table_result.result_))) {
@@ -154,7 +154,7 @@ void IcebergTableSet::ScanEagerEntries(ClientContext &context, const std::functi
 		pending.pop_front();
 		if (load->result) {
 			try {
-				ApplyLoadResult(load->table, executor.WaitAndTakeResult(*load->result), *load->publication);
+				ApplyLoadResult(context, load->table, executor.WaitAndTakeResult(*load->result), *load->publication);
 			} catch (std::exception &ex) {
 				ErrorData error(ex);
 				if (error.Type() == ExceptionType::INTERRUPT || executor.HasError()) {
