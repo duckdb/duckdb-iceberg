@@ -144,6 +144,8 @@ public:
 	vector<idx_t> row_id_indexes;
 
 	vector<IcebergEqualityDeletePredicate> equality_predicates;
+	//! Whether this DELETE is the DELETE action of a MERGE INTO.
+	bool is_merge = false;
 
 public:
 	// // Source interface

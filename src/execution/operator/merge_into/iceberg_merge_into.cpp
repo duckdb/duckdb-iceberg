@@ -1,6 +1,9 @@
 #include "catalog/rest/iceberg_catalog.hpp"
 #include "catalog/rest/catalog_entry/table/iceberg_table_schema_version.hpp"
 #include "catalog/rest/transaction/iceberg_transaction.hpp"
+#include "execution/operator/iceberg_insert.hpp"
+#include "execution/operator/iceberg_delete.hpp"
+#include "duckdb/execution/operator/persistent/physical_merge_into.hpp"
 #include "duckdb/execution/physical_plan_generator.hpp"
 #include "duckdb/planner/operator/logical_merge_into.hpp"
 
@@ -30,9 +33,18 @@ PhysicalOperator &IcebergCatalog::PlanMergeInto(ClientContext &context, Physical
 	}
 	irc_transaction.planning_merge_into = true;
 	try {
-		auto &result = Catalog::PlanMergeInto(context, planner, op, plan);
+		auto &merge_into = Catalog::PlanMergeInto(context, planner, op, plan).Cast<PhysicalMergeInto>();
+		for (auto &action : merge_into.actions) {
+			if (action->action_type == MergeActionType::MERGE_UPDATE) {
+				D_ASSERT(action->op);
+				action->op->Cast<IcebergInsert>().is_merge = true;
+			} else if (action->action_type == MergeActionType::MERGE_DELETE) {
+				D_ASSERT(action->op);
+				action->op->Cast<IcebergDelete>().is_merge = true;
+			}
+		}
 		irc_transaction.planning_merge_into = false;
-		return result;
+		return merge_into;
 	} catch (...) {
 		irc_transaction.planning_merge_into = false;
 		throw;

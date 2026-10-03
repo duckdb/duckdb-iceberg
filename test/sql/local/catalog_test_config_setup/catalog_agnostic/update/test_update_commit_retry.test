@@ -1,0 +1,191 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/update/test_update_commit_retry.test
+# description: An UPDATE retries its commit when a concurrent APPEND landed first; it aborts when a concurrent commit removed/rewrote data it targets or the isolation level is serializable
+# group: [update]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require-env METADATA_FILE_READ_SUPPORT
+
+require-env METADATA_LOG_SUPPORT
+
+include test/sql/init_requires
+
+# Do not ignore 'HTTP' / conflict error messages!
+# ----------------------------------------------------------------------------
+# Concurrent APPEND under 'snapshot' isolation: the update's targeted data is
+# untouched, so on the commit conflict it refreshes and re-applies against the
+# new tip and succeeds.
+# ----------------------------------------------------------------------------
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.upd_retry_append;
+
+statement ok
+CREATE TABLE my_datalake.default.upd_retry_append (id INTEGER, name VARCHAR) WITH ('write.update.isolation-level' = 'snapshot');
+
+statement ok
+INSERT INTO my_datalake.default.upd_retry_append VALUES (1, 'a'), (2, 'b');
+
+statement ok con1
+begin
+
+statement ok con1
+UPDATE my_datalake.default.upd_retry_append SET name = 'z' WHERE id = 1;
+
+statement ok con2
+begin
+
+statement ok con2
+INSERT INTO my_datalake.default.upd_retry_append VALUES (3, 'c');
+
+statement ok con2
+commit
+
+# con1 commits after con2 — the update retries against the refreshed tip and lands.
+statement ok con1
+commit
+
+# id=1 updated, con2's append preserved.
+query II
+SELECT * FROM my_datalake.default.upd_retry_append ORDER BY id;
+----
+1	z
+2	b
+3	c
+
+statement ok
+DROP TABLE my_datalake.default.upd_retry_append;
+
+# ----------------------------------------------------------------------------
+# Concurrent DELETE on the same file: re-applying is unsafe even under
+# 'snapshot' isolation, so the losing update aborts with a clear conflict.
+# ----------------------------------------------------------------------------
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.upd_retry_conflict;
+
+statement ok
+CREATE TABLE my_datalake.default.upd_retry_conflict (id INTEGER, name VARCHAR) WITH ('write.update.isolation-level' = 'snapshot');
+
+statement ok
+INSERT INTO my_datalake.default.upd_retry_conflict VALUES (1, 'a'), (2, 'b'), (3, 'c');
+
+statement ok con3
+begin
+
+statement ok con3
+UPDATE my_datalake.default.upd_retry_conflict SET name = 'z' WHERE id = 1;
+
+statement ok con4
+begin
+
+statement ok con4
+DELETE FROM my_datalake.default.upd_retry_conflict WHERE id = 2;
+
+statement ok con4
+commit
+
+statement error con3
+commit
+----
+UPDATE on "upd_retry_conflict" conflicts with a concurrent commit
+
+# con4's delete applied; con3's update did not.
+query II
+SELECT * FROM my_datalake.default.upd_retry_conflict ORDER BY id;
+----
+1	a
+3	c
+
+statement ok
+DROP TABLE my_datalake.default.upd_retry_conflict;
+
+# ----------------------------------------------------------------------------
+# Isolation level unset (Iceberg default 'serializable'): a concurrent APPEND
+# can add rows matching the update predicate, so the update aborts.
+# ----------------------------------------------------------------------------
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.upd_retry_serializable;
+
+statement ok
+CREATE TABLE my_datalake.default.upd_retry_serializable (id INTEGER, name VARCHAR);
+
+statement ok
+INSERT INTO my_datalake.default.upd_retry_serializable VALUES (1, 'a'), (2, 'b');
+
+statement ok con5
+begin
+
+statement ok con5
+UPDATE my_datalake.default.upd_retry_serializable SET name = 'z' WHERE id = 1;
+
+statement ok con6
+begin
+
+statement ok con6
+INSERT INTO my_datalake.default.upd_retry_serializable VALUES (1, 'a2');
+
+statement ok con6
+commit
+
+statement error con5
+commit
+----
+UPDATE on "upd_retry_serializable" conflicts with a concurrent commit
+
+# Nothing from con5 landed; con6's append is intact.
+query II
+SELECT * FROM my_datalake.default.upd_retry_serializable ORDER BY id, name;
+----
+1	a
+1	a2
+2	b
+
+statement ok
+DROP TABLE my_datalake.default.upd_retry_serializable;
+
+# ----------------------------------------------------------------------------
+# UPDATE reads 'write.update.isolation-level', not 'write.delete.isolation-level':
+# with only the delete property set, the update keeps the default
+# ('serializable') and aborts over a concurrent APPEND.
+# ----------------------------------------------------------------------------
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.upd_retry_delete_prop;
+
+statement ok
+CREATE TABLE my_datalake.default.upd_retry_delete_prop (id INTEGER, name VARCHAR) WITH ('write.delete.isolation-level' = 'snapshot');
+
+statement ok
+INSERT INTO my_datalake.default.upd_retry_delete_prop VALUES (1, 'a'), (2, 'b');
+
+statement ok con7
+begin
+
+statement ok con7
+UPDATE my_datalake.default.upd_retry_delete_prop SET name = 'z' WHERE id = 1;
+
+statement ok con8
+begin
+
+statement ok con8
+INSERT INTO my_datalake.default.upd_retry_delete_prop VALUES (3, 'c');
+
+statement ok con8
+commit
+
+statement error con7
+commit
+----
+<REGEX>:.*UPDATE on .*Set 'write.update.isolation-level'='snapshot'.*
+
+query II
+SELECT * FROM my_datalake.default.upd_retry_delete_prop ORDER BY id;
+----
+1	a
+2	b
+3	c
+
+statement ok
+DROP TABLE my_datalake.default.upd_retry_delete_prop;

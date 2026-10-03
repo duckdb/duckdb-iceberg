@@ -22,7 +22,8 @@ struct IcebergAddSnapshot : public IcebergTableUpdate {
 
 public:
 	IcebergAddSnapshot(const IcebergTable &table_info,
-	                   IcebergSnapshotOperationType operation = IcebergSnapshotOperationType::OVERWRITE);
+	                   IcebergSnapshotOperationType operation = IcebergSnapshotOperationType::OVERWRITE,
+	                   bool is_merge = false);
 
 public:
 	bool IsRetryable() const override;
@@ -35,12 +36,17 @@ public:
 	IcebergSnapshotOperationType GetOperation() const {
 		return operation;
 	}
+	bool IsMerge() const {
+		return is_merge;
+	}
 
 private:
 	vector<IcebergManifestListEntry> manifest_files;
 	optional<VersionedIcebergManifestDeletes> manifest_deletes;
 	int32_t schema_id;
 	IcebergSnapshotOperationType operation;
+	//! Whether a MERGE INTO produced this snapshot; selects the isolation-level property on retry.
+	bool is_merge;
 };
 
 } // namespace duckdb
