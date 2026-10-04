@@ -33,15 +33,6 @@ IcebergCreateTableRequest::IcebergCreateTableRequest(string name_p, shared_ptr<I
 
 static void AddUnnamedField(JSONWriter &writer, JSONMutableValue field_obj, const IcebergColumnDefinition &column);
 
-static string GetPrimitiveTypeString(const IcebergColumnDefinition &column) {
-	//! A 'fixed[L]' field is read as BLOB, so write back its original type
-	//! rather than hiddenly promote to 'binary'.
-	if (column.fixed_length && column.type.id() == LogicalTypeId::BLOB) {
-		return StringUtil::Format("fixed[%d]", *column.fixed_length);
-	}
-	return IcebergTypeHelper::LogicalTypeToIcebergType(column.type);
-}
-
 static void AddNamedField(JSONWriter &writer, JSONMutableValue field_obj, const IcebergColumnDefinition &column) {
 	field_obj.AddString("name", column.name);
 	field_obj.Add("id", writer.CreateUnsignedInteger(column.id));
@@ -65,7 +56,7 @@ static void AddNamedField(JSONWriter &writer, JSONMutableValue field_obj, const 
 	}
 
 	//! Write of non-struct type
-	field_obj.AddString("type", GetPrimitiveTypeString(column));
+	field_obj.AddString("type", IcebergTypeHelper::LogicalTypeToIcebergType(column.type));
 	if (column.initial_default && !column.initial_default->IsNull()) {
 		auto primitive_type_value = IcebergTypeHelper::PrimitiveTypeFromValue(*column.initial_default);
 		field_obj.Add("initial-default", IcebergTypeHelper::PrimitiveTypeValueToJSON(writer, primitive_type_value));
@@ -97,7 +88,7 @@ static void AddUnnamedField(JSONWriter &writer, JSONMutableValue field_obj, cons
 		auto list_type = column.GetChild("element");
 		field_obj.Add("element-id", writer.CreateUnsignedInteger(list_type->id));
 		if (list_type->IsIcebergPrimitiveType()) {
-			field_obj.AddString("element", GetPrimitiveTypeString(*list_type));
+			field_obj.AddString("element", IcebergTypeHelper::LogicalTypeToIcebergType(list_type->type));
 		} else {
 			auto list_type_obj = writer.CreateObject();
 			field_obj.Add("element", list_type_obj);
@@ -111,7 +102,7 @@ static void AddUnnamedField(JSONWriter &writer, JSONMutableValue field_obj, cons
 		D_ASSERT(column.GetChildCount() == 2);
 		auto key_child = column.GetChild("key");
 		if (key_child->IsIcebergPrimitiveType()) {
-			field_obj.AddString("key", GetPrimitiveTypeString(*key_child));
+			field_obj.AddString("key", IcebergTypeHelper::LogicalTypeToIcebergType(key_child->type));
 		} else {
 			auto key_obj = writer.CreateObject();
 			field_obj.Add("key", key_obj);
@@ -120,7 +111,7 @@ static void AddUnnamedField(JSONWriter &writer, JSONMutableValue field_obj, cons
 		field_obj.Add("key-id", writer.CreateUnsignedInteger(key_child->id));
 		auto val_child = column.GetChild("value");
 		if (val_child->IsIcebergPrimitiveType()) {
-			field_obj.AddString("value", GetPrimitiveTypeString(*val_child));
+			field_obj.AddString("value", IcebergTypeHelper::LogicalTypeToIcebergType(val_child->type));
 		} else {
 			auto val_obj = writer.CreateObject();
 			field_obj.Add("value", val_obj);

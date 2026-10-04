@@ -27,6 +27,7 @@
 #include "iceberg_attach.hpp"
 #include "iceberg_options.hpp"
 #include "common/iceberg_default.hpp"
+#include "common/iceberg_fixed_type.hpp"
 #include "function/copy/iceberg_copy_function.hpp"
 #include "duckdb/planner/planner_extension.hpp"
 #include "planning/iceberg_planner.hpp"
@@ -95,6 +96,7 @@ static void LoadRequiredExtension(DatabaseInstance &instance, const string &exte
 }
 
 static void LoadInternal(ExtensionLoader &loader) {
+	IcebergFixedType::Register(loader);
 	auto &instance = loader.GetDatabaseInstance();
 	LoadRequiredExtension(instance, "parquet");
 	LoadRequiredExtension(instance, "avro");

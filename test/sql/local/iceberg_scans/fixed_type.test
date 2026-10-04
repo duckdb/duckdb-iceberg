@@ -1,0 +1,27 @@
+# name: test/sql/local/iceberg_scans/fixed_type.test
+# description: Read fixed binary schemas and reject malformed lengths
+# group: [iceberg_scans]
+
+include test/sql/init_requires
+
+query TI
+SELECT typeof(partition_col), octet_length(partition_col)
+FROM iceberg_scan('{WORKING_DIRECTORY}/data/persistent/partition_fixed_length_binary/default.db/partition_fixed_length_binary/metadata/00001-b4b3d6d2-cac2-4480-952e-0e4b3b88b5d7.metadata.json');
+----
+ICEBERG_FIXED(11)	11
+ICEBERG_FIXED(11)	11
+
+foreach fixed_type fixed fixed[] fixed[0] fixed[-1] fixed[abc] fixed[4 fixed[4]junk fixed[2147483648] fixed[999999999999999999999999]
+
+statement ok
+COPY (
+	SELECT replace(content, '"timestamptz_ns"', '"{fixed_type}"')
+	FROM read_text('{WORKING_DIRECTORY}/data/persistent/timestamptz_ns/metadata/v1.metadata.json')
+) TO '{TEST_DIR}/invalid_fixed.metadata.json' (FORMAT CSV, HEADER false, QUOTE '', ESCAPE '');
+
+statement error
+SELECT * FROM iceberg_scan('{TEST_DIR}/invalid_fixed.metadata.json');
+----
+Invalid fixed type
+
+endloop

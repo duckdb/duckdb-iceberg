@@ -1,7 +1,7 @@
 """DuckDB schema changes keep the types and requiredness of fields they don't touch.
 
-DuckDB can't create some fields itself (it has no fixed-length binary type, and no syntax for required list
-elements or map values), so the table is created with PyIceberg and then altered by DuckDB.
+Tables are created with PyIceberg and then altered by DuckDB, including fields with required list
+elements or map values that cannot be declared in DuckDB SQL.
 """
 
 from uuid import uuid4
@@ -62,6 +62,7 @@ def test_alter_preserves_fixed_type(rest_catalog, unittest_binary, unittest_test
         NestedField(2, "f", FixedType(16), required=False),
         NestedField(3, "lf", ListType(4, FixedType(4), element_required=False), required=False),
         NestedField(5, "s", StructType(NestedField(6, "a", FixedType(8), required=False)), required=False),
+        NestedField(7, "m", MapType(8, FixedType(2), 9, FixedType(3), value_required=False), required=False),
     )
     table = _alter_with_duckdb(
         rest_catalog,
@@ -69,11 +70,11 @@ def test_alter_preserves_fixed_type(rest_catalog, unittest_binary, unittest_test
         unittest_binary,
         unittest_test_config,
         print_unittest_stdin,
-        # A fixed column still reads as BLOB.
+        # Fixed columns expose their length through the extension type.
         queries=[
             (
                 "SELECT data_type FROM information_schema.columns WHERE table_name = '{name}' AND column_name = 'f'",
-                [("BLOB",)],
+                [("ICEBERG_FIXED(16)",)],
             )
         ],
     )
@@ -81,6 +82,8 @@ def test_alter_preserves_fixed_type(rest_catalog, unittest_binary, unittest_test
     assert schema.find_field("f").field_type == FixedType(16)
     assert schema.find_field("lf").field_type.element_type == FixedType(4)
     assert schema.find_field("s.a").field_type == FixedType(8)
+    assert schema.find_field("m").field_type.key_type == FixedType(2)
+    assert schema.find_field("m").field_type.value_type == FixedType(3)
 
 
 def test_alter_preserves_nested_requiredness(rest_catalog, unittest_binary, unittest_test_config, print_unittest_stdin):
