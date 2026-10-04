@@ -64,6 +64,8 @@ string IcebergTypeHelper::LogicalTypeToIcebergType(const LogicalType &type) {
 	case LogicalTypeId::UUID:
 		return "uuid";
 	case LogicalTypeId::BLOB:
+		//! An existing 'fixed[L]' field is also read as BLOB; its type is written back from
+		//! IcebergColumnDefinition::fixed_length when the schema is serialized.
 		return "binary";
 	case LogicalTypeId::STRUCT:
 		return "struct";

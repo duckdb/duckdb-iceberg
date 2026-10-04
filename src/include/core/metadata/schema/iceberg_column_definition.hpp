@@ -22,6 +22,8 @@ public:
 public:
 	static LogicalType ParsePrimitiveType(const rest_api_objects::PrimitiveType &type);
 	static LogicalType ParsePrimitiveTypeString(const string &type_str);
+	//! Returns L for a 'fixed[L]' type string, or nothing for any other type.
+	static optional<idx_t> ParseFixedLength(const string &type_str);
 	static Value ParsePrimitiveValue(const LogicalType &type,
 	                                 const rest_api_objects::PrimitiveTypeValue &primitive_value);
 	bool IsIcebergPrimitiveType() const;
@@ -63,6 +65,9 @@ public:
 	unique_ptr<Value> initial_default;
 	unique_ptr<Value> write_default;
 	bool required;
+	//! DuckDB has no fixed-length binary type and reads fixed length field as BLOB, so the
+	//! length is kept here to write the type back unchanged when the schema is serialized.
+	optional<idx_t> fixed_length;
 
 private:
 	optional_ptr<IcebergColumnDefinition> parent;

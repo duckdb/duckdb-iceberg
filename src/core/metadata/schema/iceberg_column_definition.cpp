@@ -168,6 +168,25 @@ LogicalType IcebergColumnDefinition::ParsePrimitiveTypeString(const string &type
 	throw InvalidConfigurationException("Unrecognized primitive type: %s", type_str);
 }
 
+optional<idx_t> IcebergColumnDefinition::ParseFixedLength(const string &type_str) {
+	static constexpr const char *FIXED_PREFIX = "fixed[";
+	if (!StringUtil::StartsWith(type_str, "fixed")) {
+		return std::nullopt;
+	}
+	//! Expect 'fixed[<digits>]' with at least one digit.
+	const idx_t prefix_len = strlen(FIXED_PREFIX);
+	if (!StringUtil::StartsWith(type_str, FIXED_PREFIX) || type_str.back() != ']' || type_str.size() < prefix_len + 2) {
+		throw InvalidConfigurationException("Invalid fixed type format: %s", type_str);
+	}
+	auto digits = type_str.substr(prefix_len, type_str.size() - prefix_len - 1);
+	for (auto c : digits) {
+		if (!StringUtil::CharacterIsDigit(c)) {
+			throw InvalidConfigurationException("Invalid fixed type format: %s", type_str);
+		}
+	}
+	return std::stoull(digits);
+}
+
 static rest_api_objects::StructField
 CreateStructField(const string &name, int32_t field_id, bool required, const rest_api_objects::Type &iceberg_type,
                   const optional<string> &doc = std::nullopt,
@@ -201,6 +220,7 @@ IcebergColumnDefinition::ParseStructField(const rest_api_objects::StructField &f
 	auto &type = *field.type;
 	if (type.primitive_type) {
 		res->type = ParsePrimitiveType(*type.primitive_type);
+		res->fixed_length = ParseFixedLength(type.primitive_type->value);
 	} else if (type.struct_type) {
 		auto &struct_type = *type.struct_type;
 		child_list_t<LogicalType> struct_children;
@@ -285,6 +305,7 @@ unique_ptr<IcebergColumnDefinition> IcebergColumnDefinition::Copy() const {
 		res->write_default = make_uniq<Value>(write_default->Copy());
 	}
 	res->required = required;
+	res->fixed_length = fixed_length;
 	for (auto &child : children) {
 		res->AddChild(child->Copy());
 	}
@@ -522,6 +543,9 @@ bool IcebergColumnDefinition::Equals(const IcebergColumnDefinition &other) const
 		return false;
 	}
 	if (doc != other.doc) {
+		return false;
+	}
+	if (fixed_length != other.fixed_length) {
 		return false;
 	}
 	if (children.size() != other.children.size()) {
