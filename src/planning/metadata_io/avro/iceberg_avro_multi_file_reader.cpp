@@ -47,6 +47,10 @@ static optional<string> TryGetMetadataString(const InsertionOrderPreservingMap<V
 	return entry->second.GetValue<string>();
 }
 
+static bool HasMetadataKey(const InsertionOrderPreservingMap<Value> &metadata, const string &key) {
+	return metadata.find(key) != metadata.end();
+}
+
 static string ManifestMetadataErrorPrefix(const string &path) {
 	if (path.empty()) {
 		return "Manifest";
@@ -93,12 +97,25 @@ static optional<int32_t> TryParseSchemaIdFromSchemaJson(const string &schema_jso
 	                                : schema_id_val.GetUnsignedInteger());
 }
 
+//! 'fallback_schema_id' and 'fallback_partition_spec_id' replace the keys that v1 manifests don't have to store
 static IcebergManifestMetadata ParseManifestMetadata(const InsertionOrderPreservingMap<Value> &metadata,
-                                                     const string &path) {
+                                                     const string &path, int32_t fallback_schema_id,
+                                                     int32_t fallback_partition_spec_id) {
+	//! SPEC: 'format-version', 'partition-spec-id' and 'schema-id' are optional in v1 and required from v2,
+	//! so a manifest without 'format-version' is a v1 manifest
+	int32_t format_version = 1;
+	if (HasMetadataKey(metadata, "format-version")) {
+		format_version = GetRequiredMetadataInt(metadata, "format-version", path);
+	}
+	bool is_v1_manifest = format_version == 1;
+
 	auto schema_id = TryGetMetadataInt(metadata, "schema-id");
 	if (!schema_id) {
 		auto schema_json = GetRequiredMetadataString(metadata, "schema", path);
 		schema_id = TryParseSchemaIdFromSchemaJson(schema_json);
+		if (!schema_id && is_v1_manifest) {
+			schema_id = fallback_schema_id;
+		}
 		if (!schema_id) {
 			throw InvalidConfigurationException(
 			    "%s is missing required Avro key-value metadata field 'schema-id' and its 'schema' JSON does not "
@@ -107,8 +124,10 @@ static IcebergManifestMetadata ParseManifestMetadata(const InsertionOrderPreserv
 		}
 	}
 
-	auto partition_spec_id = GetRequiredMetadataInt(metadata, "partition-spec-id", path);
-	auto format_version = GetRequiredMetadataInt(metadata, "format-version", path);
+	int32_t partition_spec_id = fallback_partition_spec_id;
+	if (!is_v1_manifest || HasMetadataKey(metadata, "partition-spec-id")) {
+		partition_spec_id = GetRequiredMetadataInt(metadata, "partition-spec-id", path);
+	}
 
 	IcebergManifestContentType content = IcebergManifestContentType::DATA;
 	auto content_str = TryGetMetadataString(metadata, "content");
@@ -607,8 +626,9 @@ ReaderInitializeType IcebergAvroMultiFileReader::InitializeReader(
 				auto manifest_path = manifest_list_entry.file.manifest_path.empty()
 				                         ? reader_data.reader->GetFileName()
 				                         : manifest_list_entry.file.manifest_path;
-				manifest_list_entry.manifest_metadata.emplace(
-				    ParseManifestMetadata(reader_data.reader->GetMetadata(), manifest_path));
+				manifest_list_entry.manifest_metadata.emplace(ParseManifestMetadata(
+				    reader_data.reader->GetMetadata(), manifest_path, avro_scan_info.metadata.GetCurrentSchemaId(),
+				    manifest_list_entry.file.partition_spec_id));
 			}
 		}
 		for (auto &partition_spec : avro_scan_info.metadata.partition_specs) {

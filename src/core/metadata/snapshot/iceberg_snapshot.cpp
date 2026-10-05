@@ -74,11 +74,8 @@ rest_api_objects::Snapshot IcebergSnapshot::ToRESTObject(const IcebergTableMetad
 
 IcebergSnapshot IcebergSnapshot::ParseSnapshot(const rest_api_objects::Snapshot &snapshot,
                                                IcebergTableMetadata &metadata) {
-	if (!snapshot.schema_id) {
-		throw InvalidConfigurationException("snapshot.schema_id is not set");
-	}
-
-	IcebergSnapshot ret(*snapshot.schema_id);
+	//! SPEC: Snapshot field schema-id is optional; without it the snapshot is read with the current schema
+	IcebergSnapshot ret(snapshot.schema_id ? *snapshot.schema_id : metadata.GetCurrentSchemaId());
 	if (metadata.iceberg_version == 1) {
 		//! SPEC: Snapshot field sequence-number must default to 0
 		ret.sequence_number = 0;
