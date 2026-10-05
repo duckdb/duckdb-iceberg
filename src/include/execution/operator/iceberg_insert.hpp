@@ -38,6 +38,8 @@ public:
 	//! Partition specification for the table (if partitioned)
 	optional_ptr<const IcebergPartitionSpec> partition_spec;
 	IcebergInsertVirtualColumns virtual_columns = IcebergInsertVirtualColumns::NONE;
+	//! Table name used in NOT NULL constraint errors
+	string table_name;
 	//! For CREATE TABLE AS: what to create, and (via its `schema`) where.
 	unique_ptr<BoundCreateTableInfo> ctas_info;
 };

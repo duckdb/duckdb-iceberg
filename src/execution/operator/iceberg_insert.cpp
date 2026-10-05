@@ -23,6 +23,7 @@
 #include "catalog/rest/iceberg_catalog.hpp"
 #include "catalog/rest/catalog_entry/table/iceberg_table_schema_version.hpp"
 #include "execution/operator/iceberg_delete.hpp"
+#include "execution/operator/iceberg_not_null_check.hpp"
 #include "catalog/rest/catalog_entry/table/iceberg_table.hpp"
 #include "core/metadata/schema/iceberg_column_definition.hpp"
 #include "core/metadata/schema/iceberg_table_schema.hpp"
@@ -584,6 +585,8 @@ struct IcebergWriteColumn {
 	optional<Value> field_id;
 	//! Added only to route rows by a transformed partition value (e.g. day(ts)); not written to the file.
 	bool is_computed_partition_value = false;
+	//! The child plan column this written column is produced from, possibly through a cast or NOT NULL check.
+	optional_idx source_index;
 };
 
 //! The layout of the chunk that reaches the copy operator. Built once, so that the copy bind
@@ -610,11 +613,11 @@ static optional_idx PassThroughIndex(const IcebergWriteColumn &column) {
 	return column.source->Cast<BoundReferenceExpression>().Index();
 }
 
-//! Position in the layout of the written column that passes through the given child plan column.
+//! Position in the layout of the written column that is produced from the given child plan column.
 static idx_t FindWrittenColumn(const IcebergWriteLayout &layout, idx_t child_idx) {
 	for (idx_t i = 0; i < layout.columns.size(); i++) {
 		auto &column = layout.columns[i];
-		if (!column.is_computed_partition_value && PassThroughIndex(column) == child_idx) {
+		if (!column.is_computed_partition_value && column.source_index == child_idx) {
 			return i;
 		}
 	}
@@ -662,6 +665,9 @@ static IcebergWriteLayout BuildWriteLayout(ClientContext &context, const Iceberg
 		write_column.name = column.name;
 		write_column.type = GetWrittenType(column.type, column.name);
 		write_column.source = make_uniq<BoundReferenceExpression>(column.type, schema_idx);
+		write_column.source_index = schema_idx;
+		// checked before the cast below, which may drop fields of the original type
+		write_column.source = IcebergNotNullCheck::Wrap(std::move(write_column.source), column, copy_input.table_name);
 		if (write_column.type != column.type) {
 			// casting to the written type drops the omitted fields from the value
 			write_column.source =
@@ -1016,6 +1022,7 @@ PhysicalOperator &IcebergCatalog::PlanInsert(ClientContext &context, PhysicalPla
 
 	// Create Copy Info
 	IcebergCopyInput copy_input(context, table_metadata, schema);
+	copy_input.table_name = updated_table_entry.name.GetIdentifierName();
 	auto &insert = planner.Make<IcebergInsert>(op, updated_table_entry, op.column_index_map);
 	auto &physical_copy = IcebergInsert::PlanCopyForInsert(context, planner, copy_input, plan);
 	insert.children.push_back(physical_copy);

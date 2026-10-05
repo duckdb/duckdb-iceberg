@@ -16,7 +16,8 @@ namespace duckdb {
 struct IcebergDataFileStats {
 	//! Populate lower/upper bounds, value/null counts, and column sizes on
 	//! `data_file` from one COPY RETURN_STATS `column_statistics` map value.
-	//! Respects write.metadata.metrics.* and enforces NOT NULL constraints.
+	//! Respects write.metadata.metrics.*. NOT NULL constraints are checked on the values before the write
+	//! (IcebergNotNullCheck), since a null count cannot tell a NULL field from a NULL parent.
 	static void PopulateFromReturnStats(ClientContext &context, IcebergDataFile &data_file, const Value &column_stats,
 	                                    const IcebergTableMetadata &table_metadata, const string &table_name);
 };

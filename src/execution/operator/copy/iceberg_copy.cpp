@@ -73,6 +73,7 @@ PhysicalOperator &IcebergLogicalCopy::CreatePlan(ClientContext &context, Physica
 
 	// Create IcebergCopyInput with the metadata from bind data
 	IcebergCopyInput copy_input(context, *copy_bind_data.table_metadata, *copy_bind_data.table_schema);
+	copy_input.table_name = "local_iceberg_table";
 
 	if (!fs.IsRemoteFile(copy_input.data_path)) {
 		// create data path if it does not yet exist

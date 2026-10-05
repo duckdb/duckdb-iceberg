@@ -103,6 +103,7 @@ PhysicalOperator &LogicalRewriteDataFiles::CreatePlan(ClientContext &context, Ph
 	//! Vended credentials are already installed: PlanRewrite loads them for the manifests,
 	//! and BindCandidateCopy's table scan bind calls PrepareIcebergScanFromEntry.
 	IcebergCopyInput copy_input(context, metadata, current_schema);
+	copy_input.table_name = rewrite.plan.table_name.Name().GetIdentifierName();
 	auto &copy = IcebergInsert::PlanCopyForInsert(context, planner, copy_input, &scan);
 	copy.file_size_bytes = NumericCast<idx_t>(rewrite.plan.target_file_size_bytes);
 	//! A file can never be smaller than a single row group; rotation only happens at row-group
