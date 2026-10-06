@@ -28,15 +28,14 @@ public:
 	int64_t GetCommitRetryCount() const;
 	bool SupportsAppendRetry() const;
 	bool RetryStateMatches(const IcebergTable &table_info) const;
-	//! Whether this transaction stages a DELETE snapshot; gates the commit-retry safety check.
-	bool ContainsDelete() const;
 	bool IsFileInvalidated(const IcebergFileIdentity &file) const;
 
 	void AddSnapshot(IcebergSnapshotOperationType operation, vector<IcebergManifestEntry> &&data_files,
 	                 IcebergManifestDeletes &&altered_manifests);
-	void AddDeleteSnapshot(partitioned_manifest_entry_map_t &&delete_files, IcebergManifestDeletes &&altered_manifests);
+	void AddDeleteSnapshot(partitioned_manifest_entry_map_t &&delete_files, IcebergManifestDeletes &&altered_manifests,
+	                       bool is_merge);
 	void AddUpdateSnapshot(partitioned_manifest_entry_map_t &&delete_files, vector<IcebergManifestEntry> &&data_files,
-	                       IcebergManifestDeletes &&altered_manifests);
+	                       IcebergManifestDeletes &&altered_manifests, bool is_merge);
 	// add a schema update for a table
 	void TableAddSchema(int32_t schema_id);
 	void TableSetCurrentSchema(int32_t schema_id);

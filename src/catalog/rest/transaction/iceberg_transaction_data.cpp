@@ -126,18 +126,6 @@ int64_t IcebergTransactionData::GetCommitRetryCount() const {
 	return result;
 }
 
-bool IcebergTransactionData::ContainsDelete() const {
-	for (auto &update : updates) {
-		if (update->type != IcebergTableUpdateType::ADD_SNAPSHOT) {
-			continue;
-		}
-		if (update->Cast<IcebergAddSnapshot>().GetOperation() == IcebergSnapshotOperationType::DELETE) {
-			return true;
-		}
-	}
-	return false;
-}
-
 bool IcebergTransactionData::IsFileInvalidated(const IcebergFileIdentity &file) const {
 	return manifest_deletes.IsInvalidated(file);
 }
@@ -253,7 +241,7 @@ void IcebergTransactionData::AddSnapshotUpdate(unique_ptr<IcebergAddSnapshot> ad
 }
 
 void IcebergTransactionData::AddDeleteSnapshot(partitioned_manifest_entry_map_t &&delete_files,
-                                               IcebergManifestDeletes &&altered_manifests) {
+                                               IcebergManifestDeletes &&altered_manifests, bool is_merge) {
 	//! NOTE: Lock has to be held to make sure the rows are assigned the correct row ids
 	lock_guard<mutex> guard(lock);
 
@@ -262,7 +250,7 @@ void IcebergTransactionData::AddDeleteSnapshot(partitioned_manifest_entry_map_t 
 
 	const auto sequence_number = table_metadata.last_sequence_number + alters.size() + 1;
 
-	auto add_snapshot = make_uniq<IcebergAddSnapshot>(table_info, IcebergSnapshotOperationType::DELETE);
+	auto add_snapshot = make_uniq<IcebergAddSnapshot>(table_info, IcebergSnapshotOperationType::DELETE, is_merge);
 	AddDeleteManifestFiles(*add_snapshot, std::move(delete_files), sequence_number);
 	// make sure we are still inserting into the current schema
 	if (table_metadata.current_snapshot_id) {
@@ -273,7 +261,7 @@ void IcebergTransactionData::AddDeleteSnapshot(partitioned_manifest_entry_map_t 
 
 void IcebergTransactionData::AddUpdateSnapshot(partitioned_manifest_entry_map_t &&delete_files,
                                                vector<IcebergManifestEntry> &&data_files,
-                                               IcebergManifestDeletes &&altered_manifests) {
+                                               IcebergManifestDeletes &&altered_manifests, bool is_merge) {
 	//! NOTE: Lock has to be held to make sure the rows are assigned the correct row ids
 	lock_guard<mutex> guard(lock);
 
@@ -289,7 +277,7 @@ void IcebergTransactionData::AddUpdateSnapshot(partitioned_manifest_entry_map_t 
 	auto data_manifest_metadata =
 	    IcebergManifestMetadata::FromTableMetadata(table_metadata, IcebergManifestContentType::DATA);
 
-	auto add_snapshot = make_uniq<IcebergAddSnapshot>(table_info);
+	auto add_snapshot = make_uniq<IcebergAddSnapshot>(table_info, IcebergSnapshotOperationType::OVERWRITE, is_merge);
 	AddDeleteManifestFiles(*add_snapshot, std::move(delete_files), sequence_number);
 	// Add a manifest_file for the new insert data
 	add_snapshot->AddManifestFile(IcebergManifestListEntry::CreateFromEntries(

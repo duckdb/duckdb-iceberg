@@ -16,8 +16,9 @@
 
 namespace duckdb {
 
-IcebergAddSnapshot::IcebergAddSnapshot(const IcebergTable &table_info, IcebergSnapshotOperationType operation)
-    : IcebergTableUpdate(IcebergTableUpdateType::ADD_SNAPSHOT), operation(operation) {
+IcebergAddSnapshot::IcebergAddSnapshot(const IcebergTable &table_info, IcebergSnapshotOperationType operation,
+                                       bool is_merge)
+    : IcebergTableUpdate(IcebergTableUpdateType::ADD_SNAPSHOT), operation(operation), is_merge(is_merge) {
 	//! FIXME: Do we also need to capture the current partition spec and sort order?
 	//! This is a bit of a code smell, the `IcebergTable` should instead be const
 	//! and all transactional changes should live in the IcebergTransactionData
@@ -25,8 +26,9 @@ IcebergAddSnapshot::IcebergAddSnapshot(const IcebergTable &table_info, IcebergSn
 }
 
 bool IcebergAddSnapshot::IsRetryable() const {
-	//! DELETE-retry safety is enforced in StageSingleTableCommit.
-	return operation == IcebergSnapshotOperationType::APPEND || operation == IcebergSnapshotOperationType::DELETE;
+	//! DELETE/OVERWRITE-retry safety is enforced in StageSingleTableCommit.
+	return operation == IcebergSnapshotOperationType::APPEND || operation == IcebergSnapshotOperationType::DELETE ||
+	       operation == IcebergSnapshotOperationType::OVERWRITE;
 }
 
 static rest_api_objects::TableUpdate CreateAddSnapshotUpdate(const IcebergTable &table_info,
