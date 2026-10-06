@@ -45,7 +45,10 @@ public:
 	//! Snapshot(s) created in this commit
 	vector<IcebergSnapshot> created_snapshots;
 	int64_t next_sequence_number;
+	//! Next row ID to assign, ahead of 'table_next_row_id' once existing manifests get row IDs (upgraded tables)
 	int64_t next_row_id = 0;
+	//! The table's 'next-row-id' after the snapshots created so far in this commit, the next 'first-row-id'
+	int64_t table_next_row_id = 0;
 
 	ClientContext &context;
 	vector<string> created_metadata_files;

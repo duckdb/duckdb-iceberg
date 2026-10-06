@@ -53,6 +53,7 @@ void IcebergCommitState::RefreshFromTable() {
 	if (table_info.table_metadata.next_row_id) {
 		next_row_id = *table_info.table_metadata.next_row_id;
 	}
+	table_next_row_id = next_row_id;
 }
 
 void IcebergCommitState::LoadExistingManifests(DatabaseInstance &db,
@@ -83,6 +84,7 @@ void IcebergCommitState::LoadExistingManifests(DatabaseInstance &db,
 	if (table_info.table_metadata.next_row_id) {
 		next_row_id = *table_info.table_metadata.next_row_id;
 	}
+	table_next_row_id = next_row_id;
 	AssignManifestFirstRowIds(table_info.table_metadata, current_snapshot, manifests, next_row_id);
 
 	auto &system_catalog = Catalog::GetSystemCatalog(db);

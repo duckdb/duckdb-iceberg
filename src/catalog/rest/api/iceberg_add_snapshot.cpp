@@ -151,12 +151,12 @@ CreateCommitManifestFiles(const vector<IcebergPendingManifest> &pending_manifest
 	vector<IcebergManifestListEntry> result;
 	result.reserve(pending_manifests.size());
 	auto &fs = FileSystem::GetFileSystem(commit_state.context);
-	auto next_row_id = commit_state.next_row_id;
 	for (const auto &pending_manifest : pending_manifests) {
 		auto copied_entries = pending_manifest.GetEntries();
+		//! Data manifests get their 'first_row_id' here, and 'next_row_id' moves past the rows they cover
 		auto copied_manifest = IcebergManifestListEntry::CreateFromEntries(
 		    fs, sequence_number, table_info.table_metadata, pending_manifest.GetMetadata(), std::move(copied_entries),
-		    next_row_id);
+		    commit_state.next_row_id);
 		result.push_back(std::move(copied_manifest));
 	}
 	return result;
@@ -205,29 +205,22 @@ void IcebergAddSnapshot::CreateUpdate(DatabaseInstance &db, ClientContext &conte
 	ConstructManifestList(new_manifest_list, avro_copy, db, commit_state, new_snapshot.metrics);
 
 	if (table_metadata.iceberg_version >= 3) {
-		new_snapshot.first_row_id = commit_state.next_row_id;
-		new_snapshot.added_rows = 0;
+		//! The snapshot starts at the table's 'next-row-id' and covers every row ID assigned since, including the IDs
+		//! given to existing manifests that had none (tables upgraded from v2). The catalog adds 'added-rows' to
+		//! 'next-row-id', so this keeps 'next-row-id' above every assigned row ID.
+		D_ASSERT(commit_state.next_row_id >= commit_state.table_next_row_id);
+		new_snapshot.first_row_id = commit_state.table_next_row_id;
+		new_snapshot.added_rows = commit_state.next_row_id - commit_state.table_next_row_id;
+		commit_state.table_next_row_id = commit_state.next_row_id;
 	}
 
 	for (auto &manifest_list_entry : uncommitted_manifest_files) {
-		auto &manifest_file = manifest_list_entry.file;
 		new_snapshot.metrics.AddManifestListEntry(manifest_list_entry);
 
 		auto new_manifest_list_entry =
 		    WriteManifestListEntry(commit_state.table_info, manifest_list_entry, avro_copy, db, context);
 		commit_state.created_metadata_files.push_back(new_manifest_list_entry.file.manifest_path);
 		new_manifest_list.AddNewManifestFile(std::move(new_manifest_list_entry));
-
-		if (table_metadata.iceberg_version >= 3) {
-			D_ASSERT(manifest_file.counts && manifest_file.counts->added_rows_count &&
-			         manifest_file.counts->existing_rows_count);
-			commit_state.next_row_id +=
-			    *manifest_file.counts->existing_rows_count + *manifest_file.counts->added_rows_count;
-
-			if (manifest_file.content == IcebergManifestContentType::DATA) {
-				*new_snapshot.added_rows += *manifest_file.counts->added_rows_count;
-			}
-		}
 	}
 
 	manifest_list::WriteToFile(table_metadata, new_manifest_list, avro_copy, db, context);

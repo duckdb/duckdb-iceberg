@@ -1,0 +1,206 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/test_row_lineage_next_row_id.test
+# description: A snapshot's first-row-id and added-rows cover every row ID it assigns, so next-row-id stays above all of them
+# group: [catalog_agnostic]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require-env FORMAT_V3_SUPPORT
+
+require-env SNAPSHOT_HISTORY_SUPPORT
+
+include test/sql/init_requires
+
+require core_functions
+
+# The first commit after a V2 -> V3 upgrade gives the existing rows their row IDs. The catalog adds the snapshot's
+# added-rows to next-row-id, so added-rows must count those rows too, or other writers reuse their IDs.
+
+# ---- First commit after the upgrade is an INSERT ----
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.next_row_id_upgrade_insert;
+
+statement ok
+CREATE TABLE my_datalake.default.next_row_id_upgrade_insert (id INTEGER) WITH ('format-version'=2);
+
+statement ok
+INSERT INTO my_datalake.default.next_row_id_upgrade_insert SELECT range FROM range(10);
+
+statement ok
+ALTER TABLE my_datalake.default.next_row_id_upgrade_insert SET ('format-version'=3);
+
+statement ok
+INSERT INTO my_datalake.default.next_row_id_upgrade_insert SELECT 100 + range FROM range(5);
+
+# The 10 existing rows get row IDs 0-9 and the 5 new rows 10-14
+query III
+SELECT count(*), count(DISTINCT _row_id), max(_row_id) FROM my_datalake.default.next_row_id_upgrade_insert;
+----
+15	15	14
+
+query I
+SELECT metadata."next-row-id"::BIGINT FROM iceberg_load_table_response('my_datalake.default.next_row_id_upgrade_insert');
+----
+15
+
+query III
+SELECT s."sequence-number"::BIGINT AS seq, s."first-row-id"::BIGINT, s."added-rows"::BIGINT
+FROM iceberg_load_table_response('my_datalake.default.next_row_id_upgrade_insert'), unnest(metadata.snapshots::VARIANT[]) AS t(s)
+ORDER BY seq;
+----
+1	NULL	NULL
+2	0	15
+
+# The next commit continues from next-row-id
+statement ok
+INSERT INTO my_datalake.default.next_row_id_upgrade_insert VALUES (200), (201);
+
+query I
+SELECT list(_row_id ORDER BY _row_id) FROM my_datalake.default.next_row_id_upgrade_insert WHERE id >= 200;
+----
+[15, 16]
+
+query I
+SELECT metadata."next-row-id"::BIGINT FROM iceberg_load_table_response('my_datalake.default.next_row_id_upgrade_insert');
+----
+17
+
+query III
+SELECT s."sequence-number"::BIGINT AS seq, s."first-row-id"::BIGINT, s."added-rows"::BIGINT
+FROM iceberg_load_table_response('my_datalake.default.next_row_id_upgrade_insert'), unnest(metadata.snapshots::VARIANT[]) AS t(s)
+ORDER BY seq;
+----
+1	NULL	NULL
+2	0	15
+3	15	2
+
+statement ok
+DROP TABLE my_datalake.default.next_row_id_upgrade_insert;
+
+# ---- First commit after the upgrade is a DELETE: it adds no rows but still assigns IDs ----
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.next_row_id_upgrade_delete;
+
+statement ok
+CREATE TABLE my_datalake.default.next_row_id_upgrade_delete (id INTEGER) WITH ('format-version'=2);
+
+statement ok
+INSERT INTO my_datalake.default.next_row_id_upgrade_delete SELECT range FROM range(10);
+
+statement ok
+ALTER TABLE my_datalake.default.next_row_id_upgrade_delete SET ('format-version'=3);
+
+statement ok
+DELETE FROM my_datalake.default.next_row_id_upgrade_delete WHERE id = 0;
+
+query III
+SELECT count(*), min(_row_id), max(_row_id) FROM my_datalake.default.next_row_id_upgrade_delete;
+----
+9	1	9
+
+query I
+SELECT metadata."next-row-id"::BIGINT FROM iceberg_load_table_response('my_datalake.default.next_row_id_upgrade_delete');
+----
+10
+
+query III
+SELECT s."sequence-number"::BIGINT AS seq, s."first-row-id"::BIGINT, s."added-rows"::BIGINT
+FROM iceberg_load_table_response('my_datalake.default.next_row_id_upgrade_delete'), unnest(metadata.snapshots::VARIANT[]) AS t(s)
+ORDER BY seq;
+----
+1	NULL	NULL
+2	0	10
+
+statement ok
+DROP TABLE my_datalake.default.next_row_id_upgrade_delete;
+
+# ---- First commit after the upgrade is an UPDATE ----
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.next_row_id_upgrade_update;
+
+statement ok
+CREATE TABLE my_datalake.default.next_row_id_upgrade_update (id INTEGER) WITH ('format-version'=2);
+
+statement ok
+INSERT INTO my_datalake.default.next_row_id_upgrade_update SELECT range FROM range(10);
+
+statement ok
+ALTER TABLE my_datalake.default.next_row_id_upgrade_update SET ('format-version'=3);
+
+statement ok
+UPDATE my_datalake.default.next_row_id_upgrade_update SET id = id + 1000 WHERE id = 0;
+
+# Rows written before the upgrade have no row ID to carry over, so the updated row gets the new row ID 10
+query III
+SELECT count(*), count(DISTINCT _row_id), max(_row_id) FROM my_datalake.default.next_row_id_upgrade_update;
+----
+10	10	10
+
+query I
+SELECT metadata."next-row-id"::BIGINT FROM iceberg_load_table_response('my_datalake.default.next_row_id_upgrade_update');
+----
+11
+
+query III
+SELECT s."sequence-number"::BIGINT AS seq, s."first-row-id"::BIGINT, s."added-rows"::BIGINT
+FROM iceberg_load_table_response('my_datalake.default.next_row_id_upgrade_update'), unnest(metadata.snapshots::VARIANT[]) AS t(s)
+ORDER BY seq;
+----
+1	NULL	NULL
+2	0	11
+
+statement ok
+DROP TABLE my_datalake.default.next_row_id_upgrade_update;
+
+# ---- DELETE then INSERT in one transaction: the delete files must not move the row IDs of the insert ----
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.next_row_id_delete_insert;
+
+statement ok
+CREATE TABLE my_datalake.default.next_row_id_delete_insert (id INTEGER) WITH ('format-version'=3);
+
+statement ok
+INSERT INTO my_datalake.default.next_row_id_delete_insert SELECT range FROM range(10);
+
+statement ok
+BEGIN;
+
+statement ok
+DELETE FROM my_datalake.default.next_row_id_delete_insert WHERE id < 3;
+
+statement ok
+INSERT INTO my_datalake.default.next_row_id_delete_insert SELECT 100 + range FROM range(5);
+
+query I
+SELECT list(_row_id ORDER BY _row_id) FROM my_datalake.default.next_row_id_delete_insert WHERE id >= 100;
+----
+[10, 11, 12, 13, 14]
+
+statement ok
+COMMIT;
+
+# The committed row IDs match the ones seen inside the transaction
+query I
+SELECT list(_row_id ORDER BY _row_id) FROM my_datalake.default.next_row_id_delete_insert WHERE id >= 100;
+----
+[10, 11, 12, 13, 14]
+
+query I
+SELECT metadata."next-row-id"::BIGINT FROM iceberg_load_table_response('my_datalake.default.next_row_id_delete_insert');
+----
+15
+
+query III
+SELECT s."sequence-number"::BIGINT AS seq, s."first-row-id"::BIGINT, s."added-rows"::BIGINT
+FROM iceberg_load_table_response('my_datalake.default.next_row_id_delete_insert'), unnest(metadata.snapshots::VARIANT[]) AS t(s)
+ORDER BY seq;
+----
+1	0	10
+2	10	0
+3	10	5
+
+statement ok
+DROP TABLE my_datalake.default.next_row_id_delete_insert;
