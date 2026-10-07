@@ -19,9 +19,9 @@ public:
 	}
 
 	//! Adapt to the scanner's manifest representation without allocating a file path.
-	//! Sequence numbers and row IDs belong to this scan, not to the pending content.
+	//! Sequence numbers belong to this scan, not to the pending content. The scan gets no first_row_id.
 	IcebergManifestListEntry CreateScanEntry(const IcebergTableMetadata &table_metadata,
-	                                         sequence_number_t sequence_number, int64_t &next_row_id) const;
+	                                         sequence_number_t sequence_number) const;
 
 private:
 	IcebergManifestMetadata metadata;

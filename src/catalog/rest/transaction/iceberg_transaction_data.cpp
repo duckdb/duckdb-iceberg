@@ -41,8 +41,7 @@ static void LoadMissingManifestCounts(ClientContext &context, const IcebergTable
 }
 
 static optional<int64_t> LoadExistingManifestList(ClientContext &context, const IcebergTableMetadata &metadata,
-                                                  vector<IcebergManifestListEntry> &existing_manifest_list,
-                                                  int64_t &next_row_id) {
+                                                  vector<IcebergManifestListEntry> &existing_manifest_list) {
 	existing_manifest_list.clear();
 
 	auto current_snapshot = metadata.GetLatestSnapshot();
@@ -60,30 +59,6 @@ static optional<int64_t> LoadExistingManifestList(ClientContext &context, const 
 		LoadMissingManifestCounts(context, metadata, snapshot_info, manifest_list_entry);
 	}
 
-	if (metadata.iceberg_version < 3) {
-		return base_snapshot_id;
-	}
-
-	//! Deal with upgraded tables, if the snapshot originated from V2
-	for (auto &manifest_list_entry : existing_manifest_list) {
-		auto &manifest_file = manifest_list_entry.GetManifest();
-		if (manifest_file.content != IcebergManifestContentType::DATA) {
-			continue;
-		}
-		if (manifest_file.first_row_id) {
-			continue;
-		}
-		if (current_snapshot->first_row_id) {
-			throw InvalidConfigurationException(
-			    "Table is corrupted, snapshot has 'first-row-id' but not all 'manifest_file' "
-			    "entries have a 'first_row_id'");
-		}
-		D_ASSERT(manifest_file.counts && manifest_file.counts->added_rows_count &&
-		         manifest_file.counts->existing_rows_count);
-		manifest_file.first_row_id = next_row_id;
-		next_row_id += *manifest_file.counts->added_rows_count;
-		next_row_id += *manifest_file.counts->existing_rows_count;
-	}
 	return base_snapshot_id;
 }
 
@@ -179,12 +154,7 @@ void IcebergTransactionData::CacheExistingManifestList(lock_guard<mutex> &guard,
 	if (!alters.empty()) {
 		return;
 	}
-	int64_t loaded_next_row_id = 0;
-	if (metadata.next_row_id) {
-		loaded_next_row_id = *metadata.next_row_id;
-	}
-	base_snapshot_id = LoadExistingManifestList(context, metadata, existing_manifest_list, loaded_next_row_id);
-	scan_first_row_id = loaded_next_row_id;
+	base_snapshot_id = LoadExistingManifestList(context, metadata, existing_manifest_list);
 	scan_sequence_number = metadata.last_sequence_number + 1;
 }
 

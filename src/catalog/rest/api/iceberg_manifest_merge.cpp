@@ -214,7 +214,7 @@ optional<IcebergManifestListEntry> MergeBin(const vector<IcebergManifestListEntr
 	//! manifest's first_row_id is the smallest first_row_id among the manifests it absorbs.
 	//! This uses file-level metadata only -- no entry read required. Carried-over manifests always
 	//! have a first_row_id by this point: a V2->V3 upgraded snapshot assigns one to every existing
-	//! DATA manifest earlier in the commit (see IcebergTransactionData's upgrade handling), and new
+	//! DATA manifest earlier in the commit (see AssignManifestFirstRowIds in iceberg_table_update.cpp), and new
 	//! V3 data manifests are excluded from merging (they inherit their id only at write time).
 	optional<int64_t> min_first_row_id;
 	for (auto idx : bin) {

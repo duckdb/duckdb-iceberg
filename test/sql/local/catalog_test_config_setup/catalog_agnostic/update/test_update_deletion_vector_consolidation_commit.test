@@ -40,13 +40,13 @@ insert into my_datalake.default.tbl values
 	(5, 'e');
 
 query IIII
-select _last_updated_sequence_number, _row_id, id, data from my_datalake.default.tbl order by _row_id;
+select _last_updated_sequence_number, _row_id, id, data from my_datalake.default.tbl order by id;
 ----
-1	0	1	a
-1	1	2	b
-1	2	3	c
-1	3	4	d
-1	4	5	e
+1	NULL	1	a
+1	NULL	2	b
+1	NULL	3	c
+1	NULL	4	d
+1	NULL	5	e
 
 # Create the first delete on the table
 statement ok
@@ -55,13 +55,13 @@ SET data = data || '_u1'
 WHERE id IN (2, 4);
 
 query IIII
-select _last_updated_sequence_number, _row_id, id, data from my_datalake.default.tbl order by _row_id;
+select _last_updated_sequence_number, _row_id, id, data from my_datalake.default.tbl order by id;
 ----
-1	0	1	a
-2	1	2	b_u1
-1	2	3	c
-2	3	4	d_u1
-1	4	5	e
+1	NULL	1	a
+2	NULL	2	b_u1
+1	NULL	3	c
+2	NULL	4	d_u1
+1	NULL	5	e
 
 # Create a new delete that needs to invalidate the existing delete and include its contents
 statement ok
@@ -69,12 +69,12 @@ DELETE FROM my_datalake.default.tbl
 WHERE id = 5;
 
 query IIII
-select _last_updated_sequence_number, _row_id, id, data from my_datalake.default.tbl order by _row_id;
+select _last_updated_sequence_number, _row_id, id, data from my_datalake.default.tbl order by id;
 ----
-1	0	1	a
-2	1	2	b_u1
-1	2	3	c
-2	3	4	d_u1
+1	NULL	1	a
+2	NULL	2	b_u1
+1	NULL	3	c
+2	NULL	4	d_u1
 
 # Create a new delete that needs to invalidate the existing delete and include its contents
 statement ok
@@ -83,20 +83,31 @@ SET data = data || '_u3'
 WHERE id IN (1, 4);
 
 query IIII
-select _last_updated_sequence_number, _row_id, id, data from my_datalake.default.tbl order by _row_id;
+select _last_updated_sequence_number, _row_id, id, data from my_datalake.default.tbl order by id;
 ----
-4	0	1	a_u3
-2	1	2	b_u1
-1	2	3	c
-4	3	4	d_u1_u3
+4	NULL	1	a_u3
+2	NULL	2	b_u1
+1	NULL	3	c
+4	NULL	4	d_u1_u3
 
 statement ok
 commit;
 
 query IIII
-select _last_updated_sequence_number, _row_id, id, data from my_datalake.default.tbl order by _row_id;
+select _last_updated_sequence_number, _row_id, id, data from my_datalake.default.tbl where id not in (1, 4) order by _row_id;
 ----
-4	0	1	a_u3
-2	1	2	b_u1
 1	2	3	c
-4	3	4	d_u1_u3
+2	5	2	b_u1
+
+# Rows 1 and 4 come from two pending files. Their order in the new file depends on the scan.
+
+query III
+select _last_updated_sequence_number, id, data from my_datalake.default.tbl where id in (1, 4) order by id;
+----
+4	1	a_u3
+4	4	d_u1_u3
+
+query II
+select list(_row_id ORDER BY _row_id), count(DISTINCT _row_id) from my_datalake.default.tbl where id in (1, 4);
+----
+[7, 8]	2
