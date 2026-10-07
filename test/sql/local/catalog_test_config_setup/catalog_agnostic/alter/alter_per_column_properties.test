@@ -1,0 +1,288 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/alter/alter_per_column_properties.test
+# description: Per-column table properties follow their column on RENAME COLUMN and are removed on DROP COLUMN
+# group: [alter]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+include test/sql/init_requires
+
+require core_functions
+
+# --- RENAME COLUMN moves every per-column key to the new name ---
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.per_column_properties_rename;
+
+statement ok
+CREATE TABLE my_datalake.default.per_column_properties_rename (id INTEGER, secret VARCHAR, secret_x VARCHAR) WITH (
+    'write.metadata.metrics.default' = 'truncate(16)',
+    'write.metadata.metrics.column.secret' = 'none',
+    'write.metadata.metrics.column.secret_x' = 'counts',
+    'write.parquet.bloom-filter-enabled.column.secret' = 'true',
+    'write.parquet.bloom-filter-fpp.column.secret' = '0.05',
+    'write.parquet.bloom-filter-ndv.column.secret' = '1000',
+    'write.parquet.stats-enabled.column.secret' = 'false',
+    'write.parquet.dict-encoding-enabled.column.secret' = 'false'
+);
+
+statement ok
+ALTER TABLE my_datalake.default.per_column_properties_rename RENAME COLUMN secret TO secret2;
+
+# Keys of other columns and table-level keys are unchanged
+query II
+SELECT key, value FROM iceberg_table_properties(my_datalake.default.per_column_properties_rename)
+WHERE key LIKE 'write.metadata.metrics.%' OR key LIKE '%.column.%' ORDER BY key;
+----
+write.metadata.metrics.column.secret2	none
+write.metadata.metrics.column.secret_x	counts
+write.metadata.metrics.default	truncate(16)
+write.parquet.bloom-filter-enabled.column.secret2	true
+write.parquet.bloom-filter-fpp.column.secret2	0.05
+write.parquet.bloom-filter-ndv.column.secret2	1000
+write.parquet.dict-encoding-enabled.column.secret2	false
+write.parquet.stats-enabled.column.secret2	false
+
+statement ok
+INSERT INTO my_datalake.default.per_column_properties_rename VALUES (1, 'value_after_rename', 'other_value');
+
+# Metrics mode 'none' still applies to the renamed column: no bounds and no counts
+query I
+SELECT count(*) FROM iceberg_column_stats(my_datalake.default.per_column_properties_rename)
+WHERE column_name = 'secret2' AND (lower_bound IS NOT NULL OR upper_bound IS NOT NULL OR value_count IS NOT NULL);
+----
+0
+
+query II
+SELECT lower_bound IS NULL, value_count FROM iceberg_column_stats(my_datalake.default.per_column_properties_rename)
+WHERE column_name = 'secret_x';
+----
+true	1
+
+# --- The key is matched to the column case-insensitively, the same way it is looked up on write ---
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.per_column_properties_case;
+
+statement ok
+CREATE TABLE my_datalake.default.per_column_properties_case (id INTEGER, secret VARCHAR);
+
+statement ok
+ALTER TABLE my_datalake.default.per_column_properties_case SET ('write.metadata.metrics.column.SECRET' = 'none');
+
+statement ok
+INSERT INTO my_datalake.default.per_column_properties_case VALUES (1, 'value_before_rename');
+
+query I
+SELECT count(*) FROM iceberg_column_stats(my_datalake.default.per_column_properties_case)
+WHERE column_name = 'secret' AND (lower_bound IS NOT NULL OR upper_bound IS NOT NULL OR value_count IS NOT NULL);
+----
+0
+
+statement ok
+ALTER TABLE my_datalake.default.per_column_properties_case RENAME COLUMN secret TO secret2;
+
+query II
+SELECT key, value FROM iceberg_table_properties(my_datalake.default.per_column_properties_case)
+WHERE key LIKE '%.column.%';
+----
+write.metadata.metrics.column.secret2	none
+
+statement ok
+INSERT INTO my_datalake.default.per_column_properties_case VALUES (2, 'value_after_rename');
+
+query I
+SELECT count(*) FROM iceberg_column_stats(my_datalake.default.per_column_properties_case)
+WHERE column_name = 'secret2' AND (lower_bound IS NOT NULL OR upper_bound IS NOT NULL OR value_count IS NOT NULL);
+----
+0
+
+# --- Renaming a struct, list or map moves the keys of the fields inside it, and renaming a struct field moves its key ---
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.per_column_properties_nested;
+
+statement ok
+CREATE TABLE my_datalake.default.per_column_properties_nested (
+    id INTEGER,
+    s STRUCT(sf VARCHAR, keep VARCHAR),
+    l VARCHAR[],
+    m MAP(VARCHAR, VARCHAR)
+) WITH (
+    'write.metadata.metrics.column.s.sf' = 'none',
+    'write.metadata.metrics.column.l.element' = 'none',
+    'write.metadata.metrics.column.m.key' = 'none',
+    'write.metadata.metrics.column.m.value' = 'none'
+);
+
+statement ok
+ALTER TABLE my_datalake.default.per_column_properties_nested RENAME COLUMN s TO t;
+
+statement ok
+ALTER TABLE my_datalake.default.per_column_properties_nested RENAME COLUMN t.sf TO sg;
+
+statement ok
+ALTER TABLE my_datalake.default.per_column_properties_nested RENAME COLUMN l TO l2;
+
+statement ok
+ALTER TABLE my_datalake.default.per_column_properties_nested RENAME COLUMN m TO m2;
+
+query II
+SELECT key, value FROM iceberg_table_properties(my_datalake.default.per_column_properties_nested)
+WHERE key LIKE '%.column.%' ORDER BY key;
+----
+write.metadata.metrics.column.l2.element	none
+write.metadata.metrics.column.m2.key	none
+write.metadata.metrics.column.m2.value	none
+write.metadata.metrics.column.t.sg	none
+
+statement ok
+INSERT INTO my_datalake.default.per_column_properties_nested VALUES
+    (1, {'sg': 'nested_value', 'keep': 'kept_value'}, ['list_value'], MAP(['key_value'], ['map_value']));
+
+# Only the field without a key ('keep') gets bounds
+query II
+SELECT column_name, lower_bound IS NULL FROM iceberg_column_stats(my_datalake.default.per_column_properties_nested)
+WHERE column_name IN ('sg', 'keep', 'element', 'key', 'value') ORDER BY column_name;
+----
+element	true
+keep	false
+key	true
+sg	true
+value	true
+
+# --- DROP COLUMN removes the keys of the dropped field and of the fields inside it ---
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.per_column_properties_drop;
+
+statement ok
+CREATE TABLE my_datalake.default.per_column_properties_drop (id INTEGER, c VARCHAR, s STRUCT(a VARCHAR, b VARCHAR)) WITH (
+    'write.metadata.metrics.column.id' = 'counts',
+    'write.metadata.metrics.column.c' = 'full',
+    'write.parquet.bloom-filter-enabled.column.c' = 'true',
+    'write.metadata.metrics.column.s.a' = 'full',
+    'write.metadata.metrics.column.s.b' = 'full'
+);
+
+statement ok
+ALTER TABLE my_datalake.default.per_column_properties_drop DROP COLUMN c;
+
+statement ok
+ALTER TABLE my_datalake.default.per_column_properties_drop DROP COLUMN s.a;
+
+query II
+SELECT key, value FROM iceberg_table_properties(my_datalake.default.per_column_properties_drop)
+WHERE key LIKE '%.column.%' ORDER BY key;
+----
+write.metadata.metrics.column.id	counts
+write.metadata.metrics.column.s.b	full
+
+statement ok
+ALTER TABLE my_datalake.default.per_column_properties_drop DROP COLUMN s;
+
+query II
+SELECT key, value FROM iceberg_table_properties(my_datalake.default.per_column_properties_drop)
+WHERE key LIKE '%.column.%' ORDER BY key;
+----
+write.metadata.metrics.column.id	counts
+
+# A new column that reuses a dropped column's name gets the table default (truncate(16)), not the old 'full'
+statement ok
+ALTER TABLE my_datalake.default.per_column_properties_drop ADD COLUMN c VARCHAR;
+
+statement ok
+INSERT INTO my_datalake.default.per_column_properties_drop VALUES (1, 'abcdefghijklmnopqrstuvwxyz');
+
+query I
+SELECT length(lower_bound) FROM iceberg_column_stats(my_datalake.default.per_column_properties_drop)
+WHERE column_name = 'c';
+----
+16
+
+# --- In a transaction, later statements use the moved keys, and ABORT discards the change ---
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.per_column_properties_txn;
+
+statement ok
+CREATE TABLE my_datalake.default.per_column_properties_txn (id INTEGER, secret VARCHAR) WITH (
+    'write.metadata.metrics.column.secret' = 'none'
+);
+
+statement ok
+BEGIN;
+
+statement ok
+ALTER TABLE my_datalake.default.per_column_properties_txn RENAME COLUMN secret TO secret2;
+
+query II
+SELECT key, value FROM iceberg_table_properties(my_datalake.default.per_column_properties_txn)
+WHERE key LIKE '%.column.%';
+----
+write.metadata.metrics.column.secret2	none
+
+statement ok
+INSERT INTO my_datalake.default.per_column_properties_txn VALUES (1, 'inserted_in_transaction');
+
+statement ok
+COMMIT;
+
+query II
+SELECT key, value FROM iceberg_table_properties(my_datalake.default.per_column_properties_txn)
+WHERE key LIKE '%.column.%';
+----
+write.metadata.metrics.column.secret2	none
+
+query I
+SELECT count(*) FROM iceberg_column_stats(my_datalake.default.per_column_properties_txn)
+WHERE column_name = 'secret2' AND (lower_bound IS NOT NULL OR upper_bound IS NOT NULL OR value_count IS NOT NULL);
+----
+0
+
+statement ok
+BEGIN;
+
+statement ok
+ALTER TABLE my_datalake.default.per_column_properties_txn RENAME COLUMN secret2 TO secret3;
+
+statement ok
+ABORT;
+
+query II
+SELECT key, value FROM iceberg_table_properties(my_datalake.default.per_column_properties_txn)
+WHERE key LIKE '%.column.%';
+----
+write.metadata.metrics.column.secret2	none
+
+# --- Swapping two column names in one transaction swaps their keys ---
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.per_column_properties_swap;
+
+statement ok
+CREATE TABLE my_datalake.default.per_column_properties_swap (a VARCHAR, b VARCHAR) WITH (
+    'write.metadata.metrics.column.a' = 'none',
+    'write.metadata.metrics.column.b' = 'full'
+);
+
+statement ok
+BEGIN;
+
+statement ok
+ALTER TABLE my_datalake.default.per_column_properties_swap RENAME COLUMN a TO tmp;
+
+statement ok
+ALTER TABLE my_datalake.default.per_column_properties_swap RENAME COLUMN b TO a;
+
+statement ok
+ALTER TABLE my_datalake.default.per_column_properties_swap RENAME COLUMN tmp TO b;
+
+statement ok
+COMMIT;
+
+query II
+SELECT key, value FROM iceberg_table_properties(my_datalake.default.per_column_properties_swap)
+WHERE key LIKE '%.column.%' ORDER BY key;
+----
+write.metadata.metrics.column.a	full
+write.metadata.metrics.column.b	none
