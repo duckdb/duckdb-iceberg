@@ -1,10 +1,10 @@
 # name: test/sql/local/iceberg_scans/iceberg_optional_metadata_fields.test
-# description: Read snapshots without schema-id, and V1 manifests without format-version, partition-spec-id and schema-id
+# description: Read snapshots without schema-id, and V1 manifests without format-version, partition-spec-id and schema-id keys
 # group: [iceberg_scans]
 
 include test/sql/init_requires
 
-# The snapshot has no schema-id, so it is read with the table's current schema
+# The snapshot has no schema-id; reading the latest snapshot uses the table's current schema
 query III
 select *
 from iceberg_scan('data/persistent/iceberg_v1_deprecated/default/legacy_v1/metadata/no-snapshot-schema-id.metadata.json')
@@ -14,11 +14,12 @@ order by id
 2	beta	20
 3	alpha	NULL
 
-query I
+# Time travel needs the schema the snapshot was written with, which this snapshot doesn't record
+statement error
 select count(*)
 from iceberg_scan('data/persistent/iceberg_v1_deprecated/default/legacy_v1/metadata/no-snapshot-schema-id.metadata.json', snapshot_from_id => 2456114553637229296)
 ----
-3
+Snapshot 2456114553637229296 doesn't record its 'schema-id'
 
 query II
 select snapshot_id, operation
@@ -37,20 +38,20 @@ order by id
 4	nhl	40
 6	nba	60
 
-query I
+statement error
 select count(*)
 from iceberg_scan('data/persistent/iceberg_v1_repro/repro/merch_v1/metadata/v3-no-snapshot-schema-id.metadata.json', snapshot_from_id => 381223374871251311)
 ----
-6
+Snapshot 381223374871251311 doesn't record its 'schema-id'
 
-query I
+statement error
 select count(*)
 from iceberg_scan('data/persistent/iceberg_v1_repro/repro/merch_v1/metadata/v3-no-snapshot-schema-id.metadata.json', snapshot_from_timestamp => make_timestamp(1781274994780000))
 ----
-3
+Snapshot 3549704636346557910 doesn't record its 'schema-id'
 
-# The V1 manifest has no format-version, partition-spec-id or schema-id. They default to V1,
-# the partition spec the snapshot records for the manifest, and the table's current schema.
+# The V1 manifest has no format-version, partition-spec-id or schema-id keys. It's read as V1, with the
+# partition spec that matches its own 'partition-spec', and with the schema-id from its 'schema' JSON.
 query III
 select *
 from iceberg_scan('data/persistent/iceberg_v1_deprecated/default/legacy_v1/metadata/no-optional-manifest-keys.metadata.json')
@@ -76,3 +77,11 @@ from iceberg_metadata('data/persistent/iceberg_v1_deprecated/default/legacy_v1/m
 order by all
 ----
 DATA	0	0
+
+# Without partition-spec-id, the manifest's own 'partition-spec' (bucket[4]) has to match a partition spec of the
+# table (identity)
+statement error
+select count(*)
+from iceberg_scan('data/persistent/iceberg_v1_deprecated/default/legacy_v1/metadata/no-matching-partition-spec.metadata.json')
+----
+has no 'partition-spec-id', and its 'partition-spec' doesn't match any partition spec of the table

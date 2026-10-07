@@ -74,8 +74,8 @@ rest_api_objects::Snapshot IcebergSnapshot::ToRESTObject(const IcebergTableMetad
 
 IcebergSnapshot IcebergSnapshot::ParseSnapshot(const rest_api_objects::Snapshot &snapshot,
                                                IcebergTableMetadata &metadata) {
-	//! SPEC: Snapshot field schema-id is optional; without it the snapshot is read with the current schema
-	IcebergSnapshot ret(snapshot.schema_id ? *snapshot.schema_id : metadata.GetCurrentSchemaId());
+	//! The schema-id is optional, so it stays unset if the snapshot doesn't record it
+	IcebergSnapshot ret(snapshot.schema_id);
 	if (metadata.iceberg_version == 1) {
 		//! SPEC: Snapshot field sequence-number must default to 0
 		ret.sequence_number = 0;
@@ -123,7 +123,12 @@ IcebergSnapshot IcebergSnapshot::ParseSnapshot(const rest_api_objects::Snapshot 
 }
 
 int32_t IcebergSnapshot::GetSchemaId() const {
-	return schema_id;
+	if (!schema_id) {
+		throw NotImplementedException(
+		    "Snapshot %s doesn't record its 'schema-id', so the schema it was written with is unknown",
+		    snapshot_id ? std::to_string(*snapshot_id) : string("without a snapshot-id"));
+	}
+	return *schema_id;
 }
 
 } // namespace duckdb

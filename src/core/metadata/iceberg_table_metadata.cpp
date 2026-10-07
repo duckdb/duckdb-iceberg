@@ -407,16 +407,6 @@ IcebergTableMetadata IcebergTableMetadata::FromTableMetadata(const rest_api_obje
 	D_ASSERT(table_metadata.last_updated_ms);
 	res.last_updated_ms = timestamp_ms_t(*table_metadata.last_updated_ms);
 
-	// Set before parsing the snapshots: a snapshot without a schema-id uses the current schema
-	if (!table_metadata.current_schema_id) {
-		if (res.iceberg_version == 1 && table_metadata.schema) {
-			res.current_schema_id = table_metadata.schema->object_1.schema_id.value_or(0);
-		} else {
-			throw InvalidConfigurationException("'current_schema_id' field is missing from the metadata.json file");
-		}
-	} else {
-		res.current_schema_id = *table_metadata.current_schema_id;
-	}
 	if (table_metadata.snapshots) {
 		for (auto &snapshot : *table_metadata.snapshots) {
 			res.snapshots.emplace(snapshot.snapshot_id, IcebergSnapshot::ParseSnapshot(snapshot, res));
@@ -449,6 +439,15 @@ IcebergTableMetadata IcebergTableMetadata::FromTableMetadata(const rest_api_obje
 		for (auto &sort_order : *table_metadata.sort_orders) {
 			res.sort_specs.emplace(sort_order.order_id, IcebergSortOrder::ParseFromJson(sort_order));
 		}
+	}
+	if (!table_metadata.current_schema_id) {
+		if (res.iceberg_version == 1 && table_metadata.schema) {
+			res.current_schema_id = table_metadata.schema->object_1.schema_id.value_or(0);
+		} else {
+			throw InvalidConfigurationException("'current_schema_id' field is missing from the metadata.json file");
+		}
+	} else {
+		res.current_schema_id = *table_metadata.current_schema_id;
 	}
 	if (table_metadata.next_row_id) {
 		res.next_row_id = *table_metadata.next_row_id;
