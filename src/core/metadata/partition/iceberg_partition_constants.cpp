@@ -39,23 +39,19 @@ unordered_map<int32_t, Value> IcebergPartitionConstants::Resolve(int32_t spec_id
 	if (spec == metadata.partition_specs.end()) {
 		throw InvalidConfigurationException("'partition_spec_id' %d doesn't exist in the metadata", spec_id);
 	}
-	unordered_map<int32_t, idx_t> field_indexes;
-	for (idx_t i = 0; i < spec->second.fields.size(); i++) {
-		field_indexes[spec->second.fields[i].source_id] = i;
-	}
 	unordered_map<int32_t, Value> constants;
-	for (auto &item : field_indexes) {
-		auto &field = spec->second.fields[item.second];
-		if (field.transform != IcebergTransformType::IDENTITY) {
+	//! A source column can have several partition fields (e.g. identity and bucket); only identity ones carry its value
+	for (auto &field : spec->second.fields) {
+		if (field.transform != IcebergTransformType::IDENTITY || constants.count(field.source_id)) {
 			continue;
 		}
-		auto type = GetType(item.first, schema, metadata.GetSchemas());
+		auto type = GetType(field.source_id, schema, metadata.GetSchemas());
 		if (!type) {
 			continue;
 		}
 		for (auto &partition : partition_values) {
 			if (partition.field_id == field.partition_field_id && !partition.value.IsNull()) {
-				constants.emplace(item.first, IcebergValue::TransformPartitionValue(partition.value, *type));
+				constants.emplace(field.source_id, IcebergValue::TransformPartitionValue(partition.value, *type));
 				break;
 			}
 		}

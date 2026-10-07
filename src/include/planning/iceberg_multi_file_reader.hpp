@@ -158,7 +158,7 @@ private:
 	                        MultiFileReaderData &reader_data, ClientContext &context);
 	static void ApplyPartitionConstants(const unordered_map<int32_t, Value> &constants,
 	                                    MultiFileReaderData &reader_data,
-	                                    const vector<MultiFileColumnDefinition> &global_columns,
+	                                    vector<MultiFileColumnDefinition> &global_columns,
 	                                    const vector<ColumnIndex> &global_column_ids);
 
 public:
