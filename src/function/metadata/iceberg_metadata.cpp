@@ -187,14 +187,17 @@ static void IcebergMetaDataFunction(ClientContext &context, TableFunctionInput &
 TableFunctionSet IcebergFunctions::GetIcebergMetadataFunction() {
 	TableFunctionSet function_set("iceberg_metadata");
 
-	auto fun = TableFunction({LogicalType::VARCHAR}, IcebergMetaDataFunction, IcebergMetaDataBind,
-	                         IcebergMetaDataGlobalTableFunctionState::Init);
-	fun.named_parameters["allow_moved_paths"] = LogicalType::BOOLEAN;
-	fun.named_parameters["metadata_compression_codec"] = LogicalType::VARCHAR;
-	fun.named_parameters["version"] = LogicalType::VARCHAR;
-	fun.named_parameters["version_name_format"] = LogicalType::VARCHAR;
-	fun.named_parameters["snapshot_from_timestamp"] = LogicalType::TIMESTAMP_MS;
-	fun.named_parameters["snapshot_from_id"] = LogicalType::UBIGINT;
+	auto fun =
+	    TableFunction(FunctionSignature().AddPositionalOnly("path", LogicalType::VARCHAR), IcebergMetaDataFunction,
+	                  IcebergMetaDataBind, IcebergMetaDataGlobalTableFunctionState::Init);
+	fun.GetSignature().WithTypedKwargs("options", [&](TypedKwargs &options) {
+		options.Add("allow_moved_paths", LogicalType::BOOLEAN)
+		    .Add("metadata_compression_codec", LogicalType::VARCHAR)
+		    .Add("version", LogicalType::ANY)
+		    .Add("version_name_format", LogicalType::VARCHAR)
+		    .Add("snapshot_from_timestamp", LogicalType::ANY)
+		    .Add("snapshot_from_id", LogicalType::UBIGINT);
+	});
 	function_set.AddFunction(fun);
 
 	return function_set;

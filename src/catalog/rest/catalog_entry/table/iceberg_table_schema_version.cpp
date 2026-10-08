@@ -90,7 +90,7 @@ TableFunction IcebergTableSchemaVersion::GetScanFunction(ClientContext &context,
 	}
 
 	iceberg_scan_function.function_info = scan_info;
-	named_parameter_map_t param_map;
+	named_argument_map_t param_map;
 	vector<LogicalType> return_types;
 	vector<Identifier> names;
 	TableFunctionRef empty_ref;
@@ -98,7 +98,9 @@ TableFunction IcebergTableSchemaVersion::GetScanFunction(ClientContext &context,
 	// Set the S3 path as input to table function
 	const auto &storage_location = metadata.location;
 	vector<Value> inputs = {storage_location};
-	TableFunctionBindInput bind_input(inputs, param_map, return_types, names, nullptr, nullptr, iceberg_scan_function,
+	// the bind sees the function as a bound call would; nothing is read back off it afterwards
+	BoundTableFunction bound_scan_function(iceberg_scan_function);
+	TableFunctionBindInput bind_input(inputs, param_map, return_types, names, nullptr, nullptr, bound_scan_function,
 	                                  empty_ref);
 	auto result = iceberg_scan_function.bind(context, bind_input, return_types, names);
 	bind_data = std::move(result);

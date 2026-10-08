@@ -33,7 +33,7 @@ public:
 	                   ExpressionExecutor &executor, optional_ptr<MultiFileReaderGlobalState> global_state) override;
 
 public:
-	static unique_ptr<MultiFileReader> CreateInstance(const TableFunction &table);
+	static unique_ptr<MultiFileReader> CreateInstance(const BoundTableFunction &table);
 
 private:
 	shared_ptr<TableFunctionInfo> function_info;

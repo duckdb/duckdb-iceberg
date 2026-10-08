@@ -47,7 +47,7 @@ static string DEFAULT_TABLE_VERSION = UNKNOWN_TABLE_VERSION;
 struct IcebergOptions {
 public:
 	IcebergOptions();
-	IcebergOptions(named_parameter_map_t &named_parameters);
+	IcebergOptions(named_argument_map_t &named_parameters);
 	IcebergOptions(const IcebergOptions &) = default;
 	IcebergOptions &operator=(const IcebergOptions &other);
 

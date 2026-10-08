@@ -234,11 +234,13 @@ static void IcebergScanPlanFunction(ClientContext &context, TableFunctionInput &
 
 TableFunctionSet IcebergFunctions::GetIcebergScanPlanFunction() {
 	TableFunctionSet function_set("iceberg_scan_plan");
-	auto fun = TableFunction({LogicalType::VARCHAR}, IcebergScanPlanFunction, IcebergScanPlanBind,
-	                         IcebergScanPlanGlobalState::Init);
-	fun.named_parameters["produce_sequence_number"] = LogicalType::BOOLEAN;
-	fun.named_parameters["snapshot_from_id"] = LogicalType::UBIGINT;
-	fun.named_parameters["snapshot_from_timestamp"] = LogicalType::TIMESTAMP_MS;
+	auto fun = TableFunction(FunctionSignature().AddPositionalOnly("path", LogicalType::VARCHAR),
+	                         IcebergScanPlanFunction, IcebergScanPlanBind, IcebergScanPlanGlobalState::Init);
+	fun.GetSignature().WithTypedKwargs("options", [&](TypedKwargs &options) {
+		options.Add("produce_sequence_number", LogicalType::BOOLEAN)
+		    .Add("snapshot_from_id", LogicalType::UBIGINT)
+		    .Add("snapshot_from_timestamp", LogicalType::ANY);
+	});
 	function_set.AddFunction(fun);
 	return function_set;
 }

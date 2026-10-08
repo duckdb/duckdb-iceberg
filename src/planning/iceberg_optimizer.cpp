@@ -42,7 +42,7 @@ void IcebergOptimizerRoutine::VisitOperator(unique_ptr<LogicalOperator> &op, boo
 		// reliably across the extension linking boundary; instead the function
 		// pointer uniquely identifies our scan, which guarantees the bind data
 		// and file list are the iceberg types we expect.
-		if (get.function.name != "iceberg_scan" ||
+		if (get.function.GetName() != "iceberg_scan" ||
 		    get.function.get_multi_file_reader != IcebergMultiFileReader::CreateInstance || !get.bind_data) {
 			VisitOperator(child, below_write);
 			continue;

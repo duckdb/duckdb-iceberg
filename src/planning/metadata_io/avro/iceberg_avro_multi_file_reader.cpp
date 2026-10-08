@@ -23,7 +23,7 @@
 
 namespace duckdb {
 
-unique_ptr<MultiFileReader> IcebergAvroMultiFileReader::CreateInstance(const TableFunction &table) {
+unique_ptr<MultiFileReader> IcebergAvroMultiFileReader::CreateInstance(const BoundTableFunction &table) {
 	return make_uniq<IcebergAvroMultiFileReader>(table.function_info);
 }
 

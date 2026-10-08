@@ -315,15 +315,17 @@ static void ScanParquetDeleteFiles(const IcebergDeleteExecutionContext &context,
 
 	vector<Value> children;
 	children.push_back(Value::LIST(LogicalType::VARCHAR, std::move(delete_file_paths)));
-	named_parameter_map_t named_params;
+	named_argument_map_t named_params;
 	vector<LogicalType> input_types;
 	vector<Identifier> input_names;
 	TableFunctionRef empty;
 	auto delete_info = make_shared_ptr<IcebergDeleteScanInfo>(std::move(delete_file_infos), std::move(delete_schema));
 	delete_scan_function.function_info = delete_info;
 
+	// the bind sees the function as a bound call would; nothing is read back off it afterwards
+	BoundTableFunction bound_delete_scan_function(delete_scan_function);
 	TableFunctionBindInput bind_input(children, named_params, input_types, input_names, nullptr, nullptr,
-	                                  delete_scan_function, empty);
+	                                  bound_delete_scan_function, empty);
 	vector<LogicalType> return_types;
 	vector<Identifier> return_names;
 	auto bind_data = delete_scan_function.bind(context.context, bind_input, return_types, return_names);

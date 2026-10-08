@@ -7,7 +7,7 @@ namespace duckdb {
 IcebergOptions::IcebergOptions() : snapshot_lookup(IcebergSnapshotLookup::FromLatest()) {
 }
 
-IcebergOptions::IcebergOptions(named_parameter_map_t &named_parameters) : IcebergOptions() {
+IcebergOptions::IcebergOptions(named_argument_map_t &named_parameters) : IcebergOptions() {
 	snapshot_lookup.reset();
 
 	for (auto &kv : named_parameters) {
@@ -18,7 +18,7 @@ IcebergOptions::IcebergOptions(named_parameter_map_t &named_parameters) : Iceber
 		} else if (loption == "metadata_compression_codec") {
 			metadata_compression_codec = StringValue::Get(val);
 		} else if (loption == "version") {
-			table_version = StringValue::Get(val);
+			table_version = StringValue::Get(val.DefaultCastAs(LogicalType::VARCHAR));
 			version_explicitly_set = true;
 		} else if (loption == "version_name_format") {
 			auto value = StringValue::Get(kv.second);

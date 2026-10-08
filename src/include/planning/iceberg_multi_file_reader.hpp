@@ -94,7 +94,7 @@ public:
 	IcebergMultiFileReader(shared_ptr<TableFunctionInfo> function_info);
 
 public:
-	static unique_ptr<MultiFileReader> CreateInstance(const TableFunction &table);
+	static unique_ptr<MultiFileReader> CreateInstance(const BoundTableFunction &table);
 	static vector<PartitionStatistics> IcebergGetPartitionStats(ClientContext &context, GetPartitionStatsInput &input);
 
 public:

@@ -106,7 +106,7 @@ struct IcebergTaskReader : public IcebergMultiFileReader {
 	explicit IcebergTaskReader(shared_ptr<TableFunctionInfo> info) : IcebergMultiFileReader(std::move(info)) {
 	}
 
-	static unique_ptr<MultiFileReader> CreateInstance(const TableFunction &function) {
+	static unique_ptr<MultiFileReader> CreateInstance(const BoundTableFunction &function) {
 		return make_uniq<IcebergTaskReader>(function.function_info);
 	}
 
@@ -268,12 +268,14 @@ static unique_ptr<IcebergActiveTask> StartTask(ExecutionContext &context, const 
 	result->function.get_multi_file_reader = IcebergTaskReader::CreateInstance;
 	result->function.late_materialization = false;
 	vector<Value> arguments {path};
-	named_parameter_map_t parameters;
+	named_argument_map_t parameters;
 	vector<LogicalType> input_types;
 	vector<Identifier> input_names;
 	TableFunctionRef ref;
-	TableFunctionBindInput bind_input(arguments, parameters, input_types, input_names, nullptr, nullptr,
-	                                  result->function, ref);
+	// the bind sees the function as a bound call would; nothing is read back off it afterwards
+	BoundTableFunction bound_function(result->function);
+	TableFunctionBindInput bind_input(arguments, parameters, input_types, input_names, nullptr, nullptr, bound_function,
+	                                  ref);
 	vector<LogicalType> types;
 	vector<Identifier> names;
 	result->bind = result->function.bind(context.client, bind_input, types, names);
@@ -319,7 +321,8 @@ static OperatorResultType IcebergScanTasksFunction(ExecutionContext &context, Ta
 }
 
 TableFunctionSet IcebergFunctions::GetIcebergScanTasksFunction() {
-	TableFunction function("iceberg_scan_tasks", {LogicalType::TABLE}, nullptr, IcebergScanTasksBind);
+	TableFunction function("iceberg_scan_tasks", FunctionSignature().AddPositionalOnly("input", LogicalType::TABLE),
+	                       nullptr, IcebergScanTasksBind);
 	function.in_out_function = IcebergScanTasksFunction;
 	function.init_global = [](ClientContext &, TableFunctionInitInput &) -> unique_ptr<GlobalTableFunctionState> {
 		return make_uniq<IcebergScanTasksGlobalState>();

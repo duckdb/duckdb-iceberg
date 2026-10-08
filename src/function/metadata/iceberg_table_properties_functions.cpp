@@ -268,8 +268,11 @@ static void GetIcebergTablePropertiesFunction(ClientContext &context, TableFunct
 TableFunctionSet IcebergFunctions::SetIcebergTablePropertiesFunctions() {
 	TableFunctionSet function_set("set_iceberg_table_properties");
 
-	auto fun = TableFunction({LogicalType::VARCHAR, LogicalType::ANY}, SetIcebergTablePropertiesFunction,
-	                         SetIcebergTablePropertiesBind, SetIcebergTablePropertiesGlobalTableFunctionState::Init);
+	auto fun = TableFunction(FunctionSignature()
+	                             .AddPositionalOnly("table_name", LogicalType::VARCHAR)
+	                             .AddPositionalOnly("properties", LogicalType::ANY),
+	                         SetIcebergTablePropertiesFunction, SetIcebergTablePropertiesBind,
+	                         SetIcebergTablePropertiesGlobalTableFunctionState::Init);
 	function_set.AddFunction(fun);
 
 	return function_set;
@@ -278,7 +281,9 @@ TableFunctionSet IcebergFunctions::SetIcebergTablePropertiesFunctions() {
 TableFunctionSet IcebergFunctions::RemoveIcebergTablePropertiesFunctions() {
 	TableFunctionSet function_set("remove_iceberg_table_properties");
 
-	auto fun = TableFunction({LogicalType::VARCHAR, LogicalType::LIST(LogicalType::VARCHAR)},
+	auto fun = TableFunction(FunctionSignature()
+	                             .AddPositionalOnly("table_name", LogicalType::VARCHAR)
+	                             .AddPositionalOnly("property_names", LogicalType::LIST(LogicalType::VARCHAR)),
 	                         RemoveIcebergTablePropertiesFunction, RemoveIcebergTablePropertiesBind,
 	                         SetIcebergTablePropertiesGlobalTableFunctionState::Init);
 	function_set.AddFunction(fun);
@@ -289,7 +294,8 @@ TableFunctionSet IcebergFunctions::RemoveIcebergTablePropertiesFunctions() {
 TableFunctionSet IcebergFunctions::GetIcebergTablePropertiesFunctions() {
 	TableFunctionSet function_set("iceberg_table_properties");
 
-	auto fun = TableFunction({LogicalType::VARCHAR}, GetIcebergTablePropertiesFunction, GetIcebergTablePropertiesBind,
+	auto fun = TableFunction(FunctionSignature().AddPositionalOnly("table_name", LogicalType::VARCHAR),
+	                         GetIcebergTablePropertiesFunction, GetIcebergTablePropertiesBind,
 	                         SetIcebergTablePropertiesGlobalTableFunctionState::Init);
 	function_set.AddFunction(fun);
 
