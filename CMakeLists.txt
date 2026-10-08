@@ -50,6 +50,7 @@ if(EMSCRIPTEN)
 endif()
 
 build_loadable_extension(${TARGET_NAME} ${PARAMETERS} ${ALL_OBJECT_FILES})
+target_link_libraries(${TARGET_NAME}_loadable_extension duckdb_mbedtls)
 
 # Link Roaring library
 target_link_libraries(
