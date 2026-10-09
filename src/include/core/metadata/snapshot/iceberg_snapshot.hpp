@@ -14,17 +14,19 @@ enum class IcebergSnapshotOperationType : uint8_t { APPEND, REPLACE, OVERWRITE, 
 //! An Iceberg snapshot https://iceberg.apache.org/spec/#snapshots
 class IcebergSnapshot {
 public:
-	IcebergSnapshot(int32_t schema_id) : schema_id(schema_id) {
+	IcebergSnapshot(optional<int32_t> schema_id) : schema_id(schema_id) {
 	}
 	static int64_t NewSnapshotId();
 	static IcebergSnapshot ParseSnapshot(const rest_api_objects::Snapshot &snapshot, IcebergTableMetadata &metadata);
 	rest_api_objects::Snapshot ToRESTObject(const IcebergTableMetadata &table_metadata) const;
 
 public:
+	//! Throws if the snapshot doesn't record its schema-id
 	int32_t GetSchemaId() const;
 
 private:
-	int32_t schema_id;
+	//! The schema-id is optional, so a snapshot may not record the schema it was written with
+	optional<int32_t> schema_id;
 
 public:
 	//! Snapshot metadata

@@ -1,0 +1,87 @@
+# name: test/sql/local/iceberg_scans/iceberg_optional_metadata_fields.test
+# description: Read snapshots without schema-id, and V1 manifests without format-version, partition-spec-id and schema-id keys
+# group: [iceberg_scans]
+
+include test/sql/init_requires
+
+# The snapshot has no schema-id; reading the latest snapshot uses the table's current schema
+query III
+select *
+from iceberg_scan('data/persistent/iceberg_v1_deprecated/default/legacy_v1/metadata/no-snapshot-schema-id.metadata.json')
+order by id
+----
+1	alpha	10
+2	beta	20
+3	alpha	NULL
+
+# Time travel needs the schema the snapshot was written with, which this snapshot doesn't record
+statement error
+select count(*)
+from iceberg_scan('data/persistent/iceberg_v1_deprecated/default/legacy_v1/metadata/no-snapshot-schema-id.metadata.json', snapshot_from_id => 2456114553637229296)
+----
+Snapshot 2456114553637229296 doesn't record its 'schema-id'
+
+query II
+select snapshot_id, operation
+from iceberg_snapshots('data/persistent/iceberg_v1_deprecated/default/legacy_v1/metadata/no-snapshot-schema-id.metadata.json')
+----
+2456114553637229296	append
+
+# Snapshot schema-id is optional in every format version: a V3 table where no snapshot has one
+query III
+select *
+from iceberg_scan('data/persistent/iceberg_v1_repro/repro/merch_v1/metadata/v3-no-snapshot-schema-id.metadata.json')
+order by id
+----
+2	nba	20
+3	mlb	30
+4	nhl	40
+6	nba	60
+
+statement error
+select count(*)
+from iceberg_scan('data/persistent/iceberg_v1_repro/repro/merch_v1/metadata/v3-no-snapshot-schema-id.metadata.json', snapshot_from_id => 381223374871251311)
+----
+Snapshot 381223374871251311 doesn't record its 'schema-id'
+
+statement error
+select count(*)
+from iceberg_scan('data/persistent/iceberg_v1_repro/repro/merch_v1/metadata/v3-no-snapshot-schema-id.metadata.json', snapshot_from_timestamp => make_timestamp(1781274994780000))
+----
+Snapshot 3549704636346557910 doesn't record its 'schema-id'
+
+# The V1 manifest has no format-version, partition-spec-id or schema-id keys. It's read as V1, with the
+# partition spec that matches its own 'partition-spec', and with the schema-id from its 'schema' JSON.
+query III
+select *
+from iceberg_scan('data/persistent/iceberg_v1_deprecated/default/legacy_v1/metadata/no-optional-manifest-keys.metadata.json')
+order by id
+----
+1	alpha	10
+2	beta	20
+3	alpha	NULL
+
+# Partition values are decoded with that spec, so a filter on the partition column still finds the rows
+query II
+select id, amount
+from iceberg_scan('data/persistent/iceberg_v1_deprecated/default/legacy_v1/metadata/no-optional-manifest-keys.metadata.json')
+where category = 'alpha'
+order by id
+----
+1	10
+3	NULL
+
+query III
+select distinct content, data_sequence_number, file_sequence_number
+from iceberg_metadata('data/persistent/iceberg_v1_deprecated/default/legacy_v1/metadata/no-optional-manifest-keys.metadata.json')
+order by all
+----
+DATA	0	0
+
+# Without partition-spec-id, the manifest's own 'partition-spec' (bucket[4]) has to match a partition spec of the
+# table (identity)
+statement error
+select count(*)
+from iceberg_scan('data/persistent/iceberg_v1_deprecated/default/legacy_v1/metadata/no-matching-partition-spec.metadata.json')
+----
+has no 'partition-spec-id', and its 'partition-spec' doesn't match any partition spec of the table
