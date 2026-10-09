@@ -1,5 +1,5 @@
 # name: test/sql/local/catalog_test_config_setup/catalog_agnostic/create/test_view_star_columns.test
-# description: An Iceberg view that selects * is refused when its table's columns no longer match the view's columns
+# description: Querying an Iceberg view that selects * is not supported once its table's columns no longer match the view's columns
 # group: [create]
 
 require-env CATALOG_TEST_CONFIG_SETUP
@@ -75,19 +75,19 @@ statement ok
 insert into vs_renamed values (1, 2);
 
 statement ok
-create view v_moved as select * from vs_moved;
+create view v_moved as select * from my_datalake.view_star.vs_moved;
 
 statement ok
-create view v_named as select a, b from vs_moved;
+create view v_named as select a, b from my_datalake.view_star.vs_moved;
 
 statement ok
-create view v_added as select * from vs_added;
+create view v_added as select * from my_datalake.view_star.vs_added;
 
 statement ok
-create view v_join as select * from vs_left l join vs_right r on l.id = r.id;
+create view v_join as select * from my_datalake.view_star.vs_left l join my_datalake.view_star.vs_right r on l.id = r.id;
 
 statement ok
-create view v_renamed (x, y) as select * from vs_renamed;
+create view v_renamed (x, y) as select * from my_datalake.view_star.vs_renamed;
 
 query II
 select a, b from v_moved;
@@ -110,7 +110,7 @@ alter table vs_moved add column a integer;
 statement error
 select * from v_moved;
 ----
-<REGEX>:.*Cannot query Iceberg view 'v_moved': its query selects \*, and column 1 of the query is 'b' where the view stores 'a'.*
+<REGEX>:.*Not implemented Error: Querying Iceberg view 'v_moved' is not supported: its query selects \*, and column 1 of the query is 'b' where the view stores 'a'.*
 
 # A view that names its columns reads them by name
 query II
@@ -131,7 +131,7 @@ select * from v_added;
 statement error
 select * from v_renamed;
 ----
-<REGEX>:.*Cannot query Iceberg view 'v_renamed': its query selects \*, and column 1 of the query is 'a' where the view stores 'x'.*
+<REGEX>:.*Not implemented Error: Querying Iceberg view 'v_renamed' is not supported: its query selects \*, and column 1 of the query is 'a' where the view stores 'x'.*
 
 statement ok
 drop view v_moved;
