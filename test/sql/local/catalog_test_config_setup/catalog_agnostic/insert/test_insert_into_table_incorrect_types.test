@@ -20,10 +20,18 @@ statement ok
 drop table if exists my_datalake.default.test;
 
 # we can create a table with invalid iceberg types, but they get converted to valid iceberg types.
-statement error
+statement ok
 create table my_datalake.default.test (int_col UTINYINT, long_col UINT32, string_col varchar);
+
+query II
+select column_name, column_type from (describe from my_datalake.default.test);
 ----
-<REGEX>:.*Column type UTINYINT is not a valid Iceberg Type.*
+int_col	INTEGER
+long_col	BIGINT
+string_col	VARCHAR
+
+statement ok
+drop table my_datalake.default.test;
 
 statement ok
 create table my_datalake.default.test (int_col INT, long_col LONG, string_col varchar);

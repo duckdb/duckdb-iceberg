@@ -175,7 +175,12 @@
         "test/sql/types/nested/map/test_map_nested_keys.test",
         "test/sql/types/struct/nested_structs.test",
         "test/sql/types/struct/struct_updates.test",
+        "test/sql/function/list/aggregates/any_value.test",
         "test/sql/function/list/aggregates/entropy.test",
+        "test/sql/function/list/aggregates/first.test",
+        "test/sql/function/list/aggregates/last.test",
+        "test/sql/function/list/aggregates/max.test",
+        "test/sql/function/list/aggregates/min.test",
         "test/sql/function/list/list_unique.test",
         "test/sql/function/timestamp/test_icu_datediff.test",
         "test/sql/insert/test_insert_query.test",
@@ -751,9 +756,31 @@
       ]
     },
     {
-      "reason": "HUGEINT extreme values cast to DECIMAL(38,0) on iceberg",
+      "reason": "HUGEINT extreme values exceed the range of the DECIMAL(38,0) type used by Iceberg",
       "paths": [
+        "test/sql/aggregate/group/group_by_limits.test",
+        "test/sql/function/numeric/test_bit_count.test",
+        "test/sql/join/inner/equality_join_limits.test",
         "test/sql/order/hugeint_order_by_extremes.test"
+      ]
+    },
+    {
+      "reason": "HUGEINT lists are stored as DECIMAL(38,0)[], so list_median cannot represent the fractional result expected for HUGEINT[]",
+      "paths": [
+        "test/sql/function/list/aggregates/median.test"
+      ]
+    },
+    {
+      "reason": "Iceberg widens TINYINT/SMALLINT columns to INTEGER, so arithmetic does not overflow at the native 8-bit or 16-bit bounds",
+      "paths": [
+        "test/sql/function/numeric/test_unary.test",
+        "test/sql/overflow/table_overflow.test"
+      ]
+    },
+    {
+      "reason": "Iceberg scans do not provide the table-wide min/max statistics required to bind BITSTRING_AGG(col) without explicit bounds",
+      "paths": [
+        "test/sql/aggregate/aggregates/test_bitstring_agg.test"
       ]
     },
     {
@@ -1319,7 +1346,8 @@
         "test/sql/function/string/test_left.test",
         "test/sql/function/string/test_right.test",
         "test/sql/pivot/pivot_in_boolean.test",
-        "test/sql/alter/rename_table/test_rename_table_case.test"
+        "test/sql/alter/rename_table/test_rename_table_case.test",
+        "test/sql/subquery/lateral/pg_lateral.test"
       ]
     },
     {
@@ -1524,11 +1552,12 @@
       ]
     },
     {
-      "reason": "AGGREGATE_STATE columns cannot be stored in an Iceberg table",
+      "reason": "Iceberg stores aggregate-state values as ordinary types without the AGGREGATE_STATE alias and function metadata required by finalize/combine",
       "paths": [
         "test/sql/aggregate/aggregate_state_export/arg_min_max_export_state.test",
         "test/sql/aggregate/aggregate_state_export/first_last_export_state.test",
         "test/sql/aggregate/aggregate_state_export/list_export_state.test",
+        "test/sql/aggregate/aggregate_state_export/ordered_aggregate_export_state.test",
         "test/sql/aggregate/aggregate_state_export/test_state_export_quantile.test",
         "test/sql/aggregate/aggregates/lttb.test",
         "test/sql/aggregate/aggregate_state_export/test_state_export_string_agg.test"

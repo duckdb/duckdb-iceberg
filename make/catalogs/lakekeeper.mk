@@ -1,5 +1,6 @@
 LAKEKEEPER_ENV_FILE ?= scripts/envs/lakekeeper.env
 LAKEKEEPER_SPARK_LOCAL_DIR ?= /home/jovyan/.spark-local
+LAKEKEEPER_IMAGE ?= quay.io/lakekeeper/catalog:v0.14.0
 
 lakekeeper-clone:
 	@if [ ! -d ".catalogs/lakekeeper" ]; then \
@@ -29,7 +30,7 @@ lakekeeper: lakekeeper-clone lakekeeper-stop
 	$(call stop_active_catalog)
 	@echo "Starting Lakekeeper catalog..."
 	@grep -q '127.0.0.1 silo' /etc/hosts || (echo "Adding silo host entry..." && echo "127.0.0.1 silo" | sudo tee -a /etc/hosts)
-	(cd .catalogs/lakekeeper/examples/access-control-simple && docker compose up -d)
+	(cd .catalogs/lakekeeper/examples/access-control-simple && LAKEKEEPER_TEST__SERVER_IMAGE=$(LAKEKEEPER_IMAGE) docker compose up -d)
 	$(MAKE) lakekeeper-configure-auth
 	@echo "Bootstrapping Lakekeeper..."
 	cd .catalogs/lakekeeper/examples/access-control-simple && \

@@ -1,0 +1,23 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/create/test_create_view_widened_integer_types.test
+# description: CREATE VIEW accepts integer types widened to Iceberg storage types
+# group: [create]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require-env VIEW_SUPPORT
+
+include test/sql/init_requires
+
+statement ok
+DROP VIEW IF EXISTS my_datalake.default.widened_view;
+
+statement ok
+CREATE VIEW my_datalake.default.widened_view AS SELECT 1::TINYINT AS ti, 2::USMALLINT AS usi;
+
+query II
+SELECT * FROM my_datalake.default.widened_view;
+----
+1	2
+
+statement ok
+DROP VIEW my_datalake.default.widened_view;

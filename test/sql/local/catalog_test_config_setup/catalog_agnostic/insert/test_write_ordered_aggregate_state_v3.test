@@ -1,0 +1,17 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/insert/test_write_ordered_aggregate_state_v3.test
+# description: Storage-type casts preserve the extra row-id column on v3 UPDATE and MERGE
+# group: [insert]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require-env FORMAT_V3_SUPPORT
+
+include test/sql/init_requires
+
+statement ok
+SET iceberg_default_format_version = 3;
+
+include test/sql/local/catalog_test_config_setup/catalog_agnostic/insert/test_write_ordered_aggregate_state.test
+
+statement ok
+RESET iceberg_default_format_version;

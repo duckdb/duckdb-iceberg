@@ -1,0 +1,146 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/insert/test_write_ordered_aggregate_state.test
+# description: Ordered EXPORT_STATE values must be converted to Iceberg storage types before CTAS, INSERT, UPDATE and MERGE
+# group: [insert]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+# Keep these inline so the v3 variant can include this test without nested includes.
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+statement ok
+CREATE TEMP TABLE ordered_state_input AS
+SELECT (range % 8)::TINYINT AS g, range AS v FROM range(1000);
+
+statement ok
+CREATE TEMP VIEW ordered_state_source AS
+SELECT g, list(v ORDER BY v) EXPORT_STATE l FROM ordered_state_input GROUP BY g;
+
+foreach layout plain sorted partitioned
+
+foreach operation ctas insert update merge
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.ordered_state_{layout}_{operation};
+
+# Regression from duckdb/test/sql/aggregate/aggregate_state_export/ordered_aggregate_export_state.test.
+# The exported state is a LIST with an AGGREGATE_STATE alias and function metadata.
+# Its Iceberg storage type is a plain STRUCT(v0 BIGINT)[]; equal LIST children do
+# not make those vector types interchangeable.
+onlyif operation=ctas&&layout=plain
+statement ok
+CREATE TABLE my_datalake.default.ordered_state_{layout}_{operation} AS
+SELECT g, list(v ORDER BY v) EXPORT_STATE l FROM ordered_state_input GROUP BY g;
+
+onlyif operation=ctas&&layout=sorted
+statement ok
+CREATE TABLE my_datalake.default.ordered_state_{layout}_{operation} SORTED BY (g) AS
+SELECT g, list(v ORDER BY v) EXPORT_STATE l FROM ordered_state_input GROUP BY g;
+
+onlyif operation=ctas&&layout=partitioned
+statement ok
+CREATE TABLE my_datalake.default.ordered_state_{layout}_{operation}
+PARTITIONED BY (bucket(2, g)) SORTED BY (g) AS
+SELECT g, list(v ORDER BY v) EXPORT_STATE l FROM ordered_state_input GROUP BY g;
+
+onlyif operation<>ctas&&layout=plain
+statement ok
+CREATE TABLE my_datalake.default.ordered_state_{layout}_{operation} (g INTEGER, l STRUCT(v0 BIGINT)[]);
+
+onlyif operation<>ctas&&layout=sorted
+statement ok
+CREATE TABLE my_datalake.default.ordered_state_{layout}_{operation} (g INTEGER, l STRUCT(v0 BIGINT)[])
+SORTED BY (g);
+
+onlyif operation<>ctas&&layout=partitioned
+statement ok
+CREATE TABLE my_datalake.default.ordered_state_{layout}_{operation} (g INTEGER, l STRUCT(v0 BIGINT)[])
+PARTITIONED BY (bucket(2, g)) SORTED BY (g);
+
+onlyif operation=update
+statement ok
+INSERT INTO my_datalake.default.ordered_state_{layout}_{operation} (g) SELECT g FROM ordered_state_source;
+
+onlyif operation=merge
+statement ok
+INSERT INTO my_datalake.default.ordered_state_{layout}_{operation} (g) SELECT g FROM ordered_state_source WHERE g < 4;
+
+onlyif operation=insert
+query I
+INSERT INTO my_datalake.default.ordered_state_{layout}_{operation} SELECT * FROM ordered_state_source;
+----
+8
+
+onlyif operation=update
+query I
+UPDATE my_datalake.default.ordered_state_{layout}_{operation} AS target SET l = source.l
+FROM ordered_state_source AS source WHERE target.g = source.g;
+----
+8
+
+onlyif operation=merge
+query I
+MERGE INTO my_datalake.default.ordered_state_{layout}_{operation} AS target
+USING ordered_state_source AS source ON target.g = source.g
+WHEN MATCHED THEN UPDATE SET l = source.l
+WHEN NOT MATCHED THEN INSERT VALUES (source.g, source.l);
+----
+8
+
+query II
+SELECT column_name, column_type FROM (DESCRIBE my_datalake.default.ordered_state_{layout}_{operation});
+----
+g	INTEGER
+l	STRUCT(v0 BIGINT)[]
+
+# Iceberg stores the buffer, not DuckDB's aggregate function metadata. Reattach
+# that metadata explicitly and check that all groups still finalize correctly.
+query II
+SELECT count(*), count(*) FILTER (WHERE
+	finalize(to_aggregate_state(stored.l, 'list', ['BIGINT'], [NULL],
+		[{'column': 0, 'order': 'ASC NULLS LAST'}])) IS DISTINCT FROM expected.direct)
+FROM my_datalake.default.ordered_state_{layout}_{operation} AS stored
+FULL OUTER JOIN (
+	SELECT g, list(v ORDER BY v) AS direct FROM ordered_state_input GROUP BY g
+) AS expected USING (g);
+----
+8	0
+
+statement ok
+BEGIN;
+
+statement ok
+SET VARIABLE ordered_state_files = (
+	SELECT list(file_path) FROM iceberg_metadata('my_datalake.default.ordered_state_{layout}_{operation}')
+	WHERE manifest_content = 'DATA' AND status <> 'DELETED'
+);
+
+query III
+SELECT DISTINCT name, type, converted_type
+FROM parquet_schema(getvariable('ordered_state_files'))
+WHERE num_children IS NULL AND name NOT IN ('_row_id', '_last_updated_sequence_number')
+ORDER BY name;
+----
+g	INT32	INT_32
+v0	INT64	INT_64
+
+statement ok
+COMMIT;
+
+statement ok
+DROP TABLE my_datalake.default.ordered_state_{layout}_{operation};
+
+endloop
+
+endloop
+
+statement ok
+DROP VIEW ordered_state_source;
+
+statement ok
+DROP TABLE ordered_state_input;
