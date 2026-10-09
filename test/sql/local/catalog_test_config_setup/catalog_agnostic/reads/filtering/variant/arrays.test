@@ -88,9 +88,9 @@ insert into my_datalake.default.variant_array_prune_tbl values
 statement ok
 call enable_logging('Iceberg');
 
-# filter on the scalar 'id' field prunes data file 1 (max id = 3)
+# Less-than on the sibling 'id' field prunes data file 2 (min id = 10).
 statement ok
-select * from my_datalake.default.variant_array_prune_tbl where variant_col.id > 5;
+select * from my_datalake.default.variant_array_prune_tbl where variant_col.id < 5;
 
 query I
 select count(*) from duckdb_logs() where type = 'Iceberg' and message like '%skipped%';
@@ -102,6 +102,6 @@ CALL truncate_duckdb_logs();
 
 # the surviving rows are correct
 query I
-select count(*) from my_datalake.default.variant_array_prune_tbl where variant_col.id > 5;
+select count(*) from my_datalake.default.variant_array_prune_tbl where variant_col.id < 5;
 ----
 3

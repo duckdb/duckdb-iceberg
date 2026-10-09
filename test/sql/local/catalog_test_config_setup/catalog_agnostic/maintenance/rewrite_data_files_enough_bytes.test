@@ -14,21 +14,23 @@ drop table if exists my_datalake.default.rewrite_enough_bytes;
 statement ok
 create table my_datalake.default.rewrite_enough_bytes (id INTEGER, payload VARCHAR);
 
-# Three modest files: each under the rewrite target, but combined size exceeds it.
+# Three single-row files: each under the rewrite target, but combined size exceeds it.
+# Each payload exceeds the row-group byte target. Keep the row count small so the
+# rewrite tests eligibility by input bytes without also triggering file rotation.
 statement ok
 insert into my_datalake.default.rewrite_enough_bytes
 select i, repeat('x', 5000)
-from range(20) t(i);
+from range(1) t(i);
 
 statement ok
 insert into my_datalake.default.rewrite_enough_bytes
 select i, repeat('y', 5000)
-from range(20, 40) t(i);
+from range(1, 2) t(i);
 
 statement ok
 insert into my_datalake.default.rewrite_enough_bytes
 select i, repeat('z', 5000)
-from range(40, 60) t(i);
+from range(2, 3) t(i);
 
 query I
 select count(*)
@@ -36,6 +38,26 @@ from iceberg_metadata('my_datalake.default.rewrite_enough_bytes')
 where content = 'DATA' and status <> 'DELETED';
 ----
 3
+
+statement ok
+begin
+
+# Verify the input-byte precondition independently of Parquet encoding details.
+statement ok
+set variable input_file_paths = (
+	select list(file_path)
+	from iceberg_metadata('my_datalake.default.rewrite_enough_bytes')
+	where content = 'DATA' and status <> 'DELETED'
+);
+
+query II
+select bool_and(size < 2000), sum(size) >= 2000
+from read_blob($input_file_paths);
+----
+true	true
+
+statement ok
+commit
 
 # Spark's default min is 75% of target (1500 here). Catalogs write slightly
 # different parquet sizes for the same rows (Nessie ~1.7KiB, fixture ~1.5KiB),
@@ -58,7 +80,7 @@ call iceberg_rewrite_data_files(
 query I
 select count(*) from my_datalake.default.rewrite_enough_bytes;
 ----
-60
+3
 
 query I
 select count(*)

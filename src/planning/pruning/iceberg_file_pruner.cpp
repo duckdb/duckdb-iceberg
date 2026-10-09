@@ -44,7 +44,7 @@ void ApplyNullCounts(const IcebergDataFile &data_file, int32_t column_id, Iceber
 } // namespace
 
 bool IcebergFilePruner::FilePartitionMatchesFilter(const IcebergDataFile &data_file,
-                                                   const IcebergManifestFile &manifest_file) const {
+                                                   const IcebergManifest &manifest_file) const {
 	if (data_file.partition_info.empty()) {
 		return true;
 	}
@@ -111,7 +111,7 @@ bool IcebergFilePruner::FilePartitionMatchesFilter(const IcebergDataFile &data_f
 	return true;
 }
 
-bool IcebergFilePruner::FileMatchesFilter(const IcebergManifestFile &manifest_file,
+bool IcebergFilePruner::FileMatchesFilter(const IcebergManifest &manifest_file,
                                           const IcebergManifestEntry &manifest_entry) const {
 	D_ASSERT(table_filters.HasFilters());
 	unordered_set<int32_t> mapping_field_ids;
@@ -130,6 +130,13 @@ bool IcebergFilePruner::FileMatchesFilter(const IcebergManifestFile &manifest_fi
 		auto &column_index = entry.first;
 		auto primary_index = column_index.GetPrimaryIndex();
 		auto &column = *schema.columns[primary_index];
+
+		if (column_index.IsPushdownExtract() && column.type.id() == LogicalTypeId::STRUCT) {
+			// These metrics describe the parent struct, not the extracted field. In particular,
+			// a non-NULL struct can contain a NULL child. Child metrics also exclude NULL parents,
+			// so pruning an extracted field requires accounting for every ancestor's validity.
+			continue;
+		}
 
 		if (data_file.content == IcebergManifestEntryContentType::POSITION_DELETES) {
 			continue;
@@ -156,6 +163,21 @@ bool IcebergFilePruner::FileMatchesFilter(const IcebergManifestFile &manifest_fi
 			if (lower_bound.IsNull() || upper_bound.IsNull()) {
 				return true;
 			}
+			//! A filter on an extracted field refers to that field, so compare against the field's bounds
+			vector<string> path;
+			bool path_supported = true;
+			reference<const ColumnIndex> path_index(column_index);
+			while (path_index.get().HasChildren()) {
+				if (path_index.get().ChildIndexCount() != 1 || path_index.get().GetChildIndex(0).HasPrimaryIndex()) {
+					path_supported = false;
+					break;
+				}
+				path_index = path_index.get().GetChildIndex(0);
+				path.push_back(path_index.get().GetFieldName());
+			}
+			if (!path_supported) {
+				continue;
+			}
 			Value lower_decoded;
 			Value upper_decoded;
 			Value lower_variant;
@@ -163,11 +185,11 @@ bool IcebergFilePruner::FileMatchesFilter(const IcebergManifestFile &manifest_fi
 			auto lower_blob = lower_bound.GetValueUnsafe<string_t>();
 			auto upper_blob = upper_bound.GetValueUnsafe<string_t>();
 			if (IcebergVariantBoundsReader::Deserialize(context, lower_blob, lower_decoded) &&
-			    IcebergVariantBoundsReader::RekeyBoundsVariant(lower_decoded, lower_variant)) {
+			    IcebergVariantBoundsReader::RekeyBoundsVariant(lower_decoded, path, lower_variant)) {
 				stats.SetLowerBound(lower_variant);
 			}
 			if (IcebergVariantBoundsReader::Deserialize(context, upper_blob, upper_decoded) &&
-			    IcebergVariantBoundsReader::RekeyBoundsVariant(upper_decoded, upper_variant)) {
+			    IcebergVariantBoundsReader::RekeyBoundsVariant(upper_decoded, path, upper_variant)) {
 				stats.SetUpperBound(upper_variant);
 			}
 		} else {
@@ -199,21 +221,17 @@ bool IcebergFilePruner::FileMatchesFilter(const IcebergManifestFile &manifest_fi
 	return true;
 }
 
-bool IcebergFilePruner::DeleteManifestMatchesDataFile(const IcebergManifestFile &delete_manifest,
-                                                      const IcebergManifestFile &data_manifest,
+bool IcebergFilePruner::DeleteManifestMatchesDataFile(const IcebergManifest &delete_manifest,
+                                                      const IcebergManifest &data_manifest,
                                                       const IcebergManifestEntry &data_manifest_entry) const {
-	if (!delete_manifest.sequence_number) {
-		throw InvalidConfigurationException("Delete manifest %s does not have a sequence number",
-		                                    delete_manifest.manifest_path);
-	}
-	if (*delete_manifest.sequence_number < data_manifest_entry.GetSequenceNumber(data_manifest)) {
+	if (delete_manifest.sequence_number < data_manifest_entry.GetSequenceNumber(data_manifest)) {
 		return false;
 	}
 
 	auto partition_spec_it = metadata.partition_specs.find(delete_manifest.partition_spec_id);
 	if (partition_spec_it == metadata.partition_specs.end()) {
-		throw InvalidInputException("Delete manifest %s references partition_spec_id %d which doesn't exist",
-		                            delete_manifest.manifest_path, delete_manifest.partition_spec_id);
+		throw InvalidInputException("Delete manifest references partition_spec_id %d which doesn't exist",
+		                            delete_manifest.partition_spec_id);
 	}
 	auto &delete_partition_spec = partition_spec_it->second;
 	if (delete_partition_spec.IsUnpartitioned()) {
@@ -351,9 +369,9 @@ partition_value_map_t IcebergFilePruner::PartitionValueMap(const IcebergDataFile
 	return result;
 }
 
-bool IcebergFilePruner::DeleteFileMatchesDataFile(const IcebergManifestFile &delete_manifest,
+bool IcebergFilePruner::DeleteFileMatchesDataFile(const IcebergManifest &delete_manifest,
                                                   const IcebergManifestEntry &delete_manifest_entry,
-                                                  const IcebergManifestFile &data_manifest,
+                                                  const IcebergManifest &data_manifest,
                                                   const IcebergManifestEntry &data_manifest_entry,
                                                   const partition_value_map_t &data_partition_values) const {
 	auto &delete_file = delete_manifest_entry.data_file;
@@ -385,8 +403,8 @@ bool IcebergFilePruner::DeleteFileMatchesDataFile(const IcebergManifestFile &del
 
 	auto partition_spec_it = metadata.partition_specs.find(delete_manifest.partition_spec_id);
 	if (partition_spec_it == metadata.partition_specs.end()) {
-		throw InvalidInputException("Delete manifest %s references partition_spec_id %d which doesn't exist",
-		                            delete_manifest.manifest_path, delete_manifest.partition_spec_id);
+		throw InvalidInputException("Delete manifest references partition_spec_id %d which doesn't exist",
+		                            delete_manifest.partition_spec_id);
 	}
 	if (!partition_spec_it->second.IsUnpartitioned()) {
 		if (delete_manifest.partition_spec_id != data_manifest.partition_spec_id) {
@@ -421,12 +439,13 @@ bool IcebergFilePruner::DeleteFileMatchesDataFile(const IcebergManifestFile &del
 	return true;
 }
 
-bool IcebergFilePruner::ManifestMatchesFilter(const IcebergManifestFile &manifest) const {
+bool IcebergFilePruner::ManifestMatchesFilter(const IcebergManifestListEntry &entry) const {
+	auto &manifest = entry.GetManifest();
+	auto path = entry.HasFile() ? entry.GetFile().manifest_path : "<in-memory>";
 	auto spec_id = manifest.partition_spec_id;
 	auto partition_spec_it = metadata.partition_specs.find(spec_id);
 	if (partition_spec_it == metadata.partition_specs.end()) {
-		throw InvalidInputException("Manifest %s references 'partition_spec_id' %d which doesn't exist",
-		                            manifest.manifest_path, spec_id);
+		throw InvalidInputException("Manifest %s references 'partition_spec_id' %d which doesn't exist", path, spec_id);
 	}
 	auto &partition_spec = partition_spec_it->second;
 	if (!manifest.partitions.has_partitions) {
@@ -470,7 +489,7 @@ bool IcebergFilePruner::ManifestMatchesFilter(const IcebergManifestFile &manifes
 			DUCKDB_LOG(context, IcebergLogType,
 			           "Iceberg Filter Pushdown, skipped 'manifest_file': '%s', column '%s' with "
 			           "transform '%s', bounds [%s, %s] did not match filter: %s",
-			           manifest.manifest_path, column.name, field.transform.RawType(),
+			           path, column.name, field.transform.RawType(),
 			           stats.lower_bound ? stats.lower_bound->ToString() : "N/A",
 			           stats.upper_bound ? stats.upper_bound->ToString() : "N/A", table_filter->ToString(column.name));
 			return false;

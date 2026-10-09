@@ -156,11 +156,11 @@ void SelectCandidates(RewritePlan &plan, const RewriteDataFilesPlanInput &input,
 
 void AssertCurrentPartitionSpec(const IcebergManifestListEntry &list_entry, int32_t default_spec_id) {
 	//! Guard against partition spec evolution: reject until multi-spec support is implemented.
-	if (list_entry.file.partition_spec_id != default_spec_id) {
+	if (list_entry.GetFile().partition_spec_id != default_spec_id) {
 		throw NotImplementedException(
 		    "iceberg_rewrite_data_files: table has data files written under partition spec %d "
 		    "but current default spec is %d; partition spec evolution is not yet supported",
-		    list_entry.file.partition_spec_id, default_spec_id);
+		    list_entry.GetFile().partition_spec_id, default_spec_id);
 	}
 }
 
@@ -183,7 +183,7 @@ void CollectUnpartitionedCandidates(RewriteBucket &bucket, const vector<IcebergM
                                     const RewriteDataFilesPlanInput &input, int32_t default_spec_id,
                                     int64_t target_file_size_bytes) {
 	for (const auto &list_entry : manifest_files) {
-		if (list_entry.file.content != IcebergManifestContentType::DATA) {
+		if (list_entry.GetFile().content != IcebergManifestContentType::DATA) {
 			continue;
 		}
 		AssertCurrentPartitionSpec(list_entry, default_spec_id);
@@ -235,7 +235,7 @@ void CollectPartitionedCandidates(std::map<string, RewriteBucket> &per_partition
                                   const vector<IcebergManifestListEntry> &manifest_files,
                                   const RewriteDataFilesPlanInput &input, int32_t default_spec_id) {
 	for (const auto &list_entry : manifest_files) {
-		if (list_entry.file.content != IcebergManifestContentType::DATA) {
+		if (list_entry.GetFile().content != IcebergManifestContentType::DATA) {
 			continue;
 		}
 		AssertCurrentPartitionSpec(list_entry, default_spec_id);

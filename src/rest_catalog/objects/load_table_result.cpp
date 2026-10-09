@@ -42,6 +42,18 @@ LoadTableResult LoadTableResult::Copy() const {
 			(*res.storage_credentials).emplace_back(item.Copy());
 		}
 	}
+	if (remote_signing_config.has_value()) {
+		res.remote_signing_config.emplace();
+		(*res.remote_signing_config) = (*remote_signing_config).Copy();
+	}
+	if (read_restrictions.has_value()) {
+		res.read_restrictions.emplace();
+		(*res.read_restrictions) = (*read_restrictions).Copy();
+	}
+	if (labels.has_value()) {
+		res.labels.emplace();
+		(*res.labels) = (*labels).Copy();
+	}
 	return res;
 }
 
@@ -124,6 +136,33 @@ string LoadTableResult::TryFromJSON(JSONValue obj) {
 		}
 		storage_credentials = std::move(storage_credentials_tmp);
 	}
+	auto remote_signing_config_val = obj.GetMember("remote-signing-config");
+	if (remote_signing_config_val.IsValid()) {
+		RemoteSigningConfig remote_signing_config_tmp;
+		error = remote_signing_config_tmp.TryFromJSON(remote_signing_config_val);
+		if (!error.empty()) {
+			return error;
+		}
+		remote_signing_config = std::move(remote_signing_config_tmp);
+	}
+	auto read_restrictions_val = obj.GetMember("read-restrictions");
+	if (read_restrictions_val.IsValid()) {
+		ReadRestrictions read_restrictions_tmp;
+		error = read_restrictions_tmp.TryFromJSON(read_restrictions_val);
+		if (!error.empty()) {
+			return error;
+		}
+		read_restrictions = std::move(read_restrictions_tmp);
+	}
+	auto labels_val = obj.GetMember("labels");
+	if (labels_val.IsValid()) {
+		Labels labels_tmp;
+		error = labels_tmp.TryFromJSON(labels_val);
+		if (!error.empty()) {
+			return error;
+		}
+		labels = std::move(labels_tmp);
+	}
 	return "";
 }
 
@@ -159,6 +198,27 @@ void LoadTableResult::PopulateJSON(JSONWriter &writer, JSONMutableValue obj) con
 			storage_credentials_json.Append(storage_credentials_json_item_json);
 		}
 		obj.Add("storage-credentials", storage_credentials_json);
+	}
+
+	// Serialize: remote-signing-config
+	if (remote_signing_config.has_value()) {
+		auto &remote_signing_config_value = *remote_signing_config;
+		auto remote_signing_config_json = remote_signing_config_value.ToJSON(writer);
+		obj.Add("remote-signing-config", remote_signing_config_json);
+	}
+
+	// Serialize: read-restrictions
+	if (read_restrictions.has_value()) {
+		auto &read_restrictions_value = *read_restrictions;
+		auto read_restrictions_json = read_restrictions_value.ToJSON(writer);
+		obj.Add("read-restrictions", read_restrictions_json);
+	}
+
+	// Serialize: labels
+	if (labels.has_value()) {
+		auto &labels_value = *labels;
+		auto labels_json = labels_value.ToJSON(writer);
+		obj.Add("labels", labels_json);
 	}
 }
 

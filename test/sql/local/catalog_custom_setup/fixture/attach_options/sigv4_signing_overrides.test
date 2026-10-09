@@ -23,6 +23,10 @@ CREATE SECRET (
 statement ok
 call enable_logging('http');
 
+# Inspect the region and service in the logged SigV4 Authorization header.
+statement ok
+SET redact_http_logs=false
+
 # sigv4_service and sigv4_region override SigV4 service/region parsing from host
 # The fixture catalog at 8181 does not validate auth, so the attach succeeds
 statement ok

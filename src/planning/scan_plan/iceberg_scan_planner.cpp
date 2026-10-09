@@ -136,23 +136,23 @@ void IcebergScanPlanner::InitializeView(annotated_lock_guard<annotated_mutex> &g
 	auto &committed_data = GetScanPlanProvider().DataManifests();
 	for (auto &manifest : committed_data) {
 		data_manifests.emplace_back(data_manifests.size(), manifest);
-		data_manifest_matches.push_back(pruner.ManifestMatchesFilter(manifest.file));
+		data_manifest_matches.push_back(pruner.ManifestMatchesFilter(manifest));
 	}
 	for (auto &manifest : GetScanPlanProvider().TransactionDataManifests()) {
 		data_manifests.emplace_back(data_manifests.size(), manifest);
-		data_manifest_matches.push_back(pruner.ManifestMatchesFilter(manifest.get().file));
+		data_manifest_matches.push_back(pruner.ManifestMatchesFilter(manifest.get()));
 	}
 	auto &committed_deletes = GetScanPlanProvider().DeleteManifests();
 	bool has_matching_deletes = false;
 	for (auto &manifest : committed_deletes) {
 		delete_manifests.emplace_back(delete_manifests.size(), manifest);
-		auto matches = pruner.ManifestMatchesFilter(manifest.file);
+		auto matches = pruner.ManifestMatchesFilter(manifest);
 		delete_manifest_matches.push_back(matches);
 		has_matching_deletes |= matches;
 	}
 	for (auto &manifest : GetScanPlanProvider().TransactionDeleteManifests()) {
 		delete_manifests.emplace_back(delete_manifests.size(), manifest);
-		auto matches = pruner.ManifestMatchesFilter(manifest.get().file);
+		auto matches = pruner.ManifestMatchesFilter(manifest.get());
 		delete_manifest_matches.push_back(matches);
 		has_matching_deletes |= matches;
 	}
@@ -188,7 +188,7 @@ IcebergScanPlanner::GetDataFile(idx_t file_id, annotated_lock_guard<annotated_mu
 		auto &batch = data_view_cursor.current_batch;
 		auto &bound_manifest = data_manifests[batch.manifest_list_entry_idx];
 		auto &manifest_entries = bound_manifest.entry.GetManifestEntries();
-		auto &manifest_file = bound_manifest.entry.file;
+		auto &manifest_file = bound_manifest.entry.GetManifest();
 		if (!data_manifest_matches[batch.manifest_list_entry_idx]) {
 			data_view_cursor.current_batch_offset = batch.end_index;
 		}
@@ -236,7 +236,7 @@ void IcebergScanPlanner::EnsureScanOrderApplied(annotated_lock_guard<annotated_m
 
 IcebergDataFileDescriptor IcebergScanPlanner::CreateDataFileDescriptor(const BoundIcebergManifestEntry &entry) const {
 	auto &file = entry.entry.data_file;
-	auto &manifest = data_manifests[entry.manifest_file_idx].entry.file;
+	auto &manifest = data_manifests[entry.manifest_file_idx].entry.GetManifest();
 	IcebergDataFileDescriptor task;
 	task.original_file_path = file.file_path;
 	task.file_path =

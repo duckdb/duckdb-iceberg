@@ -32,6 +32,10 @@ LoadViewResult LoadViewResult::Copy() const {
 			(*res.config).emplace(entry.first, entry.second);
 		}
 	}
+	if (labels.has_value()) {
+		res.labels.emplace();
+		(*res.labels) = (*labels).Copy();
+	}
 	return res;
 }
 
@@ -85,6 +89,15 @@ string LoadViewResult::TryFromJSON(JSONValue obj) {
 		}
 		config = std::move(config_tmp);
 	}
+	auto labels_val = obj.GetMember("labels");
+	if (labels_val.IsValid()) {
+		Labels labels_tmp;
+		error = labels_tmp.TryFromJSON(labels_val);
+		if (!error.empty()) {
+			return error;
+		}
+		labels = std::move(labels_tmp);
+	}
 	return "";
 }
 
@@ -106,6 +119,13 @@ void LoadViewResult::PopulateJSON(JSONWriter &writer, JSONMutableValue obj) cons
 			config_json.Add(config_json_key, config_json_value_json);
 		}
 		obj.Add("config", config_json);
+	}
+
+	// Serialize: labels
+	if (labels.has_value()) {
+		auto &labels_value = *labels;
+		auto labels_json = labels_value.ToJSON(writer);
+		obj.Add("labels", labels_json);
 	}
 }
 

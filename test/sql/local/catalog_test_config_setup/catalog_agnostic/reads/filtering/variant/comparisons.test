@@ -36,50 +36,58 @@ insert into my_datalake.default.variant_cmp_tbl values
 statement ok
 call enable_logging('Iceberg');
 
-# '>' prunes data file 1 (max 30)
-statement ok
-select * from my_datalake.default.variant_cmp_tbl where variant_col.age > 50;
+# '>' keeps both files: the primitive bounds could describe array elements.
+query I
+select count(*) from my_datalake.default.variant_cmp_tbl where variant_col.age > 50;
+----
+3
 
 query I
 select count(*) from duckdb_logs() where type = 'Iceberg' and message like '%skipped%';
 ----
-1
+0
 
 statement ok
 CALL truncate_duckdb_logs();
 
-# flipped '>' prunes data file 1 (max 30)
-statement ok
-select * from my_datalake.default.variant_cmp_tbl where 50 < variant_col.age;
+# Flipping the operands must preserve the conservative decision.
+query I
+select count(*) from my_datalake.default.variant_cmp_tbl where 50 < variant_col.age;
+----
+3
 
 query I
 select count(*) from duckdb_logs() where type = 'Iceberg' and message like '%skipped%';
 ----
-1
+0
 
 statement ok
 CALL truncate_duckdb_logs();
 
-# '>=' prunes data file 1 (max 30)
-statement ok
-select * from my_datalake.default.variant_cmp_tbl where variant_col.age >= 70;
+# '>=' also keeps both files.
+query I
+select count(*) from my_datalake.default.variant_cmp_tbl where variant_col.age >= 70;
+----
+3
 
 query I
 select count(*) from duckdb_logs() where type = 'Iceberg' and message like '%skipped%';
 ----
-1
+0
 
 statement ok
 CALL truncate_duckdb_logs();
 
-# flipped '>=' prunes data file 1 (max 30)
-statement ok
-select * from my_datalake.default.variant_cmp_tbl where 70 <= variant_col.age;
+# Flipped '>=' also keeps both files.
+query I
+select count(*) from my_datalake.default.variant_cmp_tbl where 70 <= variant_col.age;
+----
+3
 
 query I
 select count(*) from duckdb_logs() where type = 'Iceberg' and message like '%skipped%';
 ----
-1
+0
 
 statement ok
 CALL truncate_duckdb_logs();

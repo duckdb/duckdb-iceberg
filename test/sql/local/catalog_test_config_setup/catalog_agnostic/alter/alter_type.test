@@ -176,3 +176,38 @@ statement error
 ALTER TABLE my_datalake.default.schema_evolution_table ALTER evolve_to_timestamp_partitioned TYPE TIMESTAMP;
 ----
 Catalog Error: Column 'evolve_to_timestamp_partitioned' of type 'DATE' can't be altered to type 'TIMESTAMP' (there is a partition field that refers to the column (name: year_evolve_to_timestamp_partitioned_1, partition_field_id: 1000))
+
+# Nested type promotion must reference the exact field being altered.
+statement ok
+drop table my_datalake.default.schema_evolution_table;
+
+statement ok
+create table my_datalake.default.schema_evolution_table (s STRUCT(a INTEGER, b INTEGER));
+
+statement ok
+insert into my_datalake.default.schema_evolution_table values ({'a': 42, 'b': 7});
+
+statement error
+ALTER TABLE my_datalake.default.schema_evolution_table ALTER s.a TYPE BIGINT USING s.b::BIGINT;
+----
+ALTER TYPE with a USING expression is not supported for Iceberg tables
+
+statement ok
+ALTER TABLE my_datalake.default.schema_evolution_table ALTER s.a TYPE BIGINT;
+
+query IIII
+select typeof(s.a), typeof(s.b), s.a, s.b from my_datalake.default.schema_evolution_table;
+----
+BIGINT	INTEGER	42	7
+
+statement ok
+insert into my_datalake.default.schema_evolution_table values ({'a': 9223372036854775807, 'b': 8});
+
+query II rowsort
+select s.a, s.b from my_datalake.default.schema_evolution_table;
+----
+42	7
+9223372036854775807	8
+
+statement ok
+drop table my_datalake.default.schema_evolution_table;

@@ -220,7 +220,7 @@ void IcebergSnapshotMetrics::AddManifestListEntry(const IcebergManifestListEntry
 	}
 	UpdateTotalFilesSize(manifest_metrics.added_files_size, manifest_metrics.removed_files_size);
 
-	auto &manifest_file = manifest_list_entry.file;
+	auto &manifest_file = manifest_list_entry.GetManifest();
 	if (manifest_file.content == IcebergManifestContentType::DELETE) {
 		//! Delete file count metrics
 		AddMetric(IcebergSnapshotMetricType::ADDED_DELETE_FILES, manifest_metrics.added_delete_files);

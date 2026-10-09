@@ -18,7 +18,7 @@ optional<idx_t> IcebergScanStatistics::CountDataRows() const {
 		if (!data_manifest_matches[i]) {
 			continue;
 		}
-		auto &counts = data_manifests[i].entry.file.counts;
+		auto &counts = data_manifests[i].entry.GetManifest().counts;
 		if (!counts || !counts->added_rows_count || !counts->existing_rows_count) {
 			return nullopt;
 		}
@@ -36,7 +36,7 @@ optional<idx_t> IcebergScanStatistics::EstimateCardinality() const {
 		if (!delete_manifest_matches[i]) {
 			continue;
 		}
-		auto &counts = delete_manifests[i].entry.file.counts;
+		auto &counts = delete_manifests[i].entry.GetManifest().counts;
 		if (!counts || !counts->added_rows_count || !counts->existing_rows_count) {
 			return nullopt;
 		}

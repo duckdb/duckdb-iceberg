@@ -196,8 +196,7 @@ IcebergLoadTableResult IcebergLoadTableRequest::Execute(ClientContext &context, 
 	}
 	auto doc = ICUtils::APIResultToDoc(result->body);
 	auto metadata_root = doc->GetRoot();
-	ret.result_ =
-	    make_uniq<const rest_api_objects::LoadTableResult>(rest_api_objects::LoadTableResult::FromJSON(metadata_root));
+	ret.result_ = make_uniq<const rest_api_objects::LoadTableResult>(ICUtils::ParseLoadTableResult(metadata_root));
 	return ret;
 }
 
@@ -613,8 +612,10 @@ rest_api_objects::LoadTableResult IRCAPI::CommitNewTable(ClientContext &context,
 		}
 		auto doc = ICUtils::APIResultToDoc(response->body);
 		auto root = doc->GetRoot();
-		auto load_table_result = rest_api_objects::LoadTableResult::FromJSON(root);
+		auto load_table_result = ICUtils::ParseLoadTableResult(root);
 		return load_table_result;
+	} catch (const NotImplementedException &) {
+		throw;
 	} catch (const HTTPException &) {
 		// Non-200 already classified by HTTP status; rethrow so the status survives.
 		throw;

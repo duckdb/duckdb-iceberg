@@ -156,6 +156,16 @@ static bool MatchBoundsIsNotNullFilter(const IcebergPredicateStats &stats) {
 	return stats.has_not_null == true;
 }
 
+//! variant_comparator keys start with a byte that ranks the value's type (all numbers share one rank)
+static bool SameVariantTypeRank(const Value &key, const Value &other_key) {
+	if (key.type().id() != LogicalTypeId::BLOB || other_key.type().id() != LogicalTypeId::BLOB) {
+		return true;
+	}
+	auto &a = StringValue::Get(key);
+	auto &b = StringValue::Get(other_key);
+	return !a.empty() && !b.empty() && a[0] == b[0];
+}
+
 static bool TryEvaluateVariantScalarBound(ClientContext &context, const Expression &expr, Value &result) {
 	auto &comparator = expr.Cast<BoundFunctionExpression>();
 	D_ASSERT(comparator.Function().GetName() == "variant_comparator");
@@ -182,6 +192,13 @@ static bool TryEvaluateVariantScalarBound(ClientContext &context, const Expressi
 bool MatchVariantBounds(ClientContext &context, ExpressionType comparison_type, const Expression &left,
                         const Expression &right, const IcebergPredicateStats &stats,
                         const IcebergTransform &transform) {
+	if (comparison_type == ExpressionType::COMPARE_GREATERTHAN ||
+	    comparison_type == ExpressionType::COMPARE_GREATERTHANOREQUALTO) {
+		// Iceberg uses the same primitive bounds for a scalar and for the elements of an array.
+		// An ARRAY variant sorts after every primitive, so it may match even when its elements do not.
+		// Without the field's actual type, these bounds cannot rule out either comparison.
+		return true;
+	}
 	if (!stats.lower_bound || !stats.upper_bound) {
 		return true;
 	}
@@ -203,6 +220,15 @@ bool MatchVariantBounds(ClientContext &context, ExpressionType comparison_type, 
 		return true;
 	}
 	if (!TryEvaluateVariantScalarBound(context, *upper_copy, transformed_upper_bound)) {
+		return true;
+	}
+	if (transformed_lower_bound.IsNull() || transformed_upper_bound.IsNull()) {
+		//! The bounds have no entry for this path, so nothing is known about its values
+		return true;
+	}
+	if (!SameVariantTypeRank(transformed_lower_bound, right_constant) ||
+	    !SameVariantTypeRank(transformed_upper_bound, right_constant)) {
+		//! Bounds of another type say nothing about values of the filtered type
 		return true;
 	}
 	IcebergPredicateStats transformed_stats(stats);
@@ -287,7 +313,8 @@ static bool MatchBoundsExpression(ClientContext &context, const unique_ptr<Expre
 				return MatchBoundsConstant(left.Cast<BoundConstantExpression>().GetValue(),
 				                           FlipComparisonExpression(comparison_type), stats, transform);
 			} else if (is_identity && IsVariantReference(right)) {
-				return MatchVariantBounds(context, comparison_type, right, left, stats, transform);
+				return MatchVariantBounds(context, FlipComparisonExpression(comparison_type), right, left, stats,
+				                          transform);
 			}
 		}
 		return true;

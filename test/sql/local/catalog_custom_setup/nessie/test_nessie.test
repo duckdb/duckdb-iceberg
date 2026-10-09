@@ -42,6 +42,10 @@ attach '' as my_datalake (
 statement ok
 call enable_logging(level='debug');
 
+# Inspect the warehouse query parameter in the logged catalog config URL.
+statement ok
+SET redact_http_logs=false
+
 statement ok
 attach 'warehouse' as my_datalake (
     type ICEBERG,

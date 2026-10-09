@@ -25,6 +25,10 @@ CREATE SECRET sigv4_secret (
 statement ok
 CALL enable_logging(level='debug');
 
+# Inspect the signing scheme in the logged Authorization header.
+statement ok
+SET redact_http_logs=false
+
 statement ok
 ATTACH ':' AS glue_catalog (
     TYPE ICEBERG,

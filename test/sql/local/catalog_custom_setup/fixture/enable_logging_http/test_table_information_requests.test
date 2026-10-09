@@ -18,6 +18,10 @@ set logging_level='debug';
 statement ok
 CALL enable_logging('HTTP');
 
+# Inspect custom header values and Bearer tokens in the logged requests.
+statement ok
+SET redact_http_logs=false
+
 statement ok
 CREATE SECRET (
     TYPE S3,

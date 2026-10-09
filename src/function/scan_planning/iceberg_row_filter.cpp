@@ -28,7 +28,7 @@ static void ValidateRowFilter(const ParsedExpression &expression) {
 }
 
 unique_ptr<Expression> IcebergRowFilter::Bind(ClientContext &context, const string &sql, const LogicalType &schema) {
-	auto expressions = Parser::ParseExpressionList(sql);
+	auto expressions = Parser(context).ParseExpressionList(sql);
 	if (expressions.size() != 1) {
 		throw BinderException("Iceberg row_filter requires exactly one Boolean expression");
 	}

@@ -10,50 +10,56 @@
 
 namespace duckdb {
 
+// Keep emitting legacy term/value operands so filters also work with catalogs
+// that predate the value-expression representation.
 rest_api_objects::Term IcebergExpression::ReferenceExpression(const string &column_name) {
 	rest_api_objects::Term result;
-	result.reference.emplace();
-	result.reference->value = column_name;
+	result.term_reference.emplace();
+	result.term_reference->value = column_name;
 	return result;
 }
 
-unique_ptr<rest_api_objects::Expression>
+unique_ptr<rest_api_objects::Predicate>
 IcebergExpression::LiteralExpression(const string &type, const string &column_name, const Value &value) {
 	if (value.IsNull()) {
 		return nullptr;
 	}
-	auto result = make_uniq<rest_api_objects::Expression>();
-	result->literal_expression.emplace();
-	result->literal_expression->type.value = type;
-	result->literal_expression->term = ReferenceExpression(column_name);
+	auto result = make_uniq<rest_api_objects::Predicate>();
+	result->comparison_predicate.emplace();
+	result->comparison_predicate->type.value = type;
+	result->comparison_predicate->term = ReferenceExpression(column_name);
 	try {
-		result->literal_expression->value = IcebergTypeHelper::PrimitiveTypeFromValue(value);
+		result->comparison_predicate->value.emplace();
+		result->comparison_predicate->value->primitive_type_value = IcebergTypeHelper::PrimitiveTypeFromValue(value);
 	} catch (...) {
 		return nullptr;
 	}
 	return result;
 }
 
-unique_ptr<rest_api_objects::Expression> IcebergExpression::UnaryExpression(const string &type,
-                                                                            const string &column_name) {
-	auto result = make_uniq<rest_api_objects::Expression>();
-	result->unary_expression.emplace();
-	result->unary_expression->type.value = type;
-	result->unary_expression->term = ReferenceExpression(column_name);
+unique_ptr<rest_api_objects::Predicate> IcebergExpression::UnaryExpression(const string &type,
+                                                                           const string &column_name) {
+	auto result = make_uniq<rest_api_objects::Predicate>();
+	result->unary_predicate.emplace();
+	result->unary_predicate->type.value = type;
+	result->unary_predicate->term = ReferenceExpression(column_name);
 	return result;
 }
 
-unique_ptr<rest_api_objects::Expression>
-IcebergExpression::SetExpression(const string &type, const string &column_name,
-                                 const vector<reference<const Value>> &values) {
-	auto result = make_uniq<rest_api_objects::Expression>();
-	result->set_expression.emplace();
-	result->set_expression->type.value = type;
-	result->set_expression->term = ReferenceExpression(column_name);
-	result->set_expression->values.reserve(values.size());
+unique_ptr<rest_api_objects::Predicate> IcebergExpression::SetExpression(const string &type, const string &column_name,
+                                                                         const vector<reference<const Value>> &values) {
+	auto result = make_uniq<rest_api_objects::Predicate>();
+	result->set_predicate.emplace();
+	result->set_predicate->type.value = type;
+	result->set_predicate->term = ReferenceExpression(column_name);
+	result->set_predicate->values.literals_one_of_1.emplace();
+	auto &literals = result->set_predicate->values.literals_one_of_1->value;
+	literals.reserve(values.size());
 	for (auto &value : values) {
 		try {
-			result->set_expression->values.push_back(IcebergTypeHelper::PrimitiveTypeFromValue(value.get()));
+			rest_api_objects::Literal literal;
+			literal.primitive_type_value = IcebergTypeHelper::PrimitiveTypeFromValue(value.get());
+			literals.push_back(std::move(literal));
 		} catch (...) {
 			return nullptr;
 		}
@@ -61,20 +67,20 @@ IcebergExpression::SetExpression(const string &type, const string &column_name,
 	return result;
 }
 
-unique_ptr<rest_api_objects::Expression>
-IcebergExpression::AndExpression(unique_ptr<rest_api_objects::Expression> left,
-                                 unique_ptr<rest_api_objects::Expression> right) {
+unique_ptr<rest_api_objects::Predicate>
+IcebergExpression::AndExpression(unique_ptr<rest_api_objects::Predicate> left,
+                                 unique_ptr<rest_api_objects::Predicate> right) {
 	if (!left) {
 		return right;
 	}
 	if (!right) {
 		return left;
 	}
-	auto result = make_uniq<rest_api_objects::Expression>();
-	result->and_or_expression.emplace();
-	result->and_or_expression->type.value = "and";
-	result->and_or_expression->left = std::move(left);
-	result->and_or_expression->right = std::move(right);
+	auto result = make_uniq<rest_api_objects::Predicate>();
+	result->and_or_predicate.emplace();
+	result->and_or_predicate->type.value = "and";
+	result->and_or_predicate->left = std::move(left);
+	result->and_or_predicate->right = std::move(right);
 	return result;
 }
 
@@ -97,8 +103,8 @@ optional<string> IcebergExpression::GetComparisonType(ExpressionType type, bool 
 	}
 }
 
-unique_ptr<rest_api_objects::Expression> IcebergExpression::TryConvertFilter(const Expression &expr,
-                                                                             const string &column_name) {
+unique_ptr<rest_api_objects::Predicate> IcebergExpression::TryConvertFilter(const Expression &expr,
+                                                                            const string &column_name) {
 	if (expr.GetExpressionClass() == ExpressionClass::BOUND_FUNCTION) {
 		//! An optional filter wraps a predicate the scan may skip for performance but that the query
 		//! still implies, so the wrapped predicate is safe to send. IN lists arrive in this shape.
@@ -116,7 +122,7 @@ unique_ptr<rest_api_objects::Expression> IcebergExpression::TryConvertFilter(con
 	if (expr.GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
 		auto &conjunction = expr.Cast<BoundConjunctionExpression>();
 		const bool is_and = expr.GetExpressionType() == ExpressionType::CONJUNCTION_AND;
-		unique_ptr<rest_api_objects::Expression> result;
+		unique_ptr<rest_api_objects::Predicate> result;
 		for (auto &child : conjunction.GetChildren()) {
 			auto converted = TryConvertFilter(*child, column_name);
 			if (!converted) {
@@ -130,11 +136,11 @@ unique_ptr<rest_api_objects::Expression> IcebergExpression::TryConvertFilter(con
 				result = std::move(converted);
 				continue;
 			}
-			auto combined = make_uniq<rest_api_objects::Expression>();
-			combined->and_or_expression.emplace();
-			combined->and_or_expression->type.value = is_and ? "and" : "or";
-			combined->and_or_expression->left = std::move(result);
-			combined->and_or_expression->right = std::move(converted);
+			auto combined = make_uniq<rest_api_objects::Predicate>();
+			combined->and_or_predicate.emplace();
+			combined->and_or_predicate->type.value = is_and ? "and" : "or";
+			combined->and_or_predicate->left = std::move(result);
+			combined->and_or_predicate->right = std::move(converted);
 			result = std::move(combined);
 		}
 		return result;

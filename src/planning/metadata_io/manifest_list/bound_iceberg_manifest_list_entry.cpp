@@ -5,7 +5,7 @@ namespace duckdb {
 
 BoundIcebergManifestListEntry::BoundIcebergManifestListEntry(idx_t index, const IcebergManifestListEntry &entry)
     : entry(entry), index(index) {
-	next_row_id = entry.file.first_row_id;
+	next_row_id = entry.GetManifest().first_row_id;
 }
 
 BoundIcebergManifestEntry BoundIcebergManifestListEntry::BindEntry(const IcebergManifestEntry &entry) const {

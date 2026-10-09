@@ -36,6 +36,10 @@ FunctionDefinition FunctionDefinition::Copy() const {
 	}
 	res.current_version_id = current_version_id;
 	res.function_type = function_type;
+	if (specific_name.has_value()) {
+		res.specific_name.emplace();
+		(*res.specific_name) = (*specific_name);
+	}
 	if (return_nullable.has_value()) {
 		res.return_nullable.emplace();
 		(*res.return_nullable) = (*return_nullable);
@@ -144,6 +148,18 @@ string FunctionDefinition::TryFromJSON(JSONValue obj) {
 			    json_utils::GetTypeDescription(function_type_val).c_str());
 		}
 	}
+	auto specific_name_val = obj.GetMember("specific-name");
+	if (specific_name_val.IsValid()) {
+		string specific_name_tmp;
+		if (json_utils::IsString(specific_name_val)) {
+			specific_name_tmp = json_utils::GetString(specific_name_val);
+		} else {
+			return StringUtil::Format(
+			    "FunctionDefinition property 'specific_name_tmp' is not of type 'string', found %s instead",
+			    json_utils::GetTypeDescription(specific_name_val).c_str());
+		}
+		specific_name = std::move(specific_name_tmp);
+	}
 	auto return_nullable_val = obj.GetMember("return-nullable");
 	if (return_nullable_val.IsValid()) {
 		bool return_nullable_tmp;
@@ -203,6 +219,13 @@ void FunctionDefinition::PopulateJSON(JSONWriter &writer, JSONMutableValue obj) 
 	// Serialize: function-type
 	auto function_type_json = writer.CreateString(function_type);
 	obj.Add("function-type", function_type_json);
+
+	// Serialize: specific-name
+	if (specific_name.has_value()) {
+		auto &specific_name_value = *specific_name;
+		auto specific_name_json = writer.CreateString(specific_name_value);
+		obj.Add("specific-name", specific_name_json);
+	}
 
 	// Serialize: return-nullable
 	if (return_nullable.has_value()) {

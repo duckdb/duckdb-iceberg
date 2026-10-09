@@ -132,7 +132,7 @@ static void IcebergPartitionStatsFunction(ClientContext &context, TableFunctionI
 	auto &metadata = bind_data.metadata;
 	for (; global_state.current_manifest_idx < table_entries.size(); global_state.current_manifest_idx++) {
 		auto &table_entry = table_entries[global_state.current_manifest_idx];
-		auto &manifest = table_entry.file;
+		auto &manifest = table_entry.GetFile();
 		auto &field_summaries = manifest.partitions.field_summary;
 
 		auto spec_id = manifest.partition_spec_id;
@@ -159,8 +159,7 @@ static void IcebergPartitionStatsFunction(ClientContext &context, TableFunctionI
 			//! manifest_path
 			AddString(output.data[col++], out, string_t(manifest.manifest_path));
 			//! added_snapshot_id
-			D_ASSERT(manifest.added_snapshot_id);
-			FlatVector::GetDataMutable<int64_t>(output.data[col++])[out] = *manifest.added_snapshot_id;
+			FlatVector::GetDataMutable<int64_t>(output.data[col++])[out] = manifest.added_snapshot_id;
 			//! partition_spec_id
 			FlatVector::GetDataMutable<int32_t>(output.data[col++])[out] = manifest.partition_spec_id;
 			//! partition_field_id

@@ -41,6 +41,7 @@ public:
 	vector<FunctionDefinitionVersion> versions;
 	int32_t current_version_id;
 	string function_type;
+	optional<string> specific_name;
 	optional<bool> return_nullable;
 	optional<string> _doc;
 };

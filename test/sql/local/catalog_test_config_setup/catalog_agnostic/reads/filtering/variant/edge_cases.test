@@ -36,11 +36,11 @@ insert into my_datalake.default.variant_edge_tbl values
 statement ok
 call enable_logging('Iceberg');
 
-# filtering on 'age' must not crash even though files 2/3 have no usable 'age' bounds
+# Filtering on 'age' must not crash even though the NULL file has no usable 'age' bounds.
 statement ok
-select * from my_datalake.default.variant_edge_tbl where variant_col.age > 100;
+select * from my_datalake.default.variant_edge_tbl where variant_col.age < 5;
 
-# data file 1 (max age 30) is pruned; files without 'age' bounds are conservatively kept
+# data file 1 (min age 10) is pruned; files without 'age' bounds are conservatively kept
 query I
 select count(*) from duckdb_logs() where type = 'Iceberg' and message like '%skipped%';
 ----

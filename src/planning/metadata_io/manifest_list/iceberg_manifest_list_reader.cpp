@@ -124,10 +124,18 @@ void ManifestListReader::ReadChunk(DataChunk &chunk, idx_t table_format_version,
 	//! Conversion logic
 	for (idx_t i = 0; i < count; i++) {
 		auto manifest_path = ReadRequiredField<string_t>("manifest_path", manifest_path_entries[i]).GetString();
-		IcebergManifestFile manifest(manifest_path);
-		manifest.manifest_length = ReadRequiredField<int64_t>("manifest_length", manifest_length_entries[i]);
-		manifest.added_snapshot_id = ReadRequiredField<int64_t>("added_snapshot_id", added_snapshot_id_entries[i]);
-		manifest.partition_spec_id = ReadRequiredField<int32_t>("partition_spec_id", partition_spec_id_entries[i]);
+		auto manifest_length = ReadRequiredField<int64_t>("manifest_length", manifest_length_entries[i]);
+		auto snapshot_id = ReadRequiredField<int64_t>("added_snapshot_id", added_snapshot_id_entries[i]);
+		auto spec_id = ReadRequiredField<int32_t>("partition_spec_id", partition_spec_id_entries[i]);
+		//! V1 omits these fields: content defaults to DATA and sequence number to 0.
+		auto manifest_content =
+		    table_format_version >= 2
+		        ? IcebergManifestContentType(ReadRequiredField<int32_t>("content", (*content_entries)[i]))
+		        : IcebergManifestContentType::DATA;
+		auto manifest_sequence_number =
+		    table_format_version >= 2 ? ReadRequiredField<int64_t>("sequence_number", (*sequence_number_entries)[i])
+		                              : 0;
+		IcebergManifest manifest(spec_id, manifest_content, manifest_sequence_number);
 		IcebergManifestCounts manifest_counts;
 		manifest_counts.added_files_count =
 		    ReadOptionalCount<int32_t>("added_files_count", added_files_count_entries[i]);
@@ -147,17 +155,11 @@ void ManifestListReader::ReadChunk(DataChunk &chunk, idx_t table_format_version,
 		}
 
 		if (table_format_version >= 2) {
-			manifest.content = IcebergManifestContentType(ReadRequiredField<int32_t>("content", (*content_entries)[i]));
-			manifest.sequence_number = ReadRequiredField<int64_t>("sequence_number", (*sequence_number_entries)[i]);
 			manifest.min_sequence_number =
 			    ReadRequiredField<int64_t>("min_sequence_number", (*min_sequence_number_entries)[i]);
 		} else {
-			//! SPEC: Manifest list field sequence-number must default to 0
-			manifest.sequence_number = 0;
 			//! SPEC: Manifest list field min-sequence-number must default to 0
 			manifest.min_sequence_number = 0;
-			//! SPEC: Manifest list field content must default to 0 (data)
-			manifest.content = IcebergManifestContentType::DATA;
 		}
 
 		if (table_format_version >= 3) {
@@ -191,7 +193,8 @@ void ManifestListReader::ReadChunk(DataChunk &chunk, idx_t table_format_version,
 				summaries.push_back(summary);
 			}
 		}
-		result.push_back(std::move(manifest));
+		result.emplace_back(
+		    IcebergManifestFile(std::move(manifest_path), manifest_length, snapshot_id, std::move(manifest)));
 	}
 }
 

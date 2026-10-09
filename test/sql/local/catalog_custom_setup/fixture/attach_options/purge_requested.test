@@ -9,6 +9,10 @@ include test/sql/init_requires
 # Do not ignore 'HTTP' error messages!
 set ignore_error_messages
 
+# Inspect the purgeRequested query parameter in logged DELETE requests.
+statement ok
+SET redact_http_logs=false
+
 statement ok
 CREATE SECRET (
     TYPE S3,

@@ -151,17 +151,14 @@ static void IcebergMetaDataFunction(ClientContext &context, TableFunctionInput &
 				output.SetChildCardinality(out);
 				return;
 			}
-			auto &manifest = table_entry.file;
+			auto &manifest = table_entry.GetFile();
 			auto &manifest_entry = entries[global_state.current_manifest_entry_idx];
 			auto &data_file = manifest_entry.data_file;
 
 			//! manifest_path
 			AddString(output.data[0], out, string_t(manifest.manifest_path));
 			//! manifest_sequence_number
-			if (!manifest.sequence_number) {
-				throw InvalidConfigurationException("manifest_file.sequence_number is not set");
-			}
-			FlatVector::GetDataMutable<int64_t>(output.data[1])[out] = *manifest.sequence_number;
+			FlatVector::GetDataMutable<int64_t>(output.data[1])[out] = manifest.sequence_number;
 			//! manifest_content
 			AddString(output.data[2], out, string_t(IcebergManifestContentTypeToString(manifest.content)));
 

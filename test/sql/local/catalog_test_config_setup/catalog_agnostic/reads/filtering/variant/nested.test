@@ -36,7 +36,7 @@ insert into my_datalake.default.variant_nested_tbl values
 statement ok
 call enable_logging('Iceberg');
 
-# zip > 1500 prunes data file 1 (max zip 1200)
+# zip > 1500 keeps both files: bounds cannot distinguish scalars from array elements.
 query I
 select * from my_datalake.default.variant_nested_tbl where variant_col.person.address.zip > 1500;
 ----
@@ -47,7 +47,7 @@ select * from my_datalake.default.variant_nested_tbl where variant_col.person.ad
 query I
 select count(*) from duckdb_logs() where type = 'Iceberg' and message like '%skipped%';
 ----
-1
+0
 
 statement ok
 CALL truncate_duckdb_logs();

@@ -1,0 +1,29 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -94,6 +94,10 @@ if (USE_CPU_EXTENSIONS)
+         endif()
+ 
+         list(APPEND UBER_FILE_FLAGS "${AWS_SSE4_2_FLAG}")
++        if (MSVC AND CMAKE_C_COMPILER_ID STREQUAL "Clang")
++            # Unlike cl.exe, clang-cl requires a target feature for CRC32 intrinsics.
++            list(APPEND UBER_FILE_FLAGS "-mcrc32")
++        endif()
+ 
+        # this file routes all of the implementations together based on available cpu features. It gets built regardless
+        # of which flags exist. The c file sorts it out.
+diff --git a/source/xxhash.c b/source/xxhash.c
+--- a/source/xxhash.c
++++ b/source/xxhash.c
+@@ -46,11 +46,7 @@
+ #        elif defined(__clang__) && defined(_MSC_VER) /* clang-cl.exe */
+ #            include <emmintrin.h>                    /* SSE2 */
+ #            if XXH_DISPATCH_AVX2 || XXH_DISPATCH_AVX512
+-#                include <avx2intrin.h>
+-#                include <avx512fintrin.h>
+-#                include <avxintrin.h>
+ #                include <immintrin.h> /* AVX2, AVX512F */
+-#                include <smmintrin.h>
+ #            endif
+ #            define XXH_TARGET_SSE2 __attribute__((__target__("sse2")))
+ #            define XXH_TARGET_AVX2 __attribute__((__target__("avx2")))

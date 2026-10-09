@@ -71,7 +71,7 @@ unique_ptr<IcebergScanPlanProvider> IcebergScanPlanProvider::Create(IcebergScanP
 			request.case_sensitive = true;
 			request.use_snapshot_schema =
 			    context.snapshot.snapshot->snapshot_id != context.metadata.current_snapshot_id;
-			unique_ptr<rest_api_objects::Expression> server_side_filter;
+			unique_ptr<rest_api_objects::Predicate> server_side_filter;
 			for (auto &filter : table_filters) {
 				auto primary_index = filter.first.GetPrimaryIndex();
 				if (primary_index >= context.schema.columns.size()) {

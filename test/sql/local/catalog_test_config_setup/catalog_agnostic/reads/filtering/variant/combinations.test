@@ -36,9 +36,9 @@ insert into my_datalake.default.variant_combo_tbl values
 statement ok
 call enable_logging('Iceberg');
 
-# filter on 'a' prunes data file 1 (max a = 3)
+# Equality on 'a' prunes data file 1 (max a = 3).
 statement ok
-select * from my_datalake.default.variant_combo_tbl where variant_col.a > 5;
+select * from my_datalake.default.variant_combo_tbl where variant_col.a = 11;
 
 query I
 select count(*) from duckdb_logs() where type = 'Iceberg' and message like '%skipped%';
@@ -60,9 +60,9 @@ select count(*) from duckdb_logs() where type = 'Iceberg' and message like '%ski
 statement ok
 CALL truncate_duckdb_logs();
 
-# combined: data file 1 fails (a > 5), data file 2 fails (b < 150) -> both pruned
+# combined: data file 1 fails (a = 11), data file 2 fails (b < 150) -> both pruned
 statement ok
-select * from my_datalake.default.variant_combo_tbl where variant_col.a > 5 and variant_col.b < 150;
+select * from my_datalake.default.variant_combo_tbl where variant_col.a = 11 and variant_col.b < 150;
 
 query I
 select count(*) from duckdb_logs() where type = 'Iceberg' and message like '%skipped%';
@@ -74,7 +74,7 @@ CALL truncate_duckdb_logs();
 
 # the combined predicate eliminates every row
 query I
-select count(*) from my_datalake.default.variant_combo_tbl where variant_col.a > 5 and variant_col.b < 150;
+select count(*) from my_datalake.default.variant_combo_tbl where variant_col.a = 11 and variant_col.b < 150;
 ----
 0
 

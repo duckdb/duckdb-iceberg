@@ -1502,6 +1502,7 @@
         "test/sql/storage/metadata/full_table_metadata_reuse.test",
         "test/sql/storage/metadata/multi_table_metadata_reuse.test",
         "test/sql/subquery/scalar/correlated_missing_columns.test",
+        "test/sql/tpch/dbgen_reference_values.test",
         "test/sql/tpch/tpch_sf0.test",
         "test/sql/types/enum/test_5983.test",
         "test/sql/types/variant/tpch_test.test",
@@ -1924,6 +1925,37 @@
       "reason": "Test expects current_schema() to be main rather than the configured per-test Iceberg namespace",
       "paths": [
         "test/sql/storage/extensions/extension_views.test"
+      ]
+    },
+    {
+      "reason": "Native block-reclamation test expects DuckDB's missing struct-field error; Iceberg correctly rejects the dotted DROP COLUMN path with a different catalog error",
+      "paths": [
+        "test/sql/alter/drop_col/test_drop_col_dotted_name.test"
+      ]
+    },
+    {
+      "reason": "HTTP header assertions inspect all logged requests; fixture catalog traffic adds an Authorization header beyond the test's explicitly configured HTTP headers",
+      "paths": [
+        "test/sql/logging/http_request_log_redaction.test"
+      ]
+    },
+    {
+      "reason": "Requires native transaction-local tables and row IDs; creating a second table inside the transaction is rejected because the fixture cannot commit multiple CTAS operations atomically",
+      "paths": [
+        "test/sql/parallelism/intraquery/test_transaction_local_parallelism.test"
+      ]
+    },
+    {
+      "reason": "duckdb_columns exposes the unloaded Iceberg table's __ placeholder instead of the column names checked by this parser test",
+      "paths": [
+        "test/sql/parser/backtick_identifiers.test"
+      ]
+    },
+    {
+      "reason": "Assertions require native column compression segments in pragma_storage_info, which Iceberg's Parquet-backed tables do not expose",
+      "paths": [
+        "test/sql/storage/compression/constant/constant_negative_zero.test",
+        "test/sql/storage/compression/rle/rle_select_force_fetch_row.test"
       ]
     }
   ]

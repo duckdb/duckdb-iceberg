@@ -6,7 +6,7 @@
 #include "duckdb/common/string.hpp"
 #include "duckdb/common/vector.hpp"
 #include "duckdb/common/case_insensitive_map.hpp"
-#include "rest_catalog/objects/reference.hpp"
+#include "rest_catalog/objects/term_reference.hpp"
 #include "rest_catalog/objects/transform.hpp"
 
 namespace duckdb {
@@ -35,7 +35,7 @@ public:
 public:
 	string type;
 	Transform transform;
-	Reference term;
+	TermReference term;
 };
 
 } // namespace rest_api_objects

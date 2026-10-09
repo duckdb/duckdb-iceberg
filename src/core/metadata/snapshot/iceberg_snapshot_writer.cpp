@@ -44,27 +44,26 @@ IcebergSnapshotWriter::IcebergSnapshotWriter(ClientContext &context, const Icebe
 }
 
 void IcebergSnapshotWriter::AddExistingManifest(IcebergManifestListEntry manifest) {
-	if (manifest.file.manifest_path.empty() || !manifest.file.added_snapshot_id) {
-		throw InternalException("Cannot carry forward a manifest without a path and snapshot identity");
+	if (!manifest.HasFile()) {
+		throw InternalException("Cannot carry forward unwritten manifest content");
 	}
 	manifest_list.AddExistingManifestFile(std::move(manifest));
 }
 
-void IcebergSnapshotWriter::WriteManifestFile(IcebergManifestListEntry &manifest) {
-	if (manifest.GetManifestEntries().empty()) {
+void IcebergSnapshotWriter::WriteManifestFile(IcebergManifestListEntry &list_entry) {
+	if (list_entry.GetManifestEntries().empty()) {
 		throw InternalException("Cannot write an empty Iceberg manifest");
 	}
-	auto &file = manifest.file;
+	auto &manifest = list_entry.GetManifest();
 	auto &fs = FileSystem::GetFileSystem(context);
-	file.manifest_path =
+	auto path =
 	    fs.JoinPath(table_metadata.GetMetadataPath(fs), UUID::ToString(UUID::GenerateRandomUUID()) + "-m0.avro");
-	file.sequence_number = snapshot.sequence_number;
-	file.added_snapshot_id = snapshot.snapshot_id;
-	if (!file.min_sequence_number || *file.min_sequence_number > *file.sequence_number) {
-		file.min_sequence_number = file.sequence_number;
+	if (!manifest.min_sequence_number || *manifest.min_sequence_number > manifest.sequence_number) {
+		manifest.min_sequence_number = manifest.sequence_number;
 	}
-	created_metadata_files.push_back(file.manifest_path);
-	file.manifest_length = manifest_file::WriteToFile(table_metadata, manifest, avro_copy, db, context);
+	created_metadata_files.push_back(path);
+	auto length = manifest_file::WriteToFile(table_metadata, list_entry, path, avro_copy, db, context);
+	list_entry.SetFile(std::move(path), length, *snapshot.snapshot_id);
 }
 
 void IcebergSnapshotWriter::WriteManifest(const IcebergPendingManifest &pending) {
@@ -78,7 +77,7 @@ void IcebergSnapshotWriter::WriteManifest(const IcebergPendingManifest &pending)
 	snapshot.metrics.AddManifestListEntry(manifest);
 	WriteManifestFile(manifest);
 	if (first_row_id) {
-		auto &counts = *manifest.file.counts;
+		auto &counts = *manifest.GetFile().counts;
 		next_row_id += *counts.existing_rows_count + *counts.added_rows_count;
 		*snapshot.added_rows += *counts.added_rows_count;
 	}

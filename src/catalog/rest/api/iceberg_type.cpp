@@ -3,11 +3,10 @@
 #include "common/iceberg_fixed_type.hpp"
 
 #include "duckdb/common/string_util.hpp"
-#include "duckdb/common/extra_type_info.hpp"
 #include "duckdb/common/types.hpp"
 #include "duckdb/common/types/blob.hpp"
 #include "duckdb/parser/column_definition.hpp"
-
+#include "duckdb/common/types/geometry_crs.hpp"
 #include "rest_catalog/objects/list_type.hpp"
 #include "rest_catalog/objects/map_type.hpp"
 #include "rest_catalog/objects/struct_type.hpp"
@@ -357,6 +356,10 @@ rest_api_objects::StructField IcebergTypeHelper::CreateIcebergRestType(const str
 	case LogicalTypeId::ARRAY: {
 		throw InvalidConfigurationException("Array type not supported in Iceberg type. Please cast to LIST");
 	}
+	case LogicalTypeId::VARIANT:
+		rest_type.variant_type.emplace();
+		rest_type.variant_type->value = "variant";
+		return result;
 	default:
 		rest_type.primitive_type = rest_api_objects::PrimitiveType();
 		rest_type.primitive_type->value = IcebergTypeHelper::LogicalTypeToIcebergType(type);

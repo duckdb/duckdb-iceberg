@@ -1,0 +1,139 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/reads/filtering/test_missing_metrics_pruning.test
+# description: Missing data-file bounds are unknown, and metrics modes do not disable partition summaries.
+# group: [filtering]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require-env SCAN_PLANNING_MODE client
+
+include test/sql/init_requires
+
+statement ok
+CALL enable_logging('Iceberg');
+
+foreach mode none counts
+
+foreach layout unpartitioned partitioned
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.missing_metrics_{layout};
+
+endloop
+
+# The non-partition column has no bounds either, exercising file pruning even
+# when the partition summary can prune other manifests.
+statement ok
+CREATE TABLE my_datalake.default.missing_metrics_unpartitioned (p INTEGER, value INTEGER)
+WITH ('write.metadata.metrics.default' = '{mode}');
+
+statement ok
+CREATE TABLE my_datalake.default.missing_metrics_partitioned (p INTEGER, value INTEGER)
+PARTITIONED BY (p)
+WITH ('write.metadata.metrics.default' = '{mode}');
+
+foreach layout unpartitioned partitioned
+
+statement ok
+INSERT INTO my_datalake.default.missing_metrics_{layout} VALUES (1, 10), (1, NULL);
+
+statement ok
+INSERT INTO my_datalake.default.missing_metrics_{layout} VALUES (2, 20), (2, NULL);
+
+statement ok
+INSERT INTO my_datalake.default.missing_metrics_{layout} VALUES (NULL, NULL);
+
+statement ok
+BEGIN;
+
+statement ok
+SET VARIABLE missing_metrics_manifests = (
+	SELECT list(DISTINCT manifest_path) FROM iceberg_metadata(my_datalake.default.missing_metrics_{layout})
+);
+
+query II
+SELECT
+	bool_and(coalesce(cardinality(data_file.lower_bounds), 0) = 0),
+	bool_and(coalesce(cardinality(data_file.upper_bounds), 0) = 0)
+FROM read_avro(getvariable('missing_metrics_manifests'));
+----
+true	true
+
+query I
+SELECT bool_and((coalesce(cardinality(data_file.null_value_counts), 0) > 0) = ('{mode}' = 'counts'))
+FROM read_avro(getvariable('missing_metrics_manifests'));
+----
+true
+
+statement ok
+COMMIT;
+
+statement ok
+CALL truncate_duckdb_logs();
+
+query I
+SELECT count(*) FROM my_datalake.default.missing_metrics_{layout} WHERE value = 10;
+----
+1
+
+# Only counts mode can prove that the all-null data file cannot match.
+query I
+SELECT (count(*) > 0) = ('{mode}' = 'counts') FROM duckdb_logs()
+WHERE type = 'Iceberg' AND message LIKE '%skipped ''data_file''%';
+----
+true
+
+query I
+SELECT count(*) FROM my_datalake.default.missing_metrics_{layout} WHERE value > 10;
+----
+1
+
+query I
+SELECT count(*) FROM my_datalake.default.missing_metrics_{layout} WHERE value < 20;
+----
+1
+
+query I
+SELECT count(*) FROM my_datalake.default.missing_metrics_{layout} WHERE value IN (10, 20);
+----
+2
+
+query I
+SELECT count(*) FROM my_datalake.default.missing_metrics_{layout} WHERE value IS NULL;
+----
+3
+
+query I
+SELECT count(*) FROM my_datalake.default.missing_metrics_{layout} WHERE value IS NOT NULL;
+----
+2
+
+query I
+SELECT count(*) FROM my_datalake.default.missing_metrics_{layout} WHERE p IS NULL;
+----
+1
+
+query I
+SELECT count(*) FROM my_datalake.default.missing_metrics_{layout} WHERE p IS NOT NULL;
+----
+4
+
+statement ok
+CALL truncate_duckdb_logs();
+
+query I
+SELECT count(*) FROM my_datalake.default.missing_metrics_{layout} WHERE p = 1;
+----
+2
+
+query I
+SELECT (count(*) > 0) = ('{layout}' = 'partitioned') FROM duckdb_logs()
+WHERE type = 'Iceberg' AND message LIKE '%skipped ''manifest_file''%';
+----
+true
+
+statement ok
+DROP TABLE my_datalake.default.missing_metrics_{layout};
+
+endloop
+
+endloop

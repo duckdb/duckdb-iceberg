@@ -439,8 +439,8 @@ bool IcebergServerSideScanPlanning::Plan(ClientContext &context, IcebergTable &t
 			if (status == "completed") {
 				auto completed = rest_api_objects::CompletedPlanningResult::FromJSON(root);
 				AppendTasks(std::move(completed.scan_tasks), table_info.table_metadata, accumulator);
-				if (completed.object_5.storage_credentials) {
-					result.storage_credentials = std::move(*completed.object_5.storage_credentials);
+				if (completed.object_10.storage_credentials) {
+					result.storage_credentials = std::move(*completed.object_10.storage_credentials);
 				}
 				auto plan_id = root.GetMember("plan-id");
 				if (plan_id.IsString()) {

@@ -116,10 +116,11 @@ void IcebergManifestStore::LoadManifestList() {
 		}
 
 		for (auto &manifest_list_entry : manifest_list_entries) {
-			if (manifest_list_entry.file.content == IcebergManifestContentType::DATA) {
+			auto content = manifest_list_entry.GetFile().content;
+			if (content == IcebergManifestContentType::DATA) {
 				committed_data_manifests.push_back(std::move(manifest_list_entry));
 			} else {
-				D_ASSERT(manifest_list_entry.file.content == IcebergManifestContentType::DELETE);
+				D_ASSERT(content == IcebergManifestContentType::DELETE);
 				committed_delete_manifests.push_back(std::move(manifest_list_entry));
 			}
 		}
@@ -128,16 +129,17 @@ void IcebergManifestStore::LoadManifestList() {
 		eagerly_loaded_data_manifests.resize(data_manifests.size(), false);
 		vector<idx_t> manifests_to_eagerly_load;
 		for (idx_t manifest_idx = 0; manifest_idx < data_manifests.size(); manifest_idx++) {
-			auto &manifest = data_manifests[manifest_idx];
-			if (manifest.HasManifestEntries()) {
+			auto &list_entry = data_manifests[manifest_idx];
+			auto &manifest = list_entry.GetManifest();
+			if (list_entry.HasManifestEntries()) {
 				eagerly_loaded_data_manifests[manifest_idx] = true;
-				if (!manifest.file.counts || !manifest.file.counts->Complete()) {
-					manifest.file.SetCountsFromEntries(manifest.GetManifestEntries());
+				if (!manifest.counts || !manifest.counts->Complete()) {
+					manifest.SetCountsFromEntries(list_entry.GetManifestEntries());
 				}
 				continue;
 			}
 
-			auto &counts = manifest.file.counts;
+			auto &counts = manifest.counts;
 			if (!counts || !counts->FilesComplete()) {
 				manifests_to_eagerly_load.push_back(manifest_idx);
 				continue;
@@ -145,7 +147,7 @@ void IcebergManifestStore::LoadManifestList() {
 
 			idx_t reserve_size =
 			    *counts->existing_files_count + *counts->added_files_count + *counts->deleted_files_count;
-			manifest.GetOrCreateManifestEntries().reserve(reserve_size);
+			list_entry.GetOrCreateManifestEntries().reserve(reserve_size);
 		}
 
 		if (!manifests_to_eagerly_load.empty()) {
@@ -158,7 +160,7 @@ void IcebergManifestStore::LoadManifestList() {
 			}
 			for (auto manifest_idx : manifests_to_eagerly_load) {
 				auto &manifest = data_manifests[manifest_idx];
-				manifest.file.SetCountsFromEntries(manifest.GetManifestEntries());
+				manifest.GetManifest().SetCountsFromEntries(manifest.GetManifestEntries());
 				eagerly_loaded_data_manifests[manifest_idx] = true;
 			}
 		}
@@ -171,7 +173,8 @@ void IcebergManifestStore::LoadManifestList() {
 			for (const auto &pending_manifest : alter_p.get().GetPendingManifests()) {
 				auto manifest_list_entry =
 				    pending_manifest.CreateScanEntry(context.metadata, sequence_number, next_row_id);
-				switch (manifest_list_entry.file.content) {
+				auto content = pending_manifest.GetMetadata().content;
+				switch (content) {
 				case IcebergManifestContentType::DATA:
 					transaction_data_manifests.push_back(std::move(manifest_list_entry));
 					break;
@@ -179,8 +182,7 @@ void IcebergManifestStore::LoadManifestList() {
 					transaction_delete_manifests.push_back(std::move(manifest_list_entry));
 					break;
 				default:
-					throw NotImplementedException("IcebergManifestContentType: %d",
-					                              static_cast<uint8_t>(manifest_list_entry.file.content));
+					throw NotImplementedException("IcebergManifestContentType: %d", static_cast<uint8_t>(content));
 				}
 			}
 			sequence_number++;

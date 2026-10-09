@@ -1,0 +1,73 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/reads/filtering/variant/test_missing_path_bounds.test
+# description: a VARIANT path without bounds is unknown, so filters on it keep the file
+# group: [variant]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require-env FORMAT_V3_SUPPORT
+
+require-env SCAN_PLANNING_MODE client
+
+require-env VARIANT_SUPPORT
+
+include test/sql/init_requires
+
+statement ok
+drop table if exists my_datalake.default.variant_missing_path_bounds;
+
+statement ok
+create table my_datalake.default.variant_missing_path_bounds (id INT, v VARIANT) WITH ('format-version'='3');
+
+# 'b' holds an INT in every row but one, so the file gets bounds for 'a' and none for 'b'
+statement ok
+insert into my_datalake.default.variant_missing_path_bounds
+select range, CASE WHEN range = 501 THEN {'a': 3, 'b': 'str'}::VARIANT
+                   ELSE {'a': (range % 10)::INT, 'b': (range % 10)::INT}::VARIANT END
+from range(1000);
+
+query I
+select id from my_datalake.default.variant_missing_path_bounds where v.b = 'str';
+----
+501
+
+query I
+select count(*) from my_datalake.default.variant_missing_path_bounds where TRY_CAST(v.b AS INT) = 7;
+----
+100
+
+# 'a' has bounds [0, 9], so a value outside them still prunes the file
+query I
+select count(*) from my_datalake.default.variant_missing_path_bounds where v.a = 42;
+----
+0
+
+statement ok
+CALL enable_logging('Iceberg');
+
+statement ok
+set logging_level = 'debug';
+
+# 'a' has INT bounds: a filter on a string value of 'a' can't use them, so the file is kept
+query I
+select count(*) from my_datalake.default.variant_missing_path_bounds where v.a = 'x';
+----
+0
+
+query I
+select count(*) from duckdb_logs() where type = 'Iceberg' and message like '%skipped%';
+----
+0
+
+statement ok
+CALL truncate_duckdb_logs();
+
+# a filter of the same type does use them
+query I
+select count(*) from my_datalake.default.variant_missing_path_bounds where v.a = 42;
+----
+0
+
+query I
+select count(*) from duckdb_logs() where type = 'Iceberg' and message like '%skipped%';
+----
+1

@@ -89,17 +89,61 @@ def test_overlapping_primitive_one_of_keeps_all_matching_views():
     assert "string_type_value.emplace()" in source
 
 
-def test_expression_accepts_canonical_boolean_constants():
+def test_predicate_accepts_canonical_boolean_constants():
     parser, parse_info = parse_spec()
-    schema = parser.parsed_schemas["Expression"]
+    schema = parser.parsed_schemas["Predicate"]
 
-    assert schema.one_of[0].ref == "BooleanExpression"
+    assert schema.one_of[0].ref == "PredicateOneOf1"
+    assert parser.parsed_schemas["PredicateOneOf1"].primitive_type == "boolean"
 
-    cpp_class, header, source = render_class(parser, parse_info, "Expression")
+    cpp_class, header, source = render_class(parser, parse_info, "Predicate")
     assert not cpp_class.supports_json_object_population()
-    assert "optional<BooleanExpression> boolean_expression" in header
-    assert "boolean_expression->TryFromJSON(obj)" in source
-    assert "return boolean_expression->ToJSON(writer)" in source
+    assert "optional<PredicateOneOf1> predicate_one_of_1" in header
+    assert "predicate_one_of_1->TryFromJSON(obj)" in source
+    assert "return predicate_one_of_1->ToJSON(writer)" in source
+
+
+def test_variant_type_is_checked_before_primitive_type():
+    parser, parse_info = parse_spec()
+
+    _, _, type_source = render_class(parser, parse_info, "Type")
+    assert type_source.index("variant_type->TryFromJSON(obj)") < type_source.index("primitive_type->TryFromJSON(obj)")
+    _, _, variant_source = render_class(parser, parse_info, "VariantType")
+    assert 'value != "variant"' in variant_source
+
+
+def test_predicates_keep_legacy_operands_and_support_value_expressions():
+    parser, parse_info = parse_spec()
+
+    _, header, source = render_class(parser, parse_info, "ComparisonPredicate")
+    assert "unique_ptr<ValueExpression> left" in header
+    assert "unique_ptr<ValueExpression> right" in header
+    assert "optional<Term> term" in header
+    assert "optional<Literal> value" in header
+    assert "required property 'term' is missing" not in source
+    assert "required property 'value' is missing" not in source
+
+    _, _, literals_source = render_class(parser, parse_info, "Literals")
+    assert "if (obj.IsArray())" in literals_source
+    assert "Literal value_item" in literals_source
+
+    _, _, argument_source = render_class(parser, parse_info, "FunctionArgument")
+    assert "value_expression->TryFromJSON(obj)" in argument_source
+    assert "predicate->TryFromJSON(obj)" in argument_source
+    assert "none of the anyOf candidates matched" in argument_source
+
+
+def test_read_restriction_actions_use_discriminator_union():
+    parser, parse_info = parse_spec()
+
+    _, header, source = render_class(parser, parse_info, "Action")
+    assert "optional<MaskToFixedValue> mask_to_fixed_value" in header
+    assert 'if (discriminator == "mask-alphanum")' in source
+    assert "unknown discriminator value" in source
+
+    _, action_header, action_source = render_class(parser, parse_info, "MaskToFixedValue")
+    assert "int32_t field_id" in action_header
+    assert 'action != "mask-to-fixed-value"' in action_source
 
 
 def test_inherited_const_and_array_valued_map_are_generated():

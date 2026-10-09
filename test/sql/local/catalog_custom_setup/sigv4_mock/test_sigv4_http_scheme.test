@@ -23,6 +23,10 @@ CREATE SECRET sigv4_secret (
 statement ok
 call enable_logging(level='debug');
 
+# Inspect the signing scheme in the logged Authorization header.
+statement ok
+SET redact_http_logs=false
+
 # Attach with http:// endpoint + explicit sigv4_region/sigv4_service to bypass hostname parsing.
 # The attach triggers a GET /v1/config request through the SigV4 signing path.
 statement ok

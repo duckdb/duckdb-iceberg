@@ -11,7 +11,7 @@
 namespace duckdb {
 namespace rest_api_objects {
 
-class Expression;
+class Predicate;
 
 class ScanReport {
 public:
@@ -36,7 +36,7 @@ public:
 public:
 	string table_name;
 	int64_t snapshot_id;
-	unique_ptr<Expression> filter;
+	unique_ptr<Predicate> filter;
 	int32_t schema_id;
 	vector<int32_t> projected_field_ids;
 	vector<string> projected_field_names;

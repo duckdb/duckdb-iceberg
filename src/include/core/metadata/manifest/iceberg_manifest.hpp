@@ -18,6 +18,7 @@ namespace duckdb {
 
 struct IcebergTable;
 struct IcebergManifestFile;
+struct IcebergManifest;
 
 using sequence_number_t = int64_t;
 
@@ -135,11 +136,11 @@ public:
 	bool HasSnapshotId() const;
 	int64_t GetSnapshotId() const;
 	//! The explicit snapshot id, or the one inherited from the manifest that holds this entry
-	optional<int64_t> GetSnapshotId(const IcebergManifestFile &manifest_file) const;
+	int64_t GetSnapshotId(const IcebergManifestFile &manifest_file) const;
 	void SetSequenceNumber(optional<sequence_number_t> value);
 	void SetFileSequenceNumber(optional<sequence_number_t> value);
-	sequence_number_t GetSequenceNumber(const IcebergManifestFile &manifest_file) const;
-	sequence_number_t GetFileSequenceNumber(const IcebergManifestFile &manifest_file) const;
+	sequence_number_t GetSequenceNumber(const IcebergManifest &manifest_file) const;
+	sequence_number_t GetFileSequenceNumber(const IcebergManifest &manifest_file) const;
 	optional<sequence_number_t> ExplicitSequenceNumber() const;
 	optional<sequence_number_t> ExplicitFileSequenceNumber() const;
 
@@ -207,7 +208,7 @@ static constexpr const int32_t CONTENT_SIZE_IN_BYTES = 145;
 
 //! Writes the manifest file using the precomputed metadata stored on the list entry.
 idx_t WriteToFile(const IcebergTableMetadata &table_metadata, const IcebergManifestListEntry &manifest_entry,
-                  CopyFunction &copy_function, DatabaseInstance &db, ClientContext &context);
+                  const string &path, CopyFunction &copy_function, DatabaseInstance &db, ClientContext &context);
 
 } // namespace manifest_file
 

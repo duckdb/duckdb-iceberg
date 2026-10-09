@@ -17,21 +17,21 @@ public:
 	SnapshotLog &operator=(const SnapshotLog &) = delete;
 	SnapshotLog(SnapshotLog &&) = default;
 	SnapshotLog &operator=(SnapshotLog &&) = default;
-	class Object3 {
+	class Object7 {
 	public:
-		Object3();
-		Object3(const Object3 &) = delete;
-		Object3 &operator=(const Object3 &) = delete;
-		Object3(Object3 &&) = default;
-		Object3 &operator=(Object3 &&) = default;
+		Object7();
+		Object7(const Object7 &) = delete;
+		Object7 &operator=(const Object7 &) = delete;
+		Object7(Object7 &&) = default;
+		Object7 &operator=(Object7 &&) = default;
 
 	public:
 		// Deserialization
-		static Object3 FromJSON(JSONValue obj);
+		static Object7 FromJSON(JSONValue obj);
 		string TryFromJSON(JSONValue obj);
 
 		// Copy
-		Object3 Copy() const;
+		Object7 Copy() const;
 
 		// Serialization
 		void PopulateJSON(JSONWriter &writer, JSONMutableValue obj) const;
@@ -54,7 +54,7 @@ public:
 	JSONMutableValue ToJSON(JSONWriter &writer) const;
 
 public:
-	vector<Object3> value;
+	vector<Object7> value;
 };
 
 } // namespace rest_api_objects

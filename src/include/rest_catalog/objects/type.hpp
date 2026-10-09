@@ -10,6 +10,7 @@
 #include "rest_catalog/objects/map_type.hpp"
 #include "rest_catalog/objects/primitive_type.hpp"
 #include "rest_catalog/objects/struct_type.hpp"
+#include "rest_catalog/objects/variant_type.hpp"
 
 namespace duckdb {
 namespace rest_api_objects {
@@ -34,6 +35,7 @@ public:
 	JSONMutableValue ToJSON(JSONWriter &writer) const;
 
 public:
+	optional<VariantType> variant_type;
 	optional<PrimitiveType> primitive_type;
 	optional<StructType> struct_type;
 	optional<ListType> list_type;

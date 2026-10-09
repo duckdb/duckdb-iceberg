@@ -15,7 +15,7 @@ static void AssignManifestFirstRowIds(const IcebergTableMetadata &metadata,
 		return;
 	}
 	for (auto &manifest_list_entry : existing_manifest_list) {
-		auto &manifest_file = manifest_list_entry.file;
+		auto &manifest_file = manifest_list_entry.GetManifest();
 		if (manifest_file.content != IcebergManifestContentType::DATA) {
 			continue;
 		}
@@ -70,7 +70,8 @@ void IcebergCommitState::LoadExistingManifests(DatabaseInstance &db,
 	//! But even if the attributes are present, they're allowed to be NULL
 	//! In both those situations we have to read all the entries of the manifest to materialize these counts on-demand
 	for (auto &manifest : manifests) {
-		if (manifest.file.counts && manifest.file.counts->Complete()) {
+		auto &counts = manifest.GetFile().counts;
+		if (counts && counts->Complete()) {
 			continue;
 		}
 		manifest =

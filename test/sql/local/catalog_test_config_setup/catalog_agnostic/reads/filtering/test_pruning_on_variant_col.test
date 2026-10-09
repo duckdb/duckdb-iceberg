@@ -39,16 +39,15 @@ statement ok
 call enable_logging('Iceberg');
 
 query I
-select * from my_datalake.default.variant_bounds_tbl where variant_col.age > 60 order by all;
+select * from my_datalake.default.variant_bounds_tbl where variant_col.age <= 60 order by all;
 ----
-{'age': 70, 'name': Frank}
-{'age': 80, 'name': George}
-{'age': 90, 'name': Howard}
-{'age': 100, 'name': Ian}
-{'age': 110, 'name': Jill}
+{'age': 20, 'name': Alice}
+{'age': 30, 'name': Bob}
+{'age': 40, 'name': Chad}
+{'age': 50, 'name': Dylan}
+{'age': 60, 'name': Eric}
 
-# FIXME: not being skipped currently
-# skipped the first file.
+# The second file is skipped using its lower bound.
 query I
 select count(*) from duckdb_logs() where type = 'Iceberg' and message like '%skipped%';
 ----

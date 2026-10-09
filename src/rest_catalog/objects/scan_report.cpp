@@ -26,7 +26,7 @@ ScanReport ScanReport::Copy() const {
 	ScanReport res;
 	res.table_name = table_name;
 	res.snapshot_id = snapshot_id;
-	res.filter = filter ? make_uniq<Expression>(filter->Copy()) : nullptr;
+	res.filter = filter ? make_uniq<Predicate>(filter->Copy()) : nullptr;
 	res.schema_id = schema_id;
 	res.projected_field_ids.reserve(projected_field_ids.size());
 	for (auto &item : projected_field_ids) {
@@ -76,7 +76,7 @@ string ScanReport::TryFromJSON(JSONValue obj) {
 	if (!filter_val.IsValid()) {
 		return "ScanReport required property 'filter' is missing";
 	} else {
-		filter = make_uniq<Expression>();
+		filter = make_uniq<Predicate>();
 		error = filter->TryFromJSON(filter_val);
 		if (!error.empty()) {
 			return error;

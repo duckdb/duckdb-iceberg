@@ -12,11 +12,11 @@ namespace rest_api_objects {
 
 CompletedPlanningResult::CompletedPlanningResult() {
 }
-CompletedPlanningResult::Object5::Object5() {
+CompletedPlanningResult::Object10::Object10() {
 }
 
-CompletedPlanningResult::Object5 CompletedPlanningResult::Object5::FromJSON(JSONValue obj) {
-	Object5 res;
+CompletedPlanningResult::Object10 CompletedPlanningResult::Object10::FromJSON(JSONValue obj) {
+	Object10 res;
 	auto error = res.TryFromJSON(obj);
 	if (!error.empty()) {
 		throw InvalidInputException(error);
@@ -24,8 +24,8 @@ CompletedPlanningResult::Object5 CompletedPlanningResult::Object5::FromJSON(JSON
 	return res;
 }
 
-CompletedPlanningResult::Object5 CompletedPlanningResult::Object5::Copy() const {
-	Object5 res;
+CompletedPlanningResult::Object10 CompletedPlanningResult::Object10::Copy() const {
+	Object10 res;
 	res.status = status.Copy();
 	if (storage_credentials.has_value()) {
 		res.storage_credentials.emplace();
@@ -37,11 +37,11 @@ CompletedPlanningResult::Object5 CompletedPlanningResult::Object5::Copy() const 
 	return res;
 }
 
-string CompletedPlanningResult::Object5::TryFromJSON(JSONValue obj) {
+string CompletedPlanningResult::Object10::TryFromJSON(JSONValue obj) {
 	string error;
 	auto status_val = obj.GetMember("status");
 	if (!status_val.IsValid()) {
-		return "Object5 required property 'status' is missing";
+		return "Object10 required property 'status' is missing";
 	} else {
 		error = status.TryFromJSON(status_val);
 		if (!error.empty()) {
@@ -68,7 +68,7 @@ string CompletedPlanningResult::Object5::TryFromJSON(JSONValue obj) {
 			}
 		} else {
 			return StringUtil::Format(
-			    "Object5 property 'storage_credentials_tmp' is not of type 'array', found %s instead",
+			    "Object10 property 'storage_credentials_tmp' is not of type 'array', found %s instead",
 			    json_utils::GetTypeDescription(storage_credentials_val).c_str());
 		}
 		storage_credentials = std::move(storage_credentials_tmp);
@@ -76,7 +76,7 @@ string CompletedPlanningResult::Object5::TryFromJSON(JSONValue obj) {
 	return "";
 }
 
-void CompletedPlanningResult::Object5::PopulateJSON(JSONWriter &writer, JSONMutableValue obj) const {
+void CompletedPlanningResult::Object10::PopulateJSON(JSONWriter &writer, JSONMutableValue obj) const {
 	// Serialize: status
 	auto status_json = status.ToJSON(writer);
 	obj.Add("status", status_json);
@@ -93,7 +93,7 @@ void CompletedPlanningResult::Object5::PopulateJSON(JSONWriter &writer, JSONMuta
 	}
 }
 
-JSONMutableValue CompletedPlanningResult::Object5::ToJSON(JSONWriter &writer) const {
+JSONMutableValue CompletedPlanningResult::Object10::ToJSON(JSONWriter &writer) const {
 	auto obj = writer.CreateObject();
 	PopulateJSON(writer, obj);
 	return obj;
@@ -111,7 +111,7 @@ CompletedPlanningResult CompletedPlanningResult::FromJSON(JSONValue obj) {
 CompletedPlanningResult CompletedPlanningResult::Copy() const {
 	CompletedPlanningResult res;
 	res.scan_tasks = scan_tasks.Copy();
-	res.object_5 = object_5.Copy();
+	res.object_10 = object_10.Copy();
 	return res;
 }
 
@@ -121,7 +121,7 @@ string CompletedPlanningResult::TryFromJSON(JSONValue obj) {
 	if (!error.empty()) {
 		return error;
 	}
-	error = object_5.TryFromJSON(obj);
+	error = object_10.TryFromJSON(obj);
 	if (!error.empty()) {
 		return error;
 	}
@@ -132,8 +132,8 @@ void CompletedPlanningResult::PopulateJSON(JSONWriter &writer, JSONMutableValue 
 	// Serialize base class: ScanTasks
 	scan_tasks.PopulateJSON(writer, obj);
 
-	// Serialize base class: Object5
-	object_5.PopulateJSON(writer, obj);
+	// Serialize base class: Object10
+	object_10.PopulateJSON(writer, obj);
 }
 
 JSONMutableValue CompletedPlanningResult::ToJSON(JSONWriter &writer) const {

@@ -206,7 +206,9 @@ IcebergColumnDefinition::ParseStructField(const rest_api_objects::StructField &f
 	}
 
 	auto &type = *field.type;
-	if (type.primitive_type) {
+	if (type.variant_type) {
+		res->type = LogicalType::VARIANT();
+	} else if (type.primitive_type) {
 		res->type = ParsePrimitiveType(*type.primitive_type);
 	} else if (type.struct_type) {
 		auto &struct_type = *type.struct_type;

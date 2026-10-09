@@ -6,7 +6,7 @@
 #include "duckdb/common/string.hpp"
 #include "duckdb/common/vector.hpp"
 #include "duckdb/common/case_insensitive_map.hpp"
-#include "rest_catalog/objects/reference.hpp"
+#include "rest_catalog/objects/term_reference.hpp"
 #include "rest_catalog/objects/transform_term.hpp"
 
 namespace duckdb {
@@ -32,7 +32,7 @@ public:
 	JSONMutableValue ToJSON(JSONWriter &writer) const;
 
 public:
-	optional<Reference> reference;
+	optional<TermReference> term_reference;
 	optional<TransformTerm> transform_term;
 };
 

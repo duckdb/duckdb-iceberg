@@ -6,6 +6,22 @@
 
 namespace duckdb {
 
+rest_api_objects::LoadTableResult ICUtils::ParseLoadTableResult(JSONValue root) {
+	auto restrictions = root.GetMember("read-restrictions");
+	auto row_filter = restrictions.GetMember("required-row-filter");
+	auto projections = restrictions.GetMember("required-column-projections");
+	bool has_projections = false;
+	if (projections.IsArray()) {
+		projections.IterateArray([&](JSONValue) { has_projections = true; });
+	}
+	// Check the raw response so unknown predicates and actions also fail before
+	// the generated parser attempts to interpret them.
+	if (has_projections || (row_filter.IsValid() && !row_filter.IsNull())) {
+		throw NotImplementedException("Iceberg read-restrictions are not supported");
+	}
+	return rest_api_objects::LoadTableResult::FromJSON(root);
+}
+
 void ICUtils::LogPostBody(ClientContext &context, const IRCEndpointBuilder &url_builder, const string &body) {
 	if (!Logger::Get(context).ShouldLog(IcebergLogType::NAME, IcebergLogType::LEVEL)) {
 		return;

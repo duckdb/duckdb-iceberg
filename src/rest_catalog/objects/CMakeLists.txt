@@ -10,24 +10,32 @@ add_library(
   table_identifier.cpp
   catalog_object_identifier.cpp
   primitive_type.cpp
+  variant_type.cpp
   struct_field.cpp
   struct_type.cpp
   list_type.cpp
   map_type.cpp
   type.cpp
   schema.cpp
-  expression.cpp
-  boolean_expression.cpp
+  predicate.cpp
   expression_type.cpp
+  value_expression.cpp
   true_expression.cpp
   false_expression.cpp
-  and_or_expression.cpp
-  not_expression.cpp
-  unary_expression.cpp
-  literal_expression.cpp
-  set_expression.cpp
-  term.cpp
+  and_or_predicate.cpp
+  not_predicate.cpp
+  unary_predicate.cpp
+  comparison_predicate.cpp
+  set_predicate.cpp
+  literal.cpp
+  literals.cpp
   reference.cpp
+  id_reference.cpp
+  named_reference.cpp
+  apply.cpp
+  function_argument.cpp
+  term.cpp
+  term_reference.cpp
   transform_term.cpp
   transform.cpp
   partition_field.cpp
@@ -88,7 +96,21 @@ add_library(
   view_requirement.cpp
   assert_view_uuid.cpp
   storage_credential.cpp
+  read_restrictions.cpp
+  action.cpp
+  mask_alphanum.cpp
+  mask_to_fixed_value.cpp
+  replace_with_null.cpp
+  show_first_4.cpp
+  show_last_4.cpp
+  truncate_to_year.cpp
+  truncate_to_month.cpp
+  sha_256global.cpp
+  sha_256query_local.cpp
   load_credentials_response.cpp
+  catalog_object_labels.cpp
+  field_labels.cpp
+  labels.cpp
   load_table_result.cpp
   scan_tasks.cpp
   completed_planning_result.cpp
@@ -165,6 +187,7 @@ add_library(
   fixed_type_value.cpp
   binary_type_value.cpp
   count_map.cpp
+  field_statistics.cpp
   value_map.cpp
   primitive_type_value.cpp
   file_format.cpp
@@ -180,7 +203,8 @@ add_library(
   file_scan_task.cpp
   multi_valued_map.cpp
   remote_sign_request.cpp
-  remote_sign_result.cpp)
+  remote_sign_result.cpp
+  remote_signing_config.cpp)
 
 set(ALL_OBJECT_FILES
     ${ALL_OBJECT_FILES} $<TARGET_OBJECTS:rest_catalog_objects>

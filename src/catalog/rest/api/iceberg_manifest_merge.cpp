@@ -193,7 +193,7 @@ IcebergManifestListEntry IcebergManifestMerge::ScanManifestEntries(const Iceberg
 		reader->Read();
 	}
 	auto result = std::move(manifest_files[0]);
-	result.file.SetCountsFromEntries(result.GetManifestEntries());
+	result.GetManifest().SetCountsFromEntries(result.GetManifestEntries());
 	return result;
 }
 
@@ -219,9 +219,10 @@ optional<IcebergManifestListEntry> MergeBin(const vector<IcebergManifestListEntr
 	optional<int64_t> min_first_row_id;
 	for (auto idx : bin) {
 		auto &member = input[idx];
-		if (is_v3 && member.file.first_row_id.has_value()) {
-			if (!min_first_row_id || *member.file.first_row_id < *min_first_row_id) {
-				min_first_row_id = *member.file.first_row_id;
+		const auto &file = member.GetFile();
+		if (is_v3 && file.first_row_id.has_value()) {
+			if (!min_first_row_id || *file.first_row_id < *min_first_row_id) {
+				min_first_row_id = *file.first_row_id;
 			}
 		}
 		auto loaded = member.HasManifestEntries()
@@ -242,8 +243,8 @@ optional<IcebergManifestListEntry> MergeBin(const vector<IcebergManifestListEntr
 		//! Note: with today's ordering invariants (carried-over manifests are prepended in first_row_id
 		//! order and are contiguous), reading back would recompute the same ids even without this step;
 		//! materializing is spec-compliant and keeps correctness independent of those invariants.
-		if (is_v3 && content == IcebergManifestContentType::DATA && member.file.first_row_id.has_value()) {
-			int64_t inherited_row_id = *member.file.first_row_id;
+		if (is_v3 && content == IcebergManifestContentType::DATA && file.first_row_id.has_value()) {
+			int64_t inherited_row_id = *file.first_row_id;
 			for (auto &entry : loaded_entries) {
 				if (!entry.data_file.HasFirstRowId()) {
 					entry.data_file.SetFirstRowId(inherited_row_id);
@@ -253,12 +254,12 @@ optional<IcebergManifestListEntry> MergeBin(const vector<IcebergManifestListEntr
 		}
 		for (auto &entry : loaded_entries) {
 			//! The merged manifest is added by this snapshot, so entries must keep their snapshot id
-			entry.SetSnapshotId(entry.GetSnapshotId(member.file));
+			entry.SetSnapshotId(entry.GetSnapshotId(file));
 			//! These are already-committed manifests. Any ADDED entry describes a file added by an
 			//! earlier snapshot and must be materialized as EXISTING in the replacement manifest.
 			if (entry.status == IcebergManifestEntryStatusType::ADDED) {
-				auto seq = entry.GetSequenceNumber(member.file);
-				auto file_seq = entry.GetFileSequenceNumber(member.file);
+				auto seq = entry.GetSequenceNumber(file);
+				auto file_seq = entry.GetFileSequenceNumber(file);
 				entry.SetSequenceNumber(seq);
 				entry.SetFileSequenceNumber(file_seq);
 				entry.status = IcebergManifestEntryStatusType::EXISTING;
@@ -306,16 +307,14 @@ IcebergManifestMerge::MergeManifests(vector<IcebergManifestListEntry> &&input, I
 			continue;
 		}
 		auto loaded = IcebergManifestMerge::ScanManifestEntries(member, commit_state, current_schema_id);
-		member.file = std::move(loaded.file);
-		member.manifest_entries = std::move(loaded.manifest_entries);
-		member.manifest_metadata.emplace(*loaded.manifest_metadata);
+		member = std::move(loaded);
 	}
 
 	//! Group by spec_id+schema_id, so we only merge manifests that are compatible
 	map<std::pair<int32_t, int32_t>, vector<idx_t>> groups;
 	for (idx_t i = 0; i < input.size(); i++) {
 		auto schema_id = input[i].manifest_metadata->schema_id;
-		auto spec_id = input[i].file.partition_spec_id;
+		auto spec_id = input[i].GetFile().partition_spec_id;
 		groups[std::make_pair(schema_id, spec_id)].push_back(i);
 	}
 
@@ -329,7 +328,7 @@ IcebergManifestMerge::MergeManifests(vector<IcebergManifestListEntry> &&input, I
 		vector<int64_t> weights;
 		weights.reserve(group_indices.size());
 		for (auto idx : group_indices) {
-			weights.push_back(input[idx].file.manifest_length);
+			weights.push_back(input[idx].GetFile().manifest_length);
 		}
 		auto bins = IcebergManifestMerge::BinPackManifests(weights, config.target_size_bytes);
 
@@ -375,7 +374,7 @@ void IcebergManifestMerge::MergeManifestList(vector<IcebergManifestListEntry> &m
 	vector<IcebergManifestListEntry> data_input;
 	vector<IcebergManifestListEntry> delete_input;
 	for (auto &entry : manifests) {
-		auto &target = entry.file.content == IcebergManifestContentType::DELETE ? delete_input : data_input;
+		auto &target = entry.GetFile().content == IcebergManifestContentType::DELETE ? delete_input : data_input;
 		target.push_back(std::move(entry));
 	}
 

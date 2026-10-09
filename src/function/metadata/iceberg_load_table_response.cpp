@@ -155,7 +155,7 @@ static void IcebergLoadTableResponseFunction(ClientContext &context, TableFuncti
 	auto doc = ICUtils::APIResultToDoc(response->body);
 	auto root = doc->GetRoot();
 
-	auto load_result = rest_api_objects::LoadTableResult::FromJSON(root);
+	auto load_result = ICUtils::ParseLoadTableResult(root);
 
 	output.SetChildCardinality(1);
 

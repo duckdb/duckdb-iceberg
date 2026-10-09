@@ -649,7 +649,7 @@ optional_ptr<CatalogEntry> IcebergTableSet::ApplyViewLoadResult(ClientContext &c
 	} else if (current_version->default_namespace.value != schema.namespace_items) {
 		unsupported_reason = "a different default namespace is not supported";
 	} else {
-		Parser parser;
+		Parser parser(context);
 		try {
 			parser.ParseQuery(view_sql);
 		} catch (const ParserException &ex) {

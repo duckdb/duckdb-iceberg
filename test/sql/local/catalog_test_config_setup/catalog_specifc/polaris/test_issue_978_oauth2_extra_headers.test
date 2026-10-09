@@ -26,6 +26,10 @@ call enable_logging('HTTP')
 statement ok
 call truncate_duckdb_logs()
 
+# Inspect the custom header value in the logged OAuth2 token request.
+statement ok
+SET redact_http_logs=false
+
 # The token is fetched when the secret is created, so logging is enabled before this.
 statement ok
 create secret polaris_secret_extra_headers (

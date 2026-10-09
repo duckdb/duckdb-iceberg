@@ -47,12 +47,12 @@ SELECT v FROM my_datalake.default.variant_partial_object_bounds WHERE v.extra > 
 ----
 {'a': 10, 'extra': []}
 
-# A comparison against an exact scalar bound still prunes the file.
+# Equality outside the primitive bounds still prunes the file.
 statement ok
 CALL enable_logging('Iceberg');
 
 statement ok
-SELECT v FROM my_datalake.default.variant_partial_object_bounds WHERE v.a > 100;
+SELECT v FROM my_datalake.default.variant_partial_object_bounds WHERE v.a = 100;
 
 query I
 SELECT count(*) FROM duckdb_logs() WHERE type = 'Iceberg' AND message LIKE '%skipped%';

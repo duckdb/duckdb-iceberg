@@ -6,6 +6,9 @@
 #include "duckdb/common/string.hpp"
 #include "duckdb/common/vector.hpp"
 #include "duckdb/common/case_insensitive_map.hpp"
+#include "rest_catalog/objects/labels.hpp"
+#include "rest_catalog/objects/read_restrictions.hpp"
+#include "rest_catalog/objects/remote_signing_config.hpp"
 #include "rest_catalog/objects/storage_credential.hpp"
 #include "rest_catalog/objects/table_metadata.hpp"
 
@@ -37,6 +40,9 @@ public:
 	optional<string> metadata_location;
 	optional<case_insensitive_map_t<string>> config;
 	optional<vector<StorageCredential>> storage_credentials;
+	optional<RemoteSigningConfig> remote_signing_config;
+	optional<ReadRestrictions> read_restrictions;
+	optional<Labels> labels;
 };
 
 } // namespace rest_api_objects

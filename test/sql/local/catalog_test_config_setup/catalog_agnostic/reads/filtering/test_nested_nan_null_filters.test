@@ -1,0 +1,323 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/reads/filtering/test_nested_nan_null_filters.test
+# description: Nested FLOAT/DOUBLE filters preserve NaNs and NULLs across metrics changes, appends, updates and deletes
+# group: [filtering]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require-env SCAN_PLANNING_MODE client
+
+include test/sql/init_requires
+
+statement ok
+SET threads=1;
+
+foreach type FLOAT DOUBLE
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.nested_nan_filters;
+
+statement ok
+CREATE TABLE my_datalake.default.nested_nan_filters (
+	id INTEGER,
+	s STRUCT(v {type}),
+	deep STRUCT(child STRUCT(v {type})),
+	list_values {type}[],
+	list_structs STRUCT(v {type})[],
+	struct_list STRUCT(items STRUCT(v {type})[]),
+	map_structs MAP(VARCHAR, STRUCT(v {type})),
+	struct_map STRUCT(entries MAP(VARCHAR, STRUCT(v {type}))),
+	float_map MAP({type}, {type})
+);
+
+statement ok
+CREATE OR REPLACE TEMP TABLE nested_nan_expected AS
+SELECT * FROM my_datalake.default.nested_nan_filters LIMIT 0;
+
+# Separate files contain finite values, NaNs mixed with NULL leaves, NULL
+# parents/elements, and empty containers/missing keys. A NaN in the second
+# element must match membership predicates without matching first-element ones.
+statement ok
+CREATE OR REPLACE TEMP TABLE nested_nan_seed AS
+WITH scalars AS (
+	SELECT id, batch, shape, v::{type} AS v, second::{type} AS second
+	FROM (VALUES
+		(1, 0, 'values', '1', '2'),
+		(2, 0, 'values', '3', '4'),
+		(3, 1, 'values', 'NaN', '1'),
+		(4, 1, 'values', '-NaN', NULL),
+		(5, 1, 'values', NULL, NULL),
+		(6, 1, 'values', '1', 'NaN'),
+		(7, 2, 'parent_null', NULL, NULL),
+		(8, 2, 'inner_null', NULL, NULL),
+		(9, 3, 'empty', NULL, NULL),
+		(10, 3, 'missing_key', 'NaN', NULL)
+	) t(id, batch, shape, v, second)
+), containers AS (
+	SELECT *,
+		CASE WHEN shape = 'parent_null' THEN NULL ELSE {'v': v} END AS s,
+		CASE
+			WHEN shape = 'parent_null' THEN NULL
+			WHEN shape = 'empty' THEN []
+			WHEN shape = 'inner_null' THEN [NULL::{type}]
+			ELSE [v, second]
+		END AS list_values,
+		CASE
+			WHEN shape = 'parent_null' THEN NULL
+			WHEN shape = 'empty' THEN []
+			WHEN shape = 'inner_null' THEN [NULL::STRUCT(v {type})]
+			ELSE [{'v': v}, {'v': second}]
+		END AS list_structs,
+		CASE
+			WHEN shape = 'parent_null' THEN NULL
+			WHEN shape = 'empty' THEN MAP()
+			WHEN shape = 'inner_null' THEN MAP {'a': NULL::STRUCT(v {type})}
+			WHEN shape = 'missing_key' THEN MAP {'b': {'v': v}}
+			ELSE MAP {'a': {'v': v}, 'b': {'v': second}}
+		END AS map_structs,
+		CASE
+			WHEN shape = 'parent_null' THEN NULL
+			WHEN shape = 'empty' THEN MAP()
+			WHEN shape = 'inner_null' THEN MAP {1::{type}: NULL::{type}}
+			WHEN shape = 'missing_key' THEN MAP {42::{type}: v}
+			ELSE MAP {
+				CASE WHEN isnan(v) THEN 'NaN'::{type} ELSE 1::{type} END: v,
+				2::{type}: second
+			}
+		END AS float_map
+	FROM scalars
+)
+SELECT id, batch, s,
+	CASE
+		WHEN shape = 'parent_null' THEN NULL
+		WHEN shape = 'inner_null' THEN {'child': NULL::STRUCT(v {type})}
+		ELSE {'child': {'v': v}}
+	END AS deep,
+	list_values, list_structs,
+	CASE
+		WHEN shape = 'parent_null' THEN NULL
+		WHEN shape = 'inner_null' THEN {'items': NULL::STRUCT(v {type})[]}
+		ELSE {'items': list_structs}
+	END AS struct_list,
+	map_structs,
+	CASE
+		WHEN shape = 'parent_null' THEN NULL
+		WHEN shape = 'inner_null' THEN {'entries': NULL::MAP(VARCHAR, STRUCT(v {type}))}
+		ELSE {'entries': map_structs}
+	END AS struct_map,
+	float_map
+FROM containers;
+
+statement ok
+SET VARIABLE nested_offset = 0;
+
+foreach metrics none counts full
+
+statement ok
+SET VARIABLE nested_offset = getvariable('nested_offset') + 100;
+
+statement ok
+ALTER TABLE my_datalake.default.nested_nan_filters SET ('write.metadata.metrics.default'='{metrics}');
+
+foreach batch 0 1 2 3
+
+statement ok
+CREATE OR REPLACE TEMP TABLE nested_nan_batch AS
+SELECT id + getvariable('nested_offset') AS id, * EXCLUDE (id, batch)
+FROM nested_nan_seed WHERE batch = {batch};
+
+statement ok
+INSERT INTO nested_nan_expected SELECT * FROM nested_nan_batch;
+
+statement ok
+INSERT INTO my_datalake.default.nested_nan_filters SELECT * FROM nested_nan_batch;
+
+endloop
+
+# Compare exact row IDs, not just counts: pruning a wrong file must not be
+# masked by returning the same number of different rows. Nested metrics may
+# require conservative reads, so these checks do not demand file skipping.
+foreach value s.v deep.child.v list_values[1] list_values[2] list_structs[1].v struct_list.items[1].v map_extract_value(map_structs,'a').v map_extract_value(map_structs,'b').v map_extract_value(struct_map.entries,'a').v map_extract_value(float_map,'NaN'::FLOAT) map_extract_value(float_map,2)
+
+foreach op < <= = != > >=
+
+query I
+SELECT (SELECT list(id ORDER BY id) FROM my_datalake.default.nested_nan_filters WHERE {value} {op} 5)
+	IS NOT DISTINCT FROM
+	(SELECT list(id ORDER BY id) FROM nested_nan_expected WHERE {value} {op} 5);
+----
+true
+
+endloop
+
+query I
+SELECT (SELECT list(id ORDER BY id) FROM my_datalake.default.nested_nan_filters WHERE {value} = 'NaN'::{type})
+	IS NOT DISTINCT FROM
+	(SELECT list(id ORDER BY id) FROM nested_nan_expected WHERE {value} = 'NaN'::{type});
+----
+true
+
+query I
+SELECT (SELECT list(id ORDER BY id) FROM my_datalake.default.nested_nan_filters WHERE isnan({value}))
+	IS NOT DISTINCT FROM
+	(SELECT list(id ORDER BY id) FROM nested_nan_expected WHERE isnan({value}));
+----
+true
+
+query I
+SELECT (SELECT list(id ORDER BY id) FROM my_datalake.default.nested_nan_filters WHERE {value} IS NULL)
+	IS NOT DISTINCT FROM
+	(SELECT list(id ORDER BY id) FROM nested_nan_expected WHERE {value} IS NULL);
+----
+true
+
+query I
+SELECT (SELECT list(id ORDER BY id) FROM my_datalake.default.nested_nan_filters WHERE {value} IS NOT NULL)
+	IS NOT DISTINCT FROM
+	(SELECT list(id ORDER BY id) FROM nested_nan_expected WHERE {value} IS NOT NULL);
+----
+true
+
+query I
+SELECT (SELECT list(id ORDER BY id) FROM my_datalake.default.nested_nan_filters WHERE {value} IS DISTINCT FROM 'NaN'::{type})
+	IS NOT DISTINCT FROM
+	(SELECT list(id ORDER BY id) FROM nested_nan_expected WHERE {value} IS DISTINCT FROM 'NaN'::{type});
+----
+true
+
+query I
+SELECT (SELECT list(id ORDER BY id) FROM my_datalake.default.nested_nan_filters WHERE {value} IS NOT DISTINCT FROM 'NaN'::{type})
+	IS NOT DISTINCT FROM
+	(SELECT list(id ORDER BY id) FROM nested_nan_expected WHERE {value} IS NOT DISTINCT FROM 'NaN'::{type});
+----
+true
+
+query I
+SELECT (SELECT list(id ORDER BY id) FROM my_datalake.default.nested_nan_filters WHERE {value} > 5 OR {value} IS NULL)
+	IS NOT DISTINCT FROM
+	(SELECT list(id ORDER BY id) FROM nested_nan_expected WHERE {value} > 5 OR {value} IS NULL);
+----
+true
+
+query I
+SELECT (SELECT list(id ORDER BY id) FROM my_datalake.default.nested_nan_filters WHERE {value} IN (1, 'NaN'::{type}))
+	IS NOT DISTINCT FROM
+	(SELECT list(id ORDER BY id) FROM nested_nan_expected WHERE {value} IN (1, 'NaN'::{type}));
+----
+true
+
+endloop
+
+# A NULL container differs from an empty one or a container with a NULL leaf.
+foreach container s deep deep.child list_values list_structs struct_list struct_list.items map_structs struct_map struct_map.entries float_map
+
+query I
+SELECT (SELECT list(id ORDER BY id) FROM my_datalake.default.nested_nan_filters WHERE {container} IS NULL)
+	IS NOT DISTINCT FROM
+	(SELECT list(id ORDER BY id) FROM nested_nan_expected WHERE {container} IS NULL);
+----
+true
+
+query I
+SELECT (SELECT list(id ORDER BY id) FROM my_datalake.default.nested_nan_filters WHERE {container} IS NOT NULL)
+	IS NOT DISTINCT FROM
+	(SELECT list(id ORDER BY id) FROM nested_nan_expected WHERE {container} IS NOT NULL);
+----
+true
+
+endloop
+
+foreach values list_values map_keys(float_map) map_values(float_map)
+
+query I
+SELECT (SELECT list(id ORDER BY id) FROM my_datalake.default.nested_nan_filters WHERE list_contains({values}, 'NaN'::{type}))
+	IS NOT DISTINCT FROM
+	(SELECT list(id ORDER BY id) FROM nested_nan_expected WHERE list_contains({values}, 'NaN'::{type}));
+----
+true
+
+endloop
+
+query I
+SELECT (SELECT list(id ORDER BY id) FROM my_datalake.default.nested_nan_filters
+	WHERE list_contains(list_transform(list_structs, lambda e: e.v), 'NaN'::{type}))
+	IS NOT DISTINCT FROM
+	(SELECT list(id ORDER BY id) FROM nested_nan_expected
+	WHERE list_contains(list_transform(list_structs, lambda e: e.v), 'NaN'::{type}));
+----
+true
+
+query I
+SELECT (SELECT list(id ORDER BY id) FROM my_datalake.default.nested_nan_filters WHERE len(list_values) = 0)
+	IS NOT DISTINCT FROM
+	(SELECT list(id ORDER BY id) FROM nested_nan_expected WHERE len(list_values) = 0);
+----
+true
+
+query I
+SELECT (SELECT list(id ORDER BY id) FROM my_datalake.default.nested_nan_filters WHERE cardinality(map_structs) = 0)
+	IS NOT DISTINCT FROM
+	(SELECT list(id ORDER BY id) FROM nested_nan_expected WHERE cardinality(map_structs) = 0);
+----
+true
+
+endloop
+
+# Rewrite a row from the first (metrics=none) file with new nested NaNs/NULLs.
+statement ok
+UPDATE my_datalake.default.nested_nan_filters SET
+	s = {'v': 'NaN'::{type}},
+	deep = {'child': {'v': NULL::{type}}},
+	list_values = [NULL::{type}, 'NaN'::{type}],
+	list_structs = [{'v': NULL::{type}}, {'v': 'NaN'::{type}}],
+	float_map = MAP {'NaN'::{type}: NULL::{type}, 2::{type}: 'NaN'::{type}}
+WHERE id = 101;
+
+statement ok
+UPDATE nested_nan_expected SET
+	s = {'v': 'NaN'::{type}},
+	deep = {'child': {'v': NULL::{type}}},
+	list_values = [NULL::{type}, 'NaN'::{type}],
+	list_structs = [{'v': NULL::{type}}, {'v': 'NaN'::{type}}],
+	float_map = MAP {'NaN'::{type}: NULL::{type}, 2::{type}: 'NaN'::{type}}
+WHERE id = 101;
+
+# The delete itself filters on nested leaves with NULL parents and map values.
+statement ok
+DELETE FROM my_datalake.default.nested_nan_filters
+WHERE deep.child.v IS NULL AND map_extract_value(map_structs, 'a').v IS NULL;
+
+statement ok
+DELETE FROM nested_nan_expected
+WHERE deep.child.v IS NULL AND map_extract_value(map_structs, 'a').v IS NULL;
+
+query I
+SELECT (SELECT list(id ORDER BY id) FROM my_datalake.default.nested_nan_filters)
+	IS NOT DISTINCT FROM (SELECT list(id ORDER BY id) FROM nested_nan_expected);
+----
+true
+
+foreach value s.v deep.child.v list_values[1] list_values[2] list_structs[1].v struct_list.items[1].v map_extract_value(map_structs,'a').v map_extract_value(struct_map.entries,'a').v map_extract_value(float_map,'NaN'::FLOAT) map_extract_value(float_map,2)
+
+query I
+SELECT (SELECT list(id ORDER BY id) FROM my_datalake.default.nested_nan_filters WHERE {value} > 5 OR {value} IS NULL)
+	IS NOT DISTINCT FROM
+	(SELECT list(id ORDER BY id) FROM nested_nan_expected WHERE {value} > 5 OR {value} IS NULL);
+----
+true
+
+query I
+SELECT (SELECT list(id ORDER BY id) FROM my_datalake.default.nested_nan_filters WHERE {value} IS NOT DISTINCT FROM 'NaN'::{type})
+	IS NOT DISTINCT FROM
+	(SELECT list(id ORDER BY id) FROM nested_nan_expected WHERE {value} IS NOT DISTINCT FROM 'NaN'::{type});
+----
+true
+
+endloop
+
+statement ok
+DROP TABLE my_datalake.default.nested_nan_filters;
+
+endloop
+
+statement ok
+RESET threads;

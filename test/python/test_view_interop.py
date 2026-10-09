@@ -104,6 +104,12 @@ def test_spark_view_unsupported_sql(spark_con, unittest_binary, unittest_test_co
             None,
             ["default"],
             [("duckdb", "select 42 as `spark column`")],
+            None,
+        ),
+        (
+            None,
+            ["default"],
+            [("duckdb", "select 42 as")],
             "cannot be parsed by DuckDB",
         ),
     ],
