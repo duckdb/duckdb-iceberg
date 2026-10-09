@@ -1,0 +1,147 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/create/test_view_name_resolution.test
+# description: A table name in an Iceberg view is read from the view's namespace, not from a temporary table or the reader's own tables
+# group: [create]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require-env VIEW_SUPPORT
+
+include test/sql/init_requires
+
+statement ok
+create schema if not exists my_datalake.view_names;
+
+statement ok
+create schema if not exists my_datalake.view_names_other;
+
+statement ok
+use my_datalake.view_names;
+
+statement ok
+drop view if exists v_base;
+
+statement ok
+drop view if exists v_qualified;
+
+statement ok
+drop view if exists v_cte;
+
+statement ok
+drop view if exists v_gone;
+
+statement ok
+drop table if exists vn_base;
+
+statement ok
+drop table if exists vn_gone;
+
+statement ok
+drop table if exists my_datalake.view_names_other.vn_gone;
+
+statement ok
+create table vn_base (i integer);
+
+statement ok
+insert into vn_base values (1);
+
+statement ok
+create table vn_gone (i integer);
+
+statement ok
+insert into vn_gone values (2);
+
+statement ok
+create view v_base as select i from vn_base;
+
+statement ok
+create view v_qualified as select i from view_names.vn_base;
+
+statement ok
+create view v_cte as with vn_base as (select 3 as i) select i from vn_base;
+
+statement ok
+create view v_gone as select i from vn_gone;
+
+# A temporary table with the name of the view's table would be read first, so the view is refused
+statement ok
+create temp table vn_base as select 999 as i;
+
+statement error
+select i from v_base;
+----
+<REGEX>:.*Cannot query Iceberg view 'v_base': table 'vn_base' would be read from 'temp.main.vn_base' instead of the view's namespace 'view_names'.*
+
+# A name with a namespace, and the name of a CTE, aren't affected
+query I
+select i from v_qualified;
+----
+1
+
+query I
+select i from v_cte;
+----
+3
+
+statement ok
+drop table temp.main.vn_base;
+
+query I
+select i from v_base;
+----
+1
+
+# When the view's table doesn't exist anymore, the reader's own table with that name isn't read instead
+statement ok
+drop table vn_gone;
+
+statement ok
+use memory.main;
+
+statement ok
+create table vn_gone as select 555 as i;
+
+statement error
+select i from my_datalake.view_names.v_gone;
+----
+<REGEX>:.*Cannot query Iceberg view 'v_gone': table 'vn_gone' would be read from 'memory.main.vn_gone'.*
+
+statement ok
+drop table vn_gone;
+
+statement error
+select i from my_datalake.view_names.v_gone;
+----
+<REGEX>:.*Table with name vn_gone does not exist.*
+
+# Nor a table in the reader's current namespace
+statement ok
+create table my_datalake.view_names_other.vn_gone (i integer);
+
+statement ok
+use my_datalake.view_names_other;
+
+statement error
+select i from my_datalake.view_names.v_gone;
+----
+<REGEX>:.*Cannot query Iceberg view 'v_gone': table 'vn_gone' would be read from 'my_datalake.view_names_other.vn_gone'.*
+
+statement ok
+use my_datalake.view_names;
+
+statement ok
+drop view v_base;
+
+statement ok
+drop view v_qualified;
+
+statement ok
+drop view v_cte;
+
+statement ok
+drop view v_gone;
+
+statement ok
+drop table vn_base;
+
+statement ok
+drop table my_datalake.view_names_other.vn_gone;
