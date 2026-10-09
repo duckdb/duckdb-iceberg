@@ -7,6 +7,7 @@
 #include "duckdb/parser/expression/function_expression.hpp"
 #include "duckdb/function/scalar/generic_functions.hpp"
 #include "common/iceberg_default.hpp"
+#include "common/iceberg_fixed_type.hpp"
 
 namespace duckdb {
 
@@ -66,8 +67,15 @@ Value IcebergColumnDefinition::ParsePrimitiveValue(const LogicalType &type,
 		return Value(default_value.string_type_value->value).DefaultCastAs(type);
 	}
 	case LogicalTypeId::BLOB: {
-		D_ASSERT(default_value.binary_type_value);
-		return Value::BLOB(AddEscapesToBlob(default_value.binary_type_value->value));
+		D_ASSERT(default_value.fixed_type_value || default_value.binary_type_value);
+		auto &hex = default_value.fixed_type_value ? default_value.fixed_type_value->value
+		                                           : default_value.binary_type_value->value;
+		auto value = Value::BLOB(AddEscapesToBlob(hex));
+		if (IcebergFixedType::IsFixed(type) &&
+		    value.GetValueUnsafe<string_t>().GetSize() != NumericCast<idx_t>(IcebergFixedType::GetLength(type))) {
+			throw InvalidConfigurationException("Invalid default length for %s", type.ToString());
+		}
+		return value.WithType(type);
 	}
 	default:
 		throw NotImplementedException("ParsePrimitiveValue not implemented for type: %s", type.ToString());
@@ -120,8 +128,7 @@ LogicalType IcebergColumnDefinition::ParsePrimitiveTypeString(const string &type
 		return LogicalType::UUID;
 	}
 	if (StringUtil::StartsWith(type_str, "fixed")) {
-		// FIXME: use fixed size type in DuckDB
-		return LogicalType::BLOB;
+		return IcebergFixedType::Parse(type_str);
 	}
 	if (type_str == "binary") {
 		return LogicalType::BLOB;

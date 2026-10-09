@@ -1,0 +1,143 @@
+# name: test/sql/local/iceberg_fixed_type.test
+# description: Parameterized fixed binary types preserve lengths and validate casts
+# group: [local]
+
+include test/sql/init_requires
+
+query TT
+SELECT typeof('abcd'::ICEBERG_FIXED(4)), typeof(NULL::ICEBERG_FIXED(16));
+----
+ICEBERG_FIXED(4)	ICEBERG_FIXED(16)
+
+query TII
+SELECT hex('\x00\xFF'::ICEBERG_FIXED(2)), octet_length('abcd'::ICEBERG_FIXED(4)), 'abcd'::ICEBERG_FIXED(4) = 'abcd'::BLOB;
+----
+00FF	4	true
+
+statement error
+SELECT 'abc'::BLOB::ICEBERG_FIXED(4);
+----
+Expected 4 bytes
+
+statement error
+SELECT 'abcde'::ICEBERG_FIXED(4);
+----
+Expected 4 bytes
+
+statement error
+SELECT 'abcd'::ICEBERG_FIXED(4)::ICEBERG_FIXED(3);
+----
+Expected 3 bytes
+
+query I
+SELECT octet_length('00112233-4455-6677-8899-aabbccddeeff'::UUID::ICEBERG_FIXED(16));
+----
+16
+
+statement error
+SELECT '00112233-4455-6677-8899-aabbccddeeff'::UUID::ICEBERG_FIXED(4);
+----
+Expected 4 bytes
+
+query T
+SELECT hex('11111111'::BIT::ICEBERG_FIXED(1));
+----
+FF
+
+statement error
+SELECT '11111111'::BIT::ICEBERG_FIXED(2);
+----
+Expected 2 bytes
+
+query T
+SELECT ('abcd'::BLOB::VARIANT)::ICEBERG_FIXED(4);
+----
+abcd
+
+statement error
+SELECT ('abc'::BLOB::VARIANT)::ICEBERG_FIXED(4);
+----
+Expected 4 bytes
+
+query T
+SELECT TRY_CAST(v AS ICEBERG_FIXED(4)) FROM (VALUES ('abcd'), ('abc'), (NULL), ('abcde')) t(v);
+----
+abcd
+NULL
+NULL
+NULL
+
+query T
+SELECT TRY_CAST(v AS ICEBERG_FIXED(4)) FROM (VALUES ('abcd'::BLOB), ('abc'::BLOB), (NULL)) t(v);
+----
+abcd
+NULL
+NULL
+
+statement error
+SELECT NULL::ICEBERG_FIXED(0);
+----
+length must be a positive integer
+
+statement error
+SELECT NULL::ICEBERG_FIXED(-1);
+----
+length must be a positive integer
+
+statement error
+SELECT NULL::ICEBERG_FIXED(NULL);
+----
+cannot be NULL
+
+statement error
+SELECT NULL::ICEBERG_FIXED;
+----
+Error
+
+statement error
+SELECT NULL::ICEBERG_FIXED(2147483648);
+----
+Error
+
+# Exercise non-constant vectors and string heap ownership.
+statement ok
+CREATE TABLE fixed_values AS SELECT repeat(chr(97 + (i % 2)::INTEGER), 32)::ICEBERG_FIXED(32) v FROM range(5000) t(i);
+
+query II
+SELECT count(*), min(octet_length(v)) FROM fixed_values WHERE v = repeat('a', 32)::BLOB;
+----
+2500	32
+
+# The modifier must survive nested types and database serialization.
+statement ok
+ATTACH '{TEST_DIR}/iceberg_fixed.db' AS fixed_db;
+
+statement ok
+CREATE TABLE fixed_db.nested (f ICEBERG_FIXED(4), l ICEBERG_FIXED(2)[], s STRUCT(f ICEBERG_FIXED(3)), m MAP(ICEBERG_FIXED(1), ICEBERG_FIXED(2)));
+
+statement ok
+INSERT INTO fixed_db.nested VALUES ('abcd'::BLOB, ['xy'::BLOB], {'f': 'abc'::BLOB}, MAP(['k'::BLOB], ['vv'::BLOB]));
+
+statement ok
+DETACH fixed_db;
+
+statement ok
+ATTACH '{TEST_DIR}/iceberg_fixed.db' AS fixed_db;
+
+query TTTT
+SELECT typeof(f), typeof(l), typeof(s), typeof(m) FROM fixed_db.nested;
+----
+ICEBERG_FIXED(4)	ICEBERG_FIXED(2)[]	STRUCT(f ICEBERG_FIXED(3))	MAP(ICEBERG_FIXED(1), ICEBERG_FIXED(2))
+
+query TTTT
+SELECT f, l[1], s.f, m['k'::ICEBERG_FIXED(1)] FROM fixed_db.nested;
+----
+abcd	xy	abc	vv
+
+statement error
+INSERT INTO fixed_db.nested (f) VALUES ('abc'::BLOB);
+----
+Expected 4 bytes
+
+statement ok
+DETACH fixed_db;

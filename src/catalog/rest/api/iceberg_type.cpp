@@ -1,5 +1,6 @@
 #include "catalog/rest/api/iceberg_type.hpp"
 #include "common/iceberg_constants.hpp"
+#include "common/iceberg_fixed_type.hpp"
 
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/common/types.hpp"
@@ -69,6 +70,9 @@ string IcebergTypeHelper::LogicalTypeToIcebergType(const LogicalType &type) {
 	case LogicalTypeId::UUID:
 		return "uuid";
 	case LogicalTypeId::BLOB:
+		if (IcebergFixedType::IsFixed(type)) {
+			return StringUtil::Format("fixed[%d]", IcebergFixedType::GetLength(type));
+		}
 		return "binary";
 	case LogicalTypeId::STRUCT:
 		return "struct";
@@ -241,12 +245,16 @@ rest_api_objects::PrimitiveTypeValue IcebergTypeHelper::PrimitiveTypeFromValue(c
 		result.string_type_value->value = str;
 		return result;
 	}
-	//! FIXME: missing FixedTypeValue
-	//! BinaryTypeValue
+	//! FixedTypeValue / BinaryTypeValue
 	case LogicalTypeId::BLOB: {
 		auto str = value.GetValueUnsafe<string_t>();
 		auto blob_str = ConvertBlobDefault(str);
 
+		if (IcebergFixedType::IsFixed(type)) {
+			result.fixed_type_value = rest_api_objects::FixedTypeValue();
+			result.fixed_type_value->value = blob_str;
+			return result;
+		}
 		result.binary_type_value = rest_api_objects::BinaryTypeValue();
 		result.binary_type_value->value = blob_str;
 		return result;

@@ -1,0 +1,50 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/create/default/test_create_default_fixed.test
+# description: Fixed binary defaults retain and validate their length
+# group: [default]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require-env COLUMN_DEFAULT_SUPPORT
+
+require-env FORMAT_V3_SUPPORT
+
+include test/sql/init_requires
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.fixed_default;
+
+statement error
+CREATE TABLE my_datalake.default.fixed_default_invalid (
+	f ICEBERG_FIXED(4) DEFAULT 'abc'::BLOB
+) WITH ('format-version'='3');
+----
+Expected 4 bytes
+
+statement ok
+CREATE TABLE my_datalake.default.fixed_default (
+	id INTEGER,
+	f ICEBERG_FIXED(4) DEFAULT 'abcd'::BLOB
+) WITH ('format-version'='3');
+
+statement ok
+INSERT INTO my_datalake.default.fixed_default (id) VALUES (1);
+
+statement ok
+ALTER TABLE my_datalake.default.fixed_default ADD COLUMN g ICEBERG_FIXED(2) DEFAULT '\x00\xFF'::BLOB;
+
+query ITTT
+SELECT id, f, hex(g), typeof(g) FROM my_datalake.default.fixed_default;
+----
+1	abcd	00FF	ICEBERG_FIXED(2)
+
+statement ok
+INSERT INTO my_datalake.default.fixed_default (id) VALUES (2);
+
+query ITTT rowsort
+SELECT id, f, hex(g), typeof(g) FROM my_datalake.default.fixed_default;
+----
+1	abcd	00FF	ICEBERG_FIXED(2)
+2	abcd	00FF	ICEBERG_FIXED(2)
+
+statement ok
+DROP TABLE my_datalake.default.fixed_default;

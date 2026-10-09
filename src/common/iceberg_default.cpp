@@ -49,7 +49,7 @@ Value IcebergDefaultBinder::Evaluate(optional_ptr<const ParsedExpression> expr, 
 	default:
 		break;
 	};
-	return val.DefaultCastAs(type);
+	return val.CastAs(context, type);
 }
 
 namespace {

@@ -94,7 +94,7 @@ static void AddUnnamedField(JSONWriter &writer, JSONMutableValue field_obj, cons
 			field_obj.Add("element", list_type_obj);
 			AddUnnamedField(writer, list_type_obj, *list_type);
 		}
-		field_obj.Add("element-required", writer.CreateBoolean(false));
+		field_obj.Add("element-required", writer.CreateBoolean(list_type->required));
 		return;
 	}
 	case LogicalTypeId::MAP: {
@@ -118,7 +118,7 @@ static void AddUnnamedField(JSONWriter &writer, JSONMutableValue field_obj, cons
 			AddUnnamedField(writer, val_obj, *val_child);
 		}
 		field_obj.Add("value-id", writer.CreateUnsignedInteger(val_child->id));
-		field_obj.Add("value-required", writer.CreateBoolean(false));
+		field_obj.Add("value-required", writer.CreateBoolean(val_child->required));
 		break;
 	}
 	default:
