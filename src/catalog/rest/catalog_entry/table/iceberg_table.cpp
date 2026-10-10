@@ -184,6 +184,24 @@ static void ParseConfigOptions(const case_insensitive_map_t<string> &config, cas
 	endpoint_it->second = endpoint;
 }
 
+//! A vended secret is scoped to the table, so DuckDB uses it for the table's files instead of the user's own S3 secret.
+//! Copy the KMS key from the user's secret for this location, unless the vended options already set one.
+static void AddUserKMSKeyId(ClientContext &context, const string &location, case_insensitive_map_t<Value> &options) {
+	if (options.find("kms_key_id") != options.end()) {
+		return;
+	}
+	auto transaction = CatalogTransaction::GetSystemCatalogTransaction(context);
+	auto secret_match = SecretManager::Get(context).LookupSecret(transaction, location, "s3");
+	if (!secret_match.HasMatch()) {
+		return;
+	}
+	auto &kv_secret = dynamic_cast<const KeyValueSecret &>(*secret_match.secret_entry->secret);
+	auto kms_key_id = kv_secret.TryGetValue("kms_key_id");
+	if (!kms_key_id.IsNull()) {
+		options["kms_key_id"] = kms_key_id;
+	}
+}
+
 IRCAPITableCredentials IcebergTable::GetVendedCredentials(ClientContext &context) const {
 	return GetVendedCredentials(context, storage_credentials);
 }
@@ -275,6 +293,9 @@ IcebergTable::GetVendedCredentials(ClientContext &context,
 		}
 
 		ParseConfigOptions(credential.config, create_secret_input.options, context, storage_type);
+		if (storage_type == "s3") {
+			AddUserKMSKeyId(context, table_location, create_secret_input.options);
+		}
 		//! TODO: apply the 'overrides' retrieved from the /v1/config endpoint
 		result.storage_credentials.push_back(create_secret_input);
 	}
@@ -288,6 +309,9 @@ IcebergTable::GetVendedCredentials(ClientContext &context,
 
 		//! TODO: apply the 'overrides' retrieved from the /v1/config endpoint
 		config.options = config_options;
+		if (storage_type == "s3") {
+			AddUserKMSKeyId(context, table_location, config.options);
+		}
 		config.name = Identifier(secret_base_name);
 		config.type = Identifier(storage_type);
 		config.provider = "config";
