@@ -682,7 +682,7 @@ optional_ptr<CatalogEntry> IcebergTableSet::ApplyViewLoadResult(ClientContext &c
 
 	unique_ptr<ViewCatalogEntry> view_entry;
 	if (unsupported_reason.empty()) {
-		view_entry = make_uniq<ViewCatalogEntry>(catalog, schema, *view_info);
+		view_entry = make_uniq<IcebergViewEntry>(catalog, schema, *view_info);
 	} else {
 		view_entry = make_uniq<UnsupportedIcebergViewEntry>(catalog, schema, *view_info, unsupported_reason);
 	}

@@ -1,0 +1,164 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/create/test_view_star_columns.test
+# description: Querying an Iceberg view that selects * is not supported once its table's columns no longer match the view's columns
+# group: [create]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require-env VIEW_SUPPORT
+
+include test/sql/init_requires
+
+statement ok
+create schema if not exists my_datalake.view_star;
+
+statement ok
+use my_datalake.view_star;
+
+statement ok
+drop view if exists v_moved;
+
+statement ok
+drop view if exists v_named;
+
+statement ok
+drop view if exists v_added;
+
+statement ok
+drop view if exists v_join;
+
+statement ok
+drop view if exists v_renamed;
+
+statement ok
+drop table if exists vs_moved;
+
+statement ok
+drop table if exists vs_added;
+
+statement ok
+drop table if exists vs_left;
+
+statement ok
+drop table if exists vs_right;
+
+statement ok
+drop table if exists vs_renamed;
+
+statement ok
+create table vs_moved (a integer, b integer);
+
+statement ok
+insert into vs_moved values (1, 2);
+
+statement ok
+create table vs_added (a integer, b integer);
+
+statement ok
+insert into vs_added values (1, 2);
+
+statement ok
+create table vs_left (id integer, x integer);
+
+statement ok
+insert into vs_left values (1, 10);
+
+statement ok
+create table vs_right (id integer, y integer);
+
+statement ok
+insert into vs_right values (1, 20);
+
+statement ok
+create table vs_renamed (a integer, b integer);
+
+statement ok
+insert into vs_renamed values (1, 2);
+
+statement ok
+create view v_moved as select * from my_datalake.view_star.vs_moved;
+
+statement ok
+create view v_named as select a, b from my_datalake.view_star.vs_moved;
+
+statement ok
+create view v_added as select * from my_datalake.view_star.vs_added;
+
+statement ok
+create view v_join as select * from my_datalake.view_star.vs_left l join my_datalake.view_star.vs_right r on l.id = r.id;
+
+statement ok
+create view v_renamed (x, y) as select * from my_datalake.view_star.vs_renamed;
+
+query II
+select a, b from v_moved;
+----
+1	2
+
+# Duplicate column names from * are numbered the same way as when the view was created
+query IIII
+select * from v_join;
+----
+1	10	1	20
+
+# Dropping a and adding it again puts it after b, so * now gives b, a: the view would show b's values as a
+statement ok
+alter table vs_moved drop column a;
+
+statement ok
+alter table vs_moved add column a integer;
+
+statement error
+select * from v_moved;
+----
+<REGEX>:.*Not implemented Error: Querying Iceberg view 'v_moved' is not supported: its query selects \*, and column 1 of the query is 'b' where the view stores 'a'.*
+
+# A view that names its columns reads them by name
+query II
+select a, b from v_named;
+----
+NULL	2
+
+# A column added after the view's columns is returned after them
+statement ok
+alter table vs_added add column c integer;
+
+query III
+select * from v_added;
+----
+1	2	NULL
+
+# Column names given to * can't be checked against the table's columns, so that view is refused too
+statement error
+select * from v_renamed;
+----
+<REGEX>:.*Not implemented Error: Querying Iceberg view 'v_renamed' is not supported: its query selects \*, and column 1 of the query is 'a' where the view stores 'x'.*
+
+statement ok
+drop view v_moved;
+
+statement ok
+drop view v_named;
+
+statement ok
+drop view v_added;
+
+statement ok
+drop view v_join;
+
+statement ok
+drop view v_renamed;
+
+statement ok
+drop table vs_moved;
+
+statement ok
+drop table vs_added;
+
+statement ok
+drop table vs_left;
+
+statement ok
+drop table vs_right;
+
+statement ok
+drop table vs_renamed;
