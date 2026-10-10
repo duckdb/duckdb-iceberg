@@ -454,6 +454,83 @@ void IntroduceNewSchema(IcebergTable &updated_table, IcebergTransactionData &tra
 	updated_table.table_metadata.SetCurrentSchemaId(result_schema.schema_id);
 }
 
+//! Table properties that configure a single column. The key ends with the column's full name: the field names on
+//! the path to it joined with '.' (e.g. 's.sf', 'l.element', 'm.key'), the name used to look the setting up on write.
+static constexpr const char *PER_COLUMN_PROPERTY_PREFIXES[] = {
+    "write.metadata.metrics.column.",         "write.parquet.bloom-filter-enabled.column.",
+    "write.parquet.bloom-filter-fpp.column.", "write.parquet.bloom-filter-ndv.column.",
+    "write.parquet.stats-enabled.column.",    "write.parquet.dict-encoding-enabled.column."};
+
+static void CollectFullNames(const IcebergColumnDefinition &column, const string &parent_name,
+                             vector<pair<int32_t, string>> &result) {
+	auto full_name = parent_name.empty() ? column.name : parent_name + "." + column.name;
+	result.emplace_back(column.id, full_name);
+	for (auto &child : column.GetChildren()) {
+		CollectFullNames(*child, full_name, result);
+	}
+}
+
+static vector<pair<int32_t, string>> GetFullNames(const IcebergTableSchema &schema) {
+	vector<pair<int32_t, string>> result;
+	for (auto &column : schema.columns) {
+		CollectFullNames(*column, string(), result);
+	}
+	return result;
+}
+
+//! Per-column properties name their column, so they have to follow it: when a field (or the struct, list or map it is
+//! nested in) is renamed, its keys move to the new full name, and when a field is dropped, its keys are removed.
+static void UpdatePerColumnProperties(IcebergTable &updated_table, IcebergTransactionData &transaction_data,
+                                      const IcebergTableSchema &old_schema, const IcebergTableSchema &new_schema) {
+	//! Case-insensitive, like the property lookup on write
+	case_insensitive_map_t<int32_t> old_field_ids;
+	for (auto &field : GetFullNames(old_schema)) {
+		old_field_ids.emplace(field.second, field.first);
+	}
+	unordered_map<int32_t, string> new_full_names;
+	for (auto &field : GetFullNames(new_schema)) {
+		new_full_names.emplace(field.first, field.second);
+	}
+
+	auto &properties = updated_table.table_metadata.table_properties;
+	vector<string> removed_keys;
+	case_insensitive_map_t<string> moved_properties;
+	for (auto &property : properties) {
+		auto &key = property.first;
+		for (auto prefix_p : PER_COLUMN_PROPERTY_PREFIXES) {
+			const string prefix(prefix_p);
+			if (key.size() <= prefix.size() || !StringUtil::CIEquals(key.substr(0, prefix.size()), prefix)) {
+				continue;
+			}
+			auto old_field = old_field_ids.find(key.substr(prefix.size()));
+			if (old_field == old_field_ids.end()) {
+				break;
+			}
+			auto new_full_name = new_full_names.find(old_field->second);
+			if (new_full_name == new_full_names.end()) {
+				removed_keys.push_back(key);
+			} else if (new_full_name->second != old_field->first) {
+				removed_keys.push_back(key);
+				moved_properties[key.substr(0, prefix.size()) + new_full_name->second] = property.second;
+			}
+			break;
+		}
+	}
+	if (removed_keys.empty()) {
+		return;
+	}
+	transaction_data.TableRemoveProperties(removed_keys);
+	for (auto &key : removed_keys) {
+		properties.erase(key);
+	}
+	if (!moved_properties.empty()) {
+		transaction_data.TableSetProperties(moved_properties);
+		for (auto &property : moved_properties) {
+			properties[property.first] = property.second;
+		}
+	}
+}
+
 template <typename T>
 IcebergColumnDefinition &ResolveColumn(T &alter_table_info, const shared_ptr<IcebergTableSchema> &new_schema) {
 	auto &column_path = alter_table_info.column_path;
@@ -645,6 +722,7 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 		}
 
 		IntroduceNewSchema(updated_table, transaction_data, new_schema);
+		UpdatePerColumnProperties(updated_table, transaction_data, current_schema, *new_schema);
 
 		return;
 	}
@@ -747,6 +825,7 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 		column.RewriteType();
 
 		IntroduceNewSchema(updated_table, transaction_data, new_schema);
+		UpdatePerColumnProperties(updated_table, transaction_data, current_schema, *new_schema);
 		return;
 	}
 	case AlterTableType::SET_TABLE_OPTIONS: {
@@ -931,6 +1010,7 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 		column_p->name = new_name.GetIdentifierName();
 		column_p->RewriteType();
 		IntroduceNewSchema(updated_table, transaction_data, new_schema);
+		UpdatePerColumnProperties(updated_table, transaction_data, current_schema, *new_schema);
 		return;
 	}
 	case AlterTableType::REMOVE_FIELD: {
@@ -979,6 +1059,7 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 		}
 		parent.RemoveChild(child->name);
 		IntroduceNewSchema(updated_table, transaction_data, new_schema);
+		UpdatePerColumnProperties(updated_table, transaction_data, current_schema, *new_schema);
 		return;
 	}
 	default: {
