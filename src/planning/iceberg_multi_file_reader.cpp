@@ -275,27 +275,53 @@ static void ApplyFieldMapping(MultiFileColumnDefinition &col, const vector<Icebe
 	}
 }
 
+static void CollectFieldIds(const vector<MultiFileColumnDefinition> &columns, unordered_set<int32_t> &result) {
+	for (auto &column : columns) {
+		if (!column.identifier.IsNull()) {
+			result.insert(column.GetIdentifierFieldId());
+		}
+		CollectFieldIds(column.children, result);
+	}
+}
+
+//! A struct field missing from the file reads its partition value through the field's default
+static void ApplyNestedPartitionConstants(const unordered_map<int32_t, Value> &constants,
+                                          const unordered_set<int32_t> &local_ids,
+                                          vector<MultiFileColumnDefinition> &children) {
+	for (auto &child : children) {
+		if (!child.identifier.IsNull()) {
+			auto field_id = child.GetIdentifierFieldId();
+			auto value = constants.find(field_id);
+			if (!local_ids.count(field_id) && value != constants.end() && !value->second.IsNull()) {
+				child.default_expression = ConstantExpression::FromValue(value->second);
+			}
+		}
+		ApplyNestedPartitionConstants(constants, local_ids, child.children);
+	}
+}
+
 void IcebergMultiFileReader::ApplyPartitionConstants(const unordered_map<int32_t, Value> &constants,
                                                      MultiFileReaderData &reader_data,
-                                                     const vector<MultiFileColumnDefinition> &global_columns,
-                                                     const vector<ColumnIndex> &global_column_ids) {
-	unordered_set<int32_t> local_ids;
-	for (auto &column : reader_data.reader->columns) {
-		if (!column.identifier.IsNull()) {
-			local_ids.insert(column.GetIdentifierFieldId());
-		}
+                                                     vector<MultiFileColumnDefinition> &scan_columns,
+                                                     const vector<ColumnIndex> &scan_column_ids) {
+	if (constants.empty()) {
+		return;
 	}
-	for (idx_t i = 0; i < global_column_ids.size(); i++) {
-		auto &id = global_column_ids[i];
+	unordered_set<int32_t> local_ids;
+	CollectFieldIds(reader_data.reader->columns, local_ids);
+	for (idx_t i = 0; i < scan_column_ids.size(); i++) {
+		auto &id = scan_column_ids[i];
 		if (id.IsVirtualColumn()) {
 			continue;
 		}
-		auto &column = global_columns[id.GetPrimaryIndex()];
+		auto &column = scan_columns[id.GetPrimaryIndex()];
 		auto field_id = column.GetIdentifierFieldId();
 		auto value = constants.find(field_id);
 		if (!local_ids.count(field_id) && value != constants.end() && !value->second.IsNull()) {
 			reader_data.constant_map.Add(MultiFileGlobalIndex(i), value->second);
+			continue;
 		}
+		ApplyNestedPartitionConstants(constants, local_ids, column.children);
 	}
 }
 

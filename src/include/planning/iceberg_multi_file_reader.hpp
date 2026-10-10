@@ -156,10 +156,12 @@ private:
 	AddEqualityDeleteColumn(const IcebergTableMetadataSchemas &schemas, int32_t field_id,
 	                        vector<MultiFileColumnDefinition> &scan_columns, vector<ColumnIndex> &scan_column_ids,
 	                        MultiFileReaderData &reader_data, ClientContext &context);
+	//! 'scan_columns' is this file's copy of the table columns (see InitializeTaskReader), so setting a default on
+	//! a nested field only affects this file
 	static void ApplyPartitionConstants(const unordered_map<int32_t, Value> &constants,
 	                                    MultiFileReaderData &reader_data,
-	                                    const vector<MultiFileColumnDefinition> &global_columns,
-	                                    const vector<ColumnIndex> &global_column_ids);
+	                                    vector<MultiFileColumnDefinition> &scan_columns,
+	                                    const vector<ColumnIndex> &scan_column_ids);
 
 public:
 	shared_ptr<TableFunctionInfo> function_info;
