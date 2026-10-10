@@ -16,7 +16,6 @@
 namespace duckdb {
 
 struct IcebergTable;
-class IcebergSnapshotWriter;
 
 struct IcebergAddSnapshot : public IcebergTableUpdate {
 	static constexpr const IcebergTableUpdateType TYPE = IcebergTableUpdateType::ADD_SNAPSHOT;
@@ -36,8 +35,6 @@ public:
 	}
 
 private:
-	void ConstructManifestList(IcebergSnapshotWriter &writer, IcebergCommitState &commit_state) const;
-
 	vector<IcebergPendingManifest> pending_manifests;
 	optional<VersionedIcebergManifestDeletes> manifest_deletes;
 	int32_t schema_id;

@@ -1,6 +1,7 @@
 #include "catalog/rest/api/iceberg_table_update.hpp"
 #include "catalog/rest/api/iceberg_manifest_merge.hpp"
 #include "catalog/rest/transaction/iceberg_transaction_data.hpp"
+#include "catalog/rest/transaction/iceberg_transaction_metadata.hpp"
 #include "catalog/rest/catalog_entry/table/iceberg_table.hpp"
 #include "common/iceberg_utils.hpp"
 #include "core/metadata/iceberg_table_metadata.hpp"
@@ -70,12 +71,12 @@ optional_ptr<const IcebergSnapshot> IcebergCommitState::GetLatestSnapshot() cons
 	return GetTableMetadata().GetLatestSnapshot();
 }
 
-static int64_t ReconstructTotalFilesSize(IcebergCommitState &commit_state, int32_t schema_id) {
+int64_t IcebergCommitState::ReconstructTotalFilesSize(int32_t schema_id) {
 	int64_t total_files_size = 0;
-	for (const auto &manifest : commit_state.manifests) {
+	for (const auto &manifest : manifests) {
 		auto loaded_manifest = manifest.HasManifestEntries()
 		                           ? manifest
-		                           : IcebergManifestMerge::ScanManifestEntries(manifest, commit_state, schema_id);
+		                           : IcebergManifestMerge::ScanManifestEntries(manifest, *this, schema_id);
 		for (const auto &entry : loaded_manifest.GetManifestEntries()) {
 			if (entry.status == IcebergManifestEntryStatusType::DELETED) {
 				continue;
@@ -87,8 +88,56 @@ static int64_t ReconstructTotalFilesSize(IcebergCommitState &commit_state, int32
 	return total_files_size;
 }
 
-IcebergSnapshotWriter IcebergCommitState::CreateSnapshotWriter(int32_t schema_id,
-                                                               IcebergSnapshotOperationType operation) {
+static optional<IcebergManifestListEntry> RewriteManifestFile(const IcebergManifestListEntry &list_entry,
+                                                              IcebergSnapshotWriter &writer,
+                                                              IcebergCommitState &commit_state, int32_t schema_id,
+                                                              const VersionedIcebergManifestDeletes &deletes) {
+	auto loaded_manifest = list_entry.HasManifestEntries()
+	                           ? list_entry
+	                           : IcebergManifestMerge::ScanManifestEntries(list_entry, commit_state, schema_id);
+	D_ASSERT(loaded_manifest.manifest_metadata);
+	const auto &file = loaded_manifest.GetFile();
+
+	auto rewritten_entries = file.PrepareEntriesForRewrite(std::move(loaded_manifest.GetManifestEntries()));
+	bool removed_any_entries = false;
+	for (auto &manifest_entry : rewritten_entries) {
+		if (manifest_entry.status == IcebergManifestEntryStatusType::DELETED) {
+			continue;
+		}
+		if (!deletes.IsInvalidated({manifest_entry.data_file.file_path, manifest_entry.data_file.content_offset})) {
+			continue;
+		}
+		writer.RemoveManifestEntry(manifest_entry);
+		manifest_entry.status = IcebergManifestEntryStatusType::DELETED;
+		//! Inherits this snapshot, which deleted the file; conflict checks in other engines rely on it
+		manifest_entry.SetSnapshotId(nullopt);
+		removed_any_entries = true;
+	}
+	if (!removed_any_entries) {
+		return nullopt;
+	}
+	return writer.WriteReplacementManifest(*loaded_manifest.manifest_metadata, std::move(rewritten_entries),
+	                                       file.first_row_id);
+}
+
+void IcebergCommitState::WriteExistingManifests(IcebergSnapshotWriter &writer, int32_t schema_id,
+                                                optional_ptr<const VersionedIcebergManifestDeletes> manifest_deletes) {
+	for (auto &manifest : manifests) {
+		if (manifest_deletes) {
+			auto replacement = RewriteManifestFile(manifest, writer, *this, schema_id, *manifest_deletes);
+			if (replacement) {
+				writer.AddExistingManifest(std::move(*replacement));
+				continue;
+			}
+		}
+		writer.AddExistingManifest(std::move(manifest));
+	}
+	manifests.clear();
+}
+
+IcebergSnapshotWriter
+IcebergCommitState::CreateSnapshotWriter(int32_t schema_id, IcebergSnapshotOperationType operation,
+                                         optional_ptr<const VersionedIcebergManifestDeletes> manifest_deletes) {
 	auto &metadata = GetTableMetadata();
 	auto parent = GetLatestSnapshot();
 	IcebergSnapshotWriter writer(context, metadata, schema_id, operation, next_sequence_number++, row_ids,
@@ -98,8 +147,9 @@ IcebergSnapshotWriter IcebergCommitState::CreateSnapshotWriter(int32_t schema_id
 		IcebergManifestMerge::MergeManifestList(manifests, metadata.GetCurrentSchemaId(), writer, *this);
 	}
 	if (parent && !parent->metrics.HasTotalFilesSize()) {
-		writer.SetTotalFilesSize(ReconstructTotalFilesSize(*this, schema_id));
+		writer.SetTotalFilesSize(ReconstructTotalFilesSize(schema_id));
 	}
+	WriteExistingManifests(writer, schema_id, manifest_deletes);
 	return writer;
 }
 

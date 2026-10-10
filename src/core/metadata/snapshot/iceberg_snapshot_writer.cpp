@@ -57,9 +57,8 @@ IcebergManifestListEntry IcebergSnapshotWriter::WriteManifestFile(const IcebergM
 		throw InternalException("Cannot write an empty Iceberg manifest");
 	}
 	auto metadata = GetWriteMetadata(source_metadata);
-	auto list_entry = IcebergManifestListEntry::CreateFromEntries(*snapshot.sequence_number, table_metadata, metadata,
-	                                                              std::move(entries), first_row_id);
-	auto &manifest = list_entry.GetManifest();
+	auto manifest =
+	    IcebergManifest::CreateFromEntries(*snapshot.sequence_number, table_metadata, metadata, entries, first_row_id);
 	auto &fs = FileSystem::GetFileSystem(context);
 	auto path =
 	    fs.JoinPath(table_metadata.GetMetadataPath(fs), UUID::ToString(UUID::GenerateRandomUUID()) + "-m0.avro");
@@ -67,10 +66,9 @@ IcebergManifestListEntry IcebergSnapshotWriter::WriteManifestFile(const IcebergM
 		manifest.min_sequence_number = manifest.sequence_number;
 	}
 	created_metadata_files.push_back(path);
-	auto length = manifest_file::WriteToFile(table_metadata, metadata, list_entry.GetManifestEntries(), path, avro_copy,
-	                                         db, context);
-	return IcebergManifestListEntry::CreateWritten(std::move(list_entry), std::move(path), length,
-	                                               snapshot.snapshot_id);
+	auto length = manifest_file::WriteToFile(table_metadata, metadata, entries, path, avro_copy, db, context);
+	IcebergManifestFile file(std::move(path), length, snapshot.snapshot_id, std::move(manifest));
+	return IcebergManifestListEntry(std::move(file), std::move(metadata), std::move(entries));
 }
 
 void IcebergSnapshotWriter::WriteManifest(const IcebergPendingManifest &pending) {

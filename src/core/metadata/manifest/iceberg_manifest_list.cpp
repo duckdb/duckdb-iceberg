@@ -134,22 +134,19 @@ void IcebergManifest::SetCountsFromEntries(const vector<IcebergManifestEntry> &e
 	}
 }
 
-IcebergManifestListEntry IcebergManifestListEntry::CreateFromEntries(sequence_number_t sequence_number,
-                                                                     const IcebergTableMetadata &table_metadata,
-                                                                     const IcebergManifestMetadata &manifest_metadata,
-                                                                     vector<IcebergManifestEntry> &&manifest_entries,
-                                                                     optional<int64_t> first_row_id) {
-	IcebergManifestListEntry manifest_list_entry(
-	    IcebergManifest(manifest_metadata.partition_spec_id, manifest_metadata.content, sequence_number),
-	    manifest_metadata);
+IcebergManifest IcebergManifest::CreateFromEntries(sequence_number_t sequence_number,
+                                                   const IcebergTableMetadata &table_metadata,
+                                                   const IcebergManifestMetadata &manifest_metadata,
+                                                   const vector<IcebergManifestEntry> &manifest_entries,
+                                                   optional<int64_t> first_row_id) {
 	auto manifest_content = manifest_metadata.content;
 	auto manifest_partition_spec_id = manifest_metadata.partition_spec_id;
-	auto &manifest_file = manifest_list_entry.GetManifest();
+	IcebergManifest manifest(manifest_partition_spec_id, manifest_content, sequence_number);
 	if (manifest_content == IcebergManifestContentType::DATA) {
-		manifest_file.first_row_id = first_row_id;
+		manifest.first_row_id = first_row_id;
 	}
 
-	manifest_file.SetCountsFromEntries(manifest_entries);
+	manifest.SetCountsFromEntries(manifest_entries);
 
 	for (const auto &manifest_entry : manifest_entries) {
 		const auto &data_file = manifest_entry.data_file;
@@ -162,9 +159,9 @@ IcebergManifestListEntry IcebergManifestListEntry::CreateFromEntries(sequence_nu
 			throw InvalidConfigurationException("Encountered data_file.content == DATA in DELETE manifest");
 		}
 
-		auto entry_data_seq = manifest_entry.GetSequenceNumber(manifest_file);
-		if (!manifest_file.min_sequence_number || entry_data_seq < *manifest_file.min_sequence_number) {
-			manifest_file.min_sequence_number = entry_data_seq;
+		auto entry_data_seq = manifest_entry.GetSequenceNumber(manifest);
+		if (!manifest.min_sequence_number || entry_data_seq < *manifest.min_sequence_number) {
+			manifest.min_sequence_number = entry_data_seq;
 		}
 	}
 	// Compute partition field summaries (upper/lower bounds) for the manifest list entry
@@ -177,20 +174,24 @@ IcebergManifestListEntry IcebergManifestListEntry::CreateFromEntries(sequence_nu
 	auto &partition_spec = partition_spec_it->second;
 	if (partition_spec.IsPartitioned()) {
 		auto &target_schema = table_metadata.GetSchemaFromId(manifest_metadata.schema_id);
-		manifest_file.partitions.Create(table_metadata, target_schema, partition_spec, manifest_entries);
+		manifest.partitions.Create(table_metadata, target_schema, partition_spec, manifest_entries);
 	}
 
-	auto &stored_entries = manifest_list_entry.GetOrCreateManifestEntries();
-	stored_entries.insert(stored_entries.end(), std::make_move_iterator(manifest_entries.begin()),
-	                      std::make_move_iterator(manifest_entries.end()));
-	return manifest_list_entry;
+	return manifest;
+}
+
+IcebergManifestListEntry IcebergManifestListEntry::CreateForScan(sequence_number_t sequence_number,
+                                                                 const IcebergTableMetadata &table_metadata,
+                                                                 const IcebergManifestMetadata &manifest_metadata,
+                                                                 vector<IcebergManifestEntry> entries) {
+	auto manifest =
+	    IcebergManifest::CreateFromEntries(sequence_number, table_metadata, manifest_metadata, entries, nullopt);
+	return IcebergManifestListEntry(std::move(manifest), manifest_metadata, std::move(entries));
 }
 
 IcebergManifestListEntry IcebergPendingManifest::CreateScanEntry(const IcebergTableMetadata &table_metadata,
                                                                  sequence_number_t sequence_number) const {
-	auto copied_entries = entries;
-	return IcebergManifestListEntry::CreateFromEntries(sequence_number, table_metadata, metadata,
-	                                                   std::move(copied_entries), nullopt);
+	return IcebergManifestListEntry::CreateForScan(sequence_number, table_metadata, metadata, entries);
 }
 
 // Iceberg Java compares UUIDs as two signed longs; DuckDB compares unsigned bytes.

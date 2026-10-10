@@ -98,6 +98,13 @@ public:
 	    : partition_spec_id(partition_spec_id), content(content), sequence_number(sequence_number) {
 	}
 
+	//! Compute manifest attributes from content without taking ownership of its entries or assigning a file path.
+	static IcebergManifest CreateFromEntries(sequence_number_t sequence_number,
+	                                         const IcebergTableMetadata &table_metadata,
+	                                         const IcebergManifestMetadata &manifest_metadata,
+	                                         const vector<IcebergManifestEntry> &entries,
+	                                         optional<int64_t> first_row_id);
+
 public:
 	//! The id of the partition spec referenced by this manifest (and the data files that are part of it)
 	int32_t partition_spec_id;
@@ -136,8 +143,9 @@ struct IcebergManifestListEntry {
 public:
 	IcebergManifestListEntry(IcebergManifestFile file) : manifest(std::move(file)) {
 	}
-	IcebergManifestListEntry(IcebergManifest manifest, IcebergManifestMetadata manifest_metadata)
-	    : manifest_metadata(std::move(manifest_metadata)), manifest(std::move(manifest)) {
+	IcebergManifestListEntry(IcebergManifestFile file, IcebergManifestMetadata metadata,
+	                         vector<IcebergManifestEntry> entries)
+	    : manifest_metadata(std::move(metadata)), manifest_entries(std::move(entries)), manifest(std::move(file)) {
 	}
 	IcebergManifestListEntry(const IcebergManifestListEntry &) = default;
 	IcebergManifestListEntry(IcebergManifestListEntry &&) = default;
@@ -169,18 +177,11 @@ public:
 	}
 
 public:
-	//! Compute a descriptor and summaries from content, without allocating paths or row IDs.
-	static IcebergManifestListEntry CreateFromEntries(sequence_number_t sequence_number,
-	                                                  const IcebergTableMetadata &table_metadata,
-	                                                  const IcebergManifestMetadata &manifest_metadata,
-	                                                  vector<IcebergManifestEntry> &&manifest_entries,
-	                                                  optional<int64_t> first_row_id);
-	//! Consume the assembled content after writing its Avro file, preserving entries and metadata.
-	static IcebergManifestListEntry CreateWritten(IcebergManifestListEntry entry, string path, int64_t length,
-	                                              int64_t snapshot_id) {
-		entry.manifest = IcebergManifestFile(std::move(path), length, snapshot_id, std::move(entry.GetManifest()));
-		return entry;
-	}
+	//! Adapt materialized entries to the scanner without a file path or manifest-level row-ID inheritance.
+	static IcebergManifestListEntry CreateForScan(sequence_number_t sequence_number,
+	                                              const IcebergTableMetadata &table_metadata,
+	                                              const IcebergManifestMetadata &manifest_metadata,
+	                                              vector<IcebergManifestEntry> entries);
 	bool HasManifestEntries() const {
 		return manifest_entries.has_value();
 	}
@@ -219,6 +220,11 @@ public:
 	optional<vector<IcebergManifestEntry>> manifest_entries;
 
 private:
+	IcebergManifestListEntry(IcebergManifest manifest, IcebergManifestMetadata metadata,
+	                         vector<IcebergManifestEntry> entries)
+	    : manifest_metadata(std::move(metadata)), manifest_entries(std::move(entries)), manifest(std::move(manifest)) {
+	}
+
 	std::variant<IcebergManifest, IcebergManifestFile> manifest;
 };
 

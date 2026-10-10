@@ -13,6 +13,7 @@ struct IcebergTransactionData;
 struct IcebergTableMetadata;
 class IcebergSnapshotWriter;
 struct IcebergWrittenSnapshot;
+struct VersionedIcebergManifestDeletes;
 
 enum class IcebergTableUpdateType : uint8_t {
 	ASSIGN_UUID,
@@ -50,8 +51,10 @@ public:
 	const IcebergTableMetadata &GetTableMetadata() const;
 	void SetFormatVersion(int32_t format_version);
 	optional_ptr<const IcebergSnapshot> GetLatestSnapshot() const;
-	//! Start a snapshot using this attempt's parent, sequence number, and row-ID allocation.
-	IcebergSnapshotWriter CreateSnapshotWriter(int32_t schema_id, IcebergSnapshotOperationType operation);
+	//! Start a snapshot and carry forward its existing manifests, applying this update's file invalidations.
+	IcebergSnapshotWriter
+	CreateSnapshotWriter(int32_t schema_id, IcebergSnapshotOperationType operation,
+	                     optional_ptr<const VersionedIcebergManifestDeletes> manifest_deletes = nullptr);
 	//! Adopt the written snapshot and its manifests together with the REST update that publishes it.
 	void AddWrittenSnapshot(IcebergWrittenSnapshot written);
 
@@ -60,11 +63,15 @@ public:
 	ClientContext &context;
 	vector<string> created_metadata_files;
 
-	//! All the 'manifest_file' entries we will write to the new manifest list
-	vector<IcebergManifestListEntry> manifests;
 	rest_api_objects::CommitTableRequest table_change;
 
 private:
+	int64_t ReconstructTotalFilesSize(int32_t schema_id);
+	void WriteExistingManifests(IcebergSnapshotWriter &writer, int32_t schema_id,
+	                            optional_ptr<const VersionedIcebergManifestDeletes> manifest_deletes);
+
+	//! Owned here between snapshots; writer creation transfers them into the next manifest list.
+	vector<IcebergManifestListEntry> manifests;
 	//! Earlier snapshots are retained in table_change; only the latest is needed as the next parent.
 	optional<IcebergSnapshot> written_snapshot;
 	sequence_number_t next_sequence_number;
