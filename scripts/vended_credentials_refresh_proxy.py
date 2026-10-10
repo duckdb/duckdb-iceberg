@@ -13,6 +13,9 @@ rejects an S3 request signed with those credentials, and then returns refreshed
 credentials on the refresh-triggered table load. This models the production
 contract that fresh vended credentials come from reloading the table through the
 Iceberg REST catalog, without waiting for a real STS expiry in CI.
+
+For the TLS tests, each table in TLS_TABLE_CONFIGS vends its own S3 endpoint and
+path-style settings.
 """
 
 import datetime
@@ -78,6 +81,22 @@ NEW_MIXED_REFRESH_B_KEY = "NEW_MIXED_REFRESH_B_KEY"
 OLD_SAME_BAD_KEY = "OLD_SAME_BAD_KEY"
 OLD_RANGE_FAIL_KEY = "OLD_RANGE_FAIL_KEY"
 NEW_RANGE_FAIL_KEY = "NEW_RANGE_FAIL_KEY"
+TLS_KEY = "TLS_KEY"
+
+# Tables for vended_credentials_tls.test, and the S3 endpoint and path-style settings each one vends.
+TLS_TABLE_CONFIGS = {
+    "vended_tls_path_style_no_endpoint": {"s3.path-style-access": "true"},
+    "vended_tls_path_style_no_scheme": {"s3.path-style-access": "true", "s3.endpoint": f"{S3_HOST}:{S3_PORT}"},
+    "vended_tls_path_style_https_endpoint": {
+        "s3.path-style-access": "true",
+        "s3.endpoint": f"https://{S3_HOST}:9443",
+    },
+    "vended_tls_path_style_http_endpoint": {
+        "s3.path-style-access": "true",
+        "s3.endpoint": f"http://{S3_HOST}:{S3_PORT}",
+    },
+    "vended_tls_http_endpoint": {"s3.endpoint": f"http://{S3_HOST}:{S3_PORT}"},
+}
 
 UPSTREAM_S3_KEY = "admin"
 UPSTREAM_S3_SECRET = "password"
@@ -161,15 +180,18 @@ class VendedCredentialRefreshAddon:
             self._forced_catalog_commit_failure(flow)
             return
 
-        if flow.request.method == "GET" and table_match and table_match.group(1) in self.refresh_unlocked:
+        if flow.request.method == "GET" and table_match and self._is_vended_table(table_match.group(1)):
             table = table_match.group(1)
             flow.metadata["vended_table"] = table
             return
 
-        if credentials_match and credentials_match.group(1) in self.refresh_unlocked:
+        if credentials_match and self._is_vended_table(credentials_match.group(1)):
             table = credentials_match.group(1)
             body = json.dumps({"storage-credentials": [self._credentials_for_table(table)]}).encode()
             flow.response = http.Response.make(200, body, {"Content-Type": "application/json"})
+
+    def _is_vended_table(self, table):
+        return table in self.refresh_unlocked or table in TLS_TABLE_CONFIGS
 
     def _is_direct_delete_commit_request(self, flow: http.HTTPFlow, path):
         if flow.request.method != "POST":
@@ -314,6 +336,7 @@ class VendedCredentialRefreshAddon:
             NEW_MIXED_REFRESH_A_KEY,
             NEW_MIXED_REFRESH_B_KEY,
             OLD_RANGE_FAIL_KEY,
+            TLS_KEY,
         }:
             self._forbidden(flow, "unknown test credentials")
             return
@@ -402,6 +425,16 @@ class VendedCredentialRefreshAddon:
         return True
 
     def _credentials_for_table(self, table):
+        if table in TLS_TABLE_CONFIGS:
+            return {
+                "prefix": "s3://warehouse/",
+                "config": {
+                    "s3.access-key-id": TLS_KEY,
+                    "s3.secret-access-key": f"{TLS_KEY}_SECRET",
+                    "s3.region": "us-east-1",
+                    **TLS_TABLE_CONFIGS[table],
+                },
+            }
         key_id = self._key_for_table(table)
         return {
             "prefix": self._credentials_prefix(table),
