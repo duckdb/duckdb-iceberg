@@ -1,5 +1,6 @@
 #include "catalog/rest/api/catalog_utils.hpp"
 #include "duckdb/common/operator/cast_operators.hpp"
+#include "duckdb/common/string_util.hpp"
 #include "duckdb/logging/logger.hpp"
 #include "catalog/rest/catalog_entry/schema/iceberg_schema_entry.hpp"
 #include "iceberg_logging.hpp"
@@ -40,6 +41,33 @@ void ICUtils::LogPostBody(ClientContext &context, const IRCEndpointBuilder &url_
 		body_to_log = body;
 	}
 	DUCKDB_LOG(context, IcebergLogType, "POST %s body=%s", url_builder.GetURLEncoded(), body_to_log);
+}
+
+bool ICUtils::IsSensitiveConfigKey(const string &key) {
+	// Match on fragments rather than an exact list of FileIO properties, so credentials vended under
+	// properties we don't know about (yet) are redacted as well.
+	static const char *const SENSITIVE_FRAGMENTS[] = {"secret",     "token",     "password", "credential",
+	                                                  "shared-key", "signature", "sse.key"};
+	// Properties that describe a credential without containing it, e.g. 's3.session-token-expires-at-ms'.
+	static const char *const NON_SENSITIVE_SUFFIXES[] = {"-expires-at", "-expires-at-ms", "-expires-in-ms", "-enabled",
+	                                                     "-endpoint"};
+
+	auto lower_key = StringUtil::Lower(key);
+	for (auto suffix : NON_SENSITIVE_SUFFIXES) {
+		if (StringUtil::EndsWith(lower_key, suffix)) {
+			return false;
+		}
+	}
+	for (auto fragment : SENSITIVE_FRAGMENTS) {
+		if (StringUtil::Contains(lower_key, fragment)) {
+			return true;
+		}
+	}
+	return false;
+}
+
+string ICUtils::RedactConfigValue(const string &key, const string &value) {
+	return IsSensitiveConfigKey(key) ? "redacted" : value;
 }
 
 JSONValue ICUtils::GetErrorMessage(const string &api_result, unique_ptr<JSONDocument> &out_doc) {

@@ -18,6 +18,10 @@ public:
 	static rest_api_objects::LoadTableResult ParseLoadTableResult(JSONValue root);
 	//! Log the body of a REST POST, honouring 'iceberg_logging_post_body_truncate_limit'.
 	static void LogPostBody(ClientContext &context, const IRCEndpointBuilder &url_builder, const string &body);
+	//! Whether a REST 'config' / storage-credential property holds secret material (keys, tokens, signatures).
+	static bool IsSensitiveConfigKey(const string &key);
+	//! The value of 'key', or 'redacted' when IsSensitiveConfigKey(key).
+	static string RedactConfigValue(const string &key, const string &value);
 };
 
 } // namespace duckdb
