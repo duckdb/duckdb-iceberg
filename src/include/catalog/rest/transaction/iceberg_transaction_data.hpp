@@ -90,7 +90,6 @@ public:
 	//! Starting identities for read-your-writes, captured with the base manifest list.
 	//! Commit attempts allocate their identities independently.
 	sequence_number_t scan_sequence_number = 0;
-	int64_t scan_first_row_id = 0;
 
 	//! If we perform an update that relies on the current schema id staying unchanged
 	bool assert_schema_id = false;

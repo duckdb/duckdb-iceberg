@@ -168,11 +168,9 @@ void IcebergManifestStore::LoadManifestList() {
 
 	if (context.transaction_data) {
 		auto sequence_number = context.transaction_data->scan_sequence_number;
-		auto next_row_id = context.transaction_data->scan_first_row_id;
 		for (auto &alter_p : context.transaction_data->alters) {
 			for (const auto &pending_manifest : alter_p.get().GetPendingManifests()) {
-				auto manifest_list_entry =
-				    pending_manifest.CreateScanEntry(context.metadata, sequence_number, next_row_id);
+				auto manifest_list_entry = pending_manifest.CreateScanEntry(context.metadata, sequence_number);
 				auto content = pending_manifest.GetMetadata().content;
 				switch (content) {
 				case IcebergManifestContentType::DATA:

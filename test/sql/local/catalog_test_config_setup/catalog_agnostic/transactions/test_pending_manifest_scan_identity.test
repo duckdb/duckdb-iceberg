@@ -31,26 +31,27 @@ ALTER TABLE my_datalake.default.pending_manifest_scan_identity SET PARTITIONED B
 statement ok
 INSERT INTO my_datalake.default.pending_manifest_scan_identity VALUES (3, 20);
 
-# Pruning earlier manifests must not change the row IDs assigned to later ones.
+# Pruning earlier manifests must not change the sequence numbers of later ones.
+# Rows that are not committed have no row ID yet.
 query III
 SELECT id, _row_id, _last_updated_sequence_number
 FROM my_datalake.default.pending_manifest_scan_identity WHERE p = 20;
 ----
-3	3	3
+3	NULL	3
 
 # Rebuilding a scan view must not advance transaction state.
 query III
 SELECT id, _row_id, _last_updated_sequence_number
 FROM my_datalake.default.pending_manifest_scan_identity WHERE p = 20;
 ----
-3	3	3
+3	NULL	3
 
 query III
 SELECT id, _row_id, _last_updated_sequence_number
 FROM my_datalake.default.pending_manifest_scan_identity WHERE p = 10 ORDER BY id;
 ----
-1	1	2
-2	2	2
+1	NULL	2
+2	NULL	2
 
 statement ok
 DELETE FROM my_datalake.default.pending_manifest_scan_identity WHERE id = 1;
@@ -64,9 +65,9 @@ SELECT id, _row_id, _last_updated_sequence_number
 FROM my_datalake.default.pending_manifest_scan_identity ORDER BY id;
 ----
 0	0	1
-2	2	2
-3	3	3
-4	4	5
+2	NULL	2
+3	NULL	3
+4	NULL	5
 
 statement ok
 COMMIT;
@@ -90,7 +91,7 @@ query III
 SELECT id, _row_id, _last_updated_sequence_number
 FROM my_datalake.default.pending_manifest_scan_identity WHERE id = 5;
 ----
-5	5	6
+5	NULL	6
 
 statement ok
 ROLLBACK;
@@ -111,7 +112,7 @@ query III
 SELECT id, _row_id, _last_updated_sequence_number
 FROM my_datalake.default.pending_manifest_scan_identity WHERE id = 6;
 ----
-6	5	6
+6	NULL	6
 
 statement ok
 COMMIT;

@@ -1,0 +1,1397 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/update/test_update_uncommitted_row_id.test
+# description: Rows that the transaction did not commit yet have no _row_id; committed rows keep their _row_id
+# group: [update]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require-env FORMAT_V3_SUPPORT
+
+include test/sql/init_requires
+
+statement ok
+create schema if not exists my_datalake.default;
+
+# Each scenario first commits 100 seed rows (id 1000-1099, _row_id 0-99, next-row-id 100).
+# Scenario rows have id < 1000. The commit gives the next row ids to all rows of new data files,
+# also to rows that keep a stored _row_id. Thus next-row-id is max(_row_id) + 1 only when the last new row has no stored _row_id.
+
+# a. Committed row: UPDATE keeps the stored _row_id
+
+statement ok
+drop table if exists my_datalake.default.update_row_id_committed;
+
+statement ok
+create table my_datalake.default.update_row_id_committed (id int, data varchar) WITH ('format-version' = 3);
+
+statement ok
+insert into my_datalake.default.update_row_id_committed select range + 1000, 'seed' from range(100);
+
+statement ok
+insert into my_datalake.default.update_row_id_committed values (1, 'a'), (2, 'b');
+
+statement ok
+update my_datalake.default.update_row_id_committed set data = 'x' where id = 2;
+
+statement ok
+SET VARIABLE files = (SELECT list(file_path) FROM iceberg_metadata('my_datalake.default.update_row_id_committed') WHERE content = 'DATA');
+
+query II
+SELECT id, _row_id FROM read_parquet(getvariable('files'), union_by_name = true) WHERE data = 'x';
+----
+2	101
+
+query III
+SELECT _row_id, id, data FROM my_datalake.default.update_row_id_committed WHERE id < 1000 ORDER BY id;
+----
+100	1	a
+101	2	x
+
+query IIIII
+SELECT count(*), count(DISTINCT _row_id), min(_row_id), max(_row_id), sum(_row_id) FROM my_datalake.default.update_row_id_committed;
+----
+102	102	0	101	5151
+
+# The new file of the UPDATE takes row id 102, but its row keeps _row_id 101
+
+query I
+SELECT metadata."next-row-id" FROM iceberg_load_table_response(my_datalake.default.update_row_id_committed);
+----
+103
+
+statement ok
+DROP TABLE my_datalake.default.update_row_id_committed;
+
+statement ok
+drop table if exists my_datalake.default.update_row_id_uncommitted;
+
+statement ok
+create table my_datalake.default.update_row_id_uncommitted (id int, data varchar) WITH ('format-version' = 3);
+
+statement ok
+insert into my_datalake.default.update_row_id_uncommitted select range + 1000, 'seed' from range(100);
+
+# b. Row inserted and updated in one transaction: UPDATE writes a NULL _row_id
+
+statement ok
+insert into my_datalake.default.update_row_id_uncommitted values (1, 'a');
+
+statement ok
+begin
+
+statement ok
+insert into my_datalake.default.update_row_id_uncommitted values (2, 'b');
+
+statement ok
+update my_datalake.default.update_row_id_uncommitted set data = 'y' where id = 2;
+
+statement ok
+commit
+
+statement ok
+SET VARIABLE files = (SELECT list(file_path) FROM iceberg_metadata('my_datalake.default.update_row_id_uncommitted') WHERE content = 'DATA');
+
+query II
+SELECT id, _row_id FROM read_parquet(getvariable('files'), union_by_name = true) WHERE data = 'y';
+----
+2	NULL
+
+query III
+SELECT _row_id, id, data FROM my_datalake.default.update_row_id_uncommitted WHERE id < 1000 ORDER BY id;
+----
+100	1	a
+102	2	y
+
+query IIIII
+SELECT count(*), count(DISTINCT _row_id), min(_row_id), max(_row_id), sum(_row_id) FROM my_datalake.default.update_row_id_uncommitted;
+----
+102	102	0	102	5152
+
+query I
+SELECT metadata."next-row-id" FROM iceberg_load_table_response(my_datalake.default.update_row_id_uncommitted);
+----
+103
+
+query I
+SELECT count(*) = count(DISTINCT _row_id) FROM my_datalake.default.update_row_id_uncommitted;
+----
+true
+
+query I
+SELECT (SELECT metadata."next-row-id" FROM iceberg_load_table_response(my_datalake.default.update_row_id_uncommitted))
+	= (SELECT max(_row_id) FROM my_datalake.default.update_row_id_uncommitted) + 1;
+----
+true
+
+statement ok
+DROP TABLE my_datalake.default.update_row_id_uncommitted;
+
+# c. One UPDATE on a committed row and an uncommitted row
+
+statement ok
+drop table if exists my_datalake.default.update_row_id_mixed;
+
+statement ok
+create table my_datalake.default.update_row_id_mixed (id int, data varchar) WITH ('format-version' = 3);
+
+statement ok
+insert into my_datalake.default.update_row_id_mixed select range + 1000, 'seed' from range(100);
+
+statement ok
+insert into my_datalake.default.update_row_id_mixed values (1, 'a');
+
+statement ok
+begin
+
+statement ok
+insert into my_datalake.default.update_row_id_mixed values (2, 'b');
+
+statement ok
+update my_datalake.default.update_row_id_mixed set data = 'z' where id < 1000;
+
+statement ok
+commit
+
+statement ok
+SET VARIABLE files = (SELECT list(file_path) FROM iceberg_metadata('my_datalake.default.update_row_id_mixed') WHERE content = 'DATA');
+
+query II
+SELECT id, _row_id FROM read_parquet(getvariable('files'), union_by_name = true) WHERE data = 'z' ORDER BY id;
+----
+1	100
+2	NULL
+
+# The UPDATE file holds both rows. Their order in the file depends on the scan, so row 2 gets 102 or 103.
+
+query IIT
+SELECT id, CASE WHEN id = 2 THEN _row_id IN (102, 103) ELSE _row_id = 100 END, data FROM my_datalake.default.update_row_id_mixed WHERE id < 1000 ORDER BY id;
+----
+1	true	z
+2	true	z
+
+query III
+SELECT count(*), count(DISTINCT _row_id), min(_row_id) FROM my_datalake.default.update_row_id_mixed;
+----
+102	102	0
+
+query I
+SELECT metadata."next-row-id" FROM iceberg_load_table_response(my_datalake.default.update_row_id_mixed);
+----
+104
+
+statement ok
+DROP TABLE my_datalake.default.update_row_id_mixed;
+
+# d. A delete manifest earlier in the transaction must not move the row ids of later data files
+
+statement ok
+drop table if exists my_datalake.default.update_row_id_delete_first;
+
+statement ok
+create table my_datalake.default.update_row_id_delete_first (id int, data varchar) WITH ('format-version' = 3);
+
+statement ok
+insert into my_datalake.default.update_row_id_delete_first select range + 1000, 'seed' from range(100);
+
+statement ok
+insert into my_datalake.default.update_row_id_delete_first values (1, 'a');
+
+statement ok
+begin
+
+statement ok
+update my_datalake.default.update_row_id_delete_first set data = 'u' where id = 1;
+
+statement ok
+insert into my_datalake.default.update_row_id_delete_first values (2, 'b');
+
+statement ok
+update my_datalake.default.update_row_id_delete_first set data = 'v' where id = 2;
+
+statement ok
+commit
+
+query III
+SELECT _row_id, id, data FROM my_datalake.default.update_row_id_delete_first WHERE id < 1000 ORDER BY id;
+----
+100	1	u
+103	2	v
+
+query I
+SELECT metadata."next-row-id" FROM iceberg_load_table_response(my_datalake.default.update_row_id_delete_first);
+----
+104
+
+query I
+SELECT (SELECT metadata."next-row-id" FROM iceberg_load_table_response(my_datalake.default.update_row_id_delete_first))
+	= (SELECT max(_row_id) FROM my_datalake.default.update_row_id_delete_first) + 1;
+----
+true
+
+statement ok
+insert into my_datalake.default.update_row_id_delete_first values (3, 'c');
+
+query III
+SELECT _row_id, id, data FROM my_datalake.default.update_row_id_delete_first WHERE id < 1000 ORDER BY id;
+----
+100	1	u
+103	2	v
+104	3	c
+
+query IIIII
+SELECT count(*), count(DISTINCT _row_id), min(_row_id), max(_row_id), sum(_row_id) FROM my_datalake.default.update_row_id_delete_first;
+----
+103	103	0	104	5257
+
+query I
+SELECT metadata."next-row-id" FROM iceberg_load_table_response(my_datalake.default.update_row_id_delete_first);
+----
+105
+
+query I
+SELECT (SELECT metadata."next-row-id" FROM iceberg_load_table_response(my_datalake.default.update_row_id_delete_first))
+	= (SELECT max(_row_id) FROM my_datalake.default.update_row_id_delete_first) + 1;
+----
+true
+
+statement ok
+DROP TABLE my_datalake.default.update_row_id_delete_first;
+
+statement ok
+drop table if exists my_datalake.default.update_row_id_twice_uncommitted;
+
+statement ok
+create table my_datalake.default.update_row_id_twice_uncommitted (id int, data varchar) WITH ('format-version' = 3);
+
+statement ok
+insert into my_datalake.default.update_row_id_twice_uncommitted select range + 1000, 'seed' from range(100);
+
+# D. Row inserted, then updated twice in one transaction
+
+statement ok
+begin
+
+statement ok
+insert into my_datalake.default.update_row_id_twice_uncommitted values (1, 'a');
+
+statement ok
+update my_datalake.default.update_row_id_twice_uncommitted set data = 'a1' where id = 1;
+
+statement ok
+update my_datalake.default.update_row_id_twice_uncommitted set data = 'a2' where id = 1;
+
+statement ok
+commit
+
+statement ok
+SET VARIABLE files = (SELECT list(file_path) FROM iceberg_metadata('my_datalake.default.update_row_id_twice_uncommitted') WHERE content = 'DATA');
+
+query II
+SELECT id, _row_id FROM read_parquet(getvariable('files'), union_by_name = true) WHERE data = 'a2';
+----
+1	NULL
+
+query III
+SELECT _row_id, id, data FROM my_datalake.default.update_row_id_twice_uncommitted WHERE id < 1000 ORDER BY id;
+----
+102	1	a2
+
+query IIIII
+SELECT count(*), count(DISTINCT _row_id), min(_row_id), max(_row_id), sum(_row_id) FROM my_datalake.default.update_row_id_twice_uncommitted;
+----
+101	101	0	102	5052
+
+query I
+SELECT metadata."next-row-id" FROM iceberg_load_table_response(my_datalake.default.update_row_id_twice_uncommitted);
+----
+103
+
+query I
+SELECT count(*) = count(DISTINCT _row_id) FROM my_datalake.default.update_row_id_twice_uncommitted;
+----
+true
+
+query I
+SELECT (SELECT metadata."next-row-id" FROM iceberg_load_table_response(my_datalake.default.update_row_id_twice_uncommitted))
+	= (SELECT max(_row_id) FROM my_datalake.default.update_row_id_twice_uncommitted) + 1;
+----
+true
+
+statement ok
+DROP TABLE my_datalake.default.update_row_id_twice_uncommitted;
+
+statement ok
+drop table if exists my_datalake.default.update_row_id_twice_committed;
+
+statement ok
+create table my_datalake.default.update_row_id_twice_committed (id int, data varchar) WITH ('format-version' = 3);
+
+statement ok
+insert into my_datalake.default.update_row_id_twice_committed select range + 1000, 'seed' from range(100);
+
+# E. Committed row updated twice in one transaction keeps its _row_id
+
+statement ok
+insert into my_datalake.default.update_row_id_twice_committed values (0, 'a'), (1, 'b');
+
+statement ok
+begin
+
+statement ok
+update my_datalake.default.update_row_id_twice_committed set data = 'b1' where id = 1;
+
+statement ok
+update my_datalake.default.update_row_id_twice_committed set data = 'b2' where id = 1;
+
+statement ok
+commit
+
+statement ok
+SET VARIABLE files = (SELECT list(file_path) FROM iceberg_metadata('my_datalake.default.update_row_id_twice_committed') WHERE content = 'DATA');
+
+query II
+SELECT id, _row_id FROM read_parquet(getvariable('files'), union_by_name = true) WHERE data = 'b2';
+----
+1	101
+
+query III
+SELECT _row_id, id, data FROM my_datalake.default.update_row_id_twice_committed WHERE id < 1000 ORDER BY id;
+----
+100	0	a
+101	1	b2
+
+query IIIII
+SELECT count(*), count(DISTINCT _row_id), min(_row_id), max(_row_id), sum(_row_id) FROM my_datalake.default.update_row_id_twice_committed;
+----
+102	102	0	101	5151
+
+# Both UPDATE files take a row id (102, 103); the row keeps _row_id 101
+
+query I
+SELECT metadata."next-row-id" FROM iceberg_load_table_response(my_datalake.default.update_row_id_twice_committed);
+----
+104
+
+query I
+SELECT count(*) = count(DISTINCT _row_id) FROM my_datalake.default.update_row_id_twice_committed;
+----
+true
+
+statement ok
+DROP TABLE my_datalake.default.update_row_id_twice_committed;
+
+# B'. Seed with gaps (DELETE 10, UPDATE 10), then b. c0 = 110, so the rows get 110 and 112.
+
+statement ok
+drop table if exists my_datalake.default.update_row_id_gap_uncommitted;
+
+statement ok
+create table my_datalake.default.update_row_id_gap_uncommitted (id int, data varchar) WITH ('format-version' = 3);
+
+statement ok
+insert into my_datalake.default.update_row_id_gap_uncommitted select range + 1000, 'seed' from range(100);
+
+statement ok
+begin
+
+statement ok
+delete from my_datalake.default.update_row_id_gap_uncommitted where id between 1000 and 1009;
+
+statement ok
+update my_datalake.default.update_row_id_gap_uncommitted set data = 'g' where id between 1010 and 1019;
+
+statement ok
+commit
+
+# 90 live rows. The UPDATE file holds 10 rows with stored _row_id 10-19 and takes row ids 100-109.
+
+query IIIII
+SELECT count(*), count(DISTINCT _row_id), min(_row_id), max(_row_id), sum(_row_id) FROM my_datalake.default.update_row_id_gap_uncommitted;
+----
+90	90	10	99	4905
+
+query I
+SELECT metadata."next-row-id" FROM iceberg_load_table_response(my_datalake.default.update_row_id_gap_uncommitted);
+----
+110
+
+statement ok
+SET VARIABLE c0 = (SELECT metadata."next-row-id" FROM iceberg_load_table_response(my_datalake.default.update_row_id_gap_uncommitted));
+
+# Run b on the table with gaps
+
+statement ok
+insert into my_datalake.default.update_row_id_gap_uncommitted values (1, 'a');
+
+statement ok
+begin
+
+statement ok
+insert into my_datalake.default.update_row_id_gap_uncommitted values (2, 'b');
+
+statement ok
+update my_datalake.default.update_row_id_gap_uncommitted set data = 'y' where id = 2;
+
+statement ok
+commit
+
+statement ok
+SET VARIABLE files = (SELECT list(file_path) FROM iceberg_metadata('my_datalake.default.update_row_id_gap_uncommitted') WHERE content = 'DATA');
+
+query II
+SELECT id, _row_id FROM read_parquet(getvariable('files'), union_by_name = true) WHERE data = 'y';
+----
+2	NULL
+
+query III
+SELECT _row_id - getvariable('c0'), id, data FROM my_datalake.default.update_row_id_gap_uncommitted WHERE id < 1000 ORDER BY id;
+----
+0	1	a
+2	2	y
+
+query I
+SELECT metadata."next-row-id" - getvariable('c0') FROM iceberg_load_table_response(my_datalake.default.update_row_id_gap_uncommitted);
+----
+3
+
+query I
+SELECT count(*) = count(DISTINCT _row_id) FROM my_datalake.default.update_row_id_gap_uncommitted;
+----
+true
+
+query I
+SELECT (SELECT metadata."next-row-id" FROM iceberg_load_table_response(my_datalake.default.update_row_id_gap_uncommitted))
+	= (SELECT max(_row_id) FROM my_datalake.default.update_row_id_gap_uncommitted) + 1;
+----
+true
+
+statement ok
+DROP TABLE my_datalake.default.update_row_id_gap_uncommitted;
+
+# D'. Seed with gaps, then D. c0 = 110, so the row gets 112.
+
+statement ok
+drop table if exists my_datalake.default.update_row_id_gap_twice_uncommitted;
+
+statement ok
+create table my_datalake.default.update_row_id_gap_twice_uncommitted (id int, data varchar) WITH ('format-version' = 3);
+
+statement ok
+insert into my_datalake.default.update_row_id_gap_twice_uncommitted select range + 1000, 'seed' from range(100);
+
+statement ok
+begin
+
+statement ok
+delete from my_datalake.default.update_row_id_gap_twice_uncommitted where id between 1000 and 1009;
+
+statement ok
+update my_datalake.default.update_row_id_gap_twice_uncommitted set data = 'g' where id between 1010 and 1019;
+
+statement ok
+commit
+
+# 90 live rows. The UPDATE file holds 10 rows with stored _row_id 10-19 and takes row ids 100-109.
+
+query IIIII
+SELECT count(*), count(DISTINCT _row_id), min(_row_id), max(_row_id), sum(_row_id) FROM my_datalake.default.update_row_id_gap_twice_uncommitted;
+----
+90	90	10	99	4905
+
+query I
+SELECT metadata."next-row-id" FROM iceberg_load_table_response(my_datalake.default.update_row_id_gap_twice_uncommitted);
+----
+110
+
+statement ok
+SET VARIABLE c0 = (SELECT metadata."next-row-id" FROM iceberg_load_table_response(my_datalake.default.update_row_id_gap_twice_uncommitted));
+
+# Run D on the table with gaps
+
+statement ok
+begin
+
+statement ok
+insert into my_datalake.default.update_row_id_gap_twice_uncommitted values (1, 'a');
+
+statement ok
+update my_datalake.default.update_row_id_gap_twice_uncommitted set data = 'a1' where id = 1;
+
+statement ok
+update my_datalake.default.update_row_id_gap_twice_uncommitted set data = 'a2' where id = 1;
+
+statement ok
+commit
+
+statement ok
+SET VARIABLE files = (SELECT list(file_path) FROM iceberg_metadata('my_datalake.default.update_row_id_gap_twice_uncommitted') WHERE content = 'DATA');
+
+query II
+SELECT id, _row_id FROM read_parquet(getvariable('files'), union_by_name = true) WHERE data = 'a2';
+----
+1	NULL
+
+query III
+SELECT _row_id - getvariable('c0'), id, data FROM my_datalake.default.update_row_id_gap_twice_uncommitted WHERE id < 1000 ORDER BY id;
+----
+2	1	a2
+
+query I
+SELECT metadata."next-row-id" - getvariable('c0') FROM iceberg_load_table_response(my_datalake.default.update_row_id_gap_twice_uncommitted);
+----
+3
+
+query I
+SELECT count(*) = count(DISTINCT _row_id) FROM my_datalake.default.update_row_id_gap_twice_uncommitted;
+----
+true
+
+query I
+SELECT (SELECT metadata."next-row-id" FROM iceberg_load_table_response(my_datalake.default.update_row_id_gap_twice_uncommitted))
+	= (SELECT max(_row_id) FROM my_datalake.default.update_row_id_gap_twice_uncommitted) + 1;
+----
+true
+
+statement ok
+DROP TABLE my_datalake.default.update_row_id_gap_twice_uncommitted;
+
+# E'. Seed with gaps, then E. c0 = 110, so the rows get 110 and 111.
+
+statement ok
+drop table if exists my_datalake.default.update_row_id_gap_twice_committed;
+
+statement ok
+create table my_datalake.default.update_row_id_gap_twice_committed (id int, data varchar) WITH ('format-version' = 3);
+
+statement ok
+insert into my_datalake.default.update_row_id_gap_twice_committed select range + 1000, 'seed' from range(100);
+
+statement ok
+begin
+
+statement ok
+delete from my_datalake.default.update_row_id_gap_twice_committed where id between 1000 and 1009;
+
+statement ok
+update my_datalake.default.update_row_id_gap_twice_committed set data = 'g' where id between 1010 and 1019;
+
+statement ok
+commit
+
+# 90 live rows. The UPDATE file holds 10 rows with stored _row_id 10-19 and takes row ids 100-109.
+
+query IIIII
+SELECT count(*), count(DISTINCT _row_id), min(_row_id), max(_row_id), sum(_row_id) FROM my_datalake.default.update_row_id_gap_twice_committed;
+----
+90	90	10	99	4905
+
+query I
+SELECT metadata."next-row-id" FROM iceberg_load_table_response(my_datalake.default.update_row_id_gap_twice_committed);
+----
+110
+
+statement ok
+SET VARIABLE c0 = (SELECT metadata."next-row-id" FROM iceberg_load_table_response(my_datalake.default.update_row_id_gap_twice_committed));
+
+# Run E on the table with gaps
+
+statement ok
+insert into my_datalake.default.update_row_id_gap_twice_committed values (0, 'a'), (1, 'b');
+
+statement ok
+begin
+
+statement ok
+update my_datalake.default.update_row_id_gap_twice_committed set data = 'b1' where id = 1;
+
+statement ok
+update my_datalake.default.update_row_id_gap_twice_committed set data = 'b2' where id = 1;
+
+statement ok
+commit
+
+statement ok
+SET VARIABLE files = (SELECT list(file_path) FROM iceberg_metadata('my_datalake.default.update_row_id_gap_twice_committed') WHERE content = 'DATA');
+
+query II
+SELECT id, _row_id - getvariable('c0') FROM read_parquet(getvariable('files'), union_by_name = true) WHERE data = 'b2';
+----
+1	1
+
+query III
+SELECT _row_id - getvariable('c0'), id, data FROM my_datalake.default.update_row_id_gap_twice_committed WHERE id < 1000 ORDER BY id;
+----
+0	0	a
+1	1	b2
+
+query I
+SELECT metadata."next-row-id" - getvariable('c0') FROM iceberg_load_table_response(my_datalake.default.update_row_id_gap_twice_committed);
+----
+4
+
+query I
+SELECT count(*) = count(DISTINCT _row_id) FROM my_datalake.default.update_row_id_gap_twice_committed;
+----
+true
+
+statement ok
+DROP TABLE my_datalake.default.update_row_id_gap_twice_committed;
+
+# F. Insert 4 rows, delete 2, update the other 2, in one transaction
+
+statement ok
+drop table if exists my_datalake.default.update_row_id_delete_update;
+
+statement ok
+create table my_datalake.default.update_row_id_delete_update (id int, data varchar) WITH ('format-version' = 3);
+
+statement ok
+insert into my_datalake.default.update_row_id_delete_update select range + 1000, 'seed' from range(100);
+
+statement ok
+begin
+
+statement ok
+insert into my_datalake.default.update_row_id_delete_update values (1, 'a'), (2, 'b'), (3, 'c'), (4, 'd');
+
+statement ok
+delete from my_datalake.default.update_row_id_delete_update where id in (1, 2);
+
+statement ok
+update my_datalake.default.update_row_id_delete_update set data = 'f' where id in (3, 4);
+
+statement ok
+commit
+
+statement ok
+SET VARIABLE files = (SELECT list(file_path) FROM iceberg_metadata('my_datalake.default.update_row_id_delete_update') WHERE content = 'DATA');
+
+query II
+SELECT id, _row_id FROM read_parquet(getvariable('files'), union_by_name = true) WHERE data = 'f' ORDER BY id;
+----
+3	NULL
+4	NULL
+
+query III
+SELECT _row_id, id, data FROM my_datalake.default.update_row_id_delete_update WHERE id < 1000 ORDER BY id;
+----
+104	3	f
+105	4	f
+
+query IIIII
+SELECT count(*), count(DISTINCT _row_id), min(_row_id), max(_row_id), sum(_row_id) FROM my_datalake.default.update_row_id_delete_update;
+----
+102	102	0	105	5159
+
+query I
+SELECT metadata."next-row-id" FROM iceberg_load_table_response(my_datalake.default.update_row_id_delete_update);
+----
+106
+
+query I
+SELECT (SELECT metadata."next-row-id" FROM iceberg_load_table_response(my_datalake.default.update_row_id_delete_update))
+	= (SELECT max(_row_id) FROM my_datalake.default.update_row_id_delete_update) + 1;
+----
+true
+
+statement ok
+DROP TABLE my_datalake.default.update_row_id_delete_update;
+
+# G1. MERGE updates a row that the transaction inserted and inserts a new row
+
+statement ok
+drop table if exists my_datalake.default.merge_row_id_uncommitted;
+
+statement ok
+create table my_datalake.default.merge_row_id_uncommitted (id int, data varchar) WITH ('format-version' = 3);
+
+statement ok
+insert into my_datalake.default.merge_row_id_uncommitted select range + 1000, 'seed' from range(100);
+
+statement ok
+insert into my_datalake.default.merge_row_id_uncommitted values (1, 'a');
+
+statement ok
+begin
+
+statement ok
+insert into my_datalake.default.merge_row_id_uncommitted values (2, 'b');
+
+statement ok
+MERGE INTO my_datalake.default.merge_row_id_uncommitted AS t USING (SELECT 2 AS id, 'm' AS data UNION ALL SELECT 3, 'n') AS s ON t.id = s.id WHEN MATCHED THEN UPDATE SET data = s.data WHEN NOT MATCHED THEN INSERT VALUES (s.id, s.data);
+
+statement ok
+commit
+
+statement ok
+SET VARIABLE files = (SELECT list(file_path) FROM iceberg_metadata('my_datalake.default.merge_row_id_uncommitted') WHERE content = 'DATA');
+
+query II
+SELECT id, _row_id FROM read_parquet(getvariable('files'), union_by_name = true) WHERE data IN ('m', 'n') ORDER BY id;
+----
+2	NULL
+3	NULL
+
+query II
+SELECT id, data FROM my_datalake.default.merge_row_id_uncommitted WHERE id < 1000 ORDER BY id;
+----
+1	a
+2	m
+3	n
+
+# The order of rows 2 and 3 in the new files depends on the MERGE, so they get 102 and 103 in any order.
+
+query II
+SELECT min(_row_id) FILTER (WHERE id = 1), list(_row_id ORDER BY _row_id) FILTER (WHERE id IN (2, 3)) FROM my_datalake.default.merge_row_id_uncommitted;
+----
+100	[102, 103]
+
+query IIIII
+SELECT count(*), count(DISTINCT _row_id), min(_row_id), max(_row_id), sum(_row_id) FROM my_datalake.default.merge_row_id_uncommitted;
+----
+103	103	0	103	5255
+
+query I
+SELECT metadata."next-row-id" FROM iceberg_load_table_response(my_datalake.default.merge_row_id_uncommitted);
+----
+104
+
+query I
+SELECT (SELECT metadata."next-row-id" FROM iceberg_load_table_response(my_datalake.default.merge_row_id_uncommitted))
+	= (SELECT max(_row_id) FROM my_datalake.default.merge_row_id_uncommitted) + 1;
+----
+true
+
+statement ok
+DROP TABLE my_datalake.default.merge_row_id_uncommitted;
+
+# G2. MERGE updates a committed row
+
+statement ok
+drop table if exists my_datalake.default.merge_row_id_committed;
+
+statement ok
+create table my_datalake.default.merge_row_id_committed (id int, data varchar) WITH ('format-version' = 3);
+
+statement ok
+insert into my_datalake.default.merge_row_id_committed select range + 1000, 'seed' from range(100);
+
+statement ok
+insert into my_datalake.default.merge_row_id_committed values (1, 'a'), (2, 'b');
+
+statement ok
+MERGE INTO my_datalake.default.merge_row_id_committed AS t USING (SELECT 2 AS id, 'm' AS data) AS s ON t.id = s.id WHEN MATCHED THEN UPDATE SET data = s.data;
+
+statement ok
+SET VARIABLE files = (SELECT list(file_path) FROM iceberg_metadata('my_datalake.default.merge_row_id_committed') WHERE content = 'DATA');
+
+query II
+SELECT id, _row_id FROM read_parquet(getvariable('files'), union_by_name = true) WHERE data = 'm';
+----
+2	101
+
+query III
+SELECT _row_id, id, data FROM my_datalake.default.merge_row_id_committed WHERE id < 1000 ORDER BY id;
+----
+100	1	a
+101	2	m
+
+query IIIII
+SELECT count(*), count(DISTINCT _row_id), min(_row_id), max(_row_id), sum(_row_id) FROM my_datalake.default.merge_row_id_committed;
+----
+102	102	0	101	5151
+
+# The new file of the MERGE takes row id 102, but its row keeps _row_id 101
+
+query I
+SELECT metadata."next-row-id" FROM iceberg_load_table_response(my_datalake.default.merge_row_id_committed);
+----
+103
+
+statement ok
+DROP TABLE my_datalake.default.merge_row_id_committed;
+
+# H. Partitioned table: UPDATE moves rows to another partition
+
+statement ok
+drop table if exists my_datalake.default.update_row_id_partition_move;
+
+statement ok
+create table my_datalake.default.update_row_id_partition_move (id int, p int, data varchar) PARTITIONED BY (p) WITH ('format-version' = 3);
+
+statement ok
+insert into my_datalake.default.update_row_id_partition_move select range + 1000, 0, 'seed' from range(100);
+
+statement ok
+insert into my_datalake.default.update_row_id_partition_move values (1, 1, 'a');
+
+statement ok
+begin
+
+statement ok
+insert into my_datalake.default.update_row_id_partition_move values (2, 1, 'b');
+
+statement ok
+update my_datalake.default.update_row_id_partition_move set p = 2, data = 'h' where id = 2;
+
+statement ok
+commit
+
+query I
+SELECT metadata."next-row-id" FROM iceberg_load_table_response(my_datalake.default.update_row_id_partition_move);
+----
+103
+
+query I
+SELECT (SELECT metadata."next-row-id" FROM iceberg_load_table_response(my_datalake.default.update_row_id_partition_move))
+	= (SELECT max(_row_id) FROM my_datalake.default.update_row_id_partition_move) + 1;
+----
+true
+
+statement ok
+update my_datalake.default.update_row_id_partition_move set p = 3, data = 'hc' where id = 1;
+
+statement ok
+SET VARIABLE files = (SELECT list(file_path) FROM iceberg_metadata('my_datalake.default.update_row_id_partition_move') WHERE content = 'DATA');
+
+query III
+SELECT id, p, _row_id FROM read_parquet(getvariable('files'), union_by_name = true, hive_partitioning = false) WHERE data IN ('h', 'hc') ORDER BY id;
+----
+1	3	100
+2	2	NULL
+
+query IIII
+SELECT _row_id, id, p, data FROM my_datalake.default.update_row_id_partition_move WHERE id < 1000 ORDER BY id;
+----
+100	1	3	hc
+102	2	2	h
+
+query IIIII
+SELECT count(*), count(DISTINCT _row_id), min(_row_id), max(_row_id), sum(_row_id) FROM my_datalake.default.update_row_id_partition_move;
+----
+102	102	0	102	5152
+
+# The last UPDATE file takes row id 103, but its row keeps _row_id 100
+
+query I
+SELECT metadata."next-row-id" FROM iceberg_load_table_response(my_datalake.default.update_row_id_partition_move);
+----
+104
+
+statement ok
+DROP TABLE my_datalake.default.update_row_id_partition_move;
+
+# I. Format version 2: UPDATE writes no _row_id column
+
+statement ok
+drop table if exists my_datalake.default.update_row_id_v2;
+
+statement ok
+create table my_datalake.default.update_row_id_v2 (id int, data varchar) WITH ('format-version' = 2);
+
+statement ok
+insert into my_datalake.default.update_row_id_v2 select range + 1000, 'seed' from range(100);
+
+statement ok
+insert into my_datalake.default.update_row_id_v2 values (1, 'a');
+
+statement ok
+begin
+
+statement ok
+insert into my_datalake.default.update_row_id_v2 values (2, 'b');
+
+statement ok
+update my_datalake.default.update_row_id_v2 set data = 'y' where id = 2;
+
+statement ok
+commit
+
+statement ok
+begin
+
+statement ok
+update my_datalake.default.update_row_id_v2 set data = 'a1' where id = 1;
+
+statement ok
+update my_datalake.default.update_row_id_v2 set data = 'a2' where id = 1;
+
+statement ok
+commit
+
+statement ok
+SET VARIABLE files = (SELECT list(file_path) FROM iceberg_metadata('my_datalake.default.update_row_id_v2') WHERE content = 'DATA');
+
+query I
+SELECT count(*) FROM parquet_schema(getvariable('files')) WHERE name = '_row_id';
+----
+0
+
+query II
+SELECT id, data FROM my_datalake.default.update_row_id_v2 WHERE id < 1000 ORDER BY id;
+----
+1	a2
+2	y
+
+query I
+SELECT count(*) FROM my_datalake.default.update_row_id_v2;
+----
+102
+
+statement ok
+DROP TABLE my_datalake.default.update_row_id_v2;
+
+# I2. Format version 2: INSERT, DELETE, UPDATE and MERGE in one transaction write no _row_id column
+
+statement ok
+drop table if exists my_datalake.default.update_row_id_v2_merge;
+
+statement ok
+create table my_datalake.default.update_row_id_v2_merge (id int, data varchar) WITH ('format-version' = 2);
+
+statement ok
+insert into my_datalake.default.update_row_id_v2_merge select range + 1000, 'seed' from range(100);
+
+statement ok
+begin
+
+statement ok
+insert into my_datalake.default.update_row_id_v2_merge values (3, 'c'), (4, 'd');
+
+statement ok
+delete from my_datalake.default.update_row_id_v2_merge where id = 3;
+
+statement ok
+update my_datalake.default.update_row_id_v2_merge set data = 'd1' where id = 4;
+
+statement ok
+MERGE INTO my_datalake.default.update_row_id_v2_merge AS t USING (SELECT 4 AS id, 'm' AS data UNION ALL SELECT 5, 'n') AS s ON t.id = s.id WHEN MATCHED THEN UPDATE SET data = s.data WHEN NOT MATCHED THEN INSERT VALUES (s.id, s.data);
+
+statement ok
+commit
+
+statement ok
+SET VARIABLE files = (SELECT list(file_path) FROM iceberg_metadata('my_datalake.default.update_row_id_v2_merge') WHERE content = 'DATA');
+
+query I
+SELECT count(*) FROM parquet_schema(getvariable('files')) WHERE name = '_row_id';
+----
+0
+
+query II
+SELECT id, data FROM my_datalake.default.update_row_id_v2_merge WHERE id < 1000 ORDER BY id;
+----
+4	m
+5	n
+
+query I
+SELECT count(*) FROM my_datalake.default.update_row_id_v2_merge;
+----
+102
+
+statement ok
+DROP TABLE my_datalake.default.update_row_id_v2_merge;
+
+# J. Table upgraded from format version 2 to 3
+
+statement ok
+drop table if exists my_datalake.default.update_row_id_upgraded;
+
+statement ok
+create table my_datalake.default.update_row_id_upgraded (id int, data varchar) WITH ('format-version' = 2);
+
+statement ok
+insert into my_datalake.default.update_row_id_upgraded select range + 1000, 'seed' from range(100);
+
+statement ok
+insert into my_datalake.default.update_row_id_upgraded values (1, 'a'), (2, 'b');
+
+statement ok
+ALTER TABLE my_datalake.default.update_row_id_upgraded SET ('format-version' = 3);
+
+statement ok
+begin
+
+statement ok
+update my_datalake.default.update_row_id_upgraded set data = 'a1' where id = 1;
+
+statement ok
+insert into my_datalake.default.update_row_id_upgraded values (3, 'c');
+
+statement ok
+update my_datalake.default.update_row_id_upgraded set data = 'c1' where id = 3;
+
+statement ok
+commit
+
+query II
+SELECT id, data FROM my_datalake.default.update_row_id_upgraded WHERE id < 1000 ORDER BY id;
+----
+1	a1
+2	b
+3	c1
+
+query III
+SELECT count(*), count(_row_id), count(DISTINCT _row_id) FROM my_datalake.default.update_row_id_upgraded;
+----
+103	103	103
+
+# The first commit after the upgrade does not count the upgraded rows in next-row-id, so do not check it here (see PR #1515)
+
+statement ok
+DROP TABLE my_datalake.default.update_row_id_upgraded;
+
+# K. One UPDATE touches rows from two files that the transaction inserted
+
+statement ok
+drop table if exists my_datalake.default.update_row_id_two_inserts;
+
+statement ok
+create table my_datalake.default.update_row_id_two_inserts (id int, data varchar) WITH ('format-version' = 3);
+
+statement ok
+insert into my_datalake.default.update_row_id_two_inserts select range + 1000, 'seed' from range(100);
+
+statement ok
+begin
+
+statement ok
+insert into my_datalake.default.update_row_id_two_inserts values (1, 'a'), (2, 'b'), (3, 'c');
+
+statement ok
+insert into my_datalake.default.update_row_id_two_inserts values (4, 'd'), (5, 'e'), (6, 'f');
+
+statement ok
+update my_datalake.default.update_row_id_two_inserts set data = 'k' where id in (2, 5);
+
+statement ok
+commit
+
+statement ok
+SET VARIABLE files = (SELECT list(file_path) FROM iceberg_metadata('my_datalake.default.update_row_id_two_inserts') WHERE content = 'DATA');
+
+query II
+SELECT id, _row_id FROM read_parquet(getvariable('files'), union_by_name = true) WHERE data = 'k' ORDER BY id;
+----
+2	NULL
+5	NULL
+
+query II
+SELECT _row_id, id FROM my_datalake.default.update_row_id_two_inserts WHERE id < 1000 AND data <> 'k' ORDER BY id;
+----
+100	1
+102	3
+103	4
+105	6
+
+# The two updated rows come from two files. Their order in the UPDATE file depends on the scan.
+
+query I
+SELECT list(_row_id ORDER BY _row_id) FROM my_datalake.default.update_row_id_two_inserts WHERE data = 'k';
+----
+[106, 107]
+
+query IIIII
+SELECT count(*), count(DISTINCT _row_id), min(_row_id), max(_row_id), sum(_row_id) FROM my_datalake.default.update_row_id_two_inserts;
+----
+106	106	0	107	5573
+
+query I
+SELECT metadata."next-row-id" FROM iceberg_load_table_response(my_datalake.default.update_row_id_two_inserts);
+----
+108
+
+query I
+SELECT (SELECT metadata."next-row-id" FROM iceberg_load_table_response(my_datalake.default.update_row_id_two_inserts))
+	= (SELECT max(_row_id) FROM my_datalake.default.update_row_id_two_inserts) + 1;
+----
+true
+
+statement ok
+DROP TABLE my_datalake.default.update_row_id_two_inserts;
+
+# L. Insert and update 5000 rows in one transaction. Counter before is 100. The INSERT file takes 100-5099 and the UPDATE file takes 5100-10099.
+
+statement ok
+drop table if exists my_datalake.default.update_row_id_large;
+
+statement ok
+create table my_datalake.default.update_row_id_large (id int, data varchar) WITH ('format-version' = 3);
+
+statement ok
+insert into my_datalake.default.update_row_id_large select range + 1000, 'seed' from range(100);
+
+statement ok
+SET VARIABLE c0 = (SELECT metadata."next-row-id" FROM iceberg_load_table_response(my_datalake.default.update_row_id_large));
+
+statement ok
+begin
+
+statement ok
+insert into my_datalake.default.update_row_id_large select range::int, 'r' from range(5000);
+
+statement ok
+update my_datalake.default.update_row_id_large set data = 'l' where data = 'r';
+
+statement ok
+commit
+
+query III
+SELECT count(*), count(DISTINCT _row_id), count(_row_id) FROM my_datalake.default.update_row_id_large WHERE data = 'l';
+----
+5000	5000	5000
+
+query II
+SELECT min(_row_id) - getvariable('c0'), max(_row_id) - getvariable('c0') FROM my_datalake.default.update_row_id_large WHERE data = 'l';
+----
+5000	9999
+
+query IIII
+SELECT count(*), count(DISTINCT _row_id), min(_row_id), max(_row_id) FROM my_datalake.default.update_row_id_large;
+----
+5100	5100	0	10099
+
+query I
+SELECT (SELECT metadata."next-row-id" FROM iceberg_load_table_response(my_datalake.default.update_row_id_large))
+	= (SELECT max(_row_id) FROM my_datalake.default.update_row_id_large) + 1;
+----
+true
+
+statement ok
+DROP TABLE my_datalake.default.update_row_id_large;
+
+# M. Rollback leaves the table and next-row-id unchanged
+
+statement ok
+drop table if exists my_datalake.default.update_row_id_rollback;
+
+statement ok
+create table my_datalake.default.update_row_id_rollback (id int, data varchar) WITH ('format-version' = 3);
+
+statement ok
+insert into my_datalake.default.update_row_id_rollback select range + 1000, 'seed' from range(100);
+
+statement ok
+insert into my_datalake.default.update_row_id_rollback values (1, 'a');
+
+statement ok
+SET VARIABLE next_row_id_before = (SELECT metadata."next-row-id" FROM iceberg_load_table_response(my_datalake.default.update_row_id_rollback));
+
+statement ok
+begin
+
+statement ok
+insert into my_datalake.default.update_row_id_rollback values (2, 'b');
+
+statement ok
+update my_datalake.default.update_row_id_rollback set data = 'y' where id = 2;
+
+statement ok
+rollback
+
+query III
+SELECT _row_id, id, data FROM my_datalake.default.update_row_id_rollback WHERE id < 1000 ORDER BY id;
+----
+100	1	a
+
+query I
+SELECT metadata."next-row-id" = getvariable('next_row_id_before') FROM iceberg_load_table_response(my_datalake.default.update_row_id_rollback);
+----
+true
+
+query I
+SELECT metadata."next-row-id" FROM iceberg_load_table_response(my_datalake.default.update_row_id_rollback);
+----
+101
+
+query I
+SELECT (SELECT metadata."next-row-id" FROM iceberg_load_table_response(my_datalake.default.update_row_id_rollback))
+	= (SELECT max(_row_id) FROM my_datalake.default.update_row_id_rollback) + 1;
+----
+true
+
+statement ok
+DROP TABLE my_datalake.default.update_row_id_rollback;
+
+# N. Inside a transaction, uncommitted rows show a NULL _row_id and committed rows keep their _row_id
+
+statement ok
+drop table if exists my_datalake.default.update_row_id_inside_txn;
+
+statement ok
+create table my_datalake.default.update_row_id_inside_txn (id int, data varchar) WITH ('format-version' = 3);
+
+statement ok
+insert into my_datalake.default.update_row_id_inside_txn select range + 1000, 'seed' from range(100);
+
+statement ok
+insert into my_datalake.default.update_row_id_inside_txn values (1, 'a'), (2, 'b');
+
+statement ok
+begin
+
+statement ok
+insert into my_datalake.default.update_row_id_inside_txn values (3, 'c');
+
+statement ok
+update my_datalake.default.update_row_id_inside_txn set data = 'y' where id = 3;
+
+statement ok
+insert into my_datalake.default.update_row_id_inside_txn values (4, 'd');
+
+statement ok
+update my_datalake.default.update_row_id_inside_txn set data = 'n' where id = 2;
+
+query III
+SELECT _row_id, id, data FROM my_datalake.default.update_row_id_inside_txn WHERE id < 1000 ORDER BY id;
+----
+100	1	a
+101	2	n
+NULL	3	y
+NULL	4	d
+
+query IIII
+SELECT count(*), count(_row_id), min(_row_id), max(_row_id) FROM my_datalake.default.update_row_id_inside_txn WHERE id >= 1000;
+----
+100	100	0	99
+
+statement ok
+commit
+
+query II
+SELECT _row_id, id FROM my_datalake.default.update_row_id_inside_txn WHERE id < 1000 ORDER BY id;
+----
+100	1
+101	2
+103	3
+104	4
+
+query IIIII
+SELECT count(*), count(DISTINCT _row_id), min(_row_id), max(_row_id), sum(_row_id) FROM my_datalake.default.update_row_id_inside_txn;
+----
+104	104	0	104	5358
+
+# The last UPDATE file takes row id 105, but its row keeps _row_id 101
+
+query I
+SELECT metadata."next-row-id" FROM iceberg_load_table_response(my_datalake.default.update_row_id_inside_txn);
+----
+106
+
+statement ok
+DROP TABLE my_datalake.default.update_row_id_inside_txn;
+
+# Q. INSERT 5, DELETE 2, UPDATE 2 in one transaction. The commit writes delete manifests.
+
+# next-row-id must count only the rows of data manifests, else other engines reuse row ids.
+
+statement ok
+drop table if exists my_datalake.default.update_row_id_delete_manifest;
+
+statement ok
+create table my_datalake.default.update_row_id_delete_manifest (id int, data varchar) WITH ('format-version' = 3);
+
+statement ok
+insert into my_datalake.default.update_row_id_delete_manifest select range + 1000, 'seed' from range(100);
+
+statement ok
+begin
+
+statement ok
+insert into my_datalake.default.update_row_id_delete_manifest values (1, 'a'), (2, 'b'), (3, 'c'), (4, 'd'), (5, 'e');
+
+statement ok
+delete from my_datalake.default.update_row_id_delete_manifest where id in (1, 2);
+
+statement ok
+update my_datalake.default.update_row_id_delete_manifest set data = 'q' where id in (3, 4);
+
+statement ok
+commit
+
+query III
+SELECT _row_id, id, data FROM my_datalake.default.update_row_id_delete_manifest WHERE id < 1000 ORDER BY id;
+----
+105	3	q
+106	4	q
+104	5	e
+
+query IIIII
+SELECT count(*), count(DISTINCT _row_id), min(_row_id), max(_row_id), sum(_row_id) FROM my_datalake.default.update_row_id_delete_manifest;
+----
+103	103	0	106	5265
+
+query I
+SELECT metadata."next-row-id" FROM iceberg_load_table_response(my_datalake.default.update_row_id_delete_manifest);
+----
+107
+
+query I
+SELECT (SELECT metadata."next-row-id" FROM iceberg_load_table_response(my_datalake.default.update_row_id_delete_manifest))
+	= (SELECT max(_row_id) FROM my_datalake.default.update_row_id_delete_manifest) + 1;
+----
+true
+
+statement ok
+DROP TABLE my_datalake.default.update_row_id_delete_manifest;
+
+# R. Table upgraded from format version 2 to 3. An UPDATE of an old row after the first write of the transaction writes a NULL _row_id.
+
+statement ok
+drop table if exists my_datalake.default.update_row_id_upgraded_second;
+
+statement ok
+create table my_datalake.default.update_row_id_upgraded_second (id int, data varchar) WITH ('format-version' = 2);
+
+statement ok
+insert into my_datalake.default.update_row_id_upgraded_second select range + 1000, 'seed' from range(100);
+
+statement ok
+insert into my_datalake.default.update_row_id_upgraded_second values (1, 'a'), (2, 'b');
+
+statement ok
+ALTER TABLE my_datalake.default.update_row_id_upgraded_second SET ('format-version' = 3);
+
+statement ok
+begin
+
+statement ok
+insert into my_datalake.default.update_row_id_upgraded_second values (3, 'c');
+
+statement ok
+update my_datalake.default.update_row_id_upgraded_second set data = 'b1' where id = 2;
+
+query II
+SELECT id, _row_id FROM my_datalake.default.update_row_id_upgraded_second WHERE id = 2;
+----
+2	NULL
+
+query II
+SELECT count(*), count(_row_id) FROM my_datalake.default.update_row_id_upgraded_second;
+----
+103	0
+
+statement ok
+commit
+
+statement ok
+SET VARIABLE files = (SELECT list(file_path) FROM iceberg_metadata('my_datalake.default.update_row_id_upgraded_second') WHERE content = 'DATA');
+
+query II
+SELECT id, _row_id FROM read_parquet(getvariable('files'), union_by_name = true) WHERE data = 'b1';
+----
+2	NULL
+
+query II
+SELECT id, data FROM my_datalake.default.update_row_id_upgraded_second WHERE id < 1000 ORDER BY id;
+----
+1	a
+2	b1
+3	c
+
+query III
+SELECT count(*), count(_row_id), count(DISTINCT _row_id) FROM my_datalake.default.update_row_id_upgraded_second;
+----
+103	103	103
+
+statement ok
+DROP TABLE my_datalake.default.update_row_id_upgraded_second;

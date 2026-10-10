@@ -557,14 +557,9 @@ PhysicalOperator &IcebergCatalog::PlanDeleteOperation(ClientContext &context, Ph
 	}
 
 	vector<idx_t> row_id_indexes;
-	// we only push 2 columns for positional deletes
-	idx_t column_offset = 0;
-	if (iceberg_version >= 3) {
-		//! The row ids of the table contain the _row_id column, which we're not interested in
-		column_offset = 1;
-	}
+	//! Positional deletes use only the first 2 row-id columns (file name, file row number), not _row_id
 	for (idx_t i = 0; i < 2; i++) {
-		auto &bound_ref = op.expressions[column_offset + i]->Cast<BoundReferenceExpression>();
+		auto &bound_ref = op.expressions[i]->Cast<BoundReferenceExpression>();
 		row_id_indexes.push_back(bound_ref.Index());
 	}
 

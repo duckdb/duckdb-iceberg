@@ -27,8 +27,7 @@ UPDATE my_datalake.default.update_then_insert_v3_row_lineage SET val = 11 WHERE 
 statement ok
 INSERT INTO my_datalake.default.update_then_insert_v3_row_lineage VALUES (3, 30);
 
-# The updated row keeps its identity. Its new data file reserves one row ID,
-# while the delete manifest reserves none: the insert inherits row ID 4.
+# The updated row keeps its identity. The inserted row has no row ID until the commit.
 query IIII
 SELECT id, val, _row_id, _last_updated_sequence_number
 FROM my_datalake.default.update_then_insert_v3_row_lineage ORDER BY id;
@@ -36,7 +35,7 @@ FROM my_datalake.default.update_then_insert_v3_row_lineage ORDER BY id;
 0	0	0	1
 1	11	1	2
 2	20	2	1
-3	30	4	3
+3	30	NULL	3
 
 statement ok
 COMMIT;
@@ -88,7 +87,7 @@ query III
 SELECT id, _row_id, _last_updated_sequence_number
 FROM my_datalake.default.update_then_insert_v3_row_lineage WHERE id = 4;
 ----
-4	5	4
+4	NULL	4
 
 statement ok
 COMMIT;
