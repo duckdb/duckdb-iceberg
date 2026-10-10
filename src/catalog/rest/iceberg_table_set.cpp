@@ -249,6 +249,10 @@ void IcebergTableSet::DropEntry(ClientContext &context, DropInfo &info, bool del
 		entries.erase(entry);
 		return;
 	}
+	if (entry->second->type != info.type) {
+		throw CatalogException("Existing object %s is of type %s, trying to drop type %s", table_name,
+		                       CatalogTypeToString(entry->second->type), CatalogTypeToString(info.type));
+	}
 
 	// Add the table to the transaction's deleted tables.
 	auto &transaction = IcebergTransaction::Get(context, catalog).Cast<IcebergTransaction>();
