@@ -103,21 +103,6 @@ AWSInput SIGV4Authorization::CreateAWSInput(ClientContext &context, const IRCEnd
 	return aws_input;
 }
 
-namespace {
-
-//! Test hook mirroring OAuth2Authorization::IsTokenExpiredUnlocked, so a test can observe a
-//! refresh without waiting out the interval.
-bool ForceExpiry(ClientContext &context) {
-	Value force_expiry_val;
-	if (context.TryGetCurrentSetting("iceberg_test_force_token_expiry", force_expiry_val)) {
-		return !force_expiry_val.IsNull() && force_expiry_val.type().id() == LogicalTypeId::BOOLEAN &&
-		       force_expiry_val.GetValue<bool>();
-	}
-	return false;
-}
-
-} // namespace
-
 void SIGV4Authorization::MaybeRefreshSecret(ClientContext &context) {
 	if (!refresh_mutex.try_lock()) {
 		// Another thread is already refreshing, proceed with the current credentials
@@ -125,7 +110,7 @@ void SIGV4Authorization::MaybeRefreshSecret(ClientContext &context) {
 	}
 	annotated_lock_guard<annotated_mutex> guard(refresh_mutex, std::adopt_lock);
 
-	if (!ForceExpiry(context)) {
+	if (!IcebergAuthorization::ForceTokenExpiry(context)) {
 		auto elapsed =
 		    std::chrono::duration_cast<std::chrono::seconds>(std::chrono::steady_clock::now() - last_refresh_time)
 		        .count();
@@ -135,41 +120,13 @@ void SIGV4Authorization::MaybeRefreshSecret(ClientContext &context) {
 	}
 
 	auto secret_entry = IcebergCatalog::GetStorageSecret(context, secret);
-	const auto &kv_secret = dynamic_cast<const KeyValueSecret &>(*secret_entry->secret);
-	Value refresh_info;
-	if (!kv_secret.TryGetValue("refresh_info", refresh_info)) {
-		// Static credentials, nothing to refresh
-		last_refresh_time = std::chrono::steady_clock::now();
-		return;
-	}
-
-	// refresh_info holds the named parameters the secret was created with (stored by the aws
-	// extension when refresh='auto'). Replaying them re-runs the credential chain provider,
-	// which fetches a fresh token.
-	CreateSecretInput refresh_input;
-	refresh_input.on_conflict = OnCreateConflict::REPLACE_ON_CONFLICT;
-	refresh_input.persist_type = SecretPersistType::TEMPORARY;
-	refresh_input.type = kv_secret.GetType();
-	refresh_input.name = kv_secret.GetName();
-	refresh_input.provider = kv_secret.GetProvider();
-	refresh_input.storage_type = Identifier(secret_entry->storage_mode);
-	refresh_input.scope = kv_secret.GetScope();
-
-	auto child_count = StructType::GetChildCount(refresh_info.type());
-	auto children = StructValue::GetChildren(refresh_info);
-	for (idx_t i = 0; i < child_count; i++) {
-		auto &key = StructType::GetChildName(refresh_info.type(), i);
-		refresh_input.options[key.GetIdentifierName()] = children[i];
-	}
-
 	try {
-		auto &secret_manager = context.db->GetSecretManager();
-		(void)secret_manager.CreateSecret(context, refresh_input);
+		// Static credentials (no refresh_info) have nothing to refresh
+		(void)IcebergAuthorization::ReplaySecretRefresh(context, *secret_entry);
 		last_refresh_time = std::chrono::steady_clock::now();
 	} catch (std::exception &ex) {
 		// Leave last_refresh_time alone so the next call retries with the same credentials.
-		DUCKDB_LOG_DEBUG(context, "Iceberg SigV4 secret '%s' was not updated, refresh failed: %s",
-		                 refresh_input.name.GetIdentifierName(), ex.what());
+		DUCKDB_LOG_DEBUG(context, "Iceberg SigV4 secret '%s' was not updated, refresh failed: %s", secret, ex.what());
 	}
 }
 

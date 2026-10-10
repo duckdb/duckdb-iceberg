@@ -150,6 +150,7 @@ unique_ptr<SecretEntry> IcebergTableSecretProvider::GetHTTPSecretForCatalog(Clie
 		return LookupHTTPSecretForCatalog(context, catalog);
 	}
 	case IcebergAuthorizationType::OAUTH2:
+	case IcebergAuthorizationType::AZURE:
 		return LookupHTTPSecretForCatalog(context, catalog);
 	default:
 		return nullptr;
