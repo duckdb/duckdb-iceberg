@@ -66,3 +66,14 @@ install(
   EXPORT "${DUCKDB_EXPORT_SET}"
   LIBRARY DESTINATION "${INSTALL_LIB_DIR}"
   ARCHIVE DESTINATION "${INSTALL_LIB_DIR}")
+
+# Test-only table loader; its tests need it linked together with iceberg. Linked
+# into unittest alone, the way DuckDB links debug_fs. DuckDB decides what it
+# links only after adding every extension, so ask it here
+duckdb_resolve_static_link(ICEBERG_LINKED_CAPABILITIES
+                           ICEBERG_LINKED_EXTENSIONS)
+if(BUILD_UNITTESTS
+   AND NOT CLANG_TIDY
+   AND "iceberg" IN_LIST ICEBERG_LINKED_EXTENSIONS)
+  add_subdirectory(test/extension/iceberg_test_table_loader)
+endif()

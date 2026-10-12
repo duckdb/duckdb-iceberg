@@ -131,6 +131,13 @@ class MockCatalogHandler(BaseHTTPRequestHandler):
             return
         if self.path.startswith("/v1/config"):
             self._respond(200, {"defaults": {}, "overrides": {}})
+        elif path.endswith("/namespaces"):
+            # One namespace with one table, so listings have something to list
+            self._respond(200, {"namespaces": [["governed_db"]]})
+        elif path.endswith("/namespaces/governed_db/tables"):
+            self._respond(200, {"identifiers": [{"namespace": ["governed_db"], "name": "governed_table"}]})
+        elif path.endswith("/tables"):
+            self._respond(200, {"identifiers": []})
         elif "/namespaces" in self.path:
             self._respond(200, {"namespaces": []})
         else:

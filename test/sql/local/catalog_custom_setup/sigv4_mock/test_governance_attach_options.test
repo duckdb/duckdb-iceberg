@@ -1,0 +1,69 @@
+# name: test/sql/local/catalog_custom_setup/sigv4_mock/test_governance_attach_options.test
+# description: test the ATTACH options of the governed lookup mode
+# group: [sigv4_mock]
+
+# Requires: python3 scripts/sigv4_mock_server.py 19130
+require-env SIGV4_MOCK_SERVER_AVAILABLE
+
+include test/sql/init_requires
+
+require aws
+
+statement ok
+CREATE SECRET sigv4_secret (
+    TYPE S3,
+    KEY_ID 'test_key_id',
+    SECRET 'test_secret_key',
+    REGION 'us-east-1'
+);
+
+# Only Glue tables can be governed
+statement error
+ATTACH 'test_warehouse' AS governance_rest (
+    TYPE ICEBERG,
+    URI 'http://127.0.0.1:19130',
+    GOVERNANCE true
+);
+----
+GOVERNANCE requires ENDPOINT_TYPE 'glue'
+
+statement ok
+ATTACH ':' AS governance_glue (
+    TYPE ICEBERG,
+    ENDPOINT_TYPE 'GLUE',
+    URI 'http://127.0.0.1:19130',
+    SECRET 'sigv4_secret',
+    GOVERNANCE true
+);
+
+# A lookup needs a registered loader
+statement error
+SELECT * FROM governance_glue.governed_db.lookup_table;
+----
+Catalog 'governance_glue' is attached with GOVERNANCE true, but no extension registered a GovernedIcebergTableLoader
+
+# The loader vends the table credentials itself
+statement error
+ATTACH ':' AS governance_vended (
+    TYPE ICEBERG,
+    ENDPOINT_TYPE 'GLUE',
+    URI 'http://127.0.0.1:19130',
+    SECRET 'sigv4_secret',
+    ACCESS_DELEGATION_MODE 'vended_credentials',
+    GOVERNANCE true
+);
+----
+GOVERNANCE requires ACCESS_DELEGATION_MODE 'none'
+
+# Each transaction loads a governed table again
+statement error
+ATTACH ':' AS governance_staleness (
+    TYPE ICEBERG,
+    ENDPOINT_TYPE 'GLUE',
+    URI 'http://127.0.0.1:19130',
+    SECRET 'sigv4_secret',
+    MAX_TABLE_STALENESS '1 minute',
+    GOVERNANCE true
+);
+----
+GOVERNANCE does not support MAX_TABLE_STALENESS
