@@ -53,6 +53,8 @@ struct IcebergAttachOptions {
 	unordered_map<string, Value> options;
 	// max staleness for cached table metadata in minutes (optional - if not set, always request fresh metadata)
 	optional_idx max_table_staleness_micros;
+	// load tables through an extension's GovernedIcebergTableLoader instead of the REST LoadTable
+	bool governance = false;
 };
 
 unordered_map<string, Value> NormalizeIcebergAttachOptions(const unordered_map<string, Value> &options);
