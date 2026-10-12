@@ -174,6 +174,12 @@ public:
 	case_insensitive_map_t<string> table_properties;
 
 	vector<IcebergMetadataLogItem> metadata_log;
+	//! The metadata file this metadata was read from (the catalog's 'metadata-location'), empty when unknown.
+	//! Not part of the metadata JSON itself, so FromTableMetadata leaves it to the caller.
+	string metadata_location;
+	//! Paths of the table statistics and partition statistics (Puffin) files, kept so a purge can delete them.
+	vector<string> statistics_files;
+	vector<string> partition_statistics_files;
 
 public:
 	explicit IcebergTableMetadata(IcebergTableMetadataSchemas schemas);

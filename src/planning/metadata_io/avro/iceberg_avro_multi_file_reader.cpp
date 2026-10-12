@@ -8,6 +8,7 @@
 #include "duckdb/function/cast/bound_cast_data.hpp"
 #include "duckdb/common/vector/map_vector.hpp"
 #include "duckdb/common/vector/struct_vector.hpp"
+#include "duckdb/common/vector/vector_iterator.hpp"
 #include "duckdb/main/database.hpp"
 #include "duckdb/parser/tableref/table_function_ref.hpp"
 
@@ -263,6 +264,24 @@ static vector<MultiFileColumnDefinition> BuildManifestListSchema(const IcebergTa
 
 namespace manifest_file {
 
+//! Purge needs only the required path from every manifest row. Keeping this projection independent of table metadata
+//! is correctness-critical: buildReplacement can preserve old snapshots while reusing a partition source field ID
+//! with an incompatible type in the new schema.
+static vector<MultiFileColumnDefinition> BuildManifestFilePathSchema() {
+	child_list_t<LogicalType> data_file_children;
+	data_file_children.emplace_back("file_path", LogicalType::VARCHAR);
+	MultiFileColumnDefinition data_file("data_file", LogicalType::STRUCT(data_file_children));
+	data_file.identifier = Value::INTEGER(DATA_FILE);
+
+	MultiFileColumnDefinition file_path("file_path", LogicalType::VARCHAR);
+	file_path.identifier = Value::INTEGER(FILE_PATH);
+	data_file.children.push_back(std::move(file_path));
+
+	vector<MultiFileColumnDefinition> schema;
+	schema.push_back(std::move(data_file));
+	return schema;
+}
+
 static MultiFileColumnDefinition CreateManifestPartitionColumn(const map<idx_t, LogicalType> partition_field_id_to_type,
                                                                const LogicalType &partition_type) {
 	MultiFileColumnDefinition partition("partition", partition_type);
@@ -516,7 +535,6 @@ bool IcebergAvroMultiFileReader::Bind(MultiFileOptions &options, MultiFileList &
 	auto &scan_info = *iceberg_avro_list.info;
 	auto &type = scan_info.type;
 	auto &metadata = scan_info.metadata;
-	auto &snapshot = *scan_info.snapshot_info.snapshot;
 
 	// Build the expected schema with field IDs
 	vector<MultiFileColumnDefinition> schema;
@@ -524,8 +542,13 @@ bool IcebergAvroMultiFileReader::Bind(MultiFileOptions &options, MultiFileList &
 		schema = manifest_list::BuildManifestListSchema(metadata);
 	} else {
 		auto &manifest_file_scan = scan_info.Cast<IcebergManifestFileScanInfo>();
-		auto &partition_field_id_to_type = manifest_file_scan.partition_field_id_to_type;
-		schema = manifest_file::BuildManifestSchema(snapshot, metadata, partition_field_id_to_type);
+		if (manifest_file_scan.FilePathsOnly()) {
+			schema = manifest_file::BuildManifestFilePathSchema();
+		} else {
+			auto &snapshot = *scan_info.snapshot_info.snapshot;
+			auto &partition_field_id_to_type = manifest_file_scan.partition_field_id_to_type;
+			schema = manifest_file::BuildManifestSchema(snapshot, metadata, partition_field_id_to_type);
+		}
 	}
 
 	// Populate return_types and names from schema
@@ -600,6 +623,12 @@ ReaderInitializeType IcebergAvroMultiFileReader::InitializeReader(
 		auto &avro_scan_info = get_function_info->Cast<IcebergAvroScanInfo>();
 		if (avro_scan_info.type == AvroScanInfoType::MANIFEST_FILE) {
 			auto &manifest_scan_info = avro_scan_info.Cast<IcebergManifestFileScanInfo>();
+			if (manifest_scan_info.FilePathsOnly()) {
+				//! The projected file path is self-describing in the Avro writer schema. Do not parse manifest metadata
+				//! or resolve partition specs: neither is needed to collect it, and replacement can make them
+				//! incompatible.
+				return result;
+			}
 			auto file_idx = manifest_scan_info.GetManifestIndex(reader_data.reader->file_list_idx.GetIndex());
 			lock_guard<mutex> manifest_guard(manifest_scan_info.GetManifestLock(file_idx));
 			auto &manifest_list_entry = manifest_scan_info.manifest_files[file_idx];
@@ -650,6 +679,37 @@ void IcebergAvroMultiFileReader::FinalizeChunk(ClientContext &context, const Mul
 		auto &manifest_scan_info = scan_info->Cast<IcebergManifestFileScanInfo>();
 		auto manifest_file_idx = manifest_scan_info.GetManifestIndex(reader.file_list_idx.GetIndex());
 		auto &manifest_file = manifest_scan_info.manifest_files[manifest_file_idx];
+
+		if (manifest_scan_info.FilePathsOnly()) {
+			if (output_chunk.ColumnCount() != 1 || output_chunk.data[0].GetType().id() != LogicalTypeId::STRUCT) {
+				throw InternalException("The manifest file-path scan did not produce its projected data_file struct");
+			}
+			auto &data_file_vector = output_chunk.data[0];
+			auto &data_file_children = StructVector::GetEntries(data_file_vector);
+			if (data_file_children.size() != 1) {
+				throw InternalException("The manifest file-path scan did not produce only data_file.file_path");
+			}
+			//! Read the vectors the way ManifestReader::ReadChunk does: the iterators handle the vector type (flat,
+			//! constant, dictionary) and a path is copied once, into its final string.
+			auto data_file_validity = data_file_vector.Validity();
+			auto file_path_entries = data_file_children[0].Values<string_t>();
+			vector<string> chunk_paths;
+			chunk_paths.reserve(output_chunk.size());
+			for (idx_t row = 0; row < output_chunk.size(); row++) {
+				auto file_path = file_path_entries[row];
+				if (!data_file_validity.IsValid(row) || !file_path.IsValid() || file_path.GetValueUnsafe().Empty()) {
+					throw InvalidConfigurationException("Manifest file '%s' has a NULL or empty required field "
+					                                    "'data_file.file_path'",
+					                                    manifest_file.GetFile().manifest_path);
+				}
+				chunk_paths.push_back(file_path.GetValueUnsafe().GetString());
+			}
+			lock_guard<mutex> result_guard(manifest_scan_info.file_paths_lock);
+			for (auto &path : chunk_paths) {
+				manifest_scan_info.file_paths->push_back(std::move(path));
+			}
+			break;
+		}
 
 		//! InitializeReader publishes this immutable value under the per-manifest lock
 		//! before this reader can produce chunks.

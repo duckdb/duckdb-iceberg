@@ -149,7 +149,23 @@ class Catalog:
         self.namespace(key[0])
         if key not in self.tables:
             raise CatalogError(404, "NoSuchTableException", f"Table does not exist: {key[1]}")
-        return copy.deepcopy(self.tables[key])
+        table = copy.deepcopy(self.tables[key])
+        # The REST spec does not order "snapshots". A table created with the test-only property
+        # 'mock.snapshots-order' = 'newest-first' is served with the list reversed, so a test can check
+        # that the client does not depend on the order (the metadata file on disk keeps commit order).
+        if table["metadata"].get("properties", {}).get("mock.snapshots-order") == "newest-first":
+            table["metadata"]["snapshots"] = list(reversed(table["metadata"]["snapshots"]))
+        return table
+
+    def load_table_response(self, key):
+        # GET /tables/{t} only. A table with the test-only property 'mock.load-table-status' = '<code>' fails
+        # this request with that HTTP status while commits and DELETE keep working, so a test can check what
+        # a client does with a table it knows but can no longer load from the catalog.
+        table = self.load(key)
+        status = table["metadata"].get("properties", {}).get("mock.load-table-status")
+        if status is not None:
+            raise CatalogError(int(status), "MockLoadTableFailure", f"mock.load-table-status is {status}")
+        return table
 
     def rename(self, body):
         source, destination = table_identifier(body["source"]), table_identifier(body["destination"])
@@ -218,6 +234,41 @@ class Catalog:
     def publish(self, key, metadata):
         return copy.deepcopy(self.publish_many({key: metadata})[key])
 
+    def apply_test_hooks(self, metadata):
+        replacement = metadata.get("properties", {}).pop("mock.replace-bigint-partition-with-integer", None)
+        if replacement is None:
+            return
+        if replacement != "true":
+            invalid("mock.replace-bigint-partition-with-integer must be 'true'")
+
+        # Model TableMetadata.buildReplacement(): retain historical schemas/specs/snapshots and their IDs, reuse the
+        # source field ID by name in an incompatible replacement schema, and remove the main branch/current snapshot.
+        # Normal schema evolution forbids this narrowing; replacement deliberately does not.
+        current_schema = next(
+            schema for schema in metadata["schemas"] if schema["schema-id"] == metadata["current-schema-id"]
+        )
+        field = next((field for field in current_schema["fields"] if field["name"] == "a"), None)
+        if field is None or field["type"] != "long":
+            invalid("mock replacement requires a top-level BIGINT field named 'a'")
+        if not any(
+            partition_field["source-id"] == field["id"] and partition_field["transform"] == "identity"
+            for spec in metadata["partition-specs"]
+            for partition_field in spec["fields"]
+        ):
+            invalid("mock replacement requires an identity partition on 'a'")
+
+        source_field_id = field["id"]
+        replacement_schema = copy.deepcopy(current_schema)
+        replacement_schema["schema-id"] = max(schema["schema-id"] for schema in metadata["schemas"]) + 1
+        replacement_field = next(
+            field for field in replacement_schema["fields"] if field["id"] == source_field_id
+        )
+        replacement_field["type"] = "int"
+        metadata["schemas"].append(replacement_schema)
+        metadata["current-schema-id"] = replacement_schema["schema-id"]
+        metadata.pop("current-snapshot-id", None)
+        metadata.get("refs", {}).pop("main", None)
+
     def validate_metadata(self, metadata):
         for schema in metadata["schemas"]:
             validate_type(schema, metadata["format-version"])
@@ -259,6 +310,7 @@ class Catalog:
         # The HTTP adapter holds the catalog lock through validation and publication.
         # A later validation or file-write failure must not publish earlier tables.
         for metadata in candidates.values():
+            self.apply_test_hooks(metadata)
             self.validate_metadata(metadata)
         timestamp = time.time_ns() // 1_000_000
         results = {key: self.write_metadata(key, metadata, timestamp) for key, metadata in candidates.items()}

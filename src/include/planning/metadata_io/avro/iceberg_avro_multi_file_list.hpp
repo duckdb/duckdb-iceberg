@@ -69,11 +69,15 @@ public:
 	IcebergManifestFileScanInfo(const IcebergTableMetadata &metadata, const IcebergSnapshotScanInfo &snapshot_info,
 	                            vector<IcebergManifestListEntry> &manifest_files, const IcebergOptions &options,
 	                            FileSystem &fs, const string &iceberg_pat,
-	                            optional_ptr<ManifestEntryReadState> read_state, vector<idx_t> manifest_indexes);
+	                            optional_ptr<ManifestEntryReadState> read_state, vector<idx_t> manifest_indexes,
+	                            optional_ptr<vector<string>> file_paths = nullptr);
 	virtual ~IcebergManifestFileScanInfo();
 
 	idx_t GetManifestIndex(idx_t scan_index) const;
 	mutex &GetManifestLock(idx_t manifest_index);
+	bool FilePathsOnly() const {
+		return file_paths;
+	}
 
 public:
 	vector<IcebergManifestListEntry> &manifest_files;
@@ -86,9 +90,13 @@ public:
 	const IcebergOptions &options;
 	FileSystem &fs;
 	string iceberg_path;
-	//! partition_field_id -> semantic column type (e.g. INTEGER for DAY)
+	//! partition_field_id -> semantic column type (e.g. INTEGER for DAY); empty in FILE_PATHS mode.
 	map<idx_t, LogicalType> partition_field_id_to_type;
 	optional_ptr<ManifestEntryReadState> read_state;
+	//! FILE_PATHS mode appends every required data_file.file_path here. The scan can produce chunks from several
+	//! manifests concurrently, so the result has its own lock rather than using a per-manifest lock.
+	optional_ptr<vector<string>> file_paths;
+	mutex file_paths_lock;
 };
 
 class IcebergAvroMultiFileList : public SimpleMultiFileList {

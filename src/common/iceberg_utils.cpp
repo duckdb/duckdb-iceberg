@@ -40,6 +40,17 @@ timestamp_ms_t IcebergUtils::GetTransactionStartTimeMS(ClientContext &context) {
 	return timestamp_ms_t(Timestamp::GetEpochMs(transaction_start));
 }
 
+bool IcebergUtils::MustPropagate(const ErrorData &error) {
+	switch (error.Type()) {
+	case ExceptionType::INTERRUPT:
+	case ExceptionType::FATAL:
+	case ExceptionType::OUT_OF_MEMORY:
+		return true;
+	default:
+		return false;
+	}
+}
+
 idx_t IcebergUtils::ParseByteSizeOptionallyFormatted(const string &input) {
 	idx_t result;
 	auto error = StringUtil::TryParseFormattedBytes(input, result);
@@ -259,7 +270,9 @@ IcebergResolvedMetadata IcebergUtils::ResolveTableMetadata(ClientContext &contex
 	auto caching_fs = make_shared_ptr<CachingFileSystemWrapper>(fs, *context.db);
 	auto metadata_path = IcebergTableMetadata::GetMetaDataPath(context, table_location, fs, options);
 	auto table_metadata = IcebergTableMetadata::Parse(metadata_path, *caching_fs, options.metadata_compression_codec);
-	return IcebergResolvedMetadata(std::move(table_location), IcebergTableMetadata::FromTableMetadata(table_metadata));
+	auto result = IcebergTableMetadata::FromTableMetadata(table_metadata);
+	result.metadata_location = metadata_path;
+	return IcebergResolvedMetadata(std::move(table_location), std::move(result));
 }
 
 // Function to decompress a gz file content string

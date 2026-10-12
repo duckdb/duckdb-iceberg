@@ -1,0 +1,817 @@
+# name: test/sql/local/catalog_custom_setup/mock/drop_table_purge_mode.test
+# description: PURGE_MODE decides what happens to a dropped table's files
+# group: [mock]
+
+# The mock catalog, like the AWS Glue Iceberg REST endpoint for Glue tables, only unregisters a table and rejects
+# purgeRequested=true, so its files can only be deleted by the client.
+
+require-env CATALOG_TEST_CONFIG_SETUP mock
+
+include test/sql/init_requires
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+# Inspect the purgeRequested query parameter in logged DELETE requests.
+statement ok
+SET redact_http_logs=false
+
+# The mock keeps its warehouse on the local filesystem, so the files of a table can be listed with glob().
+# A table's root is derived from its manifest list: <root>/metadata/snap-<id>-<uuid>.avro
+
+#===--------------------------------------------------------------------===#
+# PURGE_MODE 'client': the catalog unregisters the table, DuckDB deletes its files
+#===--------------------------------------------------------------------===#
+
+statement ok
+ATTACH '' AS purge_client (
+    TYPE ICEBERG,
+    URI 'http://127.0.0.1:19134',
+    AUTHORIZATION_TYPE 'none',
+    ACCESS_DELEGATION_MODE 'none',
+    STAGE_CREATE_TABLES true,
+    PURGE_MODE 'client'
+);
+
+statement ok
+CREATE TABLE purge_client.default.purge_me (a INTEGER, b VARCHAR) WITH ('write.delete.mode' = 'merge-on-read');
+
+# Three snapshots: two appends share the manifest of the first one, and the delete adds a delete file
+statement ok
+INSERT INTO purge_client.default.purge_me SELECT range, 'first' FROM range(10);
+
+statement ok
+INSERT INTO purge_client.default.purge_me SELECT range, 'second' FROM range(10, 20);
+
+statement ok
+DELETE FROM purge_client.default.purge_me WHERE a < 5;
+
+query I
+SELECT count(*) FROM purge_client.default.purge_me;
+----
+15
+
+query I
+SELECT count(*) FROM iceberg_snapshots('purge_client.default.purge_me');
+----
+3
+
+statement ok
+SET VARIABLE purge_me_root = (
+    SELECT regexp_replace(manifest_list, '/metadata/[^/]*$', '')
+    FROM iceberg_snapshots('purge_client.default.purge_me')
+    LIMIT 1
+);
+
+# Before the drop: two data files and one delete file, a manifest per commit, a manifest list per snapshot, and a
+# metadata file per commit (the create included)
+query I
+SELECT count(*) FROM glob(getvariable('purge_me_root') || '/data/**/*.parquet');
+----
+3
+
+query I
+SELECT count(*) FROM glob(getvariable('purge_me_root') || '/metadata/*-m*.avro');
+----
+3
+
+query I
+SELECT count(*) FROM glob(getvariable('purge_me_root') || '/metadata/snap-*.avro');
+----
+3
+
+query I
+SELECT count(*) FROM glob(getvariable('purge_me_root') || '/metadata/*.metadata.json');
+----
+4
+
+# A file in the metadata directory that the metadata does not reference, like a manifest of a commit that never
+# landed. The purge deletes what the metadata references, like Iceberg's CatalogUtil.dropTableData, so it stays.
+statement ok
+COPY (SELECT 'orphan' AS v) TO (getvariable('purge_me_root') || '/metadata/unreferenced.txt') (FORMAT csv);
+
+query I
+SELECT count(*) FROM glob(getvariable('purge_me_root') || '/metadata/unreferenced.txt');
+----
+1
+
+statement ok
+CALL enable_logging('HTTP');
+
+statement ok
+CALL truncate_duckdb_logs();
+
+statement ok
+DROP TABLE purge_client.default.purge_me;
+
+# The catalog was not asked to purge
+query I
+SELECT request.url FROM duckdb_logs_parsed('HTTP') WHERE request.type = 'DELETE';
+----
+http://127.0.0.1:19134/v1/namespaces/default/tables/purge_me?purgeRequested=false
+
+statement ok
+CALL disable_logging();
+
+query I
+SELECT count(*) FROM (SHOW TABLES FROM purge_client.default) WHERE name = 'purge_me';
+----
+0
+
+# Every file the table metadata referenced is gone
+query I
+SELECT count(*) FROM glob(getvariable('purge_me_root') || '/**/*.parquet');
+----
+0
+
+query I
+SELECT count(*) FROM glob(getvariable('purge_me_root') || '/**/*.avro');
+----
+0
+
+query I
+SELECT count(*) FROM glob(getvariable('purge_me_root') || '/**/*.json');
+----
+0
+
+# The unreferenced file is not the purge's to delete
+query I
+SELECT count(*) FROM glob(getvariable('purge_me_root') || '/**/*');
+----
+1
+
+# A table without snapshots only has its metadata file to delete
+statement ok
+CREATE TABLE purge_client.default.purge_empty (a INTEGER);
+
+statement ok
+SET VARIABLE purge_empty_metadata = (
+    SELECT metadata_location FROM iceberg_load_table_response(purge_client.default.purge_empty)
+);
+
+query I
+SELECT count(*) FROM glob(getvariable('purge_empty_metadata'));
+----
+1
+
+statement ok
+DROP TABLE purge_client.default.purge_empty;
+
+query I
+SELECT count(*) FROM (SHOW TABLES FROM purge_client.default) WHERE name = 'purge_empty';
+----
+0
+
+query I
+SELECT count(*) FROM glob(getvariable('purge_empty_metadata'));
+----
+0
+
+#===--------------------------------------------------------------------===#
+# PURGE_MODE 'client' with 'gc.enabled' = false: the data files may belong to another table and are kept,
+# the metadata is still this table's and is deleted (Iceberg's CatalogUtil.dropTableData)
+#===--------------------------------------------------------------------===#
+
+statement ok
+CREATE TABLE purge_client.default.keep_data (a INTEGER) WITH ('gc.enabled' = 'false');
+
+statement ok
+INSERT INTO purge_client.default.keep_data SELECT range FROM range(10);
+
+statement ok
+SET VARIABLE keep_data_root = (
+    SELECT regexp_replace(manifest_list, '/metadata/[^/]*$', '')
+    FROM iceberg_snapshots('purge_client.default.keep_data')
+    LIMIT 1
+);
+
+query I
+SELECT count(*) FROM glob(getvariable('keep_data_root') || '/data/**/*.parquet');
+----
+1
+
+statement ok
+DROP TABLE purge_client.default.keep_data;
+
+query I
+SELECT count(*) FROM glob(getvariable('keep_data_root') || '/data/**/*.parquet');
+----
+1
+
+query I
+SELECT count(*) FROM glob(getvariable('keep_data_root') || '/metadata/*');
+----
+0
+
+#===--------------------------------------------------------------------===#
+# A partition source column promoted between commits: the manifests written after the promotion carry partition
+# values the old type cannot hold. The REST spec does not order 'snapshots'; the mock serves this table newest-first.
+# The purge must be independent of both the arbitrary snapshot order and the partition types, because it projects only
+# data_file.file_path.
+#===--------------------------------------------------------------------===#
+
+statement ok
+CREATE TABLE purge_client.default.promoted (a INTEGER) PARTITIONED BY (a) WITH ('mock.snapshots-order' = 'newest-first');
+
+statement ok
+INSERT INTO purge_client.default.promoted VALUES (1);
+
+statement ok
+ALTER TABLE purge_client.default.promoted ALTER COLUMN a TYPE BIGINT;
+
+statement ok
+INSERT INTO purge_client.default.promoted VALUES (2147483648);
+
+query I
+SELECT count(*) FROM purge_client.default.promoted;
+----
+2
+
+statement ok
+SET VARIABLE promoted_root = (
+    SELECT regexp_replace(manifest_list, '/metadata/[^/]*$', '')
+    FROM iceberg_snapshots('purge_client.default.promoted')
+    LIMIT 1
+);
+
+query I
+SELECT count(*) FROM glob(getvariable('promoted_root') || '/data/**/*.parquet');
+----
+2
+
+statement ok
+DROP TABLE purge_client.default.promoted;
+
+query I
+SELECT count(*) FROM glob(getvariable('promoted_root') || '/**/*');
+----
+0
+
+#===--------------------------------------------------------------------===#
+# Table replacement is not normal schema evolution and may reuse a field ID with an incompatible type while keeping
+# old snapshots. Start with an identity-partitioned BIGINT containing a value outside INTEGER, then have the mock
+# persist the metadata shape produced by Iceberg's buildReplacement(): current a is INTEGER with the same field ID,
+# the old BIGINT snapshot remains, and main/current-snapshot is removed. Add a new INTEGER snapshot too, so purge has
+# to collect paths from manifests on both sides of the replacement without decoding either partition value.
+#===--------------------------------------------------------------------===#
+
+statement ok
+CREATE TABLE purge_client.default.replaced (a BIGINT) PARTITIONED BY (a);
+
+statement ok
+INSERT INTO purge_client.default.replaced VALUES (2147483648);
+
+statement ok
+CALL set_iceberg_table_properties(
+    purge_client.default.replaced,
+    {'mock.replace-bigint-partition-with-integer': 'true'}
+);
+
+# The replacement schema reuses field ID 1, but narrows its type from long to int
+query IIIII
+SELECT metadata."current-schema-id",
+       metadata."schemas"[1]."fields"[1]."id",
+       metadata."schemas"[1]."fields"[1]."type",
+       metadata."schemas"[2]."fields"[1]."id",
+       metadata."schemas"[2]."fields"[1]."type"
+FROM iceberg_load_table_response(purge_client.default.replaced);
+----
+1	1	long	1	int
+
+query I
+SELECT metadata."current-snapshot-id" IS NULL
+FROM iceberg_load_table_response(purge_client.default.replaced);
+----
+true
+
+# buildReplacement retains the old snapshot but removes the main ref, so the replacement starts empty
+query I
+SELECT count(*) FROM purge_client.default.replaced;
+----
+0
+
+statement ok
+INSERT INTO purge_client.default.replaced VALUES (1);
+
+query I
+SELECT count(*) FROM purge_client.default.replaced;
+----
+1
+
+query I
+SELECT count(*) FROM iceberg_snapshots('purge_client.default.replaced');
+----
+2
+
+statement ok
+SET VARIABLE replaced_root = (
+    SELECT regexp_replace(manifest_list, '/metadata/[^/]*$', '')
+    FROM iceberg_snapshots('purge_client.default.replaced')
+    LIMIT 1
+);
+
+query I
+SELECT count(*) FROM glob(getvariable('replaced_root') || '/data/**/*.parquet');
+----
+2
+
+statement ok
+DROP TABLE purge_client.default.replaced;
+
+query I
+SELECT count(*) FROM glob(getvariable('replaced_root') || '/**/*');
+----
+0
+
+#===--------------------------------------------------------------------===#
+# The same replacement dropped before anything is written to it: the old BIGINT snapshot is retained, but there is no
+# current snapshot. Purge still walks that snapshot's manifest and deletes the data file it names.
+#===--------------------------------------------------------------------===#
+
+statement ok
+CREATE TABLE purge_client.default.replaced_at_once (a BIGINT) PARTITIONED BY (a);
+
+statement ok
+INSERT INTO purge_client.default.replaced_at_once VALUES (2147483648);
+
+statement ok
+SET VARIABLE replaced_at_once_root = (
+    SELECT regexp_replace(manifest_list, '/metadata/[^/]*$', '')
+    FROM iceberg_snapshots('purge_client.default.replaced_at_once')
+    LIMIT 1
+);
+
+statement ok
+CALL set_iceberg_table_properties(
+    purge_client.default.replaced_at_once,
+    {'mock.replace-bigint-partition-with-integer': 'true'}
+);
+
+query I
+SELECT metadata."current-snapshot-id" IS NULL
+FROM iceberg_load_table_response(purge_client.default.replaced_at_once);
+----
+true
+
+# The old snapshot is retained
+query I
+SELECT count(*) FROM iceberg_snapshots('purge_client.default.replaced_at_once');
+----
+1
+
+query I
+SELECT count(*) FROM glob(getvariable('replaced_at_once_root') || '/data/**/*.parquet');
+----
+1
+
+statement ok
+DROP TABLE purge_client.default.replaced_at_once;
+
+query I
+SELECT count(*) FROM glob(getvariable('replaced_at_once_root') || '/**/*');
+----
+0
+
+#===--------------------------------------------------------------------===#
+# Metadata that cannot be read, handled like Iceberg's GlueCatalog.dropTable + CatalogUtil.dropTableData:
+#   - a manifest cannot be read: logged, the data files it names stay behind, everything else is deleted
+#   - a manifest list cannot be read: logged, its manifests and their data files stay behind, the rest is deleted
+#   - the catalog cannot serve the table's metadata: nothing is dropped or deleted. The REST catalog reads the
+#     metadata file, so a table it cannot serve cannot be bound by any statement; DROP TABLE reports what the catalog
+#     reported (a 404 is "does not exist", which IF EXISTS accepts) and the catalog is never asked to drop it.
+#===--------------------------------------------------------------------===#
+
+statement ok
+CALL enable_logging(level='info');
+
+# --- a manifest cannot be read ---
+
+# Two commits, so the table has a readable manifest next to the one that gets destroyed
+statement ok
+CREATE TABLE purge_client.default.unreadable AS SELECT range a FROM range(10);
+
+statement ok
+INSERT INTO purge_client.default.unreadable VALUES (10);
+
+statement ok
+SET VARIABLE unreadable_root = (
+    SELECT regexp_replace(manifest_list, '/metadata/[^/]*$', '')
+    FROM iceberg_snapshots('purge_client.default.unreadable')
+    LIMIT 1
+);
+
+query I
+SELECT count(*) FROM glob(getvariable('unreadable_root') || '/data/**/*.parquet');
+----
+2
+
+# Overwrite the manifest of the first commit (not the manifest list) with something that is not Avro
+statement ok
+SET VARIABLE unreadable_manifest = (
+    SELECT file FROM glob(getvariable('unreadable_root') || '/metadata/*-m*.avro') ORDER BY file LIMIT 1
+);
+
+statement ok
+COPY (SELECT 'garbage' AS g) TO (getvariable('unreadable_manifest')) (FORMAT csv);
+
+statement ok
+CALL truncate_duckdb_logs();
+
+statement ok
+DROP TABLE purge_client.default.unreadable;
+
+query I
+SELECT count(*) FROM (SHOW TABLES FROM purge_client.default) WHERE name = 'unreadable';
+----
+0
+
+query I
+SELECT count(*) FROM duckdb_logs()
+WHERE type = '' AND log_level = 'WARNING'
+AND message LIKE 'Purge of Iceberg table "purge_client"."default"."unreadable", a manifest cannot be read, the data files it names may be left behind [%]: %';
+----
+1
+
+# The data file of the unreadable manifest is the only thing left: the manifest itself, the other commit's data file
+# and manifest, both manifest lists and all metadata files are gone
+query I
+SELECT count(*) FROM glob(getvariable('unreadable_root') || '/**/*');
+----
+1
+
+query I
+SELECT count(*) FROM glob(getvariable('unreadable_root') || '/data/**/*.parquet');
+----
+1
+
+# --- a manifest list cannot be read ---
+
+statement ok
+CREATE TABLE purge_client.default.unreadable_list AS SELECT range a FROM range(10);
+
+statement ok
+INSERT INTO purge_client.default.unreadable_list VALUES (10);
+
+statement ok
+SET VARIABLE unreadable_list_root = (
+    SELECT regexp_replace(manifest_list, '/metadata/[^/]*$', '')
+    FROM iceberg_snapshots('purge_client.default.unreadable_list')
+    LIMIT 1
+);
+
+# Destroy the manifest list of the second commit; it names both manifests, the first commit's manifest list names one
+statement ok
+SET VARIABLE unreadable_manifest_list = (
+    SELECT manifest_list FROM iceberg_snapshots('purge_client.default.unreadable_list')
+    ORDER BY sequence_number DESC LIMIT 1
+);
+
+statement ok
+COPY (SELECT 'garbage' AS g) TO (getvariable('unreadable_manifest_list')) (FORMAT csv);
+
+statement ok
+CALL truncate_duckdb_logs();
+
+statement ok
+DROP TABLE purge_client.default.unreadable_list;
+
+query I
+SELECT count(*) FROM (SHOW TABLES FROM purge_client.default) WHERE name = 'unreadable_list';
+----
+0
+
+query I
+SELECT count(*) FROM duckdb_logs()
+WHERE type = '' AND log_level = 'WARNING'
+AND message LIKE 'Purge of Iceberg table "purge_client"."default"."unreadable_list", the manifest list of snapshot % cannot be read, the manifests it names and their data files may be left behind [%]: %';
+----
+1
+
+# The first commit's manifest list still named its manifest, so that manifest and its data file were deleted along
+# with both manifest lists and all metadata files; the second commit's manifest and data file are left behind
+query II
+SELECT count(*) FILTER (WHERE file LIKE '%/data/%'), count(*) FILTER (WHERE file LIKE '%/metadata/%')
+FROM glob(getvariable('unreadable_list_root') || '/**/*');
+----
+1	1
+
+# --- the catalog cannot serve the table's metadata ---
+
+# These tables can no longer be addressed once the mock stops serving them, so they live in their own namespace
+statement ok
+CREATE SCHEMA purge_client.unservable;
+
+statement ok
+CREATE TABLE purge_client.unservable.load_fails AS SELECT range a FROM range(10);
+
+statement ok
+CREATE TABLE purge_client.unservable.not_found AS SELECT range a FROM range(10);
+
+statement ok
+SET VARIABLE load_fails_root = (
+    SELECT regexp_replace(manifest_list, '/metadata/[^/]*$', '')
+    FROM iceberg_snapshots('purge_client.unservable.load_fails')
+    LIMIT 1
+);
+
+statement ok
+SET VARIABLE not_found_root = (
+    SELECT regexp_replace(manifest_list, '/metadata/[^/]*$', '')
+    FROM iceberg_snapshots('purge_client.unservable.not_found')
+    LIMIT 1
+);
+
+# From here on LoadTable fails for these tables (503 and 404) while DELETE would keep working
+statement ok
+CALL set_iceberg_table_properties(purge_client.unservable.load_fails, {'mock.load-table-status': '503'});
+
+statement ok
+CALL set_iceberg_table_properties(purge_client.unservable.not_found, {'mock.load-table-status': '404'});
+
+statement ok
+SET VARIABLE load_fails_files = (SELECT count(*) FROM glob(getvariable('load_fails_root') || '/**/*'));
+
+statement ok
+SET VARIABLE not_found_files = (SELECT count(*) FROM glob(getvariable('not_found_root') || '/**/*'));
+
+statement ok
+CALL enable_logging('HTTP');
+
+statement ok
+CALL truncate_duckdb_logs();
+
+statement error
+DROP TABLE purge_client.unservable.load_fails;
+----
+<REGEX>:.*HTTP 503.*
+
+statement error
+DROP TABLE IF EXISTS purge_client.unservable.load_fails;
+----
+<REGEX>:.*HTTP 503.*
+
+statement error
+DROP TABLE purge_client.unservable.not_found;
+----
+<REGEX>:.*does not exist.*
+
+statement ok
+DROP TABLE IF EXISTS purge_client.unservable.not_found;
+
+# No DELETE reached the catalog
+query I
+SELECT count(*) FROM duckdb_logs_parsed('HTTP') WHERE request.type = 'DELETE';
+----
+0
+
+statement ok
+CALL disable_logging();
+
+# The files of both tables are untouched
+query II
+SELECT count(*) = getvariable('load_fails_files'), count(*) FILTER (WHERE file LIKE '%/data/%')
+FROM glob(getvariable('load_fails_root') || '/**/*');
+----
+true	1
+
+query II
+SELECT count(*) = getvariable('not_found_files'), count(*) FILTER (WHERE file LIKE '%/data/%')
+FROM glob(getvariable('not_found_root') || '/**/*');
+----
+true	1
+
+# --- the catalog stops serving the table between the DROP and its commit ---
+
+# The DROP binds and loads the table; the purge loads it again at commit time, and that load fails
+statement ok
+CREATE TABLE purge_client.unservable.vanishes AS SELECT range a FROM range(10);
+
+statement ok
+SET VARIABLE vanishes_root = (
+    SELECT regexp_replace(manifest_list, '/metadata/[^/]*$', '')
+    FROM iceberg_snapshots('purge_client.unservable.vanishes')
+    LIMIT 1
+);
+
+statement ok con1
+BEGIN;
+
+statement ok con1
+DROP TABLE purge_client.unservable.vanishes;
+
+statement ok
+CALL set_iceberg_table_properties(purge_client.unservable.vanishes, {'mock.load-table-status': '503'});
+
+statement ok
+SET VARIABLE vanishes_files = (SELECT count(*) FROM glob(getvariable('vanishes_root') || '/**/*'));
+
+statement ok
+CALL enable_logging('HTTP');
+
+statement ok
+CALL truncate_duckdb_logs();
+
+statement error con1
+COMMIT;
+----
+<REGEX>:.*"vanishes" was not dropped: the client-side purge \(PURGE_MODE 'client'\) could not load its current metadata and storage credentials.*503.*
+
+# No DELETE reached the catalog
+query I
+SELECT count(*) FROM duckdb_logs_parsed('HTTP') WHERE request.type = 'DELETE';
+----
+0
+
+statement ok
+CALL disable_logging();
+
+query I
+SELECT count(*) FROM (SHOW TABLES FROM purge_client.unservable) WHERE name = 'vanishes';
+----
+1
+
+query II
+SELECT count(*) = getvariable('vanishes_files'), count(*) FILTER (WHERE file LIKE '%/data/%')
+FROM glob(getvariable('vanishes_root') || '/**/*');
+----
+true	1
+
+#===--------------------------------------------------------------------===#
+# PURGE_MODE 'none' (the REST default): the table is unregistered and its files stay
+#===--------------------------------------------------------------------===#
+
+statement ok
+ATTACH '' AS purge_none (
+    TYPE ICEBERG,
+    URI 'http://127.0.0.1:19134',
+    AUTHORIZATION_TYPE 'none',
+    ACCESS_DELEGATION_MODE 'none',
+    STAGE_CREATE_TABLES true,
+    PURGE_MODE 'none'
+);
+
+statement ok
+CREATE TABLE purge_none.default.leave_me (a INTEGER);
+
+statement ok
+INSERT INTO purge_none.default.leave_me SELECT range FROM range(10);
+
+statement ok
+SET VARIABLE leave_me_root = (
+    SELECT regexp_replace(manifest_list, '/metadata/[^/]*$', '')
+    FROM iceberg_snapshots('purge_none.default.leave_me')
+    LIMIT 1
+);
+
+statement ok
+CALL enable_logging('HTTP');
+
+statement ok
+CALL truncate_duckdb_logs();
+
+statement ok
+DROP TABLE purge_none.default.leave_me;
+
+query I
+SELECT request.url FROM duckdb_logs_parsed('HTTP') WHERE request.type = 'DELETE';
+----
+http://127.0.0.1:19134/v1/namespaces/default/tables/leave_me?purgeRequested=false
+
+statement ok
+CALL disable_logging();
+
+query I
+SELECT count(*) FROM glob(getvariable('leave_me_root') || '/data/**/*.parquet');
+----
+1
+
+# One metadata file for the create, one for the insert
+query I
+SELECT count(*) FROM glob(getvariable('leave_me_root') || '/metadata/*.metadata.json');
+----
+2
+
+#===--------------------------------------------------------------------===#
+# PURGE_MODE 'server': the catalog is asked to purge; this one refuses, so nothing is dropped or deleted
+#===--------------------------------------------------------------------===#
+
+statement ok
+ATTACH '' AS purge_server (
+    TYPE ICEBERG,
+    URI 'http://127.0.0.1:19134',
+    AUTHORIZATION_TYPE 'none',
+    ACCESS_DELEGATION_MODE 'none',
+    STAGE_CREATE_TABLES true,
+    PURGE_MODE 'server'
+);
+
+statement ok
+CREATE TABLE purge_server.default.refuse_me (a INTEGER);
+
+statement ok
+INSERT INTO purge_server.default.refuse_me SELECT range FROM range(10);
+
+statement ok
+SET VARIABLE refuse_me_root = (
+    SELECT regexp_replace(manifest_list, '/metadata/[^/]*$', '')
+    FROM iceberg_snapshots('purge_server.default.refuse_me')
+    LIMIT 1
+);
+
+statement error
+DROP TABLE purge_server.default.refuse_me;
+----
+<REGEX>:.*purgeRequested=true.*Purge is not implemented.*
+
+query I
+SELECT count(*) FROM purge_server.default.refuse_me;
+----
+10
+
+query I
+SELECT count(*) FROM glob(getvariable('refuse_me_root') || '/data/**/*.parquet');
+----
+1
+
+# Clean up through a client-side purge
+statement ok
+DROP TABLE purge_client.default.refuse_me;
+
+query I
+SELECT count(*) FROM glob(getvariable('refuse_me_root') || '/**/*.parquet');
+----
+0
+
+#===--------------------------------------------------------------------===#
+# Option validation
+#===--------------------------------------------------------------------===#
+
+statement error
+ATTACH '' AS bad_purge_mode (
+    TYPE ICEBERG,
+    URI 'http://127.0.0.1:19134',
+    AUTHORIZATION_TYPE 'none',
+    PURGE_MODE 'sometimes'
+);
+----
+<REGEX>:.*Unrecognized 'purge_mode' \(sometimes\), accepted options are: none, server, client.*
+
+# The deprecated boolean still works, but not together with the mode it maps onto
+statement error
+ATTACH '' AS both_purge_options (
+    TYPE ICEBERG,
+    URI 'http://127.0.0.1:19134',
+    AUTHORIZATION_TYPE 'none',
+    PURGE_MODE 'client',
+    PURGE_REQUESTED false
+);
+----
+<REGEX>:.*Both 'purge_mode' and deprecated 'purge_requested' were provided.*
+
+# A client-side purge deletes files, which 'remove_files_on_delete' false forbids
+statement error
+ATTACH '' AS contradicting_purge (
+    TYPE ICEBERG,
+    URI 'http://127.0.0.1:19134',
+    AUTHORIZATION_TYPE 'none',
+    PURGE_MODE 'client',
+    REMOVE_FILES_ON_DELETE false
+);
+----
+<REGEX>:.*'purge_mode' 'client' deletes a dropped table's files, which 'remove_files_on_delete' false forbids.*
+
+statement ok
+ATTACH '' AS legacy_purge_requested (
+    TYPE ICEBERG,
+    URI 'http://127.0.0.1:19134',
+    AUTHORIZATION_TYPE 'none',
+    ACCESS_DELEGATION_MODE 'none',
+    STAGE_CREATE_TABLES true,
+    PURGE_REQUESTED true
+);
+
+statement ok
+CREATE TABLE legacy_purge_requested.default.legacy (a INTEGER);
+
+statement ok
+CALL enable_logging('HTTP');
+
+statement ok
+CALL truncate_duckdb_logs();
+
+# PURGE_REQUESTED true is PURGE_MODE 'server'
+statement error
+DROP TABLE legacy_purge_requested.default.legacy;
+----
+<REGEX>:.*purgeRequested=true.*
+
+query I
+SELECT request.url FROM duckdb_logs_parsed('HTTP') WHERE request.type = 'DELETE';
+----
+http://127.0.0.1:19134/v1/namespaces/default/tables/legacy?purgeRequested=true
+
+statement ok
+CALL disable_logging();
+
+statement ok
+DROP TABLE purge_client.default.legacy;

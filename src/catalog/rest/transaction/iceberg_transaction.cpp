@@ -36,7 +36,10 @@
 #include "planning/metadata_io/avro/avro_scan.hpp"
 #include "iceberg_logging.hpp"
 #include "catalog/rest/api/table_update.hpp"
+#include "catalog/rest/transaction/iceberg_table_purge.hpp"
 #include "catalog/rest/transaction/iceberg_transaction_update.hpp"
+#include "common/iceberg_file_cleanup.hpp"
+#include "common/iceberg_utils.hpp"
 #include "rest_catalog/objects/list.hpp"
 
 namespace duckdb {
@@ -404,22 +407,8 @@ const IcebergTransactionAlterUpdate *IcebergTransaction::GetAlterUpdate() const 
 
 namespace {
 
-void RemoveFilesBestEffort(ClientContext &context, FileSystem &fs, const vector<string> &paths,
-                           const char *description) {
-	if (paths.empty()) {
-		return;
-	}
-	try {
-		fs.RemoveFiles(paths);
-		DUCKDB_LOG(context, IcebergLogType, "Iceberg Transaction Cleanup, deleted %llu %s(s)",
-		           static_cast<uint64_t>(paths.size()), description);
-	} catch (std::exception &ex) {
-		//! A bulk delete reports one error for the whole batch, so some of these files may well have been removed.
-		DUCKDB_LOG(context, IcebergLogType,
-		           "Iceberg Transaction Cleanup, failed to delete one or more of %llu %s(s): %s",
-		           static_cast<uint64_t>(paths.size()), description, ex.what());
-	}
-}
+//! The operation the cleanup of a failed transaction's files is logged under.
+constexpr const char *TRANSACTION_CLEANUP = "Iceberg Transaction Cleanup";
 
 } // namespace
 
@@ -436,7 +425,7 @@ void IcebergTransaction::CleanupMetadataFiles(ClientContext &context, const vect
 			unique_paths.push_back(path);
 		}
 	}
-	RemoveFilesBestEffort(context, fs, unique_paths, "metadata file");
+	IcebergFileCleanup::RemoveFilesBestEffort(context, fs, unique_paths, "metadata file", TRANSACTION_CLEANUP);
 }
 
 void IcebergTransaction::RefreshRetryTables(IcebergTransactionAlterUpdate &alter_update,
@@ -676,6 +665,37 @@ void IcebergTransaction::DoTableDeletes(IcebergTransactionDeleteUpdate &delete_u
 	auto &ic_catalog = catalog.Cast<IcebergCatalog>();
 	auto &table = delete_update.deleted_table.get();
 	auto &table_name = table.name;
+
+	//! With a client-side purge the catalog only unregisters the table, and the files are deleted here afterwards,
+	//! following Iceberg's GlueCatalog.dropTable: load the current metadata, drop the table from the catalog, then
+	//! delete the files that metadata references (CatalogUtil.dropTableData). The load is a fresh one, so it covers
+	//! every snapshot committed up to the drop rather than the state this transaction saw, and it happens before the
+	//! DELETE, while the catalog can still vend the table's storage credentials. A load that fails, fails the drop
+	//! before the catalog is asked anything, like GlueCatalog.dropTable on an error other than NotFound. GlueCatalog's
+	//! NotFound case, a catalog entry whose metadata file is gone, which it drops without a purge, has no client-side
+	//! counterpart here: a REST catalog serves the metadata itself, and a table it cannot serve cannot be bound by
+	//! any statement, so DROP TABLE reports it the way the catalog does (and IF EXISTS treats a 404 as absent).
+	//! Everything after the load is best effort: unreadable metadata and undeletable files are logged, never an error.
+	const bool purge = ic_catalog.attach_options.purge_mode == IcebergPurgeMode::CLIENT;
+	auto qualified_name = StringUtil::Format("%s.%s.%s", catalog.GetName(), table.schema.name, Identifier(table_name));
+	auto purge_operation = StringUtil::Format("Purge of Iceberg table %s", qualified_name);
+	IcebergTableFiles purge_files;
+	if (purge) {
+		try {
+			table.RefreshFromCatalog(context);
+			table.LoadCredentials(context);
+		} catch (std::exception &ex) {
+			ErrorData error(ex);
+			if (IcebergUtils::MustPropagate(error)) {
+				throw;
+			}
+			throw IOException("Iceberg table %s was not dropped: the client-side purge (PURGE_MODE 'client') could not "
+			                  "load its current metadata and storage credentials: %s",
+			                  qualified_name, error.RawMessage());
+		}
+		purge_files = IcebergTablePurge::CollectFiles(context, table.table_metadata, purge_operation);
+	}
+
 	IRCAPI::CommitTableDelete(context, catalog, table.schema.namespace_items, table_name);
 	// remove the load table result
 	ic_catalog.table_request_cache.EvictIfCurrent(table);
@@ -685,6 +705,10 @@ void IcebergTransaction::DoTableDeletes(IcebergTransactionDeleteUpdate &delete_u
 	drop_info.GetQualifiedNameMutable() = Identifier(table_name);
 	drop_info.if_not_found = OnEntryNotFound::RETURN_NULL;
 	table.schema.DropEntry(context, drop_info, true);
+
+	if (purge) {
+		IcebergTablePurge::DeleteFiles(context, purge_files, purge_operation);
+	}
 }
 
 void IcebergTransaction::DoSchemaCreates(ClientContext &context) {
@@ -921,7 +945,7 @@ void IcebergTransaction::CleanupFiles() {
 					}
 				}
 			}
-			RemoveFilesBestEffort(temp_context, fs, data_files, "data_file");
+			IcebergFileCleanup::RemoveFilesBestEffort(temp_context, fs, data_files, "data_file", TRANSACTION_CLEANUP);
 		}
 	}
 }

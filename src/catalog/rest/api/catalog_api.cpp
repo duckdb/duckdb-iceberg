@@ -517,8 +517,10 @@ void IRCAPI::CommitTableDelete(ClientContext &context, IcebergCatalog &catalog, 
 
 	url_builder.AddPathComponent(IRCPathComponent::RegularComponent("tables"));
 	url_builder.AddPathComponent(IRCPathComponent::RegularComponent(table));
-	url_builder.SetParam("purgeRequested", IRCPathComponent::RegularComponent(
-	                                           Value::BOOLEAN(catalog.attach_options.purge_requested).ToString()));
+	//! Only the server-side purge is the catalog's job; a client-side purge happens after this request succeeds.
+	auto purge_requested = catalog.attach_options.purge_mode == IcebergPurgeMode::SERVER;
+	url_builder.SetParam("purgeRequested",
+	                     IRCPathComponent::RegularComponent(Value::BOOLEAN(purge_requested).ToString()));
 
 	HTTPHeaders headers(*context.db);
 	auto response = catalog.auth_handler->Request(RequestType::DELETE_REQUEST, context, url_builder, headers);

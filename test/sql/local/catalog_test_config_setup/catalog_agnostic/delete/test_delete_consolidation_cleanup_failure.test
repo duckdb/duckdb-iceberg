@@ -19,6 +19,10 @@ set enable_logging=true
 statement ok
 set logging_level='debug'
 
+# The cleanup logs name the files and carry the storage error, both redacted by default.
+statement ok
+set redact_http_logs=false
+
 statement ok
 drop table if exists my_datalake.default.delete_consolidation_cleanup_failure;
 
@@ -92,11 +96,12 @@ select _last_updated_sequence_number, _row_id, id, data from my_datalake.default
 statement ok
 abort
 
-# The configured storage credentials deny removal of uncommitted files. Cleanup must report the failure.
+# The configured storage credentials deny removal of uncommitted files. Cleanup must warn about the failure, naming
+# the files that may have been left behind.
 query I
 select count(*) from duckdb_logs()
-where type = 'Iceberg'
-and message like 'Iceberg Transaction Cleanup, failed to delete one or more of 2 data_file(s):%'
+where type = '' and log_level = 'WARNING'
+and message like 'Iceberg Transaction Cleanup, failed to delete one or more of 2 data_file(s) [%]: %'
 and regexp_matches(message, 'AccessDenied|403 Forbidden');
 ----
 1

@@ -8,6 +8,7 @@
 
 #pragma once
 
+#include "duckdb/common/error_data.hpp"
 #include "duckdb/common/printer.hpp"
 #include "duckdb/common/file_system.hpp"
 #include "duckdb/catalog/catalog_entry/copy_function_catalog_entry.hpp"
@@ -48,6 +49,9 @@ public:
 	static int64_t AddFileSizeChecked(int64_t total, int64_t file_size_in_bytes);
 	static timestamp_ms_t GetTransactionStartTimeMS(ClientContext &context);
 	static bool IsIcebergCatalog(Catalog &catalog);
+	//! Whether an error caught by a best-effort step (one that logs failures instead of raising them) has to be
+	//! rethrown anyway: the statement was cancelled, the database is in a fatal state, or memory ran out.
+	static bool MustPropagate(const ErrorData &error);
 };
 
 } // namespace duckdb

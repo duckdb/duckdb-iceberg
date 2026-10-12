@@ -34,6 +34,14 @@ public:
 	                                         const IcebergTableMetadata &metadata, ClientContext &context,
 	                                         optional_ptr<ManifestEntryReadState> read_state = nullptr,
 	                                         vector<idx_t> manifest_indexes = {});
+	//! Scan every row of every manifest, but project only the required data_file.file_path. Unlike ScanManifest, this
+	//! never resolves or decodes partition values through a table schema, which is required for table replacement:
+	//! replacement may reuse a field ID with an incompatible type while preserving historical snapshots.
+	static unique_ptr<AvroScan> ScanManifestFilePaths(const IcebergSnapshotScanInfo &snapshot_info,
+	                                                  vector<IcebergManifestListEntry> &manifest_files,
+	                                                  const IcebergOptions &options, FileSystem &fs,
+	                                                  const string &iceberg_path, const IcebergTableMetadata &metadata,
+	                                                  ClientContext &context, vector<string> &file_paths);
 
 public:
 	void InitializeChunk(DataChunk &chunk) const;

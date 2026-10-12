@@ -88,7 +88,7 @@ class Handler(BaseHTTPRequestHandler):
             if len(parts) == 5 and parts[3] == "tables":
                 key = namespace, parts[4]
                 if method == "GET":
-                    return 200, catalog.load(key)
+                    return 200, catalog.load_table_response(key)
                 if method == "POST":
                     return 200, catalog.commit(key, body)
                 if method == "DELETE":

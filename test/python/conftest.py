@@ -47,7 +47,8 @@ def is_active_catalog(catalog: str) -> bool:
 
 
 def _requires_catalog_options(path: str) -> bool:
-    return "cloud" not in Path(path).parts
+    parts = Path(path).parts
+    return "cloud" not in parts and "standalone" not in parts
 
 
 def _selected_catalog_profile(config: pytest.Config):
