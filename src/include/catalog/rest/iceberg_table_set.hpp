@@ -17,12 +17,14 @@ struct DropInfo;
 class IcebergSchemaEntry;
 class IcebergTransaction;
 class LoadTableCachePublication;
+class GovernedIcebergTableLoader;
 
 class IcebergTableSet {
 public:
 	explicit IcebergTableSet(IcebergSchemaEntry &schema);
 
 public:
+	//! With a GovernedIcebergTableLoader registered, the entry it returned to bind
 	optional_ptr<CatalogEntry> GetEntry(ClientContext &context, const EntryLookupInfo &lookup);
 	void Scan(ClientContext &context, const std::function<void(CatalogEntry &)> &callback);
 	void ScanTables(ClientContext &context, const std::function<void(IcebergTable &)> &callback);
@@ -32,6 +34,11 @@ public:
 	                                    CreateTableInfo &info);
 
 private:
+	//! 'fill' loads a table the transaction has not seen, false if it does not exist
+	optional_ptr<CatalogEntry> GetEntry(ClientContext &context, const EntryLookupInfo &lookup,
+	                                    const std::function<bool(IcebergTable &)> &fill);
+	optional_ptr<CatalogEntry> GetGovernedEntry(ClientContext &context, const EntryLookupInfo &lookup,
+	                                            GovernedIcebergTableLoader &loader);
 	bool TryFillEntryFromCache(ClientContext &context, IcebergTable &table);
 	void ScanEagerEntries(ClientContext &context, const std::function<void(CatalogEntry &)> &callback)
 	    DUCKDB_REQUIRES(entry_lock);
