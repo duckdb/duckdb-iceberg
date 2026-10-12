@@ -4,6 +4,7 @@
 #include "duckdb/planner/expression/bound_comparison_expression.hpp"
 #include "duckdb/planner/expression/bound_constant_expression.hpp"
 #include "duckdb/planner/expression/bound_reference_expression.hpp"
+#include "duckdb/planner/expression/bound_cast_expression.hpp"
 #include "duckdb/planner/expression/bound_conjunction_expression.hpp"
 #include "duckdb/planner/expression/bound_function_expression.hpp"
 #include "duckdb/planner/expression/bound_operator_expression.hpp"
@@ -16,6 +17,7 @@
 #include "duckdb/planner/filter/expression_filter.hpp"
 #include "duckdb/planner/logical_operator_visitor.hpp"
 #include "duckdb/execution/expression_executor.hpp"
+#include "duckdb/main/client_context.hpp"
 #include "duckdb/storage/statistics/geometry_stats.hpp"
 
 namespace duckdb {
@@ -238,6 +240,14 @@ bool MatchVariantBounds(ClientContext &context, ExpressionType comparison_type, 
 	return MatchBoundsConstant(right_constant, comparison_type, transformed_stats, transform);
 }
 
+static bool PrefixRangePruningEnabled(ClientContext &context) {
+	Value enabled;
+	if (context.TryGetCurrentSetting("iceberg_prefix_range_file_pruning", enabled) && !enabled.IsNull()) {
+		return BooleanValue::Get(enabled);
+	}
+	return true;
+}
+
 static bool IsDirectReference(const Expression &expr) {
 	switch (expr.GetExpressionClass()) {
 	case ExpressionClass::BOUND_REF:
@@ -281,6 +291,82 @@ static bool IsVariantReference(const Expression &expr) {
 		current_expr = *func.GetChildren()[0];
 	}
 	return IsDirectReference(current_expr);
+}
+
+static bool IsOrderPreservingCastType(const LogicalType &type) {
+	return type.IsNumeric() || type.IsTemporal();
+}
+
+//! Whether the expression is a direct column reference, or a monotone cast chain over one
+static bool IsOrderPreservingFilterInput(const Expression &expr) {
+	reference<const Expression> current(expr);
+	while (BoundCastExpression::IsCast(current)) {
+		auto &cast_expr = current.get().Cast<BoundFunctionExpression>();
+		auto &child = BoundCastExpression::Child(cast_expr);
+		if (!IsOrderPreservingCastType(cast_expr.GetReturnType()) ||
+		    !IsOrderPreservingCastType(child.GetReturnType())) {
+			return false;
+		}
+		current = child;
+	}
+	return IsDirectReference(current);
+}
+
+//! A failed or NULL evaluation yields no value; the caller must not prune then.
+static optional<Value> EvaluateFilterInput(ClientContext &context, const Expression &input_expr, const Value &bound) {
+	if (IsDirectReference(input_expr)) {
+		return bound;
+	}
+	BoundExpressionReplacer replacer(bound);
+	auto input_copy = input_expr.Copy();
+	replacer.VisitExpression(&input_copy);
+	Value result;
+	if (!ExpressionExecutor::TryEvaluateScalar(context, *input_copy, result) || result.IsNull()) {
+		return optional<Value>();
+	}
+	return result;
+}
+
+//! LookupRange returns FILTER_ALWAYS_FALSE only when no build-side join key lies in [lower_bound, upper_bound].
+static bool MatchPrefixRangeFilter(ClientContext &context, const BoundFunctionExpression &func,
+                                   const IcebergPredicateStats &stats, const IcebergTransform &transform) {
+	if (transform.Type() != IcebergTransformType::IDENTITY) {
+		//! Non-identity transforms describe the transformed value, not the raw key domain the PRF was built over.
+		return true;
+	}
+	auto &data = func.BindInfo()->Cast<PrefixRangeFunctionData>();
+	if (!data.filter || !data.filter->IsInitialized()) {
+		return true;
+	}
+	if (!PrefixRangePruningEnabled(context)) {
+		return true;
+	}
+	if (!data.filters_null_values && stats.has_null) {
+		//! NULL rows pass this filter unexamined, and this entry may contain NULLs.
+		return true;
+	}
+	if (data.filters_null_values && !stats.has_not_null) {
+		//! Every key in this entry is NULL and the filter rejects NULLs, so no row can pass.
+		return false;
+	}
+	if (!stats.lower_bound || !stats.upper_bound || stats.BoundsAreNull()) {
+		return true;
+	}
+	if (func.GetChildren().size() != 1 || !IsOrderPreservingFilterInput(*func.GetChildren()[0])) {
+		return true;
+	}
+	auto &input_expr = *func.GetChildren()[0];
+	auto lower_input = EvaluateFilterInput(context, input_expr, *stats.lower_bound);
+	auto upper_input = EvaluateFilterInput(context, input_expr, *stats.upper_bound);
+	if (!lower_input || !upper_input) {
+		return true;
+	}
+	auto lower = lower_input->DefaultTryCastAs(data.key_type);
+	auto upper = upper_input->DefaultTryCastAs(data.key_type);
+	if (!lower || !upper || lower->IsNull() || upper->IsNull() || *lower > *upper) {
+		return true;
+	}
+	return data.filter->LookupRange(*lower, *upper) != FilterPropagateResult::FILTER_ALWAYS_FALSE;
 }
 
 static bool MatchBoundsExpression(ClientContext &context, const unique_ptr<Expression> &expr_p,
@@ -396,6 +482,9 @@ static bool MatchBoundsExpression(ClientContext &context, const unique_ptr<Expre
 			}
 			//! child filter wasn't populated (yet?) for some reason, just be conservative
 			return true;
+		}
+		if (func.Function().GetName() == PrefixRangeScalarFun::NAME && func.BindInfo()) {
+			return MatchPrefixRangeFilter(context, func, stats, transform);
 		}
 		return true;
 	}
