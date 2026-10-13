@@ -282,6 +282,8 @@ unique_ptr<Catalog> IcebergAttach::Attach(optional_ptr<StorageExtensionInfo> sto
 				throw ConversionException("Could not get interval information from %s", interval_option.ToString());
 			}
 			attach_options.max_table_staleness_micros = interval_in_micros;
+		} else if (lower_name == "governance") {
+			attach_options.governance = argument.DefaultCastAs(LogicalType::BOOLEAN).GetValue<bool>();
 		} else {
 			attach_options.options.emplace(std::move(entry));
 		}
@@ -332,6 +334,20 @@ unique_ptr<Catalog> IcebergAttach::Attach(optional_ptr<StorageExtensionInfo> sto
 	}
 	if (attach_options.authorization_type == IcebergAuthorizationType::INVALID) {
 		attach_options.authorization_type = IcebergAuthorizationType::OAUTH2;
+	}
+	if (attach_options.governance) {
+		if (endpoint_type != IcebergEndpointType::AWS_GLUE) {
+			throw InvalidConfigurationException("GOVERNANCE requires ENDPOINT_TYPE 'glue'");
+		}
+		// The loader vends the table credentials, not the REST catalog
+		if (!access_mode_string.empty() && attach_options.access_mode != IRCAccessDelegationMode::NONE) {
+			throw InvalidConfigurationException("GOVERNANCE requires ACCESS_DELEGATION_MODE 'none'");
+		}
+		attach_options.access_mode = IRCAccessDelegationMode::NONE;
+		// Each transaction loads a governed table again, never from table_request_cache
+		if (attach_options.max_table_staleness_micros.IsValid()) {
+			throw InvalidConfigurationException("GOVERNANCE does not support MAX_TABLE_STALENESS");
+		}
 	}
 
 	//! Finally, create the auth_handler class from the authorization_type and the remaining options
