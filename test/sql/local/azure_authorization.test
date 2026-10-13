@@ -1,0 +1,37 @@
+# name: test/sql/local/azure_authorization.test
+# description: AUTHORIZATION_TYPE 'azure' validates its secret at ATTACH
+# group: [local]
+
+include test/sql/init_requires
+
+statement error
+ATTACH 'warehouse' AS my_datalake (
+	TYPE ICEBERG,
+	URI 'http://127.0.0.1:1',
+	AUTHORIZATION_TYPE 'azure'
+)
+----
+Invalid Configuration Error: AUTHORIZATION_TYPE 'azure' requires a 'secret' of type 'azure'
+
+statement error
+ATTACH 'warehouse' AS my_datalake (
+	TYPE ICEBERG,
+	URI 'http://127.0.0.1:1',
+	AUTHORIZATION_TYPE 'azure',
+	SECRET 'does_not_exist'
+)
+----
+Invalid Configuration Error: No secret by the name of 'does_not_exist' could be found
+
+statement ok
+CREATE SECRET not_azure (TYPE ICEBERG, TOKEN 'abc');
+
+statement error
+ATTACH 'warehouse' AS my_datalake (
+	TYPE ICEBERG,
+	URI 'http://127.0.0.1:1',
+	AUTHORIZATION_TYPE 'azure',
+	SECRET 'not_azure'
+)
+----
+Invalid Configuration Error: Secret 'not_azure' is of type 'iceberg', AUTHORIZATION_TYPE 'azure' requires a secret of type 'azure'
