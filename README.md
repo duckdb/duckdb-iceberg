@@ -176,7 +176,7 @@ python3 -m pytest -vv test/python \
   --test-python-verbosity verbose
 ```
 
-Verbose mode prints the resolved catalog and Spark runtime and explains capability-based skips. Cloud-only tests under `test/python/cloud/` are excluded unless that directory is requested explicitly.
+Verbose mode prints the resolved catalog and Spark runtime and explains capability-based skips. Cloud-only tests under `test/python/cloud/` are excluded unless that directory is requested explicitly. The tests under `test/python/standalone/` start their own mock REST catalog and run without an active catalog.
 
 ## Test data generation
 

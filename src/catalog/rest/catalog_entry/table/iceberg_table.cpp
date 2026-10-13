@@ -823,7 +823,9 @@ IcebergTableMetadata IcebergTable::CreateMetadataFromLog(ClientContext &context,
 	auto &path = log[log_item_index.GetIndex()].metadata_file;
 	auto parsed_metadata = IcebergTableMetadata::Parse(path, *fs, "");
 
-	return IcebergTableMetadata::FromTableMetadata(parsed_metadata);
+	auto result = IcebergTableMetadata::FromTableMetadata(parsed_metadata);
+	result.metadata_location = path;
+	return result;
 }
 
 IcebergTable IcebergTable::Copy(IcebergTransaction &iceberg_transaction) const {
@@ -882,6 +884,9 @@ IcebergTable::IcebergTable(IcebergCatalog &catalog, IcebergSchemaEntry &schema, 
 IcebergTable::IcebergTable(IcebergCatalog &catalog, IcebergSchemaEntry &schema, const string &name,
                            const rest_api_objects::LoadTableResult &load_table_result)
     : IcebergTable(catalog, schema, name, IcebergTableMetadata::FromTableMetadata(load_table_result.metadata)) {
+	if (load_table_result.metadata_location) {
+		table_metadata.metadata_location = *load_table_result.metadata_location;
+	}
 	SetLoadTableResult(load_table_result);
 }
 
@@ -904,6 +909,9 @@ void IcebergTable::InitializeFromLoadTableResult(
     optional_ptr<const rest_api_objects::TableMetadata> metadata_override) {
 	table_metadata =
 	    IcebergTableMetadata::FromTableMetadata(metadata_override ? *metadata_override : load_table_result.metadata);
+	if (load_table_result.metadata_location) {
+		table_metadata.metadata_location = *load_table_result.metadata_location;
+	}
 	SetLoadTableResult(load_table_result);
 	D_ASSERT(!table_metadata.GetSchemas().IsEmpty());
 	InitSchemaVersions();

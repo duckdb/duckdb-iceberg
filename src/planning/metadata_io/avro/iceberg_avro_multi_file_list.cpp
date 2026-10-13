@@ -21,9 +21,10 @@ IcebergManifestListScanInfo::~IcebergManifestListScanInfo() {
 IcebergManifestFileScanInfo::IcebergManifestFileScanInfo(
     const IcebergTableMetadata &metadata, const IcebergSnapshotScanInfo &snapshot_info,
     vector<IcebergManifestListEntry> &manifest_files, const IcebergOptions &options, FileSystem &fs,
-    const string &iceberg_path, optional_ptr<ManifestEntryReadState> read_state, vector<idx_t> manifest_indexes_p)
+    const string &iceberg_path, optional_ptr<ManifestEntryReadState> read_state, vector<idx_t> manifest_indexes_p,
+    optional_ptr<vector<string>> file_paths_p)
     : IcebergAvroScanInfo(TYPE, metadata, snapshot_info), manifest_files(manifest_files), options(options), fs(fs),
-      iceberg_path(iceberg_path), read_state(read_state) {
+      iceberg_path(iceberg_path), read_state(read_state), file_paths(file_paths_p) {
 	if (manifest_indexes_p.empty()) {
 		manifest_indexes_p.reserve(manifest_files.size());
 		for (idx_t manifest_idx = 0; manifest_idx < manifest_files.size(); manifest_idx++) {
@@ -40,9 +41,16 @@ IcebergManifestFileScanInfo::IcebergManifestFileScanInfo(
 		if (manifest_idx >= manifest_files.size()) {
 			throw InternalException("Manifest selection index %llu is out of bounds", manifest_idx);
 		}
-		auto &manifest_list_entry = manifest_files[manifest_idx];
-		auto &manifest = manifest_list_entry.GetFile();
-		partition_spec_ids.insert(manifest.partition_spec_id);
+		if (!FilePathsOnly()) {
+			auto &manifest_list_entry = manifest_files[manifest_idx];
+			auto &manifest = manifest_list_entry.GetFile();
+			partition_spec_ids.insert(manifest.partition_spec_id);
+		}
+	}
+	if (FilePathsOnly()) {
+		//! The purge path does not inspect partition values or metrics, so it must not resolve them against a table
+		//! schema. Table replacement can reuse a field ID with an incompatible type while preserving old snapshots.
+		return;
 	}
 	//! The schema of a manifest is affected by the 'partition_spec_id' of the 'manifest_file',
 	//! because the 'partition' struct has a field for every partition field in that partition spec.

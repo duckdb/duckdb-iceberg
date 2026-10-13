@@ -513,6 +513,16 @@ IcebergTableMetadata IcebergTableMetadata::FromTableMetadata(const rest_api_obje
 			res.metadata_log.emplace_back(item.metadata_file, timestamp_ms_t(item.timestamp_ms));
 		}
 	}
+	if (table_metadata.statistics) {
+		for (auto &item : *table_metadata.statistics) {
+			res.statistics_files.push_back(item.statistics_path);
+		}
+	}
+	if (table_metadata.partition_statistics) {
+		for (auto &item : *table_metadata.partition_statistics) {
+			res.partition_statistics_files.push_back(item.statistics_path);
+		}
+	}
 	return res;
 }
 
@@ -538,6 +548,9 @@ IcebergTableMetadata IcebergTableMetadata::Copy() const {
 	res.write_metadata_path = write_metadata_path;
 	res.table_properties = table_properties;
 	res.metadata_log = metadata_log;
+	res.metadata_location = metadata_location;
+	res.statistics_files = statistics_files;
+	res.partition_statistics_files = partition_statistics_files;
 	res.current_schema_id = current_schema_id;
 	return res;
 }

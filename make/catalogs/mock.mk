@@ -2,6 +2,9 @@
 
 MOCK_TEST_BINARY ?= $(PROJ_DIR)build/release/test/unittest
 MOCK_TEST_FILTER ?= test/sql/local/catalog_test_config_setup/catalog_agnostic/*
+# Tests that attach the mock with their own options instead of the config's my_datalake. A separate unittest
+# invocation: the test specs of one invocation are AND-ed, so a second glob would match nothing.
+MOCK_CUSTOM_TEST_FILTER ?= test/sql/local/catalog_custom_setup/mock/*
 
 mock: mock-stop
 	$(call stop_active_catalog)
@@ -23,7 +26,9 @@ test_mock:
 	trap '$(MAKE) mock-stop' EXIT; \
 	$(MAKE) mock; \
 	"$(MOCK_TEST_BINARY)" --test-config "$$(scripts/catalog_test_config.sh)" \
-		"$(MOCK_TEST_FILTER)" "exclude:*.test_slow"
+		"$(MOCK_TEST_FILTER)" "exclude:*.test_slow"; \
+	"$(MOCK_TEST_BINARY)" --test-config "$$(scripts/catalog_test_config.sh)" \
+		"$(MOCK_CUSTOM_TEST_FILTER)" "exclude:*.test_slow"
 
 # The native backend owns its state inside each unittest DatabaseInstance.
 # It neither consults nor changes the active service catalog.

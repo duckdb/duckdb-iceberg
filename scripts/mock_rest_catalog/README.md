@@ -41,6 +41,10 @@ build directories. `test_mock` accepts `MOCK_TEST_BINARY` for an already-built
 unittest executable.
 These targets follow `make mock`'s active-catalog switching behavior.
 
+The target also runs `test/sql/local/catalog_custom_setup/mock/*`
+(`MOCK_CUSTOM_TEST_FILTER`): tests that attach the mock with their own options,
+such as `PURGE_MODE`, instead of the `my_datalake` from the config.
+
 The distribution workflow uses the standard Make test targets to run the native
 catalog suite and the delegated extension tests. It does not start the Python
 mock. The service-backed mock suite runs in the dedicated Linux
@@ -61,6 +65,21 @@ The explicit `test_mock_*` targets remain available for local use, and
 attachment SQL, capability flags, and skip policy. The launcher reads the endpoint
 from that file and fails if the port is occupied. Python integration tests and
 Spark data generation are outside this backend's scope.
+
+A table created with the test-only property `'mock.snapshots-order' = 'newest-first'`
+is served by `LoadTable` with its `snapshots` list reversed (the metadata file on
+disk keeps commit order), so a test can check that the client does not depend on
+the order the REST spec leaves unspecified. Setting the test-only property
+`'mock.replace-bigint-partition-with-integer' = 'true'` on an existing table
+models `TableMetadata.buildReplacement()`: it retains historical snapshots and
+IDs, replaces a top-level identity-partitioned `a BIGINT` with `a INTEGER` using
+the same field ID, and removes the main snapshot ref. This exercises clients
+that must inspect old manifests without applying the replacement schema to them.
+A table with the test-only property `'mock.load-table-status' = '<code>'` fails
+`LoadTable` (`GET /tables/{t}`, and only that request) with that HTTP status while
+commits and `DELETE` keep working, so a test can check what a client does with a
+table it knows but can no longer load from the catalog. Such a table can no longer
+be addressed through DuckDB, so a test should create it in a namespace of its own.
 
 Each start creates a fresh run directory under `.catalogs/mock/` containing the
 warehouse, request journal and server log. `make mock-stop` shuts down the owned

@@ -21,6 +21,25 @@ enum class IRCAccessDelegationMode : uint8_t { NONE, VENDED_CREDENTIALS };
 //! 'information_schema.columns' report real columns, at the cost of one request per table.
 enum class IcebergTableResolution : uint8_t { LAZY, EAGER };
 
+//! Who deletes a table's data and metadata files when it is dropped: nobody, the catalog, or this client. Exactly one
+//! of them does, so the mode also fixes the purgeRequested flag of the DELETE request: only SERVER sends true.
+//!
+//! NONE: DROP TABLE only unregisters the table from the catalog (purgeRequested=false) and its files stay in storage,
+//! which is what the REST spec and Spark's DROP TABLE without PURGE do, and the only mode whose DROP is not
+//! destructive. It is the default: the files are not necessarily the table's to delete (a location shared with
+//! another table, data registered from elsewhere, a table about to be re-registered under another catalog or name),
+//! DuckDB has no DROP TABLE ... PURGE clause to ask for deletion per statement, and deleting by default would turn
+//! every existing catalog's DROP TABLE destructive. The files can still be removed later by the catalog's own
+//! maintenance or a remove-orphan-files pass.
+//!
+//! SERVER asks the catalog to delete the files (purgeRequested=true); catalogs that own the table's storage, such as
+//! AWS S3 Tables, require this and refuse a drop without it.
+//!
+//! CLIENT unregisters the table (purgeRequested=false) and then deletes the files the table metadata references, the
+//! way Iceberg's CatalogUtil.dropTableData does; for catalogs that only hold a pointer to storage they do not manage
+//! and reject purgeRequested=true, such as the AWS Glue Iceberg REST endpoint for Glue tables.
+enum class IcebergPurgeMode : uint8_t { NONE, SERVER, CLIENT };
+
 struct IcebergAttachOptions {
 	string catalog_uri;
 	string warehouse;
@@ -36,8 +55,8 @@ struct IcebergAttachOptions {
 	bool remove_files_on_delete = true;
 	bool support_nested_namespaces = false;
 	bool encode_entire_prefix = false;
-	// in rest api spec, purge requested defaults to false.
-	bool purge_requested = false;
+	// in rest api spec, purge requested defaults to false: a DROP TABLE leaves the table's files in storage.
+	IcebergPurgeMode purge_mode = IcebergPurgeMode::NONE;
 	// some catalogs (e.g. AWS Glue) do not assign a table location server-side; derive one from the namespace's
 	// 'location' property
 	bool default_table_location_from_namespace = false;

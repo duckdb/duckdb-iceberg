@@ -1,0 +1,115 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_specifc/s3tables/test_drop_table_purge_mode.test
+# description: S3 Tables deletes a dropped table's files itself, so only PURGE_MODE 'server' (the default) can drop one
+# group: [s3tables]
+
+# S3 Tables owns a table's storage. PURGE_MODE 'server' (the ENDPOINT_TYPE S3_TABLES default) sends purgeRequested=true
+# and works. 'none' and 'client' would send purgeRequested=false, which S3 Tables refuses on every DROP TABLE, so the
+# extension rejects those configurations at ATTACH instead.
+
+require-env CATALOG_TEST_CONFIG_SETUP s3tables
+
+require-env S3TABLES_TABLE_BUCKET_ARN
+
+include test/sql/init_requires
+
+require aws
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+# Inspect the purgeRequested query parameter in logged DELETE requests.
+statement ok
+SET redact_http_logs = false;
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.purge_mode_default;
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.purge_mode_legacy;
+
+#===--------------------------------------------------------------------===#
+# The default for ENDPOINT_TYPE S3_TABLES is PURGE_MODE 'server': purgeRequested=true
+#===--------------------------------------------------------------------===#
+
+statement ok
+CREATE TABLE my_datalake.default.purge_mode_default AS SELECT range a FROM range(10);
+
+statement ok
+CALL enable_logging('HTTP');
+
+statement ok
+CALL truncate_duckdb_logs();
+
+statement ok
+DROP TABLE my_datalake.default.purge_mode_default;
+
+query I
+SELECT regexp_matches(request.url, 'tables/purge_mode_default\?purgeRequested=true$') FROM duckdb_logs_parsed('HTTP') WHERE request.type = 'DELETE';
+----
+true
+
+statement ok
+CALL disable_logging();
+
+query I
+SELECT count(*) FROM (SHOW TABLES FROM my_datalake.default) WHERE name = 'purge_mode_default';
+----
+0
+
+#===--------------------------------------------------------------------===#
+# 'none' and 'client' both send purgeRequested=false, which S3 Tables refuses on every DROP TABLE, so the attach
+# itself is refused
+#===--------------------------------------------------------------------===#
+
+statement error
+ATTACH '{S3TABLES_TABLE_BUCKET_ARN}' AS s3tables_purge_none (TYPE ICEBERG, ENDPOINT_TYPE S3_TABLES, PURGE_MODE 'none');
+----
+<REGEX>:.*S3 Tables deletes a dropped table's files itself; only 'purge_mode' 'server' is supported for 'endpoint_type' 's3_tables'.*
+
+statement error
+ATTACH '{S3TABLES_TABLE_BUCKET_ARN}' AS s3tables_purge_client (TYPE ICEBERG, ENDPOINT_TYPE S3_TABLES, PURGE_MODE 'client');
+----
+<REGEX>:.*S3 Tables deletes a dropped table's files itself; only 'purge_mode' 'server' is supported for 'endpoint_type' 's3_tables'.*
+
+# The deprecated spelling of 'none' is refused the same way
+statement error
+ATTACH '{S3TABLES_TABLE_BUCKET_ARN}' AS s3tables_legacy_none (TYPE ICEBERG, ENDPOINT_TYPE S3_TABLES, PURGE_REQUESTED false);
+----
+<REGEX>:.*only 'purge_mode' 'server' is supported for 'endpoint_type' 's3_tables'.*
+
+# An explicit 'server' is accepted
+statement ok
+ATTACH '{S3TABLES_TABLE_BUCKET_ARN}' AS s3tables_purge_server (TYPE ICEBERG, ENDPOINT_TYPE S3_TABLES, PURGE_MODE 'server');
+
+statement ok
+DETACH s3tables_purge_server;
+
+#===--------------------------------------------------------------------===#
+# The deprecated PURGE_REQUESTED true is PURGE_MODE 'server'
+#===--------------------------------------------------------------------===#
+
+statement ok
+ATTACH '{S3TABLES_TABLE_BUCKET_ARN}' AS s3tables_legacy (TYPE ICEBERG, ENDPOINT_TYPE S3_TABLES, PURGE_REQUESTED true);
+
+statement ok
+CREATE TABLE s3tables_legacy.default.purge_mode_legacy AS SELECT range a FROM range(10);
+
+statement ok
+CALL enable_logging('HTTP');
+
+statement ok
+CALL truncate_duckdb_logs();
+
+statement ok
+DROP TABLE s3tables_legacy.default.purge_mode_legacy;
+
+query I
+SELECT regexp_matches(request.url, 'tables/purge_mode_legacy\?purgeRequested=true$') FROM duckdb_logs_parsed('HTTP') WHERE request.type = 'DELETE';
+----
+true
+
+statement ok
+CALL disable_logging();
+
+statement ok
+DETACH s3tables_legacy;

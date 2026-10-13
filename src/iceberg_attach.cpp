@@ -31,6 +31,19 @@ static IcebergEndpointType EndpointTypeFromString(const string &input) {
 	                                    StringUtil::Join(options, ", "));
 }
 
+static IcebergPurgeMode PurgeModeFromString(const string &input) {
+	auto value = StringUtil::Lower(input);
+	if (value == "none") {
+		return IcebergPurgeMode::NONE;
+	} else if (value == "server") {
+		return IcebergPurgeMode::SERVER;
+	} else if (value == "client") {
+		return IcebergPurgeMode::CLIENT;
+	}
+	throw InvalidConfigurationException("Unrecognized 'purge_mode' (%s), accepted options are: none, server, client",
+	                                    input);
+}
+
 static void S3OrGlueAttachInternal(IcebergAttachOptions &input, const string &service, const string &region) {
 	if (input.authorization_type != IcebergAuthorizationType::INVALID) {
 		throw InvalidConfigurationException("'endpoint_type' can not be combined with 'authorization_type'");
@@ -168,8 +181,25 @@ static void SetAWSCatalogOptions(IcebergAttachOptions &attach_options, case_inse
 	if (set_by_attach_options.find("stage_create_tables") == set_by_attach_options.end()) {
 		attach_options.stage_create_tables = false;
 	}
-	if (set_by_attach_options.find("purge_requested") == set_by_attach_options.end()) {
-		attach_options.purge_requested = true;
+	if (set_by_attach_options.find("purge_mode") == set_by_attach_options.end()) {
+		attach_options.purge_mode = IcebergPurgeMode::SERVER;
+	}
+}
+
+//! A client-side purge deletes the dropped table's files itself, which contradicts an explicit
+//! 'remove_files_on_delete' false (storage the client must not delete from). The value SetAWSCatalogOptions derives for
+//! an AWS endpoint is left alone: it is false because S3 Tables rejects client-side deletes, and says nothing about the
+//! customer-owned storage of a Glue table, which is where a client-side purge is needed. It only governs the cleanup of
+//! files a failed transaction wrote; the purge does not consult it.
+static void ReconcilePurgeMode(const IcebergAttachOptions &attach_options,
+                               const case_insensitive_set_t &set_by_attach_options) {
+	if (attach_options.purge_mode != IcebergPurgeMode::CLIENT) {
+		return;
+	}
+	if (set_by_attach_options.find("remove_files_on_delete") != set_by_attach_options.end() &&
+	    !attach_options.remove_files_on_delete) {
+		throw InvalidConfigurationException(
+		    "'purge_mode' 'client' deletes a dropped table's files, which 'remove_files_on_delete' false forbids");
 	}
 }
 
@@ -207,6 +237,7 @@ unique_ptr<Catalog> IcebergAttach::Attach(optional_ptr<StorageExtensionInfo> sto
 	string access_mode_string;
 	case_insensitive_set_t set_by_attach_options;
 	bool used_legacy_endpoint = false;
+	bool used_purge_requested = false;
 	for (const auto &entry : info.options) {
 		used_legacy_endpoint |= StringUtil::CIEquals(entry.first, "endpoint");
 	}
@@ -242,9 +273,26 @@ unique_ptr<Catalog> IcebergAttach::Attach(optional_ptr<StorageExtensionInfo> sto
 		} else if (lower_name == "support_nested_namespaces") {
 			attach_options.support_nested_namespaces = argument.DefaultCastAs(LogicalType::BOOLEAN).GetValue<bool>();
 			set_by_attach_options.insert("support_nested_namespaces");
+		} else if (lower_name == "purge_mode") {
+			if (set_by_attach_options.find("purge_mode") != set_by_attach_options.end()) {
+				throw InvalidConfigurationException(
+				    "Both 'purge_mode' and deprecated 'purge_requested' were provided for Iceberg attach; use only "
+				    "'purge_mode'");
+			}
+			attach_options.purge_mode = PurgeModeFromString(argument.ToString());
+			set_by_attach_options.insert("purge_mode");
 		} else if (lower_name == "purge_requested") {
-			attach_options.purge_requested = argument.DefaultCastAs(LogicalType::BOOLEAN).GetValue<bool>();
-			set_by_attach_options.insert("purge_requested");
+			//! Deprecated alias: true is the server-side purge, false leaves the files in storage.
+			if (set_by_attach_options.find("purge_mode") != set_by_attach_options.end()) {
+				throw InvalidConfigurationException(
+				    "Both 'purge_mode' and deprecated 'purge_requested' were provided for Iceberg attach; use only "
+				    "'purge_mode'");
+			}
+			used_purge_requested = true;
+			attach_options.purge_mode = argument.DefaultCastAs(LogicalType::BOOLEAN).GetValue<bool>()
+			                                ? IcebergPurgeMode::SERVER
+			                                : IcebergPurgeMode::NONE;
+			set_by_attach_options.insert("purge_mode");
 		} else if (lower_name == "default_table_location_from_namespace") {
 			attach_options.default_table_location_from_namespace =
 			    argument.DefaultCastAs(LogicalType::BOOLEAN).GetValue<bool>();
@@ -289,6 +337,10 @@ unique_ptr<Catalog> IcebergAttach::Attach(optional_ptr<StorageExtensionInfo> sto
 	if (used_legacy_endpoint) {
 		DUCKDB_LOG_WARNING(context, "The Iceberg attach option 'endpoint' is deprecated; use 'uri' instead");
 	}
+	if (used_purge_requested) {
+		DUCKDB_LOG_WARNING(context, "The Iceberg attach option 'purge_requested' is deprecated; use 'purge_mode' "
+		                            "('none', 'server' or 'client') instead");
+	}
 	StringUtil::RTrim(attach_options.catalog_uri, "/");
 	IcebergEndpointType endpoint_type = IcebergEndpointType::INVALID;
 	//! Then check any if the 'endpoint_type' is set, for any well known catalogs
@@ -305,12 +357,21 @@ unique_ptr<Catalog> IcebergAttach::Attach(optional_ptr<StorageExtensionInfo> sto
 			S3TablesAttach(attach_options);
 			endpoint_type = IcebergEndpointType::AWS_S3TABLES;
 			SetAWSCatalogOptions(attach_options, set_by_attach_options);
+			if (attach_options.purge_mode != IcebergPurgeMode::SERVER) {
+				//! S3 Tables owns a table's storage: it deletes the files with the table, refuses a DROP TABLE sent
+				//! with purgeRequested=false, and lets no client list or delete from that storage. Every DROP TABLE
+				//! through such an attach would fail, so the configuration is refused here instead.
+				throw InvalidConfigurationException(
+				    "S3 Tables deletes a dropped table's files itself; only 'purge_mode' 'server' is supported for "
+				    "'endpoint_type' 's3_tables'");
+			}
 			break;
 		}
 		default:
 			throw InternalException("Endpoint type (%s) not implemented", endpoint_type_string);
 		}
 	}
+	ReconcilePurgeMode(attach_options, set_by_attach_options);
 
 	//! Then check the authorization type
 	if (!authorization_type_string.empty()) {
