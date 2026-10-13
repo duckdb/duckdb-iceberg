@@ -28,11 +28,11 @@ jobs:
     name: Build extension binaries
     needs: get-duckdb-version
     # Keep the shared workflows and their checkouts aligned with the CI-tools submodule.
-    uses: duckdb/extension-ci-tools/.github/workflows/_extension_distribution.yml@a68570fde10384547868301a12327d5c67909527
+    uses: duckdb/extension-ci-tools/.github/workflows/_extension_distribution.yml@969bc76276acec1c0a3922ff500d2ec3a1a3b037 # v2.0-cyanoptera 2026-10-01 pin
     with:
       extension_name: iceberg
       duckdb_version: ${{ needs.get-duckdb-version.outputs.duckdb_version }}
-      ci_tools_version: a68570fde10384547868301a12327d5c67909527
+      ci_tools_version: 969bc76276acec1c0a3922ff500d2ec3a1a3b037 # v2.0-cyanoptera 2026-10-01 pin
       vcpkg_commit: cd61e1e26a038e82d6550a3ebbe0fbbfe7da78e3
       exclude_archs: 'windows_amd64_mingw'
       extra_toolchains: 'python3'
@@ -44,11 +44,11 @@ jobs:
   duckdb-stable-deploy:
     name: Deploy extension binaries
     needs: duckdb-stable-build
-    uses: duckdb/extension-ci-tools/.github/workflows/_extension_deploy.yml@a68570fde10384547868301a12327d5c67909527
+    uses: duckdb/extension-ci-tools/.github/workflows/_extension_deploy.yml@969bc76276acec1c0a3922ff500d2ec3a1a3b037 # v2.0-cyanoptera 2026-10-01 pin
     secrets: inherit
     with:
       extension_name: iceberg
-      ci_tools_version: a68570fde10384547868301a12327d5c67909527
+      ci_tools_version: 969bc76276acec1c0a3922ff500d2ec3a1a3b037 # v2.0-cyanoptera 2026-10-01 pin
       exclude_archs: 'windows_amd64_mingw'
       deploy_latest: ${{ startsWith(github.ref, 'refs/heads/v') || github.ref == 'refs/heads/main' }}
       deploy_versioned: ${{ startsWith(github.ref, 'refs/heads/v') || github.ref == 'refs/heads/main' }}
@@ -56,9 +56,9 @@ jobs:
   code-quality-check:
     name: Code Quality Check
     needs: get-duckdb-version
-    uses: duckdb/extension-ci-tools/.github/workflows/_extension_code_quality.yml@a68570fde10384547868301a12327d5c67909527
+    uses: duckdb/extension-ci-tools/.github/workflows/_extension_code_quality.yml@969bc76276acec1c0a3922ff500d2ec3a1a3b037 # v2.0-cyanoptera 2026-10-01 pin
     with:
       extension_name: iceberg
       duckdb_version: ${{ needs.get-duckdb-version.outputs.duckdb_version }}
-      ci_tools_version: a68570fde10384547868301a12327d5c67909527
+      ci_tools_version: 969bc76276acec1c0a3922ff500d2ec3a1a3b037 # v2.0-cyanoptera 2026-10-01 pin
       format_checks: 'format'
