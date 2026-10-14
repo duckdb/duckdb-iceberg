@@ -3,6 +3,7 @@
 #include "duckdb/main/extension_helper.hpp"
 #include "duckdb/main/extension/extension_loader.hpp"
 #include "duckdb/main/database.hpp"
+#include "duckdb/common/multi_file/table_function_multi_file.hpp"
 
 #include "iceberg_extension.hpp"
 #include "planning/metadata_io/manifest/iceberg_manifest_reader.hpp"
@@ -53,7 +54,14 @@ AvroScan::AvroScan(const string &path, ClientContext &context, shared_ptr<Iceber
 
 	TableFunctionBindInput bind_input(children, named_params, input_types, input_names, nullptr, nullptr,
 	                                  bound_table_function, empty);
-	bind_data = avro_scan->bind(context, bind_input, return_types, return_names);
+	if (avro_scan->function_info) {
+		// read_avro wraps a single-file function, which it keeps in the function info we replace above
+		auto &avro_info = avro_scan->function_info->Cast<TableFunctionMultiFileInfo>();
+		bind_data = TableFunctionMultiFileWrapper::MultiFileBindWith(context, bind_input, return_types, return_names,
+		                                                             avro_info.function, avro_info.settings);
+	} else {
+		bind_data = avro_scan->bind(context, bind_input, return_types, return_names);
+	}
 
 	for (idx_t i = 0; i < return_types.size(); i++) {
 		column_ids.push_back(i);
