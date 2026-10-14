@@ -101,126 +101,115 @@ bool IcebergTableSet::ApplyLoadResult(ClientContext &context, IcebergTable &tabl
 namespace {
 
 struct PendingTableLoad {
-	explicit PendingTableLoad(IcebergTable &table) : table(table) {
-	}
-
-	IcebergTable &table;
+	shared_ptr<IcebergTable> table;
+	optional_ptr<CatalogEntry> entry;
 	unique_ptr<LoadTableCachePublication> publication;
 	shared_ptr<IcebergRequestResult<IcebergLoadTableResult>> result;
 };
 
-void WarnTableLoadFailure(ClientContext &context, IcebergTable &table, const ErrorData &error) {
-	DUCKDB_LOG_WARNING(context, "Could not resolve the columns of Iceberg table '%s' while listing: %s",
-	                   table.GetTableKey(), error.RawMessage());
-}
-
 } // namespace
 
-void IcebergTableSet::ScanEagerEntries(ClientContext &context, const std::function<void(CatalogEntry &)> &callback) {
+IcebergTable &IcebergTableSet::StoreEntry(ClientContext &context, shared_ptr<IcebergTable> table) {
+	{
+		annotated_lock_guard<annotated_mutex> lock(entry_lock);
+		entries[table->name] = table;
+	}
+	auto &transaction = IcebergTransaction::Get(context, catalog);
+	transaction.tables[table->GetTableKey()] = table;
+	auto &state = transaction.SetCatalogTableState(table);
+	if (transaction.StartedBefore(table->table_metadata.last_updated_ms)) {
+		state.GetOrCreateTransactionInfo(transaction);
+	}
+	return state.GetInfo();
+}
+
+vector<reference<CatalogEntry>> IcebergTableSet::LoadScanEntries(ClientContext &context) {
 	auto &ic_catalog = catalog.Cast<IcebergCatalog>();
 	auto &transaction = IcebergTransaction::Get(context, catalog);
+	unordered_set<string> names;
+	{
+		annotated_lock_guard<annotated_mutex> lock(entry_lock);
+		LoadEntriesInternal(context);
+		for (auto &entry : entries) {
+			names.insert(entry.first);
+		}
+	}
+	// Include staged creations and renames, even when they are not in the catalog listing yet.
+	for (auto &entry : transaction.current_table_data) {
+		if (entry.second.IsAlive()) {
+			auto &table = entry.second.GetInfo();
+			if (table.schema.namespace_items == schema.namespace_items) {
+				names.insert(table.name);
+			}
+		}
+	}
+
 	auto &scheduler = TaskScheduler::GetScheduler(context);
 	// Regular workers can also execute async tasks; NumberOfThreads includes the calling thread.
 	const auto window_size = MinValue<idx_t>(8, scheduler.NumberOfThreads() + scheduler.NumberOfAsyncThreads());
 	deque<unique_ptr<PendingTableLoad>> pending;
 	IcebergRequestExecutor executor(context, ic_catalog);
-	auto entry = entries.begin();
+	vector<reference<CatalogEntry>> scan_entries;
+	auto name = names.begin();
 
 	auto schedule_next = [&]() {
 		context.InterruptCheck();
-		auto &table = *entry->second;
-		transaction.tables[table.GetTableKey()] = entry->second;
-		++entry;
-		auto load = make_uniq<PendingTableLoad>(table);
-		bool needs_load = false;
-		try {
-			needs_load = !TryFillEntryFromCache(context, table);
-		} catch (std::exception &ex) {
-			context.InterruptCheck();
-			WarnTableLoadFailure(context, table, ErrorData(ex));
-		}
-		if (needs_load) {
-			load->publication = ic_catalog.table_request_cache.BeginLoad(table.GetTableKey());
-			load->result = executor.Schedule(IcebergLoadTableRequest(table.schema.namespace_items, table.name));
+		auto table_name = *name++;
+		auto load = make_uniq<PendingTableLoad>();
+		auto table_key = IcebergTable::GetTableKey(ic_catalog, schema.namespace_items, table_name);
+		auto state = transaction.GetLatestTableState(table_key);
+		if (state) {
+			if (state->IsAlive()) {
+				load->entry = state->GetInfo().GetLatestSchema();
+			}
+		} else {
+			// Shared catalog entries can belong to an older transaction. Resolve a fresh version.
+			load->table = IcebergTable::CreatePlaceholder(ic_catalog, schema, table_name);
+			if (TryFillEntryFromCache(context, *load->table)) {
+				load->entry = StoreEntry(context, load->table).GetLatestSchema();
+			} else {
+				load->publication = ic_catalog.table_request_cache.BeginLoad(table_key);
+				load->result = executor.Schedule(IcebergLoadTableRequest(schema.namespace_items, table_name));
+			}
 		}
 		pending.push_back(std::move(load));
 	};
 
-	while (entry != entries.end() && pending.size() < window_size) {
+	while (name != names.end() && pending.size() < window_size) {
 		schedule_next();
 	}
 	while (!pending.empty()) {
 		auto load = std::move(pending.front());
 		pending.pop_front();
 		if (load->result) {
-			try {
-				ApplyLoadResult(context, load->table, executor.WaitAndTakeResult(*load->result), *load->publication);
-			} catch (std::exception &ex) {
-				ErrorData error(ex);
-				if (error.Type() == ExceptionType::INTERRUPT || executor.HasError()) {
-					throw;
-				}
-				context.InterruptCheck();
-				WarnTableLoadFailure(context, load->table, error);
+			if (ApplyLoadResult(context, *load->table, executor.WaitAndTakeResult(*load->result), *load->publication)) {
+				load->entry = StoreEntry(context, load->table).GetLatestSchema();
+			} else {
+				// The table disappeared after ListTables. Do not manufacture a schema for it.
+				transaction.SetLatestTableState(load->table->GetTableKey(), IcebergTableStatus::MISSING);
 			}
 		}
-		// Refill before invoking the callback, so requests can overlap both consumption and callback work.
-		// The task owns its result holder even if this window slot is released before task cleanup finishes.
-		if (entry != entries.end()) {
+		if (name != names.end()) {
 			schedule_next();
 		}
-		callback(GetScanEntry(load->table));
+		if (load->entry) {
+			scan_entries.emplace_back(*load->entry);
+		}
 	}
 	// Join at the scan boundary. Exceptions instead cancel and drain through the executor's destructor.
 	executor.Drain();
-}
-
-CatalogEntry &IcebergTableSet::GetScanEntry(IcebergTable &table_info) const {
-	if (!table_info.schema_versions.empty()) {
-		// Surface resolved columns, including comments, instead of a listing placeholder.
-		auto resolved = table_info.GetLatestSchema();
-		if (resolved) {
-			return *resolved;
-		}
-	}
-	return GetOrCreateDummy(table_info);
-}
-
-IcebergTableSchemaVersion &IcebergTableSet::GetOrCreateDummy(IcebergTable &table_info) const {
-	if (table_info.dummy_entry) {
-		return *table_info.dummy_entry;
-	}
-	// create a table entry with fake schema data to avoid calling the LoadTableInformation endpoint for every
-	// table while listing schemas
-	CreateTableInfo info(schema, Identifier(table_info.name));
-	vector<ColumnDefinition> columns;
-	auto col = ColumnDefinition(Identifier("__"), LogicalType::UNKNOWN);
-	columns.push_back(std::move(col));
-	info.columns = ColumnList(std::move(columns));
-	auto table_entry = make_uniq<IcebergTableSchemaVersion>(table_info, catalog, schema, info, optional_idx());
-	if (!table_entry->internal) {
-		table_entry->internal = schema.internal;
-	}
-	auto result = table_entry.get();
-	if (result->name.empty()) {
-		throw InternalException("IcebergTableSet::CreateEntry called with empty name");
-	}
-	table_info.dummy_entry = std::move(table_entry);
-	return *table_info.dummy_entry;
+	return scan_entries;
 }
 
 void IcebergTableSet::Scan(ClientContext &context, const std::function<void(CatalogEntry &)> &callback) {
-	annotated_lock_guard<annotated_mutex> lock(entry_lock);
-	LoadEntriesInternal(context);
-	if (catalog.Cast<IcebergCatalog>().attach_options.table_resolution == IcebergTableResolution::EAGER) {
-		ScanEagerEntries(context, callback);
-		return;
+	vector<reference<CatalogEntry>> scan_entries;
+	{
+		auto &transaction = IcebergTransaction::Get(context, catalog);
+		lock_guard<mutex> guard(transaction.catalog_entry_lock);
+		scan_entries = LoadScanEntries(context);
 	}
-	auto &transaction = IcebergTransaction::Get(context, catalog);
-	for (auto &entry : entries) {
-		auto &table = *entry.second;
-		transaction.tables[table.GetTableKey()] = entry.second;
-		callback(GetScanEntry(table));
+	for (auto &entry : scan_entries) {
+		callback(entry.get());
 	}
 }
 
@@ -475,6 +464,7 @@ static bool EntryMissingFromListing(const optional<vector<rest_api_objects::Tabl
 optional_ptr<CatalogEntry> IcebergTableSet::GetEntry(ClientContext &context, const EntryLookupInfo &lookup) {
 	auto &ic_catalog = catalog.Cast<IcebergCatalog>();
 	auto &iceberg_transaction = IcebergTransaction::Get(context, catalog);
+	lock_guard<mutex> guard(iceberg_transaction.catalog_entry_lock);
 	const auto &table_name = lookup.GetEntryName();
 	// first check transaction entries
 	const auto table_key = IcebergTable::GetTableKey(ic_catalog, schema.namespace_items, table_name);
@@ -508,16 +498,7 @@ optional_ptr<CatalogEntry> IcebergTableSet::GetEntry(ClientContext &context, con
 		return nullptr;
 	}
 
-	{
-		annotated_lock_guard<annotated_mutex> l(entry_lock);
-		entries[table_name] = new_version;
-	}
-	iceberg_transaction.tables[table_key] = new_version;
-	auto &state = iceberg_transaction.SetCatalogTableState(new_version);
-	if (iceberg_transaction.StartedBefore(table_info.table_metadata.last_updated_ms)) {
-		state.GetOrCreateTransactionInfo(iceberg_transaction);
-	}
-	return state.GetInfo().GetSchemaVersion(at);
+	return StoreEntry(context, std::move(new_version)).GetSchemaVersion(at);
 }
 
 // ─── View operations ─────────────────────────────────────────────────────────

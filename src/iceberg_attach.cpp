@@ -229,12 +229,9 @@ static void ParseAttachOptions(IcebergAttachOptions &attach_options, optional<Id
 		} else if (lower_name == "use_metadata_location") {
 			attach_options.use_metadata_location = entry.second.DefaultCastAs(LogicalType::BOOLEAN).GetValue<bool>();
 		} else if (lower_name == "table_resolution") {
+			// Retained for compatibility. Catalog listings always resolve real table schemas.
 			auto value = StringUtil::Lower(argument.ToString());
-			if (value == "lazy") {
-				attach_options.table_resolution = IcebergTableResolution::LAZY;
-			} else if (value == "eager") {
-				attach_options.table_resolution = IcebergTableResolution::EAGER;
-			} else {
+			if (value != "lazy" && value != "eager") {
 				throw InvalidConfigurationException(
 				    "Unrecognized 'table_resolution' (%s), accepted options are: lazy, eager", value);
 			}
