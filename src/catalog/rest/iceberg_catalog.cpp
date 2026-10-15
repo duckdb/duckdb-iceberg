@@ -1,4 +1,5 @@
 #include "catalog/rest/iceberg_catalog.hpp"
+#include "catalog/rest/iceberg_catalog_prefetch.hpp"
 
 #include "duckdb/storage/database_size.hpp"
 #include "duckdb/logging/logger.hpp"
@@ -32,9 +33,12 @@ bool LoadTableCachePublication::TryPublish(unique_ptr<const rest_api_objects::Lo
 	return cache->TryPublish(*this, std::move(result));
 }
 
-unique_ptr<LoadTableCachePublication> LoadTableResultCache::BeginLoad(const string &table_key) {
+unique_ptr<LoadTableCachePublication> LoadTableResultCache::BeginLoad(const string &table_key, bool only_if_missing) {
 	auto publication = unique_ptr<LoadTableCachePublication>(new LoadTableCachePublication(table_key));
 	annotated_lock_guard<annotated_mutex> guard(lock);
+	if (only_if_missing && (tables.count(table_key) || pending_loads.count(table_key))) {
+		return nullptr;
+	}
 	auto &pending = pending_loads[table_key];
 	pending.latest = publication.get();
 	pending.count++;
@@ -119,6 +123,17 @@ IcebergCatalog::IcebergCatalog(AttachedDatabase &db_p, AccessMode access_mode,
 }
 
 IcebergCatalog::~IcebergCatalog() = default;
+
+void IcebergCatalog::StartPrefetch(ClientContext &context) {
+	prefetch = make_uniq<IcebergCatalogPrefetch>(context, *this);
+	prefetch->Start();
+}
+
+void IcebergCatalog::OnDetach(ClientContext &context) {
+	if (prefetch) {
+		prefetch->Stop();
+	}
+}
 
 //===--------------------------------------------------------------------===//
 // Catalog API

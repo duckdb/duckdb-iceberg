@@ -8,6 +8,13 @@ include test/sql/init_requires
 
 require json
 
+# Isolate synchronous config negotiation from background discovery traffic.
+statement ok
+SET threads = 1;
+
+statement ok
+SET async_threads = 0;
+
 statement ok
 CREATE MACRO config_response(defaults, overrides) AS TABLE
 SELECT status FROM iceberg_test_catalog_request('POST', '/__test/response',

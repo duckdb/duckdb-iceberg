@@ -234,6 +234,7 @@ void IcebergTableSet::ScanTables(ClientContext &context, const std::function<voi
 
 void IcebergTableSet::DropEntry(ClientContext &context, DropInfo &info, bool delete_entry) {
 	annotated_lock_guard<annotated_mutex> lock(entry_lock);
+	allow_prefetch = false;
 	auto table_name = info.GetQualifiedName().Name();
 	auto entry = entries.find(table_name.GetIdentifierName());
 	if (entry == entries.end()) {
@@ -259,6 +260,7 @@ void IcebergTableSet::DropEntry(ClientContext &context, DropInfo &info, bool del
 
 void IcebergTableSet::RenameEntry(const string &name, const string &new_name, IcebergTable &&new_table) {
 	annotated_lock_guard<annotated_mutex> lock(entry_lock);
+	allow_prefetch = false;
 	auto source = entries.find(name);
 	if (source == entries.end()) {
 		throw CatalogException("Table %s does not exist", name);
@@ -272,6 +274,7 @@ void IcebergTableSet::RenameEntry(const string &name, const string &new_name, Ic
 }
 
 void IcebergTableSet::LoadEntriesInternal(ClientContext &context) {
+	allow_prefetch = false;
 	auto &iceberg_transaction = IcebergTransaction::Get(context, catalog);
 	bool schema_listed = iceberg_transaction.listed_schemas.find(schema.name.GetIdentifierName()) !=
 	                     iceberg_transaction.listed_schemas.end();
@@ -293,6 +296,21 @@ void IcebergTableSet::LoadEntriesInternal(ClientContext &context) {
 	}
 	ApplyListResult(std::move(tables));
 	iceberg_transaction.listed_schemas.insert(schema.name.GetIdentifierName());
+}
+
+void IcebergTableSet::AddPrefetchedEntries(const vector<rest_api_objects::TableIdentifier> &tables) {
+	// Never occupy an async worker waiting for a foreground scan's entry lock.
+	if (!entry_lock.try_lock()) {
+		return;
+	}
+	annotated_lock_guard<annotated_mutex> guard(entry_lock, std::adopt_lock);
+	if (!allow_prefetch) {
+		return;
+	}
+	auto &ic_catalog = catalog.Cast<IcebergCatalog>();
+	for (auto &table : tables) {
+		entries.emplace(table.name, IcebergTable::CreatePlaceholder(ic_catalog, schema, table.name));
+	}
 }
 
 void IcebergTableSet::ApplyListResult(IcebergListTablesResult tables) {
@@ -480,6 +498,10 @@ static bool EntryMissingFromListing(const optional<vector<rest_api_objects::Tabl
 }
 
 optional_ptr<CatalogEntry> IcebergTableSet::GetEntry(ClientContext &context, const EntryLookupInfo &lookup) {
+	{
+		annotated_lock_guard<annotated_mutex> guard(entry_lock);
+		allow_prefetch = false;
+	}
 	auto &ic_catalog = catalog.Cast<IcebergCatalog>();
 	auto &iceberg_transaction = IcebergTransaction::Get(context, catalog);
 	const auto &table_name = lookup.GetEntryName();

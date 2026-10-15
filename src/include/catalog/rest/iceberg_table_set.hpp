@@ -28,6 +28,7 @@ public:
 	void ScanTables(ClientContext &context, const std::function<void(IcebergTable &)> &callback);
 	void DropEntry(ClientContext &context, DropInfo &info, bool delete_entry);
 	void RenameEntry(const string &name, const string &new_name, IcebergTable &&new_table);
+	void AddPrefetchedEntries(const vector<rest_api_objects::TableIdentifier> &tables);
 	static IcebergTable &CreateNewEntry(ClientContext &context, IcebergCatalog &catalog, IcebergSchemaEntry &schema,
 	                                    CreateTableInfo &info);
 
@@ -66,6 +67,7 @@ private:
 	                                               IcebergLoadViewResult result);
 
 	annotated_mutex entry_lock;
+	bool allow_prefetch DUCKDB_GUARDED_BY(entry_lock) = true;
 	unordered_map<string, shared_ptr<IcebergTable>> entries DUCKDB_GUARDED_BY(entry_lock);
 };
 

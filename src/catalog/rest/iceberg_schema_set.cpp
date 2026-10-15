@@ -130,11 +130,13 @@ vector<shared_ptr<IcebergSchemaEntry>> IcebergSchemaSet::GetEntries(ClientContex
 void IcebergSchemaSet::AddEntry(const string &name, shared_ptr<IcebergSchemaEntry> entry) {
 	D_ASSERT(entry);
 	annotated_lock_guard<annotated_mutex> l(entry_lock);
+	allow_prefetch = false;
 	entries[name] = std::move(entry);
 }
 
 void IcebergSchemaSet::RemoveEntry(const string &name) {
 	annotated_lock_guard<annotated_mutex> l(entry_lock);
+	allow_prefetch = false;
 	entries.erase(name);
 }
 
@@ -148,6 +150,7 @@ void IcebergSchemaSet::LoadEntries(ClientContext &context) {
 }
 
 void IcebergSchemaSet::LoadEntriesInternal(ClientContext &context) {
+	allow_prefetch = false;
 	auto &ic_catalog = catalog.Cast<IcebergCatalog>();
 	auto &iceberg_transaction = IcebergTransaction::Get(context, catalog);
 	bool schema_listed = iceberg_transaction.called_list_schemas;
@@ -163,6 +166,23 @@ void IcebergSchemaSet::LoadEntriesInternal(ClientContext &context) {
 	}
 	ApplyListResult(std::move(schemas));
 	iceberg_transaction.called_list_schemas = true;
+}
+
+vector<shared_ptr<IcebergSchemaEntry>> IcebergSchemaSet::AddPrefetchedEntries(IcebergListSchemasResult schemas) {
+	// A foreground owner may be waiting for this same worker pool to finish a request.
+	if (!entry_lock.try_lock()) {
+		return {};
+	}
+	annotated_lock_guard<annotated_mutex> guard(entry_lock, std::adopt_lock);
+	if (!allow_prefetch) {
+		return {};
+	}
+	ApplyListResult(std::move(schemas));
+	vector<shared_ptr<IcebergSchemaEntry>> result;
+	for (auto &entry : entries) {
+		result.push_back(entry.second);
+	}
+	return result;
 }
 
 void IcebergSchemaSet::ApplyListResult(IcebergListSchemasResult schemas) {

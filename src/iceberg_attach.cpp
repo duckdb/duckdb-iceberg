@@ -459,6 +459,7 @@ unique_ptr<Catalog> IcebergAttach::Attach(optional_ptr<StorageExtensionInfo> sto
 		    "default_schema '%s' does not exist. ATTACH with no DEFAULT_SCHEMA to successfully attach",
 		    default_schema->GetIdentifierName());
 	}
+	catalog->StartPrefetch(context);
 	return std::move(catalog);
 }
 

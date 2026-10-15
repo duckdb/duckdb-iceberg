@@ -5,15 +5,22 @@
 #include "duckdb/common/file_system.hpp"
 #include "duckdb/common/http_util.hpp"
 
+#include <condition_variable>
+
 namespace duckdb {
 namespace iceberg_test {
 
 using Namespace = vector<string>;
 using Identifier = std::pair<Namespace, string>;
 
+struct ResponseGate {
+	bool released = false;
+};
+
 struct Reply {
 	int status;
 	Json body;
+	shared_ptr<ResponseGate> gate;
 };
 
 class Catalog {
@@ -49,6 +56,10 @@ private:
 	map<string, std::pair<Identifier, Json>> staged;
 	//! Exact, test-supplied responses for exercising client protocol handling.
 	map<string, Reply> responses;
+	//! Gates let concurrency tests hold responses without holding the catalog model's mutex.
+	std::condition_variable response_cv;
+	vector<shared_ptr<ResponseGate>> response_gates;
+	idx_t waiting_responses = 0;
 };
 
 Namespace ParseNamespace(const Json &value);

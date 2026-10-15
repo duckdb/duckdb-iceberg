@@ -18,3 +18,21 @@ set_target_properties(
 # by the SQL suite over HTTPUtil/HTTPClient.
 target_link_libraries(unittest_iceberg_native duckdb_static)
 duckdb_link_extensions(unittest_iceberg_native httpfs iceberg_mock)
+
+add_executable(unittest_iceberg_prefetch test_catalog_prefetch.cpp)
+target_include_directories(
+  unittest_iceberg_prefetch
+  PRIVATE ${CMAKE_SOURCE_DIR}/third_party/catch
+          ${CMAKE_CURRENT_SOURCE_DIR}/../../src/include)
+set_target_properties(
+  unittest_iceberg_prefetch PROPERTIES RUNTIME_OUTPUT_DIRECTORY
+                                       ${CMAKE_BINARY_DIR}/test)
+target_link_libraries(unittest_iceberg_prefetch duckdb_static)
+duckdb_link_extensions(
+  unittest_iceberg_prefetch
+  avro
+  parquet
+  json
+  iceberg
+  httpfs
+  iceberg_mock)

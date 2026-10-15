@@ -16,6 +16,8 @@ enum class IcebergAuthorizationType : uint8_t { OAUTH2, SIGV4, NONE, INVALID };
 enum class IRCAccessDelegationMode : uint8_t { NONE, VENDED_CREDENTIALS };
 
 //! Whether listing the tables of a schema also resolves their columns.
+//! Background ATTACH discovery lists namespaces and tables; EAGER also prefetches table metadata.
+//! Prefetched metadata is reused only within the configured MAX_TABLE_STALENESS.
 //! LAZY surfaces a placeholder entry per table and only loads a table when it is actually referenced.
 //! EAGER issues a LoadTable request for every listed table, so 'SHOW ALL TABLES' and
 //! 'information_schema.columns' report real columns, at the cost of one request per table.

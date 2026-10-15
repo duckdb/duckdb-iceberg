@@ -1,6 +1,7 @@
 #include "catalog_model.hpp"
 #include "duckdb/common/string_util.hpp"
 #include <algorithm>
+#include <chrono>
 
 namespace duckdb {
 namespace iceberg_test {
@@ -26,11 +27,21 @@ Reply Catalog::Route(const string &method, const string &path, const Json &body)
 		if (response_path.empty() || response_path[0] != '/' || status < 200 || status > 599) {
 			Invalid("Scripted responses require an absolute path and an HTTP status from 200 to 599");
 		}
-		responses[response_method + " " + response_path] = {static_cast<int>(status), body.At("body")};
+		Reply reply {static_cast<int>(status), body.At("body"), nullptr};
+		if (body.Has("blocked") && body.At("blocked").Bool()) {
+			reply.gate = make_shared_ptr<ResponseGate>();
+			response_gates.push_back(reply.gate);
+		}
+		responses[response_method + " " + response_path] = std::move(reply);
 		return {204, Json()};
 	}
 	if (path == "/__test/response" && method == "DELETE") {
 		responses.clear();
+		for (auto &gate : response_gates) {
+			gate->released = true;
+		}
+		response_gates.clear();
+		response_cv.notify_all();
 		return {204, Json()};
 	}
 	auto response = responses.find(method + " " + path);
@@ -147,7 +158,16 @@ Reply Catalog::Route(const string &method, const string &path, const Json &body)
 }
 
 unique_ptr<HTTPResponse> Catalog::Request(const string &method, const string &path, const string &body_text) {
-	lock_guard<mutex> guard(lock);
+	unique_lock<mutex> guard(lock);
+	if (method == "POST" && path == "/__test/wait") {
+		auto count = Json::Parse(body_text).At("count").Integer();
+		auto ready =
+		    response_cv.wait_for(guard, std::chrono::seconds(10), [&]() { return waiting_responses == idx_t(count); });
+		auto response =
+		    make_uniq<HTTPResponse>(ready ? HTTPStatusCode::NoContent_204 : HTTPStatusCode::RequestTimeout_408);
+		response->success = ready;
+		return response;
+	}
 	request_start_ms = NowMillis();
 	Json body;
 	Reply reply;
@@ -164,6 +184,17 @@ unique_ptr<HTTPResponse> Catalog::Request(const string &method, const string &pa
 			}
 		}
 		reply = Route(method, path, body);
+		if (reply.gate) {
+			waiting_responses++;
+			response_cv.notify_all();
+			auto released =
+			    response_cv.wait_for(guard, std::chrono::seconds(10), [&]() { return reply.gate->released; });
+			waiting_responses--;
+			response_cv.notify_all();
+			if (!released) {
+				Invalid("Timed out waiting for scripted response release");
+			}
+		}
 	} catch (const CatalogError &error) {
 		reply = {error.code, Json::Object({{"error", Json::Object({{"message", error.what()},
 		                                                           {"type", error.kind},

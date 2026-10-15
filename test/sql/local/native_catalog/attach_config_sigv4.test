@@ -6,6 +6,13 @@ require-env CATALOG_TEST_CONFIG_SETUP mock
 
 include test/sql/init_requires
 
+# Isolate synchronous config negotiation from background discovery traffic.
+statement ok
+SET threads = 1;
+
+statement ok
+SET async_threads = 0;
+
 require json
 
 statement ok

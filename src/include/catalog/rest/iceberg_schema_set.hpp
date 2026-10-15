@@ -24,6 +24,7 @@ public:
 	vector<shared_ptr<IcebergSchemaEntry>> GetEntries(ClientContext &context);
 	void AddEntry(const string &name, shared_ptr<IcebergSchemaEntry> entry);
 	void RemoveEntry(const string &name);
+	vector<shared_ptr<IcebergSchemaEntry>> AddPrefetchedEntries(IcebergListSchemasResult schemas);
 
 protected:
 	void LoadEntriesInternal(ClientContext &context) DUCKDB_REQUIRES(entry_lock);
@@ -36,6 +37,8 @@ public:
 private:
 	void ApplyListResult(IcebergListSchemasResult schemas) DUCKDB_REQUIRES(entry_lock);
 	annotated_mutex entry_lock;
+	//! Once foreground discovery or a mutation runs, attach-time discovery must not republish older names.
+	bool allow_prefetch DUCKDB_GUARDED_BY(entry_lock) = true;
 	unordered_map<string, shared_ptr<IcebergSchemaEntry>> entries DUCKDB_GUARDED_BY(entry_lock);
 };
 

@@ -23,6 +23,7 @@ class CatalogConfig;
 }
 
 class IcebergSchemaEntry;
+class IcebergCatalogPrefetch;
 struct IcebergTable;
 
 class MetadataCacheValue {
@@ -36,7 +37,7 @@ public:
 	//! The timestamp until when this entry is valid
 	timestamp_ms_t expire_timestamp_ms;
 	//! The payload of the cache entry
-	unique_ptr<const rest_api_objects::LoadTableResult> load_table_result;
+	shared_ptr<const rest_api_objects::LoadTableResult> load_table_result;
 };
 
 class LoadTableResultCache;
@@ -68,24 +69,27 @@ public:
 	bool Get(ClientContext &context, const string &table_key,
 	         const std::function<void(const rest_api_objects::LoadTableResult &)> &callback,
 	         bool validate_cache = true) {
-		annotated_lock_guard<annotated_mutex> guard(lock);
-		auto it = tables.find(table_key);
-		if (it == tables.end()) {
-			return false;
+		shared_ptr<const rest_api_objects::LoadTableResult> result;
+		{
+			annotated_lock_guard<annotated_mutex> guard(lock);
+			auto it = tables.find(table_key);
+			if (it == tables.end()) {
+				return false;
+			}
+			auto transaction_start_ms = IcebergUtils::GetTransactionStartTimeMS(context);
+			auto &entry = it->second;
+			if (validate_cache && transaction_start_ms > entry.expire_timestamp_ms) {
+				return false;
+			}
+			result = entry.load_table_result;
 		}
-
-		auto transaction_start_ms = IcebergUtils::GetTransactionStartTimeMS(context);
-
-		auto &entry = it->second;
-		if (validate_cache && transaction_start_ms > entry.expire_timestamp_ms) {
-			// cached value has expired
-			return false;
-		}
-		callback(*entry.load_table_result);
+		// Metadata-file reads in the callback can need async workers that are publishing other results.
+		callback(*result);
 		return true;
 	}
 	//! Create publication state before fetching. A later fetch supersedes earlier loads for the same key.
-	unique_ptr<LoadTableCachePublication> BeginLoad(const string &table_key);
+	//! Prefetch uses only_if_missing to leave foreground loads and existing cache entries alone.
+	unique_ptr<LoadTableCachePublication> BeginLoad(const string &table_key, bool only_if_missing = false);
 	//! Authoritative publication (e.g. staged creation) also invalidates outstanding fetches.
 	void SetOrOverwrite(const string &table_key, unique_ptr<const rest_api_objects::LoadTableResult> load_table_result);
 
@@ -116,6 +120,8 @@ public:
 	                        unique_ptr<IcebergAuthorization> auth_handler, IcebergAttachOptions &attach_options,
 	                        const optional<Identifier> &default_schema);
 	~IcebergCatalog() override;
+	void StartPrefetch(ClientContext &context);
+	void OnDetach(ClientContext &context) override;
 
 public:
 	static unique_ptr<SecretEntry> GetStorageSecret(ClientContext &context, const string &secret_name);
@@ -216,6 +222,10 @@ public:
 	unordered_set<string> supported_urls;
 	IcebergSchemaSet schemas;
 	LoadTableResultCache table_request_cache;
+
+private:
+	//! Must be destroyed before the schemas, cache and authorization used by its requests.
+	unique_ptr<IcebergCatalogPrefetch> prefetch;
 };
 
 } // namespace duckdb

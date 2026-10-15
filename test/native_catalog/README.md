@@ -56,6 +56,14 @@ cmake --build build/reldebug --target unittest_iceberg_native
 ./build/reldebug/test/unittest_iceberg_native
 ```
 
+The prefetch API tests verify background ATTACH discovery, overlapping requests,
+cache publication, connection lifetime, and cancellation on DETACH:
+
+```sh
+cmake --build build/reldebug --target unittest_iceberg_prefetch
+./build/reldebug/test/unittest_iceberg_prefetch
+```
+
 ## SQL test interfaces
 
 Load the test extension before using its SQL helpers. The native test config
@@ -102,6 +110,12 @@ and `body`. The path includes the query string. The response replaces that route
 until overwritten or cleared with `DELETE /__test/response`, which clears all
 scripted responses. This permits config and auth tests without external servers;
 the normal catalog model handles all other routes.
+
+Concurrency tests can add `"blocked": true` to a scripted response. The response
+is captured and held without locking the catalog; `POST /__test/wait` with
+`{"count": N}` waits for exactly N held responses. Replacing a route affects new
+requests only. `DELETE /__test/response` releases all held responses, including
+those from replaced routes. Both waits time out after ten seconds.
 
 Supported behavior and exclusions follow the
 [Python mock documentation](../../scripts/mock_rest_catalog/README.md).

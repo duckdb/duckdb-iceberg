@@ -7,6 +7,18 @@ This repository contains DuckDB's Apache Iceberg extension. It adds support for 
 
 User-facing documentation is available on the [Iceberg extension page](https://duckdb.org/docs/extensions/iceberg).
 
+## Catalog discovery
+
+After validating the catalog configuration and any explicit default schema,
+`ATTACH` starts background namespace and table discovery and returns without
+waiting for discovery to finish. Requests use up to eight available DuckDB
+workers. With no background workers, catalog access remains on demand.
+
+`TABLE_RESOLUTION 'eager'` also prefetches table metadata. Reusing that metadata
+still requires `MAX_TABLE_STALENESS`; normal queries retain their freshness and
+permission checks. Background discovery is best effort, and `DETACH` cancels
+queued work and waits for in-flight requests to finish.
+
 ## Row lineage inside transactions
 
 For format version 3 tables, rows inserted within a transaction have NULL `_row_id`
