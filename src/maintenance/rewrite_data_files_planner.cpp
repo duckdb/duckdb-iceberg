@@ -5,6 +5,7 @@
 #include "duckdb/common/operator/cast_operators.hpp"
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/common/types/value.hpp"
+#include "duckdb/common/unordered_set.hpp"
 
 #include "catalog/rest/catalog_entry/table/iceberg_table.hpp"
 #include "core/metadata/manifest/iceberg_manifest_list.hpp"
@@ -278,6 +279,145 @@ void CollectPartitionedCandidates(std::map<string, RewriteBucket> &per_partition
 	}
 }
 
+const Value *PartitionFieldValue(const vector<IcebergPartitionInfo> &partition_info, uint64_t field_id) {
+	for (auto &partition : partition_info) {
+		if (partition.field_id == field_id) {
+			return &partition.value;
+		}
+	}
+	return nullptr;
+}
+
+enum class DeleteApplyMatch { NO, YES, AMBIGUOUS };
+
+//! Position-delete applicability without referenced_data_file: same spec and partition key, plus the
+//! sequence rule from IcebergFilePruner::DeleteFileMatchesDataFile. A missing spec or partition value
+//! is ambiguous, so the caller leaves the delete file in place.
+DeleteApplyMatch PositionDeleteApplies(const IcebergTableMetadata &metadata, const IcebergManifest &delete_manifest,
+                                       const IcebergManifestEntry &delete_entry, const IcebergManifest &data_manifest,
+                                       const IcebergManifestEntry &data_entry) {
+	if (delete_entry.GetSequenceNumber(delete_manifest) < data_entry.GetSequenceNumber(data_manifest)) {
+		return DeleteApplyMatch::NO;
+	}
+	auto spec_it = metadata.GetPartitionSpecs().find(delete_manifest.partition_spec_id);
+	if (spec_it == metadata.GetPartitionSpecs().end()) {
+		return DeleteApplyMatch::AMBIGUOUS;
+	}
+	if (spec_it->second.IsUnpartitioned()) {
+		return DeleteApplyMatch::YES;
+	}
+	if (delete_manifest.partition_spec_id != data_manifest.partition_spec_id) {
+		return DeleteApplyMatch::NO;
+	}
+	for (auto &field : spec_it->second.GetFields()) {
+		auto delete_value = PartitionFieldValue(delete_entry.data_file.partition_info, field.partition_field_id);
+		auto data_value = PartitionFieldValue(data_entry.data_file.partition_info, field.partition_field_id);
+		if (!delete_value || !data_value) {
+			return DeleteApplyMatch::AMBIGUOUS;
+		}
+		if (!Value::NotDistinctFrom(*delete_value, *data_value)) {
+			return DeleteApplyMatch::NO;
+		}
+	}
+	return DeleteApplyMatch::YES;
+}
+
+//! Drop a delete file only when every data file it references is in the rewritten set.
+//! referenced_data_file names that file directly. Otherwise a position delete is removed only when every
+//! live data file it can match was rewritten. Dangling deletes stay (Spark remove-dangling-deletes defaults
+//! to false). Equality deletes without referenced_data_file stay.
+bool DeleteFileFullyApplied(const IcebergTableMetadata &metadata, const IcebergManifest &delete_manifest,
+                            const IcebergManifestEntry &delete_entry,
+                            const vector<std::pair<const IcebergManifest *, const IcebergManifestEntry *>> &live_data,
+                            const unordered_set<string> &rewritten_paths) {
+	auto &delete_file = delete_entry.data_file;
+	//! InvalidateFile(path) addresses an ordinary file. An offset identifies a deletion-vector blob.
+	if (delete_file.content_offset || delete_file.file_path.empty()) {
+		return false;
+	}
+	const bool has_reference = delete_file.referenced_data_file && !delete_file.referenced_data_file->empty();
+	if (delete_file.content == IcebergManifestEntryContentType::EQUALITY_DELETES) {
+		return has_reference && rewritten_paths.count(*delete_file.referenced_data_file) > 0;
+	}
+	if (delete_file.content != IcebergManifestEntryContentType::POSITION_DELETES) {
+		return false;
+	}
+	if (has_reference) {
+		return rewritten_paths.count(*delete_file.referenced_data_file) > 0;
+	}
+
+	bool matched_live_file = false;
+	for (auto &live : live_data) {
+		auto match = PositionDeleteApplies(metadata, delete_manifest, delete_entry, *live.first, *live.second);
+		if (match == DeleteApplyMatch::AMBIGUOUS) {
+			return false;
+		}
+		if (match == DeleteApplyMatch::NO) {
+			continue;
+		}
+		matched_live_file = true;
+		if (rewritten_paths.count(live.second->data_file.file_path) == 0) {
+			return false;
+		}
+	}
+	return matched_live_file;
+}
+
+void CollectFullyAppliedDeleteFiles(RewritePlan &plan, const IcebergTableMetadata &metadata,
+                                    const vector<IcebergManifestListEntry> &manifest_files) {
+	if (plan.selected_candidates.empty()) {
+		return;
+	}
+	unordered_set<string> rewritten_paths;
+	for (auto &candidate : plan.selected_candidates) {
+		rewritten_paths.insert(candidate.file_path);
+	}
+
+	vector<std::pair<const IcebergManifest *, const IcebergManifestEntry *>> live_data;
+	for (const auto &list_entry : manifest_files) {
+		auto &manifest = list_entry.GetManifest();
+		for (const auto &entry : list_entry.GetManifestEntries()) {
+			if (entry.status == IcebergManifestEntryStatusType::DELETED) {
+				continue;
+			}
+			if (entry.data_file.content != IcebergManifestEntryContentType::DATA) {
+				continue;
+			}
+			live_data.emplace_back(&manifest, &entry);
+		}
+	}
+
+	unordered_set<string> blocked_paths;
+	vector<string> removable_paths;
+	unordered_set<string> seen_removable;
+	for (const auto &list_entry : manifest_files) {
+		auto &manifest = list_entry.GetManifest();
+		for (const auto &entry : list_entry.GetManifestEntries()) {
+			if (entry.status == IcebergManifestEntryStatusType::DELETED) {
+				continue;
+			}
+			auto &delete_file = entry.data_file;
+			if (delete_file.content != IcebergManifestEntryContentType::POSITION_DELETES &&
+			    delete_file.content != IcebergManifestEntryContentType::EQUALITY_DELETES) {
+				continue;
+			}
+			if (!DeleteFileFullyApplied(metadata, manifest, entry, live_data, rewritten_paths)) {
+				blocked_paths.insert(delete_file.file_path);
+				continue;
+			}
+			if (seen_removable.insert(delete_file.file_path).second) {
+				removable_paths.push_back(delete_file.file_path);
+			}
+		}
+	}
+	for (auto &path : removable_paths) {
+		if (blocked_paths.count(path)) {
+			continue;
+		}
+		plan.delete_files_to_remove.push_back(path);
+	}
+}
+
 } // namespace
 
 RewritePlan PlanRewrite(ClientContext &context, RewriteDataFilesPlanInput input) {
@@ -355,6 +495,7 @@ RewritePlan PlanRewrite(ClientContext &context, RewriteDataFilesPlanInput input)
 		SelectCandidates(plan, input, per_partition, other_specs);
 	}
 
+	CollectFullyAppliedDeleteFiles(plan, table_metadata, manifest_files);
 	return plan;
 }
 

@@ -60,7 +60,7 @@ call iceberg_rewrite_data_files(
     min_input_files => 3
 );
 ----
-<REGEX>:[3-9][0-9]*	<REGEX>:[1-9][0-9]*	<REGEX>:[1-9][0-9]*	0	0
+<REGEX>:[3-9][0-9]*	<REGEX>:[1-9][0-9]*	<REGEX>:[1-9][0-9]*	0	<REGEX>:[0-9]+
 
 query I
 select count(*) from my_datalake.default.spark_rewrite_mor_residual_deletes;
