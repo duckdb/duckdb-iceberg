@@ -117,6 +117,7 @@ void WarnTableLoadFailure(ClientContext &context, IcebergTable &table, const Err
 } // namespace
 
 void IcebergTableSet::ScanEagerEntries(ClientContext &context, const std::function<void(CatalogEntry &)> &callback) {
+	auto &entries = entry_map.GetEntries();
 	auto &ic_catalog = catalog.Cast<IcebergCatalog>();
 	auto &transaction = IcebergTransaction::Get(context, catalog);
 	auto &scheduler = TaskScheduler::GetScheduler(context);
@@ -217,6 +218,7 @@ void IcebergTableSet::Scan(ClientContext &context, const std::function<void(Cata
 		return;
 	}
 	auto &transaction = IcebergTransaction::Get(context, catalog);
+	auto &entries = entry_map.GetEntries();
 	for (auto &entry : entries) {
 		auto &table = *entry.second;
 		transaction.tables[table.GetTableKey()] = entry.second;
@@ -227,6 +229,7 @@ void IcebergTableSet::Scan(ClientContext &context, const std::function<void(Cata
 void IcebergTableSet::ScanTables(ClientContext &context, const std::function<void(IcebergTable &)> &callback) {
 	annotated_lock_guard<annotated_mutex> lock(entry_lock);
 	LoadEntriesInternal(context);
+	auto &entries = entry_map.GetEntries();
 	for (auto &entry : entries) {
 		callback(*entry.second);
 	}
@@ -234,7 +237,7 @@ void IcebergTableSet::ScanTables(ClientContext &context, const std::function<voi
 
 void IcebergTableSet::DropEntry(ClientContext &context, DropInfo &info, bool delete_entry) {
 	annotated_lock_guard<annotated_mutex> lock(entry_lock);
-	allow_prefetch = false;
+	auto &entries = entry_map.GetEntries();
 	auto table_name = info.GetQualifiedName().Name();
 	auto entry = entries.find(table_name.GetIdentifierName());
 	if (entry == entries.end()) {
@@ -260,21 +263,21 @@ void IcebergTableSet::DropEntry(ClientContext &context, DropInfo &info, bool del
 
 void IcebergTableSet::RenameEntry(const string &name, const string &new_name, IcebergTable &&new_table) {
 	annotated_lock_guard<annotated_mutex> lock(entry_lock);
-	allow_prefetch = false;
+	auto &entries = entry_map.GetEntries();
 	auto source = entries.find(name);
 	if (source == entries.end()) {
 		throw CatalogException("Table %s does not exist", name);
 	}
 	entries.erase(source);
 	shared_ptr<IcebergTable> old_version;
-	CreateEntryInternal(new_name, std::move(new_table), old_version);
+	CreateEntryInternal(entries, new_name, std::move(new_table), old_version);
 	if (old_version) {
 		throw TransactionException("Table %s was already created by a different transaction!", new_name);
 	}
 }
 
 void IcebergTableSet::LoadEntriesInternal(ClientContext &context) {
-	allow_prefetch = false;
+	auto &entries = entry_map.GetEntries();
 	auto &iceberg_transaction = IcebergTransaction::Get(context, catalog);
 	bool schema_listed = iceberg_transaction.listed_schemas.find(schema.name.GetIdentifierName()) !=
 	                     iceberg_transaction.listed_schemas.end();
@@ -294,26 +297,16 @@ void IcebergTableSet::LoadEntriesInternal(ClientContext &context) {
 		// A later explicit lookup in this transaction must retry and report the permission error.
 		return;
 	}
-	ApplyListResult(std::move(tables));
+	ApplyListResult(entries, std::move(tables));
 	iceberg_transaction.listed_schemas.insert(schema.name.GetIdentifierName());
 }
 
-void IcebergTableSet::AddPrefetchedEntries(const vector<rest_api_objects::TableIdentifier> &tables) {
-	// Never occupy an async worker waiting for a foreground scan's entry lock.
-	if (!entry_lock.try_lock()) {
-		return;
-	}
-	annotated_lock_guard<annotated_mutex> guard(entry_lock, std::adopt_lock);
-	if (!allow_prefetch) {
-		return;
-	}
-	auto &ic_catalog = catalog.Cast<IcebergCatalog>();
-	for (auto &table : tables) {
-		entries.emplace(table.name, IcebergTable::CreatePlaceholder(ic_catalog, schema, table.name));
-	}
+shared_ptr<IcebergTableSet::EntryMap::Prefetch> IcebergTableSet::GetPrefetch() {
+	annotated_lock_guard<annotated_mutex> guard(entry_lock);
+	return entry_map.GetPrefetch();
 }
 
-void IcebergTableSet::ApplyListResult(IcebergListTablesResult tables) {
+void IcebergTableSet::ApplyListResult(EntryMap::Entries &entries, IcebergListTablesResult tables) {
 	auto &ic_catalog = catalog.Cast<IcebergCatalog>();
 	// A refused listing says nothing about which tables exist, so the cache is left untouched.
 	if (tables) {
@@ -354,7 +347,8 @@ static Value ParseTableProperty(TableFunctionBinder &binder, ClientContext &cont
 	return std::move(*casted_val);
 }
 
-shared_ptr<IcebergTable> IcebergTableSet::CreateEntryInternal(const string &name, IcebergTable &&table,
+shared_ptr<IcebergTable> IcebergTableSet::CreateEntryInternal(EntryMap::Entries &entries, const string &name,
+                                                              IcebergTable &&table,
                                                               shared_ptr<IcebergTable> &old_entry) {
 	auto it = entries.find(name);
 	if (it != entries.end()) {
@@ -498,10 +492,6 @@ static bool EntryMissingFromListing(const optional<vector<rest_api_objects::Tabl
 }
 
 optional_ptr<CatalogEntry> IcebergTableSet::GetEntry(ClientContext &context, const EntryLookupInfo &lookup) {
-	{
-		annotated_lock_guard<annotated_mutex> guard(entry_lock);
-		allow_prefetch = false;
-	}
 	auto &ic_catalog = catalog.Cast<IcebergCatalog>();
 	auto &iceberg_transaction = IcebergTransaction::Get(context, catalog);
 	const auto &table_name = lookup.GetEntryName();
@@ -539,7 +529,7 @@ optional_ptr<CatalogEntry> IcebergTableSet::GetEntry(ClientContext &context, con
 
 	{
 		annotated_lock_guard<annotated_mutex> l(entry_lock);
-		entries[table_name] = new_version;
+		entry_map.GetEntries()[table_name] = new_version;
 	}
 	iceberg_transaction.tables[table_key] = new_version;
 	auto &state = iceberg_transaction.SetCatalogTableState(new_version);

@@ -17,6 +17,7 @@ IcebergSchemaSet::IcebergSchemaSet(Catalog &catalog) : catalog(catalog) {
 optional_ptr<CatalogEntry> IcebergSchemaSet::GetEntry(ClientContext &context, const string &name,
                                                       OnEntryNotFound if_not_found) {
 	annotated_lock_guard<annotated_mutex> l(entry_lock);
+	auto &entries = entry_map.GetEntries();
 	auto &ic_catalog = catalog.Cast<IcebergCatalog>();
 	auto &iceberg_transaction = IcebergTransaction::Get(context, catalog);
 
@@ -87,7 +88,7 @@ optional_ptr<CatalogEntry> IcebergSchemaSet::GetEntry(ClientContext &context, co
 		info.internal = false;
 		// assume schema exists to avoid extra roundtrip
 		auto schema_entry = make_shared_ptr<IcebergSchemaEntry>(catalog, info);
-		auto inserted_entry = CreateEntryInternal(std::move(schema_entry));
+		auto inserted_entry = CreateEntryInternal(entries, std::move(schema_entry));
 		iceberg_transaction.schemas.emplace(name, inserted_entry);
 		return inserted_entry.get();
 	}
@@ -106,6 +107,7 @@ vector<shared_ptr<IcebergSchemaEntry>> IcebergSchemaSet::GetEntries(ClientContex
 	annotated_lock_guard<annotated_mutex> l(entry_lock);
 	auto &iceberg_transaction = IcebergTransaction::Get(context, catalog);
 	LoadEntriesInternal(context);
+	auto &entries = entry_map.GetEntries();
 	vector<shared_ptr<IcebergSchemaEntry>> result;
 	result.reserve(entries.size() + iceberg_transaction.created_schemas.size());
 	for (auto &entry : entries) {
@@ -130,14 +132,12 @@ vector<shared_ptr<IcebergSchemaEntry>> IcebergSchemaSet::GetEntries(ClientContex
 void IcebergSchemaSet::AddEntry(const string &name, shared_ptr<IcebergSchemaEntry> entry) {
 	D_ASSERT(entry);
 	annotated_lock_guard<annotated_mutex> l(entry_lock);
-	allow_prefetch = false;
-	entries[name] = std::move(entry);
+	entry_map.GetEntries()[name] = std::move(entry);
 }
 
 void IcebergSchemaSet::RemoveEntry(const string &name) {
 	annotated_lock_guard<annotated_mutex> l(entry_lock);
-	allow_prefetch = false;
-	entries.erase(name);
+	entry_map.GetEntries().erase(name);
 }
 
 static string GetSchemaName(const vector<string> &items) {
@@ -150,7 +150,7 @@ void IcebergSchemaSet::LoadEntries(ClientContext &context) {
 }
 
 void IcebergSchemaSet::LoadEntriesInternal(ClientContext &context) {
-	allow_prefetch = false;
+	auto &entries = entry_map.GetEntries();
 	auto &ic_catalog = catalog.Cast<IcebergCatalog>();
 	auto &iceberg_transaction = IcebergTransaction::Get(context, catalog);
 	bool schema_listed = iceberg_transaction.called_list_schemas;
@@ -164,28 +164,18 @@ void IcebergSchemaSet::LoadEntriesInternal(ClientContext &context) {
 	if (context.IsInterrupted()) {
 		throw InterruptException();
 	}
-	ApplyListResult(std::move(schemas));
+	ApplyListResult(entries, std::move(schemas));
 	iceberg_transaction.called_list_schemas = true;
 }
 
-vector<shared_ptr<IcebergSchemaEntry>> IcebergSchemaSet::AddPrefetchedEntries(IcebergListSchemasResult schemas) {
-	// A foreground owner may be waiting for this same worker pool to finish a request.
-	if (!entry_lock.try_lock()) {
-		return {};
-	}
-	annotated_lock_guard<annotated_mutex> guard(entry_lock, std::adopt_lock);
-	if (!allow_prefetch) {
-		return {};
-	}
-	ApplyListResult(std::move(schemas));
-	vector<shared_ptr<IcebergSchemaEntry>> result;
-	for (auto &entry : entries) {
-		result.push_back(entry.second);
-	}
-	return result;
+shared_ptr<IcebergSchemaSet::EntryMap::Prefetch> IcebergSchemaSet::GetPrefetch() {
+	annotated_lock_guard<annotated_mutex> guard(entry_lock);
+	return entry_map.GetPrefetch();
 }
 
-void IcebergSchemaSet::ApplyListResult(IcebergListSchemasResult schemas) {
+IcebergSchemaSet::EntryMap::Entries IcebergSchemaSet::CreateEntries(Catalog &catalog,
+                                                                    IcebergListSchemasResult schemas) {
+	EntryMap::Entries entries;
 	for (auto &schema : schemas) {
 		CreateSchemaInfo info;
 		info.SetQualifiedName(QualifiedName(info.GetQualifiedName().Catalog(), Identifier(GetSchemaName(schema.items)),
@@ -193,11 +183,23 @@ void IcebergSchemaSet::ApplyListResult(IcebergListSchemasResult schemas) {
 		info.internal = false;
 		auto schema_entry = make_shared_ptr<IcebergSchemaEntry>(catalog, info);
 		schema_entry->namespace_items = std::move(schema.items);
-		CreateEntryInternal(std::move(schema_entry));
+		auto name = schema_entry->name.GetIdentifierName();
+		if (name.empty()) {
+			throw InternalException("IcebergSchemaSet::CreateEntry called with empty name");
+		}
+		entries.emplace(std::move(name), std::move(schema_entry));
+	}
+	return entries;
+}
+
+void IcebergSchemaSet::ApplyListResult(EntryMap::Entries &entries, IcebergListSchemasResult schemas) {
+	for (auto &entry : CreateEntries(catalog, std::move(schemas))) {
+		CreateEntryInternal(entries, std::move(entry.second));
 	}
 }
 
-shared_ptr<IcebergSchemaEntry> IcebergSchemaSet::CreateEntryInternal(shared_ptr<IcebergSchemaEntry> entry) {
+shared_ptr<IcebergSchemaEntry> IcebergSchemaSet::CreateEntryInternal(EntryMap::Entries &entries,
+                                                                     shared_ptr<IcebergSchemaEntry> entry) {
 	auto &name = entry->name.GetIdentifierName();
 	if (name.empty()) {
 		throw InternalException("IcebergSchemaSet::CreateEntry called with empty name");

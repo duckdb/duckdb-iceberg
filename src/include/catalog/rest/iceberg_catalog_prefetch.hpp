@@ -1,6 +1,7 @@
 #pragma once
 
 #include "catalog/rest/api/catalog_api.hpp"
+#include "catalog/rest/iceberg_catalog_entry_map.hpp"
 #include "duckdb/common/deque.hpp"
 #include "duckdb/main/client_context.hpp"
 #include "duckdb/parallel/task_executor.hpp"
@@ -9,6 +10,7 @@ namespace duckdb {
 
 class IcebergCatalog;
 class IcebergSchemaEntry;
+struct IcebergTable;
 
 //! Best-effort discovery owned by the attached catalog, independent of the attaching connection.
 class IcebergCatalogPrefetch {
@@ -25,6 +27,8 @@ private:
 		RequestType type;
 		shared_ptr<IcebergSchemaEntry> schema;
 		string table_name;
+		shared_ptr<IcebergCatalogEntryMap<IcebergSchemaEntry>::Prefetch> schema_publication;
+		shared_ptr<IcebergCatalogEntryMap<IcebergTable>::Prefetch> table_publication;
 	};
 	class Worker;
 

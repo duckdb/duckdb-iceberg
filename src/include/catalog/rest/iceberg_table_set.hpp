@@ -10,6 +10,7 @@
 #include "catalog/rest/catalog_entry/table/iceberg_table_schema_version.hpp"
 #include "catalog/rest/catalog_entry/table/iceberg_table.hpp"
 #include "catalog/rest/transaction/iceberg_transaction_data.hpp"
+#include "catalog/rest/iceberg_catalog_entry_map.hpp"
 
 namespace duckdb {
 struct CreateTableInfo;
@@ -20,6 +21,7 @@ class LoadTableCachePublication;
 
 class IcebergTableSet {
 public:
+	using EntryMap = IcebergCatalogEntryMap<IcebergTable>;
 	explicit IcebergTableSet(IcebergSchemaEntry &schema);
 
 public:
@@ -28,7 +30,7 @@ public:
 	void ScanTables(ClientContext &context, const std::function<void(IcebergTable &)> &callback);
 	void DropEntry(ClientContext &context, DropInfo &info, bool delete_entry);
 	void RenameEntry(const string &name, const string &new_name, IcebergTable &&new_table);
-	void AddPrefetchedEntries(const vector<rest_api_objects::TableIdentifier> &tables);
+	shared_ptr<EntryMap::Prefetch> GetPrefetch();
 	static IcebergTable &CreateNewEntry(ClientContext &context, IcebergCatalog &catalog, IcebergSchemaEntry &schema,
 	                                    CreateTableInfo &info);
 
@@ -41,8 +43,8 @@ private:
 	CatalogEntry &GetScanEntry(IcebergTable &table_info) const DUCKDB_REQUIRES(entry_lock);
 	IcebergTableSchemaVersion &GetOrCreateDummy(IcebergTable &table_info) const DUCKDB_REQUIRES(entry_lock);
 	void LoadEntriesInternal(ClientContext &context) DUCKDB_REQUIRES(entry_lock);
-	void ApplyListResult(IcebergListTablesResult tables) DUCKDB_REQUIRES(entry_lock);
-	shared_ptr<IcebergTable> CreateEntryInternal(const string &name, IcebergTable &&table,
+	void ApplyListResult(EntryMap::Entries &entries, IcebergListTablesResult tables) DUCKDB_REQUIRES(entry_lock);
+	shared_ptr<IcebergTable> CreateEntryInternal(EntryMap::Entries &entries, const string &name, IcebergTable &&table,
 	                                             shared_ptr<IcebergTable> &old_entry) DUCKDB_REQUIRES(entry_lock);
 
 public:
@@ -67,8 +69,7 @@ private:
 	                                               IcebergLoadViewResult result);
 
 	annotated_mutex entry_lock;
-	bool allow_prefetch DUCKDB_GUARDED_BY(entry_lock) = true;
-	unordered_map<string, shared_ptr<IcebergTable>> entries DUCKDB_GUARDED_BY(entry_lock);
+	EntryMap entry_map DUCKDB_GUARDED_BY(entry_lock);
 };
 
 } // namespace duckdb

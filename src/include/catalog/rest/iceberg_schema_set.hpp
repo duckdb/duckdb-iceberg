@@ -8,6 +8,7 @@
 #include "duckdb/common/vector.hpp"
 
 #include "catalog/rest/api/catalog_api.hpp"
+#include "catalog/rest/iceberg_catalog_entry_map.hpp"
 #include "catalog_entry/schema/iceberg_schema_entry.hpp"
 
 namespace duckdb {
@@ -15,6 +16,7 @@ struct CreateSchemaInfo;
 
 class IcebergSchemaSet {
 public:
+	using EntryMap = IcebergCatalogEntryMap<IcebergSchemaEntry>;
 	explicit IcebergSchemaSet(Catalog &catalog);
 
 public:
@@ -24,22 +26,21 @@ public:
 	vector<shared_ptr<IcebergSchemaEntry>> GetEntries(ClientContext &context);
 	void AddEntry(const string &name, shared_ptr<IcebergSchemaEntry> entry);
 	void RemoveEntry(const string &name);
-	vector<shared_ptr<IcebergSchemaEntry>> AddPrefetchedEntries(IcebergListSchemasResult schemas);
+	shared_ptr<EntryMap::Prefetch> GetPrefetch();
+	static EntryMap::Entries CreateEntries(Catalog &catalog, IcebergListSchemasResult schemas);
 
 protected:
 	void LoadEntriesInternal(ClientContext &context) DUCKDB_REQUIRES(entry_lock);
-	shared_ptr<IcebergSchemaEntry> CreateEntryInternal(shared_ptr<IcebergSchemaEntry> entry)
+	shared_ptr<IcebergSchemaEntry> CreateEntryInternal(EntryMap::Entries &entries, shared_ptr<IcebergSchemaEntry> entry)
 	    DUCKDB_REQUIRES(entry_lock);
 
 public:
 	Catalog &catalog;
 
 private:
-	void ApplyListResult(IcebergListSchemasResult schemas) DUCKDB_REQUIRES(entry_lock);
+	void ApplyListResult(EntryMap::Entries &entries, IcebergListSchemasResult schemas) DUCKDB_REQUIRES(entry_lock);
 	annotated_mutex entry_lock;
-	//! Once foreground discovery or a mutation runs, attach-time discovery must not republish older names.
-	bool allow_prefetch DUCKDB_GUARDED_BY(entry_lock) = true;
-	unordered_map<string, shared_ptr<IcebergSchemaEntry>> entries DUCKDB_GUARDED_BY(entry_lock);
+	EntryMap entry_map DUCKDB_GUARDED_BY(entry_lock);
 };
 
 } // namespace duckdb

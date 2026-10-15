@@ -49,7 +49,11 @@ IcebergCatalogPrefetch::~IcebergCatalogPrefetch() {
 
 void IcebergCatalogPrefetch::Start() {
 	if (!contexts.empty() && catalog.supported_urls.count("GET /v1/{prefix}/namespaces")) {
-		Enqueue({{RequestType::SCHEMAS, nullptr, ""}});
+		Request request {RequestType::SCHEMAS, nullptr, ""};
+		request.schema_publication = catalog.schemas.GetPrefetch();
+		if (request.schema_publication) {
+			Enqueue({std::move(request)});
+		}
 	}
 }
 
@@ -131,14 +135,16 @@ void IcebergCatalogPrefetch::Execute(ClientContext &context, const Request &requ
 	case RequestType::SCHEMAS: {
 		auto schemas = IcebergListSchemasRequest({}).Execute(context, catalog);
 		context.InterruptCheck();
-		auto entries = catalog.schemas.AddPrefetchedEntries(std::move(schemas));
-		if (!catalog.supported_urls.count("GET /v1/{prefix}/namespaces/{namespace}/tables")) {
-			return;
-		}
+		auto entries = IcebergSchemaSet::CreateEntries(catalog, std::move(schemas));
 		vector<Request> requests;
-		for (auto &entry : entries) {
-			requests.push_back({RequestType::TABLES, std::move(entry), ""});
+		if (catalog.supported_urls.count("GET /v1/{prefix}/namespaces/{namespace}/tables")) {
+			for (auto &entry : entries) {
+				Request tables {RequestType::TABLES, entry.second, ""};
+				tables.table_publication = entry.second->tables.GetPrefetch();
+				requests.push_back(std::move(tables));
+			}
 		}
+		request.schema_publication->Publish(std::move(entries));
 		Enqueue(std::move(requests));
 		return;
 	}
@@ -148,7 +154,11 @@ void IcebergCatalogPrefetch::Execute(ClientContext &context, const Request &requ
 		if (!tables) {
 			return;
 		}
-		request.schema->tables.AddPrefetchedEntries(*tables);
+		IcebergTableSet::EntryMap::Entries entries;
+		for (auto &table : *tables) {
+			entries.emplace(table.name, IcebergTable::CreatePlaceholder(catalog, *request.schema, table.name));
+		}
+		request.table_publication->Publish(std::move(entries));
 		if (catalog.attach_options.table_resolution != IcebergTableResolution::EAGER ||
 		    !catalog.supported_urls.count("GET /v1/{prefix}/namespaces/{namespace}/tables/{table}")) {
 			return;

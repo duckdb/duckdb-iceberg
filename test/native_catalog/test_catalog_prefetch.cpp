@@ -241,17 +241,13 @@ TEST_CASE("DETACH drains in-flight catalog discovery", "[iceberg_prefetch]") {
 TEST_CASE("A foreground schema scan can overtake background discovery with one worker", "[iceberg_prefetch]") {
 	PrefetchTest test;
 	Query(test.connection, "SET async_threads = 1");
-	test.Seed("a");
+	test.Request("POST", "/v1/namespaces", R"({"namespace":["a"]})");
 	auto namespaces = test.Request("GET", "/v1/namespaces");
 	test.Block("/v1/namespaces", namespaces);
 	test.Attach(test.connection);
 	test.WaitForBlocked(1);
-	// The queued foreground request will get a normal reply, while the original remains blocked.
-	test.Request(
-	    "POST", "/__test/response",
-	    Json::Object({{"method", "GET"}, {"path", "/v1/namespaces"}, {"status", int64_t(200)}, {"body", namespaces}})
-	        .Dump(),
-	    204);
+	// The foreground request will see the removal, while the background response still contains "a".
+	test.Request("DELETE", "/v1/namespaces/a", "", 204);
 	Connection scanning(test.database);
 	auto scan = std::async(std::launch::async, [&]() {
 		return scanning.Query("SELECT count(*) FROM duckdb_schemas() WHERE database_name = 'reader'");
@@ -271,7 +267,74 @@ TEST_CASE("A foreground schema scan can overtake background discovery with one w
 	REQUIRE(status == std::future_status::ready);
 	auto result = scan.get();
 	REQUIRE_FALSE(result->HasError());
-	REQUIRE(result->Collection().GetValue(0, 0).GetValue<int64_t>() == 1);
+	// The foreground listing wins even though the older background response still contains "a".
+	REQUIRE(result->Collection().GetValue(0, 0).GetValue<int64_t>() == 0);
+}
+
+TEST_CASE("Late namespace discovery cannot resurrect a dropped schema", "[iceberg_prefetch]") {
+	PrefetchTest test;
+	Query(test.connection, "SET async_threads = 1");
+	test.Request("POST", "/v1/namespaces", R"({"namespace":["a"]})");
+	test.Block("/v1/namespaces", test.Request("GET", "/v1/namespaces"));
+	test.Attach(test.connection);
+	test.WaitForBlocked(1);
+	Query(test.connection, "DROP SCHEMA reader.a");
+	test.Release();
+	auto schemas = Query(test.connection, "SELECT count(*) FROM duckdb_schemas() WHERE database_name = 'reader'");
+	REQUIRE(schemas->Collection().GetValue(0, 0).GetValue<int64_t>() == 0);
+}
+
+TEST_CASE("Late table discovery cannot undo foreground table mutations", "[iceberg_prefetch]") {
+	PrefetchTest test;
+	Query(test.connection, "SET async_threads = 1");
+	test.Seed("a");
+	test.Block("/v1/namespaces/a/tables", test.Request("GET", "/v1/namespaces/a/tables"));
+	test.Attach(test.connection);
+	test.WaitForBlocked(1);
+	string expected;
+	SECTION("Drop leaves an empty entry map") {
+		Query(test.connection, "DROP TABLE reader.a.t");
+	}
+	SECTION("Rename keeps only the new name") {
+		Query(test.connection, "ALTER TABLE reader.a.t RENAME TO renamed");
+		expected = "renamed";
+	}
+	test.Release();
+	// A refused listing retains cached names, so it cannot mask resurrection by removing the stale name.
+	test.Request(
+	    "POST", "/__test/response",
+	    R"({"method":"GET","path":"/v1/namespaces/a/tables","status":403,"body":{"error":{"message":"denied","type":"ForbiddenException","code":403}}})",
+	    204);
+	auto tables = Query(test.connection, "SELECT table_name FROM duckdb_tables() WHERE database_name = 'reader'");
+	REQUIRE(tables->Collection().Count() == (expected.empty() ? 0 : 1));
+	if (!expected.empty()) {
+		REQUIRE(tables->Collection().GetValue(0, 0).GetValue<string>() == expected);
+	}
+}
+
+TEST_CASE("Ready prefetched listings are adopted before foreground discovery", "[iceberg_prefetch]") {
+	PrefetchTest test;
+	test.Seed("a");
+	test.Attach(test.connection, ", TABLE_RESOLUTION 'eager', MAX_TABLE_STALENESS '5 minutes'");
+	Query(test.connection, "BEGIN");
+	test.WaitForCache("a");
+	Query(test.connection, "COMMIT");
+	for (auto path : {"/v1/namespaces", "/v1/namespaces/a/tables"}) {
+		test.Request(
+		    "POST", "/__test/response",
+		    Json::Object(
+		        {{"method", "GET"},
+		         {"path", path},
+		         {"status", int64_t(403)},
+		         {"body", Json::Parse(R"({"error":{"message":"denied","type":"ForbiddenException","code":403}})")}})
+		        .Dump(),
+		    204);
+	}
+	auto tables =
+	    Query(test.connection, "SELECT schema_name, table_name FROM duckdb_tables() WHERE database_name = 'reader'");
+	REQUIRE(tables->Collection().Count() == 1);
+	REQUIRE(tables->Collection().GetValue(0, 0).GetValue<string>() == "a");
+	REQUIRE(tables->Collection().GetValue(1, 0).GetValue<string>() == "t");
 }
 
 TEST_CASE("Background discovery does not retain the database", "[iceberg_prefetch]") {
