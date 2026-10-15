@@ -23,8 +23,6 @@ namespace duckdb {
 
 namespace {
 
-constexpr int64_t MIN_TARGET_FILE_SIZE_BYTES = 100;
-
 static QualifiedName ParseRewriteTableName(const string &identifier) {
 	auto parts = QualifiedName::ParseComponents(identifier);
 	if (parts.size() != 3) {
@@ -41,28 +39,18 @@ static QualifiedName ParseRewriteTableName(const string &identifier) {
 }
 
 static int64_t ParseByteSizeNamedParameter(const Value &value, const char *parameter_name) {
-	idx_t parsed_value;
 	if (value.type().id() == LogicalTypeId::VARCHAR) {
+		idx_t parsed_value;
 		auto error = StringUtil::TryParseFormattedBytes(StringValue::Get(value), parsed_value);
 		if (!error.empty()) {
 			throw InvalidInputException("iceberg_rewrite_data_files: invalid '%s': %s", parameter_name, error);
 		}
-	} else {
-		auto numeric_value = value.DefaultCastAs(LogicalType::BIGINT).GetValue<int64_t>();
-		if (numeric_value < MIN_TARGET_FILE_SIZE_BYTES) {
-			throw InvalidInputException("iceberg_rewrite_data_files: '%s' must be >= %lld bytes, got %lld",
-			                            parameter_name, MIN_TARGET_FILE_SIZE_BYTES, numeric_value);
+		if (parsed_value > static_cast<idx_t>(NumericLimits<int64_t>::Maximum())) {
+			throw InvalidInputException("iceberg_rewrite_data_files: '%s' is too large", parameter_name);
 		}
-		return numeric_value;
+		return static_cast<int64_t>(parsed_value);
 	}
-	if (parsed_value < static_cast<idx_t>(MIN_TARGET_FILE_SIZE_BYTES)) {
-		throw InvalidInputException("iceberg_rewrite_data_files: '%s' must be >= %lld bytes, got %llu", parameter_name,
-		                            MIN_TARGET_FILE_SIZE_BYTES, static_cast<unsigned long long>(parsed_value));
-	}
-	if (parsed_value > static_cast<idx_t>(NumericLimits<int64_t>::Maximum())) {
-		throw InvalidInputException("iceberg_rewrite_data_files: '%s' is too large", parameter_name);
-	}
-	return static_cast<int64_t>(parsed_value);
+	return value.DefaultCastAs(LogicalType::BIGINT).GetValue<int64_t>();
 }
 
 static RewriteDataFilesPlanInput ParseRewritePlanInput(TableFunctionBindInput &input) {
@@ -73,11 +61,26 @@ static RewriteDataFilesPlanInput ParseRewritePlanInput(TableFunctionBindInput &i
 		auto opt = StringUtil::Lower(kv.first.GetIdentifierName());
 		auto &val = kv.second;
 		if (opt == "target_file_size_bytes") {
-			result.target_file_size_bytes = ParseByteSizeNamedParameter(val, "target_file_size_bytes");
+			auto target = ParseByteSizeNamedParameter(val, "target_file_size_bytes");
+			if (target <= 0) {
+				throw InvalidInputException(
+				    "iceberg_rewrite_data_files: 'target_file_size_bytes' must be > 0 bytes, got %lld", target);
+			}
+			result.target_file_size_bytes = target;
 		} else if (opt == "min_file_size_bytes") {
-			result.min_file_size_bytes = ParseByteSizeNamedParameter(val, "min_file_size_bytes");
+			auto min_size = ParseByteSizeNamedParameter(val, "min_file_size_bytes");
+			if (min_size < 0) {
+				throw InvalidInputException(
+				    "iceberg_rewrite_data_files: 'min_file_size_bytes' must be >= 0 bytes, got %lld", min_size);
+			}
+			result.min_file_size_bytes = min_size;
 		} else if (opt == "max_file_size_bytes") {
-			result.max_file_size_bytes = ParseByteSizeNamedParameter(val, "max_file_size_bytes");
+			auto max_size = ParseByteSizeNamedParameter(val, "max_file_size_bytes");
+			if (max_size <= 0) {
+				throw InvalidInputException(
+				    "iceberg_rewrite_data_files: 'max_file_size_bytes' must be > 0 bytes, got %lld", max_size);
+			}
+			result.max_file_size_bytes = max_size;
 		} else if (opt == "min_input_files") {
 			auto value = val.GetValue<int64_t>();
 			if (value < 1) {
@@ -104,6 +107,23 @@ static RewriteDataFilesPlanInput ParseRewritePlanInput(TableFunctionBindInput &i
 		throw InvalidInputException(
 		    "iceberg_rewrite_data_files: 'min_file_size_bytes' (%lld) must be <= 'max_file_size_bytes' (%lld)",
 		    result.min_file_size_bytes.value(), result.max_file_size_bytes.value());
+	}
+	//! When the caller sets the target, compare it with any explicit threshold. Defaults are 75% and 180%
+	//! of the target, so an omitted threshold cannot violate the Spark ordering.
+	if (result.target_file_size_bytes) {
+		auto target = result.target_file_size_bytes.value();
+		auto min_size = result.min_file_size_bytes ? result.min_file_size_bytes.value() : (target * 3) / 4;
+		auto max_size = result.max_file_size_bytes ? result.max_file_size_bytes.value() : (target * 9) / 5;
+		if (target <= min_size) {
+			throw InvalidInputException("iceberg_rewrite_data_files: 'target_file_size_bytes' (%lld) must be > "
+			                            "'min_file_size_bytes' (%lld)",
+			                            target, min_size);
+		}
+		if (target >= max_size) {
+			throw InvalidInputException("iceberg_rewrite_data_files: 'target_file_size_bytes' (%lld) must be < "
+			                            "'max_file_size_bytes' (%lld)",
+			                            target, max_size);
+		}
 	}
 	return result;
 }
