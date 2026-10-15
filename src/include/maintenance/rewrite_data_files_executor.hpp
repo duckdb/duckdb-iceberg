@@ -14,6 +14,7 @@ struct RewriteExecutionResult {
 	int64_t rewritten_data_files = 0;
 	int64_t added_data_files = 0;
 	int64_t rewritten_bytes = 0;
+	int64_t failed_data_files = 0;
 	//! Added files for the REPLACE snapshot.
 	vector<IcebergManifestEntry> new_entries;
 	//! Input files to remove in the same REPLACE snapshot.
@@ -22,6 +23,10 @@ struct RewriteExecutionResult {
 
 //! Commit all completed rewrite output as one Iceberg REPLACE snapshot.
 void CommitRewrite(ClientContext &context, const RewritePlan &plan, RewriteExecutionResult &result);
+
+//! Rewrite ordered file groups in partial-progress batches. Each batch commits on its own
+//! connection, so a later failure leaves earlier commits in place.
+RewriteExecutionResult ExecutePartialRewrite(ClientContext &context, const RewritePlan &plan);
 
 //! Best-effort cleanup for files produced before a rewrite failure.
 void CleanupRewriteFiles(ClientContext &context, const IcebergTable &table_info, const vector<string> &produced_paths);

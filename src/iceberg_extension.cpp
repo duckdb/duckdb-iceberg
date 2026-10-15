@@ -138,6 +138,17 @@ static void LoadInternal(ExtensionLoader &loader) {
 	    "Maximum number of characters of a REST catalog POST body to include in Iceberg log messages. "
 	    "Bodies longer than this are truncated with a trailing '... (truncated)' marker. Set to 0 to omit the body.",
 	    LogicalType::UBIGINT, Value::UBIGINT(10000));
+	config.AddExtensionOption("iceberg_rewrite_fail_next_commit",
+	                          "DEBUG SETTING: fail the next iceberg_rewrite_data_files commit before it is published.",
+	                          LogicalType::BOOLEAN, Value::BOOLEAN(false), nullptr, SetScope::SESSION);
+	config.AddExtensionOption(
+	    "iceberg_rewrite_fail_commit_index",
+	    "DEBUG SETTING: 1-based partial-progress commit to fail. 0 disables injection. 1 also fails the "
+	    "single commit used when partial progress is off.",
+	    LogicalType::BIGINT, Value::BIGINT(0), nullptr, SetScope::SESSION);
+	config.AddExtensionOption("iceberg_rewrite_only_paths",
+	                          "DEBUG SETTING: newline-separated data file paths the next rewrite may select.",
+	                          LogicalType::VARCHAR, Value(""), nullptr, SetScope::SESSION);
 	config.AddExtensionOption(
 	    "iceberg_equality_delete_fast_filter",
 	    "Apply byte-comparable equality deletes through a shared columnar flat hash filter instead of a bound "

@@ -4,6 +4,7 @@
 #include "duckdb/common/optional.hpp"
 #include "duckdb/common/string.hpp"
 #include "duckdb/common/types/value.hpp"
+#include "duckdb/common/unordered_set.hpp"
 #include "duckdb/common/vector.hpp"
 #include "duckdb/main/client_context.hpp"
 #include "duckdb/parser/qualified_name.hpp"
@@ -28,10 +29,23 @@ struct RewriteBucket {
 	int64_t eligible_bytes = 0;
 };
 
+struct RewriteFileGroup {
+	vector<RewriteCandidate> files;
+	int64_t input_bytes = 0;
+};
+
 struct RewritePlan {
 	QualifiedName table_name;
 	int64_t starting_snapshot_id = -1;
 	int64_t starting_sequence_number = 0;
+	//! Qualifying partition buckets, ordered by rewrite_job_order.
+	vector<RewriteFileGroup> file_groups;
+	bool partial_progress_enabled = false;
+	int64_t partial_progress_max_commits = 10;
+	int64_t partial_progress_max_failed_commits = 2147483647;
+	int64_t max_concurrent_file_group_rewrites = 5;
+	//! none, bytes-asc, bytes-desc, files-asc, or files-desc.
+	string rewrite_job_order = "none";
 	//! Iceberg spec default for write.target-file-size-bytes (same as IcebergCopyOptions::file_size_bytes).
 	int64_t target_file_size_bytes = 512LL * 1024 * 1024;
 	//! Keep the loaded metadata alive until commit.
@@ -51,6 +65,13 @@ struct RewriteDataFilesPlanInput {
 	//! Optional upper bound on how many eligible files will be rewritten.
 	optional<int64_t> max_files_to_rewrite;
 	bool rewrite_all = false;
+	bool partial_progress_enabled = false;
+	int64_t partial_progress_max_commits = 10;
+	int64_t partial_progress_max_failed_commits = 2147483647;
+	int64_t max_concurrent_file_group_rewrites = 5;
+	string rewrite_job_order = "none";
+	//! Internal path allow-list. Empty means every data file is eligible.
+	unordered_set<string> only_paths;
 };
 
 RewritePlan PlanRewrite(ClientContext &context, RewriteDataFilesPlanInput input);

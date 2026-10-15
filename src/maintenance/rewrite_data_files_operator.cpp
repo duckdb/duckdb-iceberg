@@ -199,6 +199,15 @@ SourceResultType PhysicalRewriteDataFiles::GetDataInternal(ExecutionContext &con
 	}
 	source_state.emitted = true;
 
+	if (plan.partial_progress_enabled) {
+		auto result =
+		    plan.file_groups.empty() ? RewriteExecutionResult {} : ExecutePartialRewrite(context.client, plan);
+		chunk.data[0].Append(Value::BIGINT(result.rewritten_data_files));
+		chunk.data[1].Append(Value::BIGINT(result.added_data_files));
+		chunk.data[2].Append(Value::BIGINT(result.rewritten_bytes));
+		return SourceResultType::FINISHED;
+	}
+
 	int64_t rewritten_data_files = 0;
 	int64_t added_data_files = 0;
 	int64_t rewritten_bytes = 0;

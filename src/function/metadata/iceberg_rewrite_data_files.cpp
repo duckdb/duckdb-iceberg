@@ -97,6 +97,39 @@ static RewriteDataFilesPlanInput ParseRewritePlanInput(TableFunctionBindInput &i
 			result.max_files_to_rewrite = value;
 		} else if (opt == "rewrite_all") {
 			result.rewrite_all = BooleanValue::Get(val);
+		} else if (opt == "partial_progress_enabled") {
+			result.partial_progress_enabled = BooleanValue::Get(val);
+		} else if (opt == "partial_progress_max_commits") {
+			auto value = val.GetValue<int64_t>();
+			if (value < 1) {
+				throw InvalidInputException(
+				    "iceberg_rewrite_data_files: 'partial_progress_max_commits' must be >= 1, got %lld", value);
+			}
+			result.partial_progress_max_commits = value;
+		} else if (opt == "partial_progress_max_failed_commits") {
+			auto value = val.GetValue<int64_t>();
+			if (value < 0) {
+				throw InvalidInputException(
+				    "iceberg_rewrite_data_files: 'partial_progress_max_failed_commits' must be >= 0, got %lld", value);
+			}
+			result.partial_progress_max_failed_commits = value;
+		} else if (opt == "max_concurrent_file_group_rewrites") {
+			auto value = val.GetValue<int64_t>();
+			if (value < 1) {
+				throw InvalidInputException(
+				    "iceberg_rewrite_data_files: 'max_concurrent_file_group_rewrites' must be >= 1, got %lld", value);
+			}
+			result.max_concurrent_file_group_rewrites = value;
+		} else if (opt == "rewrite_job_order") {
+			auto order = StringUtil::Lower(StringValue::Get(val));
+			if (order != "none" && order != "bytes-asc" && order != "bytes-desc" && order != "files-asc" &&
+			    order != "files-desc") {
+				throw InvalidInputException(
+				    "iceberg_rewrite_data_files: 'rewrite_job_order' must be one of none, bytes-asc, bytes-desc, "
+				    "files-asc, files-desc, got '%s'",
+				    order);
+			}
+			result.rewrite_job_order = std::move(order);
 		}
 	}
 	if (result.min_file_size_bytes && result.max_file_size_bytes &&
@@ -171,7 +204,7 @@ static unique_ptr<LogicalOperator> RewriteDataFilesBindOperator(ClientContext &c
 	auto plan = PlanRewrite(context, plan_input);
 
 	auto result = make_uniq<LogicalRewriteDataFiles>(bind_index.index, std::move(plan));
-	if (!result->plan.selected_candidates.empty()) {
+	if (!result->plan.selected_candidates.empty() && !result->plan.partial_progress_enabled) {
 		result->children.push_back(BindCandidateCopy(*input.binder, result->plan));
 	}
 
@@ -192,7 +225,12 @@ TableFunctionSet IcebergFunctions::GetIcebergRewriteDataFilesFunction() {
 		    .Add("max_file_size_bytes", LogicalType::ANY)
 		    .Add("min_input_files", LogicalType::BIGINT)
 		    .Add("max_files_to_rewrite", LogicalType::BIGINT)
-		    .Add("rewrite_all", LogicalType::BOOLEAN);
+		    .Add("rewrite_all", LogicalType::BOOLEAN)
+		    .Add("partial_progress_enabled", LogicalType::BOOLEAN)
+		    .Add("partial_progress_max_commits", LogicalType::BIGINT)
+		    .Add("partial_progress_max_failed_commits", LogicalType::BIGINT)
+		    .Add("max_concurrent_file_group_rewrites", LogicalType::BIGINT)
+		    .Add("rewrite_job_order", LogicalType::VARCHAR);
 	});
 	function_set.AddFunction(function);
 	return function_set;

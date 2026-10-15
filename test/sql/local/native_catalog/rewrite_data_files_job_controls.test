@@ -1,0 +1,196 @@
+# name: test/sql/local/native_catalog/rewrite_data_files_job_controls.test
+# description: partial-progress commits follow rewrite_job_order and keep earlier commits when a later one fails
+# group: [native_catalog]
+
+require-env CATALOG_TEST_CONFIG_SETUP mock
+
+include test/sql/init_requires
+
+statement ok
+CREATE TABLE my_datalake.default.rewrite_job_order (id INTEGER, category VARCHAR, payload VARCHAR)
+PARTITIONED BY (category);
+
+statement ok
+INSERT INTO my_datalake.default.rewrite_job_order VALUES (1, 'a', 's'), (2, 'a', 's');
+
+statement ok
+INSERT INTO my_datalake.default.rewrite_job_order VALUES (3, 'a', 's'), (4, 'a', 's');
+
+statement ok
+INSERT INTO my_datalake.default.rewrite_job_order
+SELECT i, 'b', repeat('payload-', 40) FROM range(1, 80) t(i);
+
+statement ok
+INSERT INTO my_datalake.default.rewrite_job_order
+SELECT i, 'b', repeat('payload-', 40) FROM range(80, 160) t(i);
+
+query III
+CALL iceberg_rewrite_data_files(
+    'my_datalake.default.rewrite_job_order',
+    partial_progress_enabled => true,
+    partial_progress_max_commits => 10,
+    max_concurrent_file_group_rewrites => 1,
+    rewrite_job_order => 'bytes-asc',
+    min_input_files => 2
+);
+----
+4	2	<REGEX>:[1-9][0-9]*
+
+statement ok
+BEGIN;
+
+statement ok
+SET VARIABLE first_replace_list = (
+    SELECT manifest_list
+    FROM iceberg_snapshots('my_datalake.default.rewrite_job_order')
+    ORDER BY sequence_number
+    LIMIT 1
+    OFFSET 4
+);
+
+statement ok
+SET VARIABLE first_replace_paths = (
+    SELECT list(manifest_path)
+    FROM read_avro(getvariable('first_replace_list'))
+    WHERE content = 0
+);
+
+query I
+SELECT count(*) > 0
+FROM read_avro(getvariable('first_replace_paths'))
+WHERE status = 2 AND replace(data_file.file_path, chr(92), '/') LIKE '%category=a%';
+----
+true
+
+query I
+SELECT count(*)
+FROM read_avro(getvariable('first_replace_paths'))
+WHERE status = 2 AND replace(data_file.file_path, chr(92), '/') LIKE '%category=b%';
+----
+0
+
+statement ok
+COMMIT;
+
+statement ok
+CREATE TABLE my_datalake.default.rewrite_job_fail (id INTEGER, category VARCHAR, payload VARCHAR)
+PARTITIONED BY (category);
+
+statement ok
+INSERT INTO my_datalake.default.rewrite_job_fail VALUES (1, 'a', 's'), (2, 'a', 's');
+
+statement ok
+INSERT INTO my_datalake.default.rewrite_job_fail VALUES (3, 'a', 's'), (4, 'a', 's');
+
+statement ok
+INSERT INTO my_datalake.default.rewrite_job_fail VALUES (5, 'b', 's'), (6, 'b', 's');
+
+statement ok
+INSERT INTO my_datalake.default.rewrite_job_fail VALUES (7, 'b', 's'), (8, 'b', 's');
+
+statement ok
+SET VARIABLE fail_snapshots_before = (
+    SELECT count(*) FROM iceberg_snapshots('my_datalake.default.rewrite_job_fail')
+);
+
+statement ok
+SET iceberg_rewrite_fail_commit_index = 1;
+
+statement error
+CALL iceberg_rewrite_data_files(
+    'my_datalake.default.rewrite_job_fail',
+    min_input_files => 2
+);
+----
+Injected rewrite commit failure
+
+query I
+SELECT count(*) = getvariable('fail_snapshots_before')
+FROM iceberg_snapshots('my_datalake.default.rewrite_job_fail');
+----
+true
+
+query I
+SELECT count(*)
+FROM iceberg_metadata('my_datalake.default.rewrite_job_fail')
+WHERE content = 'DATA' AND status <> 'DELETED';
+----
+4
+
+statement ok
+SET iceberg_rewrite_fail_commit_index = 2;
+
+query III
+CALL iceberg_rewrite_data_files(
+    'my_datalake.default.rewrite_job_fail',
+    partial_progress_enabled => true,
+    partial_progress_max_commits => 10,
+    partial_progress_max_failed_commits => 1,
+    max_concurrent_file_group_rewrites => 1,
+    rewrite_job_order => 'bytes-asc',
+    min_input_files => 2
+);
+----
+2	1	<REGEX>:[1-9][0-9]*
+
+query II
+SELECT
+    count(*) FILTER (WHERE file_path LIKE '%category=a%'),
+    count(*) FILTER (WHERE file_path LIKE '%category=b%')
+FROM iceberg_metadata('my_datalake.default.rewrite_job_fail')
+WHERE content = 'DATA' AND status <> 'DELETED';
+----
+1	2
+
+statement ok
+CREATE TABLE my_datalake.default.rewrite_job_fail_limit (id INTEGER, category VARCHAR, payload VARCHAR)
+PARTITIONED BY (category);
+
+statement ok
+INSERT INTO my_datalake.default.rewrite_job_fail_limit VALUES (1, 'a', 's'), (2, 'a', 's');
+
+statement ok
+INSERT INTO my_datalake.default.rewrite_job_fail_limit VALUES (3, 'a', 's'), (4, 'a', 's');
+
+statement ok
+INSERT INTO my_datalake.default.rewrite_job_fail_limit VALUES (5, 'b', 's'), (6, 'b', 's');
+
+statement ok
+INSERT INTO my_datalake.default.rewrite_job_fail_limit VALUES (7, 'b', 's'), (8, 'b', 's');
+
+statement ok
+SET iceberg_rewrite_fail_commit_index = 2;
+
+statement error
+CALL iceberg_rewrite_data_files(
+    'my_datalake.default.rewrite_job_fail_limit',
+    partial_progress_enabled => true,
+    partial_progress_max_commits => 10,
+    partial_progress_max_failed_commits => 0,
+    max_concurrent_file_group_rewrites => 1,
+    rewrite_job_order => 'bytes-asc',
+    min_input_files => 2
+);
+----
+Injected rewrite commit failure
+
+query II
+SELECT
+    count(*) FILTER (WHERE file_path LIKE '%category=a%'),
+    count(*) FILTER (WHERE file_path LIKE '%category=b%')
+FROM iceberg_metadata('my_datalake.default.rewrite_job_fail_limit')
+WHERE content = 'DATA' AND status <> 'DELETED';
+----
+1	2
+
+statement ok
+SET iceberg_rewrite_fail_commit_index = 0;
+
+statement ok
+DROP TABLE my_datalake.default.rewrite_job_order;
+
+statement ok
+DROP TABLE my_datalake.default.rewrite_job_fail;
+
+statement ok
+DROP TABLE my_datalake.default.rewrite_job_fail_limit;

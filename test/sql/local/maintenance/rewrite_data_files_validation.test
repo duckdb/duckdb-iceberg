@@ -99,6 +99,38 @@ SELECT * FROM iceberg_rewrite_data_files(
 Catalog "cat" does not exist
 
 statement error
+SELECT * FROM iceberg_rewrite_data_files('cat.sch.tbl', partial_progress_max_commits => 0);
+----
+'partial_progress_max_commits' must be >= 1
+
+statement error
+SELECT * FROM iceberg_rewrite_data_files('cat.sch.tbl', partial_progress_max_failed_commits => -1);
+----
+'partial_progress_max_failed_commits' must be >= 0
+
+statement error
+SELECT * FROM iceberg_rewrite_data_files('cat.sch.tbl', max_concurrent_file_group_rewrites => 0);
+----
+'max_concurrent_file_group_rewrites' must be >= 1
+
+statement error
+SELECT * FROM iceberg_rewrite_data_files('cat.sch.tbl', rewrite_job_order => 'size');
+----
+'rewrite_job_order' must be one of none, bytes-asc, bytes-desc, files-asc, files-desc
+
+statement error
+SELECT * FROM iceberg_rewrite_data_files(
+    'cat.sch.tbl',
+    partial_progress_enabled => true,
+    partial_progress_max_commits => 10,
+    partial_progress_max_failed_commits => 0,
+    max_concurrent_file_group_rewrites => 5,
+    rewrite_job_order => 'bytes-asc'
+);
+----
+Catalog "cat" does not exist
+
+statement error
 SELECT * FROM iceberg_rewrite_data_files('cat.sch.tbl');
 ----
 Catalog "cat" does not exist
