@@ -19,7 +19,7 @@ namespace duckdb {
 namespace {
 
 static vector<LogicalType> RewriteResultTypes() {
-	return {LogicalType::BIGINT, LogicalType::BIGINT, LogicalType::BIGINT};
+	return {LogicalType::BIGINT, LogicalType::BIGINT, LogicalType::BIGINT, LogicalType::BIGINT, LogicalType::BIGINT};
 }
 
 struct RewriteDataFilesGlobalState : public GlobalSinkState {
@@ -68,7 +68,7 @@ void LogicalRewriteDataFiles::ResolveTypes() {
 }
 
 vector<ColumnBinding> LogicalRewriteDataFiles::GetColumnBindings() {
-	return GenerateColumnBindings(TableIndex(bind_index), 3);
+	return GenerateColumnBindings(TableIndex(bind_index), 5);
 }
 
 vector<TableIndex> LogicalRewriteDataFiles::GetTableIndex() const {
@@ -211,6 +211,9 @@ SourceResultType PhysicalRewriteDataFiles::GetDataInternal(ExecutionContext &con
 	chunk.data[0].Append(Value::BIGINT(rewritten_data_files));
 	chunk.data[1].Append(Value::BIGINT(added_data_files));
 	chunk.data[2].Append(Value::BIGINT(rewritten_bytes));
+	//! Failed commits and removed deletes stay zero until those controls are wired.
+	chunk.data[3].Append(Value::BIGINT(0));
+	chunk.data[4].Append(Value::BIGINT(0));
 	return SourceResultType::FINISHED;
 }
 

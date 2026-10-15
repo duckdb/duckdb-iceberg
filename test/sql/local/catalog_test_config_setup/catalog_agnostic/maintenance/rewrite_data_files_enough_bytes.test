@@ -66,7 +66,7 @@ commit
 # Also pin max_file_size_bytes: Spark's default max is 180% of target (3600),
 # which would reject min 10000.
 # Three files is below min_input_files=5, but combined size meets the 2KiB target.
-query III
+query IIIII
 call iceberg_rewrite_data_files(
 	'my_datalake.default.rewrite_enough_bytes',
 	target_file_size_bytes => 2000,
@@ -75,7 +75,7 @@ call iceberg_rewrite_data_files(
 	min_input_files => 5
 );
 ----
-3	1	<REGEX>:[1-9][0-9]*
+3	1	<REGEX>:[1-9][0-9]*	0	0
 
 query I
 select count(*) from my_datalake.default.rewrite_enough_bytes;

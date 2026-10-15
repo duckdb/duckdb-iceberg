@@ -180,7 +180,8 @@ static unique_ptr<LogicalOperator> RewriteDataFilesBindOperator(ClientContext &c
 		result->children.push_back(BindCandidateCopy(*input.binder, result->plan));
 	}
 
-	return_names = {"rewritten_data_files", "added_data_files", "rewritten_bytes"};
+	return_names = {"rewritten_data_files_count", "added_data_files_count", "rewritten_bytes_count",
+	                "failed_data_files_count", "removed_delete_files_count"};
 	return std::move(result);
 }
 

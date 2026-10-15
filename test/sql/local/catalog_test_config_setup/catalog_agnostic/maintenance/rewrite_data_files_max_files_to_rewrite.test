@@ -38,14 +38,14 @@ where content = 'DATA' and status <> 'DELETED';
 6
 
 # Six eligible files, but only rewrite three of them.
-query III
+query IIIII
 call iceberg_rewrite_data_files(
 	'my_datalake.default.rewrite_max_files',
 	min_input_files => 5,
 	max_files_to_rewrite => 3
 );
 ----
-3	1	<REGEX>:[1-9][0-9]*
+3	1	<REGEX>:[1-9][0-9]*	0	0
 
 # One new file plus the three untouched originals.
 query I
@@ -104,14 +104,14 @@ where content = 'DATA' and status <> 'DELETED';
 
 # Both partitions qualify (6 >= min_input_files). The global cap of 3 is filled
 # from the first partition key (category=a), leaving category=b untouched.
-query III
+query IIIII
 call iceberg_rewrite_data_files(
 	'my_datalake.default.rewrite_max_files_part',
 	min_input_files => 5,
 	max_files_to_rewrite => 3
 );
 ----
-3	1	<REGEX>:[1-9][0-9]*
+3	1	<REGEX>:[1-9][0-9]*	0	0
 
 query I
 select count(*)

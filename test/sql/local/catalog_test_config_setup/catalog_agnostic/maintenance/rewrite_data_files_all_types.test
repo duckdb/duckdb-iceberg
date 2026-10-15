@@ -87,13 +87,13 @@ query T nosort all_types_before
 select * from my_datalake.default.rewrite_all_types order by row_id;
 ----
 
-query III
+query IIIII
 call iceberg_rewrite_data_files(
     'my_datalake.default.rewrite_all_types',
     min_input_files => 3
 );
 ----
-3	1	<REGEX>:[1-9][0-9]*
+3	1	<REGEX>:[1-9][0-9]*	0	0
 
 query T nosort all_types_before
 select * from my_datalake.default.rewrite_all_types order by row_id;
