@@ -319,6 +319,11 @@ void IcebergScanPlanner::GetStatistics(vector<PartitionStatistics> &result) cons
 	if (GetMetadata().iceberg_version == 1) {
 		return;
 	}
+	if (GetSnapshot().incremental) {
+		//! A manifest written by a snapshot in the range can also carry EXISTING entries from before it
+		//! (manifest merging on append), so its row counts overstate what the range added.
+		return;
+	}
 	annotated_lock_guard<annotated_mutex> guard(shared_state->lock);
 	InitializeView(guard);
 	auto count = IcebergScanStatistics(data_manifests, data_manifest_matches, delete_manifests, delete_manifest_matches)

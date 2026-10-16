@@ -89,11 +89,22 @@ bool IcebergIncrementalSnapshots::ManifestInRange(const IcebergManifestListEntry
 
 bool IcebergIncrementalSnapshots::EntryInRange(const IcebergManifestEntry &entry,
                                                const IcebergManifestListEntry &manifest) const {
-	if (entry.status != IcebergManifestEntryStatusType::ADDED) {
-		//! An EXISTING entry was carried forward from an earlier snapshot, it is not new data
+	switch (entry.status) {
+	case IcebergManifestEntryStatusType::ADDED:
+		return snapshot_ids.count(entry.GetSnapshotId(GetCommittedManifestFile(manifest))) != 0;
+	case IcebergManifestEntryStatusType::EXISTING:
+		//! Merging manifests on append rewrites files added earlier as EXISTING, keeping the id of the
+		//! snapshot that added them, so a file added in the range can be EXISTING in the end snapshot.
+		//! Only ADDED entries may inherit, inheriting here would attribute an old file to the range.
+		if (!entry.HasSnapshotId()) {
+			throw InvalidConfigurationException(
+			    "EXISTING manifest entry for '%s' has no 'snapshot_id', so the snapshot that added it is unknown",
+			    entry.data_file.file_path);
+		}
+		return snapshot_ids.count(entry.GetSnapshotId()) != 0;
+	default:
 		return false;
 	}
-	return snapshot_ids.count(entry.GetSnapshotId(GetCommittedManifestFile(manifest))) != 0;
 }
 
 } // namespace duckdb

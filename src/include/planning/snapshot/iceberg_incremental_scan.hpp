@@ -40,7 +40,7 @@ public:
 public:
 	//! Whether the manifest was written by a snapshot in the range.
 	bool ManifestInRange(const IcebergManifestListEntry &manifest) const;
-	//! Whether a manifest entry was added by a snapshot in the range.
+	//! Whether a live (ADDED or EXISTING) manifest entry was added by a snapshot in the range.
 	bool EntryInRange(const IcebergManifestEntry &entry, const IcebergManifestListEntry &manifest) const;
 
 public:
