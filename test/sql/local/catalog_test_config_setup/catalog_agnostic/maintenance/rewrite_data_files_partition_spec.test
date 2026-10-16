@@ -1,0 +1,186 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/maintenance/rewrite_data_files_partition_spec.test
+# description: rewrite data files migrates an older partition spec onto the current default spec
+# group: [maintenance]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+include test/sql/init_requires
+
+statement ok
+drop table if exists my_datalake.default.rewrite_partition_spec_evolution;
+
+# Spec 0 partitions by a. One file holds two values of the column that becomes the next spec.
+statement ok
+create table my_datalake.default.rewrite_partition_spec_evolution (a INTEGER, b INTEGER, payload VARCHAR)
+partitioned by (a);
+
+statement ok
+insert into my_datalake.default.rewrite_partition_spec_evolution values (1, 10, 'old1'), (1, 20, 'old2');
+
+statement ok
+alter table my_datalake.default.rewrite_partition_spec_evolution set partitioned by (b);
+
+statement ok
+insert into my_datalake.default.rewrite_partition_spec_evolution values (2, 10, 'new1');
+
+statement ok
+insert into my_datalake.default.rewrite_partition_spec_evolution values (3, 30, 'new2');
+
+query I
+select count(*) from my_datalake.default.rewrite_partition_spec_evolution;
+----
+4
+
+# iceberg_metadata has no partition_spec_id column; the manifest spec id is on iceberg_partition_stats.
+query I
+select count(distinct s.partition_spec_id)
+from iceberg_metadata('my_datalake.default.rewrite_partition_spec_evolution') m
+join iceberg_partition_stats('my_datalake.default.rewrite_partition_spec_evolution') s
+    on m.manifest_path = s.manifest_path
+where m.content = 'DATA' and m.status <> 'DELETED';
+----
+2
+
+statement ok
+set variable output_spec_id = (
+    select max(s.partition_spec_id)
+    from iceberg_metadata('my_datalake.default.rewrite_partition_spec_evolution') m
+    join iceberg_partition_stats('my_datalake.default.rewrite_partition_spec_evolution') s
+        on m.manifest_path = s.manifest_path
+    where m.content = 'DATA' and m.status <> 'DELETED'
+);
+
+statement ok
+set variable old_spec_id = (
+    select min(s.partition_spec_id)
+    from iceberg_metadata('my_datalake.default.rewrite_partition_spec_evolution') m
+    join iceberg_partition_stats('my_datalake.default.rewrite_partition_spec_evolution') s
+        on m.manifest_path = s.manifest_path
+    where m.content = 'DATA' and m.status <> 'DELETED'
+);
+
+query I
+select cast(getvariable('old_spec_id') as integer) <> cast(getvariable('output_spec_id') as integer);
+----
+1
+
+statement ok
+set variable old_file_count = (
+    select count(distinct m.file_path)
+    from iceberg_metadata('my_datalake.default.rewrite_partition_spec_evolution') m
+    join iceberg_partition_stats('my_datalake.default.rewrite_partition_spec_evolution') s
+        on m.manifest_path = s.manifest_path
+    where m.content = 'DATA' and m.status <> 'DELETED'
+      and s.partition_spec_id = cast(getvariable('old_spec_id') as integer)
+);
+
+query I
+select cast(getvariable('old_file_count') as bigint) >= 1;
+----
+1
+
+# Unknown ids fail before any file is planned.
+statement error
+call iceberg_rewrite_data_files(
+    'my_datalake.default.rewrite_partition_spec_evolution',
+    output_spec_id => 2147483647
+);
+----
+does not exist in the table partition specs
+
+# The copy writer emits the current default spec, so a historical output spec is rejected.
+statement error
+call iceberg_rewrite_data_files(
+    'my_datalake.default.rewrite_partition_spec_evolution',
+    output_spec_id => cast(getvariable('old_spec_id') as integer)
+);
+----
+current default partition spec
+
+# Anything larger than 100 bytes is oversized, so the old-spec file qualifies at min_input_files 1.
+# output_spec_id is omitted and therefore the table's current default spec.
+query I
+select count(*)
+from iceberg_rewrite_data_files(
+    'my_datalake.default.rewrite_partition_spec_evolution',
+    min_input_files => 1,
+    min_file_size_bytes => 100,
+    max_file_size_bytes => 100
+)
+where rewritten_data_files >= cast(getvariable('old_file_count') as bigint)
+  and added_data_files >= 1
+  and rewritten_bytes > 0;
+----
+1
+
+query I
+select count(*) from my_datalake.default.rewrite_partition_spec_evolution;
+----
+4
+
+query III
+select a, b, payload from my_datalake.default.rewrite_partition_spec_evolution order by payload;
+----
+2	10	new1
+3	30	new2
+1	10	old1
+1	20	old2
+
+query II
+select b, count(*) from my_datalake.default.rewrite_partition_spec_evolution group by b order by b;
+----
+10	2
+20	1
+30	1
+
+# Live DATA files are on the output spec. Deleted entries from the old spec may remain.
+query I
+select count(distinct m.file_path)
+from iceberg_metadata('my_datalake.default.rewrite_partition_spec_evolution') m
+join iceberg_partition_stats('my_datalake.default.rewrite_partition_spec_evolution') s
+    on m.manifest_path = s.manifest_path
+where m.content = 'DATA' and m.status <> 'DELETED'
+  and s.partition_spec_id <> cast(getvariable('output_spec_id') as integer);
+----
+0
+
+query I
+select count(distinct s.partition_spec_id)
+from iceberg_metadata('my_datalake.default.rewrite_partition_spec_evolution') m
+join iceberg_partition_stats('my_datalake.default.rewrite_partition_spec_evolution') s
+    on m.manifest_path = s.manifest_path
+where m.content = 'DATA' and m.status <> 'DELETED';
+----
+1
+
+query I
+select count(*)
+from iceberg_metadata('my_datalake.default.rewrite_partition_spec_evolution')
+where content = 'DATA' and status <> 'DELETED'
+  and replace(file_path, chr(92), '/') not like '%/b=%';
+----
+0
+
+# One output file must not mix values of the current partition column.
+query I
+select count(*)
+from (
+    select filename
+    from my_datalake.default.rewrite_partition_spec_evolution
+    group by filename
+    having count(distinct b) > 1
+);
+----
+0
+
+# Passing the current spec explicitly is accepted and does not rewrite the compacted files.
+query III
+call iceberg_rewrite_data_files(
+    'my_datalake.default.rewrite_partition_spec_evolution',
+    output_spec_id => cast(getvariable('output_spec_id') as integer)
+);
+----
+0	0	0
+
+statement ok
+drop table if exists my_datalake.default.rewrite_partition_spec_evolution;

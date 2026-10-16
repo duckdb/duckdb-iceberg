@@ -51,6 +51,8 @@ struct RewriteDataFilesPlanInput {
 	//! Optional upper bound on how many eligible files will be rewritten.
 	optional<int64_t> max_files_to_rewrite;
 	bool rewrite_all = false;
+	//! Spec to rewrite into. Defaults to the table's current default spec (default_spec_id).
+	optional<int32_t> output_spec_id;
 };
 
 RewritePlan PlanRewrite(ClientContext &context, RewriteDataFilesPlanInput input);
