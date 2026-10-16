@@ -202,6 +202,10 @@ static void SetIcebergTablePropertiesFunction(ClientContext &context, TableFunct
 	ApplyTableUpdate(table_info, iceberg_transaction, [&](IcebergTable &tbl) {
 		auto &transaction_data = tbl.GetOrCreateTransactionData(iceberg_transaction);
 		transaction_data.TableSetProperties(bind_data.properties);
+		// Later statements, including write-mode checks, must see this transaction's property changes.
+		for (auto &property : bind_data.properties) {
+			tbl.table_metadata.table_properties[property.first] = property.second;
+		}
 	});
 
 	auto schema = iceberg_table->schema.name;
@@ -231,6 +235,9 @@ static void RemoveIcebergTablePropertiesFunction(ClientContext &context, TableFu
 	ApplyTableUpdate(table_info, iceberg_transaction, [&](IcebergTable &tbl) {
 		auto &transaction_data = tbl.GetOrCreateTransactionData(iceberg_transaction);
 		transaction_data.TableRemoveProperties(bind_data.remove_properties);
+		for (auto &property : bind_data.remove_properties) {
+			tbl.table_metadata.table_properties.erase(property);
+		}
 	});
 
 	auto schema = iceberg_table->schema.name;

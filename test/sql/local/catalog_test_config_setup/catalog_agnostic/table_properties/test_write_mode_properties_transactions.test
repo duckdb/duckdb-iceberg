@@ -1,0 +1,182 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/table_properties/test_write_mode_properties_transactions.test
+# description: Write mode checks honor uncommitted property changes and roll back rejected writes
+# group: [table_properties]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+include test/sql/init_requires
+
+require core_functions
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.write_modes_transactions;
+
+statement ok
+CREATE TABLE my_datalake.default.write_modes_transactions (id INTEGER, v VARCHAR) WITH (
+    'format-version' = '2',
+    'write.update.mode' = 'merge-on-read',
+    'write.delete.mode' = 'merge-on-read',
+    'write.merge.mode' = 'merge-on-read'
+);
+
+statement ok
+INSERT INTO my_datalake.default.write_modes_transactions VALUES (1, 'a'), (2, 'b');
+
+# UPDATE must use the property changed in this transaction, not the catalog's committed value
+
+statement ok
+BEGIN;
+
+statement ok
+CALL set_iceberg_table_properties(my_datalake.default.write_modes_transactions,
+    {'write.update.mode': 'copy-on-write'});
+
+statement error
+UPDATE my_datalake.default.write_modes_transactions SET v = 'z' WHERE id = 1;
+----
+<REGEX>:.*Not implemented Error.*write.update.mode.*copy-on-write.*
+
+statement ok
+ROLLBACK;
+
+# DELETE must also observe an uncommitted property change
+
+statement ok
+BEGIN;
+
+statement ok
+CALL set_iceberg_table_properties(my_datalake.default.write_modes_transactions,
+    {'write.delete.mode': 'copy-on-write'});
+
+statement error
+DELETE FROM my_datalake.default.write_modes_transactions WHERE id = 1;
+----
+<REGEX>:.*Not implemented Error.*write.delete.mode.*copy-on-write.*
+
+statement ok
+ROLLBACK;
+
+# Append-only writes remain allowed after an uncommitted change to all three modes.
+# A subsequent modifying MERGE is refused, including its insert action.
+
+statement ok
+BEGIN;
+
+statement ok
+CALL set_iceberg_table_properties(my_datalake.default.write_modes_transactions,
+    {'write.update.mode': 'copy-on-write', 'write.delete.mode': 'copy-on-write', 'write.merge.mode': 'copy-on-write'});
+
+query TT
+SELECT key, value FROM iceberg_table_properties(my_datalake.default.write_modes_transactions)
+WHERE key IN ('write.update.mode', 'write.delete.mode', 'write.merge.mode') ORDER BY key;
+----
+write.delete.mode	copy-on-write
+write.merge.mode	copy-on-write
+write.update.mode	copy-on-write
+
+query I
+INSERT INTO my_datalake.default.write_modes_transactions VALUES (3, 'c');
+----
+1
+
+query I
+MERGE INTO my_datalake.default.write_modes_transactions AS t USING (SELECT 4 AS id, 'd' AS v) AS s ON t.id = s.id
+WHEN NOT MATCHED THEN INSERT VALUES (s.id, s.v);
+----
+1
+
+query II
+SELECT id, v FROM my_datalake.default.write_modes_transactions ORDER BY id;
+----
+1	a
+2	b
+3	c
+4	d
+
+statement error
+MERGE INTO my_datalake.default.write_modes_transactions AS t USING (VALUES (2, 'z'), (5, 'e')) AS s(id, v) ON t.id = s.id
+WHEN MATCHED THEN UPDATE SET v = s.v
+WHEN NOT MATCHED THEN INSERT VALUES (s.id, s.v);
+----
+<REGEX>:.*Not implemented Error.*write.merge.mode.*copy-on-write.*
+
+statement ok
+ROLLBACK;
+
+# None of the rolled-back property changes or writes reached the catalog
+
+query II
+SELECT id, v FROM my_datalake.default.write_modes_transactions ORDER BY id;
+----
+1	a
+2	b
+
+query TT
+SELECT key, value FROM iceberg_table_properties(my_datalake.default.write_modes_transactions)
+WHERE key IN ('write.update.mode', 'write.delete.mode', 'write.merge.mode') ORDER BY key;
+----
+write.delete.mode	merge-on-read
+write.merge.mode	merge-on-read
+write.update.mode	merge-on-read
+
+query I
+SELECT count(*) FROM iceberg_snapshots(my_datalake.default.write_modes_transactions);
+----
+1
+
+# Removing committed copy-on-write modes must also take effect before commit
+
+statement ok
+CALL set_iceberg_table_properties(my_datalake.default.write_modes_transactions,
+    {'write.update.mode': 'copy-on-write', 'write.delete.mode': 'copy-on-write', 'write.merge.mode': 'copy-on-write'});
+
+statement ok
+BEGIN;
+
+statement ok
+CALL remove_iceberg_table_properties(my_datalake.default.write_modes_transactions,
+    ['write.update.mode', 'write.delete.mode', 'write.merge.mode']);
+
+query I
+SELECT count(*) FROM iceberg_table_properties(my_datalake.default.write_modes_transactions)
+WHERE key IN ('write.update.mode', 'write.delete.mode', 'write.merge.mode');
+----
+0
+
+query I
+UPDATE my_datalake.default.write_modes_transactions SET v = 'z' WHERE id = 1;
+----
+1
+
+query I
+DELETE FROM my_datalake.default.write_modes_transactions WHERE id = 2;
+----
+1
+
+query I
+INSERT INTO my_datalake.default.write_modes_transactions VALUES (3, 'c');
+----
+1
+
+query I
+MERGE INTO my_datalake.default.write_modes_transactions AS t USING (VALUES (3, 'y'), (4, 'd')) AS s(id, v) ON t.id = s.id
+WHEN MATCHED THEN UPDATE SET v = s.v
+WHEN NOT MATCHED THEN INSERT VALUES (s.id, s.v);
+----
+2
+
+statement ok
+COMMIT;
+
+query II
+SELECT id, v FROM my_datalake.default.write_modes_transactions ORDER BY id;
+----
+1	z
+3	y
+4	d
+
+query I
+SELECT count(*) FROM iceberg_table_properties(my_datalake.default.write_modes_transactions)
+WHERE key IN ('write.update.mode', 'write.delete.mode', 'write.merge.mode');
+----
+0

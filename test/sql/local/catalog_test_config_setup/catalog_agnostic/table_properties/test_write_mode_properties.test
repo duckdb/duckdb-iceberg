@@ -1,5 +1,5 @@
 # name: test/sql/local/catalog_test_config_setup/catalog_agnostic/table_properties/test_write_mode_properties.test
-# description: UPDATE and MERGE honor write.update.mode and write.merge.mode
+# description: Copy-on-write modes reject UPDATE, DELETE and modifying MERGE actions while allowing appends
 # group: [table_properties]
 
 require-env CATALOG_TEST_CONFIG_SETUP
@@ -17,10 +17,16 @@ CREATE TABLE my_datalake.default.write_modes (id INTEGER, v VARCHAR) WITH ('form
 statement ok
 INSERT INTO my_datalake.default.write_modes VALUES (1, 'a'), (2, 'b'), (3, 'c');
 
-# UPDATE is refused when write.update.mode is copy-on-write
+# UPDATE and DELETE are refused when their respective modes are copy-on-write
 
 statement ok
-CALL set_iceberg_table_properties(my_datalake.default.write_modes, {'write.update.mode': 'copy-on-write'});
+CALL set_iceberg_table_properties(my_datalake.default.write_modes,
+    {'write.update.mode': 'copy-on-write', 'write.delete.mode': 'copy-on-write'});
+
+statement error
+DELETE FROM my_datalake.default.write_modes WHERE id = 2;
+----
+<REGEX>:.*Not implemented Error.*write.delete.mode.*copy-on-write.*
 
 statement error
 UPDATE my_datalake.default.write_modes SET v = 'z' WHERE id = 2;
@@ -60,6 +66,20 @@ SELECT id, v FROM my_datalake.default.write_modes ORDER BY id;
 2	b
 3	c
 
+# rejected writes do not publish a snapshot
+
+query I
+SELECT count(*) FROM iceberg_snapshots(my_datalake.default.write_modes);
+----
+1
+
+# INSERT remains an append even when all three write modes are copy-on-write
+
+query I
+INSERT INTO my_datalake.default.write_modes VALUES (5, 'e');
+----
+1
+
 # an insert-only MERGE is an append: it keeps the existing data files and writes no delete files, so it is allowed
 
 query I
@@ -75,6 +95,7 @@ SELECT id, v FROM my_datalake.default.write_modes ORDER BY id;
 2	b
 3	c
 4	d
+5	e
 
 query T
 SELECT operation FROM iceberg_snapshots(my_datalake.default.write_modes) ORDER BY sequence_number DESC LIMIT 1;
@@ -84,7 +105,7 @@ append
 query TTI
 SELECT content, status, count(*) FROM iceberg_metadata(my_datalake.default.write_modes) GROUP BY ALL ORDER BY ALL;
 ----
-DATA	ADDED	2
+DATA	ADDED	3
 
 # MERGE uses write.merge.mode only, not the delete and update modes
 
@@ -120,6 +141,7 @@ SELECT id, v FROM my_datalake.default.write_modes ORDER BY id;
 1	a
 2	z
 4	d
+5	e
 
 # a mode changed earlier in the same transaction with ALTER TABLE applies
 
@@ -143,6 +165,7 @@ SELECT id, v FROM my_datalake.default.write_modes ORDER BY id;
 1	y
 2	z
 4	d
+5	e
 
 # an unset mode is treated as merge-on-read
 
