@@ -65,10 +65,10 @@ where content = 'DATA' and status <> 'DELETED'
 ----
 12
 
-query III
+query IIIII
 call iceberg_rewrite_data_files('my_datalake.default.rewrite_day');
 ----
-12	2	<REGEX>:[1-9][0-9]*
+12	2	<REGEX>:[1-9][0-9]*	0	0
 
 query I
 select count(*) from my_datalake.default.rewrite_day;
@@ -106,10 +106,10 @@ where content = 'DATA' and status <> 'DELETED'
 ----
 2
 
-query III
+query IIIII
 call iceberg_rewrite_data_files('my_datalake.default.rewrite_day');
 ----
-0	0	0
+0	0	0	0	0
 
 statement ok
 drop table if exists my_datalake.default.rewrite_day;
@@ -168,10 +168,10 @@ where content = 'DATA' and status <> 'DELETED'
 ----
 12
 
-query III
+query IIIII
 call iceberg_rewrite_data_files('my_datalake.default.rewrite_month');
 ----
-12	2	<REGEX>:[1-9][0-9]*
+12	2	<REGEX>:[1-9][0-9]*	0	0
 
 query I
 select count(*) from my_datalake.default.rewrite_month;
@@ -209,10 +209,10 @@ where content = 'DATA' and status <> 'DELETED'
 ----
 2
 
-query III
+query IIIII
 call iceberg_rewrite_data_files('my_datalake.default.rewrite_month');
 ----
-0	0	0
+0	0	0	0	0
 
 statement ok
 drop table if exists my_datalake.default.rewrite_month;
@@ -265,14 +265,14 @@ where content = 'DATA' and status <> 'DELETED';
 
 # Both day partitions qualify (6 >= min_input_files). The global cap of 3 is filled
 # from the lexicographically first day key (2021-06-15), leaving 2021-06-16 untouched.
-query III
+query IIIII
 call iceberg_rewrite_data_files(
 	'my_datalake.default.rewrite_max_files_day',
 	min_input_files => 5,
 	max_files_to_rewrite => 3
 );
 ----
-3	1	<REGEX>:[1-9][0-9]*
+3	1	<REGEX>:[1-9][0-9]*	0	0
 
 query I
 select count(*)

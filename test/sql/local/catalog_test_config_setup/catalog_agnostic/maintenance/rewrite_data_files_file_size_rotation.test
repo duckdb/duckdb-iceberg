@@ -35,7 +35,7 @@ where content = 'DATA' and status <> 'DELETED';
 ----
 1
 
-query III
+query IIIII
 call iceberg_rewrite_data_files(
     'my_datalake.default.rewrite_file_size_rotation',
     target_file_size_bytes => 1048576,
@@ -43,7 +43,7 @@ call iceberg_rewrite_data_files(
     rewrite_all => true
 );
 ----
-1	<REGEX>:[2-9][0-9]*	<REGEX>:[1-9][0-9]*
+1	<REGEX>:[2-9][0-9]*	<REGEX>:[1-9][0-9]*	0	0
 
 query I
 select count(*) from my_datalake.default.rewrite_file_size_rotation;

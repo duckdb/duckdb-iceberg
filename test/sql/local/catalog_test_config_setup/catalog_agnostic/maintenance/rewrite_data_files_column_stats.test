@@ -45,10 +45,10 @@ payload	e	f
 payload	g	h
 payload	j	t
 
-query III
+query IIIII
 call iceberg_rewrite_data_files('my_datalake.default.rewrite_column_stats');
 ----
-5	1	<REGEX>:[1-9][0-9]*
+5	1	<REGEX>:[1-9][0-9]*	0	0
 
 # After rewrite there is a single ADDED data file whose bounds span the full table.
 query III

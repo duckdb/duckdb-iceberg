@@ -33,7 +33,7 @@ where content = 'DATA' and status <> 'DELETED';
 ----
 1
 
-query III
+query IIIII
 call iceberg_rewrite_data_files(
     'my_datalake.default.rewrite_target_file_size',
     target_file_size_bytes => 4194304,
@@ -41,7 +41,7 @@ call iceberg_rewrite_data_files(
     rewrite_all => true
 );
 ----
-1	<REGEX>:[2-9][0-9]*	<REGEX>:[1-9][0-9]*
+1	<REGEX>:[2-9][0-9]*	<REGEX>:[1-9][0-9]*	0	0
 
 statement ok
 set variable target_4m_file_count = (
@@ -59,14 +59,14 @@ CALL set_iceberg_table_properties(
     }
 );
 
-query III
+query IIIII
 call iceberg_rewrite_data_files(
     'my_datalake.default.rewrite_target_file_size',
     min_input_files => 1,
     rewrite_all => true
 );
 ----
-<REGEX>:[2-9][0-9]*	<REGEX>:[2-9][0-9]*	<REGEX>:[1-9][0-9]*
+<REGEX>:[2-9][0-9]*	<REGEX>:[2-9][0-9]*	<REGEX>:[1-9][0-9]*	0	0
 
 statement ok
 set variable target_2m_file_count = (
@@ -92,14 +92,14 @@ CALL set_iceberg_table_properties(
     {'write.target-file-size-bytes': '1048576'}
 );
 
-query III
+query IIIII
 call iceberg_rewrite_data_files(
     'my_datalake.default.rewrite_target_file_size',
     min_input_files => 1,
     rewrite_all => true
 );
 ----
-<REGEX>:[2-9][0-9]*	<REGEX>:[2-9][0-9]*	<REGEX>:[1-9][0-9]*
+<REGEX>:[2-9][0-9]*	<REGEX>:[2-9][0-9]*	<REGEX>:[1-9][0-9]*	0	0
 
 statement ok
 set variable target_1m_file_count = (

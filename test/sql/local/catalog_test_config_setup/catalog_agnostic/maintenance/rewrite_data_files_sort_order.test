@@ -58,10 +58,10 @@ set variable table_sort_order_id = (
 	from iceberg_load_table_response(my_datalake.default.rewrite_sort_order)
 );
 
-query III
+query IIIII
 call iceberg_rewrite_data_files('my_datalake.default.rewrite_sort_order');
 ----
-6	1	<REGEX>:[1-9][0-9]*
+6	1	<REGEX>:[1-9][0-9]*	0	0
 
 query I
 select count(*)
