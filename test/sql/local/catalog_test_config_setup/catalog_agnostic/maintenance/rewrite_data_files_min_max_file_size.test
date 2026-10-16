@@ -46,22 +46,26 @@ call iceberg_rewrite_data_files(
 0	0	0
 
 # Files are larger than a tiny max, so they are oversized candidates.
+# Spark requires the target to sit strictly inside the band. Each input is its own
+# row group and is larger than that target, so the rewrite replaces the five files
+# without folding them into one.
 query III
 call iceberg_rewrite_data_files(
 	'my_datalake.default.rewrite_min_max_size',
-	min_file_size_bytes => 100,
+	target_file_size_bytes => 50,
+	min_file_size_bytes => 1,
 	max_file_size_bytes => 100,
 	min_input_files => 5
 );
 ----
-5	1	<REGEX>:[1-9][0-9]*
+5	5	<REGEX>:[1-9][0-9]*
 
 query I
 select count(*)
 from iceberg_metadata('my_datalake.default.rewrite_min_max_size')
 where content = 'DATA' and status <> 'DELETED';
 ----
-1
+5
 
 statement ok
 drop table if exists my_datalake.default.rewrite_min_max_size;
