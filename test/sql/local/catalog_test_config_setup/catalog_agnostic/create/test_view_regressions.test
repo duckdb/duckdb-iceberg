@@ -1,5 +1,5 @@
 # name: test/sql/local/catalog_test_config_setup/catalog_agnostic/create/test_view_regressions.test
-# description: View namespace collisions, duplicate output names, and file shorthand survive reload
+# description: View namespace collisions and duplicate output names survive reload, and a view reading file shorthand is refused
 # group: [create]
 
 require-env CATALOG_TEST_CONFIG_SETUP
@@ -64,7 +64,7 @@ drop view if exists base;
 <REGEX>:.*trying to drop type View.*
 
 statement ok
-create view duplicate_names as select i as a, i + 1 as a from base;
+create view duplicate_names as select i as a, i + 1 as a from my_datalake.view_regressions.base;
 
 statement error
 drop table if exists duplicate_names;
@@ -91,7 +91,7 @@ statement ok
 insert into "table.parquet" values (88);
 
 statement ok
-create view dotted_table_view as select * from "table.parquet";
+create view dotted_table_view as select * from my_datalake.view_regressions."table.parquet";
 
 # Native view binding handles CTE scope and subqueries in the owning namespace.
 statement ok
@@ -125,10 +125,11 @@ select a, a_1 from duplicate_names;
 ----
 42	43
 
-query I
+# A file name in the view's query is a table name without a namespace
+statement error
 select * from file_view;
 ----
-7
+<REGEX>:.*Not implemented Error: Querying Iceberg view 'file_view' is not supported: its query names a table without a namespace.*
 
 query I
 select * from dotted_table_view;

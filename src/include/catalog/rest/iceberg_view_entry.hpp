@@ -18,4 +18,17 @@ private:
 	string reason;
 };
 
+//! A view loaded from the catalog. Refused when it names a table without a namespace, or its * columns changed
+class IcebergViewEntry : public ViewCatalogEntry {
+public:
+	IcebergViewEntry(Catalog &catalog, SchemaCatalogEntry &schema, CreateViewInfo &info);
+	const SelectStatement &GetQuery() override;
+	void UpdateBinding(const vector<LogicalType> &types, const vector<Identifier> &names) override;
+	unique_ptr<CatalogEntry> Copy(ClientContext &context) const override;
+
+private:
+	//! Whether the view's columns come from *
+	bool columns_from_star;
+};
+
 } // namespace duckdb
