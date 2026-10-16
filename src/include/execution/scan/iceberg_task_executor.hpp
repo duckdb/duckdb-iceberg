@@ -21,13 +21,14 @@ struct IcebergTaskExecutionContext {
 	IcebergDeleteExecutionState deletes;
 };
 
-//! Executes one already-decoded file task. No SQL task layout or planner is needed.
-//! Workers share the executor and each own a separate local scanner.
+//! Executes one or more already-decoded file tasks through one Parquet scan.
+//! No SQL task layout or planner is needed. Workers share the executor and each
+//! own a separate local scanner.
 class IcebergTaskExecutor {
 public:
 	IcebergTaskExecutor(ClientContext &context, shared_ptr<IcebergTaskExecutionContext> execution,
-	                    IcebergFileScanTask task, vector<ColumnIndex> column_indexes,
-	                    unique_ptr<Expression> row_filter);
+	                    vector<IcebergFileScanTask> tasks, vector<ColumnIndex> column_indexes,
+	                    const TableFilterSet &table_filters, unique_ptr<Expression> row_filter);
 	~IcebergTaskExecutor();
 
 	//! Creates a private scanner that claims work from the shared Parquet scan.
@@ -44,7 +45,8 @@ private:
 	vector<column_t> output_columns;
 	vector<LogicalType> scan_types;
 	unique_ptr<Expression> row_filter;
-	TableFilterSet filters;
+	//! Descriptor filters are added to a private copy of the invocation's table filters.
+	unique_ptr<TableFilterSet> filters;
 	unique_ptr<GlobalTableFunctionState> global;
 };
 

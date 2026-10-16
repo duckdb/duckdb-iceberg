@@ -1,0 +1,386 @@
+# name: test/sql/local/scan_tasks_filters.test
+# description: Task scan filter forwarding and safe partition-constant pruning
+# group: [local]
+
+include test/sql/init_requires
+
+require json
+
+# Disable caches so a positive control can observe actual data-column reads.
+statement ok
+set enable_external_file_cache=false;
+
+statement ok
+set parquet_metadata_cache=false;
+
+# The trailing columns keep footer prefetch away from the id column's byte range.
+foreach partition 1999 2000
+
+statement ok
+copy (select i::integer id, i * 10::bigint payload, i::integer tail from range(100000) t(i))
+to '{TEST_DIR}/filter_task_{partition}.parquet'
+(format parquet, compression uncompressed, row_group_size 100000, dictionary_size_limit 1,
+ field_ids {id:1, payload:2, tail:4});
+
+endloop
+
+statement ok
+create temp table filter_tasks as select
+    '{TEST_DIR}/filter_task_' || p::varchar || '.parquet' as file_path,
+    'PARQUET'::varchar file_format,
+    (case p when 1999 then (select size from read_blob('{TEST_DIR}/filter_task_1999.parquet'))
+     else (select size from read_blob('{TEST_DIR}/filter_task_2000.parquet')) end)::bigint file_size_in_bytes,
+    100000::bigint record_count, NULL::bigint sequence_number, NULL::bigint first_row_id,
+    0::integer partition_spec_id, {'3':p::integer} partition_constants,
+    []::struct(file_path varchar, file_format varchar, content integer, file_size_in_bytes bigint,
+              record_count bigint, equality_ids integer[], referenced_data_file varchar,
+              content_offset bigint, content_size_in_bytes bigint)[] delete_files,
+    NULL::bigint snapshot_id, 0::integer schema_id,
+    '{"format-version": 3, "table-uuid": "00000000-0000-0000-0000-000000000002", "location": "{TEST_DIR}", "last-updated-ms": 0, "last-column-id": 4, "last-sequence-number": 0, "current-schema-id": 0, "schemas": [{"schema-id": 0, "type": "struct", "fields": [{"id": 1, "name": "id", "required": false, "type": "int"}, {"id": 2, "name": "payload", "required": false, "type": "long"}, {"id": 3, "name": "part", "required": false, "type": "int", "initial-default": 2001}, {"id": 4, "name": "tail", "required": false, "type": "int"}]}], "partition-specs": [{"spec-id": 0, "fields": [{"name": "part", "transform": "identity", "source-id": 3, "field-id": 1000}]}], "default-spec-id": 0, "sort-orders": [{"order-id": 0, "fields": []}], "default-sort-order-id": 0}'::json::variant metadata,
+    NULL::struct(id integer, payload bigint, part integer, tail integer) schema
+from (values (1999), (2000)) t(p);
+
+statement ok
+set variable filter_task_list = (select list(t order by file_path) from filter_tasks t);
+
+statement ok
+create temp table filter_chunk_ranges as
+select file_name, coalesce(dictionary_page_offset, data_page_offset) as start_offset,
+       coalesce(dictionary_page_offset, data_page_offset) + total_compressed_size as end_offset
+from parquet_metadata(['{TEST_DIR}/filter_task_1999.parquet', '{TEST_DIR}/filter_task_2000.parquet'])
+where path_in_schema='id';
+
+statement ok
+create temp macro filter_chunk_reads() as table
+select r.file_name, count(l.pos) as reads
+from filter_chunk_ranges r left join duckdb_logs_parsed('FileSystem') l
+on l.op='READ' and l.path=r.file_name
+   and l.pos < r.end_offset and l.pos + l.bytes > r.start_offset
+group by r.file_name;
+
+# A chosen flag on a separate table produces a join filter at execution time.
+# Keep the task reader on the probe side without disabling join-filter pushdown.
+statement ok
+create temp table chosen_parts(part integer, chosen boolean);
+
+statement ok
+insert into chosen_parts values (1999, false), (2000, true);
+
+statement ok
+set disabled_optimizers='join_order,build_side_probe_side';
+
+foreach multi_file true false
+
+statement ok
+set iceberg_enable_multi_file_scan_tasks={multi_file};
+
+foreach threads 1 4
+
+statement ok
+set threads={threads};
+
+# Static partition predicate: verify both the result and physical data skipping.
+statement ok
+call enable_logging('FileSystem');
+
+statement ok
+call truncate_duckdb_logs();
+
+query II
+select count(*), sum(id) from iceberg_scan_tasks(getvariable('filter_task_list')) where part=2000;
+----
+100000	4999950000
+
+query II
+select count(*) filter (where file_name='{TEST_DIR}/filter_task_1999.parquet' and reads=0),
+       count(*) filter (where file_name='{TEST_DIR}/filter_task_2000.parquet' and reads>0)
+from filter_chunk_reads();
+----
+1	1
+
+statement ok
+call disable_logging();
+
+statement ok
+call enable_logging('FileSystem');
+
+statement ok
+call truncate_duckdb_logs();
+
+query II
+select count(*), sum(s.id)
+from iceberg_scan_tasks(getvariable('filter_task_list')) s
+join chosen_parts d on s.part=d.part
+where d.chosen;
+----
+100000	4999950000
+
+query II
+select count(*) filter (where file_name='{TEST_DIR}/filter_task_1999.parquet' and reads=0),
+       count(*) filter (where file_name='{TEST_DIR}/filter_task_2000.parquet' and reads>0)
+from filter_chunk_reads();
+----
+1	1
+
+statement ok
+call disable_logging();
+
+endloop
+
+endloop
+
+# Prove that both filter scenarios used the expected executor mode.
+foreach multi_file true false
+
+statement ok
+set iceberg_enable_multi_file_scan_tasks={multi_file};
+
+statement ok
+call enable_logging('Iceberg');
+
+statement ok
+call truncate_duckdb_logs();
+
+query II
+select count(*), sum(id) from iceberg_scan_tasks(getvariable('filter_task_list')) where part=2000;
+----
+100000	4999950000
+
+query II
+select count(*) filter (where message='Iceberg scan tasks executor mode=multi_file task_count=2') =
+         case when {multi_file} then 1 else 0 end,
+       count(*) filter (where message='Iceberg scan tasks executor mode=single_file task_count=1') =
+         case when {multi_file} then 0 else 2 end
+from duckdb_logs() where type='Iceberg';
+----
+true	true
+
+statement ok
+call truncate_duckdb_logs();
+
+query II
+select count(*), sum(s.id)
+from iceberg_scan_tasks(getvariable('filter_task_list')) s
+join chosen_parts d on s.part=d.part
+where d.chosen;
+----
+100000	4999950000
+
+query II
+select count(*) filter (where message='Iceberg scan tasks executor mode=multi_file task_count=2') =
+         case when {multi_file} then 1 else 0 end,
+       count(*) filter (where message='Iceberg scan tasks executor mode=single_file task_count=1') =
+         case when {multi_file} then 0 else 2 end
+from duckdb_logs() where type='Iceberg';
+----
+true	true
+
+statement ok
+call disable_logging();
+
+endloop
+
+statement ok
+set iceberg_enable_multi_file_scan_tasks=true;
+
+# Negative control: the same join without runtime filters must read both files.
+statement ok
+set disabled_optimizers='join_order,build_side_probe_side,join_filter_pushdown';
+
+statement ok
+call enable_logging('FileSystem');
+
+statement ok
+call truncate_duckdb_logs();
+
+query II
+select count(*), sum(s.id)
+from iceberg_scan_tasks(getvariable('filter_task_list')) s
+join chosen_parts d on s.part=d.part
+where d.chosen;
+----
+100000	4999950000
+
+query I
+select count(*) from filter_chunk_reads() where reads>0;
+----
+2
+
+statement ok
+call disable_logging();
+
+statement ok
+set disabled_optimizers='join_order,build_side_probe_side';
+
+# A physical column must win over a conflicting descriptor partition constant.
+statement ok
+copy (select 42::integer id, 2000::integer part)
+to '{TEST_DIR}/filter_task_physical.parquet' (format parquet, field_ids {id:1, part:3});
+
+statement ok
+set variable physical_filter_tasks = (select list(t) from (select * replace(
+ '{TEST_DIR}/filter_task_physical.parquet' as file_path,
+ (select size from read_blob('{TEST_DIR}/filter_task_physical.parquet'))::bigint as file_size_in_bytes,
+ 1::bigint as record_count) from filter_tasks where partition_constants."3"=1999) t);
+
+query II
+select id, part from iceberg_scan_tasks(getvariable('physical_filter_tasks')) where part=2000;
+----
+42	2000
+
+query I
+select count(*) from iceberg_scan_tasks(getvariable('physical_filter_tasks')) where part=1999;
+----
+0
+
+query I
+select s.id from iceberg_scan_tasks(getvariable('physical_filter_tasks')) s
+join chosen_parts d on s.part=d.part where d.chosen;
+----
+42
+
+# NULL constants retain missing-column defaults, including under pushed filters.
+statement ok
+set variable default_filter_tasks = (select list(t) from (select * replace(
+ {'3':NULL::integer} as partition_constants) from filter_tasks where partition_constants."3"=2000) t);
+
+query II
+select count(*), sum(id) from iceberg_scan_tasks(getvariable('default_filter_tasks')) where part=2001;
+----
+100000	4999950000
+
+query I
+select count(*) from iceberg_scan_tasks(getvariable('default_filter_tasks')) where part is null;
+----
+0
+
+# Pushed NULL predicates on physically absent, nullable fields remain correct.
+query I
+select id from iceberg_scan_tasks(getvariable('physical_filter_tasks')) where payload is null;
+----
+42
+
+query I
+select count(*) from iceberg_scan_tasks(getvariable('physical_filter_tasks')) where payload is not null;
+----
+0
+
+# Incoming filters use scan positions, not schema positions. Descriptor-only
+# columns are appended without changing those positions or the output projection.
+statement ok
+set variable descriptor_filter_tasks = (select list(t) from (select *,
+ 'payload >= 10'::varchar row_filter from filter_tasks where partition_constants."3"=2000) t);
+
+foreach multi_file true false
+
+statement ok
+set iceberg_enable_multi_file_scan_tasks={multi_file};
+
+statement ok
+call enable_logging('Iceberg');
+
+statement ok
+call truncate_duckdb_logs();
+
+query II rowsort
+select part, id from iceberg_scan_tasks(getvariable('descriptor_filter_tasks')) where id<3;
+----
+2000	1
+2000	2
+
+query II
+select count(*) filter (where message.contains('Iceberg scan tasks executor mode=multi_file')),
+       count(*) filter (where message='Iceberg scan tasks executor mode=single_file task_count=1')
+from duckdb_logs() where type='Iceberg';
+----
+0	1
+
+statement ok
+call disable_logging();
+
+endloop
+
+statement ok
+set iceberg_enable_multi_file_scan_tasks=true;
+
+# Both filters on the same column must be enforced, even across prepared replays.
+statement ok
+prepare merged_task_filters as
+select id from iceberg_scan_tasks(getvariable('descriptor_filter_tasks')) where payload<=20 order by id;
+
+query I
+execute merged_task_filters;
+----
+1
+2
+
+query I
+execute merged_task_filters;
+----
+1
+2
+
+# Descriptor predicates also compose with runtime filters on another column.
+query II
+select count(*), sum(s.id)
+from iceberg_scan_tasks(getvariable('descriptor_filter_tasks')) s
+join chosen_parts d on s.part=d.part
+where d.chosen and s.id<3;
+----
+2	3
+
+# Task-local descriptor filters must not accumulate in the shared incoming set.
+statement ok
+set variable different_descriptor_filters = (select list(t order by file_path) from (select *,
+ case when partition_constants."3"=1999 then 'id=1' else 'id=2' end::varchar row_filter
+ from filter_tasks) t);
+
+foreach multi_file true false
+
+statement ok
+set iceberg_enable_multi_file_scan_tasks={multi_file};
+
+foreach threads 1 4
+
+statement ok
+set threads={threads};
+
+statement ok
+call enable_logging('Iceberg');
+
+statement ok
+call truncate_duckdb_logs();
+
+query II
+select count(*), sum(id) from iceberg_scan_tasks(getvariable('different_descriptor_filters')) where id>=0;
+----
+2	3
+
+query II
+select count(*) filter (where message.contains('Iceberg scan tasks executor mode=multi_file')),
+       count(*) filter (where message='Iceberg scan tasks executor mode=single_file task_count=1')
+from duckdb_logs() where type='Iceberg';
+----
+0	2
+
+statement ok
+call disable_logging();
+
+endloop
+
+endloop
+
+statement ok
+set iceberg_enable_multi_file_scan_tasks=true;
+
+statement ok
+reset threads;
+
+statement ok
+reset disabled_optimizers;
+
+statement ok
+reset parquet_metadata_cache;
+
+statement ok
+reset enable_external_file_cache;

@@ -58,6 +58,43 @@ set variable saved_snapshot = (select snapshot_id from saved_tasks limit 1);
 statement ok
 create temp table expected_scan as select * from my_datalake.default.scan_tasks_test;
 
+# Planned tasks and the ordinary scan must agree on physical file identity and row position.
+statement ok
+create temp table expected_virtuals as
+select id, filename, file_row_number from my_datalake.default.scan_tasks_test;
+
+statement ok
+set variable virtual_task_list = (select list(task) from (select * from saved_tasks) task);
+
+statement ok
+call enable_logging('Iceberg');
+
+statement ok
+call truncate_duckdb_logs();
+
+statement ok
+create temp table actual_virtuals as
+select id, filename, file_row_number from iceberg_scan_tasks(getvariable('virtual_task_list'));
+
+query I
+select count(*) from (
+  (select * from actual_virtuals except all select * from expected_virtuals)
+  union all
+  (select * from expected_virtuals except all select * from actual_virtuals)
+);
+----
+0
+
+query II
+select count(*) filter (where message='Iceberg scan tasks executor mode=multi_file task_count=3'),
+       count(*) filter (where message.contains('Iceberg scan tasks executor mode=single_file'))
+from duckdb_logs() where type='Iceberg';
+----
+1	0
+
+statement ok
+call disable_logging();
+
 # Repeated executions create filtered views with their own cursors while sharing
 # the bound scan configuration and manifest caches. Changing the build-side key
 # must neither retain the previous filter nor exhaust the original scan.
@@ -257,6 +294,61 @@ begin;
 statement ok
 create temp table deleted_tasks as select * from iceberg_scan_plan('my_datalake.default.scan_tasks_test');
 
+# Delete-bearing plans keep sequential executors and preserve ordinary-scan virtual columns.
+statement ok
+create temp table expected_deleted_virtuals as
+select id, filename, file_row_number from my_datalake.default.scan_tasks_test;
+
+statement ok
+set variable deleted_virtual_task_list = (select list(task) from (select * from deleted_tasks) task);
+
+statement ok
+call enable_logging('Iceberg');
+
+statement ok
+call truncate_duckdb_logs();
+
+statement ok
+create temp table actual_deleted_virtuals as
+select id, filename, file_row_number from iceberg_scan_tasks(getvariable('deleted_virtual_task_list'));
+
+query I
+select count(*) from (
+  (select * from actual_deleted_virtuals except all select * from expected_deleted_virtuals)
+  union all
+  (select * from expected_deleted_virtuals except all select * from actual_deleted_virtuals)
+);
+----
+0
+
+# Every deleted physical position is absent while a later row in the same file survives, leaving a gap.
+query I
+select count(*)
+from expected_virtuals deleted
+where deleted.id<3
+  and not exists (
+    select 1 from actual_deleted_virtuals actual
+    where actual.filename=deleted.filename
+      and actual.file_row_number=deleted.file_row_number
+  )
+  and exists (
+    select 1 from actual_deleted_virtuals actual
+    where actual.filename=deleted.filename
+      and actual.file_row_number>deleted.file_row_number
+  );
+----
+3
+
+query II
+select count(*) filter (where message.contains('Iceberg scan tasks executor mode=multi_file')),
+       count(*) filter (where message='Iceberg scan tasks executor mode=single_file task_count=1')
+from duckdb_logs() where type='Iceberg';
+----
+0	3
+
+statement ok
+call disable_logging();
+
 statement ok
 set variable scan_task_list_18 = (select list(task) from (select * from deleted_tasks) task);
 
@@ -437,10 +529,27 @@ create temp table dv_ranges as
 statement ok
 set variable scan_task_list_26 = (select list(task) from (select * from dv_ranges) task);
 
+statement ok
+call enable_logging('Iceberg');
+
+statement ok
+call truncate_duckdb_logs();
+
 query II
 select count(*), sum(id) from iceberg_scan_tasks(getvariable('scan_task_list_26'));
 ----
 3	7
+
+# Deletion vectors force the complete invocation onto one-task executors.
+query II
+select count(*) filter (where message.contains('Iceberg scan tasks executor mode=multi_file')),
+       count(*) filter (where message='Iceberg scan tasks executor mode=single_file task_count=1')
+from duckdb_logs() where type='Iceberg';
+----
+0	2
+
+statement ok
+call disable_logging();
 
 statement ok
 set variable scan_task_list_27 = (select list(task) from (select * replace(list_concat(delete_files, delete_files) as delete_files) from dv_ranges) task);

@@ -21,6 +21,12 @@ static constexpr int32_t MAX_ICEBERG_FORMAT_VERSION = 3;
 static constexpr const char *METADATA_LOG_CLOCK_SKEW_CONFIG_VARIABLE = "iceberg_metadata_log_clock_skew_ms";
 static constexpr int64_t DEFAULT_METADATA_LOG_CLOCK_SKEW_MS = 0;
 
+// Controls whether eligible delete-free iceberg_scan_tasks descriptor lists share
+// one Parquet multi-file executor. Lists with deletes or distinct residual filters
+// retain one-task-at-a-time execution.
+static constexpr const char *ENABLE_MULTI_FILE_SCAN_TASKS_CONFIG_VARIABLE = "iceberg_enable_multi_file_scan_tasks";
+static constexpr bool DEFAULT_ENABLE_MULTI_FILE_SCAN_TASKS = true;
+
 // Compatibility escape hatch for deletion-vector files written by DuckDB Iceberg 1.5.3,
 // which contain only the deletion-vector blob rather than a valid Puffin container.
 static constexpr const char *SKIP_PUFFIN_VERIFICATION_CONFIG_VARIABLE = "iceberg_unsafe_skip_puffin_verification";
