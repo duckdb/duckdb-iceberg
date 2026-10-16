@@ -1,0 +1,69 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/scan_planning/shared_scan_provider.test
+# description: Filtered scan views share snapshot discovery and keep independent pruning and cursors
+# group: [scan_planning]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+include test/sql/init_requires
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.shared_scan_provider;
+
+statement ok
+CREATE TABLE my_datalake.default.shared_scan_provider (id INTEGER, part INTEGER)
+PARTITIONED BY (part);
+
+statement ok
+INSERT INTO my_datalake.default.shared_scan_provider SELECT range, range // 10 FROM range(30);
+
+statement ok
+CALL enable_logging(level=debug);
+
+statement ok
+CALL truncate_duckdb_logs();
+
+# Cardinality and execution may initialize different filtered views of the same scan.
+query I
+SELECT sum(id) FROM my_datalake.default.shared_scan_provider WHERE part IN (0, 2);
+----
+290
+
+# Server planning must not issue a new request for each view.
+query I
+SELECT count(*) <= 1 FROM duckdb_logs()
+WHERE type = 'Iceberg' AND message.contains('/plan body=');
+----
+true
+
+query I
+SELECT count(*) <= 1 FROM duckdb_logs()
+WHERE type = 'Iceberg' AND message.contains('phase=manifest_list_loaded');
+----
+true
+
+statement ok
+CREATE TABLE shared_scan_provider_filter AS SELECT 2 AS part;
+
+statement ok
+CALL truncate_duckdb_logs();
+
+# Join filters can create another view after the initial planning pass.
+query I
+SELECT sum(id) FROM my_datalake.default.shared_scan_provider JOIN shared_scan_provider_filter USING (part);
+----
+245
+
+query I
+SELECT count(*) <= 1 FROM duckdb_logs()
+WHERE type = 'Iceberg' AND message.contains('/plan body=');
+----
+true
+
+statement ok
+CALL disable_logging();
+
+statement ok
+DROP TABLE shared_scan_provider_filter;
+
+statement ok
+DROP TABLE my_datalake.default.shared_scan_provider;

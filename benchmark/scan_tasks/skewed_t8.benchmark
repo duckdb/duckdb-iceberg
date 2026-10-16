@@ -1,0 +1,14 @@
+# name: benchmark/scan_tasks/skewed_t8.benchmark
+# description: 4096 scan tasks, skewed, 8 threads
+# group: [scan_tasks]
+
+template benchmark/scan_tasks/scan_tasks.benchmark.in
+CASE=skewed
+THREADS=8
+TASKS=4096
+DATA_TASKS=1
+ROWS=8388608
+COUNT=8519648
+SUM_ID=35184369925648
+SUM_PAYLOAD=105553169414480
+SUM_TASK_ID=268369920

@@ -4,13 +4,7 @@
 
 require-env CATALOG_TEST_CONFIG_SETUP
 
-require avro
-
-require parquet
-
-require iceberg
-
-require httpfs
+include test/sql/init_requires
 
 
 statement ok
@@ -89,3 +83,12 @@ NULL
 
 statement ok
 abort;
+
+# iceberg_manifests shows the manifests of the current snapshot
+query IIIIIII
+SELECT content, added_data_files_count, existing_data_files_count, deleted_data_files_count, added_delete_files_count, existing_delete_files_count, partition_summaries
+FROM iceberg_manifests(my_datalake.default.test_delete_manifest_partitions)
+ORDER BY content;
+----
+0	6	0	0	0	0	[{'contains_null': true, 'contains_nan': false, 'lower_bound': A, 'upper_bound': E}]
+1	0	0	0	3	0	[{'contains_null': true, 'contains_nan': false, 'lower_bound': A, 'upper_bound': D}]

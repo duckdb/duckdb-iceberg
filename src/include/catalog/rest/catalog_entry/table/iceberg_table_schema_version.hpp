@@ -14,11 +14,13 @@ public:
 	IcebergTableSchemaVersion(IcebergTable &table_info, Catalog &catalog, SchemaCatalogEntry &schema,
 	                          CreateTableInfo &info, optional_idx schema_id);
 
-	static virtual_column_map_t VirtualColumns();
+	static virtual_column_map_t VirtualColumns(int32_t iceberg_version);
 	virtual_column_map_t GetVirtualColumns() const override;
 	vector<column_t> GetRowIdColumns() const override;
 
 public:
+	const ColumnList &GetColumns() const override;
+
 	unique_ptr<BaseStatistics> GetStatistics(ClientContext &context, column_t column_id) override;
 	void PrepareIcebergScanFromEntry(ClientContext &context) const;
 	TableFunction GetScanFunction(ClientContext &context, unique_ptr<FunctionData> &bind_data) override;
@@ -33,6 +35,9 @@ public:
 
 	void BindUpdateConstraints(Binder &binder, LogicalGet &get, LogicalProjection &proj, LogicalUpdate &update,
 	                           ClientContext &context) override;
+
+protected:
+	ColumnList columns;
 
 public:
 	IcebergTable &table_info;

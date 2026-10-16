@@ -1,0 +1,55 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/alter/sorted_by/test_ctas_nested_sorted_by.test
+# description: CTAS resolves nested sort fields using the Iceberg storage schema
+# group: [sorted_by]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+include test/sql/init_requires
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.ctas_nested_sorted_by;
+
+# Verify both a nested sort key and a subsequent top-level sort key.
+statement ok
+CREATE TABLE my_datalake.default.ctas_nested_sorted_by SORTED BY (s.x, id) AS
+SELECT {'x': x} AS s, id
+FROM (VALUES (2, 30), (1, 20), (1, 10), (NULL, 40)) v(x, id);
+
+query II
+SELECT o.fields[1]."source-id" = s.fields[1].type.fields[1].id,
+       o.fields[2]."source-id" = s.fields[2].id
+FROM iceberg_load_table_response(my_datalake.default.ctas_nested_sorted_by),
+unnest(metadata."sort-orders"::VARIANT[]) AS orders(o),
+unnest(metadata.schemas::VARIANT[]) AS schemas(s)
+WHERE o."order-id"::INTEGER = metadata."default-sort-order-id"
+AND s."schema-id"::INTEGER = metadata."current-schema-id";
+----
+true	true
+
+query II
+SELECT s.x, id FROM my_datalake.default.ctas_nested_sorted_by
+ORDER BY filename, file_row_number;
+----
+1	10
+1	20
+2	30
+NULL	40
+
+statement ok
+DROP TABLE my_datalake.default.ctas_nested_sorted_by;
+
+# Partitioned CTAS also sorts nested fields after converting to storage types.
+statement ok
+CREATE TABLE my_datalake.default.ctas_nested_sorted_by PARTITIONED BY (id) SORTED BY (s.x) AS
+SELECT {'x': x::HUGEINT} AS s, 1 AS id FROM (VALUES (3), (1), (2)) v(x);
+
+query IT
+SELECT s.x, typeof(s.x) FROM my_datalake.default.ctas_nested_sorted_by
+ORDER BY filename, file_row_number;
+----
+1	DECIMAL(38,0)
+2	DECIMAL(38,0)
+3	DECIMAL(38,0)
+
+statement ok
+DROP TABLE my_datalake.default.ctas_nested_sorted_by;

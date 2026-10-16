@@ -8,13 +8,7 @@ require-env ICEBERG_REMOTE_INSERT_READY
 
 require-env R2_TOKEN
 
-require avro
-
-require parquet
-
-require iceberg
-
-require httpfs
+include test/sql/init_requires
 
 require aws
 

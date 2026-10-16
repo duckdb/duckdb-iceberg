@@ -1,8 +1,14 @@
 build
 .vscode
 .idea
+.cache/
+.ignore
+.clangd
+.java-version
+.python-version
 cmake-build-debug
 duckdb_unittest_tempdir/
+duckdb_benchmark_data/
 .DS_Store
 testext
 test/python/__pycache__/

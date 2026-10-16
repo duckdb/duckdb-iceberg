@@ -5,14 +5,13 @@ Run with:
     mitmdump --mode regular@19133 -s scripts/vended_credentials_refresh_proxy.py
 
 The addon rewrites selected real fixture catalog table responses to vend
-controlled S3 credentials, then intercepts MinIO requests to reject stale
+controlled S3 credentials, then intercepts object store requests to reject stale
 credentials and serve deterministic local Parquet objects.
 
 For refresh tests, the proxy returns initial credentials on the first table load,
 rejects an S3 request signed with those credentials, and then returns refreshed
-credentials on the refresh-triggered table load. This models the production
-contract that fresh vended credentials come from reloading the table through the
-Iceberg REST catalog, without waiting for a real STS expiry in CI.
+credentials through /credentials or LoadTable, depending on the advertised
+endpoints, without waiting for a real STS expiry in CI.
 """
 
 import datetime
@@ -30,6 +29,8 @@ CATALOG_HOST = "127.0.0.1"
 CATALOG_PORT = 8181
 S3_HOST = "127.0.0.1"
 S3_PORT = 9000
+
+CREDENTIALS_ENDPOINT = "GET /v1/{prefix}/namespaces/{namespace}/tables/{table}/credentials"
 
 SCAN_TABLE = "empty_table"
 TABLE_SCAN_TABLE = "vended_refresh_table"
@@ -134,13 +135,87 @@ class VendedCredentialRefreshAddon:
             self._handle_s3_request(flow)
 
     def response(self, flow: http.HTTPFlow):
+        if flow.metadata.get("vended_config") and flow.response and flow.response.status_code == 200:
+            response = json.loads(flow.response.content.decode())
+            mode = self._credential_endpoint_mode(flow)
+            if mode == "omitted":
+                response.pop("endpoints", None)
+            else:
+                endpoints = response.setdefault("endpoints", ["GET /v1/{prefix}/namespaces/{namespace}"])
+                response["endpoints"] = [endpoint for endpoint in endpoints if endpoint != CREDENTIALS_ENDPOINT]
+                if mode in ("supported", "error"):
+                    response["endpoints"].append(CREDENTIALS_ENDPOINT)
+            flow.response.text = json.dumps(response)
+            return
         table = flow.metadata.get("vended_table")
         if not table or not flow.response or flow.response.status_code >= 300:
             return
 
         response = json.loads(flow.response.content.decode())
-        response["storage-credentials"] = [self._credentials_for_table(table)]
+        if table == INIT_TABLE and "x-credential-endpoint" in flow.request.headers:
+            # Keep the table location aligned with the synthetic object so
+            # multi-credential tests can select an exact matching scope.
+            response["metadata"]["location"] = self._credentials_prefix(table)
+        self._set_storage_credentials(flow, table, response)
         flow.response.text = json.dumps(response)
+
+    @staticmethod
+    def _mode(flow: http.HTTPFlow, header, default):
+        # Catalog auth and HTTP transport can both add the same header. Avoid
+        # Headers.get(), which joins repeated values into e.g. "error, error".
+        values = flow.request.headers.get_all(header)
+        return values[0] if values else default
+
+    @staticmethod
+    def _credential_endpoint_mode(flow: http.HTTPFlow):
+        return VendedCredentialRefreshAddon._mode(flow, "x-credential-endpoint", "supported")
+
+    def _set_storage_credentials(self, flow, table, response):
+        credential = self._credentials_for_table(table)
+        response["storage-credentials"] = [credential]
+        mode = self._mode(flow, "x-refresh-response", "single")
+        if mode in ("config", "removed_config"):
+            response["config"] = credential["config"]
+            response.pop("storage-credentials")
+            if mode == "removed_config" and self.refresh_unlocked[table]:
+                response.pop("config")
+            return
+        if mode == "merged":
+            # Table defaults may change with the credentials, but per-prefix
+            # credentials must retain precedence over those defaults.
+            response["config"] = credential["config"].copy()
+            response["config"]["s3.access-key-id"] = "UNRELATED_KEY"
+            response["config"]["s3.region"] = "wrong-region"
+            credential["config"] = {
+                "s3.access-key-id": credential["config"]["s3.access-key-id"],
+                "client.region": "us-east-1",
+            }
+            return
+        if not self.refresh_unlocked[table]:
+            return
+        if mode == "empty":
+            response["storage-credentials"] = []
+        elif mode == "omitted":
+            response.pop("storage-credentials")
+        elif mode == "multiple":
+            unrelated = self._credentials_for_table(table)
+            unrelated["prefix"] = "s3://warehouse/unrelated"
+            unrelated["config"]["s3.access-key-id"] = "UNRELATED_KEY"
+            response["storage-credentials"] = [unrelated, credential]
+        elif mode == "invalid":
+            response["storage-credentials"] = "not an array"
+
+    @staticmethod
+    def _catalog_error(flow, status, message):
+        body = json.dumps({"error": {"message": message, "type": "TestFailure", "code": status}}).encode()
+        flow.response = http.Response.make(status, body, {"Content-Type": "application/json"})
+
+    def _refresh_error(self, flow, table):
+        mode = self._mode(flow, "x-refresh-response", "single")
+        if self.refresh_unlocked[table] and mode in ("403", "404"):
+            self._catalog_error(flow, int(mode), f"refresh denied ({mode})")
+            return True
+        return False
 
     @staticmethod
     def _is_catalog_request(flow: http.HTTPFlow):
@@ -154,6 +229,14 @@ class VendedCredentialRefreshAddon:
         parsed_path = urllib.parse.urlparse(flow.request.path)
         path = parsed_path.path
 
+        if flow.request.method == "GET" and path == "/v1/config":
+            flow.metadata["vended_config"] = True
+            if "x-credential-endpoint" in flow.request.headers:
+                self.refresh_unlocked[INIT_TABLE] = False
+                self.refresh_unlocked[TABLE_SCAN_TABLE] = False
+                self.table_scan_refresh_path = None
+            return
+
         table_match = re.fullmatch(r"/v1/namespaces/default/tables/([^/]+)", path)
         credentials_match = re.fullmatch(r"/v1/namespaces/default/tables/([^/]+)/credentials", path)
 
@@ -163,13 +246,25 @@ class VendedCredentialRefreshAddon:
 
         if flow.request.method == "GET" and table_match and table_match.group(1) in self.refresh_unlocked:
             table = table_match.group(1)
+            if self._refresh_error(flow, table):
+                return
             flow.metadata["vended_table"] = table
             return
 
         if credentials_match and credentials_match.group(1) in self.refresh_unlocked:
+            mode = self._credential_endpoint_mode(flow)
+            if mode in ("absent", "omitted"):
+                self._catalog_error(flow, 404, "credentials endpoint is not supported")
+                return
+            if mode == "error":
+                self._catalog_error(flow, 403, "credential endpoint denied")
+                return
             table = credentials_match.group(1)
-            body = json.dumps({"storage-credentials": [self._credentials_for_table(table)]}).encode()
-            flow.response = http.Response.make(200, body, {"Content-Type": "application/json"})
+            if self._refresh_error(flow, table):
+                return
+            response = {}
+            self._set_storage_credentials(flow, table, response)
+            flow.response = http.Response.make(200, json.dumps(response).encode(), {"Content-Type": "application/json"})
 
     def _is_direct_delete_commit_request(self, flow: http.HTTPFlow, path):
         if flow.request.method != "POST":

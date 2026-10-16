@@ -86,6 +86,19 @@ class PartitionedInsertCase:
 ANIMAL_VALUES = ["aardvark", "bison", "camel", "dingo", "eagle", "falcon", "gecko", "hippo", "ibis", "jaguar", None]
 DATE_VALUES = [datetime.date(2020, month, 1) for month in range(1, 11)] + [None]
 TIMESTAMP_VALUES = [datetime.datetime(2023, month, 1, 0, 0, 0) for month in range(1, 11)] + [None]
+TRUNCATE_COMBINING_VALUES = [
+    "e\u0301x",
+    "a\u0300y",
+    "o\u0308z",
+    "n\u0303a",
+    "c\u0327d",
+    "\U0001f468\u200d\U0001f469z",
+    "plain",
+    "other",
+    "abc",
+    "xyz",
+    None,
+]
 TRUNCATE_NUMBER_VALUES = [1, 11, 21, 31, 41, 51, 61, 71, 81, 91, None]
 BUCKET_DECIMAL_VALUES = [Decimal(f"{value}.00") for value in [10, 20, 30, 40, 50, 60, 70, 80, 90, 100]] + [None]
 TRUNCATE_DECIMAL_VALUES = [Decimal(f"{value}.00") for value in range(1, 11)] + [None]
@@ -336,6 +349,25 @@ PARTITIONED_INSERT_CASES = [
             "SELECT * FROM default.truncate_partitioned_varchar_for_insert WHERE value = 'aardvark' ORDER BY id"
         ),
         spark_filter_expected_rows=[Row(id=1, value="aardvark"), Row(id=101, value="aardvark")],
+    ),
+    PartitionedInsertCase(
+        table_name="truncate_partitioned_varchar_combining_for_insert",
+        column_name="value",
+        spark_seed=_build_seed(
+            "truncate_partitioned_varchar_combining_for_insert",
+            "value",
+            "STRING",
+            "truncate(value, 2)",
+            [f"'{value}'" for value in TRUNCATE_COMBINING_VALUES[:-1]] + ["NULL"],
+        ),
+        duckdb_insert_literals=[f"'{value}'" for value in TRUNCATE_COMBINING_VALUES[:-1]] + ["NULL"],
+        duckdb_filter_literals=[f"'{value}'" for value in TRUNCATE_COMBINING_VALUES[:-1]],
+        spark_expected_rows=_expected_rows("value", TRUNCATE_COMBINING_VALUES),
+        spark_filter_sql=(
+            "SELECT * FROM default.truncate_partitioned_varchar_combining_for_insert "
+            "WHERE value = 'e\u0301x' ORDER BY id"
+        ),
+        spark_filter_expected_rows=[Row(id=1, value="e\u0301x"), Row(id=101, value="e\u0301x")],
     ),
     PartitionedInsertCase(
         table_name="truncate_partitioned_binary_for_insert",

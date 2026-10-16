@@ -13,7 +13,8 @@ void DuckLakeColumnStats::AddStats(IcebergPredicateStats &stats) {
 	if (stats.has_null) {
 		contains_null = true;
 	}
-	if (stats.has_nan) {
+	//! DuckLake's boolean stats conservatively include unknown NaN presence.
+	if (!stats.has_nan || *stats.has_nan) {
 		contains_nan = true;
 	}
 

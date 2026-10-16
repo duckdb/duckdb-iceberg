@@ -16,7 +16,7 @@ string IcebergSnapshotOperationTypeToString(IcebergSnapshotOperationType type);
 //! An Iceberg snapshot https://iceberg.apache.org/spec/#snapshots
 class IcebergSnapshot {
 public:
-	IcebergSnapshot(int32_t schema_id) : schema_id(schema_id) {
+	IcebergSnapshot(int32_t schema_id, int64_t snapshot_id) : schema_id(schema_id), snapshot_id(snapshot_id) {
 	}
 	static int64_t NewSnapshotId();
 	static IcebergSnapshot ParseSnapshot(const rest_api_objects::Snapshot &snapshot, IcebergTableMetadata &metadata);
@@ -29,8 +29,8 @@ private:
 	int32_t schema_id;
 
 public:
-	//! Snapshot metadata
-	optional<int64_t> snapshot_id;
+	//! Required in every Iceberg format version.
+	int64_t snapshot_id;
 	optional<int64_t> parent_snapshot_id;
 	optional<int64_t> sequence_number;
 	optional<int64_t> first_row_id;

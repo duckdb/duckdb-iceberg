@@ -3,15 +3,26 @@
 
 require-env CATALOG_TEST_CONFIG_SETUP
 
-require avro
-
-require parquet
-
-require iceberg
-
-require httpfs
+include test/sql/init_requires
 
 require core_functions
+
+# Reset this small fixture for each test.
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.table_properties;
+
+statement ok
+CREATE TABLE my_datalake.default.table_properties (a INTEGER) WITH ('format-version'='2', 'write.delete.mode'='merge-on-read');
+
+statement ok
+CALL set_iceberg_table_properties(my_datalake.default.table_properties, {'read.split.target-size': '268435456', 'foo': 'baz'});
+
+statement ok
+CALL remove_iceberg_table_properties(my_datalake.default.table_properties, ['foo']);
+
+statement ok
+CALL set_iceberg_table_properties(my_datalake.default.table_properties, {'duckdb_man': 'superman', 'another1': 'neato'});
 
 statement ok
 CALL enable_logging('HTTP');
@@ -80,7 +91,7 @@ select count(*) from my_datalake.default.test;
 50
 
 query II
-select * from iceberg_table_properties(my_datalake.default.test_table_properties) where key in ('write.update.mode', 'write.delete.mode', 'page-write-size', 'another1', 'duckdb_man') order by all;
+select * from iceberg_table_properties(my_datalake.default.table_properties) where key in ('write.update.mode', 'write.delete.mode', 'page-write-size', 'another1', 'duckdb_man') order by all;
 ----
 another1	neato
 duckdb_man	superman
@@ -141,3 +152,47 @@ CALL remove_iceberg_table_properties(my_datalake.default.test, ['write.delete.mo
 
 statement ok
 ROLLBACK;
+
+# reserved properties describe table state; storing them as plain properties is refused
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.reserved_properties;
+
+statement ok
+CREATE TABLE my_datalake.default.reserved_properties (a INTEGER) WITH ('format-version' = '2');
+
+statement error
+CALL set_iceberg_table_properties(my_datalake.default.reserved_properties, {'format-version': '3'});
+----
+<REGEX>:.*Cannot change 'format-version' with set_iceberg_table_properties\(\), use ALTER TABLE.*
+
+statement error
+CALL set_iceberg_table_properties(my_datalake.default.reserved_properties, {'format-version': '1'});
+----
+<REGEX>:.*Cannot change 'format-version' with set_iceberg_table_properties\(\), use ALTER TABLE.*
+
+statement error
+CALL set_iceberg_table_properties(my_datalake.default.reserved_properties, {'foo': 'bar', 'Current-Snapshot-Id': '1'});
+----
+<REGEX>:.*'Current-Snapshot-Id' is a reserved Iceberg table property and can't be changed with set_iceberg_table_properties\(\).*
+
+statement error
+CALL remove_iceberg_table_properties(my_datalake.default.reserved_properties, ['uuid']);
+----
+<REGEX>:.*'uuid' is a reserved Iceberg table property and can't be changed with remove_iceberg_table_properties\(\).*
+
+query I
+SELECT count(*) FROM iceberg_table_properties(my_datalake.default.reserved_properties) WHERE key IN ('format-version', 'foo', 'Current-Snapshot-Id');
+----
+0
+
+# every listed property is removed, not only the first
+statement ok
+CALL set_iceberg_table_properties(my_datalake.default.reserved_properties, {'p1': 'a', 'p2': 'b', 'p3': 'c'});
+
+statement ok
+CALL remove_iceberg_table_properties(my_datalake.default.reserved_properties, ['p1', 'p3']);
+
+query II
+SELECT key, value FROM iceberg_table_properties(my_datalake.default.reserved_properties) WHERE key IN ('p1', 'p2', 'p3') ORDER BY key;
+----
+p2	b

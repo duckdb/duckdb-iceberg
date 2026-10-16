@@ -11,7 +11,7 @@
 namespace duckdb {
 namespace rest_api_objects {
 
-class Expression;
+class Predicate;
 
 class PlanTableScanRequest {
 public:
@@ -36,7 +36,7 @@ public:
 public:
 	optional<int64_t> snapshot_id;
 	optional<vector<FieldName>> select;
-	unique_ptr<Expression> filter;
+	unique_ptr<Predicate> filter;
 	optional<int64_t> min_rows_requested;
 	optional<bool> case_sensitive;
 	optional<bool> use_snapshot_schema;

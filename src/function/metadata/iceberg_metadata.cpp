@@ -151,17 +151,14 @@ static void IcebergMetaDataFunction(ClientContext &context, TableFunctionInput &
 				output.SetChildCardinality(out);
 				return;
 			}
-			auto &manifest = table_entry.file;
+			auto &manifest = table_entry.GetFile();
 			auto &manifest_entry = entries[global_state.current_manifest_entry_idx];
 			auto &data_file = manifest_entry.data_file;
 
 			//! manifest_path
 			AddString(output.data[0], out, string_t(manifest.manifest_path));
 			//! manifest_sequence_number
-			if (!manifest.sequence_number) {
-				throw InvalidConfigurationException("manifest_file.sequence_number is not set");
-			}
-			FlatVector::GetDataMutable<int64_t>(output.data[1])[out] = *manifest.sequence_number;
+			FlatVector::GetDataMutable<int64_t>(output.data[1])[out] = manifest.sequence_number;
 			//! manifest_content
 			AddString(output.data[2], out, string_t(IcebergManifestContentTypeToString(manifest.content)));
 
@@ -187,14 +184,17 @@ static void IcebergMetaDataFunction(ClientContext &context, TableFunctionInput &
 TableFunctionSet IcebergFunctions::GetIcebergMetadataFunction() {
 	TableFunctionSet function_set("iceberg_metadata");
 
-	auto fun = TableFunction({LogicalType::VARCHAR}, IcebergMetaDataFunction, IcebergMetaDataBind,
-	                         IcebergMetaDataGlobalTableFunctionState::Init);
-	fun.named_parameters["allow_moved_paths"] = LogicalType::BOOLEAN;
-	fun.named_parameters["metadata_compression_codec"] = LogicalType::VARCHAR;
-	fun.named_parameters["version"] = LogicalType::VARCHAR;
-	fun.named_parameters["version_name_format"] = LogicalType::VARCHAR;
-	fun.named_parameters["snapshot_from_timestamp"] = LogicalType::TIMESTAMP_MS;
-	fun.named_parameters["snapshot_from_id"] = LogicalType::UBIGINT;
+	auto fun =
+	    TableFunction(FunctionSignature().AddPositionalOnly("path", LogicalType::VARCHAR), IcebergMetaDataFunction,
+	                  IcebergMetaDataBind, IcebergMetaDataGlobalTableFunctionState::Init);
+	fun.GetSignature().WithTypedKwargs("options", [&](TypedKwargs &options) {
+		options.Add("allow_moved_paths", LogicalType::BOOLEAN)
+		    .Add("metadata_compression_codec", LogicalType::VARCHAR)
+		    .Add("version", LogicalType::ANY)
+		    .Add("version_name_format", LogicalType::VARCHAR)
+		    .Add("snapshot_from_timestamp", LogicalType::ANY)
+		    .Add("snapshot_from_id", LogicalType::UBIGINT);
+	});
 	function_set.AddFunction(fun);
 
 	return function_set;

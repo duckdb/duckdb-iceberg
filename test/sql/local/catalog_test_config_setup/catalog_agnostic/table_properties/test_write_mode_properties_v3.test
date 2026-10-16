@@ -1,0 +1,83 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/table_properties/test_write_mode_properties_v3.test
+# description: UPDATE and MERGE honor write.update.mode and write.merge.mode on v3 tables, which use deletion vectors
+# group: [table_properties]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require-env FORMAT_V3_SUPPORT
+
+include test/sql/init_requires
+
+require core_functions
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.write_modes_v3;
+
+statement ok
+CREATE TABLE my_datalake.default.write_modes_v3 (id INTEGER, v VARCHAR) WITH ('format-version'='3');
+
+statement ok
+INSERT INTO my_datalake.default.write_modes_v3 VALUES (1, 'a'), (2, 'b'), (3, 'c');
+
+statement ok
+CALL set_iceberg_table_properties(my_datalake.default.write_modes_v3,
+    {'write.update.mode': 'copy-on-write', 'write.merge.mode': 'copy-on-write'});
+
+statement error
+UPDATE my_datalake.default.write_modes_v3 SET v = 'z' WHERE id = 2;
+----
+<REGEX>:.*Not implemented Error.*write.update.mode.*copy-on-write.*
+
+statement error
+MERGE INTO my_datalake.default.write_modes_v3 AS t USING (SELECT 2 AS id) AS s ON t.id = s.id
+WHEN MATCHED THEN UPDATE SET v = 'z';
+----
+<REGEX>:.*Not implemented Error.*write.merge.mode.*copy-on-write.*
+
+statement error
+MERGE INTO my_datalake.default.write_modes_v3 AS t USING (SELECT 2 AS id) AS s ON t.id = s.id
+WHEN MATCHED THEN DELETE;
+----
+<REGEX>:.*Not implemented Error.*write.merge.mode.*copy-on-write.*
+
+# an insert-only MERGE is an append, so it is allowed and writes no deletion vectors
+
+query I
+MERGE INTO my_datalake.default.write_modes_v3 AS t USING (SELECT 4 AS id, 'd' AS v) AS s ON t.id = s.id
+WHEN NOT MATCHED THEN INSERT VALUES (s.id, s.v);
+----
+1
+
+query T
+SELECT operation FROM iceberg_snapshots(my_datalake.default.write_modes_v3) ORDER BY sequence_number DESC LIMIT 1;
+----
+append
+
+query TTI
+SELECT content, status, count(*) FROM iceberg_metadata(my_datalake.default.write_modes_v3) GROUP BY ALL ORDER BY ALL;
+----
+DATA	ADDED	2
+
+# with write.merge.mode set to merge-on-read, the same MERGE is allowed and writes a deletion vector
+
+statement ok
+CALL set_iceberg_table_properties(my_datalake.default.write_modes_v3, {'write.merge.mode': 'merge-on-read'});
+
+query I
+MERGE INTO my_datalake.default.write_modes_v3 AS t USING (SELECT 2 AS id) AS s ON t.id = s.id
+WHEN MATCHED THEN UPDATE SET v = 'z';
+----
+1
+
+query I
+SELECT count(*) > 0 FROM iceberg_metadata(my_datalake.default.write_modes_v3) WHERE content = 'POSITION_DELETES';
+----
+true
+
+query II
+SELECT id, v FROM my_datalake.default.write_modes_v3 ORDER BY id;
+----
+1	a
+2	z
+3	c
+4	d

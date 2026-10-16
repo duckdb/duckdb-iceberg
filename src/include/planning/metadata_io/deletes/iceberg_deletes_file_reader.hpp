@@ -33,7 +33,7 @@ struct IcebergDeleteFileReader : public MultiFileReader {
 	bool Bind(MultiFileOptions &options, MultiFileList &files, vector<LogicalType> &return_types,
 	          vector<Identifier> &names, MultiFileReaderBindData &bind_data) override;
 
-	static unique_ptr<MultiFileReader> CreateInstance(const TableFunction &table);
+	static unique_ptr<MultiFileReader> CreateInstance(const BoundTableFunction &table);
 
 public:
 	shared_ptr<TableFunctionInfo> function_info;

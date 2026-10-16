@@ -70,8 +70,8 @@ jobs:
         env:
           GRAVITINO_SERVER_AVAILABLE: 1
         run: |
-          ./build/relassert/test/unittest --order lex "$PWD/test/sql/local/catalog_test_config_setup/*" --list-test-names-only || true
-          ./build/relassert/test/unittest --order lex "$PWD/test/sql/local/catalog_test_config_setup/*" --test-config test/configs/gravitino.json
+          ./build/relassert/test/unittest --order lex "$PWD/test/sql/local/catalog_test_config_setup/*" "exclude:*.test_slow" --list-test-names-only || true
+          ./build/relassert/test/unittest --order lex "$PWD/test/sql/local/catalog_test_config_setup/*" "exclude:*.test_slow" --test-config test/configs/gravitino.json
 
       - name: Test reads with PyIceberg and Spark
         env:

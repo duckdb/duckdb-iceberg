@@ -20,21 +20,21 @@ public:
 	CompletedPlanningResult &operator=(const CompletedPlanningResult &) = delete;
 	CompletedPlanningResult(CompletedPlanningResult &&) = default;
 	CompletedPlanningResult &operator=(CompletedPlanningResult &&) = default;
-	class Object5 {
+	class Object10 {
 	public:
-		Object5();
-		Object5(const Object5 &) = delete;
-		Object5 &operator=(const Object5 &) = delete;
-		Object5(Object5 &&) = default;
-		Object5 &operator=(Object5 &&) = default;
+		Object10();
+		Object10(const Object10 &) = delete;
+		Object10 &operator=(const Object10 &) = delete;
+		Object10(Object10 &&) = default;
+		Object10 &operator=(Object10 &&) = default;
 
 	public:
 		// Deserialization
-		static Object5 FromJSON(JSONValue obj);
+		static Object10 FromJSON(JSONValue obj);
 		string TryFromJSON(JSONValue obj);
 
 		// Copy
-		Object5 Copy() const;
+		Object10 Copy() const;
 
 		// Serialization
 		void PopulateJSON(JSONWriter &writer, JSONMutableValue obj) const;
@@ -59,7 +59,7 @@ public:
 
 public:
 	ScanTasks scan_tasks;
-	Object5 object_5;
+	Object10 object_10;
 };
 
 } // namespace rest_api_objects

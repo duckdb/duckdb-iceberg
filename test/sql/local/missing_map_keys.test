@@ -1,0 +1,158 @@
+# name: test/sql/local/missing_map_keys.test
+# group: [local]
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+# Unmappable key in a map.
+
+statement error
+SELECT payload FROM iceberg_scan('{WORKING_DIRECTORY}/data/persistent/missing_map_keys/map', version='1')
+----
+Invalid Input Error: Field ""key"" (field id 3) is missing from the file schema and has no default expression
+
+statement error
+SELECT * FROM iceberg_scan('{WORKING_DIRECTORY}/data/persistent/missing_map_keys/map', version='1')
+----
+Invalid Input Error: Field ""key"" (field id 3) is missing from the file schema and has no default expression
+
+statement error
+SELECT id FROM iceberg_scan('{WORKING_DIRECTORY}/data/persistent/missing_map_keys/map', version='1') WHERE payload IS NOT NULL
+----
+Invalid Input Error: Field ""key"" (field id 3) is missing from the file schema and has no default expression
+
+query I
+SELECT id FROM iceberg_scan('{WORKING_DIRECTORY}/data/persistent/missing_map_keys/map', version='1')
+----
+1
+
+# Unmappable key in a struct.
+
+statement error
+SELECT payload FROM iceberg_scan('{WORKING_DIRECTORY}/data/persistent/missing_map_keys/struct', version='1')
+----
+Invalid Input Error: Field ""key"" (field id 4) is missing from the file schema and has no default expression
+
+statement error
+SELECT * FROM iceberg_scan('{WORKING_DIRECTORY}/data/persistent/missing_map_keys/struct', version='1')
+----
+Invalid Input Error: Field ""key"" (field id 4) is missing from the file schema and has no default expression
+
+statement error
+SELECT id FROM iceberg_scan('{WORKING_DIRECTORY}/data/persistent/missing_map_keys/struct', version='1') WHERE payload IS NOT NULL
+----
+Invalid Input Error: Field ""key"" (field id 4) is missing from the file schema and has no default expression
+
+query I
+SELECT id FROM iceberg_scan('{WORKING_DIRECTORY}/data/persistent/missing_map_keys/struct', version='1')
+----
+1
+
+# Unmappable key in a list.
+
+statement error
+SELECT payload FROM iceberg_scan('{WORKING_DIRECTORY}/data/persistent/missing_map_keys/list', version='1')
+----
+Invalid Input Error: Field ""key"" (field id 4) is missing from the file schema and has no default expression
+
+statement error
+SELECT * FROM iceberg_scan('{WORKING_DIRECTORY}/data/persistent/missing_map_keys/list', version='1')
+----
+Invalid Input Error: Field ""key"" (field id 4) is missing from the file schema and has no default expression
+
+statement error
+SELECT id FROM iceberg_scan('{WORKING_DIRECTORY}/data/persistent/missing_map_keys/list', version='1') WHERE payload IS NOT NULL
+----
+Invalid Input Error: Field ""key"" (field id 4) is missing from the file schema and has no default expression
+
+query I
+SELECT id FROM iceberg_scan('{WORKING_DIRECTORY}/data/persistent/missing_map_keys/list', version='1')
+----
+1
+
+query T
+SELECT payload FROM iceberg_scan('{WORKING_DIRECTORY}/data/persistent/missing_map_keys/missing_value', version='1')
+----
+{key=NULL}
+
+query T
+SELECT payload FROM iceberg_scan('{WORKING_DIRECTORY}/data/persistent/missing_map_keys/missing_map', version='1')
+----
+NULL
+
+# Unmappable key in the manifest column_sizes map.
+
+statement error
+SELECT * FROM iceberg_column_stats('{WORKING_DIRECTORY}/data/persistent/missing_map_keys/manifest_column_sizes', version='1')
+----
+Invalid Input Error: Field ""key"" (field id 117) is missing from the file schema and has no default expression
+
+query I
+SELECT 42
+----
+42
+
+# Unmappable key in the manifest value_counts map.
+
+statement error
+SELECT * FROM iceberg_column_stats('{WORKING_DIRECTORY}/data/persistent/missing_map_keys/manifest_value_counts', version='1')
+----
+Invalid Input Error: Field ""key"" (field id 119) is missing from the file schema and has no default expression
+
+query I
+SELECT 42
+----
+42
+
+# Unmappable key in the manifest null_value_counts map.
+
+statement error
+SELECT * FROM iceberg_column_stats('{WORKING_DIRECTORY}/data/persistent/missing_map_keys/manifest_null_value_counts', version='1')
+----
+Invalid Input Error: Field ""key"" (field id 121) is missing from the file schema and has no default expression
+
+query I
+SELECT 42
+----
+42
+
+# Unmappable key in the manifest nan_value_counts map.
+
+statement error
+SELECT * FROM iceberg_column_stats('{WORKING_DIRECTORY}/data/persistent/missing_map_keys/manifest_nan_value_counts', version='1')
+----
+Invalid Input Error: Field ""key"" (field id 138) is missing from the file schema and has no default expression
+
+query I
+SELECT 42
+----
+42
+
+# Unmappable key in the manifest lower_bounds map.
+
+statement error
+SELECT * FROM iceberg_column_stats('{WORKING_DIRECTORY}/data/persistent/missing_map_keys/manifest_lower_bounds', version='1')
+----
+Invalid Input Error: Field ""key"" (field id 126) is missing from the file schema and has no default expression
+
+query I
+SELECT 42
+----
+42
+
+# Unmappable key in the manifest upper_bounds map.
+
+statement error
+SELECT * FROM iceberg_column_stats('{WORKING_DIRECTORY}/data/persistent/missing_map_keys/manifest_upper_bounds', version='1')
+----
+Invalid Input Error: Field ""key"" (field id 129) is missing from the file schema and has no default expression
+
+query I
+SELECT 42
+----
+42

@@ -1,0 +1,44 @@
+# name: test/sql/local/iceberg_scans/encrypted_table.test
+# description: Reject Java-encrypted Iceberg tables before opening manifest files
+# group: [iceberg_scans]
+
+include test/sql/init_requires
+
+require json
+
+foreach table t_enc t_enc_empty
+
+foreach function iceberg_scan iceberg_metadata iceberg_snapshots
+
+statement error
+SELECT * FROM {function}('{WORKING_DIRECTORY}/data/persistent/encrypted_table/{table}');
+----
+Not implemented Error: Iceberg table encryption is not supported (encryption.key-id is set)
+
+endloop
+
+endloop
+
+# Registered keys still indicate encryption when the current write key property is absent.
+statement ok
+COPY (
+	SELECT json_merge_patch(content, '{"properties":{"encryption.key-id":null}}')
+	FROM read_text('{WORKING_DIRECTORY}/data/persistent/encrypted_table/t_enc/metadata/v2.metadata.json')
+) TO '{TEST_DIR}/encrypted_keys.metadata.json' (FORMAT CSV, HEADER false, QUOTE '', ESCAPE '');
+
+statement error
+SELECT * FROM iceberg_scan('{TEST_DIR}/encrypted_keys.metadata.json', allow_moved_paths = true);
+----
+Not implemented Error: Iceberg table encryption is not supported (encryption-keys is not empty)
+
+# An empty key registry does not make a plaintext table encrypted.
+statement ok
+COPY (
+	SELECT json_merge_patch(content, '{"properties":{"encryption.key-id":null},"encryption-keys":[]}')
+	FROM read_text('{WORKING_DIRECTORY}/data/persistent/encrypted_table/t_enc_empty/metadata/v1.metadata.json')
+) TO '{TEST_DIR}/plaintext.metadata.json' (FORMAT CSV, HEADER false, QUOTE '', ESCAPE '');
+
+query I
+SELECT count(*) FROM iceberg_scan('{TEST_DIR}/plaintext.metadata.json');
+----
+0

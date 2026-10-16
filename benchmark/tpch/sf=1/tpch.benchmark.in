@@ -20,10 +20,47 @@ require tpch
 
 cache tpch_sf${sf}_iceberg.db
 
+# The Python-generated fixture can use a different dbgen version.
 load
 ATTACH ':memory:' AS mem;
-USE mem;
-CALL dbgen(sf=${sf});
+CALL dbgen(sf=${sf}, catalog='mem');
+CREATE SECRET (
+    TYPE S3,
+    KEY_ID 'admin',
+    SECRET 'password',
+    ENDPOINT '127.0.0.1:9000',
+    URL_STYLE 'path',
+    USE_SSL 0
+);
+ATTACH '' AS my_datalake (
+    TYPE ICEBERG,
+    CLIENT_ID 'admin',
+    CLIENT_SECRET 'password',
+    ENDPOINT 'http://127.0.0.1:8181'
+);
+CREATE SCHEMA IF NOT EXISTS my_datalake."tpch_sf${sf}";
+DROP TABLE IF EXISTS my_datalake."tpch_sf${sf}".customer;
+DROP TABLE IF EXISTS my_datalake."tpch_sf${sf}".lineitem;
+DROP TABLE IF EXISTS my_datalake."tpch_sf${sf}".nation;
+DROP TABLE IF EXISTS my_datalake."tpch_sf${sf}".orders;
+DROP TABLE IF EXISTS my_datalake."tpch_sf${sf}".part;
+DROP TABLE IF EXISTS my_datalake."tpch_sf${sf}".partsupp;
+DROP TABLE IF EXISTS my_datalake."tpch_sf${sf}".region;
+DROP TABLE IF EXISTS my_datalake."tpch_sf${sf}".supplier;
+CREATE TABLE my_datalake."tpch_sf${sf}".customer AS SELECT * FROM mem.customer;
+CREATE TABLE my_datalake."tpch_sf${sf}".lineitem AS SELECT * FROM mem.lineitem;
+CREATE TABLE my_datalake."tpch_sf${sf}".nation AS SELECT * FROM mem.nation;
+CREATE TABLE my_datalake."tpch_sf${sf}".orders AS SELECT * FROM mem.orders;
+CREATE TABLE my_datalake."tpch_sf${sf}".part AS SELECT * FROM mem.part;
+CREATE TABLE my_datalake."tpch_sf${sf}".partsupp AS SELECT * FROM mem.partsupp;
+CREATE TABLE my_datalake."tpch_sf${sf}".region AS SELECT * FROM mem.region;
+CREATE TABLE my_datalake."tpch_sf${sf}".supplier AS SELECT * FROM mem.supplier;
+DETACH mem;
+/* Mark the cache ready only after copying this build's dbgen output to Iceberg. */
+CREATE TABLE benchmark_loaded AS SELECT true AS loaded;
+USE my_datalake."tpch_sf${sf}";
+
+reload
 CREATE SECRET (
     TYPE S3,
     KEY_ID 'admin',
@@ -37,31 +74,9 @@ ATTACH '' AS my_datalake (
     CLIENT_ID 'admin',
     CLIENT_SECRET 'password',
     ENDPOINT 'http://127.0.0.1:8181',
-    DEFAULT_SCHEMA 'default'
+    DEFAULT_SCHEMA 'tpch_sf${sf}'
 );
 USE my_datalake;
-
-reload
-ATTACH '' AS my_datalake (
-    TYPE ICEBERG,
-    CLIENT_ID 'admin',
-    CLIENT_SECRET 'password',
-    ENDPOINT 'http://127.0.0.1:8181',
-    DEFAULT_SCHEMA 'default'
-);
-DROP TABLE IF EXISTS my_datalake."default".customer;
-DROP TABLE IF EXISTS my_datalake."default".lineitem;
-DROP TABLE IF EXISTS my_datalake."default".nation;
-DROP TABLE IF EXISTS my_datalake."default".orders;
-DROP TABLE IF EXISTS my_datalake."default".part;
-DROP TABLE IF EXISTS my_datalake."default".partsupp;
-DROP TABLE IF EXISTS my_datalake."default".region;
-DROP TABLE IF EXISTS my_datalake."default".supplier;
-DROP SCHEMA IF EXISTS my_datalake."default";
-CREATE SCHEMA IF NOT EXISTS my_datalake."default";
-COPY FROM DATABASE mem TO my_datalake;
-USE my_datalake;
-DETACH mem;
 
 run
 SET debug_fs_delay_mean_ms=3;

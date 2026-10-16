@@ -1,3 +1,4 @@
+#include "core/metadata/partition/iceberg_partition_constants.hpp"
 #include "core/metadata/manifest/iceberg_manifest.hpp"
 #include "core/metadata/manifest/iceberg_manifest_list.hpp"
 #include "core/metadata/manifest/iceberg_avro_codec.hpp"
@@ -31,20 +32,15 @@ static void WriteBoundsMap(IntStringMapWriter &writer, const unordered_map<int32
 static void WriteInt32List(Int32ListWriter &writer, const vector<int32_t> &values);
 static void WriteInt64List(Int64ListWriter &writer, const vector<int64_t> &values);
 static void WritePartitionStructRow(Vector &partition_vector, idx_t row_idx, const IcebergDataFile &data_file,
-                                    const IcebergTableMetadata &table_metadata,
+                                    const IcebergTableMetadata &table_metadata, const IcebergTableSchema &target_schema,
                                     const vector<IcebergExtendedPartitionInfo> &schema_partition_info);
-static void PopulateSourceIdToTypeMap(const vector<unique_ptr<IcebergColumnDefinition>> &columns,
-                                      unordered_map<uint64_t, const LogicalType *> &source_id_to_type) {
-	for (auto &col : columns) {
-		source_id_to_type.emplace(static_cast<uint64_t>(col->id), &col->type);
-		PopulateSourceIdToTypeMap(col->GetChildren(), source_id_to_type);
-	}
-}
 
 struct DataFileVectorWriters {
 	explicit DataFileVectorWriters(Vector &data_file_vector, idx_t row_count,
-	                               const IcebergTableMetadata &table_metadata, int32_t manifest_format_version)
-	    : table_metadata(table_metadata), data_file_entries(StructVector::GetEntries(data_file_vector)),
+	                               const IcebergTableMetadata &table_metadata, const IcebergTableSchema &target_schema,
+	                               int32_t manifest_format_version)
+	    : table_metadata(table_metadata), target_schema(target_schema),
+	      data_file_entries(StructVector::GetEntries(data_file_vector)),
 	      file_path(data_file_entries[FILE_PATH_INDEX], row_count, 0),
 	      file_format(data_file_entries[FILE_FORMAT_INDEX], row_count, 0),
 	      partition(data_file_entries[PARTITION_INDEX]),
@@ -79,7 +75,7 @@ struct DataFileVectorWriters {
 		file_path.WriteValue(string_t(data_file.file_path));
 		file_format.WriteValue(string_t(data_file.file_format));
 
-		WritePartitionStructRow(partition, row_idx, data_file, table_metadata, schema_partition_info);
+		WritePartitionStructRow(partition, row_idx, data_file, table_metadata, target_schema, schema_partition_info);
 
 		record_count.WriteValue(data_file.record_count);
 		file_size_in_bytes.WriteValue(data_file.file_size_in_bytes);
@@ -166,6 +162,7 @@ private:
 
 public:
 	const IcebergTableMetadata &table_metadata;
+	const IcebergTableSchema &target_schema;
 	vector<Vector> &data_file_entries;
 	VectorWriter<string_t> file_path;
 	VectorWriter<string_t> file_format;
@@ -221,25 +218,19 @@ map<idx_t, LogicalType> IcebergDataFile::GetFieldIdToTypeMapping(const IcebergSn
                                                                  const unordered_set<int32_t> &partition_spec_ids) {
 	D_ASSERT(!partition_spec_ids.empty());
 	auto &partition_specs = metadata.GetPartitionSpecs();
-	auto &schema = *metadata.GetSchemaFromId(snapshot_info.schema_id);
+	auto &schema = metadata.GetSchemaFromId(snapshot_info.schema_id);
 
-	auto &source_to_column_id = schema.GetSourceIdMap();
 	map<idx_t, LogicalType> partition_field_id_to_type;
 	for (auto &spec_id : partition_spec_ids) {
 		auto &partition_spec = partition_specs.at(spec_id);
 		auto &fields = partition_spec.GetFields();
 
 		for (auto &field : fields) {
-			auto it = source_to_column_id.find(field.source_id);
-			if (it == source_to_column_id.end()) {
-				//! FIXME: is this correct?
-				//! The column doesn't exist (anymore) in the schema we're scanning
-				//! So this essentially excludes these partition values from the scan
+			auto type = IcebergPartitionConstants::GetType(field.source_id, schema, metadata.GetSchemas());
+			if (!type) {
 				continue;
 			}
-			auto &column_id = it->second;
-			auto &column = IcebergTableSchema::GetFromColumnIndex(schema.columns, column_id, 0);
-			partition_field_id_to_type.emplace(field.partition_field_id, field.transform.GetBoundsType(column.type));
+			partition_field_id_to_type.emplace(field.partition_field_id, field.transform.GetBoundsType(*type));
 		}
 	}
 	return partition_field_id_to_type;
@@ -258,35 +249,33 @@ LogicalType IcebergDataFile::PartitionStructType(const map<idx_t, LogicalType> &
 }
 
 const vector<IcebergExtendedPartitionInfo>
-IcebergDataFile::GetExtendedPartitionInfo(const IcebergTableMetadata &metadata) const {
+IcebergDataFile::GetExtendedPartitionInfo(const IcebergTableMetadata &metadata,
+                                          const IcebergTableSchema &target_schema) const {
 	if (partition_info.empty()) {
 		return {};
 	}
 
-	// Build source_id -> LogicalType map from all schemas (schema evolution may spread columns).
-	unordered_map<uint64_t, const LogicalType *> source_id_to_type;
-	for (auto &schema_pair : metadata.GetSchemas()) {
-		PopulateSourceIdToTypeMap(schema_pair.second->columns, source_id_to_type);
-	}
-
 	// Build field_id -> (spec field, source_type) map from all partition specs.
 	// Partition field ids are globally unique across all specs per the Iceberg spec.
-	struct ParitionFieldWithSourceType {
+	struct PartitionFieldWithSourceType {
 		const IcebergPartitionSpecField *field;
 		const LogicalType *source_type;
 	};
 
-	unordered_map<uint64_t, ParitionFieldWithSourceType> field_id_to_partition_spec_and_source_type;
+	unordered_map<uint64_t, PartitionFieldWithSourceType> field_id_to_partition_spec_and_source_type;
 	for (auto &spec_pair : metadata.partition_specs) {
 		for (auto &field : spec_pair.second.fields) {
-			auto type_it = source_id_to_type.find(field.source_id);
-			if (type_it == source_id_to_type.end()) {
-				throw InternalException(
+			// Resolve promoted columns against the manifest schema; historical schemas are only
+			// a fallback for source columns that have since been dropped.
+			auto source_type =
+			    IcebergPartitionConstants::GetType(field.source_id, target_schema, metadata.GetSchemas());
+			if (!source_type) {
+				throw InvalidConfigurationException(
 				    "Partition %s with field_id %llu in data_file %s with source_id %llu not found in any table schema",
 				    field.GetPartitionSpecFieldName(), field.partition_field_id, file_path, field.source_id);
 			}
-			field_id_to_partition_spec_and_source_type.emplace(field.partition_field_id,
-			                                                   ParitionFieldWithSourceType {&field, type_it->second});
+			field_id_to_partition_spec_and_source_type.emplace(
+			    field.partition_field_id, PartitionFieldWithSourceType {&field, source_type.get()});
 		}
 	}
 
@@ -295,7 +284,8 @@ IcebergDataFile::GetExtendedPartitionInfo(const IcebergTableMetadata &metadata) 
 	for (auto &info : partition_info) {
 		auto it = field_id_to_partition_spec_and_source_type.find(info.field_id);
 		if (it == field_id_to_partition_spec_and_source_type.end()) {
-			throw InternalException("Partition field_id %llu not found in any partition spec", info.field_id);
+			throw InvalidConfigurationException("Partition field_id %llu not found in any partition spec",
+			                                    info.field_id);
 		}
 		auto &resolved = it->second;
 		IcebergExtendedPartitionInfo extended;
@@ -425,30 +415,24 @@ optional<sequence_number_t> IcebergManifestEntry::ExplicitFileSequenceNumber() c
 	return file_sequence_number;
 }
 
-sequence_number_t IcebergManifestEntry::GetSequenceNumber(const IcebergManifestFile &manifest_file) const {
+sequence_number_t IcebergManifestEntry::GetSequenceNumber(const IcebergManifest &manifest_file) const {
 	if (!sequence_number) {
 		if (status != IcebergManifestEntryStatusType::ADDED) {
 			throw InvalidConfigurationException(
 			    "'manifest_entry.sequence_number' is only allowed to be NULL for ADDED entries");
 		}
-		if (!manifest_file.sequence_number) {
-			throw InvalidConfigurationException("'manifest_file.sequence_number' is not set");
-		}
-		return *manifest_file.sequence_number;
+		return manifest_file.sequence_number;
 	}
 	return *sequence_number;
 }
 
-sequence_number_t IcebergManifestEntry::GetFileSequenceNumber(const IcebergManifestFile &manifest_file) const {
+sequence_number_t IcebergManifestEntry::GetFileSequenceNumber(const IcebergManifest &manifest_file) const {
 	if (!file_sequence_number) {
 		if (status != IcebergManifestEntryStatusType::ADDED) {
 			throw InvalidConfigurationException(
 			    "'manifest_entry.file_sequence_number' is only allowed to be NULL for ADDED entries");
 		}
-		if (!manifest_file.sequence_number) {
-			throw InvalidConfigurationException("'manifest_file.sequence_number' is not set");
-		}
-		return *manifest_file.sequence_number;
+		return manifest_file.sequence_number;
 	}
 	return *file_sequence_number;
 }
@@ -467,15 +451,10 @@ int64_t IcebergManifestEntry::GetSnapshotId() const {
 }
 
 int64_t IcebergManifestEntry::GetSnapshotId(const IcebergManifestFile &manifest_file) const {
-	if (!snapshot_id) {
-		if (!manifest_file.added_snapshot_id) {
-			throw InvalidConfigurationException(
-			    "'manifest_entry.snapshot_id' is NULL and 'manifest_file.added_snapshot_id' is not set, so the "
-			    "snapshot id can not be inherited");
-		}
-		return *manifest_file.added_snapshot_id;
+	if (snapshot_id) {
+		return *snapshot_id;
 	}
-	return *snapshot_id;
+	return manifest_file.added_snapshot_id;
 }
 
 static Value CreateFieldID(int32_t field_id, bool nullable) {
@@ -537,17 +516,17 @@ static void WritePartitionValue(Vector &vector, idx_t row_idx, const Value &valu
 		FlatVector::SetNull(vector, row_idx, true);
 		return;
 	}
-	Value cast_value;
 	string error_message;
-	if (!value.DefaultTryCastAs(vector.GetType(), cast_value, &error_message, true)) {
+	auto cast_value = value.DefaultTryCastAs(vector.GetType(), &error_message, true);
+	if (!cast_value) {
 		throw InvalidInputException("Could not cast partition value %s to %s", value.type().ToString(),
 		                            vector.GetType().ToString());
 	}
-	vector.SetValue(row_idx, cast_value);
+	vector.SetValue(row_idx, *cast_value);
 }
 
 static void WritePartitionStructRow(Vector &partition_vector, idx_t row_idx, const IcebergDataFile &data_file,
-                                    const IcebergTableMetadata &table_metadata,
+                                    const IcebergTableMetadata &table_metadata, const IcebergTableSchema &target_schema,
                                     const vector<IcebergExtendedPartitionInfo> &schema_partition_info) {
 	auto &partition_children = StructVector::GetEntries(partition_vector);
 	if (schema_partition_info.empty()) {
@@ -556,7 +535,7 @@ static void WritePartitionStructRow(Vector &partition_vector, idx_t row_idx, con
 		return;
 	}
 
-	auto extended_partition_info = data_file.GetExtendedPartitionInfo(table_metadata);
+	auto extended_partition_info = data_file.GetExtendedPartitionInfo(table_metadata, target_schema);
 	unordered_map<uint64_t, const Value *> value_by_field_id;
 	for (auto &entry : extended_partition_info) {
 		value_by_field_id.emplace(entry.field_id, &entry.value);
@@ -631,20 +610,28 @@ static Value FieldIdsForList(int32_t list_field_id, int32_t element_field_id) {
 	return Value::STRUCT(members);
 }
 
-idx_t WriteToFile(const IcebergTableMetadata &table_metadata, const IcebergManifestListEntry &manifest_entry,
-                  CopyFunction &copy, DatabaseInstance &db, ClientContext &context) {
-	auto &manifest_file = manifest_entry.file;
-	if (!manifest_entry.manifest_metadata) {
-		throw InternalException("Manifest entry for '%s' is missing typed manifest metadata",
-		                        manifest_file.manifest_path);
+static void WriteEntrySequenceNumber(VectorWriter<int64_t> &writer, optional<sequence_number_t> sequence_number,
+                                     IcebergManifestEntryStatusType status, const char *field) {
+	if (sequence_number) {
+		writer.WriteValue(*sequence_number);
+	} else if (status == IcebergManifestEntryStatusType::ADDED) {
+		writer.WriteNull();
+	} else {
+		throw InvalidConfigurationException("'manifest_entry.%s' is only allowed to be NULL for ADDED entries", field);
 	}
-	auto &manifest_entries = manifest_entry.GetManifestEntries();
-	auto &entry_metadata = *manifest_entry.manifest_metadata;
+}
+
+idx_t WriteToFile(const IcebergTableMetadata &table_metadata, const IcebergManifestMetadata &entry_metadata,
+                  const vector<IcebergManifestEntry> &manifest_entries, const string &path, CopyFunction &copy,
+                  DatabaseInstance &db, ClientContext &context) {
+	if (entry_metadata.format_version < 2) {
+		throw NotImplementedException("Writing Iceberg V%d manifests is not supported", entry_metadata.format_version);
+	}
+	auto &target_schema = table_metadata.GetSchemaFromId(entry_metadata.schema_id);
 	auto manifest_metadata = GetManifestMetadataMap(table_metadata, entry_metadata);
 	auto manifest_format_version = entry_metadata.format_version;
 	D_ASSERT(!manifest_entries.empty());
 	auto &allocator = db.GetBufferManager().GetBufferAllocator();
-	auto &path = manifest_file.manifest_path;
 
 	//! Create the types for the DataChunk
 
@@ -688,14 +675,17 @@ idx_t WriteToFile(const IcebergTableMetadata &table_metadata, const IcebergManif
 	auto &first_entry = manifest_entries.front();
 	auto &data_file = first_entry.data_file;
 
-	auto extended_partition_info = data_file.GetExtendedPartitionInfo(table_metadata);
+	auto extended_partition_info = data_file.GetExtendedPartitionInfo(table_metadata, target_schema);
 	child_list_t<Value> partition;
 	// partition: struct(...)
 	children.emplace_back("partition", PartitionStructType(extended_partition_info));
 	partition.emplace_back("__duckdb_field_id", Value::INTEGER(PARTITION));
 	partition.emplace_back("__duckdb_nullable", Value::BOOLEAN(false));
 	for (auto &entry : extended_partition_info) {
-		partition.emplace_back(entry.name, Value::INTEGER(static_cast<int32_t>(entry.field_id)));
+		//! SQLNULL is already Avro "null"; a nullable union would contain "null" twice.
+		auto partition_type = entry.transform.GetBoundsType(entry.source_type);
+		partition.emplace_back(entry.name, CreateFieldID(static_cast<int32_t>(entry.field_id),
+		                                                 partition_type.id() != LogicalTypeId::SQLNULL));
 	}
 	data_file_field_ids.emplace_back("partition", Value::STRUCT(partition));
 
@@ -812,6 +802,7 @@ idx_t WriteToFile(const IcebergTableMetadata &table_metadata, const IcebergManif
 	copy_info.options["root_name"].push_back(Value("manifest_entry"));
 	copy_info.options["field_ids"].push_back(Value::STRUCT(field_ids));
 	copy_info.options["metadata"].push_back(metadata_map);
+	copy_info.options["SANITIZE_FIELD_NAMES"].push_back(Value::BOOLEAN(true));
 
 	//! write.manifest.compression-codec: let the Avro COPY writer emit the codec natively.
 	//! "null" is the COPY default (uncompressed), so only set the option for a compressing codec.
@@ -843,12 +834,12 @@ idx_t WriteToFile(const IcebergTableMetadata &table_metadata, const IcebergManif
 		auto snapshot_id_writer = FlatVector::Writer<int64_t>(chunk.data[1], chunk_count);
 		auto sequence_number_writer = FlatVector::Writer<int64_t>(chunk.data[2], chunk_count);
 		auto file_sequence_number_writer = FlatVector::Writer<int64_t>(chunk.data[3], chunk_count);
-		DataFileVectorWriters data_file_writers(chunk.data[4], chunk_count, table_metadata, manifest_format_version);
+		DataFileVectorWriters data_file_writers(chunk.data[4], chunk_count, table_metadata, target_schema,
+		                                        manifest_format_version);
 
 		for (idx_t i = 0; i < chunk_count; i++) {
 			auto &manifest_entry = manifest_entries[offset + i];
 			status_writer.WriteValue(static_cast<int32_t>(manifest_entry.status));
-			//! FIXME: this is missing logic, needs to be looked into
 			//! SPEC: Snapshot id where the file was added, or deleted if status is 2. Inherited when null.
 			// snapshot_id: long
 			if (manifest_entry.HasSnapshotId()) {
@@ -856,25 +847,10 @@ idx_t WriteToFile(const IcebergTableMetadata &table_metadata, const IcebergManif
 			} else {
 				snapshot_id_writer.WriteNull();
 			}
-			// sequence_number: long
-			// file_sequence_number: long
-			if (manifest_entry.status == IcebergManifestEntryStatusType::ADDED) {
-				auto sequence_number = manifest_entry.ExplicitSequenceNumber();
-				if (sequence_number) {
-					sequence_number_writer.WriteValue(*sequence_number);
-				} else {
-					sequence_number_writer.WriteNull();
-				}
-				auto file_sequence_number = manifest_entry.ExplicitFileSequenceNumber();
-				if (file_sequence_number) {
-					file_sequence_number_writer.WriteValue(*file_sequence_number);
-				} else {
-					file_sequence_number_writer.WriteNull();
-				}
-			} else {
-				sequence_number_writer.WriteValue(manifest_entry.GetSequenceNumber(manifest_file));
-				file_sequence_number_writer.WriteValue(manifest_entry.GetFileSequenceNumber(manifest_file));
-			}
+			WriteEntrySequenceNumber(sequence_number_writer, manifest_entry.ExplicitSequenceNumber(),
+			                         manifest_entry.status, "sequence_number");
+			WriteEntrySequenceNumber(file_sequence_number_writer, manifest_entry.ExplicitFileSequenceNumber(),
+			                         manifest_entry.status, "file_sequence_number");
 
 			data_file_writers.WriteRow(i, manifest_entry.data_file, extended_partition_info);
 		}

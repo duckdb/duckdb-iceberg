@@ -4,13 +4,9 @@
 
 require-env CATALOG_TEST_CONFIG_SETUP
 
-require avro
+require-env TIMETRAVEL_SUPPORT
 
-require parquet
-
-require iceberg
-
-require httpfs
+include test/sql/init_requires
 
 require json
 
@@ -112,6 +108,13 @@ select json_extract_string(metadata::JSON, '$."current-snapshot-id"')::BIGINT
 from iceberg_load_table_response(my_datalake.default.rollback_snap);
 ----
 true
+
+# The main branch also points at snap1
+query III
+select name, type, snapshot_id = getvariable('snap1').snapshot_id
+from iceberg_refs(my_datalake.default.rollback_snap);
+----
+main	BRANCH	true
 
 # Same-snapshot rollback is a successful no-op.
 query II

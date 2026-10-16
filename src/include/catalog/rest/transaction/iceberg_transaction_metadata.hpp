@@ -1,6 +1,7 @@
 #pragma once
 
 #include "duckdb/common/optional_idx.hpp"
+#include "core/metadata/iceberg_file_identity.hpp"
 #include "duckdb/common/string.hpp"
 #include "duckdb/common/unordered_map.hpp"
 
@@ -10,11 +11,11 @@ struct VersionedIcebergManifestDeletes;
 
 struct IcebergManifestDeletes {
 public:
-	void InvalidateFile(const string &file_path) {
-		data_files.emplace(file_path, optional_idx());
+	void InvalidateFile(const IcebergFileIdentity &file) {
+		data_files.emplace(file, optional_idx());
 	}
-	bool IsInvalidated(const string &file_path) const {
-		return data_files.count(file_path);
+	bool IsInvalidated(const IcebergFileIdentity &file) const {
+		return data_files.count(file);
 	}
 	VersionedIcebergManifestDeletes AtVersion(idx_t alter_version);
 	bool IsEmpty() const {
@@ -29,16 +30,16 @@ private:
 		}
 		return added_count;
 	}
-	bool IsInvalidatedAt(const string &file_path, idx_t alter_version) const {
-		auto entry = data_files.find(file_path);
+	bool IsInvalidatedAt(const IcebergFileIdentity &file, idx_t alter_version) const {
+		auto entry = data_files.find(file);
 		return entry != data_files.end() && entry->second.IsValid() && entry->second.GetIndex() == alter_version;
 	}
 
 private:
 	friend struct VersionedIcebergManifestDeletes;
 
-	//! The 'data_file.file_path' of invalidated files, optionally tagged with the alter that invalidated them
-	unordered_map<string, optional_idx> data_files;
+	//! File identities tagged with the alter that invalidated them.
+	unordered_map<IcebergFileIdentity, optional_idx, IcebergFileIdentityHash> data_files;
 };
 
 struct VersionedIcebergManifestDeletes {
@@ -50,8 +51,8 @@ public:
 	idx_t Merge(IcebergManifestDeletes &&other) {
 		return manifest_deletes.Merge(std::move(other), alter_version);
 	}
-	bool IsInvalidated(const string &file_path) const {
-		return manifest_deletes.IsInvalidatedAt(file_path, alter_version);
+	bool IsInvalidated(const IcebergFileIdentity &file) const {
+		return manifest_deletes.IsInvalidatedAt(file, alter_version);
 	}
 
 private:

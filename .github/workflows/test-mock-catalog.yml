@@ -1,0 +1,58 @@
+name: Test Mock REST Catalog Reusable
+on:
+  workflow_call:
+    inputs:
+      artifact-name:
+        description: "Name of the DuckDB-Iceberg artifact to download"
+        required: true
+        type: string
+
+jobs:
+  test-mock:
+    name: Test mock REST catalog
+    runs-on: ubuntu-latest
+    env:
+      ASAN_SYMBOLIZER_PATH: "/usr/bin/llvm-symbolizer"
+      ASAN_OPTIONS: "detect_leaks=1:halt_on_error=1:abort_on_error=0:external_symbolizer_path=/usr/bin/llvm-symbolizer"
+      LSAN_OPTIONS: "suppressions=${{ github.workspace }}/.combined-sanitizer-leak-suppressions.txt"
+      UBSAN_OPTIONS: "halt_on_error=1:print_stacktrace=1"
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          submodules: 'true'
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: ${{ inputs.artifact-name }}
+          path: build
+
+      - name: Extract build artifact
+        run: tar -xzf build/relassert-artifact.tar.gz -C build
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+
+      - name: Prepare sanitizer support
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq llvm
+          python3 - <<'PY'
+          from pathlib import Path
+          Path(".combined-sanitizer-leak-suppressions.txt").write_text(
+              Path("duckdb/.sanitizer-leak-suppressions.txt").read_text()
+              + "\n" + Path(".sanitizer-leak-suppressions.txt").read_text()
+          )
+          PY
+
+      - name: Run catalog-agnostic SQL tests
+        run: make test_mock_relassert
+
+      - name: Upload failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mock-catalog-diagnostics
+          path: .catalogs/mock
+          if-no-files-found: ignore
+          retention-days: 3

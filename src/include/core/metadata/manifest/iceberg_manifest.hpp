@@ -18,6 +18,7 @@ namespace duckdb {
 
 struct IcebergTable;
 struct IcebergManifestFile;
+struct IcebergManifest;
 
 using sequence_number_t = int64_t;
 
@@ -83,7 +84,9 @@ public:
 	// struct {partition_name: val} (with partition field id for the struct key.
 	// extended partition info returns extra information about these partitions
 	// like source column id, source type, transform, and partition value.
-	const vector<IcebergExtendedPartitionInfo> GetExtendedPartitionInfo(const IcebergTableMetadata &metadata) const;
+	// Resolve source types in target_schema, falling back to historical schemas for dropped columns.
+	const vector<IcebergExtendedPartitionInfo> GetExtendedPartitionInfo(const IcebergTableMetadata &metadata,
+	                                                                    const IcebergTableSchema &target_schema) const;
 
 public:
 	void SetFirstRowId(optional<int64_t> first_row_id);
@@ -132,13 +135,12 @@ public:
 	void SetSnapshotId(optional<int64_t> snapshot_id);
 	bool HasSnapshotId() const;
 	int64_t GetSnapshotId() const;
-	//! Inherits from the manifest file's 'added_snapshot_id' when the field is NULL. Writers may omit
-	//! it precisely so it can be inherited, so read paths must use this overload.
+	//! The explicit snapshot id, or the one inherited from the manifest that holds this entry
 	int64_t GetSnapshotId(const IcebergManifestFile &manifest_file) const;
 	void SetSequenceNumber(optional<sequence_number_t> value);
 	void SetFileSequenceNumber(optional<sequence_number_t> value);
-	sequence_number_t GetSequenceNumber(const IcebergManifestFile &manifest_file) const;
-	sequence_number_t GetFileSequenceNumber(const IcebergManifestFile &manifest_file) const;
+	sequence_number_t GetSequenceNumber(const IcebergManifest &manifest_file) const;
+	sequence_number_t GetFileSequenceNumber(const IcebergManifest &manifest_file) const;
 	optional<sequence_number_t> ExplicitSequenceNumber() const;
 	optional<sequence_number_t> ExplicitFileSequenceNumber() const;
 
@@ -156,6 +158,7 @@ using partitioned_manifest_entry_map_t = map<int32_t, vector<IcebergManifestEntr
 using partition_value_map_t = unordered_map<uint64_t, reference<const Value>>;
 
 struct IcebergManifestListEntry;
+struct IcebergManifestMetadata;
 
 namespace manifest_file {
 
@@ -204,9 +207,10 @@ static constexpr const int32_t REFERENCED_DATA_FILE = 143;
 static constexpr const int32_t CONTENT_OFFSET = 144;
 static constexpr const int32_t CONTENT_SIZE_IN_BYTES = 145;
 
-//! Writes the manifest file using the precomputed metadata stored on the list entry.
-idx_t WriteToFile(const IcebergTableMetadata &table_metadata, const IcebergManifestListEntry &manifest_entry,
-                  CopyFunction &copy_function, DatabaseInstance &db, ClientContext &context);
+//! Serialize content without a resolved manifest sequence number. ADDED entries may inherit it later.
+idx_t WriteToFile(const IcebergTableMetadata &table_metadata, const IcebergManifestMetadata &manifest_metadata,
+                  const vector<IcebergManifestEntry> &manifest_entries, const string &path, CopyFunction &copy_function,
+                  DatabaseInstance &db, ClientContext &context);
 
 } // namespace manifest_file
 

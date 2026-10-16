@@ -1,0 +1,158 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/alter/test_partition_field_id_reuse_transaction.test
+# group: [alter]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+include test/sql/init_requires
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.partition_field_id_reuse_transaction;
+
+statement ok
+CREATE TABLE my_datalake.default.partition_field_id_reuse_transaction (a INTEGER, b INTEGER, c INTEGER)
+WITH ('format-version' = '2');
+
+# Several evolutions share a transaction: none of these partition field IDs have been committed yet.
+statement ok
+BEGIN;
+
+statement ok
+ALTER TABLE my_datalake.default.partition_field_id_reuse_transaction SET PARTITIONED BY (a);
+
+statement ok
+ALTER TABLE my_datalake.default.partition_field_id_reuse_transaction SET PARTITIONED BY (b);
+
+statement ok
+ALTER TABLE my_datalake.default.partition_field_id_reuse_transaction SET PARTITIONED BY (a, bucket(4, c));
+
+statement ok
+ALTER TABLE my_datalake.default.partition_field_id_reuse_transaction SET PARTITIONED BY (bucket(4, c), b, truncate(2, a));
+
+statement ok
+COMMIT;
+
+statement ok
+CREATE TEMP VIEW current_transaction_partition_ids AS
+SELECT list_transform(spec.fields::VARIANT[], lambda f: f."field-id"::INTEGER) AS ids,
+       metadata."last-partition-id"::INTEGER AS last_id
+FROM iceberg_load_table_response('my_datalake.default.partition_field_id_reuse_transaction'),
+unnest(metadata."partition-specs"::VARIANT[]) AS t(spec)
+WHERE spec."spec-id"::INTEGER = metadata."default-spec-id"::INTEGER;
+
+query TI
+SELECT ids, last_id FROM current_transaction_partition_ids;
+----
+[1002, 1001, 1003]	1003
+
+query IT
+SELECT spec."spec-id"::INTEGER, list_transform(spec.fields::VARIANT[], lambda f: f."field-id"::INTEGER)
+FROM iceberg_load_table_response('my_datalake.default.partition_field_id_reuse_transaction'),
+unnest(metadata."partition-specs"::VARIANT[]) AS t(spec)
+ORDER BY spec."spec-id"::INTEGER;
+----
+0	[]
+1	[1000]
+2	[1001]
+3	[1000, 1002]
+4	[1002, 1001, 1003]
+
+# Reset, allocate new fields, reuse historical fields, then return to an older spec in one transaction.
+statement ok
+BEGIN;
+
+statement ok
+ALTER TABLE my_datalake.default.partition_field_id_reuse_transaction RESET PARTITIONED BY;
+
+statement ok
+ALTER TABLE my_datalake.default.partition_field_id_reuse_transaction SET PARTITIONED BY (a, b);
+
+statement ok
+ALTER TABLE my_datalake.default.partition_field_id_reuse_transaction SET PARTITIONED BY (truncate(4, a), c);
+
+statement ok
+ALTER TABLE my_datalake.default.partition_field_id_reuse_transaction SET PARTITIONED BY (bucket(4, c), truncate(2, a));
+
+statement ok
+ALTER TABLE my_datalake.default.partition_field_id_reuse_transaction SET PARTITIONED BY (a, bucket(4, c));
+
+statement ok
+COMMIT;
+
+query TI
+SELECT ids, last_id FROM current_transaction_partition_ids;
+----
+[1000, 1002]	1005
+
+query IT
+SELECT spec."spec-id"::INTEGER, list_transform(spec.fields::VARIANT[], lambda f: f."field-id"::INTEGER)
+FROM iceberg_load_table_response('my_datalake.default.partition_field_id_reuse_transaction'),
+unnest(metadata."partition-specs"::VARIANT[]) AS t(spec)
+ORDER BY spec."spec-id"::INTEGER;
+----
+0	[]
+1	[1000]
+2	[1001]
+3	[1000, 1002]
+4	[1002, 1001, 1003]
+5	[1000, 1001]
+6	[1004, 1005]
+7	[1002, 1003]
+
+# Rolled-back fields must not persist or consume IDs.
+statement ok
+BEGIN;
+
+statement ok
+ALTER TABLE my_datalake.default.partition_field_id_reuse_transaction SET PARTITIONED BY (bucket(8, c), a);
+
+statement ok
+ALTER TABLE my_datalake.default.partition_field_id_reuse_transaction SET PARTITIONED BY (bucket(8, c), truncate(8, b));
+
+statement ok
+ROLLBACK;
+
+query TI
+SELECT ids, last_id FROM current_transaction_partition_ids;
+----
+[1000, 1002]	1005
+
+query I
+SELECT len(metadata."partition-specs"::VARIANT[])
+FROM iceberg_load_table_response('my_datalake.default.partition_field_id_reuse_transaction');
+----
+8
+
+statement ok
+BEGIN;
+
+statement ok
+ALTER TABLE my_datalake.default.partition_field_id_reuse_transaction SET PARTITIONED BY (bucket(16, c), a);
+
+statement ok
+COMMIT;
+
+query TI
+SELECT ids, last_id FROM current_transaction_partition_ids;
+----
+[1006, 1000]	1006
+
+# A later transaction can still reuse a field introduced in an intermediate committed spec.
+statement ok
+BEGIN;
+
+statement ok
+ALTER TABLE my_datalake.default.partition_field_id_reuse_transaction SET PARTITIONED BY (truncate(4, a), bucket(16, c), b);
+
+statement ok
+COMMIT;
+
+query TI
+SELECT ids, last_id FROM current_transaction_partition_ids;
+----
+[1004, 1006, 1001]	1006
+
+statement ok
+DROP VIEW current_transaction_partition_ids;
+
+statement ok
+DROP TABLE my_datalake.default.partition_field_id_reuse_transaction;

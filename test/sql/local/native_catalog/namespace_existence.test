@@ -1,0 +1,245 @@
+# name: test/sql/local/native_catalog/namespace_existence.test
+# description: Namespace existence distinguishes permission errors, absence and unsupported HEAD
+# group: [native_catalog]
+
+require-env CATALOG_TEST_CONFIG_SETUP mock
+
+include test/sql/init_requires
+
+require json
+
+# Java RESTSessionCatalog.namespaceExists and PyIceberg RestCatalog.namespace_exists
+# only translate 404 to absence. An advertised HEAD endpoint's 401/403 is terminal.
+# https://github.com/apache/iceberg/blob/cf6e7038041aaa496bc650890b4dda4bd6c61940/core/src/main/java/org/apache/iceberg/rest/RESTSessionCatalog.java
+# https://github.com/apache/iceberg-python/blob/b32392dcbafd3b92415a5b5dc0444722ca2091d9/pyiceberg/catalog/rest/__init__.py
+
+query I
+SELECT status FROM iceberg_test_catalog_request('POST', '/v1/namespaces', '{"namespace":["existence"]}');
+----
+200
+
+statement ok
+CREATE MACRO existence_response(method, status_code, body) AS TABLE
+SELECT status FROM iceberg_test_catalog_request('POST', '/__test/response',
+	json_object('method', method, 'path', '/v1/namespaces/existence',
+		'status', status_code, 'body', body::JSON)::VARCHAR);
+
+statement ok
+SET VARIABLE catalog_config = (SELECT body FROM iceberg_test_catalog_request('GET', '/v1/config', NULL));
+
+query I
+SELECT status FROM iceberg_test_catalog_request('POST', '/__test/response',
+	json_object('method', 'GET', 'path', '/v1/config', 'status', 200,
+		'body', json_merge_patch(getvariable('catalog_config')::JSON, json_object('endpoints',
+			list_append((getvariable('catalog_config')::JSON->'endpoints')::VARCHAR[],
+				'HEAD /v1/{prefix}/namespaces/{namespace}'))))::VARCHAR);
+----
+204
+
+statement ok
+DETACH my_datalake;
+
+statement ok
+ATTACH '' AS my_datalake (TYPE ICEBERG, URI 'http://iceberg-mock.invalid',
+	AUTHORIZATION_TYPE 'none', ACCESS_DELEGATION_MODE 'none');
+
+statement ok
+CALL enable_logging('HTTP');
+
+# A HEAD denial must not be masked by a successful or missing GET response.
+# The native transport removes HEAD bodies, matching a real HTTP server.
+foreach status_code 403 401
+
+foreach get_status 200 404
+
+query I
+SELECT * FROM existence_response('HEAD', {status_code}, NULL);
+----
+204
+
+query I
+SELECT * FROM existence_response('GET', {get_status}, '{"namespace":["existence"],"properties":{}}');
+----
+204
+
+statement ok
+CALL truncate_duckdb_logs();
+
+statement error
+DROP SCHEMA IF EXISTS my_datalake.existence;
+----
+<REGEX>:.*HEAD request.*HTTP (401|403).*
+
+statement error
+CREATE SCHEMA IF NOT EXISTS my_datalake.existence;
+----
+<REGEX>:.*HEAD request.*HTTP (401|403).*
+
+statement error
+ATTACH '' AS denied_default (TYPE ICEBERG, URI 'http://iceberg-mock.invalid',
+	AUTHORIZATION_TYPE 'none', ACCESS_DELEGATION_MODE 'none', DEFAULT_SCHEMA 'existence');
+----
+<REGEX>:.*HEAD request.*HTTP (401|403).*
+
+query III
+SELECT count(*) FILTER (WHERE request.type = 'HEAD' AND request.url LIKE '%/namespaces/existence'),
+	count(*) FILTER (WHERE request.type = 'GET' AND request.url LIKE '%/namespaces/existence'),
+	count(*) FILTER (WHERE request.type IN ('POST', 'DELETE'))
+FROM duckdb_logs_parsed('HTTP');
+----
+3	0	0
+
+endloop
+
+endloop
+
+# Both standard success codes establish existence without GET, even if GET would be denied.
+foreach status_code 200 204
+
+query I
+SELECT * FROM existence_response('HEAD', {status_code}, NULL);
+----
+204
+
+query I
+SELECT * FROM existence_response('GET', 403, NULL);
+----
+204
+
+statement ok
+CALL truncate_duckdb_logs();
+
+statement ok
+CREATE SCHEMA IF NOT EXISTS my_datalake.existence;
+
+query II
+SELECT count(*) FILTER (WHERE request.type = 'HEAD'),
+	count(*) FILTER (WHERE request.type <> 'HEAD')
+FROM duckdb_logs_parsed('HTTP');
+----
+1	0
+
+endloop
+
+# A true HEAD 404 is absence, without probing GET or issuing DELETE.
+query I
+SELECT * FROM existence_response('HEAD', 404, NULL);
+----
+204
+
+statement ok
+CALL truncate_duckdb_logs();
+
+statement ok
+DROP SCHEMA IF EXISTS my_datalake.existence;
+
+statement error
+DROP SCHEMA my_datalake.existence;
+----
+does not exist
+
+query II
+SELECT count(*) FILTER (WHERE request.type = 'HEAD'),
+	count(*) FILTER (WHERE request.type <> 'HEAD')
+FROM duckdb_logs_parsed('HTTP');
+----
+2	0
+
+# Preserve DuckDB's compatibility fallback for servers that advertise an unsupported HEAD.
+foreach head_status 405 501
+
+query I
+SELECT * FROM existence_response('HEAD', {head_status}, NULL);
+----
+204
+
+query I
+SELECT * FROM existence_response('GET', 200, '{"namespace":["existence"],"properties":{}}');
+----
+204
+
+statement ok
+CREATE SCHEMA IF NOT EXISTS my_datalake.existence;
+
+query I
+SELECT * FROM existence_response('GET', 404, NULL);
+----
+204
+
+statement ok
+DROP SCHEMA IF EXISTS my_datalake.existence;
+
+query I
+SELECT * FROM existence_response('GET', 403,
+	'{"error":{"message":"GET namespace denied","type":"ForbiddenException","code":403}}');
+----
+204
+
+statement error
+CREATE SCHEMA IF NOT EXISTS my_datalake.existence;
+----
+GET namespace denied
+
+endloop
+
+# An invalid or empty GET error payload still preserves the HTTP permission error.
+foreach error_body null "not_an_Iceberg_error" {"error":{"message":42,"type":false,"code":"invalid"}}
+
+query I
+SELECT * FROM existence_response('GET', 403, '{error_body}');
+----
+204
+
+statement error
+CREATE SCHEMA IF NOT EXISTS my_datalake.existence;
+----
+HTTP 403
+
+endloop
+
+query I
+SELECT status FROM iceberg_test_catalog_request('DELETE', '/__test/response', NULL);
+----
+204
+
+# Permission to inspect a namespace does not imply permission to mutate it.
+query I
+SELECT * FROM existence_response('DELETE', 403,
+	'{"error":{"message":"namespace deletion denied","type":"ForbiddenException","code":403}}');
+----
+204
+
+statement error
+DROP SCHEMA IF EXISTS my_datalake.existence;
+----
+namespace deletion denied
+
+query I
+SELECT status FROM iceberg_test_catalog_request('GET', '/v1/namespaces/existence', NULL);
+----
+200
+
+query I
+SELECT status FROM iceberg_test_catalog_request('POST', '/__test/response',
+	'{"method":"POST","path":"/v1/namespaces","status":403,
+	  "body":{"error":{"message":"namespace creation denied","type":"ForbiddenException","code":403}}}');
+----
+204
+
+statement error
+CREATE SCHEMA IF NOT EXISTS my_datalake.creation_denied;
+----
+namespace creation denied
+
+query I
+SELECT status FROM iceberg_test_catalog_request('GET', '/v1/namespaces/creation_denied', NULL);
+----
+404
+
+query I
+SELECT status FROM iceberg_test_catalog_request('DELETE', '/__test/response', NULL);
+----
+204
+
+statement ok
+DROP SCHEMA my_datalake.existence;

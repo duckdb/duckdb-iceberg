@@ -1,0 +1,176 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/alter/test_partition_field_id_reuse_schema.test
+# group: [alter]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+include test/sql/init_requires
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.partition_field_id_reuse_schema;
+
+statement ok
+CREATE TABLE my_datalake.default.partition_field_id_reuse_schema (
+	a INTEGER,
+	amount DECIMAL(9, 2),
+	s STRUCT(
+		k INTEGER,
+		obsolete VARCHAR
+	)
+)
+PARTITIONED BY (
+	a,
+	bucket(4, a),
+	truncate(10, amount),
+	s.k
+) WITH ('format-version' = '2');
+
+statement ok
+INSERT INTO my_datalake.default.partition_field_id_reuse_schema VALUES (
+	7,
+	12.34,
+	{
+		'k': 9,
+		'obsolete': 'old'
+	}
+);
+
+statement ok
+CREATE TEMP VIEW schema_partition_fields AS
+SELECT spec.fields::VARIANT[] AS fields, metadata."last-partition-id"::INTEGER AS last_id
+FROM iceberg_load_table_response('my_datalake.default.partition_field_id_reuse_schema'),
+unnest(metadata."partition-specs"::VARIANT[]) AS t(spec)
+WHERE spec."spec-id"::INTEGER = metadata."default-spec-id"::INTEGER;
+
+statement ok
+CREATE TEMP TABLE original_partition_sources AS
+SELECT list_sort(list_transform(fields, lambda f: f."source-id"::INTEGER)) AS source_ids
+FROM schema_partition_fields;
+
+query TI
+SELECT list_transform(fields, lambda f: f."field-id"::INTEGER), last_id FROM schema_partition_fields;
+----
+[1000, 1001, 1002, 1003]	1003
+
+# Type promotion preserves source IDs, even when partition result types change.
+# The new ordering forces a new spec rather than simply selecting the original spec.
+statement ok
+ALTER TABLE my_datalake.default.partition_field_id_reuse_schema ALTER COLUMN a TYPE BIGINT;
+
+statement ok
+ALTER TABLE my_datalake.default.partition_field_id_reuse_schema ALTER COLUMN amount TYPE DECIMAL(18, 2);
+
+statement ok
+ALTER TABLE my_datalake.default.partition_field_id_reuse_schema SET PARTITIONED BY (
+	bucket(4, a),
+	truncate(10, amount),
+	s.k,
+	a
+);
+
+query TI
+SELECT list_transform(fields, lambda f: f."field-id"::INTEGER), last_id FROM schema_partition_fields;
+----
+[1001, 1002, 1003, 1000]	1003
+
+# Change the containing struct's shape and promote the partitioned child in the same transaction.
+statement ok
+BEGIN;
+
+statement ok
+ALTER TABLE my_datalake.default.partition_field_id_reuse_schema ALTER COLUMN s.k TYPE BIGINT;
+
+statement ok
+ALTER TABLE my_datalake.default.partition_field_id_reuse_schema DROP COLUMN s.obsolete;
+
+statement ok
+ALTER TABLE my_datalake.default.partition_field_id_reuse_schema SET PARTITIONED BY (
+	s.k,
+	a,
+	truncate(10, amount),
+	bucket(4, a)
+);
+
+statement ok
+COMMIT;
+
+query TI
+SELECT list_transform(fields, lambda f: f."field-id"::INTEGER), last_id FROM schema_partition_fields;
+----
+[1003, 1000, 1002, 1001]	1003
+
+query I
+SELECT list_sort(list_transform(fields, lambda f: f."source-id"::INTEGER)) = source_ids
+FROM schema_partition_fields, original_partition_sources;
+----
+true
+
+statement ok
+INSERT INTO my_datalake.default.partition_field_id_reuse_schema VALUES (
+	2147483648,
+	1234567890.12,
+	{
+		'k': 2147483649
+	}
+);
+
+query TTT
+SELECT typeof(a), typeof(amount), typeof(s) FROM my_datalake.default.partition_field_id_reuse_schema LIMIT 1;
+----
+BIGINT	DECIMAL(18,2)	STRUCT(k BIGINT)
+
+query ITI
+SELECT a, amount, s.k FROM my_datalake.default.partition_field_id_reuse_schema ORDER BY a;
+----
+7	12.34	9
+2147483648	1234567890.12	2147483649
+
+# Reuse historical fields after their source types have changed, not just active fields.
+statement ok
+ALTER TABLE my_datalake.default.partition_field_id_reuse_schema RESET PARTITIONED BY;
+
+statement ok
+ALTER TABLE my_datalake.default.partition_field_id_reuse_schema SET PARTITIONED BY (truncate(10, amount), a, s.k);
+
+query TI
+SELECT list_transform(fields, lambda f: f."field-id"::INTEGER), last_id FROM schema_partition_fields;
+----
+[1002, 1000, 1003]	1003
+
+# A same-named replacement column has a different source ID and must not inherit the old field IDs.
+statement ok
+ALTER TABLE my_datalake.default.partition_field_id_reuse_schema SET PARTITIONED BY (s.k);
+
+statement ok
+BEGIN;
+
+statement ok
+ALTER TABLE my_datalake.default.partition_field_id_reuse_schema DROP COLUMN a;
+
+statement ok
+ALTER TABLE my_datalake.default.partition_field_id_reuse_schema ADD COLUMN a BIGINT;
+
+statement ok
+ALTER TABLE my_datalake.default.partition_field_id_reuse_schema SET PARTITIONED BY (a, bucket(4, a), s.k);
+
+statement ok
+COMMIT;
+
+query TI
+SELECT list_transform(fields, lambda f: f."field-id"::INTEGER), last_id FROM schema_partition_fields;
+----
+[1004, 1005, 1003]	1005
+
+query I
+SELECT fields[1]."source-id"::INTEGER NOT IN (SELECT unnest(source_ids) FROM original_partition_sources)
+FROM schema_partition_fields;
+----
+true
+
+statement ok
+DROP VIEW schema_partition_fields;
+
+statement ok
+DROP TABLE original_partition_sources;
+
+statement ok
+DROP TABLE my_datalake.default.partition_field_id_reuse_schema;

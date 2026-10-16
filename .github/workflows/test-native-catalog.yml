@@ -1,0 +1,49 @@
+name: Test Native REST Catalog Reusable
+on:
+  workflow_call:
+    inputs:
+      artifact-name:
+        required: true
+        type: string
+
+jobs:
+  test-native:
+    name: Test native catalog without networking
+    runs-on: ubuntu-latest
+    env:
+      ASAN_SYMBOLIZER_PATH: /usr/bin/llvm-symbolizer
+      ASAN_OPTIONS: detect_leaks=1:halt_on_error=1:abort_on_error=0:external_symbolizer_path=/usr/bin/llvm-symbolizer
+      LSAN_OPTIONS: suppressions=${{ github.workspace }}/.combined-sanitizer-leak-suppressions.txt
+      UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          submodules: true
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: ${{ inputs.artifact-name }}
+          path: build
+
+      - name: Extract build artifact
+        run: tar -xzf build/relassert-artifact.tar.gz -C build
+
+      - name: Prepare sanitizer support
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq llvm
+          cat duckdb/.sanitizer-leak-suppressions.txt .sanitizer-leak-suppressions.txt > .combined-sanitizer-leak-suppressions.txt
+
+      - name: Run native catalog tests in an empty network namespace
+        run: |
+          sudo --preserve-env=ASAN_SYMBOLIZER_PATH,ASAN_OPTIONS,LSAN_OPTIONS,UBSAN_OPTIONS \
+            unshare --net -- make test_mock_native_relassert
+
+      - name: Upload failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-catalog-diagnostics
+          path: duckdb_unittest_tempdir
+          if-no-files-found: ignore
+          retention-days: 3

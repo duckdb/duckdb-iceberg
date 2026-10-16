@@ -1,0 +1,51 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/alter/sorted_by/test_reset_created_sorted_by.test
+# description: Reset a table whose initial sort order is nonempty
+# group: [sorted_by]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+include test/sql/init_requires
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.reset_created_sorted_by;
+
+statement ok
+CREATE TABLE my_datalake.default.reset_created_sorted_by (a INTEGER) SORTED BY (a);
+
+statement ok
+ALTER TABLE my_datalake.default.reset_created_sorted_by RESET SORTED BY;
+
+query II
+SELECT metadata."default-sort-order-id", len(o.fields::VARIANT[])
+FROM iceberg_load_table_response(my_datalake.default.reset_created_sorted_by),
+unnest(metadata."sort-orders"::VARIANT[]) AS orders(o)
+WHERE o."order-id"::INTEGER = metadata."default-sort-order-id";
+----
+0	0
+
+# Resetting again must reuse the unsorted order.
+statement ok
+ALTER TABLE my_datalake.default.reset_created_sorted_by RESET SORTED BY;
+
+statement ok
+INSERT INTO my_datalake.default.reset_created_sorted_by VALUES (3), (1), (2);
+
+query I
+SELECT a FROM my_datalake.default.reset_created_sorted_by ORDER BY filename, file_row_number;
+----
+3
+1
+2
+
+# The original order remains usable after the reset.
+statement ok
+ALTER TABLE my_datalake.default.reset_created_sorted_by SET SORTED BY (a);
+
+query I
+SELECT metadata."default-sort-order-id"
+FROM iceberg_load_table_response(my_datalake.default.reset_created_sorted_by);
+----
+1
+
+statement ok
+DROP TABLE my_datalake.default.reset_created_sorted_by;

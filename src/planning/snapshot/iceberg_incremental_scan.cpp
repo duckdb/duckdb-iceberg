@@ -63,35 +63,37 @@ IcebergIncrementalSnapshots IcebergIncrementalSnapshots::Resolve(const IcebergTa
 
 	for (auto &snapshot_ref : collected) {
 		auto &snapshot = snapshot_ref.get();
-		if (!snapshot.snapshot_id) {
-			throw InvalidConfigurationException("Snapshot in the requested range has no 'snapshot-id'");
-		}
 		if (snapshot.operation != IcebergSnapshotOperationType::APPEND) {
 			throw InvalidInputException(
 			    "Snapshot %lld in the requested range has operation '%s', incremental reads only support "
 			    "'append' snapshots. Reading between these snapshots would silently skip the data it changed",
-			    *snapshot.snapshot_id, IcebergSnapshotOperationTypeToString(snapshot.operation));
+			    snapshot.snapshot_id, IcebergSnapshotOperationTypeToString(snapshot.operation));
 		}
-		result.snapshot_ids.insert(*snapshot.snapshot_id);
+		result.snapshot_ids.insert(snapshot.snapshot_id);
 	}
 	return result;
 }
 
-bool IcebergIncrementalSnapshots::ManifestInRange(const IcebergManifestFile &manifest_file) const {
-	if (!manifest_file.added_snapshot_id) {
-		//! Not attributable, leave the decision to the entry check
-		return true;
+//! Manifests built from transaction-local content belong to no committed snapshot. Incremental scans
+//! are only reachable through 'iceberg_scan', which never carries them, so reaching one is a bug.
+static const IcebergManifestFile &GetCommittedManifestFile(const IcebergManifestListEntry &manifest) {
+	if (!manifest.HasFile()) {
+		throw InternalException("An incremental scan can not include transaction-local manifests");
 	}
-	return snapshot_ids.count(*manifest_file.added_snapshot_id) != 0;
+	return manifest.GetFile();
+}
+
+bool IcebergIncrementalSnapshots::ManifestInRange(const IcebergManifestListEntry &manifest) const {
+	return snapshot_ids.count(GetCommittedManifestFile(manifest).added_snapshot_id) != 0;
 }
 
 bool IcebergIncrementalSnapshots::EntryInRange(const IcebergManifestEntry &entry,
-                                               const IcebergManifestFile &manifest_file) const {
+                                               const IcebergManifestListEntry &manifest) const {
 	if (entry.status != IcebergManifestEntryStatusType::ADDED) {
 		//! An EXISTING entry was carried forward from an earlier snapshot, it is not new data
 		return false;
 	}
-	return snapshot_ids.count(entry.GetSnapshotId(manifest_file)) != 0;
+	return snapshot_ids.count(entry.GetSnapshotId(GetCommittedManifestFile(manifest))) != 0;
 }
 
 } // namespace duckdb

@@ -1,0 +1,138 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/maintenance/rewrite_data_files_entry_snapshot_ids.test
+# description: rewritten manifests record the deleting snapshot on DELETED entries and keep the original snapshot on carried-over entries
+# group: [maintenance]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+include test/sql/init_requires
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.entry_snapshot_ids;
+
+statement ok
+CREATE TABLE my_datalake.default.entry_snapshot_ids (id INTEGER, category VARCHAR) PARTITIONED BY (category);
+
+# one manifest holding a file in each partition
+statement ok
+INSERT INTO my_datalake.default.entry_snapshot_ids VALUES (1, 'a'), (2, 'b');
+
+statement ok
+SET VARIABLE first_insert = (SELECT snapshot_id::BIGINT FROM iceberg_snapshots(my_datalake.default.entry_snapshot_ids) ORDER BY sequence_number DESC LIMIT 1);
+
+statement ok
+INSERT INTO my_datalake.default.entry_snapshot_ids VALUES (3, 'a');
+
+# only partition 'a' has two files, so only its files are rewritten
+query III
+CALL iceberg_rewrite_data_files('my_datalake.default.entry_snapshot_ids', min_input_files => 2);
+----
+2	1	<REGEX>:[1-9][0-9]*
+
+statement ok
+begin;
+
+statement ok
+SET VARIABLE first_rewrite = (SELECT snapshot_id::BIGINT FROM iceberg_snapshots(my_datalake.default.entry_snapshot_ids) ORDER BY sequence_number DESC LIMIT 1);
+
+statement ok
+SET VARIABLE manifest_list = (SELECT manifest_list FROM iceberg_snapshots(my_datalake.default.entry_snapshot_ids) ORDER BY sequence_number DESC LIMIT 1);
+
+statement ok
+CREATE OR REPLACE TEMP TABLE manifests AS SELECT manifest_path, added_snapshot_id FROM read_avro(getvariable('manifest_list')) WHERE content = 0;
+
+statement ok
+SET VARIABLE manifest_paths = (SELECT list(manifest_path) FROM manifests);
+
+# an entry's snapshot id, after inheriting from its manifest when null
+statement ok
+CREATE OR REPLACE TEMP TABLE entries AS
+SELECT e.status, coalesce(e.snapshot_id, m.added_snapshot_id) AS snapshot_id,
+       replace(e.data_file.file_path, chr(92), '/') AS file_path,
+       e.sequence_number, e.file_sequence_number
+FROM read_avro(getvariable('manifest_paths'), filename = true) e JOIN manifests m ON e.filename = m.manifest_path;
+
+# the two rewritten files were deleted by the rewrite
+query I
+SELECT count(*) FROM entries WHERE status = 2 AND snapshot_id = getvariable('first_rewrite') AND file_path LIKE '%/category=a/%';
+----
+2
+
+# Deleting the old files changes their snapshot id, but retains their original sequences.
+query II
+SELECT sequence_number, file_sequence_number FROM entries
+WHERE status = 2 AND file_path LIKE '%/category=a/%' ORDER BY sequence_number;
+----
+1	1
+2	2
+
+# the untouched file in the same manifest is still attributed to the insert that added it
+query II
+SELECT status, snapshot_id = getvariable('first_insert') FROM entries WHERE file_path LIKE '%/category=b/%';
+----
+0	true
+
+statement ok
+commit;
+
+statement ok
+INSERT INTO my_datalake.default.entry_snapshot_ids VALUES (4, 'b');
+
+query III
+CALL iceberg_rewrite_data_files('my_datalake.default.entry_snapshot_ids', min_input_files => 2);
+----
+2	1	<REGEX>:[1-9][0-9]*
+
+statement ok
+begin;
+
+statement ok
+SET VARIABLE second_rewrite = (SELECT snapshot_id::BIGINT FROM iceberg_snapshots(my_datalake.default.entry_snapshot_ids) ORDER BY sequence_number DESC LIMIT 1);
+
+statement ok
+SET VARIABLE manifest_list = (SELECT manifest_list FROM iceberg_snapshots(my_datalake.default.entry_snapshot_ids) ORDER BY sequence_number DESC LIMIT 1);
+
+statement ok
+CREATE OR REPLACE TEMP TABLE manifests AS SELECT manifest_path, added_snapshot_id FROM read_avro(getvariable('manifest_list')) WHERE content = 0;
+
+statement ok
+SET VARIABLE manifest_paths = (SELECT list(manifest_path) FROM manifests);
+
+statement ok
+CREATE OR REPLACE TEMP TABLE entries AS
+SELECT e.status, coalesce(e.snapshot_id, m.added_snapshot_id) AS snapshot_id,
+       replace(e.data_file.file_path, chr(92), '/') AS file_path,
+       e.sequence_number, e.file_sequence_number
+FROM read_avro(getvariable('manifest_paths'), filename = true) e JOIN manifests m ON e.filename = m.manifest_path;
+
+# a file carried over as EXISTING and then deleted is attributed to the snapshot that deleted it, not the one that added it
+query I
+SELECT count(*) FROM entries WHERE status = 2 AND snapshot_id = getvariable('second_rewrite') AND file_path LIKE '%/category=b/%';
+----
+2
+
+query II
+SELECT sequence_number, file_sequence_number FROM entries
+WHERE status = 2 AND file_path LIKE '%/category=b/%' ORDER BY sequence_number;
+----
+1	1
+4	4
+
+# files deleted by the first rewrite keep that snapshot when their manifest is rewritten again
+query I
+SELECT count(*) FROM entries WHERE status = 2 AND snapshot_id = getvariable('first_rewrite') AND file_path LIKE '%/category=a/%';
+----
+2
+
+query II
+SELECT id, category FROM my_datalake.default.entry_snapshot_ids ORDER BY id;
+----
+1	a
+2	b
+3	a
+4	b
+
+statement ok
+DROP TABLE my_datalake.default.entry_snapshot_ids;
+
+statement ok
+commit;

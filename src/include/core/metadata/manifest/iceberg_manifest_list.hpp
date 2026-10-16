@@ -11,6 +11,8 @@
 
 #include "core/metadata/manifest/iceberg_manifest.hpp"
 
+#include <variant>
+
 namespace duckdb {
 
 struct IcebergPartitionSpec;
@@ -21,7 +23,7 @@ struct FieldSummary {
 public:
 	bool contains_null = false;
 	//! Optional
-	bool contains_nan = false;
+	optional<bool> contains_nan = false;
 	//! Optional
 	Value lower_bound;
 	//! Optional
@@ -30,8 +32,8 @@ public:
 
 struct ManifestPartitions {
 public:
-	void Create(const IcebergTableMetadata &metadata, const IcebergPartitionSpec &partition_spec,
-	            const vector<IcebergManifestEntry> &entries);
+	void Create(const IcebergTableMetadata &metadata, const IcebergTableSchema &target_schema,
+	            const IcebergPartitionSpec &partition_spec, const vector<IcebergManifestEntry> &entries);
 
 public:
 	bool has_partitions = false;
@@ -89,81 +91,68 @@ public:
 unordered_map<string, string> GetManifestMetadataMap(const IcebergTableMetadata &table_metadata,
                                                      const IcebergManifestMetadata &manifest_metadata);
 
-struct IcebergManifestFile {
+//! Manifest attributes shared by in-memory content and Avro files.
+struct IcebergManifest {
 public:
-	//! Path to the manifest AVRO file
-	string manifest_path;
-	//! Length of the manifest file in bytes
-	int64_t manifest_length;
+	IcebergManifest(int32_t partition_spec_id, IcebergManifestContentType content, sequence_number_t sequence_number)
+	    : partition_spec_id(partition_spec_id), content(content), sequence_number(sequence_number) {
+	}
+
+	//! Compute manifest attributes from content without taking ownership of its entries or assigning a file path.
+	static IcebergManifest CreateFromEntries(sequence_number_t sequence_number,
+	                                         const IcebergTableMetadata &table_metadata,
+	                                         const IcebergManifestMetadata &manifest_metadata,
+	                                         const vector<IcebergManifestEntry> &entries,
+	                                         optional<int64_t> first_row_id);
+
+public:
 	//! The id of the partition spec referenced by this manifest (and the data files that are part of it)
 	int32_t partition_spec_id;
 	optional<sequence_number_t> first_row_id;
 	//! either data or deletes
 	IcebergManifestContentType content;
-	//! sequence_number when manifest was added to table (0 for Iceberg v1)
-	optional<sequence_number_t> sequence_number;
+	//! Sequence number used for entry inheritance: transaction-local or persisted (0 for Iceberg v1).
+	sequence_number_t sequence_number;
 	optional<sequence_number_t> min_sequence_number;
-	optional<int64_t> added_snapshot_id;
 	//! The count fields were optional in V1 manifest lists. A missing count means unknown/non-zero, not zero.
 	optional<IcebergManifestCounts> counts;
 	//! The field summaries of the partition (if present)
 	ManifestPartitions partitions;
 
 public:
-	IcebergManifestFile(const string &manifest_path) : manifest_path(manifest_path) {
-	}
-
 	void SetCountsFromEntries(const vector<IcebergManifestEntry> &entries);
 };
 
-//! Snapshot metrics gathered for a manifest
-struct IcebergManifestMetrics {
-public:
-	//! DELETE metrics
-	int64_t added_position_deletes = 0; // added-position-deletes
-	int64_t added_deletion_vectors = 0; // added-dvs
-	int64_t added_equality_deletes = 0; // added-equality-deletes
+//! A descriptor for an existing Avro manifest, including its snapshot identity.
+struct IcebergManifestFile : public IcebergManifest {
+	IcebergManifestFile(string path, int64_t length, int64_t snapshot_id, IcebergManifest manifest)
+	    : IcebergManifest(std::move(manifest)), manifest_path(std::move(path)), manifest_length(length),
+	      added_snapshot_id(snapshot_id) {
+	}
 
-	int64_t removed_position_deletes = 0; // removed-position-deletes
-	int64_t removed_deletion_vectors = 0; // removed-dvs
-	int64_t removed_equality_deletes = 0; // removed-equality-deletes
+	//! Resolve inherited identities against this file before moving entries into a replacement.
+	//! ADDED entries become EXISTING; explicit identities and previously DELETED entries are preserved.
+	vector<IcebergManifestEntry> PrepareEntriesForRewrite(vector<IcebergManifestEntry> entries) const;
 
-	int64_t added_position_delete_files = 0; // added-position-delete-files
-	int64_t added_equality_delete_files = 0; // added-equality-delete-files
-	int64_t added_delete_files = 0;          // added-delete-files
-
-	int64_t removed_position_delete_files = 0; // removed-position-delete-files
-	int64_t removed_equality_delete_files = 0; // removed-equality-delete-files
-	int64_t removed_delete_files = 0;          // removed-delete-files
-
-public:
-	//! DATA metrics
-	int64_t added_data_files = 0; // added-data-files
-	int64_t added_records = 0;    // added-records
-
-	int64_t deleted_data_files = 0; // deleted-data-files
-	int64_t deleted_records = 0;    // deleted-records
-
-public:
-	//! Shared metrics
-	int64_t added_files_size = 0;
-	int64_t removed_files_size = 0;
+	string manifest_path;
+	int64_t manifest_length;
+	int64_t added_snapshot_id;
 };
 
 struct IcebergManifestListEntry {
 public:
-	IcebergManifestListEntry(IcebergManifestFile file) : file(std::move(file)) {
+	IcebergManifestListEntry(IcebergManifestFile file) : manifest(std::move(file)) {
 	}
-	IcebergManifestListEntry(IcebergManifestFile file, IcebergManifestMetadata manifest_metadata)
-	    : file(std::move(file)), manifest_metadata(std::move(manifest_metadata)) {
+	IcebergManifestListEntry(IcebergManifestFile file, IcebergManifestMetadata metadata,
+	                         vector<IcebergManifestEntry> entries)
+	    : manifest_metadata(std::move(metadata)), manifest_entries(std::move(entries)), manifest(std::move(file)) {
 	}
 	IcebergManifestListEntry(const IcebergManifestListEntry &) = default;
 	IcebergManifestListEntry(IcebergManifestListEntry &&) = default;
 	IcebergManifestListEntry &operator=(const IcebergManifestListEntry &other) {
 		if (this != &other) {
-			file = other.file;
+			manifest = other.manifest;
 			manifest_entries = other.manifest_entries;
-			metrics = other.metrics;
 			if (other.manifest_metadata) {
 				manifest_metadata.reset();
 				manifest_metadata.emplace(*other.manifest_metadata);
@@ -175,9 +164,8 @@ public:
 	}
 	IcebergManifestListEntry &operator=(IcebergManifestListEntry &&other) {
 		if (this != &other) {
-			file = std::move(other.file);
+			manifest = std::move(other.manifest);
 			manifest_entries = std::move(other.manifest_entries);
-			metrics = std::move(other.metrics);
 			if (other.manifest_metadata) {
 				manifest_metadata.reset();
 				manifest_metadata.emplace(*other.manifest_metadata);
@@ -189,11 +177,11 @@ public:
 	}
 
 public:
-	static IcebergManifestListEntry CreateFromEntries(FileSystem &fs, sequence_number_t sequence_number,
-	                                                  const IcebergTableMetadata &table_metadata,
-	                                                  const IcebergManifestMetadata &manifest_metadata,
-	                                                  vector<IcebergManifestEntry> &&manifest_entries,
-	                                                  int64_t &next_row_id);
+	//! Adapt materialized entries to the scanner without a file path or manifest-level row-ID inheritance.
+	static IcebergManifestListEntry CreateForScan(sequence_number_t sequence_number,
+	                                              const IcebergTableMetadata &table_metadata,
+	                                              const IcebergManifestMetadata &manifest_metadata,
+	                                              vector<IcebergManifestEntry> entries);
 	bool HasManifestEntries() const {
 		return manifest_entries.has_value();
 	}
@@ -213,46 +201,53 @@ public:
 	}
 
 public:
-	IcebergManifestFile file;
+	bool HasFile() const {
+		return std::holds_alternative<IcebergManifestFile>(manifest);
+	}
+	const IcebergManifestFile &GetFile() const {
+		if (!HasFile()) {
+			throw InternalException("In-memory manifest content has no Avro file");
+		}
+		return std::get<IcebergManifestFile>(manifest);
+	}
+	IcebergManifest &GetManifest() {
+		return HasFile() ? std::get<IcebergManifestFile>(manifest) : std::get<IcebergManifest>(manifest);
+	}
+	const IcebergManifest &GetManifest() const {
+		return HasFile() ? std::get<IcebergManifestFile>(manifest) : std::get<IcebergManifest>(manifest);
+	}
 	optional<IcebergManifestMetadata> manifest_metadata;
 	optional<vector<IcebergManifestEntry>> manifest_entries;
-	//! Metrics gathered during 'CreateFromEntries'
-	optional<IcebergManifestMetrics> metrics;
+
+private:
+	IcebergManifestListEntry(IcebergManifest manifest, IcebergManifestMetadata metadata,
+	                         vector<IcebergManifestEntry> entries)
+	    : manifest_metadata(std::move(metadata)), manifest_entries(std::move(entries)), manifest(std::move(manifest)) {
+	}
+
+	std::variant<IcebergManifest, IcebergManifestFile> manifest;
 };
 
+//! Contains only descriptors for written Avro files; in-memory scan entries cannot be added to this list.
 struct IcebergManifestList {
 public:
-	IcebergManifestList(int64_t snapshot_id, sequence_number_t sequence_number, const string &path)
-	    : path(path), snapshot_id(snapshot_id), sequence_number(sequence_number) {
+	explicit IcebergManifestList(const string &path) : path(path) {
 	}
 
 public:
-	vector<IcebergManifestListEntry> &GetManifestFilesMutable();
 	const vector<IcebergManifestListEntry> &GetManifestFilesConst() const;
 	const string &GetPath() const {
 		return path;
 	}
-	sequence_number_t GetSequenceNumber() const {
-		return sequence_number;
-	}
-
-	void AddNewManifestFile(IcebergManifestListEntry &&manifest_list_entry) {
-		auto &manifest_file = manifest_list_entry.file;
-		manifest_file.sequence_number = sequence_number;
-		manifest_file.added_snapshot_id = snapshot_id;
-
-		if (!manifest_file.min_sequence_number || *manifest_file.min_sequence_number > sequence_number) {
-			manifest_file.min_sequence_number = sequence_number;
-		}
-		manifest_entries.push_back(std::move(manifest_list_entry));
-	}
 	void AddExistingManifestFile(IcebergManifestListEntry &&manifest_file) {
+		if (!manifest_file.HasFile()) {
+			throw InternalException("Cannot add unwritten manifest content to a manifest list");
+		}
 		manifest_entries.push_back(std::move(manifest_file));
 	}
 	idx_t GetManifestListEntriesCount() const;
 
-	void AddToManifestEntries(vector<IcebergManifestListEntry> &manifest_list_entries);
-	vector<IcebergManifestListEntry> GetManifestListEntries();
+	vector<IcebergManifestListEntry> TakeManifestListEntries();
 
 public:
 	static LogicalType FieldSummaryType();
@@ -265,8 +260,6 @@ public:
 
 private:
 	string path;
-	int64_t snapshot_id;
-	sequence_number_t sequence_number;
 	vector<IcebergManifestListEntry> manifest_entries;
 };
 

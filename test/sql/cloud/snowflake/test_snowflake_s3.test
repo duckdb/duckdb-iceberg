@@ -7,13 +7,7 @@ require-env SNOWFLAKE_SECRET_KEY_S3
 
 require-env SNOWFLAKE_CATALOG_URI_GCS
 
-require avro
-
-require parquet
-
-require iceberg
-
-require httpfs
+include test/sql/init_requires
 
 require aws
 

@@ -18,21 +18,21 @@ public:
 	CompletedPlanningWithIDResult &operator=(const CompletedPlanningWithIDResult &) = delete;
 	CompletedPlanningWithIDResult(CompletedPlanningWithIDResult &&) = default;
 	CompletedPlanningWithIDResult &operator=(CompletedPlanningWithIDResult &&) = default;
-	class Object6 {
+	class Object11 {
 	public:
-		Object6();
-		Object6(const Object6 &) = delete;
-		Object6 &operator=(const Object6 &) = delete;
-		Object6(Object6 &&) = default;
-		Object6 &operator=(Object6 &&) = default;
+		Object11();
+		Object11(const Object11 &) = delete;
+		Object11 &operator=(const Object11 &) = delete;
+		Object11(Object11 &&) = default;
+		Object11 &operator=(Object11 &&) = default;
 
 	public:
 		// Deserialization
-		static Object6 FromJSON(JSONValue obj);
+		static Object11 FromJSON(JSONValue obj);
 		string TryFromJSON(JSONValue obj);
 
 		// Copy
-		Object6 Copy() const;
+		Object11 Copy() const;
 
 		// Serialization
 		void PopulateJSON(JSONWriter &writer, JSONMutableValue obj) const;
@@ -56,7 +56,7 @@ public:
 
 public:
 	CompletedPlanningResult completed_planning_result;
-	Object6 object_6;
+	Object11 object_11;
 };
 
 } // namespace rest_api_objects

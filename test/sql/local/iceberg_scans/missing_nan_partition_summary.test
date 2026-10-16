@@ -1,0 +1,263 @@
+# name: test/sql/local/iceberg_scans/missing_nan_partition_summary.test
+# description: Missing or NULL manifest contains_nan must not prune NaN partitions
+# group: [iceberg_scans]
+
+include test/sql/init_requires
+
+require json
+
+statement ok
+CALL enable_logging('Iceberg');
+
+foreach type FLOAT DOUBLE
+
+statement ok
+CREATE OR REPLACE TABLE nan_rows AS SELECT
+	id,
+	x::{type} AS x
+FROM (VALUES
+	(1, '1'),
+	(2, 'NaN'),
+	(3, '-NaN')
+) t(id, x);
+
+foreach id 1 2 3
+
+statement ok
+COPY (
+	SELECT
+		id,
+		x
+	FROM nan_rows WHERE id = {id}
+) TO '{TEST_DIR}/nan_{type}_{id}.parquet' (
+	FORMAT PARQUET,
+	FIELD_IDS {id: 2, x: 1}
+);
+
+endloop
+
+# Explicit false describes a manifest containing only the finite partition.
+foreach flag NULL true false
+
+statement ok
+COPY (
+	SELECT
+		1::INTEGER AS status,
+		1::BIGINT AS snapshot_id,
+		1::BIGINT AS sequence_number,
+		1::BIGINT AS file_sequence_number,
+		{
+			content: 0::INTEGER,
+			file_path: '{TEST_DIR}/nan_{type}_' || id || '.parquet',
+			file_format: 'PARQUET',
+			partition: {
+				x: x
+			},
+			record_count: 1::BIGINT,
+			file_size_in_bytes: 1000::BIGINT
+		} AS data_file
+	FROM nan_rows WHERE id = 1 OR {flag} IS DISTINCT FROM false
+) TO '{TEST_DIR}/nan_{type}_{flag}_manifest.avro' (
+	FORMAT AVRO,
+	METADATA {'schema-id': '0', 'partition-spec-id': '0', 'format-version': '2', 'content': 'data'},
+	FIELD_IDS {status: 0, snapshot_id: 1, sequence_number: 3, file_sequence_number: 4,
+	data_file: {__duckdb_field_id: 2, content: 134, file_path: 100, file_format: 101,
+	partition: {__duckdb_field_id: 102, x: 1000}, record_count: 103, file_size_in_bytes: 104}}
+);
+
+statement ok
+CREATE OR REPLACE TABLE nan_manifest_list AS
+SELECT
+	'{TEST_DIR}/nan_{type}_{flag}_manifest.avro' AS manifest_path,
+	1000::BIGINT AS manifest_length,
+	0::INTEGER AS partition_spec_id,
+	0::INTEGER AS content,
+	1::BIGINT AS sequence_number,
+	1::BIGINT AS min_sequence_number,
+	1::BIGINT AS added_snapshot_id,
+	[
+		{
+			contains_null: false,
+			contains_nan: {flag}::BOOLEAN,
+			lower_bound: CASE WHEN '{type}' = 'FLOAT' THEN unhex('0000803f') ELSE unhex('000000000000f03f') END,
+			upper_bound: CASE WHEN '{type}' = 'FLOAT' THEN unhex('0000803f') ELSE unhex('000000000000f03f') END
+		}
+	] AS partitions;
+
+statement ok
+COPY nan_manifest_list TO '{TEST_DIR}/nan_{type}_{flag}_list.avro' (
+	FORMAT AVRO,
+	FIELD_IDS {
+		manifest_path: 500,
+		manifest_length: 501,
+		partition_spec_id: 502,
+		content: 517,
+		sequence_number: 515,
+		min_sequence_number: 516,
+		added_snapshot_id: 503,
+		partitions: {
+			__duckdb_field_id: 507,
+			list: {
+				__duckdb_field_id: 508,
+				contains_null: 509,
+				contains_nan: {
+					__duckdb_field_id: 518,
+					__duckdb_nullable: true
+				},
+				lower_bound: 510,
+				upper_bound: 511
+			}
+		}
+	}
+);
+
+endloop
+
+# Omit the field from the Avro schema altogether as well as testing a NULL value.
+statement ok
+COPY (
+	SELECT * REPLACE (
+		'{TEST_DIR}/nan_{type}_NULL_manifest.avro' AS manifest_path,
+		list_transform(
+			partitions, lambda p: {
+				contains_null: p.contains_null,
+				lower_bound: p.lower_bound,
+				upper_bound: p.upper_bound
+			}
+		) AS partitions
+	)
+	FROM nan_manifest_list
+) TO '{TEST_DIR}/nan_{type}_absent_list.avro' (
+	FORMAT AVRO,
+	FIELD_IDS {
+		manifest_path: 500,
+		manifest_length: 501,
+		partition_spec_id: 502,
+		content: 517,
+		sequence_number: 515,
+		min_sequence_number: 516,
+		added_snapshot_id: 503,
+		partitions: {
+			__duckdb_field_id: 507, list: {
+				__duckdb_field_id: 508,
+				contains_null: 509,
+				lower_bound: 510,
+				upper_bound: 511
+			}
+		}
+	}
+);
+
+foreach flag NULL true false absent
+
+statement ok
+COPY (
+	SELECT to_json(
+		{
+		'format-version': 2,
+		'table-uuid': 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',
+		'location': '{TEST_DIR}',
+		'last-sequence-number': 1,
+		'last-updated-ms': 1700000000000,
+		'last-column-id': 2,
+		'current-schema-id': 0,
+		'schemas': [
+			{
+				'type': 'struct',
+				'schema-id': 0,
+				'fields': [
+					{
+						'id': 1,
+						'name': 'x',
+						'required': false,
+						'type': lower('{type}')
+					},
+					{
+						'id': 2,
+						'name': 'id',
+						'required': false,
+						'type': 'int'
+					}
+				]
+			}
+		],
+		'default-spec-id': 0,
+		'partition-specs': [
+			{
+				'spec-id': 0,
+				'fields': [
+					{
+						'source-id': 1,
+						'field-id': 1000,
+						'name': 'x',
+						'transform': 'identity'
+					}
+				]
+			}
+		],
+		'last-partition-id': 1000,
+		'default-sort-order-id': 0,
+		'sort-orders': [
+			{
+				'order-id': 0,
+				'fields': []
+			}
+		],
+		'current-snapshot-id': 1,
+		'snapshots': [
+			{
+				'snapshot-id': 1,
+				'sequence-number': 1,
+				'timestamp-ms': 1700000000000,
+				'manifest-list': '{TEST_DIR}/nan_{type}_{flag}_list.avro',
+				'schema-id': 0,
+				'summary': {'operation': 'append'}
+			}
+		]
+	}
+) AS metadata) TO '{TEST_DIR}/nan_{type}_{flag}.metadata.json' (
+	FORMAT CSV,
+	HEADER false,
+	QUOTE '',
+	ESCAPE ''
+);
+
+statement ok
+CALL truncate_duckdb_logs();
+
+foreach nan 'NaN' '-NaN'
+
+query I
+SELECT count(*) = CASE WHEN '{flag}' = 'false' THEN 0 ELSE 2 END
+FROM iceberg_scan('{TEST_DIR}/nan_{type}_{flag}.metadata.json') WHERE x = {nan}::{type};
+----
+true
+
+endloop
+
+foreach op > >=
+
+query I
+SELECT count(*) = CASE WHEN '{flag}' = 'false' THEN 0 ELSE 2 END
+FROM iceberg_scan('{TEST_DIR}/nan_{type}_{flag}.metadata.json') WHERE x {op} 5;
+----
+true
+
+endloop
+
+# Only an explicit false permits these comparisons to prune the manifest.
+query I
+SELECT (count(*) > 0) = ('{flag}' = 'false')
+FROM duckdb_logs() WHERE type = 'Iceberg' AND message LIKE '%skipped ''manifest_file''%';
+----
+true
+
+query I
+SELECT contains_nan IS NOT DISTINCT FROM CASE WHEN '{flag}' IN ('NULL', 'absent') THEN NULL ELSE '{flag}' = 'true' END
+FROM iceberg_partition_stats('{TEST_DIR}/nan_{type}_{flag}.metadata.json');
+----
+true
+
+endloop
+
+endloop

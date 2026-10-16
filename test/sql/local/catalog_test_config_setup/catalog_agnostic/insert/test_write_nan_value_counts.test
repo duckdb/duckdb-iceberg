@@ -1,0 +1,183 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/insert/test_write_nan_value_counts.test
+# description: NaN and NULL counts stay attached to their files across inserts, nested fields and metrics changes
+# group: [insert]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+include test/sql/init_requires
+
+statement ok
+SET threads=1;
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.nan_counts_files;
+
+statement ok
+CREATE TABLE my_datalake.default.nan_counts_files (batch_id INTEGER, f FLOAT, d DOUBLE)
+WITH ('write.target-file-size-bytes'='100000');
+
+# Each insert rotates files and puts the FLOAT and DOUBLE NaNs at opposite
+# ends of the input. The second insert has different counts from the first.
+foreach batch 0 1
+
+statement ok
+INSERT INTO my_datalake.default.nan_counts_files
+SELECT {batch},
+	CASE WHEN i >= 199995 + {batch} THEN 'NaN'::FLOAT
+		WHEN i % 777 = 0 THEN NULL ELSE i::FLOAT END,
+	CASE WHEN i < 3 + {batch} THEN 'NaN'::DOUBLE
+		WHEN i % 1000 = 0 THEN NULL ELSE i::DOUBLE END
+FROM range(200000) t(i);
+
+# Keep vended credentials in scope while reading the data files directly.
+statement ok
+BEGIN;
+
+statement ok
+SET VARIABLE nan_files = (
+	SELECT list(DISTINCT file_path) FROM iceberg_metadata(my_datalake.default.nan_counts_files)
+);
+
+query I
+SELECT count(DISTINCT filename) > 1
+FROM read_parquet(getvariable('nan_files'), filename=true) WHERE batch_id = {batch};
+----
+true
+
+# A correct total can hide counts assigned to the wrong file. Check every
+# manifest entry against the actual Parquet rows after each insert.
+foreach column f d
+
+query I
+WITH actual AS (
+	SELECT parse_filename(filename) AS file_name,
+		count(*) AS value_count,
+		count(*) FILTER (WHERE {column} IS NULL) AS null_count,
+		count(*) FILTER (WHERE isnan({column})) AS nan_count
+	FROM read_parquet(getvariable('nan_files'), filename=true)
+	GROUP BY file_name
+), recorded AS (
+	SELECT parse_filename(file_path) AS file_name, value_count, null_value_count, nan_value_count
+	FROM iceberg_column_stats(my_datalake.default.nan_counts_files) WHERE column_name = '{column}'
+)
+SELECT count(*) FROM recorded FULL JOIN actual USING (file_name)
+WHERE recorded.file_name IS NULL OR actual.file_name IS NULL
+	OR recorded.value_count IS DISTINCT FROM actual.value_count
+	OR recorded.null_value_count IS DISTINCT FROM actual.null_count
+	OR recorded.nan_value_count IS DISTINCT FROM actual.nan_count;
+----
+0
+
+endloop
+
+statement ok
+COMMIT;
+
+endloop
+
+statement ok
+DROP TABLE my_datalake.default.nan_counts_files;
+
+# Walk every ancestor: struct-only paths retain counts, while a list or map
+# anywhere in the path suppresses them, including floating-point map keys.
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.nan_counts_nested;
+
+statement ok
+CREATE TABLE my_datalake.default.nan_counts_nested (
+	nested_struct STRUCT("inner" STRUCT(kept_float FLOAT, kept_double DOUBLE)),
+	struct_list_struct STRUCT(items STRUCT(skipped_list_field DOUBLE)[]),
+	struct_map_struct STRUCT(entries MAP(VARCHAR, STRUCT(skipped_map_field FLOAT))),
+	float_key_map MAP(FLOAT, DOUBLE)
+);
+
+statement ok
+INSERT INTO my_datalake.default.nan_counts_nested VALUES (
+	{'inner': {'kept_float': 'NaN'::FLOAT, 'kept_double': 1.0::DOUBLE}},
+	{'items': [{'skipped_list_field': 'NaN'::DOUBLE}]},
+	{'entries': MAP {'a': {'skipped_map_field': 'NaN'::FLOAT}}},
+	MAP {'NaN'::FLOAT: 'NaN'::DOUBLE}
+);
+
+statement ok
+INSERT INTO my_datalake.default.nan_counts_nested VALUES
+	({'inner': {'kept_float': NULL::FLOAT, 'kept_double': NULL::DOUBLE}},
+	 {'items': [{'skipped_list_field': NULL::DOUBLE}]},
+	 {'entries': MAP {'a': {'skipped_map_field': NULL::FLOAT}}},
+	 MAP {1.0::FLOAT: NULL::DOUBLE}),
+	(NULL, NULL, NULL, NULL);
+
+query III
+SELECT column_name, count(*), sum(nan_value_count)
+FROM iceberg_column_stats(my_datalake.default.nan_counts_nested)
+WHERE nan_value_count IS NOT NULL GROUP BY column_name ORDER BY ALL;
+----
+kept_double	2	0
+kept_float	2	1
+
+statement ok
+DROP TABLE my_datalake.default.nan_counts_nested;
+
+# Overrides re-enable metrics under a 'none' default, including struct leaves.
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.nan_counts_metrics;
+
+statement ok
+CREATE TABLE my_datalake.default.nan_counts_metrics (f FLOAT, d DOUBLE, s STRUCT(x FLOAT, y DOUBLE))
+WITH (
+	'write.metadata.metrics.default'='none',
+	'write.metadata.metrics.column.f'='counts',
+	'write.metadata.metrics.column.s.x'='full'
+);
+
+statement ok
+INSERT INTO my_datalake.default.nan_counts_metrics VALUES
+	('NaN'::FLOAT, 'NaN'::DOUBLE, {'x': 'NaN'::FLOAT, 'y': 'NaN'::DOUBLE}),
+	(NULL, NULL, {'x': NULL, 'y': NULL});
+
+statement ok
+INSERT INTO my_datalake.default.nan_counts_metrics VALUES
+	(2.0, 2.0, {'x': 2.0, 'y': 2.0});
+
+query IIIIIII
+SELECT column_name, count(nan_value_count), sum(value_count), sum(null_value_count), sum(nan_value_count),
+	bool_and(lower_bound IS NULL), bool_and(upper_bound IS NULL)
+FROM iceberg_column_stats(my_datalake.default.nan_counts_metrics) GROUP BY column_name ORDER BY ALL;
+----
+d	0	NULL	NULL	NULL	true	true
+f	2	3	1	1	true	true
+s	0	NULL	NULL	NULL	true	true
+x	2	3	1	1	false	false
+y	0	NULL	NULL	NULL	true	true
+
+# Changing metrics affects later files without changing the earlier entries.
+statement ok
+ALTER TABLE my_datalake.default.nan_counts_metrics SET (
+	'write.metadata.metrics.column.f'='none',
+	'write.metadata.metrics.column.d'='full',
+	'write.metadata.metrics.column.s.x'='none',
+	'write.metadata.metrics.column.s.y'='counts'
+);
+
+statement ok
+INSERT INTO my_datalake.default.nan_counts_metrics VALUES
+	('NaN'::FLOAT, 'NaN'::DOUBLE, {'x': 'NaN'::FLOAT, 'y': 'NaN'::DOUBLE}),
+	(NULL, NULL, {'x': NULL, 'y': NULL}),
+	(4.0, 4.0, {'x': 4.0, 'y': 4.0});
+
+query IIIIIII
+SELECT column_name, count(nan_value_count), sum(value_count), sum(null_value_count), sum(nan_value_count),
+	bool_and(lower_bound IS NULL), bool_and(upper_bound IS NULL)
+FROM iceberg_column_stats(my_datalake.default.nan_counts_metrics) GROUP BY column_name ORDER BY ALL;
+----
+d	1	3	1	1	false	false
+f	2	3	1	1	true	true
+s	0	NULL	NULL	NULL	true	true
+x	2	3	1	1	false	false
+y	1	3	1	1	true	true
+
+statement ok
+DROP TABLE my_datalake.default.nan_counts_metrics;
+
+statement ok
+RESET threads;

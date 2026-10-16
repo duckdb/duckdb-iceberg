@@ -1,0 +1,98 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/insert/test_write_container_stats.test
+# description: RETURN_STATS records container counts and distinguishes empty containers from NULL
+# group: [insert]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+include test/sql/init_requires
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.container_stats;
+
+statement ok
+CREATE TABLE my_datalake.default.container_stats (
+    s STRUCT(x INTEGER, n STRUCT(y INTEGER)),
+    l INTEGER[],
+    m MAP(INTEGER, INTEGER)
+);
+
+statement ok
+INSERT INTO my_datalake.default.container_stats VALUES
+    (NULL, NULL, NULL),
+    ({'x': NULL, 'n': NULL}, [], MAP()),
+    ({'x': 7, 'n': {'y': NULL}}, [NULL], MAP([1], [NULL])),
+    ({'x': 9, 'n': {'y': 2}}, [2, 3], MAP([2], [3]));
+
+# Counts belong to the containers, independently of their children.
+query IIIII rowsort
+SELECT column_name, value_count, null_value_count, lower_bound, upper_bound
+FROM iceberg_column_stats(my_datalake.default.container_stats)
+WHERE column_name IN ('s', 'l', 'm');
+----
+l	4	1	NULL	NULL
+m	4	1	NULL	NULL
+s	4	1	NULL	NULL
+
+# Nested container counts exclude absent parents and include their own NULLs.
+query II
+SELECT value_count, null_value_count
+FROM iceberg_column_stats(my_datalake.default.container_stats) WHERE column_name = 'n';
+----
+3	1
+
+statement ok
+INSERT INTO my_datalake.default.container_stats VALUES (NULL, NULL, NULL);
+
+statement ok
+CALL iceberg_rewrite_data_files('my_datalake.default.container_stats', min_input_files => 2);
+
+query IIIII rowsort
+SELECT column_name, value_count, null_value_count, lower_bound, upper_bound
+FROM iceberg_column_stats(my_datalake.default.container_stats)
+WHERE status = 'ADDED' AND column_name IN ('s', 'l', 'm');
+----
+l	5	2	NULL	NULL
+m	5	2	NULL	NULL
+s	5	2	NULL	NULL
+
+statement ok
+DROP TABLE my_datalake.default.container_stats;
+
+# An empty map and a map with a NULL value satisfy NOT NULL on the map itself.
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.required_containers;
+
+statement ok
+CREATE TABLE my_datalake.default.required_containers (
+    s STRUCT(x INTEGER) NOT NULL,
+    l INTEGER[] NOT NULL,
+    m MAP(INTEGER, INTEGER) NOT NULL
+);
+
+statement ok
+INSERT INTO my_datalake.default.required_containers VALUES
+    ({'x': NULL}, [], MAP()),
+    ({'x': 7}, [NULL], MAP([1], [NULL]));
+
+statement error
+INSERT INTO my_datalake.default.required_containers VALUES (NULL, [], MAP());
+----
+NOT NULL constraint failed
+
+statement error
+INSERT INTO my_datalake.default.required_containers VALUES ({'x': 1}, NULL, MAP());
+----
+NOT NULL constraint failed
+
+statement error
+INSERT INTO my_datalake.default.required_containers VALUES ({'x': 1}, [], NULL);
+----
+NOT NULL constraint failed
+
+query I
+SELECT count(*) FROM my_datalake.default.required_containers;
+----
+2
+
+statement ok
+DROP TABLE my_datalake.default.required_containers;

@@ -1,0 +1,149 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/create/test_create_table_widened_integer_types.test
+# description: integer types without an Iceberg equivalent are widened losslessly (TINYINT/SMALLINT/UTINYINT/USMALLINT -> int, UINTEGER -> long) in CREATE TABLE, CTAS and ADD COLUMN
+# group: [create]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+include test/sql/init_requires
+
+statement ok
+use my_datalake.default;
+
+statement ok
+DROP TABLE IF EXISTS widened_ctas;
+
+statement ok
+CREATE TABLE widened_ctas AS SELECT * FROM (VALUES
+	((-128)::TINYINT, (-32768)::SMALLINT, 0::UTINYINT, 0::USMALLINT, 0::UINTEGER),
+	(127::TINYINT, 32767::SMALLINT, 255::UTINYINT, 65535::USMALLINT, 4294967295::UINTEGER),
+	(NULL, NULL, NULL, NULL, NULL)
+) t(ti, si, uti, usi, ui);
+
+query II
+SELECT column_name, column_type FROM (DESCRIBE widened_ctas);
+----
+ti	INTEGER
+si	INTEGER
+uti	INTEGER
+usi	INTEGER
+ui	BIGINT
+
+query IIIII
+SELECT * FROM widened_ctas ORDER BY ti NULLS LAST;
+----
+-128	-32768	0	0	0
+127	32767	255	65535	4294967295
+NULL	NULL	NULL	NULL	NULL
+
+# the data file stores the widened types, matching the table schema
+statement ok
+begin
+
+statement ok
+set variable data_file = (select file_path from iceberg_metadata(my_datalake.default.widened_ctas) limit 1);
+
+query II
+select column_name, column_type from (describe (from read_parquet(getvariable('data_file'))));
+----
+ti	INTEGER
+si	INTEGER
+uti	INTEGER
+usi	INTEGER
+ui	BIGINT
+
+statement ok
+commit
+
+# the column bounds written for the widened columns allow pruning on them
+query I
+SELECT ui FROM widened_ctas WHERE ti = -128;
+----
+0
+
+query I
+SELECT ti FROM widened_ctas WHERE ui = 4294967295;
+----
+127
+
+statement ok
+DROP TABLE IF EXISTS widened_nested;
+
+statement ok
+CREATE TABLE widened_nested AS
+	SELECT [i::TINYINT] AS lst, {'x': i::SMALLINT} AS strct, MAP {i::UTINYINT: i::USMALLINT} AS mp FROM range(3) t(i);
+
+query II
+SELECT column_name, column_type FROM (DESCRIBE widened_nested);
+----
+lst	INTEGER[]
+strct	STRUCT(x INTEGER)
+mp	MAP(INTEGER, INTEGER)
+
+query III
+SELECT lst[1], strct.x, mp[2] FROM widened_nested ORDER BY lst[1];
+----
+0	0	NULL
+1	1	NULL
+2	2	2
+
+statement ok
+DROP TABLE IF EXISTS widened_create;
+
+statement ok
+CREATE TABLE widened_create (ti TINYINT, si SMALLINT, uti UTINYINT, usi USMALLINT, ui UINTEGER);
+
+query II
+SELECT column_name, column_type FROM (DESCRIBE widened_create);
+----
+ti	INTEGER
+si	INTEGER
+uti	INTEGER
+usi	INTEGER
+ui	BIGINT
+
+statement ok
+INSERT INTO widened_create VALUES ((-1)::TINYINT, (-2)::SMALLINT, 3::UTINYINT, 4::USMALLINT, 5::UINTEGER);
+
+query IIIII
+SELECT * FROM widened_create;
+----
+-1	-2	3	4	5
+
+statement ok
+DROP TABLE IF EXISTS widened_alter;
+
+statement ok
+CREATE TABLE widened_alter (a INTEGER);
+
+statement ok
+ALTER TABLE widened_alter ADD COLUMN si SMALLINT;
+
+statement ok
+ALTER TABLE widened_alter ADD COLUMN ui UINTEGER;
+
+query II
+SELECT column_name, column_type FROM (DESCRIBE widened_alter);
+----
+a	INTEGER
+si	INTEGER
+ui	BIGINT
+
+statement ok
+INSERT INTO widened_alter VALUES (1, (-2)::SMALLINT, 4294967295::UINTEGER);
+
+query III
+SELECT * FROM widened_alter;
+----
+1	-2	4294967295
+
+statement ok
+DROP TABLE widened_ctas;
+
+statement ok
+DROP TABLE widened_nested;
+
+statement ok
+DROP TABLE widened_create;
+
+statement ok
+DROP TABLE widened_alter;

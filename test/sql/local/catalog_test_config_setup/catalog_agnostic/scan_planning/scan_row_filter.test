@@ -1,0 +1,161 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/scan_planning/scan_row_filter.test
+# description: SQL row filters prune planning and survive materialized task execution
+# group: [scan_planning]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+# Manifest-pruning log assertions require client-side planning.
+require-env SCAN_PLANNING_MODE client
+
+include test/sql/init_requires
+
+require json
+
+statement ok
+drop table if exists my_datalake.default.scan_row_filter;
+
+statement ok
+create table my_datalake.default.scan_row_filter(id integer, part integer, amount decimal(9,2))
+partitioned by (part) with ('format-version' = 2);
+
+statement ok
+insert into my_datalake.default.scan_row_filter select i, 1, i::decimal(9,2) from range(10) t(i);
+
+statement ok
+insert into my_datalake.default.scan_row_filter select i, 2, i::decimal(9,2) from range(10,20) t(i);
+
+statement ok
+insert into my_datalake.default.scan_row_filter select i, 2, i::decimal(9,2) from range(20,30) t(i);
+
+statement ok
+set iceberg_use_server_side_scan_planning=false;
+
+statement ok
+begin;
+
+statement ok
+create temp table unfiltered_plan as select * from iceberg_scan_plan('my_datalake.default.scan_row_filter');
+
+query I
+select count(*) from unfiltered_plan;
+----
+3
+
+statement ok
+call enable_logging('Iceberg');
+
+statement ok
+call truncate_duckdb_logs();
+
+# Partition summaries eliminate a manifest before reading its entries.
+statement ok
+create temp table filtered_plan as
+select * from iceberg_scan_plan('my_datalake.default.scan_row_filter', row_filter='part = 2 AND id >= 17');
+
+query II
+select count(*), sum(record_count) from filtered_plan;
+----
+2	20
+
+query I
+select count(*) > 0 from duckdb_logs()
+where type = 'Iceberg' and contains(message, 'skipped ''manifest_file''');
+----
+true
+
+statement ok
+call disable_logging();
+
+# Manifest/file pruning leaves id=10..16 in a candidate file; the residual must remove them.
+statement ok
+set variable filtered_scan_tasks = (select list(task) from filtered_plan task);
+
+query III
+select count(*), min(id), max(id) from iceberg_scan_tasks(getvariable('filtered_scan_tasks'));
+----
+13	17	29
+
+query T
+select distinct row_filter from filtered_plan;
+----
+part = 2 AND id >= 17
+
+# A nonpartition predicate prunes files by their metrics.
+query II
+select count(*), sum(record_count)
+from iceberg_scan_plan('my_datalake.default.scan_row_filter', row_filter='id >= 25');
+----
+1	10
+
+# SQL typed literals and Boolean expressions survive task transport.
+statement ok
+set variable filtered_scan_tasks = (select list(task) from (
+ select * from iceberg_scan_plan('my_datalake.default.scan_row_filter',
+ row_filter='amount >= 27.50 OR id IN (1, 2)')) task);
+
+query I
+select id from iceberg_scan_tasks(getvariable('filtered_scan_tasks')) order by id;
+----
+1
+2
+28
+29
+
+# Contradictions are handled before discovery.
+query I
+select count(*) from iceberg_scan_plan('my_datalake.default.scan_row_filter', row_filter='id > 20 AND id < 10');
+----
+0
+
+query I
+select count(*) from iceberg_scan_plan('my_datalake.default.scan_row_filter', row_filter='false');
+----
+0
+
+# Turning on server planning must preserve the predicate and exact row results,
+# whether the catalog supplies a plan or falls back to client planning.
+statement ok
+set iceberg_use_server_side_scan_planning=true;
+
+statement ok
+set variable filtered_scan_tasks = (select list(task) from (
+ select * from iceberg_scan_plan('my_datalake.default.scan_row_filter', row_filter='part = 2 AND id >= 17')) task);
+
+query III
+select count(*), min(id), max(id) from iceberg_scan_tasks(getvariable('filtered_scan_tasks'));
+----
+13	17	29
+
+statement ok
+commit;
+
+statement ok
+reset iceberg_use_server_side_scan_planning;
+
+statement error
+select * from iceberg_scan_plan('my_datalake.default.scan_row_filter', row_filter=NULL);
+----
+row_filter cannot be NULL
+
+statement error
+select * from iceberg_scan_plan('my_datalake.default.scan_row_filter', row_filter='missing = 1');
+----
+not found
+
+statement error
+select * from iceberg_scan_plan('my_datalake.default.scan_row_filter', row_filter='id = (select 1)');
+----
+subqueries, parameters and function calls are not supported
+
+statement error
+select * from iceberg_scan_plan('my_datalake.default.scan_row_filter', row_filter='id = ?');
+----
+subqueries, parameters and function calls are not supported
+
+statement error
+select * from iceberg_scan_plan('my_datalake.default.scan_row_filter', row_filter='true, false');
+----
+exactly one Boolean expression
+
+statement ok
+drop table my_datalake.default.scan_row_filter;

@@ -1,0 +1,189 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/merge/test_merge_multiple_actions.test
+# description: Multiple modifying MERGE actions share deletes and one snapshot in v2 and v3.
+# group: [merge]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require-env FORMAT_V3_SUPPORT
+
+require-env SNAPSHOT_HISTORY_SUPPORT
+
+include test/sql/init_requires
+
+foreach version 2 3
+
+foreach threads 1 4
+
+statement ok
+SET threads = {threads};
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.merge_multiple_actions;
+
+statement ok
+CREATE TABLE my_datalake.default.merge_multiple_actions (id INTEGER, v VARCHAR)
+WITH ('format-version' = '{version}');
+
+statement ok
+INSERT INTO my_datalake.default.merge_multiple_actions VALUES
+    (0, 'old'), (1, 'a'), (2, 'b'), (3, 'c'), (4, 'd'), (5, 'e'), (6, 'f'), (7, 'g');
+
+# Every action below targets the same original data file.
+query I
+SELECT count(DISTINCT filename) FROM my_datalake.default.merge_multiple_actions;
+----
+1
+
+statement ok
+DELETE FROM my_datalake.default.merge_multiple_actions WHERE id = 0;
+
+# Overlapping conditions select only the first matching action for a row.
+# The final UPDATE gets no rows and must still release the earlier actions' collected deletes.
+query I
+MERGE INTO my_datalake.default.merge_multiple_actions t
+USING (VALUES (1, 'A'), (2, 'B'), (3, 'unused'), (8, 'h')) s(id, v) ON t.id = s.id
+WHEN MATCHED AND s.id = 1 THEN UPDATE SET v = s.v
+WHEN MATCHED AND s.id = 2 THEN UPDATE SET v = s.v
+WHEN MATCHED THEN DELETE
+WHEN NOT MATCHED THEN INSERT VALUES (s.id, s.v)
+WHEN NOT MATCHED BY SOURCE AND t.id = 4 THEN DELETE
+WHEN NOT MATCHED BY SOURCE AND t.id = 5 THEN UPDATE SET v = 'E'
+WHEN NOT MATCHED BY SOURCE AND t.id = 99 THEN UPDATE SET v = 'unused';
+----
+6
+
+query IT
+SELECT * FROM my_datalake.default.merge_multiple_actions ORDER BY id;
+----
+1	A
+2	B
+5	E
+6	f
+7	g
+8	h
+
+query IT
+SELECT sequence_number, operation FROM iceberg_snapshots('my_datalake.default.merge_multiple_actions')
+ORDER BY sequence_number;
+----
+1	append
+2	delete
+3	overwrite
+
+# All delete-producing actions can also be empty.
+query I
+MERGE INTO my_datalake.default.merge_multiple_actions t
+USING (VALUES (1, 'unused')) s(id, v) ON t.id = s.id
+WHEN MATCHED AND false THEN UPDATE SET v = s.v
+WHEN MATCHED AND false THEN DELETE
+WHEN NOT MATCHED THEN INSERT VALUES (s.id, s.v);
+----
+0
+
+query I
+SELECT count(*) FROM iceberg_snapshots('my_datalake.default.merge_multiple_actions');
+----
+3
+
+# DELETE-only actions can run concurrently. Both remaining rows are in the original data file.
+query I
+MERGE INTO my_datalake.default.merge_multiple_actions t
+USING (VALUES (6), (7)) s(id) ON t.id = s.id
+WHEN MATCHED AND s.id = 6 THEN DELETE
+WHEN MATCHED AND s.id = 7 THEN DELETE
+WHEN MATCHED THEN DELETE;
+----
+2
+
+query IT
+SELECT * FROM my_datalake.default.merge_multiple_actions ORDER BY id;
+----
+1	A
+2	B
+5	E
+8	h
+
+query IT
+SELECT sequence_number, operation FROM iceberg_snapshots('my_datalake.default.merge_multiple_actions')
+ORDER BY sequence_number;
+----
+1	append
+2	delete
+3	overwrite
+4	delete
+
+statement ok
+DROP TABLE my_datalake.default.merge_multiple_actions;
+
+# Repeat with enough rows to span many input chunks and several physical files.
+statement ok
+CREATE TABLE my_datalake.default.merge_multiple_actions (id BIGINT, v BIGINT)
+WITH ('format-version' = '{version}');
+
+statement ok
+INSERT INTO my_datalake.default.merge_multiple_actions SELECT i, 0 FROM range(10000) t(i);
+
+statement ok
+INSERT INTO my_datalake.default.merge_multiple_actions SELECT i, 0 FROM range(10000, 20000) t(i);
+
+query II
+SELECT count(*) >= 2, bool_and(action_count = 3)
+FROM (
+    SELECT filename, count(DISTINCT id % 3) AS action_count
+    FROM my_datalake.default.merge_multiple_actions GROUP BY filename
+);
+----
+true	true
+
+query I
+MERGE INTO my_datalake.default.merge_multiple_actions t
+USING (SELECT i FROM range(20000) s(i)) s ON t.id = s.i
+WHEN MATCHED AND s.i % 3 = 0 THEN UPDATE SET v = s.i
+WHEN MATCHED AND s.i % 3 = 1 THEN UPDATE SET v = -s.i
+WHEN MATCHED THEN DELETE;
+----
+20000
+
+query III
+SELECT count(*), sum(v), count(*) FILTER (WHERE id % 3 = 2)
+FROM my_datalake.default.merge_multiple_actions;
+----
+13334	-6667	0
+
+query IT
+SELECT sequence_number, operation FROM iceberg_snapshots('my_datalake.default.merge_multiple_actions')
+ORDER BY sequence_number;
+----
+1	append
+2	append
+3	overwrite
+
+# The delete-only pipelines can consume their batches concurrently.
+query I
+MERGE INTO my_datalake.default.merge_multiple_actions t
+USING (SELECT i FROM range(20000) s(i)) s ON t.id = s.i
+WHEN MATCHED AND s.i % 3 = 0 THEN DELETE
+WHEN MATCHED THEN DELETE;
+----
+13334
+
+query I
+SELECT count(*) FROM my_datalake.default.merge_multiple_actions;
+----
+0
+
+query IT
+SELECT sequence_number, operation FROM iceberg_snapshots('my_datalake.default.merge_multiple_actions')
+ORDER BY sequence_number;
+----
+1	append
+2	append
+3	overwrite
+4	delete
+
+statement ok
+DROP TABLE my_datalake.default.merge_multiple_actions;
+
+endloop
+
+endloop

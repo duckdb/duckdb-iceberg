@@ -1,0 +1,77 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/reads/filtering/test_nan_filter_pruning.test
+# description: Data file pruning must not skip files that contain NaN
+# group: [filtering]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require-env SCAN_PLANNING_MODE client
+
+include test/sql/init_requires
+
+# All NaN representations are treated equal
+foreach nan 'NaN' '-NaN'
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.nan_filter_pruning;
+
+statement ok
+CREATE TABLE my_datalake.default.nan_filter_pruning (
+	id INTEGER,
+	flt FLOAT,
+	dbl DOUBLE
+);
+
+# A single data file: finite values 1..3 plus one NaN row. The written bounds are [1.0, 3.0].
+statement ok
+INSERT INTO my_datalake.default.nan_filter_pruning VALUES
+	(1, 1.0, 1.0),
+	(2, 2.0, 2.0),
+	(3, 3.0, 3.0),
+	(4, {nan}::FLOAT, {nan}::DOUBLE);
+
+query I
+SELECT id FROM my_datalake.default.nan_filter_pruning WHERE flt = CAST({nan} AS FLOAT);
+----
+4
+
+query I
+SELECT id FROM my_datalake.default.nan_filter_pruning WHERE dbl = {nan}::DOUBLE;
+----
+4
+
+query I
+SELECT id FROM my_datalake.default.nan_filter_pruning WHERE flt > 5;
+----
+4
+
+query I
+SELECT id FROM my_datalake.default.nan_filter_pruning WHERE dbl >= 100;
+----
+4
+
+query I
+SELECT id FROM my_datalake.default.nan_filter_pruning WHERE flt IN ({nan}::FLOAT, 2) ORDER BY id;
+----
+2
+4
+
+query I
+SELECT id FROM my_datalake.default.nan_filter_pruning WHERE flt != 1 ORDER BY id;
+----
+2
+3
+4
+
+query I
+SELECT id FROM my_datalake.default.nan_filter_pruning WHERE flt < 0;
+----
+
+query I
+SELECT id FROM my_datalake.default.nan_filter_pruning WHERE dbl <= 0;
+----
+
+statement ok
+DROP TABLE my_datalake.default.nan_filter_pruning;
+
+# nan
+endloop

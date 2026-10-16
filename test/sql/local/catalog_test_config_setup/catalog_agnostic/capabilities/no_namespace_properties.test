@@ -1,0 +1,28 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/capabilities/no_namespace_properties.test
+# description: Reject property updates on an otherwise valid namespace
+# group: [capabilities]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require-env-not NAMESPACE_PROPERTIES_SUPPORT
+
+include test/sql/init_requires
+
+require core_functions
+
+# Expected HTTP errors must be checked, not ignored.
+set ignore_error_messages
+
+statement ok
+DROP SCHEMA IF EXISTS my_datalake.cap_namespace_properties;
+
+statement ok
+CREATE SCHEMA my_datalake.cap_namespace_properties;
+
+statement error
+CALL set_iceberg_schema_properties(my_datalake.cap_namespace_properties, {'capability_probe': 'value'});
+----
+This Iceberg REST catalog server does not support this operation
+
+statement ok
+DROP SCHEMA my_datalake.cap_namespace_properties;

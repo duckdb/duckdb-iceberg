@@ -1,0 +1,81 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/insert/partitions/test_partition_summary_uuid_range.test
+# description: Range filters on a UUID identity partition return the rows that DuckDB's UUID order selects
+# group: [partitions]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+# With server-side scan planning the catalog picks the files using its own UUID order
+require-env SCAN_PLANNING_MODE client
+
+include test/sql/init_requires
+
+# ---- UUID starting with 8-f only, the manifest has partition summaries ----
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.partition_summary_uuid_range_high;
+
+statement ok
+CREATE TABLE my_datalake.default.partition_summary_uuid_range_high (id INTEGER, u UUID);
+
+statement ok
+ALTER TABLE my_datalake.default.partition_summary_uuid_range_high SET PARTITIONED BY (u);
+
+statement ok
+INSERT INTO my_datalake.default.partition_summary_uuid_range_high VALUES
+	(3, '80000000-0000-4000-8000-000000000000'),
+	(4, 'f79c3e09-677c-4bbd-a479-3f349cb785e7');
+
+query I
+SELECT list(id ORDER BY id) FROM my_datalake.default.partition_summary_uuid_range_high WHERE u > '90000000-0000-4000-8000-000000000000';
+----
+[4]
+
+query I
+SELECT list(id ORDER BY id) FROM my_datalake.default.partition_summary_uuid_range_high WHERE u < '90000000-0000-4000-8000-000000000000';
+----
+[3]
+
+query I
+SELECT count(*) FROM my_datalake.default.partition_summary_uuid_range_high WHERE u < '70000000-0000-4000-8000-000000000000';
+----
+0
+
+statement ok
+DROP TABLE my_datalake.default.partition_summary_uuid_range_high;
+
+# ---- UUID starting with both 0-7 and 8-f, the manifest has no partition summaries ----
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.partition_summary_uuid_range;
+
+statement ok
+CREATE TABLE my_datalake.default.partition_summary_uuid_range (id INTEGER, u UUID);
+
+statement ok
+ALTER TABLE my_datalake.default.partition_summary_uuid_range SET PARTITIONED BY (u);
+
+statement ok
+INSERT INTO my_datalake.default.partition_summary_uuid_range VALUES
+	(1, '11111111-1111-4111-8111-111111111111'),
+	(2, '7fffffff-ffff-4fff-bfff-ffffffffffff'),
+	(3, '80000000-0000-4000-8000-000000000000'),
+	(4, 'f79c3e09-677c-4bbd-a479-3f349cb785e7'),
+	(5, NULL);
+
+query I
+SELECT list(id ORDER BY id) FROM my_datalake.default.partition_summary_uuid_range WHERE u > '70000000-0000-4000-8000-000000000000';
+----
+[2, 3, 4]
+
+query I
+SELECT list(id ORDER BY id) FROM my_datalake.default.partition_summary_uuid_range WHERE u < '80000000-0000-4000-8000-000000000000';
+----
+[1, 2]
+
+query I
+SELECT list(id ORDER BY id) FROM my_datalake.default.partition_summary_uuid_range WHERE u BETWEEN '7fffffff-ffff-4fff-bfff-ffffffffffff' AND '80000000-0000-4000-8000-000000000000';
+----
+[2, 3]
+
+statement ok
+DROP TABLE my_datalake.default.partition_summary_uuid_range;

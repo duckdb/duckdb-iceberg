@@ -1,0 +1,110 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/transactions/test_v3_row_id_allocation.test
+# description: V3 row-ID allocation survives snapshot rollback and ignores aborted writes
+# group: [transactions]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require-env FORMAT_V3_SUPPORT
+
+require-env TIMETRAVEL_SUPPORT
+
+include test/sql/init_requires
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.v3_row_id_allocation;
+
+statement ok
+CREATE TABLE my_datalake.default.v3_row_id_allocation (id INTEGER) WITH ('format-version' = '3');
+
+query I
+SELECT metadata."next-row-id" FROM iceberg_load_table_response(my_datalake.default.v3_row_id_allocation);
+----
+0
+
+statement ok
+INSERT INTO my_datalake.default.v3_row_id_allocation VALUES (1), (2);
+
+statement ok
+SET VARIABLE first_snapshot = (
+	SELECT metadata."current-snapshot-id"::BIGINT
+	FROM iceberg_load_table_response(my_datalake.default.v3_row_id_allocation)
+);
+
+statement ok
+INSERT INTO my_datalake.default.v3_row_id_allocation VALUES (3), (4), (5);
+
+statement ok
+SET VARIABLE allocated_end = (
+	SELECT metadata."next-row-id"::BIGINT
+	FROM iceberg_load_table_response(my_datalake.default.v3_row_id_allocation)
+);
+
+statement ok
+CALL iceberg_rollback_to_snapshot('my_datalake.default.v3_row_id_allocation', getvariable('first_snapshot'));
+
+# Rolling back main must not make IDs allocated by a later snapshot available again.
+query I
+SELECT metadata."next-row-id"::BIGINT = getvariable('allocated_end')
+FROM iceberg_load_table_response(my_datalake.default.v3_row_id_allocation);
+----
+true
+
+statement ok
+INSERT INTO my_datalake.default.v3_row_id_allocation VALUES (99);
+
+query I
+SELECT _row_id >= getvariable('allocated_end')
+FROM my_datalake.default.v3_row_id_allocation WHERE id = 99;
+----
+true
+
+statement ok
+SET VARIABLE before_abort = (
+	SELECT metadata."next-row-id"::BIGINT
+	FROM iceberg_load_table_response(my_datalake.default.v3_row_id_allocation)
+);
+
+statement ok
+BEGIN;
+
+statement ok
+INSERT INTO my_datalake.default.v3_row_id_allocation VALUES (100);
+
+statement ok
+ROLLBACK;
+
+query I
+SELECT metadata."next-row-id"::BIGINT = getvariable('before_abort')
+FROM iceberg_load_table_response(my_datalake.default.v3_row_id_allocation);
+----
+true
+
+statement ok
+INSERT INTO my_datalake.default.v3_row_id_allocation VALUES (101);
+
+query I
+SELECT _row_id >= getvariable('before_abort')
+FROM my_datalake.default.v3_row_id_allocation WHERE id = 101;
+----
+true
+
+query I
+SELECT id FROM my_datalake.default.v3_row_id_allocation ORDER BY id;
+----
+1
+2
+99
+101
+
+statement error
+ALTER TABLE my_datalake.default.v3_row_id_allocation SET ('format-version' = '2');
+----
+<REGEX>:.*Cannot downgrade format-version.*
+
+query I
+SELECT metadata."format-version" FROM iceberg_load_table_response(my_datalake.default.v3_row_id_allocation);
+----
+3
+
+statement ok
+DROP TABLE my_datalake.default.v3_row_id_allocation;

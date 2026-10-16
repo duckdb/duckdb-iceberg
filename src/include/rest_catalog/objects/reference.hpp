@@ -6,6 +6,8 @@
 #include "duckdb/common/string.hpp"
 #include "duckdb/common/vector.hpp"
 #include "duckdb/common/case_insensitive_map.hpp"
+#include "rest_catalog/objects/id_reference.hpp"
+#include "rest_catalog/objects/named_reference.hpp"
 
 namespace duckdb {
 namespace rest_api_objects {
@@ -27,10 +29,12 @@ public:
 	Reference Copy() const;
 
 	// Serialization
+	void PopulateJSON(JSONWriter &writer, JSONMutableValue obj) const;
 	JSONMutableValue ToJSON(JSONWriter &writer) const;
 
 public:
-	string value;
+	optional<IdReference> id_reference;
+	optional<NamedReference> named_reference;
 };
 
 } // namespace rest_api_objects

@@ -1,0 +1,7 @@
+{
+	"extends": ["mock.json"],
+	"description": "In-process v2/v3 REST catalog. Requires no service or network; shares the Python mock's capabilities and explicit exclusions.",
+	"statically_loaded_extensions": ["core_functions", "parquet", "avro", "iceberg", "httpfs", "icu", "iceberg_mock"],
+	"on_init": "CALL iceberg_test_catalog_init('{TEMP_DIR}/iceberg-native'); ATTACH '' AS my_datalake (TYPE ICEBERG, URI 'http://iceberg-mock.invalid', AUTHORIZATION_TYPE 'none', ACCESS_DELEGATION_MODE 'none', STAGE_CREATE_TABLES true); CREATE SCHEMA IF NOT EXISTS my_datalake.default;",
+	"skip_error_messages": []
+}

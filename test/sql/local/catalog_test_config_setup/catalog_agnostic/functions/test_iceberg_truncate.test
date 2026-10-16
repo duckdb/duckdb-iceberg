@@ -4,13 +4,7 @@
 
 # Spec: https://iceberg.apache.org/spec/#truncate-transform-details
 
-require avro
-
-require parquet
-
-require iceberg
-
-require httpfs
+include test/sql/init_requires
 
 
 # ---- NULL handling ----
@@ -124,7 +118,7 @@ SELECT iceberg_truncate(10, -1::BIGINT);
 ----
 -10
 
-# ---- VARCHAR: first L grapheme clusters ----
+# ---- VARCHAR: first L code points ----
 # truncate[3]("iceberg") = "ice"
 query I
 SELECT iceberg_truncate(3, 'iceberg');
@@ -148,6 +142,24 @@ query I
 SELECT iceberg_truncate(5, '');
 ----
 (empty)
+
+# truncate[2]("e" + U+0301 COMBINING ACUTE + "x") = "e" + U+0301 (65 CC 81)
+query I
+SELECT hex(iceberg_truncate(2, 'e' || chr(769) || 'x'));
+----
+65CC81
+
+# truncate[1](U+1F468 + U+200D ZWJ + U+1F469 + "z") = U+1F468 (F0 9F 91 A8)
+query I
+SELECT hex(iceberg_truncate(1, chr(128104) || chr(8205) || chr(128105) || 'z'));
+----
+F09F91A8
+
+# truncate[1]("e" + U+0301) = "e"
+query I
+SELECT iceberg_truncate(1, 'e' || chr(769));
+----
+e
 
 # ---- BLOB: first L bytes ----
 

@@ -1,0 +1,135 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/insert/test_write_widened_integer_types.test
+# description: INSERT, UPDATE and both MERGE actions write widened integer types to Parquet, including nested values
+# group: [insert]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+include test/sql/init_requires
+
+# Keep the source in DuckDB so its types are still narrow when binding each write.
+statement ok
+CREATE TEMP TABLE widened_write_input (
+	id INTEGER, ti TINYINT, si SMALLINT, uti UTINYINT, usi USMALLINT, ui UINTEGER,
+	lst TINYINT[], strct STRUCT(x SMALLINT, y UINTEGER), mp MAP(UTINYINT, USMALLINT)
+);
+
+statement ok
+INSERT INTO widened_write_input VALUES
+	(1, -128, -32768, 0, 0, 0, [-128, NULL, 127], {'x': -32768, 'y': 0}, MAP {0: 0}),
+	(2, 127, 32767, 255, 65535, 4294967295, [127], {'x': 32767, 'y': 4294967295}, MAP {255: 65535}),
+	(3, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL),
+	(4, 0, 0, 0, 0, 0, [], {'x': NULL, 'y': NULL}, MAP {});
+
+# Give both MERGE actions their own copy of every boundary, NULL and empty value.
+statement ok
+INSERT INTO widened_write_input SELECT * REPLACE (id + 4 AS id) FROM widened_write_input;
+
+foreach operation insert update merge
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.widened_{operation};
+
+statement ok
+CREATE TABLE my_datalake.default.widened_{operation} (
+	id INTEGER, ti TINYINT, si SMALLINT, uti UTINYINT, usi USMALLINT, ui UINTEGER,
+	lst TINYINT[], strct STRUCT(x SMALLINT, y UINTEGER), mp MAP(UTINYINT, USMALLINT)
+);
+
+# UPDATE replaces every row. MERGE updates the first copy and inserts the second.
+onlyif operation=update
+statement ok
+INSERT INTO my_datalake.default.widened_{operation} (id) SELECT id FROM widened_write_input;
+
+onlyif operation=merge
+statement ok
+INSERT INTO my_datalake.default.widened_{operation} (id) SELECT id FROM widened_write_input WHERE id <= 4;
+
+onlyif operation=insert
+query I
+INSERT INTO my_datalake.default.widened_{operation} SELECT * FROM widened_write_input;
+----
+8
+
+onlyif operation=update
+query I
+UPDATE my_datalake.default.widened_{operation} AS target
+SET ti = source.ti, si = source.si, uti = source.uti, usi = source.usi, ui = source.ui,
+	lst = source.lst, strct = source.strct, mp = source.mp
+FROM widened_write_input AS source WHERE target.id = source.id;
+----
+8
+
+onlyif operation=merge
+query I
+MERGE INTO my_datalake.default.widened_{operation} AS target
+USING widened_write_input AS source ON target.id = source.id
+WHEN MATCHED THEN UPDATE SET
+	ti = source.ti, si = source.si, uti = source.uti, usi = source.usi, ui = source.ui,
+	lst = source.lst, strct = source.strct, mp = source.mp
+WHEN NOT MATCHED THEN INSERT VALUES
+	(source.id, source.ti, source.si, source.uti, source.usi, source.ui, source.lst, source.strct, source.mp);
+----
+8
+
+query II
+SELECT column_name, column_type FROM (DESCRIBE my_datalake.default.widened_{operation});
+----
+id	INTEGER
+ti	INTEGER
+si	INTEGER
+uti	INTEGER
+usi	INTEGER
+ui	BIGINT
+lst	INTEGER[]
+strct	STRUCT(x INTEGER, y BIGINT)
+mp	MAP(INTEGER, INTEGER)
+
+# Compare both directions, including duplicates, NULLs and nested values.
+query I
+SELECT count(*) FROM (
+	(TABLE my_datalake.default.widened_{operation} EXCEPT ALL TABLE widened_write_input)
+	UNION ALL
+	(TABLE widened_write_input EXCEPT ALL TABLE my_datalake.default.widened_{operation})
+);
+----
+0
+
+# Reading through Iceberg can cast away a storage mismatch. Check every data file's
+# physical type AND integer annotation: TINYINT/SMALLINT also use physical INT32.
+statement ok
+BEGIN;
+
+statement ok
+SET VARIABLE widened_write_files = (
+	SELECT list(file_path) FROM iceberg_metadata('my_datalake.default.widened_{operation}')
+	WHERE manifest_content = 'DATA' AND status <> 'DELETED'
+);
+
+query III
+SELECT DISTINCT name, type, converted_type
+FROM parquet_schema(getvariable('widened_write_files'))
+WHERE num_children IS NULL
+ORDER BY name;
+----
+element	INT32	INT_32
+id	INT32	INT_32
+key	INT32	INT_32
+si	INT32	INT_32
+ti	INT32	INT_32
+ui	INT64	INT_64
+usi	INT32	INT_32
+uti	INT32	INT_32
+value	INT32	INT_32
+x	INT32	INT_32
+y	INT64	INT_64
+
+statement ok
+COMMIT;
+
+statement ok
+DROP TABLE my_datalake.default.widened_{operation};
+
+endloop
+
+statement ok
+DROP TABLE widened_write_input;

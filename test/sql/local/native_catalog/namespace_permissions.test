@@ -1,0 +1,333 @@
+# name: test/sql/local/native_catalog/namespace_permissions.test
+# description: Namespace permission errors are distinct from missing namespaces
+# group: [native_catalog]
+
+require-env CATALOG_TEST_CONFIG_SETUP mock
+
+include test/sql/init_requires
+
+require json
+
+statement ok
+CREATE MACRO deny_request(method, path, status_code) AS TABLE
+SELECT status FROM iceberg_test_catalog_request('POST', '/__test/response',
+	json_object('method', method, 'path', path, 'status', status_code,
+		'body', json_object('error', json_object(
+			'message', 'Insufficient Lake Formation permission(s): Required Describe',
+			'type', 'AccessDeniedException', 'code', status_code)))::VARCHAR);
+
+# Seed through the server so the reader has never cached the restricted namespace.
+query I
+SELECT status FROM iceberg_test_catalog_request('POST', '/v1/namespaces',
+	'{"namespace":["restricted_table"]}');
+----
+200
+
+query I
+SELECT status FROM iceberg_test_catalog_request('POST', '/v1/namespaces/restricted_table/tables',
+	'{"name":"t","schema":{"type":"struct","schema-id":0,
+	  "fields":[{"id":1,"name":"id","required":false,"type":"int"}]}}');
+----
+200
+
+statement ok
+CREATE TABLE my_datalake.default.visible (id INTEGER);
+
+statement ok
+CALL enable_logging('HTTP');
+
+statement ok
+SET VARIABLE catalog_config = (SELECT body FROM iceberg_test_catalog_request('GET', '/v1/config', NULL));
+
+# Exercise both GET-only catalogs and catalogs advertising namespace HEAD.
+foreach head false true
+
+query I
+SELECT status FROM iceberg_test_catalog_request('POST', '/__test/response',
+	json_object('method', 'GET', 'path', '/v1/config', 'status', 200,
+		'body', json_merge_patch(getvariable('catalog_config')::JSON, json_object('endpoints',
+			CASE WHEN {head} THEN to_json(list_append(
+				(getvariable('catalog_config')::JSON->'endpoints')::VARCHAR[],
+				'HEAD /v1/{prefix}/namespaces/{namespace}'))
+				ELSE getvariable('catalog_config')::JSON->'endpoints' END)))::VARCHAR);
+----
+204
+
+foreach status_code 403 401
+
+query I
+SELECT * FROM deny_request('GET', '/v1/namespaces/restricted_table', {status_code});
+----
+204
+
+query I
+SELECT * FROM deny_request('HEAD', '/v1/namespaces/restricted_table', {status_code});
+----
+204
+
+query I
+SELECT * FROM deny_request('GET', '/v1/namespaces/restricted_table/tables', {status_code});
+----
+204
+
+query I
+SELECT * FROM deny_request('GET', '/v1/namespaces/restricted_table/tables/t', {status_code});
+----
+204
+
+# Lake Formation filters the namespace out of discovery results.
+query I
+SELECT status FROM iceberg_test_catalog_request('POST', '/__test/response',
+	'{"method":"GET","path":"/v1/namespaces","status":200,
+	  "body":{"namespaces":[["default"]]}}');
+----
+204
+
+statement ok
+DETACH my_datalake;
+
+statement ok
+ATTACH '' AS my_datalake (TYPE ICEBERG, URI 'http://iceberg-mock.invalid',
+	AUTHORIZATION_TYPE 'none', ACCESS_DELEGATION_MODE 'none');
+
+query I
+SELECT count(*) FROM duckdb_schemas()
+WHERE database_name = 'my_datalake' AND schema_name = 'restricted_table';
+----
+0
+
+query I
+SELECT name FROM (SHOW ALL TABLES) WHERE database = 'my_datalake';
+----
+visible
+
+statement ok
+CALL truncate_duckdb_logs();
+
+statement error
+DROP SCHEMA my_datalake.restricted_table;
+----
+<REGEX>:.*HTTP (401|403).*
+
+statement error
+DROP SCHEMA IF EXISTS my_datalake.restricted_table;
+----
+<REGEX>:.*HTTP (401|403).*
+
+statement error
+CREATE SCHEMA IF NOT EXISTS my_datalake.restricted_table;
+----
+<REGEX>:.*HTTP (401|403).*
+
+# Permission failures must not stage mutations or fall back from HEAD to GET.
+query III
+SELECT count(*) FILTER (WHERE request.type IN ('POST', 'DELETE')),
+	count(*) FILTER (WHERE request.type = 'GET'
+		AND request.url LIKE '%/namespaces/restricted_table') = CASE WHEN {head} THEN 0 ELSE 3 END,
+	count(*) FILTER (WHERE request.type = 'HEAD'
+		AND request.url LIKE '%/namespaces/restricted_table') = CASE WHEN {head} THEN 3 ELSE 0 END
+FROM duckdb_logs_parsed('HTTP');
+----
+0	true	true
+
+statement error
+SHOW TABLES FROM my_datalake.restricted_table;
+----
+Insufficient Lake Formation permission(s): Required Describe
+
+statement error
+SELECT * FROM my_datalake.restricted_table.t;
+----
+Insufficient Lake Formation permission(s): Required Describe
+
+# Discovery can still enumerate the accessible tables after a direct lookup failed.
+query I
+SELECT name FROM (SHOW ALL TABLES) WHERE database = 'my_datalake';
+----
+visible
+
+# A refused discovery scan must not hide a later explicit lookup in the same transaction.
+statement ok
+BEGIN;
+
+query I
+SELECT name FROM (SHOW ALL TABLES) WHERE database = 'my_datalake';
+----
+visible
+
+statement error
+SHOW TABLES FROM my_datalake.restricted_table;
+----
+Insufficient Lake Formation permission(s): Required Describe
+
+statement ok
+ROLLBACK;
+
+endloop
+
+query I
+SELECT status FROM iceberg_test_catalog_request('DELETE', '/__test/response', NULL);
+----
+204
+
+endloop
+
+# Real 404 responses retain normal IF EXISTS / IF NOT EXISTS semantics.
+statement error
+DROP SCHEMA my_datalake.restricted_no_such_db;
+----
+does not exist
+
+statement ok
+DROP SCHEMA IF EXISTS my_datalake.restricted_no_such_db;
+
+statement ok
+CREATE SCHEMA IF NOT EXISTS my_datalake.restricted_no_such_db;
+
+statement ok
+CREATE SCHEMA IF NOT EXISTS my_datalake.restricted_no_such_db;
+
+statement ok
+DROP SCHEMA my_datalake.restricted_no_such_db;
+
+# Clearing permission failures allows the previously refused schema to resolve.
+query I
+SHOW TABLES FROM my_datalake.restricted_table;
+----
+t
+
+query I
+SELECT count(*) FROM my_datalake.restricted_table.t;
+----
+0
+
+# Listing and loading a table may have different permissions. A listed namespace
+# whose table listing is denied must not break catalog-wide discovery, and a
+# permitted LoadTable must not require GetNamespace or ListTables permission.
+foreach status_code 403 401
+
+query I
+SELECT * FROM deny_request('GET', '/v1/namespaces/restricted_table', {status_code});
+----
+204
+
+query I
+SELECT * FROM deny_request('GET', '/v1/namespaces/restricted_table/tables', {status_code});
+----
+204
+
+statement ok
+DETACH my_datalake;
+
+statement ok
+ATTACH '' AS my_datalake (TYPE ICEBERG, URI 'http://iceberg-mock.invalid',
+	AUTHORIZATION_TYPE 'none', ACCESS_DELEGATION_MODE 'none');
+
+query I
+SELECT name FROM (SHOW ALL TABLES) WHERE database = 'my_datalake';
+----
+visible
+
+statement ok
+CALL truncate_duckdb_logs();
+
+query I
+SELECT count(*) FROM my_datalake.restricted_table.t;
+----
+0
+
+query II
+SELECT count(*) FILTER (WHERE request.url LIKE '%/namespaces/restricted_table/tables/t'),
+	count(*) FILTER (WHERE request.url LIKE '%/namespaces/restricted_table'
+		OR request.url LIKE '%/namespaces/restricted_table/tables')
+FROM duckdb_logs_parsed('HTTP');
+----
+1	0
+
+statement error
+SHOW TABLES FROM my_datalake.restricted_table;
+----
+Insufficient Lake Formation permission(s): Required Describe
+
+# A refused listing does not discard an already resolved table from the cache.
+query I rowsort
+SELECT name FROM (SHOW ALL TABLES) WHERE database = 'my_datalake';
+----
+t
+visible
+
+# A denied namespace enumeration must not prevent explicit, permitted table access.
+query I
+SELECT * FROM deny_request('GET', '/v1/namespaces', {status_code});
+----
+204
+
+statement ok
+DETACH my_datalake;
+
+statement ok
+ATTACH '' AS my_datalake (TYPE ICEBERG, URI 'http://iceberg-mock.invalid',
+	AUTHORIZATION_TYPE 'none', ACCESS_DELEGATION_MODE 'none');
+
+query I
+SELECT count(*) FROM duckdb_schemas() WHERE database_name = 'my_datalake';
+----
+0
+
+query I
+SELECT count(*) FROM my_datalake.restricted_table.t;
+----
+0
+
+query I
+SELECT status FROM iceberg_test_catalog_request('DELETE', '/__test/response', NULL);
+----
+204
+
+endloop
+
+# A later page's permission error must not publish a partial listing.
+query I
+SELECT status FROM iceberg_test_catalog_request('POST', '/__test/response',
+	'{"method":"GET","path":"/v1/namespaces/default/tables","status":200,
+	  "body":{"identifiers":[{"namespace":["default"],"name":"visible"}],"next-page-token":"denied-page"}}');
+----
+204
+
+query I
+SELECT * FROM deny_request('GET', '/v1/namespaces/default/tables?pageToken=denied-page', 403);
+----
+204
+
+statement ok
+DETACH my_datalake;
+
+statement ok
+ATTACH '' AS my_datalake (TYPE ICEBERG, URI 'http://iceberg-mock.invalid',
+	AUTHORIZATION_TYPE 'none', ACCESS_DELEGATION_MODE 'none');
+
+statement ok
+BEGIN;
+
+query II
+SELECT schema, name FROM (SHOW ALL TABLES) WHERE database = 'my_datalake';
+----
+restricted_table	t
+
+statement error
+SHOW TABLES FROM my_datalake.default;
+----
+Insufficient Lake Formation permission(s): Required Describe
+
+statement ok
+ROLLBACK;
+
+query I
+SELECT status FROM iceberg_test_catalog_request('DELETE', '/__test/response', NULL);
+----
+204
+
+query I
+SHOW TABLES FROM my_datalake.default;
+----
+visible

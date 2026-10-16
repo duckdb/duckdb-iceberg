@@ -3,13 +3,7 @@
 
 require-env CATALOG_TEST_CONFIG_SETUP
 
-require avro
-
-require parquet
-
-require iceberg
-
-require httpfs
+include test/sql/init_requires
 
 statement ok
 SET default_transaction_invalidation_policy='SYNTACTIC_ERRORS_DO_NOT_INVALIDATE';
@@ -80,27 +74,14 @@ select evolve_to_long from my_datalake.default.schema_evolution_table;
 23123425
 9223372036854775807
 
-# ---- DATE -> TIMESTAMP ----
+# ---- DATE -> TIMESTAMP (V2) ----
 
-statement ok
+# date -> timestamp is a V3 type promotion (see the Iceberg spec's type
+# promotion table), so it must be rejected on a V2 table.
+statement error
 ALTER TABLE my_datalake.default.schema_evolution_table ALTER evolve_to_timestamp TYPE TIMESTAMP;
-
-query I
-select evolve_to_timestamp from my_datalake.default.schema_evolution_table where evolve_to_timestamp IS NOT NULL;
 ----
-1983-05-21 00:00:00
-
-statement ok
-insert into my_datalake.default.schema_evolution_table(evolve_to_timestamp) VALUES
-	(
-		'2013/11/23 19:53:12'::TIMESTAMP, -- evolve_to_timestamp
-	);
-
-query I
-select evolve_to_timestamp from my_datalake.default.schema_evolution_table where evolve_to_timestamp IS NOT NULL order by all;
-----
-1983-05-21 00:00:00
-2013-11-23 19:53:12
+Catalog Error: Column 'evolve_to_timestamp' of type 'DATE' can't be altered to type 'TIMESTAMP' (DATE to TIMESTAMP is an Iceberg V3 feature)
 
 # ---- DATE -> TIMESTAMP_NS (V2) ----
 
@@ -108,7 +89,7 @@ select evolve_to_timestamp from my_datalake.default.schema_evolution_table where
 statement error
 ALTER TABLE my_datalake.default.schema_evolution_table ALTER evolve_to_timestamp_ns TYPE TIMESTAMP_NS;
 ----
-Catalog Error: Column 'evolve_to_timestamp_ns' of type 'DATE' can't be altered to type 'TIMESTAMP_NS' (DATE to TIMESTAMP_NS is a Iceberg V3 feature)
+Catalog Error: Column 'evolve_to_timestamp_ns' of type 'DATE' can't be altered to type 'TIMESTAMP_NS' (DATE to TIMESTAMP_NS is an Iceberg V3 feature)
 
 # ---- FLOAT -> DOUBLE ----
 
@@ -195,3 +176,38 @@ statement error
 ALTER TABLE my_datalake.default.schema_evolution_table ALTER evolve_to_timestamp_partitioned TYPE TIMESTAMP;
 ----
 Catalog Error: Column 'evolve_to_timestamp_partitioned' of type 'DATE' can't be altered to type 'TIMESTAMP' (there is a partition field that refers to the column (name: year_evolve_to_timestamp_partitioned_1, partition_field_id: 1000))
+
+# Nested type promotion must reference the exact field being altered.
+statement ok
+drop table my_datalake.default.schema_evolution_table;
+
+statement ok
+create table my_datalake.default.schema_evolution_table (s STRUCT(a INTEGER, b INTEGER));
+
+statement ok
+insert into my_datalake.default.schema_evolution_table values ({'a': 42, 'b': 7});
+
+statement error
+ALTER TABLE my_datalake.default.schema_evolution_table ALTER s.a TYPE BIGINT USING s.b::BIGINT;
+----
+ALTER TYPE with a USING expression is not supported for Iceberg tables
+
+statement ok
+ALTER TABLE my_datalake.default.schema_evolution_table ALTER s.a TYPE BIGINT;
+
+query IIII
+select typeof(s.a), typeof(s.b), s.a, s.b from my_datalake.default.schema_evolution_table;
+----
+BIGINT	INTEGER	42	7
+
+statement ok
+insert into my_datalake.default.schema_evolution_table values ({'a': 9223372036854775807, 'b': 8});
+
+query II rowsort
+select s.a, s.b from my_datalake.default.schema_evolution_table;
+----
+42	7
+9223372036854775807	8
+
+statement ok
+drop table my_datalake.default.schema_evolution_table;

@@ -4,13 +4,11 @@
 
 require-env CATALOG_TEST_CONFIG_SETUP
 
-require avro
+require-env METADATA_FILE_READ_SUPPORT
 
-require parquet
+require-env METADATA_LOG_SUPPORT
 
-require iceberg
-
-require httpfs
+include test/sql/init_requires
 
 require core_functions
 

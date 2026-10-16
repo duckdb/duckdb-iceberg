@@ -13,6 +13,82 @@
 		{
 			"env_name": "CATALOG_TEST_CONFIG_SETUP",
 			"env_value": "polaris"
+		},
+		{
+			"env_name": "FORMAT_V3_SUPPORT",
+			"env_value": "true"
+		},
+		{
+			"env_name": "UNKNOWN_SUPPORT",
+			"env_value": "true"
+		},
+		{
+			"env_name": "VARIANT_SUPPORT",
+			"env_value": "true"
+		},
+		{
+			"env_name": "GEOMETRY_SUPPORT",
+			"env_value": "true"
+		},
+		{
+			"env_name": "TIMESTAMP_NS_SUPPORT",
+			"env_value": "true"
+		},
+		{
+			"env_name": "COLUMN_DEFAULT_SUPPORT",
+			"env_value": "true"
+		},
+		{
+			"env_name": "TIMESTAMPTZ_NS_DEFAULT_SUPPORT",
+			"env_value": "true"
+		},
+		{
+			"env_name": "TIMESTAMP_NS_DEFAULT_SUPPORT",
+			"env_value": "true"
+		},
+		{
+			"env_name": "FILE_CLEANUP_SUPPORT",
+			"env_value": "true"
+		},
+		{
+			"env_name": "TIMETRAVEL_SUPPORT",
+			"env_value": "true"
+		},
+		{
+			"env_name": "SNAPSHOT_HISTORY_SUPPORT",
+			"env_value": "true"
+		},
+		{
+			"env_name": "METADATA_LOG_SUPPORT",
+			"env_value": "true"
+		},
+		{
+			"env_name": "METADATA_FILE_READ_SUPPORT",
+			"env_value": "true"
+		},
+		{
+			"env_name": "STAGED_CREATE_SUPPORT",
+			"env_value": "true"
+		},
+		{
+			"env_name": "MULTI_TABLE_COMMIT_SUPPORT",
+			"env_value": "true"
+		},
+		{
+			"env_name": "NAMESPACE_PROPERTIES_SUPPORT",
+			"env_value": "true"
+		},
+		{
+			"env_name": "CASE_SENSITIVE_TABLE_NAMES_SUPPORT",
+			"env_value": "true"
+		},
+		{
+			"env_name": "VIEW_SUPPORT",
+			"env_value": "true"
+		},
+		{
+			"env_name": "SCAN_PLANNING_MODE",
+			"env_value": "client"
 		}
 	],
 	"skip_tests": [
@@ -27,19 +103,11 @@
 		{
 			"reason": "For some reason the tables cannot be generated in polaris yet",
 			"paths": [
-				"test/sql/local/catalog_test_config_setup/catalog_agnostic/insert/test_insert_into_sorted_table_fails.test",
-				"test/sql/local/catalog_test_config_setup/catalog_agnostic/update/test_update_into_sorted_table_fails.test",
 				"test/sql/local/catalog_test_config_setup/catalog_agnostic/reads/test_requests_to_partitioned_table.test",
-				"test/sql/local/catalog_test_config_setup/catalog_agnostic/reads/read_mor_delete_partition_evolution.test",
-				"test/sql/local/catalog_test_config_setup/catalog_agnostic/irc_catalog_read_deletes.test",
-				"test/sql/local/catalog_test_config_setup/catalog_agnostic/insert/test_read_upper_and_lower_bounds.test",
+				"test/sql/local/catalog_test_config_setup/catalog_interop/reads/read_mor_delete_partition_evolution.test",
+				"test/sql/local/catalog_test_config_setup/catalog_interop/irc_catalog_read_deletes.test",
+				"test/sql/local/catalog_test_config_setup/catalog_interop/insert/test_read_upper_and_lower_bounds.test",
 				"test/sql/local/catalog_test_config_setup/catalog_agnostic/iceberg_catalog_eager_refresh.test"
-			]
-		},
-		{
-			"reason": "TIMESTAMP_NS CREATE DEFAULT: catalog rejects this with 400 BAD REQUEST",
-			"paths": [
-				"test/sql/local/catalog_test_config_setup/catalog_agnostic/create/default/test_create_default_timestamp_ns.test"
 			]
 		},
 		{
@@ -52,11 +120,11 @@
 			"reason": "Need to reparse paths",
 			"paths": [
 				"test/sql/local/catalog_test_config_setup/catalog_agnostic/delete/delete_table.test",
-				"test/sql/local/catalog_test_config_setup/catalog_agnostic/insert/test_write_upper_and_lower_bounds_single_values.test",
-				"test/sql/local/catalog_test_config_setup/catalog_agnostic/insert/test_write_upper_and_lower_bounds_all_null.test",
-				"test/sql/local/catalog_test_config_setup/catalog_agnostic/insert/test_write_upper_and_lower_bounds.test",
-				"test/sql/local/catalog_test_config_setup/catalog_agnostic/insert/test_write_decimal_bounds_hugeint.test",
-				"test/sql/local/catalog_test_config_setup/catalog_agnostic/insert/test_write_decimal_bounds.test"
+				"test/sql/local/catalog_test_config_setup/catalog_interop/insert/test_write_upper_and_lower_bounds_single_values.test",
+				"test/sql/local/catalog_test_config_setup/catalog_interop/insert/test_write_upper_and_lower_bounds_all_null.test",
+				"test/sql/local/catalog_test_config_setup/catalog_interop/insert/test_write_upper_and_lower_bounds.test",
+				"test/sql/local/catalog_test_config_setup/catalog_interop/insert/test_write_decimal_bounds_hugeint.test",
+				"test/sql/local/catalog_test_config_setup/catalog_interop/insert/test_write_decimal_bounds.test"
 			]
 		},
 		{
@@ -68,7 +136,7 @@
 		{
 			"reason": "Inserting into Nessie triggers Relassert error that does not reproduce locally",
 			"paths": [
-				"test/sql/local/catalog_test_config_setup/catalog_agnostic/file_properties/test_parquet_options_physical_properties.test"
+				"test/sql/local/catalog_test_config_setup/catalog_agnostic/file_properties/test_parquet_options_physical_properties.test_slow"
 			]
 		}
 	]

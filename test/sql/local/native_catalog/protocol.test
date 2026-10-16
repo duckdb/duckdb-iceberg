@@ -1,0 +1,320 @@
+# name: test/sql/local/native_catalog/protocol.test
+# description: Independent native catalog REST contracts and atomic validation
+# group: [native_catalog]
+
+require-env CATALOG_TEST_CONFIG_SETUP mock
+
+include test/sql/init_requires
+
+require json
+
+statement ok
+CALL iceberg_test_catalog_init('{TEMP_DIR}/iceberg-native');
+
+query II
+SELECT status, json_extract_string(body, '$.error.type')
+FROM iceberg_test_catalog_request('POST', '/v1/namespaces', '{');
+----
+400	ValidationException
+
+query I
+SELECT status FROM iceberg_test_catalog_request('POST', '/v1/namespaces', '[]');
+----
+400
+
+query I
+SELECT status FROM iceberg_test_catalog_request('POST', '/v1/namespaces', repeat(' ', 16777217));
+----
+400
+
+query II
+SELECT status, json_extract_string(body, '$.error.type')
+FROM iceberg_test_catalog_request('GET', '/v1/unknown', NULL);
+----
+501	UnsupportedOperationException
+
+query II
+SELECT status, body FROM iceberg_test_catalog_request('HEAD', '/v1/unknown', NULL);
+----
+501	(empty)
+
+query I
+SELECT status FROM iceberg_test_catalog_request('POST', '/v1/namespaces', '{"namespace":["protocol"]}');
+----
+200
+
+query II
+SELECT status, json_extract_string(body, '$.error.type')
+FROM iceberg_test_catalog_request('POST', '/v1/namespaces', '{"namespace":["protocol"]}');
+----
+409	AlreadyExistsException
+
+query I
+SELECT status FROM iceberg_test_catalog_request('POST', '/v1/namespaces',
+	'{"namespace":["protocol","slash/name +"]}');
+----
+200
+
+query II
+SELECT status, json_extract_string(body, '$.namespace[1]')
+FROM iceberg_test_catalog_request('GET', '/v1/namespaces/protocol%1Fslash%2Fname%20%2B', NULL);
+----
+200	slash/name +
+
+query I
+SELECT json_extract_string(body, '$.namespaces[0][1]')
+FROM iceberg_test_catalog_request('GET', '/v1/namespaces?parent=protocol', NULL);
+----
+slash/name +
+
+query II
+SELECT status, json_extract_string(body, '$.missing[0]')
+FROM iceberg_test_catalog_request('POST', '/v1/namespaces/protocol/properties',
+	'{"updates":{"kept":"yes","changed":"before"},"removals":["absent"]}');
+----
+200	absent
+
+query I
+SELECT status FROM iceberg_test_catalog_request('POST', '/v1/namespaces/protocol/properties',
+	'{"updates":{"changed":"after"},"removals":["changed"]}');
+----
+422
+
+query II
+SELECT json_extract_string(body, '$.properties.kept'), json_extract_string(body, '$.properties.changed')
+FROM iceberg_test_catalog_request('GET', '/v1/namespaces/protocol', NULL);
+----
+yes	before
+
+statement ok
+SET VARIABLE native_create = '{"name":"t","schema":{"type":"struct","schema-id":0,"fields":[{"id":1,"name":"id","required":false,"type":"int"}]},"stage-create":true}';
+
+statement ok
+SET VARIABLE native_staged = (
+	SELECT body FROM iceberg_test_catalog_request('POST', '/v1/namespaces/protocol/tables', getvariable('native_create'))
+);
+
+statement ok
+SET VARIABLE native_uuid = json_extract_string(getvariable('native_staged'), '$.metadata."table-uuid"');
+
+query I
+SELECT status FROM iceberg_test_catalog_request('GET', '/v1/namespaces/protocol/tables/t', NULL);
+----
+404
+
+query I
+SELECT status FROM iceberg_test_catalog_request('POST', '/v1/namespaces/protocol/tables/other',
+	'{"requirements":[{"type":"assert-create"}],"updates":[{"action":"assign-uuid","uuid":"' || getvariable('native_uuid') || '"}]}');
+----
+400
+
+query I
+SELECT status FROM iceberg_test_catalog_request('POST', '/v1/namespaces/protocol/tables/t',
+	'{"requirements":[{"type":"assert-create"}],"updates":[{"action":"assign-uuid","uuid":"' || getvariable('native_uuid') || '"}]}');
+----
+200
+
+query II
+SELECT status, json_extract_string(body, '$.error.type')
+FROM iceberg_test_catalog_request('POST', '/v1/namespaces/protocol/tables/t',
+	'{"requirements":[{"type":"assert-create"}],"updates":[]}');
+----
+409	CommitFailedException
+
+# All supported requirements are evaluated against the original published metadata.
+query I
+SELECT status FROM iceberg_test_catalog_request('POST', '/v1/namespaces/protocol/tables/t',
+	'{"requirements":[
+		{"type":"assert-table-uuid","uuid":"' || getvariable('native_uuid') || '"},
+		{"type":"assert-current-schema-id","current-schema-id":0},
+		{"type":"assert-last-assigned-field-id","last-assigned-field-id":1},
+		{"type":"assert-last-assigned-partition-id","last-assigned-partition-id":999},
+		{"type":"assert-default-spec-id","default-spec-id":0},
+		{"type":"assert-default-sort-order-id","default-sort-order-id":0},
+		{"type":"assert-ref-snapshot-id","ref":"main","snapshot-id":null}
+	],"updates":[{"action":"set-properties","updates":{"probe":"before"}}]}');
+----
+200
+
+foreach requirement assert-current-schema-id assert-last-assigned-field-id assert-last-assigned-partition-id assert-default-spec-id assert-default-sort-order-id
+
+# A missing requirement operand is malformed, never implicitly successful.
+query I
+SELECT status FROM iceberg_test_catalog_request('POST', '/v1/namespaces/protocol/tables/t',
+	'{"requirements":[{"type":"{requirement}"}],"updates":[]}');
+----
+400
+
+endloop
+
+query I
+SELECT status FROM iceberg_test_catalog_request('POST', '/v1/namespaces/protocol/tables/t',
+	'{"requirements":[{"type":"not-a-requirement"}],"updates":[]}');
+----
+400
+
+# The first update must not leak if a later one fails.
+query I
+SELECT status FROM iceberg_test_catalog_request('POST', '/v1/namespaces/protocol/tables/t',
+	'{"requirements":[],"updates":[{"action":"set-properties","updates":{"probe":"after"}},{"action":"not-an-update"}]}');
+----
+400
+
+query I
+SELECT json_extract_string(body, '$.metadata.properties.probe')
+FROM iceberg_test_catalog_request('GET', '/v1/namespaces/protocol/tables/t', NULL);
+----
+before
+
+query I
+SELECT status FROM iceberg_test_catalog_request('POST', '/v1/namespaces/protocol/tables/t',
+	'{"requirements":[],"updates":[{"action":"set-current-schema","schema-id":-1}]}');
+----
+400
+
+# A valid v2 snapshot, then an upgrade, then a v3 snapshot in one ordered commit.
+query I
+SELECT status FROM iceberg_test_catalog_request('POST', '/v1/namespaces/protocol/tables/t',
+	'{"requirements":[],"updates":[
+		{"action":"add-snapshot","snapshot":{"snapshot-id":10,"sequence-number":1,"schema-id":0,"timestamp-ms":100,"manifest-list":"v2.avro","summary":{"operation":"append"}}},
+		{"action":"set-snapshot-ref","ref-name":"main","type":"branch","snapshot-id":10},
+		{"action":"upgrade-format-version","format-version":3},
+		{"action":"add-snapshot","snapshot":{"snapshot-id":11,"sequence-number":2,"parent-snapshot-id":10,"schema-id":0,"timestamp-ms":200,"manifest-list":"v3.avro","first-row-id":4,"added-rows":3,"summary":{"operation":"append"}}},
+		{"action":"set-snapshot-ref","ref-name":"main","type":"branch","snapshot-id":11}
+	]}');
+----
+200
+
+query III
+SELECT json_extract_string(body, '$.metadata."format-version"'),
+	json_extract_string(body, '$.metadata."next-row-id"'),
+	json_extract_string(body, '$.metadata."current-snapshot-id"')
+FROM iceberg_test_catalog_request('GET', '/v1/namespaces/protocol/tables/t', NULL);
+----
+3	7	11
+
+query I
+SELECT status FROM iceberg_test_catalog_request('POST', '/v1/namespaces/protocol/tables/t',
+	'{"requirements":[],"updates":[{"action":"upgrade-format-version","format-version":2}]}');
+----
+400
+
+query II
+SELECT status, json_extract_string(body, '$.error.type')
+FROM iceberg_test_catalog_request('POST', '/v1/namespaces/protocol/tables/t',
+	'{"requirements":[],"updates":[{"action":"add-snapshot","snapshot":{"snapshot-id":12,"sequence-number":3,"schema-id":0,"timestamp-ms":300,"manifest-list":"overlap.avro","first-row-id":6,"added-rows":1,"summary":{"operation":"append"}}}]}');
+----
+409	CommitFailedException
+
+query I
+SELECT status FROM iceberg_test_catalog_request('POST', '/v1/namespaces/protocol/tables/t',
+	'{"requirements":[],"updates":[{"action":"add-snapshot","snapshot":{"snapshot-id":12,"sequence-number":3,"schema-id":0,"timestamp-ms":300,"manifest-list":"overflow.avro","first-row-id":9223372036854775807,"added-rows":1,"summary":{"operation":"append"}}}]}');
+----
+400
+
+query I
+SELECT status FROM iceberg_test_catalog_request('DELETE', '/v1/namespaces/protocol/tables/t?purgeRequested=true', NULL);
+----
+501
+
+# Schema, partition, sort and property updates use the same ordered replay.
+query I
+SELECT status FROM iceberg_test_catalog_request('POST', '/v1/namespaces/protocol/tables/t',
+	'{"requirements":[],"updates":[
+		{"action":"add-schema","schema":{"type":"struct","schema-id":1,"fields":[{"id":1,"name":"id","required":false,"type":"int"},{"id":2,"name":"value","required":false,"type":"long","write-default":5}]},"last-column-id":7},
+		{"action":"set-current-schema","schema-id":-1},
+		{"action":"add-spec","spec":{"spec-id":2,"fields":[{"source-id":1,"field-id":1000,"name":"part","transform":"identity"}]}},
+		{"action":"set-default-spec","spec-id":-1},
+		{"action":"add-sort-order","sort-order":{"order-id":2,"fields":[{"source-id":2,"transform":"identity","direction":"asc","null-order":"nulls-first"}]}},
+		{"action":"set-default-sort-order","sort-order-id":-1},
+		{"action":"set-properties","updates":{"remove":"yes"}},
+		{"action":"remove-properties","removals":["remove"]},
+		{"action":"set-location","location":' || to_json(json_extract_string(getvariable('native_staged'), '$.metadata.location')) || '}
+	]}');
+----
+200
+
+query I
+SELECT status FROM iceberg_test_catalog_request('POST', '/v1/namespaces/protocol/tables/t',
+	'{"requirements":[
+		{"type":"assert-current-schema-id","current-schema-id":1},
+		{"type":"assert-last-assigned-field-id","last-assigned-field-id":7},
+		{"type":"assert-last-assigned-partition-id","last-assigned-partition-id":1000},
+		{"type":"assert-default-spec-id","default-spec-id":2},
+		{"type":"assert-default-sort-order-id","default-sort-order-id":2},
+		{"type":"assert-ref-snapshot-id","ref":"main","snapshot-id":11}
+	],"updates":[]}');
+----
+200
+
+query I
+SELECT status FROM iceberg_test_catalog_request('POST', '/v1/namespaces/protocol/tables/t',
+	'{"requirements":[],"updates":[
+		{"action":"add-schema","schema":{"type":"struct","schema-id":2,"fields":[{"id":1,"name":"id","required":false,"type":"int"}]}},
+		{"action":"set-current-schema","schema-id":-1}
+	]}');
+----
+400
+
+query I
+SELECT status FROM iceberg_test_catalog_request('POST', '/v1/namespaces/protocol/tables/t',
+	'{"requirements":[],"updates":[{"action":"set-snapshot-ref","ref-name":"main","type":"branch","snapshot-id":10}]}');
+----
+200
+
+query III
+SELECT json_extract_string(body, '$.metadata."current-schema-id"'),
+	json_extract_string(body, '$.metadata."next-row-id"'),
+	json_extract_string(body, '$.metadata."current-snapshot-id"')
+FROM iceberg_test_catalog_request('GET', '/v1/namespaces/protocol/tables/t', NULL);
+----
+1	7	10
+
+# Renaming changes only the catalog identifier, including across encoded namespaces.
+statement ok
+SET VARIABLE native_before_rename = (
+	SELECT body FROM iceberg_test_catalog_request('GET', '/v1/namespaces/protocol/tables/t', NULL)
+);
+
+query I
+SELECT status FROM iceberg_test_catalog_request('POST', '/v1/tables/rename',
+	'{"source":{"namespace":["protocol"],"name":"t"},"destination":{"namespace":["protocol","slash/name +"],"name":"renamed"}}');
+----
+204
+
+query I
+SELECT body = getvariable('native_before_rename')
+FROM iceberg_test_catalog_request('GET', '/v1/namespaces/protocol%1Fslash%2Fname%20%2B/tables/renamed', NULL);
+----
+true
+
+query I
+SELECT status FROM iceberg_test_catalog_request('GET', '/v1/namespaces/protocol/tables/t', NULL);
+----
+404
+
+query I
+SELECT status FROM iceberg_test_catalog_request('POST', '/v1/tables/rename',
+	'{"source":{"namespace":["protocol","slash/name +"],"name":"renamed"},"destination":{"namespace":["protocol"],"name":"t"}}');
+----
+204
+
+query I
+SELECT status FROM iceberg_test_catalog_request('DELETE', '/v1/namespaces/protocol', NULL);
+----
+409
+
+query I
+SELECT status FROM iceberg_test_catalog_request('DELETE', '/v1/namespaces/protocol/tables/t', NULL);
+----
+204
+
+query I
+SELECT status FROM iceberg_test_catalog_request('DELETE', '/v1/namespaces/protocol%1Fslash%2Fname%20%2B', NULL);
+----
+204
+
+query I
+SELECT status FROM iceberg_test_catalog_request('DELETE', '/v1/namespaces/protocol', NULL);
+----
+204

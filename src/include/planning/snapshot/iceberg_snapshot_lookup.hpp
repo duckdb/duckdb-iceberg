@@ -24,9 +24,8 @@ public:
 	static IcebergSnapshotLookup FromSnapshotId(int64_t snapshot_id) {
 		return IcebergSnapshotLookup(SnapshotFromId(snapshot_id));
 	}
-	static IcebergSnapshotLookup FromTimestamp(timestamp_ms_t snapshot_timestamp) {
-		return IcebergSnapshotLookup(SnapshotFromTimestamp(snapshot_timestamp));
-	}
+	//! Throws if 'snapshot_timestamp' lies beyond the current time
+	static IcebergSnapshotLookup FromTimestamp(timestamp_ms_t snapshot_timestamp);
 	static IcebergSnapshotLookup FromAtClause(optional_ptr<BoundAtClause> at);
 
 public:

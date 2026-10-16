@@ -1,0 +1,126 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/transactions/test_pending_manifest_scan_identity.test
+# description: Pending manifests retain their spec without inventing lineage across reads, commit, and rollback.
+# group: [transactions]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require-env FORMAT_V3_SUPPORT
+
+include test/sql/init_requires
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.pending_manifest_scan_identity;
+
+statement ok
+CREATE TABLE my_datalake.default.pending_manifest_scan_identity (id INTEGER, p INTEGER)
+PARTITIONED BY (p) WITH ('format-version' = 3);
+
+statement ok
+INSERT INTO my_datalake.default.pending_manifest_scan_identity VALUES (0, 0);
+
+statement ok
+BEGIN;
+
+statement ok
+INSERT INTO my_datalake.default.pending_manifest_scan_identity VALUES (1, 10), (2, 10);
+
+# The earlier pending manifest must still use its original partition spec.
+statement ok
+ALTER TABLE my_datalake.default.pending_manifest_scan_identity SET PARTITIONED BY (id);
+
+statement ok
+INSERT INTO my_datalake.default.pending_manifest_scan_identity VALUES (3, 20);
+
+# Pruning earlier manifests must not assign lineage to later pending rows.
+query III
+SELECT id, _row_id, _last_updated_sequence_number
+FROM my_datalake.default.pending_manifest_scan_identity WHERE p = 20;
+----
+3	NULL	NULL
+
+# Rebuilding a scan view must not advance transaction state.
+query III
+SELECT id, _row_id, _last_updated_sequence_number
+FROM my_datalake.default.pending_manifest_scan_identity WHERE p = 20;
+----
+3	NULL	NULL
+
+query III
+SELECT id, _row_id, _last_updated_sequence_number
+FROM my_datalake.default.pending_manifest_scan_identity WHERE p = 10 ORDER BY id;
+----
+1	NULL	NULL
+2	NULL	NULL
+
+statement ok
+DELETE FROM my_datalake.default.pending_manifest_scan_identity WHERE id = 1;
+
+statement ok
+INSERT INTO my_datalake.default.pending_manifest_scan_identity VALUES (4, 30);
+
+# Deletes retain their internal ordering while pending lineage remains unknown.
+query III
+SELECT id, _row_id, _last_updated_sequence_number
+FROM my_datalake.default.pending_manifest_scan_identity ORDER BY id;
+----
+0	0	1
+2	NULL	NULL
+3	NULL	NULL
+4	NULL	NULL
+
+statement ok
+COMMIT;
+
+query III
+SELECT id, _row_id, _last_updated_sequence_number
+FROM my_datalake.default.pending_manifest_scan_identity ORDER BY id;
+----
+0	0	1
+2	2	2
+3	3	3
+4	4	5
+
+statement ok
+BEGIN;
+
+statement ok
+INSERT INTO my_datalake.default.pending_manifest_scan_identity VALUES (5, 40);
+
+query III
+SELECT id, _row_id, _last_updated_sequence_number
+FROM my_datalake.default.pending_manifest_scan_identity WHERE id = 5;
+----
+5	NULL	NULL
+
+statement ok
+ROLLBACK;
+
+query I
+SELECT count(*) FROM my_datalake.default.pending_manifest_scan_identity WHERE id = 5;
+----
+0
+
+# A fresh transaction also waits for commit to assign new lineage.
+statement ok
+BEGIN;
+
+statement ok
+INSERT INTO my_datalake.default.pending_manifest_scan_identity VALUES (6, 50);
+
+query III
+SELECT id, _row_id, _last_updated_sequence_number
+FROM my_datalake.default.pending_manifest_scan_identity WHERE id = 6;
+----
+6	NULL	NULL
+
+statement ok
+COMMIT;
+
+query III
+SELECT id, _row_id, _last_updated_sequence_number
+FROM my_datalake.default.pending_manifest_scan_identity WHERE id = 6;
+----
+6	5	6
+
+statement ok
+DROP TABLE my_datalake.default.pending_manifest_scan_identity;

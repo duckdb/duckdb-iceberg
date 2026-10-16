@@ -85,8 +85,21 @@ jobs:
         with:
           build-type: relassert
           build: python3 duckdb/scripts/ci/retry.py -- make relassert
-          vcpkg-commit: 84bab45d415d22042bd0b9081aea57f362da3f35
-          bundle: bash duckdb/scripts/prepare_build_artifact.sh relassert
+          test: ./build/relassert/test/unittest_iceberg_native
+          vcpkg-commit: cd61e1e26a038e82d6550a3ebbe0fbbfe7da78e3 # Release 2026.06.24
+          bundle: |
+            # Python needs the same ASan/UBSan runtime as the instrumented library.
+            # Put it in the repository so prepare_build_artifact.sh carries it along.
+            runtime="$("$CXX" -print-file-name="libclang_rt.asan-$(uname -m).so")"
+            if [[ ! -f "$runtime" ]]; then
+              runtime="$(find "$("$CXX" -print-resource-dir)" -name "libclang_rt.asan-$(uname -m).so" -print -quit)"
+            fi
+            test -f "$runtime"
+            mkdir -p build/relassert/repository/capi_runtime
+            cp "$runtime" build/relassert/repository/capi_runtime/
+            bash duckdb/scripts/prepare_build_artifact.sh relassert
+            # Exercise the packaged layout, without requiring a catalog service.
+            python3 test/python/test_python_ctas.py check_build build/relassert-artifact/relassert
           upload-name: duckdb-iceberg
           upload-path: build/relassert-artifact.tar.gz
 
@@ -110,11 +123,27 @@ jobs:
         with:
           build-type: release
           build: python3 duckdb/scripts/ci/retry.py -- make release
-          vcpkg-commit: 84bab45d415d22042bd0b9081aea57f362da3f35
-          bundle: bash duckdb/scripts/prepare_build_artifact.sh release
+          vcpkg-commit: cd61e1e26a038e82d6550a3ebbe0fbbfe7da78e3 # Release 2026.06.24
+          bundle: |
+            bash duckdb/scripts/prepare_build_artifact.sh release
+            python3 test/python/test_python_ctas.py check_build build/release-artifact/release
           upload-name: duckdb-iceberg-equality-delete-support
 
-  # Fixture catalog acts as the smoke test: it must pass before we spend CI on the other catalogs.
+  test-mock:
+    name: Test against mock REST catalog
+    needs: build_iceberg
+    uses: ./.github/workflows/test-mock-catalog.yml
+    with:
+      artifact-name: duckdb-iceberg
+
+  test-native:
+    name: Test against native REST catalog
+    needs: build_iceberg
+    uses: ./.github/workflows/test-native-catalog.yml
+    with:
+      artifact-name: duckdb-iceberg
+
+  # Fixture catalog acts as the smoke test: it must pass before we spend CI on the other real catalogs.
   test-fixture:
     name: Test against fixture catalog
     needs: build_iceberg

@@ -1,0 +1,103 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/insert/partitions/test_partition_summary_nan.test
+# description: Partition summaries distinguish NaNs from nulls and bound only the non-null, non-NaN values.
+# group: [partitions]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require-env SCAN_PLANNING_MODE client
+
+include test/sql/init_requires
+
+foreach type FLOAT DOUBLE
+
+foreach values finite nan mixed null nan_null
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.partition_summary_nan;
+
+statement ok
+CREATE TABLE my_datalake.default.partition_summary_nan (id INTEGER, p {type})
+PARTITIONED BY (p)
+WITH ('write.metadata.metrics.default' = 'none');
+
+statement ok
+INSERT INTO my_datalake.default.partition_summary_nan
+SELECT id, p::{type}
+FROM (VALUES
+	(1, '1'),
+	(2, 'NaN'),
+	(3, '3'),
+	(4, NULL)
+) t(id, p)
+WHERE '{values}' = 'mixed'
+	OR ('{values}' = 'finite' AND id IN (1, 3))
+	OR ('{values}' = 'nan' AND id = 2)
+	OR ('{values}' = 'null' AND id = 4)
+	OR ('{values}' = 'nan_null' AND id IN (2, 4));
+
+# Inspect the raw summary so that NaN bytes cannot be mistaken for absent bounds.
+statement ok
+BEGIN;
+
+statement ok
+SET VARIABLE nan_summary_list = (
+	SELECT manifest_list FROM iceberg_snapshots(my_datalake.default.partition_summary_nan)
+);
+
+query IIII
+SELECT
+	partitions[1].contains_null = ('{values}' IN ('mixed', 'null', 'nan_null')),
+	partitions[1].contains_nan = ('{values}' IN ('mixed', 'nan', 'nan_null')),
+	(partitions[1].lower_bound IS NULL) = ('{values}' IN ('nan', 'null', 'nan_null')),
+	(partitions[1].upper_bound IS NULL) = ('{values}' IN ('nan', 'null', 'nan_null'))
+FROM read_avro(getvariable('nan_summary_list'));
+----
+true	true	true	true
+
+statement ok
+COMMIT;
+
+query I
+SELECT CASE WHEN '{values}' IN ('finite', 'mixed') THEN
+	lower_bound::{type} = 1 AND upper_bound::{type} = 3
+ELSE lower_bound IS NULL AND upper_bound IS NULL END
+FROM iceberg_partition_stats(my_datalake.default.partition_summary_nan);
+----
+true
+
+query I
+SELECT count(*) = CASE WHEN '{values}' IN ('mixed', 'nan', 'nan_null') THEN 1 ELSE 0 END
+FROM my_datalake.default.partition_summary_nan WHERE p = 'NaN'::{type};
+----
+true
+
+query I
+SELECT count(*) = CASE WHEN '{values}' IN ('mixed', 'nan', 'nan_null') THEN 1 ELSE 0 END
+FROM my_datalake.default.partition_summary_nan WHERE p > 3;
+----
+true
+
+query I
+SELECT count(*) = CASE WHEN '{values}' IN ('finite', 'mixed') THEN 2 ELSE 0 END
+FROM my_datalake.default.partition_summary_nan WHERE p < 'NaN'::{type};
+----
+true
+
+query I
+SELECT count(*) = CASE WHEN '{values}' IN ('mixed', 'null', 'nan_null') THEN 1 ELSE 0 END
+FROM my_datalake.default.partition_summary_nan WHERE p IS NULL;
+----
+true
+
+query I
+SELECT count(*) = CASE '{values}' WHEN 'finite' THEN 2 WHEN 'mixed' THEN 3 WHEN 'null' THEN 0 ELSE 1 END
+FROM my_datalake.default.partition_summary_nan WHERE p IS NOT NULL;
+----
+true
+
+statement ok
+DROP TABLE my_datalake.default.partition_summary_nan;
+
+endloop
+
+endloop

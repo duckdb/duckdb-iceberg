@@ -38,10 +38,7 @@ string IcebergSnapshotOperationTypeToString(IcebergSnapshotOperationType type) {
 rest_api_objects::Snapshot IcebergSnapshot::ToRESTObject(const IcebergTableMetadata &table_metadata) const {
 	rest_api_objects::Snapshot res;
 
-	if (!snapshot_id) {
-		throw InvalidConfigurationException("snapshot.snapshot_id is not set");
-	}
-	res.snapshot_id = *snapshot_id;
+	res.snapshot_id = snapshot_id;
 	res.timestamp_ms = timestamp_ms.value;
 	if (manifest_list.empty()) {
 		throw InvalidConfigurationException("Writing snapshots without a manifest list is not supported");
@@ -66,7 +63,7 @@ rest_api_objects::Snapshot IcebergSnapshot::ToRESTObject(const IcebergTableMetad
 	if (first_row_id) {
 		res.first_row_id = *first_row_id;
 	} else if (table_metadata.iceberg_version >= 3) {
-		throw InternalException("first-row-id required for V3 tables!");
+		throw InvalidConfigurationException("first-row-id required for V3 tables!");
 	}
 
 	return res;
@@ -78,7 +75,7 @@ IcebergSnapshot IcebergSnapshot::ParseSnapshot(const rest_api_objects::Snapshot 
 		throw InvalidConfigurationException("snapshot.schema_id is not set");
 	}
 
-	IcebergSnapshot ret(*snapshot.schema_id);
+	IcebergSnapshot ret(*snapshot.schema_id, snapshot.snapshot_id);
 	if (metadata.iceberg_version == 1) {
 		//! SPEC: Snapshot field sequence-number must default to 0
 		ret.sequence_number = 0;
@@ -87,7 +84,6 @@ IcebergSnapshot IcebergSnapshot::ParseSnapshot(const rest_api_objects::Snapshot 
 		ret.sequence_number = *snapshot.sequence_number;
 	}
 
-	ret.snapshot_id = snapshot.snapshot_id;
 	ret.timestamp_ms = timestamp_ms_t(snapshot.timestamp_ms);
 	if (snapshot.manifest_list) {
 		ret.manifest_list = *snapshot.manifest_list;

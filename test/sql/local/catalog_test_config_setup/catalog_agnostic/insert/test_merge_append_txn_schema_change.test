@@ -4,14 +4,9 @@
 
 require-env CATALOG_TEST_CONFIG_SETUP
 
-require avro
+require-env TIMETRAVEL_SUPPORT
 
-require parquet
-
-require iceberg
-
-require httpfs
-
+include test/sql/init_requires
 
 statement ok
 drop table if exists my_datalake.default.merge_txn_schema;
@@ -99,6 +94,28 @@ set variable latest_txn_manifest_list = (
 	order by sequence_number desc
 	limit 1
 );
+
+# The merge belongs to the first snapshot in this commit. Carrying its descriptor
+# into the second snapshot must preserve that identity and its historical minimum.
+query III
+select sequence_number, min_sequence_number, existing_files_count
+from read_avro(getvariable('latest_txn_manifest_list'))
+order by sequence_number, min_sequence_number;
+----
+3	1	2
+3	3	0
+4	4	0
+
+query II
+select
+	count(*),
+	bool_and(m.added_snapshot_id = s.snapshot_id)
+from read_avro(getvariable('latest_txn_manifest_list')) m
+join iceberg_snapshots(
+	my_datalake.default.merge_txn_schema
+) s using (sequence_number);
+----
+3	true
 
 statement ok
 set variable txn_manifest_1 = (

@@ -194,7 +194,7 @@ shared_ptr<IcebergTableSchema> IcebergTableSchema::Copy() const {
 
 shared_ptr<IcebergTableSchema> IcebergTableSchema::RemoveColumn(const string &name, optional_idx &column_id) const {
 	auto res = make_shared_ptr<IcebergTableSchema>();
-	res->schema_id = schema_id + 1;
+	res->schema_id = schema_id;
 	res->last_column_id = last_column_id;
 	res->identifier_field_ids = identifier_field_ids;
 	for (auto &column : columns) {

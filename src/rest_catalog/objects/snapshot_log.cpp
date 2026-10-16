@@ -12,11 +12,11 @@ namespace rest_api_objects {
 
 SnapshotLog::SnapshotLog() {
 }
-SnapshotLog::Object3::Object3() {
+SnapshotLog::Object7::Object7() {
 }
 
-SnapshotLog::Object3 SnapshotLog::Object3::FromJSON(JSONValue obj) {
-	Object3 res;
+SnapshotLog::Object7 SnapshotLog::Object7::FromJSON(JSONValue obj) {
+	Object7 res;
 	auto error = res.TryFromJSON(obj);
 	if (!error.empty()) {
 		throw InvalidInputException(error);
@@ -24,45 +24,45 @@ SnapshotLog::Object3 SnapshotLog::Object3::FromJSON(JSONValue obj) {
 	return res;
 }
 
-SnapshotLog::Object3 SnapshotLog::Object3::Copy() const {
-	Object3 res;
+SnapshotLog::Object7 SnapshotLog::Object7::Copy() const {
+	Object7 res;
 	res.snapshot_id = snapshot_id;
 	res.timestamp_ms = timestamp_ms;
 	return res;
 }
 
-string SnapshotLog::Object3::TryFromJSON(JSONValue obj) {
+string SnapshotLog::Object7::TryFromJSON(JSONValue obj) {
 	string error;
 	auto snapshot_id_val = obj.GetMember("snapshot-id");
 	if (!snapshot_id_val.IsValid()) {
-		return "Object3 required property 'snapshot-id' is missing";
+		return "Object7 required property 'snapshot-id' is missing";
 	} else {
 		if (json_utils::IsInteger(snapshot_id_val)) {
 			snapshot_id = json_utils::GetSignedInteger(snapshot_id_val);
 		} else if (json_utils::IsUnsignedInteger(snapshot_id_val)) {
 			snapshot_id = json_utils::GetUnsignedInteger(snapshot_id_val);
 		} else {
-			return StringUtil::Format("Object3 property 'snapshot_id' is not of type 'integer', found %s instead",
+			return StringUtil::Format("Object7 property 'snapshot_id' is not of type 'integer', found %s instead",
 			                          json_utils::GetTypeDescription(snapshot_id_val).c_str());
 		}
 	}
 	auto timestamp_ms_val = obj.GetMember("timestamp-ms");
 	if (!timestamp_ms_val.IsValid()) {
-		return "Object3 required property 'timestamp-ms' is missing";
+		return "Object7 required property 'timestamp-ms' is missing";
 	} else {
 		if (json_utils::IsInteger(timestamp_ms_val)) {
 			timestamp_ms = json_utils::GetSignedInteger(timestamp_ms_val);
 		} else if (json_utils::IsUnsignedInteger(timestamp_ms_val)) {
 			timestamp_ms = json_utils::GetUnsignedInteger(timestamp_ms_val);
 		} else {
-			return StringUtil::Format("Object3 property 'timestamp_ms' is not of type 'integer', found %s instead",
+			return StringUtil::Format("Object7 property 'timestamp_ms' is not of type 'integer', found %s instead",
 			                          json_utils::GetTypeDescription(timestamp_ms_val).c_str());
 		}
 	}
 	return "";
 }
 
-void SnapshotLog::Object3::PopulateJSON(JSONWriter &writer, JSONMutableValue obj) const {
+void SnapshotLog::Object7::PopulateJSON(JSONWriter &writer, JSONMutableValue obj) const {
 	// Serialize: snapshot-id
 	auto snapshot_id_json = writer.CreateSignedInteger(snapshot_id);
 	obj.Add("snapshot-id", snapshot_id_json);
@@ -72,7 +72,7 @@ void SnapshotLog::Object3::PopulateJSON(JSONWriter &writer, JSONMutableValue obj
 	obj.Add("timestamp-ms", timestamp_ms_json);
 }
 
-JSONMutableValue SnapshotLog::Object3::ToJSON(JSONWriter &writer) const {
+JSONMutableValue SnapshotLog::Object7::ToJSON(JSONWriter &writer) const {
 	auto obj = writer.CreateObject();
 	PopulateJSON(writer, obj);
 	return obj;
@@ -103,7 +103,7 @@ string SnapshotLog::TryFromJSON(JSONValue obj) {
 			if (!error.empty()) {
 				return;
 			}
-			Object3 value_item;
+			Object7 value_item;
 			error = value_item.TryFromJSON(value_item_val);
 			if (!error.empty()) {
 				return;

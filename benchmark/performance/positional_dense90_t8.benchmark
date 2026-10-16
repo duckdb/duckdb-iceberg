@@ -1,0 +1,12 @@
+# name: benchmark/performance/positional_dense90_t8.benchmark
+# description: dense90 positional deletes, 8 threads
+# group: [performance]
+
+template benchmark/performance/positional_delete.benchmark.in
+CASE=dense90
+THREADS=8
+DELETE_PREDICATE=i % 10 > 0
+DELETED_COUNT=7549747
+COUNT=838861
+SUM_ID=3518434692300
+SUM_PAYLOAD=10555309948927

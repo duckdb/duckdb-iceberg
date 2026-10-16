@@ -1,0 +1,100 @@
+# name: benchmark/rewrite_data_files/partitioned_rewrite.benchmark
+# description: rewrite many small files across partitions with a single partitioned COPY
+# group: [rewrite_data_files]
+
+name Partitioned rewrite data files
+group rewrite_data_files
+subgroup partitioned
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+# Build a partitioned table with many small files across several partition values.
+# The rewrite should scan candidate files once and write through a single partitioned
+# COPY (IcebergCopyOptions), rather than one Iceberg scan + COPY per partition value.
+load
+SET enable_external_file_cache=false;
+CREATE SECRET (
+    TYPE S3,
+    KEY_ID 'admin',
+    SECRET 'password',
+    ENDPOINT '127.0.0.1:9000',
+    URL_STYLE 'path',
+    USE_SSL 0
+);
+ATTACH '' AS my_datalake (
+    TYPE ICEBERG,
+    CLIENT_ID 'admin',
+    CLIENT_SECRET 'password',
+    ENDPOINT 'http://127.0.0.1:8181',
+);
+CREATE SCHEMA if not exists my_datalake.default;
+DROP TABLE IF EXISTS my_datalake.default.partitioned_rewrite_bench;
+CREATE TABLE my_datalake.default.partitioned_rewrite_bench (
+    id BIGINT,
+    category VARCHAR,
+    payload VARCHAR
+) PARTITIONED BY (category);
+INSERT INTO my_datalake.default.partitioned_rewrite_bench
+SELECT
+    range,
+    chr((65 + (range % 16))::INTEGER),
+    'payload-' || range::VARCHAR
+FROM range(1000000);
+INSERT INTO my_datalake.default.partitioned_rewrite_bench
+SELECT
+    range + 16000,
+    chr((65 + (range % 16))::INTEGER),
+    'payload-' || (range + 16000)::VARCHAR
+FROM range(1000000);
+INSERT INTO my_datalake.default.partitioned_rewrite_bench
+SELECT
+    range + 32000,
+    chr((65 + (range % 16))::INTEGER),
+    'payload-' || (range + 32000)::VARCHAR
+FROM range(1000000);
+INSERT INTO my_datalake.default.partitioned_rewrite_bench
+SELECT
+    range + 48000,
+    chr((65 + (range % 16))::INTEGER),
+    'payload-' || (range + 48000)::VARCHAR
+FROM range(1000000);
+INSERT INTO my_datalake.default.partitioned_rewrite_bench
+SELECT
+    range + 64000,
+    chr((65 + (range % 16))::INTEGER),
+    'payload-' || (range + 64000)::VARCHAR
+FROM range(1000000);
+INSERT INTO my_datalake.default.partitioned_rewrite_bench
+SELECT
+    range + 80000,
+    chr((65 + (range % 16))::INTEGER),
+    'payload-' || (range + 80000)::VARCHAR
+FROM range(1000000);
+drop table if exists my_datalake.default.pre_rewrite_snapshot;
+create table my_datalake.default.pre_rewrite_snapshot as
+    SELECT snapshot_id::BIGINT snapshot_id
+    FROM iceberg_snapshots(my_datalake.default.partitioned_rewrite_bench)
+    ORDER BY sequence_number DESC
+    LIMIT 1;
+
+run
+set enable_external_file_cache=false;
+set variable pre_rewrite_snapshot_var = (select snapshot_id from my_datalake.default.pre_rewrite_snapshot limit 1);
+SELECT *
+FROM iceberg_rollback_to_snapshot(
+    'my_datalake.default.partitioned_rewrite_bench',
+    getvariable('pre_rewrite_snapshot_var')
+);
+SELECT *
+FROM iceberg_rewrite_data_files(
+    'my_datalake.default.partitioned_rewrite_bench',
+    min_input_files => 1,
+    rewrite_all => true
+);
+

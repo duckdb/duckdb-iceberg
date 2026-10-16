@@ -1,0 +1,193 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/scan_planning/scan_partition_value_encoding.test
+# description: Textual pending partition values and persisted physical values use the same reader conversion
+# group: [scan_planning]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+include test/sql/init_requires
+
+require json
+
+statement ok
+drop table if exists my_datalake.default.scan_partition_value_encoding;
+
+statement ok
+create table my_datalake.default.scan_partition_value_encoding(i integer, d date, ts timestamp, n decimal(9,2), s varchar)
+partitioned by (i, d, ts, n, s);
+
+statement ok
+begin;
+
+statement ok
+insert into my_datalake.default.scan_partition_value_encoding values
+(1234, '2024-03-01', '2024-03-01 12:34:56.123456', 90.12, '1234');
+
+# Four-character integers must not be reinterpreted as four binary bytes.
+query ITTTT
+select * from my_datalake.default.scan_partition_value_encoding;
+----
+1234	2024-03-01	2024-03-01 12:34:56.123456	90.12	1234
+
+query ITTTT
+select partition_constants."1", partition_constants."2", partition_constants."3", partition_constants."4", partition_constants."5"
+from iceberg_scan_plan('my_datalake.default.scan_partition_value_encoding');
+----
+1234	2024-03-01	2024-03-01 12:34:56.123456	90.12	1234
+
+statement ok
+set variable scan_task_list_1 = (select list(task) from (select * from iceberg_scan_plan('my_datalake.default.scan_partition_value_encoding')) task);
+
+query ITTTT
+select * from iceberg_scan_tasks(getvariable('scan_task_list_1'));
+----
+1234	2024-03-01	2024-03-01 12:34:56.123456	90.12	1234
+
+statement ok
+commit;
+
+# Persisted manifest values still require physical-value decoding.
+statement ok
+set iceberg_use_server_side_scan_planning=false;
+
+query ITTTT
+select * from my_datalake.default.scan_partition_value_encoding;
+----
+1234	2024-03-01	2024-03-01 12:34:56.123456	90.12	1234
+
+query ITTTT
+select partition_constants."1", partition_constants."2", partition_constants."3", partition_constants."4", partition_constants."5"
+from iceberg_scan_plan('my_datalake.default.scan_partition_value_encoding');
+----
+1234	2024-03-01	2024-03-01 12:34:56.123456	90.12	1234
+
+# Keep planning credentials alive until the task list has been consumed.
+statement ok
+begin;
+
+statement ok
+set variable scan_task_list_2 = (select list(task) from (select * from iceberg_scan_plan('my_datalake.default.scan_partition_value_encoding')) task);
+
+query ITTTT
+select * from iceberg_scan_tasks(getvariable('scan_task_list_2'));
+----
+1234	2024-03-01	2024-03-01 12:34:56.123456	90.12	1234
+
+statement ok
+commit;
+
+statement ok
+drop table my_datalake.default.scan_partition_value_encoding;
+
+# Evolved specs retain a stable typed SQL field, but only identity specs provide a fallback.
+statement ok
+create table my_datalake.default.scan_partition_value_encoding(id integer, p integer) partitioned by (p);
+
+statement ok
+insert into my_datalake.default.scan_partition_value_encoding values (1, 42), (2, NULL);
+
+statement ok
+alter table my_datalake.default.scan_partition_value_encoding alter p type bigint;
+
+statement ok
+alter table my_datalake.default.scan_partition_value_encoding set partitioned by (bucket(4, p));
+
+statement ok
+insert into my_datalake.default.scan_partition_value_encoding values (3, 99);
+
+query IIT
+select sum(record_count), count(partition_constants."2"), first(typeof(partition_constants."2"))
+from iceberg_scan_plan('my_datalake.default.scan_partition_value_encoding');
+----
+3	1	BIGINT
+
+query II
+select * from my_datalake.default.scan_partition_value_encoding order by id;
+----
+1	42
+2	NULL
+3	99
+
+# Keep planning credentials alive until the task list has been consumed.
+statement ok
+begin;
+
+statement ok
+set variable scan_task_list_3 = (select list(task) from (select * from iceberg_scan_plan('my_datalake.default.scan_partition_value_encoding')) task);
+
+query II
+select * from iceberg_scan_tasks(getvariable('scan_task_list_3')) order by id;
+----
+1	42
+2	NULL
+3	99
+
+statement ok
+commit;
+
+statement ok
+drop table my_datalake.default.scan_partition_value_encoding;
+
+# Dropping an identity source from the selected schema must not remove its historical constants.
+statement ok
+create table my_datalake.default.scan_partition_value_encoding(id integer, p integer) partitioned by (p);
+
+statement ok
+insert into my_datalake.default.scan_partition_value_encoding values (1, 42), (2, NULL);
+
+statement ok
+alter table my_datalake.default.scan_partition_value_encoding set partitioned by (id);
+
+statement ok
+alter table my_datalake.default.scan_partition_value_encoding drop column p;
+
+query III
+select sum(record_count), count(partition_constants."2"), max(partition_constants."2")
+from iceberg_scan_plan('my_datalake.default.scan_partition_value_encoding');
+----
+2	1	42
+
+query I
+select * from my_datalake.default.scan_partition_value_encoding order by id;
+----
+1
+2
+
+# Keep planning credentials alive until the task list has been consumed.
+statement ok
+begin;
+
+statement ok
+set variable scan_task_list_4 = (select list(task) from (select * from iceberg_scan_plan('my_datalake.default.scan_partition_value_encoding')) task);
+
+# Execution accepts the historical constant without exposing the dropped column.
+query I
+select * from iceberg_scan_tasks(getvariable('scan_task_list_4')) order by id;
+----
+1
+2
+
+statement ok
+commit;
+
+# Reusing the name does not change the identity of the historical field.
+statement ok
+alter table my_datalake.default.scan_partition_value_encoding add column p varchar;
+
+# Keep planning credentials alive until the task list has been consumed.
+statement ok
+begin;
+
+statement ok
+set variable scan_task_list_5 = (select list(task) from (select * from iceberg_scan_plan('my_datalake.default.scan_partition_value_encoding')) task);
+
+query IT
+select * from iceberg_scan_tasks(getvariable('scan_task_list_5')) order by id;
+----
+1	NULL
+2	NULL
+
+statement ok
+commit;
+
+statement ok
+drop table my_datalake.default.scan_partition_value_encoding;

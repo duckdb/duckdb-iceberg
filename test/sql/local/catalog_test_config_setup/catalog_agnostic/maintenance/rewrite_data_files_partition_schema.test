@@ -1,0 +1,93 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/maintenance/rewrite_data_files_partition_schema.test
+# description: Rewriting data after partition-source promotion keeps manifest types and bounds consistent
+# group: [maintenance]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+include test/sql/init_requires
+
+require json
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.rewrite_partition_schema;
+
+statement ok
+CREATE TABLE my_datalake.default.rewrite_partition_schema (p INTEGER, payload INTEGER)
+PARTITIONED BY (p) WITH ('format-version' = '2', 'commit.manifest-merge.enabled' = 'false');
+
+# Two files in the same partition can be compacted without changing the partition spec.
+statement ok
+INSERT INTO my_datalake.default.rewrite_partition_schema VALUES (7, 10);
+
+statement ok
+INSERT INTO my_datalake.default.rewrite_partition_schema VALUES (7, 20);
+
+statement ok
+ALTER TABLE my_datalake.default.rewrite_partition_schema ALTER COLUMN p TYPE BIGINT;
+
+# No post-promotion INSERT: the maintenance operation itself must handle the changed source type.
+query III
+CALL iceberg_rewrite_data_files('my_datalake.default.rewrite_partition_schema', min_input_files => 2);
+----
+2	1	<REGEX>:[1-9][0-9]*
+
+statement ok
+BEGIN;
+
+statement ok
+SET VARIABLE rewrite_partition_list = (
+    SELECT manifest_list FROM iceberg_snapshots(my_datalake.default.rewrite_partition_schema)
+    ORDER BY sequence_number DESC LIMIT 1
+);
+
+# The replacement data file is represented by an ADDED entry; deleted-file manifests can coexist.
+statement ok
+SET VARIABLE rewrite_partition_manifest = (
+    SELECT DISTINCT manifest_path FROM iceberg_metadata(my_datalake.default.rewrite_partition_schema)
+    WHERE status = 'ADDED'
+);
+
+# The data rewrite path currently emits data under the current table schema. Pin that behavior
+# separately from manifest-only compaction, which preserves each existing manifest group's schema.
+query IT
+SELECT
+    (SELECT value::INTEGER FROM avro_metadata(getvariable('rewrite_partition_manifest')) WHERE key = 'schema-id'),
+    (SELECT (value::JSON)->>'$.fields[0].type' FROM avro_metadata(getvariable('rewrite_partition_manifest')) WHERE key = 'schema');
+----
+1	long
+
+query TII
+SELECT typeof(data_file.partition.identity_p_1), data_file.partition.identity_p_1, data_file.record_count
+FROM read_avro(getvariable('rewrite_partition_manifest')) WHERE status = 1;
+----
+BIGINT	7	2
+
+query TT
+SELECT hex(partitions[1].lower_bound), hex(partitions[1].upper_bound)
+FROM read_avro(getvariable('rewrite_partition_list'))
+WHERE manifest_path = getvariable('rewrite_partition_manifest');
+----
+0700000000000000	0700000000000000
+
+query I
+SELECT ((value::JSON)->>'$[0].field-id')::INTEGER
+FROM avro_metadata(getvariable('rewrite_partition_manifest')) WHERE key = 'partition-spec';
+----
+1000
+
+statement ok
+COMMIT;
+
+query II
+SELECT p, payload FROM my_datalake.default.rewrite_partition_schema WHERE p = 7 ORDER BY payload;
+----
+7	10
+7	20
+
+query I
+SELECT count(*) FROM my_datalake.default.rewrite_partition_schema WHERE p = 2147483648;
+----
+0
+
+statement ok
+DROP TABLE my_datalake.default.rewrite_partition_schema;

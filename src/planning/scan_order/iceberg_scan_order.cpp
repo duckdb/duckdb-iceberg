@@ -82,8 +82,8 @@ void IcebergScanOrder::Apply(ClientContext &context, const IcebergTableSchema &s
 		if (lower_it == data_file.lower_bounds.end() || upper_it == data_file.upper_bounds.end()) {
 			return;
 		}
-		auto stats = IcebergPredicateStats::DeserializeBounds(lower_it->second, upper_it->second, order_column.name,
-		                                                      order_column.type);
+		auto stats = IcebergPredicateStats::DeserializeBounds(context, lower_it->second, upper_it->second,
+		                                                      order_column.name, order_column.type);
 		if (!stats.lower_bound || !stats.upper_bound || stats.lower_bound->IsNull() || stats.upper_bound->IsNull()) {
 			return;
 		}

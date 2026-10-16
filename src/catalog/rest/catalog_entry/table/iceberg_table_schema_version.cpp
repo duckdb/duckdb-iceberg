@@ -13,6 +13,7 @@
 #include "duckdb/planner/operator/logical_get.hpp"
 #include "duckdb/common/multi_file/multi_file_reader.hpp"
 #include "duckdb/planner/tableref/bound_at_clause.hpp"
+#include "duckdb/common/named_parameter_map.hpp"
 
 #include "catalog/rest/iceberg_catalog.hpp"
 #include "catalog/rest/catalog_entry/schema/iceberg_schema_entry.hpp"
@@ -32,8 +33,13 @@ constexpr column_t IcebergMultiFileReader::COLUMN_IDENTIFIER_LAST_SEQUENCE_NUMBE
 IcebergTableSchemaVersion::IcebergTableSchemaVersion(IcebergTable &table_info, Catalog &catalog,
                                                      SchemaCatalogEntry &schema, CreateTableInfo &info,
                                                      optional_idx schema_id)
-    : TableCatalogEntry(catalog, schema, info), table_info(table_info), schema_id(schema_id) {
+    : TableCatalogEntry(catalog, schema, info), columns(std::move(info.columns)), table_info(table_info),
+      schema_id(schema_id) {
 	this->internal = false;
+}
+
+const ColumnList &IcebergTableSchemaVersion::GetColumns() const {
+	return columns;
 }
 
 unique_ptr<BaseStatistics> IcebergTableSchemaVersion::GetStatistics(ClientContext &context, column_t column_id) {
@@ -56,7 +62,7 @@ TableFunction IcebergTableSchemaVersion::GetScanFunction(ClientContext &context,
 	}
 	auto &iceberg_scan_function_set = catalog_entry->Cast<TableFunctionCatalogEntry>();
 	auto iceberg_scan_function =
-	    iceberg_scan_function_set.functions.GetFunctionByArguments(context, {LogicalType::VARCHAR});
+	    *iceberg_scan_function_set.functions.GetFunctionByArguments(context, {LogicalType::VARCHAR});
 	PrepareIcebergScanFromEntry(context);
 
 	if (!schema_id.IsValid()) {
@@ -65,7 +71,7 @@ TableFunction IcebergTableSchemaVersion::GetScanFunction(ClientContext &context,
 	}
 	const auto schema_id = this->schema_id.GetIndex();
 	const auto &metadata = table_info.table_metadata;
-	const auto &iceberg_schema = *metadata.GetSchemaFromId(schema_id);
+	const auto &iceberg_schema = metadata.GetSchemaFromId(schema_id);
 
 	// The pinned metadata object's current snapshot is the transaction-visible head. Only an explicit AT clause
 	// selects a different snapshot.
@@ -85,7 +91,7 @@ TableFunction IcebergTableSchemaVersion::GetScanFunction(ClientContext &context,
 	}
 
 	iceberg_scan_function.function_info = scan_info;
-	named_parameter_map_t param_map;
+	named_argument_map_t param_map;
 	vector<LogicalType> return_types;
 	vector<Identifier> names;
 	TableFunctionRef empty_ref;
@@ -93,7 +99,8 @@ TableFunction IcebergTableSchemaVersion::GetScanFunction(ClientContext &context,
 	// Set the S3 path as input to table function
 	const auto &storage_location = metadata.location;
 	vector<Value> inputs = {storage_location};
-	TableFunctionBindInput bind_input(inputs, param_map, return_types, names, nullptr, nullptr, iceberg_scan_function,
+	BoundTableFunction bound_table_function(iceberg_scan_function);
+	TableFunctionBindInput bind_input(inputs, param_map, return_types, names, nullptr, nullptr, bound_table_function,
 	                                  empty_ref);
 	auto result = iceberg_scan_function.bind(context, bind_input, return_types, names);
 	bind_data = std::move(result);
@@ -110,31 +117,34 @@ TableFunction IcebergTableSchemaVersion::GetScanFunction(ClientContext &context,
 }
 
 virtual_column_map_t IcebergTableSchemaVersion::GetVirtualColumns() const {
-	return VirtualColumns();
+	return VirtualColumns(table_info.table_metadata.iceberg_version);
 }
 
-virtual_column_map_t IcebergTableSchemaVersion::VirtualColumns() {
+virtual_column_map_t IcebergTableSchemaVersion::VirtualColumns(int32_t iceberg_version) {
 	virtual_column_map_t result;
 	result.emplace(MultiFileReader::COLUMN_IDENTIFIER_FILENAME, TableColumn("filename", LogicalType::VARCHAR));
-	result.emplace(COLUMN_IDENTIFIER_ROW_ID, TableColumn("_row_id", LogicalType::BIGINT));
 	result.emplace(MultiFileReader::COLUMN_IDENTIFIER_FILE_ROW_NUMBER,
 	               TableColumn("file_row_number", LogicalType::BIGINT));
-	result.emplace(IcebergMultiFileReader::COLUMN_IDENTIFIER_LAST_SEQUENCE_NUMBER,
-	               TableColumn("_last_updated_sequence_number", LogicalType::BIGINT));
+	//! Row lineage columns only exist for format version >= 3
+	if (iceberg_version >= 3) {
+		result.emplace(COLUMN_IDENTIFIER_ROW_ID, TableColumn("_row_id", LogicalType::BIGINT));
+		result.emplace(IcebergMultiFileReader::COLUMN_IDENTIFIER_LAST_SEQUENCE_NUMBER,
+		               TableColumn("_last_updated_sequence_number", LogicalType::BIGINT));
+	}
 	return result;
 }
 
 //! NOTE: IcebergDelete::FindIcebergScan needs to change in tandem with this method
 vector<column_t> IcebergTableSchemaVersion::GetRowIdColumns() const {
 	vector<column_t> result;
-	auto &table_metadata = table_info.table_metadata;
-	if (table_metadata.iceberg_version >= 3) {
-		//! Project the _row_id column as part of the row-id-columns
-		result.push_back(COLUMN_IDENTIFIER_ROW_ID);
-	}
-
+	//! MERGE interprets a NULL first row-ID column as an absent target, so physical identity comes first.
 	result.push_back(MultiFileReader::COLUMN_IDENTIFIER_FILENAME);
 	result.push_back(MultiFileReader::COLUMN_IDENTIFIER_FILE_ROW_NUMBER);
+	auto &table_metadata = table_info.table_metadata;
+	if (table_metadata.iceberg_version >= 3) {
+		//! Preserve assigned lineage on UPDATE; pending rows may have no assigned ID.
+		result.push_back(COLUMN_IDENTIFIER_ROW_ID);
+	}
 	return result;
 }
 

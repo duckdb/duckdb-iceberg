@@ -1,13 +1,7 @@
 # name: test/sql/local/iceberg_scans/uuid_type.test
 # group: [iceberg_scans]
 
-require avro
-
-require parquet
-
-require iceberg
-
-require httpfs
+include test/sql/init_requires
 
 require no_extension_autoloading "EXPECTED: enable logging is not aware of where 'Iceberg' option comes from"
 

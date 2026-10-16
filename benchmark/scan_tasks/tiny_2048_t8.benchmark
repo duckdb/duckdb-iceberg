@@ -1,0 +1,14 @@
+# name: benchmark/scan_tasks/tiny_2048_t8.benchmark
+# description: 2048 scan tasks, tiny_2048, 8 threads
+# group: [scan_tasks]
+
+template benchmark/scan_tasks/scan_tasks.benchmark.in
+CASE=tiny_2048
+THREADS=8
+TASKS=2048
+DATA_TASKS=2048
+ROWS=32
+COUNT=65536
+SUM_ID=1015808
+SUM_PAYLOAD=3506176
+SUM_TASK_ID=67076096

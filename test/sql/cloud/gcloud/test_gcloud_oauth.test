@@ -1,11 +1,7 @@
 # name: test/sql/cloud/gcloud/test_gcloud_oauth.test
 # group: [gcloud]
 
-require avro
-
-require parquet
-
-require httpfs
+include test/sql/init_requires
 
 require aws
 

@@ -1,0 +1,56 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/alter/alter_collection_fields.test
+# description: Collection fields cannot be renamed or dropped, but their struct children can
+# group: [alter]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+include test/sql/init_requires
+
+statement ok
+CREATE TABLE my_datalake.default.collection_fields(s STRUCT(m MAP(STRUCT(a INTEGER, b INTEGER), STRUCT(a INTEGER, b INTEGER)), l STRUCT(a INTEGER, b INTEGER)[]));
+
+statement ok
+INSERT INTO my_datalake.default.collection_fields VALUES ({'m': MAP {ROW(1, 2): ROW(3, 4)}, 'l': [ROW(5, 6)]});
+
+foreach field m.key m.value l.element
+
+statement error
+ALTER TABLE my_datalake.default.collection_fields RENAME COLUMN s.{field} TO other;
+----
+can only rename fields inside a struct
+
+statement error
+ALTER TABLE my_datalake.default.collection_fields DROP COLUMN s.{field};
+----
+it's not a struct
+
+statement error
+ALTER TABLE my_datalake.default.collection_fields DROP COLUMN IF EXISTS s.{field};
+----
+it's not a struct
+
+# The rejected changes must leave the table usable.
+query I
+SELECT s FROM my_datalake.default.collection_fields;
+----
+{'m': {{'a': 1, 'b': 2}={'a': 3, 'b': 4}}, 'l': [{'a': 5, 'b': 6}]}
+
+endloop
+
+foreach field m.key m.value l.element
+
+statement ok
+ALTER TABLE my_datalake.default.collection_fields RENAME COLUMN s.{field}.a TO renamed;
+
+statement ok
+ALTER TABLE my_datalake.default.collection_fields DROP COLUMN s.{field}.b;
+
+endloop
+
+query I
+SELECT s FROM my_datalake.default.collection_fields;
+----
+{'m': {{'renamed': 1}={'renamed': 3}}, 'l': [{'renamed': 5}]}
+
+statement ok
+DROP TABLE my_datalake.default.collection_fields;

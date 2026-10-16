@@ -33,8 +33,8 @@ namespace duckdb {
 
 struct IcebergPartitionStatsBindData : public TableFunctionData {
 	IcebergSnapshotScanInfo snapshot_to_scan;
-	IcebergTableMetadata metadata;
-	shared_ptr<IcebergTableSchema> schema;
+	IcebergTableMetadata metadata {IcebergTableMetadataSchemas {}};
+	optional_ptr<const IcebergTableSchema> schema;
 	unordered_map<uint64_t, ColumnIndex> source_to_column_id;
 	unique_ptr<IcebergManifestList> iceberg_table;
 };
@@ -132,7 +132,7 @@ static void IcebergPartitionStatsFunction(ClientContext &context, TableFunctionI
 	auto &metadata = bind_data.metadata;
 	for (; global_state.current_manifest_idx < table_entries.size(); global_state.current_manifest_idx++) {
 		auto &table_entry = table_entries[global_state.current_manifest_idx];
-		auto &manifest = table_entry.file;
+		auto &manifest = table_entry.GetFile();
 		auto &field_summaries = manifest.partitions.field_summary;
 
 		auto spec_id = manifest.partition_spec_id;
@@ -159,8 +159,7 @@ static void IcebergPartitionStatsFunction(ClientContext &context, TableFunctionI
 			//! manifest_path
 			AddString(output.data[col++], out, string_t(manifest.manifest_path));
 			//! added_snapshot_id
-			D_ASSERT(manifest.added_snapshot_id);
-			FlatVector::GetDataMutable<int64_t>(output.data[col++])[out] = *manifest.added_snapshot_id;
+			FlatVector::GetDataMutable<int64_t>(output.data[col++])[out] = manifest.added_snapshot_id;
 			//! partition_spec_id
 			FlatVector::GetDataMutable<int32_t>(output.data[col++])[out] = manifest.partition_spec_id;
 			//! partition_field_id
@@ -172,20 +171,29 @@ static void IcebergPartitionStatsFunction(ClientContext &context, TableFunctionI
 			//! partition_field_transform
 			AddString(output.data[col++], out, string_t(field.transform.RawType()));
 
-			auto stats = IcebergPredicateStats::DeserializeBounds(field_summary.lower_bound, field_summary.upper_bound,
-			                                                      column.name, result_type);
+			auto stats = IcebergPredicateStats::DeserializeBounds(context, field_summary.lower_bound,
+			                                                      field_summary.upper_bound, column.name, result_type);
 			//! partition_field_type
 			AddString(output.data[col++], out, string_t(result_type.ToString()));
 
 			//! lower_bound
-			AddString(output.data[col++], out, string_t(stats.lower_bound->ToString()));
+			if (stats.lower_bound) {
+				AddString(output.data[col++], out, string_t(stats.lower_bound->ToString()));
+			} else {
+				output.data[col++].SetValue(out, Value(LogicalType::VARCHAR));
+			}
 			//! upper_bound
-			AddString(output.data[col++], out, string_t(stats.upper_bound->ToString()));
+			if (stats.upper_bound) {
+				AddString(output.data[col++], out, string_t(stats.upper_bound->ToString()));
+			} else {
+				output.data[col++].SetValue(out, Value(LogicalType::VARCHAR));
+			}
 
 			//! contains_null
 			FlatVector::GetDataMutable<bool>(output.data[col++])[out] = field_summary.contains_null;
 			//! contains_nan
-			FlatVector::GetDataMutable<bool>(output.data[col++])[out] = field_summary.contains_nan;
+			output.data[col++].SetValue(out, field_summary.contains_nan ? Value::BOOLEAN(*field_summary.contains_nan)
+			                                                            : Value(LogicalType::BOOLEAN));
 
 			out++;
 		}
@@ -196,15 +204,18 @@ static void IcebergPartitionStatsFunction(ClientContext &context, TableFunctionI
 
 TableFunctionSet IcebergFunctions::GetIcebergPartitionStatsFunction() {
 	TableFunctionSet function_set("iceberg_partition_stats");
-	TableFunction fun({LogicalType::VARCHAR}, IcebergPartitionStatsFunction, IcebergPartitionStatsBind,
+	TableFunction fun(FunctionSignature().AddPositionalOnly("path", LogicalType::VARCHAR),
+	                  IcebergPartitionStatsFunction, IcebergPartitionStatsBind,
 	                  IcebergPartitionStatsGlobalTableFunctionState::Init);
 
-	fun.named_parameters["allow_moved_paths"] = LogicalType::BOOLEAN;
-	fun.named_parameters["metadata_compression_codec"] = LogicalType::VARCHAR;
-	fun.named_parameters["version"] = LogicalType::VARCHAR;
-	fun.named_parameters["version_name_format"] = LogicalType::VARCHAR;
-	fun.named_parameters["snapshot_from_timestamp"] = LogicalType::TIMESTAMP_MS;
-	fun.named_parameters["snapshot_from_id"] = LogicalType::UBIGINT;
+	fun.GetSignature().WithTypedKwargs("options", [&](TypedKwargs &options) {
+		options.Add("allow_moved_paths", LogicalType::BOOLEAN)
+		    .Add("metadata_compression_codec", LogicalType::VARCHAR)
+		    .Add("version", LogicalType::ANY)
+		    .Add("version_name_format", LogicalType::VARCHAR)
+		    .Add("snapshot_from_timestamp", LogicalType::ANY)
+		    .Add("snapshot_from_id", LogicalType::UBIGINT);
+	});
 	function_set.AddFunction(fun);
 	return function_set;
 }

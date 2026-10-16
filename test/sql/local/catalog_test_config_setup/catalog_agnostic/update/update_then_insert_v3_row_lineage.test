@@ -1,0 +1,100 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/update/update_then_insert_v3_row_lineage.test
+# description: Delete manifests from UPDATE must not advance row IDs for later snapshots in the same commit.
+# group: [update]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require-env FORMAT_V3_SUPPORT
+
+include test/sql/init_requires
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.update_then_insert_v3_row_lineage;
+
+statement ok
+CREATE TABLE my_datalake.default.update_then_insert_v3_row_lineage (id INTEGER, val INTEGER)
+WITH ('format-version' = 3);
+
+statement ok
+INSERT INTO my_datalake.default.update_then_insert_v3_row_lineage VALUES (0, 0), (1, 10), (2, 20);
+
+statement ok
+BEGIN;
+
+statement ok
+UPDATE my_datalake.default.update_then_insert_v3_row_lineage SET val = 11 WHERE id = 1;
+
+statement ok
+INSERT INTO my_datalake.default.update_then_insert_v3_row_lineage VALUES (3, 30);
+
+# The updated row keeps its assigned identity; new lineage remains unknown until commit.
+query IIII
+SELECT id, val, _row_id, _last_updated_sequence_number
+FROM my_datalake.default.update_then_insert_v3_row_lineage ORDER BY id;
+----
+0	0	0	1
+1	11	1	NULL
+2	20	2	1
+3	30	NULL	NULL
+
+statement ok
+COMMIT;
+
+# Every committed ID must be below the table's next allocation.
+query I
+SELECT metadata."next-row-id"::BIGINT > max_row_id
+FROM iceberg_load_table_response('my_datalake.default.update_then_insert_v3_row_lineage'),
+(SELECT max(_row_id) AS max_row_id FROM my_datalake.default.update_then_insert_v3_row_lineage);
+----
+true
+
+query IIII
+SELECT id, val, _row_id, _last_updated_sequence_number
+FROM my_datalake.default.update_then_insert_v3_row_lineage ORDER BY id;
+----
+0	0	0	1
+1	11	1	2
+2	20	2	1
+3	30	4	3
+
+# Snapshot allocation must agree with both the data manifests and the table.
+query III
+SELECT snapshot."sequence-number"::BIGINT, snapshot."first-row-id"::BIGINT, snapshot."added-rows"::BIGINT
+FROM iceberg_load_table_response('my_datalake.default.update_then_insert_v3_row_lineage'),
+unnest(metadata.snapshots::VARIANT[]) AS t(snapshot)
+ORDER BY 1;
+----
+1	0	3
+2	3	1
+3	4	1
+
+query I
+SELECT metadata."next-row-id"::BIGINT
+FROM iceberg_load_table_response('my_datalake.default.update_then_insert_v3_row_lineage');
+----
+5
+
+# The next transaction starts immediately after the committed allocation.
+statement ok
+BEGIN;
+
+statement ok
+INSERT INTO my_datalake.default.update_then_insert_v3_row_lineage VALUES (4, 40);
+
+query III
+SELECT id, _row_id, _last_updated_sequence_number
+FROM my_datalake.default.update_then_insert_v3_row_lineage WHERE id = 4;
+----
+4	NULL	NULL
+
+statement ok
+COMMIT;
+
+query III
+SELECT id, _row_id, _last_updated_sequence_number
+FROM my_datalake.default.update_then_insert_v3_row_lineage WHERE id = 4;
+----
+4	5	4
+
+statement ok
+DROP TABLE my_datalake.default.update_then_insert_v3_row_lineage;

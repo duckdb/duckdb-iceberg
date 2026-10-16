@@ -77,4 +77,7 @@ jobs:
         if: inputs.local-extension-repo == ''
         run: |
           ${{ inputs.build-path }}/test/unittest --order lex --test-dir duckdb "test/sql/*" "exclude:*.test_slow" --list-test-names-only || true
-          ${{ inputs.build-path }}/test/unittest --order lex --test-dir duckdb "test/sql/*" "exclude:*.test_slow" --test-config test/configs/fixture_duckdb_tests.json
+          # This test compares SELECT * without ORDER BY across multiple inserts.
+          # Run every assertion, comparing rows independently of Iceberg file order.
+          ${{ inputs.build-path }}/test/unittest --test-dir duckdb "test/sql/alter/drop_col/test_drop_col_not_null.test" --test-config test/configs/fixture_duckdb_tests.json --sort-style rowsort
+          ${{ inputs.build-path }}/test/unittest --order lex --test-dir duckdb "test/sql/*" "exclude:*.test_slow" "exclude:test/sql/alter/drop_col/test_drop_col_not_null.test" --test-config test/configs/fixture_duckdb_tests.json

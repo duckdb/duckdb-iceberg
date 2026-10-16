@@ -15,10 +15,12 @@
 #include "catalog/rest/catalog_entry/table/iceberg_table_schema_version.hpp"
 #include "catalog/rest/catalog_entry/schema/iceberg_schema_entry.hpp"
 #include "core/metadata/manifest/iceberg_manifest.hpp"
+#include "execution/operator/iceberg_pending_deletes.hpp"
 
 namespace duckdb {
 
 class PhysicalTableScan;
+class IcebergMergeDeleteCollector;
 struct IcebergMultiFileList;
 
 struct WrittenColumnInfo {
@@ -75,6 +77,14 @@ struct IcebergDeleteFileInfo {
 	unordered_map<int32_t, int64_t> nan_value_counts;
 };
 
+//! Materialized deletes and the old deletion vectors they supersede.
+struct IcebergDeleteWriteResult {
+	unordered_map<string, IcebergDeleteFileInfo> written_files;
+	IcebergManifestDeletes altered_manifests;
+
+	partitioned_manifest_entry_map_t GenerateManifestEntries() const;
+};
+
 class IcebergDeleteGlobalState : public GlobalSinkState {
 public:
 	explicit IcebergDeleteGlobalState() {
@@ -84,12 +94,12 @@ public:
 	}
 
 	mutex lock;
-	unordered_map<string, IcebergDeleteFileInfo> written_files;
+	IcebergPendingDeletes pending_deletes;
+	IcebergDeleteWriteResult write_result;
+	//! Shared by the delete-producing actions of this execution, never by planned operators.
+	shared_ptr<IcebergMergeDeleteCollector> merge_deletes;
 	unordered_map<string, WrittenColumnInfo> written_columns;
 	atomic<idx_t> total_deleted_count;
-	// data file name -> newly deleted rows.
-	unordered_map<string, vector<idx_t>> deleted_rows;
-	IcebergManifestDeletes altered_manifests;
 	//! Guards the one-time write of the equality-delete file (Sink runs in parallel)
 	bool equality_delete_written = false;
 
@@ -99,7 +109,7 @@ public:
 			return;
 		}
 		lock_guard<mutex> guard(lock);
-		auto &global_entry = deleted_rows[local_state.current_file_name];
+		auto &global_entry = pending_deletes.rows_by_file[local_state.current_file_name];
 		global_entry.insert(global_entry.end(), local_entry.begin(), local_entry.end());
 		total_deleted_count += local_entry.size();
 		local_entry.clear();
@@ -107,6 +117,14 @@ public:
 
 	void FinalFlush(IcebergDeleteLocalState &local_state) {
 		Flush(local_state);
+	}
+
+	//! Called after all local states have combined. Transferring the batch performs no file I/O.
+	IcebergPendingDeletes TakePendingDeletes() {
+		lock_guard<mutex> guard(lock);
+		IcebergPendingDeletes result;
+		result.rows_by_file.swap(pending_deletes.rows_by_file);
+		return result;
 	}
 };
 
@@ -142,6 +160,12 @@ public:
 	optional_ptr<IcebergMultiFileList> multi_file_list;
 	//! The column indexes for the relevant row-id columns
 	vector<idx_t> row_id_indexes;
+
+	//! Contribute this action's files to the active MERGE's snapshot.
+	bool merge_action = false;
+	//! Immutable participant information assigned by MERGE planning.
+	optional_idx merge_delete_action_index;
+	idx_t merge_delete_action_count = 0;
 
 	vector<IcebergEqualityDeletePredicate> equality_predicates;
 
@@ -184,19 +208,26 @@ public:
 
 	string GetName() const override;
 	InsertionOrderPreservingMap<string> ParamsToString() const override;
-	void FlushDeletes(IcebergTransaction &transaction, ClientContext &context,
-	                  IcebergDeleteGlobalState &global_state) const;
+	//! Drain this action's collected positions and materialize them at the existing finalization point.
+	void FlushDeletes(ClientContext &context, IcebergDeleteGlobalState &global_state) const;
+	//! Contribute this action's positions, materializing and staging deletes only for the last participant.
+	void FinalizeMergeDeletes(ClientContext &context, IcebergDeleteGlobalState &global_state) const;
+	//! Materialize a collected batch using the target scan's existing deletes and partition metadata.
+	//! All new positions for a data file must be collected before calling this writer.
+	void WriteDeletes(ClientContext &context, const IcebergPendingDeletes &pending_deletes,
+	                  IcebergDeleteWriteResult &result) const;
 
 private:
 	//! Walk `plan` for the PhysicalTableScan that emits the row-id virtual columns the delete needs.
 	static optional_ptr<PhysicalTableScan> FindIcebergScan(PhysicalOperator &plan);
-	void WritePositionalDeleteFile(ClientContext &context, IcebergDeleteGlobalState &global_state,
-	                               const string &filename, IcebergDeleteFileInfo delete_file,
-	                               set<idx_t> sorted_deletes) const;
-	void WriteDeletionVectorFile(ClientContext &context, IcebergDeleteGlobalState &global_state, const string &filename,
-	                             IcebergDeleteFileInfo delete_file, const set<idx_t> &sorted_deletes) const;
+	IcebergDeleteFileInfo WritePositionalDeleteFile(ClientContext &context, const string &filename,
+	                                                IcebergDeleteFileInfo delete_file,
+	                                                const set<idx_t> &sorted_deletes) const;
+	IcebergDeleteFileInfo WriteDeletionVectorFile(ClientContext &context, const string &filename,
+	                                              IcebergDeleteFileInfo delete_file,
+	                                              const set<idx_t> &sorted_deletes) const;
 	//! Writes the Iceberg equality-delete parquet file (one column per equality field, one row of
-	//! constants) and records it in `global_state.written_files`.
+	//! constants) and records it in `global_state.write_result`.
 	void WriteEqualityDeleteFile(ClientContext &context, IcebergDeleteGlobalState &global_state) const;
 };
 

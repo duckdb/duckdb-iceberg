@@ -1,0 +1,94 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_interop/maintenance/rewrite_data_files_spark_entry_snapshot_ids.test
+# description: rewriting a Spark-written table, whose manifest entries carry explicit snapshot ids, records the rewrite as the deleting snapshot
+# group: [maintenance]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require-env TIMETRAVEL_SUPPORT
+
+include test/sql/init_requires
+
+statement ok
+begin
+
+statement ok
+SET VARIABLE first_insert = (SELECT snapshot_id::BIGINT FROM iceberg_snapshots(my_datalake.default.spark_rewrite_entry_snapshot_ids) ORDER BY sequence_number LIMIT 1);
+
+statement ok
+SET VARIABLE manifest_list = (SELECT manifest_list FROM iceberg_snapshots(my_datalake.default.spark_rewrite_entry_snapshot_ids) ORDER BY sequence_number DESC LIMIT 1);
+
+statement ok
+SET VARIABLE manifest_paths = (SELECT list(manifest_path) FROM read_avro(getvariable('manifest_list')) WHERE content = 0);
+
+# Spark writes the adding snapshot id explicitly on each entry
+query I
+WITH cte as (
+    select count(*) count_star, count(snapshot_id) count_snapshot_id
+    FROM read_avro(getvariable('manifest_paths'))
+)
+SELECT CASE
+    WHEN count_star = count_snapshot_id THEN true::VARIANT ELSE {
+        expected: COUNT_STAR, actual: count_snapshot_id
+    }::VARIANT END
+FROM cte
+----
+true
+
+statement ok
+commit
+
+query III
+CALL iceberg_rewrite_data_files('my_datalake.default.spark_rewrite_entry_snapshot_ids', min_input_files => 2);
+----
+2	1	<REGEX>:[1-9][0-9]*
+
+statement ok
+begin
+
+statement ok
+SET VARIABLE rewrite = (SELECT snapshot_id::BIGINT FROM iceberg_snapshots(my_datalake.default.spark_rewrite_entry_snapshot_ids) ORDER BY sequence_number DESC LIMIT 1);
+
+statement ok
+SET VARIABLE manifest_list = (SELECT manifest_list FROM iceberg_snapshots(my_datalake.default.spark_rewrite_entry_snapshot_ids) ORDER BY sequence_number DESC LIMIT 1);
+
+statement ok
+CREATE OR REPLACE TEMP TABLE manifests AS SELECT manifest_path, added_snapshot_id FROM read_avro(getvariable('manifest_list')) WHERE content = 0;
+
+statement ok
+SET VARIABLE manifest_paths = (SELECT list(manifest_path) FROM manifests);
+
+# an entry's snapshot id, after inheriting from its manifest when null
+statement ok
+CREATE OR REPLACE TEMP TABLE entries AS
+SELECT e.status, coalesce(e.snapshot_id, m.added_snapshot_id) AS snapshot_id, e.data_file.file_path AS file_path
+FROM read_avro(getvariable('manifest_paths'), filename = true) e JOIN manifests m ON e.filename = m.manifest_path;
+
+# the rewritten Spark files are attributed to the rewrite, which Iceberg's conflict checks use to find removed files
+
+query I
+WITH cte as (
+    select count(*) count_star, list(file_path) file_paths
+    FROM entries WHERE status = 2 AND snapshot_id = getvariable('rewrite') AND file_path LIKE '%/category=a/%'
+)
+SELECT CASE
+    WHEN count_star = 2 THEN true::VARIANT ELSE {
+        expected: 2, actual: count_star, snapshot_id: getvariable('rewrite')
+    }::VARIANT END
+    FROM cte
+----
+true
+
+query II
+SELECT status, snapshot_id = getvariable('first_insert') FROM entries WHERE file_path LIKE '%/category=b/%';
+----
+0	true
+
+query II
+SELECT id, category FROM my_datalake.default.spark_rewrite_entry_snapshot_ids ORDER BY id;
+----
+1	a
+2	b
+3	a
+
+statement ok
+commit

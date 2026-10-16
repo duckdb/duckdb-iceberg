@@ -1,0 +1,77 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/insert/partitions/null_values/test_unknown_partition_avro_schema.test
+# description: Unknown identity partitions use Avro null without a duplicate null union branch
+# group: [null_values]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require-env FORMAT_V3_SUPPORT
+
+require-env UNKNOWN_SUPPORT
+
+include test/sql/init_requires
+
+require json
+
+statement ok
+CREATE SCHEMA IF NOT EXISTS my_datalake.default;
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.unknown_partition_avro_schema;
+
+statement ok
+CREATE TABLE my_datalake.default.unknown_partition_avro_schema (id INT, u "NULL")
+PARTITIONED BY (u) WITH ('format-version' = '3');
+
+statement ok
+INSERT INTO my_datalake.default.unknown_partition_avro_schema VALUES (1, NULL), (2, NULL);
+
+# DuckDB also reads the invalid ["null","null"] union, so a row round trip is insufficient.
+query II
+SELECT * FROM my_datalake.default.unknown_partition_avro_schema ORDER BY id;
+----
+1	NULL
+2	NULL
+
+statement ok
+BEGIN;
+
+statement ok
+SET VARIABLE unknown_partition_manifest = (
+	SELECT DISTINCT manifest_path
+	FROM iceberg_metadata(my_datalake.default.unknown_partition_avro_schema)
+);
+
+# Check the partition record in the file's actual Avro schema, including its field name and IDs.
+# Iceberg's unknown type maps to the primitive "null", not a union containing "null" twice.
+query TTITTI
+WITH fields AS (
+	SELECT unnest((value::JSON)->'$.fields[*]') AS field
+	FROM avro_metadata(getvariable('unknown_partition_manifest')) WHERE key = 'avro.schema'
+), data_fields AS (
+	SELECT unnest(field->'$.type.fields[*]') AS field
+	FROM fields WHERE field->>'$.name' = 'data_file'
+), partition_fields AS (
+	SELECT field AS partition_record, unnest(field->'$.type.fields[*]') AS partition_field
+	FROM data_fields WHERE field->>'$.name' = 'partition'
+)
+SELECT
+	partition_record->>'$.type.type',
+	partition_record->>'$.type.name',
+	partition_record->>'$.field-id',
+	partition_field->>'$.name',
+	partition_field->'$.type',
+	partition_field->>'$.field-id'
+FROM partition_fields;
+----
+record	r102	102	identity_u_2	"null"	1000
+
+query II
+SELECT data_file.record_count, data_file.partition.identity_u_2
+FROM read_avro(getvariable('unknown_partition_manifest'));
+----
+2	NULL
+
+statement ok
+COMMIT;
+
+# Keep the table for test_spark_read_duckdb_unknown_partition.

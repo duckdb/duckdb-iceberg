@@ -3,12 +3,13 @@
 #include "duckdb/common/typedefs.hpp"
 #include "duckdb/common/unordered_map.hpp"
 #include "duckdb/common/case_insensitive_map.hpp"
+#include "duckdb/common/vector.hpp"
 
 namespace duckdb {
 
 class IcebergSnapshot;
 struct IcebergManifestEntry;
-struct IcebergManifestListEntry;
+enum class IcebergManifestContentType : uint8_t;
 
 //! Taken from https://iceberg.apache.org/spec/#metrics
 enum class IcebergSnapshotMetricType : uint8_t {
@@ -84,7 +85,8 @@ public:
 	IcebergSnapshotMetrics(const case_insensitive_map_t<string> &summary);
 
 public:
-	void AddManifestListEntry(const IcebergManifestListEntry &manifest_list_entry);
+	//! Account for newly written content. Existing entries are not changes to the snapshot.
+	void AddManifestEntries(IcebergManifestContentType content, const vector<IcebergManifestEntry> &entries);
 	void RemoveManifestEntry(const IcebergManifestEntry &manifest_entry);
 	bool HasTotalFilesSize() const;
 	void SetTotalFilesSize(int64_t total_files_size);

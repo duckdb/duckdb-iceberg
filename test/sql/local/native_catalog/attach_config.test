@@ -1,0 +1,438 @@
+# name: test/sql/local/native_catalog/attach_config.test
+# description: ATTACH and REST config translation, precedence, routing and authorization
+# group: [native_catalog]
+
+require-env CATALOG_TEST_CONFIG_SETUP mock
+
+include test/sql/init_requires
+
+require json
+
+statement ok
+CREATE MACRO config_response(defaults, overrides) AS TABLE
+SELECT status FROM iceberg_test_catalog_request('POST', '/__test/response',
+	json_object('method', 'GET', 'path', '/v1/config', 'status', 200,
+		'body', json_object('defaults', defaults::JSON, 'overrides', overrides::JSON))::VARCHAR);
+
+statement ok
+CREATE MACRO namespace_response(path) AS TABLE
+SELECT status FROM iceberg_test_catalog_request('POST', '/__test/response',
+	json_object('method', 'GET', 'path', path, 'status', 200,
+		'body', json_object('namespace', ['default'], 'properties', json_object()))::VARCHAR);
+
+statement ok
+CALL enable_logging('HTTP');
+
+statement ok
+SET redact_http_logs = false;
+
+# Server defaults apply when ATTACH omits an option; unfamiliar server properties
+# and local secret selectors must not be treated as ATTACH options.
+query I
+SELECT * FROM config_response(
+	'{"prefix":"server/default","default_schema":"default","namespace-separator":"%1F","clients":"4"}',
+	'{"unrecognized-server-property":"ignored","secret":"must-not-be-looked-up","endpoint_type":"unknown"}');
+----
+204
+
+query I
+SELECT * FROM namespace_response('/v1/server/default/namespaces/default');
+----
+204
+
+statement ok
+CALL truncate_duckdb_logs();
+
+statement ok
+ATTACH '' AS config_default (TYPE ICEBERG, URI 'http://iceberg-mock.invalid',
+	AUTHORIZATION_TYPE 'none');
+
+query I
+SELECT request.url FROM duckdb_logs_parsed('HTTP') ORDER BY timestamp;
+----
+http://iceberg-mock.invalid/v1/config
+http://iceberg-mock.invalid/v1/server/default/namespaces/default
+
+statement ok
+DETACH config_default;
+
+# Native ATTACH names override server defaults, even when the server uses an alias.
+# ENCODE_ENTIRE_PREFIX false preserves separate path segments.
+query I
+SELECT * FROM namespace_response('/v1/client/prefix/namespaces/parent%1Fchild');
+----
+204
+
+statement ok
+CALL truncate_duckdb_logs();
+
+statement ok
+ATTACH '' AS config_client (TYPE ICEBERG, URI 'http://iceberg-mock.invalid',
+	AUTHORIZATION_TYPE 'none', PREFIX 'client/prefix', DEFAULT_SCHEMA 'parent.child',
+	NAMESPACE_SEPARATOR '%1F', ENCODE_ENTIRE_PREFIX false);
+
+query I
+SELECT request.url FROM duckdb_logs_parsed('HTTP') ORDER BY timestamp;
+----
+http://iceberg-mock.invalid/v1/config
+http://iceberg-mock.invalid/v1/client/prefix/namespaces/parent%1Fchild
+
+statement ok
+DETACH config_client;
+
+# Server overrides win over ATTACH. They apply after the unprefixed /config
+# request, including URI relocation, encoded prefixes and namespace delimiters.
+query I
+SELECT * FROM config_response('{"prefix":"unused","uri":"http://unused.invalid"}',
+	'{"uri":"http://iceberg-mock.invalid/relocated///","prefix":"override/prefix",
+	  "encode_entire_prefix":"true","namespace-separator":"%3A","default_schema":"parent.child"}');
+----
+204
+
+query I
+SELECT * FROM namespace_response('/relocated/v1/override%2Fprefix/namespaces/parent%3Achild');
+----
+204
+
+statement ok
+CALL truncate_duckdb_logs();
+
+statement ok
+ATTACH '' AS config_override (TYPE ICEBERG, URI 'http://iceberg-mock.invalid/',
+	AUTHORIZATION_TYPE 'none', PREFIX 'client', DEFAULT_SCHEMA 'absent',
+	NAMESPACE_SEPARATOR '%1F', ENCODE_ENTIRE_PREFIX false);
+
+query I
+SELECT request.url FROM duckdb_logs_parsed('HTTP') ORDER BY timestamp;
+----
+http://iceberg-mock.invalid/v1/config
+http://iceberg-mock.invalid/relocated/v1/override%2Fprefix/namespaces/parent%3Achild
+
+statement ok
+DETACH config_override;
+
+# Nessie prefix encoding (issue #375): raw and already-encoded pipes must both
+# reach the server as %7C, without double encoding or interpreting nessie.prefix-pattern.
+query I
+SELECT * FROM namespace_response('/v1/main%7Cmy-bucket/namespaces/default');
+----
+204
+
+foreach prefix main|my-bucket main%7Cmy-bucket
+
+query I
+SELECT * FROM config_response('{"prefix":"{prefix}","default_schema":"default"}',
+	'{"nessie.prefix-pattern":"{ref}|{warehouse}"}');
+----
+204
+
+statement ok
+CALL truncate_duckdb_logs();
+
+statement ok
+ATTACH '' AS config_nessie (TYPE ICEBERG, URI 'http://iceberg-mock.invalid',
+	AUTHORIZATION_TYPE 'none');
+
+query I
+SELECT request.url FROM duckdb_logs_parsed('HTTP') ORDER BY timestamp;
+----
+http://iceberg-mock.invalid/v1/config
+http://iceberg-mock.invalid/v1/main%7Cmy-bucket/namespaces/default
+
+statement ok
+DETACH config_nessie;
+
+endloop
+
+# Empty client values are explicit, rather than falling back to the server value.
+query I
+SELECT * FROM config_response('{"prefix":"unused","default_schema":"absent"}', '{}');
+----
+204
+
+statement ok
+CALL truncate_duckdb_logs();
+
+statement ok
+ATTACH '' AS config_empty (TYPE ICEBERG, URI 'http://iceberg-mock.invalid',
+	AUTHORIZATION_TYPE 'none', PREFIX '', DEFAULT_SCHEMA '');
+
+query I
+SELECT count(*) FROM duckdb_logs_parsed('HTTP');
+----
+1
+
+statement ok
+DETACH config_empty;
+
+# Headers merge individually, case-insensitively, through the same three layers.
+query I
+SELECT * FROM config_response(
+	'{"header.X-Default":"default","header.X-Client":"default","header.X-Override":"default"}',
+	'{"header.x-override":"override","default_schema":"default"}');
+----
+204
+
+statement ok
+CALL truncate_duckdb_logs();
+
+statement ok
+ATTACH '' AS config_headers (TYPE ICEBERG, URI 'http://iceberg-mock.invalid',
+	AUTHORIZATION_TYPE 'none',
+	EXTRA_HTTP_HEADERS MAP {'x-client': 'client', 'X-Override': 'client'});
+
+query III
+SELECT request.headers['x-default'], request.headers['x-client'], request.headers['x-override']
+FROM duckdb_logs_parsed('HTTP') WHERE request.url LIKE '%/namespaces/default';
+----
+default	client	override
+
+statement ok
+DETACH config_headers;
+
+# A secret is part of client configuration. Defaults do not replace its token.
+statement ok
+CREATE SECRET config_secret (TYPE ICEBERG, TOKEN 'client-token', URI 'http://iceberg-mock.invalid');
+
+query I
+SELECT * FROM config_response('{"token":"default-token","default_schema":"default"}', '{}');
+----
+204
+
+statement ok
+CALL truncate_duckdb_logs();
+
+statement ok
+ATTACH '' AS config_auth (TYPE ICEBERG, SECRET config_secret);
+
+query I
+SELECT request.headers['Authorization'] FROM duckdb_logs_parsed('HTTP') ORDER BY timestamp;
+----
+Bearer client-token
+Bearer client-token
+
+statement ok
+DETACH config_auth;
+
+# A token override takes effect only after the bootstrap request.
+query I
+SELECT * FROM config_response('{"token":"default-token","default_schema":"default"}',
+	'{"token":"server-token","oauth2-server-uri":"http://iceberg-mock.invalid/token","scope":"server-scope"}');
+----
+204
+
+statement ok
+CALL truncate_duckdb_logs();
+
+statement ok
+ATTACH '' AS config_auth (TYPE ICEBERG, SECRET config_secret);
+
+query I
+SELECT request.headers['Authorization'] FROM duckdb_logs_parsed('HTTP') ORDER BY timestamp;
+----
+Bearer client-token
+Bearer server-token
+
+statement ok
+DETACH config_auth;
+
+statement ok
+DROP SECRET config_secret;
+
+# Iceberg's combined credential, scope and OAuth URI spellings also work in ATTACH.
+query I
+SELECT status FROM iceberg_test_catalog_request('POST', '/__test/response',
+	'{"method":"POST","path":"/token","status":200,"body":{"access_token":"issued-token","token_type":"bearer"}}');
+----
+204
+
+query I
+SELECT * FROM config_response('{"default_schema":"default"}', '{}');
+----
+204
+
+statement ok
+CALL truncate_duckdb_logs();
+
+statement ok
+ATTACH '' AS config_credential (TYPE ICEBERG, URI 'http://iceberg-mock.invalid',
+	"credential" 'client:secret:with:colons', "scope" 'test-scope',
+	"oauth2-server-uri" 'http://iceberg-mock.invalid/token');
+
+query I
+SELECT request.url FROM duckdb_logs_parsed('HTTP') ORDER BY timestamp;
+----
+http://iceberg-mock.invalid/token
+http://iceberg-mock.invalid/v1/config
+http://iceberg-mock.invalid/v1/namespaces/default
+
+query I
+SELECT request.headers['Authorization'] = 'Basic ' || to_base64('client:secret:with:colons'::BLOB)
+FROM duckdb_logs_parsed('HTTP') WHERE request.url LIKE '%/token';
+----
+true
+
+statement ok
+DETACH config_credential;
+
+# The negotiated auth manager can change, and properties for other managers are ignored.
+query I
+SELECT * FROM config_response('{"default_schema":"default","rest.signing-region":"unused"}',
+	'{"rest.auth.type":"none"}');
+----
+204
+
+statement ok
+CALL truncate_duckdb_logs();
+
+statement ok
+ATTACH '' AS config_none (TYPE ICEBERG, URI 'http://iceberg-mock.invalid', TOKEN 'bootstrap-token');
+
+query I
+SELECT request.headers['Authorization'] IS NULL FROM duckdb_logs_parsed('HTTP')
+WHERE request.url LIKE '%/namespaces/default';
+----
+true
+
+statement ok
+DETACH config_none;
+
+# Native booleans participate in config resolution. Inspect the actual CREATE request.
+query I
+SELECT * FROM config_response('{"stage_create_tables":"false"}', '{}');
+----
+204
+
+statement ok
+ATTACH '' AS config_create (TYPE ICEBERG, URI 'http://iceberg-mock.invalid',
+	AUTHORIZATION_TYPE 'none', ACCESS_DELEGATION_MODE 'none');
+
+statement ok
+CALL truncate_duckdb_logs();
+
+statement ok
+CREATE TABLE config_create.default.config_nonstaged (id INTEGER);
+
+query I
+SELECT try_cast(request AS JSON)->>'stage-create'
+FROM read_json_auto('{TEMP_DIR}/iceberg-native/*/requests.jsonl')
+WHERE method = 'POST' AND path = '/v1/namespaces/default/tables'
+	AND try_cast(request AS JSON)->>'name' = 'config_nonstaged';
+----
+false
+
+statement ok
+DROP TABLE config_create.default.config_nonstaged;
+
+statement ok
+DETACH config_create;
+
+statement ok
+ATTACH '' AS config_create (TYPE ICEBERG, URI 'http://iceberg-mock.invalid',
+	AUTHORIZATION_TYPE 'none', ACCESS_DELEGATION_MODE 'none', STAGE_CREATE_TABLES true);
+
+statement ok
+CALL truncate_duckdb_logs();
+
+statement ok
+CREATE TABLE config_create.default.config_staged (id INTEGER);
+
+query I
+SELECT try_cast(request AS JSON)->>'stage-create'
+FROM read_json_auto('{TEMP_DIR}/iceberg-native/*/requests.jsonl')
+WHERE method = 'POST' AND path = '/v1/namespaces/default/tables'
+	AND try_cast(request AS JSON)->>'name' = 'config_staged';
+----
+true
+
+statement ok
+DROP TABLE config_create.default.config_staged;
+
+statement ok
+DETACH config_create;
+
+query I
+SELECT * FROM config_response('{"stage_create_tables":"true"}', '{"stage_create_tables":"false"}');
+----
+204
+
+statement ok
+ATTACH '' AS config_create (TYPE ICEBERG, URI 'http://iceberg-mock.invalid',
+	AUTHORIZATION_TYPE 'none', ACCESS_DELEGATION_MODE 'none', STAGE_CREATE_TABLES true);
+
+statement ok
+CREATE TABLE config_create.default.config_forced_nonstaged (id INTEGER);
+
+query I
+SELECT try_cast(request AS JSON)->>'stage-create'
+FROM read_json_auto('{TEMP_DIR}/iceberg-native/*/requests.jsonl')
+WHERE method = 'POST' AND path = '/v1/namespaces/default/tables'
+	AND try_cast(request AS JSON)->>'name' = 'config_forced_nonstaged';
+----
+false
+
+statement ok
+DROP TABLE config_create.default.config_forced_nonstaged;
+
+statement ok
+DETACH config_create;
+
+# Resolved warehouse values do not change the identity of the original ATTACH.
+query I
+SELECT * FROM config_response('{"warehouse":"server-default"}', '{"warehouse":"server-warehouse"}');
+----
+204
+
+statement ok
+ATTACH '' AS config_warehouse (TYPE ICEBERG, URI 'http://iceberg-mock.invalid',
+	AUTHORIZATION_TYPE 'none');
+
+statement ok
+CALL truncate_duckdb_logs();
+
+statement ok
+ATTACH OR REPLACE '' AS config_warehouse (TYPE ICEBERG, ENDPOINT 'http://iceberg-mock.invalid',
+	"rest.auth.type" 'none');
+
+query I
+SELECT count(*) FROM duckdb_logs_parsed('HTTP');
+----
+0
+
+statement ok
+DETACH config_warehouse;
+
+# Invalid known values fail; unknown explicit ATTACH options still fail.
+query I
+SELECT * FROM config_response('{}', '{"stage_create_tables":"not-a-boolean"}');
+----
+204
+
+statement error
+ATTACH '' AS config_invalid (TYPE ICEBERG, URI 'http://iceberg-mock.invalid',
+	AUTHORIZATION_TYPE 'none');
+----
+Could not convert string 'not-a-boolean' to BOOL
+
+statement error
+ATTACH '' AS config_invalid (TYPE ICEBERG, URI 'http://iceberg-mock.invalid',
+	AUTHORIZATION_TYPE 'none', UNKNOWN_CLIENT_OPTION 'invalid');
+----
+Unhandled options found: unknown_client_option
+
+statement error
+ATTACH '' AS config_invalid (TYPE ICEBERG, URI 'http://iceberg-mock.invalid',
+	AUTHORIZATION_TYPE 'none', NAMESPACE_SEPARATOR ':', "namespace-separator" '/');
+----
+Duplicate Iceberg option 'namespace_separator'
+
+statement error
+ATTACH '' AS config_invalid (TYPE ICEBERG, URI 'http://iceberg-mock.invalid',
+	ENDPOINT 'http://iceberg-mock.invalid', AUTHORIZATION_TYPE 'none');
+----
+Both 'uri' and deprecated 'endpoint'
+
+query I
+SELECT status FROM iceberg_test_catalog_request('DELETE', '/__test/response', NULL);
+----
+204

@@ -4,13 +4,7 @@
 
 require-env CATALOG_TEST_CONFIG_SETUP
 
-require avro
-
-require parquet
-
-require iceberg
-
-require httpfs
+include test/sql/init_requires
 
 statement ok
 drop table if exists my_datalake.default.rewrite_partitioned;
@@ -59,7 +53,7 @@ query I
 select count(*)
 from iceberg_metadata('my_datalake.default.rewrite_partitioned')
 where content = 'DATA' and status <> 'DELETED'
-  and file_path like '%/category=%';
+  and replace(file_path, chr(92), '/') like '%/category=%';
 ----
 12
 

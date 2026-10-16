@@ -1,0 +1,111 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/reads/filtering/test_geometry_filter_correctness.test
+# description: Iceberg equivalents of the upstream geometry filter and persisted bbox regressions
+# group: [filtering]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require-env FORMAT_V3_SUPPORT
+
+require-env GEOMETRY_SUPPORT
+
+include test/sql/init_requires
+
+# geometry_stats_prune_null.test and geometry_intersection_filter.test_slow
+# assert native-storage EXPLAIN plans. Test their result guarantees on Iceberg,
+# including NULLs and empty geometries in the same data file as real points.
+statement ok
+drop table if exists my_datalake.default.geom_filter_nullable;
+
+statement ok
+create table my_datalake.default.geom_filter_nullable (id BIGINT, g GEOMETRY)
+with ('format-version'='3');
+
+statement ok
+insert into my_datalake.default.geom_filter_nullable
+select i, case when i % 10 = 0 then NULL
+               when i = 999 then 'POINT EMPTY'::GEOMETRY
+               else printf('POINT(%d %d)', i % 100, i % 100)::GEOMETRY end
+from range(1000) t(i);
+
+query I
+select count(*) from my_datalake.default.geom_filter_nullable
+where g && 'POLYGON((-1 -1, 200 -1, 200 200, -1 200, -1 -1))'::GEOMETRY;
+----
+899
+
+query I
+select count(*) from my_datalake.default.geom_filter_nullable
+where g && 'POLYGON((500 500, 600 500, 600 600, 500 600, 500 500))'::GEOMETRY;
+----
+0
+
+query I rowsort matching_ids
+select id from my_datalake.default.geom_filter_nullable
+where g && 'POLYGON((0 0, 10 0, 10 10, 0 10, 0 0))'::GEOMETRY;
+----
+
+statement ok
+set disabled_optimizers='filter_pushdown';
+
+query I
+select count(*) from my_datalake.default.geom_filter_nullable
+where g && 'POLYGON((-1 -1, 200 -1, 200 200, -1 200, -1 -1))'::GEOMETRY;
+----
+899
+
+query I rowsort matching_ids
+select id from my_datalake.default.geom_filter_nullable
+where g && 'POLYGON((0 0, 10 0, 10 10, 0 10, 0 0))'::GEOMETRY;
+----
+
+statement ok
+reset disabled_optimizers;
+
+# geometry_stats_prune.test / geometry_stats_prune_shredded.test reproduce
+# spatial/#817 using a native database detach/reattach. On Iceberg, write the
+# same polygons and query their committed bounds from another connection.
+statement ok
+drop table if exists my_datalake.default.geom_filter_grid;
+
+statement ok
+create table my_datalake.default.geom_filter_grid (g GEOMETRY)
+with ('format-version'='3');
+
+statement ok
+insert into my_datalake.default.geom_filter_grid
+select printf('POLYGON((%f %f, %f %f, %f %f, %f %f, %f %f))',
+              x, y, x, y + 0.005, x + 0.005, y + 0.005,
+              x + 0.005, y, x, y)::GEOMETRY
+from (select (i % 10)::DOUBLE * 0.01 as x,
+             floor(i / 10)::DOUBLE * 0.01 as y
+      from range(2048) t(i));
+
+query I
+select count(*) from my_datalake.default.geom_filter_grid
+where g && 'POLYGON((0.02 0.02, 0.02 0.05, 0.05 0.05, 0.05 0.02, 0.02 0.02))'::GEOMETRY;
+----
+16
+
+query I con1
+select count(*) from my_datalake.default.geom_filter_grid
+where g && 'POLYGON((0.02 0.02, 0.02 0.05, 0.05 0.05, 0.05 0.02, 0.02 0.02))'::GEOMETRY;
+----
+16
+
+statement ok con1
+set disabled_optimizers='filter_pushdown';
+
+query I con1
+select count(*) from my_datalake.default.geom_filter_grid
+where g && 'POLYGON((0.02 0.02, 0.02 0.05, 0.05 0.05, 0.05 0.02, 0.02 0.02))'::GEOMETRY;
+----
+16
+
+statement ok con1
+reset disabled_optimizers;
+
+statement ok
+drop table my_datalake.default.geom_filter_grid;
+
+statement ok
+drop table my_datalake.default.geom_filter_nullable;

@@ -1,0 +1,14 @@
+# name: benchmark/scan_tasks/multi_row_group_t1.benchmark
+# description: 64 scan tasks, multi_row_group, 1 threads
+# group: [scan_tasks]
+
+template benchmark/scan_tasks/scan_tasks.benchmark.in
+CASE=multi_row_group
+THREADS=1
+TASKS=64
+DATA_TASKS=64
+ROWS=262144
+COUNT=16777216
+SUM_ID=2199014866944
+SUM_PAYLOAD=6597162041344
+SUM_TASK_ID=528482304

@@ -1,0 +1,117 @@
+# name: test/sql/local/native_catalog/lifecycle.test
+# description: Native REST catalog activation, connection sharing, rollback and HTTP logging
+# group: [native_catalog]
+
+require-env CATALOG_TEST_CONFIG_SETUP mock
+
+include test/sql/init_requires
+
+statement ok
+CALL iceberg_test_catalog_init('{TEMP_DIR}/iceberg-native');
+
+# Binding/EXPLAIN must not execute the mutating request.
+statement ok
+EXPLAIN SELECT * FROM iceberg_test_catalog_request('POST', '/v1/namespaces', '{"namespace":["bind_only"]}');
+
+query I
+SELECT status FROM iceberg_test_catalog_request('GET', '/v1/namespaces/bind_only', NULL);
+----
+404
+
+statement ok
+ATTACH '' AS native_catalog (TYPE ICEBERG, URI 'http://iceberg-mock.invalid',
+	AUTHORIZATION_TYPE 'none', ACCESS_DELEGATION_MODE 'none', STAGE_CREATE_TABLES true);
+
+statement ok
+CREATE SCHEMA native_catalog.lifecycle;
+
+statement ok
+CREATE TABLE native_catalog.lifecycle.t (id INTEGER);
+
+statement ok
+INSERT INTO native_catalog.lifecycle.t VALUES (1), (2);
+
+statement ok
+CALL iceberg_test_catalog_init('{TEMP_DIR}/iceberg-native');
+
+query I con1
+SELECT sum(id) FROM native_catalog.lifecycle.t;
+----
+3
+
+statement ok con1
+BEGIN;
+
+statement ok con1
+INSERT INTO native_catalog.lifecycle.t VALUES (100);
+
+statement ok con1
+ROLLBACK;
+
+query I
+SELECT sum(id) FROM native_catalog.lifecycle.t;
+----
+3
+
+statement error
+CALL iceberg_test_catalog_init('{TEMP_DIR}/another-native-root');
+----
+already initialized with another root
+
+# Iceberg goes through the normal transport, which has no network fallback.
+statement error
+ATTACH '' AS forbidden_catalog (TYPE ICEBERG, URI 'http://unexpected.invalid',
+	AUTHORIZATION_TYPE 'none', ACCESS_DELEGATION_MODE 'none');
+----
+Native Iceberg test catalog only accepts
+
+# HTTPFS expects its own parameter type; reject file sessions before that cast.
+statement error
+SELECT * FROM read_text('http://iceberg-mock.invalid/not-a-file');
+----
+Native Iceberg test catalog does not support HTTP filesystem I/O
+
+statement error
+SELECT * FROM read_text('http://unexpected.invalid/not-a-file');
+----
+Native Iceberg test catalog does not support HTTP filesystem I/O
+
+statement ok
+CALL enable_logging('HTTP');
+
+query I
+SELECT status FROM iceberg_test_catalog_request('GET', '/v1/config', NULL);
+----
+200
+
+query I
+SELECT count(*) > 0 FROM duckdb_logs_parsed('HTTP')
+WHERE request.url = 'http://iceberg-mock.invalid/v1/config' AND request.type = 'GET';
+----
+true
+
+statement ok
+BEGIN;
+
+statement ok
+CREATE TABLE native_catalog.lifecycle.aborted (id INTEGER);
+
+statement ok
+INSERT INTO native_catalog.lifecycle.aborted VALUES (5);
+
+statement ok
+ROLLBACK;
+
+statement error con1
+SELECT * FROM native_catalog.lifecycle.aborted;
+----
+does not exist
+
+statement ok
+DROP TABLE native_catalog.lifecycle.t;
+
+statement ok
+DROP SCHEMA native_catalog.lifecycle;
+
+statement ok
+DETACH native_catalog;

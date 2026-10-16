@@ -1,0 +1,113 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/insert/partitions/test_partition_summary_missing_bounds.test
+# description: An unavailable bound must omit the partition summaries, rather than describe non-null values as all-null.
+# group: [partitions]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+include test/sql/init_requires
+
+# VARCHAR can have a lower bound but no representable truncated upper bound.
+# TIME and UUID with compatible extrema can serialize both bounds. Check that
+# adding support for them preserves null-only summaries and the VARCHAR fallback.
+foreach type VARCHAR TIME UUID
+
+statement ok
+CREATE OR REPLACE TABLE missing_bounds_rows AS
+SELECT id, CASE '{type}'
+	WHEN 'VARCHAR' THEN repeat(chr(1114111), 5) || id::VARCHAR
+	WHEN 'TIME' THEN '12:34:56.12345' || id::VARCHAR
+	WHEN 'UUID' THEN '12345678-1234-1234-1234-12345678900' || id::VARCHAR
+END::{type} AS p
+FROM range(1, 3) t(id)
+UNION ALL SELECT 3, NULL::{type};
+
+foreach nulls none mixed all
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.partition_summary_missing_bounds;
+
+# A supported field before p must not leave a partial list of summaries behind.
+statement ok
+CREATE TABLE my_datalake.default.partition_summary_missing_bounds (id BIGINT, category INTEGER, p {type})
+PARTITIONED BY (category, p);
+
+statement ok
+INSERT INTO my_datalake.default.partition_summary_missing_bounds
+SELECT id, 42, p FROM missing_bounds_rows
+WHERE '{nulls}' = 'mixed' OR ('{nulls}' = 'all') = (p IS NULL);
+
+statement ok
+BEGIN;
+
+statement ok
+SET VARIABLE missing_bounds_list = (
+	SELECT manifest_list FROM iceberg_snapshots(my_datalake.default.partition_summary_missing_bounds)
+);
+
+# Null bounds are valid only when there are no non-null partition values.
+# The optional partitions list is the place to express unavailable summaries.
+query I
+SELECT bool_and((partitions IS NULL) = ('{type}' = 'VARCHAR' AND '{nulls}' <> 'all'))
+FROM read_avro(getvariable('missing_bounds_list'));
+----
+true
+
+query I
+SELECT CASE WHEN '{nulls}' = 'all' THEN
+	len(partitions) = 2 AND partitions[2].contains_null
+	AND NOT partitions[2].contains_nan
+	AND partitions[2].lower_bound IS NULL AND partitions[2].upper_bound IS NULL
+WHEN '{type}' = 'VARCHAR' THEN partitions IS NULL
+ELSE len(partitions) = 2
+	AND partitions[2].contains_null = ('{nulls}' = 'mixed')
+	AND NOT partitions[2].contains_nan
+	AND partitions[2].lower_bound IS NOT NULL AND partitions[2].upper_bound IS NOT NULL END
+FROM read_avro(getvariable('missing_bounds_list'));
+----
+true
+
+statement ok
+COMMIT;
+
+query I
+SELECT count(*) = CASE '{nulls}' WHEN 'none' THEN 2 WHEN 'mixed' THEN 3 ELSE 1 END
+FROM my_datalake.default.partition_summary_missing_bounds;
+----
+true
+
+query I
+SELECT count(*) = CASE WHEN '{nulls}' = 'none' THEN 0 ELSE 1 END
+FROM my_datalake.default.partition_summary_missing_bounds WHERE p IS NULL;
+----
+true
+
+query I
+SELECT count(*) = CASE WHEN '{nulls}' = 'all' THEN 0 ELSE 2 END
+FROM my_datalake.default.partition_summary_missing_bounds WHERE p IS NOT NULL;
+----
+true
+
+statement ok
+SET VARIABLE first_partition = (SELECT p FROM missing_bounds_rows WHERE id = 1);
+
+foreach op = >
+
+query I
+SELECT count(*) = CASE WHEN '{nulls}' = 'all' THEN 0 ELSE 1 END
+FROM my_datalake.default.partition_summary_missing_bounds WHERE p {op} getvariable('first_partition');
+----
+true
+
+endloop
+
+query I
+SELECT count(*) FROM my_datalake.default.partition_summary_missing_bounds WHERE p < getvariable('first_partition');
+----
+0
+
+statement ok
+DROP TABLE my_datalake.default.partition_summary_missing_bounds;
+
+endloop
+
+endloop

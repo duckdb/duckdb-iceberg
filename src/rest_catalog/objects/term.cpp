@@ -24,9 +24,9 @@ Term Term::FromJSON(JSONValue obj) {
 
 Term Term::Copy() const {
 	Term res;
-	if (reference.has_value()) {
-		res.reference.emplace();
-		(*res.reference) = (*reference).Copy();
+	if (term_reference.has_value()) {
+		res.term_reference.emplace();
+		(*res.term_reference) = (*term_reference).Copy();
 	}
 	if (transform_term.has_value()) {
 		res.transform_term.emplace();
@@ -38,12 +38,12 @@ Term Term::Copy() const {
 string Term::TryFromJSON(JSONValue obj) {
 	string error;
 	do {
-		reference.emplace();
-		error = reference->TryFromJSON(obj);
+		term_reference.emplace();
+		error = term_reference->TryFromJSON(obj);
 		if (error.empty()) {
 			break;
 		} else {
-			reference = nullopt;
+			term_reference = nullopt;
 		}
 		transform_term.emplace();
 		error = transform_term->TryFromJSON(obj);
@@ -58,8 +58,8 @@ string Term::TryFromJSON(JSONValue obj) {
 }
 
 JSONMutableValue Term::ToJSON(JSONWriter &writer) const {
-	if (reference.has_value()) {
-		return reference->ToJSON(writer);
+	if (term_reference.has_value()) {
+		return term_reference->ToJSON(writer);
 	} else if (transform_term.has_value()) {
 		return transform_term->ToJSON(writer);
 	}

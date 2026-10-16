@@ -1,0 +1,217 @@
+# name: test/sql/local/mapping_failure_variations.test
+# group: [local]
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+# struct_to_list
+
+statement error
+SELECT payload FROM iceberg_scan('{WORKING_DIRECTORY}/data/persistent/mapping_failures/struct_to_list', version='1')
+----
+Binder Error: Failed to map file-column of type 'STRUCT("value" VARCHAR)' to result-column of type 'VARCHAR[]'
+
+statement error
+SELECT * FROM iceberg_scan('{WORKING_DIRECTORY}/data/persistent/mapping_failures/struct_to_list', version='1')
+----
+Binder Error: Failed to map file-column of type 'STRUCT("value" VARCHAR)' to result-column of type 'VARCHAR[]'
+
+statement error
+SELECT id FROM iceberg_scan('{WORKING_DIRECTORY}/data/persistent/mapping_failures/struct_to_list', version='1') WHERE payload IS NOT NULL
+----
+Binder Error: Failed to map file-column of type 'STRUCT("value" VARCHAR)' to result-column of type 'VARCHAR[]'
+
+query I
+SELECT id FROM iceberg_scan('{WORKING_DIRECTORY}/data/persistent/mapping_failures/struct_to_list', version='1') ORDER BY id
+----
+1
+2
+
+# struct_to_map
+
+statement error
+SELECT payload FROM iceberg_scan('{WORKING_DIRECTORY}/data/persistent/mapping_failures/struct_to_map', version='1')
+----
+Binder Error: Failed to map file-column of type 'STRUCT("value" VARCHAR)' to result-column of type 'MAP(VARCHAR, VARCHAR)'
+
+statement error
+SELECT * FROM iceberg_scan('{WORKING_DIRECTORY}/data/persistent/mapping_failures/struct_to_map', version='1')
+----
+Binder Error: Failed to map file-column of type 'STRUCT("value" VARCHAR)' to result-column of type 'MAP(VARCHAR, VARCHAR)'
+
+statement error
+SELECT id FROM iceberg_scan('{WORKING_DIRECTORY}/data/persistent/mapping_failures/struct_to_map', version='1') WHERE payload IS NOT NULL
+----
+Binder Error: Failed to map file-column of type 'STRUCT("value" VARCHAR)' to result-column of type 'MAP(VARCHAR, VARCHAR)'
+
+query I
+SELECT id FROM iceberg_scan('{WORKING_DIRECTORY}/data/persistent/mapping_failures/struct_to_map', version='1') ORDER BY id
+----
+1
+2
+
+# list_to_struct
+
+statement error
+SELECT payload FROM iceberg_scan('{WORKING_DIRECTORY}/data/persistent/mapping_failures/list_to_struct', version='1')
+----
+Binder Error: Failed to map file-column of type 'VARCHAR[]' to result-column of type 'STRUCT("value" VARCHAR)'
+
+statement error
+SELECT * FROM iceberg_scan('{WORKING_DIRECTORY}/data/persistent/mapping_failures/list_to_struct', version='1')
+----
+Binder Error: Failed to map file-column of type 'VARCHAR[]' to result-column of type 'STRUCT("value" VARCHAR)'
+
+statement error
+SELECT id FROM iceberg_scan('{WORKING_DIRECTORY}/data/persistent/mapping_failures/list_to_struct', version='1') WHERE payload IS NOT NULL
+----
+Binder Error: Failed to map file-column of type 'VARCHAR[]' to result-column of type 'STRUCT("value" VARCHAR)'
+
+query I
+SELECT id FROM iceberg_scan('{WORKING_DIRECTORY}/data/persistent/mapping_failures/list_to_struct', version='1') ORDER BY id
+----
+1
+2
+
+# list_to_map
+
+statement error
+SELECT payload FROM iceberg_scan('{WORKING_DIRECTORY}/data/persistent/mapping_failures/list_to_map', version='1')
+----
+Binder Error: Failed to map file-column of type 'VARCHAR[]' to result-column of type 'MAP(VARCHAR, VARCHAR)'
+
+statement error
+SELECT * FROM iceberg_scan('{WORKING_DIRECTORY}/data/persistent/mapping_failures/list_to_map', version='1')
+----
+Binder Error: Failed to map file-column of type 'VARCHAR[]' to result-column of type 'MAP(VARCHAR, VARCHAR)'
+
+statement error
+SELECT id FROM iceberg_scan('{WORKING_DIRECTORY}/data/persistent/mapping_failures/list_to_map', version='1') WHERE payload IS NOT NULL
+----
+Binder Error: Failed to map file-column of type 'VARCHAR[]' to result-column of type 'MAP(VARCHAR, VARCHAR)'
+
+query I
+SELECT id FROM iceberg_scan('{WORKING_DIRECTORY}/data/persistent/mapping_failures/list_to_map', version='1') ORDER BY id
+----
+1
+2
+
+# map_to_struct
+
+statement error
+SELECT payload FROM iceberg_scan('{WORKING_DIRECTORY}/data/persistent/mapping_failures/map_to_struct', version='1')
+----
+Binder Error: Failed to map file-column of type 'MAP(VARCHAR, VARCHAR)' to result-column of type 'STRUCT("value" VARCHAR)'
+
+statement error
+SELECT * FROM iceberg_scan('{WORKING_DIRECTORY}/data/persistent/mapping_failures/map_to_struct', version='1')
+----
+Binder Error: Failed to map file-column of type 'MAP(VARCHAR, VARCHAR)' to result-column of type 'STRUCT("value" VARCHAR)'
+
+statement error
+SELECT id FROM iceberg_scan('{WORKING_DIRECTORY}/data/persistent/mapping_failures/map_to_struct', version='1') WHERE payload IS NOT NULL
+----
+Binder Error: Failed to map file-column of type 'MAP(VARCHAR, VARCHAR)' to result-column of type 'STRUCT("value" VARCHAR)'
+
+query I
+SELECT id FROM iceberg_scan('{WORKING_DIRECTORY}/data/persistent/mapping_failures/map_to_struct', version='1') ORDER BY id
+----
+1
+2
+
+# map_to_list
+
+statement error
+SELECT payload FROM iceberg_scan('{WORKING_DIRECTORY}/data/persistent/mapping_failures/map_to_list', version='1')
+----
+Binder Error: Failed to map file-column of type 'MAP(VARCHAR, VARCHAR)' to result-column of type 'VARCHAR[]'
+
+statement error
+SELECT * FROM iceberg_scan('{WORKING_DIRECTORY}/data/persistent/mapping_failures/map_to_list', version='1')
+----
+Binder Error: Failed to map file-column of type 'MAP(VARCHAR, VARCHAR)' to result-column of type 'VARCHAR[]'
+
+statement error
+SELECT id FROM iceberg_scan('{WORKING_DIRECTORY}/data/persistent/mapping_failures/map_to_list', version='1') WHERE payload IS NOT NULL
+----
+Binder Error: Failed to map file-column of type 'MAP(VARCHAR, VARCHAR)' to result-column of type 'VARCHAR[]'
+
+query I
+SELECT id FROM iceberg_scan('{WORKING_DIRECTORY}/data/persistent/mapping_failures/map_to_list', version='1') ORDER BY id
+----
+1
+2
+
+# struct_child
+
+statement error
+SELECT payload FROM iceberg_scan('{WORKING_DIRECTORY}/data/persistent/mapping_failures/struct_child', version='1')
+----
+Binder Error: Failed to map file-column of type 'STRUCT("value" VARCHAR)' to result-column of type 'VARCHAR[]'
+
+statement error
+SELECT * FROM iceberg_scan('{WORKING_DIRECTORY}/data/persistent/mapping_failures/struct_child', version='1')
+----
+Binder Error: Failed to map file-column of type 'STRUCT("value" VARCHAR)' to result-column of type 'VARCHAR[]'
+
+statement error
+SELECT id FROM iceberg_scan('{WORKING_DIRECTORY}/data/persistent/mapping_failures/struct_child', version='1') WHERE payload IS NOT NULL
+----
+Binder Error: Failed to map file-column of type 'STRUCT("value" VARCHAR)' to result-column of type 'VARCHAR[]'
+
+query I
+SELECT id FROM iceberg_scan('{WORKING_DIRECTORY}/data/persistent/mapping_failures/struct_child', version='1') ORDER BY id
+----
+1
+2
+
+# list_element
+
+statement error
+SELECT payload FROM iceberg_scan('{WORKING_DIRECTORY}/data/persistent/mapping_failures/list_element', version='1')
+----
+Binder Error: Failed to map file-column of type 'STRUCT("value" VARCHAR)' to result-column of type 'VARCHAR[]'
+
+statement error
+SELECT * FROM iceberg_scan('{WORKING_DIRECTORY}/data/persistent/mapping_failures/list_element', version='1')
+----
+Binder Error: Failed to map file-column of type 'STRUCT("value" VARCHAR)' to result-column of type 'VARCHAR[]'
+
+statement error
+SELECT id FROM iceberg_scan('{WORKING_DIRECTORY}/data/persistent/mapping_failures/list_element', version='1') WHERE payload IS NOT NULL
+----
+Binder Error: Failed to map file-column of type 'STRUCT("value" VARCHAR)' to result-column of type 'VARCHAR[]'
+
+query I
+SELECT id FROM iceberg_scan('{WORKING_DIRECTORY}/data/persistent/mapping_failures/list_element', version='1') ORDER BY id
+----
+1
+2
+
+# map_value
+
+statement error
+SELECT payload FROM iceberg_scan('{WORKING_DIRECTORY}/data/persistent/mapping_failures/map_value', version='1')
+----
+Binder Error: Failed to map file-column of type 'STRUCT("value" VARCHAR)' to result-column of type 'VARCHAR[]'
+
+statement error
+SELECT * FROM iceberg_scan('{WORKING_DIRECTORY}/data/persistent/mapping_failures/map_value', version='1')
+----
+Binder Error: Failed to map file-column of type 'STRUCT("value" VARCHAR)' to result-column of type 'VARCHAR[]'
+
+statement error
+SELECT id FROM iceberg_scan('{WORKING_DIRECTORY}/data/persistent/mapping_failures/map_value', version='1') WHERE payload IS NOT NULL
+----
+Binder Error: Failed to map file-column of type 'STRUCT("value" VARCHAR)' to result-column of type 'VARCHAR[]'
+
+query I
+SELECT id FROM iceberg_scan('{WORKING_DIRECTORY}/data/persistent/mapping_failures/map_value', version='1') ORDER BY id
+----
+1
+2

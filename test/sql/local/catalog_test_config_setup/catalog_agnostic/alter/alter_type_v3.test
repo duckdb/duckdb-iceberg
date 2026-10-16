@@ -3,13 +3,11 @@
 
 require-env CATALOG_TEST_CONFIG_SETUP
 
-require avro
+require-env FORMAT_V3_SUPPORT
 
-require parquet
+require-env TIMESTAMP_NS_SUPPORT
 
-require iceberg
-
-require httpfs
+include test/sql/init_requires
 
 statement ok
 SET default_transaction_invalidation_policy='SYNTACTIC_ERRORS_DO_NOT_INVALIDATE';
@@ -28,14 +26,43 @@ drop table if exists my_datalake.default.schema_evolution_table;
 
 statement ok
 create table my_datalake.default.schema_evolution_table(
+	evolve_to_timestamp DATE,
 	evolve_to_timestamp_ns DATE
 ) WITH ('format-version'='3');
 
 statement ok
 insert into my_datalake.default.schema_evolution_table VALUES
 	(
+		'1983/05/21'::DATE, -- evolve_to_timestamp
 		'1934/11/05'::DATE -- evolve_to_timestamp_ns
 	);
+
+# ---- DATE -> TIMESTAMP (V3) ----
+
+statement ok
+ALTER TABLE my_datalake.default.schema_evolution_table ALTER evolve_to_timestamp TYPE TIMESTAMP;
+
+query I
+select evolve_to_timestamp from my_datalake.default.schema_evolution_table where evolve_to_timestamp IS NOT NULL;
+----
+1983-05-21 00:00:00
+
+statement ok
+insert into my_datalake.default.schema_evolution_table(evolve_to_timestamp) VALUES
+	(
+		'2013/11/23 19:53:12'::TIMESTAMP, -- evolve_to_timestamp
+	);
+
+query I
+select evolve_to_timestamp from my_datalake.default.schema_evolution_table where evolve_to_timestamp IS NOT NULL order by all;
+----
+1983-05-21 00:00:00
+2013-11-23 19:53:12
+
+query I
+select typeof(evolve_to_timestamp) from my_datalake.default.schema_evolution_table limit 1
+----
+TIMESTAMP
 
 # ---- DATE -> TIMESTAMP_NS (V3) ----
 

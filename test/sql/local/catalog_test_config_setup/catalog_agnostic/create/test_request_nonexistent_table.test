@@ -4,13 +4,7 @@
 
 require-env CATALOG_TEST_CONFIG_SETUP
 
-require avro
-
-require parquet
-
-require iceberg
-
-require httpfs
+include test/sql/init_requires
 
 require core_functions
 
@@ -26,6 +20,19 @@ use my_datalake.default;
 
 statement ok
 drop table if exists create_table_t1;
+
+# SHOW ALL TABLES below must have real tables to enumerate, even in an isolated catalog.
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.request_nonexistent_seed_one;
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.request_nonexistent_seed_two;
+
+statement ok
+CREATE TABLE my_datalake.default.request_nonexistent_seed_one (id INTEGER);
+
+statement ok
+CREATE TABLE my_datalake.default.request_nonexistent_seed_two (id INTEGER);
 
 # table does not exist
 statement error
@@ -51,8 +58,8 @@ select count(*) > 1 from (show all tables);
 ----
 1
 
+statement ok
+DROP TABLE my_datalake.default.request_nonexistent_seed_one;
 
-
-
-
-
+statement ok
+DROP TABLE my_datalake.default.request_nonexistent_seed_two;

@@ -1,25 +1,23 @@
 # name: test/sql/local/catalog_test_config_setup/catalog_agnostic/delete/equality_deletes/test_equality_delete_schema_evolution_date_to_timestamp.test
-# description: Equality deletes remain valid when their target column evolves from DATE to TIMESTAMP
+# description: Equality deletes remain valid when their target column evolves from DATE to TIMESTAMP (a V3-only promotion)
 # group: [equality_deletes]
 
 require-env CATALOG_TEST_CONFIG_SETUP
 
 require-env EQUALITY_DELETE_WRITES_ENABLED 1
 
-require avro
-
-require parquet
-
-require iceberg
-
-require httpfs
+include test/sql/init_requires
 
 
 statement ok
 use my_datalake.default;
 
+# server-side scan planning has a bug on the server side currently
 statement ok
-set unsafe_and_disabled_for_iceberg_v3_enable_equality_deletes=true;
+set iceberg_use_server_side_scan_planning=false;
+
+statement ok
+set __iceberg_unsafe_enable_equality_deletes=true;
 
 statement ok
 drop table if exists my_datalake.default.equality_delete_evolve_date_to_timestamp;
@@ -29,7 +27,7 @@ create table my_datalake.default.equality_delete_evolve_date_to_timestamp (
 	id integer,
 	target date,
 	marker varchar
-);
+) WITH ('format-version'='3');
 
 statement ok
 insert into my_datalake.default.equality_delete_evolve_date_to_timestamp values

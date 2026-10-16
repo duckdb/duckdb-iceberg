@@ -15,7 +15,7 @@ namespace duckdb {
 
 struct IcebergSnaphotsBindData : public TableFunctionData {
 	IcebergSnaphotsBindData() {};
-	IcebergTableMetadata metadata;
+	IcebergTableMetadata metadata {IcebergTableMetadataSchemas {}};
 };
 
 struct IcebergSnapshotGlobalTableFunctionState : public GlobalTableFunctionState {
@@ -31,7 +31,7 @@ public:
 		return std::move(global_state);
 	}
 
-	IcebergTableMetadata metadata;
+	IcebergTableMetadata metadata {IcebergTableMetadataSchemas {}};
 	unordered_map<int64_t, IcebergSnapshot>::iterator snapshot_it;
 };
 
@@ -44,7 +44,8 @@ static unique_ptr<FunctionData> IcebergSnapshotsBind(ClientContext &context, Tab
 		if (loption == "metadata_compression_codec") {
 			options.metadata_compression_codec = StringValue::Get(kv.second);
 		} else if (loption == "version") {
-			options.table_version = StringValue::Get(kv.second);
+			options.table_version = StringValue::Get(kv.second.DefaultCastAs(LogicalType::VARCHAR));
+			options.version_explicitly_set = true;
 		} else if (loption == "version_name_format") {
 			auto value = StringValue::Get(kv.second);
 			auto string_substitutions = IcebergUtils::CountOccurrences(value, "%s");
@@ -93,11 +94,8 @@ static void IcebergSnapshotsFunction(ClientContext &context, TableFunctionInput 
 		if (!snapshot.sequence_number) {
 			throw InvalidConfigurationException("snapshot.sequence_number is not set");
 		}
-		if (!snapshot.snapshot_id) {
-			throw InvalidConfigurationException("snapshot.snapshot_id is not set");
-		}
 		FlatVector::GetDataMutable<uint64_t>(output.data[0])[i] = *snapshot.sequence_number;
-		FlatVector::GetDataMutable<uint64_t>(output.data[1])[i] = *snapshot.snapshot_id;
+		FlatVector::GetDataMutable<uint64_t>(output.data[1])[i] = snapshot.snapshot_id;
 		FlatVector::GetDataMutable<timestamp_ms_t>(output.data[2])[i] = snapshot.timestamp_ms;
 		if (snapshot.manifest_list.empty()) {
 			FlatVector::SetNull(output.data[3], i, true);
@@ -115,11 +113,14 @@ static void IcebergSnapshotsFunction(ClientContext &context, TableFunctionInput 
 
 TableFunctionSet IcebergFunctions::GetIcebergSnapshotsFunction() {
 	TableFunctionSet function_set("iceberg_snapshots");
-	TableFunction table_function({LogicalType::VARCHAR}, IcebergSnapshotsFunction, IcebergSnapshotsBind,
+	TableFunction table_function(FunctionSignature().AddPositionalOnly("path", LogicalType::VARCHAR),
+	                             IcebergSnapshotsFunction, IcebergSnapshotsBind,
 	                             IcebergSnapshotGlobalTableFunctionState::Init);
-	table_function.named_parameters["metadata_compression_codec"] = LogicalType::VARCHAR;
-	table_function.named_parameters["version"] = LogicalType::VARCHAR;
-	table_function.named_parameters["version_name_format"] = LogicalType::VARCHAR;
+	table_function.GetSignature().WithTypedKwargs("options", [&](TypedKwargs &options) {
+		options.Add("metadata_compression_codec", LogicalType::VARCHAR)
+		    .Add("version", LogicalType::ANY)
+		    .Add("version_name_format", LogicalType::VARCHAR);
+	});
 	function_set.AddFunction(table_function);
 	return function_set;
 }

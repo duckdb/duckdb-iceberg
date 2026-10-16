@@ -1,0 +1,12 @@
+# name: benchmark/performance/positional_alternating_t8.benchmark
+# description: alternating positional deletes, 8 threads
+# group: [performance]
+
+template benchmark/performance/positional_delete.benchmark.in
+CASE=alternating
+THREADS=8
+DELETE_PREDICATE=i % 2 < 1
+DELETED_COUNT=4194304
+COUNT=4194304
+SUM_ID=17592186044416
+SUM_PAYLOAD=52776587493376

@@ -16,7 +16,6 @@
 #include "duckdb/common/vector_operations/vector_operations.hpp"
 #include "duckdb/execution/expression_executor.hpp"
 #include "duckdb/common/types/hugeint.hpp"
-#include "utf8proc_wrapper.hpp"
 
 namespace duckdb {
 
@@ -206,7 +205,7 @@ ScalarFunctionSet IcebergFunctions::GetIcebergBucketFunction() {
 // iceberg_truncate(width, value) -> same type as value
 // Iceberg spec:
 //   integers:  v - (((v % W) + W) % W)      (floor to nearest multiple of W)
-//   strings:   first L grapheme clusters
+//   strings:   first L code points
 //   binary:    first L bytes
 //===--------------------------------------------------------------------===//
 
@@ -242,15 +241,8 @@ static void IcebergTruncateVarchar(DataChunk &input, ExpressionState &state, Vec
 	BinaryExecutor::Execute<int32_t, string_t, string_t>(
 	    input.data[0], input.data[1], result, input.size(), [&result](int32_t L, string_t val) -> string_t {
 		    auto data = val.GetData();
-		    auto size = val.GetSize();
-		    size_t num_chars = 0;
-		    for (auto cluster : Utf8Proc::GraphemeClusters(data, size)) {
-			    if (++num_chars >= static_cast<size_t>(L)) {
-				    return StringVector::AddString(result, data, cluster.end);
-			    }
-		    }
-		    // Fewer grapheme clusters than width: return the whole string
-		    return StringVector::AddString(result, data, size);
+		    auto length = IcebergHash::TruncatedStringLength(data, val.GetSize(), static_cast<idx_t>(L));
+		    return StringVector::AddString(result, data, length);
 	    });
 }
 

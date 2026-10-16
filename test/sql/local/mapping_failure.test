@@ -1,0 +1,53 @@
+# name: test/sql/local/mapping_failure.test
+# group: [local]
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+query II
+select DISTINCT ON (column_name) column_name, column_type from iceberg_column_stats('{WORKING_DIRECTORY}/data/persistent/issue1270/warehouse/default.db/my_table', version='1') order by column_name
+----
+element	VARCHAR
+id	BIGINT
+metadata	STRUCT(uid VARCHAR, profiles VARCHAR[])
+profiles	VARCHAR[]
+uid	VARCHAR
+
+query I
+select metadata.uid from iceberg_scan('{WORKING_DIRECTORY}/data/persistent/issue1270/warehouse/default.db/my_table', version='1') order by id
+----
+row-1
+row-2
+row-3
+row-4
+
+statement error
+select metadata.profiles from iceberg_scan('{WORKING_DIRECTORY}/data/persistent/issue1270/warehouse/default.db/my_table', version='1')
+----
+Binder Error: Failed to map file-column of type 'STRUCT(list STRUCT(element VARCHAR))' to result-column of type 'VARCHAR[]'
+
+statement error
+SELECT metadata FROM iceberg_scan('{WORKING_DIRECTORY}/data/persistent/issue1270/warehouse/default.db/my_table', version='1')
+----
+Binder Error: Failed to map file-column of type 'STRUCT(list STRUCT(element VARCHAR))' to result-column of type 'VARCHAR[]'
+
+statement error
+SELECT * FROM iceberg_scan('{WORKING_DIRECTORY}/data/persistent/issue1270/warehouse/default.db/my_table', version='1')
+----
+Binder Error: Failed to map file-column of type 'STRUCT(list STRUCT(element VARCHAR))' to result-column of type 'VARCHAR[]'
+
+statement error
+SELECT id FROM iceberg_scan('{WORKING_DIRECTORY}/data/persistent/issue1270/warehouse/default.db/my_table', version='1') WHERE metadata.profiles IS NOT NULL
+----
+Binder Error: Failed to map file-column of type 'STRUCT(list STRUCT(element VARCHAR))' to result-column of type 'VARCHAR[]'
+
+query IT
+SELECT id, metadata.uid FROM iceberg_scan('{WORKING_DIRECTORY}/data/persistent/issue1270/warehouse/default.db/my_table', version='1') WHERE id >= 3 ORDER BY id
+----
+3	row-3
+4	row-4

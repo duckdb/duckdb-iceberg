@@ -1,0 +1,179 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/transactions/test_upgrade_row_id_allocation.test
+# description: Upgrade row-ID allocations are counted once across multiple snapshots and commit retries.
+# group: [transactions]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require-env FORMAT_V3_SUPPORT
+
+require-env SNAPSHOT_HISTORY_SUPPORT
+
+include test/sql/init_requires
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.upgrade_row_id_allocation;
+
+statement ok
+CREATE TABLE my_datalake.default.upgrade_row_id_allocation (id INTEGER) WITH ('format-version' = 2);
+
+statement ok
+INSERT INTO my_datalake.default.upgrade_row_id_allocation SELECT range FROM range(10);
+
+statement ok
+ALTER TABLE my_datalake.default.upgrade_row_id_allocation SET ('format-version' = 3);
+
+statement ok
+BEGIN;
+
+statement ok
+DELETE FROM my_datalake.default.upgrade_row_id_allocation WHERE id < 3;
+
+statement ok
+INSERT INTO my_datalake.default.upgrade_row_id_allocation SELECT 100 + range FROM range(5);
+
+statement ok
+COMMIT;
+
+# The DELETE assigns the old rows their IDs; the INSERT starts after that range.
+query III
+SELECT s."sequence-number"::BIGINT AS seq, s."first-row-id"::BIGINT, s."added-rows"::BIGINT
+FROM iceberg_load_table_response('my_datalake.default.upgrade_row_id_allocation'),
+     unnest(metadata.snapshots::VARIANT[]) AS t(s)
+ORDER BY seq;
+----
+1	NULL	NULL
+2	0	10
+3	10	5
+
+query I
+SELECT metadata."next-row-id"::BIGINT
+FROM iceberg_load_table_response('my_datalake.default.upgrade_row_id_allocation');
+----
+15
+
+query III
+SELECT count(*), count(DISTINCT _row_id), max(_row_id)
+FROM my_datalake.default.upgrade_row_id_allocation;
+----
+12	12	14
+
+statement ok
+DROP TABLE my_datalake.default.upgrade_row_id_allocation;
+
+# Both writers start before any V3 snapshot exists. The second attempt must
+# rebase its allocation on the committed table cursor, without counting the old rows again.
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.upgrade_row_id_retry;
+
+statement ok
+CREATE TABLE my_datalake.default.upgrade_row_id_retry (id INTEGER) WITH ('format-version' = 2);
+
+statement ok
+INSERT INTO my_datalake.default.upgrade_row_id_retry SELECT range FROM range(10);
+
+statement ok
+ALTER TABLE my_datalake.default.upgrade_row_id_retry SET ('format-version' = 3);
+
+statement ok con1
+BEGIN;
+
+statement ok con2
+BEGIN;
+
+statement ok con1
+INSERT INTO my_datalake.default.upgrade_row_id_retry VALUES (100);
+
+statement ok con2
+INSERT INTO my_datalake.default.upgrade_row_id_retry VALUES (200);
+
+statement ok con1
+COMMIT;
+
+statement ok con2
+COMMIT;
+
+query III
+SELECT s."sequence-number"::BIGINT AS seq, s."first-row-id"::BIGINT, s."added-rows"::BIGINT
+FROM iceberg_load_table_response('my_datalake.default.upgrade_row_id_retry'),
+     unnest(metadata.snapshots::VARIANT[]) AS t(s)
+ORDER BY seq;
+----
+1	NULL	NULL
+2	0	11
+3	11	1
+
+# Assigning identities to old rows does not count those rows as newly appended data.
+query II
+SELECT s."sequence-number"::BIGINT AS seq, s.summary."added-records"::BIGINT
+FROM iceberg_load_table_response('my_datalake.default.upgrade_row_id_retry'),
+     unnest(metadata.snapshots::VARIANT[]) AS t(s)
+WHERE s."sequence-number"::BIGINT >= 2 ORDER BY seq;
+----
+2	1
+3	1
+
+query I
+SELECT metadata."next-row-id"::BIGINT
+FROM iceberg_load_table_response('my_datalake.default.upgrade_row_id_retry');
+----
+12
+
+query III
+SELECT count(*), count(DISTINCT _row_id), max(_row_id)
+FROM my_datalake.default.upgrade_row_id_retry;
+----
+12	12	11
+
+statement ok
+DROP TABLE my_datalake.default.upgrade_row_id_retry;
+
+# V2 maintenance may leave DELETED entries beside live files. Those old tombstones
+# never received row IDs and must not consume IDs when the remaining rows are upgraded.
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.upgrade_row_id_deleted_entries;
+
+statement ok
+CREATE TABLE my_datalake.default.upgrade_row_id_deleted_entries (id INTEGER, category VARCHAR)
+PARTITIONED BY (category)
+WITH ('format-version' = 2, 'commit.manifest-merge.enabled' = false, 'commit.manifest.min-count-to-merge' = 2);
+
+statement ok
+INSERT INTO my_datalake.default.upgrade_row_id_deleted_entries VALUES (1, 'a'), (2, 'b');
+
+statement ok
+INSERT INTO my_datalake.default.upgrade_row_id_deleted_entries VALUES (3, 'a');
+
+query III
+CALL iceberg_rewrite_data_files('my_datalake.default.upgrade_row_id_deleted_entries', min_input_files => 2);
+----
+2	1	<REGEX>:[1-9][0-9]*
+
+statement ok
+ALTER TABLE my_datalake.default.upgrade_row_id_deleted_entries
+SET ('format-version' = 3, 'commit.manifest-merge.enabled' = true);
+
+statement ok
+INSERT INTO my_datalake.default.upgrade_row_id_deleted_entries VALUES (4, 'b');
+
+query III
+SELECT count(*), count(DISTINCT _row_id), max(_row_id)
+FROM my_datalake.default.upgrade_row_id_deleted_entries;
+----
+4	4	3
+
+query I
+SELECT metadata."next-row-id"::BIGINT
+FROM iceberg_load_table_response('my_datalake.default.upgrade_row_id_deleted_entries');
+----
+4
+
+query III
+SELECT s."sequence-number"::BIGINT AS seq, s."first-row-id"::BIGINT, s."added-rows"::BIGINT
+FROM iceberg_load_table_response('my_datalake.default.upgrade_row_id_deleted_entries'),
+     unnest(metadata.snapshots::VARIANT[]) AS t(s)
+ORDER BY seq DESC LIMIT 1;
+----
+4	0	4
+
+statement ok
+DROP TABLE my_datalake.default.upgrade_row_id_deleted_entries;

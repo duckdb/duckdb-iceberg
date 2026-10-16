@@ -9,7 +9,9 @@
 #include "duckdb/parser/parsed_data/create_secret_info.hpp"
 
 #include "catalog/rest/api/url_utils.hpp"
+#include "iceberg_attach.hpp"
 #include "rest_catalog/objects/list.hpp"
+#include "rest_catalog/objects/load_view_result.hpp"
 
 namespace duckdb {
 
@@ -22,6 +24,13 @@ struct IRCAPISchema {
 	//! The (potentially multiple) levels that the namespace is made up of
 	vector<string> items;
 	string catalog_name;
+};
+
+struct IRCAPICredentials {
+	vector<rest_api_objects::StorageCredential> storage_credentials;
+	//! Top-level config override used to build the refreshed secret; unset uses the existing table config.
+	//! The LoadTable fallback currently supplies an empty override when config is omitted.
+	optional<case_insensitive_map_t<string>> config;
 };
 
 enum class IRCEntryLookupStatus : uint8_t { EXISTS = 0, NOT_FOUND = 1, API_ERROR = 2 };
@@ -38,6 +47,81 @@ public:
 	T result_;
 	HTTPStatusCode status_;
 	optional<rest_api_objects::IcebergErrorResponse> error_;
+};
+
+using IcebergLoadTableResult = APIResult<unique_ptr<const rest_api_objects::LoadTableResult>>;
+using IcebergLoadViewResult = APIResult<unique_ptr<const rest_api_objects::LoadViewResult>>;
+
+//! Owns the request inputs; execution only fetches and parses view metadata.
+//! SQL interpretation and transaction publication remain the caller's responsibility.
+class IcebergLoadViewRequest {
+public:
+	using Result = IcebergLoadViewResult;
+
+	IcebergLoadViewRequest(vector<string> namespace_items, string view_name);
+	IcebergLoadViewResult Execute(ClientContext &context, IcebergCatalog &catalog) const;
+
+private:
+	vector<string> namespace_items;
+	string view_name;
+};
+
+//! Owns the request inputs; execution only fetches and parses a response.
+//! The caller supplies a live context and catalog and owns cache lookup and result publication.
+class IcebergLoadTableRequest {
+public:
+	using Result = IcebergLoadTableResult;
+
+	IcebergLoadTableRequest(vector<string> namespace_items, string table_name);
+	IcebergLoadTableResult Execute(ClientContext &context, IcebergCatalog &catalog) const;
+
+private:
+	vector<string> namespace_items;
+	string table_name;
+};
+
+//! A refused table listing is distinct from a successful, empty listing.
+using IcebergListTablesResult = optional<vector<rest_api_objects::TableIdentifier>>;
+//! Schema listings retain already collected results if a subsequent page is refused.
+using IcebergListSchemasResult = vector<IRCAPISchema>;
+//! A refused view listing is distinct from an empty listing (including a missing namespace).
+using IcebergListViewsResult = optional<vector<rest_api_objects::TableIdentifier>>;
+
+//! Owns the namespace; execution fetches all pages without publishing view entries.
+class IcebergListViewsRequest {
+public:
+	using Result = IcebergListViewsResult;
+
+	explicit IcebergListViewsRequest(vector<string> namespace_items);
+	IcebergListViewsResult Execute(ClientContext &context, IcebergCatalog &catalog) const;
+
+private:
+	vector<string> namespace_items;
+};
+
+//! Owns the namespace; execution fetches all pages without publishing catalog entries.
+class IcebergListTablesRequest {
+public:
+	using Result = IcebergListTablesResult;
+
+	explicit IcebergListTablesRequest(vector<string> namespace_items, bool allow_forbidden = true);
+	IcebergListTablesResult Execute(ClientContext &context, IcebergCatalog &catalog) const;
+
+private:
+	vector<string> namespace_items;
+	bool allow_forbidden;
+};
+
+//! Owns the parent namespace; execution includes pagination and configured nested-namespace traversal.
+class IcebergListSchemasRequest {
+public:
+	using Result = IcebergListSchemasResult;
+
+	explicit IcebergListSchemasRequest(vector<string> parent);
+	IcebergListSchemasResult Execute(ClientContext &context, IcebergCatalog &catalog) const;
+
+private:
+	vector<string> parent;
 };
 
 class CommitResult {
@@ -67,25 +151,22 @@ class IRCAPI {
 public:
 	static const string API_VERSION_1;
 	//! Returns 'nullopt' if the catalog refused the listing, which must not be read as "the schema is empty".
-	static optional<vector<rest_api_objects::TableIdentifier>>
-	GetTables(ClientContext &context, IcebergCatalog &catalog, const IcebergSchemaEntry &schema);
+	static IcebergListTablesResult GetTables(ClientContext &context, IcebergCatalog &catalog,
+	                                         const IcebergSchemaEntry &schema);
 	static bool VerifyResponse(ClientContext &context, IcebergCatalog &catalog, IRCEndpointBuilder &url_builder,
 	                           bool execute_head);
 	static bool VerifySchemaExistence(ClientContext &context, IcebergCatalog &catalog, const string &schema);
 	static bool VerifyTableExistence(ClientContext &context, IcebergCatalog &catalog, const IcebergSchemaEntry &schema,
 	                                 const string &table);
 	static vector<string> ParseSchemaName(const string &namespace_name);
-	static APIResult<unique_ptr<const rest_api_objects::LoadTableResult>> GetTable(ClientContext &context,
-	                                                                               IcebergCatalog &catalog,
-	                                                                               const IcebergSchemaEntry &schema,
-	                                                                               const string &table_name);
-	static APIResult<unique_ptr<const rest_api_objects::LoadCredentialsResponse>>
-	GetTableCredentials(ClientContext &context, IcebergCatalog &catalog, const IcebergSchemaEntry &schema,
-	                    const string &table_name);
+	static IcebergLoadTableResult GetTable(ClientContext &context, IcebergCatalog &catalog,
+	                                       const IcebergSchemaEntry &schema, const string &table_name);
+	static APIResult<IRCAPICredentials> GetTableCredentials(ClientContext &context, IcebergCatalog &catalog,
+	                                                        const IcebergSchemaEntry &schema, const string &table_name);
 	static APIResult<unique_ptr<const rest_api_objects::GetNamespaceResponse>>
 	GetNamespace(ClientContext &context, IcebergCatalog &catalog, const IcebergSchemaEntry &schema);
-	static vector<IRCAPISchema> GetSchemas(ClientContext &context, IcebergCatalog &catalog,
-	                                       const vector<string> &parent);
+	static IcebergListSchemasResult GetSchemas(ClientContext &context, IcebergCatalog &catalog,
+	                                           const vector<string> &parent);
 	static CommitResult CommitTableUpdate(ClientContext &context, IcebergCatalog &catalog, const vector<string> &schema,
 	                                      const string &table_name, const string &body);
 	static void CommitTableDelete(ClientContext &context, IcebergCatalog &catalog, const vector<string> &schema,
@@ -104,6 +185,16 @@ public:
 	                                                        const IcebergCreateTableRequest &request);
 	static rest_api_objects::CatalogConfig GetCatalogConfig(ClientContext &context, IcebergCatalog &catalog,
 	                                                        const string &warehouse);
+
+	//! View operations
+	static IcebergListViewsResult GetViews(ClientContext &context, IcebergCatalog &catalog,
+	                                       const IcebergSchemaEntry &schema);
+	static IcebergLoadViewResult GetView(ClientContext &context, IcebergCatalog &catalog,
+	                                     const IcebergSchemaEntry &schema, const string &view_name);
+	static void CommitNewView(ClientContext &context, IcebergCatalog &catalog, const IcebergSchemaEntry &schema,
+	                          const string &json_body);
+	static void CommitViewDelete(ClientContext &context, IcebergCatalog &catalog, const vector<string> &schema,
+	                             const string &view_name);
 };
 
 } // namespace duckdb

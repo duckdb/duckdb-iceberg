@@ -1,0 +1,72 @@
+# name: test/sql/local/iceberg_scans/fixed_type.test
+# description: Read fixed binary schemas and reject malformed lengths
+# group: [iceberg_scans]
+
+include test/sql/init_requires
+
+query TI
+SELECT typeof(partition_col), octet_length(partition_col)
+FROM iceberg_scan('{WORKING_DIRECTORY}/data/persistent/partition_fixed_length_binary/default.db/partition_fixed_length_binary/metadata/00001-b4b3d6d2-cac2-4480-952e-0e4b3b88b5d7.metadata.json');
+----
+ICEBERG_FIXED(11)	11
+ICEBERG_FIXED(11)	11
+
+foreach fixed_type fixed fixed[] fixed[abc] fixed[4 fixed[4]junk fixed[+4] fixed[4.5] fixed[1_0] fixed[1e1] fixed[2147483648] fixed[999999999999999999999999]
+
+statement ok
+COPY (
+	SELECT replace(content, '"timestamptz_ns"', '"{fixed_type}"')
+	FROM read_text('{WORKING_DIRECTORY}/data/persistent/timestamptz_ns/metadata/v1.metadata.json')
+) TO '{TEST_DIR}/invalid_fixed.metadata.json' (FORMAT CSV, HEADER false, QUOTE '', ESCAPE '');
+
+statement error
+SELECT * FROM iceberg_scan('{TEST_DIR}/invalid_fixed.metadata.json');
+----
+Invalid fixed type
+
+endloop
+
+# The defaults are hexadecimal bytes, not BLOB literals. An odd trailing digit
+# must not be silently dropped (or trip a debug assertion).
+foreach default_kind initial-default write-default
+
+statement ok
+COPY (
+	SELECT replace(content, '"timestamptz_ns"', '"fixed[2]", "{default_kind}": "6162F"')
+	FROM read_text('{WORKING_DIRECTORY}/data/persistent/timestamptz_ns/metadata/v1.metadata.json')
+) TO '{TEST_DIR}/invalid_fixed_default.metadata.json' (FORMAT CSV, HEADER false, QUOTE '', ESCAPE '');
+
+statement error
+SELECT * FROM iceberg_scan('{TEST_DIR}/invalid_fixed_default.metadata.json');
+----
+Invalid hexadecimal default
+
+# Valid hexadecimal still has to match the declared width.
+statement ok
+COPY (
+	SELECT replace(content, '"timestamptz_ns"', '"fixed[2]", "{default_kind}": "61"')
+	FROM read_text('{WORKING_DIRECTORY}/data/persistent/timestamptz_ns/metadata/v1.metadata.json')
+) TO '{TEST_DIR}/invalid_fixed_default.metadata.json' (FORMAT CSV, HEADER false, QUOTE '', ESCAPE '');
+
+statement error
+SELECT * FROM iceberg_scan('{TEST_DIR}/invalid_fixed_default.metadata.json');
+----
+Invalid default length
+
+endloop
+
+# A zero or negative length is well-formed but rejected by the type itself.
+foreach fixed_type fixed[0] fixed[-1]
+
+statement ok
+COPY (
+	SELECT replace(content, '"timestamptz_ns"', '"{fixed_type}"')
+	FROM read_text('{WORKING_DIRECTORY}/data/persistent/timestamptz_ns/metadata/v1.metadata.json')
+) TO '{TEST_DIR}/invalid_fixed.metadata.json' (FORMAT CSV, HEADER false, QUOTE '', ESCAPE '');
+
+statement error
+SELECT * FROM iceberg_scan('{TEST_DIR}/invalid_fixed.metadata.json');
+----
+length must be a positive integer
+
+endloop

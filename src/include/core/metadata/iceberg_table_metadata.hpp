@@ -11,6 +11,7 @@
 #include "core/metadata/sort/iceberg_sort_order.hpp"
 #include "iceberg_options.hpp"
 #include "rest_catalog/objects/list.hpp"
+#include "rest_catalog/objects/snapshot_references.hpp"
 #include "planning/snapshot/iceberg_snapshot_scan_info.hpp"
 
 namespace duckdb {
@@ -18,6 +19,7 @@ namespace duckdb {
 // common Iceberg table property keys
 const string WRITE_UPDATE_MODE = "write.update.mode";
 const string WRITE_DELETE_MODE = "write.delete.mode";
+const string WRITE_MERGE_MODE = "write.merge.mode";
 const string WRITE_DELETE_ISOLATION_LEVEL = "write.delete.isolation-level";
 
 struct IcebergMetadataLogItem {
@@ -29,6 +31,30 @@ public:
 public:
 	string metadata_file;
 	timestamp_ms_t timestamp_ms;
+};
+
+struct IcebergTableMetadataSchemas {
+public:
+	IcebergTableMetadataSchemas() = default;
+	explicit IcebergTableMetadataSchemas(unordered_map<int32_t, shared_ptr<IcebergTableSchema>> schemas_p)
+	    : schemas(std::move(schemas_p)) {
+		for (auto &[_, schema] : schemas) {
+			if (!schema) {
+				throw InternalException("Can't create IcebergTableMetadataSchemas from NULL schema(s)");
+			}
+		}
+	}
+
+public:
+	optional_ptr<const IcebergColumnDefinition> FindColumnByFieldId(int32_t field_id) const;
+	const IcebergTableSchema &GetSchemaFromId(int32_t schema_id) const;
+	void ForEachSchema(const std::function<void(const IcebergTableSchema &)> &callback) const;
+	bool IsEmpty() const;
+	IcebergTableSchema &AddSchemaOrGetExisting(shared_ptr<IcebergTableSchema> schema);
+
+private:
+	//! schema_id -> schema
+	unordered_map<int32_t, shared_ptr<IcebergTableSchema>> schemas;
 };
 
 //! A structure to store "LoadTableResult" information that changes as a transaction goes on
@@ -69,7 +95,7 @@ public:
 
 	//! Internal JSON parsing functions
 	optional_ptr<const IcebergSnapshot> FindSnapshotByIdInternal(int64_t target_id) const;
-	shared_ptr<IcebergTableSchema> GetSchemaFromId(int32_t schema_id) const;
+	const IcebergTableSchema &GetSchemaFromId(int32_t schema_id) const;
 	//! Searches every schema (current and historical) for a column with the given field-id.
 	//! Used to resolve equality-delete columns that have since been dropped from the table.
 	optional_ptr<const IcebergColumnDefinition> FindColumnByFieldId(int32_t field_id) const;
@@ -89,17 +115,19 @@ public:
 
 	const case_insensitive_map_t<string> &GetTableProperties() const;
 	string GetTableProperty(string property_string) const;
-	bool PropertiesAllowPositionalDeletes(IcebergSnapshotOperationType operation_type) const;
+	//! Whether the given write mode property (write.delete.mode, write.update.mode or write.merge.mode) allows
+	//! writing merge-on-read delete files
+	bool AllowsMergeOnRead(const string &write_mode_property) const;
 	string ToJSON() const;
 	void WriteMetadata(ClientContext &context, const string &path) const;
-	void WriteVersionHint(ClientContext &context, const string &path, const string &metadata_json_path) const;
+	bool WriteVersionHint(ClientContext &context, const string &path, const string &metadata_json_path) const;
 
 public:
 	void SetCurrentSchemaId(int32_t schema_id);
 	int32_t GetCurrentSchemaId() const;
 
-	IcebergTableSchema &AddSchemaOrGetExisting(shared_ptr<IcebergTableSchema> schema);
-	const unordered_map<int32_t, shared_ptr<IcebergTableSchema>> &GetSchemas() const;
+	const IcebergTableMetadataSchemas &GetSchemas() const;
+	IcebergTableMetadataSchemas &GetSchemasMutable();
 
 private:
 	JSONMutableValue SchemasToJSON(JSONWriter &writer) const;
@@ -113,14 +141,14 @@ public:
 	string table_uuid;
 	string location;
 
-	int32_t iceberg_version;
-	int32_t default_spec_id;
+	int32_t iceberg_version = 1;
+	int32_t default_spec_id = 0;
 	optional<int64_t> next_row_id;
 	optional_idx default_sort_order_id;
 
 	optional<int64_t> current_snapshot_id;
-	int64_t last_sequence_number;
-	timestamp_ms_t last_updated_ms;
+	int64_t last_sequence_number = 0;
+	timestamp_ms_t last_updated_ms {0};
 
 	optional_idx last_column_id;
 	optional_idx last_partition_field_id;
@@ -131,6 +159,8 @@ public:
 	unordered_map<int32_t, IcebergSortOrder> sort_specs;
 	//! snapshot_id -> snapshot
 	unordered_map<int64_t, IcebergSnapshot> snapshots;
+	//! Branch and tag references, including their optional retention settings
+	optional<rest_api_objects::SnapshotReferences> refs;
 	//! History of refs.main per Iceberg spec "snapshot-log": (snapshot_id, raw millis)
 	//! pairs recording each change to current-snapshot-id, sorted ascending by ms.
 	//! Used for spec-compliant point-in-time resolution; side-branch commits are absent.
@@ -149,12 +179,11 @@ public:
 	vector<IcebergMetadataLogItem> metadata_log;
 
 public:
-	IcebergTableMetadata() = default;
+	explicit IcebergTableMetadata(IcebergTableMetadataSchemas schemas);
 
 private:
-	int32_t current_schema_id;
-	//! schema_id -> schema
-	unordered_map<int32_t, shared_ptr<IcebergTableSchema>> schemas;
+	int32_t current_schema_id = 0;
+	IcebergTableMetadataSchemas schemas;
 };
 
 } // namespace duckdb

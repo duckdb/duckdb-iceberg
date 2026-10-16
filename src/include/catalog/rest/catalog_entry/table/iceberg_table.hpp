@@ -4,12 +4,15 @@
 #include "duckdb/storage/external_file_cache/caching_file_system_wrapper.hpp"
 
 #include "catalog/rest/catalog_entry/table/iceberg_table_schema_version.hpp"
+#include "catalog/rest/api/catalog_api.hpp"
 #include "core/metadata/manifest/iceberg_manifest.hpp"
 #include "core/metadata/iceberg_table_metadata.hpp"
 #include "catalog/rest/transaction/iceberg_transaction_data.hpp"
 #include "rest_catalog/objects/storage_credential.hpp"
+#include "iceberg_attach.hpp"
 
 namespace duckdb {
+class LoadTableCachePublication;
 class IcebergTableSchema;
 class ParsedExpression;
 struct CreateTableInfo;
@@ -23,7 +26,13 @@ struct IRCAPITableCredentials {
 
 struct IcebergTable {
 public:
-	IcebergTable(IcebergCatalog &catalog, IcebergSchemaEntry &schema, const string &name);
+	IcebergTable(IcebergCatalog &catalog, IcebergSchemaEntry &schema, const string &name,
+	             IcebergTableMetadata metadata);
+	IcebergTable(IcebergCatalog &catalog, IcebergSchemaEntry &schema, const string &name,
+	             const rest_api_objects::LoadTableResult &load_table_result);
+	//! A listing placeholder has no schemas until FillEntry resolves it.
+	static shared_ptr<IcebergTable> CreatePlaceholder(IcebergCatalog &catalog, IcebergSchemaEntry &schema,
+	                                                  const string &name);
 
 public:
 	void LoadCredentials(ClientContext &context) const;
@@ -34,6 +43,7 @@ public:
 	optional_ptr<CatalogEntry> CreateSchemaVersion(const IcebergTableSchema &table_schema);
 	idx_t GetMaxSchemaId();
 	idx_t GetNextPartitionSpecId();
+	idx_t GetNextPartitionFieldId();
 	idx_t GetNextSortOrderId();
 	optional<int64_t> GetExistingSpecId(IcebergPartitionSpec &spec);
 	optional<int64_t> GetExistingSortOrderId(IcebergSortOrder &sort_order);
@@ -45,12 +55,17 @@ public:
 	static IcebergPartitionSpec BuildPartitionSpec(const vector<unique_ptr<ParsedExpression>> &partition_keys,
 	                                               const IcebergTableSchema &schema, int32_t spec_id,
 	                                               idx_t base_partition_field_id);
-	static IcebergSortOrder BuildSortOrder(const vector<OrderByNode> &orders, const IcebergTableSchema &schema,
-	                                       int32_t sort_order_id);
+	static IcebergSortOrder BuildSortOrder(ClientContext &context, const vector<OrderByNode> &orders,
+	                                       const IcebergTableSchema &schema, int32_t sort_order_id);
+	//! Build a sort order from CreateTableInfo::sort_keys (expressions in the current DuckDB parser),
+	//! resolving direction and null ordering from the client settings.
+	static IcebergSortOrder BuildSortOrder(ClientContext &context,
+	                                       const vector<unique_ptr<ParsedExpression>> &sort_keys,
+	                                       const IcebergTableSchema &schema, int32_t sort_order_id);
 	IRCAPITableCredentials GetVendedCredentials(ClientContext &context) const;
 	IRCAPITableCredentials
-	GetVendedCredentials(ClientContext &context,
-	                     const vector<rest_api_objects::StorageCredential> &storage_credentials) const;
+	GetVendedCredentials(ClientContext &context, const vector<rest_api_objects::StorageCredential> &storage_credentials,
+	                     optional_ptr<const case_insensitive_map_t<string>> config_override = nullptr) const;
 	const string &BaseFilePath() const;
 	bool IsRenamed() const;
 
@@ -59,16 +74,22 @@ public:
 	static string GetTableKey(const IcebergCatalog &catalog, const vector<string> &namespace_items,
 	                          const string &table_name);
 	string GetTableKey() const;
-	IcebergTableMetadata CreateMetadataFromLog(ClientContext &context, timestamp_ms_t transaction_start_ms) const;
-	// With metadata-log enabled, reconstruct the complete table state at transaction start. Otherwise pin and copy
-	// the complete catalog state that was resolved for this transaction.
+	IcebergTableMetadata CreateMetadataFromLog(ClientContext &context, timestamp_ms_t transaction_start_ms,
+	                                           timestamp_ms_t metadata_cutoff_ms) const;
+	// With metadata-log enabled, reconstruct table state at transaction start plus the clock-skew allowance.
+	// Otherwise pin and copy the complete catalog state that was resolved for this transaction.
 	IcebergTable Copy(IcebergTransaction &iceberg_transaction) const;
 	// This copy is used for deletes, where we don't care about valid table state
 	IcebergTable Copy() const;
 	void InitSchemaVersions();
 
 	bool HasTransactionUpdates() const;
-	void InitializeFromLoadTableResult(const rest_api_objects::LoadTableResult &load_table_result);
+	void InitializeFromLoadTableResult(const rest_api_objects::LoadTableResult &load_table_result,
+	                                   optional_ptr<const rest_api_objects::TableMetadata> metadata_override = nullptr);
+	//! Initialize from a LoadTableResult, preferring the authoritative metadata file referenced by
+	//! 'metadata-location' over the metadata embedded in the catalog response.
+	void InitializeFromCatalogResponse(ClientContext &context,
+	                                   const rest_api_objects::LoadTableResult &load_table_result);
 	void RefreshFromCatalog(ClientContext &context);
 
 public:
@@ -86,6 +107,10 @@ public:
 	optional_ptr<const rest_api_objects::LoadTableResult> initialization_source;
 
 private:
+	void ApplyRefreshResult(ClientContext &context, IcebergLoadTableResult result,
+	                        LoadTableCachePublication &publication);
+	void SetLoadTableResult(const rest_api_objects::LoadTableResult &load_table_result);
+
 	//! Unchanged by rename, used to check for a rename
 	const string original_name;
 };

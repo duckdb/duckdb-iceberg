@@ -4,6 +4,7 @@
 #include "duckdb/common/bswap.hpp"
 #include "duckdb/common/file_system.hpp"
 #include "duckdb/common/string_util.hpp"
+#include "duckdb/common/json_document.hpp"
 #include "duckdb/common/vector_operations/unary_executor.hpp"
 
 namespace duckdb {
@@ -65,7 +66,7 @@ bool CRC32::table_initialized = false;
 
 } // namespace
 
-shared_ptr<IcebergDeletionVectorData> IcebergDeletionVectorData::FromBlob(const BoundIcebergManifestEntry &entry,
+shared_ptr<IcebergDeletionVectorData> IcebergDeletionVectorData::FromBlob(const IcebergFileIdentity &file,
                                                                           data_ptr_t blob_start, idx_t blob_length) {
 	//! https://iceberg.apache.org/puffin-spec/#deletion-vector-v1-blob-type
 
@@ -98,7 +99,7 @@ shared_ptr<IcebergDeletionVectorData> IcebergDeletionVectorData::FromBlob(const 
 	vector_size -= sizeof(int64_t);
 	D_ASSERT(blob_start < blob_end);
 
-	auto result_p = make_shared_ptr<IcebergDeletionVectorData>(entry);
+	auto result_p = make_shared_ptr<IcebergDeletionVectorData>(file);
 	auto &result = *result_p;
 	result.bitmaps.reserve(amount_of_bitmaps);
 	for (int64_t i = 0; i < amount_of_bitmaps; i++) {

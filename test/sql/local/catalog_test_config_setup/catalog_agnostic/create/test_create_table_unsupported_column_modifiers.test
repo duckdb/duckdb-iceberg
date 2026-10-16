@@ -1,0 +1,80 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/create/test_create_table_unsupported_column_modifiers.test
+# description: Reject unsupported CREATE TABLE column modifiers instead of silently ignoring them
+# group: [create]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+include test/sql/init_requires
+
+statement ok
+USE my_datalake.default;
+
+statement ok
+DROP TABLE IF EXISTS unsupported_create;
+
+# Typed generated column
+statement error
+CREATE TABLE unsupported_create (i INTEGER, j INTEGER GENERATED ALWAYS AS (i + 1) VIRTUAL);
+----
+Not implemented Error: Generated columns are not supported for Iceberg tables
+
+# Inferred generated column
+statement error
+CREATE TABLE unsupported_create (i INTEGER, j AS (i + 1));
+----
+Not implemented Error: Generated columns are not supported for Iceberg tables
+
+# Column collation
+statement error
+CREATE TABLE unsupported_create (i VARCHAR COLLATE nocase);
+----
+Not implemented Error: Column collations are not supported for Iceberg tables
+
+# Column compression
+statement error
+CREATE TABLE unsupported_create (i INTEGER USING COMPRESSION rle);
+----
+Not implemented Error: Column compression is not supported for Iceberg tables
+
+# Explicitly uncompressed column
+statement error
+CREATE TABLE unsupported_create (i INTEGER USING COMPRESSION uncompressed);
+----
+Not implemented Error: Column compression is not supported for Iceberg tables
+
+# CTAS can inherit collation from its query result.
+statement error
+CREATE TABLE unsupported_create AS SELECT 'value' COLLATE nocase AS i;
+----
+Not implemented Error: Column collations are not supported for Iceberg tables
+
+# Collations nested inside a CTAS column must not be discarded either.
+statement error
+CREATE TABLE unsupported_create AS SELECT {'nested': 'value' COLLATE nocase} AS i;
+----
+Not implemented Error: Column collations are not supported for Iceberg tables
+
+query I
+SELECT count(*) FROM duckdb_tables() WHERE database_name = 'my_datalake' AND schema_name = 'default' AND table_name = 'unsupported_create';
+----
+0
+
+# Validate before CREATE OR REPLACE can drop an existing table.
+statement ok
+CREATE TABLE unsupported_create (i INTEGER);
+
+statement ok
+INSERT INTO unsupported_create VALUES (42);
+
+statement error
+CREATE OR REPLACE TABLE unsupported_create (i INTEGER, j AS (i + 1));
+----
+Not implemented Error: Generated columns are not supported for Iceberg tables
+
+query I
+SELECT * FROM unsupported_create;
+----
+42
+
+statement ok
+DROP TABLE unsupported_create;

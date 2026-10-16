@@ -17,10 +17,79 @@ import json
 import sys
 import threading
 from http.server import HTTPServer, BaseHTTPRequestHandler
+from urllib.parse import urlsplit
+from uuid import NAMESPACE_URL, uuid5
 
 # Guards the recorded key id against concurrent requests.
 _lock = threading.Lock()
 _last_key_id = None
+
+
+# Empty tables exercise credential registration without contacting object storage.
+_scope_tables = {
+    "single_prefix": ("s3://scope-bucket/table/_external_metadata", ["s3://scope-bucket/table/"]),
+    "single_nested": ("s3://scope-bucket/table/", ["s3://scope-bucket/table/metadata/"]),
+    "nested": ("s3://scope-bucket/table/", ["s3://scope-bucket/table/metadata/", "s3://scope-bucket/table/"]),
+    "alias": ("s3a://scope-bucket/table/", ["s3://scope-bucket/table/metadata/"]),
+    "different_bucket": ("s3://scope-bucket/table/", ["s3://other-bucket/table/"]),
+    "slash": ("s3://scope-bucket/table/", ["/"]),
+    "bare_scheme": ("s3://scope-bucket/table/", ["s3"]),
+    "mixed_types": ("s3://scope-bucket/table/", ["gs://scope-bucket/table/", "s3://scope-bucket/table/"]),
+}
+
+
+def _scope_response(path):
+    if path == "/v1/config":
+        return {"defaults": {}, "overrides": {}}
+    if path == "/v1/namespaces":
+        return {"namespaces": [["default"]]}
+    if path == "/v1/namespaces/default":
+        return {"namespace": ["default"], "properties": {}}
+    if path == "/v1/namespaces/default/tables":
+        return {"identifiers": [{"namespace": ["default"], "name": name} for name in _scope_tables]}
+    table_name = path.removeprefix("/v1/namespaces/default/tables/")
+    if table_name not in _scope_tables:
+        return None
+    location, prefixes = _scope_tables[table_name]
+    return {
+        "metadata-location": location.rstrip("/") + "/metadata/v1.metadata.json",
+        "metadata": {
+            "format-version": 2,
+            "table-uuid": str(uuid5(NAMESPACE_URL, table_name)),
+            "location": location,
+            "last-sequence-number": 0,
+            "last-updated-ms": 1,
+            "last-column-id": 1,
+            "schemas": [
+                {
+                    "type": "struct",
+                    "schema-id": 0,
+                    "fields": [{"id": 1, "name": "id", "required": False, "type": "long"}],
+                }
+            ],
+            "current-schema-id": 0,
+            "partition-specs": [{"spec-id": 0, "fields": []}],
+            "default-spec-id": 0,
+            "last-partition-id": 999,
+            "sort-orders": [{"order-id": 0, "fields": []}],
+            "default-sort-order-id": 0,
+            "properties": {},
+            "snapshots": [],
+            "snapshot-log": [],
+            "metadata-log": [],
+        },
+        "storage-credentials": [
+            {
+                "prefix": prefix,
+                "config": {
+                    "s3.access-key-id": f"scope_key_{index}",
+                    "s3.secret-access-key": "scope_secret",
+                    "s3.region": "us-east-1",
+                },
+            }
+            for index, prefix in enumerate(prefixes)
+        ],
+    }
 
 
 def _record_signing_key(headers):
@@ -50,6 +119,16 @@ class MockCatalogHandler(BaseHTTPRequestHandler):
             self._respond(200, {"key_id": key_id})
             return
         _record_signing_key(self.headers)
+        path = urlsplit(self.path).path
+        if path.startswith("/credential-scopes/"):
+            response = _scope_response(path.removeprefix("/credential-scopes"))
+            if response is None:
+                self._respond(
+                    404, {"error": {"message": "Unknown scope fixture", "type": "NoSuchTableException", "code": 404}}
+                )
+            else:
+                self._respond(200, response)
+            return
         if self.path.startswith("/v1/config"):
             self._respond(200, {"defaults": {}, "overrides": {}})
         elif "/namespaces" in self.path:

@@ -7,6 +7,7 @@
 #include "duckdb/parser/expression/function_expression.hpp"
 #include "duckdb/function/scalar/generic_functions.hpp"
 #include "common/iceberg_default.hpp"
+#include "common/iceberg_fixed_type.hpp"
 
 namespace duckdb {
 
@@ -15,7 +16,9 @@ namespace duckdb {
 //! Hexadecimal values are given without the proper escape sequences, so we add them, for simplicity of conversion
 static string AddEscapesToBlob(const string &hexadecimal_string) {
 	string result;
-	D_ASSERT(hexadecimal_string.size() % 2 == 0);
+	if (hexadecimal_string.size() % 2 != 0) {
+		throw InvalidConfigurationException("Invalid hexadecimal default: expected an even number of digits");
+	}
 	for (idx_t i = 0; i < hexadecimal_string.size() / 2; i++) {
 		result += "\\x";
 		result += hexadecimal_string.substr(i * 2, 2);
@@ -66,8 +69,15 @@ Value IcebergColumnDefinition::ParsePrimitiveValue(const LogicalType &type,
 		return Value(default_value.string_type_value->value).DefaultCastAs(type);
 	}
 	case LogicalTypeId::BLOB: {
-		D_ASSERT(default_value.binary_type_value);
-		return Value::BLOB(AddEscapesToBlob(default_value.binary_type_value->value));
+		D_ASSERT(default_value.fixed_type_value || default_value.binary_type_value);
+		auto &hex = default_value.fixed_type_value ? default_value.fixed_type_value->value
+		                                           : default_value.binary_type_value->value;
+		auto value = Value::BLOB(AddEscapesToBlob(hex));
+		if (IcebergFixedType::IsFixed(type) &&
+		    value.GetValueUnsafe<string_t>().GetSize() != NumericCast<idx_t>(IcebergFixedType::GetLength(type))) {
+			throw InvalidConfigurationException("Invalid default length for %s", type.ToString());
+		}
+		return value.WithType(type);
 	}
 	default:
 		throw NotImplementedException("ParsePrimitiveValue not implemented for type: %s", type.ToString());
@@ -120,8 +130,7 @@ LogicalType IcebergColumnDefinition::ParsePrimitiveTypeString(const string &type
 		return LogicalType::UUID;
 	}
 	if (StringUtil::StartsWith(type_str, "fixed")) {
-		// FIXME: use fixed size type in DuckDB
-		return LogicalType::BLOB;
+		return IcebergFixedType::Parse(type_str);
 	}
 	if (type_str == "binary") {
 		return LogicalType::BLOB;
@@ -149,13 +158,15 @@ LogicalType IcebergColumnDefinition::ParsePrimitiveTypeString(const string &type
 		// Geometry is an Iceberg v3 type stored as WKB binary in parquet.
 		// The type string may include a CRS parameter: geometry(<crs>)
 		if (type_str == "geometry") {
-			// If we use IcebergConstants::DefaultGeometryCRS, file pruning does not work as well
-			// since LogicalType::Geometry(<crs>) != LogicalType::Geometry(), so casts get introduced
-			// on Iceberg predicates.
-			return LogicalType::GEOMETRY();
+			// An omitted Iceberg CRS means OGC:CRS84, not DuckDB's unspecified CRS.
+			return LogicalType::GEOMETRY(IcebergConstants::DefaultGeometryCRS);
 		}
 		if (type_str.size() > 9 && type_str[8] == '(' && type_str.back() == ')') {
 			auto crs_str = type_str.substr(9, type_str.size() - 10);
+			// Catalogs can serialize the default CRS as either geometry or geometry(ogc:crs84).
+			if (StringUtil::CIEquals(crs_str, IcebergConstants::DefaultGeometryCRS)) {
+				return LogicalType::GEOMETRY(IcebergConstants::DefaultGeometryCRS);
+			}
 			return LogicalType::GEOMETRY(crs_str);
 		}
 		throw InvalidConfigurationException("Invalid geometry type format: %s", type_str);
@@ -197,7 +208,9 @@ IcebergColumnDefinition::ParseStructField(const rest_api_objects::StructField &f
 	}
 
 	auto &type = *field.type;
-	if (type.primitive_type) {
+	if (type.variant_type) {
+		res->type = LogicalType::VARIANT();
+	} else if (type.primitive_type) {
 		res->type = ParsePrimitiveType(*type.primitive_type);
 	} else if (type.struct_type) {
 		auto &struct_type = *type.struct_type;
@@ -262,6 +275,7 @@ bool IcebergColumnDefinition::IsIcebergPrimitiveType() const {
 	case LogicalTypeId::TIMESTAMP_TZ_NS:
 	case LogicalTypeId::VARIANT:
 	case LogicalTypeId::GEOMETRY:
+	case LogicalTypeId::SQLNULL:
 		return true;
 	default:
 		return false;
@@ -290,10 +304,13 @@ unique_ptr<IcebergColumnDefinition> IcebergColumnDefinition::Copy() const {
 
 MultiFileColumnDefinition IcebergColumnDefinition::GetMultiFileColumnDefinition() const {
 	MultiFileColumnDefinition column(name, type);
-	column.default_expression = make_uniq<ConstantExpression>(GetInitialDefault());
+	column.default_expression = ConstantExpression::FromValue(GetInitialDefault());
 	column.identifier = Value::INTEGER(id);
 	for (auto &child : children) {
 		column.children.push_back(child->GetMultiFileColumnDefinition());
+	}
+	if (type.id() == LogicalTypeId::MAP) {
+		column.children[0].default_expression.reset();
 	}
 	return column;
 }
@@ -312,15 +329,8 @@ Value IcebergColumnDefinition::GetInitialDefault() const {
 }
 
 Value IcebergColumnDefinition::GetWriteDefault() const {
-	optional_ptr<Value> default_to_use;
-	if (write_default) {
-		//! Use write-default if it's set
-		default_to_use = write_default.get();
-	} else if (initial_default) {
-		//! If it's not set, use the initial-default (if that *is* set)
-		default_to_use = initial_default.get();
-	}
-	Value result = default_to_use ? *default_to_use : Value(type);
+	//! An omitted write-default is null - the initial-default only applies to rows written before the field existed
+	Value result = write_default ? *write_default : Value(type);
 	if (type.id() != LogicalTypeId::STRUCT || !result.IsNull() || !IcebergDefault::InterpretStructNullAsEmpty()) {
 		return result;
 	}
@@ -373,14 +383,14 @@ ColumnDefinition IcebergColumnDefinition::GetColumnDefinition() const {
 		// ConstantOrNull::IsConstantOrNull and extracts the second argument only when it needs to remap a supplied
 		// non-NULL STRUCT. This envelope is internal and is not serialized into Iceberg metadata.
 		vector<unique_ptr<ParsedExpression>> arguments;
-		arguments.push_back(make_uniq<ConstantExpression>(std::move(write_default)));
-		arguments.push_back(make_uniq<ConstantExpression>(GetWriteDefaultDescriptor()));
+		arguments.push_back(ConstantExpression::FromValue(write_default));
+		arguments.push_back(ConstantExpression::FromValue(GetWriteDefaultDescriptor()));
 		res.SetDefaultValue(make_uniq<FunctionExpression>(Identifier(ConstantOrNullFun::Name), std::move(arguments)));
 	} else if (!write_default.IsNull()) {
 		if (type.IsNested()) {
 			throw NotImplementedException("DEFAULT values for nested types are not supported yet");
 		}
-		res.SetDefaultValue(make_uniq<ConstantExpression>(write_default));
+		res.SetDefaultValue(ConstantExpression::FromValue(write_default));
 	}
 
 	if (doc) {

@@ -3,13 +3,9 @@
 
 require-env CATALOG_TEST_CONFIG_SETUP
 
-require avro
+require-env FORMAT_V3_SUPPORT
 
-require parquet
-
-require iceberg
-
-require httpfs
+include test/sql/init_requires
 
 require core_functions
 
@@ -29,6 +25,11 @@ statement error
 ALTER TABLE my_datalake.default.alter_table_set_options SET ('format-version'=2);
 ----
 <REGEX>:.*Cannot downgrade format-version.*
+
+statement error
+ALTER TABLE my_datalake.default.alter_table_set_options SET ('format-version'=4);
+----
+<REGEX>:.*Cannot upgrade format-version to 4, the highest supported version is 3.*
 
 # test setting arbitrary table properties
 statement ok

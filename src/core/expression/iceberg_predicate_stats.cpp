@@ -2,7 +2,10 @@
 
 #include "core/expression/iceberg_value.hpp"
 #include "duckdb/common/types/geometry.hpp"
+#include "duckdb/logging/logger.hpp"
+#include "duckdb/main/client_context.hpp"
 #include "duckdb/storage/statistics/geometry_stats.hpp"
+#include "iceberg_logging.hpp"
 
 namespace duckdb {
 
@@ -50,8 +53,9 @@ static shared_ptr<BaseStatistics> BuildGeometryStats(const Value &lower_bound, c
 	return stats;
 }
 
-IcebergPredicateStats IcebergPredicateStats::DeserializeBounds(const Value &lower_bound, const Value &upper_bound,
-                                                               const string &name, const LogicalType &type) {
+IcebergPredicateStats IcebergPredicateStats::DeserializeBounds(ClientContext &context, const Value &lower_bound,
+                                                               const Value &upper_bound, const string &name,
+                                                               const LogicalType &type) {
 	IcebergPredicateStats result;
 	if (type.id() == LogicalTypeId::GEOMETRY) {
 		result.geometry_stats = BuildGeometryStats(lower_bound, upper_bound, type);
@@ -64,21 +68,27 @@ IcebergPredicateStats IcebergPredicateStats::DeserializeBounds(const Value &lowe
 
 	if (!lower_bound.IsNull()) {
 		D_ASSERT(lower_bound.type().id() == LogicalTypeId::BLOB);
-		auto deserialized = IcebergValue::DeserializeValue(lower_bound.GetValueUnsafe<string_t>(), type);
+		auto deserialized =
+		    IcebergValue::DeserializeValue(lower_bound.GetValueUnsafe<string_t>(), type, SerializeBound::LOWER_BOUND);
 		if (deserialized.HasError()) {
-			throw InvalidConfigurationException("Column %s lower bound deserialization failed: %s", name,
-			                                    deserialized.GetError());
+			// Bounds are optional, so omit one that cannot be deserialized rather than failing the scan.
+			DUCKDB_LOG(context, IcebergLogType, "Omitting invalid lower bound for column '%s' of type %s", name,
+			           type.ToString());
+		} else {
+			result.SetLowerBound(deserialized.GetValue());
 		}
-		result.SetLowerBound(deserialized.GetValue());
 	}
 	if (!upper_bound.IsNull()) {
 		D_ASSERT(upper_bound.type().id() == LogicalTypeId::BLOB);
-		auto deserialized = IcebergValue::DeserializeValue(upper_bound.GetValueUnsafe<string_t>(), type);
+		auto deserialized =
+		    IcebergValue::DeserializeValue(upper_bound.GetValueUnsafe<string_t>(), type, SerializeBound::UPPER_BOUND);
 		if (deserialized.HasError()) {
-			throw InvalidConfigurationException("Column %s upper bound deserialization failed: %s", name,
-			                                    deserialized.GetError());
+			// Bounds are optional, so omit one that cannot be deserialized rather than failing the scan.
+			DUCKDB_LOG(context, IcebergLogType, "Omitting invalid upper bound for column '%s' of type %s", name,
+			           type.ToString());
+		} else {
+			result.SetUpperBound(deserialized.GetValue());
 		}
-		result.SetUpperBound(deserialized.GetValue());
 	}
 	return result;
 }

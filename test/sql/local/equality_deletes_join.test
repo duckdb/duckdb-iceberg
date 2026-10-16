@@ -2,13 +2,7 @@
 # description: Equality deletes must be applied even when the iceberg scan is not the first child of a join
 # group: [local]
 
-require avro
-
-require parquet
-
-require iceberg
-
-require httpfs
+include test/sql/init_requires
 
 # Keep the iceberg scan on the right side of the join and disable all optimizers.
 # Equality-delete columns are private scan inputs and must remain available.

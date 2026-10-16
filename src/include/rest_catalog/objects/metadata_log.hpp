@@ -17,21 +17,21 @@ public:
 	MetadataLog &operator=(const MetadataLog &) = delete;
 	MetadataLog(MetadataLog &&) = default;
 	MetadataLog &operator=(MetadataLog &&) = default;
-	class Object4 {
+	class Object8 {
 	public:
-		Object4();
-		Object4(const Object4 &) = delete;
-		Object4 &operator=(const Object4 &) = delete;
-		Object4(Object4 &&) = default;
-		Object4 &operator=(Object4 &&) = default;
+		Object8();
+		Object8(const Object8 &) = delete;
+		Object8 &operator=(const Object8 &) = delete;
+		Object8(Object8 &&) = default;
+		Object8 &operator=(Object8 &&) = default;
 
 	public:
 		// Deserialization
-		static Object4 FromJSON(JSONValue obj);
+		static Object8 FromJSON(JSONValue obj);
 		string TryFromJSON(JSONValue obj);
 
 		// Copy
-		Object4 Copy() const;
+		Object8 Copy() const;
 
 		// Serialization
 		void PopulateJSON(JSONWriter &writer, JSONMutableValue obj) const;
@@ -54,7 +54,7 @@ public:
 	JSONMutableValue ToJSON(JSONWriter &writer) const;
 
 public:
-	vector<Object4> value;
+	vector<Object8> value;
 };
 
 } // namespace rest_api_objects

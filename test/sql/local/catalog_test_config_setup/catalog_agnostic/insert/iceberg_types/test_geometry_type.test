@@ -3,13 +3,11 @@
 
 require-env CATALOG_TEST_CONFIG_SETUP
 
-require avro
+require-env FORMAT_V3_SUPPORT
 
-require parquet
+require-env GEOMETRY_SUPPORT
 
-require iceberg
-
-require httpfs
+include test/sql/init_requires
 
 
 statement ok

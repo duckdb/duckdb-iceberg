@@ -1,0 +1,117 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/scan_planning/server_planned_writes.test
+# description: Server-planned writes preserve partitions and combine existing deletes
+# group: [scan_planning]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require-env SCAN_PLANNING_MODE server
+
+require-env FORMAT_V3_SUPPORT
+
+include test/sql/init_requires
+
+statement ok
+SET iceberg_use_server_side_scan_planning = true;
+
+statement ok
+CALL enable_logging(level=debug);
+
+foreach version 2 3
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.server_planned_writes;
+
+statement ok
+CREATE TABLE my_datalake.default.server_planned_writes (id INTEGER, part INTEGER, val VARCHAR)
+PARTITIONED BY (part) WITH ('format-version' = '{version}');
+
+statement ok
+INSERT INTO my_datalake.default.server_planned_writes VALUES
+(1, 10, 'a'), (2, 10, 'b'), (3, 10, 'c'), (4, 10, 'd'), (5, 20, 'e'), (6, 20, 'f');
+
+# The first delete creates a positional delete file (v2) or vector (v3).
+statement ok
+CALL truncate_duckdb_logs();
+
+query I
+DELETE FROM my_datalake.default.server_planned_writes WHERE id = 1;
+----
+1
+
+query I
+SELECT count(*) > 0 FROM duckdb_logs() WHERE type = 'Iceberg' AND message.contains('/plan body=');
+----
+true
+
+query I
+SELECT count(*) FROM duckdb_logs() WHERE message.contains('Scan planning failed');
+----
+0
+
+# Exercise delete partitions from an older spec in the server's plan.
+statement ok
+ALTER TABLE my_datalake.default.server_planned_writes SET PARTITIONED BY (truncate(10, part));
+
+statement ok
+CALL truncate_duckdb_logs();
+
+query I
+UPDATE my_datalake.default.server_planned_writes SET val = 'updated', part = 30 WHERE id = 2;
+----
+1
+
+query I
+SELECT count(*) > 0 FROM duckdb_logs() WHERE type = 'Iceberg' AND message.contains('/plan body=');
+----
+true
+
+query I
+SELECT count(*) FROM duckdb_logs() WHERE message.contains('Scan planning failed');
+----
+0
+
+# Replacing the vector again must retain both earlier deleted positions.
+statement ok
+CALL truncate_duckdb_logs();
+
+query I
+DELETE FROM my_datalake.default.server_planned_writes WHERE id = 3;
+----
+1
+
+query I
+SELECT count(*) > 0 FROM duckdb_logs() WHERE type = 'Iceberg' AND message.contains('/plan body=');
+----
+true
+
+query I
+SELECT count(*) FROM duckdb_logs() WHERE message.contains('Scan planning failed');
+----
+0
+
+# Read through both providers to verify the committed data independently.
+foreach server_scan true false
+
+statement ok
+SET iceberg_use_server_side_scan_planning = {server_scan};
+
+query III
+SELECT * FROM my_datalake.default.server_planned_writes ORDER BY id;
+----
+2	30	updated
+4	10	d
+5	20	e
+6	20	f
+
+endloop
+
+statement ok
+SET iceberg_use_server_side_scan_planning = true;
+
+statement ok
+DROP TABLE my_datalake.default.server_planned_writes;
+
+endloop
+
+statement ok
+CALL disable_logging();

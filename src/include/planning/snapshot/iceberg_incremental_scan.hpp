@@ -7,7 +7,7 @@
 namespace duckdb {
 
 struct IcebergManifestEntry;
-struct IcebergManifestFile;
+struct IcebergManifestListEntry;
 struct IcebergTableMetadata;
 
 //! The unresolved 'start_snapshot_id' / 'end_snapshot_id' options of 'iceberg_scan'.
@@ -38,10 +38,10 @@ public:
 	                                           const IcebergIncrementalScanRange &range);
 
 public:
-	//! An unattributable manifest (no 'added_snapshot_id') returns true, the entry check decides.
-	bool ManifestInRange(const IcebergManifestFile &manifest_file) const;
+	//! Whether the manifest was written by a snapshot in the range.
+	bool ManifestInRange(const IcebergManifestListEntry &manifest) const;
 	//! Whether a manifest entry was added by a snapshot in the range.
-	bool EntryInRange(const IcebergManifestEntry &entry, const IcebergManifestFile &manifest_file) const;
+	bool EntryInRange(const IcebergManifestEntry &entry, const IcebergManifestListEntry &manifest) const;
 
 public:
 	//! Ancestors of the end snapshot down to, but excluding, the start snapshot.

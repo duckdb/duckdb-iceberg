@@ -6,8 +6,6 @@
 
 namespace duckdb {
 
-struct IcebergDataViewCursor;
-
 //! A batch of scanned/cached IcebergManifestEntry items to read
 struct ManifestReadBatch {
 public:
@@ -21,6 +19,13 @@ public:
 	idx_t manifest_list_entry_idx;
 	idx_t start_index;
 	idx_t end_index;
+};
+
+struct IcebergDataViewCursor {
+	idx_t next_batch_idx = 0;
+	bool has_current_batch = false;
+	ManifestReadBatch current_batch;
+	idx_t current_batch_offset = 0;
 };
 
 struct ManifestEntryReadState {

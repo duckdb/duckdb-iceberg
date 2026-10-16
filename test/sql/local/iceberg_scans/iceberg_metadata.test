@@ -8,11 +8,7 @@ SELECT * FROM ICEBERG_METADATA('{WORKING_DIRECTORY}/data/persistent/iceberg/line
 ----
 Error
 
-require avro
-
-require parquet
-
-require iceberg
+include test/sql/init_requires
 
 query IIIIIIIIII
 SELECT * FROM ICEBERG_METADATA('{WORKING_DIRECTORY}/data/persistent/iceberg/lineitem_iceberg', ALLOW_MOVED_PATHS=TRUE);
@@ -62,6 +58,108 @@ SELECT * FROM ICEBERG_METADATA('{WORKING_DIRECTORY}/data/persistent/iceberg/line
 ----
 <REGEX>:.*SET unsafe_enable_version_guessing.*
 
+query I
+SELECT count(*)
+FROM ICEBERG_METADATA(
+	'{WORKING_DIRECTORY}/data/persistent/iceberg/lineitem_iceberg_no_hint',
+	ALLOW_MOVED_PATHS=TRUE,
+	version='?'
+);
+----
+2
+
+statement error
+SELECT count(*)
+FROM ICEBERG_SCAN(
+	'{WORKING_DIRECTORY}/data/persistent/iceberg/lineitem_iceberg_no_hint',
+	ALLOW_MOVED_PATHS=TRUE
+);
+----
+<REGEX>:.*SET unsafe_enable_version_guessing.*
+
+query I
+SELECT count(*)
+FROM ICEBERG_SCAN(
+	'{WORKING_DIRECTORY}/data/persistent/iceberg/lineitem_iceberg_no_hint',
+	ALLOW_MOVED_PATHS=TRUE,
+	version='?'
+);
+----
+51793
+
+statement error
+SELECT count(*)
+FROM ICEBERG_SNAPSHOTS(
+	'{WORKING_DIRECTORY}/data/persistent/iceberg/lineitem_iceberg_no_hint'
+);
+----
+<REGEX>:.*SET unsafe_enable_version_guessing.*
+
+query I
+SELECT count(*)
+FROM ICEBERG_SNAPSHOTS(
+	'{WORKING_DIRECTORY}/data/persistent/iceberg/lineitem_iceberg_no_hint',
+	version='?'
+);
+----
+2
+
+query IIIIIIIIIIII
+SELECT * FROM ICEBERG_MANIFESTS('{WORKING_DIRECTORY}/data/persistent/iceberg/lineitem_iceberg', ALLOW_MOVED_PATHS=TRUE) ORDER BY path;
+----
+0	lineitem_iceberg/metadata/179b4fb1-0366-4f7d-ad35-99ee8da0abf5-m0.avro	7862	0	2354745328521181395	0	0	1	0	0	0	[]
+0	lineitem_iceberg/metadata/179b4fb1-0366-4f7d-ad35-99ee8da0abf5-m1.avro	7863	0	2354745328521181395	1	0	0	0	0	0	[]
+
+query IIIIIIIIIIII
+SELECT * FROM ICEBERG_MANIFESTS('{WORKING_DIRECTORY}/data/persistent/iceberg/lineitem_iceberg', ALLOW_MOVED_PATHS=TRUE, version='1');
+----
+0	lineitem_iceberg/metadata/787a5996-87e9-4d93-b258-066d524e82cc-m0.avro	7867	0	7817332053627255703	1	0	0	0	0	0	[]
+
+query I
+SELECT count(*) FROM ICEBERG_MANIFESTS('{WORKING_DIRECTORY}/data/persistent/iceberg/lineitem_iceberg_gz', ALLOW_MOVED_PATHS=TRUE, METADATA_COMPRESSION_CODEC='gzip');
+----
+1
+
+# Partition summaries follow the partition spec of each manifest
+query IIII
+SELECT path, partition_spec_id, added_data_files_count, partition_summaries
+FROM ICEBERG_MANIFESTS('{WORKING_DIRECTORY}/data/persistent/hive_partitioned_table', ALLOW_MOVED_PATHS=TRUE)
+ORDER BY path;
+----
+data/persistent/hive_partitioned_table/metadata/8f7c6cdd-f7e6-4743-857e-021adfe0b999-m0.avro	0	2	[{'contains_null': false, 'contains_nan': false, 'lower_bound': 2024-01-01, 'upper_bound': 2024-01-02}]
+data/persistent/hive_partitioned_table/metadata/fee93099-6425-4d83-bd7c-0aa646533090-m0.avro	1	4	[{'contains_null': false, 'contains_nan': false, 'lower_bound': 2024-01-03, 'upper_bound': 2024-01-04}, {'contains_null': false, 'contains_nan': false, 'lower_bound': click, 'upper_bound': view}]
+
+query II
+SELECT added_snapshot_id, partition_summaries
+FROM ICEBERG_MANIFESTS('{WORKING_DIRECTORY}/data/persistent/map_stats/default.db/map_stats', version='00002-0e059d4b-e5e8-41af-a763-76cbf3a3d0bc', ALLOW_MOVED_PATHS=TRUE)
+ORDER BY added_snapshot_id;
+----
+554549470069664013	[{'contains_null': false, 'contains_nan': false, 'lower_bound': 2026-01-02, 'upper_bound': 2026-01-02}]
+8792170059756986233	[{'contains_null': false, 'contains_nan': false, 'lower_bound': 2026-01-01, 'upper_bound': 2026-01-01}]
+
+query IIIIII
+SELECT * FROM ICEBERG_REFS('{WORKING_DIRECTORY}/data/persistent/iceberg/lineitem_iceberg');
+----
+main	BRANCH	2354745328521181395	NULL	NULL	NULL
+
+query IIIIII
+SELECT * FROM ICEBERG_REFS('{WORKING_DIRECTORY}/data/persistent/iceberg/lineitem_iceberg', version='1');
+----
+main	BRANCH	7817332053627255703	NULL	NULL	NULL
+
+query I
+SELECT count(*) FROM ICEBERG_REFS('{WORKING_DIRECTORY}/data/persistent/iceberg/lineitem_iceberg_gz', METADATA_COMPRESSION_CODEC='gzip');
+----
+1
+
+# Table with both tag and branch with retention settings
+query IIIIII
+SELECT * FROM ICEBERG_REFS('{WORKING_DIRECTORY}/data/persistent/snapshot_refs/metadata/v1.metadata.json') ORDER BY name;
+----
+dev	BRANCH	1	2592000000	3	172800000
+main	BRANCH	2	NULL	NULL	NULL
+v1	TAG	1	604800000	NULL	NULL
+
 statement ok
 SET unsafe_enable_version_guessing = true;
 
@@ -103,5 +201,15 @@ create table t1 as select range a from range(10);
 
 statement error
 select * from iceberg_metadata(memory.main.t1);
+----
+<REGEX>:.*Invalid Input Error.*t1 is not an Iceberg table.*
+
+statement error
+select * from iceberg_manifests(memory.main.t1);
+----
+<REGEX>:.*Invalid Input Error.*t1 is not an Iceberg table.*
+
+statement error
+select * from iceberg_refs(memory.main.t1);
 ----
 <REGEX>:.*Invalid Input Error.*t1 is not an Iceberg table.*

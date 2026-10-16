@@ -25,7 +25,7 @@ public:
 public:
 	IcebergTransaction &transaction;
 	//! All the tables touched in this atomic block
-	case_insensitive_map_t<reference<IcebergTable>> updated_tables;
+	unordered_map<string, reference<IcebergTable>> updated_tables;
 };
 
 //! Drop a table

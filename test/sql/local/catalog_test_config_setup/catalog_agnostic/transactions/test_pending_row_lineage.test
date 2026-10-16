@@ -1,0 +1,264 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/transactions/test_pending_row_lineage.test
+# description: Pending rewrites retain assigned lineage without inventing IDs or sequence numbers.
+# group: [transactions]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require-env FORMAT_V3_SUPPORT
+
+require-env METADATA_FILE_READ_SUPPORT
+
+require-env SNAPSHOT_HISTORY_SUPPORT
+
+include test/sql/init_requires
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.pending_row_lineage;
+
+statement ok
+CREATE TABLE my_datalake.default.pending_row_lineage (id INTEGER, val INTEGER) WITH ('format-version' = 3);
+
+statement ok
+INSERT INTO my_datalake.default.pending_row_lineage VALUES (0, 0), (1, 10);
+
+statement ok
+BEGIN;
+
+statement ok
+INSERT INTO my_datalake.default.pending_row_lineage VALUES (2, 20), (3, 30);
+
+query IIII
+SELECT id, val, _row_id, _last_updated_sequence_number
+FROM my_datalake.default.pending_row_lineage ORDER BY id;
+----
+0	0	0	1
+1	10	1	1
+2	20	NULL	NULL
+3	30	NULL	NULL
+
+# One rewrite contains both an assigned ID and an unassigned ID.
+statement ok
+UPDATE my_datalake.default.pending_row_lineage SET val = val + 1 WHERE id IN (1, 2);
+
+query IIII
+SELECT id, val, _row_id, _last_updated_sequence_number
+FROM my_datalake.default.pending_row_lineage ORDER BY id;
+----
+0	0	0	1
+1	11	1	NULL
+2	21	NULL	NULL
+3	30	NULL	NULL
+
+statement ok
+SET VARIABLE pending_rewrite = (SELECT filename FROM my_datalake.default.pending_row_lineage WHERE id = 1);
+
+query III
+SELECT id, val, _row_id FROM read_parquet(getvariable('pending_rewrite')) ORDER BY id;
+----
+1	11	1
+2	21	NULL
+
+query I
+SELECT count(*) FROM parquet_schema(getvariable('pending_rewrite')) WHERE name = '_last_updated_sequence_number';
+----
+0
+
+statement ok
+UPDATE my_datalake.default.pending_row_lineage SET val = val + 1 WHERE id IN (1, 2);
+
+# Repeated projection and filtering must preserve the mode when rebuilding scan views.
+loop i 0 2
+
+query IIII
+SELECT id, val, _row_id, _last_updated_sequence_number
+FROM my_datalake.default.pending_row_lineage WHERE val BETWEEN 12 AND 22 ORDER BY id;
+----
+1	12	1	NULL
+2	22	NULL	NULL
+
+endloop
+
+query II
+SELECT id, _last_updated_sequence_number FROM my_datalake.default.pending_row_lineage
+WHERE id IN (1, 2) ORDER BY id;
+----
+1	NULL
+2	NULL
+
+query I
+SELECT list(id ORDER BY id) FROM my_datalake.default.pending_row_lineage WHERE _row_id IS NULL;
+----
+[2, 3]
+
+query I
+SELECT list(id ORDER BY id) FROM my_datalake.default.pending_row_lineage WHERE _row_id IS NOT NULL;
+----
+[0, 1]
+
+statement ok
+SET VARIABLE pending_rewrite = (SELECT filename FROM my_datalake.default.pending_row_lineage WHERE id = 1);
+
+query III
+SELECT id, val, _row_id FROM read_parquet(getvariable('pending_rewrite')) ORDER BY id;
+----
+1	12	1
+2	22	NULL
+
+# Exported tasks retain unknown first_row_id values; physical task replay still reads the same rows.
+query II
+SELECT count(*), bool_and(first_row_id IS NULL)
+FROM iceberg_scan_plan('my_datalake.default.pending_row_lineage')
+WHERE file_path = getvariable('pending_rewrite');
+----
+1	true
+
+statement ok
+SET VARIABLE pending_tasks = (
+    SELECT list(task) FROM (SELECT * FROM iceberg_scan_plan('my_datalake.default.pending_row_lineage')) task
+);
+
+query I
+SELECT count(*) FROM (
+    (SELECT * FROM iceberg_scan_tasks(getvariable('pending_tasks'))
+     EXCEPT ALL SELECT * FROM my_datalake.default.pending_row_lineage)
+    UNION ALL
+    (SELECT * FROM my_datalake.default.pending_row_lineage
+     EXCEPT ALL SELECT * FROM iceberg_scan_tasks(getvariable('pending_tasks')))
+);
+----
+0
+
+statement ok
+COMMIT;
+
+# Exact file ordering is not significant. Assigned IDs must survive, all IDs must be unique,
+# and the new row must inherit from the final UPDATE's allocation.
+query IIIII
+SELECT count(*), count(DISTINCT _row_id), min(_row_id) FILTER (WHERE id = 1),
+       bool_and(_row_id >= 6 AND _row_id < 8) FILTER (WHERE id = 2),
+       min(_last_updated_sequence_number) FILTER (WHERE id IN (1, 2))
+FROM my_datalake.default.pending_row_lineage;
+----
+4	4	1	true	4
+
+query I
+SELECT metadata."next-row-id"::BIGINT FROM iceberg_load_table_response('my_datalake.default.pending_row_lineage');
+----
+8
+
+# Every published rewrite retains the already assigned row ID.
+loop seq 3 5
+
+statement ok
+SET VARIABLE lineage_snapshot = (
+    SELECT snapshot_id FROM iceberg_snapshots(my_datalake.default.pending_row_lineage) WHERE sequence_number = {seq}
+);
+
+query II
+SELECT _row_id, _last_updated_sequence_number = {seq}
+FROM my_datalake.default.pending_row_lineage AT (VERSION => getvariable('lineage_snapshot')) WHERE id = 1;
+----
+1	true
+
+endloop
+
+statement ok
+DROP TABLE my_datalake.default.pending_row_lineage;
+
+# New rows have no assigned identity to preserve across statements.
+statement ok
+CREATE TABLE my_datalake.default.pending_row_lineage (id INTEGER, val INTEGER) WITH ('format-version' = 3);
+
+statement ok
+INSERT INTO my_datalake.default.pending_row_lineage VALUES (0, 0);
+
+statement ok
+BEGIN;
+
+statement ok
+INSERT INTO my_datalake.default.pending_row_lineage VALUES (1, 10);
+
+statement ok
+UPDATE my_datalake.default.pending_row_lineage SET val = 11 WHERE id = 1;
+
+statement ok
+UPDATE my_datalake.default.pending_row_lineage SET val = 12 WHERE id = 1;
+
+query III
+SELECT val, _row_id, _last_updated_sequence_number FROM my_datalake.default.pending_row_lineage WHERE id = 1;
+----
+12	NULL	NULL
+
+statement ok
+COMMIT;
+
+loop seq 2 5
+
+statement ok
+SET VARIABLE lineage_snapshot = (
+    SELECT snapshot_id FROM iceberg_snapshots(my_datalake.default.pending_row_lineage) WHERE sequence_number = {seq}
+);
+
+# The three published versions have IDs 1, 2, 3 and sequence numbers 2, 3, 4.
+query II
+SELECT _row_id = {seq} - 1, _last_updated_sequence_number = {seq}
+FROM my_datalake.default.pending_row_lineage AT (VERSION => getvariable('lineage_snapshot')) WHERE id = 1;
+----
+true	true
+
+query II
+SELECT count(*), count(DISTINCT _row_id)
+FROM my_datalake.default.pending_row_lineage AT (VERSION => getvariable('lineage_snapshot'));
+----
+2	2
+
+endloop
+
+query III
+SELECT s."sequence-number"::BIGINT, s."first-row-id"::BIGINT, s."added-rows"::BIGINT
+FROM iceberg_load_table_response('my_datalake.default.pending_row_lineage'),
+unnest(metadata.snapshots::VARIANT[]) AS t(s) ORDER BY 1;
+----
+1	0	1
+2	1	1
+3	2	1
+4	3	1
+
+# Once committed, the final assigned ID is preserved on subsequent updates.
+statement ok
+UPDATE my_datalake.default.pending_row_lineage SET val = 13 WHERE id = 1;
+
+query III
+SELECT val, _row_id, _last_updated_sequence_number FROM my_datalake.default.pending_row_lineage WHERE id = 1;
+----
+13	3	5
+
+statement ok
+BEGIN;
+
+statement ok
+UPDATE my_datalake.default.pending_row_lineage SET val = 14 WHERE id = 1;
+
+statement ok
+INSERT INTO my_datalake.default.pending_row_lineage VALUES (2, 20);
+
+statement ok
+ROLLBACK;
+
+query III
+SELECT val, _row_id, _last_updated_sequence_number FROM my_datalake.default.pending_row_lineage WHERE id = 1;
+----
+13	3	5
+
+query II
+SELECT count(*), max(_row_id) FROM my_datalake.default.pending_row_lineage;
+----
+2	3
+
+query I
+SELECT metadata."next-row-id"::BIGINT FROM iceberg_load_table_response('my_datalake.default.pending_row_lineage');
+----
+5
+
+statement ok
+DROP TABLE my_datalake.default.pending_row_lineage;

@@ -1,12 +1,12 @@
 #include "catalog/rest/api/iceberg_type.hpp"
 #include "common/iceberg_constants.hpp"
+#include "common/iceberg_fixed_type.hpp"
 
 #include "duckdb/common/string_util.hpp"
-#include "duckdb/common/extra_type_info.hpp"
 #include "duckdb/common/types.hpp"
 #include "duckdb/common/types/blob.hpp"
 #include "duckdb/parser/column_definition.hpp"
-
+#include "duckdb/common/types/geometry_crs.hpp"
 #include "rest_catalog/objects/list_type.hpp"
 #include "rest_catalog/objects/map_type.hpp"
 #include "rest_catalog/objects/struct_type.hpp"
@@ -35,6 +35,11 @@ static string ConvertBlobDefault(const string_t &str) {
 
 string IcebergTypeHelper::LogicalTypeToIcebergType(const LogicalType &type) {
 	switch (type.id()) {
+	// Iceberg has no 8- or 16-bit integers; widen them losslessly, as other engines do
+	case LogicalTypeId::TINYINT:
+	case LogicalTypeId::SMALLINT:
+	case LogicalTypeId::UTINYINT:
+	case LogicalTypeId::USMALLINT:
 	case LogicalTypeId::INTEGER:
 		return "int";
 	case LogicalTypeId::BOOLEAN:
@@ -47,6 +52,7 @@ string IcebergTypeHelper::LogicalTypeToIcebergType(const LogicalType &type) {
 	}
 	case LogicalTypeId::DATE:
 		return "date";
+	case LogicalTypeId::UINTEGER:
 	case LogicalTypeId::BIGINT:
 		return "long";
 	case LogicalTypeId::HUGEINT:
@@ -64,6 +70,9 @@ string IcebergTypeHelper::LogicalTypeToIcebergType(const LogicalType &type) {
 	case LogicalTypeId::UUID:
 		return "uuid";
 	case LogicalTypeId::BLOB:
+		if (IcebergFixedType::IsFixed(type)) {
+			return StringUtil::Format("fixed[%d]", IcebergFixedType::GetLength(type));
+		}
 		return "binary";
 	case LogicalTypeId::STRUCT:
 		return "struct";
@@ -167,11 +176,16 @@ rest_api_objects::PrimitiveTypeValue IcebergTypeHelper::PrimitiveTypeFromValue(c
 		result.boolean_type_value->value = value.GetValue<bool>();
 		return result;
 	}
+	case LogicalTypeId::TINYINT:
+	case LogicalTypeId::SMALLINT:
+	case LogicalTypeId::UTINYINT:
+	case LogicalTypeId::USMALLINT:
 	case LogicalTypeId::INTEGER: {
 		result.integer_type_value = rest_api_objects::IntegerTypeValue();
 		result.integer_type_value->value = value.GetValue<int32_t>();
 		return result;
 	}
+	case LogicalTypeId::UINTEGER:
 	case LogicalTypeId::BIGINT: {
 		result.long_type_value = rest_api_objects::LongTypeValue();
 		result.long_type_value->value = value.GetValue<int64_t>();
@@ -231,18 +245,46 @@ rest_api_objects::PrimitiveTypeValue IcebergTypeHelper::PrimitiveTypeFromValue(c
 		result.string_type_value->value = str;
 		return result;
 	}
-	//! FIXME: missing FixedTypeValue
-	//! BinaryTypeValue
+	//! FixedTypeValue / BinaryTypeValue
 	case LogicalTypeId::BLOB: {
 		auto str = value.GetValueUnsafe<string_t>();
 		auto blob_str = ConvertBlobDefault(str);
 
+		if (IcebergFixedType::IsFixed(type)) {
+			result.fixed_type_value = rest_api_objects::FixedTypeValue();
+			result.fixed_type_value->value = blob_str;
+			return result;
+		}
 		result.binary_type_value = rest_api_objects::BinaryTypeValue();
 		result.binary_type_value->value = blob_str;
 		return result;
 	}
 	default:
 		throw NotImplementedException("DEFAULT values for nested types (like %s) not implemented", type.ToString());
+	}
+}
+
+int32_t IcebergTypeHelper::MinimumFormatVersion(const LogicalType &type) {
+	switch (type.id()) {
+	case LogicalTypeId::TIMESTAMP_NS:
+	case LogicalTypeId::TIMESTAMP_TZ_NS:
+	case LogicalTypeId::VARIANT:
+	case LogicalTypeId::GEOMETRY:
+	case LogicalTypeId::SQLNULL:
+		return 3;
+	case LogicalTypeId::STRUCT: {
+		int32_t result = 1;
+		for (auto &child : StructType::GetChildTypes(type)) {
+			result = MaxValue(result, MinimumFormatVersion(child.second));
+		}
+		return result;
+	}
+	case LogicalTypeId::LIST:
+		return MinimumFormatVersion(ListType::GetChildType(type));
+	case LogicalTypeId::MAP:
+		return MaxValue(MinimumFormatVersion(MapType::KeyType(type)), MinimumFormatVersion(MapType::ValueType(type)));
+	default:
+		return 1;
 	}
 }
 
@@ -272,6 +314,7 @@ rest_api_objects::StructField IcebergTypeHelper::CreateIcebergRestType(const str
 	switch (type.id()) {
 	case LogicalTypeId::MAP: {
 		rest_type.map_type = rest_api_objects::MapType();
+		rest_type.map_type->type = "map";
 
 		//! Key
 		auto key_type = MapType::KeyType(type);
@@ -293,6 +336,7 @@ rest_api_objects::StructField IcebergTypeHelper::CreateIcebergRestType(const str
 	}
 	case LogicalTypeId::STRUCT: {
 		rest_type.struct_type = rest_api_objects::StructType();
+		rest_type.struct_type->type = "struct";
 		auto &children = StructType::GetChildTypes(type);
 
 		for (idx_t i = 0; i < children.size(); i++) {
@@ -323,6 +367,10 @@ rest_api_objects::StructField IcebergTypeHelper::CreateIcebergRestType(const str
 	case LogicalTypeId::ARRAY: {
 		throw InvalidConfigurationException("Array type not supported in Iceberg type. Please cast to LIST");
 	}
+	case LogicalTypeId::VARIANT:
+		rest_type.variant_type.emplace();
+		rest_type.variant_type->value = "variant";
+		return result;
 	default:
 		rest_type.primitive_type = rest_api_objects::PrimitiveType();
 		rest_type.primitive_type->value = IcebergTypeHelper::LogicalTypeToIcebergType(type);

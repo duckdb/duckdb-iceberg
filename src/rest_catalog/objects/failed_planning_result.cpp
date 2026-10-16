@@ -12,11 +12,11 @@ namespace rest_api_objects {
 
 FailedPlanningResult::FailedPlanningResult() {
 }
-FailedPlanningResult::Object7::Object7() {
+FailedPlanningResult::Object12::Object12() {
 }
 
-FailedPlanningResult::Object7 FailedPlanningResult::Object7::FromJSON(JSONValue obj) {
-	Object7 res;
+FailedPlanningResult::Object12 FailedPlanningResult::Object12::FromJSON(JSONValue obj) {
+	Object12 res;
 	auto error = res.TryFromJSON(obj);
 	if (!error.empty()) {
 		throw InvalidInputException(error);
@@ -24,17 +24,17 @@ FailedPlanningResult::Object7 FailedPlanningResult::Object7::FromJSON(JSONValue 
 	return res;
 }
 
-FailedPlanningResult::Object7 FailedPlanningResult::Object7::Copy() const {
-	Object7 res;
+FailedPlanningResult::Object12 FailedPlanningResult::Object12::Copy() const {
+	Object12 res;
 	res.status = status.Copy();
 	return res;
 }
 
-string FailedPlanningResult::Object7::TryFromJSON(JSONValue obj) {
+string FailedPlanningResult::Object12::TryFromJSON(JSONValue obj) {
 	string error;
 	auto status_val = obj.GetMember("status");
 	if (!status_val.IsValid()) {
-		return "Object7 required property 'status' is missing";
+		return "Object12 required property 'status' is missing";
 	} else {
 		error = status.TryFromJSON(status_val);
 		if (!error.empty()) {
@@ -44,13 +44,13 @@ string FailedPlanningResult::Object7::TryFromJSON(JSONValue obj) {
 	return "";
 }
 
-void FailedPlanningResult::Object7::PopulateJSON(JSONWriter &writer, JSONMutableValue obj) const {
+void FailedPlanningResult::Object12::PopulateJSON(JSONWriter &writer, JSONMutableValue obj) const {
 	// Serialize: status
 	auto status_json = status.ToJSON(writer);
 	obj.Add("status", status_json);
 }
 
-JSONMutableValue FailedPlanningResult::Object7::ToJSON(JSONWriter &writer) const {
+JSONMutableValue FailedPlanningResult::Object12::ToJSON(JSONWriter &writer) const {
 	auto obj = writer.CreateObject();
 	PopulateJSON(writer, obj);
 	return obj;
@@ -68,7 +68,7 @@ FailedPlanningResult FailedPlanningResult::FromJSON(JSONValue obj) {
 FailedPlanningResult FailedPlanningResult::Copy() const {
 	FailedPlanningResult res;
 	res.iceberg_error_response = iceberg_error_response.Copy();
-	res.object_7 = object_7.Copy();
+	res.object_12 = object_12.Copy();
 	return res;
 }
 
@@ -78,7 +78,7 @@ string FailedPlanningResult::TryFromJSON(JSONValue obj) {
 	if (!error.empty()) {
 		return error;
 	}
-	error = object_7.TryFromJSON(obj);
+	error = object_12.TryFromJSON(obj);
 	if (!error.empty()) {
 		return error;
 	}
@@ -89,8 +89,8 @@ void FailedPlanningResult::PopulateJSON(JSONWriter &writer, JSONMutableValue obj
 	// Serialize base class: IcebergErrorResponse
 	iceberg_error_response.PopulateJSON(writer, obj);
 
-	// Serialize base class: Object7
-	object_7.PopulateJSON(writer, obj);
+	// Serialize base class: Object12
+	object_12.PopulateJSON(writer, obj);
 }
 
 JSONMutableValue FailedPlanningResult::ToJSON(JSONWriter &writer) const {

@@ -14,21 +14,20 @@ public:
 	    : context(context), metadata(metadata), schema(schema), table_filters(table_filters) {
 	}
 
-	bool ManifestMatchesFilter(const IcebergManifestFile &manifest) const;
-	bool FileMatchesFilter(const IcebergManifestFile &manifest_file, const IcebergManifestEntry &manifest_entry) const;
-	bool DeleteManifestMatchesDataFile(const IcebergManifestFile &delete_manifest,
-	                                   const IcebergManifestFile &data_manifest,
+	bool ManifestMatchesFilter(const IcebergManifestListEntry &entry) const;
+	bool FileMatchesFilter(const IcebergManifest &manifest_file, const IcebergManifestEntry &manifest_entry) const;
+	bool DeleteManifestMatchesDataFile(const IcebergManifest &delete_manifest, const IcebergManifest &data_manifest,
 	                                   const IcebergManifestEntry &data_manifest_entry) const;
-	bool DeleteFileMatchesDataFile(const IcebergManifestFile &delete_manifest,
+	bool DeleteFileMatchesDataFile(const IcebergManifest &delete_manifest,
 	                               const IcebergManifestEntry &delete_manifest_entry,
-	                               const IcebergManifestFile &data_manifest,
+	                               const IcebergManifest &data_manifest,
 	                               const IcebergManifestEntry &data_manifest_entry,
 	                               const partition_value_map_t &data_partition_values) const;
 	//! Built once per data file: every delete file considered for it is matched against the same values.
 	static partition_value_map_t PartitionValueMap(const IcebergDataFile &data_file);
 
 private:
-	bool FilePartitionMatchesFilter(const IcebergDataFile &data_file, const IcebergManifestFile &manifest_file) const;
+	bool FilePartitionMatchesFilter(const IcebergDataFile &data_file, const IcebergManifest &manifest_file) const;
 	bool EqualityDeleteMatchesDataFile(const IcebergDataFile &delete_file, const IcebergDataFile &data_file) const;
 
 private:

@@ -55,12 +55,12 @@ IcebergTransform IcebergTransform::FromExpression(const ParsedExpression &expr, 
 			break;
 		}
 		auto &base_column = base->Cast<ColumnRefExpression>();
-		auto &fields_constant = remaining_fields->Cast<ConstantExpression>();
-		if (fields_constant.GetValue().type().id() != LogicalTypeId::VARCHAR) {
+		auto &fields_literal = remaining_fields->Cast<ConstantExpression>().GetLiteral();
+		if (fields_literal.kind != LiteralKind::STRING) {
 			break;
 		}
 		auto fields = base_column.ColumnNames();
-		auto parsed_fields = QualifiedName::ParseComponents(fields_constant.GetValue().GetValue<string>());
+		auto parsed_fields = QualifiedName::ParseComponents(fields_literal.text);
 		for (auto &parsed_field : parsed_fields) {
 			fields.push_back(std::move(parsed_field));
 		}
@@ -94,12 +94,15 @@ IcebergTransform IcebergTransform::FromExpression(const ParsedExpression &expr, 
 			if (param_expr.GetExpressionType() != ExpressionType::VALUE_CONSTANT) {
 				throw InvalidInputException("%s first argument must be a constant integer", transform);
 			}
-			auto &const_expr = param_expr.Cast<ConstantExpression>();
-			auto raw_val = const_expr.GetValue().GetValue<int32_t>();
+			auto &const_literal = param_expr.Cast<ConstantExpression>().GetLiteral();
+			int64_t raw_val;
+			if (!const_literal.TryGetInt64(raw_val)) {
+				throw InvalidInputException("%s first argument must be a constant integer", transform);
+			}
 			if (raw_val <= 0) {
 				throw InvalidInputException("%s requires a positive integer argument, got %d", transform, raw_val);
 			}
-			constant_value = const_expr.GetValue().GetValue<idx_t>();
+			constant_value = NumericCast<idx_t>(raw_val);
 			transform = StringUtil::Format("%s[%d]", transform, constant_value);
 			//! Source columns start behind the constant argument
 			source_columns_offset = 1;
@@ -245,12 +248,12 @@ string IcebergTransform::PartitionValueToString(const Value &partition_value) co
 	case IcebergTransformType::MONTH: {
 		int32_t m = partition_value.GetValue<int32_t>();
 		// Floor-divide to correctly handle months before 1970
-		int32_t year = 1970 + (m >= 0 ? m : m - 11) / 12;
+		int32_t year = Date::EPOCH_YEAR + (m >= 0 ? m : m - 11) / 12;
 		int32_t month = ((m % 12) + 12) % 12 + 1;
 		return StringUtil::Format("%04d-%02d", year, month);
 	}
 	case IcebergTransformType::YEAR: {
-		return std::to_string(1970 + partition_value.GetValue<int32_t>());
+		return std::to_string(Date::EPOCH_YEAR + partition_value.GetValue<int32_t>());
 	}
 	case IcebergTransformType::HOUR: {
 		int64_t hours = partition_value.GetValue<int32_t>();

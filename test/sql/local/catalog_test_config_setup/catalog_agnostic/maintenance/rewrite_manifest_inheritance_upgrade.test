@@ -1,0 +1,95 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/maintenance/rewrite_manifest_inheritance_upgrade.test
+# description: Rewrites after a format upgrade materialize inherited row IDs for existing and deleted files.
+# group: [maintenance]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require-env FORMAT_V3_SUPPORT
+
+require-env METADATA_FILE_READ_SUPPORT
+
+include test/sql/init_requires
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.rewrite_manifest_inheritance_upgrade;
+
+statement ok
+CREATE TABLE my_datalake.default.rewrite_manifest_inheritance_upgrade (id INTEGER, category VARCHAR)
+PARTITIONED BY (category)
+WITH ('format-version' = 2, 'commit.manifest-merge.enabled' = false);
+
+# The first manifest has two one-row files. Their inherited row IDs will be 0 and 1.
+statement ok
+INSERT INTO my_datalake.default.rewrite_manifest_inheritance_upgrade VALUES (1, 'a'), (2, 'b');
+
+statement ok
+INSERT INTO my_datalake.default.rewrite_manifest_inheritance_upgrade VALUES (3, 'a');
+
+statement ok
+BEGIN;
+
+# Snapshots use the format active at their position in the transaction, so
+# upgrade before the rewrite to materialize the V2 files' inherited row IDs.
+statement ok
+ALTER TABLE my_datalake.default.rewrite_manifest_inheritance_upgrade SET ('format-version' = 3);
+
+# Only partition 'a' has two files.
+query III
+CALL iceberg_rewrite_data_files('my_datalake.default.rewrite_manifest_inheritance_upgrade', min_input_files => 2);
+----
+2	1	<REGEX>:[1-9][0-9]*
+
+statement ok
+COMMIT;
+
+statement ok
+BEGIN;
+
+statement ok
+SET VARIABLE inherited_replacement = (
+    SELECT DISTINCT manifest_path FROM iceberg_metadata(my_datalake.default.rewrite_manifest_inheritance_upgrade)
+    WHERE status = 'EXISTING'
+);
+
+query T
+SELECT value FROM avro_metadata(getvariable('inherited_replacement')) WHERE key = 'format-version';
+----
+3
+
+# The replacement contains one existing file and one deleted file. Neither may
+# depend on the replacement's row-ID inheritance to retain its original identity.
+query II
+SELECT status, sequence_number FROM read_avro(getvariable('inherited_replacement')) ORDER BY status;
+----
+0	1
+2	1
+
+query I
+SELECT data_file.first_row_id FROM read_avro(getvariable('inherited_replacement')) ORDER BY 1;
+----
+0
+1
+
+statement ok
+SET VARIABLE surviving_row_id = (
+    SELECT data_file.first_row_id FROM read_avro(getvariable('inherited_replacement')) WHERE status = 0
+);
+
+query II
+SELECT _row_id = getvariable('surviving_row_id'), _last_updated_sequence_number
+FROM my_datalake.default.rewrite_manifest_inheritance_upgrade WHERE id = 2;
+----
+true	1
+
+query IT
+SELECT id, category FROM my_datalake.default.rewrite_manifest_inheritance_upgrade ORDER BY id;
+----
+1	a
+2	b
+3	a
+
+statement ok
+COMMIT;
+
+statement ok
+DROP TABLE my_datalake.default.rewrite_manifest_inheritance_upgrade;

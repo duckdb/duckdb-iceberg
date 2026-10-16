@@ -1,0 +1,12 @@
+# name: benchmark/performance/positional_clustered_t8.benchmark
+# description: clustered positional deletes, 8 threads
+# group: [performance]
+
+template benchmark/performance/positional_delete.benchmark.in
+CASE=clustered
+THREADS=8
+DELETE_PREDICATE=i < 4194304
+DELETED_COUNT=4194304
+COUNT=4194304
+SUM_ID=26388276969472
+SUM_PAYLOAD=79164860268544

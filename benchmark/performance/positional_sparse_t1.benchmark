@@ -1,0 +1,12 @@
+# name: benchmark/performance/positional_sparse_t1.benchmark
+# description: sparse positional deletes, 1 threads
+# group: [performance]
+
+template benchmark/performance/positional_delete.benchmark.in
+CASE=sparse
+THREADS=1
+DELETE_PREDICATE=i % 1000 < 1
+DELETED_COUNT=8389
+COUNT=8380219
+SUM_ID=35149184428528
+SUM_PAYLOAD=105447611947117

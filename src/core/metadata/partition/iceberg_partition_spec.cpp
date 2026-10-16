@@ -3,45 +3,66 @@
 
 namespace duckdb {
 
-IcebergPartitionSpecField IcebergPartitionSpecField::ParseFromJson(const rest_api_objects::PartitionField &field) {
+IcebergPartitionSpecField IcebergPartitionSpecField::ParseFromJson(const rest_api_objects::PartitionField &field,
+                                                                   optional_idx assigned_field_id) {
 	IcebergPartitionSpecField result;
 
 	result.name = field.name;
 	result.transform = field.transform.value;
 	result.source_id = field.source_id;
-	D_ASSERT(field.field_id);
-	result.partition_field_id = *field.field_id;
+	if (assigned_field_id.IsValid()) {
+		result.partition_field_id = assigned_field_id.GetIndex();
+	} else {
+		if (!field.field_id) {
+			throw InvalidConfigurationException("Partition field '%s' is missing 'field-id'", field.name);
+		}
+		result.partition_field_id = *field.field_id;
+	}
 	return result;
 }
 
+bool IcebergPartitionSpecField::Equals(const IcebergPartitionSpecField &other) const {
+	return source_id == other.source_id && transform.RawType() == other.transform.RawType();
+}
+
 bool IcebergPartitionSpec::Equals(const IcebergPartitionSpec &other) const {
-	if (other.fields.size() != fields.size()) {
+	if (fields.size() != other.fields.size()) {
 		return false;
 	}
-	for (idx_t i = 0; i < other.fields.size(); i++) {
-		auto existing_partition_col_source_id = other.fields[i].source_id;
-
-		//! Compare source ids
-		auto new_spec_col_source_id = fields[i].source_id;
-		if (existing_partition_col_source_id != new_spec_col_source_id) {
-			return false;
-		}
-
-		//! Compare transforms
-		auto existing_partition_col_transform = other.fields[i].transform.RawType();
-		auto new_spec_col_transform = fields[i].transform.RawType();
-		if (existing_partition_col_transform != new_spec_col_transform) {
+	for (idx_t i = 0; i < fields.size(); i++) {
+		if (!fields[i].Equals(other.fields[i]) ||
+		    fields[i].GetPartitionSpecFieldName() != other.fields[i].GetPartitionSpecFieldName()) {
 			return false;
 		}
 	}
 	return true;
 }
 
-IcebergPartitionSpec IcebergPartitionSpec::ParseFromJson(const rest_api_objects::PartitionSpec &partition_spec) {
+IcebergPartitionSpec IcebergPartitionSpec::ParseFromJson(const rest_api_objects::PartitionSpec &partition_spec,
+                                                         int32_t iceberg_version) {
 	D_ASSERT(partition_spec.spec_id);
 	IcebergPartitionSpec result(*partition_spec.spec_id);
-	for (auto &field : partition_spec.fields) {
-		result.fields.push_back(IcebergPartitionSpecField::ParseFromJson(field));
+	auto &fields = partition_spec.fields;
+	idx_t missing_field_ids = 0;
+	for (auto &field : fields) {
+		if (!field.field_id) {
+			missing_field_ids++;
+		}
+	}
+	//! v1 partition field ids are optional and default to 1000 + position in the spec
+	bool assign_field_ids = iceberg_version == 1 && missing_field_ids > 0;
+	if (assign_field_ids && missing_field_ids != fields.size()) {
+		// ids assigned by position could collide with the ones that are set
+		throw InvalidConfigurationException(
+		    "Cannot parse partition spec %d with missing field IDs: %d missing of %d fields", result.spec_id,
+		    missing_field_ids, fields.size());
+	}
+	for (idx_t i = 0; i < fields.size(); i++) {
+		optional_idx assigned_field_id;
+		if (assign_field_ids) {
+			assigned_field_id = 1000 + i;
+		}
+		result.fields.push_back(IcebergPartitionSpecField::ParseFromJson(fields[i], assigned_field_id));
 	}
 	return result;
 }

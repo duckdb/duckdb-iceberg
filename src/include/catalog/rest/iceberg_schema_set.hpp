@@ -7,6 +7,7 @@
 #include "duckdb/common/thread_annotation.hpp"
 #include "duckdb/common/vector.hpp"
 
+#include "catalog/rest/api/catalog_api.hpp"
 #include "catalog_entry/schema/iceberg_schema_entry.hpp"
 
 namespace duckdb {
@@ -33,8 +34,9 @@ public:
 	Catalog &catalog;
 
 private:
+	void ApplyListResult(IcebergListSchemasResult schemas) DUCKDB_REQUIRES(entry_lock);
 	annotated_mutex entry_lock;
-	case_insensitive_map_t<shared_ptr<IcebergSchemaEntry>> entries DUCKDB_GUARDED_BY(entry_lock);
+	unordered_map<string, shared_ptr<IcebergSchemaEntry>> entries DUCKDB_GUARDED_BY(entry_lock);
 };
 
 } // namespace duckdb

@@ -1,0 +1,156 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/reads/filtering/variant/test_array_field_comparison.test
+# description: Element bounds do not describe the type or ordering of a whole VARIANT array
+# group: [variant]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require-env FORMAT_V3_SUPPORT
+
+require-env SCAN_PLANNING_MODE client
+
+require-env VARIANT_SUPPORT
+
+include test/sql/init_requires
+
+statement ok
+SET iceberg_use_server_side_scan_planning=false;
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.variant_array_field;
+
+statement ok
+CREATE TABLE my_datalake.default.variant_array_field WITH ('format-version'='3') AS
+SELECT
+    {
+        'arr': [1,2]
+    }::VARIANT AS v;
+
+statement ok
+CREATE TEMP TABLE reference AS FROM my_datalake.default.variant_array_field;
+
+query I
+SELECT count(*) FROM reference WHERE v.arr > 100;
+----
+1
+
+query I
+SELECT count(*) FROM my_datalake.default.variant_array_field WHERE v.arr > 100;
+----
+1
+
+# A separate file of scalars has the same bounds as the array file.
+statement ok
+INSERT INTO my_datalake.default.variant_array_field VALUES
+({'arr': 1}::VARIANT), ({'arr': 2}::VARIANT);
+
+query III rowsort
+SELECT lower_bound, upper_bound, value_count
+FROM iceberg_column_stats(my_datalake.default.variant_array_field);
+----
+{'$[\'arr\']': 1}	{'$[\'arr\']': 2}	1
+{'$[\'arr\']': 1}	{'$[\'arr\']': 2}	2
+
+statement ok
+CREATE OR REPLACE TEMP TABLE reference AS FROM my_datalake.default.variant_array_field;
+
+# Arrays sort after primitives. Element upper bounds cannot disprove these predicates.
+foreach OP > >=
+
+query I
+SELECT count(*) FROM reference WHERE v.arr {OP} 100;
+----
+1
+
+query I
+SELECT count(*) FROM my_datalake.default.variant_array_field WHERE v.arr {OP} 100;
+----
+1
+
+# Projecting the whole VARIANT takes a different filter/projection path.
+query I
+SELECT v FROM my_datalake.default.variant_array_field WHERE v.arr {OP} 100;
+----
+{'arr': [1, 2]}
+
+endloop
+
+foreach OP < <=
+
+query I
+SELECT count(*) FROM my_datalake.default.variant_array_field WHERE 100 {OP} v.arr;
+----
+1
+
+endloop
+
+# Same-type equality and less-than comparisons can rule out both interpretations.
+statement ok
+CALL enable_logging('Iceberg');
+
+foreach OP = < <=
+
+statement ok
+CALL truncate_duckdb_logs();
+
+query I
+SELECT count(*) FROM my_datalake.default.variant_array_field WHERE v.arr {OP} 0;
+----
+0
+
+query I
+SELECT count(*) FROM duckdb_logs() WHERE type = 'Iceberg' AND message LIKE '%skipped%';
+----
+2
+
+endloop
+
+# An array-valued constant must not be compared against the primitive element bounds.
+query I
+SELECT count(*) FROM my_datalake.default.variant_array_field WHERE v.arr = [1,2]::VARIANT;
+----
+1
+
+statement ok
+DROP TABLE my_datalake.default.variant_array_field;
+
+# Nested paths, other primitive type ranks, and empty arrays have the same ambiguity.
+foreach TYPE INTEGER DOUBLE VARCHAR
+
+statement ok
+CREATE TABLE my_datalake.default.variant_array_field WITH ('format-version'='3') AS
+SELECT {'nested': {'arr': [1::{TYPE}, 2::{TYPE}]}}::VARIANT v
+UNION ALL
+SELECT {'nested': {'arr': []::{TYPE}[]}}::VARIANT;
+
+statement ok
+INSERT INTO my_datalake.default.variant_array_field VALUES
+({'nested': {'arr': 1::{TYPE}}}::VARIANT), ({'nested': {'arr': 2::{TYPE}}}::VARIANT);
+
+# Both files have bounds, including the file containing an empty array.
+query I
+SELECT count(*) FROM iceberg_column_stats(my_datalake.default.variant_array_field)
+WHERE lower_bound IS NOT NULL AND upper_bound IS NOT NULL;
+----
+2
+
+statement ok
+CREATE OR REPLACE TEMP TABLE reference AS FROM my_datalake.default.variant_array_field;
+
+foreach OP > >=
+
+query I
+SELECT count(*) FROM reference WHERE v.nested.arr {OP} 9::{TYPE};
+----
+2
+
+query I
+SELECT count(*) FROM my_datalake.default.variant_array_field WHERE v.nested.arr {OP} 9::{TYPE};
+----
+2
+
+endloop
+
+statement ok
+DROP TABLE my_datalake.default.variant_array_field;
+
+endloop

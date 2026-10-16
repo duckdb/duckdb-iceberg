@@ -1,0 +1,109 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/alter/test_schema_update_order.test
+# description: Schema switches precede partition and sort updates that reference newly added columns
+# group: [alter]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+include test/sql/init_requires
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.schema_update_order;
+
+statement ok
+CREATE TABLE my_datalake.default.schema_update_order (a INTEGER) WITH ('format-version' = '2');
+
+# The intermediate spec references b, which is absent from the final schema.
+# Moving only the final set-current-schema to the start or end cannot satisfy all these dependencies.
+statement ok
+BEGIN;
+
+statement ok
+ALTER TABLE my_datalake.default.schema_update_order ADD COLUMN b INTEGER;
+
+statement ok
+ALTER TABLE my_datalake.default.schema_update_order SET PARTITIONED BY (b);
+
+statement ok
+ALTER TABLE my_datalake.default.schema_update_order RESET PARTITIONED BY;
+
+# This reuses schema 0: schema switches must be queued even when no add-schema update is needed.
+statement ok
+ALTER TABLE my_datalake.default.schema_update_order DROP COLUMN b;
+
+statement ok
+ALTER TABLE my_datalake.default.schema_update_order ADD COLUMN c INTEGER;
+
+statement ok
+ALTER TABLE my_datalake.default.schema_update_order SET PARTITIONED BY (c);
+
+statement ok
+ALTER TABLE my_datalake.default.schema_update_order SET SORTED BY (c);
+
+statement ok
+COMMIT;
+
+query IIII
+SELECT metadata."current-schema-id"::INTEGER, len(metadata.schemas::VARIANT[]),
+       metadata."default-spec-id"::INTEGER, metadata."default-sort-order-id"::INTEGER
+FROM iceberg_load_table_response('my_datalake.default.schema_update_order');
+----
+2	3	2	1
+
+# Both historical and current partition specs retain the source IDs they were created against.
+query ITT
+SELECT spec."spec-id"::INTEGER,
+       list_transform(spec.fields::VARIANT[], lambda f: f."source-id"::INTEGER),
+       list_transform(spec.fields::VARIANT[], lambda f: f."field-id"::INTEGER)
+FROM iceberg_load_table_response('my_datalake.default.schema_update_order'),
+unnest(metadata."partition-specs"::VARIANT[]) AS t(spec)
+ORDER BY spec."spec-id"::INTEGER;
+----
+0	[]	[]
+1	[2]	[1000]
+2	[3]	[1001]
+
+statement ok
+INSERT INTO my_datalake.default.schema_update_order VALUES (1, 2);
+
+query II
+SELECT * FROM my_datalake.default.schema_update_order;
+----
+1	2
+
+# Switch to an existing schema and then build a new spec against it in the same transaction.
+statement ok
+BEGIN;
+
+statement ok
+ALTER TABLE my_datalake.default.schema_update_order RESET PARTITIONED BY;
+
+statement ok
+ALTER TABLE my_datalake.default.schema_update_order RESET SORTED BY;
+
+statement ok
+ALTER TABLE my_datalake.default.schema_update_order DROP COLUMN c;
+
+statement ok
+ALTER TABLE my_datalake.default.schema_update_order SET PARTITIONED BY (a);
+
+statement ok
+COMMIT;
+
+query III
+SELECT metadata."current-schema-id"::INTEGER, metadata."default-spec-id"::INTEGER,
+       metadata."default-sort-order-id"::INTEGER
+FROM iceberg_load_table_response('my_datalake.default.schema_update_order');
+----
+0	3	0
+
+statement ok
+INSERT INTO my_datalake.default.schema_update_order VALUES (3);
+
+query I
+SELECT a FROM my_datalake.default.schema_update_order ORDER BY a;
+----
+1
+3
+
+statement ok
+DROP TABLE my_datalake.default.schema_update_order;

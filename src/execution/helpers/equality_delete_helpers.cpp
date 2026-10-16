@@ -262,9 +262,10 @@ bool IcebergDelete::TryGetEqualityDeletePredicates(ClientContext &context, Icebe
 		return false;
 	}
 
-	//! Equality-delete writing is only supported for v2, unpartitioned tables.
+	//! Equality-delete writing is only supported for v2 & v3, unpartitioned tables.
+	//! v1 has no delete files, and v4 forbids writing new equality deletes.
 	auto &table_metadata = table.table_info.table_metadata;
-	if (table_metadata.iceberg_version != 2) {
+	if (table_metadata.iceberg_version != 2 && table_metadata.iceberg_version != 3) {
 		return false;
 	}
 	if (table_metadata.HasPartitionSpec() && table_metadata.GetLatestPartitionSpec().IsPartitioned()) {
@@ -336,16 +337,16 @@ bool IcebergDelete::TryGetEqualityDeletePredicates(ClientContext &context, Icebe
 		predicate.column_name = column_definition->name;
 		predicate.type = column_definition->type;
 		for (auto &raw_value : raw_values) {
-			Value delete_value;
 			if (raw_value.IsNull()) {
-				delete_value = Value(column_definition->type);
-			} else {
-				string error_message;
-				if (!raw_value.DefaultTryCastAs(column_definition->type, delete_value, &error_message, true)) {
-					return false;
-				}
+				predicate.values.push_back(Value(column_definition->type));
+				continue;
 			}
-			predicate.values.push_back(std::move(delete_value));
+			string error_message;
+			auto delete_value = raw_value.DefaultTryCastAs(column_definition->type, &error_message, true);
+			if (!delete_value) {
+				return false;
+			}
+			predicate.values.push_back(std::move(*delete_value));
 		}
 		equality_predicates.push_back(std::move(predicate));
 	}
@@ -532,7 +533,7 @@ void IcebergDelete::WriteEqualityDeleteFile(ClientContext &context, IcebergDelet
 		}
 	}
 
-	global_state.written_files.emplace(delete_file_path, std::move(delete_file));
+	global_state.write_result.written_files.emplace(delete_file_path, std::move(delete_file));
 }
 
 } // namespace duckdb

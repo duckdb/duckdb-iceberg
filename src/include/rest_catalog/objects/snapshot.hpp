@@ -17,21 +17,21 @@ public:
 	Snapshot &operator=(const Snapshot &) = delete;
 	Snapshot(Snapshot &&) = default;
 	Snapshot &operator=(Snapshot &&) = default;
-	class Object2 {
+	class Object6 {
 	public:
-		Object2();
-		Object2(const Object2 &) = delete;
-		Object2 &operator=(const Object2 &) = delete;
-		Object2(Object2 &&) = default;
-		Object2 &operator=(Object2 &&) = default;
+		Object6();
+		Object6(const Object6 &) = delete;
+		Object6 &operator=(const Object6 &) = delete;
+		Object6(Object6 &&) = default;
+		Object6 &operator=(Object6 &&) = default;
 
 	public:
 		// Deserialization
-		static Object2 FromJSON(JSONValue obj);
+		static Object6 FromJSON(JSONValue obj);
 		string TryFromJSON(JSONValue obj);
 
 		// Copy
-		Object2 Copy() const;
+		Object6 Copy() const;
 
 		// Serialization
 		void PopulateJSON(JSONWriter &writer, JSONMutableValue obj) const;
@@ -57,7 +57,7 @@ public:
 public:
 	int64_t snapshot_id;
 	int64_t timestamp_ms;
-	Object2 summary;
+	Object6 summary;
 	optional<int64_t> parent_snapshot_id;
 	optional<int64_t> sequence_number;
 	optional<string> manifest_list;

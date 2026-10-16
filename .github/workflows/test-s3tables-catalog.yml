@@ -16,6 +16,10 @@ on:
         description: 'Commit hash or branch of the httpfs fork. Leave empty to use default.'
         required: false
         default: ''
+      pr_number:
+        description: 'Pull request number (e.g. 1501) to test instead of the selected branch. Leave empty to use the branch'
+        required: false
+        default: ''
   workflow_call:
     # Callers must use `secrets: inherit`; no secrets are declared here so the
     # list can't drift out of sync with the ones the steps below actually read.
@@ -35,10 +39,15 @@ on:
         required: false
         default: ''
         type: string
+      pr_number:
+        description: 'Pull request number (e.g. 1501) to test instead of the selected branch. Leave empty to use the branch'
+        required: false
+        default: ''
+        type: string
 
 # cancel-in-progress = false to avoid skipping teardown step and leaking table buckets
 concurrency:
-  group: s3tables-catalog-${{ github.workflow }}-${{ github.ref }}
+  group: s3tables-catalog-${{ github.workflow }}-${{ github.ref }}-pr${{ inputs.pr_number || '' }}
   cancel-in-progress: false
 
 defaults:
@@ -68,8 +77,10 @@ jobs:
 
     steps:
       # v5 runs on Node 24; v4 still ships a Node 20 entrypoint and warns.
+      # refs/pull/<n>/head is the PR's head commit, including PRs from forks.
       - uses: actions/checkout@v5
         with:
+          ref: ${{ inputs.pr_number && format('refs/pull/{0}/head', inputs.pr_number) || github.ref }}
           fetch-depth: 0
           submodules: 'true'
 
@@ -116,7 +127,7 @@ jobs:
         with:
           build-type: release
           build: python3 duckdb/scripts/ci/retry.py -- make release
-          vcpkg-commit: 84bab45d415d22042bd0b9081aea57f362da3f35
+          vcpkg-commit: cd61e1e26a038e82d6550a3ebbe0fbbfe7da78e3 # Release 2026.06.24
 
       - name: Create S3 Tables table bucket
         run: |
@@ -157,8 +168,8 @@ jobs:
 
       - name: Run Generic IRC tests
         run: |
-          ./build/release/test/unittest --order lex "$PWD/test/sql/local/catalog_test_config_setup/*" --list-test-names-only || true
-          ./build/release/test/unittest --order lex "$PWD/test/sql/local/catalog_test_config_setup/*" --test-config test/configs/cloud_s3tables.json
+          ./build/release/test/unittest --order lex "$PWD/test/sql/local/catalog_test_config_setup/*" "exclude:*.test_slow" --list-test-names-only || true
+          ./build/release/test/unittest --order lex "$PWD/test/sql/local/catalog_test_config_setup/*" "exclude:*.test_slow" --test-config test/configs/cloud_s3tables.json
 
       - name: Tear down S3 Tables table bucket
         # Must run even when the build, the smoke test or the suite failed, so a

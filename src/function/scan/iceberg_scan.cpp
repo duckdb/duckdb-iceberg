@@ -38,46 +38,67 @@
 namespace duckdb {
 
 static void AddNamedParameters(TableFunction &fun) {
-	fun.named_parameters["allow_moved_paths"] = LogicalType::BOOLEAN;
-	fun.named_parameters["mode"] = LogicalType::VARCHAR;
-	fun.named_parameters["metadata_compression_codec"] = LogicalType::VARCHAR;
-	fun.named_parameters["version"] = LogicalType::VARCHAR;
-	fun.named_parameters["version_name_format"] = LogicalType::VARCHAR;
-	fun.named_parameters["snapshot_from_timestamp"] = LogicalType::TIMESTAMP_MS;
-	fun.named_parameters["snapshot_from_id"] = LogicalType::UBIGINT;
-	fun.named_parameters["start_snapshot_id"] = LogicalType::BIGINT;
-	fun.named_parameters["end_snapshot_id"] = LogicalType::BIGINT;
+	fun.GetSignature().ExtendTypedKwargs([&](TypedKwargs &options) {
+		options.Add("allow_moved_paths", LogicalType::BOOLEAN)
+		    .Add("mode", LogicalType::VARCHAR)
+		    .Add("metadata_compression_codec", LogicalType::VARCHAR)
+		    .Add("version", LogicalType::ANY)
+		    .Add("version_name_format", LogicalType::VARCHAR)
+		    .Add("snapshot_from_timestamp", LogicalType::ANY)
+		    .Add("snapshot_from_id", LogicalType::UBIGINT)
+		    .Add("start_snapshot_id", LogicalType::BIGINT)
+		    .Add("end_snapshot_id", LogicalType::BIGINT);
+	});
 }
 
 virtual_column_map_t IcebergVirtualColumns(ClientContext &context, optional_ptr<FunctionData> bind_data_p) {
 	auto &bind_data = bind_data_p->Cast<MultiFileBindData>();
-	auto result = IcebergTableSchemaVersion::VirtualColumns();
+	auto &file_list = bind_data.file_list->Cast<IcebergMultiFileList>();
+	auto result = IcebergTableSchemaVersion::VirtualColumns(file_list.GetScanPlanner().GetMetadata().iceberg_version);
 	bind_data.virtual_columns = result;
 	return result;
 }
 
 static void IcebergScanSerialize(Serializer &serializer, const optional_ptr<FunctionData> bind_data,
-                                 const TableFunction &function) {
+                                 const BoundTableFunction &function) {
 	throw NotImplementedException("IcebergScan serialization not implemented");
 }
-static unique_ptr<FunctionData> IcebergScanDeserialize(Deserializer &deserializer, TableFunction &function) {
+static unique_ptr<FunctionData> IcebergScanDeserialize(Deserializer &deserializer, BoundTableFunction &function) {
 	throw NotImplementedException("IcebergScan deserialization not implemented");
 }
 
-BindInfo IcebergBindInfo(const optional_ptr<FunctionData> bind_data) {
+static optional_ptr<TableCatalogEntry> IcebergGetTableEntry(optional_ptr<const FunctionData> bind_data) {
 	auto &multi_file_data = bind_data->Cast<MultiFileBindData>();
 	auto &file_list = multi_file_data.file_list->Cast<IcebergMultiFileList>();
-	auto table = file_list.GetTable();
-	if (!table) {
-		return BindInfo(ScanType::EXTERNAL);
+	return file_list.GetTable().get();
+}
+
+BindInfo IcebergBindInfo(TableFunctionGetBindInfoInput &input) {
+	auto &multi_file_data = input.bind_data->Cast<MultiFileBindData>();
+	auto &file_list = multi_file_data.file_list->Cast<IcebergMultiFileList>();
+	BindInfo result(file_list.GetTable() ? ScanType::TABLE : ScanType::EXTERNAL);
+
+	auto &planner = file_list.GetScanPlanner();
+	if (!planner.HasScanInfo()) {
+		return result;
 	}
-	return BindInfo(*table);
+	auto &snapshot_info = planner.GetSnapshot();
+	auto &table_uuid = planner.GetMetadata().table_uuid;
+	if (!table_uuid.empty()) {
+		result.InsertOption("table_uuid", Value(table_uuid));
+	}
+	result.InsertOption("schema_id", Value::INTEGER(snapshot_info.schema_id));
+	// Omitted for empty tables, and when uncommitted transaction-local changes are also scanned
+	if (snapshot_info.snapshot && !planner.HasTransactionData()) {
+		result.InsertOption("snapshot_id", Value::BIGINT(snapshot_info.snapshot->snapshot_id));
+	}
+	return result;
 }
 
 static void IcebergSetScanOrder(unique_ptr<RowGroupOrderOptions> order_options, optional_ptr<FunctionData> bind_data) {
 	auto &multi_file_data = bind_data->Cast<MultiFileBindData>();
 	auto &file_list = multi_file_data.file_list->Cast<IcebergMultiFileList>();
-	file_list.SetScanOrder(std::move(order_options));
+	file_list.GetScanPlanner().SetScanOrder(std::move(order_options));
 }
 
 //! FIXME: needs v1.5.1, causes a crash on v1.5.0
@@ -98,7 +119,7 @@ TableFunctionSet IcebergFunctions::GetIcebergScanFunction(ExtensionLoader &loade
 	auto &parquet_scan = loader.GetTableFunction("parquet_scan");
 	auto parquet_scan_copy = parquet_scan.functions;
 
-	for (auto &function : parquet_scan_copy.functions) {
+	parquet_scan_copy.ApplyToFunctions([](TableFunction &function) {
 		// Register the MultiFileReader as the driver for reads
 		function.get_multi_file_reader = IcebergMultiFileReader::CreateInstance;
 		function.late_materialization = false;
@@ -111,17 +132,31 @@ TableFunctionSet IcebergFunctions::GetIcebergScanFunction(ExtensionLoader &loade
 		function.statistics = nullptr;
 		function.table_scan_progress = nullptr;
 		function.get_bind_info = IcebergBindInfo;
+		function.get_table_entry = IcebergGetTableEntry;
 		function.get_virtual_columns = IcebergVirtualColumns;
 		function.get_partition_stats = IcebergMultiFileReader::IcebergGetPartitionStats;
 		function.set_scan_order = IcebergSetScanOrder;
 		// function.supports_pushdown_type = IcebergScanSupportsPushdownType;
 
-		// Schema param is just confusing here
-		function.named_parameters.erase("schema");
+		// Schema param is just confusing here, so the options are rebuilt without it
+		auto &signature = function.GetSignature();
+		signature.ExtendTypedKwargs([](TypedKwargs &options) {
+			TypedKwargs without_schema;
+			for (auto &option : options.GetOptions()) {
+				if (option.name == "schema") {
+					continue;
+				}
+				without_schema.Add(option.name, option.type);
+				for (auto &alias : option.aliases) {
+					without_schema.Alias(alias);
+				}
+			}
+			options = std::move(without_schema);
+		});
 		AddNamedParameters(function);
 
 		function.SetName("iceberg_scan");
-	}
+	});
 
 	parquet_scan_copy.SetName("iceberg_scan");
 	return parquet_scan_copy;

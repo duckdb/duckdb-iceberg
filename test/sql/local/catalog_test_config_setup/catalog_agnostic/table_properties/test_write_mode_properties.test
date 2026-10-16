@@ -1,0 +1,182 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/table_properties/test_write_mode_properties.test
+# description: UPDATE and MERGE honor write.update.mode and write.merge.mode
+# group: [table_properties]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+include test/sql/init_requires
+
+require core_functions
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.write_modes;
+
+statement ok
+CREATE TABLE my_datalake.default.write_modes (id INTEGER, v VARCHAR) WITH ('format-version'='2');
+
+statement ok
+INSERT INTO my_datalake.default.write_modes VALUES (1, 'a'), (2, 'b'), (3, 'c');
+
+# UPDATE is refused when write.update.mode is copy-on-write
+
+statement ok
+CALL set_iceberg_table_properties(my_datalake.default.write_modes, {'write.update.mode': 'copy-on-write'});
+
+statement error
+UPDATE my_datalake.default.write_modes SET v = 'z' WHERE id = 2;
+----
+<REGEX>:.*Not implemented Error.*write.update.mode.*copy-on-write.*
+
+# MERGE with an UPDATE or DELETE action is refused when write.merge.mode is copy-on-write
+
+statement ok
+CALL set_iceberg_table_properties(my_datalake.default.write_modes, {'write.merge.mode': 'copy-on-write'});
+
+statement error
+MERGE INTO my_datalake.default.write_modes AS t USING (SELECT 2 AS id) AS s ON t.id = s.id
+WHEN MATCHED THEN UPDATE SET v = 'z';
+----
+<REGEX>:.*Not implemented Error.*write.merge.mode.*copy-on-write.*
+
+statement error
+MERGE INTO my_datalake.default.write_modes AS t USING (SELECT 2 AS id) AS s ON t.id = s.id
+WHEN MATCHED THEN DELETE;
+----
+<REGEX>:.*Not implemented Error.*write.merge.mode.*copy-on-write.*
+
+# an upsert is refused as a whole, so its insert doesn't happen either
+
+statement error
+MERGE INTO my_datalake.default.write_modes AS t USING (VALUES (2, 'z'), (5, 'e')) AS s(id, v) ON t.id = s.id
+WHEN MATCHED THEN UPDATE SET v = s.v
+WHEN NOT MATCHED THEN INSERT VALUES (s.id, s.v);
+----
+<REGEX>:.*Not implemented Error.*write.merge.mode.*copy-on-write.*
+
+query II
+SELECT id, v FROM my_datalake.default.write_modes ORDER BY id;
+----
+1	a
+2	b
+3	c
+
+# an insert-only MERGE is an append: it keeps the existing data files and writes no delete files, so it is allowed
+
+query I
+MERGE INTO my_datalake.default.write_modes AS t USING (SELECT 4 AS id, 'd' AS v) AS s ON t.id = s.id
+WHEN NOT MATCHED THEN INSERT VALUES (s.id, s.v);
+----
+1
+
+query II
+SELECT id, v FROM my_datalake.default.write_modes ORDER BY id;
+----
+1	a
+2	b
+3	c
+4	d
+
+query T
+SELECT operation FROM iceberg_snapshots(my_datalake.default.write_modes) ORDER BY sequence_number DESC LIMIT 1;
+----
+append
+
+query TTI
+SELECT content, status, count(*) FROM iceberg_metadata(my_datalake.default.write_modes) GROUP BY ALL ORDER BY ALL;
+----
+DATA	ADDED	2
+
+# MERGE uses write.merge.mode only, not the delete and update modes
+
+statement ok
+CALL set_iceberg_table_properties(my_datalake.default.write_modes,
+    {'write.merge.mode': 'merge-on-read', 'write.delete.mode': 'copy-on-write'});
+
+query I
+MERGE INTO my_datalake.default.write_modes AS t USING (SELECT 2 AS id) AS s ON t.id = s.id
+WHEN MATCHED THEN UPDATE SET v = 'z';
+----
+1
+
+query I
+MERGE INTO my_datalake.default.write_modes AS t USING (SELECT 3 AS id) AS s ON t.id = s.id
+WHEN MATCHED THEN DELETE;
+----
+1
+
+statement error
+DELETE FROM my_datalake.default.write_modes WHERE id = 1;
+----
+<REGEX>:.*Not implemented Error.*write.delete.mode.*copy-on-write.*
+
+statement error
+UPDATE my_datalake.default.write_modes SET v = 'y' WHERE id = 1;
+----
+<REGEX>:.*Not implemented Error.*write.update.mode.*copy-on-write.*
+
+query II
+SELECT id, v FROM my_datalake.default.write_modes ORDER BY id;
+----
+1	a
+2	z
+4	d
+
+# a mode changed earlier in the same transaction with ALTER TABLE applies
+
+statement ok
+BEGIN;
+
+statement ok
+ALTER TABLE my_datalake.default.write_modes SET ('write.update.mode' = 'merge-on-read');
+
+query I
+UPDATE my_datalake.default.write_modes SET v = 'y' WHERE id = 1;
+----
+1
+
+statement ok
+COMMIT;
+
+query II
+SELECT id, v FROM my_datalake.default.write_modes ORDER BY id;
+----
+1	y
+2	z
+4	d
+
+# an unset mode is treated as merge-on-read
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.write_modes_unset;
+
+statement ok
+CREATE TABLE my_datalake.default.write_modes_unset (id INTEGER, v VARCHAR) WITH ('format-version'='2');
+
+statement ok
+INSERT INTO my_datalake.default.write_modes_unset VALUES (1, 'a'), (2, 'b'), (3, 'c');
+
+query I
+SELECT count(*) FROM iceberg_table_properties(my_datalake.default.write_modes_unset) WHERE key LIKE 'write.%.mode';
+----
+0
+
+query I
+DELETE FROM my_datalake.default.write_modes_unset WHERE id = 1;
+----
+1
+
+query I
+UPDATE my_datalake.default.write_modes_unset SET v = 'z' WHERE id = 2;
+----
+1
+
+query I
+MERGE INTO my_datalake.default.write_modes_unset AS t USING (SELECT 3 AS id) AS s ON t.id = s.id
+WHEN MATCHED THEN DELETE;
+----
+1
+
+query II
+SELECT id, v FROM my_datalake.default.write_modes_unset ORDER BY id;
+----
+2	z

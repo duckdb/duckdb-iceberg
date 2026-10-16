@@ -17,8 +17,8 @@ namespace duckdb {
 struct IcebergColumnStatsBindData : public TableFunctionData {
 	unique_ptr<IcebergManifestList> iceberg_table;
 	IcebergSnapshotScanInfo snapshot_to_scan;
-	IcebergTableMetadata metadata;
-	shared_ptr<IcebergTableSchema> schema;
+	IcebergTableMetadata metadata {IcebergTableMetadataSchemas {}};
+	optional_ptr<const IcebergTableSchema> schema;
 	unordered_map<uint64_t, ColumnIndex> source_to_column_id;
 };
 
@@ -225,8 +225,8 @@ static void IcebergColumnStatsFunction(ClientContext &context, TableFunctionInpu
 						upper_bound_str = Value().ToString();
 					}
 				} else {
-					auto stats =
-					    IcebergPredicateStats::DeserializeBounds(lower_bound, upper_bound, column.name, column.type);
+					auto stats = IcebergPredicateStats::DeserializeBounds(context, lower_bound, upper_bound,
+					                                                      column.name, column.type);
 					//! GEOMETRY bounds are a bounding box (no scalar min/max), so lower_bound /
 					//! upper_bound carry the box serialized as a JSON object instead of a scalar.
 					bool is_geometry = column.type.id() == LogicalTypeId::GEOMETRY && stats.geometry_stats;
@@ -266,7 +266,7 @@ static void IcebergColumnStatsFunction(ClientContext &context, TableFunctionInpu
 				// nan_value_count
 				output.data[col++].SetValue(out, nan_value_count);
 				// file_sequence_number
-				output.data[col++].SetValue(out, manifest_entry.GetFileSequenceNumber(table_entry.file));
+				output.data[col++].SetValue(out, manifest_entry.GetFileSequenceNumber(table_entry.GetFile()));
 				out++;
 			}
 			global_state.column_it = bind_data.source_to_column_id.begin();
@@ -278,15 +278,17 @@ static void IcebergColumnStatsFunction(ClientContext &context, TableFunctionInpu
 
 TableFunctionSet IcebergFunctions::GetIcebergColumnStatsFunction() {
 	TableFunctionSet function_set("iceberg_column_stats");
-	TableFunction fun({LogicalType::VARCHAR}, IcebergColumnStatsFunction, IcebergColumnStatsBind,
-	                  IcebergColumnStatsGlobalTableFunctionState::Init);
+	TableFunction fun(FunctionSignature().AddPositionalOnly("path", LogicalType::VARCHAR), IcebergColumnStatsFunction,
+	                  IcebergColumnStatsBind, IcebergColumnStatsGlobalTableFunctionState::Init);
 
-	fun.named_parameters["allow_moved_paths"] = LogicalType::BOOLEAN;
-	fun.named_parameters["metadata_compression_codec"] = LogicalType::VARCHAR;
-	fun.named_parameters["version"] = LogicalType::VARCHAR;
-	fun.named_parameters["version_name_format"] = LogicalType::VARCHAR;
-	fun.named_parameters["snapshot_from_timestamp"] = LogicalType::TIMESTAMP_MS;
-	fun.named_parameters["snapshot_from_id"] = LogicalType::UBIGINT;
+	fun.GetSignature().WithTypedKwargs("options", [&](TypedKwargs &options) {
+		options.Add("allow_moved_paths", LogicalType::BOOLEAN)
+		    .Add("metadata_compression_codec", LogicalType::VARCHAR)
+		    .Add("version", LogicalType::ANY)
+		    .Add("version_name_format", LogicalType::VARCHAR)
+		    .Add("snapshot_from_timestamp", LogicalType::ANY)
+		    .Add("snapshot_from_id", LogicalType::UBIGINT);
+	});
 	function_set.AddFunction(fun);
 	return function_set;
 }

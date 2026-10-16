@@ -156,7 +156,7 @@ static void GlueAttach(ClientContext &context, IcebergAttachOptions &input) {
 
 	if (region.IsNull()) {
 		throw InvalidConfigurationException("Assumed catalog secret '%s' for catalog '%s' does not have a region",
-		                                    secret_entry->secret->GetName(), input.name);
+		                                    secret_entry->secret->GetName().GetIdentifierName(), input.name);
 	}
 	S3OrGlueAttachInternal(input, "glue", region.ToString());
 }
@@ -175,23 +175,172 @@ static void SetAWSCatalogOptions(IcebergAttachOptions &attach_options, case_inse
 
 } // namespace
 
-unordered_map<string, Value> NormalizeIcebergAttachOptions(const unordered_map<string, Value> &options) {
-	unordered_map<string, Value> result;
-	for (const auto &entry : options) {
-		auto name = StringUtil::Lower(entry.first);
-		if (name == "endpoint") {
-			name = "uri";
+namespace {
+
+static void ParseAttachOptions(IcebergAttachOptions &attach_options, optional<Identifier> &default_schema,
+                               const unordered_map<string, Value> &properties) {
+	string authorization_type_string;
+	string access_mode_string;
+	attach_options.options.clear();
+	//! First handle generic attach options
+	for (auto &entry : properties) {
+		auto &lower_name = entry.first;
+		auto &argument = entry.second;
+		if (lower_name == "type" || lower_name == "read_only") {
+			continue;
 		}
-		if (!result.emplace(name, entry.second).second) {
-			if (name == "uri") {
-				throw InvalidConfigurationException(
-				    "Both 'uri' and deprecated 'endpoint' were provided for Iceberg attach; use only 'uri'");
+
+		if (lower_name == "endpoint_type") {
+			continue;
+		} else if (lower_name == "authorization_type") {
+			authorization_type_string = StringUtil::Lower(argument.ToString());
+		} else if (lower_name == "access_delegation_mode") {
+			access_mode_string = StringUtil::Lower(argument.ToString());
+		} else if (lower_name == "uri") {
+			attach_options.catalog_uri = argument.ToString();
+		} else if (lower_name == "warehouse") {
+			attach_options.warehouse = argument.ToString();
+		} else if (lower_name == "prefix") {
+			attach_options.prefix = argument.ToString();
+		} else if (lower_name == "namespace_separator") {
+			attach_options.namespace_separator = StringUtil::URLDecode(argument.ToString());
+			if (attach_options.namespace_separator.empty()) {
+				throw InvalidConfigurationException("'namespace_separator' cannot be empty");
 			}
-			throw InvalidConfigurationException("Duplicate Iceberg attach option '%s'", name);
+		} else if (lower_name == "default_region") {
+			attach_options.default_region = argument.ToString();
+		} else if (lower_name == "stage_create_tables") {
+			auto result = argument.DefaultCastAs(LogicalType::BOOLEAN).GetValue<bool>();
+			attach_options.stage_create_tables = result;
+		} else if (lower_name == "disable_multi_table_commit") {
+			attach_options.disable_multi_table_commit = argument.DefaultCastAs(LogicalType::BOOLEAN).GetValue<bool>();
+		} else if (lower_name == "skip_create_table_metadata_updates") {
+			attach_options.skip_create_table_metadata_updates =
+			    argument.DefaultCastAs(LogicalType::BOOLEAN).GetValue<bool>();
+		} else if (lower_name == "remove_files_on_delete") {
+			attach_options.remove_files_on_delete = argument.DefaultCastAs(LogicalType::BOOLEAN).GetValue<bool>();
+		} else if (lower_name == "support_nested_namespaces") {
+			attach_options.support_nested_namespaces = argument.DefaultCastAs(LogicalType::BOOLEAN).GetValue<bool>();
+		} else if (lower_name == "purge_requested") {
+			attach_options.purge_requested = argument.DefaultCastAs(LogicalType::BOOLEAN).GetValue<bool>();
+		} else if (lower_name == "default_table_location_from_namespace") {
+			attach_options.default_table_location_from_namespace =
+			    argument.DefaultCastAs(LogicalType::BOOLEAN).GetValue<bool>();
+		} else if (lower_name == "use_metadata_location") {
+			attach_options.use_metadata_location = entry.second.DefaultCastAs(LogicalType::BOOLEAN).GetValue<bool>();
+		} else if (lower_name == "table_resolution") {
+			auto value = StringUtil::Lower(argument.ToString());
+			if (value == "lazy") {
+				attach_options.table_resolution = IcebergTableResolution::LAZY;
+			} else if (value == "eager") {
+				attach_options.table_resolution = IcebergTableResolution::EAGER;
+			} else {
+				throw InvalidConfigurationException(
+				    "Unrecognized 'table_resolution' (%s), accepted options are: lazy, eager", value);
+			}
+		} else if (lower_name == "default_schema") {
+			if (argument.IsNull()) {
+				default_schema = std::nullopt;
+				continue;
+			}
+			auto schema_name = argument.ToString();
+			if (schema_name.empty()) {
+				default_schema = std::nullopt;
+				continue;
+			}
+			default_schema = Identifier(schema_name);
+		} else if (lower_name == "encode_entire_prefix") {
+			attach_options.encode_entire_prefix = argument.DefaultCastAs(LogicalType::BOOLEAN).GetValue<bool>();
+		} else if (lower_name == "max_table_staleness") {
+			auto interval_option = argument.DefaultCastAs(LogicalType::INTERVAL);
+			auto interval_value = interval_option.GetValue<interval_t>();
+			int64_t interval_in_micros = 0;
+			if (!Interval::TryGetMicro(interval_value, interval_in_micros)) {
+				throw ConversionException("Could not get interval information from %s", interval_option.ToString());
+			}
+			if (interval_in_micros < 0) {
+				throw InvalidConfigurationException("'max_table_staleness' cannot be negative");
+			}
+			attach_options.max_table_staleness_micros = interval_in_micros;
+		} else {
+			attach_options.options.emplace(entry);
 		}
 	}
-	return result;
+	//! Then check the authorization type
+	if (!authorization_type_string.empty()) {
+		attach_options.authorization_type = IcebergAuthorization::TypeFromString(authorization_type_string);
+	}
+	if (!access_mode_string.empty()) {
+		if (access_mode_string == "vended_credentials") {
+			attach_options.access_mode = IRCAccessDelegationMode::VENDED_CREDENTIALS;
+		} else if (access_mode_string == "none") {
+			attach_options.access_mode = IRCAccessDelegationMode::NONE;
+		} else {
+			throw InvalidInputException(
+			    "Unrecognized access mode '%s'. Supported options are 'vended_credentials' and 'none'",
+			    access_mode_string);
+		}
+	}
 }
+
+static unique_ptr<IcebergAuthorization>
+CreateAuthorization(AttachedDatabase &db, ClientContext &context, IcebergAttachOptions &attach_options,
+                    optional_ptr<unordered_map<string, Value>> client_options = nullptr) {
+	//! Finally, create the auth_handler class from the authorization_type and the remaining options
+	unique_ptr<IcebergAuthorization> auth_handler;
+	switch (attach_options.authorization_type) {
+	case IcebergAuthorizationType::OAUTH2: {
+		auth_handler = OAuth2Authorization::FromAttachOptions(db, context, attach_options, client_options);
+		break;
+	}
+	case IcebergAuthorizationType::SIGV4: {
+		auth_handler = SIGV4Authorization::FromAttachOptions(db, attach_options);
+		break;
+	}
+	case IcebergAuthorizationType::NONE: {
+		auth_handler = NoneAuthorization::FromAttachOptions(db, attach_options);
+		break;
+	}
+	default:
+		throw InternalException("Authorization Type (%s) not implemented",
+		                        static_cast<int>(attach_options.authorization_type));
+	}
+
+	//! We throw if there are any additional options not handled by previous steps
+	if (!attach_options.options.empty()) {
+		set<string> unrecognized_options;
+		for (auto &entry : attach_options.options) {
+			unrecognized_options.insert(entry.first);
+		}
+		throw InvalidConfigurationException("Unhandled options found: %s",
+		                                    StringUtil::Join(unrecognized_options, ", "));
+	}
+
+	// The URI can be supplied by an ICEBERG secret during authorization setup.
+	StringUtil::RTrim(attach_options.catalog_uri, "/");
+	if (attach_options.catalog_uri.empty()) {
+		throw InvalidConfigurationException("Missing 'uri' option for Iceberg attach");
+	}
+
+	return auth_handler;
+}
+
+static bool AuthorizationChanged(const unordered_map<string, Value> &before,
+                                 const unordered_map<string, Value> &after) {
+	for (auto &entry : after) {
+		if (!IsIcebergAuthorizationOption(entry.first)) {
+			continue;
+		}
+		auto it = before.find(entry.first);
+		if (it == before.end() || it->second.type() != entry.second.type() ||
+		    it->second.ToString() != entry.second.ToString()) {
+			return true;
+		}
+	}
+	return false;
+}
+
+} // namespace
 
 unique_ptr<Catalog> IcebergAttach::Attach(optional_ptr<StorageExtensionInfo> storage_info, ClientContext &context,
                                           AttachedDatabase &db, const string &name, AttachInfo &info,
@@ -199,71 +348,29 @@ unique_ptr<Catalog> IcebergAttach::Attach(optional_ptr<StorageExtensionInfo> sto
 	IcebergAttachOptions attach_options;
 	attach_options.warehouse = info.path;
 	attach_options.name = name;
-
-	// check if we have a secret provided
-	Identifier default_schema;
+	optional<Identifier> default_schema;
+	auto client_options = NormalizeIcebergAttachOptions(info.options);
+	// An empty ATTACH path leaves warehouse selection to the server.
+	if (client_options.count("warehouse")) {
+		throw InvalidConfigurationException("Specify the Iceberg warehouse as the ATTACH path, not a WAREHOUSE option");
+	}
+	if (!info.path.empty()) {
+		client_options["warehouse"] = info.path;
+	}
+	ParseAttachOptions(attach_options, default_schema, client_options);
+	for (auto &entry : info.options) {
+		if (StringUtil::CIEquals(entry.first, "endpoint")) {
+			DUCKDB_LOG_WARNING(context, "The Iceberg attach option 'endpoint' is deprecated; use 'uri' instead");
+		}
+	}
 	string endpoint_type_string;
-	string authorization_type_string;
-	string access_mode_string;
+	auto endpoint_it = client_options.find("endpoint_type");
+	if (endpoint_it != client_options.end()) {
+		endpoint_type_string = StringUtil::Lower(endpoint_it->second.ToString());
+	}
 	case_insensitive_set_t set_by_attach_options;
-	bool used_legacy_endpoint = false;
-	for (const auto &entry : info.options) {
-		used_legacy_endpoint |= StringUtil::CIEquals(entry.first, "endpoint");
-	}
-	auto normalized_options = NormalizeIcebergAttachOptions(info.options);
-	//! First handle generic attach options
-	for (auto &entry : normalized_options) {
-		auto &lower_name = entry.first;
-		if (lower_name == "type" || lower_name == "read_only") {
-			continue;
-		}
-
-		if (lower_name == "endpoint_type") {
-			endpoint_type_string = StringUtil::Lower(entry.second.ToString());
-		} else if (lower_name == "authorization_type") {
-			authorization_type_string = StringUtil::Lower(entry.second.ToString());
-		} else if (lower_name == "access_delegation_mode") {
-			access_mode_string = StringUtil::Lower(entry.second.ToString());
-		} else if (lower_name == "uri") {
-			attach_options.catalog_uri = entry.second.ToString();
-		} else if (lower_name == "stage_create_tables") {
-			auto result = entry.second.DefaultCastAs(LogicalType::BOOLEAN).GetValue<bool>();
-			attach_options.stage_create_tables = result;
-			set_by_attach_options.insert("stage_create_tables");
-		} else if (lower_name == "disable_multi_table_commit") {
-			attach_options.disable_multi_table_commit =
-			    entry.second.DefaultCastAs(LogicalType::BOOLEAN).GetValue<bool>();
-		} else if (lower_name == "skip_create_table_metadata_updates") {
-			attach_options.skip_create_table_metadata_updates =
-			    entry.second.DefaultCastAs(LogicalType::BOOLEAN).GetValue<bool>();
-		} else if (lower_name == "remove_files_on_delete") {
-			attach_options.remove_files_on_delete = entry.second.DefaultCastAs(LogicalType::BOOLEAN).GetValue<bool>();
-			set_by_attach_options.insert("remove_files_on_delete");
-		} else if (lower_name == "support_nested_namespaces") {
-			attach_options.support_nested_namespaces =
-			    entry.second.DefaultCastAs(LogicalType::BOOLEAN).GetValue<bool>();
-			set_by_attach_options.insert("support_nested_namespaces");
-		} else if (lower_name == "purge_requested") {
-			attach_options.purge_requested = entry.second.DefaultCastAs(LogicalType::BOOLEAN).GetValue<bool>();
-			set_by_attach_options.insert("purge_requested");
-		} else if (lower_name == "default_schema") {
-			default_schema = Identifier(entry.second.ToString());
-		} else if (lower_name == "encode_entire_prefix") {
-			attach_options.encode_entire_prefix = true;
-		} else if (lower_name == "max_table_staleness") {
-			auto interval_option = entry.second.DefaultCastAs(LogicalType::INTERVAL);
-			auto interval_value = interval_option.GetValue<interval_t>();
-			int64_t interval_in_micros = 0;
-			if (!Interval::TryGetMicro(interval_value, interval_in_micros)) {
-				throw ConversionException("Could not get interval information from %s", interval_option.ToString());
-			}
-			attach_options.max_table_staleness_micros = interval_in_micros;
-		} else {
-			attach_options.options.emplace(std::move(entry));
-		}
-	}
-	if (used_legacy_endpoint) {
-		DUCKDB_LOG_WARNING(context, "The Iceberg attach option 'endpoint' is deprecated; use 'uri' instead");
+	for (auto &entry : client_options) {
+		set_by_attach_options.insert(entry.first);
 	}
 	StringUtil::RTrim(attach_options.catalog_uri, "/");
 	IcebergEndpointType endpoint_type = IcebergEndpointType::INVALID;
@@ -288,72 +395,69 @@ unique_ptr<Catalog> IcebergAttach::Attach(optional_ptr<StorageExtensionInfo> sto
 		}
 	}
 
-	//! Then check the authorization type
-	if (!authorization_type_string.empty()) {
-		if (attach_options.authorization_type != IcebergAuthorizationType::INVALID) {
-			throw InvalidConfigurationException("'authorization_type' can not be combined with 'endpoint_type'");
-		}
-		attach_options.authorization_type = IcebergAuthorization::TypeFromString(authorization_type_string);
-	}
-	if (!access_mode_string.empty()) {
-		if (access_mode_string == "vended_credentials") {
-			attach_options.access_mode = IRCAccessDelegationMode::VENDED_CREDENTIALS;
-		} else if (access_mode_string == "none") {
-			attach_options.access_mode = IRCAccessDelegationMode::NONE;
-		} else {
-			throw InvalidInputException(
-			    "Unrecognized access mode '%s'. Supported options are 'vended_credentials' and 'none'",
-			    access_mode_string);
-		}
-	}
 	if (attach_options.authorization_type == IcebergAuthorizationType::INVALID) {
 		attach_options.authorization_type = IcebergAuthorizationType::OAUTH2;
 	}
-
-	//! Finally, create the auth_handler class from the authorization_type and the remaining options
-	unique_ptr<IcebergAuthorization> auth_handler;
-	switch (attach_options.authorization_type) {
-	case IcebergAuthorizationType::OAUTH2: {
-		auth_handler = OAuth2Authorization::FromAttachOptions(db, context, attach_options);
-		break;
+	// Catalog-specific presets are fallbacks, below the server's defaults.
+	auto fallback_options = attach_options.options;
+	fallback_options["authorization_type"] =
+	    attach_options.authorization_type == IcebergAuthorizationType::SIGV4
+	        ? "sigv4"
+	        : (attach_options.authorization_type == IcebergAuthorizationType::NONE ? "none" : "oauth2");
+	if (endpoint_type != IcebergEndpointType::INVALID) {
+		fallback_options["stage_create_tables"] = Value::BOOLEAN(false);
+		fallback_options["remove_files_on_delete"] = Value::BOOLEAN(false);
+		fallback_options["purge_requested"] = Value::BOOLEAN(true);
 	}
-	case IcebergAuthorizationType::SIGV4: {
-		auth_handler = SIGV4Authorization::FromAttachOptions(db, attach_options);
-		break;
-	}
-	case IcebergAuthorizationType::NONE: {
-		auth_handler = NoneAuthorization::FromAttachOptions(db, attach_options);
-		break;
-	}
-	default:
-		throw InternalException("Authorization Type (%s) not implemented", authorization_type_string);
-	}
-
-	//! We throw if there are any additional options not handled by previous steps
-	if (!attach_options.options.empty()) {
-		set<string> unrecognized_options;
-		for (auto &entry : attach_options.options) {
-			unrecognized_options.insert(entry.first);
-		}
-		throw InvalidConfigurationException("Unhandled options found: %s",
-		                                    StringUtil::Join(unrecognized_options, ", "));
-	}
-
-	// The URI can be supplied by an ICEBERG secret during authorization setup.
-	StringUtil::RTrim(attach_options.catalog_uri, "/");
-	if (attach_options.catalog_uri.empty()) {
-		throw InvalidConfigurationException("Missing 'uri' option for Iceberg attach");
-	}
-
-	D_ASSERT(auth_handler);
+	auto auth_handler = CreateAuthorization(db, context, attach_options, &client_options);
+	// The bootstrap URI may have come from a secret or an endpoint preset.
+	client_options["uri"] = attach_options.catalog_uri;
 	auto catalog =
 	    make_uniq<IcebergCatalog>(db, options.access_mode, std::move(auth_handler), attach_options, default_schema);
-	//! Remember the normalized attach options so that a later ATTACH OR REPLACE can detect when they change.
 	catalog->SetAttachOptions(options.options);
-	catalog->GetConfig(context, endpoint_type);
-	if (!default_schema.empty() &&
-	    !IRCAPI::VerifySchemaExistence(context, *catalog, default_schema.GetIdentifierName())) {
-		throw InvalidConfigurationException("default_schema '%s' does not exist", default_schema);
+
+	// /config is requested exactly once, using the bootstrap URI/warehouse/auth.
+	// A server prefix or URI override applies only to subsequent requests.
+	auto config_warehouse = attach_options.warehouse;
+	if (endpoint_type == IcebergEndpointType::AWS_GLUE && config_warehouse == ":") {
+		config_warehouse.clear();
+	}
+	auto config = IRCAPI::GetCatalogConfig(context, *catalog, config_warehouse);
+	// OAuth2 SECRET was expanded into client properties by CreateAuthorization.
+	// Do not retain the now-consumed secret selector in the fallback layer.
+	if (attach_options.authorization_type == IcebergAuthorizationType::OAUTH2) {
+		fallback_options.erase("secret");
+	}
+	auto bootstrap_options = fallback_options;
+	MergeIcebergOptions(bootstrap_options, client_options);
+	auto resolved_options = fallback_options;
+	MergeIcebergOptions(resolved_options, NormalizeIcebergCatalogOptions(config.defaults));
+	MergeIcebergOptions(resolved_options, client_options);
+	MergeIcebergOptions(resolved_options, NormalizeIcebergCatalogOptions(config.overrides));
+	// A catalog can advertise properties for multiple auth managers. Only the
+	// selected manager's properties apply after negotiation.
+	auto authorization_type =
+	    IcebergAuthorization::TypeFromString(StringUtil::Lower(resolved_options.at("authorization_type").ToString()));
+	if (authorization_type != attach_options.authorization_type) {
+		// A secret selector belongs to the bootstrap auth manager (e.g. an S3
+		// secret for SigV4), not to a different manager selected by /config.
+		resolved_options.erase("secret");
+	}
+	FilterIcebergAuthorizationOptions(resolved_options, authorization_type);
+	ParseAttachOptions(attach_options, default_schema, resolved_options);
+	if (AuthorizationChanged(bootstrap_options, resolved_options)) {
+		catalog->auth_handler = CreateAuthorization(db, context, attach_options);
+	} else {
+		// Already validated/consumed by the bootstrap authorization handler.
+		attach_options.options.clear();
+	}
+	catalog->attach_options = attach_options;
+	catalog->default_schema = default_schema;
+	catalog->Configure(context, config, endpoint_type);
+	if (default_schema && !IRCAPI::VerifySchemaExistence(context, *catalog, default_schema->GetIdentifierName())) {
+		throw InvalidConfigurationException(
+		    "default_schema '%s' does not exist. ATTACH with no DEFAULT_SCHEMA to successfully attach",
+		    default_schema->GetIdentifierName());
 	}
 	return std::move(catalog);
 }

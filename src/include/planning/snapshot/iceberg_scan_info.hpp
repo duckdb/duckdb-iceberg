@@ -15,6 +15,8 @@ struct IcebergTransactionData;
 
 //! Used when we are not scanning from a REST Catalog
 struct IcebergScanTemporaryData {
+	explicit IcebergScanTemporaryData(IcebergTableMetadata metadata) : metadata(std::move(metadata)) {
+	}
 	IcebergTableMetadata metadata;
 };
 

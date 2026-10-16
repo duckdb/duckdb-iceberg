@@ -24,6 +24,10 @@ Type Type::FromJSON(JSONValue obj) {
 
 Type Type::Copy() const {
 	Type res;
+	if (variant_type.has_value()) {
+		res.variant_type.emplace();
+		(*res.variant_type) = (*variant_type).Copy();
+	}
 	if (primitive_type.has_value()) {
 		res.primitive_type.emplace();
 		(*res.primitive_type) = (*primitive_type).Copy();
@@ -46,6 +50,13 @@ Type Type::Copy() const {
 string Type::TryFromJSON(JSONValue obj) {
 	string error;
 	do {
+		variant_type.emplace();
+		error = variant_type->TryFromJSON(obj);
+		if (error.empty()) {
+			break;
+		} else {
+			variant_type = nullopt;
+		}
 		primitive_type.emplace();
 		error = primitive_type->TryFromJSON(obj);
 		if (error.empty()) {
@@ -80,7 +91,9 @@ string Type::TryFromJSON(JSONValue obj) {
 }
 
 JSONMutableValue Type::ToJSON(JSONWriter &writer) const {
-	if (primitive_type.has_value()) {
+	if (variant_type.has_value()) {
+		return variant_type->ToJSON(writer);
+	} else if (primitive_type.has_value()) {
 		return primitive_type->ToJSON(writer);
 	} else if (struct_type.has_value()) {
 		return struct_type->ToJSON(writer);

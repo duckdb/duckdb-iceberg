@@ -1,13 +1,7 @@
 # name: test/sql/local/iceberg_scans/timestamptz_ns_type.test
 # group: [iceberg_scans]
 
-require avro
-
-require parquet
-
-require iceberg
-
-require httpfs
+include test/sql/init_requires
 
 require icu
 

@@ -1,13 +1,7 @@
 # name: test/sql/local/nested_types.test
 # group: [local]
 
-require avro
-
-require parquet
-
-require iceberg
-
-require httpfs
+include test/sql/init_requires
 
 require-env DUCKDB_ICEBERG_HAVE_GENERATED_DATA
 

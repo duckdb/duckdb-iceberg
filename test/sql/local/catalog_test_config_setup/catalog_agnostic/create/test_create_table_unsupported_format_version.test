@@ -1,0 +1,20 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/create/test_create_table_unsupported_format_version.test
+# description: format versions above the highest supported one are refused on create
+# group: [create]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+include test/sql/init_requires
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.unsupported_format_version;
+
+statement error
+CREATE TABLE my_datalake.default.unsupported_format_version (a INTEGER) WITH ('format-version' = '4');
+----
+<REGEX>:.*The highest supported iceberg version is 3.*
+
+statement error
+CREATE TABLE my_datalake.default.unsupported_format_version WITH ('format-version' = '4') AS SELECT 1 AS a;
+----
+<REGEX>:.*The highest supported iceberg version is 3.*

@@ -1,11 +1,12 @@
 LAKEKEEPER_ENV_FILE ?= scripts/envs/lakekeeper.env
 LAKEKEEPER_SPARK_LOCAL_DIR ?= /home/jovyan/.spark-local
+LAKEKEEPER_IMAGE ?= quay.io/lakekeeper/catalog:v0.14.0
 
 lakekeeper-clone:
 	@if [ ! -d ".catalogs/lakekeeper" ]; then \
 		echo "Cloning Lakekeeper repository..."; \
 		mkdir -p .catalogs && git clone https://github.com/lakekeeper/lakekeeper.git .catalogs/lakekeeper; \
-		cd .catalogs/lakekeeper && git checkout f6aaa4570cf62d54943581e7a00b9f882d9c992d && git apply ../../.github/patches/lakekeeper_docker_compose.patch; \
+		cd .catalogs/lakekeeper && git checkout 0648c99789dbaf42c23a45753f53f67db38fddd2 && git apply ../../.github/patches/lakekeeper_docker_compose.patch; \
 	else \
 		echo "Lakekeeper repository exists."; \
 	fi
@@ -28,8 +29,8 @@ lakekeeper-configure-auth:
 lakekeeper: lakekeeper-clone lakekeeper-stop
 	$(call stop_active_catalog)
 	@echo "Starting Lakekeeper catalog..."
-	@grep -q '127.0.0.1 minio' /etc/hosts || (echo "Adding minio host entry..." && echo "127.0.0.1 minio" | sudo tee -a /etc/hosts)
-	(cd .catalogs/lakekeeper/examples/access-control-simple && docker compose up -d)
+	@grep -q '127.0.0.1 silo' /etc/hosts || (echo "Adding silo host entry..." && echo "127.0.0.1 silo" | sudo tee -a /etc/hosts)
+	(cd .catalogs/lakekeeper/examples/access-control-simple && LAKEKEEPER_TEST__SERVER_IMAGE=$(LAKEKEEPER_IMAGE) docker compose up -d)
 	$(MAKE) lakekeeper-configure-auth
 	@echo "Bootstrapping Lakekeeper..."
 	cd .catalogs/lakekeeper/examples/access-control-simple && \

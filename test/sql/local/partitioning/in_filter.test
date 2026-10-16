@@ -1,13 +1,7 @@
 # name: test/sql/local/partitioning/in_filter.test
 # group: [partitioning]
 
-require httpfs
-
-require avro
-
-require parquet
-
-require iceberg
+include test/sql/init_requires
 
 require-env CATALOG_TEST_CONFIG_SETUP fixture
 

@@ -1,0 +1,21 @@
+# name: test/sql/local/iceberg_scans/row_lineage_requires_v3.test
+# description: the row lineage columns _row_id and _last_updated_sequence_number only exist on v3 tables
+# group: [iceberg_scans]
+
+include test/sql/init_requires
+
+# v2 table
+statement error
+SELECT _row_id FROM iceberg_scan('{WORKING_DIRECTORY}/data/persistent/generated_bounds/metadata/v1.metadata.json');
+----
+<REGEX>:.*Referenced column "_row_id" not found.*
+
+statement error
+SELECT _last_updated_sequence_number FROM iceberg_scan('{WORKING_DIRECTORY}/data/persistent/generated_bounds/metadata/v1.metadata.json');
+----
+<REGEX>:.*Referenced column "_last_updated_sequence_number" not found.*
+
+# v3 table
+query II
+SELECT _row_id, _last_updated_sequence_number FROM iceberg_scan('{WORKING_DIRECTORY}/data/persistent/timestamptz_ns/metadata/v1.metadata.json') LIMIT 0;
+----
