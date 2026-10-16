@@ -139,6 +139,11 @@ static void LoadInternal(ExtensionLoader &loader) {
 	    "Bodies longer than this are truncated with a trailing '... (truncated)' marker. Set to 0 to omit the body.",
 	    LogicalType::UBIGINT, Value::UBIGINT(10000));
 	config.AddExtensionOption(
+	    "iceberg_prefix_range_file_pruning",
+	    "Prune manifests, data files, and identity partitions against the exact membership of pushed-down "
+	    "prefix-range join filters, in addition to their [min, max] bounds.",
+	    LogicalType::BOOLEAN, Value::BOOLEAN(true), nullptr, SetScope::GLOBAL);
+	config.AddExtensionOption(
 	    "iceberg_equality_delete_fast_filter",
 	    "Apply byte-comparable equality deletes through a shared columnar flat hash filter instead of a bound "
 	    "expression per delete row. Unsupported types retain the upstream expression path.",
