@@ -1,0 +1,111 @@
+# name: test/sql/local/catalog_custom_setup/fixture/server_side_scan_planning_errors.test
+# description: A failed server-side scan-planning request fails the scan instead of planning it on the client
+# group: [fixture]
+
+require-env FIXTURE_SERVER_AVAILABLE
+
+require-env SCAN_PLANNING_ERROR_PROXY
+
+include test/sql/init_requires
+
+# Do not ignore 'HTTP' error messages.
+set ignore_error_messages
+
+statement ok
+CALL enable_logging('HTTP');
+
+statement ok
+CREATE SECRET (
+    TYPE S3,
+    KEY_ID 'admin',
+    SECRET 'password',
+    ENDPOINT '127.0.0.1:9000',
+    URL_STYLE 'path',
+    USE_SSL 0
+);
+
+# The proxy advertises scan planning and answers each planning request based on the table name,
+# see scripts/scan_planning_error_proxy.py.
+statement ok
+CREATE SECRET scan_planning_error_proxy (
+    TYPE HTTP,
+    HTTP_PROXY '{SCAN_PLANNING_ERROR_PROXY}'
+);
+
+statement ok
+ATTACH '' AS planning_errors (
+    TYPE ICEBERG,
+    CLIENT_ID 'admin',
+    CLIENT_SECRET 'password',
+    URI 'http://127.0.0.1:8181'
+);
+
+statement ok
+CREATE SCHEMA IF NOT EXISTS planning_errors.default;
+
+foreach table_name plan_forbidden plan_failed plan_unsupported
+
+statement ok
+DROP TABLE IF EXISTS planning_errors.default.{table_name};
+
+statement ok
+CREATE TABLE planning_errors.default.{table_name} (id INTEGER, val VARCHAR);
+
+statement ok
+INSERT INTO planning_errors.default.{table_name} VALUES (1, 'a'), (2, 'b'), (3, 'c');
+
+endloop
+
+statement ok
+SET iceberg_use_server_side_scan_planning = true;
+
+# The catalog refuses to plan the scan: the scan fails instead of being planned on the client.
+statement error
+SELECT * FROM planning_errors.default.plan_forbidden;
+----
+failed (HTTP 403)
+
+statement error
+SELECT * FROM planning_errors.default.plan_forbidden WHERE id = 2;
+----
+failed (HTTP 403)
+
+# The scan of a DELETE fails the same way, and nothing is deleted.
+statement error
+DELETE FROM planning_errors.default.plan_forbidden WHERE id = 1;
+----
+failed (HTTP 403)
+
+# The catalog reports that planning failed: the scan fails with the catalog's error message.
+statement error
+SELECT * FROM planning_errors.default.plan_failed;
+----
+Scan planning failed on the server
+
+# The catalog declines to plan the scan (HTTP 406): the scan is planned on the client.
+query II
+SELECT * FROM planning_errors.default.plan_unsupported ORDER BY id;
+----
+1	a
+2	b
+3	c
+
+query I
+SELECT count(*) > 0
+FROM duckdb_logs_parsed('HTTP')
+WHERE request.type = 'POST'
+  AND request.url = 'http://127.0.0.1:8181/v1/namespaces/default/tables/plan_unsupported/plan'
+  AND response.status = 'NotAcceptable_406'
+----
+true
+
+# Without server-side planning, the scan is planned on the client.
+statement ok
+SET iceberg_use_server_side_scan_planning = false;
+
+query II
+SELECT * FROM planning_errors.default.plan_forbidden ORDER BY id;
+----
+1	a
+2	b
+3	c

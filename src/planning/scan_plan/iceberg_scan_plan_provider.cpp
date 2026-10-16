@@ -37,6 +37,18 @@ static ScanPlanningMode GetScanPlanningMode(optional_ptr<IcebergTableSchemaVersi
 	throw InvalidConfigurationException("Table's config 'scan-planning-mode' has unrecognized option: %s", mode);
 }
 
+//! Returns the first entry in the server's scan plan whose data file has no 'first-row-id', if any.
+static optional_ptr<const IcebergManifestEntry> FindEntryWithoutFirstRowId(const IcebergServerSideScanPlan &plan) {
+	for (auto &manifest : plan.data_manifests) {
+		for (auto &entry : manifest.GetManifestEntries()) {
+			if (!entry.data_file.HasFirstRowId()) {
+				return entry;
+			}
+		}
+	}
+	return nullptr;
+}
+
 } // namespace
 
 unique_ptr<IcebergScanPlanProvider> IcebergScanPlanProvider::Create(IcebergScanPlanState &shared_state,
@@ -100,32 +112,27 @@ unique_ptr<IcebergScanPlanProvider> IcebergScanPlanProvider::Create(IcebergScanP
 			}
 
 			IcebergServerSideScanPlan plan;
-			try {
-				if (IcebergServerSideScanPlanning::Plan(context.context, table_info, std::move(request), plan)) {
-					if (shared_state.Configuration().row_ids_required && context.metadata.iceberg_version >= 3) {
-						// Without inspecting Parquet we cannot know whether all row IDs are
-						// materialized. Fall back rather than silently replacing inherited IDs.
-						for (auto &manifest : plan.data_manifests) {
-							for (auto &entry : manifest.GetManifestEntries()) {
-								if (!entry.data_file.HasFirstRowId()) {
-									throw InvalidInputException("Server scan plan is missing first-row-id for file "
-									                            "'%s', but this scan requires row IDs",
-									                            entry.data_file.file_path);
-								}
-							}
-						}
-					}
+			// An error from the catalog fails the scan. Planning the scan on the client instead would silently
+			// ignore the request for server-side planning, and any filtering the catalog applies when it plans.
+			if (IcebergServerSideScanPlanning::Plan(context.context, table_info, std::move(request), plan)) {
+				optional_ptr<const IcebergManifestEntry> entry_without_row_id;
+				if (shared_state.Configuration().row_ids_required && context.metadata.iceberg_version >= 3) {
+					entry_without_row_id = FindEntryWithoutFirstRowId(plan);
+				}
+				if (entry_without_row_id) {
+					// Without inspecting Parquet we cannot know whether all row IDs are
+					// materialized. Fall back rather than silently replacing inherited IDs.
+					DUCKDB_LOG_INFO(context.context,
+					                "Scan planning failed, server scan plan is missing first-row-id for file '%s', "
+					                "but this scan requires row IDs",
+					                entry_without_row_id->data_file.file_path);
+				} else {
 					if (!plan.storage_credentials.empty()) {
 						table_info.LoadCredentials(context.context, table_info.GetVendedCredentials(
 						                                                context.context, plan.storage_credentials));
 					}
 					provider = make_uniq<ServerSideScanPlanProvider>(std::move(plan));
 				}
-			} catch (std::exception &ex) {
-				ErrorData error(ex);
-				DUCKDB_LOG_INFO(context.context, "Scan planning failed, Plan resulted in error: %s", error.Message());
-			} catch (...) {
-				DUCKDB_LOG_INFO(context.context, "Scan planning failed, Plan resulted in unknown error");
 			}
 		}
 	}

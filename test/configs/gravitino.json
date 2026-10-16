@@ -98,6 +98,17 @@
 				"test/sql/local/catalog_test_config_setup/catalog_agnostic/schema_properties/schema_properties_update_transaction.test",
 				"test/sql/local/catalog_test_config_setup/catalog_agnostic/schema_properties/schema_properties_update_concurrent_transactions.test"
 			]
+		},
+		{
+			"reason": "This Gravitino setup (in-memory backend, see scripts/gravitino/docker-compose.yml) advertises server-side scan planning but fails every planning request with HTTP 500 ('No in-memory file found for location' for the snapshot's manifest list). These tests turn server-side planning on, so their scans fail.",
+			"paths": [
+				"test/sql/local/catalog_test_config_setup/catalog_agnostic/insert/count_star_optimizer.test",
+				"test/sql/local/catalog_test_config_setup/catalog_agnostic/reads/filtering/test_server_side_planning_set_filters.test",
+				"test/sql/local/catalog_test_config_setup/catalog_agnostic/reads/test_scan_many_files.test",
+				"test/sql/local/catalog_test_config_setup/catalog_agnostic/scan_planning/scan_plan.test",
+				"test/sql/local/catalog_test_config_setup/catalog_agnostic/scan_planning/scan_row_filter.test",
+				"test/sql/local/catalog_test_config_setup/catalog_agnostic/scan_planning/scan_tasks.test"
+			]
 		}
 	]
 }

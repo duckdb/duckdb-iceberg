@@ -113,6 +113,21 @@
 			"paths": [
 				"test/sql/local/catalog_test_config_setup/catalog_agnostic/delete/partitions/test_delete_manifest_partitions.test"
 			]
+		},
+		{
+			"reason": "apache/iceberg-rest-fixture:latest cannot write the scan-planning response for a table with a partition spec on a dropped column: it fails with 'Type: unknown is not supported' after sending HTTP 200, so the response body is cut off and the scan fails. Client-side planning of these tables is covered by the other lanes.",
+			"paths": [
+				"test/sql/local/catalog_test_config_setup/catalog_agnostic/alter/test_schema_update_order.test",
+				"test/sql/local/catalog_test_config_setup/catalog_agnostic/maintenance/manifest_compaction_dropped_partition_source.test",
+				"test/sql/local/catalog_test_config_setup/catalog_agnostic/maintenance/manifest_compaction_partition_schema.test",
+				"test/sql/local/catalog_test_config_setup/catalog_agnostic/reads/test_dropped_partition_source_promotions.test"
+			]
+		},
+		{
+			"reason": "Another transaction drops the table and renames a different table to its name. With server-side planning the catalog then rejects the UPDATE's scan-planning request (HTTP 400, the snapshot is not in the renamed table), so the transaction fails at the UPDATE instead of at the COMMIT this test expects to fail.",
+			"paths": [
+				"test/sql/local/catalog_test_config_setup/catalog_agnostic/transactions/concurrent_table_swap.test"
+			]
 		}
 	]
 }
