@@ -1,0 +1,29 @@
+# name: test/sql/local/partitioning/identity/identity_source_missing_from_file.test
+# description: a data file without an identity partition's source column reads the value from the partition data
+# group: [identity]
+
+include test/sql/init_requires
+
+# identity(region) and bucket(16, region) share the source column
+query II
+select id, region from ICEBERG_SCAN('{WORKING_DIRECTORY}/data/persistent/partition_values_missing_from_files/warehouse/default/shared_source/metadata/00001-9f5a8050-a1f4-4bb0-933b-717d763465cc.metadata.json') order by id;
+----
+1	eu
+2	eu
+
+query I
+select count(*) from ICEBERG_SCAN('{WORKING_DIRECTORY}/data/persistent/partition_values_missing_from_files/warehouse/default/shared_source/metadata/00001-9f5a8050-a1f4-4bb0-933b-717d763465cc.metadata.json') where region = 'eu';
+----
+2
+
+# the source is a struct field that the file's struct omits
+query II
+select id, address from ICEBERG_SCAN('{WORKING_DIRECTORY}/data/persistent/partition_values_missing_from_files/warehouse/default/nested_source/metadata/00001-e7aaa19e-f292-4245-89eb-9c92709dad47.metadata.json') order by id;
+----
+1	{'country': fr, 'city': paris}
+2	{'country': fr, 'city': lyon}
+
+query I
+select count(*) from ICEBERG_SCAN('{WORKING_DIRECTORY}/data/persistent/partition_values_missing_from_files/warehouse/default/nested_source/metadata/00001-e7aaa19e-f292-4245-89eb-9c92709dad47.metadata.json') where address.country = 'fr';
+----
+2
