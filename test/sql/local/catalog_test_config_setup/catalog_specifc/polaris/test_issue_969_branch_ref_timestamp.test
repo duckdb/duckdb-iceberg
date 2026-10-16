@@ -36,6 +36,18 @@ select count(*) from my_datalake.default.issue_969;
 ----
 5
 
+# Both refs are listed, and main differs from the side branch.
+query TT
+select name, type from iceberg_refs(my_datalake.default.issue_969) order by name;
+----
+main	BRANCH
+side_branch	BRANCH
+
+query I
+select count(distinct snapshot_id) from iceberg_refs(my_datalake.default.issue_969);
+----
+2
+
 # Explicit-id time travel against refs.main's snapshot keeps working.
 statement ok
 set variable main_snapshot_id = (

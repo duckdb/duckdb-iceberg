@@ -21,18 +21,19 @@ public:
 
 public:
 	static SnapshotReference FromJSON(yyjson_val *obj);
+	SnapshotReference Copy() const;
 
 public:
 	string TryFromJSON(yyjson_val *obj);
 
 public:
 	string type;
-	int64_t snapshot_id;
-	int64_t max_ref_age_ms;
+	int64_t snapshot_id = 0;
+	int64_t max_ref_age_ms = 0;
 	bool has_max_ref_age_ms = false;
-	int64_t max_snapshot_age_ms;
+	int64_t max_snapshot_age_ms = 0;
 	bool has_max_snapshot_age_ms = false;
-	int32_t min_snapshots_to_keep;
+	int32_t min_snapshots_to_keep = 0;
 	bool has_min_snapshots_to_keep = false;
 };
 

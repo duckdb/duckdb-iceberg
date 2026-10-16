@@ -376,6 +376,12 @@ IcebergTableMetadata IcebergTableMetadata::FromTableMetadata(const rest_api_obje
 	for (auto &snapshot : table_metadata.snapshots) {
 		res.snapshots.emplace(snapshot.snapshot_id, IcebergSnapshot::ParseSnapshot(snapshot, res));
 	}
+	if (table_metadata.has_refs) {
+		res.refs = make_uniq<rest_api_objects::SnapshotReferences>();
+		for (auto &entry : table_metadata.refs.additional_properties) {
+			res.refs->additional_properties.emplace(entry.first, entry.second.Copy());
+		}
+	}
 	if (table_metadata.has_snapshot_log) {
 		res.snapshot_log.reserve(table_metadata.snapshot_log.value.size());
 		for (auto &entry : table_metadata.snapshot_log.value) {

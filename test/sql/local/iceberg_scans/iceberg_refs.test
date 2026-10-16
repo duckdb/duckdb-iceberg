@@ -1,0 +1,103 @@
+# name: test/sql/local/iceberg_scans/iceberg_refs.test
+# description: Reference heads, absent refs, empty tables, and multi-chunk output.
+# group: [iceberg_scans]
+
+require avro
+
+require parquet
+
+require iceberg
+
+require json
+
+query TT
+SELECT column_name, column_type FROM (
+    DESCRIBE SELECT * FROM iceberg_refs('__WORKING_DIRECTORY__/data/persistent/snapshot_refs/metadata/v1.metadata.json')
+);
+----
+name	VARCHAR
+type	VARCHAR
+snapshot_id	BIGINT
+max_reference_age_in_ms	BIGINT
+min_snapshots_to_keep	INTEGER
+max_snapshot_age_in_ms	BIGINT
+
+# A branch has the newest snapshot, while main still points at snapshot 1.
+statement ok
+COPY (
+    SELECT json_merge_patch(content::JSON, '{"current-snapshot-id":1,"refs":{"main":{"snapshot-id":1},"dev":{"snapshot-id":2}},"snapshot-log":[{"timestamp-ms":1746188479060,"snapshot-id":1}]}')::VARCHAR
+    FROM read_text('__WORKING_DIRECTORY__/data/persistent/snapshot_refs/metadata/v1.metadata.json')
+) TO '__TEST_DIR__/branch_refs.metadata.json' (FORMAT CSV, HEADER false, QUOTE '');
+
+query TI
+SELECT name, snapshot_id FROM iceberg_refs('__TEST_DIR__/branch_refs.metadata.json') ORDER BY name;
+----
+dev	2
+main	1
+v1	1
+
+query II
+SELECT s.snapshot_id, s.sequence_number
+FROM iceberg_refs('__TEST_DIR__/branch_refs.metadata.json') r
+JOIN iceberg_snapshots('__TEST_DIR__/branch_refs.metadata.json') s USING (snapshot_id)
+WHERE r.name = 'main';
+----
+1	1
+
+query I
+SELECT max(sequence_number) FROM iceberg_snapshots('__TEST_DIR__/branch_refs.metadata.json');
+----
+2
+
+# This is also the metadata state after moving main back to an older snapshot.
+query TTI
+SELECT name, type, snapshot_id = 1
+FROM iceberg_refs('__TEST_DIR__/branch_refs.metadata.json') WHERE name = 'main';
+----
+main	BRANCH	true
+
+statement ok
+COPY (
+    SELECT json_merge_patch(content::JSON, '{"refs":null}')::VARCHAR
+    FROM read_text('__WORKING_DIRECTORY__/data/persistent/snapshot_refs/metadata/v1.metadata.json')
+) TO '__TEST_DIR__/no_refs.metadata.json' (FORMAT CSV, HEADER false, QUOTE '');
+
+query TTIIII
+SELECT * FROM iceberg_refs('__TEST_DIR__/no_refs.metadata.json');
+----
+main	BRANCH	2	NULL	NULL	NULL
+
+# Both an absent current snapshot and the legacy -1 sentinel mean no main ref.
+foreach current null -1
+
+statement ok
+COPY (
+    SELECT json_merge_patch(content::JSON, '{"refs":null,"current-snapshot-id":${current},"snapshots":[],"snapshot-log":[],"last-sequence-number":0}')::VARCHAR
+    FROM read_text('__WORKING_DIRECTORY__/data/persistent/snapshot_refs/metadata/v1.metadata.json')
+) TO '__TEST_DIR__/empty_${current}.metadata.json' (FORMAT CSV, HEADER false, QUOTE '');
+
+query I
+SELECT count(*) FROM iceberg_refs('__TEST_DIR__/empty_${current}.metadata.json');
+----
+0
+
+endloop
+
+# More than STANDARD_VECTOR_SIZE references must survive chunk boundaries.
+statement ok
+COPY (
+    SELECT json_merge_patch(content::JSON, json_object('refs', (
+        SELECT json_group_object('tag_' || i, json_object('snapshot-id', 1, 'type', 'tag')) FROM range(2055) t(i)
+    )))::VARCHAR
+    FROM read_text('__WORKING_DIRECTORY__/data/persistent/snapshot_refs/metadata/v1.metadata.json')
+) TO '__TEST_DIR__/many_refs.metadata.json' (FORMAT CSV, HEADER false, QUOTE '');
+
+query III
+SELECT count(*), count(DISTINCT name), sum(snapshot_id) FROM iceberg_refs('__TEST_DIR__/many_refs.metadata.json');
+----
+2058	2058	2059
+
+statement error
+SELECT * FROM iceberg_refs('__TEST_DIR__/branch_refs.metadata.json', version_name_format = 'v%s.metadata.json');
+----
+'version_name_format' has to contain two occurrences

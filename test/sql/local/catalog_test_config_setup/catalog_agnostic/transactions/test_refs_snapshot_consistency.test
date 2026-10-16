@@ -1,0 +1,90 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/transactions/test_refs_snapshot_consistency.test
+# description: Refs and snapshots use the same transaction-cached metadata path across a concurrent commit.
+# group: [transactions]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+set ignore_error_messages
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.refs_snapshot_consistency;
+
+statement ok
+CREATE TABLE my_datalake.default.refs_snapshot_consistency (id INTEGER);
+
+query I
+SELECT count(*) FROM iceberg_refs('my_datalake.default.refs_snapshot_consistency');
+----
+0
+
+statement ok
+INSERT INTO my_datalake.default.refs_snapshot_consistency VALUES (1);
+
+statement ok reader
+BEGIN;
+
+# Establish the table entry in the reader transaction with an actual table read.
+query I reader
+SELECT id FROM my_datalake.default.refs_snapshot_consistency;
+----
+1
+
+statement ok reader
+SET VARIABLE original_head = (
+    SELECT snapshot_id FROM iceberg_refs('my_datalake.default.refs_snapshot_consistency') WHERE name = 'main'
+);
+
+query I reader
+SELECT count(*) FROM iceberg_snapshots('my_datalake.default.refs_snapshot_consistency');
+----
+1
+
+statement ok writer
+INSERT INTO my_datalake.default.refs_snapshot_consistency VALUES (2);
+
+# Another connection sees the new committed metadata.
+query I writer
+SELECT count(*) FROM iceberg_snapshots('my_datalake.default.refs_snapshot_consistency');
+----
+2
+
+query I reader
+SELECT snapshot_id = getvariable('original_head')
+FROM iceberg_refs('my_datalake.default.refs_snapshot_consistency') WHERE name = 'main';
+----
+true
+
+query I reader
+SELECT count(*) FROM iceberg_snapshots('my_datalake.default.refs_snapshot_consistency');
+----
+1
+
+query III reader
+SELECT r.snapshot_id = getvariable('original_head'), s.sequence_number, count(*) OVER ()
+FROM iceberg_refs('my_datalake.default.refs_snapshot_consistency') r
+JOIN iceberg_snapshots('my_datalake.default.refs_snapshot_consistency') s USING (snapshot_id)
+WHERE r.name = 'main';
+----
+true	1	1
+
+statement ok reader
+COMMIT;
+
+query II reader
+SELECT s.snapshot_id != getvariable('original_head'), s.sequence_number
+FROM iceberg_refs('my_datalake.default.refs_snapshot_consistency') r
+JOIN iceberg_snapshots('my_datalake.default.refs_snapshot_consistency') s USING (snapshot_id)
+WHERE r.name = 'main';
+----
+true	2
+
+statement ok
+DROP TABLE my_datalake.default.refs_snapshot_consistency;

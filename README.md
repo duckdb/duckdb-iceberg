@@ -9,6 +9,27 @@ of an iceberg tables.
 
 See the [Iceberg page in the DuckDB documentation](https://duckdb.org/docs/extensions/iceberg).
 
+### Snapshot references
+
+Use `iceberg_refs()` to list branch and tag heads with their optional retention
+settings. Reference types are `BRANCH` and `TAG`. Metadata without `refs`
+returns `main` at `current-snapshot-id` when a current snapshot exists;
+metadata without either returns no rows.
+
+To find the head of `main`, join references to snapshots:
+
+```sql
+SELECT s.snapshot_id, s.sequence_number
+FROM iceberg_refs('catalog.namespace.table') r
+JOIN iceberg_snapshots('catalog.namespace.table') s USING (snapshot_id)
+WHERE r.name = 'main';
+```
+
+The highest snapshot sequence number can belong to another branch. Both
+functions accept the same table paths, metadata version, compression, and
+version filename options. For catalog table names, both use the transaction's
+cached metadata file across concurrent commits.
+
 ## Developer guide
 
 ### Dependencies

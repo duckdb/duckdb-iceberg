@@ -106,3 +106,32 @@ select * from iceberg_metadata(memory.main.t1);
 ----
 <REGEX>:.*Invalid Input Error.*t1 is not an Iceberg table.*
 
+
+query IIIIII
+SELECT * FROM ICEBERG_REFS('__WORKING_DIRECTORY__/data/persistent/iceberg/lineitem_iceberg');
+----
+main	BRANCH	2354745328521181395	NULL	NULL	NULL
+
+query IIIIII
+SELECT * FROM ICEBERG_REFS('__WORKING_DIRECTORY__/data/persistent/iceberg/lineitem_iceberg', version='1');
+----
+main	BRANCH	7817332053627255703	NULL	NULL	NULL
+
+query I
+SELECT count(*) FROM ICEBERG_REFS('__WORKING_DIRECTORY__/data/persistent/iceberg/lineitem_iceberg_gz', METADATA_COMPRESSION_CODEC='gzip');
+----
+1
+
+# Table with both tag and branch with retention settings
+query IIIIII
+SELECT * FROM ICEBERG_REFS('__WORKING_DIRECTORY__/data/persistent/snapshot_refs/metadata/v1.metadata.json') ORDER BY name;
+----
+dev	BRANCH	1	2592000000	3	172800000
+main	BRANCH	2	NULL	NULL	NULL
+v1	TAG	1	604800000	NULL	NULL
+
+
+statement error
+select * from iceberg_refs(memory.main.t1);
+----
+<REGEX>:.*Invalid Input Error.*t1 is not an Iceberg table.*

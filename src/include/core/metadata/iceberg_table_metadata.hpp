@@ -11,6 +11,7 @@
 #include "core/metadata/sort/iceberg_sort_order.hpp"
 #include "iceberg_options.hpp"
 #include "rest_catalog/objects/list.hpp"
+#include "rest_catalog/objects/snapshot_references.hpp"
 #include "planning/snapshot/iceberg_snapshot_scan_info.hpp"
 
 namespace duckdb {
@@ -130,6 +131,7 @@ public:
 	unordered_map<int32_t, IcebergSortOrder> sort_specs;
 	//! snapshot_id -> snapshot
 	unordered_map<int64_t, IcebergSnapshot> snapshots;
+	unique_ptr<rest_api_objects::SnapshotReferences> refs;
 	//! History of refs.main per Iceberg spec "snapshot-log": (snapshot_id, raw millis)
 	//! pairs recording each change to current-snapshot-id, sorted ascending by ms.
 	//! Used for spec-compliant point-in-time resolution; side-branch commits are absent.

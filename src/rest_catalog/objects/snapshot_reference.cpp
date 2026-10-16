@@ -15,6 +15,25 @@ namespace rest_api_objects {
 SnapshotReference::SnapshotReference() {
 }
 
+SnapshotReference SnapshotReference::Copy() const {
+	SnapshotReference result;
+	result.type = type;
+	result.snapshot_id = snapshot_id;
+	if (has_max_ref_age_ms) {
+		result.has_max_ref_age_ms = true;
+		result.max_ref_age_ms = max_ref_age_ms;
+	}
+	if (has_min_snapshots_to_keep) {
+		result.has_min_snapshots_to_keep = true;
+		result.min_snapshots_to_keep = min_snapshots_to_keep;
+	}
+	if (has_max_snapshot_age_ms) {
+		result.has_max_snapshot_age_ms = true;
+		result.max_snapshot_age_ms = max_snapshot_age_ms;
+	}
+	return result;
+}
+
 SnapshotReference SnapshotReference::FromJSON(yyjson_val *obj) {
 	SnapshotReference res;
 	auto error = res.TryFromJSON(obj);
