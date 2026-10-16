@@ -6,7 +6,10 @@ from mitmproxy import http
 
 from scripts.vended_credentials_refresh_proxy import (
     CREDENTIALS_ENDPOINT,
+    EXPIRED_EXPIRY_KEY,
+    EXPIRY_TABLE,
     INIT_TABLE,
+    NEW_EXPIRY_KEY,
     NEW_INIT_KEY,
     OLD_INIT_KEY,
     TABLE_SCAN_TABLE,
@@ -24,6 +27,44 @@ def catalog_flow(path, mode=None, copies=1):
 
 
 class TestCredentialEndpointModes(unittest.TestCase):
+    def test_expiry_modes_with_duplicate_headers(self):
+        for key in (
+            "s3.session-token-expires-at-ms",
+            "gcs.oauth2.token-expires-at",
+            "adls.sas-token-expires-at-ms.account",
+        ):
+            for copies in (1, 2):
+                with self.subTest(key=key, copies=copies):
+                    addon = VendedCredentialRefreshAddon()
+                    flow = catalog_flow("/v1/config")
+                    for _ in range(copies):
+                        flow.request.headers.add("x-credential-expiry", key)
+                    addon.request(flow)
+                    config = addon._credentials_for_table(EXPIRY_TABLE)["config"]
+                    self.assertEqual(config[key], "1000")
+                    self.assertEqual(config["s3.access-key-id"], EXPIRED_EXPIRY_KEY)
+                    flow = catalog_flow(f"/v1/namespaces/default/tables/{EXPIRY_TABLE}/credentials")
+                    addon.request(flow)
+                    config = json.loads(flow.response.text)["storage-credentials"][0]["config"]
+                    self.assertGreater(int(config[key]), 1000)
+                    self.assertEqual(config["s3.access-key-id"], NEW_EXPIRY_KEY)
+
+    def test_lifecycle_mode_with_duplicate_headers(self):
+        for copies in (1, 2):
+            with self.subTest(copies=copies):
+                addon = VendedCredentialRefreshAddon()
+                flow = catalog_flow("/v1/config")
+                for _ in range(copies):
+                    flow.request.headers.add("x-credential-lifecycle", "true")
+                addon.request(flow)
+                self.assertTrue(addon.lifecycle_test)
+                self.assertFalse(addon.lifecycle_expired)
+                addon.request(catalog_flow("/vended-credentials/expire"))
+                self.assertTrue(addon.lifecycle_expired)
+                addon.request(flow)
+                self.assertFalse(addon.lifecycle_expired)
+                self.assertFalse(addon.refresh_unlocked[TABLE_SCAN_TABLE])
+
     def test_config_modes_with_duplicate_headers(self):
         for copies in (1, 2):
             for mode in ("supported", "absent", "omitted", "error"):
