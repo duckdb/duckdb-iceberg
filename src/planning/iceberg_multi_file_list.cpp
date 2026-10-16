@@ -53,16 +53,35 @@ void IcebergMultiFileList::Bind(vector<LogicalType> &return_types, vector<Identi
 		return_types = types;
 		return;
 	}
+	auto &incremental_range = planner->GetOptions().incremental_range;
+	if (incremental_range.end_snapshot_id && !incremental_range.start_snapshot_id) {
+		throw InvalidInputException("'end_snapshot_id' can only be used together with 'start_snapshot_id'");
+	}
+
 	if (!planner->HasScanInfo()) {
 		D_ASSERT(!planner->GetPath().empty());
 		auto resolved_metadata =
 		    IcebergUtils::ResolveTableMetadata(planner->GetContext(), planner->GetPath(), planner->GetOptions());
 		auto temp_data = make_uniq<IcebergScanTemporaryData>(std::move(resolved_metadata.metadata));
 		auto &metadata = temp_data->metadata;
-		auto snapshot_info = metadata.GetSnapshot(*planner->GetOptions().snapshot_lookup);
+		IcebergSnapshotScanInfo snapshot_info;
+		if (incremental_range.IsIncremental()) {
+			//! Validates the bounds before any manifest is read. The scan then reads the end snapshot
+			//! like a normal time travel read, and the range narrows which of its files are visible.
+			auto incremental = IcebergIncrementalSnapshots::Resolve(metadata, incremental_range);
+			snapshot_info = metadata.GetSnapshot(IcebergSnapshotLookup::FromSnapshotId(incremental.end_snapshot_id));
+			snapshot_info.incremental = std::move(incremental);
+		} else {
+			snapshot_info = metadata.GetSnapshot(*planner->GetOptions().snapshot_lookup);
+		}
 		auto &schema = metadata.GetSchemaFromId(snapshot_info.schema_id);
 		planner->SetScanInfo(make_shared_ptr<IcebergScanInfo>(resolved_metadata.table_location, std::move(temp_data),
-		                                                      snapshot_info, schema));
+		                                                      std::move(snapshot_info), schema));
+	} else if (incremental_range.IsIncremental()) {
+		//! A table reference already chose the snapshot and can not carry named parameters, so this is
+		//! unreachable through SQL. Fail loudly rather than ignoring the range.
+		throw InvalidInputException("'start_snapshot_id' is only supported when scanning through "
+		                            "'iceberg_scan', not through a table reference");
 	}
 	for (auto &schema_entry : planner->GetSchema().columns) {
 		names.push_back(Identifier(schema_entry->name));

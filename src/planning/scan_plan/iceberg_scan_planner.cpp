@@ -136,7 +136,8 @@ void IcebergScanPlanner::InitializeView(annotated_lock_guard<annotated_mutex> &g
 	auto &committed_data = GetScanPlanProvider().DataManifests();
 	for (auto &manifest : committed_data) {
 		data_manifests.emplace_back(data_manifests.size(), manifest);
-		data_manifest_matches.push_back(pruner.ManifestMatchesFilter(manifest));
+		data_manifest_matches.push_back(pruner.ManifestMatchesFilter(manifest) &&
+		                                GetScanPlanProvider().ManifestIsVisible(manifest));
 	}
 	for (auto &manifest : GetScanPlanProvider().TransactionDataManifests()) {
 		auto &metadata = manifest.get().manifest_metadata;
@@ -144,7 +145,8 @@ void IcebergScanPlanner::InitializeView(annotated_lock_guard<annotated_mutex> &g
 		auto lineage_mode =
 		    metadata->format_version >= 3 ? IcebergRowLineageMode::STORED_ONLY : IcebergRowLineageMode::NONE;
 		data_manifests.emplace_back(data_manifests.size(), manifest, lineage_mode);
-		data_manifest_matches.push_back(pruner.ManifestMatchesFilter(manifest.get()));
+		data_manifest_matches.push_back(pruner.ManifestMatchesFilter(manifest.get()) &&
+		                                GetScanPlanProvider().ManifestIsVisible(manifest.get()));
 	}
 	auto &committed_deletes = GetScanPlanProvider().DeleteManifests();
 	bool has_matching_deletes = false;
@@ -209,6 +211,10 @@ IcebergScanPlanner::GetDataFile(idx_t file_id, annotated_lock_guard<annotated_mu
 			shared_state->data_file_partitions[data_file.file_path] = std::move(partition);
 			auto bound_entry = bound_manifest.BindEntry(manifest_entry);
 			if (manifest_entry.status == IcebergManifestEntryStatusType::DELETED) {
+				continue;
+			}
+			if (!GetScanPlanProvider().EntryIsVisible(manifest_entry, bound_manifest.entry)) {
+				//! Not added by a snapshot in the requested incremental range
 				continue;
 			}
 			if (table_filters.HasFilters() && !IcebergFilePruner(context, GetMetadata(), GetSchema(), table_filters)
@@ -311,6 +317,11 @@ unique_ptr<NodeStatistics> IcebergScanPlanner::GetCardinality() const {
 
 void IcebergScanPlanner::GetStatistics(vector<PartitionStatistics> &result) const {
 	if (GetMetadata().iceberg_version == 1) {
+		return;
+	}
+	if (GetSnapshot().incremental) {
+		//! A manifest written by a snapshot in the range can also carry EXISTING entries from before it
+		//! (manifest merging on append), so its row counts overstate what the range added.
 		return;
 	}
 	annotated_lock_guard<annotated_mutex> guard(shared_state->lock);

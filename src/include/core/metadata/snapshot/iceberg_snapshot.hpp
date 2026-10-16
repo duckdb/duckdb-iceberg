@@ -11,6 +11,8 @@ struct IcebergTable;
 
 enum class IcebergSnapshotOperationType : uint8_t { APPEND, REPLACE, OVERWRITE, DELETE };
 
+string IcebergSnapshotOperationTypeToString(IcebergSnapshotOperationType type);
+
 //! An Iceberg snapshot https://iceberg.apache.org/spec/#snapshots
 class IcebergSnapshot {
 public:
