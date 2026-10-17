@@ -65,10 +65,7 @@ TableFunction IcebergTableSchemaVersion::GetScanFunction(ClientContext &context,
 	    *iceberg_scan_function_set.functions.GetFunctionByArguments(context, {LogicalType::VARCHAR});
 	PrepareIcebergScanFromEntry(context);
 
-	if (!schema_id.IsValid()) {
-		throw InternalException(
-		    "GetScanFunction was called with a dummy IcebergTableSchemaVersion, this should never happen");
-	}
+	D_ASSERT(schema_id.IsValid());
 	const auto schema_id = this->schema_id.GetIndex();
 	const auto &metadata = table_info.table_metadata;
 	const auto &iceberg_schema = metadata.GetSchemaFromId(schema_id);
