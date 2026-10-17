@@ -47,6 +47,17 @@ select storage_credentials[1].prefix FROM iceberg_load_table_response(my_datalak
 ----
 s3://bucket123/default/my_table
 
+# Polaris vends credentials; their secret values are redacted
+query I
+SELECT count(*) > 0
+FROM (
+    SELECT unnest(map_entries(cred.config)) AS entry
+    FROM (SELECT unnest(storage_credentials) AS cred FROM iceberg_load_table_response(my_datalake.default.my_table))
+)
+WHERE entry.value = 'redacted';
+----
+true
+
 
 # request_url
 query I

@@ -118,7 +118,7 @@ static void OutputMap(const case_insensitive_map_t<string> &config, Vector &conf
 		FlatVector::GetDataMutable<string_t>(config_key_vec)[config_idx] =
 		    StringVector::AddString(config_key_vec, kv.first);
 		FlatVector::GetDataMutable<string_t>(config_val_vec)[config_idx] =
-		    StringVector::AddString(config_val_vec, kv.second);
+		    StringVector::AddString(config_val_vec, ICUtils::RedactConfigValue(kv.first, kv.second));
 		config_idx++;
 	}
 	ListVector::SetListSize(config_vec, config_count);
