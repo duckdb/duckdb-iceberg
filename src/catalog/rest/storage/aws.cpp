@@ -2,13 +2,13 @@
 
 #include "duckdb/common/http_util.hpp"
 #include "duckdb/common/http_transport_manager.hpp"
+#include "duckdb/common/encryption_state.hpp"
 #include "duckdb/logging/logger.hpp"
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/common/exception/http_exception.hpp"
 #include "duckdb/main/database.hpp"
 #include "duckdb/function/scalar/strftime_format.hpp"
 #include "duckdb/main/client_data.hpp"
-#include "mbedtls_wrapper.hpp"
 
 #include "iceberg_logging.hpp"
 #include "catalog/rest/storage/iceberg_authorization.hpp"
@@ -16,31 +16,6 @@
 namespace duckdb {
 
 namespace {
-
-typedef unsigned char hash_str[64];
-typedef unsigned char hash_bytes[32];
-
-void sha256(const char *in, size_t in_len, hash_bytes &out) {
-	duckdb_mbedtls::MbedTlsWrapper::ComputeSha256Hash(in, in_len, (char *)out);
-}
-
-void hmac256(const std::string &message, const char *secret, size_t secret_len, hash_bytes &out) {
-	duckdb_mbedtls::MbedTlsWrapper::Hmac256(secret, secret_len, message.data(), message.size(), (char *)out);
-}
-
-void hmac256(std::string message, hash_bytes secret, hash_bytes &out) {
-	hmac256(message, (char *)secret, sizeof(hash_bytes), out);
-}
-
-void hex256(hash_bytes &in, hash_str &out) {
-	const char *hex = "0123456789abcdef";
-	unsigned char *pin = in;
-	unsigned char *pout = out;
-	for (; pin < in + sizeof(in); pout += 2, pin++) {
-		pout[0] = hex[(*pin >> 4) & 0xF];
-		pout[1] = hex[*pin & 0xF];
-	}
-}
 
 //! The verb as it appears on the first line of the SigV4 canonical request.
 const char *MethodName(RequestType request_type) {
@@ -108,16 +83,11 @@ string WireEncodeSegment(const string &segment) {
 	return result;
 }
 
-string GetPayloadHash(const char *buffer, idx_t buffer_len) {
-	if (buffer_len > 0) {
-		hash_bytes payload_hash_bytes;
-		hash_str payload_hash_str;
-		sha256(buffer, buffer_len, payload_hash_bytes);
-		hex256(payload_hash_bytes, payload_hash_str);
-		return string((char *)payload_hash_str, sizeof(payload_hash_str));
-	} else {
-		return "";
-	}
+//! Hex encoded SHA256 of the request body, as it appears in x-amz-content-sha256 and the canonical request.
+string GetPayloadHash(EncryptionUtil &encryption_util, const string &data) {
+	string result(CryptoHash::GetHexDigestSize(CryptoHashFunction::SHA256), '\0');
+	encryption_util.HashHex(CryptoHashFunction::SHA256, const_data_ptr_cast(data.data()), data.size(), &result[0]);
+	return result;
 }
 
 } // namespace
@@ -155,109 +125,78 @@ string AWSInput::URL() const {
 	return string(use_https ? "https://" : "http://") + authority + WirePath() + QueryString();
 }
 
-unique_ptr<HTTPResponse> AWSInput::Request(RequestType request_type, ClientContext &context, HTTPHeaders &headers,
-                                           const string &data) {
+HTTPHeaders AWSInput::SignRequest(RequestType request_type, ClientContext &context, HTTPHeaders &headers,
+                                  const string &data) const {
 	auto &db = DatabaseInstance::GetDatabase(context);
+	// the crypto module of httpfs if that is loaded, duckdb's own otherwise
+	auto encryption_util = db.GetEncryptionUtil(true);
 
-	HTTPHeaders res(db);
-
-	res["host"] = authority;
-	// If access key is not set, we don't set the headers at all to allow accessing public files through s3 urls
-
-	string payload_hash = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"; // Empty payload hash
-
-	if (!data.empty()) {
-		payload_hash = GetPayloadHash(data.c_str(), data.size());
-	}
-
-	// key_id, secret, session_token
-	// we can pass date/time but this is mostly useful in testing. normally we just get the current datetime
-	// here.
 	auto timestamp = Timestamp::GetCurrentTimestamp();
 	string date_now = StrfTimeFormat::Format(timestamp, "%Y%m%d");
 	string datetime_now = StrfTimeFormat::Format(timestamp, "%Y%m%dT%H%M%SZ");
+	auto payload_hash = GetPayloadHash(*encryption_util, data);
 
-	res["x-amz-date"] = datetime_now;
-	res["x-amz-content-sha256"] = payload_hash;
-	if (session_token.length() > 0) {
-		res["x-amz-security-token"] = session_token;
-	}
-	string content_type;
+	// The headers that are signed and sent, in the (alphabetical) order of the canonical request.
+	vector<std::pair<string, string>> signed_headers;
 	if (headers.HasHeader("Content-Type")) {
-		content_type = headers.GetHeaderValue("Content-Type");
+		auto content_type = headers.GetHeaderValue("Content-Type");
+		if (!content_type.empty()) {
+			signed_headers.emplace_back("Content-Type", std::move(content_type));
+		}
 	}
-	if (!content_type.empty()) {
-		res["Content-Type"] = content_type;
+	signed_headers.emplace_back("host", authority);
+	signed_headers.emplace_back("x-amz-content-sha256", payload_hash);
+	signed_headers.emplace_back("x-amz-date", datetime_now);
+	if (!session_token.empty()) {
+		signed_headers.emplace_back("x-amz-security-token", session_token);
 	}
-	string signed_headers = "";
-	hash_bytes canonical_request_hash;
-	hash_str canonical_request_hash_str;
-	if (content_type.length() > 0) {
-		signed_headers += "content-type;";
-		res["Content-Type"] = content_type;
-	}
-	signed_headers += "host;x-amz-content-sha256;x-amz-date";
-	if (session_token.length() > 0) {
-		signed_headers += ";x-amz-security-token";
-	}
-	string access_delegation;
 	if (headers.HasHeader("X-Iceberg-Access-Delegation")) {
-		access_delegation = headers.GetHeaderValue("X-Iceberg-Access-Delegation");
-	}
-	if (!access_delegation.empty()) {
-		signed_headers += ";x-iceberg-access-delegation";
-		res["X-Iceberg-Access-Delegation"] = access_delegation;
-	}
-
-	string url_encoded_path = CanonicalPath();
-
-	{
-		// it's unclear to be why we need to transform %2F into %252F, see
-		// https://en.wikipedia.org/wiki/Percent-encoding#Percent_character
-		url_encoded_path = StringUtil::Replace(url_encoded_path, "%2F", "%252F");
+		auto access_delegation = headers.GetHeaderValue("X-Iceberg-Access-Delegation");
+		if (!access_delegation.empty()) {
+			signed_headers.emplace_back("X-Iceberg-Access-Delegation", std::move(access_delegation));
+		}
 	}
 
+	HTTPHeaders result(db);
+	string canonical_headers;
+	string signed_header_names;
+	for (auto &header : signed_headers) {
+		auto canonical_name = StringUtil::Lower(header.first);
+		canonical_headers += canonical_name + ":" + header.second + "\n";
+		if (!signed_header_names.empty()) {
+			signed_header_names += ";";
+		}
+		signed_header_names += canonical_name;
+		result[header.first] = header.second;
+	}
+
+	// it's unclear to be why we need to transform %2F into %252F, see
+	// https://en.wikipedia.org/wiki/Percent-encoding#Percent_character
+	auto canonical_path = StringUtil::Replace(CanonicalPath(), "%2F", "%252F");
 	auto query_string = QueryString();
+	auto canonical_query_string = query_string.empty() ? string() : query_string.substr(1);
 
-	auto canonical_request = string(MethodName(request_type)) + "\n" + url_encoded_path + "\n";
-	if (query_string.size()) {
-		canonical_request += query_string.substr(1);
-	}
+	SignatureV4Params signature_params;
+	signature_params.canonical_request = string(MethodName(request_type)) + "\n" + canonical_path + "\n" +
+	                                     canonical_query_string + "\n" + canonical_headers + "\n" +
+	                                     signed_header_names + "\n" + payload_hash;
+	signature_params.credential_scope = date_now + "/" + region + "/" + service + "/aws4_request";
+	signature_params.region = region;
+	signature_params.service = service;
+	signature_params.secret_access_key = secret;
+	signature_params.date_now = date_now;
+	signature_params.datetime_now = datetime_now;
+	auto signature = HTTPUtil::CreateSignatureV4(*encryption_util, signature_params);
 
-	if (content_type.length() > 0) {
-		canonical_request += "\ncontent-type:" + content_type;
-	}
-	canonical_request +=
-	    "\nhost:" + authority + "\nx-amz-content-sha256:" + payload_hash + "\nx-amz-date:" + datetime_now;
-	if (session_token.length() > 0) {
-		canonical_request += "\nx-amz-security-token:" + session_token;
-	}
-	if (!access_delegation.empty()) {
-		canonical_request += "\nx-iceberg-access-delegation:" + access_delegation;
-	}
-	canonical_request += "\n\n" + signed_headers + "\n" + payload_hash;
-	sha256(canonical_request.c_str(), canonical_request.length(), canonical_request_hash);
+	result["Authorization"] = "AWS4-HMAC-SHA256 Credential=" + key_id + "/" + signature_params.credential_scope +
+	                          ", SignedHeaders=" + signed_header_names + ", Signature=" + signature;
+	return result;
+}
 
-	hex256(canonical_request_hash, canonical_request_hash_str);
-	auto string_to_sign = "AWS4-HMAC-SHA256\n" + datetime_now + "\n" + date_now + "/" + region + "/" + service +
-	                      "/aws4_request\n" + string((char *)canonical_request_hash_str, sizeof(hash_str));
-
-	// TODO: DUCKDB_LOGS (canonical_request + string_to_sing)
-
-	// compute signature
-	hash_bytes k_date, k_region, k_service, signing_key, signature;
-	hash_str signature_str;
-	auto sign_key = "AWS4" + secret;
-	hmac256(date_now, sign_key.c_str(), sign_key.length(), k_date);
-	hmac256(region, k_date, k_region);
-	hmac256(service, k_region, k_service);
-	hmac256("aws4_request", k_service, signing_key);
-	hmac256(string_to_sign, signing_key, signature);
-	hex256(signature, signature_str);
-
-	res["Authorization"] = "AWS4-HMAC-SHA256 Credential=" + key_id + "/" + date_now + "/" + region + "/" + service +
-	                       "/aws4_request, SignedHeaders=" + signed_headers +
-	                       ", Signature=" + string((char *)signature_str, sizeof(hash_str));
+unique_ptr<HTTPResponse> AWSInput::Request(RequestType request_type, ClientContext &context, HTTPHeaders &headers,
+                                           const string &data) {
+	auto &db = DatabaseInstance::GetDatabase(context);
+	auto res = SignRequest(request_type, context, headers, data);
 
 	string request_url = URL();
 	auto session = db.config.GetHTTPTransportManager().CreateSession(context, request_url);
