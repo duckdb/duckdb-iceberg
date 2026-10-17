@@ -12,6 +12,9 @@ For refresh tests, the proxy returns initial credentials on the first table load
 rejects an S3 request signed with those credentials, and then returns refreshed
 credentials through /credentials or LoadTable, depending on the advertised
 endpoints, without waiting for a real STS expiry in CI.
+
+For the TLS tests, each table in TLS_TABLE_CONFIGS vends its own S3 endpoint and
+path-style settings.
 """
 
 import datetime
@@ -79,6 +82,22 @@ NEW_MIXED_REFRESH_B_KEY = "NEW_MIXED_REFRESH_B_KEY"
 OLD_SAME_BAD_KEY = "OLD_SAME_BAD_KEY"
 OLD_RANGE_FAIL_KEY = "OLD_RANGE_FAIL_KEY"
 NEW_RANGE_FAIL_KEY = "NEW_RANGE_FAIL_KEY"
+TLS_KEY = "TLS_KEY"
+
+# Tables for vended_credentials_tls.test, and the S3 endpoint and path-style settings each one vends.
+TLS_TABLE_CONFIGS = {
+    "vended_tls_path_style_no_endpoint": {"s3.path-style-access": "true"},
+    "vended_tls_path_style_no_scheme": {"s3.path-style-access": "true", "s3.endpoint": f"{S3_HOST}:{S3_PORT}"},
+    "vended_tls_path_style_https_endpoint": {
+        "s3.path-style-access": "true",
+        "s3.endpoint": f"https://{S3_HOST}:9443",
+    },
+    "vended_tls_path_style_http_endpoint": {
+        "s3.path-style-access": "true",
+        "s3.endpoint": f"http://{S3_HOST}:{S3_PORT}",
+    },
+    "vended_tls_http_endpoint": {"s3.endpoint": f"http://{S3_HOST}:{S3_PORT}"},
+}
 
 UPSTREAM_S3_KEY = "admin"
 UPSTREAM_S3_SECRET = "password"
@@ -135,6 +154,9 @@ class VendedCredentialRefreshAddon:
             self._handle_s3_request(flow)
 
     def response(self, flow: http.HTTPFlow):
+        if flow.response:
+            # Tests look for this header in DuckDB's HTTP log to see which requests went through the proxy.
+            flow.response.headers["x-vended-credentials-proxy"] = "true"
         if flow.metadata.get("vended_config") and flow.response and flow.response.status_code == 200:
             response = json.loads(flow.response.content.decode())
             mode = self._credential_endpoint_mode(flow)
@@ -156,7 +178,10 @@ class VendedCredentialRefreshAddon:
             # Keep the table location aligned with the synthetic object so
             # multi-credential tests can select an exact matching scope.
             response["metadata"]["location"] = self._credentials_prefix(table)
-        self._set_storage_credentials(flow, table, response)
+        if table in TLS_TABLE_CONFIGS:
+            response["storage-credentials"] = [self._tls_credentials(table, response["metadata"]["location"])]
+        else:
+            self._set_storage_credentials(flow, table, response)
         flow.response.text = json.dumps(response)
 
     @staticmethod
@@ -242,6 +267,10 @@ class VendedCredentialRefreshAddon:
 
         if self._is_direct_delete_commit_request(flow, path):
             self._forced_catalog_commit_failure(flow)
+            return
+
+        if flow.request.method == "GET" and table_match and table_match.group(1) in TLS_TABLE_CONFIGS:
+            flow.metadata["vended_table"] = table_match.group(1)
             return
 
         if flow.request.method == "GET" and table_match and table_match.group(1) in self.refresh_unlocked:
@@ -409,6 +438,7 @@ class VendedCredentialRefreshAddon:
             NEW_MIXED_REFRESH_A_KEY,
             NEW_MIXED_REFRESH_B_KEY,
             OLD_RANGE_FAIL_KEY,
+            TLS_KEY,
         }:
             self._forbidden(flow, "unknown test credentials")
             return
@@ -495,6 +525,19 @@ class VendedCredentialRefreshAddon:
             self._forbidden(flow, "mixed refresh partition b used wrong credentials")
             return False
         return True
+
+    @staticmethod
+    def _tls_credentials(table, location):
+        # A single credential is scoped by its prefix, so the table's location gives each table its own secret.
+        return {
+            "prefix": location,
+            "config": {
+                "s3.access-key-id": TLS_KEY,
+                "s3.secret-access-key": f"{TLS_KEY}_SECRET",
+                "s3.region": "us-east-1",
+                **TLS_TABLE_CONFIGS[table],
+            },
+        }
 
     def _credentials_for_table(self, table):
         key_id = self._key_for_table(table)

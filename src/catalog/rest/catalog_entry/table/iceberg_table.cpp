@@ -159,7 +159,7 @@ static void ParseConfigOptions(const case_insensitive_map_t<string> &config, cas
 			                            it->second);
 		}
 
-		options["use_ssl"] = Value(!path_style);
+		// path-style access only changes where the bucket name goes in the URL; the endpoint's scheme decides ssl.
 		if (path_style) {
 			options["url_style"] = "path";
 		}
@@ -172,6 +172,8 @@ static void ParseConfigOptions(const case_insensitive_map_t<string> &config, cas
 	auto endpoint = endpoint_it->second.ToString();
 	if (StringUtil::StartsWith(endpoint, "http://")) {
 		endpoint = endpoint.substr(7, string::npos);
+		// an endpoint with http:// doesn't use ssl.
+		options["use_ssl"] = Value(false);
 	}
 	if (StringUtil::StartsWith(endpoint, "https://")) {
 		endpoint = endpoint.substr(8, string::npos);
