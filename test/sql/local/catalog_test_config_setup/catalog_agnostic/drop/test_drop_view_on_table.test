@@ -1,0 +1,68 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/drop/test_drop_view_on_table.test
+# description: DROP VIEW on an iceberg table is refused and the table survives
+# group: [drop]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+require core_functions
+
+statement ok
+use my_datalake.default;
+
+statement ok
+drop table if exists test_drop_view_on_table;
+
+statement ok
+create table test_drop_view_on_table (a int);
+
+statement ok
+insert into test_drop_view_on_table select range a from range(3);
+
+statement error
+drop view test_drop_view_on_table;
+----
+Existing object test_drop_view_on_table is of type Table, trying to drop type View
+
+# IF EXISTS does not apply: the object exists, it has the wrong type
+statement error
+drop view if exists test_drop_view_on_table;
+----
+Existing object test_drop_view_on_table is of type Table, trying to drop type View
+
+statement ok
+drop view if exists test_drop_view_on_table_missing;
+
+query I
+select * from test_drop_view_on_table order by a;
+----
+0
+1
+2
+
+# the table is still there for a new transaction
+statement ok
+begin;
+
+query I
+select count(*) from test_drop_view_on_table;
+----
+3
+
+statement ok
+commit;
+
+statement ok
+drop table test_drop_view_on_table;
+
+query I
+select count(*) from (show tables) where name = 'test_drop_view_on_table';
+----
+0
