@@ -1,0 +1,52 @@
+# name: test/sql/local/iceberg_scans/iceberg_scan_incremental_errors.test
+# description: option validation for the incremental read parameters of iceberg_scan
+# group: [iceberg_scans]
+
+require avro
+
+require parquet
+
+require iceberg
+
+# 'start_snapshot_id' is what activates an incremental scan, so an end bound alone is meaningless
+statement error
+SELECT * FROM ICEBERG_SCAN('{WORKING_DIRECTORY}/data/persistent/is_null_is_not_null', end_snapshot_id=2353095958979530531);
+----
+'end_snapshot_id' can only be used together with 'start_snapshot_id'
+
+# a range and a point in time read are mutually exclusive, in either parameter order
+statement error
+SELECT * FROM ICEBERG_SCAN('{WORKING_DIRECTORY}/data/persistent/is_null_is_not_null', snapshot_from_id=6009550004485738065, start_snapshot_id=6009550004485738065);
+----
+in combination with
+
+statement error
+SELECT * FROM ICEBERG_SCAN('{WORKING_DIRECTORY}/data/persistent/is_null_is_not_null', start_snapshot_id=6009550004485738065, snapshot_from_id=6009550004485738065);
+----
+in combination with
+
+statement error
+SELECT * FROM ICEBERG_SCAN('{WORKING_DIRECTORY}/data/persistent/is_null_is_not_null', snapshot_from_timestamp='2023-01-01 00:00:00', start_snapshot_id=6009550004485738065);
+----
+in combination with
+
+statement error
+SELECT * FROM ICEBERG_SCAN('{WORKING_DIRECTORY}/data/persistent/is_null_is_not_null', start_snapshot_id=6009550004485738065, snapshot_from_timestamp='2023-01-01 00:00:00');
+----
+in combination with
+
+statement error
+SELECT * FROM ICEBERG_SCAN('{WORKING_DIRECTORY}/data/persistent/is_null_is_not_null', end_snapshot_id=2353095958979530531, snapshot_from_id=6009550004485738065);
+----
+in combination with
+
+# the metadata functions do not accept the range parameters
+statement error
+SELECT * FROM ICEBERG_METADATA('{WORKING_DIRECTORY}/data/persistent/is_null_is_not_null', start_snapshot_id=6009550004485738065);
+----
+start_snapshot_id
+
+statement error
+SELECT * FROM ICEBERG_SNAPSHOTS('{WORKING_DIRECTORY}/data/persistent/is_null_is_not_null', start_snapshot_id=6009550004485738065);
+----
+start_snapshot_id
