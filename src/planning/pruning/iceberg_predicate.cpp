@@ -397,6 +397,26 @@ static bool MatchBoundsExpression(ClientContext &context, const unique_ptr<Expre
 			//! child filter wasn't populated (yet?) for some reason, just be conservative
 			return true;
 		}
+		if (func.Function().GetName() == PrefixRangeScalarFun::NAME && func.BindInfo()) {
+			auto &data = func.BindInfo()->Cast<PrefixRangeFunctionData>();
+			if (transform.Type() != IcebergTransformType::IDENTITY) {
+				return true;
+			}
+			//! FilterPrune needs min/max, so an all-NULL file needs this guard
+			if (data.filter && data.filter->IsInitialized() && data.filters_null_values && !stats.has_not_null) {
+				return false;
+			}
+			if (!stats.lower_bound || !stats.upper_bound || stats.lower_bound->IsNull() ||
+			    stats.upper_bound->IsNull()) {
+				return true;
+			}
+			auto column_stats = stats.BuildColumnStats(stats.lower_bound->type());
+			if (!column_stats) {
+				return true;
+			}
+			auto result = ExpressionFilter::CheckExpressionStatistics(&context, expr, *column_stats);
+			return result != FilterPropagateResult::FILTER_ALWAYS_FALSE;
+		}
 		return true;
 	}
 	default:

@@ -22,6 +22,7 @@ public:
 	void SetLowerBound(const Value &new_lower_bound);
 	void SetUpperBound(const Value &new_upper_bound);
 	bool BoundsAreNull() const;
+	shared_ptr<BaseStatistics> BuildColumnStats(const LogicalType &type) const;
 
 public:
 	optional<Value> lower_bound;
