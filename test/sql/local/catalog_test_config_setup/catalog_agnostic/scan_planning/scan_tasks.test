@@ -529,16 +529,26 @@ create temp table dv_ranges as
 statement ok
 set variable scan_task_list_26 = (select list(task) from (select * from dv_ranges) task);
 
+# Distinct Puffin blob ranges must retain distinct deletion-vector cache identities.
+query II
+select count(*), sum(id) from iceberg_scan_tasks(getvariable('scan_task_list_26'));
+----
+3	7
+
 statement ok
 call enable_logging('Iceberg');
 
 statement ok
 call truncate_duckdb_logs();
 
-query II
-select count(*), sum(id) from iceberg_scan_tasks(getvariable('scan_task_list_26'));
+# Pushed filters compose with deletion vectors without renumbering surviving rows.
+query II rowsort
+select id, file_row_number
+from iceberg_scan_tasks(getvariable('scan_task_list_26'))
+where id>=2;
 ----
-3	7
+3	2
+3	2
 
 # Deletion vectors force the complete invocation onto one-task executors.
 query II

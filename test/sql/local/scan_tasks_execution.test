@@ -470,10 +470,13 @@ call enable_logging('Iceberg');
 statement ok
 call truncate_duckdb_logs();
 
-query I
-select count(*) from iceberg_scan_tasks(getvariable('scan_task_list_10'));
+# Pushed outer filters retain private equality-delete keys while every task stays sequential.
+query I rowsort
+select id from iceberg_scan_tasks(getvariable('scan_task_list_10')) where value>=20;
 ----
-5
+2
+3
+3
 
 # Equality deletes force the complete invocation onto one-task executors.
 query II
@@ -546,11 +549,17 @@ set variable scan_task_list_14 = (select list(task) from (select * from position
  union all select * replace([delete_files[1]] as delete_files) from position_tasks
  union all select * from tasks) task);
 
-# Cached position deletes cannot leak into another task for the same data path.
-query I
-select count(*) from iceberg_scan_tasks(getvariable('scan_task_list_14'));
+# Cached position deletes cannot leak, and pushed filters retain original physical row positions.
+query II rowsort
+select id, file_row_number
+from iceberg_scan_tasks(getvariable('scan_task_list_14'))
+where value>=20;
 ----
-9
+2	2
+2	2
+3	3
+3	3
+3	3
 
 # Any delete descriptor keeps the complete invocation on one-task executors.
 query II
