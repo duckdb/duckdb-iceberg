@@ -1,0 +1,65 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/reads/filtering/test_generic_function_filter_pruning.test
+# description: Generic function-filter pruning trusts float bounds only with a zero NaN count
+# group: [filtering]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require-env SCAN_PLANNING_MODE client
+
+include test/sql/init_requires
+
+statement ok
+SET threads=1;
+
+statement ok
+create schema if not exists my_datalake.default;
+
+statement ok
+CALL enable_logging('Iceberg');
+
+foreach type FLOAT DOUBLE
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.test_generic_function_pruning;
+
+statement ok
+CREATE TABLE my_datalake.default.test_generic_function_pruning (id INTEGER, x {type});
+
+statement ok
+INSERT INTO my_datalake.default.test_generic_function_pruning VALUES (1, 1.0), (2, 2.0), (3, 3.0);
+
+statement ok
+INSERT INTO my_datalake.default.test_generic_function_pruning VALUES (4, 1.0), (5, 3.0), (6, 'NaN'::{type});
+
+query II
+SELECT nan_value_count, count(*)
+FROM iceberg_column_stats(my_datalake.default.test_generic_function_pruning)
+WHERE column_name = 'x'
+GROUP BY nan_value_count
+ORDER BY nan_value_count;
+----
+0	1
+1	1
+
+statement ok
+CALL truncate_duckdb_logs();
+
+query II
+SELECT id, isnan(x) FROM my_datalake.default.test_generic_function_pruning
+WHERE x + 1 > 7 AND x + 1 <= 'NaN'::{type};
+----
+6	true
+
+query I
+select count(distinct message) from duckdb_logs()
+where type = 'Iceberg' and message like '%skipped ''data_file''%';
+----
+1
+
+statement ok
+DROP TABLE my_datalake.default.test_generic_function_pruning;
+
+endloop
+
+statement ok
+RESET threads;

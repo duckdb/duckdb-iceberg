@@ -397,29 +397,27 @@ static bool MatchBoundsExpression(ClientContext &context, const unique_ptr<Expre
 			//! child filter wasn't populated (yet?) for some reason, just be conservative
 			return true;
 		}
+		if (transform.Type() != IcebergTransformType::IDENTITY) {
+			return true;
+		}
 		if (func.Function().GetName() == PrefixRangeScalarFun::NAME && func.BindInfo()) {
 			auto &data = func.BindInfo()->Cast<PrefixRangeFunctionData>();
-			if (transform.Type() != IcebergTransformType::IDENTITY) {
-				return true;
-			}
 			//! FilterPrune needs min/max. Counts or an explicit NULL identity partition
 			//! can prove that every key is NULL even without usable bounds.
 			if (data.filter && data.filter->IsInitialized() && data.filters_null_values &&
 			    (!stats.has_not_null || stats.BoundsAreNull())) {
 				return false;
 			}
-			if (!stats.lower_bound || !stats.upper_bound || stats.lower_bound->IsNull() ||
-			    stats.upper_bound->IsNull()) {
-				return true;
-			}
-			auto column_stats = stats.BuildColumnStats(stats.lower_bound->type());
-			if (!column_stats) {
-				return true;
-			}
-			auto result = ExpressionFilter::CheckExpressionStatistics(&context, expr, *column_stats);
-			return result != FilterPropagateResult::FILTER_ALWAYS_FALSE;
 		}
-		return true;
+		if (!stats.lower_bound || !stats.upper_bound || stats.lower_bound->IsNull() || stats.upper_bound->IsNull()) {
+			return true;
+		}
+		auto column_stats = stats.BuildColumnStats(stats.lower_bound->type());
+		if (!column_stats) {
+			return true;
+		}
+		auto result = ExpressionFilter::CheckExpressionStatistics(&context, expr, *column_stats);
+		return result != FilterPropagateResult::FILTER_ALWAYS_FALSE;
 	}
 	default:
 		//! Conservative approach: we don't know what this is, just say it doesn't filter anything
