@@ -8,6 +8,12 @@
 
 namespace duckdb {
 
+void IcebergAuthorization::AddRemoteSignerHeaders(ClientContext &context, case_insensitive_map_t<string> &headers) {
+	for (auto &entry : extra_http_headers) {
+		headers[entry.first] = entry.second;
+	}
+}
+
 IcebergAuthorizationType IcebergAuthorization::TypeFromString(const string &type) {
 	static const case_insensitive_map_t<IcebergAuthorizationType> mapping {{"oauth2", IcebergAuthorizationType::OAUTH2},
 	                                                                       {"sigv4", IcebergAuthorizationType::SIGV4},

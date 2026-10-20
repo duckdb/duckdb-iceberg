@@ -23,6 +23,7 @@ public:
 	unique_ptr<HTTPResponse> Request(RequestType request_type, ClientContext &context,
 	                                 const IRCEndpointBuilder &endpoint_builder, HTTPHeaders &headers,
 	                                 const string &data = "") override;
+	void AddRemoteSignerHeaders(ClientContext &context, case_insensitive_map_t<string> &headers) override;
 
 private:
 	AWSInput CreateAWSInput(ClientContext &context, const IRCEndpointBuilder &endpoint_builder);

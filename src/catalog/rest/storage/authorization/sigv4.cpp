@@ -173,6 +173,11 @@ void SIGV4Authorization::MaybeRefreshSecret(ClientContext &context) {
 	}
 }
 
+void SIGV4Authorization::AddRemoteSignerHeaders(ClientContext &context, case_insensitive_map_t<string> &headers) {
+	//! Every request to the signer would have to be SigV4 signed itself, which httpfs cannot do on our behalf
+	throw NotImplementedException("Remote signing is not supported for Iceberg catalogs that use SigV4 authorization");
+}
+
 unique_ptr<HTTPResponse> SIGV4Authorization::Request(RequestType request_type, ClientContext &context,
                                                      const IRCEndpointBuilder &endpoint_builder, HTTPHeaders &headers,
                                                      const string &data) {

@@ -1,0 +1,238 @@
+# name: test/sql/local/native_catalog/remote_signing.test
+# description: ACCESS_DELEGATION_MODE 'remote_signing' hands the catalog's signer to httpfs through the table's storage secret
+# group: [native_catalog]
+
+require-env CATALOG_TEST_CONFIG_SETUP mock
+
+include test/sql/init_requires
+
+require json
+
+statement ok
+CREATE TABLE my_datalake.default.remote_signed AS SELECT 1 AS id;
+
+# The warehouse is local, so the response is changed to report an s3 location. The data files keep their absolute
+# local paths and stay readable, while the table location decides which kind of storage secret is created.
+statement ok
+CREATE MACRO table_response(patch) AS TABLE
+SELECT status FROM iceberg_test_catalog_request('POST', '/__test/response',
+	json_object('method', 'GET', 'path', '/v1/namespaces/default/tables/remote_signed', 'status', 200,
+		'body', json_merge_patch(getvariable('table_body'), patch))::VARCHAR);
+
+statement ok
+CREATE MACRO signing_secret() AS TABLE
+SELECT secret_string FROM duckdb_secrets() WHERE storage = 'transaction' AND type = 's3';
+
+statement ok
+SET VARIABLE table_body = (SELECT body FROM iceberg_test_catalog_request('GET', '/v1/namespaces/default/tables/remote_signed', NULL));
+
+query I
+SELECT * FROM table_response('{
+	"metadata-location": null,
+	"metadata": {"location": "s3://remote-signing-bucket/default/remote_signed"},
+	"config": {
+		"s3.remote-signing-enabled": "true",
+		"s3.region": "eu-central-1",
+		"s3.endpoint": "https://storage.example.com",
+		"s3.access-key-id": "not-used-with-a-signer",
+		"signer.endpoint": "https://deprecated.example.com/v1/aws/s3/sign"
+	},
+	"remote-signing-config": {
+		"headers": {"X-Signer-Static": ["first", "second"]},
+		"properties": {"signer-property": "passed-through"}
+	}
+}');
+----
+204
+
+statement ok
+CALL enable_logging(level = 'debug');
+
+statement ok
+SET redact_http_logs = false;
+
+statement ok
+ATTACH '' AS signed_lake (TYPE ICEBERG, URI 'http://iceberg-mock.invalid', TOKEN 'catalog-token',
+	ACCESS_DELEGATION_MODE 'remote_signing');
+
+statement ok
+BEGIN;
+
+query I
+SELECT id FROM signed_lake.default.remote_signed;
+----
+1
+
+# The catalog is asked for remote signing rather than for credentials
+query I
+SELECT DISTINCT request.headers['X-Iceberg-Access-Delegation'] FROM duckdb_logs_parsed('HTTP')
+WHERE request.url LIKE '%/tables/remote_signed';
+----
+remote-signing
+
+# With a 'remote-signing-config' the deprecated signer properties are ignored and the table scoped endpoint is used
+query I
+SELECT secret_string LIKE '%signer_url=http://iceberg-mock.invalid/v1/namespaces/default/tables/remote_signed/sign;%'
+FROM signing_secret();
+----
+true
+
+# The signer is authenticated like the catalog, next to the static headers the catalog asked for. Only the names of
+# the headers are logged, their values are as secret as the catalog token.
+query I
+SELECT message LIKE '%sending headers [Authorization, X-Signer-Static]' FROM duckdb_logs()
+WHERE message LIKE '%storage requests are signed by%';
+----
+true
+
+# The catalog token is redacted
+query II
+SELECT secret_string LIKE '%signer_headers=redacted%', secret_string LIKE '%catalog-token%' FROM signing_secret();
+----
+true	false
+
+query I
+SELECT secret_string LIKE '%signer_properties={signer-property=passed-through}%' FROM signing_secret();
+----
+true
+
+query III
+SELECT secret_string LIKE '%provider=iceberg%', secret_string LIKE '%region=eu-central-1%',
+	secret_string LIKE '%not-used-with-a-signer%'
+FROM signing_secret();
+----
+true	true	false
+
+statement ok
+COMMIT;
+
+statement ok
+DETACH signed_lake;
+
+# Without a 'remote-signing-config' the deprecated properties locate the signer
+statement ok
+SET VARIABLE table_body = (SELECT body FROM iceberg_test_catalog_request('GET', '/v1/namespaces/default/tables/remote_signed', NULL));
+
+query I
+SELECT * FROM table_response('{
+	"config": {
+		"signer.endpoint": null,
+		"signer.uri": "https://signer.example.com/base/",
+		"s3.signer.endpoint": "v1/custom/sign"
+	},
+	"remote-signing-config": null
+}');
+----
+204
+
+statement ok
+ATTACH '' AS signed_lake (TYPE ICEBERG, URI 'http://iceberg-mock.invalid', AUTHORIZATION_TYPE 'none',
+	ACCESS_DELEGATION_MODE 'remote_signing');
+
+statement ok
+BEGIN;
+
+query I
+SELECT id FROM signed_lake.default.remote_signed;
+----
+1
+
+query II
+SELECT secret_string LIKE '%signer_url=https://signer.example.com/base/v1/custom/sign;%',
+	secret_string LIKE '%signer_properties%'
+FROM signing_secret();
+----
+true	false
+
+# Without catalog authentication or static headers there is nothing to send along
+query I
+SELECT message LIKE '%sending headers []' FROM duckdb_logs()
+WHERE message LIKE '%storage requests are signed by ''https://signer.example.com/base/v1/custom/sign''%';
+----
+true
+
+statement ok
+COMMIT;
+
+statement ok
+DETACH signed_lake;
+
+# A signer uri without an endpoint gets the endpoint clients used before the table scoped one
+statement ok
+SET VARIABLE table_body = (SELECT body FROM iceberg_test_catalog_request('GET', '/v1/namespaces/default/tables/remote_signed', NULL));
+
+query I
+SELECT * FROM table_response('{"config": {"s3.signer.endpoint": null}}');
+----
+204
+
+statement ok
+ATTACH '' AS signed_lake (TYPE ICEBERG, URI 'http://iceberg-mock.invalid', AUTHORIZATION_TYPE 'none',
+	ACCESS_DELEGATION_MODE 'remote_signing');
+
+statement ok
+BEGIN;
+
+query I
+SELECT id FROM signed_lake.default.remote_signed;
+----
+1
+
+query I
+SELECT secret_string LIKE '%signer_url=https://signer.example.com/base/v1/aws/s3/sign;%' FROM signing_secret();
+----
+true
+
+statement ok
+COMMIT;
+
+statement ok
+DETACH signed_lake;
+
+# Catalogs report remote signing whenever the storage supports it, so it is only used by attaches that opted in
+statement ok
+ATTACH '' AS vended_lake (TYPE ICEBERG, URI 'http://iceberg-mock.invalid', AUTHORIZATION_TYPE 'none',
+	ACCESS_DELEGATION_MODE 'vended_credentials');
+
+statement ok
+BEGIN;
+
+query I
+SELECT id FROM vended_lake.default.remote_signed;
+----
+1
+
+query II
+SELECT secret_string LIKE '%signer_url%', secret_string LIKE '%key_id=not-used-with-a-signer%' FROM signing_secret();
+----
+false	true
+
+statement ok
+COMMIT;
+
+statement ok
+DETACH vended_lake;
+
+# An attach that asked for remote signing fails clearly when the catalog cannot provide it
+statement ok
+SET VARIABLE table_body = (SELECT body FROM iceberg_test_catalog_request('GET', '/v1/namespaces/default/tables/remote_signed', NULL));
+
+query I
+SELECT * FROM table_response('{"config": {"s3.remote-signing-enabled": "false"}}');
+----
+204
+
+statement ok
+ATTACH '' AS signed_lake (TYPE ICEBERG, URI 'http://iceberg-mock.invalid', AUTHORIZATION_TYPE 'none',
+	ACCESS_DELEGATION_MODE 'remote_signing');
+
+statement error
+SELECT id FROM signed_lake.default.remote_signed;
+----
+<REGEX>:.*attached with ACCESS_DELEGATION_MODE 'remote_signing', but the catalog returned neither remote signing information nor credentials for table 'remote_signed'.*
+
+statement ok
+DETACH signed_lake;
+
+statement ok
+SELECT * FROM iceberg_test_catalog_request('DELETE', '/__test/response', NULL);

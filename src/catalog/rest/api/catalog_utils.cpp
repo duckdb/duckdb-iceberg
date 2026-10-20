@@ -6,6 +6,19 @@
 
 namespace duckdb {
 
+void ICUtils::AddAccessDelegationHeader(HTTPHeaders &headers, IRCAccessDelegationMode access_mode) {
+	switch (access_mode) {
+	case IRCAccessDelegationMode::VENDED_CREDENTIALS:
+		headers.Insert("X-Iceberg-Access-Delegation", "vended-credentials");
+		break;
+	case IRCAccessDelegationMode::REMOTE_SIGNING:
+		headers.Insert("X-Iceberg-Access-Delegation", "remote-signing");
+		break;
+	default:
+		break;
+	}
+}
+
 rest_api_objects::LoadTableResult ICUtils::ParseLoadTableResult(JSONValue root) {
 	auto restrictions = root.GetMember("read-restrictions");
 	auto row_filter = restrictions.GetMember("required-row-filter");

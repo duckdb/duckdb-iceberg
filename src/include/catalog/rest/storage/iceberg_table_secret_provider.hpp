@@ -16,7 +16,8 @@ struct SecretEntry;
 //! Storage secrets created from vended credentials use this provider so httpfs'
 //! refresh path can dispatch back into Iceberg. On refresh, the provider
 //! reloads the table from the Iceberg REST catalog and replaces the expired
-//! scoped storage secret with newly vended credentials.
+//! scoped storage secret with newly vended credentials. Remote signing secrets are
+//! refreshed the same way when the signer rejects the catalog credentials they carry.
 class IcebergTableSecretProvider {
 public:
 	static const char *Provider();

@@ -23,8 +23,13 @@ duckdb_extension_load(iceberg
 duckdb_extension_statically_link(parquet json iceberg)
 
 if (NOT EMSCRIPTEN)
-  # Use DuckDB's pinned HTTPFS configuration without relying on Make build flags.
-  include("${EXTENSION_CONFIG_BASE_DIR}/httpfs.cmake")
+  # Remote signing needs the SIGNER_URL secret options, which are not in a released HTTPFS yet. Switch back to
+  # DuckDB's pinned configuration, include("${EXTENSION_CONFIG_BASE_DIR}/httpfs.cmake"), once they are.
+  duckdb_extension_load(httpfs
+      LOAD_TESTS
+      GIT_URL https://github.com/wolkwork/duckdb-httpfs
+      GIT_TAG 35ccec6d36929e47a34a1ed7b654c79745eb18fb
+  )
   duckdb_extension_load(tpch)
   duckdb_extension_load(icu)
   duckdb_extension_statically_link(tpch icu httpfs)
