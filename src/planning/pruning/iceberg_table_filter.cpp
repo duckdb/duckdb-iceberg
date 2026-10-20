@@ -165,6 +165,16 @@ bool IcebergTableFilters::FiltersEqual(const ExpressionFilter &left, const Expre
 	return left_copy->Equals(*right_copy);
 }
 
+unique_ptr<ExpressionFilter> IcebergTableFilters::CombineFilters(const ExpressionFilter &left,
+                                                                 const ExpressionFilter &right) {
+	if (left.column_indexes != right.column_indexes) {
+		return nullptr;
+	}
+	auto conjunction =
+	    make_uniq<BoundConjunctionExpression>(ExpressionType::CONJUNCTION_AND, left.expr->Copy(), right.expr->Copy());
+	return make_uniq<ExpressionFilter>(std::move(conjunction), left.column_indexes);
+}
+
 unique_ptr<ExpressionFilter> IcebergTableFilters::GetFilterForColumnIndex(const ColumnIndex &column_index) const {
 	auto filter = TryGetFilterByColumnIndex(column_index);
 	if (!filter && column_index.HasChildren()) {

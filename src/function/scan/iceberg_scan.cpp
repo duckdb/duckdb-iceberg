@@ -99,6 +99,13 @@ static void IcebergSetScanOrder(unique_ptr<RowGroupOrderOptions> order_options, 
 	file_list.GetScanPlanner().SetScanOrder(std::move(order_options));
 }
 
+static unique_ptr<BaseStatistics> IcebergScanColumnStatistics(ClientContext &, const FunctionData *bind_data,
+                                                              column_t column_index) {
+	auto &multi_file_data = bind_data->Cast<MultiFileBindData>();
+	auto &file_list = multi_file_data.file_list->Cast<IcebergMultiFileList>();
+	return file_list.GetScanPlanner().GetColumnStatistics(column_index);
+}
+
 //! FIXME: needs v1.5.1, causes a crash on v1.5.0
 // static bool IcebergScanSupportsPushdownType(const FunctionData &bind_data_p, idx_t column_id) {
 //	// Don't push down filters on the _row_id virtual column
@@ -127,7 +134,9 @@ TableFunctionSet IcebergFunctions::GetIcebergScanFunction(ExtensionLoader &loade
 		function.serialize = IcebergScanSerialize;
 		function.deserialize = IcebergScanDeserialize;
 
-		function.statistics = nullptr;
+		function.statistics = IcebergScanColumnStatistics;
+		// The copied Parquet extended callback takes precedence; clear it so DuckDB uses the Iceberg callback.
+		function.statistics_extended = nullptr;
 		function.table_scan_progress = nullptr;
 		function.get_bind_info = IcebergBindInfo;
 		function.get_table_entry = IcebergGetTableEntry;
