@@ -47,6 +47,7 @@ MIXED_REFRESH_A_TABLE = "vended_mixed_delete_refresh_a"
 MIXED_REFRESH_B_TABLE = "vended_mixed_delete_refresh_b"
 SAME_BAD_TABLE = "vended_same_bad_refresh"
 RANGE_FAIL_TABLE = "vended_range_fail_refresh"
+EXPIRY_TABLE = "vended_expiry_refresh"
 
 OLD_SCAN_KEY = "OLD_SCAN_KEY"
 NEW_SCAN_KEY = "NEW_SCAN_KEY"
@@ -79,6 +80,8 @@ NEW_MIXED_REFRESH_B_KEY = "NEW_MIXED_REFRESH_B_KEY"
 OLD_SAME_BAD_KEY = "OLD_SAME_BAD_KEY"
 OLD_RANGE_FAIL_KEY = "OLD_RANGE_FAIL_KEY"
 NEW_RANGE_FAIL_KEY = "NEW_RANGE_FAIL_KEY"
+EXPIRED_EXPIRY_KEY = "EXPIRED_EXPIRY_KEY"
+NEW_EXPIRY_KEY = "NEW_EXPIRY_KEY"
 
 UPSTREAM_S3_KEY = "admin"
 UPSTREAM_S3_SECRET = "password"
@@ -121,7 +124,11 @@ class VendedCredentialRefreshAddon:
             MIXED_REFRESH_B_TABLE: False,
             SAME_BAD_TABLE: False,
             RANGE_FAIL_TABLE: False,
+            EXPIRY_TABLE: False,
         }
+        self.expiry_key = "s3.session-token-expires-at-ms"
+        self.lifecycle_test = False
+        self.lifecycle_expired = False
         self.table_scan_refresh_path = None
         # Force a rollback if this branch reaches the catalog commit after writing the
         # direct-delete data file. Some fixture versions fail earlier while building metadata.
@@ -235,6 +242,19 @@ class VendedCredentialRefreshAddon:
                 self.refresh_unlocked[INIT_TABLE] = False
                 self.refresh_unlocked[TABLE_SCAN_TABLE] = False
                 self.table_scan_refresh_path = None
+            if "x-credential-expiry" in flow.request.headers:
+                self.expiry_key = self._mode(flow, "x-credential-expiry", self.expiry_key)
+                self.refresh_unlocked[EXPIRY_TABLE] = False
+            self.lifecycle_test = self._mode(flow, "x-credential-lifecycle", "false") == "true"
+            if self.lifecycle_test:
+                self.lifecycle_expired = False
+                self.refresh_unlocked[TABLE_SCAN_TABLE] = False
+                self.table_scan_refresh_path = None
+            return
+
+        if path == "/vended-credentials/expire":
+            self.lifecycle_expired = True
+            flow.response = http.Response.make(200, b"expired", {"Content-Type": "text/plain"})
             return
 
         table_match = re.fullmatch(r"/v1/namespaces/default/tables/([^/]+)", path)
@@ -262,6 +282,8 @@ class VendedCredentialRefreshAddon:
             table = credentials_match.group(1)
             if self._refresh_error(flow, table):
                 return
+            if table == EXPIRY_TABLE:
+                self.refresh_unlocked[table] = True
             response = {}
             self._set_storage_credentials(flow, table, response)
             flow.response = http.Response.make(200, json.dumps(response).encode(), {"Content-Type": "application/json"})
@@ -306,7 +328,11 @@ class VendedCredentialRefreshAddon:
             self.refresh_unlocked[SCAN_TABLE] = True
             self._forbidden(flow, "stale scan credentials")
             return
-        if key_id == INITIAL_TABLE_SCAN_KEY and self._is_data_file_request(flow):
+        if (
+            key_id == INITIAL_TABLE_SCAN_KEY
+            and self._is_data_file_request(flow)
+            and (not self.lifecycle_test or self.lifecycle_expired)
+        ):
             data_path = urllib.parse.urlparse(flow.request.path).path
             if self.table_scan_refresh_path is None:
                 self.table_scan_refresh_path = data_path
@@ -375,6 +401,9 @@ class VendedCredentialRefreshAddon:
         if key_id == NEW_RANGE_FAIL_KEY:
             self._forbidden(flow, "refreshed range-fail credentials")
             return
+        if key_id == EXPIRED_EXPIRY_KEY:
+            self._forbidden(flow, "expired credentials were signed with")
+            return
         if is_delete_post and self._is_mixed_delete_request(flow):
             if not self._validate_mixed_delete_request(flow, key_id):
                 return
@@ -409,6 +438,7 @@ class VendedCredentialRefreshAddon:
             NEW_MIXED_REFRESH_A_KEY,
             NEW_MIXED_REFRESH_B_KEY,
             OLD_RANGE_FAIL_KEY,
+            NEW_EXPIRY_KEY,
         }:
             self._forbidden(flow, "unknown test credentials")
             return
@@ -498,7 +528,7 @@ class VendedCredentialRefreshAddon:
 
     def _credentials_for_table(self, table):
         key_id = self._key_for_table(table)
-        return {
+        credentials = {
             "prefix": self._credentials_prefix(table),
             "config": {
                 "s3.access-key-id": key_id,
@@ -508,8 +538,14 @@ class VendedCredentialRefreshAddon:
                 "s3.path-style-access": "true",
             },
         }
+        if table == EXPIRY_TABLE:
+            now_ms = int(datetime.datetime.now(datetime.timezone.utc).timestamp() * 1000)
+            credentials["config"][self.expiry_key] = str(now_ms + 3600000 if self.refresh_unlocked[table] else 1000)
+        return credentials
 
     def _key_for_table(self, table):
+        if table == EXPIRY_TABLE:
+            return NEW_EXPIRY_KEY if self.refresh_unlocked[table] else EXPIRED_EXPIRY_KEY
         if table == SCAN_TABLE:
             return NEW_SCAN_KEY if self.refresh_unlocked[table] else OLD_SCAN_KEY
         if table == TABLE_SCAN_TABLE:
@@ -544,6 +580,8 @@ class VendedCredentialRefreshAddon:
 
     @staticmethod
     def _credentials_prefix(table):
+        if table == EXPIRY_TABLE:
+            return "s3://warehouse/"
         if table == SCAN_TABLE:
             return "s3://warehouse/"
         if table == TABLE_SCAN_TABLE:
