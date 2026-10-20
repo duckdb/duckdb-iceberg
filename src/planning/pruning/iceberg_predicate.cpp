@@ -402,8 +402,10 @@ static bool MatchBoundsExpression(ClientContext &context, const unique_ptr<Expre
 			if (transform.Type() != IcebergTransformType::IDENTITY) {
 				return true;
 			}
-			//! FilterPrune needs min/max, so an all-NULL file needs this guard
-			if (data.filter && data.filter->IsInitialized() && data.filters_null_values && !stats.has_not_null) {
+			//! FilterPrune needs min/max. Counts or an explicit NULL identity partition
+			//! can prove that every key is NULL even without usable bounds.
+			if (data.filter && data.filter->IsInitialized() && data.filters_null_values &&
+			    (!stats.has_not_null || stats.BoundsAreNull())) {
 				return false;
 			}
 			if (!stats.lower_bound || !stats.upper_bound || stats.lower_bound->IsNull() ||
