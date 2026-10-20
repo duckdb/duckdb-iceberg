@@ -107,9 +107,11 @@ from iceberg_rewrite_data_files(
     min_file_size_bytes => 100,
     max_file_size_bytes => 100
 )
-where rewritten_data_files >= cast(getvariable('old_file_count') as bigint)
-  and added_data_files >= 1
-  and rewritten_bytes > 0;
+where rewritten_data_files_count >= cast(getvariable('old_file_count') as bigint)
+  and added_data_files_count >= 1
+  and rewritten_bytes_count > 0
+  and failed_data_files_count = 0
+  and removed_delete_files_count = 0;
 ----
 1
 
@@ -174,13 +176,13 @@ from (
 0
 
 # Passing the current spec explicitly is accepted and does not rewrite the compacted files.
-query III
+query IIIII
 call iceberg_rewrite_data_files(
     'my_datalake.default.rewrite_partition_spec_evolution',
     output_spec_id => cast(getvariable('output_spec_id') as integer)
 );
 ----
-0	0	0
+0	0	0	0	0
 
 statement ok
 drop table if exists my_datalake.default.rewrite_partition_spec_evolution;

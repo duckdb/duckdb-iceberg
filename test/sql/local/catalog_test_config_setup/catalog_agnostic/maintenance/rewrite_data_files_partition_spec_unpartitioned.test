@@ -36,10 +36,10 @@ WHERE content = 'DATA' AND status <> 'DELETED';
 
 # Neither spec has five files on its own. With an unpartitioned output,
 # they must qualify as one group, even when fewer than five files are retained.
-query III
+query IIIII
 CALL iceberg_rewrite_data_files('my_datalake.default.rewrite_spec_remove_partition', max_files_to_rewrite => 3);
 ----
-3	1	<REGEX>:[1-9][0-9]*
+3	1	<REGEX>:[1-9][0-9]*	0	0
 
 query I
 SELECT count(*) FROM iceberg_metadata('my_datalake.default.rewrite_spec_remove_partition')
@@ -52,10 +52,10 @@ SELECT count(*), sum(payload) FROM my_datalake.default.rewrite_spec_remove_parti
 ----
 5	150
 
-query III
+query IIIII
 CALL iceberg_rewrite_data_files('my_datalake.default.rewrite_spec_remove_partition', rewrite_all => true);
 ----
-3	1	<REGEX>:[1-9][0-9]*
+3	1	<REGEX>:[1-9][0-9]*	0	0
 
 query II
 SELECT s.partition_spec_id, count(*)
@@ -85,10 +85,10 @@ statement ok
 CREATE TABLE my_datalake.default.rewrite_spec_add_partition (a INTEGER, b INTEGER);
 
 # Validate output_spec_id even when there is no snapshot.
-query III
+query IIIII
 CALL iceberg_rewrite_data_files('my_datalake.default.rewrite_spec_add_partition', output_spec_id => 0);
 ----
-0	0	0
+0	0	0	0	0
 
 statement error
 CALL iceberg_rewrite_data_files('my_datalake.default.rewrite_spec_add_partition', output_spec_id => -1);
@@ -105,14 +105,14 @@ statement ok
 ALTER TABLE my_datalake.default.rewrite_spec_add_partition SET PARTITIONED BY (b);
 
 # Two historical files do not meet the default count or byte threshold.
-query III
+query IIIII
 CALL iceberg_rewrite_data_files('my_datalake.default.rewrite_spec_add_partition');
 ----
-0	0	0
+0	0	0	0	0
 
 # The byte threshold can qualify the historical group independently of file count.
 # Passing the current spec explicitly must work for a non-empty rewrite.
-query III
+query IIIII
 CALL iceberg_rewrite_data_files(
     'my_datalake.default.rewrite_spec_add_partition',
     target_file_size_bytes => 100,
@@ -120,7 +120,7 @@ CALL iceberg_rewrite_data_files(
     output_spec_id => 1
 );
 ----
-2	3	<REGEX>:[1-9][0-9]*
+2	3	<REGEX>:[1-9][0-9]*	0	0
 
 query II
 SELECT s.partition_spec_id, count(*)
@@ -180,10 +180,10 @@ statement ok
 ALTER TABLE my_datalake.default.rewrite_spec_dropped_source DROP COLUMN p;
 
 # Historical partition values retain their original schema even when their source is gone.
-query III
+query IIIII
 CALL iceberg_rewrite_data_files('my_datalake.default.rewrite_spec_dropped_source', min_input_files => 2);
 ----
-2	1	<REGEX>:[1-9][0-9]*
+2	1	<REGEX>:[1-9][0-9]*	0	0
 
 query I
 SELECT payload FROM my_datalake.default.rewrite_spec_dropped_source ORDER BY payload;
