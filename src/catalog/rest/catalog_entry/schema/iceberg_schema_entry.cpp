@@ -751,6 +751,11 @@ optional_ptr<CatalogEntry> IcebergSchemaEntry::LookupEntry(CatalogTransaction tr
 	auto &ic_catalog = catalog.Cast<IcebergCatalog>();
 	auto table_entry = GetCatalogSet(type).GetEntry(context, lookup_info);
 	if (!table_entry) {
+		// a schema created in this transaction is not on the server until commit
+		auto &iceberg_transaction = IcebergTransaction::Get(context, catalog);
+		if (iceberg_transaction.created_schemas.Contains(name)) {
+			return nullptr;
+		}
 		// verify the schema exists
 		if (!IRCAPI::VerifySchemaExistence(context, ic_catalog, name)) {
 			// set exists to false here
