@@ -117,3 +117,21 @@ DROP TABLE other_datalake.concurrent_schema.my_table;
 
 statement ok con2
 DROP SCHEMA other_datalake.concurrent_schema;
+
+# a plain create of a schema already being created in the same transaction is an error
+statement ok con1
+begin
+
+statement ok con1
+CREATE SCHEMA IF NOT EXISTS my_datalake.concurrent_schema;
+
+statement ok con1
+CREATE SCHEMA IF NOT EXISTS my_datalake.concurrent_schema;
+
+statement error con1
+CREATE SCHEMA my_datalake.concurrent_schema;
+----
+Schema with name "concurrent_schema" already exists
+
+statement ok con1
+rollback
