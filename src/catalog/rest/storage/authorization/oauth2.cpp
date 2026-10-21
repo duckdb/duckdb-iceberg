@@ -532,6 +532,21 @@ unique_ptr<HTTPResponse> OAuth2Authorization::Request(RequestType request_type, 
 	return response;
 }
 
+void OAuth2Authorization::AddRemoteSignerHeaders(ClientContext &context, case_insensitive_map_t<string> &headers) {
+	string bearer_token;
+	{
+		annotated_lock_guard<annotated_mutex> lock(token_mutex);
+		if (IsTokenExpiredUnlocked(context) && CanRefreshUnlocked()) {
+			RefreshAccessTokenUnlocked(context);
+		}
+		bearer_token = token;
+	}
+	IcebergAuthorization::AddRemoteSignerHeaders(context, headers);
+	if (!bearer_token.empty()) {
+		headers["Authorization"] = StringUtil::Format("Bearer %s", bearer_token);
+	}
+}
+
 void OAuth2Authorization::SetCatalogSecretParameters(CreateSecretFunction &function) {
 	auto &options = IcebergSecretOptions();
 	for (auto &option : options) {

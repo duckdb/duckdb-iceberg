@@ -1,6 +1,7 @@
 #pragma once
 
 #include "duckdb/main/secret/secret.hpp"
+#include "duckdb/common/case_insensitive_map.hpp"
 #include "duckdb/common/http_util.hpp"
 
 #include "iceberg_attach.hpp"
@@ -25,6 +26,9 @@ public:
 	virtual unique_ptr<HTTPResponse> Request(RequestType request_type, ClientContext &context,
 	                                         const IRCEndpointBuilder &endpoint_builder, HTTPHeaders &headers,
 	                                         const string &data = "") = 0;
+	//! Headers that authenticate a request to the catalog's remote signing endpoint. The signer is called by
+	//! httpfs, outside of Request, so they are handed over instead of being applied to a request here.
+	virtual void AddRemoteSignerHeaders(ClientContext &context, case_insensitive_map_t<string> &headers);
 
 public:
 	template <class TARGET>

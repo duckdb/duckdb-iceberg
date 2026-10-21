@@ -9,6 +9,7 @@
 #include "core/metadata/iceberg_table_metadata.hpp"
 #include "catalog/rest/transaction/iceberg_transaction_data.hpp"
 #include "rest_catalog/objects/storage_credential.hpp"
+#include "rest_catalog/objects/remote_signing_config.hpp"
 #include "iceberg_attach.hpp"
 
 namespace duckdb {
@@ -63,9 +64,12 @@ public:
 	                                       const vector<unique_ptr<ParsedExpression>> &sort_keys,
 	                                       const IcebergTableSchema &schema, int32_t sort_order_id);
 	IRCAPITableCredentials GetVendedCredentials(ClientContext &context) const;
-	IRCAPITableCredentials
-	GetVendedCredentials(ClientContext &context, const vector<rest_api_objects::StorageCredential> &storage_credentials,
-	                     optional_ptr<const case_insensitive_map_t<string>> config_override = nullptr) const;
+	IRCAPITableCredentials GetVendedCredentials(
+	    ClientContext &context, const vector<rest_api_objects::StorageCredential> &storage_credentials,
+	    optional_ptr<const case_insensitive_map_t<string>> config_override = nullptr,
+	    optional_ptr<const rest_api_objects::RemoteSigningConfig> remote_signing_override = nullptr) const;
+	//! The endpoint httpfs sends this table's storage requests to for signing
+	string GetRemoteSignerURL(const case_insensitive_map_t<string> &table_config, bool has_remote_signing_config) const;
 	const string &BaseFilePath() const;
 	bool IsRenamed() const;
 
@@ -99,6 +103,7 @@ public:
 	IcebergTableMetadata table_metadata;
 	case_insensitive_map_t<string> config;
 	vector<rest_api_objects::StorageCredential> storage_credentials;
+	optional<rest_api_objects::RemoteSigningConfig> remote_signing_config;
 	unordered_map<int32_t, unique_ptr<IcebergTableSchemaVersion>> schema_versions;
 	// dummy entry to hold existence of a table, but no schema versions
 	unique_ptr<IcebergTableSchemaVersion> dummy_entry;
@@ -110,6 +115,9 @@ private:
 	void ApplyRefreshResult(ClientContext &context, IcebergLoadTableResult result,
 	                        LoadTableCachePublication &publication);
 	void SetLoadTableResult(const rest_api_objects::LoadTableResult &load_table_result);
+	void AddRemoteSigningOptions(ClientContext &context, const case_insensitive_map_t<string> &table_config,
+	                             optional_ptr<const rest_api_objects::RemoteSigningConfig> signing_config,
+	                             case_insensitive_map_t<Value> &options) const;
 
 	//! Unchanged by rename, used to check for a rename
 	const string original_name;

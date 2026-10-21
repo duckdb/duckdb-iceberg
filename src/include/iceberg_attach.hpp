@@ -13,7 +13,7 @@ enum class IcebergEndpointType : uint8_t { AWS_S3TABLES, AWS_GLUE, INVALID };
 
 enum class IcebergAuthorizationType : uint8_t { OAUTH2, SIGV4, NONE, INVALID };
 
-enum class IRCAccessDelegationMode : uint8_t { NONE, VENDED_CREDENTIALS };
+enum class IRCAccessDelegationMode : uint8_t { NONE, VENDED_CREDENTIALS, REMOTE_SIGNING };
 
 //! Whether listing the tables of a schema also resolves their columns.
 //! LAZY surfaces a placeholder entry per table and only loads a table when it is actually referenced.

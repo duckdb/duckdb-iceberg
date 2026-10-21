@@ -273,12 +273,14 @@ static void ParseAttachOptions(IcebergAttachOptions &attach_options, optional<Id
 	if (!access_mode_string.empty()) {
 		if (access_mode_string == "vended_credentials") {
 			attach_options.access_mode = IRCAccessDelegationMode::VENDED_CREDENTIALS;
+		} else if (access_mode_string == "remote_signing") {
+			attach_options.access_mode = IRCAccessDelegationMode::REMOTE_SIGNING;
 		} else if (access_mode_string == "none") {
 			attach_options.access_mode = IRCAccessDelegationMode::NONE;
 		} else {
-			throw InvalidInputException(
-			    "Unrecognized access mode '%s'. Supported options are 'vended_credentials' and 'none'",
-			    access_mode_string);
+			throw InvalidInputException("Unrecognized access mode '%s'. Supported options are 'vended_credentials', "
+			                            "'remote_signing' and 'none'",
+			                            access_mode_string);
 		}
 	}
 }

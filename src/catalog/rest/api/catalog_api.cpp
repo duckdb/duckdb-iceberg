@@ -183,9 +183,7 @@ IcebergLoadTableResult IcebergLoadTableRequest::Execute(ClientContext &context, 
 	url_builder.AddPathComponent(IRCPathComponent::RegularComponent(table_name));
 
 	HTTPHeaders headers(*context.db);
-	if (catalog.attach_options.access_mode == IRCAccessDelegationMode::VENDED_CREDENTIALS) {
-		headers.Insert("X-Iceberg-Access-Delegation", "vended-credentials");
-	}
+	ICUtils::AddAccessDelegationHeader(headers, catalog.attach_options.access_mode);
 	auto result = catalog.auth_handler->Request(RequestType::GET_REQUEST, context, url_builder, headers);
 	IcebergLoadTableResult ret;
 	ret.status_ = result->status;
@@ -216,9 +214,7 @@ static unique_ptr<HTTPResponse> LoadCredentials(ClientContext &context, IcebergC
 	url_builder.AddPathComponent(IRCPathComponent::RegularComponent("credentials"));
 
 	HTTPHeaders headers(*context.db);
-	if (catalog.attach_options.access_mode == IRCAccessDelegationMode::VENDED_CREDENTIALS) {
-		headers.Insert("X-Iceberg-Access-Delegation", "vended-credentials");
-	}
+	ICUtils::AddAccessDelegationHeader(headers, catalog.attach_options.access_mode);
 	return catalog.auth_handler->Request(RequestType::GET_REQUEST, context, url_builder, headers);
 }
 
@@ -231,8 +227,10 @@ APIResult<IRCAPICredentials> IRCAPI::GetTableCredentials(ClientContext &context,
                                                          const IcebergSchemaEntry &schema, const string &table_name) {
 	auto ret = APIResult<IRCAPICredentials>();
 	ret.status_ = HTTPStatusCode::OK_200;
-	if (catalog.supported_urls.find("GET /v1/{prefix}/namespaces/{namespace}/tables/{table}/credentials") ==
-	    catalog.supported_urls.end()) {
+	//! The credentials endpoint has no field for remote signing configuration
+	if (catalog.attach_options.access_mode == IRCAccessDelegationMode::REMOTE_SIGNING ||
+	    catalog.supported_urls.find("GET /v1/{prefix}/namespaces/{namespace}/tables/{table}/credentials") ==
+	        catalog.supported_urls.end()) {
 		auto table_result = GetTable(context, catalog, schema, table_name);
 		if (table_result.error_) {
 			ret.status_ = table_result.status_;
@@ -248,6 +246,9 @@ APIResult<IRCAPICredentials> IRCAPI::GetTableCredentials(ClientContext &context,
 		credentials.config.emplace();
 		if (table_result.result_->config) {
 			*credentials.config = *table_result.result_->config;
+		}
+		if (table_result.result_->remote_signing_config) {
+			credentials.remote_signing_config = table_result.result_->remote_signing_config->Copy();
 		}
 		return ret;
 	}
@@ -284,9 +285,7 @@ IRCAPI::GetNamespace(ClientContext &context, IcebergCatalog &catalog, const Iceb
 	    IRCPathComponent::NamespaceComponent(schema.namespace_items, catalog.namespace_separator));
 
 	HTTPHeaders headers(*context.db);
-	if (catalog.attach_options.access_mode == IRCAccessDelegationMode::VENDED_CREDENTIALS) {
-		headers.Insert("X-Iceberg-Access-Delegation", "vended-credentials");
-	}
+	ICUtils::AddAccessDelegationHeader(headers, catalog.attach_options.access_mode);
 	auto result = catalog.auth_handler->Request(RequestType::GET_REQUEST, context, url_builder, headers);
 
 	if (result->status != HTTPStatusCode::OK_200) {
@@ -331,9 +330,7 @@ IcebergListTablesResult IcebergListTablesRequest::Execute(ClientContext &context
 		}
 
 		HTTPHeaders headers(*context.db);
-		if (catalog.attach_options.access_mode == IRCAccessDelegationMode::VENDED_CREDENTIALS) {
-			headers.Insert("X-Iceberg-Access-Delegation", "vended-credentials");
-		}
+		ICUtils::AddAccessDelegationHeader(headers, catalog.attach_options.access_mode);
 		auto response = catalog.auth_handler->Request(RequestType::GET_REQUEST, context, url_builder, headers);
 		if (!response->Success()) {
 			if (response->status == HTTPStatusCode::NotFound_404) {
@@ -482,9 +479,7 @@ CommitResult IRCAPI::CommitMultiTableUpdate(ClientContext &context, IcebergCatal
 	headers.Insert("Content-Type", "application/json");
 	// Some catalogs (e.g. BigLake) require this header on the commit request itself, not just on
 	// table/credential loads, or they reject the commit with a 400 asking for vended-credentials.
-	if (catalog.attach_options.access_mode == IRCAccessDelegationMode::VENDED_CREDENTIALS) {
-		headers.Insert("X-Iceberg-Access-Delegation", "vended-credentials");
-	}
+	ICUtils::AddAccessDelegationHeader(headers, catalog.attach_options.access_mode);
 	ICUtils::LogPostBody(context, url_builder, body);
 	auto response = catalog.auth_handler->Request(RequestType::POST_REQUEST, context, url_builder, headers, body);
 	return BuildCommitResult(context, response);
@@ -502,9 +497,7 @@ CommitResult IRCAPI::CommitTableUpdate(ClientContext &context, IcebergCatalog &c
 	headers.Insert("Content-Type", "application/json");
 	// Some catalogs (e.g. BigLake) require this header on the commit request itself, not just on
 	// table/credential loads, or they reject the commit with a 400 asking for vended-credentials.
-	if (catalog.attach_options.access_mode == IRCAccessDelegationMode::VENDED_CREDENTIALS) {
-		headers.Insert("X-Iceberg-Access-Delegation", "vended-credentials");
-	}
+	ICUtils::AddAccessDelegationHeader(headers, catalog.attach_options.access_mode);
 	ICUtils::LogPostBody(context, url_builder, body);
 	auto response = catalog.auth_handler->Request(RequestType::POST_REQUEST, context, url_builder, headers, body);
 	return BuildCommitResult(context, response);
@@ -621,9 +614,7 @@ rest_api_objects::LoadTableResult IRCAPI::CommitNewTable(ClientContext &context,
 		HTTPHeaders headers(*context.db);
 		headers.Insert("Content-Type", "application/json");
 		// if you are creating a table with stage create, you need vended credentials
-		if (catalog.attach_options.access_mode == IRCAccessDelegationMode::VENDED_CREDENTIALS) {
-			headers.Insert("X-Iceberg-Access-Delegation", "vended-credentials");
-		}
+		ICUtils::AddAccessDelegationHeader(headers, catalog.attach_options.access_mode);
 		ICUtils::LogPostBody(context, url_builder, create_table_json);
 		auto response =
 		    catalog.auth_handler->Request(RequestType::POST_REQUEST, context, url_builder, headers, create_table_json);
