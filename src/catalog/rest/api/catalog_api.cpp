@@ -469,7 +469,7 @@ void IRCAPI::CommitNamespaceCreate(ClientContext &context, IcebergCatalog &catal
 	LogPostBody(context, url_builder, body);
 	auto response = catalog.auth_handler->Request(RequestType::POST_REQUEST, context, url_builder, headers, body);
 	if (ignore_conflict && response->status == HTTPStatusCode::Conflict_409) {
-		// namespace already exists (AlreadyExistsException), which is fine for CREATE SCHEMA IF NOT EXISTS
+		// namespace already exists
 		return;
 	}
 	if (response->status != HTTPStatusCode::OK_200) {

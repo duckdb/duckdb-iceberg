@@ -573,8 +573,7 @@ void IcebergTransaction::DoSchemaCreates(ClientContext &context) {
 		yyjson_mut_obj_add_obj(doc, root_object, "properties");
 		auto create_body = JsonDocToString(std::move(doc_p));
 
-		// The existence check in CreateSchema happens before commit, so a concurrent transaction may have created
-		// the namespace in the meantime. For IF NOT EXISTS, the server's 409 is then an acceptable outcome.
+		// the namespace may have been created concurrently since CreateSchema checked for it
 		bool ignore_conflict = entry.second == OnCreateConflict::IGNORE_ON_CONFLICT;
 		IRCAPI::CommitNamespaceCreate(context, ic_catalog, create_body, ignore_conflict);
 	}
