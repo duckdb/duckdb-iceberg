@@ -79,11 +79,8 @@ optional_ptr<CatalogEntry> IcebergCatalog::CreateSchema(CatalogTransaction trans
 
 	// the schema is already being created in this transaction
 	auto &iceberg_transaction = IcebergTransaction::Get(*context, *this);
-	if (iceberg_transaction.created_schemas.count(info.schema)) {
-		if (info.on_conflict == OnCreateConflict::IGNORE_ON_CONFLICT) {
-			return &schemas.GetEntry(info.schema);
-		}
-		throw CatalogException("Schema with name \"%s\" already exists", info.schema);
+	if (iceberg_transaction.created_schemas.CheckPending(info.schema, info.on_conflict)) {
+		return &schemas.GetEntry(info.schema);
 	}
 
 	// Verify schema existence on the server first
@@ -108,7 +105,7 @@ optional_ptr<CatalogEntry> IcebergCatalog::CreateSchema(CatalogTransaction trans
 	auto new_schema = make_uniq<IcebergSchemaEntry>(*this, info);
 	auto schema_name = new_schema->name;
 	schemas.AddEntry(schema_name, std::move(new_schema));
-	iceberg_transaction.created_schemas.emplace(info.schema, info.on_conflict);
+	iceberg_transaction.created_schemas.Add(info.schema, info.on_conflict);
 	return &schemas.GetEntry(info.schema);
 }
 

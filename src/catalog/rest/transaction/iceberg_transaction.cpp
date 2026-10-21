@@ -388,7 +388,7 @@ TableTransactionInfo IcebergTransaction::GetTransactionRequest(IcebergTransactio
 }
 
 void IcebergTransaction::Commit() {
-	if (transaction_updates.empty() && created_schemas.empty() && deleted_schemas.empty() &&
+	if (transaction_updates.empty() && created_schemas.Empty() && deleted_schemas.empty() &&
 	    schema_property_updates.empty()) {
 		return;
 	}
@@ -574,12 +574,11 @@ void IcebergTransaction::DoSchemaCreates(ClientContext &context) {
 		auto create_body = JsonDocToString(std::move(doc_p));
 
 		// the namespace may have been created concurrently since CreateSchema checked for it
-		bool created = IRCAPI::CommitNamespaceCreate(context, ic_catalog, create_body);
-		if (!created && entry.second != OnCreateConflict::IGNORE_ON_CONFLICT) {
-			throw CatalogException("Schema with name \"%s\" already exists", schema_name);
+		if (!IRCAPI::CommitNamespaceCreate(context, ic_catalog, create_body)) {
+			created_schemas.OnNamespaceExists(schema_name);
 		}
 	}
-	created_schemas.clear();
+	created_schemas.Clear();
 }
 
 void IcebergTransaction::DoSchemaDeletes(ClientContext &context) {
@@ -620,7 +619,7 @@ void IcebergTransaction::DoSchemaPropertyUpdates(ClientContext &context) {
 
 		IRCAPI::CommitNamespacePropertiesUpdate(context, ic_catalog, create_body, namespace_identifiers);
 	}
-	created_schemas.clear();
+	this->schema_property_updates.clear();
 }
 
 namespace {
