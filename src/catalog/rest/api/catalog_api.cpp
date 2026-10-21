@@ -460,8 +460,7 @@ void IRCAPI::CommitTableRename(ClientContext &context, IcebergCatalog &catalog, 
 	}
 }
 
-void IRCAPI::CommitNamespaceCreate(ClientContext &context, IcebergCatalog &catalog, string body,
-                                   bool ignore_conflict) {
+void IRCAPI::CommitNamespaceCreate(ClientContext &context, IcebergCatalog &catalog, string body, bool ignore_conflict) {
 	auto url_builder = catalog.GetBaseUrl();
 	url_builder.AddPrefixComponent(catalog.prefix, catalog.prefix_is_one_component);
 	url_builder.AddPathComponent(IRCPathComponent::RegularComponent("namespaces"));
