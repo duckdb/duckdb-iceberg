@@ -37,7 +37,6 @@ public:
 		schemas.emplace(name, on_conflict == OnCreateConflict::IGNORE_ON_CONFLICT);
 	}
 
-	//! Called at commit when the namespace already exists on the server
 	void OnNamespaceExists(const string &name) const {
 		auto entry = schemas.find(name);
 		D_ASSERT(entry != schemas.end());
@@ -46,7 +45,6 @@ public:
 		}
 	}
 
-	//! Iterates over the names of the pending schemas
 	unordered_map<string, bool>::const_iterator begin() const {
 		return schemas.begin();
 	}

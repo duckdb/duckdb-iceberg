@@ -573,7 +573,6 @@ void IcebergTransaction::DoSchemaCreates(ClientContext &context) {
 		yyjson_mut_obj_add_obj(doc, root_object, "properties");
 		auto create_body = JsonDocToString(std::move(doc_p));
 
-		// the namespace may have been created concurrently since CreateSchema checked for it
 		if (!IRCAPI::CommitNamespaceCreate(context, ic_catalog, create_body)) {
 			created_schemas.OnNamespaceExists(schema_name);
 		}

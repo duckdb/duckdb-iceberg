@@ -77,7 +77,6 @@ optional_ptr<CatalogEntry> IcebergCatalog::CreateSchema(CatalogTransaction trans
 
 	D_ASSERT(context);
 
-	// the schema is already being created in this transaction
 	auto &iceberg_transaction = IcebergTransaction::Get(*context, *this);
 	if (iceberg_transaction.created_schemas.CheckPending(info.schema, info.on_conflict)) {
 		return &schemas.GetEntry(info.schema);
