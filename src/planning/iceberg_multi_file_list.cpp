@@ -686,7 +686,8 @@ bool IcebergMultiFileList::FileMatchesFilter(const IcebergManifestFile &manifest
 				stats.SetUpperBound(upper_variant);
 			}
 		} else {
-			stats = IcebergPredicateStats::DeserializeBounds(context, lower_bound, upper_bound, column.name, column.type);
+			stats =
+			    IcebergPredicateStats::DeserializeBounds(context, lower_bound, upper_bound, column.name, column.type);
 		}
 
 		int64_t value_count = 0;
