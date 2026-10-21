@@ -56,6 +56,10 @@
     {
       "reason": "Polaris can't handle removals and updates of schema properties in the same request",
       "paths": ["test/sql/local/catalog_test_config_setup/catalog_agnostic/schema_properties/schema_properties_update_transaction.test"]
+    },
+    {
+      "reason": "Polaris rejects creating a table in a namespace created in the same transaction (404 NoSuchNamespace), since the namespace is only created at commit",
+      "paths": ["test/sql/local/catalog_test_config_setup/catalog_agnostic/create/test_create_schema_and_table_in_transaction.test"]
     }
   ]
 }
