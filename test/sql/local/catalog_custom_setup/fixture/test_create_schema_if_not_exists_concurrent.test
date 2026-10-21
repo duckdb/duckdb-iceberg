@@ -84,7 +84,7 @@ CREATE SCHEMA other_datalake.concurrent_schema;
 statement error con1
 commit
 ----
-<REGEX>:.*Conflict_409.*
+Schema with name "concurrent_schema" already exists
 
 statement ok
 DROP SCHEMA my_datalake.concurrent_schema;

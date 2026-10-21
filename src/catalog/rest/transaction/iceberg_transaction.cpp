@@ -574,8 +574,10 @@ void IcebergTransaction::DoSchemaCreates(ClientContext &context) {
 		auto create_body = JsonDocToString(std::move(doc_p));
 
 		// the namespace may have been created concurrently since CreateSchema checked for it
-		bool ignore_conflict = entry.second == OnCreateConflict::IGNORE_ON_CONFLICT;
-		IRCAPI::CommitNamespaceCreate(context, ic_catalog, create_body, ignore_conflict);
+		bool created = IRCAPI::CommitNamespaceCreate(context, ic_catalog, create_body);
+		if (!created && entry.second != OnCreateConflict::IGNORE_ON_CONFLICT) {
+			throw CatalogException("Schema with name \"%s\" already exists", schema_name);
+		}
 	}
 	created_schemas.clear();
 }
