@@ -460,7 +460,8 @@ void IRCAPI::CommitTableRename(ClientContext &context, IcebergCatalog &catalog, 
 	}
 }
 
-void IRCAPI::CommitNamespaceCreate(ClientContext &context, IcebergCatalog &catalog, string body) {
+void IRCAPI::CommitNamespaceCreate(ClientContext &context, IcebergCatalog &catalog, string body,
+                                   bool ignore_conflict) {
 	auto url_builder = catalog.GetBaseUrl();
 	url_builder.AddPrefixComponent(catalog.prefix, catalog.prefix_is_one_component);
 	url_builder.AddPathComponent(IRCPathComponent::RegularComponent("namespaces"));
@@ -468,6 +469,10 @@ void IRCAPI::CommitNamespaceCreate(ClientContext &context, IcebergCatalog &catal
 	headers.Insert("Content-Type", "application/json");
 	LogPostBody(context, url_builder, body);
 	auto response = catalog.auth_handler->Request(RequestType::POST_REQUEST, context, url_builder, headers, body);
+	if (ignore_conflict && response->status == HTTPStatusCode::Conflict_409) {
+		// namespace already exists (AlreadyExistsException), which is fine for CREATE SCHEMA IF NOT EXISTS
+		return;
+	}
 	if (response->status != HTTPStatusCode::OK_200) {
 		throw InvalidConfigurationException(
 		    "Request to '%s' returned a non-200 status code (%s), with reason: %s, body: %s",

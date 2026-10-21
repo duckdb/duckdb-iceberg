@@ -558,7 +558,8 @@ void IcebergTransaction::DoTableDeletes(IcebergTransactionDeleteUpdate &delete_u
 
 void IcebergTransaction::DoSchemaCreates(ClientContext &context) {
 	auto &ic_catalog = catalog.Cast<IcebergCatalog>();
-	for (auto &schema_name : created_schemas) {
+	for (auto &entry : created_schemas) {
+		auto &schema_name = entry.first;
 		auto namespace_identifiers = IRCAPI::ParseSchemaName(schema_name);
 
 		std::unique_ptr<yyjson_mut_doc, YyjsonDocDeleter> doc_p(yyjson_mut_doc_new(nullptr));
@@ -572,7 +573,10 @@ void IcebergTransaction::DoSchemaCreates(ClientContext &context) {
 		yyjson_mut_obj_add_obj(doc, root_object, "properties");
 		auto create_body = JsonDocToString(std::move(doc_p));
 
-		IRCAPI::CommitNamespaceCreate(context, ic_catalog, create_body);
+		// The existence check in CreateSchema happens before commit, so a concurrent transaction may have created
+		// the namespace in the meantime. For IF NOT EXISTS, the server's 409 is then an acceptable outcome.
+		bool ignore_conflict = entry.second == OnCreateConflict::IGNORE_ON_CONFLICT;
+		IRCAPI::CommitNamespaceCreate(context, ic_catalog, create_body, ignore_conflict);
 	}
 	created_schemas.clear();
 }
