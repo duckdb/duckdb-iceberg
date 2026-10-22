@@ -417,7 +417,8 @@ static bool MatchBoundsExpression(ClientContext &context, const unique_ptr<Expre
 			return true;
 		}
 		auto result = ExpressionFilter::CheckExpressionStatistics(&context, expr, *column_stats);
-		return result != FilterPropagateResult::FILTER_ALWAYS_FALSE;
+		return result != FilterPropagateResult::FILTER_ALWAYS_FALSE &&
+		       result != FilterPropagateResult::FILTER_FALSE_OR_NULL;
 	}
 	default:
 		//! Conservative approach: we don't know what this is, just say it doesn't filter anything

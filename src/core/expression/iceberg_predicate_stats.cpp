@@ -10,6 +10,8 @@
 #include "duckdb/storage/statistics/string_stats.hpp"
 #include "iceberg_logging.hpp"
 
+#include <limits>
+
 namespace duckdb {
 
 void IcebergPredicateStats::SetLowerBound(const Value &new_lower_bound) {
@@ -59,18 +61,20 @@ static shared_ptr<BaseStatistics> BuildGeometryStats(const Value &lower_bound, c
 shared_ptr<BaseStatistics> IcebergPredicateStats::BuildColumnStats(const LogicalType &type) const {
 	switch (BaseStatistics::GetStatsType(type)) {
 	case StatisticsType::NUMERIC_STATS: {
-		if (type.id() == LogicalTypeId::FLOAT || type.id() == LogicalTypeId::DOUBLE) {
-			//! Iceberg float bounds exclude NaN, while core zonemaps order NaN as the largest value
-			if (!has_nan || *has_nan) {
-				return nullptr;
-			}
-		}
 		auto stats = NumericStats::CreateEmpty(type);
 		if (lower_bound && !lower_bound->IsNull()) {
 			NumericStats::SetMin(stats, *lower_bound);
 		}
 		if (upper_bound && !upper_bound->IsNull()) {
 			NumericStats::SetMax(stats, *upper_bound);
+		}
+		if (type.id() == LogicalTypeId::FLOAT || type.id() == LogicalTypeId::DOUBLE) {
+			//! Iceberg float bounds exclude NaN, which core zonemaps order as the largest value
+			if (!has_nan || *has_nan) {
+				NumericStats::SetMax(stats, type.id() == LogicalTypeId::FLOAT
+				                                ? Value::FLOAT(std::numeric_limits<float>::quiet_NaN())
+				                                : Value::DOUBLE(std::numeric_limits<double>::quiet_NaN()));
+			}
 		}
 		if (has_null) {
 			stats.SetHasNull();

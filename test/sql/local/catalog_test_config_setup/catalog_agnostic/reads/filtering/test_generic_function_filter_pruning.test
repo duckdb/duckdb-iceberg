@@ -1,5 +1,5 @@
 # name: test/sql/local/catalog_test_config_setup/catalog_agnostic/reads/filtering/test_generic_function_filter_pruning.test
-# description: Generic function-filter pruning trusts float bounds only with a zero NaN count
+# description: Generic function-filter pruning with NaN-aware float bounds and FILTER_FALSE_OR_NULL
 # group: [filtering]
 
 require-env CATALOG_TEST_CONFIG_SETUP
@@ -60,6 +60,36 @@ statement ok
 DROP TABLE my_datalake.default.test_generic_function_pruning;
 
 endloop
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.test_false_or_null_pruning;
+
+statement ok
+CREATE TABLE my_datalake.default.test_false_or_null_pruning (id INTEGER, x INTEGER);
+
+statement ok
+INSERT INTO my_datalake.default.test_false_or_null_pruning VALUES (1, 1), (2, 3), (3, NULL);
+
+statement ok
+INSERT INTO my_datalake.default.test_false_or_null_pruning VALUES (4, 150);
+
+statement ok
+CALL truncate_duckdb_logs();
+
+query I
+SELECT id FROM my_datalake.default.test_false_or_null_pruning
+WHERE x + 1 > 100 AND x + 1 <= 200;
+----
+4
+
+query I
+select count(distinct message) from duckdb_logs()
+where type = 'Iceberg' and message like '%skipped ''data_file''%';
+----
+1
+
+statement ok
+DROP TABLE my_datalake.default.test_false_or_null_pruning;
 
 statement ok
 RESET threads;
