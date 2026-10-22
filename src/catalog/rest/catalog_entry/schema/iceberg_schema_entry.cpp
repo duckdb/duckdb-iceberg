@@ -81,7 +81,7 @@ bool IcebergSchemaEntry::HandleCreateConflict(CatalogTransaction &transaction, C
 optional_ptr<CatalogEntry> IcebergSchemaEntry::CreateTable(CatalogTransaction &transaction, ClientContext &context,
                                                            BoundCreateTableInfo &info) {
 	auto &iceberg_transaction = IcebergTransaction::Get(context, catalog);
-	if (!exists && iceberg_transaction.created_schemas.find(name) == iceberg_transaction.created_schemas.end()) {
+	if (!exists && !iceberg_transaction.created_schemas.Contains(name)) {
 		throw InvalidInputException("Schema with name \"%s\" does not exist", name);
 	}
 	auto &base_info = info.Base();

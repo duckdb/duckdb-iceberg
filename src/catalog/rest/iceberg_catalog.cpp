@@ -77,6 +77,11 @@ optional_ptr<CatalogEntry> IcebergCatalog::CreateSchema(CatalogTransaction trans
 
 	D_ASSERT(context);
 
+	auto &iceberg_transaction = IcebergTransaction::Get(*context, *this);
+	if (iceberg_transaction.created_schemas.CheckPending(info.schema, info.on_conflict)) {
+		return &schemas.GetEntry(info.schema);
+	}
+
 	// Verify schema existence on the server first
 	bool schema_exists = IRCAPI::VerifySchemaExistence(*context, *this, info.schema);
 
@@ -96,11 +101,10 @@ optional_ptr<CatalogEntry> IcebergCatalog::CreateSchema(CatalogTransaction trans
 	}
 
 	// Schema does not exist - create it locally and defer the server creation to commit
-	auto &iceberg_transaction = IcebergTransaction::Get(*context, *this);
 	auto new_schema = make_uniq<IcebergSchemaEntry>(*this, info);
 	auto schema_name = new_schema->name;
 	schemas.AddEntry(schema_name, std::move(new_schema));
-	iceberg_transaction.created_schemas.insert(info.schema);
+	iceberg_transaction.created_schemas.Add(info.schema, info.on_conflict);
 	return &schemas.GetEntry(info.schema);
 }
 

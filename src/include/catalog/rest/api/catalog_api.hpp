@@ -62,7 +62,9 @@ public:
 	                              const string &table_name);
 	static void CommitTableRename(ClientContext &context, IcebergCatalog &catalog, const string &body);
 	static void CommitMultiTableUpdate(ClientContext &context, IcebergCatalog &catalog, const string &body);
-	static void CommitNamespaceCreate(ClientContext &context, IcebergCatalog &catalog, string body);
+	//! returns false if the namespace already exists
+	static bool CommitNamespaceCreate(ClientContext &context, IcebergCatalog &catalog, const string &schema,
+	                                  string body);
 	static void CommitNamespaceDrop(ClientContext &context, IcebergCatalog &catalog,
 	                                const vector<string> &namespace_items);
 	static void CommitNamespacePropertiesUpdate(ClientContext &context, IcebergCatalog &catalog, string body,
