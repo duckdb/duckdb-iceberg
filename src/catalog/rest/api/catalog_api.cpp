@@ -460,7 +460,7 @@ void IRCAPI::CommitTableRename(ClientContext &context, IcebergCatalog &catalog, 
 	}
 }
 
-bool IRCAPI::CommitNamespaceCreate(ClientContext &context, IcebergCatalog &catalog, string body) {
+bool IRCAPI::CommitNamespaceCreate(ClientContext &context, IcebergCatalog &catalog, const string &schema, string body) {
 	auto url_builder = catalog.GetBaseUrl();
 	url_builder.AddPrefixComponent(catalog.prefix, catalog.prefix_is_one_component);
 	url_builder.AddPathComponent(IRCPathComponent::RegularComponent("namespaces"));
@@ -468,7 +468,8 @@ bool IRCAPI::CommitNamespaceCreate(ClientContext &context, IcebergCatalog &catal
 	headers.Insert("Content-Type", "application/json");
 	LogPostBody(context, url_builder, body);
 	auto response = catalog.auth_handler->Request(RequestType::POST_REQUEST, context, url_builder, headers, body);
-	if (response->status == HTTPStatusCode::Conflict_409) {
+	// some catalogs also answer other conflicts with a 409
+	if (response->status == HTTPStatusCode::Conflict_409 && VerifySchemaExistence(context, catalog, schema)) {
 		return false;
 	}
 	if (response->status != HTTPStatusCode::OK_200) {

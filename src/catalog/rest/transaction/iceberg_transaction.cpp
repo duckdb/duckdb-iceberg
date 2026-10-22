@@ -573,7 +573,7 @@ void IcebergTransaction::DoSchemaCreates(ClientContext &context) {
 		yyjson_mut_obj_add_obj(doc, root_object, "properties");
 		auto create_body = JsonDocToString(std::move(doc_p));
 
-		if (!IRCAPI::CommitNamespaceCreate(context, ic_catalog, create_body)) {
+		if (!IRCAPI::CommitNamespaceCreate(context, ic_catalog, schema_name, create_body)) {
 			created_schemas.OnNamespaceExists(schema_name);
 		}
 	}
