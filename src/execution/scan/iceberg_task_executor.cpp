@@ -2,9 +2,11 @@
 
 #include "duckdb/catalog/catalog_entry/table_function_catalog_entry.hpp"
 #include "duckdb/common/multi_file/multi_file_states.hpp"
+#include "duckdb/logging/logger.hpp"
 #include "duckdb/parser/tableref/table_function_ref.hpp"
 #include "planning/iceberg_multi_file_reader.hpp"
 #include "function/scan_planning/iceberg_row_filter.hpp"
+#include "iceberg_logging.hpp"
 #include "duckdb/execution/expression_executor.hpp"
 #include "duckdb/execution/execution_context.hpp"
 #include "duckdb/planner/expression/bound_columnref_expression.hpp"
@@ -30,12 +32,11 @@ struct IcebergTaskLocalState : public LocalTableFunctionState {
 
 struct IcebergTaskScanInfo : public TableFunctionInfo {
 	shared_ptr<IcebergTaskExecutionContext> execution;
-	OpenFileInfo file;
-	IcebergFileScanTask task;
+	vector<IcebergFileScanTask> tasks;
 };
 
-//! The ordinary reader owns mapping and chunk finalization. Only its planner-facing
-//! binding and task lookup are replaced for a materialized single-file task.
+//! The ordinary reader owns mapping, read-ahead and chunk finalization. Only its planner-facing
+//! binding and task lookup are replaced for an already materialized list of Iceberg file tasks.
 struct IcebergTaskReader : public IcebergMultiFileReader {
 	explicit IcebergTaskReader(shared_ptr<TableFunctionInfo> info) : IcebergMultiFileReader(std::move(info)) {
 	}
@@ -46,7 +47,12 @@ struct IcebergTaskReader : public IcebergMultiFileReader {
 
 	shared_ptr<MultiFileList> CreateFileList(ClientContext &, const vector<string> &, const FileGlobInput &) override {
 		auto &info = function_info->Cast<IcebergTaskScanInfo>();
-		return make_shared_ptr<SimpleMultiFileList>(vector<OpenFileInfo> {info.file});
+		vector<OpenFileInfo> files;
+		files.reserve(info.tasks.size());
+		for (auto &task : info.tasks) {
+			files.push_back(IcebergMultiFileReader::FileInfo(task));
+		}
+		return make_shared_ptr<SimpleMultiFileList>(std::move(files));
 	}
 
 	bool Bind(MultiFileOptions &, MultiFileList &, vector<LogicalType> &types, vector<Identifier> &names,
@@ -70,35 +76,54 @@ struct IcebergTaskReader : public IcebergMultiFileReader {
 	                                      const vector<ColumnIndex> &column_ids, optional_ptr<TableFilterSet> filters,
 	                                      ClientContext &context, MultiFileGlobalState &gstate) override {
 		auto &info = function_info->Cast<IcebergTaskScanInfo>();
+		auto file_index = reader_data.reader->file_list_idx.GetIndex();
+		if (file_index >= info.tasks.size()) {
+			throw InternalException("Missing Iceberg task for file-list index %llu", file_index);
+		}
+		auto &task = info.tasks[file_index];
 		auto &execution = *info.execution;
 		IcebergDeleteExecutionContext delete_context {context, FileSystem::GetFileSystem(context),
 		                                              execution.metadata.location, execution.options,
 		                                              execution.metadata};
-		auto deletes =
-		    execution.deletes.ProcessDeletes(delete_context, info.task.original_file_path, info.task.delete_files);
+		auto deletes = execution.deletes.ProcessDeletes(delete_context, task.original_file_path, task.delete_files);
+		//! InitializeTaskReader resolves physical fields and fallback partition constants before
+		//! CreateMapping evaluates these filters. A rejected constant skips the data read safely;
+		//! testing task.partition_constants before resolving the file schema could discard real values.
 		return InitializeTaskReader(reader_data, bind, columns, column_ids, filters, context, gstate,
 		                            execution.metadata.GetSchemas(), execution.metadata.mappings, std::move(deletes),
-		                            info.task.partition_constants);
+		                            task.partition_constants);
 	}
 };
 
 } // namespace
 
 IcebergTaskExecutor::IcebergTaskExecutor(ClientContext &context, shared_ptr<IcebergTaskExecutionContext> execution,
-                                         IcebergFileScanTask task, vector<ColumnIndex> column_indexes_p,
-                                         unique_ptr<Expression> row_filter_p)
-    : column_indexes(std::move(column_indexes_p)), row_filter(std::move(row_filter_p)) {
+                                         vector<IcebergFileScanTask> tasks, vector<ColumnIndex> column_indexes_p,
+                                         const TableFilterSet &table_filters, unique_ptr<Expression> row_filter_p)
+    : column_indexes(std::move(column_indexes_p)), row_filter(std::move(row_filter_p)), filters(table_filters.Copy()) {
+	if (tasks.empty()) {
+		throw InternalException("IcebergTaskExecutor requires at least one file task");
+	}
+	DUCKDB_LOG(context, IcebergLogType, "Iceberg scan tasks executor mode=%s task_count=%llu",
+	           tasks.size() > 1 ? "multi_file" : "single_file", tasks.size());
+
 	auto info = make_shared_ptr<IcebergTaskScanInfo>();
 	info->execution = std::move(execution);
-	info->file = IcebergMultiFileReader::FileInfo(task);
-	info->task = std::move(task);
+	vector<Value> paths;
+	paths.reserve(tasks.size());
+	for (auto &task : tasks) {
+		paths.emplace_back(task.file_path);
+	}
+	info->tasks = std::move(tasks);
+	auto path_list = Value::LIST(LogicalType::VARCHAR, std::move(paths));
 	auto &entry = Catalog::GetEntry<TableFunctionCatalogEntry>(
 	    context, QualifiedName(SYSTEM_CATALOG, DEFAULT_SCHEMA, "parquet_scan"));
-	function = *entry.functions.GetFunctionByArguments(context, {LogicalType::VARCHAR});
+	function = *entry.functions.GetFunctionByArguments(context, {path_list.type()});
 	function.function_info = info;
 	function.get_multi_file_reader = IcebergTaskReader::CreateInstance;
 	function.late_materialization = false;
-	vector<Value> arguments {Value(info->file.path)};
+	vector<Value> arguments;
+	arguments.push_back(std::move(path_list));
 	named_argument_map_t parameters;
 	vector<LogicalType> input_types;
 	vector<Identifier> input_names;
@@ -144,11 +169,12 @@ IcebergTaskExecutor::IcebergTaskExecutor(ClientContext &context, shared_ptr<Iceb
 			    }
 			    expr = make_uniq<BoundReferenceExpression>(expr->GetReturnType(), index);
 		    });
-		//! Remap the extracted filters' target columns to the same scan order for Parquet initialization.
+		//! Incoming table filters already index column_indexes. Appending predicate-only columns
+		//! preserves those positions. Remap descriptor filters and combine them with incoming filters.
 		for (auto &entry : schema_filters) {
 			for (idx_t i = 0; i < column_indexes.size(); i++) {
 				if (column_indexes[i] == ColumnIndex(entry.GetIndex().GetIndex())) {
-					filters.PushFilter(ProjectionIndex(i), entry.TakeFilter());
+					filters->PushFilter(ProjectionIndex(i), entry.TakeFilter());
 					break;
 				}
 			}
@@ -166,7 +192,7 @@ IcebergTaskExecutor::IcebergTaskExecutor(ClientContext &context, shared_ptr<Iceb
 		}
 		scan_types.push_back(types[column.GetPrimaryIndex()]);
 	}
-	TableFunctionInitInput init(bind.get(), column_indexes, {}, &filters);
+	TableFunctionInitInput init(bind.get(), column_indexes, {}, filters.get());
 	global = function.init_global(context, init);
 }
 
@@ -174,7 +200,7 @@ IcebergTaskExecutor::~IcebergTaskExecutor() = default;
 
 unique_ptr<LocalTableFunctionState> IcebergTaskExecutor::InitializeLocal(ExecutionContext &context) {
 	auto result = make_uniq<IcebergTaskLocalState>();
-	TableFunctionInitInput init(bind.get(), column_indexes, {}, &filters);
+	TableFunctionInitInput init(bind.get(), column_indexes, {}, filters.get());
 	result->scanner = function.init_local(context, init, global.get());
 	result->chunk.Initialize(context.client, scan_types);
 	if (row_filter) {

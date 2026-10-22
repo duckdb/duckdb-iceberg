@@ -46,6 +46,302 @@ select id, filename like '%task_data.parquet', file_row_number from iceberg_scan
 2	true	2
 3	true	3
 
+# Multi-file execution must preserve file identity and restart physical row numbers for each file.
+query I
+select current_setting('iceberg_enable_multi_file_scan_tasks')::boolean;
+----
+true
+
+statement ok
+copy (select i::integer id, i::integer*10 value, {'key':i::integer} nested, i::integer dropped
+      from range(10, 12) t(i)) to '{TEST_DIR}/task_multi_data.parquet'
+(format parquet, field_ids {id:1, value:2, nested:{__duckdb_field_id:3, key:4}, dropped:5});
+
+statement ok
+create temp table multi_file_tasks as
+select * from tasks
+union all
+select * replace(
+ '{TEST_DIR}/task_multi_data.parquet' as file_path,
+ (select size from read_blob('{TEST_DIR}/task_multi_data.parquet'))::bigint as file_size_in_bytes,
+ 2::bigint as record_count) from tasks;
+
+statement ok
+call enable_logging('Iceberg');
+
+statement ok
+call truncate_duckdb_logs();
+
+statement ok
+set variable multi_file_task_list_1 = (select list(t order by file_path) from multi_file_tasks t);
+
+query III
+select id,
+       filename = case when id < 10 then '{TEST_DIR}/task_data.parquet'
+                       else '{TEST_DIR}/task_multi_data.parquet' end,
+       file_row_number
+from iceberg_scan_tasks(getvariable('multi_file_task_list_1')) order by id;
+----
+0	true	0
+1	true	1
+2	true	2
+3	true	3
+10	true	0
+11	true	1
+
+query II
+select count(*) filter (where message='Iceberg scan tasks executor mode=multi_file task_count=2'),
+       count(*) filter (where message='Iceberg scan tasks executor mode=single_file task_count=1')
+from duckdb_logs() where type='Iceberg';
+----
+1	0
+
+# An outer filter removes rows without renumbering the surviving physical positions.
+statement ok
+set variable multi_file_task_list_2 = (select list(t order by file_path) from multi_file_tasks t);
+
+query II
+select id, file_row_number from iceberg_scan_tasks(getvariable('multi_file_task_list_2'))
+where id in (0, 2, 10) order by id;
+----
+0	0
+2	2
+10	0
+
+# One identical descriptor residual is bound once and shared by the multi-file executor.
+statement ok
+call truncate_duckdb_logs();
+
+statement ok
+set variable multi_file_task_list_3 = (select list(t order by file_path) from (
+ select *, 'id >= 1'::varchar row_filter from multi_file_tasks
+) t);
+
+query III
+select id,
+       filename = case when id < 10 then '{TEST_DIR}/task_data.parquet'
+                       else '{TEST_DIR}/task_multi_data.parquet' end,
+       file_row_number
+from iceberg_scan_tasks(getvariable('multi_file_task_list_3'))
+where id <= 10 order by id;
+----
+1	true	1
+2	true	2
+3	true	3
+10	true	0
+
+query II
+select count(*) filter (where message='Iceberg scan tasks executor mode=multi_file task_count=2'),
+       count(*) filter (where message='Iceberg scan tasks executor mode=single_file task_count=1')
+from duckdb_logs() where type='Iceberg';
+----
+1	0
+
+# Prepared executions read the batching setting for each execution while preserving exact results.
+statement ok
+set variable prepared_multi_file_task_list = (select list(t order by file_path) from (
+ select *, 'id >= 1'::varchar row_filter from multi_file_tasks
+) t);
+
+statement ok
+prepare prepared_multi_file_setting as
+select id,
+       filename = case when id < 10 then '{TEST_DIR}/task_data.parquet'
+                       else '{TEST_DIR}/task_multi_data.parquet' end,
+       file_row_number
+from iceberg_scan_tasks(getvariable('prepared_multi_file_task_list'))
+where id <= 10 order by id;
+
+statement ok
+call truncate_duckdb_logs();
+
+query III
+execute prepared_multi_file_setting;
+----
+1	true	1
+2	true	2
+3	true	3
+10	true	0
+
+query II
+select count(*) filter (where message='Iceberg scan tasks executor mode=multi_file task_count=2'),
+       count(*) filter (where message='Iceberg scan tasks executor mode=single_file task_count=1')
+from duckdb_logs() where type='Iceberg';
+----
+1	0
+
+statement ok
+set iceberg_enable_multi_file_scan_tasks=false;
+
+statement ok
+call truncate_duckdb_logs();
+
+query III
+execute prepared_multi_file_setting;
+----
+1	true	1
+2	true	2
+3	true	3
+10	true	0
+
+query II
+select count(*) filter (where message='Iceberg scan tasks executor mode=multi_file task_count=2'),
+       count(*) filter (where message='Iceberg scan tasks executor mode=single_file task_count=1')
+from duckdb_logs() where type='Iceberg';
+----
+0	2
+
+statement ok
+set iceberg_enable_multi_file_scan_tasks=true;
+
+# Distinct descriptor residuals retain one-task executors.
+statement ok
+call truncate_duckdb_logs();
+
+statement ok
+set variable multi_file_task_list_4 = (select list(t order by file_path) from (
+ select *, case when file_path='{TEST_DIR}/task_data.parquet' then 'id = 0' else 'id = 11' end::varchar row_filter
+ from multi_file_tasks
+) t);
+
+query I
+select id from iceberg_scan_tasks(getvariable('multi_file_task_list_4')) order by id;
+----
+0
+11
+
+query II
+select count(*) filter (where message='Iceberg scan tasks executor mode=multi_file task_count=2'),
+       count(*) filter (where message='Iceberg scan tasks executor mode=single_file task_count=1')
+from duckdb_logs() where type='Iceberg';
+----
+0	2
+
+# Mixed NULL and non-NULL descriptor residuals also retain one-task executors.
+statement ok
+call truncate_duckdb_logs();
+
+statement ok
+set variable multi_file_task_list_mixed = (select list(t order by file_path) from (
+ select *, case when file_path='{TEST_DIR}/task_data.parquet' then NULL else 'id = 11' end::varchar row_filter
+ from multi_file_tasks
+) t);
+
+query I
+select id from iceberg_scan_tasks(getvariable('multi_file_task_list_mixed')) order by id;
+----
+0
+1
+2
+3
+11
+
+query II
+select count(*) filter (where message='Iceberg scan tasks executor mode=multi_file task_count=2'),
+       count(*) filter (where message='Iceberg scan tasks executor mode=single_file task_count=1')
+from duckdb_logs() where type='Iceberg';
+----
+0	2
+
+# The setting changes batching only; rows remain identical through sequential execution.
+statement ok
+set iceberg_enable_multi_file_scan_tasks=false;
+
+statement ok
+call truncate_duckdb_logs();
+
+statement ok
+set variable multi_file_task_list_5 = (select list(t order by file_path) from multi_file_tasks t);
+
+query III
+select id,
+       filename = case when id < 10 then '{TEST_DIR}/task_data.parquet'
+                       else '{TEST_DIR}/task_multi_data.parquet' end,
+       file_row_number
+from iceberg_scan_tasks(getvariable('multi_file_task_list_5')) order by id;
+----
+0	true	0
+1	true	1
+2	true	2
+3	true	3
+10	true	0
+11	true	1
+
+query II
+select count(*) filter (where message='Iceberg scan tasks executor mode=multi_file task_count=2'),
+       count(*) filter (where message='Iceberg scan tasks executor mode=single_file task_count=1')
+from duckdb_logs() where type='Iceberg';
+----
+0	2
+
+statement ok
+set iceberg_enable_multi_file_scan_tasks=true;
+
+# Filters on reader-produced virtual columns are correct in both execution modes.
+foreach batching true false
+
+statement ok
+set iceberg_enable_multi_file_scan_tasks={batching};
+
+statement ok
+call truncate_duckdb_logs();
+
+statement ok
+set variable virtual_row_filter_tasks = (select list(t order by file_path) from multi_file_tasks t);
+
+query III
+select id,
+       filename = case when id < 10 then '{TEST_DIR}/task_data.parquet'
+                       else '{TEST_DIR}/task_multi_data.parquet' end,
+       file_row_number
+from iceberg_scan_tasks(getvariable('virtual_row_filter_tasks'))
+where file_row_number=1 order by id;
+----
+1	true	1
+11	true	1
+
+query II
+select count(*) filter (where message='Iceberg scan tasks executor mode=multi_file task_count=2') =
+         case when {batching} then 1 else 0 end,
+       count(*) filter (where message='Iceberg scan tasks executor mode=single_file task_count=1') =
+         case when {batching} then 0 else 2 end
+from duckdb_logs() where type='Iceberg';
+----
+true	true
+
+statement ok
+call truncate_duckdb_logs();
+
+statement ok
+set variable virtual_filename_filter_tasks = (select list(t order by file_path) from multi_file_tasks t);
+
+query III
+select id, filename='{TEST_DIR}/task_data.parquet', file_row_number
+from iceberg_scan_tasks(getvariable('virtual_filename_filter_tasks'))
+where filename='{TEST_DIR}/task_data.parquet' order by id;
+----
+0	true	0
+1	true	1
+2	true	2
+3	true	3
+
+query II
+select count(*) filter (where message='Iceberg scan tasks executor mode=multi_file task_count=2') =
+         case when {batching} then 1 else 0 end,
+       count(*) filter (where message='Iceberg scan tasks executor mode=single_file task_count=1') =
+         case when {batching} then 0 else 2 end
+from duckdb_logs() where type='Iceberg';
+----
+true	true
+
+endloop
+
+statement ok
+set iceberg_enable_multi_file_scan_tasks=true;
+
+statement ok
+call disable_logging();
+
 # A physically empty file must also advance to the next task.
 statement ok
 copy (select 0::integer id where false) to '{TEST_DIR}/task_empty.parquet' (format parquet, field_ids {id:1});
@@ -168,10 +464,30 @@ select id from iceberg_scan_tasks(getvariable('scan_task_list_9'));
 statement ok
 set variable scan_task_list_10 = (select list(task) from (select * from equality_tasks union all select * from tasks) task);
 
-query I
-select count(*) from iceberg_scan_tasks(getvariable('scan_task_list_10'));
+statement ok
+call enable_logging('Iceberg');
+
+statement ok
+call truncate_duckdb_logs();
+
+# Pushed outer filters retain private equality-delete keys while every task stays sequential.
+query I rowsort
+select id from iceberg_scan_tasks(getvariable('scan_task_list_10')) where value>=20;
 ----
-5
+2
+3
+3
+
+# Equality deletes force the complete invocation onto one-task executors.
+query II
+select count(*) filter (where message.contains('Iceberg scan tasks executor mode=multi_file')),
+       count(*) filter (where message='Iceberg scan tasks executor mode=single_file task_count=1')
+from duckdb_logs() where type='Iceberg';
+----
+0	2
+
+statement ok
+call disable_logging();
 
 # Missing equality fields are NULL, independent of their initial default.
 statement ok
@@ -223,15 +539,38 @@ select id from iceberg_scan_tasks(getvariable('scan_task_list_13')) order by id;
 3
 
 statement ok
+call enable_logging('Iceberg');
+
+statement ok
+call truncate_duckdb_logs();
+
+statement ok
 set variable scan_task_list_14 = (select list(task) from (select * from position_tasks
  union all select * replace([delete_files[1]] as delete_files) from position_tasks
  union all select * from tasks) task);
 
-# Cached position deletes cannot leak into another task for the same data path.
-query I
-select count(*) from iceberg_scan_tasks(getvariable('scan_task_list_14'));
+# Cached position deletes cannot leak, and pushed filters retain original physical row positions.
+query II rowsort
+select id, file_row_number
+from iceberg_scan_tasks(getvariable('scan_task_list_14'))
+where value>=20;
 ----
-9
+2	2
+2	2
+3	3
+3	3
+3	3
+
+# Any delete descriptor keeps the complete invocation on one-task executors.
+query II
+select count(*) filter (where message.contains('Iceberg scan tasks executor mode=multi_file')),
+       count(*) filter (where message='Iceberg scan tasks executor mode=single_file task_count=1')
+from duckdb_logs() where type='Iceberg';
+----
+0	3
+
+statement ok
+call disable_logging();
 
 statement ok
 set variable scan_task_list_15 = (select list(task) from (select * replace(list_concat(delete_files, delete_files) as delete_files) from position_tasks) task);
@@ -358,6 +697,23 @@ copy (select i::integer id from range(65536) t(i)) to '{TEST_DIR}/task_parallel.
 (format parquet, row_group_size 2048, field_ids {id:1});
 
 statement ok
+copy (select i::integer id from range(65536, 131072) t(i)) to '{TEST_DIR}/task_parallel_second.parquet'
+(format parquet, row_group_size 2048, field_ids {id:1});
+
+statement ok
+create temp table parallel_multi_file_tasks as select t.*, 'id >= 32768 AND id < 98304'::varchar row_filter from (
+ select * replace(
+  '{TEST_DIR}/task_parallel.parquet' as file_path,
+  (select size from read_blob('{TEST_DIR}/task_parallel.parquet'))::bigint as file_size_in_bytes,
+  65536::bigint as record_count) from tasks
+ union all
+ select * replace(
+  '{TEST_DIR}/task_parallel_second.parquet' as file_path,
+  (select size from read_blob('{TEST_DIR}/task_parallel_second.parquet'))::bigint as file_size_in_bytes,
+  65536::bigint as record_count) from tasks
+) t;
+
+statement ok
 copy (select '{TEST_DIR}/task_parallel.parquet'::varchar file_path, i*2048::bigint pos from range(32) t(i))
 to '{TEST_DIR}/task_parallel_pos.parquet' (format parquet, field_ids {file_path:2147483546, pos:2147483545});
 
@@ -390,6 +746,32 @@ loop threads 1 5
 
 statement ok
 set threads={threads};
+
+# A common supported residual is evaluated while workers share one multi-file executor.
+statement ok
+set variable parallel_multi_file_task_list = (select list(t order by file_path) from parallel_multi_file_tasks t);
+
+statement ok
+call enable_logging('Iceberg');
+
+statement ok
+call truncate_duckdb_logs();
+
+query IIII
+select count(*), sum(id), min(id), max(id)
+from iceberg_scan_tasks(getvariable('parallel_multi_file_task_list'));
+----
+65536	4294934528	32768	98303
+
+query II
+select count(*) filter (where message='Iceberg scan tasks executor mode=multi_file task_count=2'),
+       count(*) filter (where message.contains('Iceberg scan tasks executor mode=single_file'))
+from duckdb_logs() where type='Iceberg';
+----
+1	0
+
+statement ok
+call disable_logging();
 
 query II
 select count(*), sum(id) from iceberg_scan_tasks(getvariable('parallel_task_list'));

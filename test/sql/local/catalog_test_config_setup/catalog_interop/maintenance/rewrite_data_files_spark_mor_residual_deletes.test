@@ -54,13 +54,13 @@ where content = 'POSITION_DELETES' and status <> 'DELETED';
 ----
 true
 
-query III
+query IIIII
 call iceberg_rewrite_data_files(
     'my_datalake.default.spark_rewrite_mor_residual_deletes',
     min_input_files => 3
 );
 ----
-<REGEX>:[3-9][0-9]*	<REGEX>:[1-9][0-9]*	<REGEX>:[1-9][0-9]*
+<REGEX>:[3-9][0-9]*	<REGEX>:[1-9][0-9]*	<REGEX>:[1-9][0-9]*	0	0
 
 query I
 select count(*) from my_datalake.default.spark_rewrite_mor_residual_deletes;

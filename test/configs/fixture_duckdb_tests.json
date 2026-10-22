@@ -863,6 +863,12 @@
       ]
     },
     {
+      "reason": "Flaky native spill-accounting assertion: parallel CTAS can leave freed interior block slots in temp files; file sizes include those slots while duckdb_memory reports only live spilled bytes",
+      "paths": [
+        "test/sql/storage/encryption/temp_files/encrypted_temp_file_size_accounting.test"
+      ]
+    },
+    {
       "reason": "DuckDB WAL semantics don't apply to Iceberg",
       "paths": [
         "test/sql/storage/wal/wal_check_constraint.test",

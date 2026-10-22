@@ -31,10 +31,19 @@ insert into my_datalake.default.rewrite_select_probe values (9, 'a', 'a5'), (10,
 statement ok
 insert into my_datalake.default.rewrite_select_probe values (11, 'a', 'a6'), (12, 'b', 'b6');
 
-query III
+query TTTTTT
+DESCRIBE SELECT * FROM iceberg_rewrite_data_files('my_datalake.default.rewrite_select_probe');
+----
+rewritten_data_files_count	BIGINT	YES	NULL	NULL	NULL
+added_data_files_count	BIGINT	YES	NULL	NULL	NULL
+rewritten_bytes_count	BIGINT	YES	NULL	NULL	NULL
+failed_data_files_count	BIGINT	YES	NULL	NULL	NULL
+removed_delete_files_count	BIGINT	YES	NULL	NULL	NULL
+
+query IIIII
 select * from iceberg_rewrite_data_files('my_datalake.default.rewrite_select_probe');
 ----
-12	2	<REGEX>:[1-9][0-9]*
+12	2	<REGEX>:[1-9][0-9]*	0	0
 
 statement ok
 drop table if exists my_datalake.default.rewrite_select_probe;

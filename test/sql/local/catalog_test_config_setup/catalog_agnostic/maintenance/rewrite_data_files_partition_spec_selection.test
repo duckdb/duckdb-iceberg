@@ -43,21 +43,21 @@ SELECT count(*) FROM current_spec_files;
 2
 
 # A historical spec does not bypass the file-size eligibility filter.
-query III
+query IIIII
 CALL iceberg_rewrite_data_files(
     'my_datalake.default.rewrite_spec_groups',
     min_file_size_bytes => 100,
     max_file_size_bytes => 1000000000
 );
 ----
-0	0	0
+0	0	0	0	0
 
 # All five historical files qualify together at the default min_input_files.
 # The two current-spec partitions remain separate and below that threshold.
-query III
+query IIIII
 CALL iceberg_rewrite_data_files('my_datalake.default.rewrite_spec_groups');
 ----
-5	1	<REGEX>:[1-9][0-9]*
+5	1	<REGEX>:[1-9][0-9]*	0	0
 
 query I
 SELECT count(*)
@@ -109,17 +109,17 @@ statement ok
 INSERT INTO my_datalake.default.rewrite_spec_cap VALUES (6, 7);
 
 # Historical and current-spec buckets cannot qualify each other for a partitioned output.
-query III
+query IIIII
 CALL iceberg_rewrite_data_files('my_datalake.default.rewrite_spec_cap');
 ----
-0	0	0
+0	0	0	0	0
 
 # Both groups qualify at min_input_files 2. The current group consumes two slots,
 # leaving only one slot for the historical group.
-query III
+query IIIII
 CALL iceberg_rewrite_data_files('my_datalake.default.rewrite_spec_cap', min_input_files => 2, max_files_to_rewrite => 3);
 ----
-3	1	<REGEX>:[1-9][0-9]*
+3	1	<REGEX>:[1-9][0-9]*	0	0
 
 query I
 SELECT count(*)
@@ -130,10 +130,10 @@ WHERE m.content = 'DATA' AND m.status <> 'DELETED' AND s.partition_spec_id = 0;
 3
 
 # Count all eligible historical files before applying the cap.
-query III
+query IIIII
 CALL iceberg_rewrite_data_files('my_datalake.default.rewrite_spec_cap', min_input_files => 3, max_files_to_rewrite => 1);
 ----
-1	1	<REGEX>:[1-9][0-9]*
+1	1	<REGEX>:[1-9][0-9]*	0	0
 
 query I
 SELECT count(*)
@@ -144,7 +144,7 @@ WHERE m.content = 'DATA' AND m.status <> 'DELETED' AND s.partition_spec_id = 0;
 2
 
 # rewrite_all bypasses both size and count thresholds for every spec.
-query III
+query IIIII
 CALL iceberg_rewrite_data_files(
     'my_datalake.default.rewrite_spec_cap',
     min_file_size_bytes => 100,
@@ -152,7 +152,7 @@ CALL iceberg_rewrite_data_files(
     rewrite_all => true
 );
 ----
-4	1	<REGEX>:[1-9][0-9]*
+4	1	<REGEX>:[1-9][0-9]*	0	0
 
 query II
 SELECT s.partition_spec_id, count(*)

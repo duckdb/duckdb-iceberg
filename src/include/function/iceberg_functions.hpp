@@ -31,6 +31,7 @@ private:
 	static TableFunctionSet GetIcebergHistoryFunction();
 	static TableFunctionSet GetIcebergRefsFunction();
 	static TableFunctionSet GetIcebergPartitionSpecsFunction();
+	static TableFunctionSet GetIcebergPartitionsFunction();
 	static TableFunctionSet GetIcebergScanFunction(ExtensionLoader &loader);
 	static TableFunctionSet GetIcebergMetadataFunction();
 	static TableFunctionSet GetIcebergLoadTableResponseFunction();

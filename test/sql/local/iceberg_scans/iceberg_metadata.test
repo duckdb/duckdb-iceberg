@@ -259,6 +259,36 @@ ORDER BY content;
 0	100	false	NULL	NULL	0
 1	1	true	4	42	NULL
 
+# One row per partition, with the totals of its files
+query IIIIIIIIIII
+SELECT * FROM ICEBERG_PARTITIONS('{WORKING_DIRECTORY}/data/persistent/hive_partitioned_table', ALLOW_MOVED_PATHS=TRUE)
+ORDER BY ALL;
+----
+{'event_date': 2024-01-01, 'event_type': NULL}	0	1	1	928	0	0	0	0	2025-05-09 12:21:11.358	2541674261311761067
+{'event_date': 2024-01-02, 'event_type': NULL}	0	1	1	948	0	0	0	0	2025-05-09 12:21:11.358	2541674261311761067
+{'event_date': 2024-01-03, 'event_type': click}	1	1	1	928	0	0	0	0	2025-05-09 12:21:11.644	5128628767169163501
+{'event_date': 2024-01-03, 'event_type': view}	1	1	1	921	0	0	0	0	2025-05-09 12:21:11.644	5128628767169163501
+{'event_date': 2024-01-04, 'event_type': purchase}	1	1	1	948	0	0	0	0	2025-05-09 12:21:11.644	5128628767169163501
+{'event_date': 2024-01-04, 'event_type': view}	1	1	1	921	0	0	0	0	2025-05-09 12:21:11.644	5128628767169163501
+
+# An unpartitioned table has a single row, without 'partition' and 'spec_id'
+query IIIIIIIII
+SELECT * FROM ICEBERG_PARTITIONS('{WORKING_DIRECTORY}/data/persistent/iceberg/lineitem_iceberg', ALLOW_MOVED_PATHS=TRUE);
+----
+51793	1	1225526	0	0	0	0	2025-05-02 12:21:20.005	2354745328521181395
+
+query II
+SELECT record_count, last_updated_snapshot_id FROM ICEBERG_PARTITIONS('{WORKING_DIRECTORY}/data/persistent/iceberg/lineitem_iceberg', ALLOW_MOVED_PATHS=TRUE, version='1');
+----
+60175	7817332053627255703
+
+# A deletion vector counts as a position delete file
+query III
+SELECT record_count, position_delete_record_count, position_delete_file_count
+FROM ICEBERG_PARTITIONS('{WORKING_DIRECTORY}/data/persistent/moved_deletion_vector_path', ALLOW_MOVED_PATHS=TRUE);
+----
+100	1	1
+
 statement ok
 SET unsafe_enable_version_guessing = true;
 
@@ -310,6 +340,11 @@ select * from iceberg_manifests(memory.main.t1);
 
 statement error
 select * from iceberg_history(memory.main.t1);
+----
+<REGEX>:.*Invalid Input Error.*t1 is not an Iceberg table.*
+
+statement error
+select * from iceberg_partitions(memory.main.t1);
 ----
 <REGEX>:.*Invalid Input Error.*t1 is not an Iceberg table.*
 

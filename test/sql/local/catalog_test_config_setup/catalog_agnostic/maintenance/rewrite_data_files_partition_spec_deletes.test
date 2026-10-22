@@ -37,10 +37,10 @@ WHERE content = 'POSITION_DELETES' AND status <> 'DELETED';
 2
 
 # Only the historical group qualifies; rewrite one of its two files.
-query III
+query IIIII
 CALL iceberg_rewrite_data_files('my_datalake.default.rewrite_spec_deletes', min_input_files => 2, max_files_to_rewrite => 1);
 ----
-1	1	<REGEX>:[1-9][0-9]*
+1	1	<REGEX>:[1-9][0-9]*	0	0
 
 query I
 SELECT count(*)
@@ -58,10 +58,10 @@ SELECT id, ts FROM my_datalake.default.rewrite_spec_deletes ORDER BY id;
 3	2021-05-02 09:00:00
 5	2021-05-01 09:30:00
 
-query III
+query IIIII
 CALL iceberg_rewrite_data_files('my_datalake.default.rewrite_spec_deletes', rewrite_all => true);
 ----
-3	2	<REGEX>:[1-9][0-9]*
+3	2	<REGEX>:[1-9][0-9]*	0	0
 
 query II
 SELECT s.partition_spec_id, count(*)

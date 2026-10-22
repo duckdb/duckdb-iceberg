@@ -1,0 +1,81 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/functions/iceberg_partitions/test_iceberg_partitions.test
+# description: iceberg_partitions returns the file and record totals per partition
+# group: [iceberg_partitions]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require-env SNAPSHOT_HISTORY_SUPPORT
+
+include test/sql/init_requires
+
+statement ok
+drop table if exists my_datalake.default.partitions_evolved;
+
+statement ok
+create table my_datalake.default.partitions_evolved (a INTEGER, b INTEGER);
+
+statement ok
+alter table my_datalake.default.partitions_evolved SET PARTITIONED BY (a);
+
+statement ok
+insert into my_datalake.default.partitions_evolved values (1, NULL), (1, NULL), (2, NULL);
+
+statement ok
+alter table my_datalake.default.partitions_evolved SET PARTITIONED BY (a, b);
+
+statement ok
+insert into my_datalake.default.partitions_evolved values (1, NULL), (1, 10);
+
+statement ok
+delete from my_datalake.default.partitions_evolved where a = 2;
+
+# Files of different specs are different partitions, even when their values are the same
+query IIIIII
+SELECT partition, spec_id, record_count, file_count, position_delete_record_count, position_delete_file_count
+FROM iceberg_partitions(my_datalake.default.partitions_evolved)
+ORDER BY spec_id, partition;
+----
+{'identity_a_1': 1, 'identity_b_2': NULL}	1	2	1	0	0
+{'identity_a_1': 2, 'identity_b_2': NULL}	1	1	1	1	1
+{'identity_a_1': 1, 'identity_b_2': 10}	2	1	1	0	0
+{'identity_a_1': 1, 'identity_b_2': NULL}	2	1	1	0	0
+
+# The last snapshot that added a file to the partition
+query IIII
+SELECT p.spec_id, p.partition, s.operation, p.last_updated_at = s.timestamp_ms
+FROM iceberg_partitions(my_datalake.default.partitions_evolved) p
+JOIN iceberg_snapshots(my_datalake.default.partitions_evolved) s ON p.last_updated_snapshot_id = s.snapshot_id
+ORDER BY p.spec_id, p.partition;
+----
+1	{'identity_a_1': 1, 'identity_b_2': NULL}	append	true
+1	{'identity_a_1': 2, 'identity_b_2': NULL}	delete	true
+2	{'identity_a_1': 1, 'identity_b_2': 10}	append	true
+2	{'identity_a_1': 1, 'identity_b_2': NULL}	append	true
+
+statement ok
+drop table if exists my_datalake.default.partitions_unpartitioned;
+
+statement ok
+create table my_datalake.default.partitions_unpartitioned as select range a from range(10);
+
+statement ok
+insert into my_datalake.default.partitions_unpartitioned select range a from range(5);
+
+# An unpartitioned table has a single row, without 'partition' and 'spec_id'
+query IIIII
+SELECT count(*) OVER (), record_count, file_count, position_delete_file_count, equality_delete_file_count
+FROM iceberg_partitions(my_datalake.default.partitions_unpartitioned);
+----
+1	15	2	0	0
+
+query I
+SELECT count(*) FROM (DESCRIBE SELECT * FROM iceberg_partitions(my_datalake.default.partitions_unpartitioned))
+WHERE column_name IN ('partition', 'spec_id');
+----
+0
+
+statement ok
+drop table my_datalake.default.partitions_evolved;
+
+statement ok
+drop table my_datalake.default.partitions_unpartitioned;

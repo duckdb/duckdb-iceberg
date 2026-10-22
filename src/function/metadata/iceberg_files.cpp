@@ -1,8 +1,7 @@
 #include "duckdb/common/string.hpp"
-#include "duckdb/common/string_util.hpp"
-#include "duckdb/common/types/date.hpp"
 
 #include "function/iceberg_functions.hpp"
+#include "core/metadata/partition/iceberg_partition_struct.hpp"
 #include "common/iceberg_utils.hpp"
 #include "core/expression/iceberg_predicate_stats.hpp"
 #include "core/metadata/iceberg_table_metadata.hpp"
@@ -12,13 +11,6 @@
 #include "planning/metadata_io/manifest_list/bound_iceberg_manifest_list_entry.hpp"
 
 namespace duckdb {
-
-//! A field of the 'partition' struct
-struct IcebergFilesPartitionField {
-	string name;
-	LogicalType type;
-	reference<const IcebergPartitionSpecField> field;
-};
 
 //! A primitive column of the schema
 struct IcebergFilesMetricsField {
@@ -33,7 +25,7 @@ struct IcebergFilesBindData : public TableFunctionData {
 	IcebergOptions options;
 	string table_location;
 	IcebergSnapshotScanInfo snapshot_to_scan;
-	vector<IcebergFilesPartitionField> partition_fields;
+	vector<IcebergPartitionStructField> partition_fields;
 	vector<IcebergFilesMetricsField> metrics_fields;
 };
 
@@ -54,64 +46,6 @@ struct IcebergFilesGlobalState : public GlobalTableFunctionState {
 	//! Assigns inherited first row ids to the entries of the current manifest
 	optional<BoundIcebergManifestListEntry> bound_manifest;
 };
-
-static LogicalType PartitionStructType(const vector<IcebergFilesPartitionField> &partition_fields) {
-	child_list_t<LogicalType> children;
-	for (auto &field : partition_fields) {
-		children.emplace_back(field.name, field.type);
-	}
-	return LogicalType::STRUCT(std::move(children));
-}
-
-//! All partition fields of all specs, matching Iceberg's Partitioning.partitionType
-static vector<IcebergFilesPartitionField> GetPartitionFields(const IcebergTableMetadata &metadata) {
-	auto &schema = metadata.GetLatestSchema();
-	auto &source_to_column_id = schema.GetSourceIdMap();
-
-	//! Newest spec first, so the most recent field names are used
-	vector<reference<const IcebergPartitionSpec>> specs;
-	for (auto &entry : metadata.partition_specs) {
-		specs.push_back(entry.second);
-	}
-	std::sort(specs.begin(), specs.end(),
-	          [](const IcebergPartitionSpec &a, const IcebergPartitionSpec &b) { return a.spec_id > b.spec_id; });
-
-	map<uint64_t, IcebergFilesPartitionField> fields;
-	for (auto &spec : specs) {
-		for (auto &field : spec.get().fields) {
-			//! Fields whose source column is no longer in the schema are left out
-			auto source_it = source_to_column_id.find(field.source_id);
-			if (source_it == source_to_column_id.end()) {
-				continue;
-			}
-			auto &column = IcebergTableSchema::GetFromColumnIndex(schema.columns, source_it->second, 0);
-			auto type = field.transform.GetResultType(column.type);
-			auto existing = fields.find(field.partition_field_id);
-			if (existing == fields.end()) {
-				fields.emplace(field.partition_field_id,
-				               IcebergFilesPartitionField {field.GetPartitionSpecFieldName(), type, field});
-			} else if (existing->second.field.get().transform.Type() == IcebergTransformType::VOID &&
-			           field.transform.Type() != IcebergTransformType::VOID) {
-				//! Fields dropped from v1 tables become void, use the field from before it was dropped
-				existing->second.field = field;
-				existing->second.type = type;
-			}
-		}
-	}
-
-	vector<IcebergFilesPartitionField> result;
-	case_insensitive_set_t names;
-	for (auto &entry : fields) {
-		auto field = std::move(entry.second);
-		//! Fields from different partition specs can share a name, but struct field names have to be unique.
-		if (!names.insert(field.name).second) {
-			field.name = StringUtil::Format("%s_%d", field.name, field.field.get().partition_field_id);
-			names.insert(field.name);
-		}
-		result.push_back(std::move(field));
-	}
-	return result;
-}
 
 static LogicalType ColumnMetricsType(const LogicalType &type) {
 	child_list_t<LogicalType> children;
@@ -162,7 +96,7 @@ static unique_ptr<FunctionData> IcebergFilesBind(ClientContext &context, TableFu
 	bind_data->table_location = std::move(resolved_metadata.table_location);
 	bind_data->metadata = std::move(resolved_metadata.metadata);
 	bind_data->snapshot_to_scan = bind_data->metadata.GetSnapshot(*bind_data->options.snapshot_lookup);
-	bind_data->partition_fields = GetPartitionFields(bind_data->metadata);
+	bind_data->partition_fields = IcebergPartitionStruct::GetFields(bind_data->metadata);
 	for (auto &column : bind_data->metadata.GetLatestSchema().columns) {
 		GetMetricsFields(*column, "", bind_data->metrics_fields);
 	}
@@ -187,7 +121,7 @@ static unique_ptr<FunctionData> IcebergFilesBind(ClientContext &context, TableFu
 
 	if (!bind_data->partition_fields.empty()) {
 		names.emplace_back("partition");
-		return_types.emplace_back(PartitionStructType(bind_data->partition_fields));
+		return_types.emplace_back(IcebergPartitionStruct::GetType(bind_data->partition_fields));
 	}
 
 	names.emplace_back("record_count");
@@ -242,28 +176,6 @@ static unique_ptr<FunctionData> IcebergFilesBind(ClientContext &context, TableFu
 	return_types.emplace_back(ReadableMetricsType(bind_data->metrics_fields));
 
 	return std::move(bind_data);
-}
-
-static Value PartitionValue(const vector<IcebergFilesPartitionField> &partition_fields,
-                            const IcebergDataFile &data_file) {
-	child_list_t<Value> children;
-	for (auto &field : partition_fields) {
-		auto &spec_field = field.field.get();
-		Value value(field.type);
-		for (auto &info : data_file.partition_info) {
-			if (info.field_id != spec_field.partition_field_id || info.value.IsNull()) {
-				continue;
-			}
-			if (spec_field.transform.Type() == IcebergTransformType::DAY) {
-				value = Value::DATE(date_t(info.value.GetValue<int32_t>()));
-			} else {
-				value = info.value.DefaultCastAs(field.type);
-			}
-			break;
-		}
-		children.emplace_back(field.name, std::move(value));
-	}
-	return Value::STRUCT(std::move(children));
 }
 
 //! Map of column id to value, NULL if the file has none
@@ -382,7 +294,7 @@ static void IcebergFilesFunction(ClientContext &context, TableFunctionInput &dat
 		output.data[col++].SetValue(out, Value(data_file.file_format));
 		output.data[col++].SetValue(out, Value::INTEGER(manifest_file.partition_spec_id));
 		if (!bind_data.partition_fields.empty()) {
-			output.data[col++].SetValue(out, PartitionValue(bind_data.partition_fields, data_file));
+			output.data[col++].SetValue(out, IcebergPartitionStruct::GetValue(bind_data.partition_fields, data_file));
 		}
 		output.data[col++].SetValue(out, Value::BIGINT(data_file.record_count));
 		output.data[col++].SetValue(out, Value::BIGINT(data_file.file_size_in_bytes));
