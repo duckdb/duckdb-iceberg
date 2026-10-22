@@ -420,7 +420,7 @@ TableTransactionInfo IcebergTransaction::GetTransactionRequest(IcebergTransactio
 }
 
 void IcebergTransaction::Commit() {
-	if (transaction_updates.empty() && created_schemas.empty() && deleted_schemas.empty() &&
+	if (transaction_updates.empty() && created_schemas.Empty() && deleted_schemas.empty() &&
 	    schema_property_updates.empty()) {
 		// Read-only transactions have no catalog commit work; temporary vended storage secrets
 		// are left to transaction/session cleanup.
@@ -599,7 +599,8 @@ void IcebergTransaction::DoTableDeletes(IcebergTransactionDeleteUpdate &delete_u
 
 void IcebergTransaction::DoSchemaCreates(ClientContext &context) {
 	auto &ic_catalog = catalog.Cast<IcebergCatalog>();
-	for (auto &schema_name : created_schemas) {
+	for (auto &entry : created_schemas) {
+		auto &schema_name = entry.first;
 		auto namespace_identifiers = IRCAPI::ParseSchemaName(schema_name);
 
 		std::unique_ptr<yyjson_mut_doc, YyjsonDocDeleter> doc_p(yyjson_mut_doc_new(nullptr));
@@ -613,9 +614,11 @@ void IcebergTransaction::DoSchemaCreates(ClientContext &context) {
 		yyjson_mut_obj_add_obj(doc, root_object, "properties");
 		auto create_body = JsonDocToString(std::move(doc_p));
 
-		IRCAPI::CommitNamespaceCreate(context, ic_catalog, create_body);
+		if (!IRCAPI::CommitNamespaceCreate(context, ic_catalog, schema_name, create_body)) {
+			created_schemas.OnNamespaceExists(schema_name);
+		}
 	}
-	created_schemas.clear();
+	created_schemas.Clear();
 }
 
 void IcebergTransaction::DoSchemaDeletes(ClientContext &context) {
@@ -656,7 +659,7 @@ void IcebergTransaction::DoSchemaPropertyUpdates(ClientContext &context) {
 
 		IRCAPI::CommitNamespacePropertiesUpdate(context, ic_catalog, create_body, namespace_identifiers);
 	}
-	created_schemas.clear();
+	this->schema_property_updates.clear();
 }
 
 namespace {
