@@ -15,6 +15,7 @@ namespace duckdb {
 void AccountSelectedCandidates(const RewritePlan &plan, RewriteExecutionResult &result) {
 	result.rewritten_data_files = static_cast<int64_t>(plan.selected_candidates.size());
 	result.rewritten_bytes = 0;
+	result.removed_delete_files = static_cast<int64_t>(plan.delete_files_to_remove.size());
 	result.rewritten_candidates.clear();
 	result.rewritten_candidates.reserve(plan.selected_candidates.size());
 	for (auto &candidate : plan.selected_candidates) {
@@ -71,6 +72,10 @@ void CommitRewrite(ClientContext &context, const RewritePlan &plan, RewriteExecu
 	IcebergManifestDeletes deletes;
 	for (auto &cand : result.rewritten_candidates) {
 		deletes.InvalidateFile(cand.file_path);
+	}
+	//! Same invalidation path drops delete-manifest entries. Position delete files have no content offset.
+	for (auto &delete_path : plan.delete_files_to_remove) {
+		deletes.InvalidateFile(delete_path);
 	}
 
 	ApplyTableUpdate(table_info, iceberg_transaction, [&](IcebergTable &tbl) {
