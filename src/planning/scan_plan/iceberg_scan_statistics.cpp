@@ -56,4 +56,19 @@ optional<idx_t> IcebergScanStatistics::ExactRowCount() const {
 	return CountDataRows();
 }
 
+optional<idx_t> IcebergScanStatistics::CountDataFiles() const {
+	idx_t count = 0;
+	for (idx_t i = 0; i < data_manifests.size(); i++) {
+		if (!data_manifest_matches[i]) {
+			continue;
+		}
+		auto &counts = data_manifests[i].entry.GetManifest().counts;
+		if (!counts || !counts->added_files_count || !counts->existing_files_count) {
+			return nullopt;
+		}
+		count += *counts->added_files_count + *counts->existing_files_count;
+	}
+	return count;
+}
+
 } // namespace duckdb

@@ -21,6 +21,10 @@ public:
 		D_ASSERT(table_filters.find(column_idx) == table_filters.end());
 		table_filters[column_idx] = std::move(table_filter);
 	}
+	void ReplaceFilter(const ColumnIndex &column_idx, unique_ptr<ExpressionFilter> table_filter) {
+		D_ASSERT(table_filters.find(column_idx) != table_filters.end());
+		table_filters[column_idx] = std::move(table_filter);
+	}
 	optional_ptr<const ExpressionFilter> TryGetFilterByColumnIndex(const ColumnIndex &column_idx) const {
 		auto entry = table_filters.find(column_idx);
 		if (entry == table_filters.end()) {
@@ -30,6 +34,8 @@ public:
 	}
 	unique_ptr<ExpressionFilter> GetFilterForColumnIndex(const ColumnIndex &column_index) const;
 	static bool FiltersEqual(const ExpressionFilter &left, const ExpressionFilter &right);
+	//! The conjunction of two filters on the same column, or nullptr if their column mappings differ
+	static unique_ptr<ExpressionFilter> CombineFilters(const ExpressionFilter &left, const ExpressionFilter &right);
 
 	iterator begin() { // NOLINT: match stl API
 		return table_filters.begin();

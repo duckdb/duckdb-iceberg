@@ -6,6 +6,10 @@ require-env CATALOG_TEST_CONFIG_SETUP
 
 include test/sql/init_requires
 
+# This test verifies execution-time file pruning through the rewritten bounds.
+statement ok
+SET iceberg_enable_manifest_statistics = false;
+
 statement ok
 drop table if exists my_datalake.default.rewrite_column_stats;
 
@@ -73,3 +77,6 @@ analyzed_plan	<REGEX>:.*Total Files Read: 0.*
 
 statement ok
 drop table if exists my_datalake.default.rewrite_column_stats;
+
+statement ok
+RESET iceberg_enable_manifest_statistics;

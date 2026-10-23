@@ -48,6 +48,7 @@ public:
 public:
 	optional_ptr<const IcebergColumnDefinition> FindColumnByFieldId(int32_t field_id) const;
 	const IcebergTableSchema &GetSchemaFromId(int32_t schema_id) const;
+	optional_ptr<const IcebergTableSchema> TryGetSchemaFromId(int32_t schema_id) const;
 	void ForEachSchema(const std::function<void(const IcebergTableSchema &)> &callback) const;
 	bool IsEmpty() const;
 	IcebergTableSchema &AddSchemaOrGetExisting(shared_ptr<IcebergTableSchema> schema);

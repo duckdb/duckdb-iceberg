@@ -2,6 +2,7 @@
 
 #include "core/expression/iceberg_predicate_stats.hpp"
 #include "core/metadata/schema/iceberg_table_schema.hpp"
+#include "duckdb/common/exception.hpp"
 #include "duckdb/common/numeric_utils.hpp"
 #include "duckdb/logging/logger.hpp"
 #include "duckdb/storage/table/row_group_reorderer.hpp"
@@ -33,6 +34,10 @@ IcebergScanOrder::~IcebergScanOrder() {
 }
 
 void IcebergScanOrder::Set(unique_ptr<RowGroupOrderOptions> new_options) {
+	if (new_options && (new_options->row_group_offset > 0 || new_options->leading_null_group_offset > 0)) {
+		// The optimizer has already reduced the LIMIT offset for these groups, so ignoring them is a wrong result
+		throw InternalException("Iceberg scan order does not support offset-pruned data files");
+	}
 	options = std::move(new_options);
 	applied = false;
 }
