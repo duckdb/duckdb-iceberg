@@ -11,6 +11,7 @@ namespace duckdb {
 
 PhysicalOperator &IcebergCatalog::PlanMergeInto(ClientContext &context, PhysicalPlanGenerator &planner,
                                                 LogicalMergeInto &op, PhysicalOperator &plan) {
+	op.table.Cast<IcebergTableSchemaVersion>().table_info.VerifyWriteEncryptionSupported();
 	// Each delete-producing action participates in the shared collector, including actions that select no rows.
 	idx_t update_delete_count = 0;
 	for (auto &entry : op.actions) {

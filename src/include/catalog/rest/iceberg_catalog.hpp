@@ -203,6 +203,7 @@ public:
 	IcebergAttachOptions attach_options;
 	//! Optionally (user-)provided default schema to use
 	optional<Identifier> default_schema;
+	case_insensitive_map_t<string> catalog_properties;
 
 private:
 	//! Original client selector, used for ATTACH OR REPLACE comparisons.

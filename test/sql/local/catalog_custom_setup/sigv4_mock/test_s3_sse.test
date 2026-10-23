@@ -1,0 +1,113 @@
+# name: test/sql/local/catalog_custom_setup/sigv4_mock/test_s3_sse.test
+# description: Writes are refused when the catalog asks for S3 server-side encryption, and reads refused when it asks for a customer-provided key
+# group: [sigv4_mock]
+
+# Requires: python3 scripts/sigv4_mock_server.py 19130
+require-env SIGV4_MOCK_SERVER_AVAILABLE
+
+include test/sql/init_requires
+
+# Without the check the writes reach S3 and fail with an HTTP error, which must not skip the test
+set ignore_error_messages
+
+statement ok
+CREATE SECRET sse_catalog_secret (
+    TYPE S3,
+    KEY_ID 'catalog_key',
+    SECRET 'catalog_secret',
+    REGION 'us-east-1',
+    SCOPE 'http://127.0.0.1:19130'
+);
+
+# The tables ask for encryption in their LoadTable config or storage credential config
+statement ok
+ATTACH 'sse_tests' AS sse (
+    TYPE ICEBERG,
+    URI 'http://127.0.0.1:19130/sse',
+    AUTHORIZATION_TYPE 'sigv4',
+    SECRET 'sse_catalog_secret',
+    SIGV4_REGION 'us-east-1',
+    SIGV4_SERVICE 'execute-api'
+);
+
+# The catalog asks for encryption in the /v1/config overrides
+statement ok
+ATTACH 'sse_catalog_tests' AS sse_catalog (
+    TYPE ICEBERG,
+    URI 'http://127.0.0.1:19130/sse-catalog',
+    AUTHORIZATION_TYPE 'sigv4',
+    SECRET 'sse_catalog_secret',
+    SIGV4_REGION 'us-east-1',
+    SIGV4_SERVICE 'execute-api'
+);
+
+# Reads are still allowed
+query I
+SELECT count(*) FROM sse.default.table_config;
+----
+0
+
+query I
+SELECT count(*) FROM sse.default.credential_config;
+----
+0
+
+query I
+SELECT count(*) FROM sse_catalog.default.catalog_config;
+----
+0
+
+statement error
+INSERT INTO sse.default.table_config VALUES (1);
+----
+Cannot write to Iceberg table 'table_config': the catalog requests S3 server-side encryption with 's3.sse.type'='kms'
+
+statement error
+DELETE FROM sse.default.table_config;
+----
+'s3.sse.type'='kms'
+
+statement error
+UPDATE sse.default.credential_config SET id = 2;
+----
+'s3.sse.type'='dsse-kms'
+
+statement error
+MERGE INTO sse.default.credential_config t USING (SELECT 1 AS id) s ON t.id = s.id WHEN NOT MATCHED THEN INSERT VALUES (s.id);
+----
+'s3.sse.type'='dsse-kms'
+
+statement error
+INSERT INTO sse_catalog.default.catalog_config VALUES (1);
+----
+'s3.sse.type'='s3'
+
+statement error
+CALL iceberg_rewrite_data_files('sse_catalog.default.catalog_config');
+----
+'s3.sse.type'='s3'
+
+# A customer-provided key is needed to read the files too, so reads are refused as well
+statement error
+SELECT count(*) FROM sse.default.customer_key;
+----
+Cannot read Iceberg table 'customer_key': the catalog requests S3 server-side encryption with 's3.sse.type'='custom'
+
+statement error
+SELECT count(*) FROM iceberg_snapshots('sse.default.customer_key');
+----
+'s3.sse.type'='custom'
+
+statement error
+INSERT INTO sse.default.customer_key VALUES (1);
+----
+Cannot write to Iceberg table 'customer_key'
+
+statement ok
+DETACH sse;
+
+statement ok
+DETACH sse_catalog;
+
+statement ok
+DROP SECRET sse_catalog_secret;

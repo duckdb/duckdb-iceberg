@@ -294,6 +294,7 @@ RewritePlan PlanRewrite(ClientContext &context, RewriteDataFilesPlanInput input)
 		                            input.min_file_size_bytes.value(), input.max_file_size_bytes.value());
 	}
 	plan.table_info = std::move(table_info_ptr);
+	table_info.VerifyWriteEncryptionSupported();
 
 	if (table_metadata.iceberg_version >= 3) {
 		throw NotImplementedException("iceberg_rewrite_data_files does not yet support V3 tables");

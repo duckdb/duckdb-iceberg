@@ -37,21 +37,50 @@ _scope_tables = {
     "mixed_types": ("s3://scope-bucket/table/", ["gs://scope-bucket/table/", "s3://scope-bucket/table/"]),
 }
 
+# Tables whose catalog asks for S3 server-side encryption
+_sse_tables = {
+    "table_config": (
+        "s3://scope-bucket/sse/",
+        ["s3://scope-bucket/sse/"],
+        {"s3.sse.type": "kms", "s3.sse.key": "arn:aws:kms:us-east-1:111122223333:key/test"},
+        {},
+    ),
+    "credential_config": ("s3://scope-bucket/sse/", ["s3://scope-bucket/sse/"], {}, {"s3.sse.type": "dsse-kms"}),
+    # A customer-provided key must also be sent on reads
+    "customer_key": (
+        "s3://scope-bucket/sse/",
+        ["s3://scope-bucket/sse/"],
+        {"s3.sse.type": "custom", "s3.sse.key": "test-customer-key"},
+        {},
+    ),
+}
 
-def _scope_response(path):
+_sse_catalog_tables = {
+    "catalog_config": ("s3://scope-bucket/sse/", ["s3://scope-bucket/sse/"], {}, {}),
+}
+
+# URI path root -> (/v1/config overrides, tables)
+_fixtures = {
+    "/credential-scopes": ({}, {name: (*table, {}, {}) for name, table in _scope_tables.items()}),
+    "/sse": ({}, _sse_tables),
+    "/sse-catalog": ({"s3.sse.type": "s3"}, _sse_catalog_tables),
+}
+
+
+def _scope_response(path, overrides, tables):
     if path == "/v1/config":
-        return {"defaults": {}, "overrides": {}}
+        return {"defaults": {}, "overrides": overrides}
     if path == "/v1/namespaces":
         return {"namespaces": [["default"]]}
     if path == "/v1/namespaces/default":
         return {"namespace": ["default"], "properties": {}}
     if path == "/v1/namespaces/default/tables":
-        return {"identifiers": [{"namespace": ["default"], "name": name} for name in _scope_tables]}
+        return {"identifiers": [{"namespace": ["default"], "name": name} for name in tables]}
     table_name = path.removeprefix("/v1/namespaces/default/tables/")
-    if table_name not in _scope_tables:
+    if table_name not in tables:
         return None
-    location, prefixes = _scope_tables[table_name]
-    return {
+    location, prefixes, table_config, credential_config = tables[table_name]
+    response = {
         "metadata-location": location.rstrip("/") + "/metadata/v1.metadata.json",
         "metadata": {
             "format-version": 2,
@@ -85,11 +114,15 @@ def _scope_response(path):
                     "s3.access-key-id": f"scope_key_{index}",
                     "s3.secret-access-key": "scope_secret",
                     "s3.region": "us-east-1",
+                    **credential_config,
                 },
             }
             for index, prefix in enumerate(prefixes)
         ],
     }
+    if table_config:
+        response["config"] = table_config
+    return response
 
 
 def _record_signing_key(headers):
@@ -120,15 +153,17 @@ class MockCatalogHandler(BaseHTTPRequestHandler):
             return
         _record_signing_key(self.headers)
         path = urlsplit(self.path).path
-        if path.startswith("/credential-scopes/"):
-            response = _scope_response(path.removeprefix("/credential-scopes"))
-            if response is None:
-                self._respond(
-                    404, {"error": {"message": "Unknown scope fixture", "type": "NoSuchTableException", "code": 404}}
-                )
-            else:
-                self._respond(200, response)
-            return
+        for root, (overrides, tables) in _fixtures.items():
+            if path.startswith(root + "/"):
+                response = _scope_response(path.removeprefix(root), overrides, tables)
+                if response is None:
+                    self._respond(
+                        404,
+                        {"error": {"message": "Unknown scope fixture", "type": "NoSuchTableException", "code": 404}},
+                    )
+                else:
+                    self._respond(200, response)
+                return
         if self.path.startswith("/v1/config"):
             self._respond(200, {"defaults": {}, "overrides": {}})
         elif "/namespaces" in self.path:

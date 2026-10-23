@@ -1080,6 +1080,7 @@ PhysicalOperator &IcebergCatalog::PlanInsert(ClientContext &context, PhysicalPla
 		plan = planner.ResolveDefaultsProjection(op, *plan);
 	}
 	auto &table_entry = op.table.Cast<IcebergTableSchemaVersion>();
+	table_entry.table_info.VerifyWriteEncryptionSupported();
 	table_entry.PrepareIcebergScanFromEntry(context);
 
 	auto &irc_transaction = IcebergTransaction::Get(context, *this);

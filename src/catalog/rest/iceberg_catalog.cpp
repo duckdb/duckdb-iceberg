@@ -461,6 +461,11 @@ void IcebergCatalog::Configure(ClientContext &context, const rest_api_objects::C
 	ParsePrefix();
 	namespace_separator = attach_options.namespace_separator;
 
+	catalog_properties = catalog_config.defaults;
+	for (auto &entry : catalog_config.overrides) {
+		catalog_properties[entry.first] = entry.second;
+	}
+
 	supported_urls.clear();
 	if (auto &endpoints = catalog_config.endpoints) {
 		for (auto &endpoint : *endpoints) {
