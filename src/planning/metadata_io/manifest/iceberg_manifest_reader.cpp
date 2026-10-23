@@ -63,7 +63,7 @@ static unordered_map<int32_t, Value> GetBounds(const IntStringMapEntries::ValueE
 			auto &str = value_entry.GetValueUnsafe();
 			value = Value::BLOB(const_data_ptr_cast(str.GetData()), str.GetSize());
 		}
-		parsed_bounds[key_entry.GetValueUnsafe()] = value;
+		parsed_bounds[key_entry.GetValueUnsafe()] = std::move(value);
 	}
 	return parsed_bounds;
 }
@@ -292,7 +292,7 @@ void ManifestReader::ReadChunk(DataChunk &chunk, const map<idx_t, LogicalType> &
 				}
 			}
 		}
-		result.push_back(entry);
+		result.push_back(std::move(entry));
 	}
 }
 
