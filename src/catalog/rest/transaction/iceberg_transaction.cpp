@@ -498,7 +498,7 @@ static bool CommitStateUnknown(const ErrorData &error) {
 }
 
 void IcebergTransaction::Commit() {
-	if (!HasTableUpdate() && created_schemas.empty() && deleted_schemas.empty() && schema_property_updates.empty() &&
+	if (!HasTableUpdate() && created_schemas.Empty() && deleted_schemas.empty() && schema_property_updates.empty() &&
 	    created_views.empty() && deleted_views.empty()) {
 		// Read-only transactions have no catalog commit work; temporary vended storage secrets
 		// are left to transaction/session cleanup.
@@ -507,7 +507,7 @@ void IcebergTransaction::Commit() {
 	// Views use individual REST endpoints, not the atomic table commit endpoint. Validate
 	// the entire write set before any schema, table, or view request can reach the catalog.
 	auto view_operations = created_views.size() + deleted_views.size();
-	if (view_operations && (view_operations > 1 || HasTableUpdate() || !created_schemas.empty() ||
+	if (view_operations && (view_operations > 1 || HasTableUpdate() || !created_schemas.Empty() ||
 	                        !deleted_schemas.empty() || !schema_property_updates.empty())) {
 		CleanupFiles();
 		throw TransactionException("Iceberg REST Catalog cannot commit view changes atomically with other catalog "
@@ -699,8 +699,10 @@ void IcebergTransaction::DoSchemaCreates(ClientContext &context) {
 		request.properties = case_insensitive_map_t<string>();
 		auto create_body = RESTObjectToJSONString(request);
 
-		IRCAPI::CommitNamespaceCreate(context, ic_catalog, create_body);
-		ic_catalog.GetSchemas().AddEntry(schema_name, created_schema.second);
+		if (!IRCAPI::CommitNamespaceCreate(context, ic_catalog, schema_name, create_body)) {
+			created_schemas.OnNamespaceExists(schema_name);
+		}
+		ic_catalog.GetSchemas().AddEntry(schema_name, created_schema.second.entry);
 	}
 }
 

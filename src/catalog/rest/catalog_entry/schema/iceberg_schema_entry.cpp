@@ -108,8 +108,7 @@ optional_ptr<CatalogEntry> IcebergSchemaEntry::CreateTable(CatalogTransaction &t
 	}
 
 	auto &iceberg_transaction = IcebergTransaction::Get(context, catalog);
-	if (!exists && iceberg_transaction.created_schemas.find(name.GetIdentifierName()) ==
-	                   iceberg_transaction.created_schemas.end()) {
+	if (!exists && !iceberg_transaction.created_schemas.Contains(name.GetIdentifierName())) {
 		throw InvalidInputException("Schema with name \"%s\" does not exist", name.GetIdentifierName());
 	}
 	auto &ir_catalog = catalog.Cast<IcebergCatalog>();
@@ -1040,6 +1039,11 @@ optional_ptr<CatalogEntry> IcebergSchemaEntry::LookupEntry(CatalogTransaction tr
 		auto view_entry = GetCatalogSet(type).GetViewEntry(context, lookup_info.GetEntryName());
 		if (view_entry) {
 			return view_entry;
+		}
+		// a schema created in this transaction is not on the server until commit
+		auto &iceberg_transaction = IcebergTransaction::Get(context, catalog);
+		if (iceberg_transaction.created_schemas.Contains(name.GetIdentifierName())) {
+			return nullptr;
 		}
 		// verify the schema exists
 		if (!IRCAPI::VerifySchemaExistence(context, ic_catalog, name.GetIdentifierName())) {
