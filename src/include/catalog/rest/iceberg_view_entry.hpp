@@ -25,6 +25,8 @@ public:
 	const SelectStatement &GetQuery() override;
 	void UpdateBinding(const vector<LogicalType> &types, const vector<Identifier> &names) override;
 	unique_ptr<CatalogEntry> Copy(ClientContext &context) const override;
+	//! Throws when every read of the view being created would be refused
+	static void CheckCreate(CreateViewInfo &info);
 
 private:
 	//! Whether the view's columns come from *

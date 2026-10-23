@@ -1,5 +1,5 @@
 # name: test/sql/local/catalog_test_config_setup/catalog_agnostic/create/test_view_name_resolution.test
-# description: Querying an Iceberg view whose query names a table without its namespace is not supported, since the reader's session could change which table it reads
+# description: Creating or querying an Iceberg view whose query names a table without its namespace is not supported, since the reader's session could change which table it reads
 # group: [create]
 
 require-env CATALOG_TEST_CONFIG_SETUP
@@ -15,13 +15,19 @@ statement ok
 use my_datalake.view_names;
 
 statement ok
-drop view if exists v_base;
-
-statement ok
 drop view if exists v_qualified;
 
 statement ok
 drop view if exists v_cte;
+
+statement ok
+drop view if exists v_subquery_cte;
+
+statement ok
+drop view if exists v_nested_cte;
+
+statement ok
+drop view if exists v_recursive_cte;
 
 statement ok
 drop table if exists vn_base;
@@ -32,8 +38,22 @@ create table vn_base (i integer);
 statement ok
 insert into vn_base values (1);
 
-statement ok
+# The binder would look vn_base up in the reader's session, starting with its temporary tables
+statement error
 create view v_base as select i from vn_base;
+----
+<REGEX>:.*Not implemented Error: Creating Iceberg view 'v_base' is not supported: its query names a table without a namespace.*
+
+# Inside a CTE's body, its own name and the names of CTEs defined after it are table names
+statement error
+create view v_self_cte as with vn_base as (select i + 1 as i from vn_base) select i from vn_base;
+----
+<REGEX>:.*Not implemented Error: Creating Iceberg view 'v_self_cte' is not supported: its query names a table without a namespace.*
+
+statement error
+create view v_later_cte as with a as (select i from vn_base), vn_base as (select 2 as i) select i from a;
+----
+<REGEX>:.*Not implemented Error: Creating Iceberg view 'v_later_cte' is not supported: its query names a table without a namespace.*
 
 statement ok
 create view v_qualified as select i from my_datalake.view_names.vn_base;
@@ -41,11 +61,14 @@ create view v_qualified as select i from my_datalake.view_names.vn_base;
 statement ok
 create view v_cte as with vn_base as (select 3 as i) select i from vn_base;
 
-# The binder would look vn_base up in the reader's session, starting with its temporary tables
-statement error
-select i from v_base;
-----
-<REGEX>:.*Not implemented Error: Querying Iceberg view 'v_base' is not supported: its query names a table without a namespace.*
+statement ok
+create view v_subquery_cte as select i from (with c as (select 4 as i) select i from c);
+
+statement ok
+create view v_nested_cte as with a as (with b as (select 5 as i) select i from b) select i from a;
+
+statement ok
+create view v_recursive_cte as with recursive r as (select 1 as i union all select i + 1 from r where i < 3) select count(*) as n from r;
 
 # A temporary table with the same name doesn't change a view that names the namespace
 statement ok
@@ -56,23 +79,29 @@ select i from v_qualified;
 ----
 1
 
-# A CTE name isn't a table name
+# A CTE name isn't a table name, wherever the CTE is defined
 query I
 select i from v_cte;
 ----
 3
 
+query I
+select i from v_subquery_cte;
+----
+4
+
+query I
+select i from v_nested_cte;
+----
+5
+
+query I
+select n from v_recursive_cte;
+----
+3
+
 statement ok
 drop table temp.main.vn_base;
-
-# The refused view can still be listed and dropped
-query I
-select count(*) from duckdb_views() where database_name = 'my_datalake' and schema_name = 'view_names' and view_name = 'v_base';
-----
-1
-
-statement ok
-drop view v_base;
 
 statement ok
 drop view v_qualified;
@@ -81,4 +110,16 @@ statement ok
 drop view v_cte;
 
 statement ok
+drop view v_subquery_cte;
+
+statement ok
+drop view v_nested_cte;
+
+statement ok
+drop view v_recursive_cte;
+
+statement ok
 drop table vn_base;
+
+statement ok
+drop schema my_datalake.view_names;

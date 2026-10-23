@@ -1,5 +1,5 @@
 # name: test/sql/local/catalog_test_config_setup/catalog_agnostic/create/test_view_star_columns.test
-# description: Querying an Iceberg view that selects * is not supported once its table's columns no longer match the view's columns
+# description: Querying an Iceberg view that selects * is not supported once its table's columns no longer match the view's columns, and creating one whose column list renames the columns of * is not supported
 # group: [create]
 
 require-env CATALOG_TEST_CONFIG_SETUP
@@ -27,7 +27,7 @@ statement ok
 drop view if exists v_join;
 
 statement ok
-drop view if exists v_renamed;
+drop view if exists v_same_names;
 
 statement ok
 drop table if exists vs_moved;
@@ -86,8 +86,20 @@ create view v_added as select * from my_datalake.view_star.vs_added;
 statement ok
 create view v_join as select * from my_datalake.view_star.vs_left l join my_datalake.view_star.vs_right r on l.id = r.id;
 
-statement ok
+# Column names given to * can't be checked against the table's columns later, so that view isn't created
+statement error
 create view v_renamed (x, y) as select * from my_datalake.view_star.vs_renamed;
+----
+<REGEX>:.*Not implemented Error: Creating Iceberg view 'v_renamed' is not supported: its column list renames the columns of \*.*
+
+# A column list that repeats the names * gives renames nothing
+statement ok
+create view v_same_names (a, b) as select * from my_datalake.view_star.vs_renamed;
+
+query II
+select a, b from v_same_names;
+----
+1	2
 
 query II
 select a, b from v_moved;
@@ -112,6 +124,12 @@ select * from v_moved;
 ----
 <REGEX>:.*Not implemented Error: Querying Iceberg view 'v_moved' is not supported: its query selects \*, and column 1 of the query is 'b' where the view stores 'a'.*
 
+# The refused view can still be listed and dropped
+query I
+select count(*) from duckdb_views() where database_name = 'my_datalake' and schema_name = 'view_star' and view_name = 'v_moved';
+----
+1
+
 # A view that names its columns reads them by name
 query II
 select a, b from v_named;
@@ -127,12 +145,6 @@ select * from v_added;
 ----
 1	2	NULL
 
-# Column names given to * can't be checked against the table's columns, so that view is refused too
-statement error
-select * from v_renamed;
-----
-<REGEX>:.*Not implemented Error: Querying Iceberg view 'v_renamed' is not supported: its query selects \*, and column 1 of the query is 'a' where the view stores 'x'.*
-
 statement ok
 drop view v_moved;
 
@@ -146,7 +158,7 @@ statement ok
 drop view v_join;
 
 statement ok
-drop view v_renamed;
+drop view v_same_names;
 
 statement ok
 drop table vs_moved;
@@ -162,3 +174,6 @@ drop table vs_right;
 
 statement ok
 drop table vs_renamed;
+
+statement ok
+drop schema my_datalake.view_star;
