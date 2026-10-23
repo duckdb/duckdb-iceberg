@@ -108,8 +108,7 @@ optional_ptr<CatalogEntry> IcebergSchemaEntry::CreateTable(CatalogTransaction &t
 	}
 
 	auto &iceberg_transaction = IcebergTransaction::Get(context, catalog);
-	if (!exists && iceberg_transaction.created_schemas.find(name.GetIdentifierName()) ==
-	                   iceberg_transaction.created_schemas.end()) {
+	if (!exists && !iceberg_transaction.created_schemas.Contains(name.GetIdentifierName())) {
 		throw InvalidInputException("Schema with name \"%s\" does not exist", name.GetIdentifierName());
 	}
 	auto &ir_catalog = catalog.Cast<IcebergCatalog>();
