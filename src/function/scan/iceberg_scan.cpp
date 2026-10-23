@@ -99,11 +99,14 @@ static void IcebergSetScanOrder(unique_ptr<RowGroupOrderOptions> order_options, 
 	file_list.GetScanPlanner().SetScanOrder(std::move(order_options));
 }
 
-static unique_ptr<BaseStatistics> IcebergScanColumnStatistics(ClientContext &, const FunctionData *bind_data,
-                                                              column_t column_index) {
-	auto &multi_file_data = bind_data->Cast<MultiFileBindData>();
+static unique_ptr<BaseStatistics> IcebergScanColumnStatistics(ClientContext &, TableFunctionGetStatisticsInput &input) {
+	auto &column_index = input.column_index;
+	if (column_index.IsVirtualColumn() || column_index.IsPushdownExtract()) {
+		return nullptr;
+	}
+	auto &multi_file_data = input.bind_data->Cast<MultiFileBindData>();
 	auto &file_list = multi_file_data.file_list->Cast<IcebergMultiFileList>();
-	return file_list.GetScanPlanner().GetColumnStatistics(column_index);
+	return file_list.GetScanPlanner().GetColumnStatistics(column_index.GetPrimaryIndex());
 }
 
 //! FIXME: needs v1.5.1, causes a crash on v1.5.0
@@ -134,9 +137,8 @@ TableFunctionSet IcebergFunctions::GetIcebergScanFunction(ExtensionLoader &loade
 		function.serialize = IcebergScanSerialize;
 		function.deserialize = IcebergScanDeserialize;
 
-		function.statistics = IcebergScanColumnStatistics;
-		// The copied Parquet extended callback takes precedence; clear it so DuckDB uses the Iceberg callback.
-		function.statistics_extended = nullptr;
+		function.statistics = nullptr;
+		function.statistics_extended = IcebergScanColumnStatistics;
 		function.table_scan_progress = nullptr;
 		function.get_bind_info = IcebergBindInfo;
 		function.get_table_entry = IcebergGetTableEntry;
