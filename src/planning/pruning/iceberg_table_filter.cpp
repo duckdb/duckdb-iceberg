@@ -37,18 +37,19 @@ static unique_ptr<Expression> CreateReferenceExpression(const LogicalType &type)
 	return make_uniq<BoundReferenceExpression>(type, 0ULL);
 }
 
-static void AppendColumnPath(const ColumnIndex &column_index, vector<idx_t> &path) {
-	for (auto &child_index : column_index.GetChildIndexes()) {
-		path.push_back(child_index.GetPrimaryIndex());
-		AppendColumnPath(child_index, path);
+static bool TryGetColumnPath(const ColumnIndex &column_index, vector<idx_t> &path) {
+	// GetSourceIdMap stores successive nesting levels as a flat list of child indexes.
+	// These are a single field path, not sibling projections in DuckDB's ColumnIndex representation.
+	if (!column_index.HasPrimaryIndex()) {
+		return false;
 	}
-}
-
-static vector<idx_t> GetColumnPath(const ColumnIndex &column_index) {
-	column_index.VerifySinglePath();
-	vector<idx_t> path;
-	AppendColumnPath(column_index, path);
-	return path;
+	for (auto &child_index : column_index.GetChildIndexes()) {
+		if (!child_index.HasPrimaryIndex() || child_index.HasChildren()) {
+			return false;
+		}
+		path.push_back(child_index.GetPrimaryIndex());
+	}
+	return true;
 }
 
 static bool TryGetFilterPath(const Expression &expr, vector<idx_t> &path) {
@@ -166,6 +167,10 @@ bool IcebergTableFilters::FiltersEqual(const ExpressionFilter &left, const Expre
 }
 
 unique_ptr<ExpressionFilter> IcebergTableFilters::GetFilterForColumnIndex(const ColumnIndex &column_index) const {
+	vector<idx_t> path;
+	if (!TryGetColumnPath(column_index, path)) {
+		return nullptr;
+	}
 	auto filter = TryGetFilterByColumnIndex(column_index);
 	if (!filter && column_index.HasChildren()) {
 		// Filters on struct fields can be registered for the top-level column. The path extraction below ensures
@@ -176,7 +181,6 @@ unique_ptr<ExpressionFilter> IcebergTableFilters::GetFilterForColumnIndex(const 
 		return nullptr;
 	}
 
-	auto path = GetColumnPath(column_index);
 	if (path.empty()) {
 		return filter->Copy();
 	}

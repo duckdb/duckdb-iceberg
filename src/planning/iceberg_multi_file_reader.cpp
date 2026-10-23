@@ -9,6 +9,9 @@
 #include "duckdb/parallel/thread_context.hpp"
 #include "duckdb/parser/tableref/table_function_ref.hpp"
 #include "duckdb/parser/expression/constant_expression.hpp"
+#include "duckdb/parser/expression/function_expression.hpp"
+#include "duckdb/function/scalar/struct_functions.hpp"
+#include "duckdb/planner/expression_binder/constant_binder.hpp"
 #include "duckdb/planner/expression/bound_comparison_expression.hpp"
 #include "duckdb/planner/expression/bound_constant_expression.hpp"
 #include "duckdb/planner/expression/bound_operator_expression.hpp"
@@ -274,26 +277,104 @@ static void ApplyFieldMapping(MultiFileColumnDefinition &col, const vector<Icebe
 	}
 }
 
+static void CollectFieldIds(const vector<MultiFileColumnDefinition> &columns, unordered_set<int32_t> &result) {
+	for (auto &column : columns) {
+		if (!column.identifier.IsNull()) {
+			result.insert(column.GetIdentifierFieldId());
+		}
+		CollectFieldIds(column.children, result);
+	}
+}
+
+//! Return whether a non-NULL partition value proves that this field (and its ancestors) is non-NULL.
+static bool ApplyPartitionDefault(const unordered_map<int32_t, Value> &constants,
+                                  const unordered_set<int32_t> &local_ids, MultiFileColumnDefinition &column) {
+	auto field_id = column.GetIdentifierFieldId();
+	auto value = constants.find(field_id);
+	if (value != constants.end()) {
+		if (!local_ids.count(field_id)) {
+			column.default_expression = ConstantExpression::FromValue(value->second);
+		}
+		return !value->second.IsNull();
+	}
+	if (column.type.id() != LogicalTypeId::STRUCT) {
+		return false;
+	}
+	bool has_value = false;
+	for (auto &child : column.children) {
+		has_value |= ApplyPartitionDefault(constants, local_ids, child);
+	}
+	if (has_value && !local_ids.count(field_id)) {
+		// The whole struct is absent. Its original NULL default would hide the partition values
+		// installed on its children, so construct it using their per-file defaults.
+		vector<unique_ptr<ParsedExpression>> children;
+		for (auto &child : column.children) {
+			auto expression = child.default_expression->Copy();
+			expression->SetAlias(child.name);
+			children.push_back(std::move(expression));
+		}
+		column.default_expression = make_uniq<FunctionExpression>(Identifier(StructPackFun::Name), std::move(children));
+	}
+	return has_value;
+}
+
+static optional<Value> ProjectPartitionDefault(ClientContext &context, const MultiFileColumnDefinition &column,
+                                               const ColumnIndex &index) {
+	auto binder = Binder::CreateBinder(context);
+	binder->SetCanContainNulls(true);
+	ConstantBinder constant_binder(*binder, context, "partition default");
+	auto expression = column.default_expression->Copy();
+	auto type = column.type;
+	auto bound = constant_binder.Bind(expression, &type);
+	auto value = ExpressionExecutor::EvaluateScalar(context, *bound, true);
+	optional_ptr<const ColumnIndex> current = index;
+	while (current->IsPushdownExtract()) {
+		current = current->GetChildIndex(0);
+		if (value.type().id() != LogicalTypeId::STRUCT || !current->HasPrimaryIndex()) {
+			// Semi-structured extraction (e.g. VARIANT) belongs to the normal column mapper.
+			return nullopt;
+		}
+		auto child_index = current->GetPrimaryIndex();
+		auto child_type = StructType::GetChildType(value.type(), child_index);
+		value = value.IsNull() ? Value(child_type) : Value(StructValue::GetChildren(value)[child_index]);
+	}
+	return value;
+}
+
 void IcebergMultiFileReader::ApplyPartitionConstants(const unordered_map<int32_t, Value> &constants,
                                                      MultiFileReaderData &reader_data,
-                                                     const vector<MultiFileColumnDefinition> &global_columns,
-                                                     const vector<ColumnIndex> &global_column_ids) {
-	unordered_set<int32_t> local_ids;
-	for (auto &column : reader_data.reader->columns) {
-		if (!column.identifier.IsNull()) {
-			local_ids.insert(column.GetIdentifierFieldId());
-		}
+                                                     vector<MultiFileColumnDefinition> &scan_columns,
+                                                     const vector<ColumnIndex> &scan_column_ids,
+                                                     ClientContext &context) {
+	if (constants.empty()) {
+		return;
 	}
-	for (idx_t i = 0; i < global_column_ids.size(); i++) {
-		auto &id = global_column_ids[i];
+	unordered_set<int32_t> local_ids;
+	CollectFieldIds(reader_data.reader->columns, local_ids);
+	unordered_set<idx_t> visited;
+	for (idx_t i = 0; i < scan_column_ids.size(); i++) {
+		auto &id = scan_column_ids[i];
 		if (id.IsVirtualColumn()) {
 			continue;
 		}
-		auto &column = global_columns[id.GetPrimaryIndex()];
-		auto field_id = column.GetIdentifierFieldId();
-		auto value = constants.find(field_id);
-		if (!local_ids.count(field_id) && value != constants.end() && !value->second.IsNull()) {
-			reader_data.constant_map.Add(MultiFileGlobalIndex(i), value->second);
+		auto &column = scan_columns[id.GetPrimaryIndex()];
+		if (visited.insert(id.GetPrimaryIndex()).second) {
+			ApplyPartitionDefault(constants, local_ids, column);
+		}
+		// The mapper uses the default of the first missing field. For a pushed-down extraction
+		// through a missing struct, project that default to the scan's result type.
+		optional_ptr<const MultiFileColumnDefinition> current_column = column;
+		optional_ptr<const ColumnIndex> current_index = id;
+		while (current_index->IsPushdownExtract() && current_column->type.id() == LogicalTypeId::STRUCT) {
+			if (!local_ids.count(current_column->GetIdentifierFieldId())) {
+				auto value = ProjectPartitionDefault(context, *current_column, *current_index);
+				if (value) {
+					reader_data.constant_map.Add(MultiFileGlobalIndex(i), *value);
+				}
+				break;
+			}
+			current_index = current_index->GetChildIndex(0);
+			current_column = current_column->children[current_index->GetPrimaryIndex()];
 		}
 	}
 }
@@ -349,7 +430,7 @@ ReaderInitializeType IcebergMultiFileReader::InitializeTaskReader(
 			ApplyFieldMapping(local_column, mappings, root.field_mapping_indexes, context);
 		}
 	}
-	ApplyPartitionConstants(partition_constants, reader_data, scan_columns, scan_column_ids);
+	ApplyPartitionConstants(partition_constants, reader_data, scan_columns, scan_column_ids, context);
 
 	vector<bool> accelerated_files;
 	Value fast_filter_setting;

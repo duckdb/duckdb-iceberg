@@ -1,0 +1,133 @@
+# name: test/sql/local/partitioning/identity/identity_source_missing_edge_cases.test
+# description: Identity partition fallback across files, nested projections, NULLs, defaults, and spec evolution
+# group: [identity]
+
+include test/sql/init_requires
+
+require json
+
+statement ok
+CREATE MACRO direct_scan() AS TABLE
+FROM iceberg_scan('data/persistent/partition_values_missing_edge_cases/default/mixed/metadata/final.metadata.json');
+
+statement ok
+SET VARIABLE identity_tasks = (
+    SELECT list(task) FROM (
+        FROM iceberg_scan_plan('data/persistent/partition_values_missing_edge_cases/default/mixed/metadata/final.metadata.json')
+    ) task
+);
+
+statement ok
+CREATE MACRO planned_scan() AS TABLE FROM iceberg_scan_tasks(getvariable('identity_tasks'));
+
+# Both scan paths must use each file's spec and constants, including explicit NULL values.
+foreach scan direct_scan planned_scan
+
+query ITT
+SELECT id, region, address FROM {scan}() ORDER BY id;
+----
+1	eu	{'country': fr, 'city': paris, 'geo': {'code': 42, 'label': a}}
+2	eu	{'country': fr, 'city': lyon, 'geo': {'code': 42, 'label': b}}
+3	us	{'country': us, 'city': ny, 'geo': {'code': 7, 'label': c}}
+4	NULL	{'country': NULL, 'city': null-city, 'geo': {'code': NULL, 'label': null-code}}
+5	ap	{'country': jp, 'city': tokyo, 'geo': {'code': 9, 'label': d}}
+6	NULL	NULL
+7	eu	{'country': fr, 'city': unknown-city, 'geo': {'code': 84, 'label': unknown-label}}
+8	eu	{'country': it, 'city': rome, 'geo': {'code': 12, 'label': unknown-label}}
+9	unknown-region	{'country': unknown-country, 'city': default-city, 'geo': {'code': -1, 'label': default-code}}
+10	de	{'country': de, 'city': berlin, 'geo': {'code': 16, 'label': e}}
+11	NULL	NULL
+
+# Projecting only a partition source exercises struct-extract pushdown, including missing ancestors.
+query T
+SELECT address.country FROM {scan}() ORDER BY id;
+----
+fr
+fr
+us
+NULL
+jp
+NULL
+fr
+it
+unknown-country
+de
+NULL
+
+query I
+SELECT address.geo.code FROM {scan}() ORDER BY id;
+----
+42
+42
+7
+NULL
+9
+NULL
+84
+12
+-1
+16
+NULL
+
+# A nested struct projection must include both partition and ordinary default values.
+query T
+SELECT address.geo FROM {scan}() WHERE id IN (7, 8) ORDER BY id;
+----
+{'code': 84, 'label': unknown-label}
+{'code': 12, 'label': unknown-label}
+
+# Filters must agree with projection, even when every projected field is absent from the file.
+query II
+SELECT count(*), sum(id) FROM {scan}() WHERE address.country = 'fr';
+----
+3	10
+
+query II
+SELECT count(*), sum(id) FROM {scan}() WHERE address.geo.code = 84;
+----
+1	7
+
+query II
+SELECT count(*), sum(id) FROM {scan}() WHERE region IS NULL;
+----
+3	21
+
+query II
+SELECT count(*), sum(id) FROM {scan}() WHERE address.country IS NULL AND address.geo.code IS NULL;
+----
+3	21
+
+query I
+SELECT id FROM {scan}() WHERE address IS NULL ORDER BY id;
+----
+6
+11
+
+# No identity source in the evolved spec: keep the schema default instead of inferring it from a bucket.
+query I
+SELECT id FROM {scan}() WHERE region = 'unknown-region' AND address.country = 'unknown-country';
+----
+9
+
+query IT
+SELECT count(*), min(extra) FROM {scan}();
+----
+11	unpartitioned-default
+
+endloop
+
+# Planning a nested row filter must use the same field paths and preserve it when executing the tasks.
+statement ok
+SET VARIABLE filtered_identity_tasks = (
+    SELECT list(task) FROM (
+        FROM iceberg_scan_plan(
+            'data/persistent/partition_values_missing_edge_cases/default/mixed/metadata/final.metadata.json',
+            row_filter = 'address.geo.code = 84 AND address.country = ''fr'''
+        )
+    ) task
+);
+
+query II
+SELECT id, address.geo.code FROM iceberg_scan_tasks(getvariable('filtered_identity_tasks'));
+----
+7	84

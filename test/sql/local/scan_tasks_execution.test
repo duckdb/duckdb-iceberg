@@ -411,11 +411,25 @@ select id, part from iceberg_scan_tasks(getvariable('scan_task_list_6'));
 statement ok
 set variable scan_task_list_7 = (select list(task) from (select * replace({'6':NULL::varchar} as partition_constants) from tasks) task);
 
-# Null partition constants preserve normal missing-column defaults.
+# An explicit NULL identity partition value takes precedence over the missing column's initial default.
 query T
 select distinct part from iceberg_scan_tasks(getvariable('scan_task_list_7'));
 ----
-fallback
+NULL
+
+# Partition fallback must not overwrite a physically stored NULL.
+statement ok
+copy (select 8::integer id, NULL::varchar part) to '{TEST_DIR}/task_physical_null.parquet'
+(format parquet, field_ids {id:1, part:6});
+
+statement ok
+set variable scan_task_physical_null = (select list(task) from (select * replace('{TEST_DIR}/task_physical_null.parquet' as file_path,
+ (select size from read_blob('{TEST_DIR}/task_physical_null.parquet'))::bigint as file_size_in_bytes) from tasks) task);
+
+query IT
+select id, part from iceberg_scan_tasks(getvariable('scan_task_physical_null'));
+----
+8	NULL
 
 # Files without field IDs use historical names from the mapping tree.
 statement ok
