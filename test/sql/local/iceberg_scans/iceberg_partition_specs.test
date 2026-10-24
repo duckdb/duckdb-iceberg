@@ -28,11 +28,11 @@ FROM iceberg_partition_specs('{WORKING_DIRECTORY}/data/persistent/timestamptz_ns
 0	1002	val_day	day	val
 0	1003	val_hour	hour	val
 
-# an unpartitioned table has no partition fields
-query I
-SELECT count(*) FROM iceberg_partition_specs('{WORKING_DIRECTORY}/data/persistent/iceberg/lineitem_iceberg');
+# an unpartitioned table emits one row with NULLs so spec_id and is_default are visible
+query IIIIIII
+SELECT * FROM iceberg_partition_specs('{WORKING_DIRECTORY}/data/persistent/iceberg/lineitem_iceberg');
 ----
-0
+0	true	NULL	NULL	NULL	NULL	NULL
 
 statement ok
 create table t1 as select range a from range(10);

@@ -1,3 +1,5 @@
+#include <algorithm>
+
 #include "duckdb/main/client_context.hpp"
 
 #include "function/iceberg_functions.hpp"
@@ -10,15 +12,16 @@ namespace duckdb {
 struct IcebergPartitionSpecEntry {
 	int32_t spec_id;
 	bool is_default;
-	int64_t field_id;
-	string name;
-	string transform;
-	int64_t source_id;
-	//! NULL when no schema has the source column
+	//! NULL for an unpartitioned spec
+	Value field_id;
+	Value name;
+	Value transform;
+	Value source_id;
+	//! NULL when no schema has the source column, or for an unpartitioned spec
 	Value source_column;
 };
 
-//! One entry per partition field of every spec, ordered by spec id; an unpartitioned spec has no fields
+//! One entry per partition field of every spec, ordered by spec id; an unpartitioned spec emits one row with NULLs
 static vector<IcebergPartitionSpecEntry> GetPartitionSpecFields(const IcebergTableMetadata &metadata) {
 	vector<int32_t> spec_ids;
 	for (auto &entry : metadata.GetPartitionSpecs()) {
@@ -30,15 +33,24 @@ static vector<IcebergPartitionSpecEntry> GetPartitionSpecFields(const IcebergTab
 	vector<IcebergPartitionSpecEntry> result;
 	for (auto spec_id : spec_ids) {
 		auto &spec = metadata.GetPartitionSpecs().at(spec_id);
-		for (auto &field : spec.fields) {
-			//! The current name of the source column, or its last name if it has since been dropped
+		bool is_default = spec_id == metadata.default_spec_id;
+		if (spec.GetFields().empty()) {
+			//! An unpartitioned spec: one row so spec_id and is_default are always visible
+			result.push_back(IcebergPartitionSpecEntry {spec_id, is_default, Value(LogicalType::BIGINT),
+			                                            Value(LogicalType::VARCHAR), Value(LogicalType::VARCHAR),
+			                                            Value(LogicalType::BIGINT), Value(LogicalType::VARCHAR)});
+			continue;
+		}
+		for (auto &field : spec.GetFields()) {
+			//! The source column name from the current schema, or from an earlier schema if the column has been dropped
 			auto column = current_schema.TryGetColumnByFieldId(field.source_id);
 			if (!column) {
 				column = metadata.FindColumnByFieldId(static_cast<int32_t>(field.source_id));
 			}
 			result.push_back(IcebergPartitionSpecEntry {
-			    spec_id, spec_id == metadata.default_spec_id, static_cast<int64_t>(field.partition_field_id),
-			    field.GetPartitionSpecFieldName(), field.transform.RawType(), static_cast<int64_t>(field.source_id),
+			    spec_id, is_default, Value::BIGINT(static_cast<int64_t>(field.partition_field_id)),
+			    Value(field.GetPartitionSpecFieldName()), Value(field.transform.RawType()),
+			    Value::BIGINT(static_cast<int64_t>(field.source_id)),
 			    column ? Value(column->name) : Value(LogicalType::VARCHAR)});
 		}
 	}
@@ -105,10 +117,10 @@ static void IcebergPartitionSpecsFunction(ClientContext &context, TableFunctionI
 		idx_t col = 0;
 		output.data[col++].SetValue(out, Value::INTEGER(field.spec_id));
 		output.data[col++].SetValue(out, Value::BOOLEAN(field.is_default));
-		output.data[col++].SetValue(out, Value::BIGINT(field.field_id));
-		output.data[col++].SetValue(out, Value(field.name));
-		output.data[col++].SetValue(out, Value(field.transform));
-		output.data[col++].SetValue(out, Value::BIGINT(field.source_id));
+		output.data[col++].SetValue(out, field.field_id);
+		output.data[col++].SetValue(out, field.name);
+		output.data[col++].SetValue(out, field.transform);
+		output.data[col++].SetValue(out, field.source_id);
 		output.data[col++].SetValue(out, field.source_column);
 		out++;
 	}
