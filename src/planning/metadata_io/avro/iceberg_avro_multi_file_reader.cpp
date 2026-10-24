@@ -714,6 +714,7 @@ shared_ptr<MultiFileList> IcebergAvroMultiFileReader::CreateFileList(ClientConte
 		open_files.emplace_back(paths[0]);
 		auto &file_info = open_files.back();
 		file_info.extended_info = make_uniq<ExtendedOpenFileInfo>();
+		file_info.extended_info->credentials = scan_info->metadata.credentials;
 		file_info.extended_info->options["validate_external_file_cache"] = Value::BOOLEAN(false);
 		file_info.extended_info->options["force_full_download"] = Value::BOOLEAN(true);
 		file_info.extended_info->options["etag"] = Value("");
@@ -732,6 +733,7 @@ shared_ptr<MultiFileList> IcebergAvroMultiFileReader::CreateFileList(ClientConte
 			open_files.emplace_back(full_path);
 			auto &file_info = open_files.back();
 			file_info.extended_info = make_uniq<ExtendedOpenFileInfo>();
+			file_info.extended_info->credentials = scan_info->metadata.credentials;
 			file_info.extended_info->options["validate_external_file_cache"] = Value::BOOLEAN(false);
 			file_info.extended_info->options["force_full_download"] = Value::BOOLEAN(true);
 			if (file.manifest_length > 0) {

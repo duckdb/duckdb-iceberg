@@ -365,13 +365,13 @@ int32_t IcebergTableMetadata::GetLastPartitionFieldId() const {
 
 //! ----------- Parse the Metadata JSON -----------
 
-rest_api_objects::TableMetadata IcebergTableMetadata::Parse(const string &path, FileSystem &fs,
+rest_api_objects::TableMetadata IcebergTableMetadata::Parse(const OpenFileInfo &file, FileSystem &fs,
                                                             const string &metadata_compression_codec) {
 	string json_content;
-	if (metadata_compression_codec == "gzip" || StringUtil::EndsWith(path, "gz.metadata.json")) {
-		json_content = IcebergUtils::GzFileToString(path, fs);
+	if (metadata_compression_codec == "gzip" || StringUtil::EndsWith(file.path, "gz.metadata.json")) {
+		json_content = IcebergUtils::GzFileToString(file, fs);
 	} else {
-		json_content = IcebergUtils::FileToString(path, fs);
+		json_content = IcebergUtils::FileToString(file, fs);
 	}
 	auto doc = JSONDocument::Parse(json_content.c_str(), json_content.size());
 	return rest_api_objects::TableMetadata::FromJSON(doc->GetRoot());
@@ -560,6 +560,7 @@ IcebergTableMetadata IcebergTableMetadata::Copy() const {
 	res.table_properties = table_properties;
 	res.metadata_log = metadata_log;
 	res.current_schema_id = current_schema_id;
+	res.credentials = credentials;
 	return res;
 }
 

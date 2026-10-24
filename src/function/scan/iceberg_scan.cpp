@@ -124,6 +124,8 @@ TableFunctionSet IcebergFunctions::GetIcebergScanFunction(ExtensionLoader &loade
 
 		// Unset all of these: they are either broken, very inefficient.
 		// TODO: implement/fix these
+		// must keep throwing while a scan can carry credentials (IcebergTableMetadata::credentials): a merged or copied
+		// plan would read with other credentials
 		function.serialize = IcebergScanSerialize;
 		function.deserialize = IcebergScanDeserialize;
 

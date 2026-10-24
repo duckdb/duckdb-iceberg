@@ -14,6 +14,7 @@
 #include "catalog/rest/catalog_entry/table/iceberg_table_schema_version.hpp"
 #include "catalog/rest/catalog_entry/table/iceberg_table.hpp"
 #include "core/metadata/iceberg_table_metadata.hpp"
+#include "catalog/rest/iceberg_file_credentials.hpp"
 #include "duckdb/catalog/catalog_entry_retriever.hpp"
 
 namespace duckdb {
@@ -90,7 +91,7 @@ idx_t IcebergUtils::CountOccurrences(const string &input, const string &to_find)
 	return count;
 }
 
-string IcebergUtils::FileToString(const string &path, FileSystem &fs) {
+string IcebergUtils::FileToString(const OpenFileInfo &file, FileSystem &fs) {
 	// This function is used to read table metadata files (e.g., metadata.json).
 	//
 	// We intentionally avoid calling GetFileSize() to pre-allocate the result buffer because
@@ -103,7 +104,7 @@ string IcebergUtils::FileToString(const string &path, FileSystem &fs) {
 	//
 	// We read directly into the result string's buffer to avoid an intermediate copy,
 	// growing the buffer 2x when space runs out (amortized O(1) per byte).
-	auto handle = fs.OpenFile(path, FileFlags::FILE_FLAGS_READ);
+	auto handle = fs.OpenFile(file, FileFlags::FILE_FLAGS_READ);
 	string result;
 	idx_t capacity = 32768;
 	idx_t size = 0;
@@ -250,7 +251,9 @@ IcebergResolvedMetadata IcebergUtils::ResolveTableMetadata(ClientContext &contex
 			auto &iceberg_table = catalog_entry->Cast<IcebergTableSchemaVersion>();
 			iceberg_table.PrepareIcebergScanFromEntry(context);
 			auto &metadata = iceberg_table.table_info.table_metadata;
-			return IcebergResolvedMetadata(metadata.GetLocation(), metadata.Copy());
+			auto copy = metadata.Copy();
+			copy.credentials = IcebergFileCredentialsCallback::Get(context, iceberg_table.table_info);
+			return IcebergResolvedMetadata(metadata.GetLocation(), std::move(copy));
 		}
 	}
 
@@ -263,9 +266,9 @@ IcebergResolvedMetadata IcebergUtils::ResolveTableMetadata(ClientContext &contex
 }
 
 // Function to decompress a gz file content string
-string IcebergUtils::GzFileToString(const string &path, FileSystem &fs) {
+string IcebergUtils::GzFileToString(const OpenFileInfo &file, FileSystem &fs) {
 	// Initialize zlib variables
-	string gzipped_string = FileToString(path, fs);
+	string gzipped_string = FileToString(file, fs);
 	return GZipFileSystem::UncompressGZIPString(gzipped_string);
 }
 

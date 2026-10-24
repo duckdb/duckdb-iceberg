@@ -33,6 +33,7 @@
 #include "core/expression/iceberg_transform.hpp"
 #include "common/iceberg_utils.hpp"
 #include "iceberg_options.hpp"
+#include "catalog/rest/iceberg_file_credentials.hpp"
 
 #include <climits>
 
@@ -866,8 +867,9 @@ IcebergTableMetadata IcebergTable::CreateMetadataFromLog(ClientContext &context,
 	}
 
 	auto fs = make_shared_ptr<CachingFileSystemWrapper>(FileSystem::GetFileSystem(context), *context.db);
-	auto &path = log[log_item_index.GetIndex()].metadata_file;
-	auto parsed_metadata = IcebergTableMetadata::Parse(path, *fs, "");
+	auto metadata_file = OpenFileInfo(log[log_item_index.GetIndex()].metadata_file)
+	                         .WithCredentials(IcebergFileCredentialsCallback::Get(context, *this));
+	auto parsed_metadata = IcebergTableMetadata::Parse(metadata_file, *fs, "");
 
 	return IcebergTableMetadata::FromTableMetadata(parsed_metadata);
 }
@@ -968,8 +970,10 @@ void IcebergTable::InitializeFromCatalogResponse(ClientContext &context,
 		try {
 			auto &fs = FileSystem::GetFileSystem(context);
 			auto caching_fs = make_shared_ptr<CachingFileSystemWrapper>(fs, *context.db);
+			auto metadata_file =
+			    OpenFileInfo(metadata_location).WithCredentials(IcebergFileCredentialsCallback::Get(context, *this));
 			file_metadata = make_uniq<const rest_api_objects::TableMetadata>(
-			    IcebergTableMetadata::Parse(metadata_location, *caching_fs, "none"));
+			    IcebergTableMetadata::Parse(metadata_file, *caching_fs, "none"));
 		} catch (std::exception &ex) {
 			DUCKDB_LOG(context, IcebergLogType,
 			           "Could not load table metadata from metadata-location '%s': %s - falling back to the "
