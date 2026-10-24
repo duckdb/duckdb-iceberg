@@ -604,6 +604,30 @@ bool IcebergTableMetadata::AllowsMergeOnRead(const string &write_mode_property) 
 	return mode == "merge-on-read" || mode.empty();
 }
 
+static void VerifyParquetFileFormat(const case_insensitive_map_t<string> &table_properties, const string &property,
+                                    const char *file_kind) {
+	auto it = table_properties.find(property);
+	if (it != table_properties.end() && !StringUtil::CIEquals(it->second, "parquet")) {
+		throw NotImplementedException("Cannot write %s file with '%s'='%s': only parquet is supported", file_kind,
+		                              property, it->second);
+	}
+}
+
+void IcebergTableMetadata::VerifyDataFileFormat() const {
+	VerifyParquetFileFormat(table_properties, WRITE_FORMAT_DEFAULT, "data");
+}
+
+void IcebergTableMetadata::VerifyDeleteFileFormat() const {
+	// V3 tables write deletion vectors, which are always Puffin files
+	if (iceberg_version >= 3) {
+		return;
+	}
+	// The delete file format defaults to the data file format
+	auto &property =
+	    table_properties.count(WRITE_DELETE_FORMAT_DEFAULT) ? WRITE_DELETE_FORMAT_DEFAULT : WRITE_FORMAT_DEFAULT;
+	VerifyParquetFileFormat(table_properties, property, "delete");
+}
+
 JSONMutableValue IcebergTableMetadata::SchemasToJSON(JSONWriter &writer) const {
 	auto schemas_array = writer.CreateArray();
 	schemas.ForEachSchema([&](const IcebergTableSchema &schema) {
