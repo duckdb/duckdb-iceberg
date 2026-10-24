@@ -93,7 +93,7 @@ statement ok
 DETACH my_datalake;
 
 # ---------------------------------------------------------------------------
-# lazy (the default): listing a schema never loads its tables
+# Default listings resolve real table schemas
 # ---------------------------------------------------------------------------
 
 statement ok
@@ -111,21 +111,24 @@ CALL enable_logging('HTTP');
 statement ok
 CALL truncate_duckdb_logs();
 
-# the tables are listed, but with no columns resolved they only carry the placeholder
+# Column listings resolve every table without requiring an attach option
 query II
 SELECT table_name, column_name FROM information_schema.columns
 WHERE table_catalog = 'my_datalake' AND table_schema = 'table_resolution'
-ORDER BY table_name;
+ORDER BY table_name, ordinal_position;
 ----
-tr_alpha	__
-tr_beta	__
-tr_gamma	__
+tr_alpha	id
+tr_alpha	name
+tr_beta	a
+tr_beta	b
+tr_beta	c
+tr_gamma	x
 
-# the namespaces were listed, but no table metadata was requested at all
+# Each test table was loaded once; unrelated catalog tables do not affect the count
 query I
-SELECT count(*) FROM duckdb_logs_parsed('HTTP') WHERE request.url LIKE '%/tables/%';
+SELECT count(*) FROM duckdb_logs_parsed('HTTP') WHERE request.url LIKE '%/namespaces/table_resolution/tables/tr_%';
 ----
-0
+3
 
 query I
 SELECT count(*) > 0 FROM duckdb_logs_parsed('HTTP')
@@ -140,7 +143,7 @@ statement ok
 CALL truncate_duckdb_logs();
 
 # ---------------------------------------------------------------------------
-# eager: listing a schema resolves the columns of every table it lists
+# The legacy eager option continues to return real columns
 # ---------------------------------------------------------------------------
 
 statement ok
@@ -155,7 +158,7 @@ ATTACH 'warehouse' AS my_datalake (
 statement ok
 CALL enable_logging('HTTP');
 
-# the real columns are reported, not the '__' placeholder
+# The legacy option reports the same columns and types
 query III
 SELECT table_name, column_name, data_type FROM information_schema.columns
 WHERE table_catalog = 'my_datalake' AND table_schema = 'table_resolution'
@@ -170,16 +173,15 @@ tr_gamma	x	VARCHAR
 
 # each of the three tables was loaded exactly once
 query I
-SELECT count(*) FROM duckdb_logs_parsed('HTTP') WHERE request.url LIKE '%/tables/tr_%';
+SELECT count(*) FROM duckdb_logs_parsed('HTTP') WHERE request.url LIKE '%/namespaces/table_resolution/tables/tr_%';
 ----
 3
 
 statement ok
 CALL truncate_duckdb_logs();
 
-# a listing load is not cached as if it were a complete one: actually reading the table still
-# issues a full LoadTable request, without the snapshots filter. Credential vending is not
-# asserted here the way it is for the fixture: this catalog is attached with
+# A new transaction refreshes the table metadata. Credential vending is not
+# asserted here because this catalog is attached with
 # ACCESS_DELEGATION_MODE 'none', so that header is never sent on any request.
 query I
 SELECT count(*) FROM my_datalake.table_resolution.tr_alpha;
@@ -218,15 +220,18 @@ BEGIN;
 statement ok
 SELECT * FROM information_schema.columns WHERE table_catalog = 'my_datalake';
 
-# SHOW ALL TABLES scans every schema twice more (duckdb_tables joined with duckdb_columns)
-statement ok
-SELECT count(*) FROM (SHOW ALL TABLES);
+# Table OIDs remain stable across the table/column scans used by SHOW ALL TABLES.
+query I
+SELECT count(*) FROM (SHOW ALL TABLES)
+WHERE database = 'my_datalake' AND schema = 'table_resolution';
+----
+3
 
 statement ok
 COMMIT;
 
 query I
-SELECT count(*) FROM duckdb_logs_parsed('HTTP') WHERE request.url LIKE '%/tables/tr_%';
+SELECT count(*) FROM duckdb_logs_parsed('HTTP') WHERE request.url LIKE '%/namespaces/table_resolution/tables/tr_%';
 ----
 3
 

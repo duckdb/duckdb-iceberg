@@ -136,6 +136,8 @@ public:
 	unordered_map<string, shared_ptr<IcebergSchemaEntry>> created_schemas;
 	//! Tables referenced by this transaction that have to stay alive for the duration of the transaction.
 	unordered_map<string, shared_ptr<IcebergTable>> tables;
+	//! Serialize table listings and lookups that publish transaction-visible schema entries.
+	mutex catalog_entry_lock;
 	//! The visible state of every resolved table in this transaction.
 	unordered_map<string, IcebergTransactionTableState> current_table_data;
 	//! Declared after the schema and table states so update references are destroyed before the referenced states.

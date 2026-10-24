@@ -33,12 +33,10 @@ public:
 
 private:
 	bool TryFillEntryFromCache(ClientContext &context, IcebergTable &table);
-	void ScanEagerEntries(ClientContext &context, const std::function<void(CatalogEntry &)> &callback)
-	    DUCKDB_REQUIRES(entry_lock);
+	vector<reference<CatalogEntry>> LoadScanEntries(ClientContext &context);
+	IcebergTable &StoreEntry(ClientContext &context, shared_ptr<IcebergTable> table);
 	bool ApplyLoadResult(ClientContext &context, IcebergTable &table, IcebergLoadTableResult result,
 	                     LoadTableCachePublication &publication);
-	CatalogEntry &GetScanEntry(IcebergTable &table_info) const DUCKDB_REQUIRES(entry_lock);
-	IcebergTableSchemaVersion &GetOrCreateDummy(IcebergTable &table_info) const DUCKDB_REQUIRES(entry_lock);
 	void LoadEntriesInternal(ClientContext &context) DUCKDB_REQUIRES(entry_lock);
 	void ApplyListResult(IcebergListTablesResult tables) DUCKDB_REQUIRES(entry_lock);
 	shared_ptr<IcebergTable> CreateEntryInternal(const string &name, IcebergTable &&table,

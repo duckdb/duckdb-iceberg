@@ -1,0 +1,118 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/test_table_listing_schema.test
+# description: Catalog listings expose transaction-visible table schemas and stable table identities
+# group: [catalog_agnostic]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require-env STAGED_CREATE_SUPPORT
+
+include test/sql/init_requires
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.listing_schema;
+
+statement ok
+CREATE TABLE my_datalake.default.listing_schema (id INTEGER, payload STRUCT(x INTEGER, labels VARCHAR[]));
+
+statement ok
+COMMENT ON COLUMN my_datalake.default.listing_schema.id IS 'Identifier';
+
+statement ok
+BEGIN;
+
+query III
+SELECT column_name, data_type, comment FROM duckdb_columns()
+WHERE database_name = 'my_datalake' AND schema_name = 'default' AND table_name = 'listing_schema'
+ORDER BY column_index;
+----
+id	INTEGER	Identifier
+payload	STRUCT(x INTEGER, labels VARCHAR[])	NULL
+
+# Both system functions must return the same table OID, including on repeated scans.
+loop i 0 2
+
+query III
+SELECT name, column_names, column_types FROM (SHOW ALL TABLES)
+WHERE database = 'my_datalake' AND schema = 'default' AND name = 'listing_schema';
+----
+listing_schema	[id, payload]	[INTEGER, 'STRUCT(x INTEGER, labels VARCHAR[])']
+
+endloop
+
+# A different connection's schema change must not replace this transaction's pinned entry.
+statement ok writer
+ALTER TABLE my_datalake.default.listing_schema ADD COLUMN extra BIGINT;
+
+query I
+SELECT column_name FROM information_schema.columns
+WHERE table_catalog = 'my_datalake' AND table_schema = 'default' AND table_name = 'listing_schema'
+ORDER BY ordinal_position;
+----
+id
+payload
+
+statement ok
+COMMIT;
+
+# A new transaction must refresh even though an older schema is cached in the table set.
+query I
+SELECT column_name FROM information_schema.columns
+WHERE table_catalog = 'my_datalake' AND table_schema = 'default' AND table_name = 'listing_schema'
+ORDER BY ordinal_position;
+----
+id
+payload
+extra
+
+statement ok
+BEGIN;
+
+statement ok
+ALTER TABLE my_datalake.default.listing_schema ADD COLUMN local_change BOOLEAN;
+
+query I
+SELECT column_name FROM information_schema.columns
+WHERE table_catalog = 'my_datalake' AND table_schema = 'default' AND table_name = 'listing_schema'
+ORDER BY ordinal_position;
+----
+id
+payload
+extra
+local_change
+
+statement ok
+ROLLBACK;
+
+statement ok
+BEGIN;
+
+statement ok
+DROP TABLE my_datalake.default.listing_schema;
+
+query I
+SELECT count(*) FROM duckdb_tables()
+WHERE database_name = 'my_datalake' AND schema_name = 'default' AND table_name = 'listing_schema';
+----
+0
+
+statement ok
+ROLLBACK;
+
+# Staged tables must be listed with their schema before publication.
+statement ok
+BEGIN;
+
+statement ok
+CREATE TABLE my_datalake.default.listing_staged (value DOUBLE);
+
+query II
+SELECT column_name, data_type FROM information_schema.columns
+WHERE table_catalog = 'my_datalake' AND table_schema = 'default' AND table_name = 'listing_staged';
+----
+value	DOUBLE
+
+statement ok
+ROLLBACK;
+
+statement ok
+DROP TABLE my_datalake.default.listing_schema;
